@@ -35,7 +35,7 @@ M.TILE_CAP = { { 300, 6000 }, { 700, 2400 }, { 1500, 900 }, { 1e9, 400 } }
 -- density settings (rescale: QUALITY_LEVELS' clump).
 M.CLUMP_M = 200
 M.FAR_ONLY = { conifer_clump = true, deciduous_clump = true, oak_west_clump = true, mediterranean_clump = true,
-  eucalyptus_clump = true }
+  eucalyptus_clump = true, birch_clump = true, oak_clump = true, beech_clump = true }
 -- small props only near the player (2026-10-14, Fells Point at street level: ~10 ms a frame for the Forest
 -- with a door on every house out to 300 m): the tile distance (m) beyond which a group is not shown
 -- rocks only over the fine ground (farfield.NEAR_RADII: L0 within 400 m): beyond it the coarser tiles round off the
@@ -403,6 +403,57 @@ M.CATALOG = {
     { ATT .. 'trees/trees_poplar/s_poplar_large_03', 23.03 } },     -- (the stock survey 2026-11-15)
   creosote = { { ATT .. 'trees/trees_shrub/shrub_c', 1.15 }, { ATT .. 'trees/trees_shrub/shrub_b', 1.63 },
     { ATT .. 'trees/trees_shrub/shrub_a', 2.43 } },
+  -- Eurasia's species (server vegetation.species_groups, 29; the stock survey 2026-11-15, heights from the shapes'
+  -- bounds, to be checked in game): East Coast USA's "aspen" shapes wear the game's birch bark and leaves
+  -- (/assets/materials/tree/birch); Scots pines (Italy's) with Monterey pines and a young maritime pine for variety;
+  -- Douglas firs stand in for spruces (no stock spruce)
+  birch = {
+    { ECA .. 'trees/trees_aspen/tree_aspen_small_low', 6.05 }, { ECA .. 'trees/trees_aspen/tree_aspen_small_b', 8.18 },
+    { ECA .. 'trees/trees_aspen/tree_aspen_small_a', 8.3 }, { ECA .. 'trees/trees_aspen/tree_aspen_small_c', 9.7 },
+    { ECA .. 'trees/trees_aspen/tree_aspen_small_d', 10.37 }, { ECA .. 'trees/trees_aspen/tree_aspen_large_b', 10.43 },
+    { ECA .. 'trees/trees_aspen/tree_aspen_large_a', 10.45 }, { ECA .. 'trees/trees_aspen/tree_aspen_forest_a', 15.62 },
+    { ECA .. 'trees/trees_aspen/tree_aspen_forest_b', 18.5 },
+  },
+  oak = {
+    { ECA .. 'trees/trees_oak/tree_oak_sml_a', 8.6 }, { ECA .. 'trees/trees_oak/tree_oak_sml_b', 9.5 },
+    { ECA .. 'trees/trees_oak/tree_oak_large_a', 13.2 }, { ECA .. 'trees/trees_oak/tree_oak_large_c', 15.5 },
+    { ECA .. 'trees/trees_oak/tree_oak_large_b', 15.9 }, { ECA .. 'trees/trees_oak/tree_oak_forest_a', 15.9 },
+    { ECA .. 'trees/trees_oak/tree_oak_forest_b', 16.0 },
+  },
+  beech = {
+    { ECA .. 'trees/trees_beech/tree_beech_bush_e', 6.51 }, { ECA .. 'trees/trees_beech/tree_beech_bush_d', 7.23 },
+    { ECA .. 'trees/trees_beech/tree_beech_small_c', 9.9 }, { ECA .. 'trees/trees_beech/tree_beech_small_b', 11.6 },
+    { ECA .. 'trees/trees_beech/tree_beech_small_d', 13.32 }, { ECA .. 'trees/trees_beech/tree_beech_large_c', 17.4 },
+    { ECA .. 'trees/trees_beech/tree_beech_forest_a', 20.2 }, { ECA .. 'trees/trees_beech/tree_beech_large_b', 21.1 },
+    { ECA .. 'trees/trees_beech/tree_beech_forest_b', 21.75 },
+  },
+  pine_eu = {
+    { IT .. 'trees/trees_italy/maritime_pine_bush', 5.05 }, { WCA .. 'trees/trees_conifer/pine_radiata_small', 8.6 },
+    { WCA .. 'trees/trees_conifer/pine_radiata_forest', 13.3 }, { IT .. 'trees/trees_italy/scots_pine_filler', 14.21 },
+    { IT .. 'trees/trees_italy/scots_pine', 18.9 },
+  },
+  spruce = {
+    { ECA .. 'trees/trees_douglasfir/tree_douglasfir_small_d', 5.01 },
+    { ECA .. 'trees/trees_douglasfir/tree_douglasfir_small_c', 7.78 },
+    { ECA .. 'trees/trees_douglasfir/tree_douglasfir_small_b', 11.2 }, { ECA .. 'trees/trees_douglasfir/tree_douglasfir_small_a', 13.4 },
+    { ECA .. 'trees/trees_douglasfir/tree_douglasfir_large_c', 18.9 }, { ECA .. 'trees/trees_douglasfir/tree_douglasfir_large_a', 19.6 },
+    { ECA .. 'trees/trees_douglasfir/tree_douglasfir_large_b', 21.4 }, { ECA .. 'trees/trees_douglasfir/tree_douglasfir_large_d', 21.7 },
+  },
+  -- dead trees in the forests (species_groups' SNAG_SHARE)
+  snag_broad = { { ECA .. 'trees/trees_oak/tree_oak_dead_b', 8.7 }, { ECA .. 'trees/trees_oak/tree_oak_dead_a', 12.54 } },
+  snag_conifer = { { ECA .. 'trees/trees_douglasfir/tree_douglasfir_dead', 7.31 },
+    { ECA .. 'trees/trees_douglasfir/tree_douglasfir_dead_02', 13.96 } },
+  -- warm towns' palms outside the tropics (species_groups' DRY_PALMS): West Coast USA's fan palms, Italy's date palms
+  palm_dry = {
+    { WCA .. 'trees/trees_palm/fanpalm_short', 10.6 }, { WCA .. 'trees/trees_palm/fanpalm_skirt', 11.7 },
+    { IT .. 'trees/trees_italy/italy_palm_1_short', 11.74 }, { WCA .. 'trees/trees_palm/fanpalm_full', 13.8 },
+    { IT .. 'trees/trees_italy/italy_palm_1', 13.77 }, { WCA .. 'trees/trees_palm/fanpalm_tall', 18.5 },
+    { WCA .. 'trees/trees_palm/fanpalm_slim', 20.8 },
+  },
+  birch_clump = { { ECA .. 'trees/trees_aspen/tree_aspen_forest_group', 20.1 } },
+  oak_clump = { { ECA .. 'trees/trees_oak/tree_oak_forest_group', 18.4 } },
+  beech_clump = { { ECA .. 'trees/trees_beech/tree_beech_forest_group', 23.8 },
+    { ECA .. 'trees/trees_beech/tree_beech_small_forest_group', 14.17 } },
   tropical = {
     { JRI .. 'trees/bush_tropical_1/tro_bush_huge', 5.5 }, { JRI .. 'trees/bush_tropical_2/tro_bush_2_small', 6.1 },
     { JRI .. 'trees/trees_tropical_2/tro_tree_2_filler', 20.2 }, { JRI .. 'trees/trees_tropical_1/tro_tree_1_huge', 20.6 },

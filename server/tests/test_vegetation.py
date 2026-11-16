@@ -305,6 +305,78 @@ class LatitudeTest(unittest.TestCase):
         self.assertAlmostEqual(veg._merc_k(-69.0), veg._merc_k(69.0), places=12)
 
 
+class SpeciesTest(unittest.TestCase):
+    """species_groups (29): Eurasia's birches / oaks / beeches and pines / spruces from the stock shapes, dead trees,
+    the warm towns' palms, the rainforests' trees."""
+
+    def g(self, group, lat, lon, lcls=10, h=14.0, elev=None, u=0.5, ub=None, uc=None, snag=0.9, palm=0.9):
+        import climate
+        la, lo = np.array([lat]), np.array([lon])
+        k = climate.koppen_many(la, lo)
+        return int(veg.species_groups(np.array([group], np.uint8), np.array([h]), la, lo, np.array([lcls]), k,
+                                      None if elev is None else np.array([float(elev)]),
+                                      np.array([u if ub is None else ub]), np.array([u if uc is None else uc]),
+                                      np.array([snag]), np.array([palm]))[0])
+
+    def test_conifers_pines_low_spruces_up(self):
+        self.assertEqual(self.g(veg.G_CONIFER, 52.23, 21.0, elev=100, u=0.9), veg.G_PINE_EU, "Warsaw: pines")
+        self.assertEqual(self.g(veg.G_CONIFER, 52.23, 21.0, elev=100, u=0.05), veg.G_SPRUCE, "a few spruces")
+        self.assertEqual(self.g(veg.G_CONIFER, 49.25, 19.95, elev=1200, u=0.8), veg.G_SPRUCE, "the Tatras: spruces")
+        self.assertEqual(self.g(veg.G_CONIFER, 52.23, 21.0, elev=None, u=0.9), veg.G_PINE_EU, "no DEM: the lowlands")
+
+    def test_broadleaves_by_climate_and_height(self):
+        self.assertEqual(self.g(veg.G_DECIDUOUS, 52.23, 21.0, elev=100, u=0.1), veg.G_BIRCH)
+        self.assertEqual(self.g(veg.G_DECIDUOUS, 52.23, 21.0, elev=100, u=0.5), veg.G_OAK)
+        self.assertEqual(self.g(veg.G_DECIDUOUS, 52.23, 21.0, elev=100, u=0.9), veg.G_BEECH)
+        self.assertEqual(self.g(veg.G_DECIDUOUS, 52.23, 21.0, elev=100, u=0.6), veg.G_OAK, "lowland: an oak")
+        self.assertEqual(self.g(veg.G_DECIDUOUS, 49.2, 22.6, elev=900, u=0.6), veg.G_BEECH, "Bieszczady: a beech")
+        for u in (0.1, 0.5, 0.95):
+            self.assertEqual(self.g(veg.G_DECIDUOUS, 68.0, 25.0, elev=200, u=u), veg.G_BIRCH, "Lapland: birches")
+
+    def test_the_americas_and_others_keep_theirs(self):
+        self.assertEqual(self.g(veg.G_DECIDUOUS, 39.3, -76.6, u=0.1), veg.G_DECIDUOUS, "Maryland")
+        self.assertEqual(self.g(veg.G_CONIFER, 39.3, -76.6, u=0.1), veg.G_CONIFER)
+        self.assertEqual(self.g(veg.G_MEDITERRANEAN, 41.9, 12.5, u=0.1), veg.G_MEDITERRANEAN, "Rome's own trees")
+        self.assertEqual(self.g(veg.G_PALM, 25.8, -80.2, lcls=50, palm=0.0), veg.G_PALM, "Miami")
+
+    def test_rainforest(self):
+        self.assertEqual(self.g(veg.G_DECIDUOUS, -3.1, -60.0, h=8.0), veg.G_TROPICAL, "Manaus: no oaks")
+        self.assertEqual(self.g(veg.G_PALM, -3.1, -60.0, palm=0.9), veg.G_TROPICAL, "fewer palms in the forest")
+        self.assertEqual(self.g(veg.G_PALM, -3.1, -60.0, palm=0.1), veg.G_PALM)
+        self.assertEqual(self.g(veg.G_PALM, -3.1, -60.0, lcls=50, palm=0.9), veg.G_PALM, "in town as before")
+
+    def test_warm_towns_palms(self):
+        self.assertEqual(self.g(veg.G_MEDITERRANEAN, 41.39, 2.17, lcls=50, palm=0.05), veg.G_PALM_DRY, "Barcelona")
+        self.assertEqual(self.g(veg.G_MEDITERRANEAN, 41.39, 2.17, lcls=50, palm=0.5), veg.G_MEDITERRANEAN)
+        self.assertEqual(self.g(veg.G_MEDITERRANEAN, 41.39, 2.17, lcls=10, palm=0.05), veg.G_MEDITERRANEAN,
+                         "not in the hills' woods")
+        self.assertEqual(self.g(veg.G_DECIDUOUS, 25.2, 55.27, lcls=50, palm=0.3), veg.G_PALM_DRY, "Dubai")
+        self.assertNotEqual(self.g(veg.G_DECIDUOUS, 48.14, 11.58, lcls=50, palm=0.01), veg.G_PALM_DRY, "Munich: none")
+
+    def test_dead_trees(self):
+        self.assertEqual(self.g(veg.G_DECIDUOUS, 52.23, 21.0, elev=100, u=0.5, snag=0.001), veg.G_SNAG_BROAD)
+        self.assertEqual(self.g(veg.G_CONIFER, 52.23, 21.0, elev=100, u=0.9, snag=0.001), veg.G_SNAG_CONIFER)
+        self.assertEqual(self.g(veg.G_CONIFER, 39.3, -76.6, snag=0.001), veg.G_SNAG_CONIFER, "everywhere temperate")
+        self.assertEqual(self.g(veg.G_DECIDUOUS, 52.23, 21.0, lcls=50, u=0.5, snag=0.001), veg.G_OAK, "not in town")
+        self.assertEqual(self.g(veg.G_DECIDUOUS, 52.23, 21.0, h=25.0, u=0.5, snag=0.001), veg.G_OAK, "nor tall")
+
+    def test_stands(self):
+        """Trees a few metres apart mostly share a stand's value, trees far apart do not; uniform over many stands;
+        the same for the same tree."""
+        rng = np.random.default_rng(3)
+        x0, y0 = 2338000.0, 6840000.0       # (Warsaw, Web Mercator)
+        mx = x0 + rng.uniform(0, 4000, 20000)
+        my = y0 + rng.uniform(0, 4000, 20000)
+        gx, gy = (mx / 1.2).astype(np.int64), (my / 1.2).astype(np.int64)
+        u = veg.stand_u(mx, my, gx, gy, 52.2, 51)
+        self.assertTrue(np.array_equal(u, veg.stand_u(mx, my, gx, gy, 52.2, 51)))
+        self.assertAlmostEqual(float(u.mean()), 0.5, delta=0.03)
+        d = veg.stand_u(mx + 3.0, my, gx + 1, gy, 52.2, 51)
+        self.assertGreater(float((np.abs(d - u) < 1e-12).mean()), 0.7, "neighbours in one stand")
+        far = veg.stand_u(mx + 2000.0, my, gx, gy, 52.2, 51)
+        self.assertLess(float((np.abs(far - u) < 1e-12).mean()), 0.05)
+
+
 class RegionalTest(unittest.TestCase):
     def g(self, group, h, lat, lon, lcls, u=0.9):
         return int(veg.regional(np.array([group]), np.array([h]), np.array([lat]), np.array([lon]),
