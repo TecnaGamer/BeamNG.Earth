@@ -6478,6 +6478,8 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     ggshapes::register(m)?;
     // 309: gg_poly_axes(..., skip): linear (a histogram of the edge directions), all of a polygon's rings, clip edges left
     // out (Codex review of 308)
-    m.add("VERSION", 309)?;
+    // 310: stage 3 perf: gg_grid (the texel grid and its Web-Mercator metres, rectangles), the edge-table polygon fill,
+    // the capsule-interval line fill, value_noises on the kernels' threads (all the same output)
+    m.add("VERSION", 310)?;
     Ok(())
 }

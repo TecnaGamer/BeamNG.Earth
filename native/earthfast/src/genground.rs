@@ -342,6 +342,8 @@ pub fn gg_fill_polys(py: Python<'_>, mut out: PyReadwriteArray2<'_, u32>, xy: Py
     let written = py.detach(|| {
         let mut written = 0usize;
         let mut xs: Vec<f64> = Vec::new();
+        let mut edges: Vec<(usize, usize, f64, f64, f64, f64)> = Vec::new();
+        let mut active: Vec<usize> = Vec::new();
         for p in 0..np {
             let (r0, r1) = (poly_off[p] as usize, poly_off[p + 1] as usize);
             let (mut ymin, mut ymax) = (f64::INFINITY, f64::NEG_INFINITY);
@@ -360,20 +362,45 @@ pub fn gg_fill_polys(py: Python<'_>, mut out: PyReadwriteArray2<'_, u32>, xy: Py
                 continue;
             }
             let rb = rb as usize;
-            for row in ra..=rb.min(h.saturating_sub(1)) {
-                let ty = row as f64 + 0.5;
-                xs.clear();
-                for ring in r0..r1 {
-                    let (a, b) = (ring_off[ring] as usize, ring_off[ring + 1] as usize);
-                    if b < a + 3 {
+            let rend = rb.min(h.saturating_sub(1));
+            if ra > rend {
+                continue;
+            }
+            // (stage 3) an edge table: each edge bucketed by the first row it can cross (a row more either side of its
+            // own span: the exact test below decides), so a row looks at the edges spanning it, not every edge of the
+            // polygon; the crossings are the same numbers from the original end points, sorted as before
+            edges.clear();
+            for ring in r0..r1 {
+                let (a, b) = (ring_off[ring] as usize, ring_off[ring + 1] as usize);
+                if b < a + 3 {
+                    continue;
+                }
+                for q in a..b {
+                    let q2 = if q + 1 < b { q + 1 } else { a };
+                    let (xa, ya, xb, yb) = (xy[[q, 0]], xy[[q, 1]], xy[[q2, 0]], xy[[q2, 1]]);
+                    let lo = ((ya.min(yb) - 0.5).ceil() - 1.0).max(ra as f64);
+                    let hi = (ya.max(yb) - 0.5).ceil().min(rend as f64);
+                    if hi < lo {
                         continue;
                     }
-                    for q in a..b {
-                        let q2 = if q + 1 < b { q + 1 } else { a };
-                        let (xa, ya, xb, yb) = (xy[[q, 0]], xy[[q, 1]], xy[[q2, 0]], xy[[q2, 1]]);
-                        if (ya > ty) != (yb > ty) {
-                            xs.push(xa + (ty - ya) * (xb - xa) / (yb - ya));
-                        }
+                    edges.push((lo as usize, hi as usize, xa, ya, xb, yb));
+                }
+            }
+            edges.sort_by_key(|e| e.0);
+            active.clear();
+            let mut next = 0usize;
+            for row in ra..=rend {
+                let ty = row as f64 + 0.5;
+                while next < edges.len() && edges[next].0 <= row {
+                    active.push(next);
+                    next += 1;
+                }
+                active.retain(|&k| edges[k].1 >= row);
+                xs.clear();
+                for &k in active.iter() {
+                    let (_, _, xa, ya, xb, yb) = edges[k];
+                    if (ya > ty) != (yb > ty) {
+                        xs.push(xa + (ty - ya) * (xb - xa) / (yb - ya));
                     }
                 }
                 if xs.len() < 2 {
@@ -842,7 +869,47 @@ pub fn gen_ground<'py>(py: Python<'py>, s2: PyReadonlyArray3<'py, u8>, kind: PyR
     Ok(arr.into_pyarray(py))
 }
 
+/// genground._grid and canopy_grid's Web-Mercator coordinates in one pass on the kernels' threads (stage 3: the
+/// largest part of inputs(), 1.3 million texels a block): (lat, lon, mx, my) (rows, cols) of the texel centres
+/// (x0 + (j + 0.5) t, top - (i + 0.5) t) of the frame (origin, rot: geodesy.EnuFrame's), row 0 = north. The same numbers
+/// as before: e2g_one is enu_to_geodetic's, the texel centres numpy's, np.radians a multiply by pi / 180, dnp's tan and
+/// log the libm crate's. A rectangle: genground's grid cache computes only the strips a block adds to the last one.
+#[pyfunction]
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+pub fn gg_grid<'py>(py: Python<'py>, origin: PyReadonlyArray1<'py, f64>, rot: PyReadonlyArray2<'py, f64>, x0: f64,
+                    top: f64, t: f64, rows: usize, cols: usize)
+                    -> PyResult<(Bound<'py, PyArray2<f64>>, Bound<'py, PyArray2<f64>>, Bound<'py, PyArray2<f64>>,
+                                 Bound<'py, PyArray2<f64>>)> {
+    let (o, r) = crate::frame_of(&origin, &rot)?;
+    if rows == 0 || cols == 0 || !(t > 0.0) {
+        return Err(pyo3::exceptions::PyValueError::new_err("gg_grid: bad rectangle"));
+    }
+    const R_MERC: f64 = 6378137.0;
+    let rad = std::f64::consts::PI / 180.0;
+    let (lat, lon, mx, my) = py.detach(move || {
+        let mut ll = vec![[0.0f64; 4]; rows * cols];
+        let threads = par::threads_for(rows * cols, 65536);
+        par::rows(&mut ll, cols, threads, |i, row| {
+            let n = top - (i as f64 + 0.5) * t;
+            for (j, v) in row.iter_mut().enumerate() {
+                let e = x0 + (j as f64 + 0.5) * t;
+                let (la, lo, _) = crate::e2g_one(e, n, 0.0, &o, &r);
+                let my = R_MERC * libm::log(libm::tan(std::f64::consts::PI / 4.0 + la * rad / 2.0));
+                *v = [la, lo, R_MERC * (lo * rad), my];
+            }
+        });
+        let pick = |k: usize| ll.iter().map(|v| v[k]).collect::<Vec<f64>>();
+        (pick(0), pick(1), pick(2), pick(3))
+    });
+    let mk = |v: Vec<f64>| -> PyResult<Bound<'py, PyArray2<f64>>> {
+        Ok(numpy::ndarray::Array2::from_shape_vec((rows, cols), v)
+            .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?.into_pyarray(py))
+    };
+    Ok((mk(lat)?, mk(lon)?, mk(mx)?, mk(my)?))
+}
+
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_function(wrap_pyfunction!(gg_grid, m)?)?;
     m.add_function(wrap_pyfunction!(gg_fill_polys, m)?)?;
     m.add_function(wrap_pyfunction!(gg_regions, m)?)?;
     m.add_function(wrap_pyfunction!(gen_ground, m)?)?;

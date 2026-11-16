@@ -59,7 +59,7 @@ import revisit
 log = logging.getLogger("earthd.genground")
 
 ON = os.environ.get("BNE_GEN_GROUND", "off").strip().lower() in ("on", "1", "yes", "true")
-NEED = 309                  # earthfast gg_* / gen_ground (stage 2: lines, surfaces, patterns; linear axes)
+NEED = 310                  # earthfast gg_* / gen_ground (stage 2: lines, surfaces, patterns; linear axes)
 # m round a block its generated ground is made over and cut from: a texel's colour reads the inputs this far round
 # (genground.rs: windows FAR_R_M 48 + the lattice and purity margins), so overlapping blocks agree
 HALO_M = 64.0
@@ -138,12 +138,95 @@ def chain(names):
 
 
 def _grid(frame, x0, y0, size, px):
-    """(lat, lon) (px, px) of the texel centres of [x0, x0 + size]^2 of frame, row 0 = north (imagery.render's)."""
+    """(lat, lon, mx, my) (px, px) of the texel centres of [x0, x0 + size]^2 of frame, row 0 = north (imagery.render's),
+    with their Web-Mercator metres (the canopy rasters'): earthfast.gg_grid on the kernels' threads, the numbers
+    frame.enu_to_geodetic and numpy / dnp gave (tests: test_genground_v3)."""
     t = size / px
-    k = (np.arange(px) + 0.5) * t
+    if hasattr(frame, "origin") and hasattr(frame, "rot"):
+        return _grid_rect(frame, x0, y0 + size, t, px, px)
+    k = (np.arange(px) + 0.5) * t   # (a stand-in frame: its own enu_to_geodetic)
     E, N = np.meshgrid(x0 + k, y0 + size - k)
     lat, lon, _ = frame.enu_to_geodetic(E, N, 0.0)
-    return np.asarray(lat, np.float64), np.asarray(lon, np.float64)
+    lat, lon = np.asarray(lat, np.float64), np.asarray(lon, np.float64)
+    return lat, lon, R_MERC * np.radians(lon), R_MERC * dnp.log(dnp.tan(np.pi / 4 + np.radians(lat) / 2))
+
+
+def _grid_rect(frame, x0, top, t, rows, cols):
+    return fast._ef.gg_grid(np.asarray(frame.origin, np.float64), np.asarray(frame.rot, np.float64), float(x0),
+                            float(top), float(t), int(rows), int(cols))
+
+
+# The per-texel fields that are pure functions of the texel's place (its lat / lon, Web-Mercator metres, land-cover
+# class read at its warped point, its land-cover kind): the last block's kept, and a block that overlaps it (the next
+# block along a drive: 1,024 of its 1,152 columns) computes only the strips it adds (stage 3: they were ~60 % of
+# inputs()'s CPU). Exact: at 1 m texels on the anchor's half-metre texel grid the centres are the same doubles
+# whichever block names them (x0 + (j + 0.5) t: halves of integers, exact), so the fields are the same bits; kept only
+# when their land cover was complete (a class read before its cell came is not kept).
+FIELD_NAMES = ("lat", "lon", "mx", "my", "classes", "base")
+_FIELDS_LOCK = threading.Lock()
+_fields_last = []           # [(key, x0, top, rows, cols, {name: array})]
+
+
+def _fields_rect(frame, x0, top, t, rows, cols, surface):
+    lat, lon, mx, my = _grid_rect(frame, x0, top, t, rows, cols)
+    complete = True
+    if surface is not None:
+        classes, complete = surface.classes(lat, lon)
+    else:
+        classes = np.zeros(lat.shape, np.uint8)
+    base = base_kinds(classes, lat, lon)
+    return {"lat": lat, "lon": lon, "mx": mx, "my": my, "classes": np.asarray(classes, np.uint8),
+            "base": np.asarray(base, np.uint8)}, bool(complete)
+
+
+def texel_fields(frame, x0, y0, size, px, surface):
+    """({FIELD_NAMES: (px, px) arrays}, complete) of the square (see the cache's note above)."""
+    t = size / px
+    top = y0 + size
+    if not (hasattr(frame, "origin") and hasattr(frame, "rot")):
+        lat, lon, mx, my = _grid(frame, x0, y0, size, px)
+        complete = True
+        if surface is not None:
+            classes, complete = surface.classes(lat, lon)
+        else:
+            classes = np.zeros(lat.shape, np.uint8)
+        return {"lat": lat, "lon": lon, "mx": mx, "my": my, "classes": classes,
+                "base": base_kinds(classes, lat, lon)}, bool(complete)
+    exact = t == 1.0 and float(2 * x0).is_integer() and float(2 * top).is_integer()
+    key = (np.asarray(frame.origin, np.float64).tobytes(), np.asarray(frame.rot, np.float64).tobytes(), t,
+           id(surface))
+    prev = None
+    if exact:
+        with _FIELDS_LOCK:
+            prev = _fields_last[0] if _fields_last else None
+    out, complete = None, True
+    if prev is not None and prev[0] == key:
+        _k, ox0, otop, orows, ocols, old = prev
+        dc, dr = x0 - ox0, otop - top               # (new texel (i, j) is the old (i + dr, j + dc))
+        if float(dc).is_integer() and float(dr).is_integer():
+            dc, dr = int(dc), int(dr)
+            r_lo, r_hi = max(0, -dr), min(px, orows - dr)
+            c_lo, c_hi = max(0, -dc), min(px, ocols - dc)
+            if r_lo < r_hi and c_lo < c_hi:
+                out = {}
+                for n in FIELD_NAMES:
+                    a = np.empty((px, px), old[n].dtype)
+                    a[r_lo:r_hi, c_lo:c_hi] = old[n][r_lo + dr:r_hi + dr, c_lo + dc:c_hi + dc]
+                    out[n] = a
+                strips = [(0, r_lo, 0, px), (r_hi, px, 0, px), (r_lo, r_hi, 0, c_lo), (r_lo, r_hi, c_hi, px)]
+                for a0, a1, b0, b1 in strips:
+                    if a1 <= a0 or b1 <= b0:
+                        continue
+                    got, ok = _fields_rect(frame, x0 + b0 * t, top - a0 * t, t, a1 - a0, b1 - b0, surface)
+                    complete = complete and ok
+                    for n in FIELD_NAMES:
+                        out[n][a0:a1, b0:b1] = got[n]
+    if out is None:
+        out, complete = _fields_rect(frame, x0, top, t, px, px, surface)
+    if exact:
+        with _FIELDS_LOCK:
+            _fields_last[:] = [(key, x0, top, px, px, out)] if complete else []
+    return out, complete
 
 
 def _cells(lat, lon):
@@ -450,22 +533,53 @@ def polygons(frame, x0, y0, size, px, feats_list, more=None):
     return poly, np.asarray(kinds, np.uint8), np.ascontiguousarray(dirs), np.asarray(phases, np.float64)
 
 
+def _memo(f, name, make):
+    """make() kept on the Features object f (a decoded map-data layer: immutable, shared by the blocks that read its
+    cell): the tags' decisions are made once per layer, not again for every block (stage 3)."""
+    d = getattr(f, "__dict__", None)
+    if d is None:
+        return make()
+    got = d.get(name)
+    if got is None:
+        got = d[name] = make()
+    return got
+
+
 def line_items(roads_list, water_list, infra_list):
     """[(order, id, kind, half m, Features, row)] of the lines the ground draws: railway ballast (0), paths, tracks and
     unpaved drives (1), hedges and tree rows (2), streams and ditches (3), piers (4), later orders over earlier. Not
-    underground or on a bridge (a road's layer other than 0, a waterway's tunnel or culvert)."""
+    underground or on a bridge (a road's layer other than 0, a waterway's tunnel or culvert). Each layer's decisions are
+    made once (_memo)."""
     out = []
-    for f in roads_list:
-        if f is None or not len(f):
-            continue
-        for i in np.flatnonzero(np.asarray(f.kind) == 2):
+    for layer, fs in (("roads", roads_list), ("infrastructure", infra_list), ("water", water_list)):
+        for f in fs:
+            if f is None or not len(f):
+                continue
+            out.extend((o, fid, k, h, f, i)
+                       for o, fid, k, h, i in _memo(f, "_gg_lines_v1", lambda f=f, layer=layer: _line_rows(layer, f)))
+    return out
+
+
+def _line_rows(layer, f):
+    """line_items' [(order, id, kind, half m, row)] of one layer's Features."""
+    out = []
+    if layer == "roads":
+        lines_ = np.flatnonzero(np.asarray(f.kind) == 2)
+        cls_all = f.attrs.get("class")
+        sub_all = f.attrs.get("subtype")
+        if cls_all is not None and len(lines_):      # (the candidates by class at once: thousands of road segments)
+            c = np.char.strip(np.char.lower(np.asarray(cls_all, str)[lines_]))
+            s = (np.char.strip(np.char.lower(np.asarray(sub_all, str)[lines_])) if sub_all is not None
+                 else np.full(len(lines_), ""))
+            lines_ = lines_[(s == "rail") | np.isin(c, list(LINE_ROADS)) | (c == "service")]
+        for i in lines_:
             cls = _attr(f, "class", i) or ""
             sub = _attr(f, "subtype", i) or ""
             try:
-                layer = float(_attr(f, "osm_layer", i) or 0.0)
+                level = float(_attr(f, "osm_layer", i) or 0.0)
             except ValueError:
-                layer = 0.0
-            if layer != 0:          # (underground, or a bridge: the ground under it is not the line)
+                level = 0.0
+            if level != 0:          # (underground, or a bridge: the ground under it is not the line)
                 continue
             surf = _attr(f, "osm_surface", i)
             width = _width(_attr(f, "osm_width", i))
@@ -474,33 +588,29 @@ def line_items(roads_list, water_list, infra_list):
                 if cls in ("subway", "tram", "funicular") or rw in ("subway", "tram", "abandoned", "razed",
                                                                    "proposed", "construction"):
                     continue
-                out.append((0, str(f.ids[i]), GRAVEL, RAIL_HALF_M, f, i))
+                out.append((0, str(f.ids[i]), GRAVEL, RAIL_HALF_M, i))
             elif cls in LINE_ROADS:
                 kind, half = LINE_ROADS[cls]
                 if surf in SURFACE_KIND:
                     kind = SURFACE_KIND[surf]
-                out.append((1, str(f.ids[i]), kind, width / 2 if width else half, f, i))
+                out.append((1, str(f.ids[i]), kind, width / 2 if width else half, i))
             elif cls == "service" and surf in UNPAVED:
                 half = width / 2 if width else SERVICE_HALF.get(_attr(f, "osm_service", i) or "", 2.0)
                 out.append((1, str(f.ids[i]), GRAVEL if surf not in ("grass", "dirt", "ground", "earth", "mud")
-                            else PATH, half, f, i))
-    for f in infra_list:
-        if f is None or not len(f):
-            continue
+                            else PATH, half, i))
+    elif layer == "infrastructure":
         for i in np.flatnonzero(np.asarray(f.kind) == 2):
             tags = _tags(f, i)
             cls = _attr(f, "class", i) or ""
             if cls == "hedge" or tags.get("barrier") == "hedge":
-                out.append((2, str(f.ids[i]), TREE, HEDGE_HALF_M, f, i))
+                out.append((2, str(f.ids[i]), TREE, HEDGE_HALF_M, i))
             elif tags.get("natural") == "tree_row":
-                out.append((2, str(f.ids[i]), TREE, TREE_ROW_HALF_M, f, i))
+                out.append((2, str(f.ids[i]), TREE, TREE_ROW_HALF_M, i))
             elif cls == "pier" or tags.get("man_made") == "pier":
                 # (a pier's deck over the water: built ground, as INFRA_KIND's pier polygons; drawn after the water)
                 width = _width(tags.get("width"))
-                out.append((4, str(f.ids[i]), BUILT, width / 2 if width else PIER_HALF_M, f, i))
-    for f in water_list:
-        if f is None or not len(f):
-            continue
+                out.append((4, str(f.ids[i]), BUILT, width / 2 if width else PIER_HALF_M, i))
+    else:
         for i in np.flatnonzero(np.asarray(f.kind) == 2):
             tags = _tags(f, i)
             if tags.get("tunnel") or str(tags.get("location") or "") == "underground":
@@ -511,7 +621,7 @@ def line_items(roads_list, water_list, infra_list):
             if half is None:
                 continue
             width = _width(tags.get("width"))
-            out.append((3, str(f.ids[i]), WATER, width / 2 if width else half, f, i))
+            out.append((3, str(f.ids[i]), WATER, width / 2 if width else half, i))
     return out
 
 
@@ -549,14 +659,12 @@ def lines(frame, x0, y0, size, px, roads_list, water_list, infra_list):
     return line, np.asarray(kinds, np.uint8)
 
 
-def canopy_grid(lat, lon, rasters):
-    """The canopy height (m, uint8; CANOPY_NODATA where none) at the texels from the cells' canopy Rasters (EPSG:3857,
-    nearest pixel)."""
-    out = np.full(lat.shape, CANOPY_NODATA, np.uint8)
+def canopy_grid(mx, my, rasters):
+    """The canopy height (m, uint8; CANOPY_NODATA where none) at the texels (Web-Mercator metres mx, my: _grid's)
+    from the cells' canopy Rasters (EPSG:3857, nearest pixel)."""
+    out = np.full(mx.shape, CANOPY_NODATA, np.uint8)
     if not rasters:
         return out
-    mx = R_MERC * np.radians(lon)
-    my = R_MERC * dnp.log(dnp.tan(np.pi / 4 + np.radians(lat) / 2))
     for r in rasters:
         if r is None:
             continue
@@ -573,13 +681,8 @@ def inputs(frame, x0, y0, size, px, md, surface, widths=None):
     import buildings as buildingsmod
     import surface as surfacemod
     fast.require(NEED, "generated ground")
-    lat, lon = _grid(frame, x0, y0, size, px)
-    complete = True
-    if surface is not None:
-        classes, complete = surface.classes(lat, lon)
-    else:
-        classes = np.zeros(lat.shape, np.uint8)
-    base = base_kinds(classes, lat, lon)
+    fields, complete = texel_fields(frame, x0, y0, size, px, surface)
+    lat, lon, mx, my, base = fields["lat"], fields["lon"], fields["mx"], fields["my"], fields["base"]
     feats, canopies, missing = [], [], []
     by_layer = {"roads": [], "water": [], "infrastructure": []}
     keys = _cells(lat, lon)
@@ -607,7 +710,7 @@ def inputs(frame, x0, y0, size, px, md, surface, widths=None):
         return loaded[k2]
     poly, pkinds, dirs, phases = polygons(frame, x0, y0, size, px, feats, more)
     line, lkinds = lines(frame, x0, y0, size, px, by_layer["roads"], by_layer["water"], by_layer["infrastructure"])
-    canopy = canopy_grid(lat, lon, canopies)
+    canopy = canopy_grid(mx, my, canopies)
     cover = np.zeros((px, px), np.uint8)
     if surface is not None:
         try:
