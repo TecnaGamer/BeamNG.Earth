@@ -193,5 +193,65 @@ class FieldsCacheTest(unittest.TestCase):
         self.assertEqual(sf.calls, 128 * 128, "off the half-metre grid: computed in full")
 
 
+def gen(s2, kind, ox, oy, canopy=None):
+    n = kind.shape[0]
+    canopy = np.full((n, n), 255, np.uint8) if canopy is None else canopy
+    return EF.gen_ground(np.ascontiguousarray(s2), np.ascontiguousarray(kind, np.uint8),
+                         np.ascontiguousarray(kind.astype(np.uint32)), np.ascontiguousarray(canopy, np.uint8),
+                         np.zeros((n, n), np.uint32), np.zeros((0, 2)), np.zeros(0), float(ox), float(oy), 1.0,
+                         int(-oy), int(ox))
+
+
+def two_fields(n, col, a, b, blur=12):
+    """One crop region (unmapped fields): colour a west of col, b east, smeared over `blur` texels (the 10 m photo)."""
+    x = np.clip((np.arange(n) - (col - blur / 2)) / blur, 0.0, 1.0)[None, :, None]
+    img = np.asarray(a, float)[None, None, :] * (1 - x) + np.asarray(b, float)[None, None, :] * x
+    return np.ascontiguousarray(np.broadcast_to(img, (n, n, 3)).round().astype(np.uint8))
+
+
+class BarrierTest(unittest.TestCase):
+    """(stage 3, step 2) a field's edge the photo shows inside one land-cover region: each side keeps its own colour
+    and the edge is sharp, not the 10 m photo's smear; no barrier inside a uniform or merely noisy field."""
+
+    def test_two_fields_sharp(self):
+        n, col = 256, 132
+        a, b = (150, 140, 90), (70, 105, 50)            # (stubble beside green crop)
+        s2 = two_fields(n, col, a, b)
+        kind = np.full((n, n), 4, np.uint8)             # CROP
+        out = gen(s2, kind, 0.0, 0.0).astype(float)
+        m = n // 2
+        left, right = out[m - 8:m + 8, col - 3].mean(0), out[m - 8:m + 8, col + 2].mean(0)
+        s_left, s_right = s2[m, col - 3].astype(float), s2[m, col + 2].astype(float)
+        self.assertGreater(np.abs(left - right).sum(), 2.0 * np.abs(s_left - s_right).sum(),
+                           "the sides apart at the edge (the photo smeared them together)")
+        self.assertLess(np.abs(left - np.array(a)).sum(), 40)
+        self.assertLess(np.abs(right - np.array(b)).sum(), 40)
+
+    def test_no_barrier_in_noise(self):
+        n = 256
+        rng = np.random.default_rng(3)
+        s2 = np.clip(np.full((n, n, 3), (100, 110, 70), float) + rng.normal(0, 3, (n // 8, n // 8, 1)).repeat(8, 0)
+                     .repeat(8, 1), 0, 255).astype(np.uint8)
+        kind = np.full((n, n), 4, np.uint8)
+        plain = gen(s2, kind, 0.0, 0.0).astype(float)
+        # (the same field without the analysis's chance of a barrier: compare with a flat field's detail alone)
+        flat = gen(np.full_like(s2, (100, 110, 70)), kind, 0.0, 0.0).astype(float)
+        diff = np.abs((plain - s2) - (flat - np.full_like(s2, (100, 110, 70))))
+        self.assertLess(diff.max(), 12.0, "no edge drawn in a noisy field")
+
+    def test_blocks_agree_with_barriers(self):
+        n, halo, W = 160, int(gg.HALO_M), 600
+        rng = np.random.default_rng(8)
+        cols = rng.integers(40, 200, (W // 40 + 1, W // 56 + 1, 3)).repeat(40, 0).repeat(56, 1)[:W, :W]
+        s2 = np.ascontiguousarray(cols.astype(np.uint8))
+        kind = np.full((W, W), 4, np.uint8)
+
+        def block(r0, c0):
+            sl = (slice(r0 - halo, r0 + n + halo), slice(c0 - halo, c0 + n + halo))
+            return gen(s2[sl], kind[sl], float(c0 - halo), float(-(r0 - halo)))[halo:halo + n, halo:halo + n]
+        a, b = block(140, 140), block(140 + 24, 140 + 40)
+        np.testing.assert_array_equal(a[24:, 40:], b[:n - 24, :n - 40])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -71,6 +71,7 @@ const COVER_ROOF: u8 = 4;
 const CANOPY_NODATA: u8 = 255;
 const TREE_MIN_M: u8 = 3;           // canopy at least this tall: a tree (Meta / WRI CHM, 1.2 m pixels)
 const SHRUB_MIN_M: u8 = 1;          // ... at least this: a shrub where the land cover says trees
+const SKIRT_M: f64 = 3.0;           // canopy of SHRUB_MIN_M and over this far from a tree's crown is its skirt (gg_regions)
 
 // gen_ground's borders (m)
 const PURE_M: f64 = 8.0;            // a texel this far inside its region: its photo colour is the region's own
@@ -222,7 +223,15 @@ fn pattern(k: u8, u: f64, v: f64, inside_m: f64, phase: f64) -> (f32, [f32; 3], 
 // the crowns' sun (unit vector east, north, up: from the north-west at 45 degrees, as the photos' shadows and
 // groundphoto.rs) and how strongly the canopy's slope shades them
 const SUN: (f32, f32, f32) = (-0.5, 0.5, 0.70710677);
-const CANOPY_SHADE: f32 = 0.5;
+const CANOPY_SHADE: f32 = 0.3;
+/// (stage 3, the in-game A/B of 2026-11-16) the ground under the trees: the game draws their crowns (trees.lua), so a
+/// wood's texels take the forest floor's colour (leaf litter and undergrowth) this far over the photo's canopy colour,
+/// which drew a dark band wherever the placed trees thin out (the woods' edges, lower tree settings)
+const FLOOR: [f32; 3] = [98.0, 94.0, 66.0];
+const FLOOR_MIX: f32 = 0.5;
+/// ... and a skirt (canopy under TREE_MIN_M) is shaded this much less and lifted this much
+const SKIRT_SHADE: f32 = 0.5;
+const SKIRT_LIFT: f32 = 1.08;
 
 /// Smooth value noise in [-1, 1] at (x, y) lattice units (groundpaint::value_noises' formula).
 #[inline]
@@ -456,7 +465,7 @@ pub fn gg_fill_polys(py: Python<'_>, mut out: PyReadwriteArray2<'_, u32>, xy: Py
 pub fn gg_regions<'py>(py: Python<'py>, base: PyReadonlyArray2<'py, u8>, poly: PyReadonlyArray2<'py, u32>,
                        poly_kind: PyReadonlyArray1<'py, u8>, line: PyReadonlyArray2<'py, u32>,
                        line_kind: PyReadonlyArray1<'py, u8>, canopy: PyReadonlyArray2<'py, u8>,
-                       cover: PyReadonlyArray2<'py, u8>)
+                       cover: PyReadonlyArray2<'py, u8>, t: f64)
                        -> PyResult<(Bound<'py, PyArray2<u8>>, Bound<'py, PyArray2<u32>>)> {
     let (base, poly, pk, line, lk, canopy, cover) = (base.as_array(), poly.as_array(), poly_kind.as_array(),
                                                      line.as_array(), line_kind.as_array(), canopy.as_array(),
@@ -537,17 +546,47 @@ pub fn gg_regions<'py>(py: Python<'py>, base: PyReadonlyArray2<'py, u8>, poly: P
                 };
             }
         }
-        // hedgerows grown by a texel (from the canopy's own trees: the pass above, read only)
-        let grown: Vec<usize> = (0..h * w).filter(|&i| {
-            let (r, c) = (i / w, i % w);
-            let ch = canopy[[r, c]];
-            if chm_tree[i] || ch == CANOPY_NODATA || ch < SHRUB_MIN_M
-                || !matches!(kind[i], GRASS | CROP | SHRUB | LAWN | BUILT | BARE | NONE) {
-                return false;
+        // (stage 3) hedgerow and wood skirts: from the canopy's own trees (>= TREE_MIN_M) through open ground with
+        // SHRUB_MIN_M of canopy, SKIRT_M at most (a chamfer distance in thirds of a texel, two passes, only through
+        // such texels: the canopy model draws a hedgerow's tall core only); the one-texel growth of stage 2 widened
+        // with the texel size, this does not
+        let lim = ((SKIRT_M / t) * 3.0).round().max(0.0) as u32;
+        let passable = |i: usize| {
+            let ch = canopy[[i / w, i % w]];
+            ch != CANOPY_NODATA && ch >= SHRUB_MIN_M && !by_line[i]
+                && matches!(kind[i], GRASS | CROP | SHRUB | LAWN | BUILT | BARE | NONE)
+        };
+        let big = u32::MAX / 4;
+        let mut sd: Vec<u32> = (0..h * w).map(|i| if chm_tree[i] { 0 } else { big }).collect();
+        for pass in 0..2 {
+            let order: Box<dyn Iterator<Item = usize>> = if pass == 0 { Box::new(0..h * w) } else {
+                Box::new((0..h * w).rev())
+            };
+            for i in order {
+                if sd[i] == 0 || !passable(i) {
+                    continue;
+                }
+                let (r, c) = ((i / w) as i64, (i % w) as i64);
+                let nbrs: [(i64, i64, u32); 4] = if pass == 0 {
+                    [(0, -1, 3), (-1, 0, 3), (-1, -1, 4), (-1, 1, 4)]
+                } else {
+                    [(0, 1, 3), (1, 0, 3), (1, 1, 4), (1, -1, 4)]
+                };
+                let mut v = sd[i];
+                for (dr, dc, cost) in nbrs {
+                    let (y, x) = (r + dr, c + dc);
+                    if y < 0 || x < 0 || y >= h as i64 || x >= w as i64 {
+                        continue;
+                    }
+                    let d = sd[y as usize * w + x as usize];
+                    if d < big {
+                        v = v.min(d + cost);
+                    }
+                }
+                sd[i] = v;
             }
-            (r.saturating_sub(1)..=(r + 1).min(h - 1))
-                .any(|y| (c.saturating_sub(1)..=(c + 1).min(w - 1)).any(|x| chm_tree[y * w + x]))
-        }).collect();
+        }
+        let grown: Vec<usize> = (0..h * w).filter(|&i| !chm_tree[i] && sd[i] <= lim && passable(i)).collect();
         for i in grown {
             let pid = if by_line[i] { 0 } else { region[i] >> 5 };
             kind[i] = TREE;
@@ -662,6 +701,204 @@ fn region_mean(s2: &[u8], kind: &[u8], region: &[u32], dist: &[u32], n: usize, r
     }
 }
 
+// ---- stage 3 step 2: Sentinel-2 field-edge barriers (bounded, local) ----
+
+/// Coarse analysis cell (texels, on the global grid's multiples) for the field-edge barriers: about the photo's own
+/// resolution (8 m at 1 m texels).
+const COARSE: usize = 8;
+/// A barrier's colour step: the smoothed coarse luminance gradient (sum of |dY| over 2 cells, 0..255 units) at least
+/// this, and its neighbours along the edge at least BARRIER_LOW (persistence over 3 cells, ~24 m).
+const BARRIER_HIGH: i32 = 18;
+const BARRIER_LOW: i32 = 11;
+/// Texels within this of a barrier's centre line take their own side's colour (sampled BARRIER_PROBE cells either
+/// side), sharp at the line; faded back into the photo by BARRIER_FADE_M.
+const BARRIER_NEAR_M: f64 = 10.0;
+const BARRIER_FADE_M: f64 = 14.0;
+const BARRIER_PROBE: i64 = 2;
+
+/// 8 quantized directions (dx, dy) of a coarse gradient: integer comparisons against tan 22.5 deg ~ 5 / 12.
+#[inline]
+fn quant_dir(gx: i32, gy: i32) -> (i64, i64) {
+    let (ax, ay) = (gx.abs() as i64, gy.abs() as i64);
+    let sx = if gx >= 0 { 1 } else { -1 };
+    let sy = if gy >= 0 { 1 } else { -1 };
+    if 12 * ay <= 5 * ax {
+        (sx, 0)
+    } else if 12 * ax <= 5 * ay {
+        (0, sy)
+    } else {
+        (sx, sy)
+    }
+}
+
+struct Coarse {
+    nr: usize,
+    nc: usize,
+    pr: usize,          // texel row / col of coarse cell (0, 0)'s corner (global multiples of COARSE)
+    pc: usize,
+    rgb: Vec<[i32; 3]>, // the cell's mean photo colour (0..255), -1 where the cell is not whole inside the square
+    lum: Vec<i32>,      // smoothed luminance x 16
+    barrier: Vec<(i64, i64)>, // the barrier's gradient direction (cells), (0, 0): none
+}
+
+fn coarse_barriers(s2: &[u8], kind: &[u8], region: &[u32], dist: &[u32], n: usize, gr: i64, gc: i64) -> Coarse {
+    let pr = aligned(0, gr, COARSE);
+    let pc = aligned(0, gc, COARSE);
+    let nr = if n > pr { (n - pr) / COARSE } else { 0 };
+    let nc = if n > pc { (n - pc) / COARSE } else { 0 };
+    let mut rgb = vec![[-1i32; 3]; nr * nc];
+    let mut open = vec![false; nr * nc];
+    for a in 0..nr {
+        for b in 0..nc {
+            let (r0, c0) = (pr + a * COARSE, pc + b * COARSE);
+            let mut s = [0i64; 3];
+            let reg = region[r0 * n + c0];
+            let mut one = true;
+            for y in r0..r0 + COARSE {
+                for x in c0..c0 + COARSE {
+                    let i = y * n + x;
+                    for ch in 0..3 {
+                        s[ch] += s2[i * 3 + ch] as i64;
+                    }
+                    one &= region[i] == reg && dist[i] >= 36;   // (no region border within 12 m: unexplained)
+                }
+            }
+            let k = (COARSE * COARSE) as i64;
+            rgb[a * nc + b] = [((s[0] + k / 2) / k) as i32, ((s[1] + k / 2) / k) as i32, ((s[2] + k / 2) / k) as i32];
+            open[a * nc + b] = one && matches!(kind[r0 * n + c0], GRASS | CROP | LAWN | SHRUB | BARE | WETLAND | BUILT);
+        }
+    }
+    // luminance Y = (77 R + 150 G + 29 B + 128) >> 8, smoothed 1-2-1 both ways (x 16)
+    let y: Vec<i32> = rgb.iter().map(|c| (77 * c[0] + 150 * c[1] + 29 * c[2] + 128) >> 8).collect();
+    let at = |a: i64, b: i64| -> i32 {
+        let a = a.clamp(0, nr as i64 - 1) as usize;
+        let b = b.clamp(0, nc as i64 - 1) as usize;
+        y[a * nc + b]
+    };
+    let mut lum = vec![0i32; nr * nc];
+    for a in 0..nr as i64 {
+        for b in 0..nc as i64 {
+            let mut s = 0;
+            for (da, wa) in [(-1i64, 1i32), (0, 2), (1, 1)] {
+                for (db, wb) in [(-1i64, 1i32), (0, 2), (1, 1)] {
+                    s += wa * wb * at(a + da, b + db);
+                }
+            }
+            lum[a as usize * nc + b as usize] = s;
+        }
+    }
+    let l = |a: i64, b: i64| -> i32 {
+        let a = a.clamp(0, nr as i64 - 1) as usize;
+        let b = b.clamp(0, nc as i64 - 1) as usize;
+        lum[a * nc + b]
+    };
+    // gradients (x 16 units over 2 cells); a barrier: a local maximum across the edge (along its quantized
+    // direction), BARRIER_HIGH, and both neighbours along the edge BARRIER_LOW with a similar direction
+    let mut g = vec![(0i32, 0i32); nr * nc];
+    for a in 0..nr as i64 {
+        for b in 0..nc as i64 {
+            g[a as usize * nc + b as usize] = (l(a, b + 1) - l(a, b - 1), l(a - 1, b) - l(a + 1, b));
+        }
+    }
+    let mag = |a: i64, b: i64| -> i32 {
+        if a < 0 || b < 0 || a >= nr as i64 || b >= nc as i64 { return 0; }
+        let (gx, gy) = g[a as usize * nc + b as usize];
+        (gx.abs() + gy.abs()) / 16
+    };
+    let mut barrier = vec![(0i64, 0i64); nr * nc];
+    for a in 1..nr as i64 - 1 {
+        for b in 1..nc as i64 - 1 {
+            let i = a as usize * nc + b as usize;
+            if !open[i] {
+                continue;
+            }
+            let m = mag(a, b);
+            if m < BARRIER_HIGH {
+                continue;
+            }
+            let (gx, gy) = g[i];
+            let (dx, dy) = quant_dir(gx, gy);      // (dy positive: north, rows run south)
+            let (da, db) = (-dy, dx);              // (in cells: rows, cols)
+            if mag(a + da, b + db) > m || mag(a - da, b - db) >= m {
+                continue;                           // (not the edge's crest; ties to the lower side)
+            }
+            let along = [(db, -da), (-db, da)];     // (perpendicular: along the edge)
+            let ok = along.iter().all(|&(ea, eb)| {
+                let (a2, b2) = (a + ea, b + eb);
+                if mag(a2, b2) < BARRIER_LOW || !open[a2 as usize * nc + b2 as usize] {
+                    return false;
+                }
+                let (hx, hy) = g[a2 as usize * nc + b2 as usize];
+                (gx as i64) * (hx as i64) + (gy as i64) * (hy as i64) > 0
+            });
+            if ok {
+                barrier[i] = (dx, dy);
+            }
+        }
+    }
+    Coarse { nr, nc, pr, pc, rgb, lum, barrier }
+}
+
+
+/// The colour of texel (r, c)'s side of the strongest barrier within a cell of its own cell, and its weight (1 within
+/// BARRIER_NEAR_M of the barrier's line, fading out by BARRIER_FADE_M), or None. The step between the sides is
+/// smoothed over 1.5 m either side of the line (through the barrier cell's centre, across its direction).
+fn barrier_colour(cg: &Coarse, r: usize, c: usize, n: usize, t: f64, region: &[u32]) -> Option<([f32; 3], f32)> {
+    if r < cg.pr || c < cg.pc || cg.nr == 0 || cg.nc == 0 {
+        return None;
+    }
+    let (a0, b0) = (((r - cg.pr) / COARSE) as i64, ((c - cg.pc) / COARSE) as i64);
+    let mut best: Option<(i64, i64, i64, i64)> = None;
+    let mut best_d2 = i64::MAX;
+    for da in -1..=1i64 {
+        for db in -1..=1i64 {
+            let (a, b) = (a0 + da, b0 + db);
+            if a < 0 || b < 0 || a >= cg.nr as i64 || b >= cg.nc as i64 {
+                continue;
+            }
+            let (dx, dy) = cg.barrier[a as usize * cg.nc + b as usize];
+            if dx == 0 && dy == 0 {
+                continue;
+            }
+            let d2 = da * da + db * db;          // (the nearest barrier cell; ties: the first in row order)
+            if d2 < best_d2 {
+                best_d2 = d2;
+                best = Some((a, b, dx, dy));
+            }
+        }
+    }
+    let (a, b, dx, dy) = best?;
+    // the texel's signed distance (m) from the line through the cell's centre, across the edge (gradient direction)
+    let half = COARSE as f64 / 2.0;
+    let (cy, cx) = (cg.pr as f64 + a as f64 * COARSE as f64 + half, cg.pc as f64 + b as f64 * COARSE as f64 + half);
+    let (px, py) = (c as f64 + 0.5 - cx, -(r as f64 + 0.5 - cy));
+    let norm = ((dx * dx + dy * dy) as f64).sqrt();
+    let sd = (px * dx as f64 + py * dy as f64) / norm * t;
+    if sd.abs() >= BARRIER_FADE_M {
+        return None;
+    }
+    let probe = |sgn: i64| -> Option<[f32; 3]> {
+        let (pa, pb) = (a - sgn * dy * BARRIER_PROBE, b + sgn * dx * BARRIER_PROBE);
+        if pa < 0 || pb < 0 || pa >= cg.nr as i64 || pb >= cg.nc as i64 {
+            return None;
+        }
+        let i = pa as usize * cg.nc + pb as usize;
+        let (rr, cc) = (cg.pr + pa as usize * COARSE, cg.pc + pb as usize * COARSE);
+        if region[rr * n + cc] != region[r * n + c] || cg.rgb[i][0] < 0 {
+            return None;                        // (a probe in another region: not this field's colour)
+        }
+        Some([cg.rgb[i][0] as f32, cg.rgb[i][1] as f32, cg.rgb[i][2] as f32])
+    };
+    let (hi, lo) = (probe(1)?, probe(-1)?);
+    let x = ((sd + 1.5) / 3.0).clamp(0.0, 1.0) as f32;
+    let a_ = x * x * (3.0 - 2.0 * x);
+    let col = [lo[0] + (hi[0] - lo[0]) * a_, lo[1] + (hi[1] - lo[1]) * a_, lo[2] + (hi[2] - lo[2]) * a_];
+    let w = if sd.abs() <= BARRIER_NEAR_M { 1.0 } else {
+        (1.0 - (sd.abs() - BARRIER_NEAR_M) / (BARRIER_FADE_M - BARRIER_NEAR_M)) as f32
+    };
+    Some((col, w))
+}
+
 /// The generated ground (n, n, 3) u8, row 0 = north: s2 (n, n, 3) the Sentinel-2 photo rendered over the block's
 /// texels (enlarged: its own 10 m detail); kind / region (n, n) from gg_regions; canopy (n, n) heights (m, 255: none);
 /// (ox, oy) the world-locked east / north (m) of texel (0, 0)'s centre (texel (r, c) at ox + c t, oy - r t); t: m a
@@ -725,6 +962,7 @@ pub fn gen_ground<'py>(py: Python<'py>, s2: PyReadonlyArray3<'py, u8>, kind: PyR
             }
         }
         let threads = par::threads_for(n * n, 65536);
+        let cg = coarse_barriers(&s2, &kind, &region, &dist, n, gr, gc);
         // the regions' colours on a lattice of every LATTICE texels (interpolated between the lattice points of the
         // texel's own region; a texel with none of its region round it asks its own): a tenth of the windows
         // (lattice point (a, b) at texel (pr + a L, pc + b L): on the global grid's multiples of L)
@@ -792,6 +1030,17 @@ pub fn gen_ground<'py>(py: Python<'py>, s2: PyReadonlyArray3<'py, u8>, kind: PyR
                                 base[2] + (p[2] - base[2]) * m];
                     }
                 }
+                if k == TREE {       // (the forest floor under the game's trees, FLOOR)
+                    base = [base[0] + (FLOOR[0] - base[0]) * FLOOR_MIX, base[1] + (FLOOR[1] - base[1]) * FLOOR_MIX,
+                            base[2] + (FLOOR[2] - base[2]) * FLOOR_MIX];
+                }
+                // (stage 3) a field's edge the photo shows inside one region (two unmapped fields of one class): each
+                // side its own colour, sampled BARRIER_PROBE cells off the edge, the step at the edge's line
+                if let Some(side) = barrier_colour(&cg, r, c, n, t, &region) {
+                    let (sc, w) = side;
+                    base = [base[0] + (sc[0] - base[0]) * w, base[1] + (sc[1] - base[1]) * w,
+                            base[2] + (sc[2] - base[2]) * w];
+                }
                 // the kind's fine detail, world-locked
                 let det = &DETAIL[k as usize];
                 let (wx, wy) = (ox + c as f64 * t, oy - r as f64 * t);
@@ -812,7 +1061,12 @@ pub fn gen_ground<'py>(py: Python<'py>, s2: PyReadonlyArray3<'py, u8>, kind: PyR
                         let hy = (at(ru, c) - at(rd, c)) / (((rd - ru).max(1)) as f32 * t as f32);
                         let len = (hx * hx + hy * hy + 1.0).sqrt();
                         let lam = ((-hx * SUN.0 - hy * SUN.1 + SUN.2) / len).max(0.0);
-                        f *= (1.0 + CANOPY_SHADE * (lam / SUN.2 - 1.0)).clamp(0.45, 1.25);
+                        let skirt = k == TREE && hc < TREE_MIN_M as f32;
+                        let shade = if skirt { CANOPY_SHADE * SKIRT_SHADE } else { CANOPY_SHADE };
+                        f *= (1.0 + shade * (lam / SUN.2 - 1.0)).clamp(0.45, 1.25);
+                        if skirt {
+                            f *= SKIRT_LIFT;
+                        }
                     } else if det.crowns.0 > 0.0 {
                         let dome = crown(wx, wy, det.crowns.0, 7 + k as u64);
                         f *= 1.0 + det.crowns.1 * (dome.sqrt() - 0.55);

@@ -59,10 +59,10 @@ import revisit
 log = logging.getLogger("earthd.genground")
 
 ON = os.environ.get("BNE_GEN_GROUND", "off").strip().lower() in ("on", "1", "yes", "true")
-NEED = 310                  # earthfast gg_* / gen_ground (stage 2: lines, surfaces, patterns; linear axes)
+NEED = 311                  # earthfast gg_* / gen_ground (stage 2: lines, surfaces, patterns; linear axes)
 # m round a block its generated ground is made over and cut from: a texel's colour reads the inputs this far round
 # (genground.rs: windows FAR_R_M 48 + the lattice and purity margins), so overlapping blocks agree
-HALO_M = 64.0
+HALO_M = 96.0
 # the photo's pending mark while some map data it reads is not on disk (earthd.Server.base_ready / _base_kept)
 GEN_PENDING = ("genground_data",)
 LAYERS = ("land_use", "water", "infrastructure", "canopy", "landcover", "roads", "buildings")
@@ -726,7 +726,8 @@ def inputs(frame, x0, y0, size, px, md, surface, widths=None):
                 cover[np.asarray(m, bool)] |= 4
         except Exception as e:      # (the roofs are filled in after anyway)
             log.debug("genground: building mask: %s: %s", type(e).__name__, e)
-    kind, region = fast._ef.gg_regions(np.ascontiguousarray(base), poly, pkinds, line, lkinds, canopy, cover)
+    kind, region = fast._ef.gg_regions(np.ascontiguousarray(base), poly, pkinds, line, lkinds, canopy, cover,
+                                       float(size / px))
     return kind, region, canopy, bool(complete) and not missing, poly, dirs, phases
 
 

@@ -6480,6 +6480,8 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // out (Codex review of 308)
     // 310: stage 3 perf: gg_grid (the texel grid and its Web-Mercator metres, rectangles), the edge-table polygon fill,
     // the capsule-interval line fill, value_noises on the kernels' threads (all the same output)
-    m.add("VERSION", 310)?;
+    // 311: stage 3 steps 2-3: gg_regions(..., t) with the bounded hedgerow skirt; gen_ground's field-edge barriers and
+    // forest floor
+    m.add("VERSION", 311)?;
     Ok(())
 }
