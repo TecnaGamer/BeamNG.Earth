@@ -47,6 +47,48 @@ def points(x, y, vx, vy, turn=0.0, lead_s=LEAD_S, min_m=MIN_M, max_m=MAX_M, step
     return out
 
 
+END_M = 400.0           # m of a known road's end whose direction the path goes on in past it (along)
+
+
+def along(line, v, lead_s=LEAD_S, min_m=MIN_M, max_m=MAX_M, step_m=STEP_M):
+    """points() for a player on a known road: line ((k, 2), the road ahead from the player: roadahead.follow) walked
+    every step_m, then, where the known road ends before the lookahead does (the map ahead not read yet, a fork),
+    straight on in the direction of its last END_M, the spread growing from there (along the road itself none: it is
+    the way, not a guess). A motorway's bends took a straight line off it within 2-3 km, and the map cells warmed
+    10 km ahead were another road's. [] when not moving or without a line."""
+    if v < MIN_V or line is None or len(line) < 2:
+        return []
+    dist = min(max_m, max(min_m, v * lead_s))
+    out = [(0.0, float(line[0][0]), float(line[0][1]), 0.0)]
+    s, due = 0.0, step_m
+    px, py = float(line[0][0]), float(line[0][1])
+    tail = [(0.0, px, py)]                  # (the walked points: the end's direction)
+    for q in line[1:]:
+        qx, qy = float(q[0]), float(q[1])
+        seg = math.hypot(qx - px, qy - py)
+        while seg > 1e-9 and s + seg >= due and due <= dist + 1e-6:
+            f = (due - s) / seg
+            out.append((due / v, px + (qx - px) * f, py + (qy - py) * f, 0.0))
+            due += step_m
+        s += seg
+        px, py = qx, qy
+        tail.append((s, px, py))
+        if s >= dist:
+            return out
+    back = next(((bx, by) for bs, bx, by in reversed(tail) if s - bs >= END_M), tail[0][1:])
+    d = math.hypot(px - back[0], py - back[1])
+    if d < 1e-6:
+        return out
+    ux, uy = (px - back[0]) / d, (py - back[1]) / d
+    end = s
+    while due <= dist + 1e-6:
+        out.append((due / v, px + ux * (due - end), py + uy * (due - end), min(SPREAD_MAX_M, SPREAD * (due - end))))
+        due += step_m
+    if out[-1][0] * v < dist - 1e-6:
+        out.append((dist / v, px + ux * (dist - end), py + uy * (dist - end), min(SPREAD_MAX_M, SPREAD * (dist - end))))
+    return out
+
+
 class Track:
     """The player's recent poses: its turn rate (heading change per second over the last WINDOW_S)."""
     WINDOW_S = 3.0

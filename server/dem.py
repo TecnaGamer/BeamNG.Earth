@@ -55,6 +55,7 @@ import netfetch
 import polardem
 import revisit
 import staging
+import waits
 import xproc
 
 log = logging.getLogger("earthd.dem")
@@ -1560,7 +1561,8 @@ class Dem:
         if progress:
             progress(done, len(keys))
         for k, fut in futs.items():
-            out[k] = fut.result()
+            with waits.waiting("elevation"):
+                out[k] = fut.result()
             done += 1
             if progress:
                 progress(done, len(keys))

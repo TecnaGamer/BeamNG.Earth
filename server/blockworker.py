@@ -680,11 +680,40 @@ def ground(frame, la, lo, z):
     return z
 
 
-def warm_map(key, layers, veg=True):
+_towns_warm_ex = None
+
+
+def _towns_warm(key):
+    """The town signs' inputs of map cell key's road tiles fetched on a thread of this process (townentry.Towns.warm:
+    the communes' areas, their village points and land cover; it waits for them as a road tile would, so not in
+    warm_map's own time: the cell's next job starts meanwhile)."""
+    global _towns_warm_ex
+    if _s.md is None or _s.surface is None:
+        return
+    if getattr(_s, "towns", None) is None:
+        _s.towns = townsignsmod.Towns(_s.md, _s.surface)
+    if _towns_warm_ex is None:
+        from concurrent.futures import ThreadPoolExecutor
+        _towns_warm_ex = ThreadPoolExecutor(1, thread_name_prefix="towns-warm")
+
+    def run():
+        try:
+            _s.towns.warm(key)
+        except Exception as e:      # (the tile asks itself, as before)
+            log.debug("warm towns %s: %s: %s", key, type(e).__name__, e)
+    _towns_warm_ex.submit(run)
+
+
+def warm_map(key, layers, veg=True, towns=False, plan=None):
     """Map data cell key ((z, x, y)) built into the disk caches ahead of the car (earthd.Server.map_ahead): its
     layers (MapData.cell) and its vegetation cell (Vegetation.cell, which reads its 3 x 3 neighbours' roads,
     buildings and water). On a first visit a trees geotile spent ~56 s on its cell's map data and 0.01 s on its
-    trees, and the tiles asked for it only ~200 m before the car at 175 mph. Seconds."""
+    trees, and the tiles asked for it only ~200 m before the car at 175 mph. towns: the town signs' inputs of its road
+    tiles too (_towns_warm, behind this call: a road geotile of a cell without them waited up to 45 s for its
+    communes' village points and land cover, 9-14 s at 300 km/h). plan: (anchor id, lat, lon): the cell's road plans
+    too (plan_cell, into the run's plan cache: the grading every road and trees tile of the cell reads its ground
+    through; unplanned, the first trees tile of each new cell waited 3-14 s for them and its road tiles up to 6 s,
+    2026-11-16). Seconds."""
     import vegetation as vegetationmod
     if _s.md is None:
         return 0.0
@@ -699,10 +728,12 @@ def warm_map(key, layers, veg=True):
             log.debug("warm map %s: %s: %s", k, type(e).__name__, e)
     # the cell's layers and its 8 neighbours' roads, buildings and water (what Vegetation.cell reads) at once: mostly
     # downloads; one after another a first-visit cell took 101 s on 2 cores
+    # (the neighbours' infrastructure too: a road tile reads it for the stations, bridges and power lines that reach in
+    # from the next cell, railstations.stations_near: 13 s of a first-visit drive's road tiles waited for it)
     jobs = [(key, layers)] if layers else []
     if veg:
-        jobs += [((z, x + dx, y + dy), ("buildings", "roads", "water")) for dy in (-1, 0, 1) for dx in (-1, 0, 1)
-                 if (dx, dy) != (0, 0)]
+        jobs += [((z, x + dx, y + dy), ("buildings", "roads", "water", "infrastructure"))
+                 for dy in (-1, 0, 1) for dx in (-1, 0, 1) if (dx, dy) != (0, 0)]
     if jobs:
         with ThreadPoolExecutor(min(9, len(jobs)), thread_name_prefix="warm-map") as ex:
             list(ex.map(lambda j: one(*j), jobs))
@@ -716,6 +747,15 @@ def warm_map(key, layers, veg=True):
             _s.veg.cell(key)
         except Exception as e:
             log.debug("warm veg %s: %s: %s", key, type(e).__name__, e)
+    # (after the trees' cell, which the first tiles ask for: a tile that needs the plans before this builds them
+    # itself, as before, and this reads them)
+    if plan is not None:
+        try:
+            plan_cell(*plan, key)
+        except Exception as e:      # (the first tile that reads the cell plans it, as before)
+            log.debug("warm plans %s: %s: %s", key, type(e).__name__, e)
+    if towns:
+        _towns_warm(key)
     return time.perf_counter() - t0
 def plan_elev(la, lo):
     """The road plans' ground (PlanStore's elev): the DEM at grading.PROFILE_ZOOM with the tunnels' lids
@@ -2677,25 +2717,32 @@ def _geo_near(gx, gy, lat, lon):
 
 def roads_geo(aid, lat, lon, zoom, gx, gy, gzoom, out_dir, vfs_dir, sidewalks, lift, buildings, left_hand, mph, q,
               gas_stations, buried=0.0, lamp_region=None, country=None, content=True, skin=True, exact=None, pole_profile=None,
-              de_junctions=False, towns_on=False, wear=None):
-    """earthd.Server.build_roads_geo here (road-tile pool): geotile (gx, gy)'s content (content: built in its own
+              de_junctions=False, towns_on=False, wear=None, patience=None):
+    """earthd.Server.build_roads_geo here (road-tile pool; patience: s its content may wait for what it can be built
+    without, townentry.patience: the car is that close; None: as long as it takes): geotile (gx, gy)'s content (content: built in its own
     frame, or from the revisit cache; gzoom its DEM zoom, the rules its own place's), anchor aid's skin (skin) and its
     parts' exact variants for that anchor (exact: {what: {pivot}}, or "auto": those of the content built here that its
     rigid placement would leave off, roads.geo_exact_auto). Returns {"content": (vfs path, chunks, info,
     fuel pads) or None, "skin": (vfs path, info) or None, "exact": {what: vfs path}, "stages": {...}}."""
+    import waits as waitsmod
     watch = _stack_watch(f"road geotile {gx}_{gy}")
     chk = _abandon_check(out_dir, aid)      # (given up once a teleport leaves aid: pools.Abandoned)
     chk.__enter__()
+    waited = waitsmod.collect()             # (what this build's thread waited for, by name: the slow tile's log line)
+    waits = waited.__enter__()
     try:
-        out = {"content": None, "skin": None, "exact": {}, "stages": {}}
+        out = {"content": None, "skin": None, "exact": {}, "stages": {}, "waits": waits}
         t0 = time.perf_counter()
         c0 = time.process_time()
+        own0 = time.thread_time()
 
         near = _geo_near(gx, gy, lat, lon)
 
         def build_content():
             import buildings as buildingsmod
-            with buildingsmod.urgent_photos(near):      # (the tiles round the car: their roof photos first)
+            import townentry
+            # (the tiles round the car: their roof photos first; a tile the car is about to reach: no long waits)
+            with buildingsmod.urgent_photos(near), townentry.patience(patience):
                 return _geo_content(gx, gy, gzoom, out_dir, vfs_dir, buildings, left_hand, mph, gas_stations, buried,
                                     lamp_region, country, pole_profile, de_junctions=de_junctions, towns_on=towns_on,
                                     wear=wear)
@@ -2721,9 +2768,10 @@ def roads_geo(aid, lat, lon, zoom, gx, gy, gzoom, out_dir, vfs_dir, sidewalks, l
         if exact:
             out["exact"] = _geo_exact(aid, lat, lon, gx, gy, out_dir, vfs_dir, exact)
         out["time"] = {"content_s": t1 - t0, "content_cpu": c1 - c0, "skin_s": t2 - t1, "skin_cpu": c2 - c1,
-                       "exact_s": time.perf_counter() - t2}
+                       "exact_s": time.perf_counter() - t2, "own_cpu": time.thread_time() - own0}
         return out
     finally:
+        waited.__exit__()
         chk.__exit__()
         watch.cancel()
 

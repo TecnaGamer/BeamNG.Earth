@@ -72,3 +72,43 @@ class TrackTest(unittest.TestCase):
         self.assertEqual(t.turn(), 0.0)
         t.add(3.0, 2030.0, 0.0, 0.0, 0.0)               # stopped
         self.assertEqual(len(t.poses), 0)
+
+
+class AlongTest(unittest.TestCase):
+    """along: the path on the road the player drives on, then straight on from its end."""
+
+    def test_follows_the_road_then_goes_straight_on(self):
+        # east 1 km, then north 1 km; the lookahead reaches 4.8 km
+        p = aheadpath.along([(0.0, 0.0), (1000.0, 0.0), (1000.0, 1000.0)], 80.0, lead_s=60.0, min_m=1500.0,
+                            max_m=10000.0)
+        self.assertEqual(p[0], (0.0, 0.0, 0.0, 0.0))
+        self.assertAlmostEqual(p[-1][0], 60.0, delta=0.01)
+        self.assertAlmostEqual(p[-1][1], 1000.0, delta=1e-6)      # north on from the road's end, not east
+        self.assertAlmostEqual(p[-1][2], 3800.0, delta=1e-6)
+        on_road = [q for q in p if q[0] * 80.0 <= 2000.0]
+        self.assertTrue(all(q[3] == 0.0 for q in on_road), "the road itself is no guess")
+        past = [q for q in p if q[0] * 80.0 > 2000.0]
+        self.assertTrue(all(b[3] >= a[3] > 0.0 for a, b in zip(past, past[1:])), "the guess past it spreads")
+        self.assertLessEqual(p[-1][3], aheadpath.SPREAD_MAX_M)
+        ts = [q[0] for q in p]
+        self.assertEqual(ts, sorted(ts))
+        for a, b in zip(p, p[1:]):
+            self.assertLessEqual(math.hypot(b[1] - a[1], b[2] - a[2]), aheadpath.STEP_M + 1e-6)
+
+    def test_a_road_longer_than_the_lookahead_is_cut(self):
+        p = aheadpath.along([(0.0, 0.0), (0.0, 9000.0)], 20.0, lead_s=60.0, min_m=1200.0, max_m=6000.0)
+        self.assertAlmostEqual(p[-1][2], 1200.0, delta=1e-6)
+        self.assertTrue(all(q[3] == 0.0 for q in p))
+
+    def test_the_end_direction_is_the_roads_last_stretch(self):
+        # a long bend ending north-east: straight on north-east, not along the last 5 m kink east
+        line = [(0.0, 0.0), (0.0, 500.0), (600.0, 1100.0), (605.0, 1100.0)]
+        p = aheadpath.along(line, 50.0, lead_s=60.0, min_m=1200.0, max_m=6000.0)
+        dx, dy = p[-1][1] - 605.0, p[-1][2] - 1100.0
+        self.assertGreater(dx, 0.0)
+        self.assertGreater(dy, 0.5 * dx, "north-east on, as the bend ended")
+
+    def test_no_line_or_standing(self):
+        self.assertEqual(aheadpath.along(None, 50.0), [])
+        self.assertEqual(aheadpath.along([(0.0, 0.0)], 50.0), [])
+        self.assertEqual(aheadpath.along([(0.0, 0.0), (0.0, 100.0)], 0.5), [])

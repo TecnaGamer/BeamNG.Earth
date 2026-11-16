@@ -137,6 +137,8 @@ import dem as demmod  # noqa: E402
 import mapcells  # noqa: E402
 import arrival as arrivalmod  # noqa: E402
 import orderedjobs as orderedjobsmod  # noqa: E402
+import cpuload as cpuloadmod  # noqa: E402
+import waits as waitsmod  # noqa: E402
 import aheadpath  # noqa: E402
 import roadahead  # noqa: E402
 import pacer  # noqa: E402
@@ -339,6 +341,7 @@ MAP_AHEAD_S = 120.0
 MAP_AHEAD_MIN_M = 1500.0
 MAP_AHEAD_MAX_M = 10000.0
 MAP_AHEAD_MOVE_M = 200.0        # m the player moves before the list is made again
+MAP_AHEAD_SIDE_K = 2.0          # a cell beside the path comes as much later as driving this many times its distance
 MAP_AHEAD_LAYERS = AHEAD_LAYERS + ("canopy", "landcover", "places")     # (places: the road tiles' gas stations)
 # the loading map (Server.load_map; the mod's debug window loadmap.lua, opened by its setting): a map cell's state
 LOAD_MAP_MISSING, LOAD_MAP_QUEUED, LOAD_MAP_LOADING, LOAD_MAP_READY, LOAD_MAP_ON_DISK, LOAD_MAP_FAILED = range(6)
@@ -518,6 +521,7 @@ ROAD_PROCESSES = 2              # road-tile processes (--block-process on, --roa
 # s a road tile may take in its worker before it is given up and its workers restarted (build_roads_tile): a first
 # visit's slowest tiles take ~1 min on a busy 6-core laptop and several times that on a Steam Deck, where a tile given
 # up at 2 min would be built and given up again for good; BNGE_ROAD_TILE_TIMEOUT=<s> to change it
+NAV_YIELD_S = 15.0              # s the AI road graph waits for a free road process before it takes one anyway
 ROAD_GEO_SLOW_S = 3.0           # a road geotile slower than this is logged (queue and build)
 VEG_GEO_BATCH = 32              # trees geotiles one road-process job builds at most (_veg_geo_job): its nearest wait
                                 # for the rest of it
@@ -2437,7 +2441,10 @@ class Server:
             cla, clo, _ = anchor.frame.enu_to_geodetic(x, y, 0.0)
             rules = navgraphmod.road_rules(navgraphmod.country_at(self.airports_db, float(cla), float(clo), _borders(self)))
             rules["de_junctions"] = designsmod.enabled(self.dej_on)
-            path, n_nodes, n_edges = self.road_pool.submit(
+            # (giving way to the road geotiles: when a road process is free, or after NAV_YIELD_S; pools.submit_idle)
+            idle = getattr(self.road_pool, "submit_idle", None)
+            submit = functools.partial(idle, NAV_YIELD_S) if idle is not None else self.road_pool.submit
+            path, n_nodes, n_edges = submit(
                 blockworker.navgraph, aid, anchor.lat, anchor.lon, anchor.zooms[0], x, y, self.out_dir,
                 self.vfs_dir, serial, self.left_hand(anchor), self.mph(anchor), rules).result()
             log.debug("navgraph %d of anchor %d: %d nodes in %.2f s (queue + build)", serial, aid, n_nodes,
@@ -3006,7 +3013,8 @@ class Server:
             self.vfs_dir, self.sidewalks, DETAIL_ROAD_LIFT if self.near_visual == "detail" else 0.0,
             self.buildings, lh, mph, self.anchor_q(anchor) if skin else None, self.gas_stations, buried, lamps,
             country, content, skin, exact, Server.pole_profile(self), designsmod.enabled(self.dej_on),
-            Server.towns_enabled(self), Server.wear_arg(self))
+            Server.towns_enabled(self), Server.wear_arg(self), Server.geo_patience(self, aid, gx, gy))
+        cell_was = Server.geo_cell_state(self, gx, gy)
         t0, waited = time.perf_counter(), []
         try:
             res = poolsmod.result_running(fut, ROAD_TILE_TIMEOUT_S, waited, abandon=lambda: Server.is_abandoned(self, aid)
@@ -3020,11 +3028,14 @@ class Server:
                         st[k] = st.get(k, 0.0) + v
                 top = " ".join(f"{k} {v:.1f}" for k, v in sorted(st.items(), key=lambda kv: -kv[1])[:5])
                 tm = (res or {}).get("time") or {}
+                # (what its thread waited for, by name, and the CPU that thread itself got: the rest of its wall
+                # time it was ready to run and did not, the server's cores busy with other work)
                 log.info("road geotile %d_%d in %.1f s (queue %.1f; content %.1f s %.1f cpu, skin %.1f s %.1f cpu, "
-                         "exact %.1f s): %s",
+                         "exact %.1f s): %s; its thread %.1f cpu, waited: %s; map cell %s",
                          gx, gy, took, waited[0] if waited else 0.0, tm.get("content_s", 0.0),
                          tm.get("content_cpu", 0.0), tm.get("skin_s", 0.0), tm.get("skin_cpu", 0.0),
-                         tm.get("exact_s", 0.0), top)
+                         tm.get("exact_s", 0.0), top, tm.get("own_cpu", 0.0),
+                         waitsmod.text((res or {}).get("waits")) or "nothing", cell_was)
         except poolsmod.Abandoned:
             return None                         # (a teleport left its anchor: not built)
         except concurrent.futures.TimeoutError as e:
@@ -4187,38 +4198,69 @@ class Server:
                 self.ahead_busy = False
         self.ahead_pool.submit(run)
 
-    def map_ahead(self, anchor, x, y, vx, vy, turn=0.0):
-        """The map data cells along the way ahead (aheadpath.points: MAP_AHEAD_S of driving, bending with turn; the
-        block's half width + AHEAD_MARGIN_M beside it) handed to the map ahead processes (blockworker.warm_map),
-        nearest first; each cell once a session."""
+    @staticmethod
+    def ahead_path(x, y, vx, vy, turn=0.0, road=None):
+        """The way ahead the map cells are warmed along, [(t s, x, y, spread m)]: along the road the player drives on
+        where it is known (road: (k, 2) from the player, roadahead.follow, or a callable giving it; aheadpath.along:
+        the road's own bends, then straight on from where the known road ends), else the car's own line bending with
+        turn (aheadpath.points). MAP_AHEAD_S of driving. [] when not moving."""
+        v = math.hypot(vx, vy)
+        kw = dict(lead_s=MAP_AHEAD_S, min_m=MAP_AHEAD_MIN_M,
+                  max_m=max(MAP_AHEAD_MIN_M, min(MAP_AHEAD_MAX_M, v * MAP_AHEAD_S)))
+        if v >= aheadpath.MIN_V and road is not None:
+            try:
+                line = road() if callable(road) else road
+            except Exception as e:      # (only the road's bends are lost)
+                log.debug("map ahead: road: %s: %s", type(e).__name__, e)
+                line = None
+            path = aheadpath.along(line, v, **kw)
+            if path:
+                return path
+        return aheadpath.points(x, y, vx, vy, turn, **kw)
+
+    def map_ahead(self, anchor, x, y, vx, vy, turn=0.0, road=None):
+        """The map data cells along the way ahead (ahead_path: MAP_AHEAD_S of driving along the player's road, or
+        its own line bending with turn; the block's half width + AHEAD_MARGIN_M beside it, and the path's spread where
+        it is a guess) handed to the map ahead processes (blockworker.warm_map), nearest first; each cell once a
+        session."""
         if self.map_ahead_pool is None or self.mapdata is None:
             return
         last = self.map_ahead_last
         if last is not None and last[0] == anchor.id and math.hypot(x - last[1], y - last[2]) < MAP_AHEAD_MOVE_M:
             return
-        v = math.hypot(vx, vy)
-        path = aheadpath.points(x, y, vx, vy, turn, lead_s=MAP_AHEAD_S, min_m=MAP_AHEAD_MIN_M,
-                                max_m=max(MAP_AHEAD_MIN_M, min(MAP_AHEAD_MAX_M, v * MAP_AHEAD_S)))
+        path = Server.ahead_path(x, y, vx, vy, turn, road)
         if not path:
             return
         self.map_ahead_last = (anchor.id, x, y)
         reach = self.layout.block * heightmap.SQUARE / 2 + AHEAD_MARGIN_M
-        want, seen = [], set()
-        for _t, px, py, _sp in path:
+        eta, off = {}, {}
+        v = max(1.0, math.hypot(vx, vy))
+        for t, px, py, sp in path:
             la, lo, _ = anchor.frame.enu_to_geodetic(px, py, 0.0)
             la, lo = float(la), float(lo)
-            dlat = reach / 111320.0
-            dlon = reach / (111320.0 * max(0.05, dmath.cos(math.radians(la))))
+            mlon = 111320.0 * max(0.05, dmath.cos(math.radians(la)))
+            dlat = (reach + sp) / 111320.0
+            dlon = (reach + sp) / mlon
             try:
                 keys = mapcells.cells_for_bbox(la - dlat, lo - dlon, la + dlat, lo + dlon)
             except ValueError:
                 continue
             for k in keys:
                 kk = (int(k.z), int(k.x), int(k.y))
-                if kk not in seen and kk not in self.map_ahead_done:
-                    seen.add(kk)
-                    want.append(kk)
+                if kk in self.map_ahead_done:
+                    continue
+                w, so, e, n = k.bounds()
+                d = math.hypot(max(w - lo, 0.0, lo - e) * mlon, max(so - la, 0.0, la - n) * 111320.0)
+                eta.setdefault(kk, t)       # (s until the car is near it: the path's first point that reaches it)
+                if kk not in off or d < off[kk][0]:
+                    off[kk] = (d, t)        # (m beside the path, 0 where it runs through the cell, and when)
+        # nearest in time first, and of the cells the car nears at once the one the path runs through before those
+        # beside it: at 300 km/h the two processes cannot have every cell of the swath in time, and the road, its
+        # trees and its signs are in the middle one
+        want = sorted(eta, key=lambda kk: (eta[kk] + MAP_AHEAD_SIDE_K * off[kk][0] / v, off[kk][1]))
         with self.map_ahead_cv:
+            self.map_ahead_eta = eta        # (the log's "begun N s ahead of the car")
+            self.map_ahead_plan = (anchor.id, anchor.lat, anchor.lon) if getattr(self, "grading", False) else None
             self.map_ahead_want = want      # (the last list's cells not begun yet: behind the car or off the path)
             if self.map_ahead_threads is None:
                 self.map_ahead_threads = [threading.Thread(target=self._map_ahead_loop, daemon=True,
@@ -4241,27 +4283,29 @@ class Server:
                     self.map_ahead_done.clear()
                     self.map_ahead_state.clear()
                 self.map_ahead_state[key] = (LOAD_MAP_LOADING, 0.0)
+                ahead = getattr(self, "map_ahead_eta", {}).get(key)
+                plan = getattr(self, "map_ahead_plan", None)
             try:
+                towns = bool(getattr(self, "towns_on", False)) and Server.towns_enabled(self)
                 dt = self.map_ahead_pool.submit(blockworker.warm_map, key, MAP_AHEAD_LAYERS,
-                                                self.veg is not None).result()
+                                                self.veg is not None, towns, plan).result()
                 self.map_ahead_stats["cells"] += 1
                 self.map_ahead_stats["s"] += dt or 0.0
                 self.map_ahead_state[key] = (LOAD_MAP_READY, dt or 0.0)
                 if dt and dt > 1.0:
-                    log.info("map ahead: cell %d_%d in %.1f s (%d queued; session %s)", key[1], key[2], dt,
+                    log.info("map ahead: cell %d_%d in %.1f s, begun %s ahead of the car (%d queued; session %s)",
+                             key[1], key[2], dt, "?" if ahead is None else f"{ahead:.0f} s",
                              len(self.map_ahead_want), self.map_ahead_stats)
             except Exception as e:      # only costs the lookahead
                 self.map_ahead_state[key] = (LOAD_MAP_FAILED, 0.0)
                 log.debug("map ahead %s: %s: %s", key, type(e).__name__, e)
 
-    def load_map(self, anchor, x, y, vx, vy, turn=0.0):
+    def load_map(self, anchor, x, y, vx, vy, turn=0.0, road=None):
         """The loading map's message (the mod's debug window, loadmap.lua): map_ahead's path (the zone: [x, y,
         spread m]) and the map cells around it ([west, south, east, north] in the anchor frame, LOAD_MAP_* state, s it
         took), all in the anchor frame; lead: m along the path before its first cell not ready."""
         v = math.hypot(vx, vy)
-        path = aheadpath.points(x, y, vx, vy, turn, lead_s=MAP_AHEAD_S, min_m=MAP_AHEAD_MIN_M,
-                                max_m=max(MAP_AHEAD_MIN_M, min(MAP_AHEAD_MAX_M, v * MAP_AHEAD_S))) \
-            or [(0.0, x, y, WARM_AROUND)]
+        path = Server.ahead_path(x, y, vx, vy, turn, road) or [(0.0, x, y, WARM_AROUND)]
         frame = anchor.frame
         lls = []
         for _t, px, py, _sp in path:
@@ -4420,6 +4464,42 @@ class Server:
                 continue
             return False
         return True
+
+    def geo_cell_state(self, gx, gy):
+        """How far the map ahead had geotile (gx, gy)'s map cell when asked: "ready", "loading", "queued" or "not
+        asked" (the slow road geotile's log line: was its cell's data there before the tile wanted it?)."""
+        try:
+            c = mapcells.cell_of(*geotilesmod.centre(gx, gy))
+        except Exception:
+            return "?"
+        kk = (int(c.z), int(c.x), int(c.y))
+        st = getattr(self, "map_ahead_state", {}).get(kk)
+        if st is not None:
+            return {LOAD_MAP_READY: "ready", LOAD_MAP_LOADING: "loading", LOAD_MAP_FAILED: "failed"}.get(st[0], "?")
+        return "queued" if kk in getattr(self, "map_ahead_want", ()) else "not asked"
+
+    def geo_patience(self, aid, gx, gy):
+        """s road geotile (gx, gy)'s build may wait for the inputs it can be built without (blockworker.roads_geo's
+        patience: the town signs' village points and land cover): until the first moving player on anchor aid reaches
+        it (its quad's distance over the car's speed), less the build's own time (reach.BUILD_EST_S). None while
+        nobody on aid moves: as long as it takes, its signs with it. Called as Server.geo_patience(self, ...)."""
+        anchor = getattr(self, "anchors", {}).get(aid)
+        frame = getattr(anchor, "frame", None)
+        if frame is None:
+            return None
+        quad, best = None, None
+        for c in list(getattr(self, "connections", ())):
+            if getattr(c, "active", None) != aid:
+                continue
+            v = math.hypot(*getattr(c, "vel", (0.0, 0.0)))
+            at = getattr(c, "focus", None)
+            if v < aheadpath.MIN_V or at is None:
+                continue
+            if quad is None:
+                quad = geotilesmod.quad(frame, gx, gy)
+            eta = geotilesmod.quad_dist(quad, *at) / v
+            best = eta if best is None else min(best, eta)
+        return None if best is None else max(0.0, best - reachmod.BUILD_EST_S)
 
     def geo_unwanted(self, aid, gx, gy):
         """Is road geotile (gx, gy), queued for anchor aid, wanted by no player on it any more (roads.GeoTracker.unwanted:
@@ -10488,7 +10568,11 @@ class Connection:
         if aid == self.active and self.following:
             self.s.warm_roads(self.s.anchors[aid], *self.focus, *self.vel, tree=tree)
             self.s.warm_imagery(self.s.anchors[aid], *self.focus, *self.vel, tree=tree)
-            self.s.map_ahead(self.s.anchors[aid], *self.focus, *self.vel, self.track.turn())
+            self.s.map_ahead(self.s.anchors[aid], *self.focus, *self.vel, self.track.turn(),
+                             road=lambda: self.road_xy(aid, *self.focus))
+            load = getattr(self.s, "cpu_load", None)
+            if load is not None:
+                load.tick(math.hypot(*self.vel), len(getattr(self.s, "server_cpus", None) or ()) or None)
             self.s.download_ahead(self.s.anchors[aid], *self.focus, *self.vel, tree=tree)
             self.s.bake_sync(self.s.anchors[aid], *self.focus)
             self.base_refresh(aid)
@@ -10499,7 +10583,8 @@ class Connection:
         if aid == self.active and now < self.load_map_until and now - self.load_map_at >= LOAD_MAP_EVERY_S:
             self.load_map_at = now
             try:
-                m = self.s.load_map(self.s.anchors[aid], *self.focus, *self.vel, self.track.turn())
+                m = self.s.load_map(self.s.anchors[aid], *self.focus, *self.vel, self.track.turn(),
+                                    road=lambda: self.road_xy(aid, *self.focus))
                 m["blocks"], m["asked"] = self.load_map_blocks(aid)
                 self.send(m)
             except Exception as e:      # (a debug view: never the pose)
@@ -10536,7 +10621,11 @@ class Connection:
                                       view=self.view_at, frame=anchor.frame)
         if self.s.veg is not None and aid == self.active and detail:
             anchor = self.s.anchors.get(aid)
-            if anchor is not None:                            # a teleport's cells built at once, ahead
+            # a teleport's cells built at once, ahead. Not while the car moves and the map ahead processes build the
+            # cells on its way (Server.map_ahead): this thread built the same cells again here, a cell not on disk
+            # yet twice at once, under the server's own interpreter lock beside its event loop
+            if anchor is not None and (getattr(self.s, "map_ahead_pool", None) is None
+                                       or math.hypot(*self.vel) < aheadpath.MIN_V):
                 la, lo, _ = anchor.frame.enu_to_geodetic(*self.focus, 0.0)
                 self.s.veg.warm_around(float(la), float(lo))
             self.veg.on_pose(self, aid, *self.focus, asyncio.get_running_loop(),
@@ -12798,6 +12887,9 @@ async def main_async(args, restart=None):
     memwatchmod.register(*[p for p, _q in block_pools], photo_pool, far_pool, road_pool, far_bld_pool,
                          server.veg_pool, server.map_ahead_pool)
     memwatchmod.start()
+    # who has the server's cores while a player drives fast (cpuload.py: one log line every 20 s)
+    server.cpu_load = cpuloadmod.of_server([*[p for p, _q in block_pools], photo_pool, far_pool, road_pool,
+                                            far_bld_pool, late_pool, server.veg_pool, server.map_ahead_pool])
     server.boost_cpus = (cpupin.boosted(server.server_cpus, server.game_cpus)
                          if getattr(args, "load_boost", "on") == "on" else None)
     # (a driving player's catch-up lends less: half the game's cores for the whole of a 150 mph drive took its frame

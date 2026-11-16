@@ -49,6 +49,7 @@ import dnp
 
 import furniture
 import polygon
+import waits
 from overture import LATIN_COLS, REGIONAL_LANGS
 
 log = logging.getLogger("earthd.townsigns")
@@ -2966,6 +2967,38 @@ LANDCOVER_REACH_M = 10000.0    # m: the farthest from a commune's middle its lan
 POINTS_REACH_M = 4000.0
 
 
+# How long the road tile being built may wait for its town signs' inputs. A tile under a parked car waits POINTS_WAIT_S
+# for them (its signs come with it); a tile a fast car reaches in 6 s that waited 45 s for a commune's village points
+# came long after the car (Felix's 300 km/h drives, 2026-11-16: road geotiles 9-14 s in build_tile with 1-2 s of CPU,
+# the road popping in under the car). The caller that knows when the tile is needed says so (patience: earthd
+# Server.geo_patience, blockworker.roads_geo): what is not in by then is left out, the tile not kept (revisit.fault,
+# as any wait that ran out) and built whole for the next visit (latework.py).
+_hurry = threading.local()
+
+
+class patience:
+    """with patience(s): the tile built inside by this thread waits `s` seconds in all for its town signs' inputs
+    (None: POINTS_WAIT_S for each, as without it)."""
+
+    def __init__(self, s):
+        self.s = s
+
+    def __enter__(self):
+        self.old = getattr(_hurry, "until", None)
+        _hurry.until = None if self.s is None else time.monotonic() + max(0.0, float(self.s))
+        return self
+
+    def __exit__(self, *exc):
+        _hurry.until = self.old
+        return False
+
+
+def wait_s():
+    """s a wait for a town sign input may take now: POINTS_WAIT_S, less inside a patience() that ends sooner."""
+    until = getattr(_hurry, "until", None)
+    return POINTS_WAIT_S if until is None else max(0.0, min(POINTS_WAIT_S, until - time.monotonic()))
+
+
 class Towns:
     """A process's town signs for its road tiles: the communes of a tile's map cells (mapdata layer "town_areas") with
     their agglomerations, made once per commune from the land cover (surface: surface.Surface) and kept, and the
@@ -2995,12 +3028,14 @@ class Towns:
             # (not again for a while after a wait in vain: a tile's every commune and exit sign asks, the road tile's
             # worker is killed at 300 s)
             now = time.monotonic()
-            deadline = now + (POINTS_WAIT_S if now - self._waited_in_vain > POINTS_WAIT_S else 0.0)
-            while time.monotonic() < deadline and not all(self.md.has(k, "town_points") for k in missing):
-                time.sleep(0.2)
+            wait = wait_s()             # (less for a tile a fast car is about to reach: patience)
+            deadline = now + (wait if now - self._waited_in_vain > POINTS_WAIT_S else 0.0)
+            with waits.waiting("town signs"):
+                while time.monotonic() < deadline and not all(self.md.has(k, "town_points") for k in missing):
+                    time.sleep(0.2)
             if not all(self.md.has(k, "town_points") for k in missing):
-                if deadline > now:
-                    self._waited_in_vain = time.monotonic()
+                if deadline > now and wait >= POINTS_WAIT_S:    # (a whole wait in vain; a hurried tile's cut one says
+                    self._waited_in_vain = time.monotonic()     # nothing about the next tile's)
                 revisit.fault()
                 return None
         return [self.md.cell(k, layers=("town_points",), kind="background").layers.get("town_points")
@@ -3055,7 +3090,7 @@ class Towns:
         if not ready[0]:                # (a village's points not cached yet: no signs now, the tile built again)
             return None
         done = [True]
-        deadline = time.monotonic() + POINTS_WAIT_S             # (the tile's one wait for land cover)
+        deadline = time.monotonic() + wait_s()                  # (the tile's one wait for land cover)
 
         def agglo_of(c):
             if c.fid in self._agglo:
@@ -3072,6 +3107,20 @@ class Towns:
             return a
         out = with_agglomerations(communes, agglo_of)
         return out if done[0] else None
+
+    def warm(self, key):
+        """The town signs' inputs of the road tiles of map cell key ((z, x, y)) fetched ahead of the car (the map
+        ahead processes, blockworker.warm_map): communes() of the cell and the eight around it (every tile of the cell
+        reads a part of them: blockworker.TOWNS_MARGIN_M), which reads their town areas, fetches the village points
+        near them and the land cover of their communes, and waits for them as a tile would, here where no tile
+        waits. True when all were there in the end."""
+        import geodesy
+        import mapcells
+        z, x, y = (int(v) for v in key)
+        n = 1 << z
+        keys = [mapcells.CellKey(z, (x + dx) % n, y + dy) for dy in (-1, 0, 1) for dx in (-1, 0, 1) if 0 <= y + dy < n]
+        lat, lon = mapcells.CellKey(z, x, y).center()
+        return self.communes(geodesy.EnuFrame(lat, lon, 0.0), keys) is not None
 
     def _wait_landcover(self, c, deadline):
         """Fetch the land cover of the map cells over the commune c's box (and AGGLO_MARGIN_M; LANDCOVER_REACH_M at
@@ -3097,11 +3146,13 @@ class Towns:
         missing = [k for k in keys if not self.md.has(k, "landcover")]
         for k in missing:
             self._queue(k, "landcover")
-        while time.monotonic() < deadline and not all(self.md.has(k, "landcover") for k in missing):
-            time.sleep(0.2)
+        with waits.waiting("town signs"):
+            while time.monotonic() < deadline and not all(self.md.has(k, "landcover") for k in missing):
+                time.sleep(0.2)
         if all(self.md.has(k, "landcover") for k in missing):
             return True
-        self._waited_in_vain = time.monotonic()
+        if wait_s() >= POINTS_WAIT_S:   # (not a hurried tile's cut wait: _points)
+            self._waited_in_vain = time.monotonic()
         return False
 
     def _points_of(self, c, near=None):

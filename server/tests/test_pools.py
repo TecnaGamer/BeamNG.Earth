@@ -117,6 +117,32 @@ class RespawnTest(unittest.TestCase):
         finally:
             p.shutdown()
 
+    def test_idle_jobs_give_way_until_a_process_is_free_or_their_wait_is_over(self):
+        """submit_idle: not beside the other jobs while every process has one (the AI road graph behind the road
+        geotiles), handed over when one is free, or once it waited its wait_s."""
+        import time
+        p = pools.RespawningPool("test", 1, mp_context=SPAWN)
+        try:
+            p.submit(time.sleep, 0.1).result(timeout=30)        # (the process started)
+            busy = [p.submit(time.sleep, 0.6) for _ in range(3)]
+            idle = p.submit_idle(30.0, abs, -4)
+            time.sleep(0.5)
+            self.assertFalse(idle.running() or idle.done(), "every process busy: it waits")
+            self.assertEqual(idle.result(timeout=30), 4)        # (the busy jobs done: a free process)
+            self.assertTrue(all(f.done() for f in busy))
+            busy = [p.submit(time.sleep, 0.8) for _ in range(4)]
+            t0 = time.monotonic()
+            hurried = p.submit_idle(0.3, abs, -5)               # (waited 0.3 s: beside them now)
+            while not hurried.running() and not hurried.done() and time.monotonic() - t0 < 10.0:
+                time.sleep(0.05)
+            self.assertLess(time.monotonic() - t0, 2.5)
+            self.assertFalse(busy[-1].done(), "handed over while the others still queue")
+            self.assertEqual(hurried.result(timeout=30), 5)
+            with self.assertRaises(ZeroDivisionError):
+                p.submit_idle(0.0, divmod, 1, 0).result(timeout=30)
+        finally:
+            p.shutdown()
+
     def test_lazy_low_jobs_take_their_arguments_at_handover(self):
         """submit_low_lazy: the arguments are made when the job goes to the processes, so what was added while it
         waited goes with it (the trees geotiles that join one job, Server._veg_geo_job)."""

@@ -75,6 +75,7 @@ import revisit
 import levelways
 import roadsmooth
 import staging
+import waits
 import xproc
 
 log = logging.getLogger("earthd.mapdata")
@@ -1350,7 +1351,8 @@ class MapData:
         for layer, fut, shared in futs:     # all finish before an error is raised (no stray fetches)
             start = time.perf_counter()
             try:
-                results[layer] = fut.result()
+                with waits.waiting("map data"):
+                    results[layer] = fut.result()
             except Exception as e:
                 err = err or e
             finally:

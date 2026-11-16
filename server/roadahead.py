@@ -27,7 +27,7 @@ SNAP_ALIGN = 0.9        # ... heading along it (cos of the angle) is on it
 JOIN_M = 6.0            # m: a line starting (or ending) this near another's end continues it
 TURN_MAX = math.radians(60)     # a continuation bending more than this at the join is a turn off the road
 FORK_RAD = math.radians(12)     # two continuations as alike as this, bending within this of each other: a fork
-CELL_RADIUS_M = 3000.0  # m: the cells this near the player are read
+CELL_RADIUS_M = 5500.0  # m: the cells this near the player are read (those on disk: past earthd.ROAD_AHEAD_MAX_M)
 ROAD_CLASSES = frozenset({"motorway", "trunk", "primary", "secondary", "tertiary", "residential", "unclassified",
                           "living_street", "service"})
 
@@ -194,7 +194,7 @@ class RoadAhead:
                                                  np.array([y - CELL_RADIUS_M, y + CELL_RADIUS_M]), 0.0)
         try:
             keys = mapcells.cells_for_bbox(float(min(la)), float(min(lo)), float(max(la)), float(max(lo)),
-                                           max_cells=64)
+                                           max_cells=144)
         except ValueError:
             return None
         want = [(anchor.id, k) for k in keys]

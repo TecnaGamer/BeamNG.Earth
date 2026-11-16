@@ -43,6 +43,7 @@ import mapcells
 import railways as railwaysmod
 import roads as roadsmod
 import seatiles
+import waits
 
 log = logging.getLogger("earthd.grading")
 
@@ -6360,7 +6361,7 @@ class _Planner:
         with _STAGE_CROWD_LOCK:         # (their road stages made side by side: none of them claimed, _road_stage)
             _STAGE_CROWD[0] += n
         try:
-            with ThreadPoolExecutor(n, thread_name_prefix="plans") as ex:
+            with ThreadPoolExecutor(n, thread_name_prefix="plans") as ex, waits.waiting("road plans"):
                 list(ex.map(one, missing))
         finally:
             with _STAGE_CROWD_LOCK:

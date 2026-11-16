@@ -454,10 +454,28 @@ class RespawningPool:
         waits can join it (Server.build_veg_geo: the trees geotiles waiting together go in one job)."""
         return self._queue_low(fn, (), {}, make_args)
 
-    def _queue_low(self, fn, args, kwargs, make_args):
+    def submit_idle(self, wait_s, fn, *args, **kwargs):
+        """submit for work that gives way to the pool's other jobs: handed to the processes when one of them is free,
+        or once it has waited wait_s (never starved). The AI road graph round the car (earthd.Server.build_navgraph):
+        built again every 400 m, at 300 km/h it held one of the three road processes most of the time while the road
+        geotiles ahead of the car queued behind it (11 graphs, 96 s of a 135 s drive, 2026-11-16). Behind the low jobs
+        asked before it; its future is running once handed over (result_running)."""
+        return self._queue_low(fn, args, kwargs, None, time.monotonic() + max(0.0, float(wait_s)))
+
+    def _low_ready(self):
+        """May the first low job be handed over now (under _low_cv)? A free process: yes. Else a submit_low job when
+        no low job runs, a submit_idle job once its wait is over."""
+        if not self._low:
+            return False
+        if self.inflight < self.workers:
+            return True
+        until = self._low[0][5]
+        return self._low_active == 0 if until is None else time.monotonic() >= until
+
+    def _queue_low(self, fn, args, kwargs, make_args, until=None):
         outer = concurrent.futures.Future()
         with self._low_cv:
-            self._low.append((outer, fn, args, kwargs, make_args))
+            self._low.append((outer, fn, args, kwargs, make_args, until))
             if self._low_thread is None:
                 self._low_thread = threading.Thread(target=self._low_loop, daemon=True, name=f"{self.name}-low")
                 self._low_thread.start()
@@ -467,9 +485,9 @@ class RespawningPool:
     def _low_loop(self):
         while True:
             with self._low_cv:
-                while not (self._low and (self.inflight < self.workers or self._low_active == 0)):
+                while not self._low_ready():
                     self._low_cv.wait(timeout=1.0)
-                outer, fn, args, kwargs, make_args = self._low.popleft()
+                outer, fn, args, kwargs, make_args, _until = self._low.popleft()
                 if not outer.set_running_or_notify_cancel():
                     continue                # (cancelled while it waited)
                 self._low_active += 1

@@ -102,9 +102,10 @@ class FakeMapAheadPool:
         self.keys = []
         self.lock = threading.Lock()
 
-    def submit(self, fn, key, layers, veg):
+    def submit(self, fn, key, layers, veg, towns=False, plan=None):
         with self.lock:
             self.keys.append(key)
+            self.towns, self.plan = towns, plan
         return FakeFuture()
 
 
@@ -143,7 +144,8 @@ class MapAheadTest(unittest.TestCase):
         self.assertEqual(len(keys), len(set(keys)))
         ys = [k[2] for k in keys]       # (tile rows count southwards)
         self.assertGreaterEqual(ys[0], max(ys) - 1, "the cells around the car first")
-        self.assertEqual(ys[-1], min(ys), "the farthest north last")
+        # (the guess spreads with the distance: the last cells are the far end's, a row of them at most beside it)
+        self.assertLessEqual(ys[-1], min(ys) + 1, "the farthest north last")
         earthd.Server.map_ahead(s, a, 50.0, 0.0, 0.0, 40.0)     # less than MAP_AHEAD_MOVE_M later: no new list
         self.assertEqual(s.map_ahead_last[1], 0.0)
         earthd.Server.map_ahead(s, a, 0.0, 300.0, 0.0, 40.0)    # further on: only new cells
@@ -214,6 +216,119 @@ class LoadMapBlocksTest(unittest.TestCase):
         st = {(b[0] + b[2]) / 2: b[4] for b in blocks}
         self.assertEqual(st[768.0], earthd.BLOCK_ASKED)
         self.assertGreaterEqual(asked, 2.5)
+
+
+class MapAheadRoadTest(unittest.TestCase):
+    """map_ahead along the road the player drives on (aheadpath.along), not its straight line."""
+
+    def test_cells_follow_the_road(self):
+        import numpy as np
+        s, a = map_ahead_server(), anchor()
+        # driving north at 80 m/s on a road that turns east after 1 km and goes on 9 km
+        road = np.array([(0.0, 0.0), (0.0, 1000.0), (9000.0, 1000.0)])
+        straight = earthd.Server.ahead_path(0.0, 0.0, 0.0, 80.0)
+        along = earthd.Server.ahead_path(0.0, 0.0, 0.0, 80.0, road=lambda: road)
+        self.assertGreater(straight[-1][2], 9000.0)
+        self.assertAlmostEqual(along[-1][2], 1000.0, delta=1.0)
+        self.assertGreater(along[-1][1], 8000.0)
+        earthd.Server.map_ahead(s, a, 0.0, 0.0, 0.0, 80.0, road=road)
+        want = set(s.map_ahead_done) | set(s.map_ahead_want)
+        east = a.frame.enu_to_geodetic(8000.0, 1000.0, 0.0)
+        north = a.frame.enu_to_geodetic(0.0, 8000.0, 0.0)
+        cell = lambda p: tuple(int(v) for v in earthd.mapcells.cell_of(float(p[0]), float(p[1])))   # noqa: E731
+        self.assertIn(cell(east), want, "the road's cells 8 km on")
+        self.assertNotIn(cell(north), want, "not the straight line's")
+        self.assertLess(s.map_ahead_eta[cell(east)], earthd.MAP_AHEAD_S + 1.0)
+
+    def test_no_road_or_a_failing_one_is_the_cars_line(self):
+        def broken():
+            raise RuntimeError("no net")
+        straight = earthd.Server.ahead_path(0.0, 0.0, 0.0, 80.0)
+        self.assertEqual(earthd.Server.ahead_path(0.0, 0.0, 0.0, 80.0, road=lambda: None), straight)
+        self.assertEqual(earthd.Server.ahead_path(0.0, 0.0, 0.0, 80.0, road=broken), straight)
+        self.assertEqual(earthd.Server.ahead_path(0.0, 0.0, 0.0, 0.5, road=lambda: [(0, 0), (0, 9)]), [])
+
+    def test_the_town_signs_inputs_are_asked_with_the_cell(self):
+        s, a = map_ahead_server(), anchor()
+        s.towns_on, s.buildings = True, True
+        earthd.Server.map_ahead(s, a, 0.0, 0.0, 0.0, 40.0)
+        MapAheadTest.wait_for(self, s.map_ahead_pool, 1)
+        self.assertTrue(s.map_ahead_pool.towns)
+
+    def test_the_cell_on_the_path_before_those_beside_it(self):
+        s, a = map_ahead_server(), anchor()
+        s.map_ahead_done = None             # (nothing begun: the whole list stays to look at)
+        s.map_ahead_done = set()
+        s.map_ahead_threads = [None]        # (no worker takes any)
+        earthd.Server.map_ahead(s, a, 0.0, 0.0, 0.0, 80.0)
+        want, eta = s.map_ahead_want, s.map_ahead_eta
+        la, lo, _ = a.frame.enu_to_geodetic(0.0, 0.0, 0.0)
+        own = tuple(int(v) for v in earthd.mapcells.cell_of(float(la), float(lo)))
+        self.assertEqual(want[0], own, "the cell the car is in first")
+        col = [k for k in want if k[1] == own[1]]           # (its column: the cells the path north runs through)
+        self.assertGreater(len(col), 3)
+        self.assertEqual([k[2] for k in col], sorted((k[2] for k in col), reverse=True), "northwards in order")
+        for k in col:                                       # (each before the cells beside it in its row)
+            beside = [j for j in want if j[2] == k[2] and j != k]
+            self.assertTrue(beside)
+            self.assertTrue(all(want.index(k) < want.index(j) for j in beside))
+
+    def test_the_cells_road_plans_are_asked_where_the_ground_is_graded(self):
+        s, a = map_ahead_server(), anchor()
+        a.lat, a.lon = 36.17, -115.145
+        earthd.Server.map_ahead(s, a, 0.0, 0.0, 0.0, 40.0)
+        MapAheadTest.wait_for(self, s.map_ahead_pool, 1)
+        self.assertIsNone(s.map_ahead_pool.plan)
+        s2 = map_ahead_server()
+        s2.grading = True
+        earthd.Server.map_ahead(s2, a, 0.0, 0.0, 0.0, 40.0)
+        MapAheadTest.wait_for(self, s2.map_ahead_pool, 1)
+        self.assertEqual(s2.map_ahead_pool.plan, (1, 36.17, -115.145))
+
+
+class GeoPatienceTest(unittest.TestCase):
+    """Server.geo_patience: how long a road geotile's build may wait for what it can be built without."""
+
+    def setUp(self):
+        import geotiles
+        self.a = anchor()
+        la, lo, _ = self.a.frame.enu_to_geodetic(3000.0, 0.0, 0.0)
+        self.far = geotiles.tile_of(float(la), float(lo))
+        self.here = geotiles.tile_of(self.a.frame.lat0, self.a.frame.lon0)
+
+    def server(self, *cars):
+        conns = [types.SimpleNamespace(active=aid, focus=at, vel=vel) for aid, at, vel in cars]
+        return types.SimpleNamespace(anchors={1: self.a}, connections=conns)
+
+    def test_until_the_car_gets_there_less_the_build(self):
+        import reach
+        s = self.server((1, (0.0, 0.0), (100.0, 0.0)))
+        got = earthd.Server.geo_patience(s, 1, *self.far)
+        self.assertLess(got, 30.0 - reach.BUILD_EST_S + 0.1)
+        self.assertGreater(got, 30.0 - reach.BUILD_EST_S - 3.0)     # (its near edge: a tile's width sooner)
+        self.assertEqual(earthd.Server.geo_patience(s, 1, *self.here), 0.0)     # under the car: no waiting at all
+
+    def test_nobody_moving_waits_as_long_as_it_takes(self):
+        self.assertIsNone(earthd.Server.geo_patience(self.server((1, (0.0, 0.0), (0.0, 0.5))), 1, *self.far))
+        self.assertIsNone(earthd.Server.geo_patience(self.server((2, (0.0, 0.0), (100.0, 0.0))), 1, *self.far))
+        self.assertIsNone(earthd.Server.geo_patience(self.server(), 1, *self.far))
+        self.assertIsNone(earthd.Server.geo_patience(self.server(), 9, *self.far))
+
+    def test_the_first_car_to_get_there_counts(self):
+        s = self.server((1, (0.0, 0.0), (10.0, 0.0)), (1, (2000.0, 0.0), (50.0, 0.0)))
+        self.assertLess(earthd.Server.geo_patience(s, 1, *self.far), 20.0)
+
+    def test_cell_state(self):
+        s = map_ahead_server()
+        c = earthd.mapcells.cell_of(*__import__("geotiles").centre(*self.far))
+        kk = (int(c.z), int(c.x), int(c.y))
+        self.assertEqual(earthd.Server.geo_cell_state(s, *self.far), "not asked")
+        s.map_ahead_want = [kk]
+        self.assertEqual(earthd.Server.geo_cell_state(s, *self.far), "queued")
+        s.map_ahead_state[kk] = (earthd.LOAD_MAP_LOADING, 0.0)
+        self.assertEqual(earthd.Server.geo_cell_state(s, *self.far), "loading")
+        s.map_ahead_state[kk] = (earthd.LOAD_MAP_READY, 2.0)
+        self.assertEqual(earthd.Server.geo_cell_state(s, *self.far), "ready")
 
 
 if __name__ == "__main__":
