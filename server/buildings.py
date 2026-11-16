@@ -3739,15 +3739,25 @@ RAIL_BED_CLEAR_M = 3.2     # m from a track's axis a footprint may not reach (th
                            # stood with its wall on the ballast and the rails ran into it (Kalynivka, 2026-11-05)
 
 
+class _RailLines(list):
+    """rail_lines' polylines, with the distance each keeps a footprint off (keep, one per line)."""
+
+    def __init__(self, *a):
+        super().__init__(*a)
+        self.keep = []
+
+
 def rail_lines(frame, road_layers, x0, y0, margin=50.0, size=256.0):
     """Polylines (k, 2) relative to (x0, y0) of the railway tracks on the ground near the tile (railways.drawn's, the
     ground pieces); none unless BNE_RAIL_XING is on."""
     import railxing
-    if not railxing.ENABLED:
+    import tramtrack
+    trams_on = tramtrack.ENABLED and tramtrack.CORRIDOR
+    if not railxing.ENABLED and not trams_on:
         return []
     import railways
     import roads as roadsmod
-    out = []
+    out = _RailLines()
     for f in road_layers:
         if f is None or len(f.kind) == 0 or "subtype" not in f.attrs:
             continue
@@ -3756,13 +3766,20 @@ def rail_lines(frame, road_layers, x0, y0, margin=50.0, size=256.0):
                               & (bb[:, 3] - y0 >= -margin) & (bb[:, 1] - y0 <= size + margin))
         for i in near.tolist():
             got = railways.drawn(f, i)
-            if got is None or got[0] == "tram":
+            tram = False
+            if got is None and trams_on:        # (a ground tram: its corridor, tram/corridor.rs, a wall's own clearance)
+                t = railways.drawn(f, i, bridges=True)
+                tram = t is not None and t[0] == "tram" and not t[1]
+                if not tram:
+                    continue
+            elif got is None or got[0] == "tram" or not railxing.ENABLED:
                 continue
             for ll in roadsmod.ground_parts(f, i):
                 if len(ll) < 2:
                     continue
                 e, n = mapgeom.enu_xy(f, frame, np.asarray(ll, np.float64))
                 out.append(np.stack([e - x0, n - y0], 1))
+                out.keep.append(tramtrack.BUILDING_KEEP_M if tram else RAIL_BED_CLEAR_M)
     return out
 
 
@@ -3776,12 +3793,13 @@ def on_rail_bed(ring, rails_xy, step=1.0):
         n = max(1, int(np.ceil(float(dnp.hypot(*(b - a))) / step)))
         pts.append(a + (b - a) * (np.arange(n) / n)[:, None])
     allp = np.vstack(pts)
-    for ln in rails_xy:
+    keep = getattr(rails_xy, "keep", None)
+    for k, ln in enumerate(rails_xy):
         a, b = ln[:-1], ln[1:]
         d = b - a
         t = np.clip(((allp[:, None, :] - a[None]) * d[None]).sum(2) / np.maximum((d * d).sum(1), 1e-12)[None], 0.0, 1.0)
         q = a[None] + t[:, :, None] * d[None]
-        if float(dnp.hypot(*(q - allp[:, None, :]).transpose(2, 0, 1)).min()) <= RAIL_BED_CLEAR_M:
+        if float(dnp.hypot(*(q - allp[:, None, :]).transpose(2, 0, 1)).min()) <= (keep[k] if keep else RAIL_BED_CLEAR_M):
             return True
     return False
 

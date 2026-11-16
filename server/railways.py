@@ -25,6 +25,7 @@ import footbridges
 import mapgeom
 import railxing
 import roads
+import tramtrack
 
 # the ballasted classes drawn (Overture's rail classes); ground trams stay in rails.py,
 # their mapped bridges alone are meshed here. Subways, monorails and funiculars are not.
@@ -52,6 +53,9 @@ SLEEPER_EVERY = 0.6         # m between sleepers
 SLEEPER_L, SLEEPER_W, SLEEPER_H = 2.6, 0.26, 0.2
 SLEEPER_SINK = 0.08         # m of sleeper in the ballast
 RAIL_HEAD, RAIL_H = 0.07, 0.16
+# A tram's own track in the open (BNE_TRAM_TRACK3D, plan 046; rails.py leaves the decal out) is drawn by the kernel
+# (tram/mesh.rs: its profile, sleepers, turnouts and collider); its parts here are named TRAM3D_PREFIX + ...
+TRAM3D_PREFIX = "tram3d:"
 DECK_HALF_M = 2.4           # m: half a bridge deck's width
 DECK_D = 1.4                # m of deck under the ballast's top
 DECK_WALL_H = 0.7           # m its edge walls stand over the ballast
@@ -74,6 +78,7 @@ FOOTBRIDGES_ON = os.environ.get("BNE_FOOTBRIDGES", "on") != "off"     # (footbri
 CONCRETE = "bne_bridge_concrete"    # (roadmesh.DECK_SIDE: the decks and piers)
 SLEEPER = "bne_rail_sleeper"        # weathered concrete sleepers (bne_bridge_concrete stood out near-white, 2026-10-25)
 COLLIDER = "bne_rail_collider"    # a rail's physics-only box (never drawn): the inner face a flange rides along, tile_mesh
+TRAM_PHYS = "bne_tram_rail_collider"   # the street trams' rails' physics-only strips (tram/physmesh.rs): metal, never drawn
 COLLIDER_W = 0.30           # m the box reaches out from the rail's inner face (BeamNG wants colliders 30 cm thick)
 COLLIDER_DOWN = 0.10        # m the box reaches under the ballast top
 STEEL = "bne_rail_steel"            # rust-brown rails
@@ -183,7 +188,7 @@ def _flushed(frame, cells, box, rails, prof, ground, tunnels):
     return out
 
 
-def _beds(frame, rails, ground, underpasses, load=None, elev=None, raw=None):
+def _beds(frame, rails, ground, underpasses, load=None, elev=None, raw=None, road_decks=()):
     """railways.profile of rails, its beds from railprofile's lattice of node profiles (the same bed in every tile and
     grading cell: plan 035) where load (key -> roads layer) and elev (the grader's DEM) are given; railways.profile's own
     where not, for a tram and for a point no node has. raw: ground(xy) -> the DEM's heights as they are (the grader's,
@@ -198,31 +203,22 @@ def _beds(frame, rails, ground, underpasses, load=None, elev=None, raw=None):
         else:
             new = railprofile.beds(frame, ("beds-dem", lat0, lon0), load, raw, rails)
     if new is None or any(np.isnan(z).any() for z in new):
-        old = profile(rails, ground, underpasses)
+        old = profile(rails, ground, underpasses, road_decks)
         if new is None:
             return old
         return [(np.where(np.isfinite(z), z, zb), zg) for z, (zb, zg) in zip(new, old)]
     return [(z, np.asarray(ground(xy), np.float64)) for z, (_f, _c, _k, xy) in zip(new, rails)]
 
 
-def grade_plans(frame, cells, box, elev, load=None):
-    """[(fid, xy (k, 2), z (k,))]: the bed line of each on-ground rail part near box, in elev's heights (elev(lat, lon):
-    the grader's DEM), for grading.Grader to lay the ground to (the cutting's walls back from the track, the ramps'
-    embankments filled). tile_mesh then finds the ground at its bed. Pure given elev."""
-    cells = list(cells)
-    tunnels = road_underpasses(frame, cells, box, GRADE_REACH_M)
-    worn = {}
-    rails = parts(frame, cells, box, reach=GRADE_REACH_M, clip=True, worn=worn, underpasses=tunnels)
-    if not rails:
-        return []
-    ungraded = {fid for fid, w in worn.items() if w >= UNGRADED_WEAR}
+def _dem_ground(frame, elev):
+    """ground(xy (n, 2)) -> the DEM's heights (elev(lat, lon): the grader's) at the points, remembered per point (every
+    cell's plan asks for the same lines' points)."""
     memo_key = ("dem", round(float(getattr(frame, "lat0", 0.0)), 7), round(float(getattr(frame, "lon0", 0.0)), 7))
     memo = _GROUND_MEMO.get(memo_key)
     if memo is None:
         memo = _GROUND_MEMO.setdefault(memo_key, _point_memo())
 
     def ground(xy):
-        # (the DEM's heights, remembered per point: every cell's plan asks for the same lines' points)
         xy = np.asarray(xy, np.float64).reshape(-1, 2)
         keys = np.ascontiguousarray(np.round(xy * 100.0).astype(np.int64))
         out = memo.get(keys)
@@ -239,6 +235,21 @@ def grade_plans(frame, cells, box, elev, load=None):
                 memo.clear()
             memo.put(np.ascontiguousarray(keys[miss]), np.ascontiguousarray(z, np.float64))
         return out
+    return ground
+
+
+def grade_plans(frame, cells, box, elev, load=None):
+    """[(fid, xy (k, 2), z (k,))]: the bed line of each on-ground rail part near box, in elev's heights (elev(lat, lon):
+    the grader's DEM), for grading.Grader to lay the ground to (the cutting's walls back from the track, the ramps'
+    embankments filled). tile_mesh then finds the ground at its bed. Pure given elev."""
+    cells = list(cells)
+    tunnels = road_underpasses(frame, cells, box, GRADE_REACH_M)
+    worn = {}
+    rails = parts(frame, cells, box, reach=GRADE_REACH_M, clip=True, worn=worn, underpasses=tunnels)
+    if not rails:
+        return []
+    ungraded = {fid for fid, w in worn.items() if w >= UNGRADED_WEAR}
+    ground = _dem_ground(frame, elev)
     pad = GRADE_HALF_M + 15.0
     out = []
     tunnels = tunnels + coarse_underpasses(frame, cells, box, rails, GRADE_REACH_M)
@@ -252,6 +263,21 @@ def grade_plans(frame, cells, box, elev, load=None):
                     (box[0] - pad, box[1] - pad, box[2] + pad, box[3] + pad)):
             out.append((fid, xy, zb))
     return out
+
+
+def tram_grade_plans(frame, cells, box, elev):
+    """[(fid, xy (k, 2), zd (k,))]: the ground tram parts near box (the ones rails.py drapes on the road tile) with the
+    DEM's heights under them (elev(lat, lon): the grader's), for tramtrack.beds to lay their bed to and Grader to grade
+    the ground to (plan 046, stage A). Pure given elev."""
+    cells = list(cells)
+    trams = parts(frame, cells, box, reach=GRADE_REACH_M, clip=True, trams="only")
+    if not trams:
+        return []
+    ground = _dem_ground(frame, elev)
+    pad = GRADE_HALF_M + 15.0
+    return [(fid, xy, ground(xy)) for fid, _c, _k, xy in trams
+            if _box_hit((xy[:, 0].min(), xy[:, 1].min(), xy[:, 0].max(), xy[:, 1].max()),
+                        (box[0] - pad, box[1] - pad, box[2] + pad, box[3] + pad))]
 
 
 def gauge(cls, sign_style=None):
@@ -280,14 +306,16 @@ def _is(col, values):
     return np.isin(np.asarray(col).astype(str), list(values))
 
 
-def parts(frame, cells, box, reach=REACH_M, clip=False, worn=None, gauges=None, underpasses=None):
+def parts(frame, cells, box, reach=REACH_M, clip=False, worn=None, gauges=None, underpasses=None, trams=False):
     """[(fid, class, kind, xy (k, 2))]: the rail parts ("ground" / "bridge"; tunnels left out) of the lines drawn
     (drawn(); worn: a dict given here gets {fid: wear} of the worn ones, gauges {fid: m} OSM's gauge where tagged)
     within reach of box (x0, y0, x1, y1), resampled every STEP_M from each part's start, each feature once (by id).
     Each part must intersect that window: a feature's bbox can cover far-away bridges or a long bend around it.
     clip: the ground parts cut to their points within reach of box (a segment of line runs on for km, and every one of
     its points was profiled for each cell and tile: _clip); the bridges stay whole (a deck runs between its ends).
-    underpasses: road_underpasses(frame, cells, box, reach) when the caller has them already."""
+    underpasses: road_underpasses(frame, cells, box, reach) when the caller has them already.
+    trams: "only" gives the ground trams alone (the track's grading plans, tram_grade_plans); the ground trams are
+    otherwise left to rails.py (street track draped on the road tile)."""
     cells = list(cells)
     near = (box[0] - reach, box[1] - reach, box[2] + reach, box[3] + reach)
     seen, out = set(), []
@@ -315,6 +343,8 @@ def parts(frame, cells, box, reach=REACH_M, clip=False, worn=None, gauges=None, 
             if got is None:
                 continue
             c = got[0]
+            if trams == "only" and c != "tram":
+                continue
             seen.add(fid)
             if got[1]:
                 wear_of[fid] = got[1]
@@ -323,8 +353,10 @@ def parts(frame, cells, box, reach=REACH_M, clip=False, worn=None, gauges=None, 
                 if g:
                     gauges[fid] = g
             for kind, rings in _pieces(feats, i):
-                if c == "tram" and kind != "bridge":
+                if c == "tram" and kind != "bridge" and not trams:
                     continue                    # street track stays draped in rails.py, never terrain grading
+                if trams == "only" and kind != "ground":
+                    continue
                 for ring in rings:
                     got = _ring_xy(feats, frame, ring)
                     if not _box_hit(got[2], near):
@@ -1235,7 +1267,18 @@ def approach_levels_many(xys, ground, grades=None):
     return [(found[2 * j], found[2 * j + 1]) for j in range(len(xys))]
 
 
-def profile(rails, ground, underpasses=()):
+DECK_NEAR_M = 6.0           # m: a tram bridge point this close to a road deck lies on it (BNE_TRAM)
+
+
+def road_deck_z(xy, decks):
+    """(z (n,), on (n,)): the surface height of the road deck under each point of xy (n, 2): the nearest of decks
+    [(xy (k, 2), z (k,))] within DECK_NEAR_M (interpolated along it); on False and z nan elsewhere. A street tram's bridge
+    is the road's: its rails lie on the road deck, not on a slab of its own beside it (tram/mesh.rs road_deck_z)."""
+    z = tramtrack.road_deck_z(xy, decks)
+    return z, np.isfinite(z)
+
+
+def profile(rails, ground, underpasses=(), road_decks=()):
     """Per part: bed and ground heights. Underpasses reserve clearance above their lower road mouths.
     ground(xy (n, 2)) -> z. The resulting deck heights propagate along connected approach ramps.
     """
@@ -1251,9 +1294,12 @@ def profile(rails, ground, underpasses=()):
     nodes, edges, adj = roads._chain_graph(lines)
     level = {}                                  # node -> (level, reach): the track's level beyond a bridge's end there
     decks = [n for n, (_, _, kind, _) in enumerate(rails) if kind == "bridge"]
-    got_all = approach_levels_many([rails[n][3] for n in decks], ground,
-                                   [LINE_GRADE.get(rails[n][1], GRADE) for n in decks]) if decks else []
-    for n, ends_got in zip(decks, got_all):
+    # (a street tram's bridge keeps the street's level: the railway's "level beyond the end" lifted it 0.5 m or more over
+    # the street it came from, Vinnytsia's Centralnyi bridge, BNE_TRAM, 2026-11-06)
+    appr = [n for n in decks if not (tramtrack.ENABLED and rails[n][1] == "tram")]
+    got_all = approach_levels_many([rails[n][3] for n in appr], ground,
+                                   [LINE_GRADE.get(rails[n][1], GRADE) for n in appr]) if appr else []
+    for n, ends_got in zip(appr, got_all):
         for node, got in zip(edges[n][:2], ends_got):
             if got is not None and got[0] > level.get(node, (-np.inf, 0.0))[0]:
                 level[node] = got
@@ -1331,6 +1377,12 @@ def profile(rails, ground, underpasses=()):
             elif lifts:                         # a ground track follows its own bed: a distant deck carries the
                 lift = np.maximum(ltop - GRADE * (dl[a] + s), ltop - GRADE * (dl[b] + s[-1] - s))     # ramps to it
                 zb[n] = zb[n] + np.clip(lift, 0.0, SEED_LIFT_MAX_M)
+    if tramtrack.ENABLED and road_decks:        # (a street tram's bridge on a road deck: that deck's height, as it is)
+        for n, (_f, cls, kind, xy) in enumerate(rails):
+            if cls == "tram" and kind == "bridge":
+                zd, on = road_deck_z(xy, road_decks)
+                if on.any():
+                    zb[n] = np.where(on, zd, zb[n])
     return list(zip(zb, zgs))
 
 
@@ -1536,6 +1588,8 @@ class _Mesh:
         n = len(c)
         if n == 0:
             return
+        hx = np.broadcast_to(np.asarray(hx, np.float64), (n,))[:, None]         # (a size each: the switch sleepers differ)
+        hy = np.broadcast_to(np.asarray(hy, np.float64), (n,))[:, None]
         corners = [(-1, -1), (1, -1), (1, 1), (-1, 1)]
         xy = np.stack([c + sx * hx * ax + sy * hy * ay for sx, sy in corners], 1)       # (n, 4, 2)
         lo = np.concatenate([xy, np.repeat(z0[:, None, None], 4, 1)], 2)
@@ -1557,6 +1611,28 @@ class _Mesh:
         self.T.append(tri + self.nv)
         self.M.append(np.full(len(tri), mi))
         self.nv += 8 * n
+
+    def add_tagged(self, strips, mats):
+        """A kernel's strips (P (n, 3) in the frame, T (m, 3) 0-based, UV (n, 2), tag (m,)) appended, tag k drawn in material
+        index mats[k] (tram/mesh.rs)."""
+        P, T, UV, tag = strips
+        if not len(P) or not len(T):
+            return
+        self.P.append(np.asarray(P, np.float64) - self.origin)
+        self.UV.append(np.asarray(UV, np.float64))
+        self.T.append(np.asarray(T, np.int64) + self.nv)
+        self.M.append(np.asarray([mats[int(k)] for k in np.asarray(tag).tolist()], np.int64))
+        self.nv += len(P)
+
+    def add_raw(self, P, T, mi):
+        """Vertices P (n, 3) (the frame's) and triangles T (m, 3) of one material, as they are (no UVs: a collision mesh)."""
+        if not len(P) or not len(T):
+            return
+        self.P.append(np.asarray(P, np.float64) - self.origin)
+        self.UV.append(np.zeros((len(P), 2)))
+        self.T.append(np.asarray(T, np.int64) + self.nv)
+        self.M.append(np.full(len(T), mi))
+        self.nv += len(P)
 
     def result(self):
         if not self.P:
@@ -1758,6 +1834,11 @@ def _tram_deck(mesh, p, uu, t, v, concrete):
     for edge, normal in ((left, out_l), (right, -out_l)):
         mesh.strip(np.c_[edge, top], np.c_[edge, bottom], 0.0, 0.5, v, concrete, normal)
     mesh.strip(np.c_[left, bottom], np.c_[right, bottom], 0.0, 0.9, v, concrete, -up)
+
+
+def _tram_paving(mesh, p, uu, t, v, half_g, mi):
+    """The paved strip of a street tram on a road deck (concrete slabs, BNE_TRAM): tram/mesh.rs deck_paving."""
+    mesh.add_tagged(tramtrack.deck_paving(p, uu, t, v, half_g), [mi])
 
 
 GRADED_NEAR_M = 40.0        # m around the tile where the track's heights read the graded ground (tile_mesh far_ground)
@@ -2351,14 +2432,14 @@ def _switch_masks(rails):
         d = np.gradient(xy, axis=0)
         d /= np.maximum(dnp.hypot(d[:, 0], d[:, 1]), 1e-9)[:, None]
         dirs.append(d)
-        if c == "tram":
+        if c == "tram" and not _f.startswith(TRAM3D_PREFIX):
             continue
         for i, (x, y) in enumerate(np.floor(xy / cell).astype(np.int64).tolist()):
             grid.setdefault((x, y), []).append((n, i))
     out = []
     for n, (_f, c, _k, xy) in enumerate(rails):
         m = np.zeros(len(xy), bool)
-        if c != "tram":
+        if c != "tram" or _f.startswith(TRAM3D_PREFIX):
             for i, (x, y) in enumerate(np.floor(xy / cell).astype(np.int64).tolist()):
                 for gx in (x - 1, x, x + 1):
                     for gy in (y - 1, y, y + 1):
@@ -2428,15 +2509,18 @@ def _foot_limits(xy, side, foot, others, crossers):
     return np.maximum(lim, BALLAST_TOP_M + 0.01)
 
 
-def tile_mesh(frame, tx, ty, cells, ground, sign_style=None, far_ground=None, return_decks=False, load=None,
-              bed_elev=None, _drop=frozenset(), furniture=None, under=None):
+def tile_mesh(frame, tx, ty, cells, ground, sign_style=None, far_ground=None, road_decks=(), country=None,
+              return_decks=False, load=None, bed_elev=None, _drop=frozenset(), furniture=None, under=None):
     """The road tile (tx, ty)'s railway mesh (roadmesh.write's (positions, tris, uvs, materials, tri material)) or
     None. cells: the roads layers of the cells within REACH_M of the tile (cells_of_tile(..., margin=REACH_M));
-    ground(xy (n, 2)) -> z: the drawn ground in the frame. far_ground: the natural ground, read beyond GRADED_NEAR_M
+    road_decks: [(xy, z)] the road bridge decks near it (BNE_TRAM: a street tram's bridge lies on one), country: its
+    paving. ground(xy (n, 2)) -> z: the drawn ground in the frame. far_ground: the natural ground, read beyond GRADED_NEAR_M
     of the tile (the lines REACH_M round it only smooth the track and carry its ramps: the graded ground there made the
     grader plan the cells round every tile, and the railways doubled a tile's time, 2026-10-25). return_decks: also
     return the bridge decks' centrelines ([{"n": xy+z line, "w": width}], the bed plus its ballast), for mapped
-    furniture (fences.py) to stand on: the profile is already made here, no second pass. under(xy (k, 2)) -> mask: the
+    furniture (fences.py) to stand on: the profile is already made here, no second pass. load (a roads layer by cell key)
+    and bed_elev (the grader's DEM): the beds from railprofile's lattice, the same in every tile (plan 035).
+    under(xy (k, 2)) -> mask: the
     points a 3dmr model bridge stands over (buildings.bridge_footprints'): a railway's or a walkway's bridge mostly
     under one is not drawn (the model carries it: Perth's Narrows and Mount Henry bridges' rail decks, the Elizabeth
     Quay footbridge, GitHub #1071); the track's profile still runs over it.
@@ -2456,10 +2540,35 @@ def tile_mesh(frame, tx, ty, cells, ground, sign_style=None, far_ground=None, re
     walk = [w for w in walk if _box_hit((w[1][:, 0].min(), w[1][:, 1].min(), w[1][:, 0].max(), w[1][:, 1].max()), exs)]
     if under is not None:
         walk = [w for w in walk if not np.asarray(under(w[1]), bool).mean() >= 0.5]
-    if not rails and not walk:
+    # (the street trams' rails for the physics: raised strips in the collision mesh, tram/physmesh.rs)
+    tram_runs = []
+    if tramtrack.ENABLED and tramtrack.RAIL_PHYS:
+        import rails as railsmod
+        tram_runs = railsmod.tram_street_runs(frame, tx, ty, cells, country)
+    # (a tram's open track in 3D: BNE_TRAM_TRACK3D, rails.py leaves its decals out, tram/track.rs open_runs)
+    tram3d = {}                 # (part name -> whether its start / end meets a strip or a free end: ramped)
+    tram_sw = {}                # (... and its turnout: the branch's zone / divergence / frog, the through track's marks)
+    if tramtrack.ENABLED and tramtrack.TRACK3D:
+        import rails as railsmod
+        for k, (run, g, ramp_s, ramp_e, sw_info) in enumerate(railsmod.tram_open_runs(frame, tx, ty, cells, country,
+                                                                                       (exs[0], exs[1], exs[2], exs[3]))):
+            xy3 = _resample(np.asarray(run, np.float64), STEP_M)
+            if len(xy3) < 2:
+                continue
+            fid3 = "%s%d:%d:%d" % (TRAM3D_PREFIX, k, int(round(run[0, 0])), int(round(run[0, 1])))
+            rails.append((fid3, "tram", "ground", xy3))
+            gauges[fid3] = g
+            tram3d[fid3] = (ramp_s, ramp_e)
+            tram_sw[fid3] = sw_info
+    if not rails and not walk and not tram_runs:
         return (None, []) if return_decks else None
-    prof = (_beds(frame, rails, ground, tunnels + coarse_underpasses(frame, cells, box, rails), load, bed_elev)
+    prof = (_beds(frame, rails, ground, tunnels + coarse_underpasses(frame, cells, box, rails), load, bed_elev,
+                  road_decks=road_decks)
             if rails else [])
+    for n, (fid3, _c3, _k3, xy3) in enumerate(rails):
+        if fid3 in tram3d:      # (its bed: the graded ground, which was laid to the tram's bed; the heights are open_heights')
+            zg3 = np.asarray(prof[n][1], np.float64)
+            prof[n] = (tramtrack.open_bed(zg3), zg3)
     keep = [n for n in range(len(rails)) if n not in _drop]
     if _drop:                                       # (a retry past the vertex budget: the tracks of lowest rank left out)
         rails, prof = [rails[n] for n in keep], [prof[n] for n in keep]
@@ -2469,7 +2578,7 @@ def tile_mesh(frame, tx, ty, cells, ground, sign_style=None, far_ground=None, re
                "w": 2 * (TRAM_DECK_HALF_M if cls == "tram" else DECK_HALF_M)}
               for (_, cls, kind, xy), (zb, _zg), gone in zip(rails, prof, carried) if kind == "bridge" and not gone]
              if return_decks else [])
-    ground_lines = [xy for _f, c, kind, xy in rails if kind == "ground" and c != "tram"]
+    ground_lines = [xy for _f, c, kind, xy in rails if kind == "ground" and (c != "tram" or _f in tram3d)]
     all_cr = crossings(frame, cells, box, reach=50.0)
     cr = (true_crossers(ground_lines, all_cr) if TRUE_CROSSERS_ON else all_cr) + tunnels
     crossers = []
@@ -2495,8 +2604,26 @@ def tile_mesh(frame, tx, ty, cells, ground, sign_style=None, far_ground=None, re
         s = _arc(xy)
         w = worn.get(fid, 0)
         ballast_w, steel_w = mesh.mat(BALLAST_WORN[w]), mesh.mat(STEEL_WORN[w])
+        if fid in tram3d:       # (a tram's open track: the kernel draws it all, tram/mesh.rs; only the level crossings'
+            blk = _blocked(xy, zb, crossers)     # flush bed, finals, is the railway's)
+            if blk.any():
+                finals[n_part] = _flush(s, zb, blk, np.asarray(ground(xy[blk]), np.float64))
+            rails_s, boxes_s, coll_s = tramtrack.open_mesh(xy, gauges[fid], zg, blk | ~inside, inside, sw, tram3d[fid],
+                                                           tram_sw.get(fid) or {})
+            mesh.add_tagged(rails_s, [steel_w])
+            if boxes_s:
+                mats_b = {0: steel_w}
+                if any(b[7] == 2 for b in boxes_s):
+                    mats_b[2] = mesh.mat(SLEEPER_WORN[0])
+                small.extend(((c, al, ac, z0, z1), hx, hy, mats_b[tag]) for c, al, ac, z0, z1, hx, hy, tag in boxes_s)
+            if len(coll_s[1]):
+                mesh.add_tagged(coll_s, [None, mesh.mat(COLLIDER)])
+            continue
         half_g = gauges.get(fid, gauge(cls, sign_style)) / 2 + RAIL_HEAD / 2
         top = zb + BALLAST_H
+        on_road = np.zeros(len(xy), bool)
+        if tramtrack.ENABLED and cls == "tram" and kind == "bridge" and road_decks:
+            on_road = road_deck_z(xy, road_decks)[1]
         if kind == "ground":
             blk = _blocked(xy, zb, crossers)
             if blk.any():           # (its rails flush with the road at a level crossing)
@@ -2540,15 +2667,21 @@ def tile_mesh(frame, tx, ty, cells, ground, sign_style=None, far_ground=None, re
             elif kind == "tunnel":
                 _tunnel(mesh, p, uu, t, v, ballast_w, concrete, i == 0, j == len(xy) - 1)
             else:
-                if cls == "tram":
+                on_deck = bool(on_road[sl].mean() > 0.5)
+                if cls == "tram" and on_deck:           # (on the road's deck: its paving and rails only, the deck and
+                    if tramtrack.paving(country)["m"] == tramtrack.SLAB["m"]:       # piers are the road bridge's)
+                        _tram_paving(mesh, p, uu, t, v, half_g, mesh.mat(tramtrack.SLAB["m"]))
+                elif cls == "tram":
                     _tram_deck(mesh, p, uu, t, v, concrete)
                 else:
                     _deck(mesh, p, uu, t, v, ballast_w, concrete)
                 pier_w = min(PIER_W, 2 * TRAM_DECK_HALF_M) if cls == "tram" else PIER_W
-                if obstacles is None:
-                    obstacles = pier_obstacles(frame, cells, box)
-                pr = pier_sites(s, xy, u, top, zg, i, j, obstacles, ground, PIER_EVERY, DECK_D, PIER_MIN_H,
-                                np.array([PIER_T / 2, pier_w / 2]))
+                pr = None
+                if not on_deck:
+                    if obstacles is None:
+                        obstacles = pier_obstacles(frame, cells, box)
+                    pr = pier_sites(s, xy, u, top, zg, i, j, obstacles, ground, PIER_EVERY, DECK_D, PIER_MIN_H,
+                                    np.array([PIER_T / 2, pier_w / 2]))
                 if pr is not None:
                     small.append((pr, PIER_T / 2, pier_w / 2, concrete))
             st = t - SLEEPER_SINK + SLEEPER_H           # the sleepers' top: the rails' foot
@@ -2569,6 +2702,9 @@ def tile_mesh(frame, tx, ty, cells, ground, sign_style=None, far_ground=None, re
             for i, j in _runs(~inside | sw):     # road, as the bed is flush with it; none in a switch: SWITCH_M)
                 sl = slice(i, j + 1)
                 _collider(mesh, xy[sl], u[sl], top[sl], s[sl] / 3.0, half_g, up)
+    for run, g, taper_s, taper_e in tram_runs:
+        v, t = tramtrack.physics_mesh(run, g, ground, taper_s, taper_e)
+        mesh.add_raw(v, t, mesh.mat(TRAM_PHYS))
     rows = []                                       # (the props of the tile's furniture: appended to `furniture` once, at the end)
     if STATION_FURNITURE_ON:        # (buffer stops at the tracks' ends, the footways' panels and signs: plan 035)
         carriage = [(ln, hw) for ln, hw, _z in crossers if ln is not None]
@@ -2603,7 +2739,7 @@ def tile_mesh(frame, tx, ty, cells, ground, sign_style=None, far_ground=None, re
     if walk and obstacles is None:
         obstacles = pier_obstacles(frame, cells, box)
     footbridges.add(mesh, walk, ground, crossers, ex, concrete, small, obstacles)
-    small.sort(key=lambda e: -e[2])                 # (the piers first: a deck needs them more than its sleepers)
+    small.sort(key=lambda e: -float(np.max(e[2])))  # (the piers first: a deck needs them more than its sleepers)
     for (c, along, across, z0, z1), hx, hy, mi in small:
         room = (TILE_VERTS_MAX - mesh.nv) // 8
         if room <= 0:
@@ -2618,8 +2754,8 @@ def tile_mesh(frame, tx, ty, cells, ground, sign_style=None, far_ground=None, re
         if len(rank) > 1:                           # (unworn and longest first: the last of the rank go)
             for n in rank[-min(len(rank) - 1, max(1, len(rank) // 4)):]:
                 _drop = _drop | {keep[n]}
-            return tile_mesh(frame, tx, ty, cells, ground, sign_style, far_ground, return_decks=return_decks,
-                             load=load, bed_elev=bed_elev, _drop=_drop, furniture=furniture, under=under)
+            return tile_mesh(frame, tx, ty, cells, ground, sign_style, far_ground, road_decks, country, return_decks,
+                             load, bed_elev, _drop, furniture, under)
         return (None, decks) if return_decks else None
     if furniture is not None:
         furniture += rows
@@ -2693,11 +2829,11 @@ def collision_mesh(mesh):
 
 def render_mesh(mesh):
     """tile_mesh's mesh without the physics-only boxes (COLLIDER), for the drawn shape."""
-    if mesh is None or COLLIDER not in mesh[3]:
+    if mesh is None or (COLLIDER not in mesh[3] and TRAM_PHYS not in mesh[3]):
         return mesh
     P, T, UV, mats, M = mesh[:5]
     M = np.asarray(M)
-    keep = M != mats.index(COLLIDER)
+    keep = ~np.isin(M, [k for k, m in enumerate(mats) if m in (COLLIDER, TRAM_PHYS)])
     if not keep.any():
         return None
     return (P, np.asarray(T)[keep], UV, mats, M[keep]) + tuple(mesh[5:])

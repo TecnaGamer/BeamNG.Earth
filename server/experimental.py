@@ -39,6 +39,7 @@ FEATURES = (
     ("expAiTunnels", {"BNE_AI_TUNNELS": "on"}, None),                     # navgraph.AI_TUNNELS
     ("expRailCollide", {"BNE_RAIL_COLLIDE": "on"}, None),                 # railways.RAIL_COLLIDE
     ("expCatenary", {"BNE_CATENARY": "1"}, None),                         # catenary.ENABLED
+    ("expTrams", {"BNE_TRAM": "1"}, None),                                # tramtrack.ENABLED (its overhead line also needs expCatenary)
     ("expRailCrossings", {"BNE_RAIL_XING": "1"}, None),                   # railxing.ENABLED
     ("expRailTunnels", {"BNE_RAIL_TUNNELS": "on"}, None),                 # railways.TUNNELS_ON
     ("expRailCurves", {"BNE_RAIL_CURVES": "on"}, None),                   # roadsmooth.RAIL_ON

@@ -3405,6 +3405,10 @@ class Server:
                                        anchor.frame,
                                        lambda la, lo: self.ground(anchor.frame, la, lo, self.dem.sample(la, lo, zoom)),
                                        ("raw", aid, anchor.lat, anchor.lon)),
+                                   road_decks=blockworker._road_decks(
+                                       anchor.bridges, [cell_fn(k) for k in roadsmod.cells_of_tile(
+                                           anchor.frame, tx, ty, railways.REACH_M)], tx, ty),
+                                   country=self.country(anchor),
                                    return_decks=True, load=cell_fn,
                                    bed_elev=getattr(getattr(self, "plan_store", None), "elev", None), furniture=rail_props,
                                    under=((lambda xy: buildingsmod._under_bridges(_bridge_fps, xy))

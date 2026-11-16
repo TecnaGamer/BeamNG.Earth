@@ -279,7 +279,7 @@ class KnownPinnedTest(unittest.TestCase):
                 os.makedirs(s.dir)
                 with open(os.path.join(s.dir, "manifest.json"), "w") as fh:
                     json.dump({"built": "2026-11-12T18:20:31Z"}, fh)
-                with mock.patch.object(railtags, "PIN_RECHECK_S", 0.0):
+                with mock.patch.object(railtags, "PIN_RECHECK_S", -1.0):   # (Windows: monotonic() can read the same tick)
                     self.assertEqual(s.known(), "2026-11-12T18:20:31Z")
             finally:
                 railtags.ON = on

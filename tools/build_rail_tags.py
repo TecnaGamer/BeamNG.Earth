@@ -6,7 +6,7 @@ Overture keeps rail geometry but no gauge, electrification or service, and calls
     python3 tools/build_rail_tags.py https://.../planet-YYMMDD.osm.pbf out/     (streamed twice by curl: no disk)
 
 Shards: <OUT_DIR>/<x>/<y>.json.gz per z7 tile (SHARD_ZOOM) with rails, {"ways": {way id: tags}, "nodes": [[id,
-lon, lat, tags]]} (ways with railway=*, nodes railway=level_crossing / crossing and power=catenary_mast / _portal; the
+lon, lat, tags]]} (ways with railway=*, nodes railway=level_crossing / crossing / signal and power=catenary_mast / _portal; the
 tags in TAGS), and <OUT_DIR>/manifest.json. Served by GitHub Pages from TecnaGamer/BeamNG.Earth-data, rebuilt weekly
 by its GitHub Action (the user, 2026-10-27: "could we automate some of the data with github actions?").
 A way is in every shard its points fall in. Two passes over the planet: the
@@ -30,7 +30,9 @@ TAGS = ("railway", "usage", "service", "gauge", "tracks", "electrified", "voltag
         "power", "structure", "disused:railway", "abandoned:railway", "razed:railway", "construction:railway",
         "proposed:railway",
         "highway")          # (a rail trail: an abandoned line that is now a road or path, railways.drawn)
-NODE_RAILWAY = {"level_crossing", "crossing"}
+# (signal: the tram signals of plan 046 stage H, server/tramsignals.py rule B: only the node, its place and railway=signal, is kept; a
+# planet rebuild with it grows the shards by the world's ~1 million railway signals: measure before publishing)
+NODE_RAILWAY = {"level_crossing", "crossing", "signal"}
 NODE_POWER = {"catenary_mast", "catenary_portal"}
 
 

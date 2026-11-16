@@ -68,6 +68,7 @@ POST_H = 10.4                   # m (the post models' height)
 CHORD_R, DIAG_R = 0.05, 0.025
 HOLDER_INS_M = 0.4             # m a rod insulator is long (two of them with a gap hold a contact wire to the girder)
 INS_R, CLAMP_R = 0.035, 0.03   # their half widths
+SPRING_R = 0.019               # a tram span wire's tensioner spring (tramcat: the kernel's tram/wires.rs, a steel bar)
 HANGER_R = 0.022               # the holder's hanger rod (a 2 cm ribbon vanished at a distance and left the insulators floating)
 PORTAL_VERT_M = 2.0            # m between the girder's verticals (no diagonals: the user, 2026-11-10, "remove the triangles")   # the girder's bars' half widths (drawn as the tile's wire ribbons)
 ELECTRIC = {"contact_line", "yes"}     # (not "rail": a third rail has no overhead line)
@@ -459,7 +460,7 @@ def wire_material(r, default="bne_wire"):
         return MAT_COPPER
     if r in (MESSENGER_R, DROPPER_R):
         return MAT_BRONZE
-    if r in (CHORD_R, DIAG_R, CHORD_R * 1.6, CLAMP_R, HANGER_R):
+    if r in (CHORD_R, DIAG_R, CHORD_R * 1.6, CLAMP_R, HANGER_R, SPRING_R):
         return MAT_STEEL
     if r == INS_R:
         return MAT_INSULATOR
@@ -469,7 +470,7 @@ def wire_material(r, default="bne_wire"):
 def wire_solid(r):
     """Whether a wire ribbon of half width r is drawn as a four-sided bar: the girder's bars, the insulators and clamps
     (the thin wires stay ribbons)."""
-    return r in (CHORD_R, DIAG_R, CHORD_R * 1.6, CLAMP_R, INS_R, HANGER_R)
+    return r in (CHORD_R, DIAG_R, CHORD_R * 1.6, CLAMP_R, INS_R, HANGER_R, SPRING_R)
 
 
 def span_wires(a, b):
@@ -549,10 +550,15 @@ def rows_and_wires(masts, box_owns, style="su"):
     return rows, wires
 
 
-def build(frame, tx, ty, cells, ground, rings=(), country=None):
+def build(frame, tx, ty, cells, ground, rings=(), country=None, decks=()):
     """(prop rows, wire lines) of road tile (tx, ty): the catenary of the electrified lines round it. rings: the
     buildings' footprints (anchor frame) the masts keep off."""
     import roads as roadsmod
     box = roadsmod.tile_bbox(tx, ty)
     masts = masts_of(frame, cells, box, ground, rings)
-    return rows_and_wires(masts, lambda x, y: roadsmod.box_owns(box, x, y), style_of(country))
+    rows, wires = rows_and_wires(masts, lambda x, y: roadsmod.box_owns(box, x, y), style_of(country))
+    import tramcat
+    if tramcat.ENABLED:                 # (BNE_TRAM: the street trams' poles and contact wire, tramcat.py)
+        t_rows, t_wires = tramcat.build(frame, tx, ty, cells, ground, rings, country, decks)
+        rows, wires = list(rows) + t_rows, list(wires) + t_wires
+    return rows, wires

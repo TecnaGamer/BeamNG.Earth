@@ -78,6 +78,8 @@ MEDIAN_M = float(os.environ.get("BNE_GRADE_MEDIAN", "24"))
 DIRT_MEDIAN_M = 10.0        # (tracks keep their small real bumps)
 RAIL_GRADE_ON = os.environ.get("BNE_RAIL_GRADE", "1") != "0"    # the ground laid to the railways' bed (railways.py)
 RAIL_TAG = "rail:"
+TRAM_FOLLOW_ON = os.environ.get("BNE_TRAM_FOLLOW", "on") != "off"   # side streets ramp to the tram bed they cross (tramtrack.follow)
+TRAM_GRADE_ON = os.environ.get("BNE_TRAM_GRADE", "on") != "off"     # the ground laid to a ground tram's bed (plan 046 stage A)
 SHOULDER_M = 1.0            # m of flat shoulder beyond the carriageway, each side
 RURAL_MINOR_SHOULDER_M = 1.0   # a rural residential / service / unclassified lane's flat verge: not a town sidewalk
 RURAL_MINOR_CLASSES = {"residential", "service", "unclassified", "living_street"}
@@ -450,6 +452,9 @@ UNDER_NODE_M = float(os.environ.get("BNE_UNDER_NODE", "2.0"))
 # The deck keeps less headroom there instead (as UNDER_MAX_DROP_M: rather a low bridge than a flooded road); a road
 # already under that is not lowered. A polder's (under UNDER_POLDER_M) dips as before: the tiles split away from it.
 UNDER_SEA_ON = os.environ.get("BNE_UNDER_SEA", "on") != "off"
+UNDER_TRAM_RIDE = 0.25      # a street tram's bridge piece with this share of its length on a road deck lies on that deck
+                            # and is no overpass for the roads it crosses (Prague, Rašínovo nábřeží, 2026-11-06: a 25 m
+                            # tram piece at the end of Palackého most dug the quay 4.9 m under it)
 UNDER_SEA_M = 0.5           # m over the sea surface (seatiles.SEA_E) a dip's floor stays (the tiles' curve: <= 0.17 m)
 UNDER_POLDER_M = -1.0       # m: a road this far under the sea is behind dikes (the Netherlands' polders: 2-6 m under)
 # Where the elevation is lidar, a deck (its ends' ground, as raised) standing less than this over the road crossing
@@ -2148,6 +2153,18 @@ def _twin_trimmed(secs):
 _UNSET = object()
 
 
+def tram_rides_deck(line, decks, share=UNDER_TRAM_RIDE, step=2.0):
+    """True when a street tram's bridge piece (line (n, 2)) lies on a road deck: at least `share` of its length, sampled
+    every `step` m, within railways.DECK_NEAR_M of one of decks [line (m, 2)] (tram/mesh.rs rides_deck: the same test the
+    tram's own deck height uses). Such a piece is the road's, at its level: the roads it crosses at grade are not under it.
+    A tram viaduct standing clear of every road deck is not."""
+    import tramtrack
+    line = np.asarray(line, np.float64)[:, :2]
+    if len(line) < 2 or not decks:
+        return False
+    return tramtrack.rides_deck(line, decks, share, step)
+
+
 _MAKING = threading.local()     # .stack: the fault scopes of the kept answers this thread is making now (_marked)
 
 
@@ -2877,6 +2894,28 @@ class _Planner:
                 except Exception as e:      # no rail grading rather than no grading
                     _caught(e)
                     log.debug("grading: railways of %s: %s: %s", key, type(e).__name__, e)
+                try:            # the ground trams' bed (tramtrack.beds): the track on the formation of the roads beside it
+                    import tramtrack
+                    if TRAM_GRADE_ON and tramtrack.ENABLED and RAIL_GRADE_ON:
+                        tram_roads = [(np.asarray(q.xy, np.float64)[:, :2], np.asarray(q.z, np.float64), q.road_half)
+                                      for _f, q in plans[:len(pspecs)] if TUNNEL_TAG not in _f]
+                        tram_parts = railways.tram_grade_plans(self.frame, rcells, own, self.elev)
+                        tram_beds = tramtrack.beds([(p[1], p[2]) for p in tram_parts], tram_roads)
+                        if TRAM_FOLLOW_ON and tram_parts:   # (the streets that cross a tram at grade: a ramp to it, no crest)
+                            own_plans = [(f, q, sp) for (f, q), sp in zip(plans[:len(pspecs)], pspecs) if TUNNEL_TAG not in f]
+                            moved = tramtrack.follow([(q.xy, q.z, getattr(sp, "cls", "") or "") for _f, q, sp in own_plans],
+                                                     [(p[1], z) for p, z in zip(tram_parts, tram_beds)])
+                            for (_f, q, _sp), z in zip(own_plans, moved):
+                                if len(z) == len(q.z) and not np.array_equal(z, q.z):
+                                    q.z = np.ascontiguousarray(z, np.float64)
+                        for (fid, xy, _zd), z in zip(tram_parts, tram_beds):
+                            for pxy, pz in rail_yield_pieces(xy, z, cways, tramtrack.PLAN_HALF_M):
+                                p = Plan(pxy, pz, tramtrack.PLAN_HALF_M, road_half=tramtrack.PLAN_ROAD_HALF_M)
+                                p.rid = road_id(RAIL_TAG + fid)
+                                plans.append((RAIL_TAG + fid, p))
+                                pclip.append(True)
+                except Exception as e:      # no tram grading rather than no grading
+                    log.debug("grading: trams of %s: %s: %s", key, type(e).__name__, e)
             # every plan only within the cell's own box, so each stretch of road is planned by one cell (its dips
             # made with every road around: _lower_underpasses); the tunnels' ends graded as before, a part shorter
             # than LONG_PART_M by all of it (TunnelProfiles.ends grades them by the roads' plans alone)
@@ -3831,7 +3870,7 @@ class _Planner:
         cla, clo = np.asarray(cla, f64), np.asarray(clo, f64)
         keys = sorted(set(mapcells.cells_for_bbox(float(cla.min()), float(clo.min()), float(cla.max()),
                                                   float(clo.max()))) | {key}, key=str)
-        bridges, ground, over, limits = [], {}, [], []
+        bridges, ground, over, trams, limits = [], {}, [], [], []
         for k in keys:
             c = self._cell_enu(k)
             limits += c.get("height_limits", ())
@@ -3846,7 +3885,11 @@ class _Planner:
                 bridges.append((line, cls in APPROACH_SKIP, False))     # (a link's "<cls>_link": raised)
             # (a line's deck: never raised; straight between its ends whatever its length or what it joins, as
             # railways.deck_heights lays it: no single-span test)
-            bridges += [(line, True, True) for line in c.get("rail_bridges", ())]
+            rcls = c.get("rail_bridge_cls") or [None] * len(c.get("rail_bridges", ()))
+            for line, rc in zip(c.get("rail_bridges", ()), rcls):
+                bridges.append((line, True, True))
+                if rc == "tram":
+                    trams.append(line)
             gl, gi = c["ground"], c["ground_ids"]
             for n_ in np.flatnonzero(_boxes_meet(c["ground_box"], lo, hi)).tolist():
                 (line, _h, cls), (fid, j, sg, med) = gl[n_], gi[n_]
@@ -3855,6 +3898,11 @@ class _Planner:
                 got = ground.get((fid, j))      # (the longest copy of a part, as each cell has it)
                 if got is None or len(line) > len(got[0]):
                     ground[(fid, j)] = (line, sg, med, cls)
+        if trams:           # (a street tram's piece on a road deck is the road's: tram_rides_deck)
+            road_decks = [b for b, _f, rail in bridges if not rail]
+            riders = {id(t) for t in trams if tram_rides_deck(t, road_decks)}
+            if riders:
+                bridges = [b for b in bridges if id(b[0]) not in riders]
         if not bridges or not ground:
             return
         # (single spans: neither end continues into another bridge part; deduplicated across cells, a piece lying
@@ -5006,7 +5054,7 @@ class _Planner:
         # the rail bridges (railways.DRAWN lines' bridge pieces): the roads under them dip as under a road overpass
         # (_lower_underpasses), nothing else (no ramps, no abutments: a line's deck is never raised for a road).
         # (GitHub #311 / #345 / #364: the track lay across the road under a rail bridge)
-        rail, rail_g = [], []
+        rail, rail_g, rail_cls = [], [], []
         if f is not None and len(f) and f.attrs.get("subtype") is not None:
             import railways
             sub, rcls = f.attrs["subtype"], f.attrs.get("class")
@@ -5017,6 +5065,7 @@ class _Planner:
                 for kind, rings in railways._pieces(f, i):
                     if kind == "bridge":
                         rail += [np.asarray(r, np.float64) for r in rings if len(r) >= 2]
+                        rail_cls += [got[0]] * sum(1 for r in rings if len(r) >= 2)
                     elif kind == "ground" and ground and got[0] != "tram":
                         # (and the tracks on the ground: a road bridge's approaches rise over them as over a road,
                         # GitHub #324)
@@ -5080,7 +5129,7 @@ class _Planner:
                 "bridge_half": bhalf, "ground": ground_l, "ground_ids": ground_ids, "ground_link": ground_link,
                 "end_of": end_of, "span_bridges": span_xy,
                 "ends": np.asarray(ends, np.float64).reshape(-1, 2), "rail_bridges": rail_xy, "rail_ground": rail_gxy,
-                "height_limits": limits,
+                "rail_bridge_cls": rail_cls, "height_limits": limits,
                 # (each line's box [min e, min n, max e, max n], made once: the passes skip the far ones at once)
                 "ground_box": _line_boxes([g[0] for g in ground_l]), "rail_ground_box": _line_boxes(rail_gxy)}
 

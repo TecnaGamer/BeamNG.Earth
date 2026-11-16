@@ -80,6 +80,7 @@ local ambience = require('beamngEarth/ambience') -- forest wind and room tone (t
 local pumpjacks = require('beamngEarth/pumpjacks') -- oil wells' pump jacks (server oilwells.py)
 local nightlights = require('beamngEarth/nightlights') -- the buildings' windows lit at night
 pumpjacks.onCollide = roads.markCollisionDirty
+require('beamngEarth/tramsignals').onCollide = roads.markCollisionDirty -- tram signals with working phases (server tramsignals.py)
 require('beamngEarth/windturbines').onCollide = roads.markCollisionDirty
 local parking = require('beamngEarth/parking') -- parked cars on the road tiles' spots (stock gameplay_parking)
 local gasstations = require('beamngEarth/gasstations') -- pumps and the stock refuel prompt (server gasstations.py)
@@ -645,6 +646,7 @@ local function finishRebase()
   trees.transform(xf, geodesy, rb.newAnchor)    -- (geotiles: placed into the new anchor, nothing sent again)
   ambience.transform(xf)
   pumpjacks.transform(xf)
+  require('beamngEarth/tramsignals').transform(xf)
   require('beamngEarth/windturbines').transform(xf)
   require('beamngEarth/turbinestream').reanchor(rb.newAnchor)
   nightlights.transform(xf)
@@ -3122,6 +3124,7 @@ local function onUpdate(dtReal, dtSim)
     end
     pcall(ambience.update, st.anchorId, sea)      -- (sound never stops the world's updates)
     pcall(pumpjacks.update)
+    pcall(require('beamngEarth/tramsignals').update)
     pcall(nightlights.update)
     t = mark('sea+trees', t)
     local pb = nil
@@ -3363,6 +3366,7 @@ local function onClientEndMission()
   trees.reset()
   ambience.reset()
   pumpjacks.reset()
+  require('beamngEarth/tramsignals').reset()
   require('beamngEarth/windturbines').reset()
   require('beamngEarth/turbinestream').reset()
   nightlights.reset()

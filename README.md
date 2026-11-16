@@ -93,6 +93,17 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   crossings and name boards (`BNE_RAILSTATIONS=off` turns them off). The catenary runs on through way joints and
   switches, with portals over three tracks or more, droppers and per-class wire materials. Opt-in: a physics
   collider at the rails for riding them (Settings > Experimental > Solid railway rails, or `BNE_RAIL_COLLIDE=on`) and rail tunnels as tubes (Settings > Experimental > Railway tunnels, or `BNE_RAIL_TUNNELS=on`).
+  Opt-in (Settings > Experimental > Tram tracks, poles and signals, or `BNE_TRAM=1`): street trams lie in a strip of
+  paving with the rails flush (asphalt, setts or concrete slabs by country and street; the gauge from OpenStreetMap),
+  open tram track lies on the ground (sleepers and rails, no embankment) with turnouts drawn as one sleeper grid and a
+  frog, the track's bed and the streets that cross it at grade are graded to each other, nothing (poles, signs,
+  benches, trees, buildings, kerbs) stands on the rails, and the street rails are raised a few millimetres in the
+  collision mesh. With the overhead wires on as well: tram poles by country (galvanised tube, black square or lattice,
+  spun concrete) with span wires, cantilevers, cross-span portals over yards and lamp brackets, the contact wire
+  continuous through joints and switches; and working tram signals (white bars or BOStrab-like heads) before the
+  stop lines at signalled junctions, their phases tied to the junction's car signals. Each part has an off switch:
+  `BNE_TRAM_GRADE`, `BNE_TRAM_FOLLOW`, `BNE_TRAM_TRACK3D`, `BNE_TRAM_SWITCH3D`, `BNE_TRAM_CORRIDOR`,
+  `BNE_TRAM_RAIL_PHYS`, `BNE_TRAM_STREET_TEX`, `BNE_TRAM_SIGNALS` (`=off`).
 - Gas stations with pumps, canopies and forecourts in the region's style, where the stock refuel prompt fills the
   tank.
 - Golf courses: mapped greens, fairways, rough and bunkers painted into the ground, and a flag at each mapped hole

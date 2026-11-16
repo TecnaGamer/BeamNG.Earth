@@ -16,7 +16,7 @@ local function rec(mod)
     return function(...) calls[#calls + 1] = { mod, fn, ... } end
   end })
 end
-for _, m in ipairs({ 'trees', 'nightlights', 'parking', 'gasstations', 'pumpjacks', 'windturbines', 'ambience' }) do
+for _, m in ipairs({ 'trees', 'nightlights', 'parking', 'gasstations', 'pumpjacks', 'windturbines', 'ambience', 'tramsignals' }) do
   package.loaded['beamngEarth/' .. m] = rec(m)
 end
 rawset(package.loaded['beamngEarth/windturbines'], 'placeRows', function(...)
@@ -70,6 +70,7 @@ local content = string.format([[{ v = 1, key = "%s", frame = { %.10f, %.10f }, h
   signs = { shape = "/s/rg_signs.cdae", pos = { -118, -118, 0 }, pivot = 2, relief = 1 },
   colliders = { deck = { { -10, -10, 5, 10, 10, 15 } }, bldcol = { { 50, 50, 0, 60, 60, 30 } } },
   park = { { 10, 20, 3, 90 } }, wells = { { 30, 40, 3, 45 } },
+  tsig = { { 12, 22, 3, 45, 1, 60, 10, 12 } },
   turbines = { { id = "osm:node:1175681635", x = 8, y = 9, z = 1800, yaw = 30, scale = 1,
     lat = 41.1397814, lon = -104.9978882, dimensions = { basis = "stock_model_default" } } },
   sound = { 1, 5, 6, 7, 20, 10, 5, 0.5 },
@@ -135,6 +136,14 @@ do
 end
 T.check(#called('trees', 'onGeoRows') == 1 and #called('pumpjacks', 'onRows') == 1 and #called('ambience', 'onSpaces') == 1,
   'furniture, wells, sound handed on')
+do
+  local ts = called('tramsignals', 'onRows')
+  T.check(#ts == 1, 'tram signal rows handed on')
+  local r = ts[1][4][1]
+  local ex, ey, ez = geotile.worldMap(frame, A, 12, 22, 3)
+  T.check(math.abs(r[1] - ex) < 1e-3 and math.abs(r[2] - ey) < 1e-3 and math.abs(r[3] - ez) < 1e-3 and #r == 8 and r[5] == 1,
+    'a tram signal mapped exactly, its style and cycle kept')
+end
 -- its 3dmr models (b3dmr): each made once, placed as the parts are (the bld part's placement), a model bridge's
 -- drawn mesh without collision, its deck slab a collision mesh
 local function placedAt(a, o)

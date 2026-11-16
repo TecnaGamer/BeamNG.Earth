@@ -56,8 +56,9 @@ class Wall:
 
 
 class Context:
-    def __init__(self, rings=(), walls=(), ground=None, get_footprints=None):
+    def __init__(self, rings=(), walls=(), ground=None, get_footprints=None, corridor=None):
         self.ground = ground
+        self._corridor = corridor           # () -> the ground trams' parts (tramtrack.corridor_parts): no post on the rails
         self._get_footprints = get_footprints
         if get_footprints is None:
             self._set_footprints(rings, walls)
@@ -84,7 +85,21 @@ class Context:
         self._load_footprints()
         return np.flatnonzero(np.all(self.lo <= hi, axis=1) & np.all(self.hi >= lo, axis=1))
 
+    def on_rails(self, point, pad=0.0):
+        """Does the point lie in a ground tram's corridor (tram/corridor.rs)?"""
+        if self._corridor is None:
+            return False
+        if callable(self._corridor):
+            self._corridor = self._corridor()
+        if not self._corridor:
+            return False
+        import tramtrack
+        return bool(tramtrack.corridor_hits(np.asarray(point, np.float64)[None, :2], self._corridor,
+                                            tramtrack.KEEP_M + pad)[0])
+
     def clear(self, point, pad=0.15):
+        if self.on_rails(point, pad):
+            return False
         p = np.asarray(point)[:2]
         for i in self._near(p - pad, p + pad):
             r = self.rings[i]
@@ -117,6 +132,8 @@ class Context:
         return True
 
     def post(self, q, front, width, eyes):
+        if self.on_rails(q, width / 2):
+            return False
         probes = span(q, front, width)
         return self.visible(probes[0], probes[-1], 0.16) and all(
             self.visible(eye, p) for eye in eyes for p in probes
@@ -214,7 +231,23 @@ def arm_line(lines, arm):
 
 def for_tile(frame, tx, ty, md, items, skip=frozenset()):
     # A motorway or rural tile may never need to look up any building outlines.
-    return Context(get_footprints=lambda: _tile_footprints(frame, tx, ty, md, items, skip))
+    return Context(get_footprints=lambda: _tile_footprints(frame, tx, ty, md, items, skip),
+                   corridor=lambda: _tile_trams(frame, tx, ty, md))
+
+
+def _tile_trams(frame, tx, ty, md):
+    """The ground trams near the tile (tramtrack.corridor_parts), [] where there is none or the corridor is off."""
+    import railways
+    import roads
+    import tramtrack
+    if not (tramtrack.ENABLED and tramtrack.CORRIDOR):
+        return []
+    box = roads.tile_bbox(tx, ty)
+    try:
+        cells = [md.cell(k, layers=("roads",), kind="demand").layers.get("roads") for k in railways.cells_near(frame, box, 60.0)]
+        return tramtrack.corridor_parts(frame, cells, box, 30.0)
+    except Exception:               # (the signs as before rather than none)
+        return []
 
 
 def _tile_footprints(frame, tx, ty, md, items, skip):

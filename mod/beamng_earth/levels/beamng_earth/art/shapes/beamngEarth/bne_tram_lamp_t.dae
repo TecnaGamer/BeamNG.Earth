@@ -1,0 +1,309 @@
+<?xml version="1.0" encoding="utf-8"?>
+<COLLADA xmlns="http://www.collada.org/2005/11/COLLADASchema" version="1.4.1" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <asset>
+    <contributor>
+      <author>Blender User</author>
+      <authoring_tool>Blender 4.5.15 LTS commit date:2026-10-21, commit time:09:15, hash:5afeabba6097</authoring_tool>
+    </contributor>
+    <created>2026-11-13T16:49:03</created>
+    <modified>2026-11-13T16:49:03</modified>
+    <unit name="meter" meter="1"/>
+    <up_axis>Z_UP</up_axis>
+  </asset>
+  <library_effects>
+    <effect id="bne_tram_concrete-effect">
+      <profile_COMMON>
+        <technique sid="common">
+          <lambert>
+            <emission>
+              <color sid="emission">0 0 0 1</color>
+            </emission>
+            <diffuse>
+              <color sid="diffuse">0.62 0.61 0.58 1</color>
+            </diffuse>
+            <index_of_refraction>
+              <float sid="ior">1.5</float>
+            </index_of_refraction>
+          </lambert>
+        </technique>
+      </profile_COMMON>
+    </effect>
+    <effect id="bne_tram_galv-effect">
+      <profile_COMMON>
+        <technique sid="common">
+          <lambert>
+            <emission>
+              <color sid="emission">0 0 0 1</color>
+            </emission>
+            <diffuse>
+              <color sid="diffuse">0.62 0.64 0.65 1</color>
+            </diffuse>
+            <reflectivity>
+              <float sid="specular">0.85</float>
+            </reflectivity>
+            <index_of_refraction>
+              <float sid="ior">1.5</float>
+            </index_of_refraction>
+          </lambert>
+        </technique>
+      </profile_COMMON>
+    </effect>
+    <effect id="bne_cat_insulator-effect">
+      <profile_COMMON>
+        <technique sid="common">
+          <lambert>
+            <emission>
+              <color sid="emission">0 0 0 1</color>
+            </emission>
+            <diffuse>
+              <color sid="diffuse">0.03 0.03 0.035 1</color>
+            </diffuse>
+            <index_of_refraction>
+              <float sid="ior">1.5</float>
+            </index_of_refraction>
+          </lambert>
+        </technique>
+      </profile_COMMON>
+    </effect>
+    <effect id="bne_cat_plate-effect">
+      <profile_COMMON>
+        <technique sid="common">
+          <lambert>
+            <emission>
+              <color sid="emission">0 0 0 1</color>
+            </emission>
+            <diffuse>
+              <color sid="diffuse">0.9 0.85 0.1 1</color>
+            </diffuse>
+            <index_of_refraction>
+              <float sid="ior">1.5</float>
+            </index_of_refraction>
+          </lambert>
+        </technique>
+      </profile_COMMON>
+    </effect>
+    <effect id="bne_tram_black-effect">
+      <profile_COMMON>
+        <technique sid="common">
+          <lambert>
+            <emission>
+              <color sid="emission">0 0 0 1</color>
+            </emission>
+            <diffuse>
+              <color sid="diffuse">0.05 0.05 0.055 1</color>
+            </diffuse>
+            <reflectivity>
+              <float sid="specular">0.2</float>
+            </reflectivity>
+            <index_of_refraction>
+              <float sid="ior">1.5</float>
+            </index_of_refraction>
+          </lambert>
+        </technique>
+      </profile_COMMON>
+    </effect>
+    <effect id="bne_cat_foundation-effect">
+      <profile_COMMON>
+        <technique sid="common">
+          <lambert>
+            <emission>
+              <color sid="emission">0 0 0 1</color>
+            </emission>
+            <diffuse>
+              <color sid="diffuse">0.54 0.53 0.5 1</color>
+            </diffuse>
+            <index_of_refraction>
+              <float sid="ior">1.5</float>
+            </index_of_refraction>
+          </lambert>
+        </technique>
+      </profile_COMMON>
+    </effect>
+  </library_effects>
+  <library_images/>
+  <library_materials>
+    <material id="bne_tram_concrete-material" name="bne_tram_concrete">
+      <instance_effect url="#bne_tram_concrete-effect"/>
+    </material>
+    <material id="bne_tram_galv-material" name="bne_tram_galv">
+      <instance_effect url="#bne_tram_galv-effect"/>
+    </material>
+    <material id="bne_cat_insulator-material" name="bne_cat_insulator">
+      <instance_effect url="#bne_cat_insulator-effect"/>
+    </material>
+    <material id="bne_cat_plate-material" name="bne_cat_plate">
+      <instance_effect url="#bne_cat_plate-effect"/>
+    </material>
+    <material id="bne_tram_black-material" name="bne_tram_black">
+      <instance_effect url="#bne_tram_black-effect"/>
+    </material>
+    <material id="bne_cat_foundation-material" name="bne_cat_foundation">
+      <instance_effect url="#bne_cat_foundation-effect"/>
+    </material>
+  </library_materials>
+  <library_geometries>
+    <geometry id="bne_tram_lamp_t8-mesh" name="bne_tram_lamp_t8">
+      <mesh>
+        <source id="bne_tram_lamp_t8-mesh-positions">
+          <float_array id="bne_tram_lamp_t8-mesh-positions-array" count="174">0.03499996 -0.97 8.78 0.01081556 -0.97 8.746713 -0.02831554 -0.97 8.759428 -0.02831554 -0.97 8.800573 0.01081556 -0.97 8.813287 0.03499996 0.97 8.78 0.01081556 0.97 8.746713 -0.02831554 0.97 8.759428 -0.02831554 0.97 8.800573 0.01081556 0.97 8.813287 -0.3 -0.98 8.69 0.3 -0.98 8.69 -0.3 -0.72 8.69 0.3 -0.72 8.69 -0.3 -0.98 8.79 0.3 -0.98 8.79 -0.3 -0.72 8.79 0.3 -0.72 8.79 -0.27 -0.965 8.673001 0.27 -0.965 8.673001 -0.27 -0.735 8.673001 0.27 -0.735 8.673001 -0.27 -0.965 8.697001 0.27 -0.965 8.697001 -0.27 -0.735 8.697001 0.27 -0.735 8.697001 0.01499772 -0.8649978 8.78 -0.01499772 -0.8649978 8.78 -0.01499772 -0.8350023 8.78 0.01499772 -0.8350023 8.78 0.01499772 -0.8649978 8.770001 -0.01499772 -0.8649978 8.770001 -0.01499772 -0.8350023 8.770001 0.01499772 -0.8350023 8.770001 -0.3 0.72 8.69 0.3 0.72 8.69 -0.3 0.98 8.69 0.3 0.98 8.69 -0.3 0.72 8.79 0.3 0.72 8.79 -0.3 0.98 8.79 0.3 0.98 8.79 -0.27 0.735 8.673001 0.27 0.735 8.673001 -0.27 0.965 8.673001 0.27 0.965 8.673001 -0.27 0.735 8.697001 0.27 0.735 8.697001 -0.27 0.965 8.697001 0.27 0.965 8.697001 0.01499772 0.8350023 8.78 -0.01499772 0.8350023 8.78 -0.01499772 0.8649978 8.78 0.01499772 0.8649978 8.78 0.01499772 0.8350023 8.770001 -0.01499772 0.8350023 8.770001 -0.01499772 0.8649978 8.770001 0.01499772 0.8649978 8.770001</float_array>
+          <technique_common>
+            <accessor source="#bne_tram_lamp_t8-mesh-positions-array" count="58" stride="3">
+              <param name="X" type="float"/>
+              <param name="Y" type="float"/>
+              <param name="Z" type="float"/>
+            </accessor>
+          </technique_common>
+        </source>
+        <source id="bne_tram_lamp_t8-mesh-normals">
+          <float_array id="bne_tram_lamp_t8-mesh-normals-array" count="54">0.3090165 0 -0.9510567 1 0 -3.42388e-6 1 0 3.07217e-6 -0.809014 0 -0.5877896 0.3090016 0 -0.9510616 -0.8090183 0 0.5877836 -0.8090317 0 -0.5877652 0.3090095 0 0.951059 -0.8090137 0 0.5877898 0.3090295 0 0.9510526 0 -1 -2.31377e-6 0 0 1 0 0 -1 0 1 0 0 -1 0 1 0 0 -1 0 0 0 -1 4.62754e-6</float_array>
+          <technique_common>
+            <accessor source="#bne_tram_lamp_t8-mesh-normals-array" count="18" stride="3">
+              <param name="X" type="float"/>
+              <param name="Y" type="float"/>
+              <param name="Z" type="float"/>
+            </accessor>
+          </technique_common>
+        </source>
+        <source id="bne_tram_lamp_t8-mesh-map-0">
+          <float_array id="bne_tram_lamp_t8-mesh-map-0-array" count="486">0.2 0 0 1.94 0 0 0.4 0 0.2 1.94 0.2 0 0.6 0 0.4 1.94 0.4 0 0.8 0 0.6 1.94 0.6 0 1 0 0.8 1.94 0.8 0 0.5 0.5 0.5 0.5 0.5 0.5 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 0.25 0 0 0.009999275 0 0 0.5 0 0.25 0.009999275 0.25 0 0.75 0 0.5 0.009999275 0.5 0 1 0 0.75 0.009999275 0.75 0 0.5 0.5 0.5 0.5 0.5 0.5 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 0.25 0 0 0.009999275 0 0 0.5 0 0.25 0.009999275 0.25 0 0.75 0 0.5 0.009999275 0.5 0 1 0 0.75 0.009999275 0.75 0 0.5 0.5 0.5 0.5 0.5 0.5 0.2 0 0.2 1.94 0 1.94 0.4 0 0.4 1.94 0.2 1.94 0.6 0 0.6 1.94 0.4 1.94 0.8 0 0.8 1.94 0.6 1.94 1 0 1 1.94 0.8 1.94 0.5 0.5 0.5 0.5 0.5 0.5 0.5 0.5 0.5 0.5 0.5 0.5 1 0 1 1 0 1 1 0 1 1 0 1 1 0 1 1 0 1 1 0 1 1 0 1 1 0 1 1 0 1 1 0 1 1 0 1 1 0 1 1 0 1 1 0 1 1 0 1 1 0 1 1 0 1 1 0 1 1 0 1 1 0 1 1 0 1 1 0 1 1 0 1 0.25 0 0.25 0.009999275 0 0.009999275 0.5 0 0.5 0.009999275 0.25 0.009999275 0.75 0 0.75 0.009999275 0.5 0.009999275 1 0 1 0.009999275 0.75 0.009999275 0.5 0.5 0.5 0.5 0.5 0.5 1 0 1 1 0 1 1 0 1 1 0 1 1 0 1 1 0 1 1 0 1 1 0 1 1 0 1 1 0 1 1 0 1 1 0 1 1 0 1 1 0 1 1 0 1 1 0 1 1 0 1 1 0 1 1 0 1 1 0 1 1 0 1 1 0 1 1 0 1 1 0 1 0.25 0 0.25 0.009999275 0 0.009999275 0.5 0 0.5 0.009999275 0.25 0.009999275 0.75 0 0.75 0.009999275 0.5 0.009999275 1 0 1 0.009999275 0.75 0.009999275 0.5 0.5 0.5 0.5 0.5 0.5</float_array>
+          <technique_common>
+            <accessor source="#bne_tram_lamp_t8-mesh-map-0-array" count="243" stride="2">
+              <param name="S" type="float"/>
+              <param name="T" type="float"/>
+            </accessor>
+          </technique_common>
+        </source>
+        <vertices id="bne_tram_lamp_t8-mesh-vertices">
+          <input semantic="POSITION" source="#bne_tram_lamp_t8-mesh-positions"/>
+        </vertices>
+        <triangles material="bne_cat_insulator-material" count="24">
+          <input semantic="VERTEX" source="#bne_tram_lamp_t8-mesh-vertices" offset="0"/>
+          <input semantic="NORMAL" source="#bne_tram_lamp_t8-mesh-normals" offset="1"/>
+          <input semantic="TEXCOORD" source="#bne_tram_lamp_t8-mesh-map-0" offset="2" set="0"/>
+          <p>19 11 36 20 11 37 18 11 38 24 12 39 23 12 40 22 12 41 22 13 42 19 13 43 18 13 44 21 14 45 24 14 46 20 14 47 20 15 48 22 15 49 18 15 50 23 16 51 21 16 52 19 16 53 43 11 87 44 11 88 42 11 89 48 12 90 47 12 91 46 12 92 46 13 93 43 13 94 42 13 95 45 14 96 48 14 97 44 14 98 44 15 99 46 15 100 42 15 101 47 16 102 45 16 103 43 16 104 19 11 159 21 11 160 20 11 161 24 12 162 25 12 163 23 12 164 22 13 165 23 13 166 19 13 167 21 14 168 25 14 169 24 14 170 20 15 171 24 15 172 22 15 173 23 16 174 25 16 175 21 16 176 43 11 210 45 11 211 44 11 212 48 12 213 49 12 214 47 12 215 46 13 216 47 13 217 43 13 218 45 14 219 49 14 220 48 14 221 44 15 222 48 15 223 46 15 224 47 16 225 49 16 226 45 16 227</p>
+        </triangles>
+        <triangles material="bne_tram_black-material" count="57">
+          <input semantic="VERTEX" source="#bne_tram_lamp_t8-mesh-vertices" offset="0"/>
+          <input semantic="NORMAL" source="#bne_tram_lamp_t8-mesh-normals" offset="1"/>
+          <input semantic="TEXCOORD" source="#bne_tram_lamp_t8-mesh-map-0" offset="2" set="0"/>
+          <p>1 0 0 5 1 1 0 2 2 2 3 3 6 4 4 1 0 5 3 5 6 7 6 7 2 3 8 4 7 9 8 8 10 3 5 11 0 2 12 9 9 13 4 7 14 7 10 15 6 10 16 5 10 17 11 11 18 12 11 19 10 11 20 16 12 21 15 12 22 14 12 23 14 13 24 11 13 25 10 13 26 13 14 27 16 14 28 12 14 29 12 15 30 14 15 31 10 15 32 15 16 33 13 16 34 11 16 35 27 14 54 30 14 55 26 14 56 28 16 57 31 16 58 27 16 59 29 13 60 32 13 61 28 13 62 26 15 63 33 15 64 29 15 65 32 11 66 30 11 67 33 11 68 35 11 69 36 11 70 34 11 71 40 12 72 39 12 73 38 12 74 38 13 75 35 13 76 34 13 77 37 14 78 40 14 79 36 14 80 36 15 81 38 15 82 34 15 83 39 16 84 37 16 85 35 16 86 51 14 105 54 14 106 50 14 107 52 16 108 55 16 109 51 16 110 53 13 111 56 13 112 52 13 113 50 15 114 57 15 115 53 15 116 56 11 117 54 11 118 57 11 119 1 0 120 6 4 121 5 1 122 2 3 123 7 6 124 6 4 125 3 5 126 8 8 127 7 6 128 4 7 129 9 9 130 8 8 131 0 2 132 5 1 133 9 9 134 5 17 135 9 17 136 8 17 137 8 14 138 7 14 139 5 14 140 11 11 141 13 11 142 12 11 143 16 12 144 17 12 145 15 12 146 14 13 147 15 13 148 11 13 149 13 14 150 17 14 151 16 14 152 12 15 153 16 15 154 14 15 155 15 16 156 17 16 157 13 16 158 27 14 177 31 14 178 30 14 179 28 16 180 32 16 181 31 16 182 29 13 183 33 13 184 32 13 185 26 15 186 30 15 187 33 15 188 32 11 189 31 11 190 30 11 191 35 11 192 37 11 193 36 11 194 40 12 195 41 12 196 39 12 197 38 13 198 39 13 199 35 13 200 37 14 201 41 14 202 40 14 203 36 15 204 40 15 205 38 15 206 39 16 207 41 16 208 37 16 209 51 14 228 55 14 229 54 14 230 52 16 231 56 16 232 55 16 233 53 13 234 57 13 235 56 13 236 50 15 237 54 15 238 57 15 239 56 11 240 55 11 241 54 11 242</p>
+        </triangles>
+      </mesh>
+    </geometry>
+    <geometry id="bne_tram_lamp_t64-mesh" name="bne_tram_lamp_t64">
+      <mesh>
+        <source id="bne_tram_lamp_t64-mesh-positions">
+          <float_array id="bne_tram_lamp_t64-mesh-positions-array" count="174">0.03499996 -0.97 8.78 0.01081556 -0.97 8.746713 -0.02831554 -0.97 8.759428 -0.02831554 -0.97 8.800573 0.01081556 -0.97 8.813287 0.03499996 0.97 8.78 0.01081556 0.97 8.746713 -0.02831554 0.97 8.759428 -0.02831554 0.97 8.800573 0.01081556 0.97 8.813287 -0.3 -0.98 8.69 0.3 -0.98 8.69 -0.3 -0.72 8.69 0.3 -0.72 8.69 -0.3 -0.98 8.79 0.3 -0.98 8.79 -0.3 -0.72 8.79 0.3 -0.72 8.79 -0.27 -0.965 8.673001 0.27 -0.965 8.673001 -0.27 -0.735 8.673001 0.27 -0.735 8.673001 -0.27 -0.965 8.697001 0.27 -0.965 8.697001 -0.27 -0.735 8.697001 0.27 -0.735 8.697001 0.01499772 -0.8649978 8.78 -0.01499772 -0.8649978 8.78 -0.01499772 -0.8350023 8.78 0.01499772 -0.8350023 8.78 0.01499772 -0.8649978 8.770001 -0.01499772 -0.8649978 8.770001 -0.01499772 -0.8350023 8.770001 0.01499772 -0.8350023 8.770001 -0.3 0.72 8.69 0.3 0.72 8.69 -0.3 0.98 8.69 0.3 0.98 8.69 -0.3 0.72 8.79 0.3 0.72 8.79 -0.3 0.98 8.79 0.3 0.98 8.79 -0.27 0.735 8.673001 0.27 0.735 8.673001 -0.27 0.965 8.673001 0.27 0.965 8.673001 -0.27 0.735 8.697001 0.27 0.735 8.697001 -0.27 0.965 8.697001 0.27 0.965 8.697001 0.01499772 0.8350023 8.78 -0.01499772 0.8350023 8.78 -0.01499772 0.8649978 8.78 0.01499772 0.8649978 8.78 0.01499772 0.8350023 8.770001 -0.01499772 0.8350023 8.770001 -0.01499772 0.8649978 8.770001 0.01499772 0.8649978 8.770001</float_array>
+          <technique_common>
+            <accessor source="#bne_tram_lamp_t64-mesh-positions-array" count="58" stride="3">
+              <param name="X" type="float"/>
+              <param name="Y" type="float"/>
+              <param name="Z" type="float"/>
+            </accessor>
+          </technique_common>
+        </source>
+        <source id="bne_tram_lamp_t64-mesh-normals">
+          <float_array id="bne_tram_lamp_t64-mesh-normals-array" count="54">0.3090165 0 -0.9510567 1 0 -3.42388e-6 1 0 3.07217e-6 -0.809014 0 -0.5877896 0.3090016 0 -0.9510616 -0.8090183 0 0.5877836 -0.8090317 0 -0.5877652 0.3090095 0 0.951059 -0.8090137 0 0.5877898 0.3090295 0 0.9510526 0 -1 -2.31377e-6 0 0 1 0 0 -1 0 1 0 0 -1 0 1 0 0 -1 0 0 0 -1 4.62754e-6</float_array>
+          <technique_common>
+            <accessor source="#bne_tram_lamp_t64-mesh-normals-array" count="18" stride="3">
+              <param name="X" type="float"/>
+              <param name="Y" type="float"/>
+              <param name="Z" type="float"/>
+            </accessor>
+          </technique_common>
+        </source>
+        <source id="bne_tram_lamp_t64-mesh-map-0">
+          <float_array id="bne_tram_lamp_t64-mesh-map-0-array" count="486">0.2 0 0 1.94 0 0 0.4 0 0.2 1.94 0.2 0 0.6 0 0.4 1.94 0.4 0 0.8 0 0.6 1.94 0.6 0 1 0 0.8 1.94 0.8 0 0.5 0.5 0.5 0.5 0.5 0.5 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 0.25 0 0 0.009999275 0 0 0.5 0 0.25 0.009999275 0.25 0 0.75 0 0.5 0.009999275 0.5 0 1 0 0.75 0.009999275 0.75 0 0.5 0.5 0.5 0.5 0.5 0.5 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 0.25 0 0 0.009999275 0 0 0.5 0 0.25 0.009999275 0.25 0 0.75 0 0.5 0.009999275 0.5 0 1 0 0.75 0.009999275 0.75 0 0.5 0.5 0.5 0.5 0.5 0.5 0.2 0 0.2 1.94 0 1.94 0.4 0 0.4 1.94 0.2 1.94 0.6 0 0.6 1.94 0.4 1.94 0.8 0 0.8 1.94 0.6 1.94 1 0 1 1.94 0.8 1.94 0.5 0.5 0.5 0.5 0.5 0.5 0.5 0.5 0.5 0.5 0.5 0.5 1 0 1 1 0 1 1 0 1 1 0 1 1 0 1 1 0 1 1 0 1 1 0 1 1 0 1 1 0 1 1 0 1 1 0 1 1 0 1 1 0 1 1 0 1 1 0 1 1 0 1 1 0 1 1 0 1 1 0 1 1 0 1 1 0 1 1 0 1 1 0 1 0.25 0 0.25 0.009999275 0 0.009999275 0.5 0 0.5 0.009999275 0.25 0.009999275 0.75 0 0.75 0.009999275 0.5 0.009999275 1 0 1 0.009999275 0.75 0.009999275 0.5 0.5 0.5 0.5 0.5 0.5 1 0 1 1 0 1 1 0 1 1 0 1 1 0 1 1 0 1 1 0 1 1 0 1 1 0 1 1 0 1 1 0 1 1 0 1 1 0 1 1 0 1 1 0 1 1 0 1 1 0 1 1 0 1 1 0 1 1 0 1 1 0 1 1 0 1 1 0 1 1 0 1 0.25 0 0.25 0.009999275 0 0.009999275 0.5 0 0.5 0.009999275 0.25 0.009999275 0.75 0 0.75 0.009999275 0.5 0.009999275 1 0 1 0.009999275 0.75 0.009999275 0.5 0.5 0.5 0.5 0.5 0.5</float_array>
+          <technique_common>
+            <accessor source="#bne_tram_lamp_t64-mesh-map-0-array" count="243" stride="2">
+              <param name="S" type="float"/>
+              <param name="T" type="float"/>
+            </accessor>
+          </technique_common>
+        </source>
+        <vertices id="bne_tram_lamp_t64-mesh-vertices">
+          <input semantic="POSITION" source="#bne_tram_lamp_t64-mesh-positions"/>
+        </vertices>
+        <triangles material="bne_cat_insulator-material" count="24">
+          <input semantic="VERTEX" source="#bne_tram_lamp_t64-mesh-vertices" offset="0"/>
+          <input semantic="NORMAL" source="#bne_tram_lamp_t64-mesh-normals" offset="1"/>
+          <input semantic="TEXCOORD" source="#bne_tram_lamp_t64-mesh-map-0" offset="2" set="0"/>
+          <p>19 11 36 20 11 37 18 11 38 24 12 39 23 12 40 22 12 41 22 13 42 19 13 43 18 13 44 21 14 45 24 14 46 20 14 47 20 15 48 22 15 49 18 15 50 23 16 51 21 16 52 19 16 53 43 11 87 44 11 88 42 11 89 48 12 90 47 12 91 46 12 92 46 13 93 43 13 94 42 13 95 45 14 96 48 14 97 44 14 98 44 15 99 46 15 100 42 15 101 47 16 102 45 16 103 43 16 104 19 11 159 21 11 160 20 11 161 24 12 162 25 12 163 23 12 164 22 13 165 23 13 166 19 13 167 21 14 168 25 14 169 24 14 170 20 15 171 24 15 172 22 15 173 23 16 174 25 16 175 21 16 176 43 11 210 45 11 211 44 11 212 48 12 213 49 12 214 47 12 215 46 13 216 47 13 217 43 13 218 45 14 219 49 14 220 48 14 221 44 15 222 48 15 223 46 15 224 47 16 225 49 16 226 45 16 227</p>
+        </triangles>
+        <triangles material="bne_tram_black-material" count="57">
+          <input semantic="VERTEX" source="#bne_tram_lamp_t64-mesh-vertices" offset="0"/>
+          <input semantic="NORMAL" source="#bne_tram_lamp_t64-mesh-normals" offset="1"/>
+          <input semantic="TEXCOORD" source="#bne_tram_lamp_t64-mesh-map-0" offset="2" set="0"/>
+          <p>1 0 0 5 1 1 0 2 2 2 3 3 6 4 4 1 0 5 3 5 6 7 6 7 2 3 8 4 7 9 8 8 10 3 5 11 0 2 12 9 9 13 4 7 14 7 10 15 6 10 16 5 10 17 11 11 18 12 11 19 10 11 20 16 12 21 15 12 22 14 12 23 14 13 24 11 13 25 10 13 26 13 14 27 16 14 28 12 14 29 12 15 30 14 15 31 10 15 32 15 16 33 13 16 34 11 16 35 27 14 54 30 14 55 26 14 56 28 16 57 31 16 58 27 16 59 29 13 60 32 13 61 28 13 62 26 15 63 33 15 64 29 15 65 32 11 66 30 11 67 33 11 68 35 11 69 36 11 70 34 11 71 40 12 72 39 12 73 38 12 74 38 13 75 35 13 76 34 13 77 37 14 78 40 14 79 36 14 80 36 15 81 38 15 82 34 15 83 39 16 84 37 16 85 35 16 86 51 14 105 54 14 106 50 14 107 52 16 108 55 16 109 51 16 110 53 13 111 56 13 112 52 13 113 50 15 114 57 15 115 53 15 116 56 11 117 54 11 118 57 11 119 1 0 120 6 4 121 5 1 122 2 3 123 7 6 124 6 4 125 3 5 126 8 8 127 7 6 128 4 7 129 9 9 130 8 8 131 0 2 132 5 1 133 9 9 134 5 17 135 9 17 136 8 17 137 8 14 138 7 14 139 5 14 140 11 11 141 13 11 142 12 11 143 16 12 144 17 12 145 15 12 146 14 13 147 15 13 148 11 13 149 13 14 150 17 14 151 16 14 152 12 15 153 16 15 154 14 15 155 15 16 156 17 16 157 13 16 158 27 14 177 31 14 178 30 14 179 28 16 180 32 16 181 31 16 182 29 13 183 33 13 184 32 13 185 26 15 186 30 15 187 33 15 188 32 11 189 31 11 190 30 11 191 35 11 192 37 11 193 36 11 194 40 12 195 41 12 196 39 12 197 38 13 198 39 13 199 35 13 200 37 14 201 41 14 202 40 14 203 36 15 204 40 15 205 38 15 206 39 16 207 41 16 208 37 16 209 51 14 228 55 14 229 54 14 230 52 16 231 56 16 232 55 16 233 53 13 234 57 13 235 56 13 236 50 15 237 54 15 238 57 15 239 56 11 240 55 11 241 54 11 242</p>
+        </triangles>
+      </mesh>
+    </geometry>
+  </library_geometries>
+  <library_visual_scenes>
+    <visual_scene id="Scene" name="Scene">
+      <node id="base00" name="base00" type="NODE">
+        <matrix sid="transform">1 0 0 0 0 1 0 0 0 0 1 0 0 0 0 1</matrix>
+        <node id="start01" name="start01" type="NODE">
+          <matrix sid="transform">1 0 0 0 0 1 0 0 0 0 1 0 0 0 0 1</matrix>
+          <node id="bne_tram_lamp_t64" name="bne_tram_lamp_t64" type="NODE">
+            <matrix sid="transform">1 0 0 0 0 1 0 0 0 0 1 0 0 0 0 1</matrix>
+            <instance_geometry url="#bne_tram_lamp_t64-mesh" name="bne_tram_lamp_t64">
+              <bind_material>
+                <technique_common>
+                  <instance_material symbol="bne_tram_concrete-material" target="#bne_tram_concrete-material">
+                    <bind_vertex_input semantic="Float2" input_semantic="TEXCOORD" input_set="0"/>
+                  </instance_material>
+                  <instance_material symbol="bne_tram_galv-material" target="#bne_tram_galv-material">
+                    <bind_vertex_input semantic="Float2" input_semantic="TEXCOORD" input_set="0"/>
+                  </instance_material>
+                  <instance_material symbol="bne_cat_insulator-material" target="#bne_cat_insulator-material">
+                    <bind_vertex_input semantic="Float2" input_semantic="TEXCOORD" input_set="0"/>
+                  </instance_material>
+                  <instance_material symbol="bne_cat_plate-material" target="#bne_cat_plate-material">
+                    <bind_vertex_input semantic="Float2" input_semantic="TEXCOORD" input_set="0"/>
+                  </instance_material>
+                  <instance_material symbol="bne_tram_black-material" target="#bne_tram_black-material">
+                    <bind_vertex_input semantic="Float2" input_semantic="TEXCOORD" input_set="0"/>
+                  </instance_material>
+                  <instance_material symbol="bne_cat_foundation-material" target="#bne_cat_foundation-material">
+                    <bind_vertex_input semantic="Float2" input_semantic="TEXCOORD" input_set="0"/>
+                  </instance_material>
+                </technique_common>
+              </bind_material>
+            </instance_geometry>
+          </node>
+          <node id="bne_tram_lamp_t8" name="bne_tram_lamp_t8" type="NODE">
+            <matrix sid="transform">1 0 0 0 0 1 0 0 0 0 1 0 0 0 0 1</matrix>
+            <instance_geometry url="#bne_tram_lamp_t8-mesh" name="bne_tram_lamp_t8">
+              <bind_material>
+                <technique_common>
+                  <instance_material symbol="bne_tram_concrete-material" target="#bne_tram_concrete-material">
+                    <bind_vertex_input semantic="Float2" input_semantic="TEXCOORD" input_set="0"/>
+                  </instance_material>
+                  <instance_material symbol="bne_tram_galv-material" target="#bne_tram_galv-material">
+                    <bind_vertex_input semantic="Float2" input_semantic="TEXCOORD" input_set="0"/>
+                  </instance_material>
+                  <instance_material symbol="bne_cat_insulator-material" target="#bne_cat_insulator-material">
+                    <bind_vertex_input semantic="Float2" input_semantic="TEXCOORD" input_set="0"/>
+                  </instance_material>
+                  <instance_material symbol="bne_cat_plate-material" target="#bne_cat_plate-material">
+                    <bind_vertex_input semantic="Float2" input_semantic="TEXCOORD" input_set="0"/>
+                  </instance_material>
+                  <instance_material symbol="bne_tram_black-material" target="#bne_tram_black-material">
+                    <bind_vertex_input semantic="Float2" input_semantic="TEXCOORD" input_set="0"/>
+                  </instance_material>
+                  <instance_material symbol="bne_cat_foundation-material" target="#bne_cat_foundation-material">
+                    <bind_vertex_input semantic="Float2" input_semantic="TEXCOORD" input_set="0"/>
+                  </instance_material>
+                </technique_common>
+              </bind_material>
+            </instance_geometry>
+          </node>
+        </node>
+      </node>
+    </visual_scene>
+  </library_visual_scenes>
+  <scene>
+    <instance_visual_scene url="#Scene"/>
+  </scene>
+</COLLADA>

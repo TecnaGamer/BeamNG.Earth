@@ -160,7 +160,8 @@ WIRE_Z = 7.9                    # m above the pole's base (s_powerpole_3wire: 8.
 WIRE_SAG = 0.012                # sag per metre of span
 WIRE_SEG_M = 5.0
 WIRE_R = 0.012                  # m half width of a wire's ribbons
-WIRE_VERTS_MAX = 60000          # a tile's wire mesh at most (the engine's 16-bit index buffers; railways.VERTS_MAX)
+WIRE_VERTS_MAX = 60000          # a wire mesh at most (the engine's 16-bit index buffers; railways.VERTS_MAX)
+WIRE_PARTS_MAX = 4              # wire meshes per road tile ("wire", "wire2" .. "wire4": roads.WIRE_PARTS_MAX, the mod's list)
 
 
 def wire_lines(poles, anchors=None, radius=None, max_span=80.0):
@@ -180,6 +181,29 @@ def wire_lines(poles, anchors=None, radius=None, max_span=80.0):
             p = a[None] + (b - a)[None] * t[:, None]
             p[:, 2] -= 4.0 * WIRE_SAG * span * t * (1.0 - t)
             out.append(p if radius is None else (p, radius))
+    return out
+
+
+def wire_mesh_parts(lines, origin, material_of=None, solid_of=None, parts_max=WIRE_PARTS_MAX):
+    """The wires as up to parts_max meshes (wire_mesh's results), the lines dealt out in order so that no mesh passes
+    WIRE_VERTS_MAX vertices: a dense tile (a tram junction's wires with the power lines') keeps every wire in a second or
+    third mesh instead of losing the last ones silently (plan 046). A line is never cut between two meshes."""
+    groups, cur, used = [], [], 0
+    for line in lines:
+        pts = line[0] if isinstance(line, tuple) else line
+        need = 8 * max(len(pts) - 1, 0)
+        if cur and used + need > WIRE_VERTS_MAX:
+            groups.append(cur)
+            cur, used = [], 0
+        cur.append(line)
+        used += need
+    if cur:
+        groups.append(cur)
+    out = []
+    for g in groups[:parts_max]:
+        m = wire_mesh(g, origin, material_of, solid_of)
+        if m is not None:
+            out.append(m)
     return out
 
 
@@ -755,6 +779,9 @@ G_GLOW = "lampglow"
 LAMP_HEADS = {G_LAMP: (2.71130, -0.00032, 7.95393), G_POLELAMP: (-2.67592, 0.00012, 0.43511), "fr_lantern": (0.0, 0.0, 4.67)}
 for _g in citylamps.GROUPS:         # the local lamp posts (citylamps.py): the lens under their luminaire
     LAMP_HEADS[_g] = citylamps.HEAD
+# the lamp brackets of the tram poles (tramcat.py, tools/blender/build_tram_poles.py LAMP_X / LAMP_Z: the luminaire's centre)
+for _g in ("tram_lamp_g", "tram_lamp_k"):
+    LAMP_HEADS[_g] = (1.55, 0.0, 8.07)
 # The mapped OpenStreetMap lamps' own stock posts (worldprops._street_lamps, by lamp_mount; PR #981 by wyo-backroads):
 # each head (x, y, z in the model's frame, the lens's yaw relative to the post's), two for a double arm.
 MAPPED_LAMP_HEADS = {
@@ -762,6 +789,7 @@ MAPPED_LAMP_HEADS = {
     "streetlight_double_arm": ((4.9, 0., 12.65, 0.), (-4.9, 0., 12.65, 180.)),
     "streetlight_high_mast": ((0., 0., 17.9326, 0.),),
 }
+MAPPED_LAMP_HEADS["tram_lamp_t"] = ((0.0, 0.85, 8.67, 0.0), (0.0, -0.85, 8.67, 0.0))
 G_HIGH_MAST_LENS = "high_mast_light"      # (nightlights.lua: a broader, brighter downward light)
 LENS_DROP_M = 0.03
 TOWN_POLE_CLASSES = {"residential", "tertiary", "unclassified", "secondary", "living_street", "primary", "trunk"}
@@ -791,7 +819,7 @@ PARTIAL_END_M = 15.0        # m from a rural ramp's ends its two lamps stand (pa
                             # Handbook 2012 / AASHTO: luminaires at the gores and the ramp terminals only; every rural
                             # ramp lit end to end put 27 lamps on a Wyoming interchange of I-80, Discord 2026-10-28)
 HIGHWAY_LAMP_H = {"na": 13.5, None: 11.0}         # (ramps: the street post, NJDOT's 26 ft on ramps)
-LAMP_H = {G_LAMP: 9.0, "polelamp": 1.1, "fr_lantern": 5.4, **{g: citylamps.HEIGHT for g in citylamps.GROUPS},
+LAMP_H = {G_LAMP: 9.0, "polelamp": 1.1, "tram_lamp_g": 9.0, "tram_lamp_k": 9.0, "tram_lamp_t": 9.0, "fr_lantern": 5.4, **{g: citylamps.HEIGHT for g in citylamps.GROUPS},
          "streetlight_straight_mast": 12.25, "streetlight_double_arm": 13.76, "streetlight_high_mast": 18.03}    # the catalog's heights (trees.lua CATALOG): a row's height over it, its scale
 POLE_LAMP_Z = 7.0           # m above the pole's base
 HYDRANT_SPACING = 120.0
@@ -986,6 +1014,11 @@ class RoadClearance:
             if (distance2 < dnp.sq(self.half[pick[valid]] + margin)).any():
                 return False
         return True
+
+
+# every row group that is a street lamp or its light (tramcat.drop_lamps leaves out those a tram pole's bracket replaces)
+LAMP_ROW_GROUPS = frozenset(LAMP_HEADS) | frozenset(MAPPED_LAMP_HEADS) | {G_LENS, G_GLOW, "fr_lantern_light", G_HIGH_MAST_LENS}
+LAMP_ROW_GROUPS -= {"tram_lamp_g", "tram_lamp_k", "tram_lamp_t"}
 
 
 def lamp_lenses(rows):
@@ -1267,7 +1300,7 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
             tph = _h01(fid, side, "tph") * STREET_TREE_SPACING
             for p, out, s_line in _stations(run, line, STREET_TREE_SPACING, tph, END_CLEAR_M + 4.0, side):
                 q = p[:2] - out * (w / 2 - STREET_TREE_CURB_M)
-                if _owns(box, q[0], q[1]):
+                if _owns(box, q[0], q[1]) and not on_bed(q):        # (not on a track's bed or a tram's rails)
                     # (each tree's size, turn and rank keyed on its station along the road, not on where the anchor's
                     # frame puts it: the same tree from every anchor, geotiles 2026-10-29)
                     k = int(round((s_line - tph) / STREET_TREE_SPACING))
