@@ -154,6 +154,10 @@ class _Surf:
 
     def __init__(self, complete=True):
         self.complete, self.calls = complete, 0
+        self.cells = {}
+
+    def _cached(self, key):         # (surface.Surface._cached: one Raster object per cell while it is cached)
+        return self.cells.setdefault(key, object())
 
     def classes(self, lat, lon):
         self.calls += np.size(lat)
@@ -177,6 +181,37 @@ class FieldsCacheTest(unittest.TestCase):
         gg._fields_last.clear()
         fresh, _ = gg.texel_fields(frame, -512.5, -640.5, 256.0, 256, _Surf())
         for n in gg.FIELD_NAMES:
+            np.testing.assert_array_equal(got[n], fresh[n], n)
+
+    def test_changed_land_cover_not_reused(self):
+        # (Codex review of f25f5d5f..5cff9200) the fields reused from the last block must be keyed on the land cover they
+        # were read from: a cell's raster replaced (another version, re-decoded) between two blocks must not carry the
+        # old classes into the next block
+        class Raster:
+            def __init__(self, offset):
+                self.offset = offset
+
+        class Surf(_Surf):
+            def __init__(self):
+                super().__init__()
+                self.rasters = {}
+                self.offset = 0
+
+            def _cached(self, key):
+                return self.rasters.setdefault(key, Raster(self.offset))
+
+            def classes(self, lat, lon):
+                c, ok = super().classes(lat, lon)
+                return (c + 10 * self.offset).astype(np.uint8), ok
+
+        frame = geodesy.EnuFrame(40.877, -77.566)
+        sf = Surf()
+        gg.texel_fields(frame, -640.5, -576.5, 256.0, 256, sf)
+        sf.offset, sf.rasters = 1, {}               # (the land cover's cells changed: new rasters, new classes)
+        got, _ = gg.texel_fields(frame, -512.5, -640.5, 256.0, 256, sf)
+        gg._fields_last.clear()
+        fresh, _ = gg.texel_fields(frame, -512.5, -640.5, 256.0, 256, sf)
+        for n in ("classes", "base"):
             np.testing.assert_array_equal(got[n], fresh[n], n)
 
     def test_incomplete_not_kept_other_frames_not_used(self):

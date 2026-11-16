@@ -161,7 +161,9 @@ def _grid_rect(frame, x0, top, t, rows, cols):
 # block along a drive: 1,024 of its 1,152 columns) computes only the strips it adds (stage 3: they were ~60 % of
 # inputs()'s CPU). Exact: at 1 m texels on the anchor's half-metre texel grid the centres are the same doubles
 # whichever block names them (x0 + (j + 0.5) t: halves of integers, exact), so the fields are the same bits; kept only
-# when their land cover was complete (a class read before its cell came is not kept).
+# when their land cover was complete (a class read before its cell came is not kept), and reused only with the same
+# frame, texel size, Surface, map-data versions and, for every cell both squares read, the very same land-cover Raster
+# object (held by the cache, so its identity cannot be reused; Codex review of f25f5d5f..5cff9200).
 FIELD_NAMES = ("lat", "lon", "mx", "my", "classes", "base")
 _FIELDS_LOCK = threading.Lock()
 _fields_last = []           # [(key, x0, top, rows, cols, {name: array})]
@@ -179,6 +181,43 @@ def _fields_rect(frame, x0, top, t, rows, cols, surface):
             "base": np.asarray(base, np.uint8)}, bool(complete)
 
 
+def _versions_key(surface):
+    """The map data's versions (mapdata.versions(): the land cover's release among them) as a string, or None."""
+    md = getattr(surface, "md", None)
+    try:
+        return json.dumps(md.versions(), sort_keys=True, default=str) if md is not None else None
+    except Exception:           # (no versions: no reuse rather than a wrong one)
+        return object()
+
+
+WARP_MARGIN_DEG = 0.0005        # (the land cover is read up to ~11 m off each texel: surface.WARP_OCTAVES)
+
+
+def _land_cover_sources(frame, x0, top, size, surface):
+    """{cell: its land-cover Raster object} of the cells the square's texels read (the square and WARP_MARGIN_DEG round
+    it), held by identity: a cell re-read (another version, decoded again) is another object. None without a
+    Surface's cache to ask (then nothing is reused)."""
+    if surface is None:
+        return {}
+    cached = getattr(surface, "_cached", None)
+    if cached is None:
+        return None
+    la, lo, _ = frame.enu_to_geodetic(np.array([x0, x0 + size]), np.array([top - size, top]), 0.0)
+    keys = mapcells.cells_for_bbox(float(np.min(la)) - WARP_MARGIN_DEG, float(np.min(lo)) - WARP_MARGIN_DEG,
+                                   float(np.max(la)) + WARP_MARGIN_DEG, float(np.max(lo)) + WARP_MARGIN_DEG)
+    return {str(k): cached(k) for k in keys}
+
+
+def _same_sources(old, new):
+    """Whether every cell both squares read has the very same land-cover Raster object (and neither is missing)."""
+    if old is None or new is None:
+        return False
+    for k in old.keys() & new.keys():
+        if old[k] is None or new[k] is None or old[k] is not new[k]:
+            return False
+    return True
+
+
 def texel_fields(frame, x0, y0, size, px, surface):
     """({FIELD_NAMES: (px, px) arrays}, complete) of the square (see the cache's note above)."""
     t = size / px
@@ -194,14 +233,15 @@ def texel_fields(frame, x0, y0, size, px, surface):
                 "base": base_kinds(classes, lat, lon)}, bool(complete)
     exact = t == 1.0 and float(2 * x0).is_integer() and float(2 * top).is_integer()
     key = (np.asarray(frame.origin, np.float64).tobytes(), np.asarray(frame.rot, np.float64).tobytes(), t,
-           id(surface))
+           id(surface), _versions_key(surface))
+    sources = _land_cover_sources(frame, x0, top, size, surface) if exact else None
     prev = None
     if exact:
         with _FIELDS_LOCK:
             prev = _fields_last[0] if _fields_last else None
     out, complete = None, True
-    if prev is not None and prev[0] == key:
-        _k, ox0, otop, orows, ocols, old = prev
+    if prev is not None and prev[0] == key and _same_sources(prev[6], sources):
+        _k, ox0, otop, orows, ocols, old, _src = prev
         dc, dr = x0 - ox0, otop - top               # (new texel (i, j) is the old (i + dr, j + dc))
         if float(dc).is_integer() and float(dr).is_integer():
             dc, dr = int(dc), int(dr)
@@ -225,7 +265,7 @@ def texel_fields(frame, x0, y0, size, px, surface):
         out, complete = _fields_rect(frame, x0, top, t, px, px, surface)
     if exact:
         with _FIELDS_LOCK:
-            _fields_last[:] = [(key, x0, top, px, px, out)] if complete else []
+            _fields_last[:] = [(key, x0, top, px, px, out, sources)] if complete and sources is not None else []
     return out, complete
 
 
