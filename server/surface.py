@@ -974,10 +974,11 @@ def road_mask_name(texture):
     return re.sub(r"(_r\d+)?\.dds$", "_road.dds", texture)
 
 
-def road_mask(frame, x0, y0, size, px, surface, widths=None):
+def road_mask(frame, x0, y0, size, px, surface, widths=None, corners=True):
     """The built carriageways' coverage (px x px uint8, 255 on the road, antialiased) of a tile photo's square
     [x0, x0 + size]² (its gutter included: the mask lines up with it on UV0), or None (texels coarser than
-    ROAD_MASK_MAX_TEXEL, no roads, no cell cached)."""
+    ROAD_MASK_MAX_TEXEL, no roads, no cell cached). corners: with the junctions' curb corners (corner_pads: 60 % of
+    a city block's mask time; the generated ground's regions go without them, genground.py)."""
     if surface is None or size / max(px, 1) > ROAD_MASK_MAX_TEXEL:
         return None
     pads = pads_mask(frame, x0, y0, size, px, _square_pads(frame, x0, y0, size, surface))
@@ -985,7 +986,7 @@ def road_mask(frame, x0, y0, size, px, surface, widths=None):
     feats = _square_roads(frame, x0, y0, size, surface)
     got = _road_segments(frame, x0, y0, size, px, px, feats, surface.urban, widths) if feats else None
     corners = corners_mask(frame, x0, y0, size, px, corner_pads(frame, x0, y0, size, feats, surface.urban, widths)) \
-        if feats else None
+        if feats and corners else None
     out = None
     if got is not None:
         colors = np.array([(255.0, 255.0, 255.0, 1.0 if k in ROAD_MASK_KINDS else 0.0) for k in PHOTO_ROAD_RGBA],

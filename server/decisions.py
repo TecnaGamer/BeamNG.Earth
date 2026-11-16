@@ -314,13 +314,25 @@ def _cell_tuple(cell):
 
 class Store:
     """One cache folder's archives in this process: manifests, blocks on disk and in memory, downloads, the weekly
-    slices' digests."""
+    slices' digests. Another signed product of the builder in the same layout (lidarz.Store: the lidar road heights)
+    subclasses it with its own names below (DOMAIN: its files' magics, decisions.rs Domain)."""
+    DOMAIN = "dec"                  # (earthfast's dec_* functions: the product whose magics a file must carry)
+    LAYOUT = FORMAT                 # the product's layout number: the d<LAYOUT> folder here and on the CDN
+    PREFIX = "d"
+    SUBDIR = SUBDIR
+    EXT = "bngd"
+    MANIFEST = "manifest.bngm"
+    LANE = LANE
+    NATIVE = NATIVE
+    WHAT = "decisions"              # (its log lines)
 
     def __init__(self, cache_dir, fetcher=None, base=None, sources=None):
-        fast.require(NATIVE, "shared decision archives")
+        fast.require(self.NATIVE, f"shared {self.WHAT} archives")
         self.cache_dir = cache_dir
-        self.root = os.path.join(cache_dir, SUBDIR, f"d{FORMAT}")
-        self.base = (base or _base()).rstrip("/")
+        self.root = os.path.join(cache_dir, self.SUBDIR, f"{self.PREFIX}{self.LAYOUT}")
+        self.base = (base or self.default_base()).rstrip("/")
+        # (the decision archives' calls as before: a module older than the domains (303) still reads them)
+        self._dkw = {} if self.DOMAIN == "dec" else {"domain": self.DOMAIN}
         self._fetcher = fetcher
         self._sources = sources         # (tests: {"rails", "lanes"}; else the registered map data's: weekly_sources)
         self._lock = threading.Lock()
@@ -331,6 +343,10 @@ class Store:
         self._failed = {}           # (vkey, bx, by) -> monotonic time a download failed
         self._inflight = {}         # (vkey, bx, by) -> Event
         self.stats = {"hits": 0, "misses": 0, "fetched": 0, "bytes": 0, "bad": 0, "fetch_s": 0.0, "stale": 0}
+
+    @staticmethod
+    def default_base():
+        return _base()
 
     @property
     def fetcher(self):
@@ -349,10 +365,10 @@ class Store:
         return os.path.join(self.root, vk)
 
     def block_path(self, vk, bx, by, h):
-        return os.path.join(self._dir(vk), str(BLOCK_Z), str(bx), f"{by}.{h}.bngd")
+        return os.path.join(self._dir(vk), str(BLOCK_Z), str(bx), f"{by}.{h}.{self.EXT}")
 
     def url(self, vk, rest):
-        return f"{self.base}/d{FORMAT}/{vk}/{rest}"
+        return f"{self.base}/{self.PREFIX}{self.LAYOUT}/{vk}/{rest}"
 
     def _local(self, vk, bx, by):
         """(hash, path) of the newest copy of a block on disk (any name), or None."""
@@ -364,7 +380,7 @@ class Store:
             return None
         for n in names:
             bits = n.split(".")
-            if len(bits) == 3 and bits[0] == str(by) and bits[2] == "bngd":
+            if len(bits) == 3 and bits[0] == str(by) and bits[2] == self.EXT:
                 p = os.path.join(d, n)
                 try:
                     t = os.path.getmtime(p)
@@ -394,7 +410,7 @@ class Store:
         if got is not None:
             return got[0]
         try:
-            with open(os.path.join(self._dir(vk), "manifest.bngm"), "rb") as f:
+            with open(os.path.join(self._dir(vk), self.MANIFEST), "rb") as f:
                 blocks = self._parse_manifest(vk, f.read())
         except (OSError, ValueError):
             return None
@@ -403,8 +419,8 @@ class Store:
         return blocks
 
     def _parse_manifest(self, vk, body):
-        doc = json.loads(fast._ef.dec_open_manifest(body, pubkeys()))
-        if doc.get("format") != FORMAT or doc.get("vkey") != vk:
+        doc = json.loads(fast._ef.dec_open_manifest(body, pubkeys(), **self._dkw))
+        if doc.get("format") != self.LAYOUT or doc.get("vkey") != vk:
             raise ValueError(f"manifest of {doc.get('vkey')} (format {doc.get('format')}) for {vk}")
         out = {}
         for b in doc.get("blocks", ()):
@@ -415,7 +431,7 @@ class Store:
         return out
 
     def _load_manifest(self, vk):
-        path = os.path.join(self._dir(vk), "manifest.bngm")
+        path = os.path.join(self._dir(vk), self.MANIFEST)
         absent = path + ".absent"
         try:                            # (another process of this server read it a moment ago)
             for p, is_absent in ((path, False), (absent, True)):
@@ -426,23 +442,23 @@ class Store:
                     with open(p, "rb") as f:
                         return self._parse_manifest(vk, f.read()), MANIFEST_TTL_S - age
         except (OSError, ValueError) as e:
-            log.info("decisions: manifest of %s on disk unusable (%s: %s)", vk, type(e).__name__, e)
+            log.info("%s: manifest of %s on disk unusable (%s: %s)", self.WHAT, vk, type(e).__name__, e)
         try:
-            body = self.fetcher.get(self.url(vk, "manifest.bngm"), kind="demand", lane=LANE).body
+            body = self.fetcher.get(self.url(vk, self.MANIFEST), kind="demand", lane=self.LANE).body
             blocks = self._parse_manifest(vk, body)
             _write(path, body)
             try:
                 os.remove(absent)
             except OSError:
                 pass
-            log.info("decisions: version %s: %d blocks built", vk, len(blocks))
+            log.info("%s: version %s: %d blocks built", self.WHAT, vk, len(blocks))
             return blocks, MANIFEST_TTL_S
         except netfetch.NotFound:
             _write(absent, b"")
-            log.info("decisions: none built for version %s", vk)
+            log.info("%s: none built for version %s", self.WHAT, vk)
             return None, RETRY_S
         except (netfetch.FetchError, ValueError, OSError) as e:
-            log.info("decisions: manifest of %s unavailable (%s: %s)", vk, type(e).__name__, e)
+            log.info("%s: manifest of %s unavailable (%s: %s)", self.WHAT, vk, type(e).__name__, e)
             try:                        # (the copy on disk, however old: blocks only ever get added)
                 with open(path, "rb") as f:
                     return self._parse_manifest(vk, f.read()), NET_RETRY_S
@@ -460,7 +476,7 @@ class Store:
             want = blocks.get((bx, by)) if blocks else None
             if want is None:
                 if blocks:              # (this version is served, this block not built: the builder may be asked)
-                    ask_build(self.cache_dir, vk, bx, by)
+                    self._unbuilt(vk, bx, by)
                 return None
         else:
             blocks = self.known_manifest(vk)
@@ -488,6 +504,9 @@ class Store:
             while len(self._mem) > MEM_BLOCKS:
                 self._mem.popitem(last=False)
         return got
+
+    def _unbuilt(self, vk, bx, by):
+        ask_build(self.cache_dir, vk, bx, by)
 
     def _download(self, vk, vkb, bx, by, h, path):
         k = (vk, bx, by)
@@ -521,17 +540,18 @@ class Store:
     def _fetch(self, vk, vkb, bx, by, h, path, kind="demand"):
         t0 = time.perf_counter()
         try:
-            body = self.fetcher.get(self.url(vk, f"{BLOCK_Z}/{bx}/{by}.{h}.bngd"), kind=kind, lane=LANE).body
+            body = self.fetcher.get(self.url(vk, f"{BLOCK_Z}/{bx}/{by}.{h}.{self.EXT}"), kind=kind,
+                                    lane=self.LANE).body
             if len(body) > MAX_BLOCK_BYTES:
                 raise ValueError(f"{len(body)} bytes")
             if hashlib.sha256(body).hexdigest()[:HASH_HEX] != h:
                 raise ValueError("not the file its name holds")
-            fast._ef.dec_verify_block(body, BLOCK_Z, bx, by, vkb, pubkeys())
+            fast._ef.dec_verify_block(body, BLOCK_Z, bx, by, vkb, pubkeys(), **self._dkw)
         except (netfetch.FetchError, ValueError) as e:
             bad = isinstance(e, ValueError)
             if bad:
                 self._count("bad")
-            log.info("decisions: block %s/%s of %s %s (%s: %s): planned here", bx, by, vk,
+            log.info("%s: block %s/%s of %s %s (%s: %s): made here", self.WHAT, bx, by, vk,
                      "rejected" if bad else "unavailable", type(e).__name__, e)
             with self._lock:
                 self._failed[(vk, bx, by)] = time.monotonic() - (0 if bad else RETRY_S - NET_RETRY_S)
@@ -539,7 +559,7 @@ class Store:
         _write(path, body)
         old = os.path.dirname(path)     # (the block's older copies: a rebuild's new name replaces them)
         for n in os.listdir(old):
-            if n.startswith(f"{by}.") and n.endswith(".bngd") and n != os.path.basename(path):
+            if n.startswith(f"{by}.") and n.endswith(f".{self.EXT}") and n != os.path.basename(path):
                 try:
                     os.remove(os.path.join(old, n))
                 except OSError:
@@ -549,7 +569,7 @@ class Store:
             self.stats["fetched"] += 1
             self.stats["bytes"] += len(body)
             self.stats["fetch_s"] += dt
-        log.info("decisions: block %s/%s of %s: %.0f KB in %.2f s", bx, by, vk, len(body) / 1e3, dt)
+        log.info("%s: block %s/%s of %s: %.0f KB in %.2f s", self.WHAT, bx, by, vk, len(body) / 1e3, dt)
         return body
 
     def keys(self, vk, bx, by, got):
@@ -557,7 +577,7 @@ class Store:
         with self._lock:
             ks = self._keys.get(k)
         if ks is None:
-            ks = frozenset(fast._ef.dec_block_info(got[1])[4])
+            ks = frozenset(fast._ef.dec_block_info(got[1], **self._dkw)[4])
             with self._lock:
                 self._keys[k] = ks
         return ks

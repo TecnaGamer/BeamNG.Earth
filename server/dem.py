@@ -15,6 +15,10 @@ tiles as context so neighbours agree), and deeper zooms there are that ground up
 25 m building bumps in Mexico City, a 28 m void fill over Botafogo's bay; 2026-10-15). Dem.ground_filter = False
 keeps the raw tiles and AWS (tests, comparisons).
 
+Zoom 13 and deeper come from Mapterhorn's regional PMTiles archives by range reads (mtarchive.py: Source Cooperative's
+mirror, then download.mapterhorn.com; the same bytes as the endpoint's), the tile endpoint only when neither can be
+read (2026-11-15); zooms 0-12 from the project's tile host's packs (MT_CDN_*) when its switch says so.
+
 Requests go through a netfetch.Fetcher (rate limit, retries, circuit breaker per host). When
 Mapterhorn cannot be asked (circuit open, rate limited, failing) the same tile comes from AWS
 (failover); if AWS fails too, DemUnavailable. 404s are remembered in the tile column's miss index (missindex.py)
@@ -27,7 +31,9 @@ import json
 import logging
 import math
 import missindex
+import mtarchive
 import os
+import sys
 import threading
 import time
 from collections import Counter, OrderedDict
@@ -49,6 +55,7 @@ import netfetch
 import polardem
 import revisit
 import staging
+import xproc
 
 log = logging.getLogger("earthd.dem")
 
@@ -175,6 +182,26 @@ MT_CDN_MAX_ZOOM = GLOBAL_ZOOM
 MT_CDN_RETRY_S = 600.0              # the index not to be had: the endpoint alone, asked again after this
 PACK_WAIT_S = 8.0                   # another process fetching a pack: its tile waited for at most this long
 PACK_CLAIM_STALE_S = 30.0           # a pack claim older than this: its process ended mid-fetch
+# One download of a raw tile on the machine at a time (_fetch_raw): the server's processes (main, terrain blocks, far
+# tiles, road tiles) all start on a fresh place together and each met the same cold tiles, and the probes, the
+# prefetch and the loads of one process did not share an in-flight registry either (telemetry 2026-11-15: ~60 M
+# Mapterhorn requests a day). A process (or thread) that finds a tile being downloaded waits for it on disk (an
+# xproc lock file, <dem>/locks/<src>-<z>-<x>-<y>.lock: dead holders' broken, Windows too) for up to DL_WAIT_S, on to
+# DL_LIVE_S while its holder is alive and at it; then downloads it itself. The cache is looked at again once the lock
+# is had.
+SINGLE_FLIGHT = os.environ.get("BNGE_DEM_SINGLE_FLIGHT", "1") != "0"
+# Zoom 13 and deeper from Mapterhorn's regional PMTiles archives by range reads (mtarchive.py: Source Cooperative's
+# mirror, then download.mapterhorn.com), the tile endpoint only when neither can be read, and never for a prefetch or
+# a pre-download (BNGE_DEM_ARCHIVES=0: the endpoint, as before).
+ARCHIVES = mtarchive.ON
+SPECULATIVE = ("prefetch", "predownload", "background")
+DL_WAIT_S = 30.0
+DL_LIVE_S = 120.0
+DL_URGENT_WAIT_S = 10.0             # (the urgent lane's: no live wait)
+_MISS = ("no tile",)                # (_fetch_raw's ready(): a 404 another process remembered)
+# Callers of the raw reads (_note): the module that asked (frames of these skipped), for the telemetry's DEM detail.
+_SKIP_MODULES = frozenset(("dem", "runtimeprofiler", "contextlib", "functools", "threading",
+                           "concurrent.futures.thread", "concurrent.futures._base", "pools"))
 _cdn_env = os.environ.get("BNGE_DEM_CDN", "").strip()
 MT_CDN_RELEASE = None if _cdn_env.lower() in ("", "off", "0", "none") else _cdn_env
 
@@ -182,6 +209,11 @@ MT_CDN_RELEASE = None if _cdn_env.lower() in ("", "off", "0", "none") else _cdn_
 def mt_cdn_base(release):
     import imagery as imagerymod
     return f"{imagerymod.CDN_BASE}/dem/mapterhorn/{release}"
+
+
+def _xkind(kind):
+    """A request kind as xproc ranks its lock holders."""
+    return kind if kind in xproc.KIND_RANK else "demand"
 
 
 class DemUnavailable(IOError):
@@ -300,6 +332,31 @@ class Dem:
         self._cdn_idx = None            # (release, index bytes) once read
         self._cdn_failed_at = -1e18
         self._pack_locks = {}           # pack key -> lock: one fetch of a pack at a time in this process
+        # zoom 13 and deeper from Mapterhorn's regional archives (mtarchive.py), the endpoint only when they cannot
+        # be read
+        self.archives = (mtarchive.Archives(cache_dir, self.fetcher, self._archive_items)
+                         if ARCHIVES and fast.AVAILABLE and fast._ef is not None
+                         and getattr(fast._ef, "VERSION", 0) >= mtarchive.NATIVE else None)
+        import multiprocessing
+        if SINGLE_FLIGHT and multiprocessing.current_process().name == "MainProcess":
+            self._prune_locks()
+
+    def _prune_locks(self):
+        """Download locks (_fetch_raw) left by processes that ended mid-download, older than a day: removed (a lock
+        is broken when its tile is asked again; one never asked again stayed)."""
+        d = os.path.join(self.cache_dir, "locks")
+        try:
+            names = os.listdir(d)
+        except OSError:
+            return
+        now = time.time()
+        for n in names:
+            p = os.path.join(d, n)
+            try:
+                if n.endswith(".lock") and now - os.path.getmtime(p) > 86400:
+                    os.remove(p)
+            except OSError:
+                continue
 
 
     def clear_memory(self):
@@ -515,15 +572,19 @@ class Dem:
                 age = now - os.path.getmtime(path)
                 if age < COVERAGE_MAX_AGE_S:
                     with open(path, "rb") as f:
-                        c["index"], c["at"], c["failed"] = coverage_index(json.loads(f.read())), now - age, False
+                        doc = json.loads(f.read())
+                        c["index"], c["at"], c["failed"] = coverage_index(doc), now - age, False
+                        c["archives"] = mtarchive.archives_of(doc)
                         return c["index"]
             except (OSError, ValueError):
                 pass
             try:
                 body = self.fetcher.get(COVERAGE_URL, kind="demand").body
-                idx = coverage_index(json.loads(body))
+                doc = json.loads(body)
+                idx = coverage_index(doc)
                 if not idx:
                     raise ValueError("no z6 files listed")
+                c["archives"] = mtarchive.archives_of(doc)
                 os.makedirs(os.path.dirname(path), exist_ok=True)
                 tmp = f"{path}.{os.getpid()}.{threading.get_ident()}.tmp"
                 with open(tmp, "wb") as f:
@@ -554,6 +615,12 @@ class Dem:
             return False
         return True
 
+    def _archive_items(self):
+        """The file list's regional archives (mtarchive.archives_of), or None while there is no list."""
+        if self._coverage() is None:
+            return None
+        return _coverage.get("archives")
+
     def _listed(self, z, x, y):
         """False when Mapterhorn's file list says it has no tile (z, x, y) (z > GLOBAL_ZOOM); True otherwise."""
         idx = self._coverage()
@@ -567,12 +634,14 @@ class Dem:
         netfetch.FetchError when the host cannot deliver (netfetch.Deferred for a refused prefetch)."""
         if src is MAPTERHORN and z > GLOBAL_ZOOM and not self._listed(z, x, y):
             self._count(src["name"] + ":unlisted")
+            self._note(src, z, "unlisted")
             return None
         path = self._path(src, z, x, y)
         miss = os.path.join(self.cache_dir, src["name"], str(z), str(x), f"{y}.404")
         data = self.disk.read(path)         # None: not cached (or evicted a moment ago)
         if data is not None:
             self._count(src["name"] + ":disk")
+            self._note(src, z, "disk")
             return data
         mk = (src["name"], z, x, y)
         if self._mem_raw or self._mem_miss:
@@ -581,33 +650,181 @@ class Dem:
                 if data is not None:
                     self._mem_raw.move_to_end(mk)
                 elif mk in self._mem_miss:
+                    self._note(src, z, "miss")
                     return None
             if data is not None:
                 self._count(src["name"] + ":memory")
+                self._note(src, z, "memory")
                 return data
         url = src["url"].format(z=z, x=x, y=y)
         if self.fetcher.miss_alive(miss, url):
+            self._note(src, z, "miss")
             return None
         if src is MAPTERHORN and z <= MT_CDN_MAX_ZOOM and self.cdn_release:
             got = self._download_pack(z, x, y, kind)
             if got is not False:
+                self._note(src, z, "cdn")
                 return got
+        return self._fetch_raw(src, z, x, y, url, path, miss, mk, kind)
+
+    def _fetch_raw(self, src, z, x, y, url, path, miss, mk, kind):
+        """Raw tile (z, x, y) from src's host (_download's network part): one download on the machine at a time
+        (SINGLE_FLIGHT); bytes, or None for a 404 (remembered)."""
+        # (one folder of their own: not among the tiles, whose folders the map's cache view counts by name)
+        lock = os.path.join(self.cache_dir, "locks", f"{src['name']}-{z}-{x}-{y}.lock")
+        mine = False
+        if SINGLE_FLIGHT:
+            def ready():
+                if os.path.exists(path):
+                    got = self.disk.read(path)
+                    if got is not None:
+                        return got
+                return _MISS if self.fetcher.miss_alive(miss, url) else None
+            # (the urgent lane's loads, the block under the car: waited for DL_URGENT_WAIT_S at most)
+            urgent = self.is_urgent() or threading.current_thread().name.startswith("dem-urgent")
+            got, mine = xproc.once(lock, ready, DL_URGENT_WAIT_S if urgent else DL_WAIT_S,
+                                   kind=_xkind(kind),
+                                   live_s=None if urgent else DL_LIVE_S, patient=True)
+            if got is not None:             # (another process's, or another thread's, download)
+                self._count(src["name"] + ":waited")
+                self._note(src, z, "waited")
+                return None if got is _MISS else got
         try:
-            data = self.fetcher.get(url, kind=kind).body
-        except netfetch.NotFound:
-            self._remember_miss([(mk, miss)])   # (again: its time starts the miss TTL)
-            self._count(src["name"] + ":404")
-            return None
-        except netfetch.FetchError:
-            self._count(src["name"] + ":error")
-            raise
-        self._keep(mk, path, data)
+            if self.archives is not None and src is MAPTERHORN and z >= mtarchive.MIN_ZOOM:
+                got = self._from_archives([(z, x, y)], kind).get((z, x, y), False)
+                if got is not False:
+                    return got
+                if kind in SPECULATIVE and self.archives.region(z, x, y) is not None:
+                    # (an archive has it but cannot be read now: the endpoint is the demand's last resort, never a
+                    # guess's; with no file list at all every tile is asked as before)
+                    self._note(src, z, "deferred")
+                    raise netfetch.Deferred(f"mapterhorn {z}/{x}/{y}: the archives cannot be read now", url,
+                                            netfetch.host_of(url))
+            try:
+                data = self.fetcher.get(url, kind=kind).body
+            except netfetch.NotFound:
+                self._remember_miss([(mk, miss)])   # (again: its time starts the miss TTL)
+                self._count(src["name"] + ":404")
+                self._note(src, z, "404")
+                return None
+            except netfetch.Deferred:
+                self._count(src["name"] + ":error")
+                self._note(src, z, "deferred")
+                raise
+            except netfetch.FetchError:
+                self._count(src["name"] + ":error")
+                self._note(src, z, "error")
+                raise
+            self._keep(mk, path, data)
+            try:
+                missindex.clear(miss, self.disk)    # an expired miss: the host has data there now
+            except OSError:
+                pass
+            self._count(src["name"] + ":net")
+            self._note(src, z, "net")
+            return data
+        finally:
+            if mine:
+                xproc.release(lock)
+
+    def _from_archives(self, keys, kind):
+        """Mapterhorn tiles keys from the regional archives (mtarchive.py), written to the raw cache as the endpoint's
+        would be (a tile an archive lacks: its 404 remembered): {key: bytes or None} for those an archive answered;
+        the others left out (the endpoint's to ask). Raises netfetch.Deferred (a prefetch refused)."""
+        name = MAPTERHORN["name"]
+        got = self.archives.fetch(keys, kind)
+        misses = []
+        for (z, x, y), b in got.items():
+            mk = (name, z, x, y)
+            marker = os.path.join(self.cache_dir, name, str(z), str(x), f"{y}.404")
+            if b is None:
+                misses.append((mk, marker))
+                self._count(name + ":archive404")
+                self._note(MAPTERHORN, z, "archive404")
+                continue
+            self._keep(mk, self._path(MAPTERHORN, z, x, y), b)
+            try:
+                missindex.clear(marker, self.disk)
+            except OSError:
+                pass
+            self._count(name + ":archive")
+            self._note(MAPTERHORN, z, "archive")
+        if misses:
+            self._remember_miss(misses)
+        for k in keys:
+            if k not in got:
+                self._note(MAPTERHORN, k[0], "archive_err")
+        return got
+
+    def _archive_batch(self, keys, kind):
+        """Warm the raw cache for keys (Mapterhorn, zoom 13+) from the archives in as few range reads as they allow:
+        the keys with neither a decoded nor a raw tile nor a remembered 404, each this process's to fetch (its download
+        lock had at once; one another process holds is left to it), and where a z16 tile proves missing the tile its
+        heights will come from (the deepest of its z15 / z14 / z13 ancestors there; no request to find it: the
+        directories say). A cache warm only: what the loads then make is decided by them as before."""
+        if self.archives is None:
+            return
+        name = MAPTERHORN["name"]
+        todo = []
+        for k in dict.fromkeys(keys):
+            z, x, y = k
+            if z < mtarchive.MIN_ZOOM or not self._listed(z, x, y):
+                continue
+            if os.path.exists(self._path(MAPTERHORN, z, x, y)) or os.path.exists(self._mirror_path(k)):
+                continue
+            if (name,) + k in self._mem_raw or self._known_miss(*k):
+                continue
+            todo.append(k)
+        rounds = 0
+        while todo and rounds < 4:
+            rounds += 1
+            held = []
+            for k in todo:
+                lock = os.path.join(self.cache_dir, "locks", f"{name}-{k[0]}-{k[1]}-{k[2]}.lock")
+                if not SINGLE_FLIGHT or xproc.take(lock, _xkind(kind)):
+                    held.append((k, lock))
+            try:
+                got = self._from_archives([k for k, _ in held], kind) if held else {}
+            except netfetch.Deferred:
+                got = {}
+            finally:
+                if SINGLE_FLIGHT:
+                    for _, lock in held:
+                        xproc.release(lock)
+            # (a missing tile's heights come from its parent: z16 always, z15 / z14 with the ground filter)
+            nxt = []
+            for (z, x, y), b in got.items():
+                if b is None and z > mtarchive.MIN_ZOOM and (z > MAX_ZOOM or self.ground_filter):
+                    p = (z - 1, x >> 1, y >> 1)
+                    if (self._listed(*p) and not os.path.exists(self._path(MAPTERHORN, *p))
+                            and not os.path.exists(self._mirror_path(p)) and not self._known_miss(*p)):
+                        nxt.append(p)
+            todo = list(dict.fromkeys(nxt))
+
+    def _caller(self):
+        """The module that asked for the tiles this thread reads now (a pool task: the one that queued it)."""
+        c = getattr(self._local, "caller", None)
+        if c is not None:
+            return c
+        f = sys._getframe(1)
+        while f is not None and f.f_globals.get("__name__") in _SKIP_MODULES:
+            f = f.f_back
+        name = f.f_globals.get("__name__") if f is not None else None
+        return (name or "pool").rsplit(".", 1)[-1][:20]
+
+    def _as(self, caller, fn, *args):
+        """fn(*args) with this thread's reads counted as caller's (a pool task queued by caller)."""
+        prev = getattr(self._local, "caller", None)
+        self._local.caller = caller
         try:
-            missindex.clear(miss, self.disk)    # an expired miss: the host has data there now
-        except OSError:
-            pass
-        self._count(src["name"] + ":net")
-        return data
+            return fn(*args)
+        finally:
+            self._local.caller = prev
+
+    def _note(self, src, z, outcome):
+        """A raw tile read's telemetry detail (netfetch.note_detail): the source, the caller, the zoom, how it was
+        answered. No position."""
+        netfetch.note_detail(f"{src['name']}:{self._caller()}:{z}:{outcome}")
 
     def _keep(self, mk, path, data):
         """Downloaded tile bytes written to the disk cache; when that fails (a full disk, a folder that cannot be
@@ -809,11 +1026,12 @@ class Dem:
         per tile however many ask. Returns their futures (result: the bytes or None; errors are left for the caller's
         own _download to meet)."""
         futs = []
+        caller = self._caller()
         with self._lock:
             for k in keys:
                 f = self._probing.get(k)
                 if f is None:
-                    f = self._probing[k] = self.probe_pool.submit(self._probe, k)
+                    f = self._probing[k] = self.probe_pool.submit(self._as, caller, self._probe, k)
                 futs.append(f)
         return futs
 
@@ -840,6 +1058,9 @@ class Dem:
         decoding them. Returns (downloaded, deferred): deferred when the host refused one (no spare tokens
         now): the rest waits for the next call. Errors skip the tile (asked again on demand)."""
         got = 0
+        keys = list(keys)
+        if self.archives is not None:       # (the zoom 13+ tiles first, in as few archive reads as they allow)
+            self._archive_batch(keys, "prefetch")
         for z, x, y in keys:
             if os.path.exists(self._path(MAPTERHORN, z, x, y)):
                 continue
@@ -924,6 +1145,10 @@ class Dem:
     def _mirror_path(self, key):
         z, x, y = key
         hk = "h" if self.hkdtm is not None and hkdtmmod.covers(z, x, y) else ""     # (made with Hong Kong's DTM)
+        # (made with the opt-in Canadian lidar, the settings page's Experimental switch: BNE_LIDARBC's own files and
+        # its bias, BNE_HRDEM_NEAR's whole HRDEM. Their tiles apart: off, the mirror's tiles as before)
+        hk += ("b" if getattr(self, "lidarbc", None) is not None else "") + \
+            ("n" if getattr(self, "hrdem_near", HRDEM_NEAR) else "")
         return os.path.join(self.cache_dir, "decoded", f"v{DECODED_VERSION}", f"g{int(self.ground_filter)}{hk}", str(z),
                             str(x), f"{y}{'.f32z' if MIRROR_ZSTD else '.npy'}")
 
@@ -1086,8 +1311,9 @@ class Dem:
 
     def _make_tile0(self, key):
         z, x, y = key
-        if z > MAX_ZOOM:                # (most places have no z16: its z15 parent asked alongside)
-            self._ahead([(MAX_ZOOM, x >> (z - MAX_ZOOM), y >> (z - MAX_ZOOM))])
+        # (a z16 tile's z15 parent is asked only once the z16 tile is found missing (_from_ancestor below): it was
+        # downloaded ahead alongside every z16 tile, used or not, a z15 request for every 4 z16 tiles of a lidar area
+        # that has them; where the file list has no z16 the z16 asks nothing and the parent comes at once)
         try:
             data = self._download(MAPTERHORN, z, x, y)
             a = None if data is None else self._decode(MAPTERHORN, z, x, y, data)
@@ -1147,15 +1373,45 @@ class Dem:
     # --- the ground under the surface model ------------------------------
     def _lidar(self, x, y):
         """Has Mapterhorn deeper tiles (national lidar: a terrain model already) under z12 tile (x, y)? Two of
-        its z13 children asked, at once (404s are remembered)."""
-        self._wait(self._ahead([(GLOBAL_ZOOM + 1, 2 * x, 2 * y), (GLOBAL_ZOOM + 1, 2 * x + 1, 2 * y + 1)]))
-        for cx, cy in ((2 * x, 2 * y), (2 * x + 1, 2 * y + 1)):
+        its z13 children (diagonal): yes when either is there (404s are remembered). A child already on disk answers
+        without a request; otherwise they are asked one after the other, the second only when the first is missing
+        (both were downloaded at once before, the second wasted wherever the first was there: the same answer)."""
+        kids = ((GLOBAL_ZOOM + 1, 2 * x, 2 * y), (GLOBAL_ZOOM + 1, 2 * x + 1, 2 * y + 1))
+        for k in kids:
+            if os.path.exists(self._path(MAPTERHORN, *k)) and self._download(MAPTERHORN, *k) is not None:
+                return True
+        if self.archives is not None:
+            # (the children the cache knows nothing of answered by the regional archive's directories, no tile read:
+            # the endpoint's answer; a 404 remembered for a child it lacks, as the endpoint's would be)
+            name = MAPTERHORN["name"]
+            ask = [k for k in kids if self._listed(*k) and not self._known_miss(*k)]
             try:
-                if self._download(MAPTERHORN, GLOBAL_ZOOM + 1, cx, cy) is not None:
+                there = self.archives.exists(ask) if ask else {}
+            except netfetch.Deferred:
+                there = None
+            if there is not None and len(there) == len(ask):
+                gone = [((name,) + k, os.path.join(self.cache_dir, name, str(k[0]), str(k[1]), f"{k[2]}.404"))
+                        for k in ask if not there[k]]
+                if gone:
+                    self._remember_miss(gone)
+                for k in ask:
+                    self._note(MAPTERHORN, k[0], "index")
+                return any(there.values())
+        for k in kids:
+            try:
+                if self._download(MAPTERHORN, *k) is not None:
                     return True
             except netfetch.FetchError:
                 self._partial()
         return False
+
+    def _known_miss(self, z, x, y):
+        """Is Mapterhorn tile (z, x, y) a 404 the cache remembers (as _download reads it)?"""
+        name = MAPTERHORN["name"]
+        if (name, z, x, y) in self._mem_miss:
+            return True
+        return self.fetcher.miss_alive(os.path.join(self.cache_dir, name, str(z), str(x), f"{y}.404"),
+                                       MAPTERHORN["url"].format(z=z, x=x, y=y))
 
     def _raw12(self, x, y):
         """A z12 Mapterhorn tile as it is (zeros where there is none: the open sea)."""
@@ -1264,9 +1520,17 @@ class Dem:
     def tiles(self, keys, progress=None):
         """Fetch many tiles concurrently (deduplicated across callers)."""
         keys = list(dict.fromkeys(keys))
+        if self.archives is not None:
+            # (the cold zoom 13+ tiles' raw bytes first, in as few archive range reads as they allow: each load then
+            # finds its tile on disk)
+            with self._lock:
+                cold = [k for k in keys if k[0] >= mtarchive.MIN_ZOOM and k not in self._lru and k not in self._inflight]
+            if cold:
+                self._archive_batch(cold, "demand")
         out, futs, new = {}, {}, []
         urgent = getattr(self._local, "urgent", False)
         pool = self.urgent_pool if urgent else self.pool
+        caller = self._caller()
         if urgent and len(keys) >= 16 and log.isEnabledFor(logging.DEBUG):
             zs = Counter(k[0] for k in keys)
             log.debug("dem urgent: %d tiles %s", len(keys), dict(zs))
@@ -1279,7 +1543,7 @@ class Dem:
                                                   and not self._inflight[k].done()):
                     futs[k] = self._inflight[k]
                 else:
-                    futs[k] = self._inflight[k] = pool.submit(self._load_tile, k)
+                    futs[k] = self._inflight[k] = pool.submit(self._as, caller, self._load_tile, k)
                     new.append(k)
         # Outside the lock: the callback runs at once if the future is already done.
         for k in new:

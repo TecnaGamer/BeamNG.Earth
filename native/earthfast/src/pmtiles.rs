@@ -198,6 +198,97 @@ pub fn pmt_find(py: Python<'_>, dir: &[u8], t: u64) -> PyResult<Option<(u64, u64
     Ok(got.map(|e| (e.offset, e.length, e.run == 0)))
 }
 
+/// Many tile ids in one directory (its bytes as stored), the directory decoded once: for each id None, or (offset,
+/// length, is_leaf) as pmt_find gives it (server/mtarchive.py: Mapterhorn's regional elevation archives, a batch of
+/// tiles of one leaf directory; the z13 lidar test answered from the index alone).
+#[pyfunction]
+pub fn pmt_find_many(py: Python<'_>, dir: &[u8], ids: Vec<u64>) -> PyResult<Vec<Option<(u64, u64, bool)>>> {
+    let raw = dir.to_vec();
+    let got = py.detach(move || -> Result<Vec<Option<Entry>>, String> {
+        let e = parse_dir(&gunzip(&raw)?)?;
+        Ok(ids.iter().map(|&t| find(&e, t)).collect())
+    }).map_err(PyValueError::new_err)?;
+    Ok(got.into_iter().map(|o| o.map(|e| (e.offset, e.length, e.run == 0))).collect())
+}
+
+/// The range reads for tiles at (offsets[i], lengths[i]) of an archive's data section: runs of tiles whose bytes lie
+/// within gap of each other merged into one read of at most max_len bytes (a single tile longer than that is a read
+/// of its own); tiles sharing their bytes (PMTiles run-length / deduplicated entries) in the same read. Each run:
+/// (start, end, [indices into the inputs]), in offset order. Pure.
+pub fn ranges(offsets: &[u64], lengths: &[u64], gap: u64, max_len: u64) -> Vec<(u64, u64, Vec<usize>)> {
+    let mut order: Vec<usize> = (0..offsets.len().min(lengths.len())).collect();
+    order.sort_by_key(|&i| (offsets[i], lengths[i], i));
+    let mut out: Vec<(u64, u64, Vec<usize>)> = Vec::new();
+    for i in order {
+        let (a, b) = (offsets[i], offsets[i] + lengths[i]);
+        if let Some(last) = out.last_mut() {
+            let end = last.1.max(b);
+            if a <= last.1.saturating_add(gap) && end - last.0 <= max_len.max(1) {
+                last.1 = end;
+                last.2.push(i);
+                continue;
+            }
+        }
+        out.push((a, b, vec![i]));
+    }
+    out
+}
+
+#[pyfunction]
+pub fn pmt_ranges(offsets: Vec<u64>, lengths: Vec<u64>, gap: u64, max_len: u64) -> Vec<(u64, u64, Vec<usize>)> {
+    ranges(&offsets, &lengths, gap, max_len)
+}
+
+#[cfg(test)]
+mod range_tests {
+    use super::*;
+
+    #[test]
+    fn adjacent_tiles_merge_within_the_cap() {
+        // three adjacent tiles, one far away, one sharing the first's bytes (a deduplicated entry)
+        let off = [100u64, 150, 175, 10_000, 100];
+        let len = [50u64, 25, 25, 10, 50];
+        let r = ranges(&off, &len, 0, 1 << 20);
+        assert_eq!(r, vec![(100, 200, vec![0, 4, 1, 2]), (10_000, 10_010, vec![3])]);
+        let capped = ranges(&off, &len, 0, 80);
+        assert_eq!(capped[0], (100, 175, vec![0, 4, 1]));
+        assert_eq!(capped[1], (175, 200, vec![2]));
+        assert_eq!(ranges(&[0, 70], &[50, 10], 20, 1 << 20), vec![(0, 80, vec![0, 1])]);
+    }
+
+    #[test]
+    fn find_many_answers_tiles_runs_and_leaves() {
+        // a directory: tile 5 (run 1), tiles 7..9 (run 3), a leaf pointer at 20 (run 0)
+        let mut b = Vec::new();
+        let push = |b: &mut Vec<u8>, mut v: u64| loop {
+            let c = (v & 0x7f) as u8;
+            v >>= 7;
+            if v == 0 {
+                b.push(c);
+                break;
+            }
+            b.push(c | 0x80);
+        };
+        push(&mut b, 3);
+        for d in [5u64, 2, 13] {
+            push(&mut b, d);
+        }
+        for r in [1u64, 3, 0] {
+            push(&mut b, r);
+        }
+        for l in [10u64, 20, 99] {
+            push(&mut b, l);
+        }
+        for o in [1u64, 0, 1] {
+            push(&mut b, o);
+        }
+        let e = parse_dir(&b).unwrap();
+        let q: Vec<Option<(u64, u64, bool)>> = [5u64, 6, 8, 10, 25, 4].iter()
+            .map(|&t| find(&e, t).map(|x| (x.offset, x.length, x.run == 0))).collect();
+        assert_eq!(q, vec![Some((0, 10, false)), None, Some((10, 20, false)), None, Some((0, 99, true)), None]);
+    }
+}
+
 // ------------------------------------------------------------------------------------------------ MVT
 #[derive(Clone, Debug)]
 enum V {

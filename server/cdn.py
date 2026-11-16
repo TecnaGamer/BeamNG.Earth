@@ -23,6 +23,10 @@ the switch (tests).
 "decisions" ({"decisions": {"enabled": true}}): the shared decision archives (decisions.py: road plans and cell facts
 built and signed by the project's builder for each release); BNGE_DECISIONS=on / off overrides the switch.
 
+"lidarz" ({"lidarz": {"enabled": true}}): the lidar road heights per map cell (lidarz.py: what the server's roadz
+measures in the USGS 3DEP point clouds, built and signed by the project's builder); BNGE_LIDARZ=on / off overrides
+the switch.
+
 "dem" / "bngmt": Mapterhorn's z0-12 elevation tiles repacked (dem.MT_CDN_*, the data repo's dem workflow), the release
 the packs were built from; the server's BNGE_DEM_CDN (a release, or "off") overrides it.
 """
@@ -135,4 +139,13 @@ def decisions_on(fetcher, cache_dir):
         log.info("cdn: shared decision archives on")
         if on.get("request") is True and "BNGE_DECISIONS_REQUEST" not in os.environ:
             os.environ["BNGE_DECISIONS_REQUEST"] = "on"     # (the builder asked for unbuilt blocks: decisions.ask_build)
+    return got
+
+
+def lidarz_on(fetcher, cache_dir):
+    """Does the switch turn the lidar road heights product on ({"lidarz": {"enabled": true}}: lidarz.py)?"""
+    on = switch(fetcher, cache_dir).get("lidarz") or {}
+    got = isinstance(on, dict) and bool(on.get("enabled"))
+    if got:
+        log.info("cdn: lidar road heights on")
     return got

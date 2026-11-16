@@ -11,10 +11,54 @@ class ProtocolError(Exception):
     pass
 
 
+class RawJson:
+    """A JSON value already encoded (its text: real UTF-8, no \\u escapes), spliced into the frame as it is by encode():
+    a tile's inline file (staging.inline_raw, read in the worker that built it) was parsed and encoded again on the
+    event loop, ~10-20 ms of the interpreter per large tile file. Read as the value it holds (parsed on first use)."""
+    __slots__ = ("text", "_value")
+    _UNSET = object()
+
+    def __init__(self, text):
+        self.text = text
+        self._value = RawJson._UNSET
+
+    def value(self):
+        if self._value is RawJson._UNSET:
+            self._value = json.loads(self.text)
+        return self._value
+
+    def __getitem__(self, k):
+        return self.value()[k]
+
+    def __contains__(self, k):
+        return k in self.value()
+
+    def __iter__(self):
+        return iter(self.value())
+
+    def __len__(self):
+        return len(self.value())
+
+    def get(self, k, default=None):
+        return self.value().get(k, default)
+
+    def __eq__(self, other):
+        return self.value() == (other.value() if isinstance(other, RawJson) else other)
+
+    __hash__ = None
+
+
 def encode(msg):
     # real UTF-8, not \u escapes: the game's jsonDecode leaves those as text ("Provence-Alpes-Cu00f4te d'Azur" in the status
     # bar, 2026-10-15)
-    payload = json.dumps(msg, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    raw = [k for k, v in msg.items() if type(v) is RawJson]
+    if raw:                 # (values already encoded: after the rest, as they are)
+        rest = {k: v for k, v in msg.items() if type(v) is not RawJson}
+        head = json.dumps(rest, separators=(",", ":"), ensure_ascii=False)
+        body = ",".join(json.dumps(k, ensure_ascii=False) + ":" + msg[k].text for k in raw)
+        payload = (head[:-1] + ("," if rest else "") + body + "}").encode("utf-8")
+    else:
+        payload = json.dumps(msg, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
     return HEADER.pack(len(payload)) + payload
 
 

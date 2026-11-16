@@ -6,6 +6,16 @@
     <BngCardHeading>{{ category.name }}</BngCardHeading>
     <div v-if="category.intro" class="earth-intro">{{ category.intro }}</div>
 
+    <!-- Restart world server: a setting read only at the server's start differs from its start-time value, or a restart
+         is under way (earthRestart.js; settings.uiRestartServer) -->
+    <div v-if="restart.show" class="earth-restart" :class="'is-' + restart.level">
+      <div class="earth-restart-text">
+        <div>{{ restart.text }}</div>
+        <div v-if="restart.note" class="earth-note">{{ restart.note }}</div>
+      </div>
+      <BngButton v-if="restart.button" :accent="ACCENTS.main" @click="restartServer">Restart world server</BngButton>
+    </div>
+
     <!-- Quality presets: one press sets every setting below; changing one makes it Custom -->
     <template v-if="category.presets">
       <div class="earth-presets">
@@ -136,7 +146,7 @@
 import { computed, reactive } from "vue"
 import { BngButton, BngSwitch, BngSlider, BngInput, BngSelect, BngRow, BngCardHeading, ACCENTS } from "@/common/components/base"
 import {
-  config, dev, help, qualityPresets, devPresets, presetLine, detectedPick, optionConfig, categoryNamed, visibleItems,
+  config, dev, help, restart, restartServer, qualityPresets, devPresets, presetLine, detectedPick, optionConfig, categoryNamed, visibleItems,
   cacheConfirm, cacheBusy, cacheResult, pathText, pathBusy, pathPick, pathMsg,
   setQuality, presetName, valueOf, selectOption, onSwitchChange, onSliderChange, onNumberEnter, onDevChange, infoValue,
   openFeedback, openLink,
@@ -184,6 +194,21 @@ function applyNumber(item) {
 }
 
 .earth-note.is-error { color: var(--bng-add-red-400, #f88); }
+
+.earth-restart {
+  display: flex;
+  align-items: center;
+  gap: 0.75em;
+  margin: 0.25em 0 0.5em;
+  padding: 0.5em 0.75em;
+  border-radius: 0.3em;
+  border-left: 0.25em solid var(--bng-orange-500, #f60);
+  background: rgba(255, 102, 0, 0.12);
+  .earth-restart-text { flex: 1 1 auto; min-width: 0; }
+  .earth-note { padding: 0.2em 0 0; }
+  &.is-warn { border-left-color: var(--bng-add-red-400, #f88); background: rgba(255, 80, 80, 0.12); }
+  &.is-ok { border-left-color: var(--bng-add-green-400, #6c6); background: rgba(80, 200, 80, 0.12); }
+}
 
 .earth-presets {
   display: grid;

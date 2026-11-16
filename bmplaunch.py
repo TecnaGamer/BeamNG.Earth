@@ -350,12 +350,11 @@ def download(data_dir, user_agent, say=print):
 
 
 def game_user_path(user_dir):
-    """The user folder BeamMP wants (the folder above the game version's, as --user-path)."""
-    d = os.path.normpath(user_dir)
-    base = os.path.basename(d)
-    if base == "current" or base[:1].isdigit():
-        return os.path.dirname(d)
-    return d
+    """The user folder BeamMP wants (the folder above the game version's, as --user-path): the same folder the game is
+    given with -userpath (gameinstall.user_base, one rule for both: a folder of the player's own named "2026-profile"
+    went to the game as it is and to BeamMP as its parent, Codex review of 904ac751)."""
+    import gameinstall
+    return gameinstall.user_base(user_dir)
 
 
 def child_env(env=None, frozen=None):
@@ -463,13 +462,17 @@ def system_too_old(exe, run=None):
     return f"this system's libraries are too old for it ({m.group(1)} missing)" if m else None
 
 
-def start(exe, user_dir, log_path):
-    """The BeamMP launcher, without starting the game itself (the app does), its output to log_path."""
+def start(exe, user_dir, log_path, user_path=False):
+    """The BeamMP launcher, without starting the game itself (the app does), its output to log_path. user_path
+    (Windows): the user folder named to it too (--user-path), as the game is told with -userpath when the app starts it
+    without Steam (gameinstall.py), so both use the same folder."""
     args = [exe, "--no-launch"]
     if not IS_WIN:
         # (a build from source: its self-update would fetch the Windows launcher; the game's folder named, as BeamMP
         # cannot find a Linux one by itself)
         args += ["--no-update", "--user-path", game_user_path(user_dir)]
+    elif user_path and user_dir:
+        args += ["--user-path", game_user_path(user_dir)]
     os.makedirs(os.path.dirname(log_path), exist_ok=True)
     # (it writes Launcher.cfg, Launcher.log and its key in its working folder: a system package's /usr/bin is not
     # writable, "Failed to write config on disk!" and it quit, 2026-11-04; then the log's folder)

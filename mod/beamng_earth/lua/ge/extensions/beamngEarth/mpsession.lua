@@ -440,6 +440,19 @@ local function onAnchors(data)
   end
 end
 
+-- (mpdefer.lua) Player pid's place (lat, lon: their car, or camera without one) from the latest bngeAnchors; nil: not
+-- known (no BeamNG.Earth, not heard yet).
+function M.ownerPlace(pid)
+  local a = anchors[tostring(tonumber(pid))]
+  if type(a) == 'table' and tonumber(a.lat) and tonumber(a.lon) then return tonumber(a.lat), tonumber(a.lon) end
+end
+-- (mpdefer.lua) Player pid's distance (m) from our origin (our anchor: mpanchor's far test is from there); nil unknown.
+function M.ownerDist(pid)
+  local lat, lon = M.ownerPlace(pid)
+  local mLat, mLon = require('beamngEarth/mpanchor').own()
+  if lat and mLat then return M.dist(mLat, mLon, lat, lon) end
+end
+
 -- core.teleportTo: the anchor of other players near (lat, lon) to teleport onto (aLat, aLon), nil if none: none while
 -- shared world building is commented out (its pickAnchor above).
 function M.adoptAnchor(lat, lon) return nil end
@@ -805,6 +818,14 @@ end
 
 -- Is this other player's car floating here (collisionfoci leaves it out)?
 function M.isFloating(gid) return floating[tonumber(gid)] == true end
+-- Is this other player's car switched off here (far, or its owner's anchor not known)? (mpdefer: its kept edit waits)
+function M.isOff(gid) return deactivated[tonumber(gid)] == true end
+-- (mpdefer: a kept car come near spawns once) a car at (x, y) of our frame has ground under it, or floats there (off
+-- our block: no ground needed), as a car switched off here comes back on.
+function M.groundOkAt(x, y)
+  if onBlock(x, y, M.FLOAT_OUT_M) == false then return true end
+  return require('beamngEarth/terrainpatch').groundReady(x, y) == true
+end
 
 local function gravityNow()
   local ce = rawget(_G, 'core_environment')
@@ -901,9 +922,16 @@ function M.update(dt, anchor, player)
     statusIn = M.STATUS_S
     local n = 0
     for _ in pairs(anchors) do n = n + 1 end
+    -- (far players' cars kept, not spawned here: mpdefer.lua)
+    local md = require('beamngEarth/mpdefer')
+    local okK, kept, keptEdits = pcall(md.counts)
+    local farcars = okK and { kept = kept, keptEdits = keptEdits, held = md.stats.held, released = md.stats.released,
+      merged = md.stats.merged, edits = md.stats.edits, editsReleased = md.stats.editsReleased, taken = md.stats.taken,
+      handedBack = md.stats.handedBack } or nil
     log('I', 'beamngEarth', string.format('BeamMP status: anchor %s, %d player(s) known, events anchors/goto %d/%d, '
-      .. 'poses %d, %s', anchor and M.key(anchor.lat, anchor.lon) or 'none', n, stats.anchors, stats.go, stats.poses,
-      mpanchor.status()))
+      .. 'poses %d, far cars kept %d (edits %d, spawned on coming near %d), %s', anchor and M.key(anchor.lat, anchor.lon)
+      or 'none', n, stats.anchors, stats.go, stats.poses, farcars and farcars.kept or -1, farcars and farcars.keptEdits
+      or -1, farcars and farcars.released or -1, mpanchor.status()))
     -- the same as a file (the game's log reaches the disk late; BeamMP turns the game's MCP off in a session)
     local hidden = 0
     for _ in pairs(deactivated) do hidden = hidden + 1 end
@@ -975,7 +1003,7 @@ function M.update(dt, anchor, player)
     end
     pcall(jsonWriteFile, M.STATUS_FILE, { t = os.time(), block = blk, sky = skyNow, weather = wxNow, anchor = anchor and M.key(anchor.lat, anchor.lon) or nil,
       perf = perf, switch = next(switchLog) and switchLog or nil, away = next(awayLog) and awayLog or nil,
-      anchors = anchors, stats = stats, hidden = hidden, remote = remote, own = own, player = player and { x = player.x,
+      anchors = anchors, stats = stats, hidden = hidden, farcars = farcars, remote = remote, own = own, player = player and { x = player.x,
       y = player.y, z = player.z, camera = player.camera } or nil }, true)
   end
   t = mk('mp:status', t)
@@ -1110,6 +1138,7 @@ function M.groundFoci()
   for gid, w in pairs(waitGround) do
     out[#out + 1] = { x = w.x, y = w.y, r = cf.PLAYER_R, trees = true, id = gid, kind = 'player' }
   end
+  for _, f in ipairs(require('beamngEarth/mpdefer').foci()) do out[#out + 1] = f end    -- (kept cars come near)
   return out
 end
 
@@ -1186,6 +1215,7 @@ function M.reset()
   -- share, config, configWait, convergeIn, anchorSince, lastAnchorKey = nil, nil, 0, 0, 0, nil   -- (shared world building)
   stats, statusIn = { anchors = 0, go = 0, poses = 0, converged = 0, peers = 0 }, M.STATUS_S
   require('beamngEarth/mpanchor').reset()
+  require('beamngEarth/mpdefer').reset()
 end
 
 -- The other players for the world map: { { pid, name, lat, lon, h } } (pid: the server's player id as a string, what
