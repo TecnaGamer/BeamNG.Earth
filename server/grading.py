@@ -2940,6 +2940,16 @@ class _Planner:
                 low = np.asarray(q.z, np.float64) <= np.asarray(z, np.float64) - vsolvemod.DIP_M
                 if low.any():
                     dips[i] = np.where(low, np.asarray(q.z, np.float64), np.nan)
+        floors = [None] * n
+        if lifts is not None and lifts[0] is not None:
+            # (where the approach rule raised a road: at least that high, but no higher than the underpass rule after
+            # it left it, nor the passes where they went lower. A lift the dip under a deck took back, ramp_envelope
+            # raised again in the passes, onto the deck: as a floor it was over the dip, every floor the solve broke
+            # in Rio, Athens and Tokyo, by up to 8 m)
+            for i, (a, b, r, p) in enumerate(zip(lifts[0][:n], lifts[1][:n], rule_z, ground)):
+                up = b - a >= vsolvemod.DIP_M
+                if up.any():
+                    floors[i] = np.where(up, np.minimum(np.minimum(b, r), np.asarray(p.z, np.float64)), np.nan)
         pins = []
         if own is not None:     # (a piece's end past the cell's box: cut there, held at its profile, as the next cell holds it)
             x0, y0, x1, y1 = own
@@ -2948,8 +2958,12 @@ class _Planner:
                     x, y = float(p.xy[e, 0]), float(p.xy[e, 1])
                     if x < x0 - 1.0 or x > x1 + 1.0 or y < y0 - 1.0 or y > y1 + 1.0:
                         # (at the underpass rule's dip where it has one there: held at the profile over a dip's
-                        # bound, the end could hold neither, and Tokyo's cells went infeasible)
+                        # bound, the end could hold neither, and Tokyo's cells went infeasible. On an approach's
+                        # floor where it has one: held at its profile 5 m under the ramp the lift made toward a deck
+                        # past the box, the smoothing between them stood a Tokyo street 8 m over its ground)
                         h = float(z_before[i][e])
+                        if floors[i] is not None and np.isfinite(floors[i][e]):
+                            h = max(h, float(floors[i][e]))
                         if dips[i] is not None and np.isfinite(dips[i][e]):
                             h = min(h, float(dips[i][e]))
                         pins.append((i, e, h))
@@ -2958,13 +2972,6 @@ class _Planner:
         # rule's alone the solve stood it there again, 2.3 m under the deck where the passes left 2.8. The passes'
         # heights: the shadow's; without them (the RFC's step 4) clearance rows on the decks' own heights)
         caps = self._vsolve_caps(key, ground, [np.minimum(r, np.asarray(p.z, np.float64)) for r, p in zip(rule_z, ground)])
-        floors = [None] * n
-        if lifts is not None and lifts[0] is not None:
-            # (where the approach rule raised a road: at least that high, as the passes left it where they went lower)
-            for i, (a, b, p) in enumerate(zip(lifts[0][:n], lifts[1][:n], ground)):
-                up = b - a >= vsolvemod.DIP_M
-                if up.any():
-                    floors[i] = np.where(up, np.minimum(b, np.asarray(p.z, np.float64)), np.nan)
         zs, info = vsolvemod.solve(ground, pspecs, z_before[:n], ceilings, ranks, pins, dips, caps=caps, floors=floors)
         if zs is None:          # (no feasible solve: the passes' heights, as the RFC's fallback; counted in info)
             zs = [np.array(p.z, np.float64) for p in ground]
