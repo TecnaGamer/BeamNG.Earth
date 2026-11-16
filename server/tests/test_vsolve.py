@@ -48,6 +48,15 @@ class SolveTest(unittest.TestCase):
         g = np.abs(np.diff(zs[1])) / 2.0
         self.assertLessEqual(float(g.max()), 0.12 + 1e-6)
 
+    def test_a_side_road_meets_a_steep_road_between_its_samples(self):
+        main = plan(np.c_[S, np.zeros_like(S)], 0.15 * S)                # (15 %, samples every 2 m)
+        side = plan(np.c_[np.full(len(S), 101.0), S + 0.5], np.full(len(S), 15.0))     # (lands at x 101: between two)
+        z0 = [main.z.copy(), side.z.copy()]
+        zs, info = vsolve.solve([main, side], [spec("primary"), spec("residential")], z0, [0.2, 0.2], [8, 2])
+        self.assertTrue(info["feasible"], info)
+        at = float(np.interp(101.0, S, zs[0]))
+        self.assertLess(abs(float(zs[1][0]) - at), 0.01)      # (the nearest sample alone: up to 15 cm off)
+
     def test_a_deck_end_is_held_and_the_road_ramps_down_within_its_ceiling(self):
         z = np.zeros(len(S))
         z[0] = 5.0                       # (the passes left the deck's height at its abutment)
