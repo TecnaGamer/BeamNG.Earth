@@ -201,6 +201,13 @@ M.CATALOG = {
     { ECA .. 'trees/trees_oak/tree_oak_forest_a', 15.9 }, { ECA .. 'trees/trees_oak/tree_oak_forest_b', 16.0 },
     { ECA .. 'trees/trees_beech/tree_beech_large_c', 17.4 }, { ECA .. 'trees/trees_aspen/tree_aspen_forest_b', 18.5 },
     { ECA .. 'trees/trees_beech/tree_beech_forest_a', 20.2 }, { ECA .. 'trees/trees_beech/tree_beech_large_b', 21.1 },
+    -- (the stock survey 2026-11-15: unused East Coast USA shapes, every one with its imposter and its materials in the
+    -- folders MATERIALS loads; heights from the shapes' bounds, to be checked in game): young trees for 5-8 m (a 4 m
+    -- tree was an 8.3 m shape at 0.48), and more beeches
+    { ECA .. 'trees/trees_aspen/tree_aspen_small_low', 6.05 }, { ECA .. 'trees/trees_beech/tree_beech_bush_e', 6.51 },
+    { ECA .. 'trees/trees_beech/tree_beech_bush_d', 7.23 }, { ECA .. 'trees/trees_aspen/tree_aspen_small_b', 8.18 },
+    { ECA .. 'trees/trees_aspen/tree_aspen_small_d', 10.37 }, { ECA .. 'trees/trees_beech/tree_beech_small_b', 11.6 },
+    { ECA .. 'trees/trees_beech/tree_beech_small_d', 13.32 }, { ECA .. 'trees/trees_beech/tree_beech_forest_b', 21.75 },
   },
   -- low ground plants of a roundabout island's planting (server roundabouts.plant_rows): patches of clover and daisies, ferns
   -- (Hirochi's groundcover shapes, measured 2026-11-10: a patch 2.3 / 1.45 m wide, 0.17 / 0.11 high; ferns 0.62 .. 1.49 high)
@@ -212,12 +219,19 @@ M.CATALOG = {
     { ECA .. 'trees/trees_douglasfir/tree_douglasfir_large_c', 18.9 }, { ECA .. 'trees/trees_douglasfir/tree_douglasfir_large_a', 19.6 },
     { ECA .. 'trees/trees_douglasfir/tree_douglasfir_large_b', 21.4 }, { ECA .. 'trees/trees_douglasfir/tree_douglasfir_large_d', 21.7 },
     { IT .. 'trees/trees_italy/scots_pine', 18.9 },
+    -- (the stock survey 2026-11-15) young firs for 5-8 m, and Italy's slender forest pine
+    { ECA .. 'trees/trees_douglasfir/tree_douglasfir_small_d', 5.01 },
+    { ECA .. 'trees/trees_douglasfir/tree_douglasfir_small_c', 7.78 }, { IT .. 'trees/trees_italy/scots_pine_filler', 14.21 },
   },
   shrub = {
     { ECA .. 'trees/ECA_coast_bush/generibush', 1.8 }, { ECA .. 'trees/trees_aspen/tree_aspen_bush_a', 2.2 },
     { ECA .. 'trees/trees_douglasfir/tree_douglasfir_bush_a', 2.7 }, { ECA .. 'trees/trees_oak/tree_oak_bush_c', 3.1 },
     { ECA .. 'trees/trees_beech/tree_beech_bush_b', 3.3 }, { ECA .. 'trees/trees_beech/tree_beech_bush_c', 3.9 },
     { ECA .. 'trees/trees_oak/tree_oak_bush_b', 4.1 },
+    -- (the stock survey 2026-11-15) low bushes for 1-2.5 m (only generibush before)
+    { ECA .. 'trees/trees_beech/tree_beech_bush_a', 1.2 }, { ECA .. 'trees/trees_oak/tree_oak_bush_a', 1.26 },
+    { ECA .. 'trees/trees_douglasfir/tree_douglasfir_bush_b', 2.09 }, { ECA .. 'trees/ECA_coast_bush/generibush_small', 2.09 },
+    { ECA .. 'trees/trees_aspen/tree_aspen_bush_b', 2.47 },
   },
   rock = {
     { ECA .. 'rocks/eca_rock_small', 0.6 }, { ECA .. 'rocks/rock_01_a_large_a', 0.7 }, { ECA .. 'rocks/eca_rock_small_2', 0.9 },
@@ -242,11 +256,15 @@ M.CATALOG = {
     { WCA .. 'trees/trees_palm/fanpalm_full', 13.8 }, { JRI .. 'trees/trees_palm/palm_medium', 18.0 },
     { WCA .. 'trees/trees_palm/fanpalm_tall', 18.5 }, { WCA .. 'trees/trees_palm/fanpalm_slim', 20.8 },
     { JRI .. 'trees/trees_palm/palm_tall', 25.3 },
+    -- (the stock survey 2026-11-15) leaning coconut palms, and Italy's date palms (Phoenix-like, loaded with its folder)
+    { JRI .. 'trees/trees_palm/palm_bend_sml', 10.24 }, { IT .. 'trees/trees_italy/italy_palm_1_short', 11.74 },
+    { IT .. 'trees/trees_italy/italy_palm_1', 13.77 }, { JRI .. 'trees/trees_palm/palm_bend', 18.8 },
   },
   juniper = {
     { UT .. 'trees/Juniper/Juniper_bush_large_01', 2.6 }, { UT .. 'trees/Juniper/Juniper_tree_04', 4.5 },
     { UT .. 'trees/Juniper/Juniper_tree_03', 5.2 }, { UT .. 'trees/Juniper/Juniper_tree_01', 6.3 },
     { UT .. 'trees/Juniper/Juniper_tree_02', 7.4 }, { UT .. 'trees/Juniper/Juniper_ancient_01', 7.5 },
+    { UT .. 'trees/Juniper/Juniper_bush_large_dry_01', 2.65 },     -- (the stock survey 2026-11-15)
   },
   -- (2026-10-16: not JV's deserttree_bush_tiny: it ships no imposter, and the one the engine baked into its temp
   -- folder while the leaf material did not resolve is solid no-texture orange, kept for good: orange bushes at range)
@@ -256,6 +274,8 @@ M.CATALOG = {
     { JV .. 'groundcover/s_gc_jv_dry_bush_03', 1.0 }, { UT .. 'trees/Juniper/Juniper_bush_small_01', 1.2 },
     { UT .. 'trees/Juniper/Juniper_bush_small_dry_01', 2.0 }, { UT .. 'trees/Juniper/Juniper_bush_medium_01', 2.4 },
     { JV .. 'trees/deserttrees/deserttree_bush_medium', 2.9 },
+    -- (the stock survey 2026-11-15; not Juniper_bush_large_dry_02: its Juniper_bark material is in no level)
+    { UT .. 'trees/Juniper/Juniper_bush_small_02', 2.15 }, { JV .. 'trees/deserttrees/deserttree_bush_medium_dead', 2.5 },
   },
   desert_rock = {
     { UT .. 'rocks/rock_01_a_small_a', 0.3 }, { UT .. 'rocks/utah_rock_flat_a', 0.5 }, { UT .. 'rocks/utah_boulder_5', 0.6 },
@@ -345,14 +365,23 @@ M.CATALOG = {
     { IT .. 'trees/trees_italy/cork_oak_medium', 11.2 }, { IT .. 'trees/trees_italy/maritime_pine_2', 11.9 },
     { IT .. 'trees/trees_italy/maritime_pine', 12.0 }, { IT .. 'trees/trees_italy/holm_oak', 12.9 },
     { IT .. 'trees/trees_italy/cork_oak_large_1', 13.9 },
+    -- (the stock survey 2026-11-15) young maritime pine and holm oak, the scraggly broadleaves, the slender forest
+    -- holm and cork oaks (Italy's forest fillers: single trees ~0.5 of their height across)
+    { IT .. 'trees/trees_italy/maritime_pine_bush', 5.05 }, { IT .. 'trees/trees_italy/holm_oak_bush', 5.86 },
+    { IT .. 'trees/trees_italy/scraggly_2', 8.52 }, { IT .. 'trees/trees_italy/scraggly', 9.55 },
+    { IT .. 'trees/trees_italy/cork_oak_filler_small', 10.1 }, { IT .. 'trees/trees_italy/scraggly_tree_filler_1', 10.7 },
+    { IT .. 'trees/trees_italy/holm_oak_filler_2', 11.17 }, { IT .. 'trees/trees_italy/holm_oak_filler_1', 16.32 },
   },
   -- Far clumps (server vegetation.CLUMP_OF, GitHub #1074): one item for a forest square's 4-8 trees, shown only
   -- beyond CLUMP_M (FAR_ONLY) where those trees are not (rows with a negative scale). The stock maps' own forest
   -- fillers, in the materials of the single trees they stand for (no new materials); heights from their bounds
   -- (the asset survey, 2026-11-10).
-  conifer_clump = { { ECA .. 'trees/trees_douglasfir/tree_douglasfir_group_low', 22.6 } },
+  conifer_clump = { { ECA .. 'trees/trees_douglasfir/tree_douglasfir_group_low', 22.6 },
+    { ECA .. 'trees/trees_douglasfir/tree_douglasfir_group', 23.09 } },     -- (the stock survey 2026-11-15)
   deciduous_clump = {
     { ECA .. 'trees/trees_oak/tree_oak_forest_group', 18.4 }, { ECA .. 'trees/trees_beech/tree_beech_forest_group', 23.8 },
+    -- (the stock survey 2026-11-15) a low wide group of beeches and a tall narrow one of birches
+    { ECA .. 'trees/trees_beech/tree_beech_small_forest_group', 14.17 }, { ECA .. 'trees/trees_aspen/tree_aspen_forest_group', 20.1 },
   },
   oak_west_clump = { { WCA .. 'trees/trees_oak/oak_a_distant', 9.8 } },
   -- vineyards' rows (server vegetation.vineyard_items): Italy's grape_vine_group, three rows 2.45 m apart and 15.9 m
@@ -362,20 +391,26 @@ M.CATALOG = {
   -- silage on meadows; by hemisphere, shown in their season only (SEASON)
   straw_n = { { '/assets/meshes/props/race_event/equipment/s_haybaleround_large_01', 1.22 } },
   silage_n = { { '/assets/meshes/props/race_event/equipment/s_haybaleround_alt_01', 1.18 } },
-  mediterranean_clump = { { IT .. 'trees/trees_italy/holm_oak_filler_center', 13.9 } },
+  mediterranean_clump = { { IT .. 'trees/trees_italy/holm_oak_filler_center', 13.9 },
+    { IT .. 'trees/trees_italy/cork_oak_filler_center', 14.14 } },     -- (the stock survey 2026-11-15)
   eucalyptus_clump = { { WCA .. 'trees/trees_eucalyptus/eucalyptus_group', 20.3 } },
   -- regional trees (server vegetation.regional's zones; heights from the shapes' bounds, the asset survey 2026-11-10):
   -- Australia's eucalypts (West Coast USA's), temperate Europe's riverside poplars and North America's hot-desert
   -- creosote bushes (Automation Test Track's)
   eucalyptus = { { WCA .. 'trees/trees_eucalyptus/eucalyptus_double', 14.7 },
     { WCA .. 'trees/trees_eucalyptus/eucalyptus_tall', 22.5 } },
-  poplar = { { ATT .. 'trees/trees_poplar/s_poplar_large_01', 16.5 }, { ATT .. 'trees/trees_poplar/s_poplar_large_02', 23.1 } },
+  poplar = { { ATT .. 'trees/trees_poplar/s_poplar_large_01', 16.5 }, { ATT .. 'trees/trees_poplar/s_poplar_large_02', 23.1 },
+    { ATT .. 'trees/trees_poplar/s_poplar_large_03', 23.03 } },     -- (the stock survey 2026-11-15)
   creosote = { { ATT .. 'trees/trees_shrub/shrub_c', 1.15 }, { ATT .. 'trees/trees_shrub/shrub_b', 1.63 },
     { ATT .. 'trees/trees_shrub/shrub_a', 2.43 } },
   tropical = {
     { JRI .. 'trees/bush_tropical_1/tro_bush_huge', 5.5 }, { JRI .. 'trees/bush_tropical_2/tro_bush_2_small', 6.1 },
     { JRI .. 'trees/trees_tropical_2/tro_tree_2_filler', 20.2 }, { JRI .. 'trees/trees_tropical_1/tro_tree_1_huge', 20.6 },
     { JRI .. 'trees/trees_tropical_1/tro_tree_1_filler', 33.0 },
+    -- (the stock survey 2026-11-15; not tro_tree_2_large: it ships no imposter) the gaps between 6 and 20 m
+    { JRI .. 'trees/bush_tropical_2/tro_bush_2_tiny', 5.19 }, { JRI .. 'trees/trees_tropical_2/tro_tree_2_tiny', 6.13 },
+    { JRI .. 'trees/trees_tropical_2/tro_tree_2_medium', 18.53 }, { JRI .. 'trees/trees_tropical_1/tro_tree_1_filler_02', 29.62 },
+    { JRI .. 'trees/trees_tropical_2/tro_tree_2_tall', 32.28 },
   },
 }
 -- Italy's authored three-metre crash barrier and two end treatments. The back-facing variants reuse
