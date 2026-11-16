@@ -10379,20 +10379,20 @@ class Connection:
                 cs = predict_route_chain(self.route_xy(aid), px, py, *self.vel, base.cx, base.cy, rule,
                                          PREFETCH_CHAIN + 1, route_at)
                 self.predicted_by = "route" if cs else "straight"
+                if not cs:          # no route: along the road the player drives on, further ahead (ROAD_CHAIN blocks)
+                    cs = predict_route_chain(self.road_xy(aid, px, py), px, py, *self.vel, base.cx, base.cy, rule,
+                                             ROAD_CHAIN + 1, route_at, ROAD_AHEAD_S, ROAD_AHEAD_MAX_M)
+                    if cs:
+                        self.predicted_by = "road"
                 if not cs and tree is not None and len(tree.mpp) >= 2:
-                    # (no GPS route: along the time-to-reach tree's most probable path, the road's curves and the
-                    # junctions' likeliest ways, not a straight line: block_unwanted drops what it no longer leads to)
+                    # (no road under the player: along the time-to-reach tree's most probable path, the road's curves and
+                    # the junctions' likeliest ways, not a straight line: block_unwanted drops what it no longer leads to)
                     route_at = {}
                     cs = predict_route_chain(tree.mpp_xy(), px, py, *self.vel, base.cx, base.cy, rule,
                                              PREFETCH_CHAIN + 1, route_at)
                     self.tree_led = bool(cs)
                     if cs:
                         self.predicted_by = "tree"
-                if not cs:          # no route, no tree: along the road the player drives on, further ahead
-                    cs = predict_route_chain(self.road_xy(aid, px, py), px, py, *self.vel, base.cx, base.cy, rule,
-                                             ROAD_CHAIN + 1, route_at, ROAD_AHEAD_S, ROAD_AHEAD_MAX_M)
-                    if cs:
-                        self.predicted_by = "road"
                 if cs:              # (on the GPS route: along it; its first is the next block, as predicted_block)
                     at.update(route_at)
                     if self.predicted_block is not None:
