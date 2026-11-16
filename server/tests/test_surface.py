@@ -379,6 +379,26 @@ class SurfaceTest(unittest.TestCase):
         self.assertLess(time.monotonic() - t0, 2.0)
         gate.set()
 
+    def test_wait_cover_reads_the_land_cover_a_plan_needs(self):
+        md = FakeMapData(lambda key: 40)
+        s = sf.Surface(md)
+        self.addCleanup(s.close)
+        la, lo = np.array([LAT]), np.array([LON])
+        self.assertTrue(s.wait_cover(la, lo, timeout_s=5.0), "the fetch in flight waited for")
+        self.assertTrue(s.md.has(mapcells.cell_of(LAT, LON), "landcover"))
+        self.assertTrue(s.wait_cover(la, lo, timeout_s=0.0), "cached: nothing to wait for")
+
+    def test_wait_cover_does_not_wait_for_a_fetch_that_failed(self):
+        md = FakeMapData(lambda key: 40)
+        s = sf.Surface(md)
+        self.addCleanup(s.close)
+        s.pool.shutdown(wait=False)          # (offline: the queued fetch never runs)
+        import time
+        t0 = time.monotonic()
+        self.assertFalse(s.wait_cover(np.array([LAT]), np.array([LON]), timeout_s=0.5))
+        self.assertLess(time.monotonic() - t0, 1.5)
+        self.assertFalse(s.md.has(mapcells.cell_of(LAT, LON), "landcover"))
+
     def test_prefetch_queues_the_cells_around_once_per_move(self):
         md = FakeMapData(lambda key: 30)
         s = sf.Surface(md)
@@ -406,6 +426,9 @@ class ServerSurfaceTest(unittest.TestCase):
 
         def roads(self, lat, lon):
             return [], True
+
+        def forest(self, lat, lon):
+            return np.zeros(np.shape(np.asarray(lat)), np.float32)
 
     class Dem:
         def sample(self, lat, lon, zoom, progress=None):
@@ -1056,5 +1079,115 @@ class GolfSurfaceTest(unittest.TestCase):
         self.assertTrue(np.array_equal(rgb[40, 40], [40, 40, 40]))
 
 
+class ForestTest(unittest.TestCase):
+    """The terrain's own roughness is the forests' (the user, 2026-11-07: "keep the unevenness only in the forests,
+    the fields and the rest flat"): the mask reads the cached land cover on a world-locked lattice."""
+
+    def forest_of(self, cls):
+        md = FakeMapData(lambda key: cls)
+        s = sf.Surface(md)
+        self.addCleanup(s.close)
+        md.store(mapcells.cell_of(LAT, LON))
+        return s
+
+    def test_tree_cover_is_forest_and_a_field_is_not(self):
+        la = np.full((5, 5), LAT)
+        lo = np.full((5, 5), LON)
+        trees = self.forest_of(10).forest(la, lo)
+        self.assertTrue((trees > 0.99).all(), "tree cover: rough ground")
+        field = self.forest_of(40).forest(la, lo)
+        self.assertTrue((field == 0.0).all(), "cropland: flat")
+        town = self.forest_of(50).forest(la, lo)
+        self.assertTrue((town == 0.0).all(), "built-up: flat")
+
+    def test_uncached_is_open_ground(self):
+        s = self.forest_of(10)
+        s.md.cached.clear()             # (its prefetch is queued, never waited on)
+        self.assertTrue((s.forest(np.array([LAT, LAT]), np.array([LON, LON])) == 0.0).all())
+
+    def test_the_lattice_is_world_locked_with_soft_edges(self):
+        class S(sf.Surface):
+            def __init__(self):
+                pass
+
+            def _forest_at(self, lat, lon):
+                return ((np.asarray(lon) > LON) & (np.asarray(lat) > LAT)).astype(np.float32)
+        s = S()
+        la, lo = np.meshgrid(np.linspace(LAT - 0.002, LAT + 0.002, 31),
+                             np.linspace(LON - 0.002, LON + 0.002, 31), indexing="ij")
+        a = s.forest(la, lo)
+        b = s.forest(la[::3, ::5], lo[::3, ::5])
+        self.assertTrue(np.allclose(a[::3, ::5], b), "the same place, the same value, whatever the grid")
+        self.assertGreater(float(a[-1, -1]), 0.95)
+        self.assertLess(float(a[0, 0]), 0.05)
+        self.assertTrue(((a > 0.05) & (a < 0.95)).any(), "a wood's edge fades in, not a step")
+
+    def test_the_edges_agree_between_neighbours(self):
+        class S(sf.Surface):
+            def __init__(self):
+                pass
+
+            def _forest_at(self, lat, lon):
+                return ((np.asarray(lon) > LON) & (np.asarray(lat) > LAT)).astype(np.float32)
+        s = S()
+        la = np.linspace(LAT - 0.001, LAT + 0.001, 21)
+        lo = np.linspace(LON - 0.001, LON + 0.001, 21)
+        whole = s.forest(*np.meshgrid(la, lo, indexing="ij"))
+        part = s.forest(*np.meshgrid(la[:11], lo[:11], indexing="ij"))
+        self.assertTrue(np.allclose(whole[:11, :11], part), "a block and its neighbour's half: the same edge")
+
+
 if __name__ == "__main__":
     unittest.main()
+
+
+class EmbankCoverTest(unittest.TestCase):
+    """Where a road rides its own low embankment (grading.embank_lift; the user, 2026-11-08): open country, from the
+    cached land cover alone; built-up near the road, water, snow and ice keep it at grade, and a dirt road is cut
+    into a wood."""
+
+    def surface_of(self, cls):
+        md = FakeMapData(lambda key: cls)
+        s = sf.Surface(md)
+        self.addCleanup(s.close)
+        md.store(mapcells.cell_of(LAT, LON))
+        return s
+
+    def test_the_open_country_is_open_ground(self):
+        la, lo = np.full(3, LAT), np.full(3, LON)
+        for cls in (sf.OPEN_CLASSES + (sf.FOREST,)):
+            self.assertEqual(float(self.surface_of(cls).open_ground(la, lo)[0]), 1.0, "class %d: open" % cls)
+
+    def test_a_village_water_and_snow_are_not(self):
+        la, lo = np.full(3, LAT), np.full(3, LON)
+        for cls in (50, 70, 80, 90, 95, 100):
+            self.assertEqual(float(self.surface_of(cls).open_ground(la, lo)[0]), 0.0, "class %d: at grade" % cls)
+
+    def test_a_wood_is_open_ground_but_not_for_a_dirt_road(self):
+        la, lo = np.full(3, LAT), np.full(3, LON)
+        s = self.surface_of(sf.FOREST)
+        self.assertEqual(float(s.open_ground(la, lo)[0]), 1.0, "a paved road is embanked through a wood")
+        self.assertEqual(float(s.tree(la, lo)[0]), 1.0, "a dirt one is cut into it")
+        self.assertEqual(float(self.surface_of(40).tree(la, lo)[0]), 0.0)
+
+    def test_built_up_within_the_margin_keeps_the_road_at_grade(self):
+        class S(sf.Surface):
+            def __init__(self):
+                pass
+
+            def classes(self, lat, lon):
+                lat, lon = np.asarray(lat, np.float64), np.asarray(lon, np.float64)
+                # built-up past LON + 10 m, open ground west of it
+                return np.where(lon > LON + 0.00009, 50, 40).astype(np.uint8), True
+        s = S()
+        la = np.array([LAT])
+        near = s.open_ground(la, np.array([LON + 0.00002]))     # (built-up ~7 m east)
+        far = s.open_ground(la, np.array([LON - 0.0005]))       # (~55 m west)
+        self.assertEqual(float(near[0]), 0.0, "a road by the houses")
+        self.assertEqual(float(far[0]), 1.0)
+
+    def test_uncached_is_open_ground(self):
+        s = self.surface_of(40)
+        s.md.cached.clear()                                     # (its prefetch is queued, never waited on)
+        self.assertEqual(float(s.open_ground(np.array([LAT]), np.array([LON]))[0]), 0.0,
+                         "no cover read yet: at grade (and the plan is not kept)")

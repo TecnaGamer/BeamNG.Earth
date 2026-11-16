@@ -104,8 +104,12 @@ class RegionalGeoTest(unittest.TestCase):
         path.write_bytes(pickle.dumps(inputs))
         bw._geo_inputs[self.tile.key] = (bw._file_sig(str(path)), inputs)
         self.addCleanup(bw._geo_inputs.pop, self.tile.key, None)
-        bw._geo_skin(1, lat, lon, 15, self.gx, self.gy, str(out), '/test',
-                     True, 0., 1 / 32, lambda: self.fail('already retained'))
+        import grading
+        # (the terrain's own roughness off the roads is on in this build: two walks 20 m apart then sit on ground
+        # that differs by up to a metre, and this test is about the walks' own heights, not the ground under them)
+        with patch.object(grading, "TERRAIN_BUMPS_ON", False):
+            bw._geo_skin(1, lat, lon, 15, self.gx, self.gy, str(out), '/test',
+                         True, 0., 1 / 32, lambda: self.fail('already retained'))
         names = bw.geo_names(self.tile.key, 1)
         shape = cdae.read(out / names["walk"])
         mesh = cdae.mesh_arrays(shape["meshes"][0])
