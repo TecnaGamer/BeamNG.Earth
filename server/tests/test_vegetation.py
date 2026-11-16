@@ -564,6 +564,19 @@ class ClumpTest(unittest.TestCase):
         out = veg.clumps(it, lc, LAT, roads=veg.ClumpRoads([segs], chm))
         self.assertEqual(len(out), 6)
         self.assertTrue(np.all(out.scale > 0), "shown far as single trees")
+        # (Codex review of cff64d91) a clump moved off the track must stay in its own cell (the next cell's tiles never
+        # show it) and off water and buildings (the tiles drop a clump in water): else its firs stay single
+        it, lc = firs([7.0, 8.5, 8.0, -8.0, -8.5, -7.0])
+        n = int(cell) + 200
+        wet = np.zeros((n, n), bool)
+        wet[: int(round(chm.y0 - mid)), :] = True          # water from the track's line up (north)
+        out = veg.clumps(it, lc, LAT, roads=veg.ClumpRoads([segs], chm, blocked=wet))
+        self.assertEqual(len(out), 7, "the north side's clump would stand in the water: left out")
+        self.assertEqual(list(out.scale[:6] < 0), [False, False, False, True, True, True])
+        own = (sx - 100.0, sy - 100.0, sx + 100.0, mid + k * 9.0)     # the cell ends 9 m north of the track
+        out = veg.clumps(it, lc, LAT, roads=veg.ClumpRoads([segs], chm, own=own))
+        self.assertEqual(len(out), 7, "the north side's clump would leave the cell: left out")
+        self.assertEqual(list(out.scale[:6] < 0), [False, False, False, True, True, True])
 
     def test_street_trees_and_palms_stay_single(self):
         x0, y0 = -8524000.0, 4764000.0

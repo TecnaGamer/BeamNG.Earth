@@ -563,7 +563,9 @@ class Vegetation:
         if vines.any():             # (the vines' own canopy read as bushes all over a vineyard: its rows stand there)
             keep = _keep_off_mask(tree, vines, chm) | (tree.height >= VINE_TREE_M)
             tree, lcls = tree.take(keep), lcls[keep]
-        tree = clumps(tree, lcls, (lat0 + lat1) / 2, roads=ClumpRoads(clump_roads, chm))
+        # (a clump moved off a road stays in this cell and off its buildings, water and decks: ClumpRoads)
+        tree = clumps(tree, lcls, (lat0 + lat1) / 2,
+                      roads=ClumpRoads(clump_roads, chm, blocked, (ex0, ey0, ex1, ey1)))
         scatter = self._scatter(cd, lc, blocked | paved | orchard | vines, chm, hs)
         edge = self._edge(cd, lc, blocked | orchard | vines, road, chm, hs)
         bounds = (lon0, lat0, lon1, lat1)
@@ -782,15 +784,21 @@ def clump_cell(lat):
 
 
 class ClumpRoads:
-    """The carriageways the far clumps keep off (clumps): _road_segs' (segs, hws) on the CHM grid chm, any number."""
+    """The carriageways the far clumps keep off (clumps): _road_segs' (segs, hws) on the CHM grid chm, any number; a
+    clump moved off one stays in the cell's box own (x0, y0, x1, y1, Web Mercator m: x0 <= x < x1, y0 < y <= y1; its
+    tiles show it) and off blocked (bool, on the CHM grid: buildings, water, decks), else its trees stay single (Codex
+    review of cff64d91: a move across the cell's edge or into water hid its trees far away)."""
 
-    def __init__(self, parts, chm):
+    def __init__(self, parts, chm, blocked=None, own=None):
+        self.blocked = np.zeros((0, 0), bool) if blocked is None else np.asarray(blocked, bool)
+        self.own = tuple(float(v) for v in own) if own is not None else (-np.inf, -np.inf, np.inf, np.inf)
         parts = [p for p in parts if p is not None and len(p[1])]
         self.segs = np.ascontiguousarray(np.concatenate([p[0] for p in parts]), np.float64) if parts \
             else np.zeros((0, 4), np.float64)
         self.hws = np.ascontiguousarray(np.concatenate([p[1] for p in parts]), np.float64) if parts \
             else np.zeros(0, np.float64)
-        self.grid = (float(chm.x0), float(chm.y0), float(chm.dx), float(chm.dy))
+        self.grid = (float(chm.x0), float(chm.y0), float(chm.dx), float(chm.dy)) if chm is not None \
+            else (0.0, 0.0, 1.0, 1.0)
 
 
 CLUMP_STATS = {"clear": 0, "split": 0, "moved": 0, "single": 0}     # (counts for the probes: clumps' road outcomes)
@@ -805,20 +813,21 @@ def clumps(tree, lcls, lat, roads=None):
     to CLUMP_SHIFT_M, else its trees stay single (veg_clumps)."""
     if len(tree) < CLUMP_MIN:
         return tree
-    fast.require(320, "veg_clumps")
+    fast.require(321, "veg_clumps")
     x, y = _to3857(tree.lon, tree.lat)
     table = [255] * len(GROUPS)
     for g, c in CLUMP_OF.items():
         table[g] = c
-    segs, hws, grid = (roads.segs, roads.hws, roads.grid) if roads is not None else \
-        (np.zeros((0, 4), np.float64), np.zeros(0, np.float64), (0.0, 0.0, 1.0, 1.0))
+    if roads is None:
+        roads = ClumpRoads([], None)
     merc_per_m = 1.0 / max(dmath.cos(math.radians(min(abs(float(lat)), 85.0))), 0.05)
     member, cx, cy, ch, cr, cg, cu, st = fast._ef.veg_clumps(
         np.ascontiguousarray(x, np.float64), np.ascontiguousarray(y, np.float64),
         np.ascontiguousarray(tree.group, np.uint8), np.ascontiguousarray(tree.kind, np.uint8),
         np.ascontiguousarray(tree.height, np.float32), np.ascontiguousarray(tree.rank, np.float32),
         np.ascontiguousarray(lcls, np.uint8), table, KIND_TREE, WC["built"], clump_cell(lat), CLUMP_MIN,
-        segs, hws, grid, merc_per_m, (CLUMP_R_K, CLUMP_R_C), CLUMP_SHIFT_M)
+        roads.segs, roads.hws, roads.grid, merc_per_m, (CLUMP_R_K, CLUMP_R_C), CLUMP_SHIFT_M, roads.own,
+        roads.blocked)
     with _clump_stats_lock:
         for k_, v_ in zip(("clear", "split", "moved", "single"), st):
             CLUMP_STATS[k_] += int(v_)

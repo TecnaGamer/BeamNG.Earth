@@ -6487,6 +6487,8 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 320: veg_clumps(..., segs, hws, grid, merc_per_m, rad, max_shift_m) -> (..., stats): the far clumps kept off the
     // carriageways (split at a road, moved off it, else their trees single). (313-319 left for the parallel ground
     // work's bumps)
-    m.add("VERSION", 320)?;
+    // 321: veg_clumps(..., own, blocked): a clump moved off a road stays in its map cell and off buildings / water
+    // (Codex review of 320)
+    m.add("VERSION", 321)?;
     Ok(())
 }

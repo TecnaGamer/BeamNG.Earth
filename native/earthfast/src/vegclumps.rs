@@ -167,13 +167,41 @@ fn clump_of_ids(ids: &[usize], x: &[f64], y: &[f64], group: &[u8], height: &[f32
 }
 
 /// What clumps_core keeps the clumps off: the roads (Web Mercator m: ax, ay, bx, by, reach), the clump's ground radius
-/// rad_k * height + rad_c, Web Mercator m per ground m, the most a clump may move off a road (ground m).
+/// rad_k * height + rad_c, Web Mercator m per ground m, the most a clump may move off a road (ground m). A moved clump
+/// must also stay in its own map cell (own: x0, y0, x1, y1 with x0 <= x < x1, y0 < y <= y1, the cell's trees' rule: a
+/// neighbour's tiles never show it) and off the blocked pixels (buildings, water, decks: blocked (rows * cols, row
+/// major) on the grid (x0, y0, dx, dy); off the grid counts as blocked; the tiles drop a clump in water), else its
+/// trees stay single (Codex review of cff64d91).
 pub(crate) struct ClumpRoadArgs {
     pub segs: Vec<[f64; 5]>,
     pub merc_per_m: f64,
     pub rad_k: f64,
     pub rad_c: f64,
     pub max_shift_m: f64,
+    pub own: Option<[f64; 4]>,
+    pub blocked: Option<(Vec<u8>, usize, usize, [f64; 4])>,
+}
+
+impl ClumpRoadArgs {
+    /// May a clump moved off a road stand at (x, y)?
+    fn free(&self, x: f64, y: f64) -> bool {
+        if let Some(o) = self.own {
+            if !(x >= o[0] && x < o[2] && y > o[1] && y <= o[3]) {
+                return false;
+            }
+        }
+        if let Some((m, rows, cols, g)) = &self.blocked {
+            let c = ((x - g[0]) / g[2]).floor();
+            let r = ((g[1] - y) / g[3]).floor();
+            if !(c >= 0.0 && r >= 0.0 && c < *cols as f64 && r < *rows as f64) {
+                return false;
+            }
+            if m[r as usize * cols + c as usize] != 0 {
+                return false;
+            }
+        }
+        true
+    }
 }
 
 /// veg_clumps' work: (member, cx, cy, height, rank, group, u, stats [clumps clear of the roads as they were, squares
@@ -246,7 +274,8 @@ pub(crate) fn clumps_core(x: &[f64], y: &[f64], group: &[u8], kind: &[u8], heigh
                 continue;
             }
             let (sx, sy, sh, srmin, sbest) = clump_of_ids(&sub, x, y, group, height, rank, clump_of);
-            match ix.place(sx, sy, rad(sh), max_shift) {
+            match ix.place(sx, sy, rad(sh), max_shift)
+                .filter(|&(px, py)| (px == sx && py == sy) || roads.free(px, py)) {
                 Some((px, py)) => {
                     for &t in &sub {
                         member[t] = true;
@@ -282,7 +311,9 @@ pub(crate) fn clumps_core(x: &[f64], y: &[f64], group: &[u8], kind: &[u8], heigh
 /// to max_shift_m where it still reaches in; one that cannot be cleared is left out and its trees stay single (a forest
 /// road through a square stood under a 6-10 m clump seen from afar; stock East Coast USA keeps its group shapes 5-10 m
 /// off the road's edge). Returns (member (n,), cx, cy, height, rank, group, u (a hashed [0, 1) per clump), stats
-/// (clear, split, moved, left out)). Deterministic: squares in key order, the left side's clump first.
+/// (clear, split, moved, left out)). own (x0, y0, x1, y1; Web Mercator m): the map cell's box (x0 <= x < x1,
+/// y0 < y <= y1); blocked (rows, cols) on grid: buildings, water, decks. A moved clump stays in its cell and off them,
+/// else its trees stay single. Deterministic: squares in key order, the left side's clump first.
 #[pyfunction]
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub fn veg_clumps<'py>(py: Python<'py>, x: PyReadonlyArray1<'py, f64>, y: PyReadonlyArray1<'py, f64>,
@@ -290,7 +321,8 @@ pub fn veg_clumps<'py>(py: Python<'py>, x: PyReadonlyArray1<'py, f64>, y: PyRead
                        height: PyReadonlyArray1<'py, f32>, rank: PyReadonlyArray1<'py, f32>,
                        lcls: PyReadonlyArray1<'py, u8>, clump_of: Vec<u8>, tree_kind: u8, skip_class: u8, cell: f64,
                        min_members: usize, segs: PyReadonlyArray2<'py, f64>, hws: PyReadonlyArray1<'py, f64>,
-                       grid: (f64, f64, f64, f64), merc_per_m: f64, rad: (f64, f64), max_shift_m: f64)
+                       grid: (f64, f64, f64, f64), merc_per_m: f64, rad: (f64, f64), max_shift_m: f64,
+                       own: (f64, f64, f64, f64), blocked: PyReadonlyArray2<'py, bool>)
                        -> PyResult<(Bound<'py, PyArray1<bool>>, Bound<'py, PyArray1<f64>>, Bound<'py, PyArray1<f64>>,
                                     Bound<'py, PyArray1<f32>>, Bound<'py, PyArray1<f32>>, Bound<'py, PyArray1<u8>>,
                                     Bound<'py, PyArray1<f64>>, (u64, u64, u64, u64))> {
@@ -316,7 +348,13 @@ pub fn veg_clumps<'py>(py: Python<'py>, x: PyReadonlyArray1<'py, f64>, y: PyRead
                   hw[q] * gdx])
         .filter(|g| g.iter().all(|v| v.is_finite()))
         .collect();
-    let roads = ClumpRoadArgs { segs: seg_m, merc_per_m, rad_k: rad.0, rad_c: rad.1, max_shift_m };
+    let bl = blocked.as_array();
+    let (rows, cols) = bl.dim();
+    let mask: Vec<u8> = bl.iter().map(|&b| b as u8).collect();     // (ndarray's logical order: row major)
+    let roads = ClumpRoadArgs { segs: seg_m, merc_per_m, rad_k: rad.0, rad_c: rad.1, max_shift_m,
+                                own: Some([own.0, own.1, own.2, own.3]),
+                                blocked: if rows * cols > 0 { Some((mask, rows, cols, [gx0, gy0, gdx, gdy])) }
+                                         else { None } };   // ((0, 0): none)
     let x = x.to_vec();
     let y = y.to_vec();
     let group = group.to_vec();
@@ -506,9 +544,50 @@ mod tests {
 
     fn run(pts: &[(f64, f64)], h: f32, segs: Vec<[f64; 5]>, shift: f64)
            -> (Vec<bool>, Vec<f64>, Vec<f64>, Vec<f32>, Vec<f32>, Vec<u8>, Vec<f64>, [u64; 4]) {
+        run_in(pts, h, segs, shift, None, None)
+    }
+
+    #[allow(clippy::type_complexity)]
+    fn run_in(pts: &[(f64, f64)], h: f32, segs: Vec<[f64; 5]>, shift: f64, own: Option<[f64; 4]>,
+              blocked: Option<(Vec<u8>, usize, usize, [f64; 4])>)
+              -> (Vec<bool>, Vec<f64>, Vec<f64>, Vec<f32>, Vec<f32>, Vec<u8>, Vec<f64>, [u64; 4]) {
         let (x, y, g, k, hh, r, l) = trees(pts, h);
-        let roads = ClumpRoadArgs { segs, merc_per_m: 1.0, rad_k: 0.3, rad_c: 2.0, max_shift_m: shift };
+        let roads = ClumpRoadArgs { segs, merc_per_m: 1.0, rad_k: 0.3, rad_c: 2.0, max_shift_m: shift, own, blocked };
         clumps_core(&x, &y, &g, &k, &hh, &r, &l, &table(), 0, 9, 18.0, 3, &roads)
+    }
+
+    // the forest road through a square (a_clump_over_a_forest_road_splits_into_one_each_side's): its upper side's
+    // clump moves up to ~SY + 17.6, its lower side's down to ~SY + 0.4
+    const SPLIT_PTS: [(f64, f64); 6] = [(SX + 2.0, SY + 2.0), (SX + 9.0, SY + 1.0), (SX + 15.0, SY + 3.0),
+                                        (SX + 3.0, SY + 16.0), (SX + 10.0, SY + 17.0), (SX + 16.0, SY + 15.0)];
+
+    #[test]
+    fn a_clump_moved_out_of_its_cell_leaves_its_trees_single() {
+        // the cell's box ends at SY + 17: the next cell's tiles would never show the moved clump (Codex review)
+        let road = vec![[SX - 50.0, SY + 9.0, SX + 70.0, SY + 9.0, 3.0]];
+        let own = Some([SX - 100.0, SY - 100.0, SX + 100.0, SY + 17.0]);
+        let (m, x, y, _h, _r, _g, _u, st) = run_in(&SPLIT_PTS, 12.0, road, 4.0, own, None);
+        assert_eq!(x.len(), 1, "the lower side's only");
+        assert!(y[0] < SY + 9.0);
+        assert_eq!(st, [0, 1, 1, 1]);
+        assert_eq!(m, vec![true, true, true, false, false, false], "the upper side's trees single");
+    }
+
+    #[test]
+    fn a_clump_moved_onto_water_or_a_building_leaves_its_trees_single() {
+        // a blocked strip (water, a building) over y in (SY + 17, SY + 18], on a 1 m grid from (SX - 10, SY + 30)
+        let (rows, cols) = (40usize, 40usize);
+        let mut mask = vec![0u8; rows * cols];
+        for c in 0..cols {
+            mask[12 * cols + c] = 1;
+        }
+        let road = vec![[SX - 50.0, SY + 9.0, SX + 70.0, SY + 9.0, 3.0]];
+        let bl = Some((mask, rows, cols, [SX - 10.0, SY + 30.0, 1.0, 1.0]));
+        let (m, x, y, _h, _r, _g, _u, st) = run_in(&SPLIT_PTS, 12.0, road, 4.0, None, bl);
+        assert_eq!(x.len(), 1);
+        assert!(y[0] < SY + 9.0);
+        assert_eq!(st, [0, 1, 1, 1]);
+        assert_eq!(m, vec![true, true, true, false, false, false]);
     }
 
     // a square's origin on the world grid (cell 18 m): its trees inside one square
