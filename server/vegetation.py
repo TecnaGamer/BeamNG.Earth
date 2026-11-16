@@ -19,10 +19,12 @@ cell's map data and VERSION; its random choices (species, yaw, size, thinning ra
   inside the orchard left out so the rows are not filled in at random.
 - Farmland: shrubs in a line down the gap between the dirt crop rows.
 """
+import functools
 import logging
 import math
 import os
 import threading
+import time
 from collections import OrderedDict
 from dataclasses import dataclass
 
@@ -39,15 +41,22 @@ import staging
 
 log = logging.getLogger("earthd.vegetation")
 
-VERSION = 27          # (the cached cells hold their groups: 14 for the regional rules of GitHub #110; 16: the roads'
+VERSION = 28          # (the cached cells hold their groups: 14 for the regional rules of GitHub #110; 16: the roads'
                       # drawn widths and sidewalks kept clear; 17: BC's lidar canopy heights, mapdata's canopy layer 2;
                       # 18: the rounded junction corners kept clear, roadcorners.py; 19: one tree per flat crown,
                       # thin_tops; 20: none on or beside a bridge deck, _mask_decks; 21: orchard rows, canopy trees
                       # inside an orchard left out; 22: shrub lines between the crop rows; 23: both of those, the
                       # orchard rows and the deck mask; 24: no rocks or bushes on a beach's sand, beaches.py; 25: the
                       # Mediterranean basin's own trees, G_MEDITERRANEAN; 26: the far clumps, CLUMP_OF, and the
-                      # vineyards' rows, vineyard_items; the round bales after the harvest, bale_items; 27: no bushes in a bus station's yard, PR #1023)
+                      # vineyards' rows, vineyard_items; the round bales after the harvest, bale_items; 27: no bushes in a bus station's yard, PR #1023;
+                      # 28: lengths in ground metres at every latitude, _merc_k; ties among flat crowns by a hash)
 TREE_MIN_M = 3.0
+# The canopy raster, the scatter grids and the crown radii are in Web Mercator units (EPSG:3857: a metre there is
+# cos(lat) metres on the ground) and were tuned by eye at mid latitudes. Past them the same pixel counts covered less
+# ground: at 69 N tops were searched and thinned over radii 2.1x too small and the bushes' grids were 4.6x as dense
+# (a player's Lapland forest, 2026-11-14: "way too many trees", a grid pattern far away). _merc_k scales those lengths
+# to what they were at MERC_REF_LAT, so the tuned look holds everywhere (and the tropics are no longer a little sparse).
+MERC_REF_LAT = 40.0
 CROWN_SPACING = 0.5          # tops kept this many crown radii apart (0.8 looked sparse: the user, 2026-10-13)
 BUSH_MIN_M = 1.0
 KIND_TREE, KIND_BUSH, KIND_ROCK = 0, 1, 2
@@ -152,6 +161,12 @@ def _hash01(a, b, salt):
     x *= np.uint64(0xBF58476D1CE4E5B9)
     x ^= x >> np.uint64(29)
     return (x >> np.uint64(11)).astype(np.float64) / float(1 << 53)
+
+
+def _merc_k(lat):
+    """Web Mercator length per tuned length at latitude lat (1 at MERC_REF_LAT, 2.14 at 69 N, 0.77 at the equator)."""
+    c = dmath.cos(dmath.radians(min(abs(float(lat)), 85.0)))
+    return dmath.cos(dmath.radians(MERC_REF_LAT)) / max(c, 0.05)
 
 
 def _shift_max(a, r):
@@ -431,10 +446,11 @@ class Vegetation:
         p = np.pad(h, 1, mode="edge")
         hs = sum(p[a:a + n_r, b:b + n_c] for a in range(3) for b in range(3)) / 9.0
         tops = np.zeros(h.shape, bool)
+        k = _merc_k((lat0 + lat1) / 2)     # (the radii below in pixels at MERC_REF_LAT: scaled to the ground's)
         for lo_m, hi_m, r in ((BUSH_MIN_M, TREE_MIN_M, 1), (TREE_MIN_M, 8.0, 2), (8.0, 15.0, 3), (15.0, 1e9, 4)):
             band = (hs >= lo_m) & (hs < hi_m)
             if band.any():
-                tops |= band & (hs >= _shift_max(hs, r))
+                tops |= band & (hs >= _shift_max(hs, max(1, int(round(r * k)))))
         tops &= ~blocked
         tops[~rj, :] = False
         tops[:, ~ci] = False
@@ -459,7 +475,13 @@ class Vegetation:
             tops |= moved
         blocked |= road
         jj, ii = np.nonzero(tops)
-        jj, ii = _thin(jj, ii, hs[jj, ii], chm.dx)     # one top per crown (flat crowns had several)
+        # one top per crown (flat crowns had several); a crown's radius in pixels as at MERC_REF_LAT (chm.dx / k), and
+        # equal heights (a canopy raster upsampled into flat plateaus) ranked by a hash of the global pixel, not by
+        # position: the position order left the tops of a plateau on a regular lattice, rows seen from afar
+        gx0 = np.floor((mx[ii] + 20037508.342789244) / chm.dx).astype(np.int64)
+        gy0 = np.floor((20037508.342789244 - my[jj]) / chm.dy).astype(np.int64)
+        tie = (_hash01(gx0, gy0, 29) * 1e-3).astype(np.float32)
+        jj, ii = _thin(jj, ii, hs[jj, ii] + tie, chm.dx, k)
         th = hs[jj, ii]
         tlon, tlat = _to4326(mx[ii], my[jj])
         is_tree = th >= TREE_MIN_M
@@ -544,7 +566,7 @@ class Vegetation:
             return _empty()
         ex0, ey0 = _to3857(lon0, lat0)
         ex1, ey1 = _to3857(lon1, lat1)
-        s = EDGE_CELL_M
+        s = EDGE_CELL_M * _merc_k((lat0 + lat1) / 2)     # (in ground metres as at MERC_REF_LAT)
         GI, GJ = np.meshgrid(np.arange(math.floor(ex0 / s), math.ceil(ex1 / s)),
                              np.arange(math.floor(ey0 / s), math.ceil(ey1 / s)))
         GI, GJ = GI.ravel(), GJ.ravel()
@@ -596,7 +618,7 @@ class Vegetation:
         lon0, lat0, lon1, lat1 = cd.bounds
         ex0, ey0 = _to3857(lon0, lat0)
         ex1, ey1 = _to3857(lon1, lat1)
-        s = SCATTER_CELL_M
+        s = SCATTER_CELL_M * _merc_k((lat0 + lat1) / 2)  # (in ground metres as at MERC_REF_LAT)
         gi = np.arange(math.floor(ex0 / s), math.ceil(ex1 / s))
         gj = np.arange(math.floor(ey0 / s), math.ceil(ey1 / s))
         GI, GJ = np.meshgrid(gi, gj)
@@ -660,14 +682,17 @@ class Vegetation:
                      (0.8 + 0.4 * _hash01(GI[sel], GJ[sel], 17)).astype(np.float32)) if n else _empty()
 
 
-def _thin(jj, ii, h, px):
+def _thin(jj, ii, h, px, k=1.0):
     """Non-maximum suppression: the tallest tops first, each removing the others within its crown
     radius (0.12 h + 1 m, times CROWN_SPACING). Deterministic (ties broken by position). earthfast thin_tops
-    (2026-10-23: the same tops as the Python loop it replaced)."""
+    (2026-10-23: the same tops as the Python loop it replaced). k (_merc_k): the pixels judged at the tuned scale, their
+    indices divided by k (thin_tops' radius and its 1.5 px floor are in pixels: at 69 N a pixel is 0.47 of one at
+    MERC_REF_LAT on the ground, and the floor let ~3x the trees stand)."""
     if len(jj) == 0:
         return jj, ii
     fast.require(64, "thin_tops")
-    keep = fast._ef.thin_tops(np.ascontiguousarray(jj, np.int64), np.ascontiguousarray(ii, np.int64),
+    sj, si = (jj, ii) if k == 1.0 else (np.rint(jj / k), np.rint(ii / k))
+    keep = fast._ef.thin_tops(np.ascontiguousarray(sj, np.int64), np.ascontiguousarray(si, np.int64),
                               np.ascontiguousarray(h, np.float32), float(CROWN_SPACING), float(px))
     return jj[keep], ii[keep]
 
@@ -1350,6 +1375,8 @@ TILE_ROWS_MAX = 6000        # items a tile sends at most, the lowest ranks: the 
 SEND_M = 1280.0             # tiles this close to the player (Euclidean, to the square's nearest point) are sent
 DROP_M = 1536.0             # ... and dropped beyond this
 BUILD_PER_POSE = 8
+TRACK_MOVE_M = 8.0          # a geotile tracker passes again once the car, camera or a focus moved this much ...
+TRACK_MAX_S = 2.0           # ... or this long after its last pass, or something it sent, built or redoes changed
 
 
 class JsonRows(str):
@@ -1653,12 +1680,14 @@ class Tracker:
         # sent files' digests are kept for that, earthd's stale mode turns it on)
         self.redo, self.sent_h, self.digests = set(), {}, False
         self.epoch = 0              # (drop_all: a build started before it lands unwanted)
+        self._gate = None           # (_on_pose_geo: the last pass's inputs, TRACK_MOVE_M)
 
     def redo_all(self):
         """Every geotile sent is asked for again (earthd Connection.stale_run's swap: they may be an older version's);
         one whose file comes back the same is not sent."""
         if self.geo:
             self.redo = set(self.sent)
+            self._gate = None
 
     def close(self):
         if self.pool is not None:
@@ -1669,6 +1698,7 @@ class Tracker:
         wanted again (those building land as new ones)."""
         self.sent = set()
         self.aid = None
+        self._gate = None
 
     def progress(self):
         """(done, wanted) of the tiles round the car at the last pose (done: sent to the mod); (0, 0) before one."""
@@ -1718,7 +1748,11 @@ class Tracker:
         # (Sinaia 2026-10-15: bare ground for minutes)
         for tx, ty in want[:max(0, self.per_pose - len(self.building))]:
             self.building.add((tx, ty))
-            fut = self.futs[(tx, ty)] = loop.run_in_executor(self.pool, build, aid, tx, ty)
+            # (the tile's file read in the worker, not on the event loop: staging.build_inline; the build's own
+            # arguments as before)
+            job = functools.partial(staging.build_inline, build, getattr(getattr(conn, "s", None), "out_dir", None),
+                                    False)
+            fut = self.futs[(tx, ty)] = loop.run_in_executor(self.pool, job, aid, tx, ty)
             fut.add_done_callback(lambda f, k=(tx, ty), a=aid: self._built(conn, a, k, f))
         for k in [k for k in list(self.sent) if all(self._dist(k, *p) > self.drop_m for p in spots)
                   and all(self._dist(k, f[0], f[1]) > f[2] + roadsmod.TILE for f in foci)]:
@@ -1740,6 +1774,19 @@ class Tracker:
             self.pool = ThreadPoolExecutor(self.per_pose, thread_name_prefix=f"{self.kind}-geo")
         z = self.z or geotiles.Z
         spots = [(x, y)] + ([tuple(view)] if view else [])
+        # (a pose that changes nothing this tracker goes by: no pass; the car, the camera and the other cars' foci
+        # within TRACK_MOVE_M of the last pass's, nothing sent, built or asked again since, at most TRACK_MAX_S ago)
+        now = time.monotonic()
+
+        def gate_key():
+            return (aid, id(frame), view is None, len(foci), id(tree), self.send_m, self.drop_m, self.inner,
+                    self.group_z, z, len(self.sent), len(self.building), len(self.redo), self.epoch, self.per_pose)
+        cont = [float(v) for p in spots for v in p[:2]] + [float(v) for f in foci for v in f[:3]]
+        last = getattr(self, "_gate", None)
+        if last is not None and last[0] == gate_key() and now - last[2] < TRACK_MAX_S and len(cont) == len(last[1]) \
+                and all(abs(a - b) <= TRACK_MOVE_M for a, b in zip(cont, last[1])) \
+                and not (last[3] and len(self.building) < self.per_pose):
+            return
 
         def near(px, py, r):
             """Keys within r of (px, py), nearest first (each tile by its own quad)."""
@@ -1774,9 +1821,14 @@ class Tracker:
                 order.append(k)
         self.redo &= self.sent
         want = [k for k in order if (k not in self.sent or k in self.redo) and k not in self.building]
-        for gx, gy in want[:max(0, self.per_pose - len(self.building))]:
+        n_go = max(0, self.per_pose - len(self.building))
+        more = len(want) > n_go             # (left for a later pass: the gate lets that one through)
+        for gx, gy in want[:n_go]:
             self.building.add((gx, gy))
-            fut = self.futs[(gx, gy)] = loop.run_in_executor(self.pool, build, gx, gy)
+            # (the tile's file read in the worker, not on the event loop: staging.build_inline)
+            job = functools.partial(staging.build_inline, build, getattr(getattr(conn, "s", None), "out_dir", None),
+                                    self.digests or (gx, gy) in self.redo)
+            fut = self.futs[(gx, gy)] = loop.run_in_executor(self.pool, job, gx, gy)
             fut.add_done_callback(lambda f, k=(gx, gy), e=self.epoch: self._built_geo(conn, k, f, e))
         for k in self._far_sent(spots, foci):
             self.sent.discard(k)
@@ -1785,6 +1837,7 @@ class Tracker:
             gone = getattr(getattr(conn, "s", None), "geo_dropped", None)
             if callable(gone):              # (its session files: deleted once no game has it, GitHub #599)
                 gone(self.kind, k, geotiles.key(*k, z))
+        self._gate = (gate_key(), cont, now, more)
 
     def _far_sent(self, spots, foci):
         """The sent tiles farther than drop_m from every spot and than its reach + 256 m from every focus (_geo_dist
@@ -1853,6 +1906,9 @@ class Tracker:
         except Exception as e:
             log.debug("%s geotile %s: %s: %s", self.kind, key, type(e).__name__, e)
             return
+        pre = res if isinstance(res, staging.Inlined) else None
+        if pre is not None:
+            res = pre.res
         if res is None:
             return
         path, n, frame, pivot = res[:4]
@@ -1860,13 +1916,14 @@ class Tracker:
         again = key in self.redo
         self.redo.discard(key)
         if self.digests or again:
-            h = None
-            try:
-                import hashlib
-                with open(os.path.join(conn.s.out_dir, os.path.basename(path)), "rb") as f:
-                    h = hashlib.sha1(f.read()).digest()
-            except (OSError, AttributeError):
-                pass
+            h = pre.digest if pre is not None else None
+            if h is None:
+                try:
+                    import hashlib
+                    with open(os.path.join(conn.s.out_dir, os.path.basename(path)), "rb") as f:
+                        h = hashlib.sha1(f.read()).digest()
+                except (OSError, AttributeError):
+                    pass
             if again and h is not None and self.sent_h.get(key) == h and key in self.sent:
                 return                  # (the same tile as the one the mod has)
             self.sent_h[key] = h
@@ -1879,7 +1936,7 @@ class Tracker:
              "path": path, "n": n, "frame": [float(frame[0]), float(frame[1])], "pivot": float(pivot)}
         s = getattr(conn, "s", None)
         out_dir = getattr(s, "out_dir", None)
-        data = staging.inline_json(out_dir, path) if out_dir else None
+        data = pre.data if pre is not None else staging.inline_json(out_dir, path) if out_dir else None
         if data is not None:
             m["data"] = data
         pool = getattr(s, "pool_shapes", None)
@@ -1924,13 +1981,16 @@ class Tracker:
         except Exception as e:
             log.debug("%s tile %s: %s: %s", self.kind, key, type(e).__name__, e)
             return
+        pre = res if isinstance(res, staging.Inlined) else None
+        if pre is not None:
+            res = pre.res
         if res is None:                 # its cells not at hand yet: asked again on a later pose
             return
         path, n = res
         self.sent.add(key)
         m = {"type": f"{self.kind}_tile", "anchorId": aid, "key": f"{key[0]}_{key[1]}", "path": path, "n": n}
         out_dir = getattr(getattr(conn, "s", None), "out_dir", None)
-        data = staging.inline_json(out_dir, path) if out_dir else None
+        data = pre.data if pre is not None else staging.inline_json(out_dir, path) if out_dir else None
         if data is not None:                # (the game need not open the file: staging.inline_json)
             m["data"] = data
         pool = getattr(getattr(conn, "s", None), "pool_shapes", None)

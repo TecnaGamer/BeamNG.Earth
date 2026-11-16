@@ -69,6 +69,7 @@ mod roadz;
 mod fartex;
 mod farglobal;
 mod farpvs;
+mod farsel;
 mod dirtsteps;
 mod gridinterp;
 mod dejunction;
@@ -126,7 +127,9 @@ mod bldclear;
 mod bnwt;
 mod aerialcov;
 mod decisions;
+mod lidarz;
 mod paintlist;
+mod nearcross;
 
 use std::cell::Cell;
 use numpy::{PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2, PyReadonlyArray3, IntoPyArray};
@@ -705,38 +708,38 @@ fn first_use<'py>(py: Python<'py>, tris: PyReadonlyArray2<'py, i64>, nverts: usi
 
 /// railways._blocked: which points (xy (k, 2), bed heights z (k,)) lie on a crossing road at grade: per road (its
 /// centre line pts (n, 3) [x, y, z] one road after another, starts (C + 1,)) the point's nearest segment (the first of
-/// equals) nearer than reach (C,) with the road's height at that segment's start within dz of z. numpy's float64
-/// arithmetic of the Python it replaces.
+/// equals) nearer than reach (C,) with the road's height at that segment's start within dz of z (nearcross.rs: the
+/// segments near each point from a grid). numpy's float64 arithmetic of the Python it replaced.
 #[pyfunction]
 fn near_crossers(py: Python<'_>, xy: PyReadonlyArray2<f64>, z: PyReadonlyArray1<f64>, pts: PyReadonlyArray2<f64>,
-                 starts: PyReadonlyArray1<i64>, reach: PyReadonlyArray1<f64>, dz: f64) -> Vec<bool> {
+                 starts: PyReadonlyArray1<i64>, reach: PyReadonlyArray1<f64>, dz: f64) -> PyResult<Vec<bool>> {
     let (p, z, d, st, r) = (xy.as_array(), z.as_array(), pts.as_array(), starts.as_array(), reach.as_array());
-    let k = p.nrows();
+    let (k, n) = (p.nrows(), d.nrows());
     let nc = st.len().saturating_sub(1);
-    py.detach(|| {
-        let mut out = vec![false; k];
-        for c in 0..nc {
-            let (j0, j1) = (st[c] as usize, st[c + 1] as usize);
-            if j1 < j0 + 2 { continue; }
-            let segs: Vec<[f64; 5]> = (j0..j1 - 1).map(|j| {
-                let (ax, ay) = (d[[j, 0]], d[[j, 1]]);
-                let (bx, by) = (d[[j + 1, 0]] - ax, d[[j + 1, 1]] - ay);
-                [ax, ay, bx, by, (bx * bx + by * by).max(1e-12)]
-            }).collect();
-            for i in 0..k {
-                if out[i] { continue; }
-                let (px, py_) = (p[[i, 0]], p[[i, 1]]);
-                let (mut best, mut bj) = (f64::INFINITY, usize::MAX);
-                for (n, g) in segs.iter().enumerate() {
-                    let t = (((px - g[0]) * g[2] + (py_ - g[1]) * g[3]) / g[4]).clamp(0.0, 1.0);
-                    let dd = (px - (g[0] + t * g[2])).dhypot(py_ - (g[1] + t * g[3]));
-                    if dd < best || bj == usize::MAX { best = dd; bj = n; }
-                }
-                if bj != usize::MAX && best < r[c] && (z[i] - d[[j0 + bj, 2]]).abs() < dz { out[i] = true; }
-            }
-        }
-        out
-    })
+    if p.ncols() < 2 || d.ncols() < 3 || z.len() != k || r.len() < nc
+        || st.iter().any(|&v| v < 0 || v as usize > n) || (1..st.len()).any(|i| st[i] < st[i - 1]) {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "near_crossers: xy (k, 2), z (k,), pts (n, 3), starts rising within pts, reach (C,)"));
+    }
+    let pv: Vec<[f64; 2]> = (0..k).map(|i| [p[[i, 0]], p[[i, 1]]]).collect();
+    let zv: Vec<f64> = z.iter().copied().collect();
+    let dv: Vec<[f64; 3]> = (0..n).map(|j| [d[[j, 0]], d[[j, 1]], d[[j, 2]]]).collect();
+    let sv: Vec<usize> = st.iter().map(|&v| v as usize).collect();
+    let rv: Vec<f64> = r.iter().copied().collect();
+    Ok(py.detach(|| nearcross::near_crossers(&pv, &zv, &dv, &sv, &rv, dz)))
+}
+
+/// grading.rail_yield_pieces: mask (k,) and the points whose arc (s (k,)) is within reach of a masked point's
+/// (nearcross::grow_along).
+#[pyfunction]
+fn grow_along(s: PyReadonlyArray1<f64>, mask: PyReadonlyArray1<bool>, reach: f64) -> PyResult<Vec<bool>> {
+    let (s, m) = (s.as_array(), mask.as_array());
+    if s.len() != m.len() {
+        return Err(pyo3::exceptions::PyValueError::new_err("grow_along: s (k,), mask (k,)"));
+    }
+    let sv: Vec<f64> = s.iter().copied().collect();
+    let mv: Vec<bool> = m.iter().copied().collect();
+    Ok(nearcross::grow_along(&sv, &mv, reach))
 }
 
 /// roads.clip_polyline: the pieces of a polyline (pts (k, D >= 2), xy first) inside the box, Liang-Barsky per segment,
@@ -6260,6 +6263,7 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 217: planset::plan_merge trims the trimmed plans' banks / widens with their lines (tbank / twiden; a bank left
     // as long as the untrimmed line read the next plans' values in the pack); plan_trim_mouths gone (unused)
     m.add_function(wrap_pyfunction!(farpvs::far_pvs, m)?)?;
+    m.add_function(wrap_pyfunction!(farpvs::far_pvs_tex_px, m)?)?;
     // 218: farpvs::far_pvs (the far field's potentially visible set: far tiles hidden behind terrain keep a small
     // texture, earthd FAR_PVS; that branch's 212)
     // 219: l0roads / groundphoto (that branch's 171)
@@ -6445,12 +6449,31 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 301 (299 is the detail packs' branch, 300 a shelved branch's): buildcolours::obc_decode (a tile of the OSM
     // building and part colours, tools/build_osm_building_colours.py, server/osmcolours.py: the colours Overture drops)
     buildcolours::register(m)?;
-    // 302 (on 301; written as 223 on 222): street-name signs on the traffic signals' mast arms (streetsigns.rs;
+    // 302: grow_along (grading.rail_yield_pieces' cut along the line, nearcross.rs; near_crossers' segments from a grid)
+    m.add_function(wrap_pyfunction!(grow_along, m)?)?;
+    // 303 (302 is the grow_along branch's): the lidar-derived road heights per map cell as a signed CDN product
+    // (lidarz: lz_encode_cell / lz_decode_cell, lz_inputs_digest, lz_probe_points, lz_dem_digest; server/lidarz.py,
+    // tools/build_lidarz.py) and the decision archives' file functions taking a signed product's domain (dec_*:
+    // domain = "dec" | "lidarz", its own magics inside the signature)
+    lidarz::register(m)?;
+    // 304: the far field's per-pose kernels (the event loop's 2-7 s stalls of a BeamMP drive, 2026-11-15):
+    // farsel::far_select_nodes (farfield.select, the anchor's quadtree, ported), farsel::far_horizon_radius
+    // (HorizonGrid.radius), farpvs::far_pvs_tex_px (farpvs.Set.tex_px / hidden for many tiles, without the GIL);
+    // far_global_select's view errors looked up in the caller's dict (not copied whole at every pose)
+    farsel::register(m)?;
+    // (304 also) far_select_nodes and far_global_select return the selection's slack (the move under which it stays the
+    // same: earthd's selection gate skips only selections that could not change)
+    // 305: pmt_find_many / pmt_ranges (Mapterhorn's regional elevation archives read by range reads instead of its
+    // tile endpoint: server/mtarchive.py)
+    m.add_function(wrap_pyfunction!(pmtiles::pmt_find_many, m)?)?;
+    m.add_function(wrap_pyfunction!(pmtiles::pmt_ranges, m)?)?;
+    m.add("VERSION", 305)?;
+    // 306 (on 305; written as 223 on 222): street-name signs on the traffic signals' mast arms (streetsigns.rs;
     // server/streetsigns.py)
     m.add_function(wrap_pyfunction!(streetsigns::street_sign_signals, m)?)?;
     m.add_function(wrap_pyfunction!(streetsigns::street_sign_cross, m)?)?;
     m.add_function(wrap_pyfunction!(streetsigns::street_sign_abbrev, m)?)?;
     m.add_function(wrap_pyfunction!(streetsigns::street_sign_mesh, m)?)?;
-    m.add("VERSION", 302)?;
+    m.add("VERSION", 306)?;
     Ok(())
 }

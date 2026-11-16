@@ -115,4 +115,13 @@ T.check(hl and hl:find('held still while the world loaded for 4.2 s', 1, true) a
   and hl:find('58.6 fps', 1, true) and hl:find('2 frames over 50 ms', 1, true), 'held line: seconds, why, the frames while not held')
 T.check(fmt.heldLine({ fps = 60, frames = 10 }) == nil and fmt.heldLine(nil) == nil, 'not held: no line')
 
+-- the frame pacer's sleep is named (it shows in the engine's LuaPre: #1170 read it as Lua work of the moving car)
+local pl = fmt.pacerLine({ { pacerWait = 0.05 }, { pacerWait = 2.7 }, { pacerWait = 2.9 }, {} })
+T.check(pl and pl:find('up to 2.9 ms', 1, true) and pl:find('LuaPre', 1, true), 'pacer line: ' .. tostring(pl))
+T.check(fmt.pacerLine({ { pacerWait = 0 }, { pacerWait = 0.1 } }) == nil and fmt.pacerLine(nil) == nil, 'no pacing: no line')
+local pmd2 = fmt.buildIssue({ kind = 'perf', note = 'fps drops when moving', time = 't',
+  bench = { frames = 900, fps = 400, p50 = 1.3, p95 = 4.0, p99 = 4.1, maxMs = 5, over50 = 0, seconds = 30, hitches = {} },
+  track = { { pacerWait = 2.8 } } }, {})
+T.check(pmd2:find('- frame pacing waited up to 2.8 ms', 1, true), 'pacer line in the performance report')
+
 T.done('test_issuefmt')

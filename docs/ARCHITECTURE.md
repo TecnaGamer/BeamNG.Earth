@@ -869,6 +869,20 @@ three days of testing: dem 741 MB / 7.5k files, imagery 1.4 GB / 35k, deshadow 7
   anchor commit (a new frame) forgets the remembered ground height (`edgeguard.newFrame`).
   Offline: 30 m/s rests 15 m inside, braking <= 6.6 m/s^2; 134 m/s on a 512 block stays on it (cut to
   the profile when it engages); an aircraft at 500 m flies off untouched.
+- **Deck guard** (`deckguard.lua`, server `deckspans.py`; 2026-11-15, a BeamMP player fell through small bridges in
+  Baltimore whose road tiles came late): a deck is part of its road tile, and the block, which comes first, already
+  has the gap under it. For a mod that says `hello.deckGuard`, the server lists the map's tagged bridges of drivable
+  roads within 1.2 km of the car (`deck_spans`: chains of pieces joined at shared ends, which ends stand on the
+  ground), from the cells already on disk, in its own thread, again every 150 m / 4 s and sent only when changed.
+  Every 0.25 s (nothing at all while no span is within reach) the mod follows the car's path ahead (an arc at its turn
+  rate) for its braking distance + 2 s and finds the first place on a span the car drives onto (along it, entered at an
+  end at the deck's level, or already on it) whose road tile has not arrived (`roads.deckGrid`: every tile the span crosses, walked over the tile grid; no tile there; a tile in
+  makes its deck solid in time itself) where the block's ground lies 2 m or more under the deck's level (the
+  abutments' heights, `getTerrainHeight`): then a light drag, the speed capped to stop 12 m short (4 m/s^2, at most
+  7 m/s^2 taken off), a hold (simhold: our car only in BeamMP) if it cannot stop, a set-back if it went over anyway;
+  `pose.deckWait` names the tile (built first, `GeoTracker.deck_first`) and `guardHold` gives the server every core
+  while the car waits. No collider, no ray; plans, blocks and tiles unchanged. Tests: `test_deckguard.lua`,
+  `test_deckspans.py`.
 - **Session adoption** (server `Server._scan_sessions / claim_sessions / release_session /
   sweep_sessions`, mod `farfield.heldSessions`): see server/README.md "Run" and the protocol table
   (`hello.sessions`, `pose.sessions`; the server's own messages are unchanged, so a default session is

@@ -150,8 +150,9 @@ def far_geometry(*args):        # (the job's name is what the pool routes by)
 class FakeHelper:
     """A helper on a local port answering every job with a fixed Built (or refusing another code)."""
 
-    def __init__(self, code=None, hold=None):
+    def __init__(self, code=None, hold=None, switches=None):
         self.hold = hold            # (an Event: no answer before it is set, so its slots stay busy)
+        self.switches = switches or peerwork.switches()     # (its build switches: revisit.switches_key)
         self.srv = socket.socket()
         self.srv.bind(("127.0.0.1", 0))
         self.srv.listen()
@@ -171,7 +172,8 @@ class FakeHelper:
     def conn(self, s):
         try:
             h, _ = peerwork.recv_msg(s)
-            peerwork.send_msg(s, {"ok": h.get("code") == self.code, "workers": 2, "code": self.code})
+            peerwork.send_msg(s, {"ok": h.get("code") == self.code, "workers": 2, "code": self.code,
+                                  "switches": self.switches})
             while True:
                 h, _ = peerwork.recv_msg(s)
                 self.jobs.append(h["tile"])
@@ -205,6 +207,41 @@ class PoolTest(unittest.TestCase):
         self.assertEqual(len(remote), 2, "the helper's two slots")
         self.assertEqual(local.calls, 2, "the rest built here")
         self.assertEqual(len(helper.jobs), 2)
+
+    def test_switches_default_helper_matches_default_earthd(self):
+        # (Codex review of f8d79aa2: earthd.main writes BNE_BRIDGE_PROFILE=curve, a standalone `peerwork.py serve`
+        # leaves it unset: the same tiles, so the same switches; a real switch still differs)
+        import revisit
+
+        def key(env):
+            with mock.patch.dict(os.environ, env):
+                for k in [k for k in os.environ if k.startswith("BNE_")]:
+                    if k not in env:
+                        del os.environ[k]
+                with revisit._lock:
+                    revisit._switches.clear()
+                peerwork._switches.clear()
+                try:
+                    return peerwork.switches()
+                finally:
+                    with revisit._lock:
+                        revisit._switches.clear()
+                    peerwork._switches.clear()
+        helper, earthd = key({}), key({"BNE_BRIDGE_PROFILE": "curve"})
+        self.assertEqual(helper, earthd, "a default helper and a default earthd")
+        self.assertNotEqual(key({"BNE_BRIDGE_PROFILE": "legacy"}), earthd, "another bridge profile")
+        self.assertNotEqual(key({"BNE_BRIDGE_PROFILE": "curve", "BNE_RAIL_COLLIDE": "on"}), earthd,
+                            "an experimental switch")
+        self.assertNotEqual(key({"BNE_HKDTM": "off"}), earthd, "Hong Kong's terrain: other far tiles there")
+        self.assertEqual(key({"BNE_STALE_REVISIT": "on"}), earthd, "not a switch (revisit.NOT_SWITCHES)")
+
+    def test_other_switches_not_used(self):
+        # (a helper with other build switches, e.g. without the player's Experimental ones: other tiles, same code)
+        helper, local = FakeHelper(switches="0123456789abcdef"), LocalPool()
+        pool = peerwork.SharedFarPool(local, [("127.0.0.1", helper.port)], {}, None)
+        threading.Event().wait(0.3)
+        self.assertEqual((pool.free.qsize(), pool.remote_slots()), (0, 0))
+        self.assertEqual(pool.submit(far_geometry, *self.args(0)).result(5), ("local", "1_0_0"))
 
     def test_other_code_not_used(self):
         helper, local = FakeHelper(code="another-0"), LocalPool()

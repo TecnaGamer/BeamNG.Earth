@@ -480,4 +480,21 @@ do
   end
   T.check(ran > 30 and ran < 300 * 2.0 / 9 + 10, 'urgent units paced by the bucket (' .. ran .. ' in 300 frames at b 2)')
 end
+-- why units waited: each refused try counted by kind and reason (snapshot.no), nothing when a unit runs
+do
+  local g = governor.new({ clock = clock })
+  g:beginFrame(true); g.tokens = 0
+  T.check(not g:try('roadWalk', 'near'), 'no tokens: refused')
+  g.tokens = 100
+  T.check(g:try('roadWalk', 'near'), 'tokens: runs')
+  g.blocked = true
+  T.check(not g:try('roadWalk', 'near'), 'blocked: refused')
+  g.blocked = false
+  local no = g:snapshot().no
+  T.check(no['roadWalk:tokens'] == 1 and no['roadWalk:heavy'] == 1, 'refusals counted by reason')
+  local n = 0
+  for _ in pairs(no) do n = n + 1 end
+  T.check(n == 2, 'a unit that ran counts nothing')
+  T.check(g:snapshot().est ~= nil, 'the per-kind estimates in the snapshot')
+end
 T.done('test_governor')
