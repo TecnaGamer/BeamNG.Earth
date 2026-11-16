@@ -478,6 +478,7 @@ UNDER_LIDAR_DECK_M = roadsmod.AT_GRADE_M
 # (plan_roads) and its underpass depth (_under_ground) alike: never raised (a real dip under a bridge stays). Not on the
 # coarse models (their smeared embankments are wider than that: UNDER_RUN_*).
 UNDER_DECK_ON = os.environ.get("BNE_UNDER_DECK_GROUND", "on") != "off"
+VSOLVE_DECK_PAD_M = 50.0     # m past the shadow solve's reach its caps' decks are read from (vsolve: a deck over its margin)
 UNDER_DECK_SIDE_M = 15.0    # m past a deck's side the road's ground is read (Assaku's hump: 6-13 m past its decks)
 # ... and an overpass's abutment lift reads the road under the same way (bridge_lifts' half, _end_lift_raw): an
 # elevation holding the deck over a cut read the motorway at the deck's height and asked 6.7-8.5 m (GitHub #1077, #1086)
@@ -2918,15 +2919,17 @@ class _Planner:
         ceilings = [guard_limits(sp, p)[0] for sp, p in zip(pspecs, ground)]
         ranks = [road_rank(sp) for sp in pspecs]
         dips = [None] * n
+        seen = z_before if z_under is None else z_under
+        rule_z = [np.asarray(z, np.float64) for z in seen[:n]]     # (the heights the underpass rule leaves)
         if UNDER_ON:            # (the dips as the passes' rule makes them, but over the whole solve: its margin too. The
             # passes make them to UNDER_NEAR_M past the box only; taken from them, a cell's own dip spread over the
             # edge into a neighbour that had none there: 6.6 m seam steps in Tokyo)
-            seen = z_before if z_under is None else z_under
             under = [(fid, Plan(p.xy, np.array(z, np.float64), p.half, p.abut, p.cut, p.road_half))
                      for (fid, p), z in zip(plans[:n], seen[:n])]
             for (_f, p), (_g, q) in zip(plans[:n], under):
                 q.rid, q.max_wall, q.bank = p.rid, p.max_wall, getattr(p, "bank", None)
             self._lower_underpasses(key, under, near=CLIP_MARGIN_M + VERTEX_STEP)
+            rule_z = [np.asarray(q.z, np.float64) for _f, q in under]
             for i, ((_f, q), z) in enumerate(zip(under, seen[:n])):
                 low = np.asarray(q.z, np.float64) <= np.asarray(z, np.float64) - vsolvemod.DIP_M
                 if low.any():
@@ -2944,7 +2947,8 @@ class _Planner:
                         if dips[i] is not None and np.isfinite(dips[i][e]):
                             h = min(h, float(dips[i][e]))
                         pins.append((i, e, h))
-        zs, info = vsolvemod.solve(ground, pspecs, z_before[:n], ceilings, ranks, pins, dips)
+        caps = self._vsolve_caps(key, ground, rule_z)
+        zs, info = vsolvemod.solve(ground, pspecs, z_before[:n], ceilings, ranks, pins, dips, caps=caps)
         if zs is None:          # (no feasible solve: the passes' heights, as the RFC's fallback; counted in info)
             zs = [np.array(p.z, np.float64) for p in ground]
         quad = self._clip_quad(key) if own is not None else None
@@ -2958,9 +2962,11 @@ class _Planner:
                 kept.extend((fid, r) for r in trim_plan(q, own if quad is None else quad))
         info["pins"] = len(pins)
         info["dips"] = int(sum(int(np.isfinite(d).sum()) for d in dips if d is not None))
+        info["caps"] = int(sum(int(np.isfinite(c).sum()) for c in caps if c is not None))
         (log.warning if info["fallback"] else log.info)(
-            "vsolve: %s: %d roads, %d unknowns, %d joins, %d pins, %d dip rows: %s%s in %.2f s", key, n, info["n"],
-            info["joins"], info["pins"], info["dips"], info.get("status"),
+            "vsolve: %s: %d roads, %d unknowns, %d joins, %d pins, %d dip rows, %d caps (%d broken, the most by "
+            "%.2f m): %s%s in %.2f s", key, n, info["n"], info["joins"], info["pins"], info["dips"], info["caps"],
+            info["clear_broken"], info["clear_excess_m"], info.get("status"),
             " (the passes' heights kept: %s)" % ", ".join(info.get("culprit") or ["?"]) if info["fallback"] else
             " (%d grade rows broken, the most by %.2f m%s)" % (
                 info["grade_broken"], info["grade_excess_m"],
@@ -2970,6 +2976,52 @@ class _Planner:
             if info["grade_broken"] else "", info["elapsed_s"])
         with self.lock:
             self.__dict__.setdefault("_vsolve", {})[str(key)] = (kept, info)
+
+    def _vsolve_caps(self, key, ground, heights, near=CLIP_MARGIN_M + VERTEX_STEP):
+        """Per plan of ground (or None) the most its heights may be in the shadow solve (NaN elsewhere): heights, where it
+        runs under a road or rail deck (within the deck's half width of its line, past APPROACH_MIN_CROSS_M of its ends:
+        nearer, a junction at grade or the road's own deck)."""
+        f64 = np.float64
+        box = self._clip_box(key, near)
+        if box is None or not ground:
+            return [None] * len(ground)
+        lo, hi = np.array(box[:2]) - VSOLVE_DECK_PAD_M, np.array(box[2:]) + VSOLVE_DECK_PAD_M
+        cla, clo, _ = self.frame.enu_to_geodetic(np.array([lo[0], hi[0]] * 2), np.array([lo[1]] * 2 + [hi[1]] * 2), 0.0)
+        cla, clo = np.asarray(cla, f64), np.asarray(clo, f64)
+        keys = sorted(set(mapcells.cells_for_bbox(float(cla.min()), float(clo.min()), float(cla.max()),
+                                                  float(clo.max()))) | {key}, key=str)
+        decks, seen = [], set()
+        for k in keys:
+            c = self._cell_enu(k)
+            lines = [(ln, float(h)) for ln, h in zip(c["bridges"], c.get("bridge_half") or ()) if h > 0]
+            lines += [(ln, float(railwaysmod.DECK_HALF_M)) for ln in c.get("rail_bridges", ())]
+            for ln, h in lines:
+                ln = np.asarray(ln, f64)[:, :2]
+                sig = (len(ln), *np.round(ln[[0, -1]], 2).ravel().tolist())     # (a deck in several cells: once)
+                if len(ln) >= 2 and sig not in seen:
+                    seen.add(sig)
+                    decks.append((ln, h))
+        if not decks:
+            return [None] * len(ground)
+        dbox = np.array([(*(ln.min(0) - h), *(ln.max(0) + h)) for ln, h in decks], f64)
+        out = []
+        for p, hz in zip(ground, heights):
+            xy = np.asarray(p.xy, f64)[:, :2]
+            pl, ph = xy.min(0), xy.max(0)
+            under = np.zeros(len(xy), bool)
+            for j in np.flatnonzero((dbox[:, 0] <= ph[0]) & (dbox[:, 2] >= pl[0]) & (dbox[:, 1] <= ph[1])
+                                    & (dbox[:, 3] >= pl[1])).tolist():
+                ln, h = decks[j]
+                a, ab = ln[:-1], np.diff(ln, axis=0)
+                lab = np.maximum(np.hypot(*ab.T), 1e-9)
+                t = np.clip(((xy[:, None, :] - a[None]) * ab[None]).sum(2) / (lab * lab)[None], 0.0, 1.0)
+                dist = np.hypot(*(a[None] + t[..., None] * ab[None] - xy[:, None, :]).transpose(2, 0, 1))
+                k = np.argmin(dist, axis=1)
+                r = np.arange(len(xy))
+                at = np.r_[0.0, np.cumsum(lab)][:-1][k] + t[r, k] * lab[k]
+                under |= (dist[r, k] <= h) & (at > APPROACH_MIN_CROSS_M) & (at < lab.sum() - APPROACH_MIN_CROSS_M)
+            out.append(np.where(under, np.asarray(hz, f64), np.nan) if under.any() else None)
+        return out
 
     @_marked("_chain_memo", lambda self, key, feats=None, specs=None: key)
     def _chain_cands(self, key, feats=None, specs=None):

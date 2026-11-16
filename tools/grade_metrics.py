@@ -122,11 +122,14 @@ def main():
                 cells_cpu += cpu.get(str(k), 0.0)
                 got = getattr(planner, "_vsolve", {}).get(str(k))
                 if got is not None:
-                    w = got[1].get("grade_worst")
-                    if w is not None:       # (where a ceiling broke the most, as lat/lon)
-                        la, lo, _ = planner.frame.enu_to_geodetic(w["x"], w["y"], 0.0)
-                        w = {**w, "lat": round(float(la), 6), "lon": round(float(lo), 6)}
-                    infos.append({**got[1], "key": str(k), "grade_worst": w})
+                    where = {}
+                    for name_ in ("grade_worst", "clear_worst"):
+                        w = got[1].get(name_)
+                        if w is not None:   # (where a ceiling / a cap broke the most, as lat/lon)
+                            la, lo, _ = planner.frame.enu_to_geodetic(w["x"], w["y"], 0.0)
+                            w = {**w, "lat": round(float(la), 6), "lon": round(float(lo), 6)}
+                        where[name_] = w
+                    infos.append({**got[1], "key": str(k), **where})
             # (the decks as the road tiles solved them, in this planner's frame)
             decks = []
             bl = [b for b in boxes.values() if b is not None]
@@ -194,12 +197,17 @@ def main():
                                "grade_broken": int(sum(i.get("grade_broken", 0) for i in infos)),
                                "grade_broken_cells": int(sum(1 for i in infos if i.get("grade_broken"))),
                                "grade_excess_m": round(max((i.get("grade_excess_m", 0.0) for i in infos), default=0.0), 3),
+                               "caps": int(sum(i.get("caps", 0) for i in infos)),
+                               "clear_broken": int(sum(i.get("clear_broken", 0) for i in infos)),
+                               "clear_excess_m": round(max((i.get("clear_excess_m", 0.0) for i in infos), default=0.0), 3),
                                "statuses": sorted({str(i.get("status")) for i in infos}),
                                "worst_s": round(max((i.get("elapsed_s", 0.0) for i in infos), default=0.0), 2),
                                "by_cell": {i["key"]: {"fallback": i.get("fallback"), "culprit": i.get("culprit"),
                                                       "grade_broken": i.get("grade_broken"),
                                                       "grade_excess_m": round(i.get("grade_excess_m", 0.0), 3),
                                                       "grade_worst": i.get("grade_worst"),
+                                                      "clear_broken": i.get("clear_broken"),
+                                                      "clear_worst": i.get("clear_worst"),
                                                       "rounds": i.get("rounds_grade"), "s": round(i.get("elapsed_s", 0), 2)}
                                            for i in infos}}
                 results[name]["vsolve"] = s

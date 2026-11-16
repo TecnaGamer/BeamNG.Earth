@@ -108,6 +108,32 @@ class SolveTest(unittest.TestCase):
         self.assertLess(float(g[:20].max()), 0.3)
         self.assertLessEqual(float(g[20:].max()), 0.09 + 1e-3)   # (past the pin, where it can hold: held)
 
+    def test_a_road_under_a_deck_is_not_raised_to_meet_a_junction(self):
+        # (the side road runs under a deck from 10 m to 40 m along it, capped at its height there; its end meets the
+        # main road 1 m higher: the main road comes down to it, the side road does not rise into the deck)
+        main = plan(np.c_[S, np.zeros_like(S)], np.full(len(S), 11.0))
+        side = plan(np.c_[np.full(len(S), 100.0), S], np.full(len(S), 10.0))
+        z0 = [main.z.copy(), side.z.copy()]
+        caps = [None, np.where((S >= 2) & (S <= 40), 10.0, np.nan)]
+        zs, info = vsolve.solve([main, side], [spec("primary"), spec("residential")], z0, [0.09, 0.12], [8, 2],
+                                caps=caps)
+        self.assertTrue(info["feasible"] and not info["fallback"], info)
+        self.assertEqual(info["clear_broken"], 0, info)
+        self.assertLessEqual(float(zs[1][1:21].max()), 10.0 + 1e-3)
+        self.assertAlmostEqual(float(zs[1][0]), float(zs[0][50]), places=3)
+        free, _ = vsolve.solve([main, side], [spec("primary"), spec("residential")], z0, [0.09, 0.12], [8, 2])
+        self.assertGreater(float(free[1][1:21].max()), 10.05)     # (without the cap: raised under the deck)
+
+    def test_a_cap_that_cannot_hold_is_broken_and_said_where(self):
+        p = plan(np.c_[S, np.zeros_like(S)], np.full(len(S), 5.0), abut=(True, False))     # (its deck end at 5 m)
+        caps = [np.where(S <= 6, 4.0, np.nan)]          # (capped at 4 m from its end: the deck end wins)
+        zs, info = vsolve.solve([p], [spec("residential")], [np.full(len(S), 5.0)], [0.12], [0], caps=caps)
+        self.assertTrue(info["feasible"] and not info["fallback"], info)
+        self.assertGreater(info["clear_broken"], 0, info)
+        self.assertEqual(info["clear_worst"]["plan"], 0)
+        self.assertAlmostEqual(float(zs[0][0]), 5.0, places=4)
+        self.assertLessEqual(float(zs[0][3]), 4.0 + 1e-3)       # (where it can hold: held)
+
     def test_a_steep_street_keeps_its_grade(self):
         z0 = 0.2 * S                     # (20 % on its ground, over its class's 12 %)
         p = plan(np.c_[S, np.zeros_like(S)], z0.copy())
