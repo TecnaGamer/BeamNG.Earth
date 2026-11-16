@@ -12,6 +12,8 @@ import sys
 import os
 import subprocess
 import tempfile
+import time
+import urllib.error
 import urllib.request
 import zipfile
 
@@ -45,7 +47,30 @@ ResourceFolder = "Resources"
 '''
 
 
-def fetch(url):
+FETCH_TRIES = 7         # GitHub's release downloads answered 504 for minutes during the 1.9.0 build (2026-11-09)
+FETCH_WAIT_S = 15       # s before the second try, doubling (~16 min of tries in all)
+
+
+def fetch(url, tries=FETCH_TRIES, wait=FETCH_WAIT_S, sleep=time.sleep):
+    """url's body. A server error, a timeout or a dropped connection is tried again (tries in all, the wait doubling);
+    a refused redirect, an oversized file or a 4xx answer is not."""
+    for attempt in range(tries):
+        try:
+            return _fetch_once(url)
+        except urllib.error.HTTPError as e:
+            if e.code < 500 or attempt == tries - 1:
+                raise
+            why = f"HTTP {e.code}"
+        except (urllib.error.URLError, TimeoutError, ConnectionError) as e:
+            if attempt == tries - 1:
+                raise
+            why = str(e)
+        print(f"{url}: {why}; trying again in {wait * 2 ** attempt:.0f} s", file=sys.stderr, flush=True)
+        sleep(wait * 2 ** attempt)
+    raise RuntimeError("unreachable")
+
+
+def _fetch_once(url):
     req = urllib.request.Request(url, headers={"User-Agent": "BeamNG.Earth-release-builder"})
     with urllib.request.urlopen(req, timeout=60) as response:
         if not response.geturl().startswith("https://"):

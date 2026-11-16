@@ -28,6 +28,7 @@ from dataclasses import dataclass
 import numpy as np
 
 import fast
+import dnp
 
 import mapcells
 
@@ -115,7 +116,7 @@ class RoadClearance:
             vx, vy = bx - ax, by - ay
             L2 = np.maximum(vx * vx + vy * vy, 1e-9)
             t = np.clip(((px - ax) * vx + (py - ay) * vy) / L2, 0.0, 1.0)
-            d = np.hypot(ax + t * vx - px, ay + t * vy - py) - hw
+            d = dnp.hypot(ax + t * vx - px, ay + t * vy - py) - hw
             out[k] = max(0.0, float(d.min()))
         return out
 
@@ -200,7 +201,7 @@ def chains(ways):
 
 
 def _resample(xy, step):
-    seg = np.hypot(*np.diff(xy, axis=0).T)
+    seg = dnp.hypot(*np.diff(xy, axis=0).T)
     s = np.r_[0.0, np.cumsum(seg)]
     if s[-1] <= 0:
         return xy[:1], s[:1]
@@ -253,7 +254,7 @@ def plan(frame, x, y, cell_water, water_at, dem_at, outline_at=None, radius=None
     for ids, kind, ll in chains(ways):
         e, n, _ = frame.geodetic_to_enu(ll[:, 1], ll[:, 0], np.zeros(len(ll)))
         xy = np.stack([np.asarray(e), np.asarray(n)], -1)
-        if np.hypot(xy[:, 0] - x, xy[:, 1] - y).min() > r + PIECE_M:
+        if dnp.hypot(xy[:, 0] - x, xy[:, 1] - y).min() > r + PIECE_M:
             continue
         pts, _ = _resample(xy, SPACING_M[kind])
         rivers.append(_nodes(frame, ids, kind, pts, water_at, dem_at, outline_at, level_at, road_clear))
@@ -324,7 +325,7 @@ def _nodes(frame, ids, kind, pts, water_at, dem_at, outline_at, level_at=None, r
 def _pieces(rv, x, y, r):
     ids, kind, pts, centre, z, width, depth = (rv[k] for k in ("ids", "kind", "pts", "centre", "z", "width",
                                                                "depth"))
-    near = np.hypot(pts[:, 0] - x, pts[:, 1] - y) <= r + PIECE_M / 2
+    near = dnp.hypot(pts[:, 0] - x, pts[:, 1] - y) <= r + PIECE_M / 2
     gone = rv["wet"] | rv["into"]       # a lake, the sea or a wider river carries the water there
     keep = ~gone & near
     # one node on into the water it flows into (and out of), so they meet without a gap
@@ -363,7 +364,7 @@ def _widths(frame, kind, pts, outline_at):
     if outline_at is None or len(pts) < 2:
         return w, pts
     t = np.gradient(pts, axis=0)
-    t /= np.maximum(np.hypot(t[:, 0], t[:, 1]), 1e-9)[:, None]
+    t /= np.maximum(dnp.hypot(t[:, 0], t[:, 1]), 1e-9)[:, None]
     nrm = np.stack([-t[:, 1], t[:, 0]], -1)
     steps = np.arange(WIDTH_STEP_M / 2, WIDTH_MAX_M / 2, WIDTH_STEP_M)
     here = np.asarray(outline_at(*_lalo(frame, pts)), bool)
@@ -395,7 +396,7 @@ def _smooth(v):
         return v
     h = SMOOTH_N // 2
     p = np.pad(v, h, mode="edge")
-    return np.convolve(p, np.ones(SMOOTH_N) / SMOOTH_N, mode="valid")
+    return dnp.convolve(p, np.ones(SMOOTH_N) / SMOOTH_N, mode="valid")
 
 
 def _lalo(frame, xy):

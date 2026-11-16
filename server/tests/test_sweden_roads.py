@@ -61,7 +61,7 @@ class KindTest(unittest.TestCase):
         self.assertEqual(got.kind, "paved")
         self.assertTrue(got.parking)
         self.assertEqual(spec("residential", urban=True, at=(tr.LAT, tr.LON)).width,
-                         roads.carriageway("residential", "paved", True))
+                         roads.default_width("residential", "paved", True, region="US"))
 
     def test_a_fast_road_is_no_town_street(self):
         self.assertTrue(spec("primary", urban=True, attrs={"osm_maxspeed": 50.0}).urban)

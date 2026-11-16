@@ -1,0 +1,161 @@
+{
+  "bne_eur_steel": {
+    "name": "bne_eur_steel",
+    "mapTo": "bne_eur_steel",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "f0e9212e-5cb5-58c7-9b54-1e3653e7d2ff",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.46,
+          0.49,
+          0.51,
+          1.0
+        ],
+        "metallicFactor": 0.75,
+        "roughnessFactor": 0.45
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "bne_eur_dark": {
+    "name": "bne_eur_dark",
+    "mapTo": "bne_eur_dark",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "1627c813-7840-572d-b373-c7089fc5fc6e",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.05,
+          0.055,
+          0.06,
+          1.0
+        ],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.45
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "bne_fr_j14_green": {
+    "name": "bne_fr_j14_green",
+    "mapTo": "bne_fr_j14_green",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "bfa7cfdf-c4bd-5722-8b11-30ae0d7c3e8d",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.018,
+          0.31,
+          0.19,
+          1.0
+        ],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.45,
+        "retroreflectivity": 0.8
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "bne_eur_white": {
+    "name": "bne_eur_white",
+    "mapTo": "bne_eur_white",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "befd4f8a-d1d2-59b1-87eb-c7da5043f178",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.93,
+          0.93,
+          0.87,
+          1.0
+        ],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.45,
+        "retroreflectivity": 0.8
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "bne_eur_red": {
+    "name": "bne_eur_red",
+    "mapTo": "bne_eur_red",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "c42114a9-9066-5f98-ad35-d30053ddffe1",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.8,
+          0.025,
+          0.02,
+          1.0
+        ],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.45,
+        "retroreflectivity": 0.8
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "bne_eur_yellow": {
+    "name": "bne_eur_yellow",
+    "mapTo": "bne_eur_yellow",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "f521a1d3-d73c-5122-9d08-12f62f79b4d4",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.96,
+          0.78,
+          0.02,
+          1.0
+        ],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.45,
+        "retroreflectivity": 0.8
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "bne_eur_orange": {
+    "name": "bne_eur_orange",
+    "mapTo": "bne_eur_orange",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "efdd707c-479c-5c1c-8ada-dc0ca63eaca1",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.98,
+          0.3,
+          0.015,
+          1.0
+        ],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.45,
+        "retroreflectivity": 0.8
+      },
+      {},
+      {},
+      {}
+    ]
+  }
+}

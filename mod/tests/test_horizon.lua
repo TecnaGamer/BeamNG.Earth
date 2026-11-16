@@ -65,4 +65,9 @@ T.check(radius3 == 6371 and writes3 == 1, 'applied three times: one write')
 T.check(horizon.restoreSky() and radius3 == 6360 and writes3 == 2, 'restored: one more write')
 sky3:delete()
 
+-- the atmosphere shell over a high camera (2026-11-06: objects drew black with the eye at / over its top)
+T.check(horizon.thicknessFor(0, 100) == 100 and horizon.thicknessFor(59, 100) == 100 and horizon.thicknessFor(nil, 100) == 100,
+  'thickness: the level\'s own up to 60 % of it')
+T.check(horizon.thicknessFor(100, 100) == 200 and horizon.thicknessFor(400, 100) == 500 and horizon.thicknessFor(2000, 100) == 600,
+  'thickness: 100 km over the camera, in 100 km steps, 600 at most')
 T.done('test_horizon')

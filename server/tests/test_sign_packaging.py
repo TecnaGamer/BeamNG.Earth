@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest import mock
 
 import numpy as np
+from PIL import Image
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
@@ -93,9 +94,9 @@ class PackagedMileMarkersTest(unittest.TestCase):
                     self.assertEqual(str(signstates.states(38.25, -85.76)), 'KY')
                 finally:
                     signstates._polygons.cache_clear()
-        client = set(package.tree_files('mod/beamng_earth'))
+        client = set(package.client_files())
         scenery = 'levels/beamng_earth/art/shapes/beamngEarth/roadside/'
-        for name in ('exit.materials.json', 'merge.materials.json', 'median.materials.json', 'sign_letters_o.data.png',
+        for name in ('exit.materials.json', 'merge.materials.json', 'median.materials.json', 'sign_letters_o.data.dds',
                      'Roadgeek-LICENSE.txt'):
             self.assertIn(scenery + name, client)
         for name in ('exit.materials.json', 'merge.materials.json'):
@@ -103,8 +104,27 @@ class PackagedMileMarkersTest(unittest.TestCase):
             for mat in mats.values():
                 for stage in mat.get('Stages', []):
                     for key, value in stage.items():
-                        if isinstance(value, str) and value.endswith('.png'):
+                        if isinstance(value, str) and value.endswith(('.png', '.dds')):
                             self.assertIn(value.lstrip('/'), client, (name, key))
+
+
+class PackagedRadarSignsTest(unittest.TestCase):
+    def test_sr3_faces_use_packaged_cookable_textures(self):
+        mod = ROOT / 'mod/beamng_earth'
+        client = set(package.client_files())
+        scenery = 'levels/beamng_earth/art/shapes/beamngEarth/fr_radars'
+        materials = json.loads((mod / scenery / 'main.materials.json').read_text())
+        for sign in ('sr3a', 'sr3b'):
+            with self.subTest(sign=sign):
+                texture = materials[f'bne_fr_radar_{sign}']['Stages'][0]['baseColorMap'].lstrip('/')
+                self.assertTrue(texture.endswith('.color.dds'))   # (a DDS the game takes as it is: no cooking)
+                self.assertIn(texture, client)
+                sys.path.insert(0, str(ROOT / 'tools'))
+                import mod_textures_dds     # (a DDS made at install from its source: its texels)
+                with mod_textures_dds.open_texture(mod / texture) as image:
+                    self.assertIn(image.mode, ('RGB', 'RGBA'))
+                    for side in image.size:
+                        self.assertEqual(side & (side - 1), 0)
 
 
 if __name__ == "__main__":

@@ -24,6 +24,8 @@ from collections import OrderedDict
 from dataclasses import dataclass, field
 
 import numpy as np
+import dmath
+import dnp
 
 import cog as cogmod
 import lidarbc
@@ -81,7 +83,7 @@ def cell_center(cell):
     """WGS84 lat / lon of a Web-Mercator cell's centre."""
     nz = 1 << cell.z
     lon = (cell.x + 0.5) / nz * 360.0 - 180.0
-    lat = math.degrees(math.atan(math.sinh(math.pi * (1 - 2 * (cell.y + 0.5) / nz))))
+    lat = math.degrees(dmath.atan(dmath.sinh(math.pi * (1 - 2 * (cell.y + 0.5) / nz))))
     return lat, lon
 
 
@@ -194,7 +196,7 @@ class Rasters:
         mx0, my0 = cell.x * size - MERC_HALF, MERC_HALF - cell.y * size
         i = (np.arange(npx) + 0.5) * px
         lon1 = np.degrees((mx0 + i) / 6378137.0)
-        lat1 = np.degrees(np.arctan(np.sinh((my0 - i) / 6378137.0)))
+        lat1 = np.degrees(dnp.arctan(dnp.sinh((my0 - i) / 6378137.0)))
         files = []
         data = None
         for r0 in range(0, npx, BC_BAND):            # in bands: a whole cell's 4 million points peaked at ~1 GB

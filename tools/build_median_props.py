@@ -17,12 +17,18 @@ And Sweden's give-way sign B1 (bne_giveway_b1.dae, server furniture.junction_con
 white. TSFS 2019:74 3 kap. 1 §: S1, across its rounded corners, 0.90 m (Normal, a road not a motorway). The face is
 Transportstyrelsen's artwork b1-1.png on bne_se_signs.png (tools/build_swedish_signs.py), whose outline this follows:
 456 x 405 px, the sides extended to sharp corners 507 px. 1 kap. 13 §: 1.0-2.0 m up to its lower edge.
+
+And Germany's junction signs (bne_de_<group>.dae, one per server/designs.py GROUPS: Zeichen 205, 206, 301, 306, 307,
+some over a 1002 plate, in Größe 1, 2 and 3), at their true size on one galvanised post; their faces are
+tools/build_de_signs.py's sheet, which this maps them on (run that first when the faces change).
 """
 import json
 import math
 import os
 import uuid
 
+import build_de_signs
+import designs          # (server/: build_de_signs puts it on the path)
 from build_rail_crossing_props import OUT, Mesh, write_dae
 
 ROPES = (0.48, 0.64, 0.80, 0.96)    # m up
@@ -222,6 +228,46 @@ def se_pole(group):
     return m
 
 
+# Germany's junction signs (server/designs.py GROUPS: a face alone or over its 1002 plate, Größe 1, 2 or 3), one mesh a
+# group at its true size: trees.lua's catalog has designs.HEIGHTS, so rows draw them at scale 1. Their faces are
+# tools/build_de_signs.py's sheet (material bne_de_signs, mapped by its uv()); group -> [(picture, shape, size m, the
+# middle's height)] bottom up, the lowest edge 2 m up (VwV-StVO zu den §§ 39 bis 43 Rn. 42). Posts, frames and backs
+# grey (Rn. 24: "Pfosten, Rahmen und Schilderrückseiten sollen grau sein"): galvanised.
+DE_SIGNS = {g: designs.panels(g) for g in designs.GROUPS}
+
+
+def de_sign(group, near):
+    """One of DE_SIGNS: Z up from the ground, its faces towards -Y (the traffic it faces), on one post behind them up
+    to a quarter of the top face's height over its middle."""
+    front, back = -(designs.POST_R_M + designs.DEPTH_M), -designs.POST_R_M
+    m = Mesh(8)
+    for pic, shape, size, mid in DE_SIGNS[group]:
+        # (far: each rounded corner one cut, its points the arc's ends, so that outline lies a hair inside the near
+        # one's extremes: designs.HEIGHTS / WIDTHS are the near LOD's, and at 4 px the difference is not seen)
+        edge = designs.edge(shape, size, 4 if near else 1)
+        f = designs.SIZE[shape][1] / size       # (the sheet's picture is Größe 2)
+        m.face("bne_de_signs", [(x, front, mid + z) for x, z in edge],
+               [build_de_signs.uv(pic, x * f, z * f) for x, z in edge])
+        m.face("bne_cable_steel", [(x, back, mid + z) for x, z in reversed(edge)])
+        if near:
+            for (x0, z0), (x1, z1) in zip(edge, edge[1:] + edge[:1]):
+                m.face("bne_cable_steel", [(x0, back, mid + z0), (x1, back, mid + z1), (x1, front, mid + z1),
+                                           (x0, front, mid + z0)])
+    if near:
+        _, shape, size, mid = DE_SIGNS[group][-1]
+        _, z0, _, z1 = designs.extent(shape, size)
+        m.cylinder("bne_cable_steel", 0.0, 0.0, -designs.SINK_M, mid + (z0 + z1) / 2 + (z1 - z0) / 4, designs.POST_R_M)
+    return m
+
+
+def de_pole(group):
+    """What a car hits: the post's box, se_pole's."""
+    m = Mesh(4)
+    h = designs.HEIGHTS[group]
+    m.box("bne_cable_steel", (0.0, 0.0, h / 2), (0.04, 0.04, h / 2))
+    return m
+
+
 def materials():
     out = {}
     pid = lambda n: str(uuid.uuid5(uuid.NAMESPACE_URL, "beamng-earth/" + n))
@@ -257,6 +303,11 @@ def main():
     pole.box("bne_cable_steel", (0.0, 0.0, A19_TOP / 2), (0.04, 0.04, A19_TOP / 2))
     write_dae(path, "bne_se_a19", [(32, moose(True)), (4, moose(False))], pole)
     print(path, os.path.getsize(path), "bytes", round(A19_TOP, 2), "m")
+    for group in DE_SIGNS:
+        name = "bne_" + group
+        path = os.path.join(OUT, name + ".dae")
+        write_dae(path, name, [(32, de_sign(group, True)), (4, de_sign(group, False))], de_pole(group))
+    print(len(DE_SIGNS), "German junction signs", "bne_de_*.dae")
 
 
 if __name__ == "__main__":

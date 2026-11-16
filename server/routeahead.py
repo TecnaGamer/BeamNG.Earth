@@ -11,6 +11,7 @@ import math
 import numpy as np
 
 import fast
+import dmath
 import mapcells
 
 ROUTE_SAMPLE_M = 250.0      # spacing of corridor sample points along the route's cumulative arc length
@@ -42,7 +43,7 @@ def need(dem, mapdata, pts, reach_m, zoom, layers):
         lats = np.array([p[0] for p in pts])
         lons = np.array([p[1] for p in pts])
         dlat = reach_m / 111320.0
-        dlon = reach_m / (111320.0 * max(0.05, math.cos(math.radians(float(lats[0])))))
+        dlon = reach_m / (111320.0 * max(0.05, dmath.cos(math.radians(float(lats[0])))))
         for key in mapcells.cells_near_points(lats, lons, dlat, dlon):
             for layer in layers:
                 cell_layer_pairs.append((key, layer))

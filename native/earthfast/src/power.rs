@@ -2,10 +2,127 @@
 //! we've been placing them almost everywhere" / "start with 1"): OpenStreetMap's power=line ways (Overture class
 //! power_line) as lattice towers at their vertices (the mapped towers) with the conductors hung between them, ending
 //! at gantries inside the substations they reach; the substations' yards filled with switchgear and fenced.
+use crate::dm::Dm;
 
 use numpy::{IntoPyArray, PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2};
 use pyo3::prelude::*;
 use std::collections::HashSet;
+
+#[derive(Clone, Copy)]
+struct RoadSegment {
+    a: [f64; 2],
+    d: [f64; 2],
+    half: f64,
+    length2: f64,
+    last: bool,
+}
+
+impl RoadSegment {
+    fn t(&self, p: [f64; 2]) -> f64 {
+        (((p[0] - self.a[0]) * self.d[0] + (p[1] - self.a[1]) * self.d[1]) / self.length2).clamp(0.0, 1.0)
+    }
+}
+
+fn road_margin(p: [f64; 2], roads: &[RoadSegment], clear: f64) -> f64 {
+    let mut best = f64::INFINITY;
+    for s in roads {
+        let t = s.t(p);
+        let x = (p[0] - s.a[0]) - t * s.d[0];
+        let y = (p[1] - s.a[1]) - t * s.d[1];
+        best = best.min((x.dhypot(y) - s.half) - clear);
+    }
+    best
+}
+
+/// First try directly away from the closest carriageway edge, as powerlines._off_roads did.
+/// Ordered segments preserve both the first nearest segment and the first road on a tie.
+fn road_candidate(p: [f64; 2], roads: &[RoadSegment], clear: f64) -> [f64; 2] {
+    let mut best = f64::INFINITY;
+    let mut out = p;
+    let mut nearest = f64::INFINITY;
+    let mut near_foot = p;
+    let mut near_direction = [0.0, 0.0];
+    for s in roads {
+        let t = s.t(p);
+        let foot = [s.a[0] + t * s.d[0], s.a[1] + t * s.d[1]];
+        let away = [p[0] - foot[0], p[1] - foot[1]];
+        let distance = away[0].dhypot(away[1]);
+        if distance < nearest {
+            nearest = distance;
+            near_foot = foot;
+            near_direction = s.d;
+        }
+        if s.last {
+            if nearest - s.half < best {
+                best = nearest - s.half;
+                let direction = if nearest > 1e-6 {
+                    [(p[0] - near_foot[0]) / nearest, (p[1] - near_foot[1]) / nearest]
+                } else {
+                    let norm = near_direction[0].dhypot(near_direction[1]).max(1e-9);
+                    [-near_direction[1] / norm, near_direction[0] / norm]
+                };
+                out = [near_foot[0] + direction[0] * (s.half + clear),
+                       near_foot[1] + direction[1] * (s.half + clear)];
+            }
+            nearest = f64::INFINITY;
+        }
+    }
+    out
+}
+
+/// Move one tower/pole off all nearby roads in one native call. roads: (n, 5), ax/ay/dx/dy/half-width;
+/// ends: exclusive segment end of each road (each road has one half-width); around: (k, 2), the caller's
+/// ordered search offsets, retained exactly (including its trig rounding).
+/// Avoid point-by-segment NumPy matrices and stop at the first acceptable candidate. Most points need no search.
+#[pyfunction]
+pub fn power_off_roads(py: Python<'_>, roads: PyReadonlyArray2<'_, f64>, ends: PyReadonlyArray1<'_, i64>, x: f64, y: f64,
+                       around: PyReadonlyArray2<'_, f64>, clear: f64) -> PyResult<(f64, f64)> {
+    let (r, a) = (roads.as_array(), around.as_array());
+    if r.ncols() != 5 || a.ncols() != 2 || !x.is_finite() || !y.is_finite() || !clear.is_finite()
+        || r.iter().chain(a.iter()).any(|v| !v.is_finite()) {
+        return Err(pyo3::exceptions::PyValueError::new_err("power_off_roads expects finite roads (n, 5), offsets (k, 2), point and clearance"));
+    }
+    let ends = ends.as_array();
+    let mut previous = 0;
+    let mut segments = Vec::with_capacity(r.nrows());
+    for &end in ends {
+        if end <= previous || end as usize > r.nrows() {
+            return Err(pyo3::exceptions::PyValueError::new_err("power_off_roads road ends must increase and cover the segments"));
+        }
+        let half = r[[previous as usize, 4]];
+        for i in previous as usize..end as usize {
+            let s = r.row(i);
+            if s[4] != half {
+                return Err(pyo3::exceptions::PyValueError::new_err("power_off_roads requires one half-width per road"));
+            }
+            segments.push(RoadSegment { a: [s[0], s[1]], d: [s[2], s[3]], half,
+                length2: (s[2] * s[2] + s[3] * s[3]).max(1e-12), last: i + 1 == end as usize });
+        }
+        previous = end;
+    }
+    if previous as usize != r.nrows() {
+        return Err(pyo3::exceptions::PyValueError::new_err("power_off_roads road ends must cover the segments"));
+    }
+    let p = [x, y];
+    if road_margin(p, &segments, clear) >= 0.0 { return Ok((x, y)); }
+    let first = road_candidate(p, &segments, clear);
+    let first_margin = road_margin(first, &segments, clear);
+    if first_margin >= -1e-6 { return Ok((first[0], first[1])); }
+    // Only the search can be substantial: ordinary unchanged points and straight moves retain the GIL.
+    let work = segments.len().saturating_mul(a.nrows()).saturating_mul(20);
+    let best = crate::release(py, work, || {
+        let mut best = first;
+        let mut margin = first_margin;
+        for delta in a.rows() {
+            let candidate = [p[0] + delta[0], p[1] + delta[1]];
+            let value = road_margin(candidate, &segments, clear);
+            if value >= -1e-6 { return candidate; }
+            if value > margin { best = candidate; margin = value; }
+        }
+        best
+    });
+    Ok((best[0], best[1]))
+}
 
 /// The towers, line ends and conductors of lines given as their vertices (n, 3) (x, y in the anchor frame, z the
 /// ground) with offsets (m + 1) and stop (n,): the vertex lies in a substation. Consecutive vertices closer than
@@ -50,7 +167,7 @@ pub fn power_line_layout<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, 
         for i in off[l] as usize..off[l + 1] as usize {
             let p = [pts[[i, 0]], pts[[i, 1]], pts[[i, 2]]];
             if let Some(q) = v.last() {
-                if (p[0] - q[0]).hypot(p[1] - q[1]) < min_span {
+                if (p[0] - q[0]).dhypot(p[1] - q[1]) < min_span {
                     continue;
                 }
             }
@@ -63,14 +180,14 @@ pub fn power_line_layout<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, 
         let n = v.len();
         let unit = |a: [f64; 3], b: [f64; 3]| {
             let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
-            let d = dx.hypot(dy).max(1e-9);
+            let d = dx.dhypot(dy).max(1e-9);
             (dx / d, dy / d)
         };
         let yaw: Vec<f64> = (0..n).map(|i| {
             let (mut dx, mut dy) = (0.0, 0.0);
             if i > 0 { let (a, b) = unit(v[i - 1], v[i]); dx += a; dy += b; }
             if i + 1 < n { let (a, b) = unit(v[i], v[i + 1]); dx += a; dy += b; }
-            dy.atan2(dx)
+            dy.datan2(dx)
         }).collect();
         for i in 0..n {
             if !st[i] && claim(&mut taken, v[i][0], v[i][1]) && inside(v[i][0], v[i][1]) {
@@ -82,15 +199,15 @@ pub fn power_line_layout<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, 
                 continue;
             }
             let (a, b) = (v[i], v[i + 1]);
-            let span = (b[0] - a[0]).hypot(b[1] - a[1]);
+            let span = (b[0] - a[0]).dhypot(b[1] - a[1]);
             if span > max_span {
                 continue;
             }
-            let head = (b[1] - a[1]).atan2(b[0] - a[0]);
+            let head = (b[1] - a[1]).datan2(b[0] - a[0]);
             // the span's line end (heading into the substation), a nearby earlier one if any
             let end = if st[i] { Some((a, head + std::f64::consts::PI)) } else if st[i + 1] { Some((b, head)) } else { None };
             let end = end.map(|(p, w)| {
-                match ends.iter().find(|e| (e[0] - p[0]).hypot(e[1] - p[1]) < end_merge_m) {
+                match ends.iter().find(|e| (e[0] - p[0]).dhypot(e[1] - p[1]) < end_merge_m) {
                     Some(e) => *e,
                     None => {
                         ends.push([p[0], p[1], p[2], w]);
@@ -103,13 +220,13 @@ pub fn power_line_layout<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, 
             }
             let k = ((span / seg_m).ceil() as usize).max(2);
             for r in 0..arms.nrows() {
-                let tower = |p: [f64; 3], w: f64| [p[0] - w.sin() * arms[[r, 0]], p[1] + w.cos() * arms[[r, 0]], p[2] + arms[[r, 1]]];
+                let tower = |p: [f64; 3], w: f64| [p[0] - w.dsin() * arms[[r, 0]], p[1] + w.dcos() * arms[[r, 0]], p[2] + arms[[r, 1]]];
                 // at the end: its lateral axis, mirrored when it points against the span's (sides kept in the world)
                 let gantry = |e: [f64; 4]| {
                     let w = e[3];
-                    let sign = if (-w.sin()) * (-head.sin()) + w.cos() * head.cos() >= 0.0 { 1.0 } else { -1.0 };
+                    let sign = if (-w.dsin()) * (-head.dsin()) + w.dcos() * head.dcos() >= 0.0 { 1.0 } else { -1.0 };
                     let lat = arms[[r, 2]] * sign;
-                    [e[0] - w.sin() * lat - w.cos() * gantry_front, e[1] + w.cos() * lat - w.sin() * gantry_front,
+                    [e[0] - w.dsin() * lat - w.dcos() * gantry_front, e[1] + w.dcos() * lat - w.dsin() * gantry_front,
                      e[2] + arms[[r, 3]]]
                 };
                 let p0 = match (st[i], end) { (true, Some(e)) => gantry(e), _ => tower(a, yaw[i]) };
@@ -131,7 +248,7 @@ pub fn power_line_layout<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, 
 }
 
 /// Even-odd: (x, y) inside the rings (all of an area's, outer and holes alike).
-fn in_rings(rings: &[Vec<(f64, f64)>], x: f64, y: f64) -> bool {
+pub(crate) fn in_rings(rings: &[Vec<(f64, f64)>], x: f64, y: f64) -> bool {
     let mut c = false;
     for r in rings {
         let n = r.len();
@@ -147,18 +264,18 @@ fn in_rings(rings: &[Vec<(f64, f64)>], x: f64, y: f64) -> bool {
     c
 }
 
-fn ring_area(r: &[(f64, f64)]) -> f64 {
+pub(crate) fn ring_area(r: &[(f64, f64)]) -> f64 {
     let n = r.len();
     (0..n).map(|i| r[i].0 * r[(i + 1) % n].1 - r[(i + 1) % n].0 * r[i].1).sum::<f64>().abs() / 2.0
 }
 
 /// The smallest rectangle around the ring along one of its edges: (u, v axes, a range along u, b range along v).
-fn min_box(r: &[(f64, f64)]) -> Option<((f64, f64), (f64, f64), (f64, f64), (f64, f64))> {
+pub(crate) fn min_box(r: &[(f64, f64)]) -> Option<((f64, f64), (f64, f64), (f64, f64), (f64, f64))> {
     let n = r.len();
     let mut best: Option<(f64, ((f64, f64), (f64, f64), (f64, f64), (f64, f64)))> = None;
     for i in 0..n {
         let (ex, ey) = (r[(i + 1) % n].0 - r[i].0, r[(i + 1) % n].1 - r[i].1);
-        let l = ex.hypot(ey);
+        let l = ex.dhypot(ey);
         if l < 1e-6 {
             continue;
         }
@@ -214,7 +331,7 @@ pub fn substation_yard<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, ri
         .collect();
     let (mut out, mut fence): (Vec<f64>, Vec<f64>) = (Vec::new(), Vec::new());
     let mut place = |k: usize, cx: f64, cy: f64, kx: (f64, f64), out: &mut Vec<f64>| {
-        let yaw = kx.1.atan2(kx.0).to_degrees().rem_euclid(360.0);
+        let yaw = kx.1.datan2(kx.0).to_degrees().rem_euclid(360.0);
         for p in 0..parts.nrows() {
             if parts[[p, 0]] as usize != k {
                 continue;
@@ -232,7 +349,7 @@ pub fn substation_yard<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, ri
         let (w, h) = (kits[[anchor_kit, 0]], kits[[anchor_kit, 1]]);
         for e in 0..an.nrows() {
             let hd = an[[e, 2]];
-            let ky = (-hd.cos(), -hd.sin());
+            let ky = (-hd.dcos(), -hd.dsin());
             let kx = (ky.1, -ky.0);
             let (cx, cy) = (an[[e, 0]] - anchor_at[0] * kx.0 - anchor_at[1] * ky.0,
                             an[[e, 1]] - anchor_at[0] * kx.1 - anchor_at[1] * ky.1);
@@ -270,7 +387,7 @@ pub fn substation_yard<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, ri
                         let b = bc + (j as f64 - (nb - 1) as f64 / 2.0) * (sb + gap);
                         let (cx, cy) = world(a, b);
                         if clear(cx, cy, kx, w, h) {
-                            got.push(((a - ac).hypot(b - bc), cx, cy, kx));
+                            got.push(((a - ac).dhypot(b - bc), cx, cy, kx));
                         }
                     }
                 }
@@ -293,12 +410,12 @@ pub fn substation_yard<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, ri
             let n = r.len();
             for i in 0..n {
                 let (p, q) = (r[i], r[(i + 1) % n]);
-                let l = (q.0 - p.0).hypot(q.1 - p.1);
+                let l = (q.0 - p.0).dhypot(q.1 - p.1);
                 if l < 1e-6 {
                     continue;
                 }
                 let (dx, dy) = ((q.0 - p.0) / l, (q.1 - p.1) / l);
-                let yaw = dy.atan2(dx).to_degrees().rem_euclid(360.0);
+                let yaw = dy.datan2(dx).to_degrees().rem_euclid(360.0);
                 let m = (l / fence_len).ceil() as usize;
                 for s in 1..=m {
                     let t = (s as f64 * fence_len).min(l.max(fence_len));

@@ -135,6 +135,26 @@ T.check(G.announceCmd('http://x/announce', 'f.json', false):match('^curl .* @f%.
   'announceCmd: Linux, in the background')
 T.check(G.announceCmd('http://x/announce', 'f.json', true):match('^start "" /b curl .* >NUL 2>&1$') ~= nil, 'announceCmd: Windows, in the background')
 
+-- client mods over 2^31 - 1 bytes: BeamMP's Util.JsonEncode wraps the size negative, and the list refuses it
+local function wrapping(t)     -- (BeamMP's encoder as far as this field goes: an integer kept to 32 bits)
+  local v = t.modstotalsize
+  if v > 2147483647 then v = v - 4294967296 end
+  return '{"name":"' .. t.name .. '","modstotalsize":' .. string.format('%d', v) .. ',"modstotal":'
+    .. string.format('%d', t.modstotal) .. '}'
+end
+local big = G.announcement({ port = 1, name = 'n' }, {}, { mods = { names = { 'm' }, size = 2441213085, count = 30 } })
+T.check(wrapping(big):find('"modstotalsize":-1853754211', 1, true) ~= nil, 'the stand-in encoder wraps as BeamMP\'s does')
+local text = G.encodeAnnouncement(big, wrapping)
+T.check(text:find('"modstotalsize":2441213085,', 1, true) ~= nil and not text:find('-', 1, true),
+  'encodeAnnouncement: 2.44 GB of mods go out as their real size, never negative: ' .. text)
+T.check(big.modstotalsize == 2441213085, 'encodeAnnouncement: the announcement keeps its real size')
+local small = G.announcement({ port = 1, name = 'n' }, {}, { mods = { names = { 'm' }, size = 1024, count = 1 } })
+T.check(G.encodeAnnouncement(small, wrapping):find('"modstotalsize":1024,', 1, true) ~= nil,
+  'encodeAnnouncement: a size that fits: as it is')
+local neg = G.announcement({ port = 1, name = 'n' }, {}, { mods = { names = {}, size = -5, count = 0 } })
+T.check(G.encodeAnnouncement(neg, wrapping):find('"modstotalsize":0,', 1, true) ~= nil,
+  'encodeAnnouncement: never a negative size')
+
 -- the server's time and weather (bngeConfig)
 T.check(G.config().time == nil and G.config().weather == nil, 'time and weather real by default')
 local tc = G.timeConfig('20:30', 0, 1000)

@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
-"""BeamNG.Earth installer (Windows and Linux; Python 3.10+, standard library only).
+"""BeamNG.Earth installer (Windows and Linux; Python 3.10+, standard library only, and the server's native module
+server/earthfast for the mod's textures).
 
 What it does:
   1. finds your BeamNG.drive user folder (or takes --user-dir),
-  2. copies the mod (mod/beamng_earth/) to <user folder>/mods/unpacked/beamng_earth,
+  2. copies the mod (mod/beamng_earth/) to <user folder>/mods/unpacked/beamng_earth and makes its DDS textures there
+     from mod/texture_sources (modtextures.py, with the server's native module),
   3. makes a Python virtual environment in .venv and installs the server's packages into it,
   4. remembers the user folder in .beamng_earth.json for start.py and the run_server launchers.
 
@@ -24,6 +26,8 @@ import re
 import shutil
 import subprocess
 import sys
+
+import modtextures
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 MOD_SRC = os.path.join(ROOT, "mod", "beamng_earth")
@@ -220,13 +224,21 @@ def choose_user_dir(args):
 
 # --- the mod ------------------------------------------------------------------------------------
 
-def tree_hash(path):
+# files made in the installed copy at install time, not in the source (skypatch.py): not part of its hash. (The DDS
+# textures made from mod/texture_sources, modtextures.py, are not either: they are checked against its stamp.)
+GENERATED = ("lua/ge/extensions/beamngEarth/skypatch_flag.lua",)
+
+
+def tree_hash(path, skip=()):
     h = hashlib.sha256()
     for dirpath, dirnames, filenames in os.walk(path):
         dirnames.sort()
         for name in sorted(filenames):
             full = os.path.join(dirpath, name)
-            h.update(os.path.relpath(full, path).replace(os.sep, "/").encode())
+            rel = os.path.relpath(full, path).replace(os.sep, "/")
+            if rel in GENERATED or rel in skip:
+                continue
+            h.update(rel.encode())
             with open(full, "rb") as f:
                 h.update(hashlib.sha256(f.read()).digest())
     return h.hexdigest()
@@ -253,10 +265,40 @@ def ensure_mod_active(user_dir):
     return True
 
 
-def install_mod(user_dir, assume_yes, dry_run, quiet=False):
+def ensure_mods_not_disabled(user_dir):
+    """Undo the game's "mods disabled after an update" (settings/settings.json disableModsAfterUpdate): after a game
+    update BeamNG turns every mod off, and the setting keeps them all off at every start until the player turns them
+    back on in the main menu, so BeamNG.Earth's level was simply missing (Discord, 2026-11-04/05: "the mods were
+    disabled by the game itself after the update"). Clearing it is what the menu's button does
+    (core_modmanager.enableModsAfterUpdate): each mod comes back as its db.json entry says. Only while the game is not
+    running (it keeps its settings in memory and writes them back). True if it changed the file."""
+    path = os.path.join(user_dir, "settings", "settings.json")
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return False
+    if not isinstance(data, dict) or data.get("disableModsAfterUpdate") is not True:
+        return False
+    data["disableModsAfterUpdate"] = False
+    tmp = path + ".bnge-tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+        os.replace(tmp, path)
+    except OSError:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        return False
+    return True
+
+
+def install_mod(user_dir, assume_yes, dry_run, quiet=False, game_running=False):
     """Copy the mod into the user folder. Returns 'current', 'enabled' (current, but it had been turned off in the
     game's mod list), 'updated', 'installed', 'kept' or None (dry run); quiet: no messages but the notes (the launcher
-    prints one status line)."""
+    prints one status line); game_running: the game is open (its settings are not touched: ensure_mods_not_disabled)."""
     def note(msg):
         if not quiet:
             say(msg)
@@ -266,11 +308,20 @@ def install_mod(user_dir, assume_yes, dry_run, quiet=False):
     packed = os.path.join(user_dir, "mods", MOD_NAME + ".zip")
     if os.path.isfile(packed):
         say(f"Note: there is also a zipped copy at {packed}; remove it so the game does not load two versions.")
+    if not dry_run and not game_running and ensure_mods_not_disabled(user_dir):
+        say("Mods: BeamNG.drive had turned all mods off after its update; turned them back on (as its main menu's "
+            "\"enable mods\" button does).")
     enabled = not dry_run and ensure_mod_active(user_dir)
     if enabled:
         say("Mod: it had been turned off in the game's mod list (a BeamMP server does that); turned it back on.")
+    try:
+        todo = modtextures.plan()
+    except modtextures.TexturesError as e:
+        fail(f"the mod's textures cannot be made: {e}")
+    made = modtextures.generated(todo)
+    keep = set()
     if os.path.isdir(dest):
-        if tree_hash(dest) == tree_hash(MOD_SRC):
+        if tree_hash(dest, made) == tree_hash(MOD_SRC, made) and modtextures.current(dest, todo):
             note(f"Mod: already up to date in {dest}")
             return "enabled" if enabled else "current"
         if not (assume_yes and quiet) and not ask(f"Mod: an older copy is installed in {dest}. Replace it?", assume_yes):
@@ -280,7 +331,13 @@ def install_mod(user_dir, assume_yes, dry_run, quiet=False):
             say(f"(dry run) would replace {dest}")
             return None
         old_times = _unchanged_times(dest, MOD_SRC)
-        shutil.rmtree(dest)
+        # the textures made before that would be made the same now stay (an update encodes only the changed ones)
+        keep = modtextures.reusable(dest, todo)
+        for rel in keep:
+            full = os.path.join(dest, *rel.split("/"))
+            st = os.stat(full)
+            old_times[os.path.relpath(full, dest)] = (st.st_atime, st.st_mtime)
+        _clear_tree(dest, keep)
         status = "updated"
     elif dry_run:
         say(f"(dry run) would copy the mod to {dest}")
@@ -288,11 +345,36 @@ def install_mod(user_dir, assume_yes, dry_run, quiet=False):
     else:
         status = "installed"
     os.makedirs(os.path.dirname(dest), exist_ok=True)
-    shutil.copytree(MOD_SRC, dest, ignore=shutil.ignore_patterns("__pycache__", "*.pyc", ".DS_Store"))
+    shutil.copytree(MOD_SRC, dest, ignore=shutil.ignore_patterns("__pycache__", "*.pyc", ".DS_Store"),
+                    dirs_exist_ok=True)
+    if len(keep) < len(todo):
+        say(f"Mod: making its textures ({len(todo) - len(keep)} of {len(todo)}; once per update) ...")
+    try:
+        encoded, reused, secs = modtextures.build(dest, todo, keep)
+    except modtextures.TexturesError as e:
+        fail(f"the mod's textures could not be made: {e}")
+    if encoded:
+        note(f"Mod: {encoded} textures made in {secs:.1f} s ({reused} kept)")
     if status == "updated":
         _stamp_times(dest, old_times)
     note(f"Mod: installed to {dest}")
     return status
+
+
+def _clear_tree(dest, keep):
+    """Remove every file of the installed copy but `keep` (paths relative to it, '/'-separated), and the folders left
+    empty."""
+    for dirpath, dirnames, filenames in os.walk(dest, topdown=False):
+        for name in filenames:
+            full = os.path.join(dirpath, name)
+            if os.path.relpath(full, dest).replace(os.sep, "/") not in keep:
+                os.remove(full)
+        for name in dirnames:
+            full = os.path.join(dirpath, name)
+            if os.path.islink(full):
+                os.remove(full)
+            elif not os.listdir(full):
+                os.rmdir(full)
 
 
 # The game packs a terrain material's textures into its own cache (temp/art/terrainMaterialCache) and packs them again,

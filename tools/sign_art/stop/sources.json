@@ -1,0 +1,603 @@
+{
+  "aliases": {
+    "AD": [
+      "vienna",
+      "generic B2a: no dedicated reusable drawing selected"
+    ],
+    "AL": [
+      "vienna",
+      "generic B2a: no dedicated reusable drawing selected"
+    ],
+    "AX": [
+      "se",
+      "Swedish-style representative face"
+    ],
+    "AZ": [
+      "vienna",
+      "generic B2a: no dedicated reusable drawing selected"
+    ],
+    "BY": [
+      "vienna",
+      "generic B2a: no dedicated reusable drawing selected"
+    ],
+    "FO": [
+      "dk",
+      "Danish-style representative face"
+    ],
+    "GG": [
+      "gb",
+      "British-style face"
+    ],
+    "GI": [
+      "gb",
+      "British-style face"
+    ],
+    "IM": [
+      "gb",
+      "British-style face"
+    ],
+    "JE": [
+      "gb",
+      "British-style face"
+    ],
+    "LI": [
+      "ch",
+      "Swiss-style face"
+    ],
+    "MC": [
+      "fr",
+      "French-style face"
+    ],
+    "MT": [
+      "gb",
+      "British-style representative face"
+    ],
+    "SM": [
+      "it",
+      "Italian-style face"
+    ],
+    "VA": [
+      "it",
+      "Italian-style face"
+    ],
+    "XK": [
+      "vienna",
+      "generic B2a: no dedicated reusable drawing selected"
+    ]
+  },
+  "faces": {
+    "am": {
+      "artist": "Gigillo83",
+      "credit": "Own work",
+      "license": "Public domain",
+      "license_url": "",
+      "original_sha256": "ea1fd9c9ae0f089d58f720554a630316301b25698fd9483d6a83a2851c53056e",
+      "page": "https://commons.wikimedia.org/wiki/File:AM_road_sign_2.5.svg",
+      "revision": "2020-05-27T16:12:35Z",
+      "sha256": "37ae359a80571342701aa0317dfa838adfbe83c1825fa40fd4d5abfc709ad634",
+      "source": "https://upload.wikimedia.org/wikipedia/commons/a/aa/AM_road_sign_2.5.svg",
+      "title": "AM road sign 2.5.svg",
+      "width_m": 0.8
+    },
+    "at": {
+      "artist": "EthanL13",
+      "credit": "Straßenverkehrszeichenverordnung (StVZVO) 2013",
+      "license": "Public domain",
+      "license_url": "",
+      "original_sha256": "eee38ff7767fb807509362e59784891c331a874fda0d04c5404464632a0100c3",
+      "page": "https://commons.wikimedia.org/wiki/File:Vorschriftszeichen_24_(2010).svg",
+      "revision": "2024-01-26T23:12:31Z",
+      "sha256": "1da0f3129a327f163e63c8fe0fe0b391c6a06aaedcf2e9e71a3a4a3384baa4dd",
+      "source": "https://upload.wikimedia.org/wikipedia/commons/f/ff/Vorschriftszeichen_24_%282010%29.svg",
+      "title": "Vorschriftszeichen 24 (2010).svg",
+      "width_m": 0.8
+    },
+    "ba": {
+      "artist": "Gigillo83",
+      "credit": "Own work",
+      "license": "CC BY-SA 4.0",
+      "license_url": "https://creativecommons.org/licenses/by-sa/4.0",
+      "original_sha256": "ec2c00642b675df05c7b30ccfc2ccc15cdc91b108924ac72003899e7ee41f1bf",
+      "page": "https://commons.wikimedia.org/wiki/File:BA_road_sign_II-2.svg",
+      "revision": "2026-08-28T19:56:07Z",
+      "sha256": "b6458ec5bd093dbd9f3773bc9ad7f9949a037a44c3d07a12b452e3f3783004ad",
+      "source": "https://upload.wikimedia.org/wikipedia/commons/9/90/BA_road_sign_II-2.svg",
+      "title": "BA road sign II-2.svg",
+      "width_m": 0.8
+    },
+    "be": {
+      "artist": "Userc11",
+      "credit": "Agentschap Wegen en Verkeer",
+      "license": "Public domain",
+      "license_url": "",
+      "original_sha256": "9f9e4df8c350cc7074c0ab23172f654ce62a7757edb86f461c82fec628979950",
+      "page": "https://commons.wikimedia.org/wiki/File:Belgian_traffic_sign_B5.svg",
+      "revision": "2022-07-28T13:09:45Z",
+      "sha256": "fe7d383829f3c42873dd2c1a310dbfcf1dd7825689f7990f855563fe0ba257fb",
+      "source": "https://upload.wikimedia.org/wikipedia/commons/9/96/Belgian_traffic_sign_B5.svg",
+      "title": "Belgian traffic sign B5.svg",
+      "width_m": 0.8
+    },
+    "bg": {
+      "artist": "มองโกเลีย๔๔",
+      "credit": "Own work",
+      "license": "CC BY-SA 4.0",
+      "license_url": "https://creativecommons.org/licenses/by-sa/4.0",
+      "original_sha256": "b63f8d0779cd2c459675d7e3d3d72a59d273fb9c5729a2c5e9399046900a240d",
+      "page": "https://commons.wikimedia.org/wiki/File:BG_road_sign_%D0%912.svg",
+      "revision": "2024-06-22T16:46:29Z",
+      "sha256": "23fe215d96de28bd97a8850d7e484770c79f907ff6e8949ec84badb67fedd594",
+      "source": "https://upload.wikimedia.org/wikipedia/commons/6/6f/BG_road_sign_%D0%912.svg",
+      "title": "BG road sign Б2.svg",
+      "width_m": 0.8
+    },
+    "ch": {
+      "artist": "Bundesamt für Strassen (ASTRA)",
+      "credit": "This image is sign number 3.01 from the list of signals of road signs of the SR/RS 741.21 Signalisationsverordnung (SSV, Signage Regulation) of the de:Bundesamt für Strassen (ASTRA, Federal Roads Office (FEDRO)), version of 21 November 2006 - SSV Revision 2005.",
+      "license": "Public domain",
+      "license_url": "",
+      "original_sha256": "b31aeb74c6c15fc325449da01a3defc9347c61df37b962d93f4b2bf202f493e3",
+      "page": "https://commons.wikimedia.org/wiki/File:CH-Vortrittssignal-Stop.svg",
+      "revision": "2017-07-02T00:34:38Z",
+      "sha256": "171009773f2d552d1489cdaf41da8667bf1f462abd20540e0de175114d380377",
+      "source": "https://upload.wikimedia.org/wikipedia/commons/c/c5/CH-Vortrittssignal-Stop.svg",
+      "title": "CH-Vortrittssignal-Stop.svg",
+      "width_m": 0.8
+    },
+    "cy": {
+      "artist": "Lolipopsignmen",
+      "credit": "Own work",
+      "license": "Public domain",
+      "license_url": "",
+      "original_sha256": "8315a3dd7b68b8d35c26734e6db5c88acda7c3f7971bb1bb1958c3feda2caba0",
+      "page": "https://commons.wikimedia.org/wiki/File:Cyprus_road_sign_-_STOP.svg",
+      "revision": "2021-10-31T00:51:46Z",
+      "sha256": "b43affb69cd821de6c0930f37beee0a7f063d0692802d797b321449d8f5b55de",
+      "source": "https://upload.wikimedia.org/wikipedia/commons/b/bb/Cyprus_road_sign_-_STOP.svg",
+      "title": "Cyprus road sign - STOP.svg",
+      "width_m": 0.8
+    },
+    "cz": {
+      "artist": "Government of the Czech Republic",
+      "credit": "[1]",
+      "license": "Public domain",
+      "license_url": "",
+      "original_sha256": "3f9fa6b83e2efa91bd04504c1d179cda4a813fc4403c37c9d721ddec5b2396c0",
+      "page": "https://commons.wikimedia.org/wiki/File:Czech_Republic_road_sign_P_6.svg",
+      "revision": "2022-07-28T13:10:11Z",
+      "sha256": "9381297d18c2b57ff6aa570a34f5edb4762475760a909cbc8f8766680302045d",
+      "source": "https://upload.wikimedia.org/wikipedia/commons/e/ed/Czech_Republic_road_sign_P_6.svg",
+      "title": "Czech Republic road sign P 6.svg",
+      "width_m": 0.8
+    },
+    "de": {
+      "artist": "nach den historischen Vorgaben digital gezeichnet und interpretiert von Mediatus .",
+      "credit": "siehe oben!",
+      "license": "Public domain",
+      "license_url": "",
+      "original_sha256": "66da1decffb25dbf64994a1928f6f42e0aa33e78826536f5e6e27db2f384d58a",
+      "page": "https://commons.wikimedia.org/wiki/File:Zeichen_206_-_Halt!_Vorfahrt_gew%C3%A4hren!_StVO_2017.svg",
+      "revision": "2023-07-24T16:16:48Z",
+      "sha256": "c2459d68b6437d2b7ead908d0d8ae9f64fb64f0b8dff73e852e72857a5dc8a0b",
+      "source": "https://upload.wikimedia.org/wikipedia/commons/a/ab/Zeichen_206_-_Halt%21_Vorfahrt_gew%C3%A4hren%21_StVO_2017.svg",
+      "title": "Zeichen 206 - Halt! Vorfahrt gewähren! StVO 2017.svg",
+      "width_m": 0.8
+    },
+    "dk": {
+      "artist": "Gigillo83 , drawn by original of Vejdirektoratet",
+      "credit": "Samlet oversigt over varianter af færdelstavler, vejvisningstavler samt kant- og baggrundsafmærkninger http://www.daluiso.dk/pdf/tavleoversigt.pdf",
+      "license": "Public domain",
+      "license_url": "",
+      "original_sha256": "12e33df1c941ac0944ca9877f9f20366ca865c3cebf2eb75c6275a612150fd16",
+      "page": "https://commons.wikimedia.org/wiki/File:Denmark_road_sign_B13.svg",
+      "revision": "2022-07-28T13:10:28Z",
+      "sha256": "ab7d6997d4a598ee8e6bc52cf809520ee5246cf95db897e64593483c13604472",
+      "source": "https://upload.wikimedia.org/wikipedia/commons/5/53/Denmark_road_sign_B13.svg",
+      "title": "Denmark road sign B13.svg",
+      "width_m": 0.8
+    },
+    "ee": {
+      "artist": "Road Administration",
+      "credit": "Electronic State Gazette",
+      "license": "Public domain",
+      "license_url": "",
+      "original_sha256": "6ccaff448f5b3ce1ede93e940c198401435b54c01839b795ad9dcf6b1ccb22a9",
+      "page": "https://commons.wikimedia.org/wiki/File:Estonia_road_sign_222.svg",
+      "revision": "2022-07-28T15:47:48Z",
+      "sha256": "fb46d6e397fbe30d956e35ba14daa2372c37089af7456a2cd2f25d796a5f38dd",
+      "source": "https://upload.wikimedia.org/wikipedia/commons/8/85/Estonia_road_sign_222.svg",
+      "title": "Estonia road sign 222.svg",
+      "width_m": 0.8
+    },
+    "es": {
+      "artist": "Ministerio de Transportes, Movilidad y Agenda Urbana",
+      "credit": "Catálogo de señales verticales de circulación (archivo) y Real Decreto 465/2025, de 10 de junio, por el que se modifica el Reglamento General de Circulación, aprobado por Real Decreto 1428/2003, de 21 de noviembre, en materia de señalización de tráfico.",
+      "license": "Public domain",
+      "license_url": "",
+      "original_sha256": "8892326c6c2caa6d0424812306304270e040a2932f1e7ed10bb4b94859cb7bff",
+      "page": "https://commons.wikimedia.org/wiki/File:Spain_traffic_signal_r2,_2023_set.svg",
+      "revision": "2023-07-14T10:15:24Z",
+      "sha256": "b08f9adc272b6d5ba62994f754f12f37993e577c00120bff8b68ceae4909456e",
+      "source": "https://upload.wikimedia.org/wikipedia/commons/a/a6/Spain_traffic_signal_r2%2C_2023_set.svg",
+      "title": "Spain traffic signal r2, 2023 set.svg",
+      "width_m": 0.8
+    },
+    "fi": {
+      "artist": "Republic of Finland",
+      "credit": "Finnish Transport Infrastructure Agency",
+      "license": "Public domain",
+      "license_url": "",
+      "original_sha256": "dcc7b7148c1698ce70695bad25ae767488d8ba010ccfbc0f13720442664efd09",
+      "page": "https://commons.wikimedia.org/wiki/File:Finland_road_sign_B6.svg",
+      "revision": "2022-07-28T13:12:35Z",
+      "sha256": "d2436ca15b8b5ac11cb798ab284673a5816dc18c0fcea06dd4e804f76a8f8e74",
+      "source": "https://upload.wikimedia.org/wikipedia/commons/9/9c/Finland_road_sign_B6.svg",
+      "title": "Finland road sign B6.svg",
+      "width_m": 0.8
+    },
+    "fr": {
+      "artist": "Roulex 45",
+      "credit": "Own work",
+      "license": "CC BY-SA 3.0",
+      "license_url": "https://creativecommons.org/licenses/by-sa/3.0",
+      "original_sha256": "0332c46f4249b039b3b821d7d4c2fa59ce5c79b2c4e819c210b0a7c3d7f877ee",
+      "page": "https://commons.wikimedia.org/wiki/File:France_road_sign_AB4.svg",
+      "revision": "2022-07-28T13:12:59Z",
+      "sha256": "0103cf403b90b5d28df026e6c865b7b595602a2890e58b3277e5d54137ec6a77",
+      "source": "https://upload.wikimedia.org/wikipedia/commons/b/bd/France_road_sign_AB4.svg",
+      "title": "France road sign AB4.svg",
+      "width_m": 0.8
+    },
+    "gb": {
+      "artist": "UK Department of Transport",
+      "credit": "Traffic signs image database",
+      "license": "Public domain",
+      "license_url": "",
+      "original_sha256": "63da379f19c9e38d1b4fbf32f10f74cb72669084635c658c4d7490f05d337983",
+      "page": "https://commons.wikimedia.org/wiki/File:UK_traffic_sign_601.1.svg",
+      "revision": "2022-10-02T03:29:34Z",
+      "sha256": "bdd4bdd1f85d1193a03f5e8eaa39e1f1a8c851325f42a5c61ac54ebdcecfdc30",
+      "source": "https://upload.wikimedia.org/wikipedia/commons/c/c8/UK_traffic_sign_601.1.svg",
+      "title": "UK traffic sign 601.1.svg",
+      "width_m": 0.75
+    },
+    "ge": {
+      "artist": "Kingwarnen",
+      "credit": "Own work",
+      "license": "Public domain",
+      "license_url": "",
+      "original_sha256": "88340ab39ed15449986c422c27d470245fa2b4fb0e238f348a27580f8502b7a2",
+      "page": "https://commons.wikimedia.org/wiki/File:2.5_Georgian_road_sign.svg",
+      "revision": "2021-07-04T17:49:27Z",
+      "sha256": "b5514797cab624804bdaac1a04cf499eee3a0b41b9bc16952111e1343381b615",
+      "source": "https://upload.wikimedia.org/wikipedia/commons/9/92/2.5_Georgian_road_sign.svg",
+      "title": "2.5 Georgian road sign.svg",
+      "width_m": 0.8
+    },
+    "gr": {
+      "artist": "Gigillo83",
+      "credit": "Road traffic codex 2009 and re-drawn by me",
+      "license": "CC BY-SA 3.0",
+      "license_url": "https://creativecommons.org/licenses/by-sa/3.0",
+      "original_sha256": "76fef8b9f07e0a8391f1814a54cc098b4b011a7bd87fa4ce95d1e772c106cda8",
+      "page": "https://commons.wikimedia.org/wiki/File:Traffic_Sign_GR_-_KOK_2009_-_R-2.svg",
+      "revision": "2022-07-28T13:13:38Z",
+      "sha256": "195256879b4a951b5ff432fcd51c412e48d0c9b26796f854c7f27ef8fda73b0c",
+      "source": "https://upload.wikimedia.org/wikipedia/commons/7/7b/Traffic_Sign_GR_-_KOK_2009_-_R-2.svg",
+      "title": "Traffic Sign GR - KOK 2009 - R-2.svg",
+      "width_m": 0.8
+    },
+    "hr": {
+      "artist": "มองโกเลีย๔๔",
+      "credit": "Own work",
+      "license": "CC BY-SA 4.0",
+      "license_url": "https://creativecommons.org/licenses/by-sa/4.0",
+      "original_sha256": "df432be9347dff6f135288dd39e3f23e91343d4f2c83112cc67d100baa0fb6b2",
+      "page": "https://commons.wikimedia.org/wiki/File:HR_road_sign_B02.svg",
+      "revision": "2023-08-27T16:17:46Z",
+      "sha256": "1fb89650ca26c0c5c4b0c0bebcf3068e12cbf6b2bc896cf70d80e6726b01df19",
+      "source": "https://upload.wikimedia.org/wikipedia/commons/9/98/HR_road_sign_B02.svg",
+      "title": "HR road sign B02.svg",
+      "width_m": 0.8
+    },
+    "hu": {
+      "artist": "Gigillo83",
+      "credit": "KRESZ The Hungarian Highway Code",
+      "license": "Public domain",
+      "license_url": "",
+      "original_sha256": "ed09df4c01c8168ffae957335bf810d9201cb931f8dae10289ed51e9931382db",
+      "page": "https://commons.wikimedia.org/wiki/File:Hungary_road_sign_B-002.svg",
+      "revision": "2014-03-18T14:13:46Z",
+      "sha256": "d5017ebcb5616f4338bb9a6da8f34716ac0b7635c2bacd83556df52aa2d9f8ba",
+      "source": "https://upload.wikimedia.org/wikipedia/commons/d/db/Hungary_road_sign_B-002.svg",
+      "title": "Hungary road sign B-002.svg",
+      "width_m": 0.8
+    },
+    "ie": {
+      "artist": "Government of Ireland – Department of Transport",
+      "credit": "Irish Traffic Signs Manual",
+      "license": "Public domain",
+      "license_url": "",
+      "original_sha256": "829b39576cb7cc402a91db3e714946d85a15c34dbd8dfd8d3d94d881d9353e65",
+      "page": "https://commons.wikimedia.org/wiki/File:IE_road_sign_RUS-027.svg",
+      "revision": "2021-12-02T20:02:20Z",
+      "sha256": "998a03d34ac15755b4f36d3a4290ff115c4a45da2e71c8b999e778f2bb995d59",
+      "source": "https://upload.wikimedia.org/wikipedia/commons/a/a5/IE_road_sign_RUS-027.svg",
+      "title": "IE road sign RUS-027.svg",
+      "width_m": 0.8
+    },
+    "is": {
+      "artist": "Gigillo83 , drawn by original of Umferðastrofa",
+      "credit": "Reglugerð um umferðarmerki og notkun þeirra http://www.us.is/Apps/WebObjects/US.woa/swdocument/3884/Regluger%C3%B0+um+umfer%C3%B0armerki+og+notkun+%C3%BEeirra,+nr.+289_1995.pdf",
+      "license": "Public domain",
+      "license_url": "",
+      "original_sha256": "817b57c7c185020864b96140328d9defe37b7df1992d515a507600c20db86a65",
+      "page": "https://commons.wikimedia.org/wiki/File:Iceland_road_sign_B19.11.svg",
+      "revision": "2014-01-20T02:06:39Z",
+      "sha256": "92319997318dae764fd1fed932c68fe0262d8d5f52ec269fd58bebfe004c5ecd",
+      "source": "https://upload.wikimedia.org/wikipedia/commons/2/2f/Iceland_road_sign_B19.11.svg",
+      "title": "Iceland road sign B19.11.svg",
+      "width_m": 0.8
+    },
+    "it": {
+      "artist": "F l a n k e r",
+      "credit": "http://www.codicestradainfantino.it/segnali/fii037.gif http://www.codicestradainfantino.it/segnali/tii4.gif",
+      "license": "CC BY-SA 3.0",
+      "license_url": "https://creativecommons.org/licenses/by-sa/3.0",
+      "original_sha256": "43dba72cd2678d7f31963e2b91f79f9de90c5f296bca6a6fe517180b03530641",
+      "page": "https://commons.wikimedia.org/wiki/File:Italian_traffic_signs_-_fermarsi_e_dare_precedenza_-_stop.svg",
+      "revision": "2025-08-24T20:17:25Z",
+      "sha256": "32c9e7f4f37ed829d5a8afb3fb6b47a0c13a57408f12afd1a29a8d7059a2d7af",
+      "source": "https://upload.wikimedia.org/wikipedia/commons/1/1c/Italian_traffic_signs_-_fermarsi_e_dare_precedenza_-_stop.svg",
+      "title": "Italian traffic signs - fermarsi e dare precedenza - stop.svg",
+      "width_m": 0.8
+    },
+    "lt": {
+      "artist": "Augustasci",
+      "credit": "Own work",
+      "license": "CC BY 4.0",
+      "license_url": "https://creativecommons.org/licenses/by/4.0",
+      "original_sha256": "03e561ddf563a6757c116529e1fdf149ae4328fb5fbd5376507c31abe004966f",
+      "page": "https://commons.wikimedia.org/wiki/File:LT_road_sign_204.svg",
+      "revision": "2026-01-21T14:59:54Z",
+      "sha256": "5862d3cfc01a2c001521c0ac8d70551d4aab430650f3ac0db34a31cfffa18881",
+      "source": "https://upload.wikimedia.org/wikipedia/commons/a/ac/LT_road_sign_204.svg",
+      "title": "LT road sign 204.svg",
+      "width_m": 0.8
+    },
+    "lu": {
+      "artist": "Gouvernement du Grand-Duché de Luxembourg",
+      "credit": "Arrêté grand-ducal du 23 novembre 1955 portant règlement de la circulation sur toutes les voies publiques, tel qu'il a été modifié par la suite",
+      "license": "Public domain",
+      "license_url": "",
+      "original_sha256": "6ccf88f1b2d1a4edd35467e797ec5e04ad9778a7ef1e22ca4d2b8b1fd3127b1a",
+      "page": "https://commons.wikimedia.org/wiki/File:Luxembourg_road_sign_B,2a.svg",
+      "revision": "2023-01-04T04:18:31Z",
+      "sha256": "458dd85541de523389503a5926276c5cc06086e71b7b8091e45bf66abac692a1",
+      "source": "https://upload.wikimedia.org/wikipedia/commons/3/33/Luxembourg_road_sign_B%2C2a.svg",
+      "title": "Luxembourg road sign B,2a.svg",
+      "width_m": 0.8
+    },
+    "lv": {
+      "artist": "มองโกเลีย๔๔",
+      "credit": "Own work",
+      "license": "Public domain",
+      "license_url": "",
+      "original_sha256": "6ae1ab8ae5434ae7e858bcbd8c91e6bfae3e5c8195b06247524136744138f531",
+      "page": "https://commons.wikimedia.org/wiki/File:Latvia_road_sign_207.svg",
+      "revision": "2019-03-23T09:13:45Z",
+      "sha256": "5da88c73fb1a0e9722e9eae3dd183af18f20bd4b04737966c5144cce3fa868e9",
+      "source": "https://upload.wikimedia.org/wikipedia/commons/4/48/Latvia_road_sign_207.svg",
+      "title": "Latvia road sign 207.svg",
+      "width_m": 0.8
+    },
+    "md": {
+      "artist": "มองโกเลีย๔๔",
+      "credit": "Own work",
+      "license": "Public domain",
+      "license_url": "",
+      "original_sha256": "14cfdc61602f2cd32e6edbefc9d841646d708545cf6b819131183482fde377e6",
+      "page": "https://commons.wikimedia.org/wiki/File:MD_road_sign_2.2.svg",
+      "revision": "2019-01-30T11:08:28Z",
+      "sha256": "811f587dc6cc9bbbafdc0cfbcb3daaa105d05f08d957600439834863aaf0bd0c",
+      "source": "https://upload.wikimedia.org/wikipedia/commons/f/f8/MD_road_sign_2.2.svg",
+      "title": "MD road sign 2.2.svg",
+      "width_m": 0.8
+    },
+    "me": {
+      "artist": "WWBM",
+      "credit": "Own work",
+      "license": "CC BY-SA 4.0",
+      "license_url": "https://creativecommons.org/licenses/by-sa/4.0",
+      "original_sha256": "4faaf333fce73fb3a733f0be7499e102a3e3fed3d5771e1a84cacc685e0c23d7",
+      "page": "https://commons.wikimedia.org/wiki/File:ME_road_sign_II-2.svg",
+      "revision": "2023-09-18T19:37:37Z",
+      "sha256": "52b8ed5850029a3b5394d983e27e272d7f47d5281b340f1d04c675439e186589",
+      "source": "https://upload.wikimedia.org/wikipedia/commons/5/5a/ME_road_sign_II-2.svg",
+      "title": "ME road sign II-2.svg",
+      "width_m": 0.8
+    },
+    "mk": {
+      "artist": "Gigillo83",
+      "credit": "Own work",
+      "license": "CC BY-SA 4.0",
+      "license_url": "https://creativecommons.org/licenses/by-sa/4.0",
+      "original_sha256": "732ce14d07a75c619882f601714aa8b74d26c36039c2ca7474de58f71b038f1c",
+      "page": "https://commons.wikimedia.org/wiki/File:MK_road_sign_202.svg",
+      "revision": "2026-03-19T02:18:11Z",
+      "sha256": "7789a3dad5aac539c11a085e2a8f350d4f46a35430a466a3e0e1d3f67115a8d9",
+      "source": "https://upload.wikimedia.org/wikipedia/commons/2/2c/MK_road_sign_202.svg",
+      "title": "MK road sign 202.svg",
+      "width_m": 0.8
+    },
+    "nl": {
+      "artist": "SVG version by Bouwe Brouwer",
+      "credit": "Verkeersborden en Verkeersregels in Nederland",
+      "license": "Public domain",
+      "license_url": "",
+      "original_sha256": "3b1be3f5e5c7de8bd78bd4dee0e83da5e91fb2bb73e4ddb9482c2a776222a1ce",
+      "page": "https://commons.wikimedia.org/wiki/File:Nederlands_verkeersbord_B7.svg",
+      "revision": "2014-01-19T01:29:25Z",
+      "sha256": "50cec6a47d4d676572980618410638f1c8fff6fd4e23f26b267450a3cbcfbe32",
+      "source": "https://upload.wikimedia.org/wikipedia/commons/6/66/Nederlands_verkeersbord_B7.svg",
+      "title": "Nederlands verkeersbord B7.svg",
+      "width_m": 0.8
+    },
+    "no": {
+      "artist": "Peter J. Acklam converted the original EPS file to PDF with Ghostscript and the PDF file to SVG with Inkscape .",
+      "credit": "EPS file downloaded from the Norwegian Public Roads Administration (Statens vegvesen) website: http://www.vegvesen.no/vegskilt/filnedlasting.stm",
+      "license": "Public domain",
+      "license_url": "",
+      "original_sha256": "a2e896493773a782a449e7e3e7957118d8e94d8f1e7b77ce611136aada7e1e9f",
+      "page": "https://commons.wikimedia.org/wiki/File:NO_road_sign_204.svg",
+      "revision": "2014-01-20T03:58:36Z",
+      "sha256": "db36ecc11f6d6f9e1f6be011fc373025c5cca4cd828f4468d9d267cf00ca6037",
+      "source": "https://upload.wikimedia.org/wikipedia/commons/b/b6/NO_road_sign_204.svg",
+      "title": "NO road sign 204.svg",
+      "width_m": 0.8
+    },
+    "pl": {
+      "artist": "Krzysztof Blachnicki",
+      "credit": "Own work i The source code of this SVG is valid . This vector image was created with Adobe Illustrator .",
+      "license": "Public domain",
+      "license_url": "",
+      "original_sha256": "7dc30bcb1cc57772009c73de5acdaef39d17cced6751c3ceea257d00cc014406",
+      "page": "https://commons.wikimedia.org/wiki/File:PL_road_sign_B-20.svg",
+      "revision": "2025-09-27T18:37:19Z",
+      "sha256": "b58c0f18ccf3008648aa44a1bf8ba2fbff3a9ae586e0c1fe4059240ddde91cf5",
+      "source": "https://upload.wikimedia.org/wikipedia/commons/7/77/PL_road_sign_B-20.svg",
+      "title": "PL road sign B-20.svg",
+      "width_m": 0.8
+    },
+    "pt": {
+      "artist": "Fer1997",
+      "credit": "Catálogo Sinalização",
+      "license": "CC BY-SA 3.0",
+      "license_url": "https://creativecommons.org/licenses/by-sa/3.0",
+      "original_sha256": "93660312bc55eab0ac5c949be4b7c5eb5397a5bed96aefb60a12d05b86c52132",
+      "page": "https://commons.wikimedia.org/wiki/File:Portugal_road_sign_B2.svg",
+      "revision": "2016-09-01T00:58:24Z",
+      "sha256": "91519350f70eba96b336ad96c44393703a3e5cf1ae61e1404eccd19143513ec3",
+      "source": "https://upload.wikimedia.org/wikipedia/commons/1/17/Portugal_road_sign_B2.svg",
+      "title": "Portugal road sign B2.svg",
+      "width_m": 0.8
+    },
+    "ro": {
+      "artist": "Alex:D",
+      "credit": "Own work",
+      "license": "CC BY-SA 3.0",
+      "license_url": "https://creativecommons.org/licenses/by-sa/3.0",
+      "original_sha256": "5bfd84d8738de93f79df47edbf3b75b3bfcd2e4892dca52cfcff3de1ac218a0b",
+      "page": "https://commons.wikimedia.org/wiki/File:RO_road_sign_B02.svg",
+      "revision": "2014-02-26T19:00:15Z",
+      "sha256": "0e8cebeb0ef53e4ff3a22e3fb4444e680205d4c259a5137bb96440a9a84b2ded",
+      "source": "https://upload.wikimedia.org/wikipedia/commons/3/3c/RO_road_sign_B02.svg",
+      "title": "RO road sign B02.svg",
+      "width_m": 0.8
+    },
+    "rs": {
+      "artist": "Gigillo83",
+      "credit": "Own work",
+      "license": "Public domain",
+      "license_url": "",
+      "original_sha256": "5364b2c836d82f2d89da3ad288a0a666dee61daa55c12d54b612e91c6823b6f1",
+      "page": "https://commons.wikimedia.org/wiki/File:Serbia_road_sign_II-2.svg",
+      "revision": "2024-12-07T18:55:32Z",
+      "sha256": "a4be9a80cf7a1785ebb77222768c118364a0860b9b44a553cc29aa4f224e3559",
+      "source": "https://upload.wikimedia.org/wikipedia/commons/e/e9/Serbia_road_sign_II-2.svg",
+      "title": "Serbia road sign II-2.svg",
+      "width_m": 0.8
+    },
+    "ru": {
+      "artist": "Nikolaev_ec06ffa5 , font by Alexander Sapozhnikov",
+      "credit": "Own work",
+      "license": "CC BY-SA 3.0",
+      "license_url": "https://creativecommons.org/licenses/by-sa/3.0",
+      "original_sha256": "a6e9363b88dea9d6fce9d19f6198138c6a25546b91c6340edd20851ca6e42074",
+      "page": "https://commons.wikimedia.org/wiki/File:RU_road_sign_2.5.svg",
+      "revision": "2014-07-28T18:33:06Z",
+      "sha256": "75c277a490b2bb1c167d1ce0688054e57d190e724d8478829627a9633a06792b",
+      "source": "https://upload.wikimedia.org/wikipedia/commons/2/23/RU_road_sign_2.5.svg",
+      "title": "RU road sign 2.5.svg",
+      "width_m": 0.8
+    },
+    "se": {
+      "artist": "See linked source history",
+      "credit": "",
+      "license": "Public domain",
+      "license_url": "",
+      "original_sha256": "26741f9b1464f99fa91e46978a91f36696fd2e8c60610c34516a19dd655f91e1",
+      "page": "https://commons.wikimedia.org/wiki/File:Sweden_road_sign_B2.svg",
+      "revision": "2017-10-26T19:53:14Z",
+      "sha256": "541656b5eae24328ffe10ef6c3b45fd90af78685d378323e20d9411b357ef877",
+      "source": "https://upload.wikimedia.org/wikipedia/commons/c/c4/Sweden_road_sign_B2.svg",
+      "title": "Sweden road sign B2.svg",
+      "width_m": 0.9
+    },
+    "si": {
+      "artist": "Government of Slovenia",
+      "credit": "Highway Code",
+      "license": "Public domain",
+      "license_url": "",
+      "original_sha256": "8d0aeb6ef7ac6031bfeacaaddba707cffaa3bfc2ced74be6c16e992e89d6294d",
+      "page": "https://commons.wikimedia.org/wiki/File:Slovenia_road_sign_II-2.svg",
+      "revision": "2014-05-12T00:14:39Z",
+      "sha256": "e8a2e2a8ed01368f9acaec2e5ef927a473d0784ba2a1a7837c8fbffa916ee004",
+      "source": "https://upload.wikimedia.org/wikipedia/commons/e/ec/Slovenia_road_sign_II-2.svg",
+      "title": "Slovenia road sign II-2.svg",
+      "width_m": 0.8
+    },
+    "sk": {
+      "artist": "Ministerstvo dopravy a výstavby SR",
+      "credit": "https://www.ssc.sk/sk/Technicke-predpisy-rezortu/zoznam-vl.ssc",
+      "license": "Public domain",
+      "license_url": "",
+      "original_sha256": "ef696337386ad1ee2d84ff9cb3c4fd053da0f2f766157c4235e49ed7bb3bcd22",
+      "page": "https://commons.wikimedia.org/wiki/File:202_Stoj,_daj_prednos%C5%A5_v_jazde!.svg",
+      "revision": "2021-10-06T19:54:23Z",
+      "sha256": "88d4bd4d5aa83594f2dcc2c08438f612dab9a3908d4f24248677f586b2d6b30a",
+      "source": "https://upload.wikimedia.org/wikipedia/commons/6/6f/202_Stoj%2C_daj_prednos%C5%A5_v_jazde%21.svg",
+      "title": "202 Stoj, daj prednosť v jazde!.svg",
+      "width_m": 0.8
+    },
+    "tr": {
+      "artist": "Gigillo83 ; original of Fry1989 eh?",
+      "credit": "Own work",
+      "license": "CC BY-SA 4.0",
+      "license_url": "https://creativecommons.org/licenses/by-sa/4.0",
+      "original_sha256": "ea0f1246fa90dabf47fe82b950f90b18145500646fe2e41ef6f88cdcd2cf8141",
+      "page": "https://commons.wikimedia.org/wiki/File:Turkey_road_sign_TT-2.svg",
+      "revision": "2021-08-10T09:18:17Z",
+      "sha256": "41cd2ffb5ecc36a6cb47012874d0b63f6fc3b42dc96d9845189ced85e68d0fe6",
+      "source": "https://upload.wikimedia.org/wikipedia/commons/e/e3/Turkey_road_sign_TT-2.svg",
+      "title": "Turkey road sign TT-2.svg",
+      "width_m": 0.8
+    },
+    "ua": {
+      "artist": "Government of Ukraine",
+      "credit": "DSTU 4100:2021",
+      "license": "Public domain",
+      "license_url": "",
+      "original_sha256": "f599b8328640883c9ae6caa026084aac5b5ffb12bb3432ac0b7b5cf4609159a8",
+      "page": "https://commons.wikimedia.org/wiki/File:UA_road_sign_2.2.svg",
+      "revision": "2023-05-20T10:08:06Z",
+      "sha256": "e1beabc9df6c8adbccc345f573e4fa16758d35c8c2d6bd9d55c0ec4f7514377c",
+      "source": "https://upload.wikimedia.org/wikipedia/commons/e/e8/UA_road_sign_2.2.svg",
+      "title": "UA road sign 2.2.svg",
+      "width_m": 0.8
+    },
+    "vienna": {
+      "artist": "United Nations",
+      "credit": "Vienna Convention on Road Signs and Signals",
+      "license": "Public domain",
+      "license_url": "",
+      "original_sha256": "e0e09a399348ec6eaf166d20fca0a4f73b07f4685cdb6f24e8ba75f86560963e",
+      "page": "https://commons.wikimedia.org/wiki/File:Vienna_Convention_road_sign_B2a.svg",
+      "revision": "2018-03-11T17:18:15Z",
+      "sha256": "9de03f010639d9004aeb19c1626ab5272733e21d9a00e8eaf89d435053c77fd0",
+      "source": "https://upload.wikimedia.org/wikipedia/commons/1/1e/Vienna_Convention_road_sign_B2a.svg",
+      "title": "Vienna Convention road sign B2a.svg",
+      "width_m": 0.8
+    }
+  }
+}

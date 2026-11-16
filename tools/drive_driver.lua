@@ -557,6 +557,11 @@ function D.pollTable()
       error = s.error, endMs = s.endMs, falls = s.falls, resets = s.resets, rebases = s.rebases, resyncs = s.resyncs, jumps = s.jumps,
       vSum = s.vSum, vProfSum = s.vProfSum, vN = s.vN },
   }
+  -- the terrain under the car (a bridge: the car well above it; a tunnel: well below; tools/bridgefps.py)
+  if s.x and s.y and core_terrain and core_terrain.getTerrainHeight then
+    local ok, h = pcall(core_terrain.getTerrainHeight, vec3(s.x, s.y, 0))
+    if ok then out.drive.terr = h end
+  end
   local core = rawget(_G, 'beamngEarth_core')
   if core and core.status then
     local ok, st = pcall(function() return loadstring('return ' .. core.status())() end)

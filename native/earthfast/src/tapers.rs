@@ -1,5 +1,6 @@
 //! Lane tapers (server roads.py road_tapers): where a road goes on as one of another width, or onto its own deck, the
 //! joint and the width it runs to there. See roads.py TAPER_* for the rules; this is their kernel.
+use crate::dm::Dm;
 use numpy::{IntoPyArray, PyArray2, PyReadonlyArray1, PyReadonlyArray2};
 use pyo3::prelude::*;
 use std::collections::HashMap;
@@ -17,7 +18,7 @@ pub fn road_tapers<'py>(py: Python<'py>, lonlat: PyReadonlyArray2<'py, f64>, off
     let (m_per_m, min_l, max_l, share, min_dw, max_turn) = (p[0], p[1], p[2], p[3], p[4], p[5]);
     let decks = p.len() > 6 && p[6] > 0.5;     // (deck mode: decks meeting decks, at their deck widths)
     let n = off.len().saturating_sub(1);
-    let rows = py.allow_threads(|| {
+    let rows = py.detach(|| {
         let mut rows: Vec<[f64; 5]> = Vec::new();
         let ok: Vec<bool> = (0..n).map(|i| (off[i + 1] - off[i]) >= 2 && at[[i, 1]] >= 0.0).collect();
         if !ok.iter().any(|&b| b) {
@@ -32,7 +33,7 @@ pub fn road_tapers<'py>(py: Python<'py>, lonlat: PyReadonlyArray2<'py, f64>, off
             }
         }
         let lat0 = lat_sum / cnt;
-        let (mx, my) = (111320.0 * lat0.to_radians().cos(), 110540.0);
+        let (mx, my) = (111320.0 * lat0.to_radians().dcos(), 110540.0);
         let key = |lon: f64, lat: f64| ((lon * 1e6).round() as i64, (lat * 1e6).round() as i64);
         let mut ends: HashMap<(i64, i64), Vec<(usize, usize)>> = HashMap::new();
         for i in 0..n {
@@ -51,7 +52,7 @@ pub fn road_tapers<'py>(py: Python<'py>, lonlat: PyReadonlyArray2<'py, f64>, off
             let (mut s, mut dir, mut px, mut py_) = (0.0, None, 0.0, 0.0);
             for k in 1..(b - a) {
                 let (x, y) = ((ll[[idx(k), 0]] - x0) * mx, (ll[[idx(k), 1]] - y0) * my);
-                s += (x - px).hypot(y - py_);
+                s += (x - px).dhypot(y - py_);
                 px = x;
                 py_ = y;
                 if dir.is_none() && s >= 10.0 {
@@ -59,10 +60,10 @@ pub fn road_tapers<'py>(py: Python<'py>, lonlat: PyReadonlyArray2<'py, f64>, off
                 }
             }
             let v = dir.unwrap_or([px, py_]);
-            let l = v[0].hypot(v[1]);
+            let l = v[0].dhypot(v[1]);
             (if l > 1e-6 { Some([v[0] / l, v[1] / l]) } else { None }, s)
         };
-        let cos_max = max_turn.to_radians().cos();
+        let cos_max = max_turn.to_radians().dcos();
         let span = |dw: f64, length: f64| (dw * m_per_m).clamp(min_l, max_l).min(share * length);
         for i in 0..n {
             let w = if decks { at[[i, 4]] } else { at[[i, 0]] };
@@ -131,7 +132,7 @@ pub fn road_tapers<'py>(py: Python<'py>, lonlat: PyReadonlyArray2<'py, f64>, off
             let (a, b) = (off[i] as usize, off[i + 1] as usize);
             let mut s = vec![0.0f64; b - a];
             for k in 1..(b - a) {
-                s[k] = s[k - 1] + ((ll[[a + k, 0]] - ll[[a + k - 1, 0]]) * mx).hypot((ll[[a + k, 1]] - ll[[a + k - 1, 1]]) * my);
+                s[k] = s[k - 1] + ((ll[[a + k, 0]] - ll[[a + k - 1, 0]]) * mx).dhypot((ll[[a + k, 1]] - ll[[a + k - 1, 1]]) * my);
             }
             let total = s[b - a - 1];
             let t = f * total;
@@ -159,74 +160,110 @@ pub fn lane_flow<'py>(py: Python<'py>, lonlat: PyReadonlyArray2<'py, f64>, off: 
                       attrs: PyReadonlyArray2<'py, f64>, max_lanes: f64) -> Bound<'py, numpy::PyArray1<f64>> {
     let (ll, off, at) = (lonlat.as_array(), off.as_array(), attrs.as_array());
     let n = off.len().saturating_sub(1);
-    let out = py.allow_threads(|| {
-        let key = |k: usize| ((ll[[k, 0]] * 1e6).round() as i64, (ll[[k, 1]] * 1e6).round() as i64);
-        let mut node: HashMap<(i64, i64), usize> = HashMap::new();
-        let mut blocked: Vec<bool> = Vec::new();        // a node a road not counted ends at
-        let mut tail = vec![usize::MAX; n];
-        let mut head = vec![usize::MAX; n];
-        let mut id = |k: (i64, i64), node: &mut HashMap<(i64, i64), usize>, blocked: &mut Vec<bool>| -> usize {
-            let len = node.len();
-            *node.entry(k).or_insert_with(|| {
-                blocked.push(false);
-                len
-            })
-        };
-        for i in 0..n {
+    let out = py.detach(|| {
+        let key = |k: usize| node_key(ll[[k, 0]], ll[[k, 1]]);
+        let ends = |i: usize| -> Option<(NodeKey, NodeKey)> {
             let (a, b) = (off[i] as usize, off[i + 1] as usize);
-            if b < a + 2 {
-                continue;
-            }
-            let (na, nb) = (id(key(a), &mut node, &mut blocked), id(key(b - 1), &mut node, &mut blocked));
-            let d = at[[i, 0]];
-            if d == 0.0 {
-                blocked[na] = true;
-                blocked[nb] = true;
-                continue;
-            }
-            if d > 0.0 { tail[i] = na; head[i] = nb; } else { tail[i] = nb; head[i] = na; }
-        }
-        let nn = node.len();
-        let mut ins: Vec<Vec<usize>> = vec![Vec::new(); nn];     // roads whose traffic arrives at the node
-        let mut outs: Vec<Vec<usize>> = vec![Vec::new(); nn];    // ... leaves it
-        for i in 0..n {
-            if tail[i] != usize::MAX {
-                outs[tail[i]].push(i);
-                ins[head[i]].push(i);
-            }
-        }
-        let mut lanes: Vec<f64> = (0..n).map(|i| {
-            let v = at[[i, 1]];
-            if v.is_nan() && at[[i, 2]] > 0.5 { 1.0 } else { v }
-        }).collect();
-        let known0: Vec<bool> = lanes.iter().map(|v| !v.is_nan()).collect();
-        let mut deflt = vec![false; n];          // (phase 2: counting as its default)
-        let mut found_default = vec![false; n];
-        let sum = |list: &Vec<usize>, lanes: &Vec<f64>| -> Option<f64> {
-            if list.is_empty() { return None; }
-            let mut s = 0.0;
-            for &j in list {
-                if lanes[j].is_nan() { return None; }
-                s += lanes[j];
-            }
-            Some(s)
+            if b < a + 2 { None } else { Some((key(a), key(b - 1))) }
         };
-        for phase in 0..2 {
+        let mut road = Vec::new();
+        let mut counted = Vec::new();
+        for i in 0..n {
+            if at[[i, 0]] != 0.0 {
+                if let Some((ka, kb)) = ends(i) {
+                    road.push(i);
+                    counted.push((ka, kb, [at[[i, 0]], at[[i, 1]], at[[i, 2]], at[[i, 3]]]));
+                }
+            }
+        }
+        let blockers = (0..n).filter(|&i| at[[i, 0]] == 0.0).filter_map(ends).flat_map(|(a, b)| [a, b]);
+        let got = lane_flow_core(&counted, blockers, max_lanes);
+        let mut out = vec![f64::NAN; n];
+        for (c, &i) in road.iter().enumerate() {
+            out[i] = got[c];
+        }
+        out
+    });
+    out.into_pyarray(py)
+}
+
+/// A node of lane_flow: a road end's lon / lat in micro-degrees, rounded.
+pub(crate) type NodeKey = (i64, i64);
+
+/// lane_flow's node of a point.
+#[inline]
+pub(crate) fn node_key(lon: f64, lat: f64) -> NodeKey {
+    ((lon * 1e6).round() as i64, (lat * 1e6).round() as i64)
+}
+
+type NodeMap = HashMap<NodeKey, usize, crate::roadlanes::FxBuild>;
+
+/// lane_flow's solve. counted: the counted roads (attrs one-way sign along the geometry not 0, two points or more), in
+/// road order: (start node, end node along the geometry, attrs row: one-way sign, the map's lanes or NaN, ramp 1 / 0,
+/// the class's default lanes or NaN); blockers: both end nodes of every road of two points or more not counted (its
+/// sign 0). Returns the count found per counted road (NaN: none), at most max_lanes; a road not counted never has one
+/// (only its ends matter: a node a road not counted ends at is left alone).
+pub(crate) fn lane_flow_core(counted: &[(NodeKey, NodeKey, [f64; 4])], blockers: impl IntoIterator<Item = NodeKey>,
+                             max_lanes: f64) -> Vec<f64> {
+    let n = counted.len();
+    let at: Vec<[f64; 4]> = counted.iter().map(|c| c.2).collect();
+    let mut node: NodeMap = HashMap::default();
+    let mut tail = vec![usize::MAX; n];
+    let mut head = vec![usize::MAX; n];
+    for (i, &(ka, kb, a)) in counted.iter().enumerate() {
+        let len = node.len();
+        let na = *node.entry(ka).or_insert(len);
+        let len = node.len();
+        let nb = *node.entry(kb).or_insert(len);
+        if a[0] > 0.0 { tail[i] = na; head[i] = nb; } else { tail[i] = nb; head[i] = na; }
+    }
+    let nn = node.len();
+    let mut blocked = vec![false; nn];      // a node a road not counted ends at
+    if nn > 0 {
+        for k in blockers {
+            if let Some(&j) = node.get(&k) {
+                blocked[j] = true;
+            }
+        }
+    }
+    let mut ins: Vec<Vec<usize>> = vec![Vec::new(); nn];     // roads whose traffic arrives at the node
+    let mut outs: Vec<Vec<usize>> = vec![Vec::new(); nn];    // ... leaves it
+    for i in 0..n {
+        outs[tail[i]].push(i);
+        ins[head[i]].push(i);
+    }
+    let mut lanes: Vec<f64> = (0..n).map(|i| {
+        let v = at[i][1];
+        if v.is_nan() && at[i][2] > 0.5 { 1.0 } else { v }
+    }).collect();
+    let known0: Vec<bool> = lanes.iter().map(|v| !v.is_nan()).collect();
+    let mut deflt = vec![false; n];          // (phase 2: counting as its default)
+    let mut found_default = vec![false; n];
+    let sum = |list: &Vec<usize>, lanes: &Vec<f64>| -> Option<f64> {
+        if list.is_empty() { return None; }
+        let mut s = 0.0;
+        for &j in list {
+            if lanes[j].is_nan() { return None; }
+            s += lanes[j];
+        }
+        Some(s)
+    };
+    for phase in 0..2 {
         // phase 1: the map's counts alone; phase 2: a road still without one counts as its class's default lanes
         // where it feeds or takes another (a merge with a ramp adds a lane, a split takes one) - after the map's own
         // counts went as far as they go
         if phase == 1 {
             for i in 0..n {
-                if lanes[i].is_nan() && !at[[i, 3]].is_nan() && tail[i] != usize::MAX {
+                if lanes[i].is_nan() && !at[i][3].is_nan() {
                     deflt[i] = true;
-                    lanes[i] = at[[i, 3]];
+                    lanes[i] = at[i][3];
                 }
             }
         }
         for _ in 0..16 {
             let mut changed = false;
             for i in 0..n {
-                if tail[i] == usize::MAX || (!lanes[i].is_nan() && !(phase == 1 && deflt[i])) {
+                if !lanes[i].is_nan() && !(phase == 1 && deflt[i]) {
                     continue;
                 }
                 let (t, h) = (tail[i], head[i]);
@@ -250,7 +287,7 @@ pub fn lane_flow<'py>(py: Python<'py>, lonlat: PyReadonlyArray2<'py, f64>, off: 
                         if a - b >= 1.0 { got = Some(a - b); }
                     }
                 }
-                if phase == 1 && got.map_or(false, |v| v <= at[[i, 3]]) {
+                if phase == 1 && got.map_or(false, |v| v <= at[i][3]) {
                     got = None;                 // (on defaults only a merge's added lane: never narrower than its own)
                 }
                 if let Some(v) = got {
@@ -268,11 +305,9 @@ pub fn lane_flow<'py>(py: Python<'py>, lonlat: PyReadonlyArray2<'py, f64>, off: 
                 break;
             }
         }
-        }
-        // only what was found: the map's own counts and the ramps' one lane stay the caller's
-        (0..n).map(|i| if known0[i] || (deflt[i] && !found_default[i]) { f64::NAN } else { lanes[i] }).collect::<Vec<f64>>()
-    });
-    out.into_pyarray(py)
+    }
+    // only what was found: the map's own counts and the ramps' one lane stay the caller's
+    (0..n).map(|i| if known0[i] || (deflt[i] && !found_default[i]) { f64::NAN } else { lanes[i] }).collect()
 }
 
 /// Lane line shifts at merges and splits (server roads.py lane_shifts): where a one-way road takes a ramp and goes on
@@ -288,7 +323,7 @@ pub fn lane_shifts<'py>(py: Python<'py>, lonlat: PyReadonlyArray2<'py, f64>, off
     let (ll, off, at, p) = (lonlat.as_array(), off.as_array(), attrs.as_array(), params.as_array());
     let (m_per_m, min_l, max_l, share, min_shift) = (p[0], p[1], p[2], p[3], p[4]);
     let n = off.len().saturating_sub(1);
-    let rows = py.allow_threads(|| {
+    let rows = py.detach(|| {
         let mut rows: Vec<[f64; 5]> = Vec::new();
         let ok: Vec<bool> = (0..n).map(|i| (off[i + 1] - off[i]) >= 2 && at[[i, 0]] != 0.0).collect();
         if !ok.iter().any(|&b| b) {
@@ -301,7 +336,7 @@ pub fn lane_shifts<'py>(py: Python<'py>, lonlat: PyReadonlyArray2<'py, f64>, off
                 cnt += 1.0;
             }
         }
-        let (mx, my) = (111320.0 * (lat_sum / cnt).to_radians().cos(), 110540.0);
+        let (mx, my) = (111320.0 * (lat_sum / cnt).to_radians().dcos(), 110540.0);
         let key = |k: usize| ((ll[[k, 0]] * 1e6).round() as i64, (ll[[k, 1]] * 1e6).round() as i64);
         // per node: roads arriving and leaving (by traffic), with the end of each at it
         let mut ins: HashMap<(i64, i64), Vec<usize>> = HashMap::new();
@@ -328,7 +363,7 @@ pub fn lane_shifts<'py>(py: Python<'py>, lonlat: PyReadonlyArray2<'py, f64>, off
             let (mut s, mut dir, mut px, mut py_) = (0.0, None, 0.0, 0.0);
             for k in 1..(b - a) {
                 let (x, y) = ((ll[[idx(k), 0]] - x0) * mx, (ll[[idx(k), 1]] - y0) * my);
-                s += (x - px).hypot(y - py_);
+                s += (x - px).dhypot(y - py_);
                 px = x;
                 py_ = y;
                 if dir.is_none() && s >= 15.0 {
@@ -336,7 +371,7 @@ pub fn lane_shifts<'py>(py: Python<'py>, lonlat: PyReadonlyArray2<'py, f64>, off
                 }
             }
             let v = dir.unwrap_or([px, py_]);
-            let l = v[0].hypot(v[1]);
+            let l = v[0].dhypot(v[1]);
             if l < 1e-6 {
                 return (None, s);
             }
@@ -357,7 +392,7 @@ pub fn lane_shifts<'py>(py: Python<'py>, lonlat: PyReadonlyArray2<'py, f64>, off
             let mut out = vec![(0.0, 0.0)];
             for k in 1..(b - a) {
                 let (x, y) = ((ll[[idx(k), 0]] - x0) * mx, (ll[[idx(k), 1]] - y0) * my);
-                s += (x - px).hypot(y - py_);
+                s += (x - px).dhypot(y - py_);
                 px = x;
                 py_ = y;
                 out.push((s, di[0] * y - di[1] * x));
@@ -394,7 +429,7 @@ pub fn lane_shifts<'py>(py: Python<'py>, lonlat: PyReadonlyArray2<'py, f64>, off
                     let mut fits = true;
                     for &r in others.iter() {
                         let (Some(dr), _) = travel(r, !at_tail) else { fits = false; break };
-                        if di[0] * dr[0] + di[1] * dr[1] < (40.0f64).to_radians().cos() {
+                        if di[0] * dr[0] + di[1] * dr[1] < (40.0f64).to_radians().dcos() {
                             fits = false;       // (a road meeting at an angle: a junction, not a merge / split)
                             break;
                         }

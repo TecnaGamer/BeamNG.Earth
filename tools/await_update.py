@@ -101,7 +101,7 @@ def main():
     if lua("return tostring(beamngEarth_core ~= nil)").strip() != "true" or \
             lua("return tostring(getCurrentLevelIdentifier and getCurrentLevelIdentifier())").strip() != "beamng_earth":
         try:
-            mcp.call("load_level", {"name": "beamng_earth"})
+            mcp.call("run_lua", {"code": "freeroam_freeroam.startFreeroamByName('beamng_earth') return 1"})     # (freeroam's start: load_level skips its extensions)
         except Exception as e:
             say(f"- load_level: {e}")
     if not wait_for(lambda: lua("return tostring(beamngEarth_core ~= nil and getPlayerVehicle(0) ~= nil)").strip()

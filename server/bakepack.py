@@ -19,6 +19,7 @@ import logging
 import os
 import struct
 import threading
+import dmath
 
 log = logging.getLogger("earthd.bakepack")
 
@@ -30,15 +31,6 @@ BAKE_FORMAT = 1
 _lock = threading.Lock()
 _packs = {}             # cache dir -> [Pack]
 _seen = {}              # cache dir -> the pack files' (name, size, mtime) when last listed
-
-
-def meta_for(md, signature, frames):
-    """The meta a pack made with map data md and plans signature / frames carries (and a reader expects)."""
-    import plancache
-    import roads
-    return {"bake_format": BAKE_FORMAT, "plans_format": plancache.PLANS_FORMAT, "facts_format": roads.FACTS_FORMAT,
-            "frames": frames, "signature": signature,
-            "versions": json.loads(json.dumps(md.versions(), sort_keys=True)) if md is not None else None}
 
 
 class Writer:
@@ -154,11 +146,38 @@ NEAR_M = 5000.0             # a pack within this of the player is fetched
 _sync = {"at": -1e9, "busy": False}
 
 
+# Switches whose output is confined to cells that are never baked or shared (roadz.hk_cell: Hong Kong's measured heights
+# and terrain stay on the computer that read them): the packs and the BeamMP helper are made with both off
+# (sharehelper.py, bake_area), the players' servers with both on; the cells they change are left out by cell instead
+CELL_SCOPED = frozenset({"BNE_ROADZ_HK", "BNE_HKDTM"})
+_switches = []
+
+
+def switches():
+    """The build switches a pack's (or a BeamMP share's, mpshare.expect_code) items were made with: revisit.switches_key's
+    BNE_* that change output, the settings page's Experimental ones among them, without CELL_SCOPED; in its meta and in
+    every expect: a pack made with other switches (the defaults, for a player with an experimental switch on) holds
+    other plans and facts. The bridge profile as the roads read it (earthd writes its CLI default into the
+    environment, the helper and bake_area do not: worldbundle.generator_identity's rule). Once a process."""
+    if not _switches:
+        import hashlib
+        import revisit
+        import roads
+        sw = {k: v for k, v in os.environ.items()
+              if k.startswith("BNE_") and k not in revisit.NOT_SWITCHES and k not in CELL_SCOPED}
+        sw["BNE_BRIDGE_PROFILE"] = roads.bridge_profile_mode()
+        h = hashlib.sha1()
+        for k in sorted(sw):
+            h.update(f"{k}={sw[k]}".encode())
+        _switches.append(h.hexdigest()[:16])
+    return _switches[0]
+
+
 def _expect_for(md, signature):
     import plancache
     import roads
     return {"bake_format": BAKE_FORMAT, "plans_format": plancache.PLANS_FORMAT, "facts_format": roads.FACTS_FORMAT,
-            "frames": plancache.FRAMES, "signature": signature,
+            "frames": plancache.FRAMES, "signature": signature, "switches": switches(),
             "versions": json.loads(json.dumps(md.versions(), sort_keys=True))}
 
 
@@ -208,7 +227,7 @@ def sync(cache_dir, net, md, lat, lon, signature, now=None):
         index = json.load(open(ip, encoding="utf-8"))
         for e in index.get("packs", []):
             s, w, n, east = e["bbox"]
-            k = 111320.0 * math.cos(math.radians(lat))
+            k = 111320.0 * dmath.cos(math.radians(lat))
             dy = max(s - lat, 0.0, lat - n) * 110540.0
             dx = max(w - lon, 0.0, lon - east) * k
             if math.hypot(dx, dy) > NEAR_M or not _matches(_Meta(e.get("meta") or {}), expect):

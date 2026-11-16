@@ -1,0 +1,12 @@
+{
+  "source_sha256": "e7f401e7f14b6835f13cf6068da7d100e251d208a7618fdd3a944b2a4debd19a",
+  "parts": [
+    "bfee1c7829a2ee4a9f22ce274aaa565dd175f0827d943d9955e0464fff6b0f8c",
+    "1f641e6f0f9214874694c4f45321f0da73270fada3c8b15d9bd131ac3c5d01fd"
+  ],
+  "counts": {
+    "intersection": 2772374,
+    "roundabout": 172615,
+    "mini": 25477
+  }
+}

@@ -257,7 +257,86 @@ class NoWaitTest(unittest.TestCase):
             z, x, y = 14, 1, 2
         t0 = time.monotonic()
         self.assertEqual(src.cells([Key()], wait=False), [], "not there yet: none, no long wait")
-        self.assertLess(time.monotonic() - t0, picnicsource.LATER_WAIT_S + 0.5)
+        self.assertLess(time.monotonic() - t0, 0.5)
         gate.set()
         src._threads[(14, 1, 2)].join(5)
         self.assertEqual(src.cells([Key()], wait=False), [["feats"]], "read in the background: used next time")
+
+
+    def test_prefetch_reads_ahead_without_waiting(self):
+        import threading
+        import time
+        import picnicsource
+        src = picnicsource.Source.__new__(picnicsource.Source)
+        src._lock, src._down, src._ready, src._threads = threading.Lock(), False, {}, {}
+        gate, calls = threading.Event(), []
+
+        def slow(key, kind):
+            calls.append((key.z, key.x, key.y))
+            gate.wait(5)
+            return ["feats"]
+        src._cell = slow
+
+        class Key:
+            z, x, y = 14, 3, 4
+        t0 = time.monotonic()
+        src.prefetch([Key()])
+        self.assertLess(time.monotonic() - t0, 0.2, "the read starts in the background")
+        gate.set()
+        src._threads[(14, 3, 4)].join(5)
+        t0 = time.monotonic()
+        self.assertEqual(src.cells([Key()], wait=False), [["feats"]], "read ahead: there when the tile asks")
+        self.assertLess(time.monotonic() - t0, 0.2)
+        src.prefetch([Key()])
+        self.assertEqual(calls, [(14, 3, 4)], "read once")
+
+    def test_a_cells_rows_are_kept_for_the_next_process(self):
+        # each process (and run) queried every cell's row groups again: the rows of a version's cell are kept on disk
+        import tempfile
+        import threading
+        import picnicsource
+        from types import SimpleNamespace
+        with tempfile.TemporaryDirectory() as d:
+            remote = SimpleNamespace(cache_dir=d)
+            import struct
+            rows = [(7, "picnic_table", None, None, struct.pack("<BIdd", 1, 1, 2.5, 48.1)), (9, None, "bbq", "", b"")]
+
+            def source(answer):
+                src = picnicsource.Source.__new__(picnicsource.Source)
+                src._lock, src._down, src._cells = threading.Lock(), False, {}
+                src._version = lambda kind: ("etag", remote)
+                src._query = answer
+                return src
+
+            class Key:
+                z, x, y = 14, 5, 6
+
+                @staticmethod
+                def bounds():
+                    return (0.0, 0.0, 1.0, 1.0)
+            asked = []
+            a = source(lambda remote_, bounds, kind: asked.append(bounds) or rows)._cell(Key(), "demand")
+            b = source(lambda remote_, bounds, kind: asked.append(bounds) or [])._cell(Key(), "demand")
+            self.assertEqual(len(asked), 1, "the second process read the kept rows")
+            self.assertEqual(list(a.ids), list(b.ids))
+            self.assertEqual(list(a.attrs["tags"]), list(b.attrs["tags"]))
+            self.assertEqual(picnicsource._rows_load(remote, Key()), rows)
+
+    def test_mapdata_side_prefetch_starts_every_side_source(self):
+        import mapdata
+
+        class Src:
+            def __init__(self):
+                self.got = []
+
+            def prefetch(self, keys):
+                self.got.append(list(keys))
+
+        class Broken:
+            def prefetch(self, keys):
+                raise OSError("down")
+        md = mapdata.MapData.__new__(mapdata.MapData)
+        a, b = Src(), Src()
+        md.side_sources = [a, Broken(), b]
+        md.side_prefetch(["k1", "k2"])
+        self.assertEqual((a.got, b.got), ([["k1", "k2"]], [["k1", "k2"]]), "one broken source stops none of the others")

@@ -43,7 +43,7 @@ class HighwayTagReaderTest(unittest.TestCase):
             bbox = dict(xmin=float(coords[0, 0]), ymin=float(coords[0, 1]),
                         xmax=float(coords[-1, 0]), ymax=float(coords[-1, 1]))
             for wid, cls, lanes in ((1, "motorway", "3"), (2, "motorway", "2;3"),
-                                    (3, "residential", "2"), (4, "raceway", "2")):
+                                    (3, "residential", "2"), (4, "raceway", "2"), (5, "busway", "1")):
                 values = dict(highway=cls, lanes=lanes, oneway="yes", name="Example", surface="asphalt")
                 row = [wid, bbox] + [values.get(c) for c in columns] + [wkb]
                 con.execute("INSERT INTO highways VALUES (" + ",".join("?" for _ in row) + ")", row)
@@ -58,7 +58,7 @@ class HighwayTagReaderTest(unittest.TestCase):
 
             store = osmtags.OsmTags(tmp, None)
             store._reader = SimpleNamespace(_connect=lambda *args: (LocalConnection(), "fixture", []), _fetch=mock.Mock())
-            groups = {0: {"first": 0, "n": 4, "cols": {c: [] for c in columns + ["id", "bbox", "geometry"]}}}
+            groups = {0: {"first": 0, "n": 5, "cols": {c: [] for c in columns + ["id", "bbox", "geometry"]}}}
             with mock.patch.object(store, "_groups", return_value=groups):
                 # (dev's reader decodes a row group once into the version's folder: remote.cache_dir)
                 remote = SimpleNamespace(cache_dir=tmp)
@@ -75,7 +75,8 @@ class HighwayTagReaderTest(unittest.TestCase):
             self.assertNotIn("lanes", tags[2])
             self.assertNotIn("_coords", tags[2])
             self.assertNotIn("_coords", tags[3], "only highways need the geometry fallback")
-            self.assertEqual([w["id"] for w in raceways], [4])
+            self.assertEqual([w["id"] for w in raceways if w.get("highway") == "raceway"], [4])
+            self.assertEqual([w["id"] for w in raceways if w.get("highway") == "busway"], [5])
             np.testing.assert_allclose(raceways[0]["coords"], coords)
 
 

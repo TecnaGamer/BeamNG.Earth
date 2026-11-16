@@ -52,6 +52,7 @@ from concurrent.futures import Future
 from runtimeprofiler import ThreadPoolExecutor
 
 import numpy as np
+import dmath
 
 log = logging.getLogger("earthd.peerwork")
 
@@ -117,6 +118,28 @@ def code_id():
             native = 0
         _CODE_ID = f"{src}-{native}"
     return _CODE_ID
+
+
+_switches = []
+
+
+def switches():
+    """This server's build switches (the BNE_* that change output, revisit.NOT_SWITCHES left out; the settings page's
+    Experimental ones among them): a helper whose switches differ builds other tiles from the same code. The bridge
+    profile as the roads read it (roads.bridge_profile_mode): earthd writes its CLI default into the environment, a
+    standalone `peerwork.py serve` does not (Codex review of f8d79aa2: every default helper was refused). Once a
+    process."""
+    if not _switches:
+        import hashlib
+        import revisit
+        import roads
+        sw = {k: v for k, v in os.environ.items() if k.startswith("BNE_") and k not in revisit.NOT_SWITCHES}
+        sw["BNE_BRIDGE_PROFILE"] = roads.bridge_profile_mode()
+        h = hashlib.sha1()
+        for k in sorted(sw):
+            h.update(f"{k}={sw[k]}".encode())
+        _switches.append(h.hexdigest()[:16])
+    return _switches[0]
 
 
 def version():
@@ -208,7 +231,8 @@ def built_msg(built):
     """(header dict, blobs) of a farfield.Built."""
     d = {"pos": [float(v) for v in built.pos], "err": float(built.err),
          "sink": None if built.sink is None else float(built.sink), "skirt": float(built.skirt),
-         "size": float(built.size), "arrays": [n for n in BUILT_ARRAYS if getattr(built, n) is not None]}
+         "size": float(built.size), "arrays": [n for n in BUILT_ARRAYS if getattr(built, n) is not None],
+         "err_n": None if built.err_n is None else float(built.err_n)}
     return d, [_npy(getattr(built, n)) for n in d["arrays"]]
 
 
@@ -218,7 +242,7 @@ def built_from(d, blobs):
     return farfield.Built(pos=list(d["pos"]), positions=arrays.get("positions"), normals=arrays.get("normals"),
                           uvs=arrays.get("uvs"), planar=arrays.get("planar"), tris=arrays.get("tris"),
                           grid=arrays.get("grid"), err=float(d["err"]), sink=d["sink"], skirt=float(d["skirt"]),
-                          size=float(d["size"]))
+                          size=float(d["size"]), err_n=d.get("err_n"))
 
 
 def job_key(header):
@@ -273,7 +297,7 @@ def owner_of(key, ids, weights=None):
     for i in ids:
         w = float((weights or {}).get(i, 1.0))
         u = (int(hashlib.sha256((key + "/" + i).encode()).hexdigest()[:13], 16) + 0.5) / float(1 << 52)
-        score = -w / math.log(u)
+        score = -w / dmath.log(u)
         if score > best_s:
             best, best_s = i, score
     return best
@@ -282,7 +306,7 @@ def owner_of(key, ids, weights=None):
 def share_weight():
     """This machine's capacity for its group (owner_of): its CPU threads, half on the small profile."""
     import budget
-    return round((os.cpu_count() or 4) * (0.5 if budget.small() else 1.0), 1)
+    return round((os.cpu_count() or 4) * (0.5 if budget.small_machine() else 1.0), 1)
 
 
 class ReplyCache:
@@ -515,7 +539,8 @@ class Helper:
 
     def hello(self):
         _require_unpinned_helper()
-        return {"ok": True, "protocol": PROTOCOL, "version": version(), "code": code_id(), "workers": self.workers}
+        return {"ok": True, "protocol": PROTOCOL, "version": version(), "code": code_id(), "switches": switches(),
+                "workers": self.workers}
 
     def handle(self, sock, addr):
         try:
@@ -523,6 +548,9 @@ class Helper:
             mine = self.hello()
             if h.get("op") != "hello" or h.get("protocol") != PROTOCOL or h.get("code") != mine["code"]:
                 send_msg(sock, dict(mine, ok=False, error="a different BeamNG.Earth version"))
+                return
+            if h.get("switches") != mine["switches"]:   # (other build switches: other tiles, the same code)
+                send_msg(sock, dict(mine, ok=False, error="other experimental settings (build switches)"))
                 return
             send_msg(sock, mine)
             while True:
@@ -635,9 +663,10 @@ class _Conn:
         s = socket.create_connection((self.host, self.port), timeout=CONNECT_S)
         s.settimeout(JOB_TIMEOUT_S)
         s.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-        send_msg(s, {"op": "hello", "protocol": PROTOCOL, "version": version(), "code": code_id()})
+        send_msg(s, {"op": "hello", "protocol": PROTOCOL, "version": version(), "code": code_id(),
+                     "switches": switches()})
         h, _ = recv_msg(s)
-        if not h.get("ok"):
+        if not h.get("ok") or h.get("switches") != switches():
             s.close()
             raise ConnectionError(f"{self.host}:{self.port}: {h.get('error', 'refused')} "
                                   f"(theirs {h.get('version')} {h.get('code')}, ours {version()} {code_id()})")

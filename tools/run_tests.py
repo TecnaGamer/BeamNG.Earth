@@ -48,7 +48,11 @@ class Runner:
 
     def say(self, msg):
         with self.lock:
-            print(f"[{time.time() - self.t0:6.0f}s] {msg}", flush=True)
+            line = f"[{time.time() - self.t0:6.0f}s] {msg}"
+            enc = getattr(sys.stdout, "encoding", None) or "utf-8"
+            # (a test's output in a character the console's code page lacks, e.g. U+FFFD on Windows cp1252, stopped
+            # the whole run with UnicodeEncodeError, CI 2026-11-15)
+            print(line.encode(enc, "replace").decode(enc, "replace"), flush=True)
 
     def expected(self, m):
         return self.hist.get(m, {}).get("secs", DEFAULT_S)
@@ -178,6 +182,18 @@ class Runner:
         bad = [(m, r) for m, r, _ in res if r != "OK"]
         self.say(f"done: {len(res) - len(bad)} OK, {len(bad)} not OK"
                  + (": " + ", ".join(f"{m} ({r})" for m, r in bad) if bad else ""))
+        # Each failed module's log tail in the ordinary CI log too: a failure stays diagnosable when the
+        # artifact download is unavailable (Windows cleanup errors especially). PR #1214.
+        for m, r in bad:
+            try:
+                with open(os.path.join(self.logs, m + '.log'), encoding='utf-8', errors='replace') as fh:
+                    tail = fh.readlines()[-100:]
+            except OSError as e:
+                self.say(f"--- {m} ({r}): no log ({e}) ---")
+                continue
+            self.say(f"--- {m} ({r}): last {len(tail)} log lines ---")
+            for line in tail:
+                self.say(line.rstrip())
         return 1 if bad else 0
 
 

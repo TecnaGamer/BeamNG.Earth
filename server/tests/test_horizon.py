@@ -166,16 +166,19 @@ class HorizonMathTest(unittest.TestCase):
         self.assertAlmostEqual((ff.horizon_distance(EYE_WHITNEY) + ff.horizon_distance(4421)) / 1000, 509, delta=1)
         self.assertAlmostEqual((ff.horizon_distance(110) + ff.horizon_distance(4421)) / 1000, 295, delta=1)
         self.assertLess(ff.horizon_distance(40000) + ff.horizon_distance(4000), ff.HORIZON_MAX)
-        self.assertEqual((ff.HORIZON_MIN, ff.HORIZON_MAX, ff.HORIZON_MAX_LEVEL), (80000.0, 1500000.0, 10))
+        self.assertEqual((ff.HORIZON_MIN, ff.HORIZON_MAX, ff.HORIZON_MAX_LEVEL), (80000.0, 2600000.0, 10))
+        # (an eye at 400 km, the ISS's height, sees 2290 km: inside the cap; the zmax grid stays 1500 km)
+        self.assertLess(ff.horizon_distance(400000), ff.HORIZON_MAX)
+        self.assertEqual(ff.HORIZON_GRID_MAX, 1500000.0)
 
     def test_extent(self):
         s10 = ff.level_size(10)
         for eye in (0.0, 2.0, EYE_WHITNEY, 10000.0, 40000.0, 1e6):
             e = ff.horizon_extent(eye, earthd.ANCHOR_CENTRE_MAX)
             self.assertEqual(e % s10, 0)
-            self.assertGreaterEqual(e, min(ff.HORIZON_MAX, ff.horizon_distance(eye) + ff.horizon_distance(ff.Z_TOP))
+            self.assertGreaterEqual(e, min(ff.HORIZON_GRID_MAX, ff.horizon_distance(eye) + ff.horizon_distance(ff.Z_TOP))
                                     + earthd.ANCHOR_CENTRE_MAX)
-            self.assertLess(e, ff.HORIZON_MAX + earthd.ANCHOR_CENTRE_MAX + s10)
+            self.assertLess(e, ff.HORIZON_GRID_MAX + earthd.ANCHOR_CENTRE_MAX + s10)
         self.assertEqual(ff.horizon_extent(EYE_WHITNEY, earthd.ANCHOR_CENTRE_MAX), 3 * s10)
 
 
@@ -222,10 +225,10 @@ class HorizonGridTest(unittest.TestCase):
         self.assertEqual(zr, 3000.0)
         self.assertAlmostEqual(r, ff.horizon_distance(4417.0) + ff.horizon_distance(3000.0))
         self.assertEqual(grid.radius(0.0, 0.0, 10000.0)[1], 6000.0)    # 383 + 296 km: from 10 km it is
-        # sea level everywhere: the 80 km floor; very high: the 1500 km cap
+        # sea level everywhere: the 80 km floor; very high (600 km): the cap
         flat = ff.HorizonGrid(half, np.zeros((n, n)))
         self.assertEqual(flat.radius(0.0, 0.0, 2.0), (ff.HORIZON_MIN, 0.0))
-        self.assertEqual(flat.radius(0.0, 0.0, 200000.0)[0], ff.HORIZON_MAX)
+        self.assertEqual(flat.radius(0.0, 0.0, 600000.0)[0], ff.HORIZON_MAX)
 
     def test_grid_is_never_below_the_dem_pixels(self):
         """Every L6 cell's zmax is at least every DEM pixel (at the grid's zoom) whose centre lies in

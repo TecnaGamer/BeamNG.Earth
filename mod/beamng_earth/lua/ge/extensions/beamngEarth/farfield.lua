@@ -118,6 +118,9 @@ M.DELETE_PRESSURE = 64  -- deletes wait for the import queue unless this many ob
 M.VIEW_PENALTY = 3      -- import order: outside the camera's view cone a tile counts this many times as far
 M.VIEW_MARGIN_DEG = 15  -- the cone: half the horizontal field of view plus this ...
 M.VIEW_MAX_DEG = 80     -- ... at most this far off the camera's heading
+M.SCREEN_ORDER = true   -- import order by size on screen (distance / edge), not distance (peekImport; false: the old),
+                        -- where the block is the near ground ('terrain' / 'detail')
+M.COVERED_PENALTY = 4   -- ... a tile under the shown block counts this many times as far
 M.SPARE_MAX = 400
 M.SPARE_S = 120
 M.MAX_DT = 0.1          -- s; longest step of the transition clock per frame
@@ -436,6 +439,7 @@ local function spawn(inst)
   end
   -- TSStatic setup as in probes/p5_tsstatic.lua / util/procTrack.lua:1278-1291. collisionType 'None'
   -- keeps it out of the static collision rebuild. Created hidden (P6), placed at its true height.
+  require('beamngEarth/texdbg').log('farShape', inst.shape, inst.material)
   local o = createObject('TSStatic')
   o:setField('shapeName', 0, inst.shape)
   o:setField('collisionType', 0, 'None')
@@ -649,6 +653,72 @@ end
 
 -- Every add loaded (or failed). An add never received makes the group wait (no hole); only once
 -- the server said far_done and nothing is loading does such a group run without it (server error).
+-- The 3D map (map3d.lua: setPreview): a waiting group's tiles shown as each one loads, lifted over the coarse tiles
+-- they will replace (the user, 2026-11-07: "it still takes way to long to load detailed terrain as i zoom in": a view's
+-- new tiles waited, loaded but hidden, for their whole group: ~125 of them for 15 s over Memphis, then one pop). The
+-- group then starts as always and takes them from there (their offset back to its own).
+M.PREVIEW_LIFT_MIN_M = 5
+-- (0.03 drew the lifted tiles' skirts as dark lines on hillsides as the 3D map's detail steps came, Rapid City
+-- 2026-11-07; a coarse tile showing through in places is the lesser evil)
+M.PREVIEW_LIFT_EYE_SHARE = 0.008    -- at most this share of the eye's height (never seen from up there)
+local preview = {on = false, eye = 0}
+
+function M.setPreview(on, eye)
+  on = on and true or false
+  preview.eye = tonumber(eye) or 0
+  if on == preview.on then return end
+  preview.on = on
+  if not on then          -- (back to the swap's own rule: previewed tiles hidden until their group starts)
+    for _, inst in pairs(pending) do
+      if inst.preview then
+        local o = getObj(inst)
+        if o then setHidden(o, true); writePos(o, inst, 0) end
+        inst.hidden, inst.off, inst.preview = true, 0, nil
+      end
+    end
+  end
+end
+
+local function previewGroup(g)
+  local lift = g.previewLift
+  if not lift then
+    local errO = 0
+    for _, key in ipairs(g.remove) do
+      local r = live[key]
+      if r and r.err then errO = max(errO, r.err) end
+    end
+    lift = max(M.PREVIEW_LIFT_MIN_M, min(2 * errO + M.PREVIEW_LIFT_MIN_M, preview.eye * M.PREVIEW_LIFT_EYE_SHARE))
+    g.previewLift = lift
+  end
+  for _, key in ipairs(g.add) do
+    local a = pending[key]
+    if a and a.loaded and not a.failed and not a.preview and visibleCover(coverOf(a)) then
+      local o = getObj(a)
+      if o then
+        writePos(o, a, lift)
+        setHidden(o, false)
+        a.off, a.hidden, a.preview = lift, false, true
+      end
+    end
+  end
+end
+
+-- (and the loaded tiles no group names yet: the server announces a group once all its tiles are sent, and over
+-- Manhattan ~420 loaded tiles waited for theirs, the view's ground missing under its buildings, 2026-11-07)
+local function previewPending()
+  local lift = max(M.PREVIEW_LIFT_MIN_M, min(200, preview.eye * M.PREVIEW_LIFT_EYE_SHARE * 0.5))
+  for _, a in pairs(pending) do
+    if a.loaded and not a.failed and not a.preview and not a.prefetch and visibleCover(coverOf(a)) then
+      local o = getObj(a)
+      if o then
+        writePos(o, a, lift)
+        setHidden(o, false)
+        a.off, a.hidden, a.preview = lift, false, true
+      end
+    end
+  end
+end
+
 local function groupReady(g)
   for _, key in ipairs(g.add) do
     local a = pending[key]
@@ -1089,7 +1159,7 @@ function M.anchorObj() return anchorObj end
 
 -- New committed anchor. keepOld=true (rebase): current tiles stay until the server removes them or
 -- the new far_done. keepOld=false (teleport): everything is hidden at once and deleted progressively.
--- blk: the new anchor's terrain block {cx, cy}; the kept tiles' cover state follows it at once.
+-- blk: the new anchor's terrain block {cx, cy}; the kept tiles' cover state follows it at once (false: none, nil: kept).
 -- newSession: the server session the new anchor belongs to (hello.sessionId; nil = unchanged). A
 -- resync with a restarted server keeps the old session's tiles like a rebase; its far_removes never
 -- come (the new server does not know them), so they go when covered (mesh) or at the new far_done.
@@ -1176,6 +1246,12 @@ switchAnchor = function(newAnchorId, keepOld, blk, newSession, newAnchor)
   if blk then
     setBlock(blk.cx, blk.cy)
     for _, inst in pairs(old) do applyCover(inst, false) end
+  elseif blk == false then
+    -- (no block in the new frame: the 3D map's view-only origin, core commitRebase 'view'; the car's block stays in
+    -- its own frame, hidden: nothing is covered here)
+    block = nil
+    for _, inst in pairs(old) do applyCover(inst, false) end
+    for _, inst in pairs(live) do applyCover(inst, false) end
   end
 end
 
@@ -1208,6 +1284,8 @@ local function peekImport(cam)
       cosmax = math.cos(rad(min(half, M.VIEW_MAX_DEG)))
     end
     local pen2 = M.VIEW_PENALTY * M.VIEW_PENALTY
+    local cov2 = M.COVERED_PENALTY * M.COVERED_PENALTY
+    local screen = M.SCREEN_ORDER and blockShown()   -- (mesh mode: the tiles are the near ground, nearest first)
     local best, bd = nil, huge
     for i = mH, mT do
       local inst = mainQ[i]
@@ -1215,6 +1293,15 @@ local function peekImport(cam)
         local dx = max(inst.x0 - cam.x, 0, cam.x - inst.x1)
         local dy = max(inst.y0 - cam.y, 0, cam.y - inst.y1)
         local d = dx * dx + dy * dy
+        if screen then
+          -- by its size on screen (2026-11-13): distance over edge, so the coarse tiles of the horizon come with the
+          -- near ones of the same apparent size instead of after every near tile; a tile under the shown block
+          -- (hidden or sunk there) after the seen ones
+          local s = max(inst.x1 - inst.x0, inst.y1 - inst.y0, 1)
+          d = d / (s * s)
+          if d == 0 then d = 1e-6 * (s * s) / 65536 end   -- (tiles round the camera: finest first, as by distance)
+          if coverOf(inst) == 'interior' then d = (d + 1) * cov2 end
+        end
         if cosmax and d > 0 then
           local cx, cy = (inst.x0 + inst.x1) / 2 - cam.x, (inst.y0 + inst.y1) / 2 - cam.y
           local r = sqrt(cx * cx + cy * cy)
@@ -1235,6 +1322,16 @@ end
 
 local function hasWaitingGroups()
   for _, g in ipairs(groups) do if g.state == 'wait' then return true end end
+  return false
+end
+
+-- Group tiles wait to be imported (the governor's lanes: core sets gov.farWait from it each frame). Prefetch tiles do
+-- not count: they load only when nothing else waits.
+function M.importWaiting()
+  for i = mH, mT do
+    local inst = mainQ[i]
+    if inst and pending[inst.key] == inst and inst.queued then return true end
+  end
   return false
 end
 
@@ -1326,7 +1423,9 @@ function M.update(gov, dt, cam, player)
     end
   end
   local stop = false
+  if preview.on then previewPending() end
   for _, g in ipairs(groups) do
+    if g.state == 'wait' and preview.on then previewGroup(g) end
     if g.state == 'wait' then
       local blocked = stop or frozen
       if not blocked then
@@ -1392,12 +1491,12 @@ function M.update(gov, dt, cam, player)
     if not inst then break end
     if inst.material and not inst.mat and not inst.matFailed then
       if not satmat.exists(inst.material) then
-        if not gov:try('material') then break end
+        if not gov:try('material', 'far') then break end
         local t1 = now()
         local ok, err = pcall(satmat.create, inst.material, inst.texture, inst.detail)
         if not ok then log('E', 'beamngEarth', 'far tile material failed: ' .. tostring(err)) end
         local ms = now() - t1
-        gov:charge('material', ms)
+        gov:charge('material', ms, 'far')
         slowUnit('material', ms, tostring(inst.material))
         units = units + 1
         if satmat.exists(inst.material) then counters.materials = counters.materials + 1 end
@@ -1409,7 +1508,7 @@ function M.update(gov, dt, cam, player)
       end
     else
       local kind = kindOf(inst)
-      if not gov:try(kind) then break end
+      if not gov:try(kind, 'far') then break end
       local t1 = now()
       local ok, err = pcall(spawn, inst)
       if not ok then
@@ -1423,7 +1522,7 @@ function M.update(gov, dt, cam, player)
       inst.queued = false
       nQueued = nQueued - 1
       inst.importMs = now() - t1 -- shown by the dev tools' mini-map
-      gov:charge(kind, inst.importMs)
+      gov:charge(kind, inst.importMs, 'far')
       slowUnit('spawn', inst.importMs, string.format('%s %s, material %s', kind, tostring(inst.key), tostring(inst.mat or inst.material)))
       units = units + 1
       imported = true
@@ -1636,6 +1735,9 @@ function M.setFrozen(on) frozen = on and true or false; return frozen end
 function M.isFrozen() return frozen end
 function M.anchorId() return anchorId end
 function M.counters() return counters end -- read-only
+-- The import queue and whether the anchor's tile list is complete, without stats()'s walk over every tile (core's
+-- hitch lines and the status bar's loading line: a frame after a hitch should not add to it).
+function M.brief() return { queued = nQueued, done = doneReceived } end
 
 -- Every tile instance with an object (pending, live and previous anchors'; not the delete queue).
 function M.eachTile(fn)

@@ -14,6 +14,7 @@ import hashlib
 import json
 import os
 import ioprofiler
+import re
 import sys
 import urllib.request
 
@@ -23,6 +24,9 @@ import updates
 API_URL = updates.LATEST_API
 ASSET_PREFIX = f"https://github.com/{updates.REPO}/releases/download/"
 STAGED = "BeamNG.Earth-update.json"     # beside the downloaded file: {"version", "path", "sha256"}
+# beside it too: a downloaded version Windows would not start (Smart App Control: an unsigned .exe, no "run anyway";
+# GitHub #823): {"version", "by"}, not offered again (earthd.check_update)
+BLOCKED = "BeamNG.Earth-update-blocked.json"
 CHUNK = 1 << 16
 
 
@@ -145,6 +149,7 @@ def download(net, current, path=None, progress=None):
             _remove(part)
             raise UpdateError("the downloaded file did not match GitHub's checksum (deleted)")
         os.replace(part, dest)
+        note_downloaded(dest)
     if suffix == ".AppImage":
         os.chmod(dest, 0o755)
     tmp = os.path.join(folder, STAGED + ".tmp")
@@ -178,11 +183,143 @@ def staged(current, path=None):
     return new
 
 
-def drop_staged(path=None):
-    """Forget the downloaded copy (its note): it would not start (launcher.hand_over), so this one runs from now on."""
+def drop_staged(path=None, blocked_by=None):
+    """Forget the downloaded copy (its note): it would not start (launcher.hand_over), so this one runs from now on.
+    blocked_by (e.g. "smart_app_control"): its version is remembered (BLOCKED) and not offered again (blocked)."""
     path = path or packaged_path()
-    if path:
-        _remove(os.path.join(os.path.dirname(os.path.abspath(path)), STAGED))
+    if not path:
+        return
+    folder = os.path.dirname(os.path.abspath(path))
+    note = os.path.join(folder, STAGED)
+    if blocked_by:
+        try:
+            with open(note, encoding="utf-8") as f:
+                version = str(json.load(f)["version"])
+            with open(os.path.join(folder, BLOCKED), "w", encoding="utf-8") as f:
+                json.dump({"version": version, "by": str(blocked_by)}, f)
+        except (OSError, ValueError, KeyError, TypeError):
+            pass
+    _remove(note)
+
+
+def blocked(path=None):
+    """{"version", "by"} of the newest downloaded version Windows would not start (drop_staged), or None."""
+    path = path or packaged_path()
+    if not path:
+        return None
+    try:
+        with open(os.path.join(os.path.dirname(os.path.abspath(path)), BLOCKED), encoding="utf-8") as f:
+            d = json.load(f)
+        return {"version": str(d["version"]), "by": str(d.get("by") or "")}
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+# Old copies (GitHub #900: "~300 MB of old copies after a few days of dev builds"): every update leaves the previous
+# file beside the new one, and a shortcut to an old file still works (it hands over, staged()), so they cannot all go.
+# Kept: this copy, the newest older one (to go back to: the SAC case of #823), every copy a hand-over started from
+# (the player's shortcut points at it: HANDED_OVER_FROM, noted in KEEP), and, while no such copy is known, the oldest
+# (the one first downloaded, most likely the shortcut's). The rest of BeamNG.Earth-<version> files of this kind that
+# are older than this copy are deleted (one still running stays: Windows refuses, _remove ignores it), but only files
+# this updater downloaded itself (DOWNLOADED, noted by download()): a copy the player downloaded by hand, which a
+# shortcut may point at before any hand-over has noted it, and every copy from before this list existed, stay.
+KEEP = "BeamNG.Earth-keep.json"         # beside the copies: {"started_from": [file names]}
+DOWNLOADED = "BeamNG.Earth-downloaded.json"     # beside them too: {"downloaded": [file names download() fetched]}
+HANDED_OVER_FROM = "BNE_HANDED_OVER_FROM"   # (the environment of a copy a hand-over started: the old copy's path)
+COPY_NAME = re.compile(r"^BeamNG\.Earth-(?P<v>.+?)(?:-x86_64)?(?P<s>\.exe|\.AppImage)$", re.IGNORECASE)
+
+
+def _kept(folder):
+    try:
+        with open(os.path.join(folder, KEEP), encoding="utf-8") as f:
+            got = json.load(f).get("started_from") or []
+        return [os.path.basename(str(n)) for n in got if n]
+    except (OSError, ValueError, AttributeError, TypeError):
+        return []
+
+
+def _downloaded(folder):
+    try:
+        with open(os.path.join(folder, DOWNLOADED), encoding="utf-8") as f:
+            got = json.load(f).get("downloaded") or []
+        return [os.path.basename(str(n)) for n in got if n]
+    except (OSError, ValueError, AttributeError, TypeError):
+        return []
+
+
+def note_downloaded(dest):
+    """Note the file dest (a path) as one download() fetched: prune_old may delete it once it is old. Names whose file
+    is gone are dropped from the note."""
+    folder = os.path.dirname(os.path.abspath(dest))
+    name = os.path.basename(dest)
+    names = [n for n in _downloaded(folder) if n != name and os.path.isfile(os.path.join(folder, n))]
+    tmp = os.path.join(folder, DOWNLOADED + ".tmp")
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump({"downloaded": names + [name]}, f)
+        os.replace(tmp, os.path.join(folder, DOWNLOADED))
+    except OSError:
+        _remove(tmp)
+
+
+def note_started_from(old, path=None):
+    """Keep the copy old (a path) from now on: a hand-over started this one from it (the player's shortcut)."""
+    path = path or packaged_path()
+    if not (path and old):
+        return
+    folder = os.path.dirname(os.path.abspath(path))
+    if os.path.dirname(os.path.abspath(old)) != folder:
+        return
+    names = _kept(folder)
+    name = os.path.basename(old)
+    if name in names:
+        return
+    tmp = os.path.join(folder, KEEP + ".tmp")
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump({"started_from": names + [name]}, f)
+        os.replace(tmp, os.path.join(folder, KEEP))
+    except OSError:
+        _remove(tmp)
+
+
+def prune_old(current, path=None, remove=None):
+    """Delete the old copies beside this one that this updater downloaded and nothing needs (KEEP's comment). Returns
+    the deleted files' names."""
+    path = path or packaged_path()
+    suffix = asset_suffix(path)
+    if not (path and suffix and updates.parse(current)):
+        return []
+    folder = os.path.dirname(os.path.abspath(path))
+    me = os.path.basename(path).lower()
+    try:
+        names = os.listdir(folder)
+    except OSError:
+        return []
+    fetched = {n.lower() for n in _downloaded(folder)}
+    old = []
+    for n in names:
+        m = COPY_NAME.match(n)
+        if (not m or n.lower() not in fetched or n.lower() == me or m.group("s").lower() != suffix.lower()
+                or not os.path.isfile(os.path.join(folder, n)) or not updates.newer(current, m.group("v"))):
+            continue
+        old.append((updates.parse(m.group("v")), n))
+    if len(old) < 2:
+        return []
+    old.sort()
+    kept = {n.lower() for n in _kept(folder)}
+    keep = {old[-1][1].lower()} | kept
+    if not kept:
+        keep.add(old[0][1].lower())
+    out = []
+    for _v, n in old:
+        if n.lower() in keep:
+            continue
+        p = os.path.join(folder, n)
+        (remove or _remove)(p)
+        if not os.path.exists(p):
+            out.append(n)
+    return out
 
 
 def _remove(p):

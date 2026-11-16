@@ -13,6 +13,7 @@ import math
 import os
 
 import numpy as np
+import dmath
 
 ON = os.environ.get("BNGE_ONEWAY_JOINS", "1") != "0"
 BLEND_M = 20.0
@@ -57,7 +58,7 @@ def apply(feats, left_hand=False):
             if not two or any(_oneway(feats, j) for j, _ in others):
                 continue        # only a one-way meeting two-way roads (a one-way chain, or three one-ways: left alone)
             lat = math.radians(ll[end, 1])
-            mx = 111320.0 * math.cos(lat)
+            mx = 111320.0 * dmath.cos(lat)
             my = 110540.0
             # direction of travel at this end: along the line (end -> next) times the line's own sense, made to point
             # the way traffic goes

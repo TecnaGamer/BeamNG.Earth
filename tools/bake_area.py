@@ -20,6 +20,9 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 PASSES = 3                  # planning passes: cells short of something in one are planned again in the next
 SERVER = os.path.join(os.path.dirname(HERE), "server")
 sys.path.insert(0, SERVER)
+# (what it plans goes to other players: never with Hong Kong's measured heights or terrain, roadz.hk_cell)
+os.environ["BNE_ROADZ_HK"] = "off"
+os.environ["BNE_HKDTM"] = "off"
 
 
 def _worker(args):
@@ -37,8 +40,8 @@ def _worker(args):
     orig_store = plancache.PlanCache.store
     orig_facts = roads._facts_store
 
-    def store(self, key, plans, keeps, covers, opens, persist=False):
-        ok = orig_store(self, key, plans, keeps, covers, opens, persist)
+    def store(self, key, plans, keeps, covers, opens, decks=None, persist=False):
+        ok = orig_store(self, key, plans, keeps, covers, opens, decks, persist=persist)
         if ok and persist:
             rec.write(json.dumps({"plans": [int(k) for k in key], "sig": self.signature,
                                   "path": self._path(key)}) + "\n")
@@ -166,6 +169,7 @@ def main():
     meta = {"bake_format": bakepack.BAKE_FORMAT, "plans_format": plancache.PLANS_FORMAT,
             "facts_format": __import__("roads").FACTS_FORMAT, "frames": plancache.FRAMES,
             "signature": next(iter(sigs)) if sigs else None, "versions": versions[0] if versions else None,
+            "switches": bakepack.switches(),    # (the build switches the items were made with: bakepack._expect_for)
             "bbox": [s, w, n, e], "made": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
     items = wr.close(meta)
     print(f"{a.out}: {items} items ({n_plans} plans, {n_facts} facts), {os.path.getsize(a.out) / 1e6:.1f} MB, "

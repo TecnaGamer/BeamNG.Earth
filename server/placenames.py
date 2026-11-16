@@ -31,6 +31,8 @@ import threading
 from collections import OrderedDict
 
 import numpy as np
+import dmath
+import dnp
 
 import geocode
 import mapcells
@@ -43,6 +45,8 @@ PLACES_FORMAT = 2               # the cell files' format (bump when what a cell 
 ZOOM = 9                        # the cells' Web-Mercator zoom up to 60 degrees of latitude (zoom_at)
 SEARCH_M = 25000.0              # towns this far around the player are read (the cells under that box)
 MEM_CELLS = 64                  # decoded cells kept in memory
+LABELS_MAX = 400                # the 3D map's labels: towns per answer (labels())
+LABELS_RADIUS_MAX_M = 150000.0  # ... and the farthest box asked (a few dozen cells at most)
 # reach of a town (km) = clamp(REACH_K * REACH_R_KM * (population / 1000) ** REACH_EXP, REACH_MIN_KM, REACH_MAX_KM):
 # REACH_R_KM * (pop / 1000) ** 0.4 is about a town's equivalent radius (Baltimore 585k: 8.7 km, its 238 km2;
 # Köln 1.07 M: 11 km, 405 km2; Leverkusen 163k: 5.2 km, 79 km2), REACH_K = 2: its edge with the outskirts
@@ -61,8 +65,8 @@ BORDER_MARGIN_DEG = 0.5         # a cell keeps the country borders this far past
 def zoom_at(lat):
     """The cells' zoom at latitude lat: ZOOM, one less for each halving of cos(lat) (a Web-Mercator tile's ground size
     shrinks with it: the cells stay ~35-80 km wide from the equator to the Arctic, a few per lookup). Pure."""
-    c = max(0.01, math.cos(math.radians(max(-mapcells.MAX_LAT, min(mapcells.MAX_LAT, float(lat))))))
-    return max(2, ZOOM - int(math.floor(math.log2(1.0 / c))))
+    c = max(0.01, dmath.cos(math.radians(max(-mapcells.MAX_LAT, min(mapcells.MAX_LAT, float(lat))))))
+    return max(2, ZOOM - int(math.floor(dmath.log2(1.0 / c))))
 
 
 def cells_for(lat, lon, search_m=SEARCH_M, z=None):
@@ -70,7 +74,7 @@ def cells_for(lat, lon, search_m=SEARCH_M, z=None):
     lat = max(-mapcells.MAX_LAT, min(mapcells.MAX_LAT, float(lat)))
     z = zoom_at(lat) if z is None else z
     dlat = search_m / M_PER_DEG
-    dlon = min(179.0, search_m / (M_PER_DEG * max(0.05, math.cos(math.radians(lat)))))
+    dlon = min(179.0, search_m / (M_PER_DEG * max(0.05, dmath.cos(math.radians(lat)))))
     lon = ((float(lon) + 180.0) % 360.0) - 180.0
     lon0 = ((lon - dlon + 180.0) % 360.0) - 180.0
     lon1 = ((lon + dlon + 180.0) % 360.0) - 180.0
@@ -87,7 +91,7 @@ def reach_km(population, klass):
     klass = np.asarray(klass).astype(str)
     dflt = np.array([CLASS_POP.get(c, UNCLASSED_POP) for c in klass], np.float64)
     pop = np.where(np.isfinite(pop) & (pop > 0), pop, dflt)
-    return np.clip(REACH_K * REACH_R_KM * (pop / 1000.0) ** REACH_EXP, REACH_MIN_KM, REACH_MAX_KM)
+    return np.clip(REACH_K * REACH_R_KM * dnp.power(pop / 1000.0, REACH_EXP), REACH_MIN_KM, REACH_MAX_KM)
 
 
 def _name(table, i, lang):
@@ -98,9 +102,9 @@ def _name(table, i, lang):
 
 def _dist_km(lat, lon, lats, lons):
     dlon = ((np.asarray(lons, np.float64) - lon + 180.0) % 360.0) - 180.0
-    dx = dlon * M_PER_DEG * math.cos(math.radians(lat))
+    dx = dlon * M_PER_DEG * dmath.cos(math.radians(lat))
     dy = (np.asarray(lats, np.float64) - lat) * M_PER_DEG
-    return np.hypot(dx, dy) / 1000.0
+    return dnp.hypot(dx, dy) / 1000.0
 
 
 def _crossed(lat, lon, tlat, tlon, borders):
@@ -111,7 +115,7 @@ def _crossed(lat, lon, tlat, tlon, borders):
         return np.zeros(m, bool)
     import fast
     fast.require(76, "segment_crossings_g")
-    kx, ky = M_PER_DEG * math.cos(math.radians(lat)) / 1000.0, M_PER_DEG / 1000.0
+    kx, ky = M_PER_DEG * dmath.cos(math.radians(lat)) / 1000.0, M_PER_DEG / 1000.0
     dlon = ((np.asarray(tlon, np.float64) - lon + 180.0) % 360.0) - 180.0
     lines = np.zeros((2 * m, 2))
     lines[1::2, 0], lines[1::2, 1] = dlon * kx, (np.asarray(tlat, np.float64) - lat) * ky
@@ -259,6 +263,49 @@ class PlaceNames:
         borders = [c[2] for c in cells if c[2] is not None and len(c[2])]
         return pick(_concat([c[0] for c in cells]), _concat([c[1] for c in cells]), lat, lon,
                     np.concatenate(borders) if borders else None)
+
+    def labels(self, lat, lon, radius_m, limit=LABELS_MAX, fetch=False, kind="background"):
+        """The towns within radius_m of (lat, lon) for the 3D map's labels: [(name, lat, lon, class, population)],
+        the largest first (classed towns ahead of districts), at most limit; names as lookup()'s (the local language
+        where Overture has it). Only the cells on disk / in memory unless fetch (then the missing ones with kind;
+        netfetch errors raised). Cells at zoom_at(lat), the box clamped to LABELS_RADIUS_MAX_M."""
+        radius_m = max(1000.0, min(float(radius_m), LABELS_RADIUS_MAX_M))
+        out = []
+        for key in cells_for(lat, lon, radius_m):
+            if fetch:
+                cell = self.cell(key, kind)
+            else:
+                with self._lock:
+                    cell = self._mem.get(key)
+                if cell is None:
+                    cell = self._load(self.path(key))
+                    if cell is None:
+                        continue
+                    with self._lock:
+                        self._mem[key] = cell
+                        while len(self._mem) > MEM_CELLS:
+                            self._mem.popitem(last=False)
+            t = cell[0]
+            n = len(t["lat"])
+            if not n:
+                continue
+            d = _dist_km(lat, lon, t["lat"], t["lon"]) * 1000.0
+            for i in np.flatnonzero(d <= radius_m):
+                cls = str(t["class"][i])
+                if str(t["subtype"][i]) not in ("locality", "localadmin"):
+                    continue
+                name = _name(t, i, geocode.lang_for(str(t["country"][i])))
+                if name:
+                    out.append((name, float(t["lat"][i]), float(t["lon"][i]), cls, float(t["population"][i])))
+        rank = {"megacity": 0, "city": 1, "town": 2, "village": 3, "hamlet": 4}
+        out.sort(key=lambda r: (rank.get(r[3], 5), -r[4], r[0]))
+        seen, uniq = set(), []
+        for r in out:                       # (a town in two cells' boxes once)
+            k = (r[0], round(r[1], 3), round(r[2], 3))
+            if k not in seen:
+                seen.add(k)
+                uniq.append(r)
+        return uniq[:limit]
 
     def cell(self, key, kind="background"):
         """(towns, areas, borders) of one cell: memory, disk, or fetched and written."""

@@ -89,7 +89,9 @@ function M.receive(data)
   server = data
 end
 
-function M.update(ms, marks, inLevel, connected, send)
+-- held: why the car is held still while the world loads ('edge', 'ground', 'loading': core.heldReason) or nil; those
+-- frames are counted apart, so waiting for the world is not read as slow frames
+function M.update(ms, marks, inLevel, connected, send, held)
   if not M.enabled then return end
   local now = clock()
   lastSend = send
@@ -107,7 +109,7 @@ function M.update(ms, marks, inLevel, connected, send)
   frameProfile.add(ms, marks, nil, math.max(0, now-startedAt))
   captured = captured + 1
   frameAt = frameAt % FRAME_KEEP + 1
-  local sample = { ms = ms, marks = {} }
+  local sample = { ms = ms, marks = {}, held = type(held) == 'string' and held or nil }
   if M.mode == 'full' then for k, v in pairs(marks or {}) do sample.marks[k] = v end end
   frames[frameAt] = sample
   frameN = math.min(frameN + 1, FRAME_KEEP)
@@ -127,9 +129,19 @@ end
 
 function M.snapshot()
   local sum, frameTimes, parts, pools, stages, plot = 0, {}, {}, {}, {}, {}
+  -- the car held while the world loads (its seconds and why) apart from slow frames (50 ms+) while playing
+  local held = { ms = 0, frames = 0, slow = 0, why = {} }
+  local slowPlaying = 0
   for i = 1, frameN do plot[i - 1] = frames[(frameAt - frameN + i - 1) % FRAME_KEEP + 1].ms end
   for _, frame in ipairs(frames) do
     sum = sum + frame.ms
+    if frame.held then
+      held.ms, held.frames = held.ms + frame.ms, held.frames + 1
+      held.why[frame.held] = (held.why[frame.held] or 0) + frame.ms
+      if frame.ms >= 50 then held.slow = held.slow + 1 end
+    elseif frame.ms >= 50 then
+      slowPlaying = slowPlaying + 1
+    end
     frameTimes[#frameTimes + 1] = frame.ms
     for name, ms in pairs(frame.marks) do
       parts[name] = parts[name] or { name = name, totalMs = 0, maxMs = 0 }
@@ -192,6 +204,7 @@ function M.snapshot()
   return { mode = M.mode, capturedFrames = captured, elapsedMs = math.max(0, clock() - startedAt),
     frames = frameN, avgMs = frameN > 0 and sum / frameN or 0, fps = sum > 0 and frameN * 1000 / sum or 0,
     p95 = percentile(frameTimes, 0.95), maxMs = frameTimes[#frameTimes] or 0,
+    held = held, slowPlaying = slowPlaying,
     parts = ordered(parts), pools = ordered(pools), stages = ordered(stages), server = server, plot = plot,
     frameDetail = frameProfile.analyze(), feedback = feedback, localLink = link, latency = latency,
     ioHistory = presentation.ioHistory(server and server.io, receivedAt and receivedAt-startedAt),
@@ -267,6 +280,22 @@ end
 local function summary(im)
   wrapped(im, string.format('%.1f FPS | frame avg %.2f ms | p95 %.2f ms | worst %.2f ms (%d recent frames)',
     view.fps, view.avgMs, view.p95, view.maxMs, view.frames))
+  local line = M.heldText(view)
+  if line then wrapped(im, line) end
+end
+
+local HELD_WHY = { edge = 'at the edge of the ground', ground = 'until the ground under it loads',
+  loading = 'loading after a teleport' }
+-- "Car held while the world loads: 4.2 s (at the edge of the ground) | slow frames (50 ms+) while playing: 3" or nil
+-- when it was not held: waiting for the world, which is not the same as slow frames.
+function M.heldText(v)
+  local h = v and v.held
+  if not h or h.frames == 0 then return nil end
+  local why, top = nil, 0
+  for k, ms in pairs(h.why) do if ms > top then why, top = k, ms end end
+  return string.format('Car held while the world loads: %.1f s (%s)%s | slow frames (50 ms+) while playing: %d',
+    h.ms / 1000, HELD_WHY[why] or tostring(why), h.slow > 0 and string.format(', %d slow while held', h.slow) or '',
+    v.slowPlaying or 0)
 end
 
 function M.chooseMode(mode)

@@ -33,6 +33,8 @@ local installed = false
 local far = {}                           -- [serverVehicleString] = true: its last position was beyond FAR_M (isFar)
 local wasFar = {}                        -- [serverVehicleString] = true: it was beyond FAR_M at some time (wasFar)
 local lastPos = {}                       -- [serverVehicleString] = { x, y, z }: its latest position placed (lastPos)
+local seen = {}                          -- [serverVehicleString] = its latest position in our frame, far or near (seen)
+local rawSeen = {}                       -- [serverVehicleString] = its latest untransformed position (rawSeen)
 
 local function isMPSession()
   return MPCoreNetwork ~= nil and MPCoreNetwork.isMPSession ~= nil and MPCoreNetwork.isMPSession()
@@ -41,9 +43,18 @@ end
 -- Called by core.lua right after st.anchor is set (commitTeleport, finishRebase): every anchor
 -- change, including the player's very first one. A no-op outside a BeamMP session.
 -- core.lua: our anchor is now (lat, lon) (a teleport's or a rebase's commit).
+-- (mpdefer.lua: an anchor changed, ours (pid nil) or player pid's; every pose of its cars kept from before is stale)
+local function anchorChanged(pid)
+  local md = package.loaded['beamngEarth/mpdefer']
+  if md and md.onAnchorChange then pcall(md.onAnchorChange, pid) end
+end
+
 function M.announceOwn(lat, lon)
-  if lat ~= myLat or lon ~= myLon then M.ownChanged = true end
+  local changed = lat ~= myLat or lon ~= myLon
+  if changed then M.ownChanged = true end
+  local had = myLat ~= nil
   myLat, myLon = lat, lon
+  if changed and had then anchorChanged(nil) end
 end
 
 -- A player's position packets name no anchor: those it sent from its old place can arrive after the plugin told us
@@ -72,11 +83,27 @@ function M.setRemote(pid, lat, lon)
   lat, lon = M.coordinates(lat, lon)
   if not pid or not (pid >= 0 and pid < math.huge and pid % 1 == 0) or not lat then return false end
   local old = remote[pid]
+  -- (mpdefer: any change, the first anchor learned too: a spawn queued while its owner was not known carries its raw
+  -- coordinates, in the owner's frame. Codex review 5, 2026-11-15)
+  local changed = not old or old.lat ~= lat or old.lon ~= lon
   if old and (old.lat ~= lat or old.lon ~= lon) then
     settleUntil[pid] = M.clock() + M.SETTLE_S
+    -- (its cars' poses were worked out with the old anchor: after a teleport they say nothing of where the cars are
+    -- now, and none come for SETTLE_S; mpdefer would spawn a kept car or build an edit by them. Codex review 2,
+    -- 2026-11-15)
+    local prefix = tostring(pid) .. '-'
+    for sid in pairs(seen) do
+      if sid:sub(1, #prefix) == prefix then seen[sid] = nil end
+    end
   end
   remote[pid] = { lat = lat, lon = lon }
   expired[pid] = nil
+  -- (known now: its untransformed poses from before (no BeamNG.Earth heard) are in no frame of ours)
+  local prefix = tostring(pid) .. '-'
+  for sid in pairs(rawSeen) do
+    if sid:sub(1, #prefix) == prefix then rawSeen[sid] = nil end
+  end
+  if changed then anchorChanged(pid) end
   return true
 end
 
@@ -95,7 +122,7 @@ function M.retainRemote(players)
       expired[pid] = true
     end
   end
-  for _, records in ipairs({ far, wasFar, lastPos, lastAt, nearSince }) do
+  for _, records in ipairs({ far, wasFar, lastPos, lastAt, nearSince, seen }) do
     for sid in pairs(records) do
       local pid = tostring(sid):match('^(%d+)%-')
       if not players[pid] then records[sid] = nil end
@@ -117,9 +144,30 @@ function M.lastPos(sid)
   if p then return p[1], p[2], p[3] end
 end
 
+-- The latest position packet of this remote car converted into our frame, the far ones too (mpdefer.lua: is a car
+-- whose spawn is kept near yet?): { t (M.clock), x, y, z, rot, d (m from our origin) }; nil: none since our anchor's
+-- last change (a position worked out in our old frame says nothing in the new one).
+function M.seen(sid)
+  local s = seen[sid]
+  if s and s.la == myLat and s.lo == myLon then return s end
+end
+-- The latest position packet of a car whose owner's anchor is not known (no BeamNG.Earth), as sent (no conversion:
+-- BeamMP places it there): { t, x, y, z, rot }; nil: none. (mpdefer: where such a car spawns after its wait)
+function M.rawSeen(sid) return rawSeen[sid] end
+-- Our own anchor (announceOwn): lat, lon (nil before the first).
+function M.own() return myLat, myLon end
+-- (lat, lon) on the ground in our frame: x, y, z (nil: our anchor not known yet).
+local ownAnchor = nil
+function M.toOurs(lat, lon)
+  if not myLat or not tonumber(lat) or not tonumber(lon) then return nil end
+  if not ownAnchor or ownAnchor.lat ~= myLat or ownAnchor.lon ~= myLon then ownAnchor = geodesy.newAnchor(myLat, myLon) end
+  return ownAnchor:geodeticToWorld(lat, lon, 0)
+end
+
 -- (the session's end) the remote anchors forgotten
 function M.reset()
   remote, expired, xfCache, far, wasFar, lastPos, settleUntil, lastAt, nearSince = {}, {}, {}, {}, {}, {}, {}, {}, {}
+  seen, rawSeen = {}, {}
 end
 
 -- A log line once per car and kind every NOTE_S (the session's log tells what happened to a car before an instability)
@@ -205,6 +253,22 @@ function M.sanitize(decoded)
   return true, false
 end
 
+-- (a packet let through or found far: where the car is in our frame, for seen; its record reused, packets come ~30 a s)
+local function noteSeen(sid, p, r, now, into)
+  if not (p and tonumber(p[1]) and tonumber(p[2])) then return end
+  into = into or seen
+  local s = into[sid]
+  if not s then s = {}; into[sid] = s end
+  s.t, s.x, s.y, s.z, s.la, s.lo = now, p[1], p[2], tonumber(p[3]) or 0, myLat, myLon
+  s.d = math.sqrt(p[1] * p[1] + p[2] * p[2])
+  if type(r) == 'table' then
+    s.rot = s.rot or {}
+    s.rot[1], s.rot[2], s.rot[3], s.rot[4] = r[1], r[2], r[3], r[4]
+  else
+    s.rot = nil
+  end
+end
+
 -- Wraps positionGE.handle: corrects a 'p' (position) packet's embedded JSON before handing the
 -- (possibly rewritten) raw string to the original handle, which then runs completely unmodified.
 local function wrapHandle(original)
@@ -237,6 +301,7 @@ local function wrapHandle(original)
     if not sane then return end
     if not xf then                          -- (no conversion: the packet as sent, if it is sane)
       if type(decoded.pos) == 'table' then lastPos[serverVehicleID] = decoded.pos end
+      noteSeen(serverVehicleID, decoded.pos, decoded.rot, now, rawSeen)
       if not changed then return original(rawData) end
       local okE, enc = pcall(jsonEncode, decoded)
       return original(okE and (code .. ':' .. serverVehicleID .. ':' .. enc) or rawData)
@@ -253,6 +318,7 @@ local function wrapHandle(original)
     end
     local p = decoded.pos
     if p and tonumber(p[1]) and tonumber(p[2]) and p[1] * p[1] + p[2] * p[2] > M.FAR_M * M.FAR_M then
+      noteSeen(serverVehicleID, p, decoded.rot, now)
       if not far[serverVehicleID] then
         log('I', 'beamngEarth', string.format('BeamMP: car %s far (%.0f km): its packets dropped', serverVehicleID,
           math.sqrt(p[1] * p[1] + p[2] * p[2]) / 1000))
@@ -276,6 +342,7 @@ local function wrapHandle(original)
     end
     far[serverVehicleID] = nil
     if p then lastPos[serverVehicleID], lastAt[serverVehicleID] = p, now end
+    noteSeen(serverVehicleID, p, decoded.rot, now)
     local ok2, reencoded = pcall(jsonEncode, decoded)
     if not ok2 then return original(rawData) end
     return original(code .. ':' .. serverVehicleID .. ':' .. reencoded)

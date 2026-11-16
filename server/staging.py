@@ -87,10 +87,42 @@ def warm(path):
         pass
 
 
+GAME_WAITS = (0.02, 0.05, 0.1, 0.25, 0.5, 1.0)  # s between the tries of replace into the game's folder (~1.9 s in all)
+
+
 def replace(tmp, path):
     """os.replace(tmp, path), making path's folder again if it was deleted under us (the game or the player
     clearing its temp folder) instead of failing every write after it. On Windows a file going into the game's folder
-    is read once at once (warm)."""
+    is read once at once (warm), and one held there for a moment (the game reading the copy it has, a virus scanner:
+    PermissionError, WinError 5) is tried again GAME_WAITS: a block's surface mask replaced over the one the game was
+    showing failed the whole block (a provisional block and a graded one, Windows 11, 2026-11-13). The last try's
+    PermissionError goes to the caller."""
+    if staging_dir(path) is None or _on_event_loop():
+        return _replace_once(tmp, path)     # (on the server's event loop, e.g. Server.reslot: one try, never a sleep)
+    for n, wait in enumerate(GAME_WAITS + (None,)):
+        try:
+            _replace_once(tmp, path)
+            if n:
+                log.info("%s was held (Windows: the game or a virus scanner): replaced at try %d",
+                         os.path.basename(path), n + 1)
+            return
+        except PermissionError:
+            if wait is None:
+                raise
+            time.sleep(wait)
+
+
+def _on_event_loop():
+    """True in a thread running an asyncio loop (the server's main loop: a sleep there stalls every client)."""
+    import asyncio
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return False
+    return True
+
+
+def _replace_once(tmp, path):
     _replace(tmp, path)
     if WARM_READ and staging_dir(path) is not None:
         warm(path)
@@ -128,6 +160,35 @@ def read_held(read):
     return read()
 
 
+DAMAGED_NPZ = (OSError, ValueError, EOFError, KeyError)     # (and zipfile.BadZipFile: read_npz)
+
+
+def read_npz(path, read, what="cache file"):
+    """read(f) of the npz cache file at path (f: np.load's NpzFile), or None when the file is damaged: empty
+    (EOFError), cut short (zipfile.BadZipFile), zeroed (ValueError) or missing a member (KeyError), as a crash or power
+    loss after its write leaves it. The damaged file is removed so the caller builds it again: unread, it failed every
+    ask for good (telemetry 2026-11-08: the far tiles' EOFError, 313k times in a week from three dev builds, BadZipFile
+    beside it). Opened with its own handle, closed whatever np.load raises (numpy left a damaged file's open, and
+    Windows cannot remove an open file)."""
+    import zipfile
+    import numpy as np
+    try:
+        with open(path, "rb") as fh, np.load(fh, allow_pickle=False) as f:
+            return read(f)
+    except FileNotFoundError:
+        return None
+    except PermissionError as e:        # (Windows: held by another process, a virus scanner: whole, so kept; built anew)
+        log.debug("%s %s: %s", what, path, e)
+        return None
+    except DAMAGED_NPZ + (zipfile.BadZipFile,) as e:
+        log.warning("%s %s damaged (%s: %s): built again", what, path, type(e).__name__, e)
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+        return None
+
+
 def replace_cached(tmp, path):
     """replace(tmp, path) for a cache file whose content is the same whoever writes it (a download, a decoded or built
     copy of one). On Windows a file another thread or process has open, or memory-mapped, cannot be replaced
@@ -136,7 +197,7 @@ def replace_cached(tmp, path):
     copy already there was kept."""
     for wait in REPLACE_WAITS + (None,):
         try:
-            replace(tmp, path)
+            _replace_once(tmp, path)        # (its own tries: not replace's too)
             return True
         except PermissionError:
             if wait is None:
@@ -151,6 +212,72 @@ def replace_cached(tmp, path):
 
 
 INLINE_MAX = 1 << 20        # bytes: a session file this small or smaller goes inside its message (inline_json)
+
+
+def inline_raw(out_dir, vfs_path, max_bytes=INLINE_MAX, digest=False):
+    """A worker thread's inline_json: the session file's text as protocol.RawJson (spliced into its message as it is;
+    a file with \\u escapes parsed and written again as real UTF-8, as inline_json's message would carry it), or None
+    as inline_json. digest: (raw, its bytes' SHA-1) instead (the trackers' same-file check)."""
+    import hashlib
+    import json
+    import protocol
+    raw = h = None
+    try:
+        path = os.path.join(out_dir, os.path.basename(vfs_path))
+        with open(path, "rb") as f:
+            data = f.read(max_bytes + 1) if not digest else f.read()
+        if digest:
+            h = hashlib.sha1(data).digest()
+        if len(data) <= max_bytes:
+            text = data.decode("utf-8").strip()
+            if b"\\u" in data:
+                text = json.dumps(json.loads(text), separators=(",", ":"), ensure_ascii=False)
+            if text[:1] in ("{", "[") and text[-1:] in ("}", "]"):
+                raw = protocol.RawJson(text)
+    except (OSError, ValueError):
+        pass
+    return (raw, h) if digest else raw
+
+
+class Inlined:
+    """A tracker build's result with its files' inline data read in the worker (build_inline): the event loop sends
+    it without opening or parsing a file. files: {vfs path: RawJson or None}; data: the first file's."""
+    __slots__ = ("res", "data", "digest", "files")
+
+    def __init__(self, res, data, digest=None, files=None):
+        self.res, self.data, self.digest, self.files = res, data, digest, files or {}
+
+
+def build_inline(build, out_dir, digest, *args):
+    """Worker thread: build(*args), and when it made a file (its result's first item, a vfs path) the file's inline
+    data (inline_raw; with its SHA-1 when digest). Returns an Inlined."""
+    res = build(*args)
+    if res is None or not out_dir:
+        return Inlined(res, None)
+    if digest:
+        raw, h = inline_raw(out_dir, res[0], digest=True)
+        return Inlined(res, raw, h, {res[0]: raw})
+    raw = inline_raw(out_dir, res[0])
+    return Inlined(res, raw, None, {res[0]: raw})
+
+
+def build_inline_paths(build, out_dir, paths_of, *args):
+    """Worker thread: build(*args) and the inline data of each file paths_of(result) names (a list of vfs paths).
+    Returns an Inlined."""
+    res = build(*args)
+    files = {}
+    if res is not None and out_dir:
+        for p in paths_of(res):
+            if p and p not in files:
+                files[p] = inline_raw(out_dir, p)
+    return Inlined(res, None, None, files)
+
+
+def inline_from(pre, out_dir, vfs_path):
+    """The inline data of a session file: read in the worker (pre: an Inlined naming it), else inline_json here."""
+    if pre is not None and vfs_path in pre.files:
+        return pre.files[vfs_path]
+    return inline_json(out_dir, vfs_path) if out_dir else None
 
 
 def inline_json(out_dir, vfs_path, max_bytes=INLINE_MAX):

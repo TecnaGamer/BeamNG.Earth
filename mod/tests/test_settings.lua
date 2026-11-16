@@ -46,6 +46,20 @@ T.check(settings.detectQuality({ name = 'AMD Custom GPU 0932 (RADV VANGOGH)', me
   'a Steam Deck gets Medium')
 T.check(settings.detectQuality({ name = 'Intel UHD 620', memoryMB = 1024 }) == 'low', 'a small GPU gets Low')
 T.check(settings.detectQuality({ name = 'AMD Radeon RX 7900 XTX', memoryMB = 24560 }) == 'high', 'a big GPU gets High')
+T.check(settings.detectQuality({ name = 'AMD Radeon RX 7900 XTX', memoryMB = 24560 }, 8 * 1073741824 - 300e6) == 'low',
+  'an 8 GB PC gets Low whatever its GPU (the server lean tier)')
+T.check(settings.detectQuality({ name = 'AMD Radeon RX 7900 XTX', memoryMB = 24560 }, 16 * 1073741824) == 'high',
+  'a 16 GB PC: by its GPU')
+T.check(settings.detectQuality({ name = 'AMD Custom GPU 0932 (RADV VANGOGH)', memoryMB = 6144 }, 15.5e9) == 'medium',
+  'a Steam Deck (16 GB) keeps Medium')
+do
+  local pick, why = settings.detectQuality(nil, 4 * 1073741824)
+  T.check(pick == 'low' and why:find('4 GB', 1, true) ~= nil, 'a 4 GB PC: Low, and why ' .. tostring(why))
+  local old = settings.LOW_RAM_GB
+  settings.LOW_RAM_GB = 0
+  T.check(settings.detectQuality(nil, 4 * 1073741824) == 'high', 'LOW_RAM_GB = 0: the memory not counted')
+  settings.LOW_RAM_GB = old
+end
 for _, p in ipairs(settings.PRESET_ORDER) do
   for _, k in ipairs(settings.PRESET_KEYS) do
     T.check(settings.validate(k, settings.PRESETS[p][k]) == settings.PRESETS[p][k], p .. ' preset: valid ' .. k)
@@ -64,6 +78,33 @@ T.check(n == #settings.ORDER, 'every SCHEMA key is in ORDER (or HIDDEN)')
 -- the one-time welcome: due in our level until seen, then not again
 T.check(settings.get('welcomeSeen') == 0, 'welcome not seen yet')
 T.check(settings.uiWelcomeDone().ok and settings.get('welcomeSeen') == settings.WELCOME_VERSION, 'seen: stored')
+-- the telemetry choice (TELEMETRY.md): asked until made; the boxes start as the region says (nothing ticked before the
+-- hello named it); the sub-switches are off with the main one; the choice is the server's consent version
+T.check(settings.privacyNeeded(), 'telemetry choice: needed before one is made')
+local p0 = settings.uiPrivacy()
+T.check(p0.needed and not p0.known and p0.telemetry == false and p0.perf == false and p0.net == false,
+  'before the hello: nothing ticked')
+settings.serverPrivacy('perf_off', 1)
+local p1 = settings.uiPrivacy()
+T.check(p1.known and p1.telemetry and p1.net and p1.perf == false, 'perf_off: performance unticked')
+settings.serverPrivacy('all', 1)
+T.check(settings.uiPrivacy().perf == true, 'all: everything ticked')
+settings.serverPrivacy('bogus', 'x')
+T.check(settings.privacyRegion == 'all' and settings.telemetryConsent == 1, 'bad region / consent ignored')
+settings.uiWelcomeDone({ telemetry = false, perf = true, net = true })
+T.check(settings.get('telemetry') == false and settings.get('telemetryPerf') == false and settings.get('telemetryNet') == false
+  and settings.get('telemetryChoice') == 1 and not settings.privacyNeeded(), 'main off: the parts off too, choice made')
+local p2 = settings.uiPrivacy()
+T.check(not p2.needed and p2.telemetry == false, 'after the choice: the saved values')
+settings.serverPrivacy('all', 2)
+T.check(settings.privacyNeeded() and settings.uiPrivacy().telemetry == false, 'a new consent version asks again (an off switch stays off)')
+settings.uiWelcomeDone({ telemetry = true, perf = false, net = true })
+T.check(settings.get('telemetry') and not settings.get('telemetryPerf') and settings.get('telemetryNet')
+  and settings.get('telemetryChoice') == 2, 'choice saved with the new version')
+settings.serverPrivacy('all', 3)
+local p3 = settings.uiPrivacy()
+T.check(p3.needed and p3.telemetry and p3.perf == false and p3.net, 'asked again: the boxes as chosen before, not the region\'s')
+settings.serverPrivacy('neutral', 1)
 
 ------------------------------------------------------------------------------------------
 -- validation
@@ -207,6 +248,29 @@ settings.set('viewDistanceKm', 200)
 T.check(scenetree.theLevelInfo.visibleDistance == 100000 and post == 2, 'horizon after fixed: the level\'s 100 km back once')
 settings.set('viewDistanceMode', 'fixed')
 T.check(scenetree.theLevelInfo.visibleDistance == 200000 and post == 3, 'fixed again: 200 km')
+do  -- the 3D map open: no fixed distance (its view reaches as far as its eye), the fixed one back when it closes
+  local post0, active = post, true
+  beamngEarth_map3d = { isActive = function() return active end }
+  settings.set('viewDistanceKm', 1)
+  T.check(settings.fixedViewM() == nil, 'map open: no fixed view distance')
+  settings.reapplyView()
+  T.check(scenetree.theLevelInfo.visibleDistance == 100000, 'map open: the level\'s distance, not 1 km')
+  active = false
+  T.check(settings.fixedViewM() == 1000, 'map closed: 1 km')
+  scenetree.theLevelInfo.visibleDistance = 900000     -- (a globe view raised it meanwhile)
+  settings.reapplyView()
+  T.check(scenetree.theLevelInfo.visibleDistance == 1000, 'map closed: the fixed 1 km back, whatever was set meanwhile')
+  settings.set('viewDistanceKm', 100)                 -- (the default value, fixed)
+  active = true
+  settings.reapplyView()
+  scenetree.theLevelInfo.visibleDistance = 900000     -- (a globe view raised it)
+  active = false
+  settings.reapplyView()
+  T.check(scenetree.theLevelInfo.visibleDistance == 100000, 'map closed: a fixed 100 km (the default value) back too')
+  beamngEarth_map3d = nil
+  settings.set('viewDistanceKm', 200)
+  post = post0                                        -- (the checks below count postApply calls from here)
+end
 settings.uiReset()
 T.check(scenetree.theLevelInfo.visibleDistance == 100000 and post == 4, 'reset (horizon): back to 100 km (applied, it had changed)')
 settings.onClientPostStartMission()
@@ -248,13 +312,9 @@ T.check(s.settings.rebaseDistance == settings.get('rebaseDistance') and #s.schem
 T.check(s.status.connection == 'disconnected' and s.status.session == 'abc' and s.status.anchorId == 3
   and s.status.attribution == 'credits' and s.status.dist == 500, 'uiState: status from the core')
 T.check(s.dev and s.dev.active, 'uiState: dev state')
-T.check(s.status.weather == 'Weather (real): 20 C' and s.status.gravity:match('EGM2008') and s.status.deshadow == 'off',
-  'uiState: server features (weather, gravity, de-shadowing off)')
-stTbl.deshadow = 'full'
-T.check(settings.uiState().status.deshadow == 'full', 'uiState: de-shadowing mode from the hello')
-T.check(s.status.colormatch == 'off', 'uiState: colour seams off without hello.colormatch')
-stTbl.colormatch = 's2'
-T.check(settings.uiState().status.colormatch == 's2', 'uiState: colour-seam mode from the hello')
+T.check(s.status.weather == 'Weather (real): 20 C' and s.status.gravity:match('EGM2008'),
+  'uiState: server features (weather, gravity)')
+T.check(s.status.deshadow == nil and s.status.colormatch == nil, 'uiState: no imagery rows (left the About page)')
 T.check(settings.uiDevSet('tint', true).active and devCalls[1] == 'tint=true', 'uiDevSet forwards')
 settings.uiDevPreset('lod')
 T.check(devCalls[2] == 'preset lod', 'uiDevPreset forwards')
@@ -388,6 +448,15 @@ do
   T.check(#sent == 3 and #sent[3] == 0, 'nothing missing any more: an empty list cancels the last one')
   settings.mapTiles(list)
   T.check(#sent == 3, 'and only once')
+  -- a sat tile with only its stand-in there (server maptiles.PROV_DIR): shown from its own path, still asked for
+  T.check(settings.mapTilePath('satp', 3, 2, 1) == '/temp/beamngEarth/maptiles/prov/3/2/1.jpg', 'stand-in path')
+  have[settings.mapTilePath('satp', 6, 1, 1)] = true
+  ready = settings.mapTiles({ { 6, 1, 1 }, { 6, 2, 1 } })
+  T.check(#ready == 1 and ready[1] == 'satp/6/1/1', 'a stand-in comes back as satp')
+  T.check(#sent == 4 and #sent[4] == 2 and sent[4][1][2] == 1, 'the tile with a stand-in is still asked for')
+  have[settings.mapTilePath('sat', 6, 1, 1)] = true
+  ready = settings.mapTiles({ { 6, 1, 1 } })
+  T.check(#ready == 1 and ready[1] == 'sat/6/1/1', 'the real tile once it is there')
   beamngEarth_core, FS = core0, fs0
 end
 
@@ -472,6 +541,34 @@ do
   settings.mapControls(false)
   vt.onActionEvent(1, 1)
   T.check(#sent == 2 and orig[2] == 1, 'map closed: the triggers as before')
+  for k, v in pairs(saved) do rawset(_G, k, v) end
+end
+
+-- Handled BigMap inputs stop before the menus' overlapping bindings (#766); the original policy is restored.
+do
+  local saved = { freeroam_bigMapMode = rawget(_G, 'freeroam_bigMapMode'), guihooks = rawget(_G, 'guihooks'),
+    pushActionMap = rawget(_G, 'pushActionMap'), popActionMap = rawget(_G, 'popActionMap') }
+  local find = scenetree.findObject
+  for _, previous in ipairs({false, true}) do
+    local am, sent = { trapHandledEvents = previous }, {}
+    local originalZoom = function() end
+    freeroam_bigMapMode = { zoomInOut = originalZoom }
+    scenetree.findObject = function(name) if name == 'BigMapActionMap' then return am end end
+    guihooks = { trigger = function(name, d) if name == settings.MAP_INPUT_EVENT then sent[#sent + 1] = d.kind end end }
+    pushActionMap, popActionMap = function() end, function() end
+    settings.mapControls(true)
+    settings.mapControls(true) -- opening twice must not replace the saved policy
+    freeroam_bigMapMode.zoomInOut(1, true)
+    -- The lower menu map receives the input only when the top action map allows a handled event through.
+    if not am.trapHandledEvents then freeroam_bigMapMode.onChangeUiFilter(1, 1) end
+    T.check(#sent == 1 and sent[1] == 'zoom_trigger', 'map zoom does not also cycle the cache layer')
+    freeroam_bigMapMode.onChangeUiFilter(1, -1)
+    T.check(sent[2] == 'filter', 'a dedicated bumper still cycles the cache layer')
+    settings.mapControls(false)
+    T.check(am.trapHandledEvents == previous and freeroam_bigMapMode.zoomInOut == originalZoom,
+      'map close restores action-map policy and stock callbacks')
+  end
+  scenetree.findObject = find
   for k, v in pairs(saved) do rawset(_G, k, v) end
 end
 
@@ -587,5 +684,54 @@ files[settings.FILE] = { version = 1, groundCover = false, rocks = false, trees 
   groundCoverDensity = 'low', viewDistanceMode = 'fixed', viewDistanceKm = 40 }
 local v3 = settings.load()
 T.check(v3.quality == 'custom' or v3.quality == 'low', 'old knobs that match no preset stay theirs')
+-- town signs on by default (version 2, 2026-11-10): a version-1 file's false was the old default, a version-2 one's a choice
 files[settings.FILE] = nil
+T.check(settings.load().townSigns == true, 'no file: town signs on')
+files[settings.FILE] = { version = 1, townSigns = false }
+T.check(settings.load().townSigns == true, 'a version-1 file: on (false was the old default)')
+files[settings.FILE] = { version = 2, townSigns = false }
+T.check(settings.load().townSigns == false, 'a version-2 file: the player turned them off')
+files[settings.FILE] = nil
+
+-- the Experimental page (2026-11-15: the server's BNE_* build switches, server/experimental.py FEATURES): every switch
+-- a bool, off by default, on the settings page; road signs off by default since version 3 (a version-2 file's true was
+-- the hidden switch's default), a version-3 file's choice kept
+do
+  local exp = { 'roadSigns', 'expNlRoadSigns', 'expEuScenery', 'expDropRails', 'expEntranceFlares', 'expPriorityStops',
+    'expRoadBumps', 'expRoughDirt', 'expWearStrips', 'expGradeGuard', 'expPhotoSurface', 'expTerrainBumps', 'expCliffWalls',
+    'expTunnelLids', 'expSubseaTunnels', 'expAiTunnels', 'expRailCollide', 'expCatenary', 'expRailCrossings', 'expRailTunnels',
+    'expRailCurves', 'expWatertight', 'expCanadaLidar', 'expGenGround', 'expStaleRevisit' }
+  local inOrder = {}
+  for _, k in ipairs(settings.ORDER) do inOrder[k] = true end
+  for _, k in ipairs(exp) do
+    local s = settings.SCHEMA[k]
+    T.check(s and s.kind == 'bool' and s.default == false, 'experimental ' .. k .. ': a bool, off by default')
+    T.check(inOrder[k] and not settings.HIDDEN[k], 'experimental ' .. k .. ': on the settings page')
+  end
+  T.check(settings.VERSION >= 3, 'settings version 3: road signs a real switch')
+  files[settings.FILE] = nil
+  T.check(settings.load().roadSigns == false and settings.load().expRoadBumps == false, 'no file: all off')
+  files[settings.FILE] = { version = 2, roadSigns = true, expRoadBumps = true }
+  local v = settings.load()
+  T.check(v.roadSigns == false, 'a version-2 file: road signs off (true was the hidden default)')
+  T.check(v.expRoadBumps == true, 'a version-2 file: another experimental switch is the player\'s')
+  files[settings.FILE] = { version = 3, roadSigns = true }
+  T.check(settings.load().roadSigns == true, 'a version-3 file: the player turned road signs on')
+  files[settings.FILE] = nil
+  settings.load()
+end
+
+-- the map's preload of a place: picked (the box) or pointed at (hover: the light part), to core.preloadPlace
+do
+  local calls = {}
+  local core0 = beamngEarth_core
+  beamngEarth_core = { preloadPlace = function(lat, lon, hover) calls[#calls + 1] = { lat, lon, hover }; return true end }
+  T.check(settings.uiMapPreload(40.5, '-73.25').ok == true, 'a pick goes to the core')
+  T.check(calls[1][1] == 40.5 and calls[1][2] == -73.25 and calls[1][3] == false, 'a pick: not a hover')
+  settings.uiMapPreload(40.5, -73.25, true)
+  T.check(calls[2][3] == true, 'a hover says so')
+  beamngEarth_core = nil
+  T.check(settings.uiMapPreload(1, 2, true).ok == false, 'no core: nothing')
+  beamngEarth_core = core0
+end
 T.done('test_settings')

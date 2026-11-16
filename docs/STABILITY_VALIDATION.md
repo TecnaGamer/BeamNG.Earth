@@ -19,27 +19,25 @@ files and barriers. All three regressions failed with the original methods and
 pass with the fix: late overwrite, shared-consumer cancellation, and pruning
 before a writer finishes. This establishes file ownership, not crash causality.
 
-## Reconnect slot ownership and queue hardening remain incomplete
+## Reconnect ownership and bounded outgoing queues
 
-Independent review reproduced a separate lifecycle issue: a disconnected game
-retains displayed shapes, but the server releases that connection's slot holds.
-Its reconnect hello restores the holds without necessarily removing those slots
-from the free pool. Allocation now checks whether a free candidate has become
-held again and moves it to the waiting set instead of reassigning it. This closes
-the post-hello allocation defect. It does not close the interval between
-disconnect and the new hello.
+The disconnected interval is now covered by a server-issued game lease that
+outlives the TCP connection. Complete reconnect snapshots reconcile held slots,
+anchors and prior session folders; replacing an overlapping connection does not
+let its old cleanup or acknowledgements release the new owner's files. The mod
+retains its token across scene resets and waits for a fresh hello before sending
+world requests. A timeout still never proves that a game deleted its objects.
 
-A complete fix needs stable per-game ownership across connections, retained
-disconnected holds, and atomic snapshot reconciliation, including overlapping
-connections. A timeout alone cannot prove that a disconnected game stopped
-drawing a shape. This remaining issue is a release limitation.
+With that ownership in place, the Lua outgoing queue is bounded to 8 MiB and
+1,024 frames, including retained partial-frame prefixes. Each update shares a
+256 KiB / 32-call send budget. The companion also bounds its pending write buffer
+to 8 MiB. Overflow aborts the transport; the next handshake safely reconciles the
+discarded acknowledgements. These are pending-traffic limits, not process-memory
+limits or evidence of native crash resolution.
 
-A bounded Lua send-queue implementation passed controlled backpressure tests,
-but its forced disconnects would increase exposure to that lifecycle issue.
-It is isolated on `experimental/bounded-send-queue` and is not included in this
-release or the final PR changes. The existing outgoing queue remains unbounded
-under sustained socket backpressure. Do not advertise bounded queues or native
-crash resolution as shipped features.
+See [streaming reliability](STREAMING_RELIABILITY.md) for the additive protocol,
+loopback/partial-write/soak tests and the conservative retention limits for games
+which never resume or use an older client.
 
 Run the regressions from a checkout with the documented development dependencies:
 
@@ -76,8 +74,8 @@ contain user paths, locations and machine details.
    second launch reconnects. Test successful BeamMP startup separately.
 4. Repeat with two actual BeamMP clients and interrupted companion connections.
    Check that reconnect restores the session without stale terrain or duplicate
-   messages; the known disconnect-gap issue above remains open. Offline Lua
-   tests do not establish this engine behavior.
+   messages, and verify slot/serial acknowledgements across forced reconnects.
+   Offline Lua tests do not establish this engine behavior.
 5. Preserve any new game log and crash report before another launch overwrites
    them. Sanitize paths and locations before sharing. Do not enable an unrelated
    branch's debug-capture instructions: this checkout has no such menu.

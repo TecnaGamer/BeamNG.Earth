@@ -18,6 +18,8 @@ spots: either way in, no "street" tracking). Cars park along the curb facing the
 import math
 
 import numpy as np
+import dmath
+import dnp
 from polygon import Path
 
 import furniture
@@ -54,7 +56,14 @@ def curb_spots(roads, walks, box, left_hand=False, directions=None):
         if fid is None or "pts" not in wk or fid not in by_fid:
             continue
         spec, line = by_fid[fid]
-        if not spec.urban or spec.cls not in PARK_CLASSES or spec.width < MIN_WIDTH_M:
+        if not spec.urban or spec.width < MIN_WIDTH_M:
+            continue
+        if spec.cls not in PARK_CLASSES:
+            import roads
+            if roads.laned_parking(spec) <= 0.0:     # (a two-lane primary between its walls: its parking lanes)
+                continue
+        street = getattr(spec, "street", None)
+        if street is not None and (street.parking < SPOT_W_M or wk.get("detached") or wk.get("median")):
             continue
         if furniture._h01(fid, "park") >= STREET_SHARE:
             continue
@@ -66,7 +75,7 @@ def curb_spots(roads, walks, box, left_hand=False, directions=None):
             continue
         w = wk.get("w", 2.5)
         phase = furniture._h01(fid, side, "parkph") * SPOT_LEN_M
-        for p, away in furniture._stations(run, line, SPOT_LEN_M, phase, CORNER_CLEAR_M, side):
+        for p, away, _ in furniture._stations(run, line, SPOT_LEN_M, phase, CORNER_CLEAR_M, side):
             q = p[:2] - away * (w / 2 + CURB_OFF_M)          # from the sidewalk's middle past the curb
             if not (_owns(box, q[0], q[1])):
                 continue
@@ -79,7 +88,7 @@ def curb_spots(roads, walks, box, left_hand=False, directions=None):
             else:
                 h = np.array([-away[1], away[0]])
             out.append([round(float(q[0]), 2), round(float(q[1]), 2), round(float(p[2]), 2),
-                        round(math.degrees(math.atan2(h[1], h[0])) % 360.0, 1)])
+                        round(math.degrees(dmath.atan2(h[1], h[0])) % 360.0, 1)])
     return out
 
 
@@ -94,7 +103,7 @@ def clear_of(spots, props, drives):
         return spots
     b = np.array(block, np.float64)
     s = np.array([r[:2] for r in spots], np.float64)
-    dist = np.hypot(s[:, None, 0] - b[None, :, 0], s[:, None, 1] - b[None, :, 1])
+    dist = dnp.hypot(s[:, None, 0] - b[None, :, 0], s[:, None, 1] - b[None, :, 1])
     keep = (dist >= b[None, :, 2]).all(1)
     return [r for r, k in zip(spots, keep) if k]
 
@@ -133,11 +142,17 @@ def _lot_rows(hw):
     return out
 
 
-def lot_spots(rings, box, z_at, blockers=()):
+LOT_ROAD_CLEAR_M = 5.0      # a lot stall whose centre is this close to a public road's centre line is on its lanes: left
+                            # out (a parking polygon drawn over a road: parked cars spawned across an Interstate's
+                            # lanes, Tann2019 on I-94 / I-90 in Montana, 2026-11-05)
+
+
+def lot_spots(rings, box, z_at, blockers=(), roads_xy=()):
     """Rows [x, y, z, heading, 1] of the stalls of parking lots (rings: (k, 2) arrays in the anchor frame)
     whose centres are in the tile box: rows along each lot's long side, every stall wholly inside the lot and
-    its centre in none of the blockers (building footprints: a garage's ground floor). z_at(x, y) -> the
-    ground (arrays). Deterministic."""
+    its centre in none of the blockers (building footprints: a garage's ground floor) nor within LOT_ROAD_CLEAR_M of
+    a public road (roads_xy: buildings.road_lines in the anchor frame). z_at(x, y) -> the ground (arrays).
+    Deterministic."""
     import buildings
     x0, y0, x1, y1 = box
     cand = []
@@ -162,7 +177,7 @@ def lot_spots(rings, box, z_at, blockers=()):
             ok = np.ones(len(centres), bool)
             for sx, sy in ((-1, -1), (1, -1), (1, 1), (-1, 1)):
                 ok &= path.contains_points(centres + sx * hx + sy * hy)
-            heading = math.degrees(math.atan2(nose * v[1], nose * v[0])) % 360.0
+            heading = math.degrees(dmath.atan2(nose * v[1], nose * v[0])) % 360.0
             for q in centres[ok]:
                 if _owns(box, q[0], q[1]):
                     cand.append((float(q[0]), float(q[1]), heading))
@@ -174,6 +189,17 @@ def lot_spots(rings, box, z_at, blockers=()):
         b = np.asarray(b, np.float64)
         if len(b) >= 3:
             keep &= ~Path(b).contains_points(pts)
+    lines = [np.asarray(ln, np.float64)[:, :2] for ln in roads_xy if len(ln) >= 2]
+    if lines and keep.any():        # (one Rust pass for every stall against every road segment: earthfast's grid)
+        import fast
+        fast.require(0, "points_near_segments")
+        a = np.concatenate([ln[:-1] for ln in lines])
+        b = np.concatenate([ln[1:] for ln in lines])
+        idx = np.flatnonzero(keep)
+        near = np.asarray(fast._ef.points_near_segments(np.ascontiguousarray(pts[idx], np.float64),
+                                                        np.ascontiguousarray(a), np.ascontiguousarray(b),
+                                                        np.full(len(a), LOT_ROAD_CLEAR_M)), bool)
+        keep[idx[near]] = False
     cand = [cnd for cnd, k in zip(cand, keep) if k][:LOT_MAX_PER_TILE]
     if not cand:
         return []
@@ -190,7 +216,7 @@ def lot_unpaved(feats, i):
     return str(surf[i] or "").strip().lower() in LOT_UNPAVED
 
 
-def lot_rings(frame, feats_list, paved_only=False):
+def lot_rings(frame, feats_list, paved_only=False, bay_rings=None):
     """The parking lot polygons (outer rings) of Overture infrastructure Features, in the anchor frame.
     paved_only: grass and gravel lots left out (the stall lines)."""
     out, seen = [], set()
@@ -203,6 +229,12 @@ def lot_rings(frame, feats_list, paved_only=False):
         for i in np.flatnonzero(np.isin(cls.astype(str), list(LOT_CLASSES)) & (f.kind == 3)):
             if paved_only and lot_unpaved(f, i):
                 continue
+            destination = out
+            if bay_rings is not None:
+                import streetfront
+                import streetparking
+                if streetparking.bay_kind(f, i, streetfront.tags_of(f, i)) is not None:
+                    destination = bay_rings
             fid = f.ids[i]
             if fid in seen:
                 continue
@@ -211,11 +243,11 @@ def lot_rings(frame, feats_list, paved_only=False):
                 if part and len(part[0]) >= 3:
                     ll = np.asarray(part[0], np.float64)
                     e, n, _ = frame.geodetic_to_enu(ll[:, 1], ll[:, 0], 0.0)
-                    out.append(np.stack([e, n], 1))
+                    destination.append(np.stack([e, n], 1))
     return out
 
 
-def tile_lot_spots(frame, tx, ty, md, elev, items=None, existing=None):
+def tile_lot_spots(frame, tx, ty, md, elev, items=None, existing=None, separate_bays=False):
     """existing (the tile's other spots) with its lot stalls (aisle_spots' rows, kind 1) inside a building or a
     mapped lot dropped, plus lot_spots of road tile (tx, ty): the lots of the map cells under it (md:
     mapdata.MapData), the tile's buildings (items: buildings.road_tile_items' result, rings tile-local) as blockers,
@@ -224,26 +256,35 @@ def tile_lot_spots(frame, tx, ty, md, elev, items=None, existing=None):
     existing = list(existing or [])
     box = roads.tile_bbox(tx, ty)
     blockers = [spec.ring + np.array(box[:2]) for spec, *_ in (items or ())]
+    roads_xy = []
+    bays = [] if separate_bays else None
     try:
-        feats = [md.cell(k, layers=("infrastructure",), kind="demand").layers.get("infrastructure")
+        cells = [md.cell(k, layers=("infrastructure", "roads"), kind="demand")
                  for k in roads.cells_of_tile(frame, tx, ty, margin=0.0)]
-        rings = lot_rings(frame, feats)
+        rings = lot_rings(frame, [c.layers.get("infrastructure") for c in cells], bay_rings=bays)
+        if rings:
+            import buildings
+            roads_xy = [ln + np.array(box[:2]) for ln in
+                        buildings.road_lines(frame, [c.layers.get("roads") for c in cells], box[0], box[1],
+                                                size=max(box[2] - box[0], box[3] - box[1]))]
     except Exception:
         rings = []
+    blockers.extend(bays or [])
     paths = [Path(np.asarray(b, np.float64)) for b in blockers + rings if len(b) >= 3]
     if paths and existing:
         pts = np.array([r[:2] for r in existing], np.float64)
         drop = np.zeros(len(existing), bool)
         for pa in paths:
             drop |= pa.contains_points(pts)
-        existing = [r for r, d in zip(existing, drop) if not (d and len(r) > 4 and r[4] == 1)]
+        existing = [r for r, d in zip(existing, drop)
+                    if not (d and (separate_bays or len(r) > 4 and r[4] == 1))]
     if not rings:
         return existing
 
     def z_at(x, y):                 # the anchor frame's up, as the ground drawn (the Earth's curve: raw heights stood a
         la, lo, _ = frame.enu_to_geodetic(x, y, 0.0)    # spot ~6 m up 10 km from the anchor, 18 m at 15 km)
         return frame.geodetic_to_enu(la, lo, np.asarray(elev(la, lo), np.float64))[2]
-    return existing + lot_spots(rings, box, z_at, blockers)
+    return existing + lot_spots(rings, box, z_at, blockers, roads_xy)
 
 
 AISLE_END_M = 6.0           # stalls kept this far from an aisle's ends (its junctions)
@@ -282,7 +323,7 @@ def aisle_spots(roads, aisles, box, blockers=(), lots=()):
                 if h:
                     continue
                 out.append([round(float(q[0]), 2), round(float(q[1]), 2), round(float(p[2]), 2),
-                            round(math.degrees(math.atan2(nn[1], nn[0])) % 360.0, 1), 1])
+                            round(math.degrees(dmath.atan2(nn[1], nn[0])) % 360.0, 1), 1])
     return out
 
 
@@ -578,18 +619,20 @@ def drop_covered(chunks, rings):
     return [ch for ch, h in zip(cand, hit) if not h]
 
 
-def finish_markings(frame, tx, ty, md, elev, items=None, marks=()):
+def finish_markings(frame, tx, ty, md, elev, items=None, marks=(), separate_bays=False):
     """A road tile's stall-line chunks: the aisle lines (marks, from build_tile) that are not inside a
     building or a mapped lot, plus lot_markings of the paved lots under the tile. elev(lat, lon) the ground."""
     import roads
     box = roads.tile_bbox(tx, ty)
     blockers = [spec.ring + np.array(box[:2]) for spec, *_ in (items or ()) if getattr(spec, "ring", None) is not None]
+    bays = [] if separate_bays else None
     try:
         feats = [md.cell(k, layers=("infrastructure",), kind="demand").layers.get("infrastructure")
                  for k in roads.cells_of_tile(frame, tx, ty, margin=0.0)]
-        rings = lot_rings(frame, feats, paved_only=True)
+        rings = lot_rings(frame, feats, paved_only=True, bay_rings=bays)
     except Exception:
         rings = []
+    blockers.extend(bays or [])
 
     def z_at(x, y):
         la, lo, _ = frame.enu_to_geodetic(np.asarray(x, np.float64), np.asarray(y, np.float64), 0.0)

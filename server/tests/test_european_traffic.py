@@ -3,6 +3,7 @@ import math
 import sys
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import numpy as np
 
@@ -37,6 +38,55 @@ def roundabout(reverse_alternate=False, mapped=False):
 
 def cross(a, b):
     return a[0] * b[1] - a[1] * b[0]
+
+
+def _arm(fid, cls, u, link=False, oneway=False, d=0, start=True):
+    spec = roads.Spec(8.0 if cls in furniture.MAJOR else 6.0, "paved", False, cls, oneway)._replace(link=link, dir=d)
+    return (fid, spec, np.array(u, float), np.zeros(3), start, 100.0)
+
+
+class PriorityStops(unittest.TestCase):
+    """Road-class right of way at unsignalised junctions (furniture.PRIORITY_STOPS, PR #728 / #773; off by default)."""
+
+    def cross(self, a="primary", b="primary", c="residential", d="residential"):
+        return [_arm("p1", a, (1, 0)), _arm("p2", b, (-1, 0)), _arm("r1", c, (0, 1)), _arm("r2", d, (0, -1))]
+
+    def test_off_by_default_nothing_changes(self):
+        self.assertFalse(furniture.PRIORITY_STOPS)
+        self.assertEqual(furniture.priority_stop_arms(self.cross()), [])
+
+    def test_lower_arms_stop_and_hierarchy_beats_guessed_signals(self):
+        with mock.patch.object(furniture, "PRIORITY_STOPS", True):
+            controls = furniture.junction_controls(self.cross(), None)
+            self.assertEqual({a[0] for a, what in controls if what == furniture.G_STOP}, {"r1", "r2"})
+            self.assertNotIn(furniture.G_SIGNAL, [what for _, what in controls])
+
+    def test_mapped_signal_wins(self):
+        with mock.patch.object(furniture, "PRIORITY_STOPS", True):
+            controls = furniture.junction_controls(self.cross(), None, signals=np.array([[0.0, 0.0]]))
+            self.assertEqual([what for _, what in controls], [furniture.G_SIGNAL] * 4)
+
+    def test_the_road_through_never_stops_where_its_class_changes(self):
+        with mock.patch.object(furniture, "PRIORITY_STOPS", True):
+            stops = furniture.priority_stop_arms(self.cross("primary", "secondary", "residential", "tertiary"))
+            self.assertEqual({a[0] for a in stops}, {"r1", "r2"}, "the secondary goes on through the primary")
+
+    def test_ramps_motorways_and_service_roads_left_as_before(self):
+        with mock.patch.object(furniture, "PRIORITY_STOPS", True):
+            merge = [_arm("m1", "trunk", (1, 0)), _arm("m2", "trunk", (-1, 0)), _arm("ramp", "trunk", (0, 1), link=True)]
+            self.assertEqual(furniture.priority_stop_arms(merge), [], "no stop on an on-ramp's merge")
+            drive = [_arm("a", "residential", (1, 0)), _arm("b", "residential", (-1, 0)), _arm("s", "service", (0, 1))]
+            self.assertEqual(furniture.priority_stop_arms(drive), [], "no stop sign at every driveway")
+
+    def test_sweden_keeps_its_own_rules(self):
+        with mock.patch.object(furniture, "PRIORITY_STOPS", True):
+            self.assertEqual(furniture.priority_controls(self.cross(), country="SE"), [])
+
+    def test_no_stop_sign_on_a_one_way_arm_leaving(self):
+        out = _arm("r2", "residential", (0, -1), oneway=True, d=1, start=True)
+        arms = self.cross()[:3] + [out]
+        controls = furniture.junction_controls(arms, None, signals=np.zeros((0, 2)))
+        self.assertEqual({a[0] for a, what in controls if what == furniture.G_STOP}, {"r1"})
 
 
 class RoundaboutTraffic(unittest.TestCase):

@@ -13,6 +13,7 @@ Everything a cell of the map-data pipeline reads, generated deterministically at
 Pixel values follow formulas (worldcover_class, canopy_value) so tests can check any window.
 """
 import json
+import math
 import os
 import re
 import struct
@@ -206,11 +207,14 @@ PLACE_SCHEMA = """id VARCHAR, version INTEGER, names STRUCT("primary" VARCHAR), 
     sources STRUCT(property VARCHAR, dataset VARCHAR, license VARCHAR, record_id VARCHAR)[], operating_status VARCHAR,
     confidence DOUBLE"""
 # the divisions theme (placenames.py): names with their common (per language) names
-DIV_NAMES = 'names STRUCT("primary" VARCHAR, common MAP(VARCHAR, VARCHAR))'
+# (and the alternate names the town signs read for a Latin form, townsigns.latin_name)
+DIV_NAMES = """names STRUCT("primary" VARCHAR, common MAP(VARCHAR, VARCHAR),
+                 rules STRUCT(variant VARCHAR, language VARCHAR, value VARCHAR)[])"""
 DIV_SCHEMA = f"""id VARCHAR, version INTEGER, subtype VARCHAR, class VARCHAR, country VARCHAR, region VARCHAR,
     population INTEGER, {DIV_NAMES}, sources STRUCT(property VARCHAR, dataset VARCHAR, license VARCHAR,
     record_id VARCHAR)[]"""
-DIV_AREA_SCHEMA = f"""id VARCHAR, version INTEGER, subtype VARCHAR, country VARCHAR, region VARCHAR, division_id VARCHAR,
+DIV_AREA_SCHEMA = f"""id VARCHAR, version INTEGER, subtype VARCHAR, class VARCHAR, country VARCHAR, region VARCHAR,
+    division_id VARCHAR,
     {DIV_NAMES}, sources STRUCT(property VARCHAR, dataset VARCHAR, license VARCHAR, record_id VARCHAR)[]"""
 DIV_BOUNDARY_SCHEMA = """id VARCHAR, version INTEGER, subtype VARCHAR, class VARCHAR, sources STRUCT(property VARCHAR,
     dataset VARCHAR, license VARCHAR, record_id VARCHAR)[]"""
@@ -338,6 +342,27 @@ def features():
                 wkt="LINESTRING({!r} {!r}, {!r} {!r})".format(*_cell_xy(0.9, 0.0), *_cell_xy(1.0, 0.1))),
            dict(id="bnd-md-pa", version=1, subtype="region", **{"class": "land"}, sources=[OSM],
                 wkt="LINESTRING({!r} {!r}, {!r} {!r})".format(*_cell_xy(0.0, 0.9), *_cell_xy(1.0, 0.9)))]
+    # two communes meeting in the middle of the cell (the town entry signs, 2026-10-28), one with names in other
+    # languages, the county around them (its outline a thousand vertices: simplified), and what the town_areas layer's
+    # `where` leaves out: a commune's maritime part (and the state's and country's areas above)
+    n = 1000
+    t = np.linspace(0.0, 2.0 * np.pi, n, endpoint=False)
+    lon0, lat0, lon1, lat1 = CELL.bounds()
+    wavy = [(lon0 + (0.5 + (2.5 + 0.0001 * math.sin(40 * a)) * math.cos(a)) * (lon1 - lon0),
+             lat0 + (0.5 + 2.5 * math.sin(a)) * (lat1 - lat0)) for a in t]
+    area += [dict(id="div-west", version=1, subtype="locality", **{"class": "land"},
+                  names={"primary": "Ouest", "common": {"key": ["oc", "ca", "en"], "value": ["Oèst", "Oest", "West"]}},
+                  sources=[OSM], country="FR", region="FR-OCC", division_id="d-west",
+                  wkt=_wkt_poly([_box(-0.5, -0.5, 0.5, 1.5)])),
+             dict(id="div-east", version=1, subtype="locality", **{"class": "land"}, names={"primary": "Est"},
+                  sources=[OSM], country="FR", region="FR-OCC", division_id="d-east",
+                  wkt=_wkt_poly([_box(0.5, -0.5, 1.5, 1.5)])),
+             dict(id="div-county", version=1, subtype="county", **{"class": "land"}, names={"primary": "Gard"},
+                  sources=[OSM], country="FR", region="FR-OCC", division_id="d-county",
+                  wkt=_wkt_poly([wavy + wavy[:1]])),
+             dict(id="div-sea", version=1, subtype="locality", **{"class": "maritime"}, names={"primary": "Est"},
+                  sources=[OSM], country="FR", region="FR-OCC", division_id="d-east",
+                  wkt=_wkt_poly([_box(1.0, -0.5, 1.5, 1.5)]))]
     return {("transportation", "segment"): seg, ("transportation", "connector"): con,
             ("buildings", "building"): bld, ("base", "water"): wat, ("base", "land_use"): lu,
             ("base", "infrastructure"): inf, ("places", "place"): pla,

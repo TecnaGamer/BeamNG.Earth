@@ -3,7 +3,11 @@
 // EarthSettings.vue, a route of its own for the main menu). One state for all of them (this module is loaded once):
 // the setting pointed at in a page shows its help in the side card. Lua side: lua/ge/extensions/beamngEarth/settings.lua.
 import { ref, computed } from "vue"
+import { restartView } from "./earthRestart.js"
 
+// The settings the world server reads only when it starts (server/srvrestart.py): the page offers "Restart world server"
+// once one of them differs from the value the server started with (earthRestart.js)
+const RESTART_NOTE = "Takes effect when the world server restarts: use Restart world server at the top of the page (the game stays open), or start BeamNG.Earth again."
 // Mirrors lua/ge/extensions/beamngEarth/settings.lua SCHEMA (the Lua side validates and clamps). Sections down the
 // left; Graphics first (the quality presets: settings.lua PRESETS).
 export const settingsSchema = [
@@ -12,12 +16,15 @@ export const settingsSchema = [
     presets: true,
     intro: "Pick a preset, then fine-tune the settings below if you like. Each change applies at once (the ground photo resolution at the next level load).",
     items: [
-      { id: "framePacing", type: "bool", default: true, name: "Even frame pacing", desc: "Keeps the time between frames steady, so the game's speed doesn't pulse while the world loads around you. Costs about a seventh of the frame rate while the world loads. Turn it off for the highest frame rate." },
       { id: "terrainDetail", type: "select", default: "normal", name: "Terrain detail", desc: "How detailed the distant ground is: how far out each finer level of the land's shape reaches, out to the horizon. Low: coarser hills sooner (fewer pieces to build and draw: about 20 % less). High, Ultra and Extreme: sharper mountains and coastlines far away; Extreme builds about twice as many pieces of distant ground, so new places take longer to fill in. Applies at once.",
         options: [ { label: "Low", value: "low" }, { label: "Normal", value: "normal" }, { label: "High", value: "high" }, { label: "Ultra", value: "ultra" }, { label: "Extreme", value: "extreme" } ] },
+      { id: "lodPx", type: "float", min: 0, max: 8, step: 0.5, default: 0, name: "Terrain pixel error", desc: "Advanced. Picks the distant ground's detail by what your screen can show: the largest jump in pixels you allow when a piece of distant ground switches to a finer or coarser version (your resolution and field of view count). 0: off, Terrain detail alone decides (the default). 1-2: switches you hardly notice, finer ground where it is rough (mountains, cliffs) and coarser where it is flat, so flat land needs fewer pieces. Higher: fewer pieces, more visible switching. Applies at once." },
       { id: "groundPhoto", type: "select", default: "2048", name: "Ground photo", desc: "The sharpness of the aerial photo and the painted roads on the ground around you (each 1 km square). 1024: 1 m a pixel, the lightest (handhelds). 2048: 0.5 m, the default. 4096: 0.25 m, the crispest road edges and markings in the ground, but each square takes 1-3 s longer to make on a fast PC (much longer on a handheld) and uses 4 times the video memory.",
         note: "Takes effect when the level next loads.",
         options: [ { label: "1024 (light)", value: "1024" }, { label: "2048 (default)", value: "2048" }, { label: "4096 (sharpest)", value: "4096" } ] },
+      { id: "groundGrid", type: "select", default: "1", name: "Ground grid", desc: "How fine the ground you drive on is: the distance between the points of its shape. 1 m: the game's own maps' detail, sharp kerbs, banks and ditches. 2 m: the lighter ground of the Low and Medium presets: softer small bumps and road edges, a quarter of the data to load each time the ground moves with you (shorter hitches while driving, faster loading on handhelds).",
+        note: RESTART_NOTE,
+        options: [ { label: "1 m (default)", value: "1" }, { label: "2 m (lighter)", value: "2" } ] },
       { id: "trees", type: "select", default: "normal", name: "Tree density", desc: "How many trees and bushes are drawn at each distance. Lowest and Low: thinner forests (the most frame time saved in wooded places). Ultra and Extreme: denser forests far out (strong GPUs).",
         options: [ { label: "Lowest", value: "lowest" }, { label: "Low", value: "low" }, { label: "Medium", value: "medium" }, { label: "Normal", value: "normal" }, { label: "High", value: "high" }, { label: "Ultra", value: "ultra" }, { label: "Extreme", value: "extreme" } ] },
       { id: "treeDistance", type: "select", default: "normal", name: "Tree draw distance", desc: "How far out trees, rocks, poles and roadside props are drawn: about 1.3 km at Normal, 1 km at Near, 0.8 km at Nearest, 2.8 km at Max. Farther needs more memory and a stronger GPU, and the app builds more tree tiles around you.",
@@ -33,13 +40,15 @@ export const settingsSchema = [
       { id: "rocks", type: "bool", default: true, name: "Rocks", desc: "Rocks and boulders on bare, rocky and steep ground. Off removes them (and their collision)." },
       { id: "nightLights", type: "select", default: "normal", name: "Street lamp lights", desc: "How many street lamps near you cast real light on the road at night (the lamps further out still glow). Fewer: cheaper nights.",
         options: [ { label: "Few", value: "few" }, { label: "Normal", value: "normal" }, { label: "Many", value: "many" } ] },
+      { id: "roadDetail", type: "select", default: "full", name: "Road surface detail", desc: "Wear on the roads from the game's own decals: Basic adds a concrete road's joints and grassy edges on country roads; Full also crack lines, repair patches, potholes on poor roads, oil spots in parking lots and fallen leaves under trees in the autumn. Drawn with the road itself (no extra objects); Off is lightest. Needs Roads.",
+        options: [ { label: "Off", value: "off" }, { label: "Basic", value: "basic" }, { label: "Full", value: "full" } ] },
       { id: "distantTraffic", type: "bool", default: false, name: "Distant traffic lights", desc: "Moving headlights and taillights on distant roads at night. Follows game traffic unless Distant lights without traffic is on. Density follows the local time. Needs Roads." },
       { id: "distantTrafficWithoutTraffic", type: "bool", default: false, name: "Distant lights without traffic", desc: "Keep the distant headlights and taillights on at night even when game traffic is off. Needs Distant traffic lights and Roads.", showIf: c => c.distantTraffic === true },
       { id: "distantTrafficQuality", type: "select", default: "high", name: "Distant traffic quality", desc: "How many distant vehicles populate the surrounding roads. Lower levels reduce the number of lights and resource use. Turning and zooming preserve the same traffic.", showIf: c => c.distantTraffic === true,
         options: [ { label: "Low", value: "low" }, { label: "Medium", value: "medium" }, { label: "High", value: "high" } ] },
       { id: "viewDistanceMode", type: "select", default: "horizon", name: "View distance", desc: "Real horizon (the default): the land reaches the true horizon. Fixed: the view ends at the distance below (cheaper on weak hardware).",
         options: [ { label: "Real horizon", value: "horizon" }, { label: "Fixed distance", value: "fixed" } ] },
-      { id: "viewDistanceKm", type: "float", min: 20, max: 1000, step: 10, default: 100, name: "Fixed view distance (km)", desc: "How far you can see with a fixed view distance.", showIf: c => c.viewDistanceMode === "fixed" },
+      { id: "viewDistanceKm", type: "float", min: 1, max: 1000, step: 1, default: 100, name: "Fixed view distance (km)", desc: "How far you can see with a fixed view distance.", showIf: c => c.viewDistanceMode === "fixed" },
     ],
   },
   {
@@ -53,11 +62,77 @@ export const settingsSchema = [
         options: [ { label: "Real weather", value: "real" }, { label: "Manual", value: "manual" } ] },
       { id: "clouds", type: "bool", default: true, name: "Clouds", desc: "A volumetric cloud layer that follows the ground under you." },
       { id: "realGravity", type: "bool", default: true, name: "Real gravity", desc: "Gravity as it really is where you are (it varies a little with latitude, height and the ground below). Off: the usual 9.81 m/s2." },
+      { id: "lowFuelPrompt", type: "bool", default: true, name: "Low fuel prompt", desc: "When the fuel or charge drops below 15 %, a message names the nearest gas station (an EV charger for an electric car) and the key that routes the GPS there (Ctrl+Shift+Q, or Nearest station in the radial menu)." },
       { id: "roads", type: "bool", default: true, name: "Roads", desc: "Real roads, bridges and buildings near you from OpenStreetMap and Overture. Off: bare terrain only." },
-      { id: "highwaySigns", type: "bool", default: true, name: "Highway signs", desc: "Exit and overhead destination signs, merge warnings and Interstate mile markers along US highways, from the signs mapped in OpenStreetMap. Needs Roads." },
+      { id: "highwaySigns", type: "bool", default: true, name: "Highway signs", desc: "Exit and overhead destination signs, merge warnings and Interstate mile markers along US highways, and the German Autobahn signs at every exit and interchange, from the signs mapped in OpenStreetMap. Needs Roads." },
       { id: "models3dmr", type: "bool", default: true, name: "3D models from 3dmr.eu", desc: "Landmarks such as the Eiffel Tower or the Dragon Bridge in Da Nang as real 3D models from the open library 3dmr.eu, downloaded when you first drive near them. Off: the usual generated buildings and bridges there. Your own models (local_models.json) stay.",
-        note: "Takes effect the next time you start BeamNG.Earth." },
+        note: RESTART_NOTE },
+      { id: "directionSigns", type: "bool", default: true, name: "Direction signs", desc: "Blue or green direction boards before junctions with the road numbers, the places ahead and their distances (cities also in English), from the road network and Overture's places. Needs Roads and Highway signs." },
+      { id: "germanJunctionSigns", type: "bool", default: false, name: "German junction signs", desc: "In Germany: German right-of-way signs and road markings at junctions, 30-zone signs, and traffic that gives way accordingly." },
+      { id: "softDrag", type: "bool", default: false, name: "Soft slow-down when the world is behind", desc: "Experimental. When the ground ahead is still loading at high speed, the car loses a little speed (at most about 4 % a second, ramped in smoothly) instead of being stopped at the edge. The stop stays as the last resort." },
+      { id: "deckGuard", type: "bool", default: true, name: "Slow down before bridges still loading", desc: "When a bridge ahead has not loaded yet (its road piece comes after the ground under it), the car slows down smoothly and stops short of it until it has, instead of driving into the gap; held there as the last resort, and set back on the road if it went over anyway. Also in BeamMP (only your own car). Nothing happens while the bridges load in time." },
+      { id: "rumbleStrips", type: "bool", default: true, name: "Rumble strip sound", desc: "Plays a brief rumble when your car drifts onto a likely lane-departure strip on selected Australian, New Zealand and US highway types. Internal lane dividers are ignored. Corridor coverage is approximate because these strips are not mapped consistently." },
+      { id: "townSigns", type: "bool", default: true, name: "Town signs", desc: "Each country's own town entry and exit signs where a road enters a town (in Germany the yellow Ortstafeln, where OpenStreetMap has them mapped), from the road network, the land cover and Overture's places. Needs Roads." },
+      { id: "adaptiveTraffic", type: "bool", default: false, name: "Adaptive traffic amount", desc: "Experimental. The traffic amount follows the place: up to your full amount in cities, fewer cars in the suburbs and the country, from the nearby road network and the nearest town (changed one car every few seconds while you drive, at once after a teleport). Never more than the traffic amount you chose. Off: always your amount." },
       { id: "rebaseDistance", type: "float", min: 2000, max: 16000, step: 100, default: 15000, name: "Rebase distance (m)", desc: "Advanced. How far you drive before the world quietly moves back under you (keeps the physics precise). 15 km keeps precision at about 1 mm." },
+    ],
+  },
+  {
+    // the BNE_* build switches a player may turn on (server/experimental.py FEATURES: the launcher starts the server
+    // with them; settings.lua SCHEMA); all off by default
+    name: "Experimental",
+    intro: "Features still being tested, all off by default. Each takes effect when the world server restarts (the Restart world server button at the top of the page; the game stays open). With any of them on, BeamNG.Earth builds every place itself (the prebuilt shared world data is made for the default settings) and builds places you visited again, so first visits load more slowly.",
+    items: [
+      { id: "roadSigns", type: "bool", default: false, name: "Road signs", desc: "Experimental. Ordinary signs where the road data implies them: no entry, dead end, crossings, bends, roundabouts, give way and stop, tunnels, bus stops, in Ukraine, Czechia, Poland and Germany. Needs Roads. Turning it off applies at once.",
+        note: RESTART_NOTE },
+      { id: "expNlRoadSigns", type: "bool", default: false, name: "Dutch road signs", desc: "Experimental. A first set of the Netherlands' own road signs, drawn by the Road signs above. Needs Road signs.",
+        note: RESTART_NOTE, showIf: c => c.roadSigns === true },
+      { id: "expEuScenery", type: "bool", default: false, name: "French and European road scenery", desc: "Experimental. Across Europe: each country's own steel guardrails (also along motorway edges where none is mapped), sign faces, bus stops and street edges (kerbs and pavements). In France also: French road markings and edge paint on country roads, bend and traffic signs, speed cameras, utility poles and regional house styles (untyped small buildings in housing areas become houses). Partly estimated where the map has no data.",
+        note: RESTART_NOTE },
+      { id: "expDropRails", type: "bool", default: false, name: "Guard rails at drops", desc: "Experimental. Steel guard rails along paved country roads wherever the ground falls away steeply beside the road (high embankments, cliffs, the valley side of mountain roads), where none is mapped.",
+        note: RESTART_NOTE },
+      { id: "expEntranceFlares", type: "bool", default: false, name: "Widened entrances", desc: "Experimental. Driveways and service roads widen where they meet the street, as real entrances and parking lot mouths do.",
+        note: RESTART_NOTE },
+      { id: "expPriorityStops", type: "bool", default: false, name: "Right of way by road class", desc: "Experimental. At junctions without traffic lights or mapped signs, the bigger road goes through and the smaller roads get stop signs, stop lines and AI traffic that stops. Puts stops at many more junctions, in the country too.",
+        note: RESTART_NOTE },
+      { id: "expRoadBumps", type: "bool", default: false, name: "Bumpy road surfaces", desc: "Experimental. Real roads are not perfectly smooth: gentle waves, dips, patches and a little side-to-side wobble, with road condition changing in sections (some stretches poor, some fresh). The same bumps on every visit.",
+        note: RESTART_NOTE },
+      { id: "expRoughDirt", type: "bool", default: false, name: "Rough dirt roads", desc: "Experimental. Minor dirt roads get potholes and worn, leaning surfaces for a rally feel. Can feel like a motocross track at speed.",
+        note: RESTART_NOTE },
+      { id: "expWearStrips", type: "bool", default: false, name: "Tyre polish, crack networks and manholes", desc: "Experimental. Extra road wear decals: polished tyre tracks, sealed and alligator crack networks across the lanes and manhole covers. They can look too bright for now. Needs Road surface detail at Full.",
+        note: RESTART_NOTE },
+      { id: "expGradeGuard", type: "bool", default: false, name: "Road steepness limit", desc: "Experimental. Caps how steep each class of road may be (unless the ground itself is that steep), smoothing out spikes the elevation data puts in roads. Changes the height of every road.",
+        note: RESTART_NOTE },
+      { id: "expPhotoSurface", type: "bool", default: false, name: "Road surface from aerial photos", desc: "Experimental. Roads whose map data has no surface are drawn paved, gravel or grass by the colour of the aerial photo along them, where a sharp regional photo source is available (such as Czechia). Otherwise such roads stay dirt as before.",
+        note: RESTART_NOTE },
+      { id: "expTerrainBumps", type: "bool", default: false, name: "Rougher land off the roads", desc: "Experimental. Small bumps in the open land away from the roads, so fields and verges are not perfectly smooth. Costs some world building time.",
+        note: RESTART_NOTE },
+      { id: "expCliffWalls", type: "bool", default: false, name: "Rock faces in deep road cuts", desc: "Experimental. Where a country road runs through a deep cutting, the sides become rock faces instead of dry-stone walls.",
+        note: RESTART_NOTE },
+      { id: "expTunnelLids", type: "bool", default: false, name: "Ground over shallow tunnels", desc: "Experimental. Puts back the ground or deck the elevation data leaves out over short tunnels under a road (cut-and-cover underpasses), so the road on top does not dip into a pit. Costs some world building time.",
+        note: RESTART_NOTE },
+      { id: "expSubseaTunnels", type: "bool", default: false, name: "More undersea tunnels", desc: "Experimental. Builds undersea tunnel tubes the usual rules leave out because their ends do not fit the ground exactly.",
+        note: RESTART_NOTE },
+      { id: "expAiTunnels", type: "bool", default: false, name: "Traffic through tunnels", desc: "Experimental. AI traffic drives through the tunnels that are built (off: tunnel stretches are left out of the AI's roads). Some tunnel entrances are narrower than the roads leading in, and AI cars may hit their walls.",
+        note: RESTART_NOTE },
+      { id: "expRailCollide", type: "bool", default: false, name: "Solid railway rails", desc: "Experimental. The rails themselves are solid, so a car on train wheels (or a train) rides on the railheads. Off: cars drive on the ballast under the rails, which is lighter for the physics on rail-heavy tiles.",
+        note: RESTART_NOTE },
+      { id: "expCatenary", type: "bool", default: false, name: "Overhead railway wires", desc: "Experimental. Masts and overhead wires along electrified railway lines (at their mapped places where they are mapped).",
+        note: RESTART_NOTE },
+      { id: "expRailCrossings", type: "bool", default: false, name: "Grouped level crossings", desc: "Experimental. A level crossing over several tracks gets one set of signals at each approach, and gates where the crossing is a big one, instead of a set before every track.",
+        note: RESTART_NOTE },
+      { id: "expRailTunnels", type: "bool", default: false, name: "Railway tunnels", desc: "Experimental. Railway lines mapped in tunnels are built as tunnels through the ground.",
+        note: RESTART_NOTE },
+      { id: "expRailCurves", type: "bool", default: false, name: "Rounded railway curves", desc: "Experimental. Railway lines follow smooth curves instead of the map's corners. Costs some world building time in big rail yards.",
+        note: RESTART_NOTE },
+      { id: "expWatertight", type: "bool", default: false, name: "Closed 3D models", desc: "Experimental. Every road, bridge and building piece is built as a closed solid (sides, ends and a sunk bottom), so a piece slightly out of place shows no see-through hole. Up to about a third more triangles to draw.",
+        note: RESTART_NOTE },
+      { id: "expCanadaLidar", type: "bool", default: false, name: "Detailed Canadian lidar", desc: "Experimental. In Canada, the national lidar terrain (HRDEM) at full detail near you, and British Columbia's own 1 m lidar where it was flown. Sharper ground, but many more downloads: first visits there take much longer.",
+        note: RESTART_NOTE },
+      { id: "expGenGround", type: "bool", default: false, name: "Generated ground", desc: "Experimental. The ground near you is made from 10 m satellite colour (Sentinel-2) and the map (land cover, fields, parks, pitches, squares, pools, paths, hedges, streams, tree heights, roads and buildings) instead of downloading 1 m aerial photos, and roofs take their mapped or typical colours instead of the photo's. Places load faster where the photo servers are slow or missing, but the ground shows less real detail where the map has none (unmapped ponds, drives and yards, crop stripes outside mapped fields).",
+        note: RESTART_NOTE },
+      { id: "expStaleRevisit", type: "bool", default: false, name: "Show the older world while rebuilding", desc: "Experimental. After an update, places you visited before show the previous version's roads, trees, signs and ground photos while the new version builds them, instead of loading as a first visit.",
+        note: RESTART_NOTE },
     ],
   },
   {
@@ -67,6 +142,10 @@ export const settingsSchema = [
       { id: "profilerMode", type: "select", default: "essential", name: "Profiler mode", desc: "Essential keeps frame times, CPU/GPU totals, basic service traffic, average latency and disk space. Full adds detailed steps, worker traces, latency distributions and process I/O sampling.", options: [ { label: "Essential", value: "essential" }, { label: "Full", value: "full" } ] },
       { id: "statusBar", type: "bool", default: true, name: "Status bar", desc: "The bar at the top of the screen: the street and town you are in, loading progress and the frame rate." },
       { id: "placeNamesOnline", type: "bool", default: true, name: "Place names", desc: "Town, state and country names in the status bar, from map data the app downloads once per region (Overture Maps). Your position is not sent anywhere." },
+      { id: "telemetry", type: "bool", default: true, name: "Anonymous usage statistics", desc: "The main switch for the anonymous reports the app sends every 5 minutes: a random install id, the app version and system, whether the game and BeamMP are running. No names, accounts, positions or places; the country is looked up from your connection and the address is not kept. It shows how many people play (earth.tgforever.net/players). Off: nothing at all is sent, whatever the two switches below say. Every field and why: TELEMETRY.md in the BeamNG.Earth folder and on GitHub." },
+      { id: "telemetryPerf", type: "bool", default: true, name: "Performance data", desc: "Part of the anonymous reports: frame rate and hitches, how fast the world is built, the CPU / GPU model and the game and BeamNG.Earth settings, the kind of area you drive in (city, rural, ...) instead of where, and error codes. It shows what makes the game slow or crash on real players' machines.", showIf: c => c.telemetry !== false },
+      { id: "telemetryNet", type: "bool", default: true, name: "Network load", desc: "Part of the anonymous reports: how many requests went to each map-data service, so we can slow down or cache before a free service is overloaded.", showIf: c => c.telemetry !== false },
+      { id: "mapStyle", type: "select", default: "2d", name: "Map style", desc: "What the map key (M) and the pause menu's Map open. 2D: the flat world map. 3D: the camera flies up from your car and you look around the real world like a map app (move with WASD or the left stick, turn and tilt with the mouse or the right stick, zoom with the wheel); the map key again flies back down to the car. The 3D map is experimental. The map key opens the style you switched to last.", options: [ { label: "2D", value: "2d" }, { label: "3D (experimental)", value: "3d" } ] },
       { id: "hudVisible", type: "bool", default: false, name: "Status window", desc: "The compact BeamNG.Earth status window (connection, location, loading, quick buttons). Also whether it opens at level start." },
       { id: "dashboardSatellite", type: "bool", default: true, name: "Satellite map on dashboards", desc: "BeamNG.Earth's satellite map on vehicles with dashboard screens. Off: the stock dashboard page." },
       { id: "creditsVisible", type: "bool", default: true, name: "Data credits on screen", desc: "Small text in a corner naming the sources of the imagery, elevation and weather around you. On by default: many of the data licences ask for visible credit. Hidden in the pause menu and the big map." },
@@ -96,35 +175,47 @@ export const settingsSchema = [
   },
   {
     name: "Performance",
-    intro: "How much of your CPU the BeamNG.Earth app may use to build the world around you. Takes effect the next time you start BeamNG.Earth.",
+    intro: "How much of your CPU and memory the BeamNG.Earth app may use to build the world around you.",
     items: [
       { id: "serverCores", type: "select", default: "auto", name: "World server CPU cores", desc: "The CPU cores the app builds the map on; the game keeps the others. Auto: a quarter of your cores (one on a 4-core CPU). On an older CPU where the map loads slowly or pauses while you drive, 2 can load it much faster, at a few frames per second. The app never takes more than half your cores.",
-        note: "Takes effect the next time you start BeamNG.Earth.",
+        note: RESTART_NOTE,
         options: [ { label: "Auto", value: "auto" }, { label: "1", value: "1" }, { label: "2", value: "2" }, { label: "3", value: "3" }, { label: "4", value: "4" }, { label: "6", value: "6" }, { label: "8", value: "8" } ] },
       { id: "serverPriority", type: "select", default: "low", name: "World server priority", desc: "Low (the default): the game always comes first, the map can take longer to load. Normal: the app gets its fair share, so the map loads faster on a busy CPU, at a few frames per second.",
-        note: "Takes effect the next time you start BeamNG.Earth.",
+        note: RESTART_NOTE,
         options: [ { label: "Low", value: "low" }, { label: "Normal", value: "normal" } ] },
       { id: "teleportPriority", type: "bool", default: false, name: "Full priority loading", desc: "When you join the world and after a teleport, the app builds the place on every CPU core and the game keeps only two, until the place around you has finished loading. The new place loads much faster; the game runs at a lower frame rate meanwhile. Takes effect at your next teleport or the next time you join." },
+      { id: "memoryUsage", type: "info", name: "World server memory", desc: "The memory the BeamNG.Earth app holds now to build the world (all its processes together), and its limit. The game's own memory is not counted." },
+      { id: "maxRamGb", type: "select", default: "auto", name: "Max RAM for BeamNG.Earth", desc: "The most memory the BeamNG.Earth app may use to build the world, all its processes together; the game's own memory is not counted. Auto: a third of your computer's memory below 24 GB (5 GB on a 16 GB PC, at least 1.5 GB), and 60 % of it on a bigger computer, at most 24 GB (19 GB on a 32 GB PC). Near the limit the app drops its caches and restarts its busiest helper processes, and it uses less while your computer is short of memory, but never less than 3 GB (the least it needs). Lower it if the game stutters while other programs are open; the world then loads more slowly. More than Auto rarely loads faster.",
+        note: "The limit takes effect at once; the app's caches and helper processes are sized for it when the world server restarts (Restart world server at the top of the page) or BeamNG.Earth starts again.",
+        options: [ { label: "Auto", value: "auto" }, { label: "3 GB", value: "3" }, { label: "4 GB", value: "4" }, { label: "6 GB", value: "6" }, { label: "8 GB", value: "8" }, { label: "12 GB", value: "12" }, { label: "16 GB", value: "16" }, { label: "24 GB", value: "24" }, { label: "32 GB", value: "32" } ] },
     ],
+  },
+  {
+    // third-party add-ons (EarthAddons.vue, earthAddonsStore.js): the page is the add-ons' own view, no settings rows
+    name: "Add-ons",
+    addons: true,
+    items: [],
   },
   {
     name: "Feedback",
     items: [
       { id: "reportOpen", type: "feedback", what: "report", label: "Report", name: "Report an issue or idea", desc: "Closes this page, takes a screenshot, the location, the frame rate and your hardware and graphics settings, then opens a window to pick the kind (map issue, performance issue, bug, idea), give a title and describe it. Saves a ready-to-post GitHub issue (issue.md). Also Ctrl+Shift+E while driving." },
       { id: "profilerOpen", type: "feedback", what: "profiler", label: "Start profiler", name: "Performance profiler", desc: "Closes this page and records 30 s of frame times while you drive (every hitch with its place), then opens the same window as a performance issue. Also Ctrl+Shift+Y while driving." },
-      { id: "reportPost", type: "text", name: "Posting it", desc: "After saving, the window shows the folder and opens the GitHub new-issue page. Edit issue.md and drag screenshot.jpg into the issue." },
+      { id: "reportPost", type: "links", name: "Posting it", desc: "After saving, the window shows the folder and opens the GitHub new-issue page. Edit issue.md and drag screenshot.jpg into the issue. GitHub issues opens the project's issues in your browser.",
+        links: [ { label: "GitHub issues", url: "https://github.com/TecnaGamer/BeamNG.Earth/issues" } ] },
     ],
   },
   {
     name: "About",
     items: [
+      { id: "links", type: "links", name: "BeamNG.Earth", desc: "The project on GitHub (code, releases, issues), the TGForever Discord (help and news) and Ko-fi (support the development). Opens in your browser.",
+        links: [ { label: "GitHub", url: "https://github.com/TecnaGamer/BeamNG.Earth" }, { label: "Discord", url: "https://discord.gg/tgf" }, { label: "Ko-fi", url: "https://ko-fi.com/tecnagamer" } ] },
       { id: "connection", type: "info", name: "Companion app", desc: "The connection to the BeamNG.Earth app (127.0.0.1:47613) that builds the world, and the session id it gave this game." },
       { id: "anchor", type: "info", name: "World origin", desc: "The current world origin (anchor) and its latitude / longitude. A rebase moves it under you." },
       { id: "player", type: "info", name: "Your position", desc: "Your latitude / longitude and the distance from the world origin." },
       { id: "weather", type: "info", name: "Weather data", desc: "Real weather from Open-Meteo.com, every 10 min or 25 km." },
       { id: "gravity", type: "info", name: "Gravity", desc: "The gravity in use: the real value (WGS84 normal plus EGM2008) or normal gravity by latitude." },
-      { id: "deshadow", type: "info", name: "Imagery de-shadowing", desc: "The app's relighting of the shadows baked into the aerial photos." },
-      { id: "colormatch", type: "info", name: "Imagery colour seams", desc: "The app's removal of the colour steps between photo flights, e.g. at state lines." },
+      { id: "contributors", type: "contributors", name: "Contributors", desc: "The GitHub users whose code is merged into this version. Thank you! Click a name to open their GitHub page." },
       { id: "credits", type: "text", name: "Data credits now", desc: "The data credits for what is around you now, as drawn in the screen corner." },
       { id: "attribution", type: "text", name: "Data sources", desc: "Credits for the elevation and imagery sources in use." },
     ],
@@ -153,14 +244,15 @@ export const settingsSchema = [
 
 // Each page's icon (the pause menu's side buttons take the icon's name, LayoutMenu's tabs the icon) and its button id
 // (the first keeps the old Mods-tab button's id: settings.lua M.BUTTON_ID, pageExists)
-export const PAGE_ICONS = { Graphics: "eyeOutlineOpened", World: "globe", Interface: "cogOutline",
-  Multiplayer: "peopleOutline", Storage: "floppyDisk", Feedback: "bug", About: "info", Developer: "code" }
+export const PAGE_ICONS = { Graphics: "eyeOutlineOpened", World: "globe", Experimental: "test", Interface: "cogOutline",
+  Multiplayer: "peopleOutline", Storage: "floppyDisk", "Add-ons": "puzzleModule", Feedback: "bug", About: "info",
+  Developer: "code" }
 export const pageId = (name, i) => i === 0 ? "beamngEarth-settings" : "beamngEarth-settings-" + name.toLowerCase()
 
 // The quality presets' cards (settings.lua PRESETS: what each sets)
 export const qualityPresets = [
-  { id: "low", name: "Low", short: "Thin forests, no grass, 40 km view", desc: "For older laptops and weak GPUs: fewer, nearer trees and buildings, no grass, coarser distant terrain, a lighter ground photo (1024), few lamp lights at night and a 40 km view distance." },
-  { id: "medium", name: "Medium", short: "Lighter forests, light grass", desc: "Somewhat thinner and nearer forests, light grass and few lamp lights at night, the real horizon. The Steam Deck's preset." },
+  { id: "low", name: "Low", short: "Thin forests, no grass, 40 km view", desc: "For older laptops and weak GPUs: fewer, nearer trees and buildings, no grass, coarser distant terrain, a lighter ground photo (1024), the lighter 2 m ground grid, few lamp lights at night, a 40 km view distance and at most 2 parked cars out at once while the game's parked-car amount is at its default (an amount you set yourself is kept)." },
+  { id: "medium", name: "Medium", short: "Lighter forests, light grass", desc: "Somewhat thinner and nearer forests, light grass, the lighter 2 m ground grid and few lamp lights at night, the real horizon, and at most 2 parked cars out at once while the game's parked-car amount is at its default (an amount you set yourself is kept). The Steam Deck's preset." },
   { id: "high", name: "High", short: "The full look", desc: "Normal trees, buildings, terrain and grass, all lamp lights, the real horizon (BeamNG.Earth's look before presets existed)." },
   { id: "ultra", name: "Ultra", short: "Denser, farther forests", desc: "Denser and farther forests, buildings farther out, finer distant terrain, thick grass and more lamp lights at night. For strong GPUs." },
   { id: "extreme", name: "Extreme", short: "Everything at its most", desc: "Every setting at its most, out to the real horizon: the finest distant terrain, the sharpest ground photo (4096), the densest forests and buildings as far as they go, far grass and the most detailed objects. For the strongest PCs only: new places take longer to build and the frame rate drops." },
@@ -215,12 +307,40 @@ export const connectionText = computed(() => {
 
 export const statusText = computed(() => status.value.status || "-")
 
+// "Restart world server": the box at the top of each page (earthRestart.js) while a setting waits for a restart or one
+// is under way; the button asks the Lua side (settings.uiRestartServer), the poll shows the phases
+const settingNames = {}
+settingsSchema.forEach(cat => cat.items.forEach(item => { if (item.id && item.name) settingNames[item.id] = item.name }))
+export const restartSent = ref("")     // the request's error, if it was not sent
+export const restart = computed(() => {
+  const p = status.value.paths      // (the cache folder chosen for the next start: a restart takes it too)
+  const more = p && p.cacheNext && p.cacheDir && p.cacheNext !== p.cacheDir ? ["Download cache folder"] : []
+  const v = restartView(status.value.restart, id => settingNames[id], more)
+  return restartSent.value && !v.busy ? { ...v, show: true, level: "warn", note: restartSent.value } : v
+})
+export function restartServer() {
+  restartSent.value = ""
+  engineLua("beamngEarth_settings and beamngEarth_settings.uiRestartServer and beamngEarth_settings.uiRestartServer() or nil", res => {
+    if (!res || !res.ok) restartSent.value = (res && res.error) || "mod not loaded"
+    refresh()
+  })
+}
+
 // the connection banner's state line (core.banner(): starting / not running / lost / offline / degraded
 // / connected, plus the edge guard's line) and its level (info / ok / warn / error)
 export const bannerText = computed(() => (status.value.banner && status.value.banner.text) || "")
 export const bannerLevel = computed(() => (status.value.banner && status.value.banner.level) || "info")
 // a newer version on GitHub: { current, latest, url } (core.updateInfo)
 export const update = computed(() => status.value.update || null)
+// a link from the About page, in the system's browser through the server (core.openPage: the game's openWebBrowser
+// refuses GitHub, Discord and Ko-fi, "unable to open webpage due to domain filter"; the server opens only the
+// page's own links and GitHub profiles, updates.openable)
+export function openLink(url) {
+  if (typeof url === "string" && url.startsWith("https://")) {
+    engineLua(`if beamngEarth_core and beamngEarth_core.openPage then beamngEarth_core.openPage(${JSON.stringify(url)}) end`)
+  }
+}
+
 export function openUpdate() {
   const url = update.value && update.value.url
   if (url) engineLua(`openWebBrowser(${JSON.stringify(url)})`)
@@ -237,12 +357,10 @@ export function infoValue(item) {
   if (item.id === "player") return (typeof s.playerLat === "number") ? `${fmt(s.playerLat, 5)}, ${fmt(s.playerLon, 5)}  (${fmt(s.dist / 1000, 1)} km from origin)` : "-"
   if (item.id === "attribution") return s.attribution || "-"
   if (item.id === "credits") return s.credits || "-"
-  if (item.id === "reportPost") return "github.com/TecnaGamer/BeamNG.Earth/issues"
   if (item.id === "weather") return s.weather || "-"
   if (item.id === "gravity") return s.gravity || "-"
-  if (item.id === "deshadow") return s.deshadow || "off"
-  if (item.id === "colormatch") return s.colormatch || "off"
   if (item.id === "cacheUsage") return (s.cache && s.cache.line) || "-"
+  if (item.id === "memoryUsage") return (s.memory && s.memory.line) || "-"
   return ""
 }
 
@@ -300,7 +418,7 @@ export function pathNote(item) {
   const p = status.value.paths
   if (!p) return "-"
   if (item.what === "cache") {
-    return p.cacheNext && p.cacheNext !== p.cacheDir ? `In use: ${p.cacheDir}  (next start: ${p.cacheNext})` : `In use: ${p.cacheDir || "-"}`
+    return p.cacheNext && p.cacheNext !== p.cacheDir ? `In use: ${p.cacheDir}  (after a world server restart: ${p.cacheNext})` : `In use: ${p.cacheDir || "-"}`
   }
   return p.beammp ? `Now: ${p.beammp}` : "None found"
 }

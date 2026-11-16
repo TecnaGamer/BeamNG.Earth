@@ -33,6 +33,7 @@ import numpy as np
 
 import cog as cogmod
 import fast
+import dmath
 import rangeread
 
 log = logging.getLogger("earthd.polardem")
@@ -80,7 +81,7 @@ def level_for(pixel_m):
     """The finest level whose pixels (north-south) are not finer than pixel_m needs."""
     if not pixel_m or pixel_m <= LAT_PX_M:
         return 0
-    return int(min(LEVELS - 1, math.floor(math.log2(pixel_m / LAT_PX_M))))
+    return int(min(LEVELS - 1, math.floor(dmath.log2(pixel_m / LAT_PX_M))))
 
 
 def global_px(lat, lon, level, cpd=360):

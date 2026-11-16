@@ -38,7 +38,7 @@ in a few minutes. No programming needed.
   and an area around your position), then Enter again takes the first line. It also answers
   "highest bridge in Switzerland", and takes your saved places and a typed "latitude, longitude". M or Esc closes it.
 - **Left-click** the map (or a saved place, or a search result) to plan a GPS route there: the whole
-  road route is planned online (OSRM on OpenStreetMap; your start and destination are sent to it)
+  road route is planned online (OSRM on OpenStreetMap; your start, destination and any waypoints are sent to it)
   and drawn on the map with the distance and driving time left; the game's own route arrows follow
   it on the road. Leave the route and it is planned again. **Clear** stops it, **Teleport** jumps there,
   **Autodrive** lets the car drive the route by itself (in its lane, at the speed limit, minding traffic;
@@ -70,6 +70,9 @@ issue**, **Bug**, **Idea / suggestion**), type a short title and what you saw, a
 or low fps, press **Ctrl+Shift+Y** instead while it happens: the **performance profiler** records 30 s
 of frame times, then opens the same window.
 
+**Send to the developers** sends the report privately to the BeamNG.Earth developers (not published): its window shows
+exactly what goes, lets you leave out the screenshot, the exact location and the logs, and gives you a report id to
+quote on Discord. Nothing is sent before you click Send there ([TELEMETRY.md](../TELEMETRY.md#reports-you-send)).
 Each report is a folder (the window shows where) with `issue.md`, a ready-to-post GitHub issue you
 can edit first. The **Open GitHub issue page** button in the game opens the new-issue page on
 <https://github.com/TecnaGamer/BeamNG.Earth/issues> with your text; **Open folder** shows the report folder, so you

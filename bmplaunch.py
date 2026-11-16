@@ -239,13 +239,59 @@ def log_too_old(text, at_least=3):
     return (text or "").count(TOO_OLD) >= at_least
 
 
-def running(port=CORE_PORT):
-    """A BeamMP launcher already listens (started by the player, or left over)."""
+def windows_listening(port, table=None):
+    """Windows: does a process listen on TCP port (IPv4, any address)? From the system's TCP table
+    (iphlpapi GetExtendedTcpTable), at once; None when it could not be asked. A connection attempt to a port nobody
+    listens on takes Windows ~1 s on localhost (it retries the refused SYN), and the launcher asked twice before the
+    game started (its own server's port, BeamMP's: measured 2026-11-12 on the Windows test PC, 1.0 s and 0.5 s of a
+    ten-second start). table: the raw MIB_TCPTABLE_OWNER_PID bytes (tests)."""
+    import struct
+    if table is None:
+        if not IS_WIN:
+            return None
+        try:
+            import ctypes
+            iphlp = ctypes.WinDLL("iphlpapi")
+            size = ctypes.c_ulong(0)
+            # (AF_INET 2, TCP_TABLE_OWNER_PID_LISTENER 3: rows of state, local address, port, remote, port, pid)
+            iphlp.GetExtendedTcpTable(None, ctypes.byref(size), False, 2, 3, 0)
+            for _ in range(3):
+                buf = ctypes.create_string_buffer(size.value + 4096)
+                size = ctypes.c_ulong(len(buf))
+                if iphlp.GetExtendedTcpTable(buf, ctypes.byref(size), False, 2, 3, 0) == 0:
+                    table = buf.raw[:size.value]
+                    break
+            else:
+                return None
+        except (OSError, AttributeError, ValueError):
+            return None
     try:
-        with socket.create_connection(("127.0.0.1", port), timeout=0.5):
+        n = struct.unpack_from("<I", table, 0)[0]
+        for i in range(n):
+            local_port = struct.unpack_from("<6I", table, 4 + 24 * i)[2]
+            if socket.ntohs(local_port & 0xFFFF) == port:
+                return True
+        return False
+    except struct.error:
+        return None
+
+
+def listening(port, timeout=0.5):
+    """Does something listen on 127.0.0.1:port? Windows: its TCP table (windows_listening); else, or when that could not
+    be asked, a connection attempt."""
+    seen = windows_listening(port) if IS_WIN else None
+    if seen is not None:
+        return seen
+    try:
+        with socket.create_connection(("127.0.0.1", port), timeout=timeout):
             return True
     except OSError:
         return False
+
+
+def running(port=CORE_PORT):
+    """A BeamMP launcher already listens (started by the player, or left over)."""
+    return listening(port)
 
 
 def _get(url, user_agent, timeout=60):
@@ -304,12 +350,11 @@ def download(data_dir, user_agent, say=print):
 
 
 def game_user_path(user_dir):
-    """The user folder BeamMP wants (the folder above the game version's, as --user-path)."""
-    d = os.path.normpath(user_dir)
-    base = os.path.basename(d)
-    if base == "current" or base[:1].isdigit():
-        return os.path.dirname(d)
-    return d
+    """The user folder BeamMP wants (the folder above the game version's, as --user-path): the same folder the game is
+    given with -userpath (gameinstall.user_base, one rule for both: a folder of the player's own named "2026-profile"
+    went to the game as it is and to BeamMP as its parent, Codex review of 904ac751)."""
+    import gameinstall
+    return gameinstall.user_base(user_dir)
 
 
 def child_env(env=None, frozen=None):
@@ -417,13 +462,17 @@ def system_too_old(exe, run=None):
     return f"this system's libraries are too old for it ({m.group(1)} missing)" if m else None
 
 
-def start(exe, user_dir, log_path):
-    """The BeamMP launcher, without starting the game itself (the app does), its output to log_path."""
+def start(exe, user_dir, log_path, user_path=False):
+    """The BeamMP launcher, without starting the game itself (the app does), its output to log_path. user_path
+    (Windows): the user folder named to it too (--user-path), as the game is told with -userpath when the app starts it
+    without Steam (gameinstall.py), so both use the same folder."""
     args = [exe, "--no-launch"]
     if not IS_WIN:
         # (a build from source: its self-update would fetch the Windows launcher; the game's folder named, as BeamMP
         # cannot find a Linux one by itself)
         args += ["--no-update", "--user-path", game_user_path(user_dir)]
+    elif user_path and user_dir:
+        args += ["--user-path", game_user_path(user_dir)]
     os.makedirs(os.path.dirname(log_path), exist_ok=True)
     # (it writes Launcher.cfg, Launcher.log and its key in its working folder: a system package's /usr/bin is not
     # writable, "Failed to write config on disk!" and it quit, 2026-11-04; then the log's folder)

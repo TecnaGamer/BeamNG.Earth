@@ -8,10 +8,34 @@ from concurrent.futures.process import BrokenProcessPool
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 import pools  # noqa: E402
 
+import multiprocessing  # noqa: E402
+
+# The server's pools spawn their processes (earthd); forked here, a pool made again right after its worker was killed
+# could fork while another thread held a lock, and the new worker never started: test_a_hung_worker_is_restarted hung
+# the CI 600 s (2026-11-05, ubuntu-22.04, Python 3.12) in the final shutdown
+SPAWN = multiprocessing.get_context("spawn")
+
+
+class NameTest(unittest.TestCase):
+    @unittest.skipUnless(sys.platform.startswith("linux"), "process names: Linux /proc")
+    def test_workers_are_named_after_their_pool(self):
+        import pathlib
+        p = pools.RespawningPool("far building", 1, mp_context=SPAWN)
+        try:
+            comm = p.submit(pathlib.Path.read_text, pathlib.Path("/proc/self/comm")).result(timeout=60).strip()
+            self.assertEqual(comm, "bnge:farbuildin")       # (15 bytes at most)
+        finally:
+            p.shutdown()
+
+    def test_the_initializer_still_runs(self):
+        seen = []
+        pools._named_init("test", seen.append, 7)
+        self.assertEqual(seen, [7])
+
 
 class RespawnTest(unittest.TestCase):
     def test_a_dead_worker_is_replaced(self):
-        p = pools.RespawningPool("test", 1)
+        p = pools.RespawningPool("test", 1, mp_context=SPAWN)
         try:
             self.assertEqual(p.submit(abs, -3).result(), 3)
             with self.assertRaises(BrokenProcessPool):
@@ -23,7 +47,7 @@ class RespawnTest(unittest.TestCase):
             p.shutdown()
 
     def test_not_made_again_and_again(self):
-        p = pools.RespawningPool("test", 1)
+        p = pools.RespawningPool("test", 1, mp_context=SPAWN)
         try:
             with unittest.mock.patch.object(pools, "RESPAWN_S", 3600.0):
                 for _ in range(2):
@@ -41,7 +65,7 @@ class RespawnTest(unittest.TestCase):
         """A worker that never answers (alive, so the pool is not broken) is killed by recycle(): the call in flight
         ends with BrokenProcessPool and the next one is served (a road tile hung for minutes, 1.7.0-beta)."""
         import time
-        p = pools.RespawningPool("test", 1)
+        p = pools.RespawningPool("test", 1, mp_context=SPAWN)
         try:
             hung = p.submit(time.sleep, 3600)
             time.sleep(0.5)                     # (it is running)
@@ -59,7 +83,7 @@ class RespawnTest(unittest.TestCase):
         backlog taken for hung workers), one that runs too long is."""
         import concurrent.futures
         import time
-        p = pools.RespawningPool("test", 1)
+        p = pools.RespawningPool("test", 1, mp_context=SPAWN)
         try:
             # (4 s behind them, more than its 2.5 s; a process pool marks a job running once it is in the worker's call
             # queue, one job ahead of where it runs: the margin covers that and a slow Windows runner's start,
@@ -77,7 +101,7 @@ class RespawnTest(unittest.TestCase):
         """submit_low: handed over while a process is free of the other jobs, else one at a time beside them; the
         other jobs go first (trees geotiles after the road tiles, 2026-11-02)."""
         import time
-        p = pools.RespawningPool("test", 2)
+        p = pools.RespawningPool("test", 2, mp_context=SPAWN)
         try:
             busy = [p.submit(time.sleep, 1.0) for _ in range(4)]
             low = [p.submit_low(abs, -i) for i in range(1, 4)]
@@ -93,11 +117,37 @@ class RespawnTest(unittest.TestCase):
         finally:
             p.shutdown()
 
+    def test_lazy_low_jobs_take_their_arguments_at_handover(self):
+        """submit_low_lazy: the arguments are made when the job goes to the processes, so what was added while it
+        waited goes with it (the trees geotiles that join one job, Server._veg_geo_job)."""
+        import time
+        p = pools.RespawningPool("test", 1, mp_context=SPAWN)
+        try:
+            p.submit(time.sleep, 0.5).result(timeout=30)        # (the process started)
+            busy = [p.submit(time.sleep, 0.5) for _ in range(2)]
+            first = p.submit_low_lazy(sorted, lambda: (([3, 1],), {}))          # (handed over beside them)
+            waiting = [2]
+            later = p.submit_low_lazy(sorted, lambda: ((list(waiting),), {}))
+            time.sleep(0.2)
+            self.assertFalse(later.running())
+            waiting += [9, 0]
+            self.assertEqual(first.result(timeout=30), [1, 3])
+            self.assertEqual(later.result(timeout=30), [0, 2, 9])
+            self.assertTrue(all(f.done() for f in busy))
+
+            def broken():
+                raise KeyError("x")
+            with self.assertRaises(KeyError):
+                p.submit_low_lazy(sorted, broken).result(timeout=30)
+            self.assertEqual(p.submit_low(abs, -4).result(timeout=30), 4)     # (the loop still runs)
+        finally:
+            p.shutdown()
+
     def test_jobs_in_flight_are_counted(self):
         """inflight (Server.live_busy: the saved areas' downloads wait for it): up at a submit, down when the job ends,
         fails or is cancelled, also when a pool made again cancels its futures (its own lock: no deadlock)."""
         import time
-        p = pools.RespawningPool("test", 1)
+        p = pools.RespawningPool("test", 1, mp_context=SPAWN)
         try:
             self.assertEqual(p.inflight, 0)
             f = p.submit(time.sleep, 0.3)
@@ -127,3 +177,293 @@ class RespawnTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class HungWatchdogTest(unittest.TestCase):
+    """GitHub #1058: every road process stopped finishing jobs; their waiters (the AI road graph, terrain patches) had
+    no timeout, so nothing restarted the processes. A job running hung_s or more recycles the pool."""
+
+    def test_a_hung_job_without_a_timeout_ends_in_a_restart(self):
+        import time
+        with unittest.mock.patch.object(pools.RespawningPool, "WATCH_S", 0.2):
+            p = pools.RespawningPool("test", 1, mp_context=SPAWN, hung_s=1.5)
+        try:
+            self.assertEqual(p.submit(abs, -3).result(timeout=60), 3)      # (the process started)
+            fut = p.submit(time.sleep, 3600)
+            with self.assertLogs("earthd.pools", "WARNING"):
+                with self.assertRaises(BrokenProcessPool):
+                    fut.result(timeout=60)                              # (the bare wait ends: the pool recycled)
+            self.assertEqual(p.respawns, 1)
+            self.assertEqual(p.submit(abs, -4).result(timeout=60), 4)   # (and works again)
+        finally:
+            p.shutdown()
+
+    def test_a_queued_job_is_not_counted_and_a_short_one_is_left_alone(self):
+        p = pools.RespawningPool("test", 1, mp_context=SPAWN, hung_s=3600.0)
+        try:
+            self.assertEqual(p.submit(abs, -3).result(timeout=60), 3)
+            self.assertFalse(p._watch_step(0.0))
+            self.assertEqual(p.respawns, 0)
+            self.assertEqual(p._live, {})                                # (done jobs leave the watch list)
+        finally:
+            p.shutdown()
+
+
+class HungDumpTest(unittest.TestCase):
+    def test_a_long_job_writes_its_stacks(self):
+        import subprocess, textwrap
+        code = textwrap.dedent("""
+            import sys, os
+            sys.path.insert(0, %r)
+            os.environ["BNGE_HUNG_DUMP_S"] = "0.5"
+            import pools, time
+            print(pools._call(time.sleep, (1.2,), {}))
+        """ % os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+        r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=60)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("Thread", r.stderr)               # (faulthandler's dump of the running threads)
+        self.assertIn("None", r.stdout)                 # (and the job ran to its end: not stopped)
+
+
+class ElasticPoolTest(unittest.TestCase):
+    """pools.ElasticPool: the far-tile processes past the driving ones only while a burst uses them (GitHub #1114: 22
+    server processes in 1.9.x, every far-tile process kept for the session from the first loading boost on)."""
+
+    def _pool(self, **kw):
+        p = pools.ElasticPool("test", 1, 2, mp_context=SPAWN, idle_s=3600.0, **kw)
+        self.addCleanup(p.shutdown)
+        return p
+
+    def test_the_base_first_extras_only_for_a_burst(self):
+        import time
+        p = self._pool()
+        self.assertEqual(p.submit(abs, -1).result(timeout=60), 1)
+        self.assertIsNone(p.extra, "one job at a time: the base alone")
+        futs = [p.submit(time.sleep, 0.5) for _ in range(3)]
+        self.assertIsNotNone(p.extra, "the base busy: extras started")
+        self.assertEqual(p.inflight, 3)
+        for f in futs:
+            f.result(timeout=60)
+        self.assertEqual(p.extra_starts, 1)
+        self.assertEqual(p.workers, 3)
+
+    def test_no_extras_while_the_caller_wants_the_base_alone(self):
+        import time
+        p = self._pool()
+        p.want = lambda: 1                  # (earthd: Server.far_limit while driving)
+        futs = [p.submit(time.sleep, 0.2) for _ in range(3)]
+        for f in futs:
+            f.result(timeout=60)
+        self.assertIsNone(p.extra)
+        p.want = lambda: 3                  # (the 3D map open)
+        futs = [p.submit(time.sleep, 0.2) for _ in range(3)]
+        self.assertIsNotNone(p.extra)
+        for f in futs:
+            f.result(timeout=60)
+
+    def test_idle_extras_stop(self):
+        import time
+        p = self._pool()
+        futs = [p.submit(time.sleep, 0.2) for _ in range(3)]
+        for f in futs:
+            f.result(timeout=60)
+        ex = p.extra
+        deadline = time.monotonic() + 10
+        while ex.inflight and time.monotonic() < deadline:
+            time.sleep(0.05)                # (the done callbacks)
+        now = 1000.0
+        self.assertFalse(p.reap_step(now), "idle from now")
+        self.assertFalse(p.reap_step(now + p.idle_s - 1))
+        with self.assertLogs("earthd.pools", "INFO"):
+            self.assertTrue(p.reap_step(now + p.idle_s))
+        self.assertIsNone(p.extra)
+        self.assertEqual(p.extra_stops, 1)
+        self.assertEqual(p.submit(abs, -5).result(timeout=60), 5, "the base goes on")
+
+    def test_busy_extras_are_kept(self):
+        import time
+        p = self._pool()
+        futs = [p.submit(time.sleep, 1.5) for _ in range(2)]
+        self.assertIsNotNone(p.extra)
+        self.assertFalse(p.reap_step(0.0))
+        self.assertFalse(p.reap_step(10 ** 6), "a job in flight: kept")
+        for f in futs:
+            f.result(timeout=60)
+
+    def test_the_old_way_without_a_reaper(self):
+        p = pools.ElasticPool("test", 1, 2, mp_context=SPAWN, idle_s=0)
+        self.addCleanup(p.shutdown)
+        [f.result(timeout=60) for f in [p.submit(abs, -i) for i in range(3)]]
+        self.assertFalse(p.reap_step(10 ** 6))
+
+
+class RotateTest(unittest.TestCase):
+    """The memory watch (budget.ROTATE_MB): a pool whose process is over it gets fresh processes; the jobs already given
+    to the old ones finish there (none fails), the old processes exit; nothing with the ceiling off, under it, within
+    ROTATE_MIN_S of the last rotation or with a backlog."""
+
+    def setUp(self):
+        import budget
+        self.budget = budget
+        self._old = (budget.ROTATE_MB, budget.ROTATE_MIN_S)
+
+    def tearDown(self):
+        self.budget.ROTATE_MB, self.budget.ROTATE_MIN_S = self._old
+
+    def test_rotated_gracefully(self):
+        import time
+        b = self.budget
+        p = pools.RespawningPool("test", 1, mp_context=SPAWN)
+        try:
+            self.assertEqual(p.submit(abs, -1).result(timeout=60), 1)
+            old_pids = set(p.worker_mb())
+            self.assertTrue(old_pids)
+            running = p.submit(time.sleep, 1.5)
+            time.sleep(0.3)
+            b.ROTATE_MB, b.ROTATE_MIN_S = 0, 0.0
+            self.assertFalse(p._mem_step(time.monotonic() + 1), "off: never")
+            b.ROTATE_MB = 10 ** 9
+            self.assertFalse(p._mem_step(time.monotonic() + 1), "under the ceiling: no")
+            b.ROTATE_MB = 1                         # (every process is over 1 MB)
+            with self.assertLogs("earthd.pools", "INFO"):
+                self.assertTrue(p._mem_step(time.monotonic() + 1))
+            self.assertEqual(p.rotations, 1)
+            self.assertIsNone(running.result(timeout=60), "the job in the old process finished")
+            self.assertEqual(p.submit(abs, -2).result(timeout=60), 2)
+            self.assertTrue(set(p.worker_mb()).isdisjoint(old_pids), "new jobs run in new processes")
+            b.ROTATE_MIN_S = 3600.0
+            self.assertFalse(p._mem_step(time.monotonic()), "at most every ROTATE_MIN_S")
+        finally:
+            p.shutdown()
+
+    def test_not_with_a_backlog(self):
+        import time
+        b = self.budget
+        p = pools.RespawningPool("test", 1, mp_context=SPAWN)
+        try:
+            p.submit(abs, -1).result(timeout=60)
+            futs = [p.submit(time.sleep, 0.5) for _ in range(4)]
+            b.ROTATE_MB, b.ROTATE_MIN_S = 1, 0.0
+            self.assertFalse(p._mem_step(time.monotonic() + 1), "jobs waiting beyond the running ones: not now")
+            for f in futs:
+                f.result(timeout=60)
+            time.sleep(0.2)
+            with self.assertLogs("earthd.pools", "INFO"):
+                self.assertTrue(p._mem_step(time.monotonic() + 1))
+        finally:
+            p.shutdown()
+
+    def test_process_mb(self):
+        mb = self.budget.process_mb(os.getpid())
+        if sys.platform.startswith("linux") or sys.platform == "win32":
+            self.assertGreater(mb, 1.0)
+        self.assertIsNone(self.budget.process_mb(2 ** 22 + 12345))   # (no such process)
+
+
+class TasksPerChildTest(unittest.TestCase):
+    """The lean memory tiers' road process replaced after so many jobs (pools.tasks_per_child_kw): every job still
+    answered, by fresh processes, the queue kept. The pool's own queue on every Python, never the executor's
+    max_tasks_per_child (it hangs before CPython's gh-115634 fix: Python 3.12, the packaged app's)."""
+
+    def test_kwargs(self):
+        self.assertEqual(pools.tasks_per_child_kw(0), {})
+        self.assertEqual(pools.tasks_per_child_kw(None), {})
+        self.assertEqual(pools.tasks_per_child_kw(40), {"tasks_per_child": 40})
+        p = pools.RespawningPool("test", 1, mp_context=SPAWN, **pools.tasks_per_child_kw(40))
+        try:
+            self.assertNotIn("max_tasks_per_child", p._kwargs)
+            self.assertEqual(p.tasks_per_child, 40)
+        finally:
+            p.shutdown(wait=False)
+
+    def test_fresh_processes(self):
+        p = pools.RespawningPool("test", 1, mp_context=SPAWN, **pools.tasks_per_child_kw(2))
+        try:
+            futs = [p.submit(os.getpid) for _ in range(6)]
+            self.assertEqual(p.inflight, 6)
+            pids = [f.result(timeout=120) for f in futs]
+            self.assertEqual(len(pids), 6)
+            self.assertEqual([pids[0], pids[2], pids[4]], [pids[1], pids[3], pids[5]], pids)
+            self.assertEqual(len(set(pids)), 3, pids)
+            self.assertGreaterEqual(p.rotations, 2)
+        finally:
+            p.shutdown(wait=True)
+
+    def test_two_processes_errors_and_cancels(self):
+        import time
+        p = pools.RespawningPool("test", 2, mp_context=SPAWN, **pools.tasks_per_child_kw(2))
+        try:
+            slow = [p.submit(time.sleep, 0.6) for _ in range(2)]
+            bad = p.submit(int, "x")                    # (a job's own error reaches its caller)
+            gone = p.submit(os.getpid)
+            self.assertFalse(gone.running(), "queued behind the two running ones")
+            self.assertTrue(gone.cancel(), "a queued job can be cancelled (result_running's abandon)")
+            rest = [p.submit(os.getpid) for _ in range(8)]
+            for f in slow:
+                self.assertIsNone(f.result(timeout=120))
+            with self.assertRaises(ValueError):
+                bad.result(timeout=120)
+            pids = [f.result(timeout=120) for f in rest]
+            self.assertGreaterEqual(len(set(pids)), 2, pids)    # (11 jobs run, 4 a generation: three generations)
+            self.assertGreaterEqual(p.rotations, 2)
+            for _ in range(100):
+                if p.inflight == 0:
+                    break
+                time.sleep(0.05)
+            self.assertEqual(p.inflight, 0)
+        finally:
+            p.shutdown(wait=True)
+
+    def test_a_death_on_the_generations_last_job(self):
+        """The process dies on its generation's last job: the pool is made again and the next job answers (1.10.0-beta:
+        rotate() refused the broken pool for good and every later road, tree and far building job waited in the queue
+        for ever, the loading line stuck at a few %)."""
+        p = pools.RespawningPool("test", 1, mp_context=SPAWN, **pools.tasks_per_child_kw(2))
+        try:
+            self.assertEqual(p.submit(abs, -1).result(timeout=120), 1)
+            with self.assertLogs("earthd.pools", "WARNING"):
+                with self.assertRaises(BrokenProcessPool):
+                    p.submit(os._exit, 1).result(timeout=120)
+                self.assertEqual(p.submit(abs, -5).result(timeout=60), 5)
+        finally:
+            p.shutdown(wait=False, cancel_futures=True)     # (a queue that never moves: a failure, not a hang)
+
+    def test_quick_deaths_never_stop_the_queue(self):
+        """Two deaths within RESPAWN_S with a loading queue behind them: the queued jobs wait for the pool to be made
+        again (not failed one after the other until the generation is full, then never handed over)."""
+        import concurrent.futures
+        with unittest.mock.patch.object(pools, "RESPAWN_S", 2.0):
+            p = pools.RespawningPool("test", 1, mp_context=SPAWN, **pools.tasks_per_child_kw(40))
+            try:
+                self.assertEqual(p.submit(abs, -1).result(timeout=120), 1)
+                dying = [p.submit(os._exit, 1) for _ in range(2)]
+                rest = [p.submit(abs, -i) for i in range(60)]
+                done, waiting = concurrent.futures.wait(dying + rest, timeout=120)
+                self.assertFalse(waiting, f"{len(waiting)} jobs never answered")
+                for f in dying:
+                    self.assertIsInstance(f.exception(), BrokenProcessPool)
+                self.assertEqual([f.result() for f in rest], list(range(60)), "none of the queue failed")
+                self.assertEqual(p.submit(abs, -7).result(timeout=60), 7)
+            finally:
+                p.shutdown(wait=False, cancel_futures=True)
+
+    def test_shutdown_waits_for_the_queue(self):
+        import time
+        p = pools.RespawningPool("test", 1, mp_context=SPAWN, **pools.tasks_per_child_kw(1))
+        futs = [p.submit(time.sleep, 0.2) for _ in range(3)]
+        p.shutdown(wait=True)
+        self.assertTrue(all(f.done() and f.exception() is None for f in futs))
+        q = pools.RespawningPool("test", 1, mp_context=SPAWN, **pools.tasks_per_child_kw(1))
+        futs = [q.submit(time.sleep, 0.5) for _ in range(3)]
+        time.sleep(0.1)
+        q.shutdown(wait=False, cancel_futures=True)
+        self.assertTrue(futs[2].cancelled())
+
+    def test_budget_setting(self):
+        import budget
+        with unittest.mock.patch.dict(os.environ, {"BNGE_TASKS_PER_CHILD": ""}):
+            self.assertEqual(budget.tasks_per_child(), budget.LEAN_TASKS_PER_CHILD)
+        with unittest.mock.patch.dict(os.environ, {"BNGE_TASKS_PER_CHILD": "0"}):
+            self.assertEqual(budget.tasks_per_child(), 0)
+        with unittest.mock.patch.dict(os.environ, {"BNGE_TASKS_PER_CHILD": "7"}):
+            self.assertEqual(budget.tasks_per_child(), 7)

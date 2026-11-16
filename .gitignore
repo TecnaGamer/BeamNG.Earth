@@ -31,3 +31,4 @@ native/earthfast/target/
 build/
 native/serverlist/target/
 server/earthfast.FAST-BUILD-do-not-commit
+*.prof

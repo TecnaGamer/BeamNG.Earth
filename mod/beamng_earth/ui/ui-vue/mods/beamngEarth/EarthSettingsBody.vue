@@ -6,6 +6,16 @@
     <BngCardHeading>{{ category.name }}</BngCardHeading>
     <div v-if="category.intro" class="earth-intro">{{ category.intro }}</div>
 
+    <!-- Restart world server: a setting read only at the server's start differs from its start-time value, or a restart
+         is under way (earthRestart.js; settings.uiRestartServer) -->
+    <div v-if="restart.show" class="earth-restart" :class="'is-' + restart.level">
+      <div class="earth-restart-text">
+        <div>{{ restart.text }}</div>
+        <div v-if="restart.note" class="earth-note">{{ restart.note }}</div>
+      </div>
+      <BngButton v-if="restart.button" :accent="ACCENTS.main" @click="restartServer">Restart world server</BngButton>
+    </div>
+
     <!-- Quality presets: one press sets every setting below; changing one makes it Custom -->
     <template v-if="category.presets">
       <div class="earth-presets">
@@ -25,11 +35,14 @@
       </div>
     </template>
 
+    <!-- Add-ons: the page is the add-ons' own view (EarthAddons.vue) -->
+    <EarthAddons v-if="category.addons" />
+
     <BngRow
       v-for="item in rows"
       :key="item.id"
       class="earth-row"
-      :vertical="item.type === 'text' || item.type === 'path'"
+      :vertical="item.type === 'text' || item.type === 'path' || item.type === 'contributors'"
       @mouseenter="setHelp(item)"
       @focusin="setHelp(item)"
     >
@@ -74,6 +87,20 @@
       />
       <span v-else-if="item.type === 'info'" class="earth-value">{{ infoValue(item) }}</span>
       <div v-else-if="item.type === 'text'" class="earth-text">{{ infoValue(item) }}</div>
+      <div v-else-if="item.type === 'links'" class="earth-links">
+        <BngButton v-for="l in item.links" :key="l.url" :accent="ACCENTS.outlined" @click="openLink(l.url)">{{ l.label }}</BngButton>
+      </div>
+      <div v-else-if="item.type === 'contributors'" class="earth-people">
+        <span
+          v-for="c in CONTRIBUTORS"
+          :key="c.login"
+          class="earth-person"
+          tabindex="0"
+          :title="'github.com/' + c.login + (c.prs.length ? ' (' + c.prs.length + (c.prs.length === 1 ? ' pull request)' : ' pull requests)') : ' (commits merged)')"
+          @click="openLink('https://github.com/' + c.login)"
+          @keydown.enter="openLink('https://github.com/' + c.login)"
+        >{{ c.login }}</span>
+      </div>
       <BngButton v-else-if="item.type === 'feedback'" :accent="ACCENTS.outlined" @click="openFeedback(item.what)">{{ item.label }}</BngButton>
 
       <!-- Clear cache: asks in the row first -->
@@ -119,12 +146,14 @@
 import { computed, reactive } from "vue"
 import { BngButton, BngSwitch, BngSlider, BngInput, BngSelect, BngRow, BngCardHeading, ACCENTS } from "@/common/components/base"
 import {
-  config, dev, help, qualityPresets, devPresets, presetLine, detectedPick, optionConfig, categoryNamed, visibleItems,
+  config, dev, help, restart, restartServer, qualityPresets, devPresets, presetLine, detectedPick, optionConfig, categoryNamed, visibleItems,
   cacheConfirm, cacheBusy, cacheResult, pathText, pathBusy, pathPick, pathMsg,
   setQuality, presetName, valueOf, selectOption, onSwitchChange, onSliderChange, onNumberEnter, onDevChange, infoValue,
-  openFeedback,
+  openFeedback, openLink,
   confirmClearCache, askClearCache, usePath, sendPath, pathNote, typing, applyDevPreset,
 } from "./earthSettingsStore.js"
+import { CONTRIBUTORS } from "./contributors.js"
+import EarthAddons from "./EarthAddons.vue"
 
 const props = defineProps({
   page: { type: String, default: "Graphics" },     // the page's name (settingsSchema's)
@@ -166,6 +195,21 @@ function applyNumber(item) {
 
 .earth-note.is-error { color: var(--bng-add-red-400, #f88); }
 
+.earth-restart {
+  display: flex;
+  align-items: center;
+  gap: 0.75em;
+  margin: 0.25em 0 0.5em;
+  padding: 0.5em 0.75em;
+  border-radius: 0.3em;
+  border-left: 0.25em solid var(--bng-orange-500, #f60);
+  background: rgba(255, 102, 0, 0.12);
+  .earth-restart-text { flex: 1 1 auto; min-width: 0; }
+  .earth-note { padding: 0.2em 0 0; }
+  &.is-warn { border-left-color: var(--bng-add-red-400, #f88); background: rgba(255, 80, 80, 0.12); }
+  &.is-ok { border-left-color: var(--bng-add-green-400, #6c6); background: rgba(80, 200, 80, 0.12); }
+}
+
 .earth-presets {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(5.5em, 1fr));     /* (5 in a row on the full page, fewer in the pause menu's card) */
@@ -175,11 +219,45 @@ function applyNumber(item) {
 
 .earth-value { color: var(--bng-cool-gray-200, #ccc); text-align: right; }
 
+.earth-people {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35em 0.5em;
+}
+.earth-person {
+  padding: 0.15em 0.55em;
+  border-radius: 0.3em;
+  font-size: 0.9em;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--bng-cool-gray-100, #e6e6e6);
+  cursor: pointer;
+}
+.earth-person:hover, .earth-person:focus { background: rgba(255, 102, 0, 0.35); outline: none; }
+
 .earth-text {
   white-space: pre-wrap;
   font-size: 0.9em;
   line-height: 1.35;
   color: var(--bng-cool-gray-200, #ccc);
+}
+
+/* the pause menu's card is the game's (layoutMenu.vue: clamp(21em, 25vw, 28em)): ours wider, so the rows' values and
+   the About page's buttons fit beside their labels (the user, 2026-11-05: "Buttons overlap with text") */
+:global(.menu-content-card-1:has(.earth-main)) {
+  width: clamp(28em, 40vw, 42em) !important;   /* (the game's rule is more specific: its scoped layout selectors) */
+}
+
+.earth-links {
+  /* the game's buttons are 6em wide at least, with a margin: three of them took 320 px of the label's 313 (Ko-fi went
+     to a second line, 2026-11-05); 4.5em and no margin fit all three in one line */
+  --bng-button-min-width: 4.5em;
+  --bng-button-custom-margin: 0;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.5em;
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 .earth-inline {
