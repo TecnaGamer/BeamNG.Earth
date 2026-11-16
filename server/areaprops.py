@@ -114,6 +114,13 @@ TC_MIN_M2 = 2500.0              # a site this big gets a crane
 TC_EVERY_M2 = 12000.0           # ... and one more for each this much more, up to TC_MAX
 TC_MAX = 3
 HOARD_GATE_M = 2.0              # a panel this near a road's edge is left out (the site's entrance)
+# A crane whose mast or jib meets a drawn carriageway at its level (furniture.RoadClearance: the tile's tapered ground
+# roads AND its bridge decks; the grid only knew the ground roads, so a site under the A7's Kalbach viaduct stood a
+# 39 m crane through the deck, a car hit it at 116 km/h, 2026-11-15) moves to the nearest clear spot on its site:
+# rings TC_SHIFT_STEP_M apart out to TC_SHIFT_M, TC_SHIFT_DIRS spots each; none clear: it is left out.
+TC_SHIFT_M = 48.0
+TC_SHIFT_STEP_M = 4.0
+TC_SHIFT_DIRS = 16
 
 
 def _tags(feats, i):
@@ -761,8 +768,40 @@ def trailer_rows(frame, places, box, elev, seg, blds, country, md=None):
     return rows
 
 
-def construction_rows(frame, places, box, elev, seg):
-    """Hoardings and tower cranes of the construction sites meeting box."""
+def _on_site(pts, off, xy):
+    """Which points xy (n, 2) lie on the site (its rings even-odd)."""
+    from polygon import Path
+    inside = np.zeros(len(xy), bool)
+    for k in range(len(off) - 1):
+        if off[k + 1] - off[k] >= 3:
+            inside ^= np.asarray(Path(pts[off[k]:off[k + 1]]).contains_points(xy), bool)
+    return inside
+
+
+def _crane_clear(frame, elev, pts, off, row, clearance):
+    """row (a tower crane's) itself when its colliders clear every carriageway the tile draws, at every level
+    (clearance: furniture.RoadClearance); else the first clear spot on its site round it (TC_SHIFT_*), its ground
+    read there; None when there is none."""
+    if clearance is None or clearance.clear(row):
+        return row
+    ang = 2.0 * np.pi * np.arange(TC_SHIFT_DIRS) / TC_SHIFT_DIRS
+    rings = np.arange(TC_SHIFT_STEP_M, TC_SHIFT_M + 1e-6, TC_SHIFT_STEP_M)
+    cand = np.asarray(row[1:3], np.float64) + (rings[:, None, None] * np.stack(
+        [dnp.cos(ang), dnp.sin(ang)], -1)[None]).reshape(-1, 2)
+    cand = cand[_on_site(pts, off, cand)]
+    if not len(cand):
+        return None
+    z = _z(frame, elev, cand[:, 0], cand[:, 1])
+    for (x, y), zz in zip(cand.tolist(), np.asarray(z, np.float64).tolist()):
+        moved = [row[0], round(x, 2), round(y, 2), round(zz, 2)] + list(row[4:])
+        if clearance.clear(moved):
+            return moved
+    return None
+
+
+def construction_rows(frame, places, box, elev, seg, clearance=None):
+    """Hoardings and tower cranes of the construction sites meeting box. clearance: the tile's furniture.RoadClearance
+    (None: the cranes are checked against seg's ground roads only)."""
     rows = []
     for fid, pts, off, b, tags in places.get("construction", ()):
         if not _meets(box, b, 40.0):
@@ -795,7 +834,12 @@ def construction_rows(frame, places, box, elev, seg):
                 zz = float(_z(frame, elev, [x], [y])[0])
                 yaw = 360.0 * _h01(fid, k, "jib")
                 sc = TC_SCALE[0] + (TC_SCALE[1] - TC_SCALE[0]) * _h01(fid, k, "tc h")
-                rows.append([G_TC, round(x, 2), round(y, 2), round(zz, 2), round(yaw, 1), 1.0, round(TC_H * sc, 3), 0.0])
+                row = _crane_clear(frame, elev, pts, off, [G_TC, round(x, 2), round(y, 2), round(zz, 2), round(yaw, 1),
+                                                           1.0, round(TC_H * sc, 3), 0.0], clearance)
+                if row is None:
+                    log.info("places: a tower crane of %s at (%.0f, %.0f) has no spot clear of the roads", fid, x, y)
+                    continue
+                rows.append(row)
     return rows
 
 
@@ -1065,9 +1109,10 @@ def _keys_of(frame, box):
         return []
 
 
-def tile_rows(frame, box, md, elev, roads=(), country=None, keys=None):
+def tile_rows(frame, box, md, elev, roads=(), country=None, keys=None, clearance=None):
     """Forest rows of the places in a road tile's box (x0, y0, x1, y1) in frame. roads: build_tile's roads_out rows
-    (the carriageways near the tile); country: ISO alpha-2 of the tile. md None: none."""
+    (the carriageways near the tile); country: ISO alpha-2 of the tile; clearance: its furniture.RoadClearance (the
+    tower cranes kept off every drawn carriageway and deck). md None: none."""
     if md is None or not ENABLED:
         return []
     if keys is None:
@@ -1089,7 +1134,7 @@ def tile_rows(frame, box, md, elev, roads=(), country=None, keys=None):
                      ("terminal", lambda: terminal_rows(frame, places, box, elev, seg, blds, water, parking)),
                      ("marina", lambda: marina_rows(frame, places, box, elev, md, keys, water)),
                      ("trailer", lambda: trailer_rows(frame, places, box, elev, seg, blds, country, md)),
-                     ("construction", lambda: construction_rows(frame, places, box, elev, seg))):
+                     ("construction", lambda: construction_rows(frame, places, box, elev, seg, clearance))):
         try:
             rows.extend(fn())
         except fast.NativeMissing:

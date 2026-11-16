@@ -1867,7 +1867,8 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
         except Exception as ex:
             log.warning("lights and fans: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
         try:           # (solar farms, container terminals, marinas, trailer parks, construction sites)
-            props.extend(places.tile_rows(frame, box, _s.md, elev, near_roads, country))
+            props.extend(places.tile_rows(frame, box, _s.md, elev, near_roads, country,
+                                          clearance=clearance[0] if clearance else None))
         except fast.NativeMissing:
             raise
         except Exception as ex:

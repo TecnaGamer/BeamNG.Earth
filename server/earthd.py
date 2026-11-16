@@ -3477,7 +3477,8 @@ class Server:
             except Exception as ex:
                 log.warning("lights and fans: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
             try:       # (solar farms, container terminals, marinas, trailer parks, construction sites)
-                props.extend(places.tile_rows(anchor.frame, box, self.mapdata, elev, near_roads, self.country(anchor)))
+                props.extend(places.tile_rows(anchor.frame, box, self.mapdata, elev, near_roads, self.country(anchor),
+                                              clearance=clearance[0] if clearance else None))
             except fast.NativeMissing:
                 raise
             except Exception as ex:
