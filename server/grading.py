@@ -2239,6 +2239,27 @@ def _caught(e):
 _CAUGHT_SAID = set()
 
 
+# A track's ground line coupled to the roads beside it (railroadseam.couple) is held at its own bed near a rail deck's ends:
+# the deck sets the track's height there, and the mesh (railways.tile_mesh) never takes the coupling. At Compiegne the ring
+# roads round the island pulled the line 6 m down between the two bridges: the ground graded to a trench 5-6 m under the
+# ballast. Within SEAM_DECK_HOLD_M of a deck's end the move is none, then it may grow at railways.GRADE per metre.
+SEAM_DECK_HOLD_ON = os.environ.get("BNE_SEAM_DECK_HOLD", "on") != "off"
+SEAM_DECK_HOLD_M = 30.0
+
+
+def _held_by_decks(xy, move, ends, hold=SEAM_DECK_HOLD_M):
+    """The coupling's moves (n,) of a track's points xy (n, 2), each at most railways.GRADE per metre past hold metres from
+    the nearest deck end (ends (m, 2)); unchanged with no deck end."""
+    import railways
+    move = np.asarray(move, np.float64)
+    if not len(ends) or not len(move):
+        return move
+    p = np.asarray(xy, np.float64)[:, :2]
+    d = np.sqrt(((p[:, None, :] - np.asarray(ends, np.float64)[None, :, :]) ** 2).sum(-1)).min(axis=1)
+    cap = railways.GRADE * np.maximum(d - hold, 0.0)
+    return np.clip(move, -cap, cap)
+
+
 class _Planner:
     """The road plans of one planning region (geotiles.PLAN_Z), in its frame, per map cell, made once (worker threads;
     it fetches the road cells it lacks). store: the PlanStore it belongs to (its other regions, its settings)."""
@@ -2865,13 +2886,19 @@ class _Planner:
                              for (_f, q), sp in zip(plans[:len(pspecs)], pspecs)
                              if TUNNEL_TAG not in _f and (getattr(sp, "cls", None) or "").removesuffix("_link")
                              not in RAIL_YIELD_SKIP] if RAIL_YIELD_ON else []
+                    rail_ends = None
+                    if SEAM_DECK_HOLD_ON and beside:     # (the decks' ends round: the track is theirs near them)
+                        ends_ = [np.asarray(r, np.float64)[[0, -1], :2] for kk in railways.cells_near(self.frame, own)
+                                 for r in self._cell_enu(kk, ground=False).get("rail_bridges", ()) if len(r) >= 2]
+                        rail_ends = np.concatenate(ends_) if ends_ else np.zeros((0, 2))
                     for fid, xy, z in railways.grade_plans(
                             self.frame, rcells, own, self.elev,
                             load=lambda k: self.md.cell(k, layers=("roads",), kind="demand").layers.get("roads")):
                         if beside:      # (the bed beside a road: where the ground between has room for its slope)
                             import railroadseam
-                            z = railroadseam.couple(xy, z, railways.GRADE_HALF_M, beside,
-                                                    railways.seam_lowered(xy, z, beside), railways.SEAM_LOWER_M)
+                            moved = railroadseam.couple(xy, z, railways.GRADE_HALF_M, beside,
+                                                        railways.seam_lowered(xy, z, beside), railways.SEAM_LOWER_M)
+                            z = z + _held_by_decks(xy, moved - z, rail_ends) if rail_ends is not None else moved
                             if railways.railxing.ENABLED:   # (flush with the roads' plans, as tile_mesh with the graded road)
                                 z = railways.flush_to_plans(xy, z, beside)
                         # (the carriageway of the bed's plan is the ballast's top, not the whole flat band: past it the band
@@ -4048,7 +4075,10 @@ class _Planner:
                         xs_floor.append((np.asarray(pt, f64), target, _road_fids(i, lines, [ground[g][3] for g in gids],
                                                                                 gids), sol["reach"]))
                     continue
-            if rail_span[bi] and lidar and n_c not in signed and \
+            # (a railway over the road's own mapped short tunnel stays at its bed: railways.TUNNEL_AT_GRADE_ON; the road
+            # dips the full clearance under it, no level crossing made of it nor lidar's 1 m cap)
+            mapped = rail_span[bi] and railwaysmod.TUNNEL_AT_GRADE_ON and self._over_mapped_underpass(spans[bi][0])
+            if rail_span[bi] and lidar and n_c not in signed and not mapped and \
                     railwaysmod.level_bridge(self.frame, spans[bi][0], lines[i], sc):
                 continue                        # (a short rail bridge over a road on level ground: no bridge, a level
                                                 # crossing; railways.parts lays it on the ground: plan 035)
@@ -4056,7 +4086,7 @@ class _Planner:
                 continue                        # (the ends' ground is not the deck: the road keeps its own, the deck
                                                 # rises; a never-raised deck, a railway's or a motorway's, cannot)
             target = max(top, z - UNDER_MAX_DROP_M)
-            if rail_span[bi] and lidar and RAIL_UNDER_LIDAR_DROP_M is not None:
+            if rail_span[bi] and lidar and RAIL_UNDER_LIDAR_DROP_M is not None and not mapped:
                 target = max(target, z - (RAIL_UNDER_SIGNED_DROP_M if n_c in signed else RAIL_UNDER_LIDAR_DROP_M))
             if UNDER_SEA_ON and z >= floor:
                 target = max(target, floor)     # (not under the sea's surface: its water tiles would flood it)
@@ -5941,7 +5971,8 @@ class _Planner:
         """Does a road bridge (line (k, 2) in the frame) span a short road tunnel the map has (railways.road_underpasses:
         the lower road's tunnel part, gradesep's open underpass included), not a motorway's or trunk's (APPROACH_SKIP),
         away from its ends (APPROACH_MIN_CROSS_M)?
-        Such a bridge is never raised (UNDER_TUNNEL_FIXED_ON). A pure function of the map round the bridge, kept per
+        Such a bridge is never raised (UNDER_TUNNEL_FIXED_ON), unless it also spans, away from its ends, a road that
+        never dips (APPROACH_SKIP's, on the ground or in a short tunnel) or a track on the ground. A pure function of the map round the bridge, kept per
         bridge (at most 4096)."""
         if not UNDER_TUNNEL_FIXED_ON:
             return False
@@ -5968,9 +5999,21 @@ class _Planner:
             got = railwaysmod.road_underpasses(self.frame, cells, box, 10.0, classes=cls)
             tun = [np.asarray(xy, np.float64)[:, :2] for (xy, _h), c in zip(got, cls)
                    if len(xy) >= 2 and str(c) not in APPROACH_SKIP]
-            if tun:
-                res = any(APPROACH_MIN_CROSS_M <= float(c[1]) <= L - APPROACH_MIN_CROSS_M
-                          for c in roadsmod._crossings([b], tun))
+
+            def mid(hits):
+                return any(APPROACH_MIN_CROSS_M <= float(c[1]) <= L - APPROACH_MIN_CROSS_M for c in hits)
+            if tun and mid(roadsmod._crossings([b], tun)):
+                # (not when the deck also spans what never dips: a motorway's or trunk's road, on the ground or in its
+                # own short tunnel, or a track: the deck rises over that as before. Dalton Street in Boston spans a
+                # service tunnel and the Mass Pike's carriageway: fixed, its north abutment stood 0.3-1.0 m into the
+                # Pike's clearance)
+                cs = [self._cell_enu(kk) for kk in keys]
+                hard = [np.asarray(line, np.float64)[:, :2] for c in cs for line, _h, gc in c["ground"]
+                        if str(gc) in APPROACH_SKIP and len(line) >= 2]
+                hard += [np.asarray(xy, np.float64)[:, :2] for (xy, _h), c in zip(got, cls)
+                         if len(xy) >= 2 and str(c) in APPROACH_SKIP]
+                hard += [np.asarray(r, np.float64)[:, :2] for c in cs for r in c.get("rail_ground", ()) if len(r) >= 2]
+                res = not (hard and mid(roadsmod._crossings([b], hard)))
         with self.lock:
             if len(memo) > 4096:
                 memo.clear()

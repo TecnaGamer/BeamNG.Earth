@@ -44,6 +44,13 @@ BRIDGE = np.array([[0.0, 0.0], [0.0, 20.0], [0.0, 44.0]])       # (44 m north)
 
 
 class OverMappedUnderpassTest(unittest.TestCase):
+    def setUp(self):
+        # (the cells' roads: none beside the tunnel unless a test says so)
+        patch = mock.patch.object(grading._Planner, "_cell_enu",
+                                  lambda self, k, ground=True: {"ground": [], "rail_ground": []})
+        patch.start()
+        self.addCleanup(patch.stop)
+
     def test_a_bridge_over_a_short_road_tunnel_is_fixed(self):
         tunnel = np.array([[-10.0, 22.0], [10.0, 20.0]])           # (a 20 m tunnel crossing under its middle)
         with mock.patch.object(grading.railwaysmod, "road_underpasses", underpasses(tunnel)):
@@ -70,6 +77,18 @@ class OverMappedUnderpassTest(unittest.TestCase):
         for cls in ("motorway", "trunk"):
             with mock.patch.object(grading.railwaysmod, "road_underpasses", underpasses(tunnel, cls=cls)):
                 self.assertFalse(planner()._over_mapped_underpass(BRIDGE), cls)
+
+    def test_not_when_it_also_spans_a_motorway_or_a_track(self):
+        """Dalton Street, Boston: a bridge over a service tunnel and the Mass Pike's carriageway at the ground: the Pike
+        never dips, the deck rises over it as before (and over a track on the ground)."""
+        tunnel = np.array([[-10.0, 22.0], [10.0, 20.0]])
+        pike = np.array([[-20.0, 10.0], [20.0, 10.0]])
+        for hc in ({"ground": [(pike, 6.0, "motorway")], "rail_ground": []},
+                   {"ground": [], "rail_ground": [pike]},
+                   {"ground": [(pike, 6.0, "residential")], "rail_ground": []}):
+            with mock.patch.object(grading.railwaysmod, "road_underpasses", underpasses(tunnel)),                     mock.patch.object(grading._Planner, "_cell_enu", lambda self, k, ground=True, hc=hc: hc):
+                got = planner()._over_mapped_underpass(BRIDGE)
+            self.assertEqual(got, hc["ground"] != [] and hc["ground"][0][2] == "residential", hc)
 
     def test_switched_off(self):
         tunnel = np.array([[-10.0, 22.0], [10.0, 20.0]])

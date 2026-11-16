@@ -167,11 +167,12 @@ def _make_node(frame, load, ground, ix, iy):
     box = (cx - NODE_M, cy - NODE_M, cx + NODE_M, cy + NODE_M)
     reach = MARGIN_M
     cells = [load(k) for k in railways.cells_near(frame, box, reach)]
-    tunnels = railways.road_underpasses(frame, cells, box, reach)     # (parts' own: asked once)
+    tcls = []
+    tunnels = railways.road_underpasses(frame, cells, box, reach, classes=tcls)     # (parts' own: asked once)
     rails = [r for r in railways.parts(frame, cells, box, reach=reach, clip=True, underpasses=tunnels) if r[1] != "tram"]
     out = {}
     if rails:
-        tunnels = tunnels + railways.coarse_underpasses(frame, cells, box, rails, reach)
+        tunnels = railways.raising_underpasses(tunnels, tcls) + railways.coarse_underpasses(frame, cells, box, rails, reach)
         xy, off = _flat(rails)
         z = np.concatenate([np.asarray(zb, np.float64).ravel() for zb, _zg in railways.profile(rails, ground, tunnels)])
         if SMOOTH_ON:

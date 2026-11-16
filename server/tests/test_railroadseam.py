@@ -96,3 +96,23 @@ class CoupleTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DeckHoldTest(unittest.TestCase):
+    """grading._held_by_decks: the coupling's move held near a rail deck's ends (Compiegne: the ring roads pulled the
+    track's ground line 6 m down between two bridges, a trench under the ballast)."""
+
+    def test_no_move_near_a_deck_end_then_growing_at_the_tracks_grade(self):
+        import grading
+        import railways
+        xy = np.c_[np.arange(0.0, 400.0, 2.0), np.zeros(200)]
+        got = grading._held_by_decks(xy, np.full(200, -6.0), np.array([[0.0, 0.0]]))
+        self.assertTrue(np.all(got[xy[:, 0] <= grading.SEAM_DECK_HOLD_M] == 0.0))
+        far = xy[:, 0] > grading.SEAM_DECK_HOLD_M + 6.0 / railways.GRADE
+        self.assertTrue(np.allclose(got[far], -6.0), "the whole move far from the deck")
+        self.assertLessEqual(float(np.abs(np.diff(got)).max()), railways.GRADE * 2.0 + 1e-9)
+
+    def test_no_deck_no_hold(self):
+        import grading
+        xy = np.c_[np.arange(0.0, 20.0, 2.0), np.zeros(10)]
+        self.assertTrue(np.allclose(grading._held_by_decks(xy, np.full(10, 3.0), np.zeros((0, 2))), 3.0))
