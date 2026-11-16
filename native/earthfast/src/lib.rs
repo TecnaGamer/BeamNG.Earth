@@ -6520,6 +6520,8 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(railxing::corridor_ground, m)?)?;
     // 372: railxing::corridor_ground (railxing.corridor_ground, BNE_RAIL_XING: a grid over the tracks' points, not
     // numpy's distance matrix per pair of lines; the same bits)
-    m.add("VERSION", 372)?;
+    // 373: carriageway_profiles(..., coupling_penalty): soft couplings, one slack each at an exact L1 penalty (the one
+    // vertical solve's grade rows, server/vsolve.py); "le" couplings and one-sample couplings (b None)
+    m.add("VERSION", 373)?;
     Ok(())
 }
