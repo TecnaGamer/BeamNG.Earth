@@ -108,6 +108,38 @@ def joins(xys, z0, r=JOIN_M, dz=JOIN_DZ_M):
     return out
 
 
+def nodes(xys, z0, r=JOIN_M, dz=JOIN_DZ_M):
+    """The junctions (joins' pairs grouped, union-find): per node {(plan, sample): offset}, the height of the node
+    being the sample's profile plus its offset (0 for a road's end; where an end lands between a road's samples, that
+    road's profile there less its nearest sample's: on a 15 % road the nearest sample alone missed by up to 15 cm,
+    Lauterbrunnen). A sample several ends land by: their offsets' mean. Pure."""
+    parent = {}
+
+    def find(k):
+        while parent.setdefault(k, k) != k:
+            parent[k] = parent[parent[k]]
+            k = parent[k]
+        return k
+    offs = {}
+    for a, ia, b, ib, sj, t in joins(xys, z0, r, dz):
+        ka = (a, ia if ia >= 0 else len(xys[a]) + ia)
+        kb = (b, ib)
+        if ib in (0, len(xys[b]) - 1):
+            off = 0.0                   # (an end on an end: the same point)
+        else:
+            zb = float(z0[b][sj] + t * (z0[b][sj + 1] - z0[b][sj]))
+            off = zb - float(z0[b][ib])
+        offs.setdefault(ka, []).append(0.0)
+        offs.setdefault(kb, []).append(off)
+        ra, rb = find(ka), find(kb)
+        if ra != rb:
+            parent[max(ra, rb)] = min(ra, rb)
+    out = {}
+    for k, o in offs.items():
+        out.setdefault(find(k), {})[k] = float(np.mean(o))
+    return [m for _r, m in sorted(out.items()) if len(m) > 1]
+
+
 def problem(plans, specs, z0, ceilings, ranks, pins=(), dips=None, grade_rows=True, extra=None, floors=None):
     """(chains, couplings) for carriageways.solve, whose unknowns are the corrections d = z - z0 (its smoothing on
     them, not on the heights: a road no row moves keeps its profile exactly, and a change is spread along it). plans:
@@ -162,18 +194,20 @@ def problem(plans, specs, z0, ceilings, ranks, pins=(), dips=None, grade_rows=Tr
             couplings.append((n, i, n, i + 1, "ge", float(dz0[i] - lim[i])))
             couplings.append((n, i + 1, n, i, "ge", float(-lim[i] - dz0[i])))
     n_joins = 0
-    for a, ia, b, ib, sj, t in joins(xys, z0):
-        ka, kb = (a, ia if ia >= 0 else len(xys[a]) + ia), (b, ib)
-        if ka in held and kb in held:
-            continue                    # (both held: their heights are given, a difference there is the data's)
-        # z_a = z_b where a's end lands (between b's samples: b's profile there, its correction its nearest sample's; on
-        # a 15 % road the nearest sample alone missed by up to 15 cm, Lauterbrunnen): d_a - d_b = v, as two rows (the
-        # kernel's equality holds d_a = d_b)
-        zb = float(z0[b][sj] + t * (z0[b][sj + 1] - z0[b][sj]))
-        v = float(zb - z0[a][ka[1]])
-        couplings.append((a, ka[1], b, ib, "ge", v))
-        couplings.append((b, ib, a, ka[1], "ge", -v))
-        n_joins += 1
+    for members in nodes(xys, z0):
+        # (each node one height: every member tied to one root, a star with no loops. Tied pair by pair, three ends
+        # meeting at a side road's mouth formed a loop whose offsets did not add up: 13 of Tokyo's 15 cells infeasible)
+        keys = sorted(members)
+        root = next((k for k in keys if k in held), keys[0])
+        hr = float(z0[root[0]][root[1]]) + members[root]
+        for k in keys:
+            if k == root or (k in held and root in held):
+                continue                # (both held: their heights are given, a difference there is the data's)
+            # z_k + off_k = z_root + off_root:  d_k - d_root = v, as two rows (the kernel's equality holds d_a = d_b)
+            v = hr - (float(z0[k[0]][k[1]]) + members[k])
+            couplings.append((k[0], k[1], root[0], root[1], "ge", v))
+            couplings.append((root[0], root[1], k[0], k[1], "ge", -v))
+            n_joins += 1
     return chains, couplings, n_joins
 
 

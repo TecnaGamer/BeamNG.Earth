@@ -57,6 +57,18 @@ class SolveTest(unittest.TestCase):
         at = float(np.interp(101.0, S, zs[0]))
         self.assertLess(abs(float(zs[1][0]) - at), 0.01)      # (the nearest sample alone: up to 15 cm off)
 
+    def test_three_ends_at_one_node_on_a_steep_road_stay_feasible(self):
+        main = plan(np.c_[S, np.zeros_like(S)], 0.15 * S)
+        north = plan(np.c_[np.full(len(S), 101.0), S + 0.3], np.full(len(S), 15.2))
+        south = plan(np.c_[np.full(len(S), 101.4), -S - 0.3], np.full(len(S), 15.0))  # (its end 0.72 m from north's)
+        z0 = [main.z.copy(), north.z.copy(), south.z.copy()]
+        zs, info = vsolve.solve([main, north, south], [spec("primary"), spec("residential"), spec("residential")], z0,
+                                [0.2, 0.2, 0.2], [8, 2, 2])
+        self.assertTrue(info["feasible"] and not info["fallback"], info)
+        self.assertEqual(len(vsolve.nodes([np.asarray(p.xy) for p in (main, north, south)], z0)), 1)
+        self.assertAlmostEqual(float(zs[1][0]), float(zs[2][0]), places=4)
+        self.assertLess(abs(float(zs[1][0]) - float(np.interp(101.2, S, zs[0]))), 0.04)
+
     def test_a_deck_end_is_held_and_the_road_ramps_down_within_its_ceiling(self):
         z = np.zeros(len(S))
         z[0] = 5.0                       # (the passes left the deck's height at its abutment)
