@@ -48,6 +48,20 @@ class YellowPavingTest(unittest.TestCase):
                          "the cobble look's strips and tiling")
         self.assertEqual(roads.YELLOW_SURF, bgpaving.SURF)
 
+    def test_painted_yellow_in_the_ground(self):
+        # with the carriageways in the ground (roads.ROADS_IN_GROUND, the default) no road mesh is drawn: the street's
+        # colour is the ground paint's (in game 2026-11-05: grey cobbles that sounded right)
+        import surface
+        yellow = spec()._replace(surf=bgpaving.SURF)
+        self.assertEqual(surface.photo_kind(yellow), "yellow_paving")
+        self.assertEqual(surface.photo_kind(spec()), "cobble")
+        self.assertEqual(surface.photo_kind(spec("paved")._replace(surf=bgpaving.SURF)), "paved")
+        r, g, b, op = surface.PHOTO_ROAD_RGBA["yellow_paving"]
+        self.assertGreater(min(r, g) - b, 50, "ochre, not grey")
+        kinds = list(surface.PHOTO_ROAD_RGBA)
+        self.assertEqual(kinds[-1], "paved", "asphalt still wins at junctions")
+        self.assertIn("yellow_paving", surface.ROAD_MASK_KINDS)
+
     def test_the_material_is_in_the_mod(self):
         root = Path(__file__).resolve().parents[2] / "mod" / "beamng_earth"
         mats = root / "levels" / "beamng_earth" / "art" / "shapes" / "beamngEarth" / "paving.materials.json"

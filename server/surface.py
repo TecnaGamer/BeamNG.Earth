@@ -397,11 +397,21 @@ def _corner_mask(feats_list, urban_fn, widths, lonlat_bounds, to_px, shape, grow
 # visible; the rest of the photo's own grain still shows through, so it does not read as a flat stripe
 # gravel: the light grey-beige gravel roads are from above (Iowa's NAIP ~200/200/195, Estonia's near white; the old
 # 128/118/102 at 0.6 drew them mid brown, 2026-11-03), less of it: the photo shows a gravel road well
+# yellow_paving: Sofia's yellow bricks (bgpaving.py, a cobble road's Spec.surf), ochre. With the carriageways in the
+# ground their colour is this paint's alone (the cobble layer adds grain): the yellow mesh material (roads.YELLOW_PAVING)
+# is drawn only with BNGE_ROADS_IN_GROUND=0, and the streets were grey cobbles in game (2026-11-05)
 PHOTO_ROAD_RGBA = {"dirt": (112, 92, 68, 0.70), "gravel": (188, 182, 168, 0.5), "cobble": (112, 104, 96, 0.85),
-                   "paved": (95, 95, 94, 1.0)}
+                   "yellow_paving": (178, 150, 72, 0.9), "paved": (95, 95, 94, 1.0)}
 PHOTO_ROADS_MAX_TEXEL = 2.0     # m per texel: coarser far tiles keep the photo's own roads (far, under a pixel wide)
 PHOTO_ROAD_EDGE_M = 0.2         # m the photo's asphalt reaches past the drawn edge, under the edge decal's inner sliver (its
                                 # antialiased rim left a pale hair between the edge line and the decal)
+
+
+def photo_kind(spec):
+    """spec's PHOTO_ROAD_RGBA key: its kind, "yellow_paving" for Sofia's yellow bricks (roads.YELLOW_SURF)."""
+    if spec.kind == "cobble" and spec.surf == roadsmod.YELLOW_SURF:
+        return "yellow_paving"
+    return spec.kind
 
 
 def _road_segments(frame, x0, y0, size, w, h, feats_list, urban_fn=None, widths=None, roads_of=None):
@@ -447,7 +457,7 @@ def _road_segments(frame, x0, y0, size, w, h, feats_list, urban_fn=None, widths=
                 else:
                     hp = (ws / 2 + PHOTO_ROAD_EDGE_M) * px_m
                     hws.append((hp[:-1] + hp[1:]) / 2)
-                kind.append(np.full(len(c) - 1, kinds.index(sp.kind), np.uint8))
+                kind.append(np.full(len(c) - 1, kinds.index(photo_kind(sp)), np.uint8))
                 if roads_of is not None:
                     roads_of.append((np.full(len(c) - 1, nroad, np.int64),
                                      np.full(len(c) - 1, not roadsmod.has_sidewalks(sp) and sp.kind == "paved")))
@@ -810,7 +820,7 @@ def _square_pads(frame, x0, y0, size, surface):
 # (farfield.NEAR_MASK_PX; the GPU has room, the CPU less, the user 2026-10-22); the mod's material gives the masked
 # part a second layer of the stock asphalt (its colour, grain and bumps, world-locked; satmat.lua), the rest the photo.
 ROAD_MASK_MAX_TEXEL = 1.0       # m per texel of the mask
-ROAD_MASK_KINDS = ("paved", "cobble")
+ROAD_MASK_KINDS = ("paved", "cobble", "yellow_paving")
 
 
 def road_mask_name(texture):
