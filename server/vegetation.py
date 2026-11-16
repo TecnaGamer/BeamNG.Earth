@@ -56,9 +56,10 @@ VERSION = 31          # (the cached cells hold their groups: 14 for the regional
                       # conifers by latitude and height above the sea, both in stands (stand_u); dead trees; date and
                       # fan palms in warm towns; the rainforests' trees tropical, fewer palms there);
                       # 30: the bushes by the climate (shrub_groups: maquis, the north's, the tropics',
-                      # the deserts'), ferns on the forest floor, dead wood added in remote forest (_deadwood), the
+                      # the deserts'), ferns on the forest floor, dead wood added in remote forest (_remote_floor), the
                       # mangroves' trees tropical
-                      # 31: dead wood only added, in remote forest (30's replaced bushes and reached over roads)
+                      # 31: dead wood only added, in remote forest on level ground (30's replaced bushes and reached
+                      # over roads); the tropics' vine-draped thickets the same way (G_TRO_THICKET)
 TREE_MIN_M = 3.0
 # The canopy raster, the scatter grids and the crown radii are in Web Mercator units (EPSG:3857: a metre there is
 # cos(lat) metres on the ground) and were tuned by eye at mid latitudes. Past them the same pixel counts covered less
@@ -77,12 +78,13 @@ GROUPS = ("deciduous", "conifer", "shrub", "rock", "pine_west", "palm", "juniper
           "birch", "oak", "beech", "pine_eu", "spruce", "snag_broad", "snag_conifer", "palm_dry",
           "birch_clump", "oak_clump", "beech_clump",
           # (30: the bushes' and forest floors' own, shrub_groups; the stock survey 2026-11-16)
-          "maquis", "shrub_north", "shrub_tropical", "fern", "deadwood")
+          "maquis", "shrub_north", "shrub_tropical", "fern", "deadwood", "tro_thicket")
 (G_DECIDUOUS, G_CONIFER, G_SHRUB, G_ROCK, G_PINE_WEST, G_PALM, G_JUNIPER, G_DESERT_SHRUB, G_DESERT_ROCK,
  G_OAK_WEST, G_TROPICAL, G_MEDITERRANEAN, G_CONIFER_CLUMP, G_DECIDUOUS_CLUMP, G_OAK_WEST_CLUMP,
  G_MEDITERRANEAN_CLUMP, G_VINE, G_STRAW_N, G_STRAW_S, G_SILAGE_N, G_SILAGE_S, G_EUCALYPTUS, G_EUCALYPTUS_CLUMP,
  G_POPLAR, G_CREOSOTE, G_BIRCH, G_OAK, G_BEECH, G_PINE_EU, G_SPRUCE, G_SNAG_BROAD, G_SNAG_CONIFER, G_PALM_DRY,
- G_BIRCH_CLUMP, G_OAK_CLUMP, G_BEECH_CLUMP, G_MAQUIS, G_SHRUB_NORTH, G_SHRUB_TROPICAL, G_FERN, G_DEADWOOD) = range(41)
+ G_BIRCH_CLUMP, G_OAK_CLUMP, G_BEECH_CLUMP, G_MAQUIS, G_SHRUB_NORTH, G_SHRUB_TROPICAL, G_FERN, G_DEADWOOD,
+ G_TRO_THICKET) = range(42)
 # Far clumps (GitHub #1074, "trees cost too much"; the asset survey 2026-11-10): a forest's canopy trees gathered on a
 # world-fixed grid of about CLUMP_CELL_M squares (a whole number of them a geotile: none straddles two); a square with
 # CLUMP_MIN of them gets one item of a stock clump shape (trees.lua's *_clump groups: East Coast USA's
@@ -458,10 +460,12 @@ PALM_FROM = (G_DECIDUOUS, G_BIRCH, G_OAK, G_BEECH, G_MEDITERRANEAN)
 #   on shrubland or bare ground below 42 degrees and in the dry West);
 # - the forest floor (the understory scatter under the canopy): FERN_SHARE of its bushes ferns in the humid temperate
 #   and boreal climates.
-# Dead wood (logs, fallen trees, branches, stumps) is not one of the bushes but added (_deadwood): one on DEADWOOD_P of
-# a DEADWOOD_CELL_M grid's squares inside the forest, only DEADWOOD_ROAD_M or more from any road and with no built-up
-# land within DEADWOOD_BUILT_M (remote woods: a fallen beech lay across a road, the user's test 2026-11-16), outside
-# the tropics and the deserts.
+# Dead wood (logs, fallen trees, branches, stumps) is not one of the bushes but added (_remote_floor): one on
+# DEADWOOD_P of a DEADWOOD_CELL_M grid's squares inside the forest, only DEADWOOD_ROAD_M or more from any road, with no
+# built-up land within DEADWOOD_BUILT_M and on level ground (the DEM's slope under DEADWOOD_MAX_SLOPE: no log on an
+# embankment) (remote woods: a fallen beech lay across a road, the user's test 2026-11-16); not in the deserts. In
+# the tropics (Af, Am, Aw) the same places get a vine-draped thicket instead (Jungle Rock Island's tro_bush_2_small,
+# a 9 m dome of aerial roots: it stood by a road like a hut, the user's test 2026-11-16).
 K_HUMID = (12, 13, 14, 15, 16, 17, 18, 21, 22, 25, 26, 27, 28)     # Cwb Cwc Cfa Cfb Cfc Dsa Dsb Dwa Dwb Dfa Dfb Dfc Dfd
 K_POLAR = (29, 30)                                                  # ET EF
 K_ARID = (4, 5, 6, 7)                                               # BWh BWk BSh BSk
@@ -475,6 +479,8 @@ DEADWOOD_P = 0.1            # (2.5 a hectare of remote forest)
 DEADWOOD_ROAD_M = 40.0      # ground m (a fallen beech is 10 m long)
 DEADWOOD_BUILT_M = 150.0
 DEADWOOD_H = (1.0, 3.0)     # m: a dead-wood item's height drawn in this range (the shapes' 1.0-3.0 m, M.pick's)
+DEADWOOD_MAX_SLOPE = 0.12   # rise over run (7 degrees)
+THICKET_H = (5.5, 7.5)
 FERN_MAX_M = 1.6            # (ferns only for the low bushes)
 SHRUB_FROM = (G_SHRUB, G_DESERT_SHRUB)
 
@@ -858,7 +864,7 @@ class Vegetation:
         tree = clumps(tree, lcls, (lat0 + lat1) / 2,
                       roads=ClumpRoads(clump_roads, chm, blocked, (ex0, ey0, ex1, ey1)))
         scatter = self._scatter(cd, lc, blocked | paved | orchard | vines, chm, hs)
-        dead = self._deadwood(cd, lc, blocked | paved | orchard | vines, road, chm, hs)
+        dead = self._remote_floor(cd, lc, blocked | paved | orchard | vines, road, chm, hs)
         edge = self._edge(cd, lc, blocked | orchard | vines, road, chm, hs)
         bounds = (lon0, lat0, lon1, lat1)
         planted = orchard_items(lu, chm, blocked, bounds)
@@ -909,14 +915,13 @@ class Vegetation:
                                     (_hash01(GI, GJ, 27) * 360.0).astype(np.float32),
                                     (0.8 + 0.4 * _hash01(GI, GJ, 28)).astype(np.float32)), cls)
 
-    def _deadwood(self, cd, lc, blocked, road, chm, hs):
-        """Dead wood in remote forest (DEADWOOD_*): added items, not bushes changed."""
+    def _remote_floor(self, cd, lc, blocked, road, chm, hs):
+        """Dead wood (the tropics: thickets) in remote forest on level ground (DEADWOOD_*): added items, not bushes
+        changed."""
         if lc is None:
             return _empty()
         lon0, lat0, lon1, lat1 = cd.bounds
         clat = (lat0 + lat1) / 2
-        if abs(clat) < 23.5:
-            return _empty()
         ex0, ey0 = _to3857(lon0, lat0)
         ex1, ey1 = _to3857(lon1, lat1)
         sec = 1.0 / max(0.05, math.cos(math.radians(clat)))      # (Web Mercator m per ground m)
@@ -947,14 +952,22 @@ class Vegetation:
                 lo2, la2 = _to4326(px + r * math.cos(math.radians(a)), py + r * math.sin(math.radians(a)))
                 keep &= lc.sample(lo2, la2) != WC["built"]
         import climate
-        keep &= ~np.isin(climate.koppen_many(lat, lon), K_ARID + K_RAINFOREST + K_SAVANNA)
+        k = climate.koppen_many(lat, lon)
+        keep &= ~np.isin(k, K_ARID)
+        if keep.any() and self.dem is not None:       # level ground only (no DEM: as it is)
+            sl = self._slope(px[keep], py[keep])
+            if sl is not None:
+                keep[np.flatnonzero(keep)[sl >= DEADWOOD_MAX_SLOPE]] = False
         if not keep.any():
             return _empty()
-        GI, GJ, lon, lat = GI[keep], GJ[keep], lon[keep], lat[keep]
+        GI, GJ, lon, lat, k = GI[keep], GJ[keep], lon[keep], lat[keep], k[keep]
         n = len(lon)
-        h = (DEADWOOD_H[0] + (DEADWOOD_H[1] - DEADWOOD_H[0]) * _hash01(GI, GJ, 84)).astype(np.float32)
-        return Items(lon, lat, h, (h * 1.5).astype(np.float32), np.full(n, KIND_BUSH, np.uint8),
-                     np.full(n, G_DEADWOOD, np.uint8), _hash01(GI, GJ, 85).astype(np.float32),
+        tro = np.isin(k, K_RAINFOREST + K_SAVANNA) & (np.abs(lat) < 23.5)
+        lo_h = np.where(tro, THICKET_H[0], DEADWOOD_H[0])
+        hi_h = np.where(tro, THICKET_H[1], DEADWOOD_H[1])
+        h = (lo_h + (hi_h - lo_h) * _hash01(GI, GJ, 84)).astype(np.float32)
+        return Items(lon, lat, h, np.where(tro, 0.6 * h, 1.5 * h).astype(np.float32), np.full(n, KIND_BUSH, np.uint8),
+                     np.where(tro, G_TRO_THICKET, G_DEADWOOD).astype(np.uint8), _hash01(GI, GJ, 85).astype(np.float32),
                      (_hash01(GI, GJ, 86) * 360.0).astype(np.float32),
                      (0.85 + 0.3 * _hash01(GI, GJ, 87)).astype(np.float32))
 

@@ -485,6 +485,9 @@ M.CATALOG = {
     { JRI .. 'trees/bush_tropical_1/tro_tree_1_bush_large', 3.38 }, { JRI .. 'trees/tropical_wide_leaves/tropical_plant_01_b', 3.64 },
     { JRI .. 'trees/bush_tropical_1/tro_bush_small', 3.9 }, { JRI .. 'trees/trees_tropical_2/tro_tree_2_bush_huge', 3.95 },
   },
+  -- the tropics' vine-draped thicket (a 9 m dome of aerial roots, 6.6 m high), only in remote forest on level ground
+  -- (server vegetation._remote_floor: it stood by a road like a hut, the user's test 2026-11-16)
+  tro_thicket = { { JRI .. 'trees/bush_tropical_2/tro_bush_2_small', 6.6 } },
   -- dead wood on the forest floor: a stump, fallen branches, fallen beeches (East Coast USA's)
   deadwood = {
     { ECA .. 'trees/trees_douglasfir/tree_douglasfir_chopped', 1.0 }, { ECA .. 'trees/trees_douglasfir/fir_dead_branches', 1.51 },
@@ -494,7 +497,7 @@ M.CATALOG = {
   beech_clump = { { ECA .. 'trees/trees_beech/tree_beech_forest_group', 23.8 },
     { ECA .. 'trees/trees_beech/tree_beech_small_forest_group', 14.17 } },
   tropical = {
-    { JRI .. 'trees/bush_tropical_1/tro_bush_huge', 5.5 }, { JRI .. 'trees/bush_tropical_2/tro_bush_2_small', 6.1 },
+    { JRI .. 'trees/bush_tropical_1/tro_bush_huge', 5.5 },     -- (tro_bush_2_small: tro_thicket's since 2026-11-16)
     { JRI .. 'trees/trees_tropical_2/tro_tree_2_filler', 20.2 }, { JRI .. 'trees/trees_tropical_1/tro_tree_1_huge', 20.6 },
     { JRI .. 'trees/trees_tropical_1/tro_tree_1_filler', 33.0 },
     -- (the stock survey 2026-11-15; not tro_tree_2_large: it ships no imposter) the gaps between 6 and 20 m
