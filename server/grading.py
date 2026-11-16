@@ -2922,6 +2922,8 @@ class _Planner:
         ranks = [road_rank(sp) for sp in pspecs]
         dips = vsolvemod.dips_under(ground, z_before[:n], self._decks_near(key))
         zs, info = vsolvemod.solve(ground, pspecs, z_before[:n], ceilings, ranks, pins, dips)
+        if zs is None:          # (no feasible solve: the passes' heights, as the RFC's fallback; counted in info)
+            zs = [np.array(p.z, np.float64) for p in ground]
         quad = self._clip_quad(key) if own is not None else None
         kept = []
         for (fid, p), z in zip(plans[:n], zs):
@@ -2933,9 +2935,11 @@ class _Planner:
                 kept.extend((fid, r) for r in trim_plan(q, own if quad is None else quad))
         info["pins"] = len(pins)
         info["dips"] = int(sum(int(np.isfinite(d).sum()) for d in dips if d is not None))
-        log.info("vsolve: %s: %d roads, %d unknowns, %d joins, %d pins, %d dip rows: %s%s in %.2f s", key, n, info["n"],
-                 info["joins"], info["pins"], info["dips"], info.get("status"), " (ceilings loosened)" if info["loosened"]
-                 else "", info["elapsed_s"])
+        (log.warning if info["fallback"] else log.info)(
+            "vsolve: %s: %d roads, %d unknowns, %d joins, %d pins, %d dip rows: %s%s in %.2f s", key, n, info["n"],
+            info["joins"], info["pins"], info["dips"], info.get("status"),
+            " (the passes' heights kept)" if info["fallback"] else " (no grade rows)" if info["loosened"] else "",
+            info["elapsed_s"])
         with self.lock:
             self.__dict__.setdefault("_vsolve", {})[str(key)] = (kept, info)
 

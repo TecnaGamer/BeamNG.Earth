@@ -184,9 +184,10 @@ def main():
                 s["wall_s"] = round(time.perf_counter() - t0, 1)
                 results[name] = s
             else:
-                bad = [i for i in infos if not (i.get("converged") and i.get("feasible"))]
+                bad = [i for i in infos if i.get("fallback")]
                 s["solves"] = {"cells": len(infos), "unknowns": int(sum(i.get("n", 0) for i in infos)),
-                               "joins": int(sum(i.get("joins", 0) for i in infos)), "infeasible": len(bad),
+                               "joins": int(sum(i.get("joins", 0) for i in infos)), "fallback": len(bad),
+                               "grade_left": int(sum(1 for i in infos if i.get("grade_left"))),
                                "loosened": int(sum(1 for i in infos if i.get("loosened"))),
                                "statuses": sorted({str(i.get("status")) for i in infos}),
                                "worst_s": round(max((i.get("elapsed_s", 0.0) for i in infos), default=0.0), 2)}
