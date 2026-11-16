@@ -5389,16 +5389,21 @@ class Server:
         the regions it was rendered without (base_pending) are done."""
         size = self.layout.block * heightmap.SQUARE
         x0, y0 = cx - size / 2 - BASE_SHIFT_M, cy - size / 2 - BASE_SHIFT_M
+        pending = self.base_pending.get((anchor.id, cx, cy), ())
+        gen = genground.GEN_PENDING in pending
+        # (the generated ground's map data first: data_ready also asks again for what is missing, with its backoff, and
+        # an early return below would hold those retries, and their give-up, for good: Codex round 3)
+        gen_ok = genground.data_ready(self.mapdata, anchor.frame, x0, y0, size, self.surface) if gen else True
         if not self.imagery.lazy_ready(anchor.frame, x0, y0, size, BASE_RENDER_PX):
             return False
-        pending = self.base_pending.get((anchor.id, cx, cy), ())
         road_data = surfacemod.PHOTO_ROADS_PENDING
         if road_data in pending and self.mapdata is not None:
             la, lo = surfacemod._square_pts(anchor.frame, x0, y0, size)
-            if not all(self.mapdata.has(k, "roads") for k in mapcells.cells_for_points(la, lo)):
+            # (with the generated ground's mark, a cell whose roads it gave up on counts as done, as for its own data)
+            if not all(self.mapdata.has(k, "roads") or (gen and genground.gave_up(k, "roads"))
+                       for k in mapcells.cells_for_points(la, lo)):
                 return False
-        if genground.GEN_PENDING in pending and not genground.data_ready(self.mapdata, anchor.frame, x0, y0, size,
-                                                                            self.surface):
+        if not gen_ok:
             return False            # (the generated ground's map data: made again once it is on disk)
         return all(rk in (road_data, genground.GEN_PENDING) or self._region_status(rk) is not None for rk in pending)
 

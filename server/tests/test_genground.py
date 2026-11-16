@@ -395,6 +395,52 @@ class RefreshTest(unittest.TestCase):
             self.assertNotIn(key, s.base_stale)
 
 
+class RoadsRetryTest(unittest.TestCase):
+    """(Codex round 3) a cold block whose roads' fetch fails carries both marks (PHOTO_ROADS_PENDING, GEN_PENDING):
+    base_ready returned at the roads' check before the generated ground's data_ready, so standing still never asked
+    again and never gave up. Now the retries run first, and roads it gave up on count as done; without the generated
+    ground's mark the roads' check is as before."""
+
+    def test_both_marks_failed_roads(self):
+        gg._retries.clear()
+        self.addCleanup(gg._retries.clear)
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import surface as surfacemod
+        from test_server import LAT, LON, ServerHarness
+
+        class Harness(ServerHarness):
+            near_visual = "detail"
+            with_imagery = True
+            cells = 64
+            block = 1024
+
+            def runTest(self):
+                pass
+        h = Harness()
+        h.setUp()
+        self.addCleanup(h.tearDown)
+        h.hello()
+        aid = h.prepare_anchor(1, LAT, LON)["anchorId"]
+        s = h.server
+        anchor = s.anchors[aid]
+        key = (aid, 0.0, 0.0)
+        s.mapdata = _MD(set(gg.LAYERS) - {"roads"})        # (the roads' fetch keeps failing)
+        now = [0.0]
+        with mock.patch.object(gg, "_now", lambda: now[0]):
+            s.base_pending[key] = frozenset({surfacemod.PHOTO_ROADS_PENDING, gg.GEN_PENDING})
+            ready = None
+            for step in range(0, 2000, 10):
+                now[0] = float(step)
+                if s.base_ready(anchor, 0.0, 0.0) and ready is None:
+                    ready = step
+            asks = [r[0] for (k, layer), r in gg._retries.items() if layer == "roads"]
+            self.assertTrue(asks and min(asks) == gg.RETRY_TRIES, "asked again with the backoff, up to the give-up")
+            self.assertEqual(ready, 1530, "then final: not stale for good")
+            # switch off (no generated ground mark): the roads' check as before, never done without the roads
+            s.base_pending[key] = frozenset({surfacemod.PHOTO_ROADS_PENDING})
+            self.assertFalse(s.base_ready(anchor, 0.0, 0.0))
+
+
 class WriteBaseTest(unittest.TestCase):
     """earthd.Server.write_base runs the generator on the imagery's render with the switch on (and not with it off, or
     for a quick stand-in)."""
