@@ -123,6 +123,7 @@ def main():
     ap.add_argument("--cache", default=os.path.expanduser("~/bnge-tests/genground/cache"))
     ap.add_argument("--no-truth", action="store_true")
     ap.add_argument("--label", default="gen", help="this generator's column and file names")
+    ap.add_argument("--no-trees", dest="trees", action="store_false", help="as a server with --trees off")
     ap.add_argument("--season", default="off", help="the generator's season grade (earthd --season: auto, fall, ...)")
     ap.add_argument("--also", nargs="*", default=[], help="earlier columns' finished images to show too (by label)")
     ap.add_argument("--truth-source", default="auto", help="tools/ortho_hi.py's SOURCE (naip: one export request; "
@@ -177,18 +178,30 @@ def main():
     # tiles on disk, the cells in memory)
     s2 = results["s2"]
     im = imagerymod.Imagery(os.path.join(a.cache, "imagery"), genground.chain(full), fetcher=f, season_mode=a.season)
+    veg = None
+    if a.trees:                 # (the game's trees, as the server's: its cells built here first, into the scratch cache)
+        import vegetation as vegetationmod
+        veg = vegetationmod.Vegetation(md, a.cache)
+        veg.surface = sf
+        t0 = time.perf_counter()
+        hx0_, _hy, hs_, _hp, _h = genground.halo_square(x0, x0, size, px)
+        la_, lo_, _ = frame.enu_to_geodetic(np.array([hx0_ - 20, hx0_ + hs_ + 20]),
+                                             np.array([hx0_ - 20, hx0_ + hs_ + 20]), 0.0)
+        for k in mapcells.cells_for_bbox(float(la_.min()), float(lo_.min()), float(la_.max()), float(lo_.max())):
+            veg.cell(k)
+        stats["trees_build_s"] = round(time.perf_counter() - t0, 1)
     times = []
     for _ in range(3):
         c0, w0 = time.process_time(), time.perf_counter()
         pend = set()
-        gen, _used = genground.render(im, frame, x0, x0, size, px, md, sf, None, pend)
+        gen, _used = genground.render(im, frame, x0, x0, size, px, md, sf, None, pend, veg)
         times.append((time.perf_counter() - w0, time.process_time() - c0))
     hx0, _hy0, hsize, hpx, h = genground.halo_square(x0, x0, size, px)
     c0, w0 = time.process_time(), time.perf_counter()
-    kind, region, canopy, complete = genground.inputs(frame, hx0, hx0, hsize, hpx, md, sf)[:4]
+    kind, region, canopy, complete = genground.inputs(frame, hx0, hx0, hsize, hpx, md, sf, None, veg)[:4]
     stats["gen_inputs_wall_ms"] = round(1000 * (time.perf_counter() - w0), 1)
     stats["gen_inputs_cpu_ms"] = round(1000 * (time.process_time() - c0), 1)
-    again, _ = genground.render(im, frame, x0, x0, size, px, md, sf, None, set())
+    again, _ = genground.render(im, frame, x0, x0, size, px, md, sf, None, set(), veg)
     im.close()
     stats["deterministic_rerun"] = bool(np.array_equal(again, gen))
     stats["complete"] = bool(complete) and not pend

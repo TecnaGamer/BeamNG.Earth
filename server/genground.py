@@ -59,7 +59,7 @@ import revisit
 log = logging.getLogger("earthd.genground")
 
 ON = os.environ.get("BNE_GEN_GROUND", "off").strip().lower() in ("on", "1", "yes", "true")
-NEED = 312                  # earthfast gg_* / gen_ground (stage 2: lines, surfaces, patterns; linear axes)
+NEED = 313                  # earthfast gg_* / gen_ground (stage 2: lines, surfaces, patterns; linear axes)
 # m round a block its generated ground is made over and cut from: a texel's colour reads the inputs this far round
 # (genground.rs: windows FAR_R_M 48 + the lattice and purity margins), so overlapping blocks agree
 HALO_M = 128.0
@@ -350,7 +350,7 @@ def _data_cells(frame, x0, y0, size):
     return keys, ring
 
 
-def data_ready(md, frame, x0, y0, size, surface=None):
+def data_ready(md, frame, x0, y0, size, surface=None, veg=None):
     """Every layer the generated ground reads (LAYERS) on disk, or given up (gave_up), for the cells under the square
     and its halo, and the land use of the cells round them (never fetches; what is missing is asked for again when its
     backoff allows: base_ready polls this): a photo made without some of them (GEN_PENDING) is made again then."""
@@ -363,7 +363,66 @@ def data_ready(md, frame, x0, y0, size, surface=None):
             continue
         _ask(k, layer, surface)
         ready = ready and gave_up(k, layer)
+    if veg is not None:         # (the game's trees: their cells built by the vegetation, not here; given up likewise)
+        for k in keys:
+            if veg.ready(k) or gave_up(k, TREES_LAYER):
+                continue
+            _ask(k, TREES_LAYER, None)
+            ready = ready and gave_up(k, TREES_LAYER)
     return ready
+
+
+# (stage 4) The forest floor under the game's own trees: vegetation.Vegetation's placed trees (the same cells the tree
+# tiles draw, read from its cache, never built here), each a disc of its crown's radius and FLOOR_FADE_M of fade
+# (earthfast.gg_discs). The trees the mod shows out to its 700 m ring at the Normal density (rank < FLOOR_RANK,
+# trees.lua RINGS): nearer it shows more of them, standing on open ground at their edges. A cell not built yet: the
+# canopy's core alone (>= 3 m, no skirt) and the photo is made again once it is (GEN_PENDING, data_ready).
+TREES_LAYER = "trees"
+FLOOR_RANK = 0.6
+FLOOR_FADE_M = 2.0
+FLOOR_REACH_M = 12.0            # (a crown's radius at most: the cells round the square whose trees reach into it)
+
+
+def tree_floor(frame, x0, y0, size, px, veg, missing):
+    """(floor (px, px) uint8 or None, mode): where the game's trees stand (mode 2), None and mode 1 while a cell's trees
+    are not built (each such cell on missing, a revisit fault), None and mode 0 without trees (the canopy's own colour:
+    nothing is drawn over it)."""
+    if veg is None:
+        return None, 0
+    import vegetation as vegetationmod
+    t = size / px
+    top = y0 + size
+    la, lo, _ = frame.enu_to_geodetic(np.array([x0 - FLOOR_REACH_M, x0 + size + FLOOR_REACH_M]),
+                                      np.array([y0 - FLOOR_REACH_M, top + FLOOR_REACH_M]), 0.0)
+    lat_lo, lat_hi, lon_lo, lon_hi = float(np.min(la)), float(np.max(la)), float(np.min(lo)), float(np.max(lo))
+    keys = mapcells.cells_for_bbox(lat_lo, lon_lo, lat_hi, lon_hi)
+    cells = []
+    for k in keys:
+        if not veg.ready(k):
+            if not gave_up(k, TREES_LAYER):
+                missing.append((k, TREES_LAYER))
+                revisit.fault()
+                return None, 1
+            continue            # (given up: its trees left out)
+        try:
+            cells.append(veg.cell(k))
+        except Exception as e:  # (unreadable: as not built)
+            log.debug("genground: trees of %s: %s: %s", k, type(e).__name__, e)
+            missing.append((k, TREES_LAYER))
+            revisit.fault()
+            return None, 1
+    floor = np.zeros((px, px), np.uint8)
+    for it in cells:
+        lat_, lon_ = np.asarray(it.lat), np.asarray(it.lon)
+        sel = ((np.asarray(it.kind) == vegetationmod.KIND_TREE) & (np.asarray(it.rank) < FLOOR_RANK)
+               & (lat_ >= lat_lo) & (lat_ <= lat_hi) & (lon_ >= lon_lo) & (lon_ <= lon_hi))   # (the square's own)
+        if not sel.any():
+            continue
+        e, n, _ = frame.geodetic_to_enu(np.asarray(it.lat, np.float64)[sel], np.asarray(it.lon, np.float64)[sel], 0.0)
+        fast._ef.gg_discs(floor, np.ascontiguousarray((np.asarray(e, np.float64) - x0) / t),
+                          np.ascontiguousarray((top - np.asarray(n, np.float64)) / t),
+                          np.ascontiguousarray(np.asarray(it.radius, np.float64)[sel] / t), float(FLOOR_FADE_M / t))
+    return floor, 2
 
 
 def base_kinds(classes, lat, lon):
@@ -715,7 +774,7 @@ def canopy_grid(mx, my, rasters):
     return out
 
 
-def inputs(frame, x0, y0, size, px, md, surface, widths=None):
+def inputs(frame, x0, y0, size, px, md, surface, widths=None, veg=None):
     """(kind, region, canopy, complete, poly, dirs, phases) of the square for gen_ground, from the cached map data
     (never waits: what is missing is queued, a revisit fault, and complete is False)."""
     import buildings as buildingsmod
@@ -766,9 +825,10 @@ def inputs(frame, x0, y0, size, px, md, surface, widths=None):
                 cover[np.asarray(m, bool)] |= 4
         except Exception as e:      # (the roofs are filled in after anyway)
             log.debug("genground: building mask: %s: %s", type(e).__name__, e)
+    floor, mode = tree_floor(frame, x0, y0, size, px, veg, missing)
     kind, region = fast._ef.gg_regions(np.ascontiguousarray(base), poly, pkinds, line, lkinds, canopy, cover,
-                                       float(size / px))
-    return kind, region, canopy, bool(complete) and not missing, poly, dirs, phases
+                                       float(size / px), floor, mode == 0)
+    return kind, region, canopy, bool(complete) and not missing, poly, dirs, phases, floor, mode
 
 
 def halo_square(x0, y0, size, px):
@@ -778,7 +838,7 @@ def halo_square(x0, y0, size, px):
     return x0 - h * t, y0 - h * t, size + 2 * h * t, px + 2 * h, h
 
 
-def generate(rgb, frame, x0, y0, size, px, md, surface, widths=None):
+def generate(rgb, frame, x0, y0, size, px, md, surface, widths=None, veg=None):
     """(the generated ground (px, px, 3) uint8 of the square, complete) from rgb, its Sentinel-2 photo (imagery.render
     over the same square at px), and the map data (inputs()). Its outer HALO_M is not final (the windows reach out of
     the square there): render() keeps the middle of a larger square."""
@@ -786,16 +846,17 @@ def generate(rgb, frame, x0, y0, size, px, md, surface, widths=None):
     rgb = np.ascontiguousarray(np.asarray(rgb, np.uint8)[:, :, :3])
     if rgb.shape[:2] != (px, px):
         raise ValueError(f"generated ground: a {rgb.shape[:2]} photo for {px} px")
-    kind, region, canopy, complete, poly, dirs, phases = inputs(frame, x0, y0, size, px, md, surface, widths)
+    kind, region, canopy, complete, poly, dirs, phases, floor, mode = inputs(frame, x0, y0, size, px, md, surface,
+                                                                             widths, veg)
     t = size / px
     # (the global texel grid of the anchor frame: the blocks' texels lie on it, so their lattices agree)
     gc, gr = int(np.floor(x0 / t + 0.5)), int(np.floor(-(y0 + size) / t + 0.5))
     out = fast._ef.gen_ground(rgb, kind, region, canopy, poly, dirs, phases, float(x0 + t / 2),
-                              float(y0 + size - t / 2), float(t), gr, gc)
+                              float(y0 + size - t / 2), float(t), gr, gc, floor, int(mode))
     return out, complete
 
 
-def render(imagery, frame, x0, y0, size, px, md, surface, widths=None, pending=None):
+def render(imagery, frame, x0, y0, size, px, md, surface, widths=None, pending=None, veg=None):
     """(rgb (px, px, 3), sources used): the generated ground of [x0, x0 + size]^2 of frame at px, made over the square
     with HALO_M round it and cut to it (every block covering a spot draws it alike, the Codex review of 41d74b61). With
     map data still missing GEN_PENDING goes into pending (earthd.Server.base_ready: made again once it is here).
@@ -808,7 +869,7 @@ def render(imagery, frame, x0, y0, size, px, md, surface, widths=None, pending=N
         rgb, used = imagery._render(where, hpx, pending)
     else:                           # (a stand-in imagery: its render as it is)
         rgb, used = imagery.render(frame, hx0, hy0, hsize, hpx, pending)
-    out, complete = generate(rgb, frame, hx0, hy0, hsize, hpx, md, surface, widths)
+    out, complete = generate(rgb, frame, hx0, hy0, hsize, hpx, md, surface, widths, veg)
     if where is not None:
         out = imagery._seasoned(where, np.asarray(out, np.uint8))
     if not complete and pending is not None:

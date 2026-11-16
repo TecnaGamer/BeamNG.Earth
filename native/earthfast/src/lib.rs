@@ -6484,6 +6484,8 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // forest floor
     // 312: stage 3 steps 4-5: unmapped crop's furrows where the photo shows periodic strips (a structure tensor on the 8 m
     // cells, 32 integer normals, a lag test), the surfaces' palette by the support of their photo colour
-    m.add("VERSION", 312)?;
+    // 313: stage 4: gg_discs (where the game's trees stand), gg_regions(..., floor, skirt), gen_ground(..., floor,
+    // floor_mode): the forest floor follows the placed trees
+    m.add("VERSION", 313)?;
     Ok(())
 }

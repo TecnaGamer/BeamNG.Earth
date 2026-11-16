@@ -4757,7 +4757,9 @@ class Server:
                                   self.tex_modes, roadsmod.ROADS_IN_GROUND, bool(self.buildings),
                                   self.mapdata.versions() if self.mapdata is not None else None,
                                   self.road_widths is not None, self.surface is not None, anchor.zooms[0],
-                                  terraincache.PHOTO_EXT, terraincache.NO_PACK, ("rules", Server.ground_rules(self)))
+                                  terraincache.PHOTO_EXT, terraincache.NO_PACK, ("rules", Server.ground_rules(self)),
+                                  *((("genground", vegetationmod.VERSION, getattr(self, "veg", None) is not None),)
+                                    if genground.ON else ()))
         except Exception as e:          # (no cache rather than no photo)
             log.debug("revisit: base photo key: %s: %s", type(e).__name__, e)
             return None
@@ -4850,7 +4852,8 @@ class Server:
                               BASE_RENDER_PX, tex, bool(self.buildings and self.mapdata is not None), anchor.zooms[0],
                               os.path.join(self.out_dir, name),
                               (self.user_dir, f"{self.vfs_dir}/{name}", base_ao_vfs(self.base_px), BASE_AO),
-                              fuel_pads=self.block_fuel_pads(anchor, cx, cy, size), out_px=self.base_px).result()
+                              fuel_pads=self.block_fuel_pads(anchor, cx, cy, size), out_px=self.base_px,
+                              **({"trees": getattr(self, "veg", None) is not None} if genground.ON else {})).result()
         except Exception as e:
             log.info("base photo %s in the block process: %s", key, e)
             return None
@@ -5297,7 +5300,8 @@ class Server:
             if genground.ON and not quick:  # the generated ground: Sentinel-2 and the map's regions (genground.py)
                 try:
                     rgb, used = genground.render(self.imagery, anchor.frame, x0, y0, size, BASE_RENDER_PX,
-                                                 self.mapdata, self.surface, self.road_widths, pending)
+                                                 self.mapdata, self.surface, self.road_widths, pending,
+                                                 getattr(self, "veg", None))
                 except Exception as e:      # (the Sentinel-2 photo alone then)
                     log.info("base photo %s: generated ground: %s: %s", (anchor.id, cx, cy), type(e).__name__, e)
                     rgb = None
@@ -5393,7 +5397,8 @@ class Server:
         gen = genground.GEN_PENDING in pending
         # (the generated ground's map data first: data_ready also asks again for what is missing, with its backoff, and
         # an early return below would hold those retries, and their give-up, for good: Codex round 3)
-        gen_ok = genground.data_ready(self.mapdata, anchor.frame, x0, y0, size, self.surface) if gen else True
+        gen_ok = genground.data_ready(self.mapdata, anchor.frame, x0, y0, size, self.surface,
+                                      getattr(self, "veg", None)) if gen else True
         if not self.imagery.lazy_ready(anchor.frame, x0, y0, size, BASE_RENDER_PX):
             return False
         road_data = surfacemod.PHOTO_ROADS_PENDING

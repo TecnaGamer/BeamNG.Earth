@@ -71,7 +71,9 @@ const COVER_ROOF: u8 = 4;
 const CANOPY_NODATA: u8 = 255;
 const TREE_MIN_M: u8 = 3;           // canopy at least this tall: a tree (Meta / WRI CHM, 1.2 m pixels)
 const SHRUB_MIN_M: u8 = 1;          // ... at least this: a shrub where the land cover says trees
-const SKIRT_M: f64 = 3.0;           // canopy of SHRUB_MIN_M and over this far from a tree's crown is its skirt (gg_regions)
+const SKIRT_M: f64 = 3.0;
+/// gg_regions' mark on a region of open ground under the canopy model where the game placed no tree (stage 4)
+const UNPLACED: u32 = 0x4000_0000;           // canopy of SHRUB_MIN_M and over this far from a tree's crown is its skirt (gg_regions)
 
 // gen_ground's borders (m)
 const PURE_M: f64 = 8.0;            // a texel this far inside its region: its photo colour is the region's own
@@ -460,7 +462,8 @@ pub fn gg_fill_polys(py: Python<'_>, mut out: PyReadwriteArray2<'_, u32>, xy: Py
 ///   pitches); a texel the land cover calls trees but lower is a shrub (SHRUB_MIN_M and over) or grass; then the
 ///   hedgerows grown by a texel: open ground with SHRUB_MIN_M of canopy next to a tree is a tree (the canopy model
 ///   draws a hedgerow's tall core only, 2026-11-16 comparison);
-/// - then the cover: water, paved, roof (each over the ones before).
+/// - then the cover: water, roof, paved (each over the ones before: a drawn road wins over a grown footprint).
+/// - a mapped road / path line is never made a tree or forest floor by the canopy (the road wins, stage 4).
 /// The region is the kind and the polygon (each polygon's texels of a kind are a region of their own); a line's texels
 /// one region per kind; paved and roof one region each.
 #[pyfunction]
@@ -468,8 +471,18 @@ pub fn gg_fill_polys(py: Python<'_>, mut out: PyReadwriteArray2<'_, u32>, xy: Py
 pub fn gg_regions<'py>(py: Python<'py>, base: PyReadonlyArray2<'py, u8>, poly: PyReadonlyArray2<'py, u32>,
                        poly_kind: PyReadonlyArray1<'py, u8>, line: PyReadonlyArray2<'py, u32>,
                        line_kind: PyReadonlyArray1<'py, u8>, canopy: PyReadonlyArray2<'py, u8>,
-                       cover: PyReadonlyArray2<'py, u8>, t: f64)
+                       cover: PyReadonlyArray2<'py, u8>, t: f64, floor: Option<PyReadonlyArray2<'py, u8>>,
+                       skirt: bool)
                        -> PyResult<(Bound<'py, PyArray2<u8>>, Bound<'py, PyArray2<u32>>)> {
+    // (stage 4) floor: where the game's trees stand (gg_discs of vegetation's placed trees: > 0 under a crown and its
+    // fade); with it a canopy texel is a tree only there, elsewhere the open ground it would be (the canopy model
+    // also covers where no tree is placed: the woods' edges drew a forest floor past the trees, in-game v3)
+    let floor = floor.map(|f| f.as_array().to_owned());
+    if let Some(f) = &floor {
+        if f.shape() != base.as_array().shape() {
+            return Err(pyo3::exceptions::PyValueError::new_err("gg_regions: bad floor shape"));
+        }
+    }
     let (base, poly, pk, line, lk, canopy, cover) = (base.as_array(), poly.as_array(), poly_kind.as_array(),
                                                      line.as_array(), line_kind.as_array(), canopy.as_array(),
                                                      cover.as_array());
@@ -534,19 +547,36 @@ pub fn gg_regions<'py>(py: Python<'py>, base: PyReadonlyArray2<'py, u8>, poly: P
                     }
                 }
                 let ch = canopy[[r, c]];
-                let open_to_canopy = !matches!(k, WATER | POOL | GREENHOUSE) && !PITCH_KINDS.contains(&k);
+                // (stage 4, the user: a road blocked by trees or buildings: the road wins) a mapped track, path, drive or
+                // sidewalk stays itself under the canopy model or a placed crown, no forest floor on it
+                // (any line but a hedge / tree row: footways, bridleways, tracks, drives, ballast, sand paths; the
+                // canopy model counted the crowns over them, the generator made them forest floor: F1, 2026-11-16)
+                let road_line = by_line[r * w + c] && !matches!(k, TREE | WATER);
+                let open_to_canopy = !matches!(k, WATER | POOL | GREENHOUSE) && !PITCH_KINDS.contains(&k) && !road_line;
+                let placed = floor.as_ref().map(|f| f[[r, c]] > 0);
                 if ch != CANOPY_NODATA && open_to_canopy {
-                    if ch >= TREE_MIN_M {
+                    if ch >= TREE_MIN_M && placed != Some(false) {
                         k = TREE;
                         chm_tree[r * w + c] = true;
                     } else if k == TREE && !by_line[r * w + c] {
-                        k = if ch >= SHRUB_MIN_M { SHRUB } else { GRASS };
+                        k = if placed == Some(true) { TREE } else if ch >= SHRUB_MIN_M && placed.is_none() {
+                            SHRUB
+                        } else {
+                            GRASS
+                        };
                     }
                 }
                 kind[r * w + c] = k;
                 region[r * w + c] = if by_line[r * w + c] && k != TREE { 0x8000_0000 | k as u32 } else {
                     (pid << 5) | k as u32
                 };
+                // (stage 4) open ground the land cover or the canopy model call wooded, where the game placed no
+                // tree: its photo is the canopy's colour; a region of its own, marked (gen_ground's UNPLACED)
+                if placed == Some(false) && !by_line[r * w + c]
+                    && matches!(k, GRASS | SHRUB | LAWN | CROP | BUILT | BARE | NONE)
+                    && (b == TREE || (ch != CANOPY_NODATA && ch >= SHRUB_MIN_M)) {
+                    region[r * w + c] |= UNPLACED;
+                }
             }
         }
         // (stage 3) hedgerow and wood skirts: from the canopy's own trees (>= TREE_MIN_M) through open ground with
@@ -589,7 +619,11 @@ pub fn gg_regions<'py>(py: Python<'py>, base: PyReadonlyArray2<'py, u8>, poly: P
                 sd[i] = v;
             }
         }
-        let grown: Vec<usize> = (0..h * w).filter(|&i| !chm_tree[i] && sd[i] <= lim && passable(i)).collect();
+        let grown: Vec<usize> = if skirt {
+            (0..h * w).filter(|&i| !chm_tree[i] && sd[i] <= lim && passable(i)).collect()
+        } else {
+            Vec::new()          // (the game's trees drawn: the floor follows them, no skirt)
+        };
         for i in grown {
             let pid = if by_line[i] { 0 } else { region[i] >> 5 };
             kind[i] = TREE;
@@ -599,8 +633,8 @@ pub fn gg_regions<'py>(py: Python<'py>, base: PyReadonlyArray2<'py, u8>, poly: P
             let cv = cover[[i / w, i % w]];
             let mut k = kind[i];
             if cv & COVER_WATER != 0 { k = WATER; }
-            if cv & COVER_PAVED != 0 { k = PAVED; }
             if cv & COVER_ROOF != 0 { k = ROOF; }
+            if cv & COVER_PAVED != 0 { k = PAVED; }     // (a drawn road over a building's grown footprint: the road)
             if k != kind[i] {
                 kind[i] = k;
                 region[i] = (region[i] & !31) | k as u32;
@@ -673,7 +707,8 @@ struct Windows {
 /// region's texels nearby whatever their purity; else a quarter of the kind's palette colour in px. Water's: of the
 /// texels no brighter than that mean.
 #[allow(clippy::too_many_arguments)]
-fn region_mean(s2: &[u8], kind: &[u8], region: &[u32], dist: &[u32], n: usize, r: usize, c: usize, w: &Windows,
+fn region_mean(s2: &[u8], kind: &[u8], region: &[u32], dist: &[u32], dirty: &[bool], n: usize, r: usize, c: usize,
+               w: &Windows,
                px: [f32; 3]) -> ([f32; 3], f32) {
     let i = r * n + c;
     let (k, reg) = (kind[i], region[i]);
@@ -681,7 +716,10 @@ fn region_mean(s2: &[u8], kind: &[u8], region: &[u32], dist: &[u32], n: usize, r
         (w.near_r, w.near_s, true, w.pure3), (w.far_r, w.far_s, true, w.pure3), (w.far_r, w.far_s, true, w.semi3),
         (w.far_r, w.far_s, false, w.pure3), (w.far_r, w.far_s, false, w.semi3), (w.near_r, 1, true, 0)];
     for (t_i, (rad, step, own, min_d)) in tries.into_iter().enumerate() {
-        let keep = |j: usize| dist[j] >= min_d && if own { region[j] == reg } else { kind[j] == k };
+        if own && dirty[i] {
+            continue;           // (its own region is all canopy-coloured: the kind's open ground, else the floor)
+        }
+        let keep = |j: usize| dist[j] >= min_d && !dirty[j] && if own { region[j] == reg } else { kind[j] == k };
         let (mut s, mut cnt) = window_sum(s2, n, r, c, rad, step, w.g, keep);
         if cnt > 0 && k == WATER {
             // water: the texels no brighter than the mean (boats, moorings, piers the map does not have)
@@ -1046,7 +1084,11 @@ pub fn gen_ground<'py>(py: Python<'py>, s2: PyReadonlyArray3<'py, u8>, kind: PyR
                        region: PyReadonlyArray2<'py, u32>, canopy: PyReadonlyArray2<'py, u8>,
                        poly: PyReadonlyArray2<'py, u32>, pdir: PyReadonlyArray2<'py, f64>,
                        pphase: PyReadonlyArray1<'py, f64>, ox: f64, oy: f64,
-                       t: f64, gr: i64, gc: i64) -> PyResult<Bound<'py, PyArray3<u8>>> {
+                       t: f64, gr: i64, gc: i64, floor: Option<PyReadonlyArray2<'py, u8>>, floor_mode: u8)
+                       -> PyResult<Bound<'py, PyArray3<u8>>> {
+    // (stage 4) the forest floor's share under a TREE texel: floor_mode 0 no trees drawn (the canopy's own colour),
+    // 1 trees drawn, their places unknown (all of FLOOR_MIX), 2 their places known (FLOOR_MIX x floor / 255)
+    let floor: Option<Vec<u8>> = floor.map(|f| f.as_array().iter().copied().collect());
     let (s2a, kind, region, canopy) = (s2.as_array(), kind.as_array(), region.as_array(), canopy.as_array());
     let (poly, pdir, pphase) = (poly.as_array(), pdir.as_array(), pphase.as_array());
     let n = kind.shape()[0];
@@ -1063,6 +1105,9 @@ pub fn gen_ground<'py>(py: Python<'py>, s2: PyReadonlyArray3<'py, u8>, kind: PyR
     let dirs: Vec<(f64, f64, f64)> = (0..pphase.len()).map(|p| (pdir[[p, 0]], pdir[[p, 1]], pphase[p])).collect();
     // (water and the surfaces (MIX): the region's colour everywhere, not the photo's inside)
     let flat = |k: u8| k == WATER || MIX[k as usize] > 0.0;
+    if floor.as_ref().is_some_and(|f| f.len() != n * n) {
+        return Err(pyo3::exceptions::PyValueError::new_err("gen_ground: bad floor shape"));
+    }
     let out = py.detach(move || {
         let tx = |m: f64| -> usize { ((m / t).round() as usize).max(1) };
         let dist = border_distance(&region, n);
@@ -1096,13 +1141,53 @@ pub fn gen_ground<'py>(py: Python<'py>, s2: PyReadonlyArray3<'py, u8>, kind: PyR
         let threads = par::threads_for(n * n, 65536);
         let cg = coarse_barriers(&s2, &kind, &region, &dist, n, gr, gc);
         let sp = stripe_patches(&cg, &kind, n);
+        // (stage 4) open ground under the canopy model where the game placed no tree: the photo there is the canopy's
+        // colour, not the ground's; its colour the region's (from texels without canopy), never a sample
+        let dirty: Vec<bool> = (0..n * n).map(|i| {
+            floor_mode == 2 && region[i] & UNPLACED != 0 && !matches!(kind[i], TREE | WATER | PAVED | ROOF | NONE)
+        }).collect();
+        // (stage 4) the open ground's colour for the texels under unplaced canopy (dirty): the kind's open texels round
+        // each 8 m cell's middle (KIND_WIN), found once per cell and kind (not per texel), bilinear between the cells
+        let mut gap_need = vec![false; cg.nr * cg.nc * NKINDS];
+        for i in 0..n * n {
+            if dirty[i] {
+                let (r, c) = (i / n, i % n);
+                if r >= cg.pr && c >= cg.pc {
+                    let (a, b) = ((r - cg.pr) / COARSE, (c - cg.pc) / COARSE);
+                    for (da, db) in [(0usize, 0usize), (0, 1), (1, 0), (1, 1)] {
+                        let (a2, b2) = ((a + da).min(cg.nr.saturating_sub(1)), (b + db).min(cg.nc.saturating_sub(1)));
+                        if a2 < cg.nr && b2 < cg.nc {
+                            gap_need[(a2 * cg.nc + b2) * NKINDS + kind[i] as usize] = true;
+                        }
+                    }
+                }
+            }
+        }
+        let mut gap = vec![[0f32; 4]; cg.nr * cg.nc * NKINDS];
+        par::rows(&mut gap, cg.nc.max(1) * NKINDS, threads, |a, row| {
+            for (j, v) in row.iter_mut().enumerate() {
+                let (b, k) = (j / NKINDS, (j % NKINDS) as u8);
+                if !gap_need[(a * cg.nc + b) * NKINDS + k as usize] {
+                    continue;
+                }
+                let (r, c) = (cg.pr + a * COARSE + COARSE / 2, cg.pc + b * COARSE + COARSE / 2);
+                for min_d in [win.pure3, win.semi3] {
+                    let (sm, cnt) = window_sum(&s2, n, r.min(n - 1), c.min(n - 1), win.far_r, win.far_s, win.g,
+                                               |q| kind[q] == k && !dirty[q] && dist[q] >= min_d);
+                    if cnt > 0 {
+                        *v = [sm[0] as f32 / cnt as f32, sm[1] as f32 / cnt as f32, sm[2] as f32 / cnt as f32, 1.0];
+                        break;
+                    }
+                }
+            }
+        });
         // the regions' colours on a lattice of every LATTICE texels (interpolated between the lattice points of the
         // texel's own region; a texel with none of its region round it asks its own): a tenth of the windows
         // (lattice point (a, b) at texel (pr + a L, pc + b L): on the global grid's multiples of L)
         let (pr, pc) = (aligned(0, gr, LATTICE), aligned(0, gc, LATTICE));
         let nar = if n > pr { (n - 1 - pr) / LATTICE + 1 } else { 0 };
         let nac = if n > pc { (n - 1 - pc) / LATTICE + 1 } else { 0 };
-        let need = |i: usize| kind[i] != NONE && ((dist[i] as f64) < blend3 + 3.0 * 1.5 * LATTICE as f64
+        let need = |i: usize| kind[i] != NONE && !dirty[i] && ((dist[i] as f64) < blend3 + 3.0 * 1.5 * LATTICE as f64
                                                    || flat(kind[i]));
         let mut lat = vec![[0f32; 4]; nar * nac];
         par::rows(&mut lat, nac.max(1), threads, |a, row| {
@@ -1111,7 +1196,7 @@ pub fn gen_ground<'py>(py: Python<'py>, s2: PyReadonlyArray3<'py, u8>, kind: PyR
                 let i = r * n + c;
                 if need(i) {
                     let px = [s2[i * 3] as f32, s2[i * 3 + 1] as f32, s2[i * 3 + 2] as f32];
-                    let (m, sup) = region_mean(&s2, &kind, &region, &dist, n, r, c, &win, px);
+                    let (m, sup) = region_mean(&s2, &kind, &region, &dist, &dirty, n, r, c, &win, px);
                     *v = [m[0], m[1], m[2], 1.0 + sup];
                 }
             }
@@ -1126,7 +1211,34 @@ pub fn gen_ground<'py>(py: Python<'py>, s2: PyReadonlyArray3<'py, u8>, kind: PyR
                 // the region's own colour near its border (water: everywhere, the photo's boats, piers and their
                 // 10 m blur are not the water's colour)
                 let mut base = px;
-                if ((d as f64) < blend3 || flat(k)) && k != NONE {
+                if dirty[i] {
+                    // (the gap colours, bilinear between the 8 m cells' middles; none round: the forest floor)
+                    let (mut acc, mut wsum) = ([0f32; 3], 0f32);
+                    if r >= cg.pr + COARSE / 2 && c >= cg.pc + COARSE / 2 {
+                        let fy = (r - cg.pr - COARSE / 2) as f32 / COARSE as f32;
+                        let fx = (c - cg.pc - COARSE / 2) as f32 / COARSE as f32;
+                        let (a0, b0) = (fy as usize, fx as usize);
+                        let (ty, tx) = (fy - a0 as f32, fx - b0 as f32);
+                        for (da, db, w) in [(0, 0, (1.0 - ty) * (1.0 - tx)), (0, 1, (1.0 - ty) * tx),
+                                            (1, 0, ty * (1.0 - tx)), (1, 1, ty * tx)] {
+                            let (a, b) = (a0 + da, b0 + db);
+                            if w <= 0.0 || a >= cg.nr || b >= cg.nc {
+                                continue;
+                            }
+                            let v = gap[(a * cg.nc + b) * NKINDS + k as usize];
+                            if v[3] > 0.0 {
+                                acc = [acc[0] + w * v[0], acc[1] + w * v[1], acc[2] + w * v[2]];
+                                wsum += w;
+                            }
+                        }
+                    }
+                    base = if wsum > 1e-4 {
+                        [acc[0] / wsum, acc[1] / wsum, acc[2] / wsum]
+                    } else {
+                        [px[0] + (FLOOR[0] - px[0]) * FLOOR_MIX, px[1] + (FLOOR[1] - px[1]) * FLOOR_MIX,
+                         px[2] + (FLOOR[2] - px[2]) * FLOOR_MIX]
+                    };
+                } else if ((d as f64) < blend3 || flat(k)) && k != NONE {
                     let l = LATTICE as i64;
                     let (dr, dc) = (r as i64 - pr as i64, c as i64 - pc as i64);
                     let (a0, b0) = (dr.div_euclid(l), dc.div_euclid(l));
@@ -1151,7 +1263,7 @@ pub fn gen_ground<'py>(py: Python<'py>, s2: PyReadonlyArray3<'py, u8>, kind: PyR
                     let mean = if wsum > 1e-4 {
                         [acc[0] / wsum, acc[1] / wsum, acc[2] / wsum]
                     } else {
-                        let (m, s_) = region_mean(&s2, &kind, &region, &dist, n, r, c, &win, px);
+                        let (m, s_) = region_mean(&s2, &kind, &region, &dist, &dirty, n, r, c, &win, px);
                         sup = s_;
                         m
                     };
@@ -1169,9 +1281,13 @@ pub fn gen_ground<'py>(py: Python<'py>, s2: PyReadonlyArray3<'py, u8>, kind: PyR
                                 base[2] + (p[2] - base[2]) * m];
                     }
                 }
-                if k == TREE {       // (the forest floor under the game's trees, FLOOR)
-                    base = [base[0] + (FLOOR[0] - base[0]) * FLOOR_MIX, base[1] + (FLOOR[1] - base[1]) * FLOOR_MIX,
-                            base[2] + (FLOOR[2] - base[2]) * FLOOR_MIX];
+                if k == TREE && floor_mode > 0 {       // (the forest floor under the game's trees, FLOOR)
+                    let fm = match (&floor, floor_mode) {
+                        (Some(fl), 2) => FLOOR_MIX * fl[i] as f32 / 255.0,
+                        _ => FLOOR_MIX,
+                    };
+                    base = [base[0] + (FLOOR[0] - base[0]) * fm, base[1] + (FLOOR[1] - base[1]) * fm,
+                            base[2] + (FLOOR[2] - base[2]) * fm];
                 }
                 // (stage 3) a field's edge the photo shows inside one region (two unmapped fields of one class): each
                 // side its own colour, sampled BARRIER_PROBE cells off the edge, the step at the edge's line
@@ -1306,8 +1422,55 @@ pub fn gg_grid<'py>(py: Python<'py>, origin: PyReadonlyArray1<'py, f64>, rot: Py
     Ok((mk(lat)?, mk(lon)?, mk(mx)?, mk(my)?))
 }
 
+/// (stage 4) where the game's trees stand: out (h, w) u8 the max over the trees of 255 within a crown's radius of its
+/// trunk, falling linearly to 0 over `fade` texels past it, at the texel centres. cx, cy (k) texel coordinates (col,
+/// row) of the trunks, r (k) their crown radii (texels). Each tree touches its own box of texels only.
+#[pyfunction]
+pub fn gg_discs(py: Python<'_>, mut out: PyReadwriteArray2<'_, u8>, cx: PyReadonlyArray1<'_, f64>,
+                cy: PyReadonlyArray1<'_, f64>, r: PyReadonlyArray1<'_, f64>, fade: f64) -> PyResult<()> {
+    let (cx, cy, r) = (cx.as_array().to_vec(), cy.as_array().to_vec(), r.as_array().to_vec());
+    if cy.len() != cx.len() || r.len() != cx.len() || !(fade >= 0.0) {
+        return Err(pyo3::exceptions::PyValueError::new_err("gg_discs: bad shapes"));
+    }
+    let mut arr = out.as_array_mut();
+    let (h, w) = (arr.shape()[0], arr.shape()[1]);
+    let mut grid = arr.to_owned();
+    py.detach(|| {
+        for k in 0..cx.len() {
+            let (x, y, rad) = (cx[k], cy[k], r[k].max(0.0));
+            let reach = rad + fade;
+            if !(x.is_finite() && y.is_finite()) || x + reach < 0.0 || y + reach < 0.0 || x - reach > w as f64
+                || y - reach > h as f64 {
+                continue;
+            }
+            let c0 = (x - reach - 0.5).floor().max(0.0) as usize;
+            let c1 = ((x + reach - 0.5).ceil().max(0.0) as usize).min(w - 1);
+            let r0 = (y - reach - 0.5).floor().max(0.0) as usize;
+            let r1 = ((y + reach - 0.5).ceil().max(0.0) as usize).min(h - 1);
+            for row in r0..=r1 {
+                for col in c0..=c1 {
+                    let (dx, dy) = (col as f64 + 0.5 - x, row as f64 + 0.5 - y);
+                    let d = (dx * dx + dy * dy).sqrt();
+                    let v = if d <= rad { 255.0 } else if fade > 0.0 && d < reach {
+                        (255.0 * (1.0 - (d - rad) / fade)).round()
+                    } else {
+                        0.0
+                    };
+                    let v = v as u8;
+                    if v > grid[[row, col]] {
+                        grid[[row, col]] = v;
+                    }
+                }
+            }
+        }
+    });
+    arr.assign(&grid);
+    Ok(())
+}
+
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(gg_grid, m)?)?;
+    m.add_function(wrap_pyfunction!(gg_discs, m)?)?;
     m.add_function(wrap_pyfunction!(gg_fill_polys, m)?)?;
     m.add_function(wrap_pyfunction!(gg_regions, m)?)?;
     m.add_function(wrap_pyfunction!(gen_ground, m)?)?;
