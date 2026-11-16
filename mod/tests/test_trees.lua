@@ -967,7 +967,7 @@ do -- far clumps (server vegetation.CLUMP_OF, GitHub #1074): the clump beyond CL
     local out = {}
     for it in pairs(items) do
       local sf = it.d.fields.shapeFile
-      local k = sf:find('group_low', 1, true) and 'clump' or sf:find('douglasfir', 1, true) and 'fir' or 'other'
+      local k = sf:find('douglasfir_group', 1, true) and 'clump' or sf:find('douglasfir', 1, true) and 'fir' or 'other'
       out[k] = (out[k] or 0) + 1
     end
     return out
