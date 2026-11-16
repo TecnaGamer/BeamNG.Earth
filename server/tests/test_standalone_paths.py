@@ -191,6 +191,7 @@ class StandalonePathsTest(unittest.TestCase):
                 row(furniture.G_BENCH, 10., 2.8, yaw=90., height=.9),
                 row(furniture.G_BIN, -2.1, 0., height=1.1),
                 row(furniture.G_STREET_TREE, 10., 2., height=10.),
+                row(furniture.G_BIN, 10., 2.30, height=1.1),  # collider clears the path by 3.6 cm
                 row(furniture.G_HYDRANT, 10., 4., height=.9),
                 row(furniture.G_BENCH, 10., 4., height=.9),
                 row(furniture.G_STREET_TREE, 10., 2.05, height=10.),

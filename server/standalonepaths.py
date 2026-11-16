@@ -83,16 +83,19 @@ def keep_outside(points, blockers, radii=None):
     if radii is None:
         return ~np.asarray(fast._ef.inside_blockers(points, *roads._blocker_segments(blockers)), bool)
     radii = np.broadcast_to(np.asarray(radii, np.float64), (len(points),))
+    x, y = points.T
+    left, right = x - radii, x + radii
+    bottom, top = y - radii, y + radii
     keep = np.ones(len(points), bool)
     for line, half in blockers:
         line = np.ascontiguousarray(line, np.float64)
         if len(line) < 2:
             continue
-        reach = half + radii
-        near = np.flatnonzero(keep & (points + reach[:, None] >= line.min(0)).all(1)
-                             & (points - reach[:, None] <= line.max(0)).all(1))
+        xmin, ymin = line.min(0) - half
+        xmax, ymax = line.max(0) + half
+        near = np.flatnonzero(keep & (right >= xmin) & (left <= xmax) & (top >= ymin) & (bottom <= ymax))
         if len(near):
-            keep[near] = fast._ef.polyline_dist(line, points[near]) > reach[near]
+            keep[near] = fast._ef.polyline_dist(line, points[near]) > half + radii[near]
     return keep
 
 
@@ -116,7 +119,7 @@ def clear_props(rows, blockers):
         if group in boxed:
             if clearance is None:
                 clearance = furniture.RoadClearance([(half, line) for line, half in blockers])
-            keep[indices] = [clearance.clear(rows[i]) for i in indices]
+            keep[indices] = [clearance.clear(rows[i], margin=0.0) for i in indices]
         else:
             radii = (0.0 if group == furniture.G_STREET_TREE else
                      pathfootprints.radii(group, [rows[i][6] for i in indices], 0.))
