@@ -187,13 +187,15 @@ def main():
                 bad = [i for i in infos if i.get("fallback")]
                 s["solves"] = {"cells": len(infos), "unknowns": int(sum(i.get("n", 0) for i in infos)),
                                "joins": int(sum(i.get("joins", 0) for i in infos)), "fallback": len(bad),
-                               "grade_left": int(sum(1 for i in infos if i.get("grade_left"))),
-                               "loosened": int(sum(1 for i in infos if i.get("loosened"))),
+                               "grade_broken": int(sum(i.get("grade_broken", 0) for i in infos)),
+                               "grade_broken_cells": int(sum(1 for i in infos if i.get("grade_broken"))),
+                               "grade_excess_m": round(max((i.get("grade_excess_m", 0.0) for i in infos), default=0.0), 3),
                                "statuses": sorted({str(i.get("status")) for i in infos}),
                                "worst_s": round(max((i.get("elapsed_s", 0.0) for i in infos), default=0.0), 2),
-                               "by_cell": {i["key"]: {"stage": i.get("stage"), "fallback": i.get("fallback"),
-                                                      "culprit": i.get("culprit"),
-                                                      "grade_left": i.get("grade_left"), "s": round(i.get("elapsed_s", 0), 2)}
+                               "by_cell": {i["key"]: {"fallback": i.get("fallback"), "culprit": i.get("culprit"),
+                                                      "grade_broken": i.get("grade_broken"),
+                                                      "grade_excess_m": round(i.get("grade_excess_m", 0.0), 3),
+                                                      "rounds": i.get("rounds_grade"), "s": round(i.get("elapsed_s", 0), 2)}
                                            for i in infos}}
                 results[name]["vsolve"] = s
             label = name if v == "passes" else "  (one solve)"

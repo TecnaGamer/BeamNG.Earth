@@ -2955,8 +2955,9 @@ class _Planner:
         (log.warning if info["fallback"] else log.info)(
             "vsolve: %s: %d roads, %d unknowns, %d joins, %d pins, %d dip rows: %s%s in %.2f s", key, n, info["n"],
             info["joins"], info["pins"], info["dips"], info.get("status"),
-            " (the passes' heights kept)" if info["fallback"] else " (no grade rows)" if info["loosened"] else "",
-            info["elapsed_s"])
+            " (the passes' heights kept: %s)" % ", ".join(info.get("culprit") or ["?"]) if info["fallback"] else
+            " (%d grade rows broken, the most by %.2f m)" % (info["grade_broken"], info["grade_excess_m"])
+            if info["grade_broken"] else "", info["elapsed_s"])
         with self.lock:
             self.__dict__.setdefault("_vsolve", {})[str(key)] = (kept, info)
 

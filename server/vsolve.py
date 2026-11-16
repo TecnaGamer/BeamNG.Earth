@@ -11,8 +11,11 @@ least-squares problem on the carriageway solver's kernel (carriageways.solve: ea
 - hard rows: a road's end at another road (its end or its middle, JOIN_M) at one height with it; a road's end on a
   bridge at the deck's height; the cut ends of a cell's margin at their profile (the next cell sees the same);
   under a deck, no higher than the underpass rule's dip (grading._lower_underpasses, run over the whole solve: whether
-  to dip and how deep stays a rule, RFC "what stays heuristic"); a grade ceiling per road (its class's, or its
-  ground's own where that is steeper: a steep street).
+  to dip and how deep stays a rule, RFC "what stays heuristic");
+- soft rows: a grade ceiling per road (its class's, or its ground's own where that is steeper: a steep street), met
+  wherever the hard rows leave room and broken by the least where they don't (earthfast 306's soft couplings: an
+  exact L1 penalty). Hard, one ceiling that could not hold made the whole cell's solve infeasible, and the cell
+  was solved again with looser ceilings, then none: three stages, in place of a row that says where it breaks.
 
 BNE_VSOLVE=shadow runs it beside the passes: their plans are used and kept as always; the solve's are only kept
 in memory for tools/grade_metrics.py to measure (Planner._vsolve). Off by default, and off it costs nothing.
@@ -39,6 +42,8 @@ DIP_M = 0.3             # m: a sample the underpass rule lowered this much is a 
 GRADE_SLACK = 0.01      # over the ground's own steepest: the ceiling of a road steeper than its class
 GRADE_ROW_M = 0.04      # a ceiling's rows where the profile comes this near it (a smooth correction stays under elsewhere)
 GRADE_ROWS_ON = os.environ.get("BNE_VSOLVE_GRADE", "on").strip().lower() not in ("0", "off", "false", "no")
+GRADE_PENALTY = 100.0   # a grade row's cost per m it is broken by, times its road's stiffness (hold x samples over its
+                        # spread: a ceiling's multiplier where it can hold is under that, so it holds as a hard one)
 GRADE_ROUNDS = 4        # solves at most, each adding the rows its heights broke (an active set)
 GRADE_ROW_REACH = 10    # segments either side of a broken one that get rows too (the next round's excess beside it)
 GRADE_D = 10.0          # the kernel's own grade bound, on the corrections: none
@@ -68,15 +73,6 @@ def _ceiling(ceil, xy, z0, floor=None):
     """A road's grade ceiling: its class's, its ground's own steepest where that is steeper (a steep street), floor."""
     g = max(float(ceil), _grade_10m(xy, z0) + GRADE_SLACK)
     return g if floor is None else max(g, float(floor))
-
-
-def _steepest_step(p):
-    """The steepest grade between neighbouring samples of plan p's heights."""
-    xy = np.asarray(p.xy, np.float64)[:, :2]
-    if len(xy) < 2:
-        return 0.0
-    return float(np.max(np.abs(np.diff(np.asarray(p.z, np.float64))) / np.maximum(np.hypot(*np.diff(xy, axis=0).T),
-                                                                                  1e-6)))
 
 
 def _cls(spec):
@@ -143,16 +139,14 @@ def nodes(xys, z0, r=JOIN_M, dz=JOIN_DZ_M):
     return [m for _r, m in sorted(out.items()) if len(m) > 1]
 
 
-def problem(plans, specs, z0, ceilings, ranks, pins=(), dips=None, grade_rows=True, extra=None, floors=None,
-            drop=()):
+def problem(plans, specs, z0, ceilings, ranks, pins=(), dips=None, grade_rows=True, extra=None, drop=()):
     """(chains, couplings) for carriageways.solve, whose unknowns are the corrections d = z - z0 (its smoothing on
     them, not on the heights: a road no row moves keeps its profile exactly, and a change is spread along it). plans:
     [Plan] (xy, z: the passes' heights, abut); z0: per plan the profile before the passes; ceilings: per plan its class's
     grade ceiling (None: none); ranks: per plan its road_rank; pins: (plan, sample, height) held; dips: per plan (n,)
-    upper bounds (NaN: none) or None; grade_rows: the ceilings as rows (off: the retry of an infeasible solve); extra:
-    {plan: segments} that get the ceiling's rows too (a solve's own excess: solve's rounds); floors: per plan a grade
-    its ceiling is at least (the passes' own steepest: solve's middle retry) or None; drop: kinds of rows left out
-    ("pins", "abut", "dips", "nodes": _culprit's tests)."""
+    upper bounds (NaN: none) or None; grade_rows: the ceilings as soft rows; extra: {plan: segments} that get the
+    ceiling's rows too (a solve's own excess: solve's rounds), and gets every segment given one here; drop: kinds of
+    rows left out ("pins", "abut", "dips", "nodes": _culprit's tests)."""
     if "pins" in drop:
         pins = ()
     if "dips" in drop:
@@ -197,15 +191,17 @@ def problem(plans, specs, z0, ceilings, ranks, pins=(), dips=None, grade_rows=Tr
             continue
         # (the ceiling on z = z0 + d, as rows on d, where z0 comes near it: elsewhere a smooth correction stays under)
         dz0 = np.diff(z)
-        g = _ceiling(ceil, xy, z, None if floors is None else floors[n])
+        g = _ceiling(ceil, xy, z)
         lim = g * np.maximum(ds, 1e-6)
         rows_at = set(np.flatnonzero(np.abs(dz0) >= lim - GRADE_ROW_M * np.maximum(ds, 1e-6)).tolist())
         if extra is not None:
             rows_at |= {i for i in extra.get(n, ()) if 0 <= i < m - 1}
+            extra[n] = set(rows_at)
+        pen = GRADE_PENALTY * hold * max(spread / step, 1.0)
         for i in sorted(rows_at):
             # z[i+1] - z[i] <= lim:  d[i] - d[i+1] >= dz0 - lim;  >= -lim:  d[i+1] - d[i] >= -lim - dz0
-            couplings.append((n, i, n, i + 1, "ge", float(dz0[i] - lim[i])))
-            couplings.append((n, i + 1, n, i, "ge", float(-lim[i] - dz0[i])))
+            couplings.append((n, i, n, i + 1, "ge", float(dz0[i] - lim[i]), pen))
+            couplings.append((n, i + 1, n, i, "ge", float(-lim[i] - dz0[i]), pen))
     n_joins = 0
     for members in node_list:
         # (each node one height: every member tied to one root, a star with no loops. Tied pair by pair, three ends
@@ -225,37 +221,32 @@ def problem(plans, specs, z0, ceilings, ranks, pins=(), dips=None, grade_rows=Tr
 
 
 def solve(plans, specs, z0, ceilings, ranks, pins=(), dips=None, budget=BUDGET_S):
-    """(heights per plan, info), or (None, info) when no solve was feasible (the passes' plans stand: the RFC's
-    fallback). info: the kernel's diagnostics plus n (unknowns), joins, loosened (solved only without the grade rows),
-    fallback, elapsed_s."""
+    """(heights per plan, info), or (None, info) when the hard rows are infeasible (the passes' plans stand: the RFC's
+    fallback). info: the kernel's diagnostics plus n (unknowns), joins, grade_broken (grade rows broken, over 1 mm),
+    grade_excess_m (the most one is), rounds_grade, fallback (and culprit), elapsed_s."""
     import carriageways
     t0 = time.perf_counter()
-    info = {"n": int(sum(len(z) for z in z0)), "loosened": False, "fallback": False, "grade_left": False}
+    info = {"n": int(sum(len(z) for z in z0)), "fallback": False, "grade_broken": 0, "grade_excess_m": 0.0}
     if not plans:
         info.update(joins=0, elapsed_s=0.0)
         return [], info
     out = None
-    passes_floor = [_steepest_step(p) + GRADE_SLACK for p in plans]
-    stages = ((True, None), (True, passes_floor), (False, None)) if GRADE_ROWS_ON else ((False, None),)
-    for stage, (rows, floors) in enumerate(stages, start=0 if GRADE_ROWS_ON else 2):
-        extra = {}
-        for _round in range(GRADE_ROUNDS if rows else 1):
-            chains, couplings, n_joins = problem(plans, specs, z0, ceilings, ranks, pins, dips, grade_rows=rows,
-                                                 extra=extra, floors=floors)
-            diag = {}
-            ds = carriageways.solve(chains, couplings, deadline=time.monotonic() + budget, diagnostics=diag)
-            info.update({k: (v if isinstance(v, (bool, int, float, str)) else str(v)) for k, v in diag.items()})
-            info["joins"] = n_joins
-            info["rounds_grade"] = _round + 1
-            if not (diag.get("converged") and diag.get("feasible")):
-                info["grade_left"] = out is not None    # (an earlier round's heights kept, some over their ceiling)
-                break
-            out = [np.asarray(z, np.float64) + np.asarray(d, np.float64) for z, d in zip(z0, ds)]
-            if not rows or not _over_ceiling(plans, out, z0, ceilings, extra, floors):
-                break
-        if out is not None:
-            info["stage"] = stage           # (0: the class ceilings; 1: no lower than the passes' own; 2: no grade rows)
-            info["loosened"] = stage > 0
+    extra = {}
+    for _round in range(GRADE_ROUNDS if GRADE_ROWS_ON else 1):
+        chains, couplings, n_joins = problem(plans, specs, z0, ceilings, ranks, pins, dips, grade_rows=GRADE_ROWS_ON,
+                                             extra=extra)
+        diag = {}
+        ds = carriageways.solve(chains, couplings, deadline=time.monotonic() + budget, diagnostics=diag)
+        info.update({k: (v if isinstance(v, (bool, int, float, str)) else str(v)) for k, v in diag.items()})
+        info["joins"] = n_joins
+        info["rounds_grade"] = _round + 1
+        if not (diag.get("converged") and diag.get("feasible")):
+            out = None          # (the hard rows: no earlier round's heights, which had fewer rows, stand for these)
+            break
+        out = [np.asarray(z, np.float64) + np.asarray(d, np.float64) for z, d in zip(z0, ds)]
+        info["grade_broken"] = int(diag.get("soft_broken", 0))
+        info["grade_excess_m"] = float(diag.get("soft_excess_m", 0.0))
+        if not GRADE_ROWS_ON or not _over_ceiling(plans, out, z0, ceilings, extra):
             break
     info["fallback"] = out is None
     if out is None:             # (which kind of row it is: the one whose absence makes the no-grade solve feasible)
@@ -278,9 +269,10 @@ def _culprit(plans, specs, z0, ceilings, ranks, pins, dips, budget):
     return out
 
 
-def _over_ceiling(plans, zs, z0, ceilings, extra, floors=None, slack=1e-3, reach=GRADE_ROW_REACH):
+def _over_ceiling(plans, zs, z0, ceilings, extra, slack=1e-3, reach=GRADE_ROW_REACH):
     """The segments where heights zs break their plan's ceiling (as problem's rows put it) and have no row yet, with
-    `reach` segments either side, added to extra {plan: set}; how many were new."""
+    `reach` segments either side, added to extra {plan: set}; how many were new (a broken row's segment has one: soft,
+    it is broken where the hard rows leave no room, and another round would not change it)."""
     new = 0
     for n, (p, z, b) in enumerate(zip(plans, zs, z0)):
         ceil = ceilings[n]
@@ -288,12 +280,13 @@ def _over_ceiling(plans, zs, z0, ceilings, extra, floors=None, slack=1e-3, reach
             continue
         xy = np.asarray(p.xy, np.float64)[:, :2]
         ds = np.maximum(np.hypot(*np.diff(xy, axis=0).T), 1e-6)
-        g = _ceiling(ceil, xy, np.asarray(b, np.float64), None if floors is None else floors[n])
+        g = _ceiling(ceil, xy, np.asarray(b, np.float64))
         bad = np.flatnonzero(np.abs(np.diff(z)) > g * ds + slack)      # (z: this solve's heights)
-        if not len(bad):
-            continue
         got = extra.setdefault(n, set())
-        for i in bad.tolist():
+        bad = [i for i in bad.tolist() if i not in got]
+        if not bad:
+            continue
+        for i in bad:
             for j in range(i - reach, i + reach + 1):
                 if j not in got:
                     got.add(j)

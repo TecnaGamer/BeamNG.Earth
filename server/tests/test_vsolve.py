@@ -24,7 +24,7 @@ def spec(cls):
 
 def have_kernel():
     try:
-        fast.require(156, "carriageway_profiles")
+        fast.require(306, "carriageway_profiles' soft couplings")
         return True
     except Exception:
         return False
@@ -90,11 +90,29 @@ class SolveTest(unittest.TestCase):
         self.assertLessEqual(float(zs[0][48:53].max()), -2.0 + 1e-4)
         self.assertAlmostEqual(float(zs[0][-1]), 0.3, places=4)
 
+    def test_a_ceiling_that_cannot_hold_breaks_where_it_must_and_nowhere_else(self):
+        # (a deck end held 6 m over a road whose other end is held at 0 m 40 m on: 15 %, over its class's 9 %; hard,
+        # the whole solve was infeasible; soft, the grade is broken there and the rest of the road keeps its own)
+        z = np.zeros(len(S))
+        z[0] = 6.0
+        p = plan(np.c_[S, np.zeros_like(S)], z, abut=(True, False))
+        zs, info = vsolve.solve([p], [spec("secondary")], [np.zeros(len(S))], [0.09], [0], pins=[(0, 20, 0.0)])
+        self.assertTrue(info["feasible"] and not info["fallback"], info)
+        self.assertGreater(info["grade_broken"], 0, info)
+        self.assertAlmostEqual(float(zs[0][0]), 6.0, places=4)
+        self.assertAlmostEqual(float(zs[0][20]), 0.0, places=4)
+        g = np.abs(np.diff(zs[0])) / 2.0
+        # (the least excess, 6 m - 9 % of 40 m: no segment between the two under its ceiling, which would put more
+        # over it elsewhere; how it is spread over them, the smoothing's)
+        self.assertGreater(float(g[:20].min()), 0.09 - 2e-3)
+        self.assertLess(float(g[:20].max()), 0.3)
+        self.assertLessEqual(float(g[20:].max()), 0.09 + 1e-3)   # (past the pin, where it can hold: held)
+
     def test_a_steep_street_keeps_its_grade(self):
         z0 = 0.2 * S                     # (20 % on its ground, over its class's 12 %)
         p = plan(np.c_[S, np.zeros_like(S)], z0.copy())
         zs, info = vsolve.solve([p], [spec("residential")], [z0], [0.12], [0])
-        self.assertTrue(info["feasible"] and not info["loosened"], info)
+        self.assertTrue(info["feasible"] and not info["grade_broken"], info)
         self.assertLess(float(np.abs(zs[0] - z0).max()), 0.05)
 
 
