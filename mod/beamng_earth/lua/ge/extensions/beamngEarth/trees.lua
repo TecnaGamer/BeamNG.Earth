@@ -219,9 +219,9 @@ M.CATALOG = {
     { ECA .. 'trees/trees_douglasfir/tree_douglasfir_large_c', 18.9 }, { ECA .. 'trees/trees_douglasfir/tree_douglasfir_large_a', 19.6 },
     { ECA .. 'trees/trees_douglasfir/tree_douglasfir_large_b', 21.4 }, { ECA .. 'trees/trees_douglasfir/tree_douglasfir_large_d', 21.7 },
     { IT .. 'trees/trees_italy/scots_pine', 18.9 },
-    -- (the stock survey 2026-11-15) young firs for 5-8 m, and Italy's slender forest pine
+    -- (the stock survey 2026-11-15) young firs for 5-8 m
     { ECA .. 'trees/trees_douglasfir/tree_douglasfir_small_d', 5.01 },
-    { ECA .. 'trees/trees_douglasfir/tree_douglasfir_small_c', 7.78 }, { IT .. 'trees/trees_italy/scots_pine_filler', 14.21 },
+    { ECA .. 'trees/trees_douglasfir/tree_douglasfir_small_c', 7.78 },
   },
   shrub = {
     { ECA .. 'trees/ECA_coast_bush/generibush', 1.8 }, { ECA .. 'trees/trees_aspen/tree_aspen_bush_a', 2.2 },
@@ -437,9 +437,11 @@ M.CATALOG = {
     { ECA .. 'trees/trees_beech/tree_beech_forest_a', 20.2 }, { ECA .. 'trees/trees_beech/tree_beech_large_b', 21.1 },
     { ECA .. 'trees/trees_beech/tree_beech_forest_b', 21.75 },
   },
+  -- (2026-11-16, the user's test: Italy's scots_pine_filler, a sparse forest filler meant to be seen among other trees,
+  -- stood alone like no pine in Poland; West Coast USA's sparse forest Monterey pine out too: a young maritime pine,
+  -- a young Monterey pine for 7-11 m, Italy's Scots pine above, M.pick scaling it down to 12 m)
   pine_eu = {
     { IT .. 'trees/trees_italy/maritime_pine_bush', 5.05 }, { WCA .. 'trees/trees_conifer/pine_radiata_small', 8.6 },
-    { WCA .. 'trees/trees_conifer/pine_radiata_forest', 13.3 }, { IT .. 'trees/trees_italy/scots_pine_filler', 14.21 },
     { IT .. 'trees/trees_italy/scots_pine', 18.9 },
   },
   spruce = {
