@@ -59,7 +59,8 @@ VERSION = 31          # (the cached cells hold their groups: 14 for the regional
                       # the deserts'), ferns on the forest floor, dead wood added in remote forest (_remote_floor), the
                       # mangroves' trees tropical
                       # 31: dead wood only added, in remote forest on level ground (30's replaced bushes and reached
-                      # over roads); the tropics' vine-draped thickets the same way (G_TRO_THICKET)
+                      # over roads); the tropics' vine-draped thickets the same way (G_TRO_THICKET); no mossy forest
+                      # oaks or dead trees by the roads and in town (OPEN_FROM)
 TREE_MIN_M = 3.0
 # The canopy raster, the scatter grids and the crown radii are in Web Mercator units (EPSG:3857: a metre there is
 # cos(lat) metres on the ground) and were tuned by eye at mid latitudes. Past them the same pixel counts covered less
@@ -78,13 +79,14 @@ GROUPS = ("deciduous", "conifer", "shrub", "rock", "pine_west", "palm", "juniper
           "birch", "oak", "beech", "pine_eu", "spruce", "snag_broad", "snag_conifer", "palm_dry",
           "birch_clump", "oak_clump", "beech_clump",
           # (30: the bushes' and forest floors' own, shrub_groups; the stock survey 2026-11-16)
-          "maquis", "shrub_north", "shrub_tropical", "fern", "deadwood", "tro_thicket")
+          "maquis", "shrub_north", "shrub_tropical", "fern", "deadwood", "tro_thicket",
+          "deciduous_open", "oak_open")
 (G_DECIDUOUS, G_CONIFER, G_SHRUB, G_ROCK, G_PINE_WEST, G_PALM, G_JUNIPER, G_DESERT_SHRUB, G_DESERT_ROCK,
  G_OAK_WEST, G_TROPICAL, G_MEDITERRANEAN, G_CONIFER_CLUMP, G_DECIDUOUS_CLUMP, G_OAK_WEST_CLUMP,
  G_MEDITERRANEAN_CLUMP, G_VINE, G_STRAW_N, G_STRAW_S, G_SILAGE_N, G_SILAGE_S, G_EUCALYPTUS, G_EUCALYPTUS_CLUMP,
  G_POPLAR, G_CREOSOTE, G_BIRCH, G_OAK, G_BEECH, G_PINE_EU, G_SPRUCE, G_SNAG_BROAD, G_SNAG_CONIFER, G_PALM_DRY,
  G_BIRCH_CLUMP, G_OAK_CLUMP, G_BEECH_CLUMP, G_MAQUIS, G_SHRUB_NORTH, G_SHRUB_TROPICAL, G_FERN, G_DEADWOOD,
- G_TRO_THICKET) = range(42)
+ G_TRO_THICKET, G_DECIDUOUS_OPEN, G_OAK_OPEN) = range(44)
 # Far clumps (GitHub #1074, "trees cost too much"; the asset survey 2026-11-10): a forest's canopy trees gathered on a
 # world-fixed grid of about CLUMP_CELL_M squares (a whole number of them a geotile: none straddles two); a square with
 # CLUMP_MIN of them gets one item of a stock clump shape (trees.lua's *_clump groups: East Coast USA's
@@ -443,6 +445,17 @@ def species_groups(group, height, lat, lon, lcls, koppen, elev, u_broad, u_conif
 
 
 SNAG_FROM = ((G_DECIDUOUS, G_BIRCH, G_OAK, G_BEECH, G_OAK_WEST), (G_CONIFER, G_PINE_EU, G_SPRUCE, G_PINE_WEST))
+OPEN_FROM = {G_DECIDUOUS: G_DECIDUOUS_OPEN, G_OAK: G_OAK_OPEN, G_SNAG_BROAD: G_DECIDUOUS_OPEN,
+             G_SNAG_CONIFER: G_CONIFER}
+
+
+def open_groups(group, open_):
+    """group with the trees in the open (per item, open_) in their OPEN_FROM twins. Pure."""
+    g = np.array(group, np.uint8, copy=True)
+    o = np.asarray(open_, bool)
+    for a, b in OPEN_FROM.items():
+        g[o & (g == a)] = b
+    return g
 PALM_FROM = (G_DECIDUOUS, G_BIRCH, G_OAK, G_BEECH, G_MEDITERRANEAN)
 
 # The bushes by the climate (30; the stock survey 2026-11-16): the same bushes in the same places (the canopy's 1-3 m
@@ -481,6 +494,11 @@ DEADWOOD_BUILT_M = 150.0
 DEADWOOD_H = (1.0, 3.0)     # m: a dead-wood item's height drawn in this range (the shapes' 1.0-3.0 m, M.pick's)
 DEADWOOD_MAX_SLOPE = 0.12   # rise over run (7 degrees)
 THICKET_H = (5.5, 7.5)
+# Trees in the open (OPEN_ROAD_M from a road's edge, or on built-up land): no forest-interior shapes there (East Coast
+# USA's mossy oaks, tree_oak_forest_a/b and large_b/c: moss on a trunk by an asphalt road, the user's test 2026-11-16)
+# and no dead trees (taken down by the road): the group's _open twin (OPEN_FROM above; the mod's catalog without
+# those shapes).
+OPEN_ROAD_M = 15.0
 FERN_MAX_M = 1.6            # (ferns only for the low bushes)
 SHRUB_FROM = (G_SHRUB, G_DESERT_SHRUB)
 
@@ -827,6 +845,13 @@ class Vegetation:
         group = regional(group, th, tlat, tlon, lcls, _hash01(gx, gy, 7),
                          riparian=None if near_water is None else near_water[jj, ii])
         group = self._species(group, th, tlat, tlon, lcls, tmx, tmy, gx, gy, clat, u_mix)
+        # (31) the trees in the open: by a road (OPEN_ROAD_M from its edge) or on built-up land
+        open_ = lcls == WC["built"]
+        if curb.any():
+            sec = 1.0 / max(0.05, math.cos(math.radians(clat)))
+            near = _dilate(curb, max(1, int(round(OPEN_ROAD_M * sec / chm.dx))))
+            open_ |= near[jj, ii]
+        group = open_groups(group, open_)
         kind = np.where(is_tree, KIND_TREE, KIND_BUSH).astype(np.uint8)
         jitter = chm.dx * 0.5
         tlon2, tlat2 = _to4326(mx[ii] + (u3 - 0.5) * jitter, my[jj] + (u4 - 0.5) * jitter)

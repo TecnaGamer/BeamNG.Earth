@@ -463,6 +463,24 @@ M.CATALOG = {
     { WCA .. 'trees/trees_palm/fanpalm_slim', 20.8 },
   },
   birch_clump = { { ECA .. 'trees/trees_aspen/tree_aspen_forest_group', 20.1 } },
+  -- trees in the open (server vegetation.OPEN_FROM, 31: by a road, in town): without East Coast USA's mossy forest oaks
+  -- (tree_oak_forest_a/b, tree_oak_large_b/c wear Moss_01 on the trunk: by an asphalt road, the user's test 2026-11-16)
+  deciduous_open = {
+    { ECA .. 'trees/trees_oak/tree_oak_sml_a', 8.6 }, { ECA .. 'trees/trees_oak/tree_oak_sml_b', 9.5 },
+    { ECA .. 'trees/trees_aspen/tree_aspen_small_a', 8.3 }, { ECA .. 'trees/trees_aspen/tree_aspen_small_c', 9.7 },
+    { ECA .. 'trees/trees_beech/tree_beech_small_c', 9.9 }, { ECA .. 'trees/trees_oak/tree_oak_large_a', 13.2 },
+    { ECA .. 'trees/trees_beech/tree_beech_large_c', 17.4 }, { ECA .. 'trees/trees_aspen/tree_aspen_forest_b', 18.5 },
+    { ECA .. 'trees/trees_beech/tree_beech_forest_a', 20.2 }, { ECA .. 'trees/trees_beech/tree_beech_large_b', 21.1 },
+    { ECA .. 'trees/trees_aspen/tree_aspen_small_low', 6.05 }, { ECA .. 'trees/trees_beech/tree_beech_bush_e', 6.51 },
+    { ECA .. 'trees/trees_beech/tree_beech_bush_d', 7.23 }, { ECA .. 'trees/trees_aspen/tree_aspen_small_b', 8.18 },
+    { ECA .. 'trees/trees_aspen/tree_aspen_small_d', 10.37 }, { ECA .. 'trees/trees_beech/tree_beech_small_b', 11.6 },
+    { ECA .. 'trees/trees_beech/tree_beech_small_d', 13.32 },
+    { ECA .. 'trees/trees_beech/tree_beech_forest_b', 21.75 },
+  },
+  oak_open = {
+    { ECA .. 'trees/trees_oak/tree_oak_sml_a', 8.6 }, { ECA .. 'trees/trees_oak/tree_oak_sml_b', 9.5 },
+    { ECA .. 'trees/trees_oak/tree_oak_large_a', 13.2 },
+  },
   -- the bushes by the climate (server vegetation.shrub_groups, 30; the stock survey 2026-11-16, heights from the shapes'
   -- bounds, every tree-kind shape with its imposter; the grey bushes are groundcover shapes as desert_shrub's):
   -- the summer-dry climates' maquis and garrigue, California's chaparral (Italy's bushes, Utah's junipers and low grey

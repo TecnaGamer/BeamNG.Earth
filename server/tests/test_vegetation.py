@@ -466,6 +466,28 @@ class ShrubTest(unittest.TestCase):
             got = v.cell(KEY)
             self.assertEqual(int((got.group == veg.G_DEADWOOD).sum()), want, f"slope {k}")
 
+    def test_no_mossy_forest_trees_in_the_open(self):
+        g = veg.open_groups(np.array([veg.G_OAK, veg.G_DECIDUOUS, veg.G_SNAG_BROAD, veg.G_SNAG_CONIFER, veg.G_BEECH,
+                                      veg.G_OAK], np.uint8), np.array([1, 1, 1, 1, 1, 0], bool))
+        self.assertEqual(g.tolist(), [veg.G_OAK_OPEN, veg.G_DECIDUOUS_OPEN, veg.G_DECIDUOUS_OPEN, veg.G_CONIFER,
+                                      veg.G_BEECH, veg.G_OAK])
+        md = FakeMapData()
+        it = veg.Vegetation(md, None).cell(KEY)
+        trees = it.take(it.kind == veg.KIND_TREE)
+        rlon, rlat = md.lonlat(100, 400)
+        d = np.hypot((trees.lon - rlon) * 85000, (trees.lat - rlat) * 111000)
+        self.assertEqual(int(trees.group[np.argmin(d)]), veg.G_DECIDUOUS_OPEN, "the street tree")
+        self.assertEqual(int(trees.group[np.argmax(d)]), veg.G_DECIDUOUS, "the free crown, 300 m off")
+        import os
+        root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        path = os.path.join(root, "mod/beamng_earth/lua/ge/extensions/beamngEarth/trees.lua")
+        lua = open(path, encoding="utf-8").read()
+        for name in ("deciduous_open", "oak_open"):
+            i = lua.index(f"\n  {name} = {{")
+            body = lua[i:lua.index("\n  },", i)]
+            self.assertNotIn("tree_oak_forest", body)
+            self.assertNotIn("tree_oak_large_b", body)
+
     def test_dead_wood_keeps_off_the_roads(self):
         m = np.zeros((200, 200), bool)
         m[100, :] = True                    # a road along row 100
