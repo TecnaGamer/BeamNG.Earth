@@ -638,6 +638,35 @@ do
   T.check(core.teleport(10.5, 20.5, nil, { record = false }) == true and #places.recentList() == n2
     and places.recentList()[1] == top, 'recent places: a tool teleport (record = false) is not recorded')
 end
+-- "Where you left off" with the car's heading: taken only when the start's own request commits; a placement before
+-- that (the level start's flat ground, placeFrames) neither uses nor drops it (Codex on 2ffc2fcc)
+do
+  local stH = core._state()
+  local rots, savedQ, savedST = {}, quatFromDir, spawn.safeTeleport
+  quatFromDir = function(d) return { d = d } end
+  spawn.safeTeleport = function(v, pos, rot, ...) rots[#rots + 1] = rot; return savedST(v, pos, rot, ...) end
+  local nPrep = #received('prepare_anchor')
+  T.check(core._teleportTo(46.6, 7.9, nil, 'start', 90) == true, 'start teleport with a heading asked')
+  local reqH = last('prepare_anchor')
+  T.check(#received('prepare_anchor') == nPrep + 1 and stH.startHeading == nil, 'heading not in use before the commit')
+  -- an earlier placement (the flat ground's) while the request is pending: the car's own heading, the saved one kept
+  stH.placeFrames, stH.placeZ = 1, 1181
+  local nRot = #rots
+  frames(2)
+  T.check(#rots == nRot + 1 and math.abs(rots[#rots].d.x) < 1e-9 and stH.startHeading == nil and stH.headingFor
+    and stH.headingFor.heading == 90, 'a placement before the commit keeps the car\'s heading and the saved one waits')
+  serverSend({ type = 'anchor_ready', requestId = reqH.requestId, anchorId = 77, lat = reqH.lat, lon = reqH.lon,
+    groundZ = 1180, px = reqH.px, py = reqH.py, terrain = terrainMsg(reqH.cx or 0, reqH.cy or 0,
+    '/temp/beamngEarth/s1/hm_77_0_0.png', 1100) })
+  nRot = #rots
+  T.check(pumpUntil(function() return #rots > nRot end, 40), 'the start teleport placed the car')
+  local hx, hy = core.headingDir(90, stH.placeX or 0, stH.placeY or 0)
+  local d = rots[#rots] and rots[#rots].d
+  T.check(d and math.abs(d.x - hx) < 1e-6 and math.abs(d.y - hy) < 1e-6 and hx > 0.99,
+    string.format('placed facing the saved heading (east): %.3f %.3f', d and d.x or 0, d and d.y or 0))
+  T.check(stH.startHeading == nil and stH.headingFor == nil, 'the heading used once')
+  quatFromDir, spawn.safeTeleport = savedQ, savedST
+end
 T.check(core.setFarBudget(3) == 3 and core.setFarBudget(10) == 4, 'far budget setter (governor target, 1-4 ms)')
 
 -- M1 (docs/V1_4_SPEC.md 3.1): a FORMAT 4 server sends hello.cells; the mod reads formats 3 and 4

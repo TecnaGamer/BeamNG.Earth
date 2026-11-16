@@ -578,6 +578,10 @@ local function commitTeleport(msg)
   st.loadingUntil = st.clock + LOADING_AFTER_TELEPORT_S
   st.teleportAt = st.clock         -- (the loading cover past loadingUntil: M._loadCover)
   st.placeFrames = PLACE_DELAY_FRAMES
+  -- "Where you left off": the heading asked with this very request, for placePlayer (once)
+  local hf = st.headingFor
+  st.startHeading = hf and msg.requestId ~= nil and hf.requestId == msg.requestId and hf.heading or nil
+  st.headingFor = nil
   st.placeZ = (msg.groundZ or 0) + 1.0
   st.placeX, st.placeY = tonumber(msg.px) or 0, tonumber(msg.py) or 0
   -- in a tunnel: set down on the ground over it first (placed in the tube before its road tile came, the car fell
@@ -3418,7 +3422,7 @@ end
 -- (M.teleport with opts.record == false: test tools like tools/benchmark.lua) is not recorded
 teleportTo = function(lat, lon, name, kind, heading)
   pcall(M._psum.mod.teleport)
-  st.startHeading = nil      -- (only "Where you left off" sets the car's heading: the start's teleport, below)
+  st.startHeading, st.headingFor = nil, nil   -- (only "Where you left off" sets the car's heading: the start's, below)
   lat, lon = tonumber(lat), tonumber(lon)
   if not lat or not lon or lat < -90 or lat > 90 or lon < -180 or lon > 180 then
     setStatus('Teleport: invalid lat/lon')
@@ -3446,7 +3450,10 @@ teleportTo = function(lat, lon, name, kind, heading)
   st.placeSnapped = place ~= nil and not (okA and adLat)
   st.teleportRetry = nil       -- (a new teleport replaces a failed one's retry)
   if requestAnchor(aLat, aLon, 'teleport', cx, cy, place) then
-    st.startHeading = places.validHeading(heading)   -- (degrees clockwise from true north; placePlayer)
+    -- (degrees clockwise from true north) for this request only: taken when its anchor commits (commitTeleport), so a
+    -- placement before that (the level start's flat ground) or another request never uses it (Codex on 2ffc2fcc)
+    local h = places.validHeading(heading)
+    st.headingFor = h and st.pending and { requestId = st.pending.requestId, heading = h } or nil
     setStatus(string.format('Preparing terrain at %.5f, %.5f ...', lat, lon))
     loadprogress.reset()
     loadprogress.start(st.clock)        -- the bar says "Loading" from now (loadprogress.lua)
@@ -3488,6 +3495,8 @@ end
 
 -- name (optional): the place's name for the recent places (places.lua; the settings page's Go);
 -- opts (optional): { record = false } keeps it out of the recent places (test tools)
+-- (tests: the level start's own teleport, with the heading "Where you left off" saved)
+function M._teleportTo(...) return teleportTo(...) end
 function M.teleport(lat, lon, name, opts)
   local kind = (type(opts) == 'table' and opts.record == false) and 'tool' or 'teleport'
   return teleportTo(lat, lon, name, kind)
