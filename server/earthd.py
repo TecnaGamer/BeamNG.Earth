@@ -102,6 +102,7 @@ import distanttraffic          # noqa: E402
 import prewarm as prewarmmod  # noqa: E402
 import parking as parkingmod  # noqa: E402
 import gasstations as gasstationsmod  # noqa: E402
+import genground  # noqa: E402
 import roads as roadsmod  # noqa: E402
 import roadsurf as roadsurfmod  # noqa: E402
 import reach as reachmod  # noqa: E402
@@ -5302,6 +5303,13 @@ class Server:
         path = os.path.join(self.out_dir, name)
         rgb = np.asarray(rgb, np.uint8)
         stamps = [("imagery", time.perf_counter())]
+        if genground.ON and not quick:      # the generated ground from that Sentinel-2 photo and the map's regions
+            try:
+                rgb = genground.generate(rgb, anchor.frame, x0, y0, size, BASE_RENDER_PX, self.mapdata, self.surface,
+                                         self.road_widths)
+            except Exception as e:      # the Sentinel-2 photo stays as it is
+                log.info("base photo %s: generated ground: %s: %s", (anchor.id, cx, cy), type(e).__name__, e)
+            stamps.append(("generated", time.perf_counter()))
         if self.buildings and self.mapdata is not None and not quick:   # no roofs beside the 3D buildings
             try:
                 mask = buildingsmod.photo_mask(anchor.frame, x0, y0, size, BASE_RENDER_PX, self.mapdata)
@@ -13155,6 +13163,9 @@ def main():
             args.imagery = cdnmod.chain(args.imagery, netfetch.Fetcher(offline=args.offline), args.cache_dir)
         except Exception as e:
             log.warning("cdn: %s: %s", type(e).__name__, e)
+        if genground.ON:            # (the generated ground: Sentinel-2 alone, no 1 m photo fetched anywhere)
+            args.imagery = genground.chain(args.imagery)
+            log.info("generated ground on: imagery chain %s", ",".join(args.imagery))
     if "BNGE_DEM_CDN" not in os.environ:     # (Mapterhorn's z0-12 from the tile host where the switch says: dem.py)
         import cdn as cdnmod
         try:

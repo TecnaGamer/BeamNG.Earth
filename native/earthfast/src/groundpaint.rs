@@ -244,7 +244,7 @@ pub fn dash_pieces<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, dash: 
 
 /// surface._hash01: a lattice point's pseudo-random value in [-1, 1] (uint64 arithmetic, wrapping as numpy's).
 #[inline]
-fn noise_hash(ix: i64, iy: i64, seed: u64) -> f64 {
+pub(crate) fn noise_hash(ix: i64, iy: i64, seed: u64) -> f64 {
     let mut h = (ix as u64).wrapping_mul(0x9E3779B185EBCA87)
         ^ (iy as u64).wrapping_mul(0xC2B2AE3D27D4EB4F)
         ^ seed.wrapping_mul(0x165667B19E3779F9);

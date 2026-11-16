@@ -404,8 +404,11 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   manholes**; **Road steepness limit**; **Road surface from aerial photos**; **Rougher land off the roads**; **Rock
   faces in deep road cuts**; **Ground over shallow tunnels**; **More undersea tunnels**; **Traffic through tunnels**;
   **Solid railway rails**; **Overhead railway wires**; **Grouped level crossings**; **Railway tunnels**; **Rounded
-  railway curves**; **Closed 3D models**; **Detailed Canadian lidar**; **Show the older world while rebuilding** (after
-  an update). A switch set by hand in the server's environment wins over the page.
+  railway curves**; **Closed 3D models**; **Detailed Canadian lidar**; **Generated ground** (`BNE_GEN_GROUND=on`: the
+  ground near you made from 10 m Sentinel-2 colour and the map's land cover, fields, parks, water, tree heights, roads
+  and buildings instead of 1 m aerial photos, which are then not downloaded at all; less real detail, a summer look);
+  **Show the older world while rebuilding** (after an update). A switch set by hand in the server's environment wins
+  over the page.
 - **Max RAM for BeamNG.Earth** (Performance settings page): the most memory the world server may hold, all its
   processes together (the game's own memory is not counted). **Auto** (the default) takes a third of your computer's
   memory below 24 GB (about 5 GB on a 16 GB PC, at least 1.5 GB) and 60 % of it on a bigger computer, at most 24 GB
