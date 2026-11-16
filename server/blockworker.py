@@ -1478,12 +1478,13 @@ def _dem_warm(frame, box, zoom):
 @profile_step('Road tile assembly')
 def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stations, buried, lamp_region, country,
                 q, rkey, centre, skin_margin=0.0, walks_raw=None, cache_dir=None, out_dir=None, vfs_dir=None, pole_profile=None,
-                de_junctions=False, towns_on=False, wear=None):
+                de_junctions=False, towns_on=False, wear=None, aid=None):
     """A road tile's parts in frame: tile (tx, ty) of an anchor, or a geotiles.GeoBox (its own frame, no anchor in
     it). g: the frame's grading.Grader view (None: no grading); q: the height quantum the sidewalks' curbs are put on
     (None: the ground as it is: a geotile's content); rkey: the railways' ground cache key; centre (lat, lon): the
     place's (the brick pavement's region). skin_margin, walks_raw: roads.build_tile's (a geotile's skin pieces).
-    out_dir, vfs_dir: where the town signs' faces are written (town_signs; None: no town signs)."""
+    out_dir, vfs_dir: where the town signs' faces are written (town_signs; None: no town signs). aid: the anchor's id
+    (the clearance log's lines name it; None for a geotile)."""
     import parking as parkingmod
     import rails as railsmod
     import roadmesh as roadmeshmod
@@ -1709,6 +1710,7 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
     # Share the bridge mesh's exact parapet geometry with the tile builder.
     # (the junction pads on the bridges round the tile: their decks' parapets stop at them; the tile draws its own:
     # roads.deck_pads)
+    pad_parts = []                  # (the bridges' parts with their lateral shifts: the clearance check's decks too)
     try:
         pad_parts = list(bridges.parts(cells, (box[0] - 40, box[1] - 40, box[2] + 40, box[3] + 40)))
         pad_parts = roadsmod.shifted_parts(pad_parts, roadsmod.deck_shift_fn(frame, cells, urban, _s.widths, left_hand))
@@ -1800,7 +1802,8 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
         except Exception as e:
             log.debug("catenary: %s: %s", type(e).__name__, e)
     rail_props = []                 # (buffer stops and the walk signs at footway crossings: railways.tile_mesh's furniture)
-    P.rmesh, rail_decks = railways.tile_mesh(frame, tx, ty, rcells, rground,
+    rail_tracks = []                # (the tracks drawn, with their beds: the clearance check's wagons stand on them)
+    P.rmesh, rail_decks = railways.tile_mesh(frame, tx, ty, rcells, rground, tracks_out=rail_tracks,
                                  far_ground=railways.point_ground(
                                      frame, lambda la, lo: ground(frame, la, lo, _s.dem.sample(la, lo, zoom)),
                                      ("raw",) + tuple(rkey)),
@@ -1923,7 +1926,31 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
     P.bus_col = _station_collision(frame, box, elev, getattr(_s, "md", None)) if buildings else None
     P.turbines = turbine_rows
     P.scene = _scene
+    P.roads, P.deck_parts, P.rail_tracks = near_roads, pad_parts, rail_tracks
+    _clearance_log(P, frame, tx, ty, box, cells, tunnels, q, aid)
+    mark("clearance")
     return P
+
+
+def _clearance_log(P, frame, tx, ty, box, cells, tunnels, q, aid):
+    """The clearance log's check of a finished road tile (clearance.py): reference trucks and wagons stood on its roads, decks,
+    tunnels and tracks, what the terrain or the other meshes put in their bodies one line each in the server's log.
+    Here, where the tile's plans, its meshes and the neighbouring tiles' ground are all at hand, and in the worker that builds
+    the tile: off the event loop. It only logs: nothing the tile is made of changes."""
+    import clearance
+    if not clearance.enabled():
+        return
+    import railways
+    import roadmesh as roadmeshmod
+    import roads as roadsmod
+
+    def build():
+        tparts = list(tunnels.parts(cells, box)) if tunnels is not None else []
+        lines = clearance.tile_lines(P.roads, P.deck_parts, tparts, P.rail_tracks, railways.RAIL_TOP_M)
+        meshes = clearance.tile_meshes(P.origin, deck=P.dmesh, tunnel=P.tmesh, rail=P.rmesh)
+        return (lines, lambda x, y: roadsmod.box_owns(box, x, y),
+                lambda x, y: roadmeshmod.drawn_ground(frame, P.drawn, np.c_[x, y], q), meshes)
+    clearance.run(build, frame, tx.key if hasattr(tx, "key") else f"{tx}_{ty}", aid)
 
 
 def _roads_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks, lift, buildings, left_hand, mph, q,
@@ -1937,7 +1964,7 @@ def _roads_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks, lift, 
     P = _tile_parts(mark, frame, (tx, ty), zoom, g, buildings, left_hand, mph, gas_stations, buried, lamp_region,
                     country, q, (aid, lat, lon), (lat, lon),
                     pole_profile=pole_profile, cache_dir=os.path.dirname(out_dir), out_dir=out_dir, vfs_dir=vfs_dir,
-                    de_junctions=de_junctions, towns_on=towns_on, wear=wear)
+                    de_junctions=de_junctions, towns_on=towns_on, wear=wear, aid=aid)
     mesh = roadmeshmod.build(frame, P.chunks, P.elev, P.origin, lift, clip=P.box, follow=True, q=q, drawn=P.drawn,
                              context=P.ctx)
     mark("mesh")
