@@ -2920,7 +2920,19 @@ class _Planner:
                         pins.append((i, e, float(z_before[i][e])))
         ceilings = [guard_limits(sp, p)[0] for sp, p in zip(pspecs, ground)]
         ranks = [road_rank(sp) for sp in pspecs]
-        dips = vsolvemod.dips_under(ground, z_before[:n], self._decks_near(key))
+        dips = [None] * n
+        if UNDER_ON:            # (the dips as the passes' rule makes them, but over the whole solve: its margin too. The
+            # passes make them to UNDER_NEAR_M past the box only; taken from them, a cell's own dip spread over the
+            # edge into a neighbour that had none there: 6.6 m seam steps in Tokyo)
+            under = [(fid, Plan(p.xy, np.array(z, np.float64), p.half, p.abut, p.cut, p.road_half))
+                     for (fid, p), z in zip(plans[:n], z_before[:n])]
+            for (_f, p), (_g, q) in zip(plans[:n], under):
+                q.rid, q.max_wall, q.bank = p.rid, p.max_wall, getattr(p, "bank", None)
+            self._lower_underpasses(key, under, near=CLIP_MARGIN_M + VERTEX_STEP)
+            for i, ((_f, q), z) in enumerate(zip(under, z_before[:n])):
+                low = np.asarray(q.z, np.float64) <= np.asarray(z, np.float64) - vsolvemod.DIP_M
+                if low.any():
+                    dips[i] = np.where(low, np.asarray(q.z, np.float64), np.nan)
         zs, info = vsolvemod.solve(ground, pspecs, z_before[:n], ceilings, ranks, pins, dips)
         if zs is None:          # (no feasible solve: the passes' heights, as the RFC's fallback; counted in info)
             zs = [np.array(p.z, np.float64) for p in ground]
@@ -3861,7 +3873,7 @@ class _Planner:
             self._marks_seen("_junction_memo", k)
             return memo[k]
 
-    def _lower_underpasses(self, key, plans):
+    def _lower_underpasses(self, key, plans, near=UNDER_NEAR_M):
         """Lower, in place, the plans that cross under a short never-raised overpass (UNDER_*), and the roads joined
         to them (underpass_offsets), only within the cell's box (each plan is trimmed to it after). Solved on every
         ground road and span within UNDER_REACH_M of the box, from whichever cells they lie in, each road whole, its
@@ -3869,7 +3881,7 @@ class _Planner:
         lay only in the next cell was pinned there by one cell and lowered 3.5 m by the other; their copies met as a
         step on US-101 by Los Angeles' Union Station, 2026-10-27.)"""
         f64 = np.float64
-        box = self._clip_box(key, UNDER_NEAR_M)
+        box = self._clip_box(key, near)     # (near: past the box the dips are made to; the shadow solve's, its margin)
         if box is None:
             return
         xys = [np.asarray(p.xy, f64)[:, :2] for _fid, p in plans]

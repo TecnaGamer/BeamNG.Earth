@@ -122,7 +122,7 @@ def main():
                 cells_cpu += cpu.get(str(k), 0.0)
                 got = getattr(planner, "_vsolve", {}).get(str(k))
                 if got is not None:
-                    infos.append(got[1])
+                    infos.append({**got[1], "key": str(k)})
             # (the decks as the road tiles solved them, in this planner's frame)
             decks = []
             bl = [b for b in boxes.values() if b is not None]
@@ -190,7 +190,10 @@ def main():
                                "grade_left": int(sum(1 for i in infos if i.get("grade_left"))),
                                "loosened": int(sum(1 for i in infos if i.get("loosened"))),
                                "statuses": sorted({str(i.get("status")) for i in infos}),
-                               "worst_s": round(max((i.get("elapsed_s", 0.0) for i in infos), default=0.0), 2)}
+                               "worst_s": round(max((i.get("elapsed_s", 0.0) for i in infos), default=0.0), 2),
+                               "by_cell": {i["key"]: {"stage": i.get("stage"), "fallback": i.get("fallback"),
+                                                      "grade_left": i.get("grade_left"), "s": round(i.get("elapsed_s", 0), 2)}
+                                           for i in infos}}
                 results[name]["vsolve"] = s
             label = name if v == "passes" else "  (one solve)"
             j, sm, g, c = s["junction"], s["seam"], s["grade"], s["clearance"]

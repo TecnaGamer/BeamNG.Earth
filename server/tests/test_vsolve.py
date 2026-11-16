@@ -106,15 +106,6 @@ class JoinTest(unittest.TestCase):
         self.assertEqual(len(vsolve.joins([a, b], [np.zeros(len(S)), np.zeros(len(S))])), 1)
         self.assertEqual(vsolve.joins([a, b], [np.zeros(len(S)), np.full(len(S), 8.0)]), [])
 
-    def test_dips_only_under_decks(self):
-        p = plan(np.c_[S, np.zeros_like(S)], np.where((S > 90) & (S < 110), -2.0, 0.0))
-        z0 = [np.zeros(len(S))]
-        deck = (np.array([[100.0, -30.0], [100.0, 30.0]]), 5.0)
-        b = vsolve.dips_under([p], z0, [deck])[0]
-        self.assertTrue(np.isfinite(b[50]))
-        self.assertFalse(np.isfinite(b[10]))
-        self.assertIsNone(vsolve.dips_under([p], z0, [])[0])
-
 
 if __name__ == "__main__":
     unittest.main()

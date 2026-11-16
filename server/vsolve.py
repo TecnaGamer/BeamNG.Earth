@@ -6,11 +6,13 @@ least-squares problem on the carriageway solver's kernel (carriageways.solve: ea
 
 - objective: stay on the profile the elevation gives (plan_roads' heights, before any pass: its smoothing, the
   lidar's and the decks' corrections in it), a higher-ranked road more firmly (the road that keeps its profile at a
-  junction, as snap_junctions), smooth (second differences: a change spreads over SPREAD_M of the road);
+  junction, as snap_junctions), the changes smooth (second differences of the corrections from the profile: a road
+  no row moves keeps its profile, a change spreads over SPREAD_M of it);
 - hard rows: a road's end at another road (its end or its middle, JOIN_M) at one height with it; a road's end on a
   bridge at the deck's height; the cut ends of a cell's margin at their profile (the next cell sees the same);
-  under a deck, no higher than the passes' dip (whether to dip and how deep stays the passes' rule, RFC "what stays
-  heuristic"); a grade ceiling per road (its class's, or its ground's own where that is steeper: a steep street).
+  under a deck, no higher than the underpass rule's dip (grading._lower_underpasses, run over the whole solve: whether
+  to dip and how deep stays a rule, RFC "what stays heuristic"); a grade ceiling per road (its class's, or its
+  ground's own where that is steeper: a steep street).
 
 BNE_VSOLVE=shadow runs it beside the passes: their plans are used and kept as always; the solve's are only kept
 in memory for tools/grade_metrics.py to measure (Planner._vsolve). Off by default, and off it costs nothing.
@@ -33,10 +35,10 @@ SPREAD_M = {"motorway": 120.0, "trunk": 120.0, "primary": 80.0, "secondary": 60.
 SPREAD_OTHER_M = 40.0   # m over which a forced change spreads (grading.JUNCTION_TAPER_M)
 RANK_W = 2.0            # each class up holds its profile this many times more firmly
 RANK_STEPS = 6.0        # classes at most (the weights' spread: the solve's conditioning)
-DIP_M = 0.3             # m: a sample the passes lowered this much under a deck is a dip (its depth an upper bound)
-DIP_REACH_M = 2.0       # m beyond the deck's half width a sample is under it
+DIP_M = 0.3             # m: a sample the underpass rule lowered this much is a dip (its depth an upper bound)
 GRADE_SLACK = 0.01      # over the ground's own steepest: the ceiling of a road steeper than its class
 GRADE_ROW_M = 0.04      # a ceiling's rows where the profile comes this near it (a smooth correction stays under elsewhere)
+GRADE_ROWS_ON = os.environ.get("BNE_VSOLVE_GRADE", "on").strip().lower() not in ("0", "off", "false", "no")
 GRADE_ROUNDS = 4        # solves at most, each adding the rows its heights broke (an active set)
 GRADE_ROW_REACH = 10    # segments either side of a broken one that get rows too (the next round's excess beside it)
 GRADE_D = 10.0          # the kernel's own grade bound, on the corrections: none
@@ -223,7 +225,8 @@ def solve(plans, specs, z0, ceilings, ranks, pins=(), dips=None, budget=BUDGET_S
         return [], info
     out = None
     passes_floor = [_steepest_step(p) + GRADE_SLACK for p in plans]
-    for stage, (rows, floors) in enumerate(((True, None), (True, passes_floor), (False, None))):
+    stages = ((True, None), (True, passes_floor), (False, None)) if GRADE_ROWS_ON else ((False, None),)
+    for stage, (rows, floors) in enumerate(stages, start=0 if GRADE_ROWS_ON else 2):
         extra = {}
         for _round in range(GRADE_ROUNDS if rows else 1):
             chains, couplings, n_joins = problem(plans, specs, z0, ceilings, ranks, pins, dips, grade_rows=rows,
@@ -269,30 +272,3 @@ def _over_ceiling(plans, zs, z0, ceilings, extra, floors=None, slack=1e-3, reach
                     got.add(j)
                     new += 1
     return new
-
-
-def dips_under(plans, z0, decks, dip=DIP_M, reach=DIP_REACH_M):
-    """Per plan (n,) upper bounds (NaN: none): its samples under a deck (decks: [(line (k, 2), half width)]) that the
-    passes lowered by dip or more, at the passes' height (the dip's depth is the passes' rule: here its bound)."""
-    import grademetrics as gm
-    out = [None] * len(plans)
-    if not decks:
-        return out
-    seg = gm._Segments([np.asarray(d[0], np.float64)[:, :2] for d in decks])
-    halves = [float(d[1]) for d in decks]
-    reach_all = max(halves) + reach + max((float(p.half) for p in plans), default=0.0)
-    for n, p in enumerate(plans):
-        z = np.asarray(p.z, np.float64)
-        low = np.flatnonzero(np.asarray(z0[n], np.float64) - z >= dip)
-        if not len(low):
-            continue
-        xy = np.asarray(p.xy, np.float64)[:, :2]
-        b = np.full(len(z), np.nan)
-        for i in low.tolist():
-            for j, (dist, _s, _t) in seg.near(xy[i], reach_all).items():
-                if dist <= halves[j] + reach + float(p.half):
-                    b[i] = z[i]
-                    break
-        if np.isfinite(b).any():
-            out[n] = b
-    return out
