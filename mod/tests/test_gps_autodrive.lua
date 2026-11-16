@@ -704,6 +704,34 @@ do
   spawn, quatFromDir, log = oldSpawn, oldQuat, oldLog
 end
 
+-- Recovery on a viaduct over a road whose line lies nearer the route than the deck's (2D): the car is put on the
+-- deck it is on, at the deck's height, not on the road under it (A7 Zillbach, 2026-11-16).
+do
+  local oldSpawn, oldQuat, oldLog, oldRay = spawn, quatFromDir, log, castRayStatic
+  local placed, rays = nil, {}
+  spawn = { safeTeleport = function(_, p, q) placed = { pos = p, direction = q } end }
+  quatFromDir = function(d) return d end
+  log = function() end
+  castRayStatic = function(from, _, len) rays[#rays + 1] = { z = from.z, len = len } return 3.5 end
+  local f = fixture({ 'j', 's', 't' }, 0, 6, function(f)
+    f.speed, f.z = 0, 30.5
+    local ow = function(from) return { oneWay = true, inNode = from } end
+    f.nodes = { w = { pos = { x = 0, y = 4, z = 30 }, links = {}, radius = 6 },
+      j = { pos = { x = 100, y = 4, z = 30 }, links = { w = ow('w') }, radius = 6 },
+      s = { pos = { x = 300, y = 4, z = 30 }, links = { j = ow('j') }, radius = 6 },
+      t = { pos = { x = 500, y = 4, z = 30 }, links = { s = ow('s') }, radius = 6 },
+      lo1 = { pos = { x = 0, y = 0.5, z = 6 }, links = {}, radius = 2 },
+      lo2 = { pos = { x = 500, y = 0.5, z = 6 }, links = { lo1 = {} }, radius = 2 } }
+    f.map.nodes = f.nodes
+    f.route = { points = { { 0, 0 }, { 0, 0.05 } }, dist = 500, dur = 30 }
+  end)
+  f:step(31); f:step(); f:step(31)
+  T.check(placed and math.abs(placed.pos.y - 4) < 1e-9, 'recovery stays on the viaduct, not the road 24 m under it')
+  T.check(placed and math.abs(placed.pos.z - 30.5) < 1e-9 and rays[1] and math.abs(rays[1].z - 33.5) < 1e-9,
+    'its ground ray starts just over the deck (a bridge over the road is not where the car lands)')
+  spawn, quatFromDir, log, castRayStatic = oldSpawn, oldQuat, oldLog, oldRay
+end
+
 -- A position-based marker leg can restart on a coincident, disconnected road. Exact node pins must keep
 -- Autodrive on its confirmed graph chain instead of reducing every refresh to the reached first waypoint.
 do
