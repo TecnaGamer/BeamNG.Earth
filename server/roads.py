@@ -2475,11 +2475,13 @@ def deck_width_fn(frame, cells):
             return None
         tp = joint_desc(got, deck_tapers)
         bs = bridge_specs(got[0][0])[got[0][1]]
-        if not tp or bs is None:
+        if bs is None:
             return None
         pts = np.asarray(pts, np.float64)
         la, lo, _ = frame.enu_to_geodetic(pts[:, 0], pts[:, 1], 0.0)
-        return taper_widths(bs.width, tp, lo, la)
+        # Norwegian NVDB bridge width, including untapered bridge decks.
+        import nvdb_bridge_fixes_v059
+        return nvdb_bridge_fixes_v059.bridge_widths(lo, la, bs.width, tp)
     return ws_of
 
 
@@ -10141,6 +10143,9 @@ def retaining_walls(frame, roads, elev, exact, decks=()):
         nl = np.stack([-d[:, 1], d[:, 0]], axis=1)
         width = spec.width if spec.mountain else max(spec.width, carriageway(spec.cls, spec.kind, True, None, spec.oneway))
         core = width / 2 + grading.shoulder(spec)
+        import nvdb_bridge_fixes_v059
+        width, core = nvdb_bridge_fixes_v059.wall_width_core(
+            frame, pts, spec, width, core, grading.shoulder(spec))
         # (the grading's sharp cuttings end the core sooner; its flat strip behind a wall reaches past the core)
         steps = np.arange(width / 2 + 0.5, core + grading.WALL_FLAT_M + 1.51, 1.0)
         for side in (1.0, -1.0):
@@ -10298,7 +10303,9 @@ def retaining_walls(frame, roads, elev, exact, decks=()):
                                                                    others, fid),
                             "edge": xy[sl] + out_n[sl] * (rh + CLIFF_EDGE_M)})
             i = j + 1
-    return out
+    # Conservative removal of short artificial concrete wall nubs at bridge ends.
+    import nvdb_bridge_fixes_v059
+    return nvdb_bridge_fixes_v059.clean_walls(frame, out, decks)
 
 
 TWIN_SHARE = 0.8        # a tunnel part beside another for this share of its length (their tubes overlapping) ...
@@ -11148,6 +11155,9 @@ def _deck_chunks(decks, exact, ground_fn=None, depths=None, walks=None, shift_of
                     ws = width_of(fid, c) if width_of else None
                     if ws is not None:          # (tapering into another deck: roadmesh.ribbons' "ws")
                         ch["ws"] = [round(float(x + dw - spec.width), 3) for x in ws]
+                        if getattr(ws, "_nvdb_matched", False):
+                            import nvdb_bridge_fixes_v059
+                            ch["ws"] = nvdb_bridge_fixes_v059.structural_deck_widths(ch["ws"], c, pts)
                     if ch["m"] == DECK_CONCRETE["m"]:
                         ch["tu"] = round(max(1.0, dw / DECK_CONCRETE_TILE_M), 3)
                     if depths and fid in depths:
@@ -11189,6 +11199,9 @@ def _deck_chunks(decks, exact, ground_fn=None, depths=None, walks=None, shift_of
                             ws = width_of(fid, c) if width_of else None
                             if ws is not None:          # (tapering into another deck: roadmesh.ribbons' "ws")
                                 ch["ws"] = [round(float(x + w - spec.width), 3) for x in ws]
+                                if getattr(ws, "_nvdb_matched", False):
+                                    import nvdb_bridge_fixes_v059
+                                    ch["ws"] = nvdb_bridge_fixes_v059.structural_deck_widths(ch["ws"], c, pts)
                             ch["tdir"] = _travel(spec)  # (roadmesh: opposite traffic beside it, a median)
                             if depths and fid in depths:
                                 ch["dd"] = round(float(depths[fid]), 3)     # (roadmesh.deck: its slab and girders)
