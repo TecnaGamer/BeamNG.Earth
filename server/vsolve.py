@@ -42,7 +42,8 @@ GRADE_ROWS_ON = os.environ.get("BNE_VSOLVE_GRADE", "on").strip().lower() not in 
 GRADE_ROUNDS = 4        # solves at most, each adding the rows its heights broke (an active set)
 GRADE_ROW_REACH = 10    # segments either side of a broken one that get rows too (the next round's excess beside it)
 GRADE_D = 10.0          # the kernel's own grade bound, on the corrections: none
-K_LOOSE = 0.05          # m per % of grade change: the kernel's curvature bound, on the corrections: next to none
+K_LOOSE = 0.001         # m per % of grade change: the kernel's curvature bound, on the corrections: none (at 0.05,
+                        # 0.8 m per 2 m step: a dip held beside a held sample made cells infeasible)
 BUDGET_S = float(os.environ.get("BNE_VSOLVE_BUDGET_S", "60"))
 
 

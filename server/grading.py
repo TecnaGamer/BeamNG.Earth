@@ -2910,14 +2910,6 @@ class _Planner:
         n = len(pspecs)
         ground = [p for _f, p in plans[:n]]
         own = self._clip_box(key, 0.0)
-        pins = []
-        if own is not None:     # (a piece's end past the cell's box: cut there, held at its profile, as the next cell holds it)
-            x0, y0, x1, y1 = own
-            for i, p in enumerate(ground):
-                for e in (0, len(p.xy) - 1):
-                    x, y = float(p.xy[e, 0]), float(p.xy[e, 1])
-                    if x < x0 - 1.0 or x > x1 + 1.0 or y < y0 - 1.0 or y > y1 + 1.0:
-                        pins.append((i, e, float(z_before[i][e])))
         ceilings = [guard_limits(sp, p)[0] for sp, p in zip(pspecs, ground)]
         ranks = [road_rank(sp) for sp in pspecs]
         dips = [None] * n
@@ -2933,6 +2925,19 @@ class _Planner:
                 low = np.asarray(q.z, np.float64) <= np.asarray(z, np.float64) - vsolvemod.DIP_M
                 if low.any():
                     dips[i] = np.where(low, np.asarray(q.z, np.float64), np.nan)
+        pins = []
+        if own is not None:     # (a piece's end past the cell's box: cut there, held at its profile, as the next cell holds it)
+            x0, y0, x1, y1 = own
+            for i, p in enumerate(ground):
+                for e in (0, len(p.xy) - 1):
+                    x, y = float(p.xy[e, 0]), float(p.xy[e, 1])
+                    if x < x0 - 1.0 or x > x1 + 1.0 or y < y0 - 1.0 or y > y1 + 1.0:
+                        # (at the underpass rule's dip where it has one there: held at the profile over a dip's
+                        # bound, the end could hold neither, and Tokyo's cells went infeasible)
+                        h = float(z_before[i][e])
+                        if dips[i] is not None and np.isfinite(dips[i][e]):
+                            h = min(h, float(dips[i][e]))
+                        pins.append((i, e, h))
         zs, info = vsolvemod.solve(ground, pspecs, z_before[:n], ceilings, ranks, pins, dips)
         if zs is None:          # (no feasible solve: the passes' heights, as the RFC's fallback; counted in info)
             zs = [np.array(p.z, np.float64) for p in ground]
