@@ -30,16 +30,4 @@ Regenerate the S-1 PNGs using the existing commands above; the committed DDS fil
 
 The F1 preview command refreshes A0?A4 and saves explicit `khrush_panel_after_<view>.png` and `panel9_after_<view>.png`. Their `before` images are archived from the committed S-1 previews and remain immutable reference artifacts. `assets/cis_src/f1_baseline.json` records all original cell layouts, DDS and non-pixel hashes, and original PNG byte counts from the S-1 commit. Verification excludes retained DDS, which are reviewer conversion outputs and are never regenerated here. PNG/JSON/DAE files remain byte-identical to a clean generator rebuild.
 
-## S-2 facade atlases
-
-The user approved **4096 ? 4096 for A6 and A7** because the mandatory cells cannot fit 2048? at 96 px/m with the required margins and gutters. The schema is unchanged; both the generator and preview use `atlas` dimensions from metadata. Other facade atlases remain 2048?. Each new kit's two colour sets occupy disjoint left/right atlas regions. All A0?A5 cell coordinates remain unchanged.
-
-For A6, A7, A8, A9, in order:
-
-    python tools/cis_assets/build_atlas.py A6
-    python tools/cis_assets/validate.py A6
-    python tools/cis_assets/render_batch.py A6
-    python tools/cis_assets/verify_rebuild.py A6
-    python tools/cis_assets/report.py A6
-
-Replace A6 in these commands with the current task. A7 also renders `<kit>_slab_<view>.png` for the 48 ? 13 m, nine-storey block. A6's final hipped roof remains owned by game code; preview roof geometry is a placeholder. Atlas generators are incremental and do not erase previously generated module metadata.
+The generator also carries the tasks of the next atlases (A6-A9: Stalinist blocks, brick towers, new low-rise and panel blocks); they are not shipped yet.
