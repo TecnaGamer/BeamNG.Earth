@@ -272,7 +272,7 @@ class Vegetation:
         self.dir = os.path.join(cache_dir, "vegetation", f"v{VERSION}") if cache_dir else None
         import standalonepaths
         if self.dir and standalonepaths.enabled():
-            self.dir = os.path.join(self.dir, "standalone-paths-v2")  # footprint clearance, not just plant centres
+            self.dir = os.path.join(self.dir, "standalone-paths-v3")  # trunks clear, crowns may overhang
         self._mem = OrderedDict()
         self._lock = threading.Lock()
         self._cell_locks = {}
@@ -756,10 +756,14 @@ FARM_MIN_M2 = 800.0
 
 
 def _off_paths(items, frame, blockers):
-    """Test final plant footprints in metres, including jitter and the offsets of planted rows."""
+    """Keep trunks and low vegetation off paths, allowing individual tree crowns to overhang."""
     import standalonepaths
     e, n, _ = frame.geodetic_to_enu(items.lat, items.lon, 0.)
-    return standalonepaths.keep_outside(np.column_stack((e, n)), blockers, items.radius)
+    # A far clump represents several trunks spread over its footprint, not one
+    # trunk at its centre. Its individual near trees are tested separately.
+    single_tree = (items.kind == KIND_TREE) & ~np.isin(items.group, CLUMP_GROUPS)
+    radius = np.where(single_tree, standalonepaths.TRUNK_CLEAR_M, items.radius)
+    return standalonepaths.keep_outside(np.column_stack((e, n)), blockers, radius)
 
 
 def _keep_off_mask(items, mask, chm):

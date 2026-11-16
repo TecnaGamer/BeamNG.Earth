@@ -13,6 +13,7 @@ EXCLUDE = {"sidewalk", "crossing", "crosswalk", "cycle_crossing", "traffic_islan
 # An unlabelled line following the roadside can be a separately surveyed sidewalk.
 VERGE_M = 4.0
 PARALLEL = math.cos(math.radians(35))
+TRUNK_CLEAR_M = 0.4      # keep trunks off the paving; branches may overhang a path
 
 
 def enabled():
@@ -73,7 +74,7 @@ def _outside_verges(xy, width, starts, delta, lengths, radii, bounds):
 def keep_outside(points, blockers, radii=None):
     """Keep footprints off accepted strips, including their rounded ends and bends.
 
-    With no radii this is a point test. Vegetation supplies its crown / footprint radius;
+    With no radii this is a point test. Vegetation supplies its ground clearance radius;
     checking only its centre lets a bush beside a narrow path cover the paving.
     """
     import fast
@@ -104,8 +105,7 @@ def clear_props(rows, blockers):
     trees = [i for i, row in enumerate(rows) if row[0] == furniture.G_STREET_TREE]
     keep = np.ones(len(rows), bool)
     if trees:
-        keep[trees] = keep_outside([rows[i][1:3] for i in trees], blockers,
-                                  [0.12 * rows[i][6] + 1.0 for i in trees])
+        keep[trees] = keep_outside([rows[i][1:3] for i in trees], blockers, TRUNK_CLEAR_M)
     # Reuse the stock models' scaled, rotated collision boxes, including the ends
     # of benches. Keep mapped lights, signs and poles (and their wire runs) intact.
     clearance = furniture.RoadClearance([(half, line) for line, half in blockers])

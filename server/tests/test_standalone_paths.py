@@ -118,7 +118,8 @@ class StandalonePathsTest(unittest.TestCase):
         self.assertFalse(np.array_equal(photo[16, 16], rgb[16, 16]))
         np.testing.assert_array_equal(photo[11, 16], rgb[11, 16])
         items = SimpleNamespace(lat=np.array([LAT + 16 / M_LAT, LAT + 18 / M_LAT]),
-                                lon=np.full(2, LON + 16 / M_LON), radius=np.full(2, .5))
+                                lon=np.full(2, LON + 16 / M_LON), radius=np.full(2, .5),
+                                kind=np.full(2, vegetation.KIND_BUSH), group=np.full(2, vegetation.G_SHRUB))
         blockers = [(xy, w / 2) for _, xy, w, _ in self.parts(f)]
         self.assertEqual(vegetation._off_paths(items, FRAME, blockers).tolist(), [False, True])
         on = vegetation.Vegetation(None, "cache").dir
@@ -159,14 +160,24 @@ class StandalonePathsTest(unittest.TestCase):
         self.assertEqual(paths.keep_outside([], blockers, []).size, 0)
 
     def test_final_plant_filter_uses_each_footprint(self):
-        # A small shrub fits beside the path; a larger bush, crown or far clump at
-        # the same position does not. Negative near-only scale is not a radius.
+        # Shrubs need their full footprint clear, but a tree's branches may
+        # overhang. A far clump contains several trunks across its footprint.
         items = vegetation.Items(np.full(4, LON + 10 / M_LON), np.full(4, LAT + 3 / M_LAT),
                                  np.array([1., 3., 12., 20.]), np.array([.5, 2., 2.5, 8.]),
                                  np.array([vegetation.KIND_BUSH] * 2 + [vegetation.KIND_TREE] * 2),
-                                 np.zeros(4, np.uint8), np.zeros(4), np.zeros(4), np.array([1., 1., -1., 1.]))
+                                 np.array([vegetation.G_SHRUB] * 2 + [vegetation.G_CONIFER,
+                                          vegetation.G_CONIFER_CLUMP]),
+                                 np.zeros(4), np.zeros(4), np.array([1., 1., -1., 1.]))
         blockers = [(np.array([[0., 0.], [20., 0.]]), 2.)]
-        self.assertEqual(vegetation._off_paths(items, FRAME, blockers).tolist(), [True, False, False, False])
+        self.assertEqual(vegetation._off_paths(items, FRAME, blockers).tolist(), [True, False, True, False])
+
+    def test_tree_trunks_stay_off_path_but_crowns_can_overhang(self):
+        items = SimpleNamespace(lon=np.full(3, LON + 10 / M_LON),
+                                lat=LAT + np.array([0., 2.2, 3.]) / M_LAT,
+                                radius=np.full(3, 5.), kind=np.full(3, vegetation.KIND_TREE),
+                                group=np.full(3, vegetation.G_DECIDUOUS))
+        blockers = [(np.array([[0., 0.], [20., 0.]]), 2.)]
+        self.assertEqual(vegetation._off_paths(items, FRAME, blockers).tolist(), [False, False, True])
 
     def test_furniture_footprints_clear_path_and_keep_nearby_items(self):
         blockers = [(np.array([[0., 0.], [20., 0.]]), 2.)]
@@ -176,10 +187,10 @@ class StandalonePathsTest(unittest.TestCase):
                 row(furniture.G_HYDRANT, 10., 2.2, height=.9),
                 row(furniture.G_BENCH, 10., 2.8, yaw=90., height=.9),
                 row(furniture.G_BIN, -2.1, 0., height=1.1),
-                row(furniture.G_STREET_TREE, 10., 3., height=10.),
+                row(furniture.G_STREET_TREE, 10., 2.2, height=10.),
                 row(furniture.G_HYDRANT, 10., 4., height=.9),
                 row(furniture.G_BENCH, 10., 4., height=.9),
-                row(furniture.G_STREET_TREE, 10., 6., height=10.),
+                row(furniture.G_STREET_TREE, 10., 3., height=10.),
                 row(furniture.G_LAMP, 10., 0., height=9.)]
         self.assertEqual(paths.clear_props(rows, blockers), rows[5:])
         self.assertEqual(paths.clear_props(rows, []), rows)
@@ -197,12 +208,12 @@ class StandalonePathsTest(unittest.TestCase):
                 roads.build_tile(FRAME, 0, 0, [f], flat, walks=[], props=props)
                 self.assertEqual(props, expected)
 
-    def test_old_centre_only_vegetation_cache_is_not_reused(self):
+    def test_old_crown_clearance_vegetation_cache_is_not_reused(self):
         from test_vegetation import FakeMapData, KEY
         with tempfile.TemporaryDirectory() as directory:
             md = FakeMapData()
             v = vegetation.Vegetation(md, directory)
-            old = Path(directory, "vegetation", f"v{vegetation.VERSION}", "standalone-paths-v1",
+            old = Path(directory, "vegetation", f"v{vegetation.VERSION}", "standalone-paths-v2",
                        md.release, str(KEY.x), f"{KEY.y}.npz")
             old.parent.mkdir(parents=True)
             empty = vegetation._empty()
