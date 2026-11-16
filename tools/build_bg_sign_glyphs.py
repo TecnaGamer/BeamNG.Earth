@@ -10,6 +10,8 @@ DIN 1451-like grotesque with the standard Cyrillic letter forms, which Roboto Co
 candidate, draws the Bulgarian forms: т like m). Writes server/bg_sign_glyphs.json (as tools/build_sign_glyphs.py's
 sign_glyphs.json: per character advance, bbox [l, t, r, b] px from the pen on the baseline, uv [u0, v0, u1, v1]) and
 the opacity atlas mod/.../roadside/bg_letters_o.data.png (material bne_bg_letters_black, exit.materials.json).
+Then run tools/mod_textures_dds.py on that PNG: the game loads only DDS (its source is kept as
+mod/texture_sources/.../bg_letters_o.data.webp and made into bg_letters_o.data.dds at install).
 """
 import json
 import os

@@ -483,7 +483,8 @@ def _corner_mask(feats_list, urban_fn, widths, lonlat_bounds, to_px, shape, grow
 # yellow_paving: Sofia's yellow bricks (bgpaving.py, a cobble road's Spec.surf: photo_kind), ochre. With the carriageways in
 # the ground their colour is this paint (the cobble layer adds grain): the yellow mesh material (roads.YELLOW_PAVING) is
 # drawn only with BNGE_ROADS_IN_GROUND=0, and the streets were grey cobbles in game (2026-11-05). After paved: the
-# native paint (paintlist.rs PAVED_KIND) expects paved as the fifth kind.
+# native paint (paintlist.rs PAVED_KIND) expects paved as the fifth kind, and the last kind over a pixel wins, so the
+# yellow bricks run on through a boulevard's junctions with asphalt streets (asphalt wins over every other kind).
 PHOTO_ROAD_RGBA = {"dirt": (112, 92, 68, 0.70), "gravel": (188, 182, 168, 0.5), "cobble": (128, 125, 120, 0.9),
                    "concrete": (172, 170, 164, 1.0), "paved": (95, 95, 94, 1.0), "yellow_paving": (178, 150, 72, 0.9)}
 # The painted roads in the photo's own tone (earthfast.paint_lines_toned; the user, 2026-11-11: "look into other ways to

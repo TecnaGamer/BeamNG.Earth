@@ -159,7 +159,14 @@ class MeshTest(unittest.TestCase):
             mats = json.load(f)
         self.assertLessEqual(set(bgsigns.MATERIALS), set(mats))
         atlas = mats["bne_bg_letters_black"]["Stages"][0]["opacityMap"]
-        self.assertTrue((ROOT / "mod" / "beamng_earth" / atlas.lstrip("/")).exists(), atlas)
+        self.assertTrue(atlas.endswith(".dds"), "the game loads only DDS (tools/mod_textures_dds.py)")
+        # (made at install from its lossless source: modtextures' manifest and mod/texture_sources)
+        import sys
+        sys.path.insert(0, str(ROOT))
+        import modtextures
+        rel = atlas.lstrip("/")
+        self.assertIn(rel, modtextures.manifest(), atlas)
+        self.assertTrue((ROOT / "mod" / "texture_sources" / rel).with_suffix(".webp").exists(), atlas)
 
 
 class TileTest(unittest.TestCase):

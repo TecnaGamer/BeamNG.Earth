@@ -59,7 +59,10 @@ class YellowPavingTest(unittest.TestCase):
         r, g, b, op = surface.PHOTO_ROAD_RGBA["yellow_paving"]
         self.assertGreater(min(r, g) - b, 50, "ochre, not grey")
         kinds = list(surface.PHOTO_ROAD_RGBA)
-        self.assertEqual(kinds[-1], "paved", "asphalt still wins at junctions")
+        self.assertEqual(kinds.index("paved"), 4, "the native paint (paintlist.rs PAVED_KIND) needs paved fifth")
+        # (the last kind over a pixel wins: yellow paving after paved, so the yellow boulevards' bricks run on through
+        # their junctions with asphalt streets; the native paint leaves no slot before paved for a sixth kind)
+        self.assertEqual(kinds[-1], "yellow_paving")
         self.assertIn("yellow_paving", surface.ROAD_MASK_KINDS)
 
     def test_the_material_is_in_the_mod(self):

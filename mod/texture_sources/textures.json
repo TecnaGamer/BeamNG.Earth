@@ -719,6 +719,11 @@
    "format": "BC4",
    "role": "data"
   },
+  "levels/beamng_earth/art/shapes/beamngEarth/roadside/bg_letters_o.data.dds": {
+   "source": "levels/beamng_earth/art/shapes/beamngEarth/roadside/bg_letters_o.data.webp",
+   "format": "BC4",
+   "role": "data"
+  },
   "levels/beamng_earth/art/shapes/beamngEarth/roadside/sign_letters_o.data.dds": {
    "source": "levels/beamng_earth/art/shapes/beamngEarth/roadside/sign_letters_o.data.webp",
    "format": "BC4",

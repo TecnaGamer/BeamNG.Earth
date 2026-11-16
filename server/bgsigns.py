@@ -30,6 +30,8 @@ from functools import lru_cache
 
 import numpy as np
 
+import dmath
+import dnp
 import exitsigns
 
 COUNTRIES = {"BG"}
@@ -110,7 +112,7 @@ def sc_of(radius):
 
 
 def _resample(xy, step):
-    seg = np.hypot(*np.diff(xy, axis=0).T)
+    seg = dnp.hypot(*np.diff(xy, axis=0).T)
     cum = np.r_[0.0, np.cumsum(seg)]
     if cum[-1] < 2 * step:
         return None, None
@@ -126,7 +128,7 @@ def bends(xy):
     if p is None:
         return []
     d = np.diff(p, axis=0)
-    head = np.unwrap(np.arctan2(d[:, 1], d[:, 0]))
+    head = np.unwrap(dnp.arctan2(d[:, 1], d[:, 0]))
     w = max(1, int(round(C7_WINDOW_M / C7_STEP_M / 2)))
     k = np.arange(len(head))
     a, b = np.clip(k - w, 0, len(head) - 1), np.clip(k + w, 0, len(head) - 1)
@@ -152,7 +154,7 @@ def bends(xy):
 
 def _at(xy, s):
     """(point, unit tangent) s m along polyline xy."""
-    seg = np.hypot(*np.diff(xy, axis=0).T)
+    seg = dnp.hypot(*np.diff(xy, axis=0).T)
     cum = np.r_[0.0, np.cumsum(seg)]
     k = min(max(int(np.searchsorted(cum, s, side="right")) - 1, 0), len(seg) - 1)
     t = (xy[k + 1] - xy[k]) / max(float(seg[k]), 1e-9)
@@ -168,7 +170,7 @@ def c7_posts(xy, width, oneway=False, direction=1):
     for s0, s1, radius, sign in bends(xy):
         r_line = radius + width / 2 + C7_SIDE_M         # the boards' line round the outside of the bend
         # the straight edge line meets the boards' line this far into the bend (an angle, both ends)
-        lead = math.acos(min(1.0, (radius + width / 2) / r_line)) * radius
+        lead = dmath.acos(min(1.0, (radius + width / 2) / r_line)) * radius
         a, b = s0 + lead, s1 - lead
         if b <= a:
             a = b = (s0 + s1) / 2
@@ -183,7 +185,7 @@ def c7_posts(xy, width, oneway=False, direction=1):
             for travel in ((direction,) if oneway else (1, -1)):
                 tt = t * travel
                 face = -tt - outside                       # towards the traffic and the road: two at a right angle
-                face /= np.linalg.norm(face)
+                face /= dnp.norm(face)
                 turn = sign * travel                       # +1: the road turns left for that traffic
                 boards.append((face, -turn))
             out.append((q, boards, outside))
@@ -231,7 +233,7 @@ def town_signs(xy, width, cls, oneway, direction, built, name_at):
     _resample(xy, TOWN_STEP_M)'s points; name_at(point) -> the place's name or "". Pure."""
     xy = np.asarray(xy, np.float64)[:, :2]
     out = []
-    total = float(np.hypot(*np.diff(xy, axis=0).T).sum())
+    total = float(dnp.hypot(*np.diff(xy, axis=0).T).sum())
     for s, into in town_edges(xy, built):
         at = s - into * TOWN_BEFORE_M
         p, t = _at(xy, min(max(at, 0.0), total))
@@ -242,7 +244,7 @@ def town_signs(xy, width, cls, oneway, direction, built, name_at):
             continue
         latin = translit(name) if cls in LATIN_CLASSES and cyrillic(name) else ""
         for kind, tr in (("d11", travel_in), ("d12", -travel_in)):
-            if oneway and not np.dot(tr, t * direction) > 0:
+            if oneway and not dnp.dot(tr, t * direction) > 0:
                 continue
             right = np.array([tr[1], -tr[0]])
             out.append({"kind": kind, "point": p + right * (width / 2 + TOWN_SIDE_M), "travel": tr, "name": name,
@@ -319,7 +321,7 @@ class Mesh(exitsigns.Mesh):
             self.letters(line, top - CAP_M - k * LINE_M, CAP_M, 0.054)
         if sign["kind"] == "d12":       # the red band, top right to bottom left
             a, b = np.array([w / 2 - 0.05, bottom + h - 0.05]), np.array([-w / 2 + 0.05, bottom + 0.05])
-            d = (a - b) / np.linalg.norm(a - b)
+            d = (a - b) / dnp.norm(a - b)
             n = np.array([-d[1], d[0]]) * 0.035
             self.quad([(0.056, *(b - n)), (0.056, *(a - n)), (0.056, *(a + n)), (0.056, *(b + n))], RED)
 
@@ -332,7 +334,7 @@ class Mesh(exitsigns.Mesh):
         for face, arrow in boards:
             self.place(np.r_[point, ground_z], face)
             self.centre = self.centre + self.face * 0.035
-            off = 0.0 if len(boards) == 1 else math.copysign(s / 2, float(np.dot(self.right[:2], outside)) or 1.0)
+            off = 0.0 if len(boards) == 1 else math.copysign(s / 2, float(dnp.dot(self.right[:2], outside)) or 1.0)
             self.quad([(-0.005, off + s / 2, bottom), (-0.005, off - s / 2, bottom), (-0.005, off - s / 2, bottom + s),
                        (-0.005, off + s / 2, bottom + s)], METAL)                     # (the back)
             self.rectangle(s, bottom, s, 0.0, WHITE, offset=off)
