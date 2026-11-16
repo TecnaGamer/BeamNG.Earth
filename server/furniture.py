@@ -1364,7 +1364,12 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
     if poleprofiles.kit_enabled(pole_profile):
         import regionalmarkers
         country_at=poleprofiles.country_selector(pole_profile,pole_frame)
-        rows.extend(regionalmarkers.place(roads, box, country_at, lighting=lighting))
+        # BNE_NO_AUTO_DELINEATORS_V01: no guessed roadside reflector posts in Norway.
+        # Preserve chevrons, road signs, guardrails, and delineators outside Norway.
+        regional_rows = regionalmarkers.place(roads, box, country_at, lighting=lighting)
+        rows.extend(r for r in regional_rows
+                    if not ((r[0].startswith("eu_marker_") or r[0] in ("fr_j1", "fr_j6"))
+                            and country_at(float(r[1]), float(r[2]), float(r[3])) == "NO"))
         import regionalstops
         rows=regionalstops.localize(rows,pole_profile,pole_frame,country_at)
         import regionaltraffic
