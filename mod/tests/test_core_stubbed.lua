@@ -1085,4 +1085,22 @@ do -- a computer with too little memory (the server's emergency tier): one warni
   T.check(#toasts == 1, 'the lean tier: no toast (the app window says it)')
   guihooks = oldGh
 end
+-- the settings page's "Restart world server": the hello comes at the main menu, a level starts (and ends) after it;
+-- the server's start-time settings and its restart capability outlive both (the user, 2026-11-15: no button)
+serverSend({ type = 'hello', protocol = 4, format = 4, cells = 64, serverVersion = '0.4.0', sessionId = 's99r',
+  farFormat = 'cdae', material = 'bngEarthFar_v3', nearVisual = 'mesh', restartable = true,
+  startSettings = { groundGrid = '1', expAiTunnels = false }, startFixed = { 'serverCores' } })
+for _ = 1, 3 do core.onUpdate(0.05, 0.05) end
+local rOrder, rMine = { 'groundGrid', 'expAiTunnels' }, { groundGrid = '1', expAiTunnels = true }
+T.check(core.restartState(rMine, rOrder).pending[1] == 'expAiTunnels', 'restart: pending after the hello')
+core.onClientEndMission()
+core.onClientStartMission()
+for _ = 1, 3 do core.onUpdate(0.05, 0.05) end
+local rsL = core.restartState(rMine, rOrder)
+T.check(#rsL.pending == 1 and rsL.pending[1] == 'expAiTunnels' and rsL.restartable == true,
+  string.format('restart: a level start after the hello keeps the start-time settings and the button (%d pending, %s)',
+    #rsL.pending, tostring(rsL.restartable)))
+T.check(#core.restartState({ groundGrid = '1', expAiTunnels = false, serverCores = '2' },
+  { 'groundGrid', 'expAiTunnels', 'serverCores' }).pending == 0, 'restart: ... and the fixed list')
+
 T.done('test_core_stubbed')

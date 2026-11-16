@@ -3203,11 +3203,20 @@ end
 ------------------------------------------------------------------------------------------
 -- level lifecycle
 
-local function onLevelStart()
-  -- the connection outlives levels: keep its session and the request id sequence
-  local sessionId, nextRequestId, mapPort = st.sessionId, st.nextRequestId, st.mapPort
+-- The state the connection holds, kept over a level's start / end (resetState): the hello comes at the main menu, so
+-- the server's start-time settings and its restart capability (the settings page's "Restart world server") must
+-- outlive the level that starts after it, or the page never offers the button (the user, 2026-11-15).
+M._CONN_KEYS = { 'sessionId', 'nextRequestId', 'mapPort', 'startSettings', 'startFixed', 'restartable' }
+function M._resetKeepingConnection()
+  local keep = {}
+  for _, k in ipairs(M._CONN_KEYS) do keep[k] = st[k] end
   resetState()
-  st.sessionId, st.nextRequestId, st.mapPort = sessionId, nextRequestId, mapPort   -- the connection's (hello)
+  for k, v in pairs(keep) do st[k] = v end
+end
+
+local function onLevelStart()
+  -- the connection outlives levels: keep its session, the request id sequence and the rest of its hello
+  M._resetKeepingConnection()
   farfield.forget()
   terrain.onLevelChanged()
   st.inOurLevel = getCurrentLevelIdentifier() == LEVEL_ID
@@ -3318,9 +3327,7 @@ local function onClientEndMission()
   parking.reset()
   navgraph.reset()
   M._trafficvisuals.reset()
-  local sessionId, nextRequestId, mapPort = st.sessionId, st.nextRequestId, st.mapPort
-  resetState()
-  st.sessionId, st.nextRequestId, st.mapPort = sessionId, nextRequestId, mapPort   -- the connection's (hello)
+  M._resetKeepingConnection()
 end
 
 local function onExtensionLoaded()
