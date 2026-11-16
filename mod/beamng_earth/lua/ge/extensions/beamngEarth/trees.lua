@@ -232,6 +232,7 @@ M.CATALOG = {
     { ECA .. 'trees/trees_beech/tree_beech_bush_a', 1.2 }, { ECA .. 'trees/trees_oak/tree_oak_bush_a', 1.26 },
     { ECA .. 'trees/trees_douglasfir/tree_douglasfir_bush_b', 2.09 }, { ECA .. 'trees/ECA_coast_bush/generibush_small', 2.09 },
     { ECA .. 'trees/trees_aspen/tree_aspen_bush_b', 2.47 },
+    { ECA .. 'trees/trees_aspen/tree_aspen_bush_c', 3.27 },     -- (the stock survey 2026-11-16)
   },
   rock = {
     { ECA .. 'rocks/eca_rock_small', 0.6 }, { ECA .. 'rocks/rock_01_a_large_a', 0.7 }, { ECA .. 'rocks/eca_rock_small_2', 0.9 },
@@ -259,6 +260,7 @@ M.CATALOG = {
     -- (the stock survey 2026-11-15) leaning coconut palms, and Italy's date palms (Phoenix-like, loaded with its folder)
     { JRI .. 'trees/trees_palm/palm_bend_sml', 10.24 }, { IT .. 'trees/trees_italy/italy_palm_1_short', 11.74 },
     { IT .. 'trees/trees_italy/italy_palm_1', 13.77 }, { JRI .. 'trees/trees_palm/palm_bend', 18.8 },
+    { JRI .. 'trees/trees_palm/palm_tiny', 3.0 },     -- (2026-11-16: a young palm for 3-5 m, was palm_small at 0.4)
   },
   juniper = {
     { UT .. 'trees/Juniper/Juniper_bush_large_01', 2.6 }, { UT .. 'trees/Juniper/Juniper_tree_04', 4.5 },
@@ -276,6 +278,10 @@ M.CATALOG = {
     { JV .. 'trees/deserttrees/deserttree_bush_medium', 2.9 },
     -- (the stock survey 2026-11-15; not Juniper_bush_large_dry_02: its Juniper_bark material is in no level)
     { UT .. 'trees/Juniper/Juniper_bush_small_02', 2.15 }, { JV .. 'trees/deserttrees/deserttree_bush_medium_dead', 2.5 },
+    -- (the stock survey 2026-11-16: low dry and dead bushes, the groundcover kind as the grey bushes above; not
+    -- Juniper_bush_small_dry_03: its Juniper_bark material is in no level)
+    { UT .. 'groundcover/s_gc_dead_bush_02', 0.71 }, { JV .. 'groundcover/s_gc_jv_dry_bush_04', 1.06 },
+    { UT .. 'trees/Juniper/Juniper_bush_small_dry_02', 2.15 },
   },
   desert_rock = {
     { UT .. 'rocks/rock_01_a_small_a', 0.3 }, { UT .. 'rocks/utah_rock_flat_a', 0.5 }, { UT .. 'rocks/utah_boulder_5', 0.6 },
@@ -402,7 +408,11 @@ M.CATALOG = {
   poplar = { { ATT .. 'trees/trees_poplar/s_poplar_large_01', 16.5 }, { ATT .. 'trees/trees_poplar/s_poplar_large_02', 23.1 },
     { ATT .. 'trees/trees_poplar/s_poplar_large_03', 23.03 } },     -- (the stock survey 2026-11-15)
   creosote = { { ATT .. 'trees/trees_shrub/shrub_c', 1.15 }, { ATT .. 'trees/trees_shrub/shrub_b', 1.63 },
-    { ATT .. 'trees/trees_shrub/shrub_a', 2.43 } },
+    { ATT .. 'trees/trees_shrub/shrub_a', 2.43 },
+    -- (the stock survey 2026-11-16) West Coast USA's big old creosotes (its trees_shrub d-g: the same m_creosote_*
+    -- materials as Automation Test Track's, loaded with that folder; leaves_thin from WCA .. 'trees')
+    { WCA .. 'trees/trees_shrub/shrub_e', 3.18 }, { WCA .. 'trees/trees_shrub/shrub_f', 3.21 },
+    { WCA .. 'trees/trees_shrub/shrub_d', 3.78 }, { WCA .. 'trees/trees_shrub/shrub_g', 5.02 } },
   -- Eurasia's species (server vegetation.species_groups, 29; the stock survey 2026-11-15, heights from the shapes'
   -- bounds, to be checked in game): East Coast USA's "aspen" shapes wear the game's birch bark and leaves
   -- (/assets/materials/tree/birch); Scots pines (Italy's) with Monterey pines and a young maritime pine for variety;
@@ -451,6 +461,35 @@ M.CATALOG = {
     { WCA .. 'trees/trees_palm/fanpalm_slim', 20.8 },
   },
   birch_clump = { { ECA .. 'trees/trees_aspen/tree_aspen_forest_group', 20.1 } },
+  -- the bushes by the climate (server vegetation.shrub_groups, 30; the stock survey 2026-11-16, heights from the shapes'
+  -- bounds, every tree-kind shape with its imposter; the grey bushes are groundcover shapes as desert_shrub's):
+  -- the summer-dry climates' maquis and garrigue, California's chaparral (Italy's bushes, Utah's junipers and low grey
+  -- bushes)
+  maquis = {
+    { UT .. 'groundcover/s_gc_utah_grey_bush_01', 0.7 }, { UT .. 'groundcover/s_gc_utah_grey_bush_03', 1.0 },
+    { UT .. 'trees/Juniper/Juniper_bush_small_01', 1.2 }, { IT .. 'trees/trees_italy/generibush', 1.83 },
+    { UT .. 'trees/Juniper/Juniper_bush_medium_01', 2.4 }, { IT .. 'trees/trees_italy/fluffy_bush', 2.47 },
+    { IT .. 'trees/trees_italy/cork_oak_bush_medium', 3.04 }, { IT .. 'trees/trees_italy/scraggly_bush', 3.8 },
+  },
+  -- the north's and the mountains' tops: birch / willow scrub (the birch-barked aspen bushes), spruce saplings, junipers
+  shrub_north = {
+    { UT .. 'trees/Juniper/Juniper_bush_small_01', 1.2 }, { ECA .. 'trees/trees_douglasfir/tree_douglasfir_bush_b', 2.09 },
+    { ECA .. 'trees/trees_aspen/tree_aspen_bush_a', 2.2 }, { ECA .. 'trees/trees_aspen/tree_aspen_bush_b', 2.47 },
+    { UT .. 'trees/Juniper/Juniper_bush_large_01', 2.6 }, { ECA .. 'trees/trees_douglasfir/tree_douglasfir_bush_a', 2.7 },
+    { ECA .. 'trees/trees_aspen/tree_aspen_bush_c', 3.27 },
+  },
+  -- the rainforests', mangroves' and savannas' bushes and wide-leaved plants (Jungle Rock Island's)
+  shrub_tropical = {
+    { JRI .. 'trees/tropical_wide_leaves/tropical_plant_02_a', 2.77 }, { JRI .. 'trees/trees_palm/palm_tiny', 3.0 },
+    { JRI .. 'trees/tropical_wide_leaves/tropical_plant_03_e', 3.19 }, { JRI .. 'trees/tropical_wide_leaves/tropical_plant_03_a', 3.33 },
+    { JRI .. 'trees/bush_tropical_1/tro_tree_1_bush_large', 3.38 }, { JRI .. 'trees/tropical_wide_leaves/tropical_plant_01_b', 3.64 },
+    { JRI .. 'trees/bush_tropical_1/tro_bush_small', 3.9 }, { JRI .. 'trees/trees_tropical_2/tro_tree_2_bush_huge', 3.95 },
+  },
+  -- dead wood on the forest floor: a stump, fallen branches, fallen beeches (East Coast USA's)
+  deadwood = {
+    { ECA .. 'trees/trees_douglasfir/tree_douglasfir_chopped', 1.0 }, { ECA .. 'trees/trees_douglasfir/fir_dead_branches', 1.51 },
+    { ECA .. 'trees/trees_beech/tree_beech_dead_a', 2.07 }, { ECA .. 'trees/trees_beech/tree_beech_dead_b', 2.98 },
+  },
   oak_clump = { { ECA .. 'trees/trees_oak/tree_oak_forest_group', 18.4 } },
   beech_clump = { { ECA .. 'trees/trees_beech/tree_beech_forest_group', 23.8 },
     { ECA .. 'trees/trees_beech/tree_beech_small_forest_group', 14.17 } },
@@ -462,6 +501,9 @@ M.CATALOG = {
     { JRI .. 'trees/bush_tropical_2/tro_bush_2_tiny', 5.19 }, { JRI .. 'trees/trees_tropical_2/tro_tree_2_tiny', 6.13 },
     { JRI .. 'trees/trees_tropical_2/tro_tree_2_medium', 18.53 }, { JRI .. 'trees/trees_tropical_1/tro_tree_1_filler_02', 29.62 },
     { JRI .. 'trees/trees_tropical_2/tro_tree_2_tall', 32.28 },
+    -- (the stock survey 2026-11-16) the island's wide-crowned fillers and its second tall tree
+    { JRI .. 'trees/trees_tropical_2/tro_tree_2_filler_04', 24.26 }, { JRI .. 'trees/trees_tropical_2/tro_tree_2_tall_02', 26.98 },
+    { JRI .. 'trees/trees_tropical_2/tro_tree_2_filler_03', 30.15 }, { JRI .. 'trees/trees_tropical_2/tro_tree_2_filler_02', 33.11 },
   },
 }
 -- Italy's authored three-metre crash barrier and two end treatments. The back-facing variants reuse
@@ -655,6 +697,10 @@ M.GROUP_MAX_M.golfflag = 400
 M.GROUP_MAX_M.vine = 450
 M.GROUP_MAX_M.creosote = 250       -- (as the other shrubs)
 M.NO_COLLIDE.creosote = true
+for _, g in ipairs({ 'maquis', 'shrub_north', 'shrub_tropical' }) do     -- (30: as the other shrubs)
+  M.GROUP_MAX_M[g] = 250; M.NO_COLLIDE[g] = true
+end
+M.GROUP_MAX_M.deadwood = 200; M.NO_COLLIDE.deadwood = true     -- (on the forest floor, as the ferns)
 M.CATALOG.straw_s, M.CATALOG.silage_s = M.CATALOG.straw_n, M.CATALOG.silage_n
 for _, g in ipairs({ 'straw_n', 'straw_s', 'silage_n', 'silage_s' }) do M.GROUP_MAX_M[g] = 400; M.ONE_SPELLING[g] = true end
 -- The months (1-12) a group shows in (server vegetation.bale_items: the bales after the harvest; the south's six months
@@ -710,6 +756,7 @@ local MATERIALS = {
   JV .. 'rocks', JV .. 'trees/deserttrees', JV .. 'trees', JRI .. 'trees/trees_palm', JRI .. 'trees/trees_tropical_1',
   JRI .. 'trees/trees_tropical_2', JRI .. 'trees/bush_tropical_1', JRI .. 'trees/bush_tropical_2', JRI .. 'trees',
   JRI .. 'trees/vines_tropical',     -- tro_tree_1's vines and aerial roots (tro_vines_2d; orange without it)
+  JRI .. 'trees/tropical_wide_leaves',     -- shrub_tropical's wide-leaved plants (tropical_wide_leaves, tropical_stem)
   IT .. 'trees/trees_italy', IT .. 'trees', IT .. 'rocks', '/levels/automation_test_track/art/shapes/objects',
   ATT .. 'trees', ATT .. 'trees/trees_poplar', ATT .. 'trees/trees_shrub',     -- riverside poplars, creosote bushes
   '/levels/automation_test_track/art/shapes/buildings',     -- the utility pole's wood_trim / painted metal

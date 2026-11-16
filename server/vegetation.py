@@ -41,7 +41,7 @@ import staging
 
 log = logging.getLogger("earthd.vegetation")
 
-VERSION = 29          # (the cached cells hold their groups: 14 for the regional rules of GitHub #110; 16: the roads'
+VERSION = 30          # (the cached cells hold their groups: 14 for the regional rules of GitHub #110; 16: the roads'
                       # drawn widths and sidewalks kept clear; 17: BC's lidar canopy heights, mapdata's canopy layer 2;
                       # 18: the rounded junction corners kept clear, roadcorners.py; 19: one tree per flat crown,
                       # thin_tops; 20: none on or beside a bridge deck, _mask_decks; 21: orchard rows, canopy trees
@@ -54,7 +54,9 @@ VERSION = 29          # (the cached cells hold their groups: 14 for the regional
                       # 29: Eurasia's own species from the stock shapes, species_groups: birches, oaks and beeches
                       # out of the broadleaves, Scots pines and (Douglas firs standing in for) spruces out of the
                       # conifers by latitude and height above the sea, both in stands (stand_u); dead trees; date and
-                      # fan palms in warm towns; the rainforests' trees tropical, fewer palms there)
+                      # fan palms in warm towns; the rainforests' trees tropical, fewer palms there);
+                      # 30: the bushes by the climate (shrub_groups: maquis, the north's, the tropics',
+                      # the deserts'), ferns and dead wood on the forest floor, the mangroves' trees tropical
 TREE_MIN_M = 3.0
 # The canopy raster, the scatter grids and the crown radii are in Web Mercator units (EPSG:3857: a metre there is
 # cos(lat) metres on the ground) and were tuned by eye at mid latitudes. Past them the same pixel counts covered less
@@ -71,12 +73,14 @@ GROUPS = ("deciduous", "conifer", "shrub", "rock", "pine_west", "palm", "juniper
           "eucalyptus_clump", "poplar", "creosote",
           # (29, species_groups: new names only at the end, the older groups keep their numbers)
           "birch", "oak", "beech", "pine_eu", "spruce", "snag_broad", "snag_conifer", "palm_dry",
-          "birch_clump", "oak_clump", "beech_clump")
+          "birch_clump", "oak_clump", "beech_clump",
+          # (30: the bushes' and forest floors' own, shrub_groups; the stock survey 2026-11-16)
+          "maquis", "shrub_north", "shrub_tropical", "fern", "deadwood")
 (G_DECIDUOUS, G_CONIFER, G_SHRUB, G_ROCK, G_PINE_WEST, G_PALM, G_JUNIPER, G_DESERT_SHRUB, G_DESERT_ROCK,
  G_OAK_WEST, G_TROPICAL, G_MEDITERRANEAN, G_CONIFER_CLUMP, G_DECIDUOUS_CLUMP, G_OAK_WEST_CLUMP,
  G_MEDITERRANEAN_CLUMP, G_VINE, G_STRAW_N, G_STRAW_S, G_SILAGE_N, G_SILAGE_S, G_EUCALYPTUS, G_EUCALYPTUS_CLUMP,
  G_POPLAR, G_CREOSOTE, G_BIRCH, G_OAK, G_BEECH, G_PINE_EU, G_SPRUCE, G_SNAG_BROAD, G_SNAG_CONIFER, G_PALM_DRY,
- G_BIRCH_CLUMP, G_OAK_CLUMP, G_BEECH_CLUMP) = range(36)
+ G_BIRCH_CLUMP, G_OAK_CLUMP, G_BEECH_CLUMP, G_MAQUIS, G_SHRUB_NORTH, G_SHRUB_TROPICAL, G_FERN, G_DEADWOOD) = range(41)
 # Far clumps (GitHub #1074, "trees cost too much"; the asset survey 2026-11-10): a forest's canopy trees gathered on a
 # world-fixed grid of about CLUMP_CELL_M squares (a whole number of them a geotile: none straddles two); a square with
 # CLUMP_MIN of them gets one item of a stock clump shape (trees.lua's *_clump groups: East Coast USA's
@@ -412,6 +416,9 @@ def species_groups(group, height, lat, lon, lcls, koppen, elev, u_broad, u_conif
     # the rainforests: no temperate broadleaves, fewer palms in the forest
     rain = np.isin(k, K_RAINFOREST) & (np.abs(lat) < 23.5)
     g[rain & (g == G_DECIDUOUS)] = G_TROPICAL
+    # (30) a mangrove's trees (WorldCover 95, any climate: the Red Sea's, the Indus delta's) tropical broadleaves
+    mangrove = np.asarray(lcls) == WC["mangrove"]
+    g[mangrove & np.isin(g, (G_DECIDUOUS, G_MEDITERRANEAN, G_PALM, G_OAK, G_BIRCH, G_BEECH))] = G_TROPICAL
     sparse = rain & (g == G_PALM) & ~built & (np.asarray(u_palm) >= RAINFOREST_PALM_KEEP)
     g[sparse] = G_TROPICAL
     # warm towns' date and fan palms
@@ -433,6 +440,88 @@ def species_groups(group, height, lat, lon, lcls, koppen, elev, u_broad, u_conif
 
 SNAG_FROM = ((G_DECIDUOUS, G_BIRCH, G_OAK, G_BEECH, G_OAK_WEST), (G_CONIFER, G_PINE_EU, G_SPRUCE, G_PINE_WEST))
 PALM_FROM = (G_DECIDUOUS, G_BIRCH, G_OAK, G_BEECH, G_MEDITERRANEAN)
+
+# The bushes by the climate (30; the stock survey 2026-11-16): the same bushes in the same places (the canopy's 1-3 m
+# tops, the scatter, the forest edges, the field hedges), their shapes from the climate at each one (Koppen, climate.py)
+# instead of East Coast USA's broadleaf bushes everywhere:
+# - Cs (summer-dry): maquis and garrigue (Italy's cork and holm oak bushes, its scraggly and fluffy bushes, Utah's
+#   junipers and low grey bushes for the rosemary / thyme scrub); in North America (California's chaparral of scrub
+#   oaks, chamise and manzanita, the same look) CHAPARRAL_SHARE of them, the rest the coastal sage scrub's grey desert
+#   bushes as regional_groups made them (West Coast USA's own trees_shrub are creosote bushes: the creosote group's);
+# - the north (Koppen ET / EF anywhere, the boreal D classes from BOREAL_SHRUB_LAT) and the tundra's moss and lichen:
+#   birch and willow scrub (the aspen / birch bushes), spruce saplings (the fir bushes), junipers;
+# - the rainforests, the mangroves and TROPICAL_SAVANNA_SHARE of the savannas' (Aw): Jungle Rock Island's bushes and
+#   wide-leaved plants;
+# - the deserts and steppes (B classes): the desert bushes wherever the land cover is (regional_groups made them only
+#   on shrubland or bare ground below 42 degrees and in the dry West);
+# - the forest floor (the understory scatter under the canopy): FERN_SHARE of its bushes ferns in the humid temperate
+#   and boreal climates, DEADWOOD_SHARE logs, fallen trees, branches and stumps outside the tropics and the deserts.
+K_HUMID = (12, 13, 14, 15, 16, 17, 18, 21, 22, 25, 26, 27, 28)     # Cwb Cwc Cfa Cfb Cfc Dsa Dsb Dwa Dwb Dfa Dfb Dfc Dfd
+K_POLAR = (29, 30)                                                  # ET EF
+K_ARID = (4, 5, 6, 7)                                               # BWh BWk BSh BSk
+K_SAVANNA = (3,)                                                    # Aw / As
+BOREAL_SHRUB_LAT = 50.0
+CHAPARRAL_SHARE = 0.7
+TROPICAL_SAVANNA_SHARE = 0.5
+FERN_SHARE = {"humid": 0.35, "boreal": 0.15}
+DEADWOOD_SHARE = 0.12
+DEADWOOD_H = (1.0, 3.0)     # m: a dead-wood item's height drawn in this range (the shapes' 1.0-3.0 m, M.pick's)
+FERN_MAX_M = 1.6            # (ferns only for the low bushes)
+SHRUB_FROM = (G_SHRUB, G_DESERT_SHRUB)
+
+
+def shrub_groups(group, height, lat, lon, lcls, koppen, u, u_floor, understory=None):
+    """The bushes' groups by the climate (the constants above): group's G_SHRUB / G_DESERT_SHRUB items (the rest as
+    they are) become maquis, northern, tropical or desert bushes; understory (per item: a forest floor
+    bush, the scatter under the canopy; None: none) ferns or dead wood. koppen: the class at each item
+    (climate.koppen_many); u, u_floor: hashed [0, 1) per item. (groups, heights): a dead-wood item's height set within
+    DEADWOOD_H (from u_floor). Pure."""
+    g = np.array(group, np.uint8, copy=True)
+    h = np.array(height, np.float32, copy=True)
+    lat, lon = np.asarray(lat, np.float64), np.asarray(lon, np.float64)
+    k = np.asarray(koppen)
+    c = np.asarray(lcls)
+    u, uf = np.asarray(u, np.float64), np.asarray(u_floor, np.float64)
+    bush = np.isin(g, SHRUB_FROM)
+    if not bush.any():
+        return g, h
+    na = (lat > 24.0) & (lon > -170.0) & (lon < -50.0)
+    alat = np.abs(lat)
+    med = np.isin(k, K_MED)
+    north = (np.isin(k, K_POLAR) | (np.isin(k, K_BOREAL) & (alat >= BOREAL_SHRUB_LAT)) | (c == WC["moss"])) & ~med
+    tropical = (np.isin(k, K_RAINFOREST) | (c == WC["mangrove"])
+                | (np.isin(k, K_SAVANNA) & (u < TROPICAL_SAVANNA_SHARE))) & (alat < 30.0)
+    arid = np.isin(k, K_ARID) & ~tropical
+    g[bush & med & (~na | (u < CHAPARRAL_SHARE))] = G_MAQUIS
+    g[bush & north] = G_SHRUB_NORTH
+    g[bush & tropical] = G_SHRUB_TROPICAL
+    g[bush & arid & (g == G_SHRUB)] = G_DESERT_SHRUB
+    if understory is not None:
+        floor = bush & np.asarray(understory, bool) & ~tropical & ~arid
+        dead = floor & (uf < DEADWOOD_SHARE)
+        g[dead] = G_DEADWOOD
+        h[dead] = DEADWOOD_H[0] + (DEADWOOD_H[1] - DEADWOOD_H[0]) * (uf[dead] / DEADWOOD_SHARE)
+        humid = np.isin(k, K_HUMID) & ~north
+        p = np.where(humid, FERN_SHARE["humid"], np.where(north & ~np.isin(k, K_POLAR), FERN_SHARE["boreal"], 0.0))
+        fern = floor & ~dead & (uf < DEADWOOD_SHARE + p) & (h <= FERN_MAX_M)
+        g[fern] = G_FERN
+    return g, h
+
+
+def climate_shrubs(it, lcls, understory=None):
+    """Items it with its bushes' groups by the climate (shrub_groups; the Koppen class from climate.koppen_many at
+    each, the hashes from its position, so the same bush gets the same shape from every build). lcls: the land cover
+    class per item; understory: per item, a forest floor bush (None: none)."""
+    if not len(it) or not np.isin(it.group, SHRUB_FROM).any():
+        return it
+    import climate
+    qx = np.rint(np.asarray(it.lon, np.float64) * 1e6).astype(np.int64)
+    qy = np.rint(np.asarray(it.lat, np.float64) * 1e6).astype(np.int64)
+    g, h = shrub_groups(it.group, it.height, it.lat, it.lon, lcls, climate.koppen_many(it.lat, it.lon),
+                        _hash01(qx, qy, 71), _hash01(qx, qy, 72), understory)
+    dead = (g == G_DEADWOOD) & (it.group != G_DEADWOOD)
+    radius = np.where(dead, h * 1.5, it.radius).astype(np.float32)     # (a log lies: wider than it is tall)
+    return Items(it.lon, it.lat, h, radius, it.kind, g, it.rank, it.yaw, it.scale)
 
 
 class Vegetation:
@@ -725,6 +814,7 @@ class Vegetation:
         tree = Items(tlon2, tlat2, th.astype(np.float32), (0.12 * th + 1.0).astype(np.float32), kind, group,
                      _hash01(gx, gy, 5).astype(np.float32), (u2 * 360.0).astype(np.float32),
                      (0.85 + 0.3 * _hash01(gx, gy, 6)).astype(np.float32))
+        tree = climate_shrubs(tree, lcls)     # (30: the canopy's 1-3 m tops by the climate too)
         # squares, pedestrian areas and parking lots: no scattered bushes or rocks (a real tree there stays).
         # An orchard keeps its planted rows and loses the canopy's trees inside it.
         paved = np.zeros(h.shape, bool)
@@ -798,11 +888,12 @@ class Vegetation:
         GI, GJ, lon, lat, cls = GI[forest], GJ[forest], lon[forest], lat[forest], cls[forest]
         size = 1.2 + 1.8 * _hash01(GI, GJ, 24)
         n = len(lon)
-        return Items(lon, lat, size.astype(np.float32), (size * 0.6).astype(np.float32),
-                     np.full(n, KIND_BUSH, np.uint8),
-                     regional(np.full(n, G_SHRUB, np.uint8), size, lat, lon, cls, _hash01(GI, GJ, 25)),
-                     _hash01(GI, GJ, 26).astype(np.float32), (_hash01(GI, GJ, 27) * 360.0).astype(np.float32),
-                     (0.8 + 0.4 * _hash01(GI, GJ, 28)).astype(np.float32))
+        return climate_shrubs(Items(lon, lat, size.astype(np.float32), (size * 0.6).astype(np.float32),
+                                    np.full(n, KIND_BUSH, np.uint8),
+                                    regional(np.full(n, G_SHRUB, np.uint8), size, lat, lon, cls, _hash01(GI, GJ, 25)),
+                                    _hash01(GI, GJ, 26).astype(np.float32),
+                                    (_hash01(GI, GJ, 27) * 360.0).astype(np.float32),
+                                    (0.8 + 0.4 * _hash01(GI, GJ, 28)).astype(np.float32)), cls)
 
     def _elev(self, lat, lon):
         """Heights above the sea (m) at the points from the DEM at ELEV_ZOOM; None without a DEM or when it cannot say
@@ -914,13 +1005,16 @@ class Vegetation:
         sel = rock | bush
         n = int(sel.sum())
         size = 0.4 + 1.6 * dnp.sq(_hash01(GI[sel], GJ[sel], 14))
-        return Items(lon[sel], lat[sel], size.astype(np.float32), (size * 0.6).astype(np.float32),
+        if not n:
+            return _empty()
+        it = Items(lon[sel], lat[sel], size.astype(np.float32), (size * 0.6).astype(np.float32),
                      np.where(rock[sel], KIND_ROCK, KIND_BUSH).astype(np.uint8),
                      regional(np.where(rock[sel], G_ROCK, G_SHRUB), size, lat[sel], lon[sel], cls[sel],
                               _hash01(GI[sel], GJ[sel], 18)),
                      _hash01(GI[sel], GJ[sel], 15).astype(np.float32),
                      (_hash01(GI[sel], GJ[sel], 16) * 360.0).astype(np.float32),
-                     (0.8 + 0.4 * _hash01(GI[sel], GJ[sel], 17)).astype(np.float32)) if n else _empty()
+                     (0.8 + 0.4 * _hash01(GI[sel], GJ[sel], 17)).astype(np.float32))
+        return climate_shrubs(it, cls[sel], understory=cls[sel] == UNDERSTORY)
 
 
 def _thin(jj, ii, h, px, k=1.0):
@@ -1465,9 +1559,11 @@ def farm_foliage(feats, chm, blocked, bounds=None):
         keep = np.sort(np.argsort(rank, kind="stable")[:FARM_BUSH_CELL])
         lon, lat, height, yaw, rank, u = lon[keep], lat[keep], height[keep], yaw[keep], rank[keep], u[keep]
     group = np.full(len(lon), G_SHRUB, np.uint8)
-    group = regional(group, height, lat, lon, np.full(len(lon), WC["crop"], np.uint8), u)
-    return Items(lon, lat, height, (0.4 * height).astype(np.float32),
-                 np.full(len(lon), KIND_BUSH, np.uint8), group, rank, yaw, np.ones(len(lon), np.float32))
+    crop = np.full(len(lon), WC["crop"], np.uint8)
+    group = regional(group, height, lat, lon, crop, u)
+    return climate_shrubs(Items(lon, lat, height, (0.4 * height).astype(np.float32),
+                                np.full(len(lon), KIND_BUSH, np.uint8), group, rank, yaw,
+                                np.ones(len(lon), np.float32)), crop)
 
 
 def _edge_axis(xy):
@@ -1680,8 +1776,8 @@ class JsonRows(str):
 AUDIO_CELL_M = 256.0 / 12
 AUDIO_H_MID = 15.0
 AUDIO_H_LARGE = 19.0
-AUDIO_SOUND = [g for g in range(len(GROUPS)) if g not in (G_ROCK, G_DESERT_ROCK, G_VINE) + CLUMP_GROUPS
-               + BALE_GROUPS]
+AUDIO_SOUND = [g for g in range(len(GROUPS)) if g not in (G_ROCK, G_DESERT_ROCK, G_VINE, G_DEADWOOD)
+               + CLUMP_GROUPS + BALE_GROUPS]
 
 
 def _ambience(group, e, n, z, height, lat, lon):

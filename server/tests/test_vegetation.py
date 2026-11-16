@@ -377,6 +377,82 @@ class SpeciesTest(unittest.TestCase):
         self.assertLess(float((np.abs(far - u) < 1e-12).mean()), 0.05)
 
 
+class ShrubTest(unittest.TestCase):
+    """shrub_groups / climate_shrubs (30): the bushes by the climate, ferns and dead wood on the forest floor; the
+    mangroves' trees tropical."""
+
+    def g(self, lat, lon, group=None, lcls=20, h=1.2, u=0.5, uf=0.9, floor=False):
+        import climate
+        la, lo = np.array([lat]), np.array([lon])
+        g, hh = veg.shrub_groups(np.array([veg.G_SHRUB if group is None else group], np.uint8), np.array([h]), la, lo,
+                                 np.array([lcls]), climate.koppen_many(la, lo), np.array([u]), np.array([uf]),
+                                 np.array([floor]))
+        return int(g[0]), float(hh[0])
+
+    def test_by_the_climate(self):
+        self.assertEqual(self.g(43.3, 5.4)[0], veg.G_MAQUIS, "Marseille: maquis and garrigue")
+        self.assertEqual(self.g(37.98, 23.73)[0], veg.G_MAQUIS, "Athens")
+        self.assertEqual(self.g(34.2, -118.4, u=0.3)[0], veg.G_MAQUIS, "Los Angeles: chaparral")
+        self.assertEqual(self.g(34.2, -118.4, u=0.9)[0], veg.G_SHRUB, "... and some of the rest as before")
+        self.assertEqual(self.g(34.2, -118.4, group=veg.G_DESERT_SHRUB, u=0.9)[0], veg.G_DESERT_SHRUB)
+        self.assertEqual(self.g(68.0, 25.0)[0], veg.G_SHRUB_NORTH, "Lapland")
+        self.assertEqual(self.g(46.5, 7.9)[0], veg.G_SHRUB_NORTH, "the Alps over the tree line (ET)")
+        self.assertEqual(self.g(-3.1, -60.0)[0], veg.G_SHRUB_TROPICAL, "Manaus")
+        self.assertEqual(self.g(25.2, 55.3, lcls=30)[0], veg.G_DESERT_SHRUB, "Dubai, on grass too")
+        self.assertEqual(self.g(52.23, 21.0)[0], veg.G_SHRUB, "Warsaw: the broadleaf bushes as before")
+        self.assertEqual(self.g(39.3, -76.6)[0], veg.G_SHRUB, "Maryland")
+
+    def test_mangroves(self):
+        self.assertEqual(self.g(24.85, 66.95, lcls=veg.WC["mangrove"])[0], veg.G_SHRUB_TROPICAL,
+                         "Karachi's mangroves (a hot desert's)")
+        import climate
+        la, lo = np.array([24.85]), np.array([66.95])
+        k = climate.koppen_many(la, lo)
+        for grp in (veg.G_DECIDUOUS, veg.G_MEDITERRANEAN, veg.G_PALM):
+            g = veg.species_groups(np.array([grp], np.uint8), np.array([6.0]), la, lo,
+                                   np.array([veg.WC["mangrove"]]), k, None, np.array([0.5]), np.array([0.5]),
+                                   np.array([0.9]), np.array([0.9]))
+            self.assertEqual(int(g[0]), veg.G_TROPICAL)
+
+    def test_the_forest_floor(self):
+        g, h = self.g(52.23, 21.0, lcls=10, uf=0.05, floor=True)
+        self.assertEqual(g, veg.G_DEADWOOD)
+        self.assertTrue(veg.DEADWOOD_H[0] <= h <= veg.DEADWOOD_H[1])
+        self.assertEqual(self.g(52.23, 21.0, lcls=10, uf=0.3, floor=True)[0], veg.G_FERN, "ferns")
+        self.assertEqual(self.g(52.23, 21.0, lcls=10, uf=0.3, h=1.9, floor=True)[0], veg.G_SHRUB, "not for the tall")
+        self.assertEqual(self.g(52.23, 21.0, lcls=10, uf=0.8, floor=True)[0], veg.G_SHRUB)
+        self.assertEqual(self.g(52.23, 21.0, uf=0.05)[0], veg.G_SHRUB, "open land: no dead wood")
+        self.assertEqual(self.g(-3.1, -60.0, lcls=10, uf=0.05, floor=True)[0], veg.G_SHRUB_TROPICAL)
+        self.assertEqual(self.g(25.2, 55.3, lcls=10, uf=0.05, floor=True)[0], veg.G_DESERT_SHRUB)
+        self.assertEqual(self.g(43.3, 5.4, lcls=10, uf=0.3, floor=True)[0], veg.G_MAQUIS, "no ferns in the dry south")
+
+    def test_others_and_the_count_unchanged(self):
+        for grp in (veg.G_ROCK, veg.G_DECIDUOUS, veg.G_JUNIPER, veg.G_CREOSOTE, veg.G_VINE):
+            self.assertEqual(self.g(43.3, 5.4, group=grp, uf=0.05, floor=True)[0], grp)
+        n = 500
+        rng = np.random.default_rng(3)
+        lat, lon = rng.uniform(40, 60, n), rng.uniform(-5, 30, n)
+        it = veg.Items(lon, lat, np.full(n, 1.0, np.float32), np.full(n, 0.6, np.float32),
+                       np.full(n, veg.KIND_BUSH, np.uint8), np.full(n, veg.G_SHRUB, np.uint8),
+                       rng.random(n).astype(np.float32), np.zeros(n, np.float32), np.ones(n, np.float32))
+        a = veg.climate_shrubs(it, np.full(n, 10, np.uint8), np.ones(n, bool))
+        b = veg.climate_shrubs(it, np.full(n, 10, np.uint8), np.ones(n, bool))
+        self.assertEqual(len(a), n)
+        np.testing.assert_array_equal(a.group, b.group)
+        np.testing.assert_array_equal(a.lon, it.lon)
+        self.assertGreater(int((a.group == veg.G_DEADWOOD).sum()), 0)
+        self.assertGreater(int((a.group == veg.G_FERN).sum()), 0)
+
+    def test_audio_and_the_mod_knows_them(self):
+        self.assertNotIn(veg.G_DEADWOOD, veg.AUDIO_SOUND)
+        import os
+        root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        path = os.path.join(root, "mod/beamng_earth/lua/ge/extensions/beamngEarth/trees.lua")
+        lua = open(path, encoding="utf-8").read()
+        for name in ("maquis", "shrub_north", "shrub_tropical", "fern", "deadwood"):
+            self.assertIn(f"\n  {name} = {{", lua, name)
+
+
 class RegionalTest(unittest.TestCase):
     def g(self, group, h, lat, lon, lcls, u=0.9):
         return int(veg.regional(np.array([group]), np.array([h]), np.array([lat]), np.array([lon]),
