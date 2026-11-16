@@ -41,7 +41,7 @@ import staging
 
 log = logging.getLogger("earthd.vegetation")
 
-VERSION = 31          # (the cached cells hold their groups: 14 for the regional rules of GitHub #110; 16: the roads'
+VERSION = 32          # (the cached cells hold their groups: 14 for the regional rules of GitHub #110; 16: the roads'
                       # drawn widths and sidewalks kept clear; 17: BC's lidar canopy heights, mapdata's canopy layer 2;
                       # 18: the rounded junction corners kept clear, roadcorners.py; 19: one tree per flat crown,
                       # thin_tops; 20: none on or beside a bridge deck, _mask_decks; 21: orchard rows, canopy trees
@@ -61,6 +61,7 @@ VERSION = 31          # (the cached cells hold their groups: 14 for the regional
                       # 31: dead wood only added, in remote forest on level ground (30's replaced bushes and reached
                       # over roads); the tropics' vine-draped thickets the same way (G_TRO_THICKET); no mossy forest
                       # oaks or dead trees by the roads and in town (OPEN_FROM)
+                      # 32: more admixture in the stands (STAND_MIX 0.3), pine_eu's shapes back to five
 TREE_MIN_M = 3.0
 # The canopy raster, the scatter grids and the crown radii are in Web Mercator units (EPSG:3857: a metre there is
 # cos(lat) metres on the ground) and were tuned by eye at mid latitudes. Past them the same pixel counts covered less
@@ -312,7 +313,8 @@ def _conifer_share(lat, lon):
 EURASIA_BOX = (23.5, -25.0, 75.0, 180.0)        # south, west, north, east
 STAND_CELL_M = 80.0         # a stand's size about (ground m); its edges ragged by STAND_JITTER of it per tree
 STAND_JITTER = 0.35
-STAND_MIX = 0.15            # this share of the trees picks its species on its own (a stand's admixture)
+STAND_MIX = 0.3             # this share of the trees picks its species on its own (a stand's admixture; 0.15 made
+                            # one-species blocks, the user's test at Gorzyce 2026-11-17)
 # Koppen classes (Beck et al.) -> (birch, oak, beech) shares of the broadleaves
 K_BOREAL = (19, 20, 23, 24, 27, 28, 29, 30)     # Dsc Dsd Dwc Dwd Dfc Dfd ET EF
 K_CONTINENTAL = (17, 18, 21, 22, 25, 26)        # Dsa Dsb Dwa Dwb Dfa Dfb

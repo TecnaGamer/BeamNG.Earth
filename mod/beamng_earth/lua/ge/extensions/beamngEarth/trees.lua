@@ -440,8 +440,11 @@ M.CATALOG = {
   -- (2026-11-16, the user's test: Italy's scots_pine_filler, a sparse forest filler meant to be seen among other trees,
   -- stood alone like no pine in Poland; West Coast USA's sparse forest Monterey pine out too: a young maritime pine,
   -- a young Monterey pine for 7-11 m, Italy's Scots pine above, M.pick scaling it down to 12 m)
+  -- (2026-11-17, the user's test at Gorzyce, Silesia: a stand of nothing but one Scots pine, clones in a row: the
+  -- weathered and large Monterey pines back for 10-17 m so M.pick has several to choose from at every height)
   pine_eu = {
     { IT .. 'trees/trees_italy/maritime_pine_bush', 5.05 }, { WCA .. 'trees/trees_conifer/pine_radiata_small', 8.6 },
+    { WCA .. 'trees/trees_conifer/pine_radiata_large', 13.2 }, { WCA .. 'trees/trees_conifer/pine_radiata_weathered', 13.2 },
     { IT .. 'trees/trees_italy/scots_pine', 18.9 },
   },
   spruce = {
