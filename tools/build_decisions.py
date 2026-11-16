@@ -383,15 +383,20 @@ def _index(root):
         return {}
 
 
-def pack(by_block, out, vkey_hex, vkey_bytes, doc, seed, built_by):
+def pack(by_block, out, vkey_hex, vkey_bytes, doc, seed, built_by, store=None, npz=None):
     """by_block's items into their blocks under <out>/d<FORMAT>/<vkey>/12/<x>/<y>.<h>.bngd (h: the file's own sha256,
     16 hex; merged with the block's current file: its items kept unless made again, by base key), signed; the
     current names in current.json, the replaced ones in retired.json (with when: run.py prune-out removes them after
     a grace period, so a client holding the old manifest still finds them); the manifest rewritten. Returns
-    {(bx, by): bytes}."""
+    {(bx, by): bytes}. store: the product's layout (a decisions.Store class: decisions.Store, lidarz.Store), npz(key):
+    is a kept item numpy's npz (the decision plans)."""
     import decisions
     import fast
-    root = os.path.join(out, f"d{decisions.FORMAT}", vkey_hex)
+    store = store or decisions.Store
+    npz = npz or (lambda k: k.startswith("p/"))
+    kw = {} if store.DOMAIN == "dec" else {"domain": store.DOMAIN}
+    ext = store.EXT
+    root = os.path.join(out, f"{store.PREFIX}{store.LAYOUT}", vkey_hex)
     os.makedirs(root, exist_ok=True)
     cur = _index(root)
     try:
@@ -405,29 +410,29 @@ def pack(by_block, out, vkey_hex, vkey_bytes, doc, seed, built_by):
         name = f"{bx}/{by}"
         old_h = cur.get(name)
         if old_h:                       # (a block built before: its items kept unless made again now)
-            with open(os.path.join(root, str(decisions.BLOCK_Z), str(bx), f"{by}.{old_h}.bngd"), "rb") as f:
+            with open(os.path.join(root, str(decisions.BLOCK_Z), str(bx), f"{by}.{old_h}.{ext}"), "rb") as f:
                 old = f.read()
-            fast._ef.dec_verify_block(old, decisions.BLOCK_Z, bx, by, vkey_bytes, [pub])
+            fast._ef.dec_verify_block(old, decisions.BLOCK_Z, bx, by, vkey_bytes, [pub], **kw)
             made = {decisions.base_key(k) for k in items}
-            for k in fast._ef.dec_block_info(old)[4]:
+            for k in fast._ef.dec_block_info(old, **kw)[4]:
                 if decisions.base_key(k) not in made:
-                    items[k] = (fast._ef.dec_block_item(old, k), k.startswith("p/"))
+                    items[k] = (fast._ef.dec_block_item(old, k, **kw), npz(k))
         body = fast._ef.dec_pack_block(decisions.BLOCK_Z, bx, by, vkey_bytes,
-                                       [(k, v[0], v[1]) for k, v in sorted(items.items())], seed)
+                                       [(k, v[0], v[1]) for k, v in sorted(items.items())], seed, **kw)
         h = hashlib.sha256(body).hexdigest()[:decisions.HASH_HEX]
-        decisions._write(os.path.join(root, str(decisions.BLOCK_Z), str(bx), f"{by}.{h}.bngd"), body)
+        decisions._write(os.path.join(root, str(decisions.BLOCK_Z), str(bx), f"{by}.{h}.{ext}"), body)
         if old_h and old_h != h:
-            retired[f"{decisions.BLOCK_Z}/{bx}/{by}.{old_h}.bngd"] = time.time()
+            retired[f"{decisions.BLOCK_Z}/{bx}/{by}.{old_h}.{ext}"] = time.time()
         cur[name] = h
         sizes[(bx, by)] = len(body)
     decisions._write(os.path.join(root, "retired.json"), json.dumps(retired, sort_keys=True).encode())
     decisions._write(os.path.join(root, "current.json"), json.dumps(cur, sort_keys=True).encode())
     blocks = sorted([int(k.split("/")[0]), int(k.split("/")[1]), h] for k, h in cur.items())
-    man = {"format": decisions.FORMAT, "vkey": vkey_hex, "doc": doc, "blocks": blocks,
+    man = {"format": store.LAYOUT, "vkey": vkey_hex, "doc": doc, "blocks": blocks,
            "built": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "builder": built_by,
            "key": pub.hex()[:16]}
-    decisions._write(os.path.join(root, "manifest.bngm"),
-                     fast._ef.dec_make_manifest(json.dumps(man, sort_keys=True).encode("utf-8"), seed))
+    decisions._write(os.path.join(root, store.MANIFEST),
+                     fast._ef.dec_make_manifest(json.dumps(man, sort_keys=True).encode("utf-8"), seed, **kw))
     return sizes
 
 

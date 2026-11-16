@@ -314,7 +314,7 @@ class PlanCache:
     def _bake_expect(self):
         import bakepack
         return {"bake_format": bakepack.BAKE_FORMAT, "plans_format": PLANS_FORMAT, "frames": FRAMES,
-                "signature": self.signature,
+                "signature": self.signature, "switches": bakepack.switches(),
                 "versions": json.loads(json.dumps(self.persist[1][2], sort_keys=True))}
 
     def _baked(self, key):

@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 MODULES = (
     "test_protocol", "test_protocol_agreement", "test_geodesy", "test_cache",
     "test_budget", "test_class_grid", "test_install", "test_updates", "test_selfupdate", "test_bmplaunch",
-    "test_launcher_linux", "test_launcher_lifecycle", "test_process_lifecycle",
+    "test_launcher_linux", "test_launcher_lifecycle", "test_process_lifecycle", "test_srvrestart",
     "test_connection_cleanup", "test_initial_loading", "test_tile_ownership", "test_matslots", "test_stream_reconnect",
     "test_netfetch", "test_mapdata", "test_rangeread", "test_grading", "test_roadz", "test_roadz_inputs",
     "test_road_seams", "test_drivability", "test_determinism", "test_roadgeo", "test_fast", "test_restart",
@@ -56,7 +56,8 @@ def main():
         [sys.executable, "tools/run_tests.py", *MODULES, "--par", str(args.par),
          "--timeout", str(args.timeout), "--logs", "build/quality-tests"],
         [sys.executable, "tools/run_lua_tests.py"],
-        ["node", "--test", "mod/tests/test_mapmath.mjs", "server/tests/test_mapmath.mjs"],
+        ["node", "--test", "mod/tests/test_mapmath.mjs", "server/tests/test_mapmath.mjs", "mod/tests/test_ui_lifecycle.mjs",
+         "mod/tests/test_restart_box.mjs"],
         ["cargo", "test", "--locked", "--manifest-path", "native/serverlist/Cargo.toml"],
         [sys.executable, "tools/package.py", "--beammp", "--out", "build/quality-packages"],
     ]

@@ -123,6 +123,10 @@ only numbers (and in section 2 short model names and settings values), so no pos
 | field | example | why |
 |---|---|---|
 | requests per map service | `basemap.nationalmap.gov`: 88 requests, 2.8 MB, 0 errors, 0 rate-limited | BeamNG.Earth downloads from free public services (map data, elevation, photos). These counts show us whether we are putting too much load on any of them, so we can cache or slow down before a service blocks everyone. |
+| elevation tile reads by part of the app | `mapterhorn:grading:16:net`: 12 (the elevation service, the part of BeamNG.Earth that asked, the zoom level, and whether the tile came from your disk, another of the app's processes, the project's tile host or the service itself) | to see which parts of the app ask the free elevation service most, so we can cut those requests. At most 64 such counts a report; no tile numbers or positions. |
+
+Each report also carries a random id of the app's current run and the report's number in that run, so a report that
+is sent again (because its answer got lost) is counted only once.
 
 ## 7. Requests for aerial photo packs (main switch)
 

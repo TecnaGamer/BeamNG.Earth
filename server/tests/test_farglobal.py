@@ -508,6 +508,122 @@ class RebaseTest(test_server.ServerHarness):
         self.assertEqual(shown, set(c.desired))
 
 
+class GlobalSlackTest(unittest.TestCase):
+    """far_global_select's slack (earthd's pose gate): from a fixed point (the selection with its own refined nodes
+    as prev), every move under the slack it reports selects the same tiles. Codex review round 3: in square mode a
+    rotated root's bbox overlapped the square past the root search's reach; 0.2 m under a reported 64 m slack added a
+    tile."""
+
+    @staticmethod
+    def _sel(lat, lon, px, py, radius, disc, zf, max_level, prev, k=0.1):
+        import fast
+        tiles, refined, regions, slack = fast._ef.far_global_select(
+            lat, lon, px, py, radius, disc, zf, max_level, [k] * 15, 100.0, 0.2, sorted(prev), [], [], None, 0.0)
+        return sorted((z, x, y) for z, x, y, _q, _s in tiles), set(refined), sorted((x, y) for x, y, _q in regions), \
+            slack
+
+    def _fixed(self, lat, lon, px, py, radius, disc, zf, max_level, k=0.1):
+        prev = set()
+        for _ in range(8):
+            got = self._sel(lat, lon, px, py, radius, disc, zf, max_level, prev, k)
+            if got[1] == prev:
+                return got
+            prev = got[1]
+        self.fail("no fixed point")
+
+    def test_square_mode_root_boundary(self):
+        a = (-262604.19504801696, 302791.4604474215)
+        b = (-262604.05301726947, 302791.6012567492)
+        tiles, refined, regions, slack = self._fixed(40.0, -76.0, *a, 40000.0, False, 12, 7)
+        moved = math.hypot(b[0] - a[0], b[1] - a[1])
+        there = self._sel(40.0, -76.0, *b, 40000.0, False, 12, 7, refined)
+        if moved < slack:
+            self.assertEqual((there[0], there[1], there[2]), (tiles, refined, regions),
+                             f"moved {moved:.2f} m under a slack of {slack:.2f} m: another selection")
+
+    def test_moves_under_the_slack_keep_the_selection(self):
+        import random
+        rng = random.Random(3)
+        n = 0
+        for _ in range(150):
+            lat, lon = rng.uniform(-60.0, 60.0), rng.uniform(-170.0, 170.0)
+            disc = rng.random() < 0.6
+            zf = ff.global_zoom(lat)
+            p = (rng.uniform(-300000.0, 300000.0), rng.uniform(-300000.0, 300000.0))
+            radius = rng.choice([20000.0, 40000.0, 80000.0])
+            k = rng.choice([0.1, 1.5, 3.0])
+            tiles, refined, regions, slack = self._fixed(lat, lon, *p, radius, disc, zf, 7, k)
+            for _ in range(3):
+                if slack <= 0.0:
+                    break
+                a, r = rng.uniform(0.0, 2 * math.pi), slack * rng.uniform(0.0, 0.999)
+                q = (p[0] + r * math.cos(a), p[1] + r * math.sin(a))    # det-ok: a test's random directions
+                there = self._sel(lat, lon, *q, radius, disc, zf, 7, refined, k)
+                self.assertEqual((there[0], there[1], there[2]), (tiles, refined, regions),
+                                 f"{lat:.3f}, {lon:.3f} disc {disc}: {r:.2f} m under a slack of {slack:.2f} m")
+                n += 1
+        self.assertGreater(n, 20)
+
+    def test_anchor_moves_under_the_slack_keep_the_selection(self):
+        """farfield.select's slack (the anchor's quadtree, farsel.rs): disc and square, the horizon cull, forced boxes,
+        the eye's height, the 3D map's cone, the screen-space LOD; from a fixed point, moves under the slack select the
+        same tiles."""
+        import random
+        rng = random.Random(1)
+        lay = ff.Layout(64, 1024, True, None)
+        n = 0
+        for t in range(150):
+            disc = rng.random() < 0.5
+            p = (rng.uniform(-20000, 20000), rng.uniform(-20000, 20000))
+            radius = rng.choice([5000.0, 20000.0, 80000.0])
+            scale = rng.choice([0.5, 1.0, 2.0])
+            hz = None
+            if disc and rng.random() < 0.5:
+                s = ff.level_size(ff.HORIZON_GRID_LEVEL)
+                grid = ff.HorizonGrid(64 * s, np.random.default_rng(t).uniform(0, 2500, (128, 128)))
+                hz = ff.Horizon(rng.uniform(2, 500), grid)
+            eye_h = rng.choice([0.0, 0.0, 200.0])
+            forced = [(p[0] - 1024, p[1] - 1024, p[0] + 1024, p[1] + 1024)] if rng.random() < 0.5 else []
+            cone = None
+            if rng.random() < 0.3:
+                a = rng.uniform(0, 6.28)
+                cone = [p[0], p[1], 300.0, math.cos(a), math.sin(a), -0.3, 0.825, 0.0, 3.0]  # det-ok: a test's
+            errs = {}
+            view = None
+
+            def sel(q, prev):
+                return ff.select(*q, forced, prev, lambda lvl: lay.k(lvl) * scale, 0.25, radius,
+                                 ff.HORIZON_MAX_LEVEL if hz else ff.MAX_LEVEL, min_level=lay.min_level, layout=lay,
+                                 disc=disc, horizon=hz, eye_h=eye_h, cone=cone, view=view)
+
+            def fixed():
+                prev = set()
+                for _ in range(8):
+                    out, ref = sel(p, prev)
+                    if ref == prev:
+                        return out, ref, ff.LAST_SLACK
+                    prev = ref
+                return None
+            got = fixed()
+            if got is not None and rng.random() < 0.4:     # (the screen-space LOD, some nodes' errors known)
+                for nd in sorted(got[1])[:300]:
+                    errs[nd] = rng.uniform(0, 30)
+                view = ff.View(p[0] + 5, p[1] - 3, 2.0, 1200.0, errs.get, tau=2.0, cells=64)
+                got = fixed()
+            if got is None:
+                continue
+            out, ref, slack = got
+            for _ in range(3):
+                if slack <= 0:
+                    break
+                a, r = rng.uniform(0, 6.28), slack * rng.uniform(0, 0.999)
+                q = (p[0] + r * math.cos(a), p[1] + r * math.sin(a))    # det-ok: a test's random directions
+                out2, ref2 = sel(q, ref)
+                self.assertEqual((sorted(out2), ref2), (sorted(out), ref), f"case {t}: {r:.2f} m under {slack:.2f}")
+                n += 1
+        self.assertGreater(n, 100)
+
+
 if __name__ == "__main__":
     unittest.main()
 

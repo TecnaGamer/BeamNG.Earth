@@ -703,8 +703,56 @@ class LeakedPacksTest(unittest.TestCase):
             s.hm[key] = {"base": names[2], "old_bases": [names[1]]}
             s.hm_committed, s.hm_sent = [], []
             s.evict_heightmaps(fresh=None)
+            s.removes_flush()               # (the files go in the "remove" thread)
             self.assertNotIn(key, s.hm)
             self.assertFalse(any(os.path.exists(p) for p in packs), "every photo of the block goes with it")
+
+    def test_eviction_never_deletes_a_rebuilt_blocks_files(self):
+        """A block evicted (its files removed in the "remove" thread) and built again while that removal is under way
+        (Codex review: the rebuild started after the removal's check and its files were deleted under it): the new
+        build's files stay; the rebuild waits for the removal of its block."""
+        with tempfile.TemporaryDirectory() as root, mock.patch.object(earthd, "game_running", lambda: True), \
+                mock.patch.object(earthd, "HM_CACHE", 0):
+            s = self.server(root)
+            a = s.new_anchor(46.86, -113.98)
+            s.anchors[a.id] = a
+            key = (a.id, 0.0, 0.0)
+            path = os.path.join(s.out_dir, s.hm_name(key))
+            with open(path, "w") as f:
+                f.write("old")
+            s.hm[key] = {"base": s.base_name(key)}
+            s.hm_committed, s.hm_sent = [], []
+            deleting, rebuilt = threading.Event(), threading.Event()
+            real_remove = earthd.Server._remove
+
+            def slow_remove(p):
+                if p == path and not deleting.is_set():
+                    deleting.set()          # (the removal under way: its check passed)
+                    rebuilt.wait(2.0)
+                real_remove(p)
+
+            def make(anchor, cx, cy, progress, lane=None, queued_at=None):
+                with open(path, "w") as f:
+                    f.write("new")
+                return {"zoom": 14, "seconds": 0.0, "zBase": 0.0, "maxHeight": 1.0, "q": 0.25}
+
+            async def go():
+                s.evict_heightmaps(fresh=None)
+                for _ in range(400):
+                    if deleting.is_set():
+                        break
+                    await asyncio.sleep(0.005)
+                task = asyncio.ensure_future(s.terrain(a, 0.0, 0.0))
+                await asyncio.sleep(0.2)    # (the rebuild's chance to write before the removal goes on)
+                rebuilt.set()
+                await task
+            with mock.patch.object(earthd.Server, "_remove", staticmethod(slow_remove)), \
+                    mock.patch.object(s, "make_heightmap", make):
+                asyncio.run(go())
+                s.removes_flush()
+            self.assertIn(key, s.hm)
+            with open(path) as f:
+                self.assertEqual(f.read(), "new", "the rebuilt block's file stays")
 
     def test_leaked_packs_wiped_once_with_no_game(self):
         import terraincache

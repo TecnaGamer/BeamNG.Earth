@@ -15,8 +15,9 @@
 -- onModDeactivated) or a copy's modScript runs (modScript.lua: a newer copy taking over from an older one that has none
 -- of this), and the copy now mounted is another one, our extensions are unloaded and our modules forgotten; the mod
 -- manager then loads the mounted copy's extensions (loadManualUnloadExtensions), or this does after a hook. Nothing is
--- swapped while no copy is mounted (between BeamMP turning one off and the other on: the running code still turns the
--- player's copy back on when they leave, beammp.lua), nor when the mounted copy is the same.
+-- swapped while no copy is mounted (between BeamMP turning one off and the other on, a stock-map server), nor when the
+-- mounted copy is the same. The player's copy is switched back on after the session by a job core.lua's
+-- onModDeactivated starts before this runs (beammp.lua): the swap doesn't touch it, whatever version the server sent.
 -- BeamMP turns the server's copy on before it turns the player's off, and the mod manager runs a modScript by its
 -- virtual path, so the player's copy's modScript usually runs then: the swap comes from the running code's hooks (the
 -- player's app), and a server's newer copy can take over an older app's code only when its files win (measured on the
