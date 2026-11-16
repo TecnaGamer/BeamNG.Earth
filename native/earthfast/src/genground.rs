@@ -120,6 +120,9 @@ const PALETTE: [[f32; 3]; NKINDS] = [
 /// How much of a kind's palette colour goes into its region's Sentinel-2 colour (stage 2): a square's, a pitch's or a
 /// pool's own colour is not in a 10 m photo (it smears them with what is round them); 0 for the land kinds, the photo
 /// is theirs.
+/// MIX's share by the support of the region's photo colour (region_mean: 0 the palette, 1 the kind's or impure
+/// texels, 2 fairly pure, 3 the region's own pure texels)
+const SUPPORT_MIX: [f32; 4] = [1.0, 1.0, 0.7, 0.35];
 const MIX: [f32; NKINDS] = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
                             0.45, 0.5, 0.6, 0.45, 0.55, 0.35, 0.6, 0.7, 0.7, 0.85, 0.0, 0.0, 0.0, 0.7, 0.0, 0.55];
 
@@ -671,13 +674,13 @@ struct Windows {
 /// texels no brighter than that mean.
 #[allow(clippy::too_many_arguments)]
 fn region_mean(s2: &[u8], kind: &[u8], region: &[u32], dist: &[u32], n: usize, r: usize, c: usize, w: &Windows,
-               px: [f32; 3]) -> [f32; 3] {
+               px: [f32; 3]) -> ([f32; 3], f32) {
     let i = r * n + c;
     let (k, reg) = (kind[i], region[i]);
     let tries: [(usize, usize, bool, u32); 6] = [
         (w.near_r, w.near_s, true, w.pure3), (w.far_r, w.far_s, true, w.pure3), (w.far_r, w.far_s, true, w.semi3),
         (w.far_r, w.far_s, false, w.pure3), (w.far_r, w.far_s, false, w.semi3), (w.near_r, 1, true, 0)];
-    for (rad, step, own, min_d) in tries {
+    for (t_i, (rad, step, own, min_d)) in tries.into_iter().enumerate() {
         let keep = |j: usize| dist[j] >= min_d && if own { region[j] == reg } else { kind[j] == k };
         let (mut s, mut cnt) = window_sum(s2, n, r, c, rad, step, w.g, keep);
         if cnt > 0 && k == WATER {
@@ -690,14 +693,16 @@ fn region_mean(s2: &[u8], kind: &[u8], region: &[u32], dist: &[u32], n: usize, r
             }
         }
         if cnt > 0 {
-            return [s[0] as f32 / cnt as f32, s[1] as f32 / cnt as f32, s[2] as f32 / cnt as f32];
+            // (the support: the region's own pure texels 3, its fairly pure ones 2, the kind's or impure ones 1)
+            let support = match t_i { 0 | 1 => 3.0, 2 => 2.0, _ => 1.0 };
+            return ([s[0] as f32 / cnt as f32, s[1] as f32 / cnt as f32, s[2] as f32 / cnt as f32], support);
         }
     }
     let p = PALETTE[k as usize];
     if p[0] > 0.0 {
-        [px[0] + (p[0] - px[0]) * 0.25, px[1] + (p[1] - px[1]) * 0.25, px[2] + (p[2] - px[2]) * 0.25]
+        ([px[0] + (p[0] - px[0]) * 0.25, px[1] + (p[1] - px[1]) * 0.25, px[2] + (p[2] - px[2]) * 0.25], 0.0)
     } else {
-        px
+        (px, 0.0)
     }
 }
 
@@ -738,6 +743,7 @@ struct Coarse {
     pc: usize,
     rgb: Vec<[i32; 3]>, // the cell's mean photo colour (0..255), -1 where the cell is not whole inside the square
     lum: Vec<i32>,      // smoothed luminance x 16
+    open: Vec<bool>,    // the cell is one open region with no region border within 12 m
     barrier: Vec<(i64, i64)>, // the barrier's gradient direction (cells), (0, 0): none
 }
 
@@ -836,7 +842,7 @@ fn coarse_barriers(s2: &[u8], kind: &[u8], region: &[u32], dist: &[u32], n: usiz
             }
         }
     }
-    Coarse { nr, nc, pr, pc, rgb, lum, barrier }
+    Coarse { nr, nc, pr, pc, rgb, lum, open, barrier }
 }
 
 
@@ -897,6 +903,132 @@ fn barrier_colour(cg: &Coarse, r: usize, c: usize, n: usize, t: f64, region: &[u
         (1.0 - (sd.abs() - BARRIER_NEAR_M) / (BARRIER_FADE_M - BARRIER_NEAR_M)) as f32
     };
     Some((col, w))
+}
+
+// ---- stage 3 step 4: cultivation direction from the photo's structure, where it shows periodic strips ----
+
+/// 32 stripe normals (x 1024; k x 180 / 32 degrees from east): integers, no trigonometry at run time.
+const NORMALS: [(i64, i64); 32] = [(1024, 0), (1019, 100), (1004, 200), (980, 297), (946, 392), (903, 483), (851, 569),
+    (792, 650), (724, 724), (650, 792), (569, 851), (483, 903), (392, 946), (297, 980), (200, 1004), (100, 1019),
+    (0, 1024), (-100, 1019), (-200, 1004), (-297, 980), (-392, 946), (-483, 903), (-569, 851), (-650, 792),
+    (-724, 724), (-792, 650), (-851, 569), (-903, 483), (-946, 392), (-980, 297), (-1004, 200), (-1019, 100)];
+/// Analysis patches of STRIPE_PATCH coarse cells (64 m), on the global grid; each from its own cells alone.
+const STRIPE_PATCH: usize = 8;
+/// A patch's cells: at least this share open crop (unmapped fields), the tensor's coherence ((A-C)^2 + 4B^2 over
+/// (A+C)^2) at least STRIPE_COH^2, its energy per cell at least STRIPE_EMIN (x 256 units^2), and a repeat: the
+/// luminance profile across the strips correlating at a lag of 3-6 cells (24-48 m) at least STRIPE_AC of its variance.
+const STRIPE_MIN_SHARE: i64 = 6;     // of 8 (75 %)
+const STRIPE_COH_NUM: i64 = 9;       // coherence^2 >= 9 / 25 (coherence >= 0.6)
+const STRIPE_COH_DEN: i64 = 25;
+const STRIPE_EMIN: i64 = 2 * 256;
+const STRIPE_AC_NUM: i64 = 3;        // autocorrelation >= 0.3
+const STRIPE_AC_DEN: i64 = 10;
+/// Furrows drawn where a patch shows strips: STRIPE_FURROW_M apart, STRIPE_AMP of luminance, faded between patches.
+const STRIPE_FURROW_M: f64 = 4.0;
+const STRIPE_AMP: f32 = 0.05;
+
+/// Per patch: Some(normal index) where the photo shows periodic strips over open crop, else None.
+fn stripe_patches(cg: &Coarse, kind: &[u8], n: usize) -> (usize, usize, Vec<Option<usize>>) {
+    let (pnr, pnc) = (cg.nr / STRIPE_PATCH, cg.nc / STRIPE_PATCH);
+    let mut out = vec![None; pnr * pnc];
+    for pa in 0..pnr {
+        for pb in 0..pnc {
+            let (a0, b0) = (pa * STRIPE_PATCH, pb * STRIPE_PATCH);
+            let (mut sa, mut sb, mut sc, mut cnt) = (0i64, 0i64, 0i64, 0i64);
+            let lum = |a: usize, b: usize| cg.lum[a * cg.nc + b] as i64;
+            for a in a0 + 1..a0 + STRIPE_PATCH - 1 {
+                for b in b0 + 1..b0 + STRIPE_PATCH - 1 {
+                    let i = a * cg.nc + b;
+                    let (r0, c0) = (cg.pr + a * COARSE, cg.pc + b * COARSE);
+                    if !cg.open[i] || kind[r0 * n + c0] != CROP {
+                        continue;
+                    }
+                    let gx = lum(a, b + 1) - lum(a, b - 1);
+                    let gy = lum(a - 1, b) - lum(a + 1, b);
+                    sa += gx * gx;
+                    sb += gx * gy;
+                    sc += gy * gy;
+                    cnt += 1;
+                }
+            }
+            let inner = ((STRIPE_PATCH - 2) * (STRIPE_PATCH - 2)) as i64;
+            if cnt * 8 < inner * STRIPE_MIN_SHARE || sa + sc < STRIPE_EMIN * cnt {
+                continue;
+            }
+            let (a_, b_, c_) = (sa as i128, sb as i128, sc as i128);
+            let coh = (a_ - c_) * (a_ - c_) + 4 * b_ * b_;
+            if coh * (STRIPE_COH_DEN as i128) < (a_ + c_) * (a_ + c_) * (STRIPE_COH_NUM as i128) {
+                continue;
+            }
+            let mut best = (i128::MIN, 0usize);
+            for (k, &(nx, ny)) in NORMALS.iter().enumerate() {
+                let (nx, ny) = (nx as i128, ny as i128);
+                let e = nx * nx * a_ + 2 * nx * ny * b_ + ny * ny * c_;
+                if e > best.0 {
+                    best = (e, k);
+                }
+            }
+            // the profile across the strips through the patch's middle (nearest cells along the normal, 1 cell apart)
+            let (nx, ny) = NORMALS[best.1];
+            let mid = (a0 as i64 + STRIPE_PATCH as i64 / 2, b0 as i64 + STRIPE_PATCH as i64 / 2);
+            let mut prof = Vec::with_capacity(9);
+            for m in -4i64..=4 {
+                let a = mid.0 - (m * ny + 512 * m.signum()) / 1024;    // (rows run south: the normal's north is -row)
+                let b = mid.1 + (m * nx + 512 * m.signum()) / 1024;
+                if a < 0 || b < 0 || a >= cg.nr as i64 || b >= cg.nc as i64 {
+                    break;
+                }
+                prof.push(lum(a as usize, b as usize));
+            }
+            if prof.len() < 9 {
+                continue;
+            }
+            let mean = prof.iter().sum::<i64>() / prof.len() as i64;
+            let d: Vec<i64> = prof.iter().map(|v| v - mean).collect();
+            let var: i64 = d.iter().map(|v| v * v).sum();
+            if var <= 0 {
+                continue;
+            }
+            let periodic = (3..=6).any(|lag| {
+                let ac: i64 = (0..d.len() - lag).map(|i| d[i] * d[i + lag]).sum();
+                ac * STRIPE_AC_DEN * d.len() as i64 >= STRIPE_AC_NUM * var * (d.len() - lag) as i64
+            });
+            if periodic {
+                out[pa * pnc + pb] = Some(best.1);
+            }
+        }
+    }
+    (pnr, pnc, out)
+}
+
+/// The furrows' luminance factor at texel (r, c), world (wx, wy): each of the four patches round it that shows strips
+/// adds its furrows (along its strips, world-locked) weighted bilinearly by distance to its middle; 1 elsewhere.
+fn stripe_factor(cg: &Coarse, sp: &(usize, usize, Vec<Option<usize>>), r: usize, c: usize, wx: f64, wy: f64) -> f32 {
+    let (pnr, pnc, ref pat) = *sp;
+    if pnr == 0 || pnc == 0 || r < cg.pr || c < cg.pc {
+        return 1.0;
+    }
+    let size = (STRIPE_PATCH * COARSE) as f64;
+    let fy = (r - cg.pr) as f64 / size - 0.5;
+    let fx = (c - cg.pc) as f64 / size - 0.5;
+    let (a0, b0) = (fy.floor(), fx.floor());
+    let (ty, tx) = (fy - a0, fx - b0);
+    let mut m = 0.0f64;
+    for (da, wa) in [(0.0, 1.0 - ty), (1.0, ty)] {
+        for (db, wb) in [(0.0, 1.0 - tx), (1.0, tx)] {
+            let (a, b) = (a0 + da, b0 + db);
+            if a < 0.0 || b < 0.0 || a >= pnr as f64 || b >= pnc as f64 {
+                continue;
+            }
+            if let Some(k) = pat[a as usize * pnc + b as usize] {
+                let (nx, ny) = NORMALS[k];
+                let u = (wx * nx as f64 + wy * ny as f64) / 1024.0 / STRIPE_FURROW_M;
+                let tri = 1.0 - 4.0 * ((u - u.floor()) - 0.5).abs();     // (a triangle wave in [-1, 1])
+                m += wa * wb * tri;
+            }
+        }
+    }
+    1.0 + STRIPE_AMP * m as f32
 }
 
 /// The generated ground (n, n, 3) u8, row 0 = north: s2 (n, n, 3) the Sentinel-2 photo rendered over the block's
@@ -963,6 +1095,7 @@ pub fn gen_ground<'py>(py: Python<'py>, s2: PyReadonlyArray3<'py, u8>, kind: PyR
         }
         let threads = par::threads_for(n * n, 65536);
         let cg = coarse_barriers(&s2, &kind, &region, &dist, n, gr, gc);
+        let sp = stripe_patches(&cg, &kind, n);
         // the regions' colours on a lattice of every LATTICE texels (interpolated between the lattice points of the
         // texel's own region; a texel with none of its region round it asks its own): a tenth of the windows
         // (lattice point (a, b) at texel (pr + a L, pc + b L): on the global grid's multiples of L)
@@ -978,8 +1111,8 @@ pub fn gen_ground<'py>(py: Python<'py>, s2: PyReadonlyArray3<'py, u8>, kind: PyR
                 let i = r * n + c;
                 if need(i) {
                     let px = [s2[i * 3] as f32, s2[i * 3 + 1] as f32, s2[i * 3 + 2] as f32];
-                    let m = region_mean(&s2, &kind, &region, &dist, n, r, c, &win, px);
-                    *v = [m[0], m[1], m[2], 1.0];
+                    let (m, sup) = region_mean(&s2, &kind, &region, &dist, n, r, c, &win, px);
+                    *v = [m[0], m[1], m[2], 1.0 + sup];
                 }
             }
         });
@@ -1000,6 +1133,7 @@ pub fn gen_ground<'py>(py: Python<'py>, s2: PyReadonlyArray3<'py, u8>, kind: PyR
                     let fy = dr.rem_euclid(l) as f32 / LATTICE as f32;
                     let fx = dc.rem_euclid(l) as f32 / LATTICE as f32;
                     let (mut acc, mut wsum) = ([0f32; 3], 0f32);
+                    let mut sup = 3.0f32;
                     for (da, db, w) in [(0, 0, (1.0 - fy) * (1.0 - fx)), (0, 1, (1.0 - fy) * fx),
                                         (1, 0, fy * (1.0 - fx)), (1, 1, fy * fx)] {
                         let (a, b) = (a0 + da, b0 + db);
@@ -1011,20 +1145,25 @@ pub fn gen_ground<'py>(py: Python<'py>, s2: PyReadonlyArray3<'py, u8>, kind: PyR
                         if v[3] > 0.0 && region[(pr + a * LATTICE) * n + pc + b * LATTICE] == region[i] {
                             acc = [acc[0] + w * v[0], acc[1] + w * v[1], acc[2] + w * v[2]];
                             wsum += w;
+                            sup = sup.min(v[3] - 1.0);
                         }
                     }
                     let mean = if wsum > 1e-4 {
                         [acc[0] / wsum, acc[1] / wsum, acc[2] / wsum]
                     } else {
-                        region_mean(&s2, &kind, &region, &dist, n, r, c, &win, px)
+                        let (m, s_) = region_mean(&s2, &kind, &region, &dist, n, r, c, &win, px);
+                        sup = s_;
+                        m
                     };
                     // smoothstep from the border (all the mean) to BLEND_M in (all the photo)
                     let x = if flat(k) { 0.0 } else { ((d as f64 - 3.0) / (blend3 - 3.0)).clamp(0.0, 1.0) as f32 };
                     let a = x * x * (3.0 - 2.0 * x);
                     base = [mean[0] + (px[0] - mean[0]) * a, mean[1] + (px[1] - mean[1]) * a,
                             mean[2] + (px[2] - mean[2]) * a];
-                    let m = MIX[k as usize];
-                    if m > 0.0 {        // (a surface's own colour into its region's)
+                    // (stage 3, step 5) a surface's own colour into its region's, less where the photo's own colour is
+                    // well supported (a square's red brick stays red, as pavers): MIX x SUPPORT_MIX[support]
+                    let m = MIX[k as usize] * SUPPORT_MIX[(sup.max(0.0) as usize).min(3)];
+                    if m > 0.0 {
                         let p = PALETTE[k as usize];
                         base = [base[0] + (p[0] - base[0]) * m, base[1] + (p[1] - base[1]) * m,
                                 base[2] + (p[2] - base[2]) * m];
@@ -1071,6 +1210,11 @@ pub fn gen_ground<'py>(py: Python<'py>, s2: PyReadonlyArray3<'py, u8>, kind: PyR
                         let dome = crown(wx, wy, det.crowns.0, 7 + k as u64);
                         f *= 1.0 + det.crowns.1 * (dome.sqrt() - 0.55);
                     }
+                }
+                if k == CROP && poly[i] == 0 {
+                    // (stage 3) unmapped crop: furrows only where the photo shows periodic strips, along them (a
+                    // mapped field's furrows are the photo path's own, surface.photo_fields: never both)
+                    f *= stripe_factor(&cg, &sp, r, c, wx, wy);
                 }
                 let mut rgb = [base[0] * f, base[1] * f, base[2] * f];
                 let p = poly[i];

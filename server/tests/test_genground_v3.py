@@ -253,5 +253,79 @@ class BarrierTest(unittest.TestCase):
         np.testing.assert_array_equal(a[24:, 40:], b[:n - 24, :n - 40])
 
 
+def strips(n, period_m, deg, a=(150, 140, 90), b=(90, 120, 60), ox=0.0, oy=0.0):
+    """Broad alternating strips (the photo's view of strip cropping), smooth as the 10 m photo shows them."""
+    t = np.radians(deg)
+    nx, ny = np.cos(t), np.sin(t)
+    c, r = np.meshgrid(np.arange(n) + 0.5 + ox, -(np.arange(n) + 0.5) + oy)
+    u = (c * nx + r * ny) / period_m
+    w = 0.5 + 0.5 * np.cos(2 * np.pi * u)
+    img = np.asarray(a, float) * w[..., None] + np.asarray(b, float) * (1 - w[..., None])
+    return np.ascontiguousarray(img.round().astype(np.uint8))
+
+
+def furrow_power(out, base, deg, period=4.0):
+    """The 4 m furrows' share of the generated texture's residual (generated / photo) along direction deg (world
+    coordinates as gen()'s: texel (r, c) at (c, -r))."""
+    resid = out.astype(float).mean(-1) / np.maximum(base.astype(float).mean(-1), 1.0) - 1.0
+    t = np.radians(deg)
+    n = out.shape[0]
+    c, r = np.meshgrid(np.arange(n, dtype=float), -np.arange(n, dtype=float))
+    u = (c * np.cos(t) + r * np.sin(t)) / period
+    tri = 1.0 - 4.0 * np.abs((u - np.floor(u)) - 0.5)
+    return float(np.mean(resid * tri))
+
+
+class StripesTest(unittest.TestCase):
+    """(stage 3, step 4) unmapped crop gets 4 m furrows only where the photo shows periodic strips, along them."""
+
+    def test_periodic_strips_get_furrows_along_them(self):
+        n = 384
+        s2 = strips(n, 40.0, 30.0)
+        kind = np.full((n, n), 4, np.uint8)
+        out = gen(s2, kind, 0.0, 0.0)
+        # (the furrows' triangle wave along the strips' normal: the 32 normals, 5.625 degrees apart; the best is the
+        # one nearest 30 degrees, none across)
+        powers = {k: furrow_power(out, s2, k * 5.625) for k in range(32)}
+        best = max(powers, key=powers.get)
+        self.assertIn(best, (5, 6), powers)
+        self.assertGreater(powers[best], 0.008)
+        self.assertLess(abs(powers[(best + 16) % 32]), powers[best] / 4)
+
+    def test_no_furrows_from_a_lone_edge_or_flat(self):
+        n = 384
+        kind = np.full((n, n), 4, np.uint8)
+        for s2 in (two_fields(n, 190, (150, 140, 90), (80, 110, 55)),
+                   np.full((n, n, 3), (120, 125, 80), np.uint8)):
+            out = gen(s2, kind, 0.0, 0.0)
+            for k in range(32):
+                self.assertLess(abs(furrow_power(out, s2, k * 5.625)), 0.002, k)
+
+    def test_blocks_agree_with_stripes(self):
+        n, halo, W = 160, int(gg.HALO_M), 700
+        s2 = strips(W, 48.0, 65.0)
+        kind = np.full((W, W), 4, np.uint8)
+
+        def block(r0, c0):
+            sl = (slice(r0 - halo, r0 + n + halo), slice(c0 - halo, c0 + n + halo))
+            return gen(s2[sl], kind[sl], float(c0 - halo), float(-(r0 - halo)))[halo:halo + n, halo:halo + n]
+        a, b = block(200, 200), block(200 + 32, 200 + 56)
+        np.testing.assert_array_equal(a[32:, 56:], b[:n - 32, :n - 56])
+
+
+class SupportTest(unittest.TestCase):
+    """(stage 3, step 5) a square whose photo colour is well supported keeps it: pavers take less of their palette."""
+
+    def test_red_square_stays_red(self):
+        n = 128
+        s2 = np.full((n, n, 3), (100, 105, 95), np.uint8)
+        kind = np.full((n, n), 11, np.uint8)            # (paved round it)
+        kind[24:104, 24:104] = 16                       # PAVERS, 80 m square
+        s2[24:104, 24:104] = (150, 82, 66)              # red brick in the photo
+        out = gen(s2, kind, 0.0, 0.0).astype(float)
+        mid = out[50:78, 50:78].mean((0, 1))
+        self.assertGreater(mid[0] - mid[2], 50.0, f"red, not the pavers' grey: {mid}")
+
+
 if __name__ == "__main__":
     unittest.main()

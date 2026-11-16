@@ -194,7 +194,7 @@ class GenGroundTest(unittest.TestCase):
         # overlap.) A world of varying photo, regions with borders and water; two squares 37 texels apart, each with
         # the HALO round it: the texels both keep are the same bits
         rng = np.random.default_rng(21)
-        W, n, halo = 560, 160, int(gg.HALO_M)
+        W, n, halo = 720, 160, int(gg.HALO_M)
         x = np.arange(W)
         s2 = np.stack([(x[None, :] + 30 + 0 * x[:, None]) % 256, (x[:, None] * 3 // 4 + 20 + 0 * x[None, :]) % 256,
                        rng.integers(0, 60, (W, W))], -1).astype(np.uint8)
@@ -209,7 +209,7 @@ class GenGroundTest(unittest.TestCase):
             sl = (slice(r0 - halo, r0 + n + halo), slice(c0 - halo, c0 + n + halo))
             out = gen(s2[sl], kind[sl], region[sl], canopy[sl], ox=float(c0 - halo), oy=float(-(r0 - halo)))
             return out[halo:halo + n, halo:halo + n]
-        a, b = block(110, 110), block(110 + 13, 110 + 37)
+        a, b = block(150, 150), block(150 + 13, 150 + 37)
         np.testing.assert_array_equal(a[13:, 37:], b[:n - 13, :n - 37])
         # without the halo (the block's own square alone, as 41d74b61 did) they differ
         a0 = gen(s2[110:270, 110:270], kind[110:270, 110:270], region[110:270, 110:270], canopy[110:270, 110:270],

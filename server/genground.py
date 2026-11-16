@@ -59,10 +59,10 @@ import revisit
 log = logging.getLogger("earthd.genground")
 
 ON = os.environ.get("BNE_GEN_GROUND", "off").strip().lower() in ("on", "1", "yes", "true")
-NEED = 311                  # earthfast gg_* / gen_ground (stage 2: lines, surfaces, patterns; linear axes)
+NEED = 312                  # earthfast gg_* / gen_ground (stage 2: lines, surfaces, patterns; linear axes)
 # m round a block its generated ground is made over and cut from: a texel's colour reads the inputs this far round
 # (genground.rs: windows FAR_R_M 48 + the lattice and purity margins), so overlapping blocks agree
-HALO_M = 96.0
+HALO_M = 128.0
 # the photo's pending mark while some map data it reads is not on disk (earthd.Server.base_ready / _base_kept)
 GEN_PENDING = ("genground_data",)
 LAYERS = ("land_use", "water", "infrastructure", "canopy", "landcover", "roads", "buildings")
