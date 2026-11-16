@@ -54,6 +54,30 @@ class RoofsTest(unittest.TestCase):
             red = buildings.plan(ring, dict(base, id="b1", roof_color="#aa2211"), 0, *FELLS).roof_mat
             self.assertIn("|c_", red, "a mapped roof colour wins")
 
+    def test_flat_roofs_light_membranes(self):
+        # (2026-11-16, Fells Point against the 3-inch photo: flat roofs mostly white / light grey, some black; the
+        # asphalt greys drew them all dark) a rowhouse with a neighbour is flat; with the switch on its membrane is
+        # picked by its seed, light for most; switch off, the old asphalt tints
+        ring = np.array([(0.0, 0.0), (5.0, 0.0), (5.0, 14.0), (0.0, 14.0)])
+        light, looks = 0, set()
+        for k in range(400):
+            at = {"class": "house", "seed_id": f"w{k}"}
+            with mock.patch.object(genground, "ON", True):
+                on = buildings.plan(ring, at, 2, *FELLS, None, False, True)
+                again = buildings.plan(ring, dict(at), 2, *FELLS, None, False, True)
+            with mock.patch.object(genground, "ON", False):
+                off = buildings.plan(ring, dict(at), 2, *FELLS, None, False, True)
+            self.assertEqual(on.roof, "flat")
+            self.assertEqual(on.roof_mat, again.roof_mat, "the building's own pick")
+            self.assertRegex(off.roof_mat, r"^bne_bld_roof_flat\|\d+$", "switch off: as before")
+            mat, tint = buildings.LOOKS[on.roof_mat]
+            looks.add(on.roof_mat)
+            rgb = np.array(buildings.ROOF_TEX_MEAN[mat]) * np.array(tint)
+            light += rgb.mean() > 0.6
+        self.assertGreater(light / 400, 0.55, "mostly white and light grey")
+        self.assertLess(light / 400, 0.85, "some gravel and black")
+        self.assertLessEqual(len(looks), 4)
+
 
 if __name__ == "__main__":
     unittest.main()

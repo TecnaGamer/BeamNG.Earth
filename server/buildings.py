@@ -366,6 +366,33 @@ ROOF_TEX_MEAN = {"bne_bld_roof_flat": (0.432, 0.431, 0.430), "bne_bld_roof_slate
 # a flat roof brighter in the photo than the asphalt roof's texture can show (a white membrane: 0.9 in the photo, the
 # asphalt texture's 0.43 at most) takes the precast concrete's plain light texture instead
 ROOF_BRIGHT_MAT = "bne_bld_panel"
+# Flat roofs without the photo (the generated ground, BNE_GEN_GROUND: no roof photo is read): the flat roofs' membranes
+# by share, a building's own pick from its seed. ROOF_TINTS' asphalt greys (the texture's 0.43 mean x 0.45-0.95) drew
+# every flat roof dark, where most are white / light grey (TPO / PVC, silver coatings) with some gravel and black EPDM
+# or tar (Fells Point's rowhouses and blocks against the 3-inch photo, 2026-11-16). (material, tint, share): the US
+# styles' white-weighted mix, and elsewhere more gravel and bitumen.
+MEMBRANES_US = ((ROOF_BRIGHT_MAT, (1.0, 1.0, 0.98), 0.42), (ROOF_BRIGHT_MAT, (0.82, 0.82, 0.82), 0.25),
+                (ROOF_BRIGHT_MAT, (0.62, 0.60, 0.56), 0.13), (ROOF_FLAT, (0.45, 0.45, 0.46), 0.20))
+MEMBRANES = ((ROOF_BRIGHT_MAT, (1.0, 1.0, 0.98), 0.20), (ROOF_BRIGHT_MAT, (0.82, 0.82, 0.82), 0.25),
+             (ROOF_BRIGHT_MAT, (0.62, 0.60, 0.56), 0.30), (ROOF_FLAT, (0.45, 0.45, 0.46), 0.25))
+
+
+def _gen_ground_on():
+    import genground
+    return genground.ON
+
+
+def membrane_look(seed, style):
+    """A flat roof's membrane look (MEMBRANES), picked by the building's seed (the same in every tile and block)."""
+    table = MEMBRANES_US if style.name.startswith("us_") else MEMBRANES
+    x = _hash01(seed, "membrane")
+    acc = 0.0
+    for mat, tint, share in table:
+        acc += share
+        if x < acc:
+            return custom_look(mat, tint)
+    mat, tint, _ = table[-1]
+    return custom_look(mat, tint)
 
 
 class RoofPhoto:
@@ -1506,6 +1533,8 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
         roof_mat = custom_look(ROOF_SHINGLE, (0.52, 0.43, 0.28))
     elif rmat in ("solar_panels", "solar"):
         roof_mat = custom_look(ROOF_METAL, (0.10, 0.14, 0.28))
+    elif roof == "flat" and not (barn or shed) and _gen_ground_on() and parse_color(attrs.get("roof_color")) is None:
+        roof_mat = membrane_look(seed, style)       # (no photo to read the roof's colour from: genground)
     elif roof == "flat" or barn or shed:
         roof_mat = ROOF_FLAT if roof == "flat" else ROOF_METAL
         roof_mat = f"{roof_mat}|{int(_hash01(seed, 'roof') * len(ROOF_TINTS[roof_mat]))}"
