@@ -405,8 +405,10 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   faces in deep road cuts**; **Ground over shallow tunnels**; **More undersea tunnels**; **Traffic through tunnels**;
   **Solid railway rails**; **Overhead railway wires**; **Grouped level crossings**; **Railway tunnels**; **Rounded
   railway curves**; **Closed 3D models**; **Detailed Canadian lidar**; **Generated ground** (`BNE_GEN_GROUND=on`: the
-  ground near you made from 10 m Sentinel-2 colour and the map's land cover, fields, parks, water, tree heights, roads
-  and buildings instead of 1 m aerial photos, which are then not downloaded at all; less real detail, a summer look);
+  ground near you made from 10 m Sentinel-2 colour and the map: land cover, fields, parks, pitches, squares, pools,
+  orchards and vineyards in rows, paths, tracks, hedges, streams, piers, tree heights, roads and buildings, graded to
+  the season, instead of 1 m aerial photos, which are then not downloaded at all, for roof colours neither; less real
+  detail where the map has none);
   **Show the older world while rebuilding** (after an update). A switch set by hand in the server's environment wins
   over the page.
 - **Max RAM for BeamNG.Earth** (Performance settings page): the most memory the world server may hold, all its

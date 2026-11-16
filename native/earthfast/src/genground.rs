@@ -40,7 +40,28 @@ pub const WETLAND: u8 = 9;
 pub const LAWN: u8 = 10;
 pub const PAVED: u8 = 11;
 pub const ROOF: u8 = 12;
-const NKINDS: usize = 13;
+// (stage 2: the map's own surfaces and patterns, from OSM's tags in Overture's layers and the road lines)
+pub const GRAVEL: u8 = 13;          // gravel drives, unpaved lots and tracks, railway ballast
+pub const PATH: u8 = 14;            // earth and compacted footpaths
+pub const BRICK: u8 = 15;           // brick squares and walks
+pub const PAVERS: u8 = 16;          // paving stones, setts
+pub const CONCRETE: u8 = 17;        // concrete squares, sidewalks
+pub const TURF: u8 = 18;            // a grass pitch (mown stripes, its lines)
+pub const ARTTURF: u8 = 19;         // an artificial turf pitch
+pub const CLAY: u8 = 20;            // a clay court
+pub const TARTAN: u8 = 21;          // a running track, a tartan pitch
+pub const POOL: u8 = 22;            // a swimming pool
+pub const ORCHARD: u8 = 23;         // trees in rows
+pub const VINEYARD: u8 = 24;        // vine rows
+pub const ALLOTMENT: u8 = 25;       // small plots
+pub const GREENHOUSE: u8 = 26;      // glasshouses (ribbed)
+pub const CEMETERY: u8 = 27;        // lawn with rows of headstones
+pub const COURT: u8 = 28;           // a hard court (asphalt, acrylic: tennis, basketball)
+const NKINDS: usize = 29;
+// polygon / line kinds that become another kind per texel (gg_regions)
+pub const LOT: u8 = 29;             // commercial / industrial / retail land: its lawns and grass are paved yards
+pub const PATH_AUTO: u8 = 30;       // a footway without a surface: concrete in built-up land, an earth path elsewhere
+const PITCH_KINDS: [u8; 5] = [TURF, ARTTURF, CLAY, TARTAN, COURT];
 
 // cover bits (gg_regions)
 const COVER_WATER: u8 = 1;
@@ -77,7 +98,29 @@ const PALETTE: [[f32; 3]; NKINDS] = [
     [86.0, 112.0, 60.0],    // LAWN
     [0.0, 0.0, 0.0],        // PAVED: the photo (the roads are painted over it)
     [0.0, 0.0, 0.0],        // ROOF: the photo (the roofs are filled in after)
+    [152.0, 144.0, 130.0],  // GRAVEL
+    [166.0, 150.0, 124.0],  // PATH
+    [150.0, 88.0, 70.0],    // BRICK
+    [168.0, 162.0, 152.0],  // PAVERS
+    [196.0, 192.0, 184.0],  // CONCRETE
+    [84.0, 124.0, 56.0],    // TURF
+    [60.0, 126.0, 62.0],    // ARTTURF
+    [184.0, 100.0, 64.0],   // CLAY
+    [166.0, 72.0, 60.0],    // TARTAN
+    [86.0, 168.0, 204.0],   // POOL
+    [94.0, 112.0, 64.0],    // ORCHARD
+    [118.0, 110.0, 76.0],   // VINEYARD
+    [104.0, 106.0, 70.0],   // ALLOTMENT
+    [208.0, 212.0, 210.0],  // GREENHOUSE
+    [92.0, 116.0, 64.0],    // CEMETERY
+    [108.0, 118.0, 112.0],  // COURT
 ];
+
+/// How much of a kind's palette colour goes into its region's Sentinel-2 colour (stage 2): a square's, a pitch's or a
+/// pool's own colour is not in a 10 m photo (it smears them with what is round them); 0 for the land kinds, the photo
+/// is theirs.
+const MIX: [f32; NKINDS] = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                            0.45, 0.5, 0.6, 0.45, 0.55, 0.35, 0.6, 0.7, 0.7, 0.85, 0.0, 0.0, 0.0, 0.7, 0.0, 0.55];
 
 /// The fine detail of each kind: (feature size m, luminance amplitude) of up to three octaves of value noise, the
 /// amplitude of a yellow / green shift (vegetation's patchiness, at 24 m), and the crowns (cell m, amplitude) drawn
@@ -102,7 +145,79 @@ const DETAIL: [Detail; NKINDS] = [
     Detail { octaves: [(9.0, 0.04), (2.0, 0.03), (1.1, 0.025)], tint: 4.0, crowns: (0.0, 0.0) },      // LAWN
     Detail { octaves: [(6.0, 0.02), (1.2, 0.025), (0.0, 0.0)], tint: 0.0, crowns: (0.0, 0.0) },       // PAVED
     Detail { octaves: [(0.0, 0.0), (0.0, 0.0), (0.0, 0.0)], tint: 0.0, crowns: (0.0, 0.0) },          // ROOF
+    Detail { octaves: [(5.0, 0.05), (1.6, 0.05), (0.0, 0.0)], tint: 0.0, crowns: (0.0, 0.0) },        // GRAVEL
+    Detail { octaves: [(4.0, 0.06), (1.3, 0.05), (0.0, 0.0)], tint: 0.0, crowns: (0.0, 0.0) },        // PATH
+    Detail { octaves: [(6.0, 0.04), (1.1, 0.04), (0.0, 0.0)], tint: 0.0, crowns: (0.0, 0.0) },        // BRICK
+    Detail { octaves: [(6.0, 0.03), (1.1, 0.03), (0.0, 0.0)], tint: 0.0, crowns: (0.0, 0.0) },        // PAVERS
+    Detail { octaves: [(8.0, 0.03), (1.5, 0.02), (0.0, 0.0)], tint: 0.0, crowns: (0.0, 0.0) },        // CONCRETE
+    Detail { octaves: [(12.0, 0.03), (1.4, 0.02), (0.0, 0.0)], tint: 2.0, crowns: (0.0, 0.0) },       // TURF
+    Detail { octaves: [(12.0, 0.015), (0.0, 0.0), (0.0, 0.0)], tint: 0.0, crowns: (0.0, 0.0) },       // ARTTURF
+    Detail { octaves: [(8.0, 0.03), (1.3, 0.02), (0.0, 0.0)], tint: 0.0, crowns: (0.0, 0.0) },        // CLAY
+    Detail { octaves: [(10.0, 0.02), (0.0, 0.0), (0.0, 0.0)], tint: 0.0, crowns: (0.0, 0.0) },        // TARTAN
+    Detail { octaves: [(0.0, 0.0), (0.0, 0.0), (0.0, 0.0)], tint: 0.0, crowns: (0.0, 0.0) },          // POOL
+    Detail { octaves: [(14.0, 0.05), (2.0, 0.04), (0.0, 0.0)], tint: 4.0, crowns: (0.0, 0.0) },       // ORCHARD
+    Detail { octaves: [(14.0, 0.04), (1.5, 0.04), (0.0, 0.0)], tint: 3.0, crowns: (0.0, 0.0) },       // VINEYARD
+    Detail { octaves: [(3.0, 0.05), (1.2, 0.05), (0.0, 0.0)], tint: 4.0, crowns: (0.0, 0.0) },        // ALLOTMENT
+    Detail { octaves: [(10.0, 0.03), (0.0, 0.0), (0.0, 0.0)], tint: 0.0, crowns: (0.0, 0.0) },        // GREENHOUSE
+    Detail { octaves: [(9.0, 0.04), (2.0, 0.03), (0.0, 0.0)], tint: 3.0, crowns: (0.0, 0.0) },        // CEMETERY
+    Detail { octaves: [(10.0, 0.025), (1.4, 0.02), (0.0, 0.0)], tint: 0.0, crowns: (0.0, 0.0) },      // COURT
 ];
+
+/// A kind's pattern along its polygon's rows (stage 2): u along the rows, v across them (m, world-locked; phase m
+/// added across), the texel's distance into its region (m): a luminance factor and a colour to lerp to with a weight
+/// (pitch lines, headstones). Deterministic: hashes and arithmetic.
+fn pattern(k: u8, u: f64, v: f64, inside_m: f64, phase: f64) -> (f32, [f32; 3], f32) {
+    let none = (1.0f32, [0.0f32; 3], 0.0f32);
+    let line = [226.0f32, 226.0, 220.0];
+    let v = v + phase;
+    match k {
+        TURF | ARTTURF => {
+            // the pitch's outline 1.5-3 m in (inside the border's antialiasing); mown stripes 6 m wide along the rows
+            if (1.5..3.0).contains(&inside_m) {
+                return (1.0, line, 0.75);
+            }
+            let s = (v / 6.0).floor() as i64;
+            (if s.rem_euclid(2) == 0 { 1.05 } else { 0.95 }, [0.0; 3], 0.0)
+        }
+        CLAY | TARTAN | COURT => {
+            if (1.5..3.0).contains(&inside_m) { (1.0, line, 0.7) } else { none }
+        }
+        ORCHARD => {
+            // trees every 5 m in rows 6 m apart: crowns 1.9 m round their middle, darker
+            let (cu, cv) = (u / 5.0, v / 6.0);
+            let (du, dv) = ((cu - cu.round()) * 5.0, (cv - cv.round()) * 6.0);
+            let d2 = du * du + dv * dv;
+            if d2 < 1.9 * 1.9 {
+                (1.0 - 0.42 * (1.0 - d2 / (1.9 * 1.9)) as f32, [52.0, 66.0, 38.0], 0.35)
+            } else {
+                none
+            }
+        }
+        VINEYARD => {
+            // vine rows 2.6 m apart, 1 m wide
+            let dv = (v / 2.6 - (v / 2.6).round()).abs() * 2.6;
+            if dv < 0.5 { (0.74 + 0.2 * (dv / 0.5) as f32, [60.0, 76.0, 44.0], 0.4) } else { (1.04, [0.0; 3], 0.0) }
+        }
+        ALLOTMENT => {
+            // plots 6 m along, 12 m across, each its own shade, some bare soil
+            let (iu, iv) = ((u / 6.0).floor() as i64, (v / 12.0).floor() as i64);
+            let h = noise_hash(iu, iv, 431);
+            (1.0 + 0.12 * h as f32, [112.0, 92.0, 66.0], if h > 0.3 { 0.45 } else { 0.0 })
+        }
+        GREENHOUSE => {
+            let dv = (v / 3.2 - (v / 3.2).round()).abs() * 3.2;
+            (if dv < 0.25 { 0.84 } else { 1.0 }, [0.0; 3], 0.0)
+        }
+        CEMETERY => {
+            // headstones 0.7 m wide every 1.6 m in rows 3 m apart, some places empty
+            let (cu, cv) = (u / 1.6, v / 3.0);
+            let (du, dv) = ((cu - cu.round()) * 1.6, (cv - cv.round()) * 3.0);
+            let keep = noise_hash(cu.round() as i64, cv.round() as i64, 977) > -0.6;
+            if keep && du.abs() < 0.35 && dv.abs() < 0.2 { (1.0, [190.0, 188.0, 182.0], 0.8) } else { none }
+        }
+        _ => none,
+    }
+}
 
 // the crowns' sun (unit vector east, north, up: from the north-west at 45 degrees, as the photos' shadows and
 // groundphoto.rs) and how strongly the canopy's slope shades them
@@ -295,34 +410,46 @@ pub fn gg_fill_polys(py: Python<'_>, mut out: PyReadwriteArray2<'_, u32>, xy: Py
 /// - an open polygon (lawn, grass, crop, shrub, bare, wetland) makes its texels its kind, but the land cover's trees
 ///   and water inside stay (a park's trees); a forest polygon makes its texels trees, but built-up land, bare ground
 ///   and water stay; a water polygon makes them water;
-/// - canopy heights, where there are some: TREE_MIN_M or taller is a tree (except on water); a texel the land cover
-///   calls trees but lower is a shrub (SHRUB_MIN_M and over) or grass;
+/// - stage 2: a surface polygon (a pitch, court, pool, glasshouse, square, gravel or paved lot) makes its texels its
+///   kind (water stays, but under a pool); a pattern polygon (orchard, vineyard, allotments, cemetery) too, but water
+///   stays; commercial / industrial land (LOT) makes its lawns and grass built ground (paved yards);
+/// - lines (line (n, n) 0 or 1 + the index of the line over it, kinds line_kind; gg_fill_lines): a stream or ditch
+///   makes water; a pier (BUILT) built ground, over water too; a hedge or tree row trees (not on water); a path, track,
+///   drive or ballast its kind (not on water or a pool); a footway without a surface (PATH_AUTO) concrete where the
+///   land cover is built-up, an earth path elsewhere;
+/// - canopy heights, where there are some: TREE_MIN_M or taller is a tree (except on water, pools, glasshouses and
+///   pitches); a texel the land cover calls trees but lower is a shrub (SHRUB_MIN_M and over) or grass; then the
+///   hedgerows grown by a texel: open ground with SHRUB_MIN_M of canopy next to a tree is a tree (the canopy model
+///   draws a hedgerow's tall core only, 2026-11-16 comparison);
 /// - then the cover: water, paved, roof (each over the ones before).
-/// The region is the kind and the polygon (each polygon's texels of a kind are a region of their own), except for
-/// paved and roof (one region each).
+/// The region is the kind and the polygon (each polygon's texels of a kind are a region of their own); a line's texels
+/// one region per kind; paved and roof one region each.
 #[pyfunction]
+#[allow(clippy::too_many_arguments)]
 pub fn gg_regions<'py>(py: Python<'py>, base: PyReadonlyArray2<'py, u8>, poly: PyReadonlyArray2<'py, u32>,
-                       poly_kind: PyReadonlyArray1<'py, u8>, canopy: PyReadonlyArray2<'py, u8>,
+                       poly_kind: PyReadonlyArray1<'py, u8>, line: PyReadonlyArray2<'py, u32>,
+                       line_kind: PyReadonlyArray1<'py, u8>, canopy: PyReadonlyArray2<'py, u8>,
                        cover: PyReadonlyArray2<'py, u8>)
                        -> PyResult<(Bound<'py, PyArray2<u8>>, Bound<'py, PyArray2<u32>>)> {
-    let (base, poly, pk, canopy, cover) = (base.as_array(), poly.as_array(), poly_kind.as_array(), canopy.as_array(),
-                                           cover.as_array());
+    let (base, poly, pk, line, lk, canopy, cover) = (base.as_array(), poly.as_array(), poly_kind.as_array(),
+                                                     line.as_array(), line_kind.as_array(), canopy.as_array(),
+                                                     cover.as_array());
     let sh = base.shape().to_vec();
-    if poly.shape() != &sh[..] || canopy.shape() != &sh[..] || cover.shape() != &sh[..] {
+    if poly.shape() != &sh[..] || canopy.shape() != &sh[..] || cover.shape() != &sh[..] || line.shape() != &sh[..] {
         return Err(pyo3::exceptions::PyValueError::new_err("gg_regions: bad shapes"));
     }
     let (h, w) = (sh[0], sh[1]);
-    let (base, poly, pk, canopy, cover) = (base.to_owned(), poly.to_owned(), pk.to_owned(), canopy.to_owned(),
-                                           cover.to_owned());
+    let (base, poly, pk, line, lk, canopy, cover) = (base.to_owned(), poly.to_owned(), pk.to_owned(), line.to_owned(),
+                                                     lk.to_owned(), canopy.to_owned(), cover.to_owned());
     let (kind, region) = py.detach(|| {
         let mut kind = vec![0u8; h * w];
         let mut region = vec![0u32; h * w];
+        let mut by_line = vec![false; h * w];
+        let mut chm_tree = vec![false; h * w];
         for r in 0..h {
             for c in 0..w {
-                let mut k = base[[r, c]];
-                if k as usize >= NKINDS {
-                    k = NONE;
-                }
+                let b = base[[r, c]];
+                let mut k = if (b as usize) < NKINDS { b } else { NONE };
                 let p = poly[[r, c]];
                 let mut pid = 0u32;
                 if p > 0 && (p as usize) <= pk.len() {
@@ -336,23 +463,81 @@ pub fn gg_regions<'py>(py: Python<'py>, base: PyReadonlyArray2<'py, u8>, poly: P
                             if k != BUILT && k != BARE && k != WATER { k = TREE; }
                         }
                         WATER => k = WATER,
+                        POOL => k = POOL,
+                        TURF | ARTTURF | CLAY | TARTAN | COURT | GREENHOUSE | BRICK | PAVERS | CONCRETE | GRAVEL
+                        | PAVED | PATH => {
+                            if k != WATER { k = want; }
+                        }
+                        ORCHARD | VINEYARD | ALLOTMENT | CEMETERY => {
+                            if k != WATER { k = want; }
+                        }
+                        LOT => {
+                            if k == LAWN || k == GRASS || k == BUILT { k = BUILT; }
+                        }
                         _ => {}
                     }
                 }
+                let l = line[[r, c]];
+                if l > 0 && (l as usize) <= lk.len() {
+                    let want = lk[l as usize - 1];
+                    let set = match want {
+                        WATER => Some(WATER),
+                        BUILT => Some(BUILT),       // (a pier's deck: over the water too)
+                        TREE => (k != WATER && k != POOL).then_some(TREE),
+                        PATH_AUTO => (k != WATER && k != POOL)
+                            .then_some(if b == BUILT || b == LAWN { CONCRETE } else { PATH }),
+                        x if (x as usize) < NKINDS => (k != WATER && k != POOL).then_some(x),
+                        _ => None,
+                    };
+                    if let Some(x) = set {
+                        k = x;
+                        by_line[r * w + c] = true;
+                    }
+                }
                 let ch = canopy[[r, c]];
-                if ch != CANOPY_NODATA && k != WATER {
+                let open_to_canopy = !matches!(k, WATER | POOL | GREENHOUSE) && !PITCH_KINDS.contains(&k);
+                if ch != CANOPY_NODATA && open_to_canopy {
                     if ch >= TREE_MIN_M {
                         k = TREE;
-                    } else if k == TREE {
+                        chm_tree[r * w + c] = true;
+                    } else if k == TREE && !by_line[r * w + c] {
                         k = if ch >= SHRUB_MIN_M { SHRUB } else { GRASS };
                     }
                 }
-                let cv = cover[[r, c]];
-                if cv & COVER_WATER != 0 { k = WATER; }
-                if cv & COVER_PAVED != 0 { k = PAVED; }
-                if cv & COVER_ROOF != 0 { k = ROOF; }
                 kind[r * w + c] = k;
-                region[r * w + c] = if k == PAVED || k == ROOF { k as u32 } else { (pid << 4) | k as u32 };
+                region[r * w + c] = if by_line[r * w + c] && k != TREE { 0x8000_0000 | k as u32 } else {
+                    (pid << 5) | k as u32
+                };
+            }
+        }
+        // hedgerows grown by a texel (from the canopy's own trees: the pass above, read only)
+        let grown: Vec<usize> = (0..h * w).filter(|&i| {
+            let (r, c) = (i / w, i % w);
+            let ch = canopy[[r, c]];
+            if chm_tree[i] || ch == CANOPY_NODATA || ch < SHRUB_MIN_M
+                || !matches!(kind[i], GRASS | CROP | SHRUB | LAWN | BUILT | BARE | NONE) {
+                return false;
+            }
+            (r.saturating_sub(1)..=(r + 1).min(h - 1))
+                .any(|y| (c.saturating_sub(1)..=(c + 1).min(w - 1)).any(|x| chm_tree[y * w + x]))
+        }).collect();
+        for i in grown {
+            let pid = if by_line[i] { 0 } else { region[i] >> 5 };
+            kind[i] = TREE;
+            region[i] = (pid << 5) | TREE as u32;
+        }
+        for i in 0..h * w {
+            let cv = cover[[i / w, i % w]];
+            let mut k = kind[i];
+            if cv & COVER_WATER != 0 { k = WATER; }
+            if cv & COVER_PAVED != 0 { k = PAVED; }
+            if cv & COVER_ROOF != 0 { k = ROOF; }
+            if k != kind[i] {
+                kind[i] = k;
+                region[i] = (region[i] & !31) | k as u32;
+            }
+            if k == PAVED || k == ROOF {
+                region[i] = k as u32;
             }
         }
         (kind, region)
@@ -364,13 +549,23 @@ pub fn gg_regions<'py>(py: Python<'py>, base: PyReadonlyArray2<'py, u8>, poly: P
     Ok((ka.into_pyarray(py), ra.into_pyarray(py)))
 }
 
-/// The mean photo colour (sum, count) of texels in the window of radius `rad` texels round (r, c), on the lattice of
-/// `step` texels from the block's corner, that satisfy keep.
+/// The first index >= lo whose global index (index + g0) is a multiple of step.
 #[inline]
-fn window_sum(s2: &[u8], n: usize, r: usize, c: usize, rad: usize, step: usize,
+fn aligned(lo: usize, g0: i64, step: usize) -> usize {
+    let s = step as i64;
+    lo + ((-(lo as i64 + g0)).rem_euclid(s)) as usize
+}
+
+/// The mean photo colour (sum, count) of texels in the window of radius `rad` texels round (r, c), on the lattice of
+/// `step` texels aligned to the global texel grid (gr, gc: the global row and column of texel (0, 0)), that satisfy
+/// keep. Global, not the square's corner: every square covering a texel samples the same texels for it (Codex review
+/// of 41d74b61: overlapping blocks drew the same ground in other colours).
+#[inline]
+#[allow(clippy::too_many_arguments)]
+fn window_sum(s2: &[u8], n: usize, r: usize, c: usize, rad: usize, step: usize, g: (i64, i64),
               keep: impl Fn(usize) -> bool) -> ([u32; 3], u32) {
-    let r0 = r.saturating_sub(rad).div_ceil(step) * step;
-    let c0 = c.saturating_sub(rad).div_ceil(step) * step;
+    let r0 = aligned(r.saturating_sub(rad), g.0, step);
+    let c0 = aligned(c.saturating_sub(rad), g.1, step);
     let r1 = (r + rad).min(n - 1);
     let c1 = (c + rad).min(n - 1);
     let mut s = [0u32; 3];
@@ -401,6 +596,7 @@ struct Windows {
     far_s: usize,
     pure3: u32,
     semi3: u32,
+    g: (i64, i64),      // the global row and column of texel (0, 0)
 }
 
 /// The colour of texel (r, c)'s region: the mean photo colour of the first of, in order, the region's pure texels
@@ -417,12 +613,12 @@ fn region_mean(s2: &[u8], kind: &[u8], region: &[u32], dist: &[u32], n: usize, r
         (w.far_r, w.far_s, false, w.pure3), (w.far_r, w.far_s, false, w.semi3), (w.near_r, 1, true, 0)];
     for (rad, step, own, min_d) in tries {
         let keep = |j: usize| dist[j] >= min_d && if own { region[j] == reg } else { kind[j] == k };
-        let (mut s, mut cnt) = window_sum(s2, n, r, c, rad, step, keep);
+        let (mut s, mut cnt) = window_sum(s2, n, r, c, rad, step, w.g, keep);
         if cnt > 0 && k == WATER {
             // water: the texels no brighter than the mean (boats, moorings, piers the map does not have)
             let lum = (s[0] + s[1] + s[2]) / cnt;
             let lum_of = |j: usize| s2[j * 3] as u32 + s2[j * 3 + 1] as u32 + s2[j * 3 + 2] as u32;
-            let (s_, cnt_) = window_sum(s2, n, r, c, rad, step, |j| keep(j) && lum_of(j) <= lum);
+            let (s_, cnt_) = window_sum(s2, n, r, c, rad, step, w.g, |j| keep(j) && lum_of(j) <= lum);
             if cnt_ > 0 {
                 (s, cnt) = (s_, cnt_);
             }
@@ -442,15 +638,24 @@ fn region_mean(s2: &[u8], kind: &[u8], region: &[u32], dist: &[u32], n: usize, r
 /// The generated ground (n, n, 3) u8, row 0 = north: s2 (n, n, 3) the Sentinel-2 photo rendered over the block's
 /// texels (enlarged: its own 10 m detail); kind / region (n, n) from gg_regions; canopy (n, n) heights (m, 255: none);
 /// (ox, oy) the world-locked east / north (m) of texel (0, 0)'s centre (texel (r, c) at ox + c t, oy - r t); t: m a
-/// texel.
+/// texel; (gr, gc) texel (0, 0)'s row and column on the global texel grid the sampling lattices are aligned to. A
+/// texel's colour depends on the inputs within HALO_M of it alone: the caller renders a square that much larger and
+/// keeps its middle (genground.render), so every block covering a spot draws it the same. Stage 2: poly (n, n) the
+/// polygon over each texel (gg_regions' poly), pdir (polygons, 2) each one's row direction (east, north: gg_poly_axes
+/// turned to the world) and pphase (polygons) its rows' offset across (m): the patterns of the pitches, orchards,
+/// vineyards, allotments, glasshouses and cemeteries (pattern).
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
 pub fn gen_ground<'py>(py: Python<'py>, s2: PyReadonlyArray3<'py, u8>, kind: PyReadonlyArray2<'py, u8>,
-                       region: PyReadonlyArray2<'py, u32>, canopy: PyReadonlyArray2<'py, u8>, ox: f64, oy: f64,
-                       t: f64) -> PyResult<Bound<'py, PyArray3<u8>>> {
+                       region: PyReadonlyArray2<'py, u32>, canopy: PyReadonlyArray2<'py, u8>,
+                       poly: PyReadonlyArray2<'py, u32>, pdir: PyReadonlyArray2<'py, f64>,
+                       pphase: PyReadonlyArray1<'py, f64>, ox: f64, oy: f64,
+                       t: f64, gr: i64, gc: i64) -> PyResult<Bound<'py, PyArray3<u8>>> {
     let (s2a, kind, region, canopy) = (s2.as_array(), kind.as_array(), region.as_array(), canopy.as_array());
+    let (poly, pdir, pphase) = (poly.as_array(), pdir.as_array(), pphase.as_array());
     let n = kind.shape()[0];
     if n < 2 || kind.shape()[1] != n || region.shape() != kind.shape() || canopy.shape() != kind.shape()
+        || poly.shape() != kind.shape() || pdir.shape()[0] != pphase.len() || (pphase.len() > 0 && pdir.shape()[1] < 2)
         || s2a.shape() != [n, n, 3] || !(t > 0.0) || !ox.is_finite() || !oy.is_finite() {
         return Err(pyo3::exceptions::PyValueError::new_err("gen_ground: bad shapes"));
     }
@@ -458,13 +663,17 @@ pub fn gen_ground<'py>(py: Python<'py>, s2: PyReadonlyArray3<'py, u8>, kind: PyR
     let kind: Vec<u8> = kind.iter().map(|&k| if (k as usize) < NKINDS { k } else { NONE }).collect();
     let region: Vec<u32> = region.iter().copied().collect();
     let canopy: Vec<u8> = canopy.iter().copied().collect();
+    let poly: Vec<u32> = poly.iter().copied().collect();
+    let dirs: Vec<(f64, f64, f64)> = (0..pphase.len()).map(|p| (pdir[[p, 0]], pdir[[p, 1]], pphase[p])).collect();
+    // (water and the surfaces (MIX): the region's colour everywhere, not the photo's inside)
+    let flat = |k: u8| k == WATER || MIX[k as usize] > 0.0;
     let out = py.detach(move || {
         let tx = |m: f64| -> usize { ((m / t).round() as usize).max(1) };
         let dist = border_distance(&region, n);
         let pure3 = (PURE_M / t * 3.0).round() as u32;
         let blend3 = BLEND_M / t * 3.0;
         let win = Windows { near_r: tx(NEAR_R_M), near_s: tx(NEAR_STEP_M), far_r: tx(FAR_R_M), far_s: tx(FAR_STEP_M),
-                            pure3, semi3: (SEMI_M / t * 3.0).round() as u32 };
+                            pure3, semi3: (SEMI_M / t * 3.0).round() as u32, g: (gr, gc) };
         // the canopy heights smoothed over 3 x 3 (the 1.2 m pixels resampled to the texels: their stairs); none where
         // a texel or most of its neighbours have none
         let mut hsm = vec![f32::NAN; n * n];
@@ -491,13 +700,16 @@ pub fn gen_ground<'py>(py: Python<'py>, s2: PyReadonlyArray3<'py, u8>, kind: PyR
         let threads = par::threads_for(n * n, 65536);
         // the regions' colours on a lattice of every LATTICE texels (interpolated between the lattice points of the
         // texel's own region; a texel with none of its region round it asks its own): a tenth of the windows
-        let na = (n - 1) / LATTICE + 1;
+        // (lattice point (a, b) at texel (pr + a L, pc + b L): on the global grid's multiples of L)
+        let (pr, pc) = (aligned(0, gr, LATTICE), aligned(0, gc, LATTICE));
+        let nar = if n > pr { (n - 1 - pr) / LATTICE + 1 } else { 0 };
+        let nac = if n > pc { (n - 1 - pc) / LATTICE + 1 } else { 0 };
         let need = |i: usize| kind[i] != NONE && ((dist[i] as f64) < blend3 + 3.0 * 1.5 * LATTICE as f64
-                                                   || kind[i] == WATER);
-        let mut lat = vec![[0f32; 4]; na * na];
-        par::rows(&mut lat, na, threads, |a, row| {
+                                                   || flat(kind[i]));
+        let mut lat = vec![[0f32; 4]; nar * nac];
+        par::rows(&mut lat, nac.max(1), threads, |a, row| {
             for (b, v) in row.iter_mut().enumerate() {
-                let (r, c) = (a * LATTICE, b * LATTICE);
+                let (r, c) = (pr + a * LATTICE, pc + b * LATTICE);
                 let i = r * n + c;
                 if need(i) {
                     let px = [s2[i * 3] as f32, s2[i * 3 + 1] as f32, s2[i * 3 + 2] as f32];
@@ -516,19 +728,22 @@ pub fn gen_ground<'py>(py: Python<'py>, s2: PyReadonlyArray3<'py, u8>, kind: PyR
                 // the region's own colour near its border (water: everywhere, the photo's boats, piers and their
                 // 10 m blur are not the water's colour)
                 let mut base = px;
-                if ((d as f64) < blend3 || k == WATER) && k != NONE {
-                    let (a0, b0) = (r / LATTICE, c / LATTICE);
-                    let fy = (r - a0 * LATTICE) as f32 / LATTICE as f32;
-                    let fx = (c - b0 * LATTICE) as f32 / LATTICE as f32;
+                if ((d as f64) < blend3 || flat(k)) && k != NONE {
+                    let l = LATTICE as i64;
+                    let (dr, dc) = (r as i64 - pr as i64, c as i64 - pc as i64);
+                    let (a0, b0) = (dr.div_euclid(l), dc.div_euclid(l));
+                    let fy = dr.rem_euclid(l) as f32 / LATTICE as f32;
+                    let fx = dc.rem_euclid(l) as f32 / LATTICE as f32;
                     let (mut acc, mut wsum) = ([0f32; 3], 0f32);
                     for (da, db, w) in [(0, 0, (1.0 - fy) * (1.0 - fx)), (0, 1, (1.0 - fy) * fx),
                                         (1, 0, fy * (1.0 - fx)), (1, 1, fy * fx)] {
                         let (a, b) = (a0 + da, b0 + db);
-                        if w <= 0.0 || a >= na || b >= na {
+                        if w <= 0.0 || a < 0 || b < 0 || a as usize >= nar || b as usize >= nac {
                             continue;
                         }
-                        let v = lat[a * na + b];
-                        if v[3] > 0.0 && region[a * LATTICE * n + b * LATTICE] == region[i] {
+                        let (a, b) = (a as usize, b as usize);
+                        let v = lat[a * nac + b];
+                        if v[3] > 0.0 && region[(pr + a * LATTICE) * n + pc + b * LATTICE] == region[i] {
                             acc = [acc[0] + w * v[0], acc[1] + w * v[1], acc[2] + w * v[2]];
                             wsum += w;
                         }
@@ -539,10 +754,16 @@ pub fn gen_ground<'py>(py: Python<'py>, s2: PyReadonlyArray3<'py, u8>, kind: PyR
                         region_mean(&s2, &kind, &region, &dist, n, r, c, &win, px)
                     };
                     // smoothstep from the border (all the mean) to BLEND_M in (all the photo)
-                    let x = if k == WATER { 0.0 } else { ((d as f64 - 3.0) / (blend3 - 3.0)).clamp(0.0, 1.0) as f32 };
+                    let x = if flat(k) { 0.0 } else { ((d as f64 - 3.0) / (blend3 - 3.0)).clamp(0.0, 1.0) as f32 };
                     let a = x * x * (3.0 - 2.0 * x);
                     base = [mean[0] + (px[0] - mean[0]) * a, mean[1] + (px[1] - mean[1]) * a,
                             mean[2] + (px[2] - mean[2]) * a];
+                    let m = MIX[k as usize];
+                    if m > 0.0 {        // (a surface's own colour into its region's)
+                        let p = PALETTE[k as usize];
+                        base = [base[0] + (p[0] - base[0]) * m, base[1] + (p[1] - base[1]) * m,
+                                base[2] + (p[2] - base[2]) * m];
+                    }
                 }
                 // the kind's fine detail, world-locked
                 let det = &DETAIL[k as usize];
@@ -571,6 +792,17 @@ pub fn gen_ground<'py>(py: Python<'py>, s2: PyReadonlyArray3<'py, u8>, kind: PyR
                     }
                 }
                 let mut rgb = [base[0] * f, base[1] * f, base[2] * f];
+                let p = poly[i];
+                if p > 0 && (p as usize) <= dirs.len() && (PITCH_KINDS.contains(&k) || (ORCHARD..=CEMETERY).contains(&k)) {
+                    // the polygon's rows (world-locked: blocks and the polygon's pieces agree)
+                    let (dx, dy, ph) = dirs[p as usize - 1];
+                    let (u, v) = (wx * dx + wy * dy, -wx * dy + wy * dx);
+                    let (pf, pc, pw) = pattern(k, u, v, d as f64 / 3.0 * t, ph);
+                    for ch in 0..3 {
+                        rgb[ch] = rgb[ch] * pf;
+                        rgb[ch] += (pc[ch] - rgb[ch]) * pw;
+                    }
+                }
                 if det.tint > 0.0 {
                     let tn = det.tint * vnoise(wx / 24.0, wy / 24.0, 977) as f32;
                     rgb[0] += tn;
