@@ -143,14 +143,20 @@ def nodes(xys, z0, r=JOIN_M, dz=JOIN_DZ_M):
     return [m for _r, m in sorted(out.items()) if len(m) > 1]
 
 
-def problem(plans, specs, z0, ceilings, ranks, pins=(), dips=None, grade_rows=True, extra=None, floors=None):
+def problem(plans, specs, z0, ceilings, ranks, pins=(), dips=None, grade_rows=True, extra=None, floors=None,
+            drop=()):
     """(chains, couplings) for carriageways.solve, whose unknowns are the corrections d = z - z0 (its smoothing on
     them, not on the heights: a road no row moves keeps its profile exactly, and a change is spread along it). plans:
     [Plan] (xy, z: the passes' heights, abut); z0: per plan the profile before the passes; ceilings: per plan its class's
     grade ceiling (None: none); ranks: per plan its road_rank; pins: (plan, sample, height) held; dips: per plan (n,)
     upper bounds (NaN: none) or None; grade_rows: the ceilings as rows (off: the retry of an infeasible solve); extra:
     {plan: segments} that get the ceiling's rows too (a solve's own excess: solve's rounds); floors: per plan a grade
-    its ceiling is at least (the passes' own steepest: solve's middle retry) or None."""
+    its ceiling is at least (the passes' own steepest: solve's middle retry) or None; drop: kinds of rows left out
+    ("pins", "abut", "dips", "nodes": _culprit's tests)."""
+    if "pins" in drop:
+        pins = ()
+    if "dips" in drop:
+        dips = None
     xys = [np.asarray(p.xy, np.float64)[:, :2] for p in plans]
     z0 = [np.asarray(z, np.float64) for z in z0]
     rk = np.asarray(ranks, np.float64)
@@ -161,7 +167,7 @@ def problem(plans, specs, z0, ceilings, ranks, pins=(), dips=None, grade_rows=Tr
         held[(a, i if i >= 0 else len(xys[a]) + i)] = float(h)
     for n, p in enumerate(plans):
         for e in (0, len(xys[n]) - 1):
-            if p.abut[0 if e == 0 else 1]:
+            if p.abut[0 if e == 0 else 1] and "abut" not in drop:
                 held[(n, e)] = float(np.asarray(p.z, np.float64)[e])   # (the deck's height at its abutment)
     for n, (sp, z) in enumerate(zip(specs, z0)):
         xy = xys[n]
@@ -197,7 +203,7 @@ def problem(plans, specs, z0, ceilings, ranks, pins=(), dips=None, grade_rows=Tr
             couplings.append((n, i, n, i + 1, "ge", float(dz0[i] - lim[i])))
             couplings.append((n, i + 1, n, i, "ge", float(-lim[i] - dz0[i])))
     n_joins = 0
-    for members in nodes(xys, z0):
+    for members in (nodes(xys, z0) if "nodes" not in drop else ()):
         # (each node one height: every member tied to one root, a star with no loops. Tied pair by pair, three ends
         # meeting at a side road's mouth formed a loop whose offsets did not add up: 13 of Tokyo's 15 cells infeasible)
         keys = sorted(members)
@@ -248,8 +254,24 @@ def solve(plans, specs, z0, ceilings, ranks, pins=(), dips=None, budget=BUDGET_S
             info["loosened"] = stage > 0
             break
     info["fallback"] = out is None
+    if out is None:             # (which kind of row it is: the one whose absence makes the no-grade solve feasible)
+        info["culprit"] = _culprit(plans, specs, z0, ceilings, ranks, pins, dips, budget)
     info["elapsed_s"] = time.perf_counter() - t0
     return out, info
+
+
+def _culprit(plans, specs, z0, ceilings, ranks, pins, dips, budget):
+    """The kinds of hard rows ("pins", "abut", "dips", "nodes") without which the solve (no grade rows) is feasible,
+    each tried alone: what made a cell fall back (logged, counted by tools/grade_metrics.py)."""
+    import carriageways
+    out = []
+    for kind in ("dips", "pins", "abut", "nodes"):
+        chains, couplings, _n = problem(plans, specs, z0, ceilings, ranks, pins, dips, grade_rows=False, drop=(kind,))
+        diag = {}
+        carriageways.solve(chains, couplings, deadline=time.monotonic() + budget, diagnostics=diag)
+        if diag.get("converged") and diag.get("feasible"):
+            out.append(kind)
+    return out
 
 
 def _over_ceiling(plans, zs, z0, ceilings, extra, floors=None, slack=1e-3, reach=GRADE_ROW_REACH):

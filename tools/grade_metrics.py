@@ -192,6 +192,7 @@ def main():
                                "statuses": sorted({str(i.get("status")) for i in infos}),
                                "worst_s": round(max((i.get("elapsed_s", 0.0) for i in infos), default=0.0), 2),
                                "by_cell": {i["key"]: {"stage": i.get("stage"), "fallback": i.get("fallback"),
+                                                      "culprit": i.get("culprit"),
                                                       "grade_left": i.get("grade_left"), "s": round(i.get("elapsed_s", 0), 2)}
                                            for i in infos}}
                 results[name]["vsolve"] = s
