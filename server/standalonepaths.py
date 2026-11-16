@@ -5,10 +5,16 @@ import os
 import numpy as np
 
 import mapgeom
+import osmtags
 import roads
 
 
 WIDTH = {"footway": 1.4, "path": 1.2, "cycleway": 2.0, "pedestrian": 3.0}
+# Locally reported 4 m width for the Charzykowy waterfront, mapped as Jeziorna and Promenada.
+CHARZYKOWY_PROMENADE = {
+    176276386, 337675417, 173504090, 22967138, 276088780,  # Jeziorna
+    359931164, 125941065, 125810533, 22967104, 125954292,  # Promenada
+}
 EXCLUDE = {"sidewalk", "crossing", "crosswalk", "cycle_crossing", "traffic_island", "link", "stairs", "steps"}
 # An unlabelled line following the roadside can be a separately surveyed sidewalk.
 VERGE_M = 4.0
@@ -38,6 +44,11 @@ def profile(f, i):
             width = None
     if width is None or not .4 <= width <= 12.:
         width = WIDTH[cls]
+    source = f.attrs.get("src_dataset")
+    record = f.attrs.get("src_record")
+    if (source is not None and source[i] == "OpenStreetMap"
+            and record is not None and osmtags.way_id(str(record[i])) in CHARZYKOWY_PROMENADE):
+        width = 4.0
     raw = roads._map_surface_value(f, i)
     kind = roads.surface_kind("track" if cls == "path" else cls, raw)
     return width, kind

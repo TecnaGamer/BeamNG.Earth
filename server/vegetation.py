@@ -364,7 +364,13 @@ class Vegetation:
 
     def _path(self, x, y):
         rel = getattr(self.md, "release", "x")
-        return os.path.join(self.dir, str(rel), str(x), f"{y}.npz") if self.dir else None
+        # The wider promenade fits inside this one level-14 cell. Rebuild its opted-in plants.
+        name = f"{y}.npz"
+        if (x, y) == (8988, 5281):
+            import standalonepaths
+            if standalonepaths.enabled():
+                name = f"{y}-charzykowy-promenada-4m.npz"
+        return os.path.join(self.dir, str(rel), str(x), name) if self.dir else None
 
     def _load(self, x, y):
         p = self._path(x, y)

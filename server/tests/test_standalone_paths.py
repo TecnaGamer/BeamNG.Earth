@@ -48,6 +48,27 @@ class StandalonePathsTest(unittest.TestCase):
     def parts(self, *cells):
         return paths.parts(FRAME, (-10, -10, 110, 110), cells)
 
+    def test_charzykowy_width_is_scoped_to_osm_ways(self):
+        ways = sorted(paths.CHARZYKOWY_PROMENADE)
+        n = len(ways)
+        f = features([[(0, 20 + i * 10), (100, 20 + i * 10)] for i in range(n + 3)],
+                     ["path"] * (n + 3), widths=[(n + 2, 2.5)])
+        f.attrs["name"] = np.full(n + 3, "Promenada")
+        f.attrs["src_dataset"] = np.array(["OpenStreetMap"] * n + ["Other", "OpenStreetMap", "OpenStreetMap"])
+        f.attrs["src_record"] = np.array([f"w{way}@5" for way in ways] + [f"w{ways[0]}@5", "w9999999999@1", "w9999999998@1"])
+        self.assertEqual([paths.profile(f, i)[0] for i in range(n + 3)], [4.] * n + [1.2, 1.2, 2.5])
+        with patch.dict(os.environ, BNE_STANDALONE_PATHS="off"):
+            self.assertEqual(self.parts(f), [])
+
+    def test_charzykowy_cache_rebuild_is_local_and_opt_in(self):
+        from test_vegetation import FakeMapData
+        with tempfile.TemporaryDirectory() as directory:
+            v = vegetation.Vegetation(FakeMapData(), directory)
+            self.assertEqual(Path(v._path(8988, 5281)).name, "5281-charzykowy-promenada-4m.npz")
+            self.assertEqual(Path(v._path(8987, 5281)).name, "5281.npz")
+            with patch.dict(os.environ, BNE_STANDALONE_PATHS="off"):
+                self.assertEqual(Path(v._path(8988, 5281)).name, "5281.npz")
+
     def test_only_ground_and_no_sidewalk_or_second_road(self):
         classes = ["residential", "footway", "footway", "cycleway", "steps", "path", "footway", "pedestrian", "cycleway"]
         lines = [[(0, y), (100, y)] for y in (0, 5, 22, 30, 40, 50, 60, 70, 80)]
