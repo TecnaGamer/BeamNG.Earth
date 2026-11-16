@@ -231,6 +231,11 @@ class Axes:
             self.a, self.b, self.line = self.a[near], self.b[near], self.line[near]
             if not len(self.a):
                 return
+        # (the attribute rows of the lines left alone, the lines numbered among them: a line's number only picks its row
+        # (match, surveyed). Every Axes kept a copy of its shards' whole attribute table, ~25 km of roads, on the
+        # Features it is memoised on (axes_for): ~75 MB of a road process after 25 tiles round the A7, 2026-11-16)
+        used, inv = np.unique(self.line, return_inverse=True)
+        self.attrs, self.line = self.attrs[used], inv.astype(np.int32 if len(used) < 2 ** 31 else np.int64)
         d = self.b - self.a
         self.len = dnp.hypot(d[:, 0], d[:, 1])
         self.dir = d / np.maximum(self.len, 1e-9)[:, None]
@@ -238,7 +243,9 @@ class Axes:
         hi = np.floor(np.maximum(self.a, self.b) / CELL_M + REACH_MAX_M / CELL_M).astype(np.int64)
         nx, ny = hi[:, 0] - lo[:, 0] + 1, hi[:, 1] - lo[:, 1] + 1
         cnt = nx * ny
-        sid = np.repeat(np.arange(len(self.a)), cnt)
+        # (segment numbers and the cells' bounds as int32: the grid is ~10 entries a segment, kept with the Axes)
+        idx = np.int32 if len(self.a) < 2 ** 31 and int(cnt.sum()) < 2 ** 31 else np.int64
+        sid = np.repeat(np.arange(len(self.a), dtype=idx), cnt)
         k = np.arange(int(cnt.sum())) - np.repeat(np.cumsum(cnt) - cnt, cnt)
         gx = lo[sid, 0] + k // ny[sid]
         gy = lo[sid, 1] + k % ny[sid]
@@ -250,13 +257,17 @@ class Axes:
         self.gsid, key = sid[order], key[order]
         cut = np.flatnonzero(key[1:] != key[:-1]) + 1
         self.gkey = key[np.concatenate([[0], cut])] if len(key) else key
-        self.gcut = np.concatenate([[0], cut, [len(key)]])
+        if len(self.gkey) and int(self.gkey[-1]) < 2 ** 31:     # (int32 too: _candidates asks with keys cut to it)
+            self.gkey = self.gkey.astype(np.int32)
+        self.gcut = np.concatenate([[0], cut, [len(key)]]).astype(idx)
 
     def _candidates(self, cells):
         """The segments in any of the grid cells (an (n, 2) array of cell coordinates), sorted, once each."""
         cx, cy = cells[:, 0] - self.g0[0], cells[:, 1] - self.g0[1]
         ok = (cx >= 0) & (cy >= 0) & (cy < self.gny)
         key = np.unique(cx[ok] * self.gny + cy[ok])
+        if self.gkey.dtype != key.dtype and len(self.gkey):      # (keys past the grid's last match nothing)
+            key = key[key <= self.gkey[-1]].astype(self.gkey.dtype)
         at = np.searchsorted(self.gkey, key)
         inside = at < len(self.gkey)
         at = at[inside][self.gkey[at[inside]] == key[inside]]
