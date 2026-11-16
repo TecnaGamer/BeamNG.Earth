@@ -10,6 +10,8 @@
       <BngButton :accent="ACCENTS.outlined" @click="openUpdate">Download page</BngButton>
     </div>
     <div class="earth-loading">{{ statusText }}</div>
+    <div v-if="offLevel" class="earth-offlevel">Not on the BeamNG.Earth level: graphics and world settings are saved
+      and take effect when you load it.</div>
 
     <div class="earth-help">
       <div class="earth-help-title">{{ help ? help.name : "" }}</div>
@@ -28,7 +30,7 @@
 import { onMounted, onUnmounted } from "vue"
 import { BngButton, BngCardHeading, ACCENTS } from "@/common/components/base"
 import {
-  help, update, bannerText, bannerLevel, connectionText, statusText, openUpdate, showWelcome, close,
+  help, update, bannerText, bannerLevel, connectionText, statusText, offLevel, openUpdate, showWelcome, close,
   startPolling, stopPolling,
 } from "./earthSettingsStore.js"
 
@@ -62,6 +64,11 @@ onUnmounted(stopPolling)
   &.is-ok { color: var(--bng-add-green-400, #8f8); }
   &.is-warn { color: var(--bng-orange-300, #fa3); }
   &.is-error { color: var(--bng-add-red-400, #f88); }
+}
+
+.earth-offlevel {
+  font-size: 0.9em;
+  color: var(--bng-orange-300, #fa3);
 }
 
 .earth-update { display: flex; align-items: center; justify-content: space-between; gap: 0.5em; }
