@@ -20,6 +20,7 @@ Not yet: grading the ground under roads, markings, junction shapes, bridges and 
 flagged as bridge / tunnel or off ground level are left out), the navgraph.
 """
 import json
+import functools
 import logging
 import math
 import types
@@ -602,7 +603,8 @@ def _facts_baked(feats, kind, extra):
     except (ValueError, IndexError, TypeError):
         return None
     got = bakepack.find(revisit.CACHE_DIR, bakepack.facts_key(kind, extra, cid[0]),
-                        {"bake_format": bakepack.BAKE_FORMAT, "facts_format": FACTS_FORMAT, "versions": versions})
+                        {"bake_format": bakepack.BAKE_FORMAT, "facts_format": FACTS_FORMAT, "versions": versions,
+                         "switches": bakepack.switches()})
     if got is None:
         import decisions        # (the shared decision archives: built by the project's builder, signed, checked)
         if decisions.enabled():
@@ -8389,6 +8391,22 @@ def _short_piece(s, gc, f, k, oc, fc, pinned):
     return _shallow_full_low(s, gc, f, k)
 
 
+def _ground_lines_near(xy, ground):
+    """The ground roads' lines of ground ({(fid, "g"): [lines]}) with an end within CHAIN_END_M of the line xy's box,
+    in the keys' order. Their ends are tested all at once: line by line, six small numpy calls each, a chain's 4,690
+    lines made this 17 % of a road tile in central Sydney (171 calls, 2026-11-15). Pure."""
+    lines = [np.asarray(ln, np.float64).reshape(-1, 2) for gk, lns in sorted((ground or {}).items()) if gk[1] == "g"
+             for ln in lns if len(ln) >= 2]
+    if not lines:
+        return lines
+    lo, hi = xy.min(axis=0) - CHAIN_END_M, xy.max(axis=0) + CHAIN_END_M
+    ends = np.empty((len(lines), 2, 2), np.float64)
+    for k, ln in enumerate(lines):
+        ends[k, 0], ends[k, 1] = ln[0], ln[-1]
+    near = ((ends >= lo) & (ends <= hi)).all(axis=2).any(axis=1)
+    return [ln for ln, keep in zip(lines, near.tolist()) if keep]
+
+
 def tunnel_side_ground(xy, s, g, spec, gfn, ground=None):
     """(left, right): the ground beside a tunnel line xy (k, 2; arc s, the ground over it g) as the burial reads it
     (tunnel_sections' sides), or None: not a road buried under flat ground (BURY_CLASSES, BURY_ON). Read with gfn(points
@@ -8410,10 +8428,7 @@ def tunnel_side_ground(xy, s, g, spec, gfn, ground=None):
     step = nrm[:, None, :] * off[None, :, None]
     gl = np.asarray(gfn((xy[:, None, :] + step).reshape(-1, 2)), np.float64)
     gr = np.asarray(gfn((xy[:, None, :] - step).reshape(-1, 2)), np.float64)
-    lines = [np.asarray(ln, np.float64).reshape(-1, 2) for gk, lns in sorted((ground or {}).items()) if gk[1] == "g"
-             for ln in lns if len(ln) >= 2]
-    lo, hi = xy.min(axis=0) - CHAIN_END_M, xy.max(axis=0) + CHAIN_END_M
-    lines = [ln for ln in lines if ((ln[[0, -1]] >= lo) & (ln[[0, -1]] <= hi)).all(axis=1).any()]
+    lines = _ground_lines_near(xy, ground)
     pts = np.concatenate(lines) if lines else np.zeros((0, 2))
     starts = np.r_[0, np.cumsum([len(ln) for ln in lines])].astype(np.int64)
     sl, sr = fast._ef.tunnel_side_ground(
@@ -12408,7 +12423,11 @@ class Tracker:
         for tx, ty in want[:max(0, BUILD_PER_POSE - len(self.building))]:   # in flight at most (vegetation.Tracker)
             self.building.add((tx, ty))
             self.started[(tx, ty)] = now
-            fut = self.futs[(tx, ty)] = loop.run_in_executor(self.pool, build, aid, tx, ty)
+            # (the tile's file read in the worker, not on the event loop: staging.build_inline; the build's own
+            # arguments as before)
+            job = functools.partial(staging.build_inline, build, getattr(getattr(conn, "s", None), "out_dir", None),
+                                    False)
+            fut = self.futs[(tx, ty)] = loop.run_in_executor(self.pool, job, aid, tx, ty)
             fut.add_done_callback(lambda f, k=(tx, ty), a=aid: self._built(conn, a, k, f))
         # a build that never ends leaves the loading line at "roads & buildings 0/36" with nothing in the log (GitHub
         # #241, a Discord report): said once per tile, with how many are in flight
@@ -12456,6 +12475,9 @@ class Tracker:
             self.retry[key] = time.monotonic() + TILE_RETRY_S
             return
         self.fails.pop(key, None)
+        pre = res if isinstance(res, staging.Inlined) else None
+        if pre is not None:
+            res = pre.res
         if res is None:                     # no roads there: not built again while it stays within reach
             self.empty.add(key)
             return
@@ -12463,7 +12485,7 @@ class Tracker:
         self.sent.add(key)
         m = {"type": "roads_tile", "anchorId": aid, "key": f"{key[0]}_{key[1]}", "path": path, "n": n}
         out_dir = getattr(getattr(conn, "s", None), "out_dir", None)
-        data = staging.inline_json(out_dir, path) if out_dir else None
+        data = staging.inline_from(pre, out_dir, path)
         if data is not None:                # (the game need not open the file: staging.inline_json)
             m["data"] = data
         pool = getattr(getattr(conn, "s", None), "pool_shapes", None)
@@ -12766,8 +12788,12 @@ class GeoTracker:
 
         build_s = getattr(self, "build_s", None) or reach_build_est()
 
+        deck_first = getattr(self, "deck_first", None) or ()
+
         def order(job):
             k = job[0]
+            if k in deck_first:         # (a bridge's tile the mod's deck guard slows the car for: first, deckguard.lua)
+                return (-1, 0.0)
             if k in car:
                 d = car[k]
                 if tree is not None:    # (by time to reach: reach.order_key; in m at the car's speed)
@@ -12805,7 +12831,10 @@ class GeoTracker:
         for k, content, skin, make in jobs[:max(0, BUILD_PER_POSE - len(self.building))]:
             self.building.add(k)
             self.started[k] = now
-            fut = self.futs[k] = loop.run_in_executor(self.pool, build, aid, k[0], k[1], content, skin, make)
+            # (the content's and the skin's files read in the worker, not on the event loop)
+            job = functools.partial(staging.build_inline_paths, build,
+                                    getattr(getattr(conn, "s", None), "out_dir", None), _geo_inline_paths)
+            fut = self.futs[k] = loop.run_in_executor(self.pool, job, aid, k[0], k[1], content, skin, make)
             fut.add_done_callback(lambda f, kk=k, a=aid, c=content, sk=skin, m=make:
                                   self._built(conn, a, kk, f, c, sk, m))
         for k in self.building:
@@ -12845,7 +12874,7 @@ class GeoTracker:
             self.futs.pop(key, None)
             t0 = self.started.pop(key, None)
             if t0 is not None and fut.done() and not fut.cancelled() and fut.exception() is None \
-                    and fut.result() is not None:
+                    and _unwrap(fut.result()) is not None:
                 # (the order's build time, queue included: reach.order_key)
                 took = getattr(self, "clock", time.monotonic)() - t0
                 old = getattr(self, "build_s", None)
@@ -12867,6 +12896,9 @@ class GeoTracker:
             if aid == self.aid:
                 self.retry[key] = time.monotonic() + TILE_RETRY_S
             return
+        pre = res if isinstance(res, staging.Inlined) else None
+        if pre is not None:
+            res = pre.res
         if res is None:
             self.retry[key] = time.monotonic() + TILE_RETRY_S
             return
@@ -12898,7 +12930,7 @@ class GeoTracker:
             self.stats["content"] += 1
             m = {"type": "roads_tile", "anchorId": aid, "key": gkey, "path": path, "n": n,
                  "frame": list(geotiles.centre(*key)), "h": info.get("h")}
-            data = staging.inline_json(out_dir, path) if out_dir else None
+            data = staging.inline_from(pre, out_dir, path)
             if data is not None:
                 m["data"] = data
             if ex:                      # (the parts this anchor needs exact: the mod loads those, not the base)
@@ -12930,7 +12962,7 @@ class GeoTracker:
             m = {"type": "roads_skin", "anchorId": aid, "key": gkey, "path": path}
             if token is not None:       # (staged by the mod, committed with the swap's terrain)
                 m["swap"] = token
-            data = staging.inline_json(out_dir, path) if out_dir else None
+            data = staging.inline_from(pre, out_dir, path)
             if data is not None:
                 m["data"] = data
             if pool is not None:
@@ -12966,6 +12998,18 @@ class GeoTracker:
             conn.send(m)
         if make and c is None:
             self.need[(key, aid)] = {w: v for w, v in (self.need.get((key, aid)) or {}).items() if w not in ex}
+
+
+def _geo_inline_paths(res):
+    """The session files a road geotile build made that go inside their messages: its content's and its skin's."""
+    if not isinstance(res, dict):
+        return []
+    c, sk = res.get("content"), res.get("skin")
+    return [c[0] if c else None, sk[0] if sk else None]
+
+
+def _unwrap(res):
+    return res.res if isinstance(res, staging.Inlined) else res
 
 
 def geo_exact_auto(tile_frame, frame, parts):

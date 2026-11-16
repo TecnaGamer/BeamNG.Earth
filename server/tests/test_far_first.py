@@ -58,6 +58,73 @@ class FarFirstTest(unittest.TestCase):
             return c, coarse, dict(c.desired), groups_before, c.groups
         return asyncio.run(go())
 
+    def _drive(self, gate, steps, global_far=False):
+        """A connection's far selection along steps [(x, y)] (update_far(gate) at each, a pose's), its desired keys
+        and refined nodes after each; the number of selections skipped."""
+        from unittest import mock
+
+        class Clock:            # (earthd's time with a fake monotonic clock: the holds expire alike in both drives)
+            def __init__(self, real):
+                self.real, self.now = real, 1000.0
+
+            def monotonic(self):
+                return self.now
+
+            def __getattr__(self, name):
+                return getattr(self.real, name)
+        clock = Clock(earthd.time)
+
+        async def go():
+            c = earthd.Connection(self.s, None, _Writer())
+            c.global_far = global_far
+            if global_far:      # (a disc, the default horizon mode's: in square mode the global part reports no slack)
+                c.view_cap = 80000.0
+            a = self.s.new_anchor(LAT, LON)
+            a.first_terrain = (0.0, 0.0)
+            self.s.anchors[a.id] = a
+            c.active = a.id
+            c.focus = steps[0]
+            c._set_block(a.id, 0.0, 0.0)
+            c.update_far()
+            skipped = [0]
+            orig = c._far_unchanged
+
+            def counted(*args):
+                r = orig(*args)
+                skipped[0] += r
+                return r
+            c._far_unchanged = counted
+            out = []
+            for k, p in enumerate(steps):
+                clock.now += 0.5
+                c.focus = p
+                c.update_far(gate=gate)
+                out.append((sorted(c.desired), sorted(c.refined, key=str), [t.key for t in c.queue[:32]]))
+            return out, skipped[0]
+        with mock.patch.object(earthd, "time", clock):
+            return asyncio.run(go())
+
+    def test_pose_gate_never_changes_the_selection(self):
+        """update_far(gate=True) (a pose) skips a selection only when it surely is the last one's (the last changed no
+        node, nothing discrete changed, the move under the last selection's slack): along drives at 0, 2, 5, 20 and 60 m/s
+        (2 Hz poses, the mod's POSE_INTERVAL) the desired tiles, the refined nodes and the build order after every pose
+        are those of selecting at every pose, and it does skip (standing, creeping)."""
+        import math
+        total = {}
+        for global_far in (False, True):
+            for speed in (0.0, 2.0, 5.0, 20.0, 60.0):
+                steps = [(137.3 + speed * 0.5 * k * math.cos(0.4), -61.9 + speed * 0.5 * k * math.sin(0.4))
+                         for k in range(40)]
+                want, n0 = self._drive(False, steps, global_far)
+                got, skipped = self._drive(True, steps, global_far)
+                self.assertEqual(n0, 0)
+                for k, (w, g) in enumerate(zip(want, got)):
+                    self.assertEqual(w, g, f"global {global_far}, {speed} m/s, pose {k}")
+                total[(global_far, speed)] = skipped
+        print(f"\n  pose gate: selections skipped of 40 per drive (global far, m/s): {total}")
+        self.assertGreater(total[(False, 0.0)], 30, total)
+        self.assertGreater(total[(True, 0.0)], 30, total)
+
     def test_coarse_cover_then_refined(self):
         c, coarse, full, _, groups = self.selections()
         self.assertGreater(min(t.level for t in full.values()), self.s.min_level - 1)

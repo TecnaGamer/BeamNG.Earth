@@ -40,18 +40,93 @@ class ReporterTest(unittest.TestCase):
         self.assertEqual(self.sent[-1]["sources"]["a.example.org"]["req"], 4)
         self.r.report()
         self.assertNotIn("a.example.org", self.sent[-1]["sources"])            # nothing new
-        self.assertEqual(set(self.sent[-1]), {"id", "v", "os", "game", "mp", "interval", "sources"})
+        self.assertEqual(set(self.sent[-1]), {"id", "v", "os", "game", "mp", "interval", "sources", "rid", "seq"})
+        self.assertEqual([b["seq"] for b in self.sent], [1, 2, 3])
+        self.assertEqual(len({b["rid"] for b in self.sent}), 1)
         again = telemetry.Reporter(self.tmp.name, "1.9.0", lambda: (False, False), send=lambda b: True)
         self.assertEqual(again.id, self.r.id)                                    # the install's id is kept
 
-    def test_a_failed_send_carries_its_counts_to_the_next(self):
+    def test_a_failed_send_is_sent_again_as_it_was_then_the_new_counts(self):
+        # (a report whose answer was lost may have arrived: sent again unchanged, its seq, so a collector can count it
+        # once; what came meanwhile goes in the next one)
         self.count("b.example.org", 7)
         self.ok = False
         self.r.report()
+        self.count("b.example.org", 1)
+        self.r.report()                     # (failed again: still the same report)
         self.ok = True
         self.count("b.example.org", 2)
         self.r.report()
-        self.assertEqual(self.sent[-1]["sources"]["b.example.org"]["req"], 9)
+        self.assertEqual([b["sources"]["b.example.org"]["req"] for b in self.sent], [7, 7, 7])
+        self.assertEqual(len({b["seq"] for b in self.sent}), 1)
+        self.r.report()
+        self.assertEqual(self.sent[-1]["sources"]["b.example.org"]["req"], 3)
+        self.assertEqual(self.sent[-1]["seq"], self.sent[0]["seq"] + 1)
+        self.r.report()
+        self.assertNotIn("b.example.org", self.sent[-1]["sources"])
+
+    def _collector(self, answer):
+        """A collector that counts each (rid, seq) once, as native/serverlist does; answer(n) -> what the sender
+        hears for the n-th report (True, False: no answer, or telemetry.REJECTED)."""
+        seen, total, n = set(), {}, [0]
+
+        def send(body):
+            n[0] += 1
+            got = answer(n[0])
+            if got is not telemetry.REJECTED:          # (taken, whether or not its answer comes back)
+                ident = (body["rid"], body["seq"])
+                if ident not in seen:
+                    seen.add(ident)
+                    for host, d in body["sources"].items():
+                        total[host] = total.get(host, 0) + d["req"]
+                    for k, v in body.get("dem", {}).items():
+                        total[k] = total.get(k, 0) + v
+            self.sent.append(body)
+            return got
+        return send, total
+
+    def test_lost_answers_never_count_a_report_twice(self):
+        # (Codex review of 497c725b: after 4 lost answers the counts went into a new seq, counted again)
+        send, total = self._collector(lambda n: n > 6)           # (every report arrives; six answers lost)
+        self.r.send = send
+        self.count("g.example.org", 5)
+        netfetch.note_detail("mapterhorn:test_lost:16:net", 3)
+        for _ in range(7):
+            self.r.report()
+            self.count("g.example.org", 1)
+        self.r.report()
+        self.r.report()
+        self.assertEqual(total.get("g.example.org"), 5 + 7, "each request counted exactly once")
+        self.assertEqual(total.get("mapterhorn:test_lost:16:net"), 3)
+        self.assertEqual(len({b["seq"] for b in self.sent[:7]}), 1, "the same report until it is acknowledged")
+
+    def test_a_rejected_report_is_dropped_not_sent_again(self):
+        # (an explicit refusal, a 400 / 413: the collector took nothing, and the same body would be refused forever)
+        send, total = self._collector(lambda n: telemetry.REJECTED if n == 1 else True)
+        self.r.send = send
+        self.count("h.example.org", 5)
+        self.r.report()
+        self.count("h.example.org", 2)
+        self.r.report()
+        self.assertEqual(total.get("h.example.org"), 2, "the refused counts dropped, never inflated")
+        self.assertEqual(self.sent[1]["seq"], self.sent[0]["seq"] + 1)
+
+    def test_post_tells_a_refusal_from_a_lost_answer(self):
+        import io
+        import urllib.error
+
+        def raising(e):
+            def f(*a, **k):
+                raise e
+            return f
+        cases = [(urllib.error.HTTPError(telemetry.URL, 400, "bad", {}, io.BytesIO()), telemetry.REJECTED),
+                 (urllib.error.HTTPError(telemetry.URL, 413, "big", {}, io.BytesIO()), telemetry.REJECTED),
+                 (urllib.error.HTTPError(telemetry.URL, 429, "soon", {}, io.BytesIO()), False),
+                 (urllib.error.HTTPError(telemetry.URL, 502, "gw", {}, io.BytesIO()), False),
+                 (TimeoutError("lost"), False), (OSError("reset"), False)]
+        for e, want in cases:
+            with mock.patch("urllib.request.urlopen", raising(e)):
+                self.assertIs(self.r._post({"id": "x"}), want, e)
 
     def test_other_processes_totals_are_summed_once(self):
         os.makedirs(self.proc)
@@ -63,6 +138,96 @@ class ReporterTest(unittest.TestCase):
             json.dump({"pid": 999999, "at": 1e12, "hosts": {"c.example.org": {"requests": 8, "bytes": 1_000_000}}}, fh)
         self.r.report()
         self.assertEqual(self.sent[-1]["sources"]["c.example.org"]["req"], 3)    # only what changed
+
+    def _proc_file(self, d, pid, inst, req, at=1e12, detail=None):
+        os.makedirs(d, exist_ok=True)
+        with open(os.path.join(d, f"{pid}-{inst}.json"), "w") as fh:
+            json.dump({"pid": pid, "inst": inst, "at": at, "hosts": {"e.example.org": {"requests": req}},
+                       "detail": detail or {}}, fh)
+
+    def test_a_restart_never_counts_the_last_runs_files_again(self):
+        # (2026-11-15 review: a new Reporter counted every surviving process file from zero, so each restart sent the
+        # last run's worker totals again, and two servers on one folder counted each other's)
+        root = os.path.join(self.tmp.name, "netstats", "proc")
+        old_run = telemetry.run_proc_dir(root)
+        self._proc_file(old_run, 999991, "aa", 50)
+        with open(os.path.join(root, "999992.json"), "w") as fh:       # (a version before the run folders)
+            json.dump({"pid": 999992, "at": 1e12, "hosts": {"e.example.org": {"requests": 70}}}, fh)
+        first = telemetry.Reporter(self.tmp.name, "1", lambda: (True, False), proc_dir=old_run,
+                                   send=lambda b: (self.sent.append(b), True)[1])
+        first.report()
+        self.assertEqual(self.sent[-1]["sources"]["e.example.org"]["req"], 50, "the run's own files, once")
+        new_run = telemetry.run_proc_dir(root)                  # (the server started again)
+        self.assertNotEqual(new_run, old_run)
+        self.assertFalse(os.path.exists(os.path.join(root, "999992.json")), "an old version's file: dropped")
+        self.assertTrue(os.path.isdir(old_run), "a recent run's folder is left (another server may still run)")
+        again = telemetry.Reporter(self.tmp.name, "1", lambda: (True, False), proc_dir=new_run,
+                                   send=lambda b: (self.sent.append(b), True)[1])
+        again.report()
+        self.assertNotIn("e.example.org", self.sent[-1]["sources"], "the old run's files are not counted again")
+        old = os.path.getmtime(old_run) - telemetry.PROC_KEEP_S - 60
+        for n in os.listdir(old_run):
+            os.utime(os.path.join(old_run, n), (old, old))
+        os.utime(old_run, (old, old))
+        telemetry.run_proc_dir(root)
+        self.assertFalse(os.path.exists(old_run), "a run's folder untouched for PROC_KEEP_S: removed")
+
+    def test_a_pid_used_again_is_another_process(self):
+        d = os.path.join(self.tmp.name, "run")
+        r = telemetry.Reporter(self.tmp.name, "1", lambda: (True, False), proc_dir=d,
+                               send=lambda b: (self.sent.append(b), True)[1])
+        self._proc_file(d, 999993, "aa", 40)
+        r.report()
+        self._proc_file(d, 999993, "bb", 5)             # (the same pid, a new process instance: counted from zero)
+        r.report()
+        self.assertEqual([b["sources"]["e.example.org"]["req"] for b in self.sent], [40, 5])
+
+    def test_a_gone_process_counted_once_then_its_file_removed(self):
+        import time
+        d = os.path.join(self.tmp.name, "run")
+        r = telemetry.Reporter(self.tmp.name, "1", lambda: (True, False), proc_dir=d,
+                               send=lambda b: (self.sent.append(b), True)[1])
+        self._proc_file(d, 999994, "aa", 10)
+        r.report()
+        self._proc_file(d, 999994, "aa", 12, at=time.time() - telemetry.PROC_KEEP_S - 5)    # (its last write)
+        r.report()
+        self.assertEqual(self.sent[-1]["sources"]["e.example.org"]["req"], 2, "only what changed since last seen")
+        self.assertEqual(os.listdir(d), [])
+        r.report()
+        self.assertNotIn("e.example.org", self.sent[-1]["sources"])
+
+    def test_dem_detail_counts_since_the_last_report(self):
+        d = os.path.join(self.tmp.name, "run")
+        r = telemetry.Reporter(self.tmp.name, "1", lambda: (True, False), proc_dir=d,
+                               send=lambda b: (self.sent.append(b), True)[1])
+        r.report()                                      # (this process's own counts so far: taken)
+        self._proc_file(d, 999995, "aa", 1, detail={"mapterhorn:grading:16:net": 4, "mapterhorn:farfield:13:disk": 9})
+        r.report()
+        self.assertEqual(self.sent[-1]["dem"], {"mapterhorn:grading:16:net": 4, "mapterhorn:farfield:13:disk": 9})
+        self._proc_file(d, 999995, "aa", 1, detail={"mapterhorn:grading:16:net": 6, "mapterhorn:farfield:13:disk": 9})
+        netfetch.note_detail("mapterhorn:heightmap:16:waited")
+        r.report()
+        self.assertEqual(self.sent[-1]["dem"], {"mapterhorn:grading:16:net": 2, "mapterhorn:heightmap:16:waited": 1})
+        r.report()
+        self.assertNotIn("dem", self.sent[-1], "nothing new: no section")
+        many = {f"mapterhorn:m{i}:16:net": i + 1 for i in range(telemetry.DEM_KEYS + 40)}
+        self._proc_file(d, 999996, "aa", 1, detail=many)
+        r.report()
+        dem = self.sent[-1]["dem"]
+        self.assertEqual(len(dem), telemetry.DEM_KEYS, "bounded")
+        self.assertEqual(sum(dem.values()), sum(many.values()), "the rest summed under other, nothing lost")
+        self.assertIn("other", dem)
+
+    def test_dem_detail_follows_the_network_switch(self):
+        sent, a = [], [{"main": True, "net": False, "perf": False}]
+        r = telemetry.Reporter(self.tmp.name, "1", lambda: (True, False), send=lambda b: (sent.append(b), True)[1],
+                               allowed=lambda: a[0])
+        netfetch.note_detail("mapterhorn:test:16:net")
+        r.report()
+        self.assertNotIn("dem", sent[-1])
+        a[0] = {"main": True, "net": True, "perf": False}
+        r.report()
+        self.assertNotIn("dem", sent[-1], "the counts made while off were dropped")
 
 
 class SwitchTest(unittest.TestCase):

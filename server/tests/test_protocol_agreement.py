@@ -119,7 +119,9 @@ MOD_TO_SERVER = {
               # it takes a built block near its target (follow.preferReady: 'terrain_ready_set')
               "readySet": F(int, OPT),
               # the game's own user folder (FS:getUserPath: Server.check_user_dir, GitHub #770)
-              "userPath": F(str, OPT)},
+              "userPath": F(str, OPT),
+              # it slows the car before a bridge whose road tile has not come (deckguard.lua PROTO: 'deck_spans')
+              "deckGuard": F(int, OPT)},
     "traffic_visuals": {"enabled": F(bool), "reset": F(bool, OPT)},
     "prepare_anchor": {"requestId": F(int), "lat": F(NUM), "lon": F(NUM), "cx": F(NUM, OPT), "cy": F(NUM, OPT),
                        # 2026-10-22: the player's spot when not the origin (BeamMP: onto another player's anchor)
@@ -145,13 +147,19 @@ MOD_TO_SERVER = {
              # other vehicles' collision foci [{x, y, r, trees}] (collisionfoci.lua; earthd parse_foci)
              "foci": F((list, dict), OPT),
              # the edge guard holds the car for its ground (earthd Connection.hold_boost: every core meanwhile)
-             "guardHold": F(bool, OPT)},
+             "guardHold": F(bool, OPT),
+             # the road geotiles the deck guard slows the car for (a bridge's, not in yet): built first (deckspans.py)
+             "deckWait": F((list, dict), OPT)},
     # the download cache (cache.py; additive): the page's size cap (GB, 0 = unlimited), a clear, or
     # neither (fresh usage numbers); always answered with a 'cache'
     "cache": {"capGb": F(NUM, OPT), "clear": F(bool, OPT)},
     # the settings page's Max RAM for BeamNG.Earth (memwatch.py): the limit (GB, 0 Auto) when the player changed it, or
     # nothing (fresh numbers); always answered with a 'memory'
     "memory": {"limitGb": F(NUM, OPT)},
+    # 2026-11-15: the settings page's "Restart world server" (srvrestart.lua; server srvrestart.py): the server stops
+    # cleanly and its launcher starts it again; always answered with a 'server_restart'. key: the capability the server
+    # wrote in the game's temp/beamngEarth folder (srvrestart.write_key; core.restartKey)
+    "server_restart": {"key": F(str)},
     # 2026-11-12: the in-game reports (report.lua / reportsend.lua; server reportsend.py): the moment's server part
     # (where the camera, the centre's aim point and the car are), the mod's files written (scrubbed), and the
     # player's "Send to the developers" (only the folder's name: never a path)
@@ -280,7 +288,8 @@ SERVER_TO_MOD = {
               "fast": F(str, OPT)},        # (the area running fast, "" none: the mod pauses the game meanwhile)
     "route_result": {"id": F(int), "points": F(list), "dist": F(NUM), "dur": F(NUM), "error": F(str, OPT),
                       "elev": F((list, dict), OPT),   # OSRM; elev: the map's profile (routing.resample, dem.sample)
-                      "legs": F(list, OPT)},          # with via: [[dist_m, dur_s], ...] per leg
+                      "legs": F(list, OPT),           # with via: [[dist_m, dur_s], ...] per leg
+                      "steps": F(list, OPT)},         # OSRM maneuvers (routing.parse; the API's gpsRoute().steps)
     "route_download": {"total": F(int), "done": F(int), "active": F(bool)},
     # the blocks built already round the player (follow.preferReady takes one instead of its own target)
     "terrain_ready_set": {"anchorId": F(int), "centres": F(list)},  # routeahead.py: the route's corridor
@@ -315,6 +324,10 @@ SERVER_TO_MOD = {
               "privacyRegion": F(str), "telemetryConsent": F(int),     # the welcome page's telemetry defaults
               "streamLease": F(int, OPT), "leaseId": F(str, OPT),
               "memoryTier": F(str, OPT), "memoryNote": F(str, OPT),   # low-memory machines only (budget.TIER lean / emergency)
+              # the start-time values of the settings read only at a start (srvrestart.start_view: {id: value}) and
+              # whether a supervisor starts the server again (srvrestart.ENV): the settings page's restart button
+              "startSettings": F(dict, OPT), "restartable": F(bool, OPT),
+              "startFixed": F((list, dict), OPT),   # ... the ids set by hand there (never pending: srvrestart.lua)
               "farFormat": F(str), "material": F(str),
               "nearVisual": F(str), "attribution": F(str),          # protocol 4
               "cells": F(int, OPT),             # v1.4 M1: cells per tile edge, FORMAT 4 only
@@ -389,6 +402,9 @@ SERVER_TO_MOD = {
     "block_base": {"anchorId": F(int), "cx": F(NUM), "cy": F(NUM), "base": F(str), "baseSize": F(NUM)},
     # the highest ground near the player's path (groundahead.py; the mod's altitude rule), z in the anchor's frame
     "ground_ahead": {"anchorId": F(int), "z": F(NUM)},
+    # the bridges round the car (deckspans.py; the mod's deck guard, hello.deckGuard): spans [[x0, y0, x1, y1, ...]] in
+    # the anchor's world, abut [bits] (1 the first end on the ground, 2 the last), for the disc (cx, cy) r
+    "deck_spans": {"anchorId": F(int), "cx": F(NUM), "cy": F(NUM), "r": F(NUM), "spans": F(list), "abut": F(list)},
     # the water near the player (--sea on): tiles [key, x, y, z, size, nx, ny] (seatiles.py), rivers
     # [key, kind, flow m/s, [[x, y, z, width, depth], ...]] (riverlines.py)
     "sea": {"anchorId": F(int), "tiles": F(list), "rivers": F(list)},
@@ -475,7 +491,10 @@ SERVER_TO_MOD = {
     # the server's memory and its limit (memwatch.status), for the settings page: after every mod 'memory'
     "memory": {"usedMB": F(NUM), "limitMB": F(NUM), "effMB": F(NUM), "autoMB": F(NUM), "setting": F(NUM),
                "tier": F(str), "processes": F(int), "sheds": F(int), "rotations": F(int), "peakMB": F(NUM),
-               "availMB": F(NUM, OPT), "restart": F(bool)},
+               "availMB": F(NUM, OPT), "restart": F(bool),
+               "tooLow": F(bool)},    # (over Max RAM for minutes: memwatch.too_low, the settings line says so)
+    # the answer to 'server_restart': ok, the server stops now and is started again; else why not (error)
+    "server_restart": {"ok": F(bool), "error": F(str, OPT)},
     "cache": {"v": F(int), "usedBytes": F(int), "capBytes": F(int), "files": F(int), "ready": F(bool),
               "managed": F(bool), "clearedBytes": F(int, OPT),
               "pinnedBytes": F(int, OPT)},     # the saved areas' files (areas.py; kept by a clear)
@@ -500,6 +519,7 @@ EXERCISED_ELSEWHERE = {"far_retex", "roads_tile", "roads_drop",   # roads: needs
                                                                      # (test_randomplace)
                        "block_base",                                 # a lazy imagery source (test_detail)
                        "sea",                                        # --sea on: needs map data (test_seacarve)
+                       "deck_spans",                                 # the bridges round the car: map data (test_deckspans)
                        "veg_tile", "veg_drop",                       # --trees on: needs map data
                        "turbines_tile", "turbines_drop",             # turbineGeo: test_windturbine_farstream
                        "user_dir_mismatch",                          # another user folder than the game's (test_user_dir)
@@ -1164,6 +1184,11 @@ class ServerMessagesTest(test_server.ServerHarness):
         self.assertIn("clearedBytes", until(lambda m: m["type"] == "cache"))
         c.send({"type": "memory"})                      # the page's world server memory line (memwatch.status)
         self.assertGreater(until(lambda m: m["type"] == "memory")["processes"], 0)
+        # the page's "Restart world server": this test's server has no supervisor (srvrestart.ENV), so it says why not
+        c.send({"type": "server_restart", "key": "0" * 32})
+        answer = until(lambda m: m["type"] == "server_restart")
+        self.assertFalse(answer["ok"])
+        self.assertIn("not started by the BeamNG.Earth app", answer["error"])
         c.send({"type": "app_path"})                    # the page's cache folder and BeamMP launcher (no choice made)
         self.assertTrue(until(lambda m: m["type"] == "app_paths")["cacheDir"])
         # (shared world building, commented out 2026-10-27)

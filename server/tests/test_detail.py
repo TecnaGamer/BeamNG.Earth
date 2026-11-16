@@ -111,6 +111,7 @@ class DetailServerTest(ServerHarness):
         earthd.HM_CACHE = 0
         try:
             self.server.evict_heightmaps()
+            self.server.removes_flush()     # (the files go in the "remove" thread)
         finally:
             earthd.HM_CACHE = old_cache
         self.assertFalse(os.path.exists(path), "base photo removed with its heightmap")

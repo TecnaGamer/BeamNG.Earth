@@ -408,6 +408,7 @@ class DirectStartAdoptsOptionsTest(unittest.TestCase):
         argv, env = self.run_start(({}, ["gamemoderun"], []))
         self.assertEqual(argv, ["gamemoderun", "/g/BeamNG/BinLinux/BeamNG.drive.x64"])
 
+    @unittest.skipIf(os.name == "nt", "the Linux start: POSIX paths (Windows CI turns /u into \\u)")
     def test_userpath_reaches_the_game(self):
         # the mod and the settings live in the user folder the launcher chose: the game is told the folder its
         # version folder sits in (a Flatpak Steam's folder, the user's report 2026-10-26)
