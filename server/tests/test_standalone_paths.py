@@ -176,7 +176,7 @@ class StandalonePathsTest(unittest.TestCase):
 
     def test_tree_trunks_stay_off_path_but_crowns_can_overhang(self):
         items = SimpleNamespace(lon=np.full(3, LON + 10 / M_LON),
-                                lat=LAT + np.array([0., 2.2, 3.]) / M_LAT,
+                                lat=LAT + np.array([0., 1.95, 2.05]) / M_LAT,
                                 radius=np.full(3, 5.), kind=np.full(3, vegetation.KIND_TREE),
                                 group=np.full(3, vegetation.G_DECIDUOUS))
         blockers = [(np.array([[0., 0.], [20., 0.]]), 2.)]
@@ -190,10 +190,10 @@ class StandalonePathsTest(unittest.TestCase):
                 row(furniture.G_HYDRANT, 10., 2.2, height=.9),
                 row(furniture.G_BENCH, 10., 2.8, yaw=90., height=.9),
                 row(furniture.G_BIN, -2.1, 0., height=1.1),
-                row(furniture.G_STREET_TREE, 10., 2.2, height=10.),
+                row(furniture.G_STREET_TREE, 10., 2., height=10.),
                 row(furniture.G_HYDRANT, 10., 4., height=.9),
                 row(furniture.G_BENCH, 10., 4., height=.9),
-                row(furniture.G_STREET_TREE, 10., 3., height=10.),
+                row(furniture.G_STREET_TREE, 10., 2.05, height=10.),
                 row(furniture.G_LAMP, 10., 0., height=9.)]
         self.assertEqual(paths.clear_props(rows, blockers), rows[5:])
         self.assertEqual(paths.clear_props(rows, []), rows)

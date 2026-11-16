@@ -13,7 +13,6 @@ EXCLUDE = {"sidewalk", "crossing", "crosswalk", "cycle_crossing", "traffic_islan
 # An unlabelled line following the roadside can be a separately surveyed sidewalk.
 VERGE_M = 4.0
 PARALLEL = math.cos(math.radians(35))
-TRUNK_CLEAR_M = 0.4      # keep trunks off the paving; branches may overhang a path
 
 
 def enabled():
@@ -119,7 +118,7 @@ def clear_props(rows, blockers):
                 clearance = furniture.RoadClearance([(half, line) for line, half in blockers])
             keep[indices] = [clearance.clear(rows[i]) for i in indices]
         else:
-            radii = (TRUNK_CLEAR_M if group == furniture.G_STREET_TREE else
+            radii = (0.0 if group == furniture.G_STREET_TREE else
                      pathfootprints.radii(group, [rows[i][6] for i in indices], 0.))
             keep[indices] = keep_outside([rows[i][1:3] for i in indices], blockers, radii)
     return [row for row, ok in zip(rows, keep) if ok]
