@@ -3606,8 +3606,21 @@ def base_photo(lat, lon, x0, y0, size, px, tex, buildings, rock_zoom, path, cach
     im = _imagery(tex)
     frame = geodesy.EnuFrame(lat, lon)
     pending = set()
+    import genground
+    rgb = None
+    if genground.ON and not quick:      # (earthd.Server.write_base)
+        try:
+            rgb, used = genground.render(im, frame, x0, y0, size, px, getattr(_s, "md", None),
+                                         getattr(_s, "surface", None), _s.widths, pending)
+        except imagerymod.ImageryError:
+            return None
+        except Exception as e:      # (the Sentinel-2 photo alone then)
+            log.info("base photo: generated ground: %s: %s", type(e).__name__, e)
+            rgb = None
+            pending.discard(genground.GEN_PENDING)
     try:
-        rgb, used = im.render(frame, x0, y0, size, px, pending)
+        if rgb is None:
+            rgb, used = im.render(frame, x0, y0, size, px, pending)
     except imagerymod.ImageryError:
         return None
     rgb = np.asarray(rgb, np.uint8)

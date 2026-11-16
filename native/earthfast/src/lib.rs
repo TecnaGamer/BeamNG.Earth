@@ -117,6 +117,8 @@ mod par;
 mod bc1fast;
 mod l0roads;
 mod groundphoto;
+mod genground;
+mod ggshapes;
 mod layerfold;
 mod roadsurf;
 mod levelways;
@@ -6467,13 +6469,29 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // tile endpoint: server/mtarchive.py)
     m.add_function(wrap_pyfunction!(pmtiles::pmt_find_many, m)?)?;
     m.add_function(wrap_pyfunction!(pmtiles::pmt_ranges, m)?)?;
-    m.add("VERSION", 305)?;
-    // 306 (on 305; written as 223 on 222): street-name signs on the traffic signals' mast arms (streetsigns.rs;
+    // 306: genground::gg_fill_polys / gg_regions / gen_ground (the generated ground, BNE_GEN_GROUND: a block's 1 m base
+    // colour from Sentinel-2 and the map's regions instead of a 1 m aerial photo; server/genground.py)
+    genground::register(m)?;
+    // 307: gen_ground(..., gr, gc): its sampling lattices on the global texel grid, the caller's square with a halo
+    // (Codex review of 306: overlapping blocks drew the same ground in other colours)
+    // 308: generated ground stage 2: gg_regions(..., line, line_kind, ...) and the surface / pattern kinds,
+    // gen_ground(..., poly, pdir, pphase, ...), ggshapes::gg_fill_lines / gg_poly_axes
+    ggshapes::register(m)?;
+    // 309: gg_poly_axes(..., skip): linear (a histogram of the edge directions), all of a polygon's rings, clip edges left
+    // out (Codex review of 308)
+    // 310: stage 3 perf: gg_grid (the texel grid and its Web-Mercator metres, rectangles), the edge-table polygon fill,
+    // the capsule-interval line fill, value_noises on the kernels' threads (all the same output)
+    // 311: stage 3 steps 2-3: gg_regions(..., t) with the bounded hedgerow skirt; gen_ground's field-edge barriers and
+    // forest floor
+    // 312: stage 3 steps 4-5: unmapped crop's furrows where the photo shows periodic strips (a structure tensor on the 8 m
+    // cells, 32 integer normals, a lag test), the surfaces' palette by the support of their photo colour
+    m.add("VERSION", 312)?;
+    // 313 (on 312; written as 223 on 222): street-name signs on the traffic signals' mast arms (streetsigns.rs;
     // server/streetsigns.py)
     m.add_function(wrap_pyfunction!(streetsigns::street_sign_signals, m)?)?;
     m.add_function(wrap_pyfunction!(streetsigns::street_sign_cross, m)?)?;
     m.add_function(wrap_pyfunction!(streetsigns::street_sign_abbrev, m)?)?;
     m.add_function(wrap_pyfunction!(streetsigns::street_sign_mesh, m)?)?;
-    m.add("VERSION", 306)?;
+    m.add("VERSION", 313)?;
     Ok(())
 }

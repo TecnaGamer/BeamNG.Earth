@@ -102,6 +102,7 @@ import distanttraffic          # noqa: E402
 import prewarm as prewarmmod  # noqa: E402
 import parking as parkingmod  # noqa: E402
 import gasstations as gasstationsmod  # noqa: E402
+import genground  # noqa: E402
 import roads as roadsmod  # noqa: E402
 import roadsurf as roadsurfmod  # noqa: E402
 import reach as reachmod  # noqa: E402
@@ -4870,7 +4871,8 @@ class Server:
         again once they are here."""
         key = (anchor.id, cx, cy)
         self.base_pending[key] = frozenset(pending)
-        if surfacemod.PHOTO_ROADS_PENDING not in pending and self.base_ready(anchor, cx, cy):
+        if surfacemod.PHOTO_ROADS_PENDING not in pending and genground.GEN_PENDING not in pending \
+                and self.base_ready(anchor, cx, cy):
             self.base_stale.discard(key)
         else:
             self.base_stale.add(key)
@@ -5291,8 +5293,18 @@ class Server:
         t0 = time.perf_counter()
         try:
             pending = set()
-            with (self.deshadow.no_wait() if self.deshadow is not None else contextlib.nullcontext()):
-                rgb, used = self.imagery.render(anchor.frame, x0, y0, size, BASE_RENDER_PX, pending)
+            rgb = None
+            if genground.ON and not quick:  # the generated ground: Sentinel-2 and the map's regions (genground.py)
+                try:
+                    rgb, used = genground.render(self.imagery, anchor.frame, x0, y0, size, BASE_RENDER_PX,
+                                                 self.mapdata, self.surface, self.road_widths, pending)
+                except Exception as e:      # (the Sentinel-2 photo alone then)
+                    log.info("base photo %s: generated ground: %s: %s", (anchor.id, cx, cy), type(e).__name__, e)
+                    rgb = None
+                    pending.discard(genground.GEN_PENDING)
+            if rgb is None:
+                with (self.deshadow.no_wait() if self.deshadow is not None else contextlib.nullcontext()):
+                    rgb, used = self.imagery.render(anchor.frame, x0, y0, size, BASE_RENDER_PX, pending)
             log.debug("base photo %s r%d: %s", (anchor.id, cx, cy), rev,
                       {k: round(v / (BASE_RENDER_PX * BASE_RENDER_PX), 3) for k, v in used.items()})
         except Exception as e:      # an imagery failure must not cost the terrain
@@ -5377,15 +5389,23 @@ class Server:
         the regions it was rendered without (base_pending) are done."""
         size = self.layout.block * heightmap.SQUARE
         x0, y0 = cx - size / 2 - BASE_SHIFT_M, cy - size / 2 - BASE_SHIFT_M
+        pending = self.base_pending.get((anchor.id, cx, cy), ())
+        gen = genground.GEN_PENDING in pending
+        # (the generated ground's map data first: data_ready also asks again for what is missing, with its backoff, and
+        # an early return below would hold those retries, and their give-up, for good: Codex round 3)
+        gen_ok = genground.data_ready(self.mapdata, anchor.frame, x0, y0, size, self.surface) if gen else True
         if not self.imagery.lazy_ready(anchor.frame, x0, y0, size, BASE_RENDER_PX):
             return False
-        pending = self.base_pending.get((anchor.id, cx, cy), ())
         road_data = surfacemod.PHOTO_ROADS_PENDING
         if road_data in pending and self.mapdata is not None:
             la, lo = surfacemod._square_pts(anchor.frame, x0, y0, size)
-            if not all(self.mapdata.has(k, "roads") for k in mapcells.cells_for_points(la, lo)):
+            # (with the generated ground's mark, a cell whose roads it gave up on counts as done, as for its own data)
+            if not all(self.mapdata.has(k, "roads") or (gen and genground.gave_up(k, "roads"))
+                       for k in mapcells.cells_for_points(la, lo)):
                 return False
-        return all(rk == road_data or self._region_status(rk) is not None for rk in pending)
+        if not gen_ok:
+            return False            # (the generated ground's map data: made again once it is on disk)
+        return all(rk in (road_data, genground.GEN_PENDING) or self._region_status(rk) is not None for rk in pending)
 
     def terrain_cached(self, key):
         return key in self.hm or key in self.hm_inflight
@@ -13155,6 +13175,9 @@ def main():
             args.imagery = cdnmod.chain(args.imagery, netfetch.Fetcher(offline=args.offline), args.cache_dir)
         except Exception as e:
             log.warning("cdn: %s: %s", type(e).__name__, e)
+        if genground.ON:            # (the generated ground: Sentinel-2 alone, no 1 m photo fetched anywhere)
+            args.imagery = genground.chain(args.imagery)
+            log.info("generated ground on: imagery chain %s", ",".join(args.imagery))
     if "BNGE_DEM_CDN" not in os.environ:     # (Mapterhorn's z0-12 from the tile host where the switch says: dem.py)
         import cdn as cdnmod
         try:
