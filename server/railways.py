@@ -390,8 +390,9 @@ def _tunnel_tagged(feats):
     return got
 
 
-def road_underpasses(frame, cells, box, reach=REACH_M):
-    """Short road tunnels near box as (xy, half width), including source tunnels made ground by gradesep."""
+def road_underpasses(frame, cells, box, reach=REACH_M, classes=None):
+    """Short road tunnels near box as (xy, half width), including source tunnels made ground by gradesep. classes: a
+    list that gets each one's road class, in the same order (grading's UNDER_TUNNEL_FIXED_ON)."""
     near = (box[0] - reach, box[1] - reach, box[2] + reach, box[3] + reach)
     out, seen = [], set()
     for feats in cells:
@@ -431,6 +432,8 @@ def road_underpasses(frame, cells, box, reach=REACH_M):
                 if key not in seen:
                     seen.add(key)
                     out.append((xy, sp.width / 2 + UNDERPASS_SIDE_M))
+                    if classes is not None:
+                        classes.append(sp.cls)
     return out
 
 
