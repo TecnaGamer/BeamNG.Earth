@@ -41,9 +41,28 @@ import mapdata as mapdatamod  # noqa: E402
 import netfetch  # noqa: E402
 import surface as surfacemod  # noqa: E402
 
+# the kinds map's colours, one per genground kind (KIND_NAMES' order; stage 2's surfaces and patterns each their own)
 KIND_RGB = np.array([(0, 0, 0), (20, 80, 20), (110, 130, 60), (120, 200, 90), (220, 200, 90), (200, 120, 120),
                      (190, 170, 140), (250, 250, 250), (40, 90, 200), (60, 160, 150), (150, 240, 120),
-                     (90, 90, 90), (200, 40, 40)], np.uint8)
+                     (90, 90, 90), (200, 40, 40),
+                     (170, 160, 140),   # gravel
+                     (200, 170, 120),   # path
+                     (180, 70, 50),     # brick
+                     (210, 200, 185),   # pavers
+                     (235, 235, 225),   # concrete
+                     (60, 170, 60),     # turf
+                     (0, 220, 120),     # artificial turf
+                     (230, 110, 40),    # clay
+                     (200, 40, 120),    # tartan
+                     (0, 200, 255),     # pool
+                     (120, 100, 0),     # orchard
+                     (140, 0, 140),     # vineyard
+                     (255, 140, 200),   # allotment
+                     (180, 255, 255),   # greenhouse
+                     (100, 100, 160),   # cemetery
+                     (60, 120, 160)],   # court
+                    np.uint8)
+assert len(KIND_RGB) == len(genground.KIND_NAMES)
 LAYERS = ("roads", "buildings", "water", "land_use", "infrastructure", "landcover", "canopy")
 
 
