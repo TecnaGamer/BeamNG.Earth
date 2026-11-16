@@ -41,7 +41,7 @@ import staging
 
 log = logging.getLogger("earthd.vegetation")
 
-VERSION = 32          # (the cached cells hold their groups: 14 for the regional rules of GitHub #110; 16: the roads'
+VERSION = 33          # (the cached cells hold their groups: 14 for the regional rules of GitHub #110; 16: the roads'
                       # drawn widths and sidewalks kept clear; 17: BC's lidar canopy heights, mapdata's canopy layer 2;
                       # 18: the rounded junction corners kept clear, roadcorners.py; 19: one tree per flat crown,
                       # thin_tops; 20: none on or beside a bridge deck, _mask_decks; 21: orchard rows, canopy trees
@@ -62,6 +62,7 @@ VERSION = 32          # (the cached cells hold their groups: 14 for the regional
                       # over roads); the tropics' vine-draped thickets the same way (G_TRO_THICKET); no mossy forest
                       # oaks or dead trees by the roads and in town (OPEN_FROM)
                       # 32: more admixture in the stands (STAND_MIX 0.3), pine_eu's shapes back to five
+                      # 33: the open's oaks the open broadleaves (oak_open had two young oaks and one veteran)
 TREE_MIN_M = 3.0
 # The canopy raster, the scatter grids and the crown radii are in Web Mercator units (EPSG:3857: a metre there is
 # cos(lat) metres on the ground) and were tuned by eye at mid latitudes. Past them the same pixel counts covered less
@@ -449,7 +450,7 @@ def species_groups(group, height, lat, lon, lcls, koppen, elev, u_broad, u_conif
 
 
 SNAG_FROM = ((G_DECIDUOUS, G_BIRCH, G_OAK, G_BEECH, G_OAK_WEST), (G_CONIFER, G_PINE_EU, G_SPRUCE, G_PINE_WEST))
-OPEN_FROM = {G_DECIDUOUS: G_DECIDUOUS_OPEN, G_OAK: G_OAK_OPEN, G_BIRCH: G_BIRCH_OPEN, G_BEECH: G_BEECH_OPEN,
+OPEN_FROM = {G_DECIDUOUS: G_DECIDUOUS_OPEN, G_OAK: G_DECIDUOUS_OPEN, G_BIRCH: G_BIRCH_OPEN, G_BEECH: G_BEECH_OPEN,
              G_PINE_WEST: G_PINE_WEST_OPEN, G_MEDITERRANEAN: G_MEDITERRANEAN_OPEN, G_TROPICAL: G_TROPICAL_OPEN,
              G_SNAG_BROAD: G_DECIDUOUS_OPEN, G_SNAG_CONIFER: G_CONIFER}
 
@@ -501,7 +502,9 @@ DEADWOOD_MAX_SLOPE = 0.12   # rise over run (7 degrees)
 THICKET_H = (5.5, 7.5)
 # Trees in the open (OPEN_ROAD_M from a road's edge, or on built-up land): no forest-interior shapes there (the
 # forest trees and fillers by their names, *_forest*, *filler*: tall, thin, sparse; East Coast USA's mossy oaks,
-# tree_oak_large_b/c: moss on a trunk by an asphalt road, the user's test 2026-11-16; trees.lua M.FOREST_ONLY)
+# tree_oak_large_*: moss on a trunk by an asphalt road, the user's test 2026-11-16, and a veteran's huge gnarled
+# trunk in a roadside row of clones, 2026-11-17; trees.lua M.FOREST_ONLY). An oak in the open takes the open
+# broadleaves (deciduous_open: oak_open was left two young oaks).
 # and no dead trees (taken down by the road): the group's _open twin (OPEN_FROM above; the mod's catalog without
 # those shapes).
 OPEN_ROAD_M = 15.0

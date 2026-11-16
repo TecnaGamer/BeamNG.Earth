@@ -713,7 +713,9 @@ M.GROUP_MAX_M.deadwood = 200; M.NO_COLLIDE.deadwood = true     -- (on the forest
 -- twin is its catalog without the forest-interior shapes: the forest trees and fillers (tall, thin, sparse: meant to be
 -- seen among others; Italy's scots_pine_filler stood alone) and the mossy oaks (Moss_01 on the trunk: by an asphalt
 -- road, the user's test 2026-11-16)
-M.FOREST_ONLY = { '_forest', 'filler', 'tree_oak_large_b', 'tree_oak_large_c' }
+-- (2026-11-17, the user's test at Syrynka: a roadside row of tree_oak_large_a, a veteran oak with a huge flared,
+-- gnarled trunk, the only open shape at 11-17 m: a wall of clones; all three large oaks are forest-only now)
+M.FOREST_ONLY = { '_forest', 'filler', 'tree_oak_large_' }
 function M.forestOnly(shape)
   for _, k in ipairs(M.FOREST_ONLY) do
     if shape:find(k, 1, true) then return true end
