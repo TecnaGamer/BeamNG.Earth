@@ -693,6 +693,34 @@ files[settings.FILE] = { version = 2, townSigns = false }
 T.check(settings.load().townSigns == false, 'a version-2 file: the player turned them off')
 files[settings.FILE] = nil
 
+-- the Experimental page (2026-11-15: the server's BNE_* build switches, server/experimental.py FEATURES): every switch
+-- a bool, off by default, on the settings page; road signs off by default since version 3 (a version-2 file's true was
+-- the hidden switch's default), a version-3 file's choice kept
+do
+  local exp = { 'roadSigns', 'expNlRoadSigns', 'expEuScenery', 'expDropRails', 'expEntranceFlares', 'expPriorityStops',
+    'expRoadBumps', 'expRoughDirt', 'expWearStrips', 'expGradeGuard', 'expPhotoSurface', 'expTerrainBumps', 'expCliffWalls',
+    'expTunnelLids', 'expSubseaTunnels', 'expAiTunnels', 'expRailCollide', 'expCatenary', 'expRailCrossings', 'expRailTunnels',
+    'expRailCurves', 'expWatertight', 'expCanadaLidar', 'expStaleRevisit' }
+  local inOrder = {}
+  for _, k in ipairs(settings.ORDER) do inOrder[k] = true end
+  for _, k in ipairs(exp) do
+    local s = settings.SCHEMA[k]
+    T.check(s and s.kind == 'bool' and s.default == false, 'experimental ' .. k .. ': a bool, off by default')
+    T.check(inOrder[k] and not settings.HIDDEN[k], 'experimental ' .. k .. ': on the settings page')
+  end
+  T.check(settings.VERSION >= 3, 'settings version 3: road signs a real switch')
+  files[settings.FILE] = nil
+  T.check(settings.load().roadSigns == false and settings.load().expRoadBumps == false, 'no file: all off')
+  files[settings.FILE] = { version = 2, roadSigns = true, expRoadBumps = true }
+  local v = settings.load()
+  T.check(v.roadSigns == false, 'a version-2 file: road signs off (true was the hidden default)')
+  T.check(v.expRoadBumps == true, 'a version-2 file: another experimental switch is the player\'s')
+  files[settings.FILE] = { version = 3, roadSigns = true }
+  T.check(settings.load().roadSigns == true, 'a version-3 file: the player turned road signs on')
+  files[settings.FILE] = nil
+  settings.load()
+end
+
 -- the map's preload of a place: picked (the box) or pointed at (hover: the light part), to core.preloadPlace
 do
   local calls = {}

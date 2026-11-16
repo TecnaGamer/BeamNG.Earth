@@ -73,7 +73,8 @@ INDEX_HEADER = "# beamng-earth cache index 1"
 # evicted and cleared. The app's built caches too (2026-11-03, a player's cache 25 GB under a 20 GB cap: they were
 # left out of the count and of "Clear cache"): a missing file of theirs is a miss, made again; their own limits stay
 MANAGED = ("dem", "imagery", "colormatch", "deshadow", "mapdata", "revisit", "seacarve", "roadwidth", "peercache",
-           "raw", "plans", "roadz", "vegetation", "pagesdata", "decoded", "mapterhorn", "blocks", "decisions")
+           "raw", "plans", "roadz", "vegetation", "pagesdata", "decoded", "mapterhorn", "blocks", "decisions",
+           "lidarz")
 CLEAR_KEEP_S = 600.0        # "Clear cache" keeps the files used this recently (the place around the player now)
 # Downloads that are dear to fetch again and small beside what is made from them: the elevation tiles (Mapterhorn: one
 # maintainer on donations, 53 M requests a day from players, 2026-11-11). A cold place's are ~160 MB of its ~2.8 GB in

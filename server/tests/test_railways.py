@@ -1019,6 +1019,77 @@ class CoarseUnderpassTest(unittest.TestCase):
         self.assertEqual([round(v, 6) for v in railways._seg_hits(road, rail)], [40.0])
         self.assertEqual(railways._seg_hits(road, rail + [0.0, 50.0]), [])
 
+    @staticmethod
+    def _loop_hits(a, b):
+        """The crossings one pair of segments at a time: what _seg_hits must give, in this order."""
+        out = []
+        sa = railways._arc(a)
+        for i in range(len(a) - 1):
+            p, r = a[i], a[i + 1] - a[i]
+            for j in range(len(b) - 1):
+                q, t = b[j], b[j + 1] - b[j]
+                den = r[0] * t[1] - r[1] * t[0]
+                if abs(den) < 1e-12:
+                    continue
+                u = ((q[0] - p[0]) * t[1] - (q[1] - p[1]) * t[0]) / den
+                v = ((q[0] - p[0]) * r[1] - (q[1] - p[1]) * r[0]) / den
+                if 0.0 <= u <= 1.0 and 0.0 <= v <= 1.0:
+                    out.append(float(sa[i] + u * (sa[i + 1] - sa[i])))
+        return out
+
+    def test_crossings_as_one_pair_of_segments_at_a_time(self):
+        rng = np.random.default_rng(414)
+        found = 0
+        for _ in range(300):
+            a = np.cumsum(rng.normal(0.0, 6.0, (int(rng.integers(2, 12)), 2)), 0)
+            b = np.cumsum(rng.normal(0.0, 6.0, (int(rng.integers(2, 12)), 2)), 0) + rng.normal(0.0, 5.0, 2)
+            want = self._loop_hits(a, b)
+            found += len(want)
+            self.assertEqual(railways._seg_hits(a, b), want)
+        self.assertGreater(found, 100)
+        road = np.array([[0.0, 0.0], [50.0, 0.0], [100.0, 0.0], [100.0, 40.0]])
+        for rail in (road + [0.0, 3.0],                                    # parallel beside it
+                     road.copy(),                                           # the same line
+                     np.array([[50.0, -10.0], [50.0, 10.0]]),               # through a vertex: both segments meet it
+                     np.array([[20.0, 0.0], [20.0, 10.0]]),                 # ends on the road
+                     np.array([[20.0, 5.0]]), np.zeros((0, 2))):            # no segment
+            self.assertEqual(railways._seg_hits(road, rail), self._loop_hits(road, rail))
+        self.assertEqual(railways._seg_hits(road, np.array([[50.0, -10.0], [50.0, 10.0]])), [50.0, 50.0])
+
+    def test_long_lines_in_runs_give_the_same_crossings(self):
+        t = np.linspace(0.0, 60.0, 400)
+        a = np.c_[10.0 * t, 30.0 * np.sin(t)]
+        b = np.c_[10.0 * t, 30.0 * np.cos(1.3 * t)]
+        want = self._loop_hits(a, b)
+        self.assertGreater(len(want), 20)
+        with mock.patch.object(railways, "SEG_HITS_PAIRS", 1000):          # (two of a's segments per run)
+            self.assertEqual(railways._seg_hits(a, b), want)
+        self.assertEqual(railways._seg_hits(a, b), want)
+
+    def test_parts_away_from_a_road_change_nothing(self):
+        import geodesy
+        frame = geodesy.EnuFrame(22.41, 114.21, 0.0)
+        road = np.array([[0.0, 0.0], [100.0, 0.0], [200.0, 30.0]])
+        side = np.array([[-50.0, 300.0], [250.0, 300.0]])                   # a road no part crosses
+        over = [("a", "rail", "bridge", np.array([[40.0, -20.0], [40.0, 20.0]])),
+                ("b", "rail", "bridge", np.array([[150.0, 60.0], [150.0, -60.0], [160.0, -60.0], [160.0, 60.0]]))]
+        away = [("c", "rail", "bridge", np.array([[900.0, -20.0], [900.0, 20.0]])),
+                ("d", "rail", "bridge", np.array([[40.0, 500.0], [40.0, 540.0]])),
+                ("e", "rail", "ground", np.array([[70.0, -20.0], [70.0, 20.0]])),      # not a bridge
+                ("f", "rail", "bridge", np.array([[-400.0, -400.0], [-300.0, -300.0]]))]
+        with mock.patch.object(railways, "COARSE_AT", lambda la, lo: True), \
+                mock.patch.object(railways, "crossings", lambda *a, **k: [(road, 3.5), (side, 2.0)]):
+            few = railways.coarse_underpasses(frame, [], (0, 0, 10, 10), over)
+            many = railways.coarse_underpasses(frame, [], (0, 0, 10, 10), away[:2] + [over[0]] + away[2:] + [over[1]])
+        self.assertEqual(len(few), 3)                                      # one crossing of a, two of b
+        self.assertEqual(len(many), len(few))
+        for (xy, half), (xy2, half2) in zip(few, many):
+            self.assertTrue(np.array_equal(xy, xy2))
+            self.assertEqual(half, half2)
+            self.assertEqual(half, 3.5 + railways.UNDERPASS_SIDE_M)
+        self.assertLess(abs(float(few[0][0].mean(0)[0]) - 40.0), 1e-6)     # each piece centred on its crossing
+        self.assertLess(abs(float(few[1][0][:, 0].mean()) - 150.0), 1.0)
+
     def test_only_on_coarse_elevation(self):
         import geodesy
         frame = geodesy.EnuFrame(58.1, 56.4, 0.0)

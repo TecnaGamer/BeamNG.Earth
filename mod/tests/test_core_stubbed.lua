@@ -271,6 +271,16 @@ T.check(tb.lastImport.sq == 2.0 and tb.lastImport.maxH == 3500, 'importMaps squa
 T.check(pumpUntil(function() return calls.safeTeleport == 2 end, 10), 'teleport placement')
 T.near(veh.pos.z, 1181, 1e-9, 'placed at groundZ + 1')
 
+do  -- the deck guard (deckguard.lua): the server's spans for the current anchor taken, its frame step without an error
+  local st = core._state()
+  T.check(received('hello')[1].deckGuard == 1, 'hello.deckGuard: the server sends deck_spans')
+  serverSend({ type = 'deck_spans', anchorId = st.anchorId, cx = 0, cy = 0, r = 1200, spans = { { 10, 0, 70, 0 } },
+    abut = { 3 } })
+  frames(3)
+  T.check(#st.deck.spans == 1 and st.deck.aid == st.anchorId, 'deck_spans taken for the current anchor')
+  T.check(not core._deckFailed and st.deck.stats.looks > 0, 'the deck guard looks in the frame without an error')
+end
+
 -- far tiles: loaded hidden within the governor budget, shown by their swap group
 local farKeys = {}
 for i = 1, 5 do
@@ -627,6 +637,41 @@ do
   local n2, top = #places.recentList(), places.recentList()[1]
   T.check(core.teleport(10.5, 20.5, nil, { record = false }) == true and #places.recentList() == n2
     and places.recentList()[1] == top, 'recent places: a tool teleport (record = false) is not recorded')
+end
+-- "Where you left off" with the car's heading: taken only when the start's own request commits; a placement before
+-- that (the level start's flat ground, placeFrames) neither uses nor drops it (Codex on 2ffc2fcc)
+do
+  local stH = core._state()
+  local rots, savedQ, savedST = {}, quatFromDir, spawn.safeTeleport
+  quatFromDir = function(d) return { d = d } end
+  spawn.safeTeleport = function(v, pos, rot, ...) rots[#rots + 1] = rot; return savedST(v, pos, rot, ...) end
+  local nPrep = #received('prepare_anchor')
+  T.check(core._teleportTo(46.6, 7.9, nil, 'start', 90) == true, 'start teleport with a heading asked')
+  local reqH = last('prepare_anchor')
+  T.check(#received('prepare_anchor') == nPrep + 1 and stH.startHeading == nil, 'heading not in use before the commit')
+  -- an earlier placement (the flat ground's) while the request is pending: the car's own heading, the saved one kept
+  stH.placeFrames, stH.placeZ = 1, 1181
+  local nRot = #rots
+  frames(2)
+  T.check(#rots == nRot + 1 and math.abs(rots[#rots].d.x) < 1e-9 and stH.startHeading == nil and stH.headingFor
+    and stH.headingFor.heading == 90, 'a placement before the commit keeps the car\'s heading and the saved one waits')
+  -- the first request fails (anchor_error) and is asked again later: the heading goes with the retry (Codex on aa16d9c9)
+  local nPrep2 = #received('prepare_anchor')
+  serverSend({ type = 'anchor_error', requestId = reqH.requestId, error = 'test: elevation download failed' })
+  T.check(pumpUntil(function() return #received('prepare_anchor') == nPrep2 + 1 end, 400), 'the failed start retried')
+  reqH = last('prepare_anchor')
+  T.check(stH.headingFor and stH.headingFor.requestId == reqH.requestId, 'the heading moved to the retry\'s request')
+  serverSend({ type = 'anchor_ready', requestId = reqH.requestId, anchorId = 77, lat = reqH.lat, lon = reqH.lon,
+    groundZ = 1180, px = reqH.px, py = reqH.py, terrain = terrainMsg(reqH.cx or 0, reqH.cy or 0,
+    '/temp/beamngEarth/s1/hm_77_0_0.png', 1100) })
+  nRot = #rots
+  T.check(pumpUntil(function() return #rots > nRot end, 40), 'the start teleport placed the car')
+  local hx, hy = core.headingDir(90, stH.placeX or 0, stH.placeY or 0)
+  local d = rots[#rots] and rots[#rots].d
+  T.check(d and math.abs(d.x - hx) < 1e-6 and math.abs(d.y - hy) < 1e-6 and hx > 0.99,
+    string.format('placed facing the saved heading (east): %.3f %.3f', d and d.x or 0, d and d.y or 0))
+  T.check(stH.startHeading == nil and stH.headingFor == nil, 'the heading used once')
+  quatFromDir, spawn.safeTeleport = savedQ, savedST
 end
 T.check(core.setFarBudget(3) == 3 and core.setFarBudget(10) == 4, 'far budget setter (governor target, 1-4 ms)')
 
@@ -1110,5 +1155,44 @@ do -- Bind the clearance policy only to vehicle maps received in this level.
   for _,name in ipairs({'beamngEarth_oncomingClearance','beamngEarth_maneuverClearance'})do _G[name]=previousPolicies[name]end
   extensions,ai=previousExtensions,previousAi
   st.inOurLevel, getObjectByID, gps.onVehicleMapmgrUpdate = wasWorld, oldGet, oldAck
+end
+-- the settings page's "Restart world server": the hello comes at the main menu, a level starts (and ends) after it;
+-- the server's start-time settings and its restart capability outlive both (the user, 2026-11-15: no button)
+serverSend({ type = 'hello', protocol = 4, format = 4, cells = 64, serverVersion = '0.4.0', sessionId = 's99r',
+  farFormat = 'cdae', material = 'bngEarthFar_v3', nearVisual = 'mesh', restartable = true,
+  startSettings = { groundGrid = '1', expAiTunnels = false }, startFixed = { 'serverCores' } })
+for _ = 1, 3 do core.onUpdate(0.05, 0.05) end
+local rOrder, rMine = { 'groundGrid', 'expAiTunnels' }, { groundGrid = '1', expAiTunnels = true }
+T.check(core.restartState(rMine, rOrder).pending[1] == 'expAiTunnels', 'restart: pending after the hello')
+core.onClientEndMission()
+core.onClientStartMission()
+for _ = 1, 3 do core.onUpdate(0.05, 0.05) end
+local rsL = core.restartState(rMine, rOrder)
+T.check(#rsL.pending == 1 and rsL.pending[1] == 'expAiTunnels' and rsL.restartable == true,
+  string.format('restart: a level start after the hello keeps the start-time settings and the button (%d pending, %s)',
+    #rsL.pending, tostring(rsL.restartable)))
+T.check(#core.restartState({ groundGrid = '1', expAiTunnels = false, serverCores = '2' },
+  { 'groundGrid', 'expAiTunnels', 'serverCores' }).pending == 0, 'restart: ... and the fixed list')
+
+-- "Where you left off" keeps the car's heading (the user, 2026-11-15): carHeading (degrees clockwise from true north,
+-- the anchor's north at the car) and headingDir (its inverse) agree, away from the anchor too (meridian convergence)
+do
+  local geo = require('beamngEarth/geodesy')
+  local stH = core._state()
+  local savedA, savedDir = stH.anchor, veh.getDirectionVector
+  stH.anchor = geo.newAnchor(64.0, -21.9)                  -- (far north: true north turns across the frame)
+  local x, y = 20000, 5000
+  for _, h in ipairs({ 0, 37.5, 90, 181, 270, 359 }) do
+    local dx, dy = core.headingDir(h, x, y)
+    veh.getDirectionVector = function() return vec3(dx, dy, 0) end
+    local back = core.carHeading(x, y)
+    T.check(back and math.abs(((back - h + 540) % 360) - 180) < 1e-6,
+      string.format('heading %.1f: the direction placed and read back agree (%s)', h, tostring(back)))
+  end
+  local nx, ny = stH.anchor:northAt(x, y)
+  local dx, dy = core.headingDir(0, x, y)
+  T.check(math.abs(dx - nx) < 1e-9 and math.abs(dy - ny) < 1e-9, 'heading 0: along true north at the car')
+  T.check(core.headingDir(nil, x, y) == nil and core.headingDir(0 / 0, x, y) == nil, 'no heading: nothing to turn to')
+  stH.anchor, veh.getDirectionVector = savedA, savedDir
 end
 T.done('test_core_stubbed')
