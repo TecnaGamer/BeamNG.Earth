@@ -43,7 +43,11 @@ No cell fell back to the passes' heights.
   and so is Lauterbrunnen (37 → 34). The cells that fall back to stage 1 only hold the passes'
   own steepest grade, not the class ceiling.
 - **Low decks**: Tokyo 72 → 60. The others are unchanged, because those decks are fixed by the
-  passes' own dips (the underpass rule), which the solve takes as given.
+  passes' own dips (the underpass rule), which the solve takes as given. But more roads now pass
+  through a deck's body (under 2.5 m from its surface): Tokyo 6 → 8 and Rio 0 → 1, while Lagos
+  goes 2 → 1. Rio's worst gap is also lower, 5.5 → 6.1 m under the 8.35 m clearance. Without
+  clearance rows, the solve can pull a road up towards a deck. This is a regression to fix before
+  step 3.
 - **CPU**: the right-hand column is the solve alone. The passes still run before it, to make its
   inputs (z0, the deck ends and the dips), so this is not a saving yet. It shows the order of cost
   a solve-only path would have: 1.1-81 s per place, with the worst cell at 10.7 s (Tokyo).
