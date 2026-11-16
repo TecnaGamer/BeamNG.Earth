@@ -552,14 +552,24 @@ def _warm_loop():
                     # (the cells other processes are planning now are looked at again: no pose may come to say so)
                     # ... nor that this process's block is built: the cells left are planned here then)
                     _s.cv.wait(WARM_RECHECK_S if _FIRST[0] > 0 or any(not g.planned(k) for g, k in _s.want) else None)
-        try:
-            t0 = time.perf_counter()
-            job[0].warm(job[1])
-            log.debug("road plans ahead: %s in %.2f s", job[1], time.perf_counter() - t0)
-        except Exception:
-            log.exception("road plans ahead for %s", job[1])
-            with _s.cv:
-                _s.want = [w for w in _s.want if w[1] != job[1]]
+        _warm_one(job)
+
+
+def _warm_one(job):
+    """Plan one cell ahead (job: (grader, cell key)). A cell that fails, or that a teleport left (pools.Abandoned: its plans no
+    longer wanted, quietly: the user, 2026-11-16, read the traceback as a fault while driving), is dropped from the wanted."""
+    import pools
+    try:
+        t0 = time.perf_counter()
+        job[0].warm(job[1])
+        log.debug("road plans ahead: %s in %.2f s", job[1], time.perf_counter() - t0)
+        return
+    except pools.Abandoned:
+        log.debug("road plans ahead for %s: given up (a teleport left it)", job[1])
+    except Exception:
+        log.exception("road plans ahead for %s", job[1])
+    with _s.cv:
+        _s.want = [w for w in _s.want if w[1] != job[1]]
 
 
 
