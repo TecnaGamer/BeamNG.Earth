@@ -12286,6 +12286,15 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
                 park.extend(parking.aisle_spots(roads, aisles, own_box))
         if marks is not None and aisles:            # stall lines along the aisles (parking.aisle_markings)
             marks.extend(parking.aisle_markings(roads, aisles, wexact))
+    import standalonepaths
+    if props and standalonepaths.enabled():
+        trees = [i for i, row in enumerate(props) if row[0] == furniture.G_STREET_TREE]
+        if trees:
+            blockers = [(xy, w / 2) for _, xy, w, _ in standalonepaths.parts(frame, own_box, cells, urban_fn, widths)]
+            keep = standalonepaths.keep_outside([props[i][1:3] for i in trees], blockers)
+            for i, ok in reversed(list(zip(trees, keep))):
+                if not ok:
+                    del props[i]
     chunks.extend(rampmerges.chunks(merge_layouts, box))
     return roadmarkings.paint(chunks)
 

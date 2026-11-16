@@ -75,6 +75,7 @@ M.SCHEMA = {
   -- Medium presets (512² samples a km, a quarter of the data at each block swap), '1' the stock maps' resolution. The
   -- server reads it when it starts (launcher.start_server: BNGE_GROUND_SQUARE), so it holds from the next start
   groundGrid = { kind = 'enum', default = '1', values = { '2', '1' }, label = 'Ground grid (m)' },   -- (least to most)
+  standalonePaths = { kind = 'bool', default = false, label = 'Standalone paths and residential driveways' },
   -- the grass's reach (groundcover.lua DISTANCE)
   grassDistance = { kind = 'enum', default = 'normal', values = { 'near', 'normal', 'far' }, label = 'Grass draw distance' },
   -- the engine's shape detail in our level (enginepref.lua: $pref::TS::detailAdjust; 'game': the game's Mesh Quality)

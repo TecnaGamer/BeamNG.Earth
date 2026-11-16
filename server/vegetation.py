@@ -270,6 +270,9 @@ class Vegetation:
         self.dem = None                 # (set by the server: rocks on bare ground by slope, ROCK_SLOPE)
         self.surface = self.widths = None   # (set by the server: the roads' drawn widths, roads.road_specs)
         self.dir = os.path.join(cache_dir, "vegetation", f"v{VERSION}") if cache_dir else None
+        import standalonepaths
+        if self.dir and standalonepaths.enabled():
+            self.dir = os.path.join(self.dir, "standalone-paths-v1")
         self._mem = OrderedDict()
         self._lock = threading.Lock()
         self._cell_locks = {}
@@ -544,6 +547,18 @@ class Vegetation:
         if vines.any():             # (the vines' own canopy read as bushes all over a vineyard: its rows stand there)
             keep = _keep_off_mask(tree, vines, chm) | (tree.height >= VINE_TREE_M)
             tree, lcls = tree.take(keep), lcls[keep]
+        import standalonepaths
+        path_blockers = []
+        if standalonepaths.enabled():
+            import geodesy
+            path_frame = geodesy.EnuFrame((lat0 + lat1) / 2, (lon0 + lon1) / 2)
+            e, n, _ = path_frame.geodetic_to_enu(np.array([lat0, lat1]), np.array([lon0, lon1]), 0.)
+            box = (min(e), min(n), max(e), max(n))
+            path_blockers = [(xy, width / 2) for _, xy, width, _ in standalonepaths.parts(
+                path_frame, box, road_cells, getattr(self.surface, "urban", None), self.widths)]
+            if path_blockers:
+                keep = _off_paths(tree, path_frame, path_blockers)
+                tree, lcls = tree.take(keep), lcls[keep]
         tree = clumps(tree, lcls, (lat0 + lat1) / 2)
         scatter = self._scatter(cd, lc, blocked | paved | orchard | vines, chm, hs)
         edge = self._edge(cd, lc, blocked | orchard | vines, road, chm, hs)
@@ -552,7 +567,8 @@ class Vegetation:
         hedges = farm_foliage(lu, chm, blocked, bounds)
         rows = vineyard_items(lu, chm, blocked, bounds)
         bales = bale_items(lu, chm, blocked, bounds)
-        return _concat_all([tree, scatter, edge, planted, hedges, rows, bales])
+        items = _concat_all([tree, scatter, edge, planted, hedges, rows, bales])
+        return items.take(_off_paths(items, path_frame, path_blockers)) if path_blockers else items
 
     def _edge(self, cd, lc, blocked, road, chm, hs):
         """The thicket along forest edges beside roads (EDGE_*), outside the dry West."""
@@ -737,6 +753,13 @@ FARM_BUSH_ALONG = 6.0
 FARM_BUSH_POLY = 500
 FARM_BUSH_CELL = 2000
 FARM_MIN_M2 = 800.0
+
+
+def _off_paths(items, frame, blockers):
+    """Test final plant positions in metres, including jitter and the offsets of planted rows."""
+    import standalonepaths
+    e, n, _ = frame.geodetic_to_enu(items.lat, items.lon, 0.)
+    return standalonepaths.keep_outside(np.column_stack((e, n)), blockers)
 
 
 def _keep_off_mask(items, mask, chm):
