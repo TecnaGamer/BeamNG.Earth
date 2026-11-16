@@ -23,7 +23,8 @@ export const START_LUA = `freeroam_freeroam.startFreeroamByName(${JSON.stringify
 // one quick connect to the companion server's local port (the game allows sockets to the local host)
 export const SERVER_LUA = "(function() local ok, up = pcall(function() local s = require('socket').tcp() " +
   "s:settimeout(0.25) local r = s:connect('127.0.0.1', 47613) s:close() return r == 1 end) " +
-  "return ok and up == true end)()"
+  "return (ok and up == true) and 'up' or 'down' end)()"
+const SERVER_POLL_MS = 3000
 
 export function isMenuRoute(route) { return MENU_ROUTES.has(route && route.name) }
 
@@ -34,13 +35,24 @@ let serverUp = null
 
 function api() { return window.bngApi || window.beamng }
 
+let pollTimer = null
 function checkServer() {
   const a = api()
   if (!a || !a.engineLua) return
   try {
-    a.engineLua(SERVER_LUA, up => { serverUp = up === true || up === "true"; paintServer() })
+    a.engineLua(SERVER_LUA, up => {
+      serverUp = up === "up"
+      paintServer()
+    })
   } catch (e) { /* no answer: no note */ }
 }
+// while the menu is up: the label follows the server (started or stopped with the menu open)
+function startPolling() {
+  if (pollTimer) return
+  checkServer()
+  pollTimer = setInterval(checkServer, SERVER_POLL_MS)
+}
+function stopPolling() { pollTimer && clearInterval(pollTimer); pollTimer = null }
 
 function paintServer() {
   if (!tile) return
@@ -129,11 +141,11 @@ function unwatchDom() { observer && observer.disconnect(); observer = null }
 
 function onRoute(route) {
   try {
-    if (!isMenuRoute(route)) { unwatchDom(); unmount(); return }
+    if (!isMenuRoute(route)) { stopPolling(); unwatchDom(); unmount(); return }
     mount()
     watchDom()
-    checkServer()
-  } catch (e) { console.error(TAG, e); unwatchDom(); unmount() }
+    startPolling()
+  } catch (e) { console.error(TAG, e); stopPolling(); unwatchDom(); unmount() }
 }
 
 export async function startTile(waitMs = 60000) {
@@ -149,6 +161,7 @@ export async function startTile(waitMs = 60000) {
 export function stopTile() {
   try { stopWatch && stopWatch() } catch (e) { /* already gone */ }
   stopWatch = null
+  stopPolling()
   unwatchDom()
   unmount()
 }
