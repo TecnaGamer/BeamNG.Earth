@@ -675,6 +675,13 @@ def _facts_key(feats, kind, extra):
     if cid is None or not revisit.ON or revisit.CACHE_DIR is None:
         return None
     # (by FACTS_FORMAT, not the code: kept across updates, the user, 2026-11-02; cid carries the map data's versions)
+    try:
+        import roadz
+        tags = roadz.hk_tags(tuple(int(v) for v in str(cid[0]).split("/")))
+    except ValueError:                  # (a test's name)
+        tags = ()
+    if tags:    # (Hong Kong's level ranges hold its source's elevated stretches, _lidar_answers: by its cells' tag too)
+        return revisit.format_key("cellfacts", FACTS_FORMAT, kind, cid, extra, tags)
     return revisit.format_key("cellfacts", FACTS_FORMAT, kind, cid, extra)
 
 
@@ -1179,15 +1186,21 @@ def _level_rows(feats):
     return got
 
 
-def lidar_gap_candidates(feats):
+def lidar_gap_candidates(feats, found=None):
     """[(fid, line lon/lat (k, 2) from the deck's end outward, LIDAR_GAP_REACH_M at most, half width m)] of the drawn
     roads' ground pieces (rule_level_ranges) with an end within LIDAR_GAP_TOUCH_M of a bridge piece's end (any road's).
-    Pure given feats (earthfast.LevelLayer.lidar_lines); kept on it."""
-    got = feats.__dict__.get("_lidar_gap_candidates")
+    Pure given feats (earthfast.LevelLayer.lidar_lines); kept on it. found ({fid: [(lon / lat from, to)]}, as
+    _lidar_answers): the candidates with those stretches made deck too, so the pieces going on from their ends as
+    well (every feature's ranges; not kept)."""
+    got = feats.__dict__.get("_lidar_gap_candidates") if not found else None
     if got is not None:
         return got
     n = len(feats)
     rules = rule_level_ranges_near(feats)       # (the others: no bridge of their own, none ending at them)
+    if found:
+        idx = list(range(n))
+        rules = dict(zip(idx, _level_steps(feats, idx, _rule_many(feats, idx), _STEP_LIDAR | _STEP_GAPS,
+                                           [found.get(str(feats.ids[i])) or () for i in idx])))
     have = np.zeros(n, np.uint8)
     have[list(rules)] = 1
     off, rng, kinds = _ranges_flat([rules.get(i, ()) for i in range(n)])
@@ -1196,20 +1209,22 @@ def lidar_gap_candidates(feats):
                                                            np.array([MIN_PART, LIDAR_GAP_TOUCH_M, LIDAR_GAP_REACH_M]))
     co = co.tolist()
     got = [(str(feats.ids[f]), pts[co[c]:co[c + 1]], float(half[c])) for c, f in enumerate(cf.tolist())]
-    feats.__dict__["_lidar_gap_candidates"] = got
+    if not found:
+        feats.__dict__["_lidar_gap_candidates"] = got
     return got
 
 
 def _lidar_cell(cid):
-    """May the lidar know cell cid ("z/x/y", or a test's name: yes)? (No candidates looked for elsewhere.)"""
+    """The sources that may know cell cid's elevated stretches ("z/x/y", or a test's name: the lidar): "lidar", "hk".
+    (No candidates looked for elsewhere.)"""
     try:
         z, x, y = (int(v) for v in str(cid).split("/"))
     except ValueError:
-        return True
+        return ["lidar"]
     import mapcells
     import roadz
     la, lo = mapcells.CellKey(z, x, y).center()
-    return "lidar" in roadz.sources_at(la, lo, True)
+    return [s for s in roadz.sources_at(la, lo, True) if s in roadz.DEFERRED]
 
 
 def _lidar_answers(feats):
@@ -1229,19 +1244,23 @@ def _lidar_answers(feats):
             import roadz
             prov = roadz.PROVIDER
             cid = st.get("_bnge_cell")
-            if (LIDAR_GAPS_ON and prov is not None and prov.enabled and prov.lidar and cid is not None
-                    and hasattr(prov, "gap_answers") and _lidar_cell(cid[0])):
+            srcs = ([s for s in _lidar_cell(cid[0]) if s != "lidar" or prov.lidar]
+                    if LIDAR_GAPS_ON and prov is not None and prov.enabled and cid is not None
+                    and hasattr(prov, "gap_answers") else [])
+            if srcs:
                 cands = lidar_gap_candidates(feats)
                 if cands:
                     import mapcells
                     owners = sorted({mapcells.cell_of(float(c[1][0, 1]), float(c[1][0, 0])) for c in cands}, key=str)
                     fids = {c[0] for c in cands}
-                    for _key, gaps in prov.gap_answers(owners).items():
-                        if gaps is None:
-                            st["_lidar_rule"] = True
-                        for fid, a, b in gaps or ():
-                            if fid in fids:
-                                got.setdefault(fid, []).append((tuple(a), tuple(b)))
+                    for src in srcs:
+                        ans = prov.gap_answers(owners) if src == "lidar" else prov.gap_answers(owners, src)
+                        for _key, gaps in ans.items():
+                            if gaps is None:
+                                st["_lidar_rule"] = True
+                            for fid, a, b in gaps or ():
+                                if fid in fids or src != "lidar":       # (hk: the pieces going on too)
+                                    got.setdefault(fid, []).append((tuple(a), tuple(b)))
         except Exception as ex:             # (the rule rather than no ranges)
             log.debug("lidar gaps: %s: %s", type(ex).__name__, ex)
             got = {}

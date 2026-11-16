@@ -79,7 +79,7 @@ HK_ON = os.environ.get("BNE_ROADZ_HK", "on") != "off"
 # across it; hk2: the one surface deck_lidar finds in the DSM pixels round its line; hk3: the lines asked for to
 # HK_LINE_TOL_DEG and their vertices roadzhk.VERTEX_MIN_M apart or more, a cell before held up to a million). Not
 # VERSION: every source's cells
-HK_CELLS = "hk3"
+HK_CELLS = "hk4"
 LIDAR_INDEX_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "usgs3dep_index.json.gz")
 PROVIDER = None             # the server's RoadZ (MapData makes it): BridgeProfiles / Grader ask it
 
@@ -149,6 +149,7 @@ LIDAR_GAP_RISE_M = 3.0
 LIDAR_GAP_END_TOL_M = 1.5
 LIDAR_GAP_MISS = 1
 LIDAR_GAP_MIN_M = 8.0
+HK_GAP_ROUNDS = 4           # times Hong Kong asks the pieces going on from the stretches found (_hk_gaps)
 LIDAR_GAPS_WAIT_S = float(os.environ.get("BNE_LIDAR_GAPS_WAIT", "8"))
 # the sources a road build waits that long at most for a cell of, the inference for the rest of the run meanwhile
 # (gap_answers). Hong Kong's read goes on where the lidar's stops (_read): its heights apply only once each sheet of the
@@ -790,7 +791,7 @@ class RoadZ:
             if p and os.path.exists(p):
                 try:
                     got = Lines.load(p)
-                    if src == "lidar":      # (its elevated ground stretches: written before the lines)
+                    if src in ("lidar", "hk"):      # (its elevated ground stretches: written before the lines)
                         with open(p + ".gaps.json", encoding="utf-8") as fh:
                             got.gaps = [(str(f), tuple(a), tuple(b)) for f, a, b in json.load(fh)]
                         # (a cell the CDN's product gave (its identity inside the file, Lines.load): taken again
@@ -847,7 +848,7 @@ class RoadZ:
                     self.stats["seconds"] += time.monotonic() - t0
                 if p:
                     try:
-                        if src == "lidar":
+                        if src in ("lidar", "hk"):
                             import staging
                             os.makedirs(os.path.dirname(p), exist_ok=True)
                             tmp = staging.tmp_for(p + ".gaps.json")
@@ -1169,7 +1170,108 @@ class RoadZ:
             return ((ll[:, 0] >= lon0 - plon) & (ll[:, 0] <= lon1 + plon)
                     & (ll[:, 1] >= lat0 - plat) & (ll[:, 1] <= lat1 + plat))
         runs = roadzhk.stations(lines, inside)
-        return Lines.build(roadzhk.rows(lines, runs, self._hk_reader("dtm"), self._hk_reader("dsm")))
+        more, gaps = self._hk_gaps(key)
+        got = Lines.build(roadzhk.rows(lines, runs, self._hk_reader("dtm"), self._hk_reader("dsm")) + more)
+        got.gaps = gaps
+        return got
+
+    def _hk_gaps(self, key):
+        """(rows, gaps): the cell's elevated ground stretches [(fid, lon / lat from, lon / lat to)] and their measured
+        lines (Lines.build rows, decks), as the lidar's (_stretches): a drawn road's ground piece going on from a
+        deck's end (_gap_candidates) is elevated from that end while the DSM's surface along it
+        (roadzhk._deck_heights, the decks' own read) goes on from the deck's measured end LIDAR_GAP_RISE_M or more
+        over the DTM, by the lidar's kernel and limits. A piece shorter than LIDAR_GAP_MIN_M counts when all of it
+        is. The pieces going on from a stretch's end are asked the same way, HK_GAP_ROUNDS times at most (an elevated
+        junction is untagged pieces in a row; a stretch longer than the reach). None on a road the map has covered
+        anywhere (is_covered: the DSM there is its cover, a noise enclosure's roof)."""
+        cands = self._gap_candidates(key) if hasattr(self.md, "cell") else []       # (no map: none)
+        if not cands:
+            return [], []
+        import roads
+        feats = self.md.cell(key, layers=("roads",), kind="demand").layers.get("roads")
+        t = feats.rules.get("flags")
+        covered = ({str(feats.ids[f]) for f, v in zip(t.feature.tolist(), t.value) if "is_covered" in str(v)}
+                   if t is not None and len(t.feature) else set())
+        fast.require(GAP_NATIVE, "roadz hk gaps")
+        dtm, dsm = self._hk_reader("dtm"), self._hk_reader("dsm")
+        ends = self._hk_deck_ends(key, cands, dsm)
+        rows, gaps, found, seen = [], [], {}, set()
+        for turn in range(HK_GAP_ROUNDS):
+            # (one that found nothing is asked again: a stretch found since may end at its start, at its height)
+            new = [c for c in cands if c[0] not in covered
+                   and (c[0], float(c[1][0, 0]), float(c[1][0, 1])) not in seen]
+            got = self._hk_stretches(new, ends, dtm, dsm)
+            for fid, a, b, end, row in got:
+                seen.add((fid, a[0], a[1]))
+                rows.append(row)
+                gaps.append((fid, a, b))
+                found.setdefault(fid, []).append((a, b))
+                ends.append(end)
+            if not got or turn == HK_GAP_ROUNDS - 1:
+                break
+            cands = roads.lidar_gap_candidates(feats, found)
+        return rows, gaps
+
+    def _hk_deck_ends(self, key, cands, dsm):
+        """[(x, y, z)] (HK1980 Grid, the DSM's datum): the measured ends of the cell's bridge parts (_bridges) that end
+        within 2 LIDAR_STEP_M of a candidate's start, as the lidar's (_decks)."""
+        clon, clat = np.array([c[1][0, 0] for c in cands]), np.array([c[1][0, 1] for c in cands])
+        cx, cy = hkdtm.grid(clat, clon)
+        runs = []
+        for ring, _half in self._bridges(key):
+            x, y = hkdtm.grid(ring[:, 1], ring[:, 0])
+            if min(dnp.hypot(cx - x[0], cy - y[0]).min(), dnp.hypot(cx - x[-1], cy - y[-1]).min()) > 2.0 * LIDAR_STEP_M:
+                continue
+            pts, s = resample_line(np.stack([x, y], 1), LIDAR_STEP_M)
+            if len(pts) >= 2:
+                runs.append((pts, s))
+        ends = []
+        for (pts, s), z in zip(runs, roadzhk._deck_heights([r[0] for r in runs], dsm) if runs else ()):
+            ok = np.flatnonzero(np.isfinite(z))
+            if not len(ok):
+                continue
+            for at, far in ((ok[0], s[ok[0]]), (ok[-1], s[-1] - s[ok[-1]])):
+                if far <= LIDAR_STEP_M:             # (measured right at its end: where a stretch must go on from)
+                    ends.append((float(pts[at, 0]), float(pts[at, 1]), float(z[at])))
+        return ends
+
+    def _hk_stretches(self, cands, ends, dtm, dsm):
+        """[(fid, lon / lat from, lon / lat to, (x, y, z) of its last station, its Lines.build row: a deck's)] of the
+        candidates cands that go on elevated from a measured deck end (ends: of those within 2 LIDAR_STEP_M of the
+        candidate's start, the one nearest its first height; a junction on a structure has several)."""
+        de = np.asarray(ends, np.float64).reshape(-1, 3)
+        runs = []
+        for fid, ring, _half in cands:
+            ring = np.asarray(ring, np.float64)[:, :2]
+            x, y = hkdtm.grid(ring[:, 1], ring[:, 0])
+            xy = np.stack([x, y], 1)
+            near = de[dnp.hypot(de[:, 0] - xy[0, 0], de[:, 1] - xy[0, 1]) <= 2.0 * LIDAR_STEP_M, 2]
+            pts, s = resample_line(xy, LIDAR_STEP_M)
+            if len(near) and len(pts) >= 2:
+                runs.append((fid, ring, xy, pts, s, near))
+        if not runs:
+            return []
+        allp = np.vstack([r[3] for r in runs])          # (one read of each surface for them all)
+        ground = np.split(np.asarray(dtm(allp[:, 0], allp[:, 1]), np.float64), np.cumsum([len(r[3]) for r in runs])[:-1])
+        out = []
+        for (fid, ring, xy, pts, s, near), z, g in zip(runs, roadzhk._deck_heights([r[3] for r in runs], dsm), ground):
+            first = np.flatnonzero(np.isfinite(z[:2]))
+            if not len(first):
+                continue
+            z_end = float(near[np.argmin(np.abs(near - z[first[0]]))])
+            m = float(fast._ef.lidar_gap_stretch(np.ascontiguousarray(s), np.ascontiguousarray(z),
+                                                 np.ascontiguousarray(g), z_end,
+                                                 LIDAR_GAP_RISE_M, LIDAR_GAP_END_TOL_M, LIDAR_GAP_MISS))
+            if m < min(LIDAR_GAP_MIN_M, s[-1] - 1e-6):
+                continue
+            arc = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(xy, axis=0).T))]
+            k = int(np.argmin(np.abs(s - m)))
+            keep = s <= m + 1e-6
+            lonlat = np.stack([np.interp(s[keep], arc, ring[:, 0]), np.interp(s[keep], arc, ring[:, 1])], 1)
+            out.append((str(fid), (float(ring[0, 0]), float(ring[0, 1])),
+                        (float(np.interp(m, arc, ring[:, 0])), float(np.interp(m, arc, ring[:, 1]))),
+                        (float(pts[k, 0]), float(pts[k, 1]), float(z[k])), (lonlat, z[keep], 1, "", "")))
+        return out
 
     def _hk_reader(self, layer):
         """(x, y) -> the LiDAR layer's ("dtm" / "dsm") heights at those HK1980 Grid points, NaN where it has none: the
