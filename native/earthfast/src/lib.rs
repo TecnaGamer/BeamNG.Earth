@@ -93,6 +93,7 @@ mod railpiers;
 mod bdtopo;
 mod nycmassing;
 mod rooftop;
+mod cisbld;
 mod specs;
 mod gsrows;
 mod places;
@@ -6478,6 +6479,10 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     ggshapes::register(m)?;
     // 309: gg_poly_axes(..., skip): linear (a histogram of the edge directions), all of a polygon's rings, clip edges left
     // out (Codex review of 308)
-    m.add("VERSION", 309)?;
+    // 310: cis_classify, cis_facade, cis_modules (the post-Soviet housing kinds, their facade cells and modules; cisbld/)
+    m.add_function(wrap_pyfunction!(cisbld::cis_classify, m)?)?;
+    m.add_function(wrap_pyfunction!(cisbld::cis_facade, m)?)?;
+    m.add_function(wrap_pyfunction!(cisbld::cis_modules, m)?)?;
+    m.add("VERSION", 310)?;
     Ok(())
 }

@@ -30,6 +30,7 @@ import osmyears
 import ships
 import staging
 import francehouses
+import cisbuildings
 
 FLOOR_M = 3.0               # m per storey (residential)
 GROUND_FLOOR_SHOP_M = 4.2   # m, a shop's ground floor
@@ -142,7 +143,7 @@ MATERIALS = (FACADE, SHOP, OFFICE, ROOF_FLAT, ROOF_SLATE, ROOF_SHINGLE, SIDING, 
              STONE, MARBLE, BRICK_WALL, CONCRETE, SKY_WALL, LANDMARK_IRON, LANDMARK_STONE, LANDMARK_LAMP,
              LANDMARK_FLOODLIT, LANDMARK_DIAL) + francehouses.MATERIALS + (GLASSHOUSE, ROOF_TILES, LOBBY, ROOF_SLATE_ROUND,
                                                                   ROOF_SLATE_DARK, ROOF_WOOD, STONE_RUBBLE, CINDER,
-                                                                  SKY_WALL_DAY)
+                                                                  SKY_WALL_DAY) + cisbuildings.MATERIALS
 LOOKS = {
     "bne_bridge_steel": (METALWALL, (0.50, 0.52, 0.54)),
     "bne_marble": (MARBLE, (1.0, 1.0, 1.0)),
@@ -160,6 +161,8 @@ LOOKS = {
     SHOP: (SHOP, (1.0, 1.0, 1.0)), OFFICE: (OFFICE, (1.0, 1.0, 1.0)), SIDING: (SIDING, (0.93, 0.92, 0.88)),
     LOBBY: (LOBBY, (1.0, 1.0, 1.0)),
 }
+for _n in cisbuildings.MATERIALS:       # (plan 048: the art's own colours, white vertex colour)
+    LOOKS[_n] = (_n, (1.0, 1.0, 1.0))
 ROOF_TINTS = {               # per roof material: the colours a building's roof takes (hashed)
     ROOF_FLAT: ((0.85, 0.85, 0.85), (0.62, 0.62, 0.64), (0.95, 0.93, 0.88), (0.45, 0.45, 0.46), (0.75, 0.70, 0.64)),
     # 4..: clay tiles (terracotta, red-brown, faded orange) and dark grey / anthracite / brown-black (regional)
@@ -848,12 +851,38 @@ def oriented_box(p):
 class Spec:
     """What is built for one footprint (decided by plan())."""
     __slots__ = ("ring", "floors", "floor_h", "height", "roof", "roof_mat", "facade", "band", "shop", "plain", "min_h", "wall", "door", "windows", "front", "steeple", "stoop",
-                 "sign", "porch", "cls", "seed", "deck", "pitch", "portal", "gring", "ship", "fr_house", "across", "hi",
+                 "sign", "porch", "cls", "seed", "deck", "pitch", "portal", "gring", "ship", "fr_house", "cis", "across", "hi",
                  "roof_h", "hf", "holes", "skel", "skel_cap", "tank", "street", "slope_dir", "ml")
 
     def __init__(self, **kw):
         for k in self.__slots__:
             setattr(self, k, kw.get(k))
+
+
+CIS_FLAT_KITS = {"khrush_brick", "khrush_panel", "panel9", "panel16", "tower", "brick_mid", "late_soviet", "new_mono",
+                 "new_low", "new_panel"}
+CIS_STALINKA_TINTS = ("bne_bld_fac_ochre", "bne_bld_fac_cream", "bne_bld_fac_salmon", "bne_bld_fac_yellow",
+                      "bne_bld_fac_sand", "bne_bld_fac_rose")
+CIS_NEW_TINTS = ("bne_bld_fac_white", "bne_bld_fac_grey", "bne_bld_fac_cream", "bne_bld_fac_terracotta",
+                 "bne_bld_fac_blue", "bne_bld_fac_ochre")
+CIS_SKINS = {"khrush_brick", "khrush_panel", "panel9", "panel16", "tower", "brick_mid", "late_soviet", "stalinka",
+             "new_mono", "new_low", "new_panel"}
+
+
+def cis_skin(kit, seed, facade, band):
+    """The facade and window band of an apartment block of the post-Soviet kinds with the materials there are (plan 048,
+    until the facade cells of the kinds' atlases replace it): precast panels with ribbon windows for the series, brick
+    (white silicate more often than red) for the brick ones, plaster and sash windows for a Stalinist block, clean
+    plaster and tall windows for the new ones."""
+    if kit in ("khrush_panel", "panel9", "panel16", "late_soviet", "new_panel"):
+        n = len(WALL_TINTS[PANEL]) - 2         # (the panels' light and grey tints: not the weathered concrete's)
+        return f"{PANEL}|{int(_hash01(seed, 'cis panel') * n)}", BAND_PANEL
+    if kit in ("khrush_brick", "brick_mid", "tower"):
+        silicate = _hash01(seed, "cis silicate") < 0.55
+        return (BRICK_TINTS[0] if silicate else BRICK_TINTS[1 + int(_hash01(seed, "cis brick") * 2)]), BAND_BRICK
+    if kit == "stalinka":
+        return CIS_STALINKA_TINTS[int(_hash01(seed, "cis stal") * len(CIS_STALINKA_TINTS))], BAND_SASH
+    return CIS_NEW_TINTS[int(_hash01(seed, "cis new") * len(CIS_NEW_TINTS))], BAND_TALL
 
 
 class Style:
@@ -918,6 +947,11 @@ STYLES = {
                   paint=0.0, wall_tints=(0, 1, 2, 3, 4, 5, 6, 8)),
     "cool": Style("cool", 0.3, ((SIDING, 0.4),), 0.05, 0.1, 0.3, (_DARK, (ROOF_METAL, (0, 1, 2, 3))), pitch=30.0,
                   paint=0.3, barn_red=0.5),
+    # the former Soviet Union (plan 048; cisbuildings.COUNTRY): private houses under grey asbestos-cement sheet and metal
+    # tile (never clay), mostly hipped; stucco in whites, creams, sky blue and mint, white silicate and red brick
+    "cis": Style("cis", 0.25, ((STUCCO, 0.6),), 0.0, 0.04, 0.65,
+                 ((ROOF_SLATE, (3, 7, 8)), (ROOF_SLATE, (3, 7)), (ROOF_METAL, (1, 2, 3, 4)), (ROOF_METAL, (3, 2))),
+                 pitch=27.0, paint=0.3, wall_tints=(0, 1, 3, 5, 7, 8, 10), attached=0.2),
 }
 
 
@@ -925,6 +959,8 @@ def region_style(lat, lon):
     """The Style of the region around (lat, lon) (None: the US East's)."""
     if lat is None or lon is None:
         return STYLES["us_east"]
+    if cisbuildings.active(lat, lon):                           # the former Soviet Union (plan 048)
+        return STYLES["cis"]
     if 24.0 <= lat <= 72.0 and -170.0 <= lon <= -52.0:          # North America (and Canada)
         if lon < -100.0:
             return STYLES["us_west"]
@@ -1257,6 +1293,9 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
                 roof = "gabled" if seed < 1.0 - style.hipped else "hipped"
         else:
             roof = "flat"
+    cis = attrs.get("_cis") if cisbuildings.active(lat, lon) else None     # (the former Soviet Union only: plan 048)
+    if cis and cis["kit"] in CIS_FLAT_KITS and not roof_given:
+        roof = "flat"       # (the series' roofs: flat, bitumen)
     across, hi = ridge_frame(ring, roof, attrs.get("roof_orientation"), attrs.get("roof_direction"))
     shw = hl if across else hw                      # (the half span the roof's slopes cover)
     # pitched roofs only on near-rectangular footprints (a church's nave keeps its gable beside a tower or an apse)
@@ -1383,6 +1422,8 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
                 else:
                     band = (BAND_SASH, BAND_TALL, BAND_PANEL)[int(seed * 104729) % 3]
         plain = False
+        if cis and not (industrial or garage or terminal or church) and cis["kit"] in CIS_SKINS:
+            facade, band = cis_skin(cis["kit"], seed, facade, band)
     wall = None
     house = (cls in HOUSE_CLASSES or (area < 260 and not shop and not industrial)) and not row and not shed \
         and not part \
@@ -1602,6 +1643,7 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
                 skel_cap=skel_cap, slope_dir=_slope_dir(roof, attrs.get("roof_direction")))
     if skel:
         spec.pitch = skel_pitch
+    spec.cis = cis      # (the post-Soviet housing verdict, cisbuildings.info: the later stages read it)
     return francehouses.adapt(spec, attrs, lat, lon)
 
 
@@ -3222,16 +3264,18 @@ def build(specs_and_ground, lite=False):
             continue
         z0 = gmin - (SKIRT_LITE_M if lite else SKIRT_M) if mh <= 0.5 else base_z(spec, gmin, gmax) + mh
         z_eave = base_z(spec, gmin, gmax) + mh + spec.height
-        _walls(m, spec, ring, z0, z_eave, mat_idx, lite)
+        cis_drawn = bool(spec.cis) and cisbuildings.draw_walls(m, spec, ring, z0, z_eave, mat_idx, lite)
+        if not cis_drawn:
+            _walls(m, spec, ring, z0, z_eave, mat_idx, lite)
         for hole in (spec.holes or ()):               # (a courtyard's walls, facing the yard: the hole clockwise)
             _walls(m, spec, hole, z0, z_eave, mat_idx, lite, hole=True)
         if mh > 0.5:                                  # a part standing on another / over a street: its underside
             m.poly([(p[0], p[1], z0) for p in ring[::-1]], [(0.002, 0.995)] * len(ring), mat_idx[spec.facade])
         _roof(m, spec, ring, z_eave, mat_idx, lite)
-        if spec.roof == "flat" and not spec.plain and spec.floors <= 6 and not lite:
+        if spec.roof == "flat" and not spec.plain and spec.floors <= 6 and not lite and not cis_drawn:
             _cornice(m, spec, ring, z_eave, mat_idx)
-        if not lite and not spec.holes:               # (roof clutter scattered over a yard would float)
-            _clutter(m, spec, ring, z_eave, mat_idx)
+        if not lite and not spec.holes and not cis_drawn:    # (roof clutter scattered over a yard would float; a block of
+            _clutter(m, spec, ring, z_eave, mat_idx)         # the atlas kinds has its machine rooms from cisbuildings)
         if spec.steeple:
             _steeple(m, spec, z_eave, mat_idx)
         if spec.stoop and not lite:
@@ -5461,6 +5505,9 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
     town, dense = cover < TOWN_COVERAGE, cover > BRICK_WALK_COVERAGE
     clat, clon, _ = frame.enu_to_geodetic((x0 + x1) / 2, (y0 + y1) / 2, 0.0)
     clat, clon = float(clat), float(clon)
+    cis_rows = None
+    if cisbuildings.active(clat, clon):         # (the former Soviet Union: which kind of housing each building is, plan 048)
+        cis_rows = cisbuildings.classify_tile(rings, attrs, shared, roads_xy if roads_xy else ml_roads_xy, clat, clon)
     alpine = False
     if cover < ALPINE_COVER:
         try:
@@ -5539,6 +5586,10 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
                                                      abs(_area2(ring)) / 2, at.get("bag_id")))
         if mh > 0.5 and at.get("height") is not None and np.isfinite(at["height"]) and look is None:
             at = dict(at, height=max(2.5, float(at["height"]) - mh))     # a building's own height range
+        if cis_rows is not None and look is None and mh <= 0.5 and not at.get("ml"):
+            ci = cisbuildings.info(cis_rows[k])
+            if ci is not None:
+                at = dict(at, _cis=ci)
         if francehouses.ON:
             if not ok[i0:i1].all():
                 continue
@@ -5880,6 +5931,8 @@ def doors(items, lines, x0, y0, drives=None, infer_fences=True):
         if (spec.min_h or 0.0) > 0.5:
             continue            # (off the ground: a bridge's building over the street, a passage's part over its way; its
                                 # door stood alone in the road under it, London's Sherwood Street, 2026-11-12)
+        if spec.cis and cisbuildings.drawn_kit(spec.cis["kit"]) and not spec.holes:
+            continue            # (its entrances are cells of its facade, with canopies: cisbuildings.draw_walls)
         no_door = False
         if spec.plain or spec.floors >= 7 or spec.band in (BAND_OFFICE, BAND_OFFICE2) or spec.wall:
             if not spec.wall or spec.plain or spec.floors >= 7:
