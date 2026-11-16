@@ -2,7 +2,7 @@
 
 What changed in each release of BeamNG.Earth, newest first.
 
-## 1.10.1 beta (2026-11-DD)
+## 1.10.1 beta (2026-11-15)
 
 > **Join the TGForever Discord, [discord.gg/tgf](https://discord.gg/tgf), to chat, get help, report bugs or help
 > develop the mod.** For help, that includes multiplayer:
@@ -57,12 +57,14 @@ Works with BeamNG.drive 0.40.5.
   roads are planned again once after updating.
 - **Reduced the chance of short server stalls on Windows** (6-9 s in a player's log): the CPU core split looked at
   every process on the computer each time (from PR #1328, OmdevShastri).
+- **Windows, installed from the source ZIP**: the sky fix and the engine patches the .exe has were missing from the
+  ZIP, so a source install ran without them; they are now included.
 - Faster road tiles in cities with many stations, tunnels and ramps (in our tests on two Sydney tiles: ramps about
   30 s to 2 s, tunnel sides 3.9 s to 0.75 s, stations 55.6 s to 44.4 s) (PR #1283, #1315 and #1314, crunchdomo).
 
 ### New
-- **Epic Games and no-Steam launch** (new; please tell us how it goes): the app now finds BeamNG.drive installed from
-  the Epic Games Store, and can start the game without Steam on Windows and Linux (`--launch direct`, kept for later
+- **Epic Games and no-Steam launch** (new; please tell us how it goes): on Windows the app now finds BeamNG.drive
+  installed from the Epic Games Store, and it can start the game without Steam on Windows and Linux (`--launch direct`, kept for later
   starts; it uses the same user folder, so your mods and settings stay put). With several copies installed it asks
   which one to use (`--choose-game` to ask again). Steam players see no change. BeamMP on Linux still needs the game in
   a Steam library. Builds on ideas from PR #1309 (ProxyFirewall202).
@@ -71,9 +73,9 @@ Works with BeamNG.drive 0.40.5.
   features, Ground grid, CPU cores and priority, 3D models from 3dmr.eu, Max RAM's sizing, the cache folder) apply
   without closing the game; the world reloads around your car, which is held still meanwhile.
 - **Experimental settings page**: features that could only be turned on with environment variables are now switches
-  (all off by default, from the next start of BeamNG.Earth): road signs (and the Dutch ones), French and European
-  road scenery, guard rails at drops, widened entrances, right of way by road class, bumpy and rough dirt roads, extra
-  road wear, the road steepness limit, road surfaces from aerial photos, rougher land off the roads, rock faces in
+  (all off by default; they apply when the world server restarts, with the Restart world server button): road signs (and the Dutch ones), French and European
+  road scenery, guard rails at drops, widened entrances, right of way by road class, bumpy and rough dirt roads, tyre
+  polish, crack networks and manholes, the road steepness limit, road surfaces from aerial photos, rougher land off the roads, rock faces in
   deep cuts, ground over shallow tunnels, more undersea tunnels, traffic through tunnels, solid railway rails,
   overhead railway wires, grouped level crossings, railway tunnels, rounded railway curves, closed 3D models,
   detailed Canadian lidar and showing the older world while a place rebuilds. With any of them on, places you visit
