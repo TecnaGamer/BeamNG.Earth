@@ -676,6 +676,7 @@ SEAM_MOUTH_GRADE = 0.08     # ... and goes back to its own profile at this grade
 SEAM_DECK_GRADE = 0.01      # a single span between two abutments is not tilted more than this by the ground at its ends: the
                             # rest of their difference is shared between the two approaches (_grade_match) ...
 SEAM_MATCH_MAX_M = 4.0      # ... at most this each (bad data: rather a steep deck)
+SEAM_FILLED_ON = os.environ.get("BNE_SEAM_FILLED", "on") != "off"   # (_grade_match reads each end as filled: fill_abutment)
 
 
 def median_profile(z, step, width):
@@ -4862,10 +4863,13 @@ class _Planner:
                                                            float(RAMP_GRADE))
         return best
 
-    def _end_filled(self, line, at_end):
+    def _end_filled(self, line, at_end, past=False):
         """m: the ground at a bridge's first (at_end False) or last end as fill_abutment lays its approach there, read
         straight on past the end (the approach roads' own plans are not made yet): its embankment's top where the
-        line ends down the slope, else the ground at the end. -inf when ABUT_FILL_ON is off."""
+        line ends down the slope, else the ground at the end. With past, never above the highest ground read past the
+        end: an embankment rises out of a hollow to the level the road comes from, and where the ground only falls
+        away from the end (a span on a hill's brow, the slope steepening below it) fill_abutment's line through the
+        far ground runs above every point of it. -inf when ABUT_FILL_ON is off."""
         if not ABUT_FILL_ON:
             return -np.inf
         b = np.asarray(line, np.float64)[:, :2]
@@ -4883,7 +4887,8 @@ class _Planner:
             _caught(e)
             log.debug("grading: fill past bridge end %s: %s: %s", np.round(p), type(e).__name__, e)
             return -np.inf
-        return float(fill_abutment(z, False)[0])
+        top = float(fill_abutment(z, False)[0])
+        return min(top, float(z.max())) if past else top
 
     @_marked("end_cache", lambda self, xy: (round(float(xy[0]) * 2), round(float(xy[1]) * 2)))
     def _end_lift(self, xy):
@@ -5896,6 +5901,16 @@ class _Planner:
         ends = np.array([bridge[0], bridge[-1]])
         ela, elo, _ = self.frame.enu_to_geodetic(ends[:, 0], ends[:, 1], 0.0)
         z = np.asarray(self.elev(ela, elo), np.float64).reshape(-1)
+        if SEAM_FILLED_ON:
+            # (each end as its approach is laid there: on its embankment's top where the map line ends down the bank,
+            # fill_abutment, as overpass_cands' deck_ends. A stream bridge's north end mapped 3 m down the bank by
+            # Alsfeld (B 62, 50.7563 N 9.2870 E) read 240.3 m against 243.3 at its south end on the same flat road:
+            # the north approach, already filled level, was raised 1.4 m more and the south one lowered 1.5 m, a
+            # crest and a 2.6 m drop over the 16 m deck that threw cars into the air at 80 km/h, 2026-11-16; at most
+            # the ground past the end: a 7 m track bridge on the hill above Riva del Garda's Pontera tunnel, the ground
+            # falling ever more steeply past its lower end, read 198.9 m there against 194.9 and 196.3 at its ends,
+            # turning the match round and stepping 0.29 m onto the deck, test_drivability)
+            z = np.maximum(z, [self._end_filled(bridge, False, past=True), self._end_filled(bridge, True, past=True)])
         deficit = abs(float(z[1] - z[0])) - SEAM_DECK_GRADE * L
         if deficit < 2 * APPROACH_MIN_LIFT:
             return None
