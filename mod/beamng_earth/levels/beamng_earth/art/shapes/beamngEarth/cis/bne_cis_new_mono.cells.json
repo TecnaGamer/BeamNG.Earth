@@ -1,0 +1,641 @@
+{
+  "atlas": [
+    2048,
+    2048
+  ],
+  "bay_m": 3.3,
+  "cells": [
+    {
+      "id": "bay_01",
+      "lit": true,
+      "px": [
+        4,
+        1748,
+        317,
+        288
+      ],
+      "role": "bay",
+      "size_m": [
+        3.3,
+        3.0
+      ],
+      "tags": [
+        "vent",
+        "pvc"
+      ],
+      "weight": 0.125
+    },
+    {
+      "id": "bay_02",
+      "lit": true,
+      "px": [
+        1609,
+        4,
+        317,
+        288
+      ],
+      "role": "bay",
+      "size_m": [
+        3.3,
+        3.0
+      ],
+      "tags": [
+        "vent",
+        "pvc"
+      ],
+      "weight": 0.125
+    },
+    {
+      "id": "bay_03",
+      "lit": true,
+      "px": [
+        325,
+        440,
+        317,
+        288
+      ],
+      "role": "bay",
+      "size_m": [
+        3.3,
+        3.0
+      ],
+      "tags": [
+        "vent",
+        "pvc"
+      ],
+      "weight": 0.125
+    },
+    {
+      "id": "bay_04",
+      "lit": true,
+      "px": [
+        325,
+        732,
+        317,
+        288
+      ],
+      "role": "bay",
+      "size_m": [
+        3.3,
+        3.0
+      ],
+      "tags": [
+        "vent",
+        "pvc"
+      ],
+      "weight": 0.125
+    },
+    {
+      "id": "bay_05",
+      "lit": true,
+      "px": [
+        325,
+        1024,
+        317,
+        288
+      ],
+      "role": "bay",
+      "size_m": [
+        3.3,
+        3.0
+      ],
+      "tags": [
+        "plaster",
+        "pvc"
+      ],
+      "weight": 0.125
+    },
+    {
+      "id": "bay_06",
+      "lit": true,
+      "px": [
+        325,
+        1316,
+        317,
+        288
+      ],
+      "role": "bay",
+      "size_m": [
+        3.3,
+        3.0
+      ],
+      "tags": [
+        "plaster",
+        "pvc"
+      ],
+      "weight": 0.125
+    },
+    {
+      "id": "bay_07",
+      "lit": true,
+      "px": [
+        325,
+        1608,
+        317,
+        288
+      ],
+      "role": "bay",
+      "size_m": [
+        3.3,
+        3.0
+      ],
+      "tags": [
+        "plaster",
+        "pvc"
+      ],
+      "weight": 0.125
+    },
+    {
+      "id": "bay_08",
+      "lit": true,
+      "px": [
+        646,
+        440,
+        317,
+        288
+      ],
+      "role": "bay",
+      "size_m": [
+        3.3,
+        3.0
+      ],
+      "tags": [
+        "plaster",
+        "pvc"
+      ],
+      "weight": 0.125
+    },
+    {
+      "id": "bay_balcony_01",
+      "lit": true,
+      "px": [
+        967,
+        440,
+        317,
+        288
+      ],
+      "role": "bay_balcony",
+      "size_m": [
+        3.3,
+        3.0
+      ],
+      "tags": [
+        "vent"
+      ],
+      "weight": 0.25
+    },
+    {
+      "id": "bay_balcony_02",
+      "lit": true,
+      "px": [
+        1288,
+        440,
+        317,
+        288
+      ],
+      "role": "bay_balcony",
+      "size_m": [
+        3.3,
+        3.0
+      ],
+      "tags": [
+        "vent"
+      ],
+      "weight": 0.25
+    },
+    {
+      "id": "bay_balcony_03",
+      "lit": true,
+      "px": [
+        1609,
+        440,
+        317,
+        288
+      ],
+      "role": "bay_balcony",
+      "size_m": [
+        3.3,
+        3.0
+      ],
+      "tags": [
+        "plaster"
+      ],
+      "weight": 0.25
+    },
+    {
+      "id": "bay_balcony_04",
+      "lit": true,
+      "px": [
+        646,
+        732,
+        317,
+        288
+      ],
+      "role": "bay_balcony",
+      "size_m": [
+        3.3,
+        3.0
+      ],
+      "tags": [
+        "plaster"
+      ],
+      "weight": 0.25
+    },
+    {
+      "id": "bay_balcony_far_01",
+      "lit": true,
+      "px": [
+        646,
+        1024,
+        317,
+        288
+      ],
+      "role": "bay_balcony_far",
+      "size_m": [
+        3.3,
+        3.0
+      ],
+      "tags": [
+        "vent",
+        "far"
+      ],
+      "weight": 0.25
+    },
+    {
+      "id": "bay_balcony_far_02",
+      "lit": true,
+      "px": [
+        646,
+        1316,
+        317,
+        288
+      ],
+      "role": "bay_balcony_far",
+      "size_m": [
+        3.3,
+        3.0
+      ],
+      "tags": [
+        "vent",
+        "far"
+      ],
+      "weight": 0.25
+    },
+    {
+      "id": "bay_balcony_far_03",
+      "lit": true,
+      "px": [
+        646,
+        1608,
+        317,
+        288
+      ],
+      "role": "bay_balcony_far",
+      "size_m": [
+        3.3,
+        3.0
+      ],
+      "tags": [
+        "plaster",
+        "far"
+      ],
+      "weight": 0.25
+    },
+    {
+      "id": "bay_balcony_far_04",
+      "lit": true,
+      "px": [
+        967,
+        732,
+        317,
+        288
+      ],
+      "role": "bay_balcony_far",
+      "size_m": [
+        3.3,
+        3.0
+      ],
+      "tags": [
+        "plaster",
+        "far"
+      ],
+      "weight": 0.25
+    },
+    {
+      "id": "stair_01",
+      "lit": true,
+      "px": [
+        1288,
+        732,
+        317,
+        288
+      ],
+      "role": "stair",
+      "size_m": [
+        3.3,
+        3.0
+      ],
+      "tags": [
+        "vent"
+      ],
+      "weight": 0.5
+    },
+    {
+      "id": "stair_02",
+      "lit": true,
+      "px": [
+        1609,
+        732,
+        317,
+        288
+      ],
+      "role": "stair",
+      "size_m": [
+        3.3,
+        3.0
+      ],
+      "tags": [
+        "plaster"
+      ],
+      "weight": 0.5
+    },
+    {
+      "id": "entrance_01",
+      "lit": true,
+      "px": [
+        4,
+        4,
+        317,
+        432
+      ],
+      "role": "entrance",
+      "size_m": [
+        3.3,
+        4.5
+      ],
+      "tags": [
+        "vent"
+      ],
+      "weight": 0.5
+    },
+    {
+      "id": "entrance_02",
+      "lit": true,
+      "px": [
+        4,
+        440,
+        317,
+        432
+      ],
+      "role": "entrance",
+      "size_m": [
+        3.3,
+        4.5
+      ],
+      "tags": [
+        "plaster"
+      ],
+      "weight": 0.5
+    },
+    {
+      "id": "ground_01",
+      "lit": true,
+      "px": [
+        4,
+        876,
+        317,
+        432
+      ],
+      "role": "ground",
+      "size_m": [
+        3.3,
+        4.5
+      ],
+      "tags": [
+        "vent",
+        "pvc",
+        "bars"
+      ],
+      "weight": 0.16666666666666666
+    },
+    {
+      "id": "ground_02",
+      "lit": true,
+      "px": [
+        4,
+        1312,
+        317,
+        432
+      ],
+      "role": "ground",
+      "size_m": [
+        3.3,
+        4.5
+      ],
+      "tags": [
+        "vent",
+        "pvc",
+        "bars"
+      ],
+      "weight": 0.16666666666666666
+    },
+    {
+      "id": "ground_03",
+      "lit": true,
+      "px": [
+        325,
+        4,
+        317,
+        432
+      ],
+      "role": "ground",
+      "size_m": [
+        3.3,
+        4.5
+      ],
+      "tags": [
+        "vent",
+        "pvc"
+      ],
+      "weight": 0.16666666666666666
+    },
+    {
+      "id": "ground_04",
+      "lit": true,
+      "px": [
+        646,
+        4,
+        317,
+        432
+      ],
+      "role": "ground",
+      "size_m": [
+        3.3,
+        4.5
+      ],
+      "tags": [
+        "plaster",
+        "pvc"
+      ],
+      "weight": 0.16666666666666666
+    },
+    {
+      "id": "ground_05",
+      "lit": true,
+      "px": [
+        967,
+        4,
+        317,
+        432
+      ],
+      "role": "ground",
+      "size_m": [
+        3.3,
+        4.5
+      ],
+      "tags": [
+        "plaster",
+        "pvc"
+      ],
+      "weight": 0.16666666666666666
+    },
+    {
+      "id": "ground_06",
+      "lit": true,
+      "px": [
+        1288,
+        4,
+        317,
+        432
+      ],
+      "role": "ground",
+      "size_m": [
+        3.3,
+        4.5
+      ],
+      "tags": [
+        "plaster",
+        "pvc"
+      ],
+      "weight": 0.16666666666666666
+    },
+    {
+      "id": "parapet_01",
+      "lit": false,
+      "px": [
+        325,
+        1900,
+        317,
+        115
+      ],
+      "role": "parapet",
+      "size_m": [
+        3.3,
+        1.2
+      ],
+      "tags": [
+        "vent"
+      ],
+      "weight": 0.5
+    },
+    {
+      "id": "parapet_02",
+      "lit": false,
+      "px": [
+        646,
+        1900,
+        317,
+        115
+      ],
+      "role": "parapet",
+      "size_m": [
+        3.3,
+        1.2
+      ],
+      "tags": [
+        "plaster"
+      ],
+      "weight": 0.5
+    },
+    {
+      "id": "end_01",
+      "lit": false,
+      "px": [
+        967,
+        1024,
+        317,
+        288
+      ],
+      "role": "end",
+      "size_m": [
+        3.3,
+        3.0
+      ],
+      "tags": [
+        "vent"
+      ],
+      "weight": 0.25
+    },
+    {
+      "id": "end_02",
+      "lit": false,
+      "px": [
+        967,
+        1316,
+        317,
+        288
+      ],
+      "role": "end",
+      "size_m": [
+        3.3,
+        3.0
+      ],
+      "tags": [
+        "vent"
+      ],
+      "weight": 0.25
+    },
+    {
+      "id": "end_03",
+      "lit": false,
+      "px": [
+        967,
+        1608,
+        317,
+        288
+      ],
+      "role": "end",
+      "size_m": [
+        3.3,
+        3.0
+      ],
+      "tags": [
+        "plaster"
+      ],
+      "weight": 0.25
+    },
+    {
+      "id": "end_04",
+      "lit": false,
+      "px": [
+        1288,
+        1024,
+        317,
+        288
+      ],
+      "role": "end",
+      "size_m": [
+        3.3,
+        3.0
+      ],
+      "tags": [
+        "plaster"
+      ],
+      "weight": 0.25
+    }
+  ],
+  "kit": "new_mono",
+  "px_per_m": 96,
+  "storey_m": 3.0,
+  "version": 1
+}

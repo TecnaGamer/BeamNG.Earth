@@ -1,0 +1,111 @@
+<?xml version='1.0' encoding='utf-8'?>
+<COLLADA xmlns="http://www.collada.org/2005/11/COLLADASchema" version="1.4.1">
+  <asset>
+    <contributor />
+    <unit name="meter" meter="1" />
+    <up_axis>Z_UP</up_axis>
+  </asset>
+  <library_effects>
+    <effect id="bne_cis_common-fx">
+      <profile_COMMON>
+        <technique sid="common">
+          <lambert>
+            <diffuse>
+              <color>.8 .8 .8 1</color>
+            </diffuse>
+          </lambert>
+        </technique>
+      </profile_COMMON>
+    </effect>
+    <effect id="bne_cis_graphite-fx">
+      <profile_COMMON>
+        <technique sid="common">
+          <lambert>
+            <diffuse>
+              <color>.8 .8 .8 1</color>
+            </diffuse>
+          </lambert>
+        </technique>
+      </profile_COMMON>
+    </effect>
+  </library_effects>
+  <library_materials>
+    <material id="bne_cis_common-mat" name="bne_cis_common">
+      <instance_effect url="#bne_cis_common-fx" />
+    </material>
+    <material id="bne_cis_graphite-mat" name="bne_cis_graphite">
+      <instance_effect url="#bne_cis_graphite-fx" />
+    </material>
+  </library_materials>
+  <library_geometries>
+    <geometry id="bne_cis_wall_drain-g">
+      <mesh>
+        <source id="bne_cis_wall_drain-p">
+          <float_array id="bne_cis_wall_drain-p-a" count="60">0.05 -0.06 0 0.025 -0.0166987 0 0.025 -0.0166987 2.8 0.05 -0.06 2.8 -0.025 -0.0166987 0 -0.025 -0.0166987 2.8 -0.05 -0.06 0 -0.05 -0.06 2.8 -0.025 -0.1033013 0 -0.025 -0.1033013 2.8 0.025 -0.1033013 0 0.025 -0.1033013 2.8 -0.07 -0.112 0.2 0.07 -0.112 0.2 0.07 -0.112 0.225 -0.07 -0.112 0.225 -0.07 -0.112 2.5 0.07 -0.112 2.5 0.07 -0.112 2.525 -0.07 -0.112 2.525</float_array>
+          <technique_common>
+            <accessor source="#bne_cis_wall_drain-p-a" count="20" stride="3">
+              <param name="X" type="float" />
+              <param name="Y" type="float" />
+              <param name="Z" type="float" />
+            </accessor>
+          </technique_common>
+        </source>
+        <source id="bne_cis_wall_drain-n">
+          <float_array id="bne_cis_wall_drain-n-a" count="72">0.8660254 0.5 0 0.8660254 0.5 0 1.3877788e-16 1 0 1.3877788e-16 1 0 -0.8660254 0.5 0 -0.8660254 0.5 0 -0.8660254 -0.5 0 -0.8660254 -0.5 0 -2.7755576e-16 -1 0 -2.7755576e-16 -1 0 0.8660254 -0.5 0 0.8660254 -0.5 0 0 0 -1 0 0 1 0 0 -1 0 0 1 -0 0 -1 0 0 1 0 0 -1 0 0 1 0 -1 0 0 -1 0 0 -1 0 0 -1 0</float_array>
+          <technique_common>
+            <accessor source="#bne_cis_wall_drain-n-a" count="24" stride="3">
+              <param name="X" type="float" />
+              <param name="Y" type="float" />
+              <param name="Z" type="float" />
+            </accessor>
+          </technique_common>
+        </source>
+        <source id="bne_cis_wall_drain-uv">
+          <float_array id="bne_cis_wall_drain-uv-a" count="144">0.001953125 0.52587891 0.048828125 0.52587891 0.048828125 0.57275391 0.001953125 0.52587891 0.048828125 0.57275391 0.001953125 0.57275391 0.001953125 0.52587891 0.048828125 0.52587891 0.048828125 0.57275391 0.001953125 0.52587891 0.048828125 0.57275391 0.001953125 0.57275391 0.001953125 0.52587891 0.048828125 0.52587891 0.048828125 0.57275391 0.001953125 0.52587891 0.048828125 0.57275391 0.001953125 0.57275391 0.001953125 0.52587891 0.048828125 0.52587891 0.048828125 0.57275391 0.001953125 0.52587891 0.048828125 0.57275391 0.001953125 0.57275391 0.001953125 0.52587891 0.048828125 0.52587891 0.048828125 0.57275391 0.001953125 0.52587891 0.048828125 0.57275391 0.001953125 0.57275391 0.001953125 0.52587891 0.048828125 0.52587891 0.048828125 0.57275391 0.001953125 0.52587891 0.048828125 0.57275391 0.001953125 0.57275391 0.001953125 0.52587891 0.048828125 0.52587891 0.048828125 0.57275391 0.001953125 0.52587891 0.048828125 0.52587891 0.048828125 0.57275391 0.001953125 0.52587891 0.048828125 0.52587891 0.048828125 0.57275391 0.001953125 0.52587891 0.048828125 0.52587891 0.048828125 0.57275391 0.001953125 0.52587891 0.048828125 0.52587891 0.048828125 0.57275391 0.001953125 0.52587891 0.048828125 0.52587891 0.048828125 0.57275391 0.001953125 0.52587891 0.048828125 0.52587891 0.048828125 0.57275391 0.001953125 0.52587891 0.048828125 0.52587891 0.048828125 0.57275391 0.001953125 0.52587891 0.048828125 0.52587891 0.048828125 0.57275391 0.001953125 0.52587891 0.048828125 0.57275391 0.001953125 0.57275391 0.001953125 0.52587891 0.048828125 0.52587891 0.048828125 0.57275391 0.001953125 0.52587891 0.048828125 0.57275391 0.001953125 0.57275391</float_array>
+          <technique_common>
+            <accessor source="#bne_cis_wall_drain-uv-a" count="72" stride="2">
+              <param name="S" type="float" />
+              <param name="T" type="float" />
+            </accessor>
+          </technique_common>
+        </source>
+        <vertices id="bne_cis_wall_drain-v">
+          <input semantic="POSITION" source="#bne_cis_wall_drain-p" />
+        </vertices>
+        <triangles material="bne_cis_common" count="20">
+          <input semantic="VERTEX" source="#bne_cis_wall_drain-v" offset="0" />
+          <input semantic="NORMAL" source="#bne_cis_wall_drain-n" offset="1" />
+          <input semantic="TEXCOORD" source="#bne_cis_wall_drain-uv" offset="2" set="0" />
+          <p>0 0 0 1 0 1 2 0 2 0 1 3 2 1 4 3 1 5 1 2 6 4 2 7 5 2 8 1 3 9 5 3 10 2 3 11 4 4 12 6 4 13 7 4 14 4 5 15 7 5 16 5 5 17 6 6 18 8 6 19 9 6 20 6 7 21 9 7 22 7 7 23 8 8 24 10 8 25 11 8 26 8 9 27 11 9 28 9 9 29 10 10 30 0 10 31 3 10 32 10 11 33 3 11 34 11 11 35 0 12 36 4 12 37 1 12 38 3 13 39 2 13 40 5 13 41 0 14 42 6 14 43 4 14 44 3 15 45 5 15 46 7 15 47 0 16 48 8 16 49 6 16 50 3 17 51 7 17 52 9 17 53 0 18 54 10 18 55 8 18 56 3 19 57 9 19 58 11 19 59</p>
+        </triangles>
+        <triangles material="bne_cis_graphite" count="4">
+          <input semantic="VERTEX" source="#bne_cis_wall_drain-v" offset="0" />
+          <input semantic="NORMAL" source="#bne_cis_wall_drain-n" offset="1" />
+          <input semantic="TEXCOORD" source="#bne_cis_wall_drain-uv" offset="2" set="0" />
+          <p>12 20 60 13 20 61 14 20 62 12 21 63 14 21 64 15 21 65 16 22 66 17 22 67 18 22 68 16 23 69 18 23 70 19 23 71</p>
+        </triangles>
+      </mesh>
+    </geometry>
+  </library_geometries>
+  <library_visual_scenes>
+    <visual_scene id="Scene">
+      <node id="bne_cis_wall_drain" name="bne_cis_wall_drain" type="NODE">
+        <instance_geometry url="#bne_cis_wall_drain-g">
+          <bind_material>
+            <technique_common>
+              <instance_material symbol="bne_cis_common" target="#bne_cis_common-mat">
+                <bind_vertex_input semantic="UVMap" input_semantic="TEXCOORD" input_set="0" />
+              </instance_material>
+              <instance_material symbol="bne_cis_graphite" target="#bne_cis_graphite-mat">
+                <bind_vertex_input semantic="UVMap" input_semantic="TEXCOORD" input_set="0" />
+              </instance_material>
+            </technique_common>
+          </bind_material>
+        </instance_geometry>
+      </node>
+    </visual_scene>
+  </library_visual_scenes>
+  <scene>
+    <instance_visual_scene url="#Scene" />
+  </scene>
+</COLLADA>

@@ -1,0 +1,645 @@
+{
+  "atlas": [
+    2048,
+    2048
+  ],
+  "bay_m": 3.0,
+  "cells": [
+    {
+      "id": "bay_01",
+      "lit": true,
+      "px": [
+        4,
+        4,
+        288,
+        269
+      ],
+      "role": "bay",
+      "size_m": [
+        3.0,
+        2.8
+      ],
+      "tags": [
+        "panel",
+        "old"
+      ],
+      "weight": 0.1
+    },
+    {
+      "id": "bay_02",
+      "lit": true,
+      "px": [
+        296,
+        4,
+        288,
+        269
+      ],
+      "role": "bay",
+      "size_m": [
+        3.0,
+        2.8
+      ],
+      "tags": [
+        "panel",
+        "old"
+      ],
+      "weight": 0.1
+    },
+    {
+      "id": "bay_03",
+      "lit": true,
+      "px": [
+        588,
+        4,
+        288,
+        269
+      ],
+      "role": "bay",
+      "size_m": [
+        3.0,
+        2.8
+      ],
+      "tags": [
+        "panel",
+        "old"
+      ],
+      "weight": 0.1
+    },
+    {
+      "id": "bay_04",
+      "lit": true,
+      "px": [
+        880,
+        4,
+        288,
+        269
+      ],
+      "role": "bay",
+      "size_m": [
+        3.0,
+        2.8
+      ],
+      "tags": [
+        "panel",
+        "old"
+      ],
+      "weight": 0.1
+    },
+    {
+      "id": "bay_05",
+      "lit": true,
+      "px": [
+        1172,
+        4,
+        288,
+        269
+      ],
+      "role": "bay",
+      "size_m": [
+        3.0,
+        2.8
+      ],
+      "tags": [
+        "panel",
+        "pvc"
+      ],
+      "weight": 0.1
+    },
+    {
+      "id": "bay_06",
+      "lit": true,
+      "px": [
+        1464,
+        4,
+        288,
+        269
+      ],
+      "role": "bay",
+      "size_m": [
+        3.0,
+        2.8
+      ],
+      "tags": [
+        "panel",
+        "pvc"
+      ],
+      "weight": 0.1
+    },
+    {
+      "id": "bay_07",
+      "lit": true,
+      "px": [
+        4,
+        277,
+        288,
+        269
+      ],
+      "role": "bay",
+      "size_m": [
+        3.0,
+        2.8
+      ],
+      "tags": [
+        "panel",
+        "pvc"
+      ],
+      "weight": 0.1
+    },
+    {
+      "id": "bay_08",
+      "lit": true,
+      "px": [
+        4,
+        550,
+        288,
+        269
+      ],
+      "role": "bay",
+      "size_m": [
+        3.0,
+        2.8
+      ],
+      "tags": [
+        "panel",
+        "pvc"
+      ],
+      "weight": 0.1
+    },
+    {
+      "id": "bay_09",
+      "lit": true,
+      "px": [
+        4,
+        823,
+        288,
+        269
+      ],
+      "role": "bay",
+      "size_m": [
+        3.0,
+        2.8
+      ],
+      "tags": [
+        "panel",
+        "old",
+        "insulated"
+      ],
+      "weight": 0.1
+    },
+    {
+      "id": "bay_10",
+      "lit": true,
+      "px": [
+        4,
+        1096,
+        288,
+        269
+      ],
+      "role": "bay",
+      "size_m": [
+        3.0,
+        2.8
+      ],
+      "tags": [
+        "panel",
+        "old",
+        "insulated"
+      ],
+      "weight": 0.1
+    },
+    {
+      "id": "bay_balcony_01",
+      "lit": true,
+      "px": [
+        4,
+        1369,
+        288,
+        269
+      ],
+      "role": "bay_balcony",
+      "size_m": [
+        3.0,
+        2.8
+      ],
+      "tags": [
+        "panel"
+      ],
+      "weight": 0.3333333333333333
+    },
+    {
+      "id": "bay_balcony_02",
+      "lit": true,
+      "px": [
+        4,
+        1642,
+        288,
+        269
+      ],
+      "role": "bay_balcony",
+      "size_m": [
+        3.0,
+        2.8
+      ],
+      "tags": [
+        "panel"
+      ],
+      "weight": 0.3333333333333333
+    },
+    {
+      "id": "bay_balcony_03",
+      "lit": true,
+      "px": [
+        296,
+        277,
+        288,
+        269
+      ],
+      "role": "bay_balcony",
+      "size_m": [
+        3.0,
+        2.8
+      ],
+      "tags": [
+        "panel"
+      ],
+      "weight": 0.3333333333333333
+    },
+    {
+      "id": "bay_balcony_far_01",
+      "lit": true,
+      "px": [
+        588,
+        277,
+        288,
+        269
+      ],
+      "role": "bay_balcony_far",
+      "size_m": [
+        3.0,
+        2.8
+      ],
+      "tags": [
+        "panel",
+        "far"
+      ],
+      "weight": 0.16666666666666666
+    },
+    {
+      "id": "bay_balcony_far_02",
+      "lit": true,
+      "px": [
+        880,
+        277,
+        288,
+        269
+      ],
+      "role": "bay_balcony_far",
+      "size_m": [
+        3.0,
+        2.8
+      ],
+      "tags": [
+        "panel",
+        "far"
+      ],
+      "weight": 0.16666666666666666
+    },
+    {
+      "id": "bay_balcony_far_03",
+      "lit": true,
+      "px": [
+        1172,
+        277,
+        288,
+        269
+      ],
+      "role": "bay_balcony_far",
+      "size_m": [
+        3.0,
+        2.8
+      ],
+      "tags": [
+        "panel",
+        "far"
+      ],
+      "weight": 0.16666666666666666
+    },
+    {
+      "id": "bay_balcony_far_04",
+      "lit": true,
+      "px": [
+        1464,
+        277,
+        288,
+        269
+      ],
+      "role": "bay_balcony_far",
+      "size_m": [
+        3.0,
+        2.8
+      ],
+      "tags": [
+        "panel",
+        "far"
+      ],
+      "weight": 0.16666666666666666
+    },
+    {
+      "id": "bay_balcony_far_05",
+      "lit": true,
+      "px": [
+        296,
+        550,
+        288,
+        269
+      ],
+      "role": "bay_balcony_far",
+      "size_m": [
+        3.0,
+        2.8
+      ],
+      "tags": [
+        "panel",
+        "far"
+      ],
+      "weight": 0.16666666666666666
+    },
+    {
+      "id": "bay_balcony_far_06",
+      "lit": true,
+      "px": [
+        296,
+        823,
+        288,
+        269
+      ],
+      "role": "bay_balcony_far",
+      "size_m": [
+        3.0,
+        2.8
+      ],
+      "tags": [
+        "panel",
+        "far"
+      ],
+      "weight": 0.16666666666666666
+    },
+    {
+      "id": "stair_01",
+      "lit": true,
+      "px": [
+        296,
+        1096,
+        288,
+        269
+      ],
+      "role": "stair",
+      "size_m": [
+        3.0,
+        2.8
+      ],
+      "tags": [
+        "panel"
+      ],
+      "weight": 0.5
+    },
+    {
+      "id": "stair_02",
+      "lit": true,
+      "px": [
+        296,
+        1369,
+        288,
+        269
+      ],
+      "role": "stair",
+      "size_m": [
+        3.0,
+        2.8
+      ],
+      "tags": [
+        "panel"
+      ],
+      "weight": 0.5
+    },
+    {
+      "id": "entrance_01",
+      "lit": true,
+      "px": [
+        296,
+        1642,
+        288,
+        269
+      ],
+      "role": "entrance",
+      "size_m": [
+        3.0,
+        2.8
+      ],
+      "tags": [
+        "panel"
+      ],
+      "weight": 0.5
+    },
+    {
+      "id": "entrance_02",
+      "lit": true,
+      "px": [
+        588,
+        550,
+        288,
+        269
+      ],
+      "role": "entrance",
+      "size_m": [
+        3.0,
+        2.8
+      ],
+      "tags": [
+        "panel"
+      ],
+      "weight": 0.5
+    },
+    {
+      "id": "ground_01",
+      "lit": true,
+      "px": [
+        880,
+        550,
+        288,
+        269
+      ],
+      "role": "ground",
+      "size_m": [
+        3.0,
+        2.8
+      ],
+      "tags": [
+        "panel",
+        "old",
+        "bars"
+      ],
+      "weight": 0.25
+    },
+    {
+      "id": "ground_02",
+      "lit": true,
+      "px": [
+        1172,
+        550,
+        288,
+        269
+      ],
+      "role": "ground",
+      "size_m": [
+        3.0,
+        2.8
+      ],
+      "tags": [
+        "panel",
+        "old",
+        "bars"
+      ],
+      "weight": 0.25
+    },
+    {
+      "id": "ground_03",
+      "lit": true,
+      "px": [
+        1464,
+        550,
+        288,
+        269
+      ],
+      "role": "ground",
+      "size_m": [
+        3.0,
+        2.8
+      ],
+      "tags": [
+        "panel",
+        "old"
+      ],
+      "weight": 0.25
+    },
+    {
+      "id": "ground_04",
+      "lit": true,
+      "px": [
+        588,
+        823,
+        288,
+        269
+      ],
+      "role": "ground",
+      "size_m": [
+        3.0,
+        2.8
+      ],
+      "tags": [
+        "panel",
+        "old"
+      ],
+      "weight": 0.25
+    },
+    {
+      "id": "tech_01",
+      "lit": false,
+      "px": [
+        880,
+        823,
+        288,
+        154
+      ],
+      "role": "tech",
+      "size_m": [
+        3.0,
+        1.6
+      ],
+      "tags": [
+        "panel"
+      ],
+      "weight": 0.5
+    },
+    {
+      "id": "tech_02",
+      "lit": false,
+      "px": [
+        1172,
+        823,
+        288,
+        154
+      ],
+      "role": "tech",
+      "size_m": [
+        3.0,
+        1.6
+      ],
+      "tags": [
+        "panel"
+      ],
+      "weight": 0.5
+    },
+    {
+      "id": "end_01",
+      "lit": false,
+      "px": [
+        588,
+        1096,
+        288,
+        269
+      ],
+      "role": "end",
+      "size_m": [
+        3.0,
+        2.8
+      ],
+      "tags": [
+        "panel"
+      ],
+      "weight": 0.3333333333333333
+    },
+    {
+      "id": "end_02",
+      "lit": false,
+      "px": [
+        588,
+        1369,
+        288,
+        269
+      ],
+      "role": "end",
+      "size_m": [
+        3.0,
+        2.8
+      ],
+      "tags": [
+        "panel"
+      ],
+      "weight": 0.3333333333333333
+    },
+    {
+      "id": "end_03",
+      "lit": false,
+      "px": [
+        588,
+        1642,
+        288,
+        269
+      ],
+      "role": "end",
+      "size_m": [
+        3.0,
+        2.8
+      ],
+      "tags": [
+        "panel"
+      ],
+      "weight": 0.3333333333333333
+    }
+  ],
+  "kit": "panel16",
+  "px_per_m": 96,
+  "storey_m": 2.8,
+  "version": 1
+}

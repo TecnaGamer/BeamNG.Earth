@@ -1,0 +1,1544 @@
+{
+  "modules": [
+    {
+      "bounds_max": [
+        1.3,
+        0.0,
+        1.05
+      ],
+      "bounds_min": [
+        -1.3,
+        -0.9,
+        -0.12
+      ],
+      "budget": 220,
+      "dae": "bne_cis_balc_kh_open_1.dae",
+      "depth_m": 0.9,
+      "fits": [
+        "khrush_panel"
+      ],
+      "height_m": 1.17,
+      "id": "balc_kh_open_1",
+      "kind": "balcony",
+      "mount": "wall",
+      "needs_role": "bay_balcony",
+      "origin": [
+        0,
+        0,
+        0
+      ],
+      "stack": "storey",
+      "task": "M1",
+      "top_only": false,
+      "tris": 132,
+      "weight": 0.18,
+      "width_m": 2.6
+    },
+    {
+      "bounds_max": [
+        1.3,
+        0.0,
+        1.07
+      ],
+      "bounds_min": [
+        -1.3,
+        -0.9,
+        -0.12
+      ],
+      "budget": 220,
+      "dae": "bne_cis_balc_kh_open_2.dae",
+      "depth_m": 0.9,
+      "fits": [
+        "khrush_panel"
+      ],
+      "height_m": 1.19,
+      "id": "balc_kh_open_2",
+      "kind": "balcony",
+      "mount": "wall",
+      "needs_role": "bay_balcony",
+      "origin": [
+        0,
+        0,
+        0
+      ],
+      "stack": "storey",
+      "task": "M1",
+      "top_only": false,
+      "tris": 60,
+      "weight": 0.17,
+      "width_m": 2.6
+    },
+    {
+      "bounds_max": [
+        1.3,
+        0.0,
+        2.47
+      ],
+      "bounds_min": [
+        -1.3,
+        -0.9005,
+        -0.12
+      ],
+      "budget": 220,
+      "dae": "bne_cis_balc_kh_glazed_wood.dae",
+      "depth_m": 0.9005,
+      "fits": [
+        "khrush_panel"
+      ],
+      "height_m": 2.59,
+      "id": "balc_kh_glazed_wood",
+      "kind": "balcony",
+      "mount": "wall",
+      "needs_role": "bay_balcony",
+      "origin": [
+        0,
+        0,
+        0
+      ],
+      "stack": "storey",
+      "task": "M1",
+      "top_only": false,
+      "tris": 114,
+      "weight": 0.15,
+      "width_m": 2.6
+    },
+    {
+      "bounds_max": [
+        1.3,
+        0.0,
+        2.47
+      ],
+      "bounds_min": [
+        -1.3,
+        -0.9005,
+        -0.12
+      ],
+      "budget": 220,
+      "dae": "bne_cis_balc_kh_glazed_pvc.dae",
+      "depth_m": 0.9005,
+      "fits": [
+        "khrush_panel"
+      ],
+      "height_m": 2.59,
+      "id": "balc_kh_glazed_pvc",
+      "kind": "balcony",
+      "mount": "wall",
+      "needs_role": "bay_balcony",
+      "origin": [
+        0,
+        0,
+        0
+      ],
+      "stack": "storey",
+      "task": "M1",
+      "top_only": false,
+      "tris": 114,
+      "weight": 0.3,
+      "width_m": 2.6
+    },
+    {
+      "bounds_max": [
+        1.35,
+        0.0,
+        2.52
+      ],
+      "bounds_min": [
+        -1.35,
+        -0.9005,
+        -0.12
+      ],
+      "budget": 260,
+      "dae": "bne_cis_balc_kh_glazed_pvc_top.dae",
+      "depth_m": 0.9005,
+      "fits": [
+        "khrush_panel"
+      ],
+      "height_m": 2.64,
+      "id": "balc_kh_glazed_pvc_top",
+      "kind": "balcony",
+      "mount": "wall",
+      "needs_role": "bay_balcony",
+      "origin": [
+        0,
+        0,
+        0
+      ],
+      "stack": "storey",
+      "task": "M1",
+      "top_only": true,
+      "tris": 126,
+      "weight": 0,
+      "width_m": 2.7
+    },
+    {
+      "bounds_max": [
+        1.3,
+        0.0,
+        2.47
+      ],
+      "bounds_min": [
+        -1.3,
+        -0.9005,
+        -0.12
+      ],
+      "budget": 220,
+      "dae": "bne_cis_balc_kh_glazed_mix.dae",
+      "depth_m": 0.9005,
+      "fits": [
+        "khrush_panel"
+      ],
+      "height_m": 2.59,
+      "id": "balc_kh_glazed_mix",
+      "kind": "balcony",
+      "mount": "wall",
+      "needs_role": "bay_balcony",
+      "origin": [
+        0,
+        0,
+        0
+      ],
+      "stack": "storey",
+      "task": "M1",
+      "top_only": false,
+      "tris": 114,
+      "weight": 0.12,
+      "width_m": 2.6
+    },
+    {
+      "bounds_max": [
+        1.5,
+        0.0,
+        2.52
+      ],
+      "bounds_min": [
+        -1.5,
+        -1.0505,
+        -0.12
+      ],
+      "budget": 220,
+      "dae": "bne_cis_balc_kh_box.dae",
+      "depth_m": 1.0505,
+      "fits": [
+        "khrush_panel"
+      ],
+      "height_m": 2.64,
+      "id": "balc_kh_box",
+      "kind": "balcony",
+      "mount": "wall",
+      "needs_role": "bay_balcony",
+      "origin": [
+        0,
+        0,
+        0
+      ],
+      "stack": "storey",
+      "task": "M1",
+      "top_only": false,
+      "tris": 138,
+      "weight": 0.08,
+      "width_m": 3.0
+    },
+    {
+      "bounds_max": [
+        1.2,
+        0.0,
+        1.05
+      ],
+      "bounds_min": [
+        -1.2,
+        -0.8,
+        -0.12
+      ],
+      "budget": 220,
+      "dae": "bne_cis_balc_kh_open_1_brick.dae",
+      "depth_m": 0.8,
+      "fits": [
+        "khrush_brick"
+      ],
+      "height_m": 1.17,
+      "id": "balc_kh_open_1_brick",
+      "kind": "balcony",
+      "mount": "wall",
+      "needs_role": "bay_balcony",
+      "origin": [
+        0,
+        0,
+        0
+      ],
+      "stack": "storey",
+      "task": "M1",
+      "top_only": false,
+      "tris": 132,
+      "weight": 0.18,
+      "width_m": 2.4
+    },
+    {
+      "bounds_max": [
+        1.2,
+        0.0,
+        1.07
+      ],
+      "bounds_min": [
+        -1.2,
+        -0.8,
+        -0.12
+      ],
+      "budget": 220,
+      "dae": "bne_cis_balc_kh_open_2_brick.dae",
+      "depth_m": 0.8,
+      "fits": [
+        "khrush_brick"
+      ],
+      "height_m": 1.19,
+      "id": "balc_kh_open_2_brick",
+      "kind": "balcony",
+      "mount": "wall",
+      "needs_role": "bay_balcony",
+      "origin": [
+        0,
+        0,
+        0
+      ],
+      "stack": "storey",
+      "task": "M1",
+      "top_only": false,
+      "tris": 60,
+      "weight": 0.17,
+      "width_m": 2.4
+    },
+    {
+      "bounds_max": [
+        1.2,
+        0.0,
+        2.47
+      ],
+      "bounds_min": [
+        -1.2,
+        -0.8005,
+        -0.12
+      ],
+      "budget": 220,
+      "dae": "bne_cis_balc_kh_glazed_wood_brick.dae",
+      "depth_m": 0.8005,
+      "fits": [
+        "khrush_brick"
+      ],
+      "height_m": 2.59,
+      "id": "balc_kh_glazed_wood_brick",
+      "kind": "balcony",
+      "mount": "wall",
+      "needs_role": "bay_balcony",
+      "origin": [
+        0,
+        0,
+        0
+      ],
+      "stack": "storey",
+      "task": "M1",
+      "top_only": false,
+      "tris": 114,
+      "weight": 0.15,
+      "width_m": 2.4
+    },
+    {
+      "bounds_max": [
+        1.2,
+        0.0,
+        2.47
+      ],
+      "bounds_min": [
+        -1.2,
+        -0.8005,
+        -0.12
+      ],
+      "budget": 220,
+      "dae": "bne_cis_balc_kh_glazed_pvc_brick.dae",
+      "depth_m": 0.8005,
+      "fits": [
+        "khrush_brick"
+      ],
+      "height_m": 2.59,
+      "id": "balc_kh_glazed_pvc_brick",
+      "kind": "balcony",
+      "mount": "wall",
+      "needs_role": "bay_balcony",
+      "origin": [
+        0,
+        0,
+        0
+      ],
+      "stack": "storey",
+      "task": "M1",
+      "top_only": false,
+      "tris": 114,
+      "weight": 0.3,
+      "width_m": 2.4
+    },
+    {
+      "bounds_max": [
+        1.25,
+        0.0,
+        2.52
+      ],
+      "bounds_min": [
+        -1.25,
+        -0.8005,
+        -0.12
+      ],
+      "budget": 260,
+      "dae": "bne_cis_balc_kh_glazed_pvc_top_brick.dae",
+      "depth_m": 0.8005,
+      "fits": [
+        "khrush_brick"
+      ],
+      "height_m": 2.64,
+      "id": "balc_kh_glazed_pvc_top_brick",
+      "kind": "balcony",
+      "mount": "wall",
+      "needs_role": "bay_balcony",
+      "origin": [
+        0,
+        0,
+        0
+      ],
+      "stack": "storey",
+      "task": "M1",
+      "top_only": true,
+      "tris": 126,
+      "weight": 0,
+      "width_m": 2.5
+    },
+    {
+      "bounds_max": [
+        1.2,
+        0.0,
+        2.47
+      ],
+      "bounds_min": [
+        -1.2,
+        -0.8005,
+        -0.12
+      ],
+      "budget": 220,
+      "dae": "bne_cis_balc_kh_glazed_mix_brick.dae",
+      "depth_m": 0.8005,
+      "fits": [
+        "khrush_brick"
+      ],
+      "height_m": 2.59,
+      "id": "balc_kh_glazed_mix_brick",
+      "kind": "balcony",
+      "mount": "wall",
+      "needs_role": "bay_balcony",
+      "origin": [
+        0,
+        0,
+        0
+      ],
+      "stack": "storey",
+      "task": "M1",
+      "top_only": false,
+      "tris": 114,
+      "weight": 0.12,
+      "width_m": 2.4
+    },
+    {
+      "bounds_max": [
+        1.4,
+        0.0,
+        2.52
+      ],
+      "bounds_min": [
+        -1.4,
+        -0.9505,
+        -0.12
+      ],
+      "budget": 220,
+      "dae": "bne_cis_balc_kh_box_brick.dae",
+      "depth_m": 0.9505,
+      "fits": [
+        "khrush_brick"
+      ],
+      "height_m": 2.64,
+      "id": "balc_kh_box_brick",
+      "kind": "balcony",
+      "mount": "wall",
+      "needs_role": "bay_balcony",
+      "origin": [
+        0,
+        0,
+        0
+      ],
+      "stack": "storey",
+      "task": "M1",
+      "top_only": false,
+      "tris": 138,
+      "weight": 0.08,
+      "width_m": 2.8
+    },
+    {
+      "bounds_max": [
+        1.7,
+        0.0,
+        1.05
+      ],
+      "bounds_min": [
+        -1.7,
+        -0.166,
+        0.0
+      ],
+      "budget": 160,
+      "dae": "bne_cis_lg_open_screen.dae",
+      "depth_m": 0.166,
+      "fits": [
+        "panel9"
+      ],
+      "height_m": 1.05,
+      "id": "lg_open_screen",
+      "kind": "loggia",
+      "mount": "wall",
+      "needs_role": "bay_balcony",
+      "origin": [
+        0,
+        0,
+        0
+      ],
+      "stack": "storey",
+      "task": "M2",
+      "tris": 96,
+      "weight": 0.2,
+      "width_m": 3.4
+    },
+    {
+      "bounds_max": [
+        1.7,
+        0.0,
+        1.05
+      ],
+      "bounds_min": [
+        -1.7,
+        -0.15,
+        0.02
+      ],
+      "budget": 160,
+      "dae": "bne_cis_lg_open_metal.dae",
+      "depth_m": 0.15,
+      "fits": [
+        "panel9"
+      ],
+      "height_m": 1.03,
+      "id": "lg_open_metal",
+      "kind": "loggia",
+      "mount": "wall",
+      "needs_role": "bay_balcony",
+      "origin": [
+        0,
+        0,
+        0
+      ],
+      "stack": "storey",
+      "task": "M2",
+      "tris": 120,
+      "weight": 0.1,
+      "width_m": 3.4
+    },
+    {
+      "bounds_max": [
+        1.7,
+        0.0,
+        2.62
+      ],
+      "bounds_min": [
+        -1.7,
+        -0.1505,
+        0.0
+      ],
+      "budget": 160,
+      "dae": "bne_cis_lg_glazed_alu.dae",
+      "depth_m": 0.1505,
+      "fits": [
+        "panel9"
+      ],
+      "height_m": 2.62,
+      "id": "lg_glazed_alu",
+      "kind": "loggia",
+      "mount": "wall",
+      "needs_role": "bay_balcony",
+      "origin": [
+        0,
+        0,
+        0
+      ],
+      "stack": "storey",
+      "task": "M2",
+      "tris": 102,
+      "weight": 0.25,
+      "width_m": 3.4
+    },
+    {
+      "bounds_max": [
+        1.7,
+        0.0,
+        2.62
+      ],
+      "bounds_min": [
+        -1.7,
+        -0.1505,
+        0.0
+      ],
+      "budget": 160,
+      "dae": "bne_cis_lg_glazed_pvc.dae",
+      "depth_m": 0.1505,
+      "fits": [
+        "panel9"
+      ],
+      "height_m": 2.62,
+      "id": "lg_glazed_pvc",
+      "kind": "loggia",
+      "mount": "wall",
+      "needs_role": "bay_balcony",
+      "origin": [
+        0,
+        0,
+        0
+      ],
+      "stack": "storey",
+      "task": "M2",
+      "tris": 102,
+      "weight": 0.3,
+      "width_m": 3.4
+    },
+    {
+      "bounds_max": [
+        1.7,
+        0.0,
+        2.62
+      ],
+      "bounds_min": [
+        -1.7,
+        -0.1505,
+        0.0
+      ],
+      "budget": 160,
+      "dae": "bne_cis_lg_glazed_wood.dae",
+      "depth_m": 0.1505,
+      "fits": [
+        "panel9"
+      ],
+      "height_m": 2.62,
+      "id": "lg_glazed_wood",
+      "kind": "loggia",
+      "mount": "wall",
+      "needs_role": "bay_balcony",
+      "origin": [
+        0,
+        0,
+        0
+      ],
+      "stack": "storey",
+      "task": "M2",
+      "tris": 102,
+      "weight": 0.1,
+      "width_m": 3.4
+    },
+    {
+      "bounds_max": [
+        1.7,
+        0.0,
+        2.62
+      ],
+      "bounds_min": [
+        -1.7,
+        -0.1505,
+        0.0
+      ],
+      "budget": 160,
+      "dae": "bne_cis_lg_glazed_mix.dae",
+      "depth_m": 0.1505,
+      "fits": [
+        "panel9"
+      ],
+      "height_m": 2.62,
+      "id": "lg_glazed_mix",
+      "kind": "loggia",
+      "mount": "wall",
+      "needs_role": "bay_balcony",
+      "origin": [
+        0,
+        0,
+        0
+      ],
+      "stack": "storey",
+      "task": "M2",
+      "tris": 102,
+      "weight": 0.05,
+      "width_m": 3.4
+    },
+    {
+      "bounds_max": [
+        1.4,
+        0.0,
+        1.05
+      ],
+      "bounds_min": [
+        -1.4,
+        -0.166,
+        0.0
+      ],
+      "budget": 160,
+      "dae": "bne_cis_lg_open_screen_p16.dae",
+      "depth_m": 0.166,
+      "fits": [
+        "panel16"
+      ],
+      "height_m": 1.05,
+      "id": "lg_open_screen_p16",
+      "kind": "loggia",
+      "mount": "wall",
+      "needs_role": "bay_balcony",
+      "origin": [
+        0,
+        0,
+        0
+      ],
+      "stack": "storey",
+      "task": "M2",
+      "tris": 96,
+      "weight": 0.2,
+      "width_m": 2.8
+    },
+    {
+      "bounds_max": [
+        1.4,
+        0.0,
+        1.05
+      ],
+      "bounds_min": [
+        -1.4,
+        -0.15,
+        0.02
+      ],
+      "budget": 160,
+      "dae": "bne_cis_lg_open_metal_p16.dae",
+      "depth_m": 0.15,
+      "fits": [
+        "panel16"
+      ],
+      "height_m": 1.03,
+      "id": "lg_open_metal_p16",
+      "kind": "loggia",
+      "mount": "wall",
+      "needs_role": "bay_balcony",
+      "origin": [
+        0,
+        0,
+        0
+      ],
+      "stack": "storey",
+      "task": "M2",
+      "tris": 120,
+      "weight": 0.1,
+      "width_m": 2.8
+    },
+    {
+      "bounds_max": [
+        1.4,
+        0.0,
+        2.62
+      ],
+      "bounds_min": [
+        -1.4,
+        -0.1505,
+        0.0
+      ],
+      "budget": 160,
+      "dae": "bne_cis_lg_glazed_alu_p16.dae",
+      "depth_m": 0.1505,
+      "fits": [
+        "panel16"
+      ],
+      "height_m": 2.62,
+      "id": "lg_glazed_alu_p16",
+      "kind": "loggia",
+      "mount": "wall",
+      "needs_role": "bay_balcony",
+      "origin": [
+        0,
+        0,
+        0
+      ],
+      "stack": "storey",
+      "task": "M2",
+      "tris": 102,
+      "weight": 0.25,
+      "width_m": 2.8
+    },
+    {
+      "bounds_max": [
+        1.4,
+        0.0,
+        2.62
+      ],
+      "bounds_min": [
+        -1.4,
+        -0.1505,
+        0.0
+      ],
+      "budget": 160,
+      "dae": "bne_cis_lg_glazed_pvc_p16.dae",
+      "depth_m": 0.1505,
+      "fits": [
+        "panel16"
+      ],
+      "height_m": 2.62,
+      "id": "lg_glazed_pvc_p16",
+      "kind": "loggia",
+      "mount": "wall",
+      "needs_role": "bay_balcony",
+      "origin": [
+        0,
+        0,
+        0
+      ],
+      "stack": "storey",
+      "task": "M2",
+      "tris": 102,
+      "weight": 0.3,
+      "width_m": 2.8
+    },
+    {
+      "bounds_max": [
+        1.4,
+        0.0,
+        2.62
+      ],
+      "bounds_min": [
+        -1.4,
+        -0.1505,
+        0.0
+      ],
+      "budget": 160,
+      "dae": "bne_cis_lg_glazed_wood_p16.dae",
+      "depth_m": 0.1505,
+      "fits": [
+        "panel16"
+      ],
+      "height_m": 2.62,
+      "id": "lg_glazed_wood_p16",
+      "kind": "loggia",
+      "mount": "wall",
+      "needs_role": "bay_balcony",
+      "origin": [
+        0,
+        0,
+        0
+      ],
+      "stack": "storey",
+      "task": "M2",
+      "tris": 102,
+      "weight": 0.1,
+      "width_m": 2.8
+    },
+    {
+      "bounds_max": [
+        1.4,
+        0.0,
+        2.62
+      ],
+      "bounds_min": [
+        -1.4,
+        -0.1505,
+        0.0
+      ],
+      "budget": 160,
+      "dae": "bne_cis_lg_glazed_mix_p16.dae",
+      "depth_m": 0.1505,
+      "fits": [
+        "panel16"
+      ],
+      "height_m": 2.62,
+      "id": "lg_glazed_mix_p16",
+      "kind": "loggia",
+      "mount": "wall",
+      "needs_role": "bay_balcony",
+      "origin": [
+        0,
+        0,
+        0
+      ],
+      "stack": "storey",
+      "task": "M2",
+      "tris": 102,
+      "weight": 0.05,
+      "width_m": 2.8
+    },
+    {
+      "bounds_max": [
+        1.2,
+        0.0,
+        2.55
+      ],
+      "bounds_min": [
+        -1.2,
+        -2.1,
+        -0.6
+      ],
+      "budget": 400,
+      "dae": "bne_cis_entr_bracket.dae",
+      "depth_m": 2.1,
+      "fits": [
+        "khrush_panel",
+        "khrush_brick",
+        "panel9",
+        "panel16"
+      ],
+      "height_m": 3.15,
+      "id": "entr_bracket",
+      "kind": "entrance",
+      "mount": "wall",
+      "needs_role": "entrance",
+      "origin": [
+        0,
+        0,
+        0
+      ],
+      "stack": "once",
+      "task": "M3",
+      "tris": 100,
+      "weight": 0.3333333333333333,
+      "width_m": 2.4
+    },
+    {
+      "bounds_max": [
+        1.2,
+        0.0,
+        2.55
+      ],
+      "bounds_min": [
+        -1.2,
+        -2.1,
+        -0.6
+      ],
+      "budget": 400,
+      "dae": "bne_cis_entr_columns.dae",
+      "depth_m": 2.1,
+      "fits": [
+        "khrush_panel",
+        "khrush_brick",
+        "panel9",
+        "panel16"
+      ],
+      "height_m": 3.15,
+      "id": "entr_columns",
+      "kind": "entrance",
+      "mount": "wall",
+      "needs_role": "entrance",
+      "origin": [
+        0,
+        0,
+        0
+      ],
+      "stack": "once",
+      "task": "M3",
+      "tris": 120,
+      "weight": 0.3333333333333333,
+      "width_m": 2.4
+    },
+    {
+      "bounds_max": [
+        1.2,
+        0.0,
+        2.55
+      ],
+      "bounds_min": [
+        -1.2,
+        -2.1,
+        -0.6
+      ],
+      "budget": 400,
+      "dae": "bne_cis_entr_vestibule.dae",
+      "depth_m": 2.1,
+      "fits": [
+        "khrush_panel",
+        "khrush_brick",
+        "panel9",
+        "panel16"
+      ],
+      "height_m": 3.15,
+      "id": "entr_vestibule",
+      "kind": "entrance",
+      "mount": "wall",
+      "needs_role": "entrance",
+      "origin": [
+        0,
+        0,
+        0
+      ],
+      "stack": "once",
+      "task": "M3",
+      "tris": 134,
+      "weight": 0.3333333333333333,
+      "width_m": 2.4
+    },
+    {
+      "bounds_max": [
+        2.0,
+        1.5,
+        2.6
+      ],
+      "bounds_min": [
+        -2.0,
+        -1.5285,
+        0.0
+      ],
+      "budget": 150,
+      "dae": "bne_cis_mr_concrete.dae",
+      "depth_m": 3.0285,
+      "fits": [
+        "panel9",
+        "brick_mid"
+      ],
+      "height_m": 2.6,
+      "id": "mr_concrete",
+      "kind": "machine_room",
+      "mount": "roof",
+      "origin": [
+        0,
+        0,
+        0
+      ],
+      "stack": "once",
+      "task": "M4",
+      "tris": 126,
+      "weight": 0.3333333333333333,
+      "width_m": 4.0
+    },
+    {
+      "bounds_max": [
+        2.0,
+        1.5,
+        2.6
+      ],
+      "bounds_min": [
+        -2.0,
+        -1.5285,
+        0.0
+      ],
+      "budget": 150,
+      "dae": "bne_cis_mr_brick_silicate.dae",
+      "depth_m": 3.0285,
+      "fits": [
+        "panel9",
+        "brick_mid"
+      ],
+      "height_m": 2.6,
+      "id": "mr_brick_silicate",
+      "kind": "machine_room",
+      "mount": "roof",
+      "origin": [
+        0,
+        0,
+        0
+      ],
+      "stack": "once",
+      "task": "M4",
+      "tris": 126,
+      "weight": 0.3333333333333333,
+      "width_m": 4.0
+    },
+    {
+      "bounds_max": [
+        2.0,
+        1.5,
+        2.6
+      ],
+      "bounds_min": [
+        -2.0,
+        -1.5285,
+        0.0
+      ],
+      "budget": 150,
+      "dae": "bne_cis_mr_brick_red.dae",
+      "depth_m": 3.0285,
+      "fits": [
+        "panel9",
+        "brick_mid"
+      ],
+      "height_m": 2.6,
+      "id": "mr_brick_red",
+      "kind": "machine_room",
+      "mount": "roof",
+      "origin": [
+        0,
+        0,
+        0
+      ],
+      "stack": "once",
+      "task": "M4",
+      "tris": 126,
+      "weight": 0.3333333333333333,
+      "width_m": 4.0
+    },
+    {
+      "bounds_max": [
+        2.5,
+        2.0,
+        3.2
+      ],
+      "bounds_min": [
+        -2.5,
+        -2.0285,
+        0.0
+      ],
+      "budget": 150,
+      "dae": "bne_cis_mr_concrete_large.dae",
+      "depth_m": 4.0285,
+      "fits": [
+        "panel16",
+        "tower"
+      ],
+      "height_m": 3.2,
+      "id": "mr_concrete_large",
+      "kind": "machine_room",
+      "mount": "roof",
+      "origin": [
+        0,
+        0,
+        0
+      ],
+      "stack": "once",
+      "task": "M4",
+      "tris": 126,
+      "weight": 0.3333333333333333,
+      "width_m": 5.0
+    },
+    {
+      "bounds_max": [
+        2.5,
+        2.0,
+        3.2
+      ],
+      "bounds_min": [
+        -2.5,
+        -2.0285,
+        0.0
+      ],
+      "budget": 150,
+      "dae": "bne_cis_mr_brick_silicate_large.dae",
+      "depth_m": 4.0285,
+      "fits": [
+        "panel16",
+        "tower"
+      ],
+      "height_m": 3.2,
+      "id": "mr_brick_silicate_large",
+      "kind": "machine_room",
+      "mount": "roof",
+      "origin": [
+        0,
+        0,
+        0
+      ],
+      "stack": "once",
+      "task": "M4",
+      "tris": 126,
+      "weight": 0.3333333333333333,
+      "width_m": 5.0
+    },
+    {
+      "bounds_max": [
+        2.5,
+        2.0,
+        3.2
+      ],
+      "bounds_min": [
+        -2.5,
+        -2.0285,
+        0.0
+      ],
+      "budget": 150,
+      "dae": "bne_cis_mr_brick_red_large.dae",
+      "depth_m": 4.0285,
+      "fits": [
+        "panel16",
+        "tower"
+      ],
+      "height_m": 3.2,
+      "id": "mr_brick_red_large",
+      "kind": "machine_room",
+      "mount": "roof",
+      "origin": [
+        0,
+        0,
+        0
+      ],
+      "stack": "once",
+      "task": "M4",
+      "tris": 126,
+      "weight": 0.3333333333333333,
+      "width_m": 5.0
+    },
+    {
+      "bounds_max": [
+        1.0,
+        1.25,
+        2.2
+      ],
+      "bounds_min": [
+        -1.1,
+        -1.2785,
+        0.0
+      ],
+      "budget": 100,
+      "dae": "bne_cis_roof_exit.dae",
+      "depth_m": 2.5285,
+      "fits": [
+        "panel9",
+        "panel16",
+        "brick_mid",
+        "tower"
+      ],
+      "height_m": 2.2,
+      "id": "roof_exit",
+      "kind": "roof_exit",
+      "mount": "roof",
+      "origin": [
+        0,
+        0,
+        0
+      ],
+      "stack": "once",
+      "task": "M4",
+      "tris": 78,
+      "weight": 1.0,
+      "width_m": 2.1
+    },
+    {
+      "bounds_max": [
+        0.3,
+        0.3,
+        1.2
+      ],
+      "bounds_min": [
+        -0.3,
+        -0.3,
+        0.0
+      ],
+      "budget": 40,
+      "dae": "bne_cis_roof_vent.dae",
+      "depth_m": 0.6,
+      "fits": [
+        "khrush_panel",
+        "khrush_brick",
+        "panel9",
+        "panel16",
+        "new_mono"
+      ],
+      "height_m": 1.2,
+      "id": "roof_vent",
+      "kind": "roof_vent",
+      "mount": "roof",
+      "origin": [
+        0,
+        0,
+        0
+      ],
+      "stack": "once",
+      "task": "M5",
+      "tris": 36,
+      "weight": 1.0,
+      "width_m": 0.6
+    },
+    {
+      "bounds_max": [
+        0.65,
+        0.2,
+        3.0
+      ],
+      "bounds_min": [
+        -0.65,
+        -0.2,
+        0.0
+      ],
+      "budget": 120,
+      "dae": "bne_cis_roof_antenna_old.dae",
+      "depth_m": 0.4,
+      "fits": [
+        "khrush_panel",
+        "khrush_brick",
+        "panel9",
+        "panel16",
+        "new_mono"
+      ],
+      "height_m": 3.0,
+      "id": "roof_antenna_old",
+      "kind": "roof_antenna_old",
+      "mount": "roof",
+      "origin": [
+        0,
+        0,
+        0
+      ],
+      "stack": "once",
+      "task": "M5",
+      "tris": 84,
+      "weight": 1.0,
+      "width_m": 1.3
+    },
+    {
+      "bounds_max": [
+        0.3,
+        0.02,
+        1.1
+      ],
+      "bounds_min": [
+        -0.3,
+        -0.2925,
+        0.0
+      ],
+      "budget": 90,
+      "dae": "bne_cis_roof_dish.dae",
+      "depth_m": 0.3125,
+      "fits": [
+        "khrush_panel",
+        "khrush_brick",
+        "panel9",
+        "panel16",
+        "new_mono"
+      ],
+      "height_m": 1.1,
+      "id": "roof_dish",
+      "kind": "roof_dish",
+      "mount": "roof",
+      "origin": [
+        0,
+        0,
+        0
+      ],
+      "stack": "once",
+      "task": "M5",
+      "tris": 60,
+      "weight": 1.0,
+      "width_m": 0.6
+    },
+    {
+      "bounds_max": [
+        0.4,
+        0.0,
+        0.275
+      ],
+      "bounds_min": [
+        -0.4,
+        -0.3,
+        -0.275
+      ],
+      "budget": 60,
+      "dae": "bne_cis_wall_ac.dae",
+      "depth_m": 0.3,
+      "fits": [
+        "khrush_panel",
+        "khrush_brick",
+        "panel9",
+        "panel16",
+        "new_mono"
+      ],
+      "height_m": 0.55,
+      "id": "wall_ac",
+      "kind": "wall_ac",
+      "mount": "wall",
+      "origin": [
+        0,
+        0,
+        0
+      ],
+      "origin_convention": "wall-plane centre, as explicitly required by M5",
+      "stack": "once",
+      "task": "M5",
+      "tris": 48,
+      "weight": 1.0,
+      "width_m": 0.8
+    },
+    {
+      "bounds_max": [
+        0.3,
+        0.0,
+        0.3
+      ],
+      "bounds_min": [
+        -0.3,
+        -0.4425,
+        -0.3
+      ],
+      "budget": 90,
+      "dae": "bne_cis_wall_dish.dae",
+      "depth_m": 0.4425,
+      "fits": [
+        "khrush_panel",
+        "khrush_brick",
+        "panel9",
+        "panel16",
+        "new_mono"
+      ],
+      "height_m": 0.6,
+      "id": "wall_dish",
+      "kind": "wall_dish",
+      "mount": "wall",
+      "origin": [
+        0,
+        0,
+        0
+      ],
+      "stack": "once",
+      "task": "M5",
+      "tris": 60,
+      "weight": 1.0,
+      "width_m": 0.6
+    },
+    {
+      "bounds_max": [
+        0.07,
+        -0.0166987,
+        2.8
+      ],
+      "bounds_min": [
+        -0.07,
+        -0.112,
+        0.0
+      ],
+      "budget": 30,
+      "dae": "bne_cis_wall_drain.dae",
+      "depth_m": 0.0953013,
+      "fits": [
+        "khrush_panel",
+        "khrush_brick",
+        "panel9",
+        "panel16",
+        "new_mono"
+      ],
+      "height_m": 2.8,
+      "id": "wall_drain",
+      "kind": "wall_drain",
+      "mount": "wall",
+      "origin": [
+        0,
+        0,
+        0
+      ],
+      "stack": "once",
+      "task": "M5",
+      "tris": 24,
+      "weight": 1.0,
+      "width_m": 0.14
+    },
+    {
+      "bounds_max": [
+        1.65,
+        0.0,
+        2.97
+      ],
+      "bounds_min": [
+        -1.65,
+        -0.1505,
+        0.0
+      ],
+      "budget": 140,
+      "dae": "bne_cis_lg_new_vent.dae",
+      "depth_m": 0.1505,
+      "fits": [
+        "new_mono"
+      ],
+      "height_m": 2.97,
+      "id": "lg_new_vent",
+      "kind": "loggia",
+      "mount": "wall",
+      "needs_role": "bay_balcony",
+      "origin": [
+        0,
+        0,
+        0
+      ],
+      "sets": [
+        "vent"
+      ],
+      "stack": "storey",
+      "task": "M6",
+      "tris": 102,
+      "weight": 1.0,
+      "width_m": 3.3
+    },
+    {
+      "bounds_max": [
+        1.65,
+        0.0,
+        2.97
+      ],
+      "bounds_min": [
+        -1.65,
+        -0.1505,
+        0.0
+      ],
+      "budget": 140,
+      "dae": "bne_cis_lg_new_plaster.dae",
+      "depth_m": 0.1505,
+      "fits": [
+        "new_mono"
+      ],
+      "height_m": 2.97,
+      "id": "lg_new_plaster",
+      "kind": "loggia",
+      "mount": "wall",
+      "needs_role": "bay_balcony",
+      "origin": [
+        0,
+        0,
+        0
+      ],
+      "sets": [
+        "plaster"
+      ],
+      "stack": "storey",
+      "task": "M6",
+      "tris": 102,
+      "weight": 1.0,
+      "width_m": 3.3
+    },
+    {
+      "bounds_max": [
+        1.65,
+        0.0,
+        1.0625
+      ],
+      "bounds_min": [
+        -1.65,
+        -1.2,
+        -0.12
+      ],
+      "budget": 140,
+      "dae": "bne_cis_balc_new_glass.dae",
+      "depth_m": 1.2,
+      "fits": [
+        "new_mono"
+      ],
+      "height_m": 1.1825,
+      "id": "balc_new_glass",
+      "kind": "balcony",
+      "mount": "wall",
+      "needs_role": "bay_balcony",
+      "origin": [
+        0,
+        0,
+        0
+      ],
+      "sets": [
+        "vent",
+        "plaster"
+      ],
+      "stack": "storey",
+      "task": "M6",
+      "tris": 30,
+      "weight": 1.0,
+      "width_m": 3.3
+    }
+  ],
+  "version": 1
+}

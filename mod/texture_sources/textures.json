@@ -284,6 +284,111 @@
    "format": "BC7",
    "role": "color"
   },
+  "levels/beamng_earth/art/shapes/beamngEarth/cis/bne_cis_common.color.dds": {
+   "source": "levels/beamng_earth/art/shapes/beamngEarth/cis/bne_cis_common.color.webp",
+   "format": "BC7_SRGB",
+   "role": "color"
+  },
+  "levels/beamng_earth/art/shapes/beamngEarth/cis/bne_cis_common.data.dds": {
+   "source": "levels/beamng_earth/art/shapes/beamngEarth/cis/bne_cis_common.data.webp",
+   "format": "BC4",
+   "role": "data"
+  },
+  "levels/beamng_earth/art/shapes/beamngEarth/cis/bne_cis_common.normal.dds": {
+   "source": "levels/beamng_earth/art/shapes/beamngEarth/cis/bne_cis_common.normal.webp",
+   "format": "BC5",
+   "role": "normal"
+  },
+  "levels/beamng_earth/art/shapes/beamngEarth/cis/bne_cis_khrush_brick.color.dds": {
+   "source": "levels/beamng_earth/art/shapes/beamngEarth/cis/bne_cis_khrush_brick.color.webp",
+   "format": "BC7_SRGB",
+   "role": "color"
+  },
+  "levels/beamng_earth/art/shapes/beamngEarth/cis/bne_cis_khrush_brick.data.dds": {
+   "source": "levels/beamng_earth/art/shapes/beamngEarth/cis/bne_cis_khrush_brick.data.webp",
+   "format": "BC4",
+   "role": "data"
+  },
+  "levels/beamng_earth/art/shapes/beamngEarth/cis/bne_cis_khrush_brick.normal.dds": {
+   "source": "levels/beamng_earth/art/shapes/beamngEarth/cis/bne_cis_khrush_brick.normal.webp",
+   "format": "BC5",
+   "role": "normal"
+  },
+  "levels/beamng_earth/art/shapes/beamngEarth/cis/bne_cis_khrush_panel.color.dds": {
+   "source": "levels/beamng_earth/art/shapes/beamngEarth/cis/bne_cis_khrush_panel.color.webp",
+   "format": "BC7_SRGB",
+   "role": "color"
+  },
+  "levels/beamng_earth/art/shapes/beamngEarth/cis/bne_cis_khrush_panel.data.dds": {
+   "source": "levels/beamng_earth/art/shapes/beamngEarth/cis/bne_cis_khrush_panel.data.webp",
+   "format": "BC4",
+   "role": "data"
+  },
+  "levels/beamng_earth/art/shapes/beamngEarth/cis/bne_cis_khrush_panel.normal.dds": {
+   "source": "levels/beamng_earth/art/shapes/beamngEarth/cis/bne_cis_khrush_panel.normal.webp",
+   "format": "BC5",
+   "role": "normal"
+  },
+  "levels/beamng_earth/art/shapes/beamngEarth/cis/bne_cis_new_mono.color.dds": {
+   "source": "levels/beamng_earth/art/shapes/beamngEarth/cis/bne_cis_new_mono.color.webp",
+   "format": "BC7_SRGB",
+   "role": "color"
+  },
+  "levels/beamng_earth/art/shapes/beamngEarth/cis/bne_cis_new_mono.data.dds": {
+   "source": "levels/beamng_earth/art/shapes/beamngEarth/cis/bne_cis_new_mono.data.webp",
+   "format": "BC4",
+   "role": "data"
+  },
+  "levels/beamng_earth/art/shapes/beamngEarth/cis/bne_cis_new_mono.normal.dds": {
+   "source": "levels/beamng_earth/art/shapes/beamngEarth/cis/bne_cis_new_mono.normal.webp",
+   "format": "BC5",
+   "role": "normal"
+  },
+  "levels/beamng_earth/art/shapes/beamngEarth/cis/bne_cis_panel16.color.dds": {
+   "source": "levels/beamng_earth/art/shapes/beamngEarth/cis/bne_cis_panel16.color.webp",
+   "format": "BC7_SRGB",
+   "role": "color"
+  },
+  "levels/beamng_earth/art/shapes/beamngEarth/cis/bne_cis_panel16.data.dds": {
+   "source": "levels/beamng_earth/art/shapes/beamngEarth/cis/bne_cis_panel16.data.webp",
+   "format": "BC4",
+   "role": "data"
+  },
+  "levels/beamng_earth/art/shapes/beamngEarth/cis/bne_cis_panel16.normal.dds": {
+   "source": "levels/beamng_earth/art/shapes/beamngEarth/cis/bne_cis_panel16.normal.webp",
+   "format": "BC5",
+   "role": "normal"
+  },
+  "levels/beamng_earth/art/shapes/beamngEarth/cis/bne_cis_panel9.color.dds": {
+   "source": "levels/beamng_earth/art/shapes/beamngEarth/cis/bne_cis_panel9.color.webp",
+   "format": "BC7_SRGB",
+   "role": "color"
+  },
+  "levels/beamng_earth/art/shapes/beamngEarth/cis/bne_cis_panel9.data.dds": {
+   "source": "levels/beamng_earth/art/shapes/beamngEarth/cis/bne_cis_panel9.data.webp",
+   "format": "BC4",
+   "role": "data"
+  },
+  "levels/beamng_earth/art/shapes/beamngEarth/cis/bne_cis_panel9.normal.dds": {
+   "source": "levels/beamng_earth/art/shapes/beamngEarth/cis/bne_cis_panel9.normal.webp",
+   "format": "BC5",
+   "role": "normal"
+  },
+  "levels/beamng_earth/art/shapes/beamngEarth/cis/bne_cis_roof.color.dds": {
+   "source": "levels/beamng_earth/art/shapes/beamngEarth/cis/bne_cis_roof.color.webp",
+   "format": "BC7_SRGB",
+   "role": "color"
+  },
+  "levels/beamng_earth/art/shapes/beamngEarth/cis/bne_cis_roof.data.dds": {
+   "source": "levels/beamng_earth/art/shapes/beamngEarth/cis/bne_cis_roof.data.webp",
+   "format": "BC4",
+   "role": "data"
+  },
+  "levels/beamng_earth/art/shapes/beamngEarth/cis/bne_cis_roof.normal.dds": {
+   "source": "levels/beamng_earth/art/shapes/beamngEarth/cis/bne_cis_roof.normal.webp",
+   "format": "BC5",
+   "role": "normal"
+  },
   "levels/beamng_earth/art/shapes/beamngEarth/de_autobahn/de_letters_o.data.dds": {
    "source": "levels/beamng_earth/art/shapes/beamngEarth/de_autobahn/de_letters_o.data.webp",
    "format": "BC4",

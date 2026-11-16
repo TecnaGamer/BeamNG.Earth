@@ -1,0 +1,609 @@
+{
+  "atlas": [
+    2048,
+    2048
+  ],
+  "bay_m": 3.2,
+  "cells": [
+    {
+      "id": "bay_01",
+      "lit": true,
+      "px": [
+        4,
+        4,
+        307,
+        259
+      ],
+      "role": "bay",
+      "size_m": [
+        3.2,
+        2.7
+      ],
+      "tags": [
+        "tile_beige",
+        "old"
+      ],
+      "weight": 0.1
+    },
+    {
+      "id": "bay_02",
+      "lit": true,
+      "px": [
+        315,
+        4,
+        307,
+        259
+      ],
+      "role": "bay",
+      "size_m": [
+        3.2,
+        2.7
+      ],
+      "tags": [
+        "tile_blue",
+        "old"
+      ],
+      "weight": 0.1
+    },
+    {
+      "id": "bay_03",
+      "lit": true,
+      "px": [
+        626,
+        4,
+        307,
+        259
+      ],
+      "role": "bay",
+      "size_m": [
+        3.2,
+        2.7
+      ],
+      "tags": [
+        "tile_beige",
+        "old"
+      ],
+      "weight": 0.1
+    },
+    {
+      "id": "bay_04",
+      "lit": true,
+      "px": [
+        937,
+        4,
+        307,
+        259
+      ],
+      "role": "bay",
+      "size_m": [
+        3.2,
+        2.7
+      ],
+      "tags": [
+        "tile_blue",
+        "old",
+        "bare"
+      ],
+      "weight": 0.1
+    },
+    {
+      "id": "bay_05",
+      "lit": true,
+      "px": [
+        1248,
+        4,
+        307,
+        259
+      ],
+      "role": "bay",
+      "size_m": [
+        3.2,
+        2.7
+      ],
+      "tags": [
+        "tile_beige",
+        "pvc"
+      ],
+      "weight": 0.1
+    },
+    {
+      "id": "bay_06",
+      "lit": true,
+      "px": [
+        1559,
+        4,
+        307,
+        259
+      ],
+      "role": "bay",
+      "size_m": [
+        3.2,
+        2.7
+      ],
+      "tags": [
+        "tile_blue",
+        "pvc"
+      ],
+      "weight": 0.1
+    },
+    {
+      "id": "bay_07",
+      "lit": true,
+      "px": [
+        4,
+        267,
+        307,
+        259
+      ],
+      "role": "bay",
+      "size_m": [
+        3.2,
+        2.7
+      ],
+      "tags": [
+        "tile_beige",
+        "pvc"
+      ],
+      "weight": 0.1
+    },
+    {
+      "id": "bay_08",
+      "lit": true,
+      "px": [
+        4,
+        530,
+        307,
+        259
+      ],
+      "role": "bay",
+      "size_m": [
+        3.2,
+        2.7
+      ],
+      "tags": [
+        "tile_blue",
+        "pvc",
+        "bare"
+      ],
+      "weight": 0.1
+    },
+    {
+      "id": "bay_09",
+      "lit": true,
+      "px": [
+        4,
+        793,
+        307,
+        259
+      ],
+      "role": "bay",
+      "size_m": [
+        3.2,
+        2.7
+      ],
+      "tags": [
+        "tile_beige",
+        "old",
+        "insulated"
+      ],
+      "weight": 0.1
+    },
+    {
+      "id": "bay_10",
+      "lit": true,
+      "px": [
+        4,
+        1056,
+        307,
+        259
+      ],
+      "role": "bay",
+      "size_m": [
+        3.2,
+        2.7
+      ],
+      "tags": [
+        "tile_blue",
+        "old",
+        "insulated"
+      ],
+      "weight": 0.1
+    },
+    {
+      "id": "bay_balcony_01",
+      "lit": true,
+      "px": [
+        4,
+        1319,
+        307,
+        259
+      ],
+      "role": "bay_balcony",
+      "size_m": [
+        3.2,
+        2.7
+      ],
+      "tags": [
+        "tile_beige"
+      ],
+      "weight": 0.3333333333333333
+    },
+    {
+      "id": "bay_balcony_02",
+      "lit": true,
+      "px": [
+        4,
+        1582,
+        307,
+        259
+      ],
+      "role": "bay_balcony",
+      "size_m": [
+        3.2,
+        2.7
+      ],
+      "tags": [
+        "tile_blue"
+      ],
+      "weight": 0.3333333333333333
+    },
+    {
+      "id": "bay_balcony_03",
+      "lit": true,
+      "px": [
+        315,
+        267,
+        307,
+        259
+      ],
+      "role": "bay_balcony",
+      "size_m": [
+        3.2,
+        2.7
+      ],
+      "tags": [
+        "tile_beige"
+      ],
+      "weight": 0.3333333333333333
+    },
+    {
+      "id": "bay_balcony_far_01",
+      "lit": true,
+      "px": [
+        626,
+        267,
+        307,
+        259
+      ],
+      "role": "bay_balcony_far",
+      "size_m": [
+        3.2,
+        2.7
+      ],
+      "tags": [
+        "tile_beige",
+        "far"
+      ],
+      "weight": 0.2
+    },
+    {
+      "id": "bay_balcony_far_02",
+      "lit": true,
+      "px": [
+        937,
+        267,
+        307,
+        259
+      ],
+      "role": "bay_balcony_far",
+      "size_m": [
+        3.2,
+        2.7
+      ],
+      "tags": [
+        "tile_blue",
+        "far"
+      ],
+      "weight": 0.2
+    },
+    {
+      "id": "bay_balcony_far_03",
+      "lit": true,
+      "px": [
+        1248,
+        267,
+        307,
+        259
+      ],
+      "role": "bay_balcony_far",
+      "size_m": [
+        3.2,
+        2.7
+      ],
+      "tags": [
+        "tile_beige",
+        "far"
+      ],
+      "weight": 0.2
+    },
+    {
+      "id": "bay_balcony_far_04",
+      "lit": true,
+      "px": [
+        1559,
+        267,
+        307,
+        259
+      ],
+      "role": "bay_balcony_far",
+      "size_m": [
+        3.2,
+        2.7
+      ],
+      "tags": [
+        "tile_blue",
+        "far"
+      ],
+      "weight": 0.2
+    },
+    {
+      "id": "bay_balcony_far_05",
+      "lit": true,
+      "px": [
+        315,
+        530,
+        307,
+        259
+      ],
+      "role": "bay_balcony_far",
+      "size_m": [
+        3.2,
+        2.7
+      ],
+      "tags": [
+        "tile_beige",
+        "far"
+      ],
+      "weight": 0.2
+    },
+    {
+      "id": "stair_01",
+      "lit": true,
+      "px": [
+        315,
+        793,
+        307,
+        259
+      ],
+      "role": "stair",
+      "size_m": [
+        3.2,
+        2.7
+      ],
+      "tags": [
+        "tile_beige"
+      ],
+      "weight": 0.5
+    },
+    {
+      "id": "stair_02",
+      "lit": true,
+      "px": [
+        315,
+        1056,
+        307,
+        259
+      ],
+      "role": "stair",
+      "size_m": [
+        3.2,
+        2.7
+      ],
+      "tags": [
+        "tile_blue"
+      ],
+      "weight": 0.5
+    },
+    {
+      "id": "entrance_01",
+      "lit": true,
+      "px": [
+        315,
+        1319,
+        307,
+        259
+      ],
+      "role": "entrance",
+      "size_m": [
+        3.2,
+        2.7
+      ],
+      "tags": [
+        "tile_beige"
+      ],
+      "weight": 0.5
+    },
+    {
+      "id": "entrance_02",
+      "lit": true,
+      "px": [
+        315,
+        1582,
+        307,
+        259
+      ],
+      "role": "entrance",
+      "size_m": [
+        3.2,
+        2.7
+      ],
+      "tags": [
+        "tile_blue"
+      ],
+      "weight": 0.5
+    },
+    {
+      "id": "ground_01",
+      "lit": true,
+      "px": [
+        626,
+        530,
+        307,
+        259
+      ],
+      "role": "ground",
+      "size_m": [
+        3.2,
+        2.7
+      ],
+      "tags": [
+        "tile_beige",
+        "old",
+        "bars"
+      ],
+      "weight": 0.25
+    },
+    {
+      "id": "ground_02",
+      "lit": true,
+      "px": [
+        937,
+        530,
+        307,
+        259
+      ],
+      "role": "ground",
+      "size_m": [
+        3.2,
+        2.7
+      ],
+      "tags": [
+        "tile_blue",
+        "old",
+        "bars"
+      ],
+      "weight": 0.25
+    },
+    {
+      "id": "ground_03",
+      "lit": true,
+      "px": [
+        1248,
+        530,
+        307,
+        259
+      ],
+      "role": "ground",
+      "size_m": [
+        3.2,
+        2.7
+      ],
+      "tags": [
+        "tile_beige",
+        "old"
+      ],
+      "weight": 0.25
+    },
+    {
+      "id": "ground_04",
+      "lit": true,
+      "px": [
+        1559,
+        530,
+        307,
+        259
+      ],
+      "role": "ground",
+      "size_m": [
+        3.2,
+        2.7
+      ],
+      "tags": [
+        "tile_blue",
+        "old"
+      ],
+      "weight": 0.25
+    },
+    {
+      "id": "end_01",
+      "lit": false,
+      "px": [
+        626,
+        793,
+        307,
+        259
+      ],
+      "role": "end",
+      "size_m": [
+        3.2,
+        2.7
+      ],
+      "tags": [
+        "tile_beige"
+      ],
+      "weight": 0.25
+    },
+    {
+      "id": "end_02",
+      "lit": false,
+      "px": [
+        626,
+        1056,
+        307,
+        259
+      ],
+      "role": "end",
+      "size_m": [
+        3.2,
+        2.7
+      ],
+      "tags": [
+        "tile_blue"
+      ],
+      "weight": 0.25
+    },
+    {
+      "id": "end_03",
+      "lit": false,
+      "px": [
+        626,
+        1319,
+        307,
+        259
+      ],
+      "role": "end",
+      "size_m": [
+        3.2,
+        2.7
+      ],
+      "tags": [
+        "tile_beige"
+      ],
+      "weight": 0.25
+    },
+    {
+      "id": "end_04",
+      "lit": false,
+      "px": [
+        626,
+        1582,
+        307,
+        259
+      ],
+      "role": "end",
+      "size_m": [
+        3.2,
+        2.7
+      ],
+      "tags": [
+        "tile_blue",
+        "bare"
+      ],
+      "weight": 0.25
+    }
+  ],
+  "kit": "khrush_panel",
+  "px_per_m": 96,
+  "storey_m": 2.7,
+  "version": 1
+}

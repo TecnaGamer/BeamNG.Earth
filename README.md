@@ -196,6 +196,16 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   joined to the map's outlines, where the map itself does not say (Aix-en-Provence's old town: 4 000 of 4 800
   buildings measured, tiled pitched roofs instead of predicted flat blocks). Downloaded per map cell in the background
   beside the map data, about 0.1-0.6 MB once; `BNE_BDTOPO=off` turns it off.
+- Post-Soviet housing, only in the former Soviet Union (Ukraine, Belarus, Russia, Moldova, Kazakhstan, Central Asia, the
+  Caucasus, the Baltic states; nowhere else): the map's buildings are sorted into the kinds the region is built of
+  (five-storey panel and brick Khrushchyovkas, nine- and sixteen-storey panel slabs, brick towers, new monolithic blocks,
+  private houses) from their storeys, the width of their body, how plain their outline is, whether the same block stands
+  repeated beside them, how they lie to the street, and a mapped construction year, material or class where there is
+  one. Blocks are cut into bays and storeys from original facade atlases (a patchwork of old wooden and white PVC
+  windows, individually glazed balconies, panel joints, foam-insulation patches), stair columns with entrances stand on
+  the street side, the ends of a slab are blind walls, and lift machine rooms and aerials stand on the roofs. Private
+  houses get hipped roofs of grey asbestos-cement sheet or metal tile instead of the clay tiles of Western Europe.
+  Everywhere else nothing changes (the meshes are identical); `BNE_CIS_BUILDINGS=off` turns it off.
 - Measured massing in New York City: the setbacks, wedding-cake towers and crowns of the city's 3-D Building Model
   (NYC Open Data, 2014) as building parts on the map's outlines, downloaded per map cell from BeamNG.Earth's data site
   (`BNE_NYC_MASSING=off` turns it off). Rooftop water tanks on the city's mid-rise roofs use the stock water-tower model.
