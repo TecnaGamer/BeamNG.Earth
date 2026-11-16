@@ -852,7 +852,7 @@ class Vegetation:
         # (31) the trees in the open: by a road (OPEN_ROAD_M from its edge) or on built-up land
         open_ = lcls == WC["built"]
         if curb.any():
-            sec = 1.0 / max(0.05, math.cos(math.radians(clat)))
+            sec = 1.0 / max(0.05, dmath.cos(dmath.radians(clat)))
             near = _dilate(curb, max(1, int(round(OPEN_ROAD_M * sec / chm.dx))))
             open_ |= near[jj, ii]
         group = open_groups(group, open_)
@@ -953,7 +953,7 @@ class Vegetation:
         clat = (lat0 + lat1) / 2
         ex0, ey0 = _to3857(lon0, lat0)
         ex1, ey1 = _to3857(lon1, lat1)
-        sec = 1.0 / max(0.05, math.cos(math.radians(clat)))      # (Web Mercator m per ground m)
+        sec = 1.0 / max(0.05, dmath.cos(dmath.radians(clat)))      # (Web Mercator m per ground m)
         s = DEADWOOD_CELL_M * sec
         GI, GJ = np.meshgrid(np.arange(math.floor(ex0 / s), math.ceil(ex1 / s)),
                              np.arange(math.floor(ey0 / s), math.ceil(ey1 / s)))
@@ -978,7 +978,7 @@ class Vegetation:
             for a in range(0, 360, step):
                 if not keep.any():
                     return _empty()
-                lo2, la2 = _to4326(px + r * math.cos(math.radians(a)), py + r * math.sin(math.radians(a)))
+                lo2, la2 = _to4326(px + r * dmath.cos(dmath.radians(a)), py + r * dmath.sin(dmath.radians(a)))
                 keep &= lc.sample(lo2, la2) != WC["built"]
         import climate
         k = climate.koppen_many(lat, lon)
