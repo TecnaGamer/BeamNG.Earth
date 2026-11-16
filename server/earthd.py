@@ -520,6 +520,27 @@ ROAD_GEO_SLOW_S = 3.0           # a road geotile slower than this is logged (que
 VEG_GEO_BATCH = 32              # trees geotiles one road-process job builds at most (_veg_geo_job): its nearest wait
                                 # for the rest of it
 VEG_GEO_PER_POSE = 64           # trees geotiles asked for at once when the road processes build them: two jobs' worth
+# The trees geotiles in processes of their own ("trees"; Map-Ahead's 46cfe686 / 3a6381af ported): in the road
+# processes they waited behind the road tiles, a job's ~5 s of work after 7.3 s in their queue (p90 13.3 s; Felix at
+# 194 mph, 2026-11-16: only the bare ground in time, the trees popped in). Their own queue, still batched
+# (_veg_geo_job); the road processes keep the roads. BNGE_VEG_PROCESSES=<n> (0: in the road processes, as before);
+# 1 on a small machine (memory).
+VEG_PROCESSES_DEFAULT = 2
+
+
+def veg_processes(env=None, small=None):
+    """The trees processes on this machine (0: the trees geotiles in the road processes)."""
+    env = os.environ if env is None else env
+    v = (env.get("BNGE_VEG_PROCESSES", "") or "").strip()
+    if v:
+        try:
+            return max(0, min(4, int(v)))
+        except ValueError:
+            pass
+    if small is None:
+        import budget
+        small = budget.small()
+    return 1 if small else VEG_PROCESSES_DEFAULT
 SLOW_SELECT_S = 0.25            # a far-tile selection (update_far, on the event loop) slower than this is logged
 SELECT_SLACK_EPS = 1e-3          # m: a pose skips the far selection only when it moved less than its slack by this much
 WORLD_WARM_Z = 7                # the rough earth's tiles (Server.start_world_warm): 16,384, ~260 km at the equator
@@ -1437,6 +1458,7 @@ class Server:
         self.far_pool = far_pool
         self.road_pool = road_pool          # road tiles in processes (blockworker.roads_tile), else threads
         self._veg_jobs, self._veg_job_lock = {}, threading.Lock()      # (_veg_geo_job)
+        self.veg_pool = None            # trees geotiles' processes (main_async: veg_processes), None: road_pool
         # the highway signs (signstream.py) in the same processes: no process of their own, their map cells warm there
         # (at most signstream.WORKERS a connection, only for road tiles sent)
         self.sign_pool = road_pool
@@ -2236,11 +2258,12 @@ class Server:
         most): one at a time, after the road tiles (RespawningPool.submit_low), each waited out the whole queue of
         road tiles for its ~10 ms of work, and the trees fell behind the car (533 tree tiles pending, 22 s each,
         2026-11-08)."""
-        submit = getattr(self.road_pool, "submit_low_lazy", None)
+        pool = getattr(self, "veg_pool", None) or self.road_pool    # (their own processes, else the road ones)
+        submit = getattr(pool, "submit_low_lazy", None)
         st = Server.stale_of(self, anchor)      # (an older version's trees with its ground, where there are)
         vfn = revisitmod.StaleJob(blockworker.veg_geo_many, st) if st else blockworker.veg_geo_many
         if submit is None:                  # (a plain executor: one tile a job)
-            return self.road_pool.submit(vfn, anchor.id, anchor.lat, anchor.lon, zoom,
+            return pool.submit(vfn, anchor.id, anchor.lat, anchor.lon, zoom,
                                          [(gx, gy)], self.out_dir, self.vfs_dir, flat), 0
         key = (anchor.id, zoom, bool(flat), bool(st))
         with self._veg_job_lock:
@@ -3651,7 +3674,8 @@ class Server:
     def live_busy(self):
         """The live world has work in flight: a worker pool's jobs (blocks, far tiles, road tiles, far buildings), or
         a player's loading line not full. The saved areas' downloads (areas.py) wait meanwhile."""
-        pools = [self.road_pool, self.far_bld_pool, getattr(self.far_pool, "local", self.far_pool)]
+        pools = [self.road_pool, getattr(self, "veg_pool", None), self.far_bld_pool,
+                 getattr(self.far_pool, "local", self.far_pool)]
         pools += [bp for bp, _ in self.block_pools]
         if any(getattr(p, "inflight", 0) for p in pools if p is not None):
             return True
@@ -12723,8 +12747,18 @@ async def main_async(args, restart=None):
             initargs=(args.cache_dir, args.offline, args.roads == "on", args.grading == "on",
                       args.road_widths == "on", args.surface == "on", None, logging.getLogger().level,
                       args.airports == "on", args.sea == "on", NICE_ROADS + 1, roadsmod.ROADS_IN_GROUND))
+    veg_n = veg_processes() if road_pool is not None and server.mapdata is not None else 0
+    if veg_n and getattr(server, "veg", None) is not None:
+        # the trees geotiles (blockworker.veg_geo_many) beside the road processes, not behind their road tiles
+        server.veg_pool = poolsmod.RespawningPool(
+            "trees", veg_n, mp_context=ctx, initializer=blockworker.init,
+            initargs=(args.cache_dir, args.offline, True, args.grading == "on", args.road_widths == "on",
+                      args.surface == "on", None, logging.getLogger().level,
+                      args.airports == "on", args.sea == "on", NICE_ROADS, roadsmod.ROADS_IN_GROUND))
+        log.info("trees processes: %d (their own queue, beside the road tiles' %d)", veg_n, args.road_processes)
     # the whole server held to its RAM limit (memwatch.py: caches dropped, a pool's processes replaced)
-    memwatchmod.register(*[p for p, _q in block_pools], photo_pool, far_pool, road_pool, far_bld_pool)
+    memwatchmod.register(*[p for p, _q in block_pools], photo_pool, far_pool, road_pool, far_bld_pool,
+                         server.veg_pool)
     memwatchmod.start()
     server.boost_cpus = (cpupin.boosted(server.server_cpus, server.game_cpus)
                          if getattr(args, "load_boost", "on") == "on" else None)
