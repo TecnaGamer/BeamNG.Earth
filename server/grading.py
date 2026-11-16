@@ -6478,6 +6478,33 @@ class _Planner:
             out[keep] = base.ravel()[keep]
         return out.reshape(shape)
 
+    def road_band(self, lat, lon, reach):
+        """(n,) bool: the points within reach m of a built road's core (rank GRADE_RANK_BUILT or more: not the dirt
+        roads, tracks or railway beds) planned in the cells that grade them (_keys, planning those not yet planned)."""
+        lat = np.asarray(lat, np.float64).ravel()
+        lon = np.asarray(lon, np.float64).ravel()
+        out = np.zeros(lat.shape, bool)
+        if not len(lat):
+            return out
+        plans, pack = self._plan_set(self._keys(lat, lon), False)
+        if not plans:
+            return out
+        e, n, _ = self.frame.geodetic_to_enu(lat, lon, 0.0)
+        e, n = np.asarray(e, np.float64), np.asarray(n, np.float64)
+        pad = reach + float(np.max(pack.h, initial=0.0)) + 1.0
+        got = pack.near(e.min() - pad, n.min() - pad, e.max() + pad, n.max() + pad)
+        if got is None:
+            return out
+        a, b, h, rk = got[0], got[1], got[4], got[7]
+        keep = (np.asarray(rk) >= GRADE_RANK_BUILT) & (np.asarray(h) > 0.0)
+        if not keep.any():
+            return out
+        import fast
+        fast.require(0, "points_near_segments")
+        return np.asarray(fast._ef.points_near_segments(
+            np.ascontiguousarray(np.column_stack((e, n)), np.float64), np.ascontiguousarray(a[keep], np.float64),
+            np.ascontiguousarray(b[keep], np.float64), np.ascontiguousarray(h[keep] + reach, np.float64)), bool)
+
     def open_tunnels(self, lat, lon):
         """[(lat (k,), lon (k,), Spec)] of the tunnels' open sections planned near the points: roads on the ground
         that the map calls tunnels (surface.paint_roads paints them: grass grew over the open road of Central Park's
@@ -6821,6 +6848,17 @@ class Grader:
         for pl, idx in parts:
             out[idx] = pl.apply(la[idx], lo[idx], b[idx], lift, roads_only, planned_only)
         return out.reshape(base.shape)
+
+    def road_band(self, lat, lon, reach):
+        """_Planner.road_band by the points' regions (n,) bool (the anchor plays no part)."""
+        lat = np.asarray(lat, np.float64).ravel()
+        lon = np.asarray(lon, np.float64).ravel()
+        out = np.zeros(lat.shape, bool)
+        for pl, idx in self.store.planners_of(lat, lon):
+            if idx is None:
+                return pl.road_band(lat, lon, reach)
+            out[idx] = pl.road_band(lat[idx], lon[idx], reach)
+        return out
 
     def deck_ground(self, lat, lon, base):
         """base at the points with the bridges the elevation holds under mapped decks taken out (DECK_GROUND_*), from
@@ -8009,19 +8047,58 @@ def _hash01(i, j, salt=0):
 # on every ground path (provisional blocks and far tiles too) and kept off towns, water and building sites; on, it is
 # ~0.3-0.5 s of numpy per million samples on every block, road tile and far tile (2026-11-05 merge review).
 TERRAIN_BUMPS_ON = os.environ.get("BNE_TERRAIN_BUMPS", "off") == "on"
+# m past a built road's core (Plan.half) where the land stays smooth (terrain_bumps with a grader): a divided road's
+# median and its verges are graded land, and its barriers and rails stand on them. With the bumps there, a median's
+# concrete barrier stood module by module on them, jagged (I-40 near 36.029 N 87.175 W, the user's report 2026-11-16).
+# The lattice points within it hold no bump, so the bumps fade in over one lattice step past it (no ledge): smooth at
+# least BUMP_CLEAR_M - 9 m (the largest wave) past the core, full from BUMP_CLEAR_M + 9 m; a median up to ~2 x
+# BUMP_CLEAR_M wide (medians.MAX_GAP_M: 22 m) lies in both carriageways' bands, smooth across. T_MAX: the grading's
+# own reach. (Dirt roads and tracks keep the bumps beside them: PR #925's forest floor.)
+BUMP_CLEAR_M = T_MAX
+_CORNERS = ((0, 0), (1, 0), (0, 1), (1, 1))
 
 
-def terrain_bumps(lat, lon):
+def _bump_corner_values(i0, j0, size, grader):
+    """[4 x (n,)]: the wave's lattice values (_hash01 - 0.5) at the corners (i0 + di, j0 + dj) of _CORNERS (lattice step
+    size m), 0 at the lattice points within BUMP_CLEAR_M of a built road's core (grader.road_band). Each lattice point
+    is computed and asked once: on a grid over the points' corners when that is no larger than four per point (a
+    block's samples), else at the distinct corners."""
+    n = i0.size
+    imin, jmin = int(i0.min()), int(j0.min())
+    nx, ny = int(i0.max()) - imin + 2, int(j0.max()) - jmin + 2
+
+    def values(ii, jj):
+        la = jj * size / 110574.0
+        lo = ii * size / (111320.0 * dnp.cos(np.radians(la)))
+        v = _hash01(ii, jj, size) - 0.5
+        v[np.asarray(grader.road_band(la, lo, BUMP_CLEAR_M), bool).ravel()] = 0.0
+        return v
+    if nx * ny <= 4 * n:
+        gi, gj = np.meshgrid(np.arange(nx, dtype=np.int64) + imin, np.arange(ny, dtype=np.int64) + jmin)
+        grid = values(gi.ravel(), gj.ravel())
+        flat = (j0 - jmin) * nx + (i0 - imin)
+        return [grid[flat + dj * nx + di] for di, dj in _CORNERS]
+    key = np.concatenate([(i0 + di - imin) * ny + (j0 + dj - jmin) for di, dj in _CORNERS])
+    uniq, inv = np.unique(key, return_inverse=True)
+    v = values(uniq // ny + imin, uniq % ny + jmin)[inv.ravel()]
+    return [v[k * n:(k + 1) * n] for k in range(4)]
+
+
+def terrain_bumps(lat, lon, grader=None):
     """World-locked roughness of the land off the roads (m), the same value whatever process or tile asks: value noise
     at a few sizes, about TERRAIN_ROUGH_M (std). 0.0 (nothing added) unless TERRAIN_BUMPS_ON, or when BNE_TERRAIN_BUMP
-    is 0."""
+    is 0. grader (a Grader: the ground graded under the roads after this): none within BUMP_CLEAR_M of a built road's
+    core, fading in past it (its lattice points there hold no bump)."""
     if not TERRAIN_BUMPS_ON or TERRAIN_ROUGH_M <= 0.0:
         return 0.0
     la = np.asarray(lat, np.float64)
     lo = np.asarray(lon, np.float64)
-    y = la * 110574.0
-    x = lo * 111320.0 * dnp.cos(np.radians(la))
-    out = np.zeros(np.shape(la), np.float64)
+    shape = np.shape(la)
+    y = (la * 110574.0).ravel()
+    x = (lo * 111320.0 * dnp.cos(np.radians(la))).ravel()
+    ok = np.isfinite(x) & np.isfinite(y)
+    roads = grader is not None and getattr(grader, "road_band", None) is not None and ok.any()
+    out = np.zeros(x.shape, np.float64)
     norm = 0.0
     for size, share in TERRAIN_ROUGH_WAVES:
         fx = x / size
@@ -8032,16 +8109,21 @@ def terrain_bumps(lat, lon):
         ty = fy - j0
         sx = tx * tx * (3.0 - 2.0 * tx)
         sy = ty * ty * (3.0 - 2.0 * ty)
-        i0 = i0.astype(np.int64)
-        j0 = j0.astype(np.int64)
-        v00 = _hash01(i0, j0, size)
-        v10 = _hash01(i0 + 1, j0, size)
-        v01 = _hash01(i0, j0 + 1, size)
-        v11 = _hash01(i0 + 1, j0 + 1, size)
+        i0 = np.where(ok, i0, 0.0).astype(np.int64)
+        j0 = np.where(ok, j0, 0.0).astype(np.int64)
+        if not roads:
+            vs = [_hash01(i0 + di, j0 + dj, size) - 0.5 for di, dj in _CORNERS]
+        elif ok.all():
+            vs = _bump_corner_values(i0, j0, size, grader)
+        else:
+            vs = [np.zeros(x.shape, np.float64) for _ in _CORNERS]
+            for v, got in zip(vs, _bump_corner_values(i0[ok], j0[ok], size, grader)):
+                v[ok] = got
+        v00, v10, v01, v11 = vs
         v = (v00 * (1.0 - sx) + v10 * sx) * (1.0 - sy) + (v01 * (1.0 - sx) + v11 * sx) * sy
-        out += share * (v - 0.5)
+        out += share * v
         norm += share * share
-    return out * (TERRAIN_ROUGH_M / (0.1875 * math.sqrt(norm)))
+    return (out * (TERRAIN_ROUGH_M / (0.1875 * math.sqrt(norm)))).reshape(shape)
 
 
 class GradedDem:
@@ -8053,7 +8135,8 @@ class GradedDem:
     def sample(self, lat, lon, zoom, progress=None):
         base = self._dem.sample(lat, lon, zoom, progress) if progress is not None else self._dem.sample(lat, lon, zoom)
         # the land off the roads is rougher than the roads themselves (the grading flattens the road's own strip)
-        base = np.asarray(base, np.float64) + terrain_bumps(np.asarray(lat, np.float64), np.asarray(lon, np.float64))
+        base = np.asarray(base, np.float64) + terrain_bumps(np.asarray(lat, np.float64), np.asarray(lon, np.float64),
+                                                            self._grader)
         return self._grader.apply(lat, lon, base)
 
     def __getattr__(self, name):
