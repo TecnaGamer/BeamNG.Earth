@@ -5,6 +5,7 @@ the underpass dip, measured from the hump, lowered it and the streets joined to 
 import os
 import sys
 import unittest
+from unittest import mock
 
 import numpy as np
 
@@ -276,6 +277,73 @@ class UnderDeckTest(unittest.TestCase):
         under = z[np.abs(ys) <= 4.0]
         self.assertLess(under.max(), need + 0.2, "the road clears the deck")
         self.assertGreater(z.min(), need - 0.6, "dug only as deep as the clearance needs")
+
+    def test_the_opening_under_the_deck_is_clear(self):
+        """The ground beside the road under the deck (Assaku, the user's report 2026-11-16: "soil all over under
+        bridge"): inside the deck's footprint the road's flat (its core and the band behind its wall) is at the road's
+        level, the embankment held behind it; past the deck's ends and away from its sides it is as before.
+        BNE_UNDER_OPEN=off: the hump's soil in the opening, as before."""
+        f = features([[(-400, 0), (400, 0)], [(0, -400), (0, 400)]], ["trunk", "tertiary"],
+                      flags=[(0, "is_bridge", 390 / 800, 410 / 800)], ids=["tartu", "jarve"])
+
+        def ground(xs, ys):
+            g = grading.Grader(FRAME, FakeMD(f), hump)
+            la, lo, _ = FRAME.enu_to_geodetic(np.asarray(xs, np.float64), np.asarray(ys, np.float64), 0.0)
+            road = float(np.asarray(g.apply(*FRAME.enu_to_geodetic(np.zeros(1), np.zeros(1), 0.0)[:2],
+                                            hump(*FRAME.enu_to_geodetic(np.zeros(1), np.zeros(1), 0.0)[:2])))[0])
+            return np.asarray(g.apply(la, lo, hump(la, lo)), np.float64) - road
+        spec = roads.road_specs(f, None)[1]
+        flat = (roads.carriageway(spec.cls, spec.kind, True, None, spec.oneway) / 2 + grading.shoulder(spec)
+                + grading.WALL_FLAT_M)
+        side = np.arange(5.0, flat - 0.4, 1.0)              # (past the carriageway, to the flat's edge)
+        xs = np.r_[side, -side]
+        for y in (-6.0, 0.0, 6.0):                          # (across the deck: its sides at 6 m)
+            got = ground(xs, np.full(len(xs), y))
+            self.assertLess(float(np.abs(got).max()), 0.05, f"the opening at y={y}: {np.round(got, 2)}")
+        far = ground(np.r_[flat + 3.0, -flat - 3.0], np.zeros(2))
+        self.assertGreater(float(far.min()), BANK - 1.0, "the embankment behind the abutment kept")
+        out = ground(xs, np.full(len(xs), 6.0 + grading.UNDER_OPEN_SIDE_M + 3.0))
+        with mock.patch.object(grading, "UNDER_OPEN_ON", False):
+            before = ground(xs, np.zeros(len(xs)))
+            self.assertGreater(float(before.max()), 2.0, "off: the hump's soil in the opening, as before")
+            np.testing.assert_allclose(ground(xs, np.full(len(xs), 6.0 + grading.UNDER_OPEN_SIDE_M + 3.0)), out,
+                                       atol=1e-9, err_msg="away from the deck's sides: as before")
+
+
+class OpenUnderDecksTest(unittest.TestCase):
+    """open_under_decks alone: a road under a deck, a road leading onto it and a stub ending under it."""
+    deck = (np.array([[0.0, -12.0], [0.0, 12.0]]), 5.0)       # 24 m long, 10 m wide, over the road along y = 0
+
+    def plan(self, xy, z, half, rh, abut=(False, False)):
+        xy = np.asarray(xy, np.float64)
+        return grading.Plan(xy, np.full(len(xy), float(z)), half, abut=abut, road_half=rh)
+
+    def run_(self, pts, plans, base=17.0):
+        pts = np.asarray(pts, np.float64)
+        return grading.open_under_decks(pts[:, 0], pts[:, 1], np.full(len(pts), base), grading.PlanPack(plans),
+                                        [self.deck])
+
+    def test_the_flat_under_the_deck_at_the_road(self):
+        road = self.plan([[-50.0, 0.0], [50.0, 0.0]], 10.0, 8.0, 3.0)
+        flat = 8.0 + grading.WALL_FLAT_M
+        reach = 5.0 + grading.UNDER_OPEN_SIDE_M
+        pts = [[0.0, 4.0], [3.0, flat - 0.5], [-reach + 0.5, -flat + 0.5],     # in the opening
+               [0.0, flat + 1.0],                                            # behind the abutment's wall
+               [reach + 1.0, 4.0],                                           # away from the deck's side
+               [0.0, 13.0]]                                                  # past its end (its approach's fill)
+        got = self.run_(pts, [road])
+        np.testing.assert_allclose(got, [10.0, 10.0, 10.0, 17.0, 17.0, 17.0])
+
+    def test_an_approach_is_no_road_under(self):
+        onto = self.plan([[0.0, 12.0], [0.0, 60.0]], 17.0, 6.0, 5.0, abut=(True, False))
+        got = self.run_([[0.0, 4.0], [2.0, 9.0]], [onto], base=20.0)
+        np.testing.assert_allclose(got, [20.0, 20.0])
+
+    def test_a_carriageway_is_left_as_graded(self):
+        road = self.plan([[-50.0, 0.0], [50.0, 0.0]], 10.0, 8.0, 3.0)
+        stub = self.plan([[-40.0, 6.0], [-1.0, 6.0]], 12.0, 3.0, 2.0)          # (ends under the deck: not crossing)
+        got = self.run_([[-3.0, 6.0], [-3.0, -4.5], [0.0, 1.0]], [road, stub])
+        np.testing.assert_allclose(got, [17.0, 10.0, 17.0])
 
 
 if __name__ == "__main__":
