@@ -39,6 +39,12 @@ TEXTURES = {
                           flatten=True),
     "cat_foundation": dict(src="cat_concrete_raw.png", out="bne_cat_foundation_v3", normal=2.5, rough=(0.8, 0.95),
                            flatten=True),
+    # the tram poles (plan 046, stage E: docs/new/046_prompts_2026-11-13.md): black painted steel; the material
+    # (trampoles.materials.json) names v1, the procedural placeholder: point it at v2 after this
+    "tram_black": dict(src="tram_black_paint.png", out="bne_tram_black_v2", normal=1.2, rough=(0.4, 0.7), flatten=True),
+    # the other tram poles' materials (docs/new/046_prompts_poles_2026-11-13.md): bne_tram_galv, bne_tram_concrete
+    "tram_galv": dict(src="tram_galv_tube.png", out="bne_tram_galv_v1", normal=1.0, rough=(0.35, 0.6), flatten=True),
+    "tram_concrete": dict(src="tram_concrete_pole.png", out="bne_tram_concrete_v1", normal=2.5, rough=(0.8, 0.95), flatten=True),
     "cat_concrete": dict(src="cat_concrete.png", out="bne_cat_concrete_v3", normal=2.5, rough=(0.8, 0.95), flatten=True),
 }
 
@@ -113,7 +119,10 @@ LINKS = {"concrete": ("catenary.materials.json", "bne_cat_concrete"), "galv": ("
          "cat_paint": ("catenary.materials.json", "bne_cat_paint"),
          "cat_porcelain": [("catenary.materials.json", "bne_cat_insulator"), ("catenary.materials.json", "bne_cat_wire_ins")],
          "cat_foundation": ("catenary.materials.json", "bne_cat_foundation"),
-         "cat_concrete": ("catenary.materials.json", "bne_cat_concrete")}
+         "cat_concrete": ("catenary.materials.json", "bne_cat_concrete"),
+         "tram_black": ("trampoles.materials.json", "bne_tram_black"),
+         "tram_galv": ("trampoles.materials.json", "bne_tram_galv"),
+         "tram_concrete": ("trampoles.materials.json", "bne_tram_concrete")}
 
 
 def link_material(file, material, base, tint=(1.0, 1.0, 1.0)):

@@ -1,0 +1,76 @@
+{
+  "bne_tram_black": {
+    "name": "bne_tram_black",
+    "mapTo": "bne_tram_black",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "8f1c2d3e-4a5b-5c6d-9e7f-0a1b2c3d4e5f",
+    "Stages": [
+      {
+        "metallicFactor": 0.25,
+        "baseColorFactor": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_tram_black_v2_b.color.dds",
+        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_tram_black_v2_nm.normal.dds",
+        "roughnessMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_tram_black_v2_r.data.dds"
+      },
+      {},
+      {},
+      {}
+    ],
+    "translucent": false,
+    "castShadows": true
+  },
+  "bne_tram_galv": {
+    "name": "bne_tram_galv",
+    "mapTo": "bne_tram_galv",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "1a2b3c4d-5e6f-5a7b-8c9d-0e1f2a3b4c5d",
+    "Stages": [
+      {
+        "metallicFactor": 0.75,
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_tram_galv_v1_b.color.dds",
+        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_tram_galv_v1_nm.normal.dds",
+        "roughnessMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_tram_galv_v1_r.data.dds",
+        "baseColorFactor": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "bne_tram_concrete": {
+    "name": "bne_tram_concrete",
+    "mapTo": "bne_tram_concrete",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "2b3c4d5e-6f7a-5b8c-9d0e-1f2a3b4c5d6e",
+    "Stages": [
+      {
+        "metallicFactor": 0.0,
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_tram_concrete_v1_b.color.dds",
+        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_tram_concrete_v1_nm.normal.dds",
+        "roughnessMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_tram_concrete_v1_r.data.dds",
+        "baseColorFactor": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      {},
+      {},
+      {}
+    ]
+  }
+}

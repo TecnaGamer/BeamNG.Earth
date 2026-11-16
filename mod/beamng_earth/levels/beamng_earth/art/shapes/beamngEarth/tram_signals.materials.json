@@ -1,0 +1,128 @@
+{
+  "bne_ts_black": {
+    "name": "bne_ts_black",
+    "mapTo": "bne_ts_black",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "546c8bd9-9f03-5131-ad81-a5bbce99dd12",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "metallicFactor": 0.0,
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_ts_paint_v1_b.color.dds",
+        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_ts_paint_v1_nm.normal.dds",
+        "roughnessMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_ts_paint_v1_r.data.dds"
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "bne_ts_grey": {
+    "name": "bne_ts_grey",
+    "mapTo": "bne_ts_grey",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "0748d00d-1b03-5ff9-a2df-68f8ed67a1fc",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "metallicFactor": 0.75,
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_ts_galv_v1_b.color.dds",
+        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_ts_galv_v1_nm.normal.dds",
+        "roughnessMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_ts_galv_v1_r.data.dds"
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "bne_ts_dark": {
+    "name": "bne_ts_dark",
+    "mapTo": "bne_ts_dark",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "66e65d84-aaac-5fd5-a047-d5c76946fae9",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "metallicFactor": 0.0,
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_ts_paint_v1_b.color.dds",
+        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_ts_paint_v1_nm.normal.dds",
+        "roughnessMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_ts_paint_v1_r.data.dds"
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "bne_ts_concrete": {
+    "name": "bne_ts_concrete",
+    "mapTo": "bne_ts_concrete",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "9f18d449-ad82-5a74-a5bc-7c37d548f586",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.55,
+          0.54,
+          0.51,
+          1.0
+        ],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.85
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "bne_ts_lamps": {
+    "name": "bne_ts_lamps",
+    "mapTo": "bne_ts_lamps",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "869cfd4a-9634-5d02-9e2c-98d0e2a330ca",
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_ts_lamps.color.dds",
+        "colorPaletteMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_ts_palette.color.dds",
+        "emissive": true,
+        "emissiveFactor": [
+          1,
+          1,
+          1
+        ],
+        "emissiveIntensityNits": 3000,
+        "emissiveMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_ts_lamps.color.dds",
+        "instanceDiffuse": true,
+        "instanceEmissive": true,
+        "pixelSpecular": true,
+        "roughnessFactor": 0.6
+      },
+      {},
+      {},
+      {}
+    ],
+    "annotation": "TRAFFIC_SIGNALS",
+    "castShadows": false,
+    "translucent": true,
+    "translucentBlendOp": "Add"
+  }
+}
