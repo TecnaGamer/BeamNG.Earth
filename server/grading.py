@@ -2947,7 +2947,11 @@ class _Planner:
                         if dips[i] is not None and np.isfinite(dips[i][e]):
                             h = min(h, float(dips[i][e]))
                         pins.append((i, e, h))
-        caps = self._vsolve_caps(key, ground, rule_z)
+        # (under a deck, no higher than the rule left it over the whole solve, nor than the passes did where they went
+        # lower: a later pass lowered a road under Rio's 205 m deck by 0.66 m that the rule left, and capped at the
+        # rule's alone the solve stood it there again, 2.3 m under the deck where the passes left 2.8. The passes'
+        # heights: the shadow's; without them (the RFC's step 4) clearance rows on the decks' own heights)
+        caps = self._vsolve_caps(key, ground, [np.minimum(r, np.asarray(p.z, np.float64)) for r, p in zip(rule_z, ground)])
         zs, info = vsolvemod.solve(ground, pspecs, z_before[:n], ceilings, ranks, pins, dips, caps=caps)
         if zs is None:          # (no feasible solve: the passes' heights, as the RFC's fallback; counted in info)
             zs = [np.array(p.z, np.float64) for p in ground]
