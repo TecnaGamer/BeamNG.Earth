@@ -137,8 +137,6 @@ def player_settings(user_dir):
     env = os.environ.get("BNGE_TELEPORT_FULL")      # (tests: the setting either way for this run)
     if env in ("0", "1"):
         out["teleport_full"] = env == "1"
-    if d.get("standalonePaths") is True:
-        out["standalone_paths"] = True
     if d.get("models3dmr") is False:
         out["models3dmr"] = False
     ram = str(d.get("maxRamGb", "auto"))       # the settings page's Max RAM for BeamNG.Earth (budget.SETTING_ENV)
@@ -176,9 +174,6 @@ def apply_player_settings(user_dir, nice, default_nice, environ=None):
     if chosen.get("models3dmr") is False and not environ.get("BNE_3DMR"):
         environ["BNE_3DMR"] = "off"            # (threedmr.enabled; the worker processes inherit it)
         notes.append("no 3dmr.eu models")
-    if chosen.get("standalone_paths") and not environ.get("BNE_STANDALONE_PATHS"):
-        environ["BNE_STANDALONE_PATHS"] = "on"
-        notes.append("standalone paths and residential driveways")
     return nice, notes
 
 

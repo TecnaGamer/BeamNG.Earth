@@ -11,7 +11,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import buildings
-import cpupin
+import experimental
 import paintlist
 import roads
 import standalonepaths as paths
@@ -36,10 +36,10 @@ class StandalonePathsTest(unittest.TestCase):
             for value in (False, True):
                 settings.write_text(json.dumps({"standalonePaths": value}), encoding="utf-8")
                 env = {}
-                cpupin.apply_player_settings(directory, 0, 0, env)
+                experimental.apply(env, directory)
                 self.assertEqual(env.get("BNE_STANDALONE_PATHS"), "on" if value else None)
             env = {"BNE_STANDALONE_PATHS": "off"}
-            cpupin.apply_player_settings(directory, 0, 0, env)
+            experimental.apply(env, directory)
             self.assertEqual(env["BNE_STANDALONE_PATHS"], "off")
 
     def parts(self, *cells):
