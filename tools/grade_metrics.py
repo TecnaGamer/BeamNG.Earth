@@ -47,7 +47,11 @@ def main():
     ap.add_argument("--cache-dir", default=os.path.expanduser("~/.cache/beamng-earth"))
     ap.add_argument("--offline", action="store_true", help="the cache only")
     ap.add_argument("--out", default=None, help="write every place's numbers here (JSON)")
+    ap.add_argument("--vsolve", action="store_true", help="the one solve beside the passes too (BNE_VSOLVE=shadow, "
+                    "server/vsolve.py): both measured on the same cells, the solve's numbers under each place's vsolve")
     a = ap.parse_args()
+    if a.vsolve:
+        os.environ["BNE_VSOLVE"] = "shadow"         # (before the server's modules read it)
 
     import blockworker
     blockworker.init(a.cache_dir, a.offline, True, True, True, True, queue.Queue(), 30, True, True)
@@ -86,9 +90,9 @@ def main():
         if store is None:
             print(f"{name}: no plans (grading off?)", file=sys.stderr)
             continue
-        junctions, seams, profs, clear, cells_cpu = [], [], [], [], 0.0
-        deck_ground = []
-        n_cells = 0
+        variants = ("passes", "vsolve") if a.vsolve else ("passes",)
+        acc = {v: {"j": [], "s": [], "p": [], "c": []} for v in variants}
+        cells_cpu, deck_ground, n_cells, infos = 0.0, [], 0, []
         # (the cells this place's road tiles planned, taken now: a cell planned later is no part of this place; one
         # measured with the next place planned its own ring round it, and so on: Tokyo's spread for an hour, 2026-11-16)
         todo = []
@@ -105,37 +109,27 @@ def main():
             def ground(xy, frame=frame, planner=planner):
                 la, lo, _ = frame.enu_to_geodetic(xy[:, 0], xy[:, 1], 0.0)
                 return planner.elev(la, lo)
-            cells = {}
-            names = set()
-            feats_all = []
+            boxes, feats_all, spec_of = {}, [], {}
             for k in keys:
-                plans = planner.cells[k]
-                box = planner._clip_box(k, 0.0)
+                boxes[k] = planner._clip_box(k, 0.0)
                 feats = blockworker._s.md.cell(k, layers=("roads",), kind="demand").layers.get("roads")
                 feats_all.append(feats)
-                ceilings = {}
+                by_fid = {}
                 if feats is not None and len(feats):
                     specs = roadsmod.road_specs(feats, None, planner.widths)
                     by_fid = {str(feats.ids[i]): sp for i, sp in enumerate(specs) if sp is not None}
-                    for fid, p in plans:
-                        sp = by_fid.get(fid)
-                        if sp is not None:
-                            ceilings[fid] = grading.guard_limits(sp, p)[0]
-                road_plans = [(f, p) for f, p in plans if f in ceilings]
-                names |= set(ceilings)
-                cells[k] = (road_plans, box)
-                junctions += gm.junction_steps(road_plans, box)
-                profs += gm.profiles(road_plans, ceilings, ground)
+                spec_of[k] = by_fid
                 cells_cpu += cpu.get(str(k), 0.0)
-            seams += gm.seam_steps(cells)
+                got = getattr(planner, "_vsolve", {}).get(str(k))
+                if got is not None:
+                    infos.append(got[1])
             # (the decks as the road tiles solved them, in this planner's frame)
-            boxes = [b for _p, b in cells.values() if b is not None]
-            if boxes:
-                bb = (min(b[0] for b in boxes), min(b[1] for b in boxes), max(b[2] for b in boxes),
-                      max(b[3] for b in boxes))
+            decks = []
+            bl = [b for b in boxes.values() if b is not None]
+            if bl:
+                bb = (min(b[0] for b in bl), min(b[1] for b in bl), max(b[2] for b in bl), max(b[3] for b in bl))
                 try:
                     view = blockworker._bridges(n, frame, None)
-                    decks = []
                     # (only the decks the road tiles solved: solving the others plans the cells round them, the
                     # roads past the tiles' reach; Tokyo's measure took 29 min of its 60 that way, 2026-11-16)
                     for fid, sp, xy, z, _lon in view._parts(feats_all, bb, solved_only=True):
@@ -149,35 +143,60 @@ def main():
                 except Exception as e:
                     print(f"{name}: decks: {type(e).__name__}: {e}", file=sys.stderr)
                     decks = []
-                for _f, xy, z, _h in decks:     # (a check of the frames: a deck's ends stand on its abutments' ground)
-                    xy = np.asarray(xy, np.float64)
-                    g = ground(xy[[0, -1], :2])
-                    deck_ground.extend((np.asarray(z, np.float64)[[0, -1]] - g).tolist())
-                all_plans = [fp for plans, _b in cells.values() for fp in plans]
-                clear += gm.clearance(all_plans, decks, names)
+            for _f, xy, z, _h in decks:     # (a check of the frames: a deck's ends stand on its abutments' ground)
+                g = ground(np.asarray(xy, np.float64)[[0, -1], :2])
+                deck_ground.extend((np.asarray(z, np.float64)[[0, -1]] - g).tolist())
 
             def geo(rows, frame=frame):
                 for r in rows:
                     if "x" in r and "lat" not in r:
                         la, lo, _ = frame.enu_to_geodetic(r["x"], r["y"], 0.0)
                         r["lat"], r["lon"] = round(float(la), 6), round(float(lo), 6)
-            geo(junctions)
-            geo(seams)
-            geo(clear)
-            geo([p[k] for p in profs for k in ("bump_at", "dev_at") if k in p])
+            for v in variants:
+                cells, names = {}, set()
+                for k in keys:
+                    if v == "passes":
+                        plans = planner.cells[k]
+                    else:
+                        plans = getattr(planner, "_vsolve", {}).get(str(k), ([], None))[0]
+                    ceilings = {fid: grading.guard_limits(spec_of[k][fid], p)[0] for fid, p in plans
+                                if fid in spec_of[k]}
+                    road_plans = [(f, p) for f, p in plans if f in ceilings]
+                    names |= set(ceilings)
+                    cells[k] = (road_plans, boxes[k])
+                    acc[v]["j"] += gm.junction_steps(road_plans, boxes[k])
+                    acc[v]["p"] += gm.profiles(road_plans, ceilings, ground)
+                acc[v]["s"] += gm.seam_steps(cells)
+                acc[v]["c"] += gm.clearance([fp for plans, _b in cells.values() for fp in plans], decks, names)
+                geo(acc[v]["j"])
+                geo(acc[v]["s"])
+                geo(acc[v]["c"])
         for planner in list(store.planners.values()):     # (any cell planned while measuring: no place's)
             with planner.lock:
                 seen_cells.update(str(k) for k in planner.cells)
-        s = gm.summary(junctions, seams, profs, clear, round(cells_cpu, 2))
-        s["cells"] = n_cells
-        s["deck_end_over_ground_median"] = float(np.median(deck_ground)) if deck_ground else None
-        s["wall_s"] = round(time.perf_counter() - t0, 1)
-        results[name] = s
-        j, sm, g, c = s["junction"], s["seam"], s["grade"], s["clearance"]
-        print(f"{name:22s} roads {s['roads']:5d}  junction steps >=30cm {j['bad']:4d}/{j['n']:5d} max {j['max']:5.2f}  "
-              f"seams >=30cm {sm['bad']:3d}/{sm['n']:4d}  made steep {g['made_steep']:3d}  "
-              f"bump p99 {s['bump']['p99_median']:.3f} (ground {s['bump']['ground_p99_median']:.3f})  "
-              f"low decks {c['n']:3d} (through {c['through_deck']:2d}) worst {c['max']:4.1f}  cpu {cells_cpu:6.1f} s", flush=True)
+        for v in variants:
+            q = acc[v]
+            cpu_s = round(cells_cpu, 2) if v == "passes" else round(sum(i.get("elapsed_s", 0.0) for i in infos), 2)
+            s = gm.summary(q["j"], q["s"], q["p"], q["c"], cpu_s)
+            s["cells"] = n_cells
+            if v == "passes":
+                s["deck_end_over_ground_median"] = float(np.median(deck_ground)) if deck_ground else None
+                s["wall_s"] = round(time.perf_counter() - t0, 1)
+                results[name] = s
+            else:
+                bad = [i for i in infos if not (i.get("converged") and i.get("feasible"))]
+                s["solves"] = {"cells": len(infos), "unknowns": int(sum(i.get("n", 0) for i in infos)),
+                               "joins": int(sum(i.get("joins", 0) for i in infos)), "infeasible": len(bad),
+                               "loosened": int(sum(1 for i in infos if i.get("loosened"))),
+                               "statuses": sorted({str(i.get("status")) for i in infos}),
+                               "worst_s": round(max((i.get("elapsed_s", 0.0) for i in infos), default=0.0), 2)}
+                results[name]["vsolve"] = s
+            label = name if v == "passes" else "  (one solve)"
+            j, sm, g, c = s["junction"], s["seam"], s["grade"], s["clearance"]
+            print(f"{label:22s} roads {s['roads']:5d}  junction steps >=30cm {j['bad']:4d}/{j['n']:5d} max {j['max']:5.2f}"
+                  f"  seams >=30cm {sm['bad']:3d}/{sm['n']:4d}  made steep {g['made_steep']:3d}  bump p99 "
+                  f"{s['bump']['p99_median']:.3f} (ground {s['bump']['ground_p99_median']:.3f})  low decks {c['n']:3d} "
+                  f"(through {c['through_deck']:2d}) worst {c['max']:4.1f}  cpu {cpu_s:6.1f} s", flush=True)
         if a.out:               # (after every place: a long run stopped keeps the places it measured)
             os.makedirs(os.path.dirname(os.path.abspath(a.out)), exist_ok=True)
             with open(a.out + ".tmp", "w", encoding="utf-8") as f:

@@ -43,6 +43,7 @@ import mapcells
 import railways as railwaysmod
 import roads as roadsmod
 import seatiles
+import vsolve as vsolvemod
 
 log = logging.getLogger("earthd.grading")
 
@@ -2725,6 +2726,8 @@ class _Planner:
                     pclip.append(cl)
                     pparts.append((fid, part[1], part[0]))
             bases = [np.array(p.z, np.float64) for _f, p in plans] if GUARD_ON else None
+            # (the profiles before the passes: the shadow solve's targets, docs/VERTICAL_SOLVER_RFC.md step 2)
+            z_before = [np.array(p.z, np.float64) for _f, p in plans] if vsolvemod.SHADOW else None
             if NEIGHBOUR_ON and plans and self._coarse(key):
                 try:
                     r = 2.0 * NEIGHBOUR_TREND_SIGMA_M
@@ -2820,6 +2823,11 @@ class _Planner:
                 except Exception as e:      # the welded heights alone rather than no grading
                     _caught(e)
                     log.debug("grading: junctions after welding of %s: %s: %s", key, type(e).__name__, e)
+            if z_before is not None and plans:
+                try:            # the one solve beside the passes: measured only, their plans kept (vsolve)
+                    self._vsolve_shadow(key, plans, pspecs, z_before)
+                except Exception as e:
+                    log.warning("vsolve: shadow solve of %s: %s: %s", key, type(e).__name__, e)
             if plans:
                 try:            # a pass road's widened hairpins (roads.HAIRPIN_*): its core wider round each
                     hairpin_cores(plans, pspecs, self.frame)
@@ -2893,6 +2901,43 @@ class _Planner:
         else:
             keeps = []
         return feats, plans, keeps
+
+    def _vsolve_shadow(self, key, plans, pspecs, z_before):
+        """The cell's ground roads solved in one problem (vsolve.solve) from their profiles before the passes, with the
+        passes' discrete outputs as its inputs (the decks' heights at their abutments, the dips under decks); kept, trimmed
+        to the cell as its plans are, in self._vsolve[str(key)] = ([(fid, Plan)], info). The plans themselves untouched."""
+        import copy
+        n = len(pspecs)
+        ground = [p for _f, p in plans[:n]]
+        own = self._clip_box(key, 0.0)
+        pins = []
+        if own is not None:     # (a piece's end past the cell's box: cut there, held at its profile, as the next cell holds it)
+            x0, y0, x1, y1 = own
+            for i, p in enumerate(ground):
+                for e in (0, len(p.xy) - 1):
+                    x, y = float(p.xy[e, 0]), float(p.xy[e, 1])
+                    if x < x0 - 1.0 or x > x1 + 1.0 or y < y0 - 1.0 or y > y1 + 1.0:
+                        pins.append((i, e, float(z_before[i][e])))
+        ceilings = [guard_limits(sp, p)[0] for sp, p in zip(pspecs, ground)]
+        ranks = [road_rank(sp) for sp in pspecs]
+        dips = vsolvemod.dips_under(ground, z_before[:n], self._decks_near(key))
+        zs, info = vsolvemod.solve(ground, pspecs, z_before[:n], ceilings, ranks, pins, dips)
+        quad = self._clip_quad(key) if own is not None else None
+        kept = []
+        for (fid, p), z in zip(plans[:n], zs):
+            q = copy.copy(p)
+            q.z = z
+            if own is None:
+                kept.append((fid, q))
+            else:
+                kept.extend((fid, r) for r in trim_plan(q, own if quad is None else quad))
+        info["pins"] = len(pins)
+        info["dips"] = int(sum(int(np.isfinite(d).sum()) for d in dips if d is not None))
+        log.info("vsolve: %s: %d roads, %d unknowns, %d joins, %d pins, %d dip rows: %s%s in %.2f s", key, n, info["n"],
+                 info["joins"], info["pins"], info["dips"], info.get("status"), " (ceilings loosened)" if info["loosened"]
+                 else "", info["elapsed_s"])
+        with self.lock:
+            self.__dict__.setdefault("_vsolve", {})[str(key)] = (kept, info)
 
     @_marked("_chain_memo", lambda self, key, feats=None, specs=None: key)
     def _chain_cands(self, key, feats=None, specs=None):
