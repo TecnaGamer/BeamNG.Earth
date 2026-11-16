@@ -129,6 +129,231 @@ fn run(rs: &[Ring], views: &[[f64; 3]], azimuths: usize, gran: usize, d0: f64, r
     vis
 }
 
+// --- a set's texture sizes (farpvs.Set.tex_px / hidden) ---------------------------------------------------------------
+
+/// Python's max / min of two floats (the first wins a tie; NaN never replaces an earlier value).
+fn pmax(a: f64, b: f64) -> f64 {
+    if b > a { b } else { a }
+}
+
+fn pmin(a: f64, b: f64) -> f64 {
+    if b < a { b } else { a }
+}
+
+fn floor_i(v: f64) -> i64 {
+    v.floor() as i64
+}
+
+/// One ring's lowest ground and steepest slope rasters (farpvs.Rings: lo and slopes, n x n, row j north).
+struct GroundRing<'a> {
+    lo: numpy::ndarray::ArrayView2<'a, f32>,
+    sl: numpy::ndarray::ArrayView2<'a, f32>,
+    x0: f64,
+    y0: f64,
+    cell: f64,
+}
+
+/// The rules of farpvs.Set.tex_px (the module's constants).
+struct TexRules {
+    min_level: i64,
+    near_m: f64,
+    slope_min_level: i64,
+    slope_near_m: f64,
+    oversample: f64,
+    aniso: f64,
+    r_occ: f64,
+    slope_px_min: i64,
+    tex_px: i64,
+    slope_sizing: bool,
+    quantile: f64,
+}
+
+/// numpy's max of a float32 window (NaN spreads), or the linear quantile q of it (np.quantile's default method).
+fn window_stat(w: numpy::ndarray::ArrayView2<'_, f32>, q: f64, take_max: bool) -> f64 {
+    if take_max || q >= 1.0 {
+        let mut m = f32::NEG_INFINITY;
+        for &v in w.iter() {
+            if v.is_nan() {
+                return f64::NAN;
+            }
+            if v > m {
+                m = v;
+            }
+        }
+        return m as f64;
+    }
+    let mut v: Vec<f64> = w.iter().map(|&x| x as f64).collect();
+    if v.iter().any(|x| x.is_nan()) {
+        return f64::NAN;
+    }
+    v.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    let pos = q.max(0.0) * (v.len() - 1) as f64;
+    let (k, t) = (pos.floor() as usize, pos - pos.floor());
+    let (a, b) = (v[k], v[(k + 1).min(v.len() - 1)]);
+    if t >= 0.5 { b - (b - a) * (1.0 - t) } else { a + (b - a) * t }
+}
+
+fn window_min(w: numpy::ndarray::ArrayView2<'_, f32>) -> f64 {
+    let mut m = f32::INFINITY;
+    for &v in w.iter() {
+        if v.is_nan() {
+            return f64::NAN;
+        }
+        if v < m {
+            m = v;
+        }
+    }
+    m as f64
+}
+
+/// Rings.tile_ground: (lowest ground, steepest slope) under a footprint (a cell round it) from the finest ring holding
+/// it whole, or None.
+fn tile_ground(rings: &[GroundRing<'_>], b: &[f64; 4], q: f64) -> Option<(f64, f64)> {
+    use numpy::ndarray::s;
+    for r in rings {
+        let n = r.lo.nrows() as i64;
+        let (i0, j0) = (floor_i((b[0] - r.x0) / r.cell) - 1, floor_i((b[1] - r.y0) / r.cell) - 1);
+        let (i1, j1) = (floor_i((b[2] - r.x0) / r.cell) + 1, floor_i((b[3] - r.y0) / r.cell) + 1);
+        if i0 < 0 || j0 < 0 || i1 >= n || j1 >= n {
+            continue;
+        }
+        let (i0, j0, i1, j1) = (i0 as usize, j0 as usize, i1 as usize + 1, j1 as usize + 1);
+        let slope = window_stat(r.sl.slice(s![j0..j1, i0..i1]), q, false);
+        return Some((window_min(r.lo.slice(s![j0..j1, i0..i1])), slope));
+    }
+    None
+}
+
+/// The set (farpvs.Set): its square, the rings' reach, the highest the eye can be in the square (None: no ground
+/// under it), the screen's pixels per radian, and whether no viewpoint fell in the rings.
+struct SetArgs {
+    cx: f64,
+    cy: f64,
+    half: f64,
+    reach: f64,
+    eye_top: Option<f64>,
+    ppr: f64,
+    empty: bool,
+}
+
+/// Set._hidden: no visible block over the footprint (grown by one block) in any ring's summed-area table.
+fn hidden(sats: &[(numpy::ndarray::ArrayView2<'_, i32>, f64, f64, f64, i64)], st: &SetArgs, rules: &TexRules,
+          b: &[f64; 4], level: i64) -> bool {
+    if level < rules.min_level || st.empty {
+        return false;
+    }
+    let (x0, y0, x1, y1) = (b[0], b[1], b[2], b[3]);
+    let r = st.half + rules.near_m;
+    if x0 < st.cx + r && x1 > st.cx - r && y0 < st.cy + r && y1 > st.cy - r {
+        return false;
+    }
+    if x0 < -st.reach || y0 < -st.reach || x1 > st.reach || y1 > st.reach {
+        return false;
+    }
+    for (sat, rx0, ry0, bs, n) in sats {
+        let i0 = 0.max(floor_i((x0 - rx0) / bs) - 1);
+        let j0 = 0.max(floor_i((y0 - ry0) / bs) - 1);
+        let i1 = (*n).min(floor_i((x1 - rx0) / bs) + 2);
+        let j1 = (*n).min(floor_i((y1 - ry0) / bs) + 2);
+        if i0 >= i1 || j0 >= j1 {
+            continue;
+        }
+        let (i0, j0, i1, j1) = (i0 as usize, j0 as usize, i1 as usize, j1 as usize);
+        let v = sat[[j1, i1]] as i64 - sat[[j0, i1]] as i64 - sat[[j1, i0]] as i64 + sat[[j0, i0]] as i64;
+        if v > 0 {
+            return false;
+        }
+    }
+    true
+}
+
+/// Set._screen_px: the texture px the screen resolves of a tile from the square (full at most, up to top where it
+/// resolves more).
+#[allow(clippy::too_many_arguments)]
+fn screen_px(rings: &[GroundRing<'_>], st: &SetArgs, rules: &TexRules, b: &[f64; 4], level: i64, size: f64, full: i64,
+             top: i64) -> i64 {
+    let top = if top != 0 { top } else { full };
+    let Some(eye_top) = st.eye_top else { return full };
+    let dx = pmax(pmax(b[0] - (st.cx + st.half), (st.cx - st.half) - b[2]), 0.0);
+    let dy = pmax(pmax(b[1] - (st.cy + st.half), (st.cy - st.half) - b[3]), 0.0);
+    let d = dx.dhypot(dy);
+    let near = level < rules.slope_min_level || d < rules.slope_near_m;
+    if near && top <= full {
+        return full;
+    }
+    let need = if near {
+        d / (st.ppr * rules.oversample)
+    } else {
+        let Some((zmin, slope)) = tile_ground(rings, b, rules.quantile) else { return full };
+        let sin_a = pmin(1.0, pmax(0.0, (eye_top - zmin) / d) + d / (2.0 * rules.r_occ) + slope);
+        d / (st.ppr * rules.oversample) * pmax(1.0, 1.0 / (rules.aniso * pmax(sin_a, 1e-6)))
+    };
+    let mut px = full;
+    while px * 2 <= top && size / px as f64 > need {
+        px *= 2;
+    }
+    while !near && px > rules.slope_px_min && size / (px.div_euclid(2)) as f64 <= need {
+        px = px.div_euclid(2);
+    }
+    px
+}
+
+/// farpvs.Set.tex_px of many tiles at once: tiles (k, 8) [x0, y0, x1, y1, level, size, full, top] (top: the most
+/// the tile may get, 0: full). Returns (px, hidden) per tile. sats: the set's per-ring summed-area tables (sat, x0, y0,
+/// block m, blocks); rings: (lo, slopes, x0, y0, cell) per ring, finest first; set: (cx, cy, half, reach, eye_top or
+/// None, ppr, empty); rules: (MIN_LEVEL, NEAR_M, SLOPE_MIN_LEVEL, SLOPE_NEAR_M, OVERSAMPLE, ANISO, R_OCC, SLOPE_PX_MIN,
+/// TEX_PX, SLOPE_SIZING, SLOPE_QUANTILE). The GIL is released while they are worked out.
+#[pyfunction]
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+pub fn far_pvs_tex_px<'py>(py: Python<'py>, sats: Vec<(PyReadonlyArray2<'py, i32>, f64, f64, f64, i64)>,
+                           rings: Vec<(PyReadonlyArray2<'py, f32>, PyReadonlyArray2<'py, f32>, f64, f64, f64)>,
+                           set: (f64, f64, f64, f64, Option<f64>, f64, bool),
+                           rules: (i64, f64, i64, f64, f64, f64, f64, i64, i64, bool, f64),
+                           tiles: PyReadonlyArray2<'py, f64>) -> PyResult<(Vec<i64>, Vec<bool>)> {
+    let t = tiles.as_array();
+    if t.ncols() != 8 {
+        return Err(PyValueError::new_err("far_pvs_tex_px: tiles (k, 8)"));
+    }
+    for (lo, sl, ..) in &rings {
+        if lo.as_array().shape() != sl.as_array().shape() {
+            return Err(PyValueError::new_err("far_pvs_tex_px: lo and slope rasters of the same size"));
+        }
+    }
+    for (sat, _, _, _, n) in &sats {
+        let a = sat.as_array();
+        let s = a.shape();
+        if *n < 0 || s[0] < *n as usize + 1 || s[1] < *n as usize + 1 {
+            return Err(PyValueError::new_err("far_pvs_tex_px: summed-area tables (n + 1, n + 1)"));
+        }
+    }
+    let sv: Vec<_> = sats.iter().map(|(a, x0, y0, b, n)| (a.as_array(), *x0, *y0, *b, *n)).collect();
+    let rv: Vec<GroundRing<'_>> = rings.iter().map(|(lo, sl, x0, y0, cell)| GroundRing {
+        lo: lo.as_array(), sl: sl.as_array(), x0: *x0, y0: *y0, cell: *cell }).collect();
+    let st = SetArgs { cx: set.0, cy: set.1, half: set.2, reach: set.3, eye_top: set.4, ppr: set.5, empty: set.6 };
+    let rules = TexRules { min_level: rules.0, near_m: rules.1, slope_min_level: rules.2, slope_near_m: rules.3,
+                           oversample: rules.4, aniso: rules.5, r_occ: rules.6, slope_px_min: rules.7, tex_px: rules.8,
+                           slope_sizing: rules.9, quantile: rules.10 };
+    let rows: Vec<[f64; 8]> = t.rows().into_iter().map(|r| [r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7]]).collect();
+    // (the views borrow numpy buffers: they are read-only and outlive the call, so the GIL can go meanwhile)
+    let work = || {
+        let mut px = Vec::with_capacity(rows.len());
+        let mut hid = Vec::with_capacity(rows.len());
+        for r in &rows {
+            let b = [r[0], r[1], r[2], r[3]];
+            let (level, size, full, top) = (r[4] as i64, r[5], r[6] as i64, r[7] as i64);
+            let h = hidden(&sv, &st, &rules, &b, level);
+            let mut p = if rules.slope_sizing { screen_px(&rv, &st, &rules, &b, level, size, full, top) } else { full };
+            if h {
+                p = p.min(rules.tex_px);
+            }
+            px.push(p);
+            hid.push(h);
+        }
+        (px, hid)
+    };
+    Ok(if rows.len() > 64 { py.detach(work) } else { work() })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
