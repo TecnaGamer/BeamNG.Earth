@@ -41,7 +41,13 @@ import revisit
 log = logging.getLogger("earthd.genground")
 
 ON = os.environ.get("BNE_GEN_GROUND", "off").strip().lower() in ("on", "1", "yes", "true")
-NEED = 306                  # earthfast gg_fill_polys / gg_regions / gen_ground
+NEED = 307                  # earthfast gg_fill_polys / gg_regions / gen_ground (gr, gc)
+# m round a block its generated ground is made over and cut from: a texel's colour reads the inputs this far round
+# (genground.rs: windows FAR_R_M 48 + the lattice and purity margins), so overlapping blocks agree
+HALO_M = 64.0
+# the photo's pending mark while some map data it reads is not on disk (earthd.Server.base_ready / _base_kept)
+GEN_PENDING = ("genground_data",)
+LAYERS = ("land_use", "water", "infrastructure", "canopy", "landcover", "roads", "buildings")
 # The imagery sources the generated ground is made from (imagery.SOURCES): Sentinel-2 alone, global
 SOURCES = ("bngs2", "eox2023", "eox2016")
 
@@ -93,19 +99,40 @@ def _cells(lat, lon):
     return mapcells.cells_for_bbox(float(lat.min()), float(lon.min()), float(lat.max()), float(lon.max()))
 
 
-def _layer(md, key, layer):
-    """A cached layer of a cell, or None (never fetches: a missing one is a fault, revisit.fault: the photo is not kept)."""
+def _layer(md, key, layer, missing, surface=None):
+    """A cached layer of a cell, or None. Never fetches here: a missing one goes on `missing` (the photo is redone once
+    it is on disk: GEN_PENDING, earthd.Server.base_ready), is a revisit fault (the photo is not kept) and is queued
+    for a background fetch (Surface._queue: the land cover's thread)."""
     if md is None:
         return None
     if not md.has(key, layer):
-        revisit.fault()             # (the land use is fetched round the player for the ground's lots, the water and
-        return None                 # canopy for the vegetation: the next photo has them)
+        missing.append((key, layer))
+        revisit.fault()
+        queue = getattr(surface, "_queue", None)
+        if queue is not None:
+            try:
+                queue(key, (layer,))
+            except Exception as e:  # (asked again by the next photo)
+                log.debug("genground: queue %s of %s: %s", layer, key, e)
+        return None
     try:
         return md.cell(key, layers=(layer,), kind="background").layers.get(layer)
     except Exception as e:          # an unreadable cache file: like a missing one
         log.debug("genground: %s of %s: %s: %s", layer, key, type(e).__name__, e)
+        missing.append((key, layer))
         revisit.fault()
         return None
+
+
+def data_ready(md, frame, x0, y0, size):
+    """Every layer the generated ground reads (LAYERS) on disk for the cells under the square and its halo (never
+    fetches): a photo made without some of them (GEN_PENDING) is made again then."""
+    if md is None:
+        return True
+    hx0, hy0, hsize, _hpx, _h = halo_square(x0, y0, size, 1024)
+    la, lo, _ = frame.enu_to_geodetic(np.array([hx0, hx0 + hsize]), np.array([hy0, hy0 + hsize]), 0.0)
+    keys = mapcells.cells_for_bbox(float(np.min(la)), float(np.min(lo)), float(np.max(la)), float(np.max(lo)))
+    return all(md.has(k, layer) for k in keys for layer in LAYERS)
 
 
 def base_kinds(classes, lat, lon):
@@ -206,24 +233,31 @@ def canopy_grid(lat, lon, rasters):
 
 
 def inputs(frame, x0, y0, size, px, md, surface, widths=None):
-    """(kind, region, canopy) (px, px) of the square for gen_ground, from the cached map data (never waits: what is
-    missing is a fault, revisit.fault, and is fetched for the next photo)."""
+    """(kind, region, canopy, complete) (px, px) of the square for gen_ground, from the cached map data (never waits:
+    what is missing is queued, a revisit fault, and complete is False)."""
     import buildings as buildingsmod
     import surface as surfacemod
     fast.require(NEED, "generated ground")
     lat, lon = _grid(frame, x0, y0, size, px)
+    complete = True
     if surface is not None:
-        classes, _complete = surface.classes(lat, lon)
+        classes, complete = surface.classes(lat, lon)
     else:
         classes = np.zeros(lat.shape, np.uint8)
     base = base_kinds(classes, lat, lon)
-    feats, canopies = [], []
-    for key in _cells(lat, lon):
+    feats, canopies, missing = [], [], []
+    keys = _cells(lat, lon)
+    for key in keys:
         for layer in ("land_use", "water", "infrastructure"):
-            f = _layer(md, key, layer)
+            f = _layer(md, key, layer, missing, surface)
             if f is not None:
                 feats.append((layer, f))
-        canopies.append(_layer(md, key, "canopy"))
+        canopies.append(_layer(md, key, "canopy", missing, surface))
+    if md is not None:
+        for key in keys:
+            for layer in ("landcover", "roads", "buildings"):
+                if not md.has(key, layer):
+                    missing.append((key, layer))
     poly, pkinds = polygons(frame, x0, y0, size, px, feats)
     canopy = canopy_grid(lat, lon, canopies)
     cover = np.zeros((px, px), np.uint8)
@@ -242,17 +276,39 @@ def inputs(frame, x0, y0, size, px, md, surface, widths=None):
         except Exception as e:      # (the roofs are filled in after anyway)
             log.debug("genground: building mask: %s: %s", type(e).__name__, e)
     kind, region = fast._ef.gg_regions(np.ascontiguousarray(base), poly, pkinds, canopy, cover)
-    return kind, region, canopy
+    return kind, region, canopy, bool(complete) and not missing
+
+
+def halo_square(x0, y0, size, px):
+    """(x0, y0, size, px, h) of the square with HALO_M (whole texels, h of them) round it."""
+    t = size / px
+    h = int(round(HALO_M / t))
+    return x0 - h * t, y0 - h * t, size + 2 * h * t, px + 2 * h, h
 
 
 def generate(rgb, frame, x0, y0, size, px, md, surface, widths=None):
-    """The generated ground (px, px, 3) uint8 of the square from rgb, its Sentinel-2 photo (imagery.render over the
-    same square at px), and the map data (inputs())."""
+    """(the generated ground (px, px, 3) uint8 of the square, complete) from rgb, its Sentinel-2 photo (imagery.render
+    over the same square at px), and the map data (inputs()). Its outer HALO_M is not final (the windows reach out of
+    the square there): render() keeps the middle of a larger square."""
     fast.require(NEED, "generated ground")
     rgb = np.ascontiguousarray(np.asarray(rgb, np.uint8)[:, :, :3])
     if rgb.shape[:2] != (px, px):
         raise ValueError(f"generated ground: a {rgb.shape[:2]} photo for {px} px")
-    kind, region, canopy = inputs(frame, x0, y0, size, px, md, surface, widths)
+    kind, region, canopy, complete = inputs(frame, x0, y0, size, px, md, surface, widths)
     t = size / px
-    return fast._ef.gen_ground(rgb, kind, region, canopy, float(x0 + t / 2), float(y0 + size - t / 2), float(t))
+    # (the global texel grid of the anchor frame: the blocks' texels lie on it, so their lattices agree)
+    gc, gr = int(np.floor(x0 / t + 0.5)), int(np.floor(-(y0 + size) / t + 0.5))
+    out = fast._ef.gen_ground(rgb, kind, region, canopy, float(x0 + t / 2), float(y0 + size - t / 2), float(t), gr, gc)
+    return out, complete
 
+
+def render(imagery, frame, x0, y0, size, px, md, surface, widths=None, pending=None):
+    """(rgb (px, px, 3), sources used): the generated ground of [x0, x0 + size]^2 of frame at px, made over the square
+    with HALO_M round it and cut to it (every block covering a spot draws it alike, the Codex review of 41d74b61). With
+    map data still missing GEN_PENDING goes into pending (earthd.Server.base_ready: made again once it is here)."""
+    hx0, hy0, hsize, hpx, h = halo_square(x0, y0, size, px)
+    rgb, used = imagery.render(frame, hx0, hy0, hsize, hpx, pending)
+    out, complete = generate(rgb, frame, hx0, hy0, hsize, hpx, md, surface, widths)
+    if not complete and pending is not None:
+        pending.add(GEN_PENDING)
+    return np.ascontiguousarray(out[h:h + px, h:h + px]), used

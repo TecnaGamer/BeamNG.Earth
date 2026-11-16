@@ -364,13 +364,23 @@ pub fn gg_regions<'py>(py: Python<'py>, base: PyReadonlyArray2<'py, u8>, poly: P
     Ok((ka.into_pyarray(py), ra.into_pyarray(py)))
 }
 
-/// The mean photo colour (sum, count) of texels in the window of radius `rad` texels round (r, c), on the lattice of
-/// `step` texels from the block's corner, that satisfy keep.
+/// The first index >= lo whose global index (index + g0) is a multiple of step.
 #[inline]
-fn window_sum(s2: &[u8], n: usize, r: usize, c: usize, rad: usize, step: usize,
+fn aligned(lo: usize, g0: i64, step: usize) -> usize {
+    let s = step as i64;
+    lo + ((-(lo as i64 + g0)).rem_euclid(s)) as usize
+}
+
+/// The mean photo colour (sum, count) of texels in the window of radius `rad` texels round (r, c), on the lattice of
+/// `step` texels aligned to the global texel grid (gr, gc: the global row and column of texel (0, 0)), that satisfy
+/// keep. Global, not the square's corner: every square covering a texel samples the same texels for it (Codex review
+/// of 41d74b61: overlapping blocks drew the same ground in other colours).
+#[inline]
+#[allow(clippy::too_many_arguments)]
+fn window_sum(s2: &[u8], n: usize, r: usize, c: usize, rad: usize, step: usize, g: (i64, i64),
               keep: impl Fn(usize) -> bool) -> ([u32; 3], u32) {
-    let r0 = r.saturating_sub(rad).div_ceil(step) * step;
-    let c0 = c.saturating_sub(rad).div_ceil(step) * step;
+    let r0 = aligned(r.saturating_sub(rad), g.0, step);
+    let c0 = aligned(c.saturating_sub(rad), g.1, step);
     let r1 = (r + rad).min(n - 1);
     let c1 = (c + rad).min(n - 1);
     let mut s = [0u32; 3];
@@ -401,6 +411,7 @@ struct Windows {
     far_s: usize,
     pure3: u32,
     semi3: u32,
+    g: (i64, i64),      // the global row and column of texel (0, 0)
 }
 
 /// The colour of texel (r, c)'s region: the mean photo colour of the first of, in order, the region's pure texels
@@ -417,12 +428,12 @@ fn region_mean(s2: &[u8], kind: &[u8], region: &[u32], dist: &[u32], n: usize, r
         (w.far_r, w.far_s, false, w.pure3), (w.far_r, w.far_s, false, w.semi3), (w.near_r, 1, true, 0)];
     for (rad, step, own, min_d) in tries {
         let keep = |j: usize| dist[j] >= min_d && if own { region[j] == reg } else { kind[j] == k };
-        let (mut s, mut cnt) = window_sum(s2, n, r, c, rad, step, keep);
+        let (mut s, mut cnt) = window_sum(s2, n, r, c, rad, step, w.g, keep);
         if cnt > 0 && k == WATER {
             // water: the texels no brighter than the mean (boats, moorings, piers the map does not have)
             let lum = (s[0] + s[1] + s[2]) / cnt;
             let lum_of = |j: usize| s2[j * 3] as u32 + s2[j * 3 + 1] as u32 + s2[j * 3 + 2] as u32;
-            let (s_, cnt_) = window_sum(s2, n, r, c, rad, step, |j| keep(j) && lum_of(j) <= lum);
+            let (s_, cnt_) = window_sum(s2, n, r, c, rad, step, w.g, |j| keep(j) && lum_of(j) <= lum);
             if cnt_ > 0 {
                 (s, cnt) = (s_, cnt_);
             }
@@ -442,12 +453,14 @@ fn region_mean(s2: &[u8], kind: &[u8], region: &[u32], dist: &[u32], n: usize, r
 /// The generated ground (n, n, 3) u8, row 0 = north: s2 (n, n, 3) the Sentinel-2 photo rendered over the block's
 /// texels (enlarged: its own 10 m detail); kind / region (n, n) from gg_regions; canopy (n, n) heights (m, 255: none);
 /// (ox, oy) the world-locked east / north (m) of texel (0, 0)'s centre (texel (r, c) at ox + c t, oy - r t); t: m a
-/// texel.
+/// texel; (gr, gc) texel (0, 0)'s row and column on the global texel grid the sampling lattices are aligned to. A
+/// texel's colour depends on the inputs within HALO_M of it alone: the caller renders a square that much larger and
+/// keeps its middle (genground.render), so every block covering a spot draws it the same.
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
 pub fn gen_ground<'py>(py: Python<'py>, s2: PyReadonlyArray3<'py, u8>, kind: PyReadonlyArray2<'py, u8>,
                        region: PyReadonlyArray2<'py, u32>, canopy: PyReadonlyArray2<'py, u8>, ox: f64, oy: f64,
-                       t: f64) -> PyResult<Bound<'py, PyArray3<u8>>> {
+                       t: f64, gr: i64, gc: i64) -> PyResult<Bound<'py, PyArray3<u8>>> {
     let (s2a, kind, region, canopy) = (s2.as_array(), kind.as_array(), region.as_array(), canopy.as_array());
     let n = kind.shape()[0];
     if n < 2 || kind.shape()[1] != n || region.shape() != kind.shape() || canopy.shape() != kind.shape()
@@ -464,7 +477,7 @@ pub fn gen_ground<'py>(py: Python<'py>, s2: PyReadonlyArray3<'py, u8>, kind: PyR
         let pure3 = (PURE_M / t * 3.0).round() as u32;
         let blend3 = BLEND_M / t * 3.0;
         let win = Windows { near_r: tx(NEAR_R_M), near_s: tx(NEAR_STEP_M), far_r: tx(FAR_R_M), far_s: tx(FAR_STEP_M),
-                            pure3, semi3: (SEMI_M / t * 3.0).round() as u32 };
+                            pure3, semi3: (SEMI_M / t * 3.0).round() as u32, g: (gr, gc) };
         // the canopy heights smoothed over 3 x 3 (the 1.2 m pixels resampled to the texels: their stairs); none where
         // a texel or most of its neighbours have none
         let mut hsm = vec![f32::NAN; n * n];
@@ -491,13 +504,16 @@ pub fn gen_ground<'py>(py: Python<'py>, s2: PyReadonlyArray3<'py, u8>, kind: PyR
         let threads = par::threads_for(n * n, 65536);
         // the regions' colours on a lattice of every LATTICE texels (interpolated between the lattice points of the
         // texel's own region; a texel with none of its region round it asks its own): a tenth of the windows
-        let na = (n - 1) / LATTICE + 1;
+        // (lattice point (a, b) at texel (pr + a L, pc + b L): on the global grid's multiples of L)
+        let (pr, pc) = (aligned(0, gr, LATTICE), aligned(0, gc, LATTICE));
+        let nar = if n > pr { (n - 1 - pr) / LATTICE + 1 } else { 0 };
+        let nac = if n > pc { (n - 1 - pc) / LATTICE + 1 } else { 0 };
         let need = |i: usize| kind[i] != NONE && ((dist[i] as f64) < blend3 + 3.0 * 1.5 * LATTICE as f64
                                                    || kind[i] == WATER);
-        let mut lat = vec![[0f32; 4]; na * na];
-        par::rows(&mut lat, na, threads, |a, row| {
+        let mut lat = vec![[0f32; 4]; nar * nac];
+        par::rows(&mut lat, nac.max(1), threads, |a, row| {
             for (b, v) in row.iter_mut().enumerate() {
-                let (r, c) = (a * LATTICE, b * LATTICE);
+                let (r, c) = (pr + a * LATTICE, pc + b * LATTICE);
                 let i = r * n + c;
                 if need(i) {
                     let px = [s2[i * 3] as f32, s2[i * 3 + 1] as f32, s2[i * 3 + 2] as f32];
@@ -517,18 +533,21 @@ pub fn gen_ground<'py>(py: Python<'py>, s2: PyReadonlyArray3<'py, u8>, kind: PyR
                 // 10 m blur are not the water's colour)
                 let mut base = px;
                 if ((d as f64) < blend3 || k == WATER) && k != NONE {
-                    let (a0, b0) = (r / LATTICE, c / LATTICE);
-                    let fy = (r - a0 * LATTICE) as f32 / LATTICE as f32;
-                    let fx = (c - b0 * LATTICE) as f32 / LATTICE as f32;
+                    let l = LATTICE as i64;
+                    let (dr, dc) = (r as i64 - pr as i64, c as i64 - pc as i64);
+                    let (a0, b0) = (dr.div_euclid(l), dc.div_euclid(l));
+                    let fy = dr.rem_euclid(l) as f32 / LATTICE as f32;
+                    let fx = dc.rem_euclid(l) as f32 / LATTICE as f32;
                     let (mut acc, mut wsum) = ([0f32; 3], 0f32);
                     for (da, db, w) in [(0, 0, (1.0 - fy) * (1.0 - fx)), (0, 1, (1.0 - fy) * fx),
                                         (1, 0, fy * (1.0 - fx)), (1, 1, fy * fx)] {
                         let (a, b) = (a0 + da, b0 + db);
-                        if w <= 0.0 || a >= na || b >= na {
+                        if w <= 0.0 || a < 0 || b < 0 || a as usize >= nar || b as usize >= nac {
                             continue;
                         }
-                        let v = lat[a * na + b];
-                        if v[3] > 0.0 && region[a * LATTICE * n + b * LATTICE] == region[i] {
+                        let (a, b) = (a as usize, b as usize);
+                        let v = lat[a * nac + b];
+                        if v[3] > 0.0 && region[(pr + a * LATTICE) * n + pc + b * LATTICE] == region[i] {
                             acc = [acc[0] + w * v[0], acc[1] + w * v[1], acc[2] + w * v[2]];
                             wsum += w;
                         }

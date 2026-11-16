@@ -103,6 +103,8 @@ def main():
     ap.add_argument("--out", default=os.path.expanduser("~/bnge-tests/genground/compare"))
     ap.add_argument("--cache", default=os.path.expanduser("~/bnge-tests/genground/cache"))
     ap.add_argument("--no-truth", action="store_true")
+    ap.add_argument("--label", default="gen", help="this generator's column and file names")
+    ap.add_argument("--also", nargs="*", default=[], help="earlier columns' finished images to show too (by label)")
     ap.add_argument("--truth-source", default="auto", help="tools/ortho_hi.py's SOURCE (naip: one export request; "
                     "auto may read a regional tile cache at z19-20: hundreds of tiles for a 1 km square)")
     a = ap.parse_args()
@@ -151,34 +153,45 @@ def main():
         im.close()
         print(tag, stats[tag]["render_s"], "s", stats[tag]["used_texels"], stats[tag]["new_bytes"])
 
-    # the generator: inputs (map data -> kinds / regions) and the kernel, timed (warm: the cells are in memory)
+    # the generator (genground.render: the Sentinel-2 render with its halo, the regions, the kernel), timed warm (the
+    # tiles on disk, the cells in memory)
     s2 = results["s2"]
+    im = imagerymod.Imagery(os.path.join(a.cache, "imagery"), genground.chain(full), fetcher=f)
     times = []
     for _ in range(3):
         c0, w0 = time.process_time(), time.perf_counter()
-        kind, region, canopy = genground.inputs(frame, x0, x0, size, px, md, sf)
-        c1, w1 = time.process_time(), time.perf_counter()
-        gen = genground.fast._ef.gen_ground(s2, kind, region, canopy, float(x0 + 0.5), float(x0 + size - 0.5), 1.0)
-        c2, w2 = time.process_time(), time.perf_counter()
-        times.append((w1 - w0, c1 - c0, w2 - w1, c2 - c1))
-    again = genground.generate(s2, frame, x0, x0, size, px, md, sf)
+        pend = set()
+        gen, _used = genground.render(im, frame, x0, x0, size, px, md, sf, None, pend)
+        times.append((time.perf_counter() - w0, time.process_time() - c0))
+    hx0, _hy0, hsize, hpx, h = genground.halo_square(x0, x0, size, px)
+    c0, w0 = time.process_time(), time.perf_counter()
+    kind, region, canopy, complete = genground.inputs(frame, hx0, hx0, hsize, hpx, md, sf)
+    stats["gen_inputs_wall_ms"] = round(1000 * (time.perf_counter() - w0), 1)
+    stats["gen_inputs_cpu_ms"] = round(1000 * (time.process_time() - c0), 1)
+    again, _ = genground.render(im, frame, x0, x0, size, px, md, sf, None, set())
+    im.close()
     stats["deterministic_rerun"] = bool(np.array_equal(again, gen))
+    stats["complete"] = bool(complete) and not pend
     tm = np.array(times)
-    stats["gen_inputs_wall_ms"] = round(1000 * float(np.median(tm[:, 0])), 1)
-    stats["gen_inputs_cpu_ms"] = round(1000 * float(np.median(tm[:, 1])), 1)
-    stats["gen_kernel_wall_ms"] = round(1000 * float(np.median(tm[:, 2])), 1)
-    stats["gen_kernel_cpu_ms"] = round(1000 * float(np.median(tm[:, 3])), 1)
+    stats["gen_total_wall_ms"] = round(1000 * float(np.median(tm[:, 0])), 1)
+    stats["gen_total_cpu_ms"] = round(1000 * float(np.median(tm[:, 1])), 1)
+    kind, canopy = kind[h:h + px, h:h + px], canopy[h:h + px, h:h + px]
     stats["kinds_share"] = {genground.KIND_NAMES[k]: round(float(np.mean(kind == k)), 4)
                             for k in range(len(genground.KIND_NAMES)) if np.any(kind == k)}
     stats["canopy_known"] = round(float(np.mean(canopy != genground.CANOPY_NODATA)), 4)
     print("generator", times[-1], stats["kinds_share"])
 
     imgs = []
-    for tag, rgb in (("photo", results["photo"]), ("s2", s2), ("gen", gen)):
+    for tag, rgb in (("photo", results["photo"]), ("s2", s2), (a.label, gen)):
         fin = finish(rgb, frame, x0, size, px, md, sf)
         Image.fromarray(fin).save(os.path.join(a.out, f"{a.name}_{tag}.png"))
         imgs.append((tag, fin))
-    Image.fromarray(KIND_RGB[kind]).resize((2048, 2048), Image.NEAREST).save(os.path.join(a.out, f"{a.name}_kinds.png"))
+    for tag in a.also:           # (earlier versions' finished images, kept: side by side with this one)
+        p = os.path.join(a.out, f"{a.name}_{tag}.png")
+        if os.path.exists(p):
+            imgs.insert(len(imgs) - 1, (tag, np.asarray(Image.open(p).convert("RGB"), np.uint8)))
+    Image.fromarray(KIND_RGB[np.minimum(kind, len(KIND_RGB) - 1)]).resize((2048, 2048), Image.NEAREST).save(
+        os.path.join(a.out, f"{a.name}_{a.label}_kinds.png"))
     truth = None
     if not a.no_truth:
         tp = os.path.join(a.out, f"{a.name}_truth.png")
@@ -189,7 +202,7 @@ def main():
             truth = np.asarray(Image.open(tp).convert("RGB").resize((2048, 2048), Image.LANCZOS), np.uint8)
     sheet = ([("truth", truth)] if truth is not None else []) + imgs
     for m in (1024, 256, 128):
-        print(crops(a.name, a.out, sheet, m))
+        print(crops(f"{a.name}_{a.label}", a.out, sheet, m))
     with open(os.path.join(a.out, f"{a.name}_stats.json"), "w") as fh:
         json.dump(stats, fh, indent=1)
     print(json.dumps(stats, indent=1))

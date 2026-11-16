@@ -4871,7 +4871,8 @@ class Server:
         again once they are here."""
         key = (anchor.id, cx, cy)
         self.base_pending[key] = frozenset(pending)
-        if surfacemod.PHOTO_ROADS_PENDING not in pending and self.base_ready(anchor, cx, cy):
+        if surfacemod.PHOTO_ROADS_PENDING not in pending and genground.GEN_PENDING not in pending \
+                and self.base_ready(anchor, cx, cy):
             self.base_stale.discard(key)
         else:
             self.base_stale.add(key)
@@ -5292,8 +5293,18 @@ class Server:
         t0 = time.perf_counter()
         try:
             pending = set()
-            with (self.deshadow.no_wait() if self.deshadow is not None else contextlib.nullcontext()):
-                rgb, used = self.imagery.render(anchor.frame, x0, y0, size, BASE_RENDER_PX, pending)
+            rgb = None
+            if genground.ON and not quick:  # the generated ground: Sentinel-2 and the map's regions (genground.py)
+                try:
+                    rgb, used = genground.render(self.imagery, anchor.frame, x0, y0, size, BASE_RENDER_PX,
+                                                 self.mapdata, self.surface, self.road_widths, pending)
+                except Exception as e:      # (the Sentinel-2 photo alone then)
+                    log.info("base photo %s: generated ground: %s: %s", (anchor.id, cx, cy), type(e).__name__, e)
+                    rgb = None
+                    pending.discard(genground.GEN_PENDING)
+            if rgb is None:
+                with (self.deshadow.no_wait() if self.deshadow is not None else contextlib.nullcontext()):
+                    rgb, used = self.imagery.render(anchor.frame, x0, y0, size, BASE_RENDER_PX, pending)
             log.debug("base photo %s r%d: %s", (anchor.id, cx, cy), rev,
                       {k: round(v / (BASE_RENDER_PX * BASE_RENDER_PX), 3) for k, v in used.items()})
         except Exception as e:      # an imagery failure must not cost the terrain
@@ -5303,13 +5314,6 @@ class Server:
         path = os.path.join(self.out_dir, name)
         rgb = np.asarray(rgb, np.uint8)
         stamps = [("imagery", time.perf_counter())]
-        if genground.ON and not quick:      # the generated ground from that Sentinel-2 photo and the map's regions
-            try:
-                rgb = genground.generate(rgb, anchor.frame, x0, y0, size, BASE_RENDER_PX, self.mapdata, self.surface,
-                                         self.road_widths)
-            except Exception as e:      # the Sentinel-2 photo stays as it is
-                log.info("base photo %s: generated ground: %s: %s", (anchor.id, cx, cy), type(e).__name__, e)
-            stamps.append(("generated", time.perf_counter()))
         if self.buildings and self.mapdata is not None and not quick:   # no roofs beside the 3D buildings
             try:
                 mask = buildingsmod.photo_mask(anchor.frame, x0, y0, size, BASE_RENDER_PX, self.mapdata)
@@ -5393,7 +5397,9 @@ class Server:
             la, lo = surfacemod._square_pts(anchor.frame, x0, y0, size)
             if not all(self.mapdata.has(k, "roads") for k in mapcells.cells_for_points(la, lo)):
                 return False
-        return all(rk == road_data or self._region_status(rk) is not None for rk in pending)
+        if genground.GEN_PENDING in pending and not genground.data_ready(self.mapdata, anchor.frame, x0, y0, size):
+            return False            # (the generated ground's map data: made again once it is on disk)
+        return all(rk in (road_data, genground.GEN_PENDING) or self._region_status(rk) is not None for rk in pending)
 
     def terrain_cached(self, key):
         return key in self.hm or key in self.hm_inflight

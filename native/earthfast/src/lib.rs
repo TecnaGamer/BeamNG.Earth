@@ -6470,6 +6470,8 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 306: genground::gg_fill_polys / gg_regions / gen_ground (the generated ground, BNE_GEN_GROUND: a block's 1 m base
     // colour from Sentinel-2 and the map's regions instead of a 1 m aerial photo; server/genground.py)
     genground::register(m)?;
-    m.add("VERSION", 306)?;
+    // 307: gen_ground(..., gr, gc): its sampling lattices on the global texel grid, the caller's square with a halo
+    // (Codex review of 306: overlapping blocks drew the same ground in other colours)
+    m.add("VERSION", 307)?;
     Ok(())
 }

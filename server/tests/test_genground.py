@@ -6,6 +6,7 @@ what is kept."""
 import importlib
 import os
 import sys
+import types
 import unittest
 from unittest import mock
 
@@ -49,12 +50,14 @@ def blurred_edge(n, col, a, b, width=10):
     return np.ascontiguousarray(np.broadcast_to(img, (n, n, 3)).round().astype(np.uint8))
 
 
-def gen(s2, kind, region=None, canopy=None, ox=1000.0, oy=2000.0):
+def gen(s2, kind, region=None, canopy=None, ox=1000.0, oy=2000.0, gr=None, gc=None):
+    """gen_ground at 1 m texels; texel (0, 0) at world (ox, oy), on the global grid at (-oy, ox) by default."""
     n = kind.shape[0]
     region = kind.astype(np.uint32) if region is None else region
     canopy = np.full((n, n), 255, np.uint8) if canopy is None else canopy
-    return EF.gen_ground(s2, np.ascontiguousarray(kind, np.uint8), np.ascontiguousarray(region, np.uint32),
-                         np.ascontiguousarray(canopy, np.uint8), float(ox), float(oy), 1.0)
+    return EF.gen_ground(np.ascontiguousarray(s2), np.ascontiguousarray(kind, np.uint8),
+                         np.ascontiguousarray(region, np.uint32), np.ascontiguousarray(canopy, np.uint8), float(ox),
+                         float(oy), 1.0, int(-oy if gr is None else gr), int(ox if gc is None else gc))
 
 
 class FillPolysTest(unittest.TestCase):
@@ -151,6 +154,34 @@ class GenGroundTest(unittest.TestCase):
         b = gen(s2, kind, ox=500.0 + sh, oy=900.0)
         np.testing.assert_array_equal(a[:, sh:], b[:, :n - sh])
         self.assertGreater(a[..., 1].std(), 1.0, "it has some detail")
+
+    def test_overlapping_blocks_agree(self):
+        # (Codex review of 41d74b61: windows clipped to each block drew the same ground in other colours where blocks
+        # overlap.) A world of varying photo, regions with borders and water; two squares 37 texels apart, each with
+        # the HALO round it: the texels both keep are the same bits
+        rng = np.random.default_rng(21)
+        W, n, halo = 420, 160, int(gg.HALO_M)
+        x = np.arange(W)
+        s2 = np.stack([(x[None, :] + 30 + 0 * x[:, None]) % 256, (x[:, None] * 3 // 4 + 20 + 0 * x[None, :]) % 256,
+                       rng.integers(0, 60, (W, W))], -1).astype(np.uint8)
+        kind = rng.choice([gg.GRASS, gg.TREE, gg.CROP, gg.WATER, gg.LAWN, gg.PAVED, gg.BUILT], (W // 12 + 1, W // 9 + 1))
+        kind = kind.repeat(12, 0).repeat(9, 1)[:W, :W].astype(np.uint8)
+        kind[100:140, 50:300] = gg.WATER
+        region = kind.astype(np.uint32) + 16 * ((np.arange(W)[None, :] // 70) % 3).astype(np.uint32)
+        canopy = np.where(kind == gg.TREE, rng.integers(3, 25, (W, W)), 255).astype(np.uint8)
+
+        def block(r0, c0):
+            sl = (slice(r0 - halo, r0 + n + halo), slice(c0 - halo, c0 + n + halo))
+            out = gen(s2[sl], kind[sl], region[sl], canopy[sl], ox=float(c0 - halo), oy=float(-(r0 - halo)))
+            return out[halo:halo + n, halo:halo + n]
+        a, b = block(70, 70), block(70 + 13, 70 + 37)
+        np.testing.assert_array_equal(a[13:, 37:], b[:n - 13, :n - 37])
+        # without the halo (the block's own square alone, as 41d74b61 did) they differ
+        a0 = gen(s2[70:230, 70:230], kind[70:230, 70:230], region[70:230, 70:230], canopy[70:230, 70:230],
+                 ox=70.0, oy=-70.0)
+        b0 = gen(s2[83:243, 107:267], kind[83:243, 107:267], region[83:243, 107:267], canopy[83:243, 107:267],
+                 ox=107.0, oy=-83.0)
+        self.assertFalse(np.array_equal(a0[13:, 37:], b0[:n - 13, :n - 37]), "the test sees the old fault")
 
     def test_same_bits_on_any_threads(self):
         n = 160
@@ -253,6 +284,80 @@ class KeysTest(unittest.TestCase):
         self.assertNotIn("BNE_GEN_GROUND", revisit.NOT_SWITCHES)
 
 
+class _Im:
+    def render(self, frame, x0, y0, size, px, pending=None):
+        return np.full((px, px, 3), 100, np.uint8), {"eox2023": px * px}
+
+
+class _MD:
+    """Map data whose cells hold the layers in `have` (each read as empty)."""
+
+    def __init__(self, have=()):
+        self.have = set(have)
+
+    def has(self, key, layer):
+        return layer in self.have
+
+    def cell(self, key, layers=None, kind=None):
+        if not all(layer in self.have for layer in layers or ()):
+            raise OSError("not here")
+        return types.SimpleNamespace(layers={})
+
+
+class RefreshTest(unittest.TestCase):
+    """(Codex review of 41d74b61) a photo made while some of its map data was not on disk is marked (GEN_PENDING) and
+    made again once it is: earthd.Server.base_ready waits for genground.data_ready."""
+
+    def test_missing_data_marks_the_photo(self):
+        import geodesy
+        frame = geodesy.EnuFrame(40.877, -77.566)
+        pending = set()
+        rgb, _ = gg.render(_Im(), frame, -64.5, -64.5, 128.0, 128, _MD(), None, None, pending)
+        self.assertEqual(rgb.shape, (128, 128, 3))
+        self.assertIn(gg.GEN_PENDING, pending)
+        self.assertFalse(gg.data_ready(_MD(), frame, -64.5, -64.5, 128.0))
+        self.assertFalse(gg.data_ready(_MD(set(gg.LAYERS) - {"canopy"}), frame, -64.5, -64.5, 128.0))
+        self.assertTrue(gg.data_ready(_MD(gg.LAYERS), frame, -64.5, -64.5, 128.0))
+        pending = set()
+        gg.render(_Im(), frame, -64.5, -64.5, 128.0, 128, None, None, None, pending)
+        self.assertNotIn(gg.GEN_PENDING, pending, "no map data at all (none to wait for)")
+
+    def test_server_redoes_it(self):
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import earthd
+        from test_server import LAT, LON, ServerHarness
+
+        class Harness(ServerHarness):
+            near_visual = "detail"
+            with_imagery = True
+            cells = 64
+            block = 1024
+
+            def runTest(self):
+                pass
+        h = Harness()
+        h.setUp()
+        self.addCleanup(h.tearDown)
+        h.hello()
+        aid = h.prepare_anchor(1, LAT, LON)["anchorId"]
+        s = h.server
+        anchor = s.anchors[aid]
+        key = (aid, 0.0, 0.0)
+        md = _MD({"buildings", "roads"})        # (the photo's own data on disk; the generated ground's not all)
+        s.mapdata = md
+        with mock.patch.object(earthd.genground, "ON", True):
+            s.base_stale.discard(key)
+            self.assertIsNotNone(s.write_base(anchor, 0.0, 0.0, rev=1))
+            self.assertIn(gg.GEN_PENDING, s.base_pending[key])
+            self.assertIn(key, s.base_stale, "made again later")
+            self.assertFalse(s.base_ready(anchor, 0.0, 0.0), "not before its map data is here")
+            md.have = set(gg.LAYERS)
+            self.assertTrue(s.base_ready(anchor, 0.0, 0.0), "then base_refresh makes it again")
+            s.write_base(anchor, 0.0, 0.0, rev=2)
+            self.assertNotIn(gg.GEN_PENDING, s.base_pending[key])
+            self.assertNotIn(key, s.base_stale)
+
+
 class WriteBaseTest(unittest.TestCase):
     """earthd.Server.write_base runs the generator on the imagery's render with the switch on (and not with it off, or
     for a quick stand-in)."""
@@ -278,12 +383,13 @@ class WriteBaseTest(unittest.TestCase):
         s = h.server
         anchor = s.anchors[aid]
         calls = []
-        real = gg.generate
+        real = gg.render
 
-        def spy(rgb, *a, **k):
-            calls.append(np.asarray(rgb).shape)
-            return real(rgb, *a, **k)
-        with mock.patch.object(earthd.genground, "generate", spy):
+        def spy(im, frame, x0, y0, size, px, *a, **k):
+            got = real(im, frame, x0, y0, size, px, *a, **k)
+            calls.append(got[0].shape)
+            return got
+        with mock.patch.object(earthd.genground, "render", spy):
             with mock.patch.object(earthd.genground, "ON", False):
                 self.assertIsNotNone(s.write_base(anchor, 0.0, 0.0))
             self.assertEqual(calls, [], "off: the photo as before")
