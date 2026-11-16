@@ -104,6 +104,7 @@ def main():
     ap.add_argument("--cache", default=os.path.expanduser("~/bnge-tests/genground/cache"))
     ap.add_argument("--no-truth", action="store_true")
     ap.add_argument("--label", default="gen", help="this generator's column and file names")
+    ap.add_argument("--season", default="off", help="the generator's season grade (earthd --season: auto, fall, ...)")
     ap.add_argument("--also", nargs="*", default=[], help="earlier columns' finished images to show too (by label)")
     ap.add_argument("--truth-source", default="auto", help="tools/ortho_hi.py's SOURCE (naip: one export request; "
                     "auto may read a regional tile cache at z19-20: hundreds of tiles for a 1 km square)")
@@ -156,7 +157,7 @@ def main():
     # the generator (genground.render: the Sentinel-2 render with its halo, the regions, the kernel), timed warm (the
     # tiles on disk, the cells in memory)
     s2 = results["s2"]
-    im = imagerymod.Imagery(os.path.join(a.cache, "imagery"), genground.chain(full), fetcher=f)
+    im = imagerymod.Imagery(os.path.join(a.cache, "imagery"), genground.chain(full), fetcher=f, season_mode=a.season)
     times = []
     for _ in range(3):
         c0, w0 = time.process_time(), time.perf_counter()
@@ -165,7 +166,7 @@ def main():
         times.append((time.perf_counter() - w0, time.process_time() - c0))
     hx0, _hy0, hsize, hpx, h = genground.halo_square(x0, x0, size, px)
     c0, w0 = time.process_time(), time.perf_counter()
-    kind, region, canopy, complete = genground.inputs(frame, hx0, hx0, hsize, hpx, md, sf)
+    kind, region, canopy, complete = genground.inputs(frame, hx0, hx0, hsize, hpx, md, sf)[:4]
     stats["gen_inputs_wall_ms"] = round(1000 * (time.perf_counter() - w0), 1)
     stats["gen_inputs_cpu_ms"] = round(1000 * (time.process_time() - c0), 1)
     again, _ = genground.render(im, frame, x0, x0, size, px, md, sf, None, set())

@@ -17,17 +17,32 @@ made from data every place has, instead of the 1 m photo:
 - earthfast.gen_ground (native/earthfast/src/genground.rs): near each region's border the Sentinel-2 colour of the
   region's own pure texels (no 10 m smear across a forest edge, a field's edge, a road), inside the photo itself, and
   the kind's fine detail (noise at a few scales, crowns shaded from the canopy heights).
+Stage 2 (the user, 2026-11-16: "we can use OSM and other map data to help guide the generator"): OSM's tags as
+Overture's layers carry them (land_use / water / infrastructure source_tags, the roads layer's osm_* columns) draw what
+a 10 m photo cannot: pitches by surface and sport (turf with mown stripes and its outline, clay, tartan, hard courts),
+squares by surface (pavers, brick, concrete), pools, orchards / vineyards / allotments / glasshouses / cemeteries as
+rows along each polygon's dominant edge (earthfast.gg_poly_axes; the rows' offset hashed from its id, so its pieces in
+every cell and block agree), commercial / industrial land's yards paved, unpaved lots; lines buffered to their widths
+(earthfast.gg_fill_lines): footways and paths (concrete in town, earth elsewhere, or their mapped surface), tracks and
+unpaved drives, railway ballast, hedges and tree rows, streams and ditches, piers; the canopy model's hedgerows grown
+by a metre (it draws their tall core only). The season grade (imagery's: fall colours, the bare winter canopy, the
+spring flush) goes over the generated ground (render). Farmland keeps the photo path's furrows (surface.photo_fields,
+the crop shrubs line up with them).
 The rest of the photo's path is unchanged: the roofs filled, the roads, lots, fields' furrows and golf painted in at
 0.5 m, the cliffs as rock, the terrain material layers' sharp detail textures over it in the game.
 
 With the switch on, the imagery chain holds SOURCES alone (chain(), earthd's main): no 1 m photo is fetched for the
-ground, the far rings, the warm-up or the prefetch. Off (the default): nothing changes. The switch is a BNE_* variable,
-so it is in revisit.code_key (the base photos' and far tiles' revisit keys, the blocks), switches_key and the decision
-archives' vkey_doc like every build switch (experimental.py).
+ground, the far rings, the warm-up or the prefetch, nor for the roofs, squares or street fronts (buildings._photo_sources).
+Off (the default): nothing changes. The switch is a BNE_* variable, so it is in revisit.code_key (the base photos' and
+far tiles' revisit keys, the blocks, the road tiles), switches_key and the decision archives' vkey_doc like every build
+switch (experimental.py). Every input is map data whose versions are in the base photo's key (mapdata.versions()); a
+photo made before some of it was on disk is marked (GEN_PENDING) and made again once it is.
 
 The noise is anchor-locked (the anchor frame's east / north): blocks of one anchor agree along their seams; another
 anchor's view of the same place draws another grain (each anchor's photos are its own in the caches anyway).
 """
+import hashlib
+import json
 import logging
 import os
 
@@ -41,7 +56,7 @@ import revisit
 log = logging.getLogger("earthd.genground")
 
 ON = os.environ.get("BNE_GEN_GROUND", "off").strip().lower() in ("on", "1", "yes", "true")
-NEED = 307                  # earthfast gg_fill_polys / gg_regions / gen_ground (gr, gc)
+NEED = 308                  # earthfast gg_* / gen_ground (stage 2: lines, surfaces, patterns)
 # m round a block its generated ground is made over and cut from: a texel's colour reads the inputs this far round
 # (genground.rs: windows FAR_R_M 48 + the lattice and purity margins), so overlapping blocks agree
 HALO_M = 64.0
@@ -52,29 +67,62 @@ LAYERS = ("land_use", "water", "infrastructure", "canopy", "landcover", "roads",
 SOURCES = ("bngs2", "eox2023", "eox2016")
 
 # Kinds of ground (genground.rs: the same numbers)
-NONE, TREE, SHRUB, GRASS, CROP, BUILT, BARE, SNOW, WATER, WETLAND, LAWN, PAVED, ROOF = range(13)
+(NONE, TREE, SHRUB, GRASS, CROP, BUILT, BARE, SNOW, WATER, WETLAND, LAWN, PAVED, ROOF, GRAVEL, PATH, BRICK, PAVERS,
+ CONCRETE, TURF, ARTTURF, CLAY, TARTAN, POOL, ORCHARD, VINEYARD, ALLOTMENT, GREENHOUSE, CEMETERY, COURT) = range(29)
+LOT, PATH_AUTO = 29, 30         # (a polygon's / a line's kind only: gg_regions makes them another per texel)
 KIND_NAMES = ("none", "tree", "shrub", "grass", "crop", "built", "bare", "snow", "water", "wetland", "lawn", "paved",
-              "roof")
+              "roof", "gravel", "path", "brick", "pavers", "concrete", "turf", "artturf", "clay", "tartan", "pool",
+              "orchard", "vineyard", "allotment", "greenhouse", "cemetery", "court")
 # WorldCover class -> kind (maprasters.CLASSES)
 WC_KIND = {10: TREE, 20: SHRUB, 30: GRASS, 40: CROP, 50: BUILT, 60: BARE, 70: SNOW, 80: WATER, 90: WETLAND,
            95: WETLAND, 100: GRASS}
 _WC_LUT = np.zeros(256, np.uint8)
 for _c, _k in WC_KIND.items():
     _WC_LUT[_c] = _k
-# Overture land_use class -> kind (others: the land cover's own)
+# Overture land_use class -> kind (others: the land cover's own); OSM's tags refine some (land_use_kind)
 LAND_USE_KIND = {
-    **{c: LAWN for c in ("park", "garden", "village_green", "recreation_ground", "cemetery", "grave_yard",
-                         "golf_course", "pitch", "playground", "dog_park", "lawn", "common", "schoolyard")},
+    **{c: LAWN for c in ("park", "garden", "village_green", "recreation_ground", "golf_course", "dog_park", "lawn",
+                         "common")},
     **{c: GRASS for c in ("meadow", "grass", "grassland", "greenfield", "fell")},
-    **{c: CROP for c in ("farmland", "allotments", "plant_nursery", "farm")},
-    **{c: SHRUB for c in ("orchard", "vineyard", "heath", "scrub", "shrubland")},
+    **{c: CROP for c in ("farmland", "plant_nursery", "farm")},
+    **{c: SHRUB for c in ("heath", "scrub", "shrubland")},
     **{c: TREE for c in ("forest", "wood")},
     **{c: BARE for c in ("quarry", "landfill", "construction", "brownfield", "sand", "beach", "bare_rock",
                          "scree", "salt_pond")},
     **{c: WETLAND for c in ("wetland", "marsh", "swamp", "bog", "reedbed")},
+    # (stage 2: OSM's surfaces and patterns)
+    "orchard": ORCHARD, "vineyard": VINEYARD, "allotments": ALLOTMENT, "greenhouse_horticulture": GREENHOUSE,
+    "cemetery": CEMETERY, "grave_yard": CEMETERY, "track": TARTAN, "railway": GRAVEL,
+    **{c: LOT for c in ("commercial", "industrial", "retail")},
 }
+# a pitch's surface (OSM surface=*) -> kind; without one, by its sport, else grass
+PITCH_SURFACE = {"grass": TURF, "artificial_turf": ARTTURF, "artificial_grass": ARTTURF, "clay": CLAY,
+                 "tartan": TARTAN, "rubber": TARTAN, "asphalt": COURT, "concrete": COURT, "acrylic": COURT,
+                 "paved": COURT, "sand": BARE, "dirt": BARE}
+PITCH_SPORT = {"tennis": COURT, "basketball": COURT, "volleyball": COURT, "handball": COURT,
+               "beachvolleyball": BARE}
+# a square's / walk's / lot's surface -> kind
+SURFACE_KIND = {"paving_stones": PAVERS, "sett": PAVERS, "cobblestone": PAVERS, "unhewn_cobblestone": PAVERS,
+                "bricks": BRICK, "brick": BRICK, "concrete": CONCRETE, "concrete:plates": CONCRETE,
+                "concrete:lanes": CONCRETE, "asphalt": PAVED, "paved": PAVED, "metal": CONCRETE, "wood": PATH,
+                "gravel": GRAVEL, "fine_gravel": GRAVEL, "pebblestone": GRAVEL, "compacted": GRAVEL,
+                "unpaved": PATH, "dirt": PATH, "ground": PATH, "earth": PATH, "mud": PATH, "sand": BARE,
+                "grass": LAWN, "grass_paver": LAWN}
+# road lines (the roads layer's class) drawn into the ground: (kind without a surface, half-width m)
+LINE_ROADS = {"footway": (PATH_AUTO, 0.9), "path": (PATH, 0.6), "cycleway": (PATH_AUTO, 1.0),
+              "bridleway": (PATH, 1.0), "steps": (PATH_AUTO, 1.0), "pedestrian": (PATH_AUTO, 2.0),
+              "track": (GRAVEL, 1.5)}
+SERVICE_HALF = {"driveway": 1.5, "parking_aisle": 3.0, "alley": 2.0}
+UNPAVED = {"gravel", "fine_gravel", "compacted", "unpaved", "dirt", "ground", "earth", "pebblestone", "grass", "sand",
+           "mud"}
+RAIL_HALF_M = 1.8               # a track's ballast
+# waterway lines: half-width m (a mapped width wins)
+WATERWAY_HALF = {"stream": 1.5, "ditch": 0.8, "drain": 0.8, "canal": 3.0, "river": 4.0, "brook": 1.0}
 # Overture infrastructure class -> kind, drawn over the water (a pier's deck is not water)
 INFRA_KIND = {"pier": BUILT, "dock": BUILT, "breakwater": BARE, "groyne": BARE}
+PIER_HALF_M = 1.5               # man_made=pier lines (floating piers, boardwalks over the water)
+HEDGE_HALF_M = 1.2              # barrier=hedge
+TREE_ROW_HALF_M = 3.0           # natural=tree_row
 CANOPY_NODATA = 255
 R_MERC = 6378137.0
 
@@ -148,41 +196,99 @@ def base_kinds(classes, lat, lon):
     return base
 
 
+def _tags(f, i):
+    """OSM's tags of feature i (Overture's source_tags JSON), {} when none."""
+    t = f.attrs.get("tags")
+    if t is None:
+        return {}
+    v = str(t[i])
+    if not v or v in ("None", "null", "nan"):
+        return {}
+    try:
+        d = json.loads(v)
+    except ValueError:
+        return {}
+    return d if isinstance(d, dict) else {}
+
+
+def _attr(f, name, i):
+    """Attribute name of feature i as a stripped lower-case string, or None."""
+    a = f.attrs.get(name)
+    if a is None:
+        return None
+    v = a[i]
+    if v is None or (isinstance(v, (float, np.floating)) and not np.isfinite(v)):
+        return None
+    out = str(v).strip().lower()
+    return None if out in ("", "none", "nan", "null") else out
+
+
+def _width(v):
+    """A mapped width in metres ("3", "3 m", "2.5"), or None."""
+    try:
+        w = float(str(v).lower().replace("m", "").strip())
+    except (TypeError, ValueError):
+        return None
+    return w if 0.3 <= w <= 60.0 else None
+
+
+def polygon_kind(layer, f, i):
+    """(kind, order) a polygon draws (kind 255: none). Order: 0 land use (largest first), 1 surfaces (pitches, squares,
+    playgrounds, unpaved lots: over the parks they lie in), 2 water and pools, 3 piers and docks."""
+    cls = _attr(f, "class", i) or ""
+    tags = _tags(f, i)
+    surf = _attr(f, "surface", i) or str(tags.get("surface") or "").strip().lower()
+    if layer == "water":
+        return (POOL if cls == "swimming_pool" or tags.get("leisure") == "swimming_pool" else WATER), 2
+    if layer == "infrastructure":
+        if cls in INFRA_KIND:
+            return INFRA_KIND[cls], 3
+        if (cls == "parking" or tags.get("amenity") == "parking") and surf in UNPAVED:
+            return GRAVEL, 1        # (a paved lot is painted asphalt: surface.paint_square's lots)
+        return 255, 0
+    if cls == "pitch":
+        sport = str(tags.get("sport") or "").split(";")[0].strip()
+        return PITCH_SURFACE.get(surf) or PITCH_SPORT.get(sport) or TURF, 1
+    if cls in ("pedestrian", "plaza") or tags.get("place") == "square" or tags.get("highway") == "pedestrian":
+        return SURFACE_KIND.get(surf, PAVERS), 1     # (no surface: pavers, as the square's material layer, plazas.paving)
+    if cls in ("schoolyard", "playground"):
+        if surf in SURFACE_KIND:
+            return SURFACE_KIND[surf], 1
+        return (BARE if cls == "playground" else 255), 1
+    if cls == "parking" and surf in UNPAVED:
+        return GRAVEL, 1
+    return LAND_USE_KIND.get(cls, 255), 0
+
+
+def _phase(fid):
+    """m a polygon's rows are moved across, from its id (the same for each of its pieces in every cell and block)."""
+    h = hashlib.blake2b(str(fid).encode(), digest_size=8).digest()
+    return int.from_bytes(h, "little") / 2.0 ** 64 * 12.0
+
+
 def polygons(frame, x0, y0, size, px, feats_list):
-    """(poly (px, px) uint32: 0 or 1 + the index of the polygon over each texel, kinds (polygons,) uint8) of the
-    land-use, water and infrastructure Features in feats_list ([(layer name, Features)]): the land use by area,
-    largest first (a park inside a bigger farm area wins), then the water, then piers and docks (INFRA_KIND)."""
+    """(poly (px, px) uint32: 0 or 1 + the index of the polygon over each texel, kinds (polygons,) uint8, dirs
+    (polygons, 2) each one's rows' direction (east, north), phases (polygons,) m) of the land-use, water and
+    infrastructure Features in feats_list ([(layer name, Features)]), drawn in polygon_kind's order (land use by area,
+    largest first: a park inside a bigger farm area wins)."""
     fast.require(NEED, "generated ground")
     t = size / px
     top = y0 + size
-    items = []          # (order, -area, id, kind, [rings as texel (col, row)])
+    items = []          # (order, -area, id, part, kind, [rings as texel (col, row)])
     seen = set()
     for layer, f in feats_list:
         if f is None or not len(f):
             continue
-        if layer == "water":
-            sel = np.ones(len(f), bool)
-            kinds = np.full(len(f), WATER, np.uint8)
-            order = 1
-        elif layer == "infrastructure":     # piers and docks over the water (their decks: built ground)
-            cls = f.attrs.get("class")
-            if cls is None:
-                continue
-            kinds = np.array([INFRA_KIND.get(str(c), 255) for c in cls], np.uint8)
-            sel = kinds != 255
-            order = 2
-        else:
-            cls = f.attrs.get("class")
-            if cls is None:
-                continue
-            kinds = np.array([LAND_USE_KIND.get(str(c), 255) for c in cls], np.uint8)
-            sel = kinds != 255
-            order = 0
-        sel &= np.asarray(f.kind) == 3
-        if not sel.any():
+        poly_rows = np.flatnonzero(np.asarray(f.kind) == 3)
+        if not len(poly_rows):
             continue
-        xy = f.xy_in(frame)
-        for i in np.flatnonzero(sel):
+        xy = None
+        for i in poly_rows:
+            kind, order = polygon_kind(layer, f, i)
+            if kind == 255:
+                continue
+            if xy is None:
+                xy = f.xy_in(frame)
             fid = str(f.ids[i])
             for pi, part in enumerate(f.parts(i, xy)):
                 if not part or (fid, pi, layer) in seen:
@@ -196,22 +302,125 @@ def polygons(frame, x0, y0, size, px, feats_list):
                 area = abs(float(np.sum(x[:-1] * y[1:] - x[1:] * y[:-1]) + x[-1] * y[0] - x[0] * y[-1])) / 2.0
                 rings = [np.stack([(np.asarray(r, np.float64)[:, 0] - x0) / t,
                                    (top - np.asarray(r, np.float64)[:, 1]) / t], 1) for r in part if len(r) >= 3]
-                items.append((order, -area, fid, pi, int(kinds[i]), rings))
+                items.append((order, -area, fid, pi, int(kind), rings))
     poly = np.zeros((px, px), np.uint32)
     if not items:
-        return poly, np.zeros(0, np.uint8)
+        return poly, np.zeros(0, np.uint8), np.zeros((0, 2)), np.zeros(0)
     items.sort(key=lambda it: it[:4])
-    pts, ring_off, poly_off, kinds = [], [0], [0], []
-    for _o, _a, _fid, _pi, k, rings in items:
+    pts, ring_off, poly_off, kinds, phases = [], [0], [0], [], []
+    for _o, _a, fid, _pi, k, rings in items:
         for r in rings:
             pts.append(r)
             ring_off.append(ring_off[-1] + len(r))
         poly_off.append(len(ring_off) - 1)
         kinds.append(k)
-    fast._ef.gg_fill_polys(poly, np.ascontiguousarray(np.concatenate(pts), np.float64),
-                           np.asarray(ring_off, np.int64), np.asarray(poly_off, np.int64),
-                           np.arange(1, len(kinds) + 1, dtype=np.uint32))
-    return poly, np.asarray(kinds, np.uint8)
+        phases.append(_phase(fid))
+    pts = np.ascontiguousarray(np.concatenate(pts), np.float64)
+    ring_off = np.asarray(ring_off, np.int64)
+    poly_off = np.asarray(poly_off, np.int64)
+    fast._ef.gg_fill_polys(poly, pts, ring_off, poly_off, np.arange(1, len(kinds) + 1, dtype=np.uint32))
+    ax = fast._ef.gg_poly_axes(pts, ring_off, poly_off)     # (in texels: rows run south)
+    dirs = np.ascontiguousarray(np.stack([ax[:, 0], -ax[:, 1]], 1))
+    return poly, np.asarray(kinds, np.uint8), dirs, np.asarray(phases, np.float64)
+
+
+def line_items(roads_list, water_list, infra_list):
+    """[(order, id, kind, half m, Features, row)] of the lines the ground draws: railway ballast (0), paths, tracks and
+    unpaved drives (1), hedges and tree rows (2), streams and ditches (3), piers (4), later orders over earlier. Not
+    underground or on a bridge (a road's layer other than 0, a waterway's tunnel or culvert)."""
+    out = []
+    for f in roads_list:
+        if f is None or not len(f):
+            continue
+        for i in np.flatnonzero(np.asarray(f.kind) == 2):
+            cls = _attr(f, "class", i) or ""
+            sub = _attr(f, "subtype", i) or ""
+            try:
+                layer = float(_attr(f, "osm_layer", i) or 0.0)
+            except ValueError:
+                layer = 0.0
+            if layer != 0:          # (underground, or a bridge: the ground under it is not the line)
+                continue
+            surf = _attr(f, "osm_surface", i)
+            width = _width(_attr(f, "osm_width", i))
+            if sub == "rail":
+                rw = _attr(f, "osm_railway", i) or ""
+                if cls in ("subway", "tram", "funicular") or rw in ("subway", "tram", "abandoned", "razed",
+                                                                   "proposed", "construction"):
+                    continue
+                out.append((0, str(f.ids[i]), GRAVEL, RAIL_HALF_M, f, i))
+            elif cls in LINE_ROADS:
+                kind, half = LINE_ROADS[cls]
+                if surf in SURFACE_KIND:
+                    kind = SURFACE_KIND[surf]
+                out.append((1, str(f.ids[i]), kind, width / 2 if width else half, f, i))
+            elif cls == "service" and surf in UNPAVED:
+                half = width / 2 if width else SERVICE_HALF.get(_attr(f, "osm_service", i) or "", 2.0)
+                out.append((1, str(f.ids[i]), GRAVEL if surf not in ("grass", "dirt", "ground", "earth", "mud")
+                            else PATH, half, f, i))
+    for f in infra_list:
+        if f is None or not len(f):
+            continue
+        for i in np.flatnonzero(np.asarray(f.kind) == 2):
+            tags = _tags(f, i)
+            cls = _attr(f, "class", i) or ""
+            if cls == "hedge" or tags.get("barrier") == "hedge":
+                out.append((2, str(f.ids[i]), TREE, HEDGE_HALF_M, f, i))
+            elif tags.get("natural") == "tree_row":
+                out.append((2, str(f.ids[i]), TREE, TREE_ROW_HALF_M, f, i))
+            elif cls == "pier" or tags.get("man_made") == "pier":
+                # (a pier's deck over the water: built ground, as INFRA_KIND's pier polygons; drawn after the water)
+                width = _width(tags.get("width"))
+                out.append((4, str(f.ids[i]), BUILT, width / 2 if width else PIER_HALF_M, f, i))
+    for f in water_list:
+        if f is None or not len(f):
+            continue
+        for i in np.flatnonzero(np.asarray(f.kind) == 2):
+            tags = _tags(f, i)
+            if tags.get("tunnel") or str(tags.get("location") or "") == "underground":
+                continue
+            cls = _attr(f, "class", i) or str(tags.get("waterway") or "")
+            way = str(tags.get("waterway") or cls)
+            half = WATERWAY_HALF.get(way, WATERWAY_HALF.get(cls))
+            if half is None:
+                continue
+            width = _width(tags.get("width"))
+            out.append((3, str(f.ids[i]), WATER, width / 2 if width else half, f, i))
+    return out
+
+
+def lines(frame, x0, y0, size, px, roads_list, water_list, infra_list):
+    """(line (px, px) uint32: 0 or 1 + the index of the line over each texel, kinds (lines,) uint8) of line_items,
+    buffered to their widths (earthfast.gg_fill_lines), in their order."""
+    fast.require(NEED, "generated ground")
+    t = size / px
+    top = y0 + size
+    pts, offs, halves, kinds, keys, seen = [], [0], [], [], [], set()
+    items = sorted(line_items(roads_list, water_list, infra_list), key=lambda it: it[:2])
+    xys = {}
+    for order, fid, kind, half, f, i in items:
+        if (order, fid) in seen:
+            continue
+        seen.add((order, fid))
+        xy = xys.get(id(f))
+        if xy is None:
+            xy = xys[id(f)] = f.xy_in(frame)
+        for part in f.parts(i, xy):
+            for ring in part:
+                r = np.asarray(ring, np.float64)
+                if len(r) < 2 or r[:, 0].max() < x0 - half or r[:, 0].min() > x0 + size + half \
+                        or r[:, 1].max() < y0 - half or r[:, 1].min() > top + half:
+                    continue
+                pts.append(np.stack([(r[:, 0] - x0) / t, (top - r[:, 1]) / t], 1))
+                offs.append(offs[-1] + len(r))
+                halves.append(half / t)
+                kinds.append(kind)
+    line = np.zeros((px, px), np.uint32)
+    if not kinds:
+        return line, np.zeros(0, np.uint8)
+    fast._ef.gg_fill_lines(line, np.ascontiguousarray(np.concatenate(pts), np.float64), np.asarray(offs, np.int64),
+                           np.asarray(halves, np.float64), np.arange(1, len(kinds) + 1, dtype=np.uint32))
+    return line, np.asarray(kinds, np.uint8)
 
 
 def canopy_grid(lat, lon, rasters):
@@ -233,8 +442,8 @@ def canopy_grid(lat, lon, rasters):
 
 
 def inputs(frame, x0, y0, size, px, md, surface, widths=None):
-    """(kind, region, canopy, complete) (px, px) of the square for gen_ground, from the cached map data (never waits:
-    what is missing is queued, a revisit fault, and complete is False)."""
+    """(kind, region, canopy, complete, poly, dirs, phases) of the square for gen_ground, from the cached map data
+    (never waits: what is missing is queued, a revisit fault, and complete is False)."""
     import buildings as buildingsmod
     import surface as surfacemod
     fast.require(NEED, "generated ground")
@@ -246,19 +455,26 @@ def inputs(frame, x0, y0, size, px, md, surface, widths=None):
         classes = np.zeros(lat.shape, np.uint8)
     base = base_kinds(classes, lat, lon)
     feats, canopies, missing = [], [], []
+    by_layer = {"roads": [], "water": [], "infrastructure": []}
     keys = _cells(lat, lon)
     for key in keys:
         for layer in ("land_use", "water", "infrastructure"):
             f = _layer(md, key, layer, missing, surface)
             if f is not None:
                 feats.append((layer, f))
+                if layer in by_layer:
+                    by_layer[layer].append(f)
         canopies.append(_layer(md, key, "canopy", missing, surface))
+        f = _layer(md, key, "roads", missing, surface)
+        if f is not None:
+            by_layer["roads"].append(f)
     if md is not None:
         for key in keys:
-            for layer in ("landcover", "roads", "buildings"):
+            for layer in ("landcover", "buildings"):
                 if not md.has(key, layer):
                     missing.append((key, layer))
-    poly, pkinds = polygons(frame, x0, y0, size, px, feats)
+    poly, pkinds, dirs, phases = polygons(frame, x0, y0, size, px, feats)
+    line, lkinds = lines(frame, x0, y0, size, px, by_layer["roads"], by_layer["water"], by_layer["infrastructure"])
     canopy = canopy_grid(lat, lon, canopies)
     cover = np.zeros((px, px), np.uint8)
     if surface is not None:
@@ -275,8 +491,8 @@ def inputs(frame, x0, y0, size, px, md, surface, widths=None):
                 cover[np.asarray(m, bool)] |= 4
         except Exception as e:      # (the roofs are filled in after anyway)
             log.debug("genground: building mask: %s: %s", type(e).__name__, e)
-    kind, region = fast._ef.gg_regions(np.ascontiguousarray(base), poly, pkinds, canopy, cover)
-    return kind, region, canopy, bool(complete) and not missing
+    kind, region = fast._ef.gg_regions(np.ascontiguousarray(base), poly, pkinds, line, lkinds, canopy, cover)
+    return kind, region, canopy, bool(complete) and not missing, poly, dirs, phases
 
 
 def halo_square(x0, y0, size, px):
@@ -294,21 +510,31 @@ def generate(rgb, frame, x0, y0, size, px, md, surface, widths=None):
     rgb = np.ascontiguousarray(np.asarray(rgb, np.uint8)[:, :, :3])
     if rgb.shape[:2] != (px, px):
         raise ValueError(f"generated ground: a {rgb.shape[:2]} photo for {px} px")
-    kind, region, canopy, complete = inputs(frame, x0, y0, size, px, md, surface, widths)
+    kind, region, canopy, complete, poly, dirs, phases = inputs(frame, x0, y0, size, px, md, surface, widths)
     t = size / px
     # (the global texel grid of the anchor frame: the blocks' texels lie on it, so their lattices agree)
     gc, gr = int(np.floor(x0 / t + 0.5)), int(np.floor(-(y0 + size) / t + 0.5))
-    out = fast._ef.gen_ground(rgb, kind, region, canopy, float(x0 + t / 2), float(y0 + size - t / 2), float(t), gr, gc)
+    out = fast._ef.gen_ground(rgb, kind, region, canopy, poly, dirs, phases, float(x0 + t / 2),
+                              float(y0 + size - t / 2), float(t), gr, gc)
     return out, complete
 
 
 def render(imagery, frame, x0, y0, size, px, md, surface, widths=None, pending=None):
     """(rgb (px, px, 3), sources used): the generated ground of [x0, x0 + size]^2 of frame at px, made over the square
     with HALO_M round it and cut to it (every block covering a spot draws it alike, the Codex review of 41d74b61). With
-    map data still missing GEN_PENDING goes into pending (earthd.Server.base_ready: made again once it is here)."""
+    map data still missing GEN_PENDING goes into pending (earthd.Server.base_ready: made again once it is here).
+    The season (imagery's season grade: fall colours, bare winter canopy, the spring flush) goes over the generated
+    ground, not under it: Sentinel-2 rendered as it is, the ground made, then graded like any photo of the place."""
     hx0, hy0, hsize, hpx, h = halo_square(x0, y0, size, px)
-    rgb, used = imagery.render(frame, hx0, hy0, hsize, hpx, pending)
+    where = None
+    if hasattr(imagery, "_render") and hasattr(imagery, "_seasoned"):
+        where = imagery.square(frame, hx0, hy0, hsize, hpx)
+        rgb, used = imagery._render(where, hpx, pending)
+    else:                           # (a stand-in imagery: its render as it is)
+        rgb, used = imagery.render(frame, hx0, hy0, hsize, hpx, pending)
     out, complete = generate(rgb, frame, hx0, hy0, hsize, hpx, md, surface, widths)
+    if where is not None:
+        out = imagery._seasoned(where, np.asarray(out, np.uint8))
     if not complete and pending is not None:
         pending.add(GEN_PENDING)
-    return np.ascontiguousarray(out[h:h + px, h:h + px]), used
+    return np.ascontiguousarray(np.asarray(out, np.uint8)[h:h + px, h:h + px]), used

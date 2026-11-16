@@ -117,6 +117,7 @@ mod bc1fast;
 mod l0roads;
 mod groundphoto;
 mod genground;
+mod ggshapes;
 mod layerfold;
 mod roadsurf;
 mod levelways;
@@ -6472,6 +6473,9 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     genground::register(m)?;
     // 307: gen_ground(..., gr, gc): its sampling lattices on the global texel grid, the caller's square with a halo
     // (Codex review of 306: overlapping blocks drew the same ground in other colours)
-    m.add("VERSION", 307)?;
+    // 308: generated ground stage 2: gg_regions(..., line, line_kind, ...) and the surface / pattern kinds,
+    // gen_ground(..., poly, pdir, pphase, ...), ggshapes::gg_fill_lines / gg_poly_axes
+    ggshapes::register(m)?;
+    m.add("VERSION", 308)?;
     Ok(())
 }

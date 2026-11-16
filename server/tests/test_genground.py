@@ -50,14 +50,19 @@ def blurred_edge(n, col, a, b, width=10):
     return np.ascontiguousarray(np.broadcast_to(img, (n, n, 3)).round().astype(np.uint8))
 
 
-def gen(s2, kind, region=None, canopy=None, ox=1000.0, oy=2000.0, gr=None, gc=None):
+def gen(s2, kind, region=None, canopy=None, ox=1000.0, oy=2000.0, gr=None, gc=None, poly=None, dirs=None,
+        phases=None):
     """gen_ground at 1 m texels; texel (0, 0) at world (ox, oy), on the global grid at (-oy, ox) by default."""
     n = kind.shape[0]
     region = kind.astype(np.uint32) if region is None else region
     canopy = np.full((n, n), 255, np.uint8) if canopy is None else canopy
+    poly = np.zeros((n, n), np.uint32) if poly is None else poly
+    dirs = np.zeros((0, 2)) if dirs is None else np.asarray(dirs, np.float64)
+    phases = np.zeros(len(dirs)) if phases is None else np.asarray(phases, np.float64)
     return EF.gen_ground(np.ascontiguousarray(s2), np.ascontiguousarray(kind, np.uint8),
-                         np.ascontiguousarray(region, np.uint32), np.ascontiguousarray(canopy, np.uint8), float(ox),
-                         float(oy), 1.0, int(-oy if gr is None else gr), int(ox if gc is None else gc))
+                         np.ascontiguousarray(region, np.uint32), np.ascontiguousarray(canopy, np.uint8),
+                         np.ascontiguousarray(poly, np.uint32), np.ascontiguousarray(dirs), np.ascontiguousarray(phases),
+                         float(ox), float(oy), 1.0, int(-oy if gr is None else gr), int(ox if gc is None else gc))
 
 
 class FillPolysTest(unittest.TestCase):
@@ -84,13 +89,15 @@ class FillPolysTest(unittest.TestCase):
 
 
 class RegionsTest(unittest.TestCase):
-    def regions(self, base, poly=None, pkinds=(), canopy=None, cover=None):
+    def regions(self, base, poly=None, pkinds=(), canopy=None, cover=None, line=None, lkinds=()):
         base = np.asarray(base, np.uint8)
         sh = base.shape
         poly = np.zeros(sh, np.uint32) if poly is None else np.asarray(poly, np.uint32)
+        line = np.zeros(sh, np.uint32) if line is None else np.asarray(line, np.uint32)
         canopy = np.full(sh, 255, np.uint8) if canopy is None else np.asarray(canopy, np.uint8)
         cover = np.zeros(sh, np.uint8) if cover is None else np.asarray(cover, np.uint8)
-        return EF.gg_regions(base, poly, np.asarray(pkinds, np.uint8), canopy, cover)
+        return EF.gg_regions(base, poly, np.asarray(pkinds, np.uint8), line, np.asarray(lkinds, np.uint8), canopy,
+                             cover)
 
     def test_polygon_rules(self):
         base = [[gg.TREE, gg.BUILT, gg.CROP, gg.WATER, gg.BUILT, gg.CROP, gg.BARE]]
@@ -98,20 +105,42 @@ class RegionsTest(unittest.TestCase):
         k, r = self.regions(base, poly, (gg.LAWN, gg.TREE))
         self.assertEqual(k.tolist(), [[gg.TREE, gg.LAWN, gg.LAWN, gg.WATER, gg.BUILT, gg.TREE, gg.BARE]],
                          "a park keeps its trees and water; a forest polygon keeps built-up and bare land")
-        self.assertEqual(r[0, 1], (1 << 4) | gg.LAWN)
-        self.assertEqual(r[0, 0], (1 << 4) | gg.TREE, "a park's trees: a region of their own")
+        self.assertEqual(r[0, 1], (1 << 5) | gg.LAWN)
+        self.assertEqual(r[0, 0], (1 << 5) | gg.TREE, "a park's trees: a region of their own")
         self.assertNotEqual(r[0, 5], r[0, 0], "each polygon's trees their own region")
 
     def test_canopy_and_cover(self):
-        base = [[gg.GRASS, gg.TREE, gg.TREE, gg.WATER, gg.GRASS, gg.GRASS, gg.GRASS]]
-        canopy = [[12, 1, 0, 30, 255, 20, 20]]
-        cover = [[0, 0, 0, 0, 1, 2, 2 | 4]]
+        base = [[gg.GRASS, gg.GRASS, gg.TREE, gg.TREE, gg.WATER, gg.GRASS, gg.GRASS, gg.GRASS]]
+        canopy = [[12, 0, 1, 0, 30, 255, 20, 20]]
+        cover = [[0, 0, 0, 0, 0, 1, 2, 2 | 4]]
         k, r = self.regions(base, canopy=canopy, cover=cover)
-        self.assertEqual(k.tolist(), [[gg.TREE, gg.SHRUB, gg.GRASS, gg.WATER, gg.WATER, gg.PAVED, gg.ROOF]])
+        self.assertEqual(k.tolist(), [[gg.TREE, gg.GRASS, gg.SHRUB, gg.GRASS, gg.WATER, gg.WATER, gg.PAVED, gg.ROOF]])
+        r = r[:, 1:]
         self.assertEqual(r[0, 5], gg.PAVED)
         self.assertEqual(r[0, 6], gg.ROOF)
         k2, r2 = self.regions([[gg.BUILT, gg.BUILT]], poly=[[1, 2]], pkinds=(gg.LAWN, gg.LAWN), cover=[[2, 2]])
         self.assertEqual(r2[0, 0], r2[0, 1], "roads: one region whatever the polygons under them")
+
+    def test_hedgerows_grow(self):
+        # (stage 2) the canopy model draws a hedgerow's tall core only: open ground with some canopy next to a tree
+        k, _ = self.regions([[gg.CROP, gg.CROP, gg.CROP, gg.CROP, gg.CROP]], canopy=[[0, 1, 9, 2, 1]])
+        self.assertEqual(k.tolist(), [[gg.CROP, gg.TREE, gg.TREE, gg.TREE, gg.CROP]])
+
+    def test_lines(self):
+        base = [[gg.BUILT, gg.GRASS, gg.GRASS, gg.TREE, gg.WATER, gg.GRASS]]
+        line = [[1, 1, 2, 3, 3, 0]]
+        k, r = self.regions(base, line=line, lkinds=(gg.PATH_AUTO, gg.TREE, gg.WATER), canopy=[[255, 255, 255, 12,
+                                                                                                255, 255]])
+        self.assertEqual(k.tolist(), [[gg.CONCRETE, gg.PATH, gg.TREE, gg.WATER, gg.WATER, gg.GRASS]],
+                         "a footway: concrete in town, an earth path elsewhere; a hedge; a stream over trees")
+        self.assertEqual(r[0, 3], r[0, 4], "a line's texels: one region per kind")
+
+    def test_surfaces_and_lots(self):
+        base = [[gg.LAWN, gg.TREE, gg.WATER, gg.LAWN, gg.GRASS, gg.TREE]]
+        poly = [[1, 1, 1, 2, 2, 3]]
+        k, _ = self.regions(base, poly, (gg.TURF, gg.LOT, gg.ORCHARD), canopy=[[9, 255, 255, 255, 255, 1]])
+        self.assertEqual(k.tolist(), [[gg.TURF, gg.TURF, gg.WATER, gg.BUILT, gg.BUILT, gg.ORCHARD]],
+                         "a pitch over the park (no canopy trees on it); commercial land's lawns paved; an orchard")
 
 
 class GenGroundTest(unittest.TestCase):
@@ -230,7 +259,9 @@ class PolygonsTest(unittest.TestCase):
         lu = _Feats([[square(0, 0, 60, 60)], [square(10, 10, 20, 20)], [square(30, 30, 40, 40)]],
                     ["farmland", "park", "residential"])
         water = _Feats([[square(40, 40, 50, 50)]], ["lake"])
-        poly, kinds = gg.polygons(None, 0.0, 0.0, 64.0, 64, [("land_use", lu), ("water", water)])
+        poly, kinds, dirs, phases = gg.polygons(None, 0.0, 0.0, 64.0, 64, [("land_use", lu), ("water", water)])
+        self.assertEqual(dirs.shape, (3, 2))
+        self.assertEqual(len(phases), 3)
         self.assertEqual(kinds.tolist(), [gg.CROP, gg.LAWN, gg.WATER], "the largest first; residential has no kind")
         self.assertEqual(kinds[poly[64 - 15, 15] - 1], gg.LAWN, "row 0 = north: y 15 m is row 49")
         self.assertEqual(kinds[poly[64 - 45, 45] - 1], gg.WATER)
