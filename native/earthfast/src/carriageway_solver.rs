@@ -2,6 +2,7 @@
 //! An unconstrained banded solve handles already-feasible profiles; Clarabel's native sparse QP handles the rest.
 //! A coupling with a penalty is soft: it may be broken, at that cost per metre (one slack per row, an exact L1
 //! penalty: met wherever it can be, broken only where the hard rows leave no room, and by the least).
+//! A coupling's gap is z_a - z_b, or z_a alone without b (a bound as a row: soft, unlike lower / upper).
 use clarabel::algebra::CscMatrix;
 use clarabel::solver::{
     DefaultSettings, DefaultSolver, IPSolver, NonnegativeConeT, SolverStatus, ZeroConeT,
@@ -22,8 +23,11 @@ pub struct Parameters {
 #[derive(Clone, Copy, Debug)]
 pub struct Coupling {
     pub a: usize,
-    pub b: usize,
+    /// None: the row is on z_a alone.
+    pub b: Option<usize>,
     pub inequality: bool,
+    /// With inequality: gap <= value, else gap >= value.
+    pub upper: bool,
     pub value: f64,
     /// 0: hard. Above: soft, its slack's cost per metre.
     pub penalty: f64,
@@ -133,6 +137,27 @@ struct Row {
     rhs: f64,
 }
 
+/// The row scale * gap (+ slack's coefficient -1 when given), right-hand side rhs.
+fn gap_row(c: &Coupling, scale: f64, slack: Option<usize>, rhs: f64) -> Row {
+    let mut row = Row {
+        index: [c.a, 0, 0],
+        coeff: [scale, 0., 0.],
+        len: 1,
+        rhs,
+    };
+    if let Some(b) = c.b {
+        row.index[1] = b;
+        row.coeff[1] = -scale;
+        row.len = 2;
+    }
+    if let Some(s) = slack {
+        row.index[row.len] = s;
+        row.coeff[row.len] = -1.;
+        row.len += 1;
+    }
+    row
+}
+
 fn bounds(mut row: Row, lo: f64, hi: f64, equalities: &mut Vec<Row>, inequalities: &mut Vec<Row>) {
     if lo == hi {
         row.rhs = lo;
@@ -175,14 +200,15 @@ pub fn measure(problem: &Problem, z: &[f64], d: &mut Diagnostics) {
         d.feasible &= v.is_finite();
     }
     for c in &problem.couplings {
-        let gap = z[c.a] - z[c.b];
+        let gap = z[c.a] - c.b.map_or(0., |b| z[b]);
+        let short = if c.upper { gap - c.value } else { c.value - gap }.max(0.);
         if c.penalty > 0. {
-            let excess = if c.inequality { (c.value - gap).max(0.) } else { gap.abs() };
+            let excess = if c.inequality { short } else { gap.abs() };
             d.soft_excess = d.soft_excess.max(excess);
             d.soft_sum += excess;
             d.soft_broken += (excess > 1e-3) as usize;
         } else if c.inequality {
-            d.clearance_shortfall = d.clearance_shortfall.max((c.value - gap).max(0.));
+            d.clearance_shortfall = d.clearance_shortfall.max(short);
         } else {
             d.junction_gap = d.junction_gap.max(gap.abs());
         }
@@ -300,13 +326,9 @@ pub fn solve(
         if c.penalty > 0. {
             q[slack] = c.penalty;
             if c.inequality {
-                // z_a - z_b + s >= v:  -z_a + z_b - s <= -v
-                ineq.push(Row {
-                    index: [c.a, c.b, slack],
-                    coeff: [-1., 1., -1.],
-                    len: 3,
-                    rhs: -c.value,
-                });
+                // sign * gap + s >= sign * v (sign -1: gap <= v):  -sign * gap - s <= -sign * v
+                let sign = if c.upper { -1. } else { 1. };
+                ineq.push(gap_row(c, -sign, Some(slack), -sign * c.value));
                 ineq.push(Row {
                     index: [slack, 0, 0],
                     coeff: [-1., 0., 0.],
@@ -314,29 +336,21 @@ pub fn solve(
                     rhs: 0.,
                 });
             } else {
-                // |z_a - z_b| <= s (s >= 0 follows)
+                // |gap| <= s (s >= 0 follows)
                 for sign in [1., -1.] {
-                    ineq.push(Row {
-                        index: [c.a, c.b, slack],
-                        coeff: [sign, -sign, -1.],
-                        len: 3,
-                        rhs: 0.,
-                    });
+                    ineq.push(gap_row(c, sign, Some(slack), 0.));
                 }
             }
             slack += 1;
             continue;
         }
-        let row = Row {
-            index: [c.a, c.b, 0],
-            coeff: [1., -1., 0.],
-            len: 2,
-            rhs: 0.,
-        };
-        if c.inequality {
-            bounds(row, c.value, f64::INFINITY, &mut eq, &mut ineq);
-        } else {
+        let row = gap_row(c, 1., None, 0.);
+        if !c.inequality {
             bounds(row, 0., 0., &mut eq, &mut ineq);
+        } else if c.upper {
+            bounds(row, f64::NEG_INFINITY, c.value, &mut eq, &mut ineq);
+        } else {
+            bounds(row, c.value, f64::INFINITY, &mut eq, &mut ineq);
         }
     }
     measure(problem, &z, &mut d);
@@ -478,8 +492,9 @@ mod tests {
     fn rise(a: usize, b: usize, value: f64, penalty: f64) -> Coupling {
         Coupling {
             a,
-            b,
+            b: Some(b),
             inequality: true,
+            upper: false,
             value,
             penalty,
         }
@@ -516,8 +531,9 @@ mod tests {
     fn a_soft_equality_breaks_where_the_holds_leave_no_room() {
         let rows = vec![Coupling {
             a: 0,
-            b: 4,
+            b: Some(4),
             inequality: false,
+            upper: false,
             value: 0.,
             penalty: 1e3,
         }];
@@ -525,5 +541,31 @@ mod tests {
         assert!(d.converged, "{d:?}");
         assert!((z[4] - 2.).abs() < 1e-6, "{z:?}");
         assert!((d.soft_excess - 2.).abs() < 1e-4, "{d:?}");
+    }
+
+    fn cap(a: usize, value: f64, penalty: f64) -> Coupling {
+        Coupling {
+            a,
+            b: None,
+            inequality: true,
+            upper: true,
+            value,
+            penalty,
+        }
+    }
+
+    #[test]
+    fn a_cap_on_one_sample_holds_hard_or_soft() {
+        // a line held at 1 at its ends, z2 <= 0: hard, it is met; soft, the same while it can be
+        let heights = [1.; 5];
+        let (hard, d) = solve(&line(&heights, &[(0, 1.), (4, 1.)], vec![cap(2, 0., 0.)]), 200, 10.).unwrap();
+        assert!(d.converged && hard[2] <= 1e-6, "{hard:?} {d:?}");
+        let (soft, d) = solve(&line(&heights, &[(0, 1.), (4, 1.)], vec![cap(2, 0., 1e3)]), 200, 10.).unwrap();
+        assert!(d.converged && d.soft_excess < 1e-5, "{soft:?} {d:?}");
+        assert!((hard[2] - soft[2]).abs() < 1e-4 && (hard[1] - soft[1]).abs() < 1e-4, "{hard:?} {soft:?}");
+        // held at 1 where it is capped at 0: soft, broken by 1 m
+        let (z, d) = solve(&line(&heights, &[(2, 1.)], vec![cap(2, 0., 1e3)]), 200, 10.).unwrap();
+        assert!(d.converged && (z[2] - 1.).abs() < 1e-6, "{z:?} {d:?}");
+        assert!((d.soft_excess - 1.).abs() < 1e-4 && d.soft_broken == 1, "{d:?}");
     }
 }

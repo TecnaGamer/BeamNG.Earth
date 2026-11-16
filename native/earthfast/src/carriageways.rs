@@ -107,14 +107,22 @@ pub fn carriageway_profiles<'py>(
     };
     let mut couplings = Vec::with_capacity(values.len());
     for (i, row) in rows.rows().into_iter().enumerate() {
-        if !(0..=1).contains(&row[4]) || !values[i].is_finite() || !penalty[i].is_finite() || penalty[i] < 0. {
+        // (kind 0: equal, 1: gap >= value, 2: gap <= value (306); chain b -1: the row on sample a alone (306), not
+        // an equality)
+        if !(0..=2).contains(&row[4])
+            || !values[i].is_finite()
+            || !penalty[i].is_finite()
+            || penalty[i] < 0.
+            || (row[2] == -1 && row[4] == 0)
+        {
             return Err(bad("invalid carriageway coupling"));
         }
         couplings.push(Coupling {
             a: sample(row[0], row[1])?,
-            b: sample(row[2], row[3])?,
-            inequality: row[4] == 1,
-            value: if row[4] == 1 { values[i] } else { 0. },
+            b: if row[2] == -1 { None } else { Some(sample(row[2], row[3])?) },
+            inequality: row[4] != 0,
+            upper: row[4] == 2,
+            value: if row[4] != 0 { values[i] } else { 0. },
             penalty: penalty[i],
         });
     }
