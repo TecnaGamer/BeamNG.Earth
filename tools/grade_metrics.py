@@ -198,6 +198,7 @@ def main():
                                "grade_broken_cells": int(sum(1 for i in infos if i.get("grade_broken"))),
                                "grade_excess_m": round(max((i.get("grade_excess_m", 0.0) for i in infos), default=0.0), 3),
                                "caps": int(sum(i.get("caps", 0) for i in infos)),
+                               "floors": int(sum(i.get("floors", 0) for i in infos)),
                                "clear_broken": int(sum(i.get("clear_broken", 0) for i in infos)),
                                "clear_excess_m": round(max((i.get("clear_excess_m", 0.0) for i in infos), default=0.0), 3),
                                "statuses": sorted({str(i.get("status")) for i in infos}),

@@ -2751,12 +2751,17 @@ class _Planner:
                 except Exception as e:      # as they were rather than no grading
                     _caught(e)
                     log.debug("grading: coarse easing of %s: %s: %s", key, type(e).__name__, e)
+            # (the approaches' lifts as the rule makes them: the shadow's floors. Without them the solve left a road
+            # leading onto a Tokyo deck on its ground, 1.3 m under the ramp the passes gave it and 1.07 m under the
+            # deck beside it)
+            z_prelift = [np.array(p.z, np.float64) for _f, p in plans] if z_before is not None else None
             if APPROACH_ON and plans:
                 try:
                     self._lift_approaches(key, plans, pspecs)
                 except Exception as e:      # ungraded approaches rather than no grading
                     _caught(e)
                     log.debug("grading: approaches of %s: %s: %s", key, type(e).__name__, e)
+            z_lift = [np.array(p.z, np.float64) for _f, p in plans] if z_before is not None else None
             # (the carriageways' profiles before the dips: a motorway under another road's low deck still dips)
             if CW_ON and plans:
                 try:
@@ -2830,7 +2835,7 @@ class _Planner:
                     log.debug("grading: junctions after welding of %s: %s: %s", key, type(e).__name__, e)
             if z_before is not None and plans:
                 try:            # the one solve beside the passes: measured only, their plans kept (vsolve)
-                    self._vsolve_shadow(key, plans, pspecs, z_before, z_under)
+                    self._vsolve_shadow(key, plans, pspecs, z_before, z_under, (z_prelift, z_lift))
                 except Exception as e:
                     log.warning("vsolve: shadow solve of %s: %s: %s", key, type(e).__name__, e)
             if plans:
@@ -2907,11 +2912,12 @@ class _Planner:
             keeps = []
         return feats, plans, keeps
 
-    def _vsolve_shadow(self, key, plans, pspecs, z_before, z_under=None):
+    def _vsolve_shadow(self, key, plans, pspecs, z_before, z_under=None, lifts=None):
         """The cell's ground roads solved in one problem (vsolve.solve) from their profiles before the passes, with the
         passes' discrete outputs as its inputs (the decks' heights at their abutments, the dips under decks: the
-        underpass rule's on z_under, the heights it sees in the passes, z_before's without); kept, trimmed to the cell
-        as its plans are, in self._vsolve[str(key)] = ([(fid, Plan)], info). The plans themselves untouched."""
+        underpass rule's on z_under, the heights it sees in the passes, z_before's without; the approaches' lifts,
+        lifts: the heights before and after _lift_approaches); kept, trimmed to the cell as its plans are, in
+        self._vsolve[str(key)] = ([(fid, Plan)], info). The plans themselves untouched."""
         import copy
         n = len(pspecs)
         ground = [p for _f, p in plans[:n]]
@@ -2952,7 +2958,14 @@ class _Planner:
         # rule's alone the solve stood it there again, 2.3 m under the deck where the passes left 2.8. The passes'
         # heights: the shadow's; without them (the RFC's step 4) clearance rows on the decks' own heights)
         caps = self._vsolve_caps(key, ground, [np.minimum(r, np.asarray(p.z, np.float64)) for r, p in zip(rule_z, ground)])
-        zs, info = vsolvemod.solve(ground, pspecs, z_before[:n], ceilings, ranks, pins, dips, caps=caps)
+        floors = [None] * n
+        if lifts is not None and lifts[0] is not None:
+            # (where the approach rule raised a road: at least that high, as the passes left it where they went lower)
+            for i, (a, b, p) in enumerate(zip(lifts[0][:n], lifts[1][:n], ground)):
+                up = b - a >= vsolvemod.DIP_M
+                if up.any():
+                    floors[i] = np.where(up, np.minimum(b, np.asarray(p.z, np.float64)), np.nan)
+        zs, info = vsolvemod.solve(ground, pspecs, z_before[:n], ceilings, ranks, pins, dips, caps=caps, floors=floors)
         if zs is None:          # (no feasible solve: the passes' heights, as the RFC's fallback; counted in info)
             zs = [np.array(p.z, np.float64) for p in ground]
         quad = self._clip_quad(key) if own is not None else None
@@ -2967,10 +2980,11 @@ class _Planner:
         info["pins"] = len(pins)
         info["dips"] = int(sum(int(np.isfinite(d).sum()) for d in dips if d is not None))
         info["caps"] = int(sum(int(np.isfinite(c).sum()) for c in caps if c is not None))
+        info["floors"] = int(sum(int(np.isfinite(c).sum()) for c in floors if c is not None))
         (log.warning if info["fallback"] else log.info)(
-            "vsolve: %s: %d roads, %d unknowns, %d joins, %d pins, %d dip rows, %d caps (%d broken, the most by "
-            "%.2f m): %s%s in %.2f s", key, n, info["n"], info["joins"], info["pins"], info["dips"], info["caps"],
-            info["clear_broken"], info["clear_excess_m"], info.get("status"),
+            "vsolve: %s: %d roads, %d unknowns, %d joins, %d pins, %d dip rows, %d caps and %d floors (%d broken, the "
+            "most by %.2f m): %s%s in %.2f s", key, n, info["n"], info["joins"], info["pins"], info["dips"], info["caps"],
+            info["floors"], info["clear_broken"], info["clear_excess_m"], info.get("status"),
             " (the passes' heights kept: %s)" % ", ".join(info.get("culprit") or ["?"]) if info["fallback"] else
             " (%d grade rows broken, the most by %.2f m%s)" % (
                 info["grade_broken"], info["grade_excess_m"],

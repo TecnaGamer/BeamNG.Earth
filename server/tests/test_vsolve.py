@@ -134,6 +134,17 @@ class SolveTest(unittest.TestCase):
         self.assertAlmostEqual(float(zs[0][0]), 5.0, places=4)
         self.assertLessEqual(float(zs[0][3]), 4.0 + 1e-3)       # (where it can hold: held)
 
+    def test_an_approach_the_rule_raised_stays_raised(self):
+        # (the approach rule raised the road's last 40 m onto its deck by up to 3 m: floors there; without them the
+        # solve, whose target is the profile, left it on its ground)
+        p = plan(np.c_[S, np.zeros_like(S)], np.zeros(len(S)))
+        lift = np.where(S >= 160, (S - 160) / 40 * 3.0, np.nan)
+        lift[lift < 0.3] = np.nan
+        zs, info = vsolve.solve([p], [spec("residential")], [np.zeros(len(S))], [0.12], [0], floors=[lift])
+        self.assertTrue(info["feasible"] and not info["clear_broken"], info)
+        ok = np.isfinite(lift)
+        self.assertGreaterEqual(float((zs[0][ok] - lift[ok]).min()), -1e-3)
+
     def test_a_steep_street_keeps_its_grade(self):
         z0 = 0.2 * S                     # (20 % on its ground, over its class's 12 %)
         p = plan(np.c_[S, np.zeros_like(S)], z0.copy())
