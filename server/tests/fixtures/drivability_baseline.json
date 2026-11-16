@@ -1804,7 +1804,7 @@
   }
  },
  "vienna_mooslacken_1083": {
-  "steps": 79,
+  "steps": 75,
   "parts": {
    "ground:44dbb086-8c34-429a-b9e1-f788916ec9f4": {
     "step_m": 1.2341,
@@ -1813,11 +1813,6 @@
    },
    "ground:7eb04a66-81b9-4a09-adbf-42a10c805e39": {
     "step_m": 2.1457,
-    "grade": 0.0,
-    "lift_g": 0.0
-   },
-   "ground:fc8772f1-5d78-4240-b9f6-28cfcc894555": {
-    "step_m": 0.2414,
     "grade": 0.0,
     "lift_g": 0.0
    }

@@ -30,6 +30,9 @@ MARGIN_M = 350.0                    # m of line taken round a node's support (+-
 SMOOTH_STEPS = 25                   # steps (STEP_M each) either side the ground beds are averaged over, twice more
 MAX_CUT_M = 3.0                     # m the long smoothing moves a bed at most (cuttings and embankments stay modest)
 PIN_M = 30.0                        # m from a part's end the bed is left as railways.profile made it (a joint, a deck)
+# A point of a line the node's window split into other parts than the asking window's (no exact key: _find) takes the
+# node's nearest points of the same line (_find_near); off with BNE_RAIL_FIND_NEAR=off.
+FIND_NEAR_ON = os.environ.get("BNE_RAIL_FIND_NEAR", "on") not in ("off", "0", "false")
 JOIN_ON = os.environ.get("BNE_RAIL_SWITCH_FIX", "on") not in ("off", "0", "false")
 JOIN_M = 2.0                        # m: a ground part's end this near another part's line (not near its ends) is a switch
 JOIN_INTERIOR_M = 3.0               # m: ... farther than this from the other part's own ends (that is a joint: profile's)
@@ -135,6 +138,38 @@ def _find(node, fid, kind, cm):
     return out
 
 
+def _find_near(node, fid, cm, out):
+    """out's NaNs (no exact key in node: _find) filled from node's points of fid, any kind, within half a STEP_M,
+    interpolated between the two nearest. The node's window split the line into other parts (other bridges spanned,
+    other starts) than the asking one, so no key matched: railways._beds fell back to profiling the whole cell, decks
+    raised 7.5 m over Popoli's track 2 carried along it, the ground graded to them (mounds, cut walls through the track)."""
+    todo = np.flatnonzero(np.isnan(out))
+    if not len(todo):
+        return out
+    ks, zs = [], []
+    for (f_, _k), (keys, z_) in node.items():
+        if f_ == fid:
+            ks.append(keys)
+            zs.append(z_)
+    if not ks:
+        return out
+    keys, z_ = np.concatenate(ks), np.concatenate(zs)
+    kx = (((keys >> 32) & 0xFFFFFFFF) - _PACK).astype(np.float64)     # (the sign bit: a key at x >= 0 wraps)
+    ky = ((keys & 0xFFFFFFFF) - _PACK).astype(np.float64)
+    lim = 50.0 * railways.STEP_M                # (cm: half a step)
+    for i in todo:
+        d = np.hypot(kx - cm[i, 0], ky - cm[i, 1])
+        j = np.argsort(d)[:2]
+        if d[j[0]] > lim:
+            continue
+        if len(j) > 1 and d[j[1]] <= 2 * lim and d[j[0]] + d[j[1]] > 0:
+            w0 = d[j[1]] / (d[j[0]] + d[j[1]])
+            out[i] = w0 * z_[j[0]] + (1.0 - w0) * z_[j[1]]
+        else:
+            out[i] = z_[j[0]]
+    return out
+
+
 def _node(frame, akey, load, ground, ix, iy):
     """{(fid, kind): (centimetre keys packed (_pack), sorted; bed heights)} of node (ix, iy): the lines of a window NODE_M +
     MARGIN_M round it, laid by railways.profile on ground's heights (the underpasses read in the same window). A point
@@ -216,6 +251,8 @@ def beds(frame, akey, load, ground, rails):
                     node = _node(frame, akey, load, ground, cell[0], cell[1])
                     idx = np.flatnonzero(m)
                     zz = _find(node, fid, kind, cm[idx])
+                    if FIND_NEAR_ON:
+                        zz = _find_near(node, fid, cm[idx], zz)
                     ok = np.isfinite(zz)
                     num[idx[ok]] += w[idx[ok]] * zz[ok]
                     den[idx[ok]] += w[idx[ok]]
