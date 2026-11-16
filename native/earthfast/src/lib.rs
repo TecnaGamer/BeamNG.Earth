@@ -6478,6 +6478,8 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     ggshapes::register(m)?;
     // 309: gg_poly_axes(..., skip): linear (a histogram of the edge directions), all of a polygon's rings, clip edges left
     // out (Codex review of 308)
-    m.add("VERSION", 309)?;
+    // 310: deck_trim_overlaps(..., params[4] = TRIM_ALONG_COS): only another deck running along a deck trims it, not
+    // one crossing it (a hole across the B 254's deck over a track's at Trutzhain)
+    m.add("VERSION", 310)?;
     Ok(())
 }
