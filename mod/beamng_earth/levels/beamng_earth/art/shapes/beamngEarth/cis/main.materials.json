@@ -1,0 +1,434 @@
+{
+  "bne_cis_brick": {
+    "Stages": [
+      {
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/cis/bne_cis_common.color.dds",
+        "metallicFactor": 0.0,
+        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/cis/bne_cis_common.normal.dds",
+        "roughnessMap": "/levels/beamng_earth/art/shapes/beamngEarth/cis/bne_cis_common.data.dds"
+      },
+      {},
+      {},
+      {}
+    ],
+    "class": "Material",
+    "doubleSided": false,
+    "mapTo": "bne_cis_brick",
+    "name": "bne_cis_brick",
+    "persistentId": "eabb33f0-1dd6-5f70-953f-03d0086d1c70",
+    "version": 1.5
+  },
+  "bne_cis_common": {
+    "Stages": [
+      {
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/cis/bne_cis_common.color.dds",
+        "metallicFactor": 0.0,
+        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/cis/bne_cis_common.normal.dds",
+        "roughnessMap": "/levels/beamng_earth/art/shapes/beamngEarth/cis/bne_cis_common.data.dds"
+      },
+      {},
+      {},
+      {}
+    ],
+    "class": "Material",
+    "doubleSided": false,
+    "mapTo": "bne_cis_common",
+    "name": "bne_cis_common",
+    "persistentId": "0268bac1-7b93-5c2c-a5d0-72cfdad73e99",
+    "version": 1.5
+  },
+  "bne_cis_concrete": {
+    "Stages": [
+      {
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/cis/bne_cis_common.color.dds",
+        "metallicFactor": 0.0,
+        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/cis/bne_cis_common.normal.dds",
+        "roughnessMap": "/levels/beamng_earth/art/shapes/beamngEarth/cis/bne_cis_common.data.dds"
+      },
+      {},
+      {},
+      {}
+    ],
+    "class": "Material",
+    "doubleSided": false,
+    "mapTo": "bne_cis_concrete",
+    "name": "bne_cis_concrete",
+    "persistentId": "dfe7872b-00c0-5978-8114-35854ca73ce4",
+    "version": 1.5
+  },
+  "bne_cis_frosted": {
+    "Stages": [
+      {
+        "baseColorFactor": [
+          1.05,
+          1.1,
+          1.09,
+          1
+        ],
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/cis/bne_cis_common.color.dds",
+        "metallicFactor": 0.0,
+        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/cis/bne_cis_common.normal.dds",
+        "roughnessMap": "/levels/beamng_earth/art/shapes/beamngEarth/cis/bne_cis_common.data.dds"
+      },
+      {},
+      {},
+      {}
+    ],
+    "class": "Material",
+    "doubleSided": false,
+    "mapTo": "bne_cis_frosted",
+    "name": "bne_cis_frosted",
+    "persistentId": "f6391e7b-8361-59ac-89fd-baca5c7bcb71",
+    "version": 1.5
+  },
+  "bne_cis_glass": {
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.19,
+          0.25,
+          0.26,
+          1
+        ],
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/cis/bne_cis_common.color.dds",
+        "metallicFactor": 0.0,
+        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/cis/bne_cis_common.normal.dds",
+        "roughnessMap": "/levels/beamng_earth/art/shapes/beamngEarth/cis/bne_cis_common.data.dds"
+      },
+      {},
+      {},
+      {}
+    ],
+    "class": "Material",
+    "doubleSided": false,
+    "mapTo": "bne_cis_glass",
+    "name": "bne_cis_glass",
+    "persistentId": "b50c0cae-e563-5b8c-980b-7a0b969bf9db",
+    "version": 1.5
+  },
+  "bne_cis_graphite": {
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.3,
+          0.34,
+          0.35,
+          1
+        ],
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/cis/bne_cis_common.color.dds",
+        "metallicFactor": 0.0,
+        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/cis/bne_cis_common.normal.dds",
+        "roughnessMap": "/levels/beamng_earth/art/shapes/beamngEarth/cis/bne_cis_common.data.dds"
+      },
+      {},
+      {},
+      {}
+    ],
+    "class": "Material",
+    "doubleSided": false,
+    "mapTo": "bne_cis_graphite",
+    "name": "bne_cis_graphite",
+    "persistentId": "a1f9064b-71c7-5e59-ac7a-39655b09c7b1",
+    "version": 1.5
+  },
+  "bne_cis_khrush_brick": {
+    "Stages": [
+      {
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/cis/bne_cis_khrush_brick.color.dds",
+        "metallicFactor": 0.0,
+        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/cis/bne_cis_khrush_brick.normal.dds",
+        "roughnessMap": "/levels/beamng_earth/art/shapes/beamngEarth/cis/bne_cis_khrush_brick.data.dds"
+      },
+      {},
+      {},
+      {}
+    ],
+    "class": "Material",
+    "doubleSided": false,
+    "mapTo": "bne_cis_khrush_brick",
+    "name": "bne_cis_khrush_brick",
+    "persistentId": "d30a4179-995f-5769-9d2e-9f20db6892bb",
+    "version": 1.5
+  },
+  "bne_cis_khrush_panel": {
+    "Stages": [
+      {
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/cis/bne_cis_khrush_panel.color.dds",
+        "metallicFactor": 0.0,
+        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/cis/bne_cis_khrush_panel.normal.dds",
+        "roughnessMap": "/levels/beamng_earth/art/shapes/beamngEarth/cis/bne_cis_khrush_panel.data.dds"
+      },
+      {},
+      {},
+      {}
+    ],
+    "class": "Material",
+    "doubleSided": false,
+    "mapTo": "bne_cis_khrush_panel",
+    "name": "bne_cis_khrush_panel",
+    "persistentId": "fe4f1267-aab9-567f-b801-b947390bcb5d",
+    "version": 1.5
+  },
+  "bne_cis_lamp": {
+    "Stages": [
+      {
+        "baseColorFactor": [
+          1.6,
+          1.5,
+          1.25,
+          1
+        ],
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/cis/bne_cis_common.color.dds",
+        "emissive": true,
+        "emissiveFactor": [
+          1,
+          0.85,
+          0.55
+        ],
+        "glow": true,
+        "metallicFactor": 0.0,
+        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/cis/bne_cis_common.normal.dds",
+        "roughnessMap": "/levels/beamng_earth/art/shapes/beamngEarth/cis/bne_cis_common.data.dds"
+      },
+      {},
+      {},
+      {}
+    ],
+    "class": "Material",
+    "doubleSided": false,
+    "mapTo": "bne_cis_lamp",
+    "name": "bne_cis_lamp",
+    "persistentId": "9853c206-8c63-50bb-806f-40463e8f98e9",
+    "version": 1.5
+  },
+  "bne_cis_new_mono": {
+    "Stages": [
+      {
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/cis/bne_cis_new_mono.color.dds",
+        "metallicFactor": 0.0,
+        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/cis/bne_cis_new_mono.normal.dds",
+        "roughnessMap": "/levels/beamng_earth/art/shapes/beamngEarth/cis/bne_cis_new_mono.data.dds"
+      },
+      {},
+      {},
+      {}
+    ],
+    "class": "Material",
+    "doubleSided": false,
+    "mapTo": "bne_cis_new_mono",
+    "name": "bne_cis_new_mono",
+    "persistentId": "37ba7b0f-b23b-51a9-aab7-628bc78200a5",
+    "version": 1.5
+  },
+  "bne_cis_panel16": {
+    "Stages": [
+      {
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/cis/bne_cis_panel16.color.dds",
+        "metallicFactor": 0.0,
+        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/cis/bne_cis_panel16.normal.dds",
+        "roughnessMap": "/levels/beamng_earth/art/shapes/beamngEarth/cis/bne_cis_panel16.data.dds"
+      },
+      {},
+      {},
+      {}
+    ],
+    "class": "Material",
+    "doubleSided": false,
+    "mapTo": "bne_cis_panel16",
+    "name": "bne_cis_panel16",
+    "persistentId": "b2a84a20-cc3e-5cc1-a2c5-0fb56d510e70",
+    "version": 1.5
+  },
+  "bne_cis_panel9": {
+    "Stages": [
+      {
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/cis/bne_cis_panel9.color.dds",
+        "metallicFactor": 0.0,
+        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/cis/bne_cis_panel9.normal.dds",
+        "roughnessMap": "/levels/beamng_earth/art/shapes/beamngEarth/cis/bne_cis_panel9.data.dds"
+      },
+      {},
+      {},
+      {}
+    ],
+    "class": "Material",
+    "doubleSided": false,
+    "mapTo": "bne_cis_panel9",
+    "name": "bne_cis_panel9",
+    "persistentId": "2caced69-5fc5-54c8-80bd-86354e6702d4",
+    "version": 1.5
+  },
+  "bne_cis_pvc": {
+    "Stages": [
+      {
+        "baseColorFactor": [
+          1.42,
+          1.4,
+          1.4,
+          1
+        ],
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/cis/bne_cis_common.color.dds",
+        "metallicFactor": 0.0,
+        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/cis/bne_cis_common.normal.dds",
+        "roughnessMap": "/levels/beamng_earth/art/shapes/beamngEarth/cis/bne_cis_common.data.dds"
+      },
+      {},
+      {},
+      {}
+    ],
+    "class": "Material",
+    "doubleSided": false,
+    "mapTo": "bne_cis_pvc",
+    "name": "bne_cis_pvc",
+    "persistentId": "48fd84dd-a793-5af8-985f-010d39c25452",
+    "version": 1.5
+  },
+  "bne_cis_roof": {
+    "Stages": [
+      {
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/cis/bne_cis_roof.color.dds",
+        "metallicFactor": 0.0,
+        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/cis/bne_cis_roof.normal.dds",
+        "roughnessMap": "/levels/beamng_earth/art/shapes/beamngEarth/cis/bne_cis_roof.data.dds"
+      },
+      {},
+      {},
+      {}
+    ],
+    "class": "Material",
+    "doubleSided": false,
+    "mapTo": "bne_cis_roof",
+    "name": "bne_cis_roof",
+    "persistentId": "07d87e89-10fd-53d1-8455-58100398ec27",
+    "version": 1.5
+  },
+  "bne_cis_sheet_brown": {
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.62,
+          0.43,
+          0.3,
+          1
+        ],
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/cis/bne_cis_common.color.dds",
+        "metallicFactor": 0.0,
+        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/cis/bne_cis_common.normal.dds",
+        "roughnessMap": "/levels/beamng_earth/art/shapes/beamngEarth/cis/bne_cis_common.data.dds"
+      },
+      {},
+      {},
+      {}
+    ],
+    "class": "Material",
+    "doubleSided": false,
+    "mapTo": "bne_cis_sheet_brown",
+    "name": "bne_cis_sheet_brown",
+    "persistentId": "9e15b129-ca2a-5fc7-a35f-a92480374a87",
+    "version": 1.5
+  },
+  "bne_cis_silicate": {
+    "Stages": [
+      {
+        "baseColorFactor": [
+          1.25,
+          1.6,
+          2.1,
+          1
+        ],
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/cis/bne_cis_common.color.dds",
+        "metallicFactor": 0.0,
+        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/cis/bne_cis_common.normal.dds",
+        "roughnessMap": "/levels/beamng_earth/art/shapes/beamngEarth/cis/bne_cis_common.data.dds"
+      },
+      {},
+      {},
+      {}
+    ],
+    "class": "Material",
+    "doubleSided": false,
+    "mapTo": "bne_cis_silicate",
+    "name": "bne_cis_silicate",
+    "persistentId": "e664ebbd-5482-54dd-bb82-1e97e516c7c0",
+    "version": 1.5
+  },
+  "bne_cis_wood": {
+    "Stages": [
+      {
+        "baseColorFactor": [
+          1.25,
+          1.24,
+          1.16,
+          1
+        ],
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/cis/bne_cis_common.color.dds",
+        "metallicFactor": 0.0,
+        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/cis/bne_cis_common.normal.dds",
+        "roughnessMap": "/levels/beamng_earth/art/shapes/beamngEarth/cis/bne_cis_common.data.dds"
+      },
+      {},
+      {},
+      {}
+    ],
+    "class": "Material",
+    "doubleSided": false,
+    "mapTo": "bne_cis_wood",
+    "name": "bne_cis_wood",
+    "persistentId": "3fed4874-2532-5035-b659-bdcb8215f050",
+    "version": 1.5
+  }
+}

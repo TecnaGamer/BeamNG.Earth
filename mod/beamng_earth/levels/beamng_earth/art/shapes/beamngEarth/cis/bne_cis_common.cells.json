@@ -1,0 +1,279 @@
+{
+  "atlas": [
+    2048,
+    2048
+  ],
+  "bay_m": 3.2,
+  "cells": [
+    {
+      "id": "plinth_01",
+      "lit": false,
+      "px": [
+        200,
+        4,
+        307,
+        96
+      ],
+      "role": "plinth",
+      "size_m": [
+        3.2,
+        1.0
+      ],
+      "tags": [
+        "common"
+      ],
+      "weight": 0.25
+    },
+    {
+      "id": "plinth_02",
+      "lit": false,
+      "px": [
+        511,
+        4,
+        307,
+        96
+      ],
+      "role": "plinth",
+      "size_m": [
+        3.2,
+        1.0
+      ],
+      "tags": [
+        "common"
+      ],
+      "weight": 0.25
+    },
+    {
+      "id": "plinth_03",
+      "lit": false,
+      "px": [
+        822,
+        4,
+        307,
+        96
+      ],
+      "role": "plinth",
+      "size_m": [
+        3.2,
+        1.0
+      ],
+      "tags": [
+        "common"
+      ],
+      "weight": 0.25
+    },
+    {
+      "id": "plinth_04",
+      "lit": false,
+      "px": [
+        1133,
+        4,
+        307,
+        96
+      ],
+      "role": "plinth",
+      "size_m": [
+        3.2,
+        1.0
+      ],
+      "tags": [
+        "common"
+      ],
+      "weight": 0.25
+    },
+    {
+      "id": "parapet_01",
+      "lit": false,
+      "px": [
+        200,
+        104,
+        307,
+        58
+      ],
+      "role": "parapet",
+      "size_m": [
+        3.2,
+        0.6
+      ],
+      "tags": [
+        "common"
+      ],
+      "weight": 0.3333333333333333
+    },
+    {
+      "id": "parapet_02",
+      "lit": false,
+      "px": [
+        511,
+        104,
+        307,
+        58
+      ],
+      "role": "parapet",
+      "size_m": [
+        3.2,
+        0.6
+      ],
+      "tags": [
+        "common"
+      ],
+      "weight": 0.3333333333333333
+    },
+    {
+      "id": "parapet_03",
+      "lit": false,
+      "px": [
+        822,
+        104,
+        307,
+        58
+      ],
+      "role": "parapet",
+      "size_m": [
+        3.2,
+        0.6
+      ],
+      "tags": [
+        "common"
+      ],
+      "weight": 0.3333333333333333
+    },
+    {
+      "id": "roof_01",
+      "lit": false,
+      "px": [
+        4,
+        4,
+        192,
+        192
+      ],
+      "role": "roof",
+      "size_m": [
+        2.0,
+        2.0
+      ],
+      "tags": [
+        "common"
+      ],
+      "weight": 1.0
+    },
+    {
+      "id": "door_steel_01",
+      "lit": true,
+      "px": [
+        4,
+        200,
+        115,
+        221
+      ],
+      "role": "door_steel",
+      "size_m": [
+        1.2,
+        2.3
+      ],
+      "tags": [
+        "common"
+      ],
+      "weight": 0.3333333333333333
+    },
+    {
+      "id": "door_steel_02",
+      "lit": true,
+      "px": [
+        4,
+        425,
+        115,
+        221
+      ],
+      "role": "door_steel",
+      "size_m": [
+        1.2,
+        2.3
+      ],
+      "tags": [
+        "common"
+      ],
+      "weight": 0.3333333333333333
+    },
+    {
+      "id": "door_steel_03",
+      "lit": true,
+      "px": [
+        4,
+        650,
+        115,
+        221
+      ],
+      "role": "door_steel",
+      "size_m": [
+        1.2,
+        2.3
+      ],
+      "tags": [
+        "common"
+      ],
+      "weight": 0.3333333333333333
+    },
+    {
+      "id": "slab_edge_01",
+      "lit": false,
+      "px": [
+        200,
+        166,
+        307,
+        24
+      ],
+      "role": "slab_edge",
+      "size_m": [
+        3.2,
+        0.25
+      ],
+      "tags": [
+        "common"
+      ],
+      "weight": 1.0
+    },
+    {
+      "id": "metal_01",
+      "lit": false,
+      "px": [
+        4,
+        875,
+        96,
+        96
+      ],
+      "role": "metal",
+      "size_m": [
+        1.0,
+        1.0
+      ],
+      "tags": [
+        "common"
+      ],
+      "weight": 0.5
+    },
+    {
+      "id": "metal_02",
+      "lit": false,
+      "px": [
+        4,
+        975,
+        96,
+        96
+      ],
+      "role": "metal",
+      "size_m": [
+        1.0,
+        1.0
+      ],
+      "tags": [
+        "common"
+      ],
+      "weight": 0.5
+    }
+  ],
+  "kit": "common",
+  "px_per_m": 96,
+  "storey_m": 2.7,
+  "version": 1
+}

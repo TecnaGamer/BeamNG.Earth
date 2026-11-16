@@ -1,0 +1,486 @@
+{
+  "atlas": [
+    2048,
+    2048
+  ],
+  "bay_m": 3.0,
+  "cells": [
+    {
+      "id": "bay_01",
+      "lit": true,
+      "px": [
+        4,
+        4,
+        288,
+        259
+      ],
+      "role": "bay",
+      "size_m": [
+        3.0,
+        2.7
+      ],
+      "tags": [
+        "silicate",
+        "old"
+      ],
+      "weight": 0.125
+    },
+    {
+      "id": "bay_02",
+      "lit": true,
+      "px": [
+        296,
+        4,
+        288,
+        259
+      ],
+      "role": "bay",
+      "size_m": [
+        3.0,
+        2.7
+      ],
+      "tags": [
+        "red",
+        "old"
+      ],
+      "weight": 0.125
+    },
+    {
+      "id": "bay_03",
+      "lit": true,
+      "px": [
+        588,
+        4,
+        288,
+        259
+      ],
+      "role": "bay",
+      "size_m": [
+        3.0,
+        2.7
+      ],
+      "tags": [
+        "silicate",
+        "old"
+      ],
+      "weight": 0.125
+    },
+    {
+      "id": "bay_04",
+      "lit": true,
+      "px": [
+        880,
+        4,
+        288,
+        259
+      ],
+      "role": "bay",
+      "size_m": [
+        3.0,
+        2.7
+      ],
+      "tags": [
+        "red",
+        "old"
+      ],
+      "weight": 0.125
+    },
+    {
+      "id": "bay_05",
+      "lit": true,
+      "px": [
+        1172,
+        4,
+        288,
+        259
+      ],
+      "role": "bay",
+      "size_m": [
+        3.0,
+        2.7
+      ],
+      "tags": [
+        "silicate",
+        "pvc"
+      ],
+      "weight": 0.125
+    },
+    {
+      "id": "bay_06",
+      "lit": true,
+      "px": [
+        1464,
+        4,
+        288,
+        259
+      ],
+      "role": "bay",
+      "size_m": [
+        3.0,
+        2.7
+      ],
+      "tags": [
+        "red",
+        "pvc"
+      ],
+      "weight": 0.125
+    },
+    {
+      "id": "bay_07",
+      "lit": true,
+      "px": [
+        4,
+        267,
+        288,
+        259
+      ],
+      "role": "bay",
+      "size_m": [
+        3.0,
+        2.7
+      ],
+      "tags": [
+        "silicate",
+        "pvc"
+      ],
+      "weight": 0.125
+    },
+    {
+      "id": "bay_08",
+      "lit": true,
+      "px": [
+        4,
+        530,
+        288,
+        259
+      ],
+      "role": "bay",
+      "size_m": [
+        3.0,
+        2.7
+      ],
+      "tags": [
+        "red",
+        "pvc"
+      ],
+      "weight": 0.125
+    },
+    {
+      "id": "bay_balcony_01",
+      "lit": true,
+      "px": [
+        4,
+        793,
+        288,
+        259
+      ],
+      "role": "bay_balcony",
+      "size_m": [
+        3.0,
+        2.7
+      ],
+      "tags": [
+        "silicate"
+      ],
+      "weight": 0.5
+    },
+    {
+      "id": "bay_balcony_02",
+      "lit": true,
+      "px": [
+        4,
+        1056,
+        288,
+        259
+      ],
+      "role": "bay_balcony",
+      "size_m": [
+        3.0,
+        2.7
+      ],
+      "tags": [
+        "red"
+      ],
+      "weight": 0.5
+    },
+    {
+      "id": "bay_balcony_far_01",
+      "lit": true,
+      "px": [
+        4,
+        1319,
+        288,
+        259
+      ],
+      "role": "bay_balcony_far",
+      "size_m": [
+        3.0,
+        2.7
+      ],
+      "tags": [
+        "silicate",
+        "far"
+      ],
+      "weight": 0.25
+    },
+    {
+      "id": "bay_balcony_far_02",
+      "lit": true,
+      "px": [
+        4,
+        1582,
+        288,
+        259
+      ],
+      "role": "bay_balcony_far",
+      "size_m": [
+        3.0,
+        2.7
+      ],
+      "tags": [
+        "red",
+        "far"
+      ],
+      "weight": 0.25
+    },
+    {
+      "id": "bay_balcony_far_03",
+      "lit": true,
+      "px": [
+        296,
+        267,
+        288,
+        259
+      ],
+      "role": "bay_balcony_far",
+      "size_m": [
+        3.0,
+        2.7
+      ],
+      "tags": [
+        "silicate",
+        "far"
+      ],
+      "weight": 0.25
+    },
+    {
+      "id": "bay_balcony_far_04",
+      "lit": true,
+      "px": [
+        588,
+        267,
+        288,
+        259
+      ],
+      "role": "bay_balcony_far",
+      "size_m": [
+        3.0,
+        2.7
+      ],
+      "tags": [
+        "red",
+        "far"
+      ],
+      "weight": 0.25
+    },
+    {
+      "id": "stair_01",
+      "lit": true,
+      "px": [
+        880,
+        267,
+        288,
+        259
+      ],
+      "role": "stair",
+      "size_m": [
+        3.0,
+        2.7
+      ],
+      "tags": [
+        "silicate"
+      ],
+      "weight": 0.5
+    },
+    {
+      "id": "stair_02",
+      "lit": true,
+      "px": [
+        1172,
+        267,
+        288,
+        259
+      ],
+      "role": "stair",
+      "size_m": [
+        3.0,
+        2.7
+      ],
+      "tags": [
+        "red"
+      ],
+      "weight": 0.5
+    },
+    {
+      "id": "entrance_01",
+      "lit": true,
+      "px": [
+        1464,
+        267,
+        288,
+        259
+      ],
+      "role": "entrance",
+      "size_m": [
+        3.0,
+        2.7
+      ],
+      "tags": [
+        "silicate"
+      ],
+      "weight": 0.5
+    },
+    {
+      "id": "entrance_02",
+      "lit": true,
+      "px": [
+        296,
+        530,
+        288,
+        259
+      ],
+      "role": "entrance",
+      "size_m": [
+        3.0,
+        2.7
+      ],
+      "tags": [
+        "red"
+      ],
+      "weight": 0.5
+    },
+    {
+      "id": "ground_01",
+      "lit": true,
+      "px": [
+        296,
+        793,
+        288,
+        259
+      ],
+      "role": "ground",
+      "size_m": [
+        3.0,
+        2.7
+      ],
+      "tags": [
+        "silicate",
+        "old",
+        "bars"
+      ],
+      "weight": 0.3333333333333333
+    },
+    {
+      "id": "ground_02",
+      "lit": true,
+      "px": [
+        296,
+        1056,
+        288,
+        259
+      ],
+      "role": "ground",
+      "size_m": [
+        3.0,
+        2.7
+      ],
+      "tags": [
+        "red",
+        "old",
+        "bars"
+      ],
+      "weight": 0.3333333333333333
+    },
+    {
+      "id": "ground_03",
+      "lit": true,
+      "px": [
+        296,
+        1319,
+        288,
+        259
+      ],
+      "role": "ground",
+      "size_m": [
+        3.0,
+        2.7
+      ],
+      "tags": [
+        "silicate",
+        "old"
+      ],
+      "weight": 0.3333333333333333
+    },
+    {
+      "id": "end_01",
+      "lit": false,
+      "px": [
+        296,
+        1582,
+        288,
+        259
+      ],
+      "role": "end",
+      "size_m": [
+        3.0,
+        2.7
+      ],
+      "tags": [
+        "silicate"
+      ],
+      "weight": 0.3333333333333333
+    },
+    {
+      "id": "end_02",
+      "lit": false,
+      "px": [
+        588,
+        530,
+        288,
+        259
+      ],
+      "role": "end",
+      "size_m": [
+        3.0,
+        2.7
+      ],
+      "tags": [
+        "red"
+      ],
+      "weight": 0.3333333333333333
+    },
+    {
+      "id": "end_03",
+      "lit": false,
+      "px": [
+        880,
+        530,
+        288,
+        259
+      ],
+      "role": "end",
+      "size_m": [
+        3.0,
+        2.7
+      ],
+      "tags": [
+        "silicate"
+      ],
+      "weight": 0.3333333333333333
+    }
+  ],
+  "kit": "khrush_brick",
+  "px_per_m": 96,
+  "storey_m": 2.7,
+  "version": 1
+}
