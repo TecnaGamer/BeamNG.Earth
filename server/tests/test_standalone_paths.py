@@ -2,6 +2,7 @@ import json
 import os
 import sys
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -14,6 +15,7 @@ import buildings
 import experimental
 import furniture
 import paintlist
+import pathfootprints
 import roads
 import standalonepaths as paths
 import surface
@@ -119,7 +121,8 @@ class StandalonePathsTest(unittest.TestCase):
         np.testing.assert_array_equal(photo[11, 16], rgb[11, 16])
         items = SimpleNamespace(lat=np.array([LAT + 16 / M_LAT, LAT + 18 / M_LAT]),
                                 lon=np.full(2, LON + 16 / M_LON), radius=np.full(2, .5),
-                                kind=np.full(2, vegetation.KIND_BUSH), group=np.full(2, vegetation.G_SHRUB))
+                                height=np.full(2, .3), kind=np.full(2, vegetation.KIND_BUSH),
+                                group=np.full(2, vegetation.G_SHRUB))
         blockers = [(xy, w / 2) for _, xy, w, _ in self.parts(f)]
         self.assertEqual(vegetation._off_paths(items, FRAME, blockers).tolist(), [False, True])
         on = vegetation.Vegetation(None, "cache").dir
@@ -162,8 +165,8 @@ class StandalonePathsTest(unittest.TestCase):
     def test_final_plant_filter_uses_each_footprint(self):
         # Shrubs need their full footprint clear, but a tree's branches may
         # overhang. A far clump contains several trunks across its footprint.
-        items = vegetation.Items(np.full(4, LON + 10 / M_LON), np.full(4, LAT + 3 / M_LAT),
-                                 np.array([1., 3., 12., 20.]), np.array([.5, 2., 2.5, 8.]),
+        items = vegetation.Items(np.full(4, LON + 10 / M_LON), np.full(4, LAT + 3.5 / M_LAT),
+                                 np.array([.3, 3., 12., 20.]), np.array([.5, 2., 2.5, 8.]),
                                  np.array([vegetation.KIND_BUSH] * 2 + [vegetation.KIND_TREE] * 2),
                                  np.array([vegetation.G_SHRUB] * 2 + [vegetation.G_CONIFER,
                                           vegetation.G_CONIFER_CLUMP]),
@@ -195,7 +198,72 @@ class StandalonePathsTest(unittest.TestCase):
         self.assertEqual(paths.clear_props(rows, blockers), rows[5:])
         self.assertEqual(paths.clear_props(rows, []), rows)
 
-    def test_road_builder_removes_hydrant_on_crossing_path_only_when_enabled(self):
+    def test_both_tile_builders_reject_late_props_on_every_path_class(self):
+        import blockworker
+        import earthd
+        import radars
+        from test_blockworker import FakeMapData, FakeDem, GermanRoutesTest
+        late = [["hydrant", 64., 70., 10., 0., 1., .9, .5],
+                ["hydrant_eu", 64., 90., 10., 0., 1., .79, .5],
+                ["shrub", 68., 80., 10., 0., 1., 1.8, .5],
+                ["bin", 80., 70., 10., 0., 1., 1.1, .5]]
+        for cls in paths.WIDTH:
+            f = features([[(0, 64), (128, 64)], [(64, 0), (64, 128)]],
+                         ["residential", cls], widths=[(1, 4.)])
+            md = FakeMapData(f, roads.cells_of_tile(FRAME, 0, 0)[0])
+            with tempfile.TemporaryDirectory() as directory:
+                state = SimpleNamespace(md=md, dem=FakeDem(), widths=None, surface=None, airports=None, sea=None,
+                                        lock=threading.Lock(), cache_dir=directory, bridges={},
+                                        anchor=lambda *a: (None, None))
+                ns = GermanRoutesTest().server((LAT, LON), directory, False, "off")
+                ns.mapdata = md
+                for setting, expected in (("off", late), ("on", late[3:])):
+                    with self.subTest(cls=cls, setting=setting), \
+                            patch.dict(os.environ, BNE_STANDALONE_PATHS=setting), \
+                            patch.object(blockworker, "_s", state), \
+                            patch.object(radars, "tile_rows", return_value=(late, [])):
+                        result = blockworker._tile_parts(lambda *a: None, FRAME, (0, 0), 15, None,
+                            buildings=False, left_hand=False, mph=False, gas_stations=False, buried=0.,
+                            lamp_region=None, country="PL", q=None, rkey=("test",), centre=(LAT, LON))
+                        self.assertEqual(result.props, expected)
+                        with patch.object(roads, "write_tile", return_value=(None, 0)) as write:
+                            earthd.Server.build_roads_tile(ns, 1, 0, 0)
+                        self.assertEqual(write.call_args.args[10], expected)
+
+    def test_measured_bush_model_extends_beyond_canopy_radius(self):
+        # The stock generibush is 1.8 m high but reaches 3.31 m from its origin.
+        # Its old canopy radius (1.216 m) misses the overlap at this point.
+        points = np.array([[10., 4.], [10., 6.]])
+        blockers = [(np.array([[0., 0.], [20., 0.]]), 2.)]
+        self.assertEqual(paths.keep_outside(points, blockers, 1.216).tolist(), [True, True])
+        self.assertAlmostEqual(pathfootprints.radii('shrub', np.array([1.8]))[0], 3.31)
+        items = SimpleNamespace(lon=LON + points[:, 0] / M_LON, lat=LAT + points[:, 1] / M_LAT,
+                                radius=np.full(2, 1.216), height=np.full(2, 1.8),
+                                kind=np.full(2, vegetation.KIND_BUSH), group=np.full(2, vegetation.G_SHRUB))
+        self.assertEqual(vegetation._off_paths(items, FRAME, blockers).tolist(), [False, True])
+
+    def test_mapped_street_furniture_is_filtered_after_placement(self):
+        import areaprops
+        import test_areaprops as fixtures
+        with patch.object(fixtures, 'FRAME', FRAME):
+            infra = fixtures.feats('infrastructure', [
+                ('hydrant', 1, [[(10., 0.)]], 'fire_hydrant', {}),
+                ('stand', 1, [[(15., 3.)]], 'bicycle_parking', {}),
+                ('clear', 1, [[(20., 8.)]], 'fire_hydrant', {})])
+        rows = areaprops.street_rows(FRAME, (-10, -10, 110, 110), fixtures.FakeMD(infrastructure=infra),
+                                    fixtures.flat, country='PL', keys=['cell'])
+        f = features([[(0, 0), (100, 0)]], ['pedestrian'], widths=[(0, 4.)])
+        self.assertEqual(len(rows), 3)
+        kept = paths.finish_props(rows, FRAME, (-10, -10, 110, 110), [f])
+        self.assertEqual(len(kept), 1)
+        self.assertGreater(kept[0][2], 7.)
+
+    def test_structural_and_overhead_objects_are_preserved(self):
+        f = features([[(0, 0), (100, 0)]], ['cycleway'], widths=[(0, 4.)])
+        rows = [['pole', 10., 0., 0., 0., 1., 9.2, .5], ['door', 20., 0., 10., 0., 1., 2., .5]]
+        self.assertEqual(paths.finish_props(rows, FRAME, (-10, -10, 110, 110), [f]), rows)
+
+    def test_final_gate_removes_hydrant_only_when_enabled(self):
         f = features([[(0, 64), (128, 64)], [(64, 0), (64, 128)]],
                      ["residential", "pedestrian"], widths=[(1, 4.)])
         on_path = [furniture.G_HYDRANT, 64., 70., 0., 0., 1., .9, .5]
@@ -206,6 +274,7 @@ class StandalonePathsTest(unittest.TestCase):
                 paintlist.clear()
                 props = []
                 roads.build_tile(FRAME, 0, 0, [f], flat, walks=[], props=props)
+                props = paths.finish_props(props, FRAME, roads.tile_bbox(0, 0), [f])
                 self.assertEqual(props, expected)
 
     def test_old_crown_clearance_vegetation_cache_is_not_reused(self):
@@ -213,7 +282,7 @@ class StandalonePathsTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             md = FakeMapData()
             v = vegetation.Vegetation(md, directory)
-            old = Path(directory, "vegetation", f"v{vegetation.VERSION}", "standalone-paths-v2",
+            old = Path(directory, "vegetation", f"v{vegetation.VERSION}", "standalone-paths-v3",
                        md.release, str(KEY.x), f"{KEY.y}.npz")
             old.parent.mkdir(parents=True)
             empty = vegetation._empty()

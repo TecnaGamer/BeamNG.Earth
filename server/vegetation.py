@@ -272,7 +272,7 @@ class Vegetation:
         self.dir = os.path.join(cache_dir, "vegetation", f"v{VERSION}") if cache_dir else None
         import standalonepaths
         if self.dir and standalonepaths.enabled():
-            self.dir = os.path.join(self.dir, "standalone-paths-v3")  # trunks clear, crowns may overhang
+            self.dir = os.path.join(self.dir, "standalone-paths-v4")  # measured low-scenery model footprints
         self._mem = OrderedDict()
         self._lock = threading.Lock()
         self._cell_locks = {}
@@ -763,6 +763,10 @@ def _off_paths(items, frame, blockers):
     # trunk at its centre. Its individual near trees are tested separately.
     single_tree = (items.kind == KIND_TREE) & ~np.isin(items.group, CLUMP_GROUPS)
     radius = np.where(single_tree, standalonepaths.TRUNK_CLEAR_M, items.radius)
+    import pathfootprints
+    for group in np.unique(items.group[~single_tree]):
+        sel = (~single_tree) & (items.group == group)
+        radius[sel] = pathfootprints.radii(GROUPS[int(group)], items.height[sel], radius[sel])
     return standalonepaths.keep_outside(np.column_stack((e, n)), blockers, radius)
 
 

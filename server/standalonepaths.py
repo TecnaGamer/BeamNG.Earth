@@ -98,21 +98,39 @@ def keep_outside(points, blockers, radii=None):
 
 
 def clear_props(rows, blockers):
-    """Guessed street trees and sidewalk furniture must leave the walking strip free."""
+    """Reject scenery overlapping a walking strip, including mapped and late-added props."""
     import furniture
+    import pathfootprints
     if not rows or not blockers:
         return rows
-    trees = [i for i, row in enumerate(rows) if row[0] == furniture.G_STREET_TREE]
-    keep = np.ones(len(rows), bool)
-    if trees:
-        keep[trees] = keep_outside([rows[i][1:3] for i in trees], blockers, TRUNK_CLEAR_M)
-    # Reuse the stock models' scaled, rotated collision boxes, including the ends
-    # of benches. Keep mapped lights, signs and poles (and their wire runs) intact.
-    clearance = furniture.RoadClearance([(half, line) for line, half in blockers])
+    # These are freestanding ground objects. Signs, bridge fixtures, overhead
+    # wires and building attachments can share their XY with a path on another
+    # level and must not be removed by a 2D test.
+    boxed = {furniture.G_HYDRANT, furniture.G_BENCH, furniture.G_BIN}
+    candidates = {}
     for i, row in enumerate(rows):
-        if row[0] in (furniture.G_HYDRANT, furniture.G_BENCH, furniture.G_BIN):
-            keep[i] = clearance.clear(row)
+        if row[0] in pathfootprints.CATALOG or row[0] in boxed or row[0] == furniture.G_STREET_TREE:
+            candidates.setdefault(row[0], []).append(i)
+    keep = np.ones(len(rows), bool)
+    clearance = None
+    for group, indices in candidates.items():
+        if group in boxed:
+            if clearance is None:
+                clearance = furniture.RoadClearance([(half, line) for line, half in blockers])
+            keep[indices] = [clearance.clear(rows[i]) for i in indices]
+        else:
+            radii = (TRUNK_CLEAR_M if group == furniture.G_STREET_TREE else
+                     pathfootprints.radii(group, [rows[i][6] for i in indices], 0.))
+            keep[indices] = keep_outside([rows[i][1:3] for i in indices], blockers, radii)
     return [row for row, ok in zip(rows, keep) if ok]
+
+
+def finish_props(rows, frame, box, cells, urban=None, widths=None):
+    """The final generation gate, after every source has contributed its scenery."""
+    if not rows or not enabled():
+        return rows
+    blockers = [(xy, width / 2) for _, xy, width, _ in parts(frame, box, cells, urban, widths)]
+    return clear_props(rows, blockers)
 
 
 def parts(frame, box, cells, urban=None, widths=None, quick=False):

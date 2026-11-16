@@ -12286,10 +12286,6 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
                 park.extend(parking.aisle_spots(roads, aisles, own_box))
         if marks is not None and aisles:            # stall lines along the aisles (parking.aisle_markings)
             marks.extend(parking.aisle_markings(roads, aisles, wexact))
-    import standalonepaths
-    if props and standalonepaths.enabled():
-        blockers = [(xy, w / 2) for _, xy, w, _ in standalonepaths.parts(frame, own_box, cells, urban_fn, widths)]
-        props[:] = standalonepaths.clear_props(props, blockers)
     chunks.extend(rampmerges.chunks(merge_layouts, box))
     return roadmarkings.paint(chunks)
 
