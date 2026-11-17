@@ -1878,10 +1878,9 @@ GRASSY = frozenset({"grass", "grass_paver"})
 
 def surface_token(surface):
     """A surface rule value's base token: the detail after a colon and a second value after a semicolon dropped
-    (`sett:pattern` -> `sett`, `sett;asphalt` -> `sett`); None for no value. surface_kind and look_of read it."""
-    if surface is None:
-        return None
-    return str(surface).lower().split(";")[0].split(":")[0].strip()
+    (`sett:pattern` -> `sett`, `sett;asphalt` -> `sett`); None for no value. surface_kind and look_of read it.
+    (earthfast roadnet::surfaces::SurfaceRules.token)"""
+    return _surface_rules().token(surface)
 
 
 def surface_kind(cls, surface):
@@ -1891,22 +1890,26 @@ def surface_kind(cls, surface):
     `paving_stones:30`, `sett:pattern`) and more than one value after a semicolon, and matched whole they all fell
     through to "dirt", which is drawn with gravel's own material (LOOK) and painted DIRT: İzmir's sett streets read
     as gravel tracks (2026-10-22). Interlocking pavers have their own names in the map. A value not understood at
-    all is the class's own surface, not dirt: an unknown tag must not turn a residential street into a track."""
-    if surface is not None:
-        s = surface_token(surface)
-        if s in PAVED:
-            return "paved"
-        if s in COBBLE or s in COBBLE_ALIASES:
-            return "cobble"
-        if s in GRAVEL:
-            return "gravel"
-        if s == "unpaved" and cls != "track":
-            # (generic "unpaved" on a road cars use is a gravel road far more often than a dirt track: the
-            # mapped unpaved roads of Ontario, Finland and Estonia, 2026-11-03; a track stays dirt)
-            return "gravel"
-        if s in UNPAVED:
-            return "dirt"
-    return "paved" if STYLE.get(cls, STYLE["unknown"])[1] else "dirt"
+    all is the class's own surface, not dirt: an unknown tag must not turn a residential street into a track.
+    Generic "unpaved" on a road cars use is a gravel road far more often than a dirt track (the mapped unpaved roads
+    of Ontario, Finland and Estonia, 2026-11-03); a track stays dirt. (earthfast roadnet::surfaces::SurfaceRules.kind)"""
+    return _surface_rules().kind(cls, surface)
+
+
+_SURFACE_RULES = None
+
+
+def _surface_rules():
+    """earthfast.SurfaceRules of this module's surface sets and STYLE's paved flags, made once per process."""
+    global _SURFACE_RULES
+    got = _SURFACE_RULES
+    if got is None:
+        import fast
+        fast.require(380, "SurfaceRules")
+        got = _SURFACE_RULES = fast._ef.SurfaceRules(
+            sorted(PAVED), sorted(COBBLE | COBBLE_ALIASES), sorted(GRAVEL), sorted(UNPAVED),
+            {c: bool(v[1]) for c, v in STYLE.items()}, bool(STYLE["unknown"][1]))
+    return got
 
 
 def _surface_value(feats, i):
@@ -2144,16 +2147,11 @@ def assumed_parking(spec):
 def cycle_streets(feats):
     """Bool per feature: a cycleway that is a street closed to cars (STYLE's "cycleway"): its pavements mapped on it
     (OSM sidewalk both / left / right). Every other cycleway is no road (the grading's grade separations included:
-    gradesep.layer_rows, where a cycle path's crossings of a motorway lifted the motorway, the drivability ratchet)."""
-    n = len(feats)
-    cls, tags = feats.attrs.get("class"), feats.attrs.get("osm_sidewalk")
-    out = np.zeros(n, bool)
-    if cls is None or tags is None:
-        return out
-    for i, (c, v) in enumerate(zip(cls.tolist(), tags.tolist())):
-        if str(c) == "cycleway" and SIDEWALK_TAG.get(str(v).strip().lower()):
-            out[i] = True
-    return out
+    gradesep.layer_rows, where a cycle path's crossings of a motorway lifted the motorway, the drivability ratchet).
+    (earthfast roadnet::columns::cycle_streets)"""
+    import fast
+    fast.require(379, "cycle_streets")
+    return fast._ef.cycle_streets(len(feats), feats.attrs.get("class"), feats.attrs.get("osm_sidewalk"))
 
 
 def _single_lane_fn(country, lon):
@@ -2210,30 +2208,15 @@ def motorway_shoulder(spec):
 
 
 
-def _lengths(feats, only=None):
+def _lengths(feats):
     """Length (m, lon scaled by the cos of each feature's first latitude) of every feature's geometry, NaN for
-    fewer than two points; only: just that feature (an array of one). All features at once: one numpy pass
-    instead of ~3000 small ones a cell."""
-    po, ro, co = feats.part_off, feats.ring_off, feats.coord_off
-    idx = np.arange(len(feats)) if only is None else np.array([only])
-    a = np.asarray(co[ro[po[idx]]], np.int64)
-    b = np.asarray(co[ro[po[idx + 1]]], np.int64)
-    out = np.full(len(idx), np.nan)
-    ll = np.asarray(feats.lonlat, np.float64)
-    cnt = b - a
-    if not len(idx) or cnt.sum() < 2:
-        return out
-    m = 111320.0
-    fid = np.repeat(np.arange(len(idx)), cnt)
-    pos = np.concatenate([np.arange(x, y) for x, y in zip(a, b)]) if only is not None else np.arange(a[0], b[-1])
-    pl = ll[pos]
-    same = fid[1:] == fid[:-1]
-    c = dnp.cos(np.radians(ll[np.minimum(a, len(ll) - 1), 1]))
-    seg = dnp.hypot(np.diff(pl[:, 0]) * m * c[fid[:-1]], np.diff(pl[:, 1]) * m)
-    L = np.bincount(fid[:-1][same], weights=seg[same], minlength=len(idx))
-    ok = cnt >= 2
-    out[ok] = L[ok]
-    return out
+    fewer than two points (earthfast roadnet::columns::layer_lengths)."""
+    import fast
+    fast.require(379, "layer_lengths")
+    return fast._ef.layer_lengths(np.ascontiguousarray(feats.part_off, np.int64),
+                                  np.ascontiguousarray(feats.ring_off, np.int64),
+                                  np.ascontiguousarray(feats.coord_off, np.int64),
+                                  np.ascontiguousarray(feats.lonlat, np.float64).reshape(-1, 2))
 
 
 DUAL_CLASSES = {"motorway", "trunk", "primary", "secondary", "tertiary"}
@@ -2256,35 +2239,12 @@ def dual_carriageways(feats, specs, left_hand=False):
         return specs
     inp = _spec_inputs(feats)
     pos = inp["pos"]
-    nan = float("nan")
-    n = len(specs)
-    cols = {"present": np.fromiter((sp is not None for sp in specs), bool, n),
-            "width": np.fromiter((nan if sp is None else float(sp.width) for sp in specs), np.float64, n),
-            "kind": np.fromiter((-1 if sp is None else _KIND_CODE.get(sp.kind, -1) for sp in specs), np.int8, n),
-            "urban": np.fromiter((sp is not None and bool(sp.urban) for sp in specs), bool, n),
-            "cls": np.fromiter((-1 if sp is None else pos.get(sp.cls, -1) for sp in specs), np.int32, n),
-            "oneway": np.fromiter((sp is not None and bool(sp.oneway) for sp in specs), bool, n),
-            "lanes": np.fromiter((-1 if sp is None or sp.lanes is None else int(sp.lanes) for sp in specs), np.int64,
-                                 n),
-            "link": np.fromiter((sp is not None and bool(sp.link) for sp in specs), bool, n),
-            "parking": np.fromiter((sp is not None and bool(sp.parking) for sp in specs), bool, n),
-            "median": np.fromiter((nan if sp is None or sp.median is None else float(sp.median) for sp in specs),
-                                  np.float64, n),
-            "dir": np.fromiter((0 if sp is None else int(sp.dir) for sp in specs), np.int64, n)}
+    import fast
+    fast.require(381, "dual_cols")
+    cols = fast._ef.dual_cols(list(specs), pos)
     d = _road_rules().dual_carriageways(inp["geo"], inp["cols"], inp["built"], cols, _spec_prm(),
                                         europewalks.enabled(), bool(left_hand))
-    out = list(specs)
-    code, width, kept, dirs, med = d["changed"], d["width"], d["w32"], d["dir"], d["median"]
-    for i in np.flatnonzero(code).tolist():
-        sp, c = specs[i], int(code[i])
-        w = sp.width if kept[i] else float(width[i])
-        if c == 1:
-            out[i] = sp._replace(width=w)
-        elif c == 2:
-            out[i] = sp._replace(median=float(med[i]), width=w)
-        else:
-            out[i] = sp._replace(oneway=True, dir=int(dirs[i]), width=w, median=float(med[i]))
-    return out
+    return fast._ef.dual_apply(list(specs), d)
 
 
 URBAN_MEDIAN_M = 1.5    # m: a city's divided road (centre lines within URBAN_MEDIAN_GAP_M): a narrow concrete median,
@@ -2564,21 +2524,16 @@ def joint_desc(copies, fn):
     """The tapers / shifts (fn(feats)[i]: ((lon, lat, ...), ...)) of a road from its copies [(feats, i)] in the cells at
     hand, each joint's from the copy in the cell the joint lies in: that cell holds every road meeting there, a copy
     elsewhere may not and found another (a Springfield Interchange ramp's deck tapered in one cell and not in the
-    next, a 0.9 m step; deckedges.py 2026-10-31). A joint whose cell is not at hand: any copy's. Pure."""
-    import mapcells
-    out, other = {}, {}
+    next, a 0.9 m step; deckedges.py 2026-10-31). A joint whose cell is not at hand: any copy's. Pure
+    (earthfast roadnet::copies::joint_desc)."""
+    import fast
+    fast.require(378, "joint_desc")
+    cells, rows = [], []
     for f, i in copies:
         cid = f.__dict__.get("_bnge_cell")
-        cid = cid[0] if cid else None
-        for d in fn(f)[i] or ():
-            key = (round(d[0], 6), round(d[1], 6))
-            if cid is None or str(mapcells.cell_of(d[1], d[0])) == cid:
-                out[key] = d
-            else:
-                other.setdefault(key, d)
-    for key, d in other.items():
-        out.setdefault(key, d)
-    return tuple(out[k] for k in sorted(out))
+        cells.append(cid[0] if cid else None)
+        rows.append(fn(f)[i] or ())
+    return fast._ef.joint_desc(cells, rows)
 
 
 def _id_rows(f):
@@ -2766,83 +2721,40 @@ def _lane_flow_ids(f):
 def _lane_flow_rows(f):
     """Layer f's rows for lane_flow, made once per layer (kept on it): (first and last coordinate (n, 4: lon, lat, lon,
     lat; 0 without any), coordinate count, attrs (n, 4): one-way sign or 0, the map's lanes or nan, link, the class's
-    default lanes or nan, 1 for a road the ramp lane rule checks: _ramp_candidates). Each cell's solve covers the 3 x 3 around it, so every layer's rows were made again for each
-    of its neighbours' solves: 6 of lane_flow's 7 CPU-s in Manhattan's first visit, the solve itself 0.3 (2026-11-02);
-    the rows of all features at once (2026-11-08)."""
+    default lanes or nan, 1 for a road the ramp lane rule checks: a motorway link with RAMP_RULE_MIN_LANES (3) or more
+    mapped lanes and nothing else saying it is that wide: no mapped width (OpenStreetMap's, Overture's width rule) and
+    no turn:lanes (its own, or a way's along it); tapers::ramp_lane_rule). Each cell's solve covers the 3 x 3 around
+    it, so every layer's rows were made again for each of its neighbours' solves: 6 of lane_flow's 7 CPU-s in
+    Manhattan's first visit, the solve itself 0.3 (2026-11-02). (earthfast roadnet::laneflow::lane_flow_rows)"""
     got = f.__dict__.get("_lane_flow_rows")
     if got is not None:
         return got
+    import fast
+    import railtags
     import roadlanes
-    n = len(f)
-    po = np.asarray(f.part_off, np.int64)
-    starts = np.asarray(f.coord_off, np.int64)[np.asarray(f.ring_off, np.int64)[po[:n]]]
-    ends = np.asarray(f.coord_off, np.int64)[np.asarray(f.ring_off, np.int64)[po[1:n + 1]]]
-    npts = np.ascontiguousarray(ends - starts, np.int64)
-    pts = np.zeros((n, 4))
-    some = npts > 0
-    if some.any():
-        ll = np.asarray(f.lonlat, np.float64)
-        pts[some, :2] = ll[starts[some]]
-        pts[some, 2:] = ll[ends[some] - 1]
-    attrs = np.zeros((n, 5))
-    attrs[:, 1] = np.nan
-    attrs[:, 3] = np.nan
-    cls_a, sub_a = f.attrs.get("class"), f.attrs.get("subtype")
-    counts = roadlanes.generated_counts(f)
-    table = f.rules.get("oneway")
-    if cls_a is not None and n and table is not None and len(table.feature):
-        cls = np.asarray(cls_a).astype(str)
-        sel = np.isin(cls, sorted(LANE_FLOW_CLASSES))
-        if sub_a is not None:
-            sel &= np.asarray(sub_a).astype(str) == "road"
-        maj = table.majors(n)
-        sel &= maj >= 0
-        idx = np.flatnonzero(sel)
-        if len(idx):
-            v = np.asarray(table.value)[maj[idx]].astype(np.float64)
-            attrs[idx, 0] = np.where(v < 0, -1.0, 1.0)
-            attrs[idx, 1] = [np.nan if counts[i] is None else float(int(counts[i])) for i in idx.tolist()]
-            attrs[idx, 2] = np.where(roadlanes.links(f)[idx], 1.0, 0.0)
-            for c in np.unique(cls[idx]).tolist():
-                if c not in _LANE_FLOW_DFLT:
-                    _LANE_FLOW_DFLT[c] = lane_layout(Spec(carriageway(c, "paved", False, None, True, None), "paved",
-                                                          False, c, True))[1]
-                attrs[idx[cls[idx] == c], 3] = float(_LANE_FLOW_DFLT[c])
-            attrs[idx, 4] = _ramp_candidates(f, idx, cls, attrs[idx, 1], attrs[idx, 2] > 0.5)
-    got = f.__dict__["_lane_flow_rows"] = (pts, npts, attrs)
+    fast.require(382, "lane_flow_rows")
+    a = f.attrs
+    got = f.__dict__["_lane_flow_rows"] = fast._ef.lane_flow_rows(
+        np.ascontiguousarray(f.part_off, np.int64), np.ascontiguousarray(f.ring_off, np.int64),
+        np.ascontiguousarray(f.coord_off, np.int64), np.ascontiguousarray(f.lonlat, np.float64).reshape(-1, 2),
+        a.get("class"), a.get("subtype"), list(roadlanes.generated_counts(f)), f.rules.get("oneway"),
+        np.ascontiguousarray(roadlanes.links(f), bool), {c: _lane_flow_default(c) for c in LANE_FLOW_CLASSES},
+        bool(RAMP_LANE_RULE), lambda: (width_table(f), _osm_widths(f, None, None)),
+        [a.get("osm_" + k) for k in _TURN_LANES],
+        a.get(railtags.LANE_PARTS))
+    return got
+
+
+def _lane_flow_default(c):
+    """Class c's one-way carriageway's lanes when the map gives none (lane_layout of its default spec), remembered."""
+    got = _LANE_FLOW_DFLT.get(c)
+    if got is None:
+        got = _LANE_FLOW_DFLT[c] = float(lane_layout(Spec(carriageway(c, "paved", False, None, True, None), "paved",
+                                                          False, c, True))[1])
     return got
 
 
 _TURN_LANES = ("turn_lanes", "turn_lanes_forward", "turn_lanes_backward", "turn_lanes_both_ways")
-
-
-def _ramp_candidates(f, idx, cls, lanes, link):
-    """(len(idx),) 1.0 / 0.0: the counted roads idx of layer f the ramp lane rule checks (tapers::ramp_lane_rule): a
-    motorway link with RAMP_RULE_MIN_LANES (3) or more mapped lanes and nothing else saying it is that wide: no mapped
-    width (OpenStreetMap's, Overture's width rule) and no turn:lanes (its own, or a way's along it)."""
-    out = np.zeros(len(idx))
-    if not RAMP_LANE_RULE:              # (off: no road checked, in the lane flow solve too)
-        return out
-    sel = (cls[idx] == "motorway") & link & (np.nan_to_num(lanes, nan=0.0) >= 3)
-    if not sel.any():
-        return out
-    import railtags
-    n = len(f)
-    has_w, _ = _rule_cols(width_table(f), n)
-    osm_w = _osm_widths(f, None, None)
-    parts = f.attrs.get(railtags.LANE_PARTS)
-    turn = [f.attrs.get("osm_" + k) for k in _TURN_LANES]
-    for k in np.flatnonzero(sel).tolist():
-        i = int(idx[k])
-        if has_w[i] or np.isfinite(osm_w[i]):
-            continue
-        if any(c is not None and c[i] not in (None, "") for c in turn):
-            continue
-        if parts is not None and parts[i] and any(t and any(str(key).startswith("turn:lanes") for key in t)
-                                                  for _, _, _, t in parts[i]):
-            continue
-        out[k] = 1.0
-    return out
 
 
 def _lane_flow_local(feats):
@@ -2870,14 +2782,9 @@ def _lane_flow_local(feats):
     ids = [_lane_flow_ids(f) for f in layers]
     got, ramp = fast._ef.lane_flow_cells(ids, [r[0] for r in rows], [r[1] for r in rows], [r[2] for r in rows],
                                          float(LANE_FLOW_MAX))
-    got, ramp = np.asarray(got), np.asarray(ramp)
-    out = [None] * len(feats)
-    for i in np.flatnonzero(np.isfinite(got) & ~(rows[0][2][:, 2] > 0.5)).tolist():
-        out[i] = int(got[i])
-    fixed = [None] * len(feats)
-    for i in np.flatnonzero(np.isfinite(ramp)).tolist():
-        fixed[i] = int(ramp[i])
-    got = feats.__dict__["_lane_flow"] = (out, fixed)
+    fast.require(382, "lane_flow_lists")
+    got = feats.__dict__["_lane_flow"] = fast._ef.lane_flow_lists(np.ascontiguousarray(got, np.float64),
+                                                                  np.ascontiguousarray(ramp, np.float64), rows[0][2])
     return got
 
 
@@ -3898,62 +3805,29 @@ SPEC_EDGE_M = 9.0       # m beside a European street where its frontage is read 
 
 def _rule_cols(table, n):
     """(has (n,) bool, value (n,) float64: NaN without) of a rule table's value covering the most of each feature
-    (_rule_value, float() of it)."""
-    has, val = np.zeros(n, bool), np.full(n, np.nan)
-    if table is None or len(table.feature) == 0 or not n:
-        return has, val
-    maj = table.majors(n)
-    has = maj >= 0
-    v = np.asarray(table.value)[maj[has]]
-    val[has] = v.astype(np.float64) if v.dtype.kind in "fiub" else [float(x) for x in v.tolist()]
-    return has, val
+    (_rule_value, float() of it; earthfast roadnet::columns::rule_cols)."""
+    import fast
+    fast.require(379, "rule_cols")
+    return fast._ef.rule_cols(table, int(n))
 
 
 def _osm_values(feats, name, lo, hi):
-    """_osm of every feature (NaN for None)."""
-    n = len(feats)
-    col = feats.attrs.get("osm_" + name)
-    if col is None:
-        return np.full(n, np.nan)
-    col = np.asarray(col)
-    if col.dtype.kind in "fiub":
-        v = col[:n].astype(np.float64)
-    else:
-        def num(x):
-            try:
-                return float(x)
-            except (TypeError, ValueError):
-                return np.nan
-        v = np.array([num(x) for x in col[:n].tolist()], np.float64)
-    with np.errstate(invalid="ignore"):
-        bad = ~np.isfinite(v)
-        if lo is not None:
-            bad |= v < lo
-        if hi is not None:
-            bad |= v > hi
-    v[bad] = np.nan
-    return v
+    """_osm of every feature (NaN for None; earthfast roadnet::columns::osm_values)."""
+    import fast
+    fast.require(379, "osm_values")
+    return fast._ef.osm_values(feats.attrs.get("osm_" + name), len(feats), None if lo is None else float(lo),
+                               None if hi is None else float(hi))
 
 
 def _map_surface_values(feats):
-    """_map_surface_value of every feature (None, a str or the rule's np.str_), kept on feats."""
+    """_map_surface_value of every feature (None, a str or the rule's np.str_), kept on feats
+    (earthfast roadnet::surfaces::map_surface_values)."""
     got = feats.__dict__.get("_map_surface_values")
     if got is not None:
         return got
-    n = len(feats)
-    out = [None] * n
-    osm = feats.attrs.get("osm_surface")
-    if osm is not None:
-        for i, v in enumerate(osm.tolist()[:n] if hasattr(osm, "tolist") else list(osm)[:n]):
-            s = str(v).strip()
-            if s and s.lower() not in ("nan", "none"):
-                out[i] = s
-    t = feats.rules.get("surface")
-    if t is not None and len(t.feature) and n:
-        maj = t.majors(n)
-        for i in np.flatnonzero(maj >= 0).tolist():
-            if out[i] is None:
-                out[i] = t.value[maj[i]]
+    import fast
+    fast.require(380, "map_surface_values")
+    out = fast._ef.map_surface_values(len(feats), feats.attrs.get("osm_surface"), feats.rules.get("surface"))
     feats.__dict__["_map_surface_values"] = out
     return out
 
@@ -3993,23 +3867,23 @@ def _spec_inputs(feats):
     names = list(STYLE)
     pos = {c: k for k, c in enumerate(names)}
     cls_s = [str(v) for v in a["class"].tolist()] if "class" in a else ["unknown"] * n
-    cls = np.fromiter((pos.get(c, -1) for c in cls_s), np.int32, n)
-    sub = a.get("subtype")
-    road = np.ones(n, bool) if sub is None else np.fromiter((str(v) == "road" for v in sub.tolist()), bool, n)
-    elig = road & (cls >= 0) & ~np.asarray(unbuilt_mask(feats), bool)
+    cr = rules.get("connectors")
+    import fast
+    fast.require(379, "spec_columns")
+    sc = fast._ef.spec_columns(n, names, np.ascontiguousarray(unbuilt_mask(feats), bool), a.get("class"),
+                               a.get("subtype"), a.get("osm_junction"), a.get("osm_smoothness"), a.get("name"),
+                               a.get("osm_sidewalk"), None if cr is None or not len(cr.feature) else
+                               np.ascontiguousarray(cr.feature, np.int64))
+    cls, elig, ring = sc["cls"], sc["elig_pre"], sc["ring"]
     has_w, wv = _rule_cols(width_table(feats), n)
     has_ow, owv = _rule_cols(rules.get("oneway"), n)
     has_k, kv = _rule_cols(rules.get("max_speed_kmh"), n)
     osm_lanes = _osm_values(feats, "lanes", *OSM_LANES)
-    cr = rules.get("connectors")
-    ncon = np.bincount(np.asarray(cr.feature), minlength=n)[:n].astype(np.int64) if cr is not None and \
-        len(cr.feature) else None
+    ncon = sc["ncon"]
     over = np.full(n, -1, np.int64)
     for i, v in _lane_overrides(feats).items():
         over[i] = int(v)
     gen = np.fromiter((-1 if c is None else int(c) for c in roadlanes.generated_counts(feats)), np.int64, n)
-    jc = a.get("osm_junction")
-    ring = np.zeros(n, bool) if jc is None else np.fromiter((str(v) in RING_JUNCTIONS for v in jc.tolist()), bool, n)
     radius = np.full(n, np.nan)
     for i in np.flatnonzero(ring & elig).tolist():
         r = ring_radius(feats, i)
@@ -4022,52 +3896,15 @@ def _spec_inputs(feats):
     if photosurface.ON and any(vals[i] is None for i in np.flatnonzero(elig).tolist()):
         ph = _photo_surface(feats)
         vals = [ph.get(i) if v is None else v for i, v in enumerate(vals)]
+    good = sc["good"]
+    name = sc["name"]
     # the aerial's verdict on an untagged minor road (roadsurf.py; this run's, made by an earlier one): unpaved -> gravel
-    # (a track stays dirt), paved -> its class's paved (a track asphalt), the regional rule not asked for either
-    photo_paved = np.zeros(n, bool)
-    for i, v in roadsurf.layer_verdicts(feats).items():
-        if vals[i] is not None:
-            continue
-        if v == roadsurf.UNPAVED:
-            if cls_s[i] != "track":
-                vals[i] = "gravel"
-        else:
-            photo_paved[i] = True
-            if cls_s[i] == "track":
-                vals[i] = "asphalt"
-    tokens, tok_of, kind_of = [], {}, {}
-
-    def token(v):
-        if v is None:
-            return -1
-        t = surface_token(v)
-        k = tok_of.get(t)
-        if k is None:
-            k = tok_of[t] = len(tokens)
-            tokens.append(t)
-        return k
-
-    def kind(c, v):
-        k = kind_of.get((c, v))
-        if k is None:
-            k = kind_of[(c, v)] = _KIND_CODE[surface_kind(c, v)]
-        return k
-    skind = np.fromiter((kind(c, v) for c, v in zip(cls_s, vals)), np.int8, n)
-    stok = np.fromiter((token(v) for v in vals), np.int32, n)
-    sm = a.get("osm_smoothness")
-    good = np.zeros(n, bool) if sm is None else np.fromiter(
-        (str(v).strip().lower() in GOOD_SMOOTHNESS for v in sm.tolist()), bool, n)
-    reg_pre = (np.fromiter((REGIONAL_ON and v is None and c in REGIONAL_CLASSES for c, v in zip(cls_s, vals)), bool, n)
-               & np.isnan(osm_lanes) & ~good & ~photo_paved)
-    nm_col = a.get("name")
-    name = None
-    if nm_col is not None:
-        codes = {}
-        name = np.full(n, -1, np.int64)
-        for i, v in enumerate(nm_col.tolist()):
-            nm = str(v or "").strip()
-            if nm and nm != "None":
-                name[i] = codes.setdefault(nm, len(codes))
+    # (a track stays dirt), paved -> its class's paved (a track asphalt), the regional rule not asked for either; the
+    # kinds (surface_kind) and tokens (surface_token) of the values, the regional rule's candidates (earthfast
+    # roadnet::surfaces)
+    sf = _surface_rules().spec_surfaces(cls_s, vals, sorted(roadsurf.layer_verdicts(feats).items()),
+                                        int(roadsurf.UNPAVED), osm_lanes, good, REGIONAL_ON, sorted(REGIONAL_CLASSES))
+    skind, stok, reg_pre = sf["skind"], sf["stok"], sf["reg_pre"]
     po, ro, co = (np.ascontiguousarray(x, np.int64) for x in (feats.part_off, feats.ring_off, feats.coord_off))
     ll = np.ascontiguousarray(feats.lonlat, np.float64).reshape(-1, 2)
     eu = np.zeros(n, bool)
@@ -4076,33 +3913,14 @@ def _spec_inputs(feats):
             p0, p1 = co[ro[po[i]]], co[ro[po[i + 1]]]
             if p1 > p0:
                 eu[i] = europewalks.country_for(*ll[p0 + (p1 - p0) // 2]) is not None
-    tags = a.get("osm_sidewalk")
-    sides = np.full(n, -1, np.int8)
-    if tags is not None:
-        for i, v in enumerate(tags.tolist()):
-            s = SIDEWALK_TAG.get(str(v).strip().lower())
-            if s is not None:
-                sides[i] = _SIDES_OF.index(s)
-    cyc = cls == pos.get("cycleway", -2)
-    if cyc.any():                   # (a cycleway is a street only with its pavements mapped on it: STYLE's "cycleway")
-        elig &= ~cyc | cycle_streets(feats)
+    sides = sc["sides"]
+    elig = sc["elig"]               # (a cycleway is a street only with its pavements mapped on it: STYLE's "cycleway")
     se = np.zeros(n, bool)
     if n:
         first = ll[co[ro[po[:-1]]]]
         se = np.asarray(sweden.contains(first[:, 0], first[:, 1]), bool)
-    se_tag, se_kind, se_tok = np.zeros(n, bool), np.zeros(n, np.int8), np.full(n, -1, np.int32)
-    aisle = np.zeros(n, bool)
-    if se.any():
-        stags = a.get("osm_surface")
-        for j in np.flatnonzero(se).tolist():
-            tag = None if stags is None or stags[j] is None else str(stags[j])
-            if tag not in (None, "", "None", "nan"):
-                se_tag[j], se_kind[j], se_tok[j] = True, kind(cls_s[j], tag), token(tag)
-        t = rules.get("subclass")
-        if t is not None and len(t.feature):
-            maj = t.majors(n)
-            for j in np.flatnonzero(se & (maj >= 0)).tolist():
-                aisle[j] = t.value[maj[j]] in ("parking_aisle",)
+    se_tag, se_kind, se_tok, tokens = _surface_rules().sweden_surfaces(cls_s, se, a.get("osm_surface"), sf["tokens"])
+    aisle = fast._ef.aisles(se, rules.get("subclass"))
     cols = {"cls": cls, "elig": elig, "has_w": has_w, "wv": wv, "osm_w": _osm_widths(feats, *OSM_WIDTH_M),
             "osm_lanes": osm_lanes, "osm_ms": _osm_values(feats, "maxspeed", 5.0, 200.0), "has_ow": has_ow,
             "owv": owv, "has_k": has_k, "kv": kv, "ncon": ncon, "lens": np.asarray(_lengths_all(feats), np.float64),
@@ -4118,24 +3936,11 @@ def _spec_inputs(feats):
 
 
 def _specs_of(d, inp, states):
-    """The Spec of each feature from the kernels' columns (d) and the layer's states (_marking_states)."""
-    names, tokens = inp["names"], inp["tokens"]
-    w32 = d["w32"]
-    widths = [np.float32(w) if f else w for w, f in zip(d["width"].tolist(), w32.tolist())] if w32.any() else \
-        d["width"].tolist()
-    out = []
-    for (pres, w, k, u, c, ow, dr, kmh, gap, med, ln, sf, lk, sd, pk, mt, stt) in zip(
-            d["present"].tolist(), widths, d["kind"].tolist(), d["urban"].tolist(), d["cls"].tolist(),
-            d["oneway"].tolist(), d["dir"].tolist(), d["kmh"].tolist(), list(d["gap"]), d["median"].tolist(),
-            d["lanes"].tolist(), d["surf"].tolist(), d["link"].tolist(), d["sides"].tolist(), d["parking"].tolist(),
-            d["mountain"].tolist(), states.tolist()):
-        if not pres:
-            out.append(None)
-            continue
-        out.append(Spec(w, _KINDS[k], u, names[c], ow, 2.5, dr, None if kmh != kmh else kmh, None if gap != gap else gap,
-                        None if med != med else med, None if ln < 0 else ln, None if sf < 0 else tokens[sf], lk,
-                        None if sd < 0 else _SIDES_OF[sd], pk, mt, False, stt))
-    return out
+    """The Spec of each feature from the kernels' columns (d) and the layer's states (_marking_states)
+    (earthfast roadnet::assembly::specs_of)."""
+    import fast
+    fast.require(381, "specs_of")
+    return fast._ef.specs_of(d, inp["names"], inp["tokens"], states, Spec)
 
 
 # Mountain pass roads (the user, 2026-10-31: the Stelvio Pass; its aerial: 6.1 m of asphalt between edge lines, no
@@ -4661,9 +4466,9 @@ def _bridge_specs(feats, want="bridge"):
     lv = _level_lists(feats, elig) if want == "bridge" else _raw_all(feats)
     for i in elig:
         has[i] = any(k == want for _, _, k in lv[i])
-    nan = float("nan")
-    gmed = np.fromiter((g.median if g is not None and g.median else nan for g in ground), np.float64, n)
-    gdir = np.fromiter((g.dir if g is not None else 0 for g in ground), np.int64, n)
+    import fast
+    fast.require(381, "ground_med_dir")
+    gmed, gdir = fast._ef.ground_med_dir(list(ground))
     d = _road_rules().bridge_specs(inp["geo"], inp["cols"], inp["built"], has, gmed, gdir, _flow_fn(feats, inp),
                                    _spec_prm())
     out = _specs_of(d, inp, _marking_states(feats))
@@ -7390,10 +7195,14 @@ def lane_tag_parts(feats, i):
     it, one stretch whole unless it was made from several ways (Overture merges the ways between two junctions; each has
     its own lane tags, a 2+1 road's alternate along one segment). Tags hold the way's own "lanes" where the way has lane
     tags; lane_tags(feats, i) is the way covering most of the feature."""
+    import fast
     import railtags
     parts = feats.attrs.get(railtags.LANE_PARTS)
-    if parts is not None and parts[i]:
-        return [(a, b, w, t or None) for a, b, w, t in parts[i]]
+    if parts is not None:
+        fast.require(383, "lane_tag_parts")
+        got = fast._ef.lane_tag_parts(parts[i])
+        if got is not None:
+            return got
     rec = feats.attrs.get("src_record")
     return [(0.0, 1.0, railtags.way_id(str(rec[i])) if rec is not None else None, lane_tags(feats, i))]
 

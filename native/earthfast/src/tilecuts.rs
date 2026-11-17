@@ -166,9 +166,26 @@ pub fn offset_polyline<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, d:
     if p.ncols() < 2 || k < 2 || !(dd.len() == 1 || dd.len() == k) {
         return Err(pyo3::exceptions::PyValueError::new_err("offset_polyline: pts (k >= 2, >= 2), d (1,) or (k,)"));
     }
+    let mut xy: Vec<[f64; 2]> = (0..k).map(|i| [p[[i, 0]], p[[i, 1]]]).collect();
+    let dv: Vec<f64> = dd.iter().copied().collect();
+    offset_xy(&mut xy, &dv);
+    let mut out = p.to_owned();
+    for i in 0..k {
+        out[[i, 0]] = xy[i][0];
+        out[[i, 1]] = xy[i][1];
+    }
+    Ok(out.into_pyarray(py))
+}
+
+/// offset_polyline's maths on xy points in place (k >= 2; d: one offset for all or one per point).
+pub(crate) fn offset_xy(xy: &mut [[f64; 2]], dd: &[f64]) {
+    let k = xy.len();
+    if k < 2 {
+        return;
+    }
     // (the unit left normal of each segment: t / max(|t|, 1e-9) turned left)
     let nrm: Vec<(f64, f64)> = (0..k - 1).map(|i| {
-        let (tx, ty) = (p[[i + 1, 0]] - p[[i, 0]], p[[i + 1, 1]] - p[[i, 1]]);
+        let (tx, ty) = (xy[i + 1][0] - xy[i][0], xy[i + 1][1] - xy[i][1]);
         let mut l = tx.dhypot(ty);
         if l < 1e-9 {
             l = 1e-9;
@@ -176,7 +193,6 @@ pub fn offset_polyline<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, d:
         let (tx, ty) = (tx / l, ty / l);
         (-ty, tx)
     }).collect();
-    let mut out = p.to_owned();
     for i in 0..k {
         let (vx, vy) = if i == 0 {
             nrm[0]
@@ -195,10 +211,9 @@ pub fn offset_polyline<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, d:
             (mx / c, my / c)
         };
         let di = if dd.len() == 1 { dd[0] } else { dd[i] };
-        out[[i, 0]] += vx * di;
-        out[[i, 1]] += vy * di;
+        xy[i][0] += vx * di;
+        xy[i][1] += vy * di;
     }
-    Ok(out.into_pyarray(py))
 }
 
 /// railways' ground memo (point_ground / grade_plans): heights by point key (x, y in cm, int64 pairs), the dict

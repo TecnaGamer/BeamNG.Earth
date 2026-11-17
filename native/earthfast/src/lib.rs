@@ -116,6 +116,7 @@ mod roadwear;
 mod roadtone;
 mod railbeds;
 mod railxing;
+mod roadnet;
 mod osmtagshards;
 mod buildyears;
 mod buildcolours;
@@ -1552,6 +1553,9 @@ fn wall_ray<T: Copy + Into<f64>>(keys: &[i64], first: &[i64], counts: &[i64], se
 /// numpy.interp at x of the increasing xp, fp.
 fn np_interp(x: f64, xp: &[f64], fp: &[f64]) -> f64 {
     let n = xp.len();
+    if x.is_nan() {
+        return x;                   // (numpy's arr_interp: a NaN x is NaN)
+    }
     if x <= xp[0] {
         return fp[0];
     }
@@ -1559,7 +1563,8 @@ fn np_interp(x: f64, xp: &[f64], fp: &[f64]) -> f64 {
         return fp[n - 1];
     }
     // the last j with xp[j] <= x
-    let j = match xp.binary_search_by(|v| v.partial_cmp(&x).unwrap()) {
+    // (a NaN in xp: ordered after x, never a panic; numpy's own search differs there, every caller's xp is finite)
+    let j = match xp.binary_search_by(|v| v.partial_cmp(&x).unwrap_or(std::cmp::Ordering::Greater)) {
         Ok(mut k) => {
             while k + 1 < n && xp[k + 1] <= x {
                 k += 1;
@@ -6529,6 +6534,38 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 377 (first numbered 375): grade_points: a road holds its carriageway whole only over no approach of its rank
     // leading onto a bridge (gradebins Pt.arank: the Stonehouse Bridge's deck end stepped 1.6 m into the gyratory it
     // runs into, GitHub #1374)
+    m.add_function(wrap_pyfunction!(roadnet::copies::joint_desc, m)?)?;
+    // 378: the road revamp's R2a (roadnet: the spec inputs' Python glue ported byte for byte): roadnet::copies::joint_desc
+    // (roads.joint_desc: each joint from the copy in its own cell, keys by Python's round(x, 6))
+    m.add_function(wrap_pyfunction!(roadnet::columns::cycle_streets, m)?)?;
+    m.add_function(wrap_pyfunction!(roadnet::columns::rule_cols, m)?)?;
+    m.add_function(wrap_pyfunction!(roadnet::columns::osm_values, m)?)?;
+    m.add_function(wrap_pyfunction!(roadnet::columns::layer_lengths, m)?)?;
+    m.add_function(wrap_pyfunction!(roadnet::columns::spec_columns, m)?)?;
+    // 379: R2a's spec input columns (roadnet::columns: cycle_streets, rule_cols, osm_values, layer_lengths,
+    // spec_columns: roads._spec_inputs' class codes, eligibility, rings, smoothness, name codes, sidewalks, connectors)
+    m.add_class::<roadnet::surfaces::SurfaceRules>()?;
+    m.add_function(wrap_pyfunction!(roadnet::surfaces::map_surface_values, m)?)?;
+    m.add_function(wrap_pyfunction!(roadnet::surfaces::aisles, m)?)?;
+    // 380: R2a's surfaces (roadnet::surfaces: SurfaceRules.token / kind / spec_surfaces / sweden_surfaces,
+    // map_surface_values, aisles: roads.surface_token, surface_kind, _map_surface_values, _spec_inputs' surface columns)
+    m.add_function(wrap_pyfunction!(roadnet::assembly::specs_of, m)?)?;
+    m.add_function(wrap_pyfunction!(roadnet::assembly::dual_cols, m)?)?;
+    m.add_function(wrap_pyfunction!(roadnet::assembly::dual_apply, m)?)?;
+    m.add_function(wrap_pyfunction!(roadnet::assembly::ground_med_dir, m)?)?;
+    // 381: R2a's spec assembly (roadnet::assembly: specs_of, dual_cols, dual_apply, ground_med_dir: roads._specs_of,
+    // dual_carriageways' columns and result, _bridge_specs' ground columns)
+    m.add_function(wrap_pyfunction!(roadnet::laneflow::lane_flow_rows, m)?)?;
+    m.add_function(wrap_pyfunction!(roadnet::laneflow::lane_flow_lists, m)?)?;
+    // 382: R2a's lane flow rows (roadnet::laneflow: lane_flow_rows, lane_flow_lists: roads._lane_flow_rows with
+    // _ramp_candidates, _lane_flow_local's lists)
+    m.add_function(wrap_pyfunction!(roadnet::lanesplit::lane_joint_specs, m)?)?;
+    m.add_function(wrap_pyfunction!(roadnet::lanesplit::lane_split_jobs, m)?)?;
+    m.add_function(wrap_pyfunction!(roadnet::lanesplit::lane_ease, m)?)?;
+    m.add_function(wrap_pyfunction!(roadnet::lanesplit::lane_offset, m)?)?;
+    m.add_function(wrap_pyfunction!(roadnet::lanesplit::lane_tag_parts, m)?)?;
+    // 383: R2a's lane sections (roadnet::lanesplit: lane_joint_specs, lane_split_jobs, lane_ease, lane_offset:
+    // lanesections.split's plan, _joint_specs, _ease, _offset; lane_tag_parts: roads.lane_tag_parts)
     m.add_function(wrap_pyfunction!(racedig::race_dig_floor, m)?)?;
     // 384: racedig::race_dig_floor (racedig.py, BNE_RACEWAY_DIG: a tunnel part dug under a racetrack, the track's
     // surface kept; road revamp R1k)
