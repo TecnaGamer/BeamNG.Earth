@@ -67,12 +67,40 @@ local TEX_FIELDS = { 'aoBaseTex', 'aoBaseTexSize', 'aoDetailStrength', 'aoDetail
 -- size. Repeats in metres divide the 128 m block step (2 / 4 m detail, 32 / 64 m macro), or the pattern
 -- jumps under the car at every terrain move (the in-game finding noted in tools/make_level_assets.py).
 local T = '/assets/materials/terrain/'
+local TL = '/temp/beamngEarth/terraintex/'
+-- Zero-mean colour grain (the near/far border, the user 2026-11-16): the shader adds (2 t - 1) x strength of a detail /
+-- macro colour texture's stored value t to the photo, so a stock map whose mean is not 0.5 tinted the whole block
+-- (t_macro_grass, mean 0.43: a darker block than the far tiles past its edge, which show the photo as it is). The
+-- server writes zero-mean copies of these (server/terraintex.py RECENTRED_STEMS, the same list; rc_name):
+M.RECENTRED = {
+  ['asphalt/asphalt/t_asphalt_b'] = true, ['asphalt/macro_asphalt/t_macro_asphalt_b'] = true,
+  ['grass/t_grass_01/t_grass_01_b'] = true, ['grass/t_macro_grass/t_macro_grass_b'] = true, ['mud/mud/t_mud_b'] = true,
+  ['rock/macro_rocky/t_macro_rocky_b'] = true, ['rock/t_dirt_rocky/t_dirt_rocky_b'] = true,
+  ['sand/t_macro_sand/t_macro_sand_b'] = true, ['sand/t_sand/t_sand_b'] = true,
+  ['soil/dirt_crumbly/t_dirt_crumbly_b'] = true, ['soil/dirt_loose_dusty/t_dirt_loose_dusty_b'] = true,
+  ['soil/macro_clumply/t_macro_clumpy_b'] = true, ['soil/t_gravel/t_gravel_b'] = true,
+}
+function M.rcName(stem) return 'bne_rc_' .. stem:gsub('/', '__') .. '.png' end
+-- The stock path of a zero-mean copy's VFS path (nil for any other path): the layer's colour when the copy is missing.
+function M.stockOf(path)
+  local n = type(path) == 'string' and path:sub(1, #TL) == TL and path:sub(#TL + 1):match('^bne_rc_(.+)%.png$')
+  return n and (T .. n:gsub('__', '/') .. '.png') or nil
+end
+local function colourTex(stem)
+  local s = stem .. '_b'
+  return M.RECENTRED[s] and (TL .. M.rcName(s)) or (T .. s .. '.png')
+end
+-- The macro (colour, normal, roughness) goes from its near strength at 0 m to its far one at 100 m, then to nothing at
+-- 200 m (macroDistAtten): past the block's edge (the player >= 229 m inside it, follow.lua) the far tiles show the photo
+-- alone (tools/make_level_assets.py MACRO_DISTANCES)
+M.MACRO_DISTANCES, M.MACRO_DIST_ATTEN = '0 0 100 200', '0 1'
 local function look(detail, dsize, macro, msize, strength)
-  local l = { detailDistances = '0 0 50 80', macroDistances = '0 0 150 1500' }
+  local l = { detailDistances = '0 0 50 80', macroDistances = M.MACRO_DISTANCES, macroDistAtten = M.MACRO_DIST_ATTEN }
   for _, k in ipairs({ { 'baseColor', '_b' }, { 'normal', '_nm' }, { 'roughness', '_r' }, { 'ao', '_ao' } }) do
     l[k[1] .. 'DetailTex'] = T .. detail .. k[2] .. '.png'
     l[k[1] .. 'MacroTex'] = T .. macro .. k[2] .. '.png'
   end
+  l.baseColorDetailTex, l.baseColorMacroTex = colourTex(detail), colourTex(macro)
   -- flat height textures: height-blended layer borders swirled across whole blocks between the land-cover
   -- classes (in-game 2026-10-12), so the borders follow the server's masks; never '' (an empty slot makes
   -- the engine build a default texture at every updateMaterial, ~0.8 s)
@@ -94,8 +122,7 @@ local function golfLook(detail, dsize, macro, msize, near, far)
 end
 -- Squares (server/surface.py PAVERS / BRICK; tools/make_level_assets.py has the same): building tileables at the
 -- 1024 detail size as PNG copies the server makes from the game's DDS (server/terraintex.py: the terrain packing reads
--- no DDS), the asphalt's roughness, ao off
-local TL = '/temp/beamngEarth/terraintex/'
+-- no DDS) under TL, the asphalt's roughness, ao off
 local function tileLook(color, normal, dsize, near, far)
   local l = look('asphalt/asphalt/t_asphalt', dsize, 'asphalt/macro_asphalt/t_macro_asphalt', 32, near)
   l.baseColorDetailTex, l.normalDetailTex = TL .. color, TL .. normal
@@ -153,6 +180,7 @@ local function applyLook(m, name)
   if not l then return end
   for k, v in pairs(l) do
     if k:sub(-7) == 'TexSize' then v = toSamples(v) end
+    if M.stockOf(v) and not FS:fileExists(v) then v = M.stockOf(v) end -- (a zero-mean copy not written: the stock one)
     pcall(function() m:setField(k, 0, tostring(v)) end)
   end
 end
@@ -289,7 +317,30 @@ function M.checkTileTextures()
     end
   end
   if #fell > 0 then log('W', 'beamngEarth', 'terrain tile textures missing (' .. table.concat(fell, ', ') .. '): stock asphalt instead') end
+  -- a zero-mean colour copy the server could not write (no game folder): the stock texture it was made from
+  local back = 0
+  for name in pairs(M.groundMaterialNames()) do
+    local m = scenetree.findObject(name)
+    if m then
+      for _, f in ipairs({ 'baseColorDetailTex', 'baseColorMacroTex' }) do
+        local ok, v = pcall(function() return m:getField(f, 0) end)
+        local stock = ok and M.stockOf(v)
+        if stock and not FS:fileExists(v) then
+          pcall(function() m:setField(f, 0, stock) end)
+          back = back + 1
+        end
+      end
+    end
+  end
+  if back > 0 then log('W', 'beamngEarth', 'terrain zero-mean textures missing (' .. back .. '): stock colour instead') end
   return fell
+end
+
+-- Every ground material name this module may list (the level's and LOOKS'), as a set.
+function M.groundMaterialNames()
+  local s = { [M.MATERIAL] = true }
+  for name in pairs(M.LOOKS) do s[name] = true end
+  return s
 end
 
 local function getOrCreate()

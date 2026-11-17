@@ -136,9 +136,29 @@ FLAT_H = B + "bngEarth_flat_h_1024.png"     # neutral height for the detail / ma
 # photo base in detail mode.
 TEX_SQ = 2          # samples per 2 m (the square is heightmap.SQUARE = 1 m)
 T_ = "/assets/materials/terrain/"
+TL_ = "/temp/beamngEarth/terraintex/"
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "server"))
+import terraintex   # noqa: E402  (rc_name: the zero-mean colour copies the server writes)
+# The near/far border (the user, 2026-11-16: "the texture between the ground with collision vs no collision is very
+# different. and there's a visible border"): past the drawn block's edge the far tiles show the photo alone, so every
+# layer's macro (colour, normal, roughness: the engine fades them all by macroDistAtten) is gone before the nearest
+# block edge can be seen (the player stays >= 229 m inside it, mod follow.lua): the strength goes linearly from its near
+# value at 0 m to its far one at MACRO_DISTANCES[2], then to nothing at [3]; the shader samples no macro past [3]. Its
+# colour grain is zero-mean (terraintex RECENTRED_STEMS): the photo's mean colour at every distance.
+MACRO_DISTANCES = [0, 0, 100, 200]
+MACRO_DIST_ATTEN = [0, 1]
+
+
+def colour_tex(stem):
+    """A layer's colour map of a stock texture stem: the server's zero-mean copy (terraintex.rc_name)."""
+    rel = stem + "_b"
+    return TL_ + terraintex.rc_name(rel) if rel in terraintex.RECENTRED_STEMS else T_ + rel + ".png"
+
+
 def surface(name, gm, pid, detail, dsize, macro, msize, strength=0.25):
     m = {"name": name, "internalName": name, "class": "TerrainMaterial", "persistentId": pid, "groundmodelName": gm,
-         "detailDistances": [0, 0, 50, 80], "macroDistances": [0, 0, 150, 1500],
+         "detailDistances": [0, 0, 50, 80], "macroDistances": list(MACRO_DISTANCES),
+         "macroDistAtten": list(MACRO_DIST_ATTEN),
          "baseColorDetailStrength": [strength, 0.08], "normalDetailStrength": [1, 0.3], "roughnessDetailStrength": [1, 0.4],
          "aoDetailStrength": [0.8, 0.2], "baseColorMacroStrength": [0.12, 0.08], "normalMacroStrength": [0.5, 0.3],
          "roughnessMacroStrength": [0, 0.8]}
@@ -147,6 +167,7 @@ def surface(name, gm, pid, detail, dsize, macro, msize, strength=0.25):
         m[key + "BaseTex"], m[key + "BaseTexSize"] = B + base, 128 * TEX_SQ
         m[key + "DetailTex"], m[key + "DetailTexSize"] = T_ + detail + suf + ".png", dsize * TEX_SQ
         m[key + "MacroTex"], m[key + "MacroTexSize"] = T_ + macro + suf + ".png", msize * TEX_SQ
+    m["baseColorDetailTex"], m["baseColorMacroTex"] = colour_tex(detail), colour_tex(macro)
     m["heightBaseTex"], m["heightBaseTexSize"] = B + "bngEarth_base_h.png", 128 * TEX_SQ
     # flat (no height-blended borders: they swirled across whole blocks, in-game 2026-10-12), never empty
     m["heightDetailTex"], m["heightDetailTexSize"] = FLAT_H, dsize * TEX_SQ
@@ -216,9 +237,9 @@ pretty(os.path.join(T, "main.materials.json"), {
         "aoDetailStrength": [1, 0], "aoDetailTex": A + "dirt_crumbly/t_dirt_crumbly_ao.png",
         "aoMacroTex": A + "macro_clumply/t_macro_clumpy_ao.png", "aoMacroTexSize": 64 * TEX_SQ,
         "baseColorBaseTex": B + "bngEarth_base_b.png", "baseColorBaseTexSize": 256 * TEX_SQ,
-        "baseColorDetailStrength": [0.25, 0], "baseColorDetailTex": A + "dirt_crumbly/t_dirt_crumbly_b.png",
-        "baseColorMacroStrength": [0.12, 0.08], "baseColorMacroTex": A + "macro_clumply/t_macro_clumpy_b.png", "baseColorMacroTexSize": 64 * TEX_SQ,
-        "detailDistances": [0, 0, 30, 60], "macroDistances": [0, 10, 100, 3000],
+        "baseColorDetailStrength": [0.25, 0], "baseColorDetailTex": colour_tex("soil/dirt_crumbly/t_dirt_crumbly"),
+        "baseColorMacroStrength": [0.12, 0.08], "baseColorMacroTex": colour_tex("soil/macro_clumply/t_macro_clumpy"), "baseColorMacroTexSize": 64 * TEX_SQ,
+        "detailDistances": [0, 0, 30, 60], "macroDistances": list(MACRO_DISTANCES), "macroDistAtten": list(MACRO_DIST_ATTEN),
         "heightBaseTex": B + "bngEarth_base_h.png", "heightBaseTexSize": 256 * TEX_SQ,
         "heightDetailTex": A + "dirt_crumbly/t_dirt_crumbly_h.png",
         "heightMacroTex": A + "macro_clumply/t_macro_clumpy_h.png", "heightMacroTexSize": 64 * TEX_SQ,
