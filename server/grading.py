@@ -429,12 +429,13 @@ UNDER_MAX_BRIDGE_M = 120.0  # only single short spans (both ends on the ground):
 UNDER_MAX_DROP_M = 8.0      # never lowered more than this (bad data: rather a low bridge than a pit)
 # Speed-based vertical curves for a fast road's dip under a deck (ski ramps, 2026-11-17): a cosine ramp at UNDER_GRADE
 # bends at 2 grade^2 / depth, 0.95 / depth g at 130 km/h (a 1 m dip throws a car 0.95 g at its crests), and a shallower
-# dip is sharper still. A motorway's, trunk's or primary's own dip (not a link's) ramps no steeper than keeps that
-# bend under 1 / UNDER_SPEED_R of its class (half the sag radius of its design speed, the road revamp plan's relaxed K:
-# 120 / 100 / 90 km/h), never so gentle that it outruns UNDER_MAX_DROP_M's ramp (underpass_offsets' 4th column).
+# dip is sharper still. A motorway's or trunk's own dip (not a link's) ramps no steeper than keeps that bend under
+# 1 / UNDER_SPEED_R of its class (half the sag radius of its design speed, the road revamp plan's relaxed K: 120 / 100
+# km/h), never so gentle that it outruns UNDER_MAX_DROP_M's ramp (underpass_offsets' 4th column). Not a primary: a city
+# street's long dip ran on through its junctions (downtown Los Angeles by the Four Level, a 0.8 g crest at a corner).
 # BNE_UNDER_SPEED=on.
 UNDER_SPEED = os.environ.get("BNE_UNDER_SPEED", "off") == "on"
-UNDER_SPEED_R = {"motorway": 3100.0, "trunk": 2200.0, "primary": 1800.0}
+UNDER_SPEED_R = {"motorway": 3100.0, "trunk": 2200.0}
 # On lidar a road under a rail bridge is where the survey has it (a town's underpass is lower than a road bridge's 6 m:
 # Nachod's road 14 under the Kladska line, 3.5 m under the track's ground, was dug 3.8 m down and its junctions with it,
 # a ravine the user saw, 2026-11-09): lowered at most this much (plan 035). BNE_RAIL_UNDER_LIDAR_DROP=off: as before.
