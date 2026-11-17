@@ -145,6 +145,13 @@ def shard(x, y):
     return got
 
 
+def clear_memory():
+    """Drop the shards kept in memory (budget.maybe_shed: a process short of memory); read from the disk cache again
+    when a cell asks."""
+    with _lock:
+        _state["shards"].clear()
+
+
 def _fetched(x, y):
     """The shard's bytes from the disk cache or the site, b"" none there, None unreachable."""
     import netfetch

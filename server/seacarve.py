@@ -138,6 +138,10 @@ RAW_MAGIC = 0x53424b31          # "1KBS": the file's first int32 (then block px,
 RAW_HEAD = 5                    # int32s before the index
 
 
+_RAW_SHIFT, _RAW_MASK = RAW_BLOCK_PX.bit_length() - 1, RAW_BLOCK_PX - 1      # (a power of two: _Blocks' lookups)
+assert 1 << _RAW_SHIFT == RAW_BLOCK_PX
+
+
 def _raw_path(p):
     return p[:-4] + ".rawb.npy" if p else None
 
@@ -153,8 +157,7 @@ class _Blocks:
     def __getitem__(self, key):
         j, i = key
         j, i = np.asarray(j), np.asarray(i)
-        b = RAW_BLOCK_PX
-        return self.data[self.idx[j // b, i // b], j % b, i % b]
+        return self.data[self.idx[j >> _RAW_SHIFT, i >> _RAW_SHIFT], j & _RAW_MASK, i & _RAW_MASK]
 
     def __array__(self, dtype=None, copy=None):
         m, b = self.idx.shape[0], RAW_BLOCK_PX
@@ -162,11 +165,15 @@ class _Blocks:
         return a if dtype is None else a.astype(dtype)
 
 
-def _write_raw(raw, r):
-    if not raw:
-        return
-    n = r[0].shape[0]
+def _pack(r):
+    """A raster's planes by RAW_BLOCK_PX blocks: (the index of the cell's blocks, the blocks with water after the land
+    block they all share, the raster's px), as the file holds them (_write_raw) and a process keeps them (_packed)."""
     b = RAW_BLOCK_PX
+    if isinstance(r[0], _Blocks):       # (kept by its blocks already)
+        data = np.zeros(r[0].data.shape, RAW_DTYPE)
+        data["depth"], data["level"], data["outline"] = r[0].data, r[1].data, r[2].data
+        return r[0].idx, data, r[0].shape[0]
+    n = r[0].shape[0]
     m = -(-n // b)
     full = np.zeros((m * b, m * b), RAW_DTYPE)
     full["level"] = np.nan
@@ -177,7 +184,25 @@ def _write_raw(raw, r):
     idx[used] = np.arange(1, int(used.sum()) + 1)
     land = np.zeros((1, b, b), RAW_DTYPE)                          # (slot 0: land)
     land["level"] = np.nan
-    data = np.concatenate([land, blocks[used]])
+    return idx, np.concatenate([land, blocks[used]]), n
+
+
+def _packed(r):
+    """A raster as a process keeps it (SeaCarver._mem, _land): by its blocks with water (_Blocks planes, each lookup
+    the pixels the whole raster gave), not the whole of it. A whole one was 9.4 MB a cell, a tenth of its blocks
+    holding any water inland, 24 of them in each of the server's ~10 processes that look at the water: 80-145 MB of
+    a worker a motorway drive left with ~500 MB after its caches were dropped (2026-11-17)."""
+    if r is None or isinstance(r[0], _Blocks):
+        return r
+    idx, data, n = _pack(r)
+    return tuple(_Blocks(idx, np.ascontiguousarray(data[f]), (n, n)) for f in ("depth", "level", "outline"))
+
+
+def _write_raw(raw, r):
+    if not raw:
+        return
+    idx, data, n = _pack(r)
+    b, m = RAW_BLOCK_PX, idx.shape[0]
     head = np.array([RAW_MAGIC, b, m, len(data), n], "<i4")
     buf = np.concatenate([head.view(np.uint8), idx.view(np.uint8).ravel(),
                           np.ascontiguousarray(data).view(np.uint8).ravel()])
@@ -503,7 +528,7 @@ class SeaCarver:
             got = staging.read_npz(p, lambda f: ((f["depth"].astype(np.float32) / 100.0, f["level"].astype(np.float32),
                                                   f["outline"].astype(bool)) if f["any"] else None,), "sea cell")
             if got is not None:
-                r = got[0]
+                r = _packed(got[0])
                 if r is not None:       # (outside the read: its raw copy failing to write is no damaged cell file)
                     self._second_use(x, y, raw, r)
                 return r, True
@@ -521,9 +546,10 @@ class SeaCarver:
                     np.savez_compressed(fh, any=True, depth=np.round(r[0] * 100.0).astype(np.int16), level=r[1],
                                         outline=r[2])
             staging.replace_cached(tmp, p)
+            r = _packed(r)
             if r is not None:
                 self._second_use(x, y, raw, r)
-        return r, complete
+        return _packed(r), complete
 
     def _second_use(self, x, y, raw, r):
         """The uncompressed raster (memory-mapped, shared) written only once this process needs the cell a second time

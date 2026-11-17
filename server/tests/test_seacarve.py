@@ -178,6 +178,20 @@ class SeaCarveTest(unittest.TestCase):
                 j, i = rng.integers(0, n, 3000), rng.integers(0, n, 3000)
                 np.testing.assert_array_equal(a[j, i], b[j, i])
             self.assertEqual(float(got[1][1025, 1025]), 0.0)
+            # a process keeps a cell the same way (_packed): the same pixels, a fraction of the memory, and the file
+            # written from it is the file written from the whole raster
+            kept = seacarve._packed((depth, level, outline))
+            for a, b in zip(kept, (depth, level, outline)):
+                self.assertEqual((a.shape, a.dtype), (b.shape, b.dtype))
+                np.testing.assert_array_equal(np.asarray(a), b)
+                np.testing.assert_array_equal(a[j, i], b[j, i])
+            self.assertLess(sum(a.data.nbytes for a in kept) + kept[0].idx.nbytes,
+                            0.15 * sum(b.nbytes for b in (depth, level, outline)))
+            self.assertIs(seacarve._packed(kept), kept)
+            p2 = os.path.join(d, "k.rawb.npy")
+            seacarve._write_raw(p2, kept)
+            with open(p, "rb") as f1, open(p2, "rb") as f2:
+                self.assertEqual(f1.read(), f2.read())
             del got, a             # the loop variable also owns a mapped view; Windows cannot truncate it alive
             gc.collect()
             with open(p, "r+b") as fh:          # damaged: not read (the npz serves, and the copy is written again)

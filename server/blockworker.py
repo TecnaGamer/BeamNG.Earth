@@ -127,6 +127,8 @@ class _State:
             budget.register_shed(rw.clear_memory)
         import roads as _roads
         budget.register_shed(_roads.clear_facts_memory)
+        import germanroads          # (the German roads' surveyed axes: up to 32 shards of ~25 km and their segments)
+        budget.register_shed(germanroads.clear_memory)
         import paintlist            # (the photos' paint lists: they hold their cells' layers)
         budget.register_shed(paintlist.clear)
         budget.register_shed(self._clear_chunks)

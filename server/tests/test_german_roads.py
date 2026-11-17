@@ -249,6 +249,15 @@ class GermanRoadsTest(unittest.TestCase):
         f = features([[(-300.0, 0.0), (300.0, 0.0)]], ["track"], osm={"osm_surface": ["asphalt"]})
         self.assertEqual(self.specs(f)[0].kind, "paved")
 
+    def test_a_process_short_of_memory_drops_the_shards_and_reads_them_again(self):
+        write_shard(self.tmp.name, [(EAST, 6.5, 2, 1, 4, 0)])
+        line = [[(-300.0, 2.0), (300.0, 2.5)]]
+        self.assertEqual(self.specs(features(line, ["secondary"]))[0].width, 6.5)
+        self.assertTrue(germanroads._state["shards"])
+        germanroads.clear_memory()
+        self.assertFalse(germanroads._state["shards"])
+        self.assertEqual(self.specs(features(line, ["secondary"]))[0].width, 6.5)
+
     def test_no_shard_changes_nothing(self):
         f = features([[(-300.0, 0.0), (300.0, 0.0)]], ["secondary"])
         self.assertEqual(self.specs(f)[0].width, roads.carriageway("secondary", "paved", False))
