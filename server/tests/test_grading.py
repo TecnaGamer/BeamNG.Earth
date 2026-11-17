@@ -295,6 +295,43 @@ class GradePointsTest(unittest.TestCase):
         # changes nothing for a road at 20 degrees to it.
         np.testing.assert_array_equal(self.open_tunnel_case(True, 20.0)[1], self.open_tunnel_case(False, 20.0)[1])
 
+    def trench_case(self, section, angle_deg=0.0, gap=10.0, rh=3.5):
+        """grade_points across a primary street 5 m over a trunk's tunnel section held in the open (a trench, covered
+        under the crossings, so not open_tunnel), the street at angle_deg to it, gap m off its line: (s, heights)."""
+        tun = grading.Plan(np.array([[-200.0, 0.0], [200.0, 0.0]]), np.array([4.3, 4.3]), 6.0)
+        tun.rank = grading.grade_rank(roads.Spec(12.0, "paved", True, "trunk"))
+        tun.tunnel_section = section
+        a = np.radians(angle_deg)
+        d = np.array([np.cos(a), np.sin(a)])
+        o = np.array([0.0, -gap])
+        street = grading.Plan(np.array([o - 200.0 * d, o + 200.0 * d]), np.array([9.3, 9.3]), rh + 3.0, road_half=rh)
+        street.rank = grading.grade_rank(roads.Spec(2 * rh, "paved", True, "primary"))
+        tun.rid, street.rid = 1, 2
+        return tun, street
+
+    def test_a_street_beside_a_trench_keeps_its_ground(self):
+        # A street running along the top of a trunk's trench (a tunnel section held in the open, covered further on),
+        # within the rank gap of the trunk: the side ease took it 2-3 m down toward the trench's floor, its kerb and the
+        # trucks on it into the trench's wall. Flagged a tunnel section, it keeps its own level; the trench holds.
+        ys = np.arange(-13.5, 0.01, 0.5)
+        tun, street = self.trench_case(False)
+        old = grading.grade_points(np.zeros_like(ys), ys, np.full(len(ys), 9.3), [tun, street])
+        on_street = np.abs(ys + 10.0) <= 3.5 - 0.01
+        self.assertLess(float(old[on_street].min()), 9.0, "(the ease this fixes)")
+        tun, street = self.trench_case(True)
+        z = grading.grade_points(np.zeros_like(ys), ys, np.full(len(ys), 9.3), [tun, street])
+        self.assertTrue(np.allclose(z[on_street], 9.3, atol=0.05), f"the street keeps its level: {z[on_street]}")
+        self.assertTrue(np.allclose(z[ys >= -6.0 + 0.01], 4.3, atol=0.05), "the trench's carriageway holds")
+
+    def test_a_street_crossing_a_trench_section_still_eases_onto_it(self):
+        # The flag is for a road beside the section: one crossing it at grade grades as before.
+        s = np.arange(-20.0, 20.01, 1.0)
+        out = []
+        for section in (False, True):
+            tun, street = self.trench_case(section, angle_deg=90.0, gap=0.0)
+            out.append(grading.grade_points(np.zeros_like(s), s, np.full(len(s), 9.3), [tun, street]))
+        np.testing.assert_array_equal(out[0], out[1])
+
     def test_a_deeper_dirt_road_still_leaves_the_paved_carriageway_whole(self):
         # A dirt path 1.8 m under the asphalt's level beside it (the height rule's fade starts at 1.5 m): the paved
         # carriageway is still held whole, and only the shoulder starts to fall toward the dirt.
