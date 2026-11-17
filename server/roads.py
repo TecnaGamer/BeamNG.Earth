@@ -7258,10 +7258,36 @@ DECK_MIN_DEPTH = 0.9    # m: the thinnest deck (a short slab bridge)
 DECK_SPAN_RATIO = 22.0  # a deck is its main span / this deep (girder bridges run span/20-25), DECK_MIN..FULL_DEPTH
 
 
+# Level spacing from real clearance and deck depth (the road revamp's R1, 2026-11-16, decision D10 "real-world
+# spacing"; plan §2.6): a deck's road over the road under it by that road's clearance C (motorway / trunk 5.0 m, other
+# roads 4.7, service / track 4.0, foot and cycle ways 2.7, a railway 6.5: electrified or unknown) + the deck's depth
+# D (0.045 of its main span, 0.7-4.0 m: a precast girder's ratio; the mesh draws the same depth) + LEVEL_MARGIN_M, not
+# 6.0 m of headroom + 0.15 m + a depth of 0.9-2.2 m (8.35 m a level with the full depth): a stack's levels ~1-2 m
+# lower each, its ramps gentler. A chain takes the clearance of the highest class it crosses (one chain, one clear;
+# the most demanding road under it, 5.0 m when unknown). Off by default until reviewed in game; BNE_LEVEL_SPACING=on.
+LEVEL_SPACING = os.environ.get("BNE_LEVEL_SPACING", "off") == "on"
+LOWER_CLEAR_M = {"motorway": 5.0, "trunk": 5.0, "service": 4.0, "track": 4.0, "footway": 2.7, "path": 2.7,
+                 "cycleway": 2.7, "pedestrian": 2.7, "bridleway": 2.7, "steps": 2.7, "rail": 6.5}
+LOWER_CLEAR_ROAD_M = 4.7        # m over any other road ...
+LOWER_CLEAR_UNKNOWN_M = 5.0     # ... and where the road under is not known (the most demanding road's)
+LEVEL_MARGIN_M = 0.1
+LEVEL_DEPTH_RATIO = 0.045       # m of deck depth per m of main span (precast girders, AASHTO's 0.045 L) ...
+LEVEL_DEPTH_RANGE = (0.7, 4.0)  # ... within these
+
+
+def lower_clear(classes):
+    """m of clearance the roads of classes need under a deck (LOWER_CLEAR_*): the most demanding's. Pure."""
+    got = [LOWER_CLEAR_M.get(str(c), LOWER_CLEAR_ROAD_M) for c in classes if c is not None]
+    return max(got) if got else LOWER_CLEAR_UNKNOWN_M
+
+
 def deck_depth(span):
     """m of structure (slab + girders) under a deck's road for a main span of span m. A short overpass or channel
     span drew 2.2 m of slab and girders whatever its span, and had to climb that much more to clear what is under it
-    (a crown on 24 m overpasses and 2.7 m humps on the Sunshine Skyway causeway's channel bridges, 2026-10-27). Pure."""
+    (a crown on 24 m overpasses and 2.7 m humps on the Sunshine Skyway causeway's channel bridges, 2026-10-27).
+    LEVEL_SPACING: LEVEL_DEPTH_RATIO of it within LEVEL_DEPTH_RANGE. Pure."""
+    if LEVEL_SPACING:
+        return float(np.clip(LEVEL_DEPTH_RATIO * float(span), *LEVEL_DEPTH_RANGE))
     return float(np.clip(float(span) / DECK_SPAN_RATIO, DECK_MIN_DEPTH, DECK_FULL_DEPTH))
 
 
@@ -7271,9 +7297,13 @@ def deck_split(depth):
     return slab, float(depth) - slab
 
 
-def deck_road_clear(depth=None):
-    """m a deck's road stands over a road under it: the headroom, its margin and the deck's depth. Pure."""
-    return MIN_BRIDGE_HEADROOM_M + BRIDGE_HEADROOM_MARGIN_M + (DECK_FULL_DEPTH if depth is None else float(depth))
+def deck_road_clear(depth=None, classes=None):
+    """m a deck's road stands over a road under it: the headroom, its margin and the deck's depth; LEVEL_SPACING: the
+    clearance of the roads under it (classes: lower_clear), the depth and LEVEL_MARGIN_M. Pure."""
+    d = DECK_FULL_DEPTH if depth is None else float(depth)
+    if LEVEL_SPACING:
+        return lower_clear(classes or ()) + d + LEVEL_MARGIN_M
+    return MIN_BRIDGE_HEADROOM_M + BRIDGE_HEADROOM_MARGIN_M + d
 
 
 # A road with a height limit under a road bridge (a maxheight sign: the roads layer's "max_height_m" rule) needs the
@@ -7384,6 +7414,16 @@ def _crossings(lines, ground_lines):
     fast.require(240, "segment_crossings_lists")
     got = fast._ef.segment_crossings_lists(_lines64(lines), _lines64(ground_lines))
     return [(pi, arc, np.array([x, y])) for pi, _g, arc, x, y in got]
+
+
+def fast_crossing_ground(lines, ground_lines):
+    """[ground line index] of each crossing of ground_lines under lines (as _crossings, in its order). Pure."""
+    import fast
+    lines, ground_lines = list(lines), list(ground_lines)
+    if not lines or not ground_lines:
+        return []
+    fast.require(240, "segment_crossings_lists")
+    return [int(g) for _pi, g, _arc, _x, _y in fast._ef.segment_crossings_lists(_lines64(lines), _lines64(ground_lines))]
 
 
 def _crossings_by(lines, ground_lines):
@@ -7756,6 +7796,7 @@ class BridgeProfiles:
                             e, n = mapgeom.enu_xy(feats, self.frame, ring)
                             lines.append(np.stack([e, n], axis=1))
                         roads_.append(((fid, "g"), lines))
+                        self.__dict__.setdefault("_gcls", {})[(fid, "g")] = rs[i].cls     # (LEVEL_SPACING)
                     elif _rail_drawn(feats, i):
                         # a railway on the ground: the decks over it keep their headroom too (GitHub #324: a road bridge
                         # lay on the tracks; only roads under a deck were counted)
@@ -7898,12 +7939,22 @@ class BridgeProfiles:
         water = self._water(lines, nav, depth, channel)
         if not water and nav > 0 and bridge_profile_mode() == "curve":
             water = self._gap(lines, nav, depth)
-        rails = [(c[0], c[1], z, deck_road_clear(depth)) for c, z in zip(rcr, rail_z)]
         levels = [pool[k][3] for k in comp]
+        under = None                        # (LEVEL_SPACING: the classes the chain's clearance is for)
+        if LEVEL_SPACING:
+            gcls = self.__dict__.get("_gcls", {})
+            gk = [gcls.get(k) for k, v in ground.items() if k[1] == "g" for _g in v]
+            got = fast_crossing_ground(lines, gl)
+            under = sorted({str(gk[gi]) for gi in got if gi < len(gk) and gk[gi] is not None})
+            if len(set(levels)) > 1:        # (a stack: its lower parts are roads under it too)
+                top = max(levels)
+                under += sorted({str(pool[k][0].cls) for k, lv in zip(comp, levels) if lv < top})
+        rails = [(c[0], c[1], z, deck_road_clear(depth, ["rail"] if LEVEL_SPACING else None))
+                 for c, z in zip(rcr, rail_z)]
         pins = _ground_pins(lines, gl)          # (once: pure in lines and gl, which stay)
 
         def solve(ground_fn):
-            return deck_profile(lines, ground_fn, required + rails + water, clear=deck_road_clear(depth),
+            return deck_profile(lines, ground_fn, required + rails + water, clear=deck_road_clear(depth, under),
                                 levels=levels, widths=[pool[k][0].width for k in comp], pins=pins)
         base = self._landing_ground(lines, gl)
         zs = solve(base)
