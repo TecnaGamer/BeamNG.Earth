@@ -117,12 +117,19 @@ def tile_bounds(z, x, y):
     return lat(y + 1), x / n * 360.0 - 180.0, lat(y), (x + 1) / n * 360.0 - 180.0
 
 
-def covers(z, x, y):
-    """Whether tile (z, x, y) touches BOUNDS and reaches north of SOUTH (where the mosaic is asked at all)."""
+def in_bounds(z, x, y):
+    """Whether tile (z, x, y) touches the BOUNDS rectangle: dem.coarse_at's "the Canadian lidar reads here" (the road
+    plans' coarse-elevation rules; kept as it was so no plan changes with covers' narrower ask, Codex review)."""
     s, w, n, e = tile_bounds(z, x, y)
     S, W, N, E = BOUNDS
-    if not (s < N and n > S and w < E and e > W):
+    return s < N and n > S and w < E and e > W
+
+
+def covers(z, x, y):
+    """Whether tile (z, x, y) touches BOUNDS and reaches north of SOUTH (where the mosaic is asked at all)."""
+    if not in_bounds(z, x, y):
         return False
+    s, w, n, e = tile_bounds(z, x, y)
     a = math.floor((w - SOUTH_W0) / SOUTH_STEP)
     b = math.floor((e - SOUTH_W0) / SOUTH_STEP)
     if a < 0 or b >= len(SOUTH):

@@ -37,6 +37,12 @@ class CoversTest(unittest.TestCase):
         for name, (lat, lon) in US.items():
             self.assertFalse(hrdem.covers(*tile(lat, lon)), name)
 
+    def test_coarse_rule_keeps_the_rectangle(self):
+        """dem.coarse_at reads in_bounds, the rectangle as before: the US south of the border still counts as where the
+        lidar reads for the road plans' coarse rules (no plan changes), though it is no longer asked."""
+        self.assertTrue(hrdem.in_bounds(*tile(42.64, -72.99)))
+        self.assertFalse(hrdem.covers(*tile(42.64, -72.99)))
+
     def test_outside_bounds(self):
         self.assertFalse(hrdem.covers(*tile(40.71, -74.0)))         # (south of BOUNDS)
         self.assertFalse(hrdem.covers(*tile(64.84, -147.72)))       # (Fairbanks: west of BOUNDS)
