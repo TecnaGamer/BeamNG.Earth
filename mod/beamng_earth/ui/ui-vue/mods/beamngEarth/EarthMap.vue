@@ -296,12 +296,15 @@
         <span v-else-if="state.gps.remaining != null" class="gps-dist">{{ fmtMiles(state.gps.remaining) }}<template
           v-if="state.gps.eta != null">, {{ fmtDur(state.gps.eta) }}</template></span>
         <span v-if="state.gps.routeError && !routePts.length" class="gps-warn" :title="state.gps.routeError">no road route: heading straight there</span>
+        <span v-else-if="state.gps.avoidHighways && state.gps.avoided === false && routePts.length" class="gps-warn"
+              title="Only a motorway reaches this destination">no route without highways</span>
         <span v-if="state.gps.routeDownload && state.gps.routeDownload.active" class="gps-download"
               title="Downloading the route's road and elevation data ahead of time so driving it is smoother">
           <span class="gps-download-bar"><span class="gps-download-fill" :style="{ width: (state.gps.routeDownload.total
             ? (100 * state.gps.routeDownload.done / state.gps.routeDownload.total) : 0) + '%' }"></span></span>
           {{ state.gps.routeDownload.done }} / {{ state.gps.routeDownload.total }}
         </span>
+        <button class="map-btn small" :class="{ primary: state.gps.avoidHighways }" @click="toggleAvoidHighways()">Avoid highways</button>
         <button class="map-btn small" @click="showOnMap(state.gps)">Show</button>
         <button v-if="routePts.length >= 2" class="map-btn small" @click="askRoute(routeHalf)"
                 title="Pre-cache this route: its data (elevation, roads, buildings, aerial photos) downloaded and kept, and the world built too if you like">Pre-cache route</button>
@@ -1798,6 +1801,11 @@ function setAutodrive(on) {
     state.value = { ...state.value, gps: state.value.gps && { ...state.value.gps, autodrive: r.autodrive } }
     if (r.autodrive && !embedded) close()
   })
+}
+function toggleAvoidHighways() {          // (the GPS plans the route again by itself: gps.lua)
+  const on = !state.value.gps.avoidHighways
+  engineLua(`beamngEarth_settings.uiSet('routeAvoidHighways', ${on})`)
+  state.value.gps.avoidHighways = on
 }
 function clearGps() {
   closeCtx()
