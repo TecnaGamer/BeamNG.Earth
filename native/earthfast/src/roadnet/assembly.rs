@@ -2,7 +2,8 @@
 //! columns of the ground specs), byte for byte the Python they replaced: the same values of the same Python types
 //! (a kernel's float32 width as numpy.float32, the gap as numpy.float64, as list(array) handed them out).
 
-use numpy::{IntoPyArray, PyArray1, PyReadonlyArray1};
+use numpy::{IntoPyArray, PyArray1};
+use super::pyobj::CArr1;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList, PyTuple};
 
@@ -27,7 +28,7 @@ fn pyidx<T: Clone>(seq: &[T], k: i64) -> PyResult<T> {
 }
 
 fn col<'py, T: numpy::Element + Copy>(d: &Bound<'py, PyDict>, k: &str) -> PyResult<Vec<T>> {
-    let a: PyReadonlyArray1<T> = d.get_item(k)?
+    let a: CArr1<T> = d.get_item(k)?
         .ok_or_else(|| pyo3::exceptions::PyKeyError::new_err(k.to_owned()))?
         .extract()?;
     Ok(a.as_array().iter().copied().collect())

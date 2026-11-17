@@ -3,12 +3,13 @@
 
 use std::collections::BTreeMap;
 
-use numpy::{IntoPyArray, PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2};
+use numpy::{IntoPyArray, PyArray1, PyArray2};
 use pyo3::prelude::*;
 use pyo3::types::{PyList, PyString};
 
 use super::columns::rule_cols_of;
 use super::pyobj::py_str;
+use super::pyobj::{CArr1, CArr2};
 
 /// np.asarray(col).astype(str), as Python strings: an object or str array's str() of each, any other dtype numpy's own
 /// text of its numbers.
@@ -33,11 +34,11 @@ fn str_col(col: &Bound<'_, PyAny>) -> PyResult<Vec<String>> {
 #[pyo3(signature = (part_off, ring_off, coord_off, lonlat, cls, subtype, counts, oneway, links, defaults, ramp_rule,
                     ramp_widths, turn_cols, parts))]
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
-pub fn lane_flow_rows<'py>(py: Python<'py>, part_off: PyReadonlyArray1<'py, i64>, ring_off: PyReadonlyArray1<'py, i64>,
-                           coord_off: PyReadonlyArray1<'py, i64>, lonlat: PyReadonlyArray2<'py, f64>,
+pub fn lane_flow_rows<'py>(py: Python<'py>, part_off: CArr1<'py, i64>, ring_off: CArr1<'py, i64>,
+                           coord_off: CArr1<'py, i64>, lonlat: CArr2<'py, f64>,
                            cls: Option<Bound<'py, PyAny>>, subtype: Option<Bound<'py, PyAny>>,
                            counts: Vec<Option<Bound<'py, PyAny>>>, oneway: Option<Bound<'py, PyAny>>,
-                           links: PyReadonlyArray1<'py, bool>, defaults: BTreeMap<String, f64>, ramp_rule: bool,
+                           links: CArr1<'py, bool>, defaults: BTreeMap<String, f64>, ramp_rule: bool,
                            ramp_widths: Bound<'py, PyAny>,
                            turn_cols: Vec<Option<Bound<'py, PyAny>>>, parts: Option<Bound<'py, PyAny>>)
                            -> PyResult<(Bound<'py, PyArray2<f64>>, Bound<'py, PyArray1<i64>>, Bound<'py, PyArray2<f64>>)> {
@@ -87,7 +88,7 @@ pub fn lane_flow_rows<'py>(py: Python<'py>, part_off: PyReadonlyArray1<'py, i64>
             let road = |i: usize| -> bool {
                 sub.as_ref().is_none_or(|s| s[if s.len() == 1 { 0 } else { i }] == "road")
             };
-            let maj: PyReadonlyArray1<i64> = table.call_method1("majors", (n,))?.extract()?;
+            let maj: CArr1<i64> = table.call_method1("majors", (n,))?.extract()?;
             let maj = maj.as_slice()?;
             let idx: Vec<usize> = (0..n).filter(|&i| defaults.contains_key(&cl[i]) && road(i) && maj[i] >= 0)
                 .collect();
@@ -97,7 +98,7 @@ pub fn lane_flow_rows<'py>(py: Python<'py>, part_off: PyReadonlyArray1<'py, i64>
                 let rows: Vec<i64> = idx.iter().map(|&i| maj[i]).collect();
                 let v: Vec<f64> = np.getattr("asarray")?.call1((table.getattr("value")?,))?
                     .get_item(rows.into_pyarray(py))?.call_method1("astype", (np.getattr("float64")?,))?
-                    .extract::<PyReadonlyArray1<f64>>()?.as_array().iter().copied().collect();
+                    .extract::<CArr1<f64>>()?.as_array().iter().copied().collect();
                 let lk = links.as_slice()?;
                 // (counts[i] for the counted roads in order, then links(f)[idx]: an IndexError past either)
                 if let Some(&i) = idx.iter().find(|&&i| i >= counts.len()) {
@@ -126,7 +127,7 @@ pub fn lane_flow_rows<'py>(py: Python<'py>, part_off: PyReadonlyArray1<'py, i64>
                         let got = ramp_widths.call0()?;
                         let wt = got.get_item(0)?;
                         let (has_w, _) = rule_cols_of(Some(&wt), n)?;
-                        let ow: PyReadonlyArray1<f64> = got.get_item(1)?.extract()?;
+                        let ow: CArr1<f64> = got.get_item(1)?.extract()?;
                         let osm_w: Vec<f64> = ow.as_array().iter().copied().collect();
                         let parts = parts.filter(|p| !p.is_none());
                         let empty = PyString::new(py, "");
@@ -180,8 +181,8 @@ pub fn lane_flow_rows<'py>(py: Python<'py>, part_off: PyReadonlyArray1<'py, i64>
 /// count, int(), None where not finite or a link (attrs' column 2); the ramp rule's count, None where not finite).
 #[pyfunction]
 #[allow(clippy::type_complexity)]
-pub fn lane_flow_lists<'py>(got: PyReadonlyArray1<'py, f64>, ramp: PyReadonlyArray1<'py, f64>,
-                            attrs: PyReadonlyArray2<'py, f64>) -> PyResult<(Vec<Option<i64>>, Vec<Option<i64>>)> {
+pub fn lane_flow_lists<'py>(got: CArr1<'py, f64>, ramp: CArr1<'py, f64>,
+                            attrs: CArr2<'py, f64>) -> PyResult<(Vec<Option<i64>>, Vec<Option<i64>>)> {
     let (g, r, a) = (got.as_slice()?, ramp.as_slice()?, attrs.as_array());
     // (isfinite(got) & ~(attrs[:, 2] > 0.5): one shape, ValueError for another)
     if a.ncols() < 3 {

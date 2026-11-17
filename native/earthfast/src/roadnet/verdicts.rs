@@ -6,11 +6,12 @@
 
 use std::collections::BTreeSet;
 
-use numpy::{IntoPyArray, PyArray1, PyReadonlyArray1};
+use numpy::{IntoPyArray, PyArray1};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 
 use super::pyobj::{items, lower_is, py_str, py_strip};
+use super::pyobj::CArr1;
 
 /// np.fromiter(..., bool, n) of an iterator that gave k < n items.
 fn too_short(n: usize, k: usize) -> PyErr {
@@ -39,7 +40,7 @@ pub fn roadsurf_candidates<'py>(py: Python<'py>, n: usize, cls: Option<Bound<'py
     if out.len() < n {
         return Err(too_short(n, out.len()));
     }
-    let lanes: PyReadonlyArray1<f64> = lanes_fn.call0()?.extract()?;
+    let lanes: CArr1<f64> = lanes_fn.call0()?.extract()?;
     let lanes = lanes.as_slice()?;
     if let Some(sm) = items(smoothness.as_ref())? {
         let mut k = 0;
@@ -69,7 +70,7 @@ pub fn roadsurf_candidates<'py>(py: Python<'py>, n: usize, cls: Option<Bound<'py
 /// roadsurf.layer_verdicts' lookup: {i: verdict} of the candidates (in order) whose home cell's entry (entry(home),
 /// homes_fn()[i]: asked only when there is a candidate) has a true verdict under str(ids[i]).
 #[pyfunction]
-pub fn roadsurf_lookup<'py>(py: Python<'py>, cand: PyReadonlyArray1<'py, bool>, homes_fn: Bound<'py, PyAny>,
+pub fn roadsurf_lookup<'py>(py: Python<'py>, cand: CArr1<'py, bool>, homes_fn: Bound<'py, PyAny>,
                             ids: Bound<'py, PyAny>, entry: Bound<'py, PyAny>) -> PyResult<Bound<'py, PyDict>> {
     let out = PyDict::new(py);
     let cand = cand.as_slice()?;
@@ -105,7 +106,7 @@ pub fn photo_candidates<'py>(n: usize, cls: Bound<'py, PyAny>, surface_of: Bound
 /// _spec_inputs' surface values with the photo's: list(vals); where an eligible feature (elig) has none, the photo's
 /// verdicts (photo_fn(): {i: value}, asked only then) fill in every feature that has none (ph.get(i)).
 #[pyfunction]
-pub fn photo_values<'py>(py: Python<'py>, vals: Bound<'py, PyAny>, elig: PyReadonlyArray1<'py, bool>,
+pub fn photo_values<'py>(py: Python<'py>, vals: Bound<'py, PyAny>, elig: CArr1<'py, bool>,
                          photo_fn: Bound<'py, PyAny>) -> PyResult<Bound<'py, PyList>> {
     let vals: Vec<Bound<'py, PyAny>> = vals.try_iter()?.collect::<PyResult<_>>()?;
     let mut ask = false;

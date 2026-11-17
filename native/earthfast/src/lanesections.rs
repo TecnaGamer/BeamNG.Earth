@@ -4,6 +4,7 @@
 //! - lane_runs: the pieces of a lane separator where the growing carriageway has room for it (room >= 0), each with
 //!   the metres along the line before its start (its dashes' phase).
 use crate::dm::Dm;
+use numpy::ndarray::{ArrayView1, ArrayView2};
 use numpy::{IntoPyArray, PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2};
 use pyo3::prelude::*;
 
@@ -159,6 +160,9 @@ pub fn lane_runs<'py>(py: Python<'py>, line: PyReadonlyArray2<'py, f64>, room: P
 type Coords<'py> = (Bound<'py, PyArray1<i64>>, Bound<'py, PyArray1<i64>>, Bound<'py, PyArray1<i64>>,
                     Bound<'py, PyArray2<f64>>);
 
+/// split_coords' new (part_off, ring_off, coord_off, coords as x0, y0, x1, ...).
+pub(crate) type SplitCoords = (Vec<i64>, Vec<i64>, Vec<i64>, Vec<f64>);
+
 /// split's geometry: job j a copy of old feature old[j] (all its parts and rings, as part_off / ring_off / coord_off /
 /// coords (N, 2) hold them), or, where moved[j], one part of one ring: pts[pts_off[j] .. pts_off[j + 1]]. Returns the
 /// new (part_off, ring_off, coord_off, coords).
@@ -174,9 +178,25 @@ pub fn lane_split_coords<'py>(
     pts: PyReadonlyArray2<'py, f64>,
     pts_off: PyReadonlyArray1<'py, i64>,
 ) -> PyResult<Coords<'py>> {
-    let (po, ro, co, xy) = (part_off.as_array(), ring_off.as_array(), coord_off.as_array(), coords.as_array());
-    let (old, moved, pts, poff) = (old.as_array(), moved.as_array(), pts.as_array(), pts_off.as_array());
-    let bad = |m: &str| pyo3::exceptions::PyValueError::new_err(format!("lane_split_coords: {m}"));
+    let (npo, nro, nco, out) = split_coords(part_off.as_array(), ring_off.as_array(), coord_off.as_array(),
+                                            coords.as_array(), old.as_array(), moved.as_array(), pts.as_array(),
+                                            pts_off.as_array())
+        .map_err(pyo3::exceptions::PyValueError::new_err)?;
+    let m = out.len() / 2;
+    Ok((
+        npo.into_pyarray(py),
+        nro.into_pyarray(py),
+        nco.into_pyarray(py),
+        numpy::ndarray::Array2::from_shape_vec((m, 2), out).expect("coords").into_pyarray(py),
+    ))
+}
+
+/// lane_split_coords' work (also roadnet::splitlayer's); Err: the ValueError's message.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn split_coords(po: ArrayView1<i64>, ro: ArrayView1<i64>, co: ArrayView1<i64>, xy: ArrayView2<f64>,
+                           old: ArrayView1<i64>, moved: ArrayView1<bool>, pts: ArrayView2<f64>, poff: ArrayView1<i64>)
+                           -> Result<SplitCoords, String> {
+    let bad = |m: &str| format!("lane_split_coords: {m}");
     let k = old.len();
     if moved.len() != k || poff.len() != k + 1 || xy.ncols() < 2 || pts.ncols() < 2 || po.is_empty() {
         return Err(bad("old / moved / pts_off must match; coords and pts (N, 2)"));
@@ -225,13 +245,7 @@ pub fn lane_split_coords<'py>(
         }
         npo.push(nro.len() as i64 - 1);
     }
-    let m = out.len() / 2;
-    Ok((
-        npo.into_pyarray(py),
-        nro.into_pyarray(py),
-        nco.into_pyarray(py),
-        numpy::ndarray::Array2::from_shape_vec((m, 2), out).expect("coords").into_pyarray(py),
-    ))
+    Ok((npo, nro, nco, out))
 }
 
 /// Python's max(x, 0.) and min(x, 1.) (a NaN stays: the first argument wins a tie or an unordered pair).
@@ -242,6 +256,9 @@ fn clamp01(x: f64) -> f64 {
 
 type Rows<'py> = (Bound<'py, PyArray1<i64>>, Bound<'py, PyArray1<i64>>, Bound<'py, PyArray1<f64>>,
                   Bound<'py, PyArray1<f64>>);
+
+/// split_rules' (rows into the table, job of each, start, end).
+pub(crate) type SplitRows = (Vec<i64>, Vec<i64>, Vec<f64>, Vec<f64>);
 
 /// split's rows of one rule table (feature, start, end per row): job j (old feature old[j], its section a[j] .. b[j]
 /// of it) keeps all of the feature's rows (in row order) when it is the whole feature (0 .. 1), else those over its
@@ -257,10 +274,17 @@ pub fn lane_split_rules<'py>(
     a: PyReadonlyArray1<'py, f64>,
     b: PyReadonlyArray1<'py, f64>,
 ) -> PyResult<Rows<'py>> {
-    let (feat, st, en, old, a, b) =
-        (feature.as_array(), start.as_array(), end.as_array(), old.as_array(), a.as_array(), b.as_array());
+    let (rows, jobs, us, vs) = split_rules(feature.as_array(), start.as_array(), end.as_array(), old.as_array(),
+                                           a.as_array(), b.as_array())
+        .map_err(pyo3::exceptions::PyValueError::new_err)?;
+    Ok((rows.into_pyarray(py), jobs.into_pyarray(py), us.into_pyarray(py), vs.into_pyarray(py)))
+}
+
+/// lane_split_rules' work (also roadnet::splitlayer's); Err: the ValueError's message.
+pub(crate) fn split_rules(feat: ArrayView1<i64>, st: ArrayView1<f64>, en: ArrayView1<f64>, old: ArrayView1<i64>,
+                          a: ArrayView1<f64>, b: ArrayView1<f64>) -> Result<SplitRows, String> {
     if st.len() != feat.len() || en.len() != feat.len() || a.len() != old.len() || b.len() != old.len() {
-        return Err(pyo3::exceptions::PyValueError::new_err("lane_split_rules: feature / start / end, old / a / b"));
+        return Err("lane_split_rules: feature / start / end, old / a / b".to_owned());
     }
     // each feature's rows, ascending (RuleTable.rows)
     let mut order: Vec<usize> = (0..feat.len()).collect();
@@ -299,7 +323,7 @@ pub fn lane_split_rules<'py>(
             }
         }
     }
-    Ok((rows.into_pyarray(py), jobs.into_pyarray(py), us.into_pyarray(py), vs.into_pyarray(py)))
+    Ok((rows, jobs, us, vs))
 }
 
 #[cfg(test)]

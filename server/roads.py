@@ -4432,10 +4432,8 @@ def _bridge_specs(feats, want="bridge"):
     inp = _spec_inputs(feats)
     n = len(feats)
     elig = np.flatnonzero(inp["cols"]["elig"]).tolist()
-    has = np.zeros(n, bool)
     lv = _level_lists(feats, elig) if want == "bridge" else _raw_all(feats)
-    for i in elig:
-        has[i] = any(k == want for _, _, k in lv[i])
+    has = _has_kind(lv, elig, want, n)
     import fast
     fast.require(381, "ground_med_dir")
     gmed, gdir = fast._ef.ground_med_dir(list(ground))
@@ -4444,6 +4442,14 @@ def _bridge_specs(feats, want="bridge"):
     out = _specs_of(d, inp, _marking_states(feats))
     import germanroads          # (Germany's surveyed widths on decks and in tunnels too: a 6.5 m Kreisstraße's
     return germanroads.adjust_specs(feats, out)     # bridge stayed at its class's 8 m, stepping at both ends)
+
+
+def _has_kind(lv, elig, want, n):
+    """(n,) bool: the roads of elig (in order) with a range of kind want among their level ranges lv[i] ((a, b, kind):
+    _level_lists' dict or _raw_all's list), the others False (earthfast roadnet::levelkinds)."""
+    import fast
+    fast.require(402, "level_kind_mask")
+    return fast._ef.level_kind_mask(lv, elig, want, n)
 
 
 class _EndJoin:

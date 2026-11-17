@@ -2,8 +2,11 @@
 //! columns are numpy arrays of objects, strings or numbers (mapgeom.Features.attrs); the ported glue read them with
 //! these, so the kernels read them the same way (CPython's own calls where its rules are not plain ASCII).
 
+use numpy::ndarray::Dimension;
+use numpy::{Element, PyReadonlyArray, PyUntypedArray, PyUntypedArrayMethods};
 use pyo3::prelude::*;
 use pyo3::types::{PyFloat, PyList, PyString};
+use pyo3::Borrowed;
 
 /// col.tolist() (a numpy array's elements as Python objects, a list's own), None for no column.
 pub fn items<'py>(col: Option<&Bound<'py, PyAny>>) -> PyResult<Option<Vec<Bound<'py, PyAny>>>> {
@@ -64,4 +67,69 @@ pub fn py_strip(s: &str) -> &str {
 pub fn lower_is(s: &str, key: &str) -> bool {
     debug_assert!(key.is_ascii() && !key.contains('k'));
     s.is_ascii() && s.len() == key.len() && s.eq_ignore_ascii_case(key)
+}
+
+/// Python's unpacking of x into exactly n names (`a, b, c = x`, `for a, b, c in ...`): its values; ValueError unless it
+/// holds n (its iterator asked for at most n + 1, as CPython's unpacking does), a non-iterable's TypeError.
+pub fn unpack<'py>(x: &Bound<'py, PyAny>, n: usize) -> PyResult<Vec<Bound<'py, PyAny>>> {
+    let mut it = x.try_iter()?;
+    let mut got = Vec::with_capacity(n);
+    while got.len() < n {
+        match it.next() {
+            Some(v) => got.push(v?),
+            None => {
+                return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                    "not enough values to unpack (expected {n}, got {})", got.len())));
+            }
+        }
+    }
+    if let Some(v) = it.next() {
+        v?;
+        return Err(pyo3::exceptions::PyValueError::new_err(format!("too many values to unpack (expected {n})")));
+    }
+    Ok(got)
+}
+
+/// A numpy array argument as rust-numpy reads it rightly: C-contiguous and aligned (np.require(x, requirements="CA"),
+/// numpy's own copy, where it is not). rust-numpy's views divide numpy's byte
+/// strides by the item size, so a byte-strided view (a float64 (2, 2) of strides (24, 12)) was read at other bytes than
+/// numpy's indexing reads (Codex on a6b93359); the copy holds the values numpy read. The dtype and dimension checks are
+/// PyReadonlyArray's own.
+pub struct CArr<'py, T: Element, D: Dimension>(pub PyReadonlyArray<'py, T, D>);
+pub type CArr1<'py, T> = CArr<'py, T, numpy::Ix1>;
+pub type CArr2<'py, T> = CArr<'py, T, numpy::Ix2>;
+
+/// Whether u is C-contiguous and aligned (numpy's own flags), as np.require(x, requirements="CA") leaves it: the
+/// kernels' as_slice reads it whole, as_array at numpy's offsets (a byte-strided view's strides, divided by the item
+/// size, pointed elsewhere; a misaligned one rust-numpy refused).
+fn sound(u: &Bound<'_, PyUntypedArray>) -> bool {
+    // SAFETY: as_array_ptr is the live array object u holds; its flags field is read, nothing written.
+    let aligned = unsafe { (*u.as_array_ptr()).fields.flags & numpy::npyffi::NPY_ARRAY_ALIGNED != 0 };
+    aligned && u.is_c_contiguous()
+}
+
+impl<'a, 'py, T: Element + 'a, D: Dimension + 'a> FromPyObject<'a, 'py> for CArr<'py, T, D> {
+    type Error = PyErr;
+
+    fn extract(obj: Borrowed<'a, 'py, PyAny>) -> Result<Self, Self::Error> {
+        let b = obj.to_owned();
+        let b = match b.cast::<PyUntypedArray>() {
+            Ok(u) if !sound(u) => {
+                let py = b.py();
+                let kw = pyo3::types::PyDict::new(py);
+                kw.set_item("requirements", "CA")?;
+                py.import("numpy")?.getattr("require")?.call((&b,), Some(&kw))?
+            }
+            _ => b,
+        };
+        Ok(CArr(b.extract()?))
+    }
+}
+
+impl<'py, T: Element, D: Dimension> std::ops::Deref for CArr<'py, T, D> {
+    type Target = PyReadonlyArray<'py, T, D>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
 }

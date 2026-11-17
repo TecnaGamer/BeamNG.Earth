@@ -4,7 +4,7 @@
 //! decomposition of a^T a where the QR finds the columns dependent), dnp.matmul's products summed in order.
 
 use pyo3::prelude::*;
-use numpy::PyReadonlyArray2;
+use super::pyobj::CArr2;
 
 use crate::dm::Dm;
 
@@ -74,7 +74,7 @@ fn lstsq3(a: &[[f64; 3]], b: &[f64]) -> [f64; 3] {
 /// roads.ring_radius's circle of a ring's points ll (k, 2: lon, lat): its radius in m, None for fewer than 5 points, a
 /// fit off by more than 15 % of its radius, or a radius outside 3-80 m.
 #[pyfunction]
-pub fn ring_radius(ll: PyReadonlyArray2<'_, f64>) -> PyResult<Option<f64>> {
+pub fn ring_radius(ll: CArr2<'_, f64>) -> PyResult<Option<f64>> {
     let p = ll.as_array();
     if p.ncols() < 2 {
         return Err(pyo3::exceptions::PyValueError::new_err("ring_radius: (k, 2) lon / lat"));

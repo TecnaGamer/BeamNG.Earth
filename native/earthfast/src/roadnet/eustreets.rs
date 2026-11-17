@@ -6,13 +6,14 @@
 
 use std::collections::BTreeSet;
 
-use numpy::{PyReadonlyArray1, PyReadonlyArray2};
+
 use pyo3::exceptions::PyIndexError;
 use pyo3::prelude::*;
 use pyo3::types::{PyFloat, PyList, PyTuple};
 
 use super::countries::np_index;
 use super::pyobj::{py_float, py_str};
+use super::pyobj::{CArr1, CArr2};
 
 /// A lazily asked Python value (the width rule's table, width_rejected's OSM mask): f() at the first need.
 struct Lazy<'py> {
@@ -68,11 +69,11 @@ fn osm_value(col: Option<&Bound<'_, PyAny>>, i: usize, lo: f64, hi: f64) -> PyRe
                     frontage, surveyed, france_on, osm_width, osm_lo, osm_hi, rule_table, rejected, country_of, plan,
                     infer))]
 #[allow(clippy::too_many_arguments)]
-pub fn eu_street_pass<'py>(py: Python<'py>, specs: Bound<'py, PyList>, part_off: PyReadonlyArray1<'py, i64>,
-                           ring_off: PyReadonlyArray1<'py, i64>, coord_off: PyReadonlyArray1<'py, i64>,
-                           lonlat: PyReadonlyArray2<'py, f64>, junction: Option<Bound<'py, PyAny>>, rings: Vec<String>,
+pub fn eu_street_pass<'py>(py: Python<'py>, specs: Bound<'py, PyList>, part_off: CArr1<'py, i64>,
+                           ring_off: CArr1<'py, i64>, coord_off: CArr1<'py, i64>,
+                           lonlat: CArr2<'py, f64>, junction: Option<Bound<'py, PyAny>>, rings: Vec<String>,
                            built: Vec<String>, streets: Vec<String>, names: Option<Bound<'py, PyAny>>,
-                           tags: Option<Bound<'py, PyAny>>, frontage: PyReadonlyArray2<'py, f64>,
+                           tags: Option<Bound<'py, PyAny>>, frontage: CArr2<'py, f64>,
                            surveyed: Bound<'py, PyAny>, france_on: bool, osm_width: Option<Bound<'py, PyAny>>,
                            osm_lo: f64, osm_hi: f64, rule_table: Bound<'py, PyAny>, rejected: Bound<'py, PyAny>,
                            country_of: Bound<'py, PyAny>, plan: Bound<'py, PyAny>, infer: bool)
