@@ -22,7 +22,7 @@ pub fn label_points(lonlat: &[[f64; 2]], starts: &[i64], ends: &[i64], spacing: 
         let kx = M_PER_DEG * pts[0][1].to_radians().dcos();
         // segment lengths in metres
         let seg: Vec<f64> = pts.windows(2)
-            .map(|w| (((w[1][0] - w[0][0]) * kx).powi(2) + ((w[1][1] - w[0][1]) * M_PER_DEG).powi(2)).sqrt())
+            .map(|w| (((w[1][0] - w[0][0]) * kx).sq() + ((w[1][1] - w[0][1]) * M_PER_DEG).sq()).sqrt())
             .collect();
         let total: f64 = seg.iter().sum();
         if !(total > 0.0) {

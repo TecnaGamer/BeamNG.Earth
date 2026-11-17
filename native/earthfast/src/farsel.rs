@@ -19,6 +19,7 @@ use std::collections::HashSet;
 
 type Node = (i32, i64, i64);
 
+#[allow(clippy::disallowed_methods)] // powi: 2^level is exact (a power of two) whatever computes it
 fn level_size(level: i32) -> f64 {
     256.0 * 2f64.powi(level)
 }

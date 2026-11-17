@@ -370,6 +370,18 @@ def source_id(here):
     return h.hexdigest()
 
 
+def all_source_id(here):
+    """A fingerprint of every server source (server/*.py; CRLF read as LF: a Windows checkout is the same code): a
+    packaged app's CODE_ID (tools/build_app.py), which blockcache's code id reads where no earthd.py is beside it.
+    (Compute sharing v1's peerwork.source_id until 2026-11-16: the same bytes.)"""
+    h = hashlib.sha256()
+    for name in sorted(os.listdir(here)):
+        if name.endswith(".py"):
+            with open(os.path.join(here, name), "rb") as f:
+                h.update(name.encode() + b"\0" + f.read().replace(b"\r\n", b"\n"))
+    return h.hexdigest()[:16]
+
+
 # BNE_* settings that change no item's content (the cache's own, how far ahead tiles are wanted): not build switches.
 # BNE_NETSTATS_PROC: earthd sets it (the telemetry's download counts, a folder under the player's own cache) before
 # its workers start, so every worker's keys held the cache folder's path and whether telemetry was on; the telemetry
@@ -383,6 +395,20 @@ NOT_SWITCHES = ("BNE_REVISIT", "BNE_REVISIT_MB", "BNE_REVISIT_SKIP", "BNE_ROADS_
                 "BNE_FIRST_FANOUT", "BNE_STAGE_SHARE",
                 # (an older version shown while this one is built: what is kept is this version's either way)
                 "BNE_STALE_REVISIT", "BNE_STALE_DAYS")
+
+
+# BNGE_* settings that change what is built (the road revamp's R1 audit, 2026-11-16): keyed like the build switches
+# (code_key, switches_key: the road tiles, the plans, the cell facts and the shared decisions' version key) whenever
+# they are set. The other BNGE_* reads of the output modules change no output (tests/test_env_keys.py lists each with
+# its reason and fails on a new one). BNGE_ONEWAY_JOINS=0: the one-way ends' lane joins off (the roads layer, so the
+# facts and plans); BNGE_ROADS_IN_GROUND=0: the carriageway meshes in the road tiles (a helper's per-client setting is
+# in the road tile's key too: blockworker._roads_tile_cached).
+OUTPUT_ENV = ("BNGE_ONEWAY_JOINS", "BNGE_ROADS_IN_GROUND")
+
+
+def keyed_env(k):
+    """Is environment variable k part of the build switches' hash (code_key, switches_key)?"""
+    return (k.startswith("BNE_") and k not in NOT_SWITCHES) or k in OUTPUT_ENV
 
 
 def code_key():
@@ -405,8 +431,8 @@ def code_key():
             if got is None or any(n.endswith(".py") for n in os.listdir(here)):
                 got = source_id(here).encode()      # (from the sources beside it: a dev tree, a source install)
             h.update(got)
-            for k in sorted(os.environ):                # (the build switches: BNE_*)
-                if k.startswith("BNE_") and k not in NOT_SWITCHES:
+            for k in sorted(os.environ):                # (the build switches: BNE_*, OUTPUT_ENV)
+                if keyed_env(k):
                     h.update(f"{k}={os.environ[k]}".encode())
             import heightmap        # (the lighter ground's 2 m squares: road tiles drape on its lattice; 1 m keys as before)
             if heightmap.SQUARE != 1.0:
@@ -444,7 +470,7 @@ def switches_key():
         if not _switches:
             h = hashlib.sha1()
             for k in sorted(os.environ):
-                if k.startswith("BNE_") and k not in NOT_SWITCHES:
+                if keyed_env(k):
                     h.update(f"{k}={os.environ[k]}".encode())
             _switches.append(h.hexdigest()[:16])
         return _switches[0]
@@ -632,7 +658,7 @@ def older(cache_dir, now=None):
     """The generations a stale scope may fall back to: those of the file that are not this one, were the server's own
     within STALE_DAYS and had the same build switches, newest first, STALE_GENS at most. [] with the switch off, the
     revisit cache off or a pinned world."""
-    if not (STALE_ON and ON) or os.environ.get("BNGE_WORLD_BUNDLE"):
+    if not (STALE_ON and ON):
         return []
     now = time.time() if now is None else now
     cur = generation()
@@ -940,7 +966,7 @@ def store(cache_dir, kind, k, blobs, extra=None, where=None, code=None, until=No
     the place it stands, for the map's cache view (a sidecar line; code: its code value there, format_marker's for a
     format-keyed item, else code_key); until (unix s): kept only until then (Build.kept_until: built on an answer that
     expires), load finds none after it. Never raises; False when not kept."""
-    if not ON or kind in SKIP or os.environ.get("BNGE_WORLD_BUNDLE"):
+    if not ON or kind in SKIP:
         return False
     if until is not None:
         if until <= time.time():
@@ -1002,7 +1028,7 @@ def load(cache_dir, kind, k):
 
 
 def _load(cache_dir, kind, k):
-    if not ON or kind in SKIP or os.environ.get("BNGE_WORLD_BUNDLE"):
+    if not ON or kind in SKIP:
         return None
     path = _path(cache_dir, kind, k)
     try:
@@ -1049,7 +1075,7 @@ def locate(cache_dir, kind, k):
 
 
 def _locate(cache_dir, kind, k):
-    if not ON or kind in SKIP or os.environ.get("BNGE_WORLD_BUNDLE"):
+    if not ON or kind in SKIP:
         return None
     try:
         loc = revisitpack.store_for(cache_dir).locate(kind, k)

@@ -41,7 +41,7 @@ import staging
 
 log = logging.getLogger("earthd.vegetation")
 
-VERSION = 28          # (the cached cells hold their groups: 14 for the regional rules of GitHub #110; 16: the roads'
+VERSION = 29          #(the cached cells hold their groups: 14 for the regional rules of GitHub #110; 16: the roads'
                       # drawn widths and sidewalks kept clear; 17: BC's lidar canopy heights, mapdata's canopy layer 2;
                       # 18: the rounded junction corners kept clear, roadcorners.py; 19: one tree per flat crown,
                       # thin_tops; 20: none on or beside a bridge deck, _mask_decks; 21: orchard rows, canopy trees
@@ -49,7 +49,8 @@ VERSION = 28          # (the cached cells hold their groups: 14 for the regional
                       # orchard rows and the deck mask; 24: no rocks or bushes on a beach's sand, beaches.py; 25: the
                       # Mediterranean basin's own trees, G_MEDITERRANEAN; 26: the far clumps, CLUMP_OF, and the
                       # vineyards' rows, vineyard_items; the round bales after the harvest, bale_items; 27: no bushes in a bus station's yard, PR #1023;
-                      # 28: lengths in ground metres at every latitude, _merc_k; ties among flat crowns by a hash)
+                      # 28: lengths in ground metres at every latitude, _merc_k; ties among flat crowns by a hash;
+                      # 29: the far clumps kept off the carriageways, CLUMP_ROAD_MARGIN_M)
 TREE_MIN_M = 3.0
 # The canopy raster, the scatter grids and the crown radii are in Web Mercator units (EPSG:3857: a metre there is
 # cos(lat) metres on the ground) and were tuned by eye at mid latitudes. Past them the same pixel counts covered less
@@ -81,6 +82,19 @@ CLUMP_GROUPS = tuple(sorted(set(CLUMP_OF.values())))
 CLUMP_CELL_M = 18.0
 CLUMP_MIN = 3
 CLUMP_ROWS_MAX = 2000       # clump rows a tile sends at most (beside TILE_ROWS_MAX's single items)
+CLUMP_R_K, CLUMP_R_C = 0.3, 2.0     # a clump's radius (ground m): CLUMP_R_K * height + CLUMP_R_C
+# A far clump keeps its footprint off the carriageways (the user, 2026-11-16: "take into consideration if the road is
+# blocked by other buildings or trees"): a forest road through a square had the square's one clump, 6-10 m across, on
+# its lanes, seen from afar until the single trees took over near it. Stock East Coast USA keeps its group shapes 5-10 m
+# off a drivable road's edge (centre to edge, p5: tree_douglasfir_group 5.7 m, tree_beech_forest_group 5.1 m,
+# tree_douglasfir_group_low 10.4 m). Its reach: the road's half width (drawn or its class's, the wider) + a margin by
+# class (CLUMP_ROAD_MARGIN_M, else CLUMP_ROAD_MARGIN_DEFAULT_M). A square whose clump reaches in is split along that
+# road's line; each side's clump is moved straight off the roads by up to CLUMP_SHIFT_M, else its trees stay single
+# (shown far as they were before the clumps). earthfast.veg_clumps
+CLUMP_ROAD_MARGIN_M = {"motorway": 3.0, "motorway_link": 2.0, "trunk": 2.5, "trunk_link": 1.5, "primary": 2.0,
+                       "primary_link": 1.0, "secondary": 1.5, "tertiary": 1.0}
+CLUMP_ROAD_MARGIN_DEFAULT_M = 0.5
+CLUMP_SHIFT_M = 4.0
 # The Mediterranean basin's Cs climates (Beck et al.'s Koppen-Geiger classes 8-10: Csa, Csb, Csc) inside its box: holm
 # and cork oaks, olives, maritime pines, cypresses (Italy's stock trees, trees.lua's "mediterranean"; the asset survey
 # 2026-11-10 found them loaded with Italy's folder but unused). California's Cs keeps the West Coast's own groups.
@@ -127,6 +141,7 @@ EDGE_M = 7.0
 EDGE_CELL_M = 3.0
 EDGE_P = 0.4
 MEM_CELLS = 16
+BUILD_SOON_MAX = 64          # cells build_soon keeps queued (the generated ground's blocks outside the warm-up)
 WARM_M = 1200.0              # cells within this of the player are built ahead (warm_around)
 WC = {"tree": 10, "shrub": 20, "grass": 30, "crop": 40, "built": 50, "bare": 60, "snow": 70,
       "water": 80, "wetland": 90, "mangrove": 95, "moss": 100}
@@ -277,6 +292,7 @@ class Vegetation:
         self._warm_at, self._warm_thread = None, None   # warm_around's latest (lat, lon, radius_m), for the warm thread
         self._warm_cv = threading.Condition()
         self._on_disk = set()           # cells whose file ready() found (the warm thread's: each file checked once)
+        self._soon = OrderedDict()      # build_soon's cells (x, y), oldest first, at most BUILD_SOON_MAX
 
     def cell(self, key):
         """The Items of map-data cell key ((z, x, y) or CellKey)."""
@@ -309,6 +325,25 @@ class Vegetation:
                 self._warm_thread.start()
             self._warm_cv.notify()
 
+    def build_soon(self, key):
+        """Build cell key in the background: the warm thread, after the cells round the player (warm_around), behind
+        the pacer like them. The generated ground's (genground._ask_trees): a block's photo waits for its cells, which
+        the pose's warm-up may never reach. Bounded: BUILD_SOON_MAX, the oldest dropped (asked again after its
+        backoff). True when queued (False: built already)."""
+        if self.ready(key):
+            return False
+        k = (int(key[1]), int(key[2]))
+        with self._warm_cv:
+            if k not in self._soon:
+                self._soon[k] = None
+                while len(self._soon) > BUILD_SOON_MAX:
+                    self._soon.popitem(last=False)
+            if self._warm_thread is None:
+                self._warm_thread = threading.Thread(target=self._warm_loop, daemon=True, name="veg-warm")
+                self._warm_thread.start()
+            self._warm_cv.notify()
+        return True
+
     def _warm_cells(self, lat, lon, radius_m):
         """The cells within radius_m of (lat, lon) not built yet, nearest first (the warm thread's: file checks)."""
         d = radius_m / 111320.0
@@ -325,14 +360,18 @@ class Vegetation:
         while True:
             pacer.hold()                # (a teleport's first block first)
             with self._warm_cv:
-                while not cells and self._warm_at is None:
+                while not cells and self._warm_at is None and not self._soon:
                     self._warm_cv.wait()
                 at, self._warm_at = self._warm_at, None
             if at is not None:          # a newer place: its nearest cells first
                 cells = self._warm_cells(*at)
-                if not cells:
-                    continue
-            x, y = cells.pop(0)
+            if cells:
+                x, y = cells.pop(0)
+            else:                       # (then build_soon's, oldest first)
+                with self._warm_cv:
+                    if not self._soon:
+                        continue
+                    (x, y), _ = self._soon.popitem(last=False)
             try:
                 if self.ready((mapcells.ZOOM, x, y)):
                     continue            # (built before: on disk)
@@ -424,6 +463,7 @@ class Vegetation:
         near_water = np.zeros(h.shape, bool) if _in_box((lat0_ + lat1_) / 2, (lon0_ + lon1_) / 2, RIPARIAN_BOX) \
             else None                       # (within RIPARIAN_M of a river, lake or shore: riverside poplars)
         road_cells = []
+        clump_roads = []                    # (the carriageways the far clumps keep off: clumps)
         for dy in (-1, 0, 1):
             for dx in (-1, 0, 1):
                 kk = (mapcells.ZOOM, x + dx, y + dy)
@@ -437,6 +477,10 @@ class Vegetation:
                 _mask_roads(c2.layers.get("roads"), road, chm, specs=self._specs, walks=True)
                 _mask_roads(c2.layers.get("roads"), curb, chm, push, clear=TREE_PIT_M, specs=self._specs)
                 _mask_decks(c2.layers.get("roads"), deck, chm, self._specs)
+                got = _road_segs(c2.layers.get("roads"), h.shape, chm, CLUMP_ROAD_MARGIN_DEFAULT_M, self._specs,
+                                 margins=CLUMP_ROAD_MARGIN_M)
+                if got is not None:
+                    clump_roads.append(got)
                 if near_water is not None:
                     _mask_near(c2.layers.get("water"), near_water, chm, RIPARIAN_M)
                 road_cells.append(c2.layers.get("roads"))
@@ -544,7 +588,9 @@ class Vegetation:
         if vines.any():             # (the vines' own canopy read as bushes all over a vineyard: its rows stand there)
             keep = _keep_off_mask(tree, vines, chm) | (tree.height >= VINE_TREE_M)
             tree, lcls = tree.take(keep), lcls[keep]
-        tree = clumps(tree, lcls, (lat0 + lat1) / 2)
+        # (a clump moved off a road stays in this cell and off its buildings, water and decks: ClumpRoads)
+        tree = clumps(tree, lcls, (lat0 + lat1) / 2,
+                      roads=ClumpRoads(clump_roads, chm, blocked, (ex0, ey0, ex1, ey1)))
         scatter = self._scatter(cd, lc, blocked | paved | orchard | vines, chm, hs)
         edge = self._edge(cd, lc, blocked | orchard | vines, road, chm, hs)
         bounds = (lon0, lat0, lon1, lat1)
@@ -762,22 +808,54 @@ def clump_cell(lat):
     return tile / k
 
 
-def clumps(tree, lcls, lat):
+class ClumpRoads:
+    """The carriageways the far clumps keep off (clumps): _road_segs' (segs, hws) on the CHM grid chm, any number; a
+    clump moved off one stays in the cell's box own (x0, y0, x1, y1, Web Mercator m: x0 <= x < x1, y0 < y <= y1; its
+    tiles show it) and off blocked (bool, on the CHM grid: buildings, water, decks), else its trees stay single (Codex
+    review of cff64d91: a move across the cell's edge or into water hid its trees far away)."""
+
+    def __init__(self, parts, chm, blocked=None, own=None):
+        self.blocked = np.zeros((0, 0), bool) if blocked is None else np.asarray(blocked, bool)
+        self.own = tuple(float(v) for v in own) if own is not None else (-np.inf, -np.inf, np.inf, np.inf)
+        parts = [p for p in parts if p is not None and len(p[1])]
+        self.segs = np.ascontiguousarray(np.concatenate([p[0] for p in parts]), np.float64) if parts \
+            else np.zeros((0, 4), np.float64)
+        self.hws = np.ascontiguousarray(np.concatenate([p[1] for p in parts]), np.float64) if parts \
+            else np.zeros(0, np.float64)
+        self.grid = (float(chm.x0), float(chm.y0), float(chm.dx), float(chm.dy)) if chm is not None \
+            else (0.0, 0.0, 1.0, 1.0)
+
+
+CLUMP_STATS = {"clear": 0, "split": 0, "moved": 0, "single": 0}     # (counts for the probes: clumps' road outcomes)
+_clump_stats_lock = threading.Lock()
+
+
+def clumps(tree, lcls, lat, roads=None):
     """tree (a cell's canopy Items) with the far clumps added (CLUMP_OF, earthfast.veg_clumps) and the trees they
     stand for flagged (a negative scale: trees.lua shows them only within its near ring). lcls: the land cover class
-    of each; lat: the cell's (clump_cell). Street trees (built-up land) stay single."""
+    of each; lat: the cell's (clump_cell). Street trees (built-up land) stay single. roads (ClumpRoads): the
+    carriageways a clump's footprint (CLUMP_R_K * height + CLUMP_R_C) keeps off: split at the road, moved off it by up
+    to CLUMP_SHIFT_M, else its trees stay single (veg_clumps)."""
     if len(tree) < CLUMP_MIN:
         return tree
-    fast.require(201, "veg_clumps")
+    fast.require(321, "veg_clumps")
     x, y = _to3857(tree.lon, tree.lat)
     table = [255] * len(GROUPS)
     for g, c in CLUMP_OF.items():
         table[g] = c
-    member, cx, cy, ch, cr, cg, cu = fast._ef.veg_clumps(
+    if roads is None:
+        roads = ClumpRoads([], None)
+    merc_per_m = 1.0 / max(dmath.cos(math.radians(min(abs(float(lat)), 85.0))), 0.05)
+    member, cx, cy, ch, cr, cg, cu, st = fast._ef.veg_clumps(
         np.ascontiguousarray(x, np.float64), np.ascontiguousarray(y, np.float64),
         np.ascontiguousarray(tree.group, np.uint8), np.ascontiguousarray(tree.kind, np.uint8),
         np.ascontiguousarray(tree.height, np.float32), np.ascontiguousarray(tree.rank, np.float32),
-        np.ascontiguousarray(lcls, np.uint8), table, KIND_TREE, WC["built"], clump_cell(lat), CLUMP_MIN)
+        np.ascontiguousarray(lcls, np.uint8), table, KIND_TREE, WC["built"], clump_cell(lat), CLUMP_MIN,
+        roads.segs, roads.hws, roads.grid, merc_per_m, (CLUMP_R_K, CLUMP_R_C), CLUMP_SHIFT_M, roads.own,
+        roads.blocked)
+    with _clump_stats_lock:
+        for k_, v_ in zip(("clear", "split", "moved", "single"), st):
+            CLUMP_STATS[k_] += int(v_)
     if not len(cx):
         return tree
     member = np.asarray(member, bool)
@@ -787,7 +865,7 @@ def clumps(tree, lcls, lat):
     lon, la = _to4326(np.asarray(cx), np.asarray(cy))
     h = np.asarray(ch, np.float32)
     n = len(lon)
-    return _concat(tree, Items(lon, la, h, (0.3 * h + 2.0).astype(np.float32), np.full(n, KIND_TREE, np.uint8),
+    return _concat(tree, Items(lon, la, h, (CLUMP_R_K * h + CLUMP_R_C).astype(np.float32), np.full(n, KIND_TREE, np.uint8),
                                np.asarray(cg, np.uint8), np.asarray(cr, np.float32),
                                (np.asarray(cu) * 360.0).astype(np.float32), np.ones(n, np.float32)))
 
@@ -1338,14 +1416,24 @@ def _mask_roads(f, mask, chm, push=None, clear=ROAD_CLEAR_M, specs=None, walks=F
     pixel, the move that takes it just out of its nearest road's corridor (street trees: vegetation._build). With the
     class widths alone a city street's trees stood in its parking lanes: 136 of 536 trunks in Baltimore, 215 of 1358 in
     Seattle on a drawn carriageway (the user, 2026-10-28: "make sure no trees spawn on the road")."""
+    got = _road_segs(f, mask.shape, chm, clear, specs, walks)
+    if got is not None:
+        fast._ef.road_corridors(mask, push, np.ascontiguousarray(got[0]), np.ascontiguousarray(got[1]))
+
+
+def _road_segs(f, shape, chm, clear=ROAD_CLEAR_M, specs=None, walks=False, margins=None):
+    """(segs (m, 4) c0 r0 c1 r1, hws (m,) px) of road Features f's carriageways (footpaths left out) on the CHM grid
+    (shape: its rows, cols), each its half width (the drawn one, specs(f): roads.road_specs; walks: with its sidewalks;
+    or its class's, the wider) + clear, or + margins[class] (margins: a dict, clear the default); None when it has
+    none."""
     if f is None:
-        return
-    n_r, n_c = mask.shape
+        return None
+    n_r, n_c = shape
     cls = f.attrs.get("class", np.full(len(f.kind), "", object))
     fast.require(63, "road_segments")
     sel = [i for i in np.flatnonzero(f.kind == 2) if str(cls[i]) not in PATH_CLASSES]
     if not sel:
-        return
+        return None
     sp = specs(f) if specs is not None else [None] * len(f.kind)
     import roads as roadsmod
 
@@ -1353,8 +1441,8 @@ def _mask_roads(f, mask, chm, push=None, clear=ROAD_CLEAR_M, specs=None, walks=F
         if s is None:   # them; the street trees, pushed to the curb, stand in pits at its edge: GitHub #424 / #425)
             return 0.0
         return s.width / 2 + (s.walk if walks and getattr(s, "walk", 0) and roadsmod.has_sidewalks(s) else 0.0)
-    hw_m = np.array([max(ROAD_HALF_WIDTH_M.get(str(cls[i]), ROAD_HALF_DEFAULT_M), drawn(sp[i])) + clear
-                     for i in sel], np.float64)
+    hw_m = np.array([max(ROAD_HALF_WIDTH_M.get(str(cls[i]), ROAD_HALF_DEFAULT_M), drawn(sp[i]))
+                     + (clear if margins is None else margins.get(str(cls[i]), clear)) for i in sel], np.float64)
     # every ring's segments on the CHM grid, its half width in grid pixels (a 3857 metre is 1 / cos(lat) of a ground
     # metre), rings off the grid left out (earthfast road_segments, 2026-10-23: the per-ring Python loop it
     # replaced gave the same segments); then the distances and the nearest road's push, without the GIL
@@ -1363,8 +1451,7 @@ def _mask_roads(f, mask, chm, push=None, clear=ROAD_CLEAR_M, specs=None, walks=F
                                        np.ascontiguousarray(f.ring_off, np.int64),
                                        np.ascontiguousarray(f.part_off, np.int64), np.asarray(sel, np.int64), hw_m,
                                        float(chm.x0), float(chm.y0), float(chm.dx), float(chm.dy), n_r, n_c)
-    if len(hws):
-        fast._ef.road_corridors(mask, push, np.ascontiguousarray(segs), np.ascontiguousarray(hws))
+    return (segs, hws) if len(hws) else None
 
 
 # --- tiles for the mod --------------------------------------------------------------------------------

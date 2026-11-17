@@ -115,17 +115,10 @@ def for_grader(cache_dir, grader, widths, wet):
     instead of planning again."""
     md = getattr(grader, "md", None)
     signature = f"w{int(widths is not None)}s{int(wet is not None)}"
-    bundle = os.environ.get("BNGE_WORLD_BUNDLE")
-    if bundle:
-        from worldbundle import PinnedPlanCache
-        versions = getattr(md, "bundle_versions", None) or getattr(md, "versions", None)
-        return PinnedPlanCache(bundle, signature, versions() if versions is not None else {})
     run = os.environ.get(RUN_ENV)
     if not run:
         return None
     pc = PlanCache(os.path.join(cache_dir, "plans", run), signature)
-    # Resolve after generation: loading source layers can discover their actual shard releases.
-    pc.source_versions = getattr(md, "bundle_versions", None) or getattr(md, "versions", None)
     pc.persist = (cache_dir, (FRAMES, pc.signature,
                               md.versions() if md is not None and hasattr(md, "versions") else None))
     if md is not None and hasattr(md, "versions"):
@@ -143,7 +136,6 @@ class PlanCache:
         self._persist = None    # (cache dir, key parts) of the revisit cache's copy (for_grader), or None: persist
         self._versions_of = None    # (for_grader: the map data's versions(), read again at most every VERSIONS_RECHECK_S)
         self._persist_at = time.monotonic()
-        self.source_versions = None  # callable for the versions actually known after a complete cell was built
         self.stats = {"read": 0, "written": 0, "waited": 0, "wait_s": 0.0}
         self._stage_tokens = {}     # cell key -> the owner token of its road stage's claim held here (stage_claim)
         # fresh: a late retry's own cache (blockworker.late_plan): this run's plans and road stages made short of
@@ -398,16 +390,11 @@ class PlanCache:
             provenance = None
             import roadz
             shared = not roadz.hk_cell(key)         # (Hong Kong's heights stay on this computer: roadz.hk_cell)
-            if persist and shared:
-                from worldbundle import canonical, completion_record
-                digest = hashlib.sha256(data).hexdigest()
-                try:
-                    sources = self.source_versions() if self.source_versions is not None else {}
-                    provenance = canonical(completion_record(key, self.signature, sources, digest))
-                except (OSError, ValueError, TypeError):
-                    # Optional export provenance must not disable normal local caching. Without a
-                    # valid marker this cell remains unexportable, including any stale earlier marker.
-                    pass
+            if persist and shared:      # (the marker of complete plans: the plans' own digest, cell and signature)
+                provenance = json.dumps({"schema": 3, "sha256": hashlib.sha256(data).hexdigest(),
+                                         "key": [int(key[0]), int(key[1]), int(key[2])], "frames": FRAMES,
+                                         "signature": self.signature}, sort_keys=True,
+                                        separators=(",", ":")).encode("ascii")
             # (made short of something, this run's other processes read it so: is_short; before the plans)
             if persist:
                 try:
@@ -418,8 +405,8 @@ class PlanCache:
                 with open(p + ".short", "wb"):
                     pass
             os.replace(tmp, p)
-            # Export only plans whose complete-input condition the grader actually observed.
-            # The digest binds the marker to this version; an interrupted replacement fails closed.
+            # (known_complete: only plans whose complete inputs the grader saw; the digest binds the marker to this
+            # file, and an interrupted replacement leaves none)
             marker = p + ".complete"
             if provenance is not None:
                 with open(tmp, "wb") as fh:

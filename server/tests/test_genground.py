@@ -63,7 +63,8 @@ def gen(s2, kind, region=None, canopy=None, ox=1000.0, oy=2000.0, gr=None, gc=No
                          np.ascontiguousarray(region, np.uint32), np.ascontiguousarray(canopy, np.uint8),
                          np.ascontiguousarray(poly, np.uint32), np.ascontiguousarray(dirs),
                          np.ascontiguousarray(phases),
-                         float(ox), float(oy), 1.0, int(-oy if gr is None else gr), int(ox if gc is None else gc))
+                         float(ox), float(oy), 1.0, int(-oy if gr is None else gr), int(ox if gc is None else gc),
+                         None, 0)
 
 
 class FillPolysTest(unittest.TestCase):
@@ -98,7 +99,7 @@ class RegionsTest(unittest.TestCase):
         canopy = np.full(sh, 255, np.uint8) if canopy is None else np.asarray(canopy, np.uint8)
         cover = np.zeros(sh, np.uint8) if cover is None else np.asarray(cover, np.uint8)
         return EF.gg_regions(base, poly, np.asarray(pkinds, np.uint8), line, np.asarray(lkinds, np.uint8), canopy,
-                             cover, 1.0)
+                             cover, 1.0, None, True)
 
     def test_polygon_rules(self):
         base = [[gg.TREE, gg.BUILT, gg.CROP, gg.WATER, gg.BUILT, gg.CROP, gg.BARE]]
@@ -115,10 +116,11 @@ class RegionsTest(unittest.TestCase):
         canopy = [[12, 0, 1, 0, 30, 255, 20, 20]]
         cover = [[0, 0, 0, 0, 0, 1, 2, 2 | 4]]
         k, r = self.regions(base, canopy=canopy, cover=cover)
-        self.assertEqual(k.tolist(), [[gg.TREE, gg.GRASS, gg.SHRUB, gg.GRASS, gg.WATER, gg.WATER, gg.PAVED, gg.ROOF]])
+        self.assertEqual(k.tolist(), [[gg.TREE, gg.GRASS, gg.SHRUB, gg.GRASS, gg.WATER, gg.WATER, gg.PAVED, gg.PAVED]],
+                         "(stage 4) a drawn road over a footprint: the road")
         r = r[:, 1:]
         self.assertEqual(r[0, 5], gg.PAVED)
-        self.assertEqual(r[0, 6], gg.ROOF)
+        self.assertEqual(r[0, 6], gg.PAVED)
         k2, r2 = self.regions([[gg.BUILT, gg.BUILT]], poly=[[1, 2]], pkinds=(gg.LAWN, gg.LAWN), cover=[[2, 2]])
         self.assertEqual(r2[0, 0], r2[0, 1], "roads: one region whatever the polygons under them")
 
@@ -347,7 +349,9 @@ class RefreshTest(unittest.TestCase):
 
     def test_missing_data_marks_the_photo(self):
         gg._retries.clear()
+        gg._fits.clear()
         self.addCleanup(gg._retries.clear)
+        self.addCleanup(gg._fits.clear)
         import geodesy
         frame = geodesy.EnuFrame(40.877, -77.566)
         pending = set()
@@ -357,8 +361,14 @@ class RefreshTest(unittest.TestCase):
         self.assertFalse(gg.data_ready(_MD(), frame, -64.5, -64.5, 128.0))
         self.assertFalse(gg.data_ready(_MD(set(gg.LAYERS) - {"canopy"}), frame, -64.5, -64.5, 128.0))
         self.assertTrue(gg.data_ready(_MD(gg.LAYERS), frame, -64.5, -64.5, 128.0))
+        # (the same imagery object: the sun fit's memo from the render with map data missing is not this one's, the
+        # mini PC's gate failure, where a new stand-in reused the old one's id())
+        im = _Im()
         pending = set()
-        gg.render(_Im(), frame, -64.5, -64.5, 128.0, 128, None, None, None, pending)
+        gg.render(im, frame, -64.5, -64.5, 128.0, 128, _MD(), None, None, pending)
+        self.assertIn(gg.GEN_PENDING, pending)
+        pending = set()
+        gg.render(im, frame, -64.5, -64.5, 128.0, 128, None, None, None, pending)
         self.assertNotIn(gg.GEN_PENDING, pending, "no map data at all (none to wait for)")
 
     def test_server_redoes_it(self):

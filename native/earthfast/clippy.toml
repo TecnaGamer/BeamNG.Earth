@@ -1,0 +1,97 @@
+# Determinism lints (the Rust port plan's section 2.6, phase 0e): plans, facts, tiles and textures must be the same
+# bits on Linux and Windows, on any CPU (GitHub #1169). lib.rs denies clippy::disallowed_methods and
+# clippy::iter_over_hash_type, so a new use fails `cargo clippy`; a use whose bits cannot reach any output carries a
+# narrow #[allow(...)] with a one-line reason.
+
+disallowed-methods = [
+    # The transcendental functions call the platform's C maths library (glibc 2.35 and 2.44, mingw and the UCRT give
+    # other last bits): use dm::Dm (the pinned libm crate), x.dsin() for x.sin(). sqrt, abs, floor, ceil, round,
+    # round_ties_even, trunc, min, max, %, the operators are exact IEEE operations and stay.
+    { path = "f64::sin", reason = "platform libm: use dm::Dm (x.dsin())" },
+    { path = "f64::cos", reason = "platform libm: use dm::Dm (x.dcos())" },
+    { path = "f64::tan", reason = "platform libm: use dm::Dm (x.dtan())" },
+    { path = "f64::asin", reason = "platform libm: use dm::Dm (x.dasin())" },
+    { path = "f64::acos", reason = "platform libm: use dm::Dm (x.dacos())" },
+    { path = "f64::atan", reason = "platform libm: use dm::Dm (x.datan())" },
+    { path = "f64::atan2", reason = "platform libm: use dm::Dm (y.datan2(x))" },
+    { path = "f64::sin_cos", reason = "platform libm: use dm::Dm (x.dsin_cos())" },
+    { path = "f64::hypot", reason = "platform libm: use dm::Dm (x.dhypot(y))" },
+    { path = "f64::exp", reason = "platform libm: use dm::Dm (x.dexp())" },
+    { path = "f64::exp2", reason = "platform libm: use dm::Dm (x.dexp2())" },
+    { path = "f64::exp_m1", reason = "platform libm: use dm::Dm (x.dexp_m1())" },
+    { path = "f64::ln", reason = "platform libm: use dm::Dm (x.dln())" },
+    { path = "f64::ln_1p", reason = "platform libm: use dm::Dm (x.dln_1p())" },
+    { path = "f64::log", reason = "platform libm: use dm::Dm (x.dln() / b.dln())" },
+    { path = "f64::log2", reason = "platform libm: use dm::Dm (x.dlog2())" },
+    { path = "f64::log10", reason = "platform libm: use dm::Dm (x.dlog10())" },
+    { path = "f64::powf", reason = "platform libm: use dm::Dm (x.dpowf(y))" },
+    { path = "f64::cbrt", reason = "platform libm: use dm::Dm (x.dcbrt())" },
+    { path = "f64::sinh", reason = "platform libm: use dm::Dm (x.dsinh())" },
+    { path = "f64::cosh", reason = "platform libm: use dm::Dm (x.dcosh())" },
+    { path = "f64::tanh", reason = "platform libm: use dm::Dm (x.dtanh())" },
+    { path = "f64::asinh", reason = "platform libm: use dm::Dm (x.dasinh())" },
+    { path = "f64::acosh", reason = "platform libm: use dm::Dm (x.dacosh())" },
+    { path = "f64::atanh", reason = "platform libm: use dm::Dm (x.datanh())" },
+    { path = "f64::abs_sub", reason = "platform libm (fdim): write (x - y).max(0.0)" },
+    { path = "f64::mul_add", reason = "fused multiply-add: only dm's explicit dmul_add, where the Python had one" },
+    { path = "f64::powi", reason = "write the products out (powi(x, 2) == x * x); a variable exponent calls compiler-rt" },
+    { path = "f32::sin", reason = "platform libm: use dm::Dm (x.dsin())" },
+    { path = "f32::cos", reason = "platform libm: use dm::Dm (x.dcos())" },
+    { path = "f32::tan", reason = "platform libm: use dm::Dm (x.dtan())" },
+    { path = "f32::asin", reason = "platform libm: use dm::Dm (x.dasin())" },
+    { path = "f32::acos", reason = "platform libm: use dm::Dm (x.dacos())" },
+    { path = "f32::atan", reason = "platform libm: use dm::Dm (x.datan())" },
+    { path = "f32::atan2", reason = "platform libm: use dm::Dm (y.datan2(x))" },
+    { path = "f32::sin_cos", reason = "platform libm: use dm::Dm (x.dsin_cos())" },
+    { path = "f32::hypot", reason = "platform libm: use dm::Dm (x.dhypot(y))" },
+    { path = "f32::exp", reason = "platform libm: use dm::Dm (x.dexp())" },
+    { path = "f32::exp2", reason = "platform libm: use dm::Dm (x.dexp2())" },
+    { path = "f32::exp_m1", reason = "platform libm: use dm::Dm (x.dexp_m1())" },
+    { path = "f32::ln", reason = "platform libm: use dm::Dm (x.dln())" },
+    { path = "f32::ln_1p", reason = "platform libm: use dm::Dm (x.dln_1p())" },
+    { path = "f32::log", reason = "platform libm: use dm::Dm (x.dln() / b.dln())" },
+    { path = "f32::log2", reason = "platform libm: use dm::Dm (x.dlog2())" },
+    { path = "f32::log10", reason = "platform libm: use dm::Dm (x.dlog10())" },
+    { path = "f32::powf", reason = "platform libm: use dm::Dm (x.dpowf(y))" },
+    { path = "f32::cbrt", reason = "platform libm: use dm::Dm (x.dcbrt())" },
+    { path = "f32::sinh", reason = "platform libm: use dm::Dm (x.dsinh())" },
+    { path = "f32::cosh", reason = "platform libm: use dm::Dm (x.dcosh())" },
+    { path = "f32::tanh", reason = "platform libm: use dm::Dm (x.dtanh())" },
+    { path = "f32::asinh", reason = "platform libm: use dm::Dm (x.dasinh())" },
+    { path = "f32::acosh", reason = "platform libm: use dm::Dm (x.dacosh())" },
+    { path = "f32::atanh", reason = "platform libm: use dm::Dm (x.datanh())" },
+    { path = "f32::abs_sub", reason = "platform libm (fdimf): write (x - y).max(0.0)" },
+    { path = "f32::mul_add", reason = "fused multiply-add: only dm's explicit dmul_add, where the Python had one" },
+    { path = "f32::powi", reason = "write the products out (powi(x, 2) == x * x); a variable exponent calls compiler-rt" },
+
+    # std's HashMap / HashSet iterate in an order seeded at random per process: never into an output. Use IndexMap /
+    # BTreeMap / a sorted Vec, or allow a site whose result provably does not depend on the order (integer sums,
+    # collected then sorted, membership, a min with a total tie-break). `for x in &map` / `for x in set` are caught by
+    # clippy::iter_over_hash_type (denied in lib.rs). Not caught by either: an explicit `map.into_iter()` outside a
+    # `for`, and a map / set handed whole to an IntoIterator parameter (`v.extend(&set)`, `zip(&set)`).
+    { path = "std::collections::HashMap::iter", reason = "random order per process: IndexMap / BTreeMap, or allow with why the order cannot matter" },
+    { path = "std::collections::HashMap::iter_mut", reason = "random order per process: IndexMap / BTreeMap, or allow with why the order cannot matter" },
+    { path = "std::collections::HashMap::keys", reason = "random order per process: IndexMap / BTreeMap, or allow with why the order cannot matter" },
+    { path = "std::collections::HashMap::values", reason = "random order per process: IndexMap / BTreeMap, or allow with why the order cannot matter" },
+    { path = "std::collections::HashMap::values_mut", reason = "random order per process: IndexMap / BTreeMap, or allow with why the order cannot matter" },
+    { path = "std::collections::HashMap::into_keys", reason = "random order per process: IndexMap / BTreeMap, or allow with why the order cannot matter" },
+    { path = "std::collections::HashMap::into_values", reason = "random order per process: IndexMap / BTreeMap, or allow with why the order cannot matter" },
+    { path = "std::collections::HashMap::drain", reason = "random order per process: IndexMap / BTreeMap, or allow with why the order cannot matter" },
+    { path = "std::collections::HashMap::retain", reason = "visits in random order per process: allow with why the predicate has no order-dependent effect" },
+    { path = "std::collections::HashMap::extract_if", reason = "random order per process: IndexMap / BTreeMap, or allow with why the order cannot matter" },
+    { path = "std::collections::HashSet::iter", reason = "random order per process: BTreeSet / IndexSet, or allow with why the order cannot matter" },
+    { path = "std::collections::HashSet::drain", reason = "random order per process: BTreeSet / IndexSet, or allow with why the order cannot matter" },
+    { path = "std::collections::HashSet::retain", reason = "visits in random order per process: allow with why the predicate has no order-dependent effect" },
+    { path = "std::collections::HashSet::extract_if", reason = "random order per process: BTreeSet / IndexSet, or allow with why the order cannot matter" },
+    { path = "std::collections::HashSet::difference", reason = "random order per process: BTreeSet / IndexSet, or allow with why the order cannot matter" },
+    { path = "std::collections::HashSet::intersection", reason = "random order per process: BTreeSet / IndexSet, or allow with why the order cannot matter" },
+    { path = "std::collections::HashSet::union", reason = "random order per process: BTreeSet / IndexSet, or allow with why the order cannot matter" },
+    { path = "std::collections::HashSet::symmetric_difference", reason = "random order per process: BTreeSet / IndexSet, or allow with why the order cannot matter" },
+]
+
+disallowed-types = [
+    # RandomState seeds each map at random per process; DefaultHasher's SipHash keys and algorithm may change with any
+    # Rust release ("not guaranteed stable"), so a hash value either makes must never reach an output or a cache key.
+    { path = "std::collections::hash_map::RandomState", reason = "random per process: never into an output" },
+    { path = "std::collections::hash_map::DefaultHasher", reason = "not stable across Rust releases: never into an output or a key" },
+]

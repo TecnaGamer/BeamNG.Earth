@@ -12,6 +12,7 @@
 
 use numpy::{IntoPyArray, PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2};
 use pyo3::prelude::*;
+use crate::dm::Dm;
 
 /// Each node's nearest point on the lines (pts (n, 2) in metres, line r its rows off[r] .. off[r + 1]) within snap_m:
 /// [line index, arc length along it, distance], [-1, 0, inf] for none. A tie goes to the lower line index.
@@ -42,7 +43,7 @@ pub fn snap(pts: &[[f64; 2]], off: &[i64], nodes: &[[f64; 2]], snap_m: f64) -> V
                 let len = len2.sqrt();
                 let t = if len2 > 0.0 { (((q[0] - p0[0]) * dx + (q[1] - p0[1]) * dy) / len2).clamp(0.0, 1.0) } else { 0.0 };
                 let (x, y) = (p0[0] + t * dx, p0[1] + t * dy);
-                let dist = ((q[0] - x).powi(2) + (q[1] - y).powi(2)).sqrt();
+                let dist = ((q[0] - x).sq() + (q[1] - y).sq()).sqrt();
                 if dist <= snap_m && dist < out[k][2] {
                     out[k] = [r as f64, acc + t * len, dist];
                 }
@@ -59,7 +60,7 @@ pub fn select(changes: &[[f64; 2]], change_towns: &[[i64; 2]], signs: &[[f64; 4]
               dedupe_m: f64) -> (Vec<bool>, Vec<bool>) {
     let keep_c = changes.iter().zip(change_towns).map(|(p, t)| {
         !signs.iter().zip(sign_towns).any(|(q, &st)| {
-            st >= 0 && (st == t[0] || st == t[1]) && ((p[0] - q[0]).powi(2) + (p[1] - q[1]).powi(2)).sqrt() <= reach_m
+            st >= 0 && (st == t[0] || st == t[1]) && ((p[0] - q[0]).sq() + (p[1] - q[1]).sq()).sqrt() <= reach_m
         })
     }).collect();
     let mut keep_s = vec![true; signs.len()];

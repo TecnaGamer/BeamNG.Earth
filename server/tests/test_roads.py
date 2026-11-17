@@ -1344,7 +1344,7 @@ class PaintRoadsTest(unittest.TestCase):
         out = sf.paint_roads(np.full(lat.shape, sf.GRASS, np.uint8), lat, lon, [f], 2.0)
         self.assertEqual(int(out[64, 10]), sf.COBBLE)
         self.assertEqual(sf.MATERIALS[sf.COBBLE][1], "COBBLESTONE")
-        self.assertEqual(sf.DIRT, len(sf.MATERIALS) - 1, "dirt still last")
+        self.assertEqual(sf.DIRT, 15, "dirt keeps its persisted index (layers after it are appended)")
 
     def test_a_tunnels_open_section_painted(self):
         # a 'tunnel' in the map lying open (grading.Grader.open_tunnels): road, not grass (Central Park, 2026-10-17)
@@ -1657,27 +1657,49 @@ class ViewOrderTest(unittest.TestCase):
 class ChainResolveTest(unittest.TestCase):
     """BridgeProfiles._resolve: a cell loaded at a loose end can put a longer copy of a part already in the chain into
     the pool (its ends then new); the chain is followed on instead of failing (KeyError, a Chicago road tile,
-    2026-10-24), whatever order the set of keys comes in."""
+    2026-10-24), whatever order the set of keys comes in, with the cells read in their own order (CANON_LOAD) or as
+    reached; and a part no loaded cell gives (a read short this time) is never lost from the chain."""
 
-    def test_part_grown_by_a_loaded_cell(self):
+    def _grown(self, canon):
         spec = type("Spec", (), {"width": 8.0})()
 
-        def part(x0, x1):
-            xy = np.array([[x0, 0.0], [x1, 0.0]])
-            return (spec, xy, LAT, 1.0, 2)
+        def part(x0, x1, n):
+            return (spec, np.array([[x0, 0.0], [x1, 0.0]]), LAT, 1.0, n)
 
         class Grown(roads.BridgeProfiles):
-            def _load(self, key, pool, ground):
-                if pool[("b", 0)][1][-1][0] < 300:
-                    pool[("b", 0)] = (spec, np.array([[100.0, 0.0], [300.0, 0.0]]), LAT, 1.0, 9)
+            CANON_LOAD = canon
 
-        for first in (("a", 0), ("b", 0)):
-            res = Grown(FRAME, lambda key: None, lambda la, lo: np.zeros(np.shape(la)))
-            pool = {("a", 0): part(0.0, 100.0), ("b", 0): part(100.0, 200.0)}
-            if first == ("b", 0):
-                pool = {("b", 0): pool[("b", 0)], ("a", 0): pool[("a", 0)]}
-            self.assertEqual(res._resolve(("a", 0), pool, {}, set()), [("a", 0), ("b", 0)])
-            self.assertEqual(float(pool[("b", 0)][1][-1][0]), 300.0)
+            def _cell_entries(self, key):       # (every loaded cell: a, and b's longer copy)
+                return [(("a", 0), part(0.0, 100.0, 2)), (("b", 0), part(100.0, 300.0, 9))], []
+        return Grown, part
+
+    def test_part_grown_by_a_loaded_cell(self):
+        for canon in (False, True):
+            Grown, part = self._grown(canon)
+            for first in (("a", 0), ("b", 0)):
+                res = Grown(FRAME, lambda key: None, lambda la, lo: np.zeros(np.shape(la)))
+                pool = {("a", 0): part(0.0, 100.0, 2), ("b", 0): part(100.0, 200.0, 2)}
+                if first == ("b", 0):
+                    pool = {("b", 0): pool[("b", 0)], ("a", 0): pool[("a", 0)]}
+                self.assertEqual(res._resolve(("a", 0), pool, {}, set()), [("a", 0), ("b", 0)], (canon, first))
+                self.assertEqual(float(pool[("b", 0)][1][-1][0]), 300.0, (canon, first))
+
+    def test_a_part_no_loaded_cell_gives_stays(self):
+        """CANON_LOAD rebuilds the pool from the loaded cells on each pass: a part they do not give (here the start
+        itself, in no cell: as after a read that came back short) stays in the chain, no KeyError."""
+        spec = type("Spec", (), {"width": 8.0})()
+
+        class Empty(roads.BridgeProfiles):
+            CANON_LOAD = True
+
+            def _cell_entries(self, key):
+                return [], []
+        res = Empty(FRAME, lambda key: None, lambda la, lo: np.zeros(np.shape(la)))
+        pool = {("a", 0): (spec, np.array([[0.0, 0.0], [100.0, 0.0]]), LAT, 1.0, 2)}
+        ground = {("r", "g"): [np.array([[50.0, -50.0], [50.0, 50.0]])]}
+        self.assertEqual(res._resolve(("a", 0), pool, ground, set()), [("a", 0)])
+        self.assertIn(("a", 0), pool)
+        self.assertIn(("r", "g"), ground)
 
 
 class TunnelReachTest(unittest.TestCase):
