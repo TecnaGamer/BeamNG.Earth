@@ -40,6 +40,7 @@ import dnp
 
 import bumps
 import mapcells
+import racedig
 import railways as railwaysmod
 import roads as roadsmod
 import seatiles
@@ -6497,6 +6498,8 @@ class _Planner:
             # a street's smoothed profile 1 m over a dip in the ground over Vienna's A23 tunnel fell back to that dip
             # in the strip over the tube, a ledge at each edge of it, 2026-11-12)
             keep &= base.ravel() - out >= OVER_TUNNEL_SMALL_M
+            if race is not None and racedig.ON:
+                keep &= ~race       # (a racetrack over the tunnel: its surface, the tube dug under it, racedig)
             out[keep] = base.ravel()[keep]
         return out.reshape(shape)
 
