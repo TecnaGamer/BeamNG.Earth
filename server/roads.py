@@ -390,6 +390,116 @@ def home_copy(feats, i):
     return None if j is None else (other, j)
 
 
+HOME_MAP_ON = os.environ.get("BNE_HOME_RANGES_MAP", "on") != "off"
+HOME_MAP_TOL_M = 1.0        # m: a copy's end this near its home copy's line lies on it (the copies are one segment's)
+
+
+def _single_ring(feats, i):
+    """Feature i's one lon/lat ring (k, 2), or None for a feature of several parts or rings."""
+    parts = feats.parts(i)
+    if len(parts) != 1 or len(parts[0]) != 1:
+        return None
+    r = np.asarray(parts[0][0], np.float64)
+    return r[:, :2] if r.ndim == 2 and len(r) >= 2 else None
+
+
+def _ring_metric(ring):
+    """(c, x (k,), y (k,), dx, dy, arc (k,)) of a lon/lat ring in sub_polyline's metric (m: lon scaled by c, the cos of
+    its mean lat)."""
+    c = dmath.cos(math.radians(float(np.mean(ring[:, 1]))))
+    x, y = ring[:, 0] * (c * 111320.0), ring[:, 1] * 111320.0
+    dx, dy = np.diff(x), np.diff(y)
+    return c, x, y, dx, dy, np.r_[0.0, np.cumsum(dnp.hypot(dx, dy))]
+
+
+def _metric_point(ring, m, f):
+    """The lon/lat point at fraction f of ring's length (m: its _ring_metric)."""
+    s = m[5]
+    return np.array([np.interp(f * s[-1], s, ring[:, 0]), np.interp(f * s[-1], s, ring[:, 1])])
+
+
+def _metric_project(m, pt):
+    """(m off, fraction along) of the point of the ring (m: its _ring_metric) nearest lon/lat pt."""
+    c, x, y, dx, dy, s = m
+    px, py = float(pt[0]) * c * 111320.0, float(pt[1]) * 111320.0
+    L2 = np.maximum(dx * dx + dy * dy, 1e-12)
+    t = np.clip(((px - x[:-1]) * dx + (py - y[:-1]) * dy) / L2, 0.0, 1.0)
+    ex, ey = x[:-1] + t * dx - px, y[:-1] + t * dy - py
+    d2 = ex * ex + ey * ey
+    k = int(np.argmin(d2))
+    return math.sqrt(float(d2[k])), float((s[k] + t[k] * (s[k + 1] - s[k])) / max(s[-1], 1e-9))
+
+
+def _ring_point(ring, f):
+    """The lon/lat point at fraction f of ring's length (sub_polyline's metric)."""
+    return _metric_point(ring, _ring_metric(ring), f)
+
+
+def _ring_project(ring, pt):
+    """(m off, fraction along) of the point of ring nearest lon/lat pt, in ring's own metric."""
+    return _metric_project(_ring_metric(ring), pt)
+
+
+def map_ranges(home, mine, rngs, tol=HOME_MAP_TOL_M):
+    """Level ranges rngs ((a, b, kind) fractions of lon/lat ring home's length) as fractions of ring mine's, a copy of
+    the same segment cut to another extent (mapdata stitches a long line's copy per cell from the map's tiles: one
+    copy ran on 13.8 km, its home cell's 10.9 km): each end of a range is the same point on the ground in both. Ranges
+    past mine's extent are cut at its ends or dropped. rngs itself where the rings are the same, or where the two do
+    not lie along each other (reversed, another route, a range's end off mine). Pure."""
+    if not rngs or home is None or mine is None:
+        return rngs
+    if home.shape == mine.shape and np.array_equal(home, mine):
+        return rngs
+    mh, mm = _ring_metric(home), _ring_metric(mine)
+    d0, h0 = _metric_project(mh, mine[0])       # (mine's ends on home: where mine starts and stops along it)
+    d1, h1 = _metric_project(mh, mine[-1])
+    on0, on1 = d0 <= tol, d1 <= tol
+    if not on0 and _metric_project(mm, home[0])[0] > tol:
+        return rngs                             # (neither starts on the other: no common line)
+    if not on1 and _metric_project(mm, home[-1])[0] > tol:
+        return rngs
+    h0 = h0 if on0 else 0.0
+    h1 = h1 if on1 else 1.0
+    if h1 <= h0:
+        return rngs
+    out = []
+    for a, b, kind in rngs:
+        if b <= h0 or a >= h1:
+            continue                            # (off this copy)
+        if on0 and a <= h0:
+            a2 = 0.0
+        else:
+            da, a2 = _metric_project(mm, _metric_point(home, mh, a))
+            if da > tol:
+                return rngs
+        if on1 and b >= h1:
+            b2 = 1.0
+        else:
+            db, b2 = _metric_project(mm, _metric_point(home, mh, b))
+            if db > tol:
+                return rngs
+        if b2 > a2:
+            out.append((a2, b2, kind))
+    return out
+
+
+def home_ranges(feats, i, other, j, rngs):
+    """rngs (feature j of layer other: feature i's home copy, home_copy) as fractions of feature i's own copy
+    (map_ranges), kept per layer. The home copy's fractions taken as they were laid a copy of other extent's bridges
+    out of place: the Main-Weser-Bahn's bridge over Friedrich-Ebert-Strasse in Treysa (50.9183 N 9.1963 E) 100 m up
+    the line in the cell whose copy ran 2.9 km further, its ballast across the road under the deck, a wall cars ran
+    into (2026-11-16). BNE_HOME_RANGES_MAP=off: as they were."""
+    if not HOME_MAP_ON or not rngs:
+        return rngs
+    memo = feats.__dict__.setdefault("_home_mapped", {})
+    got = memo.get(i)
+    if got is not None and got[0] is rngs and got[1] == (id(other), j):
+        return got[2]
+    out = map_ranges(_single_ring(other, j), _single_ring(feats, i), rngs)
+    memo[i] = (rngs, (id(other), j), out)
+    return out
+
+
 def level_ranges(feats, i, _home=True):
     """The off-ground ranges of feature i as sorted (start, end, "bridge" | "tunnel") fractions of its
     length, from its flags (is_bridge / is_tunnel) and level (> 0 bridge, < 0 tunnel) rules. Overture
@@ -401,7 +511,7 @@ def level_ranges(feats, i, _home=True):
     if _home and HOME_RANGES_ON:
         h = home_copy(feats, i)
         if h is not None:
-            return level_ranges(h[0], h[1], _home=False)
+            return list(home_ranges(feats, i, h[0], h[1], level_ranges(h[0], h[1], _home=False)))
     memo = feats.__dict__.setdefault("_level_ranges", {})
     got = memo.get(i)
     if got is None:
@@ -449,7 +559,7 @@ def _level_lists(feats, idx):
     for other, pairs in by.values():
         got = _level_memo(other, [j for _, j in pairs])
         for i, j in pairs:
-            out[i] = got[j]
+            out[i] = home_ranges(feats, i, other, j, got[j])
     out.update(_level_memo(feats, own))
     return out
 
@@ -588,7 +698,7 @@ def _facts_load(feats, kind, extra):
 # (bakepack.py), in place of the code hash; the plans' key holds it too (plancache.plans_format). Bump it whenever a
 # change makes other facts (level ranges, specs, lane flow, grade separations or their inputs' rules), or players keep
 # the old ones; tests/test_bake_formats.py fails until it is bumped.
-FACTS_FORMAT = 27     # 27: a motorway link mapped with 3 or more lanes, with no width or turn:lanes, that its diverge gives 2 or more fewer lanes takes what it gives (_lane_overrides, tapers::ramp_lane_rule; rampoverrides' I-65 Exit 76 correction by way id deleted: the road revamp's R1, 2026-11-16); 26: a cycleway with sidewalk=both / left / right is a street closed to cars, a road with its sidewalks (STYLE "cycleway", the user's London report 2026-11-12), 2026-11-12; 25: a town street of a mapped lane count between buildings takes its sidewalks out to them and, a two-lane primary, its parking lanes (roads._laned_walled; Eastern Avenue at Fells Point, the user's reports 18 and 19), 2026-11-12; 23: deterministic maths (GitHub #1169: the same facts on Windows, Linux and every glibc / CPU), 2026-11-12; 22: the roads layer's max_height_m rule (vehicle height limits) and the rail parts of a long segment where the map puts them (pmtiles anchors, railways MIN_PART_M: short rail bridges kept), Robitnik's PR #1193; 21: a motorway's or trunk road's built-up land read 90 m out (URBAN_HIGHWAY_BESIDE_M, PR #1117: its urban flag, widths); 20: a road's measured width and wall clearance from its own copy of the road in each cell, not whichever cell's copy the process measured first (roadwidth._memo_key), 2026-11-12; 19: a road joined at a bridge's end node is not a crossing under it on any system (earthfast levelrules END_EPS_M: the bridge's reach hung on the last bit of the C library's hypot, other level ranges on Ubuntu 22.04 / Windows than on a newer glibc at Vienna's S1 Rautenweg), 2026-11-12; 18: a town street's carriageway kept clear of the walls along it where the map gives no width (roads._wall_capped, roadwidth.clearance_row: Campulung, Setagaya, Trastevere; GitHub #1184, #543), 2026-11-12; 17: a junction standing over a tunnel the DEM shows open is an underpass: its arms' crossings by the node count (gradesep.JOINED_ENDS, Vienna's S1 under Rautenweg, GitHub #1083), 2026-11-12; 16: a merged highway's ways of other lane counts as lane sections of their own (lanesections.py, PR #880 by DerEifrige-f), the default widths of roads without a mapped width measured on aerials (WIDTH_TABLE: regions, town one-way streets, no parking on top of a mapped lane count), narrow winding rural roads (WINDING_*), 2026-11-12; 15: the road centrelines rounded and curvature continuous by default (roadsmooth.py), 2026-11-12; 14: the regional gravel rule needs REGIONAL_MIN_ROADS mapped roads, not one road's segments (GitHub #834), and a residential / unclassified street with built-up land beside it stays paved (REGIONAL_BESIDE_SHARE, GitHub #824); flagstone / tiles paving cobble (PR #971); 13: a grade separation's bridge spans a skew crossing (the bridged road's half width over the tangent added: a track at 45 deg under the A4 at Glaireuse cut a trench through its carriageway past a square deck, GitHub #1020), its fractions and every bridge/tunnel reach's in sub_polyline's metric (gradesep._metric, _ring_kx: on a 15 km road the deck stood 8.7 m off its crossing); 12: a long road's copy far from its home takes the grade separations its neighbour cells found too (_home_far: the A4 at Glaireuse, GitHub #1020); 11: an underpass in a cutting the DEM shows (gradesep._underpasses: a longer road tunnel with the ground over it under TUNNEL_OPEN_COVER, SEP_M under the line over it either side: Highway 3 at Hameenlinna, GitHub #1009) bridged by the roads over it; 10: a short ground gap between a tunnel's portal and a bridge of the same road made bridge (_portal_decks: CA-1's northbound Tom Lantos bore, a 22 % drop onto its bridge); 9: underpasses: a tunnel's portal kept where its own approach road joins it (_tunnel_reach, the I-280 underpass at Millbrae), a road's home cell takes the grade separations every cell it crosses found for it (_gradesep_elsewhere: CA-1's bridge over Wilder Tunnel); 8: bridge parts retain mapped local level transitions (PR #873), a segment's tunnel ranges joined only over a gap inside one source way (PR #927, was: any gap under 30 m); 7: PR #843 (restored highway shoulders, regional merge marking profiles: Spec.state); 6: busways (PR #836) and walkway spans (PR #842) in the cells; 5: PR #505's Spec.france (French road scenery flag); 4: pass roads with a mapped or default two-lane count stay mountain roads (the Stelvio); 3: PR #471 lane counts (validated highway counts, two-lane highway default) and #686 (Swedish dual carriageways, 2.75 m lanes); 2: OSM's own surface first, "unpaved" on car roads gravel, regional gravel for untagged minor roads
+FACTS_FORMAT = 28     # 28: a long feature's level ranges from its home copy laid on this copy's own extent (home_ranges: the copies of a segment are cut to other lengths per cell; the Main-Weser-Bahn's bridge in Treysa lay 100 m off in one; PR #1399), 2026-11-16; 27: a motorway link mapped with 3 or more lanes, with no width or turn:lanes, that its diverge gives 2 or more fewer lanes takes what it gives (_lane_overrides, tapers::ramp_lane_rule; rampoverrides' I-65 Exit 76 correction by way id deleted: the road revamp's R1, 2026-11-16); 26: a cycleway with sidewalk=both / left / right is a street closed to cars, a road with its sidewalks (STYLE "cycleway", the user's London report 2026-11-12), 2026-11-12; 25: a town street of a mapped lane count between buildings takes its sidewalks out to them and, a two-lane primary, its parking lanes (roads._laned_walled; Eastern Avenue at Fells Point, the user's reports 18 and 19), 2026-11-12; 23: deterministic maths (GitHub #1169: the same facts on Windows, Linux and every glibc / CPU), 2026-11-12; 22: the roads layer's max_height_m rule (vehicle height limits) and the rail parts of a long segment where the map puts them (pmtiles anchors, railways MIN_PART_M: short rail bridges kept), Robitnik's PR #1193; 21: a motorway's or trunk road's built-up land read 90 m out (URBAN_HIGHWAY_BESIDE_M, PR #1117: its urban flag, widths); 20: a road's measured width and wall clearance from its own copy of the road in each cell, not whichever cell's copy the process measured first (roadwidth._memo_key), 2026-11-12; 19: a road joined at a bridge's end node is not a crossing under it on any system (earthfast levelrules END_EPS_M: the bridge's reach hung on the last bit of the C library's hypot, other level ranges on Ubuntu 22.04 / Windows than on a newer glibc at Vienna's S1 Rautenweg), 2026-11-12; 18: a town street's carriageway kept clear of the walls along it where the map gives no width (roads._wall_capped, roadwidth.clearance_row: Campulung, Setagaya, Trastevere; GitHub #1184, #543), 2026-11-12; 17: a junction standing over a tunnel the DEM shows open is an underpass: its arms' crossings by the node count (gradesep.JOINED_ENDS, Vienna's S1 under Rautenweg, GitHub #1083), 2026-11-12; 16: a merged highway's ways of other lane counts as lane sections of their own (lanesections.py, PR #880 by DerEifrige-f), the default widths of roads without a mapped width measured on aerials (WIDTH_TABLE: regions, town one-way streets, no parking on top of a mapped lane count), narrow winding rural roads (WINDING_*), 2026-11-12; 15: the road centrelines rounded and curvature continuous by default (roadsmooth.py), 2026-11-12; 14: the regional gravel rule needs REGIONAL_MIN_ROADS mapped roads, not one road's segments (GitHub #834), and a residential / unclassified street with built-up land beside it stays paved (REGIONAL_BESIDE_SHARE, GitHub #824); flagstone / tiles paving cobble (PR #971); 13: a grade separation's bridge spans a skew crossing (the bridged road's half width over the tangent added: a track at 45 deg under the A4 at Glaireuse cut a trench through its carriageway past a square deck, GitHub #1020), its fractions and every bridge/tunnel reach's in sub_polyline's metric (gradesep._metric, _ring_kx: on a 15 km road the deck stood 8.7 m off its crossing); 12: a long road's copy far from its home takes the grade separations its neighbour cells found too (_home_far: the A4 at Glaireuse, GitHub #1020); 11: an underpass in a cutting the DEM shows (gradesep._underpasses: a longer road tunnel with the ground over it under TUNNEL_OPEN_COVER, SEP_M under the line over it either side: Highway 3 at Hameenlinna, GitHub #1009) bridged by the roads over it; 10: a short ground gap between a tunnel's portal and a bridge of the same road made bridge (_portal_decks: CA-1's northbound Tom Lantos bore, a 22 % drop onto its bridge); 9: underpasses: a tunnel's portal kept where its own approach road joins it (_tunnel_reach, the I-280 underpass at Millbrae), a road's home cell takes the grade separations every cell it crosses found for it (_gradesep_elsewhere: CA-1's bridge over Wilder Tunnel); 8: bridge parts retain mapped local level transitions (PR #873), a segment's tunnel ranges joined only over a gap inside one source way (PR #927, was: any gap under 30 m); 7: PR #843 (restored highway shoulders, regional merge marking profiles: Spec.state); 6: busways (PR #836) and walkway spans (PR #842) in the cells; 5: PR #505's Spec.france (French road scenery flag); 4: pass roads with a mapped or default two-lane count stay mountain roads (the Stelvio); 3: PR #471 lane counts (validated highway counts, two-lane highway default) and #686 (Swedish dual carriageways, 2.75 m lanes); 2: OSM's own surface first, "unpaved" on car roads gravel, regional gravel for untagged minor roads
 
 
 def _facts_baked(feats, kind, extra):
