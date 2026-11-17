@@ -193,6 +193,18 @@ Not built:
 - **Measured** (4 x 4 tiles, about 1 km², 2026-11-17): Göteborg 39 entries, Borås 8, Stockholm 2 (one E9 and one E10 each).
 - **Not done:** E7 and E8 (gågata). Pedestrian streets are not in the road tiles, so there is no road for their entrance signs to stand on.
 
+## Bus lanes (M6)
+
+Where OpenStreetMap maps a bus lane beside a general lane (`bus:lanes` / `psv:lanes`, `designated` or `yes`), the line between them is M6, not a solid line.
+
+- **Pattern:** 3.0 m dashes (TSFS 2010:171 2 kap. 11 §), 3.0 m gaps (VGU 2024 figure 12.2.1.3.6-1).
+- **Width:** 0.20 m. TSFS allows 0.20, 0.30 or 0.40 m, at least the width of the stretch's M1, so it is never narrower than the lane lines.
+- **Not done:**
+  - VGU's "1+1" start and end (6 m at 60 km/h or less, 12 m above), because the map does not say where a bus lane begins.
+  - M28, the painted word BUSS. The agency's PNG is 64 x 74 px, too small for a decal, and its vector file was not converted.
+  - Bus lanes with time limits get M6 too, though TSFS allows it only on lanes without them (12 §). The map's lane tags do not carry the times.
+- **Mapped:** 38 bus-lane ways and 53 psv-lane ways in the sampled centres of Göteborg, Stockholm, Borås and Malmö (16 map cells).
+
 ## Road type detection
 
 Findings, and the rules built on them, which shipped in `0fbe4bbb`. The commit message says what the rules do.
@@ -220,6 +232,8 @@ Rural roads with a surface tag (OpenStreetMap tags, as delivered through Overtur
 | Sign sizes and lower edge | TSFS 2019:74 (4 kap. 1 §, 3 kap. 1 §, 1 kap. 13 §) | Sign sizes for fix 2 |
 | One-way roads | OpenStreetMap `oneway` tag | Where C1 and E16 go |
 | C1 and E16 rules and sizes | TSFS 2019:74 (4 kap. 3 §; 6 kap. 1, 16, 17 §§; 1 kap. 13 §) | One-way signs |
+| Bus lanes | OpenStreetMap `bus:lanes`, `psv:lanes` | M6 between a bus lane and the others |
+| M6 pattern and width | TSFS 2010:171 2 kap. 11, 12 §§; VGU 2024 figure 12.2.1.3.6-1 | Bus lanes |
 | Gångfartsområde streets | OpenStreetMap `highway=living_street` | Where E9 and E10 go |
 | E9 and E10 sizes | TSFS 2019:74 (6 kap. 1 §; 1 kap. 13 §) | Gångfartsområde signs |
 | Minimum lane width | VGU 2024 K233046 | `markings.MIN_LANE_M` (2.75 m) |
