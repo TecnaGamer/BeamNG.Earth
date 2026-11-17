@@ -443,6 +443,50 @@ class HostTest(unittest.IsolatedAsyncioTestCase):
             await asyncio.sleep(0.02)
         self.assertEqual([json.loads(d[4:])["m"]["i"] for _, d in out], [0, 1, 2], "every chunk written")
 
+    async def test_reading_pauses_for_a_handler_that_does_not_read(self):
+        """Codex review of 28c35fc0: what the handler has not consumed is bounded (asyncio StreamReader's 128 / 64 KiB),
+        however long it does not read, and reading goes on once it does: nothing lost, in order."""
+        streams = []
+        go = asyncio.Event()
+        got = []
+
+        async def handler(r, w):
+            streams.append(r)
+            await go.wait()
+            while True:
+                m = await protocol.read_message(r)
+                if m is None:
+                    break
+                got.append(m["i"])
+        srv = await self.serve(handler)
+        s = self.connect(srv)
+        pad = "x" * 2000
+        frames = [protocol.encode({"type": "n", "i": i, "pad": pad}) for i in range(10000)]   # ~20 MB
+        sent = []
+
+        def send_all():
+            for f in frames:
+                s.sendall(f)
+                sent.append(1)
+            s.shutdown(socket.SHUT_WR)
+        t = threading.Thread(target=send_all, daemon=True)
+        t.start()
+        await asyncio.sleep(1.5)
+        st = streams[0]
+        held = sum(len(f) + 4 for f in st._frames)
+        self.assertLessEqual(st._wire.unread(), 128 * 1024 + len(frames[0]),
+                             "read and not consumed: at most the high-water mark and one frame")
+        self.assertLessEqual(held, st._wire.unread())
+        self.assertLess(len(sent), len(frames), "the rest waits in the kernel: the sender is held back")
+        go.set()
+        await self.in_thread(t.join, 60)
+        for _ in range(500):
+            if len(got) == len(frames):
+                break
+            await asyncio.sleep(0.02)
+        self.assertEqual(got, list(range(len(frames))), "reading went on: every frame, in order")
+        self.assertEqual(st._wire.unread(), 0)
+
     async def test_asyncio_by_default(self):
         if "BNGE_HOST" not in os.environ:
             self.assertFalse(protocol.HOST, "BNGE_HOST is off unless set (the asyncio path stays the default)")

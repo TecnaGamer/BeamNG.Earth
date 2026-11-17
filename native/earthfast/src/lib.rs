@@ -6509,6 +6509,8 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 361: the host wakes the loop through a local socket pair (Host.take_wake / take; no GIL in the hand-over, the
     // HostBatch class gone), Host(..., merge, record, record_out): the pose merge (1b) and the recorder (1c),
     // host_read_recording
-    m.add("VERSION", 361)?;
+    // 362: Wire.consumed / unread: the read side's flow control (asyncio's StreamReader: reading stops past 128 KiB the
+    // handler has not consumed, goes on at 64 KiB; Codex review of 28c35fc0), poses merged as they come
+    m.add("VERSION", 362)?;
     Ok(())
 }

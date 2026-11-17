@@ -9,7 +9,7 @@
 use std::collections::VecDeque;
 use std::io::{BufReader, ErrorKind, Write};
 use std::net::{Shutdown, TcpStream};
-use std::sync::atomic::{AtomicUsize, Ordering};
+
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Instant;
 
@@ -22,9 +22,13 @@ pub const HIGH: usize = 64 * 1024;
 pub const LOW: usize = 16 * 1024;
 /// the most bytes handed to the socket in one write: a blocking send returns only once all of it is in the kernel
 pub const PIECE: usize = 256 * 1024;
-/// frames read but not yet taken by Python, per connection: past this the reader stops with an error (as the frame
-/// limit does), which Python logs and closes on (one game, poses at 2 Hz: a stalled lane never comes near it)
-pub const INBOX_MAX: usize = 64 * 1024 * 1024;
+/// The read side's flow control, asyncio's StreamReader (limit 64 KiB: reading pauses while more than twice the limit
+/// is buffered and resumes at the limit): bytes read (frames with their headers) and not yet consumed by the handler
+/// (HostStream.next_message), wherever they wait: the inbox, the batch, Python's queue. Over READ_HIGH the reader
+/// stops between frames until the handler has consumed down to READ_LOW; the game's sends then wait in the kernel's
+/// buffers, as with asyncio. At most READ_HIGH + one frame waits per connection.
+pub const READ_HIGH: usize = 2 * 64 * 1024;
+pub const READ_LOW: usize = 64 * 1024;
 
 /// An OS error as Python would make it: (errno, strerror) for OSError(errno, strerror); None for errors with no errno.
 pub fn os_error(e: &std::io::Error) -> (Option<i32>, String) {
@@ -60,8 +64,9 @@ pub struct WireCore {
     sock: TcpStream,
     out: Mutex<Out>,
     out_cv: Condvar,
-    /// frame bytes read and not yet taken by Python
-    pub inbox_bytes: AtomicUsize,
+    /// bytes read and not yet consumed by the handler (READ_HIGH / READ_LOW), and the reader's wait on it
+    unread: Mutex<usize>,
+    read_cv: Condvar,
     /// when it was accepted (the recorder counts its times from it)
     t0: Instant,
     shared: Arc<Shared>,
@@ -79,7 +84,8 @@ impl WireCore {
             sock,
             out: Mutex::new(Out::default()),
             out_cv: Condvar::new(),
-            inbox_bytes: AtomicUsize::new(0),
+            unread: Mutex::new(0),
+            read_cv: Condvar::new(),
             t0: Instant::now(),
             shared,
         }))
@@ -87,6 +93,45 @@ impl WireCore {
 
     fn out(&self) -> std::sync::MutexGuard<'_, Out> {
         self.out.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
+    fn unread(&self) -> std::sync::MutexGuard<'_, usize> {
+        self.unread.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
+    /// bytes read and not yet consumed by the handler
+    pub fn unread_bytes(&self) -> usize {
+        *self.unread()
+    }
+
+    /// The handler consumed a frame of n bytes (its payload + the 4-byte header): reading resumes at READ_LOW.
+    pub fn consumed(&self, n: usize) {
+        let mut u = self.unread();
+        *u = u.saturating_sub(n);
+        if *u <= READ_LOW {
+            self.read_cv.notify_all();
+        }
+    }
+
+    /// Two frames merged into one (1b): `old` bytes now count as `new`.
+    pub fn merged(&self, old: usize, new: usize) {
+        let mut u = self.unread();
+        *u = (*u + new).saturating_sub(old);
+        if *u <= READ_LOW {
+            self.read_cv.notify_all();
+        }
+    }
+
+    /// The reader's pause: over READ_HIGH, wait (between frames) until the handler has consumed down to READ_LOW or
+    /// the connection is closing (whatever comes then is dropped anyway).
+    fn wait_for_room(&self) {
+        let mut u = self.unread();
+        if *u <= READ_HIGH {
+            return;
+        }
+        while *u > READ_LOW && !self.is_closing() && !self.shared.stopping() {
+            u = self.read_cv.wait_timeout(u, std::time::Duration::from_millis(200)).unwrap_or_else(|p| p.into_inner()).0;
+        }
     }
 
     /// Queues a frame (its bytes copied); ignored once closing, aborted or lost (as Connection.send checks first).
@@ -145,6 +190,7 @@ impl WireCore {
     pub fn close(&self) {
         self.out().closing = true;
         self.out_cv.notify_one();
+        self.read_cv.notify_all(); // (a reader paused for room: nothing more reaches the handler now)
     }
 
     /// asyncio's abort(): what is queued is dropped and the socket shut down at once
@@ -161,6 +207,7 @@ impl WireCore {
             self.shared.push(Ev::Drained(self.id));
         }
         self.out_cv.notify_one();
+        self.read_cv.notify_all();
         let _ = self.sock.shutdown(Shutdown::Both);
     }
 
@@ -276,6 +323,7 @@ impl WireCore {
         // (1c: every frame read, BNGE_HOST_RECORD; finished when this thread ends)
         let mut rec = self.shared.record.as_ref().and_then(|r| Rec::open(r, self.id, "in", self.t0));
         let end = loop {
+            self.wait_for_room();
             match frame::read_frame(&mut r) {
                 Ok(Some(data)) => {
                     if let Some(rc) = rec.as_mut() {
@@ -284,15 +332,9 @@ impl WireCore {
                     if self.is_closing() {
                         continue; // (asyncio stops reading at close: nothing more reaches the handler)
                     }
-                    let held = self.inbox_bytes.fetch_add(data.len(), Ordering::Relaxed) + data.len();
-                    if held > INBOX_MAX {
-                        break Some(End::protocol(format!(
-                            "{} MiB of frames waiting for the Python lane: closing",
-                            held >> 20
-                        )));
-                    }
                     self.shared.count_in(data.len() as u64);
-                    self.shared.push(Ev::Frame(self.id, data, Instant::now()));
+                    *self.unread() += data.len() + frame::HEADER;
+                    self.shared.push_frame(&self, data, Instant::now());
                 }
                 Ok(None) => break None,
                 Err(e) => break Some(End::from_frame(&e)),

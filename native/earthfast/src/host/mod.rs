@@ -112,14 +112,51 @@ impl Shared {
             !std::mem::replace(&mut ib.woken, true)
         };
         if wake {
-            if let Some(w) = self.waker.lock().unwrap_or_else(|p| p.into_inner()).as_mut() {
-                let _ = w.write(&[1]);
-            }
+            self.wake();
         }
     }
 
-    fn find(&self, id: u64) -> Option<Arc<WireCore>> {
-        self.conns.lock().unwrap_or_else(|p| p.into_inner()).iter().filter_map(|w| w.upgrade()).find(|w| w.id == id)
+    pub fn stopping(&self) -> bool {
+        self.stop.load(Ordering::SeqCst)
+    }
+
+    /// A frame read (its bytes already counted unread): into the inbox, or, with the merge on (1b, merge.rs), into
+    /// the pose before it when that is its connection's previous frame still waiting there (a drained mark is no
+    /// frame) and they may merge: the merged pose keeps the earlier one's place and read time. Merging as frames
+    /// come keeps a stalled lane's poses one frame (and its unread bytes small) however long the stall.
+    pub fn push_frame(&self, w: &WireCore, data: Vec<u8>, at: Instant) {
+        let mut merged = None;
+        let wake = {
+            let mut ib = self.inbox();
+            if self.merge && merge::maybe_pose(&data) {
+                let prev = ib.evs.iter_mut().rev().find(|p| ev_id(p) == w.id && !matches!(p, Ev::Drained(_)));
+                if let Some(Ev::Frame(_, prev, _)) = prev {
+                    if merge::maybe_pose(prev) {
+                        if let Some(m) = merge::merge(prev, &data) {
+                            merged = Some((prev.len() + data.len() + 2 * frame::HEADER, m.len() + frame::HEADER));
+                            *prev = m;
+                        }
+                    }
+                }
+            }
+            if merged.is_none() {
+                ib.evs.push(Ev::Frame(w.id, data, at));
+            }
+            !std::mem::replace(&mut ib.woken, true)
+        };
+        if let Some((old, new)) = merged {
+            w.merged(old, new);
+            self.stats().merged += 1;
+        }
+        if wake {
+            self.wake();
+        }
+    }
+
+    fn wake(&self) {
+        if let Some(w) = self.waker.lock().unwrap_or_else(|p| p.into_inner()).as_mut() {
+            let _ = w.write(&[1]);
+        }
     }
 
     pub fn count_in(&self, bytes: u64) {
@@ -323,44 +360,6 @@ fn ev_id(e: &Ev) -> u64 {
     }
 }
 
-/// The events in order; with the merge on (1b, merge.rs), a pose joins the pose before it when that is its
-/// connection's previous frame in the batch (a drained mark is no frame) and they may merge: the merged pose keeps the
-/// earlier one's place and read time.
-fn join(shared: &Shared, src: Vec<Ev>) -> Vec<Ev> {
-    if !shared.merge {
-        return src;
-    }
-    let mut dst: Vec<Ev> = Vec::with_capacity(src.len());
-    let mut n = 0;
-    for e in src {
-        if let Ev::Frame(id, data, _) = &e {
-            if merge::maybe_pose(data) {
-                let prev = dst.iter_mut().rev().find(|p| ev_id(p) == *id && !matches!(p, Ev::Drained(_)));
-                if let Some(Ev::Frame(_, prev, _)) = prev {
-                    if merge::maybe_pose(prev) {
-                        if let Some(m) = merge::merge(prev, data) {
-                            let (old, new) = (prev.len() + data.len(), m.len());
-                            *prev = m;
-                            if let Some(w) = shared.find(*id) {
-                                // (the bytes Python takes for these two: the merged frame's)
-                                w.inbox_bytes.fetch_add(new, Ordering::Relaxed);
-                                w.inbox_bytes.fetch_sub(old, Ordering::Relaxed);
-                            }
-                            n += 1;
-                            continue;
-                        }
-                    }
-                }
-            }
-        }
-        dst.push(e);
-    }
-    if n > 0 {
-        shared.stats().merged += n;
-    }
-    dst
-}
-
 #[pymethods]
 impl Host {
     /// Host(host, port, logger, raise_threads=False, merge=True, record=None, record_out=False): binds at once (an
@@ -435,7 +434,6 @@ impl Host {
             std::mem::take(&mut ib.evs)
         };
         let now = Instant::now();
-        let evs = join(&self.shared, evs);
         let out = PyList::empty(py);
         let mut waits = Vec::new();
         for e in evs {
@@ -446,9 +444,6 @@ impl Host {
                 }
                 Ev::Frame(id, data, at) => {
                     waits.push(now.saturating_duration_since(at).as_micros() as u64);
-                    if let Some(w) = self.shared.find(id) {
-                        w.inbox_bytes.fetch_sub(data.len(), Ordering::Relaxed);
-                    }
                     (id, 1u8, PyBytes::new(py, &data).into_any().unbind())
                 }
                 Ev::End(id, None) => (id, 2u8, py.None()),
@@ -629,6 +624,16 @@ impl Wire {
 
     fn peer(&self) -> (String, u16) {
         self.core.peer.clone()
+    }
+
+    /// The handler consumed a frame of n bytes (payload + header): the reader's flow control (READ_HIGH / READ_LOW).
+    fn consumed(&self, n: usize) {
+        self.core.consumed(n);
+    }
+
+    /// bytes read and not yet consumed by the handler
+    fn unread(&self) -> usize {
+        self.core.unread_bytes()
     }
 }
 

@@ -24,7 +24,7 @@ HOST_MERGE = os.environ.get("BNGE_HOST_MERGE", "on").strip().lower() != "off"
 # BNGE_HOST_RECORD_OUT=1: what the server sends too. Recordings hold the player's positions: private
 RECORD = os.environ.get("BNGE_HOST_RECORD") or None
 RECORD_OUT = os.environ.get("BNGE_HOST_RECORD_OUT") == "1"
-HOST_VERSION = 361          # the earthfast with Host / Wire (361: the wake pair, the pose merge, the recorder)
+HOST_VERSION = 362          # the earthfast with Host / Wire (362: the read side's flow control)
 log = logging.getLogger("earthd.host")
 
 
@@ -165,7 +165,9 @@ class HostStream:
     As asyncio's: drain() returns at once until the queue goes over 64 KiB, then waits until it is at 16 KiB (the
     water marks, kept by the wire); close() sends what is queued, then closes; abort() drops it; writes after either
     are ignored; a connection lost raises ConnectionResetError('Connection lost') in drain(), a socket error raises
-    in both read and drain; a peer's EOF reads as None."""
+    in both read and drain; a peer's EOF reads as None. Reading is flow-controlled as asyncio's StreamReader (limit
+    64 KiB): the host stops reading while more than 128 KiB the handler has not consumed waits (in Rust or in _frames)
+    and goes on at 64 KiB, so a handler that does not read leaves the rest in the kernel and the game's sends wait."""
 
     def __init__(self, wire, loop):
         self._wire = wire
@@ -212,7 +214,11 @@ class HostStream:
             if self._os_exc is not None:
                 raise self._os_exc
             if self._frames:
-                return decode_payload(self._frames.popleft())
+                data = self._frames.popleft()
+                # (consumed: the host's reader goes on once at most 64 KiB is left unconsumed, as asyncio's
+                # StreamReader resumes reading; it stops past 128 KiB)
+                self._wire.consumed(len(data) + HEADER.size)
+                return decode_payload(data)
             if self._ended:
                 if self._end_exc is not None:
                     raise self._end_exc
