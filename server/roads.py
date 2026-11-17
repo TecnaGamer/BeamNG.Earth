@@ -7182,10 +7182,14 @@ def lane_tag_parts(feats, i):
     it, one stretch whole unless it was made from several ways (Overture merges the ways between two junctions; each has
     its own lane tags, a 2+1 road's alternate along one segment). Tags hold the way's own "lanes" where the way has lane
     tags; lane_tags(feats, i) is the way covering most of the feature."""
+    import fast
     import railtags
     parts = feats.attrs.get(railtags.LANE_PARTS)
-    if parts is not None and parts[i]:
-        return [(a, b, w, t or None) for a, b, w, t in parts[i]]
+    if parts is not None:
+        fast.require(383, "lane_tag_parts")
+        got = fast._ef.lane_tag_parts(parts[i])
+        if got is not None:
+            return got
     rec = feats.attrs.get("src_record")
     return [(0.0, 1.0, railtags.way_id(str(rec[i])) if rec is not None else None, lane_tags(feats, i))]
 

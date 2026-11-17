@@ -6554,6 +6554,13 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(roadnet::laneflow::lane_flow_lists, m)?)?;
     // 382: R2a's lane flow rows (roadnet::laneflow: lane_flow_rows, lane_flow_lists: roads._lane_flow_rows with
     // _ramp_candidates, _lane_flow_local's lists)
-    m.add("VERSION", 382)?;
+    m.add_function(wrap_pyfunction!(roadnet::lanesplit::lane_joint_specs, m)?)?;
+    m.add_function(wrap_pyfunction!(roadnet::lanesplit::lane_split_jobs, m)?)?;
+    m.add_function(wrap_pyfunction!(roadnet::lanesplit::lane_ease, m)?)?;
+    m.add_function(wrap_pyfunction!(roadnet::lanesplit::lane_offset, m)?)?;
+    m.add_function(wrap_pyfunction!(roadnet::lanesplit::lane_tag_parts, m)?)?;
+    // 383: R2a's lane sections (roadnet::lanesplit: lane_joint_specs, lane_split_jobs, lane_ease, lane_offset:
+    // lanesections.split's plan, _joint_specs, _ease, _offset; lane_tag_parts: roads.lane_tag_parts)
+    m.add("VERSION", 383)?;
     Ok(())
 }

@@ -9,6 +9,7 @@ pub mod assembly;
 pub mod columns;
 pub mod copies;
 pub mod laneflow;
+pub mod lanesplit;
 pub mod pyfloat;
 pub mod pyobj;
 pub mod surfaces;
