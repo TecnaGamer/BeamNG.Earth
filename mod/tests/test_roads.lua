@@ -981,11 +981,12 @@ do -- Highway speed (>= HIGH_SPEED_MS): hasDueForward detects waiting forward ro
   local geotile = require('beamngEarth/geotile')
   local fakeAnchor = geodesy.newAnchor(47.855, 11.405)
   local g = { try = function() return false end, tryUrgent = function() return false end, charge = function() end, chargeMotion = function() end }
+  local hwPlayer = { x = hwCar.pos.x, y = hwCar.pos.y, vx = 55, vy = 0, speed = 55 }
   local prevCC = roads.COLLIDE_CHECK_S
   roads.COLLIDE_CHECK_S = 0
-  roads.update(g, 9, nil, nil, fakeAnchor, 0.05, 0.05)
+  roads.update(g, 9, hwPlayer, nil, fakeAnchor, 0.05, 0.05)
   roads.COLLIDE_CHECK_S = prevCC
-  local lat, lon = fakeAnchor:worldToGeodetic(hwCar.pos.x + 250, hwCar.pos.y, 0)
+  local lat, lon = fakeAnchor:worldToGeodetic(hwCar.pos.x + 120, hwCar.pos.y, 0)
   local gx, gy = geotile.tileOf(lat, lon)
   local fwdKey = geotile.key(gx, gy)
   local ok1 = roads.onGeoTile({
@@ -999,12 +1000,13 @@ do -- Highway speed (>= HIGH_SPEED_MS): hasDueForward detects waiting forward ro
     data = { road = { shape = '/t/hw_rd.cdae', pos = { 0, 0, 0 } } },
   }, 9)
   T.check(ok1 == true and ok2 == true, 'hw onGeoTile+onSkin accepted')
-  T.check(roads.hasDueForward(), 'hasDueForward: true while forward road surface waits in walkQ')
-  -- Verify surfaceKeys at 55 m/s reaches ~330 m (6 s * 55 m/s) in 128 m steps
+  T.check(roads.hasDueForward(), 'hasDueForward: true while immediate forward road surface (<= max(150, 3*v)) waits in walkQ')
+  -- Verify surfaceKeys at 55 m/s reaches ~330 m (6 s * 55 m/s) in 128 m steps AND covers lateral flanks (TILE_M*0.5 = 128 m) for curves
   local sk = roads._surfaceKeys(hwCar.pos, { x = 1, y = 0 }, 55)
   local countSk = 0
   for _ in pairs(sk) do countSk = countSk + 1 end
-  T.check(countSk >= 3, 'surfaceKeys covers >=3 geotiles along ~330 m forward at 55 m/s')
+  T.check(countSk >= 5, 'surfaceKeys covers forward + flanking geotiles along ~330 m at 55 m/s (got ' .. countSk .. ')')
+  T.check(sk['9:1_1'] == true and sk['9:1_0'] == true, 'surfaceKeys covers flanking curved highway tile keys')
   roads.SURFACE_FIRST = prevSF
   getPlayerVehicle = nil
   roads.clear()

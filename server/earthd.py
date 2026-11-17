@@ -4433,7 +4433,8 @@ class Server:
                     pfut = self.hm_proc[key] = submit(
                         job, anchor.id, anchor.lat, anchor.lon, anchor.hm_zoom, q, cx, cy,
                         self.layout.block, self.out_dir, self.hm_name(key), self.ter_name(key),
-                        fuel_pads=self.block_fuel_pads(anchor, cx, cy, self.layout.block * heightmap.SQUARE))
+                        fuel_pads=self.block_fuel_pads(anchor, cx, cy, self.layout.block * heightmap.SQUARE),
+                        quick_paint=bool(self.fast))
                     try:
                         info = poolsmod.result_running(pfut, None, abandon=gone)
                     finally:
@@ -4705,9 +4706,10 @@ class Server:
                 idx = surfacemod.paint_grass(idx, keep["lat"], keep["lon"], lots)  # (PR #505's mapped lawns)
                 idx = surfacemod.paint_golf(idx, keep["lat"], keep["lon"], lots)   # (golf over it: courses win)
             if road_feats:              # (provisional: the widths' guesses, not measured between the buildings)
+                self.hm_stage[(anchor.id, cx, cy)] = "roadPaint"
                 idx = surfacemod.paint_roads(idx, keep["lat"], keep["lon"], road_feats, heightmap.SQUARE,
                                              self.surface.urban, None if provisional else self.road_widths,
-                                             blockworker._open_tunnels(g, keep), quick=provisional)
+                                             blockworker._open_tunnels(g, keep), quick=provisional or bool(self.fast))
             idx = surfacemod.paint_lots(idx, keep["lat"], keep["lon"], lots,
                                         blockworker._us_square_looks(anchor.frame)) if lots else idx
             if hasattr(self.surface, "paint_ground_pads"):
@@ -5286,7 +5288,8 @@ class Server:
                 blockworker.base_photo, anchor.lat, anchor.lon, cx - size / 2 - BASE_SHIFT_M,
                 cy - size / 2 - BASE_SHIFT_M, size, QUICK_BASE_PX, tex, False, anchor.zooms[0],
                 os.path.join(self.out_dir, name), (self.user_dir, f"{self.vfs_dir}/{name}", base_ao_vfs(self.base_px),
-                                                   BASE_AO), out_px=self.base_px, quick=True).result()
+                                                   BASE_AO), out_px=self.base_px, quick=True,
+                skip_roads=getattr(self, "speed", 0.0) > HIGH_SPEED_WARM_V).result()
         except Exception as e:
             log.info("quick base photo %s in the block process: %s", key, e)
             return None
@@ -6204,14 +6207,15 @@ class Server:
         """Far tiles built at once (far_gate): far_drive while driving (the game needs its cores), every worker with
         the 3D map open (the game paused) or while the loading boost is on (the player waits), and throttled to 1
         during high-speed travel while terrain blocks or urgent road tiles are building."""
-        if any(getattr(c, "map_view", False) or getattr(c, "map_open", False) for c in self.connections) \
-                or getattr(self, "boost_on", False):
+        if any(getattr(c, "map_view", False) or getattr(c, "map_open", False) for c in self.connections):
             return self.far_max
         if getattr(self, "speed", 0.0) > HIGH_SPEED_WARM_V and (
                 any(getattr(c, "terrain_wait", 0) > 0 for c in self.connections)
                 or self.hm_inflight
                 or (self.road_pool is not None and getattr(self.road_pool, "inflight", 0) > 0)):
             return min(1, self.far_drive)
+        if getattr(self, "boost_on", False):
+            return self.far_max
         return self.far_drive
 
     def coarse_imagery(self):
@@ -7623,6 +7627,7 @@ CATCHUP_LEND_AT_NORMAL = os.environ.get("BNGE_CATCHUP_LEND_NORMAL", "0") == "1" 
 BELOW_GAME = True               # (main: the server below the game's priority, --nice > 0; tests: as by default)
 CATCHUP_MIN_MS = 8.0        # m/s: only while driving (a parked player's work waits as before)
 BOOST_FULL_MAX_S = 300.0    # full priority loading (Server.load_boost's teleportPriority) ends this long after at most
+BOOST_FULL_MOVE_MAX_S = 15.0    # ... or this long once the car is moving > 10 m/s so server threads don't starve PhysicsAndVLUA
 
 # (rs / rx: the road geotiles' skins and exact variants of the anchor; rail / railcol / tunnel: its road tiles' rail and
 # tunnel shapes. Left out until 2026-11-02: kept until the server stopped, GitHub #599's 9 GB session folder)
@@ -9980,9 +9985,13 @@ class Connection:
             if done:
                 return None
         if info is None:
+            if s.hm_stage.get(key) in ("roadPaint", "its base photo") or (pf is not None and pf.done()):
+                done, _ = await asyncio.wait({job})
+                return None
             prov = asyncio.get_running_loop().run_in_executor(s.prov_pool, s.make_provisional_follow, anchor, cx, cy)
             done, _ = await asyncio.wait({job, prov}, return_when=asyncio.FIRST_COMPLETED)
             if job in done:
+                prov.cancel()
                 return None
             try:
                 info = prov.result()
@@ -10299,12 +10308,15 @@ class Connection:
                 done, want = self.roads.progress()
                 moving = done >= want
             if self.s.boost_full:
-                # (full priority: until the far field and the roads round the car are done, moving or not)
+                # (full priority: until the far field and the roads round the car are done, or shortly after driving off)
                 done, want = self.roads.progress() if self.s.mapdata is not None else (1, 1)
                 # (its own far field done since the teleport: right after it nothing was loading yet, ended in 0.7 s)
                 loaded = getattr(self, "far_done_at", 0.0) > getattr(self, "boost_t0", 0.0) and not self.far_loading()
-                if (loaded and done >= want) or since > BOOST_FULL_MAX_S:
-                    self.s.load_boost(False, "loaded" if since <= BOOST_FULL_MAX_S else "timeout")
+                spd = math.hypot(vx, vy)
+                drive_off = (moving and done >= want) or (spd > 10.0 and since > BOOST_FULL_MOVE_MAX_S)
+                if (loaded and done >= want) or drive_off or since > BOOST_FULL_MAX_S:
+                    why = "moving" if drive_off else ("loaded" if since <= BOOST_FULL_MAX_S else "timeout")
+                    self.s.load_boost(False, why)
             elif moving or since > BOOST_MAX_S:
                 self.s.load_boost(False, "moving" if moving else "timeout")
         if isinstance(msg.get("cam"), dict):
@@ -10621,6 +10633,8 @@ class Connection:
         file name) and sent as block_base. One at a time."""
         s = self.s
         if self.base_busy or not s.base_stale or s.imagery is None or s.near_visual != "detail":
+            return
+        if math.hypot(*self.vel) > HIGH_SPEED_WARM_V:
             return
         anchor = s.anchors.get(aid)
         cands = [k for k in list(s.hm_committed)[-1:] + list(s.hm_sent)[-1:] if k in s.base_stale and k[0] == aid]

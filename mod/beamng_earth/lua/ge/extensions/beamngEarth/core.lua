@@ -3121,7 +3121,14 @@ local function onUpdate(dtReal, dtSim)
     roads.update(gov, st.anchorId, st.player, M.viewAway(), st.anchor, dtSim or dtReal, dtReal)
     gasstations.update(gov)
     t = mark('roads', t)
-    gov.roadYield = (not cover) and roads.hasDueForward and roads.hasDueForward() or false
+    local roadDue = (not cover) and roads.hasDueForward and roads.hasDueForward() or false
+    if roadDue then
+      gov._roadYieldN = (gov._roadYieldN or 0) + 1
+      gov.roadYield = (gov._roadYieldN % 3) ~= 0
+    else
+      gov._roadYieldN = 0
+      gov.roadYield = false
+    end
     farfield.update(gov, (gov.w1 or dtReal * 1000) / 1000, st.cam, st.player)
     t = mark('far', t)
     sea.update(st.anchorId, st.player)

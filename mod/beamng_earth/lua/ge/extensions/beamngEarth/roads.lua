@@ -2510,6 +2510,7 @@ function M.update(gov, currentAnchor, player, view, a, dtSim, dtReal)
   -- (NEED: a fast car's pending colliders wait for their deadline, not for RELOAD_EVERY_S; what else set the flag
   -- (trees, props, deletes near the car) keeps the timer)
   if due and not urgent and M.NEED and lastSpeed >= M.FAST_MS and M.onlyColliderDirt(dirtySrc) then due = false end
+  if due and not urgent and M.NEED and lastSpeed >= M.HIGH_SPEED_MS and sinceReload() < M.ROLL_DEFER_S * 1000 then due = false end
   if due and not holdActive and reloadWaits < M.RELOAD_WAIT_FRAMES and gov.roomFor and not gov:roomFor(M.RELOAD_ROOM_MS) then
     reloadWaits = reloadWaits + 1
     due = false
@@ -2733,15 +2734,19 @@ function M.nextWalk(q)
   return best, bestKey, nearest
 end
 
--- True when a forward road surface or bridge/tunnel mesh within dueReach is still queued in walkQ.
+-- True when a forward colliding drive surface (deck, tunnel) within dueReach or immediate road surface under/just
+-- ahead (<= max(150, lastSpeed * 3) m) is still queued in walkQ.
 function M.hasDueForward()
   if #walkQ == 0 or not M.DUE then return false end
   local p = playerNow()
   if not p then return false end
-  local reach = M.dueReach(lastSpeed)
+  local colReach = M.dueReach(lastSpeed)
+  local roadReach = math.max(150, lastSpeed * 3)
   local dir = orderDir
   for _, e in ipairs(walkQ) do
-    if e.what == 'deck' or e.what == 'tunnel' or e.what == 'road' or e.what == 'walk' then
+    local isDrive = e.what == 'deck' or e.what == 'tunnel'
+    if isDrive or e.what == 'road' then
+      local reach = isDrive and colReach or roadReach
       local t = tiles[e.key]
       if t and t.cx then
         local dx, dy = t.cx - p.x, t.cy - p.y
@@ -2761,7 +2766,8 @@ function M.hasDueForward()
 end
 
 -- The road tiles whose drawn surfaces are urgent (URGENT_SURFACES): the one under the car at p and those it reaches
--- within URGENT_SURFACE_S (URGENT_SURFACE_FAST_S at >= HIGH_SPEED_MS) along dir.
+-- within URGENT_SURFACE_S (URGENT_SURFACE_FAST_S at >= HIGH_SPEED_MS) along dir (plus lateral flanks at high speed
+-- for curved highways, with zero table allocations).
 local function surfaceKeys(p, dir, v)
   local keys = {}
   local function add(x, y)
@@ -2773,15 +2779,25 @@ local function surfaceKeys(p, dir, v)
   end
   add(p.x, p.y)
   if dir then
-    local surfS = (v and v >= M.HIGH_SPEED_MS) and M.URGENT_SURFACE_FAST_S or M.URGENT_SURFACE_S
+    local high = v and v >= M.HIGH_SPEED_MS
+    local surfS = high and M.URGENT_SURFACE_FAST_S or M.URGENT_SURFACE_S
     local d = math.max(M.URGENT_SURFACE_MIN_M, (v or 0) * surfS)
-    local stepM = (v and v >= M.HIGH_SPEED_MS) and (M.TILE_M * 0.5) or (d * 0.5)
+    local stepM = high and (M.TILE_M * 0.5) or (d * 0.5)
+    local latOff = M.TILE_M * 0.5
+    local function addSample(s)
+      local ax, ay = p.x + dir.x * s, p.y + dir.y * s
+      add(ax, ay)
+      if high and s >= M.TILE_M then
+        add(ax - dir.y * latOff, ay + dir.x * latOff)
+        add(ax + dir.y * latOff, ay - dir.x * latOff)
+      end
+    end
     local s = stepM
     while s < d do
-      add(p.x + dir.x * s, p.y + dir.y * s)
+      addSample(s)
       s = s + stepM
     end
-    add(p.x + dir.x * d, p.y + dir.y * d)
+    addSample(d)
   end
   return keys
 end

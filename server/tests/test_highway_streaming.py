@@ -269,6 +269,62 @@ class WarmRoadsAndDeckSpansTest(unittest.TestCase):
         self.assertEqual(len(msg_default["spans"]), 0)
         self.assertEqual(len(msg_fast["spans"]), 1)
 
+    def test_far_limit_does_not_bypass_throttle_via_boost_on_at_highway_speed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            s = earthd.Server(tmp, os.path.join(tmp, "cache"), imagery=None, road_pool=None, grading=False)
+            try:
+                s.far_drive = 3
+                s.far_max = 8
+                s.boost_on = True
+                s.speed = earthd.HIGH_SPEED_WARM_V + 10.0
+                s.hm_inflight = {("a", 0, 0): object()}
+                self.assertEqual(s.far_limit(), 1)
+                s.hm_inflight = {}
+                self.assertEqual(s.far_limit(), 8)
+            finally:
+                s.hm_pool.shutdown(wait=True)
+                s.tile_pool.shutdown(wait=True)
+
+    def test_base_refresh_skips_at_highway_speed(self):
+        s = types.SimpleNamespace(
+            base_stale={(1, 0.0, 0.0)},
+            imagery=object(),
+            near_visual="detail",
+            anchors={1: object()},
+            layout=types.SimpleNamespace(block=512),
+        )
+        c = earthd.Connection.__new__(earthd.Connection)
+        c.s = s
+        c.base_busy = False
+        c.vel = (0.0, -44.4)
+        c.spawn = mock.Mock()
+        c.base_refresh(1)
+        c.spawn.assert_not_called()
+
+    def test_quick_elsewhere_passes_skip_roads_at_highway_speed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            s = earthd.Server(tmp, os.path.join(tmp, "cache"), imagery=None, road_pool=None, grading=False)
+            try:
+                anchor = s.new_anchor(47.855, 11.405)
+                s.imagery = types.SimpleNamespace(chain=[], tone=None, leaf_on=True, season_mode="auto")
+                s.speed = earthd.HIGH_SPEED_WARM_V + 10.0
+                captured = {}
+
+                class _FakePool:
+                    def submit(self, fn, *args, **kwargs):
+                        captured["kwargs"] = kwargs
+                        from concurrent.futures import Future
+                        f = Future()
+                        f.set_result((None, {}, set()))
+                        return f
+
+                s.block_pools = [(_FakePool(), None)]
+                s._quick_elsewhere(anchor, 0.0, 0.0, 0)
+                self.assertTrue(captured["kwargs"]["skip_roads"])
+            finally:
+                s.hm_pool.shutdown(wait=True)
+                s.tile_pool.shutdown(wait=True)
+
 
 if __name__ == "__main__":
     unittest.main()

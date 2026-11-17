@@ -498,14 +498,25 @@ do
   T.check(g:snapshot().est ~= nil, 'the per-kind estimates in the snapshot')
 end
 
-do -- roadDrive (bridge decks) gets URGENT_ROAD_DEBT_MS headroom over general URGENT_DEBT_MS
+do -- roadDrive (bridge decks) gets URGENT_ROAD_DEBT_MS headroom, highPriority roadSurf gets URGENT_HIGH_DEBT_MS + URGENT_ROAD_ROOM_MS + heavyPending bypass
   local g = governor.new({ clock = clock })
   for _ = 1, 50 do frame(g, { cost = 1e9 }) end
   g:beginFrame(true); g.tokens = -governor.URGENT_DEBT_MS - 2
   T.check(not g:tryUrgent('roadSurf'), 'roadSurf waits past URGENT_DEBT_MS')
-  T.check(g:tryUrgent('roadSurf', true), 'highPriority roadSurf shares URGENT_ROAD_DEBT_MS headroom')
+  T.check(g:tryUrgent('roadSurf', true), 'highPriority roadSurf runs past URGENT_DEBT_MS')
   T.check(g:tryUrgent('roadDrive'), 'roadDrive still runs up to URGENT_ROAD_DEBT_MS')
   g.tokens = -governor.URGENT_ROAD_DEBT_MS - 1
   T.check(not g:tryUrgent('roadDrive'), 'roadDrive waits past URGENT_ROAD_DEBT_MS')
+  T.check(g:tryUrgent('roadSurf', true), 'highPriority roadSurf runs up to URGENT_HIGH_DEBT_MS')
+  g.tokens = -governor.URGENT_HIGH_DEBT_MS - 1
+  T.check(not g:tryUrgent('roadSurf', true), 'highPriority roadSurf waits past URGENT_HIGH_DEBT_MS')
+  -- heavyPending & frameOther room
+  g:beginFrame(true); g.tokens = 0
+  g:noteOther(governor.URGENT_ROOM_MS + 2)
+  T.check(not g:tryUrgent('roadSurf'), 'normal roadSurf waits past URGENT_ROOM_MS')
+  T.check(g:tryUrgent('roadSurf', true), 'highPriority roadSurf runs within URGENT_ROAD_ROOM_MS')
+  g:requestHeavy()
+  T.check(not g:tryUrgent('roadDrive'), 'roadDrive waits while heavyPending')
+  T.check(g:tryUrgent('roadSurf', true), 'highPriority roadSurf bypasses heavyPending')
 end
 T.done('test_governor')
