@@ -28,7 +28,7 @@ KINDS = {
               "bldfar_tile", "bldfar_drop", "bldsky_tile", "bldsky_drop", "brfar_tile", "brfar_drop", "bldpack_tile",
               "bldpack_drop", "bldhz_tile", "bldhz_drop", "navgraph", "deck_spans", "sea", "tunnel_floor"},
     "blocks": {"terrain_ready", "terrain_refresh", "block_base", "terrain_patch", "ground_ahead", "anchor_ready"},
-    "far": {"far_tile"},
+    "far": {"far_tile", "far_field"},
 }
 # messages sent again as the session goes (how often is timing): only the last one compared
 LATEST = {"ground_ahead", "credits", "weather", "gravity", "sea", "terrain_ready_set"}
@@ -66,8 +66,10 @@ def clean(m):
 
 
 def load(session_dir):
-    """{ident: (last cleaned message, times sent)}, {type: count} of the order-dependent ones."""
-    got, nth, ordered = {}, {}, {}
+    """{ident: (last cleaned message, times sent)}, {type: count} of the order-dependent ones. The far field's swaps
+    and removals are replayed into its end state, compared as ("far_field", anchor): the tiles shown at the end, every
+    tile taken away, each terrain generation swap's last message."""
+    got, nth, ordered, field = {}, {}, {}, {}
     with open(os.path.join(session_dir, "messages.jsonl"), encoding="utf-8") as f:
         for line in f:
             m = json.loads(line)["m"]
@@ -76,12 +78,25 @@ def load(session_dir):
                 continue
             if t in ORDERED:
                 ordered[t] = ordered.get(t, 0) + 1
+                st = field.setdefault(m.get("anchorId"), {"shown": set(), "removed": set(), "swaps": {}})
+                if t == "far_swap":
+                    st["shown"].difference_update(m.get("remove") or [])
+                    st["removed"].update(m.get("remove") or [])
+                    st["shown"].update(m.get("add") or [])
+                elif t == "far_remove":
+                    st["shown"].discard(m.get("key"))
+                    st["removed"].add(m.get("key"))
+                else:           # swap_begin / swap_end / swap_abort: each generation's last word
+                    st["swaps"][str(m.get("gen"))] = clean(m)
                 continue
             n = nth.get(t, 0)
             nth[t] = n + 1
             k = ident(m, n)
             prev = got.get(k)
             got[k] = (clean(m), (prev[1] if prev else 0) + 1)
+    for aid, st in field.items():
+        got[("far_field", aid)] = ({"shown": sorted(map(str, st["shown"])), "removed": sorted(map(str, st["removed"])),
+                                    "swaps": st["swaps"]}, 1)
     return got, ordered
 
 

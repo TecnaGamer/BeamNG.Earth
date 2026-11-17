@@ -68,11 +68,47 @@ def places(names=None, path=CORPUS):
     return [(n, every[n]) for n in names]
 
 
+def _inside(a, b):
+    """Is real path a b or inside b?"""
+    return a == b or a.startswith(b.rstrip(os.sep) + os.sep)
+
+
+def protected():
+    """[(real path, what)] the tools never use as a cache nor write or delete in: the player's download cache (the
+    default, the one chosen on the settings page or with --cache-dir: app.json, BNGE_CACHE_DIR), the app's own folder
+    and the game's user folder (the one the game said it uses, else the usual places)."""
+    out = [(REAL_CACHE, "the player's default cache")]
+    if os.environ.get("BNGE_CACHE_DIR"):
+        out.append((os.path.realpath(os.environ["BNGE_CACHE_DIR"]), "BNGE_CACHE_DIR"))
+    try:
+        if ROOT not in sys.path:
+            sys.path.insert(0, ROOT)
+        import apppaths
+        dd = apppaths.data_dir()
+        out.append((os.path.realpath(dd), "the app's folder"))
+        for got, what in ((apppaths.saved_cache_dir(dd), "the player's chosen cache (app.json)"),
+                          (apppaths.saved_user_dir(dd), "the game's user folder (app.json)")):
+            if got:
+                out.append((os.path.realpath(got), what))
+    except Exception:           # (no app settings: the defaults below still hold)
+        pass
+    home = os.path.expanduser("~")
+    local = os.environ.get("LOCALAPPDATA") or os.path.join(home, "AppData", "Local")
+    flatpak = os.path.join(home, ".var", "app", "com.valvesoftware.Steam", ".local", "share")
+    for p in (os.path.join(home, ".local", "share", "BeamNG"), os.path.join(home, ".local", "share", "BeamNG.drive"),
+              os.path.join(flatpak, "BeamNG"), os.path.join(flatpak, "BeamNG.drive"),
+              os.path.join(local, "BeamNG"), os.path.join(local, "BeamNG.drive")):
+        out.append((os.path.realpath(p), "a game user folder"))
+    return out
+
+
 def check_cache(path):
-    """Refuse the player's cache, a folder inside it, or a cache holding links (the 2026-10-29 eviction)."""
+    """Refuse the player's cache, the app's or the game's folders, anything inside them or holding them, or a cache
+    holding links (the 2026-10-29 eviction)."""
     real = os.path.realpath(path)
-    if real == REAL_CACHE or real.startswith(REAL_CACHE + os.sep):
-        raise SystemExit(f"refusing {path}: the player's own cache (use a corpus cache of its own)")
+    for p, what in protected():
+        if _inside(real, p) or _inside(p, real):
+            raise SystemExit(f"refusing {path}: {what} ({p}) (use a corpus cache of its own)")
     if os.path.isdir(path):
         for d, dirs, files in os.walk(path):
             for n in dirs + files:
@@ -84,7 +120,8 @@ def check_cache(path):
 
 def work_copy(src, dst):
     """A real copy of the corpus cache src at dst (copy-on-write where the file system can: btrfs, XFS), replacing
-    dst."""
+    dst. Never one inside the other: replacing dst would delete the corpus."""
+    check_apart(src, dst)
     check_cache(src)
     check_cache(dst)
     if os.path.exists(dst):
@@ -95,6 +132,14 @@ def work_copy(src, dst):
     else:
         os.makedirs(dst)
     return dst
+
+
+def check_apart(cache, other):
+    """Refuse a folder (the work copy, the outputs) equal to, inside or holding the corpus cache: the tools replace and
+    delete what is in theirs."""
+    a, b = os.path.realpath(cache), os.path.realpath(other)
+    if _inside(a, b) or _inside(b, a):
+        raise SystemExit(f"refusing {other}: it overlaps the corpus cache {cache} (keep them apart)")
 
 
 def nice_self(n=15):

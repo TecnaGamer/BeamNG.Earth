@@ -9,6 +9,7 @@ import sys
 import tempfile
 import unittest
 from contextlib import redirect_stdout
+from unittest import mock
 from pathlib import Path
 
 import numpy as np
@@ -91,7 +92,8 @@ class SessionsTest(Base):
     def test_order_fields_ignored(self):
         far = {"type": "far_tile", "anchorId": 1, "key": "3_1_2", "level": 3, "shape": "@aa.cdae", "slotSerial": 7}
         self.session(self.a, [{"type": "status", "text": "1 s"}, far, {"type": "far_swap", "id": 1, "add": ["x"]}])
-        self.session(self.b, [dict(far, slotSerial=9), {"type": "status", "text": "2 s"}])
+        self.session(self.b, [dict(far, slotSerial=9), {"type": "status", "text": "2 s"},
+                              {"type": "far_swap", "id": 7, "add": ["x"]}, {"type": "far_swap", "id": 8, "add": []}])
         self.assertEqual(quiet(msgs.compare, self.a, self.b, "far")[0], 0)
         code, out = quiet(msgs.compare, self.a, self.b, None)
         self.assertEqual(code, 0)
@@ -114,6 +116,20 @@ class SessionsTest(Base):
                      [(ha + ".png", pa)])
         self.assertEqual(quiet(msgs.compare, self.a, self.b, "blocks")[0], 0)
         self.assertEqual(quiet(msgs.compare, self.a, self.b, "tiles")[0], 2)
+
+    def test_far_field_end_state(self):
+        """The far field's swaps compared by what they leave shown and take away, not by their order or counter."""
+        t = lambda k: {"type": "far_tile", "anchorId": 1, "key": k, "level": 3}
+        a = [t("3_1_1"), t("3_1_2"), {"type": "far_swap", "anchorId": 1, "id": 1, "add": ["3_1_1", "3_1_2"], "remove": []}]
+        b = [t("3_1_2"), t("3_1_1"), {"type": "far_swap", "anchorId": 1, "id": 4, "add": ["3_1_2"], "remove": []},
+             {"type": "far_swap", "anchorId": 1, "id": 5, "add": ["3_1_1"], "remove": []}]
+        self.session(self.a, a)
+        self.session(self.b, b)
+        self.assertEqual(quiet(msgs.compare, self.a, self.b, "far")[0], 0)
+        self.session(self.b, b + [{"type": "far_remove", "anchorId": 1, "key": "3_1_1"}])
+        code, out = quiet(msgs.compare, self.a, self.b, "far")
+        self.assertEqual(code, 1)
+        self.assertIn("far_field", out)
 
     def test_slots_serials_ignored(self):
         t = {"type": "roads_tile", "anchorId": 1, "key": "g17_1_2", "slots": {"mesh": ["@s.cdae", 4]}}
@@ -162,6 +178,36 @@ class SetupTest(unittest.TestCase):
             os.symlink(d, os.path.join(d, "link"))
             with self.assertRaises(SystemExit):
                 pcommon.check_cache(d)
+
+    def test_refuses_overlapping_work_copies(self):
+        """A work copy equal to, inside or holding the corpus cache: refused before anything is deleted."""
+        with tempfile.TemporaryDirectory() as d:
+            corpus = os.path.join(d, "cache")
+            os.makedirs(os.path.join(corpus, "dem"))
+            with open(os.path.join(corpus, "dem", "t"), "w") as f:
+                f.write("x")
+            for dst in (corpus, os.path.join(corpus, "work"), d):
+                with self.assertRaises(SystemExit, msg=dst):
+                    pcommon.work_copy(corpus, dst)
+                self.assertTrue(os.path.exists(os.path.join(corpus, "dem", "t")), "the corpus untouched")
+            with self.assertRaises(SystemExit):
+                pcommon.check_apart(corpus, os.path.join(corpus, "out"))
+            pcommon.work_copy(corpus, os.path.join(d, "work"))      # (apart: copied)
+            self.assertTrue(os.path.exists(os.path.join(d, "work", "dem", "t")))
+
+    def test_refuses_the_configured_cache_and_game_folders(self):
+        with tempfile.TemporaryDirectory() as d:
+            chosen = os.path.join(d, "chosen")
+            os.makedirs(chosen)
+            with mock.patch.dict(os.environ, {"BNGE_CACHE_DIR": chosen}):
+                for p in (chosen, os.path.join(chosen, "sub"), d):
+                    with self.assertRaises(SystemExit, msg=p):
+                        pcommon.check_cache(p)
+            with mock.patch("apppaths.saved_cache_dir", return_value=chosen):
+                with self.assertRaises(SystemExit):
+                    pcommon.check_cache(os.path.join(chosen, "x"))
+        with self.assertRaises(SystemExit):
+            pcommon.check_cache(os.path.expanduser("~/.local/share/BeamNG/BeamNG.drive/current"))
 
     def test_corpus(self):
         names = [n for n, _ in pcommon.places()]

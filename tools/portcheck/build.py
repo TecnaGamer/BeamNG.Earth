@@ -141,6 +141,8 @@ def main():
     a.cache, a.out = os.path.abspath(os.path.expanduser(a.cache)), os.path.abspath(os.path.expanduser(a.out))
     a.server_dir = os.path.abspath(a.server_dir)
     pcommon.check_cache(a.cache)
+    pcommon.check_apart(a.cache, a.out)
+    pcommon.check_cache(a.out)
     if a.one:
         return child(a)
     pcommon.nice_self()
