@@ -6522,6 +6522,7 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // numpy's distance matrix per pair of lines; the same bits)
     // 373: deck_trim_overlaps(..., params[4] = TRIM_ALONG_COS): only another deck running along a deck trims it, not
     // one crossing it (a hole across the B 254's deck over a track's at Trutzhain; PR #1397, first numbered 310)
-    m.add("VERSION", 373)?;
+    // 374: membudget's map data clamp 160-384 MB (384 at the 24 GB cap; PR #1325)
+    m.add("VERSION", 374)?;
     Ok(())
 }
