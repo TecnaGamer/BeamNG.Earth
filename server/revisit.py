@@ -466,22 +466,63 @@ _formats = {}               # kind -> its current format marker (format_marker),
 
 def switches_key():
     """A hash of the build switches (BNE_*) alone, once per process: code_key's without the code."""
+    return _switch_keys()[0]
+
+
+def plans_switches_key():
+    """switches_key without the PLAN_NEUTRAL switches, once per process: the build switches of the road plans and the
+    cell facts (their format markers, the shared decision archives' vkey_doc, the baked packs' and BeamMP shares'
+    switches). With none of PLAN_NEUTRAL set it is switches_key itself (the same hash of the same variables)."""
+    return _switch_keys()[1]
+
+
+def _switch_keys():
+    """(switches_key, plans_switches_key), made together once a process (tests clear _switches: both again; one value
+    put there stands for both)."""
     with _lock:
         if not _switches:
-            h = hashlib.sha1()
+            full, plans = hashlib.sha1(), hashlib.sha1()
             for k in sorted(os.environ):
                 if keyed_env(k):
-                    h.update(f"{k}={os.environ[k]}".encode())
-            _switches.append(h.hexdigest()[:16])
-        return _switches[0]
+                    full.update(f"{k}={os.environ[k]}".encode())
+                    if k not in PLAN_NEUTRAL:
+                        plans.update(f"{k}={os.environ[k]}".encode())
+            _switches.extend((full.hexdigest()[:16], plans.hexdigest()[:16]))
+        return _switches[0], _switches[-1]
 
 
 _switches = []
 
+# Build switches that change no road plan and no cell fact (nothing a "plans" / "cellfacts" item, a decision archive's
+# block, a baked pack or a BeamMP plans share holds): left out of plans_switches_key, so a player with only these on
+# reads the shared decision archives and the plans and facts kept with the defaults (the user, 2026-11-16: a tester with
+# 21 Experimental switches got no archives in New York). Every other key (code_key: the road tiles, blocks, far tiles,
+# skins; switches_key itself; the stale generations) still holds them. A switch is listed only with both proofs
+# (tests/test_plan_neutral.py): no function the planning and the cell facts can reach reads it or anything it sets
+# (the static guard), and the portcheck corpus's plans and facts byte-identical with it on (build.py, plancmp, factcmp).
+# A change that makes one of these reach the plans or facts must take it off this list in the same commit. (Not listed
+# though the planning never reads it: BNE_GEN_GROUND, whose gated code drives the photo pipeline that feeds planning
+# inputs; tests/test_plan_neutral.py NOT_LISTED says why for each.)
+PLAN_NEUTRAL = {
+    "BNE_ROADSIGNS": "roadsigns.ON: the sign tiles' road signs (signstream), never the roads layer, plans or facts",
+    "BNE_NL_ROADSIGNS": "roadsigns.NL_ON: the Dutch sign system in the sign tiles (roadsigns.system), as above",
+    "BNE_WATERTIGHT": "shells.ON: closed collision / building / deck meshes (cdae, buildings, roadmesh): tiles only",
+    "BNE_CATENARY": "catenary.ENABLED: masts and wires in the road tiles (blockworker), nothing planned",
+    "BNE_WEAR_STRIPS": "roadwear.STRIPS_ON: the wear strips drawn on the road tiles' surface",
+    "BNE_AI_TUNNELS": "navgraph.AI_TUNNELS: the AI graph through tunnels (navgraph reads the plans, never writes them)",
+    "BNE_RAIL_COLLIDE": "railways.RAIL_COLLIDE: the rails' own collision boxes in the rail tiles (collision_mesh)",
+    "BNE_PRIORITY_STOPS": "furniture.PRIORITY_STOPS: stop signs / AI right of way at junctions (props, AI graph)",
+    "BNE_CLIFF_WALLS": "roads.CLIFF_WALLS_ON: rock faces for tall rural cuts' walls (road tiles' retaining_walls)",
+    "BNE_DROP_RAILS": "droprails.enabled: guard rails on a drop's side of rural roads (road tiles' props)",
+}
+PLAN_KINDS = ("plans", "cellfacts")     # the format-keyed kinds whose markers hold plans_switches_key
+
 
 def format_marker(kind, fmt):
-    """What a format-keyed item's sidecar line holds in place of the code key ("fmt:<kind>:<n>:<switches>")."""
-    m = f"fmt:{kind}:{fmt}:{switches_key()}" + (f":sim{SIM_BUMP}" if SIM_BUMP else "")
+    """What a format-keyed item's sidecar line holds in place of the code key ("fmt:<kind>:<n>:<switches>"; the road
+    plans' and cell facts' (PLAN_KINDS): their own build switches, plans_switches_key)."""
+    sw = plans_switches_key() if kind in PLAN_KINDS else switches_key()
+    m = f"fmt:{kind}:{fmt}:{sw}" + (f":sim{SIM_BUMP}" if SIM_BUMP else "")
     _formats[kind] = m
     return m
 

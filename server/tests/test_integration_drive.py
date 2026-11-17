@@ -110,6 +110,7 @@ sys.path.insert(0, str(SERVER_DIR))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import cdae  # noqa: E402
 import earthd  # noqa: E402
+import protocol  # noqa: E402
 import farfield as ff  # noqa: E402
 import geodesy  # noqa: E402
 import heightmap  # noqa: E402
@@ -1423,8 +1424,8 @@ class FollowDrive512Test(unittest.TestCase):
             c.anchor_delay = anchor_delay
             return c.run()
 
-        srv = asyncio.run_coroutine_threadsafe(asyncio.start_server(conn, "127.0.0.1", 0), loop).result(10)
-        client = Client(srv.sockets[0].getsockname()[1])
+        srv = asyncio.run_coroutine_threadsafe(protocol.start_server(conn, "127.0.0.1", 0), loop).result(10)
+        client = Client(protocol.listen_port(srv))
 
         def stop():
             client.close()

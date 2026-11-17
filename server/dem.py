@@ -86,6 +86,12 @@ MIRROR_MB = _mirror_mb()
 # default since 2026-11-13: the plain .npy were 1.1-3.1 GB of a cold visit's 4.8-7.9 GB of disk writes, from ~0.15 GB
 # of WebP (expo baseline 2026-11-12). BNGE_DEM_MIRROR_ZSTD=0: the .npy (memory-mapped) as before.
 MIRROR_ZSTD = os.environ.get("BNGE_DEM_MIRROR_ZSTD", "1") != "0"
+# Decoded tiles kept per process with the packed mirror (budget.apply: a desktop's MEM_TILES at most this). Packed, a
+# tile in memory is the process's own 1 MB, no longer pages every process shares, and one read back from the mirror
+# costs ~0.5 ms (its 115 KB in the system's file cache, shared). A 24 GB machine's desktop size (429) filled in every
+# road, block, late and far-tile process: 25 road tiles round the A7 or Berlin each touched 545+ tiles; at 256 the
+# extra reads cost no measurable build time and every output stayed byte-identical (CT 115, 2026-11-16).
+PACKED_MEM_TILES = 256
 if MIRROR_ZSTD:
     fast.require(146, "the packed DEM mirror (f32_pack)")
 CLAIM_WAIT_S, CLAIM_POLL_S, CLAIM_STALE_S = 0.5, 0.01, 30.0     # (Dem._load_tile: another process making a tile)
@@ -621,7 +627,7 @@ class Dem:
         y = int((1.0 - dmath.asinh(dmath.tan(math.radians(lat))) / math.pi) / 2.0 * n)
         if idx.get((x, max(0, min(n - 1, y))), GLOBAL_ZOOM) > GLOBAL_ZOOM:
             return False
-        if (self.lidarbc is not None or HRDEM_NEAR) and hrdemmod.covers(GLOBAL_ZOOM, *_tile_xy(lat, lon, GLOBAL_ZOOM)):
+        if (self.lidarbc is not None or HRDEM_NEAR) and hrdemmod.in_bounds(GLOBAL_ZOOM, *_tile_xy(lat, lon, GLOBAL_ZOOM)):
             return False
         return True
 

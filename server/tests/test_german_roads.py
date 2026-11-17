@@ -114,6 +114,24 @@ class GermanRoadsTest(unittest.TestCase):
         self.assertEqual((a.width, a.lanes), (8.0, 2))
         self.assertEqual((b.width, b.lanes), (5.0, None))     # (a town street: its width, not the survey's lanes)
 
+    def test_axes_keep_their_own_lines_attributes_alone(self):
+        """An Axes keeps the attribute rows of the lines near its roads alone (not its shards' whole table, ~25 km of
+        roads, on every cell's Features), its grid in int32: the same lines found, the same rows read."""
+        far = [(5000.0, 3000.0), (5400.0, 3000.0)]
+        write_shard(self.tmp.name, [(far, 9.0, 3, 1, 2, 0), (EAST, 6.5, 2, 1, 4, 0), (far, 7.0, 1, 2, 5, 0),
+                                    ([(-400.0, 60.0), (400.0, 60.0)], 5.0, 2, 1, 5, 0)])
+        f = features([[(-300.0, 2.0), (300.0, 2.5)], [(-300.0, 60.5), (300.0, 60.5)]], ["secondary", "residential"])
+        ax = germanroads.axes_for(f)
+        self.assertEqual(len(ax.attrs), 2)                                  # (the two far ones left out)
+        self.assertEqual(sorted(ax.attrs[:, 0].tolist()), [50, 65])
+        self.assertEqual((ax.line.dtype, ax.gsid.dtype, ax.gcut.dtype, ax.gkey.dtype), (np.int32,) * 4)
+        hit, n = ax.match(f.lonlat[0:2], carriageway=False)
+        self.assertTrue(n and (hit >= 0).all())
+        self.assertEqual(set(ax.attrs[hit][:, 0].tolist()), {65})
+        a, b = self.specs(f)
+        self.assertEqual((a.width, a.lanes), (6.5, 2))
+        self.assertEqual(b.width, 5.0)
+
     def test_driveways_and_ramps(self):
         write_shard(self.tmp.name, [(EAST, 4.0, 1, 6, 1, 0)])
         f = features([[(-300.0, 0.0), (300.0, 0.0)]], ["service"])

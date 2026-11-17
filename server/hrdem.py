@@ -44,6 +44,23 @@ ITEM_M = 500000.0
 NODATA_LIMIT = -1000.0          # heights below this are nodata (the files' -32767, whatever the tag says)
 # Where to ask at all: Canada's south (the DTM's extent), as lat / lon (south, west, north, east)
 BOUNDS = (41.6, -141.1, 62.0, -52.5)
+# ... less the US south of Canada: per 0.5-degree column of longitude from SOUTH_W0 east, the latitude below which no
+# tile is asked: Canada's southernmost land in the column and 0.25 degrees either side, less 0.15 degrees (17 km),
+# from Overture's borders (country_bands.bin, 0.01-degree samples; 2026-11-17). BOUNDS alone took in the northern US
+# down to 41.6 N, and a tester's drive in Massachusetts asked the mosaic's files for every lidar tile. Tiles that
+# reach within the margin are still asked, so a lidar project running past the border keeps its heights.
+SOUTH_W0, SOUTH_STEP = -141.5, 0.5
+SOUTH = (
+    60.10, 60.05, 60.00, 60.00, 59.75, 59.40, 59.15, 58.75, 58.75, 58.85, 59.00, 59.35, 59.10, 58.70, 58.45,
+    53.20, 52.70, 52.35, 51.95, 51.60, 51.35, 51.05, 50.80, 50.50, 50.40, 49.90, 49.65, 49.45, 49.05, 48.80,
+    48.60, 48.35, 48.30, 48.20, 48.10, 48.05, 48.05, 48.10, 48.80, 48.80, 48.80, 48.85, 48.80, 48.80, 48.85,
+    48.85, 48.85, 48.80, 48.80, 48.80, 48.80, 48.80, 48.80, 48.80, 48.80, 48.80, 48.80, 48.80, 48.80, 48.80,
+    48.80, 48.80, 48.80, 48.80, 48.80, 48.80, 48.80, 48.80, 48.80, 48.80, 48.80, 48.80, 48.80, 48.80, 48.80,
+    48.80, 48.80, 48.80, 48.80, 48.80, 48.80, 48.80, 48.80, 48.80, 48.80, 48.80, 48.85, 48.85, 48.85, 48.85,
+    48.80, 48.80, 48.80, 48.50, 48.35, 48.35, 48.35, 48.05, 48.00, 47.85, 47.85, 47.90, 47.80, 47.80, 47.80,
+    47.85, 47.90, 47.70, 47.50, 47.30, 47.10, 46.90, 46.45, 46.30, 45.90, 45.50, 41.60, 41.60, 41.60, 41.60,
+    41.80, 42.05, 42.10, 42.20, 42.35, 42.55, 43.45, 43.45, 43.45, 43.45, 43.55, 44.05, 44.35, 44.70, 44.80,
+    44.80, 44.85, 44.85, 44.85, 44.85, 44.85, 45.05, 45.20, 45.75, 46.80, 47.00, 45.50, 44.95, 44.10, 43.10)
 TILE = 512                      # dem.py's tile size
 TILE_CACHE_BYTES = 256 * 1024 * 1024
 LATTICE_M = 1.0                 # m: the terrain's lattice; finer mosaic pixels are not read (z16's 0.8 m: the 1 m overview)
@@ -100,11 +117,24 @@ def tile_bounds(z, x, y):
     return lat(y + 1), x / n * 360.0 - 180.0, lat(y), (x + 1) / n * 360.0 - 180.0
 
 
-def covers(z, x, y):
-    """Whether tile (z, x, y) touches BOUNDS (where the mosaic is asked at all)."""
+def in_bounds(z, x, y):
+    """Whether tile (z, x, y) touches the BOUNDS rectangle: dem.coarse_at's "the Canadian lidar reads here" (the road
+    plans' coarse-elevation rules; kept as it was so no plan changes with covers' narrower ask, Codex review)."""
     s, w, n, e = tile_bounds(z, x, y)
     S, W, N, E = BOUNDS
     return s < N and n > S and w < E and e > W
+
+
+def covers(z, x, y):
+    """Whether tile (z, x, y) touches BOUNDS and reaches north of SOUTH (where the mosaic is asked at all)."""
+    if not in_bounds(z, x, y):
+        return False
+    s, w, n, e = tile_bounds(z, x, y)
+    a = math.floor((w - SOUTH_W0) / SOUTH_STEP)
+    b = math.floor((e - SOUTH_W0) / SOUTH_STEP)
+    if a < 0 or b >= len(SOUTH):
+        return True                     # (past the table: west of Alaska's panhandle, east of Maine)
+    return n > min(SOUTH[a:b + 1])
 
 
 class Hrdem:

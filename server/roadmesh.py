@@ -280,6 +280,12 @@ def _ribbon_v(s, c):
 TRIM_DZ = (0.3, 4.5)                # m: another deck overlapping a deck in plan this far above or below it (two
                                     # surfaces, too near to pass over it: a ramp leaving its mainline) ...
 TRIM_GAP_M = 0.05                   # ... each slab ends this short of halfway between their centre lines
+# ... and runs along it: within TRIM_ALONG_DEG of the deck's own way (a ramp leaving or joining it). A deck crossing it
+# passes over or under: a farm track's bridge 4.1 m under the B 254's at Trutzhain (50.8968, 9.2746) had both edges of
+# the B 254 cut to a tenth of its half width round the crossing point, a 4 m deep hole across both lanes; the autodrive
+# fell into it at 80 km/h on two survey drives (2026-11-15/16).
+TRIM_ALONG_DEG = 30.0
+TRIM_ALONG_COS = dmath.cos(math.radians(TRIM_ALONG_DEG))
 
 # Short, connected bridge forks need a common two-dimensional surface. Three independently sloped, flat-width
 # ribbons can start at one height and still overlap by tens of centimetres a few metres later. Keep the longitudinal
@@ -647,11 +653,12 @@ def trim_overlaps(rb, context=(), shared=None):
     higher one from PARAPET_COVER_DZ apart), each road on its own surface, instead of the higher one's side standing in
     the lower one's lanes, and a car on the lower one's line riding the higher one's slab until it ends: a
     US-101 exit ramp diverging downhill under its mainline's 18.8 m deck put that deck's edge 0.9 m from the ramp's
-    centre, and an AI car drove into it at 29 mph (Los Angeles, 2026-10-27). Pure."""
+    centre, and an AI car drove into it at 29 mph (Los Angeles, 2026-10-27). Only a deck running along it (within
+    TRIM_ALONG_DEG) trims it: one crossing it at another height is an overpass, not a gore. Pure."""
     if not rb:
         return rb
     import fast
-    fast.require(235, "deck_trim_overlaps")
+    fast.require(373, "deck_trim_overlaps")
     # (the cuts are native: earthfast deck_trim_overlaps, meshtrim.rs; each deck against every other deck near it was
     # a numpy round of a few rows, hundreds a tile)
     owners, groups, lefts, rights, zs, lens, own_in, targets = {}, {}, [], [], [], [], [], []
@@ -680,7 +687,7 @@ def trim_overlaps(rb, context=(), shared=None):
         np.ascontiguousarray(np.concatenate(lefts)), np.ascontiguousarray(np.concatenate(rights)),
         np.ascontiguousarray(np.concatenate(zs)), np.r_[0, np.cumsum(lens)].astype(np.int64),
         np.array(oid, np.int64), np.array(gid, np.int64), np.array(sh, bool), np.array(targets, np.int64),
-        np.array([TRIM_DZ[0], TRIM_DZ[1], TRIM_GAP_M, 1.0 if shared else 0.0], np.float64))
+        np.array([TRIM_DZ[0], TRIM_DZ[1], TRIM_GAP_M, 1.0 if shared else 0.0, TRIM_ALONG_COS], np.float64))
     out = []
     at = 0
     for n, ((left, right, v, m, layer, z), c) in enumerate(rb):

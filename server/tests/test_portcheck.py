@@ -162,6 +162,13 @@ class SetupTest(unittest.TestCase):
         import launcher
         self.assertEqual(session.RECOMMENDED, launcher.RECOMMENDED)
 
+    def test_season_pinned(self):
+        """The date-graded season (--season auto, earthd's default) is pinned: sessions an hour apart across
+        midnight compare equal."""
+        self.assertNotIn("--season", session.RECOMMENDED, "pinned apart from the launcher's options")
+        i = session.PINNED_ARGS.index("--season")
+        self.assertNotEqual(session.PINNED_ARGS[i + 1], "auto")
+
     def test_mod_hello(self):
         hello = session.mod_hello(str(ROOT / "server"))
         self.assertEqual(hello["protocol"], 4)

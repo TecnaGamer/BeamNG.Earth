@@ -171,8 +171,13 @@ class KeysTest(unittest.TestCase):
             fresh_keys()
             doc = decisions.vkey_doc(dict(versions))
             v1 = decisions.vkey(dict(versions))
-            self.assertEqual(doc["switches"], revisit.switches_key())
+            self.assertEqual(doc["switches"], revisit.plans_switches_key())
         self.assertNotEqual(v0[0], v1[0], "a player with a switch on never reads the archives built with the defaults")
+        # (... unless the switch changes no plan and no fact: revisit.PLAN_NEUTRAL, tests/test_plan_neutral.py)
+        with mock.patch.dict(os.environ, experimental.env_for({"expCatenary": True})):
+            fresh_keys()
+            self.assertIn("BNE_CATENARY", revisit.PLAN_NEUTRAL)
+            self.assertEqual(decisions.vkey(dict(versions))[0], v0[0])
 
     def test_baked_packs_need_the_same_switches(self):
         import bakepack

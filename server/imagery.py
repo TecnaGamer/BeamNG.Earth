@@ -2487,16 +2487,29 @@ def mip_chain(img):
     return [Image.fromarray(a, "RGB") for a in mip_arrays(np.asarray(img.convert("RGB")))]
 
 
-def encode_dds(rgb, srgb=False):
+def encode_dds(rgb, srgb=False, fade=None):
     """DDS bytes of an RGB image (uint8 [h, w, 3], power-of-two sides): DXT1 (BC1, no alpha)
     with the full mip chain (mip_arrays' chain, in integers: within one sRGB step of it), in one Rust call
     (earthfast.dds_levels, bc1fast.rs: ISPC's BC1 kernels on the CPU, ~10x our own encoder at its quality and
     faster than the GPU's round trip, which the game's frames paid for on a Steam Deck: no GPU here since 287).
-    srgb: the same blocks under a DX10 header as DXGI_FORMAT_BC1_UNORM_SRGB (FAR_SRGB)."""
+    srgb: the same blocks under a DX10 header as DXGI_FORMAT_BC1_UNORM_SRGB (FAR_SRGB).
+    fade (canopy rgb, texel m): the generated ground's mip fade (genground.write_far_dds): each mip of rgb and of the
+    canopy version (the same chain) blended by genground.fade_weights, then encoded as dds_levels does (byte for byte
+    the same with every weight 1)."""
     rgb = np.ascontiguousarray(np.asarray(rgb, np.uint8))
     h, w = rgb.shape[:2]
     fast.require(287, "imagery dds_levels")
-    data, n, _err = fast._ef.dds_levels(rgb, _TO_LIN, float(MIP_SHARPEN), False)
+    if fade is not None:
+        import genground
+        canopy = np.ascontiguousarray(np.asarray(fade[0], np.uint8))
+        lf = [rgb] + list(fast._ef.mip_levels_fast(rgb, _TO_LIN, float(MIP_SHARPEN)))
+        lc = [canopy] + list(fast._ef.mip_levels_fast(canopy, _TO_LIN, float(MIP_SHARPEN)))
+        parts = []
+        for a, c, s in zip(lf, lc, genground.fade_weights(float(fade[1]), len(lf))):
+            parts.append(bytes(fast._ef.bc1_encode_fast(np.ascontiguousarray(genground.fade_mix(a, c, s)))))
+        data, n = b"".join(parts), len(lf)
+    else:
+        data, n, _err = fast._ef.dds_levels(rgb, _TO_LIN, float(MIP_SHARPEN), False)
     assert len(data) == sum(dxt1_size(max(1, w >> k), max(1, h >> k)) for k in range(n)), (rgb.shape, len(data))
     flags = DDSD_CAPS | DDSD_HEIGHT | DDSD_WIDTH | DDSD_PIXELFORMAT | DDSD_MIPMAPCOUNT | DDSD_LINEARSIZE
     head = (DDS_MAGIC
@@ -2521,9 +2534,9 @@ DXGI_BC1_UNORM_SRGB = 72
 FAR_SRGB = os.environ.get("BNE_FAR_SRGB", "on").strip().lower() not in ("off", "0", "false", "no")
 
 
-def write_dds(path, rgb, srgb=False):
+def write_dds(path, rgb, srgb=False, fade=None):
     """encode_dds() to path atomically; returns the file size."""
-    data = encode_dds(rgb, srgb)
+    data = encode_dds(rgb, srgb, fade)
     tmp = staging.tmp_for(path)
     with open(tmp, "wb") as f:
         f.write(data)
