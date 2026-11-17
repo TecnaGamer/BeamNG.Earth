@@ -138,19 +138,24 @@ def clear_props(props, wires, lines, ground=None):
 
 
 def _window(line, lo, hi, reach):
-    """The run of line (k, 2) with its vertices within reach m of the box lo..hi (one vertex more each side), or None."""
-    d = np.maximum(np.maximum(lo - line, line - hi), 0.0)
+    """The run of line (k, 2) resampled every grading.RACEWAY_STEP_M from its start (the stations grading's own
+    smoothing reads) with its samples within reach m of the box lo..hi (one more each side), or None. By the resampled
+    line, not its vertices: a long straight with its vertices far off still passes the box (Codex review of 47edf660)."""
+    import grading
+    dense, _st = grading.resample(np.asarray(line, np.float64)[:, :2], grading.RACEWAY_STEP_M)
+    d = np.maximum(np.maximum(lo - dense, dense - hi), 0.0)
     ok = np.flatnonzero(dnp.hypot(d[:, 0], d[:, 1]) <= reach)
     if not len(ok):
         return None
-    i0, i1 = max(0, int(ok[0]) - 1), min(len(line), int(ok[-1]) + 2)
-    return line[i0:i1] if i1 - i0 >= 2 else None
+    i0, i1 = max(0, int(ok[0]) - 1), min(len(dense), int(ok[-1]) + 2)
+    return dense[i0:i1] if i1 - i0 >= 2 else None
 
 
 def track_surface(frame, elev, races, pts, base):
     """(n,) geodetic m: the drawn surface of the raceways races ([(line, half width)]) at points pts (n, 2) on their
     bands, as grading.Grader.apply lays it (grading.raceway_surface, each raceway's own, read over WINDOW_M of track
-    round the points), base (n,) elsewhere. elev(lat, lon) -> geodetic m (the elevation the tunnels read)."""
+    round the points: 3 sigmas are 30 m, so the window's own ends change nothing there), base (n,) elsewhere.
+    elev(lat, lon) -> geodetic m (the elevation the tunnels read)."""
     import grading
     pts = np.asarray(pts, np.float64).reshape(-1, 2)
     base = np.asarray(base, np.float64)
@@ -159,7 +164,7 @@ def track_surface(frame, elev, races, pts, base):
     lo, hi = pts.min(axis=0), pts.max(axis=0)
     zones = []
     for line, hw in races:
-        win = _window(np.asarray(line, np.float64)[:, :2], lo, hi, WINDOW_M)
+        win = _window(line, lo, hi, WINDOW_M)
         if win is None:
             continue
         got = grading.raceway_surface(frame, elev, win, float(hw) + BAND_MARGIN_M)
@@ -172,57 +177,79 @@ def track_surface(frame, elev, races, pts, base):
     return np.asarray(grading.raceway_ground(pts[:, 0], pts[:, 1], base, zones, margin=1e-6), np.float64)
 
 
+def _track_low(frame, elev, races, pts):
+    """(n,) frame z: the least of the bare ground and the track's drawn surface at points pts (n, 2)."""
+    la, lo, _ = frame.enu_to_geodetic(pts[:, 0], pts[:, 1], 0.0)
+    la, lo = np.asarray(la), np.asarray(lo)
+    raw = np.asarray(elev(la, lo), np.float64)
+    zg = np.minimum(raw, track_surface(frame, elev, races, pts, raw))
+    return np.asarray(frame.geodetic_to_enu(la, lo, zg)[2], np.float64)
+
+
 def dig_part(frame, elev, xy, s, floor, kinds, races, tube_hw, tube_h, full_h):
     """A tunnel part under a raceway dug (module doc): (floor, kinds, cap) or None when no raceway's band meets it.
-    xy (k, 2), s (k,) its line and arc lengths, floor (k,) its solved floor (frame z), kinds its sections (0 open, 1 low
-    arch, 2 full); races [(line, half width)] the raceways round it; tube_hw: its half width to the wall; tube_h: its
-    low tube's least height (roads.TUNNEL_LOW_H / MAJOR_LOW_H), full_h a full tube's (roadmesh.TUNNEL_H); elev(lat,
-    lon) -> geodetic m. cap (k,): the frame z the vault's soil must stay under (the track's surface less DIG_SOIL_M) on
-    the band, +inf elsewhere."""
+    xy (k, 2), s (k,) its line and arc lengths, floor (k,) its solved floor (frame z, its ends the portals' or joints'),
+    kinds its sections (0 open, 1 low arch, 2 full); races [(line, half width)] the raceways round it; tube_hw: its half
+    width to the wall; tube_h: its low tube's least height (roads.TUNNEL_LOW_H / MAJOR_LOW_H), full_h a full tube's
+    (roadmesh.TUNNEL_H); elev(lat, lon) -> geodetic m. cap (k,): the frame z the vault's soil must stay under (the
+    track's surface less DIG_SOIL_M) on the band, +inf elsewhere.
+    A dig that cannot give MIN_TUBE_H under the track everywhere on its band (a part too short for its depth from
+    portals or joints that cannot move, the drop limit) builds no tube at all: the part is a road on the ground, the
+    track's surface over the band (open, cap +inf): the road crosses the track at grade, as an opened underpass did
+    before (Codex review of 47edf660: a 20 m part kept a 2.5 m vault 1.46 m over the track)."""
     xy = np.asarray(xy, np.float64)[:, :2]
     s = np.asarray(s, np.float64)
+    floor = np.asarray(floor, np.float64)
     if not races or len(xy) < 2 or s[-1] > MAX_PART_M:
         return None
     on = near(xy, races, BAND_MARGIN_M + tube_hw)
     if not on.any():
         return None
     out = near(xy, races, BAND_MARGIN_M + tube_hw + PORTAL_OUT_M)
-    # the track over the tube's whole footprint: its centre and both walls, the lowest
+    # the track over the tube's whole footprint at each sample and half way to its neighbours: centre and both walls
     t = np.gradient(xy, axis=0)
     t /= np.maximum(dnp.hypot(t[:, 0], t[:, 1]), 1e-9)[:, None]
     nrm = np.stack([-t[:, 1], t[:, 0]], axis=1)
     k = np.flatnonzero(on)
-    foot = np.concatenate([xy[k], xy[k] + nrm[k] * tube_hw, xy[k] - nrm[k] * tube_hw])
-    la, lo, _ = frame.enu_to_geodetic(foot[:, 0], foot[:, 1], 0.0)
-    raw = np.asarray(elev(np.asarray(la), np.asarray(lo)), np.float64)
-    surf = track_surface(frame, elev, races, foot, raw)
-    zt_geo = np.minimum(raw, surf).reshape(3, -1).min(axis=0)
-    cla, clo, _ = frame.enu_to_geodetic(xy[k, 0], xy[k, 1], 0.0)
-    zt = np.asarray(frame.geodetic_to_enu(np.asarray(cla), np.asarray(clo), zt_geo)[2], np.float64)
+    prv = np.maximum(k - 1, 0)
+    nxt = np.minimum(k + 1, len(xy) - 1)
+    cen = np.concatenate([xy[k], (xy[k] + xy[prv]) / 2, (xy[k] + xy[nxt]) / 2])
+    nr = np.concatenate([nrm[k], nrm[k], nrm[k]])
+    foot = np.concatenate([cen, cen + nr * tube_hw, cen - nr * tube_hw])
+    zt = _track_low(frame, elev, races, foot).reshape(-1, len(k)).min(axis=0)
     kinds = np.asarray(kinds, np.int64)
     th = np.where(kinds[k] == 2, float(full_h), float(tube_h))
     need = np.full(len(xy), np.inf)
-    need[k] = np.maximum(zt - th - DIG_SOIL_M - DIG_SLACK_M, np.asarray(floor, np.float64)[k] - DIG_MAX_DROP_M)
+    need[k] = np.maximum(zt - th - DIG_SOIL_M - DIG_SLACK_M, floor[k] - DIG_MAX_DROP_M)
     import fast
     fast.require(384, "race_dig_floor")
-    f2, k2 = fast._ef.race_dig_floor(np.ascontiguousarray(s), np.ascontiguousarray(floor, np.float64),
+    f2, k2 = fast._ef.race_dig_floor(np.ascontiguousarray(s), np.ascontiguousarray(floor),
                                      np.ascontiguousarray(need), np.ascontiguousarray(out),
                                      np.ascontiguousarray(kinds), DIG_GRADE, DIG_MAX_GRADE, DIG_GAP_M,
                                      DIG_EASE_M)
+    f2, k2 = np.asarray(f2, np.float64), np.asarray(k2, np.int64)
     cap = np.full(len(xy), np.inf)
     cap[k] = zt - DIG_SOIL_M
-    return np.asarray(f2, np.float64), np.asarray(k2, np.int64), cap
+    if float(np.min(cap[k] - f2[k])) >= MIN_TUBE_H:
+        return f2, k2, cap
+    # (no room for a tube: the road on the ground, the track's own surface over the band)
+    la, lo, _ = frame.enu_to_geodetic(xy[:, 0], xy[:, 1], 0.0)
+    la, lo = np.asarray(la), np.asarray(lo)
+    raw = np.asarray(elev(la, lo), np.float64)
+    ground = np.asarray(frame.geodetic_to_enu(la, lo, track_surface(frame, elev, races, xy, raw))[2], np.float64)
+    ground[0], ground[-1] = floor[0], floor[-1]
+    return ground, np.zeros(len(xy), np.int64), np.full(len(xy), np.inf)
 
 
 def tube_height(th, cap, floor, a, b):
     """A section's tube height th (samples a..b inclusive of a part with dig_part's cap and the floor as dug) no taller
-    than the room under the track (cap - floor) where the section passes under one, MIN_TUBE_H at least (below the
-    tube's least height only there)."""
+    than the room under the track (cap - floor) where the section passes under one: never through the track (dig_part
+    leaves at least MIN_TUBE_H there, or no tube)."""
     room = np.asarray(cap[a:b + 1], np.float64) - np.asarray(floor[a:b + 1], np.float64)
     room = room[np.isfinite(room)]
     if not len(room):
         return th
-    return float(min(th, max(float(room.min()), MIN_TUBE_H)))
+    return float(min(th, float(room.min())))
 
 
 def tile_clear(frame, cells, props, wires, elev):

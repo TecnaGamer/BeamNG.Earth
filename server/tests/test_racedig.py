@@ -115,6 +115,100 @@ class DigTest(unittest.TestCase):
         self.assertGreaterEqual(th, racedig.MIN_TUBE_H)
 
 
+    def test_no_room_no_tube(self):
+        # Codex review of 47edf660: a 20 m part whose portals cannot move kept a 2.5 m vault 1.46 m over the track;
+        # now no tube at all: the road on the ground, the track's surface over the band
+        xy = np.stack([np.zeros(11), np.linspace(-10.0, 10.0, 11)], axis=1)
+        s = np.linspace(0.0, 20.0, 11)
+        floor = np.full(11, self.up(9.0))
+        floor2, kinds, cap = racedig.dig_part(self.frame, self.elev, xy, s, floor, np.ones(11, np.int64), self.races,
+                                              3.2, roads.TUNNEL_LOW_H, 6.8)
+        self.assertTrue((kinds == 0).all())
+        self.assertTrue(np.isinf(cap).all())
+        self.assertAlmostEqual(float(floor2[5]), self.up(10.0), delta=1e-6)
+        self.assertEqual(floor2[0], floor[0])
+
+
+def _hump(la, lo):
+    """Flat at 10 m, a 3 m Gaussian hump across x = 0 (sigma 8 m): the track's smoothing takes its top down."""
+    from test_roads import LON, M_LON
+    x = (np.asarray(lo, np.float64) - LON) * M_LON
+    return 10.0 + 3.0 * np.exp(-0.5 * (x / 8.0) ** 2)
+
+
+class WindowTest(unittest.TestCase):
+    def test_a_sparse_long_straight_reads_the_smoothed_surface(self):
+        # Codex review of 47edf660: no vertex of a 600 m straight within the window: the bare ground was read, 3 m on
+        # the hump where the track is drawn about 1.3 m lower
+        import grading
+        from test_roads import FRAME
+        line = np.array([[-300.0, 0.0], [300.0, 0.0]])
+        pts = np.array([[0.0, 0.0], [2.0, 3.0], [-4.0, -5.0]])
+        la, lo, _ = FRAME.enu_to_geodetic(pts[:, 0], pts[:, 1], 0.0)
+        raw = _hump(np.asarray(la), np.asarray(lo))
+        got = racedig.track_surface(FRAME, _hump, [(line, 7.0)], pts, raw)
+        zone = grading.raceway_surface(FRAME, _hump, line, 7.0 + racedig.BAND_MARGIN_M)
+        want = grading.raceway_ground(pts[:, 0], pts[:, 1], raw, [zone], margin=1e-6)
+        self.assertLess(float(np.max(np.abs(got - want))), 0.02)
+        self.assertLess(float(got[0]), float(raw[0]) - 0.5)
+
+
+class TunnelUnderTrackTest(unittest.TestCase):
+    """roads.TunnelProfiles with the dig: a service road's tunnel square under a 14 m raceway on a 6 m embankment."""
+
+    def build(self, half):
+        from test_roads import FRAME, LAT, M_LAT
+        f = features([[(-300.0, 0.0), (300.0, 0.0)], [(0.0, -half), (0.0, half)]], ["raceway", "service"],
+                     flags=[(1, "is_tunnel")], ids=["osm-raceway-000000000001", "t0"])
+
+        flat = getattr(self, "flat", False)
+
+        def elev(la, lo):
+            y = (np.asarray(la, np.float64) - LAT) * M_LAT
+            if flat:
+                return np.full(np.shape(y), 10.0)
+            return 10.0 + np.where(np.abs(y) < 14.0, 6.0, np.maximum(0.0, 6.0 - (np.abs(y) - 14.0) * 0.5))
+        tp = roads.TunnelProfiles(FRAME, lambda key: f, elev)
+        return tp, tp.parts([f], (-128.0, -128.0, 128.0, 128.0)), elev
+
+    def vault_under_track(self, half):
+        with Switch(True):
+            tp, parts, elev = self.build(half)
+            covered = 0
+            from test_roads import FRAME
+            for fid, spec, xy, z, _l in parts:
+                xy = np.asarray(xy, np.float64)[:, :2]
+                th = tp.heights.get(fid, 6.8)
+                band = np.abs(xy[:, 1]) <= 7.0 + racedig.BAND_MARGIN_M + 3.0
+                if not band.any():
+                    continue
+                covered += 1
+                la, lo, _ = FRAME.enu_to_geodetic(xy[band, 0], xy[band, 1], 0.0)
+                top = np.asarray(FRAME.geodetic_to_enu(np.asarray(la), np.asarray(lo),
+                                                       elev(np.asarray(la), np.asarray(lo)))[2])
+                self.assertTrue((np.asarray(z)[band] + th + racedig.DIG_SOIL_M <= top + 1e-6).all(),
+                                (fid, np.asarray(z)[band] + th, top))
+            return covered, tp
+
+    def test_a_long_tube_goes_under_the_track(self):
+        covered, _tp = self.vault_under_track(60.0)
+        self.assertGreater(covered, 0)
+
+    def test_a_short_tube_is_no_tube_through_the_track(self):
+        # (a 20 m mapped part: its portals carried off the band, then a tube under the track or none: never through)
+        self.vault_under_track(10.0)
+
+    def test_a_short_tube_under_a_track_at_grade(self):
+        # the track on the flat ground: 5 m to dig within a few metres of portals that cannot move
+        self.flat = True
+        try:
+            covered, tp = self.vault_under_track(6.0)
+        finally:
+            self.flat = False
+        self.assertEqual(covered, 0, "no room: no tube")
+        self.assertTrue(tp.open, "the road on the ground across the track")
+
+
 class PropsTest(unittest.TestCase):
     def test_props_and_wire_ends_off_the_band(self):
         lines = [(np.array([[-100.0, 0.0], [100.0, 0.0]]), 7.0)]
