@@ -508,8 +508,9 @@ M.CATALOG = {
     { JRI .. 'trees/bush_tropical_2/tro_bush_2_tiny', 5.19 }, { JRI .. 'trees/trees_tropical_2/tro_tree_2_tiny', 6.13 },
     { JRI .. 'trees/trees_tropical_2/tro_tree_2_medium', 18.53 }, { JRI .. 'trees/trees_tropical_1/tro_tree_1_filler_02', 29.62 },
     { JRI .. 'trees/trees_tropical_2/tro_tree_2_tall', 32.28 },
-    -- (the stock survey 2026-11-16) the island's wide-crowned fillers and its second tall tree
-    { JRI .. 'trees/trees_tropical_2/tro_tree_2_filler_04', 24.26 }, { JRI .. 'trees/trees_tropical_2/tro_tree_2_tall_02', 26.98 },
+    -- (the stock survey 2026-11-16) the island's wide-crowned fillers and its second tall tree (not tro_tree_2_filler_04:
+    -- a dome of aerial roots and vines like the thicket's, a hut of a tree; the gallery 2026-11-17)
+    { JRI .. 'trees/trees_tropical_2/tro_tree_2_tall_02', 26.98 },
     { JRI .. 'trees/trees_tropical_2/tro_tree_2_filler_03', 30.15 }, { JRI .. 'trees/trees_tropical_2/tro_tree_2_filler_02', 33.11 },
   },
 }
