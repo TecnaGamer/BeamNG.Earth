@@ -360,6 +360,7 @@ PALM_FROM = None
 K_RAINFOREST = (1, 2)
 K_TROPICS = (1, 2, 3)             # Af Am Aw: the coconut palms' (34)
 REDWOOD_MIN_M = 25.0
+STEPPE_JUNIPER = 0.6
 
 
 def redwood_belt(lat, lon):
@@ -457,6 +458,13 @@ def species_groups(group, height, lat, lon, lcls, koppen, elev, u_broad, u_conif
     # (34) coconut-type palms only in the tropics' climates (Af, Am, Aw): any other palm (California's, Florida's north,
     # the Mediterranean's, the Gulf's) the fan and date palms (the gallery 2026-11-17: the palm group mixed both)
     g[(g == G_PALM) & ~np.isin(k, K_TROPICS)] = G_PALM_DRY
+    # (34) the cold steppes' and deserts' open country outside North America (BSk, BWk: Anatolia, Iran, Central Asia,
+    # Spain's meseta): its low trees junipers (Juniperus excelsa / polycarpos / seravschanica / thurifera; Utah's
+    # shapes, as regional_groups does in the dry West), STEPPE_JUNIPER of them
+    c_ = np.asarray(lcls)
+    steppe = ~na & np.isin(k, K_COLD_ARID) & np.isin(c_, (WC["shrub"], WC["grass"], WC["bare"])) & (h < 9.0)
+    g[steppe & np.isin(g, (G_DECIDUOUS, G_OAK, G_BIRCH, G_CONIFER, G_PINE_EU, G_SPRUCE))
+      & (np.asarray(u_palm) < STEPPE_JUNIPER)] = G_JUNIPER
     # (34) the coast redwoods only in their fog belt (the gallery 2026-11-17: pine_west's tallest were redwoods, drawn
     # for any 25 m+ conifer from Washington to the Southeast's loblolly pines)
     g[(g == G_PINE_WEST) & redwood_belt(lat, lon) & (h >= REDWOOD_MIN_M)] = G_REDWOOD
