@@ -6495,15 +6495,21 @@ class _Planner:
             out[keep] = base.ravel()[keep]
         return out.reshape(shape)
 
-    def road_band(self, lat, lon, reach):
+    def road_band(self, lat, lon, reach, planned_only=False):
         """(n,) bool: the points within reach m of a built road's core (rank GRADE_RANK_BUILT or more: not the dirt
-        roads, tracks or railway beds) planned in the cells that grade them (_keys, planning those not yet planned)."""
+        roads, tracks or railway beds) planned in the cells that grade them (_keys, planning those not yet planned;
+        planned_only: only the cells planned already, as apply's: the AI graph's wide window past NAV_GRADED_M)."""
         lat = np.asarray(lat, np.float64).ravel()
         lon = np.asarray(lon, np.float64).ravel()
         out = np.zeros(lat.shape, bool)
         if not len(lat):
             return out
-        plans, pack = self._plan_set(self._keys(lat, lon), False)
+        keys = self._keys(lat, lon)
+        if planned_only:
+            keys = self._planned_keys(keys)
+            if not keys:
+                return out
+        plans, pack = self._plan_set(keys, False)
         if not plans:
             return out
         e, n, _ = self.frame.geodetic_to_enu(lat, lon, 0.0)
@@ -6866,15 +6872,15 @@ class Grader:
             out[idx] = pl.apply(la[idx], lo[idx], b[idx], lift, roads_only, planned_only)
         return out.reshape(base.shape)
 
-    def road_band(self, lat, lon, reach):
+    def road_band(self, lat, lon, reach, planned_only=False):
         """_Planner.road_band by the points' regions (n,) bool (the anchor plays no part)."""
         lat = np.asarray(lat, np.float64).ravel()
         lon = np.asarray(lon, np.float64).ravel()
         out = np.zeros(lat.shape, bool)
         for pl, idx in self.store.planners_of(lat, lon):
             if idx is None:
-                return pl.road_band(lat, lon, reach)
-            out[idx] = pl.road_band(lat[idx], lon[idx], reach)
+                return pl.road_band(lat, lon, reach, planned_only)
+            out[idx] = pl.road_band(lat[idx], lon[idx], reach, planned_only)
         return out
 
     def deck_ground(self, lat, lon, base):

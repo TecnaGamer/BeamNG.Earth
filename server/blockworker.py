@@ -1002,6 +1002,28 @@ def _nav_bridges(aid, frame, elev):
                               prefer=_chain_store("bridges", roadsmod.BridgeProfiles, elev, _bridge_setup))
 
 
+class _NavBand:
+    """The AI graph's grader for grading.terrain_bumps: its road band past NAV_GRADED_M from the graph's centre (x, y)
+    only from the cells planned already, as the graph's road lift (Grader.apply planned_only): with BNE_TERRAIN_BUMPS
+    on, the band planned every cell of the graph's 2.2 km window (Codex review of PR #1407; that planning held a
+    Windows PC's road processes for minutes, 2026-10-25)."""
+
+    def __init__(self, g, frame, x, y):
+        self.g, self.frame, self.x, self.y = g, frame, x, y
+
+    def road_band(self, lat, lon, reach):
+        lat = np.asarray(lat, np.float64).ravel()
+        lon = np.asarray(lon, np.float64).ravel()
+        e, n, _ = self.frame.geodetic_to_enu(lat, lon, 0.0)
+        near = np.maximum(np.abs(np.asarray(e) - self.x), np.abs(np.asarray(n) - self.y)) <= NAV_GRADED_M
+        out = np.zeros(lat.shape, bool)
+        if near.any():
+            out[near] = self.g.road_band(lat[near], lon[near], reach)
+        if (~near).any():
+            out[~near] = self.g.road_band(lat[~near], lon[~near], reach, planned_only=True)
+        return out
+
+
 def navgraph(aid, lat, lon, zoom, x, y, out_dir, vfs_dir, serial, left_hand, mph, rules):
     """earthd.Server.build_navgraph here (a road-tile process): the AI road graph around (x, y) written to out_dir;
     returns (vfs path, nodes, edges), in a road process (in the server's interpreter it cost 13 s of its CPU in a
@@ -1016,8 +1038,8 @@ def navgraph(aid, lat, lon, zoom, x, y, out_dir, vfs_dir, serial, left_hand, mph
     feats = [cd.layers.get("roads") for cd in mapcells.load_cells(_s.md, keys, ("roads",))]
 
     def elev(la_, lo_):         # the physics ground, lifted under roads (as the road tiles'); past their reach
-        # (NAV_GRADED_M) only under cells planned already
-        z = ground(frame, la_, lo_, _s.dem.sample(la_, lo_, zoom), g)
+        # (NAV_GRADED_M) only under cells planned already, the terrain bumps' road band too (_NavBand)
+        z = ground(frame, la_, lo_, _s.dem.sample(la_, lo_, zoom), _NavBand(g, frame, x, y) if g is not None else None)
         if g is None:
             return z
         la_, lo_, z = np.asarray(la_, np.float64), np.asarray(lo_, np.float64), np.asarray(z, np.float64)
