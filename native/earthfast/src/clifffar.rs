@@ -333,7 +333,7 @@ fn eligible(v: [[f64; 3]; 3]) -> Option<bool> {
     let mut span = 0.0_f64;
     for i in 0..3 {
         let j = (i + 1) % 3;
-        span = span.max(((v[i][0] - v[j][0]).powi(2) + (v[i][1] - v[j][1]).powi(2)).sqrt());
+        span = span.max(((v[i][0] - v[j][0]).sq() + (v[i][1] - v[j][1]).sq()).sqrt());
     }
     // Scale the relief gate with footprint, so refinement cannot erase a wall.
     let drop =

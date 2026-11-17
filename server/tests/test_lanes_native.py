@@ -109,21 +109,21 @@ class LaneFlowTest(unittest.TestCase):
 
     def test_merge_adds_the_ramps_lane(self):
         a, b = self.merge()
-        new = roads._lane_flow_local(a)
+        new = roads._lane_flow_local(a)[0]
         self.assertEqual(new, [None, None, 3])
         self.assertEqual(self.old([a]), new)
         a2, b2 = fresh(a), fresh(b)
         a2.__dict__["_bnge_neighbours"] = lambda: [b2]
-        self.assertEqual(roads._lane_flow_local(a2), self.old([a, b]))
+        self.assertEqual(roads._lane_flow_local(a2)[0], self.old([a, b]))
         b3, a3 = fresh(b), fresh(a)
         b3.__dict__["_bnge_neighbours"] = lambda: [a3]
-        self.assertEqual(roads._lane_flow_local(b3), self.old([b, a]))
+        self.assertEqual(roads._lane_flow_local(b3)[0], self.old([b, a]))
 
     def test_rows_match(self):
         a, _b = self.merge()
         _ids, starts, ends, at = ref.lane_flow_rows(fresh(a), ref.generated_counts(fresh(a)))
         pts, npts, at2 = roads._lane_flow_rows(fresh(a))
-        np.testing.assert_array_equal(at, at2)
+        np.testing.assert_array_equal(at, at2[:, :4])
         np.testing.assert_array_equal(npts, ends - starts)
         np.testing.assert_array_equal(pts[:, :2], a.lonlat[starts])
         np.testing.assert_array_equal(pts[:, 2:], a.lonlat[ends - 1])

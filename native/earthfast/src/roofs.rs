@@ -346,8 +346,8 @@ fn bridge_holes(outer: Vec<P>, mut holes: Vec<Vec<P>>) -> Vec<P> {
         let m = hole[mi];
         let mut order: Vec<usize> = (0..ring.len()).collect();
         order.sort_by(|&i, &j| {
-            let di = (ring[i].0 - m.0).powi(2) + (ring[i].1 - m.1).powi(2);
-            let dj = (ring[j].0 - m.0).powi(2) + (ring[j].1 - m.1).powi(2);
+            let di = (ring[i].0 - m.0).sq() + (ring[i].1 - m.1).sq();
+            let dj = (ring[j].0 - m.0).sq() + (ring[j].1 - m.1).sq();
             di.partial_cmp(&dj).unwrap()
         });
         let edges_ok = |v: P| {
@@ -549,7 +549,7 @@ fn skeleton_faces(loops: &[Vec<P>], gable: bool) -> Option<Faces> {
             let a = &verts[i];
             let b = &verts[a.next];
             let e = a.e_out;
-            let d = { let (p, q, _) = edges[e]; let l = ((q.0 - p.0).powi(2) + (q.1 - p.1).powi(2)).sqrt(); ((q.0 - p.0) / l, (q.1 - p.1) / l) };
+            let d = { let (p, q, _) = edges[e]; let l = ((q.0 - p.0).sq() + (q.1 - p.1).sq()).sqrt(); ((q.0 - p.0) / l, (q.1 - p.1) / l) };
             let (pa, pb) = (at_t(a, now), at_t(b, now));
             let len = (pb.0 - pa.0) * d.0 + (pb.1 - pa.1) * d.1;
             let rate = (b.v.0 - a.v.0) * d.0 + (b.v.1 - a.v.1) * d.1;

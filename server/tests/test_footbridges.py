@@ -61,6 +61,28 @@ class FootbridgeTest(unittest.TestCase):
         street = (((130.0, 0.0), (130.0, 256.0)), "residential")
         self.assertIsNone(railways.tile_mesh(FRAME, 0, 0, [bridge(extra=[street])], flat))
 
+    def test_a_railway_nearby_does_not_hide_the_street(self):
+        """The road revamp's R1 (BNE_FOOT_CLEAR): with a ground railway in the tile the rail's crossers were cut to the
+        roads crossing it at grade, so the footbridge saw no street under it and its slab lay across the lanes
+        (Brisbane's Ipswich Motorway). With the switch it is tested against every carriageway: left out."""
+        # (a street on the valley's side, 3 m down: 2.5 m under the deck; the deck clears the river)
+        f = features([[(100.0, 128.0), (160.0, 128.0)], [(145.0, 0.0), (145.0, 200.0)], [(0.0, 230.0), (256.0, 230.0)]],
+                     ["footway", "residential", "standard_gauge"], ids=["id000", "id001", "id002"],
+                     subtypes=["road", "road", "rail"], flags=[(0, "is_bridge")])
+
+        def slab(mesh):
+            if mesh is None:
+                return False
+            P = mesh[0]
+            return bool(((P[:, 0] > 105) & (P[:, 0] < 155) & (np.abs(P[:, 1] - 128.0) < 3.0)).any())
+        with unittest.mock.patch.object(railways, "FOOT_CLEAR", False):
+            self.assertTrue(slab(railways.tile_mesh(FRAME, 0, 0, [f], valley)), "as before: the slab over the street")
+        with unittest.mock.patch.object(railways, "FOOT_CLEAR", True):
+            self.assertFalse(slab(railways.tile_mesh(FRAME, 0, 0, [f], valley)), "left out")
+        g = features([[(100.0, 128.0), (160.0, 128.0)], [(145.0, 0.0), (145.0, 200.0)]], ["footway", "residential"],
+                     ids=["id000", "id001"], subtypes=["road", "road"], flags=[(0, "is_bridge")])
+        self.assertFalse(slab(railways.tile_mesh(FRAME, 0, 0, [g], valley)), "no railway: left out, as before")
+
     def test_under_a_model_bridge_left_out(self):
         """GitHub #1071: Perth's Elizabeth Quay footbridge is a 3dmr model; the walkway's own deck stood in it."""
         everywhere = lambda xy: np.ones(len(xy), bool)          # noqa: E731

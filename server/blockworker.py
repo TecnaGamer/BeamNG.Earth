@@ -61,9 +61,6 @@ _dem_t = threading.local()
 class _State:
     def __init__(self, cache_dir, offline, roads, grading, road_widths, surface, airports=False, sea=False,
                  gas_stations=False):
-        if os.environ.get("BNGE_WORLD_BUNDLE") and not (roads and grading):
-            from worldbundle import BundleError
-            raise BundleError("Pinned road plans require roads and grading enabled")
         self.cache_dir = cache_dir
         import revisit
         revisit.CACHE_DIR = cache_dir
@@ -1176,6 +1173,7 @@ def _radar_key():
 def _roads_tile_cached(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks, lift, buildings, left_hand, mph, q,
                        gas_stations, buried, lamp_region, country=None, pole_profile=None, de_junctions=False, towns_on=False, wear=None):
     import revisit
+    import roads as roadsmod      # (ROADS_IN_GROUND: a helper's per-client setting, init())
     import threedmr
     from cliffsettings import SETTINGS as cliff_settings
     de = ()                         # (the German junction signs on near Germany: the border data in use too)
@@ -1186,7 +1184,7 @@ def _roads_tile_cached(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks,
                     bool(buildings), bool(left_hand), bool(mph), None if q is None else float(q), bool(gas_stations),
                     _md_versions(bool(buildings)), float(buried), lamp_region, country, cliff_settings.cache_key,
                     pole_profile, threedmr.FEATURE_VERSION, threedmr.local_signature(os.path.dirname(out_dir)),
-                    *_radar_key(), bool(towns_on), roadwear.wear_key(wear, lat),
+                    *_radar_key(), bool(towns_on), roadwear.wear_key(wear, lat), bool(roadsmod.ROADS_IN_GROUND),
                     *_surf_tags(geodesy.EnuFrame(lat, lon), *roadsmod_tile_bbox(tx, ty)),
                     _nyc_key(geodesy.EnuFrame(lat, lon), roadsmod_tile_bbox(tx, ty)) if buildings else None,
                     bool(de_junctions), *de)     # (the German junction parts last)
@@ -3593,8 +3591,8 @@ def far_global_tile(z, x, y, zoom, ref_zoom, layout, tex):
 
 def _imagery(tex):
     """This process's imagery.Imagery for the server's chain settings (tex: chain, tone, leaf_on, season_mode): the
-    imagery tiles on disk alone (strict: a missing tile fails the render), or, for a compute-sharing helper
-    (tex["online"], peerwork.py), fetched as needed."""
+    imagery tiles on disk alone (strict: a missing tile fails the render), or, with tex["online"], fetched as
+    needed."""
     import imagery as imagerymod
     online = bool(tex.get("online"))
     fin = tuple(sorted((tex.get("fin") or {}).items()))
@@ -3622,8 +3620,20 @@ def roadsurf_area(lat0, lon0, lat1, lon1):
     return len(roadsurf.measure_area(getattr(_s, "md", None), lat0, lon0, lat1, lon1))
 
 
+def _base_veg():
+    """This process's Vegetation for the generated ground's tree floor (genground.tree_floor: its cache read, cells never
+    built here), as _veg_geo's."""
+    import vegetation as vegetationmod
+    if getattr(_s, "veg", None) is None and getattr(_s, "md", None) is not None:
+        v = vegetationmod.Vegetation(_s.md, _s.cache_dir)
+        v.dem = _s.dem
+        v.surface, v.widths = _s.surface, _s.widths
+        _s.veg = v
+    return getattr(_s, "veg", None)
+
+
 def base_photo(lat, lon, x0, y0, size, px, tex, buildings, rock_zoom, path, cache, fuel_pads=None, out_px=None,
-               quick=False):
+               quick=False, trees=False):
     """earthd.Server.write_base here, for a server without its imagery analyses (a small machine): the block's base
     photo from the imagery tiles on disk, its building footprints filled and its cliffs as rock, written to path
     (PNG) and packed into the game's terrain texture cache (cache: terraincache.base_entry's arguments but the rgb).
@@ -3649,7 +3659,8 @@ def base_photo(lat, lon, x0, y0, size, px, tex, buildings, rock_zoom, path, cach
     if genground.ON and not quick:      # (earthd.Server.write_base)
         try:
             rgb, used = genground.render(im, frame, x0, y0, size, px, getattr(_s, "md", None),
-                                         getattr(_s, "surface", None), _s.widths, pending)
+                                         getattr(_s, "surface", None), _s.widths, pending, _base_veg() if trees else None,
+                                         getattr(_s, "dem", None))
         except imagerymod.ImageryError:
             return None
         except Exception as e:      # (the Sentinel-2 photo alone then)
@@ -3970,18 +3981,26 @@ def _accounted(fn):
             now = time.monotonic()
             if now - _cpu_logged[0] >= CPU_LOG_S:
                 _cpu_logged[0] = now
-                shared = [g.shared.stats for g in list(getattr(_s, "graders", {}).values())
-                          if g is not None and g.shared is not None]
-                if os.environ.get("BNGE_DEM_STATS") and getattr(_s, "dem", None) is not None:
-                    # (measuring the decoded DEM mirror: its tiles written here vs the decodes it saved here)
-                    st = getattr(_s.dem, "stats", {}) or {}
-                    log.info("worker %d dem: %s", os.getpid(), {k: v for k, v in st.items() if k.startswith("dem:")})
-                log.debug("worker %d cpu: %s%s", os.getpid(),
-                          ", ".join(f"{k} {v[0]} jobs {v[1]:.1f} s" for k, v in sorted(_cpu.items())),
-                          "; shared road plans " + ", ".join(f"{k} {sum(st[k] for st in shared):.0f}"
-                                                             for k in ("read", "written", "waited", "wait_s"))
-                          if shared else "")
+                try:
+                    _log_cpu()
+                except Exception as e:     # (a log line never fails the job it follows: a test's stand-in state, 2026-11-16)
+                    log.debug("worker cpu log: %s", e)
     return run
+
+
+def _log_cpu():
+    """The periodic per-worker CPU line (_accounted)."""
+    shared = [g.shared.stats for g in list(getattr(_s, "graders", {}).values())
+              if g is not None and g.shared is not None]
+    if os.environ.get("BNGE_DEM_STATS") and getattr(_s, "dem", None) is not None:
+        # (measuring the decoded DEM mirror: its tiles written here vs the decodes it saved here)
+        st = getattr(_s.dem, "stats", {}) or {}
+        log.info("worker %d dem: %s", os.getpid(), {k: v for k, v in st.items() if k.startswith("dem:")})
+    log.debug("worker %d cpu: %s%s", os.getpid(),
+              ", ".join(f"{k} {v[0]} jobs {v[1]:.1f} s" for k, v in sorted(_cpu.items())),
+              "; shared road plans " + ", ".join(f"{k} {sum(st[k] for st in shared):.0f}"
+                                                 for k in ("read", "written", "waited", "wait_s"))
+              if shared else "")
 
 
 build = _accounted(build)

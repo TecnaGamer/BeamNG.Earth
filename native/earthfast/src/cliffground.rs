@@ -64,7 +64,7 @@ fn detail(w: usize, h: usize, channels: usize, pixels: &[u8]) -> Vec<u8> {
     let mut values: Vec<f64> = luminance.iter().zip(low).map(|(v, l)| (v - l) / (l + 0.1)).collect();
     let count = values.len() as f64;
     let mean = values.iter().sum::<f64>() / count;
-    let std = (values.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / count)
+    let std = (values.iter().map(|v| (v - mean).sq()).sum::<f64>() / count)
         .sqrt()
         .max(MIN_STD);
     for v in &mut values {

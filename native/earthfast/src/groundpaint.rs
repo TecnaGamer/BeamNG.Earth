@@ -5,6 +5,7 @@
 
 use numpy::{PyReadonlyArray1, PyReadonlyArray2};
 use pyo3::prelude::*;
+use crate::dm::Dm;
 
 /// mask (h, w) set where a sample (col c, row r: at grid coordinate (c, r)) lies within hw[k] of segment k of segs
 /// (m, 4) [c0, r0, c1, r1] (grid coordinates). Returns how many samples were newly set.
@@ -208,7 +209,7 @@ pub fn dash_pieces<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, dash: 
         if open { out.push(at(0)); }
         for i in 0..k - 1 {
             let (a, b) = (at(i), at(i + 1));
-            let len = ((b[0] - a[0]).powi(2) + (b[1] - a[1]).powi(2)).sqrt();
+            let len = ((b[0] - a[0]).sq() + (b[1] - a[1]).sq()).sqrt();
             if len < 1e-12 { continue; }
             let mut t0 = 0.0;           // metres into this segment done
             loop {
@@ -264,25 +265,32 @@ pub fn value_noises<'py>(py: Python<'py>, x: PyReadonlyArray1<'py, f64>, y: PyRe
     let (x, y) = (x.as_array(), y.as_array());
     let outs: Vec<Vec<f64>> = py.detach(|| {
         let n = x.len().min(y.len());
-        let mut outs: Vec<Vec<f64>> = seeds.iter().map(|_| Vec::with_capacity(n)).collect();
-        for i in 0..n {
-            let (xi, yi) = (x[i], y[i]);
-            let (x0, y0) = (xi.floor(), yi.floor());
-            let (fx, fy) = (xi - x0, yi - y0);
-            let fx = fx * fx * (3.0 - 2.0 * fx);
-            let fy = fy * fy * (3.0 - 2.0 * fy);
-            let (ix, iy) = (x0 as i64, y0 as i64);
-            for (s, out) in seeds.iter().zip(outs.iter_mut()) {
-                let a = noise_hash(ix, iy, *s);
-                let b = noise_hash(ix + 1, iy, *s);
-                let c = noise_hash(ix, iy + 1, *s);
-                let d = noise_hash(ix + 1, iy + 1, *s);
-                let top = (b - a) * fx + a;
-                let bot = (d - c) * fx + c;
-                out.push((bot - top) * fy + top);
-            }
-        }
-        outs
+        // (each point from its own inputs: in parts on the kernels' threads, the same bits as one thread; the
+        // generated ground's 1.3 million texels a block, 2026-11-16)
+        const PART: usize = 16384;
+        let threads = crate::par::threads_for(n, 2 * PART);
+        seeds.iter().map(|&s| {
+            let mut out = vec![0.0f64; n];
+            crate::par::rows(&mut out, PART, threads, |part, row| {
+                for (k, o) in row.iter_mut().enumerate() {
+                    let i = part * PART + k;
+                    let (xi, yi) = (x[i], y[i]);
+                    let (x0, y0) = (xi.floor(), yi.floor());
+                    let (fx, fy) = (xi - x0, yi - y0);
+                    let fx = fx * fx * (3.0 - 2.0 * fx);
+                    let fy = fy * fy * (3.0 - 2.0 * fy);
+                    let (ix, iy) = (x0 as i64, y0 as i64);
+                    let a = noise_hash(ix, iy, s);
+                    let b = noise_hash(ix + 1, iy, s);
+                    let c = noise_hash(ix, iy + 1, s);
+                    let d = noise_hash(ix + 1, iy + 1, s);
+                    let top = (b - a) * fx + a;
+                    let bot = (d - c) * fx + c;
+                    *o = (bot - top) * fy + top;
+                }
+            });
+            out
+        }).collect()
     });
     outs.into_iter().map(|v| v.into_pyarray(py)).collect()
 }

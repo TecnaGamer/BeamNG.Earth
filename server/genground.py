@@ -59,10 +59,10 @@ import revisit
 log = logging.getLogger("earthd.genground")
 
 ON = os.environ.get("BNE_GEN_GROUND", "off").strip().lower() in ("on", "1", "yes", "true")
-NEED = 309                  # earthfast gg_* / gen_ground (stage 2: lines, surfaces, patterns; linear axes)
+NEED = 314                  # earthfast gg_* / gen_ground (stage 2: lines, surfaces, patterns; linear axes)
 # m round a block its generated ground is made over and cut from: a texel's colour reads the inputs this far round
 # (genground.rs: windows FAR_R_M 48 + the lattice and purity margins), so overlapping blocks agree
-HALO_M = 64.0
+HALO_M = 128.0
 # the photo's pending mark while some map data it reads is not on disk (earthd.Server.base_ready / _base_kept)
 GEN_PENDING = ("genground_data",)
 LAYERS = ("land_use", "water", "infrastructure", "canopy", "landcover", "roads", "buildings")
@@ -138,12 +138,135 @@ def chain(names):
 
 
 def _grid(frame, x0, y0, size, px):
-    """(lat, lon) (px, px) of the texel centres of [x0, x0 + size]^2 of frame, row 0 = north (imagery.render's)."""
+    """(lat, lon, mx, my) (px, px) of the texel centres of [x0, x0 + size]^2 of frame, row 0 = north (imagery.render's),
+    with their Web-Mercator metres (the canopy rasters'): earthfast.gg_grid on the kernels' threads, the numbers
+    frame.enu_to_geodetic and numpy / dnp gave (tests: test_genground_v3)."""
     t = size / px
-    k = (np.arange(px) + 0.5) * t
+    if hasattr(frame, "origin") and hasattr(frame, "rot"):
+        return _grid_rect(frame, x0, y0 + size, t, px, px)
+    k = (np.arange(px) + 0.5) * t   # (a stand-in frame: its own enu_to_geodetic)
     E, N = np.meshgrid(x0 + k, y0 + size - k)
     lat, lon, _ = frame.enu_to_geodetic(E, N, 0.0)
-    return np.asarray(lat, np.float64), np.asarray(lon, np.float64)
+    lat, lon = np.asarray(lat, np.float64), np.asarray(lon, np.float64)
+    return lat, lon, R_MERC * np.radians(lon), R_MERC * dnp.log(dnp.tan(np.pi / 4 + np.radians(lat) / 2))
+
+
+def _grid_rect(frame, x0, top, t, rows, cols):
+    return fast._ef.gg_grid(np.asarray(frame.origin, np.float64), np.asarray(frame.rot, np.float64), float(x0),
+                            float(top), float(t), int(rows), int(cols))
+
+
+# The per-texel fields that are pure functions of the texel's place (its lat / lon, Web-Mercator metres, land-cover
+# class read at its warped point, its land-cover kind): the last block's kept, and a block that overlaps it (the next
+# block along a drive: 1,024 of its 1,152 columns) computes only the strips it adds (stage 3: they were ~60 % of
+# inputs()'s CPU). Exact: at 1 m texels on the anchor's half-metre texel grid the centres are the same doubles
+# whichever block names them (x0 + (j + 0.5) t: halves of integers, exact), so the fields are the same bits; kept only
+# when their land cover was complete (a class read before its cell came is not kept), and reused only with the same
+# frame, texel size, Surface, map-data versions and, for every cell both squares read, the very same land-cover Raster
+# object (held by the cache, so its identity cannot be reused; Codex review of f25f5d5f..5cff9200).
+FIELD_NAMES = ("lat", "lon", "mx", "my", "classes", "base")
+_FIELDS_LOCK = threading.Lock()
+_fields_last = []           # [(key, x0, top, rows, cols, {name: array})]
+
+
+def _fields_rect(frame, x0, top, t, rows, cols, surface):
+    lat, lon, mx, my = _grid_rect(frame, x0, top, t, rows, cols)
+    complete = True
+    if surface is not None:
+        classes, complete = surface.classes(lat, lon)
+    else:
+        classes = np.zeros(lat.shape, np.uint8)
+    base = base_kinds(classes, lat, lon)
+    return {"lat": lat, "lon": lon, "mx": mx, "my": my, "classes": np.asarray(classes, np.uint8),
+            "base": np.asarray(base, np.uint8)}, bool(complete)
+
+
+def _versions_key(surface):
+    """The map data's versions (mapdata.versions(): the land cover's release among them) as a string, or None."""
+    md = getattr(surface, "md", None)
+    try:
+        return json.dumps(md.versions(), sort_keys=True, default=str) if md is not None else None
+    except Exception:           # (no versions: no reuse rather than a wrong one)
+        return object()
+
+
+WARP_MARGIN_DEG = 0.0005        # (the land cover is read up to ~11 m off each texel: surface.WARP_OCTAVES)
+
+
+def _land_cover_sources(frame, x0, top, size, surface):
+    """{cell: its land-cover Raster object} of the cells the square's texels read (the square and WARP_MARGIN_DEG round
+    it), held by identity: a cell re-read (another version, decoded again) is another object. None without a
+    Surface's cache to ask (then nothing is reused)."""
+    if surface is None:
+        return {}
+    cached = getattr(surface, "_cached", None)
+    if cached is None:
+        return None
+    la, lo, _ = frame.enu_to_geodetic(np.array([x0, x0 + size]), np.array([top - size, top]), 0.0)
+    keys = mapcells.cells_for_bbox(float(np.min(la)) - WARP_MARGIN_DEG, float(np.min(lo)) - WARP_MARGIN_DEG,
+                                   float(np.max(la)) + WARP_MARGIN_DEG, float(np.max(lo)) + WARP_MARGIN_DEG)
+    return {str(k): cached(k) for k in keys}
+
+
+def _same_sources(old, new):
+    """Whether every cell both squares read has the very same land-cover Raster object (and neither is missing)."""
+    if old is None or new is None:
+        return False
+    for k in old.keys() & new.keys():
+        if old[k] is None or new[k] is None or old[k] is not new[k]:
+            return False
+    return True
+
+
+def texel_fields(frame, x0, y0, size, px, surface):
+    """({FIELD_NAMES: (px, px) arrays}, complete) of the square (see the cache's note above)."""
+    t = size / px
+    top = y0 + size
+    if not (hasattr(frame, "origin") and hasattr(frame, "rot")):
+        lat, lon, mx, my = _grid(frame, x0, y0, size, px)
+        complete = True
+        if surface is not None:
+            classes, complete = surface.classes(lat, lon)
+        else:
+            classes = np.zeros(lat.shape, np.uint8)
+        return {"lat": lat, "lon": lon, "mx": mx, "my": my, "classes": classes,
+                "base": base_kinds(classes, lat, lon)}, bool(complete)
+    exact = t == 1.0 and float(2 * x0).is_integer() and float(2 * top).is_integer()
+    key = (np.asarray(frame.origin, np.float64).tobytes(), np.asarray(frame.rot, np.float64).tobytes(), t,
+           id(surface), _versions_key(surface))
+    sources = _land_cover_sources(frame, x0, top, size, surface) if exact else None
+    prev = None
+    if exact:
+        with _FIELDS_LOCK:
+            prev = _fields_last[0] if _fields_last else None
+    out, complete = None, True
+    if prev is not None and prev[0] == key and _same_sources(prev[6], sources):
+        _k, ox0, otop, orows, ocols, old, _src = prev
+        dc, dr = x0 - ox0, otop - top               # (new texel (i, j) is the old (i + dr, j + dc))
+        if float(dc).is_integer() and float(dr).is_integer():
+            dc, dr = int(dc), int(dr)
+            r_lo, r_hi = max(0, -dr), min(px, orows - dr)
+            c_lo, c_hi = max(0, -dc), min(px, ocols - dc)
+            if r_lo < r_hi and c_lo < c_hi:
+                out = {}
+                for n in FIELD_NAMES:
+                    a = np.empty((px, px), old[n].dtype)
+                    a[r_lo:r_hi, c_lo:c_hi] = old[n][r_lo + dr:r_hi + dr, c_lo + dc:c_hi + dc]
+                    out[n] = a
+                strips = [(0, r_lo, 0, px), (r_hi, px, 0, px), (r_lo, r_hi, 0, c_lo), (r_lo, r_hi, c_hi, px)]
+                for a0, a1, b0, b1 in strips:
+                    if a1 <= a0 or b1 <= b0:
+                        continue
+                    got, ok = _fields_rect(frame, x0 + b0 * t, top - a0 * t, t, a1 - a0, b1 - b0, surface)
+                    complete = complete and ok
+                    for n in FIELD_NAMES:
+                        out[n][a0:a1, b0:b1] = got[n]
+    if out is None:
+        out, complete = _fields_rect(frame, x0, top, t, px, px, surface)
+    if exact:
+        with _FIELDS_LOCK:
+            _fields_last[:] = [(key, x0, top, px, px, out, sources)] if complete and sources is not None else []
+    return out, complete
 
 
 def _cells(lat, lon):
@@ -227,7 +350,7 @@ def _data_cells(frame, x0, y0, size):
     return keys, ring
 
 
-def data_ready(md, frame, x0, y0, size, surface=None):
+def data_ready(md, frame, x0, y0, size, surface=None, veg=None, dem=None):
     """Every layer the generated ground reads (LAYERS) on disk, or given up (gave_up), for the cells under the square
     and its halo, and the land use of the cells round them (never fetches; what is missing is asked for again when its
     backoff allows: base_ready polls this): a photo made without some of them (GEN_PENDING) is made again then."""
@@ -240,7 +363,85 @@ def data_ready(md, frame, x0, y0, size, surface=None):
             continue
         _ask(k, layer, surface)
         ready = ready and gave_up(k, layer)
-    return ready
+    if veg is not None:         # (the game's trees: their cells built by the vegetation, not here; given up likewise)
+        for k in keys:
+            if veg.ready(k) or gave_up(k, TREES_LAYER):
+                continue
+            _ask_trees(veg, k)
+            ready = ready and gave_up(k, TREES_LAYER)
+    return shade_ready(frame, x0, y0, size, keys, dem) and ready
+
+
+# (stage 4) The forest floor under the game's own trees: vegetation.Vegetation's placed trees (the same cells the tree
+# tiles draw, read from its cache, never built here), each a disc of its crown's radius and FLOOR_FADE_M of fade
+# (earthfast.gg_discs). The trees the mod shows out to its 700 m ring at the Normal density (rank < FLOOR_RANK,
+# trees.lua RINGS): nearer it shows more of them, standing on open ground at their edges. A cell not built yet: the
+# canopy's core alone (>= 3 m, no skirt) and the photo is made again once it is (GEN_PENDING, data_ready).
+TREES_LAYER = "trees"
+
+
+def _ask_trees(veg, k):
+    """A vegetation cell the generated ground waits for: built in the background (Vegetation.build_soon: the warm
+    thread, after the player's own cells, a bounded queue) when its backoff allows, so a block outside the pose's
+    warm-up goes final after one redo instead of redoing its photo at every retry until given up (the backstop)."""
+    if not _ask(k, TREES_LAYER, None):
+        return
+    soon = getattr(veg, "build_soon", None)
+    if soon is not None:
+        try:
+            soon(k)
+        except Exception as e:      # (asked again after the backoff)
+            log.debug("genground: trees of %s: build_soon: %s: %s", k, type(e).__name__, e)
+FLOOR_RANK = 0.6
+FLOOR_FADE_M = 2.0
+FLOOR_REACH_M = 12.0            # (a crown's radius at most: the cells round the square whose trees reach into it)
+
+
+def tree_floor(frame, x0, y0, size, px, veg, missing):
+    """(floor (px, px) uint8 or None, mode): where the game's trees stand (mode 2), None and mode 1 while a cell's trees
+    are not built (each such cell on missing, a revisit fault), None and mode 0 without trees (the canopy's own colour:
+    nothing is drawn over it)."""
+    if veg is None:
+        return None, 0
+    import vegetation as vegetationmod
+    t = size / px
+    top = y0 + size
+    la, lo, _ = frame.enu_to_geodetic(np.array([x0 - FLOOR_REACH_M, x0 + size + FLOOR_REACH_M]),
+                                      np.array([y0 - FLOOR_REACH_M, top + FLOOR_REACH_M]), 0.0)
+    lat_lo, lat_hi, lon_lo, lon_hi = float(np.min(la)), float(np.max(la)), float(np.min(lo)), float(np.max(lo))
+    keys = mapcells.cells_for_bbox(lat_lo, lon_lo, lat_hi, lon_hi)
+    cells, waiting = [], False
+    for k in keys:
+        if not veg.ready(k):
+            if not gave_up(k, TREES_LAYER):
+                _ask_trees(veg, k)      # (every cell it waits for asked at once)
+                missing.append((k, TREES_LAYER))
+                waiting = True
+            continue            # (given up: its trees left out)
+        if waiting:
+            continue
+        try:
+            cells.append(veg.cell(k))
+        except Exception as e:  # (unreadable: as not built)
+            log.debug("genground: trees of %s: %s: %s", k, type(e).__name__, e)
+            missing.append((k, TREES_LAYER))
+            waiting = True
+    if waiting:
+        revisit.fault()
+        return None, 1
+    floor = np.zeros((px, px), np.uint8)
+    for it in cells:
+        lat_, lon_ = np.asarray(it.lat), np.asarray(it.lon)
+        kd = np.asarray(it.kind)
+        sel = (((kd == vegetationmod.KIND_TREE) | (kd == vegetationmod.KIND_BUSH)) & (np.asarray(it.rank) < FLOOR_RANK)
+               & (lat_ >= lat_lo) & (lat_ <= lat_hi) & (lon_ >= lon_lo) & (lon_ <= lon_hi))   # (the square's own)
+        if not sel.any():
+            continue
+        e, n, _ = frame.geodetic_to_enu(np.asarray(it.lat, np.float64)[sel], np.asarray(it.lon, np.float64)[sel], 0.0)
+        fast._ef.gg_discs(floor, np.ascontiguousarray((np.asarray(e, np.float64) - x0) / t),
+                          np.ascontiguousarray((top - np.asarray(n, np.float64)) / t),
+                          np.ascontiguousarray(np.asarray(it.radius, np.float64)[sel] / t), float(FLOOR_FADE_M / t))
+    return floor, 2
 
 
 def base_kinds(classes, lat, lon):
@@ -450,22 +651,53 @@ def polygons(frame, x0, y0, size, px, feats_list, more=None):
     return poly, np.asarray(kinds, np.uint8), np.ascontiguousarray(dirs), np.asarray(phases, np.float64)
 
 
+def _memo(f, name, make):
+    """make() kept on the Features object f (a decoded map-data layer: immutable, shared by the blocks that read its
+    cell): the tags' decisions are made once per layer, not again for every block (stage 3)."""
+    d = getattr(f, "__dict__", None)
+    if d is None:
+        return make()
+    got = d.get(name)
+    if got is None:
+        got = d[name] = make()
+    return got
+
+
 def line_items(roads_list, water_list, infra_list):
     """[(order, id, kind, half m, Features, row)] of the lines the ground draws: railway ballast (0), paths, tracks and
     unpaved drives (1), hedges and tree rows (2), streams and ditches (3), piers (4), later orders over earlier. Not
-    underground or on a bridge (a road's layer other than 0, a waterway's tunnel or culvert)."""
+    underground or on a bridge (a road's layer other than 0, a waterway's tunnel or culvert). Each layer's decisions are
+    made once (_memo)."""
     out = []
-    for f in roads_list:
-        if f is None or not len(f):
-            continue
-        for i in np.flatnonzero(np.asarray(f.kind) == 2):
+    for layer, fs in (("roads", roads_list), ("infrastructure", infra_list), ("water", water_list)):
+        for f in fs:
+            if f is None or not len(f):
+                continue
+            out.extend((o, fid, k, h, f, i)
+                       for o, fid, k, h, i in _memo(f, "_gg_lines_v1", lambda f=f, layer=layer: _line_rows(layer, f)))
+    return out
+
+
+def _line_rows(layer, f):
+    """line_items' [(order, id, kind, half m, row)] of one layer's Features."""
+    out = []
+    if layer == "roads":
+        lines_ = np.flatnonzero(np.asarray(f.kind) == 2)
+        cls_all = f.attrs.get("class")
+        sub_all = f.attrs.get("subtype")
+        if cls_all is not None and len(lines_):      # (the candidates by class at once: thousands of road segments)
+            c = np.char.strip(np.char.lower(np.asarray(cls_all, str)[lines_]))
+            s = (np.char.strip(np.char.lower(np.asarray(sub_all, str)[lines_])) if sub_all is not None
+                 else np.full(len(lines_), ""))
+            lines_ = lines_[(s == "rail") | np.isin(c, list(LINE_ROADS)) | (c == "service")]
+        for i in lines_:
             cls = _attr(f, "class", i) or ""
             sub = _attr(f, "subtype", i) or ""
             try:
-                layer = float(_attr(f, "osm_layer", i) or 0.0)
+                level = float(_attr(f, "osm_layer", i) or 0.0)
             except ValueError:
-                layer = 0.0
-            if layer != 0:          # (underground, or a bridge: the ground under it is not the line)
+                level = 0.0
+            if level != 0:          # (underground, or a bridge: the ground under it is not the line)
                 continue
             surf = _attr(f, "osm_surface", i)
             width = _width(_attr(f, "osm_width", i))
@@ -474,33 +706,29 @@ def line_items(roads_list, water_list, infra_list):
                 if cls in ("subway", "tram", "funicular") or rw in ("subway", "tram", "abandoned", "razed",
                                                                    "proposed", "construction"):
                     continue
-                out.append((0, str(f.ids[i]), GRAVEL, RAIL_HALF_M, f, i))
+                out.append((0, str(f.ids[i]), GRAVEL, RAIL_HALF_M, i))
             elif cls in LINE_ROADS:
                 kind, half = LINE_ROADS[cls]
                 if surf in SURFACE_KIND:
                     kind = SURFACE_KIND[surf]
-                out.append((1, str(f.ids[i]), kind, width / 2 if width else half, f, i))
+                out.append((1, str(f.ids[i]), kind, width / 2 if width else half, i))
             elif cls == "service" and surf in UNPAVED:
                 half = width / 2 if width else SERVICE_HALF.get(_attr(f, "osm_service", i) or "", 2.0)
                 out.append((1, str(f.ids[i]), GRAVEL if surf not in ("grass", "dirt", "ground", "earth", "mud")
-                            else PATH, half, f, i))
-    for f in infra_list:
-        if f is None or not len(f):
-            continue
+                            else PATH, half, i))
+    elif layer == "infrastructure":
         for i in np.flatnonzero(np.asarray(f.kind) == 2):
             tags = _tags(f, i)
             cls = _attr(f, "class", i) or ""
             if cls == "hedge" or tags.get("barrier") == "hedge":
-                out.append((2, str(f.ids[i]), TREE, HEDGE_HALF_M, f, i))
+                out.append((2, str(f.ids[i]), TREE, HEDGE_HALF_M, i))
             elif tags.get("natural") == "tree_row":
-                out.append((2, str(f.ids[i]), TREE, TREE_ROW_HALF_M, f, i))
+                out.append((2, str(f.ids[i]), TREE, TREE_ROW_HALF_M, i))
             elif cls == "pier" or tags.get("man_made") == "pier":
                 # (a pier's deck over the water: built ground, as INFRA_KIND's pier polygons; drawn after the water)
                 width = _width(tags.get("width"))
-                out.append((4, str(f.ids[i]), BUILT, width / 2 if width else PIER_HALF_M, f, i))
-    for f in water_list:
-        if f is None or not len(f):
-            continue
+                out.append((4, str(f.ids[i]), BUILT, width / 2 if width else PIER_HALF_M, i))
+    else:
         for i in np.flatnonzero(np.asarray(f.kind) == 2):
             tags = _tags(f, i)
             if tags.get("tunnel") or str(tags.get("location") or "") == "underground":
@@ -511,7 +739,7 @@ def line_items(roads_list, water_list, infra_list):
             if half is None:
                 continue
             width = _width(tags.get("width"))
-            out.append((3, str(f.ids[i]), WATER, width / 2 if width else half, f, i))
+            out.append((3, str(f.ids[i]), WATER, width / 2 if width else half, i))
     return out
 
 
@@ -549,14 +777,12 @@ def lines(frame, x0, y0, size, px, roads_list, water_list, infra_list):
     return line, np.asarray(kinds, np.uint8)
 
 
-def canopy_grid(lat, lon, rasters):
-    """The canopy height (m, uint8; CANOPY_NODATA where none) at the texels from the cells' canopy Rasters (EPSG:3857,
-    nearest pixel)."""
-    out = np.full(lat.shape, CANOPY_NODATA, np.uint8)
+def canopy_grid(mx, my, rasters):
+    """The canopy height (m, uint8; CANOPY_NODATA where none) at the texels (Web-Mercator metres mx, my: _grid's)
+    from the cells' canopy Rasters (EPSG:3857, nearest pixel)."""
+    out = np.full(mx.shape, CANOPY_NODATA, np.uint8)
     if not rasters:
         return out
-    mx = R_MERC * np.radians(lon)
-    my = R_MERC * dnp.log(dnp.tan(np.pi / 4 + np.radians(lat) / 2))
     for r in rasters:
         if r is None:
             continue
@@ -567,19 +793,441 @@ def canopy_grid(lat, lon, rasters):
     return out
 
 
-def inputs(frame, x0, y0, size, px, md, surface, widths=None):
+# (stage 5) The capture sun's shadows out of the Sentinel-2 colour (the user, 2026-11-16: "As well as any shadows that
+# appear from mountains and buildings"; "better methods of shadow removal for harsh shadows"; the Codex report
+# .claude/work/codex-harsh-shadows-2026-11-16.md, its rank 1 and a limited rank 3): the game lights the ground again,
+# so the photo's slope shading, mountain shadows and building shadows doubled up. earthfast ggshade.rs:
+# - the sun per data cell (z14, ~2 km; its texels relit with it wherever a block lies: every block alike): Sentinel-2
+#   flies at about 10:30 local solar time, the composite mixes dates, so the candidates are S2_TIMES x every DOY_STEP
+#   days, scored on the cell's photo (gg_sun_fit): Pearson's r of its luminance with the DEM's lam x lit (gate R2_MIN,
+#   relief at least RELIEF_MIN_M) and, independently (a flat city is not skipped by the terrain's gate), the Matthews
+#   correlation of the buildings' and canopy's predicted shadows with the open ground's dark texels (gate MCC_MIN,
+#   SHADOW_MIN texels); the shadow / lit ratio k measured across the predicted shadows' edges;
+# - per block (gg_relight): the matte (geometry where a shadow may be, the image how dark), the relight, the lost
+#   texels filled from the kind's lit texels (gen_ground's gap table). Roofs, crowns and water are not relit; roads are.
+SHADE_VERSION = 1
+SHADE_DEM_Z = 12                # (Mapterhorn is complete on land to here: the far field's tiles)
+SHADE_NODE = 16                 # texels between the block's terrain nodes (16 m at its 1 m texels)
+SHADE_PAD_M = 1536.0            # the terrain's march: a 1000 m ridge's shadow down to a 33 degree sun
+SHADE_REACH_M = 88.0            # buildings' and canopy's shadows at most this long (the sweep's heights capped)
+FIT_RES_B = 4.0                 # the fit's buildings / canopy grid (m)
+FIT_RES_T = 32.0                # the fit's terrain grid (m)
+FIT_COARSE = 8                  # FIT_RES_T / FIT_RES_B
+R2_MIN = 0.25                   # the terrain's slope shading taken out from here (its Lambert term unconfirmed per texel)
+R_CAST_MIN = 0.3                # ... its cast shadows from here (each confirmed by the image: the matte)
+RELIEF_MIN_M = 30.0
+MCC_MIN = 0.2
+SHADOW_MIN = 2000
+OCC_MIN = 500                   # 4 m texels of buildings or canopy (>= 2 m) for the buildings' fit
+K_DEFAULT = (0.40, 0.42, 0.55)  # shadow / lit (r, g, b) without enough of an edge to measure
+K_MIN_COUNT = 200
+S2_TIMES = (10.0, 10.5, 11.0)
+DOY_STEP = 12
+EL_MIN_DEG = 15.0
+SHADE_LAYER = "shade"
+LOST = 0x20000000               # (gen_ground's mark on a region's texel it fills from the kind's lit texels round it)
+FIT_PARTIAL_S = 60.0            # a fit made while its photo's tiles were still coming: made again after this
+# the kinds relit (not NONE, TREE, WATER, ROOF, POOL, GREENHOUSE: crowns, water and roofs are not the ground's colour)
+RELIT = np.ones(32, np.uint8)
+RELIT[[NONE, TREE, WATER, ROOF, POOL, GREENHOUSE]] = 0
+_fits = {}                      # (cell key, SHADE_VERSION, imagery id, dem on, versions) -> (time, partial, row, info)
+_fits_lock = threading.Lock()
+FITS_MAX = 64
+
+
+def _s2_season(lat, doy):
+    """Whether day doy can be a cloudless composite's capture day at lat: its local summer half (the composites pick
+    snow- and cloud-free scenes: a free date fitted winter suns to noise, Lauterbrunnen's cells 2026-11-16); every
+    day in the tropics."""
+    if abs(lat) < 23.5:
+        return True
+    return 100 <= doy <= 260 if lat > 0 else (doy <= 75 or doy >= 285)
+
+
+def sun_candidates(lat):
+    """(cands (k, 5) float32: se, sn, tan, sin, cos of each candidate sun at lat, [(hour, day of year)]): S2_TIMES local
+    solar time x every DOY_STEP days, above EL_MIN_DEG. dmath (no platform libm), rounded to 1e-6."""
+    import dmath
+    phi = dmath.radians(float(lat))
+    sp, cp = dmath.sin(phi), dmath.cos(phi)
+    rows, meta = [], []
+    for hour in S2_TIMES:
+        hr = dmath.radians(15.0 * (hour - 12.0))
+        sh, ch = dmath.sin(hr), dmath.cos(hr)
+        for doy in range(1, 366, DOY_STEP):
+            if not _s2_season(lat, doy):
+                continue
+            dec = dmath.radians(23.44 * dmath.sin(dmath.radians(360.0 / 365.0 * (doy - 81))))
+            sd, cd = dmath.sin(dec), dmath.cos(dec)
+            up = sp * sd + cp * cd * ch
+            if up <= dmath.sin(dmath.radians(EL_MIN_DEG)):
+                continue
+            east, north = -cd * sh, cp * sd - sp * cd * ch
+            hl = dmath.hypot(east, north)
+            if hl <= 1e-9:
+                continue
+            cos_el = dmath.sqrt(max(0.0, 1.0 - up * up))
+            rows.append([round(east / hl, 6), round(north / hl, 6), round(up / cos_el, 6), round(up, 6),
+                         round(cos_el, 6)])
+            meta.append((hour, doy))
+    return np.asarray(rows, np.float32).reshape(-1, 5), meta
+
+
+def building_heights(frame, x0, y0, size, px, md, missing):
+    """(px, px) float32: the buildings' heights over the ground (m) at the texels of the square (their outer rings, the
+    tallest over the others; 8 m where none is mapped, as buildings.photo_mask's), None without buildings."""
+    import buildings as buildingsmod
+    if md is None:
+        return None
+    la, lo, _ = frame.enu_to_geodetic(np.array([x0, x0 + size, x0, x0 + size]),
+                                      np.array([y0, y0, y0 + size, y0 + size]), 0.0)
+    keys = mapcells.cells_for_bbox(float(np.min(la)), float(np.min(lo)), float(np.max(la)), float(np.max(lo)))
+    t = size / px
+    top = y0 + size
+    items, seen = [], set()
+    for k in keys:
+        f = _layer(md, k, "buildings", missing)
+        if f is None or not len(f.ids):
+            continue
+        hs = f.attrs.get("height")
+        ids = f.ids.tolist()
+        rows, a, b = buildingsmod._photo_candidates(f, frame, x0, y0, size)
+        if len(rows):
+            xy = f.xy_in(frame)
+            for j, i in enumerate(np.asarray(rows).tolist()):
+                if ids[i] in seen or b[j] - a[j] < 3:
+                    continue
+                h = 8.0 if hs is None else float(hs[i])
+                if not (h > 0.0 and h < 1000.0):
+                    h = 8.0
+                ring = np.asarray(xy[a[j]:b[j]], np.float64)
+                items.append((int(round(h * 10.0)), str(ids[i]), np.stack([(ring[:, 0] - x0) / t,
+                                                                           (top - ring[:, 1]) / t], 1)))
+        seen.update(ids)
+    if not items:
+        return None
+    items.sort(key=lambda it: it[:2])           # (the tallest over the others; equal ones by id)
+    pts = np.ascontiguousarray(np.concatenate([it[2] for it in items]), np.float64)
+    ring_off = np.r_[0, np.cumsum([len(it[2]) for it in items])].astype(np.int64)
+    poly_off = np.arange(len(items) + 1, dtype=np.int64)
+    out = np.zeros((px, px), np.uint32)
+    fast._ef.gg_fill_polys(out, pts, ring_off, poly_off, np.asarray([it[0] for it in items], np.uint32))
+    return out.astype(np.float32) / np.float32(10.0)
+
+
+def _occluders(frame, x0, y0, size, px, md, missing, inner=None):
+    """The buildings' and canopy's heights over the ground (m, float32 (px, px)): the canopy model where it has one.
+    inner (m, canopy): the canopy already read for the square m texels inside this one (inputs()'s): only the ring
+    round it is read here (the grid and the rasters' sampling were most of the cost)."""
+    occ = building_heights(frame, x0, y0, size, px, md, missing)
+    occ = np.zeros((px, px), np.float32) if occ is None else occ
+    t = size / px
+    la, lo, _ = frame.enu_to_geodetic(np.array([x0, x0 + size, x0, x0 + size]),
+                                      np.array([y0, y0, y0 + size, y0 + size]), 0.0)
+    keys = mapcells.cells_for_bbox(float(np.min(la)), float(np.min(lo)), float(np.max(la)), float(np.max(lo)))
+    rasters = [_layer(md, k, "canopy", missing) for k in keys]
+    canopy = np.full((px, px), CANOPY_NODATA, np.uint8)
+    top = y0 + size
+    if inner is None:
+        rects = [(0, 0, px, px)]
+    else:
+        m, cin = inner
+        canopy[m:px - m, m:px - m] = cin
+        rects = [(0, 0, m, px), (px - m, 0, m, px), (m, 0, px - 2 * m, m), (m, px - m, px - 2 * m, m)]
+    for r0, c0, nr, nc in rects:            # (row, col, rows, cols)
+        if nr <= 0 or nc <= 0:
+            continue
+        if hasattr(frame, "origin") and hasattr(frame, "rot"):
+            _la, _lo, mx, my = _grid_rect(frame, x0 + c0 * t, top - r0 * t, t, nr, nc)
+        else:
+            q = max(nr, nc)         # (a stand-in frame: a square's grid, cut)
+            sub = _grid(frame, x0 + c0 * t, top - r0 * t - q * t, q * t, q)
+            mx, my = sub[2][:nr, :nc], sub[3][:nr, :nc]
+        canopy[r0:r0 + nr, c0:c0 + nc] = canopy_grid(mx, my, rasters)
+    ch = np.where(canopy != CANOPY_NODATA, canopy, 0).astype(np.float32)
+    return np.ascontiguousarray(np.maximum(occ, ch))
+
+
+def shade_margin(t):
+    """Texels of occluders round the square for gg_relight: the sweep's reach and sideways spread, the zone's 6 m."""
+    return int(np.ceil((1.45 * SHADE_REACH_M + 8.0) / t))
+
+
+def _usable_dem(dem):
+    """dem when it is a dem.Dem (has, sample, prefetch), else None (a stand-in without them: no terrain term)."""
+    return dem if all(hasattr(dem, a) for a in ("has", "sample", "prefetch")) else None
+
+
+def _dem_keys(lat, lon):
+    """The SHADE_DEM_Z tiles (z, x, y) under the points."""
+    n = 1 << SHADE_DEM_Z
+    x = np.floor((np.asarray(lon, np.float64) + 180.0) / 360.0 * n).astype(np.int64)
+    my = R_MERC * dnp.log(dnp.tan(np.pi / 4 + np.radians(np.asarray(lat, np.float64)) / 2))
+    y = np.floor((np.pi * R_MERC - my) / (2 * np.pi * R_MERC) * n).astype(np.int64)
+    x, y = np.clip(x, 0, n - 1), np.clip(y, 0, n - 1)
+    return sorted({(SHADE_DEM_Z, int(a), int(b)) for a in range(int(x.min()), int(x.max()) + 1)
+                   for b in range(int(y.min()), int(y.max()) + 1)})
+
+
+_dem_asked = set()
+_dem_lock = threading.Lock()
+
+
+def _dem_ready(dem, keys):
+    """Whether every tile is at hand (dem.has); the missing ones fetched in a background thread (once at a time)."""
+    want = [k for k in keys if not dem.has(*k)]
+    if not want:
+        return True
+    with _dem_lock:
+        want = [k for k in want if k not in _dem_asked]
+        _dem_asked.update(want)
+    if want:
+        def fetch():
+            try:
+                dem.prefetch(want)
+            except Exception as e:      # (asked again after the backoff: _dem_asked cleared below)
+                log.debug("genground: dem prefetch: %s", e)
+            finally:
+                with _dem_lock:
+                    _dem_asked.difference_update(want)
+        threading.Thread(target=fetch, name="genground-dem", daemon=True).start()
+    return False
+
+
+def _dem_nodes(frame, x0, top, t, r0, c0, step, rows, cols, dem):
+    """The ground's heights (float32 (rows, cols)) at the texels (r0 + i step, c0 + j step) of the grid from (x0, top)
+    at t m, or None when a tile is not at hand."""
+    jj = c0 + step * np.arange(cols)
+    ii = r0 + step * np.arange(rows)
+    E, N = np.meshgrid(x0 + (jj + 0.5) * t, top - (ii + 0.5) * t)
+    la, lo, _ = frame.enu_to_geodetic(E, N, 0.0)
+    if not _dem_ready(dem, _dem_keys(la, lo)):
+        return None
+    return np.ascontiguousarray(np.asarray(dem.sample(la, lo, SHADE_DEM_Z), np.float32).reshape(rows, cols))
+
+
+def _render_square(imagery, frame, x0, y0, size, px, pending):
+    if hasattr(imagery, "_render") and hasattr(imagery, "square"):
+        rgb, _used = imagery._render(imagery.square(frame, x0, y0, size, px), px, pending)
+    else:
+        rgb, _used = imagery.render(frame, x0, y0, size, px, pending)
+    return np.ascontiguousarray(np.asarray(rgb, np.uint8)[:, :, :3])
+
+
+def _fit_key(key, imagery, md, dem):
+    """A sun fit's memo key: the cell, SHADE_VERSION, the imagery by its settings (its chain's sources, tone, leaf-on,
+    season: not id(), which a new object can reuse once the old one is gone: the mini PC's gate, 2026-11-16), the map
+    data (which, and its versions) and whether the ground's heights were there."""
+    try:
+        ver = json.dumps(md.versions(buildings=True), sort_keys=True, default=str) if md is not None else None
+    except Exception:
+        ver = None
+    chain = getattr(imagery, "chain", None)
+    if chain is not None:
+        im = (tuple(str(getattr(s, "name", s)) for s in chain), str(getattr(imagery, "tone", None)),
+              str(getattr(imagery, "leaf_on", None)), str(getattr(imagery, "season_mode", None)))
+    else:                       # (a stand-in: by its object)
+        im = ("stand-in", id(imagery))
+    mdk = None if md is None else (type(md).__name__, str(getattr(md, "cache_dir", "")))
+    return (str(key), SHADE_VERSION, im, mdk, dem is not None, ver)
+
+
+def cell_sun(key, imagery, md, dem, pending=None, missing=None):
+    """(row (10,) float32 for gg_relight's suns, or None: no shadow to take out; info dict) of data cell key: its
+    capture sun fitted on its own photo, map data and ground (sun_candidates, gg_sun_fit), memoized per process.
+    A fit whose photo or data were not all at hand is made again after FIT_PARTIAL_S (and the block is pending)."""
+    dem = _usable_dem(dem)
+    fk = _fit_key(key, imagery, md, dem)
+    now = _now()
+    with _fits_lock:
+        memo = _fits.get(fk)
+    # (made again: after FIT_PARTIAL_S when its photo or ground was not all there; at once when the map data it
+    # missed is here now, data_ready's own wait)
+    if memo is not None and not (memo[1] and now - memo[0] >= FIT_PARTIAL_S) \
+            and not (memo[4] and md is not None and all(md.has(k2, layer) for k2, layer in memo[4])):
+        if missing is not None and _fit_pending(key, memo[1], memo[4]):
+            missing.append((key, SHADE_LAYER))
+        return memo[2], memo[3]
+    import geodesy
+    lon0, lat0, lon1, lat1 = key.bounds()
+    latc, lonc = (lat0 + lat1) / 2, (lon0 + lon1) / 2
+    fr = geodesy.EnuFrame(latc, lonc)
+    e, n, _u = fr.geodetic_to_enu(np.array([lat0, lat0, lat1, lat1]), np.array([lon0, lon1, lon0, lon1]), 0.0)
+    half = float(max(np.max(np.abs(e)), np.max(np.abs(n))))
+    nt = int(np.ceil(2 * half / FIT_RES_T))
+    size = nt * FIT_RES_T
+    x0 = y0 = -size / 2
+    nb = nt * FIT_COARSE
+    sub = []
+    pend = set()        # (its own: a tile the block already waits for is the fit's too, Codex review of a8da6b7b)
+    try:
+        rgb_b = _render_square(imagery, fr, x0, y0, size, nb, pend)
+    except Exception as e:      # (a worker's strict imagery without the cell's tiles on disk: no fit yet, asked again)
+        log.debug("genground: shade fit %s: photo: %s: %s", key, type(e).__name__, e)
+        rgb_b = None
+    partial = bool(pend) or rgb_b is None
+    if pending is not None:
+        pending.update(pend)
+    if rgb_b is None:
+        info = {"cell": str(key), "partial": True, "photo": False}
+        with _fits_lock:
+            if len(_fits) >= FITS_MAX:
+                _fits.pop(next(iter(_fits)))
+            _fits[fk] = (now, True, None, info, [])
+        _ask(key, SHADE_LAYER, None)
+        revisit.fault()
+        if missing is not None and _fit_pending(key, True, []):
+            missing.append((key, SHADE_LAYER))
+        return None, info
+    occ = _occluders(fr, x0, y0, size, nb, md, sub)
+    sub = [(k2, layer) for k2, layer in sub if k2 == key]     # (its neighbours' layers: only the square's fringe)
+    rgb_t = (rgb_b.reshape(nt, FIT_COARSE, nt, FIT_COARSE, 3).astype(np.uint32).sum((1, 3))
+             // (FIT_COARSE * FIT_COARSE)).astype(np.uint8)
+    pad = int(SHADE_PAD_M / FIT_RES_T)
+    dn = None
+    if dem is not None:
+        dn = _dem_nodes(fr, x0, y0 + size, FIT_RES_T, -pad, -pad, 1, nt + 2 * pad, nt + 2 * pad, dem)
+        if dn is None:
+            partial = True
+        else:
+            core = dn[pad:pad + nt, pad:pad + nt]
+            if float(core.max() - core.min()) < RELIEF_MIN_M:
+                dn = None
+    if int((occ >= 2.0).sum()) < OCC_MIN:
+        occ = None
+    cands, meta = sun_candidates(latc)
+    info = {"cell": str(key), "partial": partial, "data_missing": len(sub)}
+    row = None
+    if len(cands) and (dn is not None or occ is not None):
+        scores, _ = fast._ef.gg_sun_fit(dn, FIT_RES_T, pad, rgb_t if dn is not None else None, occ, FIT_RES_B,
+                                        rgb_b if occ is not None else None, cands, SHADE_REACH_M, pad, False)
+        r_t = np.nan_to_num(scores[:, 0]) if dn is not None else np.zeros(len(cands))
+        ok_b = (scores[:, 2] >= SHADOW_MIN) if occ is not None else np.zeros(len(cands), bool)
+        mcc = np.where(ok_b, np.nan_to_num(scores[:, 1]), 0.0)
+        rp = np.maximum(r_t, 0.0)
+        total = rp * rp + 0.5 * np.maximum(mcc, 0.0)
+        best = int(np.argmax(total))            # (the first of equal scores)
+        t_ok = bool(dn is not None and r_t[best] >= R_CAST_MIN)
+        t_level = 2.0 if t_ok and r_t[best] * r_t[best] >= R2_MIN else 1.0 if t_ok else 0.0
+        b_ok = bool(occ is not None and mcc[best] >= MCC_MIN)
+        info.update(hour=meta[best][0], doy=meta[best][1], r_t=round(float(r_t[best]), 4),
+                    mcc=round(float(mcc[best]), 4), terrain=t_ok, buildings=b_ok)
+        if t_ok or b_ok:
+            _, sums = fast._ef.gg_sun_fit(dn, FIT_RES_T, pad, rgb_t if dn is not None else None, occ, FIT_RES_B,
+                                          rgb_b if occ is not None else None, cands[best:best + 1], SHADE_REACH_M,
+                                          pad, True)
+            k = K_DEFAULT
+            for use, s in ((b_ok, sums[0]), (t_ok, sums[1])):
+                if use and s[3] >= K_MIN_COUNT and s[7] >= K_MIN_COUNT and min(s[4:7]) > 0:
+                    k = tuple(min(0.85, max(0.12, round((int(s[c]) * int(s[7])) / (int(s[4 + c]) * int(s[3]))
+                                                        * 1024) / 1024)) for c in range(3))
+                    break
+            info["k"] = k
+            row = np.asarray(list(cands[best]) + [t_level, float(b_ok)] + list(k), np.float32)
+    with _fits_lock:
+        if len(_fits) >= FITS_MAX:
+            _fits.pop(next(iter(_fits)))
+        _fits[fk] = (now, partial, row, info, sorted({(k2, layer) for k2, layer in sub}, key=str))
+    if partial:
+        _ask(key, SHADE_LAYER, None)
+    if partial or sub:
+        revisit.fault()
+        if missing is not None and _fit_pending(key, partial, sub):
+            missing.append((key, SHADE_LAYER))
+    log.debug("genground: shade fit %s", info)
+    return row, info
+
+
+def shade(rgb, frame, x0, y0, size, px, kind, region, canopy, md, dem, imagery, pending, missing, gr, gc,
+          surface=None):
+    """The square's photo (rgb, (px, px, 3) uint8: a relit copy) with the capture sun's shadows taken out, and the
+    region with LOST on the texels it could not recover (gg_relight). The sun of each texel's data cell (cell_sun)."""
+    fields, _complete = texel_fields(frame, x0, y0, size, px, surface)
+    mx, my = fields["mx"], fields["my"]
+    nz = 1 << mapcells.ZOOM
+    span = 2 * np.pi * R_MERC
+    tx = np.clip(np.floor((mx + np.pi * R_MERC) / span * nz), 0, nz - 1).astype(np.int64)
+    ty = np.clip(np.floor((np.pi * R_MERC - my) / span * nz), 0, nz - 1).astype(np.int64)
+    code = tx * nz + ty
+    cells = np.unique(code)
+    cellmap = np.full((px, px), 255, np.uint8)
+    rows = []
+    dem = _usable_dem(dem)
+    for cd in cells.tolist():
+        key = mapcells.CellKey(mapcells.ZOOM, int(cd // nz), int(cd % nz))
+        row, _info = cell_sun(key, imagery, md, dem, pending, missing)
+        if row is None or len(rows) >= 254:
+            continue
+        cellmap[code == cd] = len(rows)
+        rows.append(row)
+    if not rows:
+        return rgb, region
+    suns = np.ascontiguousarray(np.stack(rows), np.float32)
+    t = size / px
+    dn, r0, c0, step, steps = None, 0, 0, SHADE_NODE, int(SHADE_PAD_M / (SHADE_NODE * t))
+    if dem is not None and bool((suns[:, 5] > 0.5).any()):
+        padn = int(round(SHADE_PAD_M / t))
+        r0 = -padn + ((-(gr - padn)) % step)
+        c0 = -padn + ((-(gc - padn)) % step)
+        nr = (px + padn - 1 - r0) // step + 1
+        nc = (px + padn - 1 - c0) // step + 1
+        dn = _dem_nodes(frame, x0, y0 + size, t, r0, c0, step, nr, nc, dem)
+        if dn is None:
+            missing.append(((SHADE_DEM_Z,), SHADE_LAYER))
+            revisit.fault()
+    # (the occluders a margin further out: a texel's shadow from the heights within ~1.42 x reach, its matte from the
+    # lit texels within ~104 m of it and those texels' own shadows: every block computes each texel alike)
+    m = shade_margin(t)
+    occ = _occluders(frame, x0 - m * t, y0 - m * t, size + 2 * m * t, px + 2 * m, md, missing, (m, canopy))
+    out = np.array(rgb, np.uint8, copy=True)
+    lost = fast._ef.gg_relight(out, kind, occ, cellmap, suns, RELIT, float(t), dn, int(r0), int(c0), int(step),
+                               int(steps), SHADE_REACH_M, int(gr), int(gc))
+    if lost.any():
+        region = np.where(lost > 0, region | np.uint32(LOST), region).astype(np.uint32)
+    return out, region
+
+
+def _fit_pending(key, partial, sub):
+    """Whether a fit made without all of its photo (partial) or map data (sub: (cell, layer)) is to be made again: its
+    photo not given up, or one of its layers not (gave_up)."""
+    return (partial and not gave_up(key, SHADE_LAYER)) or any(not gave_up(k2, layer) for k2, layer in sub)
+
+
+def _fit_waiting(key):
+    """Whether cell key's fit was made without all of its photo or data less than FIT_PARTIAL_S ago (data_ready)."""
+    now = _now()
+    with _fits_lock:
+        return any(fk[0] == str(key) and v[1] and now - v[0] < FIT_PARTIAL_S for fk, v in _fits.items())
+
+
+def shade_ready(frame, x0, y0, size, keys, dem):
+    """data_ready's part for the shadows: the DEM's tiles under the square, its halo and the terrain's march, and no cell
+    fit waiting for its photo (each given up after RETRY_TRIES, as a layer; its map data: data_ready's layers)."""
+    ready = True
+    dem = _usable_dem(dem)
+    if dem is not None:
+        e = SHADE_PAD_M + HALO_M
+        la, lo, _ = frame.enu_to_geodetic(np.array([x0 - e, x0 + size + e]), np.array([y0 - e, y0 + size + e]), 0.0)
+        for k in _dem_keys(la, lo):
+            if dem.has(*k) or gave_up(k, "dem"):
+                continue
+            _ask(k, "dem", None)
+            _dem_ready(dem, [k])
+            ready = ready and gave_up(k, "dem")
+    for k in keys:
+        if _fit_waiting(k) and not gave_up(k, SHADE_LAYER):
+            ready = False
+    return ready
+
+
+def inputs(frame, x0, y0, size, px, md, surface, widths=None, veg=None):
     """(kind, region, canopy, complete, poly, dirs, phases) of the square for gen_ground, from the cached map data
     (never waits: what is missing is queued, a revisit fault, and complete is False)."""
     import buildings as buildingsmod
     import surface as surfacemod
     fast.require(NEED, "generated ground")
-    lat, lon = _grid(frame, x0, y0, size, px)
-    complete = True
-    if surface is not None:
-        classes, complete = surface.classes(lat, lon)
-    else:
-        classes = np.zeros(lat.shape, np.uint8)
-    base = base_kinds(classes, lat, lon)
+    fields, complete = texel_fields(frame, x0, y0, size, px, surface)
+    lat, lon, mx, my, base = fields["lat"], fields["lon"], fields["mx"], fields["my"], fields["base"]
     feats, canopies, missing = [], [], []
     by_layer = {"roads": [], "water": [], "infrastructure": []}
     keys = _cells(lat, lon)
@@ -607,7 +1255,7 @@ def inputs(frame, x0, y0, size, px, md, surface, widths=None):
         return loaded[k2]
     poly, pkinds, dirs, phases = polygons(frame, x0, y0, size, px, feats, more)
     line, lkinds = lines(frame, x0, y0, size, px, by_layer["roads"], by_layer["water"], by_layer["infrastructure"])
-    canopy = canopy_grid(lat, lon, canopies)
+    canopy = canopy_grid(mx, my, canopies)
     cover = np.zeros((px, px), np.uint8)
     if surface is not None:
         try:
@@ -623,8 +1271,10 @@ def inputs(frame, x0, y0, size, px, md, surface, widths=None):
                 cover[np.asarray(m, bool)] |= 4
         except Exception as e:      # (the roofs are filled in after anyway)
             log.debug("genground: building mask: %s: %s", type(e).__name__, e)
-    kind, region = fast._ef.gg_regions(np.ascontiguousarray(base), poly, pkinds, line, lkinds, canopy, cover)
-    return kind, region, canopy, bool(complete) and not missing, poly, dirs, phases
+    floor, mode = tree_floor(frame, x0, y0, size, px, veg, missing)
+    kind, region = fast._ef.gg_regions(np.ascontiguousarray(base), poly, pkinds, line, lkinds, canopy, cover,
+                                       float(size / px), floor, mode == 0)
+    return kind, region, canopy, bool(complete) and not missing, poly, dirs, phases, floor, mode
 
 
 def halo_square(x0, y0, size, px):
@@ -634,7 +1284,7 @@ def halo_square(x0, y0, size, px):
     return x0 - h * t, y0 - h * t, size + 2 * h * t, px + 2 * h, h
 
 
-def generate(rgb, frame, x0, y0, size, px, md, surface, widths=None):
+def generate(rgb, frame, x0, y0, size, px, md, surface, widths=None, veg=None, dem=None, imagery=None, pending=None):
     """(the generated ground (px, px, 3) uint8 of the square, complete) from rgb, its Sentinel-2 photo (imagery.render
     over the same square at px), and the map data (inputs()). Its outer HALO_M is not final (the windows reach out of
     the square there): render() keeps the middle of a larger square."""
@@ -642,16 +1292,22 @@ def generate(rgb, frame, x0, y0, size, px, md, surface, widths=None):
     rgb = np.ascontiguousarray(np.asarray(rgb, np.uint8)[:, :, :3])
     if rgb.shape[:2] != (px, px):
         raise ValueError(f"generated ground: a {rgb.shape[:2]} photo for {px} px")
-    kind, region, canopy, complete, poly, dirs, phases = inputs(frame, x0, y0, size, px, md, surface, widths)
+    kind, region, canopy, complete, poly, dirs, phases, floor, mode = inputs(frame, x0, y0, size, px, md, surface,
+                                                                             widths, veg)
     t = size / px
     # (the global texel grid of the anchor frame: the blocks' texels lie on it, so their lattices agree)
     gc, gr = int(np.floor(x0 / t + 0.5)), int(np.floor(-(y0 + size) / t + 0.5))
+    if imagery is not None:         # (stage 5) the capture sun's shadows out of the photo (shade())
+        miss = []
+        rgb, region = shade(rgb, frame, x0, y0, size, px, kind, region, canopy, md, dem, imagery, pending, miss, gr,
+                            gc, surface)
+        complete = complete and not miss
     out = fast._ef.gen_ground(rgb, kind, region, canopy, poly, dirs, phases, float(x0 + t / 2),
-                              float(y0 + size - t / 2), float(t), gr, gc)
+                              float(y0 + size - t / 2), float(t), gr, gc, floor, int(mode))
     return out, complete
 
 
-def render(imagery, frame, x0, y0, size, px, md, surface, widths=None, pending=None):
+def render(imagery, frame, x0, y0, size, px, md, surface, widths=None, pending=None, veg=None, dem=None):
     """(rgb (px, px, 3), sources used): the generated ground of [x0, x0 + size]^2 of frame at px, made over the square
     with HALO_M round it and cut to it (every block covering a spot draws it alike, the Codex review of 41d74b61). With
     map data still missing GEN_PENDING goes into pending (earthd.Server.base_ready: made again once it is here).
@@ -664,7 +1320,7 @@ def render(imagery, frame, x0, y0, size, px, md, surface, widths=None, pending=N
         rgb, used = imagery._render(where, hpx, pending)
     else:                           # (a stand-in imagery: its render as it is)
         rgb, used = imagery.render(frame, hx0, hy0, hsize, hpx, pending)
-    out, complete = generate(rgb, frame, hx0, hy0, hsize, hpx, md, surface, widths)
+    out, complete = generate(rgb, frame, hx0, hy0, hsize, hpx, md, surface, widths, veg, dem, imagery, pending)
     if where is not None:
         out = imagery._seasoned(where, np.asarray(out, np.uint8))
     if not complete and pending is not None:

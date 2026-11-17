@@ -63,7 +63,8 @@ def gen(s2, kind, region=None, canopy=None, ox=1000.0, oy=2000.0, gr=None, gc=No
                          np.ascontiguousarray(region, np.uint32), np.ascontiguousarray(canopy, np.uint8),
                          np.ascontiguousarray(poly, np.uint32), np.ascontiguousarray(dirs),
                          np.ascontiguousarray(phases),
-                         float(ox), float(oy), 1.0, int(-oy if gr is None else gr), int(ox if gc is None else gc))
+                         float(ox), float(oy), 1.0, int(-oy if gr is None else gr), int(ox if gc is None else gc),
+                         None, 0)
 
 
 class FillPolysTest(unittest.TestCase):
@@ -98,7 +99,7 @@ class RegionsTest(unittest.TestCase):
         canopy = np.full(sh, 255, np.uint8) if canopy is None else np.asarray(canopy, np.uint8)
         cover = np.zeros(sh, np.uint8) if cover is None else np.asarray(cover, np.uint8)
         return EF.gg_regions(base, poly, np.asarray(pkinds, np.uint8), line, np.asarray(lkinds, np.uint8), canopy,
-                             cover)
+                             cover, 1.0, None, True)
 
     def test_polygon_rules(self):
         base = [[gg.TREE, gg.BUILT, gg.CROP, gg.WATER, gg.BUILT, gg.CROP, gg.BARE]]
@@ -115,17 +116,22 @@ class RegionsTest(unittest.TestCase):
         canopy = [[12, 0, 1, 0, 30, 255, 20, 20]]
         cover = [[0, 0, 0, 0, 0, 1, 2, 2 | 4]]
         k, r = self.regions(base, canopy=canopy, cover=cover)
-        self.assertEqual(k.tolist(), [[gg.TREE, gg.GRASS, gg.SHRUB, gg.GRASS, gg.WATER, gg.WATER, gg.PAVED, gg.ROOF]])
+        self.assertEqual(k.tolist(), [[gg.TREE, gg.GRASS, gg.SHRUB, gg.GRASS, gg.WATER, gg.WATER, gg.PAVED, gg.PAVED]],
+                         "(stage 4) a drawn road over a footprint: the road")
         r = r[:, 1:]
         self.assertEqual(r[0, 5], gg.PAVED)
-        self.assertEqual(r[0, 6], gg.ROOF)
+        self.assertEqual(r[0, 6], gg.PAVED)
         k2, r2 = self.regions([[gg.BUILT, gg.BUILT]], poly=[[1, 2]], pkinds=(gg.LAWN, gg.LAWN), cover=[[2, 2]])
         self.assertEqual(r2[0, 0], r2[0, 1], "roads: one region whatever the polygons under them")
 
     def test_hedgerows_grow(self):
         # (stage 2) the canopy model draws a hedgerow's tall core only: open ground with some canopy next to a tree
-        k, _ = self.regions([[gg.CROP, gg.CROP, gg.CROP, gg.CROP, gg.CROP]], canopy=[[0, 1, 9, 2, 1]])
-        self.assertEqual(k.tolist(), [[gg.CROP, gg.TREE, gg.TREE, gg.TREE, gg.CROP]])
+        # (stage 3) a skirt of SKIRT_M (3 m) round the crown, only through canopy of 1 m and over
+        k, _ = self.regions([[gg.CROP] * 8], canopy=[[0, 1, 9, 2, 1, 1, 1, 1]])
+        self.assertEqual(k.tolist(), [[gg.CROP, gg.TREE, gg.TREE, gg.TREE, gg.TREE, gg.TREE, gg.CROP, gg.CROP]])
+        k, _ = self.regions([[gg.CROP] * 8], canopy=[[0, 1, 9, 2, 0, 1, 1, 1]])
+        self.assertEqual(k.tolist(), [[gg.CROP, gg.TREE, gg.TREE, gg.TREE, gg.CROP, gg.CROP, gg.CROP, gg.CROP]],
+                         "not across bare ground")
 
     def test_lines(self):
         base = [[gg.BUILT, gg.GRASS, gg.GRASS, gg.TREE, gg.WATER, gg.GRASS]]
@@ -148,7 +154,7 @@ class GenGroundTest(unittest.TestCase):
     def test_border_takes_each_regions_own_colour(self):
         n, col = 96, 48
         s2 = blurred_edge(n, col, G, D)
-        kind = np.where(np.arange(n)[None, :] < col, gg.GRASS, gg.TREE).astype(np.uint8).repeat(n, 0)
+        kind = np.where(np.arange(n)[None, :] < col, gg.GRASS, gg.CROP).astype(np.uint8).repeat(n, 0)
         out = gen(s2, kind).astype(np.float64)
         row = out[n // 2]
         # the photo's smear: the texels either side of the border are nearly the same; generated, each is its own
@@ -190,14 +196,14 @@ class GenGroundTest(unittest.TestCase):
         # overlap.) A world of varying photo, regions with borders and water; two squares 37 texels apart, each with
         # the HALO round it: the texels both keep are the same bits
         rng = np.random.default_rng(21)
-        W, n, halo = 420, 160, int(gg.HALO_M)
+        W, n, halo = 720, 160, int(gg.HALO_M)
         x = np.arange(W)
         s2 = np.stack([(x[None, :] + 30 + 0 * x[:, None]) % 256, (x[:, None] * 3 // 4 + 20 + 0 * x[None, :]) % 256,
                        rng.integers(0, 60, (W, W))], -1).astype(np.uint8)
         kinds = [gg.GRASS, gg.TREE, gg.CROP, gg.WATER, gg.LAWN, gg.PAVED, gg.BUILT]
         kind = rng.choice(kinds, (W // 12 + 1, W // 9 + 1))
         kind = kind.repeat(12, 0).repeat(9, 1)[:W, :W].astype(np.uint8)
-        kind[100:140, 50:300] = gg.WATER
+        kind[140:180, 90:340] = gg.WATER
         region = kind.astype(np.uint32) + 16 * ((np.arange(W)[None, :] // 70) % 3).astype(np.uint32)
         canopy = np.where(kind == gg.TREE, rng.integers(3, 25, (W, W)), 255).astype(np.uint8)
 
@@ -205,13 +211,13 @@ class GenGroundTest(unittest.TestCase):
             sl = (slice(r0 - halo, r0 + n + halo), slice(c0 - halo, c0 + n + halo))
             out = gen(s2[sl], kind[sl], region[sl], canopy[sl], ox=float(c0 - halo), oy=float(-(r0 - halo)))
             return out[halo:halo + n, halo:halo + n]
-        a, b = block(70, 70), block(70 + 13, 70 + 37)
+        a, b = block(150, 150), block(150 + 13, 150 + 37)
         np.testing.assert_array_equal(a[13:, 37:], b[:n - 13, :n - 37])
         # without the halo (the block's own square alone, as 41d74b61 did) they differ
-        a0 = gen(s2[70:230, 70:230], kind[70:230, 70:230], region[70:230, 70:230], canopy[70:230, 70:230],
-                 ox=70.0, oy=-70.0)
-        b0 = gen(s2[83:243, 107:267], kind[83:243, 107:267], region[83:243, 107:267], canopy[83:243, 107:267],
-                 ox=107.0, oy=-83.0)
+        a0 = gen(s2[110:270, 110:270], kind[110:270, 110:270], region[110:270, 110:270], canopy[110:270, 110:270],
+                 ox=110.0, oy=-110.0)
+        b0 = gen(s2[123:283, 147:307], kind[123:283, 147:307], region[123:283, 147:307], canopy[123:283, 147:307],
+                 ox=147.0, oy=-123.0)
         self.assertFalse(np.array_equal(a0[13:, 37:], b0[:n - 13, :n - 37]), "the test sees the old fault")
 
     def test_same_bits_on_any_threads(self):
@@ -343,7 +349,9 @@ class RefreshTest(unittest.TestCase):
 
     def test_missing_data_marks_the_photo(self):
         gg._retries.clear()
+        gg._fits.clear()
         self.addCleanup(gg._retries.clear)
+        self.addCleanup(gg._fits.clear)
         import geodesy
         frame = geodesy.EnuFrame(40.877, -77.566)
         pending = set()
@@ -353,8 +361,14 @@ class RefreshTest(unittest.TestCase):
         self.assertFalse(gg.data_ready(_MD(), frame, -64.5, -64.5, 128.0))
         self.assertFalse(gg.data_ready(_MD(set(gg.LAYERS) - {"canopy"}), frame, -64.5, -64.5, 128.0))
         self.assertTrue(gg.data_ready(_MD(gg.LAYERS), frame, -64.5, -64.5, 128.0))
+        # (the same imagery object: the sun fit's memo from the render with map data missing is not this one's, the
+        # mini PC's gate failure, where a new stand-in reused the old one's id())
+        im = _Im()
         pending = set()
-        gg.render(_Im(), frame, -64.5, -64.5, 128.0, 128, None, None, None, pending)
+        gg.render(im, frame, -64.5, -64.5, 128.0, 128, _MD(), None, None, pending)
+        self.assertIn(gg.GEN_PENDING, pending)
+        pending = set()
+        gg.render(im, frame, -64.5, -64.5, 128.0, 128, None, None, None, pending)
         self.assertNotIn(gg.GEN_PENDING, pending, "no map data at all (none to wait for)")
 
     def test_server_redoes_it(self):

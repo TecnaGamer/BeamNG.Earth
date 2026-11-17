@@ -307,7 +307,7 @@ pub fn cliff_strip_tint<'py>(
                     let mut best = 0;
                     let mut distance = f64::INFINITY;
                     for (i, (center, _)) in palette.iter().enumerate() {
-                        let d = (0..3).map(|k| (point[k] - center[k]).powi(2)).sum::<f64>();
+                        let d = (0..3).map(|k| (point[k] - center[k]).sq()).sum::<f64>();
                         if d < distance {
                             best = i;
                             distance = d;
@@ -687,7 +687,7 @@ fn spread_runs(points: &[[f64; 3]], offsets: &[usize], limit: usize) -> Vec<usiz
             run.windows(2)
                 .map(|p| {
                     (0..3)
-                        .map(|k| (p[1][k] - p[0][k]).powi(2))
+                        .map(|k| (p[1][k] - p[0][k]).sq())
                         .sum::<f64>()
                         .sqrt()
                 })
@@ -709,7 +709,7 @@ fn spread_runs(points: &[[f64; 3]], offsets: &[usize], limit: usize) -> Vec<usiz
         let mut next = None;
         for i in 0..n {
             let distance = (0..3)
-                .map(|k| (centers[i][k] - centers[selected][k]).powi(2))
+                .map(|k| (centers[i][k] - centers[selected][k]).sq())
                 .sum::<f64>();
             distances[i] = distances[i].min(distance);
             if remaining[i] && next.is_none_or(|j| distances[i] > distances[j]) {
@@ -850,7 +850,7 @@ pub fn cliff_contact_runs<'py>(
                     let mut arc = vec![0.0];
                     for pair in run.windows(2) {
                         let distance = (0..3)
-                            .map(|k| (pair[1][k] - pair[0][k]).powi(2))
+                            .map(|k| (pair[1][k] - pair[0][k]).sq())
                             .sum::<f64>()
                             .sqrt();
                         arc.push(arc.last().unwrap() + distance);
@@ -964,7 +964,7 @@ fn mask_cells(
     let mut local = Vec::new();
     for (i, &p) in line.iter().enumerate() {
         if i == 0
-            || ((p[0] - line[i - 1][0]).powi(2) + (p[1] - line[i - 1][1]).powi(2)).sqrt() > 1e-5
+            || ((p[0] - line[i - 1][0]).sq() + (p[1] - line[i - 1][1]).sq()).sqrt() > 1e-5
         {
             local.push(p);
         }
@@ -976,7 +976,7 @@ fn mask_cells(
     for pair in local.windows(2) {
         arc.push(
             arc.last().unwrap()
-                + ((pair[1][0] - pair[0][0]).powi(2) + (pair[1][1] - pair[0][1]).powi(2)).sqrt(),
+                + ((pair[1][0] - pair[0][0]).sq() + (pair[1][1] - pair[0][1]).sq()).sqrt(),
         );
     }
     let length = *arc.last().unwrap();

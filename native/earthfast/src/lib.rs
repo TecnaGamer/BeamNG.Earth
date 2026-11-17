@@ -1,5 +1,10 @@
 //! Geometry kernels for the world server.
 //! All coordinates are metres in the anchor's local frame, f64.
+// Determinism (the Rust port plan's section 2.6; native/earthfast/clippy.toml lists the methods and types): no platform
+// maths (dm::Dm instead), no powi / mul_add, no std HashMap / HashSet iteration order into an output, no std hasher
+// whose keys vary per process or per Rust release. A site that needs one anyway carries a narrow #[allow(...)] with its
+// reason; `cargo clippy` fails on a new one.
+#![deny(clippy::disallowed_methods, clippy::disallowed_types, clippy::iter_over_hash_type)]
 mod cliffcuts;
 mod cliffsurface;
 mod cliffappearance;
@@ -132,6 +137,7 @@ mod l0roads;
 mod groundphoto;
 mod genground;
 mod ggshapes;
+mod ggshade;
 mod layerfold;
 mod roadsurf;
 mod levelways;
@@ -5667,7 +5673,7 @@ fn wet_run_inside(xy: PyReadonlyArray2<f64>, wet: PyReadonlyArray1<bool>) -> PyR
     }
     let mut s = vec![0.0f64; n];
     for i in 1..n {
-        s[i] = s[i - 1] + ((p[[i, 0]] - p[[i - 1, 0]]).powi(2) + (p[[i, 1]] - p[[i - 1, 1]]).powi(2)).sqrt();
+        s[i] = s[i - 1] + ((p[[i, 0]] - p[[i - 1, 0]]).sq() + (p[[i, 1]] - p[[i - 1, 1]]).sq()).sqrt();
     }
     let (mut best, mut i) = (0.0f64, 0usize);
     while i < n {
@@ -5931,6 +5937,7 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(decks::deck_beside, m)?)?;
     m.add_function(wrap_pyfunction!(decks::deck_end_joins, m)?)?;
     m.add_function(wrap_pyfunction!(tapers::road_tapers, m)?)?;
+    m.add_function(wrap_pyfunction!(tapers::taper_widths_along, m)?)?;
     m.add_function(wrap_pyfunction!(tapers::lane_flow, m)?)?;
     m.add_function(wrap_pyfunction!(roadlanes::generated_lanes, m)?)?;
     m.add_function(wrap_pyfunction!(roadlanes::lane_flow_cells, m)?)?;
@@ -6490,9 +6497,10 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 308: generated ground stage 2: gg_regions(..., line, line_kind, ...) and the surface / pattern kinds,
     // gen_ground(..., poly, pdir, pphase, ...), ggshapes::gg_fill_lines / gg_poly_axes
     ggshapes::register(m)?;
+    ggshade::register(m)?;
     // 309: gg_poly_axes(..., skip): linear (a histogram of the edge directions), all of a polygon's rings, clip edges left
     // out (Codex review of 308)
-    // 310: opt-in dynamic cliff generation, placement and material preparation.
+    // 342: opt-in dynamic cliff generation, placement and material preparation.
     m.add_function(wrap_pyfunction!(clifflod::cliff_lod_edges, m)?)?;
     m.add_function(wrap_pyfunction!(clifflod::cliff_lod_prepare, m)?)?;
     m.add_function(wrap_pyfunction!(clifflod::cliff_lod_trial, m)?)?;
@@ -6575,6 +6583,22 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(cliffcuts::cliff_road_clearance, m)?)?;
     m.add_function(wrap_pyfunction!(cliffcuts::cliff_cut_ends, m)?)?;
     m.add_function(wrap_pyfunction!(cliffcuts::cliff_cut_sustained, m)?)?;
-    m.add("VERSION", 314)?;
+    // 310: stage 3 perf: gg_grid (the texel grid and its Web-Mercator metres, rectangles), the edge-table polygon fill,
+    // the capsule-interval line fill, value_noises on the kernels' threads (all the same output)
+    // 311: stage 3 steps 2-3: gg_regions(..., t) with the bounded hedgerow skirt; gen_ground's field-edge barriers and
+    // forest floor
+    // 312: stage 3 steps 4-5: unmapped crop's furrows where the photo shows periodic strips (a structure tensor on the 8 m
+    // cells, 32 integer normals, a lag test), the surfaces' palette by the support of their photo colour
+    // 320: veg_clumps(..., segs, hws, grid, merc_per_m, rad, max_shift_m) -> (..., stats): the far clumps kept off the
+    // carriageways (split at a road, moved off it, else their trees single). (313-319 left for the parallel ground
+    // work's bumps)
+    // 321: veg_clumps(..., own, blocked): a clump moved off a road stays in its map cell and off buildings / water
+    // (Codex review of 320)
+    // 313: stage 4: gg_discs (where the game's trees stand), gg_regions(..., floor, skirt), gen_ground(..., floor,
+    // floor_mode): the forest floor follows the placed trees
+    // 314: stage 5: ggshade (gg_sun_fit, gg_relight: the capture sun's shadows out of the Sentinel-2 colour);
+    // gen_ground's LOST texels, its crowns' shading from no direction
+    // 322: both of the above merged (321 vegetation clumps + 313/314 generated ground stages 4-5)
+    m.add("VERSION", 342)?;
     Ok(())
 }

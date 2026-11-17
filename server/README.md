@@ -1025,7 +1025,7 @@ written by the v1.3.1 code). `bench_build.py` (not discovered: run it
 by hand, it downloads unless `--synthetic`) times `Server.make_tile` per level, cold and warm.
 
 Cross-component (server ↔ mod):
-- `test_protocol_agreement.py`: the protocol 4 table above as data (sessions in both terrain/no
+- `test_protocol_agreement.py`: the protocol 4 table above as data (`server/protocol_table.json`; sessions in both terrain/no
   imagery and mesh/imagery modes), checked from both sides: the
   mod's `net.send` constructors and every `msg.X` / `tr.X` it reads (parsed from its Lua), every field
   `earthd.py` reads, every message a real in-process session sends (types, nullability, the L0-only

@@ -12,6 +12,7 @@ use std::sync::OnceLock;
 use fontdue::{Font, FontSettings};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
+use crate::dm::Dm;
 
 static FONTS: OnceLock<(Font, Font)> = OnceLock::new();
 
@@ -54,7 +55,7 @@ impl Canvas {
             for x in (x0.floor() as i64 - 1)..=(x1.ceil() as i64 + 1) {
                 let (px, py) = (x as f32 + 0.5 - cx, y as f32 + 0.5 - cy);
                 let (qx, qy) = (px.abs() - (hx - r), py.abs() - (hy - r));
-                let d = (qx.max(0.0).powi(2) + qy.max(0.0).powi(2)).sqrt() + qx.max(qy).min(0.0) - r;
+                let d = (qx.max(0.0).sq() + qy.max(0.0).sq()).sqrt() + qx.max(qy).min(0.0) - r;
                 self.blend(x, y, c, (0.5 - d).clamp(0.0, 1.0));
             }
         }

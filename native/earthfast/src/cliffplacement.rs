@@ -548,7 +548,7 @@ fn footprint_relief(ring: &[[f64; 3]; FOOTPRINT_SAMPLES], normal: [f64; 3]) -> (
     let dot = |a: [f64; 3], b: [f64; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
     let distances = ring.map(|point| dot(point, normal));
     let mean = distances.iter().sum::<f64>() / FOOTPRINT_SAMPLES as f64;
-    let relief = (distances.iter().map(|d| (d - mean).powi(2)).sum::<f64>() / FOOTPRINT_SAMPLES as f64).sqrt();
+    let relief = (distances.iter().map(|d| (d - mean).sq()).sum::<f64>() / FOOTPRINT_SAMPLES as f64).sqrt();
     let mut angles = [0.0; FOOTPRINT_SAMPLES];
     for k in 0..FOOTPRINT_SAMPLES {
         let (a, b) = (ring[k], ring[(k + 1) % FOOTPRINT_SAMPLES]);
