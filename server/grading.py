@@ -371,6 +371,12 @@ APPROACH_CELL_M = 450.0     # m: a plan's end this far from a cell cannot raise 
 MEASURED_SIDE_RUN = 0.5
 APPROACH_LIDAR_ON = os.environ.get("BNE_APPROACH_LIDAR", "on") != "off"   # (roadz APPROACH_*: Grader._obs)
 TWIN_ON = os.environ.get("BNE_APPROACH_TWINS", "on") != "off"
+# Nothing lifts the ground under a fast road's deck (ski ramps, 2026-11-17): a motorway's or trunk's abutment is never
+# raised (APPROACH_SKIP) though its clearance asks a lift, so a ramp beside its road is no twin of it: its fill keeps
+# clear of that road. Counted as rising with it, the 417's exit ramp at Carling Avenue in Ottawa (45.3852 N 75.7383 W)
+# stood 4.7 m over the motorway 11 m beside it and its fill lifted the ground under the 417's deck start 1.7 m: a 1.4 m
+# crest in 8 m, 3.0 g at 130 km/h. BNE_FAST_DECK_GROUND=on.
+FAST_DECK_GROUND = os.environ.get("BNE_FAST_DECK_GROUND", "off") == "on"
 TWIN_M = 60.0               # m: another abutment this near whose approach runs beside a ramp ...
 TWIN_TOP_TOL_M = 1.0        # m: ... or stands within this of its top already (its fill at the same level)
 TWIN_SHARE = 0.5            # ... and is raised at least this share as much rises with it (no cap between them)
@@ -5708,6 +5714,9 @@ class _Planner:
                     if kk not in lifts:
                         other = self._end_lift_raw(cand[k])
                         lift_o = 0.0 if other is None else float(other[0])
+                        if FAST_DECK_GROUND and other is not None and not other[3] and \
+                                not (len(other) > 5 and other[5]) and self._end_never_raised(cand[k]):
+                            lift_o = 0.0        # (asked, never raised: its road stays down beside this ramp)
                         lifts[kk] = (lift_o, ground_z(cand[k]) + lift_o)
                     # (raised as much, or standing as high already: its approach's fill is at this one's level, no
                     # conflict between them: Overpass Road's westbound deck starts 9 m higher than the eastbound's,
@@ -5930,6 +5939,20 @@ class _Planner:
         half = min(deficit / 2.0, SEAM_MATCH_MAX_M)
         mine = 0 if dnp.hypot(*(ends[0] - xy)) <= dnp.hypot(*(ends[1] - xy)) else 1
         return half if z[mine] < z[1 - mine] else -half
+
+    def _end_never_raised(self, xy):
+        """Is the bridge end at xy (within APPROACH_TOUCH_M, its home cell's nearest) a motorway's or trunk's own deck
+        (APPROACH_SKIP, not a link's), whose approaches are never raised? False when its cell has none there."""
+        la, lo, _ = self.frame.enu_to_geodetic(np.array([float(xy[0])]), np.array([float(xy[1])]), 0.0)
+        hc = self._cell_enu(mapcells.cell_of(float(la[0]), float(lo[0])), ground=False)
+        if not len(hc["ends"]):
+            return False
+        d = dnp.hypot(hc["ends"][:, 0] - float(xy[0]), hc["ends"][:, 1] - float(xy[1]))
+        k = int(np.argmin(d))
+        if float(d[k]) > APPROACH_TOUCH_M:
+            return False
+        cls = (hc.get("bridge_cls") or [None] * len(hc["bridges"]))[hc["end_of"][k]]
+        return cls in APPROACH_SKIP
 
     @_marked("_end_raw_cache", lambda self, xy: (float(xy[0]), float(xy[1])))
     def _end_lift_raw(self, xy):

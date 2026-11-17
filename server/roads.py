@@ -4834,7 +4834,7 @@ DUAL_DECK_M = 30.0      # m: parts of one level parallel within this are one dec
 
 
 def deck_profile(lines, ground_fn, crossings=(), clear=None, grade=None, lift=None, levels=None, widths=None, pins=None,
-                 crest=None):
+                 crest=None, fast=False):
     """deck_profile_once, then repeated with the deck-over-deck requirements: where two parts of
     different levels cross, the higher one clears the lower one's deck by `clear` (2026-10-11: crossing
     decks clipped into each other). pins: points where a ground road goes on from a joint of decks (abutments too: _pin).
@@ -4842,12 +4842,12 @@ def deck_profile(lines, ground_fn, crossings=(), clear=None, grade=None, lift=No
     the chain with them kept only where no part stands more than DECK_K_OVER_M higher at any of its points nor climbs
     more than DECK_K_GRADE more steeply on any of its segments than the chain without them (_no_worse; a branch leaving
     a trunk with a longer crest took a steeper start: an M5 deck at Almondsbury 4.2 -> 4.9 %), else the chain without.
-    Pure given ground_fn."""
+    fast: a motorway's or trunk's chain (deck_curve's FAST_DECK_ENDS rule). Pure given ground_fn."""
     if DECK_K_SPEED and crest is not None:
-        base = _deck_profile(lines, ground_fn, crossings, clear, grade, lift, levels, widths, pins, None)
-        new = _deck_profile(lines, ground_fn, crossings, clear, grade, lift, levels, widths, pins, crest)
+        base = _deck_profile(lines, ground_fn, crossings, clear, grade, lift, levels, widths, pins, None, fast)
+        new = _deck_profile(lines, ground_fn, crossings, clear, grade, lift, levels, widths, pins, crest, fast)
         return new if _no_worse(lines, base, new) else base
-    return _deck_profile(lines, ground_fn, crossings, clear, grade, lift, levels, widths, pins, None)
+    return _deck_profile(lines, ground_fn, crossings, clear, grade, lift, levels, widths, pins, None, fast)
 
 
 def _no_worse(lines, base, new):
@@ -4873,9 +4873,9 @@ def _no_worse(lines, base, new):
     return True
 
 
-def _deck_profile(lines, ground_fn, crossings, clear, grade, lift, levels, widths, pins, crest):
+def _deck_profile(lines, ground_fn, crossings, clear, grade, lift, levels, widths, pins, crest, fast=False):
     """deck_profile's solve (crest as there, used as given)."""
-    zs = deck_profile_once(lines, ground_fn, crossings, clear, grade, lift, pins=pins, crest=crest)
+    zs = deck_profile_once(lines, ground_fn, crossings, clear, grade, lift, pins=pins, crest=crest, fast=fast)
     n_road = len(crossings)
     if levels is None or len(lines) < 2:
         return zs
@@ -4900,7 +4900,7 @@ def _deck_profile(lines, ground_fn, crossings, clear, grade, lift, levels, width
         if not extra:
             break
         new = deck_profile_once(lines, ground_fn, list(crossings) + extra, clear, grade, lift, n_road=n_road,
-                                levels=levels, pins=pins, crest=crest)
+                                levels=levels, pins=pins, crest=crest, fast=fast)
         if all(np.allclose(a, b, atol=0.02, equal_nan=True) for a, b in zip(new, zs)):
             zs = new
             break
@@ -5051,7 +5051,7 @@ def _curve_crossings(crossings, n_road=None, levels=None):
 
 
 def deck_profile_once(lines, ground_fn, crossings=(), clear=None, grade=None, lift=None, n_road=None, levels=None,
-                      pins=None, curve=True, crest=None):
+                      pins=None, curve=True, crest=None, fast=False):
     """Deck heights (one array per part) of a bridge chain: deck_heights between the abutments, at
     least `lift` over the ground under it, and at least `clear` over each crossing road below
     ((part index, arc m, road height)), the requirement falling at `grade` along the chain; then
@@ -5065,14 +5065,15 @@ def deck_profile_once(lines, ground_fn, crossings=(), clear=None, grade=None, li
     # crest: Lombard Street, Baltimore's deck over its embankment, test_no_step_onto_a_steep_abutment)
     if curve and lines and bridge_profile_mode() == "curve" and len(crossings):
         got = deck_curve(lines, ground_fn, _curve_crossings(crossings, n_road, levels), (), clear, lift, pins=pins,
-                         crest=crest)
+                         crest=crest, fast=fast)
         if got is not None:
             g = _curve_grade(lines, got)
             if g <= DECK_STEEP_GRADE or _end_step(lines, got) <= DECK_STEEP_GRADE:
                 return got
             # (a curve steeper than that may not meet its ends: a "bridge" mapped along a hillside stepped 40 m at
             # its abutment, GitHub #382 near Tata. The ground envelope's profile when it is the gentler one)
-            old = deck_profile_once(lines, ground_fn, crossings, clear, grade, lift, n_road, levels, pins, False, crest)
+            old = deck_profile_once(lines, ground_fn, crossings, clear, grade, lift, n_road, levels, pins, False, crest,
+                                    fast)
             return got if not old or _end_step(lines, got) <= _end_step(lines, old) + 0.05 else old
     zs = deck_heights(lines, ground_fn, pins)
     if not zs:
@@ -5479,14 +5480,54 @@ def _path_crest(info, crest):
     return None if r is None else float(r)
 
 
-def deck_curve(lines, ground_fn, crossings=(), spans=(), clear=None, lift=None, max_grade=None, pins=None, crest=None):
+# Fast-road bridge ends (ski ramps, 2026-11-17): a motorway's or trunk's branched chain has as its trunk a line a car
+# drives through it, never a path that turns back at a joint (up one carriageway's deck, back down its twin's). The
+# trunk was the path carrying the highest requirement, then the longest: the A6 / A81 viaduct at Kreuz Weinsberg
+# (49.1549 N 9.2993 E, GitHub #1176) became a U through its two carriageways (the road continuing from an abutment at
+# grade counts as one), held at its south abutment's height, and its north spans fell 3.7 m in their 45 m (11 %, 1.4 g
+# at 130 km/h) as branches. BNE_FAST_DECK_ENDS=on.
+FAST_DECK_ENDS = os.environ.get("BNE_FAST_DECK_ENDS", "off") == "on"
+TURN_BACK_COS = 0.0         # a path turning more than 90 degrees at a joint turns back (_turns_back)
+TURN_LOOK_M = 10.0          # m along each part its direction at the joint is read over
+
+
+def _dir_at(ln, start):
+    """Unit direction (2,) out of polyline ln (k, 2+) at its start (start True: into it) or into its end, read over
+    TURN_LOOK_M. Pure."""
+    p = np.asarray(ln, np.float64)[:, :2]
+    if not start:
+        p = p[::-1]
+    s = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(p, axis=0).T))]
+    t = min(TURN_LOOK_M, float(s[-1]))
+    q = np.array([np.interp(t, s, p[:, 0]), np.interp(t, s, p[:, 1])])
+    u = (q - p[0]) if start else (p[0] - q)
+    n = float(dnp.hypot(*u))
+    return u / n if n > 1e-9 else np.zeros(2)
+
+
+def _turns_back(lines, path):
+    """Does the path [(part, reversed)] turn back on itself (more than 90 degrees, TURN_BACK_COS) at any joint? Pure."""
+    for (k1, r1), (k2, r2) in zip(path[:-1], path[1:]):
+        u = _dir_at(lines[k1], r1)          # (arriving: its end, or its start when walked reversed)
+        u = -u if r1 else u
+        w = _dir_at(lines[k2], not r2)      # (leaving: its start, or its end when walked reversed)
+        w = -w if r2 else w
+        if float(np.dot(u, w)) < TURN_BACK_COS:
+            return True
+    return False
+
+
+def deck_curve(lines, ground_fn, crossings=(), spans=(), clear=None, lift=None, max_grade=None, pins=None, crest=None,
+               fast=False):
     """Deck heights (one array per part) of a bridge chain by curve_profile. A chain of parts in one line is
     solved as one profile; a branched chain (ramps leaving a viaduct) as its longest abutment-to-abutment
     line first, then each remaining branch from the solved deck it leaves (its height and grade there) to
     its own abutment or the deck it rejoins. None when the chain has no abutment (a closed loop). crossings:
     (part, arc m, height under it[, its own clearance]) roads and water under it (held `clear`, or their own
     clearance, over +-DECK_ROAD_HALF); spans: (part, arc from, arc to, min deck height). pins: joints at ground
-    roads, split into independent abutments in the graph without moving the mapped geometry. Pure given ground_fn."""
+    roads, split into independent abutments in the graph without moving the mapped geometry. fast: a motorway's or
+    trunk's chain (FAST_DECK_ENDS): a trunk turning back at a joint (_turns_back) comes after every other. Pure given
+    ground_fn."""
     clear = DECK_ROAD_CLEAR if clear is None else clear
     lift = DECK_CLEAR if lift is None else lift
     if not lines:
@@ -5521,11 +5562,11 @@ def deck_curve(lines, ground_fn, crossings=(), spans=(), clear=None, lift=None, 
             sub = deck_curve([lines[k] for k in ks], ground_fn,
                              [(idx[cr[0]],) + tuple(cr[1:]) for cr in crossings if cr[0] in idx],
                              [(idx[k], a0, a1, z) for k, a0, a1, z in spans if k in idx], clear, lift, max_grade, pins,
-                             sc)
+                             sc, fast)
             if sub is None:
                 sub = deck_profile_once([lines[k] for k in ks], ground_fn,
                                         [(idx[cr[0]],) + tuple(cr[1:]) for cr in crossings if cr[0] in idx], clear, None,
-                                        lift, pins=pins, crest=sc)
+                                        lift, pins=pins, crest=sc, fast=fast)
                 if bridge_profile_mode() == "curve" and sub is not None and any(
                         s is None for s in sub):
                     return None
@@ -5622,7 +5663,10 @@ def deck_curve(lines, ground_fn, crossings=(), spans=(), clear=None, lift=None, 
                 continue
             L = sum(edges[k][2][-1] for k, _ in p)
             top = max((need.get(k, -np.inf) for k, _ in p), default=-np.inf)
-            key = (top if np.isfinite(top) else -1e9, L)
+            # (FAST_DECK_ENDS: a path turning back on itself at a joint, up one carriageway and down the other, is no
+            # trunk: it comes after every path that goes on through)
+            key = ((0 if fast and _turns_back(lines, p) else 1),
+                   top if np.isfinite(top) else -1e9, L)
             if best is None or key > best[0]:
                 best = (key, p)
     if best is None:
@@ -8277,9 +8321,14 @@ class BridgeProfiles:
             required = _fast_deck_cap(lines, required, self._landing_ground(lines, gl),
                                       deck_road_clear(depth, under), DECK_FULL_DEPTH if depth is None else depth)
 
+        # (FAST_DECK_ENDS: a chain carrying a motorway or a trunk, not only their links)
+        fast = FAST_DECK_ENDS and any(str(getattr(pool[k][0], "cls", "")) in FAST_DECK_CLASSES
+                                      and not getattr(pool[k][0], "link", False) for k in comp)
+
         def solve(ground_fn):
             return deck_profile(lines, ground_fn, required + rails + water, clear=deck_road_clear(depth, under),
-                                levels=levels, widths=[pool[k][0].width for k in comp], pins=pins, crest=crest)
+                                levels=levels, widths=[pool[k][0].width for k in comp], pins=pins, crest=crest,
+                                fast=fast)
         base = self._landing_ground(lines, gl)
         zs = solve(base)
         # a free end standing on another deck: solved again with it at that deck's height as drawn (measured too:
