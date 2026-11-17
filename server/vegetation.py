@@ -85,14 +85,14 @@ GROUPS = ("deciduous", "conifer", "shrub", "rock", "pine_west", "palm", "juniper
           # (30: the bushes' and forest floors' own, shrub_groups; the stock survey 2026-11-16)
           "maquis", "shrub_north", "shrub_tropical", "fern", "deadwood", "tro_thicket",
           "deciduous_open", "oak_open", "birch_open", "beech_open", "pine_west_open", "mediterranean_open",
-          "tropical_open", "conifer_open", "spruce_open", "pine_eu_open")
+          "tropical_open", "conifer_open", "spruce_open", "pine_eu_open", "redwood")
 (G_DECIDUOUS, G_CONIFER, G_SHRUB, G_ROCK, G_PINE_WEST, G_PALM, G_JUNIPER, G_DESERT_SHRUB, G_DESERT_ROCK,
  G_OAK_WEST, G_TROPICAL, G_MEDITERRANEAN, G_CONIFER_CLUMP, G_DECIDUOUS_CLUMP, G_OAK_WEST_CLUMP,
  G_MEDITERRANEAN_CLUMP, G_VINE, G_STRAW_N, G_STRAW_S, G_SILAGE_N, G_SILAGE_S, G_EUCALYPTUS, G_EUCALYPTUS_CLUMP,
  G_POPLAR, G_CREOSOTE, G_BIRCH, G_OAK, G_BEECH, G_PINE_EU, G_SPRUCE, G_SNAG_BROAD, G_SNAG_CONIFER, G_PALM_DRY,
  G_BIRCH_CLUMP, G_OAK_CLUMP, G_BEECH_CLUMP, G_MAQUIS, G_SHRUB_NORTH, G_SHRUB_TROPICAL, G_FERN, G_DEADWOOD,
  G_TRO_THICKET, G_DECIDUOUS_OPEN, G_OAK_OPEN, G_BIRCH_OPEN, G_BEECH_OPEN, G_PINE_WEST_OPEN, G_MEDITERRANEAN_OPEN,
- G_TROPICAL_OPEN, G_CONIFER_OPEN, G_SPRUCE_OPEN, G_PINE_EU_OPEN) = range(52)
+ G_TROPICAL_OPEN, G_CONIFER_OPEN, G_SPRUCE_OPEN, G_PINE_EU_OPEN, G_REDWOOD) = range(53)
 # Far clumps (GitHub #1074, "trees cost too much"; the asset survey 2026-11-10): a forest's canopy trees gathered on a
 # world-fixed grid of about CLUMP_CELL_M squares (a whole number of them a geotile: none straddles two); a square with
 # CLUMP_MIN of them gets one item of a stock clump shape (trees.lua's *_clump groups: East Coast USA's
@@ -100,7 +100,8 @@ GROUPS = ("deciduous", "conifer", "shrub", "rock", "pine_west", "palm", "juniper
 # holm_oak_filler_center, 4-8 trees each, the materials of the single trees they stand for). The mod shows the clump
 # beyond its near ring (trees.lua CLUMP_M) and the square's trees, flagged by a negative scale, only within it: a far
 # forest tile of ~900 single trees becomes ~150 clumps. Other groups (palms, junipers, tropical trees) stay single.
-CLUMP_OF = {G_CONIFER: G_CONIFER_CLUMP, G_PINE_WEST: G_CONIFER_CLUMP, G_DECIDUOUS: G_DECIDUOUS_CLUMP,
+CLUMP_OF = {G_CONIFER: G_CONIFER_CLUMP, G_PINE_WEST: G_CONIFER_CLUMP, G_REDWOOD: G_CONIFER_CLUMP,
+            G_DECIDUOUS: G_DECIDUOUS_CLUMP,
             G_OAK_WEST: G_OAK_WEST_CLUMP, G_MEDITERRANEAN: G_MEDITERRANEAN_CLUMP, G_EUCALYPTUS: G_EUCALYPTUS_CLUMP,
             # (29) the Scots pines and spruces far off as the conifer clump (no stock pine group: a pine clump is for a
             # shape of our own), the broadleaves as their own species' groups
@@ -356,6 +357,14 @@ PALM_FROM = None
 # survey), and fewer palms outside town (regional_groups' 20 % of the tropics' trees: RAINFOREST_PALM_KEEP of them)
 K_RAINFOREST = (1, 2)
 K_TROPICS = (1, 2, 3)             # Af Am Aw: the coconut palms' (34)
+REDWOOD_MIN_M = 25.0
+
+
+def redwood_belt(lat, lon):
+    """The coast redwoods' fog belt (Big Sur to the Oregon line, ~40-60 km inland): a strip east of the coast, its
+    edge from -122.0 at 37 N to -124.25 at 42 N."""
+    lat, lon = np.asarray(lat, np.float64), np.asarray(lon, np.float64)
+    return (lat > 35.8) & (lat < 42.3) & (lon < -122.0 - 0.45 * (lat - 37.0)) & (lon > -125.0)
 RAINFOREST_PALM_KEEP = 0.4
 
 
@@ -446,6 +455,9 @@ def species_groups(group, height, lat, lon, lcls, koppen, elev, u_broad, u_conif
     # (34) coconut-type palms only in the tropics' climates (Af, Am, Aw): any other palm (California's, Florida's north,
     # the Mediterranean's, the Gulf's) the fan and date palms (the gallery 2026-11-17: the palm group mixed both)
     g[(g == G_PALM) & ~np.isin(k, K_TROPICS)] = G_PALM_DRY
+    # (34) the coast redwoods only in their fog belt (the gallery 2026-11-17: pine_west's tallest were redwoods, drawn
+    # for any 25 m+ conifer from Washington to the Southeast's loblolly pines)
+    g[(g == G_PINE_WEST) & redwood_belt(lat, lon) & (h >= REDWOOD_MIN_M)] = G_REDWOOD
     # dead trees in the forests outside the tropics
     forest = (np.asarray(lcls) == WC["tree"]) & (np.abs(lat) >= 23.5) & (h >= SNAG_H[0]) & (h <= SNAG_H[1])
     snag = forest & (np.asarray(u_snag) < SNAG_SHARE)

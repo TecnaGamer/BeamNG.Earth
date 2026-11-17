@@ -477,6 +477,16 @@ class ShrubTest(unittest.TestCase):
                                    np.array([0.9]), np.array([0.1]))
             self.assertEqual(int(g[0]), want, (lat, lon, int(k[0])))
 
+    def test_redwoods_only_in_their_fog_belt(self):
+        import climate
+        for (lat, lon), want in (((41.2, -124.0), veg.G_REDWOOD), ((37.9, -122.6), veg.G_REDWOOD),
+                                 ((46.8, -121.7), veg.G_PINE_WEST), ((33.7, -84.4), veg.G_PINE_WEST)):
+            la, lo = np.array([lat]), np.array([lon])
+            g = veg.species_groups(np.array([veg.G_PINE_WEST], np.uint8), np.array([32.0]), la, lo,
+                                   np.array([veg.WC["tree"]]), climate.koppen_many(la, lo), None, np.array([0.5]),
+                                   np.array([0.5]), np.array([0.9]), np.array([0.9]))
+            self.assertEqual(int(g[0]), want, (lat, lon))
+
     def test_no_mossy_forest_trees_in_the_open(self):
         g = veg.open_groups(np.array([veg.G_OAK, veg.G_DECIDUOUS, veg.G_SNAG_BROAD, veg.G_SNAG_CONIFER, veg.G_BEECH,
                                       veg.G_OAK], np.uint8), np.array([1, 1, 1, 1, 1, 0], bool))

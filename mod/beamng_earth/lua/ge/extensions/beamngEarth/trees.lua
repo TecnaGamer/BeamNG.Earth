@@ -243,8 +243,13 @@ M.CATALOG = {
     { WCA .. 'trees/trees_conifer/pine_radiata_small', 8.6 }, { WCA .. 'trees/trees_conifer/pine_radiata_forest', 13.3 },
     { WCA .. 'trees/trees_conifer/pine_radiata_large', 13.2 }, { WCA .. 'trees/trees_conifer/pine_radiata_weathered', 13.2 },
     { ECA .. 'trees/trees_douglasfir/tree_douglasfir_large_a', 19.6 }, { ECA .. 'trees/trees_douglasfir/tree_douglasfir_large_d', 21.7 },
-    { IT .. 'trees/trees_italy/scots_pine', 18.9 }, { WCA .. 'trees/trees_conifer/redwood_tall', 38.5 },
-    { WCA .. 'trees/trees_conifer/redwood_split', 38.1 }, { WCA .. 'trees/trees_conifer/redwood_broad', 38.5 },
+    { IT .. 'trees/trees_italy/scots_pine', 18.9 }, { ECA .. 'trees/trees_douglasfir/tree_douglasfir_large_b', 21.4 },
+  },
+  -- (34) the coast redwoods, their fog belt's 25 m+ conifers only (server vegetation.redwood_belt; were pine_west's
+  -- tallest anywhere, the gallery 2026-11-17)
+  redwood = {
+    { WCA .. 'trees/trees_conifer/redwood_split', 38.1 }, { WCA .. 'trees/trees_conifer/redwood_tall', 38.5 },
+    { WCA .. 'trees/trees_conifer/redwood_broad', 38.5 },
   },
   oak_west = {
     { WCA .. 'trees/trees_oak/oak_d', 7.1 }, { WCA .. 'trees/trees_oak/oak_b', 8.2 }, { WCA .. 'trees/trees_oak/oak_c', 8.4 },
