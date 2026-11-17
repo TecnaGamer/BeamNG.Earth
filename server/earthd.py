@@ -3515,6 +3515,8 @@ class Server:
         radar_props, speed_traps = radars.tile_rows(anchor.frame, box, self.mapdata, elev, self.road_widths, urban)
         if radar_props:
             props = (props or []) + radar_props
+        import racedig              # (BNE_RACEWAY_DIG: no prop, pole or wire end on a racetrack's band)
+        racedig.tile_clear(anchor.frame, cells, props, wires, elev)
         return roadsmod.write_tile(self.out_dir, self.vfs_dir, aid, tx, ty, chunks, walks if self.sidewalks else None,
                                    mesh, dmesh, bld, props, wires, park, tunnel_mesh=tmesh, fuel=fuel,
                                    rail_mesh=rmesh, guardrail_rows=guardrail_rows, garage_sound=garage_sound,

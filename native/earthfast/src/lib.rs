@@ -75,6 +75,7 @@ mod farglobal;
 mod farpvs;
 mod farsel;
 mod dirtsteps;
+mod racedig;
 mod gridinterp;
 mod dejunction;
 mod streetlabels;
@@ -6528,6 +6529,9 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 377 (first numbered 375): grade_points: a road holds its carriageway whole only over no approach of its rank
     // leading onto a bridge (gradebins Pt.arank: the Stonehouse Bridge's deck end stepped 1.6 m into the gyratory it
     // runs into, GitHub #1374)
-    m.add("VERSION", 377)?;
+    m.add_function(wrap_pyfunction!(racedig::race_dig_floor, m)?)?;
+    // 384: racedig::race_dig_floor (racedig.py, BNE_RACEWAY_DIG: a tunnel part dug under a racetrack, the track's
+    // surface kept; road revamp R1k)
+    m.add("VERSION", 384)?;
     Ok(())
 }

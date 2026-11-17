@@ -1927,6 +1927,8 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
     radar_props, P.speed_traps = radars.tile_rows(frame, box, _s.md, elev, _s.widths, urban)
     if radar_props:
         props = (props or []) + radar_props
+    import racedig                  # (BNE_RACEWAY_DIG: no prop, pole or wire end on a racetrack's band)
+    racedig.tile_clear(frame, cells, props, wires, elev)
     P.signs = signs
     P.chunks, P.ctx, P.walks, P.box, P.origin = chunks, ctx, walks, box, (x0, y0, 0.0)
     P.custom, P.custom_entries = _custom, _entries

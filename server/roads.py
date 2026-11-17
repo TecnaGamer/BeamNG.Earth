@@ -39,6 +39,7 @@ import junctions
 import mapcells
 import mapgeom
 import photosurface
+import racedig
 import roadmesh
 import roadsurf
 import roadsmooth
@@ -1763,9 +1764,14 @@ def _clear_portals(feats, i, parts):
     for ring in parts:
         ring = np.asarray(ring, np.float64)
         kx = 111320.0 * dmath.cos(math.radians(float(ring[0, 1])))
-        if float(dnp.hypot(*(np.diff(ring, axis=0) * [kx, 111320.0]).T).sum()) <= UNDERPASS_MAX_M:
+        L = float(dnp.hypot(*(np.diff(ring, axis=0) * [kx, 111320.0]).T).sum())
+        if L <= UNDERPASS_MAX_M:
             for at_start in (True, False):
                 ring = _clear_end(feats, i, ring, at_start, half)
+        elif racedig.ON and L <= racedig.MAX_PART_M:
+            # (a longer tube under a racetrack: its portals off the track's band, racedig; the other roads as before)
+            for at_start in (True, False):
+                ring = _clear_end(feats, i, ring, at_start, half, race_only=True)
         out.append(ring)
     return out
 
@@ -1793,21 +1799,26 @@ def _portal_roads(feats):
     if got is not None:
         return got
     rs = road_specs(feats)
-    js, parts = [], []
+    js, parts, hws, race = [], [], [], []
     for j in range(len(feats)):
-        if rs[j] is None or rs[j].cls not in PORTAL_CLASSES:
+        if rs[j] is None:
+            continue
+        is_race = racedig.ON and rs[j].cls == "raceway"       # (a portal off a racetrack's band: racedig)
+        if rs[j].cls not in PORTAL_CLASSES and not is_race:
             continue
         for g in ground_parts(feats, j):
             js.append(j)
             parts.append(np.asarray(g, np.float64))
+            hws.append(rs[j].width / 2 + (racedig.BAND_MARGIN_M if is_race else 0.0))
+            race.append(is_race)
     bb = np.array([(g[:, 0].min(), g[:, 0].max(), g[:, 1].min(), g[:, 1].max()) for g in parts]).reshape(-1, 4)
     idx = {"j": np.asarray(js, np.int64), "parts": parts, "minx": bb[:, 0], "maxx": bb[:, 1], "miny": bb[:, 2],
-           "maxy": bb[:, 3], "hw": [rs[j].width / 2 for j in js]}
+           "maxy": bb[:, 3], "hw": hws, "race": race}
     feats.__dict__["_portal_roads"] = idx
     return idx
 
 
-def _clear_end(feats, i, ring, at_start, half):
+def _clear_end(feats, i, ring, at_start, half, race_only=False):
     import grading
     p0 = ring[0] if at_start else ring[-1]
     kx, ky = 111320.0 * dmath.cos(math.radians(p0[1])), 111320.0      # m per degree there
@@ -1826,6 +1837,8 @@ def _clear_end(feats, i, ring, at_start, half):
                           ((idx["minx"] - p0[0]) * kx / ky <= reach) & ((p0[0] - idx["maxx"]) * kx / ky <= reach) &
                           (idx["j"] != i)) if len(idx["j"]) else ()
     for n_ in near:
+        if race_only and not idx["race"][n_]:
+            continue
         g = idx["parts"][n_]
         gm = (g - p0) * [kx, ky]
         a_, d_ = gm[:-1], np.diff(gm, axis=0)
@@ -9424,6 +9437,7 @@ class TunnelProfiles(BridgeProfiles):
             g = g.copy()
             g[0], g[-1] = ge[0], ge[-1]
             pinned = [False, False]
+            race_cap = None             # (racedig: the height the vault's soil keeps under a racetrack over it)
             gc = None                   # (the ground the cover is read on, where g's ends are pinned)
             for e, pz in enumerate(pins.get(k, ())):
                 if np.isfinite(pz):     # (a joint inside the hill: the network's floor there, no portal)
@@ -9448,6 +9462,10 @@ class TunnelProfiles(BridgeProfiles):
                 if not fl.get("buried"):
                     kinds = portal_cover(kinds, (g if gc is None else gc) - floor, pool[k][0], s)
                 kinds = self._cover_roads(xy, s, kinds, ground, (g if gc is None else gc) - floor)
+                if racedig.ON:          # (under a racetrack: dug under its band, the track's surface kept)
+                    dug = self._race_dig(pool[k][0], xy, s, floor, kinds, ground)
+                    if dug is not None:
+                        floor, kinds, race_cap = dug
             secs, i = [], 0
             while i < len(kinds):
                 j = i
@@ -9489,6 +9507,8 @@ class TunnelProfiles(BridgeProfiles):
                     fit = self._bore_fit(xy[a:b + 1], s[a:b + 1], floor[a:b + 1], ground)
                     if fit is not None and fit < th:
                         th = float(max(fit, low_h))
+                if race_cap is not None:    # (no vault through a racetrack's surface: racedig.MIN_TUBE_H at least)
+                    th = racedig.tube_height(th, race_cap, floor, a, b)
                 ups = []
                 for near in (s[a:b + 1] <= s[a] + PORTAL_LOOK_M, s[a:b + 1] >= s[b] - PORTAL_LOOK_M):
                     cv = float(np.max(cover[a:b + 1][near])) if near.any() else th
@@ -9506,6 +9526,23 @@ class TunnelProfiles(BridgeProfiles):
             self._tls.staged[k] = (secs, subs, underwater)
             out.append(floor)
         return out
+
+    def _race_dig(self, spec, xy, s, floor, kinds, ground):
+        """racedig.dig_part for a tunnel part (spec, its line xy, arc s, floor and sections as solved) under the
+        raceways among the ground roads `ground` (their ids osm-raceway-*, half widths as _load read them): (floor,
+        kinds, cap) or None."""
+        races = []
+        for gk, lns in sorted((ground or {}).items()):
+            if gk[1] != "g" or not racedig.is_raceway(gk[0]):
+                continue
+            hw = self._hw.get(gk, STYLE["raceway"][0] / 2)
+            races.extend((np.asarray(ln, np.float64).reshape(-1, 2), hw) for ln in lns if len(ln) >= 2)
+        if not races or spec is None:
+            return None
+        low_h = MAJOR_LOW_H if spec.cls in CONCRETE_WALL_CLASSES else TUNNEL_LOW_H
+        elev = self.raw if self.raw is not None else self.elev
+        return racedig.dig_part(self.frame, elev, xy, s, floor, kinds, races,
+                                spec.width / 2 + roadmesh.TUNNEL_SHOULDER, low_h, roadmesh.TUNNEL_H)
 
     def _observed_floor(self, k, pool, xy, s, floor, secs, joints=(False, False)):
         """floor with each covered section (kind 1 / 2) at the measured height where a source has one (roadz.py,
