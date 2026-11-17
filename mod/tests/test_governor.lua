@@ -497,4 +497,15 @@ do
   T.check(n == 2, 'a unit that ran counts nothing')
   T.check(g:snapshot().est ~= nil, 'the per-kind estimates in the snapshot')
 end
+
+do -- roadDrive (bridge decks) gets URGENT_ROAD_DEBT_MS headroom over general URGENT_DEBT_MS
+  local g = governor.new({ clock = clock })
+  for _ = 1, 50 do frame(g, { cost = 1e9 }) end
+  g:beginFrame(true); g.tokens = -governor.URGENT_DEBT_MS - 2
+  T.check(not g:tryUrgent('roadSurf'), 'roadSurf waits past URGENT_DEBT_MS')
+  T.check(g:tryUrgent('roadSurf', true), 'highPriority roadSurf shares URGENT_ROAD_DEBT_MS headroom')
+  T.check(g:tryUrgent('roadDrive'), 'roadDrive still runs up to URGENT_ROAD_DEBT_MS')
+  g.tokens = -governor.URGENT_ROAD_DEBT_MS - 1
+  T.check(not g:tryUrgent('roadDrive'), 'roadDrive waits past URGENT_ROAD_DEBT_MS')
+end
 T.done('test_governor')

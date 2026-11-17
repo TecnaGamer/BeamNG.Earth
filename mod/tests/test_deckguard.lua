@@ -453,4 +453,16 @@ do
   T.check(#g.spans == 0 and g.aid == nil, 'a new frame: no spans until the next message')
 end
 
+-- Phase 2: nil groundAt past the current TerrainBlock edge must not cause false bridge-loading stalls
+do
+  local w = world()
+  w.groundAt = function(x, y)
+    if x > 301 then return nil end  -- loaded TerrainBlock ends right after abutment before valley sample
+    return 10
+  end
+  local g = guard({ SPAN })
+  T.check(look(g, w, 120, 0, 10.5, 65, 0) == nil,
+    'missing tile over un-sampled ground past block edge: no false stall')
+end
+
 T.done('test_deckguard')

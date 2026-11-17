@@ -202,4 +202,21 @@ do
   net.close()
 end
 
+-- roads_skin in urgent decode list bypasses far_tile backlog immediately
+do
+  local net = fresh()
+  net.setUrgent({ terrain_ready = true, roads_skin = true })
+  local list = {}
+  for _ = 1, 12 do list[#list + 1] = payload('far_tile', 100 * 1024) end
+  mode.incoming = wire(list)
+  net.update(0)
+  local skin = payload('roads_skin', 200)
+  local sn = seq
+  mode.incoming = wire({ skin })
+  local gotSkin = false
+  for _, m in ipairs(net.update(0)) do if m.n == sn then gotSkin = true end end
+  T.check(gotSkin, 'roads_skin decoded at once past far_tile backlog')
+  net.close()
+end
+
 T.done('test_net_decode')

@@ -260,7 +260,9 @@ scanSpan = function(sp, dir, a, b, grid, groundAt)
       local qx, qy = pointAt(sp, u)
       local lz = levelAt(sp, u, groundAt)
       local gz = lz and groundAt(qx, qy)
-      if not (lz and gz) or gz < lz - M.DROP_M then
+      -- When lz is unknown (un-abutted deck fork) or sampled ground drops below lz - DROP_M, flag the gap.
+      -- When lz is known and gz is nil (past the loaded TerrainBlock edge), do not stall before edgeguard.
+      if not lz or (gz and gz < lz - M.DROP_M) then
         found = { u = u, x = qx, y = qy, key = key, level = lz }
         return true
       end

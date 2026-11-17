@@ -56,6 +56,10 @@ M.LOOKAHEAD_S_512 = 5                       -- (was 2: a hop of 128-256 m at roa
 M.RECHECK_S_512 = 2
 M.RECHECK_SAFE_512 = 510 - 150               -- the re-check waits only while the player stays this close
 M.FAST_V_512 = 150
+M.PREP_HIGH_V_512 = 31        -- highway speed (> 112 km/h): prepare early enough for PREP_EDGE_S lead
+M.PREP_HIGH_V_1024 = 1e9
+M.PREP_EDGE_S = 14            -- s before the collidable edge at which prepare fires (clamped by PREP_AHEAD_MAX_M)
+M.PREP_AHEAD_MAX_M = 256      -- m: max extra lead ahead of player so a strictly forward target exists
 -- 512² fast mode (|v| > FAST_V)
 M.FAST_V = 150
 M.EDGE_MARGIN_FAST = 90
@@ -80,6 +84,7 @@ M.LOOKAHEAD_S = M.LOOKAHEAD_S_1024           -- target = snap256(player + veloci
 M.RECHECK_S = M.RECHECK_S_1024
 M.RECHECK_SAFE = M.RECHECK_SAFE_512
 M.FAST_MODE_V = M.FAST_V_1024
+M.PREP_HIGH_V = M.PREP_HIGH_V_1024
 M.RETRY_S = 5                  -- wait after a terrain_error before asking again
 
 -- Max |centre - player| per axis: 1020 - 600 = 420 m (design 1.2; the server's predict_centre uses
@@ -99,8 +104,21 @@ function M.configure()
   M.MIN_LEAD = M['MIN_LEAD' .. t]
   M.HARD_COMMIT_DIST, M.EDGE_MARGIN, M.REACH = M['HARD_COMMIT_DIST' .. t], M['EDGE_MARGIN' .. t], M['REACH' .. t]
   M.LOOKAHEAD_S, M.RECHECK_S, M.FAST_MODE_V = M['LOOKAHEAD_S' .. t], M['RECHECK_S' .. t], M['FAST_V' .. t]
+  M.PREP_HIGH_V = M['PREP_HIGH_V' .. t]
   REACH = M.REACH
   return n
+end
+
+-- Prepare-test lookahead (s): fast mode's ahead, extended above PREP_HIGH_V to keep PREP_EDGE_S before the edge.
+function M.prepAhead(vx, vy, ahead)
+  local sp = math.sqrt((vx or 0) ^ 2 + (vy or 0) ^ 2)
+  ahead = ahead or 0
+  if sp > M.PREP_HIGH_V and sp > 1e-6 then
+    local edgeDist = (M.HALF - M.SQUARE_SIZE) - M.PREPARE_DIST
+    local wantM = min(M.PREP_AHEAD_MAX_M, max(0, sp * M.PREP_EDGE_S - edgeDist))
+    return max(ahead, wantM / sp)
+  end
+  return ahead
 end
 
 -- (lookahead s, reach m, prepare-test lead s) at this velocity: the fast mode above FAST_MODE_V.
@@ -193,7 +211,8 @@ end
 function M.centreAhead(px, py, vx, vy, cx, cy)
   vx, vy = vx or 0, vy or 0
   local v2 = vx * vx + vy * vy
-  if M.MIN_LEAD <= 0 or v2 <= M.MIN_LEAD_V * M.MIN_LEAD_V or v2 * M.LOOKAHEAD_S * M.LOOKAHEAD_S >= M.MIN_LEAD * M.MIN_LEAD then
+  if M.MIN_LEAD <= 0 or v2 <= M.MIN_LEAD_V * M.MIN_LEAD_V or v2 > M.PREP_HIGH_V * M.PREP_HIGH_V
+    or v2 * M.LOOKAHEAD_S * M.LOOKAHEAD_S >= M.MIN_LEAD * M.MIN_LEAD then
     return false
   end
   return (cx - px) * vx + (cy - py) * vy > 0 and M.cheb(px, py, cx, cy) <= M.MIN_LEAD + M.GRID
@@ -262,8 +281,9 @@ function M.decide(px, py, vx, vy, cx, cy, pending, now, retryAt, gate, latency)
     if pd > reach then return 'discard' end
     return nil
   end
-  -- the prepare test point: the player (fast mode: PREP_AHEAD_FAST_S ahead)
-  if M.cheb(px + (vx or 0) * ahead, py + (vy or 0) * ahead, cx, cy) <= M.PREPARE_DIST or now < (retryAt or 0) then
+  -- the prepare test point: the player (extended above PREP_HIGH_V; fast mode: PREP_AHEAD_FAST_S)
+  local pAhead = M.prepAhead(vx, vy, ahead)
+  if M.cheb(px + (vx or 0) * pAhead, py + (vy or 0) * pAhead, cx, cy) <= M.PREPARE_DIST or now < (retryAt or 0) then
     return nil
   end
   -- (MIN_LEAD: the block just committed is centred ahead of the player; the box test, symmetric, asked for the next one
