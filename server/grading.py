@@ -427,6 +427,14 @@ UNDER_CLEAR_M = roadsmod.DECK_ROAD_CLEAR + ROAD_LIFT
 UNDER_GRADE = 0.06          # the dip's ramps
 UNDER_MAX_BRIDGE_M = 120.0  # only single short spans (both ends on the ground): a chain's inner ends are no abutments
 UNDER_MAX_DROP_M = 8.0      # never lowered more than this (bad data: rather a low bridge than a pit)
+# Speed-based vertical curves for a fast road's dip under a deck (ski ramps, 2026-11-17): a cosine ramp at UNDER_GRADE
+# bends at 2 grade^2 / depth, 0.95 / depth g at 130 km/h (a 1 m dip throws a car 0.95 g at its crests), and a shallower
+# dip is sharper still. A motorway's, trunk's or primary's own dip (not a link's) ramps no steeper than keeps that
+# bend under 1 / UNDER_SPEED_R of its class (half the sag radius of its design speed, the road revamp plan's relaxed K:
+# 120 / 100 / 90 km/h), never so gentle that it outruns UNDER_MAX_DROP_M's ramp (underpass_offsets' 4th column).
+# BNE_UNDER_SPEED=on.
+UNDER_SPEED = os.environ.get("BNE_UNDER_SPEED", "off") == "on"
+UNDER_SPEED_R = {"motorway": 3100.0, "trunk": 2200.0, "primary": 1800.0}
 # On lidar a road under a rail bridge is where the survey has it (a town's underpass is lower than a road bridge's 6 m:
 # Nachod's road 14 under the Kladska line, 3.5 m under the track's ground, was dug 3.8 m down and its junctions with it,
 # a ravine the user saw, 2026-11-09): lowered at most this much (plan 035). BNE_RAIL_UNDER_LIDAR_DROP=off: as before.
@@ -4144,6 +4152,9 @@ class _Planner:
         net, runs = requirements, []
         if coarse and UNDER_RUN_ON:
             net, runs = street_runs(lines, [ground[g][3] for g in gids], requirements)
+        if UNDER_SPEED:         # (a fast road's own dips on speed-based curves: under_speed_grade)
+            net = [(i, sc, d, under_speed_grade(ground[gids[int(i)]][3], ground[gids[int(i)]][1], d))
+                   for i, sc, d in net]
         offsets = underpass_offsets(lines, net, queries)
         for rxy, members, reqs in runs:
             on = [k for k, (ln, _q) in enumerate(queries) if ln in members]
@@ -7755,7 +7766,8 @@ def underpass_offsets(lines, requirements, queries=None):
     """Smooth underpass dips along joined ground roads, never across space (earthfast.underpass_offsets; after
     wyo-backroads' PR #374): m (<= 0) to add to the roads' heights.
 
-    lines: the ground roads [(k, 2)]; requirements [(line, arc m, depth m)] of the overpasses they cross under.
+    lines: the ground roads [(k, 2)]; requirements [(line, arc m, depth m)] of the overpasses they cross under, or
+    [(line, arc m, depth m, ramp grade)] (UNDER_SPEED: its own steepest grade, 0 for UNDER_GRADE).
     queries: [(line, points (k, 2) on it)] where the offsets are asked (default: every line's own points); one
     array per query (per line by default). Roads join where their ends meet; a node shared by several roads takes
     one offset in each, the eighth norm combines nearby dips without summing their depths, loose ends stay pinned
@@ -7773,13 +7785,27 @@ def underpass_offsets(lines, requirements, queries=None):
         return [np.zeros(len(q)) for q in qs]
     starts = np.r_[0, np.cumsum([len(p) for p in pts])].astype(np.int64)
     xy = np.ascontiguousarray(np.vstack(pts)) if len(starts) and starts[-1] else np.zeros((0, 2))
-    req = np.ascontiguousarray(np.asarray(requirements, f64).reshape(-1, 3))
+    ncol = 4 if any(len(r) > 3 for r in requirements) else 3
+    if ncol == 4:
+        fast.require(410, "underpass_offsets ramp grades")
+    req = np.ascontiguousarray(np.asarray([tuple(r) + (0.0,) * (ncol - len(r)) for r in requirements],
+                                          f64).reshape(-1, ncol))
     qxy = np.ascontiguousarray(np.vstack(qs)) if sum(len(q) for q in qs) else np.zeros((0, 2))
     qline = np.repeat(np.array([int(l) for l, _q in queries], np.int64), [len(q) for q in qs])
     prm = np.array([UNDER_FLAT_M, UNDER_GRADE, UNDER_MAX_GRADE, UNDER_MAX_DROP_M, UNDER_JOINT_FLAT_M,
                     UNDER_JOINT_FADE_M, UNDER_NODE_M], f64)
     out = fast._ef.underpass_offsets(xy, starts, req, qxy, qline, prm)
     return np.split(out, np.cumsum([len(q) for q in qs])[:-1])
+
+
+def under_speed_grade(cls, sigma, depth):
+    """UNDER_SPEED: the steepest grade of a dip depth m deep on a road of class cls (profile smoothing sigma: a link's
+    is not a major road's) whose bend stays under 1 / UNDER_SPEED_R (the cosine ramp's 2 grade^2 / depth), within
+    depth * UNDER_GRADE / UNDER_MAX_DROP_M .. UNDER_GRADE; 0 (UNDER_GRADE, the kernel's own) for any other road. Pure."""
+    r = UNDER_SPEED_R.get(cls)
+    if r is None or sigma < SIGMA_MAJOR_M or not depth > 0.0:
+        return 0.0
+    return float(min(UNDER_GRADE, max(depth * UNDER_GRADE / UNDER_MAX_DROP_M, dmath.sqrt(depth / (2.0 * r)))))
 
 
 def street_runs(lines, classes, requirements):

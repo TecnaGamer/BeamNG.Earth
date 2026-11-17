@@ -109,7 +109,9 @@ enum Req {
 /// - At a junction of 3+ lines (no loose end within jflat + jfade, no crossing within jflat + jfade + flat): every
 ///   line there takes the deepest drop within jflat of it, blended back over jfade (smoothstep).
 /// The queries (qxy, qline) are points on those lines: each is placed at the nearest point of its line.
-/// prm: [flat, grade, max_grade, max_drop, jflat, jfade, tol]. Pure and deterministic for a given input order.
+/// prm: [flat, grade, max_grade, max_drop, jflat, jfade, tol]. req may carry a 4th column: that dip's own grade in
+/// place of grade (at most grade, at least depth * grade / max_drop; 0 or NaN: grade). Pure and deterministic for a
+/// given input order.
 #[pyfunction]
 pub fn underpass_offsets<'py>(
     py: Python<'py>,
@@ -183,6 +185,13 @@ pub fn underpass_offsets<'py>(
         }
         let (a, b) = ends[part];
         let ll = len[part];
+        // (a 4th column: this dip's own ramp grade, gentler than grade for a fast road (grading.UNDER_SPEED), never so
+        // gentle that its ramp outruns max_drop's at grade: every dip still ends within max_run)
+        let grade = if req.shape()[1] > 3 && req[[r, 3]] > 0.0 {
+            req[[r, 3]].min(grade).max(depth * grade / max_drop)
+        } else {
+            grade
+        };
         let run = depth * PI / grade;
         let limit = (flat + run + 1.0).max(jreach + 1.0);
         dijkstra(&adj, &[(a, sc), (b, ll - sc)], limit, &mut buf, &mut touched);
