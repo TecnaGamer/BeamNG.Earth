@@ -1271,7 +1271,16 @@ def inputs(frame, x0, y0, size, px, md, surface, widths=None, veg=None):
                 cover[np.asarray(m, bool)] |= 4
         except Exception as e:      # (the roofs are filled in after anyway)
             log.debug("genground: building mask: %s: %s", type(e).__name__, e)
-    floor, mode = tree_floor(frame, x0, y0, size, px, veg, missing)
+    if getattr(_far_tl, "on", False):
+        # (a far square, render_far: the trees the mod draws at its distance, not each placed one: the canopy's core
+        # wooded, its floor weighted by the share of the trees drawn there, FAR_SHARE; no trees drawn: their colour)
+        floor, mode = None, 0
+        if veg is not None:
+            share = _far_tl.share
+            floor = np.where((canopy != CANOPY_NODATA) & (canopy >= 3), int(round(255 * share)), 0).astype(np.uint8)
+            mode = 2
+    else:
+        floor, mode = tree_floor(frame, x0, y0, size, px, veg, missing)
     kind, region = fast._ef.gg_regions(np.ascontiguousarray(base), poly, pkinds, line, lkinds, canopy, cover,
                                        float(size / px), floor, mode == 0)
     return kind, region, canopy, bool(complete) and not missing, poly, dirs, phases, floor, mode
@@ -1284,7 +1293,8 @@ def halo_square(x0, y0, size, px):
     return x0 - h * t, y0 - h * t, size + 2 * h * t, px + 2 * h, h
 
 
-def generate(rgb, frame, x0, y0, size, px, md, surface, widths=None, veg=None, dem=None, imagery=None, pending=None):
+def generate(rgb, frame, x0, y0, size, px, md, surface, widths=None, veg=None, dem=None, imagery=None, pending=None,
+             relight=True):
     """(the generated ground (px, px, 3) uint8 of the square, complete) from rgb, its Sentinel-2 photo (imagery.render
     over the same square at px), and the map data (inputs()). Its outer HALO_M is not final (the windows reach out of
     the square there): render() keeps the middle of a larger square."""
@@ -1297,7 +1307,7 @@ def generate(rgb, frame, x0, y0, size, px, md, surface, widths=None, veg=None, d
     t = size / px
     # (the global texel grid of the anchor frame: the blocks' texels lie on it, so their lattices agree)
     gc, gr = int(np.floor(x0 / t + 0.5)), int(np.floor(-(y0 + size) / t + 0.5))
-    if imagery is not None:         # (stage 5) the capture sun's shadows out of the photo (shade())
+    if imagery is not None and relight:  # (stage 5) the capture sun's shadows out of the photo (shade())
         miss = []
         rgb, region = shade(rgb, frame, x0, y0, size, px, kind, region, canopy, md, dem, imagery, pending, miss, gr,
                             gc, surface)
@@ -1307,7 +1317,8 @@ def generate(rgb, frame, x0, y0, size, px, md, surface, widths=None, veg=None, d
     return out, complete
 
 
-def render(imagery, frame, x0, y0, size, px, md, surface, widths=None, pending=None, veg=None, dem=None):
+def render(imagery, frame, x0, y0, size, px, md, surface, widths=None, pending=None, veg=None, dem=None,
+           relight=True):
     """(rgb (px, px, 3), sources used): the generated ground of [x0, x0 + size]^2 of frame at px, made over the square
     with HALO_M round it and cut to it (every block covering a spot draws it alike, the Codex review of 41d74b61). With
     map data still missing GEN_PENDING goes into pending (earthd.Server.base_ready: made again once it is here).
@@ -1320,9 +1331,140 @@ def render(imagery, frame, x0, y0, size, px, md, surface, widths=None, pending=N
         rgb, used = imagery._render(where, hpx, pending)
     else:                           # (a stand-in imagery: its render as it is)
         rgb, used = imagery.render(frame, hx0, hy0, hsize, hpx, pending)
-    out, complete = generate(rgb, frame, hx0, hy0, hsize, hpx, md, surface, widths, veg, dem, imagery, pending)
+    out, complete = generate(rgb, frame, hx0, hy0, hsize, hpx, md, surface, widths, veg, dem, imagery, pending,
+                             relight)
     if where is not None:
         out = imagery._seasoned(where, np.asarray(out, np.uint8))
     if not complete and pending is not None:
         pending.add(GEN_PENDING)
     return np.ascontiguousarray(np.asarray(out, np.uint8)[h:h + px, h:h + px]), used
+
+
+# The far rings' generated ground (the user, 2026-11-16: "the texture between the ground with collision vs no collision
+# is very different ... visible border"; Patapsco: the block's forest floor beside the far tiles' plain Sentinel-2): a
+# far tile up to FAR_MAX_T m texels (the rings within ~2-4 km) is cut from the generated ground of FAR_SQ_M squares of
+# the anchor frame's grid at a texel of FAR_MIN_T .. FAR_MAX_T (the same function, its windows in metres: the same
+# kinds and colours as the block at the seam), memoized per process (FAR_SQ_MAX). At far LODs: no shadow relight (no
+# sun fits); the trees as the mod draws them there, not each placed one (no vegetation cell read or waited for): the
+# canopy's core wooded, its forest floor as the block's (FAR_SHARE: the same weight at every far level, any change of
+# it with the level is a seam between two levels' tiles); no GEN_PENDING (a square made without all of its map data
+# is a revisit fault and made again after FAR_RETRY_S).
+FAR_VERSION = 1
+FAR_SQ_M = 1024.0
+FAR_MIN_T = 2.0
+FAR_MAX_T = 4.0
+FAR_SQ_MAX = 48
+FAR_RETRY_S = 60.0
+FAR_SHARE = {2.0: 1.0, 4.0: 1.0}  # (one weight at every far level: a level's own (the trees drawn there, 0.35 / 0.6
+                                  # at 4 m) drew a lighter box at the 2 m / 4 m levels' seam, offline 2026-11-16)
+_far_sq = {}                    # key -> (time, complete, rgb (n, n, 3), used, pending markers)
+_far_lock = threading.Lock()
+_far_tl = threading.local()     # .on: inside render_far (tree_floor neither waits for nor asks for trees)
+
+
+def far_texel(size, px):
+    """The squares' texel (m) for a far tile's square of size m at px, or None past FAR_MAX_T: the tile's texel
+    rounded up to a power of 2, at least FAR_MIN_T."""
+    t = size / px
+    if not ON or t > FAR_MAX_T * 1.01:
+        return None
+    ts = FAR_MIN_T
+    while ts < t * 0.99 and ts < FAR_MAX_T:
+        ts *= 2.0
+    return ts
+
+
+def far_key(md, trees):
+    """The far tiles' key part for the generated ground (their revisit keys: blockworker._far_tile_key): its version,
+    the map data's versions and whether the game's trees are drawn. None when off."""
+    if not ON:
+        return None
+    try:
+        ver = json.dumps(md.versions(), sort_keys=True, default=str) if md is not None else None
+    except Exception:
+        ver = None
+    return ("genfar", FAR_VERSION, FAR_SQ_M, FAR_MIN_T, FAR_MAX_T, ver, bool(trees))
+
+
+def _far_square(imagery, frame, i, j, ts, md, surface, widths, veg):
+    """(rgb, used, complete, pending markers) of the anchor grid's square (i, j) at ts m texels (memoized)."""
+    org = tuple(round(float(v), 6) for v in np.asarray(getattr(frame, "origin", (0.0, 0.0, 0.0))).ravel()[:3])
+    key = (org, i, j, ts, _fit_key("far", imagery, md, None), id(surface), id(widths), bool(veg))
+    now = _now()
+    with _far_lock:
+        got = _far_sq.get(key)
+    if got is not None and (got[1] or now - got[0] < FAR_RETRY_S):
+        if not got[1]:
+            revisit.fault()
+        return got[2], got[3], got[1], got[4]
+    n = int(round(FAR_SQ_M / ts))
+    pend = set()
+    _far_tl.on = True
+    _far_tl.share = FAR_SHARE.get(ts, 0.0)
+    try:
+        rgb, used = render(imagery, frame, i * FAR_SQ_M, j * FAR_SQ_M, FAR_SQ_M, n, md, surface, widths, pend, veg,
+                           None, relight=False)
+    finally:
+        _far_tl.on = False
+    complete = GEN_PENDING not in pend
+    pend.discard(GEN_PENDING)
+    with _far_lock:
+        while len(_far_sq) >= FAR_SQ_MAX:
+            _far_sq.pop(next(iter(_far_sq)))
+        _far_sq[key] = (now, complete and not pend, rgb, used, frozenset(pend))
+    return rgb, used, complete and not pend, frozenset(pend)
+
+
+def far_fetch(x0, y0, size, px):
+    """[(x0, y0, size, px)] the photo render_far reads for a far tile's square (its squares with their halos, at the
+    squares' texel), for Imagery.fetch_needed; [] past FAR_MAX_T."""
+    ts = far_texel(size, px)
+    if ts is None:
+        return []
+    out = []
+    n = int(round(FAR_SQ_M / ts))
+    for j in range(int(np.floor(y0 / FAR_SQ_M)), int(np.floor((y0 + size) / FAR_SQ_M - 1e-9)) + 1):
+        for i in range(int(np.floor(x0 / FAR_SQ_M)), int(np.floor((x0 + size) / FAR_SQ_M - 1e-9)) + 1):
+            hx0, hy0, hs, hpx, _h = halo_square(i * FAR_SQ_M, j * FAR_SQ_M, FAR_SQ_M, n)
+            out.append((hx0, hy0, hs, hpx))
+    return out
+
+
+def render_far(imagery, frame, x0, y0, size, px, md, surface, widths=None, pending=None, veg=None):
+    """(rgb (px, px, 3), sources used) of a far tile's square [x0, x0 + size]^2 of the anchor frame (its gutter square)
+    cut from the generated ground's squares (bilinear at its texel centres), or None (off, or past FAR_MAX_T: the
+    plain photo then). The squares' imagery markers still to come go into pending."""
+    ts = far_texel(size, px)
+    if ts is None:
+        return None
+    t = size / px
+    i0, i1 = int(np.floor(x0 / FAR_SQ_M)), int(np.floor((x0 + size) / FAR_SQ_M - 1e-9))
+    j0, j1 = int(np.floor(y0 / FAR_SQ_M)), int(np.floor((y0 + size) / FAR_SQ_M - 1e-9))
+    n = int(round(FAR_SQ_M / ts))
+    mos = np.zeros(((j1 - j0 + 1) * n, (i1 - i0 + 1) * n, 3), np.uint8)
+    used_all = {}
+    for j in range(j0, j1 + 1):
+        for i in range(i0, i1 + 1):
+            rgb, used, complete, pend = _far_square(imagery, frame, i, j, ts, md, surface, widths, veg)
+            r0 = (j1 - j) * n       # (row 0: the north)
+            mos[r0:r0 + n, (i - i0) * n:(i - i0 + 1) * n] = rgb
+            for s, v in (used or {}).items():
+                used_all[s] = used_all.get(s, 0) + v
+            if pending is not None:
+                pending.update(pend)
+            if not complete:
+                revisit.fault()
+    # bilinear at the tile's texel centres, in the mosaic's texel units (texel centres at k + 0.5)
+    X0, Y1 = i0 * FAR_SQ_M, (j1 + 1) * FAR_SQ_M
+    k = (np.arange(px) + 0.5) * t
+    u = np.clip((x0 + k - X0) / ts - 0.5, 0.0, mos.shape[1] - 1.0)
+    v = np.clip((Y1 - (y0 + size - k)) / ts - 0.5, 0.0, mos.shape[0] - 1.0)
+    ua, va = np.floor(u).astype(np.int64), np.floor(v).astype(np.int64)
+    ub, vb = np.minimum(ua + 1, mos.shape[1] - 1), np.minimum(va + 1, mos.shape[0] - 1)
+    fu, fv = (u - ua)[None, :, None], (v - va)[:, None, None]
+    m = mos.astype(np.float32)
+    top = m[va][:, ua] * (1 - fu) + m[va][:, ub] * fu
+    bot = m[vb][:, ua] * (1 - fu) + m[vb][:, ub] * fu
+    out = np.clip(np.rint(top * (1 - fv) + bot * fv), 0, 255).astype(np.uint8)
+    scale = px * px / max(1, sum(used_all.values()))
+    return np.ascontiguousarray(out), {s: int(v * scale) for s, v in used_all.items()}

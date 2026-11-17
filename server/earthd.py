@@ -6014,12 +6014,23 @@ class Server:
         x0, y0, _, _ = node.bbox
         return anchor.frame, x0, y0, node.size
 
+    def gen_far_tex(self):
+        """A far tile job's generated-ground part (blockworker.far_tile: render_far's trees, its revisit key)."""
+        return {"gen_trees": getattr(self, "veg", None) is not None} if genground.ON else {}
+
     def render_tile(self, anchor, tile, px, pending):
-        """(rgb, used): a far tile's photo with its gutter (a global tile's: its Mercator square, render_merc)."""
+        """(rgb, used): a far tile's photo with its gutter (a global tile's: its Mercator square, render_merc); with the
+        generated ground on, the near rings' cut from its squares (genground.render_far: the block's colours)."""
         if isinstance(tile, farfield.GTile):
             return self.imagery.render_merc(tile.z, tile.x, tile.y, px, pending=pending)
         frame, x0, y0, size = self.tile_where(anchor, tile)
-        return self.imagery.render(frame, *imagerymod.gutter_square(x0, y0, size, px), px, pending=pending, gutter=True)
+        sq = imagerymod.gutter_square(x0, y0, size, px)
+        if genground.ON:
+            got = genground.render_far(self.imagery, frame, *sq, px, self.mapdata, self.surface, self.road_widths,
+                                       pending, getattr(self, "veg", None))
+            if got is not None:
+                return got
+        return self.imagery.render(frame, *sq, px, pending=pending, gutter=True)
 
     def make_tile(self, anchor, tile, prev=None):
         urgencymod.wait_turn()          # (a block the game waits for first: urgency.py)
@@ -6206,7 +6217,7 @@ class Server:
                        "mask": (os.path.join(self.out_dir, surfacemod.road_mask_name(texture)),
                                 self.road_mask_px(lvl)) if self.road_masks else None,
                        "chain": [s.name for s in im.chain], "tone": self.tone, "leaf_on": im.leaf_on,
-                       "season_mode": im.season_mode, "pads": self.tile_pads(anchor, tile, px_t)}
+                       "season_mode": im.season_mode, "pads": self.tile_pads(anchor, tile, px_t), **self.gen_far_tex()}
                 if analyses and not raw_quick:
                     tex["fin"] = {s.name: im._fin_sigs.setdefault(s.name, im._fin_sig(s)) for s in im.chain}
                 if not raw_quick and self.fin_name_len():   # (a final texture: kept for the bulk restore)
@@ -6240,8 +6251,11 @@ class Server:
                     # fast drive): fetched here, the render goes back to the workers (rendered in this process, one
                     # interpreter for every far thread, the far field waited on it); here only if that fails too
                     x0, y0, _, _ = tile.bbox
-                    if im.fetch_needed(anchor.frame, *imagerymod.gutter_square(x0, y0, tile.size, tex["px"]),
-                                       tex["px"], last_only=bool(tex.get("quick")), gutter=True):
+                    sq_t = imagerymod.gutter_square(x0, y0, tile.size, tex["px"])
+                    if genground.ON and not tex.get("quick"):   # (the generated ground's squares: render_far)
+                        for a in genground.far_fetch(*sq_t, tex["px"]):
+                            im.fetch_needed(anchor.frame, *a)
+                    if im.fetch_needed(anchor.frame, *sq_t, tex["px"], last_only=bool(tex.get("quick")), gutter=True):
                         built, got = self.far_pool.submit(*args).result()
                         self.refetched += 1
                 if got is not None:
@@ -6561,7 +6575,7 @@ class Server:
                        "mask": (os.path.join(self.out_dir, surfacemod.road_mask_name(texture)),
                                 self.road_mask_px(lvl)) if self.road_masks else None,
                        "chain": [s.name for s in im.chain], "tone": self.tone, "leaf_on": im.leaf_on,
-                       "season_mode": im.season_mode, "keep_fin": n_name}
+                       "season_mode": im.season_mode, "keep_fin": n_name, **self.gen_far_tex()}
                 if fin is not None:
                     tex["fin"] = fin
                 specs.append(("tile", tile, zoom, q, ref_zoom, self.near_visual in BLOCK_DRAWN, self.layout, tex,
@@ -6773,7 +6787,7 @@ class Server:
                    "mask": (os.path.join(self.out_dir, surfacemod.road_mask_name(texture)),
                             self.road_mask_px(tile.level)) if self.road_masks else None,
                    "chain": [s_.name for s_ in im.chain], "tone": self.tone, "leaf_on": im.leaf_on,
-                   "season_mode": im.season_mode, "pads": self.tile_pads(anchor, tile, px)}
+                   "season_mode": im.season_mode, "pads": self.tile_pads(anchor, tile, px), **self.gen_far_tex()}
             lvl = tile.level
             got = self.far_pool.submit(blockworker.far_tile, anchor.id, anchor.lat, anchor.lon, tile,
                                        anchor.zooms[lvl], None, anchor.zooms[lvl - 1], self.near_visual in BLOCK_DRAWN,

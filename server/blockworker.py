@@ -3737,6 +3737,11 @@ def _far_tile_key(lat, lon, tile, zoom, q, ref_zoom, with_sink, layout, tex):
     surf = ()           # (a near far tile has the roads painted into its photo: the photo's road surfaces in its key)
     if tile.size / max(int(tex["px"]), 1) <= surfacemod.PHOTO_ROADS_MAX_TEXEL:
         surf = _surf_tags(geodesy.EnuFrame(lat, lon), *tile.bbox)
+    import genground
+    import imagery as imagerymod
+    _gx, _gy, gsize = imagerymod.gutter_square(0.0, 0.0, tile.size, int(tex["px"]))
+    if genground.far_texel(gsize, int(tex["px"])) is not None and not tex.get("quick"):
+        surf = (*surf, genground.far_key(getattr(_s, "md", None), tex.get("gen_trees")))
     return revisit.key("far", *_far_key(lat, lon, tile, zoom, q, ref_zoom, with_sink, layout), tex["px"],
                        mask[1] if mask else 0, tuple(tex["chain"]), tex["tone"], tex["leaf_on"], tex["season_mode"],
                        bool(tex.get("online")), _s.widths is not None, _s.surface is not None,
@@ -3838,12 +3843,28 @@ def _far_tile_(aid, lat, lon, tile, zoom, q, ref_zoom, with_sink, layout, tex, m
     x0, y0, _, _ = tile.bbox
     px = tex["px"]
     sq = imagerymod.gutter_square(x0, y0, tile.size, px)
-    try:
-        im.quick_all = bool(tex.get("quick"))
+    import genground
+    rgb = None
+    if genground.ON and not tex.get("quick"):  # (the generated ground's near rings: earthd.Server.render_tile)
         try:
-            rgb, used = im.render(frame, *sq, px, gutter=True)
-        finally:
-            im.quick_all = False
+            got = genground.render_far(im, frame, *sq, px, getattr(_s, "md", None), _paint_surface(), _s.widths,
+                                       None, True if tex.get("gen_trees") else None)
+            if got is not None:
+                rgb, used = got
+        except imagerymod.ImageryError:     # (a square's photo not on disk: the server fetches it, far_fetch, and asks
+            return built, None              # again)
+        except Exception as e:      # (the plain photo, not kept: made again)
+            log.debug("far tile %s: generated ground: %s: %s", tile.key, type(e).__name__, e)
+            import revisit
+            revisit.fault()
+            rgb = None
+    try:
+        if rgb is None:
+            im.quick_all = bool(tex.get("quick"))
+            try:
+                rgb, used = im.render(frame, *sq, px, gutter=True)
+            finally:
+                im.quick_all = False
     except imagerymod.ImageryError:
         return built, None
     if built.grid is not None:          # (earthd.Server.rock_faces)
