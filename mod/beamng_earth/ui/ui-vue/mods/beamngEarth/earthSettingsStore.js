@@ -307,6 +307,10 @@ export const connectionText = computed(() => {
 })
 
 export const statusText = computed(() => status.value.status || "-")
+// Off the BeamNG.Earth level (a stock level, the main menu) the settings are saved but nothing applies them until the
+// level loads (issue #1284: the pause menu's tab on West Coast USA looked as if it did nothing). Strictly false: the
+// first poll's answer, not the empty status before it.
+export const offLevel = computed(() => status.value.connection !== undefined && status.value.inOurLevel === false)
 
 // "Restart world server": the box at the top of each page (earthRestart.js) while a setting waits for a restart or one
 // is under way; the button asks the Lua side (settings.uiRestartServer), the poll shows the phases

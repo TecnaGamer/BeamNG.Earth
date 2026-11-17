@@ -188,6 +188,50 @@ class PlacesTest(unittest.TestCase):
         self.assertEqual(len(cranes), 1)
         self.assertTrue(places.TC_H * places.TC_SCALE[0] - 1e-6 <= cranes[0][6] <= places.TC_H * places.TC_SCALE[1] + 1e-6)
 
+    def _crane_site(self):
+        land = feats("land_use", [("c1", mapgeom.POLYGON, [rect(-60, -40, 60, 40)], "construction",
+                                   {"landuse": "construction"})])
+        return FakeMD(land_use=land)
+
+    def _deck(self, y, z, half=7.5):
+        """A RoadClearance with one bridge deck along x at y, its surface z m over the (flat) ground."""
+        import furniture
+        return furniture.RoadClearance([], [(np.array([[-300.0, y, z], [300.0, y, z]]), half, 2.0)], bounds=BOX)
+
+    def test_crane_under_a_deck_moves_off_it(self):
+        # (A7 Kalbach, 2026-11-15: a site under the viaduct stood its crane's mast through the deck, 27 m up; the grid
+        # knew the ground roads only)
+        md = self._crane_site()
+        before = self.rows(md)
+        crane = next(r for r in before if r[0] == places.G_TC)
+        deck = self._deck(crane[2], 12.0)
+        self.assertFalse(deck.clear(crane))                     # the mast through the deck
+        got = places.tile_rows(FRAME, BOX, md, flat, (), "US", keys=KEYS, clearance=deck)
+        moved = [r for r in got if r[0] == places.G_TC]
+        self.assertEqual(len(moved), 1)
+        self.assertTrue(deck.clear(moved[0]))
+        d = np.hypot(moved[0][1] - crane[1], moved[0][2] - crane[2])
+        self.assertTrue(0.0 < d <= places.TC_SHIFT_M + 1e-6)
+        self.assertTrue(-60 < moved[0][1] < 60 and -40 < moved[0][2] < 40)  # still on its site
+        self.assertEqual(moved[0][4:], crane[4:])               # same yaw, height
+        self.assertEqual([r for r in got if r[0] != places.G_TC], [r for r in before if r[0] != places.G_TC])
+
+    def test_crane_clear_of_roads_is_unchanged(self):
+        md = self._crane_site()
+        before = self.rows(md)
+        crane = next(r for r in before if r[0] == places.G_TC)
+        for deck in (self._deck(crane[2], 60.0),                # high over the crane's jib: headroom kept
+                     self._deck(crane[2] + 70.0, 12.0)):        # beside the site
+            self.assertEqual(places.tile_rows(FRAME, BOX, md, flat, (), "US", keys=KEYS, clearance=deck), before)
+
+    def test_crane_with_no_clear_spot_is_left_out(self):
+        md = self._crane_site()
+        before = self.rows(md)
+        crane = next(r for r in before if r[0] == places.G_TC)
+        got = places.tile_rows(FRAME, BOX, md, flat, (), "US", keys=KEYS, clearance=self._deck(crane[2], 12.0, 120.0))
+        self.assertEqual([r for r in got if r[0] == places.G_TC], [])
+        self.assertEqual(got, [r for r in before if r[0] != places.G_TC])
+
     def test_mapped_street_furniture(self):
         pt = mapgeom.POINT
         infra = feats("infrastructure", [

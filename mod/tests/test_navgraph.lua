@@ -43,7 +43,9 @@ do
       if twoWay then for _, e in ipairs(g.edges) do e[3], e[4], e[5] = 0, 3, 2 end end
       case[2](g)
       local ns = N.toNodes(g, { -100, -100, 200, 200 }, 0, false)
-      T.check(ns.b and ns.c and ns.b.links.c, 'preserve ' .. case[1] .. (twoWay and ' on a two-way road' or ''))
+      local kept = ns.b and ns.c and ns.b.links.c
+      if case[1] == 'a real junction' then kept = ns.b and ns.b.links.x and (ns.b.links.c or ns.b.links.d) end
+      T.check(kept, 'preserve ' .. case[1] .. (twoWay and ' on a two-way road' or ''))
     end
   end
   local reversed = seam()
