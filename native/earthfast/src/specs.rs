@@ -21,7 +21,7 @@ use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
 use crate::gradesep::np_interp;
-use crate::levels::np_sum;
+use crate::levels::{np_sum, part_floor, ring_length};
 use crate::{dual_side_core, polyline_dist_core, tight_bends_core};
 
 type P = [f64; 2];
@@ -565,6 +565,7 @@ fn bmean(v: &[bool]) -> f64 {
 /// The kernels' scalar constants read at each call (roads._spec_prm: tests change some).
 struct Prm {
     min_part: f64,
+    min_part_m: f64,
     urban_sample: f64,
     urban_share: f64,
     urban_beside: f64,
@@ -594,7 +595,7 @@ impl Prm {
     fn new(p: &HashMap<String, f64>) -> PyResult<Prm> {
         let g = |k: &str| prm_get(p, k);
         Ok(Prm {
-            min_part: g("MIN_PART")?, urban_sample: g("URBAN_SAMPLE_M")?, urban_share: g("URBAN_SHARE")?,
+            min_part: g("MIN_PART")?, min_part_m: g("MIN_PART_M")?, urban_sample: g("URBAN_SAMPLE_M")?, urban_share: g("URBAN_SHARE")?,
             urban_beside: g("URBAN_BESIDE_M")?, urban_highway_beside: g("URBAN_HIGHWAY_BESIDE_M")?,
             urban_beside_share: g("URBAN_BESIDE_SHARE")?,
             urban_both_share: g("URBAN_BOTH_SHARE")?, dual_gap0: g("DUAL_GAP_M0")?, dual_gap1: g("DUAL_GAP_M1")?,
@@ -1075,7 +1076,14 @@ impl RoadRules {
                 for r in a..b {
                     s += rr[[r, 1]] - rr[[r, 0]];
                 }
-                if s > 1.0 - prm.min_part {
+                // (the share a piece of this feature must have: roads.part_floor)
+                let mut len = 0.0f64;
+                for p in l.po[i]..l.po[i + 1] {
+                    for r in l.ro[p]..l.ro[p + 1] {
+                        len += ring_length(&|k, d| l.ll[[k, d]], l.co[r], l.co[r + 1]);
+                    }
+                }
+                if s > 1.0 - part_floor(prm.min_part, prm.min_part_m, len) {
                     continue;
                 }
             }

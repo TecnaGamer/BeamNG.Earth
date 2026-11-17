@@ -6462,6 +6462,9 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     farsel::register(m)?;
     // (304 also) far_select_nodes and far_global_select return the selection's slack (the move under which it stays the
     // same: earthd's selection gate skips only selections that could not change)
-    m.add("VERSION", 306)?;
+    // 307: a piece of a feature is dropped under a share of it, at most 1 m of it (roads.part_floor, MIN_PART_M: a share
+    // of a 24 km road was 24 m, its 23 m bridge dropped and its range left a hole in the road): gradesep_layer_rows takes
+    // min_part_m, LevelLayer.rules' parameters a 21st, lidar_lines' a 4th, road_specs' constants "MIN_PART_M"
+    m.add("VERSION", 307)?;
     Ok(())
 }

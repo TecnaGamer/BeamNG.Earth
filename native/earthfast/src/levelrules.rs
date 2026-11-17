@@ -19,7 +19,7 @@ use pyo3::prelude::*;
 
 use crate::decks::{deck_gaps_round, fill_gaps};
 use crate::gradesep::np_interp;
-use crate::levels::{cmp_r, level_rule, level_spans, np_sum, R};
+use crate::levels::{cmp_r, level_rule, level_spans, np_sum, part_floor, ring_length, R};
 use crate::tunnelcover::tunnel_reach_core;
 use crate::{ends_near_core, seg_hits_core};
 
@@ -243,14 +243,15 @@ struct Prm {
     gap_join: f64,
     portal_deck: f64,
     min_part: f64,
+    min_part_m: f64,
     tunnel: [f64; 7],
     lidar_on: bool,
 }
 
 impl Prm {
     fn new(p: &[f64]) -> PyResult<Prm> {
-        if p.len() < 20 {
-            return Err(pyo3::exceptions::PyValueError::new_err("level_rules: 20 parameters"));
+        if p.len() < 21 {
+            return Err(pyo3::exceptions::PyValueError::new_err("level_rules: 21 parameters"));
         }
         let mut tunnel = [0.0f64; 7];
         tunnel.copy_from_slice(&p[12..19]);
@@ -258,7 +259,7 @@ impl Prm {
             skew_on: p[0] != 0.0, skew_margin: p[1], skew_slope: p[2], skew_max: p[3], skew_min_sin: p[4],
             skew_join: p[5],
             gap_on: p[6] != 0.0, gap_deck: p[7], gap_junction: p[8], gap_join: p[9], portal_deck: p[10],
-            min_part: p[11], tunnel, lidar_on: p[19] != 0.0,
+            min_part: p[11], min_part_m: p[20], tunnel, lidar_on: p[19] != 0.0,
         })
     }
 }
@@ -284,6 +285,17 @@ impl Geo {
 
     fn n(&self) -> usize {
         self.po.len().saturating_sub(1)
+    }
+
+    /// roads._feature_length_m(feats, i).
+    fn length_m(&self, i: usize) -> f64 {
+        let mut total = 0.0f64;
+        for p in self.po[i]..self.po[i + 1] {
+            for r in self.ro[p]..self.ro[p + 1] {
+                total += ring_length(&|k, d| self.ll[k][d], self.co[r], self.co[r + 1]);
+            }
+        }
+        total
     }
 
     /// feats.parts(i)'s rings of 2 points or more, in order.
@@ -433,9 +445,18 @@ impl<'a> Layer<'a> {
         }
     }
 
+    /// roads.part_floor(feats, i, rngs): the share of feature i under which a piece of it is dropped (at most
+    /// prm.min_part_m metres of it; no ranges: the pieces are the whole feature whatever it is).
+    fn floor(&self, i: usize, rngs: &[R]) -> f64 {
+        if rngs.is_empty() {
+            return self.prm.min_part;
+        }
+        part_floor(self.prm.min_part, self.prm.min_part_m, self.geo.length_m(i))
+    }
+
     /// roads._raw_ground_parts(feats, j): j's on-ground pieces from its raw ranges.
     fn raw_ground(&self, j: usize) -> Vec<Vec<P>> {
-        let pieces = ground_pieces(&self.raw[j], self.prm.min_part);
+        let pieces = ground_pieces(&self.raw[j], self.floor(j, &self.raw[j]));
         cut_rings(&self.geo.rings(j), &pieces, true)
     }
 
@@ -796,13 +817,14 @@ impl<'a> Layer<'a> {
         if rings.is_empty() {
             return rngs;
         }
+        let floor = part_floor(self.prm.min_part, self.prm.min_part_m, self.geo.length_m(i));
         let mut all = rngs;
         for ab in got {
             let (mut fa, mut fb) = (ring_fraction(rings[0], ab[0]), ring_fraction(rings[0], ab[1]));
             if fb < fa {
                 std::mem::swap(&mut fa, &mut fb);
             }
-            if fb - fa > self.prm.min_part {
+            if fb - fa > floor {
                 all.push((if fa < 1e-4 { 0.0 } else { fa }, if fb > 1.0 - 1e-4 { 1.0 } else { fb }, BRIDGE));
             }
         }
@@ -922,7 +944,7 @@ impl LevelLayer {
     /// roads.lidar_gap_candidates' lines: the drawn roads' ground pieces (rule ranges rule_*, have_rule: the features
     /// rule_level_ranges_near holds) with an end within prm[1] m of a bridge piece's end (any road's: its rule ranges'
     /// bridge pieces split at the level rule's local levels, lv_*: feature, start, end, Python's str of the value),
-    /// from that end outward, prm[2] m at most; sk / sw: _structure_width as rules takes it; prm[0]: MIN_PART. Returns
+    /// from that end outward, prm[2] m at most; sk / sw: _structure_width as rules takes it; prm[0]: MIN_PART, prm[3]: MIN_PART_M (each feature's own floor, roads.part_floor). Returns
     /// (feature (c,), line offsets (c + 1,), lines (k, 2) lon / lat, half widths (c,)).
     #[allow(clippy::too_many_arguments, clippy::type_complexity)]
     fn lidar_lines<'py>(&self, py: Python<'py>, rule_off: PyReadonlyArray1<'py, i64>,
@@ -940,7 +962,7 @@ impl LevelLayer {
         let (sk, sw): (Vec<u8>, Vec<f64>) = (sk.as_array().to_vec(), sw.as_array().to_vec());
         let prm: Vec<f64> = prm.as_array().to_vec();
         let (lf, ls, le) = (lv_feat.as_array(), lv_start.as_array(), lv_end.as_array());
-        if rule.len() != n || have.len() != n || sk.len() != n || sw.len() != n || prm.len() < 3
+        if rule.len() != n || have.len() != n || sk.len() != n || sw.len() != n || prm.len() < 4
             || lf.len() != ls.len() || lf.len() != le.len() || lf.len() != lv_values.len() {
             return Err(pyo3::exceptions::PyValueError::new_err("LevelLayer.lidar_lines: array sizes differ"));
         }
@@ -954,7 +976,7 @@ impl LevelLayer {
                 }
             }
         }
-        let (min_part, touch, reach) = (prm[0], prm[1], prm[2]);
+        let (min_part, touch, reach, min_part_m) = (prm[0], prm[1], prm[2], prm[3]);
         let got: Result<Vec<(usize, Vec<P>, f64)>, String> = py.detach(|| {
             let mut ends: Vec<P> = Vec::new();
             for i in 0..n {
@@ -962,7 +984,7 @@ impl LevelLayer {
                     continue;
                 }
                 let br: Vec<(f64, f64)> = rule[i].iter().filter(|r| r.2 == BRIDGE).map(|r| (r.0, r.1)).collect();
-                let pieces: Vec<(f64, f64)> = level_spans(&br, &lv[i], min_part).iter().map(|s| (s.0, s.1)).collect();
+                let pieces: Vec<(f64, f64)> = level_spans(&br, &lv[i], part_floor(min_part, min_part_m, geo.length_m(i))).iter().map(|s| (s.0, s.1)).collect();
                 for r in cut_rings(&geo.rings(i), &pieces, false) {
                     ends.push(r[0]);
                     ends.push(r[r.len() - 1]);
@@ -981,7 +1003,7 @@ impl LevelLayer {
                     1 => continue,
                     _ => return Err(format!("lidar_lines: no structure width for feature {i}")),
                 };
-                for r in cut_rings(&geo.rings(i), &ground_pieces(&rule[i], min_part), false) {
+                for r in cut_rings(&geo.rings(i), &ground_pieces(&rule[i], part_floor(min_part, min_part_m, geo.length_m(i))), false) {
                     let (kx, ky) = (111320.0 * r[0][1].to_radians().dcos(), KY);
                     for at in [0usize, r.len() - 1] {
                         let p = r[at];

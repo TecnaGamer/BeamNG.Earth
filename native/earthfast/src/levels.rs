@@ -137,24 +137,33 @@ pub(crate) fn np_sum(a: &[f64]) -> f64 {
     np_pairwise(a)
 }
 
+/// roads.part_floor: the share of a feature under which a piece of it is dropped, at most min_part and at most
+/// min_part_m metres of a feature of length_m (a share of a 24 km road is 24 m: its 23 m bridge was dropped and its range
+/// left a hole in the road).
+pub(crate) fn part_floor(min_part: f64, min_part_m: f64, length_m: f64) -> f64 {
+    min_part.min(min_part_m / length_m.max(1.0))
+}
+
 /// roads._feature_length_m of the rings ring_off[part_off[i]]..ring_off[part_off[i + 1]].
 pub(crate) fn feature_length(ll: &numpy::ndarray::ArrayView2<f64>, co: &[i64], ro: &[i64], po: &[i64], i: usize) -> f64 {
     let mut total = 0.0f64;
     for p in po[i] as usize..po[i + 1] as usize {
         for r in ro[p] as usize..ro[p + 1] as usize {
-            let (a, b) = (co[r] as usize, co[r + 1] as usize);
-            if b - a < 2 {
-                continue;
-            }
-            let lat: Vec<f64> = (a..b).map(|k| ll[[k, 1]]).collect();
-            let c = (np_sum(&lat) / (b - a) as f64).to_radians().dcos();
-            let seg: Vec<f64> = (a + 1..b)
-                .map(|k| ((ll[[k, 0]] - ll[[k - 1, 0]]) * c).dhypot(ll[[k, 1]] - ll[[k - 1, 1]]))
-                .collect();
-            total += np_sum(&seg) * 111320.0;
+            total += ring_length(&|k, d| ll[[k, d]], co[r] as usize, co[r + 1] as usize);
         }
     }
     total
+}
+
+/// roads._feature_length_m of one ring: the points a..b of at(point, 0 lon / 1 lat), 0 for fewer than two.
+pub(crate) fn ring_length(at: &dyn Fn(usize, usize) -> f64, a: usize, b: usize) -> f64 {
+    if b - a < 2 {
+        return 0.0;
+    }
+    let lat: Vec<f64> = (a..b).map(|k| at(k, 1)).collect();
+    let c = (np_sum(&lat) / (b - a) as f64).to_radians().dcos();
+    let seg: Vec<f64> = (a + 1..b).map(|k| ((at(k, 0) - at(k - 1, 0)) * c).dhypot(at(k, 1) - at(k - 1, 1))).collect();
+    np_sum(&seg) * 111320.0
 }
 
 fn one(flags: &mut Vec<R>, level: &mut Vec<R>, ways: &[(f64, f64)], length: &mut dyn FnMut() -> f64,
