@@ -41,6 +41,7 @@ import dnp
 
 import bumps
 import mapcells
+import findground
 import railways as railwaysmod
 import roads as roadsmod
 import seatiles
@@ -471,18 +472,12 @@ UNDER_CLEAR_M = roadsmod.DECK_ROAD_CLEAR + ROAD_LIFT
 UNDER_GRADE = 0.06          # the dip's ramps
 UNDER_MAX_BRIDGE_M = 120.0  # only single short spans (both ends on the ground): a chain's inner ends are no abutments
 UNDER_MAX_DROP_M = 8.0      # never lowered more than this (bad data: rather a low bridge than a pit)
-# On lidar a road under a rail bridge is where the survey has it (a town's underpass is lower than a road bridge's 6 m:
-# Nachod's road 14 under the Kladska line, 3.5 m under the track's ground, was dug 3.8 m down and its junctions with it,
-# a ravine the user saw, 2026-11-09): lowered at most this much (plan 035). BNE_RAIL_UNDER_LIDAR_DROP=off: as before.
-_rud = os.environ.get("BNE_RAIL_UNDER_LIDAR_DROP", "1.0")
-RAIL_UNDER_LIDAR_DROP_M = None if _rud == "off" else float(_rud)
-# A road with a height limit under the rail bridge (a maxheight sign: Overture's vehicle-height access restriction, the
-# "max_height_m" rule) is lowered for the limit itself, its height and RAIL_SIGN_MARGIN_M over it under the deck, by at
-# most RAIL_UNDER_SIGNED_DROP_M (a bus, 3.3 m under the line over II/301 by Zdar nad Metuji, was 2 m short, 2026-11-12).
+# A road with a height limit under a rail bridge that spans the road's own mapped tunnel (a maxheight sign: Overture's
+# vehicle-height access restriction, the "max_height_m" rule) is lowered for the limit itself, its height and
+# RAIL_SIGN_MARGIN_M over it under the deck. (Over a plain road the track rises for the limit: railways.plain_underpasses.)
 # BNE_RAIL_SIGNED_UNDER=off: the limit is not read.
 RAIL_SIGNED_ON = os.environ.get("BNE_RAIL_SIGNED_UNDER", "on") != "off"
 RAIL_SIGN_MARGIN_M = 0.25
-RAIL_UNDER_SIGNED_DROP_M = 2.5
 LIMIT_NEAR_M = 4.0          # m: a limit's range holds where the road crosses under the bridge when it passes this near
 UNDER_FLAT_M = 12.0         # m either side of the crossing kept at the dip's full depth (under_dip)
 UNDER_MAX_GRADE = 0.10      # a dip's ramp made steeper, up to this, to end inside its road part (under_dip)
@@ -4147,9 +4142,15 @@ class _Planner:
         spans, rail_span = [], []
         ue = np.array([[b[0, :2], b[-1, :2]] for b, _f, _r in uniq], f64)        # (n, 2 ends, 2)
         stub = np.array([float(dnp.hypot(*np.diff(b[:, :2], axis=0).T).sum()) < UNDER_STUB_M for b, _f, _r in uniq])
-        coarse = self._coarse(key)      # (there the railway rises over the road: railways.coarse_underpasses)
+        coarse = self._coarse(key)
         for n, (b, fixed, rail) in enumerate(uniq):
-            if rail and coarse:
+            # (findground: a railway's bridge over a plain road leaves the ground itself (railways.plain_underpasses),
+            # the road stays on its ground; only under one that spans the road's own mapped tunnel does the road go
+            # down, the track staying at its bed. Every rail span dug the road under it: the streets under Zurich's
+            # Wipkingen viaduct, which stands 13 m over them)
+            mapped_under = rail and railwaysmod.TUNNEL_AT_GRADE_ON and self._over_mapped_underpass(b)
+            under = findground.TUNNEL if mapped_under else findground.GROUND
+            if rail and findground.leaves(under, findground.BRIDGE) != "lower":
                 continue
             L = float(dnp.hypot(*np.diff(b, axis=0).T).sum())
             # (a carriageway's deck, any length, joined or not: its height is its profile's, the roads under it dip
@@ -4306,20 +4307,14 @@ class _Planner:
                                                                                 gids), sol["reach"]))
                     continue
             # (a railway over the road's own mapped short tunnel stays at its bed: railways.TUNNEL_AT_GRADE_ON; the road
-            # dips the full clearance under it, no level crossing made of it nor lidar's 1 m cap)
-            mapped = rail_span[bi] and railwaysmod.TUNNEL_AT_GRADE_ON and self._over_mapped_underpass(spans[bi][0])
-            if rail_span[bi] and lidar and n_c not in signed and not mapped and \
-                    railwaysmod.level_bridge(self.frame, spans[bi][0], lines[i], sc):
-                continue                        # (a short rail bridge over a road on level ground: no bridge, a level
-                                                # crossing; railways.parts lays it on the ground: plan 035)
+            # dips the full clearance under it, without lidar's 1 m cap. The only rail spans here: findground)
+            mapped = rail_span[bi]
             if lidar and not fixed and deck < z + UNDER_LIDAR_DECK_M:
                 continue                        # (the ends' ground is not the deck: the road keeps its own, the deck
                                                 # rises; a never-raised deck, a railway's or a motorway's, cannot)
             if mapped and UNDER_MAPPED_RUN_ON:      # (the measured clearance, not the 6 m guess: a 7.4 m dip floated
                 top += roadsmod.MIN_BRIDGE_HEADROOM_M - UNDER_MEASURED_HEADROOM_M   # the road's mesh over its cut)
             target = max(top, z - UNDER_MAX_DROP_M)
-            if rail_span[bi] and lidar and RAIL_UNDER_LIDAR_DROP_M is not None and not mapped:
-                target = max(target, z - (RAIL_UNDER_SIGNED_DROP_M if n_c in signed else RAIL_UNDER_LIDAR_DROP_M))
             if UNDER_SEA_ON and z >= floor:
                 target = max(target, floor)     # (not under the sea's surface: its water tiles would flood it)
             if target < z - 0.1:

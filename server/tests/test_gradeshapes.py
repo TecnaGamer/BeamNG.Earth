@@ -166,11 +166,11 @@ def test_a_deck_over_a_railway_rises_by_the_catenary_and_its_embankments_hold_th
 
 
 def test_a_dip_follows_the_road_through_its_joints_without_a_step():
-    # a ring road split in short parts (a roundabout's), a short rail bridge over the 20 m one: the cut spreads into
-    # the parts either side through the joints, each joint at one height, within the road's grade
-    m = [Member("rail_w", _line(-7, -300, -7, -7, 80), "rail", "rail", None, 0, 2.0, None),
-         Member("rail_br", _line(-7, -7, -7, 7, 5), "rail_deck", "rail", None, 1, 2.0, None),
-         Member("rail_e", _line(-7, 7, -7, 300, 80), "rail", "rail", None, 0, 2.0, None),
+    # a ring road split in short parts (a roundabout's), a road bridge too short to rise over the 20 m one: the cut
+    # spreads into the parts either side through the joints, each joint at one height, within the road's grade
+    m = [Member("over_w", _line(-7, -300, -7, -7, 80), "ground", "tertiary", 50, 0, 4.0, None),
+         Member("over_br", _line(-7, -7, -7, 7, 5), "deck", "tertiary", 50, 1, 4.0, None),
+         Member("over_e", _line(-7, 7, -7, 300, 80), "ground", "tertiary", 50, 0, 4.0, None),
          Member(("ring", "a"), _line(-400, 0, -10, 0, 60), "ground", "secondary", 50, 0, 4.0, None),
          Member(("ring", "b"), _line(-10, 0, 10, 0, 6), "ground", "secondary", 50, 0, 4.0, None),
          Member(("ring", "c"), _line(10, 0, 400, 0, 60), "ground", "secondary", 50, 0, 4.0, None)]
@@ -407,10 +407,11 @@ def test_a_road_winding_over_itself_clears_its_own_turn_all_along_it_not_only_wh
         assert z2 - z1 >= need - 0.05, (np.degrees(a), z2 - z1)
 
 
-def test_a_road_dug_under_a_rail_deck_is_that_low_under_the_overpass_beside_it():
-    # Perth's Tonkin Highway: a trunk road under the railway in the motorway's median (a short rail deck: the road is
-    # dug) and, 6 m on, under the motorway's deck (an overpass: it rises over the road). Solved apart, the road was dug
-    # under the track and the deck lifted 7.3 m over the road's ground, its carriageway raised beside the track
+def test_a_road_under_a_rail_deck_stays_on_its_ground_under_the_overpass_beside_it():
+    # Perth's Tonkin Highway: a trunk road under the railway in the motorway's median and, 6 m on, under the motorway's
+    # deck. Both are bridges over a plain road (findground): the railways raise their own over it (not here: the track
+    # is given), the motorway's deck rises over it, and the road is not dug. (The road was dug under the track and the
+    # deck lifted 7.3 m over the road's ground, its carriageway raised beside a track left on the ground)
     m = [Member("trunk", _line(-500, 0, 500, 0, 126), "ground", "trunk", 70, 0, 7.0, None),
          Member("rdeck", _line(0, -10, 0, 10, 6), "rail_deck", "rail", None, 1, 2.0, None),
          Member("rs", _line(0, -500, 0, -10), "rail", "rail", None, 0, 2.0, None),
@@ -419,13 +420,13 @@ def test_a_road_dug_under_a_rail_deck_is_that_low_under_the_overpass_beside_it()
          Member("ms", _line(8, -600, 8, -14), "ground", "motorway", 100, 0, 6.0, None),
          Member("mn", _line(8, 14, 8, 600), "ground", "motorway", 100, 0, 6.0, None)]
     net, systems, shapes, emb = _run(m)
-    assert len(systems) == 1                                            # one interchange: the trunk's dip is both's
     assert shapes[0][2] is not None
-    zt = _shape_z(net, shapes, "trunk", np.array([8.0, 0.0]))
+    moved = {net.m[int(i)].key for _pcs, smp, _zs in shapes for x in smp for i in x["mem"]}
+    assert "trunk" not in moved and "rdeck" not in moved               # the road on its ground (0) under both
     zm = _shape_z(net, shapes, "mdeck", np.array([8.0, 0.0]))
-    assert _shape_z(net, shapes, "trunk", np.array([0.0, 0.0])) <= -(ix.HEADROOM_M + ix.HEADROOM_MARGIN_M) + 0.05
-    assert zm - zt >= ix.HEADROOM_M + ix.HEADROOM_MARGIN_M + ix.deck_depth(28.0) - 0.05
-    assert zm < 1.5                                                     # the motorway about at its ground
+    assert zm >= ix.HEADROOM_M + ix.HEADROOM_MARGIN_M + ix.deck_depth(28.0) - 0.05
+    pcs = emb.get(_key_index(net, "trunk")) if hasattr(emb, "get") else emb[_key_index(net, "trunk")]
+    assert not [1 for _s, _z, mode in pcs or () if mode == "cut"]
 
 
 def test_overpasses_over_one_road_far_apart_stay_apart():

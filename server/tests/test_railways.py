@@ -294,28 +294,6 @@ class RailwayTest(unittest.TestCase):
                       ["standard_gauge", "pedestrian"], subtypes=["rail", "road"])
         self.assertEqual(railways.crossing_props(FRAME, 0, 0, [f2], flat, False, None, "CZ"), [], "no node, no devices")
 
-    def test_a_short_rail_bridge_over_a_road_on_level_ground_is_a_level_crossing(self):
-        f = features([[(-50.0, 100.0), (300.0, 100.0)], [(120.0, 20.0), (120.0, 180.0)]], ["standard_gauge", "primary"],
-                     subtypes=["rail", "road"], flags=[(0, "is_bridge", 160.0 / 350.0, 180.0 / 350.0)])
-        box = roads.tile_bbox(0, 0)
-        with unittest.mock.patch.object(railways, "RAW_ELEV", lambda la, lo: np.full(np.shape(la), 344.0)):
-            kinds = {k for _f, _c, k, _xy in railways.parts(FRAME, [f], box, clip=True)}
-            self.assertEqual(kinds, {"ground"}, "level ground: no bridge")
-            with unittest.mock.patch.object(railways, "LEVEL_BRIDGES_ON", False):
-                self.assertIn("bridge", {k for _f, _c, k, _xy in railways.parts(FRAME, [f], box, clip=True)})
-
-        def valley(la, lo):        # (the road 6 m under the track's ends: a real underpass)
-            e, _n, _ = FRAME.geodetic_to_enu(np.asarray(la), np.asarray(lo), 0.0)
-            return 344.0 - 6.0 * (np.abs(np.asarray(e) - 120.0) < 6.0)
-        with unittest.mock.patch.object(railways, "RAW_ELEV", valley):
-            self.assertIn("bridge", {k for _f, _c, k, _xy in railways.parts(FRAME, [f], box, clip=True)})
-
-        def cut(la, lo):            # (the bridge's mapped ends down the cut's sides: Nachod's road 14, 2026-11-09)
-            e, _n, _ = FRAME.geodetic_to_enu(np.asarray(la), np.asarray(lo), 0.0)
-            return 344.0 - 4.0 * (np.abs(np.asarray(e) - 120.0) < 11.0)
-        with unittest.mock.patch.object(railways, "RAW_ELEV", cut):
-            self.assertIn("bridge", {k for _f, _c, k, _xy in railways.parts(FRAME, [f], box, clip=True)})
-
     def test_a_road_crossing_at_grade_couples_the_bed_as_the_flush_crossing(self):
         xy = np.c_[np.arange(0.0, 101.0, 2.0), np.zeros(51)]
         zb = np.full(51, 100.0)
@@ -1104,29 +1082,6 @@ class GroundMemoTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-
-
-class CoarseUnderpassTest(unittest.TestCase):
-    """GitHub #414: on coarse elevation a rail bridge over a ground road rises over it (railways.coarse_underpasses)."""
-
-    def test_crossings_are_found_along_the_road(self):
-        road = np.array([[0.0, 0.0], [100.0, 0.0]])
-        rail = np.array([[40.0, -20.0], [40.0, 20.0]])
-        self.assertEqual([round(v, 6) for v in railways._seg_hits(road, rail)], [40.0])
-        self.assertEqual(railways._seg_hits(road, rail + [0.0, 50.0]), [])
-
-    def test_only_on_coarse_elevation(self):
-        import geodesy
-        frame = geodesy.EnuFrame(58.1, 56.4, 0.0)
-        saved = railways.COARSE_AT
-        try:
-            railways.COARSE_AT = None
-            self.assertFalse(railways._coarse_here(frame, (0, 0, 10, 10)))
-            railways.COARSE_AT = lambda la, lo: True
-            self.assertTrue(railways._coarse_here(frame, (0, 0, 10, 10)))
-            self.assertEqual(railways.coarse_underpasses(frame, [], (0, 0, 10, 10), []), [])   # no rail bridge
-        finally:
-            railways.COARSE_AT = saved
 
 
 class SplitMeshTest(unittest.TestCase):
