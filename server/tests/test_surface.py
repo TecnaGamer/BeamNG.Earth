@@ -24,8 +24,25 @@ class ClassifyTest(unittest.TestCase):
     def test_classes_map_to_materials(self):
         classes = np.array([[0, 10, 20, 30], [40, 50, 60, 70], [80, 90, 95, 100]], np.uint8)
         idx = sf.classify(classes, np.zeros(classes.shape), 2.0)
-        self.assertEqual(idx.tolist(), [[sf.DIRT, sf.GRASS, sf.DUSTY, sf.GRASS], [sf.DIRT, sf.DIRT, sf.LOOSE, sf.SNOW],
+        self.assertEqual(idx.tolist(), [[sf.DIRT, sf.FOREST, sf.DUSTY, sf.GRASS], [sf.CROP, sf.DIRT, sf.LOOSE, sf.SNOW],
                                         [sf.MUD, sf.MUD, sf.MUD, sf.GRASS]])
+
+    def test_arid_grassland_is_dry_grass(self):
+        """Grassland in Koppen B (arid) is dry grass, elsewhere grass (2026-11-16); without positions, grass."""
+        classes = np.full((2, 2), 30, np.uint8)
+        lat = np.array([[36.1, 36.1], [52.0, 52.0]])      # Las Vegas valley (BWh), the Netherlands (Cfb)
+        lon = np.array([[-115.2, -115.2], [5.0, 5.0]])
+        idx = sf.classify(classes, np.zeros(classes.shape), 2.0, lat, lon)
+        self.assertEqual(idx.tolist(), [[sf.DRYGRASS, sf.DRYGRASS], [sf.GRASS, sf.GRASS]])
+        self.assertEqual(sf.classify(classes, np.zeros(classes.shape), 2.0).tolist(), [[sf.GRASS] * 2] * 2)
+
+    def test_new_layers_fold_like_their_kin(self):
+        """Forest floor, dry grass, crop soil and sand fold like the land cover they replaced; the look-alike merges
+        keep one ground model per pair."""
+        for m in (sf.FOREST, sf.DRYGRASS, sf.CROP, sf.SAND):
+            self.assertIn(m, sf.FOLD_FROM)
+        for a, b in sf.LOOKALIKE:
+            self.assertEqual(sf.MATERIALS[a][1], sf.MATERIALS[b][1], (sf.MATERIALS[a], sf.MATERIALS[b]))
         self.assertEqual(sf.MATERIALS[sf.DIRT], ("beamngEarthDirt", "DIRT"))
         self.assertEqual(sf.DIRT, len(sf.MATERIALS) - 1, "the default material goes last (ties pick the later layer)")
 
@@ -399,7 +416,7 @@ class ServerSurfaceTest(unittest.TestCase):
     class NorthGrass:
         def classes(self, lat, lon):
             lat = np.asarray(lat)
-            return np.where(lat > LAT, 30, 40).astype(np.uint8), True
+            return np.where(lat > LAT, 30, 0).astype(np.uint8), True     # (0: no data, the dirt)
 
         def block_classes(self, frame, cx, cy, lat, lon):
             return self.classes(lat, lon)
@@ -881,7 +898,7 @@ class FuelPadTest(unittest.TestCase):
 
 
 class FieldTest(unittest.TestCase):
-    def test_farmland_is_dirt(self):
+    def test_farmland_is_crop_soil(self):
         lat0, lon0 = 40.0, -76.0
         lat = lat0 + np.arange(50)[:, None] * 2e-5 + np.zeros((1, 50))
         lon = lon0 + np.arange(50)[None, :] * 2.6e-5 + np.zeros((50, 1))
@@ -900,7 +917,7 @@ class FieldTest(unittest.TestCase):
                 return [[ring]]
         idx = np.full((50, 50), sf.GRASS, np.uint8)
         out = sf.paint_fields(idx, lat, lon, [Fields()])
-        self.assertEqual(out[15, 15], sf.DIRT)
+        self.assertEqual(out[15, 15], sf.CROP)
         self.assertEqual(out[40, 40], sf.GRASS)
         self.assertTrue(np.array_equal(idx, np.full((50, 50), sf.GRASS, np.uint8)))
 

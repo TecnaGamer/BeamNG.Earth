@@ -74,6 +74,8 @@ local TL = '/temp/beamngEarth/terraintex/'
 -- server writes zero-mean copies of these (server/terraintex.py RECENTRED_STEMS, the same list; rc_name):
 M.RECENTRED = {
   ['asphalt/asphalt/t_asphalt_b'] = true, ['asphalt/macro_asphalt/t_macro_asphalt_b'] = true,
+  ['forest/t_forest_ground_02/t_forest_ground_02_b'] = true, ['forest/t_macro_forest/t_macro_forest_b'] = true,
+  ['grass/t_dirt_dry_grass/t_dirt_dry_grass_b'] = true,
   ['grass/macro_dry_grass_02/t_macro_dry_grass_02_b'] = true, ['grass/t_grass_01/t_grass_01_b'] = true,
   ['mud/mud/t_mud_b'] = true, ['rock/macro_rocky/t_macro_rocky_b'] = true, ['rock/t_dirt_rocky/t_dirt_rocky_b'] = true,
   ['sand/t_macro_sand/t_macro_sand_b'] = true, ['sand/t_sand/t_sand_b'] = true,
@@ -159,6 +161,11 @@ M.LOOKS = {
   bngEarthGroundBrick = tileLook('brick', 2, 0.85, 0.3),
   bngEarthGroundCobble = tileLook('cobble', 2, 0.6, 0.2),
   beamngEarthDirt = look('soil/dirt_crumbly/t_dirt_crumbly', 2, 'soil/macro_clumply/t_macro_clumpy', 32),
+  -- forest floor, dry grass, crop soil, beach sand (server/surface.py FOREST .. SAND)
+  bngEarthGroundForest = look('forest/t_forest_ground_02/t_forest_ground_02', 2, 'forest/t_macro_forest/t_macro_forest', 16, 0.2, 0.08, 0.05),
+  bngEarthGroundDryGrass = look('grass/t_dirt_dry_grass/t_dirt_dry_grass', 2, 'grass/macro_dry_grass_02/t_macro_dry_grass_02', 16),
+  bngEarthGroundCrop = look('soil/dirt_crumbly/t_dirt_crumbly', 2, 'soil/macro_holes/t_macro_holes', 16),
+  bngEarthGroundSand = look('sand/t_sand/t_sand', 2, 'sand/t_macro_sand/t_macro_sand', 32),
 }
 -- The tile layers' stand-ins when the server could not write their PNGs (terraintex.py: no game folder, a failed
 -- decode): the stock asphalt grain they had before, not a missing texture (a cobbled street plainer than before)

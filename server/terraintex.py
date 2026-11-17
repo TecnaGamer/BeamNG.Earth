@@ -39,7 +39,10 @@ STOCK_TERRAIN = "assets/materials/terrain/"
 RECENTRED_STEMS = (
     "asphalt/asphalt/t_asphalt_b",
     "asphalt/macro_asphalt/t_macro_asphalt_b",
+    "forest/t_forest_ground_02/t_forest_ground_02_b",
+    "forest/t_macro_forest/t_macro_forest_b",
     "grass/macro_dry_grass_02/t_macro_dry_grass_02_b",
+    "grass/t_dirt_dry_grass/t_dirt_dry_grass_b",
     "grass/t_grass_01/t_grass_01_b",
     "mud/mud/t_mud_b",
     "rock/macro_rocky/t_macro_rocky_b",

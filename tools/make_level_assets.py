@@ -197,7 +197,17 @@ LOOKS = {
     "bngEarthGroundLawn": ("grass/t_grass_01/t_grass_01", 0.5, "soil/t_macro_flows/t_macro_flows", 8, 0.2, (0.06, 0.04)),
     # the level's default (built-up land, farmland, no data)
     "beamngEarthDirt": ("soil/dirt_crumbly/t_dirt_crumbly", 1, "soil/macro_clumply/t_macro_clumpy", 16, 0.25, (0.12, 0.08)),
+    # (server/surface.py FOREST ... SAND, 2026-11-16) forest floor: East Coast USA's / Italy's leaf litter, a weak
+    # macro (the photo there is the crowns' dark: the macro's linear-light offsets weigh most on dark ground)
+    "bngEarthGroundForest": ("forest/t_forest_ground_02/t_forest_ground_02", 1, "forest/t_macro_forest/t_macro_forest", 8,
+                             0.2, (0.08, 0.05)),
+    "bngEarthGroundDryGrass": ("grass/t_dirt_dry_grass/t_dirt_dry_grass", 1,
+                               "grass/macro_dry_grass_02/t_macro_dry_grass_02", 8, 0.25, (0.12, 0.08)),
+    "bngEarthGroundCrop": ("soil/dirt_crumbly/t_dirt_crumbly", 1, "soil/macro_holes/t_macro_holes", 8, 0.25, (0.12, 0.08)),
+    "bngEarthGroundSand": ("sand/t_sand/t_sand", 1, "sand/t_macro_sand/t_macro_sand", 16, 0.25, (0.12, 0.08)),
 }
+NEW_GROUND = (("bngEarthGroundForest", "GRASS", 70), ("bngEarthGroundDryGrass", "GRASS", 71),
+              ("bngEarthGroundCrop", "DIRT", 72), ("bngEarthGroundSand", "SAND", 73))
 SURFACES = {}
 for i, name in enumerate(("bngEarthGroundAsphalt", "bngEarthGroundGrass", "bngEarthGroundDusty", "bngEarthGroundLoose",
                           "bngEarthGroundRock", "bngEarthGroundSnow", "bngEarthGroundMud", "bngEarthGroundLawn")):
@@ -206,6 +216,10 @@ for i, name in enumerate(("bngEarthGroundAsphalt", "bngEarthGroundGrass", "bngEa
           "bngEarthGroundMud": "MUD", "bngEarthGroundLawn": "GRASS"}[name]
     detail, dsize, macro, msize, strength, ms = LOOKS[name]
     SURFACES.update(surface(name, gm, f"3b0f6f0e-8f5e-4a51-9a59-0b8e2f6a1c{30 + i}", detail, dsize, macro, msize,
+                            strength, ms))
+for name, gm, pid in NEW_GROUND:
+    detail, dsize, macro, msize, strength, ms = LOOKS[name]
+    SURFACES.update(surface(name, gm, f"3b0f6f0e-8f5e-4a51-9a59-0b8e2f6a1c{pid}", detail, dsize, macro, msize,
                             strength, ms))
 
 # Golf (server/surface.py). The detail texture is painted over the photo; these are not GroundCover layers. An even,
