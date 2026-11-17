@@ -1,4 +1,4 @@
-"""The aerial photo's surface verdicts as _spec_inputs reads them (earthfast 389, roadnet::verdicts: the road revamp's
+"""The aerial photo's surface verdicts as _spec_inputs reads them (earthfast 392, roadnet::verdicts: the road revamp's
 R2a) against the Python they replaced, value for value: roadsurf.candidates (class, surface value, lane count,
 smoothness: cased, padded, numbers, None, non-ASCII), roadsurf.layer_verdicts' store lookup (a store of random entries,
 falsy verdicts, roads in other cells), photosurface.verdicts' selection (a stand-in measure: the photo's tiles are not
@@ -20,7 +20,7 @@ import roads  # noqa: E402
 import roadsurf  # noqa: E402
 
 
-# ---- the Python versions (before earthfast 389), verbatim ----
+# ---- the Python versions (before earthfast 392), verbatim ----
 
 def ref_candidates(feats, vals=None):
     import roads as roadsmod
@@ -298,6 +298,32 @@ class PhotoValuesParityTest(unittest.TestCase):
         # an eligible index past the values: the list's IndexError
         self.assertEqual(outcome(lambda: fast._ef.photo_values([None], np.array([False, True]), dict))[1], IndexError)
         self.assertEqual(outcome(lambda: ref_photo_values([None], np.array([False, True]), dict))[1], IndexError)
+
+
+class VersionSkewTest(unittest.TestCase):
+    """Codex round 2 on 7916e96d: an extension of dev's 390 (R1e's) has neither roadnet::countries nor ::verdicts; it
+    must be refused at the start (fast.MIN_VERSION) and by each facade (fast.require: NativeMissing), never get as far
+    as an AttributeError at the first road build."""
+
+    def test_a_390_extension_is_refused(self):
+        import types
+
+        import europewalks
+        import fast
+        self.assertGreaterEqual(fast.MIN_VERSION, 392)
+        self.assertGreaterEqual(fast._ef.VERSION, fast.MIN_VERSION)
+        old = types.SimpleNamespace(VERSION=390)
+        f = layer(random.Random(1), 3)
+        f.attrs["class"] = np.array(["track"] * 3)
+        with mock.patch.object(fast, "_ef", old):
+            for call in (lambda: europewalks.country_for(10.0, 50.0),
+                         lambda: europewalks.road_countries(f, np.ones(3, bool)),
+                         lambda: roadsurf.candidates(f)):
+                with self.assertRaises(fast.NativeMissing):
+                    call()
+            with mock.patch.object(photosurface, "ON", True):
+                with self.assertRaises(fast.NativeMissing):
+                    photosurface.verdicts(f, lambda i: None)
 
 
 if __name__ == "__main__":

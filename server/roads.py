@@ -3890,7 +3890,7 @@ def _spec_inputs(feats):
     import photosurface
     vals = _map_surface_values(feats)
     if photosurface.ON:         # (earthfast roadnet::verdicts: the photo asked only where an eligible road has none)
-        fast.require(389, "photo_values")
+        fast.require(392, "photo_values")
         vals = fast._ef.photo_values(vals, np.ascontiguousarray(elig, bool), lambda: _photo_surface(feats))
     else:
         vals = list(vals)

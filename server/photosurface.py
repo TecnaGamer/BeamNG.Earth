@@ -245,7 +245,7 @@ def verdicts(feats, surface_of, root=None):
     if cls is None or not ON:
         return out, missing
     import fast
-    fast.require(389, "photo_candidates")
+    fast.require(392, "photo_candidates")
     for i in fast._ef.photo_candidates(len(feats), cls, surface_of, sorted(PHOTO_CLASSES)):
         best = None
         # (the raw geometry: roads.ground_parts needs the level ranges, which read the surface: a loop. A bridge's or

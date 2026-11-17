@@ -202,7 +202,7 @@ def candidates(feats, vals=None):
     cls = feats.attrs.get("class")
     if cls is None or not n:
         return np.zeros(n, bool)
-    fast.require(389, "roadsurf_candidates")
+    fast.require(392, "roadsurf_candidates")
     return fast._ef.roadsurf_candidates(
         n, cls, roadsmod._map_surface_values(feats) if vals is None else vals,
         lambda: roadsmod._osm_values(feats, "lanes", *roadsmod.OSM_LANES), feats.attrs.get("osm_smoothness"),
@@ -233,7 +233,7 @@ def layer_verdicts(feats, vals=None):
         return {}
     import fast
     import roads as roadsmod
-    fast.require(389, "roadsurf_lookup")
+    fast.require(392, "roadsurf_lookup")
     # (each candidate's verdict in its home cell's entry: earthfast roadnet::verdicts; the cells asked for only when a
     # road is a candidate)
     out = fast._ef.roadsurf_lookup(np.ascontiguousarray(candidates(feats, vals), bool),

@@ -1,4 +1,4 @@
-"""The European streets' country lookup (earthfast 388, roadnet::countries: the road revamp's R2a) against
+"""The European streets' country lookup (earthfast 391, roadnet::countries: the road revamp's R2a) against
 europewalks.country_for's Python and _spec_inputs' loop of it, value for value: random points over Europe, North
 Africa, the Middle East, the world, on the box test's edges (25 N, 168 W, 33 W), NaN / inf points; random road layers
 (features of 0-7 points in several parts and rings) for the middle points; no border data (countrybounds.Absent); the

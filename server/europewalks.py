@@ -106,7 +106,7 @@ def country_for(lon, lat):
     33 W (the territories and the eastern end of Russia), else countrybounds' code there (earthfast
     roadnet::countries; the border data asked only for a point past that box test)."""
     import fast
-    fast.require(388, "europe_countries")
+    fast.require(391, "europe_countries")
     return fast._ef.europe_countries(_border_path, np.array([lon], np.float64), np.array([lat], np.float64),
                                      _countries())[0]
 
@@ -116,7 +116,7 @@ def road_countries(feats, mask):
     it p1, lonlat[p0 + (p1 - p0) // 2]), None for the others and a road without points (earthfast
     roadnet::countries::europe_road_countries)."""
     import fast
-    fast.require(388, "europe_road_countries")
+    fast.require(391, "europe_road_countries")
     return fast._ef.europe_road_countries(
         _border_path, np.ascontiguousarray(feats.part_off, np.int64), np.ascontiguousarray(feats.ring_off, np.int64),
         np.ascontiguousarray(feats.coord_off, np.int64), np.ascontiguousarray(feats.lonlat, np.float64).reshape(-1, 2),
