@@ -365,18 +365,18 @@ M.CATALOG = {
   catpost_eu = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_cat_post_eu', 10.4 } },
   -- the Mediterranean basin's Cs climates (server vegetation.G_MEDITERRANEAN): Italy's own trees, already loaded with
   -- its folder (MATERIALS); heights measured from the shapes' bounds (the asset survey, 2026-11-10)
+  -- (2026-11-17, the gallery: Italy's holm_oak* shapes wear oak_leaves_01/02, East Coast USA's deciduous oak leaves,
+  -- lobed, and turned rust-brown with them in the fall: no evergreen holm oak (Quercus ilex) look in a summer-dry
+  -- climate's woods all year. Out; the evergreen cork oaks, olive, pines, cypress and scraggly broadleaves stay.)
   mediterranean = {
-    { IT .. 'trees/trees_italy/olive', 4.3 }, { IT .. 'trees/trees_italy/holm_oak_city_small', 5.6 },
-    { IT .. 'trees/trees_italy/cypress_tree', 7.2 }, { IT .. 'trees/trees_italy/holm_oak_city_tall', 9.6 },
+    { IT .. 'trees/trees_italy/olive', 4.3 }, { IT .. 'trees/trees_italy/cypress_tree', 7.2 },
     { IT .. 'trees/trees_italy/cork_oak_medium', 11.2 }, { IT .. 'trees/trees_italy/maritime_pine_2', 11.9 },
-    { IT .. 'trees/trees_italy/maritime_pine', 12.0 }, { IT .. 'trees/trees_italy/holm_oak', 12.9 },
-    { IT .. 'trees/trees_italy/cork_oak_large_1', 13.9 },
-    -- (the stock survey 2026-11-15) young maritime pine and holm oak, the scraggly broadleaves, the slender forest
-    -- holm and cork oaks (Italy's forest fillers: single trees ~0.5 of their height across)
-    { IT .. 'trees/trees_italy/maritime_pine_bush', 5.05 }, { IT .. 'trees/trees_italy/holm_oak_bush', 5.86 },
+    { IT .. 'trees/trees_italy/maritime_pine', 12.0 }, { IT .. 'trees/trees_italy/cork_oak_large_1', 13.9 },
+    -- (the stock survey 2026-11-15) the young maritime pine, the scraggly broadleaves, the slender forest cork oak
+    -- (Italy's forest fillers: single trees ~0.5 of their height across)
+    { IT .. 'trees/trees_italy/maritime_pine_bush', 5.05 },
     { IT .. 'trees/trees_italy/scraggly_2', 8.52 }, { IT .. 'trees/trees_italy/scraggly', 9.55 },
     { IT .. 'trees/trees_italy/cork_oak_filler_small', 10.1 }, { IT .. 'trees/trees_italy/scraggly_tree_filler_1', 10.7 },
-    { IT .. 'trees/trees_italy/holm_oak_filler_2', 11.17 }, { IT .. 'trees/trees_italy/holm_oak_filler_1', 16.32 },
   },
   -- Far clumps (server vegetation.CLUMP_OF, GitHub #1074): one item for a forest square's 4-8 trees, shown only
   -- beyond CLUMP_M (FAR_ONLY) where those trees are not (rows with a negative scale). The stock maps' own forest
@@ -397,8 +397,8 @@ M.CATALOG = {
   -- silage on meadows; by hemisphere, shown in their season only (SEASON)
   straw_n = { { '/assets/meshes/props/race_event/equipment/s_haybaleround_large_01', 1.22 } },
   silage_n = { { '/assets/meshes/props/race_event/equipment/s_haybaleround_alt_01', 1.18 } },
-  mediterranean_clump = { { IT .. 'trees/trees_italy/holm_oak_filler_center', 13.9 },
-    { IT .. 'trees/trees_italy/cork_oak_filler_center', 14.14 } },     -- (the stock survey 2026-11-15)
+  mediterranean_clump = { { IT .. 'trees/trees_italy/cork_oak_filler_center', 14.14 } },     -- (the stock survey
+  -- 2026-11-15; holm_oak_filler_center out 2026-11-17: deciduous oak leaves, brown in the fall)
   eucalyptus_clump = { { WCA .. 'trees/trees_eucalyptus/eucalyptus_group', 20.3 } },
   -- regional trees (server vegetation.regional's zones; heights from the shapes' bounds, the asset survey 2026-11-10):
   -- Australia's eucalypts (West Coast USA's), temperate Europe's riverside poplars and North America's hot-desert
