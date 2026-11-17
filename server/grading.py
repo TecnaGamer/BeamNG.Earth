@@ -324,6 +324,10 @@ _gsh.DECK_SPAN_RATIO = roadsmod.DECK_SPAN_RATIO
 SHAPES_PAD_M = 800.0        # m round a cell its systems and their ramps are read from (a ramp is at most RAMP_MAX_M)
 SHAPES_CAP_M = 4000.0       # m: the farthest a system is followed from the cell
 SHAPES_NEAR_M = 3.0         # m: a plan vertex this near a shape's or a ramp's line takes its height
+# The road laws on every road (roadlaws.py): the cell's finished ground plans under the grade and the vertical curve
+# their speed allows (with the shapes: on unless BNE_ROAD_LAWS=off)
+ROAD_LAWS_ON = SHAPES_ON and os.environ.get("BNE_ROAD_LAWS", "on") != "off"
+ROAD_LAWS_DECK_M = 1.0      # m past a deck's half width a road under it counts as under it (only down there)
 APPROACH_ON = os.environ.get("BNE_APPROACH_RAMPS", "on") != "off" and not SHAPES_ON
 APPROACH_GRADE = float(os.environ.get("BNE_APPROACH_GRADE", "0.05"))   # steepest grade of a ramp (its middle)
 APPROACH_MAX_LIFT = 10.0    # m an abutment is raised at most
@@ -2870,6 +2874,12 @@ class _Planner:
                 except Exception as e:      # the plans as the passes left them rather than no grading
                     _caught(e)
                     log.debug("grading: grade guard of %s: %s: %s", key, type(e).__name__, e)
+            if ROAD_LAWS_ON and plans:
+                try:            # every road under its grade and vertical curve (roadlaws.py)
+                    self._road_laws(key, plans, pspecs)
+                except Exception as e:      # the plans as the passes left them rather than no grading
+                    _caught(e)
+                    log.warning("grading: road laws of %s: %s: %s", key, type(e).__name__, e)
             if CORRIDOR_ON and plans:
                 try:            # roads side by side at one height (before the welds and snaps that join them again)
                     share_corridors(plans, pspecs, self._decks_near(key) if CORRIDOR_UNDER_ON else ())
@@ -4520,6 +4530,47 @@ class _Planner:
                 z_out[n] = z[j] + (z[j + 1] - z[j]) * t[j]
                 m_out[n] = mode
         return z_out, m_out
+
+    def _road_laws(self, key, plans, specs):
+        """ROAD_LAWS_ON: the cell's plans under their laws (roadlaws.apply): held where an interchange's shape or ramp
+        set them, only down under a deck, the tunnels' as they are. Returns how many changed."""
+        import roadlaws
+        import time as _time
+        t0 = _time.monotonic()
+        decks = [(np.asarray(ln, np.float64)[:, :2], float(h)) for ln, h in (self._decks_near(key) or ())
+                 if len(ln) >= 2]
+        dbox = [(ln.min(0) - h - ROAD_LAWS_DECK_M, ln.max(0) + h + ROAD_LAWS_DECK_M) for ln, h in decks]
+
+        def held(i):
+            if not SHAPES_ON:
+                return None
+            fid, p = plans[i]
+            xy = np.asarray(p.xy, np.float64)[:, :2]
+            zs, _m = self._shape_at(xy, xy, str(fid).split(":")[0], ("fill", "cut", "set"))
+            return np.isfinite(zs)
+
+        def under(i):
+            xy = np.asarray(plans[i][1].xy, np.float64)[:, :2]
+            out = np.zeros(len(xy), bool)
+            for (ln, h), (lo, hi) in zip(decks, dbox):
+                inb = ((xy >= lo) & (xy <= hi)).all(1)
+                if not inb.any():
+                    continue
+                k = np.flatnonzero(inb)
+                a, b = ln[:-1], ln[1:]
+                ab = b - a
+                q = xy[k]
+                t = np.clip(((q[:, None] - a[None]) * ab[None]).sum(2) / np.maximum((ab * ab).sum(1), 1e-12)[None], 0, 1)
+                d = np.hypot(*(a[None] + ab[None] * t[..., None] - q[:, None]).transpose(2, 0, 1)).min(1)
+                out[k[d <= h + ROAD_LAWS_DECK_M]] = True
+            return out
+        skip = [i for i, (f, _p) in enumerate(plans) if TUNNEL_TAG in str(f)]
+        info = {}
+        n = roadlaws.apply([p for _f, p in plans], specs, held, under, skip, info)
+        log.info("grading: road laws %s: %d of %d plans changed, %s chains, %s couplings, %s samples, %.2f s%s", key, n,
+                 len(plans), info.get("chains"), info.get("couplings"), info.get("samples"), _time.monotonic() - t0,
+                 "" if info.get("feasible", True) else " (infeasible: left as they were)")
+        return n
 
     def _apply_shapes(self, plans, specs):
         """SHAPES_ON: each plan on a shape's ramp or cut takes its height there: up to an embankment ("fill"), down to

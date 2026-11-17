@@ -990,7 +990,8 @@ class ChainTest(unittest.TestCase):
     def plans(self, on):
         # A ends at the junction (0, 0) where B goes on straight and C branches off 31 degrees to the left
         f = features([[(-300, 0), (0, 0)], [(0, 0), (300, 0)], [(0, 0), (200, 120)]], ["primary"] * 3)
-        with unittest.mock.patch.object(grading, "CHAIN_ON", on):
+        # (the road laws off: they would ease the bump of the parts smoothed alone too, the case this compares with)
+        with unittest.mock.patch.object(grading, "CHAIN_ON", on), unittest.mock.patch.object(grading, "ROAD_LAWS_ON", False):
             g = grading.Grader(FRAME, FakeMD(f), self.hill)
             return {fid: p for fid, p in g._cell_plans(mapcells.cell_of(LAT, LON))}
 
@@ -1248,7 +1249,7 @@ class UnderpassTest(unittest.TestCase):
         steep, z0 = grade()
         self.assertLess(z0, 10.0 - 1.5, "(the case: the junction dug)")
         self.assertLessEqual(steep, grading.UNDER_MAX_GRADE + 0.01)
-        with unittest.mock.patch.object(grading, "UNDER_NODE_M", 0.5):
+        with unittest.mock.patch.object(grading, "UNDER_NODE_M", 0.5),                 unittest.mock.patch.object(grading, "ROAD_LAWS_ON", False):     # (they would ease the bug's step)
             self.assertGreater(grade()[0], 0.3, "(0.5 m: a step, the bug)")
 
     def test_merge_span_chains(self):
@@ -1471,6 +1472,7 @@ class StreetRunsTest(unittest.TestCase):
 
 
 class CoarseUnderpassTest(unittest.TestCase):
+    @unittest.mock.patch.object(grading, "ROAD_LAWS_ON", False)     # (the dip's own rule; the laws lengthen its ramps)
     def test_a_street_dip_stays_on_the_street_on_coarse_elevation(self):
         """Samara (2026-11-02): on the 30 m model a street under a bridge whose ramps the frontage roads hold down dips
         between its own junctions only, as deep as fits there (UNDER_RUN_*); the side streets stay at their ground.
