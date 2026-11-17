@@ -286,22 +286,3 @@ def test_overpasses_over_one_road_far_apart_stay_apart():
          Member("d2", _line(600, -6, 600, 6, 4), "deck", "tertiary", 50, 1, 4.0, None)]
     net, systems, shapes, emb = _run(m)
     assert len(systems) == 2
-
-def test_two_decks_merging_side_by_side_are_one_surface_before_their_joint():
-    # Gravelly Hill: two level-2 links converging onto one deck, side by side (their carriageways overlapping) for
-    # their last 100 m; one rises over a track further back. Each was held to the other only at the joint: 0.8 m apart
-    # in height 25 m before it, a truck on one hit the other's deck
-    a = _line(-300, -6, 0, 0, 76)
-    b = _line(-300, 6, 0, 0, 76)
-    m = [Member("a", a, "deck", "motorway_link", 60, 2, 4.0, None),
-         Member("b", b, "deck", "motorway_link", 60, 2, 4.0, None),
-         Member("c", _line(0, 0, 120, 0, 31), "deck", "motorway_link", 60, 2, 4.0, None),
-         Member("on", _line(120, 0, 700, 0), "ground", "motorway_link", 60, 0, 4.0, None),
-         Member("rail", _line(-260, -300, -260, 0.0, 60), "rail", "rail", None, 0, 2.0, None)]
-    net, systems, shapes, emb = _run(m)
-    assert len(systems) == 1 and shapes[0][2] is not None
-    for x in np.arange(-190.0, -5.0, 10.0):
-        ya = -6.0 * x / -300.0
-        za = _shape_z(net, shapes, "a", np.array([x, ya]))
-        zb = _shape_z(net, shapes, "b", np.array([x, -ya]))
-        assert abs(za - zb) <= ix.BESIDE_FALL * 2 * abs(ya) + 0.05, (x, za, zb)

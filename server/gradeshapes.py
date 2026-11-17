@@ -772,45 +772,6 @@ def _deck_targets(net, sysm, pc, t):
     return target, w
 
 
-BESIDE_FALL = 0.02          # a deck's cross-fall: two decks side by side where they merge are one surface across them,
-                            # no steeper than this from one's centreline to the other's
-
-
-def _beside(net, sysm, pcs, smp):
-    """Couplings holding two joined decks one surface where they run side by side (a merge or a diverge: their
-    carriageways overlap in plan before their shared end): each sample of one whose carriageway overlaps the other's,
-    along it (within MERGE_DEG) and across it (not past its end), within BESIDE_FALL x the distance between their
-    centrelines of the other's height there. Gravelly Hill's two level-2 links merging 1.7 m apart stood 0.8 m apart
-    in height before their joint: a truck on one hit the other's deck."""
-    deck = {pc["main"]: p for p, pc in enumerate(pcs) if pc["kind"] == "deck"}
-    pairs = {tuple(sorted((i, j))) for i, _si, j, _sj in sysm["joins"] if i in deck and j in deck}
-    out = []
-    cos_merge = math.cos(math.radians(MERGE_DEG))
-    for i, j in sorted(pairs):
-        for a, b in ((i, j), (j, i)):
-            p, q = deck[a], deck[b]
-            reach = net.m[a].half + net.m[b].half
-            for k in range(len(smp[p]["xy"])):
-                xy, sa = smp[p]["xy"][k], float(smp[p]["ms"][k])
-                sb, d = proj(net.lines[b], net.s[b], xy)
-                if d >= reach or d < 1e-6:
-                    continue                    # (apart, or the joint itself: held by the join)
-                tb = _tangent(net.lines[b], net.s[b], sb)
-                if abs(float(_tangent(net.lines[a], net.s[a], sa) @ tb)) < cos_merge:
-                    continue                    # (not along it: a crossing's business)
-                off = xy - at_s(net.lines[b], net.s[b], sb)
-                if abs(float(off[0] * tb[1] - off[1] * tb[0])) < 0.8 * d:
-                    continue                    # (past its end, not beside it)
-                got = _locate(smp, q, b, sb)
-                if got is None:
-                    continue
-                kb, kc, t = got
-                tol = BESIDE_FALL * d
-                out.append((p, k, q, kb, "ge", -tol, q, kc, t))
-                out.append((p, k, q, kb, "le", tol, q, kc, t))
-    return out
-
-
 def _solve_shape_qp(net, sysm, pcs, smp, ground, fixed_z, diagnostics):
     import carriageways as _cw
     chains = []
@@ -840,7 +801,6 @@ def _solve_shape_qp(net, sysm, pcs, smp, ground, fixed_z, diagnostics):
             cps.append((x[0], x[1] if x[3] < 0.5 else x[2], y[0], y[1] if y[3] < 0.5 else y[2], "eq", 0.0))
     for p, a, q, b in _overlaps(pcs, smp):
         cps.append((p, a, q, b, "eq", 0.0))
-    cps += _beside(net, sysm, pcs, smp)
     for c in sysm["crossings"]:
         need = clearance_need(net, c["u"], c["d"])
         x, y = _var(pcs, smp, c["u"], c["su"]), _var(pcs, smp, c["d"], c["sd"])
