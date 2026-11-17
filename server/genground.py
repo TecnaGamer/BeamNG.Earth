@@ -59,6 +59,7 @@ import revisit
 log = logging.getLogger("earthd.genground")
 
 ON = os.environ.get("BNE_GEN_GROUND", "off").strip().lower() in ("on", "1", "yes", "true")
+PAIR_NEED = 370             # earthfast gen_ground_pair (the ground and its canopy version in one pass)
 NEED = 314                  # earthfast gg_* / gen_ground (stage 2: lines, surfaces, patterns; linear axes)
 # m round a block its generated ground is made over and cut from: a texel's colour reads the inputs this far round
 # (genground.rs: windows FAR_R_M 48 + the lattice and purity margins), so overlapping blocks agree
@@ -1014,6 +1015,22 @@ def _render_square(imagery, frame, x0, y0, size, px, pending):
     return np.ascontiguousarray(np.asarray(rgb, np.uint8)[:, :, :3])
 
 
+def _imagery_key(imagery):
+    """An imagery's identity for the memos (sun fits, far squares): everything that changes its pixels: its chain's
+    sources, tone, leaf-on, season, whether it reads the finished tiles alone and their settings (a raw driving render
+    and a finished one never share an entry: the Codex review of a3c7895f), a quick render (this thread's or the
+    worker's). A stand-in without a chain: by its object."""
+    chain = getattr(imagery, "chain", None)
+    if chain is None:
+        return ("stand-in", id(imagery))
+    caller = getattr(imagery, "_caller", None)
+    quick = bool(getattr(imagery, "quick_all", False) or getattr(caller, "quick", False))
+    sigs = tuple(sorted((str(k), str(v)) for k, v in (getattr(imagery, "_fin_sigs", None) or {}).items()))
+    return (tuple(str(getattr(s, "name", s)) for s in chain), str(getattr(imagery, "tone", None)),
+            str(getattr(imagery, "leaf_on", None)), str(getattr(imagery, "season_mode", None)),
+            bool(getattr(imagery, "finished_only", False)), sigs, quick)
+
+
 def _fit_key(key, imagery, md, dem):
     """A sun fit's memo key: the cell, SHADE_VERSION, the imagery by its settings (its chain's sources, tone, leaf-on,
     season: not id(), which a new object can reuse once the old one is gone: the mini PC's gate, 2026-11-16), the map
@@ -1022,12 +1039,7 @@ def _fit_key(key, imagery, md, dem):
         ver = json.dumps(md.versions(buildings=True), sort_keys=True, default=str) if md is not None else None
     except Exception:
         ver = None
-    chain = getattr(imagery, "chain", None)
-    if chain is not None:
-        im = (tuple(str(getattr(s, "name", s)) for s in chain), str(getattr(imagery, "tone", None)),
-              str(getattr(imagery, "leaf_on", None)), str(getattr(imagery, "season_mode", None)))
-    else:                       # (a stand-in: by its object)
-        im = ("stand-in", id(imagery))
+    im = _imagery_key(imagery)
     mdk = None if md is None else (type(md).__name__, str(getattr(md, "cache_dir", "")))
     return (str(key), SHADE_VERSION, im, mdk, dem is not None, ver)
 
@@ -1271,7 +1283,16 @@ def inputs(frame, x0, y0, size, px, md, surface, widths=None, veg=None):
                 cover[np.asarray(m, bool)] |= 4
         except Exception as e:      # (the roofs are filled in after anyway)
             log.debug("genground: building mask: %s: %s", type(e).__name__, e)
-    floor, mode = tree_floor(frame, x0, y0, size, px, veg, missing)
+    if getattr(_far_tl, "on", False):
+        # (a far square, render_far: the trees the mod draws at its distance, not each placed one: the canopy's core
+        # wooded, its floor faded by the tile's level, FAR_STRENGTH; no trees drawn: their colour)
+        floor, mode = None, 0
+        if veg is not None:
+            share = _far_tl.share
+            floor = np.where((canopy != CANOPY_NODATA) & (canopy >= 3), int(round(255 * share)), 0).astype(np.uint8)
+            mode = 2
+    else:
+        floor, mode = tree_floor(frame, x0, y0, size, px, veg, missing)
     kind, region = fast._ef.gg_regions(np.ascontiguousarray(base), poly, pkinds, line, lkinds, canopy, cover,
                                        float(size / px), floor, mode == 0)
     return kind, region, canopy, bool(complete) and not missing, poly, dirs, phases, floor, mode
@@ -1284,7 +1305,8 @@ def halo_square(x0, y0, size, px):
     return x0 - h * t, y0 - h * t, size + 2 * h * t, px + 2 * h, h
 
 
-def generate(rgb, frame, x0, y0, size, px, md, surface, widths=None, veg=None, dem=None, imagery=None, pending=None):
+def generate(rgb, frame, x0, y0, size, px, md, surface, widths=None, veg=None, dem=None, imagery=None, pending=None,
+             relight=True, canopy_out=None):
     """(the generated ground (px, px, 3) uint8 of the square, complete) from rgb, its Sentinel-2 photo (imagery.render
     over the same square at px), and the map data (inputs()). Its outer HALO_M is not final (the windows reach out of
     the square there): render() keeps the middle of a larger square."""
@@ -1297,17 +1319,31 @@ def generate(rgb, frame, x0, y0, size, px, md, surface, widths=None, veg=None, d
     t = size / px
     # (the global texel grid of the anchor frame: the blocks' texels lie on it, so their lattices agree)
     gc, gr = int(np.floor(x0 / t + 0.5)), int(np.floor(-(y0 + size) / t + 0.5))
-    if imagery is not None:         # (stage 5) the capture sun's shadows out of the photo (shade())
+    if imagery is not None and relight:  # (stage 5) the capture sun's shadows out of the photo (shade())
         miss = []
         rgb, region = shade(rgb, frame, x0, y0, size, px, kind, region, canopy, md, dem, imagery, pending, miss, gr,
                             gc, surface)
         complete = complete and not miss
-    out = fast._ef.gen_ground(rgb, kind, region, canopy, poly, dirs, phases, float(x0 + t / 2),
-                              float(y0 + size - t / 2), float(t), gr, gc, floor, int(mode))
+    args = (rgb, kind, region, canopy, poly, dirs, phases, float(x0 + t / 2), float(y0 + size - t / 2), float(t), gr,
+            gc)
+    if canopy_out is not None and (mode == 1 or (mode == 2 and floor is not None)) \
+            and getattr(fast._ef, "VERSION", 0) >= PAIR_NEED:
+        # (the mip fade, far rings and block: the same ground with no forest floor under the trees, every other texel
+        # alike: the woods in the canopy's colour, written into the coarser mips, write_far_dds / bc7.dds; in one pass,
+        # gen_ground_pair. Placed trees (mode 2): gen_ground with a zero floor; not built yet (mode 1, all of
+        # FLOOR_MIX): floor mode 0, the mode's only use past the regions. The block's placed trees (not a far square):
+        # its unplaced gaps under the canopy model (their gap colour, the forest floor in dense woods: half a wood's
+        # texels at Penns Valley and Patapsco) the photo's own colour too, as the far squares' woods (every wooded
+        # texel a tree there). An older module: no canopy version, the plain encoding)
+        out, can = fast._ef.gen_ground_pair(*args, floor, int(mode), not getattr(_far_tl, "on", False))
+        canopy_out.append(can)
+    else:
+        out = fast._ef.gen_ground(*args, floor, int(mode))
     return out, complete
 
 
-def render(imagery, frame, x0, y0, size, px, md, surface, widths=None, pending=None, veg=None, dem=None):
+def render(imagery, frame, x0, y0, size, px, md, surface, widths=None, pending=None, veg=None, dem=None,
+           relight=True, canopy_out=None):
     """(rgb (px, px, 3), sources used): the generated ground of [x0, x0 + size]^2 of frame at px, made over the square
     with HALO_M round it and cut to it (every block covering a spot draws it alike, the Codex review of 41d74b61). With
     map data still missing GEN_PENDING goes into pending (earthd.Server.base_ready: made again once it is here).
@@ -1320,9 +1356,252 @@ def render(imagery, frame, x0, y0, size, px, md, surface, widths=None, pending=N
         rgb, used = imagery._render(where, hpx, pending)
     else:                           # (a stand-in imagery: its render as it is)
         rgb, used = imagery.render(frame, hx0, hy0, hsize, hpx, pending)
-    out, complete = generate(rgb, frame, hx0, hy0, hsize, hpx, md, surface, widths, veg, dem, imagery, pending)
+    cout = [] if canopy_out is not None else None
+    out, complete = generate(rgb, frame, hx0, hy0, hsize, hpx, md, surface, widths, veg, dem, imagery, pending,
+                             relight, cout)
     if where is not None:
         out = imagery._seasoned(where, np.asarray(out, np.uint8))
+        cout = [imagery._seasoned(where, np.asarray(c, np.uint8)) for c in cout or ()] if cout is not None else None
+    if canopy_out is not None:
+        canopy_out.extend(np.ascontiguousarray(np.asarray(c, np.uint8)[h:h + px, h:h + px]) for c in cout)
     if not complete and pending is not None:
         pending.add(GEN_PENDING)
     return np.ascontiguousarray(np.asarray(out, np.uint8)[h:h + px, h:h + px]), used
+
+
+# The far rings' generated ground (the user, 2026-11-16: "the texture between the ground with collision vs no collision
+# is very different ... visible border"; Patapsco: the block's forest floor beside the far tiles' plain Sentinel-2): a
+# far tile of the levels to FAR_MAX_LEVEL (L1: to ~3 km) is cut from the generated ground of FAR_SQ_M squares of the
+# anchor frame's grid at FAR_MIN_T (the same function, its windows in metres: the same kinds and colours as the block
+# at the seam), memoized per process (FAR_SQ_MAX). At far LODs: no shadow relight (no sun fits); the trees as the mod
+# draws them there, not each placed one (no vegetation cell read or waited for): the canopy's core wooded, its forest
+# floor as the block's; the fade to the canopy's colour with distance (the user, 2026-11-16, "Sure try the fade": the
+# forest-floor colour where the game draws ground between dense trees, near; from height olive-brown ridges read
+# less like forest) is in the textures' mips (write_far_dds): each mip blends the floor and canopy versions by its
+# texel's size on the ground, FADE_NEAR_M (all floor) to FADE_FAR_M (all canopy). The GPU picks the mip whose texel
+# matches the pixel's footprint, so every tile (and the block, whose packed base fades the same way: bc7.dds fade,
+# earthd.Server.write_base) shows the same weight at the same footprint: continuous per pixel, no ring seams or block
+# square from above, nothing player-dependent in the keys (per-level steps,
+# c18ac2f5, showed as nested squares). No GEN_PENDING (a square made without all of its map data is a revisit fault
+# and made again after FAR_RETRY_S).
+FAR_VERSION = 3
+FAR_SQ_M = 1024.0
+FAR_MIN_T = 2.0
+FAR_MAX_T = 2.0
+FAR_MAX_LEVEL = 1
+FAR_STRENGTH = {-2: 1.0, -1: 1.0, 0: 1.0, 1: 1.0}
+FADE_NEAR_M = 1.0               # a mip texel this fine or finer: all forest floor (the block's: ~1 m at its far side)
+FADE_FAR_M = 2.0                # ... this coarse or coarser: the canopy's colour (the plain photo's L2 on: 2 m)
+FAR_SQ_MAX = 32
+FAR_RETRY_S = 60.0
+_far_sq = {}                    # key -> (time, complete, rgb (n, n, 3), used, pending markers)
+_far_lock = threading.Lock()
+_far_tl = threading.local()     # .on: inside render_far (tree_floor neither waits for nor asks for trees)
+
+
+def far_strength(level):
+    """The forest floor's weight on a far tile of level (FAR_STRENGTH), or None: not made by render_far (off, or past
+    FAR_MAX_LEVEL: the plain photo)."""
+    if not ON or level is None or level > FAR_MAX_LEVEL:
+        return None
+    return FAR_STRENGTH.get(int(level), 1.0)
+
+
+def far_texel(size, px):
+    """The squares' texel (m) for a far tile's square of size m at px, or None past FAR_MAX_T * 2 (a coarser level's):
+    the tile's texel rounded up to a power of 2, at least FAR_MIN_T."""
+    t = size / px
+    if not ON or t > 2 * FAR_MAX_T * 1.01:
+        return None
+    ts = FAR_MIN_T
+    while ts < t * 0.99 and ts < FAR_MAX_T:
+        ts *= 2.0
+    return ts
+
+
+def far_key(md, trees):
+    """The far tiles' key part for the generated ground (their revisit keys: blockworker._far_tile_key): its version,
+    the map data's versions and whether the game's trees are drawn. None when off."""
+    if not ON:
+        return None
+    try:
+        ver = json.dumps(md.versions(), sort_keys=True, default=str) if md is not None else None
+    except Exception:
+        ver = None
+    return ("genfar", FAR_VERSION, FAR_SQ_M, FAR_MIN_T, FAR_MAX_T, FAR_MAX_LEVEL, tuple(sorted(FAR_STRENGTH.items())),
+            FADE_NEAR_M, FADE_FAR_M, ver, bool(trees))
+
+
+def _far_square(imagery, frame, i, j, ts, md, surface, widths, veg, share=1.0):
+    """(rgb, used, complete, pending markers) of the anchor grid's square (i, j) at ts m texels (memoized)."""
+    org = tuple(round(float(v), 6) for v in np.asarray(getattr(frame, "origin", (0.0, 0.0, 0.0))).ravel()[:3])
+    key = (org, i, j, ts, _fit_key("far", imagery, md, None), id(surface), id(widths), bool(veg), round(share, 6))
+    now = _now()
+    with _far_lock:
+        got = _far_sq.get(key)
+    if got is not None and (got[1] or now - got[0] < FAR_RETRY_S):
+        if not got[1]:
+            revisit.fault()
+        return got[2], got[3], got[1], got[4], got[5]
+    n = int(round(FAR_SQ_M / ts))
+    pend = set()
+    cout = []
+    _far_tl.on = True
+    _far_tl.share = share
+    try:
+        rgb, used = render(imagery, frame, i * FAR_SQ_M, j * FAR_SQ_M, FAR_SQ_M, n, md, surface, widths, pend, veg,
+                           None, relight=False, canopy_out=cout)
+    finally:
+        _far_tl.on = False
+    complete = GEN_PENDING not in pend
+    pend.discard(GEN_PENDING)
+    with _far_lock:
+        while len(_far_sq) >= FAR_SQ_MAX:
+            _far_sq.pop(next(iter(_far_sq)))
+        _far_sq[key] = (now, complete and not pend, rgb, used, frozenset(pend), cout[0] if cout else None)
+    return rgb, used, complete and not pend, frozenset(pend), cout[0] if cout else None
+
+
+def far_fetch(x0, y0, size, px, level):
+    """[(x0, y0, size, px)] the photo render_far reads for a far tile's square (its squares with their halos, at the
+    squares' texel), for Imagery.fetch_needed; [] past FAR_MAX_LEVEL."""
+    ts = far_texel(size, px)
+    if ts is None or far_strength(level) is None:
+        return []
+    out = []
+    n = int(round(FAR_SQ_M / ts))
+    for j in range(int(np.floor(y0 / FAR_SQ_M)), int(np.floor((y0 + size) / FAR_SQ_M - 1e-9)) + 1):
+        for i in range(int(np.floor(x0 / FAR_SQ_M)), int(np.floor((x0 + size) / FAR_SQ_M - 1e-9)) + 1):
+            hx0, hy0, hs, hpx, _h = halo_square(i * FAR_SQ_M, j * FAR_SQ_M, FAR_SQ_M, n)
+            out.append((hx0, hy0, hs, hpx))
+    return out
+
+
+def render_far(imagery, frame, x0, y0, size, px, md, surface, widths=None, pending=None, veg=None, level=0):
+    """(rgb (px, px, 3), sources used) of a far tile's square [x0, x0 + size]^2 of the anchor frame (its gutter square)
+    cut from the generated ground's squares (bilinear at its texel centres), or None (off, or past FAR_MAX_T: the
+    plain photo then). The squares' imagery markers still to come go into pending. level: the tile's (its floor's
+    weight, far_strength)."""
+    share = far_strength(level)
+    ts = far_texel(size, px)
+    if ts is None or share is None:
+        return None
+    t = size / px
+    i0, i1 = int(np.floor(x0 / FAR_SQ_M)), int(np.floor((x0 + size) / FAR_SQ_M - 1e-9))
+    j0, j1 = int(np.floor(y0 / FAR_SQ_M)), int(np.floor((y0 + size) / FAR_SQ_M - 1e-9))
+    n = int(round(FAR_SQ_M / ts))
+    mos = np.zeros(((j1 - j0 + 1) * n, (i1 - i0 + 1) * n, 3), np.uint8)
+    mosc = mos.copy()
+    fade = True
+    used_all = {}
+    for j in range(j0, j1 + 1):
+        for i in range(i0, i1 + 1):
+            rgb, used, complete, pend, crgb = _far_square(imagery, frame, i, j, ts, md, surface, widths, veg, share)
+            r0 = (j1 - j) * n       # (row 0: the north)
+            mos[r0:r0 + n, (i - i0) * n:(i - i0 + 1) * n] = rgb
+            if crgb is None:
+                fade = False
+            else:
+                mosc[r0:r0 + n, (i - i0) * n:(i - i0 + 1) * n] = crgb
+            for s, v in (used or {}).items():
+                used_all[s] = used_all.get(s, 0) + v
+            if pending is not None:
+                pending.update(pend)
+            if not complete:
+                revisit.fault()
+    # bilinear at the tile's texel centres, in the mosaic's texel units (texel centres at k + 0.5)
+    X0, Y1 = i0 * FAR_SQ_M, (j1 + 1) * FAR_SQ_M
+    k = (np.arange(px) + 0.5) * t
+    u = np.clip((x0 + k - X0) / ts - 0.5, 0.0, mos.shape[1] - 1.0)
+    v = np.clip((Y1 - (y0 + size - k)) / ts - 0.5, 0.0, mos.shape[0] - 1.0)
+    ua, va = np.floor(u).astype(np.int64), np.floor(v).astype(np.int64)
+    ub, vb = np.minimum(ua + 1, mos.shape[1] - 1), np.minimum(va + 1, mos.shape[0] - 1)
+    fu, fv = (u - ua)[None, :, None], (v - va)[:, None, None]
+    def cut(mm):
+        m = mm.astype(np.float32)
+        top = m[va][:, ua] * (1 - fu) + m[va][:, ub] * fu
+        bot = m[vb][:, ua] * (1 - fu) + m[vb][:, ub] * fu
+        return np.ascontiguousarray(np.clip(np.rint(top * (1 - fv) + bot * fv), 0, 255).astype(np.uint8))
+    out = cut(mos)
+    _fade_tl.last = (out, cut(mosc), t) if fade else None
+    scale = px * px / max(1, sum(used_all.values()))
+    return out, {s: int(v * scale) for s, v in used_all.items()}
+
+
+_fade_tl = threading.local()    # .last: (the tile's floor rgb, its canopy rgb, texel m) of this thread's last render_far
+
+
+def clear_fade():
+    """Forget this thread's last render_far (a far tile's render starts: earthd.Server.render_tile, blockworker)."""
+    _fade_tl.last = None
+
+
+def fade_weights(t, levels):
+    """The forest floor's weight in each of a texture's mips (level k: texel t * 2^k m): 1 to FADE_NEAR_M, 0 from
+    FADE_FAR_M, linear in log2 between (dmath)."""
+    import dmath
+    out = []
+    span = dmath.log2(FADE_FAR_M / FADE_NEAR_M)
+    for k in range(levels):
+        w = t * (1 << k)
+        out.append(min(1.0, max(0.0, dmath.log2(FADE_FAR_M / w) / span)) if w > 0 else 1.0)
+    return out
+
+
+def fade_mix(a, c, s):
+    """One mip of the fade: lerp(c, a, s) of two uint8 arrays (a the floor version's mip, c the canopy's), in
+    integers (s in 1/256ths): a itself at s 1, c itself at s 0 (both exact: (x * 256 + 128) >> 8 is x)."""
+    q = int(round(s * 256))
+    if q >= 256:
+        return a
+    if q <= 0:
+        return c
+    return ((c.astype(np.uint32) * (256 - q) + a.astype(np.uint32) * q + 128) >> 8).astype(np.uint8)
+
+
+def keep_painted(before, after, canopy):
+    """The canopy version after a step that turned the floor version before into after (roofs filled, roads and rock
+    painted): the texels it changed as it painted them, the rest the canopy's. None stays None."""
+    if canopy is None:
+        return None
+    before, after = np.asarray(before, np.uint8), np.asarray(after, np.uint8)
+    ne = before != after
+    painted = ne[:, :, 0] | ne[:, :, 1] | ne[:, :, 2]     # (any(axis=2) took 2.5x as long at 2048²)
+    out = np.array(canopy, np.uint8, copy=True)
+    np.copyto(out, after, where=painted[:, :, None])
+    return out
+
+
+# The block's base (detail mode) fades like the far tiles (bc7.dds fade, terraincache.base_entry): its mips by their
+# texels on the ground, fade_weights; in the base photo's revisit key with the switch on (earthd.base_revisit_key).
+# 1: the forest floor under the placed trees and the unplaced gaps' colour faded to the photo's (gen_ground_pair gaps)
+BLOCK_FADE_VERSION = 1
+
+
+def block_fade_key():
+    return ("blockfade", BLOCK_FADE_VERSION, FADE_NEAR_M, FADE_FAR_M)
+
+
+def canopy_if_differs(rgb, canopy_out):
+    """The canopy version render() gave (canopy_out), or None when there is none or it is the floor version itself (no
+    trees: nothing to fade, the plain encoding)."""
+    if not canopy_out:
+        return None
+    c = np.asarray(canopy_out[0], np.uint8)
+    if c.shape != np.shape(rgb) or np.array_equal(c, rgb):
+        return None
+    return c
+
+
+def write_far_dds(path, rgb, srgb=False):
+    """A far tile's texture (imagery.write_dds) with the forest floor faded out through its mips when this thread's
+    last render_far made it (the texels the roads, rock faces ... painted over since: as painted in every mip)."""
+    import imagery as imagerymod
+    last = getattr(_fade_tl, "last", None)
+    _fade_tl.last = None
+    rgb = np.asarray(rgb, np.uint8)
+    if last is None or not ON or last[0].shape != rgb.shape:
+        return imagerymod.write_dds(path, rgb, srgb)
+    floor, canopy, t = last
+    canopy = keep_painted(floor, rgb, canopy)
+    return imagerymod.write_dds(path, rgb, srgb, fade=(canopy, t))

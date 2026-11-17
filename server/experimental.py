@@ -13,6 +13,8 @@ Defaults: every switch off, as before, and NOTHING added to the environment for 
 variable set is in the cache keys (revisit.code_key / switches_key: the road plans, cell facts, road tiles, blocks;
 decisions.vkey_doc: the shared decision archives, built with the default switches), so an "off" written out would make
 other keys for the same world and lose the archives. A variable already in the environment (set by hand) is kept.
+The switches proven to change no plan and no fact (revisit.PLAN_NEUTRAL, tests/test_plan_neutral.py) are left out of
+the plans' and facts' keys and the archives' (revisit.plans_switches_key): with only those on, the archives still hold.
 """
 import json
 import os

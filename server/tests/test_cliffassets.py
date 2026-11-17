@@ -51,10 +51,11 @@ class CliffAssetTest(unittest.TestCase):
         import cliffstock
         materials = json.loads((ROOT / "mod/beamng_earth" / CLIFF).with_suffix(".materials.json").read_text())
         references = [value for material in materials.values() for stage in material.get("Stages", [])
-                      for value in stage.values() if isinstance(value, str) and "/cliff_talus_v" in value]
+                      for value in stage.values() if isinstance(value, str) and "/cliff_ground_v" in value]
         self.assertTrue(references)
         for value in references:
-            self.assertEqual(value, cliffstock.MODEL_ROOT + "detail.data.dds")
+            self.assertIn(value, {"/temp/beamngEarth/shapes/cliff_ground_v1/" + name for name in
+                                  ("detail.data.dds", "normal.dds", "ao.data.dds", "roughness.data.dds")})
         client = (ROOT / "mod/beamng_earth/lua/ge/extensions/beamngEarth/clifftalus.lua").read_text()
         self.assertIn(cliffstock.MODEL_ROOT, client)
 

@@ -128,9 +128,10 @@ def stored_photo(rgb):
     return b.getvalue()
 
 
-def base_entry(user_dir, base_vfs, ao_vfs, rgb, ao_value):
+def base_entry(user_dir, base_vfs, ao_vfs, rgb, ao_value, fade=None):
     """Write the packed base texture (RGB = the photo, A = the flat AO value) into the game's cache, atomically.
-    Call after the photo file itself is written (the cache must be the newer one)."""
+    Call after the photo file itself is written (the cache must be the newer one). fade (canopy rgb, texel m): the
+    generated ground's forest floor faded out through the mips (bc7.dds fade; None: as before)."""
     if NO_PACK:
         return None
     d = cache_dir(user_dir)
@@ -140,6 +141,6 @@ def base_entry(user_dir, base_vfs, ao_vfs, rgb, ao_value):
     path = os.path.join(d, base_key(base_vfs, ao_vfs) + ".dds")
     tmp = staging.tmp_for(path)
     with open(tmp, "wb") as f:
-        f.write(bc7.dds(rgba))
+        f.write(bc7.dds(rgba, fade) if fade is not None else bc7.dds(rgba))
     staging.replace(tmp, path)
     return path
