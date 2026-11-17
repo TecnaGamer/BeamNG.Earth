@@ -246,6 +246,29 @@ class WeeklySliceTest(unittest.TestCase):
                           "a shard not to be had: no digest")
         self.assertNotEqual(decisions.slice_digest(OFF, CELL, ["101"]), base, "lanes off")
 
+    def test_preserved_tag_only_with_the_lifecycle_switch(self):
+        """railway:preserved (railtags.LIFECYCLE_TAGS, read by BNE_RAIL_LIFECYCLE only): a shard built with it
+        slices as one without it while the switch is off (no decision goes stale); with it on, the tag counts."""
+        import railtags
+
+        def rails(preserved):
+            t = {"railway": "disused", "usage": "tourism"}
+            if preserved:
+                t["railway:preserved"] = "yes"
+            return {"ways": {"101": t, "102": {"railway": "rail"}}, "nodes": []}
+
+        def dig(shard):
+            return decisions.slice_digest({"rails": FakeShards(shard), "lanes": None}, CELL, ["101", "102"])
+        old, new = rails(False), rails(True)
+        with mock.patch.object(railtags, "LIFECYCLE_ON", False):
+            self.assertEqual(dig(old), dig(new), "off: the new tag changes no digest")
+            self.assertEqual(new["ways"]["101"]["railway:preserved"], "yes", "the shard itself untouched")
+        with mock.patch.object(railtags, "LIFECYCLE_ON", True):
+            self.assertNotEqual(dig(old), dig(new), "on: it does")
+            on_old = dig(old)
+        with mock.patch.object(railtags, "LIFECYCLE_ON", False):
+            self.assertEqual(on_old, dig(old), "an old shard: the same either way")
+
     def test_ids_of_a_roads_layer(self):
         class F:
             def __len__(self):

@@ -52,19 +52,32 @@ class DeckKSpeedTest(unittest.TestCase):
         np.testing.assert_array_equal(a[0], b[0])
 
     def test_a_long_motorway_deck_takes_a_longer_crest(self):
+        """curve_profile's own rung: the design speed's crest rounds a 900 m motorway overpass over its length, its
+        steepest grade gentler and its peak no higher."""
+        ln = overpass()
+        s = ln[:, 0]
+        g = np.full(len(s), 10.0)
+        req = np.where(np.abs(s - 450.0) <= roads.DECK_ROAD_HALF, 10.0 + roads.DECK_ROAD_CLEAR, -np.inf)
+        off = roads.curve_profile(s, g, req, 10.0, 10.0, crest_r=9390.0)
+        with mock.patch.object(roads, "DECK_K_SPEED", True):
+            on = roads.curve_profile(s, g, req, 10.0, 10.0, crest_r=9390.0)
+            slow = roads.curve_profile(s, g, req, 10.0, 10.0, crest_r=150.0)
+        mid = np.abs(s - 450.0) <= roads.DECK_ROAD_HALF
+        self.assertGreaterEqual(float(on[mid].min()), 10.0 + roads.DECK_ROAD_CLEAR - 0.06, "the clearance held")
+        self.assertLessEqual(float(on.max()), float(off.max()) + roads.DECK_K_OVER_M + 1e-9, "no higher peak")
+        self.assertLess(bend(on, 4.0), 0.75 * bend(off, 4.0), "a gentler crest")
+        self.assertLess(float(np.max(np.abs(np.diff(on)))), float(np.max(np.abs(np.diff(off)))), "gentler at most")
+        np.testing.assert_array_equal(slow, off, "a 30 km/h road's radius is under today's: as before")
+
+    def test_the_chain_guard_keeps_todays_deck_when_any_point_rises(self):
+        """deck_profile's guard is point by point (Codex review of 16fa5b80): the longer crest stands up to ~6 m over
+        today's deck on its approaches (it climbs from further out, at 2.8 % for today's 5 %), so the chain keeps
+        today's profile."""
         ln = overpass()
         off, = roads.deck_profile([ln], flat, [(0, 450.0, 10.0)], crest=[9390.0])
         with mock.patch.object(roads, "DECK_K_SPEED", True):
             on, = roads.deck_profile([ln], flat, [(0, 450.0, 10.0)], crest=[9390.0])
-            slow, = roads.deck_profile([ln], flat, [(0, 450.0, 10.0)], crest=[150.0])
-        need = 10.0 + roads.DECK_ROAD_CLEAR
-        mid = np.abs(ln[:, 0] - 450.0) <= roads.DECK_ROAD_HALF
-        self.assertGreaterEqual(float(on[mid].min()), need - 0.06, "the clearance held")
-        self.assertLessEqual(float(on.max()), float(off.max()) + roads.DECK_K_OVER_M + 1e-9, "no higher than allowed")
-        self.assertLess(bend(on, 4.0), 0.75 * bend(off, 4.0), "a gentler crest")
-        self.assertLessEqual(float(np.max(np.abs(np.diff(on)))) / 4.0,
-                             float(np.max(np.abs(np.diff(off)))) / 4.0 + roads.DECK_K_GRADE + 1e-3, "no steeper")
-        np.testing.assert_array_equal(slow, off, "a 30 km/h road's radius is under today's: as before")
+        np.testing.assert_array_equal(on, off)
 
     def test_a_short_deck_keeps_todays_profile(self):
         """Too short for the long curve to clear: today's result."""
@@ -84,6 +97,14 @@ class DeckKSpeedTest(unittest.TestCase):
         self.assertFalse(roads._no_worse([ln], base, [base[0] + 0.3]), "higher")
         self.assertFalse(roads._no_worse([ln], base, [np.linspace(0.0, 4.4, len(ln))]), "steeper")
         self.assertFalse(roads._no_worse([ln], base, [np.r_[base[0][:-1], np.nan]]), "NaN")
+        # (Codex review of 16fa5b80: equal maxima, shifted: 4 m higher at the third point, 4 % on a level segment)
+        line4 = np.c_[np.arange(4) * 100.0, np.zeros(4)]
+        self.assertFalse(roads._no_worse([line4], [np.array([0.0, 4.0, 0.0, 0.0])], [np.array([0.0, 4.0, 4.0, 0.0])]))
+        self.assertTrue(roads._no_worse([line4], [np.array([0.0, 4.0, 4.0, 0.0])], [np.array([0.0, 4.0, 4.1, 0.0])]),
+                        "0.1 m higher, 0.1 % steeper: within the margins")
+        short = np.c_[np.arange(4) * 10.0, np.zeros(4)]
+        self.assertFalse(roads._no_worse([short], [np.array([0.0, 0.4, 0.4, 0.4])], [np.array([0.0, 0.4, 0.4, 0.6])]),
+                         "within the height margin, but 2 % on a level segment (the steepest still 4 %)")
 
     def test_curve_deck_radii(self):
         import fast

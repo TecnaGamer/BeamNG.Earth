@@ -4843,9 +4843,10 @@ def deck_profile(lines, ground_fn, crossings=(), clear=None, grade=None, lift=No
     different levels cross, the higher one clears the lower one's deck by `clear` (2026-10-11: crossing
     decks clipped into each other). pins: points where a ground road goes on from a joint of decks (abutments too: _pin).
     crest: per part the crest radius (m) its road's design speed asks (DECK_K_SPEED: deck_crest_radii), or None:
-    the chain with them kept only where no part stands more than DECK_K_OVER_M higher nor climbs more than DECK_K_GRADE
-    more steeply than the chain without them (a branch leaving a trunk with a longer crest took a steeper start: an
-    M5 deck at Almondsbury 4.2 -> 4.9 %), else the chain without. Pure given ground_fn."""
+    the chain with them kept only where no part stands more than DECK_K_OVER_M higher at any of its points nor climbs
+    more than DECK_K_GRADE more steeply on any of its segments than the chain without them (_no_worse; a branch leaving
+    a trunk with a longer crest took a steeper start: an M5 deck at Almondsbury 4.2 -> 4.9 %), else the chain without.
+    Pure given ground_fn."""
     if DECK_K_SPEED and crest is not None:
         base = _deck_profile(lines, ground_fn, crossings, clear, grade, lift, levels, widths, pins, None)
         new = _deck_profile(lines, ground_fn, crossings, clear, grade, lift, levels, widths, pins, crest)
@@ -4854,19 +4855,24 @@ def deck_profile(lines, ground_fn, crossings=(), clear=None, grade=None, lift=No
 
 
 def _no_worse(lines, base, new):
-    """Does every part of new stand at most DECK_K_OVER_M over base's highest and climb at most DECK_K_GRADE more
-    steeply than base's steepest (deck_profile's DECK_K_SPEED guard)? Pure."""
+    """Does every part of new stand at most DECK_K_OVER_M over base at each of its points and climb at most
+    DECK_K_GRADE more steeply than base on each of its segments (deck_profile's DECK_K_SPEED guard; point by point,
+    not maxima against maxima: a rise moved to where base was level is a regression even at an equal peak)? Pure."""
     if base is None or new is None or len(base) != len(new):
         return False
     for ln, a, b in zip(lines, base, new):
         a, b = np.asarray(a, np.float64), np.asarray(b, np.float64)
-        if len(a) != len(b) or not np.isfinite(b).all() and np.isfinite(a).all():
+        if len(a) != len(b) or not np.array_equal(np.isfinite(a), np.isfinite(b)):
             return False
-        if len(a) < 2 or not np.isfinite(a).all() or not np.isfinite(b).all():
+        ok = np.isfinite(a)
+        if (b[ok] > a[ok] + DECK_K_OVER_M + 1e-9).any():
+            return False
+        if len(a) < 2:
             continue
         ds = np.maximum(dnp.hypot(*np.diff(np.asarray(ln, np.float64)[:, :2], axis=0).T), 1e-6)
-        if float(b.max()) > float(a.max()) + DECK_K_OVER_M + 1e-9 or \
-                float(np.max(np.abs(np.diff(b)) / ds)) > float(np.max(np.abs(np.diff(a)) / ds)) + DECK_K_GRADE + 1e-9:
+        seg = ok[:-1] & ok[1:]
+        ga, gb = np.abs(np.diff(a)) / ds, np.abs(np.diff(b)) / ds
+        if (gb[seg] > ga[seg] + DECK_K_GRADE + 1e-9).any():
             return False
     return True
 

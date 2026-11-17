@@ -194,7 +194,7 @@ def _shard_slice(sh, cell, ids, rules):
     import railtags
     ways = sh.get("ways") or {}
     found = railtags._tags_of(ways, ids) if ids else []
-    out = {"ways": [[i, t] for i, t in zip(ids, found) if t is not None]}
+    out = {"ways": [[i, railtags.slice_tags(t)] for i, t in zip(ids, found) if t is not None]}
     if rules:
         rs = sh.get("rules")
         if isinstance(rs, dict):
