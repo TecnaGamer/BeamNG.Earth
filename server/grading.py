@@ -2394,7 +2394,8 @@ class _Planner:
                     stack = self._dg_local.__dict__.setdefault("stack", [])
                     stack.append(self._stack_entry(key, dg))
                     try:
-                        got = self._make_cell(key)
+                        with roadsmod.suppress_photo_faults():
+                            got = self._make_cell(key)
                     finally:
                         stack.pop()
                     if got is not None:
@@ -2532,7 +2533,8 @@ class _Planner:
                     stack = self._dg_local.__dict__.setdefault("stack", [])
                     stack.append(self._stack_entry(key, dg))
                     try:
-                        got = self._make_cell_roads(key)
+                        with roadsmod.suppress_photo_faults():
+                            got = self._make_cell_roads(key)
                     finally:
                         stack.pop()
                 if got is not None:

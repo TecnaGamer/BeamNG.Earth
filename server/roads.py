@@ -25,6 +25,7 @@ import logging
 import math
 import types
 import collections
+import contextlib
 import hashlib
 import os
 import threading
@@ -57,17 +58,22 @@ SIMPLIFY_Z_M = 0.05     # ... and the vertical one of lines drawn at their own h
 MAX_NODES = 100         # nodes per DecalRoad (Road Spline's chunk size)
 MAX_SPACING = 12.0      # m between nodes at most (official maps: median 11-12 m)
 BUILD_PER_POSE = 4      # tiles started per pose at most
+BUILD_PER_POSE_FAST = 8 # tiles in flight at most above HIGH_SPEED_MS (capped at 2 * road_workers)
 # At speed the tiles reach along the car's path (the user, 2026-10-19: "Going high speeds the road texture can struggle
 # to keep up ... even if we have to sacrifice some things further away from the car"): above FAST_MS the tiles within
 # CORRIDOR_M of the path ahead are wanted too, up to LEAD_S of driving (LEAD_MAX_M at most), and every wanted tile is
 # built in the order the car reaches it (path_key): the corridor first, the ones beside and behind the car last.
 FAST_MS = 25.0          # m/s (56 mph)
-# (14 s / 2 km until 2026-11-03: the measured lead sat at that cap, ~800 m at 120 mph. 30 s on the Windows test PC
-# (Ryzen 3600, I-10 120 mph): road lead p10 352 -> 832 m, median 800 -> 1632 m, no poll with the car past its roads
-# (10 before), block times and holds the same; the user: "the world should generate far ahead")
+HIGH_SPEED_MS = 28.0    # m/s (~100 km/h): highway lookahead & narrow corridor focus
+HIGH_SPEED_FULL_MS = 55.0   # m/s (~200 km/h): full highway lookahead scale
 LEAD_S = float(os.environ.get("BNE_ROADS_LEAD_S", "30"))         # s of driving ahead
+LEAD_S_FAST = float(os.environ.get("BNE_ROADS_LEAD_S_FAST", "45"))
 LEAD_MAX_M = float(os.environ.get("BNE_ROADS_LEAD_M", "5000"))
 CORRIDOR_M = 160.0      # m either side of the path
+CORRIDOR_FAST_M = 140.0 # m either side at highway speed (covers dual carriageways without wide side flood)
+SEND_NEAR_FAST_M = 280.0    # m 360-deg ring kept at >= HIGH_SPEED_FULL_MS (forward corridor reaches LEAD_S_FAST * v)
+GROUND_BUSY_CORRIDOR_S = 28.0   # s of forward highway corridor kept active even when terrain_wait > 0
+NEAR_PROTECT_S = 14.0   # s ahead protected from LATE_KEEP inversion at highway speed
 SIDE_PENALTY = 4.0      # a tile off the path counts this many times its sideways distance (path_key)
 # Below FAST_MS with the car's time-to-reach tree (reach.MIN_V up: GeoTracker.on_pose) the tiles within SEND_M are built
 # in the tree's order, but the ones within INSURE_M of the car first, by their distance (a wrong guess at a junction,
@@ -1796,16 +1802,36 @@ def _surface_value(feats, i):
     return v
 
 
+_PHOTO_MISS_TL = threading.local()
+
+
+@contextlib.contextmanager
+def suppress_photo_faults():
+    """Suppress revisit.fault() from lazy aerial-photo surface checks inside grading plan builds
+    so grading plans remain persistent even when _photo_surface tiles have not arrived yet."""
+    _PHOTO_MISS_TL.skip = getattr(_PHOTO_MISS_TL, "skip", 0) + 1
+    try:
+        yield
+    finally:
+        _PHOTO_MISS_TL.skip = max(0, getattr(_PHOTO_MISS_TL, "skip", 1) - 1)
+
+
+def _note_photo_miss():
+    _PHOTO_MISS_TL.count = getattr(_PHOTO_MISS_TL, "count", 0) + 1
+    if not getattr(_PHOTO_MISS_TL, "skip", 0):
+        import revisit
+        revisit.fault()
+
+
 def _photo_surface(feats):
     """{feature index: "asphalt", "grass" or "gravel"} of feats' roads the photo says are paved, grass lanes or gravel, remembered on feats. A candidate whose photo
-    tile is not on the disk yet is not known: the verdicts stand for FACTS_SHORT_S s and revisit.fault says nothing
-    built from them is kept (the specs' disk cache included: PR #634's idiom), so they are made again once it is."""
+    tile is not on the disk yet is not known: the verdicts stand for FACTS_SHORT_S s and _note_photo_miss ensures short-lived
+    road specs are not cached permanently (and suppresses revisit.fault inside grading plan builds via suppress_photo_faults)."""
     st = feats.__dict__
     got = st.get("_photo_surface")
     if got is not None and (got[1] is None or time.monotonic() < got[1]):
         if got[1] is not None:
-            import revisit
-            revisit.fault()
+            _note_photo_miss()
         return got[0]
     if st.get("_photo_busy"):           # (asked again from inside its own making: the map's value alone)
         return {}
@@ -1816,8 +1842,7 @@ def _photo_surface(feats):
         st["_photo_busy"] = False
     v = {i: {"paved": "asphalt"}.get(k, k) for i, k in v.items()}     # ("grass" and "gravel" are surface values as they are)
     if missing:
-        import revisit
-        revisit.fault()
+        _note_photo_miss()
     st["_photo_surface"] = (v, time.monotonic() + FACTS_SHORT_S if missing else None)
     return v
 
@@ -2213,10 +2238,11 @@ def _road_specs_kept(feats, urban_fn=None, widths=None, left_hand=False):
         if got is None:
             import revisit
             f0 = revisit.thread_faults()
+            m0 = getattr(_PHOTO_MISS_TL, "count", 0)
             towns = [] if widths is None and urban_fn is not None else None
             got = (_road_specs(feats, urban_fn, left_hand, towns) if widths is None else
                    _measured_widths(feats, road_specs(feats, urban_fn, None, left_hand), widths))
-            clean = revisit.thread_faults() == f0
+            clean = revisit.thread_faults() == f0 and getattr(_PHOTO_MISS_TL, "count", 0) == m0
             if urban_fn is None and clean and _facts_key(feats, "specs", extra) is not None:
                 # (their stored form only where it is kept)
                 _facts_store(feats, "specs", extra, [None if sp is None else _spec_json(sp) for sp in got])
@@ -12511,26 +12537,38 @@ def reach_build_est():
     return reach.BUILD_EST_S
 
 
+def _high_speed_t(speed):
+    """0 at HIGH_SPEED_MS and below, 1 at HIGH_SPEED_FULL_MS and above, linear in between."""
+    if speed <= HIGH_SPEED_MS:
+        return 0.0
+    return min(1.0, (speed - HIGH_SPEED_MS) / (HIGH_SPEED_FULL_MS - HIGH_SPEED_MS))
+
+
 def geo_wanted(frame, x, y, vx=0.0, vy=0.0, tree=None):
-    """wanted_tiles for geotiles (their quads in frame's world): those within SEND_M, and at FAST_MS or more those
-    within CORRIDOR_M of the path ahead (LEAD_S of driving, LEAD_MAX_M at most). {(gx, gy): m from (x, y)}. tree: the
+    """wanted_tiles for geotiles (their quads in frame's world): those within SEND_M (narrowed to SEND_NEAR_FAST_M
+    above HIGH_SPEED_MS), and at FAST_MS or more those within CORRIDOR_M (CORRIDOR_FAST_M at highway speed) of the
+    path ahead (up to LEAD_S..LEAD_S_FAST of driving, LEAD_MAX_M at most). {(gx, gy): m from (x, y)}. tree: the
     car's time-to-reach tree (reach.Tree): the path ahead is the roads it is likely to take (reach.P_WANT), not a
     straight line (m: its ETA at the car's speed)."""
     import geotiles
-    want = {(a, b): d for a, b, d in geotiles.tiles_near(frame, x, y, SEND_M)}
     s = math.hypot(vx, vy)
-    lead = min(LEAD_MAX_M, s * LEAD_S)
-    if s < FAST_MS or lead <= SEND_M:
+    ht = _high_speed_t(s)
+    disc_r = SEND_M + (SEND_NEAR_FAST_M - SEND_M) * ht
+    corridor_m = CORRIDOR_M + (CORRIDOR_FAST_M - CORRIDOR_M) * ht
+    lead_s = LEAD_S + (LEAD_S_FAST - LEAD_S) * ht
+    want = {(a, b): d for a, b, d in geotiles.tiles_near(frame, x, y, disc_r)}
+    lead = min(LEAD_MAX_M, s * lead_s)
+    if s < FAST_MS or lead <= disc_r:
         return want
     if tree is not None:
-        for k, got in tree.geotile_keys(frame, CORRIDOR_M, horizon=lead / s).items():
+        for k, got in tree.geotile_keys(frame, corridor_m, horizon=lead / s).items():
             if got[1]:
                 want.setdefault(k, got[2] * s)
         return want
     ux, uy = vx / s, vy / s
     d = 0.0
     while d <= lead:
-        for a, b, _dd in geotiles.tiles_near(frame, x + ux * d, y + uy * d, CORRIDOR_M):
+        for a, b, _dd in geotiles.tiles_near(frame, x + ux * d, y + uy * d, corridor_m):
             want.setdefault((a, b), d)
         d += TILE / 2
     return want
@@ -12718,6 +12756,7 @@ class GeoTracker:
             for f in self.futs.values():
                 f.cancel()
             self.aid, self.frame, self.building, self.futs = aid, frame, set(), {}
+            self._pending = None
             self.frames[aid] = frame
             while len(self.frames) > 4:
                 old = min(a for a in self.frames if a != aid)
@@ -12730,11 +12769,14 @@ class GeoTracker:
             self.pool = ThreadPoolExecutor(BUILD_PER_POSE, thread_name_prefix="roads-geo")
         vx, vy = (float(vel[0]), float(vel[1])) if vel else (0.0, 0.0)
         s = math.hypot(vx, vy)
+        ht = _high_speed_t(s)
+        corridor_m = CORRIDOR_M + (CORRIDOR_FAST_M - CORRIDOR_M) * ht
+        lead_s = LEAD_S + (LEAD_S_FAST - LEAD_S) * ht
         import reach
         if s < reach.MIN_V:     # (the tree from reach.MIN_V up: below FAST_MS it orders the tiles round the car)
             tree = None
         car = geo_wanted(frame, x, y, vx, vy, tree)
-        tkeys = tree.geotile_keys(frame, CORRIDOR_M, horizon=max(min(LEAD_MAX_M, s * LEAD_S), reach.HORIZON_MIN_M)
+        tkeys = tree.geotile_keys(frame, corridor_m, horizon=max(min(LEAD_MAX_M, s * lead_s), reach.HORIZON_MIN_M)
                                   / s) if tree is not None else {}
         self.tree_on = tree is not None
         self.car_at = (x, y)
@@ -12753,7 +12795,27 @@ class GeoTracker:
             wa[k] = now
         if len(wa) > 4 * len(wanted) + 256:
             self.wanted_at = {k: t for k, t in wa.items() if now - t <= 60.0}
-        start = {(a, b) for a, b, _ in geotiles.tiles_near(frame, x, y, SEND_M)} if ground_busy else wanted
+        deck_first = getattr(self, "deck_first", None) or ()
+        if ground_busy:
+            disc_r = SEND_M + (SEND_NEAR_FAST_M - SEND_M) * ht
+            start = {(a, b) for a, b, _ in geotiles.tiles_near(frame, x, y, disc_r)}
+            if s > HIGH_SPEED_MS:
+                # Keep forward highway corridor & bridge tiles active even while a terrain block builds.
+                busy_reach = min(LEAD_MAX_M, max(SEND_M, s * GROUND_BUSY_CORRIDOR_S))
+                ux, uy = vx / s, vy / s
+                for k, d_car in car.items():
+                    if k in deck_first:
+                        start.add(k)
+                    elif d_car <= busy_reach:
+                        q = geotiles.quad(frame, *k)
+                        cx, cy = float(np.mean(q[:, 0])), float(np.mean(q[:, 1]))
+                        along = (cx - x) * ux + (cy - y) * uy
+                        side = abs((cx - x) * uy - (cy - y) * ux)
+                        if along >= -TILE / 2 and (side <= corridor_m or (k in tkeys and tkeys[k][1])):
+                            start.add(k)
+            start |= (set(deck_first) & wanted)
+        else:
+            start = wanted
         jobs = []
         self.redo &= self.sent
         for k in (set(start) | self.redo) if self.redo else start:
@@ -12778,12 +12840,13 @@ class GeoTracker:
 
         build_s = getattr(self, "build_s", None) or reach_build_est()
 
-        deck_first = getattr(self, "deck_first", None) or ()
-
         def order(job):
             k = job[0]
             if k in deck_first:         # (a bridge's tile the mod's deck guard slows the car for: first, deckguard.lua)
                 return (-1, 0.0)
+            if not job[1] and job[2] and k in car:
+                # skin-only follow-up for an already-sent tile: fast to build and draws road asphalt
+                return (-0.5, car[k])
             if k in car:
                 d = car[k]
                 if tree is not None:    # (by time to reach: reach.order_key; in m at the car's speed)
@@ -12800,6 +12863,8 @@ class GeoTracker:
                     if along < -TILE / 2:
                         return (0, (d * SIDE_PENALTY + LEAD_MAX_M) + reach.LATE_S * 2 * s)
                     side = abs(((cx - x) * vy - (cy - y) * vx) / s)
+                    if s > HIGH_SPEED_MS and along <= max(SEND_M, s * NEAR_PROTECT_S) and side <= corridor_m:
+                        return (0, max(0.0, along) + max(0.0, side - TILE / 2) * SIDE_PENALTY)
                     return (0, reach.order_key(max(0.0, along) / s, 1.0, max(0.0, side - TILE / 2), s, build_s) * s)
                 if s >= FAST_MS:        # (ahead first: the corridor's distance along the path)
                     q = geotiles.quad(frame, *k)
@@ -12812,21 +12877,18 @@ class GeoTracker:
                         # their plain distance the sides within SEND_M all came before the corridor beyond it, and
                         # at 500 mph the car outran its road tiles, 0 m of them ahead, Indianapolis 2026-10-30)
                         side = abs(((cx - x) * vy - (cy - y) * vx) / s)
-                        d = max(0.0, along) + max(0.0, side - CORRIDOR_M) * SIDE_PENALTY
+                        side_pen = SIDE_PENALTY * (1.0 + ht)
+                        d = max(0.0, along) + max(0.0, side - corridor_m) * side_pen
                 return (0, d)
             if k in seen:
                 return (1, seen[k])
             return (2, others.get(k, 1e9))
         jobs.sort(key=order)
-        for k, content, skin, make in jobs[:max(0, BUILD_PER_POSE - len(self.building))]:
-            self.building.add(k)
-            self.started[k] = now
-            # (the content's and the skin's files read in the worker, not on the event loop)
-            job = functools.partial(staging.build_inline_paths, build,
-                                    getattr(getattr(conn, "s", None), "out_dir", None), _geo_inline_paths)
-            fut = self.futs[k] = loop.run_in_executor(self.pool, job, aid, k[0], k[1], content, skin, make)
-            fut.add_done_callback(lambda f, kk=k, a=aid, c=content, sk=skin, m=make:
-                                  self._built(conn, a, kk, f, c, sk, m))
+        rp_workers = int(getattr(getattr(getattr(conn, "s", None), "road_pool", None), "workers", 0) or 0)
+        limit = max(BUILD_PER_POSE, min(BUILD_PER_POSE_FAST, max(BUILD_PER_POSE, rp_workers * 2))) \
+            if s > HIGH_SPEED_MS else BUILD_PER_POSE
+        self._pending = (jobs, conn, aid, loop, build, limit)
+        self._dispatch_pending(now)
         for k in self.building:
             t0 = self.started.get(k)
             if t0 is not None and now - t0 > TILE_STUCK_S and k not in self.stuck_said:
@@ -12857,7 +12919,33 @@ class GeoTracker:
         if self.retry:
             self.retry = {k: t for k, t in self.retry.items() if t > now}
 
-    def _built(self, conn, aid, key, fut, content, skin, make):
+    def _dispatch_pending(self, now=None):
+        pend = getattr(self, "_pending", None)
+        if not pend or self.closed:
+            return
+        jobs, conn, aid, loop, build, limit = pend
+        if aid != self.aid:
+            return
+        now = (getattr(self, "clock", None) or time.monotonic)() if now is None else now
+        slots = max(0, limit - len(self.building))
+        if not slots or not jobs:
+            return
+        started = 0
+        while jobs and started < slots:
+            k, content, skin, make = jobs.pop(0)
+            if k in self.building or self.retry.get(k, 0.0) > now:
+                continue
+            self.building.add(k)
+            self.started[k] = now
+            # (the content's and the skin's files read in the worker, not on the event loop)
+            job = functools.partial(staging.build_inline_paths, build,
+                                    getattr(getattr(conn, "s", None), "out_dir", None), _geo_inline_paths)
+            fut = self.futs[k] = loop.run_in_executor(self.pool, job, aid, k[0], k[1], content, skin, make)
+            fut.add_done_callback(lambda f, kk=k, a=aid, c=content, sk=skin, m=make, lp=loop:
+                                  self._built(conn, a, kk, f, c, sk, m, lp))
+            started += 1
+
+    def _built(self, conn, aid, key, fut, content, skin, make, loop=None):
         import geotiles
         if self.futs.get(key) is fut:
             self.building.discard(key)
@@ -12871,6 +12959,13 @@ class GeoTracker:
                 self.build_s = took if old is None else 0.8 * old + 0.2 * took
         if self.closed or fut.cancelled():
             return
+        if aid == self.aid and getattr(self, "_pending", None):
+            call_soon = getattr(loop, "call_soon_threadsafe", None)
+            if call_soon is not None:
+                try:
+                    call_soon(self._dispatch_pending)
+                except RuntimeError:
+                    pass
         try:
             res = fut.result()
         except Exception as e:

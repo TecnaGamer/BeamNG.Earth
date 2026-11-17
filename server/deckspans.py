@@ -226,14 +226,14 @@ class Spans:
         dlo = r / (111320.0 * max(0.05, dmath.cos(math.radians(la))))
         return sorted(mapcells.cells_for_bbox(la - dla, lo - dlo, la + dla, lo + dlo), key=str)
 
-    def make(self, aid, frame, x, y):
+    def make(self, aid, frame, x, y, radius=RADIUS_M):
         """The message for the car at (x, y) of anchor aid (a worker thread), or None: nothing new to send (the same
         spans round the same place)."""
         t0 = time.perf_counter()
         self.last = (aid, x, y, time.monotonic())
         if aid != self.aid:
             self.aid, self.cells = aid, {}
-        keys = self.keys_near(frame, x, y, RADIUS_M + CELL_MARGIN_M)
+        keys = self.keys_near(frame, x, y, radius + CELL_MARGIN_M)
         want = {str(k) for k in keys}
         for sk in [sk for sk in self.cells if sk not in want]:
             del self.cells[sk]
@@ -250,7 +250,7 @@ class Spans:
             except Exception as e:      # (a cell that cannot be read: no spans from it)
                 log.debug("deck spans: cell %s: %s: %s", sk, type(e).__name__, e)
         pieces = [p for sk in sorted(self.cells) for p in self.cells[sk]]
-        msg = message(aid, x, y, pieces)
+        msg = message(aid, x, y, pieces, radius=radius)
         self.stats["made"] += 1
         self.stats["ms"] += (time.perf_counter() - t0) * 1000.0
         s = self.sent

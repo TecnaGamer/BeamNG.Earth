@@ -49,6 +49,10 @@ P_MIN_CITY = 0.01           # a branch less likely than this is not followed (a 
                             # the chance fast: at P_MIN the tree stopped two or three blocks on)
 CLASS_K_CITY = 0.75         # each class step down this much less likely (a side street off an avenue: 0.42, not 0.22)
 HORIZON_S = 30.0            # s ahead the tree reaches (roads.LEAD_S) ...
+HIGH_SPEED_MS = 31.0        # m/s (~112 km/h): highway lookahead scaling starts here (keeps <= 30 m/s identical)
+HIGH_SPEED_FULL_MS = 55.0   # m/s (~200 km/h): full highway lookahead scale
+HORIZON_S_FAST = 45.0       # s ahead at >= HIGH_SPEED_FULL_MS (still capped by HORIZON_MAX_M)
+NEAR_PROTECT_S = 12.0       # s: forward corridor tiles within this ETA never suffer LATE_KEEP inversion
 HORIZON_MAX_M = 5000.0      # ... and this far at most (roads.LEAD_MAX_M) ...
 HORIZON_MIN_M = 900.0       # ... and this far at least (a slow car's: past the road tiles' disc, roads.SEND_M + a tile)
 STEP_M = 32.0               # m between the tree's points along a road
@@ -167,9 +171,12 @@ class Intent:
 
 
 def horizon_s(speed):
-    """The tree's horizon at this speed (s): HORIZON_S, HORIZON_MIN_M at least, HORIZON_MAX_M at most."""
+    """The tree's horizon at this speed (s): HORIZON_S (scaling to HORIZON_S_FAST above HIGH_SPEED_MS),
+    HORIZON_MIN_M at least, HORIZON_MAX_M at most."""
     v = max(speed, 1.0)
-    return min(max(HORIZON_S, HORIZON_MIN_M / v), HORIZON_MAX_M / v)
+    t = min(1.0, max(0.0, (v - HIGH_SPEED_MS) / (HIGH_SPEED_FULL_MS - HIGH_SPEED_MS)))
+    hs = HORIZON_S + (HORIZON_S_FAST - HORIZON_S) * t
+    return min(max(hs, HORIZON_MIN_M / v), HORIZON_MAX_M / v)
 
 
 def priority(eta, p):
@@ -187,6 +194,8 @@ def order_key(eta, p, gap, speed, build_s):
     """A fast car's tile's place in the build order (s, smaller first): eta (s) the car reaches it in with chance p,
     gap (m) it lies off the road; build_s the time a build takes now. See V_SIDE / WINDOW_M / LATE_KEEP."""
     key = priority(eta, p) + gap / side_speed(speed)
+    if speed <= 90.0 and eta <= NEAR_PROTECT_S and gap <= ORDER_CORRIDOR_M:
+        return key
     win = WINDOW_M / max(speed, 1.0)
     left = (eta + win - max(build_s, eta)) / win
     if left < LATE_KEEP:

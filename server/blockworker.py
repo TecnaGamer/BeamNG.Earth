@@ -571,7 +571,8 @@ def plan_cell(aid, lat, lon, key):
     if g is None or getattr(g, "store", None) is None or g.shared is None:
         return False
     k = mapcells.CellKey(int(key[0]), int(key[1]), int(key[2]))
-    g.store.planner_of_cell(k)._cell_plans(k)
+    with xproc.favoured():
+        g.store.planner_of_cell(k)._cell_plans(k)
     return g.shared.has(k)
 
 

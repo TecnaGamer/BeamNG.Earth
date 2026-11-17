@@ -290,8 +290,10 @@ class RespawningPool:
         # them is (one at a time beside the rest); a thread of its own hands them over (the done callbacks may run
         # under self._lock: _renew)
         self._low, self._low_active = collections.deque(), 0
+        self._low_pauses = set()
         self._low_cv = threading.Condition()
         self._low_thread = None
+        self._last_high_at = -float("inf")
         # tasks_per_child (tasks_per_child_kw; 0: off): the pool's own queue (_gen_loop). A "generation" is one
         # executor's processes: it is handed tasks_per_child jobs a process, at most `workers` at once (none waits
         # inside the executor), and once they are all done the pool is rotated: the old processes exit at once with
@@ -332,7 +334,25 @@ class RespawningPool:
         except BrokenProcessPool:
             return runtimeprofiler.collector.submit(_shedding(self._renew(pool).submit), self.name, fn, args, kwargs)
 
+    LOW_COOLDOWN_S = 2.5
+
+    def pause_low(self, key):
+        """Pause low-priority queue dispatch while `key` holds a high-priority lease."""
+        with self._low_cv:
+            self._low_pauses.add(key)
+
+    def resume_low(self, key):
+        """Release a low-priority pause lease for `key` and wake the dispatcher."""
+        with self._low_cv:
+            self._low_pauses.discard(key)
+            if not self._low_pauses:
+                self._low_cv.notify_all()
+
     def submit(self, fn, *args, **kwargs):
+        self._last_high_at = time.monotonic()
+        return self._submit_raw(fn, args, kwargs)
+
+    def _submit_raw(self, fn, args, kwargs):
         if self.tasks_per_child:
             fut = self._queue_gen(fn, args, kwargs)     # (running once handed to a process: result_running, _watch)
         else:
@@ -464,11 +484,21 @@ class RespawningPool:
             self._low_cv.notify()
         return outer
 
+    def _low_can_run(self):
+        if not self._low or self._low_pauses:
+            return False
+        if self._low_active == 0:
+            return True
+        if self.workers > 1 and time.monotonic() - self._last_high_at < self.LOW_COOLDOWN_S:
+            reserve = max(1, self.workers // 2)
+            return self.inflight < self.workers - reserve
+        return self.inflight < self.workers
+
     def _low_loop(self):
         while True:
             with self._low_cv:
-                while not (self._low and (self.inflight < self.workers or self._low_active == 0)):
-                    self._low_cv.wait(timeout=1.0)
+                while not self._low_can_run():
+                    self._low_cv.wait(timeout=min(1.0, self.LOW_COOLDOWN_S))
                 outer, fn, args, kwargs, make_args = self._low.popleft()
                 if not outer.set_running_or_notify_cancel():
                     continue                # (cancelled while it waited)
@@ -476,7 +506,7 @@ class RespawningPool:
             try:
                 if make_args is not None:   # (outside _low_cv: it may take its caller's lock)
                     args, kwargs = make_args()
-                inner = self.submit(fn, *args, **kwargs)
+                inner = self._submit_raw(fn, args, kwargs)
             except BaseException as e:
                 with self._low_cv:
                     self._low_active -= 1
