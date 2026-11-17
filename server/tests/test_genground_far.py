@@ -66,13 +66,22 @@ class FarTest(unittest.TestCase):
         def spy(*a):
             seen.setdefault("floor", []).append((None if a[12] is None else int(np.max(a[12])), a[13]))
             return real(*a)
+        real_pair = getattr(gg.fast._ef, "gen_ground_pair", None)
+
+        def pair_spy(*a):           # (the ground and its canopy version in one pass: as the two calls it replaces)
+            seen.setdefault("floor", []).append((None if a[12] is None else int(np.max(a[12])), a[13]))
+            seen["floor"].append((0, 2) if a[13] == 2 else (None, 0))
+            return real_pair(*a)
         canopy = gg.canopy_grid
 
         def tall(mx, my, rasters):
             out = canopy(mx, my, rasters)
             out[:] = 20
             return out
-        with mock.patch.object(gg.fast._ef, "gen_ground", spy), mock.patch.object(gg, "canopy_grid", tall):
+        import contextlib
+        pair = mock.patch.object(gg.fast._ef, "gen_ground_pair", pair_spy) if real_pair is not None else \
+            contextlib.nullcontext()
+        with mock.patch.object(gg.fast._ef, "gen_ground", spy), mock.patch.object(gg, "canopy_grid", tall), pair:
             gg.render_far(_Im(), frame, 0.0, 0.0, 128.0, 256, None, None, veg=True, level=-1)
             gg.render_far(_Im(), frame, 2048.0, 0.0, 512.0, 256, None, None, veg=True, level=1)
             gg.render_far(_Im(), frame, 4096.0, 0.0, 512.0, 256, None, None, veg=None, level=0)

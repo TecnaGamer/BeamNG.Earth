@@ -2506,10 +2506,7 @@ def encode_dds(rgb, srgb=False, fade=None):
         lc = [canopy] + list(fast._ef.mip_levels_fast(canopy, _TO_LIN, float(MIP_SHARPEN)))
         parts = []
         for a, c, s in zip(lf, lc, genground.fade_weights(float(fade[1]), len(lf))):
-            q = int(round(s * 256))
-            m = a if q >= 256 else ((c.astype(np.uint32) * (256 - q) + a.astype(np.uint32) * q + 128) >> 8).astype(
-                np.uint8)
-            parts.append(bytes(fast._ef.bc1_encode_fast(np.ascontiguousarray(m))))
+            parts.append(bytes(fast._ef.bc1_encode_fast(np.ascontiguousarray(genground.fade_mix(a, c, s)))))
         data, n = b"".join(parts), len(lf)
     else:
         data, n, _err = fast._ef.dds_levels(rgb, _TO_LIN, float(MIP_SHARPEN), False)

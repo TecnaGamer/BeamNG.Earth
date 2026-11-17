@@ -3416,9 +3416,11 @@ def far_geo_stats():
     return dict(_far_geo_stats)
 
 
-def base_entry(user_dir, base_vfs, ao_vfs, rgb, ao_value):
+def base_entry(user_dir, base_vfs, ao_vfs, rgb, ao_value, fade=None):
     """terraincache.base_entry here (its BC7 encode is the base photo's main cost)."""
-    return terraincache.base_entry(user_dir, base_vfs, ao_vfs, rgb, ao_value)
+    if fade is None:
+        return terraincache.base_entry(user_dir, base_vfs, ao_vfs, rgb, ao_value)
+    return terraincache.base_entry(user_dir, base_vfs, ao_vfs, rgb, ao_value, fade)
 
 
 def far_geometry(aid, lat, lon, tile, zoom, q, ref_zoom, with_sink, layout):
@@ -3595,7 +3597,7 @@ def _base_veg():
 
 
 def base_photo(lat, lon, x0, y0, size, px, tex, buildings, rock_zoom, path, cache, fuel_pads=None, out_px=None,
-               quick=False, trees=False):
+               quick=False, trees=False, canopy=False):
     """earthd.Server.write_base here, for a server without its imagery analyses (a small machine): the block's base
     photo from the imagery tiles on disk, its building footprints filled and its cliffs as rock, written to path
     (PNG) and packed into the game's terrain texture cache (cache: terraincache.base_entry's arguments but the rgb).
@@ -3605,7 +3607,9 @@ def base_photo(lat, lon, x0, y0, size, px, tex, buildings, rock_zoom, path, cach
     the gas station pads around it (_take_pads). px: the imagery's render size, out_px: the photo's (enlarged before
     the roads are painted in: earthd.BASE_PX). quick: earthd.Server.write_quick_base's stand-in (the imagery and the
     roads at px, then enlarged; no roofs' mask, road ghosts or rock): the main process's ran 5-6 s beside the rest of
-    its threads at 185 mph (2026-10-31), here ~1 s."""
+    its threads at 185 mph (2026-10-31), here ~1 s. With the generated ground on, the packed copy fades its forest
+    floor out through the mips (earthd.Server.write_base); canopy: its canopy version (or None) returned too, a
+    fourth element."""
     _take_pads(fuel_pads)
     import imagery as imagerymod
     import roads as roadsmod
@@ -3617,17 +3621,19 @@ def base_photo(lat, lon, x0, y0, size, px, tex, buildings, rock_zoom, path, cach
     frame = geodesy.EnuFrame(lat, lon)
     pending = set()
     import genground
-    rgb = None
+    rgb = can = None
     if genground.ON and not quick:      # (earthd.Server.write_base)
         try:
+            cout = []
             rgb, used = genground.render(im, frame, x0, y0, size, px, getattr(_s, "md", None),
                                          getattr(_s, "surface", None), _s.widths, pending, _base_veg() if trees else None,
-                                         getattr(_s, "dem", None))
+                                         getattr(_s, "dem", None), canopy_out=cout)
+            can = genground.canopy_if_differs(rgb, cout)
         except imagerymod.ImageryError:
             return None
         except Exception as e:      # (the Sentinel-2 photo alone then)
             log.info("base photo: generated ground: %s: %s", type(e).__name__, e)
-            rgb = None
+            rgb = can = None
             pending.discard(genground.GEN_PENDING)
     try:
         if rgb is None:
@@ -3651,6 +3657,8 @@ def base_photo(lat, lon, x0, y0, size, px, tex, buildings, rock_zoom, path, cach
         user_dir, base_vfs, ao_vfs, ao_value = cache
         terraincache.base_entry(user_dir, base_vfs, ao_vfs, rgb, ao_value)
         return rgb, used, pending
+    # (the canopy version follows every step: what a step paints, as painted; a copy, a step may paint in place)
+    rgb0 = rgb.copy() if can is not None else rgb
     if buildings and _s.md is not None:
         try:
             mask = buildingsmod.photo_mask(frame, x0, y0, size, px, _s.md)
@@ -3664,7 +3672,10 @@ def base_photo(lat, lon, x0, y0, size, px, tex, buildings, rock_zoom, path, cach
             rgb = surfacemod.unghost_square(rgb, frame, x0, y0, size, getattr(_s, "surface", None), _s.widths)
         except Exception as e:      # the photo stays as it is
             log.info("base photo: road ghosts: %s", e)
+    can = genground.keep_painted(rgb0, rgb, can)
     rgb = surfacemod.enlarge(rgb, out_px or px)
+    can = surfacemod.enlarge(can, out_px or px) if can is not None else None
+    rgb1 = np.array(rgb, np.uint8, copy=True) if can is not None else rgb
     if roadsmod.ROADS_IN_GROUND:          # (earthd.Server.write_base)
         try:
             rgb = surfacemod.paint_square(rgb, frame, x0, y0, size, getattr(_s, "surface", None), _s.widths,
@@ -3679,13 +3690,19 @@ def base_photo(lat, lon, x0, y0, size, px, tex, buildings, rock_zoom, path, cach
         rgb = rockfacemod.rock(rgb, frame, x0, y0, size, U, x0, y0, size / (n - 1))
     except Exception as e:
         log.debug("base photo: rock faces: %s", e)
+    can = genground.keep_painted(rgb1, rgb, can)
     tmp = staging.tmp_for(path)
     # (terraincache.stored_photo: the game reads the packed cache entry, this file only if that is stale)
     with open(tmp, "wb") as f:
         f.write(terraincache.stored_photo(rgb))
     staging.replace(tmp, path)
     user_dir, base_vfs, ao_vfs, ao_value = cache
-    terraincache.base_entry(user_dir, base_vfs, ao_vfs, rgb, ao_value)
+    if can is not None:         # (the forest floor faded out through the mips, as the far tiles')
+        terraincache.base_entry(user_dir, base_vfs, ao_vfs, rgb, ao_value, (can, size / rgb.shape[0]))
+    else:
+        terraincache.base_entry(user_dir, base_vfs, ao_vfs, rgb, ao_value)
+    if canopy:
+        return rgb, used, pending, can
     return rgb, used, pending
 
 

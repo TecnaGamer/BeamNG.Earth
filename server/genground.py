@@ -59,6 +59,7 @@ import revisit
 log = logging.getLogger("earthd.genground")
 
 ON = os.environ.get("BNE_GEN_GROUND", "off").strip().lower() in ("on", "1", "yes", "true")
+PAIR_NEED = 370             # earthfast gen_ground_pair (the ground and its canopy version in one pass)
 NEED = 314                  # earthfast gg_* / gen_ground (stage 2: lines, surfaces, patterns; linear axes)
 # m round a block its generated ground is made over and cut from: a texel's colour reads the inputs this far round
 # (genground.rs: windows FAR_R_M 48 + the lattice and purity margins), so overlapping blocks agree
@@ -1323,13 +1324,21 @@ def generate(rgb, frame, x0, y0, size, px, md, surface, widths=None, veg=None, d
         rgb, region = shade(rgb, frame, x0, y0, size, px, kind, region, canopy, md, dem, imagery, pending, miss, gr,
                             gc, surface)
         complete = complete and not miss
-    out = fast._ef.gen_ground(rgb, kind, region, canopy, poly, dirs, phases, float(x0 + t / 2),
-                              float(y0 + size - t / 2), float(t), gr, gc, floor, int(mode))
-    if canopy_out is not None and mode == 2 and floor is not None:
-        # (the far rings' mip fade: the same ground with no forest floor, every other texel alike: the woods in the
-        # canopy's colour, written into the coarser mips, write_far_dds)
-        canopy_out.append(fast._ef.gen_ground(rgb, kind, region, canopy, poly, dirs, phases, float(x0 + t / 2),
-                                              float(y0 + size - t / 2), float(t), gr, gc, np.zeros_like(floor), 2))
+    args = (rgb, kind, region, canopy, poly, dirs, phases, float(x0 + t / 2), float(y0 + size - t / 2), float(t), gr,
+            gc)
+    if canopy_out is not None and (mode == 1 or (mode == 2 and floor is not None)) \
+            and getattr(fast._ef, "VERSION", 0) >= PAIR_NEED:
+        # (the mip fade, far rings and block: the same ground with no forest floor under the trees, every other texel
+        # alike: the woods in the canopy's colour, written into the coarser mips, write_far_dds / bc7.dds; in one pass,
+        # gen_ground_pair. Placed trees (mode 2): gen_ground with a zero floor; not built yet (mode 1, all of
+        # FLOOR_MIX): floor mode 0, the mode's only use past the regions. The block's placed trees (not a far square):
+        # its unplaced gaps under the canopy model (their gap colour, the forest floor in dense woods: half a wood's
+        # texels at Penns Valley and Patapsco) the photo's own colour too, as the far squares' woods (every wooded
+        # texel a tree there). An older module: no canopy version, the plain encoding)
+        out, can = fast._ef.gen_ground_pair(*args, floor, int(mode), not getattr(_far_tl, "on", False))
+        canopy_out.append(can)
+    else:
+        out = fast._ef.gen_ground(*args, floor, int(mode))
     return out, complete
 
 
@@ -1370,8 +1379,9 @@ def render(imagery, frame, x0, y0, size, px, md, surface, widths=None, pending=N
 # forest-floor colour where the game draws ground between dense trees, near; from height olive-brown ridges read
 # less like forest) is in the textures' mips (write_far_dds): each mip blends the floor and canopy versions by its
 # texel's size on the ground, FADE_NEAR_M (all floor) to FADE_FAR_M (all canopy). The GPU picks the mip whose texel
-# matches the pixel's footprint, so every tile (and the block, all floor within ~1 km) shows the same weight at the
-# same footprint: continuous per pixel, no ring seams, nothing player-dependent in the keys (per-level steps,
+# matches the pixel's footprint, so every tile (and the block, whose packed base fades the same way: bc7.dds fade,
+# earthd.Server.write_base) shows the same weight at the same footprint: continuous per pixel, no ring seams or block
+# square from above, nothing player-dependent in the keys (per-level steps,
 # c18ac2f5, showed as nested squares). No GEN_PENDING (a square made without all of its map data is a revisit fault
 # and made again after FAR_RETRY_S).
 FAR_VERSION = 3
@@ -1538,6 +1548,51 @@ def fade_weights(t, levels):
     return out
 
 
+def fade_mix(a, c, s):
+    """One mip of the fade: lerp(c, a, s) of two uint8 arrays (a the floor version's mip, c the canopy's), in
+    integers (s in 1/256ths): a itself at s 1, c itself at s 0 (both exact: (x * 256 + 128) >> 8 is x)."""
+    q = int(round(s * 256))
+    if q >= 256:
+        return a
+    if q <= 0:
+        return c
+    return ((c.astype(np.uint32) * (256 - q) + a.astype(np.uint32) * q + 128) >> 8).astype(np.uint8)
+
+
+def keep_painted(before, after, canopy):
+    """The canopy version after a step that turned the floor version before into after (roofs filled, roads and rock
+    painted): the texels it changed as it painted them, the rest the canopy's. None stays None."""
+    if canopy is None:
+        return None
+    before, after = np.asarray(before, np.uint8), np.asarray(after, np.uint8)
+    ne = before != after
+    painted = ne[:, :, 0] | ne[:, :, 1] | ne[:, :, 2]     # (any(axis=2) took 2.5x as long at 2048²)
+    out = np.array(canopy, np.uint8, copy=True)
+    np.copyto(out, after, where=painted[:, :, None])
+    return out
+
+
+# The block's base (detail mode) fades like the far tiles (bc7.dds fade, terraincache.base_entry): its mips by their
+# texels on the ground, fade_weights; in the base photo's revisit key with the switch on (earthd.base_revisit_key).
+# 1: the forest floor under the placed trees and the unplaced gaps' colour faded to the photo's (gen_ground_pair gaps)
+BLOCK_FADE_VERSION = 1
+
+
+def block_fade_key():
+    return ("blockfade", BLOCK_FADE_VERSION, FADE_NEAR_M, FADE_FAR_M)
+
+
+def canopy_if_differs(rgb, canopy_out):
+    """The canopy version render() gave (canopy_out), or None when there is none or it is the floor version itself (no
+    trees: nothing to fade, the plain encoding)."""
+    if not canopy_out:
+        return None
+    c = np.asarray(canopy_out[0], np.uint8)
+    if c.shape != np.shape(rgb) or np.array_equal(c, rgb):
+        return None
+    return c
+
+
 def write_far_dds(path, rgb, srgb=False):
     """A far tile's texture (imagery.write_dds) with the forest floor faded out through its mips when this thread's
     last render_far made it (the texels the roads, rock faces ... painted over since: as painted in every mip)."""
@@ -1548,5 +1603,5 @@ def write_far_dds(path, rgb, srgb=False):
     if last is None or not ON or last[0].shape != rgb.shape:
         return imagerymod.write_dds(path, rgb, srgb)
     floor, canopy, t = last
-    canopy = np.where((rgb == floor).all(axis=2, keepdims=True), canopy, rgb)
+    canopy = keep_painted(floor, rgb, canopy)
     return imagerymod.write_dds(path, rgb, srgb, fade=(canopy, t))

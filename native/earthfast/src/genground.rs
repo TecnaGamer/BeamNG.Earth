@@ -1093,6 +1093,42 @@ pub fn gen_ground<'py>(py: Python<'py>, s2: PyReadonlyArray3<'py, u8>, kind: PyR
                        pphase: PyReadonlyArray1<'py, f64>, ox: f64, oy: f64,
                        t: f64, gr: i64, gc: i64, floor: Option<PyReadonlyArray2<'py, u8>>, floor_mode: u8)
                        -> PyResult<Bound<'py, PyArray3<u8>>> {
+    let (out, _) = gen_ground_impl(py, s2, kind, region, canopy, poly, pdir, pphase, ox, oy, t, gr, gc, floor,
+                                   floor_mode, false, false)?;
+    Ok(out)
+}
+
+/// gen_ground and its canopy version in one pass: (the ground, the same ground with no forest floor under the trees),
+/// byte for byte gen_ground(..., floor, floor_mode) and gen_ground(..., zeros, 2) (floor_mode 2) or
+/// gen_ground(..., None, 0) (floor_mode 1); with floor_mode 0 both are the ground itself. The far rings' and the
+/// block's mip fade (genground.py fade_weights): only a TREE texel under the floor (and the region borders' 3 x 3
+/// antialias next to one) differs, so the rest is computed once (a second gen_ground was ~0.4 CPU-s a block).
+/// gaps (the block's placed trees, floor_mode 2): the open ground under the canopy model where the game placed no tree
+/// (UNPLACED: its gap colour, the forest floor in dense woods; half a wood's texels on the block, Penns Valley and
+/// Patapsco 2026-11-17) takes the photo's own colour in the canopy version too, as the TREE texels' (the canopy's
+/// colour: the plain photo's far levels'); the far rings' squares draw every wooded texel as a tree (gaps false).
+#[pyfunction]
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+pub fn gen_ground_pair<'py>(py: Python<'py>, s2: PyReadonlyArray3<'py, u8>, kind: PyReadonlyArray2<'py, u8>,
+                            region: PyReadonlyArray2<'py, u32>, canopy: PyReadonlyArray2<'py, u8>,
+                            poly: PyReadonlyArray2<'py, u32>, pdir: PyReadonlyArray2<'py, f64>,
+                            pphase: PyReadonlyArray1<'py, f64>, ox: f64, oy: f64,
+                            t: f64, gr: i64, gc: i64, floor: Option<PyReadonlyArray2<'py, u8>>, floor_mode: u8,
+                            gaps: bool)
+                            -> PyResult<(Bound<'py, PyArray3<u8>>, Bound<'py, PyArray3<u8>>)> {
+    let (out, can) = gen_ground_impl(py, s2, kind, region, canopy, poly, pdir, pphase, ox, oy, t, gr, gc, floor,
+                                     floor_mode, true, gaps)?;
+    Ok((out, can.expect("gen_ground_pair: its canopy version")))
+}
+
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+fn gen_ground_impl<'py>(py: Python<'py>, s2: PyReadonlyArray3<'py, u8>, kind: PyReadonlyArray2<'py, u8>,
+                        region: PyReadonlyArray2<'py, u32>, canopy: PyReadonlyArray2<'py, u8>,
+                        poly: PyReadonlyArray2<'py, u32>, pdir: PyReadonlyArray2<'py, f64>,
+                        pphase: PyReadonlyArray1<'py, f64>, ox: f64, oy: f64,
+                        t: f64, gr: i64, gc: i64, floor: Option<PyReadonlyArray2<'py, u8>>, floor_mode: u8,
+                        dual: bool, gaps: bool)
+                        -> PyResult<(Bound<'py, PyArray3<u8>>, Option<Bound<'py, PyArray3<u8>>>)> {
     // (stage 4) the forest floor's share under a TREE texel: floor_mode 0 no trees drawn (the canopy's own colour),
     // 1 trees drawn, their places unknown (all of FLOOR_MIX), 2 their places known (FLOOR_MIX x floor / 255)
     let floor: Option<Vec<u8>> = floor.map(|f| f.as_array().iter().copied().collect());
@@ -1213,8 +1249,10 @@ pub fn gen_ground<'py>(py: Python<'py>, s2: PyReadonlyArray3<'py, u8>, kind: PyR
                 }
             }
         });
-        let mut col = vec![0f32; n * n * 3];
-        par::rows(&mut col, n * 3, threads, |r, row| {
+        // (dual: each texel's colour then its canopy version's, gen_ground_pair)
+        let stride = if dual { 6 } else { 3 };
+        let mut col = vec![0f32; n * n * stride];
+        par::rows(&mut col, n * stride, threads, |r, row| {
             for c in 0..n {
                 let i = r * n + c;
                 let k = kind[i];
@@ -1295,6 +1333,14 @@ pub fn gen_ground<'py>(py: Python<'py>, s2: PyReadonlyArray3<'py, u8>, kind: PyR
                                 base[2] + (p[2] - base[2]) * m];
                     }
                 }
+                // (the canopy version's base: no forest floor; a floor weight of 0 leaves base as it is, bit for bit;
+                // gaps: an unplaced gap's the photo's own colour)
+                let mut bare = base;
+                let mut floored = false;
+                if dual && gaps && floor_mode == 2 && dirty[i] && region[i] & UNPLACED != 0 && region[i] & LOST == 0 {
+                    bare = px;
+                    floored = true;
+                }
                 if k == TREE && floor_mode > 0 {       // (the forest floor under the game's trees, FLOOR)
                     let fm = match (&floor, floor_mode) {
                         (Some(fl), 2) => FLOOR_MIX * fl[i] as f32 / 255.0,
@@ -1302,14 +1348,11 @@ pub fn gen_ground<'py>(py: Python<'py>, s2: PyReadonlyArray3<'py, u8>, kind: PyR
                     };
                     base = [base[0] + (FLOOR[0] - base[0]) * fm, base[1] + (FLOOR[1] - base[1]) * fm,
                             base[2] + (FLOOR[2] - base[2]) * fm];
+                    floored = fm > 0.0;
                 }
                 // (stage 3) a field's edge the photo shows inside one region (two unmapped fields of one class): each
                 // side its own colour, sampled BARRIER_PROBE cells off the edge, the step at the edge's line
-                if let Some(side) = barrier_colour(&cg, r, c, n, t, &region) {
-                    let (sc, w) = side;
-                    base = [base[0] + (sc[0] - base[0]) * w, base[1] + (sc[1] - base[1]) * w,
-                            base[2] + (sc[2] - base[2]) * w];
-                }
+                let side = barrier_colour(&cg, r, c, n, t, &region);
                 // the kind's fine detail, world-locked
                 let det = &DETAIL[k as usize];
                 let (wx, wy) = (ox + c as f64 * t, oy - r as f64 * t);
@@ -1346,55 +1389,82 @@ pub fn gen_ground<'py>(py: Python<'py>, s2: PyReadonlyArray3<'py, u8>, kind: PyR
                     // mapped field's furrows are the photo path's own, surface.photo_fields: never both)
                     f *= stripe_factor(&cg, &sp, r, c, wx, wy);
                 }
-                let mut rgb = [base[0] * f, base[1] * f, base[2] * f];
                 let p = poly[i];
-                if p > 0 && (p as usize) <= dirs.len() && (PITCH_KINDS.contains(&k) || (ORCHARD..=CEMETERY).contains(&k)) {
+                let rows_of = if p > 0 && (p as usize) <= dirs.len()
+                    && (PITCH_KINDS.contains(&k) || (ORCHARD..=CEMETERY).contains(&k)) {
                     // the polygon's rows (world-locked: blocks and the polygon's pieces agree)
                     let (dx, dy, ph) = dirs[p as usize - 1];
                     let (u, v) = (wx * dx + wy * dy, -wx * dy + wy * dx);
-                    let (pf, pc, pw) = pattern(k, u, v, d as f64 / 3.0 * t, ph);
-                    for ch in 0..3 {
-                        rgb[ch] = rgb[ch] * pf;
-                        rgb[ch] += (pc[ch] - rgb[ch]) * pw;
+                    Some(pattern(k, u, v, d as f64 / 3.0 * t, ph))
+                } else {
+                    None
+                };
+                let tn = if det.tint > 0.0 { det.tint * vnoise(wx / 24.0, wy / 24.0, 977) as f32 } else { 0.0 };
+                // (the steps from here on the texel's base: the barrier's colour, the detail, the rows, the tint)
+                let finish = |mut base: [f32; 3]| -> [f32; 3] {
+                    if let Some((sc, w)) = side {
+                        base = [base[0] + (sc[0] - base[0]) * w, base[1] + (sc[1] - base[1]) * w,
+                                base[2] + (sc[2] - base[2]) * w];
                     }
+                    let mut rgb = [base[0] * f, base[1] * f, base[2] * f];
+                    if let Some((pf, pc, pw)) = rows_of {
+                        for ch in 0..3 {
+                            rgb[ch] = rgb[ch] * pf;
+                            rgb[ch] += (pc[ch] - rgb[ch]) * pw;
+                        }
+                    }
+                    if det.tint > 0.0 {
+                        rgb[0] += tn;
+                        rgb[1] += 0.5 * tn;
+                        rgb[2] -= 0.6 * tn;
+                    }
+                    rgb
+                };
+                let rgb = finish(base);
+                row[c * stride..c * stride + 3].copy_from_slice(&rgb);
+                if dual {
+                    let rgb2 = if floored { finish(bare) } else { rgb };
+                    row[c * stride + 3..c * stride + 6].copy_from_slice(&rgb2);
                 }
-                if det.tint > 0.0 {
-                    let tn = det.tint * vnoise(wx / 24.0, wy / 24.0, 977) as f32;
-                    rgb[0] += tn;
-                    rgb[1] += 0.5 * tn;
-                    rgb[2] -= 0.6 * tn;
-                }
-                row[c * 3..c * 3 + 3].copy_from_slice(&rgb);
             }
         });
         // the borders' texels (a 4-neighbour in another region) antialiased: the mean of their 3 x 3 (the regions'
         // 1 m stairs; the photo's are softer)
-        let mut out = vec![0u8; n * n * 3];
-        par::rows(&mut out, n * 3, threads, |r, row| {
-            for c in 0..n {
-                let i = r * n + c;
-                for ch in 0..3 {
-                    let v = if dist[i] <= 3 {
-                        let (mut sum, mut k) = (0f32, 0f32);
-                        for y in r.saturating_sub(1)..=(r + 1).min(n - 1) {
-                            for x in c.saturating_sub(1)..=(c + 1).min(n - 1) {
-                                sum += col[(y * n + x) * 3 + ch];
-                                k += 1.0;
+        let aa = |off: usize| -> Vec<u8> {
+            let mut out = vec![0u8; n * n * 3];
+            par::rows(&mut out, n * 3, threads, |r, row| {
+                for c in 0..n {
+                    let i = r * n + c;
+                    for ch in 0..3 {
+                        let v = if dist[i] <= 3 {
+                            let (mut sum, mut k) = (0f32, 0f32);
+                            for y in r.saturating_sub(1)..=(r + 1).min(n - 1) {
+                                for x in c.saturating_sub(1)..=(c + 1).min(n - 1) {
+                                    sum += col[(y * n + x) * stride + off + ch];
+                                    k += 1.0;
+                                }
                             }
-                        }
-                        sum / k
-                    } else {
-                        col[i * 3 + ch]
-                    };
-                    row[c * 3 + ch] = v.round().clamp(0.0, 255.0) as u8;
+                            sum / k
+                        } else {
+                            col[i * stride + off + ch]
+                        };
+                        row[c * 3 + ch] = v.round().clamp(0.0, 255.0) as u8;
+                    }
                 }
-            }
-        });
-        out
+            });
+            out
+        };
+        (aa(0), if dual { Some(aa(3)) } else { None })
     });
+    let (out, can) = out;
     let arr = numpy::ndarray::Array3::from_shape_vec((n, n, 3), out)
         .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
-    Ok(arr.into_pyarray(py))
+    let can = match can {
+        Some(v) => Some(numpy::ndarray::Array3::from_shape_vec((n, n, 3), v)
+            .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?.into_pyarray(py)),
+        None => None,
+    };
+    Ok((arr.into_pyarray(py), can))
 }
 
 /// genground._grid and canopy_grid's Web-Mercator coordinates in one pass on the kernels' threads (stage 3: the
@@ -1488,6 +1558,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(gg_fill_polys, m)?)?;
     m.add_function(wrap_pyfunction!(gg_regions, m)?)?;
     m.add_function(wrap_pyfunction!(gen_ground, m)?)?;
+    m.add_function(wrap_pyfunction!(gen_ground_pair, m)?)?;
     Ok(())
 }
 

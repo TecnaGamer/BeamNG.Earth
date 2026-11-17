@@ -113,11 +113,31 @@ def header(w, h, levels, dxgi=None):
     return head
 
 
-def dds(rgb):
-    """A BC7_UNORM_SRGB DDS (DX10 header, the full mip chain) of a square power-of-two RGB image."""
+def dds(rgb, fade=None):
+    """A BC7_UNORM_SRGB DDS (DX10 header, the full mip chain) of a square power-of-two RGB image.
+    fade (canopy, texel m): the generated ground's mip fade (genground; the far tiles' imagery.encode_dds fade): each
+    mip of rgb and of the canopy version (an image of rgb's shape: its colour channels; the alpha, AO, stays rgb's
+    chain's) blended by genground.fade_weights of that mip's texel on the ground; byte for byte the plain file with
+    the canopy version equal to rgb."""
     img = np.asarray(rgb, np.uint8)
     h, w = img.shape[:2]
     chain = mips(img)
+    if fade is not None:
+        import genground
+        can = np.asarray(fade[0], np.uint8)
+        if can.shape[:2] != img.shape[:2]:
+            raise ValueError(f"bc7.dds: a {can.shape} canopy version for a {img.shape} image")
+        if img.shape[2] == 4 and can.shape[2] == 3:
+            can = np.concatenate([can, img[:, :, 3:]], 2)
+        cchain = mips(can)
+        out = []
+        for a, c, s in zip(chain, cchain, genground.fade_weights(float(fade[1]), len(chain))):
+            m = genground.fade_mix(a, c, s)
+            if m is not a and a.shape[2] == 4:      # (the alpha as rgb's own chain)
+                m = np.array(m, np.uint8, copy=True)
+                m[:, :, 3] = a[:, :, 3]
+            out.append(m)
+        chain = out
     body = _encode_gpu(chain)
     if body is None:
         body = b"".join(encode(m) for m in chain)
