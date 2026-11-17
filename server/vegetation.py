@@ -41,7 +41,7 @@ import staging
 
 log = logging.getLogger("earthd.vegetation")
 
-VERSION = 34          # (the cached cells hold their groups: 14 for the regional rules of GitHub #110; 16: the roads'
+VERSION = 35          # (the cached cells hold their groups: 14 for the regional rules of GitHub #110; 16: the roads'
                       # drawn widths and sidewalks kept clear; 17: BC's lidar canopy heights, mapdata's canopy layer 2;
                       # 18: the rounded junction corners kept clear, roadcorners.py; 19: one tree per flat crown,
                       # thin_tops; 20: none on or beside a bridge deck, _mask_decks; 21: orchard rows, canopy trees
@@ -65,6 +65,7 @@ VERSION = 34          # (the cached cells hold their groups: 14 for the regional
                       # 33: the open's oaks the open broadleaves (oak_open had two young oaks and one veteran)
                       # 34: the conifers in the open too (no bare-trunked crowd-grown firs and pines by roads)
                       # and palms by the climate: coconut palms in the tropics, fan / date palms elsewhere
+                      # 35: Portugal's and Galicia's eucalypt plantations (eucalypt_share)
 TREE_MIN_M = 3.0
 # The canopy raster, the scatter grids and the crown radii are in Web Mercator units (EPSG:3857: a metre there is
 # cos(lat) metres on the ground) and were tuned by eye at mid latitudes. Past them the same pixel counts covered less
@@ -361,6 +362,17 @@ K_RAINFOREST = (1, 2)
 K_TROPICS = (1, 2, 3)             # Af Am Aw: the coconut palms' (34)
 REDWOOD_MIN_M = 25.0
 STEPPE_JUNIPER = 0.6
+# (35) the eucalypt plantations of Portugal and Galicia (Eucalyptus globulus; E. nitens higher up in Galicia): a
+# quarter of both forests (Portugal's IFN6 2015: 845 000 ha of 3.2 M, its first species; Galicia's IFN4: about 30 %),
+# most of them in the Atlantic lowlands north of the Tagus, few in the Alentejo's cork and holm oak montado or on the
+# interior's uplands (E. globulus is frost-tender: rare above ~700 m). West Coast USA's eucalyptus shapes, whole stands
+# (stand_u, no admixture: a plantation is one species) of the forest's trees (land cover tree, not in town).
+EUC_BOX = (36.9, -9.6, 43.8, -6.9)          # south, west, north, east: Portugal and Galicia
+EUC_SHARE = 0.45            # of the forest stands in the western lowlands north of EUC_SOUTH
+EUC_INLAND = (-7.8, -6.9)   # the share falls to nothing from the first longitude to the second
+EUC_SOUTH = ((38.5, 0.3), (39.5, 1.0))      # (latitude, the share's factor): the Alentejo's few
+EUC_ELEV = (300.0, 700.0)   # the share falls to nothing between these heights above the sea (m)
+EUC_FROM = None             # (set below: the groups a plantation replaces)
 
 
 def redwood_belt(lat, lon):
@@ -369,6 +381,16 @@ def redwood_belt(lat, lon):
     lat, lon = np.asarray(lat, np.float64), np.asarray(lon, np.float64)
     return (lat > 35.8) & (lat < 42.3) & (lon < -122.0 - 0.45 * (lat - 37.0)) & (lon > -125.0)
 RAINFOREST_PALM_KEEP = 0.4
+
+
+def eucalypt_share(lat, lon, elev=None):
+    """Per point: the share of the forest's stands that are eucalypt plantations (Portugal and Galicia, EUC_*)."""
+    lat, lon = np.asarray(lat, np.float64), np.asarray(lon, np.float64)
+    z = np.zeros(len(lat)) if elev is None else np.asarray(elev, np.float64)
+    inland = np.clip((EUC_INLAND[1] - lon) / (EUC_INLAND[1] - EUC_INLAND[0]), 0.0, 1.0)
+    south = np.interp(lat, [a for a, _ in EUC_SOUTH], [b for _, b in EUC_SOUTH])
+    up = np.clip((EUC_ELEV[1] - z) / (EUC_ELEV[1] - EUC_ELEV[0]), 0.0, 1.0)
+    return np.where(_in_box(lat, lon, EUC_BOX), EUC_SHARE * inland * south * up, 0.0)
 
 
 def stand_u(mx, my, gx, gy, lat, salt):
@@ -396,11 +418,13 @@ def spruce_line(lat):
     return np.clip(SPRUCE_LINE_M + (50.0 - np.asarray(lat, np.float64)) * SPRUCE_LINE_PER_DEG, 500.0, 1700.0)
 
 
-def species_groups(group, height, lat, lon, lcls, koppen, elev, u_broad, u_conifer, u_snag, u_palm, u_alt=None):
+def species_groups(group, height, lat, lon, lcls, koppen, elev, u_broad, u_conifer, u_snag, u_palm, u_alt=None,
+                   u_euc=None):
     """The groups after regional(): Eurasia's species (birch / oak / beech, pine_eu / spruce), dead trees, the warm
     towns' palms and the rainforests' trees (the constants above). koppen: the class at each tree (climate.koppen_many);
     elev: its height above the sea (m) or None (no DEM: as in the lowlands); u_broad, u_conifer: the species choices'
-    [0, 1) (stand_u, mixed); u_snag, u_palm, u_alt: hashed [0, 1) per tree (u_alt None: u_snag's). Pure."""
+    [0, 1) (stand_u, mixed); u_snag, u_palm, u_alt: hashed [0, 1) per tree (u_alt None: u_snag's); u_euc: a stand's
+    [0, 1) for the eucalypt plantations (stand_u, not mixed; None: none). Pure."""
     g = np.array(group, np.uint8, copy=True)
     h = np.asarray(height, np.float64)
     lat, lon = np.asarray(lat, np.float64), np.asarray(lon, np.float64)
@@ -468,6 +492,11 @@ def species_groups(group, height, lat, lon, lcls, koppen, elev, u_broad, u_conif
     # (34) the coast redwoods only in their fog belt (the gallery 2026-11-17: pine_west's tallest were redwoods, drawn
     # for any 25 m+ conifer from Washington to the Southeast's loblolly pines)
     g[(g == G_PINE_WEST) & redwood_belt(lat, lon) & (h >= REDWOOD_MIN_M)] = G_REDWOOD
+    # (35) Portugal's and Galicia's eucalypt plantations: whole stands of the forest's trees
+    if u_euc is not None:
+        wood = (np.asarray(lcls) == WC["tree"]) & np.isin(g, EUC_FROM) & np.isin(k, K_MED + K_OCEANIC)
+        if wood.any():
+            g[wood & (np.asarray(u_euc) < eucalypt_share(lat, lon, elev))] = G_EUCALYPTUS
     # dead trees in the forests outside the tropics
     forest = (np.asarray(lcls) == WC["tree"]) & (np.abs(lat) >= 23.5) & (h >= SNAG_H[0]) & (h <= SNAG_H[1])
     snag = forest & (np.asarray(u_snag) < SNAG_SHARE)
@@ -477,6 +506,7 @@ def species_groups(group, height, lat, lon, lcls, koppen, elev, u_broad, u_conif
     return g
 
 
+EUC_FROM = (G_DECIDUOUS, G_CONIFER, G_MEDITERRANEAN, G_BIRCH, G_OAK, G_BEECH, G_PINE_EU, G_SPRUCE)
 SNAG_FROM = ((G_DECIDUOUS, G_BIRCH, G_OAK, G_BEECH, G_OAK_WEST), (G_CONIFER, G_PINE_EU, G_SPRUCE, G_PINE_WEST))
 OPEN_FROM = {G_DECIDUOUS: G_DECIDUOUS_OPEN, G_OAK: G_DECIDUOUS_OPEN, G_BIRCH: G_BIRCH_OPEN, G_BEECH: G_BEECH_OPEN,
              G_PINE_WEST: G_PINE_WEST_OPEN, G_MEDITERRANEAN: G_MEDITERRANEAN_OPEN, G_TROPICAL: G_TROPICAL_OPEN,
@@ -1060,6 +1090,7 @@ class Vegetation:
         import climate
         k = climate.koppen_many(tlat, tlon)
         need = eurasia(tlat, tlon) & np.isin(group, (G_CONIFER, G_DECIDUOUS))
+        need |= _in_box(tlat, tlon, EUC_BOX) & np.isin(group, EUC_FROM)      # (35) the plantations' uplands
         elev = None
         if need.any():
             e = self._elev(tlat[need], tlon[need])
@@ -1070,7 +1101,8 @@ class Vegetation:
         u_broad = _mixed(stand_u(tmx, tmy, gx, gy, clat, 51), u_single, u_mix)
         u_con = _mixed(stand_u(tmx, tmy, gx, gy, clat, 61), u_single, u_mix)
         return species_groups(group, th, tlat, tlon, lcls, k, elev, u_broad, u_con, _hash01(gx, gy, 33),
-                              _hash01(gx, gy, 34), _hash01(gx, gy, 35))
+                              _hash01(gx, gy, 34), _hash01(gx, gy, 35),
+                              u_euc=stand_u(tmx, tmy, gx, gy, clat, 91))
 
     def _slope(self, px, py):
         """The ground's slope (rise over run) at Web Mercator points (px, py), from the DEM ROCK_SLOPE_D m either side

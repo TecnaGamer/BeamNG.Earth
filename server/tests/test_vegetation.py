@@ -503,6 +503,27 @@ class ShrubTest(unittest.TestCase):
             else:
                 self.assertEqual(int(g[0]), want, (lat, lon, lc, int(k[0])))
 
+    def test_eucalypt_plantations(self):
+        """(35) Portugal's and Galicia's eucalypt plantations: whole stands of the lowland forest."""
+        import climate
+        tree, built = veg.WC["tree"], veg.WC["built"]
+        for (lat, lon), grp, lc, elev, u, want in (
+                ((40.64, -8.45), veg.G_MEDITERRANEAN, tree, 80, 0.1, True),      # Aveiro's hills
+                ((42.88, -8.55), veg.G_DECIDUOUS, tree, 250, 0.1, True),         # Santiago de Compostela
+                ((43.30, -8.30), veg.G_CONIFER, tree, None, 0.2, True),          # A Coruna, no DEM
+                ((40.64, -8.45), veg.G_MEDITERRANEAN, tree, 80, 0.8, False),     # a stand of the rest
+                ((40.64, -8.45), veg.G_MEDITERRANEAN, built, 80, 0.1, False),    # not in town
+                ((40.32, -7.61), veg.G_CONIFER, tree, 1500, 0.1, False),         # Serra da Estrela: frost
+                ((38.57, -7.91), veg.G_MEDITERRANEAN, tree, 250, 0.2, False),    # the Alentejo's montado
+                ((52.23, 21.0), veg.G_DECIDUOUS, tree, 100, 0.0, False)):        # Warsaw
+            la, lo = np.array([lat]), np.array([lon])
+            g = veg.species_groups(np.array([grp], np.uint8), np.array([14.0]), la, lo, np.array([lc]),
+                                   climate.koppen_many(la, lo), None if elev is None else np.array([float(elev)]),
+                                   np.array([0.5]), np.array([0.5]), np.array([0.9]), np.array([0.9]),
+                                   u_euc=np.array([u]))
+            self.assertEqual(int(g[0]) == veg.G_EUCALYPTUS, want, (lat, lon, elev, u))
+        self.assertAlmostEqual(float(veg.eucalypt_share([40.6], [-8.5], [100.0])[0]), veg.EUC_SHARE)
+
     def test_no_mossy_forest_trees_in_the_open(self):
         g = veg.open_groups(np.array([veg.G_OAK, veg.G_DECIDUOUS, veg.G_SNAG_BROAD, veg.G_SNAG_CONIFER, veg.G_BEECH,
                                       veg.G_OAK], np.uint8), np.array([1, 1, 1, 1, 1, 0], bool))
