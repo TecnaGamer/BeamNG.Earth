@@ -6575,6 +6575,6 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(cliffcuts::cliff_road_clearance, m)?)?;
     m.add_function(wrap_pyfunction!(cliffcuts::cliff_cut_ends, m)?)?;
     m.add_function(wrap_pyfunction!(cliffcuts::cliff_cut_sustained, m)?)?;
-    m.add("VERSION", 311)?;
+    m.add("VERSION", 314)?;
     Ok(())
 }

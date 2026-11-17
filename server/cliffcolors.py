@@ -13,6 +13,10 @@ from PIL import Image
 
 GRID_M = 64.0
 RADIUS_M = 64.0
+REGIONAL_GRID_M = 512.0
+REGIONAL_RADIUS_M = 512.0
+# With no usable imagery anywhere, use neutral stone rather than a blue climate tint.
+NEUTRAL_STONE = (180.0, 180.0, 180.0)
 METRES_PER_DEGREE = 111320.0
 CANYON_LIGHT_BLEND = .45
 CANYON_HUE_BLEND = .85
@@ -67,18 +71,28 @@ def sample(cache_dir, lat, lon, *, grid_m=GRID_M, radius_m=RADIUS_M):
 
     Evaluate a few hundred lattice nodes, not hundreds of thousands of mesh
     vertices. Reject canopy/water chromaticity and deep shadows before averaging.
-    Zero denotes missing evidence, leaving the climate-derived tint intact.
+    Wider regional evidence fills rejected nodes before interpolation. Both scales
+    use geographic lattices, so adjoining tiles resolve the same boundary colour.
     """
     import fast
-    fast.require(310, "cliff mineral colour field")
+    fast.require(314, "continuous cliff mineral colour field")
     lat, lon = np.broadcast_arrays(lat, lon)
     if not lat.size:
         return np.empty((*lat.shape, 3))
     probes, indices, weights = fast._ef.cliff_photo_queries(
         np.ascontiguousarray(lat.ravel(), np.float64), np.ascontiguousarray(lon.ravel(), np.float64),
         grid_m, radius_m)
+    # Probe centres identify the local lattice nodes independently of query order.
+    centers = probes[:, probes.shape[1]//2, :]
+    regional, ri, rw = fast._ef.cliff_photo_queries(
+        np.ascontiguousarray(centers[:, 0]), np.ascontiguousarray(centers[:, 1]),
+        REGIONAL_GRID_M, REGIONAL_RADIUS_M)
+    regional_rgb = _samples(cache_dir, regional[:, :, 0], regional[:, :, 1])
+    fallback = fast._ef.cliff_photo_tints(np.ascontiguousarray(regional_rgb, np.float64), ri, rw,
+        np.tile(NEUTRAL_STONE, (len(regional), 1)), regional=True)
     rgb = _samples(cache_dir, probes[:, :, 0], probes[:, :, 1])
-    return fast._ef.cliff_photo_tints(np.ascontiguousarray(rgb, np.float64), indices, weights).reshape(*lat.shape, 3)
+    return fast._ef.cliff_photo_tints(np.ascontiguousarray(rgb, np.float64), indices, weights,
+        fallback).reshape(*lat.shape, 3)
 
 
 def _transfer(rgb, encode):

@@ -92,12 +92,12 @@ pub fn cliff_photo_queries<'py>(
     ))
 }
 
-fn mineral(samples: impl Iterator<Item = [f64; 3]>) -> Option<[f64; 3]> {
+fn mineral(samples: impl Iterator<Item = [f64; 3]>, regional: bool) -> Option<([f64; 3], f64)> {
     let mut valid: Vec<_> = samples
         .filter_map(|rgb| {
             let [r, g, b] = rgb;
             let light = r * LUMA[0] + g * LUMA[1] + b * LUMA[2];
-            (light > 55.0 && light < 235.0 && g < r * 1.04 && b < r * 1.08 && g - (r + b) * 0.5 < light * 0.045)
+            (light > 55.0 && light < 235.0 && g < r * 1.04 && b < r * 1.08 && (regional || g - (r + b) * 0.5 < light * 0.045))
                 .then_some((light, rgb))
         })
         .collect();
@@ -110,7 +110,7 @@ fn mineral(samples: impl Iterator<Item = [f64; 3]>) -> Option<[f64; 3]> {
     if bright.len() < 3 {
         return None;
     }
-    Some(std::array::from_fn(|k| {
+    let color = std::array::from_fn(|k| {
         let mut channel: Vec<_> = bright.iter().map(|v| v[k]).collect();
         channel.sort_by(f64::total_cmp);
         let mid = channel.len() / 2;
@@ -119,20 +119,40 @@ fn mineral(samples: impl Iterator<Item = [f64; 3]>) -> Option<[f64; 3]> {
         } else {
             channel[mid]
         }
-    }))
+    });
+    // A handful of acceptable pixels must not replace a reliable regional hue.
+    // Regional samples describe the broad ground hue, including dry tan terrain.
+    // Once supported by several bright samples, do not dilute it with neutral gray.
+    let support = if regional { 1.0 } else { (bright.len() as f64 / 12.0).min(1.0) };
+    Some((color, support * support * (3.0 - 2.0 * support)))
+}
+
+fn resolve(sample: Option<([f64; 3], f64)>, fallback: Option<[f64; 3]>) -> Option<[f64; 3]> {
+    match (sample, fallback) {
+        (Some((color, confidence)), Some(base)) =>
+            Some(std::array::from_fn(|k| base[k] + confidence * (color[k] - base[k]))),
+        (Some((color, _)), None) => Some(color),
+        (None, base) => base,
+    }
 }
 
 /// Reduce cached RGB samples (nodes, 81, 3) to mineral medians and interpolate
-/// the query plan. Unreliable nodes contribute no weight; no evidence gives zero.
+/// the query plan. Optional per-node regional colours fill rejected evidence
+/// before interpolation, so the last reliable node cannot snap to a climate tint.
 #[pyfunction]
+#[pyo3(signature = (rgb, indices, weights, fallback=None, regional=false))]
 pub fn cliff_photo_tints<'py>(
     py: Python<'py>,
     rgb: PyReadonlyArray3<'py, f64>,
     indices: PyReadonlyArray2<'py, i64>,
     weights: PyReadonlyArray2<'py, f64>,
+    fallback: Option<PyReadonlyArray2<'py, f64>>,
+    regional: bool,
 ) -> PyResult<Bound<'py, PyArray2<f64>>> {
     let (rgb, indices, weights) = (rgb.as_array(), indices.as_array(), weights.as_array());
+    let fallback = fallback.as_ref().map(|v| v.as_array());
     if rgb.shape()[1..] != [PROBES, 3]
+        || fallback.as_ref().is_some_and(|v| v.shape() != [rgb.shape()[0], 3] || v.iter().any(|c| !c.is_finite()))
         || indices.ncols() != 4
         || weights.shape() != indices.shape()
         || indices.iter().any(|&i| i < 0 || i as usize >= rgb.shape()[0])
@@ -144,7 +164,9 @@ pub fn cliff_photo_tints<'py>(
     }
     let out = py.detach(|| {
         let field: Vec<_> = (0..rgb.shape()[0])
-            .map(|n| mineral((0..PROBES).map(|p| [rgb[[n, p, 0]], rgb[[n, p, 1]], rgb[[n, p, 2]]])))
+            .map(|n| resolve(
+                mineral((0..PROBES).map(|p| [rgb[[n, p, 0]], rgb[[n, p, 1]], rgb[[n, p, 2]]]), regional),
+                fallback.as_ref().map(|v| [v[[n, 0]], v[[n, 1]], v[[n, 2]]])))
             .collect();
         let mut out = vec![0.0; indices.nrows() * 3];
         for i in 0..indices.nrows() {
@@ -173,14 +195,32 @@ pub fn cliff_photo_tints<'py>(
 mod tests {
     use super::*;
     #[test]
+    fn regional_colour_survives_missing_and_sparse_local_evidence() {
+        let base = [190., 175., 150.];
+        assert_eq!(resolve(None, Some(base)), Some(base));
+        assert_eq!(resolve(Some(([100.; 3], 0.0)), Some(base)), Some(base));
+        assert_eq!(resolve(Some(([100.; 3], 1.0)), Some(base)), Some([100.; 3]));
+        assert_eq!(resolve(Some(([100.; 3], 0.5)), Some(base)), Some([145., 137.5, 125.]));
+    }
+
+    #[test]
+    fn regional_ground_hue_retains_tan_but_rejects_green_water_and_shadow() {
+        let tan = [174., 155., 113.5];
+        assert_eq!(mineral(std::iter::repeat_n(tan, PROBES), true), Some((tan, 1.0)));
+        for rgb in [[30., 120., 20.], [30., 40., 100.], [10.; 3]] {
+            assert_eq!(mineral(std::iter::repeat_n(rgb, PROBES), true), None);
+        }
+    }
+
+    #[test]
     fn reject_canopy_water_shadows_and_sparse_evidence() {
         for rgb in [[30., 120., 20.], [30., 40., 100.], [10.; 3]] {
-            assert_eq!(mineral(std::iter::repeat_n(rgb, PROBES)), None);
+            assert_eq!(mineral(std::iter::repeat_n(rgb, PROBES), false), None);
         }
-        assert_eq!(mineral(std::iter::repeat_n([190., 175., 150.], 2)), None);
+        assert_eq!(mineral(std::iter::repeat_n([190., 175., 150.], 2), false), None);
         assert_eq!(
-            mineral(std::iter::repeat_n([190., 175., 150.], PROBES)),
-            Some([190., 175., 150.])
+            mineral(std::iter::repeat_n([190., 175., 150.], PROBES), false),
+            Some(([190., 175., 150.], 1.0))
         );
     }
 }

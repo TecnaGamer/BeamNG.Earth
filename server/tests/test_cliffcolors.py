@@ -29,12 +29,45 @@ class CliffColorTests(unittest.TestCase):
             reverse = cliffcolors.sample('', lat[::-1], lon[::-1])
         np.testing.assert_array_equal(forward, reverse[::-1])
 
-    def test_missing_and_green_photos_do_not_tint_rock(self):
+    def test_missing_and_green_photos_use_neutral_stone(self):
         for color in ([0., 0., 0.], [30., 120., 20.]):
             with patch.object(cliffcolors, '_samples', side_effect=lambda _, la, lo:
                               np.broadcast_to(color, (*la.shape, 3))):
                 result = cliffcolors.sample('', np.array([36.]), np.array([-114.]))
-            np.testing.assert_array_equal(result, [[0., 0., 0.]])
+            np.testing.assert_array_equal(result, [cliffcolors.NEUTRAL_STONE])
+
+    def test_rejected_local_patch_uses_surrounding_stone_without_a_colour_step(self):
+        # A shadowed/vegetated patch larger than the local sampling footprint.
+        lat = np.full(401, 38.86)
+        lon = -105.06 + np.linspace(-200., 200., 401)/111320.
+        def photo(_, la, lo):
+            local = (abs(la-38.86)*111320. < 130) & (abs(lo+105.06)*111320. < 130)
+            return np.where(local[..., None], [30., 120., 20.], [190., 175., 150.])
+        with patch.object(cliffcolors, '_samples', side_effect=photo):
+            whole = cliffcolors.sample('', lat, lon)
+            left = cliffcolors.sample('', lat[:201], lon[:201])
+            right = cliffcolors.sample('', lat[200:], lon[200:])
+        np.testing.assert_allclose(whole, np.broadcast_to([190., 175., 150.], whole.shape), atol=1e-10)
+        np.testing.assert_array_equal(left, whole[:201])
+        np.testing.assert_array_equal(right, whole[200:])
+        self.assertLess(np.abs(np.diff(whole, axis=0)).max(), 1.)
+
+    def test_dry_tan_regional_colour_is_not_diluted_with_gray(self):
+        tan = [174., 155., 113.5]
+        with patch.object(cliffcolors, '_samples', side_effect=lambda _, la, lo:
+                          np.broadcast_to(tan, (*la.shape, 3))):
+            result = cliffcolors.sample('', np.array([38.86]), np.array([-105.06]))
+        np.testing.assert_allclose(result, [tan], atol=1e-10)
+
+    def test_absent_regional_evidence_fades_without_switching_to_zero(self):
+        lat = np.full(401, 38.86)
+        lon = -105.06 + np.linspace(-1000., 1000., 401)/111320.
+        def photo(_, la, lo):
+            return np.where((lo < -105.06)[..., None], [190., 175., 150.], [0., 0., 0.])
+        with patch.object(cliffcolors, '_samples', side_effect=photo):
+            result = cliffcolors.sample('', lat, lon)
+        self.assertGreater(result.min(), 140.)
+        self.assertLess(np.abs(np.diff(result, axis=0)).max(), 2.)
 
     def test_empty_queries_need_no_image_io(self):
         with patch.object(cliffcolors, '_samples', side_effect=AssertionError('unexpected image read')):
