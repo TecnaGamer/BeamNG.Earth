@@ -94,6 +94,19 @@ class BudgetTest(unittest.TestCase):
         self.assertEqual(im.mem_finished, budget.SMALL_FIN_MB * 1_000_000, "read when the cache is made")
         im.close()
 
+    def test_desktop_map_data_follows_the_limit(self):
+        """A desktop's decoded map data a process by its RAM limit: 384 MB at the 24 GB cap (a 48 GB PC's Auto), 256
+        where the RAM is not known, as before."""
+        for gb, mb in ((48.0, 384), (None, 256)):
+            mapdata.MEM_MB = self.saved[2]
+            with mock.patch.object(budget, "total_gb", return_value=gb):
+                self.assertFalse(budget.apply(False))
+            self.assertEqual(mapdata.MEM_MB, mb, gb)
+        mapdata.MEM_MB = self.saved[2]
+        with mock.patch.object(budget, "total_gb", return_value=24.0):
+            budget.apply(False)
+        self.assertLess(mapdata.MEM_MB, 256, "a 24 GB PC: under the full size, as before")
+
 
 class LeanTierTest(unittest.TestCase):
     """The lean memory tiers (2026-11-12, "also check for machines with 8gb or even 4gb of ram"): an 8 GB PC's
