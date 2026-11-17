@@ -1594,7 +1594,7 @@
   }
  },
  "tamar_bridge_1112": {
-  "steps": 46,
+  "steps": 45,
   "parts": {
    "bridge:4e06ec6a-61f7-41dc-ba40-30345db4afb1": {
     "step_m": 0.051,
@@ -1607,12 +1607,12 @@
     "lift_g": 1.3284
    },
    "bridge:ee4ecb34-2fc6-465d-90f2-e4e7bb8206b4": {
-    "step_m": 0.1318,
+    "step_m": 0.1194,
     "grade": 0.0,
     "lift_g": 0.0
    },
    "ground:0105e1dc-04d6-4c9f-a12d-d2125da14e7d": {
-    "step_m": 0.225,
+    "step_m": 0.1882,
     "grade": 0.0,
     "lift_g": 0.0
    },
@@ -1637,7 +1637,7 @@
     "lift_g": 0.0
    },
    "ground:8dbd3882-1da7-4529-87a1-c3cab7598d0a": {
-    "step_m": 0.2119,
+    "step_m": 0.1834,
     "grade": 0.0,
     "lift_g": 0.0
    },
@@ -1667,12 +1667,12 @@
     "lift_g": 0.0
    },
    "ground:ee4ecb34-2fc6-465d-90f2-e4e7bb8206b4": {
-    "step_m": 0.1272,
+    "step_m": 0.1128,
     "grade": 0.0,
     "lift_g": 0.0
    },
    "ground:f9e46443-5a03-42d9-8320-f442e0f5dd0f": {
-    "step_m": 0.2215,
+    "step_m": 0.1873,
     "grade": 0.0,
     "lift_g": 0.0
    },

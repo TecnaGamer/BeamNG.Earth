@@ -673,8 +673,10 @@ SEAM_SIDE_RUN_M = (12.0, 40.0)
 SEAM_MOUTH_M = 12.0         # m a street off a deck's abutment keeps the abutment's height: the junction's wedge of the deck's
                             # level (a wider mouth than the carriageway's own) stands over the street's road no lower than this
 SEAM_MOUTH_GRADE = 0.08     # ... and goes back to its own profile at this grade
-SEAM_DECK_GRADE = 0.01      # a single span between two abutments is not tilted more than this by the ground at its ends: the
-                            # rest of their difference is shared between the two approaches (_grade_match) ...
+SEAM_DECK_GRADE = 0.03      # a single span between two abutments is not tilted more than this by the ground at its ends: the
+                            # rest of their difference is shared between the two approaches (_grade_match) ... (3 %, as
+                            # PR #990 meant: at 1 % Stonehouse Bridge, Plymouth, 166 m and 5.4 m between its ends, had the
+                            # approach at its roundabout raised 1.9 m, a step up off the ring, GitHub #1374) ...
 SEAM_MATCH_MAX_M = 4.0      # ... at most this each (bad data: rather a steep deck)
 SEAM_FILLED_ON = os.environ.get("BNE_SEAM_FILLED", "on") != "off"   # (_grade_match reads each end as filled: fill_abutment)
 
