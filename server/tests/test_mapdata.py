@@ -765,6 +765,8 @@ class OvertureTest(Sources, SmallBlocks, unittest.TestCase):
         blocks = {c.parent(overture.BLOCK_Z) for c in cells}
         for la in layers:
             self.assertLessEqual(reads.count(la), len(blocks), la)
+        md.clear_memory()                                        # (a process short of memory: the blocks go too)
+        self.assertEqual((len(md.overture._blocks), md.overture._blocks_n), (0, 0))
 
     def test_fetch_errors_surface(self):
         """A host that cannot deliver: the netfetch error, not DuckDB's generic one."""
@@ -1172,9 +1174,10 @@ class ShedTest(unittest.TestCase):
         cleared = []
         spy = lambda name: SimpleNamespace(clear_memory=lambda: cleared.append(name))
         md = SimpleNamespace(_mem_lock=threading.Lock(), _mem={"k": 1}, _mem_bytes=5, _slim={}, _slim_bytes=0,
-                             rail_tags=spy("rail"), lane_tags=spy("lanes"), station_tags=spy("stations"))
+                             rail_tags=spy("rail"), lane_tags=spy("lanes"), station_tags=spy("stations"),
+                             overture=spy("blocks"))
         mapdata.MapData.clear_memory(md)
-        self.assertEqual(sorted(cleared), ["lanes", "rail", "stations"])
+        self.assertEqual(sorted(cleared), ["blocks", "lanes", "rail", "stations"])
 
 
 class StoreLevelTest(unittest.TestCase):

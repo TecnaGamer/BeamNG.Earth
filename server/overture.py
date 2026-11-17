@@ -801,6 +801,13 @@ class Reader:
         fut.set_result(blk)
         return blk
 
+    def clear_memory(self):
+        """Drop the blocks of cells kept in memory (mapdata.MapData.clear_memory: a process short of memory); a cell's
+        next query reads its block again."""
+        with self._lock:
+            self._blocks.clear()
+            self._blocks_n = 0
+
     def _block_read(self, con, layer, spec, bounds, rows, files, kind):
         """_Block of the layer's rows in bounds from the row groups rows' local copies; False without them."""
         try:
