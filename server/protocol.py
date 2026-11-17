@@ -131,7 +131,6 @@ class Decoder:
 
 class _HostTransport:
     """The part of asyncio's transport earthd uses (get_write_buffer_size, abort), over a HostStream's wire."""
-    __slots__ = ("_stream",)
 
     def __init__(self, stream):
         self._stream = stream
