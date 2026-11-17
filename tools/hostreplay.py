@@ -23,7 +23,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(
 import fast  # noqa: E402
 import protocol  # noqa: E402
 
-RECORD_VERSION = 361            # the earthfast that reads recordings (host_read_recording)
+RECORD_VERSION = 371            # the earthfast that reads recordings (host_read_recording)
 
 
 def records(path):

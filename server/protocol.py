@@ -24,7 +24,7 @@ HOST_MERGE = os.environ.get("BNGE_HOST_MERGE", "on").strip().lower() != "off"
 # BNGE_HOST_RECORD_OUT=1: what the server sends too. Recordings hold the player's positions: private
 RECORD = os.environ.get("BNGE_HOST_RECORD") or None
 RECORD_OUT = os.environ.get("BNGE_HOST_RECORD_OUT") == "1"
-HOST_VERSION = 362          # the earthfast with Host / Wire (362: the read side's flow control)
+HOST_VERSION = 371          # the earthfast with Host / Wire (the pose merge, the recorder, the read flow control)
 log = logging.getLogger("earthd.host")
 
 
