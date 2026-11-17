@@ -698,7 +698,7 @@ def _facts_load(feats, kind, extra):
 # (bakepack.py), in place of the code hash; the plans' key holds it too (plancache.plans_format). Bump it whenever a
 # change makes other facts (level ranges, specs, lane flow, grade separations or their inputs' rules), or players keep
 # the old ones; tests/test_bake_formats.py fails until it is bumped.
-FACTS_FORMAT = 28     # 28: a long feature's level ranges from its home copy laid on this copy's own extent (home_ranges: the copies of a segment are cut to other lengths per cell; the Main-Weser-Bahn's bridge in Treysa lay 100 m off in one; PR #1399), 2026-11-16; 27: a motorway link mapped with 3 or more lanes, with no width or turn:lanes, that its diverge gives 2 or more fewer lanes takes what it gives (_lane_overrides, tapers::ramp_lane_rule; rampoverrides' I-65 Exit 76 correction by way id deleted: the road revamp's R1, 2026-11-16); 26: a cycleway with sidewalk=both / left / right is a street closed to cars, a road with its sidewalks (STYLE "cycleway", the user's London report 2026-11-12), 2026-11-12; 25: a town street of a mapped lane count between buildings takes its sidewalks out to them and, a two-lane primary, its parking lanes (roads._laned_walled; Eastern Avenue at Fells Point, the user's reports 18 and 19), 2026-11-12; 23: deterministic maths (GitHub #1169: the same facts on Windows, Linux and every glibc / CPU), 2026-11-12; 22: the roads layer's max_height_m rule (vehicle height limits) and the rail parts of a long segment where the map puts them (pmtiles anchors, railways MIN_PART_M: short rail bridges kept), Robitnik's PR #1193; 21: a motorway's or trunk road's built-up land read 90 m out (URBAN_HIGHWAY_BESIDE_M, PR #1117: its urban flag, widths); 20: a road's measured width and wall clearance from its own copy of the road in each cell, not whichever cell's copy the process measured first (roadwidth._memo_key), 2026-11-12; 19: a road joined at a bridge's end node is not a crossing under it on any system (earthfast levelrules END_EPS_M: the bridge's reach hung on the last bit of the C library's hypot, other level ranges on Ubuntu 22.04 / Windows than on a newer glibc at Vienna's S1 Rautenweg), 2026-11-12; 18: a town street's carriageway kept clear of the walls along it where the map gives no width (roads._wall_capped, roadwidth.clearance_row: Campulung, Setagaya, Trastevere; GitHub #1184, #543), 2026-11-12; 17: a junction standing over a tunnel the DEM shows open is an underpass: its arms' crossings by the node count (gradesep.JOINED_ENDS, Vienna's S1 under Rautenweg, GitHub #1083), 2026-11-12; 16: a merged highway's ways of other lane counts as lane sections of their own (lanesections.py, PR #880 by DerEifrige-f), the default widths of roads without a mapped width measured on aerials (WIDTH_TABLE: regions, town one-way streets, no parking on top of a mapped lane count), narrow winding rural roads (WINDING_*), 2026-11-12; 15: the road centrelines rounded and curvature continuous by default (roadsmooth.py), 2026-11-12; 14: the regional gravel rule needs REGIONAL_MIN_ROADS mapped roads, not one road's segments (GitHub #834), and a residential / unclassified street with built-up land beside it stays paved (REGIONAL_BESIDE_SHARE, GitHub #824); flagstone / tiles paving cobble (PR #971); 13: a grade separation's bridge spans a skew crossing (the bridged road's half width over the tangent added: a track at 45 deg under the A4 at Glaireuse cut a trench through its carriageway past a square deck, GitHub #1020), its fractions and every bridge/tunnel reach's in sub_polyline's metric (gradesep._metric, _ring_kx: on a 15 km road the deck stood 8.7 m off its crossing); 12: a long road's copy far from its home takes the grade separations its neighbour cells found too (_home_far: the A4 at Glaireuse, GitHub #1020); 11: an underpass in a cutting the DEM shows (gradesep._underpasses: a longer road tunnel with the ground over it under TUNNEL_OPEN_COVER, SEP_M under the line over it either side: Highway 3 at Hameenlinna, GitHub #1009) bridged by the roads over it; 10: a short ground gap between a tunnel's portal and a bridge of the same road made bridge (_portal_decks: CA-1's northbound Tom Lantos bore, a 22 % drop onto its bridge); 9: underpasses: a tunnel's portal kept where its own approach road joins it (_tunnel_reach, the I-280 underpass at Millbrae), a road's home cell takes the grade separations every cell it crosses found for it (_gradesep_elsewhere: CA-1's bridge over Wilder Tunnel); 8: bridge parts retain mapped local level transitions (PR #873), a segment's tunnel ranges joined only over a gap inside one source way (PR #927, was: any gap under 30 m); 7: PR #843 (restored highway shoulders, regional merge marking profiles: Spec.state); 6: busways (PR #836) and walkway spans (PR #842) in the cells; 5: PR #505's Spec.france (French road scenery flag); 4: pass roads with a mapped or default two-lane count stay mountain roads (the Stelvio); 3: PR #471 lane counts (validated highway counts, two-lane highway default) and #686 (Swedish dual carriageways, 2.75 m lanes); 2: OSM's own surface first, "unpaved" on car roads gravel, regional gravel for untagged minor roads
+FACTS_FORMAT = 29     # 29: a mapped width (Overture's width rule, OpenStreetMap's width) wider than WIDTH_PLATFORM_X x the road's lanes and a shoulder each side is a right-of-way, not the carriageway: left out by every reader of a mapped width (width_rejected, its lanes the most any lane data gives the road, read from its home copy; MA Route 2's 100 ft on a two-lane trunk, GitHub #901), 2026-11-17; 28: a long feature's level ranges from its home copy laid on this copy's own extent (home_ranges: the copies of a segment are cut to other lengths per cell; the Main-Weser-Bahn's bridge in Treysa lay 100 m off in one; PR #1399), 2026-11-16; 27: a motorway link mapped with 3 or more lanes, with no width or turn:lanes, that its diverge gives 2 or more fewer lanes takes what it gives (_lane_overrides, tapers::ramp_lane_rule; rampoverrides' I-65 Exit 76 correction by way id deleted: the road revamp's R1, 2026-11-16); 26: a cycleway with sidewalk=both / left / right is a street closed to cars, a road with its sidewalks (STYLE "cycleway", the user's London report 2026-11-12), 2026-11-12; 25: a town street of a mapped lane count between buildings takes its sidewalks out to them and, a two-lane primary, its parking lanes (roads._laned_walled; Eastern Avenue at Fells Point, the user's reports 18 and 19), 2026-11-12; 23: deterministic maths (GitHub #1169: the same facts on Windows, Linux and every glibc / CPU), 2026-11-12; 22: the roads layer's max_height_m rule (vehicle height limits) and the rail parts of a long segment where the map puts them (pmtiles anchors, railways MIN_PART_M: short rail bridges kept), Robitnik's PR #1193; 21: a motorway's or trunk road's built-up land read 90 m out (URBAN_HIGHWAY_BESIDE_M, PR #1117: its urban flag, widths); 20: a road's measured width and wall clearance from its own copy of the road in each cell, not whichever cell's copy the process measured first (roadwidth._memo_key), 2026-11-12; 19: a road joined at a bridge's end node is not a crossing under it on any system (earthfast levelrules END_EPS_M: the bridge's reach hung on the last bit of the C library's hypot, other level ranges on Ubuntu 22.04 / Windows than on a newer glibc at Vienna's S1 Rautenweg), 2026-11-12; 18: a town street's carriageway kept clear of the walls along it where the map gives no width (roads._wall_capped, roadwidth.clearance_row: Campulung, Setagaya, Trastevere; GitHub #1184, #543), 2026-11-12; 17: a junction standing over a tunnel the DEM shows open is an underpass: its arms' crossings by the node count (gradesep.JOINED_ENDS, Vienna's S1 under Rautenweg, GitHub #1083), 2026-11-12; 16: a merged highway's ways of other lane counts as lane sections of their own (lanesections.py, PR #880 by DerEifrige-f), the default widths of roads without a mapped width measured on aerials (WIDTH_TABLE: regions, town one-way streets, no parking on top of a mapped lane count), narrow winding rural roads (WINDING_*), 2026-11-12; 15: the road centrelines rounded and curvature continuous by default (roadsmooth.py), 2026-11-12; 14: the regional gravel rule needs REGIONAL_MIN_ROADS mapped roads, not one road's segments (GitHub #834), and a residential / unclassified street with built-up land beside it stays paved (REGIONAL_BESIDE_SHARE, GitHub #824); flagstone / tiles paving cobble (PR #971); 13: a grade separation's bridge spans a skew crossing (the bridged road's half width over the tangent added: a track at 45 deg under the A4 at Glaireuse cut a trench through its carriageway past a square deck, GitHub #1020), its fractions and every bridge/tunnel reach's in sub_polyline's metric (gradesep._metric, _ring_kx: on a 15 km road the deck stood 8.7 m off its crossing); 12: a long road's copy far from its home takes the grade separations its neighbour cells found too (_home_far: the A4 at Glaireuse, GitHub #1020); 11: an underpass in a cutting the DEM shows (gradesep._underpasses: a longer road tunnel with the ground over it under TUNNEL_OPEN_COVER, SEP_M under the line over it either side: Highway 3 at Hameenlinna, GitHub #1009) bridged by the roads over it; 10: a short ground gap between a tunnel's portal and a bridge of the same road made bridge (_portal_decks: CA-1's northbound Tom Lantos bore, a 22 % drop onto its bridge); 9: underpasses: a tunnel's portal kept where its own approach road joins it (_tunnel_reach, the I-280 underpass at Millbrae), a road's home cell takes the grade separations every cell it crosses found for it (_gradesep_elsewhere: CA-1's bridge over Wilder Tunnel); 8: bridge parts retain mapped local level transitions (PR #873), a segment's tunnel ranges joined only over a gap inside one source way (PR #927, was: any gap under 30 m); 7: PR #843 (restored highway shoulders, regional merge marking profiles: Spec.state); 6: busways (PR #836) and walkway spans (PR #842) in the cells; 5: PR #505's Spec.france (French road scenery flag); 4: pass roads with a mapped or default two-lane count stay mountain roads (the Stelvio); 3: PR #471 lane counts (validated highway counts, two-lane highway default) and #686 (Swedish dual carriageways, 2.75 m lanes); 2: OSM's own surface first, "unpaved" on car roads gravel, regional gravel for untagged minor roads
 
 
 def _facts_baked(feats, kind, extra):
@@ -2815,8 +2815,8 @@ def _ramp_candidates(f, idx, cls, lanes, link):
         return out
     import railtags
     n = len(f)
-    has_w, _ = _rule_cols(f.rules.get("width"), n)
-    osm_w = _osm_values(f, "width", None, None)
+    has_w, _ = _rule_cols(width_table(f), n)
+    osm_w = _osm_widths(f, None, None)
     parts = f.attrs.get(railtags.LANE_PARTS)
     turn = [f.attrs.get("osm_" + k) for k in _TURN_LANES]
     for k in np.flatnonzero(sel).tolist():
@@ -3531,9 +3531,9 @@ def _road_specs(feats, urban_fn, left_hand, towns=None):
             country = europewalks.country_for(lon, lat)
             if country is None:
                 continue
-            width = _rule_value(rules.get("width"), i)
+            width = mapped_rule_width(feats, i)
             if width is None or not 1.0 <= float(width) <= 40.0:
-                width = _osm(feats, "width", i, *OSM_WIDTH_M)
+                width = mapped_osm_width(feats, i, *OSM_WIDTH_M)
             if width is None and i in surveyed:     # (Germany's surveyed paved width stands as a mapped one)
                 width = spec.width
             # France's rural experiment already has its own narrower widths.
@@ -3682,6 +3682,173 @@ def _road_rules():
     return got
 
 
+WIDTH_PLATFORM_X = 1.6      # the road revamp plan's WIDTH repair (section 2.2): a mapped width wider than this times
+                            # the lanes' width (a two-way road two lanes at least) and a SHOULDER_M each side is a
+                            # right-of-way / platform, not the carriageway: MA Route 2, a two-lane rural trunk mapped
+                            # 30.5 m and 18.3 m (100 ft / 60 ft rights-of-way) where the asphalt is about 10 m (GitHub
+                            # #901). (The lower side of the plan's rule is left out: a mapped width under 0.7 x the
+                            # lanes is as often a lane count too high, Avenue de Verdun at Porte d'Italie mapped 2 lanes
+                            # and 3.6 m is one lane on the aerial.)
+
+
+def _lane_evidence(feats):
+    """(n,) int64: the most lanes the map's lane data gives each feature anywhere along it (-1: none): OSM's lanes of its
+    way, the lane tags' total and count (lane_count, generated_counts), lanes:forward + backward + both_ways, and each of
+    its lane parts' (LANE_PARTS: a merged highway's sections, 2 here and 4 there, give 4); a lane section split off its
+    road (lanesections.split) the road's own before the split (lanesections.LANE_MAX: the split sets each section's
+    count and clears its parts). Remembered on feats."""
+    got = feats.__dict__.get("_lane_evidence")
+    if got is not None:
+        return got
+    import railtags
+    import roadlanes
+    n = len(feats)
+    a = feats.attrs
+    ev = np.full(n, -1, np.int64)
+
+    def take(i, v):
+        c = roadlanes.count(v)
+        if c is not None and c > ev[i]:
+            ev[i] = c
+    import lanesections
+    cols = [a.get(k) for k in ("osm_lanes", railtags.lane_attr("lanes"), "lane_count", lanesections.LANE_MAX)]
+    dirs = [a.get(railtags.lane_attr(k)) for k in ("lanes:forward", "lanes:backward", "lanes:both_ways")]
+    gen = roadlanes.generated_counts(feats)
+    parts = a.get(railtags.LANE_PARTS)
+    for i in range(n):
+        for c in cols:
+            if c is not None:
+                take(i, c[i])
+        if gen[i] is not None:
+            take(i, gen[i])
+        tot = [roadlanes.count(d[i], 0) if d is not None else None for d in dirs]
+        if any(t for t in tot):
+            take(i, sum(t or 0 for t in tot))
+        ps = parts[i] if parts is not None else None
+        if isinstance(ps, (list, tuple)):
+            for p in ps:
+                tags = p[3] if isinstance(p, (list, tuple)) and len(p) == 4 and isinstance(p[3], dict) else None
+                if tags:
+                    take(i, tags.get("lanes"))
+                    t = [roadlanes.count(tags.get(k), 0) for k in ("lanes:forward", "lanes:backward",
+                                                                   "lanes:both_ways")]
+                    if any(x for x in t):
+                        take(i, sum(x or 0 for x in t))
+    feats.__dict__["_lane_evidence"] = ev
+    return ev
+
+
+def width_rejected(feats):
+    """(rule rows (len(rules["width"].feature),) bool, OSM (n,) bool): the mapped widths of the layer that are no
+    carriageway but a right-of-way / platform (earthfast RoadRules.width_rejects: wider than WIDTH_PLATFORM_X x the
+    lanes' width, two lanes at least on a two-way road, and a SHOULDER_M each side). The lanes: the most any of the
+    map's lane data gives the road anywhere along it (_lane_evidence: a merged highway's widest section keeps its
+    width), read from its home cell's copy where that is at hand (home_copy: every copy of a segment round its home
+    decides alike, whichever lane tags its own cell joined), else its own; none on a motorway / trunk 2, on a link 1 / 2,
+    on any other road no test (a wide street without a lanes tag keeps its width). Only a width wider than the fewest
+    lanes allow asks for the home copy. Never in place: the readers of a mapped width ask width_table / mapped_osm_width.
+    Remembered on feats. MA Route 2's 30.5 m and 18.3 m (100 ft / 60 ft rights-of-way) on a two-lane trunk, GitHub
+    #901."""
+    got = feats.__dict__.get("_width_rejected")
+    if got is not None:
+        return got
+    n = len(feats)
+    wt = feats.rules.get("width")
+    nw = len(wt.feature) if wt is not None else 0
+    out = (np.zeros(nw, bool), np.zeros(n, bool))
+    ow = feats.attrs.get("osm_width")
+    if not n or (not nw and ow is None):
+        feats.__dict__["_width_rejected"] = out
+        return out
+    import fast
+    import roadlanes
+    fast.require(376, "RoadRules.width_rejects")
+    pos = {c: k for k, c in enumerate(STYLE)}
+    a = feats.attrs
+    cls_s = [str(v) for v in a["class"].tolist()] if "class" in a else ["unknown"] * n
+    sub = a.get("subtype")
+    cls = np.fromiter((pos.get(c, -1) if sub is None or str(s) == "road" else -1
+                       for c, s in zip(cls_s, sub.tolist() if sub is not None else cls_s)), np.int32, n)
+    if not (cls >= 0).any():
+        feats.__dict__["_width_rejected"] = out
+        return out
+    oneway, _ = _rule_cols(feats.rules.get("oneway"), n)
+    link = np.asarray(roadlanes.links(feats), bool)
+    rr = _road_rules()
+    srcs = []                   # (feature per value, values)
+    if nw:
+        wv = np.asarray(wt.value)
+        wv = (wv.astype(np.float64) if wv.dtype.kind in "fiub" else
+              np.array([float(x) for x in wv.tolist()], np.float64))
+        srcs.append((np.ascontiguousarray(wt.feature, np.int64), np.ascontiguousarray(wv)))
+    if ow is not None:
+        srcs.append((np.arange(n, dtype=np.int64), np.ascontiguousarray(_osm_values(feats, "width", None, None))))
+    # (a width the fewest lanes allow is kept whatever the lanes: only the rest ask for lane evidence)
+    one = np.ones(n, np.int64)
+    maybe = np.zeros(n, bool)
+    for f_, v_ in srcs:
+        hit = np.asarray(rr.width_rejects(cls, oneway, link, one, f_, v_, WIDTH_PLATFORM_X), bool)
+        maybe[f_[hit]] = True
+    if not maybe.any():
+        feats.__dict__["_width_rejected"] = out
+        return out
+    lanes = np.full(n, -1, np.int64)
+    own = _lane_evidence(feats)
+    for i in np.flatnonzero(maybe).tolist():
+        h = home_copy(feats, i)
+        lanes[i] = int(_lane_evidence(h[0])[h[1]]) if h is not None else int(own[i])
+    res = []
+    for f_, v_ in srcs:
+        bad = np.asarray(rr.width_rejects(cls, oneway, link, lanes, f_, v_, WIDTH_PLATFORM_X), bool)
+        res.append(bad & maybe[f_])
+    k = 0
+    rule_bad = res[k] if nw else out[0]
+    k += 1 if nw else 0
+    osm_bad = res[k] if ow is not None else out[1]
+    out = (rule_bad, osm_bad)
+    feats.__dict__["_width_rejected"] = out
+    return out
+
+
+def width_table(feats):
+    """The layer's width rule table without the rows width_rejected takes out (the table itself where none).
+    Remembered on feats."""
+    got = feats.__dict__.get("_width_table")
+    if got is not None:
+        return got
+    wt = feats.rules.get("width")
+    if wt is not None and len(wt.feature):
+        bad = width_rejected(feats)[0]
+        if bad.any():
+            import mapgeom
+            keep = ~bad
+            wt = mapgeom.RuleTable(np.asarray(wt.feature)[keep], np.asarray(wt.value)[keep],
+                                   np.asarray(wt.start)[keep], np.asarray(wt.end)[keep])
+    feats.__dict__["_width_table"] = wt
+    return wt
+
+
+def mapped_rule_width(feats, i):
+    """_rule_value of the width rule of feature i, width_rejected's rows left out."""
+    return _rule_value(width_table(feats), i)
+
+
+def mapped_osm_width(feats, i, lo=None, hi=None):
+    """_osm(feats, "width", i, lo, hi), None where width_rejected took it out."""
+    if feats.attrs.get("osm_width") is not None and bool(width_rejected(feats)[1][i]):
+        return None
+    return _osm(feats, "width", i, lo, hi)
+
+
+def _osm_widths(feats, lo, hi):
+    """_osm_values(feats, "width", lo, hi) with width_rejected's taken out (NaN)."""
+    v = _osm_values(feats, "width", lo, hi)
+    if feats.attrs.get("osm_width") is not None and len(v):
+        v = v.copy()
+        v[width_rejected(feats)[1][:len(v)]] = np.nan
+    return v
+
+
 def _spec_prm():
     """The spec kernels' thresholds, read at each call (tests change them)."""
     return {"MIN_PART": MIN_PART, "URBAN_SAMPLE_M": URBAN_SAMPLE_M, "URBAN_SHARE": URBAN_SHARE,
@@ -3801,7 +3968,7 @@ def _spec_inputs(feats):
     sub = a.get("subtype")
     road = np.ones(n, bool) if sub is None else np.fromiter((str(v) == "road" for v in sub.tolist()), bool, n)
     elig = road & (cls >= 0) & ~np.asarray(unbuilt_mask(feats), bool)
-    has_w, wv = _rule_cols(rules.get("width"), n)
+    has_w, wv = _rule_cols(width_table(feats), n)
     has_ow, owv = _rule_cols(rules.get("oneway"), n)
     has_k, kv = _rule_cols(rules.get("max_speed_kmh"), n)
     osm_lanes = _osm_values(feats, "lanes", *OSM_LANES)
@@ -3907,7 +4074,7 @@ def _spec_inputs(feats):
             maj = t.majors(n)
             for j in np.flatnonzero(se & (maj >= 0)).tolist():
                 aisle[j] = t.value[maj[j]] in ("parking_aisle",)
-    cols = {"cls": cls, "elig": elig, "has_w": has_w, "wv": wv, "osm_w": _osm_values(feats, "width", *OSM_WIDTH_M),
+    cols = {"cls": cls, "elig": elig, "has_w": has_w, "wv": wv, "osm_w": _osm_widths(feats, *OSM_WIDTH_M),
             "osm_lanes": osm_lanes, "osm_ms": _osm_values(feats, "maxspeed", 5.0, 200.0), "has_ow": has_ow,
             "owv": owv, "has_k": has_k, "kv": kv, "ncon": ncon, "lens": np.asarray(_lengths_all(feats), np.float64),
             "over": over, "gen": gen, "ring": ring, "radius": radius, "link": np.asarray(roadlanes.links(feats), bool),
@@ -4089,7 +4256,7 @@ def entrance_flares(feats, specs, tapers=None):
         ends = [k for k in dict.fromkeys(keys[i]) if k in joins]    # (a loop's two ends are one joint)
         if not ends:
             continue
-        if _rule_value(rules.get("width"), i) is not None or _osm(feats, "width", i, *OSM_WIDTH_M) is not None:
+        if mapped_rule_width(feats, i) is not None or mapped_osm_width(feats, i, *OSM_WIDTH_M) is not None:
             continue                            # (a mapped width stands)
         if aisle_keys is None:
             aisle_keys = set()
@@ -4235,14 +4402,14 @@ def _measured_widths(feats, specs, widths):
             continue
         if sp is None or sp.kind not in BUILT or sp.cls not in SIDEWALK_CLASSES or sp.cls in MEASURE_SKIP:
             continue
-        if _rule_value(rules.get("width"), j) is not None or not sp.parking:
+        if mapped_rule_width(feats, j) is not None or not sp.parking:
             continue
         if sp.median:       # one carriageway of a divided road: the width between the buildings is both of them
             continue        # and the median (each took all of it, one wide road over Boston Street's median)
         if is_ring(feats, j):
             continue        # (a roundabout: _rings' circulatory width; the buildings stand round the whole circle)
         import germanroads
-        if _osm(feats, "width", j, *OSM_WIDTH_M) is not None:
+        if mapped_osm_width(feats, j, *OSM_WIDTH_M) is not None:
             continue        # (OpenStreetMap's own width)
         if sp.lanes and not germanroads.gave_lanes(feats, j, sp):
             if sp.street is None and _laned_measured(sp):
@@ -4364,7 +4531,7 @@ def _wall_capped(feats, specs, widths):
             continue
         if sp.cls not in CAP_CLASSES and not (sp.cls == "service" and _rule_value(rules.get("subclass"), j) == "alley"):
             continue
-        if _rule_value(rules.get("width"), j) is not None or _osm(feats, "width", j, *OSM_WIDTH_M) is not None:
+        if mapped_rule_width(feats, j) is not None or mapped_osm_width(feats, j, *OSM_WIDTH_M) is not None:
             continue            # (a mapped width stands)
         if is_ring(feats, j):
             continue            # (a roundabout's ring: the houses stand round the whole circle)

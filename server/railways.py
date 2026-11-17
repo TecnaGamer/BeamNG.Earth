@@ -1349,7 +1349,13 @@ def profile(rails, ground, underpasses=()):
                 zb[n] = _envelope(s, np.maximum(zb[n], reach))
             elif lifts:                         # a ground track follows its own bed: a distant deck carries the
                 lift = np.maximum(ltop - GRADE * (dl[a] + s), ltop - GRADE * (dl[b] + s[-1] - s))     # ramps to it
-                zb[n] = zb[n] + np.clip(lift, 0.0, SEED_LIFT_MAX_M)
+                # ... never over the decks' own heights run out at GRADE (or its own bed, where that is higher): a
+                # bridge's mapped end down a stream's bank read the bed there, in the channel, 11 m under the deck,
+                # and that 11 m rode on the bed's own level for 500 m either side (Findlay, OH: an embankment 8-11 m
+                # over a floodplain the line crosses at grade, GitHub #1384). Up a slope (#1051) the bed + lift stays
+                # under the deck's run-out, as before.
+                reach = np.maximum(top - GRADE * (d[a] + s), top - GRADE * (d[b] + s[-1] - s))
+                zb[n] = np.minimum(zb[n] + np.clip(lift, 0.0, SEED_LIFT_MAX_M), np.maximum(zb[n], reach))
     return list(zip(zb, zgs))
 
 

@@ -424,9 +424,9 @@ def adjust_specs(feats, specs):
         if got is None:
             continue
         width, lanes, surf, halved = got
-        mapped_w = roads._rule_value(rules.get("width"), i)
+        mapped_w = roads.mapped_rule_width(feats, i)
         if mapped_w is None:
-            mapped_w = roads._osm(feats, "width", i, *roads.OSM_WIDTH_M)
+            mapped_w = roads.mapped_osm_width(feats, i, *roads.OSM_WIDTH_M)
         new = sp
         if (lanes and sp.cls in LANE_CLASSES and not sp.link
                 and roads._osm(feats, "lanes", i, *roads.OSM_LANES) is None):

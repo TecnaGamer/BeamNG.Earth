@@ -26,9 +26,13 @@ import railtags
 import roadlanes
 
 ON = os.environ.get("BNE_LANE_SECTIONS", "on").lower() not in ("off", "0", "false")
-VERSION = 2                 # (mapdata.versions(): the derived caches are built again when it changes; 2: a link's
-                            # mouth on its bridge or tunnel stays on its joint, _structure_mouth)
+VERSION = 3                 # (mapdata.versions(): the derived caches are built again when it changes; 2: a link's
+                            # mouth on its bridge or tunnel stays on its joint, _structure_mouth; 3: every section
+                            # carries its road's most lanes, LANE_MAX)
 PROFILE = "lane_section_profile"
+LANE_MAX = "lane_evidence_max"  # attrs: the most lanes the map's lane data gave the road before it was split
+                                # (roads._lane_evidence of the unsplit layer): its mapped width is judged by them
+                                # (roads.width_rejected), not by the one section's count
 STEP_M = 4.0
 
 
@@ -351,6 +355,8 @@ def split(f, frame=None, context=None):
     old = np.array([r[1] for r in jobs], np.int64)
     attrs = {k: np.asarray(v)[old].copy() for k, v in f.attrs.items()}
     attrs[PROFILE] = np.full(len(jobs), None, object)
+    # (each section, and every road kept whole, with its road's most lanes before the split clears its lane parts)
+    attrs[LANE_MAX] = np.ascontiguousarray(roads._lane_evidence(f)[old], np.int64)
     # Object columns permit new tag strings longer than the dominant source's string.
     for key in railtags.LANE_COLUMNS:
         attrs[railtags.lane_attr(key)] = np.asarray(attrs.get(railtags.lane_attr(key), [None] * len(jobs)), object)
