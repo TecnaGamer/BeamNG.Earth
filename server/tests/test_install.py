@@ -248,6 +248,82 @@ class ModUpdateTimes(unittest.TestCase):
             with open(os.path.join(dest, "code.lua"), "rb") as f:
                 self.assertEqual(f.read(), b"new")
 
+    def test_sync_in_place_preserves_times_generated_and_prunes_stale(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            src, user = os.path.join(tmp, "src"), os.path.join(tmp, "user")
+            dest = os.path.join(user, "mods", "unpacked", install.MOD_NAME)
+            os.makedirs(src)
+            os.makedirs(dest)
+            # Unchanged file, changed file, new file
+            with open(os.path.join(src, "same.json"), "wb") as f:
+                f.write(b"{}")
+            with open(os.path.join(dest, "same.json"), "wb") as f:
+                f.write(b"{}")
+            with open(os.path.join(src, "mod.lua"), "wb") as f:
+                f.write(b"v2")
+            with open(os.path.join(dest, "mod.lua"), "wb") as f:
+                f.write(b"v1")
+            with open(os.path.join(src, "new.lua"), "wb") as f:
+                f.write(b"added")
+            # Stale file inside stale directory
+            stale_dir = os.path.join(dest, "obsolete", "nested")
+            os.makedirs(stale_dir)
+            with open(os.path.join(stale_dir, "old.txt"), "wb") as f:
+                f.write(b"stale")
+            # GENERATED file (only in dest, not in src)
+            gen_rel = install.GENERATED[0]
+            gen_path = os.path.join(dest, *gen_rel.split("/"))
+            os.makedirs(os.path.dirname(gen_path), exist_ok=True)
+            with open(gen_path, "wb") as f:
+                f.write(b"return true\n")
+
+            old_ns = (1_600_000_000_123_456_000, 1_600_000_000_456_789_000)
+            os.utime(os.path.join(dest, "same.json"), ns=old_ns)
+            os.utime(os.path.join(dest, "mod.lua"), ns=old_ns)
+            os.utime(gen_path, ns=old_ns)
+            for name in ("same.json", "mod.lua", "new.lua"):
+                os.utime(os.path.join(src, name), (1_600_000_050, 1_600_000_050))
+
+            with mock.patch.object(install, "MOD_SRC", src), contextlib.redirect_stdout(io.StringIO()), \
+                    mock.patch.object(install.modtextures, "plan", return_value={}):
+                self.assertEqual(install.install_mod(user, True, dry_run=False, quiet=True), "updated")
+
+            st_same = os.stat(os.path.join(dest, "same.json"))
+            self.assertEqual(st_same.st_mtime_ns, old_ns[1])
+            st_gen = os.stat(gen_path)
+            self.assertTrue(os.path.isfile(gen_path))
+            self.assertEqual((st_gen.st_atime_ns, st_gen.st_mtime_ns), old_ns)
+            with open(gen_path, "rb") as f:
+                self.assertEqual(f.read(), b"return true\n")
+
+            now = __import__("time").time()
+            self.assertGreater(os.stat(os.path.join(dest, "mod.lua")).st_mtime, now - 60)
+            with open(os.path.join(dest, "mod.lua"), "rb") as f:
+                self.assertEqual(f.read(), b"v2")
+            with open(os.path.join(dest, "new.lua"), "rb") as f:
+                self.assertEqual(f.read(), b"added")
+
+            self.assertFalse(os.path.exists(os.path.join(dest, "obsolete")))
+
+    def test_sync_tree_in_place_direct_preserves_atime_and_mtime_ns(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            src, dest = os.path.join(tmp, "src"), os.path.join(tmp, "dest")
+            os.makedirs(src)
+            os.makedirs(dest)
+            with open(os.path.join(src, "keep.txt"), "wb") as f:
+                f.write(b"identical")
+            with open(os.path.join(dest, "keep.txt"), "wb") as f:
+                f.write(b"identical")
+            with open(os.path.join(dest, "stale.txt"), "wb") as f:
+                f.write(b"remove me")
+            old_ns = (1_600_000_000_123_456_000, 1_600_000_000_456_789_000)
+            os.utime(os.path.join(dest, "keep.txt"), ns=old_ns)
+
+            install._sync_tree_in_place(src, dest)
+            st = os.stat(os.path.join(dest, "keep.txt"))
+            self.assertEqual((st.st_atime_ns, st.st_mtime_ns), old_ns)
+            self.assertFalse(os.path.exists(os.path.join(dest, "stale.txt")))
+
 
 if __name__ == "__main__":
     unittest.main()
