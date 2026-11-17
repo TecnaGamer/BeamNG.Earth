@@ -18,7 +18,7 @@ const NONE: u8 = 255;
 const HALF_WORLD: f64 = 20037508.342789244;      // Web Mercator's half extent (m)
 
 #[inline]
-fn mix(i: i64, j: i64, salt: u64) -> f64 {
+pub(crate) fn mix(i: i64, j: i64, salt: u64) -> f64 {
     let mut x = (i as u64).wrapping_mul(0x9E3779B97F4A7C15) ^ (j as u64).wrapping_add(salt).wrapping_mul(0xC2B2AE3D27D4EB4F);
     x ^= x >> 31;
     x = x.wrapping_mul(0xBF58476D1CE4E5B9);

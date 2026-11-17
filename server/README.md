@@ -12,6 +12,41 @@ the car too.
 
 ## Run
 
+### Optional dynamic cliffs
+
+Dynamic cliffs add rock faces to steep terrain and roadside cuts, with embedded
+outcrops and smaller rocks. Rock colors adapt to the local satellite imagery.
+Both categories are off by default and can be enabled independently:
+
+| Environment variable | Enables |
+| --- | --- |
+| `BNE_CLIFFS=1` | Natural cliffs and their associated rocks |
+| `BNE_CLIFF_ROAD_CUTS=1` | Road cuts and their associated rocks |
+
+Set the desired variables before installing and starting the launcher or server.
+After changing them, rerun installation and restart the server. When both are
+enabled, road cuts take priority where the categories overlap. Disabling both
+skips cliff generation and preparation of cliff textures. Cached results are
+kept separate by the enabled categories.
+
+The authored rock textures retain 4K detail. See the
+[texture source notes](../mod/texture_sources/levels/beamng_earth/art/shapes/beamngEarth/cliff/README.md)
+for download, installation and estimated texture-memory sizes. Optional ground
+detail and contact strips use stock assets from the player's own BeamNG
+installation, prepared before driving. If those assets are unavailable, the
+server startup reports that the decoration is unavailable; cliff faces still
+work. For a standalone installation, `install.py --game-dir` selects the game
+installation used for this preparation.
+
+Cliff rocks also use the installed game's compiled models, prepared in a private
+versioned cache before streaming. Their authored detail levels and collision
+shapes are preserved. Only material bindings change for satellite-based colors;
+the game does not need to recompile a Collada model for each color while driving.
+Missing or unsupported stock models skip the dependent rocks with a diagnostic.
+These models and their derived copies are never included in the mod download.
+
+### Server command
+
 ```sh
 python3 server/earthd.py                    # listens on 127.0.0.1:47613
 python3 server/earthd.py --port 47613 --user-dir ~/.local/share/BeamNG/BeamNG.drive/current \
@@ -190,6 +225,26 @@ first (the mod's cover and commit gating need them), then tiles of groups that a
 sent, then the rest, nearest first (in mesh mode there is no block class: the L-2 tiles around the
 player come first by distance). The imagery of the next 12 queued tiles is fetched ahead of their
 build.
+
+### Dynamic cliffs protocol additions
+
+Both cliff categories are off unless enabled at server startup: `BNE_CLIFFS=1`
+for natural cliffs, `BNE_CLIFF_ROAD_CUTS=1` for road cuts. The server's `hello`
+includes `cliffs: {natural: boolean, roadCuts: boolean}` so the mod only prepares
+materials and stock-rock decorations for enabled categories.
+
+A `far_retex` may also contain `replacement`, a complete `far_tile` message.
+This updates satellite-driven cliff vertex colors along with the imagery: the
+mod imports the replacement hidden, then swaps it into the existing tile while
+preserving visibility and ownership. Texture-only updates retain their existing
+behavior. Replacement shapes use new revision paths; pooled shapes carry a fresh
+`slotSerial` so a held old shape cannot be reused before release.
+
+The debug map sends `debug_map {id, layer, s, w, n, e}`. Its read-only provider
+returns `debug_map_result {id, layers, legend, features, note, enabled}` or
+`{id, error}` for invalid/busy requests. The `enabled` object uses `natural` and
+`road_cuts`. Providers use production material selectors and already-delivered
+placement records; they do not generate tiles or fetch external data.
 
 ## Wind turbine geotiles
 

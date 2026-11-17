@@ -1363,7 +1363,40 @@ def build_tile(frame, dem, tile, zoom, q=None, ref_zoom=None, with_sink=True, la
     return Built(pos, P, nrm, uv, planar, np.concatenate(tris), U.astype(np.float32), err, sink, depth, S, err_n)
 
 
-def write_built(path, built, fmt="cdae", material=MATERIAL, textured=False, tex_px=None):
+def _shape_geometry(built, material, uvs, uvs2, cliff_frame=None, cliff_surface=None, cliff_texture=None):
+    """Shared geometry for direct writes and cached shape restoration."""
+    from cliffsettings import SETTINGS
+    built.cliff_colors = False
+    if SETTINGS.natural and cliff_frame is not None:
+        import farcliffs
+        cliff = farcliffs.geometry(built, cliff_frame, uvs, uvs2, material,
+                                   surface=cliff_surface, terrain_texture=cliff_texture)
+        if cliff is not None:
+            built.cliff_colors = True
+            # Chart boundaries duplicate vertices. Respect the engine's 16-bit
+            # indices using upstream's multiple drawn objects, preserving PBR UVs.
+            if len(cliff["positions"]) > VERTS_MAX:
+                import fast
+                limit = VERTS_MAX // 3
+                batches = fast._ef.cliff_stream_parts(
+                    np.ascontiguousarray(cliff["positions"], float),
+                    np.ascontiguousarray(cliff["tris"], np.int64), limit, len(cliff["tris"]))
+                parts = []
+                for batch in batches:
+                    ids = np.asarray(batch, np.int64)
+                    used, remap = np.unique(cliff["tris"][ids], return_inverse=True)
+                    part = {name: cliff[name][used] for name in
+                            ("positions", "normals", "uvs", "uvs2", "tangent_uvs", "colors")}
+                    part.update(tris=remap.reshape(-1, 3), tri_materials=cliff["tri_materials"][ids])
+                    parts.append(part)
+                return dict(parts[0], material=cliff["material"], parts=parts[1:])
+            return cliff
+    return dict(positions=built.positions, tris=built.tris, normals=built.normals,
+                uvs=uvs, uvs2=uvs2, material=material, tangent_uvs=built.planar)
+
+
+def write_built(path, built, fmt="cdae", material=MATERIAL, textured=False, tex_px=None,
+                *, cliff_frame=None, cliff_surface=None, cliff_texture=None):
     """Write a built tile as .cdae (default) or .dae; returns the file size. textured: the tile
     has its own imagery texture (UV0 = footprint, UV1 = world-locked detail); otherwise UV0 is
     the shared palette coordinate and there is no UV1. tex_px: the texture has a border of
@@ -1374,21 +1407,22 @@ def write_built(path, built, fmt="cdae", material=MATERIAL, textured=False, tex_
         uvs = built.planar if tex_px is None else imagery.gutter_uv(built.planar, tex_px)
     uvs2 = built.detail_uvs if textured else None
     if fmt == "cdae":
-        return cdae.write(path, built.positions, built.tris, normals=built.normals, uvs=uvs, uvs2=uvs2,
-                          material=material, tangent_uvs=built.planar, close=False)    # (terrain: a heightfield)
+        geometry = _shape_geometry(built, material, uvs, uvs2, cliff_frame, cliff_surface, cliff_texture)
+        return cdae.write(path, **geometry, close=False)    # (terrain: a heightfield)
     dae.write_grid_dae(path, built.positions.ravel(), uvs.ravel(), built.tris.ravel(),
                        material=material, normals=built.normals.ravel(),
                        uvs2=None if uvs2 is None else uvs2.ravel())
     return os.path.getsize(path)
 
 
-def built_shape(built, material, tex_px=None, packed=None):
+def built_shape(built, material, tex_px=None, packed=None,
+                *, cliff_frame=None, cliff_surface=None, cliff_texture=None):
     """The .cdae bytes write_built writes for a textured tile (farrestore: a worker's kept shape, packed=False with a
     placeholder name, the session's name stamped in when it is put back)."""
     assert len(built.positions) <= VERTS_MAX
     uvs = built.planar if tex_px is None else imagery.gutter_uv(built.planar, tex_px)
-    return cdae.encode(built.positions, built.tris, normals=built.normals, uvs=uvs, uvs2=built.detail_uvs,
-                       material=material, tangent_uvs=built.planar, close=False, open_tris=None, packed=packed)
+    geometry = _shape_geometry(built, material, uvs, built.detail_uvs, cliff_frame, cliff_surface, cliff_texture)
+    return cdae.encode(**geometry, close=False, open_tris=None, packed=packed)
 
 
 def write_tile(path, frame, dem, tile, zoom, q=None, ref_zoom=None, fmt="cdae", cancelled=None, layout=V131):

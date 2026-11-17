@@ -105,7 +105,7 @@ class ModTexturesTest(unittest.TestCase):
     def test_install_makes_every_texture(self):
         """modtextures.build (install.py's step) makes every DDS of the manifest: its format, pow2 sides, whole mip
         chain; a second build keeps them all (the stamp); the bytes are the same with one thread."""
-        todo = modtextures.plan()
+        todo = modtextures.plan(env={"BNE_CLIFFS": "1", "BNE_CLIFF_ROAD_CUTS": "1"})
         self.assertGreater(len(todo), 140)
         with tempfile.TemporaryDirectory() as d:
             n, kept, _s = modtextures.build(d, todo)

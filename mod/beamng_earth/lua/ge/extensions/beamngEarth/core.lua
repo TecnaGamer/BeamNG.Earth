@@ -1254,6 +1254,9 @@ local function onMessage(msg)
   elseif t == 'runtime_profiler' then
     require('beamngEarth/profiler').receive(msg.profile)
   elseif t == 'hello' then
+    require('beamngEarth/clifftalus').configure(msg.cliffs)
+    require('beamngEarth/cliffmaterials').configure(msg.cliffs)
+    require('beamngEarth/cliffcontact').configure(msg.cliffs)
     if msg.streamLease == 1 and type(msg.leaseId) == 'string' then
       net.serverHello(msg.sessionId, msg.leaseId, msg)
     else
@@ -1659,6 +1662,8 @@ local function onMessage(msg)
     if type(msg.result) == 'table' and msg.result.id then M._areaResults = { [msg.result.id] = msg.result } end
   elseif t == 'area_plan_result' then
     if msg.id then M._areaPlans = { [msg.id] = msg } end
+  elseif t == 'debug_map_result' then
+    if msg.id then M._debugMapResults = { [msg.id] = msg } end
   elseif t == 'cache_map_result' then
     -- the map's cache view: a grid of levels for the asked box (EarthMap.vue polls takeCacheMap)
     if msg.id then M._cacheMapResults = { [msg.id] = msg } end
@@ -3309,6 +3314,7 @@ end
 M.APP_LAYOUT = 'beamngEarth'
 local function onClientPostStartMission(levelPath)
   if type(levelPath) ~= 'string' or not levelPath:find('/' .. LEVEL_ID .. '/', 1, true) then return end
+  require('beamngEarth/cliffcontact').onMissionStart()
   local gs = rawget(_G, 'core_gamestate')
   if gs and gs.setGameState then pcall(gs.setGameState, 'freeroam', M.APP_LAYOUT, 'freeroam') end
 end
@@ -3729,6 +3735,20 @@ end
 -- The world map's cache view (server covermap.py): what is cached in the zoom-z tiles x0..x1, y0..y1 (mode: summary,
 -- elevation, imagery, mapdata); the answer is cache_map_result. Only the newest answer is kept (M._cacheMapResults:
 -- a field, not a local: the main chunk is at Lua's 200-local limit).
+-- Regional placement debug requests share the existing companion connection.
+function M.requestDebugMap(id, layer, s, w, n, e)
+  if not net.isConnected() then return false end
+  M._debugMapResults = {}
+  net.send({ type = 'debug_map', id = id, layer = layer, s = s, w = w, n = n, e = e })
+  return true
+end
+function M.takeDebugMap(id)
+  local results = M._debugMapResults or {}
+  local result = results[id]
+  results[id] = nil
+  return result
+end
+
 function M.requestCacheMap(id, z, x0, y0, x1, y1, mode)
   if not net.isConnected() then return false end
   M._cacheMapResults = {}

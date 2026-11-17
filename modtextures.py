@@ -67,9 +67,17 @@ def _sha256_file(path):
     return h.hexdigest()
 
 
-def plan(sources=SOURCES, entries=None):
-    """{DDS path in the mod: dict(entry, path=its source file, key=its key)}. Raises TexturesError for a missing source."""
+def plan(sources=SOURCES, entries=None, *, env=None):
+    """Plan enabled textures, skipping opt-in sources before any file access.
+
+    An entry's optional requires_any lists startup flags; at least one must be
+    explicitly enabled. Shared maps therefore encode once for either category.
+    Missing enabled sources raise TexturesError. env defaults to this process.
+    """
     entries = manifest(os.path.join(sources, "textures.json")) if entries is None else entries
+    env = os.environ if env is None else env
+    entries = {rel: e for rel, e in entries.items() if not e.get("requires_any") or any(
+        env.get(flag, "off").strip().lower() in {"1", "on", "true"} for flag in e["requires_any"])}
     if not entries:
         return {}
     texdds = native().TEXDDS_ID

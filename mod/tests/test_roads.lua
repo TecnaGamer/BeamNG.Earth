@@ -967,4 +967,30 @@ do
   roads.COLLIDE_CHECK_S, roads.BEHIND_JUMP_M = check, jump
   getPlayerVehicle = nil
 end
+roads.clear()
+roads.setEnabled(true)
+local cliffTile = {chunks={}, cliff={shape='/t/cliff.cdae',pos={0,0,0}},
+  cliff2={shape='/t/cliff2.cdae',pos={0,0,0}},
+  cliffStrip1={shape='/t/cliff_strip.cdae',pos={0,0,0}}}
+require('beamngEarth/cliffcontact').ready = true -- private cache prepared at hello
+T.check(roads.onTile({anchorId=7,key='0_0',data=cliffTile,n=0},7), 'accept streamed cliff parts')
+T.check(not roads.cliffPiecesReady('0_0',7), 'rocks wait before cliff imports')
+gov.allow=nil
+for _=1,12 do roads.update(gov,7,{x=0,y=0,z=0}) end
+T.check(roads.cliffPiecesReady('0_0',7), 'rocks may load after all cliff pieces exist')
+local function cliffObjects()
+  local count=0
+  for _,o in pairs(S.objects) do
+    if o.fields and o.fields.shapeName and tostring(o.fields.shapeName):find('/t/cliff',1,true) then count=count+1 end
+  end
+  return count
+end
+T.check(cliffObjects()==3, 'both cliff faces and contact strip are imported')
+roads.onDrop({anchorId=7,key='0_0'})
+for _=1,12 do roads.update(gov,7,{x=0,y=0,z=0}) end
+T.check(not roads.cliffPiecesReady('0_0',7) and cliffObjects()==0, 'tile removal removes all cliff parts')
+require('beamngEarth/cliffcontact').ready = false
+roads.onTile({anchorId=7,key='0_0',data=cliffTile,n=0},7)
+for _=1,12 do roads.update(gov,7,{x=0,y=0,z=0}) end
+T.check(cliffObjects()==2 and roads.cliffPiecesReady('0_0',7), 'missing private stock skips contacts but keeps cliff faces')
 T.done('test_roads')

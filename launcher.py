@@ -484,6 +484,10 @@ def start_server(user_dir, extra, log_path, game_running=None, restart_times=())
             env[k] = v
     # ... and its "Restart world server" (server/srvrestart.py; RestartingServer), from what is applied now
     restart_env(user_dir, env, restart_times)
+    # Prepare with the actual child environment, including server-only flags,
+    # before its workers can stream. Cached maps also cover --keep-mod/restarts.
+    import cliffstock
+    cliffstock.prepare_enabled(game_install_dir, user_dir, env=env, diagnostic=lambda text: row("Cliffs", text))
     kw = {"cwd": ROOT, "env": env}
     if IS_WIN:
         kw["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP

@@ -89,6 +89,8 @@ def F(types, *flags):
 
 # message type -> {field: F(types, flags)}; "type" itself is implied.
 MOD_TO_SERVER = {
+    # Read-only cliff debug overlays; the provider uses the production selectors.
+    "debug_map": {"id": F(int), "layer": F(str), "s": F(NUM), "w": F(NUM), "n": F(NUM), "e": F(NUM)},
     # sessions: the session folders whose files the mod's objects still use (farfield.heldSessions; a
     # restarted server keeps an earlier run's folder named here, docs/ROADMAP.md "Robustness" 3)
     "hello": {"protocol": F(int), "format": F(int), "modVersion": F(str), "release": F(str, OPT),
@@ -267,6 +269,9 @@ TERRAIN = {"cx": F(NUM), "cy": F(NUM), "heightmap": F(str), "size": F(int), "squ
            "base": F(str, OPT), "baseSize": F(NUM, OPT),           # --near-visual detail: the block's photo
            "ter": F(str, OPT)}                                     # the block as a .ter (swapped in, no import)
 SERVER_TO_MOD = {
+    "debug_map_result": {"id": F(int), "layers": F(list, OPT), "legend": F(list, OPT),
+                         "features": F(list, OPT), "note": F(str, OPT), "enabled": F(dict, OPT),
+                         "error": F(str, OPT)},
     "server_list": {"servers": F(list, OPT), "error": F(str, OPT)},   # earthd.server_list (the list service)
     "share_info": {"code": F(str), "weight": F(NUM)},     # BeamMP sharing v2: our share code for the poses
     "share_out": {"to": F(str), "d": F(str)},             # ... a message for the plugin ("S") or a player
@@ -320,7 +325,7 @@ SERVER_TO_MOD = {
     "map_tiles_ready": {"tiles": F(list)},  # [z, x, y, ok, layer] each: written to <user>/temp/beamngEarth/maptiles
     "runtime_profiler_pong": {"probe": F(int)},
     "runtime_profiler": {"profile": F(dict)},
-    "hello": {"runtimeProfiler": F(int, OPT), "waterguard": F(int, OPT), "protocol": F(int), "format": F(int), "serverVersion": F(str), "appVersion": F(str), "sessionId": F(str),
+    "hello": {"cliffs": F(dict, OPT), "runtimeProfiler": F(int, OPT), "waterguard": F(int, OPT), "protocol": F(int), "format": F(int), "serverVersion": F(str), "appVersion": F(str), "sessionId": F(str),
               "privacyRegion": F(str), "telemetryConsent": F(int),     # the welcome page's telemetry defaults
               "streamLease": F(int, OPT), "leaseId": F(str, OPT),
               "memoryTier": F(str, OPT), "memoryNote": F(str, OPT),   # low-memory machines only (budget.TIER lean / emergency)
@@ -389,7 +394,8 @@ SERVER_TO_MOD = {
     "far_done": {"anchorId": F(int), "count": F(int)},
     # --colormatch / --deshadow: a shown (or held) tile's texture rendered again under a new name
     # (additive, protocol 4; exercised by RetexMessagesTest, a session whose colour-match regions turn ready)
-    "far_retex": {"anchorId": F(int), "key": F(str), "texture": F(str)},
+    "far_retex": {"anchorId": F(int), "key": F(str), "texture": F(str),
+                  "replacement": F(dict, OPT)},  # optional complete far_tile for satellite-tinted cliff geometry
     # real weather at the player (weather.py; additive, protocol 4)
     "weather": {"v": F(int), "t": F(int), "lat": F(NUM), "lon": F(NUM), "code": F(int), "isDay": F(bool),
                 "cover": F(dict), "baseM": F(NUM), "baseAglM": F(NUM), "rainMmH": F(NUM), "snowCmH": F(NUM),
@@ -502,7 +508,8 @@ SERVER_TO_MOD = {
 WEATHER_NESTED = {"cover": {"total", "low", "mid", "high"}, "wind": {"ms", "fromDeg", "gustMs"},
                   "aloft": {"ms", "fromDeg"}}
 # message types the plain session cannot produce (each has its own session test below)
-EXERCISED_ELSEWHERE = {"far_retex", "roads_tile", "roads_drop",   # roads: needs map data (roads tests)
+EXERCISED_ELSEWHERE = {"debug_map_result",  # test_cliff_debuglayers exercises success/error/busy replies
+                     "far_retex", "roads_tile", "roads_drop",   # roads: needs map data (roads tests)
                        "space_clouds",                               # the clouds from space: NASA GIBS (test_spaceclouds)
                        "tunnel_floor",                               # a tunnel at the spot: needs map data
                        "roads_skin", "roads_exact",                  # road geotiles (test_roadgeo)
@@ -1154,6 +1161,9 @@ class ServerMessagesTest(test_server.ServerHarness):
             self.assertEqual(m["shape"].rsplit("/", 1)[1], f"slot_{m['material'].rsplit('_', 1)[1]}.cdae")
             self.assertIs(m["detail"], True)
         if kind == "hello":
+            if "cliffs" in m:
+                self.assertEqual(set(m["cliffs"]), {"natural", "roadCuts"})
+                self.assertTrue(all(type(v) is bool for v in m["cliffs"].values()))
             self.assertIn(m["nearVisual"], ("mesh", "terrain"))
             self.assertEqual(m["format"], self.server.layout.format)
             self.assertIn(m["format"], modsim.CORE["FORMATS"])

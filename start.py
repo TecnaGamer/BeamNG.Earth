@@ -123,12 +123,17 @@ def run_restarting(cmd, user_dir, base_env, run=None, limiter=None):
     read again (server_env: the Experimental switches, the ground grid), at most srvrestart.MAX_RESTARTS in WINDOW_S
     (the server is told its restarts so far and refuses one past it). Any other exit code is returned."""
     import time
+    import cliffstock
+    from launcher import game_install_dir
     sr = _srvrestart()
     run = run or (lambda c, path, e: run_logged(c, path, e))
     limiter = limiter or sr.Limiter()
     first = True
     while True:
         env, ids = server_env(user_dir, base_env, limiter.times)
+        # Use the same lazy game lookup and private cache as the app launcher.
+        # Complete conversion before the child starts, also on --keep-mod/restart.
+        cliffstock.prepare_enabled(game_install_dir, user_dir, env=env, diagnostic=install.say)
         if not first and ids:
             install.say("  Experimental features on (the settings page): " + ", ".join(ids))
         first = False
