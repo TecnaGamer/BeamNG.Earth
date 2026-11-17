@@ -136,7 +136,6 @@ import mapdata as mapdatamod  # noqa: E402
 import dem as demmod  # noqa: E402
 import mapcells  # noqa: E402
 import pacer  # noqa: E402
-import peerwork as peerworkmod  # noqa: E402
 import deshadow as deshadowmod  # noqa: E402
 import farfield  # noqa: E402
 import farpvs as farpvsmod  # noqa: E402
@@ -642,6 +641,7 @@ FIRST_FANOUT_CPUS = 8       # threads the server's processes may run on (server_
 WARM_SPLIT = os.environ.get("BNE_WARM_SPLIT", "on") != "off"     # (Server.warm_roads; off: both lanes plan ahead)
 PLAN_ELSEWHERE_S = 120.0    # s a cell's plans are waited for from there before they are made here after all
 LANE_REQUEST, LANE_PREFETCH = 0, 1     # Server.block_pools: the blocks the mod asks for / the prefetch
+FAR_SPARE_THREADS = 32      # far threads beyond the far workers (Server.tile_pool; compute sharing v1's helper slots before)
 HM_BUSY_TILE_WORKERS = 1    # far tiles built at once while a physics block is building in the server process (an
                             # anchor's first, or every one with --block-process off; the block processes' blocks do
                             # not share its interpreter: far tiles one at a time behind them were most of a Steam
@@ -1193,9 +1193,6 @@ class Server:
         feather on the USGS tiles); cache: the download cache's cache.Cache (last use per file, the
         size cap, the page's 'cache' messages; None = no bookkeeping and no 'cache' message, Server()'s
         default); retex_rate: --retex-rate (live retextures per second, 0 = none)."""
-        if os.environ.get("BNGE_WORLD_BUNDLE") and not (grading and mapdata is not None):
-            from worldbundle import BundleError
-            raise BundleError("Pinned road plans require roads and grading enabled")
         self.sid = time.strftime("%Y%m%d-%H%M%S-") + secrets.token_hex(2)
         self.user_dir = user_dir           # the game's user folder (detail mode fills its terrain texture cache)
         self.cache_dir = cache_dir         # (here already: _scan_sessions moves old sessions into its trash)
@@ -1370,13 +1367,14 @@ class Server:
         self.picking = None          # the settings page's file window open (apppaths.pick): for which path
         revisitmod.CACHE_DIR = cache_dir
         self.refetched = 0              # far textures whose missing photo tiles were fetched here (make_tile)
-        # self.share_lock, self.group_helper = threading.Lock(), None    # (share_start: shared world building, commented out)
         try:                            # (BeamMP sharing v2: a session's mark left by an earlier run; share_hub sets it)
             os.remove(os.path.join(cache_dir, "share", "active"))
         except (OSError, TypeError):
             pass
-        self.tile_pool = ThreadPoolExecutor(tile_workers + (peerworkmod.MAX_SLOTS if hasattr(far_pool, "remote_slots")
-                                                            else 0), thread_name_prefix="far")
+        # (FAR_SPARE_THREADS beyond the far workers whenever there is a far pool, as when compute sharing's helper
+        # slots were added to it: the far pool's own queue orders what they submit)
+        self.tile_pool = ThreadPoolExecutor(tile_workers + (FAR_SPARE_THREADS if far_pool is not None else 0),
+                                            thread_name_prefix="far")
         # (the 3D map's big leap, the user 2026-11-07: "big leaps in world gen speed": every far worker while the map
         # is open, FAR_DRIVE of them while driving: tile_workers is the pool's whole size, main() sizes it)
         self.far_max = tile_workers
@@ -3857,9 +3855,6 @@ class Server:
     def grader_for(self, anchor):
         """The anchor's grading.Grader (--grading on), else None."""
         if not self.grading:
-            if os.environ.get("BNGE_WORLD_BUNDLE"):
-                from worldbundle import BundleError
-                raise BundleError("Pinned road plans require roads and grading enabled")
             return None
         with self.grader_lock:
             if anchor.grader is None:
@@ -3904,8 +3899,7 @@ class Server:
         20 s of a cold Fells Point visit's 30 s while the other processes waited for them (2026-11-13). It and the
         road tiles read the plans from the run's plan cache (plancache claim: they wait for the cell's planner). A
         cell no process is free for is planned by the block's process as before. BNE_FIRST_FANOUT=off: none."""
-        if not FIRST_FANOUT or not self.grading or os.environ.get("BNGE_WORLD_BUNDLE") \
-                or not os.environ.get(plancachemod.RUN_ENV):
+        if not FIRST_FANOUT or not self.grading or not os.environ.get(plancachemod.RUN_ENV):
             return 0
         bp = self.block_pools
         lanes = []                  # (pool, processes)
@@ -4425,9 +4419,6 @@ class Server:
         cached land cover and the photo. The graded block replaces it when it is built (Connection.refine_first:
         terrain_refresh). Not kept in hm (the graded one is the block of its key), nor in anchor.chunks. ground_at: the
         point its groundZ is for (the car's spot)."""
-        if os.environ.get("BNGE_WORLD_BUNDLE"):
-            from worldbundle import BundleError
-            raise BundleError("Ungraded provisional terrain is disabled for pinned road plans")
         t0 = time.perf_counter()
         # (the anchor's height quantum, its survey's DEM reads at the urgent priority as the block's own: queued behind
         # the teleport's other downloads, the survey (+-15 km of DEM z10, 0.1-0.6 s alone cold) was 3.6 s of a fresh
@@ -4487,9 +4478,6 @@ class Server:
 
     def _make_heightmap_here_(self, anchor, cx, cy, progress, t0, q, base=None, provisional=False, ground_at=(0.0, 0.0),
                               ground=False):
-        if provisional and os.environ.get("BNGE_WORLD_BUNDLE"):
-            from worldbundle import BundleError
-            raise BundleError("Ungraded provisional terrain is disabled for pinned road plans")
         keep = {}
         g = None if provisional else self.grader_for(anchor)
         c0 = time.thread_time()
@@ -6009,49 +5997,6 @@ class Server:
             return hub, True
         hub.send_mod = send
         return hub, False
-
-    # (shared world building v1, commented out 2026-10-27 (off since 2026-10-23); replaced by share_hub above)
-    # def share_start(self, port=None):
-    #     """Compute sharing in a BeamMP group: our GroupHelper listening (started once) on port (the BeamMP server's
-    #     setting, its plugin's SHARE_PORT; BNGE_SHARE_PORT on this machine wins; else peerwork.SHARE_PORT). -> {port,
-    #     code} (port None: not sharing)."""
-    #     if not hasattr(self.far_pool, "set_group"):
-    #         return {"port": None, "code": peerworkmod.code_id()}
-    #     self.far_pool.sharing = True        # every tile built is kept from now on (a player arriving gets ours)
-    #     with self.share_lock:
-    #         if self.group_helper is None:
-    #             self.group_helper = peerworkmod.GroupHelper(self.far_pool, self.anchor_id_for,
-    #                                                         os.path.join(self.cache_dir, "peer-out"))
-    #             self.group_helper.start(share_port(port))
-    #     return {"port": self.group_helper.port, "code": peerworkmod.code_id(), "weight": peerworkmod.share_weight()}
-
-    # def share_group(self, msg):
-    #     """The mod's "peers": {me, members: [{id, host, port, code}]}: the players on our anchor with our code."""
-    #     if not hasattr(self.far_pool, "set_group"):
-    #         return
-    #     code = peerworkmod.code_id()
-    #     members, weights = [], {}
-    #     for m in msg.get("members") or []:
-    #         try:
-    #             if m.get("code") == code and m.get("host") and 0 < int(m.get("port")) < 65536:
-    #                 members.append((str(m["id"]), str(m["host"]), int(m["port"])))
-    #                 w = float(m.get("weight") or 1.0)
-    #                 weights[str(m["id"])] = w if 0.1 <= w <= 1000 else 1.0
-    #         except (TypeError, ValueError, AttributeError):
-    #             continue
-    #     self.far_pool.set_group(str(msg.get("me")), members, weights)
-
-    # def anchor_id_for(self, lat, lon):
-    #     """Our anchor id at (lat, lon) when we have one there (its graders are made already), else the helper's."""
-    #     for a in list(self.anchors.values()):
-    #         if float(a.lat) == lat and float(a.lon) == lon:
-    #             return a.id
-    #     return peerworkmod._anchor_id(lat, lon)
-
-    def remote_slots(self):
-        """Far tiles compute sharing's helpers build at once (0 without helpers)."""
-        f = getattr(self.far_pool, "remote_slots", None)
-        return f() if f is not None else 0
 
     def far_ck(self, aid, key):
         """The server's key of far tile `key` shown under anchor aid: (GLOBAL_AID, key) for a global tile (the same
@@ -9001,7 +8946,7 @@ class Connection:
             import mpshare
             hub, new = self.s.share_hub(self.send)
             self.send({"type": "share_info", "code": mpshare.share_code(self.s.share_parts()),
-                       "weight": peerworkmod.share_weight()})
+                       "weight": mpshare.share_weight()})
             if new:
                 self.spawn(self.share_pump(hub))
         elif kind == "share_group":             # the plugin's bngeGroup: the players near us that share our code
@@ -9015,11 +8960,6 @@ class Connection:
             hub = getattr(self.s, "_share_hub", None)
             if hub is not None:
                 hub.on_data(msg.get("d"))
-        # (shared world building v1, commented out 2026-10-27: the mod sends neither any more)
-        # elif kind == "share":                   # a BeamMP session: serve our group (peerwork.GroupHelper)
-        #     self.send(dict(self.s.share_start(msg.get("port")), type="share"))
-        # elif kind == "peers":                   # the players on our anchor (the BeamMP plugin, through mpsession)
-        #     self.s.share_group(msg)
         elif kind == "prepare_terrain":
             self.spawn(self.prepare_terrain(msg))
         elif kind == "commit_anchor":
@@ -9615,7 +9555,7 @@ class Connection:
         self.status(f"Building terrain at {lat:.5f}, {lon:.5f}...")
         t0 = time.perf_counter()
         # a teleport's first block without its road plans, the graded one sent when built (make_provisional)
-        provisional = teleport and PROVISIONAL_FIRST and self.s.grading and not os.environ.get("BNGE_WORLD_BUNDLE")
+        provisional = teleport and PROVISIONAL_FIRST and self.s.grading
         if provisional:     # (the graded one's cells planned meanwhile, a process each: Server.plan_first)
             try:
                 self.s.plan_first(anchor, cx, cy)
@@ -11969,9 +11909,6 @@ class Connection:
             # (GIL), and three far workers made a block build 3-10x slower (landcover 1.4 s vs 0.1 s), too slow
             # to follow a car at 58 m/s (2026-10-12). The far tile finishing next refills the workers.
             workers = HM_BUSY_TILE_WORKERS if self.s.hm_here else self.s.tile_workers
-            # plus the helpers' slots (compute sharing): their tiles cost this process only the files (26 ms a
-            # tile); kept to the local workers, a Steam Deck sent 2 at a time to 12 idle helper workers (2026-10-22)
-            workers += self.s.remote_slots()
             # (graded tiles: at most GRADED_SHARE of the workers, the rest go on to the ungraded ones meanwhile)
             g_cap = max(1, int(workers * GRADED_SHARE)) if getattr(self.s, "grading", False) else workers
             # (only builds under way count: a tile the server has already, a bulk restore's, is sent in this pass; held
@@ -12067,10 +12004,6 @@ class Connection:
                 fg = getattr(self.s, "_far_geo_time", None)
                 if fg:          # (the far geotiles so far this session: n, s of queue + build by kind)
                     log.info("far geotiles: %s", {k: (v[0], round(v[1], 1)) for k, v in sorted(fg.items())})
-                if getattr(self.s.far_pool, "stats", None) is not None and self.batch[1] >= 50:   # (a full one)
-                    g = getattr(self.s.far_pool, "group", None)
-                    log.info("compute sharing: %s; group %s", self.s.far_pool.stats,
-                             g["ids"] if g else "none")
                 if self.s.imagery is not None:
                     log.info("imagery: %s", self.s.imagery.summary())
                     if self.s.imagery_worker or self.s.base_worker:
@@ -12199,16 +12132,6 @@ async def main_async(args, restart=None):
     """The server's run. restart: a list main() reads after it returns: True appended when it stopped for the settings
     page's "Restart world server" (srvrestart.py)."""
     log.info("startup: initializing data services")
-    if os.environ.get("BNGE_WORLD_BUNDLE") and (args.roads != "on" or args.grading != "on"):
-        from worldbundle import BundleError
-        raise BundleError("BNGE_WORLD_BUNDLE requires --roads on --grading on")
-    if os.environ.get("BNGE_WORLD_BUNDLE") and getattr(args, "peers", ""):
-        from worldbundle import BundleError
-        raise BundleError("Legacy --peers helpers do not negotiate the pinned road-plan identity")
-    if os.environ.get("BNGE_WORLD_BUNDLE"):
-        from worldbundle import validate_bundle
-        # Reject malformed/missing data before allocating services or starting cache maintenance.
-        validate_bundle(os.environ["BNGE_WORLD_BUNDLE"])
     fmt = args.far_format
     if fmt == "cdae":
         v = cdae.engine_version(args.user_dir)
@@ -12229,10 +12152,6 @@ async def main_async(args, restart=None):
                    if "on" in (args.surface, args.roads, args.sea, args.trees) else None)
         if mapdata is not None:
             mapdata.warm_manifests()    # (versions()' weekly builds pinned before the first builds are keyed on them)
-        if os.environ.get("BNGE_WORLD_BUNDLE"):
-            from worldbundle import PinnedPlanCache
-            PinnedPlanCache(os.environ["BNGE_WORLD_BUNDLE"],
-                            f"w{int(args.road_widths == 'on')}s{int(args.sea == 'on')}", mapdata.bundle_versions())
     except BaseException:
         try:
             if mapdata is not None:
@@ -12358,15 +12277,6 @@ async def main_async(args, restart=None):
         # (pools.ElasticPool; BNGE_FAR_ELASTIC=off: all of them for the session, as from 1.9.0 to 1.9.1)
         far_pool = (poolsmod.ElasticPool("far tile", far_base, far_n - far_base, **far_kw)
                     if FAR_ELASTIC and far_n > far_base else poolsmod.RespawningPool("far tile", far_n, **far_kw))
-    if far_pool is not None:
-        # compute sharing: far tiles to helpers (--peers) and, in a BeamMP group, split with the players on our anchor,
-        # built with the same settings as these workers (peerwork.py)
-        far_pool = peerworkmod.SharedFarPool(
-            far_pool, peerworkmod.parse_peers(args.peers),
-            {"roads": args.roads == "on", "grading": args.grading == "on" and args.roads == "on",
-             "road_widths": args.road_widths == "on" and args.roads == "on", "airports": args.airports == "on",
-             "sea": args.sea == "on", "roads_in_ground": roadsmod.ROADS_IN_GROUND}, None,
-            peerworkmod.ReplyCache(os.path.join(args.cache_dir, "peercache")))
     airports_db = None
     if args.airports == "on":       # before any worker process starts: they read this copy
         try:
@@ -12691,21 +12601,6 @@ async def main_async(args, restart=None):
         disk.close()                # the cache's last uses
 
 
-# (shared world building, commented out 2026-10-27 (off since 2026-10-23; the user: not coming back for a while))
-# def share_port(asked=None, env=None):
-#     """The port our BeamMP group service listens on: BNGE_SHARE_PORT on this machine, else the BeamMP server's (its
-#     plugin's SHARE_PORT, through the mod's "share"), else peerwork.SHARE_PORT; an unusable one is skipped."""
-#     env = os.environ.get("BNGE_SHARE_PORT") if env is None else env
-#     for p in (env, asked):
-#         try:
-#             p = int(p)
-#         except (TypeError, ValueError):
-#             continue
-#         if 1024 <= p <= 65535:
-#             return p
-#     return peerworkmod.SHARE_PORT
-
-
 def parse_cache_cap(text):
     """--cache-cap: GB >= 0 (0 = unlimited)."""
     try:
@@ -12777,7 +12672,7 @@ def prune_own_caches(cache_dir, started=None):
                            ("seacarve", 0, lambda n: n.endswith(".raw.npy")),  # (whole rasters, before 2026-11-05)
                            (os.path.join("dem", "decoded"), demmod.MIRROR_MB,
                             lambda n: n.endswith((".npy", ".f32z"))),
-                           ("peercache", peerworkmod.CACHE_BYTES / 1e6, None),
+                           ("peercache", 0, None),     # (compute sharing v1's kept replies: gone, 2026-11-16)
                            ("roadwidth", roadwidthmod.STORE_MB, lambda n: n.endswith(".npy"))):
         try:
             n, left = cachemod.prune_dir(os.path.join(cache_dir, sub), mb * 1e6, match=match)
@@ -12974,9 +12869,6 @@ def main():
     ap.add_argument("--cache-dir", default=saved_cache_dir() or os.path.join(home, ".cache/beamng-earth"),
                     help="download cache root (DEM tiles go to <cache-dir>/dem/; default: the folder chosen on the "
                          "settings page or with the app's --cache-dir, else .cache/beamng-earth in the home folder)")
-    ap.add_argument("--peers", default=os.environ.get("BNGE_PEERS", ""),
-                    help="compute sharing: helpers (HOST[:PORT] ...; peerwork.py serve on them) that build far tiles "
-                         "when this server's own workers are busy (default: BNGE_PEERS)")
     ap.add_argument("--max-ram-gb", type=float, default=None, metavar="GB",
                     help="the most memory the whole server may hold, in GB (0: Auto, a third of the RAM, 60 %% from 22 GB, 1.5 to 24 GB; "
                          "default: the settings page's Max RAM for BeamNG.Earth, else Auto; budget.py, memwatch.py)")

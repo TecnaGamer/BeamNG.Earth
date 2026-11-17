@@ -157,7 +157,6 @@ def pyinstaller(work, ico, onefile, ver=None, boot=None):
            "--add-data", f"{os.path.join(ROOT, 'VERSION')}{SEP}.",
            "--add-data", f"{os.path.join(ROOT, 'LICENSE')}{SEP}.",
            "--add-data", f"{os.path.join(ROOT, 'CREDITS.md')}{SEP}.",
-           "--add-data", f"{os.path.join(ROOT, 'docs', 'SHARED_WORLD.md')}{SEP}docs",
            "--add-data", f"{os.path.join(ROOT, 'docs', 'RELAUNCH_TROUBLESHOOTING.md')}{SEP}docs",
            "--add-data", f"{os.path.join(ROOT, 'docs', 'STABILITY_VALIDATION.md')}{SEP}docs",
            "--add-data", f"{os.path.join(server, 'bridges_us.npz')}{SEP}.",     # (bridgetypes.DB_PATH: beside the modules)
@@ -184,11 +183,12 @@ def pyinstaller(work, ico, onefile, ver=None, boot=None):
            "--add-data", f"{os.path.join(server, 'ky_interstate_medians.json')}{SEP}.",
            # threedmr.position_fix's offline table (probe/position_audit.json's own OSM-measured corrections)
            "--add-data", f"{os.path.join(server, 'threedmr_position_fixes.json')}{SEP}."]
-    # the sources' fingerprint (peerwork.code_id: compute-sharing helpers build only for the same code)
+    # every server source's fingerprint (blockcache._code_id: earthd's own copy of the block build is in no revisit
+    # closure)
     sys.path.insert(0, server)
-    import peerwork
+    import revisit
     with open(os.path.join(work, "CODE_ID"), "w", encoding="ascii") as f:
-        f.write(peerwork.source_id(server))
+        f.write(revisit.all_source_id(server))
     cmd += ["--add-data", f"{os.path.join(work, 'CODE_ID')}{SEP}."]
     # (the revisit cache's own fingerprint: only the modules its items are made with, revisit.source_id; an update of
     # the rest keeps every place's cache)

@@ -45,6 +45,6 @@ Upstream `VERSION` remains `1.7.3-beta`; no upstream release is announced by the
 
 See [startup and relaunch troubleshooting](RELAUNCH_TROUBLESHOOTING.md),
 [stability evidence and acceptance](STABILITY_VALIDATION.md),
-[shared road-plan operations](SHARED_WORLD.md), [foundation audit](MODERNIZATION.md), and
+[foundation audit](MODERNIZATION.md), and
 [foundation validation](MODERNIZATION_VALIDATION.md). Next acceptance priority is real client driving
 with pinned road plans and a larger measured region, then complete world-dependency manifests.

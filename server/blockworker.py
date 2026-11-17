@@ -61,9 +61,6 @@ _dem_t = threading.local()
 class _State:
     def __init__(self, cache_dir, offline, roads, grading, road_widths, surface, airports=False, sea=False,
                  gas_stations=False):
-        if os.environ.get("BNGE_WORLD_BUNDLE") and not (roads and grading):
-            from worldbundle import BundleError
-            raise BundleError("Pinned road plans require roads and grading enabled")
         self.cache_dir = cache_dir
         import revisit
         revisit.CACHE_DIR = cache_dir
@@ -3556,8 +3553,8 @@ def far_global_tile(z, x, y, zoom, ref_zoom, layout, tex):
 
 def _imagery(tex):
     """This process's imagery.Imagery for the server's chain settings (tex: chain, tone, leaf_on, season_mode): the
-    imagery tiles on disk alone (strict: a missing tile fails the render), or, for a compute-sharing helper
-    (tex["online"], peerwork.py), fetched as needed."""
+    imagery tiles on disk alone (strict: a missing tile fails the render), or, with tex["online"], fetched as
+    needed."""
     import imagery as imagerymod
     online = bool(tex.get("online"))
     fin = tuple(sorted((tex.get("fin") or {}).items()))

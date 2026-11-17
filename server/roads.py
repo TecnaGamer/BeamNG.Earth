@@ -7373,6 +7373,13 @@ CORNER_CONCRETE_M = 4.0  # m: a concrete street this close to a curb return fill
 AT_GRADE_M = 3.0        # m: a road crossing a deck within AT_GRADE_REACH_M of an abutment that cannot get this
 AT_GRADE_REACH_M = 12.0     # high over it is a junction at grade (the intersection a ramp starts from)
 CHAIN_CELLS = 12        # map cells read at most to close one bridge chain
+# A chain longer than CHAIN_CELLS cells (a long viaduct, a causeway) is solved in windows that do not depend on who
+# asks (BridgeProfiles.CANON_LOAD): the map cells are grouped in CHAIN_BLOCK x CHAIN_BLOCK blocks on the cells' own
+# grid; a piece is solved with the chain's parts in its block's cells and CHAIN_MARGIN cells round them, and only the
+# pieces whose middle lies in the block are kept from that solve. Read from whichever cell, a piece gets the solve of
+# its own block (the cut capped by CHAIN_CELLS read the cells nearest the asking part: two askers, two decks)
+CHAIN_BLOCK = 2
+CHAIN_MARGIN = 1
 
 
 def _rail_drawn(feats, i):
@@ -7577,6 +7584,10 @@ def _covered_by_higher(xy, half, level, key, pool):
         dist = dnp.hypot(*(q - t[..., None] * d[None]).transpose(2, 0, 1)).min(1)
         out |= dist <= reach
     return out
+
+
+class _Capped(Exception):
+    """BridgeProfiles._resolve: the chain needs more than CHAIN_CELLS cells (CANON_LOAD: solved in windows)."""
 
 
 class BridgeProfiles:
@@ -7852,9 +7863,28 @@ class BridgeProfiles:
                     out.add((min(k, j), max(k, j)))
         return sorted(out)
 
-    def _resolve(self, start, pool, ground, loaded):
-        """The chain of part `start` (keys), loading the cell at each loose end until closed."""
+    # A chain's pool and ground made from its cells in their own order (CANON_LOAD): the same whichever of its parts is
+    # asked for first. _load keeps the first of two equally long copies of a part clipped by two cells and the first
+    # copy of a ground road, so loaded in the order the asking part's ends reached them, the far bridge tiles of one
+    # chain differed with which tile asked first: 5 of Fells Point's 108 far-bridge geotiles between two runs of the
+    # same code and inputs, decks up to 3.9 m apart (tools/portcheck, 2026-11-16). TunnelProfiles keeps its own
+    # canonical ground (its _resolve) and, for now, its order of parts: its solves are the plans' (PLANS_FORMAT)
+    CANON_LOAD = True
+
+    def _canon_load(self, pool, ground, loaded):
+        """pool and ground again from the cells in loaded, in their keys' order (CANON_LOAD)."""
+        pool.clear()
+        ground.clear()
+        for c in sorted(loaded):
+            z, x, y = (int(v) for v in c.split("/"))
+            self._load(mapcells.CellKey(z, x, y), pool, ground)
+
+    def _resolve(self, start, pool, ground, loaded, grow=True):
+        """The chain of part `start` (keys), loading the cell at each loose end until closed (grow False: of the
+        cells loaded alone). CANON_LOAD: _Capped when it needs more than CHAIN_CELLS cells (_chain_solve's windows)."""
         while True:
+            if self.CANON_LOAD:
+                self._canon_load(pool, ground, loaded)
             nk = _EndJoin()
             by_node = {}
             for k, (_, xy, *_) in pool.items():
@@ -7894,14 +7924,31 @@ class BridgeProfiles:
             # ends deg never saw (KeyError: a Chicago road tile on a Windows test PC, 2026-10-24), and the set's order
             # changes with each process's string hashing (which cells CHAIN_CELLS let in)
             ends = [p for k in sorted(comp) for p in (pool[k][1][0], pool[k][1][-1]) if deg[nk(p)] == 1]
+            if not grow:
+                return sorted(comp)
             grew = False
             for p in ends:
                 la, lo, _ = self.frame.enu_to_geodetic(np.array([p[0]]), np.array([p[1]]), 0.0)
                 key = mapcells.cell_of(float(la[0]), float(lo[0]))
+                if str(key) not in loaded and len(loaded) >= CHAIN_CELLS and self.CANON_LOAD:
+                    raise _Capped()
                 if str(key) not in loaded and len(loaded) < CHAIN_CELLS:
                     loaded.add(str(key))
                     self._load(key, pool, ground)
                     grew = True
+            if self.CANON_LOAD:
+                # (and every cell the chain's parts lie in: the cells read are then the chain's own, the same from
+                # whichever of its parts the solve started; their keys' order)
+                xy = np.concatenate([np.asarray(pool[k][1], np.float64)[:, :2] for k in sorted(comp)])
+                la, lo, _ = self.frame.enu_to_geodetic(xy[:, 0], xy[:, 1], 0.0)
+                cells = {str(c): c for c in mapcells.cells_of(np.asarray(la), np.asarray(lo))}
+                for c in sorted(cells):
+                    if c not in loaded:
+                        if len(loaded) >= CHAIN_CELLS:
+                            raise _Capped()
+                        loaded.add(c)
+                        self._load(cells[c], pool, ground)
+                        grew = True
             if not grew:
                 return sorted(comp)
 
@@ -8214,14 +8261,71 @@ class BridgeProfiles:
         solved_only: only those solved already; part_ids: return (fid, j) rather than fid."""
         out = []
         for key, feats, i in todo:
+            ring = None
+            if self.CANON_LOAD and feats is not None:
+                # A piece is drawn only when a copy of its road in a cell it lies in has it under this key. A road's
+                # copies have their own level ranges, so a piece that a neighbour cell's copy (the one a tile asked
+                # through) keys otherwise is in no solve that starts from its own cells; it was drawn only once some
+                # other tile's solve had read that neighbour, so whether a far-bridge tile counted it was the asking
+                # order's (tools/portcheck, Fells Point, 2026-11-16).
+                ring = dict(_keyed(self.keys_of, self.parts_of, feats, i))[key[1]]
+                if not self._held_in(key, ring):
+                    continue
             got = self._take(key)       # (with its note: whoever builds on a solve made short is short too)
             if got is None and not solved_only:
-                ring = dict(_keyed(self.keys_of, self.parts_of, feats, i))[key[1]]
-                got = self._chain_of(key, [(float(p[1]), float(p[0])) for p in (ring[0], ring[-1])])
+                if ring is None:
+                    ring = dict(_keyed(self.keys_of, self.parts_of, feats, i))[key[1]]
+                # (CANON_LOAD: from every cell the piece lies in, not its ends' alone)
+                pts = ring if self.CANON_LOAD else (ring[0], ring[-1])
+                got = self._chain_of(key, [(float(p[1]), float(p[0])) for p in pts])
             if got is not None:
                 spec, xy, z, lon = got
                 out.append((key if part_ids else self._part_id(key), spec, xy, z, lon))
         return out
+
+    @staticmethod
+    def _block_of_cell(c):
+        return (int(c.x) // CHAIN_BLOCK, int(c.y) // CHAIN_BLOCK)
+
+    def _block_of_ll(self, ll):
+        """The block (CHAIN_BLOCK cells on the cells' grid) of a (lat, lon)."""
+        return self._block_of_cell(mapcells.cell_of(float(ll[0]), float(ll[1])))
+
+    def _block_of_xy(self, xy):
+        """The block of a part's middle vertex (this frame's world)."""
+        xy = np.asarray(xy, np.float64)
+        m = xy[len(xy) // 2]
+        la, lo, _ = self.frame.enu_to_geodetic(np.array([m[0]]), np.array([m[1]]), 0.0)
+        return self._block_of_ll((float(la[0]), float(lo[0])))
+
+    @staticmethod
+    def _window(block):
+        """The cells (as str) of a block and CHAIN_MARGIN cells round it, in their keys' order."""
+        bx, by = block
+        z = mapcells.ZOOM
+        n = 1 << z
+        out = []
+        for x in range(bx * CHAIN_BLOCK - CHAIN_MARGIN, (bx + 1) * CHAIN_BLOCK + CHAIN_MARGIN):
+            for y in range(by * CHAIN_BLOCK - CHAIN_MARGIN, (by + 1) * CHAIN_BLOCK + CHAIN_MARGIN):
+                if 0 <= y < n:
+                    out.append(str(mapcells.CellKey(z, x % n, y)))
+        return sorted(set(out))
+
+    def _held_in(self, key, ring):
+        """Does a cell the piece's ring (lon, lat) lies in hold piece key (its copy of the road keys it so)?"""
+        cells = {str(c): c for c in mapcells.cells_of(np.asarray(ring, np.float64)[:, 1],
+                                                       np.asarray(ring, np.float64)[:, 0])}
+        memo = self.__dict__.setdefault("_held_keys", {})     # id(a cell's entries) -> (entries, their keys)
+        for name in sorted(cells):
+            parts = self._cell_entries(cells[name])[0]
+            hit = memo.get(id(parts))
+            if hit is None or hit[0] is not parts:
+                if len(memo) > 256:
+                    memo.clear()
+                hit = memo[id(parts)] = (parts, {k for k, _v in parts})
+            if key in hit[1]:
+                return True
+        return False
 
     def _chain_of(self, key, ends, adopt=True):
         """Solve the chain of part key (its ring's ends (lat, lon) say where to start loading): its parts into done.
@@ -8283,7 +8387,24 @@ class BridgeProfiles:
                 self._load(ck, pool, ground)
         if key not in pool:
             return None
-        comp = self._resolve(key, pool, ground, loaded)
+        block = None
+        try:
+            comp = self._resolve(key, pool, ground, loaded)
+        except _Capped:                 # (CANON_LOAD: a chain over CHAIN_CELLS cells: the asked piece's block's window)
+            # (the block of the piece's middle as its window's copy has it: from the asker's copy first, then its
+            # window's, until they agree; the same block whichever cell's copy asked)
+            block = self._block_of_ll(ends[len(ends) // 2])
+            for _ in range(3):
+                loaded = set(self._window(block))
+                self._canon_load(pool, ground, loaded)
+                if key not in pool:
+                    return None
+                b = self._block_of_xy(pool[key][1])
+                if b == block:
+                    break
+                if _ < 2:
+                    block = b       # (else this window's block: the piece itself solved, not kept)
+            comp = self._resolve(key, pool, ground, loaded, grow=False)
         comp_out.extend(comp)
         owner = self.owner_of(self, comp, pool) if (adopt and self.owner_of is not None) else None
         if owner is not None and owner is not self:
@@ -8310,9 +8431,12 @@ class BridgeProfiles:
             before = {k: self._take_locked(k) for k in comp}    # (the structure is made from them: taken)
             ck = min(comp) if comp else None
             fresh = ck is not None and ck not in self.trusses
-        # the first solve of a part is kept, and what goes with it, unless this one saw more of it
+        # the first solve of a part is kept, and what goes with it, unless this one saw more of it (a window's solve:
+        # only its block's pieces, each piece's from its own block's window)
+        mine = {k for k in comp if block is None or self._block_of_xy(pool[k][1]) == block}
         keep = {k: (pool[k][0], pool[k][1], z, pool[k][2]) for k, z in zip(comp, zs)
-                if before[k] is None or len(pool[k][1]) > len(before[k][1])}
+                if k in mine and (before[k] is None or len(pool[k][1]) > len(before[k][1]))}
+        own = None if key in mine else (pool[key][0], pool[key][1], zs[comp.index(key)], pool[key][2])
         pre = {k: self._precommit(k, v, ground) for k, v in keep.items()}
         beams = tpiers = None
         if fresh:
@@ -8338,6 +8462,8 @@ class BridgeProfiles:
             if fresh and ck not in self.trusses:
                 self.trusses[ck] = beams
                 self.piers[("truss", ck)] = tpiers
+            if own is not None:         # (the asked piece's middle in another block than its asker's: not kept)
+                return own
             return self._take_locked(key)
 
     def _ends_ll(self, xy):
@@ -8609,6 +8735,7 @@ class TunnelProfiles(BridgeProfiles):
     levels_of = staticmethod(lambda feats, i: [-1.0] * len(tunnel_parts(feats, i)))
     END_JOINS = False
     READS_LIMITS = False                        # (no clearance over a road to hold)
+    CANON_LOAD = False                          # (its ground made canonical in _resolve; its parts' order as before)
 
     def _structure(self, chain):                # (no truss over a tunnel)
         return [], []

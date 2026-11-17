@@ -239,6 +239,7 @@ fn weld_core(p: &Plans, abut: &[[bool; 2]], rank: &[i64], join_m: f64, max_step:
                 acc.1[k] |= big;
             }
         }
+        #[allow(clippy::iter_over_hash_type)] // hash order: each plan adds into its own vertices only (disjoint ranges)
         for (i, (acc, hit)) in add {
             let o = p.off[i];
             for k in 0..acc.len() {
@@ -886,6 +887,7 @@ fn pack_core(p: &Plans, inp: &PackIn, k: &PackConsts) -> Result<PackOut, String>
             let root = find(&mut parent, r);
             members.entry(root).or_default().push(r);
         }
+        #[allow(clippy::iter_over_hash_type)] // hash order: each road is in one group, written once
         for (root, ms) in &members {
             if ms.len() > 1 {
                 for &r in ms {

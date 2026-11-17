@@ -370,6 +370,18 @@ def source_id(here):
     return h.hexdigest()
 
 
+def all_source_id(here):
+    """A fingerprint of every server source (server/*.py; CRLF read as LF: a Windows checkout is the same code): a
+    packaged app's CODE_ID (tools/build_app.py), which blockcache's code id reads where no earthd.py is beside it.
+    (Compute sharing v1's peerwork.source_id until 2026-11-16: the same bytes.)"""
+    h = hashlib.sha256()
+    for name in sorted(os.listdir(here)):
+        if name.endswith(".py"):
+            with open(os.path.join(here, name), "rb") as f:
+                h.update(name.encode() + b"\0" + f.read().replace(b"\r\n", b"\n"))
+    return h.hexdigest()[:16]
+
+
 # BNE_* settings that change no item's content (the cache's own, how far ahead tiles are wanted): not build switches.
 # BNE_NETSTATS_PROC: earthd sets it (the telemetry's download counts, a folder under the player's own cache) before
 # its workers start, so every worker's keys held the cache folder's path and whether telemetry was on; the telemetry
@@ -646,7 +658,7 @@ def older(cache_dir, now=None):
     """The generations a stale scope may fall back to: those of the file that are not this one, were the server's own
     within STALE_DAYS and had the same build switches, newest first, STALE_GENS at most. [] with the switch off, the
     revisit cache off or a pinned world."""
-    if not (STALE_ON and ON) or os.environ.get("BNGE_WORLD_BUNDLE"):
+    if not (STALE_ON and ON):
         return []
     now = time.time() if now is None else now
     cur = generation()
@@ -954,7 +966,7 @@ def store(cache_dir, kind, k, blobs, extra=None, where=None, code=None, until=No
     the place it stands, for the map's cache view (a sidecar line; code: its code value there, format_marker's for a
     format-keyed item, else code_key); until (unix s): kept only until then (Build.kept_until: built on an answer that
     expires), load finds none after it. Never raises; False when not kept."""
-    if not ON or kind in SKIP or os.environ.get("BNGE_WORLD_BUNDLE"):
+    if not ON or kind in SKIP:
         return False
     if until is not None:
         if until <= time.time():
@@ -1016,7 +1028,7 @@ def load(cache_dir, kind, k):
 
 
 def _load(cache_dir, kind, k):
-    if not ON or kind in SKIP or os.environ.get("BNGE_WORLD_BUNDLE"):
+    if not ON or kind in SKIP:
         return None
     path = _path(cache_dir, kind, k)
     try:
@@ -1063,7 +1075,7 @@ def locate(cache_dir, kind, k):
 
 
 def _locate(cache_dir, kind, k):
-    if not ON or kind in SKIP or os.environ.get("BNGE_WORLD_BUNDLE"):
+    if not ON or kind in SKIP:
         return None
     try:
         loc = revisitpack.store_for(cache_dir).locate(kind, k)

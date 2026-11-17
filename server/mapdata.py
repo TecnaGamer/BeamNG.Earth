@@ -690,28 +690,6 @@ class MapData:
                     log.debug("manifest of %s: %s: %s", getattr(src, "name", src), type(e).__name__, e)
         threading.Thread(target=run, daemon=True, name="manifests").start()
 
-    def bundle_versions(self):
-        """Offline source identity for prepared road plans, including cached but not yet opened shards.
-
-        Prefer an actively used release over a later disk update. Missing manifests stay unknown;
-        malformed manifests reject export/pinning instead of silently inventing a source version.
-        This does not alter normal lazy source refresh or claim a complete raw-input snapshot.
-        """
-        from worldbundle import BundleError, cached_source_build
-        versions = self.versions()
-        for name, attr in (("rails", "rail_tags"), ("lanes", "lane_tags")):
-            source = getattr(self, attr, None)
-            if source is None:
-                continue
-            built = versions[name]
-            if built is None and source.dir:
-                built = cached_source_build(os.path.join(source.dir, "manifest.json"))
-            if built is not None and (not isinstance(built, str) or not 0 < len(built) <= 256
-                                      or any(ord(c) < 32 for c in built)):
-                raise BundleError("Invalid active source build identity")
-            versions[name] = built
-        return versions
-
     def _pmt(self, layer):
         """Does this layer come from Overture's tiles (pmtiles.py; BNGE_MAP_SOURCE)?"""
         return getattr(self, "pmtiles", None) is not None and layer in pmtiles.LAYERS

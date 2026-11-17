@@ -242,7 +242,7 @@ pub fn dirsign_place<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, ll: 
         let (a, b) = (off[r] as usize, off[r + 1] as usize);
         let mut s = vec![0.0f64; b.saturating_sub(a)];
         for k in a + 1..b {
-            s[k - a] = s[k - a - 1] + ((pts[[k, 0]] - pts[[k - 1, 0]]).powi(2) + (pts[[k, 1]] - pts[[k - 1, 1]]).powi(2)).sqrt();
+            s[k - a] = s[k - a - 1] + ((pts[[k, 0]] - pts[[k - 1, 0]]).sq() + (pts[[k, 1]] - pts[[k - 1, 1]]).sq()).sqrt();
         }
         net.roads.push(Road { a, b, s, hw: meta[[r, 0]], dir: meta[[r, 1]] as i64, rank: meta[[r, 2]] as i64,
                               urban: meta[[r, 3]] != 0.0, link: meta[[r, 4]] != 0.0 });
@@ -318,6 +318,7 @@ pub fn dirsign_place<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, ll: 
         b
     }).collect();
 
+    #[allow(clippy::disallowed_methods)] // hash order: collected, then sorted
     let mut nodes_sorted: Vec<i64> = at_node.keys().copied().collect();
     nodes_sorted.sort();
     let mut pend: Vec<Pending> = Vec::new();
@@ -432,7 +433,7 @@ pub fn dirsign_place<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, ll: 
             }
             let Some((q, t, road_xy)) = found else { continue };
             let gap = if rd.urban { URBAN_GAP_M } else { BOARD_GAP_M };
-            if placed.iter().any(|(p, d)| dot(*d, t) > SAME_WAY_COS && (p[0] - q[0]).powi(2) + (p[1] - q[1]).powi(2) < gap * gap) {
+            if placed.iter().any(|(p, d)| dot(*d, t) > SAME_WAY_COS && (p[0] - q[0]).sq() + (p[1] - q[1]).sq() < gap * gap) {
                 continue;
             }
             placed.push((q, t));

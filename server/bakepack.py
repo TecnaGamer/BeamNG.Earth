@@ -158,7 +158,7 @@ def switches():
     BNE_* that change output, the settings page's Experimental ones among them, without CELL_SCOPED; in its meta and in
     every expect: a pack made with other switches (the defaults, for a player with an experimental switch on) holds
     other plans and facts. The bridge profile as the roads read it (earthd writes its CLI default into the
-    environment, the helper and bake_area do not: worldbundle.generator_identity's rule). Once a process."""
+    environment, the helper and bake_area do not: the same rule as the decision archives). Once a process."""
     if not _switches:
         import hashlib
         import revisit

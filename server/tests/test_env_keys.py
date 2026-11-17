@@ -63,7 +63,6 @@ NO_OUTPUT = {
     "BNGE_DEM_MIRROR_ZSTD": "the decoded tiles' on-disk packing (lossless)",
     "BNGE_DEM_SINGLE_FLIGHT": "one download per tile on the machine (scheduling)",
     "BNGE_PLANCACHE": "the within-run plan cache on or off (the same plans)",
-    "BNGE_WORLD_BUNDLE": "a pinned world bundle: its own versions (worldbundle.PinnedPlanCache)",
     "BNGE_DECISIONS": "the shared archives on or off (their items are this server's own keys' plans)",
     "BNGE_DECISIONS_PUBKEY": "the builder keys accepted",
     "BNGE_DECISIONS_REQUEST": "asking for an archive to be built",
