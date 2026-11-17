@@ -177,6 +177,8 @@ Not built:
   - roundabouts;
   - one-way pieces under 12 m, which are a junction's own links;
   - one-way roads merging, where no traffic could turn in.
+  - a divided road's carriageways: the road is two-way, so neither sign stands on it. A carriageway is one when the map
+    pairs it with its other half, or a one-way road runs alongside it within 25 m the other way (the user, 2026-11-17).
   
   Two signs of a kind closer than 4 m that face the same way are one.
 - **Measured** (4 x 4 tiles, about 1 km², 2026-11-17): Göteborg 171 C1 and 105 E16; Stockholm 176 C1 and 67 E16.

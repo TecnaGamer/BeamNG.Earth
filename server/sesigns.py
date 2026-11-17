@@ -615,7 +615,9 @@ def oneway_signs(near_roads):
             if not crossing:
                 continue
             leaving = furniture._outbound(a)            # (its traffic leaves the junction into it: where it starts)
-            if leaving and (s.median or all(b[1].oneway for b in crossing)):
+            if _divided(fid, s, p, u if leaving else -u, roads_):
+                continue                                # (a divided road's carriageway: the road is two-way)
+            if leaving and all(b[1].oneway for b in crossing):
                 continue                                # (E16: a one-way street off a two-way road only)
             if not leaving and not any((not b[1].oneway or not furniture._outbound(b)) and float(
                     dnp.dot(u, np.asarray(b[2], np.float64))) < motesfri.STRAIGHT_COS for b in crossing):
@@ -640,6 +642,36 @@ def oneway_signs(near_roads):
                            and float(dnp.dot(o.facing, sign.facing)) > motesfri.STRAIGHT_COS for o in out):
                     out.append(sign)
     return out
+
+
+TWIN_M = 25.0               # m: a one-way road this near, alongside and the other way, is the other carriageway
+
+
+def _drive_dir(s, pts, k):
+    """Unit direction a one-way road's traffic drives along its segment k (Spec.dir: +1 the points' order)."""
+    d = pts[k + 1, :2] - pts[k, :2]
+    return d / max(float(dnp.hypot(*d)), 1e-9) * (1.0 if s.dir >= 0 else -1.0)
+
+
+def _divided(fid, s, p, travel, roads_):
+    """Whether one-way carriageway fid at point p, its traffic going travel, is one half of a two-way road: the map pairs
+    it with its other carriageway (Spec.median), or a one-way road runs alongside it within TWIN_M the other way (a
+    divided street the pairing did not join: no name, a gap outside its range). The user, 2026-11-17: the no-entry sign
+    only "whenever the road is one way and not when its just the wrong direction (aka the road has 2 directions)"."""
+    if s.median:
+        return True
+    for g, t, pts, _ in roads_:
+        if g == fid or not t.oneway or t.link or len(pts) < 2:
+            continue
+        a, b = pts[:-1, :2], pts[1:, :2]
+        d = b - a
+        l2 = np.maximum((d * d).sum(1), 1e-9)
+        w = np.clip(((p - a) * d).sum(1) / l2, 0.0, 1.0)
+        off = dnp.hypot(*(a + d * w[:, None] - p).T)
+        k = int(np.argmin(off))
+        if off[k] <= TWIN_M and float(dnp.dot(_drive_dir(t, pts, k), travel)) < -motesfri.STRAIGHT_COS:
+            return True
+    return False
 
 
 LIVING = "living_street"

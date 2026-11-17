@@ -264,9 +264,27 @@ class OneWayTest(unittest.TestCase):
         got = self.tee(dir_=1, cross_oneway=True)       # (the crossing road's own ends get their C1)
         self.assertEqual(of(got, "se_e16_l") + of(got, "se_e16_r"), [])
 
-    def test_a_divided_roads_carriageway_gets_c1_not_e16(self):
-        self.assertEqual(len(of(self.tee(dir_=-1, median=20.0), "se_c1_t")), 2)
+    def test_a_divided_roads_carriageway_gets_neither(self):
+        """The road is two-way: its carriageways are one-way, but nobody meets a no-entry sign on it (the user,
+        2026-11-17: only "whenever the road is one way and not when its just the wrong direction")."""
+        self.assertEqual(self.tee(dir_=-1, median=20.0), [])
         self.assertEqual(self.tee(dir_=1, median=20.0), [])
+
+    def twins(self, gap):
+        # an east-west two-way road along y = 0; one-way streets north from (0, 0) (driven south) and from (gap, 0)
+        # (driven north), the map not pairing them
+        return sesigns.oneway_signs([street("w", [(-200, 0), (0, 0)]), street("m", [(0, 0), (gap, 0)]),
+                                     street("e", [(gap, 0), (200, 0)]),
+                                     street("a", [(0, 0), (0, 150)], oneway=True, dir_=-1),
+                                     street("b", [(gap, 0), (gap, 150)], oneway=True, dir_=1)])
+
+    def test_an_unpaired_carriageway_alongside_the_other_way_is_a_divided_road(self):
+        self.assertEqual(self.twins(14.0), [])
+
+    def test_one_way_streets_a_block_apart_keep_their_signs(self):
+        got = self.twins(60.0)
+        self.assertEqual(len(of(got, "se_c1_t")), 2)
+        self.assertEqual(len(of(got, "se_e16_l") + of(got, "se_e16_r")), 2)
 
     def test_not_out_of_town_nor_a_service_road(self):
         self.assertEqual(self.tee(dir_=-1, urban=False), [])
