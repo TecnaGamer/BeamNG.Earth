@@ -7721,9 +7721,27 @@ class BridgeProfiles:
                     out.add((min(k, j), max(k, j)))
         return sorted(out)
 
+    # A chain's pool and ground made from its cells in their own order (CANON_LOAD): the same whichever of its parts is
+    # asked for first. _load keeps the first of two equally long copies of a part clipped by two cells and the first
+    # copy of a ground road, so loaded in the order the asking part's ends reached them, the far bridge tiles of one
+    # chain differed with which tile asked first: 5 of Fells Point's 108 far-bridge geotiles between two runs of the
+    # same code and inputs, decks up to 3.9 m apart (tools/portcheck, 2026-11-16). TunnelProfiles keeps its own
+    # canonical ground (its _resolve) and, for now, its order of parts: its solves are the plans' (PLANS_FORMAT)
+    CANON_LOAD = True
+
+    def _canon_load(self, pool, ground, loaded):
+        """pool and ground again from the cells in loaded, in their keys' order (CANON_LOAD)."""
+        pool.clear()
+        ground.clear()
+        for c in sorted(loaded):
+            z, x, y = (int(v) for v in c.split("/"))
+            self._load(mapcells.CellKey(z, x, y), pool, ground)
+
     def _resolve(self, start, pool, ground, loaded):
         """The chain of part `start` (keys), loading the cell at each loose end until closed."""
         while True:
+            if self.CANON_LOAD:
+                self._canon_load(pool, ground, loaded)
             nk = _EndJoin()
             by_node = {}
             for k, (_, xy, *_) in pool.items():
@@ -8468,6 +8486,7 @@ class TunnelProfiles(BridgeProfiles):
     levels_of = staticmethod(lambda feats, i: [-1.0] * len(tunnel_parts(feats, i)))
     END_JOINS = False
     READS_LIMITS = False                        # (no clearance over a road to hold)
+    CANON_LOAD = False                          # (its ground made canonical in _resolve; its parts' order as before)
 
     def _structure(self, chain):                # (no truss over a tunnel)
         return [], []

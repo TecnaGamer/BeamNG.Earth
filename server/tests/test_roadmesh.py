@@ -648,6 +648,40 @@ class BridgeProfilesTest(unittest.TestCase):
         ea, eb = got1["a"], got1["b"]
         self.assertAlmostEqual(float(ea[1][-1]), float(eb[1][0]), places=6, msg="the halves meet")
 
+    def test_chain_the_same_whichever_cell_asks_first(self):
+        """A chain across two map cells whose cells hold different copies of a road under it (each cell's own clip):
+        the deck is the same whichever part, so whichever cell, is asked first (BridgeProfiles.CANON_LOAD). Before,
+        the first cell loaded gave the road's copy: 5 of Fells Point's far-bridge tiles moved up to 3.9 m between two
+        runs of the same code (tools/portcheck, 2026-11-16)."""
+        import mapcells
+        import roads
+        from test_roads import features
+        home = mapcells.cell_of(LAT, LON)
+        east = (home.bounds()[2] - LON) * M_LON             # m: the cell's east edge
+        lines = [[(east - 300, 0), (east + 20, 0)], [(east + 20, 0), (east + 340, 0)]]
+        levels = [(0, 1.0, 0.5, 1.0), (1, 1.0, 0.0, 0.5)]
+        street = [(east - 60, -200), (east - 60, 200)]       # under the deck, in the west cell
+        stub = [(east - 60, 120), (east - 60, 200)]          # the east cell's clip of it: not under the deck
+        west = features(lines + [street], ["primary", "primary", "residential"], levels=levels,
+                        ids=["a", "b", "street"])
+        eastf = features(lines + [stub], ["primary", "primary", "residential"], levels=levels,
+                         ids=["a", "b", "street"])
+        cell_fn = lambda key: west if key == home else eastf
+        flat = lambda la, lo: np.full(np.shape(la), 10.0)
+        box_a, box_b = (east - 200, -50, east - 100, 50), (east + 200, -50, east + 300, 50)
+        decks = []
+        for first in (box_a, box_b):        # the chain solved from part a (west cell first), then from part b (east)
+            bp = roads.BridgeProfiles(FRAME, cell_fn, flat)
+            bp.parts([west, eastf], first)
+            decks.append({fid: z for box in (box_a, box_b)
+                          for fid, spec, xy, z, lon in bp.parts([west, eastf], box)})
+        self.assertEqual(set(decks[0]), {"a", "b"})
+        self.assertEqual(set(decks[1]), {"a", "b"})
+        for fid in ("a", "b"):
+            self.assertEqual(decks[0][fid].tobytes(), decks[1][fid].tobytes(), fid)
+        # (over the street the west cell holds: the east cell's stub alone left the deck on the ground, 9.9 m)
+        self.assertGreater(float(decks[0]["a"].max()), 15.0, "over the street")
+
     def test_crossing_decks_stack_by_level(self):
         import roads
         from test_roads import features
