@@ -128,7 +128,7 @@ def layer_data(rgb, kind):
     from PIL import Image
     a = np.asarray(rgb, np.float64) / 255.0
     if kind == "luma_ao":
-        y = a @ np.array([0.2126, 0.7152, 0.0722])
+        y = a[..., 0] * 0.2126 + a[..., 1] * 0.7152 + a[..., 2] * 0.0722   # (element-wise, not BLAS: test_determinism)
         t0 = np.clip(y / max(float(np.percentile(y, 95)), 1e-6), 0.0, 1.0)
     elif kind == "spec_rough":
         t0 = 1.0 - a[..., 0] / 2.0
