@@ -431,8 +431,9 @@ def road_underpasses(frame, cells, box, reach=REACH_M, classes=None):
             missing = []
             if tagged:          # (the map's tunnels first: most features have none)
                 effective = [(a, b) for a, b, kind in roads.raw_level_ranges(feats, i) if kind == "tunnel"]
+                floor = roads.part_floor(feats, i)
                 missing = [(a, b, kind) for a, b, kind in tagged
-                           if not any(c <= a + roads.MIN_PART and d >= b - roads.MIN_PART for c, d in effective)]
+                           if not any(c <= a + floor and d >= b - floor for c, d in effective)]
             if missing:
                 if ground_specs is None:
                     ground_specs = roads.road_specs(feats)

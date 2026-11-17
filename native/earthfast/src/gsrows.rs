@@ -15,7 +15,7 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
 use crate::gradesep::{feature_boxes, np_interp, select_core};
-use crate::levels::{feature_length, np_sum};
+use crate::levels::{feature_length, np_sum, part_floor};
 use crate::{py_hypot, segment_crossings_core};
 
 const BRIDGE: i8 = 1;
@@ -40,14 +40,14 @@ fn us(a: &ArrayView1<i64>) -> Vec<i64> {
 /// none, 0 a drawn road, 1 a drawn railway); its map ranges (roads.tag_level_ranges: tag_off (n + 1,), tag_rng (m, 2),
 /// tag_kind (m,): 1 bridge, 2 tunnel). Ground pieces of its kind, its bridges as decks (-1), a railway's short tunnels
 /// (2: shorter than short_m by its length, roads._feature_length_m), a road's tunnels (3). Returns (piece_off (n + 1,),
-/// pk, pa, pb).
+/// pk, pa, pb). A piece under a share of the feature is dropped: min_part, at most min_part_m metres of it (roads.part_floor).
 #[pyfunction]
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub fn gradesep_layer_rows<'py>(py: Python<'py>, kinds: PyReadonlyArray1<'py, i64>, tag_off: PyReadonlyArray1<'py, i64>,
                                 tag_rng: PyReadonlyArray2<'py, f64>, tag_kind: PyReadonlyArray1<'py, i8>,
                                 lonlat: PyReadonlyArray2<'py, f64>, coord_off: PyReadonlyArray1<'py, i64>,
                                 ring_off: PyReadonlyArray1<'py, i64>, part_off: PyReadonlyArray1<'py, i64>,
-                                min_part: f64, short_m: f64)
+                                min_part: f64, min_part_m: f64, short_m: f64)
                                 -> PyResult<(Bound<'py, PyArray1<i64>>, Bound<'py, PyArray1<i64>>,
                                              Bound<'py, PyArray1<f64>>, Bound<'py, PyArray1<f64>>)> {
     let (kinds, toff, trng, tkind) = (kinds.as_array(), tag_off.as_array(), tag_rng.as_array(), tag_kind.as_array());
@@ -68,7 +68,8 @@ pub fn gradesep_layer_rows<'py>(py: Python<'py>, kinds: PyReadonlyArray1<'py, i6
                     pa.push(0.0);
                     pb.push(1.0);
                 } else {
-                    let mut length: Option<f64> = None;
+                    let l = feature_length(&ll, &co, &ro, &po, i);
+                    let min_part = part_floor(min_part, min_part_m, l);
                     let mut at = 0.0f64;
                     for t in t0..t1 {
                         let (a, b, kk) = (trng[[t, 0]], trng[[t, 1]], tkind[t]);
@@ -82,7 +83,6 @@ pub fn gradesep_layer_rows<'py>(py: Python<'py>, kinds: PyReadonlyArray1<'py, i6
                             pa.push(a);
                             pb.push(b);
                         } else if k == 1 {
-                            let l = *length.get_or_insert_with(|| feature_length(&ll, &co, &ro, &po, i));
                             if (b - a) * l < short_m {
                                 pk.push(2);
                                 pa.push(a);

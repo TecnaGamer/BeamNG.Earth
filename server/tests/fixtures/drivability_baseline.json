@@ -295,12 +295,12 @@
   }
  },
  "casagranda_bridge": {
-  "steps": 136,
+  "steps": 134,
   "parts": {
    "bridge:24180283-706a-4193-a9d6-18dbee4df38d": {
-    "step_m": 0.4731,
-    "grade": 0.4506,
-    "lift_g": 7.8907
+    "step_m": 0.2309,
+    "grade": 0.3135,
+    "lift_g": 3.555
    },
    "ground:053629ed-5cd3-43a0-9a3f-45d606754d27": {
     "step_m": 0.2079,
@@ -328,24 +328,19 @@
     "lift_g": 0.0
    },
    "tunnel:24180283-706a-4193-a9d6-18dbee4df38d.11342464#1": {
-    "step_m": 0.4764,
-    "grade": 0.4504,
-    "lift_g": 7.8967
-   },
-   "tunnel:24180283-706a-4193-a9d6-18dbee4df38d.11678432#1": {
-    "step_m": 0.0256,
-    "grade": 0.0198,
-    "lift_g": 0.217
+    "step_m": 0.2323,
+    "grade": 0.3185,
+    "lift_g": 3.558
    }
   }
  },
  "casagranda_portal": {
-  "steps": 54,
+  "steps": 52,
   "parts": {
    "bridge:24180283-706a-4193-a9d6-18dbee4df38d": {
-    "step_m": 0.4609,
-    "grade": 0.4384,
-    "lift_g": 7.7267
+    "step_m": 0.2382,
+    "grade": 0.3144,
+    "lift_g": 3.6682
    },
    "ground:0539dd77-5690-403a-9c73-456a26c03b08": {
     "step_m": 0.2707,
@@ -373,14 +368,9 @@
     "lift_g": 0.3571
    },
    "tunnel:24180283-706a-4193-a9d6-18dbee4df38d.11342464#1": {
-    "step_m": 0.4641,
-    "grade": 0.4382,
-    "lift_g": 7.7328
-   },
-   "tunnel:24180283-706a-4193-a9d6-18dbee4df38d.11678432#1": {
-    "step_m": 0.0257,
-    "grade": 0.0198,
-    "lift_g": 0.2137
+    "step_m": 0.2397,
+    "grade": 0.3156,
+    "lift_g": 3.6713
    }
   }
  },

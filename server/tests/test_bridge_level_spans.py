@@ -10,7 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import geodesy
 import mapgeom
 import roads
-from test_roads import features, rules
+from test_roads import FRAME, features, rules
 
 
 class BridgeLevelSpansTest(unittest.TestCase):
@@ -82,6 +82,62 @@ class BridgeLevelSpansTest(unittest.TestCase):
                      if {owners[i], owners[j]} in ({0, 2}, {1, 2}) and local[i] != local[j]]
         self.assertEqual(len(crossings), 2, 'both mainline crossings over the ramp must retain level 3 over level 2')
         self.assertTrue(all(sorted(pair) == [2., 3.] for pair in crossings))
+
+
+def covered(f, i):
+    """Share of feature i's length that its ground, bridge and tunnel parts cover."""
+    def length(ps):
+        return sum(float(np.hypot(*np.diff(np.c_[p[:, 0] * 111320 * np.cos(np.radians(p[:, 1])), p[:, 1] * 110540],
+                                           axis=0).T).sum()) for p in ps)
+    whole = length([r for part in f.parts(i) for r in part])
+    return (length(roads.ground_parts(f, i)) + length(roads.bridge_parts(f, i)) + length(roads.tunnel_parts(f, i))) / whole
+
+
+class ShortBridgeOnLongRoadTest(unittest.TestCase):
+    """A piece is dropped under MIN_PART of a feature's length, at most MIN_PART_M metres of it: a share of a 24 km
+    road was 24 m (the Fuji Subaru Line's 23 m bridge, OSM way 988616594: no deck, and its range cut out of the ground)."""
+    L = 24289.0
+
+    def road(self, *ranges):
+        flags = [(0, kind, a / self.L, b / self.L) for kind, a, b in ranges]
+        return features([[(0., 0.), (self.L, 0.)]], ['secondary'], flags=flags)
+
+    def test_23_m_bridge_on_a_24_km_road_is_kept_with_no_hole(self):
+        f = self.road(('is_bridge', 1012., 1035.))
+        self.assertEqual(len(roads.bridge_parts(f, 0)), 1)
+        self.assertEqual(len(roads.ground_parts(f, 0)), 2)
+        self.assertGreater(covered(f, 0), 0.9999)
+        keys = roads.part_keys(f, 0, 'bridge')
+        self.assertEqual(len(keys), len(roads.bridge_parts(f, 0)))
+
+    def test_every_short_bridge_and_tunnel_of_the_road_is_kept(self):
+        f = self.road(('is_bridge', 1012., 1035.), ('is_bridge', 5000., 5016.), ('is_bridge', 9000., 9014.2),
+                      ('is_tunnel', 15000., 15020.))
+        self.assertEqual(len(roads.bridge_parts(f, 0)), 3)
+        self.assertEqual(len(roads.tunnel_parts(f, 0)), 1)
+        self.assertEqual(len(roads.ground_parts(f, 0)), 5)
+        self.assertGreater(covered(f, 0), 0.9999)
+        for want in ('bridge', 'tunnel', 'ground'):
+            self.assertEqual(len(roads.part_keys(f, 0, want)), len(roads._parts_by_level_new(f, 0, want)))
+
+    def test_floor_is_a_metre_of_a_long_road_and_a_share_of_a_short_one(self):
+        self.assertAlmostEqual(roads.part_floor(self.road(), 0), 1.0 / self.L, delta=1e-7)
+        short = features([[(0., 0.), (300., 0.)]], ['secondary'])
+        self.assertEqual(roads.part_floor(short, 0), roads.MIN_PART)
+
+    def test_a_sliver_under_a_metre_is_still_dropped(self):
+        f = self.road(('is_bridge', 1012., 1012.5))
+        self.assertEqual(roads.bridge_parts(f, 0), [])
+
+    def test_the_bridge_is_a_deck_for_the_guard_and_a_crossing_row_of_gradesep(self):
+        import deckspans
+        import gradesep
+        f = self.road(('is_bridge', 1012., 1035.))
+        self.assertEqual(len(deckspans.cell_pieces(f, FRAME)), 1)
+        kinds, _halves, poff, pk, pa, pb, _ids = gradesep._layer_rows(f)
+        rows = list(zip(pk[poff[0]:poff[1]].tolist(), pa[poff[0]:poff[1]].tolist(), pb[poff[0]:poff[1]].tolist()))
+        self.assertEqual([k for k, _a, _b in rows], [0, -1, 0])      # (ground, deck, ground: no hole)
+        self.assertAlmostEqual(rows[1][2] - rows[1][1], 23. / self.L, delta=1e-6)
 
 
 if __name__ == '__main__':

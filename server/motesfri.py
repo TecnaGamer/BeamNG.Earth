@@ -350,12 +350,14 @@ def modules(ways, box, left_hand=False, mapped_rows=()):
 def _ground_stretches(feats, i):
     """(lon/lat polyline, way id, tags) of feature i's ground parts, cut where its OpenStreetMap way changes."""
     import roads
-    ground = roads.ground_ranges(roads.level_ranges(feats, i))
+    rngs = roads.level_ranges(feats, i)
+    floor = roads.part_floor(feats, i, rngs)
+    ground = roads.ground_ranges(rngs, floor)
     out = []
     for start, end, way, tags in roads.lane_tag_parts(feats, i):
         for a, b in ground:
             lo, hi = max(a, start), min(b, end)
-            if hi - lo <= roads.MIN_PART:
+            if hi - lo <= floor:
                 continue
             for part in feats.parts(i):
                 for ring in part:
