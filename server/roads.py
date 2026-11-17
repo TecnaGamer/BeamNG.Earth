@@ -4403,6 +4403,8 @@ def _end_joins(lines, halves, ground_lines):
 # that end at the other deck's height where they differ by more than END_ON_STEP_M (earthfast.deck_end_on).
 END_ON_MARGIN_M = 0.5
 END_ON_STEP_M = 0.3
+END_ON_ITER_ON = os.environ.get("BNE_END_ON_ITER", "on") != "off"
+END_ON_PASSES = 4           # solves with the ends held at most (each from the parents' heights of the one before)
 # a bridge's loose end over water with no road going on (a ferry's linkspan, a pier: BridgeProfiles._landing_ground)
 LANDING_ON = os.environ.get("BNE_LANDING", "on") != "off"
 LANDING_FREEBOARD_M = 2.0   # m over the sea such an end is held at (a ferry's car deck, a pier's top: about level with its quay)
@@ -4443,11 +4445,23 @@ TIE_MEASURED_M = 0.5        # m: a part whose heights a source measured (roadz: 
                             # pulled measured ramps by I-395 1.6 and 4.9 m off the lidar's
 
 
-def _tie_beside(lines, zs, specs, measured=None):
+# ... and only to a part of its own level: two decks of a viaduct one over the other 3 m apart in plan (Daikoku Junction's
+# K5 line, levels 2 and 3) are both within a ramp's reach, and the tie took the other level's deck for its road: the
+# upper ramp dropped 5 m, the lower one rose 5 m (and the lower mainline itself 5 m, tied to the wider upper one), and
+# the slabs were cut where they met
+TIE_LEVELS_ON = os.environ.get("BNE_TIE_LEVELS", "on") != "off"
+# ... unless its end is a node of that part, where the map joins them whatever their layer tags say: a ramp tagged one
+# level and its road another at the node they share is still its road's branch (Boston's Bowker ramps lost their tie and
+# stepped onto Storrow Drive's decks). A deck over or under another shares no node with it.
+TIE_NODE_M = 0.5
+
+
+def _tie_beside(lines, zs, specs, measured=None, levels=None):
     """zs with each branch (a ramp, else the narrower part) that leaves or joins another part (its end on that part's
     deck) held at
     that part's height while their slabs are joined (TIE_*), eased into its own profile after. lines: (k, >= 2) per
-    part, zs: heights per point, specs: their Specs. Pure."""
+    part, zs: heights per point, specs: their Specs, levels: theirs (a part is tied to a part of its own level only).
+    Pure."""
     zs = [np.asarray(z, np.float64).copy() for z in zs]
     pts = [np.asarray(ln, np.float64)[:, :2] for ln in lines]
     n = len(pts)
@@ -4490,8 +4504,11 @@ def _tie_beside(lines, zs, specs, measured=None):
                 # (its end on the other's deck: at its end, or a few metres off it, where the map starts a ramp beside
                 # its road rather than on its joint: I-95 northbound by the Middle Branch, 2.2 m off, their slabs
                 # overlapping 0.2 m apart in height)
-                if project(j, p[None])[0] > wj / 2 + 1.0:
+                d_end = project(j, p[None])[0]
+                if d_end > wj / 2 + 1.0:
                     continue
+                if levels is not None and TIE_LEVELS_ON and levels[j] != levels[i]                         and float(dnp.hypot(*(pts[j] - p).T).min()) > TIE_NODE_M:
+                    continue                            # (another level: the deck over or under it, not its road)
                 branch = (getattr(specs[i], "link", False) and not getattr(specs[j], "link", False)) or \
                     (getattr(specs[i], "link", False) == getattr(specs[j], "link", False) and wi < wj - 0.5)
                 if not branch:
@@ -4500,8 +4517,10 @@ def _tie_beside(lines, zs, specs, measured=None):
                 a = 15.0 if e == 0 else arcs[i][-1] - 15.0
                 q = np.array([np.interp(a, arcs[i], pts[i][:, 0]), np.interp(a, arcs[i], pts[i][:, 1])])
                 d, _ = project(j, q[None])
-                if best is None or d < best[0]:
-                    best = (d, j, wj)
+                # (the one its end lies on first, then the one it runs beside)
+                key = (0 if d_end <= wj / 2 else 1, d)
+                if best is None or key < best[0]:
+                    best = (key, j, wj)
             if best is None:
                 continue
             _, j, wj = best
@@ -4651,6 +4670,13 @@ def _merge_overlaps(lines, zs, widths, levels, rounds=3, pins=None):
             if deg[b] == 1:
                 new[i][-1] = zs[i][-1]
         zs = new
+    if MERGE_WELD_ON:
+        # a joint's parts each pulled toward the decks beside THEM (a way that changes level: the part of one level
+        # lifted to its twin, the other not) end at different heights: each joint at its parts' highest end, the raise
+        # run out along each part (_weld). A joint a ground road goes on from stays an abutment.
+        ids = [(a if deg[a] > 1 else len(nodes) + 2 * k, b if deg[b] > 1 else len(nodes) + 2 * k + 1, es)
+               for k, (a, b, es) in enumerate(edges[:n])]
+        zs = _weld(ids, zs)
     out = []
     for i, z in enumerate(zs):                  # re-smoothed, ends kept
         s = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(lines[i][:, :2], axis=0).T))]
@@ -4660,6 +4686,7 @@ def _merge_overlaps(lines, zs, widths, levels, rounds=3, pins=None):
 
 
 DUAL_DECK_M = 30.0      # m: parts of one level parallel within this are one deck's carriageways (_merge_overlaps)
+MERGE_WELD_ON = os.environ.get("BNE_MERGE_WELD", "on") != "off"      # the parts at a joint at one height after the merge
 
 
 def deck_profile(lines, ground_fn, crossings=(), clear=None, grade=None, lift=None, levels=None, widths=None, pins=None):
@@ -7834,34 +7861,43 @@ class BridgeProfiles:
         zs = solve(base)
         # a free end standing on another deck: solved again with it at that deck's height as drawn (measured too:
         # _observed) (_end_ons)
+        # (each held end read from the parent's heights of the solve before it, and the solve with the ends held moves
+        # the parent: Daikoku Junction's service road stood on a deck 13.7 m up, the parent then rose to 20.7 m, a
+        # 6.8 m step and the deck trimmed to 2.7 m with its parapet in the truck's lane. Repeated with each end at its
+        # parent's heights of the last solve, END_ON_PASSES at most, until every end is within END_ON_STEP_M of it.)
         over = {}
         ons = self._end_ons_of(lines, [pool[c][0].width / 2 for c in comp], levels, ground)
         final = self._observed(comp, pool, lines, zs, pins=pins) if ons else zs
-        for k, at, j, arc in ons:
-            lj = np.asarray(lines[j], np.float64)[:, :2]
-            sj = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(lj, axis=0).T))]
-            zt = float(np.interp(arc, sj, np.asarray(final[j], np.float64)))
-            if np.isfinite(zt) and abs(zt - float(final[k][at])) > END_ON_STEP_M:
-                q = np.asarray(lines[k], np.float64)[at, :2]
-                over[(float(q[0]), float(q[1]))] = zt
-        if over:
+        for _ in range(END_ON_PASSES if END_ON_ITER_ON else 1):
+            moved = False
+            for k, at, j, arc in ons:
+                lj = np.asarray(lines[j], np.float64)[:, :2]
+                sj = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(lj, axis=0).T))]
+                zt = float(np.interp(arc, sj, np.asarray(final[j], np.float64)))
+                if np.isfinite(zt) and abs(zt - float(final[k][at])) > END_ON_STEP_M:
+                    q = np.asarray(lines[k], np.float64)[at, :2]
+                    over[(float(q[0]), float(q[1]))] = zt
+                    moved = True
+            if not moved:
+                break
             keys_ = np.array(list(over), np.float64)
             vals = np.array(list(over.values()), np.float64)
 
-            def ground_on(xy):
+            def ground_on(xy, keys_=keys_, vals=vals):
                 z = np.asarray(base(xy), np.float64)
                 xy = np.asarray(xy, np.float64).reshape(-1, 2)
                 for (px, py), zt in zip(keys_, vals):
                     z = np.where((np.abs(xy[:, 0] - px) < 1e-6) & (np.abs(xy[:, 1] - py) < 1e-6), zt, z)
                 return z
             zs = solve(ground_on)
+            final = self._observed(comp, pool, lines, zs, pins=pins)
         deficits = _clearance_deficits(lines, zs, [r[:3] for r in required + rails], depth)
         if deficits:
             # (debug: a city has hundreds of such bridges, each solved again in every process and tile; as a warning it
             # filled players' consoles, GitHub #391, TGForever Discord 2026-10-28)
             log.debug("bridge clearance below %.1f m target: %s; abutment/grade or map constraints prevent full headroom",
                       MIN_BRIDGE_HEADROOM_M, [(comp[i], round(h, 2)) for i, h in deficits[:3]])
-        out = final if (ons and not over) else self._observed(comp, pool, lines, zs, pins=pins)
+        out = final if ons else self._observed(comp, pool, lines, zs, pins=pins)
         hook = DECK_Z_HOOK
         if hook is not None:
             # (a carriageway's deck: the height its roads and decks were solved for together, grading's
@@ -8172,7 +8208,7 @@ class BridgeProfiles:
         tl.measured = set()
         zs = self._solve(comp, pool, ground)
         zs = _tie_beside([pool[k][1] for k in comp], zs, [pool[k][0] for k in comp],     # (ramps beside their road)
-                         [k in tl.measured for k in comp])
+                         [k in tl.measured for k in comp], [pool[k][3] for k in comp])
         # STAGED until every read the chain depends on is done: the parts' piers (_precommit: the ground under them)
         # and the chain's structure (_structure: the cells round it) can still read something short, and a part
         # published before them was taken by a reader or an adopter in another thread as complete (review,

@@ -143,6 +143,46 @@ class EndOnDeckTest(unittest.TestCase):
         self.assertLess(abs(self.solve()["p1"][1][0] - FLAT), 0.2, "(the case it is for)")
 
 
+@unittest.skipUnless(fast.AVAILABLE and getattr(fast._ef, "VERSION", 0) >= 107, "earthfast 107 (deck_end_on)")
+class EndOnStackedParentTest(unittest.TestCase):
+    """A branch of level 2 starting 2 m off the middle of a level 2 deck (p0), with another deck (p1, level 3) over it:
+    the parent's height comes from the stacking rule. Solved with the branch's end held at the parent's height of the
+    solve before, the parent then rose (5 m here, 7 m at Daikoku Junction's service road): a step the deck trimmed
+    across. Solved again from the parent's last heights until the end is within roads.END_ON_STEP_M of it."""
+
+    LINES = [[(-300, 0), (300, 0)], [(-300, 0), (-280, 3), (280, 3)],
+             [(-100, 2), (-40, 26), (60, 62)], [(60, 62), (160, 62)],
+             [(-200, -150), (-200, 150)], [(200, -150), (200, 150)]]
+
+    def setUp(self):
+        self.old = roadz.PROVIDER, roads.END_ON_ITER_ON
+        roadz.PROVIDER = None
+
+    def tearDown(self):
+        roadz.PROVIDER, roads.END_ON_ITER_ON = self.old
+
+    def start_step(self):
+        classes = ["motorway", "motorway", "motorway", "residential", "residential", "residential"]
+        f = features(self.LINES, classes, levels=[(0, 2.0), (1, 3.0), (2, 2.0)],
+                     flags=[(0, "is_bridge", 0.0, 1.0), (1, "is_bridge", 0.0, 1.0), (2, "is_bridge", 0.0, 1.0)],
+                     ids=[f"p{i}" for i in range(len(self.LINES))])
+        d = _solve(f)
+        xy0, z0 = d["p0"]
+        xy2, z2 = d["p2"]
+        k = int(np.argmin(np.hypot(*(xy0 - xy2[0]).T)))
+        return float(z2[0] - z0[k]), float(z0[k])
+
+    def test_the_branch_starts_at_the_parents_final_height(self):
+        step, parent = self.start_step()
+        self.assertGreater(parent, FLAT + 2.5, "(the parent stands over the streets)")
+        self.assertLessEqual(abs(step), roads.END_ON_STEP_M, "no step where it starts")
+
+    def test_off(self):
+        roads.END_ON_ITER_ON = False
+        step, _ = self.start_step()
+        self.assertGreater(abs(step), 1.0, "(the step the repeat is for)")
+
+
 @unittest.skipUnless(NATIVE, "earthfast 105 (deck_end_joins, deck_gaps)")
 class GroundGapTest(unittest.TestCase):
     """A viaduct p0 - a 40 m stretch p1 the map has on the ground - a viaduct p2."""
