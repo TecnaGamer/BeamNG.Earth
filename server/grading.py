@@ -2292,7 +2292,7 @@ def _held_by_decks(xy, move, ends, hold=SEAM_DECK_HOLD_M):
     if not len(ends) or not len(move):
         return move
     p = np.asarray(xy, np.float64)[:, :2]
-    d = np.sqrt(((p[:, None, :] - np.asarray(ends, np.float64)[None, :, :]) ** 2).sum(-1)).min(axis=1)
+    d = np.sqrt(dnp.sq(p[:, None, :] - np.asarray(ends, np.float64)[None, :, :]).sum(-1)).min(axis=1)
     cap = railways.GRADE * np.maximum(d - hold, 0.0)
     return np.clip(move, -cap, cap)
 

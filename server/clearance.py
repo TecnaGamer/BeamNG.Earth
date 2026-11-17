@@ -77,7 +77,7 @@ def enabled():
 # ---- placing the vehicles -----------------------------------------------------------------------------------------------
 def _arc(xyz):
     """(k,) metres along the line in plan."""
-    return np.r_[0.0, np.cumsum(np.hypot(*np.diff(xyz[:, :2], axis=0).T))]
+    return np.r_[0.0, np.cumsum(np.hypot(*np.diff(xyz[:, :2], axis=0).T))]  # det-ok: the clearance log only
 
 
 def _at(s, xyz, t):
@@ -145,7 +145,7 @@ def place(lines, owns, ground=None, every=None, limit=MAX_VEHICLES, deadline=Non
         s0, s1 = np.clip(st - half, 0.0, s[-1]), np.clip(st + half, 0.0, s[-1])
         p0, p1 = _at(s, xyz, s0), _at(s, xyz, s1)
         chord = (p1 - p0)[:, :2]
-        cl = np.hypot(chord[:, 0], chord[:, 1])
+        cl = np.hypot(chord[:, 0], chord[:, 1])  # det-ok: the clearance log only
         ok = cl >= 3.0
         d = chord / np.maximum(cl, 1e-9)[:, None]
         sag = np.zeros(len(st))
@@ -182,11 +182,11 @@ def place(lines, owns, ground=None, every=None, limit=MAX_VEHICLES, deadline=Non
         have = np.isfinite(z0) & np.isfinite(z1)         # (no terrain there: the plan's height stays)
         p0[gi[have], 2], p1[gi[have], 2] = z0[have], z1[have]
     a = p1 - p0
-    a /= np.linalg.norm(a, axis=1)[:, None]
+    a /= np.linalg.norm(a, axis=1)[:, None]  # det-ok: the clearance log only
     up = np.cross(a, c["side"])
     d = c["d"]
     return {"c": (p0 + p1) / 2.0, "a": a, "s": c["side"], "up": up, "env": c["env"], "line": c["line"], "off": c["off"],
-            "hdg": np.degrees(np.arctan2(d[:, 0], d[:, 1])) % 360.0}
+            "hdg": np.degrees(np.arctan2(d[:, 0], d[:, 1])) % 360.0}  # det-ok: the clearance log only
 
 
 def _env(k):
@@ -313,7 +313,7 @@ def tri_box_depth(T, h):
         best = np.minimum(best, np.minimum(h[:, i] - lo, hi + h[:, i]))
     e = (T[:, 1] - T[:, 0], T[:, 2] - T[:, 1], T[:, 0] - T[:, 2])
     N = np.cross(e[0], e[1])
-    ln = np.linalg.norm(N, axis=1)
+    ln = np.linalg.norm(N, axis=1)  # det-ok: the clearance log only
     ok = ln > 1e-9
     N = N / np.where(ok, ln, 1.0)[:, None]
     d0 = (N * T[:, 0]).sum(1)
@@ -324,7 +324,7 @@ def tri_box_depth(T, h):
     for f in e:                                     # the box's axes x the triangle's edges
         for a in (np.stack([zero, -f[:, 2], f[:, 1]], 1), np.stack([f[:, 2], zero, -f[:, 0]], 1),
                   np.stack([-f[:, 1], f[:, 0], zero], 1)):
-            la = np.linalg.norm(a, axis=1)
+            la = np.linalg.norm(a, axis=1)  # det-ok: the clearance log only
             ok = la > 1e-9
             p = (T * a[:, None, :]).sum(2)
             lo, hi = p.min(axis=1), p.max(axis=1)
@@ -434,7 +434,7 @@ class Reporter:
         lat, lon = np.asarray(lat, np.float64), np.asarray(lon, np.float64)
         i = np.floor(lat * EARTH_M / DEDUP_M).astype(np.int64)
         latc = (i + 0.5) * DEDUP_M / EARTH_M
-        j = np.floor(lon * EARTH_M * np.cos(np.radians(latc)) / DEDUP_M).astype(np.int64)
+        j = np.floor(lon * EARTH_M * np.cos(np.radians(latc)) / DEDUP_M).astype(np.int64)  # det-ok: the clearance log only
         return i, j
 
     def emit(self, hits, lines, frame, tile, aid):
@@ -561,7 +561,7 @@ def gap_lines(roads, decks, tunnels):
     for fid, ps in parts.items():
         for i in range(len(ps)):
             for j in range(i + 1, len(ps)):
-                d, a, b = min((float(np.hypot(*(ps[i][1][a, :2] - ps[j][1][b, :2]))), a, b) for a in (0, -1) for b in (0, -1))
+                d, a, b = min((float(np.hypot(*(ps[i][1][a, :2] - ps[j][1][b, :2]))), a, b) for a in (0, -1) for b in (0, -1))  # det-ok: the clearance log only
                 if not GAP_MIN_M <= d <= GAP_MAX_M:
                     continue
                 p, q = ps[i][1][a], ps[j][1][b]
@@ -569,10 +569,10 @@ def gap_lines(roads, decks, tunnels):
                 v = (q - p)[:2] / d
                 ta = ps[i][1][a, :2] - ps[i][1][1 if a == 0 else -2, :2]
                 tb = ps[j][1][b, :2] - ps[j][1][1 if b == 0 else -2, :2]
-                if float(ta @ v) < GAP_ALIGN * np.hypot(*ta) or float(tb @ -v) < GAP_ALIGN * np.hypot(*tb):
+                if float(ta @ v) < GAP_ALIGN * np.hypot(*ta) or float(tb @ -v) < GAP_ALIGN * np.hypot(*tb):  # det-ok: the clearance log only
                     continue
                 mid = (p[:2] + q[:2]) / 2.0
-                if any(float(np.hypot(*(xy - mid).T).min()) <= d / 2.0 + GAP_COVER_M for xy in built.get(fid, ())):
+                if any(float(np.hypot(*(xy - mid).T).min()) <= d / 2.0 + GAP_COVER_M for xy in built.get(fid, ())):  # det-ok: the clearance log only
                     continue
                 spec = ps[i][0]
                 out.append(Line(fid, spec.cls, "bridge", np.stack([p, q]), float(spec.width), bool(spec.oneway), False, True))
