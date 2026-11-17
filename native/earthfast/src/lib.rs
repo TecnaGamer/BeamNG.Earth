@@ -114,6 +114,7 @@ mod vegclumps;
 mod roadwear;
 mod roadtone;
 mod railbeds;
+mod railxing;
 mod osmtagshards;
 mod buildyears;
 mod buildcolours;
@@ -6516,6 +6517,9 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 362: Wire.consumed / unread: the read side's flow control (asyncio's StreamReader: reading stops past 128 KiB the
     // handler has not consumed, goes on at 64 KiB; Codex review of 28c35fc0), poses merged as they come
     // 371: phase 1 merged onto 370 (the host as 362 had it)
-    m.add("VERSION", 371)?;
+    m.add_function(wrap_pyfunction!(railxing::corridor_ground, m)?)?;
+    // 372: railxing::corridor_ground (railxing.corridor_ground, BNE_RAIL_XING: a grid over the tracks' points, not
+    // numpy's distance matrix per pair of lines; the same bits)
+    m.add("VERSION", 372)?;
     Ok(())
 }
