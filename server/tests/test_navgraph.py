@@ -449,6 +449,22 @@ class GraphTest(unittest.TestCase):
         g = navgraph.build(FRAME, [f], flat, (0.0, 0.0), decks={"id001~lanes000000000-1000000000": [deck]})
         self.assertTrue(all(n[2] == 10.0 for n in g["nodes"].values()), "another road's deck is never read")
 
+    def test_family_reach_follows_section_placement(self):
+        """A section placed further off its road's line than SECTION_DECK_M (a five-lane motorway's right_of:1: 6 m)
+        still reads its road's deck, as far as its own placement and no further (Codex review of PR #1395)."""
+        deck = (np.array([(0.0, 0.0), (100.0, 0.0)]), np.array([20.0, 20.0]))
+        sec = "r~lanes000000000-500000000"
+        fam = navgraph._Roads({"r": [deck]}, {"r": 6.0})
+        self.assertEqual(navgraph._deck_z(fam, sec, 50.0, 6.5), 20.0)
+        self.assertIsNone(navgraph._deck_z(fam, sec, 50.0, 10.5), "past its placement + SECTION_DECK_M")
+        self.assertIsNone(navgraph._deck_z(navgraph._Roads({"r": [deck]}), sec, 50.0, 6.5), "no placement known: 4 m")
+        f = features([[(0, 0), (200, 0)]], ["motorway"])
+        f.ids = np.array([sec], dtype=object)
+        col = np.empty(1, object)
+        col[0] = {"offset": -6.0, "shift": -2.0, "extra": 3.5, "end_off": (-4.0, -6.0)}
+        f.attrs[navgraph.lanesections.PROFILE] = col
+        self.assertEqual(navgraph._section_shifts([f, None]), {"r": 6.0})
+
     def test_deck_z_family_lookup(self):
         deck = (np.array([(0.0, 0.0), (100.0, 0.0)]), np.array([20.0, 20.0]))
         plain = {"r": [deck]}

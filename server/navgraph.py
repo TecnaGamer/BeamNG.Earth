@@ -342,11 +342,18 @@ class _Roads(dict):
     section in the graphs centred south of its middle, found no deck and put its nodes on the valley floor 22-28 m
     under the deck: the AI drove its path into the drop, stopped on the viaduct and turned round against the barrier."""
 
-    def __init__(self, own):
+    def __init__(self, own, shifts=None):
         super().__init__(own or {})
         self.family = {}
         for k in self:
             self.family.setdefault(_road_id(k), []).append(k)
+        self.shifts = shifts or {}      # road id -> m its sections' lanes stand off its line at most (_section_shifts)
+
+    def reach(self, fid):
+        """m a node of fid's family may stand off its family's other deck lines: SECTION_DECK_M past the furthest its
+        sections are placed (a four-lane motorway's section placed right_of:1 stands 4 m off, five lanes 6 m: Codex
+        review of PR #1395)."""
+        return SECTION_DECK_M + self.shifts.get(_road_id(fid), 0.0)
 
     def related(self, fid):
         """The parts of the other ids of fid's family (not its own), [] when none."""
@@ -378,8 +385,29 @@ def _deck_z(decks, fid, x, y):
     decks a _Roads: a point on none of fid's own parts reads its road family's others' within SECTION_DECK_M."""
     got = _part_z(decks.get(fid, ()), x, y, 1.5)
     if got is None and isinstance(decks, _Roads):
-        got = _part_z(decks.related(fid), x, y, SECTION_DECK_M)
+        got = _part_z(decks.related(fid), x, y, decks.reach(fid))
     return got
+
+
+def _section_shifts(feats_list):
+    """road id -> m the lanes of its sections (lanesections.split) stand off its line at most: a section's placement
+    runs from offset - shift to offset along it (lanesections.unplaced)."""
+    out = {}
+    for f in feats_list:
+        if f is None or lanesections.PROFILE not in f.attrs:
+            continue
+        for i, fid in enumerate(f.ids):
+            prof = lanesections.profile(f, i)
+            if not prof:
+                continue
+            off = abs(float(prof.get("offset") or 0.0))
+            if prof.get("extra"):
+                off = max(off, abs(float(prof.get("offset") or 0.0) - float(prof.get("shift") or 0.0)))
+            for e in prof.get("end_off") or ():
+                off = max(off, abs(float(e)))
+            rid = _road_id(fid)
+            out[rid] = max(out.get(rid, 0.0), off)
+    return out
 
 
 def _part_z(parts, x, y, reach):
@@ -425,9 +453,10 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
     The graph's "trafficProfile": the adaptive traffic amount's profile of its centre (_traffic_profile)."""
     cx, cy = centre
     # (a lane section's nodes read its road's deck / tunnel floor and the other way round: _Roads)
-    decks = _Roads(decks) if decks else decks
-    tunnels = _Roads(tunnels) if tunnels else tunnels
-    open_tunnels = _Roads(open_tunnels) if open_tunnels else open_tunnels
+    shifts = _section_shifts(feats_list) if (decks or tunnels or open_tunnels) else {}
+    decks = _Roads(decks, shifts) if decks else decks
+    tunnels = _Roads(tunnels, shifts) if tunnels else tunnels
+    open_tunnels = _Roads(open_tunnels, shifts) if open_tunnels else open_tunnels
     nodes, edges, edge_fids, seen = {}, [], [], lanesections.replaced_roads(feats_list)
     posted = {}                 # id(edge) -> its posted limit where the AI's target is not it (posted_field)
     rough_edges = set()          # id(edge) -> OSM smoothness class says traffic should not overspeed
