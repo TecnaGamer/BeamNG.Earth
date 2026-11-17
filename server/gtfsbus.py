@@ -40,6 +40,7 @@ MIRROR_URL = "https://files.mobilitydatabase.org/mdb-3248/latest.zip"
 AREA = (57.05, 10.95, 59.45, 15.30)
 REFRESH_S = 7 * 86400           # lines and stops change seldom; Bronze's 50 calls a month stay untouched
 RETRY_S = 3600                  # a failed download: not again before this
+FIRST_WAIT_S = 45.0             # the first lookup waits this long for the first download (16 s on 2026-11-17)
 INDEX_VERSION = 1
 BUS_TYPES = {"3", "700"}        # (GTFS's bus, and the extended types' bus service; 1501 communal taxi is not a line)
 SNAP_MAX_M = 40.0
@@ -47,6 +48,7 @@ ATTRIBUTION = "Bus lines: Västtrafik (Trafiklab GTFS Regional, CC0)"
 
 _lock = threading.Lock()
 _state = {"index": None, "loaded": None, "building": False, "failed_at": 0.0, "error": None}
+_built = threading.Condition(_lock)     # notified when a download ends
 
 
 class Preparing(Exception):
@@ -265,6 +267,7 @@ def _build_in_background(cache_dir, net):
     finally:
         with _lock:
             _state["building"] = False
+            _built.notify_all()
 
 
 def index(cache_dir, net):
@@ -284,9 +287,15 @@ def index(cache_dir, net):
     if start:
         threading.Thread(target=_build_in_background, args=(cache_dir, net), name="vt-feed", daemon=True).start()
     if data is None:
-        if error and not _state["building"]:
-            raise RuntimeError(error)
-        raise Preparing("Västtrafik's lines are downloading (92 MB, once a week)")
+        # (the first lookup waits for the first download rather than asking Overpass meanwhile: it was down for
+        # hours on 2026-11-17, and the lookup then hung a minute on its two servers while the feed came in 16 s)
+        with _lock:
+            _built.wait_for(lambda: not _state["building"], timeout=FIRST_WAIT_S)
+            data, error, building = _state["index"], _state["error"], _state["building"]
+        if data is None:
+            if error and not building:
+                raise RuntimeError(error)
+            raise Preparing("Västtrafik's lines are downloading (92 MB, once a week)")
     return data
 
 

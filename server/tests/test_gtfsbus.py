@@ -127,17 +127,31 @@ class DownloadTest(unittest.TestCase):
         self.assertNotIn("s3cret-key", str(raised.exception))
         self.assertIn("<key>", str(raised.exception))
 
-    def test_first_lookup_downloads_meanwhile_then_reads_the_disk(self):
+    def test_first_lookup_waits_for_the_download_then_reads_the_disk(self):
         net = Net(self.zip)
-        with self.assertRaises(gtfsbus.Preparing):
-            gtfsbus.index(self.cache, net)
-        for t in threading.enumerate():
-            if t.name == "vt-feed":
-                t.join(30)
         self.assertEqual(len(gtfsbus.index(self.cache, net)["lines"]), 2)
         gtfsbus._state.update(index=None, loaded=None)        # (a server restart)
         self.assertEqual(len(gtfsbus.index(self.cache, Net(error=RuntimeError))["lines"]), 2, "from the disk")
         self.assertEqual(len(net.urls), 1)
+
+    def test_a_slow_download_overpass_meanwhile(self):
+        gate = threading.Event()
+
+        class Slow(Net):
+            def get(self, url, kind=None, **kw):
+                gate.wait(10)
+                return super().get(url, kind, **kw)
+        with mock.patch.object(gtfsbus, "FIRST_WAIT_S", 0.2):
+            with self.assertRaises(gtfsbus.Preparing):
+                gtfsbus.index(self.cache, Slow(self.zip))
+        gate.set()
+        for t in threading.enumerate():
+            if t.name == "vt-feed":
+                t.join(30)
+
+    def test_a_failed_download_says_why(self):
+        with self.assertRaisesRegex(RuntimeError, "HTTP 403"):
+            gtfsbus.index(self.cache, Net(error=RuntimeError))
 
 
 class BusLinesTest(unittest.TestCase):
