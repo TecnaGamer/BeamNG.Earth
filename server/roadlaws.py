@@ -34,6 +34,8 @@ import math
 
 import numpy as np
 
+import dmath
+import dnp
 import gradeshapes as _gsh
 
 log = logging.getLogger("earthd.grading")
@@ -41,7 +43,7 @@ log = logging.getLogger("earthd.grading")
 STEP_M = 4.0                # m between a run's samples
 NODE_M = 1.0                # m: plan ends this close are one node
 REACH_M = 3.0               # m past the road's carriageway an end still joins it (grading.JUNCTION_REACH_M)
-CONT_COS = math.cos(math.radians(35.0))     # two ends going on within this of straight: one road (grading.CONT_TURN_DEG)
+CONT_COS = dmath.cos(math.radians(35.0))     # two ends going on within this of straight: one road (grading.CONT_TURN_DEG)
 NATURAL_WIN_M = 20.0        # m over which the ground's own grade is read
 NATURAL_PLUS = 0.02         # a run may be as steep as its ground plus this
 W_RANK = 0.5                # a sample's weight: 1 + this x its class rank (gradeshapes' DEFAULT_KMH order)
@@ -68,14 +70,14 @@ def _rank(spec):
 
 
 def _arc(xy):
-    return np.r_[0.0, np.cumsum(np.hypot(*np.diff(xy, axis=0).T))]
+    return np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(xy, axis=0).T))]
 
 
 def _dir_out(xy, end):
     """Unit direction away from plan end (0: first point, 1: last) along the plan."""
     a, b = (xy[0], xy[min(2, len(xy) - 1)]) if end == 0 else (xy[-1], xy[max(-3, -len(xy))])
     d = b - a
-    n = float(np.hypot(*d))
+    n = float(dnp.hypot(*d))
     return d / n if n > 1e-9 else np.zeros(2)
 
 
@@ -100,7 +102,7 @@ def runs(xys, specs, rids):
             for dy in (-1, 0, 1):
                 for k2 in cells.get((cx + dx, cy + dy), ()):
                     for k in ks:
-                        if k < k2 and float(np.hypot(*(pts[k] - pts[k2]))) <= NODE_M:
+                        if k < k2 and float(dnp.hypot(*(pts[k] - pts[k2]))) <= NODE_M:
                             parent[root(k)] = root(k2)
     groups = collections.defaultdict(list)
     for k in range(len(ends)):
@@ -114,7 +116,7 @@ def runs(xys, specs, rids):
                 (i, e), (j, f) = node[a], node[b]
                 if i == j:
                     continue
-                c = -float(_dir_out(xys[i], e) @ _dir_out(xys[j], f))
+                c = -float(dnp.dot(_dir_out(xys[i], e), _dir_out(xys[j], f)))
                 if c >= CONT_COS:
                     cand.append((rids[i] != rids[j] or rids[i] < 0, -c, node[a], node[b]))
         for _same, _c, x, y in sorted(cand, key=lambda q: (q[0], q[1])):
@@ -145,7 +147,7 @@ def _nearest(xy, P):
     a, b = xy[:-1], xy[1:]
     ab = b - a
     t = np.clip(((P - a) * ab).sum(1) / np.maximum((ab * ab).sum(1), 1e-12), 0.0, 1.0)
-    d = np.hypot(*(a + ab * t[:, None] - P).T)
+    d = dnp.hypot(*(a + ab * t[:, None] - P).T)
     k = int(np.argmin(d))
     return k, float(t[k]), float(d[k])
 
@@ -306,7 +308,7 @@ def apply(plans, specs, held=None, under=None, skip=(), diagnostics=None, natura
                 sp = arcs[k][-1] - (s - s0) if rev else s - s0
                 seg = int(np.clip(np.searchsorted(arcs[k], sp) - 1, 0, len(arcs[k]) - 2))
                 d = xys[k][seg + 1] - xys[k][seg]
-                d = d / max(float(np.hypot(*d)), 1e-9)
+                d = d / max(float(dnp.hypot(*d)), 1e-9)
                 return -d if rev else d
         return None
 
@@ -362,7 +364,7 @@ def apply(plans, specs, held=None, under=None, skip=(), diagnostics=None, natura
             return
         j = 1 if i == 0 else m - 2
         st = abs(float(R[r]["sv"][j] - R[r]["sv"][i]))
-        along = st * float(_dir_out(xys[k], e) @ md)   # (m along main's samples the way out of it reaches)
+        along = st * float(dnp.dot(_dir_out(xys[k], e), md))   # (m along main's samples the way out of it reaches)
         if held:
             zm = float(np.interp(sa + along, R[ra]["S"], R[ra]["Z"]))
             pin(j, zm - LANDING_TOL * st, zm + LANDING_TOL * st)
