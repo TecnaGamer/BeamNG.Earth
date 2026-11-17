@@ -1,7 +1,9 @@
-"""The road revamp plan's WIDTH repair (roads.width_repair, earthfast RoadRules.width_rejects): a mapped width wider than
-a road's lanes can be (WIDTH_PLATFORM_X x lanes x lane width, two lanes at least on a two-way road, and a shoulder each
-side) is a right-of-way / platform, not the carriageway: taken out, so the lane / class width stands (MA Route 2, a
-two-lane rural trunk mapped 30.5 m, GitHub #901). Real wide roads keep theirs."""
+"""The road revamp plan's WIDTH repair (roads.width_rejected, earthfast RoadRules.width_rejects): a mapped width wider
+than a road's lanes can be (WIDTH_PLATFORM_X x lanes x lane width, two lanes at least on a two-way road, and a shoulder
+each side) is a right-of-way / platform, not the carriageway: every reader of a mapped width leaves it out, so the lane /
+class width stands (MA Route 2, a two-lane rural trunk mapped 30.5 m, GitHub #901). The lanes are the most any lane
+data gives the road anywhere along it, from its home cell's copy (every copy decides alike). Real wide roads keep
+theirs."""
 import os
 import sys
 import unittest
@@ -10,36 +12,43 @@ import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 from test_roads import features, rules  # noqa: E402  (first: it puts the server on the path)
+import railtags  # noqa: E402
 import roads  # noqa: E402
 
 LINE = [(0, 0), (300, 0)]
 
 
-def layer(cls, width=None, osm_width=None, lanes=None, oneway=False):
-    f = features([LINE], [cls], widths=[(0, width)] if width is not None else [])
+def layer(cls, width=None, osm_width=None, lanes=None, oneway=False, parts=None, line=LINE):
+    f = features([line], [cls], widths=[(0, width)] if width is not None else [])
     f.attrs["osm_width"] = np.array([np.nan if osm_width is None else osm_width], np.float64)
     f.attrs["osm_lanes"] = np.array([np.nan if lanes is None else lanes], np.float64)
+    if parts is not None:
+        col = np.empty(1, object)
+        col[0] = parts
+        f.attrs[railtags.LANE_PARTS] = col
     if oneway:
         f.rules["oneway"] = rules([(0, 1.0)], "float")
     return f
 
 
-def repaired(*a, **k):
-    f = roads.width_repair(layer(*a, **k))
-    return f, roads.road_specs(f)[0]
+def kept(f):
+    """(the width rule row kept, OSM's width kept, the spec's width)."""
+    return (roads.mapped_rule_width(f, 0) is not None, roads.mapped_osm_width(f, 0) is not None,
+            roads.road_specs(f)[0].width)
 
 
 class WidthRepair(unittest.TestCase):
-    def test_a_right_of_way_on_a_two_lane_trunk_is_taken_out(self):
+    def test_a_right_of_way_on_a_two_lane_trunk_is_left_out(self):
         """MA Route 2: 30.5 m (100 ft) and 18.3 m (60 ft) mapped on the Mohawk Trail, mapped lanes or none."""
         for w, lanes in ((30.5, 2), (18.3, 2), (30.5, None), (18.3, None)):
             with self.subTest(w=w, lanes=lanes):
-                f, sp = repaired("trunk", width=w, osm_width=w, lanes=lanes)
-                self.assertEqual(len(f.rules["width"].feature), 0)
-                self.assertTrue(np.isnan(f.attrs["osm_width"][0]))
-                plain = roads.road_specs(layer("trunk", lanes=lanes))[0]
-                self.assertAlmostEqual(sp.width, plain.width)
-                self.assertLess(sp.width, 12.0)
+                f = layer("trunk", width=w, osm_width=w, lanes=lanes)
+                rule, osm, width = kept(f)
+                self.assertFalse(rule)
+                self.assertFalse(osm)
+                self.assertAlmostEqual(width, roads.road_specs(layer("trunk", lanes=lanes))[0].width)
+                self.assertLess(width, 12.0)
+                self.assertEqual(len(f.rules["width"].feature), 1, "the layer itself untouched")
 
     def test_real_widths_stand(self):
         """A two-lane trunk with wide paved shoulders, a two-lane town street with parking, a 4-lane primary, a one-way
@@ -48,32 +57,69 @@ class WidthRepair(unittest.TestCase):
                                   ("motorway", 27.0, 6, True), ("residential", 6.7, 1, False),
                                   ("motorway", 16.0, None, True)):
             with self.subTest(cls=cls, w=w):
-                f, sp = repaired(cls, width=w, osm_width=w, lanes=lanes, oneway=ow)
-                self.assertEqual(len(f.rules["width"].feature), 1)
-                self.assertEqual(float(f.attrs["osm_width"][0]), w)
+                rule, osm, _ = kept(layer(cls, width=w, osm_width=w, lanes=lanes, oneway=ow))
+                self.assertTrue(rule)
+                self.assertTrue(osm)
 
     def test_no_lane_count_no_test(self):
         """A street with no lane count (none mapped, not a highway or a link): its mapped width stands, however wide."""
-        f, sp = repaired("residential", width=30.0, osm_width=30.0)
-        self.assertEqual(len(f.rules["width"].feature), 1)
-        self.assertAlmostEqual(sp.width, 30.0, places=4)
+        rule, osm, width = kept(layer("residential", width=30.0, osm_width=30.0))
+        self.assertTrue(rule and osm)
+        self.assertAlmostEqual(width, 30.0, places=4)
 
     def test_narrow_widths_stand(self):
         """The plan's lower side is not applied: Avenue de Verdun, 2 lanes mapped, 3.6 m, one lane on the aerial."""
-        f, sp = repaired("primary", width=3.6, osm_width=3.6, lanes=2, oneway=True)
-        self.assertEqual(len(f.rules["width"].feature), 1)
-        self.assertAlmostEqual(sp.width, 3.6, places=4)
+        _, _, width = kept(layer("primary", width=3.6, osm_width=3.6, lanes=2, oneway=True))
+        self.assertAlmostEqual(width, 3.6, places=4)
 
     def test_only_the_bad_source_goes(self):
         """Overture's rule a right-of-way, OpenStreetMap's a carriageway: OpenStreetMap's stands."""
-        f, sp = repaired("trunk", width=30.5, osm_width=10.0, lanes=2)
-        self.assertEqual(len(f.rules["width"].feature), 0)
-        self.assertAlmostEqual(sp.width, 10.0, places=4)
+        rule, osm, width = kept(layer("trunk", width=30.5, osm_width=10.0, lanes=2))
+        self.assertFalse(rule)
+        self.assertTrue(osm)
+        self.assertAlmostEqual(width, 10.0, places=4)
 
     def test_not_a_road(self):
         f = layer("trunk", width=30.5, lanes=2)
         f.attrs["subtype"] = np.array(["rail"])
-        self.assertEqual(len(roads.width_repair(f).rules["width"].feature), 1)
+        self.assertFalse(roads.width_rejected(f)[0].any())
+
+    def test_a_merged_highway_keeps_the_width_its_widest_section_has(self):
+        """A one-way trunk merged from a 2-lane and a 4-lane way (its lane parts; the feature's own count the 2-lane
+        way's): 22 m is a 4-lane section's width, kept (Codex: deleted against the feature's 2 lanes)."""
+        parts = [(0.0, 0.5, 1.0, {"lanes": "2"}), (0.5, 1.0, 1.0, {"lanes": "4"})]
+        rule, osm, _ = kept(layer("trunk", width=22.0, osm_width=22.0, lanes=2, oneway=True, parts=parts))
+        self.assertTrue(rule and osm)
+        rule, osm, _ = kept(layer("trunk", width=22.0, osm_width=22.0, lanes=2, oneway=True,
+                                  parts=[(0.0, 1.0, 1.0, {"lanes": "2"})]))
+        self.assertFalse(rule or osm, "two lanes all along: a right-of-way")
+
+    def test_lanes_forward_and_backward_count(self):
+        parts = [(0.0, 1.0, 1.0, {"lanes:forward": "3", "lanes:backward": "3"})]
+        rule, _, _ = kept(layer("trunk", width=30.0, parts=parts))
+        self.assertTrue(rule, "six lanes: 30 m is a carriageway")
+
+    def test_every_copy_decides_as_its_home_copy(self):
+        """Two cells' copies of one segment, the home copy's way tagged 4 lanes, the other copy's cell without that
+        way's tags (2 lanes by the trunk default): both keep a 22 m width; and the reverse: both take it out."""
+        line = [(0, 0), (1500, 0)]
+        for home_lanes, other_lanes, keep in ((4, None, True), (None, 4, False), (2, 4, False), (4, 2, True)):
+            with self.subTest(home=home_lanes, other=other_lanes):
+                home = layer("trunk", width=22.0, lanes=home_lanes, oneway=True, line=line)
+                other = layer("trunk", width=22.0, lanes=other_lanes, oneway=True, line=line)
+                home_key = str(roads._home_cells(home)[0])
+                home.__dict__["_bnge_cell"] = (home_key, "roads", "{}")
+                other.__dict__["_bnge_cell"] = ("14/0/0", "roads", "{}")
+                other.__dict__["_bnge_neighbours"] = lambda h=home: [h]
+                home.__dict__["_bnge_neighbours"] = lambda o=other: [o]
+                self.assertEqual(kept(home)[0], keep)
+                self.assertEqual(kept(other)[0], keep)
+
+    def test_a_layer_without_the_home_cell_at_hand_decides_on_its_own(self):
+        f = layer("trunk", width=22.0, lanes=4, oneway=True)
+        f.__dict__["_bnge_cell"] = ("14/0/0", "roads", "{}")
+        f.__dict__["_bnge_neighbours"] = lambda: []
+        self.assertTrue(kept(f)[0])
 
 
 if __name__ == "__main__":

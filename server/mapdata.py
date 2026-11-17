@@ -1228,9 +1228,6 @@ class MapData:
                     self._lanes(key, layer, f, **({"built": vers["lane_tags"]} if "lane_tags" in vers else {}))
                 if made and layer == "roads":
                     f = levelways.promote(f, frame)         # (a street mapped as a footway over a level crossing: a road)
-                    # (a mapped width wider than the road's lanes can be is a right-of-way: taken out, GitHub #901)
-                    import roads
-                    f = roads.width_repair(f)
                     # (a merged highway's own lane sections as their own pieces, before the bends are rounded:
                     # lanesections.py, from PR #880)
                     ctx = []
