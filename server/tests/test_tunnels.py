@@ -192,6 +192,45 @@ class LowArch(unittest.TestCase):
         self.assertFalse(used & {roadmesh.TUNNEL_STONE, roadmesh.TUNNEL_STONE_IN}, used)
 
 
+class BoreFitPiece(unittest.TestCase):
+    """Popoli: a street over the A25's two tubes 12-20 m inside their portals, 5.2 m over the floor; the tunnels 870 m
+    long, one full section each, too long for BORE_FIT: their 6.8 m tubes stood 1-1.7 m through the street."""
+
+    def solve(self, at_x):
+        from test_roads import features, FRAME, LON, M_LON
+        # a 600 m motorway tunnel through a ridge rising 0.26 m per m from its portals (x = +-300), a street across it
+        f = features([[(-300, 0), (300, 0)], [(at_x, -60), (at_x, 60)]], ["motorway", "residential"],
+                     flags=[(0, "is_tunnel")])
+
+        def ridge(la, lo):
+            e = (np.asarray(lo) - LON) * M_LON
+            return 10.0 + np.clip((300.0 - np.abs(e)) * 0.26, 0.0, 60.0)
+        tp = roads.TunnelProfiles(FRAME, lambda key: f, ridge)
+        parts = tp.parts([f], (-320.0, -64.0, 320.0, 64.0))
+        out = []
+        for fid, spec, xy, z, _lon in parts:
+            xy = np.asarray(xy, np.float64)[:, :2]
+            out.append((xy[:, 0].min(), xy[:, 0].max(), float(np.min(z)), tp.height(fid)))
+        return sorted(out)
+
+    def test_the_tube_under_a_street_near_its_portal_fits_under_it(self):
+        # the street 20 m inside the east portal, 5.2 m over the floor: the piece under it a box no taller than the
+        # room under the street allows (MAJOR_LOW_H at the least), the rest of the tunnel its full tube
+        got = self.solve(280.0)
+        under = [g for g in got if g[0] <= 280.0 <= g[1]]
+        self.assertTrue(under, got)
+        floor = under[0][2]
+        self.assertLessEqual(under[0][3], max(10.0 + 20 * 0.26 - floor - roads.BORE_FIT_M, roads.MAJOR_LOW_H) + 1e-6,
+                             got)
+        self.assertGreaterEqual(under[0][1], 299.0, "carried on to the portal: no tube's stub between")
+        self.assertTrue(any(h >= roadmesh.TUNNEL_H - 1e-6 and x1 - x0 > 400.0 for x0, x1, _z, h in got),
+                        "the tunnel inside the hill keeps its full tube")
+
+    def test_a_street_high_over_it_leaves_the_tube(self):
+        got = self.solve(200.0)         # 26 m over the floor
+        self.assertTrue(all(h >= roadmesh.TUNNEL_H - 1e-6 for x0, x1, _z, h in got if x0 <= 200.0 <= x1), got)
+
+
 class PortalCover(unittest.TestCase):
     def test_a_major_road_s_shallow_open_end_is_covered_a_park_road_s_is_not(self):
         # the Gotthard road tunnel's north portal: a cut-and-cover box under ~3 m of meadow, then the mountain

@@ -460,11 +460,10 @@ class AbutmentEndTest(unittest.TestCase):
         self.assertAlmostEqual(out[4], 82.0, delta=0.05, msg="the approach")
         for x, z in zip(px[1:4], out[1:4]):
             self.assertLessEqual(z, 82.0 + x * grading.ABUT_UNDER_GRADE + 0.05, f"past the end by {-x} m")
-        with unittest.mock.patch.object(grading, "ABUT_UNDER_GRADE", 0.0):
-            old = grading.grade_points(px, py, base, [approach])
-        self.assertGreater(old[2], 81.9, "before: held at the end's height 6 m back over the deck")
-        plain = grading.Plan(xy, np.full(21, 82.0), 9.0)    # an ordinary road end (no bridge): its round end as before
-        self.assertTrue(np.allclose(grading.grade_points(px, py, base, [plain]), old, atol=1e-9), "a plain road end: as before")
+        for x, z in zip(px[1:4], out[1:4]):              # under the deck: the abutment's slope, 1 in SLOPE_RUN
+            self.assertLessEqual(z, 82.0 + x / grading.SLOPE_RUN + 0.05, f"the abutment's slope, {-x} m past the end")
+        plain = grading.Plan(xy, np.full(21, 82.0), 9.0)    # an ordinary road end (no bridge): its round end, held
+        self.assertGreater(grading.grade_points(px, py, base, [plain])[2], 81.9, "a plain road end: its round end")
 
     def test_end_abutment_too(self):
         xy = np.stack([np.arange(-80.0, 0.1, 4.0), np.zeros(21)], axis=1)  # the approach, its end the abutment
@@ -472,6 +471,27 @@ class AbutmentEndTest(unittest.TestCase):
         out = grading.grade_points(np.array([0.0, 5.0]), np.zeros(2), np.full(2, 40.0), [approach])
         self.assertAlmostEqual(out[0], 50.0, delta=0.05)
         self.assertLessEqual(out[1], 50.0 - 5.0 * grading.ABUT_UNDER_GRADE + 0.05)
+
+    def test_a_short_deck_clears_its_ground(self):
+        # The A5 by Heidelberg (49.3546 N 8.6316 E): a carriageway on its 8 m fill crosses a service road on a 21.4 m
+        # deck. Its approaches' round ends, falling 8 % over the deck, stood 0.2-0.9 m over the girders' underside
+        # from either abutment to the service road's cutting, whose walls rose into the girders.
+        span, top = 21.4, 111.0
+        under = top - roads.deck_depth(span)
+        south = np.arange(-120.0, 0.1, 4.0)
+        north = np.arange(span, span + 120.1, 4.0)
+        approaches = [grading.Plan(np.stack([x, np.zeros(len(x))], axis=1), np.full(len(x), top), 8.0, abut=ab,
+                                   road_half=7.0) for x, ab in ((south, (False, True)), (north, (True, False)))]
+        ys = np.arange(-100.0, 100.1, 4.0)
+        service = grading.Plan(np.stack([np.full(len(ys), span / 2), ys], axis=1), np.full(len(ys), 102.6), 3.0)
+        for p, rid, rank in ((approaches[0], 1, 150), (approaches[1], 1, 150), (service, 2, 105)):
+            p.rid, p.rank = rid, rank
+        X, Y = np.meshgrid(np.r_[np.arange(0.0, span, 0.5), span], np.arange(-7.0, 7.01, 1.0))
+        z = grading.grade_points(X.ravel(), Y.ravel(), np.full(X.size, 103.6), approaches + [service]).reshape(X.shape)
+        self.assertTrue(np.allclose(z[:, [0, -1]], top, atol=0.05), "the abutments at their roads' height")
+        seat = 2.0 * roads.deck_depth(span)
+        inner = (X >= seat) & (X <= span - seat)
+        self.assertLessEqual(float(z[inner].max()), under, "the ground under the span clears its girders")
 
 
 class RailUnderAbutmentTest(unittest.TestCase):

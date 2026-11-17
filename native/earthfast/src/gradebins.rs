@@ -325,6 +325,20 @@ fn target(g: &Seg, qx: f64, qy: f64, tu: f64, t: f64, along: f64, p: &Prm) -> (f
     (target, past, g.cut[co], g.cut[co + 1], g.cut[co + 2])
 }
 
+/// A pair's target past an abutment end, under the deck (past > 0; its target there falling at abut_under): the
+/// abutment's slope, 1 in slope_run (the embankment's) down from the end, never under the point's ground where that
+/// stands higher (ground: a fill the elevation holds under the deck's end, kept at abut_under's fall). At abut_under
+/// alone the ground stood within a deck's depth for its first 11-27 m, across the whole span of a short one: the A5's
+/// 21 m bridges over a service road by Heidelberg had their girders buried, the road's cutting rising into them.
+#[inline(always)]
+fn under_deck(target: f64, past: f64, ground: f64, p: &Prm) -> f64 {
+    if past <= 0.0 {
+        return target;
+    }
+    let slope = target - past * (1.0 / p.slope_run - p.abut_under).max(0.0);
+    slope.max(ground.min(target))
+}
+
 /// Pass 0 of one pair: the carriageway, rank, abutment, cutting and core state.
 #[inline(always)]
 fn pair0(st: &mut Pt, g: &Seg, q: &Pre, p: &Prm) {
@@ -333,7 +347,8 @@ fn pair0(st: &mut Pt, g: &Seg, q: &Pre, p: &Prm) {
     if d > g.far0 {
         return;
     }
-    let (target, past, cwall, ctop, creach) = (q.target, q.past, q.cwall, q.ctop, q.creach);
+    let (past, cwall, ctop, creach) = (q.past, q.cwall, q.ctop, q.creach);
+    let target = under_deck(q.target, past, st.bs, p);
     // (a pass road's whole core, its shoulder too: the leg above's fill reached onto the strip between its lanes and
     // its wall and stood there as a jagged fin, 2026-11-01)
     let cr = if g.steep { g.h } else { g.rh };
@@ -412,7 +427,8 @@ fn pair1(st: &mut Pt, g: &Seg, q: &Pre, p: &Prm, far1: f64) {
     if d - g.h > far1 {
         return;
     }
-    let (target, cwall, ctop, side, ahead) = (q.target, q.cwall, q.ctop, q.side, q.ahead);
+    let (cwall, ctop, side, ahead) = (q.cwall, q.ctop, q.side, q.ahead);
+    let target = under_deck(q.target, q.past, st.bs, p);
     // (and not far past a road's end: beside a tunnel the approach's last segment flattened a strip 10 m along it, a
     // pit beside the arch, 2026-10-17)
     // (on a cutting's side the core ends at its wall; where the ground falls away there the road ends)

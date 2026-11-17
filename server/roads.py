@@ -5767,7 +5767,8 @@ BURY_CLASSES = {"motorway", "motorway_link", "trunk", "trunk_link", "primary", "
 ROAD_OVER_ON = os.environ.get("BNE_TUNNEL_ROAD_OVER", "on") != "off"  # cover_roads: only roads over the tunnel's level
 BORE_FIT = os.environ.get("BNE_TUNNEL_BORE_FIT", "on") != "off"   # a tube no taller than the room under a road over it
 BORE_FIT_M = 0.7        # m kept between a tube's vault and a road over it (arch_raise's soil + 0.1)
-BORE_FIT_MAX_M = 250.0  # m: covered sections up to this long are fitted under the roads over them
+BORE_FIT_MAX_M = 250.0  # m: covered sections up to this long are fitted under the roads over them; in a longer one
+                        # the piece under such a road is a section of its own (bore_pieces)
 TUNNEL_FULL_H = 6.8     # m: roadmesh.TUNNEL_H (a full tube's height: the shorter ones are kept in heights)
 CHAIN_PORTAL_M = 3.0    # m: a tunnel part's end this near its own road's ground part is a portal (_chain_pins) ...
 CHAIN_END_M = 1.0       # ... or this near another ground road's end, or on one running on in line with it
@@ -5811,6 +5812,46 @@ def portal_cover(kinds, cover, spec, s=None):
     fast.require(248, "tunnel_portal_cover")
     return np.asarray(fast._ef.tunnel_portal_cover(np.ascontiguousarray(kinds), cover, s, PORTAL_SHALLOW_COVER_M,
                                                    SECTION_MIN_M, PORTAL_RUN_ON), np.int64)
+
+
+def bore_pieces(s, kinds, floor, crossings, min_m=SECTION_MIN_M):
+    """kinds with the piece of a full tunnel section longer than BORE_FIT_MAX_M under each ground road crossing over
+    it where the tube has no room (crossings [(arc m, reach m along the tunnel either side of it, the road's height)]:
+    the road less the floor and BORE_FIT_M under roadmesh.TUNNEL_H) a low arch of its own (1), which the sections'
+    BORE_FIT sizes to that room; at least min_m long, and carried on to the section's end where less than min_m of
+    the tube would be left beyond it. A section is one height, so a long one was never fitted (one road near the
+    Gotthard tunnel's portal made all 17 km of it a low arch), and its 6.8 m tube stood through the road: Popoli's
+    street over the A25's two tubes 12-20 m inside their portals, 5.2 m over their floor, 1-1.7 m of tube through it.
+    Pure."""
+    import roadmesh
+    kinds = np.array(kinds, np.int64)
+    s = np.asarray(s, np.float64)
+    floor = np.asarray(floor, np.float64)
+    runs, i, n = [], 0, len(kinds)
+    while i < n:
+        j = i
+        while j + 1 < n and kinds[j + 1] == kinds[i]:
+            j += 1
+        if kinds[i] == 2 and s[j] - s[i] > BORE_FIT_MAX_M:
+            runs.append((i, j))
+        i = j + 1
+    for a, b in runs:
+        for arc, reach, zr in crossings:
+            if not s[a] < arc < s[b] or not np.isfinite(zr):
+                continue
+            if zr - float(np.interp(arc, s, floor)) - BORE_FIT_M >= roadmesh.TUNNEL_H:
+                continue
+            reach = max(float(reach), min_m / 2)
+            lo, hi = arc - reach, arc + reach
+            if lo - s[a] < min_m:
+                lo = s[a]
+            if s[b] - hi < min_m:
+                hi = s[b]
+            # (rounded outward to the samples: the arch under all of the road, never short of it)
+            q0 = max(a, int(np.searchsorted(s, lo, "right")) - 1)
+            q1 = min(b, int(np.searchsorted(s, hi, "left")))
+            kinds[q0:q1 + 1] = 1
+    return kinds
 
 
 def cover_roads(xy, s, kinds, lines, halves, cover=None):
@@ -8854,6 +8895,8 @@ class TunnelProfiles(BridgeProfiles):
                 if not fl.get("buried"):
                     kinds = portal_cover(kinds, (g if gc is None else gc) - floor, pool[k][0], s)
                 kinds = self._cover_roads(xy, s, kinds, ground, (g if gc is None else gc) - floor)
+                if BORE_FIT and s[-1] > BORE_FIT_MAX_M:     # (a shorter part's sections are fitted whole)
+                    kinds = bore_pieces(s, kinds, floor, self._bore_crossings(xy, s, ground))
             secs, i = [], 0
             while i < len(kinds):
                 j = i
@@ -8992,6 +9035,39 @@ class TunnelProfiles(BridgeProfiles):
                     lines.append(ln)
                     halves.append(hw)
         return cover_roads(xy, s, kinds, lines, halves, cover)
+
+    def _bore_crossings(self, xy, s, ground):
+        """[(arc m, reach m, height)] of the ground roads crossing over tunnel line xy (arc s) as bore_pieces takes
+        them: their carriageway and TUNNEL_ROAD_CLEAR_M past it along the tunnel (/ the sine of the crossing angle,
+        at least TUNNEL_ROAD_MIN_SIN, as cover_roads), their ground as graded (TunnelProfiles' ground)."""
+        xy = np.asarray(xy, np.float64)[:, :2]
+        lines, halves = [], []
+        for gk, lns in (ground or {}).items():
+            hw = self._hw.get(gk)
+            if hw is None:
+                continue
+            for ln in lns:
+                ln = np.asarray(ln, np.float64).reshape(-1, 2)
+                if len(ln) >= 2:
+                    lines.append(ln)
+                    halves.append(hw)
+        if not lines or len(xy) < 2:
+            return []
+        out, pts = [], []
+        for ln, hw, cr in zip(lines, halves, _crossings_by([xy], lines)):
+            for _pi, arc, pt in cr:
+                i = int(np.clip(np.searchsorted(s, arc) - 1, 0, len(xy) - 2))
+                t = xy[i + 1] - xy[i]
+                d = ln[1:] - ln[:-1]
+                w = np.clip(((pt - ln[:-1]) * d).sum(1) / np.maximum((d * d).sum(1), 1e-12), 0.0, 1.0)
+                j = int(np.argmin(dnp.hypot(*(ln[:-1] + d * w[:, None] - pt).T)))
+                sin = abs(float(t[0] * d[j, 1] - t[1] * d[j, 0])) / max(float(dnp.hypot(*t) * dnp.hypot(*d[j])), 1e-12)
+                out.append((float(arc), (hw + TUNNEL_ROAD_CLEAR_M) / max(sin, TUNNEL_ROAD_MIN_SIN)))
+                pts.append(pt)
+        if not out:
+            return []
+        zr = np.asarray(self._ground(np.asarray(pts, np.float64)), np.float64)
+        return [(arc, reach, float(z)) for (arc, reach), z in zip(out, zr)]
 
     def _bore_fit(self, xy, s, floor, ground):
         """m: the tallest tube (floor to vault) that stays BORE_FIT_M under every ground road and railway crossing over

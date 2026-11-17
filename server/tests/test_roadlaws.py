@@ -166,6 +166,38 @@ class LandingTest(unittest.TestCase):
         self.assertAlmostEqual(float(link.z[-1]), float(np.interp(8.0, x, b.z)), delta=0.02)
 
 
+class MouthTest(unittest.TestCase):
+    """A side road lands on the road it joins at that road's height at the mouth itself, not at the nearest of its
+    samples (4 m apart): Compiegne, a residential's end at a node of two held cut ramps (9 % one way, 16.7 % the other)
+    stood on the sample 1.7 m up the 16.7 % one, 0.3 m over the node, and the ground between them a sag a 12 m truck
+    grazed."""
+
+    @staticmethod
+    def ramp(held):
+        # (the main road along x through the node at x = 0: 9 % down to the west, 16.7 % up to the east, then flat; its
+        # samples from x = -18.3 every ~4 m, the node 1.7 m short of one)
+        x = np.r_[np.arange(-18.3, 0.0, 1.0), np.arange(0.0, 100.1, 1.0)]
+        z = 100.0 + np.where(x < 0.0, -0.09 * x, np.minimum(0.167 * x, 0.167 * 20.0))
+        main = plan(np.c_[x, 0 * x], z, half=4.0)
+        y = np.arange(0.0, 16.1, 4.0)
+        side = plan(np.c_[0 * y, y], 100.0 - 0.02 * y)
+        info = {}
+        roadlaws.apply([main, side], [spec("residential"), spec("residential")],
+                       held=(lambda i: np.ones(len(z), bool) if i == 0 else None) if held else None, diagnostics=info)
+        return main, side, info
+
+    def test_on_a_held_road_at_its_own_height(self):
+        main, side, info = self.ramp(held=True)
+        self.assertEqual(info["infeasible"], 0, info.get("failed"))
+        self.assertAlmostEqual(float(np.interp(0.0, main.xy[:, 0], main.z)), 100.0, delta=1e-9)     # (held)
+        self.assertAlmostEqual(float(side.z[0]), 100.0, delta=0.02)
+
+    def test_on_a_solved_road_between_its_samples(self):
+        main, side, info = self.ramp(held=False)
+        self.assertEqual(info["infeasible"], 0, info.get("failed"))
+        self.assertAlmostEqual(float(side.z[0]), float(np.interp(0.0, main.xy[:, 0], main.z)), delta=0.02)
+
+
 class JunctionTest(unittest.TestCase):
     """A T junction is one where the two roads share a node of the map, whatever their distance."""
 

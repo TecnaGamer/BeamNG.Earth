@@ -704,7 +704,10 @@ UNDER_CHAIN_MAX_M = UNDER_MAX_BRIDGE_M   # m: such a chain spans this at most (O
 UNDER_STUB_M = 2 * APPROACH_MIN_CROSS_M     # m: a part this short (the carriageways' fork a deck ends on, 3 m stubs on the
                                             # M1's) joined to a span leaves it a single span
 UNDER_RUN_MIN_M = 2.0
-ABUT_UNDER_GRADE = 0.08     # past a road's abutment end, over the deck, its ground falls at this grade (grade_points)
+# Past a road's abutment end, under the deck, its ground falls at ABUT_UNDER_GRADE where the elevation holds a fill there
+# (a short overpass's ends on the approach's fill), else as the abutment's slope, 1 in SLOPE_RUN (grade_points): at
+# 8 % alone it stood within a deck's depth across a short span, and a road's cutting under it rose into the girders
+ABUT_UNDER_GRADE = 0.08
 ABUT_NEAR_M = 14.0          # m from the bridge end the road is checked ...
 ABUT_FAR_M = 40.0           # ... against its grade from ABUT_NEAR_M to this far
 ABUT_STEEP = 0.15           # a fall this much steeper than that grade, near the end: the valley's side, not the road
@@ -1192,6 +1195,22 @@ def _point_along(line, d):
             return np.array([ax + (bx - ax) * t, ay + (by - ay) * t])
         acc += seg
     return np.array([float(line[-1][0]), float(line[-1][1])])
+
+
+def _signs_of(line, limits):
+    """A ground road's height limit for the shapes (gradeshapes Member.limit): q -> the limit its signs hold at a
+    crossing q (roads.road_sign_at, the dips' own reading: one rule for both), or None where no sign's range comes
+    near the line. Without it the shapes cleared the game's 6.15 m under every deck where the dips cleared the sign's
+    3.8 m, two answers for one crossing: the A5 by Heidelberg raised 3 m over a service road for headroom it does not
+    have."""
+    if not limits or len(line) < 2:
+        return None
+    lo, hi = line.min(axis=0) - roadsmod.LIMIT_NEAR_M, line.max(axis=0) + roadsmod.LIMIT_NEAR_M
+    near = [(xy, h) for xy, h in limits
+            if len(xy) >= 2 and (xy.min(axis=0) <= hi).all() and (xy.max(axis=0) >= lo).all()]
+    if not near:
+        return None
+    return lambda q: roadsmod.road_sign_at(near, q)
 
 
 def profile_sigma(spec, coarse=False):
@@ -4413,18 +4432,22 @@ class _Planner:
         nodes = self._cell_nodes(k)
         out = []
         gk = c.get("ground_kmh") or [None] * len(c["ground"])
+        lims = c.get("height_limits") or []
         for (line, half, cls), gid, kmh in zip(c["ground"], c.get("ground_ids", []), gk):
             line = np.asarray(line, np.float64)[:, :2]
             out.append(_gsh.Member((str(gid[0]), "ground", str(gid[1])), line, "ground", cls, kmh, 0.0, float(half),
-                                   None, nodes.get(str(gid[0]))))
+                                   _signs_of(line, lims), nodes.get(str(gid[0]))))
         nb = len(c["bridges"])
         for line, cls, fid, lv, h, kmh in zip(c["bridges"], c.get("bridge_cls", [None] * nb),
                                               c.get("bridge_ids", [None] * nb), c.get("bridge_levels", [1.0] * nb),
                                               c.get("bridge_half", [4.0] * nb), c.get("bridge_kmh") or [None] * nb):
             line = np.asarray(line, np.float64)[:, :2]
             mid = line[len(line) // 2]
+            # (held: the deck the underpasses never raise, the road under dug instead (_over_mapped_underpass); the
+            # shapes raising it as an overpass over that road's ground as well cleared it twice, Popoli's 15 m)
             out.append(_gsh.Member((str(fid), "deck", int(round(mid[0])), int(round(mid[1]))), line, "deck",
-                                   cls or "road", kmh, float(lv), float(h), None, nodes.get(str(fid))))
+                                   cls or "road", kmh, float(lv), float(h), None, nodes.get(str(fid)),
+                                   bool(self._over_mapped_underpass(line))))
         for kind, lines in (("rail", c.get("rail_ground", ())), ("rail_deck", c.get("rail_bridges", ()))):
             for line in lines:
                 line = np.asarray(line, np.float64)[:, :2]
@@ -4644,7 +4667,7 @@ class _Planner:
             mu, md = net.m[c["u"]], net.m[c["d"]]
             zu, zd = z_of(c["u"], c["su"]), z_of(c["d"], c["sd"])
             log.warning("grading: SHAPEDBG   crossing at %s", ll(c["q"]))
-            need = _gsh.clearance_need(net, c["u"], c["d"])
+            need = _gsh.clearance_need(net, c["u"], c["d"], c["q"])
             log.warning("grading: SHAPEDBG   at %s: %s %s over %s %s moves %s: %.2f over %.2f gap %.2f need %.2f",
                         np.round(c["q"], 1), mu.kind, mu.cls, md.kind, md.cls, c["moves"], zu if zu is not None else
                         float("nan"), zd if zd is not None else float("nan"),
@@ -7976,7 +7999,7 @@ def grade_points(px, py, base, plans, lift=0.0):
         keep = pack.seg_keep(px.min(), py.min(), px.max(), py.max())
         if keep is None:
             return out
-        fast.require(216, "grade_points_binned")    # (gradebins.rs)
+        fast.require(306, "grade_points_binned")    # (gradebins.rs; under_deck: 306)
         return fast._ef.grade_points_binned(
             np.ascontiguousarray(px, f64), np.ascontiguousarray(py, f64), np.ascontiguousarray(base, f64), pack.a,
             pack.b, pack.za, pack.zb, pack.h, pack.rh, pack.rid, pack.rk, pack.ab, pack.cut, pack.ba, pack.bb, pack.st,
@@ -7991,10 +8014,11 @@ def grade_points(px, py, base, plans, lift=0.0):
     if got is None:
         return out
     A, B, ZA, ZB, H, RH, RID, RK, AB, CUT, BA, BB, ST, LK, ABD = got
-    fast.require(181, "grade_points")        # (the Rust loop: native/earthfast; its segments' links: 125, yield_ramp: 126,
+    fast.require(306, "grade_points")        # (the Rust loop: native/earthfast; its segments' links: 125, yield_ramp: 126,
                                              # legs blend over each other's bands: 133, a pass road's core
                                              # given way to whole: 134, no carriageway past an abutment end: 169,
-                                             # a lower road over a higher one's core, easing onto it: 181)
+                                             # a lower road over a higher one's core, easing onto it: 181,
+                                             # the abutment's slope under a deck: 306)
     return fast._ef.grade_points(np.ascontiguousarray(px, f64), np.ascontiguousarray(py, f64),
                                  np.ascontiguousarray(base, f64), A, B, ZA, ZB, H, RH, RID, RK, AB, CUT, BA, BB, ST, LK,
                                  float(EXTRAP_M), float(lift), float(SLOPE_RUN), float(T_MIN), float(T_MAX), float(STEEP_RUN),

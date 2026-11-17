@@ -183,3 +183,68 @@ class NodeMemoFaultTest(RailProfileTest):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+
+class MeshGraderLatticeTest(unittest.TestCase):
+    """Popoli (42.1712 N 13.8250 E, 2026-11-17): a bridge's track level carried 700 m along the line at 2 % over a valley
+    side, past the nodes' MARGIN_M: the nodes whose window held the bridge laid the ramp, the others the ground, 7 m
+    apart. The mesh blended the nodes of the anchor's lattice, the grader those of its planning region's: the ground was
+    graded 1.4-1.7 m over the track drawn on it and the wagons hit it. The mesh's bed is read from the grader's lattice:
+    the same bed whatever the anchor. (railways.profile stands in here for a window that sees the bridge or not.)"""
+
+    def setUp(self):
+        railprofile._NODES.clear()
+        self.f = features([[(-1500.0, 100.0), (-30.0, 100.0)], [(-30.0, 100.0), (-10.0, 100.0)],
+                           [(-10.0, 100.0), (2500.0, 100.0)]],
+                          ["standard_gauge"] * 3, subtypes=["rail"] * 3, flags=[(1, "is_bridge")])
+        self.load = lambda key: self.f
+        self._cells = railways.cells_near
+        railways.cells_near = lambda frame, box, reach=railways.REACH_M: [0]
+
+    def tearDown(self):
+        railways.cells_near = self._cells
+        railprofile._NODES.clear()
+
+    @staticmethod
+    def profile(rails, ground, underpasses=()):
+        """railways.profile's stand-in: the bed 5 m over the ground in a window that holds the bridge (its ramp), on the
+        ground in one that does not."""
+        up = 5.0 if any(kind == "bridge" for _f, _c, kind, _xy in rails) else 0.0
+        out = []
+        for _f, _c, _kind, xy in rails:
+            zg = np.asarray(ground(xy), np.float64)
+            out.append((zg + up, zg))
+        return out
+
+    def test_the_mesh_has_the_bed_the_ground_is_graded_to(self):
+        import geotiles
+        elev = hill
+        with unittest.mock.patch.object(railways, "profile", self.profile):
+            region = geotiles.region_frame(*geotiles.region_of(FRAME.lat0, FRAME.lon0))
+            # (the grader: grade_plans in its planning region's frame, the DEM's heights)
+            corners = geotiles.world_xy_map(FRAME, region, np.array([[-1600.0, 0.0], [2600.0, 200.0]]))
+            box = (float(corners[:, 0].min()), float(corners[:, 1].min()), float(corners[:, 0].max()),
+                   float(corners[:, 1].max()))
+            plans = railways.grade_plans(region, [self.f], box, elev, load=self.load)
+            # (the mesh: tile_mesh's beds in the anchor's frame, in its heights)
+            rails = railways.parts(FRAME, [self.f], (-1600.0, 0.0, 2600.0, 200.0), clip=True)
+            ground = railways.point_ground(FRAME, elev)
+            prof = railways._beds(FRAME, rails, ground, [], self.load, elev)
+        gxy = np.concatenate([geotiles.world_xy_map(region, FRAME, xy) for _f, xy, _z in plans])
+        gz = np.concatenate([z for _f, _xy, z in plans])
+        worst, mixed = 0.0, 0
+        for (_fid, _c, kind, xy), (zb, _zg) in zip(rails, prof):
+            if kind != "ground":
+                continue
+            m = (xy[:, 0] > 200.0) & (xy[:, 0] < 1000.0)
+            for p, z in zip(xy[m], zb[m]):
+                d = np.hypot(gxy[:, 0] - p[0], gxy[:, 1] - p[1])
+                j = int(np.argmin(d))
+                self.assertLess(float(d[j]), 0.05, "(the grader plans the same stretch)")
+                la, lo, _ = FRAME.enu_to_geodetic(np.array([p[0]]), np.array([p[1]]), 0.0)
+                want = float(FRAME.geodetic_to_enu(la, lo, np.array([gz[j]]))[2][0])
+                worst = max(worst, abs(float(z) - want))
+                mixed += 0.5 < float(z) - float(ground(p[None])[0]) < 4.5
+        self.assertGreater(mixed, 20, "(the case: points between the nodes that see the bridge and those that do not)")
+        self.assertLess(worst, 0.01, "the track drawn on the bed the ground is graded to")

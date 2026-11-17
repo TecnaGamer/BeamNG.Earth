@@ -8,9 +8,11 @@ tiles drew one rail at two heights, a step of 0.85 m at a seam in Kyiv (railchec
 Here the beds are laid at the nodes of a lattice (a tile corner each), every node with a window much wider than the
 reach of what shapes a bed: its own profile, a pure function of (anchor, node). A point's bed is the nodes' beds around
 it (the four corners of its lattice cell) weighted bilinearly, so it is the same whichever tile or cell asks, and
-continuous across every seam by construction (the weights are). The elevation is the grader's (plan_store.elev): the mesh reads it
-in its own frame (the ENU heights, railways.point_ground), the grader as the DEM's heights, each with its own lattice (a
-frame's), so the mesh's bed is the bed the ground is graded to to within the nodes' blending. Pure given its inputs; BNE_RAIL_PROFILE=off keeps the per-window beds."""
+continuous across every seam by construction (the weights are). The elevation is the grader's (plan_store.elev), as the
+DEM's heights, and the lattice is the planning region's frame's: the mesh in an anchor's frame reads that same lattice
+(railways._region_beds), so the track is drawn on the bed the ground is graded to whatever the anchor (one of its own
+frame blended other nodes: 1.4-1.7 m apart at Popoli). Pure given its inputs; BNE_RAIL_PROFILE=off keeps the per-window
+beds."""
 import math
 import os
 import threading

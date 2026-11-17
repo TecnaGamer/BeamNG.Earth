@@ -187,15 +187,15 @@ def _beds(frame, rails, ground, underpasses, load=None, elev=None, raw=None):
     """railways.profile of rails, its beds from railprofile's lattice of node profiles (the same bed in every tile and
     grading cell: plan 035) where load (key -> roads layer) and elev (the grader's DEM) are given; railways.profile's own
     where not, for a tram and for a point no node has. raw: ground(xy) -> the DEM's heights as they are (the grader's,
-    which does not read the frame's curvature); without it the nodes read elev in the frame (point_ground: the mesh's)."""
+    in its planning frame); without it (the mesh, in an anchor's frame) the beds are the grader's lattice's
+    (_region_beds), in the frame's heights."""
     import railprofile
     new = None
     if railprofile.ENABLED and load is not None and (elev is not None or raw is not None) and rails:
-        lat0, lon0 = round(float(getattr(frame, "lat0", 0.0)), 7), round(float(getattr(frame, "lon0", 0.0)), 7)
         if raw is None:
-            new = railprofile.beds(frame, ("beds", lat0, lon0), load,
-                                   point_ground(frame, elev, ("nodes", lat0, lon0)), rails)
+            new = _region_beds(frame, load, elev, rails)
         else:
+            lat0, lon0 = round(float(getattr(frame, "lat0", 0.0)), 7), round(float(getattr(frame, "lon0", 0.0)), 7)
             new = railprofile.beds(frame, ("beds-dem", lat0, lon0), load, raw, rails)
     if new is None or any(np.isnan(z).any() for z in new):
         old = profile(rails, ground, underpasses)
@@ -205,18 +205,10 @@ def _beds(frame, rails, ground, underpasses, load=None, elev=None, raw=None):
     return [(z, np.asarray(ground(xy), np.float64)) for z, (_f, _c, _k, xy) in zip(new, rails)]
 
 
-def grade_plans(frame, cells, box, elev, load=None):
-    """[(fid, xy (k, 2), z (k,))]: the bed line of each on-ground rail part near box, in elev's heights (elev(lat, lon):
-    the grader's DEM), for grading.Grader to lay the ground to (the cutting's walls back from the track, the ramps'
-    embankments filled). tile_mesh then finds the ground at its bed. Pure given elev."""
-    cells = list(cells)
-    tcls = []
-    tunnels = road_underpasses(frame, cells, box, GRADE_REACH_M, classes=tcls)
-    worn = {}
-    rails = parts(frame, cells, box, reach=GRADE_REACH_M, clip=True, worn=worn, underpasses=tunnels)
-    if not rails:
-        return []
-    ungraded = {fid for fid, w in worn.items() if w >= UNGRADED_WEAR}
+def dem_ground(frame, elev):
+    """ground(xy (n, 2)) -> the DEM's heights at frame's points (elev(lat, lon), as they are), remembered per point and
+    read at each centimetre key's own point: grade_plans' ground, and the mesh's reading of the same lattice
+    (_region_beds)."""
     memo_key = ("dem", round(float(getattr(frame, "lat0", 0.0)), 7), round(float(getattr(frame, "lon0", 0.0)), 7))
     memo = _GROUND_MEMO.get(memo_key)
     if memo is None:
@@ -240,6 +232,62 @@ def grade_plans(frame, cells, box, elev, load=None):
                 memo.clear()
             memo.put(np.ascontiguousarray(keys[miss]), np.ascontiguousarray(z, np.float64))
         return out
+    return ground
+
+
+# The mesh reads its beds from the grader's lattice, not from one of its anchor's frame. A frame's lattice is a pure
+# function of it, but a node's bed depends on its window wherever something past MARGIN_M shapes it (a raised deck's
+# ramp runs on at GRADE for up to SEED_LIFT_MAX_M / GRADE), and two frames' nodes stand at other places: north of the
+# SR17's underpass at Popoli (42.1712 N 13.8250 E) the nodes of the Rome-Pescara line's track were 7 m apart, the
+# grader's blend stood the ground 1.4-1.7 m over the anchor's blend the track was drawn at, and the wagons hit it.
+def _region_beds(frame, load, elev, rails):
+    """railprofile.beds of rails (parts in frame, an anchor's) as the grader lays them: in each point's planning region's
+    frame (geotiles.region_frame, PlanStore.frame_of's), on the DEM's heights (dem_ground), from that frame's lattice
+    ("beds-dem"), the points mapped into it as the plans are mapped out of it (geotiles.world_xy_map); the heights then
+    in frame's (as point_ground reads the ground for the mesh). NaN where no node has the point."""
+    import geotiles
+    import railprofile
+    pts = [np.asarray(r[3], np.float64).reshape(-1, 2) for r in rails]
+    off = np.r_[0, np.cumsum([len(p) for p in pts])].astype(np.int64)
+    z = np.full(int(off[-1]), np.nan)
+    if not len(z):
+        return np.split(z, off[1:-1])
+    allxy = np.concatenate(pts)
+    la, lo, _ = frame.enu_to_geodetic(allxy[:, 0], allxy[:, 1], 0.0)
+    la, lo = np.asarray(la, np.float64).ravel(), np.asarray(lo, np.float64).ravel()
+    rx, ry = geotiles.region_of(la, lo)
+    rx, ry = np.atleast_1d(rx), np.atleast_1d(ry)
+    for a, b in sorted({(int(a), int(b)) for a, b in zip(rx.tolist(), ry.tolist())}):
+        rf = geotiles.region_frame(a, b)
+        akey = ("beds-dem", round(float(rf.lat0), 7), round(float(rf.lon0), 7))
+        here = (rx == a) & (ry == b)
+        asks, idx = [], []
+        for n, (fid, cls, kind, _xy) in enumerate(rails):
+            m = np.flatnonzero(here[off[n]:off[n + 1]])
+            if len(m):
+                asks.append((fid, cls, kind, geotiles.world_xy_map(frame, rf, pts[n][m])))
+                idx.append(off[n] + m)
+        for k, h in zip(idx, railprofile.beds(rf, akey, load, dem_ground(rf, elev), asks)):
+            z[k] = h
+    ok = np.isfinite(z)
+    if ok.any():
+        z[ok] = np.asarray(frame.geodetic_to_enu(la[ok], lo[ok], z[ok])[2], np.float64)
+    return np.split(z, off[1:-1])
+
+
+def grade_plans(frame, cells, box, elev, load=None):
+    """[(fid, xy (k, 2), z (k,))]: the bed line of each on-ground rail part near box, in elev's heights (elev(lat, lon):
+    the grader's DEM), for grading.Grader to lay the ground to (the cutting's walls back from the track, the ramps'
+    embankments filled). tile_mesh then finds the ground at its bed. Pure given elev."""
+    cells = list(cells)
+    tcls = []
+    tunnels = road_underpasses(frame, cells, box, GRADE_REACH_M, classes=tcls)
+    worn = {}
+    rails = parts(frame, cells, box, reach=GRADE_REACH_M, clip=True, worn=worn, underpasses=tunnels)
+    if not rails:
+        return []
+    ungraded = {fid for fid, w in worn.items() if w >= UNGRADED_WEAR}
+    ground = dem_ground(frame, elev)
     pad = GRADE_HALF_M + 15.0
     out = []
     tunnels = raising_underpasses(tunnels, tcls) + coarse_underpasses(frame, cells, box, rails, GRADE_REACH_M)

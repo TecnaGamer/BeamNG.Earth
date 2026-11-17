@@ -286,6 +286,40 @@ def test_a_street_ending_under_a_flyovers_middle_is_no_end_of_it_unless_the_map_
     assert any(i == fly and j == street for i, _si, j, _sj in systems[0]["ends"])
 
 
+def _arc(c, r, a0, a1, n=48):
+    a = np.radians(np.linspace(a0, a1, n))
+    return np.asarray(c, np.float64) + r * np.stack([np.cos(a), np.sin(a)], axis=1)
+
+
+def test_a_road_looping_over_itself_is_not_joined_to_its_own_deck_under_it():
+    # Kawazu's Nanadaru loop: one road in three decks at levels 1, 2 and 3; the level-2 deck ends right over the
+    # level-1 one on its heading, where the level-3 one goes on and crosses it further on. Its end was taken for a
+    # merge with the deck under it (held at its height there, and the level-3 deck's start 8.35 m over it): the loop
+    # infeasible. A road meets its own parts only end to end; over its own deck it is a crossing, its clearance kept
+    road = "loop"
+    b = np.concatenate([_arc((200, 60), 60, -90, 90), _line(200, 120, -100, 120, 76)[1:],
+                        _arc((-100, 60), 60, 90, 270)[1:]])
+    m = [Member((road, "deck", 1), _line(-400, 0, 200, 0, 151), "deck", "trunk", 40, 1, 5.0, None),
+         Member((road, "deck", 2), b, "deck", "trunk", 40, 2, 5.0, None),
+         Member((road, "deck", 3), np.array([[-100.0, 0.0], [-50.0, 15.0], [50.0, -15.0], [400.0, -15.0]]), "deck",
+                "trunk", 40, 3, 5.0, None),
+         Member((road, "ground", "w"), _line(-800, 0, -400, 0), "ground", "trunk", 40, 0, 5.0, None),
+         Member((road, "ground", "e"), _line(400, -15, 800, -15), "ground", "trunk", 40, 0, 5.0, None)]
+    a, two, three = (road, "deck", 1), (road, "deck", 2), (road, "deck", 3)
+    net, systems = ix.find_systems(m)
+    assert len(systems) == 1
+    assert _joined(net, systems[0], a, two) and _joined(net, systems[0], two, three)
+    assert all(min(si, net.L[i] - si) <= ix.JOIN_M and min(sj, net.L[j] - sj) <= ix.JOIN_M     # (end to end only)
+               for i, si, j, sj in systems[0]["joins"])
+    net, systems, shapes, emb = _run(m)
+    assert shapes[0][2] is not None
+    need = ix.HEADROOM_M + ix.HEADROOM_MARGIN_M + ix.DECK_FULL_DEPTH_M
+    za = _shape_z(net, shapes, a, np.array([-100.0, 0.0]))
+    assert _shape_z(net, shapes, two, np.array([-100.0, 0.0])) - za >= need - 0.3
+    zc = _shape_z(net, shapes, three, np.array([0.0, 0.0]))         # (where it crosses it further on)
+    assert zc - _shape_z(net, shapes, a, np.array([0.0, 0.0])) >= need - 0.3
+
+
 def test_a_road_dug_under_a_rail_deck_is_that_low_under_the_overpass_beside_it():
     # Perth's Tonkin Highway: a trunk road under the railway in the motorway's median (a short rail deck: the road is
     # dug) and, 6 m on, under the motorway's deck (an overpass: it rises over the road). Solved apart, the road was dug
@@ -313,3 +347,43 @@ def test_overpasses_over_one_road_far_apart_stay_apart():
          Member("d2", _line(600, -6, 600, 6, 4), "deck", "tertiary", 50, 1, 4.0, None)]
     net, systems, shapes, emb = _run(m)
     assert len(systems) == 2
+
+
+def test_a_held_bridge_over_a_streets_mapped_tunnel_stays_at_its_ground_and_the_street_goes_under():
+    # (grading's never-raised deck, the map's short tunnel under it: a 48 m bridge, an overpass by its length, raised
+    # 8.3 m over the street's ground on its fills while the underpasses dug the street 6.9 m under it as well)
+    def members(held):
+        return [Member("street", _line(-400, 0, 400, 0, 100), "ground", "residential", 40, 0, 4.0, None),
+                Member("deck", _line(0, -24, 0, 24, 13), "deck", "primary", 70, 1, 5.0, None, None, held),
+                Member("s", _line(0, -400, 0, -24), "ground", "primary", 70, 0, 5.0, None),
+                Member("n", _line(0, 24, 0, 400), "ground", "primary", 70, 0, 5.0, None)]
+    net, systems, shapes, emb = _run(members(False))
+    assert [c["moves"] for c in systems[0]["crossings"]] == ["up"]       # (not held: an overpass)
+    net, systems, shapes, emb = _run(members(True))
+    assert [c["moves"] for c in systems[0]["crossings"]] == ["down"]
+    zd = _shape_z(net, shapes, "deck", np.array([0.0, 0.0]))
+    zs = _shape_z(net, shapes, "street", np.array([0.0, 0.0]))
+    need = ix.HEADROOM_M + ix.HEADROOM_MARGIN_M + ix.deck_depth(48.0)
+    assert abs(zd) < 0.5                                                  # the deck at its ground: no fills
+    assert zd - zs >= need - 0.05 and zd - zs <= need + 0.5               # cleared once, not twice
+    for k in ("s", "n"):                                                  # its approaches on their ground
+        assert all(np.abs(zz).max() < 0.05 for _s, zz, _m in emb.get(_key_index(net, k), ()))
+    assert any(mode == "cut" for _s, _z, mode in emb[_key_index(net, "street")])
+
+
+def test_a_signed_height_limit_holds_at_its_own_crossing_only():
+    # a street under two overpasses 600 m apart, a 3.8 m sign at the west one alone: the west deck clears the sign,
+    # the east one the game's headroom (the limit read where each crosses, as the dips read it)
+    sign = lambda q: 3.8 if abs(q[0] + 300.0) < 4.0 else None
+    m = [Member("street", _line(-800, 0, 800, 0, 400), "ground", "residential", 40, 0, 4.0, sign)]
+    for x, name in ((-300.0, "w"), (300.0, "e")):
+        m += [Member(name, _line(x, -30, x, 30, 13), "deck", "secondary", 60, 1, 5.0, None),
+              Member(name + "s", _line(x, -600, x, -30), "ground", "secondary", 60, 0, 5.0, None),
+              Member(name + "n", _line(x, 30, x, 600), "ground", "secondary", 60, 0, 5.0, None)]
+    net, systems, shapes, emb = _run(m)
+    depth = ix.deck_depth(60.0)
+    zw = _shape_z(net, shapes, "w", np.array([-300.0, 0.0]))
+    ze = _shape_z(net, shapes, "e", np.array([300.0, 0.0]))
+    assert zw >= 3.8 + ix.HEADROOM_MARGIN_M + depth - 0.05
+    assert zw < ix.HEADROOM_M + depth - 0.5                         # not the game's headroom under the sign
+    assert ze >= ix.HEADROOM_M + ix.HEADROOM_MARGIN_M + depth - 0.05

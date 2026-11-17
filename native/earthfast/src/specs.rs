@@ -935,7 +935,13 @@ fn base_bridge(l: &Layer, rules: &RoadRules, i: usize, lanes: Option<i64>) -> (S
         rule_w = Some(rules.link_width(lanes.filter(|&v| v != 0).unwrap_or(if ow { 1 } else { 2 })));
     }
     let (w, _) = rules.cw(c, l.built(kind), false, rule_w, ow, lanes.map(|v| v as f64), link);
-    (Sp { width: w, w32: false, kind, urban: false, cls: c, oneway: ow, dir: l.dir(i), kmh: None, gap: None,
+    // (its speed limit as the ground spec reads it: the bridge is a stretch of the same road, and graded, signed and
+    // furnished at the speed it is driven at, not its class's default: a 40 km/h spiral loop was a 90 km/h trunk)
+    let mut kmh = if l.has_k[i] && l.kv[i] > 0.0 { Some(l.kv[i]) } else { None };
+    if kmh.is_none() && l.osm_ms[i].is_finite() {
+        kmh = Some(l.osm_ms[i]);
+    }
+    (Sp { width: w, w32: false, kind, urban: false, cls: c, oneway: ow, dir: l.dir(i), kmh, gap: None,
           median: None, lanes, surf: l.stok[i], link, sides: -1, parking: true, mountain: false },
      ow || rule_w.is_some())
 }

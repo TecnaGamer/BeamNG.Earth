@@ -10,8 +10,9 @@
      at grade over it stays on its ground);
    - the upper is a rail deck: a track cannot ramp, so a short rail deck (RAIL_LONG_M) stays where the track is and the
      road under goes down; a long one is a viaduct the railways raise themselves, nothing to solve here;
-   - the upper is a road deck: a short deck chain (ROAD_SHORT_M) over a road is the road dug under it; a longer one is
-     an overpass that rises over the road under, which keeps its ground;
+   - the upper is a road deck: a short deck chain (ROAD_SHORT_M) over a road is the road dug under it, and so is a
+     held one (a bridge the map has over a road's short tunnel, grading's never-raised deck: the elevation there is
+     its own); a longer one is an overpass that rises over the road under, which keeps its ground;
    - a track is never dug: the road deck over it rises.
 
 3. The shape. The heights of the system's decks, and of the roads that go down under its crossings, in one problem:
@@ -72,11 +73,13 @@ W_DIP = 0.5                 # a road's dip under its crossing
 W_SMOOTH = 0.2
 W_JOIN = 300.0
 
-Member = namedtuple("Member", "key line kind cls kmh level half limit nodes", defaults=(None,))
+Member = namedtuple("Member", "key line kind cls kmh level half limit nodes held", defaults=(None, False))
 # key: hashable, unique, the same from every cell; line (k, 2) frame ENU; kind: "ground", "deck", "tunnel", "rail",
 # "rail_deck"; cls: road class ("rail" for track); kmh: speed limit or None; level: OSM layer of a deck; half: half
-# width (m); limit: the road's signed height limit (m) or None; nodes: its road's map nodes (a frozenset of connector
-# ids) or None (not known: a track)
+# width (m); limit: the road's signed height limit (m), a callable q (x, y) -> m or None (its signs, read where it
+# crosses: grading's roads.road_sign_at, the dips' own) or None; nodes: its road's map nodes (a frozenset of connector
+# ids) or None (not known: a track); held: a deck never raised (grading's UNDER_TUNNEL_FIXED: the map has the road
+# under it in a short tunnel), its chain at its ground and the roads under it dug, whatever its length
 
 PATHS = {"footway", "path", "cycleway", "pedestrian", "steps", "bridleway", "track"}
 MINOR = {"residential", "service", "unclassified", "living_street", "road"}
@@ -137,11 +140,15 @@ def curve_radius(m):
     return max(R_MIN_ROAD_M, v * v / A_VERT)
 
 
-def headroom(m):
-    """The vehicle height member m needs under a deck, with its margin: its signed limit where it has one (a
-    maxheight sign), else the game's tallest vehicles' (a track's catenary the same), a path's less."""
-    if m.limit is not None and m.limit > 0:
-        return float(m.limit) + HEADROOM_MARGIN_M
+def headroom(m, q=None):
+    """The vehicle height member m needs under a deck at q (x, y; None: anywhere), with its margin: its signed limit
+    where it has one (a maxheight sign), else the game's tallest vehicles' (a track's catenary the same), a path's
+    less."""
+    lim = m.limit
+    if callable(lim):
+        lim = lim(q) if q is not None else None
+    if lim is not None and lim > 0:
+        return float(lim) + HEADROOM_MARGIN_M
     if m.cls in PATHS and m.kind not in ("rail", "rail_deck"):
         return CLEAR_PATH_M
     return HEADROOM_M + HEADROOM_MARGIN_M
@@ -152,12 +159,12 @@ def deck_depth(span):
     return float(np.clip(float(span) / DECK_SPAN_RATIO, DECK_MIN_DEPTH_M, DECK_FULL_DEPTH_M))
 
 
-def clearance_need(net, u, d):
-    """How far the road on upper part u stands over lower part d where they cross: the headroom d needs and u's
-    structure (a deck's depth for its span, an underpass's roof)."""
+def clearance_need(net, u, d, q=None):
+    """How far the road on upper part u stands over lower part d where they cross (at q): the headroom d needs there
+    and u's structure (a deck's depth for its span, an underpass's roof)."""
     mu = net.m[u]
     struct = deck_depth(net.L[u]) if mu.kind in ("deck", "rail_deck") else COVER_M
-    return headroom(net.m[d]) + struct
+    return headroom(net.m[d], q) + struct
 
 
 def arclen(line):
@@ -266,6 +273,11 @@ def _tangent(line, s, sq):
     return v / max(float(np.hypot(*v)), 1e-9)
 
 
+def _road_of(m):
+    """The map road member m is part of: its key's feature id (a deck's or a ground part's), else its key."""
+    return m.key[0] if isinstance(m.key, tuple) else m.key
+
+
 def _end_meets(net, e, se, o, so, crossed):
     """Whether member e's end (at arc length se) on member o's line (at so) is where they meet: always on o's end, or
     between parts at one level (a T, a ramp onto its road), or a deck merging along another deck at another level
@@ -275,8 +287,12 @@ def _end_meets(net, e, se, o, so, crossed):
     ending under a deck's middle (or over a tunnel's) with no node of it: the High Five's secondary leaving its
     level-1 link's end 0.1 m off the line of a level-4 flyover 20 m over it, taken for that flyover's end on it, ran
     a 290 m embankment down from the flyover's height along the street, and the street under the next flyover met its
-    deck. crossed: e and o cross each other (a road cannot meet the one it passes over or under a few metres on:
-    Gravelly Hill's level-1 M6 deck under its level-3 one at 29 deg, its end 5 m past their crossing)."""
+    deck. Two decks of one map road meet only end to end, never one's end on the other's middle: a road passing
+    over itself (Kawazu's Nanadaru loop, a spiral of one road at levels 1 to 3, its level-2 deck ending right over
+    its level-1 deck on its heading where the level-3 one goes on) was taken for a merge, held at the deck under it
+    there and 8.35 m over it on the level-3 deck's start: the loop infeasible. crossed: e and o cross each other (a
+    road cannot meet the one it passes over or under a few metres on: Gravelly Hill's level-1 M6 deck under its
+    level-3 one at 29 deg, its end 5 m past their crossing)."""
     me, mo = net.m[e], net.m[o]
     if min(so, net.L[o] - so) <= JOIN_M or mo.kind not in STRUCTURES:
         return True
@@ -284,7 +300,7 @@ def _end_meets(net, e, se, o, so, crossed):
         return True
     if me.kind not in STRUCTURES:
         return me.nodes is None or mo.nodes is None or bool(me.nodes & mo.nodes)    # (no nodes known: as they lie)
-    if me.kind == mo.kind == "deck" and not crossed:
+    if me.kind == mo.kind == "deck" and not crossed and _road_of(me) != _road_of(mo):
         c = abs(float(_tangent(net.lines[e], net.s[e], se) @ _tangent(net.lines[o], net.s[o], so)))
         return c >= math.cos(math.radians(MERGE_DEG))
     return False
@@ -396,12 +412,21 @@ def find_systems(members):
     return net, systems
 
 
-def _dip_half(net, u, d):
-    """m along road d each side of its crossing under u that it dips over (the clearance at its grade, the curves,
-    u's half width and the margin): _system's window."""
+def _dip_half(net, u, d, q=None):
+    """m along road d each side of its crossing under u (at q) that it dips over (the clearance at its grade, the
+    curves, u's half width and the margin): _system's window."""
     md = net.m[d]
     g = max_grade(md)
-    return clearance_need(net, u, d) / g + curve_radius(md) * g + net.m[u].half + DIP_MARGIN_M
+    return clearance_need(net, u, d, q) / g + curve_radius(md) * g + net.m[u].half + DIP_MARGIN_M
+
+
+def _dug_under(chain_len, held):
+    """Whether the road on the ground under a deck chain chain_len m long goes down under it (the deck at its ground):
+    a short chain (ROAD_SHORT_M), or a held one (Member.held). A held deck the shapes raised over the road under it
+    while grading's underpasses dug that road under it at its ground did both: the SR17 at Popoli stood on its 8 m
+    fills over Via Aldo Moro (the map's short tunnel under it), the street 6.9 m down in its pit, 15 m between them
+    where 8.3 m clears it."""
+    return chain_len < ROAD_SHORT_M or held
 
 
 def _shared_dips(net, seeds, rel, droot):
@@ -411,36 +436,40 @@ def _shared_dips(net, seeds, rel, droot):
     median and, 6 m on, a motorway deck lifted 7.3 m over its ground, its carriageway and the track's fill raised into
     the trains. The road is followed through its joints, as the dip's piece is."""
     members = net.m
-    chain = {}
+    chain, held = {}, set()
     for i in seeds:
         if members[i].kind == "deck":
             chain[droot(i)] = chain.get(droot(i), 0.0) + net.L[i]
-    under = {}              # ground member -> [(seed over it, s on it)]
+            if members[i].held:
+                held.add(droot(i))
+    under = {}              # ground member -> [(seed over it, s on it, the crossing)]
     for i in seeds:
-        for j, kind, _si, sj, _q in rel[i]:
+        for j, kind, _si, sj, q in rel[i]:
             if kind == "cross" and members[j].kind == "ground" and _over(members[i], members[j]) == "i":
-                under.setdefault(j, []).append((i, sj))
+                under.setdefault(j, []).append((i, sj, q))
     if not under:
         return []
     out = []
     for d, lst in under.items():
-        for u, sd in lst:
+        for u, sd, qd in lst:
             mu = members[u]
-            if not (mu.kind == "rail_deck" or (mu.kind == "deck" and chain.get(droot(u), 0.0) < ROAD_SHORT_M)):
+            if not (mu.kind == "rail_deck" or (mu.kind == "deck" and _dug_under(chain.get(droot(u), 0.0),
+                                                                                droot(u) in held))):
                 continue        # (this crossing does not dig the road)
-            w = _dip_half(net, u, d)
-            reach = w + max(_dip_half(net, i, j) for j, ls in under.items() for i, _s in ls)
+            w = _dip_half(net, u, d, qd)
+            reach = w + max(_dip_half(net, i, j, qq) for j, ls in under.items() for i, _s, qq in ls)
             for j, s0, s1 in path_of(net, d, sd - reach, sd + reach):
                 lo, hi = min(s0, s1), max(s0, s1)
-                for i, sj in under.get(j, ()):
+                for i, sj, qi in under.get(j, ()):
                     if i == u or not (lo - 1e-6 <= sj <= hi + 1e-6):
                         continue
                     along = abs(sj - sd) if j == d else _path_dist(net, d, sd, j, sj, reach)
                     if along is None:
                         continue
                     mi = members[i]
-                    digs = mi.kind == "rail_deck" or (mi.kind == "deck" and chain.get(droot(i), 0.0) < ROAD_SHORT_M)
-                    if along <= w + (_dip_half(net, i, j) if digs else 0.0):
+                    digs = mi.kind == "rail_deck" or (mi.kind == "deck" and _dug_under(chain.get(droot(i), 0.0),
+                                                                                       droot(i) in held))
+                    if along <= w + (_dip_half(net, i, j, qi) if digs else 0.0):
                         out.append((u, i))
     return out
 
@@ -473,9 +502,11 @@ def _system(net, seeds, rel):
         for j, kind, si, sj, q in rel[i]:
             if kind == "join" and j in S and members[i].kind == members[j].kind == "deck":
                 par[root(i)] = root(j)
-    chain_len = {}
+    chain_len, held = {}, set()
     for i in seeds:
         chain_len[root(i)] = chain_len.get(root(i), 0.0) + net.L[i]
+        if members[i].kind == "deck" and members[i].held:
+            held.add(root(i))
     joins, crossings, ends = [], [], []
     for i in seeds:
         for j, kind, si, sj, q in rel[i]:
@@ -507,7 +538,7 @@ def _system(net, seeds, rel):
                 if md.kind in ("rail", "rail_deck"):
                     moves = "up"                # (a track is never dug)
                 elif md.kind == "ground":
-                    moves = "down" if chain_len[root(u)] < ROAD_SHORT_M else "up"
+                    moves = "down" if _dug_under(chain_len[root(u)], root(u) in held) else "up"
                 else:
                     moves = "up"
             else:
@@ -525,7 +556,7 @@ def _system(net, seeds, rel):
         d = c["d"]
         md = members[d]
         g = max_grade(md)
-        w = clearance_need(net, c["u"], d) / g + curve_radius(md) * g
+        w = clearance_need(net, c["u"], d, c["q"]) / g + curve_radius(md) * g
         if md.kind == "tunnel":
             win.setdefault(d, []).append((-w, net.L[d] + w))
         else:
@@ -542,7 +573,9 @@ def _system(net, seeds, rel):
                 cur.append([a, b])
         dips += [(d, float(a), float(b)) for a, b in cur]
     chain_of = {i: chain_len[root(i)] for i in seeds if members[i].kind == "deck"}
-    return dict(seeds=seeds, joins=joins, crossings=crossings, ends=ends, dips=dips, chain_of=chain_of)
+    held_of = {i for i in seeds if members[i].kind == "deck" and root(i) in held}
+    return dict(seeds=seeds, joins=joins, crossings=crossings, ends=ends, dips=dips, chain_of=chain_of,
+                held=held_of)
 
 
 def system_key(net, sysm):
@@ -765,12 +798,13 @@ def solve_shape(net, sysm, pcs, smp, ground, fixed_z, diagnostics=None):
 
 
 def _deck_targets(net, sysm, pc, t):
-    """A deck's target and weights: toward the line between its ends' ground, held there if its chain is short (a
-    road is dug under it), else free but for the embankment where it meets the road on the ground."""
+    """A deck's target and weights: toward the line between its ends' ground, held there if a road is dug under its
+    chain (_dug_under: a short one, a held one), else free but for the embankment where it meets the road on the
+    ground."""
     i = pc["main"]
     n = len(t)
     joined = [s_ for a, sa, b, sb in sysm["joins"] for s_, m_ in ((sa, a), (sb, b)) if m_ == i]
-    short = sysm["chain_of"].get(i, 0.0) < ROAD_SHORT_M
+    short = _dug_under(sysm["chain_of"].get(i, 0.0), i in sysm.get("held", ()))
     target = t[0] + (t[-1] - t[0]) * np.arange(n) / max(n - 1, 1)
     w = np.full(n, W_HOLD if short else 1e-6)
     for k, s_end in ((0, 0.0), (n - 1, net.L[i])):
@@ -809,7 +843,7 @@ def _solve_shape_qp(net, sysm, pcs, smp, ground, fixed_z, diagnostics):
     for p, a, q, b in _overlaps(pcs, smp):
         cps.append((p, a, q, b, "eq", 0.0))
     for c in sysm["crossings"]:
-        need = clearance_need(net, c["u"], c["d"])
+        need = clearance_need(net, c["u"], c["d"], c["q"])
         x, y = _var(pcs, smp, c["u"], c["su"]), _var(pcs, smp, c["d"], c["sd"])
         if x and y:
             for kx in (x[1], x[2]):

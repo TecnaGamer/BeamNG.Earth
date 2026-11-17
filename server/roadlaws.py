@@ -265,14 +265,26 @@ def apply(plans, specs, held=None, under=None, skip=(), diagnostics=None, natura
         tn = np.interp(sv, S, NZ)                       # (the ground's own grade: the natural profile's)
         nat = np.abs(tn[w_n:] - tn[:-w_n]) / (w_n * step) if m > w_n else np.abs(np.diff(tn)) / max(step, 1e-6)
         g = max(g_law, float(nat.max()) + NATURAL_PLUS if len(nat) else g_law)
-        R.append(dict(sv=sv, t=t, w=np.where(hs, W_HOLD, 1.0 + W_RANK * rank), hi=np.where(ds, t, np.inf), grade=g,
-                      rad=rad, step=step, junction=[False, False], parts=[(k, rev) for k, rev in run]))
+        R.append(dict(sv=sv, t=t, w=np.where(hs, W_HOLD, 1.0 + W_RANK * rank), lo=np.full(m, -np.inf),
+                      hi=np.where(ds, t, np.inf), held=hs, S=S, Z=Z, grade=g, rad=rad, step=step,
+                      junction=[False, False], parts=[(k, rev) for k, rev in run]))
+
+    def arc_of(k, s_plan):
+        """(run, arc along the run) of plan k's point at its own arc length s_plan."""
+        r, rev, s0 = loc[k]
+        return r, s0 + (arcs[k][-1] - s_plan if rev else s_plan)
 
     def sample_of(k, s_plan):
         """(run, sample) of plan k's point at its own arc length s_plan."""
-        r, rev, s0 = loc[k]
-        s = s0 + (arcs[k][-1] - s_plan if rev else s_plan)
+        r, s = arc_of(k, s_plan)
         return r, int(np.argmin(np.abs(R[r]["sv"] - s)))
+
+    def between(r, s):
+        """(sample a, sample b, alpha): run r's height at its arc s is (1 - alpha) z_a + alpha z_b (two neighbouring
+        samples; alpha past 0..1 at the run's ends: carried on along its end segment)."""
+        sv = R[r]["sv"]
+        a = int(np.clip(np.searchsorted(sv, s) - 1, 0, len(sv) - 2))
+        return a, a + 1, float((s - sv[a]) / max(float(sv[a + 1] - sv[a]), 1e-9))
 
     def run_dir(r, i):
         """Unit direction of run r at its sample i (the way its samples go)."""
@@ -293,33 +305,61 @@ def apply(plans, specs, held=None, under=None, skip=(), diagnostics=None, natura
     def end_sample(k, e):
         return sample_of(k, 0.0 if e == 0 else float(arcs[k][-1]))
 
+    def end_arc(k, e):
+        return arc_of(k, 0.0 if e == 0 else float(arcs[k][-1]))
+
     landed = []                     # (plan, the plan it lands on): its ground need not yield to that one's (grading)
 
     def land(k, e, main, onto):
-        """Plan k's end e meets main (run, sample): one height there, and it leaves at main's grade its way: its next
-        sample st on stands at main's height st x cos(the angle between them) along main from the mouth, within
-        LANDING_TOL x st (main's solved heights there, between the two samples of main that hold that point)."""
+        """Plan k's end e meets main (run, arc along it: the mouth): one height there, and it leaves at main's grade its
+        way: its next sample st on stands at main's height st x cos(the angle between them) along main from the mouth,
+        within LANDING_TOL x st. Main's height there as its plan ends up: its two samples round the point and its own
+        detail between them (a plan keeps its change, not the resampled profile), not its nearest sample's (4 m apart, a
+        16 % ramp's nearest sample stood 0.3 m over the node a side road landed at); a held main's own heights (it
+        keeps them whatever its samples solve to: a side road landed on its solve stood apart from it)."""
         r, i = end_sample(k, e)
-        ra, ia = main
-        if (r, i) == (ra, ia):
+        ra, sa = main
+        a0, a1, f = between(ra, sa)
+        if r == ra and i in (a0, a1):
             return
-        cps.append((r, i, ra, ia, "eq", 0.0))
+        held = bool(R[ra]["held"][a0] and R[ra]["held"][a1] and not R[r]["held"][i])   # (both held: each its own)
+
+        def pin(j, lo, hi):
+            R[r]["lo"][j] = max(float(R[r]["lo"][j]), lo)
+            R[r]["hi"][j] = min(float(R[r]["hi"][j]), hi)
+
+        def detail(b0, b1, g, s):
+            """m main's own plan stands over its samples' line at its arc s (0 off its ends)."""
+            x = R[ra]
+            if not x["S"][0] <= s <= x["S"][-1]:
+                return 0.0
+            return float(np.interp(s, x["S"], x["Z"])) - ((1.0 - g) * float(x["t"][b0]) + g * float(x["t"][b1]))
+        if held:
+            zm = float(np.interp(sa, R[ra]["S"], R[ra]["Z"]))
+            pin(i, zm, zm)
+        else:
+            v = detail(a0, a1, f, sa)          # (an "eq" coupling's value is 0: a band of none for the rest)
+            cps.extend([(r, i, ra, a0, "eq", 0.0, ra, a1, f)] if abs(v) < 1e-9 else
+                       [(r, i, ra, a0, "ge", v, ra, a1, f), (r, i, ra, a0, "le", v, ra, a1, f)])
         m = len(R[r]["sv"])
         if i not in (0, m - 1) or m < 3 or r == ra:
             return
         R[r]["junction"][0 if i == 0 else 1] = True
         landed.append((idx[k], idx[onto], r))
-        md = run_dir(ra, ia)
+        md = run_dir(ra, a0)
         if md is None:
             return
         j = 1 if i == 0 else m - 2
         st = abs(float(R[r]["sv"][j] - R[r]["sv"][i]))
         along = st * float(_dir_out(xys[k], e) @ md)   # (m along main's samples the way out of it reaches)
-        ma = len(R[ra]["sv"])
-        nb = ia + 1 if ia + 1 < ma else ia - 1          # (main's segment there: its next sample, at its end its last)
-        alpha = (nb - ia) * along / max(float(R[ra]["step"]), 1e-6)
-        cps.append((r, j, ra, ia, "ge", -LANDING_TOL * st, ra, nb, alpha))
-        cps.append((r, j, ra, ia, "le", LANDING_TOL * st, ra, nb, alpha))
+        if held:
+            zm = float(np.interp(sa + along, R[ra]["S"], R[ra]["Z"]))
+            pin(j, zm - LANDING_TOL * st, zm + LANDING_TOL * st)
+        else:
+            b0, b1, g = between(ra, sa + along)
+            v = detail(b0, b1, g, sa + along)
+            cps.append((r, j, ra, b0, "ge", v - LANDING_TOL * st, ra, b1, g))
+            cps.append((r, j, ra, b0, "le", v + LANDING_TOL * st, ra, b1, g))
     paired = set()
     for run in rs:
         for (k, rev), (k2, rev2) in zip(run, run[1:]):
@@ -329,10 +369,10 @@ def apply(plans, specs, held=None, under=None, skip=(), diagnostics=None, natura
         through = [x for x in node if x in paired]
         free = [x for x in node if x not in paired]
         if through:
-            main, onto = end_sample(*through[0]), through[0][0]
+            main, onto = end_arc(*through[0]), through[0][0]
         else:
             free.sort(key=lambda x: -_rank(sps[x[0]]))
-            main, onto = end_sample(*free[0]), free[0][0]
+            main, onto = end_arc(*free[0]), free[0][0]
             free = free[1:]
         for k, e in free:
             land(k, e, main, onto)
@@ -360,7 +400,7 @@ def apply(plans, specs, held=None, under=None, skip=(), diagnostics=None, natura
                 if d <= reach and (best is None or d < best[0]) and                         (meets is None or meets(idx[k], idx[j]) is not False):
                     best = (d, j, float(arcs[j][seg] + tt * (arcs[j][seg + 1] - arcs[j][seg])))
             if best is not None:
-                land(k, e, sample_of(best[1], best[2]), best[1])
+                land(k, e, arc_of(best[1], best[2]), best[1])
     # (each run as chains: its ends at junctions driven at JUNCTION_KMH, the rest at its speed; the pieces overlap by
     # two samples held equal, so the grade goes on through the change of law)
     rad_j = laws(Member("ground", "road", JUNCTION_KMH))[1]
@@ -381,7 +421,7 @@ def apply(plans, specs, held=None, under=None, skip=(), diagnostics=None, natura
         where.append([])
         for a, b, rr in cuts:
             sl = slice(a, b + 1)
-            chains.append(dict(t=x["t"][sl], w=x["w"][sl], lo=np.full(b - a + 1, -np.inf), hi=x["hi"][sl],
+            chains.append(dict(t=x["t"][sl], w=x["w"][sl], lo=x["lo"][sl], hi=x["hi"][sl],
                                grade=x["grade"], K=rr / 100.0, lam=1e-3, step=x["step"], length=0.0))
             where[r].append((len(chains) - 1, a, b))
         for (c1, a1_, b1_), (c2, a2_, _b2) in zip(where[r], where[r][1:]):

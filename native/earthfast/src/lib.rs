@@ -6464,6 +6464,8 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // same: earthd's selection gate skips only selections that could not change)
     // 305: carriageway_profiles' couplings of three samples (z_a - (1 - alpha) z_b - alpha z_c: roadlaws' landings on the
     // joined road's solved grade, not its planned one) and the <= kind
-    m.add("VERSION", 305)?;
+    // 306: grade_points' ground past an abutment end, under the deck: the abutment's slope (1 in slope_run), never
+    // under the point's ground where that stands higher (gradebins::under_deck)
+    m.add("VERSION", 306)?;
     Ok(())
 }
