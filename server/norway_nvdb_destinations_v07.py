@@ -26,6 +26,7 @@ import numpy as np
 
 import norway_nvdb_signs_v06 as base
 from norway_signs_v073 import catalog, coverage, facing as facing_module
+from norway_signs_v073 import mounting_v081 as mounting
 
 LOG = logging.getLogger('earthd.no_nvdb_destinations_v07')
 ENV = 'BNE_NVDB_DESTINATIONS_V07'
@@ -53,7 +54,7 @@ def enabled():
 
 
 def cache_dir():
-    return base.cache_dir().parent / 'norway_nvdb_destinations_v073_cache'
+    return base.cache_dir().parent / 'norway_nvdb_destinations_v081_cache'
 
 
 def _number(raw):
@@ -71,6 +72,8 @@ def _kind(code):
 def _rgb_color(val, code):
     """Use NVDB Farge (1294). Never infer motorway colour from road class."""
     color = str(val or '').strip().lower()
+    if code == '723.31':
+        return 'brun'
     if color in ('gul', 'blå', 'hvit', 'grønn', 'brun'):
         return color
     if code.startswith(('723.11', '723.12', '723.13', '723.14')):
@@ -93,7 +96,7 @@ def _clean_text(value):
     return s
 
 
-def parse_text(text):
+def parse_text(text, *, distance=False):
     """Decode NVDB 1910 sign content, including 723.xx¤route number¤ shields.
 
     @ separates components and @@ separates rows. The '¤' characters delimit
@@ -104,12 +107,22 @@ def parse_text(text):
     if not text:
         return []
     shield = re.compile(r'723\.(11|12|13|14|15|16)(?:\s*¤([^¤]{1,16})¤|\s+([^@¤]{1,16}))', re.I)
+    # NVDB also separates the miniature code and its payload with @.
+    text = re.sub(r'(723\.(?:11|12|13|14|15|16))\s*@+\s*(?=¤)', r'\1', text)
+    # Legacy records place the route payload after one or two @ delimiters.
+    # Consume only the number, never the following destination.
+    text = re.sub(r'(723\.(?:11|12|13|14|15|16))\s*@{1,2}\s*((?:E\s*)?\d{1,4})(?=\s|@|$)',
+                  lambda m:m[1]+'¤'+m[2].replace(' ','')+'¤', text, flags=re.I)
     lines = []
     for ln in text.split('@@')[:8]:
         runs = []
         for part in ln.split('@')[:16]:
             part = CLEAN_SPACE.sub(' ', part.strip())
             if not part:
+                continue
+            icon = re.fullmatch(r'(77[12](?:\.0)?|790\.15|723\.31)(?:\s*¤[^¤]*¤)?', part)
+            if icon:
+                runs.append(['symbol', icon.group(1).removesuffix('.0')])
                 continue
             pos = 0
             for match in shield.finditer(part):
@@ -126,7 +139,12 @@ def parse_text(text):
                 rest = re.sub(r'¤[^¤]*¤', '', rest).strip(' ¤')
             if not rest:
                 continue
-            if re.fullmatch(r'\d{3}(?:\.\d+)?(?:\s+.*)?', rest):
+            if distance and re.fullmatch(r'\d{1,3}(?:[,.]\d+)?', rest) and any(
+                    p[0]=='text' and any(c.isalpha() for c in p[1])
+                    for p in (runs or (lines[-1] if lines else []))):
+                runs.append(['text',rest])
+                continue
+            if re.fullmatch(r'\d{3}(?:\.\d+)?', rest):
                 # Unknown sign pictogram or arrow code; never print as place text.
                 # An isolated 1-2 digit distance is permitted.
                 continue
@@ -141,30 +159,32 @@ def parse_text(text):
             runs.append(['text', rest])
         if runs:
             lines.append(runs)
-    return lines[:5]
+    return lines[:8]
 
 
 def _render_lines(row):
     """For distance signs, combine a recorded distance with its destination."""
+    if row['code'] == '723.31':
+        lines=parse_text(row.get('text',''))
+        if not any(p[0]=='symbol' and p[1]=='723.31' for line in lines for p in line):
+            lines.insert(0,[['symbol','723.31']])
+        return lines
     if row['kind'] == '723':
         txt = _clean_text(row.get('text', ''))
         # A 3-digit number on an actual 723 route shield is not an NVDB
         # pictogram code (this broke national/county routes such as 116).
         if re.fullmatch(r'(?:E\s*)?\d{1,4}', txt, re.I):
             return [[['text',txt]]]
-    lines = parse_text(row['text'])
-    if row['kind'] != '725' or len(lines) < 2:
-        return lines
-    for n, line in enumerate(lines):
-        if len(line) == 1 and line[0][0] == 'text' and re.fullmatch(r'\d{1,3}(?:[,.]\d)?', line[0][1]):
-            other = next((i for i, entry in enumerate(lines) if i != n and
-                          any(k[0] == 'text' and any(c.isalpha() for c in k[1]) for k in entry)), None)
-            if other is not None:
-                result = [list(entry) for entry in lines]
-                result[other].extend(line)
-                result.pop(n)
-                return result
-    return lines
+    lines = parse_text(row['text'], distance=row['kind']=='725')
+    if row['kind'] != '725':return lines
+    result=[]
+    for line in lines:
+        numeric=(len(line)==1 and line[0][0]=='text' and
+                 re.fullmatch(r'\d{1,3}(?:[,.]\d+)?',line[0][1]))
+        if numeric and result and any(p[0]=='text' and any(c.isalpha() for c in p[1]) for p in result[-1]):
+            result[-1].extend(line)
+        else:result.append(list(line))
+    return result
 
 
 def _validate_point(obj):
@@ -207,7 +227,7 @@ def normalize(obj):
     if color is None:
         return None
     text = _clean_text(base.prop(obj, 1910).get('verdi'))
-    if kind not in PRIORITY and not (parse_text(text) or
+    if kind not in PRIORITY and not (code == '723.31' or parse_text(text) or
             (kind == '723' and bool(re.fullmatch(r'(?:E\s*)?\d{1,4}', text, re.I)))):
         return None
     if kind == '713' and catalog.arrow_side(code) is None:
@@ -224,6 +244,9 @@ def normalize(obj):
                   for n in relation.get('vegobjekter', []) if isinstance(n, int) and n > 0]
     return {
         'pole_id': min(parent_ids) if parent_ids else None,
+        'metering_side': mounting.metering_side(obj),
+        'compass': str(base.prop(obj,1897).get('verdi') or '').strip().lower(),
+        'different_faces': str(base.prop(obj,9484).get('verdi') or '').strip().lower()=='ja',
         'id': sid, 'code': code, 'kind': kind, 'point': points[:2], 'road': points[2:],
         'facing': facing, 'color': color, 'text': text,
         'width_mm': base.prop(obj, 1328).get('verdi'),
@@ -261,7 +284,7 @@ def cached_cell(key, *, fetch=None, allow_fetch=True):
         if item is None:
             try:
                 disk = json.loads(path.read_text(encoding='utf-8'))
-                if disk.get('version') == 73 and disk.get('cell') == list(key):
+                if disk.get('version') == 81 and disk.get('cell') == list(key):
                     item = disk
                     _cache[key] = disk
             except (OSError, ValueError, KeyError, TypeError):
@@ -272,7 +295,7 @@ def cached_cell(key, *, fetch=None, allow_fetch=True):
             return item['signs'] if item else []
         try:
             signs = download_cell(key, fetch=fetch)
-            doc = {'version': 73, 'cell': list(key), 'saved': now, 'signs': signs}
+            doc = {'version': 81, 'cell': list(key), 'saved': now, 'signs': signs}
             path.parent.mkdir(parents=True, exist_ok=True)
             fd, tmp = tempfile.mkstemp(prefix='.nvdbdest_', dir=str(path.parent))
             try:
@@ -310,9 +333,9 @@ def tile_records(frame, box, allow_fetch=True):
 def face_of(row, frame):
     """Sign front, in 2D ENU. First two modes are geometrically constrained.
 
-    Directional signs face the approaching traffic. For NVDB's 'trafikk'
-    labels we use right-side-of-carriageway inference, NOT a metering-grade
-    heading. This can be wrong for medians/oneways; retain as provisional.
+    Traffic faces use recorded metering side and compass when available.
+    The perpendicular to the road offset is still a tangent approximation;
+    curves and ambiguous road references remain provisional.
     """
     lon, lat = row['point']
     rlon, rlat = row['road']
@@ -326,6 +349,7 @@ def face_of(row, frame):
     outward = off / dist
     mode = row['facing']
     normal = facing_module.facing(q, ref, mode, catalog.family(row['code']))
+    normal=mounting.normal(row,q,ref,normal)
     if normal is None:
         return None
     return q, ref, np.array(normal, float)
@@ -392,109 +416,19 @@ def _runs_plain(lines, *, shape):
             elif run[0]=='text':
                 t=run[1].replace('¤','').strip()
                 if t: clean.append(('text',t))
+            elif run[0]=='symbol':
+                clean.append(('symbol',run[1]))
             elif run[0]=='arrow':
                 clean.append(('arrow',run[1]))
         if clean: rows.append(clean)
-    return rows[:4]
+    return rows[:8]
 
 
 def _draw_face(row, *, canvas=None):
-    """Norwegian-style 713 wings, 711/725 destination panels and 723 shields.
+    """Visual-only v0.7.4 renderer; NVDB interpretation and facing are unchanged."""
+    from norway_signs_v073 import visual_v074
+    return visual_v074.render(row, _runs_plain(_render_lines(row), shape=row['kind']), canvas=canvas or _texture_canvas(row))
 
-    Simple opaque textures; no PNG alpha blending, no extra 3D objects.
-    Coordinates in a 713 texture are mapped to the *actual* pointed 713 mesh.
-    """
-    from PIL import Image, ImageDraw
-    kind=row['kind']
-    raw=_render_lines(row)
-    lines=_runs_plain(raw,shape=kind)
-    if not lines: raise ValueError('No renderable NVDB text')
-    code=row['code']
-    arrow=kind=='713' and catalog.arrow_side(code) is not None
-    shield=kind=='723'
-    if canvas:
-        W,H=canvas
-    elif shield:
-        W,H=512,256
-    elif arrow:
-        W,H=1024,256
-    elif kind=='727':
-        W,H=768,256
-    else:
-        W,H=(1024,512) if len(lines)>=3 else (1024,384)
-    bg, fg=_face_colors(row['color'])
-    im=Image.new('RGB',(W,H),bg)
-    draw=ImageDraw.Draw(im)
-    border=max(4,int(H*.034))
-    if shield:
-        label=' '.join(part[-1] if part[0]=='text' else part[2]
-                       for line in lines for part in line if part[0] in ('text','route'))
-        if not label.strip(): raise ValueError('Missing route shield number')
-        # The outline of the board is the route marker itself; no enclosing
-        # 2-m yellow direction board or separate text panel.
-        _draw_shield(draw,(border,border,W-2*border,H-2*border),code,label)
-        return im
-    if arrow:
-        isright=catalog.arrow_side(code)=='H'
-        # Border follows the five-sided mesh, fully opaque, black rather than
-        # the bright grey/white triangles seen in the previous build.
-        if isright:
-            outer=[(border,border),(.69*W,border),(W-border,H/2),(.69*W,H-border),(border,H-border)]
-            inner=[(border*2,border*2),(.68*W,border*2),(W-border*3,H/2),(.68*W,H-border*2),(border*2,H-border*2)]
-        else:
-            outer=[(W-border,border),(.31*W,border),(border,H/2),(.31*W,H-border),(W-border,H-border)]
-            inner=[(W-border*2,border*2),(.32*W,border*2),(border*3,H/2),(.32*W,H-border*2),(W-border*2,H-border*2)]
-        draw.polygon(outer,fill=fg)
-        draw.polygon(inner,fill=bg)
-        x0,x1=(int(.07*W),int(.64*W)) if isright else (int(.36*W),int(.93*W))
-    else:
-        draw.rectangle((border//2,border//2,W-border//2-1,H-border//2-1),outline=fg,width=border)
-        x0,x1=int(.065*W),int(.94*W)
-    h_avail=H-max(28,int(H*.14))
-    step=h_avail/len(lines)
-    for i,runs in enumerate(lines):
-        # Each row has distinct typography and an inset proper mini 723 shield.
-        # Fit entire row including shields or skip; never scribble over the arrow point.
-        segments=[]
-        for part in runs:
-            if part[0]=='route':
-                label=part[2].strip()
-                if not label: continue
-                segments.append(('route',part[1],label))
-            elif part[0]=='text':segments.append(('text','',part[1]))
-            elif part[0]=='arrow':segments.append(('arrow',part[1],''))
-        if not segments:continue
-        y=int((H-h_avail)/2+i*step)
-        shield_h=min(int(step*.74),int(H*.43))
-        textmax=min(int(step*.62),int(H*.44))
-        # Dynamic fit, keeping a clear gap on the sides of each symbol.
-        for font_size in range(max(18,textmax),11,-2):
-            font=_text_font(draw,'Ag',font_size,100000)
-            widths=[]
-            for typ,code_,label in segments:
-                if typ=='route': widths.append(max(62,int(shield_h*1.40)))
-                elif typ=='arrow': widths.append(int(font_size*1.4))
-                else:
-                    box=draw.textbbox((0,0),label,font=font)
-                    widths.append(box[2]-box[0])
-            gap=max(8,int(font_size*.22))
-            if sum(widths)+gap*(len(segments)-1)<=(x1-x0):break
-        else: raise ValueError('Destination text does not fit Norwegian panel')
-        # On destination wings the number/destination runs are printed in their
-        # recorded order, without duplicating the physical directional arrow.
-        cursor=x0
-        for j,(typ,code_,label) in enumerate(segments):
-            width=widths[j]
-            if typ=='route':
-                _draw_shield(draw,(cursor,y+(step-shield_h)/2,width,shield_h),code_,label)
-            elif typ=='arrow':
-                _arrow_symbol(draw,code_,cursor+width/2,y+step/2,font_size,fg)
-            else:
-                bounds=draw.textbbox((0,0),label,font=font)
-                th=bounds[3]-bounds[1]
-                draw.text((cursor-bounds[0],y+(step-th)/2-bounds[1]),label,font=font,fill=fg)
-            cursor+=width+(gap if j<len(segments)-1 else 0)
-    return im
 
 def _arrow_symbol(draw, code, x, y, size, color):
     """NVDB Tekst (1910) glyphs, codes 30..44; never print code numbers."""
@@ -532,7 +466,7 @@ def _font_for(draw, text, path, preferred, max_w):
 def _face_filename(row, out_dir):
     from PIL import Image
     import imagery
-    key = hashlib.sha256(json.dumps(['0.7.2',row['code'],row['text'],row['color']],
+    key = hashlib.sha256(json.dumps(['0.8.2',row['code'],row['text'],row['color'],_texture_canvas(row)],
                                     ensure_ascii=False, sort_keys=True).encode('utf-8')).hexdigest()[:18]
     name = 'bne_no_nvdb_%s' % key
     path = Path(out_dir) / (name + '.dds')
@@ -542,15 +476,58 @@ def _face_filename(row, out_dir):
     return name, path, img.size
 
 
+def _compact_direction_height(row, width):
+    """Estimate missing 711 height from text; retain real measured heights."""
+    from PIL import Image, ImageDraw
+    from norway_signs_v073 import shields_v074 as sh
+    from norway_signs_v073.layout_v077 import content_rows, wrap
+    if not row.get('text'):return max(.28,min(1.5,width*.195))
+    lines=_runs_plain(_render_lines(row),shape=row['kind'])
+    rows=content_rows(lines,'711')
+    draw=ImageDraw.Draw(Image.new('RGB',(1,1)))
+    path=Path(__file__).parent/'data'/'fonts'/'Overpass-Bold.ttf'
+    if not path.is_file():path=Path('DejaVuSansCondensed.ttf')
+    font=sh.font(100,path)
+    # Nominal letter size scales with width so missing data yields consistent
+    # compact strips, independent of geographic location or destination names.
+    nominal=width*.105
+    badges=any(bs for _,_,bs in rows)
+    available=width*(.64 if badges else .78)
+    count=sum(len(wrap(draw,t,font,available/nominal*100)) for t,_,_ in rows)
+    return max(.28,min(1.5,width*(.195+.115*(max(1,count)-1))))
+
+
+def _stack_gap(upper, lower):
+    """A narrow physical mounting seam between panels on the same support."""
+    return min(.025, max(.012, min(upper,lower)*.05))
+
+
 def _tile_dimensions(row):
     """Prefer trustworthy measured sizes; clamp obvious oversize entries."""
     kind=row['kind']
-    default={'723':(.68,.43),'727':(1.2,.36),'713':(1.8,.48),
-             '701':(2.5,1.1),'711':(2.0,.72),'725':(2.0,.86)}.get(kind,(1.5,.65))
+    default={'723':(.68,.43),'727':(1.2,.36),'713':(1.9,.36),
+             '701':(2.5,1.1),'711':(1.85,.60),'725':(1.9,.70)}.get(kind,(1.5,.65))
+    if kind=='725' and row.get('text'):
+        from norway_signs_v073.layout_v077 import content_rows
+        rs=content_rows(_render_lines(row),'725')
+        header=bool(len(rs)>1 and any(bs for _,_,bs in rs))
+        default=(1.9,max(.36,.12+.23*len(rs)+(.23 if header else 0)))
+    if kind=='711':default=(1.85,_compact_direction_height(row,1.85))
+    if row['code']=='723.31':default=(1.6,.65)
     try:
-        mw,mh=float(row['width_mm'])/1000.,float(row['height_mm'])/1000.
+        mw=float(row.get('width_mm'))/1000.
+        raw_h=row.get('height_mm')
+        if raw_h is None and .5<=mw<=5.5:
+            try: th=float(row.get('text_height_mm'))/1000.
+            except (TypeError,ValueError):th=0
+            inferred=_compact_direction_height(row,mw) if kind=='711' else (max(.35,th*3.8) if 0<th<.8 else default[1])
+            return mw,inferred
+        mh=float(raw_h)/1000.
         if kind=='723':
-            return min(max(mw,.40),.90),min(max(mh,.30),.65) if .15<=mh<=1.5 else default[1]
+            
+            if .15<=mw<=5.5 and .15<=mh<=3.0:
+                return mw,mh
+            return default
         if kind=='713' and .7<=mw<=3.2:
             return mw,min(max(mh,.3),.85) if .25<=mh<=1.4 else default[1]
         if .50<=mw<=5.5 and .25<=mh<=3.0:
@@ -560,28 +537,25 @@ def _tile_dimensions(row):
     return default
 
 
-def _panel_mesh(row, pos, z, face, mat, origin, w, h, bottom, *, posts=True, post_top=None):
-    """Thin arrow/rectangle sign with texture-correct outline and shared support.
+def _texture_canvas(row):
+    """One pixel has the same physical scale on both mesh axes."""
+    w,h=_tile_dimensions(row)
+    longest=2048
+    scale=longest/max(w,h)
+    return max(8,4*round(w*scale/4)),max(8,4*round(h*scale/4))
 
-    The pole is at the *butt* of a 713 arrow, not its geometric center.
-    This prevents the point from intruding through adjacent panels on the pole.
-    """
+
+def _panel_mesh(row, pos, z, face, mat, origin, w, h, bottom, *, posts=True, post_top=None):
+    """Rectangular signboards with painted direction chevrons, not pointed meshes."""
     arrow=row['kind']=='713' and catalog.arrow_side(row['code']) is not None
-    is_right=catalog.arrow_side(row['code'])=='H'
     two_sided=row.get('facing')=='tosidig' and catalog.double_sided_supported(row['code'])
-    if arrow:
-        points=([(-.5,-.5),(.19,-.5),(.5,0),(.19,.5),(-.5,.5)] if is_right else
-                [(.5,-.5),(-.19,-.5),(-.5,0),(-.19,.5),(.5,.5)])
-    else:
-        points=[(-.5,-.5),(.5,-.5),(.5,.5),(-.5,.5)]
+    points=[(-.5,-.5),(.5,-.5),(.5,.5),(-.5,.5)]
     centre=np.asarray(pos,float)
     front=np.asarray(face,float)
     front=front/max(1e-9,float(np.linalg.norm(front)))
     right=np.array([-front[1],front[0]])
-    # For the two arrow directions, keep the mounting end by the post.
+    # NVDB point is the board/support location; rectangular boards are centred.
     def horizontal(y):
-        if arrow:
-            return (y+.5)*w-.10 if is_right else (y+.5)*w-(w-.10)
         return y*w
     verts=[];uv=[]
     for depth in (.018,-.028):
@@ -614,10 +588,11 @@ def _panel_mesh(row, pos, z, face, mat, origin, w, h, bottom, *, posts=True, pos
     if posts:
         # One support per actual pole; big independent boards can have two.
         top=post_top if post_top is not None else bottom+h-.06
-        positions=[0.] if w<=2.05 or arrow else [-w*.35,w*.35]
+        positions=[-w*.24,w*.24] if arrow and w>=1.5 else ([0.] if w<=2.05 else [-w*.35,w*.35])
+        positions=row.get('_post_offsets',positions)
         for offset in positions:
             r=.04
-            x0=centre+right*offset
+            x0=centre+right*offset-front*.115
             k=len(verts)
             for dx,dy in ((-r,-r),(r,-r),(r,r),(-r,r)):
                 p=x0+front*dx+right*dy
@@ -630,6 +605,64 @@ def _panel_mesh(row, pos, z, face, mat, origin, w, h, bottom, *, posts=True, pos
                 mats.extend([0,0])
     return (np.asarray(verts,np.float64),np.asarray(triangles,np.int64),
             np.asarray(uv,np.float64),np.asarray(mats,np.int64))
+
+
+def _assembled_stack_meshes(grp, bases, origin, *, posts=True):
+    """Common metal backing and central supports for coplanar 711 stacks.
+
+    Each texture/section remains separate, preserving NVDB colors and content.
+    Ineligible stacks retain independent-board mounting.
+    """
+    if len(grp)<2 or any(r[0]['kind']!='711' or r[0].get('facing')=='tosidig' for r in grp):
+        return None
+    widths=[r[4] for r in grp]
+    if max(widths)-min(widths)>.03:return None
+    q=np.mean([r[1] for r in grp],axis=0)
+    front=np.asarray(grp[0][2],float)
+    front=front/max(1e-9,float(np.linalg.norm(front)))
+    for r in grp:
+        other=np.asarray(r[2],float);other=other/max(1e-9,float(np.linalg.norm(other)))
+        if float(np.dot(front,other))<.995 or float(np.linalg.norm(r[1]-q))>.35:
+            return None
+    grounds=[r[6] for r in grp]
+    if max(grounds)-min(grounds)>.15:return None
+    ground=float(np.mean(grounds))
+    low=min(bases[r[0]['id']] for r in grp)
+    top=max(bases[r[0]['id']]+r[5] for r in grp)
+    rim=.035
+    backing={'kind':'mount','code':'mount','_post_offsets':[-.14,.14]}
+    result=[_panel_mesh(backing,q-front*.10,ground,front,0,origin,
+                       max(widths)+2*rim,top-low+2*rim,ground+low-rim,
+                       posts=posts,post_top=ground+top)]
+    for row,_,_,idx,w,h,_ in grp:
+        result.append(_panel_mesh(row,q,ground,front,idx,origin,w,h,
+                                  ground+bases[row['id']],posts=False))
+    return result
+
+
+def _shared_support_mesh(plan,origin):
+    # Reuse the tested post geometry, stripping the temporary panel entirely.
+    offsets=[-.14,.14] if any(r[0]['kind']=='711' for r in plan['records']) or plan['width']>2.7 else [0.]
+    row={'kind':'mount','code':'mount','_post_offsets':offsets}
+    p,t,uv,m=_panel_mesh(row,plan['center'],plan['ground'],plan['normal'],0,origin,
+                        plan['width'],.01,plan['ground']+plan['top'],posts=True,
+                        post_top=plan['ground']+plan['top']-.04)
+    keep=np.all(t>=12,axis=1)
+    return p[12:],t[keep]-12,uv[12:],m[keep]
+
+
+def _mounting_meshes(indexed,priorities,origin):
+    meshes=[]
+    for plan in mounting.plan(indexed,_stack_gap,priorities):
+        meshes.append(_shared_support_mesh(plan,origin))
+        for batch in plan['batches']:
+            grp=batch['records'];bases=batch['bases']
+            assembly=_assembled_stack_meshes(grp,bases,origin,posts=False)
+            if assembly is not None:meshes.extend(assembly);continue
+            for row,q,face,idx,w,h,ground in grp:
+                meshes.append(_panel_mesh(row,q,ground,face,idx,origin,w,h,
+                                         ground+bases[row['id']],posts=False))
+    return meshes
 
 
 def _arrow_mesh(row, pos, z, front, material, origin, w, h):
@@ -714,32 +747,8 @@ def build_tile(frame, box, elev, decks, out_dir, vfs_dir):
     # A shared NVDB parent95 ID identifies one support. Legacy cache lacks it:
     # group only extremely close coordinates, not unrelated signs 0.95 m apart.
     indexed=[(r,q,face,idx,w,h,float(z[i])) for i,(r,q,_,face,idx,w,h) in enumerate(prepared)]
-    groups=[]
-    for rec in indexed:
-        hit=next((g for g in groups if
-                  ((rec[0].get('pole_id') and rec[0].get('pole_id') == g[0][0].get('pole_id')) or
-                   (not rec[0].get('pole_id') and not g[0][0].get('pole_id') and
-                    np.linalg.norm(rec[1]-g[0][1]) < .35))),None)
-        if hit is None:groups.append([rec])
-        else:hit.append(rec)
-    meshes=[]
-    for grp in groups:
-        grp.sort(key=lambda k:_mount_order(k[0]))
-        ordered=list(reversed(grp))
-        # The priority renderer mounts 206/208 at ~1.5 m; if a route shield
-        # shares this Skiltpunkt, move the destination stack above the diamond.
-        shares_priority = any(float(np.linalg.norm(grp[0][1]-p)) < 1.5 for p in priorities)
-        bottom=2.55 if shares_priority else 1.78
-        bases={}
-        for rec in ordered:
-            bases[rec[0]['id']]=bottom
-            bottom+=rec[5]+.16
-        max_top=max(bases[rec[0]['id']]+rec[5] for rec in grp)
-        for i,rec in enumerate(grp):
-            row,q,face,idx,w,h,ground=rec
-            p,t,uv,mi=_panel_mesh(row,q,ground,face,idx,[box[0],box[1]],w,h,
-                                   ground+bases[row['id']],posts=(i==0),post_top=ground+max_top-.05)
-            meshes.append((p,t,uv,mats,mi))
+    meshes=[(p,t,uv,mats,mi) for p,t,uv,mi in
+            _mounting_meshes(indexed,priorities,[box[0],box[1]])]
     return _merge_meshes(meshes),faces
 
 

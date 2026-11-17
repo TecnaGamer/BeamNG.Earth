@@ -1,0 +1,10 @@
+{
+  "norway_nvdb_destinations_v07.py": {
+    "old": "088b8664b672b9389fc17cd62eade0b9a07b0f0fba71d968824b7acb8e183b3f",
+    "new": "314161cedc695850919791708f79061878ff131c729d187a68aaae428fd13ed2"
+  },
+  "norway_signs_v073/visual_v074.py": {
+    "old": "f8a77fafc27cce2641a0f8feb9200bcbe33fc3650b81df1e3201f11c5e936bdf",
+    "new": "62a5ad9fc35572c7d900f7ec38fa45dfdeae7a85183034a9642ec586134c0a94"
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "norway_nvdb_destinations_v07.py": {
+    "old": "bfa90550926f1439e5b4d12b99be7c0139db88995d85bb0109c21a8edb6595da",
+    "new": "ef4c781bc1b687bb1fb1b40c1e6631fe93b71202eff29b60c6e298f6f5735f81"
+  },
+  "norway_signs_v073/visual_v074.py": {
+    "old": "0757e642547de716a2d41f9693f6a4fb75f1dde9e1989c620c0eeb1e0bd3146d",
+    "new": "0b55761f9a89b1eefc921688989c2323c385d377772779ad273bedb5a6a4eb4e"
+  },
+  "norway_signs_v073/shields_v074.py": {
+    "old": "ca1d8c13ed31bd835f3eba518d1f14adec54ab47457d34c23bbb3a149d813e39",
+    "new": "7e6d4425b54df2b5860cf15c121eab1fbcdb0d88845b5cc81261b31a3183da1c"
+  },
+  "norway_signs_v073/layout_v077.py": {
+    "old": null,
+    "new": "5e92f70deb4d7dca31f8a00d12c18ecbd87e4013b5cea55af3cf2a284ca81eed"
+  },
+  "norway_signs_v073/tourist_route_mask.png": {
+    "old": null,
+    "new": "12dfd00f63e41c2a993a459abcfac60840cc6e5746eee316b0219a572eef8819"
+  }
+}
