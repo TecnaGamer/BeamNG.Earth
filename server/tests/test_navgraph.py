@@ -480,6 +480,14 @@ class GraphTest(unittest.TestCase):
         self.assertTrue(navgraph._open_floor_of(fam, "r", [(20.0, 1.0)]))
         self.assertFalse(navgraph._open_floor_of(fam, "r", [(20.0, 6.0)]), "the road's own floor: 1.5 m as before")
 
+    def test_deck_keys(self):
+        deck = (np.array([(0.0, 0.0), (100.0, 0.0)]), np.array([20.0, 20.0]))
+        fam = navgraph._Roads({"r": [deck], "q": [deck]})
+        self.assertEqual(navgraph._deck_keys(fam, "r~lanes1-2"), ["r"])
+        self.assertEqual(navgraph._deck_keys(fam, "r"), ["r"])
+        self.assertEqual(navgraph._deck_keys(fam, "x"), [])
+        self.assertEqual(navgraph._deck_keys({"r": [deck]}, "r~lanes1-2"), [])
+
     def test_deck_z_family_lookup(self):
         deck = (np.array([(0.0, 0.0), (100.0, 0.0)]), np.array([20.0, 20.0]))
         plain = {"r": [deck]}

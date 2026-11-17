@@ -371,6 +371,15 @@ def _has_parts(store, fid):
     return bool(store) and (fid in store or bool(isinstance(store, _Roads) and store.related(fid)))
 
 
+def _deck_keys(store, fid):
+    """The ids store keeps fid's parts under: fid's own, else (a _Roads) its road family's others'."""
+    if store and store.get(fid):
+        return [fid]
+    if isinstance(store, _Roads):
+        return [k for k in store.family.get(_road_id(fid), ()) if k != fid and store[k]]
+    return []
+
+
 def _road_parts(store, fid):
     """store's parts of fid, else of its road's family (_Roads)."""
     own = store.get(fid) if store else None
@@ -484,7 +493,7 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
     rough_edges = set()          # id(edge) -> OSM smoothness class says traffic should not overspeed
     rumble_edges = set()         # id(edge) -> likely ATLM/rural rumble strip corridor
     carriage, carriage_ll = [], []     # sampled ground carriageways, with heights batched below
-    signal_parts, signal_walks, signal_depths = [], {}, {}
+    signal_parts, signal_walks, signal_depths, signal_seen = [], {}, {}, set()
     copies = roads.copies_of(feats_list)
     placement = roads.placement_context(feats_list, urban_fn, widths, left_hand)    # (as the road tiles draw them)
     prop_arms = {}          # connector name -> [(fid, spec, unit vector away, point, end, length)] (the props' view)
@@ -557,12 +566,18 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
                     carriage.append((half, np.column_stack([ge, gn])))
                     carriage_ll.append(ring_ll)
                     pieces.setdefault(fid, []).append(carriage[-1][1])
-            if bspecs[i] is not None and decks and fid in decks:
-                for part in decks[fid]:
-                    dxy, dz = part[:2]
-                    depth = float(part[2]) if len(part) > 2 else roads.DECK_FULL_DEPTH
-                    signal_depths[fid] = max(signal_depths.get(fid, 0.0), depth)
-                    signal_parts.append((fid, bspecs[i], np.column_stack([dxy, dz]), float(np.mean(ll[:, 0]))))
+            if bspecs[i] is not None and _has_parts(decks, fid):
+                # (a lane section's road's deck too, under the id it was planned under, as the road tiles' clearance
+                # sees it, and once: _deck_keys; Codex review of PR #1395)
+                for key in _deck_keys(decks, fid):
+                    if key in signal_seen:
+                        continue
+                    signal_seen.add(key)
+                    for part in decks[key]:
+                        dxy, dz = part[:2]
+                        depth = float(part[2]) if len(part) > 2 else roads.DECK_FULL_DEPTH
+                        signal_depths[key] = max(signal_depths.get(key, 0.0), depth)
+                        signal_parts.append((key, bspecs[i], np.column_stack([dxy, dz]), float(np.mean(ll[:, 0]))))
                 walk = roads.deck_walks(feats, i, rspecs, left_hand)
                 if walk:
                     signal_walks[fid] = walk
