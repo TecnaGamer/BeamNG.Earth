@@ -2,6 +2,7 @@
 import os
 import sys
 import unittest
+import unittest.mock
 from types import SimpleNamespace
 
 import numpy as np
@@ -164,3 +165,33 @@ class JoinTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+@unittest.skipUnless(have_kernel(), "earthfast's carriageway_profiles")
+class OnTest(unittest.TestCase):
+    """BNE_VSOLVE=on (the RFC's step 3): the solve's heights in the plans, under their own cache key."""
+
+    def setUp(self):
+        p = unittest.mock.patch.multiple(vsolve, ON=True, SHADOW=True)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def test_its_plans_are_kept_apart(self):
+        import plancache
+        with unittest.mock.patch.object(vsolve, "ON", False):
+            off = plancache.plans_format()
+        self.assertEqual(plancache.plans_format(), off + ".vs1")
+
+    def test_a_dip_comes_back_to_its_ground_without_ringing(self):
+        """A road under a motorway bridge dips, and is back on its ground past the ramp, no higher: bending and the
+        hold alone rang 0.16 m over it there, and 0.31 m at its end."""
+        import test_grading as tg
+        f = tg.features([[(-200, 0), (200, 0)], [(0, -20), (0, 20)]], ["residential", "motorway"],
+                        flags=[(1, "is_bridge")])
+        g = grading.Grader(tg.FRAME, tg.FakeMD(f), lambda la, lo: np.full(np.shape(la), 10.0))
+        xs = np.arange(-200.0, 201.0, 5.0)
+        la, lo, _ = tg.FRAME.enu_to_geodetic(xs, np.zeros(len(xs)), 0.0)
+        z = g.apply(la, lo, np.full(len(xs), 10.0))
+        self.assertLess(float(z[len(xs) // 2]), 10.0 - 0.6 * grading.UNDER_CLEAR_M, "under the deck")
+        self.assertLessEqual(float(z.max()), 10.0 + 0.02, "no higher than its ground")
+        self.assertAlmostEqual(float(z[1]), 10.0, delta=0.1, msg="back up past the ramp")

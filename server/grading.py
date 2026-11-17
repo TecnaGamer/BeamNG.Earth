@@ -483,6 +483,8 @@ VSOLVE_CONTEXT_M = 150.0     # m past a cell's box the next cells' roads are in 
                             # reach CLIP_MARGIN_M past it, but a road of the next cell's alone was in none of its
                             # problem, and an end its junction there lifts 1.2 m was held at its profile: Rio's 0.79 m
                             # seam. Over the widest spread (vsolve.SPREAD_M) a change there has died out at the box
+VSOLVE_DIP_TOUCH_M = 0.01   # m: a sample the underpass rule lowered this much is in its dip: the shadow solve keeps it,
+                            # and its road a spread (vsolve.SPREAD_M) either side, no higher than before the rule
 UNDER_DECK_SIDE_M = 15.0    # m past a deck's side the road's ground is read (Assaku's hump: 6-13 m past its decks)
 # ... and an overpass's abutment lift reads the road under the same way (bridge_lifts' half, _end_lift_raw): an
 # elevation holding the deck over a cut read the motorway at the deck's height and asked 6.7-8.5 m (GitHub #1077, #1086)
@@ -2992,6 +2994,7 @@ class _Planner:
         the problem at their profiles (no pass ran on them) and none of the output."""
         import copy
         own_n = len(pspecs)
+        given = plans                   # (the caller's: its own roads' heights replaced there under vsolve.ON)
         if context:
             zc = [np.array(p.z, np.float64) for _f, p, _s in context]
             plans = list(plans[:own_n]) + [(f, p) for f, p, _s in context]
@@ -3053,6 +3056,20 @@ class _Planner:
         # rule's alone the solve stood it there again, 2.3 m under the deck where the passes left 2.8. The passes'
         # heights: the shadow's; without them (the RFC's step 4) clearance rows on the decks' own heights)
         caps = self._vsolve_caps(key, ground, [np.minimum(r, np.asarray(p.z, np.float64)) for r, p in zip(rule_z, ground)])
+        for i, (r, z) in enumerate(zip(rule_z, seen[:n])):
+            # (where the underpass rule lowered a road at all, no higher than it was before: bending and the hold alone
+            # ring like a beam on a spring bed, and a dip came back up 0.16 to 0.44 m over its profile past its ramp,
+            # test_grading's underpass cases. A tension term (critically damped) left the ramp's foot 0.3 to 1.1 m low)
+            z = np.asarray(z, np.float64)
+            low = r < z - VSOLVE_DIP_TOUCH_M
+            if low.any():   # (and a spread past the ramp's foot: the motorway under a held overpass rang 0.44 m past it)
+                xy = np.asarray(ground[i].xy, np.float64)[:, :2]
+                sa = np.r_[0.0, np.cumsum(np.hypot(*np.diff(xy, axis=0).T))]
+                reach = vsolvemod.SPREAD_M.get(vsolvemod._cls(pspecs[i]), vsolvemod.SPREAD_OTHER_M)
+                sl = sa[low]
+                near = np.abs(sa[:, None] - sl[None, :]).min(axis=1) <= reach
+                c = np.where(near, z, np.nan)
+                caps[i] = c if caps[i] is None else np.fmin(caps[i], c)
         zs, info = vsolvemod.solve(ground, pspecs, z_before[:n], ceilings, ranks, pins, dips, caps=caps, floors=floors)
         if zs is None:          # (no feasible solve: the passes' heights, as the RFC's fallback; counted in info)
             zs = [np.array(p.z, np.float64) for p in ground]
@@ -3065,6 +3082,12 @@ class _Planner:
                 kept.append((fid, q))
             else:
                 kept.extend((fid, r) for r in trim_plan(q, own if quad is None else quad))
+        if vsolvemod.ON and not info["fallback"]:
+            for i in range(own_n):      # (the RFC's step 3: the solve's heights, its plans' all else the passes')
+                fid, p = given[i]
+                q = copy.copy(p)
+                q.z = np.asarray(zs[i], np.float64).copy()
+                given[i] = (fid, q)
         info["pins"] = len(pins)
         info["context"] = len(context)
         info["dips"] = int(sum(int(np.isfinite(d).sum()) for d in dips if d is not None))
@@ -3081,8 +3104,9 @@ class _Planner:
                     plans[info["grade_worst"]["plan"]][0], 100 * info["grade_worst"]["grade"],
                     100 * info["grade_worst"]["ceiling"], info["grade_worst"]["x"], info["grade_worst"]["y"]))
             if info["grade_broken"] else "", info["elapsed_s"])
-        with self.lock:
-            self.__dict__.setdefault("_vsolve", {})[str(key)] = (kept, info)
+        if not vsolvemod.ON:        # (the shadow's, for grade_metrics; on, the plans are the solve's: nothing kept beside)
+            with self.lock:
+                self.__dict__.setdefault("_vsolve", {})[str(key)] = (kept, info)
 
     def _vsolve_caps(self, key, ground, heights, near=CLIP_MARGIN_M + VERTEX_STEP):
         """Per plan of ground (or None) the most its heights may be in the shadow solve (NaN elsewhere): heights, where it

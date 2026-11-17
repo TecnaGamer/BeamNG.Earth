@@ -21,7 +21,9 @@ least-squares problem on the carriageway solver's kernel (carriageways.solve: ea
   was solved again with looser ceilings, then none: three stages, in place of a row that says where it breaks.
 
 BNE_VSOLVE=shadow runs it beside the passes: their plans are used and kept as always; the solve's are only kept
-in memory for tools/grade_metrics.py to measure (Planner._vsolve). Off by default, and off it costs nothing.
+in memory for tools/grade_metrics.py to measure (Planner._vsolve). BNE_VSOLVE=on (the RFC's step 3, opt-in) runs it
+the same and uses its heights for the cell's ground roads, the passes' where it falls back; its plans under their own
+cache key (plancache.plans_format). Off by default, and off it costs nothing.
 Pure: the same plans in give the same heights out.
 """
 import logging
@@ -33,7 +35,8 @@ import numpy as np
 log = logging.getLogger("earthd.vsolve")
 
 MODE = os.environ.get("BNE_VSOLVE", "off").strip().lower()
-SHADOW = MODE == "shadow"
+ON = MODE == "on"                   # (the solve's heights used)
+SHADOW = MODE == "shadow" or ON     # (the solve run, beside the passes or in their place)
 
 JOIN_M = 1.0            # m: a road's end this close to another road's centre line meets it there (grademetrics.JUNCTION_R_M)
 JOIN_DZ_M = 6.0         # m: ends whose profiles differ more meet at no node (two levels, or bad data: grading.JUNCTION_MAX_M)
