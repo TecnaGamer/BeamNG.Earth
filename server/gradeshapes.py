@@ -55,6 +55,8 @@ RAIL_LONG_M = 60.0          # m: a rail deck this long is a viaduct (the railway
 CONNECT_M = 400.0           # m: a road joining two decks' (or tunnels') ends no longer than this ties them in one system
 RAMP_MAX_M = 600.0          # m: the longest embankment or cut followed along a road
 DIP_MARGIN_M = 3.0          # m past the upper part's edge a road going under holds its dip before its cut ramps up
+DECK_INNER_M = 10.0         # m from a deck's ends past which a span over the ground keeps its girders off it ...
+DECK_AIR_M = 0.5            # ... by this much
 SOFT_M = 0.6                # m: the rounding where an embankment meets the ground (a soft maximum)
 
 CLEAR_PATH_M = 3.0          # m: a path's headroom (no vehicle on it)
@@ -251,10 +253,30 @@ def find_systems(members):
     """The interchanges among members: [System], each closed, in a deterministic order."""
     net = Net(members)
     n = len(members)
-    seeds = [i for i in range(n) if _is_seed(net, i) and len(net.lines[i]) >= 2]
+    cand = [i for i in range(n) if _is_seed(net, i) and len(net.lines[i]) >= 2]
+    rel = {i: _relations(net, i) for i in cand}
+    # a deck chain is part of an interchange only if one of its decks crosses a road, a track or a tunnel (over or
+    # under): a bridge over a river or a valley alone is the bridges' own (roads.py), not a grade separation's
+    crosses = {i for i in cand if any(kind == "cross" and _over(members[i], members[j]) is not None
+                                      for j, kind, _a, _b, _q in rel[i])}
+    dpar = {i: i for i in cand if members[i].kind == "deck"}
+
+    def droot(i):
+        while dpar[i] != i:
+            dpar[i] = dpar[dpar[i]]
+            i = dpar[i]
+        return i
+    for i in dpar:
+        for j, kind, _a, _b, _q in rel[i]:
+            if kind == "join" and j in dpar:
+                dpar[droot(i)] = droot(j)
+    live = {droot(i) for i in dpar if i in crosses}
+    seeds = [i for i in cand if (i in dpar and droot(i) in live) or (i not in dpar and i in crosses)]
     if not seeds:
         return net, []
-    rel = {i: _relations(net, i) for i in seeds}
+    for i in seeds:
+        rel[i] = [r_ for r_ in rel[i] if r_[0] in set(seeds) or not _is_seed(net, r_[0])]
+    net.crossing_decks = crosses
     par = {i: i for i in seeds}
 
     def root(i):
@@ -601,6 +623,10 @@ def _solve_shape_qp(net, sysm, pcs, smp, ground, fixed_z, diagnostics):
         lo, hi = np.full(n, -np.inf), np.full(n, np.inf)
         if pc["kind"] == "deck":
             target, w = _deck_targets(net, sysm, pc, t)
+            if pc["main"] not in getattr(net, "crossing_decks", ()):    # (a span over the ground: its girders off it)
+                dv = x["d"]
+                inner = (dv - dv[0] >= DECK_INNER_M) & (dv[-1] - dv >= DECK_INNER_M)
+                lo = np.where(inner, t + deck_depth(net.L[pc["main"]]) + DECK_AIR_M, -np.inf)
         else:
             target, w = t.copy(), np.full(n, W_DIP)
             hi = t.copy()                                   # (a road going under never rises over its ground)
