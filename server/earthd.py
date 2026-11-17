@@ -6308,7 +6308,8 @@ class Server:
                         if not is_global:
                             rgb = self.road_faces(anchor, node, px, rgb)
                             self.write_road_mask(anchor, node, px, texture)
-                        tex_bytes = imagerymod.write_dds(os.path.join(self.out_dir, texture), rgb)
+                        tex_bytes = imagerymod.write_dds(os.path.join(self.out_dir, texture), rgb,
+                                                         imagerymod.FAR_SRGB)
                     finally:
                         revisitmod.end(f0)
                     self.keep_texture(tk, texture, tex_bytes, used, pending, f0)
@@ -6329,7 +6330,8 @@ class Server:
                     material = self.matslots.take(ck)
                     texture = self.texture_name(*ck, self.tex_rev.get(ck, 0))
                     fallback_rgb = farfield.palette_fallback_rgb(getattr(built, "grid", None))
-                    tex_bytes = imagerymod.write_dds(os.path.join(self.out_dir, texture), fallback_rgb)
+                    tex_bytes = imagerymod.write_dds(os.path.join(self.out_dir, texture), fallback_rgb,
+                                                     imagerymod.FAR_SRGB)
         if geo is not None:             # (a revisit hit, or no imagery)
             w0 = time.perf_counter()
             built = geo.result()
@@ -6867,7 +6869,7 @@ class Server:
         texture = self.texture_name(*ck, prev.rev + 1)
         if not isinstance(tile, farfield.GTile):
             self.write_road_mask(anchor, node, px, texture)
-        tex_bytes = imagerymod.write_dds(os.path.join(self.out_dir, texture), rgb)
+        tex_bytes = imagerymod.write_dds(os.path.join(self.out_dir, texture), rgb, imagerymod.FAR_SRGB)
         self.keep_texture(self.tex_key(anchor, tile, px), texture, tex_bytes, used, pending, None)
         sources = prev.credits
         if self.credits is not None:        # the new texture's sources (the corrected one names S2 too)
