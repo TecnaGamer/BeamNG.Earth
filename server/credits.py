@@ -127,6 +127,7 @@ FEATURES = {
     "roadz:hk": "HK Gov TD and CEDD (DATA.GOV.HK, CSDI)",
     "air:ourairports": "OurAirports", "grav:egm2008": "NGA EGM2008", "climate:beck-kg": "Beck et al. (Koppen-Geiger)",
     "eco:resolve": "RESOLVE (Dinerstein et al. 2017)",
+    "leaf:lc100": "Copernicus Land Cover 100 m",
 }
 # (the full wordings of features whose licences name each provider: hello.attribution / CREDITS.md)
 LONG = {

@@ -67,7 +67,8 @@ VERSION = 35          # (the cached cells hold their groups: 14 for the regional
                       # and palms by the climate: coconut palms in the tropics, fan / date palms elsewhere
                       # 35: Portugal's and Galicia's eucalypt plantations (eucalypt_share); the regional rules by
                       # RESOLVE's ecoregions (ecoregion.py) where boxes and climates stood: the Mediterranean's
-                      # trees, the creosote, the steppe junipers; the Cantabrian oak woods
+                      # trees, the creosote, the steppe junipers; the Cantabrian oak woods; the conifers' share
+                      # from the forests' leaf type (leaftype.py) where a coarse rule stood
 TREE_MIN_M = 3.0
 # The canopy raster, the scatter grids and the crown radii are in Web Mercator units (EPSG:3857: a metre there is
 # cos(lat) metres on the ground) and were tuned by eye at mid latitudes. Past them the same pixel counts covered less
@@ -293,8 +294,21 @@ def _north_america(lat, lon):
 
 
 def _conifer_share(lat, lon):
-    """The regional share of conifers (a coarse climate stand-in until a species map). Beyond North America
-    (2026-10-15: Douglas firs stood in Punjab's fields): few in the tropics and subtropics, the pines of the
+    """The share of conifers among the trees: (35) the forests' leaf type around the point (leaftype.py: Copernicus
+    Land Cover 100 m's Forest Type, 2019), else the coarse rule below. South of the tropics no less than the coarse
+    rule: the map takes the radiata pine plantations of Chile, New Zealand and South Africa for evergreen
+    broadleaves (Kaingaroa's 0.27, Biobio's 0.0)."""
+    import leaftype
+    lat, lon = np.asarray(lat, np.float64), np.asarray(lon, np.float64)
+    m = leaftype.conifer_share(lat, lon)
+    coarse = _conifer_share_coarse(lat, lon)
+    m = np.where(lat < -23.5, np.fmax(m, coarse), m)
+    return np.where(np.isnan(m), coarse, m)
+
+
+def _conifer_share_coarse(lat, lon):
+    """The regional share of conifers (a coarse climate stand-in where the leaf type map has no forest). Beyond North
+    America (2026-10-15: Douglas firs stood in Punjab's fields): few in the tropics and subtropics, the pines of the
     Mediterranean, the boreal north."""
     lat, lon = np.asarray(lat, np.float64), np.asarray(lon, np.float64)
     west = lon < -100.0

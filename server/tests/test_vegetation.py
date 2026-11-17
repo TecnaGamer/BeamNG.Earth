@@ -633,9 +633,17 @@ class RegionalTest(unittest.TestCase):
         """2026-10-15: Douglas firs in Punjab's fields; the Sahara's bushes were the East's."""
         self.assertLess(float(veg._conifer_share(30.9, 75.8)), 0.1, "Punjab: hardly any conifers")
         self.assertLess(float(veg._conifer_share(-1.3, 36.8)), 0.05, "Nairobi")
-        self.assertGreaterEqual(float(veg._conifer_share(43.0, 12.0)), 0.3, "Italy's pines")
         self.assertGreaterEqual(float(veg._conifer_share(61.0, 10.0)), 0.6, "Norway")
-        self.assertEqual(float(veg._conifer_share(39.3, -76.6)), 0.2, "Maryland as before")
+        # (35) the leaf type map (leaftype.py) where it has forest, the coarse rule elsewhere
+        self.assertGreater(float(veg._conifer_share(44.2, -0.8)), 0.8, "the Landes' pines")
+        self.assertGreater(float(veg._conifer_share(53.6, 17.9)), 0.8, "Bory Tucholskie")
+        self.assertLess(float(veg._conifer_share(49.2, 22.5)), 0.3, "the Bieszczady's beeches")
+        self.assertGreater(float(veg._conifer_share(32.5, -83.5)), 0.8, "Georgia's loblolly pines")
+        self.assertLess(float(veg._conifer_share(43.0, 12.0)), 0.2, "Umbria's oaks")
+        self.assertGreaterEqual(float(veg._conifer_share(-38.4, 176.6)), float(veg._conifer_share_coarse(-38.4, 176.6)),
+                                "Kaingaroa's radiata pines: no less than the coarse rule south of the tropics")
+        self.assertEqual(float(veg._conifer_share(0.0, -30.0)), float(veg._conifer_share_coarse(0.0, -30.0)),
+                         "no forest about: the coarse rule")
         self.assertEqual(self.g(veg.G_SHRUB, 1, 22.3, -4.6, 60), veg.G_DESERT_SHRUB, "the Sahara")
         self.assertEqual(self.g(veg.G_ROCK, 1, -25.0, 133.0, 20), veg.G_DESERT_ROCK, "inner Australia")
         self.assertEqual(self.g(veg.G_SHRUB, 1, 52.0, 5.0, 20), veg.G_SHRUB, "Dutch shrubland: no desert")
