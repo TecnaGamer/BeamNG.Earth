@@ -230,7 +230,7 @@ M.CATALOG = {
     { ECA .. 'trees/trees_oak/tree_oak_bush_b', 4.1 },
     -- (the stock survey 2026-11-15) low bushes for 1-2.5 m (only generibush before)
     { ECA .. 'trees/trees_beech/tree_beech_bush_a', 1.2 }, { ECA .. 'trees/trees_oak/tree_oak_bush_a', 1.26 },
-    { ECA .. 'trees/trees_douglasfir/tree_douglasfir_bush_b', 2.09 }, { ECA .. 'trees/ECA_coast_bush/generibush_small', 2.09 },
+    { ECA .. 'trees/ECA_coast_bush/generibush_small', 2.09 },     -- (tree_douglasfir_bush_b out: a few flat broken fronds)
     { ECA .. 'trees/trees_aspen/tree_aspen_bush_b', 2.47 },
     { ECA .. 'trees/trees_aspen/tree_aspen_bush_c', 3.27 },     -- (the stock survey 2026-11-16)
   },
@@ -482,7 +482,7 @@ M.CATALOG = {
   },
   -- the north's and the mountains' tops: birch / willow scrub (the birch-barked aspen bushes), spruce saplings, junipers
   shrub_north = {
-    { UT .. 'trees/Juniper/Juniper_bush_small_01', 1.2 }, { ECA .. 'trees/trees_douglasfir/tree_douglasfir_bush_b', 2.09 },
+    { UT .. 'trees/Juniper/Juniper_bush_small_01', 1.2 },
     { ECA .. 'trees/trees_aspen/tree_aspen_bush_a', 2.2 }, { ECA .. 'trees/trees_aspen/tree_aspen_bush_b', 2.47 },
     { UT .. 'trees/Juniper/Juniper_bush_large_01', 2.6 }, { ECA .. 'trees/trees_douglasfir/tree_douglasfir_bush_a', 2.7 },
     { ECA .. 'trees/trees_aspen/tree_aspen_bush_c', 3.27 },
