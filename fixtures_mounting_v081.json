@@ -1,0 +1,62 @@
+[
+  {
+    "id": 852649001,
+    "pole_id": 852648998,
+    "kind": "713",
+    "code": "713.H",
+    "text": "Blakstad@31@",
+    "color": "gul",
+    "facing": "trafikk i metreringsretning",
+    "position_code": 20,
+    "width_mm": null,
+    "height_mm": null,
+    "text_height_mm": 175,
+    "compass": "",
+    "metering_side": "V"
+  },
+  {
+    "id": 852649002,
+    "pole_id": 852648998,
+    "kind": "713",
+    "code": "713.H",
+    "text": "Åndal@31@",
+    "color": "gul",
+    "facing": "trafikk i metreringsretning",
+    "position_code": 10,
+    "width_mm": 1700,
+    "height_mm": 380,
+    "text_height_mm": 175,
+    "compass": "",
+    "metering_side": "V"
+  },
+  {
+    "id": 852649003,
+    "pole_id": 852648998,
+    "kind": "713",
+    "code": "713.V",
+    "text": "@30@Blakstad",
+    "color": "gul",
+    "facing": "trafikk mot metreringsretning",
+    "position_code": 20,
+    "width_mm": 2000,
+    "height_mm": 475,
+    "text_height_mm": 175,
+    "compass": "",
+    "metering_side": "V"
+  },
+  {
+    "id": 852649004,
+    "pole_id": 852648998,
+    "kind": "713",
+    "code": "713.V",
+    "text": "@30@Åndal",
+    "color": "gul",
+    "facing": "trafikk mot metreringsretning",
+    "position_code": 10,
+    "width_mm": 2000,
+    "height_mm": 475,
+    "text_height_mm": 175,
+    "compass": "",
+    "metering_side": "V"
+  }
+]

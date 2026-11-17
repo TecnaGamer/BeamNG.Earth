@@ -1,0 +1,10 @@
+{
+  "norway_nvdb_destinations_v07.py": {
+    "old": "314161cedc695850919791708f79061878ff131c729d187a68aaae428fd13ed2",
+    "new": "00b8b6ec2356d7803c7ecfeda5c2d188cba3d7f7fcaf596dee8a8d2a1d365c98"
+  },
+  "norway_signs_v073/shields_v074.py": {
+    "old": "7e6d4425b54df2b5860cf15c121eab1fbcdb0d88845b5cc81261b31a3183da1c",
+    "new": "fcffe26543250e31150aa0158e40290601b0f192a6b07f3655c76423bc08ab4f"
+  }
+}

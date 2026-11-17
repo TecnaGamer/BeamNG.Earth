@@ -1,8 +1,13 @@
 """Shared route badges, used both embedded and standalone (v0.7.7)."""
+from functools import lru_cache
 import re
 from PIL import ImageFont
 
 def font(size,path=None):
+    return _cached_font(max(5,int(size)),str(path) if path else None)
+
+@lru_cache(maxsize=128)
+def _cached_font(size,path):
     for p in ([str(path)] if path else [])+['DejaVuSansCondensed.ttf','DejaVuSans.ttf']:
         try:return ImageFont.truetype(p,max(5,int(size)))
         except OSError:pass

@@ -9,6 +9,7 @@ are skipped rather than replaced with invented towns.
 The existing bne direction renderer supplies the sign mesh protocol. See README.
 """
 from __future__ import annotations
+from functools import lru_cache
 import hashlib
 import io
 import json
@@ -470,9 +471,18 @@ def _face_filename(row, out_dir):
                                     ensure_ascii=False, sort_keys=True).encode('utf-8')).hexdigest()[:18]
     name = 'bne_no_nvdb_%s' % key
     path = Path(out_dir) / (name + '.dds')
-    img = _draw_face(row)
-    if not path.is_file():
-        imagery.write_dds(str(path), np.asarray(img, np.uint8))
+    canvas = _texture_canvas(row)
+    # Existing output already has the exact content/version/dimensions key.
+    # Avoid expensive Pillow rendering on cache hits; validate the DDS header.
+    try:
+        import struct
+        with path.open('rb') as f: header=f.read(128)
+        if len(header)==128 and header[:4]==b'DDS ' and struct.unpack_from('<I',header,4)[0]==124:
+            height,width=struct.unpack_from('<II',header,12)
+            if (width,height)==canvas and path.stat().st_size>128:return name,path,canvas
+    except OSError:pass
+    img = _draw_face(row, canvas=canvas)
+    imagery.write_dds(str(path), np.asarray(img, np.uint8))
     return name, path, img.size
 
 
@@ -503,6 +513,19 @@ def _stack_gap(upper, lower):
 
 
 def _tile_dimensions(row):
+    # Only inputs actually used by dimension inference belong in this key.
+    fields=('kind','code','text','width_mm','height_mm','text_height_mm')
+    values=tuple(row.get(k) for k in fields)
+    try:hash(values)
+    except TypeError:return _compute_tile_dimensions(row)
+    return _cached_tile_dimensions(values)
+
+@lru_cache(maxsize=2048)
+def _cached_tile_dimensions(values):
+    fields=('kind','code','text','width_mm','height_mm','text_height_mm')
+    return _compute_tile_dimensions(dict(zip(fields,values)))
+
+def _compute_tile_dimensions(row):
     """Prefer trustworthy measured sizes; clamp obvious oversize entries."""
     kind=row['kind']
     default={'723':(.68,.43),'727':(1.2,.36),'713':(1.9,.36),
@@ -726,17 +749,18 @@ def build_tile(frame, box, elev, decks, out_dir, vfs_dir):
         destinations.append((row,q,ref,face))
     destinations=destinations[:MAX_PER_TILE]
     if not destinations:return None,{}
-    mats=['bne_dir_metal']; faces={}; prepared=[]
+    mats=['bne_dir_metal']; material_indices={'bne_dir_metal':0}; faces={}; prepared=[]
     for row,q,ref,face in destinations:
         try:
             name,path,_=_face_filename(row,out_dir)
         except (OSError,ValueError,TypeError) as exc:
             LOG.debug('Skip illegible NVDB sign %s: %s',row['id'],exc)
             continue
-        if name not in mats:
+        if name not in material_indices:
+            material_indices[name]=len(mats)
             mats.append(name);faces[name]=f'{vfs_dir}/{path.name}'
         w,h=_tile_dimensions(row)
-        prepared.append((row,q,ref,face,mats.index(name),w,h))
+        prepared.append((row,q,ref,face,material_indices[name],w,h))
     if not prepared:return None,{}
     pts=np.array([rec[1] for rec in prepared],float)
     la,lo,_=frame.enu_to_geodetic(pts[:,0],pts[:,1],np.zeros(len(pts)))
