@@ -54,4 +54,15 @@ do
   scenetree = saved
 end
 
+-- the poplars' fall-gold texture: green in July (the summer tint, full), their own gold at the fall's peak (2026-11-17)
+do
+  local pop = S.SPECIES[4]
+  local t1, a1 = S.speciesTint(pop, 'auto', 190, 45)
+  T.check(t1 == pop.summer and a1 == 1, 'July: the poplars green')
+  local _, a2 = S.speciesTint(pop, 'auto', 300 - 5 - 12, 45)
+  T.check(a2 < 0.2, 'their fall: the texture\'s gold, about untinted')
+  T.check(S.imposterSpecies('imposter_mat__levels_automation_test_track_art_shapes_trees_trees_poplar_s_poplar_large_01.dae')
+    == pop, 'a poplar imposter: the poplar')
+end
+
 T.done('test_seasonlook')

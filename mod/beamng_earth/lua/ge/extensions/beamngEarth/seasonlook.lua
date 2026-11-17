@@ -20,6 +20,10 @@ M.SPECIES = {
   { mats = { 'Birch_Leaves_01', 'm_birch_leaves_distant' }, merged = {}, folders = { 'trees_birch', 'trees_aspen' },
     tint = { 1.7, 1.3, 0.3 }, days = 10,
     winter = { 1.0, 0.9, 0.7 } },           -- (a leafless birch is not possible with its shape: pale instead)
+  -- Automation Test Track's Lombardy poplars: their leaf texture is fall gold, all year (the gallery 2026-11-17). Their
+  -- summer green is a tint (summer, applied the more the less fall it is), their fall the texture's own gold.
+  { mats = { 'm_poplar_leaves_01', 'm_poplar_leaves_02' }, merged = {}, folders = { 'trees_poplar' },
+    summer = { 0.55, 0.85, 0.95 }, days = 5, winter = { 0.95, 0.85, 0.7 } },
 }
 -- (oaks turn last; folders: the species' tree shapes, whose far imposters (the engine's flat pictures of a whole tree,
 -- materials 'imposter_mat__<shape path>') take the same tint: they kept their summer green while the 3D trees in front
@@ -88,6 +92,7 @@ function M.speciesTint(sp, mode_, doy, lat)
     return { 1, 1, 1 }, 0
   end
   if w >= f and w >= s and w > 0 then return sp.winter or { 1, 1, 1 }, w end
+  if sp.summer then return sp.summer, 1 - f end     -- (a fall-coloured texture: green but in the fall)
   if s > f and s > 0 then return M.SPRING, s end
   return sp.tint, f
 end
