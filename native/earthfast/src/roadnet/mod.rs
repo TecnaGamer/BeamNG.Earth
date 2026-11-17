@@ -10,6 +10,7 @@ pub mod columns;
 pub mod copies;
 pub mod flowhome;
 pub mod countries;
+pub mod eustreets;
 pub mod laneflow;
 pub mod lanesplit;
 pub mod pyfloat;

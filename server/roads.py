@@ -3427,34 +3427,29 @@ def _road_specs(feats, urban_fn, left_hand, towns=None):
     surveyed = {i for i, (x, y) in enumerate(zip(out, de)) if x is not None and y is not None and x.width != y.width}
     out = franceroads.adjust_specs(feats, de)
     if european:
-        rules = feats.rules
-        names = feats.attrs.get("name")
-        tags = feats.attrs.get("osm_sidewalk")
-        fr = d["frontage"]
-        for i, spec in enumerate(out):
-            if (spec is None or spec.kind not in BUILT or spec.cls not in europewalks.STREETS
-                    or spec.link or spec.median or spec.mountain or is_ring(feats, i)):
-                continue
-            a = feats.coord_off[feats.ring_off[feats.part_off[i]]]
-            b = feats.coord_off[feats.ring_off[feats.part_off[i + 1]]]
-            if b <= a:
-                continue
-            lon, lat = map(float, feats.lonlat[(a + b) // 2])
-            country = europewalks.country_for(lon, lat)
-            if country is None:
-                continue
-            width = mapped_rule_width(feats, i)
-            if width is None or not 1.0 <= float(width) <= 40.0:
-                width = mapped_osm_width(feats, i, *OSM_WIDTH_M)
-            if width is None and i in surveyed:     # (Germany's surveyed paved width stands as a mapped one)
-                width = spec.width
-            # France's rural experiment already has its own narrower widths.
-            if width is None and franceroads.enabled(spec) and not spec.urban:
-                width = spec.width
-            front = (0., 0.) if np.isnan(fr[i, 0]) else (float(fr[i, 0]), float(fr[i, 1]))
-            out[i] = europewalks.plan(spec, country, lon, lat, str(names[i]) if names is not None else "",
-                                      str(tags[i]) if tags is not None else "", width, front, urban_fn is not None)
+        out = _eu_street_pass(feats, out, d["frontage"], surveyed, urban_fn)
     return out
+
+
+def _eu_street_pass(feats, out, fr, surveyed, urban_fn):
+    """_road_specs' European pass over its specs (out: a list, changed in place and returned; earthfast
+    roadnet::eustreets): each built street (europewalks.STREETS, not a link, divided, pass road or ring) with points
+    whose middle point europewalks.country_for places in a supported country takes europewalks.plan's layout, with its
+    mapped width (the width rule's in 1-40 m, else OpenStreetMap's in OSM_WIDTH_M unless width_rejected took it out,
+    else the road's own where Germany surveyed it (surveyed) or France's rural experiment has it) and its frontage (fr:
+    the spec kernel's, NaN where not asked)."""
+    import europewalks
+    import fast
+    import franceroads
+    fast.require(401, "eu_street_pass")
+    return fast._ef.eu_street_pass(
+        out, np.ascontiguousarray(feats.part_off, np.int64), np.ascontiguousarray(feats.ring_off, np.int64),
+        np.ascontiguousarray(feats.coord_off, np.int64), np.ascontiguousarray(feats.lonlat, np.float64).reshape(-1, 2),
+        feats.attrs.get("osm_junction"), sorted(RING_JUNCTIONS), sorted(BUILT), sorted(europewalks.STREETS),
+        feats.attrs.get("name"), feats.attrs.get("osm_sidewalk"), np.asarray(fr, np.float64), surveyed,
+        bool(franceroads.ON), feats.attrs.get("osm_width"), float(OSM_WIDTH_M[0]), float(OSM_WIDTH_M[1]),
+        lambda: width_table(feats), lambda: width_rejected(feats)[1], europewalks.country_for, europewalks.plan,
+        urban_fn is not None)
 
 
 # The default widths of roads the map gives no width or lane count, by region, measured on the aerials
