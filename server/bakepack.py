@@ -164,7 +164,7 @@ def switches():
         import revisit
         import roads
         sw = {k: v for k, v in os.environ.items()
-              if k.startswith("BNE_") and k not in revisit.NOT_SWITCHES and k not in CELL_SCOPED}
+              if revisit.keyed_env(k) and k not in CELL_SCOPED}
         sw["BNE_BRIDGE_PROFILE"] = roads.bridge_profile_mode()
         h = hashlib.sha1()
         for k in sorted(sw):

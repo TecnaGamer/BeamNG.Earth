@@ -123,6 +123,15 @@ VERSION = 2                     # pipeline version: bump when what a cell's laye
 # (osmtags.is_outline, a raceway that is a circuit site's outline left out, GitHub #1010: as #184, only cells fetched
 # after it; the cached ones with the next Overture release bump)
 LAYER_VERSIONS = {"roads": 9}
+
+
+def dem_identity():
+    """The elevation's identity in MapData.versions() (so in the road plans', cell facts', road tiles' and shared
+    decisions' keys; the road revamp's R1, 2026-11-16: plans made on another elevation were found under the same key
+    and kept): [dem.ELEVATION_ID (pinned per app release), dem.DECODED_VERSION, roadz.VERSION]."""
+    import dem
+    import roadz
+    return [int(dem.ELEVATION_ID), int(dem.DECODED_VERSION), int(roadz.VERSION)]
 LANE_CONTEXT_CELLS = 16       # neighbour cells' raw road layers kept for slip-road mouths (lanesections.split's context)
 # (LidarBC's measured canopy heights, maprasters.bc_canopy, are opt-in: BNE_BC_CANOPY=1 fills cells built after it;
 # no canopy version bump, which would fetch every player's canopy cells again)
@@ -649,6 +658,7 @@ class MapData:
             v["street_edges"] = europewalks.VERSION
         if levelways.ON:
             v["levelways"] = levelways.VERSION
+        v["dem"] = dem_identity()               # (the elevation the plans, facts and tiles are made on: pinned per release)
         return v
 
     def warm_manifests(self):

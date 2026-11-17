@@ -68,7 +68,7 @@ def generator_identity():
     # Optional generator switches must not silently change the application of pinned plans.
     # Only their digest is retained; environment values never enter distributed metadata.
     settings = {key: value for key, value in os.environ.items()
-                if key.startswith("BNE_") and key not in revisit.NOT_SWITCHES}
+                if revisit.keyed_env(key)}
     # earthd writes the CLI default into its environment, whereas a separate exporter does not.
     # Hash the mode actually used by the road generator, including its default/case normalization.
     settings["BNE_BRIDGE_PROFILE"] = roads.bridge_profile_mode()
