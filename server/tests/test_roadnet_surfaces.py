@@ -171,6 +171,34 @@ class SurfacesParityTest(unittest.TestCase):
                 self.assertIs(type(g), type(w), k)
                 self.assertEqual(g, w, k)
 
+    def test_lane_column_of_other_length(self):
+        """The OSM lanes column shorter than the layer (_osm_values gives its first n values): one value broadcasts as
+        numpy's, another length is numpy's ValueError; never a panic (Codex review of 3eba68d9)."""
+        rules = roads._surface_rules()
+        rng = random.Random(3781)
+        for k in range(200):
+            n = rng.randint(1, 6)
+            cls_s = [rng.choice(CLASSES) for _ in range(n)]
+            vals = [None if rng.random() < 0.7 else _value(rng) for _ in range(n)]
+            lanes = np.array([rng.choice([np.nan, 2.0]) for _ in range(rng.choice([0, 1, n - 1, n, n + 2]))])
+            good = np.zeros(n, bool)
+            try:
+                want = ("ok", ref_surfaces(cls_s, vals, {}, lanes, good, True, np.zeros(n, bool), None, None)["reg_pre"])
+            except Exception as e:      # noqa: BLE001
+                want = ("raised", type(e))
+            try:
+                got = ("ok", rules.spec_surfaces(cls_s, list(vals), [], UNPAVED_VERDICT, lanes, good, True,
+                                                 sorted(REGIONAL_CLASSES))["reg_pre"])
+            except Exception as e:      # noqa: BLE001
+                got = ("raised", type(e))
+            except BaseException as e:  # noqa: BLE001
+                self.fail(f"{type(e).__name__}: {e}")
+            self.assertEqual(got[0], want[0], (k, n, len(lanes)))
+            if want[0] == "raised":
+                self.assertIs(got[1], want[1], (k, n, len(lanes)))
+            else:
+                self.assertTrue(np.array_equal(got[1], want[1]), (k, n, len(lanes)))
+
     def test_spec_surface_columns(self):
         rng = random.Random(3762)
         rules = roads._surface_rules()

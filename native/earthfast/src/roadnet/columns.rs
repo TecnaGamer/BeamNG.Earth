@@ -201,15 +201,30 @@ pub fn spec_columns<'py>(py: Python<'py>, n: usize, names: Vec<String>, unbuilt:
         }).collect::<PyResult<_>>()?,
         None => vec![false; n],
     };
+    // (np.fromiter(..., n): a column shorter than the layer is a ValueError)
+    if ring.len() != n {
+        short("osm_junction")?;
+    }
+    if good.len() != n {
+        short("osm_smoothness")?;
+    }
+    // (name[i] = / sides[i] = for every value of the column: one past the layer that would be set is numpy's
+    // IndexError)
+    let past = |i: usize| -> PyResult<()> {
+        Err(pyo3::exceptions::PyIndexError::new_err(format!("index {i} is out of bounds for axis 0 with size {n}")))
+    };
     let names_code = match items(name.as_ref())? {
         Some(v) => {
             let mut codes: BTreeMap<String, i64> = BTreeMap::new();
             let mut out = vec![-1i64; n];
-            for (i, x) in v.iter().enumerate().take(n) {
+            for (i, x) in v.iter().enumerate() {
                 // str(v or "").strip()
                 let s = if x.is_truthy()? { py_str(x)? } else { String::new() };
                 let s = py_strip(&s);
                 if !s.is_empty() && s != "None" {
+                    if i >= n {
+                        past(i)?;
+                    }
                     let k = codes.len() as i64;
                     out[i] = *codes.entry(s.to_owned()).or_insert(k);
                 }
@@ -220,8 +235,11 @@ pub fn spec_columns<'py>(py: Python<'py>, n: usize, names: Vec<String>, unbuilt:
     };
     let mut sides = vec![-1i8; n];
     if let Some(v) = items(sidewalk.as_ref())? {
-        for (i, x) in v.iter().enumerate().take(n) {
+        for (i, x) in v.iter().enumerate() {
             if let Some(c) = sidewalk_code(x)? {
+                if i >= n {
+                    past(i)?;
+                }
                 sides[i] = c;
             }
         }

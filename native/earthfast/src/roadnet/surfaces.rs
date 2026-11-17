@@ -147,7 +147,8 @@ impl SurfaceRules {
         let n = cls.len();
         let (lanes, good) = (osm_lanes.as_slice()?, good.as_slice()?);
         let mut vals: Vec<Option<String>> = vals.iter().map(|v| opt_str(&v)).collect::<PyResult<_>>()?;
-        if vals.len() != n || lanes.len() < n || good.len() < n {
+        // (reg_pre is np.fromiter(..., n) & np.isnan(osm_lanes) & ~good & ~photo_paved: numpy broadcasting, below)
+        if vals.len() != n {
             return Err(pyo3::exceptions::PyValueError::new_err("spec_surfaces: columns of other lengths"));
         }
         let mut photo = vec![false; n];
@@ -180,8 +181,26 @@ impl SurfaceRules {
         }
         let skind: Vec<i8> = (0..n).map(|i| self.kind_of_token(Some(&cls[i]), toks[i].as_deref())).collect();
         let stok: Vec<i32> = toks.iter().map(|t| t.as_deref().map_or(-1, |t| tokens.index(t))).collect();
-        let reg_pre: Vec<bool> = (0..n).map(|i| regional_on && vals[i].is_none() && regional.contains(&cls[i])
-            && lanes[i].is_nan() && !good[i] && !photo[i]).collect();
+        // (numpy's broadcasting of the four operands, in order: equal lengths, or one of them 1 (which may stretch to
+        // any length, 0 too); another pair is numpy's ValueError)
+        let mut len = n;
+        for k in [lanes.len(), good.len(), n] {
+            if k == len || k == 1 {
+                continue;
+            }
+            if len == 1 {
+                len = k;
+                continue;
+            }
+            return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "operands could not be broadcast together with shapes ({len},) ({k},)")));
+        }
+        let at = |l: usize, i: usize| if l == 1 { 0 } else { i };
+        let reg_pre: Vec<bool> = (0..len).map(|i| {
+            let j = at(n, i);
+            regional_on && vals[j].is_none() && regional.contains(&cls[j]) && lanes[at(lanes.len(), i)].is_nan()
+                && !good[at(good.len(), i)] && !photo[j]
+        }).collect();
         let d = PyDict::new(py);
         d.set_item("skind", skind.into_pyarray(py))?;
         d.set_item("stok", stok.into_pyarray(py))?;

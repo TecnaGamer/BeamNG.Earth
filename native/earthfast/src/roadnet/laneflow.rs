@@ -45,9 +45,6 @@ pub fn lane_flow_rows<'py>(py: Python<'py>, part_off: PyReadonlyArray1<'py, i64>
     let ll = lonlat.as_array();
     let n = po.len().saturating_sub(1);
     super::lanesplit::check_offsets(n, po, ro, co, ll.nrows())?;
-    if counts.len() < n || links.len()? < n {
-        return Err(pyo3::exceptions::PyValueError::new_err("lane_flow_rows: counts or links shorter than the layer"));
-    }
     let mut pts = vec![0.0f64; n * 4];
     let mut npts = vec![0i64; n];
     for i in 0..n {
@@ -74,10 +71,25 @@ pub fn lane_flow_rows<'py>(py: Python<'py>, part_off: PyReadonlyArray1<'py, i64>
                 Some(s) if !s.is_none() => Some(str_col(s)?),
                 _ => None,
             };
+            // (numpy's shapes there: `sel &= subtype == "road"` broadcasts a one-value column and refuses another
+            // length, `sel &= maj >= 0` needs the class column as long as the layer: ValueError)
+            if let Some(s) = &sub {
+                if s.len() != cl.len() && s.len() != 1 {
+                    return Err(pyo3::exceptions::PyValueError::new_err(format!("operands could not be broadcast together with shapes ({},) ({},)",
+                                             cl.len(), s.len())));
+                }
+            }
+            if cl.len() != n {
+                return Err(pyo3::exceptions::PyValueError::new_err(format!("operands could not be broadcast together with shapes ({},) ({},)",
+                                         cl.len(), n)));
+            }
+            let road = |i: usize| -> bool {
+                sub.as_ref().is_none_or(|s| s[if s.len() == 1 { 0 } else { i }] == "road")
+            };
             let maj: PyReadonlyArray1<i64> = table.call_method1("majors", (n,))?.extract()?;
             let maj = maj.as_slice()?;
-            let idx: Vec<usize> = (0..n).filter(|&i| defaults.contains_key(&cl[i])
-                && sub.as_ref().is_none_or(|s| s[i] == "road") && maj[i] >= 0).collect();
+            let idx: Vec<usize> = (0..n).filter(|&i| defaults.contains_key(&cl[i]) && road(i) && maj[i] >= 0)
+                .collect();
             if !idx.is_empty() {
                 // (np.asarray(table.value)[maj[idx]].astype(np.float64): numpy's own conversion of any dtype)
                 let np = py.import("numpy")?;
@@ -86,6 +98,13 @@ pub fn lane_flow_rows<'py>(py: Python<'py>, part_off: PyReadonlyArray1<'py, i64>
                     .get_item(rows.into_pyarray(py))?.call_method1("astype", (np.getattr("float64")?,))?
                     .extract::<PyReadonlyArray1<f64>>()?.as_array().iter().copied().collect();
                 let lk = links.as_slice()?;
+                // (counts[i] for the counted roads in order, then links(f)[idx]: an IndexError past either)
+                if let Some(&i) = idx.iter().find(|&&i| i >= counts.len()) {
+                    return Err(pyo3::exceptions::PyIndexError::new_err(format!("list index out of range ({i})")));
+                }
+                if let Some(&i) = idx.iter().find(|&&i| i >= lk.len()) {
+                    return Err(pyo3::exceptions::PyIndexError::new_err(format!("index {i} is out of bounds for axis 0 with size {}", lk.len())));
+                }
                 for (k, &i) in idx.iter().enumerate() {
                     attrs[i * 5] = if v[k] < 0.0 { -1.0 } else { 1.0 };
                     attrs[i * 5 + 1] = match &counts[i] {
@@ -111,6 +130,12 @@ pub fn lane_flow_rows<'py>(py: Python<'py>, part_off: PyReadonlyArray1<'py, i64>
                         let parts = parts.filter(|p| !p.is_none());
                         let empty = PyString::new(py, "");
                         'cand: for &i in &cand {
+                            // (_osm_values' first n values of a column that may be shorter: osm_w[i] past it is
+                            // numpy's IndexError)
+                            if i >= osm_w.len() && !has_w[i] {
+                                return Err(pyo3::exceptions::PyIndexError::new_err(format!("index {i} is out of bounds for axis 0 with size {}",
+                                                         osm_w.len())));
+                            }
                             if has_w[i] || osm_w[i].is_finite() {
                                 continue;
                             }
@@ -157,8 +182,13 @@ pub fn lane_flow_rows<'py>(py: Python<'py>, part_off: PyReadonlyArray1<'py, i64>
 pub fn lane_flow_lists<'py>(got: PyReadonlyArray1<'py, f64>, ramp: PyReadonlyArray1<'py, f64>,
                             attrs: PyReadonlyArray2<'py, f64>) -> PyResult<(Vec<Option<i64>>, Vec<Option<i64>>)> {
     let (g, r, a) = (got.as_slice()?, ramp.as_slice()?, attrs.as_array());
-    if a.nrows() < g.len() || a.ncols() < 3 {
-        return Err(pyo3::exceptions::PyIndexError::new_err("lane_flow_lists: attrs shorter than the counts"));
+    // (isfinite(got) & ~(attrs[:, 2] > 0.5): one shape, ValueError for another)
+    if a.ncols() < 3 {
+        return Err(pyo3::exceptions::PyIndexError::new_err("lane_flow_lists: attrs of fewer than 3 columns"));
+    }
+    if a.nrows() != g.len() {
+        return Err(pyo3::exceptions::PyValueError::new_err(format!(
+            "operands could not be broadcast together with shapes ({},) ({},)", g.len(), a.nrows())));
     }
     let out = (0..g.len()).map(|i| if g[i].is_finite() && !(a[[i, 2]] > 0.5) { Some(g[i] as i64) } else { None })
         .collect();

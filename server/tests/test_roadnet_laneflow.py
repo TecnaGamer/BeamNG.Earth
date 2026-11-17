@@ -190,6 +190,59 @@ class LaneFlowParityTest(unittest.TestCase):
                 self.assertEqual(g.tobytes(), w.tobytes(), (k, g, w))
         self.assertGreater(cands, 100)
 
+    def outcome(self, fn, f):
+        """("ok", the rows) or ("raised", the exception's class); a Rust panic (PanicException, a BaseException
+        `except Exception` does not catch) fails the test."""
+        f.__dict__.pop("_lane_flow_rows", None)
+        try:
+            return "ok", fn(f)
+        except Exception as e:      # noqa: BLE001 (the class is the point)
+            return "raised", type(e)
+        except BaseException as e:  # noqa: BLE001
+            self.fail(f"{type(e).__name__}: {e}")
+
+    def test_columns_of_other_lengths_raise_as_python_did(self):
+        """Attribute columns of other lengths than the layer (Features.from_arrays does not check them): class,
+        subtype (one value broadcasts, as numpy did), osm_width (a ramp candidate past it), the lane tag parts and
+        turn columns: the same rows or the same exception class as the Python, never a panic (Codex review of
+        3eba68d9: a two-value subtype column on a three-road layer panicked)."""
+        rng = random.Random(3803)
+        cases = 0
+        for k in range(300):
+            f = random_layer(rng)
+            n = len(f)
+            if n == 0:
+                continue
+            f.attrs["class"] = np.array(["motorway"] * n, object)
+            f.attrs["osm_lanes"] = np.array([rng.choice([3.0, 4.0]) for _ in range(n)])
+            one = lambda v: mapgeom.RuleTable(np.arange(n, dtype=np.int32), np.array([v] * n),  # noqa: E731
+                                              np.zeros(n, np.float32), np.ones(n, np.float32))
+            f.rules["oneway"] = one(1.0)
+            f.rules["subclass"] = one("link")
+            f.rules.pop("width", None)
+            what = rng.choice(["class", "subtype", "osm_width", "turn", "parts", "none"])
+            m = rng.choice([0, 1, max(n - 1, 0), n + 1, n + 3])
+            if what == "class":
+                f.attrs["class"] = np.array(["motorway"] * m, object)
+            elif what == "subtype":
+                f.attrs["subtype"] = np.array([rng.choice(["road", "rail"]) for _ in range(m)], str)
+            elif what == "osm_width":
+                f.attrs["osm_width"] = np.array([rng.choice([None, "", "x"]) for _ in range(m)] + [None], object)[:m]
+            elif what == "turn":
+                f.attrs["osm_turn_lanes"] = np.array([None] * m + [None], object)[:m]
+            elif what == "parts":
+                f.attrs[railtags.LANE_PARTS] = np.array([None] * m + [None], object)[:m]
+            want = self.outcome(ref_lane_flow_rows, f)
+            got = self.outcome(roads._lane_flow_rows, f)
+            self.assertEqual(got[0], want[0], (k, what, n, m))
+            if want[0] == "raised":
+                self.assertIs(got[1], want[1], (k, what, n, m))
+            else:
+                for g, w in zip(got[1], want[1]):
+                    self.assertEqual(g.tobytes(), w.tobytes(), (k, what, n, m))
+            cases += 1
+        self.assertGreater(cases, 200)
+
     def test_lists(self):
         rng = random.Random(3801)
         for k in range(500):

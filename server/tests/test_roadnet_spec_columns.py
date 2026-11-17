@@ -305,6 +305,49 @@ class SpecColumnsParityTest(unittest.TestCase):
             for key in want:
                 self.same(got[key], want[key], f"{what} {key}")
 
+    def test_columns_of_other_lengths_as_python(self):
+        """Every attribute column spec_columns reads, shorter or longer than the layer: the same columns or the same
+        exception class as _spec_inputs' Python (np.fromiter's ValueError, numpy's IndexError for a value set past the
+        layer), never a panic (Codex review of 3eba68d9)."""
+        rng = random.Random(3771)
+        seen = set()
+        for k in range(600):
+            f = random_layer(rng, rng.randint(1, 8))
+            n = len(f)
+            name = rng.choice(["class", "subtype", "osm_junction", "osm_smoothness", "name", "osm_sidewalk"])
+            col = f.attrs.get(name)
+            if col is None:
+                continue
+            m = rng.choice([0, 1, max(n - 1, 0), n + 1, n + 3])
+            vals = list(col.tolist()) + [rng.choice(["both", "x", "Main St", "good", "roundabout", "road"])
+                                         for _ in range(max(m - n, 0))]
+            f.attrs[name] = np.array(vals[:m] + [None], object)[:m]
+            unbuilt = np.zeros(n, bool)
+            cr = f.rules.get("connectors")
+            try:
+                want = ("ok", ref_columns(f, unbuilt))
+            except Exception as e:      # noqa: BLE001
+                want = ("raised", type(e))
+            try:
+                got = ("ok", fast._ef.spec_columns(n, list(STYLE), unbuilt, f.attrs.get("class"),
+                                                   f.attrs.get("subtype"), f.attrs.get("osm_junction"),
+                                                   f.attrs.get("osm_smoothness"), f.attrs.get("name"),
+                                                   f.attrs.get("osm_sidewalk"),
+                                                   None if cr is None or not len(cr.feature) else
+                                                   np.ascontiguousarray(cr.feature, np.int64)))
+            except Exception as e:      # noqa: BLE001
+                got = ("raised", type(e))
+            except BaseException as e:  # noqa: BLE001
+                self.fail(f"{type(e).__name__}: {e}")
+            self.assertEqual(got[0], want[0], (k, name, n, m))
+            if want[0] == "raised":
+                self.assertIs(got[1], want[1], (k, name, n, m))
+                seen.add((name, want[1].__name__))
+            else:
+                for key in want[1]:
+                    self.same(got[1][key], want[1][key], f"{k} {name} {key}")
+        self.assertGreaterEqual(len(seen), 5, seen)
+
     def test_short_columns_raise_not_panic(self):
         """Columns shorter than the layer (or a sidewalk column longer than it): a Python exception, never a Rust
         panic (Codex review of d0888ef3)."""
