@@ -4,12 +4,13 @@
 //! points' connector ids merged after each job's own rows, and the new Features. numpy's own conversions
 //! (np.asarray / np.array of a column, a gather by `old`) are asked of numpy, so every dtype comes out as it did.
 
-use numpy::{IntoPyArray, PyReadonlyArray1, PyReadonlyArray2};
+use numpy::IntoPyArray;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyFloat, PyList, PySlice, PyString};
 
 use super::pyobj::unpack;
 use crate::lanesections::{split_coords, split_rules};
+use super::pyobj::{CArr1, CArr2};
 
 /// lanesections._new_layer(f, jobs): the new layer of split's jobs [(fid, feature, a, b, line or None, tags, count,
 /// profile)]. lane_evidence(): roads._lane_evidence(f) (asked where the Python asked it); lane_cols: (tag, attrs column)
@@ -68,11 +69,11 @@ pub fn lane_split_layer<'py>(py: Python<'py>, f: Bound<'py, PyAny>, jobs: Bound<
     for r in &jl {
         moved.push(!r.get_item(4)?.is_none());
     }
-    let mut lines: Vec<PyReadonlyArray2<'py, f64>> = Vec::new();
+    let lines = PyList::empty(py);
     for r in &jl {
         let p = r.get_item(4)?;
         if !p.is_none() {
-            lines.push(np.call_method1("asarray", (p, &float64))?.call_method1("reshape", (-1, 2))?.extract()?);
+            lines.append(np.call_method1("asarray", (p, &float64))?.call_method1("reshape", (-1, 2))?)?;
         }
     }
     let mut p_off = vec![0i64];
@@ -81,25 +82,25 @@ pub fn lane_split_layer<'py>(py: Python<'py>, f: Bound<'py, PyAny>, jobs: Bound<
         let k = if p.is_none() { 0 } else { p.len()? as i64 };
         p_off.push(p_off[p_off.len() - 1].wrapping_add(k));
     }
-    let mut pts: Vec<f64> = Vec::new();
-    for l in &lines {
-        for row in l.as_array().rows() {
-            pts.push(row[0]);
-            pts.push(row[1]);
-        }
-    }
-    let pts = numpy::ndarray::Array2::from_shape_vec((pts.len() / 2, 2), pts).expect("pts");
-    let i64col = |name: &str| -> PyResult<PyReadonlyArray1<'py, i64>> {
+    // np.ascontiguousarray(np.concatenate(lines) if lines else np.zeros((0, 2)), np.float64): numpy's own reading of
+    // each line, whatever its strides (rust-numpy's view of a byte-strided line read other bytes: Codex on a6b93359)
+    let cat = if lines.is_empty() {
+        np.call_method1("zeros", ((0, 2),))?
+    } else {
+        np.call_method1("concatenate", (lines,))?
+    };
+    let pts: CArr2<'py, f64> = np.call_method1("ascontiguousarray", (cat, &float64))?.extract()?;
+    let i64col = |name: &str| -> PyResult<CArr1<'py, i64>> {
         np.call_method1("ascontiguousarray", (f.getattr(name)?, &int64))?.extract()
     };
     let (po, ro, co) = (i64col("part_off")?, i64col("ring_off")?, i64col("coord_off")?);
-    let ll: PyReadonlyArray2<'py, f64> = np.call_method1("ascontiguousarray", (f.getattr("lonlat")?, &float64))?
+    let ll: CArr2<'py, f64> = np.call_method1("ascontiguousarray", (f.getattr("lonlat")?, &float64))?
         .call_method1("reshape", (-1, 2))?.extract()?;
-    let old_a: PyReadonlyArray1<'py, i64> = old.extract()?;
+    let old_a: CArr1<'py, i64> = old.extract()?;
     // (with the GIL held, as kernel 235's binding ran it: a copy of the layer's points, well under a millisecond on a
     // city cell, where a GIL handoff costs another thread's switch interval)
     let got = split_coords(po.as_array(), ro.as_array(), co.as_array(), ll.as_array(), old_a.as_array(),
-                           numpy::ndarray::ArrayView1::from(&moved[..]), pts.view(),
+                           numpy::ndarray::ArrayView1::from(&moved[..]), pts.as_array(),
                            numpy::ndarray::ArrayView1::from(&p_off[..]));
     let (npo, nro, nco, coords) = got.map_err(pyo3::exceptions::PyValueError::new_err)?;
     let m = coords.len() / 2;
@@ -108,7 +109,7 @@ pub fn lane_split_layer<'py>(py: Python<'py>, f: Bound<'py, PyAny>, jobs: Bound<
     } else {
         numpy::ndarray::Array2::from_shape_vec((m, 2), coords).expect("coords").into_pyarray(py).into_any()
     };
-    let fl = |k: usize| -> PyResult<PyReadonlyArray1<'py, f64>> {
+    let fl = |k: usize| -> PyResult<CArr1<'py, f64>> {
         let l = PyList::empty(py);
         for r in &jl {
             l.append(r.get_item(k)?)?;
@@ -250,11 +251,11 @@ pub fn lane_split_layer<'py>(py: Python<'py>, f: Bound<'py, PyAny>, jobs: Bound<
 }
 
 fn i64col_of<'py>(np: &Bound<'py, PyModule>, v: &Bound<'py, PyAny>, t: &Bound<'py, PyAny>)
-                  -> PyResult<PyReadonlyArray1<'py, i64>> {
+                  -> PyResult<CArr1<'py, i64>> {
     np.call_method1("ascontiguousarray", (v, t))?.extract()
 }
 
 fn f64col_of<'py>(np: &Bound<'py, PyModule>, v: &Bound<'py, PyAny>, t: &Bound<'py, PyAny>)
-                  -> PyResult<PyReadonlyArray1<'py, f64>> {
+                  -> PyResult<CArr1<'py, f64>> {
     np.call_method1("ascontiguousarray", (v, t))?.extract()
 }

@@ -349,6 +349,31 @@ class SplitLayerParityTest(unittest.TestCase):
             raised += not self.compare(f, jobs, f"case {k}")
         self.assertGreater(raised, 1000)
 
+    def test_byte_strided_moved_lines(self):
+        """A moved line of any layout (byte strides (24, 12), unaligned, reversed, a column slice): numpy's own
+        concatenation of it, as the Python read it (Codex on a6b93359: the port read a (2, 2) line of byte strides (24,
+        12) at other bytes)."""
+        from test_roadnet_layout import odd
+        rng = random.Random(4034)
+        moved = 0
+        views = (odd, lambda a: odd(a, 20, 3), lambda a: np.ascontiguousarray(a[::-1])[::-1],
+                 lambda a: np.c_[a, a][:, ::2])
+        for k in range(600):
+            f, jobs = random_case(rng)
+            out = []
+            for r in jobs:
+                if r[4] is not None and len(r[4]) and rng.random() < 0.8:
+                    line = np.asarray(r[4], np.float64).reshape(-1, 2)
+                    r = r[:4] + (rng.choice(views)(line),) + r[5:]
+                    moved += 1
+                out.append(r)
+            self.compare(f, out, f"case {k}")
+            want = ref_new_layer(f, out)
+            got = lanesections._new_layer(f, [r[:4] + (None if r[4] is None else np.array(r[4]),) + r[5:]
+                                              for r in out])
+            self.assertEqual(got.lonlat.tobytes(), want.lonlat.tobytes(), k)
+        self.assertGreater(moved, 300)
+
     def test_split_uses_it(self):
         """split hands its jobs to _new_layer and localizes what it gives (frame) or returns it."""
         rng = random.Random(4033)

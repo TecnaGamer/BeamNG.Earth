@@ -4,12 +4,12 @@
 
 use std::collections::HashMap;
 
-use numpy::PyReadonlyArray2;
 use pyo3::exceptions::PyIndexError;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList, PySet};
 
 use super::pyobj::items;
+use super::pyobj::CArr2;
 
 /// roads._lane_flow_home: list(local) (this cell's solve), then each counted road (counted[i]) whose home cell
 /// (homes()[i]: asked only when the layer knows its cell and neighbours, homes_fn given) is not this cell (me[0])
@@ -90,7 +90,7 @@ pub fn lane_flow_home<'py>(py: Python<'py>, local: Bound<'py, PyAny>, counted: V
 /// only where a road of the layer is one the rule checks: attrs' column 4 > 0.5, _lane_flow_rows), v not None; {}
 /// otherwise.
 #[pyfunction]
-pub fn lane_overrides<'py>(py: Python<'py>, attrs: PyReadonlyArray2<'py, f64>, home: Bound<'py, PyAny>)
+pub fn lane_overrides<'py>(py: Python<'py>, attrs: CArr2<'py, f64>, home: Bound<'py, PyAny>)
                            -> PyResult<Bound<'py, PyDict>> {
     let a = attrs.as_array();
     let d = PyDict::new(py);

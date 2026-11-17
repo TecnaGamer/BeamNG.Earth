@@ -45,9 +45,39 @@ class Kind:
             return np.array([True, False])
         if self.mode == "truthy":
             return 1
+        if self.mode == "stop":
+            raise StopIteration("eq")
+        if self.mode == "boolstop":
+            return BoolStop()
         return self.name == other
 
     __hash__ = None
+
+
+class BoolStop:
+    """An == answer whose truth raises StopIteration (any() takes it outside the generator: not a RuntimeError)."""
+
+    def __bool__(self):
+        LOG.append("bool")
+        raise StopIteration("bool")
+
+
+class IterStop:
+    """A range (or a road's range list) whose iterator cannot be made: StopIteration from __iter__."""
+
+    def __iter__(self):
+        LOG.append("iter")
+        raise StopIteration("iter")
+
+
+class Short:
+    """A range whose iterator stops after `k` values (StopIteration from __next__: an exhausted iterator)."""
+
+    def __init__(self, k):
+        self.k = k
+
+    def __iter__(self):
+        return iter([0.0, 1.0, "bridge", 9][:self.k])
 
 
 def kind(rng):
@@ -62,8 +92,11 @@ def ranges(rng, bad):
         if bad and rng.random() < 0.15:
             r = rng.choice([(0.1, "bridge"), (0.1, 0.2, "bridge", 4), "abc", "xyz", 5, None,
                             (0.1, 0.2, Kind("raise", "raise")), (0.0, 1.0, Kind("arr", "array")),
-                            [0.2, 0.3, "bridge"], np.array([0.1, 0.2, 0.3])])
+                            [0.2, 0.3, "bridge"], np.array([0.1, 0.2, 0.3]), (0.1, 0.2, Kind("stop", "stop")),
+                            (0.1, 0.2, Kind("boolstop", "boolstop")), IterStop(), Short(2), Short(3), Short(4)])
         out.append(r)
+    if bad and rng.random() < 0.03:
+        return IterStop()               # (lv[i]'s iterator, made outside the generator: StopIteration as it is)
     return rng.choice([out, tuple(out), out])
 
 
@@ -92,7 +125,7 @@ def outcome(fn, *args):
     try:
         got = ("ok", fn(*args))
     except Exception as e:      # noqa: BLE001 (the class is the point)
-        got = ("raised", type(e))
+        got = ("raised", (type(e), type(e.__cause__)))
     return got, list(LOG)
 
 
@@ -116,7 +149,8 @@ class LevelKindsParityTest(unittest.TestCase):
                 self.assertEqual(got[1].tolist(), want_got[1].tolist(), (k, lv, elig))
                 tally["true"] += int(want_got[1].sum())
             else:
-                self.assertIs(got[1], want_got[1], (k, lv, elig, n))
+                self.assertEqual(got[1], want_got[1], (k, lv, elig, n))
+                tally[got[1]] = tally.get(got[1], 0) + 1
             self.assertEqual(log, want_log, k)
             tally[got[0]] += 1
         return tally
@@ -130,6 +164,10 @@ class LevelKindsParityTest(unittest.TestCase):
         t = self.check(4021, 6000, True)
         self.assertGreater(t["raised"], 1000)
         self.assertGreater(t["ok"], 1000)
+        # (StopIteration from == or a range's unpacking: the generator's RuntimeError, caused by it; from lv[i]'s own
+        # iterator or the answer's truth, outside the generator: StopIteration itself; Codex on 27762111)
+        self.assertGreater(t.get((RuntimeError, StopIteration), 0), 20)
+        self.assertGreater(t.get((StopIteration, type(None)), 0), 20)
 
 
 class VersionSkewTest(unittest.TestCase):

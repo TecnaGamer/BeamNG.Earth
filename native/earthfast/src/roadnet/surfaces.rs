@@ -3,11 +3,12 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use numpy::{IntoPyArray, PyArray1, PyReadonlyArray1};
+use numpy::{IntoPyArray, PyArray1};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList, PyString};
 
 use super::pyobj::{items, lower_is, py_str, py_strip};
+use super::pyobj::CArr1;
 
 /// Python's str.lower() of s: ASCII by itself, anything else by CPython's own (its Unicode tables and special
 /// casing: the token is an output, Spec.surf).
@@ -141,8 +142,8 @@ impl SurfaceRules {
     #[pyo3(signature = (cls, vals, verdicts, unpaved, osm_lanes, good, regional_on, regional))]
     #[allow(clippy::too_many_arguments)]
     fn spec_surfaces<'py>(&self, py: Python<'py>, cls: Vec<String>, vals: Bound<'py, PyList>,
-                          verdicts: Vec<(usize, i64)>, unpaved: i64, osm_lanes: PyReadonlyArray1<'py, f64>,
-                          good: PyReadonlyArray1<'py, bool>, regional_on: bool, regional: Vec<String>)
+                          verdicts: Vec<(usize, i64)>, unpaved: i64, osm_lanes: CArr1<'py, f64>,
+                          good: CArr1<'py, bool>, regional_on: bool, regional: Vec<String>)
                           -> PyResult<Bound<'py, PyDict>> {
         let n = cls.len();
         let (lanes, good) = (osm_lanes.as_slice()?, good.as_slice()?);
@@ -212,7 +213,7 @@ impl SurfaceRules {
     /// _spec_inputs' Swedish surface columns: (se_tag bool, se_kind int8, se_tok int32, tokens): each road in Sweden
     /// (sweden) with an OSM surface tag (osm_surface[j]: not None, "", "None" or "nan") has its own kind and token,
     /// its index in tokens (spec_surfaces' list, gaining the new ones in road order).
-    fn sweden_surfaces<'py>(&self, py: Python<'py>, cls: Vec<String>, sweden: PyReadonlyArray1<'py, bool>,
+    fn sweden_surfaces<'py>(&self, py: Python<'py>, cls: Vec<String>, sweden: CArr1<'py, bool>,
                             osm_surface: Option<Bound<'py, PyAny>>, tokens: Vec<String>)
                             -> PyResult<(Bound<'py, PyArray1<bool>>, Bound<'py, PyArray1<i8>>,
                                          Bound<'py, PyArray1<i32>>, Bound<'py, PyList>)> {
@@ -267,7 +268,7 @@ pub fn map_surface_values<'py>(py: Python<'py>, n: usize, osm_surface: Option<Bo
     }
     if let Some(t) = table.filter(|t| !t.is_none()) {
         if t.getattr("feature")?.len()? > 0 && n > 0 {
-            let maj: PyReadonlyArray1<i64> = t.call_method1("majors", (n,))?.extract()?;
+            let maj: CArr1<i64> = t.call_method1("majors", (n,))?.extract()?;
             let maj = maj.as_slice()?;
             let value = t.getattr("value")?;
             for i in 0..n {
@@ -282,14 +283,14 @@ pub fn map_surface_values<'py>(py: Python<'py>, n: usize, osm_surface: Option<Bo
 
 /// _spec_inputs' "aisle": the subclass rule's majority value is "parking_aisle" (==), for the roads in Sweden.
 #[pyfunction]
-pub fn aisles<'py>(py: Python<'py>, sweden: PyReadonlyArray1<'py, bool>, table: Option<Bound<'py, PyAny>>)
+pub fn aisles<'py>(py: Python<'py>, sweden: CArr1<'py, bool>, table: Option<Bound<'py, PyAny>>)
                    -> PyResult<Bound<'py, PyArray1<bool>>> {
     let se = sweden.as_slice()?;
     let n = se.len();
     let mut out = vec![false; n];
     if let Some(t) = table.filter(|t| !t.is_none()) {
         if t.getattr("feature")?.len()? > 0 && se.iter().any(|&b| b) {
-            let maj: PyReadonlyArray1<i64> = t.call_method1("majors", (n,))?.extract()?;
+            let maj: CArr1<i64> = t.call_method1("majors", (n,))?.extract()?;
             let maj = maj.as_slice()?;
             let value = t.getattr("value")?;
             let key = PyString::new(py, "parking_aisle");
