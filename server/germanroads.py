@@ -402,6 +402,7 @@ def adjust_specs(feats, specs):
     import roads
     rules = feats.rules
     out = list(specs)
+    known, new_rows = _survey_known(feats), 0
     for i, sp in enumerate(out):
         if sp is None or sp.cls in SKIP or roads.is_ring(feats, i):
             continue
@@ -409,7 +410,11 @@ def adjust_specs(feats, specs):
         b = feats.coord_off[feats.ring_off[feats.part_off[i + 1]]]
         if b - a < 2:
             continue
-        got = surveyed(ax, feats.lonlat[a:b], bool(sp.oneway), sp.median)
+        k = (i, bool(sp.oneway), float(sp.median) if sp.median else None)
+        got = known.get(k, _UNSET)
+        if got is _UNSET:
+            got = known[k] = surveyed(ax, feats.lonlat[a:b], k[1], sp.median)
+            new_rows += 1
         if got is None:
             continue
         width, lanes, surf, halved = got
@@ -442,7 +447,46 @@ def adjust_specs(feats, specs):
                 new = new._replace(width=float(w))
                 new = _fit_parking(new)
         out[i] = new
+    if new_rows:
+        _survey_keep(feats, known)
     return out
+
+
+def _survey_extra(feats):
+    """What a layer's surveyed() answers were made from, beside its cell: this module's version and the layer's own
+    lines (a cell's roads come in more than one form: its lane sections split out, its bends rounded)."""
+    ll = np.asarray(feats.lonlat, np.float64)
+    return (VERSION, len(feats), len(ll), float(ll.sum()) if len(ll) else 0.0)
+
+
+def _survey_known(feats):
+    """{(feature, one-way, its median or None): surveyed()'s answer} of feats' roads, as far as they were asked before:
+    on feats, and from the cell's facts (roads._facts_load) what another process of the server made. Every process
+    drawing a cell asked the survey about every one of its roads again, the specs with the land cover being each
+    process's own: 6 % of a motorway drive's CPU in eleven processes (2026-11-17)."""
+    known = feats.__dict__.get("_de_survey")
+    if known is not None:
+        return known
+    known = feats.__dict__["_de_survey"] = {}
+    import roads
+    try:
+        for i, oneway, median, got in roads._facts_load(feats, "desurvey", _survey_extra(feats)) or ():
+            known[(int(i), bool(oneway), None if median is None else float(median))] = None if got is None else (
+                None if got[0] is None else float(got[0]), got[1], got[2], bool(got[3]))
+    except (TypeError, ValueError, IndexError):
+        known.clear()
+    return known
+
+
+def _survey_keep(feats, known):
+    import roads
+    try:
+        roads._facts_store(feats, "desurvey", _survey_extra(feats),
+                           [[i, oneway, median, None if got is None else list(got)]
+                            for (i, oneway, median), got in sorted(known.items(), key=lambda kv: (kv[0][0], kv[0][1],
+                                                                                              kv[0][2] or 0.0))])
+    except Exception as e:      # (asked again by the next process then)
+        log.debug("survey facts not kept: %s", e)
 
 
 def _fit_parking(sp):

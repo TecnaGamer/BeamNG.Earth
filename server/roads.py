@@ -2909,7 +2909,13 @@ def placement_shift(feats, i, lon, lat, spec, joints=()):
             s = cum[k] + t[np.arange(len(p)), k] * seg_len[k]
             frac = s / total
             # (a point outside every part: the nearest part's; parts need not cover the whole feature)
-            shift = np.array([min(full, key=lambda r: (max(r[0] - f, f - r[1], 0.0), not r[3]))[2] for f in frac])
+            # (for all points at once: a min() with a key per point was 400,000 calls for 27 blocks, 2026-11-17)
+            pa, pb, pd = (np.array([r[k] for r in full], np.float64) for k in range(3))
+            pt = np.array([bool(r[3]) for r in full], bool)
+            gap = np.maximum(np.maximum(pa[None, :] - frac[:, None], frac[:, None] - pb[None, :]), 0.0)
+            near = gap == gap.min(axis=1, keepdims=True)     # (the nearest parts; a tunnel's first, then the first)
+            tun = near & pt[None, :]
+            shift = pd[np.where(tun.any(axis=1), tun.argmax(axis=1), near.argmax(axis=1))]
             for (a0, b0, d0, f0), (a1, b1, d1, f1) in zip(full[:-1], full[1:]):
                 if abs(d1 - d0) < 1e-9:
                     continue
