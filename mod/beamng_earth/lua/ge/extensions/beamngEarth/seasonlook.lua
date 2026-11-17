@@ -13,8 +13,10 @@ M.SPECIES = {
   { mats = { 'oak_leaves_01', 'oak_leaves_02', 'oak_leaves_03', 'm_oak_leaves_distant' },
     merged = { 'm_oak_merged_foliage' }, folders = { 'trees_oak' }, tint = { 1.55, 0.72, 0.32 }, days = -12,
     winter = { 1.05, 0.68, 0.45 } },        -- oaks and beeches keep dead brown leaves through winter
-  { mats = { 'beech_leaves', 'm_beech_leaves_distant' }, merged = { 'm_beech_merged_foliage' }, folders = { 'trees_beech' },
-    tint = { 1.6, 1.0, 0.35 }, days = 0, winter = { 1.15, 0.8, 0.5 } },
+  -- (beech_blocker: the dense leaf cards inside the big and forest beeches' crowns; untinted they stayed summer green
+  -- in a bronze crown, the gallery 2026-11-17)
+  { mats = { 'beech_leaves', 'beech_blocker', 'm_beech_leaves_distant' }, merged = { 'm_beech_merged_foliage' },
+    folders = { 'trees_beech' }, tint = { 1.6, 1.0, 0.35 }, days = 0, winter = { 1.15, 0.8, 0.5 } },
   { mats = { 'Birch_Leaves_01', 'm_birch_leaves_distant' }, merged = {}, folders = { 'trees_birch', 'trees_aspen' },
     tint = { 1.7, 1.3, 0.3 }, days = 10,
     winter = { 1.0, 0.9, 0.7 } },           -- (a leafless birch is not possible with its shape: pale instead)
