@@ -26,6 +26,7 @@ class LeafTypeTest(unittest.TestCase):
 
         def share(s, w, n, e):
             a = g[int((90 - n) / 0.05):int((90 - s) / 0.05), int((w + 180) / 0.05):int((e + 180) / 0.05)]
+            a = a[..., 0]
             return float(a[a != lt.NONE].mean()) / 250.0
         self.assertAlmostEqual(share(47.5, 6.0, 55.0, 15.0), 0.54, delta=0.08)
         self.assertGreater(share(60.0, 21.0, 70.0, 31.0), 0.8)

@@ -380,6 +380,29 @@ M.CATALOG = {
     { IT .. 'trees/trees_italy/scraggly_2', 8.52 }, { IT .. 'trees/trees_italy/scraggly', 9.55 },
     { IT .. 'trees/trees_italy/cork_oak_filler_small', 10.1 }, { IT .. 'trees/trees_italy/scraggly_tree_filler_1', 10.7 },
   },
+  -- (35) the world's own groups (server vegetation._world_groups), from shapes already in MATERIALS' folders:
+  -- the savannas' and the dry country's acacias: Johnson Valley's mesquite / acacia bush, Italy's feathery scraggly
+  -- trees, Jungle Rock Island's umbrella-crowned filler (alone it reads as an acacia or a miombo tree) and its ceiba
+  -- (a baobab's or a fig's lone giant)
+  savanna = {
+    { JV .. 'trees/deserttrees/deserttree_bush_medium', 2.9 },
+    { IT .. 'trees/trees_italy/scraggly_2', 8.52 }, { IT .. 'trees/trees_italy/scraggly', 9.55 },
+    { JRI .. 'trees/trees_tropical_2/tro_tree_2_filler', 20.2 },
+    { JRI .. 'trees/trees_tropical_1/tro_tree_1_huge', 20.6 },
+  },
+  -- the subtropics' and the south's evergreen broadleaf (laurel) forests: Italy's evergreen cork oaks (the look of
+  -- Castanopsis, Lithocarpus, the live oaks, Nothofagus dombeyi), the island's young and lianad broadleaves
+  laurel = {
+    { JRI .. 'trees/trees_tropical_2/tro_tree_2_tiny', 6.13 },
+    { IT .. 'trees/trees_italy/cork_oak_medium', 11.2 }, { IT .. 'trees/trees_italy/cork_oak_large_1', 13.9 },
+    { JRI .. 'trees/trees_tropical_2/tro_tree_2_medium', 18.53 },
+  },
+  -- the maritime and Mediterranean pines (Pinus pinaster, pinea, halepensis, brutia): Italy's maritime pines, and its
+  -- Scots pine for the tall straight forest-grown ones (the Landes', Galicia's)
+  pine_maritime = {
+    { IT .. 'trees/trees_italy/maritime_pine_bush', 5.05 }, { IT .. 'trees/trees_italy/maritime_pine_2', 11.9 },
+    { IT .. 'trees/trees_italy/maritime_pine', 12.0 }, { IT .. 'trees/trees_italy/scots_pine', 18.9 },
+  },
   -- Far clumps (server vegetation.CLUMP_OF, GitHub #1074): one item for a forest square's 4-8 trees, shown only
   -- beyond CLUMP_M (FAR_ONLY) where those trees are not (rows with a negative scale). The stock maps' own forest
   -- fillers, in the materials of the single trees they stand for (no new materials); heights from their bounds

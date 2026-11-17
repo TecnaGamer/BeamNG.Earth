@@ -5,7 +5,9 @@ shapefile https://storage.googleapis.com/teow2016/Ecoregions2017.zip, CC BY 4.0;
 The raster: 0.05 degree pixels (7200 x 3600 from 180 W, 90 N), a 16-bit PNG of each pixel's ECO_ID (1-847; 0 none: the
 sea, the large lakes; ECO_ID 0 is the shapefile's "Rock and Ice", kept as 0 too). A pixel takes the ecoregion its
 centre falls in (each record's rings drawn alone, its holes cut out, then laid in: one record's hole never erases
-another's island). The JSON: {ECO_ID: [name, biome number, realm]}. Needs pyshp and Pillow."""
+another's island). Then the coasts grown COAST_PX pixels into the sea (a 0 pixel takes the most common ecoregion
+of its 8 neighbours, COAST_PX times over): a tree on a quay or a small island whose pixel's centre lies at sea finds
+its land without a search at run time. The JSON: {ECO_ID: [name, biome number, realm]}. Needs pyshp and Pillow."""
 import json
 import os
 import sys
@@ -16,6 +18,30 @@ from PIL import Image, ImageDraw
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 RES = 0.05
 W, H = int(round(360 / RES)), int(round(180 / RES))
+COAST_PX = 3
+
+
+def grow_coasts(grid, steps=COAST_PX):
+    """Each 0 pixel next to land takes its neighbours' most common ecoregion (ties: the lowest ID), steps times; the
+    columns wrap at 180 degrees."""
+    g = grid.copy()
+    shifts = [(dy, dx) for dy in (-1, 0, 1) for dx in (-1, 0, 1) if dy or dx]
+    for _ in range(steps):
+        nb = np.stack([np.roll(np.pad(g, ((1, 1), (0, 0)))[1 + dy:1 + dy + g.shape[0]], -dx, axis=1)
+                       for dy, dx in shifts])                 # (8, h, w) the neighbours
+        zero = (g == 0) & (nb > 0).any(axis=0)
+        if not zero.any():
+            break
+        cand = nb[:, zero]                                    # (8, n)
+        best = np.zeros(cand.shape[1], np.uint16)
+        best_n = np.zeros(cand.shape[1], np.int64)
+        for row in cand:                                      # (a mode over 8 values: count each candidate's matches)
+            n = (cand == row).sum(axis=0)
+            take = (row > 0) & ((n > best_n) | ((n == best_n) & (row < best)))
+            best = np.where(take, row, best)
+            best_n = np.where(take, n, best_n)
+        g[zero] = best
+    return g
 
 
 def _px(points):
@@ -61,6 +87,7 @@ def main(path):
         grid[r0:r1, c0:c1][m] = eid
         if n % 100 == 0:
             print(f"{n} / {len(r)}", flush=True)
+    grid = grow_coasts(grid)
     out = os.path.join(ROOT, "server", "ecoregions_2017_0p05.png")
     Image.fromarray(grid).save(out, optimize=True)
     js = os.path.join(ROOT, "server", "ecoregions_2017.json")

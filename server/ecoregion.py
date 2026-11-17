@@ -1,8 +1,8 @@
 """The ecoregion at a point: RESOLVE's Ecoregions 2017 (Dinerstein et al. 2017, An Ecoregion-Based Approach to
 Protecting Half the Terrestrial Realm, BioScience 67(6): 534-545; CC BY 4.0), rasterized at 0.05 degrees by
 tools/build_ecoregions.py (ecoregions_2017_0p05.png beside the modules: 7200 x 3600 from 180 W, 90 N, 16-bit ECO_ID;
-0 the sea, the large lakes, the ice) with ecoregions_2017.json ({ECO_ID: [name, biome, realm]}). The vegetation's
-regional rules (vegetation.py) name ecoregions by ECO_ID where a box of coordinates stood before."""
+0 the open sea, the ice; the coasts grown 3 pixels out) with ecoregions_2017.json ({ECO_ID: [name, biome, realm]}).
+The vegetation's regional rules (vegetation.py) name ecoregions by ECO_ID where a box of coordinates stood before."""
 import json
 import os
 import threading
@@ -12,19 +12,23 @@ import numpy as np
 PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ecoregions_2017_0p05.png")
 META_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ecoregions_2017.json")
 RES = 0.05
-NEAR_PX = 3             # a point on a 0 pixel (a coast at 5.5 km): the most common ecoregion within this many
 # RESOLVE's biomes (BIOME_NUM)
 B_TROP_MOIST, B_TROP_DRY, B_TROP_CONIFER, B_TEMP_BROAD, B_TEMP_CONIFER, B_BOREAL, B_TROP_GRASS, B_TEMP_GRASS, \
     B_FLOODED_GRASS, B_MONTANE_GRASS, B_TUNDRA, B_MEDITERRANEAN, B_DESERT, B_MANGROVE = range(1, 15)
+# RESOLVE's realms (REALM), numbered 1.. in this order (0 none)
+REALMS = ("Afrotropic", "Antarctica", "Australasia", "Indomalayan", "Nearctic", "Neotropic", "Oceania", "Palearctic")
+R_AFROTROPIC, R_ANTARCTICA, R_AUSTRALASIA, R_INDOMALAYAN, R_NEARCTIC, R_NEOTROPIC, R_OCEANIA, R_PALEARCTIC = \
+    range(1, len(REALMS) + 1)
 
 _grid = None
 _biome = None
+_realm = None
 _meta = None
 _lock = threading.Lock()
 
 
 def _load():
-    global _grid, _biome, _meta
+    global _grid, _biome, _realm, _meta
     with _lock:
         if _grid is None:
             from PIL import Image
@@ -32,11 +36,13 @@ def _load():
                 g = np.asarray(im, np.uint16)
             with open(META_PATH, encoding="utf-8") as f:
                 meta = {int(k): v for k, v in json.load(f).items()}
-            biome = np.zeros(int(g.max()) + 1, np.uint8)
+            n = max(int(g.max()), max(meta)) + 1
+            biome = np.zeros(n, np.uint8)
+            realm = np.zeros(n, np.uint8)
             for k, v in meta.items():
-                if k < len(biome):
-                    biome[k] = v[1]
-            _meta, _biome, _grid = meta, biome, g
+                biome[k] = v[1]
+                realm[k] = REALMS.index(v[2]) + 1 if v[2] in REALMS else 0
+            _meta, _biome, _realm, _grid = meta, biome, realm, g
         return _grid
 
 
@@ -48,24 +54,23 @@ def _index(lat, lon, g):
 
 
 def eco_many(lat, lon):
-    """The ECO_ID of each point (arrays); a point on a 0 pixel (a coast, a lake shore) the most common ecoregion within
-    NEAR_PX pixels, else 0."""
+    """The ECO_ID of each point (arrays; 0 at sea). The raster's coasts reach 3 pixels (~16 km) into the sea
+    (tools/build_ecoregions.py grow_coasts): a quay's or a small island's tree finds its land by a plain lookup."""
     g = _load()
     j, i = _index(lat, lon, g)
-    e = g[j, i].astype(np.int64)
-    for n in np.flatnonzero(e == 0):
-        win = g[max(j[n] - NEAR_PX, 0):j[n] + NEAR_PX + 1, np.arange(i[n] - NEAR_PX, i[n] + NEAR_PX + 1) % g.shape[1]]
-        vals = win[win > 0]
-        if vals.size:
-            e[n] = int(np.bincount(vals).argmax())
-    return e
+    return g[j, i].astype(np.int64)
 
 
 def biome_of(eco):
     """RESOLVE's biome (B_*; 0 none) of ECO_IDs."""
     _load()
-    eco = np.asarray(eco, np.int64)
-    return _biome[np.clip(eco, 0, len(_biome) - 1)]
+    return _biome[np.clip(np.asarray(eco, np.int64), 0, len(_biome) - 1)]
+
+
+def realm_of(eco):
+    """RESOLVE's realm (R_*; 0 none) of ECO_IDs."""
+    _load()
+    return _realm[np.clip(np.asarray(eco, np.int64), 0, len(_realm) - 1)]
 
 
 def name(eco):

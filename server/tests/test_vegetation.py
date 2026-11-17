@@ -521,9 +521,54 @@ class ShrubTest(unittest.TestCase):
             g = veg.species_groups(np.array([grp], np.uint8), np.array([14.0]), la, lo, np.array([lc]),
                                    climate.koppen_many(la, lo), None if elev is None else np.array([float(elev)]),
                                    np.array([0.5]), np.array([0.5]), np.array([0.9]), np.array([0.9]),
-                                   u_euc=np.array([u]))
+                                   u_stand=np.array([u]))
             self.assertEqual(int(g[0]) == veg.G_EUCALYPTUS, want, (lat, lon, elev, u))
         self.assertAlmostEqual(float(veg.eucalypt_share([40.6], [-8.5], [100.0])[0]), veg.EUC_SHARE)
+
+    def test_world_biomes(self):
+        """(35) _world_groups: savannas' acacias, the tropics' rainforest trees, the tropics' and the south's pines,
+        the laurel forests, the south's beeches, the maritime pines."""
+        import climate
+        tree, grass = veg.WC["tree"], veg.WC["grass"]
+        for (lat, lon), grp, lc, elev, us, want, where in (
+                ((13.5, 2.1), veg.G_DECIDUOUS, grass, 200, 0.5, veg.G_SAVANNA, "Niamey's savanna"),
+                ((13.5, 2.1), veg.G_TROPICAL, grass, 200, 0.5, veg.G_SAVANNA, "regional's tropical tree there"),
+                ((-2.5, 37.5), veg.G_DECIDUOUS, grass, 1200, 0.5, veg.G_SAVANNA, "Kenya's"),
+                ((-15.8, -47.9), veg.G_DECIDUOUS, tree, 1100, 0.5, veg.G_SAVANNA, "the Cerrado"),
+                ((-3.1, -60.0), veg.G_DECIDUOUS, tree, 50, 0.5, veg.G_TROPICAL, "the Amazon"),
+                ((22.5, 79.0), veg.G_DECIDUOUS, tree, 400, 0.5, veg.G_TROPICAL, "the Deccan's forests"),
+                ((-41.0, -72.5), veg.G_DECIDUOUS, tree, 300, 0.1, veg.G_LAUREL, "Valdivia's evergreen forest"),
+                ((-41.0, -72.5), veg.G_DECIDUOUS, tree, 300, 0.95, veg.G_BEECH, "and its Nothofagus"),
+                ((-45.0, -71.5), veg.G_DECIDUOUS, tree, 600, 0.95, veg.G_BEECH, "Patagonia's lenga"),
+                ((25.0, 113.0), veg.G_DECIDUOUS, tree, 300, 0.2, veg.G_LAUREL, "southern China"),
+                ((31.5, 130.5), veg.G_DECIDUOUS, tree, 100, 0.2, veg.G_LAUREL, "Kyushu"),
+                ((52.2, 21.0), veg.G_DECIDUOUS, tree, 100, 0.01, None, "Warsaw: no laurels"),
+                ((-38.4, 176.6), veg.G_CONIFER, tree, 400, 0.5, veg.G_PINE_WEST, "Kaingaroa's radiata pines"),
+                ((14.5, -86.5), veg.G_CONIFER, tree, 900, 0.5, veg.G_PINE_WEST, "Honduras' pines"),
+                ((44.2, -0.8), veg.G_CONIFER, tree, 50, 0.5, veg.G_PINE_MARITIME, "the Landes"),
+                ((42.9, -8.5), veg.G_CONIFER, tree, 250, 0.99, veg.G_PINE_MARITIME, "Galicia"),
+                ((53.6, 17.9), veg.G_CONIFER, tree, 120, 0.5, None, "Bory Tucholskie: Scots pines")):
+            la, lo = np.array([lat]), np.array([lon])
+            g = int(veg.species_groups(np.array([grp], np.uint8), np.array([14.0]), la, lo, np.array([lc]),
+                                       climate.koppen_many(la, lo), np.array([float(elev)]), np.array([0.5]),
+                                       np.array([0.9]), np.array([0.9]), np.array([0.9]), u_stand=np.array([us]))[0])
+            if want is None:
+                self.assertNotIn(g, (veg.G_LAUREL, veg.G_PINE_MARITIME, veg.G_PINE_WEST), where)
+            else:
+                self.assertEqual(veg.GROUPS[g], veg.GROUPS[want], where)
+        self.assertEqual(int(veg.zones(np.array([-34.0]), np.array([-71.2]))[0]), veg.ZONE_MED, "Chile's matorral")
+        self.assertEqual(int(veg.zones(np.array([-33.9]), np.array([18.5]))[0]), veg.ZONE_MED, "the Cape")
+        self.assertEqual(int(veg.zones(np.array([34.05]), np.array([-118.25]))[0]), 0, "California: its own groups")
+
+    def test_world_groups_in_the_mod(self):
+        import os
+        root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        mod = os.path.join(root, "mod/beamng_earth/lua/ge/extensions/beamngEarth")
+        lua = open(os.path.join(mod, "trees.lua"), encoding="utf-8").read()
+        signs = open(os.path.join(mod, "townsigns.lua"), encoding="utf-8").read()
+        for name in ("savanna", "laurel", "pine_maritime"):
+            self.assertIn(f"\n  {name} = {{", lua, name)
+            self.assertIn(f"{name} = true", signs, name)
 
     def test_no_mossy_forest_trees_in_the_open(self):
         g = veg.open_groups(np.array([veg.G_OAK, veg.G_DECIDUOUS, veg.G_SNAG_BROAD, veg.G_SNAG_CONIFER, veg.G_BEECH,

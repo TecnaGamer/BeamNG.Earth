@@ -68,7 +68,9 @@ VERSION = 35          # (the cached cells hold their groups: 14 for the regional
                       # 35: Portugal's and Galicia's eucalypt plantations (eucalypt_share); the regional rules by
                       # RESOLVE's ecoregions (ecoregion.py) where boxes and climates stood: the Mediterranean's
                       # trees, the creosote, the steppe junipers; the Cantabrian oak woods; the conifers' share
-                      # from the forests' leaf type (leaftype.py) where a coarse rule stood
+                      # from the forests' leaf type (leaftype.py) where a coarse rule stood; the world's own groups
+                      # by biome (_world_groups: savanna, laurel, pine_maritime; the tropics' and the south's pines,
+                      # the south's beeches); the maquis by RESOLVE's Mediterranean biome
 TREE_MIN_M = 3.0
 # The canopy raster, the scatter grids and the crown radii are in Web Mercator units (EPSG:3857: a metre there is
 # cos(lat) metres on the ground) and were tuned by eye at mid latitudes. Past them the same pixel counts covered less
@@ -90,7 +92,9 @@ GROUPS = ("deciduous", "conifer", "shrub", "rock", "pine_west", "palm", "juniper
           "maquis", "shrub_north", "shrub_tropical", "fern", "deadwood", "tro_thicket",
           "deciduous_open", "oak_open", "birch_open", "beech_open", "pine_west_open", "mediterranean_open",
           "tropical_open", "conifer_open", "spruce_open", "pine_eu_open", "redwood", "tro_understory",
-          "desert_shrub_hot")
+          "desert_shrub_hot",
+          # (35: the world's own, species_groups' biome rules)
+          "savanna", "laurel", "pine_maritime")
 (G_DECIDUOUS, G_CONIFER, G_SHRUB, G_ROCK, G_PINE_WEST, G_PALM, G_JUNIPER, G_DESERT_SHRUB, G_DESERT_ROCK,
  G_OAK_WEST, G_TROPICAL, G_MEDITERRANEAN, G_CONIFER_CLUMP, G_DECIDUOUS_CLUMP, G_OAK_WEST_CLUMP,
  G_MEDITERRANEAN_CLUMP, G_VINE, G_STRAW_N, G_STRAW_S, G_SILAGE_N, G_SILAGE_S, G_EUCALYPTUS, G_EUCALYPTUS_CLUMP,
@@ -98,7 +102,7 @@ GROUPS = ("deciduous", "conifer", "shrub", "rock", "pine_west", "palm", "juniper
  G_BIRCH_CLUMP, G_OAK_CLUMP, G_BEECH_CLUMP, G_MAQUIS, G_SHRUB_NORTH, G_SHRUB_TROPICAL, G_FERN, G_DEADWOOD,
  G_TRO_THICKET, G_DECIDUOUS_OPEN, G_OAK_OPEN, G_BIRCH_OPEN, G_BEECH_OPEN, G_PINE_WEST_OPEN, G_MEDITERRANEAN_OPEN,
  G_TROPICAL_OPEN, G_CONIFER_OPEN, G_SPRUCE_OPEN, G_PINE_EU_OPEN, G_REDWOOD, G_TRO_UNDERSTORY,
- G_DESERT_SHRUB_HOT) = range(55)
+ G_DESERT_SHRUB_HOT, G_SAVANNA, G_LAUREL, G_PINE_MARITIME) = range(58)
 # Far clumps (GitHub #1074, "trees cost too much"; the asset survey 2026-11-10): a forest's canopy trees gathered on a
 # world-fixed grid of about CLUMP_CELL_M squares (a whole number of them a geotile: none straddles two); a square with
 # CLUMP_MIN of them gets one item of a stock clump shape (trees.lua's *_clump groups: East Coast USA's
@@ -112,7 +116,9 @@ CLUMP_OF = {G_CONIFER: G_CONIFER_CLUMP, G_PINE_WEST: G_CONIFER_CLUMP, G_REDWOOD:
             # (29) the Scots pines and spruces far off as the conifer clump (no stock pine group: a pine clump is for a
             # shape of our own), the broadleaves as their own species' groups
             G_BIRCH: G_BIRCH_CLUMP, G_OAK: G_OAK_CLUMP, G_BEECH: G_BEECH_CLUMP, G_PINE_EU: G_CONIFER_CLUMP,
-            G_SPRUCE: G_CONIFER_CLUMP}
+            G_SPRUCE: G_CONIFER_CLUMP,
+            # (35) the maritime pines as the other pines; the laurel forests as the cork oaks' filler (their shapes)
+            G_PINE_MARITIME: G_CONIFER_CLUMP, G_LAUREL: G_MEDITERRANEAN_CLUMP}
 CLUMP_GROUPS = tuple(sorted(set(CLUMP_OF.values())))
 CLUMP_CELL_M = 18.0
 CLUMP_MIN = 3
@@ -135,8 +141,11 @@ CLUMP_SHIFT_M = 4.0
 # Africa's and the Adriatic's maquis): holm and cork oaks, olives, maritime pines, cypresses (Italy's stock trees,
 # trees.lua's "mediterranean"; the asset survey 2026-11-10 found them loaded with Italy's folder but unused). The
 # Palearctic's Mediterranean biome without its montane forests (Corsica's, the Pindus's, the Apennines', northwest
-# Iberia's, inner Anatolia's: oaks, beeches, firs). California's keeps the West Coast's own groups.
-ECO_MED = (785, 787, 789, 790, 791, 792, 793, 794, 795, 796, 797, 798, 799, 803, 804, 805, 806)
+# Iberia's, inner Anatolia's: oaks, beeches, firs), and the southern hemisphere's outside Australia (whose are
+# eucalypts): Chile's matorral (quillay, peumo, litre: evergreen sclerophylls), the Cape's fynbos and renosterveld
+# (their trees the stone and cluster pines, oaks and olives planted since the 1650s). California's keeps the West
+# Coast's own groups.
+ECO_MED = (785, 787, 789, 790, 791, 792, 793, 794, 795, 796, 797, 798, 799, 803, 804, 805, 806, 596, 89, 90)
 # More regional trees (the asset survey 2026-11-10, the stock shapes the flora supports; earthfast.regional_groups):
 # - Australia: eucalypts most of its trees (West Coast USA's eucalyptus_double / _tall, eucalyptus_group far).
 # - Temperate Europe's river banks: a share of the broadleaves within RIPARIAN_M of water are poplars (Automation Test
@@ -266,6 +275,22 @@ def regional(group, height, lat, lon, lcls, u, riparian=None):
         [G_MEDITERRANEAN, G_EUCALYPTUS, G_POPLAR, G_CREOSOTE]), np.uint8)
 
 
+_LUTS = {}
+LUT_N = 1024        # (the ids the rules test: groups < 256, Koppen classes < 31, land cover < 101, ECO_IDs < 848)
+
+
+def _in(a, ids):
+    """np.isin(a, ids) for small non-negative integers (groups, Koppen classes, land cover classes, ECO_IDs, all under
+    LUT_N) by a cached lookup table: the species rules test ~30 sets a tile, np.isin sorted each (35: 3x faster)."""
+    key = tuple(int(i) for i in ids)
+    lut = _LUTS.get(key)
+    if lut is None:
+        lut = np.zeros(LUT_N, bool)
+        lut[list(key)] = True
+        _LUTS[key] = lut
+    return lut[np.asarray(a)]
+
+
 def _in_box(lat, lon, box):
     return (lat >= box[0]) & (lat <= box[2]) & (lon >= box[1]) & (lon <= box[3])
 
@@ -275,17 +300,17 @@ def zones(lat, lon, riparian=None):
     import ecoregion
     lat, lon = np.asarray(lat, np.float64), np.asarray(lon, np.float64)
     eco = ecoregion.eco_many(lat, lon)
-    z = np.where(np.isin(eco, ECO_MED), ZONE_MED, 0).astype(np.uint8)
+    z = np.where(_in(eco, ECO_MED), ZONE_MED, 0).astype(np.uint8)
     if riparian is not None:
         z[(z == 0) & np.asarray(riparian, bool) & _in_box(lat, lon, RIPARIAN_BOX)] = ZONE_RIPARIAN
-    z[(z == 0) & np.isin(eco, ECO_CREOSOTE)] = ZONE_HOT_DESERT
+    z[(z == 0) & _in(eco, ECO_CREOSOTE)] = ZONE_HOT_DESERT
     return np.ascontiguousarray(z)
 
 
 def mediterranean(lat, lon):
     """Per point: in the Mediterranean basin's lowland ecoregions (ECO_MED)."""
     import ecoregion
-    return np.ascontiguousarray(np.isin(ecoregion.eco_many(lat, lon), ECO_MED))
+    return np.ascontiguousarray(_in(ecoregion.eco_many(lat, lon), ECO_MED))
 
 
 def _north_america(lat, lon):
@@ -378,6 +403,33 @@ STEPPE_JUNIPER = 0.6
 # (35) the juniper woodlands' ecoregions: Anatolia's steppes and Taurus, the Elburz, the Kopet Dag, eastern Iran,
 # Baluchistan and Afghanistan, the Alai and western Tian Shan, Oman's Al-Hajar, the Asir, the High Atlas, Spain's
 # Meseta (J. thurifera)
+# (35) the world beyond Eurasia's and the dry West's rules, by RESOLVE's biomes and realms (ecoregion.py) and the
+# forests' leaf type (leaftype.py), species_groups:
+# - the tropics' broadleaves (the tropical biomes, and any land within 23.5 degrees outside the montane, temperate,
+#   Mediterranean and desert ones): the rainforest's trees (G_TROPICAL; before, only Koppen Af / Am: the savanna
+#   climates' woods were East Coast USA's oaks and beeches); the savannas' (biome 7) and the dry forests' and hot
+#   deserts' open country (biomes 2, 13 within SAVANNA_LAT, off the Mediterranean) the umbrella-crowned acacias'
+#   (G_SAVANNA: Jungle Rock Island's umbrella filler and ceiba, Italy's feathery scraggly trees, Johnson Valley's
+#   mesquite / acacia bush); town trees there the rainforest's (mangoes, figs).
+# - the conifers of the tropics and the southern hemisphere: pines (Caribbean, Mexican, chir, Benguet pines; Chile's,
+#   New Zealand's, South Africa's and Australia's radiata and patula plantations): West Coast USA's Monterey pine
+#   (Pinus radiata itself), not Douglas firs.
+# - the subtropics' and the south's evergreen broadleaf (laurel) forests (southern China, Taiwan, southern Japan and
+#   Korea, the Himalaya's foothills, Madeira; Valdivia, New Zealand): G_LAUREL (Italy's evergreen cork oaks, the
+#   island's young and lianad trees) for the forest's evergreen broadleaf share (leaftype), at least ECO_LAUREL_SHARE
+#   in the ECO_LAUREL ecoregions (the map reads Japan's and Korea's laurel woods as deciduous); not in Australia (its
+#   evergreen broadleaves are eucalypts) or the Mediterranean (its own).
+# - the south's temperate broadleaves (Chile, Argentina, New Zealand, Tasmania south of SOUTH_BEECH_LAT): southern
+#   beeches (Nothofagus), East Coast USA's beeches.
+# - the maritime and Mediterranean pines (Pinus pinaster, pinea, halepensis, brutia: Italy's maritime pines and, for
+#   the tall forest grown ones, its Scots pine) for the conifers of the Mediterranean's lowland ecoregions and the
+#   Atlantic's Cantabrian and northwest Iberian ones (Galicia, Portugal, the Landes) below MARITIME_PINE_M.
+SAVANNA_LAT = 35.0
+ECO_LAUREL = (233, 236, 251, 268, 283, 643, 657, 659, 668, 670, 680, 681, 682)
+ECO_LAUREL_SHARE = 0.6
+SOUTH_BEECH_LAT = -35.0
+ECO_MARITIME_PINE = (648, 800)
+MARITIME_PINE_M = 1000.0
 ECO_JUNIPER = (59, 652, 694, 695, 721, 723, 727, 730, 756, 757, 758, 792, 804, 814, 816, 834)
 # (35) the eucalypt plantations of Portugal and Galicia (Eucalyptus globulus; E. nitens higher up in Galicia): a
 # quarter of both forests (Portugal's IFN6 2015: 845 000 ha of 3.2 M, its first species; Galicia's IFN4: about 30 %),
@@ -437,12 +489,12 @@ def spruce_line(lat):
 
 
 def species_groups(group, height, lat, lon, lcls, koppen, elev, u_broad, u_conifer, u_snag, u_palm, u_alt=None,
-                   u_euc=None):
+                   u_stand=None):
     """The groups after regional(): Eurasia's species (birch / oak / beech, pine_eu / spruce), dead trees, the warm
     towns' palms and the rainforests' trees (the constants above). koppen: the class at each tree (climate.koppen_many);
     elev: its height above the sea (m) or None (no DEM: as in the lowlands); u_broad, u_conifer: the species choices'
-    [0, 1) (stand_u, mixed); u_snag, u_palm, u_alt: hashed [0, 1) per tree (u_alt None: u_snag's); u_euc: a stand's
-    [0, 1) for the eucalypt plantations (stand_u, not mixed; None: none). Pure."""
+    [0, 1) (stand_u, mixed); u_snag, u_palm, u_alt: hashed [0, 1) per tree (u_alt None: u_snag's); u_stand: a stand's
+    [0, 1) for the eucalypt plantations and the laurel forests (stand_u, not mixed; None: neither). Pure."""
     g = np.array(group, np.uint8, copy=True)
     h = np.asarray(height, np.float64)
     lat, lon = np.asarray(lat, np.float64), np.asarray(lon, np.float64)
@@ -466,13 +518,13 @@ def species_groups(group, height, lat, lon, lcls, koppen, elev, u_broad, u_conif
         p = base + (SPRUCE_MOUNTAIN - base) * np.clip(2.0 * montane, 0.0, 1.0)      # (no pines from mid-belt up)
         g[con] = np.where(np.asarray(u_conifer)[con] < p[con], G_SPRUCE, G_PINE_EU)
     # broadleaves: Italy's in the hot deserts and steppes; birch / oak / beech by the climate, more beeches uphill
-    g[ea & (g == G_DECIDUOUS) & np.isin(k, K_HOT_ARID)] = G_MEDITERRANEAN
+    g[ea & (g == G_DECIDUOUS) & _in(k, K_HOT_ARID)] = G_MEDITERRANEAN
     dec = ea & (g == G_DECIDUOUS)
     if dec.any():
         sh = np.tile(np.array(BROAD_SHARES["continental"]), (len(g), 1))
-        boreal = np.isin(k, K_BOREAL) & (lat >= BOREAL_LAT)
-        for name, m in (("boreal", boreal), ("oceanic", np.isin(k, K_OCEANIC)), ("med", np.isin(k, K_MED)),
-                        ("subtropical", np.isin(k, K_SUBTROPICAL)), ("cold_arid", np.isin(k, K_COLD_ARID))):
+        boreal = _in(k, K_BOREAL) & (lat >= BOREAL_LAT)
+        for name, m in (("boreal", boreal), ("oceanic", _in(k, K_OCEANIC)), ("med", _in(k, K_MED)),
+                        ("subtropical", _in(k, K_SUBTROPICAL)), ("cold_arid", _in(k, K_COLD_ARID))):
             sh[m] = BROAD_SHARES[name]
         for e_, share in ECO_BROAD_SHARES.items():
             sh[eco == e_] = share
@@ -486,16 +538,16 @@ def species_groups(group, height, lat, lon, lcls, koppen, elev, u_broad, u_conif
         pick = np.where(u < sh[:, 0], G_BIRCH, np.where(u < sh[:, 0] + sh[:, 1], G_OAK, G_BEECH)).astype(np.uint8)
         g[dec] = pick[dec]
     # the rainforests: no temperate broadleaves, fewer palms in the forest
-    rain = np.isin(k, K_RAINFOREST) & (np.abs(lat) < 23.5)
+    rain = _in(k, K_RAINFOREST) & (np.abs(lat) < 23.5)
     g[rain & (g == G_DECIDUOUS)] = G_TROPICAL
     # (30) a mangrove's trees (WorldCover 95, any climate: the Red Sea's, the Indus delta's) tropical broadleaves
     mangrove = np.asarray(lcls) == WC["mangrove"]
-    g[mangrove & np.isin(g, (G_DECIDUOUS, G_MEDITERRANEAN, G_PALM, G_OAK, G_BIRCH, G_BEECH))] = G_TROPICAL
+    g[mangrove & _in(g, (G_DECIDUOUS, G_MEDITERRANEAN, G_PALM, G_OAK, G_BIRCH, G_BEECH))] = G_TROPICAL
     sparse = rain & (g == G_PALM) & ~built & (np.asarray(u_palm) >= RAINFOREST_PALM_KEEP)
     g[sparse] = G_TROPICAL
     # warm towns' date and fan palms
     na = (lat > 24.0) & (lon > -170.0) & (lon < -50.0)
-    cand = ~na & (np.abs(lat) >= 23.5) & np.isin(g, PALM_FROM)
+    cand = ~na & (np.abs(lat) >= 23.5) & _in(g, PALM_FROM)
     if cand.any():
         up = np.asarray(u_palm)
         for kk, (p_town, p_out, lat_max) in DRY_PALMS.items():
@@ -503,33 +555,84 @@ def species_groups(group, height, lat, lon, lcls, koppen, elev, u_broad, u_conif
             g[m & (up < np.where(built, p_town, p_out))] = G_PALM_DRY
     # (34) coconut-type palms only in the tropics' climates (Af, Am, Aw): any other palm (California's, Florida's north,
     # the Mediterranean's, the Gulf's) the fan and date palms (the gallery 2026-11-17: the palm group mixed both)
-    g[(g == G_PALM) & ~np.isin(k, K_TROPICS)] = G_PALM_DRY
+    g[(g == G_PALM) & ~_in(k, K_TROPICS)] = G_PALM_DRY
     # (34) the Old World's juniper woodlands' open country (35: their ecoregions, ECO_JUNIPER; before, any BSk / BWk
     # outside North America, which put junipers on the Kazakh and Mongolian steppes): its low trees junipers
     # (Juniperus excelsa / polycarpos / seravschanica / thurifera / procera; Utah's shapes, as regional_groups does in
     # the dry West), STEPPE_JUNIPER of them
     c_ = np.asarray(lcls)
-    steppe = np.isin(eco, ECO_JUNIPER) & np.isin(c_, (WC["shrub"], WC["grass"], WC["bare"])) & (h < 9.0)
-    g[steppe & np.isin(g, (G_DECIDUOUS, G_OAK, G_BIRCH, G_CONIFER, G_PINE_EU, G_SPRUCE))
+    steppe = _in(eco, ECO_JUNIPER) & _in(c_, (WC["shrub"], WC["grass"], WC["bare"])) & (h < 9.0)
+    g[steppe & _in(g, (G_DECIDUOUS, G_OAK, G_BIRCH, G_CONIFER, G_PINE_EU, G_SPRUCE))
       & (np.asarray(u_palm) < STEPPE_JUNIPER)] = G_JUNIPER
     # (34) the coast redwoods only in their fog belt (the gallery 2026-11-17: pine_west's tallest were redwoods, drawn
     # for any 25 m+ conifer from Washington to the Southeast's loblolly pines)
     g[(g == G_PINE_WEST) & redwood_belt(lat, lon) & (h >= REDWOOD_MIN_M)] = G_REDWOOD
+    g = _world_groups(g, lat, lon, c_, eco, z, u_stand)
     # (35) Portugal's and Galicia's eucalypt plantations: whole stands of the forest's trees
-    if u_euc is not None:
-        wood = (np.asarray(lcls) == WC["tree"]) & np.isin(g, EUC_FROM) & np.isin(k, K_MED + K_OCEANIC)
+    if u_stand is not None:
+        wood = (np.asarray(lcls) == WC["tree"]) & _in(g, EUC_FROM) & _in(k, K_MED + K_OCEANIC)
         if wood.any():
-            g[wood & (np.asarray(u_euc) < eucalypt_share(lat, lon, elev))] = G_EUCALYPTUS
+            g[wood & (np.asarray(u_stand) < eucalypt_share(lat, lon, elev))] = G_EUCALYPTUS
     # dead trees in the forests outside the tropics
     forest = (np.asarray(lcls) == WC["tree"]) & (np.abs(lat) >= 23.5) & (h >= SNAG_H[0]) & (h <= SNAG_H[1])
     snag = forest & (np.asarray(u_snag) < SNAG_SHARE)
     broad, conif = SNAG_FROM
-    g[snag & np.isin(g, broad)] = G_SNAG_BROAD
-    g[snag & np.isin(g, conif)] = G_SNAG_CONIFER
+    g[snag & _in(g, broad)] = G_SNAG_BROAD
+    g[snag & _in(g, conif)] = G_SNAG_CONIFER
     return g
 
 
-EUC_FROM = (G_DECIDUOUS, G_CONIFER, G_MEDITERRANEAN, G_BIRCH, G_OAK, G_BEECH, G_PINE_EU, G_SPRUCE)
+BROAD_FROM = (G_DECIDUOUS, G_OAK, G_BIRCH, G_BEECH)
+CONIFER_FROM = (G_CONIFER, G_PINE_EU, G_SPRUCE)
+
+
+def _world_groups(g, lat, lon, lcls, eco, elev, u_stand):
+    """species_groups' biome rules (35; the constants by SAVANNA_LAT): the tropics' rainforest and savanna trees,
+    the tropics' and the south's pines, the laurel forests, the south's beeches, the maritime pines. g changed in
+    place and returned."""
+    import ecoregion as er
+    import leaftype
+    bio, realm = er.biome_of(eco), er.realm_of(eco)
+    alat = np.abs(lat)
+    med = _in(eco, ECO_MED)
+    laurel_eco = _in(eco, ECO_LAUREL)
+    built = lcls == WC["built"]
+    hot = ~laurel_eco & (_in(bio, (er.B_TROP_MOIST, er.B_TROP_DRY, er.B_TROP_GRASS, er.B_MANGROVE))
+                         | ((alat < 23.5) & ~_in(bio, (er.B_TROP_CONIFER, er.B_TEMP_BROAD, er.B_TEMP_CONIFER,
+                                                          er.B_MONTANE_GRASS, er.B_MEDITERRANEAN, er.B_DESERT,
+                                                          er.B_TEMP_GRASS))))
+    broad = _in(g, BROAD_FROM) | ((g == G_MEDITERRANEAN) & ~med)
+    # savannas and the dry country's open land: acacias (also of the trees regional_groups made the tropics' own);
+    # the rest of the tropics' broadleaves: the rainforest's
+    # (the hot deserts' woods too: the Kalahari's camelthorns, the Sahel's; not the oases' and the Nile's, which
+    # Eurasia's rule made Italy's: olives, carobs)
+    desert = (bio == er.B_DESERT) & (alat < SAVANNA_LAT) & ~med
+    open_dry = _in(bio, (er.B_TROP_DRY, er.B_DESERT)) & (lcls != WC["tree"]) & (alat < SAVANNA_LAT) & ~med
+    acacia_from = _in(g, BROAD_FROM + (G_TROPICAL,))
+    savanna = (~built & (lcls != WC["mangrove"])
+               & (((acacia_from | broad) & (((bio == er.B_TROP_GRASS) & hot) | open_dry)) | (acacia_from & desert)))
+    g[savanna] = G_SAVANNA
+    g[broad & ~savanna & hot] = G_TROPICAL
+    # the conifers of the tropics, the hot deserts and the south: pines
+    g[_in(g, CONIFER_FROM) & (hot | desert | (bio == er.B_TROP_CONIFER) | (lat < -23.5))] = G_PINE_WEST
+    # the laurel forests
+    australia = (realm == er.R_AUSTRALASIA) & (lon > 110.0) & (lon < 155.0)
+    if u_stand is not None:
+        cand = _in(g, BROAD_FROM) & ~hot & ~med & ~australia & (alat < 45.0)
+        if cand.any():
+            evb = np.nan_to_num(leaftype.evergreen_broad_share(lat, lon), nan=0.0)
+            share = np.maximum(evb, np.where(laurel_eco, ECO_LAUREL_SHARE, 0.0))
+            g[cand & (np.asarray(u_stand) < share)] = G_LAUREL
+    # the south's beeches (Nothofagus)
+    south = (lat < SOUTH_BEECH_LAT) & ((realm == er.R_NEOTROPIC) | ((realm == er.R_AUSTRALASIA)
+                                                                   & ((lon > 160.0) | (lat < -39.5))))
+    g[south & _in(g, BROAD_FROM)] = G_BEECH
+    # the maritime and Mediterranean pines
+    g[_in(g, CONIFER_FROM) & (med | _in(eco, ECO_MARITIME_PINE)) & (elev < MARITIME_PINE_M)] = G_PINE_MARITIME
+    return g
+
+
+EUC_FROM = (G_DECIDUOUS, G_CONIFER, G_MEDITERRANEAN, G_BIRCH, G_OAK, G_BEECH, G_PINE_EU, G_SPRUCE, G_PINE_MARITIME)
 SNAG_FROM = ((G_DECIDUOUS, G_BIRCH, G_OAK, G_BEECH, G_OAK_WEST), (G_CONIFER, G_PINE_EU, G_SPRUCE, G_PINE_WEST))
 OPEN_FROM = {G_DECIDUOUS: G_DECIDUOUS_OPEN, G_OAK: G_DECIDUOUS_OPEN, G_BIRCH: G_BIRCH_OPEN, G_BEECH: G_BEECH_OPEN,
              G_PINE_WEST: G_PINE_WEST_OPEN, G_MEDITERRANEAN: G_MEDITERRANEAN_OPEN, G_TROPICAL: G_TROPICAL_OPEN,
@@ -605,23 +708,27 @@ def shrub_groups(group, height, lat, lon, lcls, koppen, u, u_floor, understory=N
     k = np.asarray(koppen)
     c = np.asarray(lcls)
     u, uf = np.asarray(u, np.float64), np.asarray(u_floor, np.float64)
-    bush = np.isin(g, SHRUB_FROM)
+    bush = _in(g, SHRUB_FROM)
     if not bush.any():
         return g, h
     na = (lat > 24.0) & (lon > -170.0) & (lon < -50.0)
     alat = np.abs(lat)
-    med = np.isin(k, K_MED)
-    north = (np.isin(k, K_POLAR) | (np.isin(k, K_BOREAL) & (alat >= BOREAL_SHRUB_LAT)) | (c == WC["moss"])) & ~med
-    tropical = (np.isin(k, K_RAINFOREST) | (c == WC["mangrove"])
-                | (np.isin(k, K_SAVANNA) & (u < TROPICAL_SAVANNA_SHARE))) & (alat < 30.0)
-    arid = np.isin(k, K_ARID) & ~tropical
+    # (35) the maquis where RESOLVE's Mediterranean biome is (the Mediterranean's, California's chaparral, Chile's
+    # matorral, the Cape's fynbos, Australia's mallee; before, Koppen Cs: Galicia's and the Pacific Northwest's
+    # summer-dry oceanic woods and the Central Asian mountains' Cs pockets too)
+    import ecoregion
+    med = ecoregion.biome_of(ecoregion.eco_many(lat, lon)) == ecoregion.B_MEDITERRANEAN
+    north = (_in(k, K_POLAR) | (_in(k, K_BOREAL) & (alat >= BOREAL_SHRUB_LAT)) | (c == WC["moss"])) & ~med
+    tropical = (_in(k, K_RAINFOREST) | (c == WC["mangrove"])
+                | (_in(k, K_SAVANNA) & (u < TROPICAL_SAVANNA_SHARE))) & (alat < 30.0)
+    arid = _in(k, K_ARID) & ~tropical
     g[bush & med & (~na | (u < CHAPARRAL_SHARE))] = G_MAQUIS
     g[bush & north] = G_SHRUB_NORTH
     g[bush & tropical] = G_SHRUB_TROPICAL
     g[bush & arid & (g == G_SHRUB)] = G_DESERT_SHRUB
     # (34) the hot deserts and steppes (BWh, BSh): no junipers (Utah's: the cold deserts', the Great Basin's, Central
     # Asia's and Iran's mountains'), desert_shrub_hot (the mod's desert_shrub without them; the gallery 2026-11-17)
-    g[(g == G_DESERT_SHRUB) & np.isin(k, (4, 6))] = G_DESERT_SHRUB_HOT
+    g[(g == G_DESERT_SHRUB) & _in(k, (4, 6))] = G_DESERT_SHRUB_HOT
     if understory is not None:
         # (34) the tropics' forest floor: the wide-leaved shade plants (monstera, the island's tropical_plant_*), not
         # in the open (a monstera on a savanna or a field's hedge; the gallery 2026-11-17)
@@ -1125,7 +1232,7 @@ class Vegetation:
         u_con = _mixed(stand_u(tmx, tmy, gx, gy, clat, 61), u_single, u_mix)
         return species_groups(group, th, tlat, tlon, lcls, k, elev, u_broad, u_con, _hash01(gx, gy, 33),
                               _hash01(gx, gy, 34), _hash01(gx, gy, 35),
-                              u_euc=stand_u(tmx, tmy, gx, gy, clat, 91))
+                              u_stand=stand_u(tmx, tmy, gx, gy, clat, 91))
 
     def _slope(self, px, py):
         """The ground's slope (rise over run) at Web Mercator points (px, py), from the DEM ROCK_SLOPE_D m either side

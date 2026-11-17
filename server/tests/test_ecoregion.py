@@ -40,7 +40,13 @@ class EcoregionTest(unittest.TestCase):
         self.assertIn(er.ids("Mediterranean High Atlas juniper steppe")[0], veg.ECO_JUNIPER)
         for e in veg.ECO_MED:
             self.assertEqual(er._meta[e][1], er.B_MEDITERRANEAN, er.name(e))
-            self.assertEqual(er._meta[e][2], "Palearctic", er.name(e))
+            self.assertIn(er._meta[e][2], ("Palearctic", "Neotropic", "Afrotropic"), er.name(e))
+        self.assertEqual(set(veg.ECO_MED) - set(k for k, v in er._meta.items() if v[2] == "Palearctic"),
+                         set(er.ids("Chilean Matorral", "Fynbos shrubland", "Renosterveld shrubland")))
+        for e in veg.ECO_LAUREL:
+            self.assertTrue("evergreen" in er.name(e) or "subtropical broadleaf" in er.name(e), er.name(e))
+        self.assertEqual(set(veg.ECO_MARITIME_PINE), set(er.ids("Cantabrian mixed forests",
+                                                                "Northwest Iberian montane forests")))
 
 
 if __name__ == "__main__":
