@@ -6593,6 +6593,13 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(roadnet::verdicts::photo_values, m)?)?;
     // 392: R2a's photo surface inputs (roadnet::verdicts: roadsurf.candidates and layer_verdicts' store lookup,
     // photosurface.verdicts' selection, _spec_inputs' fill of the photo's values)
-    m.add("VERSION", 392)?;
+    m.add_function(wrap_pyfunction!(roadnet::flowhome::lane_flow_home, m)?)?;
+    m.add_function(wrap_pyfunction!(roadnet::flowhome::lane_overrides, m)?)?;
+    // 400: R2a's lane flow from the home cells (roadnet::flowhome: roads._lane_flow_home's neighbour / home-cell
+    // remap, _lane_overrides' making)
+    m.add_function(wrap_pyfunction!(roadnet::eustreets::eu_street_pass, m)?)?;
+    // 401: R2a's European street pass (roadnet::eustreets = _road_specs' europewalks pass: the filter, middle point,
+    // mapped width and frontage; europewalks.plan and country_for as callbacks)
+    m.add("VERSION", 401)?;
     Ok(())
 }

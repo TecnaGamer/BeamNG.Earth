@@ -108,7 +108,8 @@ pub fn europe_road_countries<'py>(index: Bound<'py, PyAny>, part_off: PyReadonly
         }
         let (p0, p1) = (first(i as i64)?, first(i as i64 + 1)?);
         if p1 > p0 {
-            let k = np_index(ll.nrows(), p0 + (p1 - p0) / 2)?;
+            // (p0 + (p1 - p0) // 2 of numpy int64s: wrapping, floor division; never a panic from map data)
+            let k = np_index(ll.nrows(), p0.wrapping_add(p1.wrapping_sub(p0).div_euclid(2)))?;
             out[i] = country_for(&mut b, ll[[k, 0]], ll[[k, 1]], &countries)?;
         }
     }
