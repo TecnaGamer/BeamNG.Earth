@@ -6026,8 +6026,9 @@ class Server:
         frame, x0, y0, size = self.tile_where(anchor, tile)
         sq = imagerymod.gutter_square(x0, y0, size, px)
         if genground.ON:
+            node = tile.base if isinstance(tile, farfield.Piece) else tile
             got = genground.render_far(self.imagery, frame, *sq, px, self.mapdata, self.surface, self.road_widths,
-                                       pending, getattr(self, "veg", None))
+                                       pending, getattr(self, "veg", None), level=node.level)
             if got is not None:
                 return got
         return self.imagery.render(frame, *sq, px, pending=pending, gutter=True)
@@ -6253,7 +6254,7 @@ class Server:
                     x0, y0, _, _ = tile.bbox
                     sq_t = imagerymod.gutter_square(x0, y0, tile.size, tex["px"])
                     if genground.ON and not tex.get("quick"):   # (the generated ground's squares: render_far)
-                        for a in genground.far_fetch(*sq_t, tex["px"]):
+                        for a in genground.far_fetch(*sq_t, tex["px"], tile.level):
                             im.fetch_needed(anchor.frame, *a)
                     if im.fetch_needed(anchor.frame, *sq_t, tex["px"], last_only=bool(tex.get("quick")), gutter=True):
                         built, got = self.far_pool.submit(*args).result()
@@ -6417,7 +6418,7 @@ class Server:
         # Codex review of a3c7895f)
         gsize = imagerymod.gutter_square(0.0, 0.0, tile.size, px)[2]
         gen = (genground.far_key(self.mapdata, getattr(self, "veg", None) is not None),) \
-            if genground.ON and genground.far_texel(gsize, px) is not None else ()
+            if genground.far_strength(tile.level) is not None and genground.far_texel(gsize, px) is not None else ()
         return revisitmod.key("fartex", round(float(anchor.lat), 7), round(float(anchor.lon), 7), tile.key, px,
                               self.road_mask_px(tile.level) if self.road_masks else 0, [s.name for s in im.chain],
                               self.tone, im.leaf_on, im.season_mode, self.tex_modes, roadsmod.ROADS_IN_GROUND,

@@ -47,7 +47,8 @@ class FarTest(unittest.TestCase):
 
     def test_texel_sizes_and_off(self):
         self.assertEqual(gg.far_texel(256.0, 256), 2.0, "L0 (1 m): from the 2 m squares")
-        self.assertEqual(gg.far_texel(2048.0, 512), 4.0, "L3 (4 m)")
+        self.assertIsNone(gg.far_strength(2), "L2 on: the plain photo (the fade ends at L1)")
+        self.assertEqual(gg.far_strength(-1), 1.0)
         self.assertIsNone(gg.far_texel(4096.0, 512), "L4 (8 m): the plain photo")
         frame = geodesy.EnuFrame(40.877, -77.566)
         self.assertIsNone(gg.render_far(_Im(), frame, 0.0, 0.0, 4096.0, 512, None, None))
@@ -72,12 +73,43 @@ class FarTest(unittest.TestCase):
             out[:] = 20
             return out
         with mock.patch.object(gg.fast._ef, "gen_ground", spy), mock.patch.object(gg, "canopy_grid", tall):
-            gg.render_far(_Im(), frame, 0.0, 0.0, 512.0, 256, None, None, veg=True)
-            gg.render_far(_Im(), frame, 2048.0, 0.0, 2048.0, 512, None, None, veg=True)
-            gg.render_far(_Im(), frame, 4096.0, 0.0, 512.0, 256, None, None, veg=None)
-        self.assertEqual(seen["floor"][0], (255, 2), "2 m squares: as the block (the trees drawn to 700 m)")
-        self.assertEqual(seen["floor"][1], (255, 2), "4 m: the same (a level's own weight: a seam between levels)")
+            gg.render_far(_Im(), frame, 0.0, 0.0, 128.0, 256, None, None, veg=True, level=-1)
+            gg.render_far(_Im(), frame, 2048.0, 0.0, 512.0, 256, None, None, veg=True, level=1)
+            gg.render_far(_Im(), frame, 4096.0, 0.0, 512.0, 256, None, None, veg=None, level=0)
+        self.assertEqual(seen["floor"][0], (255, 2), "L-1, next to the block: its full floor")
+        self.assertEqual(seen["floor"][1], (85, 2), "L1: a third (the fade to the canopy's colour)")
         self.assertEqual(seen["floor"][-1], (None, 0), "no trees drawn: their own colour, as the block")
+        self.assertIsNone(gg.render_far(_Im(), frame, 0.0, 0.0, 1024.0, 512, None, None, veg=True, level=2),
+                          "L2: the plain photo")
+
+    def test_fade_continuous_across_the_rings(self):
+        # a wood (the photo's dark canopy, 20 m of canopy) seen at each ring: the block's colour on L-1, a third of the
+        # way to the plain photo's at each next ring (no seam larger than a step), the plain photo past L1
+        frame = geodesy.EnuFrame(40.877, -77.566)
+
+        class Dark(_Im):
+            def render(self, frame, x0, y0, size, px, pending=None):
+                return np.full((px, px, 3), (40, 60, 35), np.uint8), {"eox2023": px * px}
+        canopy = gg.canopy_grid
+
+        def tall(mx, my, rasters):
+            out = canopy(mx, my, rasters)
+            out[:] = 20
+            return out
+        y = lambda a: float(a.astype(float).mean())     # noqa: E731
+        with mock.patch.object(gg, "canopy_grid", tall):
+            block, _ = gg.render(Dark(), frame, 0.0, 0.0, 512.0, 512, None, None, veg=None, relight=False)
+            lv = {lvl: y(gg.render_far(Dark(), frame, 0.0, 0.0, 512.0, 256, None, None, veg=True, level=lvl)[0])
+                  for lvl in (-1, 0, 1)}
+        plain = y(Dark().render(frame, 0.0, 0.0, 512.0, 256)[0])
+        full = lv[-1]
+        self.assertGreater(full, plain + 15, "the floor lighter than the canopy")
+        step = (full - plain) / 3
+        self.assertAlmostEqual(lv[0], full - step, delta=step * 0.35)
+        self.assertAlmostEqual(lv[1], full - 2 * step, delta=step * 0.35)
+        self.assertLess(abs(lv[1] - plain), step * 1.35, "L1 / plain: a step at most")
+        self.assertGreater(lv[-1], lv[0])
+        self.assertGreater(lv[0], lv[1])
 
     def test_far_squares_never_ask_for_trees(self):
         frame = geodesy.EnuFrame(40.877, -77.566)

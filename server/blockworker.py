@@ -3740,7 +3740,8 @@ def _far_tile_key(lat, lon, tile, zoom, q, ref_zoom, with_sink, layout, tex):
     import genground
     import imagery as imagerymod
     _gx, _gy, gsize = imagerymod.gutter_square(0.0, 0.0, tile.size, int(tex["px"]))
-    if genground.far_texel(gsize, int(tex["px"])) is not None and not tex.get("quick"):
+    if genground.far_strength(tile.level) is not None and genground.far_texel(gsize, int(tex["px"])) is not None \
+            and not tex.get("quick"):
         surf = (*surf, genground.far_key(getattr(_s, "md", None), tex.get("gen_trees")))
     return revisit.key("far", *_far_key(lat, lon, tile, zoom, q, ref_zoom, with_sink, layout), tex["px"],
                        mask[1] if mask else 0, tuple(tex["chain"]), tex["tone"], tex["leaf_on"], tex["season_mode"],
@@ -3848,7 +3849,7 @@ def _far_tile_(aid, lat, lon, tile, zoom, q, ref_zoom, with_sink, layout, tex, m
     if genground.ON and not tex.get("quick"):  # (the generated ground's near rings: earthd.Server.render_tile)
         try:
             got = genground.render_far(im, frame, *sq, px, getattr(_s, "md", None), _paint_surface(), _s.widths,
-                                       None, True if tex.get("gen_trees") else None)
+                                       None, True if tex.get("gen_trees") else None, level=tile.level)
             if got is not None:
                 rgb, used = got
         except imagerymod.ImageryError:     # (a square's photo not on disk: the server fetches it, far_fetch, and asks

@@ -1284,7 +1284,7 @@ def inputs(frame, x0, y0, size, px, md, surface, widths=None, veg=None):
             log.debug("genground: building mask: %s: %s", type(e).__name__, e)
     if getattr(_far_tl, "on", False):
         # (a far square, render_far: the trees the mod draws at its distance, not each placed one: the canopy's core
-        # wooded, its floor weighted by the share of the trees drawn there, FAR_SHARE; no trees drawn: their colour)
+        # wooded, its floor faded by the tile's level, FAR_STRENGTH; no trees drawn: their colour)
         floor, mode = None, 0
         if veg is not None:
             share = _far_tl.share
@@ -1353,31 +1353,41 @@ def render(imagery, frame, x0, y0, size, px, md, surface, widths=None, pending=N
 
 # The far rings' generated ground (the user, 2026-11-16: "the texture between the ground with collision vs no collision
 # is very different ... visible border"; Patapsco: the block's forest floor beside the far tiles' plain Sentinel-2): a
-# far tile up to FAR_MAX_T m texels (the rings within ~2-4 km) is cut from the generated ground of FAR_SQ_M squares of
-# the anchor frame's grid at a texel of FAR_MIN_T .. FAR_MAX_T (the same function, its windows in metres: the same
-# kinds and colours as the block at the seam), memoized per process (FAR_SQ_MAX). At far LODs: no shadow relight (no
-# sun fits); the trees as the mod draws them there, not each placed one (no vegetation cell read or waited for): the
-# canopy's core wooded, its forest floor as the block's (FAR_SHARE: the same weight at every far level, any change of
-# it with the level is a seam between two levels' tiles); no GEN_PENDING (a square made without all of its map data
-# is a revisit fault and made again after FAR_RETRY_S).
-FAR_VERSION = 1
+# far tile of the levels to FAR_MAX_LEVEL (L1: to ~3 km) is cut from the generated ground of FAR_SQ_M squares of the
+# anchor frame's grid at FAR_MIN_T (the same function, its windows in metres: the same kinds and colours as the block
+# at the seam), memoized per process (FAR_SQ_MAX). At far LODs: no shadow relight (no sun fits); the trees as the mod
+# draws them there, not each placed one (no vegetation cell read or waited for): the canopy's core wooded, its forest
+# floor faded by level (FAR_STRENGTH; the user, 2026-11-16, "Sure try the fade": the forest-floor colour where the
+# game draws ground between dense trees, near; from height olive-brown ridges read less like forest): the block's
+# full weight on the ring next to it (L-1), two thirds on L0, a third on L1, the photo's canopy colour past it (the
+# plain photo): steps of a third at each ring's seam instead of the whole floor-to-canopy jump at one; no GEN_PENDING
+# (a square made without all of its map data is a revisit fault and made again after FAR_RETRY_S).
+FAR_VERSION = 2
 FAR_SQ_M = 1024.0
 FAR_MIN_T = 2.0
-FAR_MAX_T = 4.0
-FAR_SQ_MAX = 48
+FAR_MAX_T = 2.0
+FAR_MAX_LEVEL = 1
+FAR_STRENGTH = {-2: 1.0, -1: 1.0, 0: 2.0 / 3.0, 1: 1.0 / 3.0}
+FAR_SQ_MAX = 64
 FAR_RETRY_S = 60.0
-FAR_SHARE = {2.0: 1.0, 4.0: 1.0}  # (one weight at every far level: a level's own (the trees drawn there, 0.35 / 0.6
-                                  # at 4 m) drew a lighter box at the 2 m / 4 m levels' seam, offline 2026-11-16)
 _far_sq = {}                    # key -> (time, complete, rgb (n, n, 3), used, pending markers)
 _far_lock = threading.Lock()
 _far_tl = threading.local()     # .on: inside render_far (tree_floor neither waits for nor asks for trees)
 
 
+def far_strength(level):
+    """The forest floor's weight on a far tile of level (FAR_STRENGTH), or None: not made by render_far (off, or past
+    FAR_MAX_LEVEL: the plain photo)."""
+    if not ON or level is None or level > FAR_MAX_LEVEL:
+        return None
+    return FAR_STRENGTH.get(int(level), 1.0)
+
+
 def far_texel(size, px):
-    """The squares' texel (m) for a far tile's square of size m at px, or None past FAR_MAX_T: the tile's texel
-    rounded up to a power of 2, at least FAR_MIN_T."""
+    """The squares' texel (m) for a far tile's square of size m at px, or None past FAR_MAX_T * 2 (a coarser level's):
+    the tile's texel rounded up to a power of 2, at least FAR_MIN_T."""
     t = size / px
-    if not ON or t > FAR_MAX_T * 1.01:
+    if not ON or t > 2 * FAR_MAX_T * 1.01:
         return None
     ts = FAR_MIN_T
     while ts < t * 0.99 and ts < FAR_MAX_T:
@@ -1394,13 +1404,14 @@ def far_key(md, trees):
         ver = json.dumps(md.versions(), sort_keys=True, default=str) if md is not None else None
     except Exception:
         ver = None
-    return ("genfar", FAR_VERSION, FAR_SQ_M, FAR_MIN_T, FAR_MAX_T, ver, bool(trees))
+    return ("genfar", FAR_VERSION, FAR_SQ_M, FAR_MIN_T, FAR_MAX_T, FAR_MAX_LEVEL, tuple(sorted(FAR_STRENGTH.items())),
+            ver, bool(trees))
 
 
-def _far_square(imagery, frame, i, j, ts, md, surface, widths, veg):
+def _far_square(imagery, frame, i, j, ts, md, surface, widths, veg, share=1.0):
     """(rgb, used, complete, pending markers) of the anchor grid's square (i, j) at ts m texels (memoized)."""
     org = tuple(round(float(v), 6) for v in np.asarray(getattr(frame, "origin", (0.0, 0.0, 0.0))).ravel()[:3])
-    key = (org, i, j, ts, _fit_key("far", imagery, md, None), id(surface), id(widths), bool(veg))
+    key = (org, i, j, ts, _fit_key("far", imagery, md, None), id(surface), id(widths), bool(veg), round(share, 6))
     now = _now()
     with _far_lock:
         got = _far_sq.get(key)
@@ -1411,7 +1422,7 @@ def _far_square(imagery, frame, i, j, ts, md, surface, widths, veg):
     n = int(round(FAR_SQ_M / ts))
     pend = set()
     _far_tl.on = True
-    _far_tl.share = FAR_SHARE.get(ts, 0.0)
+    _far_tl.share = share
     try:
         rgb, used = render(imagery, frame, i * FAR_SQ_M, j * FAR_SQ_M, FAR_SQ_M, n, md, surface, widths, pend, veg,
                            None, relight=False)
@@ -1426,11 +1437,11 @@ def _far_square(imagery, frame, i, j, ts, md, surface, widths, veg):
     return rgb, used, complete and not pend, frozenset(pend)
 
 
-def far_fetch(x0, y0, size, px):
+def far_fetch(x0, y0, size, px, level):
     """[(x0, y0, size, px)] the photo render_far reads for a far tile's square (its squares with their halos, at the
-    squares' texel), for Imagery.fetch_needed; [] past FAR_MAX_T."""
+    squares' texel), for Imagery.fetch_needed; [] past FAR_MAX_LEVEL."""
     ts = far_texel(size, px)
-    if ts is None:
+    if ts is None or far_strength(level) is None:
         return []
     out = []
     n = int(round(FAR_SQ_M / ts))
@@ -1441,12 +1452,14 @@ def far_fetch(x0, y0, size, px):
     return out
 
 
-def render_far(imagery, frame, x0, y0, size, px, md, surface, widths=None, pending=None, veg=None):
+def render_far(imagery, frame, x0, y0, size, px, md, surface, widths=None, pending=None, veg=None, level=0):
     """(rgb (px, px, 3), sources used) of a far tile's square [x0, x0 + size]^2 of the anchor frame (its gutter square)
     cut from the generated ground's squares (bilinear at its texel centres), or None (off, or past FAR_MAX_T: the
-    plain photo then). The squares' imagery markers still to come go into pending."""
+    plain photo then). The squares' imagery markers still to come go into pending. level: the tile's (its floor's
+    weight, far_strength)."""
+    share = far_strength(level)
     ts = far_texel(size, px)
-    if ts is None:
+    if ts is None or share is None:
         return None
     t = size / px
     i0, i1 = int(np.floor(x0 / FAR_SQ_M)), int(np.floor((x0 + size) / FAR_SQ_M - 1e-9))
@@ -1456,7 +1469,7 @@ def render_far(imagery, frame, x0, y0, size, px, md, surface, widths=None, pendi
     used_all = {}
     for j in range(j0, j1 + 1):
         for i in range(i0, i1 + 1):
-            rgb, used, complete, pend = _far_square(imagery, frame, i, j, ts, md, surface, widths, veg)
+            rgb, used, complete, pend = _far_square(imagery, frame, i, j, ts, md, surface, widths, veg, share)
             r0 = (j1 - j) * n       # (row 0: the north)
             mos[r0:r0 + n, (i - i0) * n:(i - i0 + 1) * n] = rgb
             for s, v in (used or {}).items():
