@@ -329,11 +329,63 @@ def _lanes(width, oneway, known=None):
     return k, k
 
 
+SECTION_SEP = "~lanes"      # lanesections.split: a road's lane section is the feature "<road id>~lanes<a>-<b>"
+SECTION_DECK_M = 4.0        # m a node may stand off its road family's deck line (a section's lanes are placed, its
+                            # line shifted from the road's by up to a lane and its taper)
+
+
+class _Roads(dict):
+    """fid -> [parts] (decks, tunnel floors) that also answers for the other ids of a road's family: a lane section
+    ("<road>~lanes<a>-<b>", lanesections.replaced_roads) asked for its road's parts, or a road for its sections'. The
+    graph takes a road's sections in place of the road where its cells hold every one of them, but the bridge and
+    tunnel profiles keep the id they were planned under: the A7's southbound Zillbach viaduct (2026-11-16) was a lane
+    section in the graphs centred south of its middle, found no deck and put its nodes on the valley floor 22-28 m
+    under the deck: the AI drove its path into the drop, stopped on the viaduct and turned round against the barrier."""
+
+    def __init__(self, own):
+        super().__init__(own or {})
+        self.family = {}
+        for k in self:
+            self.family.setdefault(_road_id(k), []).append(k)
+
+    def related(self, fid):
+        """The parts of the other ids of fid's family (not its own), [] when none."""
+        if fid is None:
+            return []
+        return [part for k in self.family.get(_road_id(fid), ()) if k != fid for part in self[k]]
+
+
+def _road_id(fid):
+    return str(fid).split(SECTION_SEP, 1)[0]
+
+
+def _has_parts(store, fid):
+    """store has parts for fid or (a _Roads) for its road's family."""
+    return bool(store) and (fid in store or bool(isinstance(store, _Roads) and store.related(fid)))
+
+
+def _road_parts(store, fid):
+    """store's parts of fid, else of its road's family (_Roads)."""
+    own = store.get(fid) if store else None
+    if own:
+        return own
+    return store.related(fid) if isinstance(store, _Roads) else ()
+
+
 def _deck_z(decks, fid, x, y):
     """The height at (x, y) of feature fid's bridge parts (decks: fid -> [(xy, z, depth)]), or None when the
-    point is not on one (more than 1.5 m off its line). Existing (xy, z) parts are accepted when depth is unknown."""
+    point is not on one (more than 1.5 m off its line). Existing (xy, z) parts are accepted when depth is unknown.
+    decks a _Roads: a point on none of fid's own parts reads its road family's others' within SECTION_DECK_M."""
+    got = _part_z(decks.get(fid, ()), x, y, 1.5)
+    if got is None and isinstance(decks, _Roads):
+        got = _part_z(decks.related(fid), x, y, SECTION_DECK_M)
+    return got
+
+
+def _part_z(parts, x, y, reach):
+    """_deck_z on these parts within reach m of their lines."""
     best = None
-    for part in decks.get(fid, ()):
+    for part in parts:
         xy, z = part[:2]
         a, b = xy[:-1], xy[1:]
         d = b - a
@@ -342,7 +394,7 @@ def _deck_z(decks, fid, x, y):
         q = a + t[:, None] * d
         dist = dnp.hypot(q[:, 0] - x, q[:, 1] - y)
         k = int(dist.argmin())
-        if dist[k] < 1.5 and (best is None or dist[k] < best[0]):
+        if dist[k] < reach and (best is None or dist[k] < best[0]):
             best = (float(dist[k]), float(z[k] + t[k] * (z[k + 1] - z[k])))
     return None if best is None else best[1]
 
@@ -372,6 +424,10 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
     road_routes de_routes, priority: the map's stop and give-way points, secrossings.nodes'; _signals, _give_way).
     The graph's "trafficProfile": the adaptive traffic amount's profile of its centre (_traffic_profile)."""
     cx, cy = centre
+    # (a lane section's nodes read its road's deck / tunnel floor and the other way round: _Roads)
+    decks = _Roads(decks) if decks else decks
+    tunnels = _Roads(tunnels) if tunnels else tunnels
+    open_tunnels = _Roads(open_tunnels) if open_tunnels else open_tunnels
     nodes, edges, edge_fids, seen = {}, [], [], lanesections.replaced_roads(feats_list)
     posted = {}                 # id(edge) -> its posted limit where the AI's target is not it (posted_field)
     rough_edges = set()          # id(edge) -> OSM smoothness class says traffic should not overspeed
@@ -584,10 +640,10 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
                         if hi_ > lo_:
                             arc = [lo_, (lo_ + hi_) / 2, hi_]
                             checks.extend(zip(np.interp(arc, s, p[:, 0]), np.interp(arc, s, p[:, 1])))
-                    if open_tunnels and _open_floor(open_tunnels.get(fid, ()), checks):
+                    if open_tunnels and _open_floor(_road_parts(open_tunnels, fid), checks):
                         for nm_, _q in ends_in:
                             open_node[nm_] = fid
-                    elif AI_TUNNELS and tunnels and fid in tunnels and w >= TUNNEL_AI_MIN_W and all(
+                    elif AI_TUNNELS and _has_parts(tunnels, fid) and w >= TUNNEL_AI_MIN_W and all(
                             _deck_z(tunnels, fid, float(q_[0]), float(q_[1])) is not None for _, q_ in ends_in):
                         for nm_, _q in ends_in:
                             tunnel_node[nm_] = fid      # (the AI's too: through the built tunnel)
