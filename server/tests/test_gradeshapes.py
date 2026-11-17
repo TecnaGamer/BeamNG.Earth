@@ -259,6 +259,33 @@ def test_a_deck_along_a_tunnel_over_it_is_not_joined_to_its_middle():
                 - _shape_z(net, shapes, "tun", np.array([0.0, y]))) >= need - 0.3
 
 
+def test_a_street_ending_under_a_flyovers_middle_is_no_end_of_it_unless_the_map_joins_them():
+    # the High Five: a secondary leaves its level-1 link's deck end 0.1 m off a level-4 flyover's line, 20 m under it.
+    # Taken for the flyover's end on it, the street ran a 290 m embankment down from the flyover's height, into the
+    # flyover over it further on. With no map node of both it is under the flyover, its clearance kept; a street
+    # the map joins to the deck there (a node of both) still meets it
+    def members(street_nodes):
+        return [Member("fly", _line(-300, 0, 300, 0, 151), "deck", "motorway_link", 60, 4, 5.0, None,
+                       frozenset({"fw", "fe"})),
+                Member("under", _line(-100, -400, -100, 400, 200), "ground", "secondary", 50, 0, 5.0, None,
+                       frozenset({"us", "un"})),
+                Member("fw", _line(-800, 0, -300, 0), "ground", "motorway_link", 60, 0, 5.0, None,
+                       frozenset({"fw"})),
+                Member("fe", _line(300, 0, 800, 0), "ground", "motorway_link", 60, 0, 5.0, None,
+                       frozenset({"fe"})),
+                Member("street", _line(150, 0.1, 150, -400, 101), "ground", "secondary", 50, 0, 5.0, None,
+                       street_nodes)]
+    net, systems, shapes, emb = _run(members(frozenset({"s0", "s1"})))
+    fly, street = _key_index(net, "fly"), _key_index(net, "street")
+    assert len(systems) == 1 and shapes[0][2] is not None
+    assert not any(i == fly and j == street for i, _si, j, _sj in systems[0]["ends"])
+    assert any(c["u"] == fly and c["d"] == street for c in systems[0]["crossings"])
+    assert street not in emb                                             # the street keeps its ground
+    net, systems, shapes, emb = _run(members(frozenset({"s0", "fe"})))
+    fly, street = _key_index(net, "fly"), _key_index(net, "street")
+    assert any(i == fly and j == street for i, _si, j, _sj in systems[0]["ends"])
+
+
 def test_a_road_dug_under_a_rail_deck_is_that_low_under_the_overpass_beside_it():
     # Perth's Tonkin Highway: a trunk road under the railway in the motorway's median (a short rail deck: the road is
     # dug) and, 6 m on, under the motorway's deck (an overpass: it rises over the road). Solved apart, the road was dug

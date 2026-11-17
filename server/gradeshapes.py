@@ -72,10 +72,11 @@ W_DIP = 0.5                 # a road's dip under its crossing
 W_SMOOTH = 0.2
 W_JOIN = 300.0
 
-Member = namedtuple("Member", "key line kind cls kmh level half limit")
+Member = namedtuple("Member", "key line kind cls kmh level half limit nodes", defaults=(None,))
 # key: hashable, unique, the same from every cell; line (k, 2) frame ENU; kind: "ground", "deck", "tunnel", "rail",
 # "rail_deck"; cls: road class ("rail" for track); kmh: speed limit or None; level: OSM layer of a deck; half: half
-# width (m); limit: the road's signed height limit (m) or None
+# width (m); limit: the road's signed height limit (m) or None; nodes: its road's map nodes (a frozenset of connector
+# ids) or None (not known: a track)
 
 PATHS = {"footway", "path", "cycleway", "pedestrian", "steps", "bridleway", "track"}
 MINOR = {"residential", "service", "unclassified", "living_street", "road"}
@@ -237,7 +238,7 @@ def _line_id(net, i):
     got = ids.get(i)
     if got is None:
         a = np.ascontiguousarray(net.lines[i], np.float64)
-        got = ids[i] = (repr(net.m[i].key), len(a), hash(a.tobytes()))
+        got = ids[i] = (repr(net.m[i].key), len(a), hash(a.tobytes()), net.m[i].nodes)
     return got
 
 
@@ -268,15 +269,21 @@ def _tangent(line, s, sq):
 def _end_meets(net, e, se, o, so, crossed):
     """Whether member e's end (at arc length se) on member o's line (at so) is where they meet: always on o's end, or
     between parts at one level (a T, a ramp onto its road), or a deck merging along another deck at another level
-    (MERGE_DEG) that it does not also cross; not where two structures at different levels touch in plan (a deck's or a
-    tunnel's end over or under another's middle: a separation, not a joint, its clearance kept). crossed: e and o
-    cross each other (a road cannot meet the one it passes over or under a few metres on: Gravelly Hill's level-1 M6
-    deck under its level-3 one at 29 deg, its end 5 m past their crossing)."""
+    (MERGE_DEG) that it does not also cross, or a road on the ground ending on a structure's middle where the map
+    joins them (a node of both); not where two structures at different levels touch in plan (a deck's or a tunnel's
+    end over or under another's middle: a separation, not a joint, its clearance kept), nor a road on the ground
+    ending under a deck's middle (or over a tunnel's) with no node of it: the High Five's secondary leaving its
+    level-1 link's end 0.1 m off the line of a level-4 flyover 20 m over it, taken for that flyover's end on it, ran
+    a 290 m embankment down from the flyover's height along the street, and the street under the next flyover met its
+    deck. crossed: e and o cross each other (a road cannot meet the one it passes over or under a few metres on:
+    Gravelly Hill's level-1 M6 deck under its level-3 one at 29 deg, its end 5 m past their crossing)."""
     me, mo = net.m[e], net.m[o]
-    if min(so, net.L[o] - so) <= JOIN_M or me.kind not in STRUCTURES or mo.kind not in STRUCTURES:
+    if min(so, net.L[o] - so) <= JOIN_M or mo.kind not in STRUCTURES:
         return True
     if _over(me, mo) is None:
         return True
+    if me.kind not in STRUCTURES:
+        return me.nodes is None or mo.nodes is None or bool(me.nodes & mo.nodes)    # (no nodes known: as they lie)
     if me.kind == mo.kind == "deck" and not crossed:
         c = abs(float(_tangent(net.lines[e], net.s[e], se) @ _tangent(net.lines[o], net.s[o], so)))
         return c >= math.cos(math.radians(MERGE_DEG))

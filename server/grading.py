@@ -4410,12 +4410,13 @@ class _Planner:
     def _shape_members(self, k):
         """Cell k's roads and tracks as gradeshapes members (frame ENU), keyed the same from every cell."""
         c = self._cell_enu(k)
+        nodes = self._cell_nodes(k)
         out = []
         gk = c.get("ground_kmh") or [None] * len(c["ground"])
         for (line, half, cls), gid, kmh in zip(c["ground"], c.get("ground_ids", []), gk):
             line = np.asarray(line, np.float64)[:, :2]
             out.append(_gsh.Member((str(gid[0]), "ground", str(gid[1])), line, "ground", cls, kmh, 0.0, float(half),
-                                   None))
+                                   None, nodes.get(str(gid[0]))))
         nb = len(c["bridges"])
         for line, cls, fid, lv, h, kmh in zip(c["bridges"], c.get("bridge_cls", [None] * nb),
                                               c.get("bridge_ids", [None] * nb), c.get("bridge_levels", [1.0] * nb),
@@ -4423,7 +4424,7 @@ class _Planner:
             line = np.asarray(line, np.float64)[:, :2]
             mid = line[len(line) // 2]
             out.append(_gsh.Member((str(fid), "deck", int(round(mid[0])), int(round(mid[1]))), line, "deck",
-                                   cls or "road", kmh, float(lv), float(h), None))
+                                   cls or "road", kmh, float(lv), float(h), None, nodes.get(str(fid))))
         for kind, lines in (("rail", c.get("rail_ground", ())), ("rail_deck", c.get("rail_bridges", ()))):
             for line in lines:
                 line = np.asarray(line, np.float64)[:, :2]
@@ -4457,7 +4458,7 @@ class _Planner:
                     mid = line[len(line) // 2]
                     out.append(_gsh.Member((str(f.ids[i]), "tunnel", int(round(mid[0])), int(round(mid[1]))), line,
                                            "tunnel", rs[i].cls + ("_link" if _is_link(rs[i]) else ""), rs[i].kmh, -1.0,
-                                           float(rs[i].width) / 2, None))
+                                           float(rs[i].width) / 2, None, self._cell_nodes(k).get(str(f.ids[i]))))
         with self.lock:
             if len(memo) > 256:
                 memo.clear()
@@ -4696,14 +4697,28 @@ class _Planner:
         dla, dlo = (lat1 - lat0) * 0.5, (lon1 - lon0) * 0.5
         out = {}
         for k in mapcells.cells_for_bbox(lat0 - dla, lon0 - dlo, lat1 + dla, lon1 + dlo):
-            f = self.md.cell(k, layers=("roads",), kind="demand").layers.get("roads")
-            tab = f.rules.get("connectors") if f is not None and len(f) else None
-            if tab is None:
-                continue
+            for fid, nodes in self._cell_nodes(k).items():
+                out.setdefault(fid, nodes)
+        return out
+
+    def _cell_nodes(self, k):
+        """{road feature id: its map nodes (a frozenset of connector ids)} of cell k's roads, {} without the map's
+        connectors; made once per cell."""
+        memo = self.__dict__.setdefault("_cell_nodes_memo", {})
+        with self.lock:
+            got = memo.get(str(k))
+        if got is not None:
+            return got
+        out = {}
+        f = self.md.cell(k, layers=("roads",), kind="demand").layers.get("roads")
+        tab = f.rules.get("connectors") if f is not None and len(f) else None
+        if tab is not None:
             for i in range(len(f)):
-                fid = str(f.ids[i])
-                if fid not in out:
-                    out[fid] = {str(tab.value[r]) for r in tab.rows(i)}
+                out.setdefault(str(f.ids[i]), frozenset(str(tab.value[r]) for r in tab.rows(i)))
+        with self.lock:
+            if len(memo) > 256:
+                memo.clear()
+            memo[str(k)] = out
         return out
 
     def _road_laws(self, key, plans, specs, bases=None):
