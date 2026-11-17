@@ -3694,7 +3694,9 @@ WIDTH_PLATFORM_X = 1.6      # the road revamp plan's WIDTH repair (section 2.2):
 def _lane_evidence(feats):
     """(n,) int64: the most lanes the map's lane data gives each feature anywhere along it (-1: none): OSM's lanes of its
     way, the lane tags' total and count (lane_count, generated_counts), lanes:forward + backward + both_ways, and each of
-    its lane parts' (LANE_PARTS: a merged highway's sections, 2 here and 4 there, give 4). Remembered on feats."""
+    its lane parts' (LANE_PARTS: a merged highway's sections, 2 here and 4 there, give 4); a lane section split off its
+    road (lanesections.split) the road's own before the split (lanesections.LANE_MAX: the split sets each section's
+    count and clears its parts). Remembered on feats."""
     got = feats.__dict__.get("_lane_evidence")
     if got is not None:
         return got
@@ -3708,7 +3710,8 @@ def _lane_evidence(feats):
         c = roadlanes.count(v)
         if c is not None and c > ev[i]:
             ev[i] = c
-    cols = [a.get(k) for k in ("osm_lanes", railtags.lane_attr("lanes"), "lane_count")]
+    import lanesections
+    cols = [a.get(k) for k in ("osm_lanes", railtags.lane_attr("lanes"), "lane_count", lanesections.LANE_MAX)]
     dirs = [a.get(railtags.lane_attr(k)) for k in ("lanes:forward", "lanes:backward", "lanes:both_ways")]
     gen = roadlanes.generated_counts(feats)
     parts = a.get(railtags.LANE_PARTS)
