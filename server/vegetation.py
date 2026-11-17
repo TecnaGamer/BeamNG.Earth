@@ -141,6 +141,7 @@ EDGE_M = 7.0
 EDGE_CELL_M = 3.0
 EDGE_P = 0.4
 MEM_CELLS = 16
+BUILD_SOON_MAX = 64          # cells build_soon keeps queued (the generated ground's blocks outside the warm-up)
 WARM_M = 1200.0              # cells within this of the player are built ahead (warm_around)
 WC = {"tree": 10, "shrub": 20, "grass": 30, "crop": 40, "built": 50, "bare": 60, "snow": 70,
       "water": 80, "wetland": 90, "mangrove": 95, "moss": 100}
@@ -291,6 +292,7 @@ class Vegetation:
         self._warm_at, self._warm_thread = None, None   # warm_around's latest (lat, lon, radius_m), for the warm thread
         self._warm_cv = threading.Condition()
         self._on_disk = set()           # cells whose file ready() found (the warm thread's: each file checked once)
+        self._soon = OrderedDict()      # build_soon's cells (x, y), oldest first, at most BUILD_SOON_MAX
 
     def cell(self, key):
         """The Items of map-data cell key ((z, x, y) or CellKey)."""
@@ -323,6 +325,25 @@ class Vegetation:
                 self._warm_thread.start()
             self._warm_cv.notify()
 
+    def build_soon(self, key):
+        """Build cell key in the background: the warm thread, after the cells round the player (warm_around), behind
+        the pacer like them. The generated ground's (genground._ask_trees): a block's photo waits for its cells, which
+        the pose's warm-up may never reach. Bounded: BUILD_SOON_MAX, the oldest dropped (asked again after its
+        backoff). True when queued (False: built already)."""
+        if self.ready(key):
+            return False
+        k = (int(key[1]), int(key[2]))
+        with self._warm_cv:
+            if k not in self._soon:
+                self._soon[k] = None
+                while len(self._soon) > BUILD_SOON_MAX:
+                    self._soon.popitem(last=False)
+            if self._warm_thread is None:
+                self._warm_thread = threading.Thread(target=self._warm_loop, daemon=True, name="veg-warm")
+                self._warm_thread.start()
+            self._warm_cv.notify()
+        return True
+
     def _warm_cells(self, lat, lon, radius_m):
         """The cells within radius_m of (lat, lon) not built yet, nearest first (the warm thread's: file checks)."""
         d = radius_m / 111320.0
@@ -339,14 +360,18 @@ class Vegetation:
         while True:
             pacer.hold()                # (a teleport's first block first)
             with self._warm_cv:
-                while not cells and self._warm_at is None:
+                while not cells and self._warm_at is None and not self._soon:
                     self._warm_cv.wait()
                 at, self._warm_at = self._warm_at, None
             if at is not None:          # a newer place: its nearest cells first
                 cells = self._warm_cells(*at)
-                if not cells:
-                    continue
-            x, y = cells.pop(0)
+            if cells:
+                x, y = cells.pop(0)
+            else:                       # (then build_soon's, oldest first)
+                with self._warm_cv:
+                    if not self._soon:
+                        continue
+                    (x, y), _ = self._soon.popitem(last=False)
             try:
                 if self.ready((mapcells.ZOOM, x, y)):
                     continue            # (built before: on disk)

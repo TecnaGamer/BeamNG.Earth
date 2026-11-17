@@ -367,7 +367,7 @@ def data_ready(md, frame, x0, y0, size, surface=None, veg=None, dem=None):
         for k in keys:
             if veg.ready(k) or gave_up(k, TREES_LAYER):
                 continue
-            _ask(k, TREES_LAYER, None)
+            _ask_trees(veg, k)
             ready = ready and gave_up(k, TREES_LAYER)
     return shade_ready(frame, x0, y0, size, keys, dem) and ready
 
@@ -378,6 +378,20 @@ def data_ready(md, frame, x0, y0, size, surface=None, veg=None, dem=None):
 # trees.lua RINGS): nearer it shows more of them, standing on open ground at their edges. A cell not built yet: the
 # canopy's core alone (>= 3 m, no skirt) and the photo is made again once it is (GEN_PENDING, data_ready).
 TREES_LAYER = "trees"
+
+
+def _ask_trees(veg, k):
+    """A vegetation cell the generated ground waits for: built in the background (Vegetation.build_soon: the warm
+    thread, after the player's own cells, a bounded queue) when its backoff allows, so a block outside the pose's
+    warm-up goes final after one redo instead of redoing its photo at every retry until given up (the backstop)."""
+    if not _ask(k, TREES_LAYER, None):
+        return
+    soon = getattr(veg, "build_soon", None)
+    if soon is not None:
+        try:
+            soon(k)
+        except Exception as e:      # (asked again after the backoff)
+            log.debug("genground: trees of %s: build_soon: %s: %s", k, type(e).__name__, e)
 FLOOR_RANK = 0.6
 FLOOR_FADE_M = 2.0
 FLOOR_REACH_M = 12.0            # (a crown's radius at most: the cells round the square whose trees reach into it)
@@ -396,21 +410,25 @@ def tree_floor(frame, x0, y0, size, px, veg, missing):
                                       np.array([y0 - FLOOR_REACH_M, top + FLOOR_REACH_M]), 0.0)
     lat_lo, lat_hi, lon_lo, lon_hi = float(np.min(la)), float(np.max(la)), float(np.min(lo)), float(np.max(lo))
     keys = mapcells.cells_for_bbox(lat_lo, lon_lo, lat_hi, lon_hi)
-    cells = []
+    cells, waiting = [], False
     for k in keys:
         if not veg.ready(k):
             if not gave_up(k, TREES_LAYER):
+                _ask_trees(veg, k)      # (every cell it waits for asked at once)
                 missing.append((k, TREES_LAYER))
-                revisit.fault()
-                return None, 1
+                waiting = True
             continue            # (given up: its trees left out)
+        if waiting:
+            continue
         try:
             cells.append(veg.cell(k))
         except Exception as e:  # (unreadable: as not built)
             log.debug("genground: trees of %s: %s: %s", k, type(e).__name__, e)
             missing.append((k, TREES_LAYER))
-            revisit.fault()
-            return None, 1
+            waiting = True
+    if waiting:
+        revisit.fault()
+        return None, 1
     floor = np.zeros((px, px), np.uint8)
     for it in cells:
         lat_, lon_ = np.asarray(it.lat), np.asarray(it.lon)
