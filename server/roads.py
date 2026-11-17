@@ -10302,7 +10302,11 @@ def _deck_floor_pack(decks):
     ns = [np.asarray(ch["n"], np.float64)[:, :3] for ch in decks]
     pts = np.ascontiguousarray(np.concatenate(ns)) if ns else np.zeros((0, 3))
     starts = np.r_[0, np.cumsum([len(n) for n in ns])].astype(np.int64)
-    reach = np.array([float(ch.get("w") or 0) / 2 + WALL_DECK_REACH_M for ch in decks], np.float64)
+    # (with the opening under a deck kept clear past its sides, grading.UNDER_OPEN_*: as far, so the abutment's wall
+    # stands to its underside there too, not 0.85 m lower in a twin deck's gap, Assaku)
+    import grading
+    far = max(WALL_DECK_REACH_M, grading.UNDER_OPEN_SIDE_M) if grading.UNDER_OPEN_ON else WALL_DECK_REACH_M
+    reach = np.array([float(ch.get("w") or 0) / 2 + far for ch in decks], np.float64)
     pack = (pts, starts, reach)
     _DECK_FLOOR_PACK[0] = (decks, pack)
     return pack
@@ -10421,8 +10425,9 @@ class _Segs:
         self.lo = np.minimum(self.a, self.b)
         self.hi = np.maximum(self.a, self.b)
 
-    def near(self, pts, gap, skip=None):
-        """Which points (k, 2) lie within a segment's half width + gap (its road's fid not skip). Pure."""
+    def near(self, pts, gap, skip=None, ends=None):
+        """Which points (k, 2) lie within a segment's half width + gap (its road's fid not skip); ends (k,) bool: those
+        points only beside a segment, not past its ends (a road's end at a deck: the deck goes on there). Pure."""
         import fast
         pts = np.ascontiguousarray(np.asarray(pts, np.float64))
         if not len(pts) or not len(self.h):
@@ -10435,29 +10440,43 @@ class _Segs:
             keep &= self.road != self.fids.index(skip)
         if not keep.any():
             return np.zeros(len(pts), bool)
+        if ends is not None and np.any(ends):
+            ends = np.asarray(ends, bool)
+            out = self.near(pts[~ends], gap, skip) if (~ends).any() else np.zeros(0, bool)
+            a, b, rr = self.a[keep], self.b[keep], r[keep]
+            q = pts[ends]
+            ab = b - a
+            t = ((q[:, None, :] - a[None]) * ab[None]).sum(2) / np.maximum((ab * ab).sum(1), 1e-12)[None]
+            cr = (q[:, None, 0] - a[None, :, 0]) * ab[None, :, 1] - (q[:, None, 1] - a[None, :, 1]) * ab[None, :, 0]
+            beside = (t >= 0.0) & (t <= 1.0) & (cr * cr <= (rr * rr)[None] * (ab * ab).sum(1)[None])
+            got = np.zeros(len(pts), bool)
+            got[~ends] = out
+            got[ends] = beside.any(axis=1)
+            return got
         fast.require(0, "points_near_segments")
         return np.asarray(fast._ef.points_near_segments(pts, np.ascontiguousarray(self.a[keep]),
                                                         np.ascontiguousarray(self.b[keep]),
                                                         np.ascontiguousarray(r[keep])), bool)
 
 
-def _on_carriageways(pts, others, gap):
+def _on_carriageways(pts, others, gap, ends=None):
     """Which points (k, 2) lie on a carriageway of others {fid: (centreline (m, 2), half width)} or a _Segs of them
-    (+ gap). Pure."""
+    (+ gap); ends (k,) bool: those only beside a segment (_Segs.near). Pure."""
     segs = others if isinstance(others, _Segs) else _Segs(others)
-    return segs.near(pts, gap)
+    return segs.near(pts, gap, ends=ends)
 
 
-def _clear_depth(base, out, depth, others, own):
+def _clear_depth(base, out, depth, others, own, ends=None):
     """Per point of a wall's face line base (k, 2): how far (up to depth (k,)) out from it along out (k, 2) stays off
     every other road's carriageway in others {fid: (centreline (m, 2), half width)} or a _Segs of them (less
-    WALL_OTHER_GAP_M). Pure."""
+    WALL_OTHER_GAP_M); ends (k,) bool: for those points only beside a segment (_Segs.near). Pure."""
     segs = others if isinstance(others, _Segs) else _Segs(others)
     steps = np.arange(0.5, float(np.max(depth)) + 0.51, 0.5)
     q = (base[:, None, :] + out[:, None, :] * steps[None, :, None]).reshape(-1, 2)
     # (its own road too: a hairpin's other leg; the face stands past its own carriageway, so the stretch beside it
     # never hits)
-    hit = segs.near(q, WALL_OTHER_GAP_M).reshape(len(base), len(steps))
+    hit = segs.near(q, WALL_OTHER_GAP_M, ends=None if ends is None else np.repeat(np.asarray(ends, bool), len(steps))
+                    ).reshape(len(base), len(steps))
     first = np.where(hit.any(axis=1), steps[np.argmax(hit, axis=1)] - 0.5, np.inf)
     return np.minimum(np.asarray(depth, np.float64), np.maximum(first, 0.0))
 
@@ -10758,8 +10777,12 @@ def retaining_walls(frame, roads, elev, exact, decks=()):
             floor = np.full(len(xy), np.inf)
             deck_ok = ~_under_decks(xy + out_n * core, z, decks)
         full = _wall_runs(gg - z) & deck_ok & ~bends
+        # (under a deck with its opening kept clear, grading.UNDER_OPEN_*: a road ending at the deck's end, its approach,
+        # does not go on past it over the opening; its carriageway's round end there took Assaku's abutment walls away
+        # and their tops down to nothing)
+        past = np.isfinite(floor) if grading.UNDER_OPEN_ON else None
         # (no face standing on a carriageway: a hairpin's other leg, the same road, the Stelvio Pass 2026-10-21)
-        full &= ~_on_carriageways(xy + out_n * face[:, None], others, 0.0)
+        full &= ~_on_carriageways(xy + out_n * face[:, None], others, 0.0, ends=past)
         # (its ends lowered over WALL_TAPER_M toward the road, the whole wall's ends, not a tile edge's)
         taper = _taper(xy, full)
         cut = full & inside
@@ -10783,7 +10806,8 @@ def retaining_walls(frame, roads, elev, exact, decks=()):
                     continue
                 # (never over another road: a hairpin's wall top covered the road above, the Stelvio Pass, the user's
                 # report 2026-10-21)
-                th = np.minimum(th, _clear_depth(base, out_n[sl], th, others, fid))
+                th = np.minimum(th, _clear_depth(base, out_n[sl], th, others, fid,
+                                                 ends=None if past is None else past[sl]))
                 # (no taller than that; under a deck up to its underside: no slope above the wall there to grade)
                 tp = np.minimum(top_g[sl], z[sl] + np.where(np.isfinite(floor[sl]), floor[sl] - z[sl], max_h)) + WALL_TOP_M
                 tp = z[sl] + WALL_TAPER_LOW_M + (tp - z[sl] - WALL_TAPER_LOW_M).clip(0) * taper[sl]

@@ -1862,6 +1862,36 @@ class RetainingWallTest(unittest.TestCase):
         with mock.patch.object(roads, "WALL_UNDER_DECK_ON", False):
             self.assertFalse(under(walls(18.0)), "off: none under the deck")
 
+    def test_an_approach_ending_at_the_deck_takes_no_wall_away_under_it(self):
+        """Assaku: the trunk's approaches end at its deck's ends, and their carriageways' round ends reached over the
+        opening under the deck: the abutment walls' faces "stood on a carriageway" there and were dropped, the rest of
+        their tops cut to nothing (_clear_depth). Under a deck with its opening kept clear (grading.UNDER_OPEN_ON) a
+        road's carriageway counts beside its segments only. BNE_UNDER_OPEN=off: as before."""
+        import grading
+        rh = roads.carriageway("tertiary", "paved", True, None, False) / 2
+        edge = rh + grading.shoulder(roads.Spec(2 * rh, "paved", False, "tertiary")) + grading.WALL_FLAT_M
+        end = edge + 1.0                    # (the deck's ends: the approaches' round ends reach over the faces)
+        f = features([[(0.0, 0.0), (200.0, 0.0)], [(100.0, end), (100.0, 80.0)], [(100.0, -end), (100.0, -80.0)]],
+                     ["tertiary", "trunk", "trunk"], widths=[(1, 16.0), (2, 16.0)])
+        specs = roads.road_specs(f, None)
+        pts = np.c_[np.arange(0.0, 201.0, 5.0), np.zeros(41), np.full(41, 10.0)]
+        up = np.c_[np.full(2, 100.0), np.array([end, 80.0]), np.full(2, 18.0)]
+        rows = [("r", specs[0], pts, LON), ("a", specs[1], up, LON), ("b", specs[2], up * [1, -1, 1], LON)]
+
+        def elev(la, lo):
+            _e, n, _ = FRAME.geodetic_to_enu(np.asarray(la), np.asarray(lo), np.zeros(np.shape(la)))
+            return 10.0 + np.clip((np.abs(n) - edge) / 0.8, 0.0, 1.0) * 8.0
+        deck = {"n": np.array([[100.0, -end, 18.0], [100.0, end, 18.0]]), "w": 9.0}
+
+        def sides():            # (the sides of the road with a wall under the deck, up to its underside)
+            ws = [w for w in roads.retaining_walls(FRAME, rows, elev, (0.0, -128.0, 256.0, 128.0), decks=[deck])
+                  if "base" in w and float(np.mean(np.abs(w["base"][:, 1]))) < edge + 1.0]
+            return {int(np.sign(y)) for w in ws for (x, y), h in zip(w["base"], w["top"] - w["road_z"])
+                    if abs(x - 100.0) < 4.0 and h > 4.3}
+        self.assertEqual(sides(), {-1, 1}, "the abutment walls on both sides")
+        with mock.patch.object(grading, "UNDER_OPEN_ON", False):
+            self.assertNotEqual(sides(), {-1, 1}, "off: dropped under the approaches' round ends, as before")
+
     def test_walls_under_a_deck_are_concrete_on_a_minor_road_too(self):
         """Assaku's Jarve tee is a minor road: its cutting is walled in stone, but under the deck the wall is the
         abutment's, concrete (the reference photo: sloped concrete walls under the deck)."""

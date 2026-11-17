@@ -479,6 +479,15 @@ UNDER_LIDAR_DECK_M = roadsmod.AT_GRADE_M
 # coarse models (their smeared embankments are wider than that: UNDER_RUN_*).
 UNDER_DECK_ON = os.environ.get("BNE_UNDER_DECK_GROUND", "on") != "off"
 UNDER_DECK_SIDE_M = 15.0    # m past a deck's side the road's ground is read (Assaku's hump: 6-13 m past its decks)
+# ... and the ground beside that road under the deck is the opening's (open_under_decks): inside a deck's footprint, along
+# its line between its ends and within UNDER_OPEN_SIDE_M past its sides, the ground within a crossing road's flat (its
+# core and the band behind its wall, WALL_FLAT_M) is at most that road's height; the abutment wall (roads.retaining_walls)
+# then stands where the ground climbs. The plan's own blend left the hump there: under Tartu mnt's decks at Assaku the
+# ground beside Järve tee rose 3.9-4.9 m within 1-2 m of the core's edge, in front of the walls' faces and up to the
+# deck (a sharp cutting read off the hump at the carriageway's edge, the decks' approach fill reaching past their ends;
+# the user's report 2026-11-16, "soil all over under bridge"). A carriageway is left as its plan grades it.
+UNDER_OPEN_ON = os.environ.get("BNE_UNDER_OPEN", "on") != "off"
+UNDER_OPEN_SIDE_M = 2.0     # m past a deck's sides (its faces' wing walls; a twin deck's gap up to twice this)
 # ... and an overpass's abutment lift reads the road under the same way (bridge_lifts' half, _end_lift_raw): an
 # elevation holding the deck over a cut read the motorway at the deck's height and asked 6.7-8.5 m (GitHub #1077, #1086)
 LIFT_UNDER_BESIDE = os.environ.get("BNE_LIFT_UNDER_BESIDE", "on") != "off"
@@ -5152,6 +5161,17 @@ class _Planner:
             revisit.fault(here=True)
         return out
 
+    def _open_decks(self, keys):
+        """The decks round the cells keys (_decks_near's), each once: open_under_decks'."""
+        out, seen = [], set()
+        for k in keys:
+            for line, half in self._decks_near(k):
+                dk = deck_key(line, half)
+                if dk not in seen:
+                    seen.add(dk)
+                    out.append((line, half))
+        return out
+
     # --- bridges in the elevation (DECK_GROUND_*) ------------------------------------------------------------------
     @staticmethod
     def _deck_rows(c):
@@ -6485,6 +6505,8 @@ class _Planner:
         if not graded:
             return base
         out = grade_points(e, n, base.ravel(), pack, lift) if plans else np.array(base.ravel(), np.float64, copy=True)
+        if UNDER_OPEN_ON and plans:     # (the openings under the decks: open_under_decks)
+            out = open_under_decks(e, n, out, pack, self._open_decks(keys), lift)
         race = self._on_kept(e, n)
         if race is not None:                # (the terrain is a racetrack's surface: GitHub #143, smoothed: #833)
             out[race] = self._raceway_ground(e[race], n[race], base.ravel()[race])
@@ -7320,6 +7342,100 @@ def deck_key(line, half):
     line = np.asarray(line, np.float64)
     return (round(float(line[0, 0]), 1), round(float(line[0, 1]), 1), round(float(line[-1, 0]), 1),
             round(float(line[-1, 1]), 1), len(line), round(float(half), 2))
+
+
+def _crossing_plans(segs, a, b, line):
+    """The plans (pack.of values) of the segments a, b (m, 2) (their plans' segs (m,)) that meet a deck's line (k, 2)
+    more than APPROACH_MIN_CROSS_M from either of its ends: roads passing under it (an approach ends at its end). Pure."""
+    d0, dv = line[:-1], np.diff(line, axis=0)
+    dl = dnp.hypot(*dv.T)
+    arc = np.r_[0.0, np.cumsum(dl)]
+    r = (b - a)[:, None, :]
+    w = d0[None, :, :] - a[:, None, :]
+    den = r[..., 0] * dv[None, :, 1] - r[..., 1] * dv[None, :, 0]
+    ok = np.abs(den) > 1e-12
+    den = np.where(ok, den, 1.0)
+    t = (w[..., 0] * dv[None, :, 1] - w[..., 1] * dv[None, :, 0]) / den      # along the plan's segment
+    u = (w[..., 0] * r[..., 1] - w[..., 1] * r[..., 0]) / den                # along the deck's segment
+    pos = arc[None, :-1] + u * dl[None, :]
+    hit = ok & (t >= 0.0) & (t <= 1.0) & (u >= 0.0) & (u <= 1.0) & (pos > APPROACH_MIN_CROSS_M) \
+        & (pos < arc[-1] - APPROACH_MIN_CROSS_M)
+    return set(segs[hit.any(axis=1)].tolist())
+
+
+def open_under_decks(px, py, z, pack, decks, lift=0.0):
+    """z (n,) at the points (px, py) with the openings under the decks [(line (k, 2), half width)] kept clear
+    (UNDER_OPEN_*): inside a deck's footprint (between its ends, within its half width + UNDER_OPEN_SIDE_M of its line),
+    the ground within the flat of the nearest road crossing under it (pack: the PlanPack; a plan meeting its line more
+    than APPROACH_MIN_CROSS_M from its ends; the flat: its core half width + WALL_FLAT_M) is at most that road's height
+    (+ lift); a point on a carriageway beside its segment (that road's or another's) is left as graded. Lowers only.
+    Pure; z itself when nothing changes."""
+    if not decks or pack is None or not getattr(pack, "n", 0) or not len(z):
+        return z
+    px = np.asarray(px, np.float64)
+    py = np.asarray(py, np.float64)
+    x0, y0, x1, y1 = float(px.min()), float(py.min()), float(px.max()), float(py.max())
+    out = z
+    for line, half in decks:
+        line = np.asarray(line, np.float64)[:, :2]
+        if len(line) < 2 or not half > 0:
+            continue
+        reach = float(half) + UNDER_OPEN_SIDE_M
+        lo, hi = line.min(0) - reach, line.max(0) + reach
+        if hi[0] < x0 or lo[0] > x1 or hi[1] < y0 or lo[1] > y1:
+            continue
+        keep = pack.seg_keep(*(lo - T_MAX), *(hi + T_MAX))
+        if keep is None:
+            continue
+        si = np.flatnonzero(np.asarray(keep, bool))
+        a, b = np.asarray(pack.a, np.float64)[si], np.asarray(pack.b, np.float64)[si]
+        of = np.asarray(pack.of)[si]
+        under = _crossing_plans(of, a, b, line)
+        if not under:               # (most decks: no road under them, the points not tested)
+            continue
+        m = np.flatnonzero((px >= lo[0]) & (px <= hi[0]) & (py >= lo[1]) & (py <= hi[1]))
+        if not len(m):
+            continue
+        q = np.stack([px[m], py[m]], axis=1)
+        # (the footprint: beside one of the deck's segments, not past its ends)
+        dv = np.diff(line, axis=0)
+        l2 = np.maximum((dv * dv).sum(1), 1e-12)
+        w = q[:, None, :] - line[None, :-1, :]
+        tt = (w * dv[None]).sum(2) / l2[None]
+        cr = w[..., 0] * dv[None, :, 1] - w[..., 1] * dv[None, :, 0]
+        inside = ((tt >= 0.0) & (tt <= 1.0) & (cr * cr <= (reach * reach) * l2[None])).any(axis=1)
+        if not inside.any():
+            continue
+        m, q = m[inside], q[inside]
+        # every plan segment near: distance, height at the nearest point, beside it (not past its ends)
+        ab = b - a
+        L2 = np.maximum((ab * ab).sum(1), 1e-12)
+        t = ((q[:, None, :] - a[None]) * ab[None]).sum(2) / L2[None]
+        tc = np.clip(t, 0.0, 1.0)
+        dx = a[None, :, 0] + tc * ab[None, :, 0] - q[:, None, 0]
+        dy = a[None, :, 1] + tc * ab[None, :, 1] - q[:, None, 1]
+        d = dnp.hypot(dx, dy)
+        za, zb = np.asarray(pack.za, np.float64)[si], np.asarray(pack.zb, np.float64)[si]
+        tz = za[None] + (zb - za)[None] * tc + lift
+        h, rh = np.asarray(pack.h, np.float64)[si], np.asarray(pack.rh, np.float64)[si]
+        cross = np.isin(of, list(under))
+        dc = np.where(cross[None], d, np.inf)
+        k = np.argmin(dc, axis=1)
+        r_ = np.arange(len(q))
+        flat = dc[r_, k] <= h[k] + WALL_FLAT_M
+        if not flat.any():
+            continue
+        # (a carriageway beside its segment, the road's own or another's, is left as its plan grades it)
+        on = ((d <= rh[None]) & (t >= 0.0) & (t <= 1.0)).any(axis=1)
+        cap = tz[r_, k]
+        zz = np.asarray(out, np.float64)[m]
+        low = flat & ~on & (cap < zz)
+        if not low.any():
+            continue
+        if out is z:
+            out = np.array(z, np.float64, copy=True)
+        out[m[low]] = cap[low]
+    return out
 
 
 def ground_under_deck(deck, half, crossings, z_at):
