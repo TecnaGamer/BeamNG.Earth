@@ -55,7 +55,8 @@ class WidthRepair(unittest.TestCase):
         6-lane motorway carriageway, a two-way road mapped one lane (unstriped) at 6.7 m: the mapped width kept."""
         for cls, w, lanes, ow in (("trunk", 13.5, 2, False), ("tertiary", 14.5, 2, False), ("primary", 20.0, 4, False),
                                   ("motorway", 27.0, 6, True), ("residential", 6.7, 1, False),
-                                  ("motorway", 16.0, None, True)):
+                                  ("motorway", 16.0, None, True), ("motorway", 26.0, None, False),
+                                  ("motorway", 24.0, None, True), ("primary", 25.0, None, False)):
             with self.subTest(cls=cls, w=w):
                 rule, osm, _ = kept(layer(cls, width=w, osm_width=w, lanes=lanes, oneway=ow))
                 self.assertTrue(rule)
@@ -90,9 +91,21 @@ class WidthRepair(unittest.TestCase):
         parts = [(0.0, 0.5, 1.0, {"lanes": "2"}), (0.5, 1.0, 1.0, {"lanes": "4"})]
         rule, osm, _ = kept(layer("trunk", width=22.0, osm_width=22.0, lanes=2, oneway=True, parts=parts))
         self.assertTrue(rule and osm)
-        rule, osm, _ = kept(layer("trunk", width=22.0, osm_width=22.0, lanes=2, oneway=True,
+        rule, osm, _ = kept(layer("trunk", width=25.0, osm_width=25.0, lanes=2,
+                                  parts=[(0.0, 0.5, 1.0, {"lanes": "2"}), (0.5, 1.0, 1.0, {"lanes": "4"})]))
+        self.assertTrue(rule and osm, "a two-way road: its 4-lane part's lanes count")
+        rule, osm, _ = kept(layer("trunk", width=25.0, osm_width=25.0, lanes=2,
                                   parts=[(0.0, 1.0, 1.0, {"lanes": "2"})]))
         self.assertFalse(rule or osm, "two lanes all along: a right-of-way")
+
+    def test_a_one_way_carriageway_keeps_its_width(self):
+        """A divided road's carriageway is mapped as wide as its roadway or boulevard, and the pairing caps it to the
+        gap to its twin already: Boston's Storrow Drive (21.3 m, 2 lanes) and Commonwealth Avenue (59.1 m) MassGIS
+        widths are kept (judged against their own lanes the decks round them got steeper, drivability)."""
+        for cls, w, lanes in (("motorway", 21.3, 2), ("primary", 59.1, 2), ("trunk", 22.0, 2)):
+            with self.subTest(cls=cls, w=w):
+                rule, osm, _ = kept(layer(cls, width=w, osm_width=w, lanes=lanes, oneway=True))
+                self.assertTrue(rule and osm)
 
     def test_lanes_forward_and_backward_count(self):
         parts = [(0.0, 1.0, 1.0, {"lanes:forward": "3", "lanes:backward": "3"})]
@@ -101,12 +114,12 @@ class WidthRepair(unittest.TestCase):
 
     def test_every_copy_decides_as_its_home_copy(self):
         """Two cells' copies of one segment, the home copy's way tagged 4 lanes, the other copy's cell without that
-        way's tags (2 lanes by the trunk default): both keep a 22 m width; and the reverse: both take it out."""
+        way's tags (2 lanes by the trunk default): both keep a 25 m width; and the reverse: both take it out."""
         line = [(0, 0), (1500, 0)]
         for home_lanes, other_lanes, keep in ((4, None, True), (None, 4, False), (2, 4, False), (4, 2, True)):
             with self.subTest(home=home_lanes, other=other_lanes):
-                home = layer("trunk", width=22.0, lanes=home_lanes, oneway=True, line=line)
-                other = layer("trunk", width=22.0, lanes=other_lanes, oneway=True, line=line)
+                home = layer("trunk", width=25.0, lanes=home_lanes, line=line)
+                other = layer("trunk", width=25.0, lanes=other_lanes, line=line)
                 home_key = str(roads._home_cells(home)[0])
                 home.__dict__["_bnge_cell"] = (home_key, "roads", "{}")
                 other.__dict__["_bnge_cell"] = ("14/0/0", "roads", "{}")
@@ -130,14 +143,13 @@ class WidthRepair(unittest.TestCase):
             self.assertIsNotNone(roads.mapped_rule_width(g, i), i)
             self.assertIsNotNone(roads.mapped_osm_width(g, i), i)
             self.assertAlmostEqual(roads.road_specs(g)[i].width, 22.0, places=4)
-        # (two lanes all along: no sections, and the 22 m is a right-of-way)
-        two = layer("trunk", width=22.0, lanes=2, oneway=True, line=[(0, 0), (600, 0)],
-                    parts=[(0.0, 0.5, 11, {"lanes": "2"}), (0.5, 1.0, 12, {"lanes": "2"})])
-        h = lanesections.split(two)
-        self.assertTrue(all(roads.mapped_rule_width(h, i) is None for i in range(len(h))))
+        # (the sections' evidence as the road's: a two-way road's width judged on the split layer as on the whole)
+        f2 = layer("trunk", width=25.0, lanes=2, line=[(0, 0), (600, 0)],
+                   parts=[(0.0, 0.5, 11, {"lanes": "2"}), (0.5, 1.0, 12, {"lanes": "4"})])
+        self.assertIsNotNone(roads.mapped_rule_width(lanesections.split(f2), 0))
 
     def test_a_layer_without_the_home_cell_at_hand_decides_on_its_own(self):
-        f = layer("trunk", width=22.0, lanes=4, oneway=True)
+        f = layer("trunk", width=25.0, lanes=4)
         f.__dict__["_bnge_cell"] = ("14/0/0", "roads", "{}")
         f.__dict__["_bnge_neighbours"] = lambda: []
         self.assertTrue(kept(f)[0])

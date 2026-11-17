@@ -3682,6 +3682,7 @@ def _road_rules():
     return got
 
 
+WIDTH_REPAIR_ON = os.environ.get("BNE_WIDTH_REPAIR", "on") != "off"     # (off: every mapped width stands, as before)
 WIDTH_PLATFORM_X = 1.6      # the road revamp plan's WIDTH repair (section 2.2): a mapped width wider than this times
                             # the lanes' width (a two-way road two lanes at least) and a SHOULDER_M each side is a
                             # right-of-way / platform, not the carriageway: MA Route 2, a two-lane rural trunk mapped
@@ -3744,8 +3745,10 @@ def width_rejected(feats):
     lanes' width, two lanes at least on a two-way road, and a SHOULDER_M each side). The lanes: the most any of the
     map's lane data gives the road anywhere along it (_lane_evidence: a merged highway's widest section keeps its
     width), read from its home cell's copy where that is at hand (home_copy: every copy of a segment round its home
-    decides alike, whichever lane tags its own cell joined), else its own; none on a motorway / trunk 2, on a link 1 / 2,
-    on any other road no test (a wide street without a lanes tag keeps its width). Only a width wider than the fewest
+    decides alike, whichever lane tags its own cell joined), else its own; with none anywhere only a trunk (not a link)
+    is tested, as two lanes: a motorway, a link or any other road without lane data keeps its width (one carriageway of
+    a big motorway carries 5-6 lanes; a wide street has no lanes tag). A one-way carriageway keeps its width (a divided
+    road's is mapped as wide as its roadway, and the pairing caps it, dual_cap). Only a width wider than the fewest
     lanes allow asks for the home copy. Never in place: the readers of a mapped width ask width_table / mapped_osm_width.
     Remembered on feats. MA Route 2's 30.5 m and 18.3 m (100 ft / 60 ft rights-of-way) on a two-lane trunk, GitHub
     #901."""
@@ -3757,7 +3760,7 @@ def width_rejected(feats):
     nw = len(wt.feature) if wt is not None else 0
     out = (np.zeros(nw, bool), np.zeros(n, bool))
     ow = feats.attrs.get("osm_width")
-    if not n or (not nw and ow is None):
+    if not n or (not nw and ow is None) or not WIDTH_REPAIR_ON:
         feats.__dict__["_width_rejected"] = out
         return out
     import fast
@@ -3797,6 +3800,19 @@ def width_rejected(feats):
     for i in np.flatnonzero(maybe).tolist():
         h = home_copy(feats, i)
         lanes[i] = int(_lane_evidence(h[0])[h[1]]) if h is not None else int(own[i])
+    # (no lane data anywhere on the road: only a trunk is tested, as two lanes (MA Route 2's copies without its lanes
+    # tag); a motorway or a link without lane data keeps its mapped width: one carriageway of a big motorway carries
+    # 5-6 lanes, and the kernel's guess of 2 took a 24-26 m motorway's width away, gate batch185)
+    guess = np.fromiter((c == "trunk" for c in cls_s), bool, n) & ~link
+    maybe &= (lanes > 0) | guess
+    # (a one-way carriageway keeps its mapped width: a divided road's carriageway is mapped as wide as the roadway or
+    # boulevard, and the pairing already caps it to the gap to its twin (dual_cap). Judged against its own lanes,
+    # Boston's Storrow Drive and Commonwealth Avenue carriageways (21-59 m MassGIS widths) narrowed under the Bowker
+    # Overpass and Mass Ave and their decks' approaches got steeper: drivability, gate batch185)
+    maybe &= ~oneway.astype(bool)
+    if not maybe.any():
+        feats.__dict__["_width_rejected"] = out
+        return out
     res = []
     for f_, v_ in srcs:
         bad = np.asarray(rr.width_rejects(cls, oneway, link, lanes, f_, v_, WIDTH_PLATFORM_X), bool)
