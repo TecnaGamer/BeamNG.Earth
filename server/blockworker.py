@@ -3926,18 +3926,26 @@ def _accounted(fn):
             now = time.monotonic()
             if now - _cpu_logged[0] >= CPU_LOG_S:
                 _cpu_logged[0] = now
-                shared = [g.shared.stats for g in list(getattr(_s, "graders", {}).values())
-                          if g is not None and g.shared is not None]
-                if os.environ.get("BNGE_DEM_STATS") and getattr(_s, "dem", None) is not None:
-                    # (measuring the decoded DEM mirror: its tiles written here vs the decodes it saved here)
-                    st = getattr(_s.dem, "stats", {}) or {}
-                    log.info("worker %d dem: %s", os.getpid(), {k: v for k, v in st.items() if k.startswith("dem:")})
-                log.debug("worker %d cpu: %s%s", os.getpid(),
-                          ", ".join(f"{k} {v[0]} jobs {v[1]:.1f} s" for k, v in sorted(_cpu.items())),
-                          "; shared road plans " + ", ".join(f"{k} {sum(st[k] for st in shared):.0f}"
-                                                             for k in ("read", "written", "waited", "wait_s"))
-                          if shared else "")
+                try:
+                    _log_cpu()
+                except Exception as e:     # (a log line never fails the job it follows: a test's stand-in state, 2026-11-16)
+                    log.debug("worker cpu log: %s", e)
     return run
+
+
+def _log_cpu():
+    """The periodic per-worker CPU line (_accounted)."""
+    shared = [g.shared.stats for g in list(getattr(_s, "graders", {}).values())
+              if g is not None and g.shared is not None]
+    if os.environ.get("BNGE_DEM_STATS") and getattr(_s, "dem", None) is not None:
+        # (measuring the decoded DEM mirror: its tiles written here vs the decodes it saved here)
+        st = getattr(_s.dem, "stats", {}) or {}
+        log.info("worker %d dem: %s", os.getpid(), {k: v for k, v in st.items() if k.startswith("dem:")})
+    log.debug("worker %d cpu: %s%s", os.getpid(),
+              ", ".join(f"{k} {v[0]} jobs {v[1]:.1f} s" for k, v in sorted(_cpu.items())),
+              "; shared road plans " + ", ".join(f"{k} {sum(st[k] for st in shared):.0f}"
+                                                 for k in ("read", "written", "waited", "wait_s"))
+              if shared else "")
 
 
 build = _accounted(build)
