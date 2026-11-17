@@ -6523,6 +6523,8 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 373: deck_trim_overlaps(..., params[4] = TRIM_ALONG_COS): only another deck running along a deck trims it, not
     // one crossing it (a hole across the B 254's deck over a track's at Trutzhain; PR #1397, first numbered 310)
     // 374: membudget's map data clamp 160-384 MB (384 at the 24 GB cap; PR #1325)
-    m.add("VERSION", 374)?;
+    // 376 (first numbered 374): RoadRules.width_rejects (roads.width_repair: a mapped width wider than its lanes'
+    // platform is a right-of-way, not the carriageway; the road revamp's WIDTH repair, MA Route 2 GitHub #901)
+    m.add("VERSION", 376)?;
     Ok(())
 }
