@@ -5375,7 +5375,8 @@ class Server:
         info = self.hm.get(key)
         if info is not None and info.get("base"):
             return                              # (its own photo came while this waited its turn)
-        name = self._quick_once(anchor, cx, cy, lambda: self._quick_elsewhere(anchor, cx, cy, LANE_PREFETCH)
+        name = self._quick_once(anchor, cx, cy, lambda: self._quick_elsewhere(anchor, cx, cy, LANE_PREFETCH,
+                                                                              self.photo_pool)
                                 or self.write_quick_base(anchor, cx, cy))
         conns = [c for c in list(self.connections) if getattr(c, "loop", None) is not None]
         if not name or not conns:
@@ -5503,8 +5504,17 @@ class Server:
         tex = {"chain": [s_.name for s_ in im.chain], "tone": self.tone, "leaf_on": im.leaf_on,
                "season_mode": im.season_mode}
         t0 = time.perf_counter()
+        # (of the photo process and the lane's, the one with fewer jobs a process: a stand-in is 0.4 s of work, and in
+        # the photo process alone it stood in line behind the photos, which wait for their imagery: 240 stand-ins at a
+        # median of 9.1 s on a 16 min drive at up to 327 km/h, that process at 0.1 of a core, 2026-11-17)
+        lane_pool = self.block_pools[lane][0]
+
+        def load(p):
+            return getattr(p, "inflight", 0) / max(1, getattr(p, "workers", 1) or 1)
+        if pool is None or (pool is not lane_pool and load(lane_pool) < load(pool)):
+            pool = lane_pool
         try:
-            got = (pool or self.block_pools[lane][0]).submit(
+            got = pool.submit(
                 blockworker.base_photo, anchor.lat, anchor.lon, cx - size / 2 - BASE_SHIFT_M,
                 cy - size / 2 - BASE_SHIFT_M, size, QUICK_BASE_PX, tex, False, anchor.zooms[0],
                 os.path.join(self.out_dir, name), (self.user_dir, f"{self.vfs_dir}/{name}", base_ao_vfs(self.base_px),
@@ -5515,7 +5525,8 @@ class Server:
         if got is None:
             log.info("quick base photo %s: not in the block process (an imagery tile not on disk)", key)
             return None
-        log.info("quick base photo %s in the block process in %.2f s", key, time.perf_counter() - t0)
+        log.info("quick base photo %s in the %s process in %.2f s", key, "block" if pool is lane_pool else "photo",
+                 time.perf_counter() - t0)
         return name
 
     def write_ground_base(self, anchor, cx, cy, info):
