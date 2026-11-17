@@ -6135,6 +6135,24 @@ class _Planner:
             if not touches and not under:
                 others.append((line, half))
 
+        if FAST_DECK_GROUND:
+            # (and a motorway's or trunk's own deck beside it, of its chain or not, unless this is one: nothing lifts
+            # the ground under a fast deck. A link leaving the A7's deck at the B 286 (Schweinfurt) had its abutment
+            # raised 4.3 m beside the motorway's deck it forks from, and the motorway's last 6 m stood on that fill)
+            bi0 = hc["end_of"][int(hit[0])]
+            if (hc.get("bridge_cls") or [None] * len(hc["bridges"]))[bi0] not in APPROACH_SKIP:
+                seen_b = set()
+                for c in cs:
+                    for b, bc, bh in zip(c["bridges"], c.get("bridge_cls") or [None] * len(c["bridges"]),
+                                         c.get("bridge_half") or [4.0] * len(c["bridges"])):
+                        kb = (round(float(b[0, 0]), 1), round(float(b[0, 1]), 1), len(b))
+                        if bc not in APPROACH_SKIP or len(b) < 2 or b is bridge or kb in seen_b:
+                            continue
+                        if (b[:, :2].max(0) < lo_b).any() or (b[:, :2].min(0) > hi_b).any():
+                            continue
+                        seen_b.add(kb)
+                        others.append((np.asarray(b, np.float64)[:, :2], float(bh)))
+
         # (the tracks near it: crossed under like a road, never an approach or a road beside the ramp)
         rails = [c["rail_ground"][n_] for c in cs for n_ in
                  np.flatnonzero(_boxes_meet(c["rail_ground_box"], lo_b, hi_b)).tolist()]
