@@ -45,6 +45,10 @@ pub const STEEP: u8 = 1;
 /// blend it stepped down to the section's held carriageway at its edge (Kennedybruecke in Vienna: a bus lane over the
 /// open "Unterfahrung" stepped 1.2 m, GitHub #1169).
 pub const OPEN_TUNNEL: u8 = 2;
+/// ... and any tunnel part's section held in the open (Plan.tunnel_section: a trench, covered or not). Past its painted
+/// edge a road running beside it keeps its own ground, whatever the rank gap: a street along the top of a trench is
+/// on the ground beside it, not on the trench's floor. A road crossing it still eases onto it (the cross fade below)
+pub const TUNNEL: u8 = 4;
 /// the steepest a segment's line is carried on past its end (extrap): steeper than any road's grade; a steeper
 /// segment (a step held in a plan over a few cm) is carried on at this
 pub const EXTRAP_MAX_GRADE: f64 = 0.35;
@@ -76,7 +80,7 @@ struct Seg {
     len: f64,       // l2.sqrt()
     ext: f64,       // extrap / len
     za: f64, zb: f64, h: f64, rh: f64, rid: i64, rk: i64,
-    abut: bool, steep: bool, open: bool, link: u8, banked: bool, has_cut: bool, cut_reach: f64, ba: f64, bb: f64,
+    abut: bool, steep: bool, open: bool, tun: bool, link: u8, banked: bool, has_cut: bool, cut_reach: f64, ba: f64, bb: f64,
     cut: [f64; 6], da: f64, db: f64, far0: f64, far0_base: f64,
 }
 
@@ -97,7 +101,7 @@ fn prep(s: &Segs, i: usize, p: &Prm) -> Seg {
     let l2 = abx * abx + aby * aby;
     Seg {
         ax, ay, abx, aby, l2, lox: ax.min(bx), hix: ax.max(bx), loy: ay.min(by), hiy: ay.max(by), len: l2.sqrt(), ext: p.extrap / l2.sqrt(), za: s.za[i], zb: s.zb[i], h, rh, rid: s.rid[i], rk,
-        abut: s.abut[i] != 0, steep: s.steep[i] & STEEP != 0, open: s.steep[i] & OPEN_TUNNEL != 0,
+        abut: s.abut[i] != 0, steep: s.steep[i] & STEEP != 0, open: s.steep[i] & OPEN_TUNNEL != 0, tun: s.steep[i] & TUNNEL != 0,
         link: s.link[i], banked: s.ba[i] != 0.0 || s.bb[i] != 0.0,
         has_cut, cut_reach, ba: s.ba[i], bb: s.bb[i], cut, da: s.abut_d[[i, 0]], db: s.abut_d[[i, 1]], far0, far0_base,
     }
@@ -139,6 +143,8 @@ pub struct Pt {
     hdeep: f64, hrank: i64, hrank2: i64, hid: i64, hz: f64, hyield: f64, hcar: bool, hdx: f64, hdy: f64,
     // (rank) that road is a tunnel's open section (OPEN_TUNNEL)
     hopen: bool,
+    // (rank) that road is a tunnel's section in the open (TUNNEL)
+    htun: bool,
 }
 
 impl Pt {
@@ -148,7 +154,7 @@ impl Pt {
             num: 0.0, den: 0.0, wmax: 0.0, top: f64::NEG_INFINITY, cmax: 0.0, csum: 0.0, cz: 0.0,
             raised: f64::NEG_INFINITY, bs: base, beff: base, cdeep: 0.0, carz: f64::NAN, carid: -1, bdeep: 0.0,
             bz: f64::NAN, bid: -1, hdeep: f64::INFINITY, hrank: i64::MIN, hrank2: i64::MIN, hid: -1, hz: f64::NAN,
-            hyield: 0.0, hcar: false, hdx: 0.0, hdy: 0.0, hopen: false,
+            hyield: 0.0, hcar: false, hdx: 0.0, hdy: 0.0, hopen: false, htun: false,
         }
     }
 
@@ -366,6 +372,7 @@ fn pair0(st: &mut Pt, g: &Seg, q: &Pre, p: &Prm) {
         st.hyield = 1.0 - smooth(((d - g.rh) / reach).clamp(0.0, 1.0));
         st.hcar = d <= g.rh;
         st.hopen = g.open;
+        st.htun = g.tun;
         st.hdx = g.abx / g.len.max(1e-9);       // (its direction there: the side ease below)
         st.hdy = g.aby / g.len.max(1e-9);
     }
@@ -492,7 +499,10 @@ fn pair1(st: &mut Pt, g: &Seg, q: &Pre, p: &Prm, far1: f64) {
         // (a tunnel's open section only: a road crossing it, mapped over the tunnel, eases onto it whatever the class
         // gap; one running beside it, a street along the top of its trench, keeps its own ground: a residential street
         // over the A23's cover beside its portal stepped 1.2 m at the cover's edge, eased down to the open section)
-        let cross = if ranked { 1.0 } else {
+        // A tunnel's section in the open, covered or not, the same past its painted edge for a road within the rank gap:
+        // a street running along the top of the trench was eased 2-3 m down onto its floor, its kerb and the trucks
+        // on it into the trench's wall (TUNNEL)
+        let cross = if ranked && (!st.htun || st.hcar) { 1.0 } else {
             let c = ((g.abx * st.hdx + g.aby * st.hdy) / g.len.max(1e-9)).abs();
             1.0 - smooth((c - 0.5) / (0.866 - 0.5))
         };
