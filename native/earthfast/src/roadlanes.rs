@@ -163,7 +163,7 @@ fn str_rows<'a>(a: &'a numpy::ndarray::ArrayView2<u32>, what: &str) -> PyResult<
     }
 }
 
-/// Per feature: roadlanes.generated_counts before rampoverrides (-1: None). base, total, fwd, bwd, both: the attrs
+/// Per feature: roadlanes.generated_counts (-1: None). base, total, fwd, bwd, both: the attrs
 /// columns lane_count (else osm_lanes), osm_lane_total, osm_lanes_forward, osm_lanes_backward, osm_lanes_both_ways
 /// (None: absent); oneway / oneway_has: the oneway rule's major value per feature and whether it has one; eligible:
 /// a motorway / trunk, not a ramp nor a roundabout; hw: its class code (1 motorway, 2 trunk); the layer's geometry

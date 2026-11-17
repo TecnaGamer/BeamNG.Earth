@@ -2314,6 +2314,18 @@ TAPER_M = (15.0, 90.0)          # m: a taper's length at the least and most ...
 TAPER_SHARE = 0.45              # ... and at most this share of the road's length (a taper at each end)
 TAPER_MIN_DW = 0.4              # m of width change that tapers
 TAPER_MAX_TURN = 35.0           # degrees between two roads' directions at a joint: one going on as the other
+# Speed tapers (the road revamp's R1, 2026-11-16; plan §2.3): a taper as long as the standards ask at the road's design
+# speed (earthfast tapers::speed_taper_m: MUTCD's W·V·min(V/155, 0.62), at least the length that keeps the quintic
+# shape's lateral acceleration at 0.5 m/s², 20-400 m; a 3.6 m lane 54 m at 30 km/h, 125 m at 70, 268 m at 120 km/h,
+# against 43 m at any speed before), its width change on its own side (half at a joint of two roads, all of it at a
+# deck's end), TAPER_SHARE of the road at most; the distance measured along the road, not in a straight line from the
+# joint, and the width eased by the quintic smootherstep (curvature continuous at both ends); the graded core widened
+# with it on every road, not only on lane sections. Off by default until reviewed in game (then on with a PLANS_FORMAT
+# bump); BNE_SPEED_TAPERS=on.
+SPEED_TAPERS = os.environ.get("BNE_SPEED_TAPERS", "off") == "on"
+# class -> its rank for tapers::design_speed_kmh (0 motorway ... 6 service / track; any other: 5)
+_SPEED_RANK = {"motorway": 0, "trunk": 1, "primary": 2, "secondary": 3, "tertiary": 4, "unclassified": 5,
+               "residential": 5, "living_street": 5, "service": 6, "track": 6, "unknown": 5}
 
 
 def road_tapers(feats, urban_fn=None, widths=None, left_hand=False):
@@ -2343,7 +2355,7 @@ def road_tapers(feats, urban_fn=None, widths=None, left_hand=False):
 def _tapers(feats, specs, decks=False):
     """road_tapers' kernel (earthfast.road_tapers): the per-road rows marshalled, the joints found in Rust."""
     import fast
-    fast.require(120 if decks else 117, "road_tapers")
+    fast.require(341, "road_tapers (speed tapers)")
     n = len(feats)
     out = [()] * n
     bridge = bridge_specs(feats)
@@ -2354,7 +2366,7 @@ def _tapers(feats, specs, decks=False):
     off = np.zeros(n + 1, np.int64)
     off[1:] = np.cumsum(stops - starts)
     lonlat = np.concatenate([feats.lonlat[a:b] for a, b in zip(starts, stops)]) if off[-1] else np.zeros((0, 2))
-    attrs = np.full((n, 5), np.nan)
+    attrs = np.full((n, 9 if SPEED_TAPERS else 5), np.nan)
     codes, own = {}, []
     for i, sp in enumerate(specs):
         bs = bridge[i]
@@ -2363,6 +2375,12 @@ def _tapers(feats, specs, decks=False):
             continue
         cls = (sp or bs).cls
         attrs[i, 1] = codes.setdefault(cls, len(codes))
+        if SPEED_TAPERS:                        # (tapers::design_speed_kmh's inputs)
+            ref = sp or bs
+            attrs[i, 5] = np.nan if ref.kmh is None else float(ref.kmh)
+            attrs[i, 6] = float(_SPEED_RANK.get(cls, 5))
+            attrs[i, 7] = 1.0 if ref.urban else 0.0
+            attrs[i, 8] = 1.0 if ref.link else 0.0
         attrs[i, 2:4] = 0.0
         if sp is not None:
             attrs[i, 0] = sp.width
@@ -2376,13 +2394,18 @@ def _tapers(feats, specs, decks=False):
                 if b0 >= 1 - 1e-3:
                     attrs[i, 3] = 1.0
                 own.extend((i, f) for f in (a0, b0) if 1e-3 < f < 1 - 1e-3)
-    rows = fast._ef.road_tapers(np.ascontiguousarray(lonlat, np.float64), off, attrs,
-                                np.asarray(own, np.float64).reshape(-1, 2),
-                                np.array([TAPER_M_PER_M, TAPER_M[0], TAPER_M[1], TAPER_SHARE, TAPER_MIN_DW,
-                                          TAPER_MAX_TURN] + ([1.0] if decks else []), np.float64))
+    rows, line_off, line_ll, s_joint = fast._ef.road_tapers(
+        np.ascontiguousarray(lonlat, np.float64), off, attrs, np.asarray(own, np.float64).reshape(-1, 2),
+        np.array([TAPER_M_PER_M, TAPER_M[0], TAPER_M[1], TAPER_SHARE, TAPER_MIN_DW, TAPER_MAX_TURN]
+                 + ([1.0 if decks else 0.0, 1.0] if SPEED_TAPERS else [1.0] if decks else []), np.float64))
     got = {}
-    for r in np.asarray(rows):
-        got.setdefault(int(r[0]), []).append((float(r[1]), float(r[2]), float(r[3]), float(r[4])))
+    for k, r in enumerate(np.asarray(rows)):
+        t = (float(r[1]), float(r[2]), float(r[3]), float(r[4]))
+        if SPEED_TAPERS:                        # (its stretch of the road's line: taper_widths along the road)
+            # (as tuples: taper rows compare and hash like the plain ones)
+            t += ((tuple(map(tuple, np.asarray(line_ll[line_off[k]:line_off[k + 1]], np.float64).tolist())),
+                   float(s_joint[k])),)
+        got.setdefault(int(r[0]), []).append(t)
     for i, t in got.items():
         out[i] = tuple(t)
     return _section_tapers(feats, specs, bridge, out)
@@ -2502,7 +2525,24 @@ def taper_widths(width, tapers, lon, lat):
         return None
     lon, lat = np.asarray(lon, np.float64), np.asarray(lat, np.float64)
     out, hit = np.full(lon.shape, float(width)), False
-    for tlon, tlat, target, span in tapers:
+    along = [t for t in tapers if len(t) > 4]   # (speed tapers: SPEED_TAPERS, along the road, quintic: in Rust)
+    if along:
+        import fast
+        fast.require(341, "taper_widths_along")
+        rows = np.array([[t[2], t[3], t[4][1], t[1]] for t in along], np.float64)
+        lines = [np.asarray(t[4][0], np.float64).reshape(-1, 2) for t in along]
+        off = np.zeros(len(lines) + 1, np.int64)
+        off[1:] = np.cumsum([len(x) for x in lines])
+        flat = np.ascontiguousarray(lon.ravel()), np.ascontiguousarray(lat.ravel())
+        w, any_hit = fast._ef.taper_widths_along(float(width), rows, off, np.ascontiguousarray(np.concatenate(lines)),
+                                                 *flat)
+        if any_hit:
+            hit = True
+            out = out + (np.asarray(w).reshape(lon.shape) - float(width))
+    for t in tapers:
+        if len(t) > 4:
+            continue
+        tlon, tlat, target, span = t
         d = dnp.hypot((lon - tlon) * 111320.0 * dmath.cos(math.radians(tlat)), (lat - tlat) * 110540.0)
         near = d < span
         if span > 0 and near.any():
@@ -3155,7 +3195,8 @@ class Placement:
         out, done = [], set()
         tapers = joint_desc(self.copies.get(fid, [(f, i)]),
                             deck_tapers if deck else (lambda g: road_tapers(g, *self.args)))
-        for tlon, tlat, _w, span in tapers or ():
+        for t in tapers or ():
+            tlon, tlat, _w, span = t[:4]
             k = _end_key(tlon, tlat)
             e = next((e for e in mine if ends[e] == k), None)
             if e is None:

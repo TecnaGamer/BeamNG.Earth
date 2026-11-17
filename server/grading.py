@@ -2712,7 +2712,9 @@ class _Planner:
                     p.rid = road_id(fid)
                     import lanesections
                     fi = feats.index(fid)
-                    if fi >= 0 and lanesections.profile(feats, fi):
+                    # (the graded core follows the tapers: a lane section's, and with the speed tapers every
+                    # road's, roads.SPEED_TAPERS)
+                    if fi >= 0 and (roadsmod.SPEED_TAPERS or lanesections.profile(feats, fi)):
                         la, lo, _ = self.frame.enu_to_geodetic(p.xy[:, 0], p.xy[:, 1], 0.)
                         tp = roadsmod.road_tapers(feats, None, self.widths)[fi]
                         ws = roadsmod.taper_widths(part[1].width, tp, lo, la)
