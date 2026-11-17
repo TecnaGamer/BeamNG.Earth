@@ -81,6 +81,13 @@ def item_id(code, key):
     return hashlib.sha1(f"{code}|{key}".encode()).hexdigest()
 
 
+def share_weight():
+    """This machine's capacity for its group (the plugin's owner choice): its CPU threads, half on the small profile.
+    (Moved from compute sharing v1's peerwork.py, 2026-11-16: the same number.)"""
+    import budget
+    return round((os.cpu_count() or 4) * (0.5 if budget.small_machine() else 1.0), 1)
+
+
 def share_code(parts):
     """A hash of an app's sharing parts (formats, map data versions, settings): its share code (the log, the relay)."""
     return hashlib.sha1(json.dumps(parts, sort_keys=True, default=str).encode()).hexdigest()[:16]

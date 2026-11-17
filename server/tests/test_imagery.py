@@ -1401,6 +1401,17 @@ class DdsTest(unittest.TestCase):
                          (256, 128 + sum(max(1, (256 >> k) // 4) ** 2 * 8 for k in range(9)))):
             self.assertEqual(len(imagery.encode_dds(np.zeros((px, px, 3), np.uint8))), want)
 
+    def test_srgb_tag(self):
+        """The far tiles' sRGB tag (FAR_SRGB): the same BC1 blocks under a DX10 header, BC1_UNORM_SRGB (72)."""
+        import struct
+        rgb = (np.arange(64 * 64 * 3).reshape(64, 64, 3) % 251).astype(np.uint8)
+        plain, tagged = imagery.encode_dds(rgb), imagery.encode_dds(rgb, srgb=True)
+        self.assertEqual(plain[84:88], b"DXT1")
+        self.assertEqual(tagged[84:88], b"DX10")
+        self.assertEqual(struct.unpack_from("<5I", tagged, 128), (72, 3, 0, 1, 0))
+        self.assertEqual(tagged[148:], plain[128:], "the blocks themselves unchanged")
+        self.assertEqual(tagged[:84], plain[:84])
+
 
 class PictureDdsTest(unittest.TestCase):
     """A drawn sign face goes out as a DDS (never a PNG the engine's texture cooker takes at run time: it deadlocked the

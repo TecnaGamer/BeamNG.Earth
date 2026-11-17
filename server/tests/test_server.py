@@ -28,6 +28,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import cdae  # noqa: E402
 import earthd  # noqa: E402
+import protocol  # noqa: E402
 import farpvs  # noqa: E402
 import revisitpack  # noqa: E402
 import farfield as ff  # noqa: E402
@@ -116,10 +117,10 @@ class ServerHarness(unittest.TestCase):
         self.thread.start()
 
         async def start():
-            return await asyncio.start_server(
+            return await protocol.start_server(
                 lambda r, w: earthd.Connection(self.server, r, w).run(), "127.0.0.1", 0)
         self.srv = asyncio.run_coroutine_threadsafe(start(), self.loop).result(10)
-        self.c = Client(self.srv.sockets[0].getsockname()[1])
+        self.c = Client(protocol.listen_port(self.srv))
 
     def tearDown(self):
         self.c.close()
@@ -774,7 +775,7 @@ class MeshServerTest(ServerHarness):
                 self.assertEqual(px, earthd.TEX_NEAR if m["level"] <= -1 else earthd.TEX_FAR)
             else:
                 self.assertEqual(px, 512 if m["level"] >= 2 else 256)
-            self.assertEqual((w, h, mips, fourcc), (px, px, int(math.log2(px)) + 1, b"DXT1"))
+            self.assertEqual((w, h, mips, fourcc), (px, px, int(math.log2(px)) + 1, b"DX10" if imagery.FAR_SRGB else b"DXT1"))
             shape = cdae.read(self.fs(m["shape"]))
             self.assertEqual(shape["materials"][0]["name"], m["material"])
             self.assertEqual(shape["meshes"][0]["tverts2"][0], shape["meshes"][0]["verts"][0])

@@ -42,7 +42,7 @@ fn vincenty(lon1: f64, lat1: f64, lon2: f64, lat2: f64) -> f64 {
         }
     }
     if !converged {
-        let h = ((lat2 - lat1) / 2.0).dsin().powi(2) + lat1.dcos() * lat2.dcos() * (l / 2.0).dsin().powi(2);
+        let h = ((lat2 - lat1) / 2.0).dsin().sq() + lat1.dcos() * lat2.dcos() * (l / 2.0).dsin().sq();
         return 2.0 * R_MEAN * h.clamp(0.0, 1.0).sqrt().dasin();
     }
     let u2_ = ca2 * (A * A - B * B) / (B * B);

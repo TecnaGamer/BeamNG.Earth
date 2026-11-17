@@ -78,7 +78,7 @@ fn cumlen(pts: &[[f64; 2]]) -> Vec<f64> {
     let mut s = 0.0;
     for (i, p) in pts.iter().enumerate() {
         if i > 0 {
-            s += ((p[0] - pts[i - 1][0]).powi(2) + (p[1] - pts[i - 1][1]).powi(2)).sqrt();
+            s += ((p[0] - pts[i - 1][0]).sq() + (p[1] - pts[i - 1][1]).sq()).sqrt();
         }
         c.push(s);
     }
@@ -281,7 +281,9 @@ impl RoadReach {
     }
 
     fn loaded(&self, p: [f64; 2]) -> bool {
-        self.cells.values().any(|c| in_quad(&c.quad, p[0], p[1]))
+        #[allow(clippy::disallowed_methods)] // hash order: any()
+        let any = self.cells.values().any(|c| in_quad(&c.quad, p[0], p[1]));
+        any
     }
 
     /// The turn's time cost (s) at speed s through angle theta (rad): braking to the turn's speed and back up.
@@ -347,6 +349,9 @@ impl RoadReach {
         // road, a ramp) less likely)
         let rank_of = |de: u32| (self.edges[(de / 2) as usize].rank & 0x7f) as i32;
         let top = roots.iter().map(|r| rank_of(r.0)).max().unwrap_or(0);
+        // powi(0..=4): the runtime's __powidf2 (libgcc, compiler-rt and compiler_builtins all run one
+        // square-and-multiply loop: the same bits); a streaming-priority weight, not an output
+        #[allow(clippy::disallowed_methods)]
         let mut ws: Vec<f64> = roots.iter().map(|r| (-(r.1 - best) / 3.0).dexp()
             * pr.class_k.powi((top - rank_of(r.0)).clamp(0, 4))).collect();
         if let Some(r) = route {
@@ -459,6 +464,9 @@ impl RoadReach {
                           + INTENT_BRAKE_K * pr.intent_brake.clamp(0.0, 1.0)).dexp();
                 }
                 let (ri, ro) = (rank_in & 0x7f, o.rank & 0x7f);
+                // powi(1..=4): the runtime's __powidf2 (libgcc, compiler-rt and compiler_builtins all run one
+                // square-and-multiply loop: the same bits); a streaming-priority weight, not an output
+                #[allow(clippy::disallowed_methods)]
                 if ro < ri {
                     w *= pr.class_k.powi((ri - ro).min(4) as i32);
                 }
@@ -747,6 +755,7 @@ impl RoadReach {
                 f.1.clear();
             }
         }
+        #[allow(clippy::disallowed_methods)] // hash order: a pure predicate
         self.feat_ids.retain(|_, fi| self.feats[*fi as usize].0 > 0);
         self.dirty = true;
         true
@@ -763,6 +772,7 @@ impl RoadReach {
     }
 
     fn cell_keys(&self) -> Vec<String> {
+        #[allow(clippy::disallowed_methods)] // hash order: collected, then sorted
         let mut v: Vec<String> = self.cells.keys().cloned().collect();
         v.sort();
         v

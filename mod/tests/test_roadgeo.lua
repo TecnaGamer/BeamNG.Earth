@@ -279,7 +279,10 @@ roads.reset()
 -- collider defers on the tile, a near one marks at once, deferred dirt is promoted when the player arrives, a
 -- rebuild in between makes it solid (be:reloadCollision is global), and a rebase still rebuilds at once
 do
-  roads.RELOAD_EVERY_S, roads.COLLIDE_CHECK_S = 0, 0
+  -- (-1, not 0: the rebuild rule is sinceReload() > RELOAD_EVERY_S, and a CI runner without socket times with
+  -- os.clock, 1 ms steps on Windows: two rebuilds in one ms read 0 apart and 0 > 0 kept the second one back,
+  -- windows-latest 2026-11-17 "reloads 1, want 2")
+  roads.RELOAD_EVERY_S, roads.COLLIDE_CHECK_S = -1, 0
   -- (a rebuild waits after RELOAD_ROOM_MS of imports in a frame, measured on the wall clock: a slow CI runner's frames
   -- spent that and the promoted rebuild came after run()'s updates, windows-latest 2026-11-10)
   local room = roads.RELOAD_ROOM_MS

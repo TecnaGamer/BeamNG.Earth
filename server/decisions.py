@@ -9,7 +9,7 @@ version, a bad signature, a network error: the server plans the cell itself, as 
 
 What is shared, and its key. A version key (vkey: sha256 of vkey_doc) names everything a product's own cache key
 holds besides the cell: PLANS_FORMAT / FACTS_FORMAT (plancache.plans_format: with the grade guard's tag), the plans'
-frames, the build switches (revisit.switches_key: the BNE_* that change output), the map data's versions
+frames, the build switches (revisit.plans_switches_key: the BNE_* that change plans or facts), the map data's versions
 (MapData.versions(): Overture release, map source, the optional layers' versions) WITHOUT the weekly datasets' builds
 (WEEKLY: rails, lanes, stations; a weekly build made every archive unreachable). What a cell's items read of the weekly
 rail and lane tags is keyed per item instead (FORMAT 2): each item's key ends in "@<dep>", the digest of the slices of
@@ -106,7 +106,7 @@ def vkey_doc(versions):
     import revisit
     import roads
     return {"dec": FORMAT, "plans": plancache.plans_format(), "facts": roads.FACTS_FORMAT,
-            "frames": plancache.FRAMES, "switches": revisit.switches_key(),
+            "frames": plancache.FRAMES, "switches": revisit.plans_switches_key(),
             "rings": [RING_PLANS, RING_FACTS],
             "versions": json.loads(json.dumps({k: v for k, v in versions.items() if k not in WEEKLY},
                                               sort_keys=True))}

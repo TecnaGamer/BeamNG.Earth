@@ -136,7 +136,6 @@ import mapdata as mapdatamod  # noqa: E402
 import dem as demmod  # noqa: E402
 import mapcells  # noqa: E402
 import pacer  # noqa: E402
-import peerwork as peerworkmod  # noqa: E402
 import deshadow as deshadowmod  # noqa: E402
 import farfield  # noqa: E402
 import farpvs as farpvsmod  # noqa: E402
@@ -642,6 +641,7 @@ FIRST_FANOUT_CPUS = 8       # threads the server's processes may run on (server_
 WARM_SPLIT = os.environ.get("BNE_WARM_SPLIT", "on") != "off"     # (Server.warm_roads; off: both lanes plan ahead)
 PLAN_ELSEWHERE_S = 120.0    # s a cell's plans are waited for from there before they are made here after all
 LANE_REQUEST, LANE_PREFETCH = 0, 1     # Server.block_pools: the blocks the mod asks for / the prefetch
+FAR_SPARE_THREADS = 32      # far threads beyond the far workers (Server.tile_pool; compute sharing v1's helper slots before)
 HM_BUSY_TILE_WORKERS = 1    # far tiles built at once while a physics block is building in the server process (an
                             # anchor's first, or every one with --block-process off; the block processes' blocks do
                             # not share its interpreter: far tiles one at a time behind them were most of a Steam
@@ -1173,6 +1173,8 @@ TURBINE_PER_POSE = 2       # bounded batches: only populated cells request terra
 
 
 class Server:
+    host = None                 # the game connection's protocol.HostServer (BNGE_HOST=on, main_async), else None
+
     def __init__(self, user_dir, cache_dir, tile_workers=3, kfun=None,
                  hysteresis=farfield.HYSTERESIS, radius=farfield.RADIUS, far_format="cdae",
                  imagery=imagerymod.DEFAULT_CHAIN, near_visual="mesh", tex_near=TEX_NEAR, tex_far=TEX_FAR,
@@ -1193,9 +1195,6 @@ class Server:
         feather on the USGS tiles); cache: the download cache's cache.Cache (last use per file, the
         size cap, the page's 'cache' messages; None = no bookkeeping and no 'cache' message, Server()'s
         default); retex_rate: --retex-rate (live retextures per second, 0 = none)."""
-        if os.environ.get("BNGE_WORLD_BUNDLE") and not (grading and mapdata is not None):
-            from worldbundle import BundleError
-            raise BundleError("Pinned road plans require roads and grading enabled")
         self.sid = time.strftime("%Y%m%d-%H%M%S-") + secrets.token_hex(2)
         self.user_dir = user_dir           # the game's user folder (detail mode fills its terrain texture cache)
         self.cache_dir = cache_dir         # (here already: _scan_sessions moves old sessions into its trash)
@@ -1370,13 +1369,14 @@ class Server:
         self.picking = None          # the settings page's file window open (apppaths.pick): for which path
         revisitmod.CACHE_DIR = cache_dir
         self.refetched = 0              # far textures whose missing photo tiles were fetched here (make_tile)
-        # self.share_lock, self.group_helper = threading.Lock(), None    # (share_start: shared world building, commented out)
         try:                            # (BeamMP sharing v2: a session's mark left by an earlier run; share_hub sets it)
             os.remove(os.path.join(cache_dir, "share", "active"))
         except (OSError, TypeError):
             pass
-        self.tile_pool = ThreadPoolExecutor(tile_workers + (peerworkmod.MAX_SLOTS if hasattr(far_pool, "remote_slots")
-                                                            else 0), thread_name_prefix="far")
+        # (FAR_SPARE_THREADS beyond the far workers whenever there is a far pool, as when compute sharing's helper
+        # slots were added to it: the far pool's own queue orders what they submit)
+        self.tile_pool = ThreadPoolExecutor(tile_workers + (FAR_SPARE_THREADS if far_pool is not None else 0),
+                                            thread_name_prefix="far")
         # (the 3D map's big leap, the user 2026-11-07: "big leaps in world gen speed": every far worker while the map
         # is open, FAR_DRIVE of them while driving: tile_workers is the pool's whole size, main() sizes it)
         self.far_max = tile_workers
@@ -1465,7 +1465,7 @@ class Server:
         self.quick_made, self.quick_running = {}, {}
         self.quick_futs = {}            # (aid, cx, cy) -> a requested block's stand-in photo started with it (fast)
         self.photo_pool = None          # requested blocks' photos and stand-ins (main(): PHOTO_PROCESS_MIN_CPUS)
-        self.recent_full = collections.deque(maxlen=RECENT_FULL)    # (anchorId, cx, cy, rgb) of the last full photos
+        self.recent_full = collections.deque(maxlen=RECENT_FULL)  # (aid, cx, cy, rgb, canopy or None): last photos
         self.base_lock = threading.Lock()
         self.pads_rebuild = set()       # blocks built without gas station pads that lie on them (pads_stale)
         self.roads_rebuild = set()      # blocks built before every road cell under them was on disk (roads_refresh)
@@ -3857,9 +3857,6 @@ class Server:
     def grader_for(self, anchor):
         """The anchor's grading.Grader (--grading on), else None."""
         if not self.grading:
-            if os.environ.get("BNGE_WORLD_BUNDLE"):
-                from worldbundle import BundleError
-                raise BundleError("Pinned road plans require roads and grading enabled")
             return None
         with self.grader_lock:
             if anchor.grader is None:
@@ -3904,8 +3901,7 @@ class Server:
         20 s of a cold Fells Point visit's 30 s while the other processes waited for them (2026-11-13). It and the
         road tiles read the plans from the run's plan cache (plancache claim: they wait for the cell's planner). A
         cell no process is free for is planned by the block's process as before. BNE_FIRST_FANOUT=off: none."""
-        if not FIRST_FANOUT or not self.grading or os.environ.get("BNGE_WORLD_BUNDLE") \
-                or not os.environ.get(plancachemod.RUN_ENV):
+        if not FIRST_FANOUT or not self.grading or not os.environ.get(plancachemod.RUN_ENV):
             return 0
         bp = self.block_pools
         lanes = []                  # (pool, processes)
@@ -4425,9 +4421,6 @@ class Server:
         cached land cover and the photo. The graded block replaces it when it is built (Connection.refine_first:
         terrain_refresh). Not kept in hm (the graded one is the block of its key), nor in anchor.chunks. ground_at: the
         point its groundZ is for (the car's spot)."""
-        if os.environ.get("BNGE_WORLD_BUNDLE"):
-            from worldbundle import BundleError
-            raise BundleError("Ungraded provisional terrain is disabled for pinned road plans")
         t0 = time.perf_counter()
         # (the anchor's height quantum, its survey's DEM reads at the urgent priority as the block's own: queued behind
         # the teleport's other downloads, the survey (+-15 km of DEM z10, 0.1-0.6 s alone cold) was 3.6 s of a fresh
@@ -4487,9 +4480,6 @@ class Server:
 
     def _make_heightmap_here_(self, anchor, cx, cy, progress, t0, q, base=None, provisional=False, ground_at=(0.0, 0.0),
                               ground=False):
-        if provisional and os.environ.get("BNGE_WORLD_BUNDLE"):
-            from worldbundle import BundleError
-            raise BundleError("Ungraded provisional terrain is disabled for pinned road plans")
         keep = {}
         g = None if provisional else self.grader_for(anchor)
         c0 = time.thread_time()
@@ -4709,6 +4699,7 @@ class Server:
         fetched ahead of the far field's (Imagery.urgent, netfetch "urgent"). quick: write_base's."""
         t1 = time.perf_counter()
         photo = []
+        canopies = []                       # (its canopy version, for the revisit cache: _base_keep)
         plain = URGENT_ELSEWHERE and urgent       # (analyses on: its photo without them at once, then refreshed)
         # (a block in use built again (gas station pads, a refresh): its photo under a new name, as base_refresh's. The
         # engine watches the photo it shows: written over in place, it reloaded it and froze for good in its
@@ -4729,14 +4720,17 @@ class Server:
                     return name, photo, time.perf_counter() - t1
         f0 = revisitmod.begin()             # (this photo's own faults: revisit.scope)
         try:
-            name = self._base_elsewhere(anchor, cx, cy, pool, photo, plain, **kw) if pool is not None else None
+            ck = {"canopy_out": canopies} if genground.ON else {}
+            name = self._base_elsewhere(anchor, cx, cy, pool, photo, plain, **ck, **kw) if pool is not None else None
             if name is None:
+                del canopies[:]
                 with self.imagery.urgent() if urgent and hasattr(self.imagery, "urgent") else contextlib.nullcontext():
-                    name = self.write_base(anchor, cx, cy, photo=photo, quick=quick, **kw)
+                    name = self.write_base(anchor, cx, cy, photo=photo, quick=quick, **ck, **kw)
         finally:
             revisitmod.end(f0)
         if bk is not None and name is not None:
-            self._base_keep(anchor, cx, cy, bk, name, (f0,))
+            self._base_keep(anchor, cx, cy, bk, name, (f0,),
+                            (photo[-1], canopies[-1]) if canopies and canopies[-1] is not None and photo else None)
         return name, photo, time.perf_counter() - t1
 
     # A block's finished base photo kept in the revisit cache (kind "basephoto": the photo file and the game's packed
@@ -4757,7 +4751,11 @@ class Server:
                                   self.tex_modes, roadsmod.ROADS_IN_GROUND, bool(self.buildings),
                                   self.mapdata.versions() if self.mapdata is not None else None,
                                   self.road_widths is not None, self.surface is not None, anchor.zooms[0],
-                                  terraincache.PHOTO_EXT, terraincache.NO_PACK, ("rules", Server.ground_rules(self)))
+                                  terraincache.PHOTO_EXT, terraincache.NO_PACK, ("rules", Server.ground_rules(self)),
+                                  *((("genground", vegetationmod.VERSION, getattr(self, "veg", None) is not None,
+                                      ("shade", genground.SHADE_VERSION, getattr(self, "dem", None) is not None),
+                                      genground.block_fade_key()),)
+                                    if genground.ON else ()))
         except Exception as e:          # (no cache rather than no photo)
             log.debug("revisit: base photo key: %s: %s", type(e).__name__, e)
             return None
@@ -4785,6 +4783,7 @@ class Server:
             if rgb.shape[:2] != (self.base_px, self.base_px):
                 return None
             revisitmod.place(ph, path)              # (a Side hard-linked: the game only reads it)
+            canopy = Server._canopy_blob(rgb, blobs)
             if "base.dds" in blobs:         # (after the photo: the cache entry must be the newer file; its own copy)
                 b = blobs["base.dds"]
                 os.makedirs(terraincache.cache_dir(self.user_dir), exist_ok=True)
@@ -4797,12 +4796,46 @@ class Server:
         self.base_stale.discard(key)
         photo.append(rgb)
         with self.base_lock:    # (the stand-ins of the blocks after it take its overlap, as write_base's)
-            self.recent_full.append((anchor.id, cx, cy, rgb))
+            self.recent_full.append((anchor.id, cx, cy, rgb, canopy))
         log.info("base photo %s from the revisit cache", (anchor.id, cx, cy))
         return name
 
-    def _base_keep(self, anchor, cx, cy, bk, name, f0):
-        """The block's photo just made kept in the revisit cache when it is final (see base_revisit_key)."""
+    # (the generated ground's canopy version of a kept photo, for the stand-ins pasted from it, which write_quick_base
+    # fades as the photo's packed copy is: where it differs from the photo, a bit mask, and the canopy version there, a
+    # JPEG as the photo's; restored over the photo's own decoded texels)
+    @staticmethod
+    def _canopy_blobs(rgb, canopy):
+        """{blob name: bytes} of the canopy version of photo rgb (both exact, as write_base made them)."""
+        import zlib
+        rgb, canopy = np.asarray(rgb, np.uint8), np.asarray(canopy, np.uint8)
+        diff = (canopy != rgb).any(axis=2)
+        return {"canopy.mask": zlib.compress(np.packbits(diff).tobytes(), 6),
+                "canopy.jpg": terraincache.stored_photo(np.where(diff[..., None], canopy, rgb))}
+
+    @staticmethod
+    def _canopy_blob(rgb, blobs):
+        """The canopy version of the kept photo rgb (as decoded) from its blobs (_canopy_blobs), or None."""
+        import zlib
+        if "canopy.mask" not in blobs or "canopy.jpg" not in blobs:
+            return None
+        try:
+            m, j = blobs["canopy.mask"], blobs["canopy.jpg"]
+            m = m.read() if isinstance(m, revisitmod.Side) else m
+            j = j.read() if isinstance(j, revisitmod.Side) else j
+            n = rgb.shape[0] * rgb.shape[1]
+            diff = np.unpackbits(np.frombuffer(zlib.decompress(m), np.uint8))[:n]
+            with Image.open(io.BytesIO(j)) as im:
+                c = np.asarray(im.convert("RGB"), np.uint8)
+            if c.shape != rgb.shape or diff.size != n:
+                return None
+            return np.where(diff.reshape(rgb.shape[:2])[..., None].astype(bool), c, rgb)
+        except Exception as e:          # (its stand-ins unfaded then; the photo and its packed copy as kept)
+            log.debug("revisit: canopy version: %s: %s", type(e).__name__, e)
+            return None
+
+    def _base_keep(self, anchor, cx, cy, bk, name, f0, canopy=None):
+        """The block's photo just made kept in the revisit cache when it is final (see base_revisit_key); canopy:
+        (its rgb, its canopy version) (write_base canopy_out), kept with it."""
         key = (anchor.id, cx, cy)
         if self.base_pending.get(key) or key in self.base_stale or not revisitmod.all_complete(f0):
             return
@@ -4817,10 +4850,15 @@ class Server:
                 return
             with open(pack, "rb") as f:     # (bytes: a file of its own in the revisit cache, not a link)
                 blobs["base.dds"] = f.read()
+        if canopy is not None and np.shape(canopy[0]) == np.shape(canopy[1]):
+            try:
+                blobs.update(Server._canopy_blobs(*canopy))
+            except Exception as e:      # (kept without it: its stand-ins unfaded)
+                log.debug("revisit: canopy version of %s: %s: %s", key, type(e).__name__, e)
         if os.path.exists(path):
             revisitmod.store(self.cache_dir, "basephoto", bk, blobs)
 
-    def _base_elsewhere(self, anchor, cx, cy, pool, photo, plain=False, rev=0):
+    def _base_elsewhere(self, anchor, cx, cy, pool, photo, plain=False, rev=0, canopy_out=None):
         """write_base in a block process (blockworker.base_photo): the file name, or None when it lacked an imagery
         tile on disk or failed (then rendered here). With the imagery analyses on, from this process's finished tiles
         on disk (tex["fin"], Imagery.finished_only: as write_base here would render it); one not finished yet fails
@@ -4828,14 +4866,16 @@ class Server:
         (base_stale). Every block's photo was rendered twice before (there without them, here with them: 2 x 12 MB
         of PNG and 2 x 5.6 MB of the game's packed copy a block, 2026-11-04)."""
         im = self.imagery
+        ck = {"canopy_out": canopy_out} if canopy_out is not None else {}
         if self.deshadow is not None or self.colormatch is not None:
             name = self._base_in(anchor, cx, cy, pool, photo,
-                                 {s.name: im._fin_sigs.setdefault(s.name, im._fin_sig(s)) for s in im.chain}, rev)
+                                 {s.name: im._fin_sigs.setdefault(s.name, im._fin_sig(s)) for s in im.chain}, rev,
+                                 **ck)
             if name is not None or not plain:
                 return name
-        return self._base_in(anchor, cx, cy, pool, photo, None, rev)
+        return self._base_in(anchor, cx, cy, pool, photo, None, rev, **ck)
 
-    def _base_in(self, anchor, cx, cy, pool, photo, fin, rev=0):
+    def _base_in(self, anchor, cx, cy, pool, photo, fin, rev=0, canopy_out=None):
         size = self.layout.block * heightmap.SQUARE
         key = (anchor.id, cx, cy)
         name = self.base_name(key, rev)
@@ -4850,13 +4890,17 @@ class Server:
                               BASE_RENDER_PX, tex, bool(self.buildings and self.mapdata is not None), anchor.zooms[0],
                               os.path.join(self.out_dir, name),
                               (self.user_dir, f"{self.vfs_dir}/{name}", base_ao_vfs(self.base_px), BASE_AO),
-                              fuel_pads=self.block_fuel_pads(anchor, cx, cy, size), out_px=self.base_px).result()
+                              fuel_pads=self.block_fuel_pads(anchor, cx, cy, size), out_px=self.base_px,
+                              **({"trees": getattr(self, "veg", None) is not None, "canopy": canopy_out is not None}
+                                 if genground.ON else {})).result()
         except Exception as e:
             log.info("base photo %s in the block process: %s", key, e)
             return None
         if got is None:
             return None
-        rgb, _, pending = got
+        rgb, _, pending = got[:3]
+        if canopy_out is not None:      # (its canopy version: the revisit cache's, _base_keep)
+            canopy_out.append(got[3] if len(got) > 3 else None)
         self._base_kept(anchor, cx, cy, pending)
         if not fin and (self.deshadow is not None or self.colormatch is not None):
             # (rendered without the imagery analyses, which live in this process: rendered again here with them,
@@ -5141,7 +5185,7 @@ class Server:
         with self.base_lock:
             recent = list(self.recent_full)
         if getattr(self, "speed", 0.0) < FAST_BASE_V and any(
-                aid == anchor.id and abs(ocx - cx) < size and abs(ocy - cy) < size for aid, ocx, ocy, _ in recent):
+                aid == anchor.id and abs(ocx - cx) < size and abs(ocy - cy) < size for aid, ocx, ocy, *_ in recent):
             return None                 # (slower: the overlap pasted in here; faster, every block overlaps the last)
         key = (anchor.id, cx, cy)
         name = self.quick_base_name(key)
@@ -5218,13 +5262,13 @@ class Server:
                 recent = list(self.recent_full)
             parts = []                  # (the oldest first: the newer is pasted over it)
             have = np.zeros((n, n), bool)
-            for aid, ocx, ocy, orgb in recent:
+            for aid, ocx, ocy, orgb, *ocan in recent:
                 if aid != anchor.id or orgb.shape[:2] != (n, n):
                     continue
                 dx, dy = int(round((cx - ocx) * sc)), int(round((ocy - cy) * sc))
                 i0, i1, j0, j1 = max(0, -dy), min(n, n - dy), max(0, -dx), min(n, n - dx)
                 if i0 < i1 and j0 < j1:
-                    parts.append((i0, i1, j0, j1, dy, dx, orgb))
+                    parts.append((i0, i1, j0, j1, dy, dx, orgb, ocan[0] if ocan else None))
                     have[i0:i1, j0:j1] = True
             if have.all():
                 rgb = np.empty((n, n, 3), np.uint8)
@@ -5251,8 +5295,13 @@ class Server:
                 tq.append(("enlarge", time.perf_counter()))
             # plain slices, not masks: masked copies took 0.9 s of a 4096² stand-in's 1.4 s, and at 230 mph (a block
             # every 1.2 s) the stand-ins fell behind and the flat base showed between them (the user, 2026-10-30)
-            for i0, i1, j0, j1, dy, dx, orgb in parts:
+            # (the generated ground's canopy versions with them: the stand-in's forest floor fades out through its
+            # packed mips as the photos' did; its own imagery has no floor, its canopy version is itself)
+            canopy = rgb.copy() if any(p[7] is not None for p in parts) else None
+            for i0, i1, j0, j1, dy, dx, orgb, ocan in parts:
                 rgb[i0:i1, j0:j1] = orgb[i0 + dy:i1 + dy, j0 + dx:j1 + dx]
+                if canopy is not None:
+                    canopy[i0:i1, j0:j1] = (ocan if ocan is not None else orgb)[i0 + dy:i1 + dy, j0 + dx:j1 + dx]
             tq.append(("paste", time.perf_counter()))
             name = self.quick_base_name(key)
             path = os.path.join(self.out_dir, name)
@@ -5262,6 +5311,8 @@ class Server:
             staging.replace(tmp, path)
             tq.append(("png", time.perf_counter()))
             args = (self.user_dir, f"{self.vfs_dir}/{name}", base_ao_vfs(self.base_px), rgb, BASE_AO)
+            if canopy is not None and genground.ON:
+                args += ((canopy, size / n),)
             pool = self.block_pools[LANE_PREFETCH][0] if (URGENT_ELSEWHERE and self.block_pools and
                                                           not bc7.gpu_ok()) else None
             if pool is not None:        # (the CPU's BC7 encode on a block process's core: ~1 s here beside the rest)
@@ -5277,7 +5328,7 @@ class Server:
             log.info("quick base photo %s: %s", key, e)
             return None
 
-    def write_base(self, anchor, cx, cy, pool=None, rev=0, photo=None, quick=False):
+    def write_base(self, anchor, cx, cy, pool=None, rev=0, photo=None, quick=False, canopy_out=None):
         """Detail mode: the block footprint's aerial photo (base_px² PNG, row 0 = north, the same imagery
         chain and corrections as the far tiles), the drawn block's base colour. The game would pack it into
         BC7 on its main thread (1.5 s for a new 1024² photo); terraincache writes that packed texture into
@@ -5286,21 +5337,27 @@ class Server:
         quick (a teleport's provisional first block): without the roofs' mask and the painted roads when the place's
         buildings and roads are not on disk yet (their downloads, and the road widths measured from them, were 20 s
         of a fresh place's 22 s photo on a Deck, before the car could be placed; 2026-10-23); rendered again in full
-        once the graded block is in (base_refresh), as for a lazy imagery source."""
+        once the graded block is in (base_refresh), as for a lazy imagery source.
+        With the generated ground on, its canopy version (the forest floor's fade through the packed texture's mips,
+        genground.fade_weights) goes into canopy_out (None: there is none)."""
         size = self.layout.block * heightmap.SQUARE
         x0, y0 = cx - size / 2 - BASE_SHIFT_M, cy - size / 2 - BASE_SHIFT_M
         quick = quick and not self._photo_data_cached(anchor, x0, y0, size)
         t0 = time.perf_counter()
         try:
             pending = set()
-            rgb = None
+            rgb = canopy = None
             if genground.ON and not quick:  # the generated ground: Sentinel-2 and the map's regions (genground.py)
                 try:
+                    cout = []       # (its canopy version: the mip fade, bc7.dds)
                     rgb, used = genground.render(self.imagery, anchor.frame, x0, y0, size, BASE_RENDER_PX,
-                                                 self.mapdata, self.surface, self.road_widths, pending)
+                                                 self.mapdata, self.surface, self.road_widths, pending,
+                                                 getattr(self, "veg", None), getattr(self, "dem", None),
+                                                 canopy_out=cout)
+                    canopy = genground.canopy_if_differs(rgb, cout)
                 except Exception as e:      # (the Sentinel-2 photo alone then)
                     log.info("base photo %s: generated ground: %s: %s", (anchor.id, cx, cy), type(e).__name__, e)
-                    rgb = None
+                    rgb = canopy = None
                     pending.discard(genground.GEN_PENDING)
             if rgb is None:
                 with (self.deshadow.no_wait() if self.deshadow is not None else contextlib.nullcontext()):
@@ -5313,6 +5370,8 @@ class Server:
         name = self.base_name((anchor.id, cx, cy), rev)
         path = os.path.join(self.out_dir, name)
         rgb = np.asarray(rgb, np.uint8)
+        # (the canopy version follows every step: what a step paints, as painted; a copy, a step may paint in place)
+        rgb0 = rgb.copy() if canopy is not None else rgb
         stamps = [("imagery", time.perf_counter())]
         if self.buildings and self.mapdata is not None and not quick:   # no roofs beside the 3D buildings
             try:
@@ -5326,7 +5385,10 @@ class Server:
                 rgb = surfacemod.unghost_square(rgb, anchor.frame, x0, y0, size, self.surface, self.road_widths)
             except Exception as e:      # the photo stays as it is
                 log.info("base photo %s: road ghosts: %s", (anchor.id, cx, cy), e)
+        canopy = genground.keep_painted(rgb0, rgb, canopy)
         rgb = surfacemod.enlarge(rgb, self.base_px)
+        canopy = surfacemod.enlarge(canopy, self.base_px) if canopy is not None else None
+        rgb1 = np.array(rgb, np.uint8, copy=True) if canopy is not None else rgb
         stamps.append(("buildings", time.perf_counter()))
         if roadsmod.ROADS_IN_GROUND and not quick:      # the carriageways in the ground (surface.photo_roads)
             try:
@@ -5344,6 +5406,7 @@ class Server:
             rgb = rockfacemod.rock(rgb, anchor.frame, x0, y0, size, U, x0, y0, size / (n - 1))
         except Exception as e:      # the photo stays as it is
             log.debug("base photo %s: rock faces: %s", (anchor.id, cx, cy), e)
+        canopy = genground.keep_painted(rgb1, rgb, canopy)
         # a lazy source (NAIP) not fetched yet for all of it: rendered again once it is (base_refresh)
         # ... and the analyses (de-shadow, colour match) it was rendered without (never waited for)
         key = (anchor.id, cx, cy)
@@ -5353,7 +5416,9 @@ class Server:
         if photo is not None:
             photo.append(rgb)
         with self.base_lock:    # (the stand-ins of the blocks after it take its overlap: write_quick_base)
-            self.recent_full.append((anchor.id, cx, cy, rgb))
+            self.recent_full.append((anchor.id, cx, cy, rgb, canopy))
+        if canopy_out is not None:      # (kept with it in the revisit cache, _base_keep)
+            canopy_out.append(canopy)
         t1 = time.perf_counter()
         tmp = staging.tmp_for(path)
         # (terraincache.stored_photo: the game reads the packed cache entry, this file only if that is stale)
@@ -5363,6 +5428,8 @@ class Server:
         t2 = time.perf_counter()
         try:            # after the photo: the cache entry must be the newer file
             args = (self.user_dir, f"{self.vfs_dir}/{name}", base_ao_vfs(self.base_px), rgb, BASE_AO)
+            if canopy is not None:      # (the forest floor faded out through the mips, as the far tiles')
+                args += ((canopy, size / self.base_px),)
             if pool is not None and not bc7.gpu_ok():   # the CPU's BC7 encode on the block process's core
                 pool.submit(blockworker.base_entry, *args).result()
             else:
@@ -5393,7 +5460,8 @@ class Server:
         gen = genground.GEN_PENDING in pending
         # (the generated ground's map data first: data_ready also asks again for what is missing, with its backoff, and
         # an early return below would hold those retries, and their give-up, for good: Codex round 3)
-        gen_ok = genground.data_ready(self.mapdata, anchor.frame, x0, y0, size, self.surface) if gen else True
+        gen_ok = genground.data_ready(self.mapdata, anchor.frame, x0, y0, size, self.surface,
+                                      getattr(self, "veg", None), getattr(self, "dem", None)) if gen else True
         if not self.imagery.lazy_ready(anchor.frame, x0, y0, size, BASE_RENDER_PX):
             return False
         road_data = surfacemod.PHOTO_ROADS_PENDING
@@ -5962,7 +6030,7 @@ class Server:
         the build switches; the map data's versions): equal for two apps, their items have the same keys."""
         md = self.mapdata.versions() if self.mapdata is not None and hasattr(self.mapdata, "versions") else None
         return {"plans": plancachemod.plans_format(), "facts": roadsmod.FACTS_FORMAT,
-                "sw": revisitmod.switches_key(), "md": md, "widths": self.road_widths is not None,
+                "sw": revisitmod.plans_switches_key(), "md": md, "widths": self.road_widths is not None,
                 "sea": self.sea is not None}
 
     def share_store(self):
@@ -6004,49 +6072,6 @@ class Server:
         hub.send_mod = send
         return hub, False
 
-    # (shared world building v1, commented out 2026-10-27 (off since 2026-10-23); replaced by share_hub above)
-    # def share_start(self, port=None):
-    #     """Compute sharing in a BeamMP group: our GroupHelper listening (started once) on port (the BeamMP server's
-    #     setting, its plugin's SHARE_PORT; BNGE_SHARE_PORT on this machine wins; else peerwork.SHARE_PORT). -> {port,
-    #     code} (port None: not sharing)."""
-    #     if not hasattr(self.far_pool, "set_group"):
-    #         return {"port": None, "code": peerworkmod.code_id()}
-    #     self.far_pool.sharing = True        # every tile built is kept from now on (a player arriving gets ours)
-    #     with self.share_lock:
-    #         if self.group_helper is None:
-    #             self.group_helper = peerworkmod.GroupHelper(self.far_pool, self.anchor_id_for,
-    #                                                         os.path.join(self.cache_dir, "peer-out"))
-    #             self.group_helper.start(share_port(port))
-    #     return {"port": self.group_helper.port, "code": peerworkmod.code_id(), "weight": peerworkmod.share_weight()}
-
-    # def share_group(self, msg):
-    #     """The mod's "peers": {me, members: [{id, host, port, code}]}: the players on our anchor with our code."""
-    #     if not hasattr(self.far_pool, "set_group"):
-    #         return
-    #     code = peerworkmod.code_id()
-    #     members, weights = [], {}
-    #     for m in msg.get("members") or []:
-    #         try:
-    #             if m.get("code") == code and m.get("host") and 0 < int(m.get("port")) < 65536:
-    #                 members.append((str(m["id"]), str(m["host"]), int(m["port"])))
-    #                 w = float(m.get("weight") or 1.0)
-    #                 weights[str(m["id"])] = w if 0.1 <= w <= 1000 else 1.0
-    #         except (TypeError, ValueError, AttributeError):
-    #             continue
-    #     self.far_pool.set_group(str(msg.get("me")), members, weights)
-
-    # def anchor_id_for(self, lat, lon):
-    #     """Our anchor id at (lat, lon) when we have one there (its graders are made already), else the helper's."""
-    #     for a in list(self.anchors.values()):
-    #         if float(a.lat) == lat and float(a.lon) == lon:
-    #             return a.id
-    #     return peerworkmod._anchor_id(lat, lon)
-
-    def remote_slots(self):
-        """Far tiles compute sharing's helpers build at once (0 without helpers)."""
-        f = getattr(self.far_pool, "remote_slots", None)
-        return f() if f is not None else 0
-
     def far_ck(self, aid, key):
         """The server's key of far tile `key` shown under anchor aid: (GLOBAL_AID, key) for a global tile (the same
         for every anchor), else (aid, key)."""
@@ -6063,12 +6088,25 @@ class Server:
         x0, y0, _, _ = node.bbox
         return anchor.frame, x0, y0, node.size
 
+    def gen_far_tex(self):
+        """A far tile job's generated-ground part (blockworker.far_tile: render_far's trees, its revisit key)."""
+        return {"gen_trees": getattr(self, "veg", None) is not None} if genground.ON else {}
+
     def render_tile(self, anchor, tile, px, pending):
-        """(rgb, used): a far tile's photo with its gutter (a global tile's: its Mercator square, render_merc)."""
+        """(rgb, used): a far tile's photo with its gutter (a global tile's: its Mercator square, render_merc); with the
+        generated ground on, the near rings' cut from its squares (genground.render_far: the block's colours)."""
+        genground.clear_fade()
         if isinstance(tile, farfield.GTile):
             return self.imagery.render_merc(tile.z, tile.x, tile.y, px, pending=pending)
         frame, x0, y0, size = self.tile_where(anchor, tile)
-        return self.imagery.render(frame, *imagerymod.gutter_square(x0, y0, size, px), px, pending=pending, gutter=True)
+        sq = imagerymod.gutter_square(x0, y0, size, px)
+        if genground.ON:
+            node = tile.base if isinstance(tile, farfield.Piece) else tile
+            got = genground.render_far(self.imagery, frame, *sq, px, self.mapdata, self.surface, self.road_widths,
+                                       pending, getattr(self, "veg", None), level=node.level)
+            if got is not None:
+                return got
+        return self.imagery.render(frame, *sq, px, pending=pending, gutter=True)
 
     def make_tile(self, anchor, tile, prev=None):
         urgencymod.wait_turn()          # (a block the game waits for first: urgency.py)
@@ -6255,7 +6293,7 @@ class Server:
                        "mask": (os.path.join(self.out_dir, surfacemod.road_mask_name(texture)),
                                 self.road_mask_px(lvl)) if self.road_masks else None,
                        "chain": [s.name for s in im.chain], "tone": self.tone, "leaf_on": im.leaf_on,
-                       "season_mode": im.season_mode, "pads": self.tile_pads(anchor, tile, px_t)}
+                       "season_mode": im.season_mode, "pads": self.tile_pads(anchor, tile, px_t), **self.gen_far_tex()}
                 if analyses and not raw_quick:
                     tex["fin"] = {s.name: im._fin_sigs.setdefault(s.name, im._fin_sig(s)) for s in im.chain}
                 if not raw_quick and self.fin_name_len():   # (a final texture: kept for the bulk restore)
@@ -6289,8 +6327,11 @@ class Server:
                     # fast drive): fetched here, the render goes back to the workers (rendered in this process, one
                     # interpreter for every far thread, the far field waited on it); here only if that fails too
                     x0, y0, _, _ = tile.bbox
-                    if im.fetch_needed(anchor.frame, *imagerymod.gutter_square(x0, y0, tile.size, tex["px"]),
-                                       tex["px"], last_only=bool(tex.get("quick")), gutter=True):
+                    sq_t = imagerymod.gutter_square(x0, y0, tile.size, tex["px"])
+                    if genground.ON and not tex.get("quick"):   # (the generated ground's squares: render_far)
+                        for a in genground.far_fetch(*sq_t, tex["px"], tile.level):
+                            im.fetch_needed(anchor.frame, *a)
+                    if im.fetch_needed(anchor.frame, *sq_t, tex["px"], last_only=bool(tex.get("quick")), gutter=True):
                         built, got = self.far_pool.submit(*args).result()
                         self.refetched += 1
                 if got is not None:
@@ -6363,7 +6404,8 @@ class Server:
                         if not is_global:
                             rgb = self.road_faces(anchor, node, px, rgb)
                             self.write_road_mask(anchor, node, px, texture)
-                        tex_bytes = imagerymod.write_dds(os.path.join(self.out_dir, texture), rgb)
+                        tex_bytes = genground.write_far_dds(os.path.join(self.out_dir, texture), rgb,
+                                                            imagerymod.FAR_SRGB)
                     finally:
                         revisitmod.end(f0)
                     self.keep_texture(tk, texture, tex_bytes, used, pending, f0)
@@ -6384,7 +6426,8 @@ class Server:
                     material = self.matslots.take(ck)
                     texture = self.texture_name(*ck, self.tex_rev.get(ck, 0))
                     fallback_rgb = farfield.palette_fallback_rgb(getattr(built, "grid", None))
-                    tex_bytes = imagerymod.write_dds(os.path.join(self.out_dir, texture), fallback_rgb)
+                    tex_bytes = imagerymod.write_dds(os.path.join(self.out_dir, texture), fallback_rgb,
+                                                     imagerymod.FAR_SRGB)
         if geo is not None:             # (a revisit hit, or no imagery)
             w0 = time.perf_counter()
             built = geo.result()
@@ -6446,12 +6489,17 @@ class Server:
                                   farfield.global_dem_zoom(tile.z, self.layout.cells))
         if isinstance(tile, farfield.Piece):
             tile = tile.base
+        # (the generated ground's near rings, render_far: its trees and map data, as blockworker._far_tile_key's; the
+        # Codex review of a3c7895f)
+        gsize = imagerymod.gutter_square(0.0, 0.0, tile.size, px)[2]
+        gen = (genground.far_key(self.mapdata, getattr(self, "veg", None) is not None),) \
+            if genground.far_strength(tile.level) is not None and genground.far_texel(gsize, px) is not None else ()
         return revisitmod.key("fartex", round(float(anchor.lat), 7), round(float(anchor.lon), 7), tile.key, px,
                               self.road_mask_px(tile.level) if self.road_masks else 0, [s.name for s in im.chain],
                               self.tone, im.leaf_on, im.season_mode, self.tex_modes, roadsmod.ROADS_IN_GROUND,
                               self.mapdata.versions() if self.mapdata is not None else None,
                               self.road_widths is not None, self.surface is not None, self.layout.cells,
-                              anchor.zooms[max(tile.level, 0)])
+                              anchor.zooms[max(tile.level, 0)], *gen)
 
     def keep_texture(self, tk, texture, tex_bytes, used, pending, f0):
         """A far texture rendered here kept in the revisit cache when it is final: no colour-match or de-shadow region
@@ -6608,7 +6656,7 @@ class Server:
                        "mask": (os.path.join(self.out_dir, surfacemod.road_mask_name(texture)),
                                 self.road_mask_px(lvl)) if self.road_masks else None,
                        "chain": [s.name for s in im.chain], "tone": self.tone, "leaf_on": im.leaf_on,
-                       "season_mode": im.season_mode, "keep_fin": n_name}
+                       "season_mode": im.season_mode, "keep_fin": n_name, **self.gen_far_tex()}
                 if fin is not None:
                     tex["fin"] = fin
                 specs.append(("tile", tile, zoom, q, ref_zoom, self.near_visual in BLOCK_DRAWN, self.layout, tex,
@@ -6820,7 +6868,7 @@ class Server:
                    "mask": (os.path.join(self.out_dir, surfacemod.road_mask_name(texture)),
                             self.road_mask_px(tile.level)) if self.road_masks else None,
                    "chain": [s_.name for s_ in im.chain], "tone": self.tone, "leaf_on": im.leaf_on,
-                   "season_mode": im.season_mode, "pads": self.tile_pads(anchor, tile, px)}
+                   "season_mode": im.season_mode, "pads": self.tile_pads(anchor, tile, px), **self.gen_far_tex()}
             lvl = tile.level
             got = self.far_pool.submit(blockworker.far_tile, anchor.id, anchor.lat, anchor.lon, tile,
                                        anchor.zooms[lvl], None, anchor.zooms[lvl - 1], self.near_visual in BLOCK_DRAWN,
@@ -6841,7 +6889,7 @@ class Server:
         texture = self.texture_name(*ck, prev.rev + 1)
         if not isinstance(tile, farfield.GTile):
             self.write_road_mask(anchor, node, px, texture)
-        tex_bytes = imagerymod.write_dds(os.path.join(self.out_dir, texture), rgb)
+        tex_bytes = genground.write_far_dds(os.path.join(self.out_dir, texture), rgb, imagerymod.FAR_SRGB)
         self.keep_texture(self.tex_key(anchor, tile, px), texture, tex_bytes, used, pending, None)
         sources = prev.credits
         if self.credits is not None:        # the new texture's sources (the corrected one names S2 too)
@@ -8995,7 +9043,7 @@ class Connection:
             import mpshare
             hub, new = self.s.share_hub(self.send)
             self.send({"type": "share_info", "code": mpshare.share_code(self.s.share_parts()),
-                       "weight": peerworkmod.share_weight()})
+                       "weight": mpshare.share_weight()})
             if new:
                 self.spawn(self.share_pump(hub))
         elif kind == "share_group":             # the plugin's bngeGroup: the players near us that share our code
@@ -9009,11 +9057,6 @@ class Connection:
             hub = getattr(self.s, "_share_hub", None)
             if hub is not None:
                 hub.on_data(msg.get("d"))
-        # (shared world building v1, commented out 2026-10-27: the mod sends neither any more)
-        # elif kind == "share":                   # a BeamMP session: serve our group (peerwork.GroupHelper)
-        #     self.send(dict(self.s.share_start(msg.get("port")), type="share"))
-        # elif kind == "peers":                   # the players on our anchor (the BeamMP plugin, through mpsession)
-        #     self.s.share_group(msg)
         elif kind == "prepare_terrain":
             self.spawn(self.prepare_terrain(msg))
         elif kind == "commit_anchor":
@@ -9609,7 +9652,7 @@ class Connection:
         self.status(f"Building terrain at {lat:.5f}, {lon:.5f}...")
         t0 = time.perf_counter()
         # a teleport's first block without its road plans, the graded one sent when built (make_provisional)
-        provisional = teleport and PROVISIONAL_FIRST and self.s.grading and not os.environ.get("BNGE_WORLD_BUNDLE")
+        provisional = teleport and PROVISIONAL_FIRST and self.s.grading
         if provisional:     # (the graded one's cells planned meanwhile, a process each: Server.plan_first)
             try:
                 self.s.plan_first(anchor, cx, cy)
@@ -11963,9 +12006,6 @@ class Connection:
             # (GIL), and three far workers made a block build 3-10x slower (landcover 1.4 s vs 0.1 s), too slow
             # to follow a car at 58 m/s (2026-10-12). The far tile finishing next refills the workers.
             workers = HM_BUSY_TILE_WORKERS if self.s.hm_here else self.s.tile_workers
-            # plus the helpers' slots (compute sharing): their tiles cost this process only the files (26 ms a
-            # tile); kept to the local workers, a Steam Deck sent 2 at a time to 12 idle helper workers (2026-10-22)
-            workers += self.s.remote_slots()
             # (graded tiles: at most GRADED_SHARE of the workers, the rest go on to the ungraded ones meanwhile)
             g_cap = max(1, int(workers * GRADED_SHARE)) if getattr(self.s, "grading", False) else workers
             # (only builds under way count: a tile the server has already, a bulk restore's, is sent in this pass; held
@@ -12061,10 +12101,6 @@ class Connection:
                 fg = getattr(self.s, "_far_geo_time", None)
                 if fg:          # (the far geotiles so far this session: n, s of queue + build by kind)
                     log.info("far geotiles: %s", {k: (v[0], round(v[1], 1)) for k, v in sorted(fg.items())})
-                if getattr(self.s.far_pool, "stats", None) is not None and self.batch[1] >= 50:   # (a full one)
-                    g = getattr(self.s.far_pool, "group", None)
-                    log.info("compute sharing: %s; group %s", self.s.far_pool.stats,
-                             g["ids"] if g else "none")
                 if self.s.imagery is not None:
                     log.info("imagery: %s", self.s.imagery.summary())
                     if self.s.imagery_worker or self.s.base_worker:
@@ -12193,16 +12229,6 @@ async def main_async(args, restart=None):
     """The server's run. restart: a list main() reads after it returns: True appended when it stopped for the settings
     page's "Restart world server" (srvrestart.py)."""
     log.info("startup: initializing data services")
-    if os.environ.get("BNGE_WORLD_BUNDLE") and (args.roads != "on" or args.grading != "on"):
-        from worldbundle import BundleError
-        raise BundleError("BNGE_WORLD_BUNDLE requires --roads on --grading on")
-    if os.environ.get("BNGE_WORLD_BUNDLE") and getattr(args, "peers", ""):
-        from worldbundle import BundleError
-        raise BundleError("Legacy --peers helpers do not negotiate the pinned road-plan identity")
-    if os.environ.get("BNGE_WORLD_BUNDLE"):
-        from worldbundle import validate_bundle
-        # Reject malformed/missing data before allocating services or starting cache maintenance.
-        validate_bundle(os.environ["BNGE_WORLD_BUNDLE"])
     fmt = args.far_format
     if fmt == "cdae":
         v = cdae.engine_version(args.user_dir)
@@ -12223,10 +12249,6 @@ async def main_async(args, restart=None):
                    if "on" in (args.surface, args.roads, args.sea, args.trees) else None)
         if mapdata is not None:
             mapdata.warm_manifests()    # (versions()' weekly builds pinned before the first builds are keyed on them)
-        if os.environ.get("BNGE_WORLD_BUNDLE"):
-            from worldbundle import PinnedPlanCache
-            PinnedPlanCache(os.environ["BNGE_WORLD_BUNDLE"],
-                            f"w{int(args.road_widths == 'on')}s{int(args.sea == 'on')}", mapdata.bundle_versions())
     except BaseException:
         try:
             if mapdata is not None:
@@ -12352,15 +12374,6 @@ async def main_async(args, restart=None):
         # (pools.ElasticPool; BNGE_FAR_ELASTIC=off: all of them for the session, as from 1.9.0 to 1.9.1)
         far_pool = (poolsmod.ElasticPool("far tile", far_base, far_n - far_base, **far_kw)
                     if FAR_ELASTIC and far_n > far_base else poolsmod.RespawningPool("far tile", far_n, **far_kw))
-    if far_pool is not None:
-        # compute sharing: far tiles to helpers (--peers) and, in a BeamMP group, split with the players on our anchor,
-        # built with the same settings as these workers (peerwork.py)
-        far_pool = peerworkmod.SharedFarPool(
-            far_pool, peerworkmod.parse_peers(args.peers),
-            {"roads": args.roads == "on", "grading": args.grading == "on" and args.roads == "on",
-             "road_widths": args.road_widths == "on" and args.roads == "on", "airports": args.airports == "on",
-             "sea": args.sea == "on", "roads_in_ground": roadsmod.ROADS_IN_GROUND}, None,
-            peerworkmod.ReplyCache(os.path.join(args.cache_dir, "peercache")))
     airports_db = None
     if args.airports == "on":       # before any worker process starts: they read this copy
         try:
@@ -12491,6 +12504,10 @@ async def main_async(args, restart=None):
             if line:
                 rate = net.throughput()     # (a slow connection shows here: GitHub #241's stuck-looking roads)
                 log.info("net: %s%s", line, "" if rate is None else f"; large downloads at {rate:.2f} MB/s")
+            if server.host is not None:     # (the game connection in Rust: its traffic and the lane's waits)
+                hl = server.host.summary()
+                if hl:
+                    log.info("%s", hl)
             for c in list(server.connections):     # a host that came back while nobody posed
                 c.refresh_status()
             if server.degraded and not server.imagery_down():
@@ -12643,10 +12660,12 @@ async def main_async(args, restart=None):
             await asyncio.get_running_loop().run_in_executor(None, server.addons().autostart)
     except Exception as e:      # (an add-on that does not start never stops the server)
         log.warning("add-ons: autostart: %s: %s", type(e).__name__, e)
-    log.info("startup: opening the local connection")
-    srv = await asyncio.start_server(
-        lambda r, w: Connection(server, r, w).run(), "127.0.0.1", args.port)
-    port = srv.sockets[0].getsockname()[1]
+    log.info("startup: opening the local connection%s", " (in Rust: BNGE_HOST=on)" if protocol.HOST else "")
+    # (asyncio's server, or with BNGE_HOST=on earthfast's host: the socket, the framing and the writes in Rust, the
+    # handlers on this loop as before; the Rust port's phase 1)
+    srv = await protocol.start_server(lambda r, w: Connection(server, r, w).run(), "127.0.0.1", args.port)
+    server.host = srv if isinstance(srv, protocol.HostServer) else None
+    port = protocol.listen_port(srv)
     print(f"earthd listening on 127.0.0.1:{port} session {server.sid} -> {server.out_dir} "
           f"(far tiles: {fmt}, near visual: {server.near_visual}, cells: {server.layout.cells} "
           f"(format {server.layout.format}), block: {server.layout.block}, "
@@ -12665,6 +12684,8 @@ async def main_async(args, restart=None):
     try:
         await serve(srv, server, restart)
     finally:
+        if server.host is not None:     # (the host's threads ended before anything they could reach closes)
+            server.host.shutdown()
         pl = server.__dict__.get("_preloader")
         if pl is not None:          # (before the network and the disk cache close: its running part ends first)
             await pl.shutdown()
@@ -12683,21 +12704,6 @@ async def main_async(args, restart=None):
             server.areas.close()
         net.close()                 # today's request counters
         disk.close()                # the cache's last uses
-
-
-# (shared world building, commented out 2026-10-27 (off since 2026-10-23; the user: not coming back for a while))
-# def share_port(asked=None, env=None):
-#     """The port our BeamMP group service listens on: BNGE_SHARE_PORT on this machine, else the BeamMP server's (its
-#     plugin's SHARE_PORT, through the mod's "share"), else peerwork.SHARE_PORT; an unusable one is skipped."""
-#     env = os.environ.get("BNGE_SHARE_PORT") if env is None else env
-#     for p in (env, asked):
-#         try:
-#             p = int(p)
-#         except (TypeError, ValueError):
-#             continue
-#         if 1024 <= p <= 65535:
-#             return p
-#     return peerworkmod.SHARE_PORT
 
 
 def parse_cache_cap(text):
@@ -12771,7 +12777,7 @@ def prune_own_caches(cache_dir, started=None):
                            ("seacarve", 0, lambda n: n.endswith(".raw.npy")),  # (whole rasters, before 2026-11-05)
                            (os.path.join("dem", "decoded"), demmod.MIRROR_MB,
                             lambda n: n.endswith((".npy", ".f32z"))),
-                           ("peercache", peerworkmod.CACHE_BYTES / 1e6, None),
+                           ("peercache", 0, None),     # (compute sharing v1's kept replies: gone, 2026-11-16)
                            ("roadwidth", roadwidthmod.STORE_MB, lambda n: n.endswith(".npy"))):
         try:
             n, left = cachemod.prune_dir(os.path.join(cache_dir, sub), mb * 1e6, match=match)
@@ -12968,9 +12974,6 @@ def main():
     ap.add_argument("--cache-dir", default=saved_cache_dir() or os.path.join(home, ".cache/beamng-earth"),
                     help="download cache root (DEM tiles go to <cache-dir>/dem/; default: the folder chosen on the "
                          "settings page or with the app's --cache-dir, else .cache/beamng-earth in the home folder)")
-    ap.add_argument("--peers", default=os.environ.get("BNGE_PEERS", ""),
-                    help="compute sharing: helpers (HOST[:PORT] ...; peerwork.py serve on them) that build far tiles "
-                         "when this server's own workers are busy (default: BNGE_PEERS)")
     ap.add_argument("--max-ram-gb", type=float, default=None, metavar="GB",
                     help="the most memory the whole server may hold, in GB (0: Auto, a third of the RAM, 60 %% from 22 GB, 1.5 to 24 GB; "
                          "default: the settings page's Max RAM for BeamNG.Earth, else Auto; budget.py, memwatch.py)")

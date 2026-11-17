@@ -94,6 +94,16 @@ MIRROR_MAX_AGE_S = 30 * 86400
 DECODED_VERSION = 4          # 2: tiles past the lidar's depth upsampled from its deepest tile, not z12; its holes
                              # filled (fill_holes); 3: Canada's HRDEM lidar (hrdem.py) from z13 down; 4: LidarBC,
                              # and z12 / z13 shifted to its ground (BIAS_*)
+# The elevation's identity in the format-keyed caches (mapdata.dem_identity: road plans, cell facts, the road tiles and
+# the shared decisions' version key), pinned per app release (the user, 2026-11-16, the road revamp's decision D5: "Pin
+# per app release"): the plans made on one release's elevation are kept until a release changes what the ground
+# reads, and are never mixed with plans made on another. Raise it in the release whose elevation changes: a new source
+# read (a lidar, a DEM), a source's pinned build moved (the Mapterhorn CDN packs' release, the regional archives'
+# bindings), a filter or bias rule. The decoding (DECODED_VERSION) and the measured road heights (roadz.VERSION) are in
+# the key on their own; the BNE_* elevation switches (BNE_DEM_ZOOM, BNE_HRDEM...) through revisit.switches_key. What
+# the public Mapterhorn endpoint changes between releases is not followed (D5a): it reaches the plans with the next
+# release that raises this.
+ELEVATION_ID = 1
 MAX_ZOOM = 15               # AWS stops at z15 (the far field's zooms: zoom_for's default cap)
 # The near terrain and the road profiles read Mapterhorn's lidar one zoom deeper where it has it (the user, 2026-10-21:
 # "the terrain data gets smoothed ... sharper terrain features get lost": z16 is ~0.8 m a pixel at 48 N, z15 ~1.6 m, the

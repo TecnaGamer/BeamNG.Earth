@@ -469,7 +469,7 @@ def gave_lanes(feats, i, sp):
 
 
 def _map_lanes(feats, i, cls):
-    """Road i's lane count from the map alone, as roads gives it without the survey: a correction (rampoverrides),
+    """Road i's lane count from the map alone, as roads gives it without the survey: the ramp lane rule's (roads._lane_overrides),
     OpenStreetMap's own count, PR #471's validated ones, the one-way roads joined to it (lane_flow), else two lanes per
     motorway / trunk way, one on a one-way ramp; None otherwise. (roads' own lane count is in the spec kernels now.)"""
     import roadlanes

@@ -22,7 +22,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FILES = ["install.py", "modtextures.py", "start.py", "launcher.py", "bmplaunch.py", "apppaths.py", "gameinstall.py", "skypatch.py",
          "enginepatch.py", "enginepatch_code.py", "enginepatch_terfast.py", "enginepatch_terfast_code.py", "run_server.bat", "run_server.sh", "README.md", "LICENSE", "CREDITS.md", "TELEMETRY.md",
          "VERSION", "docs/QUICKSTART.md", "docs/MODERNIZATION.md", "docs/MODERNIZATION_VALIDATION.md",
-         "docs/SKETCHFAB_ASSETS.md", "docs/SHARED_WORLD.md", "docs/RELAUNCH_TROUBLESHOOTING.md", "docs/STABILITY_VALIDATION.md",
+         "docs/SKETCHFAB_ASSETS.md", "docs/RELAUNCH_TROUBLESHOOTING.md", "docs/STABILITY_VALIDATION.md",
          "docs/INITIAL_LOADING_VALIDATION.md",
          "docs/CLASS_GRID_CACHE.md",
          "docs/SUBSEA_TUNNEL_VALIDATION.md", "docs/licenses/Clarabel-LICENSE.txt",
@@ -31,7 +31,7 @@ FILES = ["install.py", "modtextures.py", "start.py", "launcher.py", "bmplaunch.p
          "docs/research/2026-11-02-world-bundle.json", "docs/research/2026-11-02-release-1.8.1-world-bundle.json",
          "beammp/MODERNIZATION.md"]
 TREES = ["mod/beamng_earth", "mod/texture_sources", "server"]     # (the DDS made from texture_sources at install)
-TOOLS = ["tools/reports.py", "tools/sketchfab_assets.py", "tools/world_cache.py"]  # no stored credentials
+TOOLS = ["tools/reports.py", "tools/sketchfab_assets.py"]  # no stored credentials
 SKIP_DIRS = {"__pycache__", "tests", ".git", "backups", "probes", "research", ".venv", "dist"}
 SKIP_EXT = {".pyc", ".pyo", ".log", ".swp"}
 EXECUTABLE = {"run_server.sh", "install.py", "start.py"}

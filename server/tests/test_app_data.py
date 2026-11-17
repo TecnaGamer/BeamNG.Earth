@@ -13,7 +13,10 @@ sys.path.insert(0, str(ROOT))
 
 from tools import build_app
 
-NOT_DATA = {"server/README.md", "server/requirements.txt", "server/earthfast.abi3.so", "server/earthfast.pyd"}
+NOT_DATA = {"server/README.md", "server/requirements.txt", "server/earthfast.abi3.so", "server/earthfast.pyd",
+            # (the message protocol's table: read by test_protocol_agreement only, nothing at run time; the Rust host
+            # takes it in at build time: Rust port phase 0c, 2026-11-16)
+            "server/protocol_table.json"}
 
 
 class AppDataTest(unittest.TestCase):

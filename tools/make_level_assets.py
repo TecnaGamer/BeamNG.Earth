@@ -136,99 +136,141 @@ FLAT_H = B + "bngEarth_flat_h_1024.png"     # neutral height for the detail / ma
 # photo base in detail mode.
 TEX_SQ = 2          # samples per 2 m (the square is heightmap.SQUARE = 1 m)
 T_ = "/assets/materials/terrain/"
-def surface(name, gm, pid, detail, dsize, macro, msize, strength=0.25):
+TL_ = "/temp/beamngEarth/terraintex/"
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "server"))
+import terraintex   # noqa: E402  (rc_name: the zero-mean colour copies the server writes)
+# The near/far border (the user, 2026-11-16: "the texture between the ground with collision vs no collision is very
+# different. and there's a visible border"): past the drawn block's edge the far tiles show the photo alone, so every
+# layer's macro (colour, normal, roughness: the engine fades them all by macroDistAtten) is gone before the nearest
+# block edge can be seen (the player stays >= 229 m inside it, mod follow.lua): the strength goes linearly from its near
+# value at 0 m to its far one at MACRO_DISTANCES[2], then to nothing at [3]; the shader samples no macro past [3]. Its
+# colour grain is zero-mean (terraintex RECENTRED_STEMS): the photo's mean colour at every distance.
+MACRO_DISTANCES = [0, 0, 100, 200]
+MACRO_DIST_ATTEN = [0, 1]
+
+
+def colour_tex(stem):
+    """A layer's colour map of a stock texture stem: the server's zero-mean copy (terraintex.rc_name)."""
+    rel = stem + "_b"
+    return TL_ + terraintex.rc_name(rel) if rel in terraintex.RECENTRED_STEMS else T_ + rel + ".png"
+
+
+def surface(name, gm, pid, detail, dsize, macro, msize, strength=0.25, macro_strength=(0.12, 0.08), base_size=128):
+    """A ground layer: the stock detail texture (repeat dsize x 2 m) and macro (msize x 2 m), the colour as the server's
+    zero-mean copies, the detail colour at `strength` near (0.08 by 80 m), the macro colour at macro_strength (near, at
+    100 m; gone by 200 m: MACRO_DISTANCES). terrain.lua look() makes the same fields (its LOOKS: metres)."""
     m = {"name": name, "internalName": name, "class": "TerrainMaterial", "persistentId": pid, "groundmodelName": gm,
-         "detailDistances": [0, 0, 50, 80], "macroDistances": [0, 0, 150, 1500],
+         "detailDistances": [0, 0, 50, 80], "macroDistances": list(MACRO_DISTANCES),
+         "macroDistAtten": list(MACRO_DIST_ATTEN),
          "baseColorDetailStrength": [strength, 0.08], "normalDetailStrength": [1, 0.3], "roughnessDetailStrength": [1, 0.4],
-         "aoDetailStrength": [0.8, 0.2], "baseColorMacroStrength": [0.12, 0.08], "normalMacroStrength": [0.5, 0.3],
-         "roughnessMacroStrength": [0, 0.8]}
+         "aoDetailStrength": [0.8, 0.2], "baseColorMacroStrength": list(macro_strength),
+         "normalMacroStrength": [0.5, 0.3], "roughnessMacroStrength": [0, 0.8]}
     for key, suf, base in (("baseColor", "_b", "bngEarth_base_b.png"), ("normal", "_nm", "bngEarth_base_nm.png"),
                            ("roughness", "_r", "bngEarth_base_r.png"), ("ao", "_ao", "bngEarth_base_ao.png")):
-        m[key + "BaseTex"], m[key + "BaseTexSize"] = B + base, 128 * TEX_SQ
-        m[key + "DetailTex"], m[key + "DetailTexSize"] = T_ + detail + suf + ".png", dsize * TEX_SQ
-        m[key + "MacroTex"], m[key + "MacroTexSize"] = T_ + macro + suf + ".png", msize * TEX_SQ
-    m["heightBaseTex"], m["heightBaseTexSize"] = B + "bngEarth_base_h.png", 128 * TEX_SQ
+        m[key + "BaseTex"], m[key + "BaseTexSize"] = B + base, base_size * TEX_SQ
+        m[key + "DetailTex"], m[key + "DetailTexSize"] = T_ + detail + suf + ".png", int(dsize * TEX_SQ)
+        m[key + "MacroTex"], m[key + "MacroTexSize"] = T_ + macro + suf + ".png", int(msize * TEX_SQ)
+    m["baseColorDetailTex"], m["baseColorMacroTex"] = colour_tex(detail), colour_tex(macro)
+    m["heightBaseTex"], m["heightBaseTexSize"] = B + "bngEarth_base_h.png", base_size * TEX_SQ
     # flat (no height-blended borders: they swirled across whole blocks, in-game 2026-10-12), never empty
-    m["heightDetailTex"], m["heightDetailTexSize"] = FLAT_H, dsize * TEX_SQ
-    m["heightMacroTex"], m["heightMacroTexSize"] = FLAT_H, msize * TEX_SQ
+    m["heightDetailTex"], m["heightDetailTexSize"] = FLAT_H, int(dsize * TEX_SQ)
+    m["heightMacroTex"], m["heightMacroTexSize"] = FLAT_H, int(msize * TEX_SQ)
     return {name: m}
+# The layers' looks (2026-11-16, the stock maps' way, .claude/work/stock-terrain-materials-2026-11-16.md: each surface its
+# own detail AND macro texture and strengths, where we had one 64 m macro at 12 % for all). Our base is a photo that
+# already has the 10-1000 m variation; what was missing is the 4-16 m band (clumps, bare patches, tussocks, gravel
+# flows) between the 1-4 m detail grain and the photo's texels: the macros repeat every 8-32 m (dividing the 128 m block
+# step) with the stock "breakup" macros (dry grass 02, flows, holes, rocky, clumpy). (detail, its repeat in 2 m units,
+# macro, its repeat in 2 m units, detail colour strength near, macro colour strength (near, at 100 m)); the macro is
+# gone by 200 m (the block's edge, MACRO_DISTANCES) in every one.
+LOOKS = {
+    "bngEarthGroundAsphalt": ("asphalt/asphalt/t_asphalt", 2, "asphalt/macro_asphalt/t_macro_asphalt", 16, 0.3, (0.12, 0.08)),
+    "bngEarthGroundGrass": ("grass/t_grass_01/t_grass_01", 1, "grass/macro_dry_grass_02/t_macro_dry_grass_02", 8, 0.25,
+                            (0.12, 0.08)),
+    "bngEarthGroundDusty": ("soil/dirt_loose_dusty/t_dirt_loose_dusty", 1, "soil/t_macro_flows/t_macro_flows", 8, 0.25,
+                            (0.15, 0.1)),
+    "bngEarthGroundLoose": ("soil/t_gravel/t_gravel", 1, "soil/t_macro_flows/t_macro_flows", 4, 0.3, (0.2, 0.12)),
+    "bngEarthGroundRock": ("rock/t_dirt_rocky/t_dirt_rocky", 2, "rock/macro_rocky/t_macro_rocky", 8, 0.25, (0.15, 0.1)),
+    "bngEarthGroundSnow": ("sand/t_sand/t_sand", 2, "sand/t_macro_sand/t_macro_sand", 16, 0.12, (0.06, 0.04)),
+    "bngEarthGroundMud": ("mud/mud/t_mud", 1, "soil/macro_holes/t_macro_holes", 8, 0.25, (0.12, 0.08)),
+    # mown town yards (server/surface.py LAWN): the grass detail at a 1 m repeat (finer grain), an even macro
+    "bngEarthGroundLawn": ("grass/t_grass_01/t_grass_01", 0.5, "soil/t_macro_flows/t_macro_flows", 8, 0.2, (0.06, 0.04)),
+    # the level's default (built-up land, farmland, no data)
+    "beamngEarthDirt": ("soil/dirt_crumbly/t_dirt_crumbly", 1, "soil/macro_clumply/t_macro_clumpy", 16, 0.25, (0.12, 0.08)),
+    # (server/surface.py FOREST ... SAND, 2026-11-16) forest floor: East Coast USA's / Italy's leaf litter, a weak
+    # macro (the photo there is the crowns' dark: the macro's linear-light offsets weigh most on dark ground)
+    "bngEarthGroundForest": ("forest/t_forest_ground_02/t_forest_ground_02", 1, "forest/t_macro_forest/t_macro_forest", 8,
+                             0.2, (0.08, 0.05)),
+    "bngEarthGroundDryGrass": ("grass/t_dirt_dry_grass/t_dirt_dry_grass", 1,
+                               "grass/macro_dry_grass_02/t_macro_dry_grass_02", 8, 0.25, (0.12, 0.08)),
+    "bngEarthGroundCrop": ("soil/dirt_crumbly/t_dirt_crumbly", 1, "soil/macro_holes/t_macro_holes", 8, 0.25, (0.12, 0.08)),
+    "bngEarthGroundSand": ("sand/t_sand/t_sand", 1, "sand/t_macro_sand/t_macro_sand", 16, 0.25, (0.12, 0.08)),
+}
+NEW_GROUND = (("bngEarthGroundForest", "GRASS", 70), ("bngEarthGroundDryGrass", "GRASS", 71),
+              ("bngEarthGroundCrop", "DIRT", 72), ("bngEarthGroundSand", "SAND", 73))
 SURFACES = {}
-for i, args in enumerate((
-        ("bngEarthGroundAsphalt", "ASPHALT_OLD", "asphalt/asphalt/t_asphalt", 2, "asphalt/macro_asphalt/t_macro_asphalt", 16, 0.3),
-        ("bngEarthGroundGrass", "GRASS", "grass/t_grass_01/t_grass_01", 1, "grass/t_macro_grass/t_macro_grass", 32),
-        ("bngEarthGroundDusty", "DIRT_DUSTY", "soil/dirt_loose_dusty/t_dirt_loose_dusty", 1, "soil/macro_clumply/t_macro_clumpy", 32),
-        ("bngEarthGroundLoose", "DIRT_DUSTY_LOOSE", "soil/t_gravel/t_gravel", 1, "soil/macro_clumply/t_macro_clumpy", 32),
-        ("bngEarthGroundRock", "ROCK", "rock/t_dirt_rocky/t_dirt_rocky", 2, "rock/macro_rocky/t_macro_rocky", 32),
-        ("bngEarthGroundSnow", "SNOW", "sand/t_sand/t_sand", 2, "sand/t_macro_sand/t_macro_sand", 32, 0.12),
-        ("bngEarthGroundMud", "MUD", "mud/mud/t_mud", 1, "soil/macro_clumply/t_macro_clumpy", 32),
-        # mown town yards (server/surface.py LAWN): the grass detail, finer grain
-        ("bngEarthGroundLawn", "GRASS", "grass/t_grass_01/t_grass_01", 1, "grass/t_macro_grass/t_macro_grass", 32, 0.2))):
-    name, gm, detail, dsize, macro, msize, *st = args
-    SURFACES.update(surface(name, gm, f"3b0f6f0e-8f5e-4a51-9a59-0b8e2f6a1c{30 + i}", detail, dsize, macro, msize, *st))
+for i, name in enumerate(("bngEarthGroundAsphalt", "bngEarthGroundGrass", "bngEarthGroundDusty", "bngEarthGroundLoose",
+                          "bngEarthGroundRock", "bngEarthGroundSnow", "bngEarthGroundMud", "bngEarthGroundLawn")):
+    gm = {"bngEarthGroundAsphalt": "ASPHALT_OLD", "bngEarthGroundGrass": "GRASS", "bngEarthGroundDusty": "DIRT_DUSTY",
+          "bngEarthGroundLoose": "DIRT_DUSTY_LOOSE", "bngEarthGroundRock": "ROCK", "bngEarthGroundSnow": "SNOW",
+          "bngEarthGroundMud": "MUD", "bngEarthGroundLawn": "GRASS"}[name]
+    detail, dsize, macro, msize, strength, ms = LOOKS[name]
+    SURFACES.update(surface(name, gm, f"3b0f6f0e-8f5e-4a51-9a59-0b8e2f6a1c{30 + i}", detail, dsize, macro, msize,
+                            strength, ms))
+for name, gm, pid in NEW_GROUND:
+    detail, dsize, macro, msize, strength, ms = LOOKS[name]
+    SURFACES.update(surface(name, gm, f"3b0f6f0e-8f5e-4a51-9a59-0b8e2f6a1c{pid}", detail, dsize, macro, msize,
+                            strength, ms))
 
-# Golf (server/surface.py). The detail texture is painted over the photo; these are not GroundCover layers.
+# Golf (server/surface.py). The detail texture is painted over the photo; these are not GroundCover layers. An even,
+# weak macro (mown).
 for i, (name, gm, detail, dsize, macro, msize, strength, far) in enumerate((
-        ("bngEarthGroundGolfRough", "GRASS", "grass/t_grass_01/t_grass_01", 2, "grass/t_macro_grass/t_macro_grass", 32, 0.72, 0.28),
-        ("bngEarthGroundGolfFairway", "GRASS", "grass/t_grass_01/t_grass_01", 1, "grass/t_macro_grass/t_macro_grass", 32, 0.45, 0.18),
-        ("bngEarthGroundGolfGreen", "GRASS", "grass/t_grass_01/t_grass_01", 0.5, "grass/t_macro_grass/t_macro_grass", 32, 0.5, 0.2),
-        ("bngEarthGroundGolfBunker", "SAND", "sand/t_sand/t_sand", 1, "sand/t_macro_sand/t_macro_sand", 32, 0.95, 0.55))):
-    made = surface(name, gm, f"3b0f6f0e-8f5e-4a51-9a59-0b8e2f6a1c{50 + i}", detail, dsize, macro, msize, strength)
+        ("bngEarthGroundGolfRough", "GRASS", "grass/t_grass_01/t_grass_01", 2, "grass/macro_dry_grass_02/t_macro_dry_grass_02", 8, 0.72, 0.28),
+        ("bngEarthGroundGolfFairway", "GRASS", "grass/t_grass_01/t_grass_01", 1, "soil/t_macro_flows/t_macro_flows", 8, 0.45, 0.18),
+        ("bngEarthGroundGolfGreen", "GRASS", "grass/t_grass_01/t_grass_01", 0.5, "soil/t_macro_flows/t_macro_flows", 8, 0.5, 0.2),
+        ("bngEarthGroundGolfBunker", "SAND", "sand/t_sand/t_sand", 1, "sand/t_macro_sand/t_macro_sand", 16, 0.95, 0.55))):
+    made = surface(name, gm, f"3b0f6f0e-8f5e-4a51-9a59-0b8e2f6a1c{50 + i}", detail, dsize, macro, msize, strength,
+                   (0.06, 0.04))
     mat = made[name]
     mat["baseColorDetailStrength"] = [strength, far]
     SURFACES.update(made)
 
 # Squares (server/surface.py PAVERS / BRICK, the user 2026-11-11: "paint the plaza and apply a texture to it like the
 # roads"): no stock terrain texture has pavers or brick, so the building tileables at the texture set's 1024 detail
-# size (the large grey slabs of West Coast USA's brutalist plazas; the red herringbone brick); their roughness and
-# ao maps are 512 (a slot-size mismatch costs a resize at every material rebuild), so the asphalt's, ao off. A 2 m
-# repeat: 1 m slabs, 0.25 m bricks. The detail colour shows over the photo (pavers' joints, brick's red).
+# size (the large grey slabs of West Coast USA's brutalist plazas; the red herringbone brick). A 2 m repeat: 1 m slabs,
+# 0.25 m bricks. The detail colour shows over the photo (pavers' joints, brick's red). Their own roughness and ambient
+# occlusion (2026-11-16; they had the asphalt's roughness, ao off): the 512 maps resized to 1024 and stored as the
+# layer's offsets from the flat base (server/terraintex.py BASE_R), the setts' from their specular map and colour.
 # The terrain packing reads no DDS (GBitmap) and these ship as DDS only: the server writes PNG copies from the
 # player's game files under /temp/beamngEarth/terraintex/ (server/terraintex.py).
-TL_ = "/temp/beamngEarth/terraintex/"
 PAVING_DETAIL_DISTANCES = (0, 0, 150, 250)     # m: the detail texture whole to 150 m, gone at 250 (terrain.lua tileLook)
-for i, (name, gm, color, normal, dsize, strength, far) in enumerate((
-        ("bngEarthGroundPavers", "ASPHALT_OLD", "bne_pavers_b.png", "bne_pavers_nm.png", 1, 0.5, 0.15),
-        ("bngEarthGroundBrick", "COBBLESTONE", "bne_brick_b.png", "bne_brick_nm.png", 1, 0.85, 0.3),
+for i, (name, gm, tile, dsize, strength, far) in enumerate((
+        ("bngEarthGroundPavers", "ASPHALT_OLD", "pavers", 1, 0.5, 0.15),
+        ("bngEarthGroundBrick", "COBBLESTONE", "brick", 1, 0.85, 0.3),
         # cobbled roads and squares (the layer had t_asphalt_02's grain): Italy's setts, persistentId kept
-        ("bngEarthGroundCobble", "COBBLESTONE", "bne_cobble_b.png", "bne_cobble_nm.png", 1, 0.6, 0.2))):
+        ("bngEarthGroundCobble", "COBBLESTONE", "cobble", 1, 0.6, 0.2))):
     pid = "3b0f6f0e-8f5e-4a51-9a59-0b8e2f6a1c37" if name == "bngEarthGroundCobble" else \
         f"3b0f6f0e-8f5e-4a51-9a59-0b8e2f6a1c{60 + i}"
     made = surface(name, gm, pid, "asphalt/asphalt/t_asphalt", dsize, "asphalt/macro_asphalt/t_macro_asphalt", 16,
                    strength)
     mat = made[name]
-    mat["baseColorDetailTex"], mat["normalDetailTex"] = TL_ + color, TL_ + normal
-    mat["baseColorDetailStrength"], mat["aoDetailStrength"] = [strength, far], [0, 0]
+    for key, suf in (("baseColor", "_b"), ("normal", "_nm"), ("roughness", "_r"), ("ao", "_ao")):
+        mat[key + "DetailTex"] = f"{TL_}bne_{tile}{suf}.png"
+    mat["baseColorDetailStrength"], mat["aoDetailStrength"] = [strength, far], [1, 0.3]
+    mat["roughnessDetailStrength"] = [1, 0.3]
     # (seen further than the land's 50-80 m: the user, 2026-11-11, "the texture fades away pretty quickly")
     mat["detailDistances"] = list(PAVING_DETAIL_DISTANCES)
     SURFACES.update(made)
 
+# The level's own default layer (built-up land, farmland, no data; the block's material 0): the same rules as the rest
+# (it had its own: a 128 m macro, no detail repeat set, the stock height maps; 2026-11-16 made it agree with terrain.lua's
+# LOOKS), base slot 256 x 2 m, persistentId kept
+_d = LOOKS["beamngEarthDirt"]
+DIRT = surface("beamngEarthDirt", "DIRT", "3b0f6f0e-8f5e-4a51-9a59-0b8e2f6a1c10", _d[0], _d[1], _d[2], _d[3], _d[4],
+               _d[5], base_size=256)
+
 pretty(os.path.join(T, "main.materials.json"), {
-    "beamngEarthDirt": {
-        "name": "beamngEarthDirt",
-        "internalName": "beamngEarthDirt",
-        "class": "TerrainMaterial",
-        "persistentId": "3b0f6f0e-8f5e-4a51-9a59-0b8e2f6a1c10",
-        "groundmodelName": "DIRT",
-        # Texture repeat sizes (metres) must divide the 256 m terrain-follow step, or the texture
-        # pattern shifts under the car at every terrain move (in-game 2026-10-10: macro 80 m / base 512 m
-        # made 24% of the view change at each commit; 64 m / 256 m makes it pixel-identical).
-        "aoBaseTex": B + "bngEarth_base_ao.png", "aoBaseTexSize": 256 * TEX_SQ,
-        "aoDetailStrength": [1, 0], "aoDetailTex": A + "dirt_crumbly/t_dirt_crumbly_ao.png",
-        "aoMacroTex": A + "macro_clumply/t_macro_clumpy_ao.png", "aoMacroTexSize": 64 * TEX_SQ,
-        "baseColorBaseTex": B + "bngEarth_base_b.png", "baseColorBaseTexSize": 256 * TEX_SQ,
-        "baseColorDetailStrength": [0.25, 0], "baseColorDetailTex": A + "dirt_crumbly/t_dirt_crumbly_b.png",
-        "baseColorMacroStrength": [0.12, 0.08], "baseColorMacroTex": A + "macro_clumply/t_macro_clumpy_b.png", "baseColorMacroTexSize": 64 * TEX_SQ,
-        "detailDistances": [0, 0, 30, 60], "macroDistances": [0, 10, 100, 3000],
-        "heightBaseTex": B + "bngEarth_base_h.png", "heightBaseTexSize": 256 * TEX_SQ,
-        "heightDetailTex": A + "dirt_crumbly/t_dirt_crumbly_h.png",
-        "heightMacroTex": A + "macro_clumply/t_macro_clumpy_h.png", "heightMacroTexSize": 64 * TEX_SQ,
-        "normalBaseTex": B + "bngEarth_base_nm.png", "normalBaseTexSize": 256 * TEX_SQ,
-        "normalDetailStrength": [0.8, 0], "normalDetailTex": A + "dirt_crumbly/t_dirt_crumbly_nm.png",
-        "normalMacroStrength": [0.5, 0.2], "normalMacroTex": A + "macro_clumply/t_macro_clumpy_nm.png", "normalMacroTexSize": 64 * TEX_SQ,
-        "roughnessBaseTex": B + "bngEarth_base_r.png", "roughnessBaseTexSize": 256 * TEX_SQ,
-        "roughnessDetailStrength": [1, 0], "roughnessDetailTex": A + "dirt_crumbly/t_dirt_crumbly_r.png",
-        "roughnessMacroStrength": [0, 0.8], "roughnessMacroTex": A + "macro_clumply/t_macro_clumpy_r.png", "roughnessMacroTexSize": 64 * TEX_SQ,
-    },
+    **DIRT,
     **SURFACES,
     "beamngEarthTerrainMaterialTextureSet": {
         "name": "beamngEarthTerrainMaterialTextureSet",

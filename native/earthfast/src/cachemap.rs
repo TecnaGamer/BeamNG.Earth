@@ -90,6 +90,7 @@ fn coverage(m: &Tiles, gz: u8, x0: u32, y0: u32, w: u32, h: u32, cov: &mut [f32]
             }
         } else {
             let s = (z - gz) as u32;
+            #[allow(clippy::disallowed_methods)] // powi: 0.25^s is exact (a power of two) whatever computes it
             let part = 0.25f32.powi(s as i32);
             let (tx0, tx1) = (x0 << s, ((x0 + w) << s) - 1);
             let (ty0, ty1) = (y0 << s, ((y0 + h) << s) - 1);
@@ -203,6 +204,7 @@ impl CoverIndex {
             let s = (CZ - gz) as u32;
             let mut nfull = vec![0u64; n];
             let mut nany = vec![0u64; n];
+            #[allow(clippy::iter_over_hash_type, clippy::disallowed_methods)] // hash order: integer counts per pixel
             for (&(x, y), &m) in masks.iter() {
                 let (i, j) = (((x as u64) >> s) - x0l, ((y as u64) >> s) - y0l);
                 let k = (j * wl + i) as usize;

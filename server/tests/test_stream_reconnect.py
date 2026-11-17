@@ -34,8 +34,8 @@ class ReconnectTest(unittest.IsolatedAsyncioTestCase):
                 conn.finished.set()
                 self.handlers.discard(task)
 
-        self.listener = await asyncio.start_server(accept, "127.0.0.1", 0)
-        self.port = self.listener.sockets[0].getsockname()[1]
+        self.listener = await protocol.start_server(accept, "127.0.0.1", 0)
+        self.port = protocol.listen_port(self.listener)
 
     async def asyncTearDown(self):
         for writer in self.clients:

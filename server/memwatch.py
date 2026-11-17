@@ -52,7 +52,7 @@ _thread = None
 
 
 def _respawning(p):
-    """The RespawningPools behind p (a SharedFarPool's local pool, an ElasticPool's base and running extras)."""
+    """The RespawningPools behind p (a wrapper's local pool, an ElasticPool's base and running extras)."""
     if p is None:
         return []
     p = getattr(p, "local", p)
@@ -63,7 +63,7 @@ def _respawning(p):
 
 
 def register(*pools):
-    """The server's pools (any of RespawningPool / ElasticPool / SharedFarPool; None skipped), once each."""
+    """The server's pools (any of RespawningPool / ElasticPool; None skipped), once each."""
     with _lock:
         for p in pools:
             if p is not None and all(p is not q for q in _pools):
