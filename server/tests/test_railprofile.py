@@ -53,6 +53,37 @@ class RailProfileTest(unittest.TestCase):
         for k in common:
             self.assertAlmostEqual(a[k], b[k], places=6, msg=str(k))
 
+    def test_the_bed_is_the_same_in_every_frame(self):
+        """Popoli (2026-11-17): the mesh is built in the anchor's frame and the grader plans in its planning region's, kilometres
+        off. The nodes lay on each frame's own lattice, a raised deck's ramp (reaching past the windows) was blended from
+        different nodes, and the grader's bed stood 1.3 m over the mesh's: the ground graded to it buried the track. A
+        bed is the same whichever frame asks."""
+        def ridge(la, lo):      # (a ridge 14 m high under the bridge: its deck is raised, the ramps climb 2 % for 700 m)
+            x, _y, _ = FRAME.geodetic_to_enu(np.asarray(la, np.float64), np.asarray(lo, np.float64), 0.0)
+            return hill(la, lo) + 14.0 * np.exp(-((x - 598.0) / 9.0) ** 2)
+
+        def beds_in(frame):
+            railprofile._NODES.clear()
+            ground = lambda xy: ridge(*frame.enu_to_geodetic(xy[:, 0], xy[:, 1], 0.0)[:2])
+            out = {}
+            for tx in range(-3, 5):
+                for ty in range(-2, 2):
+                    rails = railways.parts(frame, [self.f], roads.tile_bbox(tx, ty), clip=True)
+                    for (fid, _c, kind, xy), zs in zip(rails, railprofile.beds(frame, "t", self.load, ground, rails)):
+                        la, lo, _ = frame.enu_to_geodetic(xy[:, 0], xy[:, 1], 0.0)
+                        for a, b, z in zip(np.asarray(la), np.asarray(lo), zs):
+                            out[(fid, kind, round(float(a), 7), round(float(b), 7))] = float(z)
+            return out
+        import geodesy
+        from test_roads import LAT, LON, M_LAT, M_LON
+        base = beds_in(FRAME)
+        for dx, dy in ((137.0, 59.0), (-90.0, 0.0), (900.0, 400.0)):
+            other = beds_in(geodesy.EnuFrame(LAT + dy / M_LAT, LON + dx / M_LON, 0.0))
+            common = set(base) & set(other)
+            self.assertGreater(len(common), 500)
+            worst = max(abs(base[k] - other[k]) for k in common)
+            self.assertLess(worst, 0.02, f"a frame {dx:g} m east, {dy:g} m north of it laid the bed up to {worst:.2f} m off")
+
     def test_no_point_is_left_without_a_bed(self):
         for tx in (0, 1, 2):
             self.assertTrue(np.isfinite(list(self.beds(tx).values())).all())
