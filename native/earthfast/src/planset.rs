@@ -613,7 +613,8 @@ impl Ord for Step {
 /// bank_off[j]..bank_off[j + 1] (has_bank[j] false: none, zeros), widen's the same. numpy's concatenation of them taken
 /// as it is: a plan's bank as long as it is (trim_side_mouths keeps the untrimmed plan's), read at the segments' vertex
 /// positions in the concatenated plans (as PlanPack's bk[ia]: one longer shifts the plans after it). half, road_half (plans,); rid (plans,): its road (-1: none); rank (plans,); abut (plans, 2); steep (plans,): flags,
-/// STEEP (a pass road's) and OPEN_TUNNEL (a tunnel's open section: gradebins), the segments' st;
+/// STEEP (a pass road's), OPEN_TUNNEL (a tunnel's open section) and TUNNEL (a covered tunnel's section in the open:
+/// gradebins), the segments' st;
 /// bbox (plans, 4); cut (c, 6) the plans' cut rows, plan j's cut_off[j]..cut_off[j + 1] (has_cut[j] false: it has
 /// none); then grading's constants. Returns a dict of PlanPack's attributes.
 #[pyfunction]

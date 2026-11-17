@@ -23,7 +23,9 @@ one quadratic programme (the Rust kernel of carriageways.solve, as the interchan
   programme, left 900 roads of the cell as the passes made them); one with no answer is left as it is, and said (no
   stand-in: the conflict is the thing to fix);
 - what the passes solved is held (an interchange's shape and its ramps, a bridge's abutment end, a tunnel), and a road
-  under a deck may only go down (its clearance stays).
+  under a deck may only go down (its clearance stays); where a shape set nothing but bounds a road (a cut's ceiling
+  over it, a fill's floor under it) the road stays within it, and a road over a low arch stays over its cover (the
+  soil roads.arch_raise keeps over the vault, which would otherwise stand as a step in the road).
 
 Pure but for the kernel; plans are changed in place (a plan's z replaced)."""
 import collections
@@ -188,13 +190,14 @@ def _solve_networks(chains, ccps):
     return out, stats
 
 
-def apply(plans, specs, held=None, under=None, skip=(), diagnostics=None, natural=None, meets=None):
+def apply(plans, specs, held=None, under=None, skip=(), diagnostics=None, natural=None, meets=None, bounds=None):
     """plans: [Plan] (xy (n, 2+), z (n,), road_half, abut, rid), specs alike (cls, kmh; None: left out); held(i) ->
     bool (n,) of plan i's held samples (or None), under(i) -> bool (n,) of those under a deck (only down there); skip:
     plan indices left as they are, held whole (tunnels); natural(i) -> (n,) plan i's natural profile (the heights
     before the passes; None: its heights now). meets(i, j) -> True / False / None (unknown): plans i and j share a node
     of the map (a T junction is one only where they do: an end a few metres from a road it does not join, a service
-    road's cut ending 6 m beside a street, is no junction). Changes the plans' z in place; returns how many changed."""
+    road's cut ending 6 m beside a street, is no junction). bounds(i) -> (lo (n,), hi (n,)) or None: plan i's heights
+    stay within them (-inf / inf: none). Changes the plans' z in place; returns how many changed."""
     idx = [i for i, sp in enumerate(specs) if sp is not None and len(plans[i].xy) >= 2]
     if not idx:
         return 0
@@ -208,7 +211,7 @@ def apply(plans, specs, held=None, under=None, skip=(), diagnostics=None, natura
     rids = [int(getattr(plans[i], "rid", -1)) for i in idx]
     arcs = [_arc(xy) for xy in xys]
     skip = set(skip)
-    hold, down = [], []
+    hold, down, lob, hib = [], [], [], []
     for k, i in enumerate(idx):
         h = np.zeros(len(zs[k]), bool)
         if i in skip:
@@ -223,39 +226,47 @@ def apply(plans, specs, held=None, under=None, skip=(), diagnostics=None, natura
         hold.append(h)
         got = under(i) if under is not None else None
         down.append(np.asarray(got, bool) if got is not None else np.zeros(len(zs[k]), bool))
+        got = bounds(i) if bounds is not None else None
+        lob.append(np.asarray(got[0], np.float64) if got is not None else np.full(len(zs[k]), -np.inf))
+        hib.append(np.asarray(got[1], np.float64) if got is not None else np.full(len(zs[k]), np.inf))
     rs, nodes = runs(xys, sps, rids)
     R = []                          # per run: its samples, targets, weights, bounds and laws
     loc = {}                        # plan k -> (run, reversed, s0)
     for r, run in enumerate(rs):
-        z_r, h_r, d_r, s_r, n_r = [], [], [], [], []
+        z_r, h_r, d_r, s_r, n_r, lo_r, hi_r = [], [], [], [], [], [], []
         s0 = 0.0
         for k, rev in run:
-            z, h, d, s, nz = zs[k], hold[k], down[k], arcs[k], nats[k]
+            z, h, d, s, nz, lb, hb = zs[k], hold[k], down[k], arcs[k], nats[k], lob[k], hib[k]
             if rev:
-                z, h, d, s, nz = z[::-1], h[::-1], d[::-1], s[-1] - s[::-1], nz[::-1]
+                z, h, d, s, nz, lb, hb = z[::-1], h[::-1], d[::-1], s[-1] - s[::-1], nz[::-1], lb[::-1], hb[::-1]
             s = s + s0
             if z_r:                                     # (the joint: one point, the first part's)
-                z, h, d, s, nz = z[1:], h[1:], d[1:], s[1:], nz[1:]
+                z, h, d, s, nz, lb, hb = z[1:], h[1:], d[1:], s[1:], nz[1:], lb[1:], hb[1:]
             loc[k] = (r, rev, s0)
             z_r.append(z)
             h_r.append(h)
             d_r.append(d)
             s_r.append(s)
             n_r.append(nz)
+            lo_r.append(lb)
+            hi_r.append(hb)
             s0 = float(s[-1]) if len(s) else s0
-        S, Z, H, D, NZ = (np.concatenate(a) for a in (s_r, z_r, h_r, d_r, n_r))
+        S, Z, H, D, NZ, LB, HB = (np.concatenate(a) for a in (s_r, z_r, h_r, d_r, n_r, lo_r, hi_r))
         L = float(S[-1] - S[0])
         m = max(2, int(math.ceil(L / STEP_M)) + 1)
         sv = np.linspace(S[0], S[-1], m)
         step = L / max(m - 1, 1)
         t = np.interp(sv, S, Z)
         j = np.clip(np.searchsorted(S, sv), 0, len(S) - 1)      # (a sample is held / only down where a plan point
-        hs = np.zeros(m, bool)                                   # within half a step of it is)
+        hs = np.zeros(m, bool)                                   # within half a step of it is; bounded by theirs)
         ds = np.zeros(m, bool)
+        lo_s, hi_s = np.full(m, -np.inf), np.full(m, np.inf)
         for jj in (j, np.clip(j - 1, 0, len(S) - 1)):
             ok = np.abs(S[jj] - sv) <= step / 2 + 1e-6
             hs |= ok & H[jj]
             ds |= ok & D[jj]
+            lo_s = np.where(ok, np.maximum(lo_s, LB[jj]), lo_s)
+            hi_s = np.where(ok, np.minimum(hi_s, HB[jj]), hi_s)
         g_law = rad = 0.0
         rank = 0
         for k, _rev in run:
@@ -265,8 +276,8 @@ def apply(plans, specs, held=None, under=None, skip=(), diagnostics=None, natura
         tn = np.interp(sv, S, NZ)                       # (the ground's own grade: the natural profile's)
         nat = np.abs(tn[w_n:] - tn[:-w_n]) / (w_n * step) if m > w_n else np.abs(np.diff(tn)) / max(step, 1e-6)
         g = max(g_law, float(nat.max()) + NATURAL_PLUS if len(nat) else g_law)
-        R.append(dict(sv=sv, t=t, w=np.where(hs, W_HOLD, 1.0 + W_RANK * rank), lo=np.full(m, -np.inf),
-                      hi=np.where(ds, t, np.inf), held=hs, S=S, Z=Z, grade=g, rad=rad, step=step,
+        R.append(dict(sv=sv, t=t, w=np.where(hs, W_HOLD, 1.0 + W_RANK * rank), lo=lo_s,
+                      hi=np.minimum(np.where(ds, t, np.inf), hi_s), held=hs, S=S, Z=Z, grade=g, rad=rad, step=step,
                       junction=[False, False], parts=[(k, rev) for k, rev in run]))
 
     def arc_of(k, s_plan):
@@ -468,6 +479,7 @@ def apply(plans, specs, held=None, under=None, skip=(), diagnostics=None, natura
                                                         # parts the passes left apart, each part's own, so both end on
                                                         # the solved height; the run's targets there are the first's)
         z = zs[k] + (np.interp(s, R[r]["sv"], sol[r]) - np.interp(s, R[r]["sv"], own))
+        z = np.minimum(np.maximum(z, lob[k]), hib[k])
         z = np.where(hold[k], zs[k], z)                 # (the change, not the resampled profile: the plan's own detail)
         z = np.where(down[k], np.minimum(z, zs[k]), z)
         if float(np.abs(z - zs[k]).max()) >= MIN_MOVE_M:

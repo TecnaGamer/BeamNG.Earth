@@ -59,6 +59,12 @@ def deck_road():
     return features([[(-300.0, 0.0), (300.0, 0.0)]], ["motorway"], flags=[(0, "is_bridge", 0.2, 0.8)])
 
 
+def deck_over_tunnel():
+    """deck_road, and a street mapped in a tunnel under its middle (x = 0, y -40 to 40): a trench the bridge crosses."""
+    return features([[(-300.0, 0.0), (300.0, 0.0)], [(0.0, -40.0), (0.0, 40.0)]], ["motorway", "residential"],
+                    flags=[(0, "is_bridge", 0.2, 0.8), (1, "is_tunnel")])
+
+
 def grid(xs, ys):
     e, n = np.meshgrid(np.asarray(xs, np.float64), np.asarray(ys, np.float64))
     la, lo, _ = FRAME.enu_to_geodetic(e.ravel(), n.ravel(), 0.0)
@@ -116,7 +122,9 @@ class DeckGroundTest(unittest.TestCase):
         with mock.patch.object(grading, "DECK_GROUND_ON", True):
             g = grading.Grader(FRAME, FakeMD(overpass_road()), fill)
         z = g.apply(la, lo, fill(la, lo))
-        np.testing.assert_allclose(z, MARSH + 8.0, atol=0.5)
+        # (under the deck, past its ends at +-20: the abutment's slope down from the fill, 1 in SLOPE_RUN, no ledge)
+        past = np.array([1.0, 3.0, 3.0, 1.0])
+        np.testing.assert_allclose(z, MARSH + 8.0 - past / grading.SLOPE_RUN, atol=0.1)
         # (the street under the deck's middle is the marsh)
         la, lo, _e, _n = grid([0.0], [0.0])
         self.assertLess(float(g.apply(la, lo, fill(la, lo))[0]), MARSH + 0.5)
@@ -158,6 +166,36 @@ class DeckGroundTest(unittest.TestCase):
         np.testing.assert_allclose(zb, MARSH, atol=0.05)
         # ... and the far tiles past the graded levels read them too (DeckGroundDem: only what is planned)
         np.testing.assert_allclose(b.deck_ground(la, lo, ridge(la, lo)), MARSH, atol=0.05)
+
+    def test_tunnel_networks_read_the_plans_ground(self):
+        """The tunnel networks read their cover on the ground the plans read (Grader.tunnel_ground: the planner's own
+        correction, by the decks round each point whatever was planned before), not on the elevation as read: the
+        bridge it holds over a trench was cover, a tube (a low arch where it is lower) under the deck, its portals'
+        lintels standing through it (Barcelona's Ronda, the street bridge over the trunk's trench)."""
+        import roads
+        md = FakeMD(deck_over_tunnel())
+        with mock.patch.object(grading, "DECK_GROUND_ON", True):
+            g = grading.Grader(FRAME, md, ridge)
+        la, lo, _e, _n = grid([-6.0, 0.0, 6.0], np.arange(-40.0, 41.0, 5.0))
+        self.assertGreater(float(ridge(la, lo).max()), 100.0)
+        np.testing.assert_allclose(g.tunnel_ground(la, lo), MARSH, atol=0.05)
+        # the same where nothing was planned first and where everything was (one source: the plans' own elevation)
+        g.apply(la, lo, ridge(la, lo))
+        pl = g.store.planners_of(la[:1], lo[:1])[0][0]
+        np.testing.assert_allclose(g.tunnel_ground(la, lo), pl.elev(la, lo), atol=1e-9)
+        # ... the planner's own tunnel networks read it too (_tunnel_chains)
+        st = pl._tunnel_chains().store_at(float(la[0]), float(lo[0]))
+        np.testing.assert_allclose(st.raw(la, lo), MARSH, atol=0.05)
+        f = md.feats
+
+        def chunks(raw):
+            tp = roads.TunnelProfiles(FRAME, lambda key: f, ridge)
+            tp.raw = raw
+            return roads._tunnel_chunks(tp, [f], (-128.0, -128.0, 128.0, 128.0))
+        self.assertTrue(any(c.get("tunnel") for c in chunks(ridge)), "(on the elevation as read: a tube)")
+        ch = chunks(g.tunnel_ground)
+        self.assertTrue(ch)
+        self.assertFalse(any(c.get("tunnel") for c in ch), "the trench under the deck in the open: no tube, no portals")
 
     def test_points_asked_apart_or_together_agree(self):
         g = self.grader(ridge)

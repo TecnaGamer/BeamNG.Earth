@@ -275,26 +275,57 @@ def _region_beds(frame, load, elev, rails):
     return np.split(z, off[1:-1])
 
 
-def grade_plans(frame, cells, box, elev, load=None):
-    """[(fid, xy (k, 2), z (k,))]: the bed line of each on-ground rail part near box, in elev's heights (elev(lat, lon):
-    the grader's DEM), for grading.Grader to lay the ground to (the cutting's walls back from the track, the ramps'
-    embankments filled). tile_mesh then finds the ground at its bed. Pure given elev."""
+def track_beds(frame, cells, box, elev, load=None):
+    """(rails, beds, worn): the rail parts near box (parts', GRADE_REACH_M round it: [(fid, class, kind, xy (k, 2))]),
+    each one's bed (k,) in elev's heights (elev(lat, lon): the grader's DEM) and {fid: wear} of the worn lines. The
+    track's height wherever the grader asks it: grade_plans lays the ground to these beds, the shapes and the underpasses
+    clear these decks (grading), tile_mesh draws them. Pure given elev."""
     cells = list(cells)
     tcls = []
     tunnels = road_underpasses(frame, cells, box, GRADE_REACH_M, classes=tcls)
     worn = {}
     rails = parts(frame, cells, box, reach=GRADE_REACH_M, clip=True, worn=worn, underpasses=tunnels)
     if not rails:
-        return []
-    ungraded = {fid for fid, w in worn.items() if w >= UNGRADED_WEAR}
+        return [], [], worn
     ground = dem_ground(frame, elev)
-    pad = GRADE_HALF_M + 15.0
-    out = []
     tunnels = raising_underpasses(tunnels, tcls) + coarse_underpasses(frame, cells, box, rails, GRADE_REACH_M)
     prof = _beds(frame, rails, ground, tunnels, load, elev, raw=ground)
     if railxing.ENABLED:        # (the bed flush with the road at a level crossing: the ground is graded to it, else the
         prof = _flushed(frame, cells, box, rails, prof, ground, tunnels)     # ballast and sleepers lay under the ground)
-    for (fid, _c, kind, xy), (zb, _zg) in zip(rails, prof):
+    return rails, [np.asarray(zb, np.float64) for zb, _zg in prof], worn
+
+
+def bed_at(rails, beds, xy, fid=None):
+    """The bed (n,) at points xy (n, 2) on a track's own line (track_beds' rails and beds): each point's on the part
+    nearest it (of line fid only, when given), between the two samples of its segment there. NaN where there is no
+    part (the railways lay none of that line: a stub they leave out). Pure."""
+    xy = np.asarray(xy, np.float64).reshape(-1, 2)
+    out = np.full(len(xy), np.nan)
+    best = np.full(len(xy), np.inf)
+    for (f, _c, _kind, pxy), zb in zip(rails, beds):
+        if (fid is not None and f != fid) or len(pxy) < 2:
+            continue
+        a, ab = pxy[:-1], np.diff(pxy, axis=0)
+        t = np.clip(((xy[:, None, :] - a[None]) * ab[None]).sum(2) / np.maximum((ab * ab).sum(1), 1e-12)[None], 0.0, 1.0)
+        d = dnp.hypot(*(a[None] + t[:, :, None] * ab[None] - xy[:, None, :]).transpose(2, 0, 1))
+        j = np.argmin(d, axis=1)
+        dj = d[np.arange(len(xy)), j]
+        tj = t[np.arange(len(xy)), j]
+        nearer = dj < best
+        best = np.where(nearer, dj, best)
+        out = np.where(nearer, zb[j] + (zb[j + 1] - zb[j]) * tj, out)
+    return out
+
+
+def grade_plans(frame, cells, box, elev, load=None):
+    """[(fid, xy (k, 2), z (k,))]: the bed line of each on-ground rail part near box, in elev's heights (elev(lat, lon):
+    the grader's DEM), for grading.Grader to lay the ground to (the cutting's walls back from the track, the ramps'
+    embankments filled). tile_mesh then finds the ground at its bed. Pure given elev."""
+    rails, beds, worn = track_beds(frame, cells, box, elev, load)
+    ungraded = {fid for fid, w in worn.items() if w >= UNGRADED_WEAR}
+    pad = GRADE_HALF_M + 15.0
+    out = []
+    for (fid, _c, kind, xy), zb in zip(rails, beds):
         if kind != "ground" or fid in ungraded:
             continue
         if _box_hit((xy[:, 0].min(), xy[:, 1].min(), xy[:, 0].max(), xy[:, 1].max()),
@@ -943,9 +974,133 @@ def osm_gauge(feats, i):
     return mm / 1000.0 if 381 <= mm <= 1676 else None
 
 
+TUNNEL_NODE_M = 0.5         # m: two lines' ends this close are one node (the map's segments of a line share their end)
+
+
+def tunnel_run_m(feats, i, a, b):
+    """m of the tunnel that feature i's tunnel range (a, b) (fractions of it) is a piece of, as SHORT_TUNNEL_M reads
+    it: its own length and, from each end of the feature it reaches, the tunnel going on through the drawn railways
+    joined there (their map ranges, roads.tag_level_ranges: a tunnel reaching that end), the longest way, counted as
+    far as SHORT_TUNNEL_M (enough to tell). The map splits a line at every switch: the tracks east of Birmingham New
+    Street run 450 m under the Bullring at level -2 in segments of 7 to 55 m, each taken for a short tunnel under a
+    road bridge and laid on the ground in the city centre; Worcester Street over them was bridged (gradesep) and its
+    own short tunnel dug 7 m under two of them, 8 m on from the deck that cleared four: its shapes infeasible. A node
+    outside the cell is read with the neighbouring cells' lines (mapdata's _bnge_neighbours): every copy of a line
+    finds the same run."""
+    L = roads._feature_length_m(feats, i)
+    own = (b - a) * L
+    ends = [at_end for at_end, gap in ((False, a * L), (True, (1.0 - b) * L)) if gap <= TUNNEL_NODE_M]
+    if own >= SHORT_TUNNEL_M or not ends:
+        return own
+    lays, asked = [feats], set()
+    while True:
+        outside = []
+        got = own + _tunnel_on(lays, feats, i, ends, SHORT_TUNNEL_M - own, {str(feats.ids[i])}, outside)
+        want = set(outside) - asked
+        if got >= SHORT_TUNNEL_M or not want:
+            return got
+        asked |= want
+        more = _neighbour_layers(feats, want)
+        if not more:
+            return got
+        lays = lays + more
+
+
+def _tunnel_on(lays, f, i, ends, need, seen, outside):
+    """m of tunnel going on from feature i's (of layer f) ends ([at its end?]) through the lines of lays joined there:
+    over its ends, the longest way from each, up to need. outside: the cells of the nodes outside lays[0]'s cell."""
+    total = 0.0
+    for at_end in ends:
+        ring = f.parts(i)[-1][-1] if at_end else f.parts(i)[0][0]
+        total += _tunnel_from(lays, np.asarray(ring[-1] if at_end else ring[0], np.float64), need - total, seen,
+                              outside)
+        if total >= need:
+            break
+    return total
+
+
+def _tunnel_from(lays, q, need, seen, outside):
+    """m of tunnel going on from node q (lon, lat) into the lines of lays whose end it is (seen: the lines walked),
+    the longest way, up to need."""
+    cell = _cell_outside(lays[0], q)
+    if cell is not None:
+        outside.append(cell)
+    c = dmath.cos(math.radians(float(q[1])))
+    best = 0.0
+    for g in lays:
+        rows, at_end, ll = _rail_ends(g)
+        if not len(rows):
+            continue
+        d = dnp.hypot((ll[:, 0] - q[0]) * 111320.0 * c, (ll[:, 1] - q[1]) * 110540.0)
+        for k in np.flatnonzero(d <= TUNNEL_NODE_M).tolist():
+            j, e = int(rows[k]), bool(at_end[k])
+            fid = str(g.ids[j])
+            if fid in seen:
+                continue
+            Lj = roads._feature_length_m(g, j)
+            rng = [(ra, rb) for ra, rb, kind in roads.tag_level_ranges(g, j) if kind == "tunnel"
+                   and ((1.0 - rb) * Lj if e else ra * Lj) <= TUNNEL_NODE_M]
+            if not rng:
+                continue                    # (the line goes on out of the tunnel there: its portal)
+            ra, rb = rng[-1] if e else rng[0]
+            got = (rb - ra) * Lj
+            if got < need and ra * Lj <= TUNNEL_NODE_M and (1.0 - rb) * Lj <= TUNNEL_NODE_M:
+                got += _tunnel_on(lays, g, j, [not e], need - got, seen | {fid}, outside)
+            best = max(best, got)
+            if best >= need:
+                return best
+    return best
+
+
+def _rail_ends(feats):
+    """(rows (k,), at its end? (k,), lon/lat (k, 2)) of the drawn railways' ends in feats (each one's first and last
+    point), kept on feats."""
+    got = feats.__dict__.get("_rail_ends")
+    if got is None:
+        rows, at_end, ll = [], [], []
+        sub = feats.attrs.get("subtype")
+        for i in range(len(feats) if sub is not None else 0):
+            if str(sub[i]) != "rail" or drawn(feats, i) is None:
+                continue
+            parts = feats.parts(i)
+            if not parts or not len(parts[0]) or len(parts[0][0]) < 2:
+                continue
+            rows += [i, i]
+            at_end += [False, True]
+            ll += [parts[0][0][0], parts[-1][-1][-1]]
+        got = feats.__dict__["_rail_ends"] = (np.array(rows, np.int64), np.array(at_end, bool),
+                                              np.array(ll, np.float64).reshape(-1, 2))
+    return got
+
+
+def _cell_outside(feats, q):
+    """str of the cell node q (lon, lat) lies in when it is not feats' own cell (the lines joined there may be in the
+    neighbours' layers alone), else None (or no cell known: a test's layer)."""
+    cid = feats.__dict__.get("_bnge_cell")
+    if cid is None:
+        return None
+    import mapcells
+    k = str(mapcells.cell_of(float(q[1]), float(q[0])))
+    return None if k == cid[0] else k
+
+
+def _neighbour_layers(feats, want):
+    """The roads layers of the neighbouring cells named in want (mapdata's _bnge_neighbours), [] without them."""
+    hook = feats.__dict__.get("_bnge_neighbours")
+    if hook is None:
+        return []
+    try:
+        return [f for f in roads._near_layers(hook, want) if f is not None and len(f)]
+    except Exception:                   # (not at hand: what is built on it is not kept)
+        import revisit
+        revisit.fault()
+        return []
+
+
 def _pieces(feats, i):
     """[("ground" | "bridge" | "tunnel", [lon/lat polylines])] of feature i: its level ranges with the short tunnels
-    (SHORT_TUNNEL_M) on the ground and the long ones left out (BNE_RAIL_TUNNELS: a part of their own, kind "tunnel")."""
+    (SHORT_TUNNEL_M along the line: tunnel_run_m) on the ground and the long ones left out (BNE_RAIL_TUNNELS: a part
+    of their own, kind "tunnel")."""
     rngs = roads.level_ranges(feats, i)
     if not rngs:
         return [("ground", roads.ground_parts(feats, i))]
@@ -967,7 +1122,7 @@ def _pieces_of(feats, i, rngs):
     # (roads.MIN_PART is a share of the segment: 1e-3 of a 19 km rail segment is 19 m, and its 11 m bridges over the
     # roads were dropped, the track lying across them; at most MIN_PART_M, as for a short feature)
     min_part = min(roads.MIN_PART, MIN_PART_M / max(L, 1.0))
-    off = [(a, b, k) for a, b, k in rngs if not (k == "tunnel" and (b - a) * L < SHORT_TUNNEL_M)]
+    off = [(a, b, k) for a, b, k in rngs if not (k == "tunnel" and tunnel_run_m(feats, i, a, b) < SHORT_TUNNEL_M)]
     ground, at = [], 0.0
     for a, b, _k in off:
         if a - at > min_part:

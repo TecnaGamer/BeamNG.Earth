@@ -3072,7 +3072,8 @@ def _rail_tunnel_parts(frame):
 
 def tunnel_profiles(aid, frame, elev, g=None):
     """The anchor's view of this process's tunnel chains (road tiles and the blocks' terrain holes share them): their
-    ground read at grading.PROFILE_ZOOM (raw; ends: graded), as in every other process."""
+    ground read at grading.PROFILE_ZOOM (raw: the plans' tunnel ground, Grader.tunnel_ground; ends: graded), as in
+    every other process."""
     import roads as roadsmod
     if getattr(_s, "tunnels", None) is None:        # (a state made without it: tests)
         _s.tunnels = {}
@@ -3081,9 +3082,13 @@ def tunnel_profiles(aid, frame, elev, g=None):
         sea = getattr(_s, "sea", None)
         t.wet = sea.depth if sea is not None else None
         t.water = sea.water if sea is not None else None
-        t.raw = lambda la, lo: ground(None, la, lo, _s.dem.sample(la, lo, gradingmod.PROFILE_ZOOM))  # noqa: E731
+        raw = lambda la, lo: ground(None, la, lo, _s.dem.sample(la, lo, gradingmod.PROFILE_ZOOM))  # noqa: E731
+        t.raw = raw
         if g is not None:
-            t.ends = lambda la, lo: g.apply(la, lo, t.raw(la, lo), gradingmod.ROAD_LIFT, roads_only=True)    # noqa: E731
+            # (the cover read with the bridges under mapped decks taken out, as the plans read it: one ground for the
+            # plans' tunnel networks and these; the portals graded from the elevation as read, apply takes them out)
+            t.raw = g.tunnel_ground
+            t.ends = lambda la, lo: g.apply(la, lo, raw(la, lo), gradingmod.ROAD_LIFT, roads_only=True)    # noqa: E731
     return roadsmod.ChainView(_chain_store("tunnels", roadsmod.TunnelProfiles, elev, setup), frame)
 
 

@@ -4641,9 +4641,13 @@ class Server:
                 def setup(t):
                     t.wet = self.sea.depth if self.sea is not None else None
                     t.water = self.sea.water if self.sea is not None else None
-                    t.raw = lambda la, lo: self.ground(None, la, lo, self.dem.sample(la, lo, gradingmod.PROFILE_ZOOM))
+                    def raw(la, lo):
+                        return self.ground(None, la, lo, self.dem.sample(la, lo, gradingmod.PROFILE_ZOOM))
+                    t.raw = raw
                     if g is not None:
-                        t.ends = lambda la, lo: g.apply(la, lo, t.raw(la, lo), gradingmod.ROAD_LIFT, roads_only=True)
+                        # (the cover as the plans read it: Grader.tunnel_ground, blockworker.tunnel_profiles)
+                        t.raw = g.tunnel_ground
+                        t.ends = lambda la, lo: g.apply(la, lo, raw(la, lo), gradingmod.ROAD_LIFT, roads_only=True)
                 cls = roadsmod.TunnelProfiles
             cs = stores[kind] = roadsmod.ChainStore(cls, cell_fn, elev, setup)
         return roadsmod.ChainView(cs, anchor.frame)

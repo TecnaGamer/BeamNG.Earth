@@ -448,6 +448,22 @@ class RailwayTest(unittest.TestCase):
         self.assertAlmostEqual([g[2] for g in got if g[0] == "id000"][0], 250.0, 0, "track through the short tunnel")
         self.assertLess(max(g[2] for g in got if g[0] == "id002"), 60.0, "a long tunnel left out")
 
+    def test_a_tunnel_split_into_short_segments_is_one_tunnel(self):
+        """A short tunnel is short along the line: three 30 m segments of one 90 m tunnel (the map splits a line at
+        every switch: the tracks under Birmingham's Bullring, 450 m in segments of 7 to 55 m, were laid on the
+        ground in the city centre) are left out; a 30 m tunnel between ground track (a road bridge's) is track."""
+        f = features([[(0.0, 100.0), (30.0, 100.0)], [(30.0, 100.0), (60.0, 100.0)], [(60.0, 100.0), (90.0, 100.0)],
+                      [(-100.0, 150.0), (0.0, 150.0)], [(0.0, 150.0), (30.0, 150.0)], [(30.0, 150.0), (130.0, 150.0)]],
+                     ["standard_gauge"] * 6, subtypes=["rail"] * 6,
+                     flags=[(0, "is_tunnel"), (1, "is_tunnel"), (2, "is_tunnel"), (4, "is_tunnel")])
+        self.assertGreaterEqual(railways.tunnel_run_m(f, 1, 0.0, 1.0), railways.SHORT_TUNNEL_M)
+        self.assertAlmostEqual(railways.tunnel_run_m(f, 4, 0.0, 1.0), 30.0, 0)
+        for i in (0, 1, 2):
+            self.assertEqual([rs for kind, rs in railways._pieces(f, i) if kind == "ground" and rs], [],
+                             "a piece of the long tunnel left out")
+        self.assertEqual(len([r for kind, rs in railways._pieces(f, 4) if kind == "ground" for r in rs]), 1,
+                         "the short tunnel under a road bridge is track")
+
     def test_level_crossing_rails_meet_the_road_on_gentle_ramps(self):
         """The rails' top is flush with the road where the track crosses it (they stood 0.6 m over it at its edge), and
         the track ramps back to its own height at 1.7 %."""

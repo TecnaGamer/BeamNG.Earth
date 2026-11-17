@@ -37,8 +37,9 @@ log = logging.getLogger("earthd.gradesep")
 MODE = os.environ.get("BNE_GRADESEP", "tunnels")
 ON = MODE == "on"
 TUNNELS = MODE in ("on", "tunnels")
-VERSION = 3             # in MapData.versions(): every cell's ranges (cell_facts) and tiles made again on a change
-                        # (3: a road joined end to end with a short tunnel is no line over it, PORTAL_JOIN)
+VERSION = 4             # in MapData.versions(): every cell's ranges (cell_facts) and tiles made again on a change
+                        # (3: a road joined end to end with a short tunnel is no line over it, PORTAL_JOIN; 4: a railway's
+                        # short tunnel short along the line, railways.tunnel_run_m)
 DEM_ZOOM = 15
 SEP_M = 4.0             # m the upper line's ground stands above the lower one's (medians of four heights each)
 SIDE_M = 2.0            # m ... at least, on each side of each line
@@ -215,6 +216,18 @@ def _layer_rows(f):
                 kinds, toff, trng, tkind, np.ascontiguousarray(f.lonlat, np.float64).reshape(-1, 2),
                 np.ascontiguousarray(f.coord_off, np.int64), np.ascontiguousarray(f.ring_off, np.int64),
                 np.ascontiguousarray(f.part_off, np.int64), roads.MIN_PART, railways.SHORT_TUNNEL_M)
+            # (a railway's tunnel is short along the line, not on its segment: railways.tunnel_run_m, the railways'
+            # own test; the kernel measures the segment's range alone, and a road over the tracks under the Bullring,
+            # 450 m of tunnel in 7-55 m segments, got a bridge over each)
+            short = np.flatnonzero(pk == 2)
+            if len(short):
+                feat = np.searchsorted(poff, short, side="right") - 1
+                keep = np.ones(len(pk), bool)
+                for q, i in zip(short.tolist(), feat.tolist()):
+                    keep[q] = railways.tunnel_run_m(f, int(i), float(pa[q]), float(pb[q])) < railways.SHORT_TUNNEL_M
+                if not keep.all():
+                    poff = np.r_[0, np.cumsum(keep)].astype(np.int64)[poff]
+                    pk, pa, pb = pk[keep], pa[keep], pb[keep]
         else:
             poff, pk, pa, pb = np.zeros(n + 1, np.int64), np.zeros(0, np.int64), np.zeros(0), np.zeros(0)
         got = f.__dict__["_gs_layer"] = (kinds, halves, poff, pk, pa, pb, [str(x) for x in f.ids])

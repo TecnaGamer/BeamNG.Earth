@@ -159,6 +159,10 @@ WALL_FLAT_M = roadsmod.roadmesh.GRID_M  # ... after one terrain grid step (heigh
                             # wall itself, the grid's triangles stood as dark wedges in front of its face; the wall's
                             # top (roadmesh.WALL_THICK_M) covers the strip
 OPEN_TUNNEL_EASE = os.environ.get("BNE_OPEN_TUNNEL_EASE", "on") != "off"    # (_make_cell: Plan.open_tunnel)
+# a road running beside a covered tunnel's section in the open (a trench) keeps its own ground past the section's
+# painted edge whatever the rank gap; one crossing it, and a lower road on its carriageway, as before (_make_cell:
+# Plan.tunnel_section, gradebins TUNNEL)
+BESIDE_TRENCH_KEEPS = os.environ.get("BNE_BESIDE_TRENCH_KEEPS", "on") != "off"
 TUNNEL_TAG = ":tun"          # in the fid of the tunnels' own plans (open sections, mouths): apply(roads_only) skips them
 MOUTH_PLAN_M = 4.0          # m into a tunnel from a portal its floor is a grading plan too (Grader._mouth_plans)
 TUNNEL_KEEP_IN_M = 3.0      # (roads.LOW_HOLE_M: a low arch's mouths, flat at its floor)
@@ -167,6 +171,10 @@ PORTAL_REACH_M = 30.0       # m: the cells this near a tunnel's portal grade it 
 TUNNEL_OWN_MARGIN_M = 30.0  # m round a cell's box: the tunnel parts reaching into it are its plans' (_tunnel_sections)
 OVER_TUNNEL_SMALL_M = 0.5   # ... but for a change smaller than this (a road crossing over it, graded flush)
 OVER_TUNNEL_APPROACH_M = 1.0  # m: a road ending this near a tunnel's portal is its approach (_cell_own_roads)
+# A road over a low arch is held over its cover by its own laws (_over_arches: the road stage, made before the tunnels,
+# never saw the arch; roads.arch_raise then raised the ground over the vault through the road: Popoli's street over
+# the A25's east tube, a 5 m box 0.04 m under it, a 0.56 m step at each side of the tube). BNE_ARCH_COVER=off: as before.
+ARCH_COVER_ON = os.environ.get("BNE_ARCH_COVER", "on") != "off"
 WALL_AHEAD_M = 2.5          # ... only beside a segment or this little past its end (a joint between two: VERTEX_STEP)
 YIELD_RAMP_M = 0.5          # m over which a road gives way to another's carriageway at another level (grade_points): in
                             # height difference up to WALL_CUT_M and in distance past its own carriageway's edge
@@ -322,6 +330,7 @@ SHAPES_ON = os.environ.get("BNE_SHAPES", "0").strip().lower() in ("1", "on", "ye
 _gsh.HEADROOM_M, _gsh.HEADROOM_MARGIN_M = roadsmod.MIN_BRIDGE_HEADROOM_M, roadsmod.BRIDGE_HEADROOM_MARGIN_M
 _gsh.DECK_MIN_DEPTH_M, _gsh.DECK_FULL_DEPTH_M = roadsmod.DECK_MIN_DEPTH, roadsmod.DECK_FULL_DEPTH
 _gsh.DECK_SPAN_RATIO = roadsmod.DECK_SPAN_RATIO
+_gsh.RAIL_DECK_DEPTH_M = railwaysmod.RAIL_TOP_M + railwaysmod.DECK_D - railwaysmod.BALLAST_H
 SHAPES_PAD_M = 800.0        # m round a cell its systems and their ramps are read from (a ramp is at most RAMP_MAX_M)
 SHAPES_CAP_M = 4000.0       # m: the farthest a system is followed from the cell
 SHAPES_NEAR_M = 3.0         # m: a plan vertex this near a shape's or a ramp's line takes its height
@@ -844,7 +853,7 @@ class Plan:
     """One road's grading: vertices (n, 2) in the frame's ENU metres, their target heights, core half width; abut: does
     it lead onto a bridge at its (first, last) vertex (grade_points)."""
     __slots__ = ("xy", "z", "half", "bbox", "abut", "cut", "road_half", "rid", "rank", "max_wall", "bank", "steep",
-                 "widen", "open_tunnel")
+                 "widen", "open_tunnel", "tunnel_section")
 
     def __init__(self, xy, z, half, abut=(False, False), cut=None, road_half=None):
         self.xy, self.z, self.half, self.abut = xy, z, float(half), (bool(abut[0]), bool(abut[1]))
@@ -858,6 +867,7 @@ class Plan:
         self.bank = None                # (n,) its cross slope (m per m toward its left: a banked curve, bank) or None
         self.steep = False              # a mountain pass road's: steep sides (STEEP_RUN, roads._mountain_roads)
         self.open_tunnel = False        # a tunnel part's open section: a lower road crossing it eases onto it (_plan_flags)
+        self.tunnel_section = False     # a covered tunnel's section in the open: a road beside it keeps its ground
         self.widen = None               # (n,) m its core and carriageway are wider each side there (hairpin_cores) or None
         pad = half + T_MAX
         self.bbox = (xy[:, 0].min() - pad, xy[:, 1].min() - pad, xy[:, 0].max() + pad, xy[:, 1].max() + pad)
@@ -1574,6 +1584,7 @@ def _replan(p, xy, z, abut=None, cut=False):
     q.rank = getattr(p, "rank", GRADE_RANK_NONE)
     q.steep = bool(getattr(p, "steep", False))
     q.open_tunnel = bool(getattr(p, "open_tunnel", False))
+    q.tunnel_section = bool(getattr(p, "tunnel_section", False))
     set_widen(q, getattr(p, "widen", None))
     return q
 
@@ -2423,6 +2434,21 @@ def _held_by_decks(xy, move, ends, hold=SEAM_DECK_HOLD_M):
     return np.clip(move, -cap, cap)
 
 
+def shape_heights(z, zs, modes):
+    """(heights, set) of a plan's points z under the shapes' heights there (zs, modes: _Planner._shape_at's): a "fill"
+    raises a point to its embankment, a "cut" lowers it into its cut, a "set" puts it there; set: the points whose
+    height is the shape's. A fill under a road above it, a cut over a road below it, set nothing: the height there is
+    the passes' before the shapes, a floor or a ceiling to the road laws, not a height they hold (held, two pieces of a
+    roundabout at Popoli under two cuts' ceilings 1.7-2.4 m over them kept their bases' 0.93 m step at their joint,
+    and the primary leaving there, pinned to it at 17.7 % against its 9 %, had no answer). Pure."""
+    z = np.asarray(z, np.float64)
+    zs = np.asarray(zs, np.float64)
+    m = np.array([str(v) for v in modes])
+    ok = np.isfinite(zs)
+    put = ok & ((m == "set") | ((m == "fill") & (zs >= z)) | ((m == "cut") & (zs <= z)))
+    return np.where(put, zs, z), put
+
+
 class _Planner:
     """The road plans of one planning region (geotiles.PLAN_Z), in its frame, per map cell, made once (worker threads;
     it fetches the road cells it lacks). store: the PlanStore it belongs to (its other regions, its settings)."""
@@ -2649,8 +2675,14 @@ class _Planner:
         plans = list(plans)
         covers, opens = [], []
         if feats is not None and len(feats):
-            portals = {}
-            secs = self._tunnel_sections(feats, key, portals=portals)
+            portals, arches = {}, {}
+            secs = self._tunnel_sections(feats, key, portals=portals, arches=arches)
+            if ARCH_COVER_ON and arches:
+                try:
+                    plans = self._over_arches(key, feats, plans, secs, arches)
+                except Exception as e:      # (the roads as the road stage made them, the step said)
+                    _caught(e)
+                    log.warning("grading: roads over the low arches of %s: %s: %s", key, type(e).__name__, e)
             covered = {f.rsplit("#", 1)[0] for f, _s, _xy, _z, k in secs if k}
             for fid, spec, xy, z, k in secs:
                 if k == 0:
@@ -2662,6 +2694,11 @@ class _Planner:
                     # Vienna: a bus lane stepped 1.2 m down to it, GitHub #1169). An open stretch by a portal is a real
                     # trench, the roads beside it on the cover: they keep their ground)
                     p.open_tunnel = OPEN_TUNNEL_EASE and fid.rsplit("#", 1)[0] not in covered
+                    # (and that trench, the tunnel covered elsewhere: the streets along its top keep their ground past
+                    # its painted edge whatever the rank gap, gradebins TUNNEL. Within it a primary beside a trunk took
+                    # the side ease down toward the floor 5 m under it: its lanes tilted 1-3.5 m toward the trench, the
+                    # trucks on it in the ground at the kerb, a 5 m pit in it where it passed a portal)
+                    p.tunnel_section = BESIDE_TRENCH_KEEPS and not p.open_tunnel
                     plans.append((fid + TUNNEL_TAG, p))
             plans.extend(self._mouth_plans(secs, portals))
             covers = [(xy, spec.width / 2 + TUNNEL_KEEP_M) for _f, spec, xy, _z, k in _twin_trimmed(secs) if k]
@@ -4141,13 +4178,6 @@ class _Planner:
                 ends = np.array([b[0], b[-1]], f64)
                 ela, elo, _ = self.frame.enu_to_geodetic(ends[:, 0], ends[:, 1], 0.0)
                 got = np.asarray(self.elev(np.asarray(ela), np.asarray(elo)), f64).reshape(2).copy()
-                if rail:            # (the track's level beyond its ends, as railways.profile lays the deck)
-                    def ground_xy(q):
-                        qla, qlo, _ = self.frame.enu_to_geodetic(q[:, 0], q[:, 1], 0.0)
-                        return np.asarray(self.elev(np.asarray(qla), np.asarray(qlo)), f64)
-                    for e, lv in enumerate(railwaysmod.approach_levels(b[:, :2], ground_xy)):
-                        if lv is not None:
-                            got[e] = max(got[e], lv[0])
                 if not fixed or (XS_ON and not rail and self._xsolve(b) is not None):
                     got[0] += self._end_raised(b[0])
                     got[1] += self._end_raised(b[-1])
@@ -4181,6 +4211,13 @@ class _Planner:
                     cz = self._cw_z_at(b, np.r_[cpts, pt[None]])
                 if cz is not None:
                     deck = float(np.min(cz))
+                elif rail:                      # (a track's deck: the railways' bed it is drawn at, over the corridor)
+                    sb = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(b[:, :2], axis=0).T))]
+                    cpts = np.stack([np.interp(corridor, sb, b[:, 0]), np.interp(corridor, sb, b[:, 1])], axis=1)
+                    zr = self._track_bed(np.r_[cpts, pt[None]])
+                    if not np.isfinite(zr).all():
+                        continue                # (the railways lay no track there: nothing over the road to clear)
+                    deck = float(zr.min())
                 else:
                     ze = deck_ends(bi)
                     # (or higher where it climbs from its ends as the abutments' lifts were asked: bridge_lifts; the
@@ -4448,12 +4485,15 @@ class _Planner:
             out.append(_gsh.Member((str(fid), "deck", int(round(mid[0])), int(round(mid[1]))), line, "deck",
                                    cls or "road", kmh, float(lv), float(h), None, nodes.get(str(fid)),
                                    bool(self._over_mapped_underpass(line))))
-        for kind, lines in (("rail", c.get("rail_ground", ())), ("rail_deck", c.get("rail_bridges", ()))):
-            for line in lines:
+        for kind, lines, fids in (("rail", c.get("rail_ground", ()), c.get("rail_ground_ids", ())),
+                                  ("rail_deck", c.get("rail_bridges", ()), c.get("rail_bridge_ids", ()))):
+            for line, fid in zip(lines, fids):
                 line = np.asarray(line, np.float64)[:, :2]
                 if len(line) < 2:
                     continue
-                key = ("rail", kind) + tuple(int(round(v)) for v in (line[0][0], line[0][1], line[-1][0], line[-1][1]))
+                # (its line's id: its height is the railways' bed of that line, _track_bed)
+                key = ("rail", kind, fid) + tuple(int(round(v)) for v in (line[0][0], line[0][1], line[-1][0],
+                                                                          line[-1][1]))
                 out.append(_gsh.Member(key, line, kind, "rail", None, 1.0, 2.0, None))
         out += self._shape_tunnels(k)
         return out
@@ -4518,6 +4558,37 @@ class _Planner:
             raw = smooth_profile(median_profile(raw, _gsh.STEP_M, 12.0), _gsh.STEP_M, 6.0)
         return raw
 
+    def _track_bed(self, xy, fid=None):
+        """The railways' bed (n,) at points xy (n, 2) on a track's line (of line fid only, when given), in the DEM's
+        heights: railways.track_beds round them, the bed grade_plans lays the ground to and tile_mesh draws the track
+        on. NaN where the railways lay none of that line."""
+        xy = np.asarray(xy, np.float64).reshape(-1, 2)
+        box = (float(xy[:, 0].min()), float(xy[:, 1].min()), float(xy[:, 0].max()), float(xy[:, 1].max()))
+
+        def load(k):
+            return self.md.cell(k, layers=("roads",), kind="demand").layers.get("roads")
+        rails, beds, _worn = railwaysmod.track_beds(self.frame, [load(k) for k in railwaysmod.cells_near(self.frame, box)],
+                                                    box, self.elev, load=load)
+        return railwaysmod.bed_at(rails, beds, xy, fid)
+
+    def _ground_lines(self, xys):
+        """_ground_line of k lines of n points each (k, n, 2), the elevation read once for all (a crossing's footprint
+        reads a road's ground every metre along it: gradeshapes.under_pairs)."""
+        f64 = np.float64
+        k, n = xys.shape[:2]
+        flat = np.asarray(xys, f64).reshape(-1, 2)
+        la, lo, _ = self.frame.enu_to_geodetic(flat[:, 0], flat[:, 1], 0.0)
+        raws = np.asarray(self.elev(np.asarray(la, f64), np.asarray(lo, f64)), f64).ravel().reshape(k, n)
+        out = np.zeros((k, n))
+        for r, raw in enumerate(raws):
+            ok = np.isfinite(raw)
+            if not ok.any():
+                continue
+            if not ok.all():
+                raw = np.interp(np.arange(n), np.flatnonzero(ok), raw[ok])
+            out[r] = smooth_profile(median_profile(raw, _gsh.STEP_M, 12.0), _gsh.STEP_M, 6.0) if n >= 5 else raw
+        return out
+
     @staticmethod
     def _shape_sys_key(net, sysm, smp):
         """A system's solve's identity: its parts and its samples (the same samples: the same ground, laws and
@@ -4570,26 +4641,28 @@ class _Planner:
             box_lo, box_hi = n_lo, n_hi
         t1 = time.perf_counter()
 
-        rail_ends = {}
+        rail_z = {}
 
         def fixed_z(i, s_):
+            if np.ndim(s_):                 # (many: the ground read once for all, _ground_lines)
+                sv_ = np.asarray(s_, np.float64)
+                if net.m[i].kind in ("rail", "rail_deck"):
+                    return np.array([fixed_z(i, float(v)) for v in sv_.tolist()])
+                sv = np.clip(sv_[:, None] + np.linspace(-24.0, 24.0, 13)[None], 0.0, net.L[i])
+                xy = np.stack([np.interp(sv, net.s[i], net.lines[i][:, 0]),
+                               np.interp(sv, net.s[i], net.lines[i][:, 1])], axis=2)
+                return self._ground_lines(xy)[:, 6]
             m = net.m[i]
-            if m.kind == "rail_deck":       # (the track's deck: the line between its ends' track levels)
-                ends = rail_ends.get(i)
-                if ends is None:            # (the ground there, or the track's level beyond the end where it is higher,
-                    # as railways.profile lays the deck: a short deck among a station's raised tracks stood at street
-                    # level from its ends' ground, 6.8 m under its track, and the road under it was dug 8 m too deep)
-                    line = np.asarray(net.lines[i], np.float64)[:, :2]
-                    ends = self._ground_line(np.array([line[0], line[-1]])).astype(np.float64)
-
-                    def ground_xy(q):
-                        qla, qlo, _ = self.frame.enu_to_geodetic(q[:, 0], q[:, 1], 0.0)
-                        return np.asarray(self.elev(np.asarray(qla), np.asarray(qlo)), np.float64)
-                    for e, lv in enumerate(railwaysmod.approach_levels(line, ground_xy)):
-                        if lv is not None:
-                            ends[e] = max(ends[e], float(lv[0]))
-                    rail_ends[i] = ends
-                return float(ends[0] + (ends[1] - ends[0]) * s_ / max(net.L[i], 1e-6))
+            if m.kind in ("rail", "rail_deck"):     # (a track, on its deck or on the ground: its rails' top over the
+                # bed the railways lay and draw it on, never a height of the shapes' own: its deck's mapped ends' ground,
+                # down the slopes of the street's cutting under it, stood Compiegne's 7 m rail bridge 2.8 m under its
+                # track, the street was dug that much too deep and the track's fill beside it stood 10.5 m tall)
+                got = rail_z.get((i, s_))
+                if got is None:
+                    q = _gsh.at_s(net.lines[i], net.s[i], s_)
+                    z = float(self._track_bed(q[None], m.key[2])[0])
+                    got = rail_z[(i, s_)] = (z + railwaysmod.RAIL_TOP_M) if np.isfinite(z) else None
+                return got      # (None: the railways lay none of it, no track there to clear)
             q = _gsh.at_s(net.lines[i], net.s[i], s_)
             sv = np.clip(np.linspace(s_ - 24.0, s_ + 24.0, 13), 0.0, net.L[i])
             xy = np.stack([np.interp(sv, net.s[i], net.lines[i][:, 0]),
@@ -4744,22 +4817,49 @@ class _Planner:
             memo[str(k)] = out
         return out
 
-    def _road_laws(self, key, plans, specs, bases=None):
+    def _road_laws(self, key, plans, specs, bases=None, over=None, hold=None, keep=()):
         """ROAD_LAWS_ON: the cell's plans under their laws (roadlaws.apply): held where an interchange's shape or ramp
-        set them, only down under a deck, the tunnels' as they are. Returns how many changed."""
+        set them, under a shape's cut or over its fill where it set nothing (shape_heights), only down under a deck,
+        the tunnels' as they are; over(i): more of plan i's lower bounds (a low arch's cover, _over_arches), hold
+        {i: bool (n,)} more of plan i's points held, keep the plans held whole. Returns how many changed."""
         import roadlaws
         import time as _time
         t0 = _time.monotonic()
         decks = [(np.asarray(ln, np.float64)[:, :2], float(h)) for ln, h in (self._decks_near(key) or ())
                  if len(ln) >= 2]
+        hold = hold or {}
+
+        shaped = {}
+
+        def shape(i):
+            """(zs, modes, set) of plan i: the shapes' heights at its points, and those they set (shape_heights)."""
+            if i not in shaped:
+                fid, p = plans[i]
+                xy = np.asarray(p.xy, np.float64)[:, :2]
+                zs, modes = self._shape_at(xy, xy, str(fid).split(":")[0], ("fill", "cut", "set"))
+                shaped[i] = (zs, np.array([str(v) for v in modes]), shape_heights(p.z, zs, modes)[1])
+            return shaped[i]
 
         def held(i):
-            if not SHAPES_ON:
+            h = shape(i)[2] if SHAPES_ON else None
+            if i in hold:
+                h = np.asarray(hold[i], bool) if h is None else h | np.asarray(hold[i], bool)
+            return h
+
+        def bounds(i):          # (a cut's ceiling over a road it set nothing of, a fill's floor under one; a low
+            lo = hi = None      # arch's cover under a road over it: over)
+            n_ = len(plans[i][1].z)
+            if SHAPES_ON:
+                zs, m, put = shape(i)
+                free = np.isfinite(zs) & ~put
+                lo, hi = np.where(free & (m == "fill"), zs, -np.inf), np.where(free & (m == "cut"), zs, np.inf)
+            got = over(i) if over is not None else None
+            if got is not None:
+                got = np.asarray(got, np.float64)
+                lo = got if lo is None else np.maximum(lo, got)
+            if lo is None and hi is None:
                 return None
-            fid, p = plans[i]
-            xy = np.asarray(p.xy, np.float64)[:, :2]
-            zs, _m = self._shape_at(xy, xy, str(fid).split(":")[0], ("fill", "cut", "set"))
-            return np.isfinite(zs)
+            return (lo if lo is not None else np.full(n_, -np.inf)), (hi if hi is not None else np.full(n_, np.inf))
 
         # (every deck's segments as arrays once: a plan's points against those whose box meets the plan's, at once)
         SA = np.concatenate([ln[:-1] for ln, _h in decks]) if decks else np.zeros((0, 2))
@@ -4783,7 +4883,7 @@ class _Planner:
             d = np.hypot(*(a[None] + ab[None] * t[..., None] - xy[:, None]).transpose(2, 0, 1))
             out[(d <= h[None]).any(1)] = True
             return out
-        skip = [i for i, (f, _p) in enumerate(plans) if TUNNEL_TAG in str(f)]
+        skip = [i for i, (f, _p) in enumerate(plans) if TUNNEL_TAG in str(f)] + list(keep)
         info = {}
         dbg = os.environ.get("BNE_LAWS_DEBUG")         # "lat,lon": the plans within 40 m of it, before and after
         near = []
@@ -4804,7 +4904,7 @@ class _Planner:
         def meets(i, j):
             a, b = nodes.get(str(plans[i][0]).split(":")[0]), nodes.get(str(plans[j][0]).split(":")[0])
             return None if a is None or b is None else bool(a & b)
-        n = roadlaws.apply([p for _f, p in plans], specs, held, under, skip, info, natural, meets)
+        n = roadlaws.apply([p for _f, p in plans], specs, held, under, skip, info, natural, meets, bounds)
         # (a side road the laws landed on the road it joins, at its height and its grade its way, keeps its own plan at
         # the mouth: as high a grade rank, its ground no longer eased flat onto that road's for RANK_SIDE_FADE_M past its
         # carriageway, the sag a 12 m truck bottomed out in at the mouth)
@@ -4830,6 +4930,61 @@ class _Planner:
                                                       if k not in ("converged", "feasible")))
         return n
 
+    def _over_arches(self, key, feats, plans, secs, arches):
+        """plans (cell key's road stage; a new list) with each road that lies under the cover of a low arch it crosses
+        (secs: _tunnel_sections', arches: their {sub: (tube height, mouths)}) under its laws again, that cover its lower
+        bound (roadlaws.apply's over): the ground roads.arch_raise keeps over the vault, the same kernel on the plan's
+        points, so arch_raise has nothing left to raise under the road. The road stage is made before the tunnels (their
+        portals are graded on it), so it never saw the arch: where the tube was no lower than the room under the road
+        allowed (MAJOR_LOW_H), arch_raise raised the ground through the road, a step at each side of the tube (Popoli's
+        street over the A25's east tube: a 5 m box under 5.04 m of street, the ground over it 0.56 m over the street
+        within a metre; trucks hit it). The other roads are held as they are (they land on it as before), and the road
+        itself beyond the reach its laws need to climb onto the cover; a road with no answer under its laws is left as
+        it is, and said (_road_laws). Copies: the road stage's plans are shared."""
+        import copy
+        import roadlaws
+        # (in the plans' datum, the sections' z: the floor less ROAD_LIFT, which apply adds)
+        parts = [(fid, spec, xy, z, None) for fid, spec, xy, z, k in secs
+                 if k and arches.get(fid, (None, None))[0] is not None]
+        if not parts:
+            return plans
+        heights = {fid: arches[fid][0] for fid, *_r in parts}
+        mouths = {fid: arches[fid][1] for fid, *_r in parts if arches[fid][1] is not None}
+        rs = roadsmod.road_specs(feats, None, self.widths)
+        spec_of = {str(feats.ids[i]): rs[i] for i in range(len(feats)) if rs[i] is not None}
+        # (not over its own tunnel: the ground parts of the arches' own roads, part ids "<feature>.<n>#<section>")
+        mine = {fid.rsplit("#", 1)[0].rsplit(".", 1)[0] for fid, *_r in parts}
+        specs, lows, hold = [], [], {}
+        for n, (fid, p) in enumerate(plans):
+            sp = spec_of.get(str(fid))          # (a road's own plan: its feature's id; flanks, corners, beds are not)
+            lo = None
+            if sp is not None and str(fid) not in mine:
+                lo = _cover_under(p, lambda x, y: roadsmod.arch_raise(parts, heights, x, y, np.full(len(x), -np.inf),
+                                                                      mouths))
+                short = np.asarray(p.z, np.float64) < lo - roadlaws.MIN_MOVE_M
+                if not np.isfinite(lo).any():
+                    lo = None
+                elif short.any():
+                    # (free only as far as its laws need to climb onto the cover and back to any grade they allow: a
+                    # sag and a crest for the rise, a curve from its steepest grade, roadlaws.laws; held beyond, its
+                    # junctions and the passes' work there as they were, and its ends: a cell's edge)
+                    xy = np.asarray(p.xy, np.float64)[:, :2]
+                    s = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(xy, axis=0).T))]
+                    g, rad = roadlaws.laws(sp)
+                    rise = float(np.max(lo[short] - np.asarray(p.z, np.float64)[short]))
+                    w = 2.0 * math.sqrt(rad * rise) + rad * g + roadlaws.STEP_M
+                    h = (s < s[short].min() - w) | (s > s[short].max() + w)
+                    h[[0, -1]] = True
+                    hold[n] = h
+            specs.append(sp)
+            lows.append(lo)
+        if not hold:
+            return plans
+        out = [(fid, copy.copy(p)) for fid, p in plans]
+        self._road_laws(key, out, specs, None, over=lambda i: lows[i], hold=hold,
+                        keep=[i for i, sp in enumerate(specs) if sp is not None and i not in hold])
+        return out
+
     def _apply_shapes(self, plans, specs):
         """SHAPES_ON: each plan on a shape's ramp or cut takes its height there: up to an embankment ("fill"), down to
         a cut ("cut"), onto a lerp between two shapes ("set"). Whether any changed."""
@@ -4841,17 +4996,9 @@ class _Planner:
             if len(xy) < 2:
                 continue
             zs, modes = self._shape_at(xy, xy, str(fid).split(":")[0], ("fill", "cut", "set"))
-            ok = np.isfinite(zs)
-            if not ok.any():
+            if not np.isfinite(zs).any():
                 continue
-            z = np.array(p.z, np.float64)
-            for k in np.flatnonzero(ok):
-                if modes[k] == "fill":
-                    z[k] = max(z[k], zs[k])
-                elif modes[k] == "cut":
-                    z[k] = min(z[k], zs[k])
-                else:
-                    z[k] = zs[k]
+            z = shape_heights(p.z, zs, modes)[0]
             if np.abs(z - np.asarray(p.z, np.float64)).max() < 1e-6:
                 continue
             np_ = Plan(p.xy, z, p.half, p.abut, p.cut, p.road_half)
@@ -5686,7 +5833,7 @@ class _Planner:
         # the rail bridges (railways.DRAWN lines' bridge pieces): the roads under them dip as under a road overpass
         # (_lower_underpasses), nothing else (no ramps, no abutments: a line's deck is never raised for a road).
         # (GitHub #311 / #345 / #364: the track lay across the road under a rail bridge)
-        rail, rail_g = [], []
+        rail, rail_g, rail_ids, rail_gids = [], [], [], []
         if f is not None and len(f) and f.attrs.get("subtype") is not None:
             import railways
             sub, rcls = f.attrs["subtype"], f.attrs.get("class")
@@ -5697,10 +5844,12 @@ class _Planner:
                 for kind, rings in railways._pieces(f, i):
                     if kind == "bridge":
                         rail += [np.asarray(r, np.float64) for r in rings if len(r) >= 2]
+                        rail_ids += [str(f.ids[i]) for r in rings if len(r) >= 2]
                     elif kind == "ground" and ground and got[0] != "tram":
                         # (and the tracks on the ground: a road bridge's approaches rise over them as over a road,
                         # GitHub #324)
                         rail_g += [np.asarray(r, np.float64) for r in rings if len(r) >= 2]
+                        rail_gids += [str(f.ids[i]) for r in rings if len(r) >= 2]
         bridges, ground_l, ends, end_of, bcls, ground_ids, bids, blevels, bhalf = [], [], [], [], [], [], [], [], []
         ground_link = []                # (per ground part: a freeway's link: the junction raise, _end_lift_raw)
         gkmh, bkmh = [], []             # (per ground part / bridge: its speed limit, km/h or None)
@@ -5764,6 +5913,7 @@ class _Planner:
                 "ground_kmh": gkmh, "bridge_kmh": bkmh,
                 "end_of": end_of, "span_bridges": span_xy,
                 "ends": np.asarray(ends, np.float64).reshape(-1, 2), "rail_bridges": rail_xy, "rail_ground": rail_gxy,
+                "rail_bridge_ids": rail_ids, "rail_ground_ids": rail_gids,
                 "height_limits": limits,
                 # (each line's box [min e, min n, max e, max n], made once: the passes skip the far ones at once)
                 "ground_box": _line_boxes([g[0] for g in ground_l]), "rail_ground_box": _line_boxes(rail_gxy)}
@@ -6163,13 +6313,15 @@ class _Planner:
         (_cell_deck_patches) as a pack, and its bounds (lon0, lat0, lon1, lat1): the points they hold every deck of."""
         return self._pack_of([(ln, h, r) for _k, ln, h, r in dg]), (key.bounds() if hasattr(key, "bounds") else None)
 
-    def _deck_ground(self, lat, lon, z, e=None, n=None, keys=None):
+    def _deck_ground(self, lat, lon, z, e=None, n=None, keys=None, near=False):
         """z (n,) at points (lat, lon) (frame ENU e, n when at hand) with the bridges the elevation holds under mapped
         decks taken out (DECK_GROUND_*): z itself when nothing changes. keys: the planned cells round the points whose
         kept corrections are used (apply); None: the cell this thread is planning's for its own points and the decks
         round the others (_near_pack), else the planned cells' the points lie in (the plans' own elevation: never a cell
-        read for it). Pure in the map and the elevation (each point's decks are those within DECK_GROUND_REACH_M of it,
-        whatever else is asked with it: every one of them is kept with the plans of the point's own cell). A point past
+        read for it). near: every point by the decks round it (_near_pack), whatever this thread plans and whatever was
+        planned before (tunnel_ground). Pure in the map and the elevation (each point's decks are those within
+        DECK_GROUND_REACH_M of it, whatever else is asked with it: every one of them is kept with the plans of the
+        point's own cell). A point past
         the cell being planned read that cell's decks alone, and a height kept per point (railways' ground, the rail
         nodes, the abutments') was the first planned cell's: plans depended on the order cells were planned in
         (2026-11-12)."""
@@ -6177,7 +6329,9 @@ class _Planner:
             return z
         try:
             past = None
-            if keys is None:
+            if near:
+                pack, past = None, np.ones(len(z), bool)
+            elif keys is None:
                 stack = self._dg_local.__dict__.get("stack")
                 if stack:
                     pack, bounds = stack[-1]
@@ -6310,6 +6464,16 @@ class _Planner:
             return z
         got = self._deck_ground(lat, lon, zz.ravel())
         return z if got is zz.ravel() or got is None else got.reshape(zz.shape)
+
+    def tunnel_ground(self, la, lo):
+        """The tunnel networks' ground at the points (roads.TunnelProfiles.raw: the cover over a tunnel, its sections,
+        its portals' faces): tunnel_raw (the elevation shaped as the blocks' ground; the plans' own elevation without
+        one) with the bridges the elevation holds under mapped decks taken out as the plans' own elevation has them
+        (_deck_ground, DECK_GROUND_*), by the decks round each point whatever was planned before. On the elevation as
+        read, the street bridge over Barcelona's Ronda trench was 5 m of cover over its floor: a low arch under the
+        deck, whose portals' lintels and stone tops stood through the deck, while the plans graded the trench's open
+        floor under it (2026-11-17)."""
+        return _tunnel_ground(self.store, self, la, lo)
 
     def _ground_table(self, keys, cs):
         """The ground road parts of the cells keys (cs: their _cell_enu), each once (the first copy, by its first point
@@ -6900,7 +7064,7 @@ class _Planner:
             t = roadsmod.TunnelProfiles(self.frame, lambda key: md.cell(key, layers=("roads",), kind="demand")
                                         .layers.get("roads"), self.elev)
             t.wet = self.wet
-            t.raw = self.tunnel_raw      # (the tunnels' raw ground, as the road tiles' chain store reads it: _tunnel_pins)
+            t.raw = self.tunnel_ground   # (the tunnels' ground, as the road tiles' chain store reads it: _tunnel_pins)
             self._chains = t
         return self._chains
 
@@ -6923,36 +7087,40 @@ class _Planner:
 
     def _tunnel_chains(self):
         """The tunnel networks of this process's plans (a roads.ChainStore of roads.TunnelProfiles, one for the
-        PlanStore's every region): the same solve as the road tiles' and the terrain blocks' stores, on the same raw
-        ground (tunnel_raw), its portals on the ground the roads' plans alone grade (_roads_ground): the grading takes a
-        tunnel's floor and sections from it instead of working them out again from its own cell's copy of the part
-        (2026-11-12: I-395's ramps under Washington, a 1.4 m step in the ground where the store and the grading had
-        read one network from different cells; Porte Maillot's ramp, a tube in the meshes and an open cut in the
+        PlanStore's every region): the same solve as the road tiles' and the terrain blocks' stores, on the same
+        ground (tunnel_ground), its portals on the ground the roads' plans alone grade (_roads_ground): the grading
+        takes a tunnel's floor and sections from it instead of working them out again from its own cell's copy of the
+        part (2026-11-12: I-395's ramps under Washington, a 1.4 m step in the ground where the store and the grading
+        had read one network from different cells; Porte Maillot's ramp, a tube in the meshes and an open cut in the
         ground, 6 m apart)."""
         holder = self.store if self.store is not None else self
         with holder.lock:
             cs = holder.__dict__.get("_tunnel_cs")
         if cs is not None:
             return cs
-        raw = self.tunnel_raw or self.elev
+        # (the cover read on tunnel_ground; the portals' ground graded from the elevation as read: apply takes the
+        # bridges under decks out itself)
+        raw = self.tunnel_raw or self.elev_raw
         md, wet, water = self.md, self.wet, self.water
 
         def ends(la, lo):
             return self._roads_ground(la, lo, raw(la, lo))
 
         def setup(t):
-            t.wet, t.water, t.raw, t.ends = wet, water, raw, ends
+            t.wet, t.water, t.raw, t.ends = wet, water, self.tunnel_ground, ends
         cs = roadsmod.ChainStore(roadsmod.TunnelProfiles,
                                  lambda k: md.cell(k, layers=("roads",), kind="demand").layers.get("roads"), ends, setup)
         with holder.lock:
             return holder.__dict__.setdefault("_tunnel_cs", cs)
 
-    def _tunnel_sections(self, feats, key=None, road_plans=(), portals=None):
+    def _tunnel_sections(self, feats, key=None, road_plans=(), portals=None, arches=None):
         """[(fid, spec, xy, z, kind)] of the tunnels' sections, as the tunnel networks have them (_tunnel_chains: the
         floor and the sections the road tiles draw and the terrain blocks cut their holes for): kind 0 an open road at
         z, 1 a low arch, 2 a full tunnel; z the plans' (the terrain's datum: the floor less ROAD_LIFT, which apply
         adds). portals ({(fid, an end's xy rounded): is a portal}): filled for the covered sections' ends
-        (_mouth_plans). A part left out by the networks (under water, GitHub #128) has none."""
+        (_mouth_plans); arches ({fid: (tube height, mouths)}): for the covered sections lower than a full tube (the
+        networks' heights, as roads.arch_raise takes them: _over_arches). A part left out by the networks (under water,
+        GitHub #128) has none."""
         import geotiles
         import pools
         out = []
@@ -7004,6 +7172,11 @@ class _Planner:
                     if kind and portals is not None:
                         for at, is_mouth in zip((0, -1), st.mouth(sub)):
                             portals[(str(sub), tuple(np.round(pxy[at], 3)))] = bool(is_mouth)
+                    if kind and arches is not None:
+                        with st.lock:
+                            th, mo = st.heights.get(str(sub)), st.mouths.get(str(sub))
+                        if th is not None:
+                            arches[str(sub)] = (float(th), mo)
         return out
 
     @staticmethod
@@ -7392,6 +7565,39 @@ class _Planner:
         return mask if mask.any() else None
 
 
+ARCH_COVER_STEP_M = 0.5     # m between the points along and across a road where an arch's cover under it is read
+
+
+def _cover_under(p, cover):
+    """(n,) the height each point of plan p must keep for the ground under its core to stay at cover(x, y) ((k,) heights,
+    -inf: none) or over it: the highest cover under the core (half p.half either side of its line, read every
+    ARCH_COVER_STEP_M along and across it) between the point's neighbours, the ground between two points being their
+    line. At its points alone, the edge of a tube's footprint between two of them, or under the edge of the road where
+    it crosses at an angle, stayed under the cover (_over_arches). Pure."""
+    xy = np.asarray(p.xy, np.float64)[:, :2]
+    n = len(xy)
+    s = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(xy, axis=0).T))]
+    fine = np.union1d(s, np.arange(0.0, s[-1], ARCH_COVER_STEP_M))
+    seg = np.clip(np.searchsorted(s, fine, "right") - 1, 0, n - 2)
+    d = xy[seg + 1] - xy[seg]
+    ln = np.maximum(dnp.hypot(d[:, 0], d[:, 1]), 1e-9)
+    t = ((fine - s[seg]) / np.maximum(s[seg + 1] - s[seg], 1e-9))[:, None]
+    at = xy[seg] + t * d
+    nrm = np.c_[-d[:, 1] / ln, d[:, 0] / ln]
+    half = float(p.half)
+    k = max(1, int(np.ceil(half / ARCH_COVER_STEP_M)))
+    cv = np.full(len(fine), -np.inf)
+    for off in np.linspace(-half, half, 2 * k + 1):
+        q = at + off * nrm
+        cv = np.maximum(cv, np.asarray(cover(q[:, 0], q[:, 1]), np.float64))
+    out = np.full(n, -np.inf)
+    for i in range(n):
+        w = (fine >= s[max(i - 1, 0)] - 1e-9) & (fine <= s[min(i + 1, n - 1)] + 1e-9)
+        if w.any():
+            out[i] = float(cv[w].max())
+    return out
+
+
 def mapped_plan(p, fn):
     """Plan p with its vertices through fn (xy (n, 2) -> (n, 2): geotiles.world_xy_map); heights, widths, cuttings and
     banking as they are (geodetic, or along / across the road)."""
@@ -7400,6 +7606,7 @@ def mapped_plan(p, fn):
     q.rank = getattr(p, "rank", GRADE_RANK_NONE)
     q.steep = getattr(p, "steep", False)
     q.open_tunnel = getattr(p, "open_tunnel", False)
+    q.tunnel_section = getattr(p, "tunnel_section", False)
     set_widen(q, getattr(p, "widen", None))
     return q
 
@@ -7504,6 +7711,30 @@ if CW_ON or SHAPES_ON:
     roadsmod.DECK_Z_HOOK = _deck_z_hook
 
 
+def _tunnel_z_hook(frame, lines, fids):
+    """roads.TUNNEL_Z_HOOK: per tunnel line (frame ENU (k, 2+)) of road fids[n], its heights (frame up m) from its
+    interchange's shape (the dip the road goes down in under what crosses it), or None where the shape has not all of
+    it."""
+    store = _ACTIVE_STORE
+    if store is None:
+        return None
+    out = []
+    for fid, ln in zip(fids, lines):
+        ln = np.asarray(ln, np.float64)[:, :2]
+        la, lo, _ = frame.enu_to_geodetic(ln[:, 0], ln[:, 1], 0.0)
+        la, lo = np.asarray(la, np.float64), np.asarray(lo, np.float64)
+        pl, _idx = store.planners_of(la[len(la) // 2:len(la) // 2 + 1], lo[len(lo) // 2:len(lo) // 2 + 1])[0]
+        e, n, _ = pl.frame.geodetic_to_enu(la, lo, 0.0)
+        xy = np.stack([np.asarray(e, np.float64), np.asarray(n, np.float64)], axis=1)
+        z, _m = pl._shape_at(xy, xy, str(fid), ("cut",))
+        out.append(np.asarray(frame.geodetic_to_enu(la, lo, z)[2], np.float64) if np.isfinite(z).all() else None)
+    return out
+
+
+if SHAPES_ON:
+    roadsmod.TUNNEL_Z_HOOK = _tunnel_z_hook
+
+
 def cells_of_points(lat, lon):
     """The map cells Grader.prepare plans for the points (each planning region's _Planner._keys of its own points, in
     its order), without a store: the server's own process asks which cells a first block will wait for
@@ -7541,6 +7772,31 @@ _STAGE_CROWD_LOCK = threading.Lock()
 
 PLANNERS_KEPT = 6               # planning regions a PlanStore keeps in memory (~30 km each)
 MAPPED_MAX = 256                # cells' plans mapped into an anchor's world kept (Grader._cell_plans)
+
+
+def _tunnel_ground(store, own, la, lo):
+    """_Planner.tunnel_ground / Grader.tunnel_ground: store's tunnel_raw (own's without a store) at the points, each
+    point's bridges under mapped decks taken out by its planning region's planner (own without a store)."""
+    raw = (store if store is not None else own).tunnel_raw or (own.elev_raw if own is not None else store.elev)
+    la = np.asarray(la, np.float64)
+    lo = np.asarray(lo, np.float64)
+    z = np.asarray(raw(la, lo), np.float64)
+    if not DECK_GROUND_ON or z.size == 0 or z.size != la.size:
+        return z
+    la_, lo_, b = la.ravel(), lo.ravel(), z.ravel()
+    out = b
+    for pl, idx in ([(own, None)] if store is None else store.planners_of(la_, lo_)):
+        zb = b if idx is None else b[idx]
+        got = pl._deck_ground(la_ if idx is None else la_[idx], lo_ if idx is None else lo_[idx], zb, near=True)
+        if got is zb:
+            continue
+        if out is b:
+            out = np.array(b, np.float64, copy=True)
+        if idx is None:
+            out[:] = got
+        else:
+            out[idx] = got
+    return out.reshape(z.shape)
 
 
 class Grader:
@@ -7674,6 +7930,11 @@ class Grader:
                 out[idx] = got
         return out.reshape(base.shape)
 
+    def tunnel_ground(self, la, lo):
+        """_Planner.tunnel_ground by the points' regions: the tunnel networks' ground (roads.TunnelProfiles.raw), the
+        road tiles' and terrain blocks' chain stores' as the plans' own (_tunnel_chains)."""
+        return _tunnel_ground(self.store, None, la, lo)
+
     def open_tunnels(self, lat, lon):
         """_Planner.open_tunnels by the points' regions: [(lat (k,), lon (k,), Spec)], each section once."""
         lat = np.asarray(lat, np.float64).ravel()
@@ -7736,6 +7997,7 @@ def trim_plan(p, box):
             q.bank = pb
             q.steep = getattr(p, "steep", False)
             q.open_tunnel = getattr(p, "open_tunnel", False)
+            q.tunnel_section = getattr(p, "tunnel_section", False)
             set_widen(q, pw)
             out.append(q)
         i = j + 1
@@ -7885,15 +8147,17 @@ def merge_plan_set(plans):
     return pack
 
 
-PLAN_STEEP, PLAN_OPEN_TUNNEL = 1, 2     # (earthfast gradebins STEEP / OPEN_TUNNEL)
+PLAN_STEEP, PLAN_OPEN_TUNNEL, PLAN_TUNNEL = 1, 2, 4     # (earthfast gradebins STEEP / OPEN_TUNNEL / TUNNEL)
 
 
 def _plan_flags(plans):
     """(plans,) uint8: each plan's flags as grade_points reads them (PlanPack's st): PLAN_STEEP a pass road's
     (Plan.steep), PLAN_OPEN_TUNNEL a tunnel's open section (Plan.open_tunnel: a lower-ranked road crossing it takes the
-    side ease onto it, whatever the class gap)."""
+    side ease onto it, whatever the class gap), PLAN_TUNNEL a covered tunnel's section in the open (Plan.tunnel_section:
+    a road running beside it keeps its ground past its painted edge)."""
     return np.array([(PLAN_STEEP if getattr(p, "steep", False) else 0)
-                     | (PLAN_OPEN_TUNNEL if getattr(p, "open_tunnel", False) else 0) for p in plans], np.uint8)
+                     | (PLAN_OPEN_TUNNEL if getattr(p, "open_tunnel", False) else 0)
+                     | (PLAN_TUNNEL if getattr(p, "tunnel_section", False) else 0) for p in plans], np.uint8)
 
 
 def _per_plan(vs, width=None):
@@ -7999,7 +8263,7 @@ def grade_points(px, py, base, plans, lift=0.0):
         keep = pack.seg_keep(px.min(), py.min(), px.max(), py.max())
         if keep is None:
             return out
-        fast.require(306, "grade_points_binned")    # (gradebins.rs; under_deck: 306)
+        fast.require(307, "grade_points_binned")    # (gradebins.rs; under_deck: 306, TUNNEL: 307)
         return fast._ef.grade_points_binned(
             np.ascontiguousarray(px, f64), np.ascontiguousarray(py, f64), np.ascontiguousarray(base, f64), pack.a,
             pack.b, pack.za, pack.zb, pack.h, pack.rh, pack.rid, pack.rk, pack.ab, pack.cut, pack.ba, pack.bb, pack.st,
@@ -8014,11 +8278,12 @@ def grade_points(px, py, base, plans, lift=0.0):
     if got is None:
         return out
     A, B, ZA, ZB, H, RH, RID, RK, AB, CUT, BA, BB, ST, LK, ABD = got
-    fast.require(306, "grade_points")        # (the Rust loop: native/earthfast; its segments' links: 125, yield_ramp: 126,
+    fast.require(307, "grade_points")        # (the Rust loop: native/earthfast; its segments' links: 125, yield_ramp: 126,
                                              # legs blend over each other's bands: 133, a pass road's core
                                              # given way to whole: 134, no carriageway past an abutment end: 169,
                                              # a lower road over a higher one's core, easing onto it: 181,
-                                             # the abutment's slope under a deck: 306)
+                                             # the abutment's slope under a deck, a road beside a trench
+                                             # keeping its ground: 306)
     return fast._ef.grade_points(np.ascontiguousarray(px, f64), np.ascontiguousarray(py, f64),
                                  np.ascontiguousarray(base, f64), A, B, ZA, ZB, H, RH, RID, RK, AB, CUT, BA, BB, ST, LK,
                                  float(EXTRAP_M), float(lift), float(SLOPE_RUN), float(T_MIN), float(T_MAX), float(STEEP_RUN),

@@ -1871,7 +1871,8 @@ macro_rules! grade_segs {
 /// wall, top and top offset, left then right; ba / bb: the cross slope at each segment's ends (m per m toward its left:
 /// a banked curve, grading.bank); steep: flags, gradebins::STEEP a mountain pass road's (grading.Plan.steep: its sides
 /// fall to the natural ground at steep_run, from steep_t_min, between its retaining wall and its parapet),
-/// gradebins::OPEN_TUNNEL a tunnel's open section (grading.Plan.open_tunnel); link: bit 0 the plan goes on
+/// gradebins::OPEN_TUNNEL a tunnel's open section (grading.Plan.open_tunnel), gradebins::TUNNEL a covered tunnel's
+/// section in the open (grading.Plan.tunnel_section); link: bit 0 the plan goes on
 /// before it, bit 1 after it (a point past such an end takes the segment's line carried on, up to extrap m, not its
 /// end height: on a grade the ends' heights blended in made a washboard of the plan's vertex step, the Stelvio
 /// 2026-11-01); rk: a road's grading rank (grading.grade_rank: a lower one gives way over a higher one's core);
@@ -6466,6 +6467,8 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // joined road's solved grade, not its planned one) and the <= kind
     // 306: grade_points' ground past an abutment end, under the deck: the abutment's slope (1 in slope_run), never
     // under the point's ground where that stands higher (gradebins::under_deck)
-    m.add("VERSION", 306)?;
+    // 307: a road running beside a covered tunnel's section in the open keeps its own ground past the section's
+    // painted edge (gradebins::TUNNEL)
+    m.add("VERSION", 307)?;
     Ok(())
 }
