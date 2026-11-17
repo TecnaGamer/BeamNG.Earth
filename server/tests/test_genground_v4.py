@@ -240,5 +240,68 @@ class TreeFloorTest(unittest.TestCase):
         self.assertTrue(gg.data_ready(md, frame, -64.0, -64.0, 128.0, None, None), "no trees: nothing to wait for")
 
 
+class BuildSoonTest(unittest.TestCase):
+    """A block outside the pose's warm-up: the generated ground asks the vegetation to build its cells in the
+    background (Vegetation.build_soon) and goes final after one redo, instead of redoing its photo at every retry
+    until given up."""
+
+    def setUp(self):
+        gg._retries.clear()
+        self.addCleanup(gg._retries.clear)
+
+    def test_cells_asked_built_and_final_after_one_redo(self):
+        frame = geodesy.EnuFrame(40.877, -77.566)
+        la, lo, _ = frame.enu_to_geodetic(np.array([10.0]), np.array([-20.0]), 0.0)
+
+        class Veg:
+            def __init__(self):
+                self.built, self.asked = set(), []
+
+            def ready(self, key):
+                return (int(key[1]), int(key[2])) in self.built
+
+            def cell(self, key):
+                return items(la, lo, 3.0)
+
+            def build_soon(self, key):
+                self.asked.append((int(key[1]), int(key[2])))
+                return True
+        veg = Veg()
+        md = types.SimpleNamespace(has=lambda k, layer: True)
+        missing = []
+        floor, mode = gg.tree_floor(frame, -64.0, -64.0, 128.0, 128, veg, missing)
+        self.assertEqual((floor, mode), (None, 1))
+        keys = {(int(k[1]), int(k[2])) for k, _l in missing}
+        self.assertTrue(keys and set(veg.asked) == keys, "every cell it waits for asked to be built, at once")
+        self.assertFalse(gg.data_ready(md, frame, -64.0, -64.0, 128.0, None, veg))
+        veg.built |= set(veg.asked)                 # (the warm thread built them)
+        self.assertTrue(gg.data_ready(md, frame, -64.0, -64.0, 128.0, None, veg), "ready: made again once")
+        missing = []
+        floor, mode = gg.tree_floor(frame, -64.0, -64.0, 128.0, 128, veg, missing)
+        self.assertEqual((mode, missing), (2, []), "final")
+
+    def test_vegetation_builds_them_in_the_background_bounded(self):
+        import threading
+        v = vegetation.Vegetation(None, None)
+        gate = threading.Event()
+        loaded = []
+
+        def load(x, y):
+            gate.wait(10)
+            loaded.append((x, y))
+            return items([], [], 1.0)
+        v._load = load
+        for i in range(vegetation.BUILD_SOON_MAX + 10):
+            v.build_soon((14, 1000 + i, 2000))
+        self.assertLessEqual(len(v._soon), vegetation.BUILD_SOON_MAX, "a bounded queue: the oldest dropped")
+        gate.set()
+        for _ in range(500):
+            if v.ready((14, 1000 + vegetation.BUILD_SOON_MAX + 9, 2000)):
+                break
+            threading.Event().wait(0.01)
+        self.assertTrue(v.ready((14, 1000 + vegetation.BUILD_SOON_MAX + 9, 2000)), "built by the warm thread")
+        self.assertFalse(v.build_soon((14, 1000 + vegetation.BUILD_SOON_MAX + 9, 2000)), "(built: not queued)")
+
+
 if __name__ == "__main__":
     unittest.main()
