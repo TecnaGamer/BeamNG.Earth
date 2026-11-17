@@ -143,6 +143,38 @@ class CountryParityTest(unittest.TestCase):
             with self.assertRaises(AssertionError):
                 europewalks.country_for(10.0, 50.0)
 
+    def test_border_index_asked_again_after_none(self):
+        """Codex on 98e07733: a border index missing at one road (a manifest still being fetched on a cold start: Absent)
+        and there at the next. The Python asked bundled() at every point past the box test; so does the port."""
+        real = countrybounds.bundled()
+        rng = random.Random(3881)
+        changed = 0
+        for k in range(300):
+            f = layer(rng)
+            mask = np.ones(len(f), bool)
+            gaps = [rng.random() < 0.3 for _ in range(60)]
+
+            def flaky():
+                state = {"k": 0}
+
+                def bundled():
+                    state["k"] += 1
+                    return countrybounds.Absent() if state["k"] <= len(gaps) and gaps[state["k"] - 1] else real
+                return bundled
+            with mock.patch.object(countrybounds, "bundled", flaky()):
+                want = ref_eu_column(f, mask)
+            with mock.patch.object(countrybounds, "bundled", flaky()):
+                got = europewalks.road_countries(f, mask)
+            self.assertEqual(got, want, k)
+            changed += want != ref_eu_column(f, mask)
+        self.assertGreater(changed, 20)
+        # one point missing the index, the next finding it
+        seq = iter([countrybounds.Absent(), real])
+        with mock.patch.object(countrybounds, "bundled", lambda: next(seq)):
+            import fast
+            self.assertEqual(fast._ef.europe_countries(europewalks._border_path, np.array([11.0, 11.0]),
+                                                       np.array([48.5, 48.5]), europewalks._countries()), [None, "DE"])
+
     def test_malformed_offsets_raise_as_numpy(self):
         rng = random.Random(77)
         n_raised = 0

@@ -20,23 +20,31 @@ pub(crate) fn np_index(len: usize, i: i64) -> PyResult<usize> {
     Ok(if i < 0 { (i + n) as usize } else { i as usize })
 }
 
-/// The border index countrybounds.bundled() names, asked once and only when a point needs it (bundled() may fetch the
-/// regional data): `index()` gives the band file's path, or None (countrybounds.Absent: no data, every lookup None).
+/// The border index countrybounds.bundled() names, asked at every point past the box test as europewalks.country_for
+/// asked it (bundled() may fetch the regional data; on a cold start its manifest can be missing at one point, Absent,
+/// and published by the next: Codex on 98e07733): `index()` gives the band file's path, or None (countrybounds.Absent:
+/// that point's lookup None). The last path's map is kept (map() keeps every opened one anyway).
 struct Borders<'py> {
     index: Bound<'py, PyAny>,
-    got: Option<Option<Arc<Map>>>,
+    last: Option<(String, Arc<Map>)>,
 }
 
 impl<'py> Borders<'py> {
     fn get(&mut self) -> PyResult<Option<Arc<Map>>> {
-        if let Some(m) = &self.got {
-            return Ok(m.clone());
-        }
         let path = self.index.call0()?;
+        if path.is_none() {
+            return Ok(None);
+        }
+        let path = path.extract::<String>()?;
+        if let Some((p, m)) = &self.last {
+            if *p == path {
+                return Ok(Some(m.clone()));
+            }
+        }
         // (countrybounds.BandIndex opened the file in its constructor; a file it could not open raised there)
-        let m = if path.is_none() { None } else { Some(map(&path.extract::<String>()?)?) };
-        self.got = Some(m.clone());
-        Ok(m)
+        let m = map(&path)?;
+        self.last = Some((path, m.clone()));
+        Ok(Some(m))
     }
 }
 
@@ -48,7 +56,9 @@ fn country_for(b: &mut Borders, lon: f64, lat: f64, countries: &BTreeSet<String>
         return Ok(None);
     }
     let Some(m) = b.get()? else { return Ok(None) };
-    let Ok(k) = m.at(lat, lon) else { return Ok(None) };
+    // (the band's read and decompression without the GIL, as country_index ran it: Codex on 98e07733)
+    let mm = m.clone();
+    let Ok(k) = b.index.py().detach(move || mm.at(lat, lon)) else { return Ok(None) };
     if k == 0 {
         return Ok(None);
     }
@@ -68,7 +78,7 @@ pub fn europe_countries<'py>(index: Bound<'py, PyAny>, lons: PyReadonlyArray1<'p
         return Err(pyo3::exceptions::PyValueError::new_err("lons and lats differ in length"));
     }
     let countries: BTreeSet<String> = countries.into_iter().collect();
-    let mut b = Borders { index, got: None };
+    let mut b = Borders { index, last: None };
     lo.iter().zip(la.iter()).map(|(&x, &y)| country_for(&mut b, x, y, &countries)).collect()
 }
 
@@ -85,7 +95,7 @@ pub fn europe_road_countries<'py>(index: Bound<'py, PyAny>, part_off: PyReadonly
     let ll = lonlat.as_array();
     super::lanesplit::check_lonlat(ll.ncols())?;
     let countries: BTreeSet<String> = countries.into_iter().collect();
-    let mut b = Borders { index, got: None };
+    let mut b = Borders { index, last: None };
     let first = |i: i64| -> PyResult<i64> {
         let p = po[np_index(po.len(), i)?];
         let r = ro[np_index(ro.len(), p)?];
