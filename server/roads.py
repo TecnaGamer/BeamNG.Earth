@@ -2109,9 +2109,11 @@ def _lane_overrides(feats):
     d = feats.__dict__.get("_lane_overrides")
     if d is None:
         d = {}
-        if RAMP_LANE_RULE and (_lane_flow_rows(feats)[2][:, 4] > 0.5).any():
-            got = _cell_memo(feats, "_ramp_rule_home", lambda: _lane_flow_home(feats, 1))
-            d = {i: int(v) for i, v in enumerate(got) if v is not None}
+        if RAMP_LANE_RULE:          # (earthfast roadnet::flowhome::lane_overrides)
+            import fast
+            fast.require(400, "lane_overrides")
+            d = fast._ef.lane_overrides(_lane_flow_rows(feats)[2],
+                                        lambda: _cell_memo(feats, "_ramp_rule_home", lambda: _lane_flow_home(feats, 1)))
         feats.__dict__["_lane_overrides"] = d
     return d
 
@@ -2675,35 +2677,25 @@ def _flow_fn(feats, inp):
 
 
 def _lane_flow_home(feats, which=0):
-    """lane_flow (which 0) or the ramp lane rule's counts (1) per feature, each road's from its home cell's solve."""
-    out = list(_lane_flow_local(feats)[which])
+    """lane_flow (which 0) or the ramp lane rule's counts (1) per feature, each road's from its home cell's solve
+    (earthfast roadnet::flowhome::lane_flow_home: only the counted roads at home elsewhere take their home cell's
+    count, the others have none in any copy, the sign being the road's own; only those home cells read, 2026-11-11)."""
+    import fast
+    local = _lane_flow_local(feats)[which]
     me = feats.__dict__.get("_bnge_cell")
     hook = feats.__dict__.get("_bnge_neighbours")
-    # (only the counted roads at home elsewhere take their home cell's count: the others have none in any copy, the
-    # sign being the road's own; only those home cells read, 2026-11-11)
     counted = _lane_flow_counted(feats).tolist()
-    homes = _home_cells(feats) if me is not None and hook is not None else ()
-    away = {home for i, home in enumerate(homes) if counted[i] and home != me[0]}
-    if away:
+
+    def near(away):
         try:
-            near = {f.__dict__["_bnge_cell"][0]: f for f in _near_layers(hook, away)
+            return {f.__dict__["_bnge_cell"][0]: f for f in _near_layers(hook, away)
                     if f is not None and f.__dict__.get("_bnge_cell")}
         except Exception as e:          # (this cell's own)
             log.debug("lane flow: neighbours: %s: %s", type(e).__name__, e)
-            near = {}
-        rows = {}
-        for i, home in enumerate(homes):
-            if counted[i] and home != me[0] and home in near:
-                rows.setdefault(home, []).append(i)
-        for home, idx in rows.items():
-            other = near[home]
-            res = _lane_flow_local(other)[which]
-            pos = {fid: j for j, fid in enumerate(other.ids.tolist())}
-            for i in idx:
-                j = pos.get(feats.ids[i])
-                if j is not None:
-                    out[i] = res[j]
-    return out
+            return {}
+    fast.require(400, "lane_flow_home")
+    return fast._ef.lane_flow_home(local, counted, (lambda: _home_cells(feats)) if me is not None and hook is not None
+                                   else None, me, near, feats.ids, lambda f: _lane_flow_local(f)[which])
 
 
 _LANE_FLOW_DFLT = {}            # road class -> its one-way carriageway's lanes when the map gives none (_lane_flow_rows)
