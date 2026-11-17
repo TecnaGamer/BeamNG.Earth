@@ -20,6 +20,7 @@ from collections import OrderedDict
 
 import numpy as np
 
+import dnp
 import fast
 import railways
 import revisit
@@ -160,7 +161,7 @@ def _find_near(node, fid, cm, out):
     ky = ((keys & 0xFFFFFFFF) - _PACK).astype(np.float64)
     lim = 50.0 * railways.STEP_M                # (cm: half a step)
     for i in todo:
-        d = np.hypot(kx - cm[i, 0], ky - cm[i, 1])
+        d = dnp.hypot(kx - cm[i, 0], ky - cm[i, 1])
         j = np.argsort(d)[:2]
         if d[j[0]] > lim:
             continue
