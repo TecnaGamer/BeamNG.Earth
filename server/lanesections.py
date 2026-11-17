@@ -28,6 +28,8 @@ import roadlanes
 ON = os.environ.get("BNE_LANE_SECTIONS", "on").lower() not in ("off", "0", "false")
 VERSION = 1                 # (mapdata.versions(): the derived caches are built again when it changes)
 PROFILE = "lane_section_profile"
+SECTION_ID = re.compile(r"(.+)~lanes(\d+)-(\d+)")      # a section's id: its road's, the share of its length in 1e-9
+SECTION_END = 1000000000
 STEP_M = 4.0
 
 
@@ -433,20 +435,21 @@ def replaced_roads(cells):
         for i, fid in enumerate(f.ids):
             if not profile(f, i) or (f.clipped is not None and f.clipped[i]):
                 continue
-            match = re.fullmatch(r"(.+)~lanes(\d+)-(\d+)", str(fid))
+            match = SECTION_ID.fullmatch(str(fid))
             if match:
                 parent, a, b = match.groups()
                 intervals.setdefault(parent, set()).add((int(a), int(b)))
-    covered = set()
-    for parent, spans in intervals.items():
-        end = 0
-        for a, b in sorted(spans):
-            if a > end:
-                break
-            end = max(end, b)
-        if end == 1000000000:
-            covered.add(parent)
-    return covered
+    return {parent for parent, spans in intervals.items() if spans_cover(spans)}
+
+
+def spans_cover(spans):
+    """Do a road's sections ((from, to) shares of its length in 1e-9: SECTION_ID) cover all of it?"""
+    end = 0
+    for a, b in sorted(spans):
+        if a > end:
+            break
+        end = max(end, b)
+    return end == SECTION_END
 
 
 def end_shift(f, i, e):

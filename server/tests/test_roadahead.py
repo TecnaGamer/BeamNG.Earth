@@ -88,5 +88,22 @@ class FollowTest(unittest.TestCase):
         self.assertEqual(len(net.lines), 2)
         self.assertAlmostEqual(net.follow(100, 0, 60, 0, 3000)[-1][0], 2000, delta=1)
 
+    def test_road_and_its_lane_sections_once(self):
+        """A road whole in one cell's layer and a lane section of it in the next's: one road, no fork at its start; its
+        sections alone where they cover it."""
+        before = ([(0, 0), (1000, 0)], "motorway", "", False, "a")
+        whole = ([(1000, 0), (3000, 0)], "motorway", "", False, "b")
+        first = ([(1000, 2), (1200, 2)], "motorway", "", False, "b~lanes000000000-100000000")
+        rest = ([(1200, 2), (3000, 0)], "motorway", "", False, "b~lanes100000000-1000000000")
+        net = roadahead.RoadNet([before, first, whole])
+        self.assertEqual(len(net.lines), 2, "the part of it alone is left out")
+        self.assertAlmostEqual(net.follow(100, 0, 85, 0, 5000)[-1][0], 3000, delta=1)
+        net = roadahead.RoadNet([before, whole, first, rest])
+        self.assertEqual(len(net.lines), 3, "its sections, all there, stand for it")
+        self.assertAlmostEqual(net.follow(100, 0, 85, 0, 5000)[-1][0], 3000, delta=1)
+        net = roadahead.RoadNet([before, first])
+        self.assertEqual(len(net.lines), 2, "no road whole: its sections stay")
+
+
 if __name__ == "__main__":
     unittest.main()

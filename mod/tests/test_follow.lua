@@ -114,6 +114,33 @@ pend = { cx = 256, cy = 0, ready = true }
 T.check(d(192, 0, 40, 0, 0, 0, pend, 0, 0) == nil, '512: ready at 192 m: hold')
 T.check(d(193, 0, 40, 0, 0, 0, pend, 0, 0) == 'commit', '512: ready past 192 m: commit')
 T.check(d(400, 0, 40, 0, 0, 0, { cx = 0, cy = 384, ready = false }, 0, 0) == 'discard', '512: prepared block off by > 260 m: discard')
+-- at speed (the target clamped to the reach): the block just taken is centred ahead; the next one once the player is
+-- past its centre, three grid steps on (asked for at once it was a grid step on, built and then dropped or taken)
+T.check(f.centreAhead(200, 0, 85, 0, 384, 0) and d(200, 0, 85, 0, 384, 0, nil, 0, 0) == nil, '512 at 85 m/s: its centre ahead: no request')
+T.check(not f.centreAhead(400, 0, 85, 0, 384, 0), '512 at 85 m/s: past the centre')
+T.check(d(500, 0, 85, 0, 384, 0, nil, 0, 0) == nil, '512 at 85 m/s: 116 m past the centre: no request yet')
+a, cx, cy = d(513, 0, 85, 0, 384, 0, nil, 0, 0)
+T.check(a == 'prepare' and cx == 768 and cy == 0, '512 at 85 m/s: 129 m past the centre: prepare three steps on')
+T.check(not f.centreAhead(200, 0, -85, 0, 384, 0), '512 at 85 m/s: driving away from the centre')
+T.check(not f.centreAhead(200, 0, 160, 0, 384, 0), '512 fast mode: as before')
+do  -- 300 km/h straight on: a move every 384 m, whatever the heightmap latency
+  local function hops(speed, lat)
+    local px, cx, pending, t, n = 0, 0, nil, 0, 0
+    while px < 20000 do
+      t = t + 1 / 30
+      px = px + speed / 30
+      if pending and not pending.ready and t >= pending.at then pending.ready = true end
+      local act, nx = d(px, 0, speed, 0, cx, 0, pending, t, 0, nil, lat)
+      if act == 'prepare' then pending = { cx = nx, cy = 0, at = t + lat }
+      elseif act == 'commit' then cx, pending, n = pending.cx, nil, n + 1
+      elseif act == 'discard' then pending = nil end
+    end
+    return n
+  end
+  T.check(hops(85, 0.05) == 52 and hops(120, 0.05) == 52 and hops(145, 0.05) == 52,
+    string.format('512 at 85/120/145 m/s: 52 moves in 20 km (%d, %d, %d)', hops(85, 0.05), hops(120, 0.05), hops(145, 0.05)))
+  T.check(hops(120, 1) <= 52, '512 at 120 m/s, 1 s latency: no more moves')
+end
 -- town speeds: the next block at least MIN_LEAD (256 m) ahead, not one grid step (a move every 128 m, each a ~50 ms frame
 -- on a Deck); standing still: no lead
 a, cx, cy = d(129, 0, 11, 0, 0, 0, nil, 0, 0)

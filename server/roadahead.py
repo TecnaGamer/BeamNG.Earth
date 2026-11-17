@@ -20,6 +20,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
 
+import lanesections
 import mapcells
 
 SNAP_M = 25.0           # m: the player this near a road line ...
@@ -38,7 +39,8 @@ class RoadNet:
 
     def __init__(self, lines=()):
         self.lines, self.cls, self.name, self.link = [], [], [], []
-        seen = set()
+        lines = list(lines)
+        seen = _twice(line[4] for line in lines if len(line) > 4)
         for xy, cls, name, link, *rid in lines:
             if rid:
                 if rid[0] in seen:
@@ -132,6 +134,28 @@ class RoadNet:
             seen.add(i)
             rest = self.lines[i][1:] if sign > 0 else self.lines[i][-2::-1]
         return np.array(pts, np.float64) if len(pts) >= 2 and gone > 1.0 else None
+
+
+def _twice(ids):
+    """Of these line ids, the ones whose road is there in another form too: a road and its lane sections
+    (lanesections.split cuts a merged highway where its lane count changes; one cell's layer can hold a road whole and
+    its neighbour's the sections that reach into it). The sections where they cover the road, else the road whole: both
+    kept, they left its start together, as alike as two roads can, and the road ahead ended there as at a fork until
+    the car was past it: no blocks built ahead for 25 s of a motorway, the next one from scratch at the edge
+    (2026-11-17)."""
+    ids = set(ids)
+    spans = {}
+    for rid in ids:
+        m = lanesections.SECTION_ID.fullmatch(str(rid))
+        if m:
+            spans.setdefault(m.group(1), {})[rid] = (int(m.group(2)), int(m.group(3)))
+    out = set()
+    for road, parts in spans.items():
+        if lanesections.spans_cover(parts.values()):
+            out.add(road)
+        elif road in ids:
+            out.update(parts)
+    return out
 
 
 def cell_lines(feats, frame):

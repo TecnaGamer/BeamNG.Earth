@@ -1041,6 +1041,18 @@ def predict_centre(px, py, vx, vy, lead, reach=FOLLOW_REACH, grid=heightmap.GRID
     return tuple(out)
 
 
+def centre_ahead(px, py, vx, vy, cx, cy, rule):
+    """follow.lua centreAhead: is the block's centre (cx, cy) still ahead of a player at (px, py) moving (vx, vy), as
+    far as its target is put ahead (min_lead, or the reach where the lead goes further)? Then the mod asks for no
+    other block yet. Not in the fast mode."""
+    lead, reach, ahead = rule.mode(vx, vy)
+    v2 = vx * vx + vy * vy
+    if rule.min_lead <= 0 or v2 <= rule.min_lead_v * rule.min_lead_v or ahead > 0:
+        return False
+    far = rule.min_lead if v2 * lead * lead < rule.min_lead * rule.min_lead else reach
+    return (cx - px) * vx + (cy - py) * vy > 0 and max(abs(px - cx), abs(py - cy)) <= far + rule.grid
+
+
 def predict_request(px, py, vx, vy, cx, cy, rule=FOLLOW_RULES[2048.0], at=None):
     """The centre the mod will ask for (V1_1_SPEC 4 prefetch): where a player moving
     straight at (vx, vy) leaves the FOLLOW_PREPARE box around the block centre, then the
@@ -1049,10 +1061,8 @@ def predict_request(px, py, vx, vy, cx, cy, rule=FOLLOW_RULES[2048.0], at=None):
     follow table; in its fast mode the box test is on the point v * fast_ahead ahead."""
     lead, reach, ahead = rule.mode(vx, vy)
     v2 = vx * vx + vy * vy
-    if (rule.min_lead > 0 and rule.min_lead_v * rule.min_lead_v < v2 and v2 * lead * lead < rule.min_lead * rule.min_lead
-            and (cx - px) * vx + (cy - py) * vy > 0
-            and max(abs(px - cx), abs(py - cy)) <= rule.min_lead + rule.grid):
-        # (follow.lua centreAhead: the centre just committed is ahead; the next request once the player is past it)
+    if centre_ahead(px, py, vx, vy, cx, cy, rule):
+        # (the centre just committed is ahead; the next request once the player is past it)
         t0 = ((cx - px) * vx + (cy - py) * vy) / v2 + FRAME_S
         px, py = px + vx * t0, py + vy * t0
     qx, qy = px + vx * ahead, py + vy * ahead
@@ -1066,10 +1076,36 @@ def predict_request(px, py, vx, vy, cx, cy, rule=FOLLOW_RULES[2048.0], at=None):
     return predict_centre(px + vx * t, py + vy * t, vx, vy, lead, reach, rule.grid, rule.min_lead, rule.min_lead_v)
 
 
-def predict_chain(px, py, vx, vy, cx, cy, rule, n, at=None):
+def prefer_ready(ready, px, py, vx, vy, tx, ty, cx, cy, reach, lim):
+    """follow.lua preferReady: the centre of `ready` the mod asks for at (px, py) moving (vx, vy) instead of its target
+    (tx, ty), or None: within lim (READY_STEPS grid steps) of the target, the player within reach of it, not the
+    current centre (cx, cy); the nearest to the target, then the one furthest along the way."""
+    best, bd, ba = None, math.inf, -math.inf
+    for c in ready:
+        d = max(abs(c[0] - tx), abs(c[1] - ty))
+        if d <= lim and max(abs(px - c[0]), abs(py - c[1])) <= reach and c != (cx, cy):
+            along = (c[0] - px) * vx + (c[1] - py) * vy
+            if d < bd or (d == bd and along > ba):
+                best, bd, ba = c, d, along
+    return best
+
+
+def _asked_for(c, where, vx, vy, cx, cy, rule, ready, out):
+    """The centre the mod asks for where its rule gives target c (predict_request) and it knows the blocks of `ready`
+    and the chain's own so far (built by then) as built already: one of those when it prefers it, else c."""
+    if ready is None:
+        return c
+    r = prefer_ready(list(ready) + out, where[0], where[1], vx, vy, c[0], c[1], cx, cy, rule.mode(vx, vy)[1],
+                     READY_STEPS * rule.grid)
+    return c if r is None else (float(r[0]), float(r[1]))
+
+
+def predict_chain(px, py, vx, vy, cx, cy, rule, n, at=None, ready=None):
     """The next n centres the mod will ask for (predict_request, chained): after each, the player where its path passes
     nearest that centre, the next request from there. Fewer when the chain stops (no move, a repeat). at: a dict
-    filled with each centre's request point (the player where it asks)."""
+    filled with each centre's request point (the player where it asks). ready: the centres built or being built
+    already, when the mod takes one of them for a target near it (prefer_ready): the chain then goes on from the block
+    it takes, as the mod does."""
     out = []
     v2 = vx * vx + vy * vy
     if v2 < 1.0:
@@ -1077,7 +1113,10 @@ def predict_chain(px, py, vx, vy, cx, cy, rule, n, at=None):
     for _ in range(n):
         where = []
         c = predict_request(px, py, vx, vy, cx, cy, rule, where)
-        if c == (cx, cy) or c in out:
+        if c == (cx, cy):
+            break
+        c = _asked_for(c, where[0], vx, vy, cx, cy, rule, ready, out)
+        if c in out:
             break
         out.append(c)
         if at is not None:
@@ -1105,10 +1144,14 @@ ROAD_MOVE_M = 20.0          # m the player moves before its road ahead is follow
 
 
 def predict_route_chain(xy, px, py, vx, vy, cx, cy, rule, n, at=None, ahead_s=ROUTE_AHEAD_S,
-                        max_m=ROUTE_AHEAD_MAX_M):
+                        max_m=ROUTE_AHEAD_MAX_M, ready=None):
     """The next n centres the mod will ask for while the player at (px, py) moving (vx, vy) drives along the route
     polyline xy ((k, 2) in the anchor frame), or None when the player is not on it (ROUTE_NEAR_M, ROUTE_ALIGN). The
-    mod's rule (predict_request) tried every ROUTE_STEP_M along the route with the route's own heading there."""
+    mod's rule (predict_request) tried every ROUTE_STEP_M along the route with the route's own heading there. ready:
+    the centres built or being built already (predict_chain): where the mod takes one of them instead of its target
+    its next request is another (a grid step or three earlier or later), and so is every one after it: the chain
+    without them ordered every second block the mod then did not ask for, and the ones between were built from
+    scratch while the car waited (half the requests of a motorway drive at 190 mph, 2026-11-17)."""
     sp = math.hypot(vx, vy)
     if sp < 1.0 or xy is None or len(xy) < 2:
         return None
@@ -1135,14 +1178,20 @@ def predict_route_chain(xy, px, py, vx, vy, cx, cy, rule, n, at=None, ahead_s=RO
         x, y, gone = x + ux * step, y + uy * step, gone + step
         lvx, lvy = ux * sp, uy * sp
         _lead, _reach, ahead = rule.mode(lvx, lvy)
-        if max(abs(x + lvx * ahead - cx), abs(y + lvy * ahead - cy)) > rule.prepare:
+        if max(abs(x + lvx * ahead - cx), abs(y + lvy * ahead - cy)) > rule.prepare \
+                and not centre_ahead(x, y, lvx, lvy, cx, cy, rule):
             where = []
             c = predict_request(x, y, lvx, lvy, cx, cy, rule, where)
-            if c != (cx, cy) and c not in out:
+            if c == (cx, cy):
+                continue
+            c = _asked_for(c, where[0], lvx, lvy, cx, cy, rule, ready, out)
+            if c not in out:
                 out.append(c)
                 if at is not None:
                     at[c] = where[0]
-                cx, cy = c
+            elif ready is None:
+                continue
+            cx, cy = c
     return out
 
 
@@ -5283,14 +5332,17 @@ class Server:
             # held 40 s of 90 against none); at 170 mph no hold, roads 1.2 km ahead.
             early = self.quick_futs.pop((anchor.id, cx, cy), None)
             if early is not None:
-                t1 = time.perf_counter()
-                try:
-                    info["base"] = early.result(timeout=STANDIN_WAIT_S)
-                except concurrent.futures.TimeoutError:
+                # (begun beside its heights, not waited for here: up to a second of every block built ahead went to
+                # waiting for a stand-in that took 3-10 s beside the rest, 33 s of a 13 km drive at 190 mph, the block
+                # not known as built meanwhile and a car at its edge held for a photo; 2026-11-17. It comes onto the
+                # block's entry when made, _quick_later)
+                if early.done():
+                    try:
+                        info["base"] = early.result()
+                    except Exception as e:
+                        log.info("stand-in photo %s: %s", (anchor.id, cx, cy), e)
+                else:
                     self.quick_pool.submit(self._quick_later, anchor, cx, cy)
-                except Exception as e:
-                    log.info("stand-in photo %s: %s", (anchor.id, cx, cy), e)
-                info.setdefault("stages", {})["standIn"] = time.perf_counter() - t1
             elif getattr(self, "speed", 0.0) < QUICK_SYNC_MAX_V:
                 # (in the block's own process when it can: just done with its heights; here it took 2-6 s, 2026-10-31)
                 info["base"] = self._quick_once(anchor, cx, cy, lambda: (
@@ -10514,14 +10566,18 @@ class Connection:
                     at[c] = where[0]
             self.predicted_chain = []
             self.predicted_by = "straight"
+            self.chain_knows_ready = False
             if math.hypot(*self.vel) > FAST_BASE_V:
+                # (a mod that takes built blocks for its targets, send_ready_set: the chain as it will ask with them)
+                ready = self.blocks_known(aid) if self.s.fast and getattr(self, "ready_set", False) else None
+                self.chain_knows_ready = ready is not None
                 route_at = {}
                 cs = predict_route_chain(self.route_xy(aid), px, py, *self.vel, base.cx, base.cy, rule,
-                                         PREFETCH_CHAIN + 1, route_at)
+                                         PREFETCH_CHAIN + 1, route_at, ready=ready)
                 self.predicted_by = "route" if cs else "straight"
                 if not cs:          # no route: along the road the player drives on, further ahead (ROAD_CHAIN blocks)
                     cs = predict_route_chain(self.road_xy(aid, px, py), px, py, *self.vel, base.cx, base.cy, rule,
-                                             ROAD_CHAIN + 1, route_at, ROAD_AHEAD_S, ROAD_AHEAD_MAX_M)
+                                             ROAD_CHAIN + 1, route_at, ROAD_AHEAD_S, ROAD_AHEAD_MAX_M, ready=ready)
                     if cs:
                         self.predicted_by = "road"
                 if not cs and tree is not None and len(tree.mpp) >= 2:
@@ -10529,7 +10585,7 @@ class Connection:
                     # the junctions' likeliest ways, not a straight line: block_unwanted drops what it no longer leads to)
                     route_at = {}
                     cs = predict_route_chain(tree.mpp_xy(), px, py, *self.vel, base.cx, base.cy, rule,
-                                             PREFETCH_CHAIN + 1, route_at)
+                                             PREFETCH_CHAIN + 1, route_at, ready=ready)
                     self.tree_led = bool(cs)
                     if cs:
                         self.predicted_by = "tree"
@@ -10539,7 +10595,9 @@ class Connection:
                         self.predicted_block = self.s.layout.block_at(*cs[0])
                     cs = cs[1:]
                 else:
-                    cs = predict_chain(px, py, *self.vel, base.cx, base.cy, rule, PREFETCH_CHAIN, at)
+                    cs = predict_chain(px, py, *self.vel, base.cx, base.cy, rule, PREFETCH_CHAIN, at, ready=ready)
+                    if ready is not None and cs and self.predicted_block is not None:
+                        self.predicted_block, cs = self.s.layout.block_at(*cs[0]), cs[1:]
                 self.predicted_chain = [self.s.layout.block_at(*c) for c in cs]
         if (self.map_view or self.map_open) and self.eye:
             # the 3D map zoomed far in (the user, 2026-11-07: "no matter where i am it should only take a couple seconds
@@ -11568,6 +11626,14 @@ class Connection:
             self.ready_sent = cs
             self.send({"type": "terrain_ready_set", "anchorId": aid, "centres": [[float(cx), float(cy)] for cx, cy in cs]})
 
+    def blocks_known(self, aid):
+        """The centres of anchor aid's blocks built or being built (the mod's ready set once they are: send_ready_set),
+        within READY_SET_M of the player."""
+        px, py = self.focus
+        busy = getattr(self, "prefetch_busy", ())
+        return {(float(cx), float(cy)) for (a, cx, cy) in list(self.s.hm) + list(self.s.hm_inflight) + list(busy)
+                if a == aid and max(abs(cx - px), abs(cy - py)) <= READY_SET_M}
+
     def load_map_blocks(self, aid):
         """The loading map's terrain blocks of anchor aid: [[west, south, east, north], BLOCK_* state, s] (s: the build's
         seconds once built, else since it began or was asked for), and how long the game has waited for the block it
@@ -11629,8 +11695,8 @@ class Connection:
             key = (anchor.id, b.cx, b.cy)
             if key in busy or self.s.terrain_cached(key):
                 continue
-            if self.ready_will_do(anchor, b, at.get((b.cx, b.cy)), busy):
-                continue
+            if not getattr(self, "chain_knows_ready", False) and self.ready_will_do(anchor, b, at.get((b.cx, b.cy)), busy):
+                continue                # (a chain that knows them has left out what a built block stands in for)
             busy.add(key)
             self.prefetching = True
 

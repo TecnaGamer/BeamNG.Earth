@@ -217,11 +217,15 @@ def _retargets(px, py, vx, vy, pending, size):
 
 
 def follow_centre_ahead(px, py, vx, vy, cx, cy, size=1024):
-    """follow.centreAhead: the block's centre still ahead of a player whose target MIN_LEAD sets."""
+    """follow.centreAhead: the block's centre still ahead of a moving player, as far as its target is put ahead
+    (MIN_LEAD, or the reach where LOOKAHEAD_S goes further); not in the fast mode."""
     T = follow_table(size)
     lead, v2 = T["MIN_LEAD"], vx * vx + vy * vy
-    if lead <= 0 or v2 <= FOLLOW["MIN_LEAD_V"] ** 2 or v2 * T["LOOKAHEAD_S"] ** 2 >= lead * lead:
+    _t, reach, ahead = follow_mode(vx, vy, size)
+    if lead <= 0 or v2 <= FOLLOW["MIN_LEAD_V"] ** 2 or ahead > 0:
         return False
+    if v2 * T["LOOKAHEAD_S"] ** 2 >= lead * lead:
+        lead = reach
     return (cx - px) * vx + (cy - py) * vy > 0 and cheb(px, py, cx, cy) <= lead + T["GRID"]
 
 
