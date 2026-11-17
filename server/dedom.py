@@ -26,6 +26,9 @@ from collections import OrderedDict
 
 import numpy as np
 
+import dmath
+import dnp
+
 SAMPLE_M = 1.0              # m between a deck's samples, along and across (the DOMs' own 1 m grid)
 PAD_M = 2.0                 # m the box of a request reaches past its samples
 NODATA_BELOW = -1000.0      # heights below this are a service's no-data
@@ -192,7 +195,7 @@ def grid_along(xy, half, step=SAMPLE_M):
     if len(pts) < 2:
         return pts
     d = np.gradient(pts, axis=0)
-    n = np.stack([-d[:, 1], d[:, 0]], 1) / np.maximum(np.hypot(d[:, 0], d[:, 1]), 1e-9)[:, None]
+    n = np.stack([-d[:, 1], d[:, 0]], 1) / np.maximum(dnp.hypot(d[:, 0], d[:, 1]), 1e-9)[:, None]
     off = np.arange(-half, half + 1e-9, step)
     return (pts[:, None, :] + off[None, :, None] * n[:, None, :]).reshape(-1, 2)
 
@@ -205,7 +208,7 @@ _shards = OrderedDict()     # (x, y) -> decoded
 def tile_of(lat, lon, zoom=ZOOM):
     n = 1 << zoom
     r = math.radians(lat)
-    return int((lon + 180.0) / 360.0 * n), int((1.0 - math.asinh(math.tan(r)) / math.pi) / 2.0 * n)
+    return int((lon + 180.0) / 360.0 * n), int((1.0 - dmath.asinh(dmath.tan(r)) / math.pi) / 2.0 * n)
 
 
 def tiles_over(south, west, north, east):

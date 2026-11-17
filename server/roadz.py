@@ -1360,7 +1360,7 @@ class RoadZ:
             local.append((np.stack([np.asarray(e), np.asarray(n)], 1), half))
         allr = np.concatenate([ring for ring, _h in parts])
         pad = 60.0 / 111320.0
-        padx = pad / max(0.2, math.cos(math.radians(lat_c)))
+        padx = pad / max(0.2, dmath.cos(math.radians(lat_c)))
         la, lo, dom, dgm = dedom.points(lambda u: self._fetch(u, lane="dedom"), float(allr[:, 1].min()) - pad,
                                         float(allr[:, 0].min()) - padx, float(allr[:, 1].max()) + pad,
                                         float(allr[:, 0].max()) + padx)
