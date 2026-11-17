@@ -419,7 +419,8 @@ class ShrubTest(unittest.TestCase):
         self.assertEqual(self.g(52.23, 21.0, lcls=10, uf=0.2, h=1.9, floor=True)[0], veg.G_SHRUB, "not for the tall")
         self.assertEqual(self.g(52.23, 21.0, lcls=10, uf=0.8, floor=True)[0], veg.G_SHRUB)
         self.assertEqual(self.g(52.23, 21.0, uf=0.2)[0], veg.G_SHRUB, "open land: no ferns")
-        self.assertEqual(self.g(-3.1, -60.0, lcls=10, uf=0.05, floor=True)[0], veg.G_SHRUB_TROPICAL)
+        self.assertEqual(self.g(-3.1, -60.0, lcls=10, uf=0.05, floor=True)[0], veg.G_TRO_UNDERSTORY, "shade plants")
+        self.assertEqual(self.g(-3.1, -60.0, lcls=30)[0], veg.G_SHRUB_TROPICAL, "in the open: bushes")
         self.assertEqual(self.g(25.2, 55.3, lcls=10, uf=0.05, floor=True)[0], veg.G_DESERT_SHRUB)
         self.assertEqual(self.g(43.3, 5.4, lcls=10, uf=0.2, floor=True)[0], veg.G_MAQUIS, "no ferns in the dry south")
         for uf in np.linspace(0, 0.999, 50):        # dead wood is added elsewhere (_remote_floor), never a bush changed

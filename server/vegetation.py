@@ -85,14 +85,14 @@ GROUPS = ("deciduous", "conifer", "shrub", "rock", "pine_west", "palm", "juniper
           # (30: the bushes' and forest floors' own, shrub_groups; the stock survey 2026-11-16)
           "maquis", "shrub_north", "shrub_tropical", "fern", "deadwood", "tro_thicket",
           "deciduous_open", "oak_open", "birch_open", "beech_open", "pine_west_open", "mediterranean_open",
-          "tropical_open", "conifer_open", "spruce_open", "pine_eu_open", "redwood")
+          "tropical_open", "conifer_open", "spruce_open", "pine_eu_open", "redwood", "tro_understory")
 (G_DECIDUOUS, G_CONIFER, G_SHRUB, G_ROCK, G_PINE_WEST, G_PALM, G_JUNIPER, G_DESERT_SHRUB, G_DESERT_ROCK,
  G_OAK_WEST, G_TROPICAL, G_MEDITERRANEAN, G_CONIFER_CLUMP, G_DECIDUOUS_CLUMP, G_OAK_WEST_CLUMP,
  G_MEDITERRANEAN_CLUMP, G_VINE, G_STRAW_N, G_STRAW_S, G_SILAGE_N, G_SILAGE_S, G_EUCALYPTUS, G_EUCALYPTUS_CLUMP,
  G_POPLAR, G_CREOSOTE, G_BIRCH, G_OAK, G_BEECH, G_PINE_EU, G_SPRUCE, G_SNAG_BROAD, G_SNAG_CONIFER, G_PALM_DRY,
  G_BIRCH_CLUMP, G_OAK_CLUMP, G_BEECH_CLUMP, G_MAQUIS, G_SHRUB_NORTH, G_SHRUB_TROPICAL, G_FERN, G_DEADWOOD,
  G_TRO_THICKET, G_DECIDUOUS_OPEN, G_OAK_OPEN, G_BIRCH_OPEN, G_BEECH_OPEN, G_PINE_WEST_OPEN, G_MEDITERRANEAN_OPEN,
- G_TROPICAL_OPEN, G_CONIFER_OPEN, G_SPRUCE_OPEN, G_PINE_EU_OPEN, G_REDWOOD) = range(53)
+ G_TROPICAL_OPEN, G_CONIFER_OPEN, G_SPRUCE_OPEN, G_PINE_EU_OPEN, G_REDWOOD, G_TRO_UNDERSTORY) = range(54)
 # Far clumps (GitHub #1074, "trees cost too much"; the asset survey 2026-11-10): a forest's canopy trees gathered on a
 # world-fixed grid of about CLUMP_CELL_M squares (a whole number of them a geotile: none straddles two); a square with
 # CLUMP_MIN of them gets one item of a stock clump shape (trees.lua's *_clump groups: East Coast USA's
@@ -557,6 +557,9 @@ def shrub_groups(group, height, lat, lon, lcls, koppen, u, u_floor, understory=N
     g[bush & tropical] = G_SHRUB_TROPICAL
     g[bush & arid & (g == G_SHRUB)] = G_DESERT_SHRUB
     if understory is not None:
+        # (34) the tropics' forest floor: the wide-leaved shade plants (monstera, the island's tropical_plant_*), not
+        # in the open (a monstera on a savanna or a field's hedge; the gallery 2026-11-17)
+        g[bush & tropical & np.asarray(understory, bool)] = G_TRO_UNDERSTORY
         floor = bush & np.asarray(understory, bool) & ~tropical & ~arid
         humid = np.isin(k, K_HUMID) & ~north
         p = np.where(humid, FERN_SHARE["humid"], np.where(north & ~np.isin(k, K_POLAR), FERN_SHARE["boreal"], 0.0))

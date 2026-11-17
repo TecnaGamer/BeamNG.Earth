@@ -487,12 +487,17 @@ M.CATALOG = {
     { UT .. 'trees/Juniper/Juniper_bush_large_01', 2.6 }, { ECA .. 'trees/trees_douglasfir/tree_douglasfir_bush_a', 2.7 },
     { ECA .. 'trees/trees_aspen/tree_aspen_bush_c', 3.27 },
   },
-  -- the rainforests', mangroves' and savannas' bushes and wide-leaved plants (Jungle Rock Island's)
+  -- the rainforests', mangroves' and savannas' bushes (Jungle Rock Island's), in the open and in the canopy's gaps
   shrub_tropical = {
+    { JRI .. 'trees/trees_palm/palm_tiny', 3.0 }, { JRI .. 'trees/bush_tropical_1/tro_tree_1_bush_large', 3.38 },
+    { JRI .. 'trees/bush_tropical_1/tro_bush_small', 3.9 }, { JRI .. 'trees/trees_tropical_2/tro_tree_2_bush_huge', 3.95 },
+  },
+  -- (34) the tropics' forest floor: the wide-leaved shade plants (monstera and the like), never in the open (server
+  -- vegetation.shrub_groups: the understory scatter only; the gallery 2026-11-17)
+  tro_understory = {
     { JRI .. 'trees/tropical_wide_leaves/tropical_plant_02_a', 2.77 }, { JRI .. 'trees/trees_palm/palm_tiny', 3.0 },
     { JRI .. 'trees/tropical_wide_leaves/tropical_plant_03_e', 3.19 }, { JRI .. 'trees/tropical_wide_leaves/tropical_plant_03_a', 3.33 },
-    { JRI .. 'trees/bush_tropical_1/tro_tree_1_bush_large', 3.38 }, { JRI .. 'trees/tropical_wide_leaves/tropical_plant_01_b', 3.64 },
-    { JRI .. 'trees/bush_tropical_1/tro_bush_small', 3.9 }, { JRI .. 'trees/trees_tropical_2/tro_tree_2_bush_huge', 3.95 },
+    { JRI .. 'trees/tropical_wide_leaves/tropical_plant_01_b', 3.64 },
   },
   -- the tropics' vine-draped thicket (a 9 m dome of aerial roots, 6.6 m high), only in remote forest on level ground
   -- (server vegetation._remote_floor: it stood by a road like a hut, the user's test 2026-11-16)
@@ -713,7 +718,7 @@ M.GROUP_MAX_M.golfflag = 400
 M.GROUP_MAX_M.vine = 450
 M.GROUP_MAX_M.creosote = 250       -- (as the other shrubs)
 M.NO_COLLIDE.creosote = true
-for _, g in ipairs({ 'maquis', 'shrub_north', 'shrub_tropical' }) do     -- (30: as the other shrubs)
+for _, g in ipairs({ 'maquis', 'shrub_north', 'shrub_tropical', 'tro_understory' }) do     -- (30: as the other shrubs)
   M.GROUP_MAX_M[g] = 250; M.NO_COLLIDE[g] = true
 end
 M.GROUP_MAX_M.deadwood = 200; M.NO_COLLIDE.deadwood = true     -- (on the forest floor, as the ferns)
