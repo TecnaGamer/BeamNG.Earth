@@ -997,11 +997,21 @@ def _render_square(imagery, frame, x0, y0, size, px, pending):
 
 
 def _fit_key(key, imagery, md, dem):
+    """A sun fit's memo key: the cell, SHADE_VERSION, the imagery by its settings (its chain's sources, tone, leaf-on,
+    season: not id(), which a new object can reuse once the old one is gone: the mini PC's gate, 2026-11-16), the map
+    data (which, and its versions) and whether the ground's heights were there."""
     try:
         ver = json.dumps(md.versions(buildings=True), sort_keys=True, default=str) if md is not None else None
     except Exception:
         ver = None
-    return (str(key), SHADE_VERSION, id(imagery), dem is not None, ver)
+    chain = getattr(imagery, "chain", None)
+    if chain is not None:
+        im = (tuple(str(getattr(s, "name", s)) for s in chain), str(getattr(imagery, "tone", None)),
+              str(getattr(imagery, "leaf_on", None)), str(getattr(imagery, "season_mode", None)))
+    else:                       # (a stand-in: by its object)
+        im = ("stand-in", id(imagery))
+    mdk = None if md is None else (type(md).__name__, str(getattr(md, "cache_dir", "")))
+    return (str(key), SHADE_VERSION, im, mdk, dem is not None, ver)
 
 
 def cell_sun(key, imagery, md, dem, pending=None, missing=None):
