@@ -362,10 +362,10 @@ def probe(server, cache, lat, lon, R, checks, entrance, offline=False):
                 path = np.vstack([end, fwd])
                 sp = arc(path)
                 tt = np.arange(1.0, min(31.0, sp[-1]) + 1e-9, 2.0)
-                if len(tt) < 7:
-                    continue
+                if not len(tt):
+                    continue        # (a ground piece under 1 m: a short stub up to a roundabout ring is still scored)
                 zr = elev_xy(at(path, sp, tt))
-                gr = np.abs(zr[5:] - zr[:-5]) / 10.0
+                gr = np.abs(zr[5:] - zr[:-5]) / 10.0 if len(zr) > 5 else np.zeros(1)
                 lip = float(np.abs(np.diff(zr, 2)).max()) if len(zr) > 2 else 0.0
                 dw = (float(spec.width) - float(gspec.width)) if (spec is not None and gspec is not None) else 0.0
                 rows.append([r2(zend - zr[0]), round(100 * float(gr.max()), 1), r2(lip), r2(dw), fid,
