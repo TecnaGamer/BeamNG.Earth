@@ -65,3 +65,31 @@ test("menu routes only", () => {
   assert.match(T.SETTING_LUA, /mainMenuTile/)    // (the Interface setting; on unless it is off)
   assert.match(T.SERVER_LUA, /'up' or 'down'/)
 })
+
+test("a setting reply after stopTile installs nothing (Codex review: lifecycle generation)", async () => {
+  const pending = []
+  let observers = 0, intervals = 0
+  const saved = { mo: globalThis.MutationObserver, si: globalThis.setInterval, qs: globalThis.document.querySelector }
+  globalThis.MutationObserver = class { observe() { observers++ } disconnect() {} }
+  globalThis.setInterval = () => { intervals++; return 1 }
+  globalThis.document.querySelector = () => null
+  globalThis.document.querySelectorAll = () => []
+  window.vueRouter = { currentRoute: { value: { name: "menu" } } }
+  window.Vue = { watch: (src, cb) => { cb(src.value); return () => {} } }
+  window.bngApi = { engineLua: (code, cb) => { if (cb) pending.push(cb) } }
+  try {
+    await T.startTile()
+    assert.equal(pending.length, 1, "the setting asked once on the menu")
+    T.stopTile()
+    pending.splice(0).forEach(cb => cb("on"))
+    assert.equal(observers, 0, "no observer after stopTile")
+    assert.equal(intervals, 0, "no server poll after stopTile")
+    await T.startTile()
+    pending.splice(0).forEach(cb => cb("on"))
+    assert.equal(observers, 1, "a live reply shows the tile's watcher")
+    T.stopTile()
+  } finally {
+    globalThis.MutationObserver = saved.mo; globalThis.setInterval = saved.si; globalThis.document.querySelector = saved.qs
+    delete window.vueRouter; delete window.Vue; delete window.bngApi
+  }
+})

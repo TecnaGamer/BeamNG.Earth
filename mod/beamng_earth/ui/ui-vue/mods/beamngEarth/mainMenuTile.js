@@ -33,6 +33,7 @@ export const SETTING_LUA = "(beamngEarth_settings and beamngEarth_settings.get a
 export function isMenuRoute(route) { return MENU_ROUTES.has(route && route.name) }
 
 let stopWatch = null
+let generation = 0       // bumped by stopTile and each menu read: a late reply of an older one does nothing
 let observer = null
 let tile = null
 let serverUp = null
@@ -159,7 +160,9 @@ function onRoute(route) {
     const a = api()
     if (!a || !a.engineLua) { show(); return }
     // the setting read each time the menu comes up (changed in a level's settings page: the next menu follows it)
+    const g = ++generation
     a.engineLua(SETTING_LUA, v => {
+      if (g !== generation) return               // (stopped, or a newer route's read since)
       const r = window.vueRouter
       if (r && !isMenuRoute(r.currentRoute.value)) return
       if (v === "off") off(); else show()
@@ -169,15 +172,18 @@ function onRoute(route) {
 
 export async function startTile(waitMs = 60000) {
   const t0 = Date.now()
+  const g = ++generation
   while (!(window.Vue && window.vueRouter)) {
     if (Date.now() - t0 > waitMs) { console.error(TAG, "no router: tile not added"); return }
     await new Promise(r => setTimeout(r, 100))
+    if (g !== generation) return                 // (stopped while waiting for the router)
   }
   stopTile()
   stopWatch = window.Vue.watch(window.vueRouter.currentRoute, onRoute, { immediate: true, flush: "post" })
 }
 
 export function stopTile() {
+  generation++
   try { stopWatch && stopWatch() } catch (e) { /* already gone */ }
   stopWatch = null
   stopPolling()
