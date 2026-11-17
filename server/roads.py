@@ -7781,6 +7781,7 @@ class BridgeProfiles:
             got = cache.get(str(key))
         if got is not None:
             return got
+        import lanesections
         parts, roads_ = [], []
         # (the read AND everything made from it in a revisit scope of its own: the pool workers' faults it took,
         # a spec rule's lookup that fell back (germanroads.adjust_specs in specs_of / road_specs) count too)
@@ -7790,6 +7791,7 @@ class BridgeProfiles:
                 bs = self.specs_of(feats)
                 rs = road_specs(feats)
                 names = feats.attrs.get("name")
+                placed = feats.attrs.get(lanesections.PROFILE)      # (the lane sections: lanesections.unplaced)
                 for i in range(len(feats)):
                     fid = str(feats.ids[i])
                     if bs[i] is not None:
@@ -7805,7 +7807,16 @@ class BridgeProfiles:
                         parts.extend(best.items())
                     if rs[i] is not None:
                         lines = []
-                        for ring in ground_parts(feats, i):
+                        # (a lane section's on the map's line, as the decks are: off its placement, its end missed the
+                        # joint it goes on from, lanesections.unplaced)
+                        rings = ground_parts(feats, i)
+                        if placed is not None and placed[i]:    # (once per layer: every chain store reads the cell)
+                            memo = feats.__dict__.setdefault("_unplaced_ground", {})
+                            got = memo.get(i)
+                            if got is None:
+                                got = memo[i] = lanesections.unplaced(feats, i, rings)
+                            rings = got
+                        for ring in rings:
                             e, n = mapgeom.enu_xy(feats, self.frame, ring)
                             lines.append(np.stack([e, n], axis=1))
                         roads_.append(((fid, "g"), lines))
