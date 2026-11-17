@@ -106,3 +106,51 @@ impl PolygonIndex {
         Ok(out.into_pyarray(py))
     }
 }
+
+/// roads._width_regions: each feature's WIDTH_REGIONS code: `us` where its state is known (us_mask: _marking_states
+/// != ''), then `jp` where it has a point and its middle point ((first + max(last, first)) // 2 of its points, clipped
+/// to the layer's) lies in the Japan box (lat0, lon0, lat1, lon1, bounds included), else 0.
+#[pyfunction]
+#[allow(clippy::too_many_arguments)]
+pub fn width_regions<'py>(py: Python<'py>, us_mask: PyReadonlyArray1<'py, bool>, part_off: PyReadonlyArray1<'py, i64>,
+                          ring_off: PyReadonlyArray1<'py, i64>, coord_off: PyReadonlyArray1<'py, i64>,
+                          lonlat: PyReadonlyArray2<'py, f64>, japan: (f64, f64, f64, f64), us: i64, jp: i64)
+                          -> PyResult<Bound<'py, PyArray1<i64>>> {
+    let (po, ro, co) = (part_off.as_slice()?, ring_off.as_slice()?, coord_off.as_slice()?);
+    let n = po.len().saturating_sub(1);
+    let ll = lonlat.as_array();
+    let mut out = vec![0i64; n];
+    if n == 0 {
+        return Ok(out.into_pyarray(py));
+    }
+    super::lanesplit::check_lonlat(ll.ncols())?;
+    super::lanesplit::check_offsets(n, po, ro, co, ll.nrows())?;
+    let m = us_mask.as_slice()?;
+    if m.len() != n {
+        return Err(pyo3::exceptions::PyIndexError::new_err(format!(
+            "boolean index did not match indexed array along axis 0; size of axis is {n} but size of corresponding \
+             boolean axis is {}", m.len())));
+    }
+    for i in 0..n {
+        if m[i] {
+            out[i] = us;
+        }
+    }
+    let k = ll.nrows() as i64;
+    if k > 0 {
+        let (la0, lo0, la1, lo1) = japan;
+        for i in 0..n {
+            let s = co[ro[po[i] as usize] as usize];
+            let e = co[ro[po[i + 1] as usize] as usize];
+            if e <= s {
+                continue;
+            }
+            let mid = ((s + (e - 1).max(s)) / 2).clamp(0, k - 1) as usize;
+            let (lon, lat) = (ll[[mid, 0]], ll[[mid, 1]]);
+            if lat >= la0 && lat <= la1 && lon >= lo0 && lon <= lo1 {
+                out[i] = jp;
+            }
+        }
+    }
+    Ok(out.into_pyarray(py))
+}

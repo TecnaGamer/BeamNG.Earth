@@ -47,37 +47,38 @@ pub struct Cols<'py> {
     shoulder: (f64, f64, i64),
 }
 
-/// The layer's offsets fit together (n features, parts, rings, points): IndexError where one points past its array
-/// or runs backwards (numpy's index error; never a panic on a malformed layer).
+/// The layer's offsets fit together (n features, parts, rings, points): IndexError where one points past its array,
+/// is negative or runs backwards (numpy's index error; never a panic on a malformed layer). Every value read is
+/// checked on its own (a lone offset has no neighbour to compare with: Codex round 2 on fde0e52d, ring offsets [-1]):
+/// part_off[0..=n] index ring_off, ring_off[0..=part_off[n]] index coord_off, coord_off[0..=ring_off[part_off[n]]]
+/// are at most the point count; each run non-decreasing.
 pub(crate) fn check_offsets(n: usize, po: &[i64], ro: &[i64], co: &[i64], points: usize) -> PyResult<()> {
-    let bad = |what: &str| Err(pyo3::exceptions::PyIndexError::new_err(format!("a road layer's {what} out of range")));
+    fn run(what: &str, v: &[i64], bound: usize, inclusive: bool) -> PyResult<usize> {
+        let mut prev = 0usize;
+        for (k, &x) in v.iter().enumerate() {
+            let ok = usize::try_from(x).ok().filter(|&u| if inclusive { u <= bound } else { u < bound });
+            match ok {
+                Some(u) if k == 0 || u >= prev => prev = u,
+                _ => return Err(pyo3::exceptions::PyIndexError::new_err(format!("a road layer's {what} out of range"))),
+            }
+        }
+        Ok(prev)
+    }
     if po.len() < n + 1 {
-        return bad("part offsets");
+        return Err(pyo3::exceptions::PyIndexError::new_err("a road layer's part offsets out of range"));
     }
-    for w in po[..n + 1].windows(2) {
-        if w[0] < 0 || w[1] < w[0] {
-            return bad("part offsets");
-        }
-    }
-    if po[n] as usize + 1 > ro.len() {
-        return bad("ring offsets");
-    }
-    for w in ro[..po[n] as usize + 1].windows(2) {
-        if w[0] < 0 || w[1] < w[0] {
-            return bad("ring offsets");
-        }
-    }
-    let rings = ro[po[n] as usize] as usize;
-    if rings + 1 > co.len() {
-        return bad("coordinate offsets");
-    }
-    for w in co[..rings + 1].windows(2) {
-        if w[0] < 0 || w[1] < w[0] {
-            return bad("coordinate offsets");
-        }
-    }
-    if co[rings] as usize > points {
-        return bad("coordinates");
+    let parts = run("part offsets", &po[..n + 1], ro.len(), false)?;
+    let rings = run("ring offsets", &ro[..parts + 1], co.len(), false)?;
+    run("coordinate offsets", &co[..rings + 1], points, true)?;
+    Ok(())
+}
+
+/// A layer's lon / lat points are (k, 2): IndexError otherwise (numpy's error reading column 1 of a one-column array;
+/// never a panic on a malformed array handed to a kernel directly).
+pub(crate) fn check_lonlat(cols: usize) -> PyResult<()> {
+    if cols != 2 {
+        return Err(pyo3::exceptions::PyIndexError::new_err(format!(
+            "a road layer's lon / lat points have {cols} columns, not 2")));
     }
     Ok(())
 }
@@ -102,6 +103,7 @@ impl<'py> Cols<'py> {
            lane_w_default: f64, shoulder: (f64, f64, i64)) -> PyResult<Self> {
         let n = ids.len();
         let a = lonlat.as_array();
+        check_lonlat(a.ncols())?;
         check_offsets(n, po.as_slice()?, ro.as_slice()?, co.as_slice()?, a.nrows())?;
         if kind.len()? < n {
             return Err(pyo3::exceptions::PyIndexError::new_err("lane sections: fewer kinds than features"));
@@ -1036,6 +1038,7 @@ pub fn lane_ease<'py>(py: Python<'py>, s: PyReadonlyArray1<'py, f64>, length: f6
 pub fn lane_offset<'py>(py: Python<'py>, ll: PyReadonlyArray2<'py, f64>, d: PyReadonlyArray1<'py, f64>)
                         -> PyResult<Bound<'py, numpy::PyArray2<f64>>> {
     let a = ll.as_array();
+    check_lonlat(a.ncols())?;
     let p: Vec<[f64; 2]> = (0..a.nrows()).map(|k| [a[[k, 0]], a[[k, 1]]]).collect();
     let d = d.as_slice()?;
     if p.is_empty() || !(d.len() == 1 || d.len() == p.len()) {

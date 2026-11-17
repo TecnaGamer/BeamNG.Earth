@@ -44,6 +44,7 @@ pub fn lane_flow_rows<'py>(py: Python<'py>, part_off: PyReadonlyArray1<'py, i64>
     let (po, ro, co) = (part_off.as_slice()?, ring_off.as_slice()?, coord_off.as_slice()?);
     let ll = lonlat.as_array();
     let n = po.len().saturating_sub(1);
+    super::lanesplit::check_lonlat(ll.ncols())?;
     super::lanesplit::check_offsets(n, po, ro, co, ll.nrows())?;
     let mut pts = vec![0.0f64; n * 4];
     let mut npts = vec![0i64; n];

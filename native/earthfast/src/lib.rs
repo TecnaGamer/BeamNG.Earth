@@ -6576,6 +6576,9 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(roadnet::rings::ring_radius, m)?)?;
     // 386: R2a's roundabout ring radius (roadnet::rings::ring_radius = roads.ring_radius: dnp.lstsq's QR and eigh
     // answers, numpy's sums in their orders)
-    m.add("VERSION", 386)?;
+    m.add_function(wrap_pyfunction!(roadnet::regions::width_regions, m)?)?;
+    // 387: R2a's width regions (roadnet::regions::width_regions = roads._width_regions: the US by the states' test, Japan
+    // by its box at each road's middle point)
+    m.add("VERSION", 387)?;
     Ok(())
 }
