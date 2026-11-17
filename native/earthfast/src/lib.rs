@@ -6520,6 +6520,8 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(railxing::corridor_ground, m)?)?;
     // 372: railxing::corridor_ground (railxing.corridor_ground, BNE_RAIL_XING: a grid over the tracks' points, not
     // numpy's distance matrix per pair of lines; the same bits)
-    m.add("VERSION", 372)?;
+    // 373: deck_trim_overlaps(..., params[4] = TRIM_ALONG_COS): only another deck running along a deck trims it, not
+    // one crossing it (a hole across the B 254's deck over a track's at Trutzhain; PR #1397, first numbered 310)
+    m.add("VERSION", 373)?;
     Ok(())
 }
