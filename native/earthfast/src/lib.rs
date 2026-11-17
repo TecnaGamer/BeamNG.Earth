@@ -6544,6 +6544,12 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(roadnet::surfaces::aisles, m)?)?;
     // 380: R2a's surfaces (roadnet::surfaces: SurfaceRules.token / kind / spec_surfaces / sweden_surfaces,
     // map_surface_values, aisles: roads.surface_token, surface_kind, _map_surface_values, _spec_inputs' surface columns)
-    m.add("VERSION", 380)?;
+    m.add_function(wrap_pyfunction!(roadnet::assembly::specs_of, m)?)?;
+    m.add_function(wrap_pyfunction!(roadnet::assembly::dual_cols, m)?)?;
+    m.add_function(wrap_pyfunction!(roadnet::assembly::dual_apply, m)?)?;
+    m.add_function(wrap_pyfunction!(roadnet::assembly::ground_med_dir, m)?)?;
+    // 381: R2a's spec assembly (roadnet::assembly: specs_of, dual_cols, dual_apply, ground_med_dir: roads._specs_of,
+    // dual_carriageways' columns and result, _bridge_specs' ground columns)
+    m.add("VERSION", 381)?;
     Ok(())
 }

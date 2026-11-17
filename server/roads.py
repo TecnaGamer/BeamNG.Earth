@@ -2226,35 +2226,12 @@ def dual_carriageways(feats, specs, left_hand=False):
         return specs
     inp = _spec_inputs(feats)
     pos = inp["pos"]
-    nan = float("nan")
-    n = len(specs)
-    cols = {"present": np.fromiter((sp is not None for sp in specs), bool, n),
-            "width": np.fromiter((nan if sp is None else float(sp.width) for sp in specs), np.float64, n),
-            "kind": np.fromiter((-1 if sp is None else _KIND_CODE.get(sp.kind, -1) for sp in specs), np.int8, n),
-            "urban": np.fromiter((sp is not None and bool(sp.urban) for sp in specs), bool, n),
-            "cls": np.fromiter((-1 if sp is None else pos.get(sp.cls, -1) for sp in specs), np.int32, n),
-            "oneway": np.fromiter((sp is not None and bool(sp.oneway) for sp in specs), bool, n),
-            "lanes": np.fromiter((-1 if sp is None or sp.lanes is None else int(sp.lanes) for sp in specs), np.int64,
-                                 n),
-            "link": np.fromiter((sp is not None and bool(sp.link) for sp in specs), bool, n),
-            "parking": np.fromiter((sp is not None and bool(sp.parking) for sp in specs), bool, n),
-            "median": np.fromiter((nan if sp is None or sp.median is None else float(sp.median) for sp in specs),
-                                  np.float64, n),
-            "dir": np.fromiter((0 if sp is None else int(sp.dir) for sp in specs), np.int64, n)}
+    import fast
+    fast.require(381, "dual_cols")
+    cols = fast._ef.dual_cols(list(specs), pos)
     d = _road_rules().dual_carriageways(inp["geo"], inp["cols"], inp["built"], cols, _spec_prm(),
                                         europewalks.enabled(), bool(left_hand))
-    out = list(specs)
-    code, width, kept, dirs, med = d["changed"], d["width"], d["w32"], d["dir"], d["median"]
-    for i in np.flatnonzero(code).tolist():
-        sp, c = specs[i], int(code[i])
-        w = sp.width if kept[i] else float(width[i])
-        if c == 1:
-            out[i] = sp._replace(width=w)
-        elif c == 2:
-            out[i] = sp._replace(median=float(med[i]), width=w)
-        else:
-            out[i] = sp._replace(oneway=True, dir=int(dirs[i]), width=w, median=float(med[i]))
-    return out
+    return fast._ef.dual_apply(list(specs), d)
 
 
 URBAN_MEDIAN_M = 1.5    # m: a city's divided road (centre lines within URBAN_MEDIAN_GAP_M): a narrow concrete median,
@@ -3994,24 +3971,11 @@ def _spec_inputs(feats):
 
 
 def _specs_of(d, inp, states):
-    """The Spec of each feature from the kernels' columns (d) and the layer's states (_marking_states)."""
-    names, tokens = inp["names"], inp["tokens"]
-    w32 = d["w32"]
-    widths = [np.float32(w) if f else w for w, f in zip(d["width"].tolist(), w32.tolist())] if w32.any() else \
-        d["width"].tolist()
-    out = []
-    for (pres, w, k, u, c, ow, dr, kmh, gap, med, ln, sf, lk, sd, pk, mt, stt) in zip(
-            d["present"].tolist(), widths, d["kind"].tolist(), d["urban"].tolist(), d["cls"].tolist(),
-            d["oneway"].tolist(), d["dir"].tolist(), d["kmh"].tolist(), list(d["gap"]), d["median"].tolist(),
-            d["lanes"].tolist(), d["surf"].tolist(), d["link"].tolist(), d["sides"].tolist(), d["parking"].tolist(),
-            d["mountain"].tolist(), states.tolist()):
-        if not pres:
-            out.append(None)
-            continue
-        out.append(Spec(w, _KINDS[k], u, names[c], ow, 2.5, dr, None if kmh != kmh else kmh, None if gap != gap else gap,
-                        None if med != med else med, None if ln < 0 else ln, None if sf < 0 else tokens[sf], lk,
-                        None if sd < 0 else _SIDES_OF[sd], pk, mt, False, stt))
-    return out
+    """The Spec of each feature from the kernels' columns (d) and the layer's states (_marking_states)
+    (earthfast roadnet::assembly::specs_of)."""
+    import fast
+    fast.require(381, "specs_of")
+    return fast._ef.specs_of(d, inp["names"], inp["tokens"], states, Spec)
 
 
 # Mountain pass roads (the user, 2026-10-31: the Stelvio Pass; its aerial: 6.1 m of asphalt between edge lines, no
@@ -4537,9 +4501,9 @@ def _bridge_specs(feats, want="bridge"):
     lv = _level_lists(feats, elig) if want == "bridge" else _raw_all(feats)
     for i in elig:
         has[i] = any(k == want for _, _, k in lv[i])
-    nan = float("nan")
-    gmed = np.fromiter((g.median if g is not None and g.median else nan for g in ground), np.float64, n)
-    gdir = np.fromiter((g.dir if g is not None else 0 for g in ground), np.int64, n)
+    import fast
+    fast.require(381, "ground_med_dir")
+    gmed, gdir = fast._ef.ground_med_dir(list(ground))
     d = _road_rules().bridge_specs(inp["geo"], inp["cols"], inp["built"], has, gmed, gdir, _flow_fn(feats, inp),
                                    _spec_prm())
     out = _specs_of(d, inp, _marking_states(feats))
