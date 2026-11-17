@@ -63,6 +63,40 @@ class RailTagsTest(unittest.TestCase):
             self.assertEqual(len(f._rail_nodes), 1)
             self.assertEqual(len(fetch.asked), n)
 
+    def test_preserved_joined_only_with_the_lifecycle_switch(self):
+        """railway:preserved (a heritage line, railways.heritage) is an attr only with BNE_RAIL_LIFECYCLE: off, the
+        road layer (and its cache) is the same whichever shard build it was joined from; an old shard (no such tag)
+        joins with the switch on as None, usage still there."""
+        from unittest import mock
+        f0 = features([[(0.0, 100.0), (250.0, 100.0)]], ["standard_gauge"], subtypes=["rail"])
+        lo, la = f0.lonlat[0]
+        key = mapcells.cell_of(float(la), float(lo))
+        sx, sy = key.x >> (key.z - 7), key.y >> (key.z - 7)
+
+        def joined(preserved, on):
+            f = features([[(0.0, 100.0), (250.0, 100.0)]], ["standard_gauge"], subtypes=["rail"])
+            f.attrs["src_record"] = np.array(["w11@3"])
+            t = {"railway": "disused", "usage": "tourism"}
+            if preserved:
+                t["railway:preserved"] = "yes"
+            shard = {"ways": {"11": t}, "nodes": []}
+            fetch = _Fetcher({"manifest.json": json.dumps({"built": "2026-10-30T03:00:00Z"}).encode(),
+                              f"/{sx}/{sy}.json.gz": gzip.compress(json.dumps(shard).encode())})
+            with tempfile.TemporaryDirectory() as d, mock.patch.object(railtags, "LIFECYCLE_ON", on):
+                railtags.RailTags(d, fetch).join(f, key)
+            return f
+        for preserved in (False, True):
+            off = joined(preserved, False)
+            self.assertNotIn("osm_railway:preserved", off.attrs)
+            self.assertEqual(off.attrs["osm_usage"][0], "tourism")
+        self.assertEqual(sorted(joined(False, False).attrs), sorted(joined(True, False).attrs))
+        self.assertEqual(joined(True, True).attrs["osm_railway:preserved"][0], "yes")
+        old = joined(False, True)
+        self.assertIsNone(old.attrs["osm_railway:preserved"][0], "an old shard: none")
+        self.assertEqual(old.attrs["osm_usage"][0], "tourism")
+        import railways
+        self.assertTrue(railways.heritage(old, 0), "usage=tourism alone is a heritage line")
+
     def test_no_shard_no_tags(self):
         f = features([[(0.0, 100.0), (250.0, 100.0)]], ["standard_gauge"], subtypes=["rail"])
         f.attrs["src_record"] = np.array(["w11@3"])
