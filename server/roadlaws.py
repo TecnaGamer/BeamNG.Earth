@@ -188,11 +188,13 @@ def _solve_networks(chains, ccps):
     return out, stats
 
 
-def apply(plans, specs, held=None, under=None, skip=(), diagnostics=None, natural=None):
+def apply(plans, specs, held=None, under=None, skip=(), diagnostics=None, natural=None, meets=None):
     """plans: [Plan] (xy (n, 2+), z (n,), road_half, abut, rid), specs alike (cls, kmh; None: left out); held(i) ->
     bool (n,) of plan i's held samples (or None), under(i) -> bool (n,) of those under a deck (only down there); skip:
     plan indices left as they are, held whole (tunnels); natural(i) -> (n,) plan i's natural profile (the heights
-    before the passes; None: its heights now). Changes the plans' z in place; returns how many changed."""
+    before the passes; None: its heights now). meets(i, j) -> True / False / None (unknown): plans i and j share a node
+    of the map (a T junction is one only where they do: an end a few metres from a road it does not join, a service
+    road's cut ending 6 m beside a street, is no junction). Changes the plans' z in place; returns how many changed."""
     idx = [i for i, sp in enumerate(specs) if sp is not None and len(plans[i].xy) >= 2]
     if not idx:
         return 0
@@ -355,7 +357,7 @@ def apply(plans, specs, held=None, under=None, skip=(), diagnostics=None, natura
                     continue
                 reach = reach_all[j]
                 seg, tt, d = _nearest(xys[j], P)
-                if d <= reach and (best is None or d < best[0]):
+                if d <= reach and (best is None or d < best[0]) and                         (meets is None or meets(idx[k], idx[j]) is not False):
                     best = (d, j, float(arcs[j][seg] + tt * (arcs[j][seg + 1] - arcs[j][seg])))
             if best is not None:
                 land(k, e, sample_of(best[1], best[2]), best[1])

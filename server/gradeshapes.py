@@ -378,6 +378,8 @@ def find_systems(members):
             ss = sorted(ss)
             for i in ss[1:]:
                 unite(ss[0], i)
+    for a, b in _shared_dips(net, seeds, rel, droot):
+        unite(a, b)
     groups = {}
     for i in seeds:
         groups.setdefault(root(i), []).append(i)
@@ -385,6 +387,67 @@ def find_systems(members):
     for r in sorted(groups, key=lambda x: str(members[x].key)):
         systems.append(_system(net, sorted(groups[r], key=lambda x: str(members[x].key)), rel))
     return net, systems
+
+
+def _dip_half(net, u, d):
+    """m along road d each side of its crossing under u that it dips over (the clearance at its grade, the curves,
+    u's half width and the margin): _system's window."""
+    md = net.m[d]
+    g = max_grade(md)
+    return clearance_need(net, u, d) / g + curve_radius(md) * g + net.m[u].half + DIP_MARGIN_M
+
+
+def _shared_dips(net, seeds, rel, droot):
+    """Pairs of seeds over one road on the ground within its dip under one of them: [(a, b)]. A road dug under one
+    structure (a short rail deck, a short deck) is that low under the other too: two systems solved apart had it at
+    its ground under one and dug under the other. Perth's Tonkin Highway: a trunk road dug 7 m under the railway in the
+    median and, 6 m on, a motorway deck lifted 7.3 m over its ground, its carriageway and the track's fill raised into
+    the trains. The road is followed through its joints, as the dip's piece is."""
+    members = net.m
+    chain = {}
+    for i in seeds:
+        if members[i].kind == "deck":
+            chain[droot(i)] = chain.get(droot(i), 0.0) + net.L[i]
+    under = {}              # ground member -> [(seed over it, s on it)]
+    for i in seeds:
+        for j, kind, _si, sj, _q in rel[i]:
+            if kind == "cross" and members[j].kind == "ground" and _over(members[i], members[j]) == "i":
+                under.setdefault(j, []).append((i, sj))
+    if not under:
+        return []
+    out = []
+    for d, lst in under.items():
+        for u, sd in lst:
+            mu = members[u]
+            if not (mu.kind == "rail_deck" or (mu.kind == "deck" and chain.get(droot(u), 0.0) < ROAD_SHORT_M)):
+                continue        # (this crossing does not dig the road)
+            w = _dip_half(net, u, d)
+            reach = w + max(_dip_half(net, i, j) for j, ls in under.items() for i, _s in ls)
+            for j, s0, s1 in path_of(net, d, sd - reach, sd + reach):
+                lo, hi = min(s0, s1), max(s0, s1)
+                for i, sj in under.get(j, ()):
+                    if i == u or not (lo - 1e-6 <= sj <= hi + 1e-6):
+                        continue
+                    along = abs(sj - sd) if j == d else _path_dist(net, d, sd, j, sj, reach)
+                    if along is None:
+                        continue
+                    mi = members[i]
+                    digs = mi.kind == "rail_deck" or (mi.kind == "deck" and chain.get(droot(i), 0.0) < ROAD_SHORT_M)
+                    if along <= w + (_dip_half(net, i, j) if digs else 0.0):
+                        out.append((u, i))
+    return out
+
+
+def _path_dist(net, d, sd, j, sj, reach):
+    """Distance along the road from member d's arc length sd to member j's sj, followed through its joints (reach m
+    each way at most), or None."""
+    for toward_end in (True, False):
+        left = net.L[d] - sd if toward_end else sd
+        for m_, s0, s1 in walk(net, d, toward_end, reach):
+            if m_ == j and min(s0, s1) - 1e-6 <= sj <= max(s0, s1) + 1e-6:
+                return left + abs(sj - s0)
+            left += abs(s1 - s0)
+    return None
 
 
 def _system(net, seeds, rel):
@@ -709,6 +772,45 @@ def _deck_targets(net, sysm, pc, t):
     return target, w
 
 
+BESIDE_FALL = 0.02          # a deck's cross-fall: two decks side by side where they merge are one surface across them,
+                            # no steeper than this from one's centreline to the other's
+
+
+def _beside(net, sysm, pcs, smp):
+    """Couplings holding two joined decks one surface where they run side by side (a merge or a diverge: their
+    carriageways overlap in plan before their shared end): each sample of one whose carriageway overlaps the other's,
+    along it (within MERGE_DEG) and across it (not past its end), within BESIDE_FALL x the distance between their
+    centrelines of the other's height there. Gravelly Hill's two level-2 links merging 1.7 m apart stood 0.8 m apart
+    in height before their joint: a truck on one hit the other's deck."""
+    deck = {pc["main"]: p for p, pc in enumerate(pcs) if pc["kind"] == "deck"}
+    pairs = {tuple(sorted((i, j))) for i, _si, j, _sj in sysm["joins"] if i in deck and j in deck}
+    out = []
+    cos_merge = math.cos(math.radians(MERGE_DEG))
+    for i, j in sorted(pairs):
+        for a, b in ((i, j), (j, i)):
+            p, q = deck[a], deck[b]
+            reach = net.m[a].half + net.m[b].half
+            for k in range(len(smp[p]["xy"])):
+                xy, sa = smp[p]["xy"][k], float(smp[p]["ms"][k])
+                sb, d = proj(net.lines[b], net.s[b], xy)
+                if d >= reach or d < 1e-6:
+                    continue                    # (apart, or the joint itself: held by the join)
+                tb = _tangent(net.lines[b], net.s[b], sb)
+                if abs(float(_tangent(net.lines[a], net.s[a], sa) @ tb)) < cos_merge:
+                    continue                    # (not along it: a crossing's business)
+                off = xy - at_s(net.lines[b], net.s[b], sb)
+                if abs(float(off[0] * tb[1] - off[1] * tb[0])) < 0.8 * d:
+                    continue                    # (past its end, not beside it)
+                got = _locate(smp, q, b, sb)
+                if got is None:
+                    continue
+                kb, kc, t = got
+                tol = BESIDE_FALL * d
+                out.append((p, k, q, kb, "ge", -tol, q, kc, t))
+                out.append((p, k, q, kb, "le", tol, q, kc, t))
+    return out
+
+
 def _solve_shape_qp(net, sysm, pcs, smp, ground, fixed_z, diagnostics):
     import carriageways as _cw
     chains = []
@@ -738,6 +840,7 @@ def _solve_shape_qp(net, sysm, pcs, smp, ground, fixed_z, diagnostics):
             cps.append((x[0], x[1] if x[3] < 0.5 else x[2], y[0], y[1] if y[3] < 0.5 else y[2], "eq", 0.0))
     for p, a, q, b in _overlaps(pcs, smp):
         cps.append((p, a, q, b, "eq", 0.0))
+    cps += _beside(net, sysm, pcs, smp)
     for c in sysm["crossings"]:
         need = clearance_need(net, c["u"], c["d"])
         x, y = _var(pcs, smp, c["u"], c["su"]), _var(pcs, smp, c["d"], c["sd"])

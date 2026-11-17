@@ -257,3 +257,51 @@ def test_a_deck_along_a_tunnel_over_it_is_not_joined_to_its_middle():
     for y in (-8.0, 0.0, 8.0):
         assert (_shape_z(net, shapes, "br", np.array([y / 16.0, y]))
                 - _shape_z(net, shapes, "tun", np.array([0.0, y]))) >= need - 0.3
+
+
+def test_a_road_dug_under_a_rail_deck_is_that_low_under_the_overpass_beside_it():
+    # Perth's Tonkin Highway: a trunk road under the railway in the motorway's median (a short rail deck: the road is
+    # dug) and, 6 m on, under the motorway's deck (an overpass: it rises over the road). Solved apart, the road was dug
+    # under the track and the deck lifted 7.3 m over the road's ground, its carriageway raised beside the track
+    m = [Member("trunk", _line(-500, 0, 500, 0, 126), "ground", "trunk", 70, 0, 7.0, None),
+         Member("rdeck", _line(0, -10, 0, 10, 6), "rail_deck", "rail", None, 1, 2.0, None),
+         Member("rs", _line(0, -500, 0, -10), "rail", "rail", None, 0, 2.0, None),
+         Member("rn", _line(0, 10, 0, 500), "rail", "rail", None, 0, 2.0, None),
+         Member("mdeck", _line(8, -14, 8, 14, 8), "deck", "motorway", 100, 1, 6.0, None),
+         Member("ms", _line(8, -600, 8, -14), "ground", "motorway", 100, 0, 6.0, None),
+         Member("mn", _line(8, 14, 8, 600), "ground", "motorway", 100, 0, 6.0, None)]
+    net, systems, shapes, emb = _run(m)
+    assert len(systems) == 1                                            # one interchange: the trunk's dip is both's
+    assert shapes[0][2] is not None
+    zt = _shape_z(net, shapes, "trunk", np.array([8.0, 0.0]))
+    zm = _shape_z(net, shapes, "mdeck", np.array([8.0, 0.0]))
+    assert _shape_z(net, shapes, "trunk", np.array([0.0, 0.0])) <= -(ix.HEADROOM_M + ix.HEADROOM_MARGIN_M) + 0.05
+    assert zm - zt >= ix.HEADROOM_M + ix.HEADROOM_MARGIN_M + ix.deck_depth(28.0) - 0.05
+    assert zm < 1.5                                                     # the motorway about at its ground
+
+
+def test_overpasses_over_one_road_far_apart_stay_apart():
+    m = [Member("street", _line(-800, 0, 800, 0, 200), "ground", "residential", 40, 0, 4.0, None),
+         Member("d1", _line(0, -6, 0, 6, 4), "deck", "tertiary", 50, 1, 4.0, None),
+         Member("d2", _line(600, -6, 600, 6, 4), "deck", "tertiary", 50, 1, 4.0, None)]
+    net, systems, shapes, emb = _run(m)
+    assert len(systems) == 2
+
+def test_two_decks_merging_side_by_side_are_one_surface_before_their_joint():
+    # Gravelly Hill: two level-2 links converging onto one deck, side by side (their carriageways overlapping) for
+    # their last 100 m; one rises over a track further back. Each was held to the other only at the joint: 0.8 m apart
+    # in height 25 m before it, a truck on one hit the other's deck
+    a = _line(-300, -6, 0, 0, 76)
+    b = _line(-300, 6, 0, 0, 76)
+    m = [Member("a", a, "deck", "motorway_link", 60, 2, 4.0, None),
+         Member("b", b, "deck", "motorway_link", 60, 2, 4.0, None),
+         Member("c", _line(0, 0, 120, 0, 31), "deck", "motorway_link", 60, 2, 4.0, None),
+         Member("on", _line(120, 0, 700, 0), "ground", "motorway_link", 60, 0, 4.0, None),
+         Member("rail", _line(-260, -300, -260, 0.0, 60), "rail", "rail", None, 0, 2.0, None)]
+    net, systems, shapes, emb = _run(m)
+    assert len(systems) == 1 and shapes[0][2] is not None
+    for x in np.arange(-190.0, -5.0, 10.0):
+        ya = -6.0 * x / -300.0
+        za = _shape_z(net, shapes, "a", np.array([x, ya]))
+        zb = _shape_z(net, shapes, "b", np.array([x, -ya]))
+        assert abs(za - zb) <= ix.BESIDE_FALL * 2 * abs(ya) + 0.05, (x, za, zb)

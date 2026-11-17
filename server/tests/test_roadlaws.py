@@ -166,6 +166,33 @@ class LandingTest(unittest.TestCase):
         self.assertAlmostEqual(float(link.z[-1]), float(np.interp(8.0, x, b.z)), delta=0.02)
 
 
+class JunctionTest(unittest.TestCase):
+    """A T junction is one where the two roads share a node of the map, whatever their distance."""
+
+    @staticmethod
+    def street_and_cut(meets):
+        # (Vienna: a service road's held cut ends 6 m from a residential street's line, 7 m under it, the two sharing
+        # no node of the map; the T search's reach (the street's half width + 3 m) landed it, the street dragged 10 m down)
+        x = np.arange(-100.0, 101.0, 4.0)
+        street = plan(np.c_[x, 0 * x], 200.0 + 0 * x, half=4.0)
+        t = np.arange(6.0, 90.0, 4.0)
+        cut = plan(np.c_[0 * t, -t], 193.0 + 0.05 * (t - 6.0))
+        info = {}
+        roadlaws.apply([street, cut], [spec("residential"), spec("service")],
+                       held=lambda i: np.ones(len(cut.z), bool) if i == 1 else None, diagnostics=info, meets=meets)
+        return street, info
+
+    def test_an_end_beside_a_road_it_shares_no_node_with_is_no_junction(self):
+        street, info = self.street_and_cut(lambda i, j: False)
+        self.assertEqual(info["infeasible"], 0, info.get("failed"))
+        self.assertLess(float(np.abs(street.z - 200.0).max()), 0.01)        # the street stays where it is
+
+    def test_an_end_beside_a_road_it_shares_a_node_with_lands_on_it(self):
+        street, info = self.street_and_cut(lambda i, j: True)
+        self.assertGreater(float(np.abs(street.z - 200.0).max()), 1.0)      # a junction: one height there (a conflict
+                                                                            # the passes left, not hidden here)
+
+
 class ThreeSampleCouplingTest(unittest.TestCase):
     def test_a_height_between_two_samples_of_another_chain(self):
         import carriageways

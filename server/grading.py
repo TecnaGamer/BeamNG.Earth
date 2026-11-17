@@ -4689,6 +4689,23 @@ class _Planner:
                 m_out[n] = mode
         return z_out, m_out
 
+    def _map_nodes(self, key):
+        """{road feature id: its map nodes (connector ids)} of the roads of cell key and the cells round it (the plans
+        of a cell reach into its neighbours), {} without the map's connectors."""
+        lon0, lat0, lon1, lat1 = (float(v) for v in key.bounds())
+        dla, dlo = (lat1 - lat0) * 0.5, (lon1 - lon0) * 0.5
+        out = {}
+        for k in mapcells.cells_for_bbox(lat0 - dla, lon0 - dlo, lat1 + dla, lon1 + dlo):
+            f = self.md.cell(k, layers=("roads",), kind="demand").layers.get("roads")
+            tab = f.rules.get("connectors") if f is not None and len(f) else None
+            if tab is None:
+                continue
+            for i in range(len(f)):
+                fid = str(f.ids[i])
+                if fid not in out:
+                    out[fid] = {str(tab.value[r]) for r in tab.rows(i)}
+        return out
+
     def _road_laws(self, key, plans, specs, bases=None):
         """ROAD_LAWS_ON: the cell's plans under their laws (roadlaws.apply): held where an interchange's shape or ramp
         set them, only down under a deck, the tunnels' as they are. Returns how many changed."""
@@ -4744,7 +4761,12 @@ class _Planner:
             if bases is None or i >= len(bases) or len(bases[i]) != len(plans[i][1].z):
                 return None
             return bases[i]
-        n = roadlaws.apply([p for _f, p in plans], specs, held, under, skip, info, natural)
+        nodes = self._map_nodes(key)
+
+        def meets(i, j):
+            a, b = nodes.get(str(plans[i][0]).split(":")[0]), nodes.get(str(plans[j][0]).split(":")[0])
+            return None if a is None or b is None else bool(a & b)
+        n = roadlaws.apply([p for _f, p in plans], specs, held, under, skip, info, natural, meets)
         # (a side road the laws landed on the road it joins, at its height and its grade its way, keeps its own plan at
         # the mouth: as high a grade rank, its ground no longer eased flat onto that road's for RANK_SIDE_FADE_M past its
         # carriageway, the sag a 12 m truck bottomed out in at the mouth)
