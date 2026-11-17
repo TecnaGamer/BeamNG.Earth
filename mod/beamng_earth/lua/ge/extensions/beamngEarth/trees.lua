@@ -251,16 +251,13 @@ M.CATALOG = {
     { WCA .. 'trees/trees_oak/oak_a', 9.6 }, { WCA .. 'trees/trees_eucalyptus/eucalyptus_double', 14.7 },
     { WCA .. 'trees/trees_eucalyptus/eucalyptus_tall', 22.5 },
   },
+  -- coconut-type palms (Jungle Rock Island's), the tropics' climates only (server vegetation.species_groups, 34: the fan
+  -- and date palms are palm_dry's, every other climate's; the gallery 2026-11-17: the two kinds were mixed here)
   palm = {
-    { JRI .. 'trees/trees_palm/palm_small', 8.9 }, { JRI .. 'trees/trees_palm/palm_short', 9.1 },
-    { WCA .. 'trees/trees_palm/fanpalm_short', 10.6 }, { WCA .. 'trees/trees_palm/fanpalm_skirt', 11.7 },
-    { WCA .. 'trees/trees_palm/fanpalm_full', 13.8 }, { JRI .. 'trees/trees_palm/palm_medium', 18.0 },
-    { WCA .. 'trees/trees_palm/fanpalm_tall', 18.5 }, { WCA .. 'trees/trees_palm/fanpalm_slim', 20.8 },
-    { JRI .. 'trees/trees_palm/palm_tall', 25.3 },
-    -- (the stock survey 2026-11-15) leaning coconut palms, and Italy's date palms (Phoenix-like, loaded with its folder)
-    { JRI .. 'trees/trees_palm/palm_bend_sml', 10.24 }, { IT .. 'trees/trees_italy/italy_palm_1_short', 11.74 },
-    { IT .. 'trees/trees_italy/italy_palm_1', 13.77 }, { JRI .. 'trees/trees_palm/palm_bend', 18.8 },
     { JRI .. 'trees/trees_palm/palm_tiny', 3.0 },     -- (2026-11-16: a young palm for 3-5 m, was palm_small at 0.4)
+    { JRI .. 'trees/trees_palm/palm_small', 8.9 }, { JRI .. 'trees/trees_palm/palm_short', 9.1 },
+    { JRI .. 'trees/trees_palm/palm_bend_sml', 10.24 }, { JRI .. 'trees/trees_palm/palm_medium', 18.0 },
+    { JRI .. 'trees/trees_palm/palm_bend', 18.8 }, { JRI .. 'trees/trees_palm/palm_tall', 25.3 },
   },
   juniper = {
     { UT .. 'trees/Juniper/Juniper_bush_large_01', 2.6 }, { UT .. 'trees/Juniper/Juniper_tree_04', 4.5 },

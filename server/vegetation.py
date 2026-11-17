@@ -64,6 +64,7 @@ VERSION = 34          # (the cached cells hold their groups: 14 for the regional
                       # 32: more admixture in the stands (STAND_MIX 0.3), pine_eu's shapes back to five
                       # 33: the open's oaks the open broadleaves (oak_open had two young oaks and one veteran)
                       # 34: the conifers in the open too (no bare-trunked crowd-grown firs and pines by roads)
+                      # and palms by the climate: coconut palms in the tropics, fan / date palms elsewhere
 TREE_MIN_M = 3.0
 # The canopy raster, the scatter grids and the crown radii are in Web Mercator units (EPSG:3857: a metre there is
 # cos(lat) metres on the ground) and were tuned by eye at mid latitudes. Past them the same pixel counts covered less
@@ -354,6 +355,7 @@ PALM_FROM = None
 # the rainforests (Koppen Af, Am): every generic broadleaf a tropical tree (the shapes span 5-33 m since the stock
 # survey), and fewer palms outside town (regional_groups' 20 % of the tropics' trees: RAINFOREST_PALM_KEEP of them)
 K_RAINFOREST = (1, 2)
+K_TROPICS = (1, 2, 3)             # Af Am Aw: the coconut palms' (34)
 RAINFOREST_PALM_KEEP = 0.4
 
 
@@ -441,6 +443,9 @@ def species_groups(group, height, lat, lon, lcls, koppen, elev, u_broad, u_conif
         for kk, (p_town, p_out, lat_max) in DRY_PALMS.items():
             m = cand & (k == kk) & (np.abs(lat) < lat_max)
             g[m & (up < np.where(built, p_town, p_out))] = G_PALM_DRY
+    # (34) coconut-type palms only in the tropics' climates (Af, Am, Aw): any other palm (California's, Florida's north,
+    # the Mediterranean's, the Gulf's) the fan and date palms (the gallery 2026-11-17: the palm group mixed both)
+    g[(g == G_PALM) & ~np.isin(k, K_TROPICS)] = G_PALM_DRY
     # dead trees in the forests outside the tropics
     forest = (np.asarray(lcls) == WC["tree"]) & (np.abs(lat) >= 23.5) & (h >= SNAG_H[0]) & (h <= SNAG_H[1])
     snag = forest & (np.asarray(u_snag) < SNAG_SHARE)

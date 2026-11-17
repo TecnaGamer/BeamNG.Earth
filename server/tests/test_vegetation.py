@@ -466,6 +466,17 @@ class ShrubTest(unittest.TestCase):
             got = v.cell(KEY)
             self.assertEqual(int((got.group == veg.G_DEADWOOD).sum()), want, f"slope {k}")
 
+    def test_palms_by_the_climate(self):
+        import climate
+        for (lat, lon), want in (((34.05, -118.25), veg.G_PALM_DRY), ((25.77, -80.19), veg.G_PALM),
+                                 ((-3.1, -60.0), veg.G_PALM), ((41.39, 2.17), veg.G_PALM_DRY)):
+            la, lo = np.array([lat]), np.array([lon])
+            k = climate.koppen_many(la, lo)
+            g = veg.species_groups(np.array([veg.G_PALM], np.uint8), np.array([12.0]), la, lo,
+                                   np.array([veg.WC["built"]]), k, None, np.array([0.5]), np.array([0.5]),
+                                   np.array([0.9]), np.array([0.1]))
+            self.assertEqual(int(g[0]), want, (lat, lon, int(k[0])))
+
     def test_no_mossy_forest_trees_in_the_open(self):
         g = veg.open_groups(np.array([veg.G_OAK, veg.G_DECIDUOUS, veg.G_SNAG_BROAD, veg.G_SNAG_CONIFER, veg.G_BEECH,
                                       veg.G_OAK], np.uint8), np.array([1, 1, 1, 1, 1, 0], bool))
