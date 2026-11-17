@@ -479,6 +479,10 @@ UNDER_LIDAR_DECK_M = roadsmod.AT_GRADE_M
 # coarse models (their smeared embankments are wider than that: UNDER_RUN_*).
 UNDER_DECK_ON = os.environ.get("BNE_UNDER_DECK_GROUND", "on") != "off"
 VSOLVE_DECK_PAD_M = 50.0     # m past the shadow solve's reach its caps' decks are read from (vsolve: a deck over its margin)
+VSOLVE_CONTEXT_M = 150.0     # m past a cell's box the next cells' roads are in its shadow solve too, unkept: its own roads
+                            # reach CLIP_MARGIN_M past it, but a road of the next cell's alone was in none of its
+                            # problem, and an end its junction there lifts 1.2 m was held at its profile: Rio's 0.79 m
+                            # seam. Over the widest spread (vsolve.SPREAD_M) a change there has died out at the box
 UNDER_DECK_SIDE_M = 15.0    # m past a deck's side the road's ground is read (Assaku's hump: 6-13 m past its decks)
 # ... and an overpass's abutment lift reads the road under the same way (bridge_lifts' half, _end_lift_raw): an
 # elevation holding the deck over a cut read the motorway at the deck's height and asked 6.7-8.5 m (GitHub #1077, #1086)
@@ -2835,7 +2839,8 @@ class _Planner:
                     log.debug("grading: junctions after welding of %s: %s: %s", key, type(e).__name__, e)
             if z_before is not None and plans:
                 try:            # the one solve beside the passes: measured only, their plans kept (vsolve)
-                    self._vsolve_shadow(key, plans, pspecs, z_before, z_under, (z_prelift, z_lift))
+                    ctx = self._vsolve_context(key, set(ids))
+                    self._vsolve_shadow(key, plans, pspecs, z_before, z_under, (z_prelift, z_lift), ctx)
                 except Exception as e:
                     log.warning("vsolve: shadow solve of %s: %s: %s", key, type(e).__name__, e)
             if plans:
@@ -2912,13 +2917,89 @@ class _Planner:
             keeps = []
         return feats, plans, keeps
 
-    def _vsolve_shadow(self, key, plans, pspecs, z_before, z_under=None, lifts=None):
+    def _vsolve_context(self, key, own_ids):
+        """[(fid, Plan, spec)] of the next cells' graded ground roads within VSOLVE_CONTEXT_M of cell key's box that are
+        none of its own (own_ids), each planned as its own cell plans it (_make_cell_roads: its pieces, abutments,
+        chains, observations and decks, that cell's: the same profile): the shadow solve's context, in its problem and
+        none of its output."""
+        box = self._clip_box(key, VSOLVE_CONTEXT_M)
+        if box is None:
+            return []
+        f64 = np.float64
+        cla, clo, _ = self.frame.enu_to_geodetic(np.array([box[0], box[2]] * 2), np.array([box[1]] * 2 + [box[3]] * 2), 0.0)
+        cla, clo = np.asarray(cla, f64), np.asarray(clo, f64)
+        keys = sorted(set(mapcells.cells_for_bbox(float(cla.min()), float(clo.min()), float(cla.max()),
+                                                  float(clo.max()))) - {key}, key=str)
+        out, seen = [], set(own_ids)
+        for k in keys:
+            try:
+                feats = self.md.cell(k, layers=("roads",), kind="demand").layers.get("roads")
+                if feats is None or not len(feats):
+                    continue
+                specs = roadsmod.road_specs(feats, None, self.widths)
+                placement = roadsmod.placement_context([feats], None, self.widths)
+                clip = self._clip_box(k)
+                parts, ids, rings = [], [], []
+                for i in range(len(feats)):
+                    fid = str(feats.ids[i])
+                    if specs[i] is None or specs[i].cls in UNGRADED or fid in seen:
+                        continue
+                    pieces = []
+                    for ring in roadsmod.ground_parts(feats, i):
+                        ring = np.asarray(placement.ring(self.frame, feats, i, ring, specs[i]), f64)
+                        e, n, _ = self.frame.geodetic_to_enu(ring[:, 1], ring[:, 0], 0.0)
+                        e, n = np.asarray(e, f64), np.asarray(n, f64)
+                        near = ((e >= box[0]) & (e <= box[2]) & (n >= box[1]) & (n <= box[3])).any()
+                        pieces.append((ring, near))
+                    if not any(near for _r, near in pieces):
+                        continue
+                    seen.add(fid)
+                    for ring, near in pieces:
+                        if near:
+                            for r in self._near_cell(ring, clip):
+                                parts.append((r, specs[i]))
+                                ids.append(fid)
+                                rings.append(roadsmod.is_ring(feats, i))
+                if not parts:
+                    continue
+                abut = None
+                if ABUT_FILL_ON or APPROACH_ON:
+                    pe = np.array([[r[0], r[-1]] for r, _sp in parts], f64).reshape(-1, 2)
+                    e, n, _ = self.frame.geodetic_to_enu(pe[:, 1], pe[:, 0], 0.0)
+                    abut = self._abut_ends(k, np.stack([np.asarray(e), np.asarray(n)], axis=1)).reshape(-1, 2)
+                ext = pins = None
+                if CHAIN_ON:
+                    self._chain_cands(k, feats, specs)
+                    ext = self._extensions(parts, ids)
+                    pins = self._pins(parts, ids, ext, k)
+                for fid, part, p in zip(ids, parts, plan_roads(self.frame, parts, self.elev, abut, ext, pins,
+                                                               coarse=COARSE_EASE_ON and self._coarse(k),
+                                                               obs=self._obs(k), decks=self._decks_near(k), rings=rings)):
+                    if p is not None:
+                        p.rid = road_id(fid)
+                        out.append((fid, p, part[1]))
+            except Exception as e:      # (that cell's roads out of the context rather than no shadow solve)
+                _caught(e)
+                log.debug("vsolve: context roads of %s: %s: %s", k, type(e).__name__, e)
+        return out
+
+    def _vsolve_shadow(self, key, plans, pspecs, z_before, z_under=None, lifts=None, context=()):
         """The cell's ground roads solved in one problem (vsolve.solve) from their profiles before the passes, with the
         passes' discrete outputs as its inputs (the decks' heights at their abutments, the dips under decks: the
         underpass rule's on z_under, the heights it sees in the passes, z_before's without; the approaches' lifts,
         lifts: the heights before and after _lift_approaches); kept, trimmed to the cell as its plans are, in
-        self._vsolve[str(key)] = ([(fid, Plan)], info). The plans themselves untouched."""
+        self._vsolve[str(key)] = ([(fid, Plan)], info). The plans themselves untouched. context: _vsolve_context's, in
+        the problem at their profiles (no pass ran on them) and none of the output."""
         import copy
+        own_n = len(pspecs)
+        if context:
+            zc = [np.array(p.z, np.float64) for _f, p, _s in context]
+            plans = list(plans[:own_n]) + [(f, p) for f, p, _s in context]
+            pspecs = list(pspecs) + [sp for _f, _p, sp in context]
+            z_before = list(z_before[:own_n]) + zc
+            z_under = None if z_under is None else list(z_under[:own_n]) + zc
+            if lifts is not None and lifts[0] is not None:
+                lifts = (list(lifts[0][:own_n]) + zc, list(lifts[1][:own_n]) + zc)
         n = len(pspecs)
         ground = [p for _f, p in plans[:n]]
         own = self._clip_box(key, 0.0)
@@ -2977,7 +3058,7 @@ class _Planner:
             zs = [np.array(p.z, np.float64) for p in ground]
         quad = self._clip_quad(key) if own is not None else None
         kept = []
-        for (fid, p), z in zip(plans[:n], zs):
+        for (fid, p), z in zip(plans[:own_n], zs[:own_n]):
             q = copy.copy(p)
             q.z = z
             if own is None:
@@ -2985,6 +3066,7 @@ class _Planner:
             else:
                 kept.extend((fid, r) for r in trim_plan(q, own if quad is None else quad))
         info["pins"] = len(pins)
+        info["context"] = len(context)
         info["dips"] = int(sum(int(np.isfinite(d).sum()) for d in dips if d is not None))
         info["caps"] = int(sum(int(np.isfinite(c).sum()) for c in caps if c is not None))
         info["floors"] = int(sum(int(np.isfinite(c).sum()) for c in floors if c is not None))
