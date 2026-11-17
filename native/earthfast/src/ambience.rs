@@ -232,6 +232,7 @@ pub fn shore_lines<'py>(py: Python<'py>, kind: numpy::PyReadonlyArray2<'py, u8>,
         at.entry(*q).or_default().push(e);
     }
     let mut used = vec![false; edges.len()];
+    #[allow(clippy::disallowed_methods)] // hash order: collected, then sorted (distinct corners)
     let mut starts: Vec<(i64, i64)> = at.iter().filter(|(_, v)| v.len() == 1).map(|(c, _)| *c).collect();
     starts.sort();
     let mut loops: Vec<(i64, i64)> = edges.iter().map(|e| e.0).collect();

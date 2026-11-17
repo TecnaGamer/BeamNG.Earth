@@ -38,7 +38,7 @@ fn profile(u: &numpy::ndarray::ArrayView2<f64>, pts: &[[f64; 2]], x0: f64, y0: f
            median_m: f64, sigma: f64) -> (Vec<f64>, Vec<f64>) {
     let mut cum = vec![0.0f64; pts.len()];
     for k in 1..pts.len() {
-        cum[k] = cum[k - 1] + ((pts[k][0] - pts[k - 1][0]).powi(2) + (pts[k][1] - pts[k - 1][1]).powi(2)).sqrt();
+        cum[k] = cum[k - 1] + ((pts[k][0] - pts[k - 1][0]).sq() + (pts[k][1] - pts[k - 1][1]).sq()).sqrt();
     }
     let total = *cum.last().unwrap_or(&0.0);
     let n = ((total / step).floor() as usize) + 1;
@@ -183,7 +183,7 @@ fn nearest(p: &[[f64; 2]], cum: &[f64], x: f64, y: f64) -> (f64, f64) {
         let (ax, ay, dx, dy) = (p[i][0], p[i][1], p[i + 1][0] - p[i][0], p[i + 1][1] - p[i][1]);
         let l2 = dx * dx + dy * dy;
         let t = if l2 > 1e-12 { (((x - ax) * dx + (y - ay) * dy) / l2).clamp(0.0, 1.0) } else { 0.0 };
-        let d = ((x - ax - t * dx).powi(2) + (y - ay - t * dy).powi(2)).sqrt();
+        let d = ((x - ax - t * dx).sq() + (y - ay - t * dy).sq()).sqrt();
         if d < best.0 { best = (d, cum[i] + t * (cum[i + 1] - cum[i])); }
     }
     best
@@ -249,7 +249,7 @@ pub fn l0_flatten(py: Python<'_>, mut u: PyReadwriteArray2<'_, f64>, x0: f64, y0
             boxes[k] = [bx0, by0, bx1, by1];
             let mut cum = vec![0.0f64; p.len()];
             for i in 1..p.len() {
-                cum[i] = cum[i - 1] + ((p[i][0] - p[i - 1][0]).powi(2) + (p[i][1] - p[i - 1][1]).powi(2)).sqrt();
+                cum[i] = cum[i - 1] + ((p[i][0] - p[i - 1][0]).sq() + (p[i][1] - p[i - 1][1]).sq()).sqrt();
             }
             cums[k] = cum;
             profs[k] = profile(&ov, p, x0, y0, sq, step, median_m[k], sigma[k]);
@@ -418,7 +418,7 @@ pub fn l0_flatten(py: Python<'_>, mut u: PyReadwriteArray2<'_, f64>, x0: f64, y0
         let mut tgt = tgt;
         if blur_m > 0.0 {
             // three box passes of 2h + 1 samples a way (~ a Gaussian of blur_m, O(1) a sample whatever its width)
-            let h = (((4.0 * (blur_m / sq).powi(2) + 1.0).sqrt() - 1.0) / 2.0).round().max(1.0) as usize;
+            let h = (((4.0 * (blur_m / sq).sq() + 1.0).sqrt() - 1.0) / 2.0).round().max(1.0) as usize;
             let mut at_ = vec![0.0f64; nx * ny];     // alpha * target
             let mut a_ = vec![0.0f64; nx * ny];      // alpha
             for idx in 0..nx * ny {

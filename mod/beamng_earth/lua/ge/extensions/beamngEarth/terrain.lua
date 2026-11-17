@@ -67,12 +67,46 @@ local TEX_FIELDS = { 'aoBaseTex', 'aoBaseTexSize', 'aoDetailStrength', 'aoDetail
 -- size. Repeats in metres divide the 128 m block step (2 / 4 m detail, 32 / 64 m macro), or the pattern
 -- jumps under the car at every terrain move (the in-game finding noted in tools/make_level_assets.py).
 local T = '/assets/materials/terrain/'
-local function look(detail, dsize, macro, msize, strength)
-  local l = { detailDistances = '0 0 50 80', macroDistances = '0 0 150 1500' }
+local TL = '/temp/beamngEarth/terraintex/'
+-- Zero-mean colour grain (the near/far border, the user 2026-11-16): the shader adds (2 t - 1) x strength of a detail /
+-- macro colour texture's stored value t to the photo, so a stock map whose mean is not 0.5 tinted the whole block
+-- (t_macro_grass, mean 0.43: a darker block than the far tiles past its edge, which show the photo as it is). The
+-- server writes zero-mean copies of these (server/terraintex.py RECENTRED_STEMS, the same list; rc_name):
+M.RECENTRED = {
+  ['asphalt/asphalt/t_asphalt_b'] = true, ['asphalt/macro_asphalt/t_macro_asphalt_b'] = true,
+  ['forest/t_forest_ground_02/t_forest_ground_02_b'] = true, ['forest/t_macro_forest/t_macro_forest_b'] = true,
+  ['grass/t_dirt_dry_grass/t_dirt_dry_grass_b'] = true,
+  ['grass/macro_dry_grass_02/t_macro_dry_grass_02_b'] = true, ['grass/t_grass_01/t_grass_01_b'] = true,
+  ['mud/mud/t_mud_b'] = true, ['rock/macro_rocky/t_macro_rocky_b'] = true, ['rock/t_dirt_rocky/t_dirt_rocky_b'] = true,
+  ['sand/t_macro_sand/t_macro_sand_b'] = true, ['sand/t_sand/t_sand_b'] = true,
+  ['soil/dirt_crumbly/t_dirt_crumbly_b'] = true, ['soil/dirt_loose_dusty/t_dirt_loose_dusty_b'] = true,
+  ['soil/macro_clumply/t_macro_clumpy_b'] = true, ['soil/macro_holes/t_macro_holes_b'] = true,
+  ['soil/t_gravel/t_gravel_b'] = true, ['soil/t_macro_flows/t_macro_flows_b'] = true,
+}
+function M.rcName(stem) return 'bne_rc_' .. stem:gsub('/', '__') .. '.png' end
+-- The stock path of a zero-mean copy's VFS path (nil for any other path): the layer's colour when the copy is missing.
+function M.stockOf(path)
+  local n = type(path) == 'string' and path:sub(1, #TL) == TL and path:sub(#TL + 1):match('^bne_rc_(.+)%.png$')
+  return n and (T .. n:gsub('__', '/') .. '.png') or nil
+end
+local function colourTex(stem)
+  local s = stem .. '_b'
+  return M.RECENTRED[s] and (TL .. M.rcName(s)) or (T .. s .. '.png')
+end
+-- The macro (colour, normal, roughness) goes from its near strength at 0 m to its far one at 100 m, then to nothing at
+-- 200 m (macroDistAtten): past the block's edge (the player >= 229 m inside it, follow.lua) the far tiles show the photo
+-- alone (tools/make_level_assets.py MACRO_DISTANCES)
+M.MACRO_DISTANCES, M.MACRO_DIST_ATTEN = '0 0 100 200', '0 1'
+-- look(detail stem, its repeat m, macro stem, its repeat m, detail colour strength near, macro colour strength near,
+-- at 100 m): tools/make_level_assets.py surface() makes the same fields (its LOOKS table; server/tests/test_ground_looks.py
+-- checks the two agree). Repeats divide the 128 m block step.
+local function look(detail, dsize, macro, msize, strength, mnear, mfar)
+  local l = { detailDistances = '0 0 50 80', macroDistances = M.MACRO_DISTANCES, macroDistAtten = M.MACRO_DIST_ATTEN }
   for _, k in ipairs({ { 'baseColor', '_b' }, { 'normal', '_nm' }, { 'roughness', '_r' }, { 'ao', '_ao' } }) do
     l[k[1] .. 'DetailTex'] = T .. detail .. k[2] .. '.png'
     l[k[1] .. 'MacroTex'] = T .. macro .. k[2] .. '.png'
   end
+  l.baseColorDetailTex, l.baseColorMacroTex = colourTex(detail), colourTex(macro)
   -- flat height textures: height-blended layer borders swirled across whole blocks between the land-cover
   -- classes (in-game 2026-10-12), so the borders follow the server's masks; never '' (an empty slot makes
   -- the engine build a default texture at every updateMaterial, ~0.8 s)
@@ -84,45 +118,54 @@ local function look(detail, dsize, macro, msize, strength)
   -- colour: the photo carries it, the detail only adds grain (West Coast USA: 0.25 / 0.1)
   l.baseColorDetailStrength = (strength or 0.25) .. ' 0.08'
   l.normalDetailStrength, l.roughnessDetailStrength, l.aoDetailStrength = '1 0.3', '1 0.4', '0.8 0.2'
-  l.baseColorMacroStrength, l.normalMacroStrength, l.roughnessMacroStrength = '0.12 0.08', '0.5 0.3', '0 0.8'
+  l.baseColorMacroStrength = (mnear or 0.12) .. ' ' .. (mfar or 0.08)
+  l.normalMacroStrength, l.roughnessMacroStrength = '0.5 0.3', '0 0.8'
   return l
 end
 local function golfLook(detail, dsize, macro, msize, near, far)
-  local l = look(detail, dsize, macro, msize, near)
+  local l = look(detail, dsize, macro, msize, near, 0.06, 0.04)
   l.baseColorDetailStrength = near .. ' ' .. far
   return l
 end
 -- Squares (server/surface.py PAVERS / BRICK; tools/make_level_assets.py has the same): building tileables at the
 -- 1024 detail size as PNG copies the server makes from the game's DDS (server/terraintex.py: the terrain packing reads
--- no DDS), the asphalt's roughness, ao off
-local TL = '/temp/beamngEarth/terraintex/'
-local function tileLook(color, normal, dsize, near, far)
+-- no DDS) under TL: colour, normal, and their own roughness and ao as offsets from the flat base (terraintex BASE_R)
+local function tileLook(tile, dsize, near, far)
   local l = look('asphalt/asphalt/t_asphalt', dsize, 'asphalt/macro_asphalt/t_macro_asphalt', 32, near)
-  l.baseColorDetailTex, l.normalDetailTex = TL .. color, TL .. normal
-  l.baseColorDetailStrength, l.aoDetailStrength = near .. ' ' .. far, '0 0'
+  for _, k in ipairs({ { 'baseColor', '_b' }, { 'normal', '_nm' }, { 'roughness', '_r' }, { 'ao', '_ao' } }) do
+    l[k[1] .. 'DetailTex'] = TL .. 'bne_' .. tile .. k[2] .. '.png'
+  end
+  l.baseColorDetailStrength, l.aoDetailStrength, l.roughnessDetailStrength = near .. ' ' .. far, '1 0.3', '1 0.3'
   -- (seen further than the land's 50-80 m: the user, 2026-11-11, "the texture fades away pretty quickly")
   l.detailDistances = '0 0 150 250'
   return l
 end
+-- (2026-11-16, the stock maps' way: each surface its own macro, 8-32 m repeats for the 4-16 m band the photo and the
+-- 1-4 m detail grain leave out; tools/make_level_assets.py LOOKS says why)
 M.LOOKS = {
   bngEarthGroundAsphalt = look('asphalt/asphalt/t_asphalt', 4, 'asphalt/macro_asphalt/t_macro_asphalt', 32, 0.3),
-  bngEarthGroundGrass = look('grass/t_grass_01/t_grass_01', 2, 'grass/t_macro_grass/t_macro_grass', 64),
-  bngEarthGroundDusty = look('soil/dirt_loose_dusty/t_dirt_loose_dusty', 2, 'soil/macro_clumply/t_macro_clumpy', 64),
-  bngEarthGroundLoose = look('soil/t_gravel/t_gravel', 2, 'soil/macro_clumply/t_macro_clumpy', 64),
-  bngEarthGroundRock = look('rock/t_dirt_rocky/t_dirt_rocky', 4, 'rock/macro_rocky/t_macro_rocky', 64),
-  bngEarthGroundSnow = look('sand/t_sand/t_sand', 4, 'sand/t_macro_sand/t_macro_sand', 64, 0.12),
-  bngEarthGroundMud = look('mud/mud/t_mud', 2, 'soil/macro_clumply/t_macro_clumpy', 64),
-  bngEarthGroundLawn = look('grass/t_grass_01/t_grass_01', 1, 'grass/t_macro_grass/t_macro_grass', 64, 0.2),
+  bngEarthGroundGrass = look('grass/t_grass_01/t_grass_01', 2, 'grass/macro_dry_grass_02/t_macro_dry_grass_02', 16),
+  bngEarthGroundDusty = look('soil/dirt_loose_dusty/t_dirt_loose_dusty', 2, 'soil/t_macro_flows/t_macro_flows', 16, 0.25, 0.15, 0.1),
+  bngEarthGroundLoose = look('soil/t_gravel/t_gravel', 2, 'soil/t_macro_flows/t_macro_flows', 8, 0.3, 0.2, 0.12),
+  bngEarthGroundRock = look('rock/t_dirt_rocky/t_dirt_rocky', 4, 'rock/macro_rocky/t_macro_rocky', 16, 0.25, 0.15, 0.1),
+  bngEarthGroundSnow = look('sand/t_sand/t_sand', 4, 'sand/t_macro_sand/t_macro_sand', 32, 0.12, 0.06, 0.04),
+  bngEarthGroundMud = look('mud/mud/t_mud', 2, 'soil/macro_holes/t_macro_holes', 16),
+  bngEarthGroundLawn = look('grass/t_grass_01/t_grass_01', 1, 'soil/t_macro_flows/t_macro_flows', 16, 0.2, 0.06, 0.04),
   -- Golf (server/surface.py). The detail texture covers the aerial photo; none of these names is a
   -- GroundCover layer, so the 3D grass does not grow on them.
-  bngEarthGroundGolfRough = golfLook('grass/t_grass_01/t_grass_01', 4, 'grass/t_macro_grass/t_macro_grass', 64, 0.72, 0.28),
-  bngEarthGroundGolfFairway = golfLook('grass/t_grass_01/t_grass_01', 2, 'grass/t_macro_grass/t_macro_grass', 64, 0.45, 0.18),
-  bngEarthGroundGolfGreen = golfLook('grass/t_grass_01/t_grass_01', 1, 'grass/t_macro_grass/t_macro_grass', 64, 0.5, 0.2),
-  bngEarthGroundGolfBunker = golfLook('sand/t_sand/t_sand', 2, 'sand/t_macro_sand/t_macro_sand', 64, 0.95, 0.55),
-  bngEarthGroundPavers = tileLook('bne_pavers_b.png', 'bne_pavers_nm.png', 2, 0.5, 0.15),
-  bngEarthGroundBrick = tileLook('bne_brick_b.png', 'bne_brick_nm.png', 2, 0.85, 0.3),
-  bngEarthGroundCobble = tileLook('bne_cobble_b.png', 'bne_cobble_nm.png', 2, 0.6, 0.2),
-  beamngEarthDirt = look('soil/dirt_crumbly/t_dirt_crumbly', 2, 'soil/macro_clumply/t_macro_clumpy', 64),
+  bngEarthGroundGolfRough = golfLook('grass/t_grass_01/t_grass_01', 4, 'grass/macro_dry_grass_02/t_macro_dry_grass_02', 16, 0.72, 0.28),
+  bngEarthGroundGolfFairway = golfLook('grass/t_grass_01/t_grass_01', 2, 'soil/t_macro_flows/t_macro_flows', 16, 0.45, 0.18),
+  bngEarthGroundGolfGreen = golfLook('grass/t_grass_01/t_grass_01', 1, 'soil/t_macro_flows/t_macro_flows', 16, 0.5, 0.2),
+  bngEarthGroundGolfBunker = golfLook('sand/t_sand/t_sand', 2, 'sand/t_macro_sand/t_macro_sand', 32, 0.95, 0.55),
+  bngEarthGroundPavers = tileLook('pavers', 2, 0.5, 0.15),
+  bngEarthGroundBrick = tileLook('brick', 2, 0.85, 0.3),
+  bngEarthGroundCobble = tileLook('cobble', 2, 0.6, 0.2),
+  beamngEarthDirt = look('soil/dirt_crumbly/t_dirt_crumbly', 2, 'soil/macro_clumply/t_macro_clumpy', 32),
+  -- forest floor, dry grass, crop soil, beach sand (server/surface.py FOREST .. SAND)
+  bngEarthGroundForest = look('forest/t_forest_ground_02/t_forest_ground_02', 2, 'forest/t_macro_forest/t_macro_forest', 16, 0.2, 0.08, 0.05),
+  bngEarthGroundDryGrass = look('grass/t_dirt_dry_grass/t_dirt_dry_grass', 2, 'grass/macro_dry_grass_02/t_macro_dry_grass_02', 16),
+  bngEarthGroundCrop = look('soil/dirt_crumbly/t_dirt_crumbly', 2, 'soil/macro_holes/t_macro_holes', 16),
+  bngEarthGroundSand = look('sand/t_sand/t_sand', 2, 'sand/t_macro_sand/t_macro_sand', 32),
 }
 -- The tile layers' stand-ins when the server could not write their PNGs (terraintex.py: no game folder, a failed
 -- decode): the stock asphalt grain they had before, not a missing texture (a cobbled street plainer than before)
@@ -153,6 +196,7 @@ local function applyLook(m, name)
   if not l then return end
   for k, v in pairs(l) do
     if k:sub(-7) == 'TexSize' then v = toSamples(v) end
+    if M.stockOf(v) and not FS:fileExists(v) then v = M.stockOf(v) end -- (a zero-mean copy not written: the stock one)
     pcall(function() m:setField(k, 0, tostring(v)) end)
   end
 end
@@ -239,6 +283,7 @@ end
 
 local materialsChecked = false
 local renderEnabled = true -- false in mesh mode; survives levels (a server setting)
+local function renderOn() return renderEnabled end   -- (shadowsField: a render-disabled block, mesh mode, casts nothing)
 
 -- Our level loads main.materials.json by itself (the level loader scans the level folder,
 -- server/server.lua:200-212 loadJsonMaterialsFile). In any other level (testing) load it on demand.
@@ -264,12 +309,23 @@ function M.configure(size)
   return n
 end
 
--- The block casts no sun shadows. Every block move redrew the sun's cached shadow map for it: on a Steam Deck Fells
--- Point drive (2026-10-24) 11 of 27 frames with RenderShadows >= 25 ms came within 3 frames of a swap, 112x the swaps'
--- share of frames; with castShadows 0 none of 20 did, shadow hitches 34 -> 18. It drew nothing into that map: with the
--- block drawn (detail mode), screenshots after a forced redraw were pixel-identical with and without, the redraw
--- itself as dear (PC 8.4 / 7.7 ms vs 8.4 / 7.5), the floor of Yosemite Valley sunlit near sunset either way; trees,
--- roads, buildings and the far meshes cast the shadows.
+-- The block's sun shadows (the settings' terrainShadows: off on the Low and Medium presets). Every block move redraws the
+-- sun's cached shadow map for it: on a Steam Deck Fells Point drive (2026-10-24) 11 of 27 frames with RenderShadows
+-- >= 25 ms came within 3 frames of a swap, 112x the swaps' share of frames; with castShadows 0 none of 20 did, shadow
+-- hitches 34 -> 18 (so it was off for everyone; flat Fells Point and Yosemite's floor looked the same either way). In the
+-- mountains it is the near/far border the user saw (2026-11-16, "a visible border between the collision ground and the no
+-- collision ground. noticeable in mountain areas"): the far tiles past the block's edge cast their shadows, the block did
+-- not, so a ridge's shadow stopped at the edge and the block's shaded slopes were lit (Stelvio, the sun low, a
+-- free camera 30 m up looking up a slope: the block 97 luma, the same ground as far tiles 72, the block with its
+-- shadows 76; ~/bnge-tests/texlayer).
+M.castShadows = true
+local function shadowsField() return (M.castShadows and renderOn() ~= false) and '1' or '0' end
+function M.setCastShadows(on)
+  M.castShadows = on and true or false
+  local tb = M.get()
+  if tb then tb:setField('castShadows', 0, shadowsField()) end
+  return M.castShadows
+end
 local tilesChecked = false
 -- Each tile layer (M.TILE_FALLBACK) whose PNG copy is missing gets its stand-in look, once, before the block's first
 -- material build. Returns the names given one.
@@ -289,7 +345,30 @@ function M.checkTileTextures()
     end
   end
   if #fell > 0 then log('W', 'beamngEarth', 'terrain tile textures missing (' .. table.concat(fell, ', ') .. '): stock asphalt instead') end
+  -- a zero-mean colour copy the server could not write (no game folder): the stock texture it was made from
+  local back = 0
+  for name in pairs(M.groundMaterialNames()) do
+    local m = scenetree.findObject(name)
+    if m then
+      for _, f in ipairs({ 'baseColorDetailTex', 'baseColorMacroTex' }) do
+        local ok, v = pcall(function() return m:getField(f, 0) end)
+        local stock = ok and M.stockOf(v)
+        if stock and not FS:fileExists(v) then
+          pcall(function() m:setField(f, 0, stock) end)
+          back = back + 1
+        end
+      end
+    end
+  end
+  if back > 0 then log('W', 'beamngEarth', 'terrain zero-mean textures missing (' .. back .. '): stock colour instead') end
   return fell
+end
+
+-- Every ground material name this module may list (the level's and LOOKS'), as a set.
+function M.groundMaterialNames()
+  local s = { [M.MATERIAL] = true }
+  for name in pairs(M.LOOKS) do s[name] = true end
+  return s
 end
 
 local function getOrCreate()
@@ -303,7 +382,7 @@ local function getOrCreate()
   -- the resolution the engine bakes the block's base colour at (default 1024; West Coast USA's block 2048;
   -- set before registerObject: the engine sizes it when the block is added)
   tb:setField('baseTexSize', 0, tostring(M.BASE_TEX_SIZE))
-  tb:setField('castShadows', 0, '0')     -- (no sun shadows: see above)
+  tb:setField('castShadows', 0, shadowsField())     -- (see M.castShadows)
   tb:registerObject(M.NAME)
   tb.canSave = false
   -- importMaps keeps its .ter data under this folder; /temp is writable and outside any level.
@@ -398,6 +477,7 @@ end
 -- before (keeps the v1.2 path untouched).
 local function applyRender(tb, force)
   if (force or not renderEnabled) and tb.setRenderEnabled then tb:setRenderEnabled(renderEnabled) end
+  tb:setField('castShadows', 0, shadowsField())
 end
 
 -- Draw the block (terrain mode) or not (mesh mode: physics only).
@@ -465,7 +545,7 @@ function M.load(path, squareSize, maxHeight, x, y, z, layers, base, baseSize)
     ok, err = importMaps(tb, path, squareSize, maxHeight, false)
     if not ok then return false, err end
   end
-  tb:setField('castShadows', 0, '0')     -- (no sun shadows: kept across imports, set again to be sure)
+  tb:setField('castShadows', 0, shadowsField())     -- (kept across imports, set again to be sure)
   tb:setPosition(vec3(x, y, z))
   applyRender(tb) -- mesh mode: hidden again after every import
   if base ~= nil then M.setBase(base or nil, baseSize) end

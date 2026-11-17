@@ -593,7 +593,7 @@ def _facts_load(feats, kind, extra):
 # (bakepack.py), in place of the code hash; the plans' key holds it too (plancache.plans_format). Bump it whenever a
 # change makes other facts (level ranges, specs, lane flow, grade separations or their inputs' rules), or players keep
 # the old ones; tests/test_bake_formats.py fails until it is bumped.
-FACTS_FORMAT = 27     # 27: Sofia's yellow paving (Spec.surf "yellow_paving", bgpaving.py), 2026-11-16; 26: a cycleway with sidewalk=both / left / right is a street closed to cars, a road with its sidewalks (STYLE "cycleway", the user's London report 2026-11-12), 2026-11-12; 25: a town street of a mapped lane count between buildings takes its sidewalks out to them and, a two-lane primary, its parking lanes (roads._laned_walled; Eastern Avenue at Fells Point, the user's reports 18 and 19), 2026-11-12; 23: deterministic maths (GitHub #1169: the same facts on Windows, Linux and every glibc / CPU), 2026-11-12; 22: the roads layer's max_height_m rule (vehicle height limits) and the rail parts of a long segment where the map puts them (pmtiles anchors, railways MIN_PART_M: short rail bridges kept), Robitnik's PR #1193; 21: a motorway's or trunk road's built-up land read 90 m out (URBAN_HIGHWAY_BESIDE_M, PR #1117: its urban flag, widths); 20: a road's measured width and wall clearance from its own copy of the road in each cell, not whichever cell's copy the process measured first (roadwidth._memo_key), 2026-11-12; 19: a road joined at a bridge's end node is not a crossing under it on any system (earthfast levelrules END_EPS_M: the bridge's reach hung on the last bit of the C library's hypot, other level ranges on Ubuntu 22.04 / Windows than on a newer glibc at Vienna's S1 Rautenweg), 2026-11-12; 18: a town street's carriageway kept clear of the walls along it where the map gives no width (roads._wall_capped, roadwidth.clearance_row: Campulung, Setagaya, Trastevere; GitHub #1184, #543), 2026-11-12; 17: a junction standing over a tunnel the DEM shows open is an underpass: its arms' crossings by the node count (gradesep.JOINED_ENDS, Vienna's S1 under Rautenweg, GitHub #1083), 2026-11-12; 16: a merged highway's ways of other lane counts as lane sections of their own (lanesections.py, PR #880 by DerEifrige-f), the default widths of roads without a mapped width measured on aerials (WIDTH_TABLE: regions, town one-way streets, no parking on top of a mapped lane count), narrow winding rural roads (WINDING_*), 2026-11-12; 15: the road centrelines rounded and curvature continuous by default (roadsmooth.py), 2026-11-12; 14: the regional gravel rule needs REGIONAL_MIN_ROADS mapped roads, not one road's segments (GitHub #834), and a residential / unclassified street with built-up land beside it stays paved (REGIONAL_BESIDE_SHARE, GitHub #824); flagstone / tiles paving cobble (PR #971); 13: a grade separation's bridge spans a skew crossing (the bridged road's half width over the tangent added: a track at 45 deg under the A4 at Glaireuse cut a trench through its carriageway past a square deck, GitHub #1020), its fractions and every bridge/tunnel reach's in sub_polyline's metric (gradesep._metric, _ring_kx: on a 15 km road the deck stood 8.7 m off its crossing); 12: a long road's copy far from its home takes the grade separations its neighbour cells found too (_home_far: the A4 at Glaireuse, GitHub #1020); 11: an underpass in a cutting the DEM shows (gradesep._underpasses: a longer road tunnel with the ground over it under TUNNEL_OPEN_COVER, SEP_M under the line over it either side: Highway 3 at Hameenlinna, GitHub #1009) bridged by the roads over it; 10: a short ground gap between a tunnel's portal and a bridge of the same road made bridge (_portal_decks: CA-1's northbound Tom Lantos bore, a 22 % drop onto its bridge); 9: underpasses: a tunnel's portal kept where its own approach road joins it (_tunnel_reach, the I-280 underpass at Millbrae), a road's home cell takes the grade separations every cell it crosses found for it (_gradesep_elsewhere: CA-1's bridge over Wilder Tunnel); 8: bridge parts retain mapped local level transitions (PR #873), a segment's tunnel ranges joined only over a gap inside one source way (PR #927, was: any gap under 30 m); 7: PR #843 (restored highway shoulders, regional merge marking profiles: Spec.state); 6: busways (PR #836) and walkway spans (PR #842) in the cells; 5: PR #505's Spec.france (French road scenery flag); 4: pass roads with a mapped or default two-lane count stay mountain roads (the Stelvio); 3: PR #471 lane counts (validated highway counts, two-lane highway default) and #686 (Swedish dual carriageways, 2.75 m lanes); 2: OSM's own surface first, "unpaved" on car roads gravel, regional gravel for untagged minor roads
+FACTS_FORMAT = 28     # 28: Sofia's yellow paving (Spec.surf "yellow_paving", bgpaving.py), 2026-11-16; 27: a motorway link mapped with 3 or more lanes, with no width or turn:lanes, that its diverge gives 2 or more fewer lanes takes what it gives (_lane_overrides, tapers::ramp_lane_rule; rampoverrides' I-65 Exit 76 correction by way id deleted: the road revamp's R1, 2026-11-16); 26: a cycleway with sidewalk=both / left / right is a street closed to cars, a road with its sidewalks (STYLE "cycleway", the user's London report 2026-11-12), 2026-11-12; 25: a town street of a mapped lane count between buildings takes its sidewalks out to them and, a two-lane primary, its parking lanes (roads._laned_walled; Eastern Avenue at Fells Point, the user's reports 18 and 19), 2026-11-12; 23: deterministic maths (GitHub #1169: the same facts on Windows, Linux and every glibc / CPU), 2026-11-12; 22: the roads layer's max_height_m rule (vehicle height limits) and the rail parts of a long segment where the map puts them (pmtiles anchors, railways MIN_PART_M: short rail bridges kept), Robitnik's PR #1193; 21: a motorway's or trunk road's built-up land read 90 m out (URBAN_HIGHWAY_BESIDE_M, PR #1117: its urban flag, widths); 20: a road's measured width and wall clearance from its own copy of the road in each cell, not whichever cell's copy the process measured first (roadwidth._memo_key), 2026-11-12; 19: a road joined at a bridge's end node is not a crossing under it on any system (earthfast levelrules END_EPS_M: the bridge's reach hung on the last bit of the C library's hypot, other level ranges on Ubuntu 22.04 / Windows than on a newer glibc at Vienna's S1 Rautenweg), 2026-11-12; 18: a town street's carriageway kept clear of the walls along it where the map gives no width (roads._wall_capped, roadwidth.clearance_row: Campulung, Setagaya, Trastevere; GitHub #1184, #543), 2026-11-12; 17: a junction standing over a tunnel the DEM shows open is an underpass: its arms' crossings by the node count (gradesep.JOINED_ENDS, Vienna's S1 under Rautenweg, GitHub #1083), 2026-11-12; 16: a merged highway's ways of other lane counts as lane sections of their own (lanesections.py, PR #880 by DerEifrige-f), the default widths of roads without a mapped width measured on aerials (WIDTH_TABLE: regions, town one-way streets, no parking on top of a mapped lane count), narrow winding rural roads (WINDING_*), 2026-11-12; 15: the road centrelines rounded and curvature continuous by default (roadsmooth.py), 2026-11-12; 14: the regional gravel rule needs REGIONAL_MIN_ROADS mapped roads, not one road's segments (GitHub #834), and a residential / unclassified street with built-up land beside it stays paved (REGIONAL_BESIDE_SHARE, GitHub #824); flagstone / tiles paving cobble (PR #971); 13: a grade separation's bridge spans a skew crossing (the bridged road's half width over the tangent added: a track at 45 deg under the A4 at Glaireuse cut a trench through its carriageway past a square deck, GitHub #1020), its fractions and every bridge/tunnel reach's in sub_polyline's metric (gradesep._metric, _ring_kx: on a 15 km road the deck stood 8.7 m off its crossing); 12: a long road's copy far from its home takes the grade separations its neighbour cells found too (_home_far: the A4 at Glaireuse, GitHub #1020); 11: an underpass in a cutting the DEM shows (gradesep._underpasses: a longer road tunnel with the ground over it under TUNNEL_OPEN_COVER, SEP_M under the line over it either side: Highway 3 at Hameenlinna, GitHub #1009) bridged by the roads over it; 10: a short ground gap between a tunnel's portal and a bridge of the same road made bridge (_portal_decks: CA-1's northbound Tom Lantos bore, a 22 % drop onto its bridge); 9: underpasses: a tunnel's portal kept where its own approach road joins it (_tunnel_reach, the I-280 underpass at Millbrae), a road's home cell takes the grade separations every cell it crosses found for it (_gradesep_elsewhere: CA-1's bridge over Wilder Tunnel); 8: bridge parts retain mapped local level transitions (PR #873), a segment's tunnel ranges joined only over a gap inside one source way (PR #927, was: any gap under 30 m); 7: PR #843 (restored highway shoulders, regional merge marking profiles: Spec.state); 6: busways (PR #836) and walkway spans (PR #842) in the cells; 5: PR #505's Spec.france (French road scenery flag); 4: pass roads with a mapped or default two-lane count stay mountain roads (the Stelvio); 3: PR #471 lane counts (validated highway counts, two-lane highway default) and #686 (Swedish dual carriageways, 2.75 m lanes); 2: OSM's own surface first, "unpaved" on car roads gravel, regional gravel for untagged minor roads
 
 
 def _facts_baked(feats, kind, extra):
@@ -1975,12 +1975,23 @@ def _ramp_junction(feats):
     return got
 
 
+# A motorway link mapped with more lanes than its diverge gives takes what it gives (earthfast lane_flow_cells,
+# tapers::ramp_lane_rule; the road revamp's R1, 2026-11-16: the general rule in place of PR #471's I-65 Exit 76
+# correction by way id and box, rampoverrides.py). On by default (it replaced a correction that was always on);
+# BNE_RAMP_LANE_RULE=off: the map's count everywhere.
+RAMP_LANE_RULE = os.environ.get("BNE_RAMP_LANE_RULE", "on") != "off"
+
+
 def _lane_overrides(feats):
-    """{feature: lanes} of rampoverrides (PR #471), once per Features."""
+    """{feature: lanes} of the ramp lane rule (RAMP_LANE_RULE): its home cell's copy's (as lane_flow), once per
+    Features; {} where no road of the layer is one the rule checks (no neighbour read)."""
     d = feats.__dict__.get("_lane_overrides")
     if d is None:
-        import rampoverrides
-        d = feats.__dict__["_lane_overrides"] = rampoverrides.lane_counts(feats)
+        d = {}
+        if RAMP_LANE_RULE and (_lane_flow_rows(feats)[2][:, 4] > 0.5).any():
+            got = _cell_memo(feats, "_ramp_rule_home", lambda: _lane_flow_home(feats, 1))
+            d = {i: int(v) for i, v in enumerate(got) if v is not None}
+        feats.__dict__["_lane_overrides"] = d
     return d
 
 
@@ -2308,6 +2319,18 @@ TAPER_M = (15.0, 90.0)          # m: a taper's length at the least and most ...
 TAPER_SHARE = 0.45              # ... and at most this share of the road's length (a taper at each end)
 TAPER_MIN_DW = 0.4              # m of width change that tapers
 TAPER_MAX_TURN = 35.0           # degrees between two roads' directions at a joint: one going on as the other
+# Speed tapers (the road revamp's R1, 2026-11-16; plan §2.3): a taper as long as the standards ask at the road's design
+# speed (earthfast tapers::speed_taper_m: MUTCD's W·V·min(V/155, 0.62), at least the length that keeps the quintic
+# shape's lateral acceleration at 0.5 m/s², 20-400 m; a 3.6 m lane 54 m at 30 km/h, 125 m at 70, 268 m at 120 km/h,
+# against 43 m at any speed before), its width change on its own side (half at a joint of two roads, all of it at a
+# deck's end), TAPER_SHARE of the road at most; the distance measured along the road, not in a straight line from the
+# joint, and the width eased by the quintic smootherstep (curvature continuous at both ends); the graded core widened
+# with it on every road, not only on lane sections. Off by default until reviewed in game (then on with a PLANS_FORMAT
+# bump); BNE_SPEED_TAPERS=on.
+SPEED_TAPERS = os.environ.get("BNE_SPEED_TAPERS", "off") == "on"
+# class -> its rank for tapers::design_speed_kmh (0 motorway ... 6 service / track; any other: 5)
+_SPEED_RANK = {"motorway": 0, "trunk": 1, "primary": 2, "secondary": 3, "tertiary": 4, "unclassified": 5,
+               "residential": 5, "living_street": 5, "service": 6, "track": 6, "unknown": 5}
 
 
 def road_tapers(feats, urban_fn=None, widths=None, left_hand=False):
@@ -2337,7 +2360,7 @@ def road_tapers(feats, urban_fn=None, widths=None, left_hand=False):
 def _tapers(feats, specs, decks=False):
     """road_tapers' kernel (earthfast.road_tapers): the per-road rows marshalled, the joints found in Rust."""
     import fast
-    fast.require(120 if decks else 117, "road_tapers")
+    fast.require(341, "road_tapers (speed tapers)")
     n = len(feats)
     out = [()] * n
     bridge = bridge_specs(feats)
@@ -2348,7 +2371,7 @@ def _tapers(feats, specs, decks=False):
     off = np.zeros(n + 1, np.int64)
     off[1:] = np.cumsum(stops - starts)
     lonlat = np.concatenate([feats.lonlat[a:b] for a, b in zip(starts, stops)]) if off[-1] else np.zeros((0, 2))
-    attrs = np.full((n, 5), np.nan)
+    attrs = np.full((n, 9 if SPEED_TAPERS else 5), np.nan)
     codes, own = {}, []
     for i, sp in enumerate(specs):
         bs = bridge[i]
@@ -2357,6 +2380,12 @@ def _tapers(feats, specs, decks=False):
             continue
         cls = (sp or bs).cls
         attrs[i, 1] = codes.setdefault(cls, len(codes))
+        if SPEED_TAPERS:                        # (tapers::design_speed_kmh's inputs)
+            ref = sp or bs
+            attrs[i, 5] = np.nan if ref.kmh is None else float(ref.kmh)
+            attrs[i, 6] = float(_SPEED_RANK.get(cls, 5))
+            attrs[i, 7] = 1.0 if ref.urban else 0.0
+            attrs[i, 8] = 1.0 if ref.link else 0.0
         attrs[i, 2:4] = 0.0
         if sp is not None:
             attrs[i, 0] = sp.width
@@ -2370,13 +2399,18 @@ def _tapers(feats, specs, decks=False):
                 if b0 >= 1 - 1e-3:
                     attrs[i, 3] = 1.0
                 own.extend((i, f) for f in (a0, b0) if 1e-3 < f < 1 - 1e-3)
-    rows = fast._ef.road_tapers(np.ascontiguousarray(lonlat, np.float64), off, attrs,
-                                np.asarray(own, np.float64).reshape(-1, 2),
-                                np.array([TAPER_M_PER_M, TAPER_M[0], TAPER_M[1], TAPER_SHARE, TAPER_MIN_DW,
-                                          TAPER_MAX_TURN] + ([1.0] if decks else []), np.float64))
+    rows, line_off, line_ll, s_joint = fast._ef.road_tapers(
+        np.ascontiguousarray(lonlat, np.float64), off, attrs, np.asarray(own, np.float64).reshape(-1, 2),
+        np.array([TAPER_M_PER_M, TAPER_M[0], TAPER_M[1], TAPER_SHARE, TAPER_MIN_DW, TAPER_MAX_TURN]
+                 + ([1.0 if decks else 0.0, 1.0] if SPEED_TAPERS else [1.0] if decks else []), np.float64))
     got = {}
-    for r in np.asarray(rows):
-        got.setdefault(int(r[0]), []).append((float(r[1]), float(r[2]), float(r[3]), float(r[4])))
+    for k, r in enumerate(np.asarray(rows)):
+        t = (float(r[1]), float(r[2]), float(r[3]), float(r[4]))
+        if SPEED_TAPERS:                        # (its stretch of the road's line: taper_widths along the road)
+            # (as tuples: taper rows compare and hash like the plain ones)
+            t += ((tuple(map(tuple, np.asarray(line_ll[line_off[k]:line_off[k + 1]], np.float64).tolist())),
+                   float(s_joint[k])),)
+        got.setdefault(int(r[0]), []).append(t)
     for i, t in got.items():
         out[i] = tuple(t)
     return _section_tapers(feats, specs, bridge, out)
@@ -2496,7 +2530,24 @@ def taper_widths(width, tapers, lon, lat):
         return None
     lon, lat = np.asarray(lon, np.float64), np.asarray(lat, np.float64)
     out, hit = np.full(lon.shape, float(width)), False
-    for tlon, tlat, target, span in tapers:
+    along = [t for t in tapers if len(t) > 4]   # (speed tapers: SPEED_TAPERS, along the road, quintic: in Rust)
+    if along:
+        import fast
+        fast.require(341, "taper_widths_along")
+        rows = np.array([[t[2], t[3], t[4][1], t[1]] for t in along], np.float64)
+        lines = [np.asarray(t[4][0], np.float64).reshape(-1, 2) for t in along]
+        off = np.zeros(len(lines) + 1, np.int64)
+        off[1:] = np.cumsum([len(x) for x in lines])
+        flat = np.ascontiguousarray(lon.ravel()), np.ascontiguousarray(lat.ravel())
+        w, any_hit = fast._ef.taper_widths_along(float(width), rows, off, np.ascontiguousarray(np.concatenate(lines)),
+                                                 *flat)
+        if any_hit:
+            hit = True
+            out = out + (np.asarray(w).reshape(lon.shape) - float(width))
+    for t in tapers:
+        if len(t) > 4:
+            continue
+        tlon, tlat, target, span = t
         d = dnp.hypot((lon - tlon) * 111320.0 * dmath.cos(math.radians(tlat)), (lat - tlat) * 110540.0)
         near = d < span
         if span > 0 and near.any():
@@ -2524,7 +2575,7 @@ def lane_flow(feats):
     cell (I-95 by the Middle Branch: 4 lanes, 20.4 m, in one and the default 11.8 m in the other, a 4.3 m step where
     their tiles met; then 24.0 m against 20.4 m where the 3 x 3 round each saw another stretch of the chain). Pure
     given the cells; remembered on feats."""
-    return _cell_memo(feats, "_lane_flow_home", lambda: _lane_flow_home(feats))
+    return _cell_memo(feats, "_lane_flow_home", lambda: _lane_flow_home(feats, 0))
 
 
 def _lane_flow_counted(f):
@@ -2550,8 +2601,9 @@ def _flow_fn(feats, inp):
     return run
 
 
-def _lane_flow_home(feats):
-    out = list(_lane_flow_local(feats))
+def _lane_flow_home(feats, which=0):
+    """lane_flow (which 0) or the ramp lane rule's counts (1) per feature, each road's from its home cell's solve."""
+    out = list(_lane_flow_local(feats)[which])
     me = feats.__dict__.get("_bnge_cell")
     hook = feats.__dict__.get("_bnge_neighbours")
     # (only the counted roads at home elsewhere take their home cell's count: the others have none in any copy, the
@@ -2572,7 +2624,7 @@ def _lane_flow_home(feats):
                 rows.setdefault(home, []).append(i)
         for home, idx in rows.items():
             other = near[home]
-            res = _lane_flow_local(other)
+            res = _lane_flow_local(other)[which]
             pos = {fid: j for j, fid in enumerate(other.ids.tolist())}
             for i in idx:
                 j = pos.get(feats.ids[i])
@@ -2596,7 +2648,7 @@ def _lane_flow_ids(f):
 def _lane_flow_rows(f):
     """Layer f's rows for lane_flow, made once per layer (kept on it): (first and last coordinate (n, 4: lon, lat, lon,
     lat; 0 without any), coordinate count, attrs (n, 4): one-way sign or 0, the map's lanes or nan, link, the class's
-    default lanes or nan). Each cell's solve covers the 3 x 3 around it, so every layer's rows were made again for each
+    default lanes or nan, 1 for a road the ramp lane rule checks: _ramp_candidates). Each cell's solve covers the 3 x 3 around it, so every layer's rows were made again for each
     of its neighbours' solves: 6 of lane_flow's 7 CPU-s in Manhattan's first visit, the solve itself 0.3 (2026-11-02);
     the rows of all features at once (2026-11-08)."""
     got = f.__dict__.get("_lane_flow_rows")
@@ -2614,7 +2666,7 @@ def _lane_flow_rows(f):
         ll = np.asarray(f.lonlat, np.float64)
         pts[some, :2] = ll[starts[some]]
         pts[some, 2:] = ll[ends[some] - 1]
-    attrs = np.zeros((n, 4))
+    attrs = np.zeros((n, 5))
     attrs[:, 1] = np.nan
     attrs[:, 3] = np.nan
     cls_a, sub_a = f.attrs.get("class"), f.attrs.get("subtype")
@@ -2638,8 +2690,41 @@ def _lane_flow_rows(f):
                     _LANE_FLOW_DFLT[c] = lane_layout(Spec(carriageway(c, "paved", False, None, True, None), "paved",
                                                           False, c, True))[1]
                 attrs[idx[cls[idx] == c], 3] = float(_LANE_FLOW_DFLT[c])
+            attrs[idx, 4] = _ramp_candidates(f, idx, cls, attrs[idx, 1], attrs[idx, 2] > 0.5)
     got = f.__dict__["_lane_flow_rows"] = (pts, npts, attrs)
     return got
+
+
+_TURN_LANES = ("turn_lanes", "turn_lanes_forward", "turn_lanes_backward", "turn_lanes_both_ways")
+
+
+def _ramp_candidates(f, idx, cls, lanes, link):
+    """(len(idx),) 1.0 / 0.0: the counted roads idx of layer f the ramp lane rule checks (tapers::ramp_lane_rule): a
+    motorway link with RAMP_RULE_MIN_LANES (3) or more mapped lanes and nothing else saying it is that wide: no mapped
+    width (OpenStreetMap's, Overture's width rule) and no turn:lanes (its own, or a way's along it)."""
+    out = np.zeros(len(idx))
+    if not RAMP_LANE_RULE:              # (off: no road checked, in the lane flow solve too)
+        return out
+    sel = (cls[idx] == "motorway") & link & (np.nan_to_num(lanes, nan=0.0) >= 3)
+    if not sel.any():
+        return out
+    import railtags
+    n = len(f)
+    has_w, _ = _rule_cols(f.rules.get("width"), n)
+    osm_w = _osm_values(f, "width", None, None)
+    parts = f.attrs.get(railtags.LANE_PARTS)
+    turn = [f.attrs.get("osm_" + k) for k in _TURN_LANES]
+    for k in np.flatnonzero(sel).tolist():
+        i = int(idx[k])
+        if has_w[i] or np.isfinite(osm_w[i]):
+            continue
+        if any(c is not None and c[i] not in (None, "") for c in turn):
+            continue
+        if parts is not None and parts[i] and any(t and any(str(key).startswith("turn:lanes") for key in t)
+                                                  for _, _, _, t in parts[i]):
+            continue
+        out[k] = 1.0
+    return out
 
 
 def _lane_flow_local(feats):
@@ -2649,12 +2734,12 @@ def _lane_flow_local(feats):
     if got is not None:
         return got
     import fast
-    fast.require(169, "lane_flow_cells")
+    fast.require(340, "lane_flow_cells (the ramp lane rule)")
     if not _lane_flow_counted(feats).any():
         # (the solve gives a count only to this layer's counted roads: none here, none found, whatever the cells round
         # it hold; their roads layers were read for it anyway, most of a cold first block's halo: every cell asked
         # for its decks or road specs read the eight round it, and their home cells the eight round those, 2026-11-11)
-        got = feats.__dict__["_lane_flow"] = [None] * len(feats)
+        got = feats.__dict__["_lane_flow"] = ([None] * len(feats), [None] * len(feats))
         return got
     layers = [feats]
     hook = feats.__dict__.get("_bnge_neighbours")
@@ -2665,13 +2750,17 @@ def _lane_flow_local(feats):
             log.debug("lane flow: neighbours: %s: %s", type(e).__name__, e)
     rows = [_lane_flow_rows(f) for f in layers]
     ids = [_lane_flow_ids(f) for f in layers]
-    got = np.asarray(fast._ef.lane_flow_cells(ids, [r[0] for r in rows], [r[1] for r in rows], [r[2] for r in rows],
-                                              float(LANE_FLOW_MAX)))
+    got, ramp = fast._ef.lane_flow_cells(ids, [r[0] for r in rows], [r[1] for r in rows], [r[2] for r in rows],
+                                         float(LANE_FLOW_MAX))
+    got, ramp = np.asarray(got), np.asarray(ramp)
     out = [None] * len(feats)
     for i in np.flatnonzero(np.isfinite(got) & ~(rows[0][2][:, 2] > 0.5)).tolist():
         out[i] = int(got[i])
-    feats.__dict__["_lane_flow"] = out
-    return out
+    fixed = [None] * len(feats)
+    for i in np.flatnonzero(np.isfinite(ramp)).tolist():
+        fixed[i] = int(ramp[i])
+    got = feats.__dict__["_lane_flow"] = (out, fixed)
+    return got
 
 
 # Lane lines through merges and splits (the user, 2026-10-31, I-95 by the Middle Branch): each piece painted its lines
@@ -3113,7 +3202,8 @@ class Placement:
         out, done = [], set()
         tapers = joint_desc(self.copies.get(fid, [(f, i)]),
                             deck_tapers if deck else (lambda g: road_tapers(g, *self.args)))
-        for tlon, tlat, _w, span in tapers or ():
+        for t in tapers or ():
+            tlon, tlat, _w, span = t[:4]
             k = _end_key(tlon, tlat)
             e = next((e for e in mine if ends[e] == k), None)
             if e is None:
@@ -7180,10 +7270,36 @@ DECK_MIN_DEPTH = 0.9    # m: the thinnest deck (a short slab bridge)
 DECK_SPAN_RATIO = 22.0  # a deck is its main span / this deep (girder bridges run span/20-25), DECK_MIN..FULL_DEPTH
 
 
+# Level spacing from real clearance and deck depth (the road revamp's R1, 2026-11-16, decision D10 "real-world
+# spacing"; plan §2.6): a deck's road over the road under it by that road's clearance C (motorway / trunk 5.0 m, other
+# roads 4.7, service / track 4.0, foot and cycle ways 2.7, a railway 6.5: electrified or unknown) + the deck's depth
+# D (0.045 of its main span, 0.7-4.0 m: a precast girder's ratio; the mesh draws the same depth) + LEVEL_MARGIN_M, not
+# 6.0 m of headroom + 0.15 m + a depth of 0.9-2.2 m (8.35 m a level with the full depth): a stack's levels ~1-2 m
+# lower each, its ramps gentler. A chain takes the clearance of the highest class it crosses (one chain, one clear;
+# the most demanding road under it, 5.0 m when unknown). Off by default until reviewed in game; BNE_LEVEL_SPACING=on.
+LEVEL_SPACING = os.environ.get("BNE_LEVEL_SPACING", "off") == "on"
+LOWER_CLEAR_M = {"motorway": 5.0, "trunk": 5.0, "service": 4.0, "track": 4.0, "footway": 2.7, "path": 2.7,
+                 "cycleway": 2.7, "pedestrian": 2.7, "bridleway": 2.7, "steps": 2.7, "rail": 6.5}
+LOWER_CLEAR_ROAD_M = 4.7        # m over any other road ...
+LOWER_CLEAR_UNKNOWN_M = 5.0     # ... and where the road under is not known (the most demanding road's)
+LEVEL_MARGIN_M = 0.1
+LEVEL_DEPTH_RATIO = 0.045       # m of deck depth per m of main span (precast girders, AASHTO's 0.045 L) ...
+LEVEL_DEPTH_RANGE = (0.7, 4.0)  # ... within these
+
+
+def lower_clear(classes):
+    """m of clearance the roads of classes need under a deck (LOWER_CLEAR_*): the most demanding's. Pure."""
+    got = [LOWER_CLEAR_M.get(str(c), LOWER_CLEAR_ROAD_M) for c in classes if c is not None]
+    return max(got) if got else LOWER_CLEAR_UNKNOWN_M
+
+
 def deck_depth(span):
     """m of structure (slab + girders) under a deck's road for a main span of span m. A short overpass or channel
     span drew 2.2 m of slab and girders whatever its span, and had to climb that much more to clear what is under it
-    (a crown on 24 m overpasses and 2.7 m humps on the Sunshine Skyway causeway's channel bridges, 2026-10-27). Pure."""
+    (a crown on 24 m overpasses and 2.7 m humps on the Sunshine Skyway causeway's channel bridges, 2026-10-27).
+    LEVEL_SPACING: LEVEL_DEPTH_RATIO of it within LEVEL_DEPTH_RANGE. Pure."""
+    if LEVEL_SPACING:
+        return float(np.clip(LEVEL_DEPTH_RATIO * float(span), *LEVEL_DEPTH_RANGE))
     return float(np.clip(float(span) / DECK_SPAN_RATIO, DECK_MIN_DEPTH, DECK_FULL_DEPTH))
 
 
@@ -7193,9 +7309,13 @@ def deck_split(depth):
     return slab, float(depth) - slab
 
 
-def deck_road_clear(depth=None):
-    """m a deck's road stands over a road under it: the headroom, its margin and the deck's depth. Pure."""
-    return MIN_BRIDGE_HEADROOM_M + BRIDGE_HEADROOM_MARGIN_M + (DECK_FULL_DEPTH if depth is None else float(depth))
+def deck_road_clear(depth=None, classes=None):
+    """m a deck's road stands over a road under it: the headroom, its margin and the deck's depth; LEVEL_SPACING: the
+    clearance of the roads under it (classes: lower_clear), the depth and LEVEL_MARGIN_M. Pure."""
+    d = DECK_FULL_DEPTH if depth is None else float(depth)
+    if LEVEL_SPACING:
+        return lower_clear(classes or ()) + d + LEVEL_MARGIN_M
+    return MIN_BRIDGE_HEADROOM_M + BRIDGE_HEADROOM_MARGIN_M + d
 
 
 # A road with a height limit under a road bridge (a maxheight sign: the roads layer's "max_height_m" rule) needs the
@@ -7263,6 +7383,13 @@ CORNER_CONCRETE_M = 4.0  # m: a concrete street this close to a curb return fill
 AT_GRADE_M = 3.0        # m: a road crossing a deck within AT_GRADE_REACH_M of an abutment that cannot get this
 AT_GRADE_REACH_M = 12.0     # high over it is a junction at grade (the intersection a ramp starts from)
 CHAIN_CELLS = 12        # map cells read at most to close one bridge chain
+# A chain longer than CHAIN_CELLS cells (a long viaduct, a causeway) is solved in windows that do not depend on who
+# asks (BridgeProfiles.CANON_LOAD): the map cells are grouped in CHAIN_BLOCK x CHAIN_BLOCK blocks on the cells' own
+# grid; a piece is solved with the chain's parts in its block's cells and CHAIN_MARGIN cells round them, and only the
+# pieces whose middle lies in the block are kept from that solve. Read from whichever cell, a piece gets the solve of
+# its own block (the cut capped by CHAIN_CELLS read the cells nearest the asking part: two askers, two decks)
+CHAIN_BLOCK = 2
+CHAIN_MARGIN = 1
 
 
 def _rail_drawn(feats, i):
@@ -7306,6 +7433,16 @@ def _crossings(lines, ground_lines):
     fast.require(240, "segment_crossings_lists")
     got = fast._ef.segment_crossings_lists(_lines64(lines), _lines64(ground_lines))
     return [(pi, arc, np.array([x, y])) for pi, _g, arc, x, y in got]
+
+
+def fast_crossing_ground(lines, ground_lines):
+    """[ground line index] of each crossing of ground_lines under lines (as _crossings, in its order). Pure."""
+    import fast
+    lines, ground_lines = list(lines), list(ground_lines)
+    if not lines or not ground_lines:
+        return []
+    fast.require(240, "segment_crossings_lists")
+    return [int(g) for _pi, g, _arc, _x, _y in fast._ef.segment_crossings_lists(_lines64(lines), _lines64(ground_lines))]
 
 
 def _crossings_by(lines, ground_lines):
@@ -7457,6 +7594,10 @@ def _covered_by_higher(xy, half, level, key, pool):
         dist = dnp.hypot(*(q - t[..., None] * d[None]).transpose(2, 0, 1)).min(1)
         out |= dist <= reach
     return out
+
+
+class _Capped(Exception):
+    """BridgeProfiles._resolve: the chain needs more than CHAIN_CELLS cells (CANON_LOAD: solved in windows)."""
 
 
 class BridgeProfiles:
@@ -7678,6 +7819,7 @@ class BridgeProfiles:
                             e, n = mapgeom.enu_xy(feats, self.frame, ring)
                             lines.append(np.stack([e, n], axis=1))
                         roads_.append(((fid, "g"), lines))
+                        self.__dict__.setdefault("_gcls", {})[(fid, "g")] = rs[i].cls     # (LEVEL_SPACING)
                     elif _rail_drawn(feats, i):
                         # a railway on the ground: the decks over it keep their headroom too (GitHub #324: a road bridge
                         # lay on the tracks; only roads under a deck were counted)
@@ -7731,9 +7873,36 @@ class BridgeProfiles:
                     out.add((min(k, j), max(k, j)))
         return sorted(out)
 
-    def _resolve(self, start, pool, ground, loaded):
-        """The chain of part `start` (keys), loading the cell at each loose end until closed."""
+    # A chain's pool and ground made from its cells in their own order (CANON_LOAD): the same whichever of its parts is
+    # asked for first. _load keeps the first of two equally long copies of a part clipped by two cells and the first
+    # copy of a ground road, so loaded in the order the asking part's ends reached them, the far bridge tiles of one
+    # chain differed with which tile asked first: 5 of Fells Point's 108 far-bridge geotiles between two runs of the
+    # same code and inputs, decks up to 3.9 m apart (tools/portcheck, 2026-11-16). TunnelProfiles keeps its own
+    # canonical ground (its _resolve) and, for now, its order of parts: its solves are the plans' (PLANS_FORMAT)
+    CANON_LOAD = True
+
+    def _canon_load(self, pool, ground, loaded, keep=True):
+        """pool and ground again from the cells in loaded, in their keys' order (CANON_LOAD). keep: a part or ground
+        road the pool had that no loaded cell gives now (a cell read short this time: _cell_entries keeps only complete
+        reads, so the next read can differ) is kept as it was, never lost from a chain being followed (a KeyError
+        for the chain's own start part otherwise). The window solves (keep False) take their cells' alone."""
+        old_pool, old_ground = (dict(pool), dict(ground)) if keep else ({}, {})
+        pool.clear()
+        ground.clear()
+        for c in sorted(loaded):
+            z, x, y = (int(v) for v in c.split("/"))
+            self._load(mapcells.CellKey(z, x, y), pool, ground)
+        for k in sorted(set(old_pool) - set(pool), key=str):
+            pool[k] = old_pool[k]
+        for k in sorted(set(old_ground) - set(ground), key=str):
+            ground[k] = old_ground[k]
+
+    def _resolve(self, start, pool, ground, loaded, grow=True):
+        """The chain of part `start` (keys), loading the cell at each loose end until closed (grow False: of the
+        cells loaded alone). CANON_LOAD: _Capped when it needs more than CHAIN_CELLS cells (_chain_solve's windows)."""
         while True:
+            if self.CANON_LOAD:
+                self._canon_load(pool, ground, loaded)
             nk = _EndJoin()
             by_node = {}
             for k, (_, xy, *_) in pool.items():
@@ -7773,14 +7942,31 @@ class BridgeProfiles:
             # ends deg never saw (KeyError: a Chicago road tile on a Windows test PC, 2026-10-24), and the set's order
             # changes with each process's string hashing (which cells CHAIN_CELLS let in)
             ends = [p for k in sorted(comp) for p in (pool[k][1][0], pool[k][1][-1]) if deg[nk(p)] == 1]
+            if not grow:
+                return sorted(comp)
             grew = False
             for p in ends:
                 la, lo, _ = self.frame.enu_to_geodetic(np.array([p[0]]), np.array([p[1]]), 0.0)
                 key = mapcells.cell_of(float(la[0]), float(lo[0]))
+                if str(key) not in loaded and len(loaded) >= CHAIN_CELLS and self.CANON_LOAD:
+                    raise _Capped()
                 if str(key) not in loaded and len(loaded) < CHAIN_CELLS:
                     loaded.add(str(key))
                     self._load(key, pool, ground)
                     grew = True
+            if self.CANON_LOAD:
+                # (and every cell the chain's parts lie in: the cells read are then the chain's own, the same from
+                # whichever of its parts the solve started; their keys' order)
+                xy = np.concatenate([np.asarray(pool[k][1], np.float64)[:, :2] for k in sorted(comp)])
+                la, lo, _ = self.frame.enu_to_geodetic(xy[:, 0], xy[:, 1], 0.0)
+                cells = {str(c): c for c in mapcells.cells_of(np.asarray(la), np.asarray(lo))}
+                for c in sorted(cells):
+                    if c not in loaded:
+                        if len(loaded) >= CHAIN_CELLS:
+                            raise _Capped()
+                        loaded.add(c)
+                        self._load(cells[c], pool, ground)
+                        grew = True
             if not grew:
                 return sorted(comp)
 
@@ -7820,12 +8006,22 @@ class BridgeProfiles:
         water = self._water(lines, nav, depth, channel)
         if not water and nav > 0 and bridge_profile_mode() == "curve":
             water = self._gap(lines, nav, depth)
-        rails = [(c[0], c[1], z, deck_road_clear(depth)) for c, z in zip(rcr, rail_z)]
         levels = [pool[k][3] for k in comp]
+        under = None                        # (LEVEL_SPACING: the classes the chain's clearance is for)
+        if LEVEL_SPACING:
+            gcls = self.__dict__.get("_gcls", {})
+            gk = [gcls.get(k) for k, v in ground.items() if k[1] == "g" for _g in v]
+            got = fast_crossing_ground(lines, gl)
+            under = sorted({str(gk[gi]) for gi in got if gi < len(gk) and gk[gi] is not None})
+            if len(set(levels)) > 1:        # (a stack: its lower parts are roads under it too)
+                top = max(levels)
+                under += sorted({str(pool[k][0].cls) for k, lv in zip(comp, levels) if lv < top})
+        rails = [(c[0], c[1], z, deck_road_clear(depth, ["rail"] if LEVEL_SPACING else None))
+                 for c, z in zip(rcr, rail_z)]
         pins = _ground_pins(lines, gl)          # (once: pure in lines and gl, which stay)
 
         def solve(ground_fn):
-            return deck_profile(lines, ground_fn, required + rails + water, clear=deck_road_clear(depth),
+            return deck_profile(lines, ground_fn, required + rails + water, clear=deck_road_clear(depth, under),
                                 levels=levels, widths=[pool[k][0].width for k in comp], pins=pins)
         base = self._landing_ground(lines, gl)
         zs = solve(base)
@@ -8083,14 +8279,71 @@ class BridgeProfiles:
         solved_only: only those solved already; part_ids: return (fid, j) rather than fid."""
         out = []
         for key, feats, i in todo:
+            ring = None
+            if self.CANON_LOAD and feats is not None:
+                # A piece is drawn only when a copy of its road in a cell it lies in has it under this key. A road's
+                # copies have their own level ranges, so a piece that a neighbour cell's copy (the one a tile asked
+                # through) keys otherwise is in no solve that starts from its own cells; it was drawn only once some
+                # other tile's solve had read that neighbour, so whether a far-bridge tile counted it was the asking
+                # order's (tools/portcheck, Fells Point, 2026-11-16).
+                ring = dict(_keyed(self.keys_of, self.parts_of, feats, i))[key[1]]
+                if not self._held_in(key, ring):
+                    continue
             got = self._take(key)       # (with its note: whoever builds on a solve made short is short too)
             if got is None and not solved_only:
-                ring = dict(_keyed(self.keys_of, self.parts_of, feats, i))[key[1]]
-                got = self._chain_of(key, [(float(p[1]), float(p[0])) for p in (ring[0], ring[-1])])
+                if ring is None:
+                    ring = dict(_keyed(self.keys_of, self.parts_of, feats, i))[key[1]]
+                # (CANON_LOAD: from every cell the piece lies in, not its ends' alone)
+                pts = ring if self.CANON_LOAD else (ring[0], ring[-1])
+                got = self._chain_of(key, [(float(p[1]), float(p[0])) for p in pts])
             if got is not None:
                 spec, xy, z, lon = got
                 out.append((key if part_ids else self._part_id(key), spec, xy, z, lon))
         return out
+
+    @staticmethod
+    def _block_of_cell(c):
+        return (int(c.x) // CHAIN_BLOCK, int(c.y) // CHAIN_BLOCK)
+
+    def _block_of_ll(self, ll):
+        """The block (CHAIN_BLOCK cells on the cells' grid) of a (lat, lon)."""
+        return self._block_of_cell(mapcells.cell_of(float(ll[0]), float(ll[1])))
+
+    def _block_of_xy(self, xy):
+        """The block of a part's middle vertex (this frame's world)."""
+        xy = np.asarray(xy, np.float64)
+        m = xy[len(xy) // 2]
+        la, lo, _ = self.frame.enu_to_geodetic(np.array([m[0]]), np.array([m[1]]), 0.0)
+        return self._block_of_ll((float(la[0]), float(lo[0])))
+
+    @staticmethod
+    def _window(block):
+        """The cells (as str) of a block and CHAIN_MARGIN cells round it, in their keys' order."""
+        bx, by = block
+        z = mapcells.ZOOM
+        n = 1 << z
+        out = []
+        for x in range(bx * CHAIN_BLOCK - CHAIN_MARGIN, (bx + 1) * CHAIN_BLOCK + CHAIN_MARGIN):
+            for y in range(by * CHAIN_BLOCK - CHAIN_MARGIN, (by + 1) * CHAIN_BLOCK + CHAIN_MARGIN):
+                if 0 <= y < n:
+                    out.append(str(mapcells.CellKey(z, x % n, y)))
+        return sorted(set(out))
+
+    def _held_in(self, key, ring):
+        """Does a cell the piece's ring (lon, lat) lies in hold piece key (its copy of the road keys it so)?"""
+        cells = {str(c): c for c in mapcells.cells_of(np.asarray(ring, np.float64)[:, 1],
+                                                       np.asarray(ring, np.float64)[:, 0])}
+        memo = self.__dict__.setdefault("_held_keys", {})     # id(a cell's entries) -> (entries, their keys)
+        for name in sorted(cells):
+            parts = self._cell_entries(cells[name])[0]
+            hit = memo.get(id(parts))
+            if hit is None or hit[0] is not parts:
+                if len(memo) > 256:
+                    memo.clear()
+                hit = memo[id(parts)] = (parts, {k for k, _v in parts})
+            if key in hit[1]:
+                return True
+        return False
 
     def _chain_of(self, key, ends, adopt=True):
         """Solve the chain of part key (its ring's ends (lat, lon) say where to start loading): its parts into done.
@@ -8152,7 +8405,24 @@ class BridgeProfiles:
                 self._load(ck, pool, ground)
         if key not in pool:
             return None
-        comp = self._resolve(key, pool, ground, loaded)
+        block = None
+        try:
+            comp = self._resolve(key, pool, ground, loaded)
+        except _Capped:                 # (CANON_LOAD: a chain over CHAIN_CELLS cells: the asked piece's block's window)
+            # (the block of the piece's middle as its window's copy has it: from the asker's copy first, then its
+            # window's, until they agree; the same block whichever cell's copy asked)
+            block = self._block_of_ll(ends[len(ends) // 2])
+            for _ in range(3):
+                loaded = set(self._window(block))
+                self._canon_load(pool, ground, loaded, keep=False)
+                if key not in pool:
+                    return None
+                b = self._block_of_xy(pool[key][1])
+                if b == block:
+                    break
+                if _ < 2:
+                    block = b       # (else this window's block: the piece itself solved, not kept)
+            comp = self._resolve(key, pool, ground, loaded, grow=False)
         comp_out.extend(comp)
         owner = self.owner_of(self, comp, pool) if (adopt and self.owner_of is not None) else None
         if owner is not None and owner is not self:
@@ -8179,9 +8449,12 @@ class BridgeProfiles:
             before = {k: self._take_locked(k) for k in comp}    # (the structure is made from them: taken)
             ck = min(comp) if comp else None
             fresh = ck is not None and ck not in self.trusses
-        # the first solve of a part is kept, and what goes with it, unless this one saw more of it
+        # the first solve of a part is kept, and what goes with it, unless this one saw more of it (a window's solve:
+        # only its block's pieces, each piece's from its own block's window)
+        mine = {k for k in comp if block is None or self._block_of_xy(pool[k][1]) == block}
         keep = {k: (pool[k][0], pool[k][1], z, pool[k][2]) for k, z in zip(comp, zs)
-                if before[k] is None or len(pool[k][1]) > len(before[k][1])}
+                if k in mine and (before[k] is None or len(pool[k][1]) > len(before[k][1]))}
+        own = None if key in mine else (pool[key][0], pool[key][1], zs[comp.index(key)], pool[key][2])
         pre = {k: self._precommit(k, v, ground) for k, v in keep.items()}
         beams = tpiers = None
         if fresh:
@@ -8207,6 +8480,8 @@ class BridgeProfiles:
             if fresh and ck not in self.trusses:
                 self.trusses[ck] = beams
                 self.piers[("truss", ck)] = tpiers
+            if own is not None:         # (the asked piece's middle in another block than its asker's: not kept)
+                return own
             return self._take_locked(key)
 
     def _ends_ll(self, xy):
@@ -8478,6 +8753,7 @@ class TunnelProfiles(BridgeProfiles):
     levels_of = staticmethod(lambda feats, i: [-1.0] * len(tunnel_parts(feats, i)))
     END_JOINS = False
     READS_LIMITS = False                        # (no clearance over a road to hold)
+    CANON_LOAD = False                          # (its ground made canonical in _resolve; its parts' order as before)
 
     def _structure(self, chain):                # (no truss over a tunnel)
         return [], []

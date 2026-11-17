@@ -525,13 +525,6 @@ starts a Steam copy through Steam as before.
 
 More detail (traffic, the status bar, reporting problems, troubleshooting): [docs/QUICKSTART.md](docs/QUICKSTART.md).
 
-**Compute sharing (optional, for tinkerers):** another computer on your network can build part of the distant
-landscape for you. On it, from a copy of the same version's source: `python3 server/peerwork.py serve` (port 47620,
-`--workers N` processes; it downloads its own map data). On the computer you play on, set `BNGE_PEERS` to the
-helpers before starting BeamNG.Earth, for example `BNGE_PEERS=192.168.1.20:47620,192.168.1.21:47620`. Helpers
-running other code are left out, and anything a helper fails on is built on your own computer. Only use helpers on a
-network you trust: the connection is not encrypted.
-
 ### Developer setup
 Rail-crossing props can be regenerated with `python3 tools/build_rail_crossing_props.py`;
 their lettering uses the bundled DejaVu Sans Bold font on every platform.
@@ -616,15 +609,6 @@ running the same BeamNG.Earth version with the same settings. A server can also 
 `.bnge` files in `Resources/Server/BeamNGEarth/bake/`), and the machine running the server can build ahead of
 the players itself (the share helper, below).
 
-<!-- v1 shared world building: commented out 2026-10-27 (off since 2026-10-23; not coming back for a while).
-**Sharing the work** (turned off for now: each player builds their own world)**:** players near each other share one
-world origin and split the building of the distant landscape (each piece is built once and sent to the others; faster computers take more), while a player far from
-everyone builds their own. For that the other players must reach your computer on a TCP port, 47621 unless the server
-picks another (the server tells your app which): on the same network it just works; over the internet, forward that
-port in your router, or you simply build everything yourself. A port of your own: set the environment variable
-`BNGE_SHARE_PORT` before starting the app.
--->
-
 **Hosting a server:** download `BeamNG.Earth-BeamMP-Server-<version>.zip` from the
 [Releases](https://github.com/TecnaGamer/BeamNG.Earth/releases) page and follow the guide inside
 (`BeamNG.Earth-README.md`). In short: unzip it into a BeamMP server's folder, set
@@ -643,10 +627,6 @@ checksum BeamMP publishes), its licence and source, and a `ServerConfig.toml` wi
 With Docker: `ghcr.io/tecnagamer/beamng.earth-server:<version>`, the Linux host bundle in a container, set up through
 its environment (`BEAMMP_AUTH_KEY`, `BEAMMP_NAME`, `BNGE_WEATHER`, ...; see "Docker" in the server zip's guide,
 [beammp/README.md](beammp/README.md#docker)).
-
-**Shared road plans** (experimental, off by default): `BeamNG.Earth --world-cache export|serve|fetch|verify` packs
-the road plans one machine has built into a checked bundle that other players can fetch and reuse, so their
-companions skip planning those roads; see [docs/SHARED_WORLD.md](docs/SHARED_WORLD.md).
 
 The server keeps its players' shared world building in `Resources/Server/BeamNGEarth/store` (up to `G.SHARE_STORE_MB`,
 2 GB by default; the pieces used longest ago go first) and sends at most `G.SHARE_OUT_KBPS` (1 MB/s) of it, both near

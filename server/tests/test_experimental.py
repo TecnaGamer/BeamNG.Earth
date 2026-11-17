@@ -6,7 +6,6 @@ import glob
 import json
 import os
 import re
-import socket
 import sys
 import tempfile
 import types
@@ -49,8 +48,6 @@ def fresh_keys():
         revisit._code.clear()
     import bakepack
     bakepack._switches.clear()
-    import peerwork
-    peerwork._switches.clear()
 
 
 class ChoiceTest(unittest.TestCase):
@@ -174,8 +171,13 @@ class KeysTest(unittest.TestCase):
             fresh_keys()
             doc = decisions.vkey_doc(dict(versions))
             v1 = decisions.vkey(dict(versions))
-            self.assertEqual(doc["switches"], revisit.switches_key())
+            self.assertEqual(doc["switches"], revisit.plans_switches_key())
         self.assertNotEqual(v0[0], v1[0], "a player with a switch on never reads the archives built with the defaults")
+        # (... unless the switch changes no plan and no fact: revisit.PLAN_NEUTRAL, tests/test_plan_neutral.py)
+        with mock.patch.dict(os.environ, experimental.env_for({"expCatenary": True})):
+            fresh_keys()
+            self.assertIn("BNE_CATENARY", revisit.PLAN_NEUTRAL)
+            self.assertEqual(decisions.vkey(dict(versions))[0], v0[0])
 
     def test_baked_packs_need_the_same_switches(self):
         import bakepack
@@ -201,23 +203,6 @@ class KeysTest(unittest.TestCase):
         with mock.patch.dict(os.environ, {"BNE_ROADZ_HK": "off", "BNE_HKDTM": "off", "BNE_BRIDGE_PROFILE": "curve"}):
             fresh_keys()
             self.assertEqual(bakepack._expect_for(MD(), "w1s1")["switches"], e0["switches"])
-
-    def test_helper_refuses_other_switches(self):
-        import peerwork
-        helper = peerwork.Helper.__new__(peerwork.Helper)
-        helper.workers = 1
-        a, b = socket.socketpair()
-        self.addCleanup(a.close)
-        self.addCleanup(b.close)
-        a.settimeout(5)
-        fresh_keys()
-        peerwork.send_msg(a, {"op": "hello", "protocol": peerwork.PROTOCOL, "version": peerwork.version(),
-                              "code": peerwork.code_id(), "switches": "0123456789abcdef"})
-        helper.handle(b, ("127.0.0.1", 0))
-        h, _ = peerwork.recv_msg(a)
-        self.assertFalse(h["ok"])
-        self.assertIn("build switches", h["error"])
-        self.assertEqual(h["switches"], peerwork.switches())
 
     def test_decoded_elevation_mirror(self):
         import dem

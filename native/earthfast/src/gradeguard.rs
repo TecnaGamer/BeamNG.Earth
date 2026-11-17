@@ -761,7 +761,7 @@ mod tests {
         let mut z = base.clone();
         for i in 60..140 {
             let t = (i - 60) as f64 / 80.0; // 160 m long, 6 m deep: 11.8 % at the steepest
-            z[i] = 20.0 - 6.0 * (std::f64::consts::PI * t).dsin().powi(2);
+            z[i] = 20.0 - 6.0 * (std::f64::consts::PI * t).dsin().sq();
         }
         let (out, _) = run(&[(p, z.clone(), base, 0.09, 40.0, 0.75, 14, [false, false])], 3.0);
         assert!(out[100] < 14.1, "dip {}", out[100]);
