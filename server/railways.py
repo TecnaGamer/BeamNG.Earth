@@ -222,7 +222,8 @@ def grade_plans(frame, cells, box, elev, load=None):
     the grader's DEM), for grading.Grader to lay the ground to (the cutting's walls back from the track, the ramps'
     embankments filled). tile_mesh then finds the ground at its bed. Pure given elev."""
     cells = list(cells)
-    tunnels = road_underpasses(frame, cells, box, GRADE_REACH_M)
+    tcls = []
+    tunnels = road_underpasses(frame, cells, box, GRADE_REACH_M, classes=tcls)
     worn = {}
     rails = parts(frame, cells, box, reach=GRADE_REACH_M, clip=True, worn=worn, underpasses=tunnels)
     if not rails:
@@ -253,7 +254,7 @@ def grade_plans(frame, cells, box, elev, load=None):
         return out
     pad = GRADE_HALF_M + 15.0
     out = []
-    tunnels = tunnels + coarse_underpasses(frame, cells, box, rails, GRADE_REACH_M)
+    tunnels = raising_underpasses(tunnels, tcls) + coarse_underpasses(frame, cells, box, rails, GRADE_REACH_M)
     prof = _beds(frame, rails, ground, tunnels, load, elev, raw=ground)
     if railxing.ENABLED:        # (the bed flush with the road at a level crossing: the ground is graded to it, else the
         prof = _flushed(frame, cells, box, rails, prof, ground, tunnels)     # ballast and sleepers lay under the ground)
@@ -402,8 +403,26 @@ def _tunnel_tagged(feats):
     return got
 
 
-def road_underpasses(frame, cells, box, reach=REACH_M):
-    """Short road tunnels near box as (xy, half width), including source tunnels made ground by gradesep."""
+# A railway over a road the map has in a short tunnel stays at its bed, the road under dips (grading's _lower_underpasses,
+# _over_mapped_underpass: the same test): only a motorway's or a trunk's tunnel (never lowered, grading.APPROACH_SKIP)
+# raises the track over it. Raised over every such tunnel, the track stood 4.7 m up on Popoli's two short bridge pieces
+# over the SR17 and a service road while grading left both roads at the ground under them: the trucks hit the decks and the
+# track stepped 4.5-5.2 m down to the ground beside them (the user, 2026-11-16: "rail are continuous like roads").
+TUNNEL_AT_GRADE_ON = os.environ.get("BNE_RAIL_TUNNEL_AT_GRADE", "on") != "off"
+RAISE_OVER = ("motorway", "trunk")      # (grading.APPROACH_SKIP)
+
+
+def raising_underpasses(tunnels, classes):
+    """The road tunnels of road_underpasses (classes: their road classes, its list) the track is raised over: a motorway's
+    or a trunk's (TUNNEL_AT_GRADE_ON), every one without the rule."""
+    if not TUNNEL_AT_GRADE_ON:
+        return list(tunnels)
+    return [t for t, c in zip(tunnels, classes) if str(c) in RAISE_OVER]
+
+
+def road_underpasses(frame, cells, box, reach=REACH_M, classes=None):
+    """Short road tunnels near box as (xy, half width), including source tunnels made ground by gradesep. classes: a
+    list that gets each one's road class, in the same order (grading's UNDER_TUNNEL_FIXED_ON)."""
     near = (box[0] - reach, box[1] - reach, box[2] + reach, box[3] + reach)
     out, seen = [], set()
     for feats in cells:
@@ -443,6 +462,8 @@ def road_underpasses(frame, cells, box, reach=REACH_M):
                 if key not in seen:
                     seen.add(key)
                     out.append((xy, sp.width / 2 + UNDERPASS_SIDE_M))
+                    if classes is not None:
+                        classes.append(sp.cls)
     return out
 
 
@@ -1331,6 +1352,8 @@ def profile(rails, ground, underpasses=()):
                 zb[n] = _envelope(_arc(xy), req)
         for node, h in ((a, zb[n][0]), (b, zb[n][-1])):
             seeds[node] = max(seeds.get(node, -np.inf), float(h))
+    if seeds and STEPLESS_ON:
+        return list(zip(_stepless(rails, edges, adj, zb, ends), zgs))
     if seeds:                                   # the decks' heights out along the track, GRADE per metre down
         top = max(seeds.values())
         d = roads._dijkstra(adj, {n: (top - h) / GRADE for n, h in seeds.items()})
@@ -1351,6 +1374,80 @@ def profile(rails, ground, underpasses=()):
                 lift = np.maximum(ltop - GRADE * (dl[a] + s), ltop - GRADE * (dl[b] + s[-1] - s))     # ramps to it
                 zb[n] = zb[n] + np.clip(lift, 0.0, SEED_LIFT_MAX_M)
     return list(zip(zb, zgs))
+
+
+# The decks' heights carried along the track as one pass to a fixed point: every deck enveloped to its reach, the ground
+# track lifted to the decks' final ends (not their heights before the reach: a deck flanked by spans laid flat between ground
+# ends seeded the ground at its own height, so the ramps were never built and the spans, raised after, stepped 4.5-5.5 m
+# down to the ground track at Popoli), the decks riding the lifted track (a short bridge on a ramp keeps to it), again until
+# no end moves. Every part's bed equal at every node: never a step. Off with BNE_RAIL_STEPLESS=off (the single pass).
+STEPLESS_ON = os.environ.get("BNE_RAIL_STEPLESS", "on") != "off"
+STEPLESS_PASSES = 6
+STEPLESS_TOL_M = 0.005
+
+
+def _stepless(rails, edges, adj, zb, ends):
+    """profile's last step (see STEPLESS_ON): the beds zb of every part (decks with their clearance already in them), the
+    ground parts' beds at the nodes ends (node -> [bed]), the parts' chain graph (edges, adj): the beds, every part's end
+    equal at each node, the decks' heights run out at GRADE per metre along the track."""
+    zb = [np.asarray(z, np.float64).copy() for z in zb]
+    kind = [r[2] for r in rails]
+    req = {n: zb[n].copy() for n in range(len(rails)) if kind[n] == "bridge"}       # (a deck no lower than this)
+    base = {n: zb[n].copy() for n in range(len(rails)) if kind[n] == "ground"}      # (a ground track's own bed)
+    own = {node: float(np.mean(v)) for node, v in ends.items()}
+    # (a lift runs out along the ground track only, not over a deck: carried across one at GRADE it lifted the ground at
+    # the deck's far end, which raised the deck's end, which lifted more: a rack line up a 10 % slope ran away, #1051)
+    gadj = [[] for _ in adj]
+    for n in base:
+        a, b, s = edges[n]
+        gadj[a].append((b, float(s[-1])))
+        gadj[b].append((a, float(s[-1])))
+    for _ in range(STEPLESS_PASSES):
+        seeds = {}
+        for n in req:
+            a, b, s = edges[n]
+            for node, h in ((a, zb[n][0]), (b, zb[n][-1])):
+                seeds[node] = max(seeds.get(node, -np.inf), float(h))
+        if not seeds:
+            break
+        top = max(seeds.values())
+        d = roads._dijkstra(adj, {n: (top - h) / GRADE for n, h in seeds.items()})
+        lifts = {node: h - own[node] for node, h in seeds.items() if node in own and h - own[node] > 0.0}
+        dl = None
+        if lifts:
+            ltop = max(lifts.values())
+            dl = roads._dijkstra(gadj, {node: (ltop - v) / GRADE for node, v in lifts.items()})
+        da = roads._dijkstra(gadj, {node: (top - h) / GRADE for node, h in seeds.items()})
+        moved = 0.0
+        for n in base:                          # the ground track: its own bed, lifted on the ramps to the decks ...
+            a, b, s = edges[n]
+            new = base[n]
+            if dl is not None:
+                lift = np.maximum(ltop - GRADE * (dl[a] + s), ltop - GRADE * (dl[b] + s[-1] - s))
+                new = base[n] + np.clip(lift, 0.0, SEED_LIFT_MAX_M)
+                # ... no higher than the decks' own heights run out along it at GRADE (or its bed): a lift added to a
+                # mound between two bridges stood its top 2 m over both decks (Compiegne's roundabout island)
+                ramp = np.maximum(top - GRADE * (da[a] + s), top - GRADE * (da[b] + s[-1] - s))
+                new = np.minimum(new, np.maximum(base[n], ramp))
+            moved = max(moved, float(np.max(np.abs(new - zb[n]))))
+            zb[n] = new
+        at = {}                                 # node -> the ground track's bed there now
+        for n in base:
+            a, b, _s = edges[n]
+            at.setdefault(a, []).append(float(zb[n][0]))
+            at.setdefault(b, []).append(float(zb[n][-1]))
+        for n in req:                           # a deck: its clearance, its reach, and the track it meets at its ends
+            a, b, s = edges[n]
+            reach = np.maximum(top - GRADE * (d[a] + s), top - GRADE * (d[b] + s[-1] - s))
+            za = max([float(zb[n][0])] + at.get(a, []))
+            zb_ = max([float(zb[n][-1])] + at.get(b, []))
+            chord = za + (zb_ - za) * s / max(float(s[-1]), 1e-9)
+            new = _envelope(s, np.maximum(np.maximum(req[n], reach), chord))
+            moved = max(moved, float(np.max(np.abs(new - zb[n]))))
+            zb[n] = new
+        if moved <= STEPLESS_TOL_M:
+            break
+    return zb
 
 
 RAIL_TOP_M = BALLAST_H - SLEEPER_SINK + SLEEPER_H + RAIL_H    # the rails' top over the bed
@@ -2463,7 +2560,8 @@ def tile_mesh(frame, tx, ty, cells, ground, sign_style=None, far_ground=None, re
     every tile (railprofile.py)."""
     cells = list(cells)
     box = roads.tile_bbox(tx, ty)
-    tunnels = road_underpasses(frame, cells, box)
+    tcls = []
+    tunnels = road_underpasses(frame, cells, box, classes=tcls)
     ground = _mixed(ground, far_ground, box)
     ex = (box[0] - roads.OVERLAP, box[1] - roads.OVERLAP, box[2] + roads.OVERLAP, box[3] + roads.OVERLAP)
     worn, gauges = {}, {}
@@ -2477,7 +2575,8 @@ def tile_mesh(frame, tx, ty, cells, ground, sign_style=None, far_ground=None, re
         walk = [w for w in walk if not np.asarray(under(w[1]), bool).mean() >= 0.5]
     if not rails and not walk:
         return (None, []) if return_decks else None
-    prof = (_beds(frame, rails, ground, tunnels + coarse_underpasses(frame, cells, box, rails), load, bed_elev)
+    prof = (_beds(frame, rails, ground, raising_underpasses(tunnels, tcls) + coarse_underpasses(frame, cells, box, rails),
+                  load, bed_elev)
             if rails else [])
     keep = [n for n in range(len(rails)) if n not in _drop]
     if _drop:                                       # (a retry past the vertex budget: the tracks of lowest rank left out)

@@ -812,14 +812,94 @@ class RoadUnderpassTest(unittest.TestCase):
     def tearDown(self):
         railways._GROUND_MEMO.clear()
 
-    def features(self, split=False, tunnel=True, parallel=False):
+    def features(self, split=False, tunnel=True, parallel=False, cls="trunk"):
         track = [[(-200, 100), (120, 100)], [(120, 100), (450, 100)]] if split else [[(-200, 100), (450, 100)]]
         road = [(110, 90), (130, 90)] if parallel else [(120, 90), (120, 110)]
-        return features(track + [road], ["standard_gauge"] * len(track) + ["secondary"],
+        return features(track + [road], ["standard_gauge"] * len(track) + [cls],
                         subtypes=["rail"] * len(track) + ["road"],
                         flags=[(len(track), "is_tunnel")] if tunnel else [])
 
+    def test_over_a_streets_tunnel_the_track_stays_at_its_bed(self):
+        """A railway over a road the map has in a short tunnel, not a trunk's or a motorway's: the track on its bed, the
+        span and its deck still drawn over the road (grading dips the road under it: _lower_underpasses). Popoli, the
+        user 2026-11-16: raised 4.7 m on two short pieces over the SR17, the track stepped 4.5-5.2 m to the ground."""
+        f = self.features(cls="secondary")
+        box = roads.tile_bbox(0, 0)
+        cls = []
+        tunnels = railways.road_underpasses(FRAME, [f], box, classes=cls)
+        self.assertEqual(cls, ["secondary"])
+        self.assertEqual(railways.raising_underpasses(tunnels, cls), [])
+        parts = railways.parts(FRAME, [f], box)
+        self.assertTrue(any(p[2] == "bridge" for p in parts), "the span over the road is kept")
+        prof = railways.profile(parts, flat, railways.raising_underpasses(tunnels, cls))
+        for (_, _, _kind, _xy), (z, _) in zip(parts, prof):
+            self.assertLess(float(np.abs(z - z[0]).max()), 0.1, "the bed level, no raise")
+        P, T, _uv, _mats, _M = railways.tile_mesh(FRAME, 0, 0, [f], flat)
+        tri = P[T]
+        x = float(tunnels[0][0][:, 0].mean())
+        over = (tri[:, :, 0].min(1) < x + 3) & (tri[:, :, 0].max(1) > x - 3)
+        self.assertTrue(over.any())
+        self.assertLess(float(tri[over, :, 2].max()), 10 + 2.0, "the track at the ground's level over the road")
+
+    def test_two_raised_pieces_meet_the_track_with_no_step(self):
+        """Two short bridge pieces 25 m apart over trunk tunnels, the map's track split at every piece's end (Popoli's
+        layout): every part's bed equal at each node and no grade over GRADE anywhere (railways.STEPLESS_ON); the pieces
+        raised, the track ramped up to them. With the single pass the spans flanking a deck stepped 4.5 m to the ground."""
+        track = [[(-300, 100), (100, 100)], [(100, 100), (121, 100)], [(121, 100), (146, 100)],
+                 [(146, 100), (167, 100)], [(167, 100), (600, 100)]]
+        roads_ = [[(110, 85), (110, 115)], [(156, 85), (156, 115)]]
+        f = features(track + roads_, ["standard_gauge"] * 5 + ["trunk"] * 2, subtypes=["rail"] * 5 + ["road"] * 2,
+                     flags=[(1, "is_bridge"), (3, "is_bridge"), (5, "is_tunnel"), (6, "is_tunnel")])
+        box = roads.tile_bbox(0, 0)
+        cls = []
+        tunnels = railways.road_underpasses(FRAME, [f], box, classes=cls)
+        parts = railways.parts(FRAME, [f], box)
+        prof = railways.profile(parts, flat, railways.raising_underpasses(tunnels, cls))
+        lines = [xy for *_, xy in parts]
+        _nodes, edges, _adj = roads._chain_graph(lines)
+        at = {}
+        for (a, b, _s), (z, _g) in zip(edges, prof):
+            at.setdefault(a, []).append(float(z[0]))
+            at.setdefault(b, []).append(float(z[-1]))
+        for node, zs in at.items():
+            self.assertLess(max(zs) - min(zs), 0.02, f"a step at node {node}: {zs}")
+        for (_, _, _kind, xy), (z, _) in zip(parts, prof):
+            if len(z) > 1:
+                self.assertLessEqual(float((np.abs(np.diff(z)) / np.maximum(np.diff(railways._arc(xy)), 1e-9)).max()),
+                                     railways.GRADE + 1e-6)
+        top = max(float(z.max()) for z, _ in prof)
+        self.assertGreater(top, 10 + railways.UNDERPASS_CLEAR_M, "the pieces raised over the trunk")
+
+    def test_a_roundabout_crossed_twice_keeps_the_track_level_with_its_decks(self):
+        """Compiegne (the roundabout the Rochy-Conde - Soissons line crosses twice on bridges): a 14 m bridge over the ring,
+        a mound on the island, an 8 m bridge over the ring again. The decks' lift over the island's track was carried
+        across the bridges onto the tracks beyond: the west track ended 3 m over its deck, a wall of ballast across the
+        roundabout. Now every end meets its deck and the track out west keeps its embankment's height."""
+        def ground(xy):
+            x = np.asarray(xy, float).reshape(-1, 2)[:, 0]
+            z = np.full(len(x), 36.6)
+            z[x <= -3] = 41.0
+            z[(x > -3) & (x < 14)] = 33.5
+            isl = (x >= 14) & (x <= 38)
+            z[isl] = 37.4 + 2.6 * np.sin(np.pi * (x[isl] - 14) / 24)
+            z[(x > 38) & (x < 46)] = 34.7
+            return z
+
+        def line(a, b):
+            return railways._resample(np.array([[a, 0.0], [b, 0.0]]), railways.STEP_M)
+        rails = [("r", "standard_gauge", "ground", line(-200, 0)), ("r", "standard_gauge", "bridge", line(0, 14)),
+                 ("r", "standard_gauge", "ground", line(14, 38)), ("r", "standard_gauge", "bridge", line(38, 46)),
+                 ("r", "standard_gauge", "ground", line(46, 250))]
+        prof = railways.profile(rails, ground)
+        for n in range(len(rails) - 1):
+            self.assertAlmostEqual(float(prof[n][0][-1]), float(prof[n + 1][0][0]), delta=0.02, msg=f"a step after part {n}")
+        west = rails[0][3][:, 0] < -100
+        self.assertLess(float(np.abs(prof[0][0][west] - 41.0).max()), 0.1, "the west track on its embankment")
+        decks = max(float(prof[1][0].max()), float(prof[3][0].max()))
+        self.assertLessEqual(float(prof[2][0].max()), decks + 0.05, "no hump on the island over the decks")
+
     def test_span_replaces_embankment_and_has_clearance(self):
+        """... and over a trunk's tunnel (never lowered: grading.APPROACH_SKIP) the track rises over it."""
         f = self.features()
         box = roads.tile_bbox(0, 0)
         tunnels = railways.road_underpasses(FRAME, [f], box)

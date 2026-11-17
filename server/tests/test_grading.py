@@ -1107,6 +1107,76 @@ class OverTunnels(unittest.TestCase):
         self.assertIsNone(grading.Grader._over_tunnels(g, np.array([50.0]), np.array([30.0])))
 
 
+class RoadOverTunnelTest(unittest.TestCase):
+    """A road crossing over a covered tunnel keeps its own cutting over the tube; the tunnel's own road (its approaches)
+    still leaves the ground over the tube uncut. The stage road over the A25's twin tubes at Popoli (2026-11-14): its
+    cutting was undone in a strip over each tube, the hillside standing back up across the road."""
+
+    def setUp(self):
+        from test_roads import M_LON, M_LAT
+
+        def ground(la, lo):
+            e = (np.asarray(lo) - LON) * M_LON                          # along the tunnel, -500 .. 500
+            n = (np.asarray(la) - LAT) * M_LAT
+            hill = 100.0 + 60.0 * np.clip(1.0 - np.abs(e) / 400.0, 0.0, 1.0)
+            return hill + 6.0 * np.exp(-(n / 8.0) ** 2)                 # a bump on the line of the road across
+        self.ground = ground
+
+    def change(self, f, pts):
+        g = grading.Grader(FRAME, FakeMD(f), self.ground)
+        e = np.array([p[0] for p in pts], np.float64)
+        n = np.array([p[1] for p in pts], np.float64)
+        la, lo, _ = FRAME.enu_to_geodetic(e, n, 0.0)
+        base = self.ground(la, lo)
+        return g.apply(la, lo, base.copy()) - base
+
+    def tunnel(self, crossing=True):
+        lines = [[(-500, 0), (500, 0)]] + ([[(0, -150), (0, 150)]] if crossing else [])
+        return features(lines, ["primary", "secondary"][:len(lines)], flags=[(0, "is_tunnel", 0.25, 0.75)],
+                        ids=["tube", "across"][:len(lines)])
+
+    def test_the_road_across_keeps_its_cutting_over_the_tube(self):
+        d = self.change(self.tunnel(), [(0.0, 0.0), (0.0, 3.0)])
+        self.assertLess(float(d[0]), -2.0, "the bump under the road's centre cut away, as on any road")
+        self.assertLess(float(d[1]), -2.0, "... and under its lane edge")
+
+    def test_the_tunnels_own_road_does_not_cut_over_the_tube(self):
+        # (every 2 m: the approach's cutting reached ~6 m in over the cover, between samples 20 m apart)
+        pts = [(x, y) for x in range(-246, 247, 2) for y in (-4.0, 0.0, 4.0)]
+        d = self.change(self.tunnel(crossing=False), pts)
+        self.assertGreater(float(d.min()), -grading.OVER_TUNNEL_SMALL_M, "the ground over the tube not cut down")
+
+    def test_own_roads_per_cell(self):
+        # (each cell's verdict from its own plans: a road ending at an end of a tunnel's plans (a portal, or a join
+        # between its sections: the Peripherique's trunk reaches its tube at one) is its approach; one ending 3.5 m off
+        # an end, or crossing over the tube, is not)
+        import threading
+
+        def plan(*xy):
+            return grading.Plan(np.array(xy, np.float64), np.zeros(len(xy)), 3.0)
+        tag = grading.TUNNEL_TAG
+        ps = [("g.0#1" + tag, plan((0, 0), (100, 0))),                 # a section, its ends joins
+              ("g.0#1" + tag + "m0", plan((0, 0), (4, 0))),            # mouth: portal at (0, 0), inner end (4, 0)
+              ("g", plan((-50, 0), (150, 0))),                         # the tunnel's own way
+              ("approach", plan((-80, 0), (0.5, 0))),                  # ends 0.5 m from the portal
+              ("at_join", plan((100, 40), (100, 0.5))),                # ends at the section's far join
+              ("at_inner", plan((4, 40), (4, 0.5))),                   # ends at the mouth plan's inner end
+              ("off_end", plan((40, 40), (40, 3.5))),                  # ends beside the tube, 3.5 m off its line
+              ("across", plan((50, -100), (50, 100)))]                 # crosses over the tube
+        g = types.SimpleNamespace(lock=threading.Lock(), cells={"c": ps}, _cell_plans=lambda k: ps)
+        got, own = grading._Planner._cell_own_roads(g, "c")
+        self.assertIs(got, ps)
+        self.assertEqual({f for f, _x, _y in own},
+                         {"g.0#1" + tag, "g.0#1" + tag + "m0", "g", "approach", "at_join", "at_inner"})
+        self.assertIs(grading._Planner._cell_own_roads(g, "c")[1], own, "made once per cell")
+
+    def test_a_tunnel_plans_feature(self):
+        # (a tunnel's plans are named for its sections, the map part's id (roads: f"{fid}.{n}") then "#k")
+        self.assertEqual(grading._tunnel_feature("35f45a70-54b2.9398624#1:tunm1"), "35f45a70-54b2")
+        self.assertEqual(grading._tunnel_feature("eeb16a87.0#0:tun"), "eeb16a87")
+        self.assertEqual(grading._tunnel_feature("tube"), "tube")
+
+
 class WallHeightTest(unittest.TestCase):
     def test_city_concrete_walls_full_height(self):
         """A major road's cutting in town keeps a full-height concrete wall (McGraw-Graben); stone walls elsewhere
@@ -1375,6 +1445,29 @@ class StreetRunsTest(unittest.TestCase):
         ring = [np.array(ln, float) for ln in ([(0, 0), (300, 0)], [(300, 0), (300, 300)], [(300, 300), (0, 300)],
                                                 [(0, 300), (0, 0)])]
         self.assertEqual(grading.street_runs(ring, ["tertiary"] * 4, [(0, 150.0, 5.0)]), ([(0, 150.0, 5.0)], []))
+
+    def test_a_dead_end_does_not_hold_the_dip_at_the_ground(self):
+        """Popoli's service road under the railway (2026-11-16): its west end, 38 m from the crossing, joins nothing; held
+        there the dip was 0.2 m deep. Free (free: a dead end), the run goes on straight past it by the longest ramp, and
+        the crossing keeps its arc along the run's start; a loose end that touches a line is held as before."""
+        lines = [np.array([(0.0, 0.0), (200.0, 0.0)]), np.array([(200.0, 0.0), (200.0, 200.0)]),
+                 np.array([(200.0, 0.0), (400.0, 0.0)])]
+        cls = ["service"] * 3
+        req = [(0, 38.0, 5.0)]
+        net, runs = grading.street_runs(lines, cls, req)
+        self.assertEqual(net, req, "(held at its dead end: no room for the dip, spread as before)")
+        touch = [np.asarray(ln) for ln in lines]
+        net, runs = grading.street_runs(lines, cls, req, free=lambda q, own: grading.dead_end(q, own, touch))
+        self.assertEqual(net, [])
+        xy, members, reqs = runs[0]
+        ext = grading.UNDER_MAX_DROP_M * np.pi / (2 * grading.UNDER_GRADE) + grading.UNDER_FLAT_M
+        np.testing.assert_allclose(xy[0], (-ext, 0.0))
+        np.testing.assert_allclose(xy[-1], (200.0, 0.0), err_msg="(the junction end held)")
+        self.assertAlmostEqual(reqs[0][1], ext + 38.0)
+        off = grading.underpass_offsets([xy], reqs, [(0, np.array([[38.0, 0.0]]))])[0]
+        self.assertLess(float(off[0]), -4.0, "the dip about as deep as asked at the crossing")
+        wall = touch + [np.array([(-2.0, -5.0), (-2.0, 5.0)])]          # (a line 2 m past the end: no dead end)
+        self.assertFalse(grading.dead_end(lines[0][0], lines[0], wall))
 
 
 class CoarseUnderpassTest(unittest.TestCase):

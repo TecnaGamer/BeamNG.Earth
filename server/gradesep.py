@@ -37,7 +37,8 @@ log = logging.getLogger("earthd.gradesep")
 MODE = os.environ.get("BNE_GRADESEP", "tunnels")
 ON = MODE == "on"
 TUNNELS = MODE in ("on", "tunnels")
-VERSION = 2             # in MapData.versions(): every cell's ranges (cell_facts) and tiles made again on a change
+VERSION = 3             # in MapData.versions(): every cell's ranges (cell_facts) and tiles made again on a change
+                        # (3: a road joined end to end with a short tunnel is no line over it, PORTAL_JOIN)
 DEM_ZOOM = 15
 SEP_M = 4.0             # m the upper line's ground stands above the lower one's (medians of four heights each)
 SIDE_M = 2.0            # m ... at least, on each side of each line
@@ -63,6 +64,14 @@ CUT_SIDE_M = (15.0, 25.0, 35.0, 45.0)  # m along the line over a longer one's cr
                             # (a dual carriageway's cutting is 40 m wide and more: Highway 3 at Hameenlinna)
 JOINED_ENDS = os.environ.get("BNE_GRADESEP_JOINED", "on") != "off"   # a junction over a tunnel: its arms' crossings
                             # within END_M of the node count for the underpass test (_underpasses)
+# A "crossing" of a short tunnel at an end of both lines is the road going on from the portal, not a line over the
+# tunnel: Overture splits a road at its tunnel's ends, and the kernel takes every touch of a short tunnel as a line over
+# it (no junction test there), so the road's own approaches got bridges that ran on along the joined road through the
+# underpass: the SR17 at Popoli (42.1710 N 13.8247 E) under the Rome-Pescara railway became a deck on the ground,
+# beneath the railway's own bridge over it. One feature's pieces are never paired (the kernel's group test); this
+# makes the pieces of a road split at its portals the same. A junction standing over a tunnel (JOINED_ENDS) touches
+# no end of the tunnel and is kept. BNE_GRADESEP_PORTAL_JOIN=off: as before.
+PORTAL_JOIN = os.environ.get("BNE_GRADESEP_PORTAL_JOIN", "on") != "off"
 NEAR_M = 60.0           # m round the cell's own lines that neighbours' lines are taken from
 RAIL_HALF_M = 2.5       # m: a track's half width (its ballast)
 
@@ -293,6 +302,10 @@ def _spans(md, key, feats):
     if not ON and len(cand):        # (tunnels only: the lines over a short tunnel, how 1; only those were tried)
         one = cand[:, 5] == 1.0
         cand, smp = cand[one], smp.reshape(-1, 8, 2)[one].reshape(-1, 2)
+    if PORTAL_JOIN and len(cand):
+        keep = ~_portal_joins(pts, starts, cand)
+        if not keep.all():
+            cand, smp = cand[keep], smp.reshape(-1, 8, 2)[keep].reshape(-1, 2)
     oi_l, oa_l, ob_l = oi.tolist(), oa.tolist(), ob.tolist()
     out, why = {}, []                   # (why: (row, from, to, how) for probes, feats._gradesep_why)
 
@@ -374,6 +387,24 @@ def _underpasses(md, frame, pts, starts, kinds, groups):
         np.ascontiguousarray(kinds, np.int64), np.ascontiguousarray(groups, np.int64),
         [TOUCH_M, END_M, PORTAL_OUT_M, SHORT_ROAD_TUNNEL_M, UNDERPASS_COVER_M, roads.TUNNEL_OPEN_COVER, SEP_M]
         + ([1.0] if JOINED_ENDS else []), list(CUT_SIDE_M), ground), bool)
+
+
+def _portal_joins(pts, starts, cand):
+    """Per candidate row (gradesep_candidates: line over, line under, arc on each, sin, how): True for a line over a
+    short tunnel (how 1) that meets it within END_M of an end of both lines, a road joined to the tunnel at its portal
+    (PORTAL_JOIN). Pure."""
+    out = np.zeros(len(cand), bool)
+    one = np.flatnonzero(cand[:, 5] == 1.0)
+    if not len(one):
+        return out
+    seg = dnp.hypot(*np.diff(pts, axis=0).T)
+    cum = np.r_[0.0, np.cumsum(seg)]
+    length = cum[np.asarray(starts[1:], np.int64) - 1] - cum[np.asarray(starts[:-1], np.int64)]
+    for r in one.tolist():
+        up, lo = int(cand[r, 0]), int(cand[r, 1])
+        su, sl = float(cand[r, 2]), float(cand[r, 3])
+        out[r] = (min(su, length[up] - su) < END_M) and (min(sl, length[lo] - sl) < END_M)
+    return out
 
 
 def _dem(md):

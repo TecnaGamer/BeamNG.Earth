@@ -214,6 +214,31 @@ class UnderpassTest(unittest.TestCase):
         finally:
             gradesep.JOINED_ENDS = joined
 
+    def test_the_road_going_on_from_an_underpass_s_portals_stays_on_the_ground(self):
+        # The SR17 at Popoli (42.1710 N 13.8247 E) under the Rome-Pescara railway: the map splits the road at its 20 m
+        # underpass, and its pieces either side met the tunnel at its ends. Taken as lines over it, they got bridges
+        # that ran on along the road through the underpass: the road going under was a deck on the ground (PORTAL_JOIN)
+        lines = [[(0.0, -200.0), (0.0, -10.0)], [(0.0, -10.0), (0.0, 10.0)], [(0.0, 10.0), (0.0, 200.0)],
+                 [(-200.0, 0.0), (200.0, 0.0)]]
+        classes = ["primary", "primary", "primary", "secondary"]
+        f = hooked(features(lines, classes, flags=[(1, "is_tunnel")]), lambda e, n: np.zeros_like(e))
+        self.assertEqual([k for _, _, k in roads.level_ranges(f, 3)], ["bridge"], "the road over it: a bridge")
+        self.assertEqual([roads.level_ranges(f, i) for i in (0, 1, 2)], [[], [], []], "the road under it: ground")
+        joined, gradesep.PORTAL_JOIN = gradesep.PORTAL_JOIN, False
+        try:
+            g = hooked(features(lines, classes, flags=[(1, "is_tunnel")]), lambda e, n: np.zeros_like(e))
+            self.assertIn("bridge", [k for i in (0, 1, 2) for _, _, k in roads.level_ranges(g, i)])
+        finally:
+            gradesep.PORTAL_JOIN = joined
+
+    def test_portal_joins_are_the_rows_at_an_end_of_both_lines(self):
+        pts = np.array([[0.0, -200.0], [0.0, -10.0], [0.0, -10.0], [0.0, 10.0], [-200.0, 0.0], [200.0, 0.0]])
+        starts = np.array([0, 2, 4, 6])
+        cand = np.array([[0, 1, 190.0, 0.0, 0.0, 1.0],     # the road going on from the portal: a join
+                         [2, 1, 200.0, 10.0, 1.0, 1.0],    # a line over the tunnel's middle
+                         [0, 2, 190.0, 0.0, 1.0, 0.0]])    # (not a line over a short tunnel: left to the kernel)
+        self.assertEqual(gradesep._portal_joins(pts, starts, cand).tolist(), [True, False, False])
+
     def test_a_long_tunnel_on_flat_ground_stays_a_tunnel(self):
         # the same on a flat DEM (a covered tunnel the DEM does not show): no bridge over it
         f = hooked(features([[(-200.0, 0.0), (200.0, 0.0)], [(0.0, -50.0), (0.0, 0.0)], [(0.0, 0.0), (0.0, 50.0)]],
