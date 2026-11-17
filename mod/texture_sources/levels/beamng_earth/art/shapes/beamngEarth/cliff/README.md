@@ -89,3 +89,15 @@ detail layers while retaining the authored color, normal, roughness and AO maps.
 Texture names use a family, purpose and channel, for example
 `arid_near_base.color.webp`. Outcrops are embedded large rocks, companions are
 their smaller neighbours, and rubble consists of settled stones at cliff toes.
+
+### Limestone normal microrelief
+
+The limestone normal includes an offline fine-relief pass from
+`tools/enhance_limestone_normal.py`: small authored chips are strengthened and
+seeded, spatially varied grain is baked into the same 4096-square normal. The
+separate material detail-normal layer, color, roughness and occlusion are unchanged.
+The result is renormalized and converted to BC5 with the standard installer.
+
+To reproduce this pass, extract `limestone_cut.normal.webp` from commit
+`f63626c8` to a separate input file, then run the tool with that input and the
+source asset as the output. Do not apply the pass repeatedly to its own result.
