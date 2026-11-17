@@ -77,16 +77,25 @@ passes everywhere: 351 roads made steep against 575.
 - **Tokyo, made steep 54 → 69 and grade rows broken 51 → 101.** Where a ramp's foot is held (a node,
   a deck end, a cut end), it cannot lengthen, and its grade breaks instead. It is still well under the
   passes' 164.
-- **Lagos, the largest step between samples, 0.23 → 1.31 m** (the passes have 3.34 m), and ground
-  max 7.5 → 8.8 m. These are not looked at yet. The metrics tool doesn't say where the step is.
+- **Lagos, the largest pitch change ("bump max", the second difference of the grade: not a step in
+  m) 0.23 → 1.31** (the passes have 3.34), and ground max 7.5 → 8.8 m. Both are on one road (6.43185,
+  3.40885), the one the 160 % was on. It is 26 m long, from a junction on its ground at 4.43 m to its
+  own deck's end at 12.03 m: 29 % over an 18 % ceiling, a contradiction in the inputs. The approach
+  rule raises every sample but the junction's by 6.4 m, and the passes keep that as a 6.4 m step in
+  3.7 m. Without floors, the solve left the road on its ground under its own deck's end. With them,
+  it raises the junction by 2.3 m and overshoots the deck's end by 1.3 m (13.32 m). The kernel's
+  tension term (`length`, tried at 0.1 to 3 times the hold at the spread) changes that by under
+  0.12 m, and makes it worse, so it is not the fix here. `grade_metrics` now reports where the worst
+  pitch change and the largest distance from the ground are (`bump.worst`, `ground.worst`, with
+  lat/lon).
 - The 6 clearance rows still broken in Tokyo are under 0.4 m. The worst one is a single sample 0.46 m
   over its neighbours, which is both a floor and a cap in the passes, and the solve evens it out.
 
 ## Next
 
-1. Lagos' step: have `grade_metrics` report where the largest step is, then look at it.
-2. Seams: one value shared by both cells at a cut end.
-3. The overshoot past a held point: try the kernel's tension term (`length`).
-4. Amsterdam's stacked junction (52.36678, 4.87054).
-5. The RFC's step 3 (opt-in): the caps and floors come from the passes' heights now. Without the
+1. Seams: one value shared by both cells at a cut end.
+2. The overshoot past a held point. The tension term did not help on Lagos' road. Try it on
+   `test_vsolve`'s case (1.2 m past a pin) before changing anything.
+3. Amsterdam's stacked junction (52.36678, 4.87054).
+4. The RFC's step 3 (opt-in): the caps and floors come from the passes' heights now. Without the
    passes (step 4), they will have to come from the decks' own heights.
