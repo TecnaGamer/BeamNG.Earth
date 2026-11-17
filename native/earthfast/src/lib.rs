@@ -6501,6 +6501,7 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 309: gg_poly_axes(..., skip): linear (a histogram of the edge directions), all of a polygon's rings, clip edges left
     // out (Codex review of 308)
     // 342: opt-in dynamic cliff generation, placement and material preparation.
+    // 343: canyon contact strips follow the rendered terrain-blended rim.
     m.add_function(wrap_pyfunction!(clifflod::cliff_lod_edges, m)?)?;
     m.add_function(wrap_pyfunction!(clifflod::cliff_lod_prepare, m)?)?;
     m.add_function(wrap_pyfunction!(clifflod::cliff_lod_trial, m)?)?;
@@ -6599,6 +6600,6 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 314: stage 5: ggshade (gg_sun_fit, gg_relight: the capture sun's shadows out of the Sentinel-2 colour);
     // gen_ground's LOST texels, its crowns' shading from no direction
     // 322: both of the above merged (321 vegetation clumps + 313/314 generated ground stages 4-5)
-    m.add("VERSION", 342)?;
+    m.add("VERSION", 343)?;
     Ok(())
 }

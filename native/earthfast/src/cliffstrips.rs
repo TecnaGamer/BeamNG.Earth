@@ -9,6 +9,8 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 type Point = [f64; 4];
 type Poly = Vec<Point>;
 const EPS: f64 = 1e-8;
+const CANYON_FAMILY: usize = 3;
+const RIM_HALF_TEXEL: f64 = 0.5 / 16.0;
 const MAX_MASK_VERTICES: usize = 100_000;
 const CONTACT_WELD_M: f64 = 0.03;
 const MIN_CONTACT_RUN_M: f64 = 4.0;
@@ -62,7 +64,7 @@ pub fn cliff_contact_map<'py>(
 /// Select nearby receivers within a shared tile budget. Preserve contour order
 /// and skip oversized patches so smaller contacts can still use the remainder.
 #[pyfunction]
-#[pyo3(signature = (positions, triangles, colors, families, means, runs, offsets, margin, budget, byte_colors, normals=None))]
+#[pyo3(signature = (positions, triangles, colors, families, means, runs, offsets, margin, budget, byte_colors, normals=None, canyon_rim=None))]
 pub fn cliff_contact_patches<'py>(
     py: Python<'py>,
     positions: PyReadonlyArray2<'py, f64>,
@@ -76,6 +78,7 @@ pub fn cliff_contact_patches<'py>(
     budget: usize,
     byte_colors: bool,
     normals: Option<PyReadonlyArray2<'py, f64>>,
+    canyon_rim: Option<(PyReadonlyArray2<'py, f64>, PyReadonlyArray2<'py, f64>)>,
 ) -> PyResult<
     Vec<(
         usize,
@@ -94,6 +97,9 @@ pub fn cliff_contact_patches<'py>(
         offsets.as_array(),
     );
     let normals = normals.as_ref().map(|n| n.as_array());
+    let canyon_rim = canyon_rim
+        .as_ref()
+        .map(|(colors, uv)| (colors.as_array(), uv.as_array()));
     if p.ncols() != 3
         || tri.ncols() != 3
         || color.dim() != p.dim()
@@ -103,6 +109,11 @@ pub fn cliff_contact_patches<'py>(
         || normals
             .as_ref()
             .is_some_and(|n| n.dim() != p.dim() || n.iter().any(|v| !v.is_finite()))
+        || canyon_rim.as_ref().is_some_and(|(c, uv)| {
+            c.dim() != p.dim()
+                || uv.dim() != (p.nrows(), 2)
+                || c.iter().chain(uv.iter()).any(|v| !v.is_finite())
+        })
         || tri.iter().any(|i| *i < 0 || *i as usize >= p.nrows())
         || families
             .iter()
@@ -201,9 +212,25 @@ pub fn cliff_contact_patches<'py>(
                         .as_ref()
                         .map_or(n[k % 3] / length * sign, |n| n[[vertex, k % 3]])
                         as f32;
-                    albedo[[i, k]] =
-                        (crate::cliffappearance::linear(color[[vertex, k % 3]] / divisor)
-                            * means[[families[id] as usize, k % 3]]) as f32;
+                    let family = families[id] as usize;
+                    let channel = k % 3;
+                    let mean = means[[family, channel]];
+                    // Canyon rims blend the rock with a vertex-coloured terrain layer.
+                    // Match that visible surface, not the mineral tint from before blending.
+                    albedo[[i, k]] = if family == CANYON_FAMILY {
+                        canyon_rim.as_ref().map(|(c, uv)| {
+                            let half_texel = RIM_HALF_TEXEL;
+                            let blend = ((uv[[vertex, 0]] - half_texel) / (1.0 - 2.0 * half_texel))
+                                .clamp(0.0, 1.0);
+                            crate::cliffappearance::linear(c[[vertex, channel]] / 255.0)
+                                * ((1.0 - blend) * mean + blend)
+                        })
+                    } else {
+                        None
+                    }
+                    .unwrap_or_else(|| {
+                        crate::cliffappearance::linear(color[[vertex, channel]] / divisor) * mean
+                    }) as f32;
                 }
             }
             patches.push((run, faces, ns, albedo));

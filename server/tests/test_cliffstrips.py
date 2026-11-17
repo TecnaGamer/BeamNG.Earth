@@ -487,7 +487,7 @@ class ProductionStrips(unittest.TestCase):
         t = np.array([[0,1,2],[0,2,3]])
         original = np.tile([150,120,100,255], (4,1)).astype(np.uint8)
         means = np.array(json.loads(Path(cs.__file__).with_name('cliff_transition_means.json').read_text()))
-        for family in (0,3):
+        for family in (0,):
             outputs = []
             for rim_color in ([4,5,6,255],[50,230,30,255]):
                 rock = Mesh(p,t,np.zeros((4,2)),np.tile(rim_color,(4,1)).astype(np.uint8),
@@ -503,6 +503,25 @@ class ProductionStrips(unittest.TestCase):
                     self.assertTrue((strip.positions[:,2] >= cs.GROUND_CLEARANCE_M).all())
                 outputs.append(np.concatenate([c for _,c in parts]))
             np.testing.assert_array_equal(*outputs)
+
+    def test_canyon_contact_matches_rendered_rim_instead_of_unblended_tint(self):
+        from cliffrocks import Mesh
+        from cliffcolors import linear
+        from clifftransition import MEANS
+        p = np.array([[-6.,-8.,-6.],[6.,-8.,6.],[6.,8.,6.],[-6.,8.,-6.]])
+        t = np.array([[0,1,2],[0,2,3]])
+        mineral = np.tile([90,85,80,255], (4,1)).astype(np.uint8)
+        visible = np.tile([200,150,110,255], (4,1)).astype(np.uint8)
+        for blend in (0., .5, 1.):
+            rock = Mesh(p,t,np.zeros((4,2)),visible,tri_materials=np.full(2,3),
+                        uvs2=np.tile([.5/16+blend*15/16,.5],(4,1)),
+                        terrain_blend=True,strip_colors=mineral)
+            patches = cs.prepare(rock,lambda xy:np.zeros(len(xy)))
+            self.assertTrue(patches)
+            expected = linear(visible[0,:3]/255)*((1-blend)*np.array(MEANS[3])+blend)
+            for part in patches:
+                np.testing.assert_allclose(part['albedo'],
+                    np.broadcast_to(expected,part['albedo'].shape),rtol=1e-6)
 
     def test_native_strip_mesh_preserves_welding_shading_and_uvs(self):
         import fast
@@ -598,7 +617,7 @@ class ProductionStrips(unittest.TestCase):
         j,i = np.mgrid[:len(y)-1,:y.shape[1]-1]
         a=(j*y.shape[1]+i).ravel();b=a+1;c=a+y.shape[1];d=c+1
         t=np.concatenate((np.column_stack((a,b,c)),np.column_stack((b,d,c))))
-        for family in (0,3):
+        for family in (0,):
             rock=Mesh(p,t,np.zeros((len(p),2)),np.full((len(p),4),128,np.uint8),
                       tri_materials=np.full(len(t),family,np.int32))
             parts=cs.tile_parts(rock,lambda xy:np.zeros(len(xy)))

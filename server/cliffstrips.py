@@ -150,13 +150,18 @@ def prepare(rock, ground_at):
     source_colors = rock.strip_colors if rock.strip_colors is not None else rock.colors
     colors = np.asarray(source_colors)
     families = np.zeros(len(tri), np.int64) if rock.tri_materials is None else rock.tri_materials
+    canyon_rim = None
+    if getattr(rock, 'terrain_blend', False) and rock.uvs2 is not None:
+        fast.require(343, "canyon contact rim colors")
+        canyon_rim = (np.ascontiguousarray(rock.colors[:, :3], float),
+                      np.ascontiguousarray(rock.uvs2, float))
     patches = fast._ef.cliff_contact_patches(
         np.ascontiguousarray(p), np.ascontiguousarray(tri), np.ascontiguousarray(colors[:, :3], float),
         np.ascontiguousarray(families, np.int64), np.ascontiguousarray(MEANS, float),
         np.ascontiguousarray(np.concatenate(runs), float),
         np.r_[0, np.cumsum([len(r) for r in runs])].astype(np.int64),
         RECEIVER_MARGIN_M, PATCH_FACES_MAX, np.issubdtype(colors.dtype, np.integer),
-        None if rock.normals is None else np.ascontiguousarray(rock.normals, float))
+        None if rock.normals is None else np.ascontiguousarray(rock.normals, float), canyon_rim)
     return [dict(run=runs[i], faces=f.reshape(-1,3,3), normals=n.reshape(-1,3,3),
                  albedo=a.reshape(-1,3,3)) for i,f,n,a in patches]
 

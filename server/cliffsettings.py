@@ -52,7 +52,7 @@ class CliffSettings:
 
     @property
     def cache_key(self):
-        return ("dynamic-cliffs-v6", self.natural, self.road_cuts, self.detail)
+        return ("dynamic-cliffs-v7", self.natural, self.road_cuts, self.detail)
 
     @property
     def profile(self):
