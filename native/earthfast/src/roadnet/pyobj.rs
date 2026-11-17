@@ -133,3 +133,16 @@ impl<'py, T: Element, D: Dimension> std::ops::Deref for CArr<'py, T, D> {
         &self.0
     }
 }
+
+/// What a generator expression's body raised, as the generator raises it: a StopIteration becomes RuntimeError
+/// ("generator raised StopIteration", its cause the StopIteration: PEP 479); anything else as it was.
+pub fn in_generator<T>(py: Python<'_>, r: PyResult<T>) -> PyResult<T> {
+    match r {
+        Err(e) if e.is_instance_of::<pyo3::exceptions::PyStopIteration>(py) => {
+            let re = pyo3::exceptions::PyRuntimeError::new_err("generator raised StopIteration");
+            re.set_cause(py, Some(e));
+            Err(re)
+        }
+        other => other,
+    }
+}

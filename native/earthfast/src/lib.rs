@@ -6605,6 +6605,10 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(roadnet::splitlayer::lane_split_layer, m)?)?;
     // 403: R2a's lane section layer (roadnet::splitlayer::lane_split_layer = lanesections.split's new-layer assembly:
     // the columns gathered, the sections' values, LANE_MAX, the geometry and rule rows, the cut points' connectors)
-    m.add("VERSION", 403)?;
+    m.add_function(wrap_pyfunction!(roadnet::widthlanes::lane_evidence, m)?)?;
+    m.add_function(wrap_pyfunction!(roadnet::widthlanes::width_rejected, m)?)?;
+    // 404: R2a's lane evidence and width repair (roadnet::widthlanes: roads._lane_evidence's loop, width_rejected's
+    // body: the class codes, the candidates, the home copies' lanes, the trunk / one-way tests)
+    m.add("VERSION", 404)?;
     Ok(())
 }

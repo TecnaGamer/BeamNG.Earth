@@ -3600,44 +3600,20 @@ def _lane_evidence(feats):
     way, the lane tags' total and count (lane_count, generated_counts), lanes:forward + backward + both_ways, and each of
     its lane parts' (LANE_PARTS: a merged highway's sections, 2 here and 4 there, give 4); a lane section split off its
     road (lanesections.split) the road's own before the split (lanesections.LANE_MAX: the split sets each section's
-    count and clears its parts). Remembered on feats."""
+    count and clears its parts). Remembered on feats (earthfast roadnet::widthlanes::lane_evidence)."""
     got = feats.__dict__.get("_lane_evidence")
     if got is not None:
         return got
+    import fast
+    import lanesections
     import railtags
     import roadlanes
-    n = len(feats)
     a = feats.attrs
-    ev = np.full(n, -1, np.int64)
-
-    def take(i, v):
-        c = roadlanes.count(v)
-        if c is not None and c > ev[i]:
-            ev[i] = c
-    import lanesections
     cols = [a.get(k) for k in ("osm_lanes", railtags.lane_attr("lanes"), "lane_count", lanesections.LANE_MAX)]
     dirs = [a.get(railtags.lane_attr(k)) for k in ("lanes:forward", "lanes:backward", "lanes:both_ways")]
     gen = roadlanes.generated_counts(feats)
-    parts = a.get(railtags.LANE_PARTS)
-    for i in range(n):
-        for c in cols:
-            if c is not None:
-                take(i, c[i])
-        if gen[i] is not None:
-            take(i, gen[i])
-        tot = [roadlanes.count(d[i], 0) if d is not None else None for d in dirs]
-        if any(t for t in tot):
-            take(i, sum(t or 0 for t in tot))
-        ps = parts[i] if parts is not None else None
-        if isinstance(ps, (list, tuple)):
-            for p in ps:
-                tags = p[3] if isinstance(p, (list, tuple)) and len(p) == 4 and isinstance(p[3], dict) else None
-                if tags:
-                    take(i, tags.get("lanes"))
-                    t = [roadlanes.count(tags.get(k), 0) for k in ("lanes:forward", "lanes:backward",
-                                                                   "lanes:both_ways")]
-                    if any(x for x in t):
-                        take(i, sum(x or 0 for x in t))
+    fast.require(404, "lane_evidence")
+    ev = fast._ef.lane_evidence(len(feats), cols, gen, dirs, a.get(railtags.LANE_PARTS))
     feats.__dict__["_lane_evidence"] = ev
     return ev
 
@@ -3668,63 +3644,13 @@ def width_rejected(feats):
         return out
     import fast
     import roadlanes
-    fast.require(376, "RoadRules.width_rejects")
-    pos = {c: k for k, c in enumerate(STYLE)}
+    fast.require(404, "width_rejected")
     a = feats.attrs
-    cls_s = [str(v) for v in a["class"].tolist()] if "class" in a else ["unknown"] * n
-    sub = a.get("subtype")
-    cls = np.fromiter((pos.get(c, -1) if sub is None or str(s) == "road" else -1
-                       for c, s in zip(cls_s, sub.tolist() if sub is not None else cls_s)), np.int32, n)
-    if not (cls >= 0).any():
-        feats.__dict__["_width_rejected"] = out
-        return out
-    oneway, _ = _rule_cols(feats.rules.get("oneway"), n)
-    link = np.asarray(roadlanes.links(feats), bool)
-    rr = _road_rules()
-    srcs = []                   # (feature per value, values)
-    if nw:
-        wv = np.asarray(wt.value)
-        wv = (wv.astype(np.float64) if wv.dtype.kind in "fiub" else
-              np.array([float(x) for x in wv.tolist()], np.float64))
-        srcs.append((np.ascontiguousarray(wt.feature, np.int64), np.ascontiguousarray(wv)))
-    if ow is not None:
-        srcs.append((np.arange(n, dtype=np.int64), np.ascontiguousarray(_osm_values(feats, "width", None, None))))
-    # (a width the fewest lanes allow is kept whatever the lanes: only the rest ask for lane evidence)
-    one = np.ones(n, np.int64)
-    maybe = np.zeros(n, bool)
-    for f_, v_ in srcs:
-        hit = np.asarray(rr.width_rejects(cls, oneway, link, one, f_, v_, WIDTH_PLATFORM_X), bool)
-        maybe[f_[hit]] = True
-    if not maybe.any():
-        feats.__dict__["_width_rejected"] = out
-        return out
-    lanes = np.full(n, -1, np.int64)
-    own = _lane_evidence(feats)
-    for i in np.flatnonzero(maybe).tolist():
-        h = home_copy(feats, i)
-        lanes[i] = int(_lane_evidence(h[0])[h[1]]) if h is not None else int(own[i])
-    # (no lane data anywhere on the road: only a trunk is tested, as two lanes (MA Route 2's copies without its lanes
-    # tag); a motorway or a link without lane data keeps its mapped width: one carriageway of a big motorway carries
-    # 5-6 lanes, and the kernel's guess of 2 took a 24-26 m motorway's width away, gate batch185)
-    guess = np.fromiter((c == "trunk" for c in cls_s), bool, n) & ~link
-    maybe &= (lanes > 0) | guess
-    # (a one-way carriageway keeps its mapped width: a divided road's carriageway is mapped as wide as the roadway or
-    # boulevard, and the pairing already caps it to the gap to its twin (dual_cap). Judged against its own lanes,
-    # Boston's Storrow Drive and Commonwealth Avenue carriageways (21-59 m MassGIS widths) narrowed under the Bowker
-    # Overpass and Mass Ave and their decks' approaches got steeper: drivability, gate batch185)
-    maybe &= ~oneway.astype(bool)
-    if not maybe.any():
-        feats.__dict__["_width_rejected"] = out
-        return out
-    res = []
-    for f_, v_ in srcs:
-        bad = np.asarray(rr.width_rejects(cls, oneway, link, lanes, f_, v_, WIDTH_PLATFORM_X), bool)
-        res.append(bad & maybe[f_])
-    k = 0
-    rule_bad = res[k] if nw else out[0]
-    k += 1 if nw else 0
-    osm_bad = res[k] if ow is not None else out[1]
-    out = (rule_bad, osm_bad)
+    out = fast._ef.width_rejected(
+        feats, n, list(STYLE), "class" in a, a.get("class"), a.get("subtype"),
+        lambda: _rule_cols(feats.rules.get("oneway"), n)[0], lambda: roadlanes.links(feats), _road_rules,
+        wt if nw else None, ow is not None, lambda: _osm_values(feats, "width", None, None), float(WIDTH_PLATFORM_X),
+        _lane_evidence, home_copy)
     feats.__dict__["_width_rejected"] = out
     return out
 
