@@ -17,6 +17,7 @@ TSFS 2019:74.
                 its traffic enters by, facing the crossing road's traffic, its arrow along the street, where a crossing
                 road is two-way (6 kap. 16-17 §§), on a one-way street only: a divided road's carriageway is not one
                 (16 §: all traffic the other way banned). Both over the sidewalk, 2.1 m up (1 kap. 13 §)
+    E9, E10     where a gångfartsområde (OpenStreetMap's living_street) begins and ends at another street
     E1, E2      where a motorway begins and ends, and on the ramps on to and off it (TSFS 6 kap. 3-4 §§, K237587)
     A19         the moose, sparingly (the user: "very typical swedish thing but dont overdo it", 2026-11-03): no data
                 says where they stand (OpenStreetMap has 1 within 150 km of Borås, Trafikverket's API has no signs),
@@ -47,7 +48,8 @@ COUNTRIES = {"SE"}
 # Heights (mod trees.lua SE_SIGNS, tools/build_median_props.py): a row's height over its catalog's is its scale.
 HEIGHTS = {"se_f17": 2.70, "se_f17_400": 2.78, "se_f17_300": 2.78, "se_f17_200": 2.78, "se_f18_11": 2.70,
            "se_f18_12": 2.70, "se_f18_21": 2.70, "se_f2": 3.50, "se_c1": 2.10, "se_b3": 2.60, "se_e1": 2.70,
-           "se_e2": 2.70, "se_a19": 2.30, "se_c1_t": 2.70, "se_e16_r": 2.40, "se_e16_l": 2.40}
+           "se_e2": 2.70, "se_a19": 2.30, "se_c1_t": 2.70, "se_e16_r": 2.40, "se_e16_l": 2.40, "se_e9": 2.70,
+           "se_e10": 2.70}
 
 MIN_RUN_M = 300.0           # m of two lanes that are an overtaking stretch and not a junction's lane
 NEAR_M = 50.0               # F17 before the lane is 2.5 m wide where the arrows don't fit; and F18 before the barrier
@@ -584,7 +586,8 @@ def _town_oneway(s):
 
 def oneway_signs(near_roads):
     """C1 and E16 at the junctions of a town's one-way carriageways in near_roads (build_tile's roads_out) with other
-    streets: not on a roundabout, not where only a service road joins. A sign stands a little past the crossing road's edge, 0.7 m off its own carriageway."""
+    streets: not on a roundabout, not where only a service road joins. A sign stands a little past the crossing road's
+    edge, 0.7 m off its own carriageway."""
     import furniture
     import islands
     roads_ = [(r[0], r[1], np.asarray(r[2], np.float64), r[3] if len(r) > 3 else 0.0) for r in near_roads
@@ -636,6 +639,48 @@ def oneway_signs(near_roads):
                 if not any(o.group[:5] == sign.group[:5] and float(dnp.hypot(*(o.p - q))) < ONE_CORNER_M
                            and float(dnp.dot(o.facing, sign.facing)) > motesfri.STRAIGHT_COS for o in out):
                     out.append(sign)
+    return out
+
+
+LIVING = "living_street"
+
+
+def living_signs(near_roads):
+    """E9 and E10 where a gångfartsområde (a living_street in near_roads, build_tile's roads_out) meets a street that is
+    not one: E9 on the right of the traffic entering it, facing them, E10 on the right of the traffic leaving it (TSFS
+    2019:74 6 kap. 1 §: E9, E10; the signs on the right, 1 kap.); on a one-way living street the one its traffic
+    passes. Not where only service roads or other living streets join (a car park's way, the area going on)."""
+    import furniture
+    roads_ = [(r[0], r[1], np.asarray(r[2], np.float64), r[3] if len(r) > 3 else 0.0) for r in near_roads
+              if len(r[2]) >= 2]
+    if not any(s.cls == LIVING for _, s, _, _ in roads_):
+        return []
+    ways = [motesfri.Way(fid, s, {}, pts[:, :2], fid) for fid, s, pts, _ in roads_]
+    by_fid = {}
+    for w in ways:
+        by_fid.setdefault(w.fid, set()).add(id(w))
+    out = []
+    for arms in furniture._arms(roads_).values():
+        streets = [b for b in arms if b[1].cls not in ONEWAY_SKIP | {"track", LIVING}]
+        if not streets:
+            continue
+        wide = max(b[1].width for b in streets) / 2
+        for a in arms:
+            fid, s, u, p = a[0], a[1], np.asarray(a[2], np.float64), np.asarray(a[3], np.float64)[:2]
+            if s.cls != LIVING:
+                continue
+            n = _right(u)
+            for group, side, facing in (("se_e9", 1.0, u), ("se_e10", -1.0, -u)):
+                if s.oneway and furniture._outbound(a) != (group == "se_e9"):
+                    continue                            # (a one-way street: only the sign its traffic passes)
+                for back in STREET_BACK_M:
+                    q = p + u * (wide + back) + n * side * (s.width / 2 + PLAIN_SIDE_M)
+                    if _free(q, ways, by_fid[fid]):
+                        break
+                else:
+                    continue
+                if not any(o.group == group and float(dnp.hypot(*(o.p - q))) < ONE_CORNER_M for o in out):
+                    out.append(Sign(group, q, facing))
     return out
 
 
@@ -693,6 +738,6 @@ def tile_rows(frame, ways, near_roads, nodes, box, elev, country):
         return []
     signs = all_signs(ways) if ways else []
     signs = signs + zebra_signs(near_roads, (nodes or {}).get("zebras", ())) + moose_signs(near_roads) \
-        + oneway_signs(near_roads)
+        + oneway_signs(near_roads) + living_signs(near_roads)
     x0, y0, x1, y1 = box
     return [_row(s.group, s.p, s.facing, frame, elev) for s in signs if x0 <= s.p[0] < x1 and y0 <= s.p[1] < y1]

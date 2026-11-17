@@ -317,6 +317,41 @@ class OneWayTest(unittest.TestCase):
             self.assertIn(f"{g} = {sesigns.HEIGHTS[g]:.2f}", lua)
 
 
+class LivingStreetTest(unittest.TestCase):
+    """E9 and E10 where a gångfartsområde (living_street) meets another street (TSFS 2019:74 6 kap. 1 §)."""
+    def tee(self, cls="living_street", oneway=False, dir_=1, cross="residential"):
+        # an east-west street along y = 0 and the living street north from (0, 0)
+        return sesigns.living_signs([street("w", [(-200, 0), (0, 0)], cross), street("e", [(0, 0), (200, 0)], cross),
+                                     street("n", [(0, 0), (0, 150)], cls, oneway, dir_)])
+
+    def test_e9_in_on_the_right_e10_out_on_the_right(self):
+        got = self.tee()
+        self.assertEqual(sorted(g.group for g in got), ["se_e10", "se_e9"])
+        e9, e10 = of(got, "se_e9")[0], of(got, "se_e10")[0]
+        np.testing.assert_allclose(e9.facing, [0.0, 1.0], atol=1e-9)      # (the drivers turning in, heading north)
+        self.assertGreater(e9.p[0], 0.0)                                    # (on their right: east)
+        np.testing.assert_allclose(e10.facing, [0.0, -1.0], atol=1e-9)    # (the drivers leaving, heading south)
+        self.assertLess(e10.p[0], 0.0)                                      # (on their right: west)
+        for g in got:
+            self.assertGreater(g.p[1], 3.0)                                 # (past the street's edge)
+
+    def test_one_way_only_the_sign_its_traffic_passes(self):
+        self.assertEqual([g.group for g in self.tee(oneway=True, dir_=1)], ["se_e9"])
+        self.assertEqual([g.group for g in self.tee(oneway=True, dir_=-1)], ["se_e10"])
+
+    def test_none_inside_the_area_nor_off_a_car_park(self):
+        self.assertEqual(self.tee(cross="living_street"), [])
+        self.assertEqual(self.tee(cross="service"), [])
+        self.assertEqual(self.tee(cls="residential"), [])
+
+    def test_the_groups_have_their_heights(self):
+        with open(TREES, encoding="utf-8") as fh:
+            lua = fh.read()
+        for g in ("se_e9", "se_e10"):
+            self.assertIn(g, guardrails.GROUPS)
+            self.assertIn(f"{g} = {sesigns.HEIGHTS[g]:.2f}", lua)
+
+
 class ZebraTest(unittest.TestCase):
     NEAR = [("s", spec(8.0, "residential", False, 50.0, 2, urban=True), north(-100, 100))]
 

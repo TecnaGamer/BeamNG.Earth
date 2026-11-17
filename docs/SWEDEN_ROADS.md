@@ -85,7 +85,6 @@ Mapped give-way and stop nodes add to the rank guess, for props and the AI: 47 m
 - Not tested in game.
 - Which side of a crossing the cycle crossing lies on is not in the tags, so it follows the road's own direction.
 - Stop lines at mid-block signal crossings are not drawn, because no signal prop stands there.
-- B3 signs are not placed yet.
 - If the tags cannot be read, the tile falls back to the old guess.
 
 ## Trams
@@ -183,6 +182,17 @@ Not built:
 - **Measured** (4 x 4 tiles, about 1 km², 2026-11-17): Göteborg 171 C1 and 105 E16; Stockholm 176 C1 and 67 E16.
 - **Artwork.** The E16-1 picture is Transportstyrelsen's, the same source as the other signs, in `bne_se_signs2` cell (384, 896).
 
+## Gångfartsområde signs (E9 and E10)
+
+`sesigns.living_signs` signs where a gångfartsområde begins and ends. OpenStreetMap maps one as `highway=living_street`.
+
+- **E9** (gångfartsområde) stands on the right of the traffic turning in, facing them, where a living street meets a street that is not one. **E10** (gångfartsområde upphör) stands on the right of the traffic leaving, facing out. A one-way living street gets only the sign its traffic passes.
+- **Left out:** junctions where only service roads (car parks, drives) or other living streets join, since the area goes on there.
+- **Size and height.** Normal size, 0.75 m wide x 0.60 m high (TSFS 2019:74 6 kap. 1 §; the figure shows S1 as the width). The agency's web picture is 399 x 286 px, a little flatter than that, so it is drawn to the official shape. Lower edge 2.1 m, over the sidewalk (1 kap. 13 §).
+- **Artwork.** Transportstyrelsen's E9-1 and E10-1, in the empty bottom row of `bne_se_signs` (the C31 sheet).
+- **Measured** (4 x 4 tiles, about 1 km², 2026-11-17): Göteborg 39 entries, Borås 8, Stockholm 2 (one E9 and one E10 each).
+- **Not done:** E7 and E8 (gågata). Pedestrian streets are not in the road tiles, so there is no road for their entrance signs to stand on.
+
 ## Road type detection
 
 Findings, and the rules built on them, which shipped in `0fbe4bbb`. The commit message says what the rules do.
@@ -210,6 +220,8 @@ Rural roads with a surface tag (OpenStreetMap tags, as delivered through Overtur
 | Sign sizes and lower edge | TSFS 2019:74 (4 kap. 1 §, 3 kap. 1 §, 1 kap. 13 §) | Sign sizes for fix 2 |
 | One-way roads | OpenStreetMap `oneway` tag | Where C1 and E16 go |
 | C1 and E16 rules and sizes | TSFS 2019:74 (4 kap. 3 §; 6 kap. 1, 16, 17 §§; 1 kap. 13 §) | One-way signs |
+| Gångfartsområde streets | OpenStreetMap `highway=living_street` | Where E9 and E10 go |
+| E9 and E10 sizes | TSFS 2019:74 (6 kap. 1 §; 1 kap. 13 §) | Gångfartsområde signs |
 | Minimum lane width | VGU 2024 K233046 | `markings.MIN_LANE_M` (2.75 m) |
 | Road meshes loaded by the game | `rs_*_road.cdae` files | Height-step checks on loaded tiles |
 | Crossing, stop-line and give-way nodes | OpenStreetMap nodes via Overture's infrastructure layer | `server/secrossings.py`: paint, lowered kerbs, stop lines, priority signs |
