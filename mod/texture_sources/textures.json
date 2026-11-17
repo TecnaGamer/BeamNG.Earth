@@ -1026,12 +1026,6 @@
    "role": "data",
    "requires_any": ["BNE_CLIFFS"]
   },
-  "levels/beamng_earth/art/shapes/beamngEarth/cliff/terrain_rim.data.dds": {
-   "source": "levels/beamng_earth/art/shapes/beamngEarth/cliff/terrain_rim.data.webp",
-   "format": "BC4",
-   "role": "data",
-   "requires_any": ["BNE_CLIFFS"]
-  },
   "levels/beamng_earth/art/shapes/beamngEarth/cliff/arid_far_base.color.dds": {
    "source": "levels/beamng_earth/art/shapes/beamngEarth/cliff/arid_far_base.color.webp",
    "format": "BC7_SRGB",

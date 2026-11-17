@@ -137,7 +137,7 @@ def prepare(rock, ground_at):
     Retain only bounded rock receiver patches and contact centerlines. Geotiles
     cache these inputs, then project against each anchor's rendered terrain.
     """
-    from clifftransition import MEANS
+    from cliffmaterial import MEANS
     p = np.asarray(rock.positions, float); tri = np.asarray(rock.tris, np.int64)
     if not len(tri):
         return []
@@ -147,8 +147,7 @@ def prepare(rock, ground_at):
         return []
     import fast
     runs = spread_runs(runs)[:ATTEMPTS_MAX]
-    source_colors = rock.strip_colors if rock.strip_colors is not None else rock.colors
-    colors = np.asarray(source_colors)
+    colors = np.asarray(rock.colors)
     families = np.zeros(len(tri), np.int64) if rock.tri_materials is None else rock.tri_materials
     patches = fast._ef.cliff_contact_patches(
         np.ascontiguousarray(p), np.ascontiguousarray(tri), np.ascontiguousarray(colors[:, :3], float),

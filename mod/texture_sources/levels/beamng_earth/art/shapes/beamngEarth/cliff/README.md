@@ -52,7 +52,7 @@ cliff maps are converted. Shared maps are encoded only once. Both categories'
 assets are prepared up front so changing category settings never starts texture
 conversion while driving.
 
-With both categories enabled, the 27 authored maps have the following footprint
+With both categories enabled, the 26 authored maps have the following footprint
 (decimal MB, measured from local player and BeamMP packages):
 
 | Component | Size |

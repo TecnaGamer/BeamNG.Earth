@@ -377,7 +377,7 @@ def prepare_reference(rock, ground_at):
     Retain only bounded rock receiver patches and contact centerlines. Geotiles
     cache these inputs, then project against each anchor's rendered terrain.
     """
-    from clifftransition import MEANS
+    from cliffmaterial import MEANS
     p = np.asarray(rock.positions, float); tri = np.asarray(rock.tris, np.int64)
     if not len(tri):
         return []
@@ -391,9 +391,8 @@ def prepare_reference(rock, ground_at):
     means = np.asarray(MEANS)
     families = np.zeros(len(tri), int) if rock.tri_materials is None else rock.tri_materials
     from cliffcolors import linear
-    # Use the original cliff tint across the whole strip. The rendered cliff's
-    # outer rim already contains satellite colors (including photo shadows).
-    source_colors = rock.strip_colors if rock.strip_colors is not None else rock.colors
+    # Receiver patches share the cliff face's mineral tint.
+    source_colors = rock.colors
     color = np.asarray(source_colors, float)[:, :3]
     if np.issubdtype(np.asarray(source_colors).dtype, np.integer) or color.max(initial=0) > 1:
         color /= 255

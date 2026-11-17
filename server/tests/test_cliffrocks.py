@@ -35,7 +35,7 @@ class CliffRocksTest(unittest.TestCase):
         tri = rng.integers(5,75,(38,3),dtype=np.int64)
         origin = (13000000.,4000000.,0.)
         used,inverse = np.unique(tri,return_inverse=True)
-        for columns in (11,15):
+        for columns in (9,10):
             attrs = rng.random((90,columns))
             attrs[:5] = np.nan  # Unreferenced clipping leftovers must be ignored.
             for base in (0,170):
@@ -47,7 +47,7 @@ class CliffRocksTest(unittest.TestCase):
                 np.testing.assert_array_equal(actual[2],expected)
                 self.assertTrue(np.isnan(attrs[:5]).all())
         empty = fast._ef.cliff_mesh_finish(p,np.empty((0,3),np.int64),attrs,origin,0)
-        self.assertEqual([a.shape for a in empty],[(0,3),(0,3),(0,15)])
+        self.assertEqual([a.shape for a in empty],[(0,3),(0,3),(0,10)])
         for bad in (np.array([[0,1,2]]),np.array([[0,1,90]]),np.array([[-1,1,2]])):
             with self.assertRaises(ValueError):
                 fast._ef.cliff_mesh_finish(p,bad,attrs,origin,0)
@@ -240,15 +240,8 @@ class CliffRocksTest(unittest.TestCase):
         import clifflod
         keep = np.ones((20,20),bool)
         rock = cr.mesh(self.h,keep,self.x,self.x,np.zeros(keep.shape,int),
-                       (0,0,160,160),(0,0,0),natural_family=cm.CANYON,strip_tint=True)
-        self.assertTrue(rock.terrain_blend)
-        self.assertTrue(np.all((rock.uvs2[:,0]>=0) & (rock.uvs2[:,0]<=1)))
-        self.assertEqual(rock.strip_colors.shape,rock.colors.shape)
+                       (0,0,160,160),(0,0,0),natural_family=cm.CANYON)
         cliffdetail.refine_canyon(rock, full_relief=True)
-        self.assertEqual(rock.strip_colors.shape,rock.colors.shape)
-        self.assertTrue(np.isfinite(rock.strip_colors).all())
-        self.assertTrue(rock.terrain_blend)
-        self.assertTrue(np.all((rock.uvs2[:,0]>=0) & (rock.uvs2[:,0]<=1)))
         for _,lod in clifflod.levels(rock):
             np.testing.assert_array_equal(lod['tangent_uvs'],lod['uvs'])
         with tempfile.TemporaryDirectory() as tmp:
@@ -257,8 +250,7 @@ class CliffRocksTest(unittest.TestCase):
             for mesh in cdae.read(path)['meshes']:
                 arrays = cdae.mesh_arrays(mesh)
                 self.assertTrue(np.isfinite(arrays['tangents']).all())
-                self.assertTrue(np.all((arrays['tverts2'][:,0]>=0) & (arrays['tverts2'][:,0]<=1)))
-                # Normal-map tangents must use the rock chart, never the constant-Y rim UV.
+                # Normal-map tangents must use the rock chart, for every material family.
                 expected=cdae.tangents(arrays['verts'],arrays['tverts'],arrays['norms'],
                                        arrays['indices'].reshape(-1,3))
                 # Handedness on nearly degenerate UV triangles may flip when
@@ -356,7 +348,7 @@ class CliffRocksTest(unittest.TestCase):
         self.assertEqual(set(rock.tri_materials), {cm.NATURAL, cm.LIMESTONE_CUT, cm.ARID_CUT})
         with tempfile.TemporaryDirectory() as tmp:
             path = str(Path(tmp)/'mixed.cdae'); cr.write(path, rock)
-            self.assertEqual([m['name'] for m in cdae.read(path)['materials']], list(__import__('clifftransition').MATERIALS[:3]))
+            self.assertEqual([m['name'] for m in cdae.read(path)['materials']], list(cr.cliffmaterial.MATERIALS[:3]))
         # Neighboring tile generation and order must not alter material phase.
         def tile(box):
             return cr.mesh(self.h, keep, self.x, self.x, biomes, box, (0, 0, 0), cuts=cuts)
@@ -1093,7 +1085,6 @@ class CliffRocksTest(unittest.TestCase):
 
     def test_mineral_hue_matches_both_default_and_arid_materials(self):
         import cliffcolors as cc
-        import clifftransition
         # Test the rendered material product, not vertex channels: the two
         # source textures need different tints to produce the same mineral hue.
         rgb = np.array([[185., 185., 150.], [215.5, 187.1, 165.3], [180., 180., 180.]])
@@ -1104,11 +1095,11 @@ class CliffRocksTest(unittest.TestCase):
         target = cc.linear(stone/255)
         for family in (cr.cliffmaterial.NATURAL, cr.cliffmaterial.ARID_CUT):
             tint = cr.rock_colors(np.ones(3, int), rgb, family)
-            rendered = cc.linear(tint/255)*clifftransition.MEANS[family]
+            rendered = cc.linear(tint/255)*cr.cliffmaterial.MEANS[family]
             np.testing.assert_allclose(rendered/rendered[:, 1:2],
                                        target/target[:, 1:2], atol=.02)
             old_gain = cc.linear(stone/255)/cc.linear(cr.SCAN_MEDIAN_SRGB)/cr.ALBEDO_HEADROOM
-            previous = cc.linear(np.clip(old_gain, .12, 1))*clifftransition.MEANS[family]
+            previous = cc.linear(np.clip(old_gain, .12, 1))*cr.cliffmaterial.MEANS[family]
             np.testing.assert_allclose(rendered @ np.array((.2126, .7152, .0722)),
                                        previous @ np.array((.2126, .7152, .0722)), atol=.003)
 

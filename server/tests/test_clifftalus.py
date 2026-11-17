@@ -397,7 +397,7 @@ class TalusTest(unittest.TestCase):
         import json
         import cliffcolors as cc
         import cliffmaterial as cm
-        means = np.asarray(json.loads(Path(cr.__file__).with_name('cliff_transition_means.json').read_text()))
+        means = np.asarray(json.loads(Path(cr.__file__).with_name('cliff_material_means.json').read_text()))
         rgb = np.array([[90,140,80],[110,75,110],[180,170,150],[200,165,115],[0,0,0]])
         biome = np.zeros(5,int)
         for family in (cm.NATURAL,cm.ARID_CUT,cm.CANYON):
