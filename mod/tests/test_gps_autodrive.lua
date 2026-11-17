@@ -757,7 +757,7 @@ do
   f:step(31); f:step(); f:step(31)
   T.check(placed and math.abs(placed.pos.y - 4) < 1e-9, 'recovery stays on the viaduct, not the road 24 m under it')
   T.check(placed and math.abs(placed.pos.z - 31.3) < 1e-9 and rays[1] and math.abs(rays[1].z - 33.5) < 1e-9,
-    'its ground ray starts just over the deck (a bridge over the road is not where the car lands; #1282: the body's centre half its height + 0.3 m over the ground)')
+    'its ground ray starts just over the deck (a bridge over the road is not where the car lands; #1282: the body centre half its height + 0.3 m over the ground)')
   spawn, quatFromDir, log, castRayStatic = oldSpawn, oldQuat, oldLog, oldRay
 end
 
