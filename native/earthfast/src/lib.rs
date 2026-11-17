@@ -5906,6 +5906,8 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(roadgeom::dedupe_polyline, m)?)?;
     m.add_function(wrap_pyfunction!(roadsmooth::road_smooth_line, m)?)?;
     m.add_function(wrap_pyfunction!(roadgeom::curve_deck, m)?)?;
+    m.add_function(wrap_pyfunction!(roadgeom::curve_deck_radii, m)?)?;      // (390: BNE_DECK_K_SPEED)
+    m.add_function(wrap_pyfunction!(roadgeom::deck_crest_radii, m)?)?;
     m.add_function(wrap_pyfunction!(underpass::underpass_offsets, m)?)?;
     m.add_function(wrap_pyfunction!(coarseease::ease_coarse, m)?)?;
     m.add_function(wrap_pyfunction!(junctionsnap::snap_junctions, m)?)?;
@@ -6576,6 +6578,8 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(roadnet::rings::ring_radius, m)?)?;
     // 386: R2a's roundabout ring radius (roadnet::rings::ring_radius = roads.ring_radius: dnp.lstsq's QR and eigh
     // answers, numpy's sums in their orders)
-    m.add("VERSION", 386)?;
+    // 390: roadgeom::curve_deck_radii, deck_crest_radii (roads.py BNE_DECK_K_SPEED: deck vertical curves by the
+    // road's design speed; road revamp R1e)
+    m.add("VERSION", 390)?;
     Ok(())
 }
