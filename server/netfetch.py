@@ -401,7 +401,11 @@ def _regional_policies():
 
 POLICIES.update(_regional_policies())
 
-POLICIES["valhalla1.openstreetmap.de"] = POLICIES["routing.openstreetmap.de"]     # (routing.py: "Avoid highways", #330)
+# (routing.py: "Avoid highways", #330; FOSSGIS's Valhalla, the user's OK 2026-11-17): the normal route waits for it, so
+# it is asked once, briefly (a slow or stalled service: the normal route after a few s; Codex review of PR #1263)
+POLICIES["valhalla1.openstreetmap.de"] = HostPolicy(rate=0.5, burst=1.0, max_conc=1, daily_budget=300, daily_hard=500,
+                                                    cache_ttl=DAY, miss_ttl=None, max_wait=2.0, timeout=6.0,
+                                                    connect_timeout=3.0, max_attempts=1, optional=True, gzip=True)
 
 # swisstopo's WMTS (SWISSIMAGE, the "swiss" photos): the FSDI's General Terms of Use (geo.admin.ch/en/general-terms-of-use-
 # fsdi, §2.3's table, read 2026-11-13) allow wmts.geo.admin.ch 1'200 requests / minute (20/s; 631 M a year in all;

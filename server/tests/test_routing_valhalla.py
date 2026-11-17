@@ -73,6 +73,17 @@ class ValhallaTest(unittest.TestCase):
         self.assertEqual(steps[1]["location"], {"lat": 42.3611, "lon": -71.057})
         with self.assertRaises(ValueError):
             routing.parse_valhalla({"trip": {"status": 442, "legs": []}})
+        with self.assertRaises(ValueError):
+            routing.parse_valhalla({"error_code": 442, "error": "No path could be found for input"})
+        for bad in ({"trip": {"status": 0, "legs": [{}], "summary": {}}}, {"trip": {"status": 0, "legs": [{"shape": None}],
+                    "summary": {}}}, {"trip": {"status": 0, "legs": [{"shape": "~" * 50}], "summary": {}}}, {"x": 1}):
+            with self.assertRaises(routing.ValhallaUnavailable, msg=bad):
+                routing.parse_valhalla(bad)
+
+    def test_decoder_bounds(self):
+        for bad in ("~" * 40, "\x01\x02", "?" * (routing.SHAPE_MAX_CHARS + 1), encode([(95.0, 0.0), (0.0, 0.0)])):
+            with self.assertRaises(ValueError):
+                routing.decode_polyline(bad)
 
     def test_plan_order(self):
         net = FakeNet([TRIP])
@@ -85,6 +96,10 @@ class ValhallaTest(unittest.TestCase):
         r = routing.plan(42.36, -71.06, 42.365, -71.05, net, 90, avoid_highways=True)
         self.assertIsNone(r["avoided"], "the service down: no 'no route' note")
         self.assertEqual(len(net.urls), 2, "the service down: OSRM at once")
+        net = FakeNet([{"trip": {"status": 0, "legs": [{}], "summary": {}}}, OSRM])
+        r = routing.plan(42.36, -71.06, 42.365, -71.05, net, 90, avoid_highways=True)
+        self.assertIsNone(r["avoided"], "a malformed answer: the normal route, no 'no route' note")
+        self.assertEqual(len(net.urls), 2)
         net = FakeNet([OSRM])
         self.assertNotIn("avoided", routing.plan(42.36, -71.06, 42.365, -71.05, net, 90))
 

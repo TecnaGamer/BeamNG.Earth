@@ -222,16 +222,29 @@ def valhalla_url(lat0, lon0, lat1, lon1, heading=None):
     return VALHALLA_URL + urllib.parse.quote(json.dumps(q, separators=(",", ":")))
 
 
+SHAPE_MAX_CHARS = 2_000_000     # an encoded shape longer than this is refused (~200k points, a 4,000 km drive's)
+SHAPE_MAX_SHIFT = 30            # 7 groups of 5 bits: more is no coordinate (an endless varint)
+
+
+class ValhallaUnavailable(Exception):
+    """Valhalla's answer could not be used (malformed, oversized): the normal route, with no "no route" note."""
+
+
 def decode_polyline(s, precision=6):
-    """[(lat, lon)] of an encoded polyline (Valhalla's shape). Raises ValueError when it is cut short."""
+    """[(lat, lon)] of an encoded polyline (Valhalla's shape). Raises ValueError when it is cut short, too long, has a
+    character outside the encoding's range or an overlong number, or leaves the lat / lon ranges."""
+    if not isinstance(s, str) or len(s) > SHAPE_MAX_CHARS:
+        raise ValueError("bad shape")
     pts, i, lat, lon = [], 0, 0, 0
     while i < len(s):
         for axis in (0, 1):
             shift = v = 0
             while True:
-                if i >= len(s):
+                if i >= len(s) or shift > SHAPE_MAX_SHIFT:
                     raise ValueError("bad shape")
                 b = ord(s[i]) - 63
+                if not 0 <= b < 64:
+                    raise ValueError("bad shape")
                 i += 1
                 v |= (b & 0x1F) << shift
                 shift += 5
@@ -239,7 +252,10 @@ def decode_polyline(s, precision=6):
                     break
             d = ~(v >> 1) if v & 1 else v >> 1
             lat, lon = (lat + d, lon) if axis == 0 else (lat, lon + d)
-        pts.append((lat / 10.0 ** precision, lon / 10.0 ** precision))
+        la, lo = lat / 10.0 ** precision, lon / 10.0 ** precision
+        if not (-90.0 <= la <= 90.0 and -180.0 <= lo <= 180.0):
+            raise ValueError("bad shape")
+        pts.append((la, lo))
     return pts
 
 
@@ -247,11 +263,23 @@ def parse_valhalla(data):
     """parse()'s answer for a Valhalla route ({"trip": {"legs": [{"shape"}], "summary": {"length" km, "time" s}}}), or
     raises ValueError. Pure."""
     trip = data.get("trip") if isinstance(data, dict) else None
-    if not isinstance(trip, dict) or trip.get("status", 0) != 0 or not trip.get("legs"):
+    if isinstance(data, dict) and ("error_code" in data or "error" in data) and trip is None:
+        raise ValueError("no route (valhalla)")        # (its "no path" answers: error_code 442 and the like)
+    if not isinstance(trip, dict):
+        raise ValhallaUnavailable("no trip in the answer")
+    if trip.get("status", 0) != 0 or not trip.get("legs"):
         raise ValueError("no route (valhalla)")
-    sm = trip.get("summary") or {}
-    leg = trip["legs"][0]
-    pts = decode_polyline(leg["shape"])
+    sm = trip.get("summary")
+    leg = trip["legs"][0] if isinstance(trip["legs"], list) else None
+    if not isinstance(sm, dict) or not isinstance(leg, dict) or not isinstance(leg.get("shape"), str) \
+            or not isinstance(sm.get("length", 0), (int, float)):
+        raise ValhallaUnavailable("malformed trip")
+    try:
+        pts = decode_polyline(leg["shape"])
+    except ValueError as e:
+        raise ValhallaUnavailable(str(e)) from None
+    if len(pts) < 2:
+        raise ValhallaUnavailable("shape of under two points")
     out = parse({"code": "Ok", "routes": [{"distance": float(sm.get("length") or 0) * 1000, "duration": sm.get("time"),
                                            "geometry": {"coordinates": [[lo, la] for la, lo in pts]}}]})
     steps = valhalla_steps(leg.get("maneuvers"), pts)
@@ -327,8 +355,16 @@ def plan(lat0, lon0, lat1, lon1, net=None, bearing=None, via=(), avoid_highways=
     avoided = None          # (None: Valhalla not reached, the normal route without a "no route" note)
     for b in ([bearing, None] if bearing is not None else [None]) if avoid_highways else []:
         try:
-            r = parse_valhalla(json.loads(net.get(valhalla_url(lat0, lon0, lat1, lon1, b), kind="demand").body.decode("utf-8")))
+            body = net.get(valhalla_url(lat0, lon0, lat1, lon1, b), kind="demand").body
+            try:
+                data = json.loads(body.decode("utf-8"))
+            except (UnicodeDecodeError, ValueError) as e:
+                raise ValhallaUnavailable(f"not JSON: {e}") from None
+            r = parse_valhalla(data)
             return dict(r, avoided=True)
+        except ValhallaUnavailable:     # (a malformed answer: the normal route, no "no route" note)
+            avoided = None
+            break
         except ValueError:      # (no route that way: again without the heading, then the normal route)
             avoided = False
         except netfetch.FetchError:     # (the service down or slow: straight to the normal route, asked once)
