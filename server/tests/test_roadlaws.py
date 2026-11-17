@@ -1,5 +1,6 @@
 """The road laws on every road (roadlaws.apply): a sudden change of grade becomes a curve the road's speed allows, a
 side road's end stays on the road it joins, the ground's own hills stay, what the passes solved is held."""
+import math
 import sys
 import unittest
 from pathlib import Path
@@ -107,6 +108,80 @@ class JointTest(unittest.TestCase):
         g = np.diff(z) / np.diff(s)
         self.assertLess(float(np.max(np.abs(np.diff(g)) / 4.0)), 1.3 / rad)
         self.assertAlmostEqual(float(a.z[-1]), float(b.z[0]), delta=0.01)
+
+    def test_two_pieces_the_passes_left_apart_meet_at_their_joint(self):
+        # (one road in two pieces, the second planned 2 m over the first's end at their joint (a pass's piece beside one
+        # it left): both ends take the solved height there, not the first's change carried onto the second's own step)
+        s1 = np.arange(0.0, 101.0, 4.0)
+        s2 = np.arange(100.0, 201.0, 4.0)
+        a = plan(np.c_[s1, 0 * s1], 100.0 + 0 * s1)
+        b = plan(np.c_[s2, 0 * s2], 102.0 + 0 * s2)
+        a.rid = b.rid = 7
+        roadlaws.apply([a, b], [spec("tertiary"), spec("tertiary")])
+        self.assertAlmostEqual(float(a.z[-1]), float(b.z[0]), delta=0.01)
+        g = np.diff(np.r_[a.z, b.z[1:]]) / 4.0
+        self.assertLess(float(np.abs(g).max()), roadlaws.laws(spec("tertiary"))[0] + 1e-3)
+
+
+class LandingTest(unittest.TestCase):
+    """A side road leaves the road it joins at that road's grade as solved, not as planned: a step in the planned road
+    (a held shape's piece beside one at the ground, a pass's dip) is no grade a side road is held to."""
+
+    @staticmethod
+    def grade_at(p, x0):
+        """The grade of plan p (along x) over its segment from x0 on."""
+        x = np.asarray(p.xy)[:, 0]
+        k = int(np.argmin(np.abs(x - x0)))
+        return float((p.z[k + 1] - p.z[k]) / (x[k + 1] - x[k]))
+
+    def test_a_side_road_leaving_a_step_in_the_road_it_joins(self):
+        # (the main road along y = 0, planned with a 3 m step at x = 0 (a 37 % grade over its samples there); a
+        # residential side road leaves it at x = 0, 30 degrees off its line: held to 0.87 x 37 % = 32 %, over its 10 %
+        # law, its network had no answer and was left as it was)
+        x = np.arange(-200.0, 201.0, 4.0)
+        main = plan(np.c_[x, 0 * x], 100.0 + np.where(x < 0.0, 0.0, 3.0), half=4.0)
+        u = np.array([math.cos(math.radians(30.0)), math.sin(math.radians(30.0))])
+        t = np.arange(0.0, 81.0, 4.0)
+        side = plan(t[:, None] * u[None, :], 103.0 + 0 * t)
+        info = {}
+        roadlaws.apply([main, side], [spec("primary"), spec("residential")], diagnostics=info)
+        self.assertEqual(info["infeasible"], 0, info.get("failed"))
+        self.assertAlmostEqual(float(side.z[0]), float(np.interp(0.0, x, main.z)), delta=0.02)
+        g_side = float((side.z[1] - side.z[0]) / 4.0)
+        g_main = self.grade_at(main, 0.0)
+        self.assertLessEqual(abs(g_main), roadlaws.laws(spec("primary"))[0] + 1e-3, "the step a curve under its law")
+        self.assertLess(abs(g_side - u[0] * g_main), roadlaws.LANDING_TOL + 0.005, "leaves at the solved grade its way")
+
+    def test_a_short_road_between_two_roads_lands_on_both(self):
+        # (two parallel roads 12 m apart, each planned with a step where a short link joins them obliquely: both ends of
+        # the link landed on grades that, held as planned, no 20 km/h curve joins in 14 m)
+        x = np.arange(-120.0, 121.0, 4.0)
+        a = plan(np.c_[x, 0 * x], 100.0 + np.where(x < 0.0, 0.0, 1.5), half=3.0)
+        b = plan(np.c_[x, 0 * x + 12.0], 100.0 + np.where(x < 8.0, 1.0, -0.5), half=3.0)
+        link = plan(np.array([[0.0, 0.0], [8 / 3, 4.0], [16 / 3, 8.0], [8.0, 12.0]]), np.array([100.7, 100.6, 100.5, 100.3]))
+        info = {}
+        roadlaws.apply([a, b, link], [spec("tertiary"), spec("tertiary"), spec("residential")], diagnostics=info)
+        self.assertEqual(info["infeasible"], 0, info.get("failed"))
+        self.assertAlmostEqual(float(link.z[0]), float(np.interp(0.0, x, a.z)), delta=0.02)
+        self.assertAlmostEqual(float(link.z[-1]), float(np.interp(8.0, x, b.z)), delta=0.02)
+
+
+class ThreeSampleCouplingTest(unittest.TestCase):
+    def test_a_height_between_two_samples_of_another_chain(self):
+        import carriageways
+        ch = lambda t: dict(t=np.asarray(t, np.float64), w=np.ones(len(t)), grade=1.0, K=0.01, lam=0.0, step=4.0,
+                            length=0.0)
+        # (z_a[0] - (1 - 0.25) z_b[1] - 0.25 z_b[2] = 0, and the same pulled apart by a band of +-0.1)
+        for kind in ("eq", "band"):
+            cps = [(0, 0, 1, 1, "eq", 0.0, 1, 2, 0.25)] if kind == "eq" else                 [(0, 0, 1, 1, "ge", -0.1, 1, 2, 0.25), (0, 0, 1, 1, "le", 0.1, 1, 2, 0.25)]
+            info = {}
+            z = carriageways.solve([ch([0.0, 0.0]), ch([10.0, 10.0, 14.0, 14.0])], cps, diagnostics=info)
+            self.assertTrue(info["feasible"] and info["converged"], info)
+            gap = float(z[0][0] - 0.75 * z[1][1] - 0.25 * z[1][2])
+            if kind == "eq":
+                self.assertAlmostEqual(gap, 0.0, delta=1e-5)
+            else:
+                self.assertAlmostEqual(gap, -0.1, delta=1e-4)     # (pulled down to it from 11 m: its lower side)
 
 
 if __name__ == "__main__":

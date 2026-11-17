@@ -11,7 +11,9 @@ one quadratic programme (the Rust kernel of carriageways.solve, as the interchan
   under its laws (gradeshapes.max_grade, gradeshapes.curve_radius: AASHTO's grades for the speed, a vertical curve of
   v^2 / a): a step, a kink, a sag a truck bottoms out in, becomes a curve as long as the speed needs;
 - a run's end that meets another road (a T junction, a node of three or more) stands at that road's height there and
-  leaves it at that road's grade its way (a landing: the junction's surface goes on into it, no kink at the mouth),
+  leaves it at that road's grade its way (a landing: the junction's surface goes on into it, no kink at the mouth): the
+  grade that road is solved to, not the one it was planned with (a planned grade is what the laws change: a ramp's
+  10 m step at a joint read as a 300 % grade, a side road held to it had no answer, and neither had its network),
   its last APPROACH_M driven at JUNCTION_KMH (a vertical curve that speed's: a side road climbing its bank from the
   junction turns up over ~10 m, not a 12 m truck's length of 0 to 12 % in 4 m, nor a 50 km/h road's 80 m of fill);
 - the grade is never held under what the ground itself has (a real mountain road stays as steep as it is, plus
@@ -158,8 +160,10 @@ def _solve_networks(chains, ccps):
             parent[a] = parent[parent[a]]
             a = parent[a]
         return a
-    for a, _i, b, _j, _k, _v in ccps:
-        parent[root(a)] = root(b)
+    for cp in ccps:
+        parent[root(cp[0])] = root(cp[2])
+        if len(cp) == 9:
+            parent[root(cp[0])] = root(cp[6])
     groups = collections.defaultdict(list)
     for c in range(n):
         groups[root(c)].append(c)
@@ -167,7 +171,8 @@ def _solve_networks(chains, ccps):
     stats = dict(networks=len(groups), infeasible=0, failed=[], ok_chain=[False] * n)
     for members in groups.values():
         pos = {c: q for q, c in enumerate(members)}
-        cps = [(pos[a], i, pos[b], j, k, v) for a, i, b, j, k, v in ccps if a in pos]
+        cps = [(pos[cp[0]], cp[1], pos[cp[2]]) + tuple(cp[3:6]) + ((pos[cp[6]],) + tuple(cp[7:]) if len(cp) == 9 else ())
+               for cp in ccps if cp[0] in pos]
         info = {}
         try:
             got = _cw.solve([chains[c] for c in members], cps, diagnostics=info)
@@ -268,7 +273,7 @@ def apply(plans, specs, held=None, under=None, skip=(), diagnostics=None, natura
         return r, int(np.argmin(np.abs(R[r]["sv"] - s)))
 
     def run_dir(r, i):
-        """Unit direction of run r at its sample i (the way its samples go) and its grade there (as planned)."""
+        """Unit direction of run r at its sample i (the way its samples go)."""
         s = R[r]["sv"][i]
         for k, _rev in R[r]["parts"]:
             _r, rev, s0 = loc[k]
@@ -277,12 +282,11 @@ def apply(plans, specs, held=None, under=None, skip=(), diagnostics=None, natura
                 seg = int(np.clip(np.searchsorted(arcs[k], sp) - 1, 0, len(arcs[k]) - 2))
                 d = xys[k][seg + 1] - xys[k][seg]
                 d = d / max(float(np.hypot(*d)), 1e-9)
-                sv, t = R[r]["sv"], R[r]["t"]
-                a, b = max(0, i - 1), min(len(sv) - 1, i + 1)
-                return (-d if rev else d), float((t[b] - t[a]) / max(sv[b] - sv[a], 1e-6))
-        return None, 0.0
+                return -d if rev else d
+        return None
 
-    cps = []                        # in the runs' terms: (run a, sample, run b, sample, kind, value): z_a - z_b (= / >=) v
+    cps = []                        # in the runs' terms: (run a, sample, run b, sample, kind, value[, run c, sample,
+                                    # alpha]): z_a - z_b (= / >= / <=) v, or z_a - (1 - alpha) z_b - alpha z_c
 
     def end_sample(k, e):
         return sample_of(k, 0.0 if e == 0 else float(arcs[k][-1]))
@@ -290,7 +294,9 @@ def apply(plans, specs, held=None, under=None, skip=(), diagnostics=None, natura
     landed = []                     # (plan, the plan it lands on): its ground need not yield to that one's (grading)
 
     def land(k, e, main, onto):
-        """Plan k's end e meets main (run, sample): one height there, and it leaves at main's grade its way."""
+        """Plan k's end e meets main (run, sample): one height there, and it leaves at main's grade its way: its next
+        sample st on stands at main's height st x cos(the angle between them) along main from the mouth, within
+        LANDING_TOL x st (main's solved heights there, between the two samples of main that hold that point)."""
         r, i = end_sample(k, e)
         ra, ia = main
         if (r, i) == (ra, ia):
@@ -301,14 +307,17 @@ def apply(plans, specs, held=None, under=None, skip=(), diagnostics=None, natura
             return
         R[r]["junction"][0 if i == 0 else 1] = True
         landed.append((idx[k], idx[onto], r))
-        md, mg = run_dir(ra, ia)
+        md = run_dir(ra, ia)
         if md is None:
             return
-        g_way = mg * float(_dir_out(xys[k], e) @ md)   # (the joined road's surface rising along the way out of it)
         j = 1 if i == 0 else m - 2
         st = abs(float(R[r]["sv"][j] - R[r]["sv"][i]))
-        cps.append((r, j, r, i, "ge", (g_way - LANDING_TOL) * st))
-        cps.append((r, i, r, j, "ge", -(g_way + LANDING_TOL) * st))
+        along = st * float(_dir_out(xys[k], e) @ md)   # (m along main's samples the way out of it reaches)
+        ma = len(R[ra]["sv"])
+        nb = ia + 1 if ia + 1 < ma else ia - 1          # (main's segment there: its next sample, at its end its last)
+        alpha = (nb - ia) * along / max(float(R[ra]["step"]), 1e-6)
+        cps.append((r, j, ra, ia, "ge", -LANDING_TOL * st, ra, nb, alpha))
+        cps.append((r, j, ra, ia, "le", LANDING_TOL * st, ra, nb, alpha))
     paired = set()
     for run in rs:
         for (k, rev), (k2, rev2) in zip(run, run[1:]):
@@ -383,11 +392,13 @@ def apply(plans, specs, held=None, under=None, skip=(), diagnostics=None, natura
                 return c, i - a
         c, a, _b = where[r][-1]
         return c, i - a
-    for ra, ia, rb, ib, kind, v in cps:
-        ca, ja = chain_of(ra, ia)
-        cb, jb = chain_of(rb, ib)
-        if (ca, ja) != (cb, jb):
-            ccps.append((ca, ja, cb, jb, kind, v))
+    for cp in cps:
+        ca, ja = chain_of(cp[0], cp[1])
+        cb, jb = chain_of(cp[2], cp[3])
+        if len(cp) == 9:
+            ccps.append((ca, ja, cb, jb, cp[4], cp[5]) + chain_of(cp[6], cp[7]) + (cp[8],))
+        elif (ca, ja) != (cb, jb):
+            ccps.append((ca, ja, cb, jb, cp[4], cp[5]))
     out, stats = _solve_networks(chains, ccps)
     if diagnostics is not None:
         diagnostics.update(stats)
@@ -410,7 +421,11 @@ def apply(plans, specs, held=None, under=None, skip=(), diagnostics=None, natura
         s = s0 + (arcs[k][-1] - arcs[k] if rev else arcs[k])
         if all(out[c] is None for c, _a, _b in where[r]):
             continue
-        z = zs[k] + (np.interp(s, R[r]["sv"], sol[r]) - np.interp(s, R[r]["sv"], R[r]["t"]))
+        o = np.argsort(s)
+        own = np.interp(R[r]["sv"], s[o], zs[k][o])     # (the run's samples on this plan's own heights: at a joint whose
+                                                        # parts the passes left apart, each part's own, so both end on
+                                                        # the solved height; the run's targets there are the first's)
+        z = zs[k] + (np.interp(s, R[r]["sv"], sol[r]) - np.interp(s, R[r]["sv"], own))
         z = np.where(hold[k], zs[k], z)                 # (the change, not the resampled profile: the plan's own detail)
         z = np.where(down[k], np.minimum(z, zs[k]), z)
         if float(np.abs(z - zs[k]).max()) >= MIN_MOVE_M:

@@ -6462,6 +6462,8 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     farsel::register(m)?;
     // (304 also) far_select_nodes and far_global_select return the selection's slack (the move under which it stays the
     // same: earthd's selection gate skips only selections that could not change)
-    m.add("VERSION", 304)?;
+    // 305: carriageway_profiles' couplings of three samples (z_a - (1 - alpha) z_b - alpha z_c: roadlaws' landings on the
+    // joined road's solved grade, not its planned one) and the <= kind
+    m.add("VERSION", 305)?;
     Ok(())
 }

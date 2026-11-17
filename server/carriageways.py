@@ -199,12 +199,16 @@ def solve(chains, couplings=(), rounds=ROUNDS, deadline=None, diagnostics=None):
     """Profiles of coupled chains; the Rust kernel owns the numerical solve and releases the GIL.
 
     chains: dicts with t/w (n,), grade, K, optional lo/hi (n,), lam, step, length.
-    couplings: (chain a, sample i, chain b, sample j, "eq" or "ge", value).
+    couplings: (chain a, sample i, chain b, sample j, "eq", "ge" or "le", value): z_a - z_b = 0, >= value, <= value;
+    or (a, i, b, j, kind, value, chain c, sample k, alpha): the same of z_a - (1 - alpha) z_b - alpha z_c (b's height
+    moved alpha of the way to c's: a road's height where another leaves it; roadlaws' landings).
     Negative sample indices address a chain's end as in NumPy. Optional diagnostics receives
     convergence, budget and measured constraint residuals. The returned profiles retain input order.
     """
     import fast
-    fast.require(156, "carriageway_profiles")
+    cp = list(couplings)
+    three = any(len(c) == 9 for c in cp)
+    fast.require(305 if three or any(c[4] == "le" for c in cp) else 156, "carriageway_profiles")
     target = [np.asarray(c["t"], np.float64) for c in chains]
     offsets = np.r_[0, np.cumsum([len(t) for t in target])].astype(np.int64)
     pack = lambda arrays: np.ascontiguousarray(np.concatenate(arrays) if arrays else np.zeros(0), np.float64)
@@ -219,17 +223,24 @@ def solve(chains, couplings=(), rounds=ROUNDS, deadline=None, diagnostics=None):
     parameters = np.asarray([(float(c["grade"]), float(c["K"]), float(c.get("lam", LAMBDA)),
                               float(c.get("step", STEP_M)), float(c.get("length", LENGTH_BIAS)))
                              for c in chains], np.float64).reshape(-1, 5)
-    cp = list(couplings)
-    if any(kind not in ("eq", "ge") for _a, _i, _b, _j, kind, _v in cp):
-        raise ValueError("carriageway coupling kind must be eq or ge")
-    rows = np.asarray([(a, i, b, j, int(kind == "ge")) for a, i, b, j, kind, _v in cp], np.int64).reshape(-1, 5)
-    values = np.asarray([v for _a, _i, _b, _j, _kind, v in cp], np.float64)
+    if any(len(c) not in (6, 9) or c[4] not in ("eq", "ge", "le") for c in cp):
+        raise ValueError("carriageway coupling kind must be eq, ge or le, with no third sample or one and its alpha")
+    kinds = {"eq": 0, "ge": 1, "le": 2}
+    if three:
+        rows = np.asarray([tuple(c[:4]) + (kinds[c[4]],) + (tuple(c[6:8]) if len(c) == 9 else (-1, 0)) for c in cp],
+                          np.int64).reshape(-1, 7)
+        alpha = np.asarray([float(c[8]) if len(c) == 9 else 0.0 for c in cp], np.float64)
+    else:
+        rows = np.asarray([tuple(c[:4]) + (kinds[c[4]],) for c in cp], np.int64).reshape(-1, 5)
+        alpha = None
+    values = np.asarray([c[5] for c in cp], np.float64)
     budget = float(deadline) - time.monotonic() if deadline is not None else BUDGET_S
     if np.isnan(budget):
         raise ValueError("carriageway deadline must not be NaN")
     budget = max(0.0, budget)
     z, info = fast._ef.carriageway_profiles(pack(target), pack(weights_), pack(lower), pack(upper), offsets,
-                                           parameters, rows, values, rounds, budget)
+                                           parameters, rows, values, rounds, budget,
+                                           *(() if alpha is None else (alpha,)))
     if diagnostics is not None:
         diagnostics.update(info)
     if not info["converged"] or not info["feasible"]:

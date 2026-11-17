@@ -23,6 +23,19 @@ pub struct Coupling {
     pub b: usize,
     pub inequality: bool,
     pub value: f64,
+    /// The coupled quantity is z[a] - (1 - alpha) z[b] - alpha z[c]: b's height moved alpha of the way to c (a road's
+    /// height where another leaves it, between two of its samples or past one). c == b, alpha 0: z[a] - z[b].
+    pub c: usize,
+    pub alpha: f64,
+    /// An inequality's side: true for <= value, false for >= value.
+    pub upper: bool,
+}
+
+impl Coupling {
+    /// The coupled quantity at heights z.
+    pub fn gap(&self, z: &[f64]) -> f64 {
+        z[self.a] - (1. - self.alpha) * z[self.b] - self.alpha * z[self.c]
+    }
 }
 
 pub struct Problem {
@@ -167,9 +180,10 @@ pub fn measure(problem: &Problem, z: &[f64], d: &mut Diagnostics) {
         d.feasible &= v.is_finite();
     }
     for c in &problem.couplings {
-        let gap = z[c.a] - z[c.b];
+        let gap = c.gap(z);
         if c.inequality {
-            d.clearance_shortfall = d.clearance_shortfall.max((c.value - gap).max(0.));
+            let short = if c.upper { gap - c.value } else { c.value - gap };
+            d.clearance_shortfall = d.clearance_shortfall.max(short.max(0.));
         } else {
             d.junction_gap = d.junction_gap.max(gap.abs());
         }
@@ -282,13 +296,24 @@ pub fn solve(
         factor.solve_into(&rhs, &mut z[a..b]);
     }
     for c in &problem.couplings {
-        let row = Row {
-            index: [c.a, c.b, 0],
-            coeff: [1., -1., 0.],
-            len: 2,
-            rhs: 0.,
+        let row = if c.alpha == 0. || c.c == c.b {
+            Row {
+                index: [c.a, c.b, 0],
+                coeff: [1., -1., 0.],
+                len: 2,
+                rhs: 0.,
+            }
+        } else {
+            Row {
+                index: [c.a, c.b, c.c],
+                coeff: [1., -(1. - c.alpha), -c.alpha],
+                len: 3,
+                rhs: 0.,
+            }
         };
-        if c.inequality {
+        if c.inequality && c.upper {
+            bounds(row, f64::NEG_INFINITY, c.value, &mut eq, &mut ineq);
+        } else if c.inequality {
             bounds(row, c.value, f64::INFINITY, &mut eq, &mut ineq);
         } else {
             bounds(row, 0., 0., &mut eq, &mut ineq);
