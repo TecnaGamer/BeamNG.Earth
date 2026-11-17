@@ -548,6 +548,15 @@ UNDER_REACH_M = UNDER_FLAT_M + UNDER_MAX_DROP_M * math.pi / UNDER_GRADE + 2 * UN
 # road's bridge whose ramps the frontage roads at both ends held down sat ~1 m over the motorway; the 30 m elevation
 # data has no cutting under it, and the AI car drove into its abutment wall, 2026-10-25)
 UNDER_ANY_ON = os.environ.get("BNE_UNDERPASS_ANY", "on") != "off"
+# ... and a bridge over a road the map has in a short tunnel there (railways.road_underpasses: the lower road's tunnel,
+# an underpass gradesep made open ground included) is never raised: the map says the road under goes below the ground,
+# so the elevation at the crossing is the upper road's own, and it is the road under that dips to clear the deck, as
+# under a motorway's bridge. Raised over the elevation's reading of the road under (its own level there), the SR17 at
+# Popoli stood on 5 m and 8 m approach fills either side of its deck over Via Aldo Moro (42.1779 N 13.8246 E), the deck
+# climbing 8 m in 44 m between them, where the road is level with the ground. Not over a motorway's or trunk's tunnel:
+# those are never lowered for a street (their own profile, their tunnel networks), and Avenue de Neuilly's deck over the
+# Peripherique at Porte Maillot stepped 4.6 m at its abutment. BNE_UNDERPASS_TUNNEL_FIXED=off: as before.
+UNDER_TUNNEL_FIXED_ON = os.environ.get("BNE_UNDERPASS_TUNNEL_FIXED", "on") != "off"
 # A single-span bridge and the roads under it solved as one height problem (crossings.py; BNE_INTERCHANGE=1, off by
 # default): its ends raised, or the roads under it lowered, whichever costs less, from the ground they can be trusted
 # for (not lidar's fill under the deck, not an abutment on its slope). Replaces the dip, its lidar exception and the
@@ -647,6 +656,14 @@ XS_FLOOR_M = 150.0      # m round a solved crossing no road is dug under its tar
 # junctions at grade: APPROACH_SKIP) spreads as before, and so does one whose street has room for less than
 # UNDER_RUN_MIN_M (a junction right by the bridge is part of the underpass) or is a ring.
 UNDER_RUN_ON = os.environ.get("BNE_UNDERPASS_RUN", "on") != "off"
+# A road under a railway that stays at grade over the road's own mapped short tunnel (_lower_underpasses' `mapped`) keeps its
+# dip on its own street, on lidar too (street_runs), with the measured clearance (UNDER_MEASURED_HEADROOM_M), and a run's
+# end at a dead end (no other map line within UNDER_DEAD_END_M) is not held at the ground: the run goes on straight past
+# it. Spread along the joined roads (underpass_offsets) the dips stopped short at Popoli: the SR17's held 2.5 m by its
+# own bridge 134 m away, the service road's 0.2 m by its dead end 38 m away, the residential road beside the track dipped
+# 3.3 m under nothing; the trucks hit the railway's decks. Off with BNE_UNDERPASS_MAPPED_RUN=off.
+UNDER_MAPPED_RUN_ON = os.environ.get("BNE_UNDERPASS_MAPPED_RUN", "on") != "off"
+UNDER_DEAD_END_M = 3.0
 # A short overpass mapped as several parts end to end (a 3 m stub split off at its end, two ways meeting mid-span) is one
 # span for the underpass: each part had another joined to it, so none was a single span and the road under kept its
 # ground: the M1's bridges near Dundalk 3.3-4 m over the motorway (GitHub #960), an overpass at the trunk's height by
@@ -2243,6 +2260,27 @@ def _caught(e):
 _CAUGHT_SAID = set()
 
 
+# A track's ground line coupled to the roads beside it (railroadseam.couple) is held at its own bed near a rail deck's ends:
+# the deck sets the track's height there, and the mesh (railways.tile_mesh) never takes the coupling. At Compiegne the ring
+# roads round the island pulled the line 6 m down between the two bridges: the ground graded to a trench 5-6 m under the
+# ballast. Within SEAM_DECK_HOLD_M of a deck's end the move is none, then it may grow at railways.GRADE per metre.
+SEAM_DECK_HOLD_ON = os.environ.get("BNE_SEAM_DECK_HOLD", "on") != "off"
+SEAM_DECK_HOLD_M = 30.0
+
+
+def _held_by_decks(xy, move, ends, hold=SEAM_DECK_HOLD_M):
+    """The coupling's moves (n,) of a track's points xy (n, 2), each at most railways.GRADE per metre past hold metres from
+    the nearest deck end (ends (m, 2)); unchanged with no deck end."""
+    import railways
+    move = np.asarray(move, np.float64)
+    if not len(ends) or not len(move):
+        return move
+    p = np.asarray(xy, np.float64)[:, :2]
+    d = np.sqrt(((p[:, None, :] - np.asarray(ends, np.float64)[None, :, :]) ** 2).sum(-1)).min(axis=1)
+    cap = railways.GRADE * np.maximum(d - hold, 0.0)
+    return np.clip(move, -cap, cap)
+
+
 class _Planner:
     """The road plans of one planning region (geotiles.PLAN_Z), in its frame, per map cell, made once (worker threads;
     it fetches the road cells it lacks). store: the PlanStore it belongs to (its other regions, its settings)."""
@@ -2869,13 +2907,19 @@ class _Planner:
                              for (_f, q), sp in zip(plans[:len(pspecs)], pspecs)
                              if TUNNEL_TAG not in _f and (getattr(sp, "cls", None) or "").removesuffix("_link")
                              not in RAIL_YIELD_SKIP] if RAIL_YIELD_ON else []
+                    rail_ends = None
+                    if SEAM_DECK_HOLD_ON and beside:     # (the decks' ends round: the track is theirs near them)
+                        ends_ = [np.asarray(r, np.float64)[[0, -1], :2] for kk in railways.cells_near(self.frame, own)
+                                 for r in self._cell_enu(kk, ground=False).get("rail_bridges", ()) if len(r) >= 2]
+                        rail_ends = np.concatenate(ends_) if ends_ else np.zeros((0, 2))
                     for fid, xy, z in railways.grade_plans(
                             self.frame, rcells, own, self.elev,
                             load=lambda k: self.md.cell(k, layers=("roads",), kind="demand").layers.get("roads")):
                         if beside:      # (the bed beside a road: where the ground between has room for its slope)
                             import railroadseam
-                            z = railroadseam.couple(xy, z, railways.GRADE_HALF_M, beside,
-                                                    railways.seam_lowered(xy, z, beside), railways.SEAM_LOWER_M)
+                            moved = railroadseam.couple(xy, z, railways.GRADE_HALF_M, beside,
+                                                        railways.seam_lowered(xy, z, beside), railways.SEAM_LOWER_M)
+                            z = z + _held_by_decks(xy, moved - z, rail_ends) if rail_ends is not None else moved
                             if railways.railxing.ENABLED:   # (flush with the roads' plans, as tile_mesh with the graded road)
                                 z = railways.flush_to_plans(xy, z, beside)
                         # (the carriageway of the bed's plan is the ballast's top, not the whole flat band: past it the band
@@ -3845,9 +3889,14 @@ class _Planner:
         keys = sorted(set(mapcells.cells_for_bbox(float(cla.min()), float(clo.min()), float(cla.max()),
                                                   float(clo.max()))) | {key}, key=str)
         bridges, ground, over, limits = [], {}, [], []
+        touch = []                      # (every map line near, any class, decks too: what a dead end touches none of)
         for k in keys:
             c = self._cell_enu(k)
             limits += c.get("height_limits", ())
+            if UNDER_MAPPED_RUN_ON:
+                touch += [np.asarray(g_[0], f64)[:, :2] for g_ in c["ground"]]
+                touch += [np.asarray(b_, f64)[:, :2] for b_ in c["bridges"]]
+                touch += [np.asarray(b_, f64)[:, :2] for b_ in c.get("rail_bridges", ())]
             if UNDER_DECK_ON:               # (every deck, for the ground under it: _under_ground)
                 over += [(line, half) for line, half in zip(c["bridges"], c.get("bridge_half", ())) if half > 0]
                 over += [(line, railwaysmod.DECK_HALF_M) for line in c.get("rail_bridges", ())]
@@ -3856,7 +3905,8 @@ class _Planner:
                     continue
                 if not (UNDER_ANY_ON or cls in APPROACH_SKIP or cls.endswith("_link")):
                     continue
-                bridges.append((line, cls in APPROACH_SKIP, False))     # (a link's "<cls>_link": raised)
+                bridges.append((line, cls in APPROACH_SKIP or self._over_mapped_underpass(line), False))
+                # (a link's "<cls>_link": raised; one over a mapped underpass is not: UNDER_TUNNEL_FIXED_ON)
             # (a line's deck: never raised; straight between its ends whatever its length or what it joins, as
             # railways.deck_heights lays it: no single-span test)
             bridges += [(line, True, True) for line in c.get("rail_bridges", ())]
@@ -4011,6 +4061,7 @@ class _Planner:
         dem = getattr(self, "dem", None) or getattr(self.md, "dem", None)
         lidar = UNDER_LIDAR_ON and not coarse and dem is not None and hasattr(dem, "coarse_at")
         requirements, xs_floor = [], []
+        mapped_req = set()              # (requirements under a railway at grade over the road's mapped tunnel)
         floor = seatiles.SEA_E + UNDER_SEA_M
         for n_c, ((i, sc, top), (deck, fixed), z, (bi, pt), top_cw) in enumerate(zip(cands, decks, zc, cand_xs,
                                                                                          cand_cw)):
@@ -4051,19 +4102,26 @@ class _Planner:
                         xs_floor.append((np.asarray(pt, f64), target, _road_fids(i, lines, [ground[g][3] for g in gids],
                                                                                 gids), sol["reach"]))
                     continue
-            if rail_span[bi] and lidar and n_c not in signed and \
+            # (a railway over the road's own mapped short tunnel stays at its bed: railways.TUNNEL_AT_GRADE_ON; the road
+            # dips the full clearance under it, no level crossing made of it nor lidar's 1 m cap)
+            mapped = rail_span[bi] and railwaysmod.TUNNEL_AT_GRADE_ON and self._over_mapped_underpass(spans[bi][0])
+            if rail_span[bi] and lidar and n_c not in signed and not mapped and \
                     railwaysmod.level_bridge(self.frame, spans[bi][0], lines[i], sc):
                 continue                        # (a short rail bridge over a road on level ground: no bridge, a level
                                                 # crossing; railways.parts lays it on the ground: plan 035)
             if lidar and not fixed and deck < z + UNDER_LIDAR_DECK_M:
                 continue                        # (the ends' ground is not the deck: the road keeps its own, the deck
                                                 # rises; a never-raised deck, a railway's or a motorway's, cannot)
+            if mapped and UNDER_MAPPED_RUN_ON:      # (the measured clearance, not the 6 m guess: a 7.4 m dip floated
+                top += roadsmod.MIN_BRIDGE_HEADROOM_M - UNDER_MEASURED_HEADROOM_M   # the road's mesh over its cut)
             target = max(top, z - UNDER_MAX_DROP_M)
-            if rail_span[bi] and lidar and RAIL_UNDER_LIDAR_DROP_M is not None:
+            if rail_span[bi] and lidar and RAIL_UNDER_LIDAR_DROP_M is not None and not mapped:
                 target = max(target, z - (RAIL_UNDER_SIGNED_DROP_M if n_c in signed else RAIL_UNDER_LIDAR_DROP_M))
             if UNDER_SEA_ON and z >= floor:
                 target = max(target, floor)     # (not under the sea's surface: its water tiles would flood it)
             if target < z - 0.1:
+                if mapped and UNDER_MAPPED_RUN_ON:
+                    mapped_req.add(len(requirements))
                 requirements.append((i, sc, z - target))
         if not requirements:
             return
@@ -4093,6 +4151,10 @@ class _Planner:
         net, runs = requirements, []
         if coarse and UNDER_RUN_ON:
             net, runs = street_runs(lines, [ground[g][3] for g in gids], requirements)
+        elif mapped_req:
+            mine = [requirements[n_] for n_ in sorted(mapped_req)]
+            net_m, runs = street_runs(lines, [ground[g][3] for g in gids], mine, free=lambda q, own: dead_end(q, own, touch))
+            net = [r_ for n_, r_ in enumerate(requirements) if n_ not in mapped_req] + net_m
         offsets = underpass_offsets(lines, net, queries)
         for rxy, members, reqs in runs:
             on = [k for k, (ln, _q) in enumerate(queries) if ln in members]
@@ -5940,6 +6002,59 @@ class _Planner:
             self._marks_seen("_end_raw_cache", k)
             return memo[k]
 
+    def _over_mapped_underpass(self, bridge):
+        """Does a road bridge (line (k, 2) in the frame) span a short road tunnel the map has (railways.road_underpasses:
+        the lower road's tunnel part, gradesep's open underpass included), not a motorway's or trunk's (APPROACH_SKIP),
+        away from its ends (APPROACH_MIN_CROSS_M)?
+        Such a bridge is never raised (UNDER_TUNNEL_FIXED_ON), unless it also spans, away from its ends, a road that
+        never dips (APPROACH_SKIP's, on the ground or in a short tunnel) or a track on the ground. A pure function of the map round the bridge, kept per
+        bridge (at most 4096)."""
+        if not UNDER_TUNNEL_FIXED_ON:
+            return False
+        b = np.asarray(bridge, np.float64)[:, :2]
+        if len(b) < 2:
+            return False
+        k = (round(float(b[0, 0]), 1), round(float(b[0, 1]), 1), round(float(b[-1, 0]), 1), round(float(b[-1, 1]), 1),
+             len(b))
+        with self.lock:
+            memo = self.__dict__.setdefault("_over_underpass", {})
+            if k in memo:
+                return memo[k]
+        L = float(dnp.hypot(*np.diff(b, axis=0).T).sum())
+        res = False
+        if L >= 2 * APPROACH_MIN_CROSS_M and self.md is not None:
+            la, lo, _ = self.frame.enu_to_geodetic(b[:, 0], b[:, 1], 0.0)
+            la, lo = np.asarray(la, np.float64), np.asarray(lo, np.float64)
+            pad = 30.0 / 111320.0
+            keys = sorted(set(mapcells.cells_for_points(la, lo, pad, pad / max(0.05, dmath.cos(math.radians(float(la[0])))))),
+                          key=str)
+            cells = [self.md.cell(kk, layers=("roads",), kind="demand").layers.get("roads") for kk in keys]
+            box = (float(b[:, 0].min()), float(b[:, 1].min()), float(b[:, 0].max()), float(b[:, 1].max()))
+            cls = []
+            got = railwaysmod.road_underpasses(self.frame, cells, box, 10.0, classes=cls)
+            tun = [np.asarray(xy, np.float64)[:, :2] for (xy, _h), c in zip(got, cls)
+                   if len(xy) >= 2 and str(c) not in APPROACH_SKIP]
+
+            def mid(hits):
+                return any(APPROACH_MIN_CROSS_M <= float(c[1]) <= L - APPROACH_MIN_CROSS_M for c in hits)
+            if tun and mid(roadsmod._crossings([b], tun)):
+                # (not when the deck also spans what never dips: a motorway's or trunk's road, on the ground or in its
+                # own short tunnel, or a track: the deck rises over that as before. Dalton Street in Boston spans a
+                # service tunnel and the Mass Pike's carriageway: fixed, its north abutment stood 0.3-1.0 m into the
+                # Pike's clearance)
+                cs = [self._cell_enu(kk) for kk in keys]
+                hard = [np.asarray(line, np.float64)[:, :2] for c in cs for line, _h, gc in c["ground"]
+                        if str(gc) in APPROACH_SKIP and len(line) >= 2]
+                hard += [np.asarray(xy, np.float64)[:, :2] for (xy, _h), c in zip(got, cls)
+                         if len(xy) >= 2 and str(c) in APPROACH_SKIP]
+                hard += [np.asarray(r, np.float64)[:, :2] for c in cs for r in c.get("rail_ground", ()) if len(r) >= 2]
+                res = not (hard and mid(roadsmod._crossings([b], hard)))
+        with self.lock:
+            if len(memo) > 4096:
+                memo.clear()
+            memo[k] = res
+        return res
+
     def _end_lift_raw_calc(self, xy):
         la, lo, _ = self.frame.enu_to_geodetic(np.array([xy[0]]), np.array([xy[1]]), 0.0)
         home = mapcells.cell_of(float(la[0]), float(lo[0]))
@@ -5953,6 +6068,8 @@ class _Planner:
         if NEAREST_END:
             hit = hit[np.argsort(d[hit], kind="stable")]
         bridge = hc["bridges"][hc["end_of"][int(hit[0])]]
+        if self._over_mapped_underpass(bridge):
+            return None             # (a bridge over a mapped underpass is not raised: the road under dips)
         sol = self._xsolve(bridge) if XS_ON else None
         # the bridge's own cells (a few, it is short): the roads crossing under it and the parts it joins
         lam, lom, _ = self.frame.enu_to_geodetic(bridge[:, 0], bridge[:, 1], 0.0)
@@ -7617,14 +7734,30 @@ def underpass_offsets(lines, requirements, queries=None):
     return np.split(out, np.cumsum([len(q) for q in qs])[:-1])
 
 
-def street_runs(lines, classes, requirements):
+def dead_end(q, own, lines):
+    """Is the point q (2,) of the line own (k, 2) a dead end: no other of lines [(k, 2)] within UNDER_DEAD_END_M? Pure."""
+    q = np.asarray(q, np.float64)
+    for t in lines:
+        if len(t) < 2 or (len(t) == len(own) and np.allclose(t, own)):
+            continue
+        a, b = t[:-1], t[1:]
+        ab = b - a
+        u = np.clip(((q - a) * ab).sum(1) / np.maximum((ab * ab).sum(1), 1e-12), 0.0, 1.0)
+        if float(np.min(dnp.hypot(*(a + u[:, None] * ab - q).T))) < UNDER_DEAD_END_M:
+            return False
+    return True
+
+
+def street_runs(lines, classes, requirements, free=None):
     """UNDER_RUN_* (coarse elevation): requirements [(line, arc m, depth m)] on the ground roads lines [(k, 2)] (classes:
     each one's road class) split into (those spread along the joined roads as before: [(line, arc, depth)], those kept
     on their street: [(run xy (k, 2), {its lines}, [(0, arc m along the run, depth m)])]). A run: a line carried on
     through every node where only its next piece joins it (the map splits a road at more than its junctions) to its
     junctions (3+ lines) and loose ends; underpass_offsets on a run alone lays each dip inside it (flat, then ramps up
     to UNDER_MAX_GRADE, as deep as fits). Kept on its run: a street's dip (not a motorway's or trunk's: APPROACH_SKIP)
-    whose run has room for UNDER_RUN_MIN_M of it (or all of it, when shallower) and is no ring. Pure."""
+    whose run has room for UNDER_RUN_MIN_M of it (or all of it, when shallower) and is no ring. free(xy, line's points):
+    is a run's loose end there a dead end? Such an end is not held at the ground: the run goes on straight past it as far
+    as the deepest dip's ramp reaches (UNDER_MAPPED_RUN_ON). Pure."""
     if not requirements:
         return list(requirements), []
     pts = [np.asarray(ln, np.float64)[:, :2] for ln in lines]
@@ -7666,8 +7799,21 @@ def street_runs(lines, classes, requirements):
             first.append(sum(len(q) for q in xy) - (1 if xy else 0))
             xy.append(p if not xy else p[1:])
         xy = np.vstack(xy)
+        pre = 0
+        if free is not None and not ring:
+            ext = UNDER_MAX_DROP_M * math.pi / (2 * UNDER_GRADE) + UNDER_FLAT_M
+            (m0, r0), (m1, r1) = seq[0], seq[-1]
+            e0 = edges[m0][1] if r0 else edges[m0][0]
+            e1 = edges[m1][0] if r1 else edges[m1][1]
+            if len(inc[e0]) == 1 and free(xy[0], pts[m0]):
+                u = (xy[0] - xy[1]) / max(float(dnp.hypot(*(xy[0] - xy[1]))), 1e-9)
+                xy = np.vstack([xy[0] + u * ext, xy])
+                pre = 1
+            if len(inc[e1]) == 1 and free(xy[-1], pts[m1]):
+                u = (xy[-1] - xy[-2]) / max(float(dnp.hypot(*(xy[-1] - xy[-2]))), 1e-9)
+                xy = np.vstack([xy, xy[-1] + u * ext])
         sx = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(xy, axis=0).T))]
-        got = (xy, sx, {m: (float(sx[k]), rev, float(edges[m][2][-1])) for (m, rev), k in zip(seq, first)}, ring)
+        got = (xy, sx, {m: (float(sx[k + pre]), rev, float(edges[m][2][-1])) for (m, rev), k in zip(seq, first)}, ring)
         for m, _rev in seq:
             memo[m] = got
         return got

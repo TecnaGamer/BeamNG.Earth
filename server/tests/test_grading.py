@@ -1446,6 +1446,29 @@ class StreetRunsTest(unittest.TestCase):
                                                 [(0, 300), (0, 0)])]
         self.assertEqual(grading.street_runs(ring, ["tertiary"] * 4, [(0, 150.0, 5.0)]), ([(0, 150.0, 5.0)], []))
 
+    def test_a_dead_end_does_not_hold_the_dip_at_the_ground(self):
+        """Popoli's service road under the railway (2026-11-16): its west end, 38 m from the crossing, joins nothing; held
+        there the dip was 0.2 m deep. Free (free: a dead end), the run goes on straight past it by the longest ramp, and
+        the crossing keeps its arc along the run's start; a loose end that touches a line is held as before."""
+        lines = [np.array([(0.0, 0.0), (200.0, 0.0)]), np.array([(200.0, 0.0), (200.0, 200.0)]),
+                 np.array([(200.0, 0.0), (400.0, 0.0)])]
+        cls = ["service"] * 3
+        req = [(0, 38.0, 5.0)]
+        net, runs = grading.street_runs(lines, cls, req)
+        self.assertEqual(net, req, "(held at its dead end: no room for the dip, spread as before)")
+        touch = [np.asarray(ln) for ln in lines]
+        net, runs = grading.street_runs(lines, cls, req, free=lambda q, own: grading.dead_end(q, own, touch))
+        self.assertEqual(net, [])
+        xy, members, reqs = runs[0]
+        ext = grading.UNDER_MAX_DROP_M * np.pi / (2 * grading.UNDER_GRADE) + grading.UNDER_FLAT_M
+        np.testing.assert_allclose(xy[0], (-ext, 0.0))
+        np.testing.assert_allclose(xy[-1], (200.0, 0.0), err_msg="(the junction end held)")
+        self.assertAlmostEqual(reqs[0][1], ext + 38.0)
+        off = grading.underpass_offsets([xy], reqs, [(0, np.array([[38.0, 0.0]]))])[0]
+        self.assertLess(float(off[0]), -4.0, "the dip about as deep as asked at the crossing")
+        wall = touch + [np.array([(-2.0, -5.0), (-2.0, 5.0)])]          # (a line 2 m past the end: no dead end)
+        self.assertFalse(grading.dead_end(lines[0][0], lines[0], wall))
+
 
 class CoarseUnderpassTest(unittest.TestCase):
     def test_a_street_dip_stays_on_the_street_on_coarse_elevation(self):

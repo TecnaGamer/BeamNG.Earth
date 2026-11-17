@@ -83,6 +83,24 @@ class RailProfileTest(unittest.TestCase):
         self.assertTrue(np.isnan(got[0]).all())
 
 
+class FindNearTest(unittest.TestCase):
+    def test_a_point_another_window_split_differently_takes_the_lines_nearest_points(self):
+        """Popoli's track 2 (2026-11-16): the asking window split the line into other parts than the node's, no exact key
+        matched, the grader fell back to profiling the whole cell (decks 7.5 m up carried along the track). Points of the
+        same line, any kind, within half a step are interpolated; another line's, or farther, stay NaN."""
+        xy = np.array([[0.0, 0.0], [railways.STEP_M, 0.0], [2 * railways.STEP_M, 0.0]])
+        cm = railprofile._cm(xy)
+        keys = railprofile._pack(cm[:, 0], cm[:, 1])
+        node = {("f", "bridge"): (np.sort(keys), np.array([10.0, 12.0, 14.0])[np.argsort(keys)]),
+                ("g", "ground"): (np.sort(keys), np.full(3, 99.0))}
+        ask = railprofile._cm(np.array([[0.5 * railways.STEP_M, 0.0], [0.0, 3 * railways.STEP_M]]))
+        out = railprofile._find(node, "f", "ground", ask)
+        self.assertTrue(np.isnan(out).all(), "(no exact key: other kind, other points)")
+        got = railprofile._find_near(node, "f", ask, out.copy())
+        self.assertAlmostEqual(float(got[0]), 11.0, places=6)
+        self.assertTrue(np.isnan(got[1]), "(farther than half a step: left NaN)")
+
+
 class JoinBedsTest(unittest.TestCase):
     def line(self, p0, p1, step=2.0):
         n = int(np.hypot(p1[0] - p0[0], p1[1] - p0[1]) // step) + 1
