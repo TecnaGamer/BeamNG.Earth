@@ -3998,6 +3998,11 @@ class _Planner:
             return got
         cands, decks, cand_xs, cand_cw = [], [], [], []
         signed = set()                  # (the candidates under a rail deck whose road has a height limit)
+        span_cls = {}                   # (LEVEL_SPACING: the classes of every road under each span, its one target)
+        if roadsmod.LEVEL_SPACING:
+            for i, cr in enumerate(crs):
+                for c in cr or ():
+                    span_cls.setdefault(c[0], set()).add(str(ground[gids[i]][3]))
         for i, cr in enumerate(crs):
             if not cr:
                 continue
@@ -4048,7 +4053,7 @@ class _Planner:
                     roadsmod.deck_depth(roadsmod.geom_span([b]))
                 # (LEVEL_SPACING: the clearance of this road's class, as the deck's own solve asks for it; a measured
                 # deck: that clearance at most UNDER_MEASURED_HEADROOM_M, not 6.0 - 4.5 off the class's)
-                under_cls = None if rail or not roadsmod.LEVEL_SPACING else [ground[gids[i]][3]]
+                under_cls = None if rail or not roadsmod.LEVEL_SPACING else sorted(span_cls.get(bi, ()))
                 clear = roadsmod.deck_road_clear(depth, under_cls) + ROAD_LIFT
                 if measured:                    # (its real headroom, not the one a guessed deck is given)
                     clear -= max(0.0, (roadsmod.lower_clear(under_cls) if under_cls else roadsmod.MIN_BRIDGE_HEADROOM_M)
@@ -6134,9 +6139,13 @@ class _Planner:
         crossing = np.zeros(len(near), bool)
         for n, cr in zip(inbox, roadsmod._crossings_by(spans, [lines[near[n]] for n in inbox])):
             crossing[n] = bool(cr)
+        gcls_of = {id(gl_): cl_ for c in cs for gl_, _h, cl_ in c["ground"]} if roadsmod.LEVEL_SPACING else None
+        ground_cls = [] if gcls_of is not None else None
         for n, i in enumerate(near):
             line, half = lines[i], halves[i]
             ground.append(line)
+            if ground_cls is not None:
+                ground_cls.append(gcls_of.get(id(line)))
             touches = bool(tch[n])
             under = bool(crossing[n])
             if touches:
@@ -6212,7 +6221,7 @@ class _Planner:
             half_b = float((hc.get("bridge_half") or [JR_TRUSTED_HALF_M] * len(hc["bridges"]))[bi])
             lt = [lf for end, lf in bridge_lifts(bridge, bridges, ground, z_at, chain, rails,
                                                  under_z=self._under_trusted(ground, half_b, z_at),
-                                                 limits=limits)
+                                                 limits=limits, classes=ground_cls)
                   if dnp.hypot(*(end - xy)) <= APPROACH_TOUCH_M]
             jr_here = bool(lt) and float(lt[0]) >= JUNCTION_MIN_LIFT
             if not jr_here:
@@ -6262,7 +6271,7 @@ class _Planner:
             hs = hc.get("bridge_half") or ()
             bhalf = float(hs[bi]) if bi < len(hs) and hs[bi] > 0 else 4.0
         for end, lift in bridge_lifts(bridge, bridges, ground, z_at, chain, rails, half=bhalf,
-                                      limits=limits):
+                                      limits=limits, classes=ground_cls):
             if dnp.hypot(*(end - xy)) <= APPROACH_TOUCH_M:
                 best = lift
                 break
@@ -7513,7 +7522,7 @@ def ground_under_deck(deck, half, crossings, z_at):
 
 
 def bridge_lifts(line, all_bridges, ground_lines, z_at, chain=None, rail_lines=(), under_z=None, half=None,
-                 limits=()):
+                 limits=(), classes=None):
     """[(end xy (2,), lift m)] of a bridge part (line (k, 2) ENU m): at each of its ends that no other bridge part
     continues from (an abutment), how far the ground there must be raised for the deck to clear every road crossing
     under it (roads.DECK_ROAD_CLEAR + APPROACH_MARGIN_M over the road, full height within APPROACH_FLAT_M of the end,
@@ -7524,7 +7533,9 @@ def bridge_lifts(line, all_bridges, ground_lines, z_at, chain=None, rail_lines=(
     (_Planner._under_trusted). half: the deck's half width, the road under's ground then read beside the deck
     (ground_under_deck) where under_z is not given; None: on the crossing itself. limits: the height limits [(xy (k, 2),
     m)] of the roads (roads.road_sign_at): a road under with one asks its limit under the girders (roads.signed_road_clear)
-    instead. Pure given z_at and under_z."""
+    instead. classes: per ground line its road class (roads.LEVEL_SPACING: the clearance of the most demanding road
+    under the chain, roads.fast_crossing_ground's, a railway's for a railway: one target per crossing, as
+    BridgeProfiles._solve asks it); None: roads.deck_road_clear's unknown. Pure given z_at and under_z."""
     zu_at = z_at if under_z is None else under_z
     line = np.asarray(line, np.float64)[:, :2]
     if len(line) < 2:
@@ -7629,7 +7640,14 @@ def bridge_lifts(line, all_bridges, ground_lines, z_at, chain=None, rail_lines=(
             continue
         d, zu_e = d[far], zu[far]
         depth = roadsmod.deck_depth(roadsmod.geom_span([line] + list(chain or ())))
-        clear = np.full(len(zu_e), roadsmod.deck_road_clear(depth))
+        if roadsmod.LEVEL_SPACING and classes is not None:
+            got = roadsmod.fast_crossing_ground([line] + [np.asarray(q, np.float64)[:, :2] for q in (chain or ())],
+                                               ground_lines)
+            under_cls = sorted({str(classes[g]) for g in got if g < len(classes) and classes[g] is not None})
+            clear = np.where(rail[far], roadsmod.deck_road_clear(depth, ["rail"]),
+                             roadsmod.deck_road_clear(depth, under_cls))
+        else:
+            clear = np.full(len(zu_e), roadsmod.deck_road_clear(depth))
         if limits:
             for n, (p, r) in enumerate(zip(pts[far], rail[far])):
                 h = None if r else roadsmod.road_sign_at(limits, p)
