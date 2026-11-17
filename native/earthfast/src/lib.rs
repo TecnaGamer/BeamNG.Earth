@@ -1,5 +1,10 @@
 //! Geometry kernels for the world server (server/fast.py wraps them, with the Python versions as the fallback).
 //! All coordinates are metres in the anchor's local frame, f64.
+// Determinism (the Rust port plan's section 2.6; native/earthfast/clippy.toml lists the methods and types): no platform
+// maths (dm::Dm instead), no powi / mul_add, no std HashMap / HashSet iteration order into an output, no std hasher
+// whose keys vary per process or per Rust release. A site that needs one anyway carries a narrow #[allow(...)] with its
+// reason; `cargo clippy` fails on a new one.
+#![deny(clippy::disallowed_methods, clippy::disallowed_types, clippy::iter_over_hash_type)]
 use crate::dm::Dm;
 mod dm;
 mod devctx;
@@ -5653,7 +5658,7 @@ fn wet_run_inside(xy: PyReadonlyArray2<f64>, wet: PyReadonlyArray1<bool>) -> PyR
     }
     let mut s = vec![0.0f64; n];
     for i in 1..n {
-        s[i] = s[i - 1] + ((p[[i, 0]] - p[[i - 1, 0]]).powi(2) + (p[[i, 1]] - p[[i - 1, 1]]).powi(2)).sqrt();
+        s[i] = s[i - 1] + ((p[[i, 0]] - p[[i - 1, 0]]).sq() + (p[[i, 1]] - p[[i - 1, 1]]).sq()).sqrt();
     }
     let (mut best, mut i) = (0.0f64, 0usize);
     while i < n {

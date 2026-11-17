@@ -154,12 +154,14 @@ impl Map {
         }
         // per part: inside its outer ring and none of its holes
         let mut part_in: HashMap<u32, (bool, bool)> = HashMap::new();
+        #[allow(clippy::iter_over_hash_type)] // hash order: flags only set to true (an OR)
         for (&ring, &odd) in &parity {
             if !odd { continue; }
             let e = part_in.entry(self.ring_part[ring as usize]).or_insert((false, false));
             if self.ring_hole[ring as usize] { e.1 = true } else { e.0 = true }
         }
         let mut found = 0u16;
+        #[allow(clippy::iter_over_hash_type)] // hash order: the one code all parts agree on, else 0, in any order
         for (&part, &(outer, hole)) in &part_in {
             if !outer || hole { continue; }
             let code = self.part_code[part as usize] + 1;

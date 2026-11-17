@@ -27,7 +27,7 @@ fn nearest(net: &Net, q: [f64; 2], max: f64) -> Option<(usize, f64, f64, bool)> 
             let (dx, dy) = (bx - ax, by - ay);
             let l2 = (dx * dx + dy * dy).max(1e-12);
             let t = (((q[0] - ax) * dx + (q[1] - ay) * dy) / l2).clamp(0.0, 1.0);
-            let d = ((ax + t * dx - q[0]).powi(2) + (ay + t * dy - q[1]).powi(2)).sqrt();
+            let d = ((ax + t * dx - q[0]).sq() + (ay + t * dy - q[1]).sq()).sqrt();
             if d <= max && best.map_or(true, |b| d < b.2) {
                 best = Some((r, rd.s[k - rd.a] + t * l2.sqrt(), d, dx * (q[1] - ay) - dy * (q[0] - ax) > 0.0));
             }
@@ -52,7 +52,7 @@ fn priority(net: &Net, a: &Input, out: &mut Vec<Cand>) {
                 let (dx, dy) = (bx - ax, by - ay);
                 let l2 = (dx * dx + dy * dy).max(1e-12);
                 let t = (((q[0] - ax) * dx + (q[1] - ay) * dy) / l2).clamp(0.0, 1.0);
-                let d = ((ax + t * dx - q[0]).powi(2) + (ay + t * dy - q[1]).powi(2)).sqrt();
+                let d = ((ax + t * dx - q[0]).sq() + (ay + t * dy - q[1]).sq()).sqrt();
                 if d > PRIORITY_ON_M { continue; }
                 let s = rd.s[k2 - rd.a] + t * l2.sqrt();
                 if pick.map_or(true, |b| (rd.rank, d) < (b.2, b.3)) { pick = Some((r, s, rd.rank, d)); }

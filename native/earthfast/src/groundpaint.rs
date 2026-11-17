@@ -5,6 +5,7 @@
 
 use numpy::{PyReadonlyArray1, PyReadonlyArray2};
 use pyo3::prelude::*;
+use crate::dm::Dm;
 
 /// mask (h, w) set where a sample (col c, row r: at grid coordinate (c, r)) lies within hw[k] of segment k of segs
 /// (m, 4) [c0, r0, c1, r1] (grid coordinates). Returns how many samples were newly set.
@@ -208,7 +209,7 @@ pub fn dash_pieces<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, dash: 
         if open { out.push(at(0)); }
         for i in 0..k - 1 {
             let (a, b) = (at(i), at(i + 1));
-            let len = ((b[0] - a[0]).powi(2) + (b[1] - a[1]).powi(2)).sqrt();
+            let len = ((b[0] - a[0]).sq() + (b[1] - a[1]).sq()).sqrt();
             if len < 1e-12 { continue; }
             let mut t0 = 0.0;           // metres into this segment done
             loop {

@@ -353,7 +353,9 @@ fn continuations(dir: &numpy::ndarray::ArrayView1<f64>, has: &numpy::ndarray::Ar
             choices.insert(*a, near[0]);
         }
     }
-    Ok(choices.iter().filter(|(a, b)| choices.get(b) == Some(a)).map(|(a, b)| (*a, *b)).collect())
+    #[allow(clippy::disallowed_methods)] // hash order: the matches collected into a map (looked up by key only)
+    let joins = choices.iter().filter(|(a, b)| choices.get(b) == Some(a)).map(|(a, b)| (*a, *b)).collect();
+    Ok(joins)
 }
 
 /// roads.py _lane_flow_local's solve over a cell's roads layer and those round it: per layer its road ids as UCS-4

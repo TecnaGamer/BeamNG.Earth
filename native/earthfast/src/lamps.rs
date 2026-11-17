@@ -4,6 +4,7 @@
 
 use numpy::{IntoPyArray, PyArray2, PyReadonlyArray1, PyReadonlyArray2};
 use pyo3::prelude::*;
+use crate::dm::Dm;
 
 /// Lamp stations along lines given as their vertices pts (n, 2) with offsets off (m + 1): per line every spacing[i] m
 /// of arc length from phase[i] on, side[i] m to the left of the line's direction (negative: to its right). Only the
@@ -25,7 +26,7 @@ pub fn lamp_stations<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, off:
         let mut s0 = 0.0;                      // the arc length at the segment's start
         for j in a..b - 1 {
             let (x0, y0, x1, y1) = (pts[[j, 0]], pts[[j, 1]], pts[[j + 1, 0]], pts[[j + 1, 1]]);
-            let len = ((x1 - x0).powi(2) + (y1 - y0).powi(2)).sqrt();
+            let len = ((x1 - x0).sq() + (y1 - y0).sq()).sqrt();
             if len <= 1e-9 {
                 continue;
             }
