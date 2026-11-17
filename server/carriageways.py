@@ -202,7 +202,7 @@ def solve(chains, couplings=(), rounds=ROUNDS, deadline=None, diagnostics=None):
     couplings: (chain a, sample i, chain b, sample j, "eq", "ge" or "le", value[, penalty]): the gap z_a - z_b equal,
     at least or at most value; chain b None: the row on z_a alone (a bound, soft where the chain's lo / hi are hard;
     not "eq"). A penalty above 0 makes the row soft, broken where the hard rows leave no room, at that cost per metre
-    ("le", b None, penalties: earthfast 306; diagnostics' soft_*).
+    ("le", b None, penalties: earthfast 373; diagnostics' soft_*).
     Negative sample indices address a chain's end as in NumPy. Optional diagnostics receives
     convergence, budget and measured constraint residuals. The returned profiles retain input order.
     """
@@ -232,7 +232,7 @@ def solve(chains, couplings=(), rounds=ROUNDS, deadline=None, diagnostics=None):
     penalty = np.asarray([p for *_r, p in cp], np.float64)
     soft = {}
     if (penalty > 0).any() or (rows[:, 4] == 2).any() or (rows[:, 2] == -1).any():
-        fast.require(306, "carriageway_profiles' soft, upper and one-sample couplings")
+        fast.require(373, "carriageway_profiles' soft, upper and one-sample couplings")
         soft["coupling_penalty"] = penalty
     budget = float(deadline) - time.monotonic() if deadline is not None else BUDGET_S
     if np.isnan(budget):

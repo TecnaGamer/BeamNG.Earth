@@ -6,7 +6,7 @@ Rio 0 → 1). It took the underpass rule's dips as given and nothing else about 
 rows now carry what the passes know about them. All the numbers are in
 `2026-11-16-vsolve-clearance.json`.
 
-    python tools/build_native.py --fast     # earthfast 306 (the committed modules are 305)
+    python tools/build_native.py --fast     # earthfast 373 (the committed modules are 372)
     BNE_REVISIT=off BNGE_PLANCACHE=off python tools/grade_metrics.py --vsolve --tiles 1 --out build/vsolve.json
 
 The code is vsolve/soft-rows merged with PR #1344's speed fixes. It ran on a local development build
@@ -14,7 +14,7 @@ of the kernel (MSVC, no LTO): 8 places, 13.4 min wall.
 
 ## What changed
 
-- **Kernel** (earthfast 306, the same version): a coupling may be an upper bound ("le"), and it may
+- **Kernel** (earthfast 373, the same version): a coupling may be an upper bound ("le"), and it may
   have no second sample (one sample against a constant). The Rust test for this case holds a cap on a
   single sample, hard and soft.
 - **Caps under decks.** A road that runs under a road or rail deck gets a cap on each sample under it

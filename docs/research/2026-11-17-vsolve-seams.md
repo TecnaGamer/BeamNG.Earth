@@ -4,7 +4,7 @@ This follows the clearance note (2026-11-16-vsolve-clearance.md) and does the fi
 list. A seam is where a road leaves one cell's plans and goes on in the next cell's. All the numbers
 are in `2026-11-17-vsolve-seams.json`.
 
-    python tools/build_native.py --fast     # earthfast 306 (the committed modules are 305)
+    python tools/build_native.py --fast     # earthfast 373 (the committed modules are 372)
     BNE_REVISIT=off BNGE_PLANCACHE=off python tools/grade_metrics.py --vsolve --tiles 1 --out build/vsolve.json
 
 The code is vsolve/soft-rows merged with PR #1344's speed fixes. It ran on a local development build

@@ -5,12 +5,12 @@ missing" list.
 
 With hard grade ceilings, one ceiling that could not hold made the whole cell's solve infeasible. The
 cell was then solved again with looser ceilings, and then with none: three stages, each a rule about
-what to give up. Now a ceiling is a soft row (earthfast 306: one slack per row with an exact L1
+what to give up. Now a ceiling is a soft row (earthfast 373: one slack per row with an exact L1
 penalty). It holds wherever the hard rows leave room, and it is broken by the least where they
 don't. Each cell reports how many of its rows broke, by how much, and where the worst one is
 (lat/lon). All the numbers are in `2026-11-16-vsolve-soft-rows.json`.
 
-    python tools/build_native.py --fast     # earthfast 306 (the committed modules are 305)
+    python tools/build_native.py --fast     # earthfast 373 (the committed modules are 372)
     BNE_REVISIT=off BNGE_PLANCACHE=off python tools/grade_metrics.py --vsolve --tiles 1 --out build/vsolve.json
 
 Code: vsolve/soft-rows merged with PR #1344's speed fixes. A local development build of the kernel
@@ -23,9 +23,9 @@ Code: vsolve/soft-rows merged with PR #1344's speed fixes. A local development b
   times s. `carriageway_profiles` takes an optional `coupling_penalty`; without it, every coupling is
   hard, as before. The diagnostics report `soft_excess_m`, `soft_broken` and `soft_sum_m`. There are
   3 new Rust tests: soft rows that can hold give the hard solve's heights; soft rows that can't are
-  broken by the least; a soft equality breaks where the holds leave no room. VERSION goes to 306, and
-  `fast.MIN_VERSION` stays at 305, so the server still starts on today's modules. Only the shadow asks
-  for 306.
+  broken by the least; a soft equality breaks where the holds leave no room. VERSION goes to 373, and
+  `fast.MIN_VERSION` stays where it is, so the server still starts on today's modules. Only the shadow asks
+  for 373.
 - **vsolve**: grade rows are soft, and the penalty scales with the road's stiffness (hold × samples
   over its spread). There is one solve with an active set, and no more stages, floors or "loosened".
 - **The shadow's dips**: they now come from the underpass rule run on the heights it sees in the
@@ -84,7 +84,7 @@ rows, they come out as a place and a size, and the rest of the cell keeps its ce
   because both run on the development build of the module.
   Soft rows don't cost more by themselves.
 - The committed modules (`server/earthfast.pyd`, `server/earthfast.abi3.so`) are not rebuilt. That is
-  the maintainer's release build. Without 306, `test_vsolve`'s solve tests are skipped.
+  the maintainer's release build. Without 373, `test_vsolve`'s solve tests are skipped.
 
 ## Next
 
