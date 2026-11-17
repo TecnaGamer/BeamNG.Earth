@@ -4161,27 +4161,14 @@ def ring_width(lanes, radius=None):
 
 def ring_radius(feats, i):
     """The radius (m) of the circle roundabout ring feature i's points lie on (a least-squares fit; None where it is no circle: a
-    short arc, a fit off by more than 15 % of its radius, a radius outside 3-80 m)."""
+    short arc, a fit off by more than 15 % of its radius, a radius outside 3-80 m; earthfast roadnet::rings)."""
     import roundabouts
     parts = feats.parts(i) if roundabouts.enabled() else None
     if not parts or not len(parts[0]):
         return None
-    ll = np.asarray(parts[0][0], np.float64)[:, :2]
-    if len(ll) < 5:
-        return None
-    k = dnp.cos(np.radians(ll[:, 1].mean())) * 111320.0
-    xy = np.column_stack([(ll[:, 0] - ll[0, 0]) * k, (ll[:, 1] - ll[0, 1]) * 110540.0])
-    a = np.column_stack([2 * xy, np.ones(len(xy))])
-    try:
-        sol = dnp.lstsq(a, (xy * xy).sum(1), rcond=None)[0]
-    except np.linalg.LinAlgError:
-        return None
-    r2 = sol[2] + sol[0] * sol[0] + sol[1] * sol[1]
-    if r2 <= 0:
-        return None
-    r = float(np.sqrt(r2))
-    res = float(np.abs(dnp.hypot(xy[:, 0] - sol[0], xy[:, 1] - sol[1]) - r).max())
-    return r if 3.0 <= r <= 80.0 and res <= 0.15 * r else None
+    import fast
+    fast.require(386, "ring_radius")
+    return fast._ef.ring_radius(np.ascontiguousarray(np.asarray(parts[0][0], np.float64)[:, :2]))
 
 
 def is_ring(feats, i):

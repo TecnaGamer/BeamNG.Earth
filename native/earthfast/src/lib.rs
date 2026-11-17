@@ -6573,6 +6573,9 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<roadnet::regions::PolygonIndex>()?;
     // 385: R2a's region tests (roadnet::regions: outline_contains = sweden.contains, PolygonIndex.lookup =
     // signstates.states' polygon test)
-    m.add("VERSION", 385)?;
+    m.add_function(wrap_pyfunction!(roadnet::rings::ring_radius, m)?)?;
+    // 386: R2a's roundabout ring radius (roadnet::rings::ring_radius = roads.ring_radius: dnp.lstsq's QR and eigh
+    // answers, numpy's sums in their orders)
+    m.add("VERSION", 386)?;
     Ok(())
 }
