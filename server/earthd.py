@@ -7838,7 +7838,8 @@ class Connection:
             try:
                 r = await asyncio.get_running_loop().run_in_executor(
                     self.s.ui_pool, routingmod.plan, float(msg["lat0"]), float(msg["lon0"]), float(msg["lat1"]),
-                    float(msg["lon1"]), self.s.net, msg.get("bearing"), routingmod.via_points(msg.get("via")), msg.get("avoid") is True)
+                    float(msg["lon1"]), self.s.net, msg.get("bearing"), routingmod.via_points(msg.get("via")), msg.get("avoid") is True,
+                    "bus" if msg.get("profile") == "bus" else None)
                 out.update(r)
                 out.pop("error", None)
                 break
@@ -7862,7 +7863,8 @@ class Connection:
                 log.debug("route elevation: %s: %s", type(e).__name__, e)
         log.info("route %d (%s, %s -> %s, %s): %d points, %.1f km%s%s", int(msg.get("id") or 0), msg.get("lat0"),
                  msg.get("lon0"), msg.get("lat1"), msg.get("lon1"), len(out["points"]), out["dist"] / 1000,
-                 {True: ", highways avoided", False: ", highways not avoided"}.get(out.get("avoided"), ""),
+                 {True: ", highways avoided", False: ", highways not avoided"}.get(out.get("avoided"), "") +
+                 (", bus" if out.get("profile") == "bus" else ", bus asked, car route" if msg.get("profile") == "bus" else ""),
                  (" (" + out["error"] + ")") if "error" in out else "")
         self.send(out)
         if "error" not in out:

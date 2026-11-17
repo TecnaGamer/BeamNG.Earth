@@ -127,7 +127,7 @@ local function route()
   end
   local gps = M.gps()
   if gps and #pts > 0 then
-    if #pts == 1 then gps.setDestination(pts[1].lat, pts[1].lon, pts[1].name) else gps.setRoute(pts) end
+    gps.setRoute(pts, 'bus')                     -- (Valhalla's bus route: the bus-only streets a car may not use)
   end
 end
 

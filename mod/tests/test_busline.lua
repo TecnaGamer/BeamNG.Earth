@@ -15,7 +15,7 @@ local veh = { getPosition = function() return pos end, getVelocity = function() 
 B.vehicle = function() return veh end
 B.api = function() return { toGame = function(lat, lon) return lon * 1000, lat * 1000, 0 end,
   position = function() return 0, 0 end } end
-B.gps = function() return { setRoute = function(p) routed[#routed + 1] = p end,
+B.gps = function() return { setRoute = function(p, profile) routed[#routed + 1] = p; routed.profile = profile end,
   setDestination = function(la, lo, n) routed[#routed + 1] = { { lat = la, lon = lo, name = n } } end,
   clear = function() cleared = cleared + 1 end } end
 B.say = function(t) said[#said + 1] = t end
@@ -44,6 +44,7 @@ T.check(info.routeID == '64' and info.direction == 'Fyrktorget' and info.routeCo
 T.check(#info.tasklist == 5 and info.tasklist[2][2] == 'Kapellplatsen' and info.tasklist[2][3][2] == 200,
   'stops in order, at their places')
 T.check(#routed[1] == 5 and routed[1][1].name == 'Vasaplatsen', 'the GPS through the stops')
+T.check(routed.profile == 'bus', 'routed as a bus drives')
 
 -- a bus standing at the stop with the doors shut: not yet; doors open DWELL_S: served
 at(5, false) wait(1)

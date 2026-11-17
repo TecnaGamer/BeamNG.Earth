@@ -3743,10 +3743,11 @@ function M.requestBusLines(id, lat, lon)
   net.send({ type = 'bus_lines', id = id, lat = lat, lon = lon })
   return true
 end
-function M.requestRoute(id, lat0, lon0, lat1, lon1, bearing, via)
+function M.requestRoute(id, lat0, lon0, lat1, lon1, bearing, via, profile)
   if not net.isConnected() then return false end
   net.send({ type = 'route', id = id, lat0 = lat0, lon0 = lon0, lat1 = lat1, lon1 = lon1, bearing = bearing,
-    via = via, download = settings.get('routeDownload'), avoid = settings.get('routeAvoidHighways') and true or nil })
+    via = via, download = settings.get('routeDownload'), avoid = settings.get('routeAvoidHighways') and true or nil,
+    profile = profile })
   return true
 end
 function M.takeRoute(id)

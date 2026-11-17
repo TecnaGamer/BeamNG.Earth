@@ -222,6 +222,17 @@ def valhalla_url(lat0, lon0, lat1, lon1, heading=None):
     return VALHALLA_URL + urllib.parse.quote(json.dumps(q, separators=(",", ":")))
 
 
+def valhalla_bus_url(points, heading=None):
+    """Valhalla's bus route through points [(lat, lon)] in order (a bus line's stops: costing "bus" drives the
+    bus-only streets a car may not, Frölundagatan in Göteborg 421 m where a car goes round by 1.3 to 3 km, measured
+    2026-11-17), the first leaving the way heading points."""
+    locs = [{"lat": float(la), "lon": float(lo)} for la, lo in points]
+    if heading is not None:
+        locs[0]["heading"] = int(heading) % 360
+    q = {"locations": locs, "costing": "bus"}
+    return VALHALLA_URL + urllib.parse.quote(json.dumps(q, separators=(",", ":")))
+
+
 SHAPE_MAX_CHARS = 2_000_000     # an encoded shape longer than this is refused (~200k points, a 4,000 km drive's)
 SHAPE_MAX_SHIFT = 30            # 7 groups of 5 bits: more is no coordinate (an endless varint)
 
@@ -291,6 +302,45 @@ def parse_valhalla(data):
     return out
 
 
+def parse_valhalla_trip(data):
+    """parse_valhalla's answer for a trip of one leg or more (a route through waypoints): the legs' shapes joined, and
+    with two legs or more each one's [length m, time s] as "legs" and its steps numbered by leg. Raises ValueError (no
+    route) or ValhallaUnavailable (an answer that cannot be used). Pure."""
+    trip = data.get("trip") if isinstance(data, dict) else None
+    if isinstance(data, dict) and ("error_code" in data or "error" in data) and trip is None:
+        raise ValueError("no route (valhalla)")
+    if not isinstance(trip, dict):
+        raise ValhallaUnavailable("no trip in the answer")
+    legs = trip.get("legs")
+    if trip.get("status", 0) != 0 or not isinstance(legs, list) or not legs:
+        raise ValueError("no route (valhalla)")
+    pts, sizes, steps, offset = [], [], [], 0.0
+    for index, leg in enumerate(legs, 1):
+        sm = leg.get("summary") if isinstance(leg, dict) else None
+        if not isinstance(sm, dict) or not isinstance(leg.get("shape"), str):
+            raise ValhallaUnavailable("malformed trip")
+        try:
+            shape = decode_polyline(leg["shape"])
+        except ValueError as e:
+            raise ValhallaUnavailable(str(e)) from None
+        length, time = _nonnegative(sm.get("length")) * 1000.0, _nonnegative(sm.get("time"))
+        pts += shape[1:] if pts and shape and shape[0] == pts[-1] else shape
+        sizes.append([round(length, 1), round(time, 1)])
+        for st in valhalla_steps(leg.get("maneuvers"), shape) or ():
+            st["leg"], st["offset"] = index, round(st["offset"] + offset, 1)
+            steps.append(st)
+        offset += length
+    if len(pts) < 2:
+        raise ValhallaUnavailable("shape of under two points")
+    out = parse({"code": "Ok", "routes": [{"distance": offset, "duration": sum(t for _, t in sizes),
+                                           "geometry": {"coordinates": [[lo, la] for la, lo in pts]}}]})
+    if steps:
+        out["steps"] = steps
+    if len(sizes) > 1:
+        out["legs"] = sizes
+    return out
+
+
 # Valhalla's maneuver types as OSRM's (type, modifier): the GPS's turn-by-turn reads OSRM's steps (_steps)
 _VALHALLA_TYPES = {
     1: ("depart", None), 2: ("depart", "right"), 3: ("depart", "left"),
@@ -348,12 +398,17 @@ def via_points(raw):
     return out[:MAX_VIA]
 
 
-def plan(lat0, lon0, lat1, lon1, net=None, bearing=None, via=(), avoid_highways=False):
+def plan(lat0, lon0, lat1, lon1, net=None, bearing=None, via=(), avoid_highways=False, profile=None):
     """The road route from (lat0, lon0) to (lat1, lon1) (blocking) through via [(lat, lon)] in order, starting the way
     bearing points if it can (else without it). avoid_highways (only without via): Valhalla's route without
-    motorways, {..., "avoided": True}; without its answer the normal route, "avoided": False. Raises
-    netfetch.FetchError or ValueError."""
+    motorways, {..., "avoided": True}; without its answer the normal route, "avoided": False. profile "bus" (a bus
+    line, busline.lua): Valhalla's bus route through the stops, {..., "profile": "bus"}; without its answer the normal
+    route. Raises netfetch.FetchError or ValueError."""
     net = net if net is not None else netfetch.default_fetcher()
+    if profile == "bus":
+        r = _valhalla_bus([(lat0, lon0), *via, (lat1, lon1)], net, bearing)
+        if r is not None:
+            return r
     avoid_highways = avoid_highways and not via
     avoided = None          # (None: Valhalla not reached, the normal route without a "no route" note)
     for b in ([bearing, None] if bearing is not None else [None]) if avoid_highways else []:
@@ -378,6 +433,27 @@ def plan(lat0, lon0, lat1, lon1, net=None, bearing=None, via=(), avoid_highways=
             break
     r = _osrm(lat0, lon0, lat1, lon1, net, bearing, via)
     return dict(r, avoided=avoided) if avoid_highways else r
+
+
+def _valhalla_bus(points, net, bearing):
+    """Valhalla's bus route through points ({..., "profile": "bus"}), with the heading and then without; None when it
+    has none or cannot be reached (the normal route then)."""
+    for b in [bearing, None] if bearing is not None else [None]:
+        try:
+            body = net.get(valhalla_bus_url(points, b), kind="demand").body
+            try:
+                data = json.loads(body.decode("utf-8"))
+            except (UnicodeDecodeError, ValueError) as e:
+                raise ValhallaUnavailable(f"not JSON: {e}") from None
+            try:
+                return dict(parse_valhalla_trip(data), profile="bus")
+            except (TypeError, KeyError, AttributeError, IndexError, OverflowError) as e:
+                raise ValhallaUnavailable(f"malformed answer: {type(e).__name__}") from None
+        except (ValhallaUnavailable, netfetch.FetchError):
+            return None
+        except ValueError:      # (no route that way: again without the heading)
+            continue
+    return None
 
 
 def _osrm(lat0, lon0, lat1, lon1, net, bearing, via=()):
