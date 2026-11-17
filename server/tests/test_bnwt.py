@@ -435,7 +435,7 @@ class ContentGuard(unittest.TestCase):
     columns, the query, the clipping, the WKB decode, the column builders; Overture's tiles' reader and its FORMAT; the
     block path) must bump that archive's bnwt.CONTENT (the old archives are then not read) or show that the output is
     unchanged; then the fingerprint here is updated."""
-    FINGERPRINT = {("base", 1): "925b2e6e87dc4a6c", ("transportation", 1): "98802c4b9213d440",
+    FINGERPRINT = {("base", 1): "49661ca4096607ac", ("transportation", 1): "98802c4b9213d440",
                    ("buildings", 1): "0c37ee4249d499ca", ("places", 1): "af34ebc49196615b"}
 
     @staticmethod
@@ -447,7 +447,9 @@ class ContentGuard(unittest.TestCase):
         spec = bnwt.ARCHIVES[name]
         parts = [repr(sorted((k, overture.LAYERS[k]) for k in spec["layers"])), repr(sorted(spec.items()))]
         if spec["source"] == "parquet":
-            fns = (overture.Reader.query, overture.Reader._run, overture.Reader._plan, overture._number_rows,
+            fns = (overture.Reader.query, overture.Reader._read, overture.Reader._block, overture.Reader._block_read,
+                   overture.Reader._from_block, overture._Block, overture.Reader._run, overture.Reader._features,
+                   overture._geometry, overture._thinned, overture.Reader._plan, overture._number_rows,
                    overture.tolerant, overture.empty, overture.intersects, mg.build, mg.clip_polygon_parts,
                    mg.clip_ring, mg._clip_edge, mg.parse_wkb, mg._geom, mg._coords, mg.text_column, mg.float_column,
                    mg.bool_column, bnwtunit.unit_rows, bnwtunit.cell_layer, bnwtunit.assign)
