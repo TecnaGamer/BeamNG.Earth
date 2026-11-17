@@ -5956,7 +5956,7 @@ class Server:
         the build switches; the map data's versions): equal for two apps, their items have the same keys."""
         md = self.mapdata.versions() if self.mapdata is not None and hasattr(self.mapdata, "versions") else None
         return {"plans": plancachemod.plans_format(), "facts": roadsmod.FACTS_FORMAT,
-                "sw": revisitmod.switches_key(), "md": md, "widths": self.road_widths is not None,
+                "sw": revisitmod.plans_switches_key(), "md": md, "widths": self.road_widths is not None,
                 "sea": self.sea is not None}
 
     def share_store(self):
