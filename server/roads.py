@@ -3705,7 +3705,7 @@ def width_repair(feats):
         return feats
     import fast
     import roadlanes
-    fast.require(374, "RoadRules.width_rejects")
+    fast.require(376, "RoadRules.width_rejects")
     pos = {c: k for k, c in enumerate(STYLE)}
     a = feats.attrs
     cls_s = [str(v) for v in a["class"].tolist()] if "class" in a else ["unknown"] * n

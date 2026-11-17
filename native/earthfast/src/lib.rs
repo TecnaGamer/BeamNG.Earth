@@ -6522,10 +6522,10 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // numpy's distance matrix per pair of lines; the same bits)
     // 373: deck_trim_overlaps(..., params[4] = TRIM_ALONG_COS): only another deck running along a deck trims it, not
     // one crossing it (a hole across the B 254's deck over a track's at Trutzhain; PR #1397, first numbered 310)
-    // 374: RoadRules.width_rejects (roads.width_repair: a mapped width wider than its lanes' platform is a
+    // 376 (first numbered 374): RoadRules.width_rejects (roads.width_repair: a mapped width wider than its lanes' platform is a
     // right-of-way, not the carriageway; the road revamp's WIDTH repair, MA Route 2 GitHub #901)
-    // 375: grade_points: a road holds its carriageway whole only over no approach of its rank leading onto a bridge
+    // 377 (first numbered 375): grade_points: a road holds its carriageway whole only over no approach of its rank leading onto a bridge
     // (gradebins Pt.arank: the Stonehouse Bridge's deck end stepped 1.6 m into the gyratory it runs into, GitHub #1374)
-    m.add("VERSION", 375)?;
+    m.add("VERSION", 377)?;
     Ok(())
 }
