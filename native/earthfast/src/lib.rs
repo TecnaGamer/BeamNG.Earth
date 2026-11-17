@@ -6539,6 +6539,11 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(roadnet::columns::spec_columns, m)?)?;
     // 379: R2a's spec input columns (roadnet::columns: cycle_streets, rule_cols, osm_values, layer_lengths,
     // spec_columns: roads._spec_inputs' class codes, eligibility, rings, smoothness, name codes, sidewalks, connectors)
-    m.add("VERSION", 379)?;
+    m.add_class::<roadnet::surfaces::SurfaceRules>()?;
+    m.add_function(wrap_pyfunction!(roadnet::surfaces::map_surface_values, m)?)?;
+    m.add_function(wrap_pyfunction!(roadnet::surfaces::aisles, m)?)?;
+    // 380: R2a's surfaces (roadnet::surfaces: SurfaceRules.token / kind / spec_surfaces / sweden_surfaces,
+    // map_surface_values, aisles: roads.surface_token, surface_kind, _map_surface_values, _spec_inputs' surface columns)
+    m.add("VERSION", 380)?;
     Ok(())
 }

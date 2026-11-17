@@ -1865,10 +1865,9 @@ GRASSY = frozenset({"grass", "grass_paver"})
 
 def surface_token(surface):
     """A surface rule value's base token: the detail after a colon and a second value after a semicolon dropped
-    (`sett:pattern` -> `sett`, `sett;asphalt` -> `sett`); None for no value. surface_kind and look_of read it."""
-    if surface is None:
-        return None
-    return str(surface).lower().split(";")[0].split(":")[0].strip()
+    (`sett:pattern` -> `sett`, `sett;asphalt` -> `sett`); None for no value. surface_kind and look_of read it.
+    (earthfast roadnet::surfaces::SurfaceRules.token)"""
+    return _surface_rules().token(surface)
 
 
 def surface_kind(cls, surface):
@@ -1878,22 +1877,26 @@ def surface_kind(cls, surface):
     `paving_stones:30`, `sett:pattern`) and more than one value after a semicolon, and matched whole they all fell
     through to "dirt", which is drawn with gravel's own material (LOOK) and painted DIRT: İzmir's sett streets read
     as gravel tracks (2026-10-22). Interlocking pavers have their own names in the map. A value not understood at
-    all is the class's own surface, not dirt: an unknown tag must not turn a residential street into a track."""
-    if surface is not None:
-        s = surface_token(surface)
-        if s in PAVED:
-            return "paved"
-        if s in COBBLE or s in COBBLE_ALIASES:
-            return "cobble"
-        if s in GRAVEL:
-            return "gravel"
-        if s == "unpaved" and cls != "track":
-            # (generic "unpaved" on a road cars use is a gravel road far more often than a dirt track: the
-            # mapped unpaved roads of Ontario, Finland and Estonia, 2026-11-03; a track stays dirt)
-            return "gravel"
-        if s in UNPAVED:
-            return "dirt"
-    return "paved" if STYLE.get(cls, STYLE["unknown"])[1] else "dirt"
+    all is the class's own surface, not dirt: an unknown tag must not turn a residential street into a track.
+    Generic "unpaved" on a road cars use is a gravel road far more often than a dirt track (the mapped unpaved roads
+    of Ontario, Finland and Estonia, 2026-11-03); a track stays dirt. (earthfast roadnet::surfaces::SurfaceRules.kind)"""
+    return _surface_rules().kind(cls, surface)
+
+
+_SURFACE_RULES = None
+
+
+def _surface_rules():
+    """earthfast.SurfaceRules of this module's surface sets and STYLE's paved flags, made once per process."""
+    global _SURFACE_RULES
+    got = _SURFACE_RULES
+    if got is None:
+        import fast
+        fast.require(380, "SurfaceRules")
+        got = _SURFACE_RULES = fast._ef.SurfaceRules(
+            sorted(PAVED), sorted(COBBLE | COBBLE_ALIASES), sorted(GRAVEL), sorted(UNPAVED),
+            {c: bool(v[1]) for c, v in STYLE.items()}, bool(STYLE["unknown"][1]))
+    return got
 
 
 def _surface_value(feats, i):
@@ -3875,24 +3878,14 @@ def _osm_values(feats, name, lo, hi):
 
 
 def _map_surface_values(feats):
-    """_map_surface_value of every feature (None, a str or the rule's np.str_), kept on feats."""
+    """_map_surface_value of every feature (None, a str or the rule's np.str_), kept on feats
+    (earthfast roadnet::surfaces::map_surface_values)."""
     got = feats.__dict__.get("_map_surface_values")
     if got is not None:
         return got
-    n = len(feats)
-    out = [None] * n
-    osm = feats.attrs.get("osm_surface")
-    if osm is not None:
-        for i, v in enumerate(osm.tolist()[:n] if hasattr(osm, "tolist") else list(osm)[:n]):
-            s = str(v).strip()
-            if s and s.lower() not in ("nan", "none"):
-                out[i] = s
-    t = feats.rules.get("surface")
-    if t is not None and len(t.feature) and n:
-        maj = t.majors(n)
-        for i in np.flatnonzero(maj >= 0).tolist():
-            if out[i] is None:
-                out[i] = t.value[maj[i]]
+    import fast
+    fast.require(380, "map_surface_values")
+    out = fast._ef.map_surface_values(len(feats), feats.attrs.get("osm_surface"), feats.rules.get("surface"))
     feats.__dict__["_map_surface_values"] = out
     return out
 
@@ -3961,42 +3954,15 @@ def _spec_inputs(feats):
     if photosurface.ON and any(vals[i] is None for i in np.flatnonzero(elig).tolist()):
         ph = _photo_surface(feats)
         vals = [ph.get(i) if v is None else v for i, v in enumerate(vals)]
-    # the aerial's verdict on an untagged minor road (roadsurf.py; this run's, made by an earlier one): unpaved -> gravel
-    # (a track stays dirt), paved -> its class's paved (a track asphalt), the regional rule not asked for either
-    photo_paved = np.zeros(n, bool)
-    for i, v in roadsurf.layer_verdicts(feats).items():
-        if vals[i] is not None:
-            continue
-        if v == roadsurf.UNPAVED:
-            if cls_s[i] != "track":
-                vals[i] = "gravel"
-        else:
-            photo_paved[i] = True
-            if cls_s[i] == "track":
-                vals[i] = "asphalt"
-    tokens, tok_of, kind_of = [], {}, {}
-
-    def token(v):
-        if v is None:
-            return -1
-        t = surface_token(v)
-        k = tok_of.get(t)
-        if k is None:
-            k = tok_of[t] = len(tokens)
-            tokens.append(t)
-        return k
-
-    def kind(c, v):
-        k = kind_of.get((c, v))
-        if k is None:
-            k = kind_of[(c, v)] = _KIND_CODE[surface_kind(c, v)]
-        return k
-    skind = np.fromiter((kind(c, v) for c, v in zip(cls_s, vals)), np.int8, n)
-    stok = np.fromiter((token(v) for v in vals), np.int32, n)
     good = sc["good"]
-    reg_pre = (np.fromiter((REGIONAL_ON and v is None and c in REGIONAL_CLASSES for c, v in zip(cls_s, vals)), bool, n)
-               & np.isnan(osm_lanes) & ~good & ~photo_paved)
     name = sc["name"]
+    # the aerial's verdict on an untagged minor road (roadsurf.py; this run's, made by an earlier one): unpaved -> gravel
+    # (a track stays dirt), paved -> its class's paved (a track asphalt), the regional rule not asked for either; the
+    # kinds (surface_kind) and tokens (surface_token) of the values, the regional rule's candidates (earthfast
+    # roadnet::surfaces)
+    sf = _surface_rules().spec_surfaces(cls_s, vals, sorted(roadsurf.layer_verdicts(feats).items()),
+                                        int(roadsurf.UNPAVED), osm_lanes, good, REGIONAL_ON, sorted(REGIONAL_CLASSES))
+    skind, stok, reg_pre = sf["skind"], sf["stok"], sf["reg_pre"]
     po, ro, co = (np.ascontiguousarray(x, np.int64) for x in (feats.part_off, feats.ring_off, feats.coord_off))
     ll = np.ascontiguousarray(feats.lonlat, np.float64).reshape(-1, 2)
     eu = np.zeros(n, bool)
@@ -4011,19 +3977,8 @@ def _spec_inputs(feats):
     if n:
         first = ll[co[ro[po[:-1]]]]
         se = np.asarray(sweden.contains(first[:, 0], first[:, 1]), bool)
-    se_tag, se_kind, se_tok = np.zeros(n, bool), np.zeros(n, np.int8), np.full(n, -1, np.int32)
-    aisle = np.zeros(n, bool)
-    if se.any():
-        stags = a.get("osm_surface")
-        for j in np.flatnonzero(se).tolist():
-            tag = None if stags is None or stags[j] is None else str(stags[j])
-            if tag not in (None, "", "None", "nan"):
-                se_tag[j], se_kind[j], se_tok[j] = True, kind(cls_s[j], tag), token(tag)
-        t = rules.get("subclass")
-        if t is not None and len(t.feature):
-            maj = t.majors(n)
-            for j in np.flatnonzero(se & (maj >= 0)).tolist():
-                aisle[j] = t.value[maj[j]] in ("parking_aisle",)
+    se_tag, se_kind, se_tok, tokens = _surface_rules().sweden_surfaces(cls_s, se, a.get("osm_surface"), sf["tokens"])
+    aisle = fast._ef.aisles(se, rules.get("subclass"))
     cols = {"cls": cls, "elig": elig, "has_w": has_w, "wv": wv, "osm_w": _osm_widths(feats, *OSM_WIDTH_M),
             "osm_lanes": osm_lanes, "osm_ms": _osm_values(feats, "maxspeed", 5.0, 200.0), "has_ow": has_ow,
             "owv": owv, "has_k": has_k, "kv": kv, "ncon": ncon, "lens": np.asarray(_lengths_all(feats), np.float64),

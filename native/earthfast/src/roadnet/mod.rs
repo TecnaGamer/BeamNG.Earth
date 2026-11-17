@@ -9,3 +9,4 @@ pub mod columns;
 pub mod copies;
 pub mod pyfloat;
 pub mod pyobj;
+pub mod surfaces;
