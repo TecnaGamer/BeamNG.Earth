@@ -6583,6 +6583,16 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // by its box at each road's middle point)
     // 390: roadgeom::curve_deck_radii, deck_crest_radii (roads.py BNE_DECK_K_SPEED: deck vertical curves by the
     // road's design speed; road revamp R1e)
-    m.add("VERSION", 390)?;
+    m.add_function(wrap_pyfunction!(roadnet::countries::europe_countries, m)?)?;
+    m.add_function(wrap_pyfunction!(roadnet::countries::europe_road_countries, m)?)?;
+    // 391: R2a's European street country (roadnet::countries = europewalks.country_for: the territories' box, the
+    // border bands, europeinfra.COUNTRIES; for points and for each road's middle point)
+    m.add_function(wrap_pyfunction!(roadnet::verdicts::roadsurf_candidates, m)?)?;
+    m.add_function(wrap_pyfunction!(roadnet::verdicts::roadsurf_lookup, m)?)?;
+    m.add_function(wrap_pyfunction!(roadnet::verdicts::photo_candidates, m)?)?;
+    m.add_function(wrap_pyfunction!(roadnet::verdicts::photo_values, m)?)?;
+    // 392: R2a's photo surface inputs (roadnet::verdicts: roadsurf.candidates and layer_verdicts' store lookup,
+    // photosurface.verdicts' selection, _spec_inputs' fill of the photo's values)
+    m.add("VERSION", 392)?;
     Ok(())
 }

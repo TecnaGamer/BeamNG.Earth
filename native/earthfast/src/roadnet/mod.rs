@@ -8,6 +8,7 @@
 pub mod assembly;
 pub mod columns;
 pub mod copies;
+pub mod countries;
 pub mod laneflow;
 pub mod lanesplit;
 pub mod pyfloat;
@@ -15,3 +16,4 @@ pub mod pyobj;
 pub mod regions;
 pub mod rings;
 pub mod surfaces;
+pub mod verdicts;

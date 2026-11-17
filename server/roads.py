@@ -3888,10 +3888,12 @@ def _spec_inputs(feats):
     # surfaces: the map's value (BNE_PHOTO_SURFACE: the photo's for a road the map says nothing of), its kind by
     # surface_kind and its token by surface_token, each pair worked out once
     import photosurface
-    vals = list(_map_surface_values(feats))
-    if photosurface.ON and any(vals[i] is None for i in np.flatnonzero(elig).tolist()):
-        ph = _photo_surface(feats)
-        vals = [ph.get(i) if v is None else v for i, v in enumerate(vals)]
+    vals = _map_surface_values(feats)
+    if photosurface.ON:         # (earthfast roadnet::verdicts: the photo asked only where an eligible road has none)
+        fast.require(392, "photo_values")
+        vals = fast._ef.photo_values(vals, np.ascontiguousarray(elig, bool), lambda: _photo_surface(feats))
+    else:
+        vals = list(vals)
     good = sc["good"]
     name = sc["name"]
     # the aerial's verdict on an untagged minor road (roadsurf.py; this run's, made by an earlier one): unpaved -> gravel
@@ -3904,11 +3906,9 @@ def _spec_inputs(feats):
     po, ro, co = (np.ascontiguousarray(x, np.int64) for x in (feats.part_off, feats.ring_off, feats.coord_off))
     ll = np.ascontiguousarray(feats.lonlat, np.float64).reshape(-1, 2)
     eu = np.zeros(n, bool)
-    if europewalks.enabled():
-        for i in np.flatnonzero(cls == pos.get("tertiary", -2)).tolist():
-            p0, p1 = co[ro[po[i]]], co[ro[po[i + 1]]]
-            if p1 > p0:
-                eu[i] = europewalks.country_for(*ll[p0 + (p1 - p0) // 2]) is not None
+    if europewalks.enabled():       # (a tertiary road in a supported European territory at its middle point)
+        eu = np.fromiter((c is not None for c in europewalks.road_countries(feats, cls == pos.get("tertiary", -2))),
+                         bool, n)
     sides = sc["sides"]
     elig = sc["elig"]               # (a cycleway is a street only with its pavements mapped on it: STYLE's "cycleway")
     se = np.zeros(n, bool)
