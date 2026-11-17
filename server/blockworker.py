@@ -2732,6 +2732,7 @@ def roads_geo(aid, lat, lon, zoom, gx, gy, gzoom, out_dir, vfs_dir, sidewalks, l
     waits = waited.__enter__()
     try:
         out = {"content": None, "skin": None, "exact": {}, "stages": {}, "waits": waits}
+        began = time.time()         # (the clock the server's process reads too: its wait before this process took it)
         t0 = time.perf_counter()
         c0 = time.process_time()
         own0 = time.thread_time()
@@ -2768,7 +2769,8 @@ def roads_geo(aid, lat, lon, zoom, gx, gy, gzoom, out_dir, vfs_dir, sidewalks, l
         if exact:
             out["exact"] = _geo_exact(aid, lat, lon, gx, gy, out_dir, vfs_dir, exact)
         out["time"] = {"content_s": t1 - t0, "content_cpu": c1 - c0, "skin_s": t2 - t1, "skin_cpu": c2 - c1,
-                       "exact_s": time.perf_counter() - t2, "own_cpu": time.thread_time() - own0}
+                       "exact_s": time.perf_counter() - t2, "own_cpu": time.thread_time() - own0,
+                       "began": began, "ended": time.time()}
         return out
     finally:
         waited.__exit__()

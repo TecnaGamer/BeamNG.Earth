@@ -3064,7 +3064,7 @@ class Server:
             country, content, skin, exact, Server.pole_profile(self), designsmod.enabled(self.dej_on),
             Server.towns_enabled(self), Server.wear_arg(self), Server.geo_patience(self, aid, gx, gy))
         cell_was = Server.geo_cell_state(self, gx, gy)
-        t0, waited = time.perf_counter(), []
+        t0, waited, asked = time.perf_counter(), [], time.time()
         try:
             res = poolsmod.result_running(fut, ROAD_TILE_TIMEOUT_S, waited, abandon=lambda: Server.is_abandoned(self, aid)
                                           or Server.geo_left_behind(self, aid, gx, gy) or Server.geo_unwanted(self, aid, gx, gy),
@@ -3079,9 +3079,14 @@ class Server:
                 tm = (res or {}).get("time") or {}
                 # (what its thread waited for, by name, and the CPU that thread itself got: the rest of its wall
                 # time it was ready to run and did not, the server's cores busy with other work)
-                log.info("road geotile %d_%d in %.1f s (queue %.1f; content %.1f s %.1f cpu, skin %.1f s %.1f cpu, "
-                         "exact %.1f s): %s; its thread %.1f cpu, waited: %s; map cell %s",
-                         gx, gy, took, waited[0] if waited else 0.0, tm.get("content_s", 0.0),
+                # (before: from asked until a road process began it, its processes busy with other tiles; back: from
+                # its end until this thread had the answer. The step-6 drive's tiles took 4-5 s with 0.7 s of content
+                # and skin and "queue 0.0": the queue's time ends when the executor takes the job, not a process)
+                log.info("road geotile %d_%d in %.1f s (queue %.1f, before its process %.1f, back %.1f; content %.1f s "
+                         "%.1f cpu, skin %.1f s %.1f cpu, exact %.1f s): %s; its thread %.1f cpu, waited: %s; map cell %s",
+                         gx, gy, took, waited[0] if waited else 0.0,
+                         max(0.0, tm["began"] - asked) if "began" in tm else 0.0,
+                         max(0.0, time.time() - tm["ended"]) if "ended" in tm else 0.0, tm.get("content_s", 0.0),
                          tm.get("content_cpu", 0.0), tm.get("skin_s", 0.0), tm.get("skin_cpu", 0.0),
                          tm.get("exact_s", 0.0), top, tm.get("own_cpu", 0.0),
                          waitsmod.text((res or {}).get("waits")) or "nothing", cell_was)
