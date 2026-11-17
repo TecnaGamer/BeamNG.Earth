@@ -163,6 +163,26 @@ Not built:
 - **Measured:** one sign per 12-25 km of such road per direction (Borås 312 km of road, 30 signs; Härnösand 125 km, 10; Jämtland 152 km, 26).
 - **Left out:** motorways, 2+1 and divided roads, which have game fences (viltstängsel) for long stretches; where fences end has no data.
 
+## One-way signs (C1 and E16)
+
+`sesigns.oneway_signs` signs town one-way streets at their junctions. OpenStreetMap's `oneway` tag says which roads are one-way (`Spec.oneway`, its direction `Spec.dir`).
+
+- **C1** (no entry), both sides of the end where the street's traffic leaves it, facing whoever would turn in against it. TSFS 2019:74 4 kap. 3 §: it stands where "en väg eller en körbana" meets roads with traffic that could turn in, so a divided road's carriageway gets one too.
+- **E16** (one-way traffic), on both corners of the end where the street's traffic enters, facing the crossing road's traffic, its arrow along the street (two models: `se_e16_r` and the mirrored `se_e16_l`). Only where a crossing road is two-way (6 kap. 17 §), and only on a one-way street: a divided road's carriageway is not one (6 kap. 16 §: all traffic the other way must be banned).
+- **Size and height.** E16-1 normal size, 0.75 x 0.30 m (6 kap. 1 §). Town signs stand over the sidewalk, so their lower edge is 2.1 m (1 kap. 13 §: at least 2.1 m over a footway). The town C1 is its own model, `se_c1_t`; the ramps' `se_c1` keeps 1.5 m.
+- **Where.** Each sign stands 1.5-8 m past the crossing road's edge (the first spot clear of every road), 0.7 m off its own carriageway.
+- **Left out:**
+  - roads out of town;
+  - motorways, trunk roads and ramps, which have their own signs;
+  - service roads (drive-throughs, car parks) and junctions where only one joins;
+  - roundabouts;
+  - one-way pieces under 12 m, which are a junction's own links;
+  - one-way roads merging, where no traffic could turn in.
+  
+  Two signs of a kind closer than 4 m that face the same way are one.
+- **Measured** (4 x 4 tiles, about 1 km², 2026-11-17): Göteborg 171 C1 and 105 E16; Stockholm 176 C1 and 67 E16.
+- **Artwork.** The E16-1 picture is Transportstyrelsen's, the same source as the other signs, in `bne_se_signs2` cell (384, 896).
+
 ## Road type detection
 
 Findings, and the rules built on them, which shipped in `0fbe4bbb`. The commit message says what the rules do.
@@ -188,6 +208,8 @@ Rural roads with a surface tag (OpenStreetMap tags, as delivered through Overtur
 | Road surface tag | OpenStreetMap tags, as delivered through Overture | Surface statistics under Road type detection |
 | C31 and B1 artwork | Transportstyrelsen's own artwork (`bne_se_signs.png`) | Sign textures for fix 2. No reuse terms stated on its pages |
 | Sign sizes and lower edge | TSFS 2019:74 (4 kap. 1 §, 3 kap. 1 §, 1 kap. 13 §) | Sign sizes for fix 2 |
+| One-way roads | OpenStreetMap `oneway` tag | Where C1 and E16 go |
+| C1 and E16 rules and sizes | TSFS 2019:74 (4 kap. 3 §; 6 kap. 1, 16, 17 §§; 1 kap. 13 §) | One-way signs |
 | Minimum lane width | VGU 2024 K233046 | `markings.MIN_LANE_M` (2.75 m) |
 | Road meshes loaded by the game | `rs_*_road.cdae` files | Height-step checks on loaded tiles |
 | Crossing, stop-line and give-way nodes | OpenStreetMap nodes via Overture's infrastructure layer | `server/secrossings.py`: paint, lowered kerbs, stop lines, priority signs |
