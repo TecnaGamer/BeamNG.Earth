@@ -900,9 +900,11 @@ class ServerMessagesTest(test_server.ServerHarness):
             data = f.read()
         w, h, mips, fourcc, sizes = imagery.read_dds_info(data)
         # (the size the message says: its level's, or the far PVS's / the screen's, farpvs.UP_ON)
-        self.assertEqual((w, h, fourcc), (m.get("tex") or self.server.tex_size(m["level"]),) * 2 + (b"DXT1",))
+        # (DXT1 tagged sRGB under a DX10 header: imagery.FAR_SRGB, the mod's v1.5 far material)
+        tag = b"DX10" if imagery.FAR_SRGB else b"DXT1"
+        self.assertEqual((w, h, fourcc), (m.get("tex") or self.server.tex_size(m["level"]),) * 2 + (tag,))
         self.assertEqual(mips, w.bit_length())                 # full chain down to 1 x 1
-        self.assertEqual(len(data), imagery.DDS_HEADER + sum(sizes))
+        self.assertEqual(len(data), imagery.DDS_HEADER + (20 if imagery.FAR_SRGB else 0) + sum(sizes))
 
 
 class DeshadowHelloTest(test_server.ServerHarness):

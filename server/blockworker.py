@@ -3547,7 +3547,7 @@ def far_global_tile(z, x, y, zoom, ref_zoom, layout, tex):
                                    -s / 2, -s / 2, s / (g.shape[1] - 1))
         except Exception as e:
             log.debug("rock faces of global %s: %s", (z, x, y), e)
-    n = imagerymod.write_dds(tex["path"], rgb)
+    n = imagerymod.write_dds(tex["path"], rgb, imagerymod.FAR_SRGB)
     return built, (n, used)
 
 
@@ -3869,7 +3869,7 @@ def _far_tile_(aid, lat, lon, tile, zoom, q, ref_zoom, with_sink, layout, tex, m
                 imagerymod.write_dds(mask[0], np.repeat(m[..., None], 3, axis=2))
         except Exception as e:
             log.debug("road mask of %s: %s", tile.key, e)
-    return built, (imagerymod.write_dds(tex["path"], rgb), used)
+    return built, (imagerymod.write_dds(tex["path"], rgb, imagerymod.FAR_SRGB), used)
 
 
 def _paint_surface():

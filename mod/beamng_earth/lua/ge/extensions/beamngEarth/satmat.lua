@@ -81,15 +81,39 @@ function M.maskOf(texture)
   return (base:gsub('%.dds$', '_road.dds'))
 end
 
+-- The near/far ground border (the user, 2026-11-16: "the texture between the ground with collision vs no collision is
+-- very different ... noticeable in mountain areas"): a version 1.0 Material's legacy lighting drew the far tiles' shaded
+-- and mid-dark ground ~10-12 % darker than the same photo on the terrain block's v1.5 material (Stelvio, in game: block
+-- 105 luma, far tiles 94, the far tiles as v1.5 materials 106). The server now tags the tiles' DXT1 textures sRGB (a DX10
+-- header, BC1_UNORM_SRGB: server imagery.FAR_SRGB), which a v1.5 Material reads right (a plain DXT1 it reads as linear:
+-- washed out), so a texture tagged so gets a v1.5 Material; a plain one (an older server, BNE_FAR_SRGB=off, a tile kept
+-- from before) keeps the 1.0 Material it always had.
+M.SRGB_V15 = true
+local srgbOf, nSrgb = {}, 0     -- texture path -> its DDS header says sRGB (read once a path)
+function M.isSrgb(texture)
+  local v = srgbOf[texture]
+  if v ~= nil then return v end
+  local data = type(texture) == 'string' and readFile and readFile(texture)
+  v = type(data) == 'string' and data:sub(85, 88) == 'DX10'
+  if nSrgb >= 8192 then srgbOf, nSrgb = {}, 0 end
+  srgbOf[texture], nSrgb = v, nSrgb + 1
+  return v
+end
+
 -- Point material m at texture, with the asphalt layer where the tile has a road mask and world-locked UV1 (detail:
--- the layer's grain is laid out on it), and without it otherwise (a pooled material moves between tiles).
+-- the layer's grain is laid out on it), and without it otherwise (a pooled material moves between tiles); a v1.5
+-- Material for an sRGB texture or the road layer, else 1.0.
 local function setTexture(m, texture, detail)
   require('beamngEarth/texdbg').log('farTex', texture)
   m:setField('colorMap', 0, texture)
   local mask = M.maskOf(texture)
   local on = M.ASPHALT_LAYER and detail ~= false and mask ~= nil and FS:fileExists(mask)
+  local srgb = M.SRGB_V15 and M.isSrgb(texture)
   local v15 = tostring(m:getField('version', 0)) == '1.5'
-  if not on and not v15 then return end
+  if not on and not srgb then
+    if v15 then m:setField('version', 0, '1') ; m:setField('activeLayers', 0, '1') end
+    return
+  end
   m:setField('version', 0, '1.5')
   m:setField('baseColorMap', 0, texture)
   if on then
@@ -344,6 +368,7 @@ function M.clearAll()
   mats, delQ, queued, nMats = {}, {}, {}, 0
   retexQ, rqH, rqT, retexWant = {}, 1, 0, {}
   detailChecked = false
+  srgbOf, nSrgb = {}, 0
 end
 
 function M.count() return nMats end

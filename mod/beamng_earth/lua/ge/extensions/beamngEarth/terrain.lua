@@ -276,6 +276,7 @@ end
 
 local materialsChecked = false
 local renderEnabled = true -- false in mesh mode; survives levels (a server setting)
+local function renderOn() return renderEnabled end   -- (shadowsField: a render-disabled block, mesh mode, casts nothing)
 
 -- Our level loads main.materials.json by itself (the level loader scans the level folder,
 -- server/server.lua:200-212 loadJsonMaterialsFile). In any other level (testing) load it on demand.
@@ -301,12 +302,23 @@ function M.configure(size)
   return n
 end
 
--- The block casts no sun shadows. Every block move redrew the sun's cached shadow map for it: on a Steam Deck Fells
--- Point drive (2026-10-24) 11 of 27 frames with RenderShadows >= 25 ms came within 3 frames of a swap, 112x the swaps'
--- share of frames; with castShadows 0 none of 20 did, shadow hitches 34 -> 18. It drew nothing into that map: with the
--- block drawn (detail mode), screenshots after a forced redraw were pixel-identical with and without, the redraw
--- itself as dear (PC 8.4 / 7.7 ms vs 8.4 / 7.5), the floor of Yosemite Valley sunlit near sunset either way; trees,
--- roads, buildings and the far meshes cast the shadows.
+-- The block's sun shadows (the settings' terrainShadows: off on the Low and Medium presets). Every block move redraws the
+-- sun's cached shadow map for it: on a Steam Deck Fells Point drive (2026-10-24) 11 of 27 frames with RenderShadows
+-- >= 25 ms came within 3 frames of a swap, 112x the swaps' share of frames; with castShadows 0 none of 20 did, shadow
+-- hitches 34 -> 18 (so it was off for everyone; flat Fells Point and Yosemite's floor looked the same either way). In the
+-- mountains it is the near/far border the user saw (2026-11-16, "a visible border between the collision ground and the no
+-- collision ground. noticeable in mountain areas"): the far tiles past the block's edge cast their shadows, the block did
+-- not, so a ridge's shadow stopped at the edge and the block's shaded slopes were lit (Stelvio, the sun low, a
+-- free camera 30 m up looking up a slope: the block 97 luma, the same ground as far tiles 72, the block with its
+-- shadows 76; ~/bnge-tests/texlayer).
+M.castShadows = true
+local function shadowsField() return (M.castShadows and renderOn() ~= false) and '1' or '0' end
+function M.setCastShadows(on)
+  M.castShadows = on and true or false
+  local tb = M.get()
+  if tb then tb:setField('castShadows', 0, shadowsField()) end
+  return M.castShadows
+end
 local tilesChecked = false
 -- Each tile layer (M.TILE_FALLBACK) whose PNG copy is missing gets its stand-in look, once, before the block's first
 -- material build. Returns the names given one.
@@ -363,7 +375,7 @@ local function getOrCreate()
   -- the resolution the engine bakes the block's base colour at (default 1024; West Coast USA's block 2048;
   -- set before registerObject: the engine sizes it when the block is added)
   tb:setField('baseTexSize', 0, tostring(M.BASE_TEX_SIZE))
-  tb:setField('castShadows', 0, '0')     -- (no sun shadows: see above)
+  tb:setField('castShadows', 0, shadowsField())     -- (see M.castShadows)
   tb:registerObject(M.NAME)
   tb.canSave = false
   -- importMaps keeps its .ter data under this folder; /temp is writable and outside any level.
@@ -458,6 +470,7 @@ end
 -- before (keeps the v1.2 path untouched).
 local function applyRender(tb, force)
   if (force or not renderEnabled) and tb.setRenderEnabled then tb:setRenderEnabled(renderEnabled) end
+  tb:setField('castShadows', 0, shadowsField())
 end
 
 -- Draw the block (terrain mode) or not (mesh mode: physics only).
@@ -525,7 +538,7 @@ function M.load(path, squareSize, maxHeight, x, y, z, layers, base, baseSize)
     ok, err = importMaps(tb, path, squareSize, maxHeight, false)
     if not ok then return false, err end
   end
-  tb:setField('castShadows', 0, '0')     -- (no sun shadows: kept across imports, set again to be sure)
+  tb:setField('castShadows', 0, shadowsField())     -- (kept across imports, set again to be sure)
   tb:setPosition(vec3(x, y, z))
   applyRender(tb) -- mesh mode: hidden again after every import
   if base ~= nil then M.setBase(base or nil, baseSize) end

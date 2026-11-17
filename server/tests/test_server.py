@@ -774,7 +774,7 @@ class MeshServerTest(ServerHarness):
                 self.assertEqual(px, earthd.TEX_NEAR if m["level"] <= -1 else earthd.TEX_FAR)
             else:
                 self.assertEqual(px, 512 if m["level"] >= 2 else 256)
-            self.assertEqual((w, h, mips, fourcc), (px, px, int(math.log2(px)) + 1, b"DXT1"))
+            self.assertEqual((w, h, mips, fourcc), (px, px, int(math.log2(px)) + 1, b"DX10" if imagery.FAR_SRGB else b"DXT1"))
             shape = cdae.read(self.fs(m["shape"]))
             self.assertEqual(shape["materials"][0]["name"], m["material"])
             self.assertEqual(shape["meshes"][0]["tverts2"][0], shape["meshes"][0]["verts"][0])

@@ -2487,11 +2487,12 @@ def mip_chain(img):
     return [Image.fromarray(a, "RGB") for a in mip_arrays(np.asarray(img.convert("RGB")))]
 
 
-def encode_dds(rgb):
+def encode_dds(rgb, srgb=False):
     """DDS bytes of an RGB image (uint8 [h, w, 3], power-of-two sides): DXT1 (BC1, no alpha)
     with the full mip chain (mip_arrays' chain, in integers: within one sRGB step of it), in one Rust call
     (earthfast.dds_levels, bc1fast.rs: ISPC's BC1 kernels on the CPU, ~10x our own encoder at its quality and
-    faster than the GPU's round trip, which the game's frames paid for on a Steam Deck: no GPU here since 287)."""
+    faster than the GPU's round trip, which the game's frames paid for on a Steam Deck: no GPU here since 287).
+    srgb: the same blocks under a DX10 header as DXGI_FORMAT_BC1_UNORM_SRGB (FAR_SRGB)."""
     rgb = np.ascontiguousarray(np.asarray(rgb, np.uint8))
     h, w = rgb.shape[:2]
     fast.require(287, "imagery dds_levels")
@@ -2501,15 +2502,28 @@ def encode_dds(rgb):
     head = (DDS_MAGIC
             + struct.pack("<7I", 124, flags, h, w, dxt1_size(w, h), 0, n)
             + struct.pack("<11I", *((0,) * 11))
-            + struct.pack("<2I4s5I", 32, DDPF_FOURCC, b"DXT1", 0, 0, 0, 0, 0)
+            + struct.pack("<2I4s5I", 32, DDPF_FOURCC, b"DX10" if srgb else b"DXT1", 0, 0, 0, 0, 0)
             + struct.pack("<5I", DDSCAPS_TEXTURE | DDSCAPS_MIPMAP | DDSCAPS_COMPLEX, 0, 0, 0, 0))
     assert len(head) == DDS_HEADER
+    if srgb:        # DXGI format, D3D10_RESOURCE_DIMENSION_TEXTURE2D, misc flags, array size, misc flags 2
+        head += struct.pack("<5I", DXGI_BC1_UNORM_SRGB, 3, 0, 1, 0)
     return head + data
 
 
-def write_dds(path, rgb):
+# The far tiles' photos (2026-11-16, the near/far ground border the user saw in the mountains): the game drew them with
+# a version 1.0 Material, whose legacy lighting left their shaded and mid-dark ground ~10-12 % darker than the same photo
+# on the terrain block's v1.5 material (Stelvio: the block 105 luma, the far tiles 94; the far tiles as v1.5 materials
+# reading the same blocks as sRGB, 106: ~/bnge-tests/texlayer). A v1.5 Material reads a plain DXT1 as linear (washed out),
+# so the far tiles' textures are tagged sRGB (the GPU decodes them like the block's BC7_UNORM_SRGB photo) and the mod
+# draws a tile whose texture is tagged so with a v1.5 Material (satmat.lua). BNE_FAR_SRGB=off: the plain DXT1 and the
+# 1.0 Material, as before.
+DXGI_BC1_UNORM_SRGB = 72
+FAR_SRGB = os.environ.get("BNE_FAR_SRGB", "on").strip().lower() not in ("off", "0", "false", "no")
+
+
+def write_dds(path, rgb, srgb=False):
     """encode_dds() to path atomically; returns the file size."""
-    data = encode_dds(rgb)
+    data = encode_dds(rgb, srgb)
     tmp = staging.tmp_for(path)
     with open(tmp, "wb") as f:
         f.write(data)
