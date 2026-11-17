@@ -74,11 +74,12 @@ local TL = '/temp/beamngEarth/terraintex/'
 -- server writes zero-mean copies of these (server/terraintex.py RECENTRED_STEMS, the same list; rc_name):
 M.RECENTRED = {
   ['asphalt/asphalt/t_asphalt_b'] = true, ['asphalt/macro_asphalt/t_macro_asphalt_b'] = true,
-  ['grass/t_grass_01/t_grass_01_b'] = true, ['grass/t_macro_grass/t_macro_grass_b'] = true, ['mud/mud/t_mud_b'] = true,
-  ['rock/macro_rocky/t_macro_rocky_b'] = true, ['rock/t_dirt_rocky/t_dirt_rocky_b'] = true,
+  ['grass/macro_dry_grass_02/t_macro_dry_grass_02_b'] = true, ['grass/t_grass_01/t_grass_01_b'] = true,
+  ['mud/mud/t_mud_b'] = true, ['rock/macro_rocky/t_macro_rocky_b'] = true, ['rock/t_dirt_rocky/t_dirt_rocky_b'] = true,
   ['sand/t_macro_sand/t_macro_sand_b'] = true, ['sand/t_sand/t_sand_b'] = true,
   ['soil/dirt_crumbly/t_dirt_crumbly_b'] = true, ['soil/dirt_loose_dusty/t_dirt_loose_dusty_b'] = true,
-  ['soil/macro_clumply/t_macro_clumpy_b'] = true, ['soil/t_gravel/t_gravel_b'] = true,
+  ['soil/macro_clumply/t_macro_clumpy_b'] = true, ['soil/macro_holes/t_macro_holes_b'] = true,
+  ['soil/t_gravel/t_gravel_b'] = true, ['soil/t_macro_flows/t_macro_flows_b'] = true,
 }
 function M.rcName(stem) return 'bne_rc_' .. stem:gsub('/', '__') .. '.png' end
 -- The stock path of a zero-mean copy's VFS path (nil for any other path): the layer's colour when the copy is missing.
@@ -94,7 +95,10 @@ end
 -- 200 m (macroDistAtten): past the block's edge (the player >= 229 m inside it, follow.lua) the far tiles show the photo
 -- alone (tools/make_level_assets.py MACRO_DISTANCES)
 M.MACRO_DISTANCES, M.MACRO_DIST_ATTEN = '0 0 100 200', '0 1'
-local function look(detail, dsize, macro, msize, strength)
+-- look(detail stem, its repeat m, macro stem, its repeat m, detail colour strength near, macro colour strength near,
+-- at 100 m): tools/make_level_assets.py surface() makes the same fields (its LOOKS table; server/tests/test_ground_looks.py
+-- checks the two agree). Repeats divide the 128 m block step.
+local function look(detail, dsize, macro, msize, strength, mnear, mfar)
   local l = { detailDistances = '0 0 50 80', macroDistances = M.MACRO_DISTANCES, macroDistAtten = M.MACRO_DIST_ATTEN }
   for _, k in ipairs({ { 'baseColor', '_b' }, { 'normal', '_nm' }, { 'roughness', '_r' }, { 'ao', '_ao' } }) do
     l[k[1] .. 'DetailTex'] = T .. detail .. k[2] .. '.png'
@@ -112,44 +116,49 @@ local function look(detail, dsize, macro, msize, strength)
   -- colour: the photo carries it, the detail only adds grain (West Coast USA: 0.25 / 0.1)
   l.baseColorDetailStrength = (strength or 0.25) .. ' 0.08'
   l.normalDetailStrength, l.roughnessDetailStrength, l.aoDetailStrength = '1 0.3', '1 0.4', '0.8 0.2'
-  l.baseColorMacroStrength, l.normalMacroStrength, l.roughnessMacroStrength = '0.12 0.08', '0.5 0.3', '0 0.8'
+  l.baseColorMacroStrength = (mnear or 0.12) .. ' ' .. (mfar or 0.08)
+  l.normalMacroStrength, l.roughnessMacroStrength = '0.5 0.3', '0 0.8'
   return l
 end
 local function golfLook(detail, dsize, macro, msize, near, far)
-  local l = look(detail, dsize, macro, msize, near)
+  local l = look(detail, dsize, macro, msize, near, 0.06, 0.04)
   l.baseColorDetailStrength = near .. ' ' .. far
   return l
 end
 -- Squares (server/surface.py PAVERS / BRICK; tools/make_level_assets.py has the same): building tileables at the
 -- 1024 detail size as PNG copies the server makes from the game's DDS (server/terraintex.py: the terrain packing reads
--- no DDS) under TL, the asphalt's roughness, ao off
-local function tileLook(color, normal, dsize, near, far)
+-- no DDS) under TL: colour, normal, and their own roughness and ao as offsets from the flat base (terraintex BASE_R)
+local function tileLook(tile, dsize, near, far)
   local l = look('asphalt/asphalt/t_asphalt', dsize, 'asphalt/macro_asphalt/t_macro_asphalt', 32, near)
-  l.baseColorDetailTex, l.normalDetailTex = TL .. color, TL .. normal
-  l.baseColorDetailStrength, l.aoDetailStrength = near .. ' ' .. far, '0 0'
+  for _, k in ipairs({ { 'baseColor', '_b' }, { 'normal', '_nm' }, { 'roughness', '_r' }, { 'ao', '_ao' } }) do
+    l[k[1] .. 'DetailTex'] = TL .. 'bne_' .. tile .. k[2] .. '.png'
+  end
+  l.baseColorDetailStrength, l.aoDetailStrength, l.roughnessDetailStrength = near .. ' ' .. far, '1 0.3', '1 0.3'
   -- (seen further than the land's 50-80 m: the user, 2026-11-11, "the texture fades away pretty quickly")
   l.detailDistances = '0 0 150 250'
   return l
 end
+-- (2026-11-16, the stock maps' way: each surface its own macro, 8-32 m repeats for the 4-16 m band the photo and the
+-- 1-4 m detail grain leave out; tools/make_level_assets.py LOOKS says why)
 M.LOOKS = {
   bngEarthGroundAsphalt = look('asphalt/asphalt/t_asphalt', 4, 'asphalt/macro_asphalt/t_macro_asphalt', 32, 0.3),
-  bngEarthGroundGrass = look('grass/t_grass_01/t_grass_01', 2, 'grass/t_macro_grass/t_macro_grass', 64),
-  bngEarthGroundDusty = look('soil/dirt_loose_dusty/t_dirt_loose_dusty', 2, 'soil/macro_clumply/t_macro_clumpy', 64),
-  bngEarthGroundLoose = look('soil/t_gravel/t_gravel', 2, 'soil/macro_clumply/t_macro_clumpy', 64),
-  bngEarthGroundRock = look('rock/t_dirt_rocky/t_dirt_rocky', 4, 'rock/macro_rocky/t_macro_rocky', 64),
-  bngEarthGroundSnow = look('sand/t_sand/t_sand', 4, 'sand/t_macro_sand/t_macro_sand', 64, 0.12),
-  bngEarthGroundMud = look('mud/mud/t_mud', 2, 'soil/macro_clumply/t_macro_clumpy', 64),
-  bngEarthGroundLawn = look('grass/t_grass_01/t_grass_01', 1, 'grass/t_macro_grass/t_macro_grass', 64, 0.2),
+  bngEarthGroundGrass = look('grass/t_grass_01/t_grass_01', 2, 'grass/macro_dry_grass_02/t_macro_dry_grass_02', 16),
+  bngEarthGroundDusty = look('soil/dirt_loose_dusty/t_dirt_loose_dusty', 2, 'soil/t_macro_flows/t_macro_flows', 16, 0.25, 0.15, 0.1),
+  bngEarthGroundLoose = look('soil/t_gravel/t_gravel', 2, 'soil/t_macro_flows/t_macro_flows', 8, 0.3, 0.2, 0.12),
+  bngEarthGroundRock = look('rock/t_dirt_rocky/t_dirt_rocky', 4, 'rock/macro_rocky/t_macro_rocky', 16, 0.25, 0.15, 0.1),
+  bngEarthGroundSnow = look('sand/t_sand/t_sand', 4, 'sand/t_macro_sand/t_macro_sand', 32, 0.12, 0.06, 0.04),
+  bngEarthGroundMud = look('mud/mud/t_mud', 2, 'soil/macro_holes/t_macro_holes', 16),
+  bngEarthGroundLawn = look('grass/t_grass_01/t_grass_01', 1, 'soil/t_macro_flows/t_macro_flows', 16, 0.2, 0.06, 0.04),
   -- Golf (server/surface.py). The detail texture covers the aerial photo; none of these names is a
   -- GroundCover layer, so the 3D grass does not grow on them.
-  bngEarthGroundGolfRough = golfLook('grass/t_grass_01/t_grass_01', 4, 'grass/t_macro_grass/t_macro_grass', 64, 0.72, 0.28),
-  bngEarthGroundGolfFairway = golfLook('grass/t_grass_01/t_grass_01', 2, 'grass/t_macro_grass/t_macro_grass', 64, 0.45, 0.18),
-  bngEarthGroundGolfGreen = golfLook('grass/t_grass_01/t_grass_01', 1, 'grass/t_macro_grass/t_macro_grass', 64, 0.5, 0.2),
-  bngEarthGroundGolfBunker = golfLook('sand/t_sand/t_sand', 2, 'sand/t_macro_sand/t_macro_sand', 64, 0.95, 0.55),
-  bngEarthGroundPavers = tileLook('bne_pavers_b.png', 'bne_pavers_nm.png', 2, 0.5, 0.15),
-  bngEarthGroundBrick = tileLook('bne_brick_b.png', 'bne_brick_nm.png', 2, 0.85, 0.3),
-  bngEarthGroundCobble = tileLook('bne_cobble_b.png', 'bne_cobble_nm.png', 2, 0.6, 0.2),
-  beamngEarthDirt = look('soil/dirt_crumbly/t_dirt_crumbly', 2, 'soil/macro_clumply/t_macro_clumpy', 64),
+  bngEarthGroundGolfRough = golfLook('grass/t_grass_01/t_grass_01', 4, 'grass/macro_dry_grass_02/t_macro_dry_grass_02', 16, 0.72, 0.28),
+  bngEarthGroundGolfFairway = golfLook('grass/t_grass_01/t_grass_01', 2, 'soil/t_macro_flows/t_macro_flows', 16, 0.45, 0.18),
+  bngEarthGroundGolfGreen = golfLook('grass/t_grass_01/t_grass_01', 1, 'soil/t_macro_flows/t_macro_flows', 16, 0.5, 0.2),
+  bngEarthGroundGolfBunker = golfLook('sand/t_sand/t_sand', 2, 'sand/t_macro_sand/t_macro_sand', 32, 0.95, 0.55),
+  bngEarthGroundPavers = tileLook('pavers', 2, 0.5, 0.15),
+  bngEarthGroundBrick = tileLook('brick', 2, 0.85, 0.3),
+  bngEarthGroundCobble = tileLook('cobble', 2, 0.6, 0.2),
+  beamngEarthDirt = look('soil/dirt_crumbly/t_dirt_crumbly', 2, 'soil/macro_clumply/t_macro_clumpy', 32),
 }
 -- The tile layers' stand-ins when the server could not write their PNGs (terraintex.py: no game folder, a failed
 -- decode): the stock asphalt grain they had before, not a missing texture (a cobbled street plainer than before)

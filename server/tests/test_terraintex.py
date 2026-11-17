@@ -39,7 +39,8 @@ class TerrainTexTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as game, tempfile.TemporaryDirectory() as user:
             by = {}
             for member, kind, arch in terraintex.TEXTURES.values():
-                by.setdefault(arch, []).append((member, kind))
+                if all(m != member for m, _ in by.get(arch, [])):     # (one member can feed two files)
+                    by.setdefault(arch, []).append((member, kind))
             for arch, items in by.items():
                 path = os.path.join(game, *arch)
                 os.makedirs(os.path.dirname(path), exist_ok=True)

@@ -39,8 +39,8 @@ STOCK_TERRAIN = "assets/materials/terrain/"
 RECENTRED_STEMS = (
     "asphalt/asphalt/t_asphalt_b",
     "asphalt/macro_asphalt/t_macro_asphalt_b",
+    "grass/macro_dry_grass_02/t_macro_dry_grass_02_b",
     "grass/t_grass_01/t_grass_01_b",
-    "grass/t_macro_grass/t_macro_grass_b",
     "mud/mud/t_mud_b",
     "rock/macro_rocky/t_macro_rocky_b",
     "rock/t_dirt_rocky/t_dirt_rocky_b",
@@ -49,8 +49,15 @@ RECENTRED_STEMS = (
     "soil/dirt_crumbly/t_dirt_crumbly_b",
     "soil/dirt_loose_dusty/t_dirt_loose_dusty_b",
     "soil/macro_clumply/t_macro_clumpy_b",
+    "soil/macro_holes/t_macro_holes_b",
     "soil/t_gravel/t_gravel_b",
+    "soil/t_macro_flows/t_macro_flows_b",
 )
+# The squares' roughness and ambient occlusion (pavers, brick, cobble; 2026-11-16, they had the asphalt's): the layer's
+# value is the level's flat base (roughness 240/255, ao 251/255: tools/make_level_assets.py) plus (2 t - 1) x strength,
+# so a tileable's own map t0 is stored as 0.5 + (t0 - base) / 2: at the near strength 1 the layer shows t0 itself (the
+# slabs' 0.74, the brick's 0.80 with rough joints; dark ao in the joints), fading toward the base with the detail.
+BASE_R, BASE_AO = 240 / 255, 251 / 255
 
 
 def rc_name(stem):
@@ -81,6 +88,18 @@ TEXTURES = {
                          "color"),
     "bne_cobble_nm.png": ("assets/materials/tileable/paving/t_italy_cobblestone/t_italy_cobblestone_n.normal.dds",
                           "normal"),
+    # roughness / ao (BASE_R): the slabs' and brick's own 512 maps, resized; the setts have none: roughness from their
+    # specular map (1 - s / 2), ao from their colour's luminance (the joints dark)
+    "bne_pavers_r.png": ("assets/materials/tileable/concrete/slabs_brutalist/t_slabs_brutalist_r.data.dds", "rough"),
+    "bne_pavers_ao.png": ("assets/materials/tileable/concrete/slabs_brutalist/t_slabs_brutalist_ao.data.dds", "ao"),
+    "bne_brick_r.png": ("assets/materials/tileable/brick/t_bricks_herringbone_01/t_bricks_herringbone_01_r.data.dds",
+                        "rough"),
+    "bne_brick_ao.png": ("assets/materials/tileable/brick/t_bricks_herringbone_01/t_bricks_herringbone_01_ao.data.dds",
+                         "ao"),
+    "bne_cobble_r.png": ("assets/materials/tileable/paving/t_italy_cobblestone/t_italy_cobblestone_s.color.dds",
+                         "spec_rough"),
+    "bne_cobble_ao.png": ("assets/materials/tileable/paving/t_italy_cobblestone/t_italy_cobblestone_d.color.dds",
+                          "luma_ao"),
 }
 TEXTURES = {n: v + (ARCHIVE,) for n, v in TEXTURES.items()}
 TEXTURES.update({rc_name(s): (STOCK_TERRAIN + s + ".png", "recentre", TERRAIN_ARCHIVE) for s in RECENTRED_STEMS})
@@ -99,6 +118,26 @@ def recentre(a):
     return np.clip(np.floor(a.astype(np.float64) + (127.5 - mean) + 0.5), 0, 255).astype(np.uint8)
 
 
+def layer_data(rgb, kind):
+    """A SIZE x SIZE uint8 detail map of a tileable's (h, w, 3) map for the layer's roughness / ao (BASE_R): "rough" /
+    "ao" its grey value, "spec_rough" 1 - its specular / 2, "luma_ao" its colour's luminance over its 95th percentile;
+    stored as 0.5 + (t0 - base) / 2, then resized (bilinear, on the float values)."""
+    from PIL import Image
+    a = np.asarray(rgb, np.float64) / 255.0
+    if kind == "luma_ao":
+        y = a @ np.array([0.2126, 0.7152, 0.0722])
+        t0 = np.clip(y / max(float(np.percentile(y, 95)), 1e-6), 0.0, 1.0)
+    elif kind == "spec_rough":
+        t0 = 1.0 - a[..., 0] / 2.0
+    else:
+        t0 = a[..., 0]
+    base = BASE_AO if kind in ("ao", "luma_ao") else BASE_R
+    v = np.clip(0.5 + (t0 - base) / 2.0, 0.0, 1.0).astype(np.float32)
+    if v.shape != (SIZE, SIZE):
+        v = np.asarray(Image.fromarray(v, "F").resize((SIZE, SIZE), Image.BILINEAR), np.float32)
+    return np.clip(np.floor(v.astype(np.float64) * 255.0 + 0.5), 0, 255).astype(np.uint8)
+
+
 def convert(data, kind):
     """A DDS (or PNG) file's bytes as a SIZE x SIZE RGB PIL image: a two-channel (BC5) normal map with its z rebuilt;
     "recentre": the colour zero-mean (recentre, after the resize)."""
@@ -110,6 +149,8 @@ def convert(data, kind):
         if im.size != (SIZE, SIZE):
             im = im.resize((SIZE, SIZE), Image.LANCZOS)
         return Image.fromarray(recentre(np.asarray(im)), "RGB")
+    if kind in ("rough", "ao", "spec_rough", "luma_ao"):
+        return Image.fromarray(np.repeat(layer_data(np.asarray(im.convert("RGB")), kind)[..., None], 3, 2), "RGB")
     a = np.asarray(im.convert("RGBA"), np.float32)[..., :3]
     if kind == "normal":
         x, y = a[..., 0] / 127.5 - 1.0, a[..., 1] / 127.5 - 1.0
