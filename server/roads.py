@@ -7871,13 +7871,21 @@ class BridgeProfiles:
     # canonical ground (its _resolve) and, for now, its order of parts: its solves are the plans' (PLANS_FORMAT)
     CANON_LOAD = True
 
-    def _canon_load(self, pool, ground, loaded):
-        """pool and ground again from the cells in loaded, in their keys' order (CANON_LOAD)."""
+    def _canon_load(self, pool, ground, loaded, keep=True):
+        """pool and ground again from the cells in loaded, in their keys' order (CANON_LOAD). keep: a part or ground
+        road the pool had that no loaded cell gives now (a cell read short this time: _cell_entries keeps only complete
+        reads, so the next read can differ) is kept as it was, never lost from a chain being followed (a KeyError
+        for the chain's own start part otherwise). The window solves (keep False) take their cells' alone."""
+        old_pool, old_ground = (dict(pool), dict(ground)) if keep else ({}, {})
         pool.clear()
         ground.clear()
         for c in sorted(loaded):
             z, x, y = (int(v) for v in c.split("/"))
             self._load(mapcells.CellKey(z, x, y), pool, ground)
+        for k in sorted(set(old_pool) - set(pool), key=str):
+            pool[k] = old_pool[k]
+        for k in sorted(set(old_ground) - set(ground), key=str):
+            ground[k] = old_ground[k]
 
     def _resolve(self, start, pool, ground, loaded, grow=True):
         """The chain of part `start` (keys), loading the cell at each loose end until closed (grow False: of the
@@ -8396,7 +8404,7 @@ class BridgeProfiles:
             block = self._block_of_ll(ends[len(ends) // 2])
             for _ in range(3):
                 loaded = set(self._window(block))
-                self._canon_load(pool, ground, loaded)
+                self._canon_load(pool, ground, loaded, keep=False)
                 if key not in pool:
                     return None
                 b = self._block_of_xy(pool[key][1])
