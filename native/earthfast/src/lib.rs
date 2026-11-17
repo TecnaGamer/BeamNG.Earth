@@ -6502,6 +6502,9 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 314: stage 5: ggshade (gg_sun_fit, gg_relight: the capture sun's shadows out of the Sentinel-2 colour);
     // gen_ground's LOST texels, its crowns' shading from no direction
     // 322: both of the above merged (321 vegetation clumps + 313/314 generated ground stages 4-5)
-    m.add("VERSION", 341)?;
+    // 370: genground::gen_ground_pair(..., floor_mode, gaps) (the ground and its canopy version in one pass: the far
+    // rings' and the block's forest floor fade through the mips, byte for byte two gen_ground calls; gaps: the block's
+    // unplaced gaps in the photo's colour in the canopy version too)
+    m.add("VERSION", 370)?;
     Ok(())
 }
