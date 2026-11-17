@@ -184,6 +184,14 @@ Placement and size (TSFS 2019:74):
 - **Poles**: at most three signs (1 kap., allmänna råd); no rule read on which group goes above which, so each sign has
   its own pole.
 
+## Direction signs (Settings > World > Direction signs)
+
+The shared advance boards (server/dirsigns.py, `dirsigns_styles.json` row `SE`, verified): blue, white text and edge,
+as Transportstyrelsen's picture of F1; a European route's number on F14's green plate above the national (riksväg)
+and county road (länsväg) numbers in a white frame on the board's blue (TSFS 2019:74 7 kap. 1 §, 24 §). The colours
+are the agency's pictures' own: blue 0 85 150, green 0 128 101. Not told apart: the green board TSFS asks for at the
+last junction before a motorway or motortrafikled.
+
 ## Moose signs (A19)
 
 `sesigns.moose_signs` puts the moose warning sign A19-1 on rural roads, sparingly: the user wanted the typical Swedish sign but not overdone.
