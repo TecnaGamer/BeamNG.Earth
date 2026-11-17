@@ -82,6 +82,16 @@ pub(crate) fn check_offsets(n: usize, po: &[i64], ro: &[i64], co: &[i64], points
     Ok(())
 }
 
+/// A layer's lon / lat points are (k, 2): IndexError otherwise (numpy's error reading column 1 of a one-column array;
+/// never a panic on a malformed array handed to a kernel directly).
+pub(crate) fn check_lonlat(cols: usize) -> PyResult<()> {
+    if cols != 2 {
+        return Err(pyo3::exceptions::PyIndexError::new_err(format!(
+            "a road layer's lon / lat points have {cols} columns, not 2")));
+    }
+    Ok(())
+}
+
 fn table<'py>(t: Option<Bound<'py, PyAny>>, n: usize) -> PyResult<Option<(Vec<i64>, Bound<'py, PyAny>)>> {
     let Some(t) = t.filter(|t| !t.is_none()) else { return Ok(None) };
     let maj: PyReadonlyArray1<i64> = t.call_method1("majors", (n,))?.extract()?;
@@ -102,6 +112,7 @@ impl<'py> Cols<'py> {
            lane_w_default: f64, shoulder: (f64, f64, i64)) -> PyResult<Self> {
         let n = ids.len();
         let a = lonlat.as_array();
+        check_lonlat(a.ncols())?;
         check_offsets(n, po.as_slice()?, ro.as_slice()?, co.as_slice()?, a.nrows())?;
         if kind.len()? < n {
             return Err(pyo3::exceptions::PyIndexError::new_err("lane sections: fewer kinds than features"));
@@ -1036,6 +1047,7 @@ pub fn lane_ease<'py>(py: Python<'py>, s: PyReadonlyArray1<'py, f64>, length: f6
 pub fn lane_offset<'py>(py: Python<'py>, ll: PyReadonlyArray2<'py, f64>, d: PyReadonlyArray1<'py, f64>)
                         -> PyResult<Bound<'py, numpy::PyArray2<f64>>> {
     let a = ll.as_array();
+    check_lonlat(a.ncols())?;
     let p: Vec<[f64; 2]> = (0..a.nrows()).map(|k| [a[[k, 0]], a[[k, 1]]]).collect();
     let d = d.as_slice()?;
     if p.is_empty() || !(d.len() == 1 || d.len() == p.len()) {

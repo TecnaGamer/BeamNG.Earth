@@ -112,6 +112,7 @@ pub fn layer_lengths<'py>(py: Python<'py>, part_off: PyReadonlyArray1<'py, i64>,
     if n == 0 {
         return Ok(out.into_pyarray(py));
     }
+    super::lanesplit::check_lonlat(ll.ncols())?;
     super::lanesplit::check_offsets(n, po, ro, co, ll.nrows())?;
     let a: Vec<i64> = (0..n).map(|i| co[ro[po[i] as usize] as usize]).collect();
     let b: Vec<i64> = (0..n).map(|i| co[ro[po[i + 1] as usize] as usize]).collect();

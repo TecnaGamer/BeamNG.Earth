@@ -91,5 +91,33 @@ class WidthRegionsParityTest(unittest.TestCase):
             self.fail(f"{type(e).__name__}: {e}")
 
 
+class OneColumnPointsTest(unittest.TestCase):
+    """A (k, 1) points array handed to a roadnet kernel directly (Codex on 35a38d05: width_regions read its column 1:
+    a Rust panic): IndexError from each kernel that takes a layer's lon / lat, never a PanicException."""
+
+    def check(self, call):
+        try:
+            call()
+        except IndexError:
+            return
+        except BaseException as e:  # noqa: BLE001
+            self.fail(f"{type(e).__name__}: {e}")
+        self.fail("no error")
+
+    def test_kernels_raise_index_error(self):
+        import fast
+        ef = fast._ef
+        one = np.zeros((1, 1), np.float64)
+        po, ro, co = (np.array([0, 1], np.int64), np.array([0, 1], np.int64), np.array([0, 1], np.int64))
+        self.check(lambda: ef.width_regions(np.zeros(1, bool), po, ro, co, one, tuple(float(v) for v in JAPAN_BOX),
+                                            1, 2))
+        self.check(lambda: ef.layer_lengths(po, ro, co, one))
+        self.check(lambda: ef.lane_flow_rows(po, ro, co, one, None, None, [], None, np.zeros(1, bool), {}, False,
+                                             None, [], None))
+        self.check(lambda: ef.lane_joint_specs(["r0"], np.full(1, 2, np.uint8), po, ro, co, one, None, None, None,
+                                               None, None, None, None, {}, 3.0, (0.5, 1.0, 3)))
+        self.check(lambda: ef.lane_offset(one, np.zeros(1)))
+
+
 if __name__ == "__main__":
     unittest.main()

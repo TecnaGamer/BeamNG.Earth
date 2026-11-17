@@ -123,6 +123,7 @@ pub fn width_regions<'py>(py: Python<'py>, us_mask: PyReadonlyArray1<'py, bool>,
     if n == 0 {
         return Ok(out.into_pyarray(py));
     }
+    super::lanesplit::check_lonlat(ll.ncols())?;
     super::lanesplit::check_offsets(n, po, ro, co, ll.nrows())?;
     let m = us_mask.as_slice()?;
     if m.len() != n {
