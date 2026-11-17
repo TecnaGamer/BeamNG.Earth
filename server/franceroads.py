@@ -81,9 +81,9 @@ def adjust_specs(feats, specs):
         if sp is None or sp.kind != "paved" or not french_feature(feats, i):
             continue
         sp = sp._replace(france=True)
-        mapped = roads._rule_value(feats.rules.get("width"), i)
+        mapped = roads.mapped_rule_width(feats, i)
         if mapped is None:
-            mapped = roads._osm(feats, "width", i, *roads.OSM_WIDTH_M)
+            mapped = roads.mapped_osm_width(feats, i, *roads.OSM_WIDTH_M)
         if (not sp.urban and not sp.link and not sp.median and not getattr(sp, "mountain", False)
                 and not roads.is_ring(feats, i)
                 and sp.cls in RURAL_WIDTH and mapped is None):
