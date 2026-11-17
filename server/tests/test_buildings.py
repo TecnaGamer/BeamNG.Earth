@@ -1105,6 +1105,20 @@ class OverRoadTest(unittest.TestCase):
         items = bld.tile_buildings(self.f, 0, 0, 256, 256, [b], lambda la, lo: np.zeros(np.shape(la)))
         self.assertEqual(len(items), 1)
 
+    def test_a_level_below_zero_building_with_parts_above_ground_is_kept(self):
+        # Warszawa Centralna: layer=-1 under location=surface, its parts up to 41 m; Shot Tower (no parts) stays out
+        b = Feats(["W", "S"], [self.ll(10, 10, 60, 40), self.ll(100, 10, 30, 30)],
+                  **{"class": ["train_station", "train_station"], "height": [np.nan, np.nan],
+                     "level": [-1.0, -2.0], "has_parts": [1.0, 0.0]})
+        parts = Feats(["p1"], [self.ll(10, 10, 60, 40)], building_id=["W"], height=[15.0], min_height=[np.nan],
+                      num_floors=[np.nan], min_floor=[np.nan])
+        ground = lambda la, lo: np.zeros(np.shape(la))
+        items = bld.tile_buildings(self.f, 0, 0, 256, 256, [b], ground, part_layers=[parts])
+        self.assertEqual(len(items), 1)
+        self.assertAlmostEqual(items[0][0].height, 15.0, delta=0.01)
+        far = bld.tile_buildings(self.f, 0, 0, 256, 256, [b], ground)       # no part layer: has_parts
+        self.assertEqual(len(far), 1)
+
     def test_a_footprint_over_a_street_is_lifted_over_it(self):
         b = Feats(["O", "H"], [self.ll(10, 10, 80, 60), self.ll(150, 10, 30, 30)],
                   **{"class": ["", ""], "height": [16.0, 9.0]})

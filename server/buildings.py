@@ -3417,6 +3417,21 @@ def _part_heights(a, i):
     return float(top) - mh, mh
 
 
+def _level_below_but_built(a, i, key, parts_of):
+    """True for a building with a negative level that still stands above ground: one with a mapped part taller than 0
+    (a station tagged layer=-1 under location=surface, Warszawa Centralna: its 44 parts up to 41 m, 2026-11-17), or,
+    where no part layer was loaded (far tiles), Overture's has_parts. The one without parts is underground (Shot Tower)."""
+    if key is None:
+        return False
+    got = parts_of.get(str(key))
+    if got:
+        return any(p[1] is not None and p[1][0] > 0 for p in got)
+    if not parts_of.layers:
+        hp = a.get("has_parts")
+        return hp is not None and bool(hp[i])
+    return False
+
+
 ROAD_THROUGH_M = 15.0       # a footprint that public roads run through this far is a structure over them
 OVER_ROAD_CLEAR_M = 5.5     # ... lifted this high (an expressway's or a station's slab over the streets: Baltimore's
                             # 17,500 m2 one by I-83, the AI drove into its wall at 35 mph, 2026-10-14)
@@ -5186,9 +5201,9 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
             if a.get("is_underground") is not None and bool(a["is_underground"][i]):
                 continue
             lv = a["level"][i] if a.get("level") is not None else None
-            if lv is not None and np.isfinite(lv) and lv < 0:
-                continue                # below ground (Shot Tower Metro, level -2, stood across a Baltimore street)
             key = ids[i] if ids is not None else None
+            if lv is not None and np.isfinite(lv) and lv < 0 and not _level_below_but_built(a, i, key, parts_of):
+                continue                # below ground (Shot Tower Metro, level -2, stood across a Baltimore street)
             if key is not None and (key in seen or key in skip):
                 continue
             parts = f.parts(i)
