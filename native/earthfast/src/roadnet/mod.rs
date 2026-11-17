@@ -12,4 +12,5 @@ pub mod laneflow;
 pub mod lanesplit;
 pub mod pyfloat;
 pub mod pyobj;
+pub mod regions;
 pub mod surfaces;

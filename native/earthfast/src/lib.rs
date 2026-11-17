@@ -6569,6 +6569,10 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(racedig::race_dig_floor, m)?)?;
     // 384: racedig::race_dig_floor (racedig.py, BNE_RACEWAY_DIG: a tunnel part dug under a racetrack, the track's
     // surface kept; road revamp R1k)
-    m.add("VERSION", 384)?;
+    m.add_function(wrap_pyfunction!(roadnet::regions::outline_contains, m)?)?;
+    m.add_class::<roadnet::regions::PolygonIndex>()?;
+    // 385: R2a's region tests (roadnet::regions: outline_contains = sweden.contains, PolygonIndex.lookup =
+    // signstates.states' polygon test)
+    m.add("VERSION", 385)?;
     Ok(())
 }
