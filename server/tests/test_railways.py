@@ -432,6 +432,26 @@ class RailwayTest(unittest.TestCase):
         self.assertEqual(len([1 for i, *_ in rails if i == "id002"]), 2, "both sides of the motorway kept")
         self.assertEqual(railways._cut_worn_at_motorways(rails, {}, []), rails)
 
+    def test_worn_lines_cut_at_every_road_with_the_lifecycle_switch(self):
+        """The road revamp's R1 (BNE_RAIL_LIFECYCLE): a disused or abandoned line is cut at a residential street too;
+        a line in use is not; off, as before (kept at the street)."""
+        f = features([[(0.0, 60.0), (250.0, 60.0)], [(0.0, 100.0), (250.0, 100.0)], [(0.0, 140.0), (250.0, 140.0)],
+                      [(120.0, 0.0), (120.0, 180.0)]],
+                     ["standard_gauge"] * 3 + ["residential"], subtypes=["rail"] * 3 + ["road"],
+                     flags=[(1, "is_disused"), (2, "is_abandoned")])
+        hw = roads.STYLE["residential"][0] / 2
+
+        def over(rails, fid, x):
+            return any(((xy[:, 0] > x - hw) & (xy[:, 0] < x + hw)).any() for i, _c, k, xy in rails if i == fid)
+        rails = railways.parts(FRAME, [f], roads.tile_bbox(0, 0))
+        self.assertTrue(over(rails, "id001", 120.0) and over(rails, "id002", 120.0), "off: kept at a street")
+        cut = {1: frozenset(roads.STYLE), 2: frozenset(roads.STYLE)}
+        with mock.patch.object(railways, "RAIL_LIFECYCLE", True), mock.patch.object(railways, "WORN_CUT_CLASSES", cut):
+            rails = railways.parts(FRAME, [f], roads.tile_bbox(0, 0))
+        self.assertTrue(over(rails, "id000", 120.0), "a line in use keeps its track")
+        self.assertFalse(over(rails, "id001", 120.0), "a disused line cut at the street")
+        self.assertFalse(over(rails, "id002", 120.0), "an abandoned line cut at the street")
+
     def test_short_tunnel_under_a_road_is_track_and_abandoned_lines_are_worn(self):
         """The line under a road bridge tagged is_tunnel for 12 m (OSM's habit) is track; a long tunnel is left out;
         an abandoned line beside it is drawn worn (Joensuu, 2026-10-25; the user, 2026-10-27: abandoned lines shown,
