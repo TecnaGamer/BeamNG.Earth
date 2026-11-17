@@ -314,6 +314,76 @@ class Axes:
         got[ok] = self.line[c[best[ok]]]
         return got, len(pts)
 
+    PAIRS = 1_500_000           # sample-segment pairs measured at once (match_many)
+
+    def match_many(self, lonlats, carriageway, reach):
+        """match() for many roads at once: [(the samples' axes, their count)] for the roads' lines (lonlats), each
+        within its own reach (an array). Every sample against the segments of its own grid cell: a segment within
+        reach (at most REACH_MAX_M) of a sample is listed in the sample's cell, so the nearest one is the one match()
+        finds among all of the road's cells, measured by the same sums. One call per road was a third of the specs'
+        time, 6585 calls for a motorway drive's 62 road tiles (2026-11-17)."""
+        out = [(np.zeros(0, np.int64), 0)] * len(lonlats)
+        if not lonlats:
+            return out
+        npt = np.array([len(ll) for ll in lonlats], np.int64)
+        p = self.local(np.concatenate([np.asarray(ll, np.float64).reshape(-1, 2) for ll in lonlats]))
+        road = np.repeat(np.arange(len(lonlats)), npt)
+        seg = np.diff(p, axis=0)
+        L = dnp.hypot(seg[:, 0], seg[:, 1])
+        keep = (L > 0) & (road[1:] == road[:-1])        # (not from a road's last point to the next road's first)
+        if not keep.any():
+            return out
+        seg, L, p0, road = seg[keep], L[keep], p[:-1][keep], road[:-1][keep]
+        n = np.maximum(1, (L // SAMPLE_M).astype(np.int64))
+        k = np.repeat(np.arange(len(seg)), n)
+        t = (np.arange(int(n.sum())) - np.repeat(np.cumsum(n) - n, n) + 0.5) / np.repeat(n, n)
+        pts = p0[k] + t[:, None] * seg[k]
+        dirs = seg[k] / L[k][:, None]
+        road = road[k]                                  # (each sample's road; ascending)
+        got = np.full(len(pts), -1, np.int64)
+        cells = np.floor(pts / CELL_M).astype(np.int64)
+        cx, cy = cells[:, 0] - self.g0[0], cells[:, 1] - self.g0[1]
+        inside = (cx >= 0) & (cy >= 0) & (cy < self.gny) & (len(self.gkey) > 0)
+        key = np.where(inside, cx * self.gny + cy, -1)
+        at = np.minimum(np.searchsorted(self.gkey, key), max(len(self.gkey) - 1, 0))
+        inside &= self.gkey[at] == key if len(self.gkey) else False
+        cnt = np.where(inside, self.gcut[at + 1] - self.gcut[at], 0) if len(self.gkey) else np.zeros(len(pts), np.int64)
+        cos_min = dmath.cos(math.radians(MATCH_DEG))
+        reach_s = np.asarray(reach, np.float64)[road]
+        ends = np.cumsum(cnt)
+        s0 = 0
+        while s0 < len(pts):            # (the pairs in runs of whole samples)
+            s1 = max(s0 + 1, int(np.searchsorted(ends, (ends[s0 - 1] if s0 else 0) + self.PAIRS, side="right")))
+            c_n = cnt[s0:s1]
+            total = int(c_n.sum())
+            if total:
+                smp = np.repeat(np.arange(s0, s1), c_n)
+                first = np.cumsum(c_n) - c_n                # (each sample's first pair)
+                c = self.gsid[np.repeat(self.gcut[at[s0:s1]], c_n) + np.arange(total) - np.repeat(first, c_n)]
+                d, ln = self.dir[c], self.len[c]
+                rel = pts[smp] - self.a[c]
+                along = np.clip(dnp.vecdot(rel, d), 0.0, ln)
+                off = rel - along[:, None] * d
+                dist = dnp.hypot(off[:, 0], off[:, 1])
+                dist[np.abs(dirs[smp, 0] * d[:, 0] + dirs[smp, 1] * d[:, 1]) < cos_min] = np.inf
+                if carriageway is not None:
+                    is_cw = (self.attrs[self.line[c], 4] & CARRIAGEWAY) > 0
+                    dist[~is_cw if carriageway else is_cw] = np.inf
+                has = np.flatnonzero(c_n > 0)
+                low = np.minimum.reduceat(dist, first[has])
+                ok = low <= reach_s[s0:s1][has]
+                # the first of a sample's nearest pairs (its segments in rising order, as match()'s argmin takes them)
+                is_low = np.flatnonzero(dist == np.repeat(low, c_n[has]))
+                if len(is_low):         # (none: distances that are no numbers, no axis there, as match())
+                    best = is_low[np.minimum(np.searchsorted(is_low, first[has]), len(is_low) - 1)]
+                    got[s0 + has[ok]] = self.line[c[best[ok]]]
+            s0 = s1
+        cut = np.searchsorted(road, np.arange(len(lonlats) + 1))
+        for r in range(len(lonlats)):
+            if cut[r + 1] > cut[r]:
+                out[r] = (got[cut[r]:cut[r + 1]], int(cut[r + 1] - cut[r]))
+        return out
+
 
 def axes_for(feats):
     """The Axes round feats' roads, None where there are none (outside Germany, no shard), False while a shard could
@@ -375,12 +445,32 @@ def surveyed(ax, lonlat, oneway, paired=None):
     alone: the map splits roads into two one-way halves the survey keeps as one axis with both halves' width and
     sometimes fewer lanes than one half has (Saarbrücken's Mainzer Straße: one 20 m, two-lane axis, two two-lane
     halves in the map, each drawn 20 m wide), and the open data does not say which axes are one-way streets."""
-    hit, n = ax.match(lonlat, carriageway=True) if oneway else (None, 0)
-    own = True
-    if not oneway or (hit >= 0).sum() < MATCH_SHARE * max(n, 1):
-        reach = max(MATCH_M, min(REACH_MAX_M, paired / 2.0 + PAIRED_SLACK_M)) if oneway and paired else MATCH_M
-        hit, n = ax.match(lonlat, carriageway=False, reach=reach)
-        own = not oneway
+    return surveyed_many(ax, [(lonlat, oneway, paired)])[0]
+
+
+def surveyed_many(ax, roads_):
+    """surveyed() of many roads [(lonlat, oneway, paired)] at once (Axes.match_many): their answers in order."""
+    out = [None] * len(roads_)
+    first = [r for r, (_, oneway, _) in enumerate(roads_) if oneway]
+    hits = dict(zip(first, ax.match_many([roads_[r][0] for r in first], True, np.full(len(first), MATCH_M))))
+    again, reach = [], []
+    for r, (_, oneway, paired) in enumerate(roads_):
+        hit, n = hits.get(r, (None, 0))
+        if not oneway or (hit >= 0).sum() < MATCH_SHARE * max(n, 1):
+            again.append(r)
+            reach.append(max(MATCH_M, min(REACH_MAX_M, paired / 2.0 + PAIRED_SLACK_M)) if oneway and paired
+                         else MATCH_M)
+    own = {r: True for r in first}
+    for r, got in zip(again, ax.match_many([roads_[r][0] for r in again], False, np.array(reach, np.float64))):
+        hits[r] = got
+        own[r] = not roads_[r][1]
+    for r, (_, oneway, paired) in enumerate(roads_):
+        hit, n = hits[r]
+        out[r] = _survey_answer(ax, hit, n, own[r], paired)
+    return out
+
+
+def _survey_answer(ax, hit, n, own, paired):
     if not n or (hit >= 0).sum() < MATCH_SHARE * n:
         return None
     a = ax.attrs[hit[hit >= 0]]
@@ -409,7 +499,8 @@ def adjust_specs(feats, specs):
     import roads
     rules = feats.rules
     out = list(specs)
-    known, new_rows = _survey_known(feats), 0
+    known = _survey_known(feats)
+    asked, new = {}, []
     for i, sp in enumerate(out):
         if sp is None or sp.cls in SKIP or roads.is_ring(feats, i):
             continue
@@ -417,11 +508,18 @@ def adjust_specs(feats, specs):
         b = feats.coord_off[feats.ring_off[feats.part_off[i + 1]]]
         if b - a < 2:
             continue
-        k = (i, bool(sp.oneway), float(sp.median) if sp.median else None)
-        got = known.get(k, _UNSET)
-        if got is _UNSET:
-            got = known[k] = surveyed(ax, feats.lonlat[a:b], k[1], sp.median)
-            new_rows += 1
+        k = asked[i] = (i, bool(sp.oneway), float(sp.median) if sp.median else None)
+        if k not in known:
+            new.append((k, (feats.lonlat[a:b], k[1], sp.median)))
+    new_rows = len(new)
+    if new:                             # (the roads not asked about before, all at once)
+        for (k, _), got in zip(new, surveyed_many(ax, [r for _, r in new])):
+            known[k] = got
+    for i, sp in enumerate(out):
+        k = asked.get(i)
+        if k is None:
+            continue
+        got = known[k]
         if got is None:
             continue
         width, lanes, surf, halved = got
@@ -559,7 +657,11 @@ def surveyed_width(feats, i, sp):
     a = feats.coord_off[feats.ring_off[feats.part_off[i]]]
     b = feats.coord_off[feats.ring_off[feats.part_off[i + 1]]]
     if ax is not None and b - a >= 2 and not roads.is_ring(feats, i):
-        r = surveyed(ax, feats.lonlat[a:b], bool(sp.oneway), sp.median)
+        known = _survey_known(feats)    # (adjust_specs asked about the cell's roads already, all at once)
+        k = (i, bool(sp.oneway), float(sp.median) if sp.median else None)
+        r = known.get(k, _UNSET)
+        if r is _UNSET:
+            r = known[k] = surveyed(ax, feats.lonlat[a:b], bool(sp.oneway), sp.median)
         if r is not None and r[0] is not None and WIDTH_M[0] <= r[0] <= WIDTH_M[1] \
                 and r[0] >= LANE_MIN_M * (sp.lanes or 1):
             got = float(r[0])

@@ -258,6 +258,42 @@ class GermanRoadsTest(unittest.TestCase):
         self.assertFalse(germanroads._state["shards"])
         self.assertEqual(self.specs(features(line, ["secondary"]))[0].width, 6.5)
 
+    def test_many_roads_at_once_match_as_each_alone(self):
+        # Axes.match_many (a cell's roads in one pass): every road's samples find the axis match() finds for the road
+        # alone, whatever the carriageways asked for and each road's own reach
+        rng = np.random.default_rng(11)
+        axes = []
+        for k in range(60):
+            e, n = rng.uniform(-900, 900, 2)
+            t = rng.uniform(0, np.pi)
+            pts = [(e + s * np.cos(t) + rng.normal(0, 1.5), n + s * np.sin(t) + rng.normal(0, 1.5))
+                   for s in np.arange(-150.0, 151.0, 50.0)]
+            axes.append((pts, 6.5 + k % 5, 2, 1, 4, germanroads.CARRIAGEWAY if k % 3 == 0 else 0))
+        write_shard(self.tmp.name, axes)
+        lines = []
+        for pts, *_ in axes:                # roads along the axes, beside them, across them, and elsewhere
+            off = rng.uniform(-16, 16)
+            lines.append([(e + off, n + rng.uniform(-3, 3)) for e, n in pts[1:-1]])
+            lines.append([(pts[0][0], pts[0][1]), (pts[0][0] + 80.0, pts[0][1] - 90.0)])
+        lines += [[(1500.0, 1500.0), (1600.0, 1500.0)], [(10.0, 10.0), (10.0, 10.0)]]
+        f = features(lines, ["secondary"] * len(lines))
+        ax = germanroads.axes_for(f)
+        lls = [f.lonlat[f.coord_off[i]:f.coord_off[i + 1]] for i in range(len(lines))]
+        found = 0
+        for cw in (None, True, False):
+            reach = rng.uniform(3.0, germanroads.REACH_MAX_M, len(lls))
+            for ll_, r, (hit, n) in zip(lls, reach, ax.match_many(lls, cw, reach)):
+                one, n1 = ax.match(ll_, carriageway=cw, reach=float(r))
+                self.assertEqual(n, n1)
+                np.testing.assert_array_equal(hit, one)
+                found += int((hit >= 0).sum())
+        self.assertGreater(found, 100)
+        with mock.patch.object(germanroads.Axes, "PAIRS", 50):       # (the pairs in many runs: the same)
+            small = ax.match_many(lls, None, reach)
+        for (hit, n), (hit1, n1) in zip(small, ax.match_many(lls, None, reach)):
+            self.assertEqual(n, n1)
+            np.testing.assert_array_equal(hit, hit1)
+
     def test_no_shard_changes_nothing(self):
         f = features([[(-300.0, 0.0), (300.0, 0.0)]], ["secondary"])
         self.assertEqual(self.specs(f)[0].width, roads.carriageway("secondary", "paved", False))
