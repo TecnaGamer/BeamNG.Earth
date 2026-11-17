@@ -3419,16 +3419,26 @@ def _part_heights(a, i):
 
 def _level_below_but_built(a, i, key, parts_of):
     """True for a building with a negative level that still stands above ground: one with a mapped part taller than 0
-    (a station tagged layer=-1 under location=surface, Warszawa Centralna: its 44 parts up to 41 m, 2026-11-17), or,
-    where no part layer was loaded (far tiles), Overture's has_parts. The one without parts is underground (Shot Tower)."""
+    that is not itself underground (its is_underground false, its level not < 0 where its cell says; a station tagged
+    layer=-1 under location=surface, Warszawa Centralna: its 44 parts up to 41 m, 2026-11-17), or, where no part layer
+    was loaded (far tiles), Overture's has_parts with a height or floors on the row. The one without parts is
+    underground (Shot Tower), and so is one whose parts are (their levels-derived heights are no proof)."""
     if key is None:
         return False
     got = parts_of.get(str(key))
     if got:
-        return any(p[1] is not None and p[1][0] > 0 for p in got)
+        def above(p):
+            if p[1] is None or not p[1][0] > 0:
+                return False
+            own = p[2] if len(p) > 2 else {}
+            lv, ug = own.get("level"), own.get("is_underground")
+            return not (ug is not None and bool(ug)) and not (lv is not None and np.isfinite(lv) and lv < 0)
+        return any(above(p) for p in got)
     if not parts_of.layers:
         hp = a.get("has_parts")
-        return hp is not None and bool(hp[i])
+        if hp is None or not bool(hp[i]):
+            return False
+        return any(k in a and np.isfinite(a[k][i]) and a[k][i] > 0 for k in ("height", "num_floors"))
     return False
 
 
@@ -4713,6 +4723,10 @@ PART_OWN = ("roof_shape", "facade_color", "roof_color", "roof_height", "facade_m
             "roof_direction", "roof_orientation")
 
 
+PART_LEVEL = ("level", "is_underground")     # (a part's own level / underground flag, where its cell has them: only a
+                                              # part standing above ground lifts a level < 0 building, _level_below_but_built)
+
+
 def _parts_index(f):
     """{building id: [rows]} of a building parts layer, kept on it (the cells stay decoded in memory: every tile of
     them looks parts up again)."""
@@ -4772,7 +4786,7 @@ class _PartsOf:
         # (its own roof shape and mapped colours: hudsontadams' PR #167)
         # (and its roof height, materials and roof direction where the layer has them: a part's own roof height was read
         # and dropped, research 2026-11-10)
-        own = {k: (a[k][i] if k in a else None) for k in PART_OWN}
+        own = {k: (a[k][i] if k in a else None) for k in PART_OWN + PART_LEVEL}
         if self.colours is not None and "src_record" in a:
             own = self.colours.fill(own, a["src_record"][i])
         return np.stack([e, n], 1), _part_heights(a, i), own
