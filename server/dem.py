@@ -627,7 +627,7 @@ class Dem:
         y = int((1.0 - dmath.asinh(dmath.tan(math.radians(lat))) / math.pi) / 2.0 * n)
         if idx.get((x, max(0, min(n - 1, y))), GLOBAL_ZOOM) > GLOBAL_ZOOM:
             return False
-        if (self.lidarbc is not None or HRDEM_NEAR) and hrdemmod.covers(GLOBAL_ZOOM, *_tile_xy(lat, lon, GLOBAL_ZOOM)):
+        if (self.lidarbc is not None or HRDEM_NEAR) and hrdemmod.in_bounds(GLOBAL_ZOOM, *_tile_xy(lat, lon, GLOBAL_ZOOM)):
             return False
         return True
 
