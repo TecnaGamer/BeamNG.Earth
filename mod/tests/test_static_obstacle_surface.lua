@@ -1,5 +1,5 @@
 -- Physical road height can differ from the interpolated navigation graph.
-local root=arg[0]:match('^(.*[/\\])')..'../beamng_earth/lua/vehicle/extensions/beamngEarth/'
+local root=(arg[0]:match('^(.*[/\\])') or './')..'../beamng_earth/lua/vehicle/extensions/beamngEarth/'
 local S=dofile(root..'staticObstacles.lua')
 local n=0
 local function check(v,msg)n=n+1;assert(v,msg)end
