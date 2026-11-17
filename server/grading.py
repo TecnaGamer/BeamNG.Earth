@@ -4546,10 +4546,25 @@ class _Planner:
             box_lo, box_hi = n_lo, n_hi
         t1 = time.perf_counter()
 
+        rail_ends = {}
+
         def fixed_z(i, s_):
             m = net.m[i]
-            if m.kind == "rail_deck":       # (the track's deck: the line between its ends' ground)
-                ends = self._ground_line(np.array([net.lines[i][0], net.lines[i][-1]]))
+            if m.kind == "rail_deck":       # (the track's deck: the line between its ends' track levels)
+                ends = rail_ends.get(i)
+                if ends is None:            # (the ground there, or the track's level beyond the end where it is higher,
+                    # as railways.profile lays the deck: a short deck among a station's raised tracks stood at street
+                    # level from its ends' ground, 6.8 m under its track, and the road under it was dug 8 m too deep)
+                    line = np.asarray(net.lines[i], np.float64)[:, :2]
+                    ends = self._ground_line(np.array([line[0], line[-1]])).astype(np.float64)
+
+                    def ground_xy(q):
+                        qla, qlo, _ = self.frame.enu_to_geodetic(q[:, 0], q[:, 1], 0.0)
+                        return np.asarray(self.elev(np.asarray(qla), np.asarray(qlo)), np.float64)
+                    for e, lv in enumerate(railwaysmod.approach_levels(line, ground_xy)):
+                        if lv is not None:
+                            ends[e] = max(ends[e], float(lv[0]))
+                    rail_ends[i] = ends
                 return float(ends[0] + (ends[1] - ends[0]) * s_ / max(net.L[i], 1e-6))
             q = _gsh.at_s(net.lines[i], net.s[i], s_)
             sv = np.clip(np.linspace(s_ - 24.0, s_ + 24.0, 13), 0.0, net.L[i])

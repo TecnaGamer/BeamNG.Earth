@@ -41,6 +41,11 @@ import dnp
 STEP_M = 4.0                # m between a deck's or a dip's samples
 JOIN_M = 2.5                # m: two parts' ends (or an end and another's line) this close meet there
 CROSS_END_M = 2.0           # m: a crossing this near either part's end is a joint, not a separation
+MERGE_DEG = 40.0            # deg: a deck's end on another deck's line at another level meets it only along it (a ramp's
+                            # merge or diverge, its gore's taper: Vienna's A23 at 29 deg, Gravelly Hill's links at 6) and
+                            # only if they do not cross; across it, it is over or under it (the High Five's level-1 links
+                            # ending under its level-4 flyovers at 55-89 deg)
+STRUCTURES = ("deck", "rail_deck", "tunnel")
 # the game's decks (roads.py: MIN_BRIDGE_HEADROOM_M, BRIDGE_HEADROOM_MARGIN_M, deck_depth; grading sets them from there):
 # the vehicle height under the girders, its margin, and the deck's depth by its span (slab + girders)
 HEADROOM_M = 6.0
@@ -238,32 +243,59 @@ def _relations(net, i):
     return out
 
 
+def _tangent(line, s, sq):
+    a, b = at_s(line, s, max(sq - 2.0, 0.0)), at_s(line, s, min(sq + 2.0, float(s[-1])))
+    v = b - a
+    return v / max(float(np.hypot(*v)), 1e-9)
+
+
+def _end_meets(net, e, se, o, so, crossed):
+    """Whether member e's end (at arc length se) on member o's line (at so) is where they meet: always on o's end, or
+    between parts at one level (a T, a ramp onto its road), or a deck merging along another deck at another level
+    (MERGE_DEG) that it does not also cross; not where two structures at different levels touch in plan (a deck's or a
+    tunnel's end over or under another's middle: a separation, not a joint, its clearance kept). crossed: e and o
+    cross each other (a road cannot meet the one it passes over or under a few metres on: Gravelly Hill's level-1 M6
+    deck under its level-3 one at 29 deg, its end 5 m past their crossing)."""
+    me, mo = net.m[e], net.m[o]
+    if min(so, net.L[o] - so) <= JOIN_M or me.kind not in STRUCTURES or mo.kind not in STRUCTURES:
+        return True
+    if _over(me, mo) is None:
+        return True
+    if me.kind == mo.kind == "deck" and not crossed:
+        c = abs(float(_tangent(net.lines[e], net.s[e], se) @ _tangent(net.lines[o], net.s[o], so)))
+        return c >= math.cos(math.radians(MERGE_DEG))
+    return False
+
+
 def _pair_relations(net, i, j):
-    """Member i's joints and crossings with member j: [("join"|"cross", s on i, s on j, q)]."""
+    """Member i's joints and crossings with member j: [("join"|"cross", s on i, s on j, q)]. An end on the other's
+    line is a joint, or (_end_meets) between structures at different levels a crossing at that end."""
+    hits = []
+    for a_i, b_j, ta, tb, q in _seg_hits(net.lines[i], net.lines[j]):
+        si = net.s[i][a_i] + ta * (net.s[i][a_i + 1] - net.s[i][a_i])
+        sj = net.s[j][b_j] + tb * (net.s[j][b_j + 1] - net.s[j][b_j])
+        if min(si, net.L[i] - si, sj, net.L[j] - sj) >= CROSS_END_M:
+            hits.append((si, sj, q))
     out = []
-    if True:
-        for e_line, e_s, o_line, o_s, swap in ((net.lines[i], net.s[i], net.lines[j], net.s[j], False),
-                                                (net.lines[j], net.s[j], net.lines[i], net.s[i], True)):
-            for se in (0.0, float(e_s[-1])):
-                q = e_line[0] if se == 0.0 else e_line[-1]
-                so, d = proj(o_line, o_s, q)
-                if d <= JOIN_M:
-                    out.append((j, "join", so if swap else se, se if swap else so, q))
-        # (one joint found from both its parts' ends once)
-        uniq = []
-        for r_ in out:
-            if not any(u[0] == r_[0] and u[1] == r_[1] and abs(u[2] - r_[2]) < 1.0 and abs(u[3] - r_[3]) < 1.0
-                       for u in uniq):
-                uniq.append(r_)
-        out[:] = uniq
-        for a_i, b_j, ta, tb, q in _seg_hits(net.lines[i], net.lines[j]):
-            si = net.s[i][a_i] + ta * (net.s[i][a_i + 1] - net.s[i][a_i])
-            sj = net.s[j][b_j] + tb * (net.s[j][b_j + 1] - net.s[j][b_j])
-            if min(si, net.L[i] - si, sj, net.L[j] - sj) < CROSS_END_M:
-                continue
-            if any(r_[0] == j and r_[1] == "cross" and abs(r_[2] - si) < 1.0 for r_ in out):
-                continue                        # (on a vertex: found on both its segments)
-            out.append((j, "cross", si, sj, q))
+    for e, e_line, e_s, o, o_line, o_s, swap in ((i, net.lines[i], net.s[i], j, net.lines[j], net.s[j], False),
+                                                  (j, net.lines[j], net.s[j], i, net.lines[i], net.s[i], True)):
+        for se in (0.0, float(e_s[-1])):
+            q = e_line[0] if se == 0.0 else e_line[-1]
+            so, d = proj(o_line, o_s, q)
+            if d <= JOIN_M:
+                kind = "join" if _end_meets(net, e, se, o, so, bool(hits)) else "cross"
+                out.append((j, kind, so if swap else se, se if swap else so, q))
+    # (one joint found from both its parts' ends once)
+    uniq = []
+    for r_ in out:
+        if not any(u[0] == r_[0] and u[1] == r_[1] and abs(u[2] - r_[2]) < 1.0 and abs(u[3] - r_[3]) < 1.0
+                   for u in uniq):
+            uniq.append(r_)
+    out[:] = uniq
+    for si, sj, q in hits:
+        if any(r_[0] == j and r_[1] == "cross" and abs(r_[2] - si) < 1.0 for r_ in out):
+            continue                        # (on a vertex: found on both its segments)
+        out.append((j, "cross", si, sj, q))
     return [r_[1:] for r_ in out]
 
 

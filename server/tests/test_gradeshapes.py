@@ -178,3 +178,82 @@ def test_a_dip_follows_the_road_through_its_joints_without_a_step():
     a_end = [zz[-1] for sv, zz, _m in z_at[("ring", "a")] if sv[-1] > 389.0]
     b_start = [zz[0] for sv, zz, _m in z_at[("ring", "b")] if sv[0] < 1.0]
     assert a_end and b_start and abs(a_end[0] - b_start[0]) < 0.05       # one height at the joint
+
+
+def _joined(net, sysm, a, b):
+    return any({net.m[i].key, net.m[j].key} == {a, b} for i, _si, j, _sj in sysm["joins"])
+
+
+def _ray(p, deg, s0, s1, n=40):
+    u = np.array([np.cos(np.radians(deg)), np.sin(np.radians(deg))])
+    return np.asarray(p, np.float64) + np.linspace(s0, s1, n)[:, None] * u
+
+
+def test_a_flyovers_joint_over_a_link_below_is_a_crossing_not_a_join():
+    # the High Five: two parts of a level-4 flyover meet 2.2 m off a level-1 link's deck, which they cross 2.2 m on.
+    # The joint touching the link in plan was taken for a joint with it (held at the link's height there and 8.35 m
+    # over it 2 m on: the whole interchange infeasible)
+    m = [Member("fly_s", _line(0, -300, 0, 0, 76), "deck", "motorway_link", 60, 4, 5.0, None),
+         Member("fly_n", _line(0, 0, 0, 300, 76), "deck", "motorway_link", 60, 4, 5.0, None),
+         Member("link", _line(-80, 2.2, 80, 2.2, 41), "deck", "secondary_link", 50, 1, 4.0, None),
+         Member("fs", _line(0, -700, 0, -300), "ground", "motorway_link", 60, 0, 5.0, None),
+         Member("fn", _line(0, 300, 0, 700), "ground", "motorway_link", 60, 0, 5.0, None),
+         Member("lw", _line(-500, 2.2, -80, 2.2), "ground", "secondary_link", 50, 0, 4.0, None),
+         Member("le", _line(80, 2.2, 500, 2.2), "ground", "secondary_link", 50, 0, 4.0, None)]
+    net, systems, shapes, emb = _run(m)
+    assert len(systems) == 1
+    assert _joined(net, systems[0], "fly_s", "fly_n")
+    assert not _joined(net, systems[0], "fly_s", "link") and not _joined(net, systems[0], "fly_n", "link")
+    assert shapes[0][2] is not None
+    need = ix.HEADROOM_M + ix.HEADROOM_MARGIN_M + ix.deck_depth(300.0)
+    for q in ((0.0, 0.0), (0.0, 2.2)):         # (the joint over the link's edge too: a crossing at its end)
+        zf = _shape_z(net, shapes, "fly_s" if q[1] == 0.0 else "fly_n", np.array(q))
+        assert zf - _shape_z(net, shapes, "link", np.array([q[0], 2.2])) >= need - 0.3
+
+
+def test_a_deck_ending_along_one_it_passes_under_is_not_joined_to_it():
+    # Gravelly Hill: a level-1 M6 deck passes under the level-3 one at 29 deg and ends 5 m on, 2.4 m off its line: a
+    # merge's angle, but a road cannot meet the one it passes under 5 m before
+    m = [Member("upper", _line(-300, 0, 300, 0, 76), "deck", "motorway", 110, 3, 12.0, None),
+         Member("lower", _ray((0, 0), 29, -150, 5, 40), "deck", "motorway", 110, 1, 12.0, None),
+         Member("uw", _line(-800, 0, -300, 0), "ground", "motorway", 110, 0, 12.0, None),
+         Member("ue", _line(300, 0, 800, 0), "ground", "motorway", 110, 0, 12.0, None),
+         Member("lw", _ray((0, 0), 29, -650, -150, 40), "ground", "motorway", 110, 0, 12.0, None)]
+    net, systems, shapes, emb = _run(m)
+    assert len(systems) == 1 and not _joined(net, systems[0], "upper", "lower")
+    assert shapes[0][2] is not None
+    need = ix.HEADROOM_M + ix.HEADROOM_MARGIN_M + ix.deck_depth(600.0)
+    end = _ray((0, 0), 29, 5, 5, 1)[0]
+    for q in (np.zeros(2), end):               # (at the crossing and over the lower deck's end)
+        zl = _shape_z(net, shapes, "lower", q)
+        assert _shape_z(net, shapes, "upper", np.array([q[0], 0.0])) - zl >= need - 0.3
+
+
+def test_a_deck_merging_along_one_at_another_level_still_joins_it():
+    # a ramp's deck (layer 1) ending on a motorway's (layer 2) along it, 20 deg, as Vienna's A23: their joint holds
+    m = [Member("main", _line(-300, 0, 300, 0, 76), "deck", "motorway", 100, 2, 12.0, None),
+         Member("ramp", _ray((0, -1.0), 200, 0, 120, 31)[::-1], "deck", "motorway_link", 60, 1, 5.0, None),
+         Member("under", _line(150, -400, 150, 400, 100), "ground", "secondary", 50, 0, 5.0, None),
+         Member("mw", _line(-800, 0, -300, 0), "ground", "motorway", 100, 0, 12.0, None),
+         Member("me", _line(300, 0, 800, 0), "ground", "motorway", 100, 0, 12.0, None)]
+    net, systems, shapes, emb = _run(m)
+    assert len(systems) == 1 and _joined(net, systems[0], "main", "ramp")
+    assert shapes[0][2] is not None
+    assert abs(_shape_z(net, shapes, "ramp", np.array([0.0, -1.0]))
+               - _shape_z(net, shapes, "main", np.array([0.0, 0.0]))) < 0.3
+
+
+def test_a_deck_along_a_tunnel_over_it_is_not_joined_to_its_middle():
+    # Vienna: a 16 m street deck over a car park's ramp tunnel, along it, both ends 0.5 m off the tunnel's line: the
+    # deck and the tunnel are either side of the ground, never joined there (their clearance held instead)
+    m = [Member("tun", _line(0, -90, 0, 90, 46), "tunnel", "service", 20, -1, 3.0, None),
+         Member("ts", _line(0, -300, 0, -90), "ground", "service", 20, 0, 3.0, None),
+         Member("tn", _line(0, 90, 0, 300), "ground", "service", 20, 0, 3.0, None),
+         Member("br", _line(-0.5, -8, 0.5, 8, 5), "deck", "residential", 30, 1, 4.0, None)]
+    net, systems, shapes, emb = _run(m)
+    assert len(systems) == 1 and not _joined(net, systems[0], "br", "tun")
+    assert shapes[0][2] is not None
+    need = ix.HEADROOM_M + ix.HEADROOM_MARGIN_M + ix.deck_depth(16.0)
+    for y in (-8.0, 0.0, 8.0):
+        assert (_shape_z(net, shapes, "br", np.array([y / 16.0, y]))
+                - _shape_z(net, shapes, "tun", np.array([0.0, y]))) >= need - 0.3
