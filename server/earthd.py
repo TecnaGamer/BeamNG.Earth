@@ -6021,6 +6021,7 @@ class Server:
     def render_tile(self, anchor, tile, px, pending):
         """(rgb, used): a far tile's photo with its gutter (a global tile's: its Mercator square, render_merc); with the
         generated ground on, the near rings' cut from its squares (genground.render_far: the block's colours)."""
+        genground.clear_fade()
         if isinstance(tile, farfield.GTile):
             return self.imagery.render_merc(tile.z, tile.x, tile.y, px, pending=pending)
         frame, x0, y0, size = self.tile_where(anchor, tile)
@@ -6329,8 +6330,8 @@ class Server:
                         if not is_global:
                             rgb = self.road_faces(anchor, node, px, rgb)
                             self.write_road_mask(anchor, node, px, texture)
-                        tex_bytes = imagerymod.write_dds(os.path.join(self.out_dir, texture), rgb,
-                                                         imagerymod.FAR_SRGB)
+                        tex_bytes = genground.write_far_dds(os.path.join(self.out_dir, texture), rgb,
+                                                            imagerymod.FAR_SRGB)
                     finally:
                         revisitmod.end(f0)
                     self.keep_texture(tk, texture, tex_bytes, used, pending, f0)
@@ -6814,7 +6815,7 @@ class Server:
         texture = self.texture_name(*ck, prev.rev + 1)
         if not isinstance(tile, farfield.GTile):
             self.write_road_mask(anchor, node, px, texture)
-        tex_bytes = imagerymod.write_dds(os.path.join(self.out_dir, texture), rgb, imagerymod.FAR_SRGB)
+        tex_bytes = genground.write_far_dds(os.path.join(self.out_dir, texture), rgb, imagerymod.FAR_SRGB)
         self.keep_texture(self.tex_key(anchor, tile, px), texture, tex_bytes, used, pending, None)
         sources = prev.credits
         if self.credits is not None:        # the new texture's sources (the corrected one names S2 too)

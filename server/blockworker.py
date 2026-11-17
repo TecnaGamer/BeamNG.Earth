@@ -3846,6 +3846,7 @@ def _far_tile_(aid, lat, lon, tile, zoom, q, ref_zoom, with_sink, layout, tex, m
     sq = imagerymod.gutter_square(x0, y0, tile.size, px)
     import genground
     rgb = None
+    genground.clear_fade()
     if genground.ON and not tex.get("quick"):  # (the generated ground's near rings: earthd.Server.render_tile)
         try:
             got = genground.render_far(im, frame, *sq, px, getattr(_s, "md", None), _paint_surface(), _s.widths,
@@ -3891,7 +3892,7 @@ def _far_tile_(aid, lat, lon, tile, zoom, q, ref_zoom, with_sink, layout, tex, m
                 imagerymod.write_dds(mask[0], np.repeat(m[..., None], 3, axis=2))
         except Exception as e:
             log.debug("road mask of %s: %s", tile.key, e)
-    return built, (imagerymod.write_dds(tex["path"], rgb, imagerymod.FAR_SRGB), used)
+    return built, (genground.write_far_dds(tex["path"], rgb, imagerymod.FAR_SRGB), used)
 
 
 def _paint_surface():

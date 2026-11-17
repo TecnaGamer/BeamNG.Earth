@@ -77,39 +77,11 @@ class FarTest(unittest.TestCase):
             gg.render_far(_Im(), frame, 2048.0, 0.0, 512.0, 256, None, None, veg=True, level=1)
             gg.render_far(_Im(), frame, 4096.0, 0.0, 512.0, 256, None, None, veg=None, level=0)
         self.assertEqual(seen["floor"][0], (255, 2), "L-1, next to the block: its full floor")
-        self.assertEqual(seen["floor"][1], (85, 2), "L1: a third (the fade to the canopy's colour)")
+        self.assertEqual(seen["floor"][1], (0, 2), "... and its canopy version (the coarser mips', write_far_dds)")
+        self.assertEqual(seen["floor"][2], (255, 2), "L1: the same floor (the fade is in the mips)")
         self.assertEqual(seen["floor"][-1], (None, 0), "no trees drawn: their own colour, as the block")
         self.assertIsNone(gg.render_far(_Im(), frame, 0.0, 0.0, 1024.0, 512, None, None, veg=True, level=2),
                           "L2: the plain photo")
-
-    def test_fade_continuous_across_the_rings(self):
-        # a wood (the photo's dark canopy, 20 m of canopy) seen at each ring: the block's colour on L-1, a third of the
-        # way to the plain photo's at each next ring (no seam larger than a step), the plain photo past L1
-        frame = geodesy.EnuFrame(40.877, -77.566)
-
-        class Dark(_Im):
-            def render(self, frame, x0, y0, size, px, pending=None):
-                return np.full((px, px, 3), (40, 60, 35), np.uint8), {"eox2023": px * px}
-        canopy = gg.canopy_grid
-
-        def tall(mx, my, rasters):
-            out = canopy(mx, my, rasters)
-            out[:] = 20
-            return out
-        y = lambda a: float(a.astype(float).mean())     # noqa: E731
-        with mock.patch.object(gg, "canopy_grid", tall):
-            block, _ = gg.render(Dark(), frame, 0.0, 0.0, 512.0, 512, None, None, veg=None, relight=False)
-            lv = {lvl: y(gg.render_far(Dark(), frame, 0.0, 0.0, 512.0, 256, None, None, veg=True, level=lvl)[0])
-                  for lvl in (-1, 0, 1)}
-        plain = y(Dark().render(frame, 0.0, 0.0, 512.0, 256)[0])
-        full = lv[-1]
-        self.assertGreater(full, plain + 15, "the floor lighter than the canopy")
-        step = (full - plain) / 3
-        self.assertAlmostEqual(lv[0], full - step, delta=step * 0.35)
-        self.assertAlmostEqual(lv[1], full - 2 * step, delta=step * 0.35)
-        self.assertLess(abs(lv[1] - plain), step * 1.35, "L1 / plain: a step at most")
-        self.assertGreater(lv[-1], lv[0])
-        self.assertGreater(lv[0], lv[1])
 
     def test_far_squares_never_ask_for_trees(self):
         frame = geodesy.EnuFrame(40.877, -77.566)
@@ -127,6 +99,108 @@ class FarTest(unittest.TestCase):
         gg.render_far(_Im(), frame, 0.0, 0.0, 512.0, 256, None, None, pending=pending, veg=Veg())
         self.assertEqual(asked, [], "a far square takes the warm-up's cells, never queues its own")
         self.assertNotIn(gg.GEN_PENDING, pending, "no GEN_PENDING on a far tile")
+
+
+class MipFadeTest(unittest.TestCase):
+    """The forest floor's fade with distance in the far textures' mips (genground.write_far_dds): each mip blends the
+    floor and canopy versions by its texel's size on the ground; the GPU's mip choice by footprint makes it continuous
+    across every tile and ring."""
+
+    def setUp(self):
+        p = mock.patch.object(gg, "ON", True)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def levels(self, data, w):
+        import imagery
+        info = imagery.read_dds_info(data)
+        off = len(data) - sum(info[4])
+        out = []
+        for size in info[4]:
+            out.append(data[off:off + size])
+            off += size
+        return out
+
+    def chain(self, rgb):
+        import fast
+        import imagery
+        lv = [rgb] + list(fast._ef.mip_levels_fast(rgb, imagery._TO_LIN, float(imagery.MIP_SHARPEN)))
+        return [bytes(fast._ef.bc1_encode_fast(np.ascontiguousarray(m))) for m in lv]
+
+    def test_weights_by_the_ground_texel(self):
+        self.assertEqual(gg.fade_weights(0.5, 4), [1.0, 1.0, 0.0, 0.0], "0.5, 1 m: floor; 2, 4 m: canopy")
+        mid = gg.fade_weights(1.4142135623730951, 1)[0]
+        self.assertAlmostEqual(mid, 0.5, places=6)
+        # a tile one level coarser (twice the texel) has, at each mip, the weight of the finer one's next mip: the
+        # same footprint, the same weight, so neighbouring tiles of two levels agree where they meet
+        for t in (0.25, 0.5, 0.75, 1.0, 1.5):
+            self.assertEqual(gg.fade_weights(2 * t, 5), gg.fade_weights(t, 6)[1:])
+
+    def test_mips_floor_then_canopy_and_identity(self):
+        import imagery
+        n = 64
+        floor = np.full((n, n, 3), (150, 140, 95), np.uint8)
+        canopy = np.full((n, n, 3), (40, 60, 35), np.uint8)
+        plain = imagery.encode_dds(floor, True)
+        self.assertEqual(imagery.encode_dds(floor, True, fade=(floor, 0.5)), plain,
+                         "canopy == floor: byte for byte the plain encoding (the container as BNE_FAR_SRGB writes it)")
+        data = imagery.encode_dds(floor, True, fade=(canopy, 0.5))
+        self.assertEqual(data[:len(plain) - sum(imagery.read_dds_info(plain)[4])],
+                         plain[:len(plain) - sum(imagery.read_dds_info(plain)[4])], "the same header")
+        got, f, c = self.levels(data, n), self.chain(floor), self.chain(canopy)
+        self.assertEqual(got[0], f[0])
+        self.assertEqual(got[1], f[1], "1 m: still the floor")
+        self.assertEqual(got[2:], c[2:], "2 m and coarser: the canopy's colour (as the plain photo's levels)")
+
+    def test_painted_texels_kept_and_switch_off(self):
+        import imagery
+        n = 64
+        floor = np.full((n, n, 3), (150, 140, 95), np.uint8)
+        canopy = np.full((n, n, 3), (40, 60, 35), np.uint8)
+        painted = floor.copy()
+        painted[:, :16] = (90, 90, 90)              # (a road painted over the tile after its render)
+        gg._fade_tl.last = (floor, canopy, 2.0)
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "t.dds")
+            gg.write_far_dds(path, painted, True)
+            data = open(path, "rb").read()
+            road_canopy = canopy.copy()
+            road_canopy[:, :16] = (90, 90, 90)
+            self.assertEqual(data, imagery.encode_dds(painted, True, fade=(road_canopy, 2.0)),
+                             "the road in every mip, the woods faded")
+            self.assertIsNone(gg._fade_tl.last, "(used once)")
+            gg.write_far_dds(path, painted, True)
+            self.assertEqual(open(path, "rb").read(), imagery.encode_dds(painted, True), "no render_far: plain")
+            gg._fade_tl.last = (floor, canopy, 2.0)
+            with mock.patch.object(gg, "ON", False):
+                gg.write_far_dds(path, painted, True)
+            self.assertEqual(open(path, "rb").read(), imagery.encode_dds(painted, True), "off: unchanged")
+
+    def test_render_far_gives_the_canopy_version(self):
+        frame = geodesy.EnuFrame(40.877, -77.566)
+
+        class Dark(_Im):
+            def render(self, frame, x0, y0, size, px, pending=None):
+                return np.full((px, px, 3), (40, 60, 35), np.uint8), {"eox2023": px * px}
+        canopy = gg.canopy_grid
+
+        def tall(mx, my, rasters):
+            out = canopy(mx, my, rasters)
+            out[:] = 20
+            return out
+        gg._far_sq.clear()
+        self.addCleanup(gg._far_sq.clear)
+        with mock.patch.object(gg, "canopy_grid", tall):
+            gg.clear_fade()
+            rgb, _ = gg.render_far(Dark(), frame, 0.0, 0.0, 512.0, 256, None, None, veg=True, level=0)
+            fl, cn, t = gg._fade_tl.last
+            gg.clear_fade()
+            gg.render_far(Dark(), frame, 0.0, 0.0, 512.0, 256, None, None, veg=None, level=0)
+            self.assertIsNone(gg._fade_tl.last, "no trees drawn: nothing to fade")
+        self.assertIs(fl, rgb)
+        self.assertEqual(t, 2.0)
+        self.assertGreater(float(rgb.mean()), float(cn.mean()) + 10, "the floor lighter than the canopy version")
 
 
 class CodexReviewTest(unittest.TestCase):
