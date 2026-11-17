@@ -6413,12 +6413,17 @@ class Server:
                                   farfield.global_dem_zoom(tile.z, self.layout.cells))
         if isinstance(tile, farfield.Piece):
             tile = tile.base
+        # (the generated ground's near rings, render_far: its trees and map data, as blockworker._far_tile_key's; the
+        # Codex review of a3c7895f)
+        gsize = imagerymod.gutter_square(0.0, 0.0, tile.size, px)[2]
+        gen = (genground.far_key(self.mapdata, getattr(self, "veg", None) is not None),) \
+            if genground.ON and genground.far_texel(gsize, px) is not None else ()
         return revisitmod.key("fartex", round(float(anchor.lat), 7), round(float(anchor.lon), 7), tile.key, px,
                               self.road_mask_px(tile.level) if self.road_masks else 0, [s.name for s in im.chain],
                               self.tone, im.leaf_on, im.season_mode, self.tex_modes, roadsmod.ROADS_IN_GROUND,
                               self.mapdata.versions() if self.mapdata is not None else None,
                               self.road_widths is not None, self.surface is not None, self.layout.cells,
-                              anchor.zooms[max(tile.level, 0)])
+                              anchor.zooms[max(tile.level, 0)], *gen)
 
     def keep_texture(self, tk, texture, tex_bytes, used, pending, f0):
         """A far texture rendered here kept in the revisit cache when it is final: no colour-match or de-shadow region

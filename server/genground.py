@@ -1014,6 +1014,22 @@ def _render_square(imagery, frame, x0, y0, size, px, pending):
     return np.ascontiguousarray(np.asarray(rgb, np.uint8)[:, :, :3])
 
 
+def _imagery_key(imagery):
+    """An imagery's identity for the memos (sun fits, far squares): everything that changes its pixels: its chain's
+    sources, tone, leaf-on, season, whether it reads the finished tiles alone and their settings (a raw driving render
+    and a finished one never share an entry: the Codex review of a3c7895f), a quick render (this thread's or the
+    worker's). A stand-in without a chain: by its object."""
+    chain = getattr(imagery, "chain", None)
+    if chain is None:
+        return ("stand-in", id(imagery))
+    caller = getattr(imagery, "_caller", None)
+    quick = bool(getattr(imagery, "quick_all", False) or getattr(caller, "quick", False))
+    sigs = tuple(sorted((str(k), str(v)) for k, v in (getattr(imagery, "_fin_sigs", None) or {}).items()))
+    return (tuple(str(getattr(s, "name", s)) for s in chain), str(getattr(imagery, "tone", None)),
+            str(getattr(imagery, "leaf_on", None)), str(getattr(imagery, "season_mode", None)),
+            bool(getattr(imagery, "finished_only", False)), sigs, quick)
+
+
 def _fit_key(key, imagery, md, dem):
     """A sun fit's memo key: the cell, SHADE_VERSION, the imagery by its settings (its chain's sources, tone, leaf-on,
     season: not id(), which a new object can reuse once the old one is gone: the mini PC's gate, 2026-11-16), the map
@@ -1022,12 +1038,7 @@ def _fit_key(key, imagery, md, dem):
         ver = json.dumps(md.versions(buildings=True), sort_keys=True, default=str) if md is not None else None
     except Exception:
         ver = None
-    chain = getattr(imagery, "chain", None)
-    if chain is not None:
-        im = (tuple(str(getattr(s, "name", s)) for s in chain), str(getattr(imagery, "tone", None)),
-              str(getattr(imagery, "leaf_on", None)), str(getattr(imagery, "season_mode", None)))
-    else:                       # (a stand-in: by its object)
-        im = ("stand-in", id(imagery))
+    im = _imagery_key(imagery)
     mdk = None if md is None else (type(md).__name__, str(getattr(md, "cache_dir", "")))
     return (str(key), SHADE_VERSION, im, mdk, dem is not None, ver)
 

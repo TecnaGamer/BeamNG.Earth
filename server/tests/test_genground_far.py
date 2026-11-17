@@ -97,5 +97,60 @@ class FarTest(unittest.TestCase):
         self.assertNotIn(gg.GEN_PENDING, pending, "no GEN_PENDING on a far tile")
 
 
+class CodexReviewTest(unittest.TestCase):
+    """Codex review of 899a9f75..a3c7895f."""
+
+    def setUp(self):
+        gg._far_sq.clear()
+        self.addCleanup(gg._far_sq.clear)
+        p = mock.patch.object(gg, "ON", True)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def test_raw_and_finished_squares_never_shared(self):
+        # [high] a raw (driving, quick) and a finished-only imagery made the same square key: raw colours stored as the
+        # finished tile's
+        import types
+
+        class Im(_Im):
+            def __init__(self, fin, sigs, value):
+                self.chain = [types.SimpleNamespace(name="eox2023")]
+                self.tone, self.leaf_on, self.season_mode = "auto", True, "off"
+                self.finished_only, self._fin_sigs, self.value = fin, sigs, value
+
+            def render(self, frame, x0, y0, size, px, pending=None):
+                return np.full((px, px, 3), self.value, np.uint8), {"eox2023": px * px}
+        frame = geodesy.EnuFrame(40.877, -77.566)
+        raw, _ = gg.render_far(Im(False, {}, 60), frame, 0.0, 0.0, 512.0, 256, None, None)
+        fin, _ = gg.render_far(Im(True, {"eox2023": "abc"}, 160), frame, 0.0, 0.0, 512.0, 256, None, None)
+        other, _ = gg.render_far(Im(True, {"eox2023": "def"}, 200), frame, 0.0, 0.0, 512.0, 256, None, None)
+        self.assertNotEqual(int(raw.mean()), int(fin.mean()), "the finished imagery's own square")
+        self.assertNotEqual(int(fin.mean()), int(other.mean()), "other finished settings: their own square")
+
+    def test_main_process_texture_key_has_the_trees(self):
+        # [high] the main process's far texture key (Server.tex_key) left out whether the trees are drawn, which
+        # render_far's pixels depend on
+        import types
+        import earthd
+        im = types.SimpleNamespace(chain=[types.SimpleNamespace(name="eox2023")], leaf_on=True, season_mode="off")
+        md = types.SimpleNamespace(versions=lambda buildings=False: {"overture": "x"})
+
+        def server(veg):
+            return types.SimpleNamespace(imagery=im, tone="auto", tex_modes=(), road_masks=False, mapdata=md,
+                                         road_widths=None, surface=None, layout=types.SimpleNamespace(cells=64),
+                                         veg=veg, road_mask_px=lambda lvl: 0)
+        anchor = types.SimpleNamespace(lat=40.877, lon=-77.566, zooms={k: 16 - k for k in range(9)})
+        near = types.SimpleNamespace(key=(1, 0, 0), level=1, size=512.0, bbox=(0.0, 0.0, 512.0, 512.0))
+        a = earthd.Server.tex_key(server(None), anchor, near, 256)
+        b = earthd.Server.tex_key(server(object()), anchor, near, 256)
+        self.assertNotEqual(a, b, "trees drawn or not: another texture")
+        far = types.SimpleNamespace(key=(5, 0, 0), level=5, size=8192.0, bbox=(0.0, 0.0, 8192.0, 8192.0))
+        self.assertEqual(earthd.Server.tex_key(server(None), anchor, far, 512),
+                         earthd.Server.tex_key(server(object()), anchor, far, 512), "(past render_far's levels: as before)")
+        with mock.patch.object(gg, "ON", False):
+            self.assertEqual(earthd.Server.tex_key(server(None), anchor, near, 256),
+                             earthd.Server.tex_key(server(object()), anchor, near, 256), "(off: as before)")
+
+
 if __name__ == "__main__":
     unittest.main()
