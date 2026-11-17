@@ -51,6 +51,38 @@ class StopsTest(unittest.TestCase):
         self.assertEqual([s["name"] for s in buslines.stops(r, self.nodes, self.ways)], ["Vasaplatsen", "Kapellplatsen"])
 
 
+class PlatformLetterTest(unittest.TestCase):
+    """Västtrafik's platforms are named by their letter (name=A, ref=A beside "Fässbergsskolan"; line 25 near Mölndal,
+    2026-11-17): they were stops of their own, A and A8 a few metres after the stop they belong to."""
+    def test_a_lettered_platform_is_the_stop_before_it(self):
+        nodes = {1: node(1, 57.6500, 12.0150, name="Fässbergsskolan", public_transport="stop_position", ref="A"),
+                 2: node(2, 57.6600, 12.0150, name="Storgatan", public_transport="stop_position", ref="B"),
+                 3: node(3, 57.6700, 12.0150, name="Mölndals Innerstad", public_transport="stop_position", ref="A8")}
+        ways = {8: {"type": "way", "id": 8, "center": {"lat": 57.65003, "lon": 12.01505},
+                    "tags": {"name": "A", "public_transport": "platform", "ref": "A"}},
+                9: {"type": "way", "id": 9, "center": {"lat": 57.67004, "lon": 12.01506},
+                    "tags": {"name": "A8", "public_transport": "platform", "ref": "A8"}}}
+        r = rel(10, [("node", 1, "stop"), ("way", 8, "platform"), ("node", 2, "stop"), ("node", 3, "stop"),
+                     ("way", 9, "platform")])
+        st = buslines.stops(r, nodes, ways)
+        self.assertEqual([s["name"] for s in st], ["Fässbergsskolan", "Storgatan", "Mölndals Innerstad"])
+        self.assertTrue(all(s["on_road"] for s in st))
+
+    def test_a_platform_beside_the_stop_joins_it_whatever_its_name(self):
+        nodes = {1: node(1, 57.6500, 12.0150, name="Mölndals bro", public_transport="stop_position"),
+                 2: node(2, 57.65020, 12.0151, name="Mölndals bro läge C", public_transport="platform")}
+        st = buslines.stops(rel(10, [("node", 1, "stop"), ("node", 2, "platform")]), nodes, {})
+        self.assertEqual([s["name"] for s in st], ["Mölndals bro"])
+
+    def test_a_lone_lettered_platform_takes_the_name_of_the_stop_beside_it(self):
+        nodes = {1: node(1, 57.6500, 12.0150, name="GoCo", highway="bus_stop"),
+                 2: node(2, 57.65010, 12.0152, name="B", public_transport="platform", ref="B"),
+                 3: node(3, 57.6600, 12.0150, name="Krokslätt", public_transport="platform")}
+        st = buslines.stops(rel(10, [("node", 2, "platform"), ("node", 3, "platform")]), nodes, {})
+        self.assertEqual([s["name"] for s in st], ["GoCo", "Krokslätt"])
+        self.assertFalse(st[0]["on_road"])
+
+
 class ParseTest(unittest.TestCase):
     def setUp(self):
         buslines._cache.clear()

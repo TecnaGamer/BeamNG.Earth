@@ -14,6 +14,7 @@ import json
 import logging
 import math
 import os
+import re
 from pathlib import Path
 import tempfile
 import time
@@ -29,6 +30,10 @@ SNAP_DEG = 0.005                # the request's centre is rounded to this, so a 
 CACHE_TTL_S = 30 * 86400
 MAX_LINES = 40
 MAX_STOPS = 120
+JOIN_M = 60.0                   # m: a platform this near the stop_position before it is that stop's platform
+# A platform's own letter or number (Västtrafik's läge: name=A, ref=A beside the stop "Fässbergsskolan", measured
+# 2026-11-17 near Mölndal: 250 of the 8 lines' stops were named only that), not a stop's name
+_CODE = re.compile(r"[A-Za-z]{1,2}\d{0,2}|\d{1,2}")
 DEFAULT_COLOUR = "#ff6600"      # the stock bus mode's route colour (missionTypes/busMode/constructor.lua)
 ATTRIBUTION = "Bus lines: © OpenStreetMap contributors (Overpass)"
 
@@ -76,10 +81,32 @@ def _stop_role(role):
     return None
 
 
+def _code(name, tags):
+    """Whether a name is only a platform's letter or number (its ref / local_ref, or a short code like A, B2, 12)."""
+    return bool(name) and (name in (tags.get("ref"), tags.get("local_ref")) or bool(_CODE.fullmatch(name)))
+
+
+def _named_near(lat, lon, nodes):
+    """The name of the nearest stop node in nodes within JOIN_M of lat, lon that is a stop's name, else ""."""
+    best, name = JOIN_M, ""
+    for n in nodes.values():
+        t = n.get("tags") or {}
+        nm = str(t.get("name") or "")
+        if not nm or _code(nm, t) or n.get("lat") is None or not (
+                t.get("public_transport") == "stop_position" or t.get("highway") == "bus_stop"):
+            continue
+        d = _metres(lat, lon, float(n["lat"]), float(n["lon"]))
+        if d < best:
+            best, name = d, nm
+    return name
+
+
 def stops(rel, nodes, ways):
     """[{"name", "lat", "lon", "on_road"}] of a relation's stops in order: a stop_position and the platform after it are
-    one stop (at the stop_position: it is on the road the bus drives), a lone platform is a stop at the platform. A
-    member Overpass did not return (outside what it sent) is skipped; the same stop twice in a row is once."""
+    one stop (at the stop_position: it is on the road the bus drives): the platform has its name, none, only its
+    letter, or stands within JOIN_M. A lone platform is a stop at the platform, named after the stop beside it when its
+    own name is only a letter. A member Overpass did not return (outside what it sent) is skipped; the same stop twice
+    in a row is once."""
     out, cur = [], None
 
     def close():
@@ -97,19 +124,25 @@ def stops(rel, nodes, ways):
             continue
         tags = el.get("tags") or {}
         name = str(tags.get("name") or "")
+        code = _code(name, tags)
         lat, lon = (el.get("lat"), el.get("lon")) if "lat" in el else ((el.get("center") or {}).get("lat"),
                                                                         (el.get("center") or {}).get("lon"))
         if lat is None or lon is None:
             continue
         if kind == "stop":
             close()
-            cur = {"name": name, "lat": float(lat), "lon": float(lon), "on_road": True}
-        elif cur is not None and not cur.get("platform") and (not cur["name"] or not name or name == cur["name"]):
+            cur = {"name": "" if code else name, "lat": float(lat), "lon": float(lon), "on_road": True}
+        elif cur is not None and not cur.get("platform") and (
+                not cur["name"] or not name or code or name == cur["name"]
+                or _metres(cur["lat"], cur["lon"], float(lat), float(lon)) <= JOIN_M):
             cur["platform"] = True
-            cur["name"] = cur["name"] or name
+            cur["name"] = cur["name"] or ("" if code else name)
         else:
             close()
-            cur = {"name": name, "lat": float(lat), "lon": float(lon), "on_road": False, "platform": True}
+            cur = {"name": "" if code else name, "lat": float(lat), "lon": float(lon), "on_road": False,
+                   "platform": True}
+        if not cur["name"]:
+            cur["name"] = _named_near(cur["lat"], cur["lon"], nodes) or name
     close()
     for s in out:
         s.pop("platform", None)
