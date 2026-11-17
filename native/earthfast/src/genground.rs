@@ -74,6 +74,8 @@ const SHRUB_MIN_M: u8 = 1;          // ... at least this: a shrub where the land
 const SKIRT_M: f64 = 3.0;
 /// gg_regions' mark on a region of open ground under the canopy model where the game placed no tree (stage 4)
 const UNPLACED: u32 = 0x4000_0000;
+/// (stage 4b) the share of a gap cell's window that is open ground of the kind for its colour's full weight
+const GAP_SUPPORT: f32 = 0.25;
 /// (stage 5) the Python side's mark on a texel whose capture-time shadow could not be relit (ggshade::gg_relight's
 /// lost: clipped umbra): its colour the kind's lit texels' round it, as UNPLACED's
 const LOST: u32 = 0x2000_0000;
@@ -561,6 +563,8 @@ pub fn gg_regions<'py>(py: Python<'py>, base: PyReadonlyArray2<'py, u8>, poly: P
                     if ch >= TREE_MIN_M && placed != Some(false) {
                         k = TREE;
                         chm_tree[r * w + c] = true;
+                    } else if ch >= SHRUB_MIN_M && placed == Some(true) {
+                        k = TREE;       // (stage 4b) a hedgerow's low canopy under the game's placed bushes / trees
                     } else if k == TREE && !by_line[r * w + c] {
                         k = if placed == Some(true) { TREE } else if ch >= SHRUB_MIN_M && placed.is_none() {
                             SHRUB
@@ -1179,7 +1183,11 @@ pub fn gen_ground<'py>(py: Python<'py>, s2: PyReadonlyArray3<'py, u8>, kind: PyR
                     let (sm, cnt) = window_sum(&s2, n, r.min(n - 1), c.min(n - 1), win.far_r, win.far_s, win.g,
                                                |q| kind[q] == k && !dirty[q] && dist[q] >= min_d);
                     if cnt > 0 {
-                        *v = [sm[0] as f32 / cnt as f32, sm[1] as f32 / cnt as f32, sm[2] as f32 / cnt as f32, 1.0];
+                        // (its weight: how much open ground there is round, full from GAP_SUPPORT of the window's
+                        // samples: fading as the open ground leaves it, no switch)
+                        let total = ((2 * win.far_r) / win.far_s.max(1) + 1) as f32;
+                        let sup = (cnt as f32 / (GAP_SUPPORT * total * total)).min(1.0);
+                        *v = [sm[0] as f32 / cnt as f32, sm[1] as f32 / cnt as f32, sm[2] as f32 / cnt as f32, sup];
                         break;
                     }
                 }
@@ -1231,17 +1239,19 @@ pub fn gen_ground<'py>(py: Python<'py>, s2: PyReadonlyArray3<'py, u8>, kind: PyR
                             }
                             let v = gap[(a * cg.nc + b) * NKINDS + k as usize];
                             if v[3] > 0.0 {
-                                acc = [acc[0] + w * v[0], acc[1] + w * v[1], acc[2] + w * v[2]];
-                                wsum += w;
+                                let wv = w * v[3];
+                                acc = [acc[0] + wv * v[0], acc[1] + wv * v[1], acc[2] + wv * v[2]];
+                                wsum += wv;
                             }
                         }
                     }
-                    base = if wsum > 1e-4 {
-                        [acc[0] / wsum, acc[1] / wsum, acc[2] / wsum]
-                    } else {
-                        [px[0] + (FLOOR[0] - px[0]) * FLOOR_MIX, px[1] + (FLOOR[1] - px[1]) * FLOOR_MIX,
-                         px[2] + (FLOOR[2] - px[2]) * FLOOR_MIX]
-                    };
+                    // (stage 4b) the 8 m cells' open-ground colours blended by their bilinear weights, the cells without
+                    // one taking the forest floor: no switch where the open ground leaves the window (genv4's light
+                    // stair-steps, the coordinator's Penns Valley finding)
+                    let fl = [px[0] + (FLOOR[0] - px[0]) * FLOOR_MIX, px[1] + (FLOOR[1] - px[1]) * FLOOR_MIX,
+                              px[2] + (FLOOR[2] - px[2]) * FLOOR_MIX];
+                    let rest = (1.0 - wsum).max(0.0);
+                    base = [acc[0] + fl[0] * rest, acc[1] + fl[1] * rest, acc[2] + fl[2] * rest];
                 } else if ((d as f64) < blend3 || flat(k)) && k != NONE {
                     let l = LATTICE as i64;
                     let (dr, dc) = (r as i64 - pr as i64, c as i64 - pc as i64);

@@ -414,7 +414,8 @@ def tree_floor(frame, x0, y0, size, px, veg, missing):
     floor = np.zeros((px, px), np.uint8)
     for it in cells:
         lat_, lon_ = np.asarray(it.lat), np.asarray(it.lon)
-        sel = ((np.asarray(it.kind) == vegetationmod.KIND_TREE) & (np.asarray(it.rank) < FLOOR_RANK)
+        kd = np.asarray(it.kind)
+        sel = (((kd == vegetationmod.KIND_TREE) | (kd == vegetationmod.KIND_BUSH)) & (np.asarray(it.rank) < FLOOR_RANK)
                & (lat_ >= lat_lo) & (lat_ <= lat_hi) & (lon_ >= lon_lo) & (lon_ <= lon_hi))   # (the square's own)
         if not sel.any():
             continue
@@ -1030,14 +1031,15 @@ def cell_sun(key, imagery, md, dem, pending=None, missing=None):
     x0 = y0 = -size / 2
     nb = nt * FIT_COARSE
     sub = []
-    before = set(pending) if pending is not None else set()
-    pend = set(before)
+    pend = set()        # (its own: a tile the block already waits for is the fit's too, Codex review of a8da6b7b)
     try:
         rgb_b = _render_square(imagery, fr, x0, y0, size, nb, pend)
     except Exception as e:      # (a worker's strict imagery without the cell's tiles on disk: no fit yet, asked again)
         log.debug("genground: shade fit %s: photo: %s: %s", key, type(e).__name__, e)
         rgb_b = None
-    partial = pend != before or rgb_b is None
+    partial = bool(pend) or rgb_b is None
+    if pending is not None:
+        pending.update(pend)
     if rgb_b is None:
         info = {"cell": str(key), "partial": True, "photo": False}
         with _fits_lock:
@@ -1049,8 +1051,6 @@ def cell_sun(key, imagery, md, dem, pending=None, missing=None):
         if missing is not None and _fit_pending(key, True, []):
             missing.append((key, SHADE_LAYER))
         return None, info
-    if pending is not None:
-        pending.update(pend)
     occ = _occluders(fr, x0, y0, size, nb, md, sub)
     sub = [(k2, layer) for k2, layer in sub if k2 == key]     # (its neighbours' layers: only the square's fringe)
     rgb_t = (rgb_b.reshape(nt, FIT_COARSE, nt, FIT_COARSE, 3).astype(np.uint32).sum((1, 3))

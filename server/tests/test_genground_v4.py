@@ -62,6 +62,13 @@ class RegionsTest(unittest.TestCase):
         k, _ = regions(base, canopy)
         self.assertEqual(k.tolist(), [[T, T, T, 2, T, C]], "no placement known: the canopy decides, as before")
 
+    def test_hedgerow_under_placed_bushes(self):
+        # (stage 4b) a hedgerow's low canopy (1-3 m) where the game places bushes or trees: wooded (the forest floor
+        # under them), not the open ground it became in genv4; without anything placed there: open ground as before
+        G, T = 3, 1
+        k, _ = regions([[G, G, G, G]], [[2, 2, 0, 2]], floor=[[255, 120, 255, 0]])
+        self.assertEqual(k.tolist(), [[T, T, G, G]])
+
     def test_no_skirt_with_the_games_trees(self):
         base = [[4] * 8]
         canopy = [[0, 1, 9, 2, 1, 1, 1, 1]]
@@ -153,6 +160,25 @@ class GapTest(unittest.TestCase):
         self.assertLess(before[40:120, 20:40].mean(), 70.0, "(placement unknown: the photo, as before)")
 
 
+class StairTest(unittest.TestCase):
+    def test_gap_colour_without_steps(self):
+        # (stage 4b) the unplaced canopy's colour runs smoothly from the field's (near it) to the forest floor's (deep
+        # in the wood): genv4 switched at the 8 m cells where the field's texels left the window (light stair-steps)
+        n = 320
+        s2 = np.full((n, n, 3), (150, 140, 95), np.uint8)
+        s2[:, :200] = (40, 60, 35)
+        canopy = np.zeros((n, n), np.uint8)
+        canopy[:, :200] = 15
+        kind = np.full((n, n), 3, np.uint8)
+        floor = np.zeros((n, n), np.uint8)
+        _k, region = regions(kind, canopy, floor=floor)
+        out = EF.gen_ground(s2, kind, region, canopy, np.zeros((n, n), np.uint32), np.zeros((0, 2)),
+                            np.zeros(0), 0.0, 0.0, 1.0, 0, 0, floor, 2).astype(float)
+        prof = out[60:260, 20:200].mean(axis=(0, 2))
+        jumps = np.abs(np.diff(prof))
+        self.assertLess(float(jumps.max()), 4.0, "no step between neighbouring texels across the wood")
+
+
 class _Veg:
     def __init__(self, ready=True, items=None):
         self._ready, self._items = ready, items
@@ -189,11 +215,14 @@ class TreeFloorTest(unittest.TestCase):
         self.assertEqual(floor[row, col], 255)
         self.assertEqual(int((floor == 255).sum()) > 20, True)
         self.assertEqual(floor[row, col + 8], 0)
-        # (thinned away at the 700 m ring: not counted; bushes neither)
+        # (thinned away at the 700 m ring: not counted; (stage 4b) bushes are: a hedgerow's placed shrubs, the
+        # coordinator's Penns Valley finding: the hedgerows vanished in genv4)
         veg2 = _Veg(items=items(la, lo, 3.0, rank=0.9))
         self.assertEqual(int(gg.tree_floor(frame, -64.0, -64.0, 128.0, 128, veg2, [])[0].sum()), 0)
-        veg3 = _Veg(items=items(la, lo, 3.0, kind=vegetation.KIND_BUSH))
-        self.assertEqual(int(gg.tree_floor(frame, -64.0, -64.0, 128.0, 128, veg3, [])[0].sum()), 0)
+        veg3 = _Veg(items=items(la, lo, 1.5, kind=vegetation.KIND_BUSH))
+        self.assertEqual(gg.tree_floor(frame, -64.0, -64.0, 128.0, 128, veg3, [])[0][row, col], 255)
+        veg4 = _Veg(items=items(la, lo, 1.5, kind=vegetation.KIND_ROCK))
+        self.assertEqual(int(gg.tree_floor(frame, -64.0, -64.0, 128.0, 128, veg4, [])[0].sum()), 0, "(rocks not)")
 
     def test_not_built_and_no_trees(self):
         frame = geodesy.EnuFrame(40.877, -77.566)

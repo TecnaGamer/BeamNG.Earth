@@ -166,6 +166,43 @@ class FitTest(unittest.TestCase):
         self.assertAlmostEqual(k, 50 / 150, delta=0.05, msg="the shadow / lit ratio across the edges")
 
 
+class PendingFitTest(unittest.TestCase):
+    def setUp(self):
+        gg._retries.clear()
+        gg._fits.clear()
+        self.addCleanup(gg._retries.clear)
+        self.addCleanup(gg._fits.clear)
+
+    def test_fit_with_a_tile_the_block_already_waits_for(self):
+        # (Codex review of a8da6b7b, high) the block's photo is rendered first: a tile missing for both is already in
+        # the caller's pending set, so the fit's render adds nothing new; it must still count as partial and be made
+        # again once the tile is here
+        from unittest import mock
+        TILE = ("lazy", 14, 1, 2)
+        state = {"missing": True}
+
+        class Im:
+            def render(self, frame, x0, y0, size, px, pending=None):
+                if state["missing"] and pending is not None:
+                    pending.add(TILE)
+                return np.full((px, px, 3), 120, np.uint8), {"eox2023": px * px}
+
+        key = gg.mapcells.cell_of(40.758, -73.985)
+        now = [1000.0]
+        with mock.patch.object(gg, "_now", lambda: now[0]):
+            pending, missing = {TILE}, []
+            _row, info = gg.cell_sun(key, Im(), None, None, pending, missing)
+            self.assertTrue(info["partial"], "the tile still to come: a partial fit")
+            self.assertIn((key, gg.SHADE_LAYER), missing)
+            self.assertIn(TILE, pending)
+            state["missing"] = False
+            now[0] += gg.FIT_PARTIAL_S + 1
+            missing = []
+            _row, info = gg.cell_sun(key, Im(), None, None, set(), missing)
+            self.assertFalse(info["partial"], "made again once it is here: final")
+            self.assertEqual(missing, [])
+
+
 class ReadyTest(unittest.TestCase):
     def setUp(self):
         gg._retries.clear()
