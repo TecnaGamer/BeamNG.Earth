@@ -25,6 +25,15 @@ def rel(i, members, **tags):
             "members": [{"type": t, "ref": r, "role": role} for t, r, role in members]}
 
 
+class OverpassOnly:
+    """These test the Overpass path: Göteborg's coordinates are in Västtrafik's area (gtfsbus), kept out of it."""
+    def setUp(self):
+        super().setUp()
+        p = mock.patch.object(buslines.gtfsbus, "covers", return_value=False)
+        p.start()
+        self.addCleanup(p.stop)
+
+
 class StopsTest(unittest.TestCase):
     def setUp(self):
         self.nodes = {1: node(1, 57.700, 11.970, name="Vasaplatsen", public_transport="stop_position"),
@@ -83,8 +92,9 @@ class PlatformLetterTest(unittest.TestCase):
         self.assertFalse(st[0]["on_road"])
 
 
-class ParseTest(unittest.TestCase):
+class ParseTest(OverpassOnly, unittest.TestCase):
     def setUp(self):
+        super().setUp()
         buslines._cache.clear()
 
     def data(self):
@@ -274,7 +284,7 @@ class ParseTest(unittest.TestCase):
             self.assertEqual(list(Path(directory).rglob("*.json")), [])
 
 
-class BusLinesProtocolTest(unittest.IsolatedAsyncioTestCase):
+class BusLinesProtocolTest(OverpassOnly, unittest.IsolatedAsyncioTestCase):
     async def test_server_uses_disk_cache_across_sessions(self):
         import earthd
         from concurrent.futures import ThreadPoolExecutor

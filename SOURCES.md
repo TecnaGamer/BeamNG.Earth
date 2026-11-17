@@ -163,6 +163,15 @@ entire route relations by bounding box. Successful results are cached per snappe
 for 30 days in the download cache (buslines/), including across server restarts. Offline mode, quota limits and HTTP 4xx
 refusals do not trigger a fallback. The bus query allows 25 seconds execution (4-second connection / 65-second read timeout).
 
+In Västtrafik's area (Västra Götaland) bus lines come from Västtrafik's own timetable data instead (server/gtfsbus.py):
+Trafiklab's GTFS Regional feed, operator `vt`, "available under the CC0 1.0 Universal (CC0 1.0) Public Domain
+Dedication license" (https://trafiklab.se/api/gtfs-datasets/gtfs-regional/). With the player's own Trafiklab key
+(environment variable `TRAFIKLAB_KEY` or the file `trafiklab.key` in the download cache) it comes from
+`opendata.samtrafiken.se`; without one, from `files.mobilitydatabase.org`, the Mobility Database's daily copy of the same
+feed (mdb-3248, "GTFS Regional Västtrafik"). One 92 MB zip at most once a week (3/day soft, 5 hard; no retries), made
+into a 250 KB index in the download cache (transit/vt.json.gz) and not kept. The key is never logged. Overpass is asked
+in that area only while the first download runs or when it cannot be had.
+
 ## Category search on Enter
 
 `overpass-api.de` supplies named OSM category matches within 15 km for line/area categories and 50 km for peaks, race tracks, airports and dams.

@@ -20,6 +20,7 @@ import tempfile
 import time
 import urllib.parse
 
+import gtfsbus
 import netfetch
 
 OVERPASS_URL = "https://overpass-api.de/api/interpreter"
@@ -244,8 +245,31 @@ def _write_cache(path, data):
 
 
 def near(lat, lon, net, cache_dir=None):
-    """One bounded, cached lookup per snapped place. Try one alternate endpoint on connection/server failure.
-    Offline mode, budgets, throttling and other refusals are respected without contacting another service."""
+    """The lines near lat, lon: in Västtrafik's area from its own timetable data (gtfsbus: no Overpass; while its first
+    download runs, or when it cannot be had, Overpass as below). Elsewhere one bounded, cached Overpass lookup per
+    snapped place, one alternate endpoint on connection/server failure. Offline mode, budgets, throttling and other
+    refusals are respected without contacting another service."""
+    if cache_dir is not None and gtfsbus.covers(float(lat), float(lon)):
+        try:
+            return gtfsbus.near(float(lat), float(lon), gtfsbus.index(cache_dir, net), RADIUS_M, MAX_LINES, _ref_key,
+                                DEFAULT_COLOUR)
+        except gtfsbus.Preparing as e:
+            note = str(e)
+        except RuntimeError as e:
+            note = "Västtrafik's lines: " + str(e)
+        try:
+            return _overpass(lat, lon, net, cache_dir)
+        except Busy as e:
+            raise Busy(note + ". " + str(e)) from None
+    return _overpass(lat, lon, net, cache_dir)
+
+
+def attribution(lines):
+    """The window's attribution line for these lines (near's)."""
+    return gtfsbus.ATTRIBUTION if lines and lines[0].get("source") == "vt" else ATTRIBUTION
+
+
+def _overpass(lat, lon, net, cache_dir=None):
     url = overpass_url(lat, lon)
     data = _cache.get(url)
     path = _cache_path(cache_dir, url) if cache_dir is not None else None

@@ -8522,12 +8522,14 @@ class Connection:
 
     async def bus_lines(self, msg):
         """The bus lines near the player {"id", "lat", "lon"} -> bus_lines_result {"id", "lines": [...], "attribution",
-        "error"?} (buslines.near: one Overpass request per place, in the search pool)."""
+        "error"?} (buslines.near: Västtrafik's timetable data in its area, else one Overpass request per place; in the
+        search pool)."""
         out = {"type": "bus_lines_result", "id": msg.get("id"), "lines": [], "attribution": buslinesmod.ATTRIBUTION}
         try:
             lat, lon = float(msg["lat"]), float(msg["lon"])
             out["lines"] = await asyncio.get_running_loop().run_in_executor(
                 self.s.search_pool, buslinesmod.near, lat, lon, self.s.net, self.s.cache_dir)
+            out["attribution"] = buslinesmod.attribution(out["lines"])
         except Exception as e:          # offline, rate limited, a bad answer: the game says so
             out["error"] = buslinesmod.error_text(e)[:500]
             log.warning("bus lines: %s: %s", type(e).__name__, e)
