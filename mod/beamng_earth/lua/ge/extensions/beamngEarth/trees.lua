@@ -717,14 +717,18 @@ M.GROUP_MAX_M.deadwood = 200; M.NO_COLLIDE.deadwood = true     -- (on the forest
 -- road, the user's test 2026-11-16)
 -- (2026-11-17, the user's test at Syrynka: a roadside row of tree_oak_large_a, a veteran oak with a huge flared,
 -- gnarled trunk, the only open shape at 11-17 m: a wall of clones; all three large oaks are forest-only now)
-M.FOREST_ONLY = { '_forest', 'filler', 'tree_oak_large_' }
+-- (2026-11-17, the gallery: the conifers grown in a crowd, their lower half bare dead branches or a sparse crown up top
+-- only: East Coast USA's douglasfir large_c / large_d / small_a, West Coast USA's weathered Monterey pine)
+M.FOREST_ONLY = { '_forest', 'filler', 'tree_oak_large_', 'douglasfir_large_c', 'douglasfir_large_d',
+  'douglasfir_small_a', 'pine_radiata_weathered' }
 function M.forestOnly(shape)
   for _, k in ipairs(M.FOREST_ONLY) do
     if shape:find(k, 1, true) then return true end
   end
   return false
 end
-for _, g in ipairs({ 'deciduous', 'oak', 'birch', 'beech', 'pine_west', 'mediterranean', 'tropical' }) do
+for _, g in ipairs({ 'deciduous', 'oak', 'birch', 'beech', 'pine_west', 'mediterranean', 'tropical', 'conifer', 'spruce',
+  'pine_eu' }) do
   local out = {}
   for _, v in ipairs(M.CATALOG[g]) do
     if not M.forestOnly(v[1]) then out[#out + 1] = v end
