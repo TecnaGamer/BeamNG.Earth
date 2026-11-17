@@ -385,6 +385,20 @@ NOT_SWITCHES = ("BNE_REVISIT", "BNE_REVISIT_MB", "BNE_REVISIT_SKIP", "BNE_ROADS_
                 "BNE_STALE_REVISIT", "BNE_STALE_DAYS")
 
 
+# BNGE_* settings that change what is built (the road revamp's R1 audit, 2026-11-16): keyed like the build switches
+# (code_key, switches_key: the road tiles, the plans, the cell facts and the shared decisions' version key) whenever
+# they are set. The other BNGE_* reads of the output modules change no output (tests/test_env_keys.py lists each with
+# its reason and fails on a new one). BNGE_ONEWAY_JOINS=0: the one-way ends' lane joins off (the roads layer, so the
+# facts and plans); BNGE_ROADS_IN_GROUND=0: the carriageway meshes in the road tiles (a helper's per-client setting is
+# in the road tile's key too: blockworker._roads_tile_cached).
+OUTPUT_ENV = ("BNGE_ONEWAY_JOINS", "BNGE_ROADS_IN_GROUND")
+
+
+def keyed_env(k):
+    """Is environment variable k part of the build switches' hash (code_key, switches_key)?"""
+    return (k.startswith("BNE_") and k not in NOT_SWITCHES) or k in OUTPUT_ENV
+
+
 def code_key():
     """A hash of the code the cached items depend on (source_id; a packaged app's REVISIT_ID, written by its build) and
     the build switches (BNE_*), once per process."""
@@ -405,8 +419,8 @@ def code_key():
             if got is None or any(n.endswith(".py") for n in os.listdir(here)):
                 got = source_id(here).encode()      # (from the sources beside it: a dev tree, a source install)
             h.update(got)
-            for k in sorted(os.environ):                # (the build switches: BNE_*)
-                if k.startswith("BNE_") and k not in NOT_SWITCHES:
+            for k in sorted(os.environ):                # (the build switches: BNE_*, OUTPUT_ENV)
+                if keyed_env(k):
                     h.update(f"{k}={os.environ[k]}".encode())
             import heightmap        # (the lighter ground's 2 m squares: road tiles drape on its lattice; 1 m keys as before)
             if heightmap.SQUARE != 1.0:
@@ -444,7 +458,7 @@ def switches_key():
         if not _switches:
             h = hashlib.sha1()
             for k in sorted(os.environ):
-                if k.startswith("BNE_") and k not in NOT_SWITCHES:
+                if keyed_env(k):
                     h.update(f"{k}={os.environ[k]}".encode())
             _switches.append(h.hexdigest()[:16])
         return _switches[0]

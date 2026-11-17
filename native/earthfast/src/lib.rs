@@ -5918,6 +5918,7 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(decks::deck_beside, m)?)?;
     m.add_function(wrap_pyfunction!(decks::deck_end_joins, m)?)?;
     m.add_function(wrap_pyfunction!(tapers::road_tapers, m)?)?;
+    m.add_function(wrap_pyfunction!(tapers::taper_widths_along, m)?)?;
     m.add_function(wrap_pyfunction!(tapers::lane_flow, m)?)?;
     m.add_function(wrap_pyfunction!(roadlanes::generated_lanes, m)?)?;
     m.add_function(wrap_pyfunction!(roadlanes::lane_flow_cells, m)?)?;
@@ -6496,6 +6497,6 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 314: stage 5: ggshade (gg_sun_fit, gg_relight: the capture sun's shadows out of the Sentinel-2 colour);
     // gen_ground's LOST texels, its crowns' shading from no direction
     // 322: both of the above merged (321 vegetation clumps + 313/314 generated ground stages 4-5)
-    m.add("VERSION", 322)?;
+    m.add("VERSION", 341)?;
     Ok(())
 }

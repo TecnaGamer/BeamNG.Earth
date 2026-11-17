@@ -133,7 +133,7 @@ def switches():
         import hashlib
         import revisit
         import roads
-        sw = {k: v for k, v in os.environ.items() if k.startswith("BNE_") and k not in revisit.NOT_SWITCHES}
+        sw = {k: v for k, v in os.environ.items() if revisit.keyed_env(k)}
         sw["BNE_BRIDGE_PROFILE"] = roads.bridge_profile_mode()
         h = hashlib.sha1()
         for k in sorted(sw):

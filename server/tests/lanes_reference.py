@@ -126,9 +126,6 @@ def generated_counts(feats):
             if agreed is not None and agreed == counts[outside[1]]:
                 for i in component:
                     counts[i] = agreed
-    import rampoverrides
-    for i, lanes in rampoverrides.lane_counts(feats).items():
-        counts[i] = lanes
     return counts
 
 
