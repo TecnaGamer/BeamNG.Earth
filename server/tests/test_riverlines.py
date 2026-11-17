@@ -99,6 +99,42 @@ class PlanTest(unittest.TestCase):
         inside = [n for n in trib if abs(n[1] - big_y) < 40.0]
         self.assertLessEqual(len(inside), 1, "the stream stops at the river (one node into it)")
 
+    def test_chains_kept_between_plans_give_the_pieces_planned_afresh(self):
+        # plan's memo: a chain's nodes are measured once and give, wherever the player is and whatever roads are at
+        # hand, the pieces a plan measuring every chain gives; a chain measured while water was not at hand is not kept
+        f = geodesy.EnuFrame(LAT, LON)
+        lines = Lines([("big", "river", "river", [(LON - 0.03, LAT + 0.003), (LON + 0.03, LAT + 0.003)]),
+                       ("trib", "stream", "stream", [(LON, LAT - 0.004), (LON, LAT + 0.003)]),
+                       ("far", "stream", "stream", [(LON + 0.05, LAT - 0.004), (LON + 0.05, LAT + 0.003)])])
+        outline = lambda la, lo: np.abs((np.asarray(la) - (LAT + 0.003)) * 111320.0) < 40.0   # noqa: E731
+        wet = lambda la, lo: np.zeros(np.shape(la))                                           # noqa: E731
+        probes = []
+
+        def dem(la, lo):
+            probes.append(np.size(la))
+            return 20.0 - np.asarray(lo) * 50.0
+        road = riverlines.RoadClearance([(-900.0, 345.0, 900.0, 345.0, 4.0)])
+        memo, n = {}, [0]
+        for k, (x, y, rc) in enumerate([(0.0, 0.0, None), (500.0, 100.0, None), (500.0, 100.0, road),
+                                        (3000.0, 0.0, road), (0.0, 0.0, None)]):
+            plain = riverlines.plan(f, x, y, lambda key: lines, wet, dem, outline, road_clear=rc)
+            before = sum(probes)
+            got = riverlines.plan(f, x, y, lambda key: lines, wet, dem, outline, road_clear=rc, memo=memo,
+                                  settled=lambda: n[0])
+            self.assertEqual(got, plain, (x, y))
+            self.assertTrue(plain)
+            if k in (1, 2):         # (the chains measured before: no probe again, the road's clearance all the same)
+                self.assertEqual(sum(probes), before)
+        self.assertNotEqual(riverlines.plan(f, 500.0, 100.0, lambda key: lines, wet, dem, outline, road_clear=road),
+                            riverlines.plan(f, 500.0, 100.0, lambda key: lines, wet, dem, outline))
+
+        def unsettled(la, lo):      # (water not at hand yet: asked for, the count moves on)
+            n[0] += 1
+            return np.zeros(np.shape(la))
+        memo = {}
+        riverlines.plan(f, 0.0, 0.0, lambda key: lines, unsettled, dem, outline, memo=memo, settled=lambda: n[0])
+        self.assertEqual(memo, {})
+
     def test_tributary_wide_at_its_mouth_never_outranks_the_river(self):
         """GitHub #323: a 30 m river whose last nodes measured 780 m (probed along the river it joins) left that
         river's nodes out under itself; ranked by the median width, the main river keeps its water there."""

@@ -273,7 +273,7 @@ def _plane(u, v, z):
     return float(sol[0]), float(sol[1]), float(sol[2])
 
 
-def plan_lakes(frame, x, y, lake_at, ground_at, radius=None):
+def plan_lakes(frame, x, y, lake_at, ground_at, radius=None, memo=None):
     """Water tiles for the lakes and rivers around (x, y): lake_at(lat, lon) -> the inland water's level at
     the points (NaN away from it, seacarve.SeaCarver.lake_at), ground_at(lat, lon) -> the DEM there. A square of the
     LAKE_TILE_MAX lattice holding lake water becomes one tile at that level when every other point in it
@@ -281,7 +281,12 @@ def plan_lakes(frame, x, y, lake_at, ground_at, radius=None):
     of that plane (a least-squares fit: a river falls across a tile, which is tilted to match), else it
     is split, down to LAKE_TILE_MIN (kept there when at least half of
     it is water; at the median level). So a reservoir's tile never floods the valley below its dam. Tilted to
-    the local vertical like the sea's tiles."""
+    the local vertical like the sea's tiles.
+    memo: a dict the caller keeps for this frame, {lattice square: its tiles}: a square's tiles are the same wherever
+    the player is, so only the squares new in reach are worked out (every plan worked all ~50 of them out again,
+    0.37 s of CPU each 512 m of a motorway drive, the busiest part of the main process's water plan, 2026-11-17).
+    lake_at may then answer (levels, known): a square is kept only once all its points were known (the water of a
+    cell not at hand yet reads as land)."""
     r = LAKE_RADIUS_M if radius is None else radius
     x = (math.floor(x / PLAN_SQUARE) + 0.5) * PLAN_SQUARE
     y = (math.floor(y / PLAN_SQUARE) + 0.5) * PLAN_SQUARE
@@ -293,7 +298,6 @@ def plan_lakes(frame, x, y, lake_at, ground_at, radius=None):
     if not roots:
         return []
     f = (np.arange(LAKE_SAMPLES) + 0.5) / LAKE_SAMPLES
-    out = []
 
     def samples(sq, s):
         c = np.asarray(sq, np.float64)
@@ -302,22 +306,32 @@ def plan_lakes(frame, x, y, lake_at, ground_at, radius=None):
         lat, lon, _ = frame.enu_to_geodetic(E.ravel(), N.ravel(), 0.0)
         return lat, lon
 
-    todo, s = roots, s0
+    # a root square's tiles by size, each size's in the order they were found: [(size, [(x0, y0, s, a, bx, by)])]
+    found = {} if memo is None else {k: memo[k] for k in roots if k in memo}
+    fresh = {k: [] for k in roots if k not in found}
+    whole = dict.fromkeys(fresh, True)
+    todo, of, s = list(fresh), list(fresh), s0          # (of: each square's root)
     while todo and s >= LAKE_TILE_FLOOR:
         lat, lon = samples(todo, s)
-        lv = np.asarray(lake_at(lat, lon), np.float64).reshape(len(todo), -1)
+        lv = lake_at(lat, lon)
+        if isinstance(lv, tuple):
+            lv, known = lv
+            for k, ok in zip(of, np.asarray(known, bool).reshape(len(todo), -1).all(axis=1)):
+                if not ok:
+                    whole[k] = False
+        lv = np.asarray(lv, np.float64).reshape(len(todo), -1)
         has = np.isfinite(lv).any(axis=1)
-        todo = [sq for sq, h in zip(todo, has) if h]
+        todo, of = [sq for sq, h in zip(todo, has) if h], [k for k, h in zip(of, has) if h]
         lv = lv[has]
         if not todo:
             break
         lat, lon = samples(todo, s)
         g = np.asarray(ground_at(lat, lon), np.float64).reshape(len(todo), -1)
-        nxt = []
+        nxt, nxt_of = [], []
         u = (f - 0.5) * s                               # sample offsets from the tile's centre
         U = np.tile(u, LAKE_SAMPLES)                    # [j, i] raveled: i fastest
         V = np.repeat(u, LAKE_SAMPLES)
-        for (x0, y0), l, gr in zip(todo, lv, g):
+        for (x0, y0), k, l, gr in zip(todo, of, lv, g):
             wet = np.isfinite(l)
             # the water as a plane over the tile (a river falls across it): level at the centre, slope
             a, bx, by = _plane(U[wet], V[wet], l[wet])
@@ -332,11 +346,27 @@ def plan_lakes(frame, x, y, lake_at, ground_at, radius=None):
             if ((fit and clear and wet.mean() >= 0.5) or
                 (s <= LAKE_TILE_MIN and wet.mean() >= 0.5 and fit
                  and (flooded <= LAKE_FLOOD_SHARE or s <= LAKE_TILE_FLOOR))):
-                out.append((x0, y0, s, a, bx, by))
+                if not fresh[k] or fresh[k][-1][0] != s:
+                    fresh[k].append((s, []))
+                fresh[k][-1][1].append((x0, y0, s, a, bx, by))
             elif s > LAKE_TILE_FLOOR:
                 h = s / 2
                 nxt += [(x0 + a * h, y0 + b * h) for a in (0, 1) for b in (0, 1)]
-        todo, s = nxt, s / 2
+                nxt_of += [k] * 4
+        todo, of, s = nxt, nxt_of, s / 2
+    found.update(fresh)
+    if memo is not None:                # (the squares in reach now; a new one only with all its water known)
+        keep = {k: v for k, v in found.items() if whole.get(k, True)}
+        memo.clear()
+        memo.update(keep)
+    # (the tiles in the order one pass over all the squares finds them: size by size, the squares in their order)
+    out, s = [], s0
+    while s >= LAKE_TILE_FLOOR:
+        for k in roots:
+            for size, tiles_ in found[k]:
+                if size == s:
+                    out += tiles_
+        s = s / 2
     out.sort(key=lambda t: _dist(x, y, t[0], t[1], t[2]))
     tiles = []
     for x0, y0, s, level, bx, by in out[:LAKE_MAX_TILES]:

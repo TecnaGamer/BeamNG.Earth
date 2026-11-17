@@ -249,13 +249,20 @@ def _running_median(v, n):
     return np.median(np.stack([p[i:i + len(v)] for i in range(n)]), axis=0)
 
 
-def plan(frame, x, y, cell_water, water_at, dem_at, outline_at=None, radius=None, level_at=None, road_clear=None):
+def plan(frame, x, y, cell_water, water_at, dem_at, outline_at=None, radius=None, level_at=None, road_clear=None,
+         memo=None, settled=None):
     """The River pieces around (x, y) in `frame`. cell_water(key) -> the water Features of a map-data cell
     or None (not at hand); water_at(lat, lon) -> depth > 0 where seacarve's tiles already are water;
     dem_at(lat, lon) -> the DEM; outline_at(lat, lon) -> True inside a river outline (None: widths by
     class); level_at(lat, lon) -> the carved river level there (seacarve: the same the bed is cut to;
     NaN where none: the DEM rule); road_clear(points) -> the distance to the nearest road edge (RoadClearance;
-    None: widths as measured)."""
+    None: widths as measured).
+    memo: a dict the caller keeps for this frame, {a chain's ways and points: its nodes as measured}: a chain's
+    nodes are the same wherever the player is, so only the chains new or changed are measured (every plan measured
+    all ~35 chains within reach again from end to end, banks probed up to 1 km either side: 0.25-0.35 s of CPU each
+    512 m of a motorway drive, 2026-11-17). settled() -> a count that changes when a lookup met water not at hand
+    yet: a chain measured meanwhile is not kept. The roads' clearance is taken anew each time (road_clear changes
+    with the cells at hand)."""
     r = RADIUS_M if radius is None else radius
     la0, lo0, _ = frame.enu_to_geodetic(x - r, y - r, 0.0)
     la1, lo1, _ = frame.enu_to_geodetic(x + r, y + r, 0.0)
@@ -281,14 +288,31 @@ def plan(frame, x, y, cell_water, water_at, dem_at, outline_at=None, radius=None
                 for ring in part:
                     if len(ring) >= 2:
                         ways.append((gid, kind, np.asarray(ring, np.float64)))
-    rivers = []
+    rivers, kept = [], {}
     for ids, kind, ll in chains(ways):
-        e, n, _ = frame.geodetic_to_enu(ll[:, 1], ll[:, 0], np.zeros(len(ll)))
-        xy = np.stack([np.asarray(e), np.asarray(n)], -1)
+        k = (ids, kind, hashlib.sha1(np.ascontiguousarray(ll).tobytes()).digest()) if memo is not None else None
+        got = memo.get(k) if memo is not None else None
+        if got is not None:
+            xy, rv = got
+        else:
+            e, n, _ = frame.geodetic_to_enu(ll[:, 1], ll[:, 0], np.zeros(len(ll)))
+            xy, rv = np.stack([np.asarray(e), np.asarray(n)], -1), None
         if dnp.hypot(xy[:, 0] - x, xy[:, 1] - y).min() > r + PIECE_M:
+            if got is not None:
+                kept[k] = got
             continue
-        pts, _ = _resample(xy, SPACING_M[kind])
-        rivers.append(_nodes(frame, ids, kind, pts, water_at, dem_at, outline_at, level_at, road_clear))
+        if rv is None:
+            before = settled() if settled is not None else None
+            pts, _ = _resample(xy, SPACING_M[kind])
+            rv = _nodes(frame, ids, kind, pts, water_at, dem_at, outline_at, level_at)
+            if memo is not None and settled is not None and settled() == before:
+                got = (xy, rv)
+        if got is not None:
+            kept[k] = got
+        rivers.append(_clear_of_roads(rv, road_clear))
+    if memo is not None:                # (the chains met now: the others are out of reach, or changed)
+        memo.clear()
+        memo.update(kept)
     _confluences(rivers)
     out = []
     for rv in rivers:
@@ -346,11 +370,19 @@ def _nodes(frame, ids, kind, pts, water_at, dem_at, outline_at, level_at=None, r
     # the surface in the anchor frame (the curve included)
     _, _, z = frame.geodetic_to_enu(la, lo, level)
     width = width * WIDTH_PAD + WIDTH_PAD_M         # over the carved bed's edges (holes, 2026-10-13)
-    if road_clear is not None:                      # never over the road beside the river
-        clear = np.asarray(road_clear(centre), np.float64)
-        width = np.minimum(width, 2.0 * np.maximum(clear - ROAD_MARGIN_M, RIVER_MIN_HALF_M))
-    return {"ids": ids, "kind": kind, "pts": pts, "centre": centre, "z": np.asarray(z, np.float64),
-            "width": width, "depth": depth, "wet": wet, "into": np.zeros(len(pts), bool)}
+    rv = {"ids": ids, "kind": kind, "pts": pts, "centre": centre, "z": np.asarray(z, np.float64),
+          "width": width, "depth": depth, "wet": wet, "into": np.zeros(len(pts), bool)}
+    return _clear_of_roads(rv, road_clear) if road_clear is not None else rv
+
+
+def _clear_of_roads(rv, road_clear):
+    """A chain's nodes (_nodes without road_clear) never over the road beside the river: a new dict, rv as it was
+    (plan keeps it)."""
+    rv = dict(rv, into=np.zeros(len(rv["pts"]), bool))
+    if road_clear is not None:
+        clear = np.asarray(road_clear(rv["centre"]), np.float64)
+        rv["width"] = np.minimum(rv["width"], 2.0 * np.maximum(clear - ROAD_MARGIN_M, RIVER_MIN_HALF_M))
+    return rv
 
 
 def _pieces(rv, x, y, r):

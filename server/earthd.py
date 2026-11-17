@@ -11445,6 +11445,12 @@ class Connection:
         missing = [False]               # a cell's map data not at hand for this plan
         frame = self.s.anchors[aid].frame
         sea, dem = self.s.sea, self.s.dem
+        # what the last plans worked out for this anchor and the next ones need again (seatiles.plan_lakes' squares,
+        # riverlines.plan's chains): only the plan thread touches it, one plan at a time (sea_busy)
+        memo = getattr(self, "_sea_kept", None)
+        if memo is None or memo[0] != aid:
+            memo = self._sea_kept = (aid, {"lakes": {}, "rivers": {}})
+        kept = memo[1]
 
         async def run():
             try:
@@ -11558,14 +11564,16 @@ class Connection:
                     tiles = (seatilesmod.plan(frame, x, y, lambda la, lo, size: sea.sea_at(dem, la, lo, size, False),
                                               ground_at=sea_ground,
                                               low_roads_xy=low_roads if seatilesmod.LOW_ROADS_ON else None)
-                             + seatilesmod.plan_lakes(frame, x, y, lambda la, lo: sea.lake_at(la, lo, False),
-                                                      lake_ground))
+                             + seatilesmod.plan_lakes(frame, x, y,
+                                                      lambda la, lo: sea.lake_at(la, lo, False, known=True),
+                                                      lake_ground, memo=kept["lakes"]))
                     def carved(la, lo):     # the river beds' level (seacarve), NaN elsewhere
                         lv = sea.water(la, lo, wait=False)[1]
                         return np.where(sea.outline_at(la, lo), lv, np.nan)
                     rivers = riverlinesmod.plan(frame, x, y, cell_water, tiled,
                                                 lambda la, lo: dem.sample(la, lo, riverlinesmod.DEM_ZOOM),
-                                                sea.outline_at, level_at=carved, road_clear=road_clear())
+                                                sea.outline_at, level_at=carved, road_clear=road_clear(),
+                                                memo=kept["rivers"], settled=lambda: sea.warm_asked)
                     shores = seacarvemod.shore_plan(frame, x, y, sea)     # (the mod's shore sound)
                     return tiles, rivers, shores, not missing[0] and sea.warm_asked == asked
                 tiles, rivers, shores, complete = await self.loop.run_in_executor(self.s.sea_pool, plan)

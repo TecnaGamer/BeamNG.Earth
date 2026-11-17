@@ -1239,12 +1239,15 @@ class SeaCarver:
         z = np.asarray(z, np.float64)
         return np.where(cut, np.minimum(z, np.where(cut, lv, 0.0) - d), z)
 
-    def lake_at(self, lat, lon, wait=True):
+    def lake_at(self, lat, lon, wait=True, known=False):
         """The level of the lakes (still water above sea level) at the points: NaN on land, at sea, away
         from water and in rivers (they slope: River objects, riverlines.py, not flat tiles; their beds are
-        carved here all the same); wait=False: also in cells not at hand yet, built in the background."""
-        d, lv = self.water(lat, lon, wait=wait)[:2]
-        return np.where((d > 0) & (np.abs(lv - SEA_E) >= 0.01) & ~self.outline_at(lat, lon), lv, np.nan)
+        carved here all the same); wait=False: also in cells not at hand yet, built in the background. known (with
+        wait=False): (the levels, which points' cells were at hand)."""
+        got = self.water(lat, lon, wait=wait)
+        d, lv = got[:2]
+        out = np.where((d > 0) & (np.abs(lv - SEA_E) >= 0.01) & ~self.outline_at(lat, lon), lv, np.nan)
+        return (out, got[2] if len(got) > 2 else np.ones(out.shape, bool)) if known else out
 
     def outline_at(self, lat, lon):
         """Inside a river outline above sea level (any, flattened or not) at the points; False in cells not
