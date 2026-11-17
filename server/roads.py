@@ -3548,23 +3548,19 @@ def default_width(cls, kind, urban, oneway=False, region="other"):
 
 def _width_regions(feats):
     """Per feature its WIDTH_REGIONS index (int64): "US" in one of the 50 states / DC (signstates, at its middle
-    point: _marking_states), "JP" in Japan's box, else "other"."""
+    point: _marking_states), "JP" in Japan's box, else "other" (earthfast roadnet::regions::width_regions)."""
     n = len(feats)
-    out = np.zeros(n, np.int64)
     if not n:
-        return out
-    states = _marking_states(feats)
-    out[np.asarray(states) != ''] = WIDTH_REGIONS.index("US")
-    starts = feats.coord_off[feats.ring_off[feats.part_off[:-1]]]
-    ends = feats.coord_off[feats.ring_off[feats.part_off[1:]]]
-    ok = ends > starts
-    mids = ((starts + np.maximum(ends - 1, starts)) // 2).astype(int)
-    if len(feats.lonlat):
-        ll = feats.lonlat[np.clip(mids, 0, len(feats.lonlat) - 1)]
-        la0, lo0, la1, lo1 = JAPAN_BOX
-        jp = ok & (ll[:, 1] >= la0) & (ll[:, 1] <= la1) & (ll[:, 0] >= lo0) & (ll[:, 0] <= lo1)
-        out[jp] = WIDTH_REGIONS.index("JP")
-    return out
+        return np.zeros(n, np.int64)
+    import fast
+    fast.require(387, "width_regions")
+    return fast._ef.width_regions(np.ascontiguousarray(np.asarray(_marking_states(feats)) != ''),
+                                  np.ascontiguousarray(feats.part_off, np.int64),
+                                  np.ascontiguousarray(feats.ring_off, np.int64),
+                                  np.ascontiguousarray(feats.coord_off, np.int64),
+                                  np.ascontiguousarray(feats.lonlat, np.float64).reshape(-1, 2),
+                                  tuple(float(v) for v in JAPAN_BOX), WIDTH_REGIONS.index("US"),
+                                  WIDTH_REGIONS.index("JP"))
 
 
 _ROAD_RULES = None
