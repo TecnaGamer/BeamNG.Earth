@@ -222,6 +222,9 @@ def valhalla_url(lat0, lon0, lat1, lon1, heading=None):
     return VALHALLA_URL + urllib.parse.quote(json.dumps(q, separators=(",", ":")))
 
 
+VALHALLA_MAX_LOCATIONS = 10     # the public server's ("Exceeded max locations: 10", error 150; 2026-11-17)
+
+
 def valhalla_bus_url(points, heading=None):
     """Valhalla's bus route through points [(lat, lon)] in order (a bus line's stops: costing "bus" drives the
     bus-only streets a car may not, Frölundagatan in Göteborg 421 m where a car goes round by 1.3 to 3 km, measured
@@ -438,6 +441,8 @@ def plan(lat0, lon0, lat1, lon1, net=None, bearing=None, via=(), avoid_highways=
 def _valhalla_bus(points, net, bearing):
     """Valhalla's bus route through points ({..., "profile": "bus"}), with the heading and then without; None when it
     has none or cannot be reached (the normal route then)."""
+    if len(points) > VALHALLA_MAX_LOCATIONS:
+        return None             # (more than the public server takes: busline.lua's ROUTE_AHEAD keeps within it)
     for b in [bearing, None] if bearing is not None else [None]:
         try:
             body = net.get(valhalla_bus_url(points, b), kind="demand").body

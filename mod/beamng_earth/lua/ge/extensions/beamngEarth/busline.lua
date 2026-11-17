@@ -16,7 +16,8 @@ M.STANDING_MS = 0.5         -- m/s: standing still
 M.DWELL_S = 3               -- s standing (doors open, on a bus) for a stop to count
 M.TICK_S = 0.25             -- s between two checks while a line is driven
 M.SKIP_AHEAD = 3            -- at one of this many later stops: the ones before it were missed
-M.ROUTE_AHEAD = 10          -- stops the GPS routes through (gps.setRoute takes 11 points)
+M.ROUTE_AHEAD = 8           -- stops after the next the GPS routes through: 9 and the bus's place, Valhalla's
+                            -- most (routing.VALHALLA_MAX_LOCATIONS: "Exceeded max locations: 10", 2026-11-17)
 M.TRIGGER = 'bne_bus_'      -- the stops' names on the bus's line (tasklist[i][1])
 
 -- Replaceable for the tests

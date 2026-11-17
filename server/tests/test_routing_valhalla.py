@@ -141,6 +141,13 @@ class BusRouteTest(unittest.TestCase):
         self.assertEqual(len(q["locations"]), 3)
         self.assertEqual(q["locations"][0]["heading"], 90)
 
+    def test_more_places_than_valhalla_takes_is_the_car_route(self):
+        net = FakeNet([OSRM])
+        via = [(42.36 + k * 1e-3, -71.06) for k in range(routing.VALHALLA_MAX_LOCATIONS - 1)]
+        r = routing.plan(42.36, -71.06, 42.37, -71.05, net, None, via=via, profile="bus")
+        self.assertNotIn("profile", r)
+        self.assertEqual(len(net.urls), 1, "straight to OSRM: Valhalla would answer error 150")
+
     def test_without_valhalla_the_car_route(self):
         net = FakeNet([netfetch.FetchError("down"), OSRM])
         r = routing.plan(42.36, -71.06, 42.365, -71.05, net, 90, profile="bus")
