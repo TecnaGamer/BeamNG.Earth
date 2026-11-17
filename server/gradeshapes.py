@@ -205,12 +205,43 @@ def _is_seed(net, i):
     return False
 
 
+_PAIR_REL = {}
+_PAIR_REL_MAX = 200000
+
+
+def _line_id(net, i):
+    ids = getattr(net, "_line_ids", None)
+    if ids is None:
+        ids = net._line_ids = {}
+    got = ids.get(i)
+    if got is None:
+        a = np.ascontiguousarray(net.lines[i], np.float64)
+        got = ids[i] = (repr(net.m[i].key), len(a), hash(a.tobytes()))
+    return got
+
+
 def _relations(net, i):
-    """Member i's joints and crossings with the members near it: [(j, "join"|"cross", s on i, s on j, q)]."""
+    """Member i's joints and crossings with the members near it: [(j, "join"|"cross", s on i, s on j, q)]. Each
+    pair's from a cache by the two members' keys and lines (a region grown cell by cell meets the same pairs again)."""
     out = []
     for j in net.near(i, JOIN_M + 0.5):
         if len(net.lines[j]) < 2:
             continue
+        key = (_line_id(net, i), _line_id(net, j))
+        got = _PAIR_REL.get(key)
+        if got is None:
+            got = _pair_relations(net, i, j)
+            if len(_PAIR_REL) >= _PAIR_REL_MAX:
+                _PAIR_REL.clear()
+            _PAIR_REL[key] = got
+        out.extend((j,) + r_ for r_ in got)
+    return out
+
+
+def _pair_relations(net, i, j):
+    """Member i's joints and crossings with member j: [("join"|"cross", s on i, s on j, q)]."""
+    out = []
+    if True:
         for e_line, e_s, o_line, o_s, swap in ((net.lines[i], net.s[i], net.lines[j], net.s[j], False),
                                                 (net.lines[j], net.s[j], net.lines[i], net.s[i], True)):
             for se in (0.0, float(e_s[-1])):
@@ -233,7 +264,7 @@ def _relations(net, i):
             if any(r_[0] == j and r_[1] == "cross" and abs(r_[2] - si) < 1.0 for r_ in out):
                 continue                        # (on a vertex: found on both its segments)
             out.append((j, "cross", si, sj, q))
-    return out
+    return [r_[1:] for r_ in out]
 
 
 def _over(mi, mj):
@@ -336,6 +367,11 @@ def _system(net, seeds, rel):
                     if str(mi.key) < str(mj.key):
                         joins.append((i, si, j, sj))
                 elif mj.kind == "ground":         # a road on the ground leading to the system: where a ramp starts
+                    if min(sj, net.L[j] - sj) > JOIN_M and any(
+                            k2 == "join" and j2 != i and members[j2].kind in ("deck", "rail_deck") and abs(s2 - si) < 1.0
+                            for j2, k2, s2, _t, _q in rel[i]):
+                        continue    # (the bridge goes on past this end, over the road's middle: no end onto it, so no
+                        # fill run along the road under it from the deck's height: Vienna's Guertel under its square)
                     ends.append((i, si, j, sj))
                 continue
             o = _over(mi, mj)
@@ -525,10 +561,17 @@ def sample(net, pcs):
     return out
 
 
-def _locate(smp, p, i, s_):
-    """The two samples of piece p on member i bracketing arc length s_ there, with the weight of the second, or
-    None."""
-    x = smp[p]
+def _loc_sorted(x, i):
+    """Piece x's samples on member i (with its joints'), ordered by arc length: (k, ms), or None. Made once a piece."""
+    idx = x.get("_loc")
+    if idx is None:
+        idx = x["_loc"] = {}
+    if i not in idx:
+        idx[i] = _loc_sorted_calc(x, i)
+    return idx[i]
+
+
+def _loc_sorted_calc(x, i):
     k = np.flatnonzero(x["mem"] == i)
     ms = x["ms"][k]
     extra = [(kk, s0) for kk, j, s0 in x.get("joints", ()) if j == i]
@@ -540,12 +583,21 @@ def _locate(smp, p, i, s_):
     if len(k) < 2:
         return None
     lo_, hi_ = float(min(ms[0], ms[-1])), float(max(ms[0], ms[-1]))
-    if not (lo_ - 1e-6 <= s_ <= hi_ + 1e-6):
-        return None
     if ms[-1] < ms[0]:
         k, ms = k[::-1], ms[::-1]
     o = np.argsort(ms, kind="stable")
-    k, ms = k[o], ms[o]
+    return k[o], ms[o], lo_, hi_
+
+
+def _locate(smp, p, i, s_):
+    """The two samples of piece p on member i bracketing arc length s_ there, with the weight of the second, or
+    None."""
+    got = _loc_sorted(smp[p], i)
+    if got is None:
+        return None
+    k, ms, lo_, hi_ = got
+    if not (lo_ - 1e-6 <= s_ <= hi_ + 1e-6):
+        return None
     r = int(np.clip(np.searchsorted(ms, s_) - 1, 0, len(ms) - 2))
     t = float(np.clip((s_ - ms[r]) / max(ms[r + 1] - ms[r], 1e-9), 0.0, 1.0))
     return int(k[r]), int(k[r + 1]), t

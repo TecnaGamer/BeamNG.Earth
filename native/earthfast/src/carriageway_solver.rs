@@ -345,6 +345,8 @@ pub fn solve(
         tol_gap_abs: 1e-8,
         tol_gap_rel: 1e-9,
         direct_solve_method: "qdldl".into(),
+        // (no refinement rounds after each step: half the time on a city's laws, the same answer to 2 cm)
+        iterative_refinement_enable: false,
         ..Default::default()
     };
     let cones = [ZeroConeT(neq), NonnegativeConeT(nineq)];

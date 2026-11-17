@@ -47,6 +47,21 @@ class FlankTest(unittest.TestCase):
         g = self.ground([self.raised, cross] + [q for _f, q in fl], np.array([60.0, 60.0]), np.array([20.0, 30.0]))
         self.assertLess(float(np.abs(g - 100.0).max()), 0.5, "the street crossing the flank stays at its level")
 
+    def test_never_under_the_natural_ground(self):
+        z = np.where(self.x < 0, 124.0, 110.0)         # (a 24 m fill, then a 10 m one: the narrower flank's vertices)
+        step = road(np.c_[self.x, 0 * self.x], z)
+        fl = grading.embankment_flanks([("r", step)], [SimpleNamespace(cls="primary")], [self.base])
+        gx, gy = np.meshgrid(np.arange(-60.0, 61.0, 2.0), np.arange(-70.0, 71.0, 2.0))
+        g = self.ground([step] + [q for _f, q in fl], gx.ravel(), gy.ravel())
+        self.assertGreater(float(g.min()), 99.5, "a flank never digs under the natural ground")
+
+    def test_stops_at_another_roads_core(self):
+        beside = road(np.c_[self.x, 0 * self.x + 30.0], 100.0 + 0 * self.x, half=6.0, rank=-1)   # (a motorway beside)
+        fl = grading.embankment_flanks([("r", self.raised), ("m", beside)], [SimpleNamespace(cls="primary")] * 2,
+                                       [self.base, self.base])
+        g = self.ground([self.raised, beside] + [q for _f, q in fl], np.array([0.0, 50.0]), np.array([30.0, 30.0]))
+        self.assertLess(float(np.abs(g - 100.0).max()), 0.5, "the road beside keeps its own ground")
+
     def test_no_flank_for_a_small_fill(self):
         low = road(np.c_[self.x, 0 * self.x], 104.0 + 0 * self.x)
         self.assertEqual(grading.embankment_flanks([("r", low)], [SimpleNamespace(cls="primary")], [self.base]), [])

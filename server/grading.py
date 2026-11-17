@@ -26,6 +26,7 @@ GradedDem(dem, grader) is a drop-in for dem.Dem where only sample() is graded; u
 and the levels <= 0 tiles only (coarser tiles sink under the block and cover far more ground).
 """
 from runtimeprofiler import step as profile_step
+import hashlib
 import logging
 import math
 import os
@@ -2111,12 +2112,47 @@ LEG_RID_SHIFT = 44           # PlanPack: a pass road's leg (between hairpins) as
 HAIRPIN_FOLD_RATIO = 0.5      # hairpin_cores: a point of the road's own line this much nearer than along it is another leg
 
 
+def _core_hits(pts, segs, own):
+    """bool (m,): which of pts (m, 2) lie in the core of a plan other than own; segs: (plan, a, b, half, lo, hi) of
+    every plan's segments, as arrays."""
+    SN, SA, SB, SH, SLO, SHI = segs
+    hit = np.zeros(len(pts), bool)
+    if not len(SN) or not len(pts):
+        return hit
+    lo, hi = pts.min(0), pts.max(0)
+    sel = np.flatnonzero((SN != own) & (SHI[:, 0] >= lo[0]) & (SHI[:, 1] >= lo[1]) & (SLO[:, 0] <= hi[0]) &
+                         (SLO[:, 1] <= hi[1]))
+    if not len(sel):
+        return hit
+    a, ab, h = SA[sel], SB[sel] - SA[sel], SH[sel]
+    den = np.maximum((ab * ab).sum(1), 1e-12)
+    for c0 in range(0, len(pts), 256):
+        q = pts[c0:c0 + 256]
+        t = np.clip(((q[:, None] - a[None]) * ab[None]).sum(2) / den[None], 0.0, 1.0)
+        d = np.hypot(*(a[None] + ab[None] * t[..., None] - q[:, None]).transpose(2, 0, 1))
+        hit[c0:c0 + 256] = (d < h[None]).any(1)
+    return hit
+
+
 def embankment_flanks(plans, specs, bases):
     """[(fid, Plan)]: the flanks of the raised roads among plans ([(fid, Plan)], specs and bases (their natural
     profiles) alike): where a road stands more than (T_MAX + FLANK_MIN_M) / SLOPE_RUN over its natural profile, a plan
-    each side whose core is the embankment's slope from the road's core edge down at 1 / SLOPE_RUN, as wide as it
-    must be past T_MAX (the plan's own transition takes the rest down to the ground), rank 0. Pure."""
+    each side whose core is the embankment's slope from the road's core edge down at 1 / SLOPE_RUN, rank 0. Its width
+    at a vertex is the slope's whole run down to the natural ground there, rounded down to FLANK_STEP_M (the plan's
+    own transition takes the rest): never under the ground. A piece reaches a vertex into its neighbours only where
+    they are as wide (a 112 m flank reached over a vertex 22 m lower and dug 22 m under the motorway beside it), and a
+    flank stops where its band covers another road's core (it painted over a motorway beside the fill). Pure."""
     out = []
+    parts = []
+    for n, (_fid, p) in enumerate(plans):
+        xy = np.asarray(p.xy, np.float64)[:, :2]
+        if len(xy) >= 2:
+            parts.append((np.full(len(xy) - 1, n), xy[:-1], xy[1:], np.full(len(xy) - 1, float(p.half))))
+    if parts:
+        SN, SA, SB, SH = (np.concatenate([q[k] for q in parts]) for k in range(4))
+        segs = (SN, SA, SB, SH, np.minimum(SA, SB) - SH[:, None], np.maximum(SA, SB) + SH[:, None])
+    else:
+        segs = (np.zeros(0, int),) + (np.zeros((0, 2)),) * 2 + (np.zeros(0),) + (np.zeros((0, 2)),) * 2
     for n, ((fid, p), sp) in enumerate(zip(plans, specs)):
         if sp is None or TUNNEL_TAG in str(fid) or n >= len(bases):
             continue
@@ -2125,10 +2161,11 @@ def embankment_flanks(plans, specs, bases):
         b = np.asarray(bases[n], np.float64)
         if len(xy) < 2 or len(b) != len(z):
             continue
-        need = SLOPE_RUN * (z - b) - T_MAX          # (m of slope past the plan's own transition)
+        total = SLOPE_RUN * (z - b)                 # (m of slope from the core's edge down to the natural ground)
+        need = total - T_MAX                        # (past the plan's own transition)
         if float(need.max()) < FLANK_MIN_M:
             continue
-        width = np.where(need >= FLANK_MIN_M, np.ceil(need / FLANK_STEP_M) * FLANK_STEP_M, 0.0)
+        width0 = np.where(need >= FLANK_MIN_M, np.floor(total / FLANK_STEP_M) * FLANK_STEP_M, 0.0)
         seg = np.diff(xy, axis=0)
         nrm = np.stack([-seg[:, 1], seg[:, 0]], axis=1)
         nrm /= np.maximum(np.hypot(nrm[:, 0], nrm[:, 1]), 1e-9)[:, None]
@@ -2136,18 +2173,24 @@ def embankment_flanks(plans, specs, bases):
         vn[:-1] += nrm
         vn[1:] += nrm
         vn /= np.maximum(np.hypot(vn[:, 0], vn[:, 1]), 1e-9)[:, None]       # (each vertex's normal, to its left)
-        k = 0
-        while k < len(xy):
-            if width[k] <= 0:
-                k += 1
-                continue
-            j = k
-            while j + 1 < len(xy) and width[j + 1] == width[k]:
-                j += 1
-            a, e = max(0, k - 1), min(len(xy) - 1, j + 1)     # (a vertex more each side: the pieces overlap)
-            if e - a >= 1:
+        for side in (1.0, -1.0):        # (left: the slope falls to its left; right: rises to its left)
+            width = width0.copy()
+            on = np.flatnonzero(width > 0)
+            for f in (0.25, 0.5, 0.75, 1.0):        # (across the band: another road's core in it, no flank there)
+                pts = xy[on] + side * (p.half + f * width[on])[:, None] * vn[on]
+                width[on[_core_hits(pts, segs, n)]] = 0.0
+            k = 0
+            while k < len(xy):
+                if width[k] <= 0:
+                    k += 1
+                    continue
+                j = k
+                while j + 1 < len(xy) and width[j + 1] == width[k]:
+                    j += 1
                 w = float(width[k])
-                for side in (1.0, -1.0):        # (left: the slope falls to its left; right: rises to its left)
+                a = k - 1 if k > 0 and width[k - 1] >= w else k        # (a vertex more each side where it is as wide)
+                e = j + 1 if j + 1 < len(xy) and width[j + 1] >= w else j
+                if e - a >= 1:
                     c = p.half + w / 2.0
                     q = Plan(xy[a:e + 1] + side * c * vn[a:e + 1], z[a:e + 1] - (w / 2.0) / SLOPE_RUN, w / 2.0,
                              road_half=w / 2.0)
@@ -2155,7 +2198,7 @@ def embankment_flanks(plans, specs, bases):
                     q.rid = road_id(str(fid) + FLANK_TAG + ("L" if side > 0 else "R") + str(k))
                     q.rank = 0
                     out.append((str(fid) + FLANK_TAG, q))
-            k = j + 1
+                k = j + 1
     return out
 
 
@@ -2303,6 +2346,11 @@ _COMPUTED = (
 )
 
 
+# BNE_STRICT: no handler goes on with a fallback, the error goes up (an eval, a test: a fault in the grading seen, not a
+# cell planned without it)
+STRICT = os.environ.get("BNE_STRICT", "") not in ("", "0", "off")
+
+
 def _caught(e):
     """In a handler that goes on with a fallback ("... rather than no grading"): pools.Abandoned goes on up (a job of
     a place the player left is never planned on). Any other error makes what is built on the fallback short
@@ -2311,7 +2359,7 @@ def _caught(e):
     complete would stay after the source was repaired. Only the few errors of _COMPUTED, in a making that read
     nothing short, leave it persistable; those are logged with the cell (WARNING), to be found and fixed: marked
     short, a place with one would never be kept, which costs speed and never a wrong world."""
-    if type(e).__name__ == "Abandoned":
+    if type(e).__name__ == "Abandoned" or STRICT:
         raise e
     import revisit
     st = getattr(_MAKING, "stack", None) or revisit._stack()
@@ -4446,6 +4494,17 @@ class _Planner:
             raw = smooth_profile(median_profile(raw, _gsh.STEP_M, 12.0), _gsh.STEP_M, 6.0)
         return raw
 
+    @staticmethod
+    def _shape_sys_key(net, sysm, smp):
+        """A system's solve's identity: its parts and its samples (the same samples: the same ground, laws and
+        answer, from whichever region found it)."""
+        h = hashlib.sha1(_gsh.system_key(net, sysm).encode())
+        for x in smp:
+            h.update(np.round(np.asarray(x["xy"], np.float64), 3).tobytes())
+            for i in np.unique(x["mem"]).tolist():
+                h.update(repr(net.m[i].key).encode() + repr((net.m[i].kind, getattr(net.m[i], "level", None))).encode())
+        return h.hexdigest()
+
     def _shape_region_calc(self, home, hk):
         t0 = time.perf_counter()
         lon0, lat0, lon1, lat1 = (float(v) for v in home.bounds())
@@ -4502,16 +4561,25 @@ class _Planner:
         for sysm in mine:
             pcs = _gsh.pieces(net, sysm)
             smp = _gsh.sample(net, pcs)
-            ground = [self._ground_line(x["xy"]) for x in smp]
+            ck = self._shape_sys_key(net, sysm, smp)
+            cache = self.__dict__.setdefault("_shape_solved", {})   # (this grading's: its ground, its frame)
+            hit = cache.get(ck)
             diag = {}
-            zs = _gsh.solve_shape(net, sysm, pcs, smp, ground, fixed_z, diag)
+            if hit is not None:
+                ground, zs, diag = hit
+            else:
+                ground = [self._ground_line(x["xy"]) for x in smp]
+                zs = _gsh.solve_shape(net, sysm, pcs, smp, ground, fixed_z, diag)
+                if len(cache) >= 4096:
+                    cache.clear()
+                cache[ck] = (ground, zs, diag)
             if zs is None:          # (no answer: the system as it is, and why in the log; no stand-in)
                 failed += 1
                 log.error("grading: SHAPES infeasible system in region %s: %d pieces, %d crossings, %d ends; %s; "
                           "members %s", home, len(pcs), len(sysm["crossings"]), len(sysm["ends"]),
                           diag.get("qp_error") or ", ".join("%s %s" % (k, diag[k]) for k in sorted(diag)
                                                             if k not in ("converged", "feasible")),
-                          ", ".join(sorted({str(net.m[i].key[0])[:8] + ":" + net.m[i].kind for i in sysm["members"]}))[:600])
+                          ", ".join(sorted({str(net.m[i].key[0])[:8] + ":" + net.m[i].kind for i in sysm["seeds"]}))[:600])
                 continue
             solved.append(sysm)
             shapes.append((pcs, smp, zs))
