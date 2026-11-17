@@ -834,6 +834,19 @@ do
   package.loaded[module] = original
 end
 
+-- A red light that never turns green (or a stale signals table) excuses the standstill only SIGNAL_WAIT_MAX_S:
+-- then the ordinary stall handling comes back though the heartbeats go on (Codex review of PRs #1280 / #1282).
+do
+  local f=fixture(nil,0,6)
+  f.speed=0
+  local limit=f.gps.SIGNAL_WAIT_MAX_S
+  for _=1,limit-5 do f.gps.onAiSignalWait(1,true);f:step(1)end
+  T.check(not f.gps.noProgressReplans and not f.gps.autoRecoveries,'a long red wait inside the limit is not a stall')
+  for _=1,f.gps.AUTO_NOPROGRESS_S+20 do f.gps.onAiSignalWait(1,true);f:step(1)end
+  T.check((f.gps.noProgressReplans or 0)>0 or (f.gps.autoRecoveries or 0)>0,
+    'a red light that never changes stops excusing the standstill past SIGNAL_WAIT_MAX_S')
+end
+
 -- A red-light wait can outlast stall recovery. Only a current signal heartbeat
 -- from this player exempts it; losing the heartbeat restores normal recovery.
 do

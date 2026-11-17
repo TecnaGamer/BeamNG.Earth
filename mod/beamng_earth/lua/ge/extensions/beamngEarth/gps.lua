@@ -53,6 +53,8 @@ M.TAIL_STEP_M = 25
 -- path, in its lane, minding traffic, at the legal speed. Compatible updates extend the vehicle's current plan;
 -- graph replacement and recovery need a fresh lane-aware start.
 M.AUTO_STALL_S = 6
+M.SIGNAL_WAIT_MAX_S = 180   -- s a red-light stop excuses a standstill at most: a light whose phase never changes (or a
+                            -- stale signals table) is then a stall like any other (Codex review of PRs #1280 / #1282)
 M.AUTO_NOPROGRESS_S = 30  -- the route's remaining distance not down by AUTO_PROGRESS_M in this long: the path given again
 M.AUTO_PROGRESS_M = 20    -- (a car circling at 4 mph to reach a waypoint it could not, never standing still: GitHub #180)
 M.AUTO_RECOVER_M = 150    -- no progress after the path was given again either: the car put on its own carriageway this far
@@ -96,6 +98,7 @@ local paused = false    -- the AI holds the car (world server away)
 local vehGraph = {}     -- vehicle id -> the game's map buildSerial when its mapmgr last took the graph
 local pathWait = nil    -- os.clock() since a path waits for the car to have the graph it was planned on
 local signalWaitAt = nil -- recent vehicle confirmation of a deliberate red-light stop
+local signalWaitSince = nil -- when the current red-light stop began (SIGNAL_WAIT_MAX_S)
 local targetS = nil     -- the route distance of the arrows' target
 local downloadProgress = nil   -- { total, done, active } | nil: the route's corridor prefetch (server routeahead.py)
 
@@ -739,7 +742,10 @@ end
 
 function M.onAiSignalWait(id, waiting)
   local veh=auto and playerVeh()
-  if veh and veh:getId()==id then signalWaitAt=waiting and os.clock() or nil end
+  if veh and veh:getId()==id then
+    signalWaitAt=waiting and os.clock() or nil
+    signalWaitSince=waiting and (signalWaitSince or os.clock()) or nil
+  end
 end
 
 local function holdAutodrive(veh)
@@ -1120,7 +1126,7 @@ function M.setAutodrive(on, brake)
   autoFinished = nil
   autoPath, autoRoadPath, autoSerial, stillSince, paused, pathWait = nil, nil, nil, nil, false, nil
   autoForce, autoBlocked = true, false
-  signalWaitAt=nil
+  signalWaitAt, signalWaitSince = nil, nil
   progRemaining, progAt, stuckTries = nil, nil, 0
   if on then
     routedTo = nil                       -- the arrows (and the AI's path) set again at the next check
@@ -1171,8 +1177,8 @@ local function autoKeep(nodes, now)
   end
   local v = veh.getVelocity and veh:getVelocity()
   local speed = v and math.sqrt(v.x * v.x + v.y * v.y) or 0
-  if speed >= 1 then surfaceGap=false end
-  if signalWaitAt and now-signalWaitAt<2 then
+  if speed >= 1 then surfaceGap, signalWaitSince = false, nil end
+  if signalWaitAt and now-signalWaitAt<2 and not (signalWaitSince and now-signalWaitSince>M.SIGNAL_WAIT_MAX_S) then
     -- A signal stop is progress through traffic controls, not a stall. Require
     -- a fresh vehicle heartbeat so unloading/cancelling a helper cannot mask a failure.
     stillSince,progRemaining,progAt,stuckTries=nil,nil,nil,0
@@ -1448,7 +1454,7 @@ end
 
 -- The level ended: the arrows went with it (the destination and its route stay for the next level start).
 function M.reset()
-  signalWaitAt=nil
+  signalWaitAt, signalWaitSince = nil, nil
   surfaceGap=false
   routedTo, info, lastCheck, enu, progress, progressS = nil, nil, -math.huge, nil, 1, nil
   lineKey = nil
