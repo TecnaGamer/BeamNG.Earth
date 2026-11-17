@@ -5127,6 +5127,14 @@ def curve_profile(s, g, req, z0, zL, g0=0.0, gL=0.0, max_grade=None, lift=None, 
     cap = np.minimum(np.minimum(z0 + max_grade * s, zL + max_grade * (L - s)),
                      np.inf if cap is None else cap)        # (and under a junction at grade's own cap)
     line = z0 + (zL - z0) * s / max(L, 1e-9)    # never under the straight line between the abutments
+    # (a ramp: abutments further apart in height than DECK_STEEP_GRADE over the length (a deck mapped across a gully
+    # between two hillsides, the Fuji Subaru Line's 23 m bridge, 5 m between its ends: its road met it 1.0 m under a
+    # 1.4 m hump by the high end and a 2.5 m step at the low one). The grade caps stood under the straight line between
+    # the abutments, under the high end's own height, and the curve, its ends held, humped the deck. Where the curve
+    # leaves that line by RAMP_DEV_M or more: the caps never under the line and the taut line over what it must clear,
+    # _ramp. A chord steeper than RAMP_MAX_GRADE is bad data and a milder ramp's curve, rounding to the approaches, is
+    # kept (the A20's 16 m, 16 % bridge near Rostock: the straight line is a kink at each end))
+    ramp = RAMP_ON and DECK_STEEP_GRADE * L < abs(zL - z0) <= RAMP_MAX_GRADE * L
     # the straight line between the abutments, or one parabola over it rising at most CHORD_KINK more steeply out of
     # each abutment, when that clears everything (the requirements within CHORD_TOL: they carry 0.21 m of margin;
     # the ground itself, which it may rest on) and meets both approaches within CHORD_KINK. The curve's floor stood
@@ -5149,8 +5157,47 @@ def curve_profile(s, g, req, z0, zL, g0=0.0, gL=0.0, max_grade=None, lift=None, 
         key = (0, over) if short <= 0.05 else (1, short)
         if best is None or key < best[0]:
             best = (key, z)
-    z = best[1].copy()
-    return _lift_smooth(s, z, floor)                # the abutments stay on the approach road
+    z = _lift_smooth(s, best[1].copy(), floor)      # the abutments stay on the approach road
+    if ramp and float(np.max(np.abs(z - line))) >= RAMP_DEV_M:
+        wr = np.minimum(np.maximum(req, line), np.maximum(cap, line))
+        need = np.maximum(wr, floor)
+        need[0], need[-1] = z0, zL
+        return _ramp(s, need, step)
+    return z
+
+
+RAMP_ON = os.environ.get("BNE_DECK_RAMP", "on") != "off"
+RAMP_MAX_GRADE = 0.30   # a chord steeper than this (bad data: a tunnel mouth's 8.7 m deck over a 7.4 m drop, Paris) is no ramp: as before
+RAMP_DEV_M = 0.5        # m a ramp's curve may leave the straight line between its abutments before the ramp's line replaces it
+RAMP_ROUND_M = 8.0      # m: the moving average a ramp deck's crests are rounded by (_ramp)
+
+
+def _ramp(s, need, step):
+    """A ramp deck's heights (curve_profile: abutments further apart in height than DECK_STEEP_GRADE over the length): the
+    least concave majorant of need (m per grid point: the straight line between the abutments, the ground under it, the
+    clearances the grade caps let it reach; the ends are the abutments), the string pulled taut between the ends over
+    its points, its crests rounded over RAMP_ROUND_M and never under need. No vertical curves out to the approaches'
+    grades (moving averages of a line that steep put a 0.6 m hump by the high end and a step at the low one) and no
+    lift spread along it (_lift_smooth runs 1 m out over 40 m). Pure."""
+    n = len(s)
+    hull = []
+    for i in range(n):
+        while len(hull) >= 2:
+            a, b = hull[-2], hull[-1]
+            # b under the chord a-i: not on the majorant
+            if (need[b] - need[a]) * (s[i] - s[a]) <= (need[i] - need[a]) * (s[b] - s[a]):
+                hull.pop()
+            else:
+                break
+        hull.append(i)
+    z = np.interp(s, s[hull], need[hull])
+    r = int(round(RAMP_ROUND_M / 2.0 / max(step, 1e-9)))
+    if r >= 1 and n > 2 * r:
+        ext = np.r_[2 * z[0] - z[r:0:-1], z, 2 * z[-1] - z[-2:-r - 2:-1]]
+        sm = dnp.convolve(ext, np.ones(2 * r + 1) / (2 * r + 1), mode="valid")
+        z = np.maximum(sm, need)
+    z[0], z[-1] = need[0], need[-1]
+    return z
 
 
 def _tents(s, z, grade):
