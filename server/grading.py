@@ -4566,8 +4566,33 @@ class _Planner:
             return out
         skip = [i for i, (f, _p) in enumerate(plans) if TUNNEL_TAG in str(f)]
         info = {}
+        dbg = os.environ.get("BNE_LAWS_DEBUG")         # "lat,lon": the plans within 40 m of it, before and after
+        near = []
+        if dbg:
+            la_, lo_ = (float(v) for v in dbg.split(","))
+            e_, n_, _ = self.frame.geodetic_to_enu(np.array([la_]), np.array([lo_]), 0.0)
+            P = np.array([float(np.ravel(e_)[0]), float(np.ravel(n_)[0])])
+            for i, (f, p) in enumerate(plans):
+                xy = np.asarray(p.xy, np.float64)[:, :2]
+                if len(xy) and float(np.hypot(*(xy - P).T).min()) <= 40.0:
+                    near.append((i, np.array(p.z, np.float64)))
         n = roadlaws.apply([p for _f, p in plans], specs, held, under, skip, info)
-        log.info("grading: road laws %s: %d of %d plans changed, %s chains, %s couplings, %s samples, %.2f s%s", key, n,
+        # (a side road the laws landed on the road it joins, at its height and its grade its way, keeps its own plan at
+        # the mouth: as high a grade rank, its ground no longer eased flat onto that road's for RANK_SIDE_FADE_M past its
+        # carriageway, the sag a 12 m truck bottomed out in at the mouth)
+        for i, j in info.get("landed", ()) if info.get("feasible", True) else ():
+            pi, pj = plans[i][1], plans[j][1]
+            if getattr(pj, "rank", -1) > getattr(pi, "rank", -1) >= 0:
+                pi.rank = pj.rank
+        for i, z0 in near:
+            f, p = plans[i]
+            xy = np.asarray(p.xy, np.float64)[:, :2]
+            h = held(i)
+            log.warning("LAWSDBG %s %s %s kmh %s rid %s abut %s xy %s z0 %s z1 %s held %s under %s", key, f,
+                        getattr(specs[i], "cls", None), getattr(specs[i], "kmh", None), p.rid, p.abut,
+                        np.round(xy, 1).tolist(), np.round(z0, 2).tolist(), np.round(np.asarray(p.z), 2).tolist(),
+                        np.flatnonzero(h).tolist() if h is not None else None, np.flatnonzero(under(i)).tolist())
+        log.warning("grading: road laws %s: %d of %d plans changed, %s chains, %s couplings, %s samples, %.2f s%s", key, n,
                  len(plans), info.get("chains"), info.get("couplings"), info.get("samples"), _time.monotonic() - t0,
                  "" if info.get("feasible", True) else " (infeasible: left as they were)")
         return n

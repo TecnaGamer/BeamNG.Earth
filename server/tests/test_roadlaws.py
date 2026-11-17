@@ -21,11 +21,25 @@ def spec(cls, kmh=None):
     return SimpleNamespace(cls=cls, kmh=kmh)
 
 
-def bends(p):
-    """The largest change of grade per metre along plan p (1 / its tightest vertical curve)."""
+def bends(p, beyond=0.0):
+    """The largest change of grade per metre along plan p (1 / its tightest vertical curve), from beyond m on."""
     s = np.r_[0.0, np.cumsum(np.hypot(*np.diff(np.asarray(p.xy)[:, :2], axis=0).T))]
     g = np.diff(p.z) / np.diff(s)
-    return float(np.max(np.abs(np.diff(g)) / ((s[2:] - s[:-2]) / 2)))
+    b = np.abs(np.diff(g)) / ((s[2:] - s[:-2]) / 2)
+    return float(np.max(b[s[1:-1] >= beyond]))
+
+
+def sag(p, chord=12.0):
+    """m the ground stands over the straight line between any two points of p chord m apart (a truck's length)."""
+    s = np.r_[0.0, np.cumsum(np.hypot(*np.diff(np.asarray(p.xy)[:, :2], axis=0).T))]
+    fine = np.arange(0.0, s[-1], 0.5)
+    z = np.interp(fine, s, p.z)
+    n = int(round(chord / 0.5))
+    worst = 0.0
+    for a in range(len(fine) - n):
+        line = np.linspace(z[a], z[a + n], n + 1)
+        worst = max(worst, float((z[a:a + n + 1] - line).max()))
+    return worst
 
 
 class SagTest(unittest.TestCase):
@@ -37,13 +51,18 @@ class SagTest(unittest.TestCase):
         zs = 100.0 + np.where(y < 8.0, 0.0, 0.2 * (y - 8.0))
         zs = np.minimum(zs, 100.0 + 0.2 * 60.0)                     # (and flat again on top)
         side = plan(np.c_[0 * y, y], zs)
-        before = bends(side)
+        before = bends(side), sag(side)
         n = roadlaws.apply([main, side], [spec("primary"), spec("unclassified")])
         self.assertGreaterEqual(n, 1)
-        g, rad = roadlaws.laws(spec("unclassified"))
-        self.assertGreater(before, 3.0 / rad)
-        self.assertLess(bends(side), 1.3 / rad)
+        _g, rad = roadlaws.laws(spec("unclassified"))
+        rad_j = roadlaws.laws(spec("road", roadlaws.JUNCTION_KMH))[1]
+        self.assertGreater(before[0], 3.0 / rad_j)
+        self.assertGreater(before[1], 0.5, "(the case: a 12 m truck bottoms out)")
+        self.assertLess(bends(side), 1.3 / rad_j, "a junction's curve near it")
+        self.assertLess(bends(side, beyond=roadlaws.APPROACH_M + 8.0), 1.3 / rad, "its own speed's past the approach")
+        self.assertLess(sag(side), 0.5, "a 12 m truck clears it")
         self.assertAlmostEqual(float(side.z[0]), float(np.interp(0.0, x, main.z)), delta=0.05)
+        self.assertLess(abs(float(side.z[1] - side.z[0])) / 4.0, roadlaws.LANDING_TOL + 0.005, "lands on the flat main")
 
     def test_a_steep_road_keeps_its_hill(self):
         s = np.arange(0.0, 401.0, 4.0)

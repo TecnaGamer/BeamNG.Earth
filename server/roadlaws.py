@@ -10,7 +10,10 @@ one quadratic programme (the Rust kernel of carriageways.solve, as the interchan
 - the profile stays as near the plans as it can (a higher class stiffer: a side road gives way to the road it joins),
   under its laws (gradeshapes.max_grade, gradeshapes.curve_radius: AASHTO's grades for the speed, a vertical curve of
   v^2 / a): a step, a kink, a sag a truck bottoms out in, becomes a curve as long as the speed needs;
-- a run's end that meets another road (a T junction, a node of three or more) stands at that road's height there;
+- a run's end that meets another road (a T junction, a node of three or more) stands at that road's height there and
+  leaves it at that road's grade its way (a landing: the junction's surface goes on into it, no kink at the mouth),
+  its last APPROACH_M driven at JUNCTION_KMH (a vertical curve that speed's: a side road climbing its bank from the
+  junction turns up over ~10 m, not a 12 m truck's length of 0 to 12 % in 4 m, nor a 50 km/h road's 80 m of fill);
 - the grade is never held under what the ground itself has (a real mountain road stays as steep as it is, plus
   NATURAL_PLUS): it is the sudden changes of grade the laws take out, not the hills;
 - what the passes solved is held (an interchange's shape and its ramps, a bridge's abutment end, a tunnel), and a road
@@ -38,6 +41,9 @@ W_HOLD = 1.0e4              # a held sample's weight (a shape, an abutment end)
 RANKS = {"motorway": 9, "trunk": 8, "primary": 7, "secondary": 6, "tertiary": 5, "unclassified": 4, "residential": 3,
          "living_street": 2, "service": 2, "road": 2}
 MIN_MOVE_M = 0.005          # m: a plan changed less than this is left as it was
+APPROACH_M = 40.0           # m of a road before a junction it meets driven at JUNCTION_KMH (its curve law that speed's)
+JUNCTION_KMH = 20.0         # km/h: turning in or out of a junction
+LANDING_TOL = 0.03          # a road leaves a junction at the grade of the road it joins its way, within this (camber)
 
 Member = collections.namedtuple("Member", "kind cls kmh")
 
@@ -147,8 +153,9 @@ def apply(plans, specs, held=None, under=None, skip=(), diagnostics=None):
     zs = [np.asarray(plans[i].z, np.float64) for i in idx]
     sps = [specs[i] for i in idx]
     rids = [int(getattr(plans[i], "rid", -1)) for i in idx]
+    arcs = [_arc(xy) for xy in xys]
     skip = set(skip)
-    hold = []
+    hold, down = [], []
     for k, i in enumerate(idx):
         h = np.zeros(len(zs[k]), bool)
         if i in skip:
@@ -161,90 +168,118 @@ def apply(plans, specs, held=None, under=None, skip=(), diagnostics=None):
         h[0] |= bool(ab[0])
         h[-1] |= bool(ab[1])
         hold.append(h)
-    down = [np.asarray(under(i), bool) if under is not None and under(i) is not None else np.zeros(len(zs[k]), bool)
-            for k, i in enumerate(idx)]
+        got = under(i) if under is not None else None
+        down.append(np.asarray(got, bool) if got is not None else np.zeros(len(zs[k]), bool))
     rs, nodes = runs(xys, sps, rids)
-    chains, where = [], []          # where[c]: [(plan k, reversed, s0 in the run)] of chain c
-    samp = []                       # per chain: run arc length of its samples
-    for run in rs:
-        xy_r, z_r, h_r, d_r, s_r, parts = [], [], [], [], [], []
+    R = []                          # per run: its samples, targets, weights, bounds and laws
+    loc = {}                        # plan k -> (run, reversed, s0)
+    for r, run in enumerate(rs):
+        z_r, h_r, d_r, s_r = [], [], [], []
         s0 = 0.0
         for k, rev in run:
-            xy, z, h, d = xys[k], zs[k], hold[k], down[k]
+            z, h, d, s = zs[k], hold[k], down[k], arcs[k]
             if rev:
-                xy, z, h, d = xy[::-1], z[::-1], h[::-1], d[::-1]
-            s = _arc(xy) + s0
-            if xy_r:                                    # (the joint: one point, the first part's)
-                xy, z, h, d, s = xy[1:], z[1:], h[1:], d[1:], s[1:]
-            parts.append((k, rev, s0))
-            xy_r.append(xy)
+                z, h, d, s = z[::-1], h[::-1], d[::-1], s[-1] - s[::-1]
+            s = s + s0
+            if z_r:                                     # (the joint: one point, the first part's)
+                z, h, d, s = z[1:], h[1:], d[1:], s[1:]
+            loc[k] = (r, rev, s0)
             z_r.append(z)
             h_r.append(h)
             d_r.append(d)
             s_r.append(s)
             s0 = float(s[-1]) if len(s) else s0
-        S = np.concatenate(s_r)
-        Z = np.concatenate(z_r)
-        H = np.concatenate(h_r)
-        D = np.concatenate(d_r)
+        S, Z, H, D = (np.concatenate(a) for a in (s_r, z_r, h_r, d_r))
         L = float(S[-1] - S[0])
         m = max(2, int(math.ceil(L / STEP_M)) + 1)
         sv = np.linspace(S[0], S[-1], m)
+        step = L / max(m - 1, 1)
         t = np.interp(sv, S, Z)
-        # (a sample is held / only down where a plan point within half a step of it is)
-        near = np.abs(sv[:, None] - S[None, :]) <= (L / max(m - 1, 1)) / 2 + 1e-6 if len(S) * m < 4e6 else None
-        hs = (near & H[None, :]).any(1) if near is not None else np.interp(sv, S, H.astype(float)) > 0.5
-        ds = (near & D[None, :]).any(1) if near is not None else np.interp(sv, S, D.astype(float)) > 0.5
-        g_law, rad = 0.0, 0.0
+        j = np.clip(np.searchsorted(S, sv), 0, len(S) - 1)      # (a sample is held / only down where a plan point
+        hs = np.zeros(m, bool)                                   # within half a step of it is)
+        ds = np.zeros(m, bool)
+        for jj in (j, np.clip(j - 1, 0, len(S) - 1)):
+            ok = np.abs(S[jj] - sv) <= step / 2 + 1e-6
+            hs |= ok & H[jj]
+            ds |= ok & D[jj]
+        g_law = rad = 0.0
         rank = 0
         for k, _rev in run:
-            g, r = laws(sps[k])
-            g_law, rad, rank = max(g_law, g), max(rad, r), max(rank, _rank(sps[k]))
-        step = L / max(m - 1, 1)
-        if m >= 3 and L > 1e-6:
-            w_n = max(1, int(round(NATURAL_WIN_M / max(step, 1e-6))))
-            nat = np.abs(t[w_n:] - t[:-w_n]) / (w_n * step) if m > w_n else np.abs(np.diff(t)) / step
-            g = max(g_law, float(nat.max()) + NATURAL_PLUS if len(nat) else g_law)
-        else:
-            g = max(g_law, float(abs(t[-1] - t[0]) / max(L, 1e-6)) + NATURAL_PLUS)
-        w = np.where(hs, W_HOLD, 1.0 + W_RANK * rank)
-        hi = np.where(ds, t, np.inf)
-        chains.append(dict(t=t, w=w, lo=np.full(m, -np.inf), hi=hi, grade=g, K=rad / 100.0, lam=1e-3, step=step,
-                           length=0.0))
-        where.append(parts)
-        samp.append(sv)
-    loc = {}                        # plan k -> (chain, reversed, s0)
-    for c, parts in enumerate(where):
-        for k, rev, s0 in parts:
-            loc[k] = (c, rev, s0)
+            g, rr = laws(sps[k])
+            g_law, rad, rank = max(g_law, g), max(rad, rr), max(rank, _rank(sps[k]))
+        w_n = max(1, int(round(NATURAL_WIN_M / max(step, 1e-6))))
+        nat = np.abs(t[w_n:] - t[:-w_n]) / (w_n * step) if m > w_n else np.abs(np.diff(t)) / max(step, 1e-6)
+        g = max(g_law, float(nat.max()) + NATURAL_PLUS if len(nat) else g_law)
+        R.append(dict(sv=sv, t=t, w=np.where(hs, W_HOLD, 1.0 + W_RANK * rank), hi=np.where(ds, t, np.inf), grade=g,
+                      rad=rad, step=step, junction=[False, False], parts=[(k, rev) for k, rev in run]))
 
     def sample_of(k, s_plan):
-        """(chain, sample index) of plan k's point at its own arc length s_plan."""
-        c, rev, s0 = loc[k]
-        Lk = float(_arc(xys[k])[-1])
-        s = s0 + (Lk - s_plan if rev else s_plan)
-        return c, int(np.argmin(np.abs(samp[c] - s)))
-    cps = []
+        """(run, sample) of plan k's point at its own arc length s_plan."""
+        r, rev, s0 = loc[k]
+        s = s0 + (arcs[k][-1] - s_plan if rev else s_plan)
+        return r, int(np.argmin(np.abs(R[r]["sv"] - s)))
+
+    def run_dir(r, i):
+        """Unit direction of run r at its sample i (the way its samples go) and its grade there (as planned)."""
+        s = R[r]["sv"][i]
+        for k, _rev in R[r]["parts"]:
+            _r, rev, s0 = loc[k]
+            if s0 - 1e-6 <= s <= s0 + arcs[k][-1] + 1e-6:
+                sp = arcs[k][-1] - (s - s0) if rev else s - s0
+                seg = int(np.clip(np.searchsorted(arcs[k], sp) - 1, 0, len(arcs[k]) - 2))
+                d = xys[k][seg + 1] - xys[k][seg]
+                d = d / max(float(np.hypot(*d)), 1e-9)
+                sv, t = R[r]["sv"], R[r]["t"]
+                a, b = max(0, i - 1), min(len(sv) - 1, i + 1)
+                return (-d if rev else d), float((t[b] - t[a]) / max(sv[b] - sv[a], 1e-6))
+        return None, 0.0
+
+    cps = []                        # in the runs' terms: (run a, sample, run b, sample, kind, value): z_a - z_b (= / >=) v
+
+    def end_sample(k, e):
+        return sample_of(k, 0.0 if e == 0 else float(arcs[k][-1]))
+
+    landed = []                     # (plan, the plan it lands on): its ground need not yield to that one's (grading)
+
+    def land(k, e, main, onto):
+        """Plan k's end e meets main (run, sample): one height there, and it leaves at main's grade its way."""
+        r, i = end_sample(k, e)
+        ra, ia = main
+        if (r, i) == (ra, ia):
+            return
+        cps.append((r, i, ra, ia, "eq", 0.0))
+        m = len(R[r]["sv"])
+        if i not in (0, m - 1) or m < 3 or r == ra:
+            return
+        R[r]["junction"][0 if i == 0 else 1] = True
+        landed.append((idx[k], idx[onto]))
+        md, mg = run_dir(ra, ia)
+        if md is None:
+            return
+        g_way = mg * float(_dir_out(xys[k], e) @ md)   # (the joined road's surface rising along the way out of it)
+        j = 1 if i == 0 else m - 2
+        st = abs(float(R[r]["sv"][j] - R[r]["sv"][i]))
+        cps.append((r, j, r, i, "ge", (g_way - LANDING_TOL) * st))
+        cps.append((r, i, r, j, "ge", -(g_way + LANDING_TOL) * st))
     paired = set()
-    for c, parts in enumerate(where):
-        for (k, rev, _s0), (k2, _r2, _s2) in zip(parts, parts[1:]):
+    for run in rs:
+        for (k, rev), (k2, rev2) in zip(run, run[1:]):
             paired.add((k, 0 if rev else 1))
-            paired.add((k2, 1 if _r2 else 0))
-    # (a node's ends not going on into each other: one height, the first's)
-    for node in nodes:
-        free = [(k, e) for k, e in node if (k, e) not in paired]
-        anchor = node[0]
+            paired.add((k2, 1 if rev2 else 0))
+    for node in nodes:              # (its ends not going on into another: onto the road through it, or the top one's)
+        through = [x for x in node if x in paired]
+        free = [x for x in node if x not in paired]
+        if through:
+            main, onto = end_sample(*through[0]), through[0][0]
+        else:
+            free.sort(key=lambda x: -_rank(sps[x[0]]))
+            main, onto = end_sample(*free[0]), free[0][0]
+            free = free[1:]
         for k, e in free:
-            if (k, e) == anchor:
-                continue
-            a = sample_of(anchor[0], 0.0 if anchor[1] == 0 else float(_arc(xys[anchor[0]])[-1]))
-            b = sample_of(k, 0.0 if e == 0 else float(_arc(xys[k])[-1]))
-            if a != b:
-                cps.append((b[0], b[1], a[0], a[1], "eq", 0.0))
-    # (a run's end on another road's line, not at its end: a T junction, at that road's height there)
+            land(k, e, main, onto)
     in_node = {x for node in nodes for x in node}
     boxes = [(xy.min(0), xy.max(0)) for xy in xys]
-    for k in range(len(xys)):
+    for k in range(len(xys)):       # (an end on another road's line, not at its end: a T junction)
         for e in (0, 1):
             if (k, e) in paired or (k, e) in in_node:
                 continue
@@ -259,36 +294,75 @@ def apply(plans, specs, held=None, under=None, skip=(), diagnostics=None):
                     continue
                 seg, tt, d = _nearest(xys[j], P)
                 if d <= reach and (best is None or d < best[0]):
-                    a = _arc(xys[j])
-                    best = (d, j, float(a[seg] + tt * (a[seg + 1] - a[seg])))
-            if best is None:
-                continue
-            a = sample_of(best[1], best[2])
-            b = sample_of(k, 0.0 if e == 0 else float(_arc(xys[k])[-1]))
-            cps.append((b[0], b[1], a[0], a[1], "eq", 0.0))
+                    best = (d, j, float(arcs[j][seg] + tt * (arcs[j][seg + 1] - arcs[j][seg])))
+            if best is not None:
+                land(k, e, sample_of(best[1], best[2]), best[1])
+    # (each run as chains: its ends at junctions driven at JUNCTION_KMH, the rest at its speed; the pieces overlap by
+    # two samples held equal, so the grade goes on through the change of law)
+    rad_j = laws(Member("ground", "road", JUNCTION_KMH))[1]
+    chains, where = [], []          # where[run]: [(chain, its first run sample)]
+    ccps = []
+    for r, x in enumerate(R):
+        m = len(x["sv"])
+        na = int(round(APPROACH_M / max(x["step"], 1e-6)))
+        a0 = na if x["junction"][0] else 0
+        a1 = m - 1 - na if x["junction"][1] else m - 1
+        if x["rad"] <= rad_j or not (x["junction"][0] or x["junction"][1]):
+            cuts = [(0, m - 1, x["rad"])]
+        elif a1 - a0 < 3:
+            cuts = [(0, m - 1, rad_j)]
+        else:
+            cuts = ([(0, a0 + 1, rad_j)] if a0 > 0 else []) + [(a0, a1, x["rad"])] + \
+                   ([(a1 - 1, m - 1, rad_j)] if a1 < m - 1 else [])
+        where.append([])
+        for a, b, rr in cuts:
+            sl = slice(a, b + 1)
+            chains.append(dict(t=x["t"][sl], w=x["w"][sl], lo=np.full(b - a + 1, -np.inf), hi=x["hi"][sl],
+                               grade=x["grade"], K=rr / 100.0, lam=1e-3, step=x["step"], length=0.0))
+            where[r].append((len(chains) - 1, a, b))
+        for (c1, a1_, b1_), (c2, a2_, _b2) in zip(where[r], where[r][1:]):
+            for q in range(a2_, b1_ + 1):               # (the overlap: both pieces' samples equal)
+                ccps.append((c1, q - a1_, c2, q - a2_, "eq", 0.0))
+
+    def chain_of(r, i):
+        for c, a, b in where[r]:
+            if a <= i <= b:
+                return c, i - a
+        c, a, _b = where[r][-1]
+        return c, i - a
+    for ra, ia, rb, ib, kind, v in cps:
+        ca, ja = chain_of(ra, ia)
+        cb, jb = chain_of(rb, ib)
+        if (ca, ja) != (cb, jb):
+            ccps.append((ca, ja, cb, jb, kind, v))
     import carriageways as _cw
     info = {}
     try:
-        out = _cw.solve(chains, cps, diagnostics=info)
+        out = _cw.solve(chains, ccps, diagnostics=info)
     except Exception as e:          # (the plans as the passes left them)
         log.warning("grading: road laws: %s: %s", type(e).__name__, e)
         return 0
     if diagnostics is not None:
         diagnostics.update(info)
-        diagnostics.update(chains=len(chains), couplings=len(cps), samples=int(sum(len(c["t"]) for c in chains)))
+        diagnostics.update(chains=len(chains), couplings=len(ccps), samples=int(sum(len(c["t"]) for c in chains)),
+                           landed=landed)
     if not info.get("feasible", True):
         return 0
+    sol = []
+    for r, x in enumerate(R):       # (each run's samples from its chains)
+        zr = np.array(x["t"], np.float64)
+        for c, a, _b in where[r]:
+            o = np.asarray(out[c], np.float64)
+            zr[a:a + len(o)] = o
+        sol.append(zr)
     changed = 0
     for k, i in enumerate(idx):
         if k not in loc or i in skip:
             continue
-        c, rev, s0 = loc[k]
-        sk = _arc(xys[k])
-        s = s0 + (sk[-1] - sk if rev else sk)
-        new_t = np.interp(s, samp[c], np.asarray(out[c], np.float64))
-        old_t = np.interp(s, samp[c], chains[c]["t"])
-        z = zs[k] + (new_t - old_t)                     # (the change, not the resampled profile: the plan's own detail)
-        z = np.where(hold[k], zs[k], z)
+        r, rev, s0 = loc[k]
+        s = s0 + (arcs[k][-1] - arcs[k] if rev else arcs[k])
+        z = zs[k] + (np.interp(s, R[r]["sv"], sol[r]) - np.interp(s, R[r]["sv"], R[r]["t"]))
+        z = np.where(hold[k], zs[k], z)                 # (the change, not the resampled profile: the plan's own detail)
         z = np.where(down[k], np.minimum(z, zs[k]), z)
         if float(np.abs(z - zs[k]).max()) >= MIN_MOVE_M:
             plans[i].z = z
