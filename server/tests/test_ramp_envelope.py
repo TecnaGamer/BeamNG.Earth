@@ -57,5 +57,41 @@ class SideRoadOnAMiddleTest(unittest.TestCase):
         np.testing.assert_array_equal(np.asarray(plans[0][1].z), [3.0, 3.0])
 
 
+class DippedSlipRoadTest(unittest.TestCase):
+    """GitHub #1329, Sao Paulo's 23 de Maio: a trunk and the slip road leaving it at a gore, both dipped under a deck
+    after the first envelope. The second envelope's floor (the plans before any ramp, taken before the dips) stood the
+    slip road back at its undipped 7 m, a 7 m step at the gore; its floor no higher than the plans now keeps the dip."""
+
+    def setUp(self):
+        self.trunk = types.SimpleNamespace(cls="trunk", link=False, subclass=None)
+        self.slip = types.SimpleNamespace(cls="trunk", link=True, subclass="link")
+
+    def run_envelope(self, floor_now):
+        xs = np.arange(0.0, 100.0 + 1e-9, 10.0)
+        trunk = plan(np.c_[xs, np.zeros(len(xs))], np.zeros(len(xs)), 8.0)          # dipped: 0 m (was 7)
+        slip = plan(np.c_[xs[:6] + 100.0, np.linspace(0.0, 15.0, 6)], np.zeros(6), 6.0)   # dipped too, from the gore
+        # (and a street raised 3 m over the trunk's other end: a broken node at a trunk, so the envelope's ceiling and
+        # floor are laid)
+        street = plan([(0.0, 0.0), (0.0, -30.0), (0.0, -60.0)], [3.0, 3.0, 3.0])
+        before = [np.full(len(xs), 7.0), np.full(6, 7.0), np.full(3, 3.0)]   # (the floor: 7 m up before the dips)
+        plans = [("trunk", trunk), ("slip", slip), ("street", street)]
+        floor = grading._floor_now(before, plans) if floor_now else before
+        grading.ramp_envelope(plans, [self.trunk, self.slip, STREET], [1, 2], (), floor)
+        return np.asarray(plans[1][1].z, np.float64)
+
+    def test_the_slip_road_keeps_its_dip(self):
+        z = self.run_envelope(True)
+        self.assertLess(float(z[0]), 0.05, "at the trunk's height at the gore")
+
+    def test_the_old_floor_stood_it_back_up(self):
+        self.assertGreater(float(self.run_envelope(False)[0]), 6.0)
+
+    def test_floor_now_is_the_lower_of_the_two(self):
+        plans = [("a", plan([(0.0, 0.0), (10.0, 0.0)], [1.0, 5.0])), ("b", plan([(0.0, 0.0), (10.0, 0.0)], [2.0, 2.0]))]
+        got = grading._floor_now([np.array([3.0, 3.0]), np.array([1.0, 2.0, 3.0])], plans)
+        np.testing.assert_array_equal(got[0], [1.0, 3.0])
+        np.testing.assert_array_equal(got[1], [1.0, 2.0, 3.0], "another length: as it was")
+
+
 if __name__ == "__main__":
     unittest.main()

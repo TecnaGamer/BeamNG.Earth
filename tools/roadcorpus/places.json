@@ -1,5 +1,5 @@
 {
-  "_doc": "The road revamp corpus (plan .claude/work/road-revamp-plan-2026-11-16.md section 5; complaints survey section 3). Frozen: add places, never move one (a moved place is a new id). rank: the complaint survey's top-20 item; cat: the plan's section 5.1 category; star: reported on 1.10.x and still broken then; sets: top10 (one place per top-10 complaint), top20, claimed (claimed fixed but still reported), bisect (1.10 regressions), standard (section 5.2 cases), pr (cases from the open road PRs, 2026-11-16 triage; not in the R0 baseline yet). r: probe radius in m. focus: the summary keys that matter most there.",
+  "_doc": "The road revamp corpus (plan .claude/work/road-revamp-plan-2026-11-16.md section 5; complaints survey section 3). Frozen: add places, never move one (a moved place is a new id). rank: the complaint survey's top-20 item; cat: the plan's section 5.1 category; star: reported on 1.10.x and still broken then; sets: top10 (one place per top-10 complaint), top20, claimed (claimed fixed but still reported), bisect (1.10 regressions), standard (section 5.2 cases), pr (cases from the open road PRs, 2026-11-16 triage; not in the R0 baseline yet), guard (cases an R1j fix must not undo: a9988122's junction raise, 2026-11-17). r: probe radius in m. focus: the summary keys that matter most there.",
   "places": [
     {"id": "dublin_m50", "name": "Dublin M50 overpass", "rank": 1, "cat": 1, "lat": 53.39707, "lon": -6.33128, "r": 400, "star": true, "sets": ["top10", "top20"], "focus": ["clearance", "deck_deck"]},
     {"id": "nordschleife_a", "name": "Nordschleife bridge ends A", "rank": 2, "cat": 2, "lat": 50.33774, "lon": 6.95127, "r": 300, "star": true, "sets": ["top10", "top20", "bisect"], "focus": ["end_step", "steep_deck"]},
@@ -58,6 +58,8 @@
     {"id": "popoli_rail", "name": "Popoli SR17 under the railway (PR #1341)", "rank": 0, "cat": 3, "lat": 42.171, "lon": 13.8247, "r": 300, "star": false, "sets": ["pr"], "focus": ["rail_block"]},
     {"id": "popoli_a25", "name": "Popoli over the A25 tubes (PR #1341)", "rank": 0, "cat": 9, "lat": 42.1777, "lon": 13.8268, "r": 300, "star": false, "sets": ["pr"], "focus": ["tunnels"]},
     {"id": "assaku", "name": "Assaku, Tallinn opening under decks (PR #1375)", "rank": 0, "cat": 1, "lat": 59.3786, "lon": 24.8436, "r": 300, "star": false, "sets": ["pr"], "focus": ["clearance"]},
-    {"id": "i40_median", "name": "I-40 median barriers (PR #1407)", "rank": 0, "cat": 7, "lat": 36.02876, "lon": -87.17503, "r": 300, "star": false, "sets": ["pr"], "focus": ["spikes"]}
+    {"id": "i40_median", "name": "I-40 median barriers (PR #1407)", "rank": 0, "cat": 7, "lat": 36.02876, "lon": -87.17503, "r": 300, "star": false, "sets": ["pr"], "focus": ["spikes"]},
+    {"id": "wesley_chapel", "name": "Wesley Chapel Overpass Rd over I-75 (#1043, junction raise guard)", "rank": 0, "cat": 1, "lat": 28.273701, "lon": -82.326974, "r": 300, "star": false, "issue": 1043, "sets": ["guard"], "focus": ["clearance", "humps", "end_step"]},
+    {"id": "findlay_ddi", "name": "Findlay I-75 diverging diamond (#1045, junction raise guard)", "rank": 0, "cat": 1, "lat": 41.087606, "lon": -83.659754, "r": 300, "star": false, "issue": 1045, "sets": ["guard"], "focus": ["clearance", "humps", "end_step"]}
   ]
 }

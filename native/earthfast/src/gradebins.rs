@@ -139,6 +139,11 @@ pub struct Pt {
     hdeep: f64, hrank: i64, hrank2: i64, hid: i64, hz: f64, hyield: f64, hcar: bool, hdx: f64, hdy: f64,
     // (rank) that road is a tunnel's open section (OPEN_TUNNEL)
     hopen: bool,
+    // the highest rank of a plan leading onto a bridge (abut) whose carriageway holds the point within ARANK_NEAR_M of
+    // its abutment, and that plan's height there: a road of no higher rank standing more than ARANK_DZ_M off it does
+    // not hold its carriageway whole over it (finish)
+    arank: i64,
+    az: f64,
 }
 
 impl Pt {
@@ -148,7 +153,7 @@ impl Pt {
             num: 0.0, den: 0.0, wmax: 0.0, top: f64::NEG_INFINITY, cmax: 0.0, csum: 0.0, cz: 0.0,
             raised: f64::NEG_INFINITY, bs: base, beff: base, cdeep: 0.0, carz: f64::NAN, carid: -1, bdeep: 0.0,
             bz: f64::NAN, bid: -1, hdeep: f64::INFINITY, hrank: i64::MIN, hrank2: i64::MIN, hid: -1, hz: f64::NAN,
-            hyield: 0.0, hcar: false, hdx: 0.0, hdy: 0.0, hopen: false,
+            hyield: 0.0, hcar: false, hdx: 0.0, hdy: 0.0, hopen: false, arank: i64::MIN, az: f64::NAN,
         }
     }
 
@@ -164,8 +169,13 @@ impl Pt {
     #[inline(always)]
     fn finish(&self, lift: f64) -> f64 {
         // (a road whose rank is the point's highest, with no equal-ranked road there, holds its own carriageway whole:
-        // a subordinate road's carriageway, cutting band or ground may not move it, not even by centimetres)
-        if self.hcar && self.hrank > self.hrank2 && self.hrank <= RANK_HOLD_MAX {
+        // a subordinate road's carriageway, cutting band or ground may not move it, not even by centimetres; nor
+        // over the carriageway of an approach of its rank leading onto a bridge, whose end it would cut off at its
+        // own height: the Stonehouse Bridge's deck end 7 m from the gyratory it runs into stepped 1.6 m since
+        // the gyratory's pieces count as one road (GitHub #1374))
+        let cut_off = self.arank >= self.hrank && (self.hid & LEG_ROAD_MASK) >= PIECES_RID
+            && self.az - self.hz > ARANK_DZ_M && self.az - self.hz < ARANK_LEVEL_M;
+        if self.hcar && self.hrank > self.hrank2 && !cut_off && self.hrank <= RANK_HOLD_MAX {
             self.hz + lift
         } else if self.den > 0.0 {
             self.beff + self.wmax * (self.num / self.den - self.beff + lift)
@@ -176,6 +186,18 @@ impl Pt {
 }
 
 const OVERLAP_YIELD_M: f64 = 1.0;   // m (pass 1's overlap yield)
+/// m from its abutment end an approach's carriageway turns another road's hard hold off ...
+const ARANK_NEAR_M: f64 = 12.0;
+/// ... where the approach stands more than this over that road (a deck end the hold would cut off); elsewhere the hold
+/// stands (Vienna's lid junctions, Capitol Crossing, the M1 slip roads: their approaches run at the junction's height
+/// over its carriageway, and the blend there made new steps and crests: drivability, batch185)
+const ARANK_DZ_M: f64 = 0.3;
+/// ... and less than this: an approach this much over the road is another level, a deck over it (a lid's deck over
+/// Vienna's Suedtiroler Platz trench, 4.3 m over the street in it), not a deck end the road's junction cuts off
+const ARANK_LEVEL_M: f64 = 2.5;
+/// a road planned in pieces that PlanPack counts as one (planset.rs: 2^41 + the root piece): the hard hold an
+/// approach turns off is only such a road's, which had no hold where its pieces met before they were one road (PR #1107)
+const PIECES_RID: i64 = 1i64 << 41;
 
 #[inline(always)]
 fn smooth(v: f64) -> f64 {
@@ -340,6 +362,21 @@ fn pair0(st: &mut Pt, g: &Seg, q: &Pre, p: &Prm) {
     // (and none past its abutment end, over the deck, from yield_ramp on: the round end of an approach's carriageway
     // reached over the railway under a short bridge, and the track's bed gave way to it there; GitHub #909)
     let car = past <= p.yield_ramp.max(1e-6);
+    if g.abut && g.rk >= 0 && car && d <= cr && g.rk > st.arank && g.l2 > 1e-12 {
+        // (how far along the approach the point lies from its abutment end: only there, at the deck's end)
+        let along = (qx * g.abx + qy * g.aby) / g.len;
+        let mut to_abut = f64::INFINITY;
+        if g.da.is_finite() {
+            to_abut = to_abut.min((along + g.da).max(0.0));
+        }
+        if g.db.is_finite() {
+            to_abut = to_abut.min((g.len - along + g.db).max(0.0));
+        }
+        if to_abut <= ARANK_NEAR_M {
+            st.arank = g.rk;
+            st.az = target;
+        }
+    }
     if car && (d - cr < st.cdeep || (d <= cr && st.carz.is_nan())) {
         st.cdeep = d - cr;
         st.carz = target;
