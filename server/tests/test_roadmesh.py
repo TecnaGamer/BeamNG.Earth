@@ -709,6 +709,35 @@ class BridgeProfilesTest(unittest.TestCase):
         self.assertEqual(got[0], got[1])
         self.assertEqual(got[0], [], "the east cell's copy has no piece under the west copy's key")
 
+    def test_long_chain_the_same_from_either_end(self):
+        """A viaduct over more than CHAIN_CELLS map cells: every piece's deck the same whichever end is asked first
+        (the windows of roads.CHAIN_BLOCK blocks; capped at the cells nearest the asker, the decks were the asker's)."""
+        import mapcells
+        import roads
+        from test_roads import features
+        step, n = 1000.0, 28                                # 28 km: ~15 cells of 1.9 km at 39.3 N
+        lines = [[(-14000 + i * step, 0), (-14000 + (i + 1) * step, 0)] for i in range(n)]
+        cells_of = [{mapcells.cell_of(LAT, LON + e / M_LON) for e, _n in ln} for ln in lines]
+        memo = {}
+
+        def cell_fn(key):           # (each cell's copy: the pieces with an end in it)
+            if key not in memo:
+                ids = [i for i in range(n) if key in cells_of[i]]
+                memo[key] = features([lines[i] for i in ids], ["primary"] * len(ids),
+                                     levels=[(j, 1.0, 0.0, 1.0) for j in range(len(ids))],
+                                     ids=[f"v{i:02d}" for i in ids]) if ids else None
+            return memo[key]
+        hilly = lambda la, lo: 10.0 + 25.0 * np.sin((np.asarray(lo) - LON) * M_LON / 2300.0)
+        every = [cell_fn(k) for k in sorted({c for cs in cells_of for c in cs}, key=str)]
+        self.assertGreater(len(every), roads.CHAIN_CELLS)
+        decks = []
+        for first in ((-13900, -50, -13700, 50), (13700, -50, 13900, 50)):     # the west end first, the east end first
+            bp = roads.BridgeProfiles(FRAME, cell_fn, hilly)
+            bp.parts(every, first)
+            decks.append({fid: z.tobytes() for fid, spec, xy, z, lon in bp.parts(every, (-14100, -50, 14100, 50))})
+        self.assertEqual(len(decks[0]), n)
+        self.assertEqual(decks[0], decks[1])
+
     def test_crossing_decks_stack_by_level(self):
         import roads
         from test_roads import features
