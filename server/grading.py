@@ -4498,15 +4498,22 @@ class _Planner:
                            np.interp(sv, net.s[i], net.lines[i][:, 1])], axis=1)
             return float(self._ground_line(xy)[6]) if len(xy) else None
 
-        shapes, failed = [], 0
+        shapes, failed, solved = [], 0, []
         for sysm in mine:
             pcs = _gsh.pieces(net, sysm)
             smp = _gsh.sample(net, pcs)
             ground = [self._ground_line(x["xy"]) for x in smp]
             diag = {}
             zs = _gsh.solve_shape(net, sysm, pcs, smp, ground, fixed_z, diag)
-            if diag.get("qp_error") or not diag.get("feasible", True):
+            if zs is None:          # (no answer: the system as it is, and why in the log; no stand-in)
                 failed += 1
+                log.error("grading: SHAPES infeasible system in region %s: %d pieces, %d crossings, %d ends; %s; "
+                          "members %s", home, len(pcs), len(sysm["crossings"]), len(sysm["ends"]),
+                          diag.get("qp_error") or ", ".join("%s %s" % (k, diag[k]) for k in sorted(diag)
+                                                            if k not in ("converged", "feasible")),
+                          ", ".join(sorted({str(net.m[i].key[0])[:8] + ":" + net.m[i].kind for i in sysm["members"]}))[:600])
+                continue
+            solved.append(sysm)
             shapes.append((pcs, smp, zs))
             if os.environ.get("BNE_SHAPES_DEBUG"):
                 self._shape_debug(net, sysm, pcs, smp, zs, ground, fixed_z, diag)
@@ -4515,7 +4522,7 @@ class _Planner:
             xy = np.stack([np.interp(sv, net.s[i], net.lines[i][:, 0]), np.interp(sv, net.s[i], net.lines[i][:, 1])],
                           axis=1)
             return self._ground_line(xy)
-        emb = _gsh.embankments(net, mine, shapes, ground_along)
+        emb = _gsh.embankments(net, solved, shapes, ground_along)
         prof = {}
         for (pcs, smp, zs) in shapes:
             for pc, x, z in zip(pcs, smp, zs):
@@ -4530,7 +4537,7 @@ class _Planner:
                 xy = np.stack([np.interp(sv, net.s[j], net.lines[j][:, 0]),
                                np.interp(sv, net.s[j], net.lines[j][:, 1])], axis=1)
                 prof.setdefault(str(m.key[0]), []).append((xy, np.asarray(z, np.float64), mode))
-        log.warning("grading: SHAPES pid %d region %s: %d cells, %d members, %d systems (%d by penalties), %d roads "
+        log.warning("grading: SHAPES pid %d region %s: %d cells, %d members, %d systems (%d infeasible, left as they are), %d roads "
                     "graded, find %.2f s, solve %.2f s", os.getpid(), hk, len(loaded), len(members), len(mine), failed,
                     len(prof), t1 - t0, time.perf_counter() - t1)
         return prof
@@ -4607,7 +4614,6 @@ class _Planner:
         t0 = _time.monotonic()
         decks = [(np.asarray(ln, np.float64)[:, :2], float(h)) for ln, h in (self._decks_near(key) or ())
                  if len(ln) >= 2]
-        dbox = [(ln.min(0) - h - ROAD_LAWS_DECK_M, ln.max(0) + h + ROAD_LAWS_DECK_M) for ln, h in decks]
 
         def held(i):
             if not SHAPES_ON:
@@ -4617,20 +4623,27 @@ class _Planner:
             zs, _m = self._shape_at(xy, xy, str(fid).split(":")[0], ("fill", "cut", "set"))
             return np.isfinite(zs)
 
+        # (every deck's segments as arrays once: a plan's points against those whose box meets the plan's, at once)
+        SA = np.concatenate([ln[:-1] for ln, _h in decks]) if decks else np.zeros((0, 2))
+        SB = np.concatenate([ln[1:] for ln, _h in decks]) if decks else np.zeros((0, 2))
+        SH = np.concatenate([np.full(len(ln) - 1, h + ROAD_LAWS_DECK_M) for ln, h in decks]) if decks else np.zeros(0)
+        SLO = np.minimum(SA, SB) - SH[:, None]
+        SHI = np.maximum(SA, SB) + SH[:, None]
+
         def under(i):
             xy = np.asarray(plans[i][1].xy, np.float64)[:, :2]
             out = np.zeros(len(xy), bool)
-            for (ln, h), (lo, hi) in zip(decks, dbox):
-                inb = ((xy >= lo) & (xy <= hi)).all(1)
-                if not inb.any():
-                    continue
-                k = np.flatnonzero(inb)
-                a, b = ln[:-1], ln[1:]
-                ab = b - a
-                q = xy[k]
-                t = np.clip(((q[:, None] - a[None]) * ab[None]).sum(2) / np.maximum((ab * ab).sum(1), 1e-12)[None], 0, 1)
-                d = np.hypot(*(a[None] + ab[None] * t[..., None] - q[:, None]).transpose(2, 0, 1)).min(1)
-                out[k[d <= h + ROAD_LAWS_DECK_M]] = True
+            if not len(SA) or not len(xy):
+                return out
+            lo, hi = xy.min(0), xy.max(0)
+            sel = np.flatnonzero((SHI[:, 0] >= lo[0]) & (SHI[:, 1] >= lo[1]) & (SLO[:, 0] <= hi[0]) & (SLO[:, 1] <= hi[1]))
+            if not len(sel):
+                return out
+            a, b, h = SA[sel], SB[sel], SH[sel]
+            ab = b - a
+            t = np.clip(((xy[:, None] - a[None]) * ab[None]).sum(2) / np.maximum((ab * ab).sum(1), 1e-12)[None], 0, 1)
+            d = np.hypot(*(a[None] + ab[None] * t[..., None] - xy[:, None]).transpose(2, 0, 1))
+            out[(d <= h[None]).any(1)] = True
             return out
         skip = [i for i, (f, _p) in enumerate(plans) if TUNNEL_TAG in str(f)]
         info = {}
@@ -4665,9 +4678,13 @@ class _Planner:
                         np.round(xy, 1).tolist(), np.round(z0, 2).tolist(), np.round(np.asarray(p.z), 2).tolist(),
                         np.flatnonzero(h).tolist() if h is not None else None, np.flatnonzero(under(i)).tolist())
         log.warning("grading: road laws %s: %d of %d plans changed, %s chains, %s couplings, %s samples, %s networks "
-                    "(%s relaxed, %s left as they were), %.2f s", key, n, len(plans), info.get("chains"),
-                    info.get("couplings"), info.get("samples"), info.get("networks"), info.get("relaxed"),
-                    info.get("infeasible"), _time.monotonic() - t0)
+                    "(%s infeasible, left as they are), %.2f s", key, n, len(plans), info.get("chains"),
+                    info.get("couplings"), info.get("samples"), info.get("networks"), info.get("infeasible"),
+                    _time.monotonic() - t0)
+        for members, kinfo in info.get("failed", ()):       # (each: what the kernel said; the conflict to fix)
+            log.error("grading: road laws infeasible network in %s: %d chains; %s", key, len(members),
+                      kinfo.get("error") or ", ".join("%s %s" % (k, kinfo[k]) for k in sorted(kinfo)
+                                                      if k not in ("converged", "feasible")))
         return n
 
     def _apply_shapes(self, plans, specs):

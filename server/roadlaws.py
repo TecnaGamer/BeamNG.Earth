@@ -18,8 +18,8 @@ one quadratic programme (the Rust kernel of carriageways.solve, as the interchan
   NATURAL_PLUS; read from the plans' natural profiles, not from what the passes made of them: a 24 m cliff an
   interchange's ramp left is no hill to keep): it is the sudden changes of grade the laws take out, not the hills;
 - each connected network of roads is solved on its own (a conflict at one junction of a city, an infeasible
-  programme, left 900 roads of the cell as the passes made them), and one that is infeasible again without its
-  landings, then without its grade law (the curves alone), before it is left as it was;
+  programme, left 900 roads of the cell as the passes made them); one with no answer is left as it is, and said (no
+  stand-in: the conflict is the thing to fix);
 - what the passes solved is held (an interchange's shape and its ramps, a bridge's abutment end, a tunnel), and a road
   under a deck may only go down (its clearance stays).
 
@@ -148,8 +148,7 @@ def _nearest(xy, P):
 
 def _solve_networks(chains, ccps):
     """The chains' profiles ([array or None: left as it was]), each connected network (chains joined by couplings)
-    solved on its own: as it is, else without its landings (the "ge" couplings), else without its grade law too.
-    Returns (profiles, stats)."""
+    solved on its own, once. Returns (profiles, stats: stats["failed"] [(chains, kernel info)] of those with none)."""
     import carriageways as _cw
     n = len(chains)
     parent = list(range(n))
@@ -165,33 +164,22 @@ def _solve_networks(chains, ccps):
     for c in range(n):
         groups[root(c)].append(c)
     out = [None] * n
-    stats = dict(networks=len(groups), relaxed=0, infeasible=0, feasible=True, ok_chain=[False] * n)
+    stats = dict(networks=len(groups), infeasible=0, failed=[], ok_chain=[False] * n)
     for members in groups.values():
         pos = {c: q for q, c in enumerate(members)}
         cps = [(pos[a], i, pos[b], j, k, v) for a, i, b, j, k, v in ccps if a in pos]
-        for level in (0, 1, 2):
-            sub = [dict(chains[c]) for c in members]
-            sc = cps
-            if level >= 1:
-                sc = [c for c in cps if c[4] != "ge"]
-            if level >= 2:
-                for ch in sub:
-                    ch["grade"] = 1.0
-            info = {}
-            try:
-                got = _cw.solve(sub, sc, diagnostics=info)
-            except Exception as e:      # (this network as the passes left it)
-                log.warning("grading: road laws: %s: %s", type(e).__name__, e)
-                got, info = None, {"feasible": False}
-            if got is not None and info.get("feasible", True) and info.get("converged", True):
-                for c, z in zip(members, got):
-                    out[c] = z
-                    stats["ok_chain"][c] = True
-                if level:
-                    stats["relaxed"] += 1
-                break
+        info = {}
+        try:
+            got = _cw.solve([chains[c] for c in members], cps, diagnostics=info)
+        except Exception as e:          # (this network as the passes left it)
+            got, info = None, {"error": "%s: %s" % (type(e).__name__, e)}
+        if got is not None and info.get("feasible", True) and info.get("converged", True):
+            for c, z in zip(members, got):
+                out[c] = z
+                stats["ok_chain"][c] = True
         else:
             stats["infeasible"] += 1
+            stats["failed"].append((members, info))
     return out, stats
 
 
@@ -338,20 +326,25 @@ def apply(plans, specs, held=None, under=None, skip=(), diagnostics=None, natura
         for k, e in free:
             land(k, e, main, onto)
     in_node = {x for node in nodes for x in node}
-    boxes = [(xy.min(0), xy.max(0)) for xy in xys]
+    # (the plans' boxes grown by their reach, as arrays: each end tested against all of them at once; one box test a
+    # pair in Python was 40 % of a city cell's time)
+    reach_all = np.array([float(getattr(plans[idx[j]], "road_half", 0.0) or 0.0) + REACH_M for j in range(len(xys))])
+    BX = np.array([np.r_[xy.min(0), xy.max(0)] for xy in xys]).reshape(-1, 4)
+    BLO = BX[:, :2] - reach_all[:, None]
+    BHI = BX[:, 2:] + reach_all[:, None]
+    run_of = np.array([loc[j][0] if j in loc else -1 for j in range(len(xys))])
     for k in range(len(xys)):       # (an end on another road's line, not at its end: a T junction)
         for e in (0, 1):
             if (k, e) in paired or (k, e) in in_node:
                 continue
             P = xys[k][0 if e == 0 else -1]
             best = None
-            for j in range(len(xys)):
-                if j == k or loc[j][0] == loc[k][0]:
+            cand = np.flatnonzero((BLO[:, 0] <= P[0]) & (BLO[:, 1] <= P[1]) & (BHI[:, 0] >= P[0]) &
+                                  (BHI[:, 1] >= P[1]) & (run_of != run_of[k]))
+            for j in cand.tolist():
+                if j == k:
                     continue
-                reach = float(getattr(plans[idx[j]], "road_half", 0.0) or 0.0) + REACH_M
-                lo, hi_ = boxes[j]
-                if (P < lo - reach).any() or (P > hi_ + reach).any():
-                    continue
+                reach = reach_all[j]
                 seg, tt, d = _nearest(xys[j], P)
                 if d <= reach and (best is None or d < best[0]):
                     best = (d, j, float(arcs[j][seg] + tt * (arcs[j][seg + 1] - arcs[j][seg])))

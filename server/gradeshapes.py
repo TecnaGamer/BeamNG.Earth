@@ -65,9 +65,7 @@ W_END = 1.0                 # a system end's embankment (per m, squared)
 W_HOLD = 100.0              # a short deck chain (a road dug under it) at its ground
 W_DIP = 0.5                 # a road's dip under its crossing
 W_SMOOTH = 0.2
-W_LAW = 3000.0              # a grade, curve or clearance law broken (penalty: always an answer; it outranks every cost)
 W_JOIN = 300.0
-ITERS = 80
 
 Member = namedtuple("Member", "key line kind cls kmh level half limit")
 # key: hashable, unique, the same from every cell; line (k, 2) frame ENU; kind: "ground", "deck", "tunnel", "rail",
@@ -585,18 +583,15 @@ def _law(net, pc):
 def solve_shape(net, sysm, pcs, smp, ground, fixed_z, diagnostics=None):
     """The shape: per piece its heights. The laws (grade, vertical curve by speed, clearance, joints) are hard
     constraints of one quadratic programme (the Rust kernel's, carriageways.solve); the costs: the embankment at the
-    shape's ends on the ground, the depth a road goes under to, a short deck held at its ground. Where the kernel finds
-    no answer (laws that cannot all hold), the same problem with the laws as penalties (solve_shape_soft): always an
-    answer."""
+    shape's ends on the ground, the depth a road goes under to, a short deck held at its ground. None where the
+    kernel finds no answer (laws that cannot all hold): no stand-in, the system is left as it is and the caller says
+    so (the conflict is the thing to fix)."""
     try:
-        got = _solve_shape_qp(net, sysm, pcs, smp, ground, fixed_z, diagnostics)
-    except Exception as e:      # (no kernel, or it failed: the penalty solve)
+        return _solve_shape_qp(net, sysm, pcs, smp, ground, fixed_z, diagnostics)
+    except Exception as e:      # (no kernel, or it failed)
         if diagnostics is not None:
             diagnostics["qp_error"] = f"{type(e).__name__}: {e}"
-        got = None
-    if got is not None:
-        return got
-    return solve_shape_soft(net, sysm, pcs, smp, ground, fixed_z)
+        return None
 
 
 def _deck_targets(net, sysm, pc, t):
@@ -666,141 +661,6 @@ def _solve_shape_qp(net, sysm, pcs, smp, ground, fixed_z, diagnostics):
     return [np.asarray(z, np.float64) for z in zs]
 
 
-def solve_shape_soft(net, sysm, pcs, smp, ground, fixed_z):
-    """The shape with its laws as penalties (active sets, re-evaluated each iteration): always an answer."""
-    import scipy.sparse as sp
-    import scipy.sparse.linalg as spla
-    off = np.cumsum([0] + [len(x["d"]) for x in smp])
-    N = int(off[-1])
-    if N == 0:
-        return []
-
-    def var(i, s_):
-        got = _var(pcs, smp, i, s_)
-        if got is None:
-            return None
-        p, a, b, t = got
-        return [(int(off[p] + a), 1.0 - t), (int(off[p] + b), t)]
-    g_all = np.concatenate([np.asarray(g, np.float64) for g in ground])
-    R, C, V, B = [], [], [], []
-    nrow = [0]
-
-    def row(ent, b, w):
-        for c, v in ent:
-            R.append(nrow[0])
-            C.append(c)
-            V.append(v * w)
-        B.append(b * w)
-        nrow[0] += 1
-    laws, bends = [], []
-    for p, (pc, x) in enumerate(zip(pcs, smp)):
-        o = int(off[p])
-        dv = x["d"]
-        g, rad = _law(net, pc)
-        for k in range(len(dv) - 1):
-            laws.append((o + k, o + k + 1, float(dv[k + 1] - dv[k]), g))
-        for k in range(1, len(dv) - 1):
-            ds = float(dv[k + 1] - dv[k - 1]) / 2
-            bends.append((o + k - 1, o + k, o + k + 1, max(ds, 1e-6), ds / rad))
-            row([(o + k - 1, 1.0), (o + k, -2.0), (o + k + 1, 1.0)], 0.0, W_SMOOTH)
-        if pc["kind"] == "deck":
-            target, w = _deck_targets(net, sysm, pc, g_all[o:off[p + 1]])
-            for k in range(len(dv)):
-                if w[k] > 1e-5:
-                    row([(o + k, 1.0)], target[k], math.sqrt(w[k]))
-    for i, si, j, sj in sysm["joins"]:
-        a_, b_ = var(i, si), var(j, sj)
-        if a_ and b_:
-            row(a_ + [(c, -v) for c, v in b_], 0.0, W_JOIN)
-    for p, a, q, b in _overlaps(pcs, smp):
-        row([(int(off[p] + a), 1.0), (int(off[q] + b), -1.0)], 0.0, W_JOIN)
-    n_fixed = nrow[0]
-    fixed = (np.array(R, np.int64), np.array(C, np.int64), np.array(V, np.float64), np.array(B, np.float64))
-    clears = []
-    for c in sysm["crossings"]:
-        need = clearance_need(net, c["u"], c["d"])
-        vu, vd = var(c["u"], c["su"]), var(c["d"], c["sd"])
-        zu = None if vu else fixed_z(c["u"], c["su"])
-        zd = None if vd else fixed_z(c["d"], c["sd"])
-        if (vu is None and zu is None) or (vd is None and zd is None) or (vu is None and vd is None):
-            continue
-        clears.append((vu, zu, vd, zd, need))
-    la = np.array([x[0] for x in laws], np.int64)
-    lb = np.array([x[1] for x in laws], np.int64)
-    lds = np.maximum(np.array([x[2] for x in laws], np.float64), 1e-6)
-    lg = np.array([x[3] for x in laws], np.float64)
-    ba = np.array([x[0] for x in bends], np.int64)
-    bb = np.array([x[1] for x in bends], np.int64)
-    bc = np.array([x[2] for x in bends], np.int64)
-    bds = np.array([x[3] for x in bends], np.float64)
-    blim = np.array([x[4] for x in bends], np.float64)
-    dip_ix = np.concatenate([np.arange(off[p], off[p + 1]) for p, pc in enumerate(pcs) if pc["kind"] == "dip"] or
-                            [np.zeros(0, np.int64)]).astype(np.int64)
-    z = g_all.copy()
-    for it in range(ITERS):
-        Rr, Cc, Vv, Bb = [fixed[0]], [fixed[1]], [fixed[2]], [fixed[3]]
-        r0 = n_fixed
-        if len(dip_ix):
-            r_ = z[dip_ix] - g_all[dip_ix]
-            w = np.where(r_ > 0.0, 0.3 * W_LAW, np.sqrt(W_DIP / np.maximum(np.abs(r_), 0.05)))
-            k = len(dip_ix)
-            Rr.append(r0 + np.arange(k))
-            Cc.append(dip_ix)
-            Vv.append(w)
-            Bb.append(w * g_all[dip_ix])
-            r0 += k
-        gr = (z[lb] - z[la]) / lds
-        over = np.flatnonzero(np.abs(gr) > lg)
-        if len(over):
-            k = len(over)
-            rr = r0 + np.arange(k)
-            Rr += [rr, rr]
-            Cc += [lb[over], la[over]]
-            Vv += [np.full(k, W_LAW), np.full(k, -W_LAW)]
-            Bb += [W_LAW * np.sign(gr[over]) * lg[over] * lds[over]]
-            r0 += k
-        if len(bends):
-            dg = ((z[bc] - z[bb]) - (z[bb] - z[ba])) / bds
-            bent = np.flatnonzero(np.abs(dg) > blim)
-            if len(bent):
-                k = len(bent)
-                rr = r0 + np.arange(k)
-                w = W_LAW / bds[bent]
-                Rr += [rr, rr, rr]
-                Cc += [bc[bent], bb[bent], ba[bent]]
-                Vv += [w, -2.0 * w, w]
-                Bb += [W_LAW * np.sign(dg[bent]) * blim[bent]]
-                r0 += k
-        for vu, zu, vd, zd, need in clears:
-            hu = sum(z[c] * v for c, v in vu) if vu else zu
-            hd = sum(z[c] * v for c, v in vd) if vd else zd
-            if hu - hd >= need:
-                continue
-            ent, b = [], need
-            if vu:
-                ent += vu
-            else:
-                b -= zu
-            if vd:
-                ent += [(c, -v) for c, v in vd]
-            else:
-                b += zd
-            for c, v in ent:
-                Rr.append(np.array([r0]))
-                Cc.append(np.array([c], np.int64))
-                Vv.append(np.array([v * W_LAW]))
-            Bb.append(np.array([b * W_LAW]))
-            r0 += 1
-        A = sp.csr_matrix((np.concatenate(Vv), (np.concatenate(Rr), np.concatenate(Cc))), shape=(r0, N))
-        AtA = (A.T @ A).tocsc()
-        z_new = spla.spsolve(AtA + sp.identity(N, format="csc") * 1e-9, A.T @ np.concatenate(Bb))
-        moved = float(np.abs(z_new - z).max())
-        z = z_new
-        if moved < 0.001 and it > 2:
-            break
-    return [z[off[p]:off[p + 1]] for p in range(len(pcs))]
-
-
 def ramp(z0, g0, sign, g, rad, d, ground):
     """An embankment (sign +1: its start over the ground, the road falling away from it) or a cut (-1) from height z0,
     leaving at grade g0 (along d), at distances d (from 0, every STEP_M) with ground heights ground: it turns from g0
@@ -812,6 +672,9 @@ def ramp(z0, g0, sign, g, rad, d, ground):
         return np.full(n, z0), n
     ds = np.diff(d)
     target = -sign * g
+    # (the shape's leaving grade at most the road's own: a deck's end left at 10x its grade made a ramp that climbed
+    # to 10 km, the High Five's secondaries held at 8,200-10,900 m)
+    g0 = float(np.clip(g0, -g, g))
     grade = np.empty(n - 1)
     gcur = g0
     for k in range(n - 1):                      # (the change of grade at most ds / rad a step)
@@ -896,8 +759,11 @@ def embankments(net, systems, shapes, ground_along):
         def ramp_from(j, s0, toward_end, z0, g_along):
             segs = _onward(net, j, s0, toward_end)
             x = sample(net, [dict(segs=segs)])[0]
-            gr = np.concatenate([ground_along(int(m_), np.array([s_])) for m_, s_ in zip(x["mem"], x["ms"])]) \
-                if len(set(x["mem"].tolist())) > 1 else ground_along(j, x["ms"])
+            mem = np.asarray(x["mem"])
+            gr = np.empty(len(mem))
+            for m_ in np.unique(mem):               # (each member's ground in one read, not a read a sample)
+                sel = mem == m_
+                gr[sel] = ground_along(int(m_), np.asarray(x["ms"])[sel])
             sign = 1.0 if z0 >= gr[0] else -1.0
             z, k = ramp(z0, g_along, sign, max_grade(net.m[j]), curve_radius(net.m[j]), x["d"] - x["d"][0], gr)
             ramps.append((j, s0, 1 if toward_end else -1, z0, x, z, k, sign))
