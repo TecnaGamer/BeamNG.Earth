@@ -41,7 +41,13 @@ import dnp
 STEP_M = 4.0                # m between a deck's or a dip's samples
 JOIN_M = 2.5                # m: two parts' ends (or an end and another's line) this close meet there
 CROSS_END_M = 2.0           # m: a crossing this near either part's end is a joint, not a separation
-DECK_THICK_M = 1.2          # m from a deck's road surface to its underside
+# the game's decks (roads.py: MIN_BRIDGE_HEADROOM_M, BRIDGE_HEADROOM_MARGIN_M, deck_depth; grading sets them from there):
+# the vehicle height under the girders, its margin, and the deck's depth by its span (slab + girders)
+HEADROOM_M = 6.0
+HEADROOM_MARGIN_M = 0.15
+DECK_MIN_DEPTH_M = 0.9
+DECK_FULL_DEPTH_M = 2.2
+DECK_SPAN_RATIO = 22.0
 COVER_M = 1.0               # m of structure over an underpass's headroom (the roof under a road or track at grade)
 TUNNEL_MAX_M = 300.0        # m: a longer road tunnel is a tunnel network of its own (tunnels.py), not an underpass
 ROAD_SHORT_M = 20.0         # m: a road deck chain this short over a road is the road dug under it
@@ -51,11 +57,7 @@ RAMP_MAX_M = 600.0          # m: the longest embankment or cut followed along a 
 DIP_MARGIN_M = 3.0          # m past the upper part's edge a road going under holds its dip before its cut ramps up
 SOFT_M = 0.6                # m: the rounding where an embankment meets the ground (a soft maximum)
 
-# vehicle height (m) under a deck, by what runs under
-CLEAR_ROAD_M = 4.8
-CLEAR_MINOR_M = 4.0
-CLEAR_PATH_M = 2.7
-CLEAR_RAIL_M = 6.0
+CLEAR_PATH_M = 3.0          # m: a path's headroom (no vehicle on it)
 
 W_END = 1.0                 # a system end's embankment (per m, squared)
 W_HOLD = 100.0              # a short deck chain (a road dug under it) at its ground
@@ -114,16 +116,26 @@ def curve_radius(m):
 
 
 def headroom(m):
-    """The vehicle height member m needs under a deck (its signed limit where it has one)."""
+    """The vehicle height member m needs under a deck, with its margin: its signed limit where it has one (a
+    maxheight sign), else the game's tallest vehicles' (a track's catenary the same), a path's less."""
     if m.limit is not None and m.limit > 0:
-        return float(m.limit)
-    if m.kind in ("rail", "rail_deck"):
-        return CLEAR_RAIL_M
-    if m.cls in PATHS:
+        return float(m.limit) + HEADROOM_MARGIN_M
+    if m.cls in PATHS and m.kind not in ("rail", "rail_deck"):
         return CLEAR_PATH_M
-    if _base(m.cls) in MINOR:
-        return CLEAR_MINOR_M
-    return CLEAR_ROAD_M
+    return HEADROOM_M + HEADROOM_MARGIN_M
+
+
+def deck_depth(span):
+    """m of structure under a deck's road for a span of span m (the game's: span / 22, 0.9 to 2.2 m)."""
+    return float(np.clip(float(span) / DECK_SPAN_RATIO, DECK_MIN_DEPTH_M, DECK_FULL_DEPTH_M))
+
+
+def clearance_need(net, u, d):
+    """How far the road on upper part u stands over lower part d where they cross: the headroom d needs and u's
+    structure (a deck's depth for its span, an underpass's roof)."""
+    mu = net.m[u]
+    struct = deck_depth(net.L[u]) if mu.kind in ("deck", "rail_deck") else COVER_M
+    return headroom(net.m[d]) + struct
 
 
 def arclen(line):
@@ -218,6 +230,8 @@ def _relations(net, i):
             sj = net.s[j][b_j] + tb * (net.s[j][b_j + 1] - net.s[j][b_j])
             if min(si, net.L[i] - si, sj, net.L[j] - sj) < CROSS_END_M:
                 continue
+            if any(r_[0] == j and r_[1] == "cross" and abs(r_[2] - si) < 1.0 for r_ in out):
+                continue                        # (on a vertex: found on both its segments)
             out.append((j, "cross", si, sj, q))
     return out
 
@@ -327,31 +341,32 @@ def _system(net, seeds, rel):
             if moves is None:
                 continue
             crossings.append(dict(u=u, su=su, d=d, sd=sd, q=np.asarray(q, np.float64), moves=moves))
-    # the roads going under: the window of each that dips (its crossing +- the upper part's half width and a margin)
-    dips = {}
+    # the roads going under: per road, the window that dips (its crossings +- the upper part's half width and the cut
+    # each side back up to the ground at the road's grade, through its curves), past its own ends if need be (the road
+    # followed on through its joints); a tunnel whole, with its approaches the same way
+    win = {}
     for c in crossings:
         if c["moves"] != "down":
             continue
         d = c["d"]
-        if members[d].kind == "tunnel":
-            dips.setdefault(d, []).append((0.0, net.L[d]))
+        md = members[d]
+        g = max_grade(md)
+        w = clearance_need(net, c["u"], d) / g + curve_radius(md) * g
+        if md.kind == "tunnel":
+            win.setdefault(d, []).append((-w, net.L[d] + w))
         else:
-            # (the window under the upper part, and the cut each side back up to the ground at the road's grade,
-            # through its curves: the whole dip is the shape's, its least depth the cost)
-            md = members[d]
-            depth = headroom(md) + DECK_THICK_M
-            g = max_grade(md)
-            w = members[c["u"]].half + DIP_MARGIN_M + depth / g + curve_radius(md) * g
-            dips.setdefault(d, []).append((max(0.0, c["sd"] - w), min(net.L[d], c["sd"] + w)))
-    for d in list(dips):
-        rs = sorted(dips[d])
+            w += members[c["u"]].half + DIP_MARGIN_M
+            win.setdefault(d, []).append((c["sd"] - w, c["sd"] + w))
+    dips = []
+    for d in sorted(win, key=lambda i: str(members[i].key)):
+        rs = sorted(win[d])
         cur = [list(rs[0])]
         for a, b in rs[1:]:
             if a <= cur[-1][1] + STEP_M:
                 cur[-1][1] = max(cur[-1][1], b)
             else:
                 cur.append([a, b])
-        dips[d] = [(float(a), float(b)) for a, b in cur]
+        dips += [(d, float(a), float(b)) for a, b in cur]
     chain_of = {i: chain_len[root(i)] for i in seeds if members[i].kind == "deck"}
     return dict(seeds=seeds, joins=joins, crossings=crossings, ends=ends, dips=dips, chain_of=chain_of)
 
@@ -359,33 +374,190 @@ def _system(net, seeds, rel):
 def system_key(net, sysm):
     """A system's identity: its parts' keys (the same from whichever cell found it)."""
     h = hashlib.sha1()
-    for i in sorted(set(sysm["seeds"]) | set(sysm["dips"]), key=lambda i: str(net.m[i].key)):
+    for i in sorted(set(sysm["seeds"]) | {x[0] for x in sysm["dips"]}, key=lambda i: str(net.m[i].key)):
         h.update(repr(net.m[i].key).encode())
     return h.hexdigest()[:20]
 
 
+# ---- paths: a road followed through its joints (a roundabout's ring, a street split at its junctions) ----
+
+ROADS = ("ground", "tunnel")
+
+
+def _ends_index(net):
+    """{grid cell: [(member, at its end L?)]} of the roads' ends, made once."""
+    idx = getattr(net, "_ends_idx", None)
+    if idx is None:
+        idx = {}
+        for i, m in enumerate(net.m):
+            if m.kind not in ROADS or len(net.lines[i]) < 2:
+                continue
+            for at_end in (False, True):
+                p = net.lines[i][-1] if at_end else net.lines[i][0]
+                idx.setdefault((int(p[0] // 5.0), int(p[1] // 5.0)), []).append((i, at_end))
+        net._ends_idx = idx
+    return idx
+
+
+def next_member(net, i, at_end):
+    """The road going on from member i's end (its end at L if at_end, else its start): (member, entering at its start?)
+    or None: of the roads whose end is there, the same road (feature) first, else the straightest."""
+    idx = _ends_index(net)
+    line = net.lines[i]
+    p = line[-1] if at_end else line[0]
+    d_out = (line[-1] - line[-2]) if at_end else (line[0] - line[1])
+    d_out = d_out / max(float(np.hypot(*d_out)), 1e-9)
+    gx, gy = int(p[0] // 5.0), int(p[1] // 5.0)
+    best = None
+    for dx in (-1, 0, 1):
+        for dy in (-1, 0, 1):
+            for j, j_end in idx.get((gx + dx, gy + dy), ()):
+                if j == i:
+                    continue
+                lj = net.lines[j]
+                q = lj[-1] if j_end else lj[0]
+                if float(np.hypot(*(q - p))) > JOIN_M:
+                    continue
+                d_in = (lj[-2] - lj[-1]) if j_end else (lj[1] - lj[0])
+                d_in = d_in / max(float(np.hypot(*d_in)), 1e-9)
+                same = net.m[j].key[0] == net.m[i].key[0]
+                score = (0 if same else 1, -float(d_out @ d_in), str(net.m[j].key))
+                if best is None or score < best[0]:
+                    best = (score, j, not j_end)
+    if best is None or best[0][1] > -0.5:       # (nothing going on within 60 degrees of straight on)
+        return None
+    return best[1], best[2]
+
+
+def walk(net, i, at_end, length):
+    """Segments [(member, s from, s to)] following the road on from member i's end (at L if at_end, else at 0) for
+    length m, in the order walked."""
+    out, left, cur, cur_end, seen = [], float(length), i, at_end, {i}
+    while left > 1e-6:
+        nx = next_member(net, cur, cur_end)
+        if nx is None or nx[0] in seen:
+            break
+        j, from_start = nx
+        seen.add(j)
+        L = net.L[j]
+        take = min(L, left)
+        out.append((j, 0.0, take) if from_start else (j, L, L - take))
+        left -= take
+        cur, cur_end = j, from_start          # (leaving j by its other end)
+    return out
+
+
+def path_of(net, i, a, b):
+    """The segments of the road through member i from arc length a to b (either may lie past its ends: the road
+    followed on through its joints), in order."""
+    L = net.L[i]
+    segs = []
+    if a < 0:
+        back = walk(net, i, False, -a)
+        segs += [(j, s1, s0) for j, s0, s1 in back[::-1]]
+    segs.append((i, max(0.0, a), min(L, b)))
+    if b > L:
+        segs += walk(net, i, True, b - L)
+    return segs
+
+
 def pieces(net, sysm):
-    """The shape's unknowns: [(member, s0, s1, kind)] for its road decks (whole) and the windows of the roads going
-    under; kind "deck" or "dip"."""
+    """The shape's unknowns: [dict(kind "deck" or "dip", main member, segs)]: its road decks (whole), and per road
+    going under its window followed along the road through its joints."""
     out = []
     for i in sysm["seeds"]:
         if net.m[i].kind == "deck":
-            out.append((i, 0.0, net.L[i], "deck"))
-    for d in sorted(sysm["dips"], key=lambda i: str(net.m[i].key)):
-        for a, b in sysm["dips"][d]:
-            out.append((d, a, b, "dip"))
+            out.append(dict(kind="deck", main=i, segs=[(i, 0.0, net.L[i])]))
+    for d, a, b in sysm["dips"]:
+        out.append(dict(kind="dip", main=d, segs=path_of(net, d, a, b)))
     return out
 
 
 def sample(net, pcs):
-    """Per piece: (xy (m, 2), s (m,))."""
+    """Per piece: dict(xy (m, 2), d (m,) along it, mem (m,) member, ms (m,) arc length on that member)."""
     out = []
-    for i, a, b, kind in pcs:
-        k = max(2, int(math.ceil((b - a) / STEP_M)) + 1)
-        sv = np.linspace(a, b, k)
-        out.append((np.stack([np.interp(sv, net.s[i], net.lines[i][:, 0]),
-                              np.interp(sv, net.s[i], net.lines[i][:, 1])], axis=1), sv))
+    for pc in pcs:
+        xs, ds, mem, ms, joints = [], [], [], [], []
+        d0 = 0.0
+        count = 0
+        for n, (j, s0, s1) in enumerate(pc["segs"]):
+            k = max(2, int(math.ceil(abs(s1 - s0) / STEP_M)) + 1)
+            sv = np.linspace(s0, s1, k)
+            if n:
+                sv = sv[1:]                  # (the joint once: its sample the last part's, and this one's at s0)
+                joints.append((count - 1, j, float(s0)))
+            if not len(sv):
+                continue
+            xy = np.stack([np.interp(sv, net.s[j], net.lines[j][:, 0]), np.interp(sv, net.s[j], net.lines[j][:, 1])],
+                          axis=1)
+            if xs:
+                d_here = d0 + np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(np.vstack([xs[-1][-1:], xy]), axis=0).T))][1:]
+            else:
+                d_here = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(xy, axis=0).T))]
+            xs.append(xy)
+            ds.append(d_here)
+            mem.append(np.full(len(sv), j))
+            ms.append(sv)
+            d0 = float(d_here[-1])
+            count += len(sv)
+        out.append(dict(xy=np.concatenate(xs), d=np.concatenate(ds), mem=np.concatenate(mem),
+                        ms=np.concatenate(ms), joints=joints))
     return out
+
+
+def _locate(smp, p, i, s_):
+    """The two samples of piece p on member i bracketing arc length s_ there, with the weight of the second, or
+    None."""
+    x = smp[p]
+    k = np.flatnonzero(x["mem"] == i)
+    ms = x["ms"][k]
+    extra = [(kk, s0) for kk, j, s0 in x.get("joints", ()) if j == i]
+    if extra:                               # (a joint's sample is this member's too, at its end)
+        k = np.r_[k, [e[0] for e in extra]].astype(np.int64)
+        ms = np.r_[ms, [e[1] for e in extra]]
+        o = np.argsort(ms, kind="stable")
+        k, ms = k[o], ms[o]
+    if len(k) < 2:
+        return None
+    lo_, hi_ = float(min(ms[0], ms[-1])), float(max(ms[0], ms[-1]))
+    if not (lo_ - 1e-6 <= s_ <= hi_ + 1e-6):
+        return None
+    if ms[-1] < ms[0]:
+        k, ms = k[::-1], ms[::-1]
+    o = np.argsort(ms, kind="stable")
+    k, ms = k[o], ms[o]
+    r = int(np.clip(np.searchsorted(ms, s_) - 1, 0, len(ms) - 2))
+    t = float(np.clip((s_ - ms[r]) / max(ms[r + 1] - ms[r], 1e-9), 0.0, 1.0))
+    return int(k[r]), int(k[r + 1]), t
+
+
+def _var(pcs, smp, i, s_):
+    """(piece, sample a, sample b, weight of b) of member i's unknown height at arc length s_, or None."""
+    for p in range(len(pcs)):
+        got = _locate(smp, p, i, s_)
+        if got is not None:
+            return (p,) + got
+    return None
+
+
+def _overlaps(pcs, smp):
+    """Samples of two pieces on the same stretch of road (two dips along one road): [(p, k, q, k2)] to hold equal."""
+    out = []
+    for q in range(len(pcs)):
+        for k in range(len(smp[q]["mem"])):
+            i, s_ = int(smp[q]["mem"][k]), float(smp[q]["ms"][k])
+            for p in range(q):
+                got = _locate(smp, p, i, s_)
+                if got is not None:
+                    a, b, t = got
+                    out.append((p, a if t < 0.5 else b, q, k))
+                    break
+    return out
+
+
+def _law(net, pc):
+    m = net.m[pc["main"]]
+    return max_grade(m), curve_radius(m)
 
 
 def solve_shape(net, sysm, pcs, smp, ground, fixed_z, diagnostics=None):
@@ -405,73 +577,59 @@ def solve_shape(net, sysm, pcs, smp, ground, fixed_z, diagnostics=None):
     return solve_shape_soft(net, sysm, pcs, smp, ground, fixed_z)
 
 
-def _nearest(sv, s_):
-    return int(np.clip(np.searchsorted(sv, s_), 1, len(sv) - 1) - (abs(sv[max(0, np.searchsorted(sv, s_) - 1)] - s_)
-                                                                  <= abs(sv[min(len(sv) - 1, np.searchsorted(sv, s_))] - s_)))
+def _deck_targets(net, sysm, pc, t):
+    """A deck's target and weights: toward the line between its ends' ground, held there if its chain is short (a
+    road is dug under it), else free but for the embankment where it meets the road on the ground."""
+    i = pc["main"]
+    n = len(t)
+    joined = [s_ for a, sa, b, sb in sysm["joins"] for s_, m_ in ((sa, a), (sb, b)) if m_ == i]
+    short = sysm["chain_of"].get(i, 0.0) < ROAD_SHORT_M
+    target = t[0] + (t[-1] - t[0]) * np.arange(n) / max(n - 1, 1)
+    w = np.full(n, W_HOLD if short else 1e-6)
+    for k, s_end in ((0, 0.0), (n - 1, net.L[i])):
+        if not any(abs(s_ - s_end) <= JOIN_M for s_ in joined):
+            w[k] = W_HOLD if short else W_END
+    return target, w
 
 
 def _solve_shape_qp(net, sysm, pcs, smp, ground, fixed_z, diagnostics):
     import carriageways as _cw
-    where = {}
-    for p, (i, a, b, kind) in enumerate(pcs):
-        where.setdefault(i, []).append(p)
-
-    def at(i, s_):
-        """(piece, the samples bracketing arc length s_) of member i's unknown height, or None."""
-        for p in where.get(i, ()):
-            sv = smp[p][1]
-            if sv[0] - 1e-6 <= s_ <= sv[-1] + 1e-6:
-                k = int(np.clip(np.searchsorted(sv, s_) - 1, 0, len(sv) - 2))
-                return p, (k, k + 1)
-        return None
-    joined = {}
-    for i, si, j, sj in sysm["joins"]:
-        joined.setdefault(i, []).append(si)
-        joined.setdefault(j, []).append(sj)
     chains = []
-    for p, (i, a, b, kind) in enumerate(pcs):
-        sv = smp[p][1]
-        t = np.asarray(ground[p], np.float64)
-        n = len(sv)
-        m = net.m[i]
+    for pc, x, t in zip(pcs, smp, ground):
+        t = np.asarray(t, np.float64)
+        n = len(t)
         lo, hi = np.full(n, -np.inf), np.full(n, np.inf)
-        if kind == "deck":
-            short = sysm["chain_of"].get(i, 0.0) < ROAD_SHORT_M
-            target = t[0] + (t[-1] - t[0]) * np.arange(n) / max(n - 1, 1)
-            w = np.full(n, W_HOLD if short else 1e-6)
-            for k, s_end in ((0, 0.0), (n - 1, net.L[i])):
-                if not any(abs(s_ - s_end) <= JOIN_M for s_ in joined.get(i, ())):
-                    w[k] = W_HOLD if short else W_END       # (the embankment where it meets the road on the ground)
+        if pc["kind"] == "deck":
+            target, w = _deck_targets(net, sysm, pc, t)
         else:
-            target = t.copy()
-            w = np.full(n, W_DIP)
+            target, w = t.copy(), np.full(n, W_DIP)
             hi = t.copy()                                   # (a road going under never rises over its ground)
-        chains.append(dict(t=target, w=w, lo=lo, hi=hi, grade=max_grade(m), K=curve_radius(m) / 100.0,
-                           lam=1e-3, step=float((sv[-1] - sv[0]) / max(n - 1, 1)), length=0.0))
+        g, rad = _law(net, pc)
+        chains.append(dict(t=target, w=w, lo=lo, hi=hi, grade=g, K=rad / 100.0, lam=1e-3,
+                           step=float((x["d"][-1] - x["d"][0]) / max(n - 1, 1)), length=0.0))
     cps = []
     for i, si, j, sj in sysm["joins"]:
-        x, y = at(i, si), at(j, sj)
+        x, y = _var(pcs, smp, i, si), _var(pcs, smp, j, sj)
         if x and y:
-            kx = x[1][0] if abs(smp[x[0]][1][x[1][0]] - si) <= abs(smp[x[0]][1][x[1][1]] - si) else x[1][1]
-            ky = y[1][0] if abs(smp[y[0]][1][y[1][0]] - sj) <= abs(smp[y[0]][1][y[1][1]] - sj) else y[1][1]
-            cps.append((x[0], kx, y[0], ky, "eq", 0.0))
+            cps.append((x[0], x[1] if x[3] < 0.5 else x[2], y[0], y[1] if y[3] < 0.5 else y[2], "eq", 0.0))
+    for p, a, q, b in _overlaps(pcs, smp):
+        cps.append((p, a, q, b, "eq", 0.0))
     for c in sysm["crossings"]:
-        mu, md = net.m[c["u"]], net.m[c["d"]]
-        need = headroom(md) + (DECK_THICK_M if mu.kind in ("deck", "rail_deck") else COVER_M)
-        x, y = at(c["u"], c["su"]), at(c["d"], c["sd"])
+        need = clearance_need(net, c["u"], c["d"])
+        x, y = _var(pcs, smp, c["u"], c["su"]), _var(pcs, smp, c["d"], c["sd"])
         if x and y:
-            for kx in x[1]:
-                for ky in y[1]:
+            for kx in (x[1], x[2]):
+                for ky in (y[1], y[2]):
                     cps.append((x[0], kx, y[0], ky, "ge", need))
         elif x:
             zd = fixed_z(c["d"], c["sd"])
             if zd is not None:
-                for kx in x[1]:
+                for kx in (x[1], x[2]):
                     chains[x[0]]["lo"][kx] = max(chains[x[0]]["lo"][kx], zd + need)
         elif y:
             zu = fixed_z(c["u"], c["su"])
             if zu is not None:
-                for ky in y[1]:
+                for ky in (y[1], y[2]):
                     chains[y[0]]["hi"][ky] = min(chains[y[0]]["hi"][ky], zu - need)
     info = {}
     zs = _cw.solve(chains, cps, diagnostics=info)
@@ -483,29 +641,20 @@ def _solve_shape_qp(net, sysm, pcs, smp, ground, fixed_z, diagnostics):
 
 
 def solve_shape_soft(net, sysm, pcs, smp, ground, fixed_z):
-    """The shape: per piece its heights. ground: per piece, the ground height at its samples; fixed_z(member, s): the
-    height of a part that is not an unknown where the shape crosses it (its ground, a track's bed, a rail deck's line).
-    Least squares; the grade laws, clearances and joints as penalties (active sets, re-evaluated each iteration), so
-    there is always an answer."""
+    """The shape with its laws as penalties (active sets, re-evaluated each iteration): always an answer."""
     import scipy.sparse as sp
     import scipy.sparse.linalg as spla
-    off = np.cumsum([0] + [len(x[1]) for x in smp])
+    off = np.cumsum([0] + [len(x["d"]) for x in smp])
     N = int(off[-1])
     if N == 0:
         return []
-    where = {}
-    for p, (i, a, b, kind) in enumerate(pcs):
-        where.setdefault(i, []).append(p)
 
-    def var(i, s):
-        """[(sample index, weight)] interpolating member i's unknown height at arc length s, or None."""
-        for p in where.get(i, ()):
-            sv = smp[p][1]
-            if sv[0] - 1e-6 <= s <= sv[-1] + 1e-6:
-                k = int(np.clip(np.searchsorted(sv, s) - 1, 0, len(sv) - 2))
-                t = float(np.clip((s - sv[k]) / max(sv[k + 1] - sv[k], 1e-9), 0.0, 1.0))
-                return [(int(off[p] + k), 1.0 - t), (int(off[p] + k + 1), t)]
-        return None
+    def var(i, s_):
+        got = _var(pcs, smp, i, s_)
+        if got is None:
+            return None
+        p, a, b, t = got
+        return [(int(off[p] + a), 1.0 - t), (int(off[p] + b), t)]
     g_all = np.concatenate([np.asarray(g, np.float64) for g in ground])
     R, C, V, B = [], [], [], []
     nrow = [0]
@@ -517,47 +666,33 @@ def solve_shape_soft(net, sysm, pcs, smp, ground, fixed_z):
             V.append(v * w)
         B.append(b * w)
         nrow[0] += 1
-    laws = []           # (sample a, sample a+1, ds, max grade)
-    bends = []          # (sample k-1, k, k+1, the largest change of grade over them: ds / radius)
-    for p, (i, a, b, kind) in enumerate(pcs):
+    laws, bends = [], []
+    for p, (pc, x) in enumerate(zip(pcs, smp)):
         o = int(off[p])
-        sv = smp[p][1]
-        g = max_grade(net.m[i])
-        rad = curve_radius(net.m[i])
-        for k in range(len(sv) - 1):
-            laws.append((o + k, o + k + 1, float(sv[k + 1] - sv[k]), g))
-        for k in range(1, len(sv) - 1):
-            ds = float(sv[k + 1] - sv[k - 1]) / 2
+        dv = x["d"]
+        g, rad = _law(net, pc)
+        for k in range(len(dv) - 1):
+            laws.append((o + k, o + k + 1, float(dv[k + 1] - dv[k]), g))
+        for k in range(1, len(dv) - 1):
+            ds = float(dv[k + 1] - dv[k - 1]) / 2
             bends.append((o + k - 1, o + k, o + k + 1, max(ds, 1e-6), ds / rad))
             row([(o + k - 1, 1.0), (o + k, -2.0), (o + k + 1, 1.0)], 0.0, W_SMOOTH)
-    # a deck's end that is the system's end (no other deck there): the least embankment where it meets the ground
-    joined = {}
-    for i, si, j, sj in sysm["joins"]:
-        joined.setdefault(i, []).append(si)
-        joined.setdefault(j, []).append(sj)
-    for p, (i, a, b, kind) in enumerate(pcs):
-        if kind != "deck":
-            continue
-        o, n = int(off[p]), len(smp[p][1])
-        short = sysm["chain_of"].get(i, 0.0) < ROAD_SHORT_M     # (the road under goes down: the deck stays)
-        for k, s_end in ((0, 0.0), (n - 1, net.L[i])):
-            if not any(abs(s_ - s_end) <= JOIN_M for s_ in joined.get(i, ())):
-                row([(o + k, 1.0)], g_all[o + k], W_HOLD if short else W_END)
-        # (toward the straight line between its ends' ground: held there if short, else only defined where nothing
-        # else asks)
-        for k in range(n):
-            row([(o + k, 1.0)], g_all[o] + (g_all[o + n - 1] - g_all[o]) * k / max(n - 1, 1), W_HOLD if short else 1e-3)
+        if pc["kind"] == "deck":
+            target, w = _deck_targets(net, sysm, pc, g_all[o:off[p + 1]])
+            for k in range(len(dv)):
+                if w[k] > 1e-5:
+                    row([(o + k, 1.0)], target[k], math.sqrt(w[k]))
     for i, si, j, sj in sysm["joins"]:
         a_, b_ = var(i, si), var(j, sj)
         if a_ and b_:
             row(a_ + [(c, -v) for c, v in b_], 0.0, W_JOIN)
+    for p, a, q, b in _overlaps(pcs, smp):
+        row([(int(off[p] + a), 1.0), (int(off[q] + b), -1.0)], 0.0, W_JOIN)
     n_fixed = nrow[0]
     fixed = (np.array(R, np.int64), np.array(C, np.int64), np.array(V, np.float64), np.array(B, np.float64))
-    # the clearances: upper - lower >= need, either side an unknown or a fixed height
     clears = []
     for c in sysm["crossings"]:
-        mu, md = net.m[c["u"]], net.m[c["d"]]
-        need = headroom(md) + (DECK_THICK_M if mu.kind in ("deck", "rail_deck") else COVER_M)
+        need = clearance_need(net, c["u"], c["d"])
         vu, vd = var(c["u"], c["su"]), var(c["d"], c["sd"])
         zu = None if vu else fixed_z(c["u"], c["su"])
         zd = None if vd else fixed_z(c["d"], c["sd"])
@@ -573,8 +708,7 @@ def solve_shape_soft(net, sysm, pcs, smp, ground, fixed_z):
     bc = np.array([x[2] for x in bends], np.int64)
     bds = np.array([x[3] for x in bends], np.float64)
     blim = np.array([x[4] for x in bends], np.float64)
-    # a road going under: as shallow as it may be (the least cut, L1: on its ground wherever it can be), never over it
-    dip_ix = np.concatenate([np.arange(off[p], off[p + 1]) for p, x in enumerate(pcs) if x[3] == "dip"] or
+    dip_ix = np.concatenate([np.arange(off[p], off[p + 1]) for p, pc in enumerate(pcs) if pc["kind"] == "dip"] or
                             [np.zeros(0, np.int64)]).astype(np.int64)
     z = g_all.copy()
     for it in range(ITERS):
@@ -599,7 +733,7 @@ def solve_shape_soft(net, sysm, pcs, smp, ground, fixed_z):
             Vv += [np.full(k, W_LAW), np.full(k, -W_LAW)]
             Bb += [W_LAW * np.sign(gr[over]) * lg[over] * lds[over]]
             r0 += k
-        if len(bends):          # (the change of grade between neighbouring samples within the curve law)
+        if len(bends):
             dg = ((z[bc] - z[bb]) - (z[bb] - z[ba])) / bds
             bent = np.flatnonzero(np.abs(dg) > blim)
             if len(bent):
@@ -684,93 +818,106 @@ def ramp(z0, g0, sign, g, rad, d, ground):
     return out, max(k2, t + 1)
 
 
-def _span(net, j, s_from, toward_end):
-    """Arc lengths along member j from s_from away from the shape (toward its end at L if toward_end, else toward 0),
-    every STEP_M, at most RAMP_MAX_M."""
+def _onward(net, j, s_from, toward_end):
+    """The road from member j's arc length s_from on, away from the shape (toward j's end at L if toward_end), followed
+    through its joints, RAMP_MAX_M at most: segments."""
     L = net.L[j]
-    stop = min(L, s_from + RAMP_MAX_M) if toward_end else max(0.0, s_from - RAMP_MAX_M)
-    k = max(2, int(math.ceil(abs(stop - s_from) / STEP_M)) + 1)
-    return np.linspace(s_from, stop, k)
+    if toward_end:
+        segs = [(j, s_from, min(L, s_from + RAMP_MAX_M))]
+        left = RAMP_MAX_M - (segs[0][2] - s_from)
+        return segs + (walk(net, j, True, left) if left > 1e-6 else [])
+    segs = [(j, s_from, max(0.0, s_from - RAMP_MAX_M))]
+    left = RAMP_MAX_M - (s_from - segs[0][2])
+    return segs + (walk(net, j, False, left) if left > 1e-6 else [])
+
+
+def _split(net, x, z, k_end, mode, out):
+    """A ramp's or dip's samples (x from sample()) up to k_end, per member: out[member] += (s ascending, z, mode)."""
+    mem, ms = x["mem"][:k_end], x["ms"][:k_end]
+    zz = z[:k_end]
+    for j in dict.fromkeys(mem.tolist()):
+        k = np.flatnonzero(mem == j)
+        sv, zv = ms[k], zz[k]
+        extra = [(kk, s0) for kk, jj, s0 in x.get("joints", ()) if jj == j and kk < k_end]
+        if extra:                           # (the joint's sample: this member's end too)
+            sv = np.r_[sv, [e[1] for e in extra]]
+            zv = np.r_[zv, [zz[e[0]] for e in extra]]
+        if len(sv) < 2:
+            continue
+        o = np.argsort(sv, kind="stable")
+        out.setdefault(int(j), []).append((sv[o], zv[o], mode))
 
 
 def embankments(net, systems, shapes, ground_along):
     """The roads' heights round the shapes: per member, [(s (m,), z (m,), mode)] with mode "fill" (the plan rises to
     it: an embankment), "cut" (the plan goes down to it) or "set" (the plan takes it: a road between two shapes whose
-    ramps meet before the ground does, lerped). shapes: per system, per piece its heights (solve_shape);
+    ramps meet before the ground does, lerped). shapes: per system (pieces, samples, heights);
     ground_along(member, s) -> ground heights."""
-    ramps = {}              # member -> [(s0, direction +1/-1, z0, s (m,), z (m,), touch index, sign)]
+    ramps = []              # (first member, s0, direction +1/-1, z0, samples, z, touch index, sign)
+    out = {}
     for sysm, (pcs, smp, zs) in zip(systems, shapes):
         def shape_z(i, s_):
-            for (pi, a, b, kind), (xy, sv), z in zip(pcs, smp, zs):
-                if pi == i and sv[0] - 1e-6 <= s_ <= sv[-1] + 1e-6:
-                    return float(np.interp(s_, sv, z))
-            return None
+            got = _var(pcs, smp, i, s_)
+            if got is None:
+                return None, 0.0
+            p, a, b, t = got
+            z = zs[p]
+            dd = smp[p]["d"]
+            zz = z[a] + (z[b] - z[a]) * t
+            g = (z[b] - z[a]) / max(dd[b] - dd[a], 1e-6)
+            return float(zz), float(g)
 
-        def leaving(i, s_):
-            """The grade the shape leaves member i with at its end s_ (along the way out of it)."""
-            for (pi, a, b, kind), (xy, sv), z in zip(pcs, smp, zs):
-                if pi == i and sv[0] - 1e-6 <= s_ <= sv[-1] + 1e-6 and len(sv) >= 2:
-                    if s_ - sv[0] < sv[-1] - s_:
-                        return float((z[0] - z[1]) / max(sv[1] - sv[0], 1e-6))
-                    return float((z[-1] - z[-2]) / max(sv[-1] - sv[-2], 1e-6))
-            return 0.0
-        # a deck's or a tunnel's end on a road on the ground
+        def ramp_from(j, s0, toward_end, z0, g_along):
+            segs = _onward(net, j, s0, toward_end)
+            x = sample(net, [dict(segs=segs)])[0]
+            gr = np.concatenate([ground_along(int(m_), np.array([s_])) for m_, s_ in zip(x["mem"], x["ms"])]) \
+                if len(set(x["mem"].tolist())) > 1 else ground_along(j, x["ms"])
+            sign = 1.0 if z0 >= gr[0] else -1.0
+            z, k = ramp(z0, g_along, sign, max_grade(net.m[j]), curve_radius(net.m[j]), x["d"] - x["d"][0], gr)
+            ramps.append((j, s0, 1 if toward_end else -1, z0, x, z, k, sign))
+
+        # a deck's end on a road on the ground: the embankment (or cut) down (up) to the ground along it
         for i, si, j, sj in sysm["ends"]:
-            z0 = shape_z(i, si)
+            if net.m[i].kind != "deck":
+                continue
+            z0, g = shape_z(i, si)
             if z0 is None:
                 continue
-            toward_end = sj < net.L[j] / 2
-            sv = _span(net, j, sj, toward_end)
-            gr = ground_along(j, sv)
-            sign = 1.0 if z0 >= gr[0] else -1.0
-            z, k = ramp(z0, leaving(i, si), sign, max_grade(net.m[j]), curve_radius(net.m[j]), np.abs(sv - sv[0]), gr)
-            ramps.setdefault(j, []).append((sj, 1 if toward_end else -1, z0, sv, z, k, sign))
-        # a road going under: its window's heights, cut ramps out of it both ways
-        for (pi, a, b, kind), (xy, sv), z in zip(pcs, smp, zs):
-            if kind != "dip" or net.m[pi].kind == "tunnel":
+            leaving = -g if si < net.L[i] / 2 else g        # (the deck's grade on the way out of it)
+            ramp_from(j, sj, sj < net.L[j] / 2, z0, leaving)
+        # a road going under: its dip (cut), and on from its ends if they are not back on the ground
+        for pc, x, z in zip(pcs, smp, zs):
+            if pc["kind"] != "dip":
                 continue
-            ramps.setdefault(pi, []).append((a, 0, None, sv, np.asarray(z, np.float64), len(sv), 0.0))
-            for s0, z0, toward_end in ((a, float(z[0]), False), (b, float(z[-1]), True)):
-                if (toward_end and s0 >= net.L[pi] - 1e-6) or (not toward_end and s0 <= 1e-6):
+            _split(net, x, np.asarray(z, np.float64), len(z), "cut", out)
+            for e in (0, len(z) - 1):
+                j, s_ = int(x["mem"][e]), float(x["ms"][e])
+                gr = ground_along(j, np.array([s_]))[0]
+                if abs(z[e] - gr) < 0.05:
                     continue
-                sv2 = _span(net, pi, s0, toward_end)
-                gr = ground_along(pi, sv2)
-                sign = 1.0 if z0 >= gr[0] else -1.0
-                g0 = float((z[1] - z[0]) / max(sv[1] - sv[0], 1e-6)) if not toward_end else float(
-                    (z[-1] - z[-2]) / max(sv[-1] - sv[-2], 1e-6))
-                z2, k = ramp(z0, -g0 if not toward_end else g0, sign, max_grade(net.m[pi]), curve_radius(net.m[pi]),
-                             np.abs(sv2 - sv2[0]), gr)
-                ramps.setdefault(pi, []).append((s0, 1 if toward_end else -1, z0, sv2, z2, k, sign))
-    out = {}
-    for j, lst in ramps.items():
-        pieces_ = []
-        used = set()
-        # two ramps toward each other that meet before the ground: the straight line between their ends (lerped)
-        for x in range(len(lst)):
-            for y in range(len(lst)):
-                if x == y or x in used or y in used:
-                    continue
-                s0x, dx, zx, svx, z_x, kx, _sx = lst[x]
-                s0y, dy, zy, svy, z_y, ky, _sy = lst[y]
-                if dx != 1 or dy != -1 or zx is None or zy is None or s0y <= s0x:
-                    continue
-                reach_x = svx[min(kx, len(svx) - 1)]
-                reach_y = svy[min(ky, len(svy) - 1)]
-                if reach_x >= reach_y:          # (the ramps overlap: no ground between them)
-                    k = max(2, int(math.ceil((s0y - s0x) / STEP_M)) + 1)
-                    sv = np.linspace(s0x, s0y, k)
-                    pieces_.append((sv, zx + (zy - zx) * (sv - s0x) / max(s0y - s0x, 1e-6), "set"))
-                    used |= {x, y}
-        for x, (s0, d, z0, sv, z, k, sign) in enumerate(lst):
-            if x in used:
+                k2 = 1 if e == 0 else len(z) - 2
+                g = (z[e] - z[k2]) / max(abs(x["d"][e] - x["d"][k2]), 1e-6)
+                toward_end = (x["ms"][e] - x["ms"][k2] > 0) if int(x["mem"][k2]) == j else s_ > net.L[j] / 2
+                ramp_from(j, s_, bool(toward_end), float(z[e]), g)
+    # two ramps on one road toward each other that meet before the ground: the straight line between their ends
+    used = set()
+    for a in range(len(ramps)):
+        for b in range(len(ramps)):
+            if a == b or a in used or b in used:
                 continue
-            if d == 0:                          # (a dip's window)
-                pieces_.append((sv, z, "cut"))
+            ja, sa, da, za, xa, z_a, ka, _ = ramps[a]
+            jb, sb, db, zb, xb, z_b, kb, _ = ramps[b]
+            if ja != jb or da != 1 or db != -1 or sb <= sa:
                 continue
-            k = min(k, len(sv))
-            if k < 2:
-                continue
-            order = np.argsort(sv[:k])
-            pieces_.append((sv[:k][order], z[:k][order], "fill" if sign > 0 else "cut"))
-        out[j] = pieces_
+            reach_a = sa + xa["d"][min(ka, len(xa["d"]) - 1)]
+            reach_b = sb - xb["d"][min(kb, len(xb["d"]) - 1)]
+            if reach_a >= reach_b:
+                k = max(2, int(math.ceil((sb - sa) / STEP_M)) + 1)
+                sv = np.linspace(sa, sb, k)
+                out.setdefault(ja, []).append((sv, za + (zb - za) * (sv - sa) / max(sb - sa, 1e-6), "set"))
+                used |= {a, b}
+    for n, (j, s0, d, z0, x, z, k, sign) in enumerate(ramps):
+        if n in used:
+            continue
+        _split(net, x, z, min(k, len(z)), "fill" if sign > 0 else "cut", out)
     return out

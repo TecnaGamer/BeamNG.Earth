@@ -317,6 +317,10 @@ import gradeshapes as _gsh
 # default: BNE_SHAPES=1. With it the per-bridge approach lifts and ramp envelope are off (the embankments replace them);
 # the underpass dips stay (a road under a track at grade over its mapped tunnel: the tunnel face as before).
 SHAPES_ON = os.environ.get("BNE_SHAPES", "0").strip().lower() in ("1", "on", "yes", "true")
+# (the game's decks: the shapes clear what the meshes draw)
+_gsh.HEADROOM_M, _gsh.HEADROOM_MARGIN_M = roadsmod.MIN_BRIDGE_HEADROOM_M, roadsmod.BRIDGE_HEADROOM_MARGIN_M
+_gsh.DECK_MIN_DEPTH_M, _gsh.DECK_FULL_DEPTH_M = roadsmod.DECK_MIN_DEPTH, roadsmod.DECK_FULL_DEPTH
+_gsh.DECK_SPAN_RATIO = roadsmod.DECK_SPAN_RATIO
 SHAPES_PAD_M = 800.0        # m round a cell its systems and their ramps are read from (a ramp is at most RAMP_MAX_M)
 SHAPES_CAP_M = 4000.0       # m: the farthest a system is followed from the cell
 SHAPES_NEAR_M = 3.0         # m: a plan vertex this near a shape's or a ramp's line takes its height
@@ -4420,12 +4424,14 @@ class _Planner:
         for sysm in mine:
             pcs = _gsh.pieces(net, sysm)
             smp = _gsh.sample(net, pcs)
-            ground = [self._ground_line(xy) for xy, _s in smp]
+            ground = [self._ground_line(x["xy"]) for x in smp]
             diag = {}
             zs = _gsh.solve_shape(net, sysm, pcs, smp, ground, fixed_z, diag)
             if diag.get("qp_error") or not diag.get("feasible", True):
                 failed += 1
             shapes.append((pcs, smp, zs))
+            if os.environ.get("BNE_SHAPES_DEBUG"):
+                self._shape_debug(net, sysm, pcs, smp, zs, ground, fixed_z, diag)
 
         def ground_along(i, sv):
             xy = np.stack([np.interp(sv, net.s[i], net.lines[i][:, 0]), np.interp(sv, net.s[i], net.lines[i][:, 1])],
@@ -4434,9 +4440,10 @@ class _Planner:
         emb = _gsh.embankments(net, mine, shapes, ground_along)
         prof = {}
         for (pcs, smp, zs) in shapes:
-            for (i, a, b, kind), (xy, sv), z in zip(pcs, smp, zs):
-                if kind == "deck":
-                    prof.setdefault(str(net.m[i].key[0]), []).append((xy, np.asarray(z, np.float64), "deck"))
+            for pc, x, z in zip(pcs, smp, zs):
+                if pc["kind"] == "deck":
+                    prof.setdefault(str(net.m[pc["main"]].key[0]), []).append((x["xy"], np.asarray(z, np.float64),
+                                                                                "deck"))
         for j, lst in emb.items():
             m = net.m[j]
             if m.kind not in ("ground", "tunnel"):
@@ -4449,6 +4456,36 @@ class _Planner:
                     "graded, find %.2f s, solve %.2f s", os.getpid(), hk, len(loaded), len(members), len(mine), failed,
                     len(prof), t1 - t0, time.perf_counter() - t1)
         return prof
+
+    def _shape_debug(self, net, sysm, pcs, smp, zs, ground, fixed_z, diag):
+        """BNE_SHAPES_DEBUG: one system's parts, crossings and heights in the log (SHAPEDBG lines)."""
+        def z_of(i, s_):
+            got = _gsh._var(pcs, smp, i, s_)
+            if got is None:
+                return fixed_z(i, s_)
+            p_, a_, b_, t_ = got
+            return float(zs[p_][a_] + (zs[p_][b_] - zs[p_][a_]) * t_)
+        parts = ", ".join(f"{net.m[i].kind}:{net.m[i].cls}:{net.L[i]:.0f}m" for i in sysm["seeds"])
+        log.warning("grading: SHAPEDBG system [%s] status %s, %d ends, %d dips", parts, diag.get("status", "soft"),
+                    len(sysm["ends"]), len(sysm["dips"]))
+        def ll(q):
+            la_, lo_, _ = self.frame.enu_to_geodetic(np.array([q[0]]), np.array([q[1]]), 0.0)
+            return f"{float(la_[0]):.6f},{float(lo_[0]):.6f}"
+        for c in sysm["crossings"]:
+            mu, md = net.m[c["u"]], net.m[c["d"]]
+            zu, zd = z_of(c["u"], c["su"]), z_of(c["d"], c["sd"])
+            log.warning("grading: SHAPEDBG   crossing at %s", ll(c["q"]))
+            need = _gsh.clearance_need(net, c["u"], c["d"])
+            log.warning("grading: SHAPEDBG   at %s: %s %s over %s %s moves %s: %.2f over %.2f gap %.2f need %.2f",
+                        np.round(c["q"], 1), mu.kind, mu.cls, md.kind, md.cls, c["moves"], zu if zu is not None else
+                        float("nan"), zd if zd is not None else float("nan"),
+                        (zu - zd) if zu is not None and zd is not None else float("nan"), need)
+        for pc, x, z, g in zip(pcs, smp, zs, ground):
+            pi = pc["main"]
+            log.warning("grading: SHAPEDBG   %s %s %s %s %d parts %.0f m: z %.2f..%.2f over ground %.2f..%.2f, at %s..%s",
+                        pc["kind"], net.m[pi].kind, net.m[pi].cls, net.m[pi].key[0], len(pc["segs"]),
+                        float(x["d"][-1]), float(np.min(z - g)), float(np.max(z - g)), float(np.min(g)),
+                        float(np.max(g)), ll(x["xy"][0]), ll(x["xy"][-1]))
 
     def _shape_at(self, line, pts, fid, modes):
         """Per point of pts on road fid (its line in the frame): (height, mode) from the shapes and ramps of its cell's
