@@ -195,6 +195,67 @@ class EuStreetPassParityTest(unittest.TestCase):
             raised += out["ref"][0] == "raised"
         self.assertGreater(raised, 100)
 
+    def test_none_rule_values(self):
+        """A width rule whose value is None (an object column): no width, OSM's and the rest after it, the road planned
+        and the later ones too (Codex on 490d400d: the port's float(None) raised TypeError)."""
+        rng = random.Random(4012)
+        fell_back = 0
+        for k in range(1500):
+            n = rng.randint(1, 8)
+            f = layer(rng, n)
+            if rng.random() < 0.7:
+                f.attrs["osm_width"] = np.array([rng.choice(["5", "6.5", 3.2, None, "12"]) for _ in range(n)], object)
+            specs = [roads.Spec(6.0, "paved", True, rng.choice(["residential", "tertiary", "unclassified"]), False,
+                                france=rng.random() < 0.3) for _ in range(n)]
+            entries = [(i, rng.choice([None, None, 5.5, 0.5, "7", None, np.float32(9.0)])) for i in range(n)
+                       if rng.random() < 0.8]
+            vals = np.empty(len(entries), object)
+            vals[:] = [e[1] for e in entries]
+            wt = mapgeom.RuleTable(np.array([e[0] for e in entries], np.int32), vals,
+                                   np.zeros(len(entries), np.float32), np.ones(len(entries), np.float32))
+            fr = np.zeros((n, 2))
+            out, logs = self.run_both(rng, f, specs, fr, {i for i in range(n) if rng.random() < 0.3}, None, wt,
+                                      np.array([rng.random() < 0.2 for _ in range(n)], bool), rng.random() < 0.5)
+            self.assertEqual(out["new"][0], out["ref"][0], (k, out))
+            self.assertEqual(out["ref"][0], "ok", k)
+            self.assertTrue(same(out["new"][1], out["ref"][1]), k)
+            calls = {t: [e for e in logs[t] if isinstance(e, tuple)] for t in logs}
+            self.assertTrue(same(calls["new"], calls["ref"]), (k, calls))
+            fell_back += sum(1 for e in calls["ref"] if e[0] == "plan" and isinstance(e[7], float))
+        self.assertGreater(fell_back, 300)
+
+    def test_extreme_offsets_wrap_as_numpy(self):
+        """Coordinate offsets near the int64 ends: numpy's (a + b) // 2 wraps, a negative index counts from the end;
+        never a panic or a build-dependent answer (Codex on 490d400d)."""
+        import warnings
+        big, small = np.iinfo(np.int64).max, np.iinfo(np.int64).min
+        rng = random.Random(4013)
+        seen = set()
+        for k in range(600):
+            n = rng.randint(1, 5)
+            f = layer(rng, n)
+            if len(f.lonlat) < 2:
+                continue
+            co = f.coord_off.copy()
+            for _ in range(rng.choice([1, 2])):
+                co[rng.randrange(len(co))] = rng.choice([big, big - 1, big - 2, small, small + 1, small + 3, -1, -3])
+            f.coord_off = co
+            specs = [roads.Spec(6.0, "paved", True, "residential", False) for _ in range(n)]
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", RuntimeWarning)
+                out, logs = self.run_both(rng, f, specs, np.zeros((n, 2)), set(), None, None, np.zeros(n, bool), False)
+            self.assertEqual(out["new"][0], out["ref"][0], (k, co.tolist(), out))
+            if out["ref"][0] == "ok":
+                self.assertTrue(same(out["new"][1], out["ref"][1]), k)
+            else:
+                self.assertIs(out["new"][1], out["ref"][1], k)
+            calls = {t: [e for e in logs[t] if isinstance(e, tuple)] for t in logs}
+            self.assertTrue(same(calls["new"], calls["ref"]), (k, calls))
+            seen.add(out["ref"][0])
+            if out["ref"][0] == "ok" and any(e[0] == "plan" for e in calls["ref"]):
+                seen.add("planned")
+        self.assertEqual(seen, {"ok", "raised", "planned"})
+
 
 if __name__ == "__main__":
     unittest.main()

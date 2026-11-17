@@ -29,7 +29,9 @@ impl<'py> Lazy<'py> {
     }
 }
 
-/// roads._rule_value(table, i): the value of feature i's major rule, None without a table, rules or one.
+/// roads._rule_value(table, i): the value of feature i's major rule, None without a table, rules or one (and None where
+/// the rule's value is None itself: the pass's `width is None` takes it as no width, as the Python did; Codex on
+/// 490d400d).
 fn rule_value<'py>(table: &Bound<'py, PyAny>, i: usize) -> PyResult<Option<Bound<'py, PyAny>>> {
     if table.is_none() || table.getattr("feature")?.len()? == 0 {
         return Ok(None);
@@ -38,7 +40,8 @@ fn rule_value<'py>(table: &Bound<'py, PyAny>, i: usize) -> PyResult<Option<Bound
     if j < 0 {
         return Ok(None);
     }
-    Ok(Some(table.getattr("value")?.get_item(j)?))
+    let v = table.getattr("value")?.get_item(j)?;
+    Ok(if v.is_none() { None } else { Some(v) })
 }
 
 /// roads._osm(feats, "width", i, lo, hi) of the column (None absent): float(col[i]) where a number, finite, in lo..hi.
@@ -111,7 +114,9 @@ pub fn eu_street_pass<'py>(py: Python<'py>, specs: Bound<'py, PyList>, part_off:
         if b <= a {
             continue;
         }
-        let k = np_index(ll.nrows(), (a + b).div_euclid(2))?;
+        // ((a + b) // 2 of numpy int64s: wrapping, floor division; offsets from map data never panic: Codex on
+        // 490d400d)
+        let k = np_index(ll.nrows(), a.wrapping_add(b).div_euclid(2))?;
         let (lon, lat) = (ll[[k, 0]], ll[[k, 1]]);
         let country = country_of.call1((lon, lat))?;
         if country.is_none() {
