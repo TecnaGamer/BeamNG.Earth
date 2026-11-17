@@ -29,8 +29,7 @@ OUTPUTS = {*COPIES.values(), "coverage.data.dds", "threshold.data.dds", "contact
 def prepare_enabled(game_dir, user_dir, *, env=None, diagnostic=print):
     """Startup entry point; resolve the game lazily, only for enabled categories."""
     env = os.environ if env is None else env
-    enabled = any(env.get(flag, "off").strip().lower() in {"1", "on", "true"}
-                  for flag in ("BNE_CLIFFS", "BNE_CLIFF_ROAD_CUTS"))
+    enabled = env.get("BNE_CLIFFS", "off").strip().lower() in {"1", "on", "true"}
     if not enabled:
         return None
     game = game_dir() if callable(game_dir) else game_dir

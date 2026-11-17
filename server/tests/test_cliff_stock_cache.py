@@ -48,7 +48,7 @@ class StockCacheTest(unittest.TestCase):
         self.native.cliff_contact_maps.assert_not_called()
         self.assertFalse(self.user.exists())
 
-    def test_startup_flags_are_independent_and_default_off(self):
+    def test_only_master_opt_in_prepares_stock_assets(self):
         for natural, cuts in ((False, False), (True, False), (False, True), (True, True)):
             with self.subTest(natural=natural, cuts=cuts), patch.object(cliffstock, "prepare") as prepare, \
                     patch.object(cliffstock, "prepare_ground") as ground, \
@@ -56,10 +56,10 @@ class StockCacheTest(unittest.TestCase):
                 resolve = Mock(return_value=self.game)
                 env = {"BNE_CLIFFS": str(int(natural)), "BNE_CLIFF_ROAD_CUTS": str(int(cuts))}
                 cliffstock.prepare_enabled(resolve, self.user, env=env)
-                self.assertEqual(prepare.call_count, int(natural or cuts))
-                self.assertEqual(resolve.call_count, int(natural or cuts))
-                self.assertEqual(ground.call_count, int(natural or cuts))
-                self.assertEqual(models.call_count, int(natural or cuts))
+                self.assertEqual(prepare.call_count, int(natural))
+                self.assertEqual(resolve.call_count, int(natural))
+                self.assertEqual(ground.call_count, int(natural))
+                self.assertEqual(models.call_count, int(natural))
         with patch.object(cliffstock, "prepare") as prepare:
             cliffstock.prepare_enabled(None, self.user, env={})
             prepare.assert_not_called()
@@ -126,7 +126,7 @@ class InstallerContactTest(unittest.TestCase):
         import start
         for natural,cuts in ((False,False),(False,True),(True,False),(True,True)):
             events = []
-            enabled = natural or cuts
+            enabled = natural
             env = {'BNE_CLIFFS': str(int(natural)), 'BNE_CLIFF_ROAD_CUTS': str(int(cuts))}
             def prepare(*args, **kwargs):
                 events.append('prepared')

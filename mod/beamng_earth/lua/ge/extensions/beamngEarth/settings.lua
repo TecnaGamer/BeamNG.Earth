@@ -71,6 +71,10 @@ M.SCHEMA = {
   -- the drawn terrain block's aerial photo (px over the 1 km block; terrain.setPhotoSize, the server's photoPx):
   -- from the next level load
   groundPhoto = { kind = 'enum', default = '2048', values = { '1024', '2048', '4096' }, label = 'Ground photo resolution' },
+  -- Cliff-only startup controls; available only after the server opts in with BNE_CLIFFS.
+  naturalCliffs = { kind = 'bool', default = true, label = 'Natural cliffs' },
+  cliffRoadCuts = { kind = 'bool', default = true, label = 'Road-cut cliffs' },
+  cliffDetail = { kind = 'enum', default = 'normal', values = { 'low', 'medium', 'normal', 'high', 'extreme' }, label = 'Cliff detail' },
   -- the physics ground's grid (m between the terrain block's samples; GitHub #943): '2' the lighter ground of the Low and
   -- Medium presets (512² samples a km, a quarter of the data at each block swap), '1' the stock maps' resolution. The
   -- server reads it when it starts (launcher.start_server: BNGE_GROUND_SQUARE), so it holds from the next start
@@ -208,7 +212,7 @@ M.SCHEMA = {
   updateDismissed = { kind = 'string', default = '', maxLen = 40, label = 'Update notice dismissed (version)' },
   devNoticeSeen = { kind = 'string', default = '', maxLen = 40, label = 'Development build notice seen (version)' },
 }
-M.ORDER = { 'quality', 'terrainDetail', 'lodPx', 'groundPhoto', 'groundGrid', 'trees', 'treeDistance', 'buildingDistance', 'objectDetail',
+M.ORDER = { 'quality', 'naturalCliffs', 'cliffRoadCuts', 'cliffDetail', 'terrainDetail', 'lodPx', 'groundPhoto', 'groundGrid', 'trees', 'treeDistance', 'buildingDistance', 'objectDetail',
   'grassDistance', 'nightLights', 'roadDetail', 'distantTraffic', 'distantTrafficWithoutTraffic', 'distantTrafficQuality', 'rebaseDistance',
   'viewDistanceMode', 'viewDistanceKm', 'hazeStrength', 'skyMode', 'clouds',
   'weatherMode', 'realGravity', 'lowFuelPrompt', 'groundCover', 'groundCoverDensity', 'rocks', 'roads', 'highwaySigns', 'directionSigns', 'roadSigns', 'germanJunctionSigns', 'rumbleStrips', 'softDrag', 'deckGuard', 'townSigns', 'adaptiveTraffic', 'models3dmr',
@@ -233,25 +237,25 @@ M.HIDDEN = { welcomeSeen = true, updateDismissed = true, devNoticeSeen = true, q
 -- the first run (M.detectQuality).
 M.PRESET_KEYS = { 'trees', 'treeDistance', 'groundCover', 'groundCoverDensity', 'grassDistance', 'rocks', 'nightLights', 'distantTrafficQuality',
   'viewDistanceMode', 'viewDistanceKm', 'terrainDetail', 'buildingDistance', 'groundPhoto', 'objectDetail', 'roadDetail',
-  'groundGrid' }
+  'groundGrid', 'cliffDetail' }
 M.PRESETS = {
-  low = { trees = 'low', treeDistance = 'near', groundCover = false, groundCoverDensity = 'low', grassDistance = 'near',
+  low = { cliffDetail = 'low', trees = 'low', treeDistance = 'near', groundCover = false, groundCoverDensity = 'low', grassDistance = 'near',
     rocks = true, nightLights = 'few', viewDistanceMode = 'fixed', viewDistanceKm = 40, terrainDetail = 'low',
     buildingDistance = 'near', groundPhoto = '1024', objectDetail = 'game', distantTrafficQuality = 'low', roadDetail = 'off',
     groundGrid = '2' },
-  medium = { trees = 'medium', treeDistance = 'medium', groundCover = true, groundCoverDensity = 'low',
+  medium = { cliffDetail = 'medium', trees = 'medium', treeDistance = 'medium', groundCover = true, groundCoverDensity = 'low',
     grassDistance = 'normal', rocks = true, nightLights = 'few', viewDistanceMode = 'horizon', viewDistanceKm = 100,
     terrainDetail = 'normal', buildingDistance = 'normal', groundPhoto = '2048', objectDetail = 'game', distantTrafficQuality = 'medium',
     roadDetail = 'basic', groundGrid = '2' },
-  high = { trees = 'normal', treeDistance = 'normal', groundCover = true, groundCoverDensity = 'normal',
+  high = { cliffDetail = 'normal', trees = 'normal', treeDistance = 'normal', groundCover = true, groundCoverDensity = 'normal',
     grassDistance = 'normal', rocks = true, nightLights = 'normal', viewDistanceMode = 'horizon', viewDistanceKm = 100,
     terrainDetail = 'normal', buildingDistance = 'normal', groundPhoto = '2048', objectDetail = 'game', distantTrafficQuality = 'high',
     roadDetail = 'full', groundGrid = '1' },
-  ultra = { trees = 'high', treeDistance = 'far', groundCover = true, groundCoverDensity = 'high', grassDistance = 'normal',
+  ultra = { cliffDetail = 'high', trees = 'high', treeDistance = 'far', groundCover = true, groundCoverDensity = 'high', grassDistance = 'normal',
     rocks = true, nightLights = 'many', viewDistanceMode = 'horizon', viewDistanceKm = 100, terrainDetail = 'high',
     buildingDistance = 'far', groundPhoto = '2048', objectDetail = 'game', distantTrafficQuality = 'high', roadDetail = 'full',
     groundGrid = '1' },
-  extreme = { trees = 'extreme', treeDistance = 'max', groundCover = true, groundCoverDensity = 'high',
+  extreme = { cliffDetail = 'extreme', trees = 'extreme', treeDistance = 'max', groundCover = true, groundCoverDensity = 'high',
     grassDistance = 'far', rocks = true, nightLights = 'many', viewDistanceMode = 'horizon', viewDistanceKm = 100,
     terrainDetail = 'extreme', buildingDistance = 'max', groundPhoto = '4096', objectDetail = 'extreme', distantTrafficQuality = 'high',
     roadDetail = 'full', groundGrid = '1' },
@@ -786,6 +790,7 @@ function M.uiState()
   if core and core.appPath and cachePolls % M.CACHE_POLL == 1 then core.appPath() end
   status.paths = core and core.appPathState and core.appPathState() or nil
   -- the settings waiting for a world server restart, and a restart under way (core.restartState, srvrestart.lua)
+  status.cliffsAvailable = core and core.cliffsAvailable and core.cliffsAvailable() or false
   status.restart = core and core.restartState and core.restartState(values, M.ORDER) or nil
   local schema = {}
   for _, k in ipairs(M.ORDER) do

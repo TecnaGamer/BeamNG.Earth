@@ -1254,6 +1254,7 @@ local function onMessage(msg)
   elseif t == 'runtime_profiler' then
     require('beamngEarth/profiler').receive(msg.profile)
   elseif t == 'hello' then
+    M._cliffsAvailable = msg.cliffs and msg.cliffs.available == true or false
     require('beamngEarth/clifftalus').configure(msg.cliffs)
     require('beamngEarth/cliffmaterials').configure(msg.cliffs)
     require('beamngEarth/cliffcontact').configure(msg.cliffs)
@@ -3643,6 +3644,9 @@ function M.updateInfo() return updateInfo end
 -- in GB (0 = unlimited), a clear (answered with clearedBytes), fresh usage numbers. Each returns
 -- whether it went out (false without a server session; a clear also needs the server's numbers, and
 -- says why it did not go out).
+-- Only the server's explicit startup opt-in can expose Dynamic cliffs controls.
+function M.cliffsAvailable() return M._cliffsAvailable == true end
+
 function M.cacheState() return cacheInfo end
 local function cacheReady() return net.isConnected() and st.sessionId ~= nil end
 function M.cacheSetCap(gb)

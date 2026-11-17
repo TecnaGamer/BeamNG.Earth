@@ -8979,7 +8979,9 @@ class Connection:
                  "nearVisual": self.s.near_visual, "attribution": self.s.attribution()}
             import budget
             from cliffsettings import SETTINGS as cliff_settings
-            m["cliffs"] = {"natural": cliff_settings.natural, "roadCuts": cliff_settings.road_cuts}
+            from cliffsettings import available as cliffs_available
+            m["cliffs"] = {"available": cliffs_available(), "natural": cliff_settings.natural,
+                           "roadCuts": cliff_settings.road_cuts}
             if budget.TIER in ("lean", "emergency"):    # (a low-memory machine: the mod warns on the emergency tier)
                 m["memoryTier"] = budget.TIER
                 note = budget.memory_notice(tier_=budget.TIER)
@@ -13361,6 +13363,8 @@ def main():
             log.info("the settings page: the server on %s", ", ".join(chosen))
     except Exception as e:          # (the defaults then)
         log.warning("could not read the settings page's server choices: %s", e)
+    import cliffsettings
+    cliffsettings.capture_startup()
     try:            # (the same moment's start-time values for the settings page's restart button: srvrestart.py)
         args.start_settings, args.start_fixed = (srvrestartmod.start_view(
             args.user_dir, square=heightmap.SQUARE, hand=hand) if args.user_dir else (None, []))

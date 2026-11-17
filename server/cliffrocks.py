@@ -22,7 +22,6 @@ log = logging.getLogger("earthd.cliffrocks")
 
 MATERIAL = "bne_cliff_strata"
 GRID_M = 4.0
-CANYON_RENDER_SUBDIVISIONS = 4  # 1 m footprint; tall walls refine vertically in surface space
 RENDER_SUBDIVISIONS = 8    # 0.5 m terrain/heightmap samples; detection remains coarse
 CLEARANCE_M = 0.35
 EDGE_BLEND_M = 2.0
@@ -466,7 +465,8 @@ def build(frame, box, elev, surface, road_cells=(), widths=None, color_at=None, 
     shore = (classes[:-1, :-1] == 80) | (classes[:-1, 1:] == 80) | (classes[1:, :-1] == 80) | (classes[1:, 1:] == 80)
     natural_family = clifftypes.compact(cliffmaterial.natural_family(la, lo))
     coarse_canyon_grid = np.all(natural_family == cliffmaterial.CANYON) and not cuts.any()
-    subdivisions = CANYON_RENDER_SUBDIVISIONS if coarse_canyon_grid else RENDER_SUBDIVISIONS
+    near_subdivisions, canyon_subdivisions, lod_threshold_scale = settings.profile
+    subdivisions = canyon_subdivisions if coarse_canyon_grid else near_subdivisions
     xs, ys, h, keep, b, colors = _refine(xs, ys, keep, b, world_box, elev, color_at, shore, scale, subdivisions)
     # Transfer provenance with the same coarse-cell ownership as _refine.
     ci = np.clip(np.floor(((xs[:-1]+xs[1:])/2-coarse[0][0])/GRID_M).astype(int), 0, cuts.shape[1]-1)
@@ -538,6 +538,7 @@ def build(frame, box, elev, surface, road_cells=(), widths=None, color_at=None, 
                 np.ascontiguousarray(envelope, float), frame.origin, frame.rot,
                 (box[0], box[1]), (xs[0], ys[0], xs[1]-xs[0], ys[1]-ys[0]), frame.lon0)
         result.lod_ground = lod_ground
+        result.lod_scale *= lod_threshold_scale
         if np.any(natural_family == cliffmaterial.CANYON):
             import cliffdetail
             result = cliffdetail.refine_canyon(result, full_relief=True)

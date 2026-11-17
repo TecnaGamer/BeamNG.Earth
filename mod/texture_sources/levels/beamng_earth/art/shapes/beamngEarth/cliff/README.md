@@ -46,11 +46,11 @@ material directory, caps primary maps at 4K, renormalizes resized normals,
 deduplicates maps, and rejects known stock-derived inputs. It accepts the input
 directory as an argument; no workstation-specific source path is required.
 
-The manifest records which startup flags need each map. Installation and the
-BeamMP package builder read `BNE_CLIFFS` and `BNE_CLIFF_ROAD_CUTS`; both default
-to off. Enable the intended categories before installing or packaging. Shared
-maps are encoded only once, and changing categories reuses unchanged DDS files.
-To reproduce every cliff map, set both flags to `1` before running the installer.
+All cliff maps use the single `BNE_CLIFFS` opt-in. Set it to `1` before
+installation or BeamMP packaging to prepare every cliff map. Without it, no
+cliff maps are converted. Shared maps are encoded only once. Both categories'
+assets are prepared up front so changing category settings never starts texture
+conversion while driving.
 
 With both categories enabled, the 27 authored maps have the following footprint
 (decimal MB, measured from local player and BeamMP packages):

@@ -16,18 +16,25 @@ the car too.
 
 Dynamic cliffs add rock faces to steep terrain and roadside cuts, with embedded
 outcrops and smaller rocks. Rock colors adapt to the local satellite imagery.
-Both categories are off by default and can be enabled independently:
+The entire feature is off by default. Set **`BNE_CLIFFS=1`** before installation
+and launcher/server startup to opt in. This is the only Dynamic cliffs switch;
+the former `BNE_CLIFF_ROAD_CUTS` variable is no longer used.
 
-| Environment variable | Enables |
-| --- | --- |
-| `BNE_CLIFFS=1` | Natural cliffs and their associated rocks |
-| `BNE_CLIFF_ROAD_CUTS=1` | Road cuts and their associated rocks |
+With the opt-in enabled, Graphics settings offers **Natural cliffs**,
+**Road-cut cliffs**, and **Cliff detail**. Both categories start enabled and can
+be switched independently. These controls are hidden without the server opt-in;
+saved choices and graphics presets cannot enable the feature themselves.
+Use **Restart world server** to apply changes (or restart manually when running
+without the launcher). Road cuts take priority wherever both categories overlap.
 
-Set the desired variables before installing and starting the launcher or server.
-After changing them, rerun installation and restart the server. When both are
-enabled, road cuts take priority where the categories overlap. Disabling both
-skips cliff generation and preparation of cliff textures. Cached results are
-kept separate by the enabled categories.
+Cliff detail follows graphics presets: Low → Low, Medium → Medium, High → Normal,
+Ultra → High, Extreme → Extreme. Category toggles remain your own choices.
+Low and Medium build simpler nearby meshes; higher levels keep detailed meshes
+visible farther away. All levels retain the authored texture resolution.
+Cached cliff results include both category choices and detail. Disabling the
+master opt-in skips all cliff generation and cliff texture preparation.
+All cliff textures are prepared before driving when opted in, so changing
+categories later needs no texture conversion during streaming.
 
 The authored rock textures retain 4K detail. See the
 [texture source notes](../mod/texture_sources/levels/beamng_earth/art/shapes/beamngEarth/cliff/README.md)
@@ -228,10 +235,11 @@ build.
 
 ### Dynamic cliffs protocol additions
 
-Both cliff categories are off unless enabled at server startup: `BNE_CLIFFS=1`
-for natural cliffs, `BNE_CLIFF_ROAD_CUTS=1` for road cuts. The server's `hello`
-includes `cliffs: {natural: boolean, roadCuts: boolean}` so the mod only prepares
-materials and stock-rock decorations for enabled categories.
+`BNE_CLIFFS=1` permits the saved Natural cliffs and Road-cut cliffs settings.
+The server's `hello` includes `cliffs: {available: boolean, natural: boolean,
+roadCuts: boolean}`. Availability gates the UI; the category values gate client
+materials and stock-rock decorations. Cliff settings join the existing startup
+settings snapshot and restart flow; cached meshes include category and detail choices.
 
 A `far_retex` may also contain `replacement`, a complete `far_tile` message.
 This updates satellite-driven cliff vertex colors along with the imagery: the

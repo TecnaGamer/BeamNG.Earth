@@ -31,8 +31,7 @@ def texture_requirements(materials):
     """Derive opt-ins from material users, including maps shared by both kinds."""
     requirements = {}
     for name, material in materials.items():
-        flags = ({"BNE_CLIFFS", "BNE_CLIFF_ROAD_CUTS"} if "roadcut_arid" in name else
-                 {"BNE_CLIFF_ROAD_CUTS"} if "roadcut" in name else {"BNE_CLIFFS"})
+        flags = {"BNE_CLIFFS"}
         for stage in material.get("Stages", []):
             for value in stage.values():
                 if isinstance(value, str) and "/cliff/" in value:
@@ -41,7 +40,7 @@ def texture_requirements(materials):
     # their private materials are generated on the client, outside this JSON.
     rock_base = (REL / "cliff/natural_base.color.dds").as_posix()
     if rock_base in requirements:
-        requirements[rock_base].update(("BNE_CLIFFS", "BNE_CLIFF_ROAD_CUTS"))
+        requirements[rock_base].update(("BNE_CLIFFS",))
     return {path: sorted(flags) for path, flags in requirements.items()}
 
 

@@ -642,6 +642,29 @@ class CliffRocksTest(unittest.TestCase):
         x = m.positions[m.tris, 0]
         self.assertTrue(((x.max(axis=1) <= 70) | (x.min(axis=1) >= 90)).all())
 
+    def test_low_detail_reduces_generated_mesh_without_changing_materials(self):
+        from cliffsettings import CliffSettings
+        class Surface:
+            def classes(self, lat, lon):
+                return np.full(np.shape(lat), 60), True
+            def urban(self, lat, lon):
+                return np.zeros(np.shape(lat), bool)
+        frame = geodesy.EnuFrame(46, 7)
+        def elev(lat, lon):
+            return 100 + (np.asarray(lon)-7) * 111320 * np.cos(np.radians(46)) * 2
+        meshes = {}
+        with patch('surface._roads_list_enu', return_value=[]):
+            for detail in ("low", "normal"):
+                meshes[detail] = cr.build(frame, (0, 0, 64, 64), elev, Surface(),
+                    features=(True, False, False), settings=CliffSettings(True, True, detail))
+        low, normal = meshes["low"], meshes["normal"]
+        self.assertIsNotNone(low)
+        self.assertIsNotNone(normal)
+        self.assertLess(len(low.tris), len(normal.tris))
+        self.assertEqual(low.lod_scale, 2 * normal.lod_scale)
+        self.assertEqual(set(low.tri_materials), set(normal.tri_materials))
+        self.assertTrue(np.isfinite(low.positions).all())
+
     def test_roadcut_build_requires_source_relief_for_urban_highways(self):
         frame = geodesy.EnuFrame(0, 0)
         def elev(lat, lon):
