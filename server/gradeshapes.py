@@ -83,7 +83,8 @@ W_JOIN = 300.0
 
 Member = namedtuple("Member", "key line kind cls kmh level half limit nodes held", defaults=(None, False))
 # key: hashable, unique, the same from every cell; line (k, 2) frame ENU; kind: "ground", "deck", "tunnel", "rail",
-# "rail_deck"; cls: road class ("rail" for track); kmh: speed limit or None; level: OSM layer of a deck; half: half
+# "rail_deck"; cls: road class ("rail" for track); kmh: speed limit or None; level: the map's level (OSM's layer) of a
+# deck or a rail deck, 0 on the ground (_over: the order of two crossing members of one kind); half: half
 # width (m); limit: the road's signed height limit (m), a callable q (x, y) -> m or None (its signs, read where it
 # crosses: grading's roads.road_sign_at, the dips' own) or None; nodes: its road's map nodes (a frozenset of connector
 # ids) or None (not known: a track); held: a deck never raised (grading's UNDER_TUNNEL_FIXED: the map has the road
@@ -452,13 +453,19 @@ def _pair_relations(net, i, j):
     return [r_[1:] for r_ in out]
 
 
+LEVEL_BAND = {"deck": 1, "rail_deck": 1, "ground": 0, "rail": 0, "tunnel": -1}
+
+
 def _over(mi, mj):
-    """Of two crossing members, which is over: "i", "j", or None (at grade)."""
-    up = {"deck": 2, "rail_deck": 2, "ground": 1, "rail": 1, "tunnel": 0}
-    a, b = up[mi.kind], up[mj.kind]
+    """Of two crossing members, which is over: "i", "j", or None (at grade): the map's kinds first (a bridge over
+    what is on the ground, that over a tunnel), then its levels within a kind (Member.level, OSM's layer), a road's
+    and a track's alike: stacked decks, a railway's viaduct over a road's bridge, a track in a tunnel under a street.
+    The levels alone order every real crossing where they were measured (tests/test_truth.py: 280 of swisstopo's at
+    three junctions in Zurich). Only two road decks' were compared, and every track was level 1: Zurich's
+    Duttweilerbruecke (level 2) was over the railway viaduct that crosses 7 m over it (level 3) and rose over the
+    track's bed for it."""
+    a, b = (LEVEL_BAND[mi.kind], mi.level), (LEVEL_BAND[mj.kind], mj.level)
     if a == b:
-        if a == 2 and mi.level != mj.level:
-            return "i" if mi.level > mj.level else "j"
         return None
     return "i" if a > b else "j"
 

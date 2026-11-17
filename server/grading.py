@@ -4485,16 +4485,21 @@ class _Planner:
             out.append(_gsh.Member((str(fid), "deck", int(round(mid[0])), int(round(mid[1]))), line, "deck",
                                    cls or "road", kmh, float(lv), float(h), None, nodes.get(str(fid)),
                                    bool(self._over_mapped_underpass(line))))
-        for kind, lines, fids in (("rail", c.get("rail_ground", ()), c.get("rail_ground_ids", ())),
-                                  ("rail_deck", c.get("rail_bridges", ()), c.get("rail_bridge_ids", ()))):
-            for line, fid in zip(lines, fids):
+        nr = len(c.get("rail_bridges", ()))
+        # (a track's level: the ground's on the ground, the map's on a bridge (rail_bridge_levels), as a road's: every
+        # track was level 1, a viaduct on level 3 under the road bridge on level 2 it crosses over)
+        for kind, lines, fids, lvs in (("rail", c.get("rail_ground", ()), c.get("rail_ground_ids", ()), None),
+                                       ("rail_deck", c.get("rail_bridges", ()), c.get("rail_bridge_ids", ()),
+                                        c.get("rail_bridge_levels") or [1.0] * nr)):
+            for n, (line, fid) in enumerate(zip(lines, fids)):
                 line = np.asarray(line, np.float64)[:, :2]
                 if len(line) < 2:
                     continue
                 # (its line's id: its height is the railways' bed of that line, _track_bed)
                 key = ("rail", kind, fid) + tuple(int(round(v)) for v in (line[0][0], line[0][1], line[-1][0],
                                                                           line[-1][1]))
-                out.append(_gsh.Member(key, line, kind, "rail", None, 1.0, 2.0, None))
+                out.append(_gsh.Member(key, line, kind, "rail", None, float(lvs[n]) if lvs is not None else 0.0, 2.0,
+                                       None))
         out += self._shape_tunnels(k)
         return out
 
@@ -5833,7 +5838,7 @@ class _Planner:
         # the rail bridges (railways.DRAWN lines' bridge pieces): the roads under them dip as under a road overpass
         # (_lower_underpasses), nothing else (no ramps, no abutments: a line's deck is never raised for a road).
         # (GitHub #311 / #345 / #364: the track lay across the road under a rail bridge)
-        rail, rail_g, rail_ids, rail_gids = [], [], [], []
+        rail, rail_g, rail_ids, rail_gids, rail_lv = [], [], [], [], []
         if f is not None and len(f) and f.attrs.get("subtype") is not None:
             import railways
             sub, rcls = f.attrs["subtype"], f.attrs.get("class")
@@ -5841,10 +5846,13 @@ class _Planner:
                 got = railways.drawn(f, i, bridges=True) if str(sub[i]) == "rail" else None
                 if got is None:
                     continue
+                rlv = railways.bridge_levels(f, i)
                 for kind, rings in railways._pieces(f, i):
                     if kind == "bridge":
                         rail += [np.asarray(r, np.float64) for r in rings if len(r) >= 2]
                         rail_ids += [str(f.ids[i]) for r in rings if len(r) >= 2]
+                        # (a rail deck's level: the map's, as a road bridge's; stacked with it by it)
+                        rail_lv += [float(rlv[n]) if n < len(rlv) else 1.0 for n, r in enumerate(rings) if len(r) >= 2]
                     elif kind == "ground" and ground and got[0] != "tram":
                         # (and the tracks on the ground: a road bridge's approaches rise over them as over a road,
                         # GitHub #324)
@@ -5913,7 +5921,7 @@ class _Planner:
                 "ground_kmh": gkmh, "bridge_kmh": bkmh,
                 "end_of": end_of, "span_bridges": span_xy,
                 "ends": np.asarray(ends, np.float64).reshape(-1, 2), "rail_bridges": rail_xy, "rail_ground": rail_gxy,
-                "rail_bridge_ids": rail_ids, "rail_ground_ids": rail_gids,
+                "rail_bridge_ids": rail_ids, "rail_ground_ids": rail_gids, "rail_bridge_levels": rail_lv,
                 "height_limits": limits,
                 # (each line's box [min e, min n, max e, max n], made once: the passes skip the far ones at once)
                 "ground_box": _line_boxes([g[0] for g in ground_l]), "rail_ground_box": _line_boxes(rail_gxy)}

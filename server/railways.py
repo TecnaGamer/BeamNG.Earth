@@ -1110,14 +1110,30 @@ def _pieces(feats, i):
     key = (i, tuple(tuple(r) for r in rngs), TUNNELS_ON)
     got = memo.get(key)
     if got is None:
-        got = memo[key] = _pieces_of(feats, i, rngs)
-    return [(kind, list(rings)) for kind, rings in got]
+        got = memo[key] = _pieces_and_levels(feats, i, rngs)
+    return [(kind, list(rings)) for kind, rings in got[0]]
+
+
+def bridge_levels(feats, i):
+    """The map's level (OSM's layer as Overture's level rules, 1 without one: roads._bridge_level_spans, the road
+    bridges' own) of each bridge piece of feature i, in _pieces' order: which of two decks that cross is over the
+    other, a track's as a road's (gradeshapes._over)."""
+    rngs = roads.level_ranges(feats, i)
+    if not rngs:
+        return []
+    _pieces(feats, i)
+    return list(feats.__dict__["_rail_pieces"][(i, tuple(tuple(r) for r in rngs), TUNNELS_ON)][1])
 
 
 MIN_PART_M = 1.0          # m: a piece of a rail line shorter than this is a rounding sliver, whatever the line's length
 
 
 def _pieces_of(feats, i, rngs):
+    return _pieces_and_levels(feats, i, rngs)[0]
+
+
+def _pieces_and_levels(feats, i, rngs):
+    """(_pieces' list for ranges rngs, the map's level of each of its bridge pieces: bridge_levels)."""
     L = roads._feature_length_m(feats, i)
     # (roads.MIN_PART is a share of the segment: 1e-3 of a 19 km rail segment is 19 m, and its 11 m bridges over the
     # roads were dropped, the track lying across them; at most MIN_PART_M, as for a short feature)
@@ -1131,6 +1147,8 @@ def _pieces_of(feats, i, rngs):
     if 1.0 - at > min_part:
         ground.append((at, 1.0))
     out = {"ground": [], "bridge": [], "tunnel": []}
+    lv = roads._bridge_level_spans(feats, i, rngs) if any(k == "bridge" for _a, _b, k in off) else []
+    levels = []             # (per bridge piece: bridge_levels)
     for part in feats.parts(i):
         for ring in part:
             if len(ring) < 2:
@@ -1142,7 +1160,10 @@ def _pieces_of(feats, i, rngs):
                         r = ring if (a, b) == (0.0, 1.0) else roads.sub_polyline(ring, a, b)
                         if len(r) >= 2:
                             out[kind].append(r)
-    return list(out.items())
+                            if kind == "bridge":
+                                mid = (a + b) / 2
+                                levels.append(next((float(v) for s0, s1, v in lv if s0 <= mid <= s1), 1.0))
+    return list(out.items()), levels
 
 
 def crossings(frame, cells, box, reach=REACH_M):
