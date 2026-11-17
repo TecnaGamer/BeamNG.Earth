@@ -189,8 +189,18 @@ def _ref_key(ref):
     return (not ref[:1].isdigit(), int(digits) if digits else 0, ref)
 
 
+class Busy(ValueError):
+    """Every Overpass server failed (overloaded, down, its breaker open) and no lookup saved nearby: the game's message."""
+
+
+BUSY_TEXT = ("OpenStreetMap's bus-line servers (Overpass) are overloaded or down right now: try again in a few minutes. "
+             "Lines looked up here before still show while they are.")
+
+
 def error_text(error):
     """Keep the failure reason visible: the encoded query URL otherwise fills the whole game message."""
+    if isinstance(error, Busy):
+        return str(error)
     text = str(error)
     url = getattr(error, "url", None)
     if url:
@@ -269,5 +279,31 @@ def near(lat, lon, net, cache_dir=None):
                 _write_cache(path, data)
             break
         else:
-            raise ValueError("; ".join(failures))
+            saved = _nearby(float(lat), float(lon), cache_dir)
+            if saved:
+                log.warning("bus lines: Overpass failed, %d lines from a saved lookup nearby", len(saved))
+                return saved
+            raise Busy(BUSY_TEXT + " (" + "; ".join(failures) + ")")
     return parse(data, float(lat), float(lon))
+
+
+def _nearby(lat, lon, cache_dir=None):
+    """The lines with a stop within RADIUS_M of lat, lon from the saved lookups (this session's and the disk's, within
+    CACHE_TTL_S) that have the most of them, each marked "saved": for when every Overpass server fails (all of them
+    overloaded on 2026-11-17 for an hour). [] when none has such a line."""
+    found = list(_cache.values())
+    folder = Path(cache_dir) / "buslines" if cache_dir is not None else None
+    if folder is not None and folder.is_dir():
+        for path in sorted(folder.glob("*.json")):
+            data = _read_cache(path)
+            if data is not None:
+                found.append(data)
+    best = []
+    for data in found:
+        try:
+            lines = [l for l in parse(data, lat, lon) if l["near_m"] <= RADIUS_M]
+        except (KeyError, TypeError, ValueError):
+            continue
+        if len(lines) > len(best):
+            best = lines
+    return [dict(l, saved=True) for l in best]

@@ -192,6 +192,32 @@ class ParseTest(unittest.TestCase):
         self.assertFalse(buslines._cache)
         self.assertEqual(net.get.call_count, 2)
 
+    def test_both_fail_says_so_plainly(self):
+        buslines._cache.clear()
+        net = mock.Mock()
+        net.get.side_effect = netfetch.FetchFailed("x: HTTP 504", url="x", status=504)
+        with self.assertRaises(buslines.Busy) as raised:
+            buslines.near(57.7, 11.97, net)
+        self.assertTrue(buslines.error_text(raised.exception).startswith("OpenStreetMap's bus-line servers"))
+
+    def test_both_fail_uses_a_saved_lookup_nearby(self):
+        """Overpass overloaded everywhere (2026-11-17): the lines of an earlier lookup with a stop near the player."""
+        buslines._cache.clear()
+        stops_ = [node(1, 57.7000, 11.970, name="Vasaplatsen", public_transport="stop_position"),
+                  node(2, 57.7040, 11.970, name="Kapellplatsen", public_transport="stop_position"),
+                  node(3, 57.7300, 11.970, name="Far away", public_transport="stop_position")]
+        good = {"elements": stops_ + [rel(10, [("node", 1, "stop"), ("node", 2, "stop")], ref="1", to="Kapellplatsen"),
+                                      rel(11, [("node", 3, "stop"), ("node", 2, "stop")], ref="2", to="Far")]}
+        with tempfile.TemporaryDirectory() as tmp:
+            buslines._write_cache(buslines._cache_path(tmp, buslines.overpass_url(57.70, 11.97)), good)
+            net = mock.Mock()
+            net.get.side_effect = netfetch.FetchFailed("x: HTTP 504", url="x", status=504)
+            got = buslines.near(57.7012, 11.9745, net, cache_dir=tmp)       # (another snapped place: not its key)
+            self.assertEqual(sorted(l["ref"] for l in got), ["1", "2"])
+            self.assertTrue(all(l["saved"] for l in got))
+            with self.assertRaises(buslines.Busy):
+                buslines.near(57.80, 11.97, net, cache_dir=tmp)              # (none of its stops near)
+
     def test_error_text_keeps_reason_after_a_long_query_url(self):
         url = buslines.overpass_url(57.7, 11.97)
         error = netfetch.FetchFailed(f"{url}: HTTP 503", url=url, status=503)

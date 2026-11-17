@@ -273,6 +273,9 @@ local function draw()
     if pending then im.TextUnformatted('Finding bus lines (may take up to a minute) ...') end
     if linesError then im.TextUnformatted(linesError) end
     if lines and #lines == 0 and not pending and not linesError then im.TextUnformatted('No bus lines mapped here') end
+    if lines and lines[1] and lines[1].saved then        -- (buslines._nearby: Overpass down, an earlier lookup's)
+      im.TextUnformatted('OpenStreetMap is not answering: lines saved from an earlier lookup near here')
+    end
     for i, l in ipairs(lines or {}) do
       local st = l.stops[(l.near_i or 0) + 1]
       if im.Button('Drive##busline' .. i) then M.start(l) end
