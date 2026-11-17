@@ -26,3 +26,5 @@ setExtensionUnloadMode('beamngEarth_map3d', 'manual')
 setExtensionUnloadMode('beamngEarth_api', 'manual')
 -- The station finder (finder.lua: Nearest station from the radial menu, a key or the map; the low fuel prompt).
 setExtensionUnloadMode('beamngEarth_finder', 'manual')
+-- Drive a real bus line (busline.lua: the lines near the player from OpenStreetMap, on the city bus's signs).
+setExtensionUnloadMode('beamngEarth_busline', 'manual')

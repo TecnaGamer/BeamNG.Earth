@@ -293,6 +293,13 @@
     "full": {"type": "bool", "optional": true, "doc": "the map's search box"}
    }
   },
+  "bus_lines": {
+   "fields": {
+    "id": {"type": "int"},
+    "lat": {"type": "num"},
+    "lon": {"type": "num", "doc": "the bus lines near the player (busline.lua)"}
+   }
+  },
   "stations": {
    "fields": {
     "id": {"type": "int"},
@@ -534,6 +541,14 @@
     "results": {"type": "list"},
     "error": {"type": "str", "optional": true},
     "text": {"type": "str", "optional": true, "doc": "geocode.py"}
+   }
+  },
+  "bus_lines_result": {
+   "fields": {
+    "id": {"type": "int"},
+    "lines": {"type": "list"},
+    "attribution": {"type": "str"},
+    "error": {"type": "str", "optional": true, "doc": "buslines.py"}
    }
   },
   "stations_result": {

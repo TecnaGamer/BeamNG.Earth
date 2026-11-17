@@ -514,7 +514,7 @@ ROLES = {
     "photon.komoot.io": "the map's address search (the other search sources stand in)",
     "nominatim.openstreetmap.org": "street and address search on Enter",
     "www.wikidata.org": "landmarks in the map's search",
-    "overpass-api.de": "nearby category search on Enter",
+    "overpass-api.de": "nearby category search on Enter; the bus lines near you (Bus lines)",
     "query.wikidata.org": "notable category search on Enter",
     "routing.openstreetmap.de": "GPS routes",
     "valhalla1.openstreetmap.de": "GPS routes without highways (the normal route meanwhile)",
