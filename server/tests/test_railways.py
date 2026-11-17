@@ -452,6 +452,31 @@ class RailwayTest(unittest.TestCase):
         self.assertFalse(over(rails, "id001", 120.0), "a disused line cut at the street")
         self.assertFalse(over(rails, "id002", 120.0), "an abandoned line cut at the street")
 
+    def test_heritage_lines_keep_their_crossings_with_the_lifecycle_switch(self):
+        """The road revamp's R1h: a worn heritage line (usage=tourism, railway:preserved=yes) keeps its level crossing
+        at a street with BNE_RAIL_LIFECYCLE (cut only where 1.9.0 cut worn lines: a motorway); a plain disused line
+        is cut; the street track rails.py lays follows the same rule."""
+        f = features([[(0.0, 60.0), (250.0, 60.0)], [(0.0, 100.0), (250.0, 100.0)], [(0.0, 140.0), (250.0, 140.0)],
+                      [(0.0, 220.0), (250.0, 220.0)], [(120.0, 0.0), (120.0, 180.0)], [(60.0, 200.0), (60.0, 250.0)]],
+                     ["standard_gauge"] * 4 + ["residential", "motorway"], subtypes=["rail"] * 4 + ["road"] * 2,
+                     flags=[(0, "is_disused"), (1, "is_disused"), (2, "is_disused"), (3, "is_disused")])
+        f.attrs["osm_usage"] = np.array([None, "tourism", None, "tourism", None, None], object)
+        f.attrs["osm_railway:preserved"] = np.array([None, None, "yes", None, None, None], object)
+        hw = roads.STYLE["residential"][0] / 2
+
+        def over(rails, fid, x, h=hw):
+            return any(((xy[:, 0] > x - h) & (xy[:, 0] < x + h)).any() for i, _c, k, xy in rails if i == fid)
+        cut = {1: frozenset(roads.STYLE), 2: frozenset(roads.STYLE)}
+        with mock.patch.object(railways, "RAIL_LIFECYCLE", True), mock.patch.object(railways, "WORN_CUT_CLASSES", cut):
+            rails = railways.parts(FRAME, [f], roads.tile_bbox(0, 0))
+        self.assertFalse(over(rails, "id000", 120.0), "a disused line cut at the street")
+        self.assertTrue(over(rails, "id001", 120.0), "usage=tourism: its level crossing kept")
+        self.assertTrue(over(rails, "id002", 120.0), "railway:preserved=yes: kept")
+        self.assertFalse(over(rails, "id003", 60.0, roads.STYLE["motorway"][0] / 2), "still cut at a motorway")
+        self.assertEqual(railways._cut_worn_at_motorways(rails, {}, [], {"id001"}), rails)
+        rails_off = railways.parts(FRAME, [f], roads.tile_bbox(0, 0))
+        self.assertTrue(all(over(rails_off, fid, 120.0) for fid in ("id000", "id001", "id002")), "off: as before")
+
     def test_short_tunnel_under_a_road_is_track_and_abandoned_lines_are_worn(self):
         """The line under a road bridge tagged is_tunnel for 12 m (OSM's habit) is track; a long tunnel is left out;
         an abandoned line beside it is drawn worn (Joensuu, 2026-10-25; the user, 2026-10-27: abandoned lines shown,

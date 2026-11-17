@@ -29,7 +29,8 @@ log = logging.getLogger("earthd.railtags")
 ON = os.environ.get("BNE_RAILTAGS", "on") != "off"
 SHARD_ZOOM = 7
 SHARD_RETRY_S = 600             # a shard that could not be had: asked again after this long (not by every tile meanwhile)
-COLUMNS = ("railway", "gauge", "electrified", "service", "usage", "highway")    # (highway: a rail trail, railways.drawn)
+COLUMNS = ("railway", "gauge", "electrified", "service", "usage", "highway",    # (highway: a rail trail, railways.drawn)
+           "railway:preserved")     # (a heritage line: railways.heritage; in the shards built since 2026-11-17)
 
 
 _WAY_ID = re.compile(r"^w(\d+)")
