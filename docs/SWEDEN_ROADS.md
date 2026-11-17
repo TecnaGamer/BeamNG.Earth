@@ -154,6 +154,36 @@ Not built:
 - **Warning line before a solid line (M3, K237689):** the dash pattern is chosen per way, so changing the last 100 m needs a change in the line builder.
 - **Rest areas:** not attempted.
 
+## Road signs (Settings > Experimental > Road signs)
+
+The shared road-sign system (server/roadsigns.py, `sign_systems.json` row `SE`) puts up the warning, mandatory and
+information signs its rules find, in Sweden only those whose Swedish design its atlas draws. Each was compared with
+Transportstyrelsen's own picture of the sign (transportstyrelsen.se, Vägmärken, fetched 2026-11-17):
+
+| Rule | Swedish sign | Atlas |
+|---|---|---|
+| sharp bend, double bend | A1, A2 | yellow field (`vienna_y`, as Poland's) |
+| road narrows | A5 | yellow field |
+| signals | A22 | yellow field |
+| roundabout ahead / roundabout | A30 / D3 | yellow field / blue disc |
+| cycle path | D4 | blue disc |
+| dead end, parking | E17, E19 | blue square |
+
+Left out, as the Swedish sign differs from the atlas's or a Swedish module already places it: B1 (yellow inside) and B2
+(furniture.py), C1, E1, E2 and B3 (sesigns.py), E9, E16, E22 (sesigns.py, PRs #1417, #1434), E7 (white figures on
+blue), E26 (a portal, with the distance), the chevrons (not checked), and the side-road warning, which Sweden does not
+have (A29 is a crossing).
+
+Placement and size (TSFS 2019:74):
+- **Beside the road / over a footway** (1 kap. 13 §): 0.3-4.0 m out and 1.0-2.0 m up / 0.5-4.0 m out and at least
+  2.1 m up. Used: 1.0 m out and 1.5 m up outside towns, 0.5 m out and 2.1 m up in towns.
+- **Sizes**: the normal size wherever the road is not a motorway (2 kap. 3 §, 5 kap. 1 §): triangles 0.90 m, discs
+  0.60 m; on the major roads the large, 1.20 and 0.90 m. E17 and E19 0.40 m (6 kap.).
+- **Warning distance**: the shared 150 m. It lies in TSFS 2019:74 2 kap. 2 §'s ranges for 60-70 km/h (50-200 m) and
+  80-90 km/h (150-250 m); the rules warn only outside towns.
+- **Poles**: at most three signs (1 kap., allmänna råd); no rule read on which group goes above which, so each sign has
+  its own pole.
+
 ## Moose signs (A19)
 
 `sesigns.moose_signs` puts the moose warning sign A19-1 on rural roads, sparingly: the user wanted the typical Swedish sign but not overdone.

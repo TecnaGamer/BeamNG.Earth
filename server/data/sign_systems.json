@@ -18,7 +18,13 @@
            "order": ["priority", "warning", "prohibition", "mandatory", "information"]},
     "DE": {"atlas": "vienna_w", "lateral": [0.5, 1.5], "mount": [2.0, 2.0], "gap_m": [10, 20], "max_on_pole": 3,
            "roles": {"info.bus_stop": "info.bus_stop_de"},
-           "order": ["priority", "prohibition", "mandatory", "information"]}
+           "order": ["priority", "prohibition", "mandatory", "information"]},
+    "SE": {"_": "SE (TSFS 2019:74; docs/SWEDEN_ROADS.md, Road signs): lateral and mount inside 1 kap. 13 §'s table (beside the road 0.3-4.0 m out, 1.0-2.0 m up; over a footway 0.5-4.0 m out, at least 2.1 m up); sizes the normal sizes of 2 kap. 3 §, 4 kap. 1 § and 5 kap. 1 § (the large on motorways); `only` the signs whose Swedish design the atlas draws (A1, A2, A5, A22, A30, D3, D4, E17, E19; compared with Transportstyrelsen's pictures) and that no Swedish module places already (B1 and B2: furniture.py; C1, E1, E2, B3: sesigns.py; E9, E16, E22 too); order empty: no rule read on which group goes above which, so each sign has its own pole.",
+           "atlas": "vienna_y", "lateral": [0.5, 1.0], "mount": [2.1, 1.5], "gap_m": [10, 20], "max_on_pole": 3,
+           "only": ["warn.curve_right", "warn.curve_left", "warn.double_right", "warn.double_left", "warn.narrow_both",
+                    "warn.signals", "warn.roundabout", "mand.roundabout", "mand.bicycle", "info.dead_end", "info.parking"],
+           "sizes": {"tri_up": [0.9, 0.9, 1.2], "circle": [0.6, 0.6, 0.9], "square": [0.4, 0.4, 0.6]},
+           "order": []}
   },
   "rules": ["reg.no_entry", "info.dead_end", "info.crossing_right", "warn.curve_right", "warn.curve_left",
             "warn.double_right", "warn.double_left", "warn.roundabout", "mand.roundabout", "warn.signals",
