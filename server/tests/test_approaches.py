@@ -406,8 +406,10 @@ class EmbankmentApproachTest(unittest.TestCase):
         z = np.asarray(z, np.float64)
         depth = roads.deck_depth(roads.geom_span([np.c_[np.linspace(-35, 35, 36), np.zeros(36)]]))
         need = FLAT + roads.deck_road_clear(depth) + grading.APPROACH_MARGIN_M     # (7.7 m: 2 m over the embankment)
-        self.assertAlmostEqual(z[0], need, delta=0.5, msg="up to the clearance, not the lift again over the fill")
-        self.assertAlmostEqual(z[-1], need, delta=0.5)
+        for ze in (z[0], z[-1]):        # (on the embankment's top up to the clearance's height: the deck may fall from
+            # its clearance over the lanes toward its ends at its grade; never the lift again over the fill)
+            self.assertLessEqual(ze, need + 0.5, "not the lift again over the fill")
+            self.assertGreaterEqual(ze, FLAT + 6.0 - 0.05, "on the embankment's top")
         lanes = elev(*FRAME.enu_to_geodetic(np.array([-12.0, 12.0]), np.array([0.0, 0.0]), 0.0)[:2])
         over = np.interp([-12.0, 12.0], np.asarray(xy)[:, 0], z) - lanes
         self.assertGreaterEqual(over.min(), roads.deck_road_clear(depth) - 0.05, "still clears the motorway")

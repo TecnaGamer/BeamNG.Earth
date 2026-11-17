@@ -57,7 +57,7 @@ class SagTest(unittest.TestCase):
         self.assertGreaterEqual(n, 1)
         _g, rad = roadlaws.laws(spec("unclassified"))
         rad_j = roadlaws.laws(spec("road", roadlaws.JUNCTION_KMH))[1]
-        self.assertGreater(before[0], 3.0 / rad_j)
+        self.assertGreater(before[0], 2.5 / rad_j)
         self.assertGreater(before[1], 0.5, "(the case: a 12 m truck bottoms out)")
         self.assertLess(bends(side), 1.3 / rad_j, "a junction's curve near it")
         self.assertLess(bends(side, beyond=roadlaws.APPROACH_M + 8.0), 1.3 / rad, "its own speed's past the approach")

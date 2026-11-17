@@ -83,26 +83,42 @@ DEFAULT_KMH = {"motorway": 110, "trunk": 90, "primary": 70, "secondary": 60, "te
                "unclassified": 50, "service": 20, "living_street": 15, "road": 40, "track": 20}
 
 
+LINK_KMH = 60               # km/h of a link (a ramp, a slip road) with no limit mapped: not its road's (110 on a motorway's)
+# The laws are a game's, a little more generous than a design manual's (AASHTO's grades are for a loaded truck, its
+# 0.3 m/s2 a passenger's comfort): steeper by GAME_GRADE_PLUS, crests and sags at A_VERT. A curve still smooths every
+# change of grade (no hump where roads meet), over a third of the length.
+GAME_GRADE_PLUS = 0.02
+
+
 def _base(cls):
     c = cls or "road"
     return c[:-5] if c.endswith("_link") else c
 
 
+def speed(m):
+    """km/h member m is driven at: its limit, else its class's (a link's LINK_KMH)."""
+    if m.kmh:
+        return m.kmh
+    if (m.cls or "").endswith("_link"):
+        return LINK_KMH
+    return DEFAULT_KMH.get(_base(m.cls), 40)
+
+
 def max_grade(m):
     """The steepest grade member m may hold, by class and speed (AASHTO's design grades for a speed: 4 % at 120 km/h
-    to 15 % at 20); a link at least 6 %; a path 12 %; a track 2.5 %."""
+    to 15 % at 20; a link at least 6 %) plus GAME_GRADE_PLUS; a path 12 %; a track 2.5 %."""
     if m.kind in ("rail", "rail_deck"):
         return 0.025
     if m.cls in PATHS:
         return 0.12
-    kmh = m.kmh or DEFAULT_KMH.get(_base(m.cls), 40)
-    g = float(np.interp(kmh, [20, 30, 40, 50, 60, 80, 100, 120], [0.15, 0.12, 0.10, 0.09, 0.08, 0.06, 0.05, 0.04]))
+    g = float(np.interp(speed(m), [20, 30, 40, 50, 60, 80, 100, 120], [0.15, 0.12, 0.10, 0.09, 0.08, 0.06, 0.05, 0.04]))
     if (m.cls or "").endswith("_link"):
         g = max(g, 0.06)
-    return g
+    return g + GAME_GRADE_PLUS
 
 
-A_VERT = 0.3               # m/s2: the vertical acceleration a road's crest or sag may give at its speed (comfort)
+A_VERT = 1.0               # m/s2: the vertical acceleration a road's crest or sag may give at its speed (a game's: a
+#                            design manual's comfort is 0.3; a car leaves the road over a crest at 9.8)
 A_VERT_RAIL = 0.15         # m/s2 for a train
 R_MIN_ROAD_M = 60.0        # m: the tightest vertical curve on any road (a path's, a service road's)
 R_MIN_RAIL_M = 2000.0      # m: the tightest on a track
@@ -116,7 +132,7 @@ def curve_radius(m):
         return max(R_MIN_RAIL_M, v * v / A_VERT_RAIL)
     if m.cls in PATHS:
         return R_MIN_ROAD_M
-    v = (m.kmh or DEFAULT_KMH.get(_base(m.cls), 40)) / 3.6
+    v = speed(m) / 3.6
     return max(R_MIN_ROAD_M, v * v / A_VERT)
 
 
@@ -710,8 +726,11 @@ def _solve_shape_qp(net, sysm, pcs, smp, ground, fixed_z, diagnostics):
             target, w = t.copy(), np.full(n, W_DIP)
             hi = t.copy()                                   # (a road going under never rises over its ground)
         g, rad = _law(net, pc)
-        chains.append(dict(t=target, w=w, lo=lo, hi=hi, grade=g, K=rad / 100.0, lam=1e-3,
-                           step=float((x["d"][-1] - x["d"][0]) / max(n - 1, 1)), length=0.0))
+        # (the grade law per step on the closest two samples: a piece through joints has them closer than its mean
+        # step, and held at the mean its grade ran 1.8 % over the law there)
+        dd = np.diff(np.asarray(x["d"], np.float64))
+        step = float(dd[dd > 1e-6].min()) if (dd > 1e-6).any() else float(STEP_M)
+        chains.append(dict(t=target, w=w, lo=lo, hi=hi, grade=g, K=rad / 100.0, lam=1e-3, step=step, length=0.0))
     cps = []
     for i, si, j, sj in sysm["joins"]:
         x, y = _var(pcs, smp, i, si), _var(pcs, smp, j, sj)
