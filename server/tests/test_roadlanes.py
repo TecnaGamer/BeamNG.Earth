@@ -259,6 +259,20 @@ class RampLaneRuleTest(unittest.TestCase):
         with mock.patch.object(roads, "RAMP_LANE_RULE", False):
             self.assertEqual(roads.road_specs(self.diverge())[2].lanes, 3)
 
+    def test_switch_off_in_the_lane_flow_too(self):
+        # (Codex review of the R1 branch: off, the lane flow solve still took the rule's count, so a road the link
+        # feeds took 1 lane instead of its 3; off must be the map's counts everywhere)
+        def fed():
+            f = highway([[(0, 0), (100, 0)], [(100, 0), (200, 0)], [(100, 0), (180, -30)], [(180, -30), (300, -60)]])
+            f.attrs["class"] = np.array(["motorway", "motorway", "motorway", "primary"])
+            f.rules["subclass"] = rules([(2, "link")])
+            return osmtags.join(f, {1: {"lanes": 3}, 2: {"lanes": 3}, 3: {"lanes": 3}})
+        self.assertEqual(roads.lane_flow(fed())[3], 1, "on: the road it feeds takes the corrected count")
+        with mock.patch.object(roads, "RAMP_LANE_RULE", False):
+            f = fed()
+            self.assertEqual(roads.lane_flow(f)[3], 3)
+            self.assertEqual([sp.lanes for sp in roads.road_specs(f)], [3, 3, 3, 3])
+
 
 if __name__ == "__main__":
     unittest.main()

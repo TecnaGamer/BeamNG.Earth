@@ -2698,6 +2698,8 @@ def _ramp_candidates(f, idx, cls, lanes, link):
     motorway link with RAMP_RULE_MIN_LANES (3) or more mapped lanes and nothing else saying it is that wide: no mapped
     width (OpenStreetMap's, Overture's width rule) and no turn:lanes (its own, or a way's along it)."""
     out = np.zeros(len(idx))
+    if not RAMP_LANE_RULE:              # (off: no road checked, in the lane flow solve too)
+        return out
     sel = (cls[idx] == "motorway") & link & (np.nan_to_num(lanes, nan=0.0) >= 3)
     if not sel.any():
         return out
