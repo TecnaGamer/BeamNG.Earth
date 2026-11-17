@@ -20,6 +20,7 @@ const LIFECYCLE_TIMEOUT_MS = 30_000
 const owner = {}
 let serversTab = null
 let pasteSupport = null
+let menuTile = null
 // A newer request makes the running operation's wait pointless (#1302): the game's UI mod loader runs again on every
 // UiModsChanged (BeamMP mounting/unmounting mods during a join) and awaits each mod's onUnload/onLoad in turn, so a load
 // stuck on a Lua reply or import that never comes held the next unload/load, and the whole UI, until the timeout.
@@ -246,12 +247,22 @@ async function loadUi(run) {
     if (!run.active) throw e
     console.error("BeamNG.Earth: servers tab failed", e)
   }
+  // BeamNG.Earth's tile in Quick-Start's place on the main menu (mainMenuTile.js); its failure costs nothing else
+  try {
+    menuTile = await step(run, () => import("./mainMenuTile.js"))
+    menuTile.startTile()
+  } catch (e) {
+    if (!run.active) throw e
+    console.error("BeamNG.Earth: main menu tile failed", e)
+  }
 }
 
 async function unloadUi(run) {
   check(run)
   try { serversTab?.stop() } catch (e) { /* never started */ }
   serversTab = null
+  try { menuTile?.stopTile() } catch (e) { /* never started */ }
+  menuTile = null
   try { pasteSupport?.removePaste() } catch (e) { /* never installed */ }
   pasteSupport = null
   // Release local state first, and send both independent Lua removals without waiting on either callback.
