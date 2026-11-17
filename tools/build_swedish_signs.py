@@ -3,7 +3,7 @@ bne_se_signs2.png (the signs of server/sesigns.py).
 
     python tools/build_swedish_signs.py <folder of the downloaded PNGs: c31-3.png ... c31-12.png, b1-1.png,
                                          f17-1.png, f18-2.png, f18-5.png, f18-6.png, t2-1.png, c1-1.png, b3-1.png,
-                                         e-11.png, e2-1.png, f2-1.png, a19-1.png>
+                                         e-11.png, e2-1.png, f2-1.png, a19-1.png, e16-1.png>
 
 The artwork is the agency's PNGs of the signs (transportstyrelsen.se, vagmarken: C31 30 to 120 km/h as c31-3 to c31-12,
 B1 as b1-1; fetched 2026-11-02), drawn in its Tratex. Each stands centred in a cell of 256 px on the signs' red, which
@@ -27,6 +27,7 @@ RED = (238, 58, 66)     # the artwork's #EE3A42
 COLOURS = 48            # enough for the anti-aliased edges; keeps the sheet to some 70 KB
 
 
+
 # bne_se_signs2.png: name, its picture, the cell's middle in px (of 1024), the longer side drawn. tools/build_median_props
 # .py's SE_SIGNS reads this.
 F2_TEXT = ((30, 15, 525, 128), (20, 225, 272, 325))     # px of f2-1.png: the place names
@@ -35,7 +36,8 @@ SHEET2 = (("f17", "f17-1.png", (128, 128), 244), ("f18_11", "f18-2.png", (384, 1
           ("f18_12", "f18-5.png", (640, 128), 244), ("f18_21", "f18-6.png", (896, 128), 244),
           ("t400", "t400", (128, 384), 244), ("t300", "t300", (384, 384), 244), ("t200", "t200", (640, 384), 244),
           ("c1", "c1-1.png", (896, 384), 244), ("b3", "b3-1.png", (128, 640), 244), ("e1", "e-11.png", (384, 640), 244),
-          ("e2", "e2-1.png", (128, 896), 244), ("f2", "f2-1.png", (768, 768), 500))
+          ("e2", "e2-1.png", (128, 896), 244), ("f2", "f2-1.png", (768, 768), 500),
+          ("e16", "e16-1.png", (384, 896), 244))
 
 
 def _on_white(im):
