@@ -850,7 +850,7 @@ def ride_check(np, roads, gradingmod, blockworker, s, frame, ground, deck_list, 
                 row = [round(top - depth, 2), round(top, 2), round(depth, 2), gcls, dcls, fid, gid, ll(pt)]
                 (under_rows if fast_under else over_rows).append(row)
     xpts = np.asarray(xpts, np.float64).reshape(-1, 2)
-    events, chain_rows, devs, gl_m, dig1_m, humps = [], [], [], 0.0, 0.0, []
+    events, jolts, chain_rows, devs, gl_m, dig1_m, humps = [], [], [], [], 0.0, 0.0, []
     for seq in chains:
         P, Z, K, D = [], [], [], []
         for i, rev in seq:
@@ -909,20 +909,29 @@ def ride_check(np, roads, gradingmod, blockworker, s, frame, ground, deck_list, 
         if len(z) > 10:
             gr[5:-5] = np.abs(z[10:] - z[:-10]) / 10.0
         far = (t >= 12.0) & (t <= t[-1] - 12.0) & ins
-        cand = np.flatnonzero(far & (np.abs(lifts[0]) >= RIDE_EVENT_G))
-        cand = cand[np.argsort(-np.abs(lifts[0][cand]), kind="stable")]
-        taken = []
-        for k in cand:
-            if any(abs(t[k] - t[q]) < RIDE_MERGE_M for q in taken):
-                continue
-            taken.append(int(k))
+
+        def event(k):
             lo_, hi_ = max(0, k - 60), min(len(z), k + 61)
             dd = dg[lo_:hi_][dgv[lo_:hi_]]
             where = "deck" if kd[k] else ("end" if de[k] < RIDE_END_M else "ground")
-            events.append([round(float(lifts[0][k]), 2), round(float(lifts[1][max(0, min(len(z) - 1, k))]), 2),
-                           where, bool(dx[k] < RIDE_UNDER_M), round(float(dd[np.argmax(np.abs(dd))]), 2) if len(dd)
-                           else None, round(float(z[lo_:hi_].max() - z[lo_:hi_].min()), 2),
-                           round(100 * float(gr[k]), 1), cls, ll(p[k])])
+            return [round(float(lifts[0][k]), 2), round(float(lifts[1][k]), 2),
+                    where, bool(dx[k] < RIDE_UNDER_M), round(float(dd[np.argmax(np.abs(dd))]), 2) if len(dd)
+                    else None, round(float(z[lo_:hi_].max() - z[lo_:hi_].min()), 2),
+                    round(100 * float(gr[k]), 1), cls, ll(p[k])]
+        # (each chord's crests and its sags found apart, each merged only with its own kind within RIDE_MERGE_M: a
+        # crest next to a deeper sag is its own event. The 20 m chord's are the events (launch / airborne / sag); the
+        # 10 m chord's, a short jolt the 20 m chord averages away, are listed as jolts)
+        for c, out_ in ((0, events), (1, jolts)):
+            for sign in (1.0, -1.0):
+                val = sign * lifts[c]
+                cand = np.flatnonzero(far & (val >= RIDE_EVENT_G))
+                cand = cand[np.argsort(-val[cand], kind="stable")]
+                taken = []
+                for k in cand:
+                    if any(abs(t[k] - t[q]) < RIDE_MERGE_M for q in taken):
+                        continue
+                    taken.append(int(k))
+                    out_.append(event(int(k)))
         dump = os.environ.get("RIDE_DUMP")      # (debug, "lat,lon,r,file": the chains passing there, sample by sample)
         if dump:
             q_la, q_lo, q_r, q_file = dump.split(",")
@@ -954,6 +963,7 @@ def ride_check(np, roads, gradingmod, blockworker, s, frame, ground, deck_list, 
         humps.append([round(float(z[k] - line[k]), 2), round(float(s_[-1])), cls, fid, ll(xy[k])])
     devs = np.asarray(devs, np.float64)
     return {"events": sorted(events, key=lambda r: (-abs(r[0]), r[8])),
+            "jolts": sorted(jolts, key=lambda r: (-abs(r[1]), r[8])),
             "chains": sorted(chain_rows, key=lambda r: (-r[0], r[6])),
             "under": sorted(under_rows, key=lambda r: (r[0], r[5], r[7])),
             "over": sorted(over_rows, key=lambda r: (r[0], r[5], r[7])),
@@ -1187,6 +1197,8 @@ def summarise(res):
                        "launch": sum(1 for e in ev if e[0] >= RIDE_LAUNCH_G),
                        "sag": sum(1 for e in ev if e[0] <= -RIDE_LAUNCH_G),
                        "worst_crest": max((e[0] for e in ev), default=0.0),
+                       "jolt_crest": sum(1 for e in r.get("jolts", ()) if e[1] >= RIDE_AIR_G),
+                       "worst_jolt": max((e[1] for e in r.get("jolts", ())), default=0.0),
                        "under_mw_lt40": sum(1 for u in un if u[3] in ("motorway", "trunk") and u[0] < 4.0),
                        "under_mw_lt45": sum(1 for u in un if u[3] in ("motorway", "trunk") and u[0] < 4.5),
                        "under_n": len(un), "over_n": len(r["over"]),

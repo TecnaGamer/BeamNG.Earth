@@ -3976,8 +3976,7 @@ class _Planner:
                     import fast
                     deck = float(fast._ef.under_deck_reach(float(ze[0]), float(ze[1]), float(L), float(corridor[0]),
                                                            float(corridor[1]), float(roadsmod.DECK_GRADE),
-                                                           float(APPROACH_FLAT_M), bool(UNDER_CLIMB and not rail and not (
-                                                               roadsmod.FAST_DECK_LINE and fixed))))
+                                                           float(APPROACH_FLAT_M), bool(UNDER_CLIMB and not rail)))
                     if UNDER_MEASURED_ON and not rail:
                         # (a measured deck stands where it was measured: an arched overpass's middle over its ends'
                         # straight line, which dug I-75 1.5 m down under the 108 m deck at Findlay, Ohio, flat in the

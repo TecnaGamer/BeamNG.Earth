@@ -5487,6 +5487,7 @@ def _path_crest(info, crest):
 # grade counts as one), held at its south abutment's height, and its north spans fell 3.7 m in their 45 m (11 %, 1.4 g
 # at 130 km/h) as branches. BNE_FAST_DECK_ENDS=on.
 FAST_DECK_ENDS = os.environ.get("BNE_FAST_DECK_ENDS", "off") == "on"
+FAST_DECK_CLASSES = ("motorway", "trunk")
 TURN_BACK_COS = 0.0         # a path turning more than 90 degrees at a joint turns back (_turns_back)
 TURN_LOOK_M = 10.0          # m along each part its direction at the joint is read over
 
@@ -5512,7 +5513,7 @@ def _turns_back(lines, path):
         u = -u if r1 else u
         w = _dir_at(lines[k2], not r2)      # (leaving: its start, or its end when walked reversed)
         w = -w if r2 else w
-        if float(np.dot(u, w)) < TURN_BACK_COS:
+        if float(dnp.dot(u, w)) < TURN_BACK_COS:
             return True
     return False
 
@@ -7531,46 +7532,6 @@ def deck_crest_radii(specs):
     return [float(r) for r in fast._ef.deck_crest_radii(rows)]
 
 
-# A short motorway / trunk overpass deck holds the line between its ends (clearance study 2026-11-17, prototype): its
-# clearance over a road under it is what that line leaves, never less than FAST_DECK_FLOOR_M under its girders; the
-# road under dips for the rest (grading: such a deck seen as its ends' line, no climb). Without it, a deck short of the
-# clearance rule climbed to it within its own 20-50 m: a 1-3 m crest at 130 km/h (the 417 over Carling Avenue in
-# Ottawa, 1.4 m in 8 m). BNE_FAST_DECK_LINE=on.
-FAST_DECK_LINE = os.environ.get("BNE_FAST_DECK_LINE", "off") == "on"
-FAST_DECK_CLASSES = ("motorway", "trunk")
-FAST_DECK_MAX_M = 150.0     # m: a chain this long at most (a viaduct climbs on its own approaches' grade)
-FAST_DECK_FLOOR_M = 4.0     # m under the girders at least
-
-
-def _fast_deck_cap(lines, required, ground_fn, clear, depth):
-    """required (deck_profile crossings) with each road crossing's clearance capped at what the line between the
-    chain's two free ends leaves over it (FAST_DECK_LINE), FAST_DECK_FLOOR_M + depth at least. Pure given ground_fn."""
-    ls = [np.asarray(ln, np.float64)[:, :2] for ln in lines]
-    if sum(float(dnp.hypot(*np.diff(ln, axis=0).T).sum()) for ln in ls if len(ln) >= 2) > FAST_DECK_MAX_M:
-        return required
-    ends = [ln[e] for ln in ls if len(ln) >= 2 for e in (0, -1)]
-    free = [p for i, p in enumerate(ends)
-            if not any(j != i and float(dnp.hypot(*(q - p))) < 0.75 for j, q in enumerate(ends))]
-    if len(free) != 2:
-        return required
-    z0, z1 = (float(v) for v in np.asarray(ground_fn(np.array(free, np.float64)), np.float64).reshape(-1)[:2])
-    out = []
-    for c in required:
-        if not _road_crossing(c):
-            out.append(c)
-            continue
-        pi, arc, zu = c[0], c[1], float(c[2])
-        ln = ls[pi]
-        s = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(ln, axis=0).T))]
-        p = np.array([np.interp(arc, s, ln[:, 0]), np.interp(arc, s, ln[:, 1])])
-        d0, d1 = float(dnp.hypot(*(p - free[0]))), float(dnp.hypot(*(p - free[1])))
-        top = z0 + (z1 - z0) * d0 / max(1e-9, d0 + d1)
-        own = float(c[3]) if len(c) > 3 and c[3] is not None else float(clear)
-        cap = max(FAST_DECK_FLOOR_M + float(depth), top - zu)
-        out.append((pi, arc, zu, RoadClear(min(own, cap))) if cap < own else c)
-    return out
-
-
 def lower_clear(classes):
     """m of clearance the roads of classes need under a deck (LOWER_CLEAR_*): the most demanding's. Pure."""
     got = [LOWER_CLEAR_M.get(str(c), LOWER_CLEAR_ROAD_M) for c in classes if c is not None]
@@ -8316,10 +8277,6 @@ class BridgeProfiles:
         pins = _ground_pins(lines, gl)          # (once: pure in lines and gl, which stay)
 
         crest = deck_crest_radii([pool[k][0] for k in comp]) if DECK_K_SPEED else None
-        if FAST_DECK_LINE and cr and all(str(getattr(pool[k][0], "cls", "")) in FAST_DECK_CLASSES
-                                         and not getattr(pool[k][0], "link", False) for k in comp):
-            required = _fast_deck_cap(lines, required, self._landing_ground(lines, gl),
-                                      deck_road_clear(depth, under), DECK_FULL_DEPTH if depth is None else depth)
 
         # (FAST_DECK_ENDS: a chain carrying a motorway or a trunk, not only their links)
         fast = FAST_DECK_ENDS and any(str(getattr(pool[k][0], "cls", "")) in FAST_DECK_CLASSES
