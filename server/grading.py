@@ -328,6 +328,7 @@ import gradeshapes as _gsh
 SHAPES_ON = os.environ.get("BNE_SHAPES", "0").strip().lower() in ("1", "on", "yes", "true")
 # (the game's decks: the shapes clear what the meshes draw)
 _gsh.HEADROOM_M, _gsh.HEADROOM_MARGIN_M = roadsmod.MIN_BRIDGE_HEADROOM_M, roadsmod.BRIDGE_HEADROOM_MARGIN_M
+_gsh.RAIL_HEADROOM_M = roadsmod.RAIL_HEADROOM_M
 _gsh.DECK_MIN_DEPTH_M, _gsh.DECK_FULL_DEPTH_M = roadsmod.DECK_MIN_DEPTH, roadsmod.DECK_FULL_DEPTH
 _gsh.DECK_SPAN_RATIO = roadsmod.DECK_SPAN_RATIO
 _gsh.RAIL_DECK_DEPTH_M = railwaysmod.RAIL_TOP_M + railwaysmod.DECK_D - railwaysmod.BALLAST_H
@@ -515,7 +516,8 @@ UNDER_LIDAR_ON = os.environ.get("BNE_UNDER_LIDAR", "on") != "off"
 # ends' line or over it (lower is the ground under a removed deck, not a deck).
 UNDER_MEASURED_ON = os.environ.get("BNE_UNDER_MEASURED", "on") != "off"
 UNDER_CLIMB = os.environ.get("BNE_UNDER_CLIMB", "on") != "off"  # the deck as the dips see it climbs from its ends (under_deck_reach)
-UNDER_MEASURED_HEADROOM_M = 4.5     # m: Europe's least on main roads; the game's tallest trucks are about 4 m
+# m: Europe's least on main roads, never more than the headroom a road with no limit gets
+UNDER_MEASURED_HEADROOM_M = min(4.5, roadsmod.MIN_BRIDGE_HEADROOM_M)
 UNDER_MEASURED_TOL_M = 0.5
 UNDER_LIDAR_DECK_M = roadsmod.AT_GRADE_M
 # A road's ground where a deck crosses over it is read from beside the deck (deck_capped): the elevation under a deck is
@@ -8457,7 +8459,7 @@ def bridge_lifts(line, all_bridges, ground_lines, z_at, chain=None, rail_lines=(
     # (a road meeting a part's free end is a junction at grade there, as for the line itself: the trunk's own next
     # carriageway at the far abutment of its chain counted as a road under it and raised a residential bridge joined
     # to the chain 9.7 m, the trunk deck climbing 10 m in 20 m to it, US-24 near Buena Vista CO, 2026-10-27)
-    more, more_z = [], []
+    more, more_z, more_track = [], [], []
     for part in (chain or ()):
         part = np.asarray(part, np.float64)[:, :2]
         sp = float(dnp.hypot(*np.diff(part, axis=0).T).sum())
@@ -8475,15 +8477,19 @@ def bridge_lifts(line, all_bridges, ground_lines, z_at, chain=None, rail_lines=(
             zg = zu_at(np.array([c[2] for c, _gl in got], np.float64).reshape(-1, 2)) if got else np.zeros(0)
         more += [np.asarray(c[2], np.float64) for c, _gl in got]
         more_z += [float(v) for v in np.asarray(zg, np.float64).reshape(-1)]
+        more_track += [False] * len(got)
         rl = roadsmod._crossings([part], list(rail_lines)) if rail_lines else ()
         if rl:
+            more_track += [True] * len(rl)
             more += [np.asarray(c[2], np.float64) for c in rl]
             more_z += [float(v) for v in np.asarray(zu_at(np.array([c[2] for c in rl], np.float64)), np.float64).reshape(-1)]
+    track = rail.copy()                 # (over a track: the track's headroom, not a road's)
     if more:
         mp = np.array(more, np.float64)
         zu = np.r_[zu, np.asarray(more_z, np.float64)]
         pts = np.r_[pts, mp]
         rail = np.r_[rail, np.zeros(len(mp), bool)]
+        track = np.r_[track, np.asarray(more_track, bool)]
     if not len(zu):
         return []
     out = []
@@ -8496,7 +8502,7 @@ def bridge_lifts(line, all_bridges, ground_lines, z_at, chain=None, rail_lines=(
             continue
         d, zu_e = d[far], zu[far]
         depth = roadsmod.deck_depth(roadsmod.geom_span([line] + list(chain or ())))
-        clear = np.full(len(zu_e), roadsmod.deck_road_clear(depth))
+        clear = np.where(track[far], roadsmod.deck_rail_clear(depth), roadsmod.deck_road_clear(depth))
         if limits:
             for n, (p, r) in enumerate(zip(pts[far], rail[far])):
                 h = None if r else roadsmod.road_sign_at(limits, p)

@@ -16,7 +16,10 @@ from test_roads import features, FRAME  # noqa: E402
 from test_grading import FakeMD  # noqa: E402
 
 ROAD = 43.0         # the road under, level
-BANK = 5.7          # the trunk's embankment over it (its deck kept as ground: no opening)
+DIG = 1.4           # m the road under is dug under its level for the deck over it to clear
+# the trunk's embankment over it (its deck kept as ground: no opening): the height at which the 20 m deck on its top
+# clears the road under only with the road dug DIG
+BANK = roads.deck_road_clear(roads.deck_depth(20.0)) + grading.ROAD_LIFT - DIG
 
 
 def bank_profile(y):

@@ -8,7 +8,9 @@ Switzerland as a 3D line, bridges and tunnels as parts of the line with their le
 all three dimensions: what a road's height is, where the map and the elevation only let Earth work it out. TLM_DIR
 holds the release's shapefiles (swissTLM3D_TLM_STRASSE, swissTLM3D_TLM_EISENBAHN, swissTLM3D_TLM_MAUER: .shp, .shx,
 .dbf, taken out of the country's 3.6 GB zip, which stays out of the repository). Writes
-server/tests/fixtures/truth_NAME.json: the lines with a point within --half (default 600 m) of the place, in the ENU
+server/tests/fixtures/truth_NAME.json: the lines with a point within --half (default 600 m) of the place, and past
+it the rest of every bridge and tunnel that begins there up to the road on the ground it ends on (a structure is never
+cut at the fixture's edge: its loose end would read as an end in mid-air), in the ENU
 frame of (LAT, LON) (x east, y north, m; z the line's own height, LN02), the same frame as the place's replay
 (tools/capture_interchange_fixture.py NAME LAT LON CACHE --prefix truth: the map and the elevation Earth reads there).
 """
@@ -119,6 +121,18 @@ def lines_in(stem, box):
     return out
 
 
+CLOSE_M = 1500.0        # m past the place a structure that begins there is followed
+
+
+def _node(p):
+    return (round(float(p[0]), 2), round(float(p[1]), 2), round(float(p[2]), 2))
+
+
+def _structure(attrs):
+    """Whether a line is on a bridge, in a tunnel, or not said (KUNSTBAUTE k_W: a connector between such parts)."""
+    return attrs.get("KUNSTBAUTE", "Keine") not in ("Keine", "")
+
+
 ROAD_FIELDS = {"UUID": "id", "OBJEKTART": "objektart", "KUNSTBAUTE": "kunstbaute", "STUFE": "stufe",
                "RICHTUNGSG": "richtungsgetrennt", "BELAGSART": "belagsart", "VERKEHRSBD": "verkehrsbedeutung",
                "VERKEHRSBE": "verkehrsbeschraenkung", "KREISEL": "kreisel", "BEFAHRBARK": "befahrbarkeit", "NAME": "name"}
@@ -138,21 +152,38 @@ def main():
     a = ap.parse_args()
     E0, N0 = wgs84_to_lv95(a.lat, a.lon)
     frame = geodesy.EnuFrame(a.lat, a.lon)
-    box = (E0 - a.half - 5, N0 - a.half - 5, E0 + a.half + 5, N0 + a.half + 5)
+    reach = a.half + CLOSE_M
+    box = (E0 - reach, N0 - reach, E0 + reach, N0 + reach)
     out = {"source": SOURCE, "release": RELEASE, "licence": "free use with the source named (swisstopo OGD)",
            "origin": [a.lat, a.lon], "half_m": a.half, "frame": "ENU of origin: x east, y north (m); z LN02 (m)"}
     for key, layer, fields in (("roads", "swissTLM3D_TLM_STRASSE", ROAD_FIELDS),
                                ("rails", "swissTLM3D_TLM_EISENBAHN", RAIL_FIELDS),
                                ("walls", "swissTLM3D_TLM_MAUER", WALL_FIELDS)):
-        rows = []
+        cand = []
         for attrs, xyz in lines_in(str(Path(a.tlm) / layer), box):
             la, lo = lv95_to_wgs84(xyz[:, 0], xyz[:, 1], xyz[:, 2])
             e, n, _ = frame.geodetic_to_enu(la, lo, 0.0)
-            e, n = np.asarray(e, np.float64), np.asarray(n, np.float64)
-            if not ((np.abs(e) <= a.half) & (np.abs(n) <= a.half)).any():
-                continue
+            cand.append((attrs, np.c_[np.asarray(e, np.float64), np.asarray(n, np.float64), xyz[:, 2]],
+                         (_node(xyz[0]), _node(xyz[-1]))))
+        keep = {k for k, (_a, enu, _n) in enumerate(cand) if (np.abs(enu[:, :2]) <= a.half).all(axis=1).any()}
+        at = {}
+        for k, (_a, _e, nodes) in enumerate(cand):
+            for nd in nodes:
+                at.setdefault(nd, []).append(k)
+        todo = [k for k in keep if _structure(cand[k][0])]
+        while todo:                     # (a structure's chain followed to the lines on the ground it ends on)
+            k = todo.pop()
+            for nd in cand[k][2]:
+                for j in at[nd]:
+                    if j not in keep:
+                        keep.add(j)
+                        if _structure(cand[j][0]):
+                            todo.append(j)
+        rows = []
+        for k in sorted(keep):
+            attrs, enu, _n = cand[k]
             row = {new: attrs.get(old, "") for old, new in fields.items()}
-            row["xyz"] = [round(float(v), 2) for v in np.c_[e, n, xyz[:, 2]].ravel()]
+            row["xyz"] = [round(float(v), 2) for v in enu.ravel()]
             rows.append(row)
         rows.sort(key=lambda r: r["id"])
         out[key] = rows

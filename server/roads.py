@@ -7207,10 +7207,13 @@ def _strip_open_ends(roads, rings, seen, near, skip=lambda spec: False):
 DECK = {"m": "road_asphalt_2lane", "tl": 11.0, "p": 20}      # bridge decks (roadmesh.deck)
 DECK_STEP = 4.0         # m between deck profile points
 DECK_CLEAR = 0.05       # m a deck stays above the ground under it (no z-fighting where it rests on it)
-# Usable space below the lowest structural girder, not merely to the road surface.
-# Six metres accommodates tall road vehicles such as semi-trucks; unlimited-height
-# modded vehicles and raised equipment cannot have a finite universal guarantee.
-MIN_BRIDGE_HEADROOM_M = 6.0
+# Usable space below the lowest structural girder, not merely to the road surface, over a road with no height limit
+# mapped (one with a limit gets the limit: SIGN_MARGIN_M): at least 4 m, a full-height truck's (the user, 2026-11-17:
+# "as long as it respect max_height when needed and min height 4m if unspecified"; it was 6 m, and 28 of 210 surveyed
+# bridges over a road or a track stand lower than that asks, tests/test_truth.py). A track's is its own
+# (RAIL_HEADROOM_M).
+MIN_BRIDGE_HEADROOM_M = 4.0
+RAIL_HEADROOM_M = 6.0             # m over a track's rails under a bridge: a wagon's 4.3 m and the catenary over it
 BRIDGE_HEADROOM_MARGIN_M = 0.15   # mesh simplification/float and vehicle clearance tolerance
 DECK_ROAD_CLEAR = MIN_BRIDGE_HEADROOM_M + BRIDGE_HEADROOM_MARGIN_M + roadmesh.DECK_DEPTH + roadmesh.GIRDER_D
 DECK_FULL_DEPTH = roadmesh.DECK_DEPTH + roadmesh.GIRDER_D    # m of slab and girders under a long span's road
@@ -7234,6 +7237,12 @@ def deck_split(depth):
 def deck_road_clear(depth=None):
     """m a deck's road stands over a road under it: the headroom, its margin and the deck's depth. Pure."""
     return MIN_BRIDGE_HEADROOM_M + BRIDGE_HEADROOM_MARGIN_M + (DECK_FULL_DEPTH if depth is None else float(depth))
+
+
+def deck_rail_clear(depth=None):
+    """m a deck's road stands over a track's rails under it: the track's headroom (RAIL_HEADROOM_M), the margin and
+    the deck's depth. Pure."""
+    return RAIL_HEADROOM_M + BRIDGE_HEADROOM_MARGIN_M + (DECK_FULL_DEPTH if depth is None else float(depth))
 
 
 # A road with a height limit under a road bridge (a maxheight sign: the roads layer's "max_height_m" rule) needs the
@@ -7860,7 +7869,7 @@ class BridgeProfiles:
         water = self._water(lines, nav, depth, channel)
         if not water and nav > 0 and bridge_profile_mode() == "curve":
             water = self._gap(lines, nav, depth)
-        rails = [(c[0], c[1], z, deck_road_clear(depth)) for c, z in zip(rcr, rail_z)]
+        rails = [(c[0], c[1], z, deck_rail_clear(depth)) for c, z in zip(rcr, rail_z)]
         levels = [pool[k][3] for k in comp]
         pins = _ground_pins(lines, gl)          # (once: pure in lines and gl, which stay)
 

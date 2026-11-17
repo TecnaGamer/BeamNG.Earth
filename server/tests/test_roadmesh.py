@@ -641,7 +641,9 @@ class BridgeProfilesTest(unittest.TestCase):
         za = got1["a"][1]
         self.assertAlmostEqual(za[0], 10.0, delta=0.2, msg="an abutment on the ground")
         k = int(np.argmin(np.abs(got1["a"][0][:, 0] - 0.0)))
-        self.assertGreaterEqual(za[k], 10.0 + roads.DECK_ROAD_CLEAR - 0.6, "headroom over the street")
+        # (the chain's own depth, from its span, not the full one)
+        clear = roads.deck_road_clear(roads.deck_depth(roads.geom_span([got1["a"][0], got1["b"][0]])))
+        self.assertGreaterEqual(za[k], 10.0 + clear - 0.6, "headroom over the street")
         bp2 = roads.BridgeProfiles(FRAME, cell_fn, flat)        # another tile asking first: same deck
         got2 = {fid: (xy, z) for fid, spec, xy, z, lon in bp2.parts([f], (0, -128, 256, 128))}
         self.assertTrue(np.allclose(got2["a"][1], got1["a"][1]) and np.allclose(got2["b"][1], got1["b"][1]))
