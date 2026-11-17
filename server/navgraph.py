@@ -502,6 +502,15 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
                         sk = round(at * L, 2)
                         if 0 < at < 1 and not any(abs(sk - m) < 0.01 for m in marks):
                             marks[sk] = f"s{fid}_v{int(round(at * 1e6))}"
+            # A node at each portal: an edge either runs through the tunnel or stays off it. An edge reaching into a
+            # tunnel with its middle outside it was a ground edge, its end in the tube at elev(), the hill over it (the
+            # Fuji Subaru Line's snow shed: a node 9 m inside the portal 5.6 m over the floor, the route's arrows
+            # at the tube's roof, 2026-11-16)
+            for t0, t1 in tunnel_ranges:
+                for at in (t0, t1):
+                    sk = round(at * L, 2)
+                    if 0 < at < 1 and not any(abs(sk - m) < 0.05 for m in marks):
+                        marks[sk] = f"s{fid}_p{int(round(at * 1e6))}"
             # Even a sub-metre source road can join distinct connectors. Only
             # discard it when the marks collapse at the graph's centimetre precision.
             if len(marks) < 2:
