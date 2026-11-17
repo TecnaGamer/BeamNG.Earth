@@ -438,9 +438,20 @@ def _part_z(parts, x, y, reach, end_tol=None):
     return None if best is None else best[1]
 
 
-def _open_floor(parts, points):
-    """One contiguous open section must cover the whole mapped-tunnel stretch of an edge."""
-    return bool(points) and any(all(_deck_z({None: [part]}, None, *p) is not None for p in points) for part in parts)
+def _open_floor(parts, points, reach=1.5, end_tol=None):
+    """One contiguous open section must cover the whole mapped-tunnel stretch of an edge (reach, end_tol: _part_z's)."""
+    return bool(points) and any(all(_part_z([part], *p, reach, end_tol) is not None for p in points) for part in parts)
+
+
+def _open_floor_of(store, fid, points):
+    """_open_floor on fid's own open floors, else on its road family's within the family's sideways reach (a lane
+    section placed beside the line its road's floor was planned on, Codex review of PR #1395)."""
+    own = store.get(fid) if store else None
+    if own:
+        return _open_floor(own, points)
+    if isinstance(store, _Roads):
+        return _open_floor(store.related(fid), points, store.reach(fid), 1.5)
+    return False
 
 
 def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks=None, tunnels=None, widths=None, left_hand=False,
@@ -680,7 +691,7 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
                         if hi_ > lo_:
                             arc = [lo_, (lo_ + hi_) / 2, hi_]
                             checks.extend(zip(np.interp(arc, s, p[:, 0]), np.interp(arc, s, p[:, 1])))
-                    if open_tunnels and _open_floor(_road_parts(open_tunnels, fid), checks):
+                    if open_tunnels and _open_floor_of(open_tunnels, fid, checks):
                         for nm_, _q in ends_in:
                             open_node[nm_] = fid
                     elif AI_TUNNELS and _has_parts(tunnels, fid) and w >= TUNNEL_AI_MIN_W and all(

@@ -468,6 +468,18 @@ class GraphTest(unittest.TestCase):
         f.attrs[navgraph.lanesections.PROFILE] = col
         self.assertEqual(navgraph._section_shifts([f, None]), {"r": 6.0})
 
+    def test_open_floor_family_reach(self):
+        """A lane section placed 6 m beside its road's line still finds the open floor planned under the road's id
+        (all the edge's points within the family's sideways reach), not past the floor's ends."""
+        floor = (np.array([(0.0, 0.0), (100.0, 0.0)]), np.array([5.0, 5.0]))
+        sec = "r~lanes000000000-500000000"
+        fam = navgraph._Roads({"r": [floor]}, {"r": 6.0})
+        self.assertTrue(navgraph._open_floor_of(fam, sec, [(20.0, 6.0), (80.0, 6.0)]))
+        self.assertFalse(navgraph._open_floor_of(fam, sec, [(20.0, 6.0), (104.0, 6.0)]))
+        self.assertFalse(navgraph._open_floor_of(navgraph._Roads({"r": [floor]}), sec, [(20.0, 6.0)]))
+        self.assertTrue(navgraph._open_floor_of(fam, "r", [(20.0, 1.0)]))
+        self.assertFalse(navgraph._open_floor_of(fam, "r", [(20.0, 6.0)]), "the road's own floor: 1.5 m as before")
+
     def test_deck_z_family_lookup(self):
         deck = (np.array([(0.0, 0.0), (100.0, 0.0)]), np.array([20.0, 20.0]))
         plain = {"r": [deck]}
