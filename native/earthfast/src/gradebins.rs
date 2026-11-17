@@ -139,6 +139,9 @@ pub struct Pt {
     hdeep: f64, hrank: i64, hrank2: i64, hid: i64, hz: f64, hyield: f64, hcar: bool, hdx: f64, hdy: f64,
     // (rank) that road is a tunnel's open section (OPEN_TUNNEL)
     hopen: bool,
+    // the highest rank of a plan leading onto a bridge (abut) whose carriageway holds the point: a road of no higher
+    // rank does not hold its carriageway whole over it (finish)
+    arank: i64,
 }
 
 impl Pt {
@@ -148,7 +151,7 @@ impl Pt {
             num: 0.0, den: 0.0, wmax: 0.0, top: f64::NEG_INFINITY, cmax: 0.0, csum: 0.0, cz: 0.0,
             raised: f64::NEG_INFINITY, bs: base, beff: base, cdeep: 0.0, carz: f64::NAN, carid: -1, bdeep: 0.0,
             bz: f64::NAN, bid: -1, hdeep: f64::INFINITY, hrank: i64::MIN, hrank2: i64::MIN, hid: -1, hz: f64::NAN,
-            hyield: 0.0, hcar: false, hdx: 0.0, hdy: 0.0, hopen: false,
+            hyield: 0.0, hcar: false, hdx: 0.0, hdy: 0.0, hopen: false, arank: i64::MIN,
         }
     }
 
@@ -164,8 +167,11 @@ impl Pt {
     #[inline(always)]
     fn finish(&self, lift: f64) -> f64 {
         // (a road whose rank is the point's highest, with no equal-ranked road there, holds its own carriageway whole:
-        // a subordinate road's carriageway, cutting band or ground may not move it, not even by centimetres)
-        if self.hcar && self.hrank > self.hrank2 && self.hrank <= RANK_HOLD_MAX {
+        // a subordinate road's carriageway, cutting band or ground may not move it, not even by centimetres; nor
+        // over the carriageway of an approach of its rank leading onto a bridge, whose end it would cut off at its
+        // own height: the Stonehouse Bridge's deck end 7 m from the gyratory it runs into stepped 1.6 m since
+        // the gyratory's pieces count as one road (GitHub #1374))
+        if self.hcar && self.hrank > self.hrank2 && self.hrank > self.arank && self.hrank <= RANK_HOLD_MAX {
             self.hz + lift
         } else if self.den > 0.0 {
             self.beff + self.wmax * (self.num / self.den - self.beff + lift)
@@ -340,6 +346,9 @@ fn pair0(st: &mut Pt, g: &Seg, q: &Pre, p: &Prm) {
     // (and none past its abutment end, over the deck, from yield_ramp on: the round end of an approach's carriageway
     // reached over the railway under a short bridge, and the track's bed gave way to it there; GitHub #909)
     let car = past <= p.yield_ramp.max(1e-6);
+    if g.abut && g.rk >= 0 && car && d <= cr && g.rk > st.arank {
+        st.arank = g.rk;
+    }
     if car && (d - cr < st.cdeep || (d <= cr && st.carz.is_nan())) {
         st.cdeep = d - cr;
         st.carz = target;
