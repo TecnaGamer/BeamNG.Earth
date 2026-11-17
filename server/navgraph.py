@@ -417,7 +417,6 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
             fid = str(feats.ids[i])
             if spec is None or fid in seen:
                 continue
-            seen.add(fid)
             parts = feats.parts(i)
             if not parts or not parts[0]:
                 continue
@@ -430,6 +429,8 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
             if (pmax[0] < cx - window - 200 or pmin[0] > cx + window + 200 or
                     pmax[1] < cy - window - 200 or pmin[1] > cy + window + 200):
                 continue
+            # A distant copy can share the ID of a longer road through this window.
+            seen.add(fid)
             if rspecs[i] is not None:
                 ring_cands.append((fid, rspecs[i], np.column_stack([p, np.zeros(len(p))]), None))
             seg = dnp.hypot(*np.diff(p, axis=0).T)
