@@ -16,3 +16,4 @@ pub mod pyobj;
 pub mod regions;
 pub mod rings;
 pub mod surfaces;
+pub mod verdicts;

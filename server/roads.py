@@ -3888,10 +3888,12 @@ def _spec_inputs(feats):
     # surfaces: the map's value (BNE_PHOTO_SURFACE: the photo's for a road the map says nothing of), its kind by
     # surface_kind and its token by surface_token, each pair worked out once
     import photosurface
-    vals = list(_map_surface_values(feats))
-    if photosurface.ON and any(vals[i] is None for i in np.flatnonzero(elig).tolist()):
-        ph = _photo_surface(feats)
-        vals = [ph.get(i) if v is None else v for i, v in enumerate(vals)]
+    vals = _map_surface_values(feats)
+    if photosurface.ON:         # (earthfast roadnet::verdicts: the photo asked only where an eligible road has none)
+        fast.require(389, "photo_values")
+        vals = fast._ef.photo_values(vals, np.ascontiguousarray(elig, bool), lambda: _photo_surface(feats))
+    else:
+        vals = list(vals)
     good = sc["good"]
     name = sc["name"]
     # the aerial's verdict on an untagged minor road (roadsurf.py; this run's, made by an earlier one): unpaved -> gravel
