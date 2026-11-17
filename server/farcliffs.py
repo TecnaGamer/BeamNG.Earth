@@ -5,6 +5,8 @@ terrain's exact positions/triangles and skirts; split vertices only at material
 and coherent wall-chart boundaries. Its existing LOD/streaming controls the cost.
 """
 import math
+import io
+import struct
 import logging
 from functools import lru_cache
 from pathlib import Path
@@ -83,7 +85,14 @@ def terrain_colors(texture, uv, size, *, blur_m=PHOTO_BLUR_M):
     from PIL import Image
     import fast
     try:
-        with Image.open(texture) as im:
+        data = Path(texture).read_bytes()
+        # Pillow cannot open BC1_UNORM_SRGB (72). BC1_UNORM (71) has identical
+        # blocks; retag only this CPU copy to read the original encoded colours.
+        # Leave the on-disk sRGB tag intact for the game's lighting pipeline.
+        if (len(data) >= 148 and data[:4] == b'DDS ' and data[84:88] == b'DX10'
+                and struct.unpack_from('<I', data, 128)[0] == 72):
+            data = data[:128] + struct.pack('<I', 71) + data[132:]
+        with Image.open(io.BytesIO(data)) as im:
             sigma = max(0.0, blur_m*im.width/max(size,1))
             rgb = fast._ef.cliff_far_photo_field(np.asarray(im.convert('RGB')), sigma)
     except (OSError, ValueError) as e:

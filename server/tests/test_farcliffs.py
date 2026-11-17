@@ -113,6 +113,20 @@ class FarCliffsTest(unittest.TestCase):
         empty[:3] = [np.empty((0, 3), np.int64), np.empty(0, np.int8), np.empty(0, bool)]
         self.assertEqual(fast._ef.cliff_far_layout(*empty), [])
 
+    def test_srgb_dds_colour_sampling_matches_legacy_without_changing_file(self):
+        import imagery
+        rgb = np.random.default_rng(72).integers(60, 220, (32, 32, 3), dtype=np.uint8)
+        uv = np.array([[0., 0.], [.5, .5], [.9, .2], [1., 1.]])
+        with tempfile.TemporaryDirectory() as tmp:
+            legacy, srgb = Path(tmp)/'legacy.dds', Path(tmp)/'srgb.dds'
+            legacy.write_bytes(imagery.encode_dds(rgb))
+            encoded = imagery.encode_dds(rgb, srgb=True)
+            srgb.write_bytes(encoded)
+            actual = fc.terrain_colors(srgb, uv, 128)
+            self.assertIsNotNone(actual)
+            np.testing.assert_array_equal(actual, fc.terrain_colors(legacy, uv, 128))
+            self.assertEqual(srgb.read_bytes(), encoded)
+
     def test_native_detail_reduction_matches_shader_and_reads_lossless_sources(self):
         import fast
         import cliffcolors

@@ -21,7 +21,7 @@
         "roughnessFactor": 1,
         "useAnisotropic": true,
         "roughnessMapUseUV": 0,
-        "detailMap": "/temp/beamngEarth/shapes/cliff_talus_v4/detail.data.dds",
+        "detailMap": "/temp/beamngEarth/shapes/cliff_ground_v1/detail.data.dds",
         "detailNormalMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/rock_grain.normal.dds",
         "detailNormalMapStrength": 0.3,
         "detailScale": [
@@ -59,7 +59,7 @@
         "roughnessFactor": 1,
         "useAnisotropic": true,
         "roughnessMapUseUV": 0,
-        "detailMap": "/temp/beamngEarth/shapes/cliff_talus_v4/detail.data.dds",
+        "detailMap": "/temp/beamngEarth/shapes/cliff_ground_v1/detail.data.dds",
         "detailNormalMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/rock_grain.normal.dds",
         "detailNormalMapStrength": 0.35,
         "detailScale": [
@@ -266,7 +266,7 @@
         "roughnessFactor": 1,
         "useAnisotropic": true,
         "roughnessMapUseUV": 0,
-        "detailMap": "/temp/beamngEarth/shapes/cliff_talus_v4/detail.data.dds",
+        "detailMap": "/temp/beamngEarth/shapes/cliff_ground_v1/detail.data.dds",
         "detailNormalMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/rock_grain.normal.dds",
         "detailNormalMapStrength": 0.3,
         "detailScale": [
@@ -318,7 +318,7 @@
         "roughnessFactor": 1,
         "useAnisotropic": true,
         "roughnessMapUseUV": 0,
-        "detailMap": "/temp/beamngEarth/shapes/cliff_talus_v4/detail.data.dds",
+        "detailMap": "/temp/beamngEarth/shapes/cliff_ground_v1/detail.data.dds",
         "detailNormalMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/rock_grain.normal.dds",
         "detailNormalMapStrength": 0.35,
         "detailScale": [
