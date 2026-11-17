@@ -1325,6 +1325,7 @@ class UnderDipTest(unittest.TestCase):
 
 
 class UnderpassShortfallTest(unittest.TestCase):
+    @unittest.mock.patch.object(grading, "ROAD_LAWS_ON", False)     # (the dip's own rule; a motorway's laws lengthen it)
     def test_road_under_gives_way_for_what_the_ramps_could_not_raise(self):
         """A local road's bridge over a motorway (the motorway never rises): with room for its ramps the overpass rises
         and the motorway stays; with frontage roads hugging both ends (the ramps held down) the motorway dips under it

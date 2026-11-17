@@ -328,6 +328,16 @@ SHAPES_NEAR_M = 3.0         # m: a plan vertex this near a shape's or a ramp's l
 # their speed allows (with the shapes: on unless BNE_ROAD_LAWS=off)
 ROAD_LAWS_ON = SHAPES_ON and os.environ.get("BNE_ROAD_LAWS", "on") != "off"
 ROAD_LAWS_DECK_M = 1.0      # m past a deck's half width a road under it counts as under it (only down there)
+# The ground under a raised road (embankment_flanks): a road the passes lifted over its natural profile (a ramp from a
+# deck's end, a solved shape) stands on an embankment whose sides fall at SLOPE_RUN to the natural ground. A plan's own
+# transition reaches T_MAX past its core (a 6 m fill at 1:2): a 24 m fill stood on a 12 m wide cliff, and the roads
+# beside it ran into its side (Dallas' High Five). The rest of the slope is a flank plan each side: its core tilted at
+# 1 / SLOPE_RUN (Plan.bank) from the road's edge down, as wide as the slope needs past T_MAX (in FLANK_STEP_M steps),
+# the lowest grade rank, so a road crossing it keeps its own ground (the fill opened for it).
+FLANKS_ON = SHAPES_ON and os.environ.get("BNE_FLANKS", "on") != "off"
+FLANK_MIN_M = 4.0           # m of slope past T_MAX below which a fill needs no flank
+FLANK_STEP_M = 8.0          # m: a flank's width in steps of this (a piece of road per width)
+FLANK_TAG = ":flank"
 APPROACH_ON = os.environ.get("BNE_APPROACH_RAMPS", "on") != "off" and not SHAPES_ON
 APPROACH_GRADE = float(os.environ.get("BNE_APPROACH_GRADE", "0.05"))   # steepest grade of a ramp (its middle)
 APPROACH_MAX_LIFT = 10.0    # m an abutment is raised at most
@@ -2101,6 +2111,54 @@ LEG_RID_SHIFT = 44           # PlanPack: a pass road's leg (between hairpins) as
 HAIRPIN_FOLD_RATIO = 0.5      # hairpin_cores: a point of the road's own line this much nearer than along it is another leg
 
 
+def embankment_flanks(plans, specs, bases):
+    """[(fid, Plan)]: the flanks of the raised roads among plans ([(fid, Plan)], specs and bases (their natural
+    profiles) alike): where a road stands more than (T_MAX + FLANK_MIN_M) / SLOPE_RUN over its natural profile, a plan
+    each side whose core is the embankment's slope from the road's core edge down at 1 / SLOPE_RUN, as wide as it
+    must be past T_MAX (the plan's own transition takes the rest down to the ground), rank 0. Pure."""
+    out = []
+    for n, ((fid, p), sp) in enumerate(zip(plans, specs)):
+        if sp is None or TUNNEL_TAG in str(fid) or n >= len(bases):
+            continue
+        xy = np.asarray(p.xy, np.float64)[:, :2]
+        z = np.asarray(p.z, np.float64)
+        b = np.asarray(bases[n], np.float64)
+        if len(xy) < 2 or len(b) != len(z):
+            continue
+        need = SLOPE_RUN * (z - b) - T_MAX          # (m of slope past the plan's own transition)
+        if float(need.max()) < FLANK_MIN_M:
+            continue
+        width = np.where(need >= FLANK_MIN_M, np.ceil(need / FLANK_STEP_M) * FLANK_STEP_M, 0.0)
+        seg = np.diff(xy, axis=0)
+        nrm = np.stack([-seg[:, 1], seg[:, 0]], axis=1)
+        nrm /= np.maximum(np.hypot(nrm[:, 0], nrm[:, 1]), 1e-9)[:, None]
+        vn = np.zeros_like(xy)
+        vn[:-1] += nrm
+        vn[1:] += nrm
+        vn /= np.maximum(np.hypot(vn[:, 0], vn[:, 1]), 1e-9)[:, None]       # (each vertex's normal, to its left)
+        k = 0
+        while k < len(xy):
+            if width[k] <= 0:
+                k += 1
+                continue
+            j = k
+            while j + 1 < len(xy) and width[j + 1] == width[k]:
+                j += 1
+            a, e = max(0, k - 1), min(len(xy) - 1, j + 1)     # (a vertex more each side: the pieces overlap)
+            if e - a >= 1:
+                w = float(width[k])
+                for side in (1.0, -1.0):        # (left: the slope falls to its left; right: rises to its left)
+                    c = p.half + w / 2.0
+                    q = Plan(xy[a:e + 1] + side * c * vn[a:e + 1], z[a:e + 1] - (w / 2.0) / SLOPE_RUN, w / 2.0,
+                             road_half=w / 2.0)
+                    q.bank = np.full(e - a + 1, -side / SLOPE_RUN)
+                    q.rid = road_id(str(fid) + FLANK_TAG + ("L" if side > 0 else "R") + str(k))
+                    q.rank = 0
+                    out.append((str(fid) + FLANK_TAG, q))
+            k = j + 1
+    return out
+
+
 def hairpin_cores(plans, specs, frame):
     """The pass roads' plans among plans ([(fid, Plan)], specs alike) widened, in place, round their widened hairpins
     (roads.hairpin_extra: the drawn road's own widening, on the plan's line): Plan.widen, their cuttings' walls and tops
@@ -2790,7 +2848,7 @@ class _Planner:
                     pspecs.append(part[1])
                     pclip.append(cl)
                     pparts.append((fid, part[1], part[0]))
-            bases = [np.array(p.z, np.float64) for _f, p in plans] if GUARD_ON else None
+            bases = [np.array(p.z, np.float64) for _f, p in plans] if (GUARD_ON or SHAPES_ON) else None
             if NEIGHBOUR_ON and plans and self._coarse(key):
                 try:
                     r = 2.0 * NEIGHBOUR_TREND_SIGMA_M
@@ -2876,7 +2934,7 @@ class _Planner:
                     log.debug("grading: grade guard of %s: %s: %s", key, type(e).__name__, e)
             if ROAD_LAWS_ON and plans:
                 try:            # every road under its grade and vertical curve (roadlaws.py)
-                    self._road_laws(key, plans, pspecs)
+                    self._road_laws(key, plans, pspecs, bases)
                 except Exception as e:      # the plans as the passes left them rather than no grading
                     _caught(e)
                     log.warning("grading: road laws of %s: %s: %s", key, type(e).__name__, e)
@@ -2898,6 +2956,16 @@ class _Planner:
                 except Exception as e:      # the welded heights alone rather than no grading
                     _caught(e)
                     log.debug("grading: junctions after welding of %s: %s: %s", key, type(e).__name__, e)
+            if FLANKS_ON and plans and bases is not None:
+                try:            # the ground under the raised roads: their embankments' sides (embankment_flanks)
+                    fl = embankment_flanks(plans[:len(pspecs)], pspecs, bases)
+                    plans.extend(fl)
+                    pclip.extend([True] * len(fl))
+                    if fl:
+                        log.info("grading: %d embankment flanks in %s", len(fl), key)
+                except Exception as e:      # the roads' own transitions rather than no grading
+                    _caught(e)
+                    log.warning("grading: embankment flanks of %s: %s: %s", key, type(e).__name__, e)
             if plans:
                 try:            # a pass road's widened hairpins (roads.HAIRPIN_*): its core wider round each
                     hairpin_cores(plans, pspecs, self.frame)
@@ -4531,7 +4599,7 @@ class _Planner:
                 m_out[n] = mode
         return z_out, m_out
 
-    def _road_laws(self, key, plans, specs):
+    def _road_laws(self, key, plans, specs, bases=None):
         """ROAD_LAWS_ON: the cell's plans under their laws (roadlaws.apply): held where an interchange's shape or ramp
         set them, only down under a deck, the tunnels' as they are. Returns how many changed."""
         import roadlaws
@@ -4576,7 +4644,11 @@ class _Planner:
                 xy = np.asarray(p.xy, np.float64)[:, :2]
                 if len(xy) and float(np.hypot(*(xy - P).T).min()) <= 40.0:
                     near.append((i, np.array(p.z, np.float64)))
-        n = roadlaws.apply([p for _f, p in plans], specs, held, under, skip, info)
+        def natural(i):
+            if bases is None or i >= len(bases) or len(bases[i]) != len(plans[i][1].z):
+                return None
+            return bases[i]
+        n = roadlaws.apply([p for _f, p in plans], specs, held, under, skip, info, natural)
         # (a side road the laws landed on the road it joins, at its height and its grade its way, keeps its own plan at
         # the mouth: as high a grade rank, its ground no longer eased flat onto that road's for RANK_SIDE_FADE_M past its
         # carriageway, the sag a 12 m truck bottomed out in at the mouth)
@@ -4592,9 +4664,10 @@ class _Planner:
                         getattr(specs[i], "cls", None), getattr(specs[i], "kmh", None), p.rid, p.abut,
                         np.round(xy, 1).tolist(), np.round(z0, 2).tolist(), np.round(np.asarray(p.z), 2).tolist(),
                         np.flatnonzero(h).tolist() if h is not None else None, np.flatnonzero(under(i)).tolist())
-        log.warning("grading: road laws %s: %d of %d plans changed, %s chains, %s couplings, %s samples, %.2f s%s", key, n,
-                 len(plans), info.get("chains"), info.get("couplings"), info.get("samples"), _time.monotonic() - t0,
-                 "" if info.get("feasible", True) else " (infeasible: left as they were)")
+        log.warning("grading: road laws %s: %d of %d plans changed, %s chains, %s couplings, %s samples, %s networks "
+                    "(%s relaxed, %s left as they were), %.2f s", key, n, len(plans), info.get("chains"),
+                    info.get("couplings"), info.get("samples"), info.get("networks"), info.get("relaxed"),
+                    info.get("infeasible"), _time.monotonic() - t0)
         return n
 
     def _apply_shapes(self, plans, specs):

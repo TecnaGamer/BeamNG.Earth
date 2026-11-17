@@ -15,7 +15,11 @@ one quadratic programme (the Rust kernel of carriageways.solve, as the interchan
   its last APPROACH_M driven at JUNCTION_KMH (a vertical curve that speed's: a side road climbing its bank from the
   junction turns up over ~10 m, not a 12 m truck's length of 0 to 12 % in 4 m, nor a 50 km/h road's 80 m of fill);
 - the grade is never held under what the ground itself has (a real mountain road stays as steep as it is, plus
-  NATURAL_PLUS): it is the sudden changes of grade the laws take out, not the hills;
+  NATURAL_PLUS; read from the plans' natural profiles, not from what the passes made of them: a 24 m cliff an
+  interchange's ramp left is no hill to keep): it is the sudden changes of grade the laws take out, not the hills;
+- each connected network of roads is solved on its own (a conflict at one junction of a city, an infeasible
+  programme, left 900 roads of the cell as the passes made them), and one that is infeasible again without its
+  landings, then without its grade law (the curves alone), before it is left as it was;
 - what the passes solved is held (an interchange's shape and its ramps, a bridge's abutment end, a tunnel), and a road
   under a deck may only go down (its clearance stays).
 
@@ -142,15 +146,69 @@ def _nearest(xy, P):
     return k, float(t[k]), float(d[k])
 
 
-def apply(plans, specs, held=None, under=None, skip=(), diagnostics=None):
+def _solve_networks(chains, ccps):
+    """The chains' profiles ([array or None: left as it was]), each connected network (chains joined by couplings)
+    solved on its own: as it is, else without its landings (the "ge" couplings), else without its grade law too.
+    Returns (profiles, stats)."""
+    import carriageways as _cw
+    n = len(chains)
+    parent = list(range(n))
+
+    def root(a):
+        while parent[a] != a:
+            parent[a] = parent[parent[a]]
+            a = parent[a]
+        return a
+    for a, _i, b, _j, _k, _v in ccps:
+        parent[root(a)] = root(b)
+    groups = collections.defaultdict(list)
+    for c in range(n):
+        groups[root(c)].append(c)
+    out = [None] * n
+    stats = dict(networks=len(groups), relaxed=0, infeasible=0, feasible=True, ok_chain=[False] * n)
+    for members in groups.values():
+        pos = {c: q for q, c in enumerate(members)}
+        cps = [(pos[a], i, pos[b], j, k, v) for a, i, b, j, k, v in ccps if a in pos]
+        for level in (0, 1, 2):
+            sub = [dict(chains[c]) for c in members]
+            sc = cps
+            if level >= 1:
+                sc = [c for c in cps if c[4] != "ge"]
+            if level >= 2:
+                for ch in sub:
+                    ch["grade"] = 1.0
+            info = {}
+            try:
+                got = _cw.solve(sub, sc, diagnostics=info)
+            except Exception as e:      # (this network as the passes left it)
+                log.warning("grading: road laws: %s: %s", type(e).__name__, e)
+                got, info = None, {"feasible": False}
+            if got is not None and info.get("feasible", True) and info.get("converged", True):
+                for c, z in zip(members, got):
+                    out[c] = z
+                    stats["ok_chain"][c] = True
+                if level:
+                    stats["relaxed"] += 1
+                break
+        else:
+            stats["infeasible"] += 1
+    return out, stats
+
+
+def apply(plans, specs, held=None, under=None, skip=(), diagnostics=None, natural=None):
     """plans: [Plan] (xy (n, 2+), z (n,), road_half, abut, rid), specs alike (cls, kmh; None: left out); held(i) ->
     bool (n,) of plan i's held samples (or None), under(i) -> bool (n,) of those under a deck (only down there); skip:
-    plan indices left as they are, held whole (tunnels). Changes the plans' z in place; returns how many changed."""
+    plan indices left as they are, held whole (tunnels); natural(i) -> (n,) plan i's natural profile (the heights
+    before the passes; None: its heights now). Changes the plans' z in place; returns how many changed."""
     idx = [i for i, sp in enumerate(specs) if sp is not None and len(plans[i].xy) >= 2]
     if not idx:
         return 0
     xys = [np.asarray(plans[i].xy, np.float64)[:, :2] for i in idx]
     zs = [np.asarray(plans[i].z, np.float64) for i in idx]
+    nats = []
+    for k, i in enumerate(idx):
+        got = natural(i) if natural is not None else None
+        nats.append(np.asarray(got, np.float64) if got is not None and len(got) == len(zs[k]) else zs[k])
     sps = [specs[i] for i in idx]
     rids = [int(getattr(plans[i], "rid", -1)) for i in idx]
     arcs = [_arc(xy) for xy in xys]
@@ -174,22 +232,23 @@ def apply(plans, specs, held=None, under=None, skip=(), diagnostics=None):
     R = []                          # per run: its samples, targets, weights, bounds and laws
     loc = {}                        # plan k -> (run, reversed, s0)
     for r, run in enumerate(rs):
-        z_r, h_r, d_r, s_r = [], [], [], []
+        z_r, h_r, d_r, s_r, n_r = [], [], [], [], []
         s0 = 0.0
         for k, rev in run:
-            z, h, d, s = zs[k], hold[k], down[k], arcs[k]
+            z, h, d, s, nz = zs[k], hold[k], down[k], arcs[k], nats[k]
             if rev:
-                z, h, d, s = z[::-1], h[::-1], d[::-1], s[-1] - s[::-1]
+                z, h, d, s, nz = z[::-1], h[::-1], d[::-1], s[-1] - s[::-1], nz[::-1]
             s = s + s0
             if z_r:                                     # (the joint: one point, the first part's)
-                z, h, d, s = z[1:], h[1:], d[1:], s[1:]
+                z, h, d, s, nz = z[1:], h[1:], d[1:], s[1:], nz[1:]
             loc[k] = (r, rev, s0)
             z_r.append(z)
             h_r.append(h)
             d_r.append(d)
             s_r.append(s)
+            n_r.append(nz)
             s0 = float(s[-1]) if len(s) else s0
-        S, Z, H, D = (np.concatenate(a) for a in (s_r, z_r, h_r, d_r))
+        S, Z, H, D, NZ = (np.concatenate(a) for a in (s_r, z_r, h_r, d_r, n_r))
         L = float(S[-1] - S[0])
         m = max(2, int(math.ceil(L / STEP_M)) + 1)
         sv = np.linspace(S[0], S[-1], m)
@@ -208,7 +267,8 @@ def apply(plans, specs, held=None, under=None, skip=(), diagnostics=None):
             g, rr = laws(sps[k])
             g_law, rad, rank = max(g_law, g), max(rad, rr), max(rank, _rank(sps[k]))
         w_n = max(1, int(round(NATURAL_WIN_M / max(step, 1e-6))))
-        nat = np.abs(t[w_n:] - t[:-w_n]) / (w_n * step) if m > w_n else np.abs(np.diff(t)) / max(step, 1e-6)
+        tn = np.interp(sv, S, NZ)                       # (the ground's own grade: the natural profile's)
+        nat = np.abs(tn[w_n:] - tn[:-w_n]) / (w_n * step) if m > w_n else np.abs(np.diff(tn)) / max(step, 1e-6)
         g = max(g_law, float(nat.max()) + NATURAL_PLUS if len(nat) else g_law)
         R.append(dict(sv=sv, t=t, w=np.where(hs, W_HOLD, 1.0 + W_RANK * rank), hi=np.where(ds, t, np.inf), grade=g,
                       rad=rad, step=step, junction=[False, False], parts=[(k, rev) for k, rev in run]))
@@ -252,7 +312,7 @@ def apply(plans, specs, held=None, under=None, skip=(), diagnostics=None):
         if i not in (0, m - 1) or m < 3 or r == ra:
             return
         R[r]["junction"][0 if i == 0 else 1] = True
-        landed.append((idx[k], idx[onto]))
+        landed.append((idx[k], idx[onto], r))
         md, mg = run_dir(ra, ia)
         if md is None:
             return
@@ -335,23 +395,17 @@ def apply(plans, specs, held=None, under=None, skip=(), diagnostics=None):
         cb, jb = chain_of(rb, ib)
         if (ca, ja) != (cb, jb):
             ccps.append((ca, ja, cb, jb, kind, v))
-    import carriageways as _cw
-    info = {}
-    try:
-        out = _cw.solve(chains, ccps, diagnostics=info)
-    except Exception as e:          # (the plans as the passes left them)
-        log.warning("grading: road laws: %s: %s", type(e).__name__, e)
-        return 0
+    out, stats = _solve_networks(chains, ccps)
     if diagnostics is not None:
-        diagnostics.update(info)
+        diagnostics.update(stats)
         diagnostics.update(chains=len(chains), couplings=len(ccps), samples=int(sum(len(c["t"]) for c in chains)),
-                           landed=landed)
-    if not info.get("feasible", True):
-        return 0
+                           landed=[(i, j) for i, j, r in landed if all(stats["ok_chain"][c] for c, _a, _b in where[r])])
     sol = []
-    for r, x in enumerate(R):       # (each run's samples from its chains)
+    for r, x in enumerate(R):       # (each run's samples from its chains; a network left as it was: its targets)
         zr = np.array(x["t"], np.float64)
         for c, a, _b in where[r]:
+            if out[c] is None:
+                continue
             o = np.asarray(out[c], np.float64)
             zr[a:a + len(o)] = o
         sol.append(zr)
@@ -361,6 +415,8 @@ def apply(plans, specs, held=None, under=None, skip=(), diagnostics=None):
             continue
         r, rev, s0 = loc[k]
         s = s0 + (arcs[k][-1] - arcs[k] if rev else arcs[k])
+        if all(out[c] is None for c, _a, _b in where[r]):
+            continue
         z = zs[k] + (np.interp(s, R[r]["sv"], sol[r]) - np.interp(s, R[r]["sv"], R[r]["t"]))
         z = np.where(hold[k], zs[k], z)                 # (the change, not the resampled profile: the plan's own detail)
         z = np.where(down[k], np.minimum(z, zs[k]), z)
