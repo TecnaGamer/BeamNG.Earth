@@ -79,6 +79,7 @@ local routedTo = nil    -- the node id (or 'final') the current arrows go to
 local lastCheck = -math.huge
 local info = nil        -- { dist, bearing, remaining, eta } at the last check
 local auto = false      -- autodrive on
+local speedOffsetMph = 0 -- saved by settings.lua; relative to each road's limit
 local autoPath = nil    -- the node ids last given to the AI
 local autoRoadPath = nil -- the same path including its rear endpoint, for underfoot edge continuity
 local autoFinished = nil -- completed local endpoint: wait for a continuation instead of resubmitting it
@@ -323,7 +324,8 @@ function M.status()
            metric = metric(),
            remaining = info and info.remaining, eta = info and info.eta, routeVersion = route and route.version or 0,
            progress = progress, planning = pendingId ~= nil, routeError = routeError, pendingId = pendingId,
-           autodrive = auto, autoNodes = autoPath and #autoPath or nil, off = info and info.off, arrows = routedTo,
+           autodrive = auto, speedOffsetMph = speedOffsetMph,
+           autoNodes = autoPath and #autoPath or nil, off = info and info.off, arrows = routedTo,
            routeDownload = downloadProgress, replans = M.noProgressReplans, recoveries = M.autoRecoveries,
            waypoints = #vias > 0 and M.waypoints() or nil, legs = route and route.legs or nil }
 end
@@ -681,12 +683,21 @@ function M.aiCommand(ids, aggression, brake)
   return load .. 'local result = beamngEarth_autodrive.drive({' .. table.concat(q, ',') .. '}, '
     .. tostring(routeVersion) .. ', ' .. tostring(autoForce) .. ', '
     .. (speed and string.format('%.2f', speed) or 'nil') .. ', '
-    .. string.format('%.2f', aggression or M.AUTO_AGGRESSION) .. '); '
+    .. string.format('%.2f, %d', aggression or M.AUTO_AGGRESSION, speedOffsetMph) .. '); '
     .. [[if result == 'waiting' then obj:queueGameEngineLua("require('beamngEarth/gps').retryAutodrive()") end]]
 end
 
 function M.retryAutodrive()
   routedTo, autoForce = nil, true
+end
+
+-- settings.lua validates and persists the 5 mph steps. A live change replans at the next update,
+-- even when the route and graph are unchanged (the AI caches speed limits in its current plan).
+function M.setSpeedOffsetMph(mph)
+  if mph == speedOffsetMph then return end
+  speedOffsetMph = mph
+  M.retryAutodrive()
+  lastCheck = -math.huge
 end
 
 function M.onAiRouteDone(id)

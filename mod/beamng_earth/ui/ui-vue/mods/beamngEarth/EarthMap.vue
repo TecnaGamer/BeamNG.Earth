@@ -307,11 +307,13 @@
                 title="Pre-cache this route: its data (elevation, roads, buildings, aerial photos) downloaded and kept, and the world built too if you like">Pre-cache route</button>
         <button class="map-btn small" :disabled="!!state.cannotGo" @click="teleportNow(state.gps.lat, state.gps.lon, state.gps.name)">Teleport</button>
         <button class="map-btn small" :class="{ primary: state.gps.autodrive }" @click="setAutodrive(!state.gps.autodrive)"
-                :title="state.gps.autodrive ? 'Stop driving by itself' : 'The car drives itself along the route (in its lane, at the speed limit)'">
+                :title="state.gps.autodrive ? 'Stop driving by itself' : 'Drive the route in lane, at the speed limit plus the cruise offset'">
           {{ state.gps.autodrive ? "Autodrive on" : "Autodrive" }}
         </button>
         <button class="map-btn small" @click="clearGps">Clear</button>
       </div>
+      <AutodriveSpeed :offset="state.gps.speedOffsetMph || 0" :send-lua="engineLua"
+                      @change="value => { if (state.gps) state.gps.speedOffsetMph = value }" />
     </div>
     <!-- the route's elevation profile (server routing.resample + dem.sample, smoothed), with where the car is on it: a
          box of its own under the GPS box (the user, 2026-10-27) -->
@@ -479,6 +481,7 @@
 </template>
 
 <script setup>
+import AutodriveSpeed from "./AutodriveSpeed.vue"
 import { ref, shallowRef, computed, watch, onMounted, onUnmounted, nextTick } from "vue"
 import { useEvents } from "@/services/events"
 import { vBngOnUiNav } from "@/common/directives"

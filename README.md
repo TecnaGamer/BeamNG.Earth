@@ -314,7 +314,11 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   **Stop fast**.
 - In multiplayer the map has a **Players** list: follow a player, show everyone, or set the GPS to them. Teleport
   works without a car too (the free camera goes there).
-- **Autodrive**: the car drives itself along the GPS route (in lane, legal speed, minding traffic).
+- **Autodrive**: the car drives itself along the GPS route (in lane, minding traffic). Use **−5 mph / +5 mph**
+  beside Autodrive on either map to cruise below or above each road's speed limit: a +10 mph offset targets
+  85 mph on a 75 mph road, then 65 mph when the limit drops to 55. **Reset** returns to the speed limit.
+  The offset is saved between drives and also available in Settings > World (−100 to +100 mph, in 5 mph steps).
+  The AI still slows for turns, traffic and arrival; negative offsets have a 5 mph minimum target, or the road limit if lower.
 - Saved places and recent places; "Where you left off" in the level select puts you back where you last drove (it
   is saved as you drive, at teleports and when the game closes).
 

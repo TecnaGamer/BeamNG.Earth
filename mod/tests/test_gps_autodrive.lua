@@ -38,6 +38,7 @@ local function fixture(path, y, radius, configure)
       for other, e in pairs(n.links) do graph[id][other] = e; graph[other][id] = e end
     end
     env.mapmgr.mapData = { graph = graph }
+    f.vehicleGraph = graph
     G.onVehicleMapmgrUpdate(1)
   end
   f.route = { points = { { 0, 0 }, { 0, 0.01 }, { -0.006, 0.016 }, { -0.006, 0.04 } },
@@ -789,5 +790,24 @@ do
 end
 
 
+-- A live offset change must reach the vehicle even without a new route or streamed graph.
+do
+  local mph = 0.44704
+  local f = fixture(nil, nil, nil, function(f)
+    f.nodes.j.links.s.speedLimit = 75 * mph
+    f.nodes.s.links.t.speedLimit = 55 * mph
+  end)
+  local count = #f.drives
+  f.gps.setSpeedOffsetMph(5); f:step()
+  T.check(#f.drives == count + 1 and math.abs(f.vehicleGraph.j.s.speedLimit / mph - 80) < 1e-8,
+    'live +5 passes through the GE command and replans an unchanged vehicle route at 80 mph')
+  f.gps.setSpeedOffsetMph(10); f:step()
+  T.check(f.gps.status().speedOffsetMph == 10 and math.abs(f.vehicleGraph.j.s.speedLimit / mph - 85) < 1e-8
+    and math.abs(f.vehicleGraph.s.t.speedLimit / mph - 65) < 1e-8, 'the offset stays relative to changing road limits')
+  f.gps.setSpeedOffsetMph(-5); f:step()
+  T.check(math.abs(f.vehicleGraph.j.s.speedLimit / mph - 70) < 1e-8, 'live negative offset reduces cruise speed')
+  f.gps.setAutodrive(false)
+  T.check(math.abs(f.vehicleGraph.j.s.speedLimit / mph - 75) < 1e-8, 'disabling through GE restores vehicle limits')
+end
 os.clock, package.loaded['beamngEarth/navgraph'] = savedClock, savedNav
 T.done('test_gps_autodrive')

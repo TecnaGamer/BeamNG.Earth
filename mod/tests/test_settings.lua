@@ -734,4 +734,32 @@ do
   T.check(settings.uiMapPreload(1, 2, true).ok == false, 'no core: nothing')
   beamngEarth_core = core0
 end
+do
+  local key = 'autodriveSpeedOffsetMph'
+  local gps = require('beamngEarth/gps')
+  settings.uiReset()
+  T.check(settings.get(key) == 0, 'cruise offset defaults to the road limit')
+  T.check(settings.uiGpsSpeedOffset(5).value == 5 and settings.uiGpsSpeedOffset(5).value == 10,
+    'consecutive increment requests accumulate without waiting for a UI poll')
+  T.check(settings.uiGpsSpeedOffset(-5).value == 5, 'decrement is exactly 5 mph')
+  T.check(settings.uiGpsSpeedOffset(3).ok == false and settings.get(key) == 5, 'invalid step does not change the offset')
+  T.check(settings.uiSet(key, '12').value == 10 and settings.uiSet(key, '-12').value == -10,
+    'direct and saved values snap to 5 mph steps')
+  for _, bad in ipairs({'invalid', math.huge, -math.huge, 0/0}) do
+    T.check(not settings.uiSet(key, bad).ok and settings.get(key) == -10, 'invalid offset is rejected')
+  end
+  settings.load(); settings.applyAll()
+  gps.setDestination(40, -75, 'offset test')
+  T.check(settings.get(key) == -10 and gps.status().speedOffsetMph == -10, 'saved offset reloads and reaches GPS')
+  gps.clear(); gps.setDestination(41, -76, 'next drive')
+  T.check(gps.status().speedOffsetMph == -10, 'new destinations retain the cruise preference')
+  settings.uiSet(key, 100)
+  T.check(settings.uiGpsSpeedOffset(5).value == 100, 'increment stops at the upper bound')
+  settings.uiSet(key, -100)
+  T.check(settings.uiGpsSpeedOffset(-5).value == -100, 'decrement stops at the lower bound')
+  T.check(settings.uiGpsSpeedOffset(0).value == 0 and gps.status().speedOffsetMph == 0, 'map reset restores the limit')
+  settings.uiGpsSpeedOffset(5); settings.uiReset()
+  T.check(settings.get(key) == 0 and gps.status().speedOffsetMph == 0, 'reset all settings also resets the live offset')
+  gps.clear()
+end
 T.done('test_settings')

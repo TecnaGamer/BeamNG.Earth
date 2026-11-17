@@ -87,10 +87,12 @@
           <button class="map-btn small" @click="flyTo(ms.gps.lat, ms.gps.lon)">Show</button>
           <button class="map-btn small" :disabled="!!ms.cannotGo || busy" @click="teleportTo(ms.gps.lat, ms.gps.lon, ms.gps.name)">Teleport</button>
           <button class="map-btn small" :class="{ primary: ms.gps.autodrive }" @click="setAutodrive(!ms.gps.autodrive)"
-                  :title="ms.gps.autodrive ? 'Stop driving by itself' : 'The car drives itself along the route (in its lane, at the speed limit)'">
+                  :title="ms.gps.autodrive ? 'Stop driving by itself' : 'Drive the route in lane, at the speed limit plus the cruise offset'">
             {{ ms.gps.autodrive ? "Autodrive on" : "Autodrive" }}</button>
           <button class="map-btn small" @click="clearGps">Clear</button>
         </div>
+        <AutodriveSpeed :offset="ms.gps.speedOffsetMph || 0" :send-lua="engineLua"
+                        @change="value => { if (ms.gps) ms.gps.speedOffsetMph = value }" />
       </div>
     </div>
 
@@ -122,6 +124,7 @@
 </template>
 
 <script setup>
+import AutodriveSpeed from "./AutodriveSpeed.vue"
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from "vue"
 import { useEvents } from "@/services/events"
 import { LabelLayer } from "./map3dLabels.js"

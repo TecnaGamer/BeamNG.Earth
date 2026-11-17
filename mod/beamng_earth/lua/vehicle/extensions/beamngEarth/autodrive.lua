@@ -1,12 +1,40 @@
 -- Route handoffs through the stock AI API. Keep this state in the vehicle VM: GE's graph acknowledgement can
 -- arrive after another rebuild, whereas mapmgr.mapData identifies the graph the AI actually has.
 local M = {}
-local lastPath, lastMap, lastVersion, lastSpeed, lastAggression
+local lastPath, lastMap, lastVersion, lastSpeed, lastAggression, lastOffset
+local MPH_TO_MPS = 0.44704
+local adjustedGraph, adjustedOffset
+local originalLimits = {}
+
+local function restoreSpeedLimits()
+  for edge, limit in pairs(originalLimits) do edge.speedLimit = limit end
+  originalLimits, adjustedGraph, adjustedOffset = {}, nil, nil
+end
+
+-- mapmgr's graph belongs to this vehicle VM, not GE or traffic vehicles. Keep legal-speed planning so
+-- the AI still brakes for bends, traffic and lower limits ahead. Restore every edge when control ends.
+local function offsetSpeedLimits(graph, mph)
+  if graph == adjustedGraph and mph == adjustedOffset then return end
+  restoreSpeedLimits()
+  adjustedGraph, adjustedOffset = graph, mph
+  if mph == 0 then return end
+  for _, links in pairs(graph) do
+    for _, edge in pairs(links) do
+      local limit = edge.speedLimit
+      if not originalLimits[edge] and type(limit) == 'number' and limit > 0 and limit < math.huge then
+        originalLimits[edge] = limit -- both directions can reference the same edge
+        edge.speedLimit = math.max(math.min(limit, 5 * MPH_TO_MPS), limit + mph * MPH_TO_MPS)
+      end
+    end
+  end
+end
 
 function M.reset()
-  lastPath, lastMap, lastVersion, lastSpeed, lastAggression = nil, nil, nil, nil, nil
+  restoreSpeedLimits()
+  lastPath, lastMap, lastVersion, lastSpeed, lastAggression, lastOffset = nil, nil, nil, nil, nil, nil
 end
 M.onReset = M.reset
+M.onExtensionUnloaded = M.reset
 
 -- A remaining suffix of the old path followed by new nodes. setPath appends ONLY when its first node is the
 -- old path's last node. Identical remaining paths need no command; forks, loops and shorter endpoints restart.
@@ -98,7 +126,7 @@ function M.arrive()
   ai.setMode('stop') -- service brakes first; the stock controller applies the parking brake at rest
 end
 
-function M.drive(ids, version, force, speed, aggression)
+function M.drive(ids, version, force, speed, aggression, offsetMph)
   local md = mapmgr.mapData
   if not valid(ids, md) then
     M.stop()
@@ -109,8 +137,10 @@ function M.drive(ids, version, force, speed, aggression)
     local front, ref = obj:getFrontPosition(), obj:getPosition()
     ids = M.forwardStart(ids, md, { x = front.x, y = front.y, z = ref.z }, obj:getDirectionVector())
   end
+  offsetMph = speed and 0 or (offsetMph or 0) -- the performance tool's absolute speed override takes precedence
+  offsetSpeedLimits(md.graph, offsetMph)
   local suffix = not force and ai.mode == 'manual' and md == lastMap and version == lastVersion
-    and speed == lastSpeed and aggression == lastAggression and M.extension(lastPath, ids)
+    and speed == lastSpeed and aggression == lastAggression and offsetMph == lastOffset and M.extension(lastPath, ids)
   local action
   if suffix then
     if #suffix > 1 then ai.setPath(suffix); action = 'extend' else action = 'keep' end
@@ -126,6 +156,7 @@ function M.drive(ids, version, force, speed, aggression)
   lastPath = {}
   for i, id in ipairs(ids) do lastPath[i] = id end
   lastMap, lastVersion, lastSpeed, lastAggression = md, version, speed, aggression
+  lastOffset = offsetMph
   return action
 end
 
