@@ -349,7 +349,9 @@ class RefreshTest(unittest.TestCase):
 
     def test_missing_data_marks_the_photo(self):
         gg._retries.clear()
+        gg._fits.clear()
         self.addCleanup(gg._retries.clear)
+        self.addCleanup(gg._fits.clear)
         import geodesy
         frame = geodesy.EnuFrame(40.877, -77.566)
         pending = set()
@@ -359,8 +361,14 @@ class RefreshTest(unittest.TestCase):
         self.assertFalse(gg.data_ready(_MD(), frame, -64.5, -64.5, 128.0))
         self.assertFalse(gg.data_ready(_MD(set(gg.LAYERS) - {"canopy"}), frame, -64.5, -64.5, 128.0))
         self.assertTrue(gg.data_ready(_MD(gg.LAYERS), frame, -64.5, -64.5, 128.0))
+        # (the same imagery object: the sun fit's memo from the render with map data missing is not this one's, the
+        # mini PC's gate failure, where a new stand-in reused the old one's id())
+        im = _Im()
         pending = set()
-        gg.render(_Im(), frame, -64.5, -64.5, 128.0, 128, None, None, None, pending)
+        gg.render(im, frame, -64.5, -64.5, 128.0, 128, _MD(), None, None, pending)
+        self.assertIn(gg.GEN_PENDING, pending)
+        pending = set()
+        gg.render(im, frame, -64.5, -64.5, 128.0, 128, None, None, None, pending)
         self.assertNotIn(gg.GEN_PENDING, pending, "no map data at all (none to wait for)")
 
     def test_server_redoes_it(self):
