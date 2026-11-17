@@ -7,7 +7,9 @@ road revamp plan (.claude/work/road-revamp-plan-2026-11-16.md section 5):
 
   deck_grade    each bridge deck's steepest 10 m grade vs its class limit (complaint 10, steep decks)
   end           each deck end vs the graded road it continues on: the step (m), the steepest 10 m grade over the first
-                30 m off the deck, the sharpest 2 m lip, the width step deck vs road (complaint 2, abutment seams)
+                30 m off the deck, the sharpest 2 m lip, the width step deck vs road (complaint 2, abutment seams);
+                a deck end that runs into a road with no end there (a roundabout ring, a junction: "joins") gets the
+                step to the graded ground 1 m past it
   clearance     deck top over every ground road / drawn rail crossing under it, and deck over deck (complaints 1, 6)
   overlap       two decks whose footprints overlap in plan 0.3-4.5 m apart in height: torn / stacked-too-close ramps
                 (complaint 5)
@@ -346,6 +348,12 @@ def probe(server, cache, lat, lon, R, checks, entrance, offline=False):
                         if best is None or rank < best[0]:
                             best = (rank, gid, gl, k, gspec)
                 if best is None:
+                    # no ground road ends here (a deck ending on a roundabout ring or a junction it runs into, #1374):
+                    # the step to the graded ground 1 m past the end, along the deck's own direction
+                    if any(float(np.hypot(*(gl - end).T).min()) < 3.0 for _g, sub, _c, _s, gl in ground if sub == "road"):
+                        u = away / max(1e-9, float(np.hypot(*away)))
+                        z1 = float(elev_xy(np.asarray(end + u))[0])
+                        rows.append([r2(zend - z1), 0.0, 0.0, 0.0, fid, getattr(spec, "cls", None), ll(end), "joins"])
                     continue
                 _, gid, gl, k, gspec = best
                 fwd = gl[1:] if k == 0 else gl[:-1][::-1]
@@ -361,7 +369,7 @@ def probe(server, cache, lat, lon, R, checks, entrance, offline=False):
                 lip = float(np.abs(np.diff(zr, 2)).max()) if len(zr) > 2 else 0.0
                 dw = (float(spec.width) - float(gspec.width)) if (spec is not None and gspec is not None) else 0.0
                 rows.append([r2(zend - zr[0]), round(100 * float(gr.max()), 1), r2(lip), r2(dw), fid,
-                             getattr(spec, "cls", None), ll(end)])
+                             getattr(spec, "cls", None), ll(end), "road"])
         res["end"] = sorted(rows, key=lambda r: (-abs(r[0]), r[4], r[6]))
     else:
         for fid, xy, z, spec, s_ in deck_list:

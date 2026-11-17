@@ -116,6 +116,19 @@ def run_place(p, server, root, label, online, checks=None, era=None):
     with open(log, "w") as lf:
         rc = subprocess.call(base + (["--offline"] if have_seed else []), stdout=lf, stderr=subprocess.STDOUT,
                              env=clean_env(), cwd=work)
+    if rc == 0 and have_seed and os.path.exists(js):
+        with open(js) as f:
+            errs = json.load(f).get("errors", [])
+        if any("offline" in e for e in errs):     # (a probe wanted data the seed has not got: fetched, seed grown)
+            mode = "online-after-offline-missing"
+            with open(log, "a") as lf:
+                lf.write("\n== offline data missing; online ==\n")
+                lf.flush()
+                rc = subprocess.call(base, stdout=lf, stderr=subprocess.STDOUT, env=clean_env(), cwd=work)
+            if rc == 0:
+                for d in DATA_DIRS:
+                    if os.path.isdir(os.path.join(work, d)):
+                        copy_tree(os.path.join(work, d), seed)
     if rc != 0 and have_seed:
         mode = "online-after-offline-failed"
         with open(log, "a") as lf:
