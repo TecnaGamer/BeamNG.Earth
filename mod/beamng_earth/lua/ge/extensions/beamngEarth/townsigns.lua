@@ -35,7 +35,7 @@ M.TREE_GROUPS = { deciduous = true, conifer = true, shrub = true, pine_west = tr
   fern = true, deadwood = true, tro_thicket = true, deciduous_open = true, oak_open = true,
   birch_open = true, beech_open = true, pine_west_open = true, mediterranean_open = true, tropical_open = true,
   conifer_open = true, spruce_open = true, pine_eu_open = true, redwood = true,
-  tro_understory = true }
+  tro_understory = true, desert_shrub_hot = true }
 M.ANCHORS_KEPT = 3     -- the signs of this many latest anchors are kept (an older anchor's tiles are gone)
 
 local faces = {}       -- group -> true: the face groups registered

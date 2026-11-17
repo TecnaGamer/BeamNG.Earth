@@ -722,6 +722,17 @@ for _, g in ipairs({ 'maquis', 'shrub_north', 'shrub_tropical', 'tro_understory'
   M.GROUP_MAX_M[g] = 250; M.NO_COLLIDE[g] = true
 end
 M.GROUP_MAX_M.deadwood = 200; M.NO_COLLIDE.deadwood = true     -- (on the forest floor, as the ferns)
+-- (34) the hot deserts' bushes: desert_shrub without Utah's junipers (cold deserts' and mountains': the Great Basin,
+-- Central Asia, Iran), server vegetation.shrub_groups for BWh / BSh; the gallery 2026-11-17
+do
+  local out = {}
+  for _, v in ipairs(M.CATALOG.desert_shrub) do
+    if not v[1]:find('/Juniper/', 1, true) then out[#out + 1] = v end
+  end
+  M.CATALOG.desert_shrub_hot = out
+  M.GROUP_MAX_M.desert_shrub_hot = M.GROUP_MAX_M.desert_shrub
+  M.NO_COLLIDE.desert_shrub_hot = M.NO_COLLIDE.desert_shrub
+end
 -- Trees in the open (server vegetation.OPEN_FROM, 31: within 15 m of a road, on built-up land): each group's _open
 -- twin is its catalog without the forest-interior shapes: the forest trees and fillers (tall, thin, sparse: meant to be
 -- seen among others; Italy's scots_pine_filler stood alone) and the mossy oaks (Moss_01 on the trunk: by an asphalt

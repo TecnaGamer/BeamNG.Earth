@@ -398,7 +398,8 @@ class ShrubTest(unittest.TestCase):
         self.assertEqual(self.g(68.0, 25.0)[0], veg.G_SHRUB_NORTH, "Lapland")
         self.assertEqual(self.g(46.5, 7.9)[0], veg.G_SHRUB_NORTH, "the Alps over the tree line (ET)")
         self.assertEqual(self.g(-3.1, -60.0)[0], veg.G_SHRUB_TROPICAL, "Manaus")
-        self.assertEqual(self.g(25.2, 55.3, lcls=30)[0], veg.G_DESERT_SHRUB, "Dubai, on grass too")
+        self.assertEqual(self.g(25.2, 55.3, lcls=30)[0], veg.G_DESERT_SHRUB_HOT, "Dubai, on grass too, no junipers")
+        self.assertEqual(self.g(47.9, 106.9, lcls=30)[0] in (veg.G_DESERT_SHRUB, veg.G_SHRUB), True, "Mongolia")
         self.assertEqual(self.g(52.23, 21.0)[0], veg.G_SHRUB, "Warsaw: the broadleaf bushes as before")
         self.assertEqual(self.g(39.3, -76.6)[0], veg.G_SHRUB, "Maryland")
 
@@ -421,7 +422,7 @@ class ShrubTest(unittest.TestCase):
         self.assertEqual(self.g(52.23, 21.0, uf=0.2)[0], veg.G_SHRUB, "open land: no ferns")
         self.assertEqual(self.g(-3.1, -60.0, lcls=10, uf=0.05, floor=True)[0], veg.G_TRO_UNDERSTORY, "shade plants")
         self.assertEqual(self.g(-3.1, -60.0, lcls=30)[0], veg.G_SHRUB_TROPICAL, "in the open: bushes")
-        self.assertEqual(self.g(25.2, 55.3, lcls=10, uf=0.05, floor=True)[0], veg.G_DESERT_SHRUB)
+        self.assertEqual(self.g(25.2, 55.3, lcls=10, uf=0.05, floor=True)[0], veg.G_DESERT_SHRUB_HOT)
         self.assertEqual(self.g(43.3, 5.4, lcls=10, uf=0.2, floor=True)[0], veg.G_MAQUIS, "no ferns in the dry south")
         for uf in np.linspace(0, 0.999, 50):        # dead wood is added elsewhere (_remote_floor), never a bush changed
             self.assertNotEqual(self.g(52.23, 21.0, lcls=10, uf=uf, floor=True)[0], veg.G_DEADWOOD)
