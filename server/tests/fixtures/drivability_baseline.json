@@ -207,11 +207,6 @@
     "grade": 0.0,
     "lift_g": 0.0
    },
-   "ground:b6fd05b8-b955-46a8-b12b-bf73a2d89b02": {
-    "step_m": 0.0317,
-    "grade": 0.06,
-    "lift_g": 0.4873
-   },
    "ground:b8e954b0-2b48-440f-84ea-c71be95ba6ca": {
     "step_m": 0.0441,
     "grade": 0.0206,

@@ -26,7 +26,8 @@ import railtags
 import roadlanes
 
 ON = os.environ.get("BNE_LANE_SECTIONS", "on").lower() not in ("off", "0", "false")
-VERSION = 1                 # (mapdata.versions(): the derived caches are built again when it changes)
+VERSION = 2                 # (mapdata.versions(): the derived caches are built again when it changes; 2: a link's
+                            # mouth on its bridge or tunnel stays on its joint, _structure_mouth)
 PROFILE = "lane_section_profile"
 STEP_M = 4.0
 
@@ -197,6 +198,19 @@ def _grid(cls, n, lane_m):
     return cap / 2.
 
 
+def _structure_mouth(f, i, end):
+    """Whether link i's mouth (its end 0 / -1) is on a bridge or tunnel range the map gives it (roads.tag_level_ranges):
+    a deck's (a tube's) end at the joint it leaves its road from. Moved out to its lane, the deck's end left the joint the
+    chain solver and the grading join decks and roads at (roads.BridgeProfiles: END_JOIN_*, PIN_M; grading
+    APPROACH_TOUCH_M): the exit ramp's deck at the A7's junction with the B 286 at Schweinfurt (2026-11-16) began 4 m off
+    the A7's joint, its approach was raised 3.2 m for a deck taken to start on the ground, and the A7's deck beside it
+    went up 2 m within 2 m of its abutment, a wall at 116 km/h. Such a mouth stays on its joint, as without the
+    sections (BNE_LANE_SECTIONS=off); a mouth on the ground still goes out to its lane."""
+    import roads
+    at = 0. if end == 0 else 1.
+    return any(a - 1e-6 <= at <= b + 1e-6 for a, b, _kind in roads.tag_level_ranges(f, i))
+
+
 def _ramp_mouths(f, jobs, context=None):
     """Resolve the physical slip-lane centre from explicit lane evidence.
 
@@ -242,6 +256,8 @@ def _ramp_mouths(f, jobs, context=None):
             if len(candidates) != 1:
                 continue
             tangent, target, main_tail, cls, turning = candidates[0]
+            if _structure_mouth(f, i, end):
+                continue
             ramp_lanes = roadlanes.count(_col(f, "osm_lanes", i)) or \
                 roadlanes.count(_col(f, railtags.lane_attr("lanes"), i)) or 1
             if (cls != str(f.attrs["class"][i]) or turning != ramp_lanes or
@@ -478,6 +494,31 @@ def growth(prof, lon, lat):
     arc = np.r_[0., np.cumsum(dnp.hypot(*np.diff(line, axis=0).T))]
     at = np.interp(at, arc, s)
     return _ease(at, prof["length"], prof["reach"], prof["ends"]).reshape(np.shape(lon))
+
+
+def unplaced(f, i, rings):
+    """rings (lon / lat pieces of section i's line: its ground_parts) moved back onto the map's line it was cut from,
+    off its placement (split moved a section's line out to where its lanes stand, by its offset eased along it: growth).
+    The bridge chain solver's ground roads (roads.BridgeProfiles._cell_entries): its decks are the map's lines, and a
+    section's end held its placement off the joint it meets them at. The A7's southbound section ending 2.0 m off its
+    junction with the decks over the B 286 at Schweinfurt (2026-11-16) was no ground road going on from that joint
+    (roads.PIN_M), so the joint was no abutment: the decks stood 2.8 m over the road at their start, a wall at 116 km/h.
+    rings themselves for any other road and a section left in place."""
+    prof = profile(f, i)
+    if not prof or not (prof.get("extra") or abs(float(prof.get("offset") or 0.)) > 1e-9):
+        return rings
+    out = []
+    for ring in rings:
+        ll = np.asarray(ring, np.float64)[:, :2]
+        if len(ll) < 2:
+            out.append(ring)
+            continue
+        if prof["extra"]:       # (split's: its reference offset plus its shift eased along it)
+            placed = prof["offset"] - prof["shift"] + prof["shift"] * growth(prof, ll[:, 0], ll[:, 1])
+        else:
+            placed = np.full(len(ll), float(prof["offset"]))
+        out.append(_offset(ll, -placed) if np.any(np.abs(placed) > 1e-9) else ring)
+    return out
 
 
 def phase(f, i):

@@ -440,6 +440,81 @@ class GraphTest(unittest.TestCase):
             self.assertAlmostEqual(n[2], 10.0 + 4.0 * (n[0] - 50.0) / 100.0, delta=0.05)
         self.assertTrue(all(n[2] == 10.0 for n in off), "the ground (flat 10 m) off the bridge")
 
+    def test_a_lane_section_takes_its_roads_deck(self):
+        """A road's lane section ("<road>~lanes<a>-<b>", lanesections.split) stands on the deck planned under the
+        road's own id, and the road on its sections' decks: the A7's southbound Zillbach viaduct (2026-11-16) was a
+        section in the graphs centred south of its middle and its nodes stood on the valley floor 22-28 m under it."""
+        deck = (np.array([(50.0, 0.0), (150.0, 0.0)]), np.array([10.0, 14.0]))
+        for fid, key in (("id000~lanes000000000-1000000000", "id000"), ("id000", "id000~lanes200000000-800000000")):
+            f = features([[(0, 0), (200, 0)]], ["primary"])
+            f.ids = np.array([fid], dtype=object)
+            f.rules["connectors"] = rules([(0, "A", 0.0, 0.0), (0, "B", 1.0, 1.0)])
+            g = navgraph.build(FRAME, [f], flat, (0.0, 0.0), decks={key: [deck]})
+            on = [n for n in g["nodes"].values() if 55 < n[0] < 145]
+            self.assertTrue(on, fid)
+            for n in on:
+                self.assertAlmostEqual(n[2], 10.0 + 4.0 * (n[0] - 50.0) / 100.0, delta=0.05, msg=(fid, key))
+            self.assertTrue(all(n[2] == 10.0 for n in g["nodes"].values() if n[0] < 40 or n[0] > 160))
+        f = features([[(0, 0), (200, 0)]], ["primary"])
+        f.rules["connectors"] = rules([(0, "A", 0.0, 0.0), (0, "B", 1.0, 1.0)])
+        g = navgraph.build(FRAME, [f], flat, (0.0, 0.0), decks={"id001~lanes000000000-1000000000": [deck]})
+        self.assertTrue(all(n[2] == 10.0 for n in g["nodes"].values()), "another road's deck is never read")
+
+    def test_family_reach_follows_section_placement(self):
+        """A section placed further off its road's line than SECTION_DECK_M (a five-lane motorway's right_of:1: 6 m)
+        still reads its road's deck, as far as its own placement and no further (Codex review of PR #1395)."""
+        deck = (np.array([(0.0, 0.0), (100.0, 0.0)]), np.array([20.0, 20.0]))
+        sec = "r~lanes000000000-500000000"
+        fam = navgraph._Roads({"r": [deck]}, {"r": 6.0})
+        self.assertEqual(navgraph._deck_z(fam, sec, 50.0, 6.5), 20.0)
+        self.assertIsNone(navgraph._deck_z(fam, sec, 50.0, 10.5), "past its placement + SECTION_DECK_M")
+        self.assertIsNone(navgraph._deck_z(navgraph._Roads({"r": [deck]}), sec, 50.0, 6.5), "no placement known: 4 m")
+        self.assertIsNone(navgraph._deck_z(fam, sec, 103.2, 0.0), "the wider reach is sideways: not 3 m past an end")
+        self.assertIsNone(navgraph._deck_z(fam, sec, -3.2, 2.0), "nor before its start")
+        self.assertEqual(navgraph._deck_z(fam, sec, 101.0, 5.0), 20.0, "1.5 m past an end, placed beside it")
+        f = features([[(0, 0), (200, 0)]], ["motorway"])
+        f.ids = np.array([sec], dtype=object)
+        col = np.empty(1, object)
+        col[0] = {"offset": -6.0, "shift": -2.0, "extra": 3.5, "end_off": (-4.0, -6.0)}
+        f.attrs[navgraph.lanesections.PROFILE] = col
+        self.assertEqual(navgraph._section_shifts([f, None]), {"r": 6.0})
+
+    def test_open_floor_family_reach(self):
+        """A lane section placed 6 m beside its road's line still finds the open floor planned under the road's id
+        (all the edge's points within the family's sideways reach), not past the floor's ends."""
+        floor = (np.array([(0.0, 0.0), (100.0, 0.0)]), np.array([5.0, 5.0]))
+        sec = "r~lanes000000000-500000000"
+        fam = navgraph._Roads({"r": [floor]}, {"r": 6.0})
+        self.assertTrue(navgraph._open_floor_of(fam, sec, [(20.0, 6.0), (80.0, 6.0)]))
+        self.assertFalse(navgraph._open_floor_of(fam, sec, [(20.0, 6.0), (104.0, 6.0)]))
+        self.assertFalse(navgraph._open_floor_of(navgraph._Roads({"r": [floor]}), sec, [(20.0, 6.0)]))
+        self.assertTrue(navgraph._open_floor_of(fam, "r", [(20.0, 1.0)]))
+        self.assertFalse(navgraph._open_floor_of(fam, "r", [(20.0, 6.0)]), "the road's own floor: 1.5 m as before")
+
+    def test_deck_keys(self):
+        deck = (np.array([(0.0, 0.0), (100.0, 0.0)]), np.array([20.0, 20.0]))
+        fam = navgraph._Roads({"r": [deck], "q": [deck]})
+        self.assertEqual(navgraph._deck_keys(fam, "r~lanes1-2"), ["r"])
+        self.assertEqual(navgraph._deck_keys(fam, "r"), ["r"])
+        self.assertEqual(navgraph._deck_keys(fam, "x"), [])
+        self.assertEqual(navgraph._deck_keys({"r": [deck]}, "r~lanes1-2"), [])
+
+    def test_deck_z_family_lookup(self):
+        deck = (np.array([(0.0, 0.0), (100.0, 0.0)]), np.array([20.0, 20.0]))
+        plain = {"r": [deck]}
+        self.assertIsNone(navgraph._deck_z(plain, "r~lanes000000000-500000000", 50.0, 0.0), "a plain dict: as before")
+        fam = navgraph._Roads(plain)
+        self.assertEqual(navgraph._deck_z(fam, "r~lanes000000000-500000000", 50.0, 3.0), 20.0,
+                         "a section placed a lane off its road's line still finds the deck")
+        self.assertIsNone(navgraph._deck_z(fam, "r~lanes000000000-500000000", 50.0, 5.0), "SECTION_DECK_M")
+        self.assertIsNone(navgraph._deck_z(fam, "r", 50.0, 3.0), "its own parts keep the 1.5 m reach")
+        self.assertIsNone(navgraph._deck_z(fam, "r~lanes000000000-500000000", 110.0, 0.0), "past the deck's end")
+        self.assertIsNone(navgraph._deck_z(fam, "q", 50.0, 0.0), "no other road's")
+        self.assertTrue(navgraph._has_parts(fam, "r~lanes1-2") and not navgraph._has_parts(fam, "q"))
+        self.assertEqual(navgraph._road_parts(fam, "r~lanes1-2"), [deck])
+        self.assertEqual(navgraph._road_parts(fam, "r"), [deck])
+        self.assertEqual(navgraph._road_parts({"x": [deck]}, "x~lanes1-2"), ())
+
 
 
 class SignalsTest(unittest.TestCase):
