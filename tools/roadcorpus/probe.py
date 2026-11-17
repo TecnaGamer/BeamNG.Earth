@@ -22,6 +22,9 @@ road revamp plan (.claude/work/road-revamp-plan-2026-11-16.md section 5):
                 the taper length against the speed rule of the plan's section 2.3 (complaint 16)
   deck_shape    decks of 40 m+ whose profile waves (20 m chord residual > 0.3 m) and decks of 60 m+ whose middle lies
                 within 1.5 m of the graded ground (#1371: viaducts wavy and on the ground)
+  rail_over     railways as the road tiles lay them (railways.tile_mesh's beds): a rail bridge's rail top over each
+                road crossing under it, and a ground track's bed vs each road it crosses (a level crossing must be flush;
+                > 0.5 m is an embankment or a pit across the carriageway: complaints 3 and 14)
   rail_bed      along each drawn railway: the graded ground over the ungraded ground (the bed's lift; #1384)
   surface       drivable streets (not service / track) drawn gravel or dirt, by length (#1367 paved streets as dirt)
   missing       mapped road bridge pieces of 10 m+ with no built deck within 4 m of their middle (#1098: the road
@@ -124,9 +127,10 @@ def main():
     checks = set(a.checks.split(",")) if a.checks != "all" else None
     res = probe(server, cache, a.lat, a.lon, a.r, checks, not a.no_entrance, a.offline)
     res["place"] = [a.lat, a.lon, a.r]
-    with open(a.json, "w") as f:
+    with open(a.json + ".tmp", "w") as f:
         json.dump(res, f, sort_keys=True, separators=(",", ":"), allow_nan=False)
         f.write("\n")
+    os.replace(a.json + ".tmp", a.json)
     if a.timing:
         ru = resource.getrusage(resource.RUSAGE_SELF)
         with open(a.timing, "w") as f:
@@ -254,12 +258,25 @@ def probe(server, cache, lat, lon, R, checks, entrance, offline=False):
                 d = q[j] - p[i]
                 t = (d[0] * sv[j, 1] - d[1] * sv[j, 0]) / den
                 u = (d[0] * r[i, 1] - d[1] * r[i, 0]) / den
-                if 0.0 < t <= 1.0 and 0.0 < u <= 1.0:
+                if -1e-9 <= t <= 1.0 + 1e-9 and -1e-9 <= u <= 1.0 + 1e-9:
                     pt = p[i] + t * r[i]
+                    if any(math.hypot(pt[0] - q_[2][0], pt[1] - q_[2][1]) < 0.5 for q_ in out):
+                        continue        # (a crossing through a shared vertex: found on both segments)
                     out.append((float(sa[i] + t * (sa[i + 1] - sa[i])), float(sb[j] + u * (sb[j + 1] - sb[j])), pt))
         return out
 
-    deck_list = [(k[0], xy, z, spec, arc(xy)) for k, (xy, z, spec) in decks.items()]
+    deck_list, nan_decks = [], []
+    for k, (xy, z, spec) in decks.items():
+        bad = ~np.isfinite(z) | ~np.isfinite(xy).all(1)
+        if bad.any():               # (a deck with no height somewhere: itself a defect; its finite points kept)
+            if inside(xy[int(np.argmax(bad))]):
+                nan_decks.append([int(bad.sum()), int(len(z)), k[0], getattr(spec, "cls", None),
+                                  ll(np.nan_to_num(xy[int(np.argmax(bad))]))])
+            xy, z = xy[~bad], z[~bad]
+            if len(z) < 2:
+                continue
+        deck_list.append((k[0], xy, z, spec, arc(xy)))
+    res["deck_nan"] = sorted(nan_decks, key=lambda r: (r[2], r[4]))
 
     # ---- steep decks
     if want("deck_grade"):
@@ -313,18 +330,25 @@ def probe(server, cache, lat, lon, R, checks, entrance, offline=False):
                 deck_ends.append(end)
                 if not inside(end):
                     continue
+                # the ground road the deck continues on: a ground line with an END within 3 m of the deck end,
+                # heading away from the deck (never a road crossing under or beside the abutment), the deck's own
+                # feature first, then the nearest
                 best = None
+                away = end - nxt
                 for gid, sub, gcls, gspec, gl in ground:
-                    if sub != "road":
+                    if sub != "road" or len(gl) < 2:
                         continue
-                    dd = np.hypot(*(gl - end).T)
-                    if dd.min() < 3.0 and (best is None or dd.min() < best[0]):
-                        best = (float(dd.min()), gid, gl, int(dd.argmin()), gspec)
+                    for k, nb in ((0, gl[1]), (len(gl) - 1, gl[-2])):
+                        d = float(np.hypot(*(gl[k] - end)))
+                        if d >= 3.0 or np.dot(nb - gl[k], away) <= 0:
+                            continue
+                        rank = (0 if gid == fid else 1, d)
+                        if best is None or rank < best[0]:
+                            best = (rank, gid, gl, k, gspec)
                 if best is None:
                     continue
                 _, gid, gl, k, gspec = best
-                away = end - nxt
-                fwd = gl[k + 1:] if k + 1 < len(gl) and np.dot(gl[k + 1] - end, away) > 0 else gl[:k][::-1]
+                fwd = gl[1:] if k == 0 else gl[:-1][::-1]
                 if not len(fwd):
                     continue
                 path = np.vstack([end, fwd])
@@ -418,8 +442,9 @@ def probe(server, cache, lat, lon, R, checks, entrance, offline=False):
                     if not inside(pt):
                         continue
                     ends = [gi[4][0], gi[4][-1], gj[4][0], gj[4][-1]]
-                    if min(np.hypot(*(np.asarray(ends) - pt).T)) < 2.0:
-                        continue
+                    at_end = min(np.hypot(*(np.asarray(ends) - pt).T)) < 2.0
+                    if at_end and "rail" not in (gi[1], gj[1]):
+                        continue        # (a junction; a level crossing at a shared node is still a rail crossing)
                     zs = []
                     for gl, aa in ((gi[4], a_), (gj[4], b_)):
                         s_ = arc(gl)
@@ -430,7 +455,7 @@ def probe(server, cache, lat, lon, R, checks, entrance, offline=False):
                     if "rail" in (gi[1], gj[1]):
                         road = gj if gi[1] == "rail" else gi
                         rails.append([road[2], None if dz is None else round(dz, 1), road[0], ll(pt)])
-                    if dz is not None and dz > 3.0:
+                    if dz is not None and dz > 3.0 and not at_end:
                         rows.append([round(dz, 1), gi[0], gi[2], gj[0], gj[2], ll(pt)])
         res["unbridged"] = sorted(rows, key=lambda r: (-r[0], r[1], r[5]))
         res["rail_cross"] = sorted(rails, key=lambda r: (r[0], r[2], r[3]))
@@ -581,6 +606,39 @@ def probe(server, cache, lat, lon, R, checks, entrance, offline=False):
             rows.append([r2(lift[k]), r2(np.median(lift)), round(float(keep.sum()) * 4.0), gid, ll(p[k])])
         res["rail_bed"] = sorted(rows, key=lambda r: (-abs(r[0]), r[3], r[4]))
 
+    # ---- railways over / across roads as the road tiles lay them (railways.tile_mesh's beds: complaint 3, 14)
+    if want("rail_over"):
+        rows_b, rows_g = [], []
+        try:
+            def cell_fn(key):
+                return s.md.cell(key, layers=("roads",), kind="demand").layers.get("roads")
+            rground = railways.point_ground(frame, elev, ("roadcorpus", lat, lon))
+            tunnels = railways.road_underpasses(frame, flist, box)
+            rails = [r for r in railways.parts(frame, flist, box, clip=True, underpasses=tunnels) if r[1] != "tram"]
+            prof = railways._beds(frame, rails, rground, tunnels + railways.coarse_underpasses(frame, flist, box, rails),
+                                  cell_fn, getattr(getattr(s, "plan_store", None), "elev", None)) if rails else []
+            roads_g = [(gid, gcls, gl) for gid, sub, gcls, gspec, gl in ground if sub == "road"]
+            for (rfid, rcls, kind, rxy), (zb, _zg) in zip(rails, prof):
+                rxy = np.asarray(rxy, np.float64)
+                zb = np.asarray(zb, np.float64)
+                if len(rxy) < 2 or not np.isfinite(zb).all():
+                    continue
+                sr = arc(rxy)
+                for gid, gcls, gl in roads_g:
+                    for a_, b_, pt in crossings(rxy, gl):
+                        if not inside(pt):
+                            continue
+                        zr = float(np.interp(a_, sr, zb))
+                        zg = float(elev_xy(np.asarray(pt))[0])
+                        if kind == "bridge":
+                            rows_b.append([r2(zr - zg), gcls, str(rfid), gid, ll(pt)])
+                        else:
+                            rows_g.append([r2(zr - zg), gcls, str(rfid), gid, ll(pt)])
+        except Exception as ex:
+            errors.append(f"rail_over: {type(ex).__name__}: {ex}")
+        res["rail_bridge_clear"] = sorted(rows_b, key=lambda r: (r[0], r[2], r[4]))
+        res["rail_ground_cross"] = sorted(rows_g, key=lambda r: (-abs(r[0]), r[2], r[4]))
+
     # ---- surfaces (paved streets drawn as dirt, #1367) and mapped road bridges without a built deck (#1098)
     if want("surface") or want("missing"):
         unpaved, missing, seen_s, seen_b = [], [], set(), set()
@@ -676,6 +734,15 @@ def summarise(res):
         w = res["deck_wave"]
         out["deck_shape"] = {"wavy": sum(1 for r in w if abs(r[0]) > 0.3), "worst_wave": w[0][0] if w else None,
                              "on_ground": sum(1 for r in res["deck_height"] if r[0] < 1.5)}
+    if "rail_bridge_clear" in res:
+        rb, rg = res["rail_bridge_clear"], res["rail_ground_cross"]
+        # a rail bridge over a road: rail top vs road surface (deck depth not taken off); a ground track across a road
+        # more than 0.5 m off it is an embankment or a pit across the carriageway (a level crossing must be flush)
+        out["rail_block"] = {"blocker": sum(1 for r in rb if r[0] < 2.5) + sum(1 for r in rg if abs(r[0]) > 0.5),
+                             "defect": sum(1 for r in rb if r[0] < 5.0 + 0.6) + sum(1 for r in rg if abs(r[0]) > 0.1),
+                             "bridges": len(rb), "at_grade": len(rg),
+                             "lowest_bridge": rb[0][0] if rb else None,
+                             "worst_grade": rg[0][0] if rg else None}
     if "rail_bed" in res:
         rb = res["rail_bed"]
         out["rail_bed"] = {"tall3": sum(1 for r in rb if abs(r[0]) > 3.0), "worst": rb[0][0] if rb else None,
@@ -683,7 +750,8 @@ def summarise(res):
     if "unpaved" in res:
         out["unpaved_m"] = sum(r[0] for r in res["unpaved"])
     if "missing_deck" in res:
-        out["missing_deck"] = {"blocker": len(res["missing_deck"]), "m": sum(r[0] for r in res["missing_deck"])}
+        out["missing_deck"] = {"blocker": len(res["missing_deck"]), "defect": len(res["missing_deck"]),
+                               "m": sum(r[0] for r in res["missing_deck"])}
     if "end" in res:
         e = res["end"]
         out["end_step"] = {"blocker": sum(1 for r in e if abs(r[0]) > 0.3), "defect": sum(1 for r in e if abs(r[0]) > 0.05),
@@ -725,6 +793,7 @@ def summarise(res):
         dfc = sum(len(t.get(k, [])) for k in ("blocked", "left_out", "portal_open", "portal_deep", "mouth_step", "opened",
                                                "joint_step", "steep", "thin", "breaks_upper", "gap", "proud", "bare"))
         out["tunnels"] = {"blocker": blk, "defect": dfc, "parts": t.get("parts"), "built": t.get("built")}
+    out["deck_nan"] = len(res.get("deck_nan", []))
     out["errors"] = len(res.get("errors", []))
     return out
 

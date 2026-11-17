@@ -16,6 +16,11 @@
   run.py same ROOT/results/A ROOT/results/B
       Exit 0 when every place JSON in both is byte-identical (the harness's determinism check).
 
+Data eras: a revision that reads the downloaded data in another layout (8031bac3, 2026-11-11, moved the OSM road
+tag archive to parts on the tile host: older code finds no raceways, no OSM lane / tag data in a newer seed, silently)
+must not be scored offline on a newer seed. run.era_of(REV) names the era; build --rev and revbisect.py keeps one seed per era
+(seed-<era>/), each made by an online run of that era's first revision scored.
+
 Everything runs under nice -n 15, one place at a time by default; the place JSONs hold no times (those go to
 .timing.json), so two runs of the same code on the same seed give byte-identical files."""
 import argparse
@@ -30,7 +35,7 @@ REPO = os.path.dirname(os.path.dirname(HERE))
 DATA_DIRS = ("dem", "mapdata", "mapdata-mirror", "pagesdata", "roadz")
 # the categories shown in the summary: (scorecard key, label)
 CATS = (("clearance", "deck on road"), ("deck_deck", "stack"), ("end_step", "bridge end"), ("overlap", "deck overlap"),
-        ("steep_deck", "steep deck"), ("unbridged", "unbridged"), ("spikes", "spikes"), ("humps", "junction humps"),
+        ("steep_deck", "steep deck"), ("unbridged", "unbridged"), ("rail_block", "rail block"), ("spikes", "spikes"), ("humps", "junction humps"),
         ("widths", "width jumps"), ("tunnels", "tunnels"), ("missing_deck", "missing deck"))
 # extra columns: (label, scorecard key, field)
 EXTRA = (("wavy decks", "deck_shape", "wavy"), ("decks on ground", "deck_shape", "on_ground"),
@@ -75,14 +80,26 @@ def export_rev(root, rev):
     return os.path.join(dst, "server"), sha
 
 
+# (boundary commit, era of the revisions without it): newest first
+ERAS = (("8031bac3", "pre-8031bac3"),)
+
+
+def era_of(rev):
+    """The data era of a revision: None (today's layout) or the first era boundary it lacks."""
+    for sha, tag in ERAS:
+        if subprocess.call(["git", "-C", REPO, "merge-base", "--is-ancestor", sha, rev]) != 0:
+            return tag
+    return None
+
+
 def copy_tree(src, dst):
     subprocess.check_call(["cp", "-a", "--reflink=auto", src, dst])
 
 
-def run_place(p, server, root, label, online):
+def run_place(p, server, root, label, online, checks=None, era=None):
     out = os.path.join(root, "results", label)
     os.makedirs(out, exist_ok=True)
-    seed = os.path.join(root, "seed", p["id"])
+    seed = os.path.join(root, "seed" if not era else "seed-" + era, p["id"])
     work = os.path.join(root, "work", label, p["id"])
     shutil.rmtree(work, ignore_errors=True)
     os.makedirs(work)
@@ -94,7 +111,7 @@ def run_place(p, server, root, label, online):
     js, tj, log = (os.path.join(out, p["id"] + ext) for ext in (".json", ".timing.json", ".log"))
     base = ["nice", "-n", "15", sys.executable, os.path.join(HERE, "probe.py"), "--server", server, "--cache", work,
             "--lat", repr(p["lat"]), "--lon", repr(p["lon"]), "--r", repr(float(p["r"])), "--json", js,
-            "--timing", tj]
+            "--timing", tj] + (["--checks", checks] if checks else [])
     mode = "offline" if have_seed else "online"
     with open(log, "w") as lf:
         rc = subprocess.call(base + (["--offline"] if have_seed else []), stdout=lf, stderr=subprocess.STDOUT,
@@ -105,7 +122,7 @@ def run_place(p, server, root, label, online):
             lf.write("\n== offline failed; online ==\n")
             lf.flush()
             rc = subprocess.call(base, stdout=lf, stderr=subprocess.STDOUT, env=clean_env(), cwd=work)
-    if rc == 0 and not os.path.isdir(seed):
+    if rc == 0 and not os.path.isdir(seed) and mode == "online":
         tmp = seed + ".tmp"
         shutil.rmtree(tmp, ignore_errors=True)
         os.makedirs(tmp)
@@ -190,16 +207,17 @@ def cmd_build(a):
     real = os.path.realpath(os.path.expanduser("~/.cache/beamng-earth"))
     if os.path.realpath(root).startswith(real):
         sys.exit("refused: inside the player's cache")
-    rev = None
+    rev = era = None
     if a.rev:
         server, rev = export_rev(root, a.rev)
+        era = era_of(rev)
     else:
         server = os.path.realpath(a.server or os.path.join(REPO, "server"))
     ps = places(a.set, a.places)
     fails = []
     for k, p in enumerate(ps):
         print(f"[{k + 1}/{len(ps)}] {p['id']} ...", flush=True)
-        rc = run_place(p, server, root, a.label, a.online)
+        rc = run_place(p, server, root, a.label, a.online, a.checks, era)
         if rc != 0:
             fails.append(p["id"])
             print(f"  FAILED rc={rc} (see results/{a.label}/{p['id']}.log)", flush=True)
@@ -256,6 +274,7 @@ def main():
     b.add_argument("--places")
     b.add_argument("--root", default="~/bnge-tests/roadcorpus")
     b.add_argument("--online", action="store_true", help="ignore the seeds (download again)")
+    b.add_argument("--checks", help="probe.py --checks (a narrow probe for bisects), default all")
     b.set_defaults(fn=cmd_build)
     c = sub.add_parser("compare")
     c.add_argument("a")
