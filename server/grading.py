@@ -311,7 +311,16 @@ NEIGHBOUR_SMOOTH_M = 10.0       # m: the change smoothed along the road: no step
 # climbs from its ends: the deck over I-20 near Temple, GA reached ~2.5 m over the lanes (trucks hit it, 2026-10-19).
 # The roads leading onto such a bridge are now graded up to the height the deck needs, over a smooth ramp, as real
 # approach fills are: the bridge's ends (sampled from this graded ground) then sit high enough.
-APPROACH_ON = os.environ.get("BNE_APPROACH_RAMPS", "on") != "off"
+import gradeshapes as _gsh
+# Tunnel and bridge grading by interchange (gradeshapes.py): each system of decks and underpasses solved as one shape,
+# placed on the ground, the roads leading to it on embankments (or cuts) at their max grade to the ground. Off by
+# default: BNE_SHAPES=1. With it the per-bridge approach lifts and ramp envelope are off (the embankments replace them);
+# the underpass dips stay (a road under a track at grade over its mapped tunnel: the tunnel face as before).
+SHAPES_ON = os.environ.get("BNE_SHAPES", "0").strip().lower() in ("1", "on", "yes", "true")
+SHAPES_PAD_M = 800.0        # m round a cell its systems and their ramps are read from (a ramp is at most RAMP_MAX_M)
+SHAPES_CAP_M = 4000.0       # m: the farthest a system is followed from the cell
+SHAPES_NEAR_M = 3.0         # m: a plan vertex this near a shape's or a ramp's line takes its height
+APPROACH_ON = os.environ.get("BNE_APPROACH_RAMPS", "on") != "off" and not SHAPES_ON
 APPROACH_GRADE = float(os.environ.get("BNE_APPROACH_GRADE", "0.05"))   # steepest grade of a ramp (its middle)
 APPROACH_MAX_LIFT = 10.0    # m an abutment is raised at most
 APPROACH_MIN_LIFT = 0.5     # m: less is left as it is
@@ -2815,7 +2824,13 @@ class _Planner:
                 except Exception as e:      # as the data has it rather than no grading
                     _caught(e)
                     log.debug("grading: underpasses of %s: %s: %s", key, type(e).__name__, e)
-            if JUNCTION_SNAP_ON and plans and (APPROACH_ON or UNDER_ON):
+            if SHAPES_ON and plans:
+                try:            # the interchanges' shapes and their embankments and cuts
+                    self._apply_shapes(plans, pspecs)
+                except Exception as e:      # the passes' heights rather than no grading
+                    _caught(e)
+                    log.warning("grading: interchange shapes of %s: %s: %s", key, type(e).__name__, e)
+            if JUNCTION_SNAP_ON and plans and (APPROACH_ON or UNDER_ON or SHAPES_ON):
                 # the side roads again, at their roads' heights after the approaches' lifts and the underpasses' dips
                 # (snapped before them, every alley along Baltimore's Haven Street stood up to 3.5 m over the street
                 # the dip had lowered: a hump at each, the user 2026-10-28)
@@ -4260,6 +4275,250 @@ class _Planner:
 
     # ---- carriageways (carriageways.py): a motorway's roads and decks as one profile ----
 
+    # ---- tunnel and bridge grading by interchange (gradeshapes.py) ----
+
+    def _shape_members(self, k):
+        """Cell k's roads and tracks as gradeshapes members (frame ENU), keyed the same from every cell."""
+        c = self._cell_enu(k)
+        out = []
+        gk = c.get("ground_kmh") or [None] * len(c["ground"])
+        for (line, half, cls), gid, kmh in zip(c["ground"], c.get("ground_ids", []), gk):
+            line = np.asarray(line, np.float64)[:, :2]
+            out.append(_gsh.Member((str(gid[0]), "ground", str(gid[1])), line, "ground", cls, kmh, 0.0, float(half),
+                                   None))
+        nb = len(c["bridges"])
+        for line, cls, fid, lv, h, kmh in zip(c["bridges"], c.get("bridge_cls", [None] * nb),
+                                              c.get("bridge_ids", [None] * nb), c.get("bridge_levels", [1.0] * nb),
+                                              c.get("bridge_half", [4.0] * nb), c.get("bridge_kmh") or [None] * nb):
+            line = np.asarray(line, np.float64)[:, :2]
+            mid = line[len(line) // 2]
+            out.append(_gsh.Member((str(fid), "deck", int(round(mid[0])), int(round(mid[1]))), line, "deck",
+                                   cls or "road", kmh, float(lv), float(h), None))
+        for kind, lines in (("rail", c.get("rail_ground", ())), ("rail_deck", c.get("rail_bridges", ()))):
+            for line in lines:
+                line = np.asarray(line, np.float64)[:, :2]
+                if len(line) < 2:
+                    continue
+                key = ("rail", kind) + tuple(int(round(v)) for v in (line[0][0], line[0][1], line[-1][0], line[-1][1]))
+                out.append(_gsh.Member(key, line, kind, "rail", None, 1.0, 2.0, None))
+        out += self._shape_tunnels(k)
+        return out
+
+    def _shape_tunnels(self, k):
+        """Cell k's road tunnel parts as gradeshapes members (an underpass is a short one), made once per cell."""
+        memo = self.__dict__.setdefault("_shape_tun_memo", {})
+        with self.lock:
+            got = memo.get(str(k))
+        if got is not None:
+            return got
+        out = []
+        f = self.md.cell(k, layers=("roads",), kind="demand").layers.get("roads")
+        if f is not None and len(f):
+            rs = roadsmod.road_specs(f, None, self.widths)
+            for i in range(len(f)):
+                if rs[i] is None:
+                    continue
+                for ring in roadsmod.tunnel_parts(f, i):
+                    ring = np.asarray(ring, np.float64)
+                    if len(ring) < 2:
+                        continue
+                    e, n_, _ = self.frame.geodetic_to_enu(ring[:, 1], ring[:, 0], 0.0)
+                    line = np.stack([np.asarray(e, np.float64), np.asarray(n_, np.float64)], axis=1)
+                    mid = line[len(line) // 2]
+                    out.append(_gsh.Member((str(f.ids[i]), "tunnel", int(round(mid[0])), int(round(mid[1]))), line,
+                                           "tunnel", rs[i].cls + ("_link" if _is_link(rs[i]) else ""), rs[i].kmh, -1.0,
+                                           float(rs[i].width) / 2, None))
+        with self.lock:
+            if len(memo) > 256:
+                memo.clear()
+            memo[str(k)] = out
+        return out
+
+    def _shape_region(self, home):
+        """Cell home's shapes and ramps: {road feature id: [(xy (m, 2), z (m,), mode)]} (mode "deck", "fill", "cut" or
+        "set"), from every system within SHAPES_PAD_M of the cell, each followed until it is closed."""
+        memo = self.__dict__.setdefault("_shape_regions", {})
+        hk = str(home)
+        with self.lock:
+            got = memo.get(hk)
+        if got is not None:
+            return got
+        got = self._shape_region_calc(home, hk)
+        with self.lock:
+            if len(memo) > 64:
+                memo.clear()
+            memo[hk] = got
+        return got
+
+    def _ground_line(self, xy):
+        """The ground along points xy (frame ENU), smoothed as a road's plan reads it."""
+        f64 = np.float64
+        la, lo, _ = self.frame.enu_to_geodetic(xy[:, 0], xy[:, 1], 0.0)
+        raw = np.asarray(self.elev(np.asarray(la, f64), np.asarray(lo, f64)), f64).ravel()
+        ok = np.isfinite(raw)
+        if not ok.any():
+            return np.zeros(len(raw))
+        if not ok.all():
+            raw = np.interp(np.arange(len(raw)), np.flatnonzero(ok), raw[ok])
+        if len(raw) >= 5:
+            raw = smooth_profile(median_profile(raw, _gsh.STEP_M, 12.0), _gsh.STEP_M, 6.0)
+        return raw
+
+    def _shape_region_calc(self, home, hk):
+        t0 = time.perf_counter()
+        lon0, lat0, lon1, lat1 = (float(v) for v in home.bounds())
+        ce, cn, _ = self.frame.geodetic_to_enu(np.array([lat0, lat0, lat1, lat1]), np.array([lon0, lon1, lon0, lon1]),
+                                               0.0)
+        h_lo = np.array([np.min(ce), np.min(cn)]) - SHAPES_PAD_M
+        h_hi = np.array([np.max(ce), np.max(cn)]) + SHAPES_PAD_M
+        box_lo, box_hi = h_lo - 200.0, h_hi + 200.0
+        cap_lo, cap_hi = h_lo - SHAPES_CAP_M, h_hi + SHAPES_CAP_M
+        byk, loaded = {}, set()
+        while True:
+            cla, clo, _ = self.frame.enu_to_geodetic(np.array([box_lo[0], box_hi[0], box_lo[0], box_hi[0]]),
+                                                     np.array([box_lo[1], box_lo[1], box_hi[1], box_hi[1]]), 0.0)
+            keys = sorted(set(mapcells.cells_for_bbox(float(np.min(cla)), float(np.min(clo)), float(np.max(cla)),
+                                                      float(np.max(clo)))) - loaded, key=str)
+            for k in keys:
+                loaded.add(k)
+                for m in self._shape_members(k):
+                    old = byk.get(m.key)
+                    if old is None or len(m.line) > len(old.line):
+                        byk[m.key] = m
+            members = [byk[q] for q in sorted(byk, key=str)
+                       if ((byk[q].line >= box_lo) & (byk[q].line <= box_hi)).all(1).any()]
+            net, systems = _gsh.find_systems(members)
+            mine = []
+            n_lo, n_hi = box_lo.copy(), box_hi.copy()
+            for sysm in systems:
+                pts = np.concatenate([net.lines[i] for i in sysm["seeds"]])
+                b_lo, b_hi = pts.min(0), pts.max(0)
+                if (b_hi < h_lo).any() or (b_lo > h_hi).any():
+                    continue
+                mine.append(sysm)
+                if (b_lo < box_lo + 100.0).any() or (b_hi > box_hi - 100.0).any():     # (open: follow it)
+                    n_lo = np.minimum(n_lo, b_lo - 300.0)
+                    n_hi = np.maximum(n_hi, b_hi + 300.0)
+            n_lo, n_hi = np.maximum(n_lo, cap_lo), np.minimum(n_hi, cap_hi)
+            if (n_lo >= box_lo).all() and (n_hi <= box_hi).all():
+                break
+            box_lo, box_hi = n_lo, n_hi
+        t1 = time.perf_counter()
+
+        def fixed_z(i, s_):
+            m = net.m[i]
+            if m.kind == "rail_deck":       # (the track's deck: the line between its ends' ground)
+                ends = self._ground_line(np.array([net.lines[i][0], net.lines[i][-1]]))
+                return float(ends[0] + (ends[1] - ends[0]) * s_ / max(net.L[i], 1e-6))
+            q = _gsh.at_s(net.lines[i], net.s[i], s_)
+            sv = np.clip(np.linspace(s_ - 24.0, s_ + 24.0, 13), 0.0, net.L[i])
+            xy = np.stack([np.interp(sv, net.s[i], net.lines[i][:, 0]),
+                           np.interp(sv, net.s[i], net.lines[i][:, 1])], axis=1)
+            return float(self._ground_line(xy)[6]) if len(xy) else None
+
+        shapes, failed = [], 0
+        for sysm in mine:
+            pcs = _gsh.pieces(net, sysm)
+            smp = _gsh.sample(net, pcs)
+            ground = [self._ground_line(xy) for xy, _s in smp]
+            diag = {}
+            zs = _gsh.solve_shape(net, sysm, pcs, smp, ground, fixed_z, diag)
+            if diag.get("qp_error") or not diag.get("feasible", True):
+                failed += 1
+            shapes.append((pcs, smp, zs))
+
+        def ground_along(i, sv):
+            xy = np.stack([np.interp(sv, net.s[i], net.lines[i][:, 0]), np.interp(sv, net.s[i], net.lines[i][:, 1])],
+                          axis=1)
+            return self._ground_line(xy)
+        emb = _gsh.embankments(net, mine, shapes, ground_along)
+        prof = {}
+        for (pcs, smp, zs) in shapes:
+            for (i, a, b, kind), (xy, sv), z in zip(pcs, smp, zs):
+                if kind == "deck":
+                    prof.setdefault(str(net.m[i].key[0]), []).append((xy, np.asarray(z, np.float64), "deck"))
+        for j, lst in emb.items():
+            m = net.m[j]
+            if m.kind not in ("ground", "tunnel"):
+                continue
+            for sv, z, mode in lst:
+                xy = np.stack([np.interp(sv, net.s[j], net.lines[j][:, 0]),
+                               np.interp(sv, net.s[j], net.lines[j][:, 1])], axis=1)
+                prof.setdefault(str(m.key[0]), []).append((xy, np.asarray(z, np.float64), mode))
+        log.warning("grading: SHAPES pid %d region %s: %d cells, %d members, %d systems (%d by penalties), %d roads "
+                    "graded, find %.2f s, solve %.2f s", os.getpid(), hk, len(loaded), len(members), len(mine), failed,
+                    len(prof), t1 - t0, time.perf_counter() - t1)
+        return prof
+
+    def _shape_at(self, line, pts, fid, modes):
+        """Per point of pts on road fid (its line in the frame): (height, mode) from the shapes and ramps of its cell's
+        region within SHAPES_NEAR_M, else (NaN, None)."""
+        line = np.asarray(line, np.float64)[:, :2]
+        mid = line[len(line) // 2]
+        la, lo, _ = self.frame.enu_to_geodetic(np.array([mid[0]]), np.array([mid[1]]), 0.0)
+        reg = self._shape_region(mapcells.cell_of(float(la[0]), float(lo[0])))
+        items = [it for it in reg.get(str(fid), ()) if it[2] in modes]
+        pts = np.asarray(pts, np.float64).reshape(-1, 2)
+        z_out = np.full(len(pts), np.nan)
+        m_out = [None] * len(pts)
+        if not items:
+            return z_out, m_out
+        best = np.full(len(pts), np.inf)
+        for xy, z, mode in items:
+            if len(xy) < 2:
+                continue
+            a, b = xy[:-1], xy[1:]
+            ab = b - a
+            L2 = np.maximum((ab * ab).sum(1), 1e-12)
+            for n, q in enumerate(pts):
+                t = np.clip(((q - a) * ab).sum(1) / L2, 0.0, 1.0)
+                d = dnp.hypot(*(a + t[:, None] * ab - q).T)
+                j = int(np.argmin(d))
+                if d[j] > SHAPES_NEAR_M or d[j] >= best[n]:
+                    continue
+                if (t[j] <= 0.0 and j == 0) or (t[j] >= 1.0 and j == len(ab) - 1):
+                    if d[j] > 0.5:
+                        continue            # (past the piece's end: not its)
+                best[n] = d[j]
+                z_out[n] = z[j] + (z[j + 1] - z[j]) * t[j]
+                m_out[n] = mode
+        return z_out, m_out
+
+    def _apply_shapes(self, plans, specs):
+        """SHAPES_ON: each plan on a shape's ramp or cut takes its height there: up to an embankment ("fill"), down to
+        a cut ("cut"), onto a lerp between two shapes ("set"). Whether any changed."""
+        done = False
+        for n, ((fid, p), sp) in enumerate(zip(plans, specs)):
+            if sp is None:
+                continue
+            xy = np.asarray(p.xy, np.float64)[:, :2]
+            if len(xy) < 2:
+                continue
+            zs, modes = self._shape_at(xy, xy, str(fid).split(":")[0], ("fill", "cut", "set"))
+            ok = np.isfinite(zs)
+            if not ok.any():
+                continue
+            z = np.array(p.z, np.float64)
+            for k in np.flatnonzero(ok):
+                if modes[k] == "fill":
+                    z[k] = max(z[k], zs[k])
+                elif modes[k] == "cut":
+                    z[k] = min(z[k], zs[k])
+                else:
+                    z[k] = zs[k]
+            if np.abs(z - np.asarray(p.z, np.float64)).max() < 1e-6:
+                continue
+            np_ = Plan(p.xy, z, p.half, p.abut, p.cut, p.road_half)
+            np_.rid, np_.max_wall, np_.bank = p.rid, p.max_wall, getattr(p, "bank", None)
+            np_.rank = getattr(p, "rank", GRADE_RANK_NONE)
+            np_.steep = getattr(p, "steep", False)
+            for a_ in ("tunnel_section", "open_tunnel"):
+                if hasattr(p, a_):
+                    setattr(np_, a_, getattr(p, a_))
+            plans[n] = (fid, np_)
+            done = True
+        return done
+
     @_marked("_cw_cells", lambda self, k: str(k))
     def _cw_cell_parts(self, k):
         """Cell k's parts of the motorway and trunk families: [(key, line (n, 2), is_bridge, cls, feature id, level,
@@ -5098,6 +5357,7 @@ class _Planner:
                         rail_g += [np.asarray(r, np.float64) for r in rings if len(r) >= 2]
         bridges, ground_l, ends, end_of, bcls, ground_ids, bids, blevels, bhalf = [], [], [], [], [], [], [], [], []
         ground_link = []                # (per ground part: a freeway's link: the junction raise, _end_lift_raw)
+        gkmh, bkmh = [], []             # (per ground part / bridge: its speed limit, km/h or None)
         items = sorted(parts.items())
         if items:               # (the frame's conversion once for every part: it is per call)
             allr = np.concatenate([ring for _k, (ring, _sp, _lv) in items])
@@ -5115,12 +5375,14 @@ class _Planner:
                 blevels.append(lv)
                 # (one half width a bridge: two merged changes each appended it, and bridge i got bridge i // 2's)
                 bhalf.append(float(getattr(sp, "width", None) or 8.0) / 2)
+                bkmh.append(getattr(sp, "kmh", None))
                 cls = getattr(sp, "cls", None)
                 bcls.append(cls + "_link" if cls is not None and _is_link(sp) else cls)
             else:
                 ground_l.append((line, sp.width / 2 + shoulder(sp), sp.cls))
                 ground_ids.append((fid, j, profile_sigma(sp), MEDIAN_M if sp.kind in roadsmod.BUILT else DIRT_MEDIAN_M))
                 ground_link.append(_is_link(sp))
+                gkmh.append(getattr(sp, "kmh", None))
         rail_xy, rail_gxy = [], []
         if rail or rail_g:
             allr = np.concatenate(rail + rail_g)
@@ -5153,6 +5415,7 @@ class _Planner:
                 k0 += len(ring)
         return {"bridges": bridges, "bridge_cls": bcls, "bridge_ids": bids, "bridge_levels": blevels,
                 "bridge_half": bhalf, "ground": ground_l, "ground_ids": ground_ids, "ground_link": ground_link,
+                "ground_kmh": gkmh, "bridge_kmh": bkmh,
                 "end_of": end_of, "span_bridges": span_xy,
                 "ends": np.asarray(ends, np.float64).reshape(-1, 2), "rail_bridges": rail_xy, "rail_ground": rail_gxy,
                 "height_limits": limits,
@@ -6877,7 +7140,13 @@ def _deck_z_hook(frame, lines, fids=None):
         pl, _idx = store.planners_of(la[len(la) // 2:len(la) // 2 + 1], lo[len(lo) // 2:len(lo) // 2 + 1])[0]
         e, n, _ = pl.frame.geodetic_to_enu(la, lo, 0.0)
         xy = np.stack([np.asarray(e, np.float64), np.asarray(n, np.float64)], axis=1)
-        z = pl._cw_z_at(xy, xy, fid)
+        if SHAPES_ON:
+            z = None
+            if fid is not None:
+                zz, _m = pl._shape_at(xy, xy, fid, ("deck",))
+                z = zz if np.isfinite(zz).all() else None
+        else:
+            z = pl._cw_z_at(xy, xy, fid)
         if z is None:
             out.append(None)
             continue
@@ -6885,7 +7154,7 @@ def _deck_z_hook(frame, lines, fids=None):
     return out if any(o is not None for o in out) else None
 
 
-if CW_ON:
+if CW_ON or SHAPES_ON:
     roadsmod.DECK_Z_HOOK = _deck_z_hook
 
 
