@@ -2509,7 +2509,7 @@ def _foot_limits(xy, side, foot, others, crossers):
 
 
 def tile_mesh(frame, tx, ty, cells, ground, sign_style=None, far_ground=None, return_decks=False, load=None,
-              bed_elev=None, _drop=frozenset(), furniture=None, under=None):
+              bed_elev=None, _drop=frozenset(), furniture=None, under=None, tracks_out=None):
     """The road tile (tx, ty)'s railway mesh (roadmesh.write's (positions, tris, uvs, materials, tri material)) or
     None. cells: the roads layers of the cells within REACH_M of the tile (cells_of_tile(..., margin=REACH_M));
     ground(xy (n, 2)) -> z: the drawn ground in the frame. far_ground: the natural ground, read beyond GRADED_NEAR_M
@@ -2521,7 +2521,9 @@ def tile_mesh(frame, tx, ty, cells, ground, sign_style=None, far_ground=None, re
     under one is not drawn (the model carries it: Perth's Narrows and Mount Henry bridges' rail decks, the Elizabeth
     Quay footbridge, GitHub #1071); the track's profile still runs over it.
     load (a roads layer by cell key) and bed_elev (the grader's DEM): the beds from railprofile's lattice, the same in
-    every tile (railprofile.py)."""
+    every tile (railprofile.py). tracks_out: a list that gets (feature id, class, "ground" | "bridge" | "tunnel", xy, bed
+    z) of every track part the mesh draws, the bed as it was finally laid (flush with the road at a level crossing): what the
+    clearance check (clearance.py) stands its wagons on."""
     cells = list(cells)
     box = roads.tile_bbox(tx, ty)
     tcls = []
@@ -2701,10 +2703,14 @@ def tile_mesh(frame, tx, ty, cells, ground, sign_style=None, far_ground=None, re
             for n in rank[-min(len(rank) - 1, max(1, len(rank) // 4)):]:
                 _drop = _drop | {keep[n]}
             return tile_mesh(frame, tx, ty, cells, ground, sign_style, far_ground, return_decks=return_decks,
-                             load=load, bed_elev=bed_elev, _drop=_drop, furniture=furniture, under=under)
+                             load=load, bed_elev=bed_elev, _drop=_drop, furniture=furniture, under=under,
+                             tracks_out=tracks_out)
         return (None, decks) if return_decks else None
     if furniture is not None:
         furniture += rows
+    if tracks_out is not None:
+        tracks_out.extend((fid, cls, kind, xy, np.asarray(zb, np.float64))
+                          for (fid, cls, kind, xy), zb, gone in zip(rails, finals, carried) if not gone)
     return (out, decks) if return_decks else out
 
 

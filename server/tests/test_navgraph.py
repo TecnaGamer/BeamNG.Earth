@@ -33,6 +33,30 @@ def graph(lines, classes, connectors=(), oneway=(), speeds=(), subclass=(), cent
     return navgraph.build(FRAME, [f], flat, centre, window=window)
 
 
+
+def _hill(lat, lon):
+    """10 m of ground at the portals and outside, 16 m (the hill over the tube) between x 130 and 210."""
+    e, _n, _ = FRAME.geodetic_to_enu(np.asarray(lat, np.float64), np.asarray(lon, np.float64), 0.0)
+    return np.where((np.asarray(e) > 130) & (np.asarray(e) < 210), 16.0, 10.0)
+
+
+class TunnelPortalNodesTest(unittest.TestCase):
+    def test_no_ground_node_inside_a_tunnel(self):
+        """An edge reaching a few metres into a tunnel, its middle outside it, kept its inside end at the ground's
+        height, the hill over the tube (the Fuji Subaru Line's snow shed: a node 9 m inside the west portal 5.6 m over
+        the floor). Every node of the graph stands outside its road's tunnel range or is one of the tunnel's own."""
+        # a bend 5 m inside the tunnel's far end (the tunnel 0.4-0.7 of 309 m: 123.6-216.3 m), the edge after it 50 m
+        f = features([[(0, 0), (205, 0), (300, 40)]], ["primary"], levels=[(0, -1.0, 0.4, 0.7)])
+        f.rules["connectors"] = rules([(0, "A", 0.0, 0.0), (0, "B", 1.0, 1.0)])
+        g = navgraph.build(FRAME, [f], _hill, (0.0, 0.0))
+        self.assertTrue(g["edges"])
+        used = {nm for e in g["edges"] for nm in e[:2]}
+        high = {nm: g["nodes"][nm] for nm in used if g["nodes"][nm][2] > 10.5}
+        self.assertFalse(high, "a graph node in the tube at the hill's height")
+        xs = sorted(g["nodes"][nm][0] for nm in used)
+        self.assertTrue(any(213 < x < 217 for x in xs), f"a node at the far portal (x ~215.4): {xs}")
+
+
 class ShortIdsTest(unittest.TestCase):
     """navgraph.short_ids: one short stable name per node in the nodes, edges and signals (the game decodes the file at
     every rebuild; the long names were most of it), the same name in every graph."""
