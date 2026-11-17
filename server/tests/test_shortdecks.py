@@ -32,8 +32,10 @@ class ChordTest(unittest.TestCase):
         self.assertTrue((z >= g - 1e-6).all(), "never under the ground")
 
     def test_too_low_still_climbs(self):
-        # the chord cannot clear a road 2 m higher: the curve profile is still used, and holds the clearance
-        s, g, z = self.overpass_profile(road=1.7)
+        # the chord cannot clear a road whose clearance stands 1.4 m over it: the curve profile is still used, and
+        # holds the clearance
+        need = roads.deck_road_clear(roads.deck_depth(24.0)) + 0.06
+        s, g, z = self.overpass_profile(road=7.57 + 1.4 - need)
         self.assertGreater(float(z.max()), 7.57 + 0.15, "it climbs over the chord")
 
 

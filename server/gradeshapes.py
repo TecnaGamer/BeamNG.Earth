@@ -52,7 +52,8 @@ MERGE_DEG = 40.0            # deg: a deck's end on another deck's line at anothe
 STRUCTURES = ("deck", "rail_deck", "tunnel")
 # the game's decks (roads.py: MIN_BRIDGE_HEADROOM_M, BRIDGE_HEADROOM_MARGIN_M, deck_depth; grading sets them from there):
 # the vehicle height under the girders, its margin, and the deck's depth by its span (slab + girders)
-HEADROOM_M = 6.0
+HEADROOM_M = 4.0
+RAIL_HEADROOM_M = 6.0       # a track's (roads.RAIL_HEADROOM_M: a wagon and the catenary over it)
 HEADROOM_MARGIN_M = 0.15
 DECK_MIN_DEPTH_M = 0.9
 DECK_FULL_DEPTH_M = 2.2
@@ -151,14 +152,16 @@ def curve_radius(m):
 
 def headroom(m, q=None):
     """The vehicle height member m needs under a deck at q (x, y; None: anywhere), with its margin: its signed limit
-    where it has one (a maxheight sign), else the game's tallest vehicles' (a track's catenary the same), a path's
-    less."""
+    where it has one (a maxheight sign), else a full-height truck's 4 m (a track's: a wagon and its catenary), a
+    path's less."""
     lim = m.limit
     if callable(lim):
         lim = lim(q) if q is not None else None
     if lim is not None and lim > 0:
         return float(lim) + HEADROOM_MARGIN_M
-    if m.cls in PATHS and m.kind not in ("rail", "rail_deck"):
+    if m.kind in ("rail", "rail_deck"):
+        return RAIL_HEADROOM_M + HEADROOM_MARGIN_M
+    if m.cls in PATHS:
         return CLEAR_PATH_M
     return HEADROOM_M + HEADROOM_MARGIN_M
 

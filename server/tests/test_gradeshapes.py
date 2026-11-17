@@ -459,9 +459,10 @@ def test_a_held_bridge_over_a_streets_mapped_tunnel_stays_at_its_ground_and_the_
 
 
 def test_a_signed_height_limit_holds_at_its_own_crossing_only():
-    # a street under two overpasses 600 m apart, a 3.8 m sign at the west one alone: the west deck clears the sign,
-    # the east one the game's headroom (the limit read where each crosses, as the dips read it)
-    sign = lambda q: 3.8 if abs(q[0] + 300.0) < 4.0 else None
+    # a street under two overpasses 600 m apart, a sign 1 m under the game's headroom at the west one alone: the west
+    # deck clears the sign, the east one the game's headroom (the limit read where each crosses, as the dips read it)
+    limit = ix.HEADROOM_M - 1.0
+    sign = lambda q: limit if abs(q[0] + 300.0) < 4.0 else None
     m = [Member("street", _line(-800, 0, 800, 0, 400), "ground", "residential", 40, 0, 4.0, sign)]
     for x, name in ((-300.0, "w"), (300.0, "e")):
         m += [Member(name, _line(x, -30, x, 30, 13), "deck", "secondary", 60, 1, 5.0, None),
@@ -471,7 +472,7 @@ def test_a_signed_height_limit_holds_at_its_own_crossing_only():
     depth = ix.deck_depth(60.0)
     zw = _shape_z(net, shapes, "w", np.array([-300.0, 0.0]))
     ze = _shape_z(net, shapes, "e", np.array([300.0, 0.0]))
-    assert zw >= 3.8 + ix.HEADROOM_MARGIN_M + depth - 0.05
+    assert zw >= limit + ix.HEADROOM_MARGIN_M + depth - 0.05
     assert zw < ix.HEADROOM_M + depth - 0.5                         # not the game's headroom under the sign
     assert ze >= ix.HEADROOM_M + ix.HEADROOM_MARGIN_M + depth - 0.05
 

@@ -1,5 +1,5 @@
 """A road with a height limit (a maxheight sign: the roads layer's max_height_m rule) under a road bridge gets that limit
-under the girders, not the 6 m guess (roads.road_sign_at / signed_road_clear): the deck's profile, its abutments' lifts
+under the girders, not the unsigned road's headroom (roads.road_sign_at / signed_road_clear): the deck's profile, its abutments' lifts
 and the road's dip under it (after PR #922)."""
 import os
 import sys
@@ -13,6 +13,7 @@ import grading  # noqa: E402
 import roads  # noqa: E402
 
 FLAT = 10.0
+LOW = roads.MIN_BRIDGE_HEADROOM_M - 1.5       # a limit under the unsigned default
 
 
 def flat(xy):
@@ -60,7 +61,7 @@ class DeckProfileTest(unittest.TestCase):
     def test_a_low_sign_keeps_the_deck_lower(self):
         xy = line()
         plain, = roads.deck_profile([xy], flat, [(0, 201.0, FLAT)])
-        cl = roads.signed_road_clear(4.2)
+        cl = roads.signed_road_clear(LOW)
         signed, = roads.deck_profile([xy], flat, [(0, 201.0, FLAT, cl)])
         top_plain = float(np.interp(201.0, xy[:, 0], plain))
         top_signed = float(np.interp(201.0, xy[:, 0], signed))
@@ -87,12 +88,13 @@ class BridgeLiftsTest(unittest.TestCase):
         ground = [np.array([[-12.0, -500], [-12, 500]]), np.array([[12.0, 500], [12, -500]])]
         z = lambda xy: np.full(len(xy), FLAT)
         plain = dict((tuple(e), lf) for e, lf in grading.bridge_lifts(deck, [deck], ground, z))
-        lims = [(np.array([[-12.0, -10.0], [-12.0, 10.0]]), 4.2), (np.array([[12.0, -10.0], [12.0, 10.0]]), 4.2)]
+        lims = [(np.array([[-12.0, -10.0], [-12.0, 10.0]]), LOW), (np.array([[12.0, -10.0], [12.0, 10.0]]), LOW)]
         signed = dict((tuple(e), lf) for e, lf in grading.bridge_lifts(deck, [deck], ground, z, limits=lims))
         self.assertEqual(set(plain), set(signed))
         depth = roads.deck_depth(roads.geom_span([deck]))
         for k in plain:
-            self.assertAlmostEqual(plain[k] - signed[k], roads.deck_road_clear(depth) - roads.signed_road_clear(4.2, depth),
+            self.assertGreater(plain[k], signed[k])
+            self.assertAlmostEqual(plain[k] - signed[k], roads.deck_road_clear(depth) - roads.signed_road_clear(LOW, depth),
                                    delta=1e-6)
 
     def test_no_limits_as_before(self):

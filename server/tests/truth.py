@@ -5,6 +5,7 @@ over which, what stands on the ground) and its solved profiles against, offline:
 the solver given the true facts, then both together (the place's replay: fixtures/truth_*.npz, tests/interchanges.py).
 
 Source: Federal Office of Topography swisstopo (swissTLM3D, free with the source named)."""
+import functools
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -50,7 +51,36 @@ def load(name):
                 level = 0
             lines.append(SimpleNamespace(id=r["id"], layer=layer, objektart=art, cls=cls, kind=kind, level=level,
                                          xyz=xyz, attrs=r))
+    _resolve_unknown(name, lines)
     return SimpleNamespace(origin=tuple(d["origin"]), half=float(d["half_m"]), lines=lines)
+
+
+UNKNOWN = "k_W"         # KUNSTBAUTE of a line the survey gives no structure for (a connector between carriageways)
+OFF_GROUND_M = 2.5      # m over (under) the ground such a line runs: it is on a bridge (in a tunnel)
+
+
+def _resolve_unknown(name, lines):
+    """The kind and level of the lines the survey gives no structure for (UNKNOWN: its "Verbindung" connectors, which
+    join a viaduct's parts as often as two roads on the ground), from their own surveyed heights over the ground
+    Earth reads there: OFF_GROUND_M over it a bridge, under it a tunnel, at the level of the structures they join
+    (their own STUFE when it has one). Read as roads on the ground, a viaduct going on through one ended on the
+    ground 15 m under itself."""
+    unknown = [ln for ln in lines if ln.attrs["kunstbaute"] == UNKNOWN and ln.cls is not None]
+    if not unknown:
+        return
+    ground = ground_fn(replay(name), [ln for ln in lines if ln.attrs["kunstbaute"] != UNKNOWN and ln.cls is not None])
+    at = {}
+    for ln in lines:
+        for e in (0, -1):
+            at.setdefault(node_of(ln.xyz[e]), []).append(ln)
+    for ln in unknown:
+        dz = float(np.median(ln.xyz[:, 2] - ground(ln.xyz[:, :2])))
+        ln.kind = "bridge" if dz > OFF_GROUND_M else "tunnel" if dz < -OFF_GROUND_M else "ground"
+        if ln.kind != "ground" and ln.level == 0:
+            near = [o.level for e in (0, -1) for o in at[node_of(ln.xyz[e])] if o is not ln and o.kind == ln.kind]
+            ln.level = (max(near) if ln.kind == "bridge" else min(near)) if near else (1 if ln.kind == "bridge" else -1)
+        elif ln.kind == "ground":
+            ln.level = 0
 
 
 def ways(site, paths=False):
@@ -165,6 +195,7 @@ THIN_DECK_M = 0.9       # m: the thinnest deck the laws give a bridge (gradeshap
 GRADE_BASE_M = 20.0     # m over which a surveyed road's grade is read (its heights are good to a few dm)
 
 
+@functools.lru_cache(maxsize=None)
 def replay(name):
     """The place's replay (tests/interchanges.load: frame, cells, sample)."""
     import interchanges
@@ -298,8 +329,13 @@ def solved(name):
         smp = ix.sample(net, pcs)
 
         def fixed(i, s):
+            # (what the shapes do not move: a road at its ground; a track at its own surveyed height, as Earth's
+            # shapes read the railways' bed (the elevation under a railway's bridge is the valley's, not the track's))
             sv = np.atleast_1d(np.asarray(s, np.float64))
-            z = ground(np.stack([np.interp(sv, net.s[i], net.lines[i][:, 0]), np.interp(sv, net.s[i], net.lines[i][:, 1])], axis=1))
+            if ws[i].layer == "rail":
+                z = np.interp(sv, arclen(ws[i].xyz), ws[i].xyz[:, 2])
+            else:
+                z = ground(np.stack([np.interp(sv, net.s[i], net.lines[i][:, 0]), np.interp(sv, net.s[i], net.lines[i][:, 1])], axis=1))
             return np.asarray(z, np.float64) if np.ndim(s) else float(z[0])
         zs = ix.solve_shape(net, sysm, pcs, smp, [ground(x["xy"]) for x in smp], fixed)
         if zs is None:
@@ -348,6 +384,86 @@ def real_grades(name):
     return out
 
 
+def _datum(rep, ws):
+    """m to add to the replay's elevation for the survey's heights (ground_fn's, at the place's middle)."""
+    la, lo = (np.array([v]) for v in rep.origin)
+    return float(ground_fn(rep, ws)(np.zeros((1, 2)))[0] - np.asarray(rep.sample(la, lo), np.float64)[0])
+
+
+def _earth(rep):
+    """(map data, grading.Grader) of the replay's cells: Earth's own grading of the place, as it grades a session."""
+    import grading
+    md = SimpleNamespace(cell=lambda key, **kw: SimpleNamespace(layers={"roads": rep.cells.get(str(key))}))
+    store = grading.PlanStore(md, rep.sample)
+    store.frame_of = lambda region: rep.frame
+    return md, grading.Grader(rep.frame, md, rep.sample, store=store)
+
+
+GRADED_STEP_M = 4.0     # m between the points of a surveyed road Earth's graded ground is read at
+MOVED_M = 1.0           # m: ground this far under (over) the surveyed road is dug (filled): the survey's heights are good
+                        # to a few dm, the elevation's along these roads to cm (ungraded - real, the second array)
+
+
+@functools.lru_cache(maxsize=None)
+def graded(name):
+    """Earth's graded ground under the survey's roads on the ground: (graded - real (n,), ungraded - real (n,), the
+    points (n, 2), each one's line in ways(load(name))). What the car drives on against where the road really is: a
+    road dug under a bridge that stands high over it, a road filled up to a tunnel's roof, read off directly."""
+    from unittest import mock
+    import grading
+    import revisit
+    site, rep = load(name), replay(name)
+    ws = ways(site)
+    off = _datum(rep, ws)
+    P, zr, who = [], [], []
+    for i, ln in enumerate(ws):
+        if ln.layer != "road" or ln.kind != "ground":
+            continue
+        _s, xy, z = profile(ln, GRADED_STEP_M)
+        keep = (np.abs(xy) <= site.half).all(axis=1)
+        P.append(xy[keep])
+        zr.append(z[keep])
+        who += [i] * int(keep.sum())
+    P, zr = np.concatenate(P), np.concatenate(zr)
+    la, lo, _ = rep.frame.enu_to_geodetic(P[:, 0], P[:, 1], 0.0)
+    raw = np.asarray(rep.sample(la, lo), np.float64)
+    with mock.patch.object(revisit, "ON", False):
+        zg = np.asarray(_earth(rep)[1].apply(la, lo, raw, grading.ROAD_LIFT), np.float64)
+    return zg + off - zr, raw + off - zr, P, np.asarray(who)
+
+
+RAIL_STEP_M = 10.0      # m between the points of a surveyed track Earth's bed is read at
+RAIL_NEAR_M = 6.0       # m from such a point one of Earth's tracks lies and is that track
+
+
+@functools.lru_cache(maxsize=None)
+def rail_beds(name):
+    """Earth's railway bed against the survey's tracks: {the survey's kind ("ground", "bridge", "tunnel"): bed - real
+    (n,) at the track's points Earth has a track at}. The bed is where Earth draws the track and what the roads under a
+    railway's bridge are dug to clear (grading._track_bed)."""
+    from unittest import mock
+    import grading
+    import revisit
+    site, rep = load(name), replay(name)
+    ws = ways(site)
+    off = _datum(rep, ws)
+    out = {}
+    with mock.patch.object(revisit, "ON", False):
+        md, _g = _earth(rep)
+        g = grading._Planner(rep.frame, md, lambda la, lo, *a: rep.sample(la, lo))
+        for ln in ws:
+            if ln.layer != "rail":
+                continue
+            _s, xy, z = profile(ln, RAIL_STEP_M)
+            keep = (np.abs(xy) <= site.half).all(axis=1)
+            if keep.sum() < 2:
+                continue
+            bed = np.asarray(g._track_bed(xy[keep]), np.float64) + off
+            ok = np.isfinite(bed)
+            out.setdefault(ln.kind, []).append(bed[ok] - z[keep][ok])
+    return {k: np.concatenate(v) for k, v in out.items()}
+
+
 def report(name):
     """The place's measurements (what holds today: tests/test_truth.py's numbers)."""
     import collections
@@ -368,8 +484,30 @@ def report(name):
             "roads_steeper_than_the_laws": sum(1 for g, law, _c in gr if g > law + 0.01), "roads_graded": len(gr)}
 
 
+def moved(name):
+    """(per mille of the surveyed ground roads' points Earth digs MOVED_M or more, per mille it fills as much, the
+    deepest dig m, the tallest fill m)."""
+    d = graded(name)[0]
+    return (int(np.ceil(1000.0 * float((d <= -MOVED_M).mean()))), int(np.ceil(1000.0 * float((d >= MOVED_M).mean()))),
+            round(float(-d.min()), 1), round(float(d.max()), 1))
+
+
+def built(name):
+    """What Earth builds of the place against the survey (slower than report: the place graded whole)."""
+    dug, filled, deepest, tallest = moved(name)
+    d, r, _p, _w = graded(name)
+    rb = rail_beds(name)
+    return {"site": name, "ground_roads_points": len(d), "dug_per_mille": dug, "filled_per_mille": filled,
+            "deepest_dig": deepest, "tallest_fill": tallest,
+            "graded_minus_real_p1_p99": [round(float(v), 2) for v in np.percentile(d, [1, 99])],
+            "ungraded_minus_real_p1_p99": [round(float(v), 2) for v in np.percentile(r, [1, 99])],
+            "rail_bed_minus_real": {k: [round(float(np.percentile(v, 5)), 1), round(float(np.median(v)), 1),
+                                        round(float(np.percentile(v, 95)), 1), len(v)] for k, v in sorted(rb.items())}}
+
+
 if __name__ == "__main__":
     import sys
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-    for nm in sys.argv[1:] or SITES:
-        print(json.dumps(report(nm), indent=1), flush=True)
+    names = [a for a in sys.argv[1:] if a != "--built"]
+    for nm in names or SITES:
+        print(json.dumps((built if "--built" in sys.argv else report)(nm), indent=1), flush=True)
