@@ -209,7 +209,7 @@ def _make_node(frame, load, ground, ix, iy):
     rails = [r for r in railways.parts(frame, cells, box, reach=reach, clip=True, underpasses=tunnels) if r[1] != "tram"]
     out = {}
     if rails:
-        tunnels = railways.raising_underpasses(tunnels, tcls) + railways.coarse_underpasses(frame, cells, box, rails, reach)
+        tunnels = railways.raising_underpasses(tunnels, tcls) + railways.plain_underpasses(frame, cells, box, rails, reach, tunnels)
         xy, off = _flat(rails)
         z = np.concatenate([np.asarray(zb, np.float64).ravel() for zb, _zg in railways.profile(rails, ground, tunnels)])
         if SMOOTH_ON:

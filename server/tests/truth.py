@@ -393,7 +393,10 @@ def _datum(rep, ws):
 def _earth(rep):
     """(map data, grading.Grader) of the replay's cells: Earth's own grading of the place, as it grades a session."""
     import grading
-    md = SimpleNamespace(cell=lambda key, **kw: SimpleNamespace(layers={"roads": rep.cells.get(str(key))}))
+    # (dem: the elevation here is the fine one, as the server's Dem says of it: the grading's lidar rules hold. Without
+    # it the replay graded as on neither lidar nor the coarse model, a state the server never has)
+    md = SimpleNamespace(cell=lambda key, **kw: SimpleNamespace(layers={"roads": rep.cells.get(str(key))}),
+                         dem=SimpleNamespace(coarse_at=lambda la, lo: False))
     store = grading.PlanStore(md, rep.sample)
     store.frame_of = lambda region: rep.frame
     return md, grading.Grader(rep.frame, md, rep.sample, store=store)

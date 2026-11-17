@@ -27,33 +27,36 @@ TODAY = {
         unmatched=12,           # real crossings with no line of Earth's along one of the two (not judged)
         shape_p95=7.2,          # m: the Sihl viaduct's decks, solved up to 7.9 m off the real ones
         under_laws=2, steeper=2,
-        dug=(21, 22),           # per mille of the ground roads' points: a track over the motorway's tunnel, 4.3 m
+        dug=(7, 8),             # per mille of the ground roads' points, 3.3 m at the deepest
         filled=(19, 39),        # the motorway at its tunnels' mouths, up to 6.5 m
-        rail_low=None),         # (no railway bridge here)
+        rail_low=None, rail_high=None),     # (no railway bridge here)
     "zurich_europabruecke": dict(
         unmatched=22,           # (9 of them: the tracks over a 10 m road's underpass)
         shape_p95=5.8,          # m: a service road's deck 3.8 m lower than it is; the roads under the tracks 1-2 m deeper
         under_laws=0, steeper=2,
-        dug=(0, 0), filled=(0, 4), rail_low=-2.6),
+        dug=(0, 0), filled=(0, 5),
+        rail_low=2.6,           # m: the Letzigraben flyover's ramp. It is 13 m over the tracks it crosses 270 m on, which
+        rail_high=3.1),         # Earth's clears by a track's headroom, and climbs to them at 4 %: Earth's at its 2 %
     "zurich_duttweilerbruecke": dict(
-        unmatched=20,
+        unmatched=22,           # (20 before the replay's roads came as the server hands them on: gradesep)
         shape_p95=3.4,
         under_laws=2, steeper=1,
-        dug=(124, 122),         # the streets round the railway's viaduct, 4.8 m: Earth's track lies at their level
+        dug=(3, 3),             # 3.3 m at the deepest. (12 while every rail bridge dug the road under it)
         filled=(0, 0),
-        rail_low=-13.2),        # m: the viaduct stands 13 m over the streets, Earth's bed at their level at its joints
+        rail_low=-8.8,          # m: the Wipkingen viaduct, 13 m over its streets, stands 10 to 13 m up (was at their
+        rail_high=0.4),         # level at its joints, -13.2); the flyover over it and the tracks is 9 m short of 18
     "goeschenen_gotthard_portal": dict(
         unmatched=5,
         shape_p95=5.0,
         under_laws=0, steeper=1, graded=60,
         dug=(66, 64),           # a link 7.3 m: the motorway's cutting 5 m under it, 9 m beside it (a wall in the real one)
         filled=(76, 75),        # the road into the Gotthard tunnel 8.3 m: its mouth read on the face over it
-        rail_low=-9.7),
+        rail_low=-9.7, rail_high=0.2),
     "kempttal_viaduct": dict(
         unmatched=2, right=4,
         shape_p95=4.6,          # m: the viaduct's deck at its ends
         under_laws=0, steeper=0, graded=60,
-        dug=(1, 0), filled=(0, 0), rail_low=-1.0),
+        dug=(1, 0), filled=(0, 0), rail_low=-1.0, rail_high=0.1),
 }
 RAIL_M = 2.0            # m: a railway bridge's bed nearer the real track than this is right (what a road under it needs)
 MODE = int(grading.SHAPES_ON)       # (dug, filled: without the shapes, with them (BNE_SHAPES=1): what Earth builds differs)
@@ -155,9 +158,13 @@ def test_earth_fills_no_real_road_that_lies_on_its_ground(site):
     assert truth.moved(site)[1] == 0, truth.moved(site)
 
 
-def _rail_low(site):
+def _rail_low(site, q=5):
     v = truth.rail_beds(site).get("bridge")
-    return None if v is None else round(float(np.percentile(v, 5)), 1)
+    return None if v is None else round(float(np.percentile(v, q)), 1)
+
+
+def _rail_high(site):
+    return _rail_low(site, 95)
 
 
 @pytest.mark.parametrize("site", [s for s in SITES if TODAY[s]["rail_low"] is not None])
@@ -167,11 +174,17 @@ def test_earths_railway_bridges_lie_no_further_under_the_real_tracks_than_today(
     assert abs(float(np.median(ground))) <= 0.2, "(the track on the ground is the real one's: the elevation has it)"
 
 
-@pytest.mark.parametrize("site", [pytest.param(s, marks=pytest.mark.xfail(strict=True, reason="a viaduct's bed at the "
-                                               "streets' level")) if TODAY[s]["rail_low"] < -RAIL_M else s
+@pytest.mark.parametrize("site", [s for s in SITES if TODAY[s]["rail_high"] is not None])
+def test_earths_railway_bridges_lie_no_further_over_the_real_tracks_than_today(site):
+    assert _rail_high(site) <= TODAY[site]["rail_high"], truth.built(site)["rail_bed_minus_real"]
+
+
+@pytest.mark.parametrize("site", [pytest.param(s, marks=pytest.mark.xfail(strict=True, reason="a railway bridge's bed "
+                                               "off the real track")) if TODAY[s]["rail_low"] < -RAIL_M
+                                  or TODAY[s]["rail_high"] > RAIL_M else s
                                   for s in SITES if TODAY[s]["rail_low"] is not None])
 def test_earths_railway_bridges_are_the_real_tracks(site):
-    assert _rail_low(site) >= -RAIL_M, truth.built(site)["rail_bed_minus_real"]
+    assert _rail_low(site) >= -RAIL_M and _rail_high(site) <= RAIL_M, truth.built(site)["rail_bed_minus_real"]
 
 
 def test_the_survey_reads_as_lines_with_heights():

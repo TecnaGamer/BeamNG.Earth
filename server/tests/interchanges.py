@@ -148,6 +148,16 @@ def load(name, prefix="interchange", keep_m=None):
         zf, inside = _bilinear(*fine, e, n)
         z = np.where(inside, zf, z)
         return z.reshape(a.shape)
+    # (each cell's roads as the server's map data hands them on (mapdata.MapData.cell): with the grade separations the
+    # map has no bridge for (gradesep: a line over another's short tunnel is a bridge, the tunnel an open road) and the
+    # cells round it. Without them a replay's track lay on the ground across a road's short tunnel, as no server has it)
+    import gradesep
+    md = SimpleNamespace(cell=lambda key, **kw: SimpleNamespace(layers={"roads": cells.get(str(key))}),
+                         dem=SimpleNamespace(sample=sample))
+    for name_, f in cells.items():
+        k = mapcells.CellKey(*(int(v) for v in name_.split("/")))
+        f.__dict__["_bnge_gradesep"] = gradesep.hook(md, k)
+        f.__dict__["_bnge_neighbours"] = gradesep.neighbours_hook(md, k)
     return SimpleNamespace(frame=frame, cells=cells, sample=sample, origin=(lat, lon))
 
 

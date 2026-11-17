@@ -8,8 +8,9 @@
 2. Who moves, at each crossing of an upper part over a lower one:
    - the lower road is mapped in a tunnel (an underpass): it goes down, the upper stays at its level (a track or a road
      at grade over it stays on its ground); a longer tunnel (TUNNEL_MAX_M) is tunnels.py's, crossed by nothing here;
-   - the upper is a rail deck: a track cannot ramp, so a short rail deck (RAIL_LONG_M) stays where the track is and the
-     road under goes down; a long one is a viaduct the railways raise themselves, nothing to solve here;
+   - the upper is a rail deck over a road on the ground: the railways raise their own bridge over it
+     (railways.plain_underpasses) and the road stays on its ground, nothing to solve here (findground: a bridge over a
+     plain way leaves the ground; the survey's 226 plain ways under bridges all lie on it);
    - the upper is a road deck: a short deck chain (ROAD_SHORT_M) over a road is the road dug under it, and so is a
      held one (a bridge the map has over a road's short tunnel, grading's never-raised deck: the elevation there is
      its own); a longer one is an overpass that rises over the road under, which keeps its ground;
@@ -41,6 +42,7 @@ from collections import namedtuple
 import numpy as np
 
 import dnp
+import findground
 
 STEP_M = 4.0                # m between a deck's or a dip's samples
 JOIN_M = 2.5                # m: two parts' ends (or an end and another's line) this close meet there
@@ -65,7 +67,6 @@ RAIL_DECK_DEPTH_M = 1.68
 COVER_M = 1.0               # m of structure over an underpass's headroom (the roof under a road or track at grade)
 TUNNEL_MAX_M = 300.0        # m: a longer road tunnel is a tunnel network of its own (tunnels.py), not an underpass
 ROAD_SHORT_M = 20.0         # m: a road deck chain this short over a road is the road dug under it
-RAIL_LONG_M = 60.0          # m: a rail deck this long is a viaduct (the railways raise it), shorter the road goes under
 CONNECT_M = 400.0           # m: a road joining two decks' (or tunnels') ends no longer than this ties them in one system
 RAMP_MAX_M = 600.0          # m: the longest embankment or cut followed along a road
 DIP_MARGIN_M = 3.0          # m past the upper part's edge a road going under holds its dip before its cut ramps up
@@ -241,9 +242,7 @@ def _is_seed(net, i):
         return True
     if m.kind == "tunnel":
         return net.L[i] <= TUNNEL_MAX_M
-    if m.kind == "rail_deck":
-        return net.L[i] < RAIL_LONG_M
-    return False
+    return False            # (a rail deck: the railways', held at its bed; in a system only as what a seed crosses)
 
 
 def _tunnel_network(net, j):
@@ -457,6 +456,8 @@ def _pair_relations(net, i, j):
 
 
 LEVEL_BAND = {"deck": 1, "rail_deck": 1, "ground": 0, "rail": 0, "tunnel": -1}
+WAY = {"deck": findground.BRIDGE, "rail_deck": findground.BRIDGE, "ground": findground.GROUND,
+       "rail": findground.GROUND, "tunnel": findground.TUNNEL}      # (a member's kind as findground's)
 
 
 def _over(mi, mj):
@@ -582,8 +583,7 @@ def _shared_dips(net, seeds, rel, droot):
     for d, lst in under.items():
         for u, su, sd, qd in lst:
             mu = members[u]
-            if not (mu.kind == "rail_deck" or (mu.kind == "deck" and _dug_under(chain.get(droot(u), 0.0),
-                                                                                droot(u) in held))):
+            if not (mu.kind == "deck" and _dug_under(chain.get(droot(u), 0.0), droot(u) in held)):
                 continue        # (this crossing does not dig the road)
             w = _dip_half(net, u, su, d, sd, qd)
             reach = w + far
@@ -596,8 +596,7 @@ def _shared_dips(net, seeds, rel, droot):
                     if along is None:
                         continue
                     mi = members[i]
-                    digs = mi.kind == "rail_deck" or (mi.kind == "deck" and _dug_under(chain.get(droot(i), 0.0),
-                                                                                       droot(i) in held))
+                    digs = mi.kind == "deck" and _dug_under(chain.get(droot(i), 0.0), droot(i) in held)
                     if along <= w + (_dip_half(net, i, si, j, sj, qi) if digs else 0.0):
                         out.append((u, i))
     return out
@@ -659,19 +658,15 @@ def _system(net, seeds, rel):
             if j in S and str(mi.key) > str(mj.key):
                 continue                        # (a crossing of two of its own parts, once)
             mu, md = members[u], members[d]
-            if md.kind == "tunnel":
-                moves = "down"                  # (mapped as an underpass: it goes under)
-            elif mu.kind == "rail_deck":
-                moves = "down" if md.kind == "ground" else None
-            elif mu.kind == "deck":
-                if md.kind in ("rail", "rail_deck"):
-                    moves = "up"                # (a track is never dug)
-                elif md.kind == "ground":
-                    moves = "down" if _dug_under(chain_len[root(u)], root(u) in held) else "up"
-                else:
-                    moves = "up"
+            who = findground.leaves(WAY[md.kind], WAY[mu.kind])
+            if who == "lower":
+                moves = "down"                  # (mapped as an underpass: it goes under, what is over it stays)
+            elif who == "upper" and mu.kind == "deck":
+                # (the deck rises; not one too short to, nor one held over a road's short tunnel: the road under
+                # goes down with it. A track is never dug)
+                moves = "down" if md.kind == "ground" and _dug_under(chain_len[root(u)], root(u) in held) else "up"
             else:
-                moves = None
+                moves = None                    # (at grade; or a rail deck: the railways raise their own)
             if moves is None:
                 continue
             crossings.append(dict(u=u, su=su, d=d, sd=sd, q=np.asarray(q, np.float64), moves=moves,

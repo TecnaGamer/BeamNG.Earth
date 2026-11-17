@@ -1805,20 +1805,11 @@ class RailDeckHeightTest(unittest.TestCase):
     of its mapped ends, down the slopes of the street's cutting, and the track's level found beyond them: 37.3 m where
     the railways lay its bed at 40.1 (a neighbouring deck's level carried along the line), the deck drawn there. The
     street was dug for the shapes' deck, 8.75 m under the drawn one where 6.15 m clears it, and the track's fill beside
-    it stood 10.5 m tall. The shapes read the track's height and its deck's depth from the railways (track_beds): the
-    street clears the deck the railways draw. (railways.profile stands in here for a bed the railways raise over the
-    ground: the ramp to a deck along the line.)"""
-    LIFT = 2.8
+    it stood 10.5 m tall. The shapes read the track's height and its deck's depth from the railways (track_beds), and
+    a rail bridge over a street on the ground is the railways' to raise (findground, railways.plain_underpasses): the
+    street stays on its ground and clears the deck the railways draw."""
 
-    @classmethod
-    def profile(cls, rails, ground, underpasses=()):
-        out = []
-        for _f, _c, _kind, xy in rails:
-            zg = np.asarray(ground(xy), np.float64)
-            out.append((zg + cls.LIFT, zg))
-        return out
-
-    def test_the_street_clears_the_deck_the_railways_draw(self):
+    def test_the_railways_deck_clears_the_street_which_stays_on_its_ground(self):
         import railprofile
         import railways
         railprofile._NODES.clear()
@@ -1831,20 +1822,15 @@ class RailDeckHeightTest(unittest.TestCase):
             return np.full(np.shape(la), 30.0)
         g = grading._Planner(FRAME, FakeMD(f), elev)
         try:
-            with unittest.mock.patch.object(railways, "profile", self.profile):
-                prof = g._shape_region_calc(mapcells.cell_of(LAT, LON), "test")
+            prof = g._shape_region_calc(mapcells.cell_of(LAT, LON), "test")
+            bed = float(np.asarray(g._track_bed(np.array([[0.0, 0.0]])), np.float64)[0])
         finally:
             railprofile._NODES.clear()
-        got = [(xy, z) for xy, z, mode in prof.get("street", ()) if mode == "cut"]
-        self.assertTrue(got, "(the street goes down under the rail deck)")
-        xy = np.concatenate([q for q, _z in got])
-        z = np.concatenate([zz for _q, zz in got])
-        under = float(z[int(np.argmin(np.abs(xy[:, 1])))])
-        bed = 30.0 + self.LIFT                                  # (the railways' bed, the deck drawn on it)
-        underside = bed - (railways.DECK_D - railways.BALLAST_H)
+        self.assertFalse([1 for _xy, _z, mode in prof.get("street", ()) if mode == "cut"], "the street is not dug")
+        underside = bed - (railways.DECK_D - railways.BALLAST_H)    # (the railways' bed, the deck drawn on it)
         headroom = grading._gsh.HEADROOM_M + grading._gsh.HEADROOM_MARGIN_M
-        self.assertGreaterEqual(underside - under, headroom - 0.01, "the street under the deck as drawn clears it")
-        self.assertAlmostEqual(underside - under, headroom, delta=0.05, msg="and is dug no deeper")
+        self.assertGreaterEqual(underside - 30.0, headroom - 0.01, "the street on its ground clears the deck as drawn")
+        self.assertAlmostEqual(underside - 30.0, headroom, delta=0.05, msg="and the track rises no higher")
 
 
 if __name__ == "__main__":
