@@ -623,6 +623,21 @@ class RailwayTest(unittest.TestCase):
         station = x < -150
         self.assertLess(float(np.abs(z[station] - ground[station]).max()), 0.5, "the station on its own ground")
 
+    def test_a_bridge_end_down_a_deep_bank_does_not_lift_the_line(self):
+        """GitHub #1384, Findlay OH: a short rail bridge over a stream 11 m down its banks, its mapped west end in the
+        channel, the line at grade on the floodplain either side. The deck stands at the banks' level; the bed read at
+        that end (in the channel) is 11 m under it, and that 11 m was run out on top of the track's own level for
+        hundreds of metres: an embankment 8-11 m high. The track keeps its ground; only the deck spans the stream."""
+        def channel(xy):            # level at 10 m, an 11 m deep stream bed from x = 92 to 112 (the bridge: 100-150)
+            return np.where((xy[:, 0] > 92) & (xy[:, 0] < 112), -1.0, 10.0)
+        f, x, z = self._line(channel)
+        ground = channel(np.c_[x, np.zeros(len(x))])
+        line = (x < 80) | (x > 160)
+        self.assertLess(float(np.abs(z[line] - ground[line]).max()), 0.5, "the track on its own ground")
+        self.assertLess(float(z.max()), 10.0 + 0.5, "nothing over the banks' level")
+        deck = (x >= 112) & (x <= 150)
+        self.assertGreater(float(z[deck].min()), 9.0, "the deck at the banks' level over the stream")
+
     def test_bridge_over_a_dip_keeps_the_line_level(self):
         """A short bridge over a stream or an underpass road (the ground 3 m down under it): the deck straight at the
         line's height, no ramps (a 6 m clearance stood an 8 m culvert's track 6.8 m up on 4.5 m ramps, 2026-10-25)."""
