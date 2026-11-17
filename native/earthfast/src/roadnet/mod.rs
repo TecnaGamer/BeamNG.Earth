@@ -5,5 +5,7 @@
 //! Each piece replaced a Python function bit for bit (no format bump): the old Python is kept only inside the parity
 //! tests (server/tests/test_roadnet_*.py), never as a fallback (fast.require).
 
+pub mod columns;
 pub mod copies;
 pub mod pyfloat;
+pub mod pyobj;

@@ -6532,6 +6532,13 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(roadnet::copies::joint_desc, m)?)?;
     // 378: the road revamp's R2a (roadnet: the spec inputs' Python glue ported byte for byte): roadnet::copies::joint_desc
     // (roads.joint_desc: each joint from the copy in its own cell, keys by Python's round(x, 6))
-    m.add("VERSION", 378)?;
+    m.add_function(wrap_pyfunction!(roadnet::columns::cycle_streets, m)?)?;
+    m.add_function(wrap_pyfunction!(roadnet::columns::rule_cols, m)?)?;
+    m.add_function(wrap_pyfunction!(roadnet::columns::osm_values, m)?)?;
+    m.add_function(wrap_pyfunction!(roadnet::columns::layer_lengths, m)?)?;
+    m.add_function(wrap_pyfunction!(roadnet::columns::spec_columns, m)?)?;
+    // 379: R2a's spec input columns (roadnet::columns: cycle_streets, rule_cols, osm_values, layer_lengths,
+    // spec_columns: roads._spec_inputs' class codes, eligibility, rings, smoothness, name codes, sidewalks, connectors)
+    m.add("VERSION", 379)?;
     Ok(())
 }
