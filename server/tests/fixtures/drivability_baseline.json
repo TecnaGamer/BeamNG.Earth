@@ -95,7 +95,7 @@
   }
  },
  "boston_bowker": {
-  "steps": 139,
+  "steps": 124,
   "parts": {
    "bridge:347fec82-6337-4d8a-8851-d0e47606773c": {
     "step_m": 0.1954,
@@ -115,7 +115,7 @@
    "bridge:64dc338c-cfdb-4df3-abda-123224c4adf6": {
     "step_m": 0.0611,
     "grade": 0.0657,
-    "lift_g": 0.8967
+    "lift_g": 0.8806
    },
    "bridge:7927d8ea-21ca-4c09-8b47-7f380ae08994": {
     "step_m": 2.0176,
@@ -148,7 +148,7 @@
     "lift_g": 0.0
    },
    "ground:2e7b7974-ca36-4ff5-a881-f974b6303729": {
-    "step_m": 0.0236,
+    "step_m": 0.0402,
     "grade": 0.0715,
     "lift_g": 0.9827
    },
@@ -173,7 +173,7 @@
     "lift_g": 0.1828
    },
    "ground:64dc338c-cfdb-4df3-abda-123224c4adf6": {
-    "step_m": 0.2032,
+    "step_m": 0.3184,
     "grade": 0.1093,
     "lift_g": 0.8226
    },
@@ -196,11 +196,6 @@
     "step_m": 0.1829,
     "grade": 0.0779,
     "lift_g": 0.4346
-   },
-   "ground:b3ecba9f-12f6-40de-aa0d-7a7f6f8a810f": {
-    "step_m": 1.1613,
-    "grade": 0.0,
-    "lift_g": 0.0
    },
    "ground:b6fd05b8-b955-46a8-b12b-bf73a2d89b02": {
     "step_m": 0.0317,

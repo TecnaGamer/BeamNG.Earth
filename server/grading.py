@@ -687,6 +687,15 @@ UNDER_CHAIN_MAX_M = UNDER_MAX_BRIDGE_M   # m: such a chain spans this at most (O
                             # deep, ran into the trunk's next structure as a 3 m step in 12 m; left as it was)
 UNDER_STUB_M = 2 * APPROACH_MIN_CROSS_M     # m: a part this short (the carriageways' fork a deck ends on, 3 m stubs on the
                                             # M1's) joined to a span leaves it a single span
+# A deck longer than UNDER_MAX_BRIDGE_M with no carriageway profile (a viaduct, a long ramp) was no span for the dips at all,
+# and a road crossing under it near an abutment kept its own ground: the deck there is no higher than it climbs from the
+# abutment (DECK_MAX_GRADE), 3 m over the road 50 m in, so a truck stood under a 1.7 m ceiling (Popoli's SS17 ramps under the
+# A25's 500 m viaduct, Boston's Storrow Drive ramps under the Bowker Overpass' 150-270 m ramps). Such a deck is a span for
+# the crossings within UNDER_MAX_BRIDGE_M of either end, its height over them the climb from that end alone (under_deck_reach
+# with both ends that end's: the straight line between ends 500 m apart says nothing there); further along it is left
+# as it was (a long bridge's middle is not modelled). BNE_UNDERPASS_LONG=off: as before.
+UNDER_LONG_ON = os.environ.get("BNE_UNDERPASS_LONG", "on") != "off"
+
 UNDER_RUN_MIN_M = 2.0
 ABUT_UNDER_GRADE = 0.08     # past a road's abutment end, over the deck, its ground falls at this grade (grade_points)
 ABUT_NEAR_M = 14.0          # m from the bridge end the road is checked ...
@@ -3962,7 +3971,7 @@ class _Planner:
             n0 = [len(b) for b, _f, _r in uniq]
             uniq = _merge_span_chains(uniq)
             chained = {i for i, (b, _f, _r) in enumerate(uniq) if len(b) not in n0}
-        spans, rail_span = [], []
+        spans, rail_span, long_span = [], [], []
         ue = np.array([[b[0, :2], b[-1, :2]] for b, _f, _r in uniq], f64)        # (n, 2 ends, 2)
         stub = np.array([float(dnp.hypot(*np.diff(b[:, :2], axis=0).T).sum()) < UNDER_STUB_M for b, _f, _r in uniq])
         coarse = self._coarse(key)      # (there the railway rises over the road: railways.coarse_underpasses)
@@ -3975,7 +3984,8 @@ class _Planner:
             cw_deck = CW_ON and not rail and self._cw_z_at(b, b[:1]) is not None
             max_l = UNDER_CHAIN_MAX_M if n in chained else UNDER_MAX_BRIDGE_M
             mc = RAIL_MIN_CROSS_M if rail and limits else APPROACH_MIN_CROSS_M     # (shorter: signed roads only)
-            if L < 2 * mc or (L > max_l and not rail and not cw_deck):
+            long_ = UNDER_LONG_ON and not rail and not cw_deck and L > max_l       # (a span for its ends' reach alone)
+            if L < 2 * mc or (L > max_l and not rail and not cw_deck and not long_):
                 continue
             d = dnp.hypot(ue[:, :, None, 0] - ue[n, None, None, :, 0], ue[:, :, None, 1] - ue[n, None, None, :, 1])
             d[n] = np.inf                       # (another part's end within 0.75 m of either of its ends: joined)
@@ -3984,6 +3994,7 @@ class _Planner:
             if rail or cw_deck or not (d < 0.75).any():
                 spans.append((b, L, fixed, rail))
                 rail_span.append(rail)
+                long_span.append(long_)
         if not spans:
             return
         gids = sorted(ground)
@@ -4030,6 +4041,10 @@ class _Planner:
                     continue                    # (a short rail deck: a span only over a road with a height limit)
                 if arc_b < mc or arc_b > L - mc:
                     continue                    # a junction at the bridge's end
+                if long_span[bi] and (min(arc_b, L - arc_b) > UNDER_MAX_BRIDGE_M or ground[gids[i]][3] in APPROACH_SKIP):
+                    continue                    # (a long deck's middle: not modelled, UNDER_LONG_ON; nor a motorway or
+                    # trunk under it, never dipped for a long deck as it is never raised (APPROACH_SKIP): it keeps its
+                    # long, gentle grades; dipped by a ramp's climb, a motorway under an overpass's ramps stepped 0.64 m)
                 corridor = np.clip([arc_b - roadsmod.DECK_CLEAR_REACH_M, arc_b + roadsmod.DECK_CLEAR_REACH_M], 0.0, L)
                 cz, measured = None, False
                 if CW_ON and not rail_span[bi]:
@@ -4043,8 +4058,13 @@ class _Planner:
                     # (or higher where it climbs from its ends as the abutments' lifts were asked: bridge_lifts; the
                     # straight line between its ends alone dug I-75 under SR 56's decks at Wesley Chapel, GitHub #1043)
                     import fast
-                    deck = float(fast._ef.under_deck_reach(float(ze[0]), float(ze[1]), float(L), float(corridor[0]),
-                                                           float(corridor[1]), float(roadsmod.DECK_GRADE),
+                    lo_c, hi_c = float(corridor[0]), float(corridor[1])
+                    if long_span[bi]:           # (a long deck: the climb from the end the crossing is nearest to, alone)
+                        if arc_b > L - arc_b:
+                            ze, lo_c, hi_c = ze[::-1], L - hi_c, L - lo_c
+                        ze = np.array([ze[0], ze[0]])
+                    deck = float(fast._ef.under_deck_reach(float(ze[0]), float(ze[1]), float(L), lo_c, hi_c,
+                                                           float(roadsmod.DECK_GRADE),
                                                            float(APPROACH_FLAT_M), bool(UNDER_CLIMB and not rail)))
                     if UNDER_MEASURED_ON and not rail:
                         # (a measured deck stands where it was measured: an arched overpass's middle over its ends'
