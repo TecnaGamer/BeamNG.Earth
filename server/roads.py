@@ -7456,10 +7456,15 @@ DECK_SPAN_RATIO = 22.0  # a deck is its main span / this deep (girder bridges ru
 # lower each, its ramps gentler. A chain takes the clearance of the highest class it crosses (one chain, one clear;
 # the most demanding road under it, 5.0 m when unknown). Off by default until reviewed in game; BNE_LEVEL_SPACING=on.
 LEVEL_SPACING = os.environ.get("BNE_LEVEL_SPACING", "off") == "on"
-LOWER_CLEAR_M = {"motorway": 5.0, "trunk": 5.0, "service": 4.0, "track": 4.0, "footway": 2.7, "path": 2.7,
-                 "cycleway": 2.7, "pedestrian": 2.7, "bridleway": 2.7, "steps": 2.7, "rail": 6.5}
-LOWER_CLEAR_ROAD_M = 4.7        # m over any other road ...
-LOWER_CLEAR_UNKNOWN_M = 5.0     # ... and where the road under is not known (the most demanding road's)
+# (clearance study 2026-11-17: the unsigned clearances the main road standards keep: US interstates 16 ft (4.9 m),
+# UK 16 ft 6 in (5.03 m) on every unsigned road, Germany 4.50 m + 0.20 m, the Netherlands 4.50 m, France 4.75 m on main
+# roads and 4.30 m on others; farm and service underpasses 4.0 m; foot and cycle ways 2.5 m; an electrified railway
+# ~6.0 m from rail top to soffit. A lower real bridge carries a maxheight sign, which road_sign_at reads first)
+LOWER_CLEAR_M = {"motorway": 4.9, "trunk": 4.9, "primary": 4.9, "motorway_link": 4.9, "trunk_link": 4.9,
+                 "primary_link": 4.9, "service": 4.0, "track": 4.0, "footway": 2.5, "path": 2.5,
+                 "cycleway": 2.5, "pedestrian": 2.5, "bridleway": 2.5, "steps": 2.5, "rail": 6.0}
+LOWER_CLEAR_ROAD_M = 4.5        # m over any other road ...
+LOWER_CLEAR_UNKNOWN_M = 4.9     # ... and where the road under is not known (the most demanding road's)
 LEVEL_MARGIN_M = 0.1
 LEVEL_DEPTH_RATIO = 0.045       # m of deck depth per m of main span (precast girders, AASHTO's 0.045 L) ...
 LEVEL_DEPTH_RANGE = (0.7, 4.0)  # ... within these
@@ -7480,6 +7485,46 @@ def deck_crest_radii(specs):
                       flag(getattr(sp, "urban", False)), flag(getattr(sp, "link", False))] for sp in specs],
                     np.float64).reshape(-1, 4)
     return [float(r) for r in fast._ef.deck_crest_radii(rows)]
+
+
+# A short motorway / trunk overpass deck holds the line between its ends (clearance study 2026-11-17, prototype): its
+# clearance over a road under it is what that line leaves, never less than FAST_DECK_FLOOR_M under its girders; the
+# road under dips for the rest (grading: such a deck seen as its ends' line, no climb). Without it, a deck short of the
+# clearance rule climbed to it within its own 20-50 m: a 1-3 m crest at 130 km/h (the 417 over Carling Avenue in
+# Ottawa, 1.4 m in 8 m). BNE_FAST_DECK_LINE=on.
+FAST_DECK_LINE = os.environ.get("BNE_FAST_DECK_LINE", "off") == "on"
+FAST_DECK_CLASSES = ("motorway", "trunk")
+FAST_DECK_MAX_M = 150.0     # m: a chain this long at most (a viaduct climbs on its own approaches' grade)
+FAST_DECK_FLOOR_M = 4.0     # m under the girders at least
+
+
+def _fast_deck_cap(lines, required, ground_fn, clear, depth):
+    """required (deck_profile crossings) with each road crossing's clearance capped at what the line between the
+    chain's two free ends leaves over it (FAST_DECK_LINE), FAST_DECK_FLOOR_M + depth at least. Pure given ground_fn."""
+    ls = [np.asarray(ln, np.float64)[:, :2] for ln in lines]
+    if sum(float(dnp.hypot(*np.diff(ln, axis=0).T).sum()) for ln in ls if len(ln) >= 2) > FAST_DECK_MAX_M:
+        return required
+    ends = [ln[e] for ln in ls if len(ln) >= 2 for e in (0, -1)]
+    free = [p for i, p in enumerate(ends)
+            if not any(j != i and float(dnp.hypot(*(q - p))) < 0.75 for j, q in enumerate(ends))]
+    if len(free) != 2:
+        return required
+    z0, z1 = (float(v) for v in np.asarray(ground_fn(np.array(free, np.float64)), np.float64).reshape(-1)[:2])
+    out = []
+    for c in required:
+        if not _road_crossing(c):
+            out.append(c)
+            continue
+        pi, arc, zu = c[0], c[1], float(c[2])
+        ln = ls[pi]
+        s = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(ln, axis=0).T))]
+        p = np.array([np.interp(arc, s, ln[:, 0]), np.interp(arc, s, ln[:, 1])])
+        d0, d1 = float(dnp.hypot(*(p - free[0]))), float(dnp.hypot(*(p - free[1])))
+        top = z0 + (z1 - z0) * d0 / max(1e-9, d0 + d1)
+        own = float(c[3]) if len(c) > 3 and c[3] is not None else float(clear)
+        cap = max(FAST_DECK_FLOOR_M + float(depth), top - zu)
+        out.append((pi, arc, zu, RoadClear(min(own, cap))) if cap < own else c)
+    return out
 
 
 def lower_clear(classes):
@@ -8227,6 +8272,10 @@ class BridgeProfiles:
         pins = _ground_pins(lines, gl)          # (once: pure in lines and gl, which stay)
 
         crest = deck_crest_radii([pool[k][0] for k in comp]) if DECK_K_SPEED else None
+        if FAST_DECK_LINE and cr and all(str(getattr(pool[k][0], "cls", "")) in FAST_DECK_CLASSES
+                                         and not getattr(pool[k][0], "link", False) for k in comp):
+            required = _fast_deck_cap(lines, required, self._landing_ground(lines, gl),
+                                      deck_road_clear(depth, under), DECK_FULL_DEPTH if depth is None else depth)
 
         def solve(ground_fn):
             return deck_profile(lines, ground_fn, required + rails + water, clear=deck_road_clear(depth, under),

@@ -3970,7 +3970,8 @@ class _Planner:
                     import fast
                     deck = float(fast._ef.under_deck_reach(float(ze[0]), float(ze[1]), float(L), float(corridor[0]),
                                                            float(corridor[1]), float(roadsmod.DECK_GRADE),
-                                                           float(APPROACH_FLAT_M), bool(UNDER_CLIMB and not rail)))
+                                                           float(APPROACH_FLAT_M), bool(UNDER_CLIMB and not rail and not (
+                                                               roadsmod.FAST_DECK_LINE and fixed))))
                     if UNDER_MEASURED_ON and not rail:
                         # (a measured deck stands where it was measured: an arched overpass's middle over its ends'
                         # straight line, which dug I-75 1.5 m down under the 108 m deck at Findlay, Ohio, flat in the
@@ -3987,9 +3988,13 @@ class _Planner:
                 # (a rail deck's height is its bed: its own depth under the ballast's top, railways.DECK_D)
                 depth = railwaysmod.DECK_D - railwaysmod.BALLAST_H if rail else \
                     roadsmod.deck_depth(roadsmod.geom_span([b]))
-                clear = roadsmod.deck_road_clear(depth) + ROAD_LIFT
+                # (LEVEL_SPACING: the clearance of this road's class, as the deck's own solve asks for it; a measured
+                # deck: that clearance at most UNDER_MEASURED_HEADROOM_M, not 6.0 - 4.5 off the class's)
+                under_cls = None if rail or not roadsmod.LEVEL_SPACING else [ground[gids[i]][3]]
+                clear = roadsmod.deck_road_clear(depth, under_cls) + ROAD_LIFT
                 if measured:                    # (its real headroom, not the one a guessed deck is given)
-                    clear -= roadsmod.MIN_BRIDGE_HEADROOM_M - UNDER_MEASURED_HEADROOM_M
+                    clear -= max(0.0, (roadsmod.lower_clear(under_cls) if under_cls else roadsmod.MIN_BRIDGE_HEADROOM_M)
+                                 - UNDER_MEASURED_HEADROOM_M)
                 if sign is not None:            # (a rail deck over a road with a height limit: that, not the guess)
                     clear = depth + sign + RAIL_SIGN_MARGIN_M + ROAD_LIFT
                     signed.add(len(cands))

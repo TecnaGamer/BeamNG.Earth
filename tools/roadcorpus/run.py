@@ -36,7 +36,7 @@ DATA_DIRS = ("dem", "mapdata", "mapdata-mirror", "pagesdata", "roadz")
 # the categories shown in the summary: (scorecard key, label)
 CATS = (("clearance", "deck on road"), ("deck_deck", "stack"), ("end_step", "bridge end"), ("overlap", "deck overlap"),
         ("steep_deck", "steep deck"), ("unbridged", "unbridged"), ("rail_block", "rail block"), ("spikes", "spikes"), ("humps", "junction humps"),
-        ("widths", "width jumps"), ("tunnels", "tunnels"), ("missing_deck", "missing deck"), ("track", "racetrack"))
+        ("widths", "width jumps"), ("tunnels", "tunnels"), ("missing_deck", "missing deck"), ("track", "racetrack"), ("ride", "ride"))
 # extra columns: (label, scorecard key, field)
 EXTRA = (("wavy decks", "deck_shape", "wavy"), ("decks on ground", "deck_shape", "on_ground"),
          ("rail beds > 3 m", "rail_bed", "tall3"), ("unpaved m", "unpaved_m", None))
