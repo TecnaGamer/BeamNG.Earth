@@ -1,5 +1,5 @@
 """Earth's level decisions and solved shapes against the measured shape of real junctions (tests/truth.py: swisstopo's
-3D lines round three places in Zurich, and Earth's own map and elevation there, both offline).
+3D lines round five places in Switzerland, and Earth's own map and elevation there, both offline).
 
 One direction at a time, each in seconds and with no build:
   1. the survey alone: its levels order every real crossing (what a level rule can rest on);
@@ -21,20 +21,25 @@ SURVEY_M = 1.5          # m: the survey's own accuracy (0.2-1.5 m): a shape near
 # what holds today, per place
 TODAY = {
     "zurich_brunau": dict(
-        over_wrong=40,          # roads over the Zimmerberg railway tunnel: a track in a tunnel has no kind, at grade
-        reversed=3, at_grade=0,  # a link's deck at level 3 under the viaduct; the viaduct's parts read as ground
+        unmatched=12,           # real crossings with no line of Earth's along one of the two (not judged)
         shape_p95=6.9,          # m: the Sihl viaduct's decks, solved up to 10.8 m off the real ones
         under_laws=7, steeper=2),
     "zurich_europabruecke": dict(
-        over_wrong=0,
-        reversed=0, at_grade=4,  # the bridge's north end is ground on the map: the roads under it cross it at grade
+        unmatched=22,           # (9 of them: the tracks over a 10 m road's underpass)
         shape_p95=6.5,          # m: the roads under the tracks dug 3-4 m deeper than they are
         under_laws=16, steeper=2),
     "zurich_duttweilerbruecke": dict(
-        over_wrong=0,
-        reversed=3, at_grade=0,  # the railway viaduct over the bridge: every track is level 1, the bridge 2
+        unmatched=20,
         shape_p95=3.8,
         under_laws=5, steeper=1),
+    "goeschenen_gotthard_portal": dict(
+        unmatched=5,
+        shape_p95=7.9,          # m: the street under the motorway's links dug 6 m deeper than it is
+        under_laws=0, steeper=1, graded=60),
+    "kempttal_viaduct": dict(
+        unmatched=2, right=4,
+        shape_p95=7.9,          # m: the road under the viaduct dug 4 m deeper than it is, the viaduct 1.9 m higher
+        under_laws=1, steeper=0, graded=60),
 }
 SITES = sorted(TODAY)
 
@@ -55,12 +60,8 @@ def test_the_surveys_levels_alone_order_every_real_crossing(site):
 
 
 @pytest.mark.parametrize("site", SITES)
-def test_the_order_given_the_true_kinds_and_levels_is_no_worse(site):
-    assert len(truth.over_wrong(site)) <= TODAY[site]["over_wrong"]
-
-
-@pytest.mark.parametrize("site", _goal({"zurich_brunau"}, "a track in a tunnel under a road is taken at grade"))
 def test_the_order_given_the_true_kinds_and_levels_is_the_real_one(site):
+    # (Brunau's 40 roads over the Zimmerberg railway tunnel were at grade: a track's level was never read)
     assert truth.over_wrong(site) == []
 
 
@@ -87,17 +88,17 @@ def test_the_shapes_solved_from_the_true_facts_are_the_real_roads_within_the_sur
 
 
 @pytest.mark.parametrize("site", SITES)
-def test_earths_reading_of_the_map_orders_the_real_crossings_no_worse(site):
-    r = measured(site)["earth_orders"]
-    assert r["reversed"] <= TODAY[site]["reversed"], measured(site)["earth_orders_wrong"]
-    assert r["at grade"] <= TODAY[site]["at_grade"], measured(site)["earth_orders_wrong"]
-    assert r["right"] >= 20, "(the two sides are matched: most of the place's crossings are read)"
-
-
-@pytest.mark.parametrize("site", _goal(set(SITES), "Earth's members order some real crossings wrongly or not at all"))
-def test_earths_reading_of_the_map_orders_every_real_crossing(site):
+def test_earths_reading_of_the_map_orders_every_real_crossing_it_has_both_lines_of(site):
+    # (the Duttweilerbruecke, level 2, was over the railway viaduct on level 3 that crosses over it: 3 crossings)
     r = measured(site)["earth_orders"]
     assert r["reversed"] == 0 and r["at grade"] == 0, measured(site)["earth_orders_wrong"]
+    assert r["right"] >= TODAY[site].get("right", 20), "(most of the place's crossings are matched and read)"
+    assert r["unmatched"] <= TODAY[site]["unmatched"], "(no more crossings left unjudged than today)"
+
+
+@pytest.mark.parametrize("site", _goal(set(SITES), "real crossings with no line of Earth's along one of the two"))
+def test_every_real_crossing_is_judged(site):
+    assert measured(site)["earth_orders"]["unmatched"] == 0
 
 
 @pytest.mark.parametrize("site", SITES)
@@ -106,7 +107,8 @@ def test_the_laws_ask_no_more_clearance_of_the_real_bridges_than_today(site):
     assert r["real_under_the_laws"] <= TODAY[site]["under_laws"], r["real_clearance_min_median"]
 
 
-@pytest.mark.parametrize("site", _goal(set(SITES), "the laws' 6 m headroom against bridges built for less: a decision"))
+@pytest.mark.parametrize("site", _goal({s for s in SITES if TODAY[s]["under_laws"]},
+                                          "the laws' 6 m headroom against bridges built for less: a decision"))
 def test_every_real_bridge_clears_what_the_laws_ask(site):
     assert measured(site)["real_under_the_laws"] == 0, measured(site)["real_clearance_min_median"]
 
@@ -114,7 +116,7 @@ def test_every_real_bridge_clears_what_the_laws_ask(site):
 @pytest.mark.parametrize("site", SITES)
 def test_the_real_roads_keep_the_laws_grades(site):
     r = measured(site)
-    assert r["roads_graded"] >= 100
+    assert r["roads_graded"] >= TODAY[site].get("graded", 100)
     assert r["roads_steeper_than_the_laws"] <= TODAY[site]["steeper"]
 
 

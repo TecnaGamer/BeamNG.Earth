@@ -531,3 +531,32 @@ def test_a_signed_road_under_a_wide_deck_has_its_headroom_under_the_whole_deck()
                 under += 1
                 assert _shape_z(net, shapes, "a5", ix.at_s(net.lines[deck], net.s[deck], s_u)) - z[k] >= need - 0.01
     assert under >= 3                                                   # (the deck's whole width, not one point)
+
+
+def test_a_railway_viaduct_over_a_road_bridge_is_over_it_by_the_maps_levels():
+    # Zurich's Duttweilerbruecke (level 2) under the railway viaduct that crosses 7 m over it (level 3): every track
+    # was level 1, the bridge over the viaduct and raised over the track's bed for it
+    m = [Member("yard", _line(-300, -40, 300, -40, 80), "rail", "rail", None, 0, 2.0, None),
+         Member("bridge", _line(-60, -100, 60, 100, 30), "deck", "secondary", 50, 2, 5.0, None),
+         Member("south", _line(-200, -330, -60, -100), "ground", "secondary", 50, 0, 5.0, None),
+         Member("north", _line(60, 100, 200, 330), "ground", "secondary", 50, 0, 5.0, None),
+         Member("viaduct", _line(-400, 0, 400, 0, 100), "rail_deck", "rail", None, 3, 2.0, None)]
+    net, systems = ix.find_systems(m)
+    assert ix._over(m[1], m[4]) == "j" and ix._over(m[4], m[1]) == "i"
+    assert ix._over(m[1], m[0]) == "i", "(and the bridge over the yard's tracks on the ground)"
+    assert len(systems) == 1
+    for c in systems[0]["crossings"]:
+        assert net.m[c["d"]].key != "viaduct", "(nothing is over the viaduct)"
+        assert not (net.m[c["u"]].key == "bridge" and net.m[c["d"]].kind == "rail_deck")
+
+
+def test_the_maps_levels_order_two_structures_of_one_kind_and_a_track_as_a_road():
+    def mem(kind, level, cls="rail"):
+        return Member(f"{kind}{level}", _line(0, 0, 10, 0, 3), kind, cls, None, level, 2.0, None)
+    assert ix._over(mem("rail_deck", 3), mem("rail_deck", 1)) == "i", "(a viaduct over another)"
+    assert ix._over(mem("rail_deck", 1), mem("deck", 2, "primary")) == "j"
+    assert ix._over(mem("tunnel", -1, "primary"), mem("tunnel", -2, "primary")) == "i", "(tunnels on two levels)"
+    assert ix._over(mem("ground", 0, "primary"), mem("rail", -2)) == "i", "(a street over a track in a tunnel)"
+    assert ix._over(mem("ground", 0, "primary"), mem("rail", 0)) is None, "(a level crossing)"
+    assert ix._over(mem("deck", 1, "primary"), mem("deck", 1, "primary")) is None
+    assert ix._over(mem("deck", -1, "primary"), mem("ground", 0, "primary")) == "i", "(a bridge is over the ground)"

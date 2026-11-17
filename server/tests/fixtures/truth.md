@@ -13,5 +13,7 @@ file (3.6 GB) is not in the repository and no test downloads anything: only thes
 | zurich_brunau | 47.344339, 8.519291: the A3's viaducts over the Sihl, the Uetliberg tunnel's portals, a railway tunnel under them | 600 |
 | zurich_europabruecke | 47.393704, 8.493146: a road bridge over a motorway, its loop ramp, a railway yard and underpasses | 400 |
 | zurich_duttweilerbruecke | 47.389179, 8.510263: a road bridge over a railway yard, a railway viaduct over the bridge | 400 |
+| goeschenen_gotthard_portal | 46.671997, 8.592603: the Gotthard road tunnel's north portal, its links and roundabout, the railway beside | 500 |
+| kempttal_viaduct | 47.437132, 8.697650: a road viaduct over a valley, a railway and a side road, its loop ramp | 500 |
 
 `python server/tests/truth.py [NAME ...]` prints a place's measurements; tests/test_truth.py holds them.

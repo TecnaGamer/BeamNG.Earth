@@ -12,7 +12,8 @@ from types import SimpleNamespace
 import numpy as np
 
 FIXTURES = Path(__file__).parent / "fixtures"
-SITES = ("zurich_brunau", "zurich_europabruecke", "zurich_duttweilerbruecke")
+SITES = ("zurich_brunau", "zurich_europabruecke", "zurich_duttweilerbruecke", "goeschenen_gotthard_portal",
+         "kempttal_viaduct")
 
 # OBJEKTART of a road a car drives (the rest are paths, squares, ferries): its Earth class
 ROAD_CLASS = {"Autobahn": "motorway", "Autostrasse": "trunk", "Ausfahrt": "motorway_link", "Einfahrt": "motorway_link",
@@ -159,6 +160,7 @@ def z_at(line, s):
 # ---- Earth's side of a place: its replay (the map and the elevation it reads there), its decisions, its shapes ------
 MATCH_M = 8.0           # m from a surveyed line's point one of Earth's lines lies and is still that line ...
 MATCH_COS = 0.85        # ... going its way within ~32 deg (the crossing line under it is not)
+MATCH_ALONG_M = (-20.0, -10.0, 0.0, 10.0, 20.0)     # m along the surveyed line from the crossing it is followed at
 THIN_DECK_M = 0.9       # m: the thinnest deck the laws give a bridge (gradeshapes.DECK_MIN_DEPTH_M)
 GRADE_BASE_M = 20.0     # m over which a surveyed road's grade is read (its heights are good to a few dm)
 
@@ -222,15 +224,24 @@ def earth_orders(name):
     lines = [np.asarray(m.line, np.float64)[:, :2] for m in mem]
     boxes = np.array([np.r_[ln.min(0) - MATCH_M, ln.max(0) + MATCH_M] for ln in lines])
 
-    def match(ln, p):
+    def match(ln, p, s):
+        # (the line of Earth's that follows the surveyed one along MATCH_ALONG_M each side of the crossing, not the
+        # nearest at the crossing's point: the road under a bridge lies nearer that point than the bridge's own
+        # carriageway line, 3 m off the survey's one line for both)
         _d, tt = _near(ln.xyz[:, :2], p)
+        sl = arclen(ln.xyz)
+        sv = np.clip(s + np.array(MATCH_ALONG_M), 0.0, sl[-1])
+        pts = np.c_[np.interp(sv, sl, ln.xyz[:, 0]), np.interp(sv, sl, ln.xyz[:, 1])]
         best = None
         for q in np.flatnonzero((boxes[:, 0] <= p[0]) & (boxes[:, 2] >= p[0]) & (boxes[:, 1] <= p[1]) & (boxes[:, 3] >= p[1])):
             if (mem[q].kind in ("rail", "rail_deck")) != (ln.layer == "rail"):
                 continue
-            d, t = _near(lines[q], p)
-            if d <= MATCH_M and abs(float(t @ tt)) >= MATCH_COS and (best is None or d < best[0]):
-                best = (d, int(q))
+            d0, t = _near(lines[q], p)
+            if d0 > MATCH_M or abs(float(t @ tt)) < MATCH_COS:
+                continue
+            d = [_near(lines[q], pt)[0] for pt in pts]
+            if max(d) <= MATCH_M and (best is None or float(np.mean(d)) < best[0]):
+                best = (float(np.mean(d)), int(q))
         return None if best is None else best[1]
     out = {"right": [], "reversed": [], "at grade": [], "unmatched": []}
     for c in separations(ws, box=site.half):
@@ -239,7 +250,7 @@ def earth_orders(name):
             continue
         u, d = (a, b) if c.dz > 0 else (b, a)
         tag = (f"{u.cls}/{u.kind}/{u.level}", f"{d.cls}/{d.kind}/{d.level}")
-        ea, eb = match(a, c.xy), match(b, c.xy)
+        ea, eb = match(a, c.xy, c.si), match(b, c.xy, c.sj)
         if ea is None or eb is None or ea == eb:
             out["unmatched"].append(tag + ("",))
             continue
