@@ -357,7 +357,7 @@ def build_tile(md, frame, tx, ty, elev, context, decks, left_hand, mph, out_dir,
         if style is None:
             continue
         town = is_town(b)       # (a small board: the local name only, no plates, on a pole or a stand of its own)
-        content = [c for c in (_row_content(style, r, table, pl, factor, rounding, show_en and not town, not town)
+        content = [c for c in (_row_content(style, r, table, pl, factor, rounding, show_en and cc != 'NO' and not town, not town)
                                for r in mine) if c]
         if not content:
             continue

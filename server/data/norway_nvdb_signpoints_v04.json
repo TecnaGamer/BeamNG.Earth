@@ -1,0 +1,130 @@
+{
+  "version": "0.4.0-test",
+  "source": "Statens vegvesen NVDB API Les V4, Skiltplate (96) / Skiltpunkt (95)",
+  "license": "NLOD 2.0",
+  "study_area": "Batnfjordsora, Gjemnes, Norway",
+  "sample_size": 8,
+  "experimental": "Sign positions are surveyed, but absolute facing derived provisionally from vector registered road reference -> signpoint; NOT independently confirmed by side-road bearing.",
+  "signs": [
+    {
+      "plate_id": 80833718,
+      "signpoint_id": 80833719,
+      "number": "202",
+      "orientation": "parallelt_fra_veg",
+      "point_lonlat": [
+        7.6787657,
+        62.89390647
+      ],
+      "road_ref_lonlat": [
+        7.67871026,
+        62.89387043
+      ],
+      "road_sequence_id": 249530
+    },
+    {
+      "plate_id": 80833787,
+      "signpoint_id": 80833788,
+      "number": "202",
+      "orientation": "parallelt_fra_veg",
+      "point_lonlat": [
+        7.68183917,
+        62.8928921
+      ],
+      "road_ref_lonlat": [
+        7.68165111,
+        62.8928543
+      ],
+      "road_sequence_id": 249530
+    },
+    {
+      "plate_id": 80833789,
+      "signpoint_id": 80833790,
+      "number": "202",
+      "orientation": "parallelt_fra_veg",
+      "point_lonlat": [
+        7.68188776,
+        62.89281088
+      ],
+      "road_ref_lonlat": [
+        7.68168032,
+        62.89280081
+      ],
+      "road_sequence_id": 249530
+    },
+    {
+      "plate_id": 80833827,
+      "signpoint_id": 80833828,
+      "number": "202",
+      "orientation": "parallelt_fra_veg",
+      "point_lonlat": [
+        7.68005667,
+        62.89182699
+      ],
+      "road_ref_lonlat": [
+        7.68019337,
+        62.89178516
+      ],
+      "road_sequence_id": 249530
+    },
+    {
+      "plate_id": 80833837,
+      "signpoint_id": 80833838,
+      "number": "202",
+      "orientation": "parallelt_fra_veg",
+      "point_lonlat": [
+        7.6801605,
+        62.89163583
+      ],
+      "road_ref_lonlat": [
+        7.68002557,
+        62.89168233
+      ],
+      "road_sequence_id": 249530
+    },
+    {
+      "plate_id": 142993275,
+      "signpoint_id": 142993274,
+      "number": "202",
+      "orientation": "parallelt_fra_veg",
+      "point_lonlat": [
+        7.6700785,
+        62.88497706
+      ],
+      "road_ref_lonlat": [
+        7.67013253,
+        62.88494926
+      ],
+      "road_sequence_id": 249530
+    },
+    {
+      "plate_id": 761367456,
+      "signpoint_id": 761367455,
+      "number": "202",
+      "orientation": "parallelt_fra_veg",
+      "point_lonlat": [
+        7.67967157,
+        62.89345335
+      ],
+      "road_ref_lonlat": [
+        7.6797662,
+        62.89351706
+      ],
+      "road_sequence_id": 249530
+    },
+    {
+      "plate_id": 761367458,
+      "signpoint_id": 761367457,
+      "number": "202",
+      "orientation": "parallelt_fra_veg",
+      "point_lonlat": [
+        7.67793152,
+        62.89405478
+      ],
+      "road_ref_lonlat": [
+        7.67800449,
+        62.8941069
+      ],
+      "road_sequence_id": 249530
+    }
+  ]
+}

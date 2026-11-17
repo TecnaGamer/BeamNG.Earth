@@ -1383,6 +1383,14 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
     # (the tile's own, at their mapped points: not moved off the clearance like a guessed one)
     rows += [list(r) for r in mapped_lamps if _owns(box, r[1], r[2])]
     rows = citylamps.localize(rows, poleprofiles.lamp_country_selector(pole_profile, pole_frame))
+    # BNE_NO_NVDB_SIGNS_FURNITURE_V04: hide duplicate generated give-way props
+    # only near the eight survey signpoints and only with the test enabled.
+    if pole_frame is not None:
+        import norway_nvdb_signs_v06 as _no_nvdb  # BNE_NO_NVDB_SIGNS_NATIONWIDE_V06
+        rows = _no_nvdb.suppress_furniture_yields(rows, pole_frame)
+        # BNE_NVDB_DESTINATIONS_V07: suppress speculative Norwegian give-way furniture.
+        import norway_nvdb_destinations_v07 as no_dest
+        rows = no_dest.suppress_furniture_yields(rows, pole_frame)
     return under_decks(rows + lamp_lenses(rows), list(decks), wires)
 
 
