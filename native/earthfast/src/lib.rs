@@ -6550,6 +6550,10 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(roadnet::assembly::ground_med_dir, m)?)?;
     // 381: R2a's spec assembly (roadnet::assembly: specs_of, dual_cols, dual_apply, ground_med_dir: roads._specs_of,
     // dual_carriageways' columns and result, _bridge_specs' ground columns)
-    m.add("VERSION", 381)?;
+    m.add_function(wrap_pyfunction!(roadnet::laneflow::lane_flow_rows, m)?)?;
+    m.add_function(wrap_pyfunction!(roadnet::laneflow::lane_flow_lists, m)?)?;
+    // 382: R2a's lane flow rows (roadnet::laneflow: lane_flow_rows, lane_flow_lists: roads._lane_flow_rows with
+    // _ramp_candidates, _lane_flow_local's lists)
+    m.add("VERSION", 382)?;
     Ok(())
 }

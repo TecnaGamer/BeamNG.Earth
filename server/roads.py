@@ -2708,83 +2708,40 @@ def _lane_flow_ids(f):
 def _lane_flow_rows(f):
     """Layer f's rows for lane_flow, made once per layer (kept on it): (first and last coordinate (n, 4: lon, lat, lon,
     lat; 0 without any), coordinate count, attrs (n, 4): one-way sign or 0, the map's lanes or nan, link, the class's
-    default lanes or nan, 1 for a road the ramp lane rule checks: _ramp_candidates). Each cell's solve covers the 3 x 3 around it, so every layer's rows were made again for each
-    of its neighbours' solves: 6 of lane_flow's 7 CPU-s in Manhattan's first visit, the solve itself 0.3 (2026-11-02);
-    the rows of all features at once (2026-11-08)."""
+    default lanes or nan, 1 for a road the ramp lane rule checks: a motorway link with RAMP_RULE_MIN_LANES (3) or more
+    mapped lanes and nothing else saying it is that wide: no mapped width (OpenStreetMap's, Overture's width rule) and
+    no turn:lanes (its own, or a way's along it); tapers::ramp_lane_rule). Each cell's solve covers the 3 x 3 around
+    it, so every layer's rows were made again for each of its neighbours' solves: 6 of lane_flow's 7 CPU-s in
+    Manhattan's first visit, the solve itself 0.3 (2026-11-02). (earthfast roadnet::laneflow::lane_flow_rows)"""
     got = f.__dict__.get("_lane_flow_rows")
     if got is not None:
         return got
+    import fast
+    import railtags
     import roadlanes
-    n = len(f)
-    po = np.asarray(f.part_off, np.int64)
-    starts = np.asarray(f.coord_off, np.int64)[np.asarray(f.ring_off, np.int64)[po[:n]]]
-    ends = np.asarray(f.coord_off, np.int64)[np.asarray(f.ring_off, np.int64)[po[1:n + 1]]]
-    npts = np.ascontiguousarray(ends - starts, np.int64)
-    pts = np.zeros((n, 4))
-    some = npts > 0
-    if some.any():
-        ll = np.asarray(f.lonlat, np.float64)
-        pts[some, :2] = ll[starts[some]]
-        pts[some, 2:] = ll[ends[some] - 1]
-    attrs = np.zeros((n, 5))
-    attrs[:, 1] = np.nan
-    attrs[:, 3] = np.nan
-    cls_a, sub_a = f.attrs.get("class"), f.attrs.get("subtype")
-    counts = roadlanes.generated_counts(f)
-    table = f.rules.get("oneway")
-    if cls_a is not None and n and table is not None and len(table.feature):
-        cls = np.asarray(cls_a).astype(str)
-        sel = np.isin(cls, sorted(LANE_FLOW_CLASSES))
-        if sub_a is not None:
-            sel &= np.asarray(sub_a).astype(str) == "road"
-        maj = table.majors(n)
-        sel &= maj >= 0
-        idx = np.flatnonzero(sel)
-        if len(idx):
-            v = np.asarray(table.value)[maj[idx]].astype(np.float64)
-            attrs[idx, 0] = np.where(v < 0, -1.0, 1.0)
-            attrs[idx, 1] = [np.nan if counts[i] is None else float(int(counts[i])) for i in idx.tolist()]
-            attrs[idx, 2] = np.where(roadlanes.links(f)[idx], 1.0, 0.0)
-            for c in np.unique(cls[idx]).tolist():
-                if c not in _LANE_FLOW_DFLT:
-                    _LANE_FLOW_DFLT[c] = lane_layout(Spec(carriageway(c, "paved", False, None, True, None), "paved",
-                                                          False, c, True))[1]
-                attrs[idx[cls[idx] == c], 3] = float(_LANE_FLOW_DFLT[c])
-            attrs[idx, 4] = _ramp_candidates(f, idx, cls, attrs[idx, 1], attrs[idx, 2] > 0.5)
-    got = f.__dict__["_lane_flow_rows"] = (pts, npts, attrs)
+    fast.require(382, "lane_flow_rows")
+    a = f.attrs
+    got = f.__dict__["_lane_flow_rows"] = fast._ef.lane_flow_rows(
+        np.ascontiguousarray(f.part_off, np.int64), np.ascontiguousarray(f.ring_off, np.int64),
+        np.ascontiguousarray(f.coord_off, np.int64), np.ascontiguousarray(f.lonlat, np.float64).reshape(-1, 2),
+        a.get("class"), a.get("subtype"), list(roadlanes.generated_counts(f)), f.rules.get("oneway"),
+        np.ascontiguousarray(roadlanes.links(f), bool), {c: _lane_flow_default(c) for c in LANE_FLOW_CLASSES},
+        bool(RAMP_LANE_RULE), lambda: (width_table(f), _osm_widths(f, None, None)),
+        [a.get("osm_" + k) for k in _TURN_LANES],
+        a.get(railtags.LANE_PARTS))
+    return got
+
+
+def _lane_flow_default(c):
+    """Class c's one-way carriageway's lanes when the map gives none (lane_layout of its default spec), remembered."""
+    got = _LANE_FLOW_DFLT.get(c)
+    if got is None:
+        got = _LANE_FLOW_DFLT[c] = float(lane_layout(Spec(carriageway(c, "paved", False, None, True, None), "paved",
+                                                          False, c, True))[1])
     return got
 
 
 _TURN_LANES = ("turn_lanes", "turn_lanes_forward", "turn_lanes_backward", "turn_lanes_both_ways")
-
-
-def _ramp_candidates(f, idx, cls, lanes, link):
-    """(len(idx),) 1.0 / 0.0: the counted roads idx of layer f the ramp lane rule checks (tapers::ramp_lane_rule): a
-    motorway link with RAMP_RULE_MIN_LANES (3) or more mapped lanes and nothing else saying it is that wide: no mapped
-    width (OpenStreetMap's, Overture's width rule) and no turn:lanes (its own, or a way's along it)."""
-    out = np.zeros(len(idx))
-    if not RAMP_LANE_RULE:              # (off: no road checked, in the lane flow solve too)
-        return out
-    sel = (cls[idx] == "motorway") & link & (np.nan_to_num(lanes, nan=0.0) >= 3)
-    if not sel.any():
-        return out
-    import railtags
-    n = len(f)
-    has_w, _ = _rule_cols(width_table(f), n)
-    osm_w = _osm_widths(f, None, None)
-    parts = f.attrs.get(railtags.LANE_PARTS)
-    turn = [f.attrs.get("osm_" + k) for k in _TURN_LANES]
-    for k in np.flatnonzero(sel).tolist():
-        i = int(idx[k])
-        if has_w[i] or np.isfinite(osm_w[i]):
-            continue
-        if any(c is not None and c[i] not in (None, "") for c in turn):
-            continue
-        if parts is not None and parts[i] and any(t and any(str(key).startswith("turn:lanes") for key in t)
-                                                  for _, _, _, t in parts[i]):
-            continue
-        out[k] = 1.0
-    return out
 
 
 def _lane_flow_local(feats):
@@ -2812,14 +2769,9 @@ def _lane_flow_local(feats):
     ids = [_lane_flow_ids(f) for f in layers]
     got, ramp = fast._ef.lane_flow_cells(ids, [r[0] for r in rows], [r[1] for r in rows], [r[2] for r in rows],
                                          float(LANE_FLOW_MAX))
-    got, ramp = np.asarray(got), np.asarray(ramp)
-    out = [None] * len(feats)
-    for i in np.flatnonzero(np.isfinite(got) & ~(rows[0][2][:, 2] > 0.5)).tolist():
-        out[i] = int(got[i])
-    fixed = [None] * len(feats)
-    for i in np.flatnonzero(np.isfinite(ramp)).tolist():
-        fixed[i] = int(ramp[i])
-    got = feats.__dict__["_lane_flow"] = (out, fixed)
+    fast.require(382, "lane_flow_lists")
+    got = feats.__dict__["_lane_flow"] = fast._ef.lane_flow_lists(np.ascontiguousarray(got, np.float64),
+                                                                  np.ascontiguousarray(ramp, np.float64), rows[0][2])
     return got
 
 
