@@ -599,6 +599,40 @@ do
   for k, v in pairs(saved) do rawset(_G, k, v) end
 end
 
+-- mapControls(false) and onExtensionUnloaded release BigMap and beamngEarthMapBlocked even when mapCtl is nil
+do
+  local popArgs, filterArgs = {}, {}
+  local origEnter, origToggle = function() end, function() end
+  local bm = { enterBigMap = origEnter, toggleBigMap = origToggle }
+  local saved = {
+    core_input_actionFilter = rawget(_G, 'core_input_actionFilter'),
+    freeroam_bigMapMode = rawget(_G, 'freeroam_bigMapMode'),
+    popActionMap = rawget(_G, 'popActionMap'),
+  }
+  core_input_actionFilter = {
+    addAction = function(dev, name, on) filterArgs[#filterArgs + 1] = { dev, name, on } end,
+  }
+  freeroam_bigMapMode = bm
+  popActionMap = function(name) popArgs[#popArgs + 1] = name end
+
+  settings.mapControls(false)
+  T.check(#popArgs == 1 and popArgs[1] == 'BigMap', 'mapControls(false) with nil mapCtl pops BigMap')
+  T.check(#filterArgs == 1 and filterArgs[1][1] == 0 and filterArgs[1][2] == 'beamngEarthMapBlocked' and filterArgs[1][3] == false,
+    'mapControls(false) with nil mapCtl clears beamngEarthMapBlocked filter')
+
+  settings.redirectBigMap(true)
+  T.check(bm.enterBigMap ~= origEnter and bm.toggleBigMap ~= origToggle, 'redirectBigMap(true) wraps BigMap handlers')
+  settings.onExtensionUnloaded()
+  T.check(#popArgs == 2 and popArgs[2] == 'BigMap', 'onExtensionUnloaded pops BigMap')
+  T.check(#filterArgs == 2 and filterArgs[2][2] == 'beamngEarthMapBlocked' and filterArgs[2][3] == false,
+    'onExtensionUnloaded clears beamngEarthMapBlocked filter')
+  T.check(not settings.isMapOpen(), 'onExtensionUnloaded clears mapOpen')
+  T.check(bm.enterBigMap == origEnter and bm.toggleBigMap == origToggle,
+    'onExtensionUnloaded restores BigMap handlers')
+
+  for k, v in pairs(saved) do rawset(_G, k, v) end
+end
+
 -- The map's other players in a BeamMP session: none is nil, not an empty table (it reaches EarthMap.vue as {}, not
 -- [], and the map's .map() threw every second: the map stopped drawing in multiplayer; PR #509 by Astel123457).
 do
