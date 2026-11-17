@@ -198,6 +198,86 @@ pub(crate) fn node_key(lon: f64, lat: f64) -> NodeKey {
 
 type NodeMap = HashMap<NodeKey, usize, crate::roadlanes::FxBuild>;
 
+/// The least lane count a motorway link's map count is checked from (ramp_lane_rule) ...
+pub(crate) const RAMP_RULE_MIN_LANES: f64 = 3.0;
+/// ... and by how many lanes it must exceed what its diverge gives.
+pub(crate) const RAMP_RULE_EXCESS: f64 = 2.0;
+
+/// A motorway link mapped with more lanes than its diverge can give (the road revamp's R1, 2026-11-16: in place of
+/// rampoverrides.py's I-65 Exit 76 correction, a general rule; no location-specific code). counted, blockers as
+/// lane_flow_core's; cand[c]: counted road c is a one-way motorway link with RAMP_RULE_MIN_LANES or more mapped lanes and
+/// no mapped width or turn:lanes (nothing else says it is that wide). At its start node along its direction, where it
+/// leaves a mainline that goes on (two or more roads leave, every road arriving is no link, no road not counted ends
+/// there), the diverge gives
+/// max(1, the lanes arriving - the lanes of the other roads leaving) (each road's map count, else its class's default;
+/// any unknown: no rule). A count that exceeds that by RAMP_RULE_EXCESS or more takes it (I-65 Exit 76 at Upton: lanes=3
+/// on a single-lane exit from a 3-lane mainline that goes on with 3). Returns per counted road the count, NaN none.
+pub(crate) fn ramp_lane_rule(counted: &[(NodeKey, NodeKey, [f64; 4])], cand: &[bool],
+                             blockers: impl IntoIterator<Item = NodeKey>) -> Vec<f64> {
+    let n = counted.len();
+    let mut out = vec![f64::NAN; n];
+    if !cand.iter().any(|&c| c) {
+        return out;
+    }
+    let mut node: NodeMap = HashMap::default();
+    let mut tail = vec![usize::MAX; n];
+    let mut head = vec![usize::MAX; n];
+    for (i, &(ka, kb, a)) in counted.iter().enumerate() {
+        let len = node.len();
+        let na = *node.entry(ka).or_insert(len);
+        let len = node.len();
+        let nb = *node.entry(kb).or_insert(len);
+        if a[0] > 0.0 { tail[i] = na; head[i] = nb; } else { tail[i] = nb; head[i] = na; }
+    }
+    let nn = node.len();
+    let mut blocked = vec![false; nn];
+    for k in blockers {
+        if let Some(&j) = node.get(&k) {
+            blocked[j] = true;
+        }
+    }
+    let mut ins: Vec<Vec<usize>> = vec![Vec::new(); nn];
+    let mut outs: Vec<Vec<usize>> = vec![Vec::new(); nn];
+    for i in 0..n {
+        outs[tail[i]].push(i);
+        ins[head[i]].push(i);
+    }
+    let lanes = |j: usize| -> f64 { if counted[j].2[1].is_nan() { counted[j].2[3] } else { counted[j].2[1] } };
+    for i in 0..n {
+        if !cand.get(i).copied().unwrap_or(false) || counted[i].2[1].is_nan() {
+            continue;
+        }
+        let t = tail[i];
+        // (only where it leaves a mainline: a ramp splitting from a ramp near its terminal fans out to the lanes it
+        // has there, 1 into 3 at a Baltimore County signal, w53142602)
+        if blocked[t] || outs[t].len() < 2 || ins[t].is_empty() || ins[t].iter().any(|&j| counted[j].2[2] > 0.5) {
+            continue;
+        }
+        let mut arriving = 0.0;
+        let mut others = 0.0;
+        let mut known = true;
+        for &j in &ins[t] {
+            let v = lanes(j);
+            known &= !v.is_nan();
+            arriving += v;
+        }
+        for &j in outs[t].iter().filter(|&&j| j != i) {
+            let v = lanes(j);
+            known &= !v.is_nan();
+            others += v;
+        }
+        if !known {
+            continue;
+        }
+        let gives = (arriving - others).max(1.0);
+        let mapped = counted[i].2[1];
+        if mapped >= RAMP_RULE_MIN_LANES && mapped - gives >= RAMP_RULE_EXCESS {
+            out[i] = gives;
+        }
+    }
+    out
+}
+
 /// lane_flow's solve. counted: the counted roads (attrs one-way sign along the geometry not 0, two points or more), in
 /// road order: (start node, end node along the geometry, attrs row: one-way sign, the map's lanes or NaN, ramp 1 / 0,
 /// the class's default lanes or NaN); blockers: both end nodes of every road of two points or more not counted (its

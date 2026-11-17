@@ -6496,6 +6496,6 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 314: stage 5: ggshade (gg_sun_fit, gg_relight: the capture sun's shadows out of the Sentinel-2 colour);
     // gen_ground's LOST texels, its crowns' shading from no direction
     // 322: both of the above merged (321 vegetation clumps + 313/314 generated ground stages 4-5)
-    m.add("VERSION", 322)?;
+    m.add("VERSION", 340)?;
     Ok(())
 }
