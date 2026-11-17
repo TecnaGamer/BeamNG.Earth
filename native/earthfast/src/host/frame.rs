@@ -30,6 +30,7 @@ impl FrameError {
     }
 
     /// whether Python sees it as protocol.ProtocolError (else a ConnectionError)
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn is_protocol(&self) -> bool {
         !matches!(self, FrameError::Io(_))
     }
@@ -71,6 +72,7 @@ pub fn read_frame<R: Read>(r: &mut R) -> Result<Option<Vec<u8>>, FrameError> {
 }
 
 /// A whole frame for payload (header + bytes), as protocol.encode makes them.
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn frame(payload: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(HEADER + payload.len());
     out.extend_from_slice(&(payload.len() as u32).to_le_bytes());

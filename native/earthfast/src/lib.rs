@@ -6479,6 +6479,7 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 306: genground::gg_fill_polys / gg_regions / gen_ground (the generated ground, BNE_GEN_GROUND: a block's 1 m base
     // colour from Sentinel-2 and the map's regions instead of a 1 m aerial photo; server/genground.py)
     genground::register(m)?;
+    host::register(m)?;
     // 307: gen_ground(..., gr, gc): its sampling lattices on the global texel grid, the caller's square with a halo
     // (Codex review of 306: overlapping blocks drew the same ground in other colours)
     // 308: generated ground stage 2: gg_regions(..., line, line_kind, ...) and the surface / pattern kinds,
@@ -6503,6 +6504,8 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 314: stage 5: ggshade (gg_sun_fit, gg_relight: the capture sun's shadows out of the Sentinel-2 colour);
     // gen_ground's LOST texels, its crowns' shading from no direction
     // 322: both of the above merged (321 vegetation clumps + 313/314 generated ground stages 4-5)
-    m.add("VERSION", 341)?;
+    // 360: the game connection in Rust (the Rust port's phase 1, plan section 4): Host / Wire / HostBatch, host_hold_gil
+    // (protocol.HostServer / HostStream; 342-359 left for the parallel work's bumps)
+    m.add("VERSION", 360)?;
     Ok(())
 }
