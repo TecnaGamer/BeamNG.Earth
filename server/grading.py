@@ -483,6 +483,7 @@ VSOLVE_CONTEXT_M = 150.0     # m past a cell's box the next cells' roads are in 
                             # reach CLIP_MARGIN_M past it, but a road of the next cell's alone was in none of its
                             # problem, and an end its junction there lifts 1.2 m was held at its profile: Rio's 0.79 m
                             # seam. Over the widest spread (vsolve.SPREAD_M) a change there has died out at the box
+VSOLVE_JOINT_M = 1.0        # m between two decks' ends that make one joint (_vsolve_caps: no abutment there)
 VSOLVE_DIP_TOUCH_M = 0.01   # m: a sample the underpass rule lowered this much is in its dip: the shadow solve keeps it,
                             # and its road a spread (vsolve.SPREAD_M) either side, no higher than before the rule
 UNDER_DECK_SIDE_M = 15.0    # m past a deck's side the road's ground is read (Assaku's hump: 6-13 m past its decks)
@@ -3110,8 +3111,10 @@ class _Planner:
 
     def _vsolve_caps(self, key, ground, heights, near=CLIP_MARGIN_M + VERTEX_STEP):
         """Per plan of ground (or None) the most its heights may be in the shadow solve (NaN elsewhere): heights, where it
-        runs under a road or rail deck (within the deck's half width of its line, past APPROACH_MIN_CROSS_M of its ends:
-        nearer, a junction at grade or the road's own deck)."""
+        runs under a road or rail deck (its surface under the deck's: within both half widths of the deck's line; past
+        APPROACH_MIN_CROSS_M of its abutments: nearer, a junction at grade or the road's own deck; its joints with
+        other decks are no abutments). A road beside a deck's line by more than the deck's half width alone was not
+        capped, and raised 2.7 m by the solve under the Shuto's viaduct its fill lifted the deck's ground."""
         f64 = np.float64
         box = self._clip_box(key, near)
         if box is None or not ground:
@@ -3134,12 +3137,23 @@ class _Planner:
                     decks.append((ln, h))
         if not decks:
             return [None] * len(ground)
+        # (a deck's end another deck goes on from is a joint, not an abutment: a viaduct is mapped in parts, and with
+        # every part's ends left out, a junction under one of the Shuto's joints was raised 2.7 m by the solve, which
+        # stood its 76-part chain up to 25 m off, Tokyo's low decks 72 -> 139 with BNE_VSOLVE=on)
+        ends = np.array([ln[e] for ln, _h in decks for e in (0, -1)], f64)
+        joined = np.zeros(len(ends), bool)
+        for i in range(len(ends)):
+            d = np.hypot(*(ends - ends[i]).T)
+            d[i ^ 1] = np.inf                  # (its own other end)
+            d[i] = np.inf
+            joined[i] = bool((d <= VSOLVE_JOINT_M).any())
         dbox = np.array([(*(ln.min(0) - h), *(ln.max(0) + h)) for ln, h in decks], f64)
         out = []
         for p, hz in zip(ground, heights):
             xy = np.asarray(p.xy, f64)[:, :2]
             pl, ph = xy.min(0), xy.max(0)
             under = np.zeros(len(xy), bool)
+            pl, ph = pl - float(p.half), ph + float(p.half)
             for j in np.flatnonzero((dbox[:, 0] <= ph[0]) & (dbox[:, 2] >= pl[0]) & (dbox[:, 1] <= ph[1])
                                     & (dbox[:, 3] >= pl[1])).tolist():
                 ln, h = decks[j]
@@ -3150,7 +3164,8 @@ class _Planner:
                 k = np.argmin(dist, axis=1)
                 r = np.arange(len(xy))
                 at = np.r_[0.0, np.cumsum(lab)][:-1][k] + t[r, k] * lab[k]
-                under |= (dist[r, k] <= h) & (at > APPROACH_MIN_CROSS_M) & (at < lab.sum() - APPROACH_MIN_CROSS_M)
+                under |= (dist[r, k] <= h + float(p.half)) & ((at > APPROACH_MIN_CROSS_M) | joined[2 * j]) & (
+                    (at < lab.sum() - APPROACH_MIN_CROSS_M) | joined[2 * j + 1])
             out.append(np.where(under, np.asarray(hz, f64), np.nan) if under.any() else None)
         return out
 

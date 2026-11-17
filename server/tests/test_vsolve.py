@@ -195,3 +195,35 @@ class OnTest(unittest.TestCase):
         self.assertLess(float(z[len(xs) // 2]), 10.0 - 0.6 * grading.UNDER_CLEAR_M, "under the deck")
         self.assertLessEqual(float(z.max()), 10.0 + 0.02, "no higher than its ground")
         self.assertAlmostEqual(float(z[1]), 10.0, delta=0.1, msg="back up past the ramp")
+
+
+class CapsTest(unittest.TestCase):
+    """The caps under decks (grading's _vsolve_caps), on map data made by hand."""
+
+    def _caps(self, decks):
+        import test_grading as tg
+        f = tg.features([[(-200, 0), (200, 0)]] + decks, ["residential"] + ["motorway"] * len(decks),
+                        flags=[(1 + k, "is_bridge") for k in range(len(decks))])
+        g = grading.Grader(tg.FRAME, tg.FakeMD(f), lambda la, lo: np.full(np.shape(la), 10.0))
+        la, lo, _ = tg.FRAME.enu_to_geodetic(np.array([0.0]), np.array([0.0]), 0.0)
+        g.apply(la, lo, np.full(1, 10.0))
+        planner = next(iter(g.store.planners.values()))
+        key = next(iter(planner.cells))
+        xs = np.arange(-50.0, 51.0, 1.0)
+        la, lo, _ = tg.FRAME.enu_to_geodetic(xs, np.zeros_like(xs), 0.0)
+        e, n, _ = planner.frame.geodetic_to_enu(la, lo, 0.0)         # (the planner's own frame)
+        road = plan(np.c_[e, n], np.full(len(xs), 10.0))
+        got = planner._vsolve_caps(key, [road], [np.full(len(xs), 9.0)])[0]
+        return xs, got
+
+    def test_a_road_under_a_joint_of_two_decks_is_capped(self):
+        """A viaduct mapped in two parts joined 2 m from the road under it: a joint is no abutment, so the road is
+        capped there (left out, the solve raised a junction under the Shuto's viaduct 2.7 m)."""
+        xs, got = self._caps([[(5, -20), (5, 2)], [(5, 2), (5, 20)]])
+        self.assertIsNotNone(got)
+        self.assertTrue(np.isfinite(got[np.abs(xs - 5.0) < 1.0]).all())
+
+    def test_a_road_by_an_abutment_is_not(self):
+        """Within APPROACH_MIN_CROSS_M of a deck's real end, a junction at grade: no cap."""
+        xs, got = self._caps([[(5, 2), (5, 40)]])
+        self.assertTrue(got is None or not np.isfinite(got[np.abs(xs - 5.0) < 1.0]).any())
