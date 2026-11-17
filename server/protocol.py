@@ -18,7 +18,13 @@ MAX_FRAME = 16 * 1024 * 1024
 # the game connection in Rust (earthfast.Host) instead of asyncio's: off by default until proven (the Rust port's
 # phase 1; byte-identical sessions, tools/portcheck/msgcmp.py)
 HOST = os.environ.get("BNGE_HOST", "off").strip().lower() == "on"
-HOST_VERSION = 360          # the earthfast that has Host / Wire / HostBatch
+# 1b: consecutive poses merged while they wait for a busy loop (the later pose, slotsGone joined); off for A/B
+HOST_MERGE = os.environ.get("BNGE_HOST_MERGE", "on").strip().lower() != "off"
+# 1c (developers): every frame the game sends recorded into this folder (tools/hostreplay.py plays it again);
+# BNGE_HOST_RECORD_OUT=1: what the server sends too. Recordings hold the player's positions: private
+RECORD = os.environ.get("BNGE_HOST_RECORD") or None
+RECORD_OUT = os.environ.get("BNGE_HOST_RECORD_OUT") == "1"
+HOST_VERSION = 361          # the earthfast with Host / Wire (361: the wake pair, the pose merge, the recorder)
 log = logging.getLogger("earthd.host")
 
 
@@ -228,11 +234,10 @@ class HostStream:
             raise self._os_exc
         if self._wire.is_closing():
             await asyncio.sleep(0)
-        while True:
-            if self._wire.lost():
-                raise ConnectionResetError("Connection lost")
-            if not self._wire.drain_wait():
-                return
+        if self._wire.lost():
+            raise ConnectionResetError("Connection lost")
+        # (as asyncio's: once waiting, the queue drained or the connection gone both end the wait without an error)
+        while self._wire.drain_wait():
             fut = self._loop.create_future()
             self._drain_waiters.append(fut)
             try:
@@ -260,10 +265,12 @@ class HostStream:
 
 class HostServer:
     """earthfast's host serving handler(reader, writer) for each connection (asyncio.start_server's surface that
-    earthd.serve and the tests use: close, is_serving, serve_forever, wait_closed, async with; .port). Everything
-    that came is handed over in batches on the loop (_on_batch)."""
+    earthd.serve and the tests use: close, is_serving, serve_forever, wait_closed, async with; .port). The host
+    wakes the loop through a local socket pair (one byte: something came); the loop then takes everything that came
+    as one batch (_on_wake). Made by start_server (its wake socket joins the loop there)."""
 
-    def __init__(self, handler, host, port, loop):
+    def __init__(self, handler, host, port, loop, record=None, record_out=None):
+        import socket
         import sys
 
         import fast
@@ -273,17 +280,36 @@ class HostServer:
         self._streams = {}
         self._tasks = set()
         self._serving = None
-        self.batches = 0                # (callbacks the loop ran: what came while it was busy joins one batch)
+        self._wake_tr = None
+        self.batches = 0                # (batches the loop took: what came while it was busy joins one batch)
         # (the event loop's treatment for the host's threads: earthd.LOOP_RAISE, Windows; Linux threads inherit it)
         raise_threads = sys.platform == "win32" and os.environ.get("BNGE_LOOP_RAISE", "1") != "0"
-        self._host = earthfast.Host(host, port, loop, self._on_batch, log, raise_threads)
+        record = RECORD if record is None else record
+        if record:
+            os.makedirs(record, exist_ok=True)
+            log.warning("recording the game connection into %s (BNGE_HOST_RECORD: the player's positions, keep it "
+                        "private)", record)
+        self._host = earthfast.Host(host, port, log, raise_threads, HOST_MERGE, record or None,
+                                    RECORD_OUT if record_out is None else record_out)
+        self._wake = socket.socket(fileno=self._host.take_wake())
         self.port = self._host.port
         _LIVE.add(self)
 
-    def _on_batch(self, batch):
+    async def _start(self):
+        srv = self
+
+        class _Wake(asyncio.Protocol):
+            def data_received(self, data):
+                srv._on_wake()
+        self._wake_tr, _ = await self._loop.connect_accepted_socket(_Wake, self._wake)
+
+    def _on_wake(self):
+        items = self._host.take()
+        if not items:
+            return
         self.batches += 1
         streams = self._streams
-        for cid, kind, value in batch.take():
+        for cid, kind, value in items:
             if kind == 1:
                 s = streams.get(cid)
                 if s is not None:
@@ -387,6 +413,14 @@ class HostServer:
         """Every thread of the host ended (connections aborted): before the interpreter finalizes."""
         _LIVE.discard(self)
         self._host.shutdown()
+        tr, self._wake_tr = self._wake_tr, None
+        try:
+            if tr is not None:
+                tr.close()
+            else:
+                self._wake.close()
+        except Exception:           # (the loop already closed: the process ends)
+            pass
 
 
 _LIVE = weakref.WeakSet()       # the HostServers not shut down yet (the atexit hook's)
@@ -401,11 +435,17 @@ def _shutdown_all():
             pass
 
 
-async def start_server(handler, host, port, rust=None):
+async def start_server(handler, host, port, rust=None, **host_options):
     """asyncio.start_server(handler, host, port), or earthfast's host with BNGE_HOST=on (rust: True / False forces
-    one)."""
+    one; host_options: HostServer's record / record_out)."""
     if HOST if rust is None else rust:
-        return HostServer(handler, host, port, asyncio.get_running_loop())
+        srv = HostServer(handler, host, port, asyncio.get_running_loop(), **host_options)
+        try:
+            await srv._start()
+        except BaseException:
+            srv.shutdown()
+            raise
+        return srv
     return await asyncio.start_server(handler, host, port)
 
 

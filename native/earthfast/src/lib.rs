@@ -6506,6 +6506,9 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 322: both of the above merged (321 vegetation clumps + 313/314 generated ground stages 4-5)
     // 360: the game connection in Rust (the Rust port's phase 1, plan section 4): Host / Wire / HostBatch, host_hold_gil
     // (protocol.HostServer / HostStream; 342-359 left for the parallel work's bumps)
-    m.add("VERSION", 360)?;
+    // 361: the host wakes the loop through a local socket pair (Host.take_wake / take; no GIL in the hand-over, the
+    // HostBatch class gone), Host(..., merge, record, record_out): the pose merge (1b) and the recorder (1c),
+    // host_read_recording
+    m.add("VERSION", 361)?;
     Ok(())
 }

@@ -7,12 +7,17 @@
 //!   bnge-io        accepts (TCP_NODELAY on each connection, as asyncio sets it)
 //!   bnge-rd-N      reads connection N's frames into the inbox
 //!   bnge-wr-N      writes connection N's queue
-//!   bnge-deliver   the only one that takes the GIL: the inbox as one batch per wake, handed to the loop with
-//!                  loop.call_soon_threadsafe(on_batch, batch); a stall of the lane is logged from here
-//! Frames reach Python in the order read, per connection; connections are independent.
+//!   bnge-watch     logs a stalled lane ("python lane: N frames waiting X s"): the only thread that takes the GIL
+//! The hand-over needs no GIL: the first event into an empty inbox writes one byte to a local socket pair whose other
+//! end the event loop reads (as it reads any socket: one wake, as asyncio's own reads cost); the loop then takes
+//! everything that came (Host.take), so what comes while it is busy waits in one batch. Frames reach Python in the
+//! order read, per connection; connections are independent.
 pub mod frame;
+mod merge;
+mod record;
 mod wire;
 
+use std::io::Write;
 use std::net::{SocketAddr, TcpListener, TcpStream, ToSocketAddrs};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, Weak};
@@ -30,7 +35,7 @@ const STALL_S: f64 = 2.0;
 /// waits kept per stats interval (the percentiles of the host line)
 const WAITS_MAX: usize = 100_000;
 
-/// What the delivery thread hands to Python.
+/// What Python takes.
 pub enum Ev {
     Connect(Arc<WireCore>),
     Frame(u64, Vec<u8>, Instant),
@@ -51,27 +56,35 @@ struct Stats {
     wait_n: u64,
     wait_max_us: u64,
     connections: u64,
+    /// poses merged (1b)
+    merged: u64,
 }
 
+#[derive(Default)]
 struct Inbox {
     evs: Vec<Ev>,
-    /// the batch handed to the loop and not yet taken (at most one: what comes meanwhile joins it), with frames:
-    /// (its serial, its frames, the oldest one's read time)
-    out: Option<(u64, usize, Instant)>,
-    serial: u64,
+    /// the wake byte is written and Python has not taken the inbox since
+    woken: bool,
     /// a stall logged for the frames waiting now (once per stall)
     stall_logged: bool,
 }
 
 pub struct Shared {
     inbox: Mutex<Inbox>,
+    /// the watchdog's wake-ups (a thread ended, shutdown)
     cv: Condvar,
+    /// this end of the wake pair (non-blocking: one byte per wake, a full buffer only means a wake is already there)
+    waker: Mutex<Option<Box<dyn Write + Send>>>,
     stop: AtomicBool,
     /// accepting stopped (Host.close)
-    closed: Arc<AtomicBool>,
-    /// the accept thread and the connections' threads still running: once closed and none is, the delivery thread
-    /// ends by itself (letting go of the Python callbacks) when nothing is left to hand over
+    closed: AtomicBool,
+    /// the accept thread and the connections' threads still running: once closed and none is, the watchdog ends by
+    /// itself (letting go of the logger) when nothing is left to take
     live: AtomicUsize,
+    /// 1b: consecutive poses merged while they wait for the lane (BNGE_HOST_MERGE=off: never)
+    merge: bool,
+    /// 1c: BNGE_HOST_RECORD (None: nothing recorded)
+    record: Option<record::Recording>,
     stats: Mutex<Stats>,
     conns: Mutex<Vec<Weak<WireCore>>>,
 }
@@ -91,9 +104,22 @@ impl Shared {
         self.stats.lock().unwrap_or_else(|p| p.into_inner())
     }
 
+    /// An event for Python; the first since Python last took the inbox wakes the loop.
     pub fn push(&self, ev: Ev) {
-        self.inbox().evs.push(ev);
-        self.cv.notify_one();
+        let wake = {
+            let mut ib = self.inbox();
+            ib.evs.push(ev);
+            !std::mem::replace(&mut ib.woken, true)
+        };
+        if wake {
+            if let Some(w) = self.waker.lock().unwrap_or_else(|p| p.into_inner()).as_mut() {
+                let _ = w.write(&[1]);
+            }
+        }
+    }
+
+    fn find(&self, id: u64) -> Option<Arc<WireCore>> {
+        self.conns.lock().unwrap_or_else(|p| p.into_inner()).iter().filter_map(|w| w.upgrade()).find(|w| w.id == id)
     }
 
     pub fn count_in(&self, bytes: u64) {
@@ -109,11 +135,31 @@ impl Shared {
     }
 }
 
-/// The Python objects the delivery thread calls (dropped while attached, or leaked once the interpreter is gone).
-struct Sinks {
-    event_loop: Py<PyAny>,
-    on_batch: Py<PyAny>,
-    logger: Py<PyAny>,
+/// The wake pair: (this end, the event loop's end as a raw descriptor Python's socket.socket(fileno=...) takes over).
+#[cfg(unix)]
+fn wake_pair() -> std::io::Result<(Box<dyn Write + Send>, i64)> {
+    use std::os::fd::IntoRawFd;
+    let (a, b) = std::os::unix::net::UnixStream::pair()?;
+    a.set_nonblocking(true)?;
+    Ok((Box::new(a), b.into_raw_fd() as i64))
+}
+
+#[cfg(windows)]
+fn wake_pair() -> std::io::Result<(Box<dyn Write + Send>, i64)> {
+    // (no socketpair on Windows: two loopback TCP ends, the accepted one checked to be ours)
+    use std::os::windows::io::IntoRawSocket;
+    let l = TcpListener::bind("127.0.0.1:0")?;
+    let a = TcpStream::connect(l.local_addr()?)?;
+    let mine = a.local_addr()?;
+    for _ in 0..8 {
+        let (b, peer) = l.accept()?;
+        if peer == mine {
+            a.set_nodelay(true)?;
+            a.set_nonblocking(true)?;
+            return Ok((Box::new(a), b.into_raw_socket() as i64));
+        }
+    }
+    Err(std::io::Error::new(std::io::ErrorKind::Other, "host: the wake pair's connection was not ours"))
 }
 
 #[cfg(windows)]
@@ -151,10 +197,9 @@ fn spawn<F: FnOnce() + Send + 'static>(name: String, raise: bool, f: F) -> std::
 pub struct Host {
     shared: Arc<Shared>,
     addr: SocketAddr,
-    /// accepting stopped (the accept thread's flag too)
-    closed: Arc<AtomicBool>,
+    wake_fd: Mutex<Option<i64>>,
     accept: Mutex<Option<JoinHandle<()>>>,
-    deliver: Mutex<Option<JoinHandle<()>>>,
+    watch: Mutex<Option<JoinHandle<()>>>,
     threads: Arc<Mutex<Vec<JoinHandle<()>>>>,
 }
 
@@ -238,110 +283,112 @@ fn accept_loop(listener: TcpListener, shared: Arc<Shared>, raise: bool, threads:
     shared.thread_done();
 }
 
-fn deliver_loop(shared: Arc<Shared>, sinks: Sinks) {
-    let mut last: Option<Arc<BatchInner>> = None;
+/// The watchdog: a lane that has not taken what came for STALL_S is logged, once per stall (through Python's
+/// logging, so as soon as the GIL is free); ends once closed with every connection over and nothing left to take.
+fn watch_loop(shared: Arc<Shared>, logger: Py<PyAny>) {
     loop {
         let mut ib = shared.inbox();
-        if ib.evs.is_empty() && !shared.stop.load(Ordering::SeqCst) {
+        if !shared.stop.load(Ordering::SeqCst) {
             ib = shared.cv.wait_timeout(ib, Duration::from_millis(500)).unwrap_or_else(|p| p.into_inner()).0;
         }
-        if shared.stop.load(Ordering::SeqCst) {
+        if shared.stop.load(Ordering::SeqCst)
+            || (ib.evs.is_empty() && shared.closed.load(Ordering::SeqCst) && shared.live.load(Ordering::SeqCst) == 0)
+        {
             break;
         }
-        if ib.evs.is_empty() && shared.closed.load(Ordering::SeqCst) && shared.live.load(Ordering::SeqCst) == 0 {
-            break; // (closed, every connection ended and handed over: nothing can come any more)
-        }
-        // (frames handed to the loop and still not taken: the lane is stalled; said once per stall)
-        if let Some((_, handed, at)) = ib.out {
+        let oldest = ib.evs.iter().find_map(|e| if let Ev::Frame(_, _, at) = e { Some(*at) } else { None });
+        if let Some(at) = oldest {
             let waited = at.elapsed().as_secs_f64();
             if waited > STALL_S && !ib.stall_logged {
                 ib.stall_logged = true;
-                let n = handed + ib.evs.iter().filter(|e| matches!(e, Ev::Frame(..))).count();
+                let n = ib.evs.iter().filter(|e| matches!(e, Ev::Frame(..))).count();
                 drop(ib);
-                log_stall(&sinks, n, waited);
-                continue;
+                let _ = Python::try_attach(|py| {
+                    let _ = logger.bind(py).call_method1("warning", ("python lane: %d frames waiting %.1f s", n, waited));
+                });
             }
         }
-        if ib.evs.is_empty() {
-            continue;
-        }
-        let evs = std::mem::take(&mut ib.evs);
-        drop(ib);
-        let frames = evs.iter().filter(|e| matches!(e, Ev::Frame(..))).count();
-        let oldest = evs.iter().find_map(|e| if let Ev::Frame(_, _, at) = e { Some(*at) } else { None });
-        // (the batch handed over last and not taken yet, the lane busy: these join it, one callback for all of it
-        // once the lane is free, in order; locks: the batch's, then the inbox's, as take() does)
-        let mut evs = Some(evs);
-        if let Some(b) = &last {
-            let mut g = b.evs.lock().unwrap_or_else(|p| p.into_inner());
-            if let Some(v) = g.as_mut() {
-                v.extend(evs.take().unwrap_or_default());
-                let mut ib = shared.inbox();
-                match (&mut ib.out, oldest) {
-                    (Some(o), _) => o.1 += frames,
-                    (none, Some(at)) => *none = Some((b.serial, frames, at)),
-                    _ => {}
-                }
-            }
-        }
-        let Some(evs) = evs else { continue };
-        let serial = {
-            let mut ib = shared.inbox();
-            ib.serial += 1;
-            if let Some(at) = oldest {
-                ib.out = Some((ib.serial, frames, at));
-            }
-            ib.serial
-        };
-        let inner = Arc::new(BatchInner { evs: Mutex::new(Some(evs)), serial });
-        let handed = Python::try_attach(|py| -> bool {
-            let batch = match Py::new(py, Batch { inner: inner.clone(), shared: shared.clone() }) {
-                Ok(b) => b,
-                Err(_) => return false,
-            };
-            // (a closed loop raises RuntimeError: the server is ending, nothing more to hand over)
-            sinks.event_loop.bind(py).call_method1("call_soon_threadsafe", (sinks.on_batch.bind(py), batch)).is_ok()
-        });
-        if handed != Some(true) {
-            shared.stop.store(true, Ordering::SeqCst);
-            break;
-        }
-        last = Some(inner);
     }
-    // (the Python objects let go while attached; leaked once the interpreter is ending, never touched then)
-    let mut sinks = Some(sinks);
-    if Python::try_attach(|_py| drop(sinks.take())).is_none() {
-        std::mem::forget(sinks.take());
+    // (the logger let go while attached; leaked once the interpreter is ending, never touched then)
+    let mut logger = Some(logger);
+    if Python::try_attach(|_py| drop(logger.take())).is_none() {
+        std::mem::forget(logger.take());
     }
 }
 
-fn log_stall(sinks: &Sinks, frames: usize, waited: f64) {
-    let _ = Python::try_attach(|py| {
-        let _ = sinks.logger.bind(py).call_method1(
-            "warning",
-            ("python lane: %d frames waiting %.1f s", frames, waited),
-        );
-    });
+fn ev_id(e: &Ev) -> u64 {
+    match e {
+        Ev::Connect(w) => w.id,
+        Ev::Frame(id, ..) | Ev::End(id, _) | Ev::Drained(id) => *id,
+    }
+}
+
+/// The events in order; with the merge on (1b, merge.rs), a pose joins the pose before it when that is its
+/// connection's previous frame in the batch (a drained mark is no frame) and they may merge: the merged pose keeps the
+/// earlier one's place and read time.
+fn join(shared: &Shared, src: Vec<Ev>) -> Vec<Ev> {
+    if !shared.merge {
+        return src;
+    }
+    let mut dst: Vec<Ev> = Vec::with_capacity(src.len());
+    let mut n = 0;
+    for e in src {
+        if let Ev::Frame(id, data, _) = &e {
+            if merge::maybe_pose(data) {
+                let prev = dst.iter_mut().rev().find(|p| ev_id(p) == *id && !matches!(p, Ev::Drained(_)));
+                if let Some(Ev::Frame(_, prev, _)) = prev {
+                    if merge::maybe_pose(prev) {
+                        if let Some(m) = merge::merge(prev, data) {
+                            let (old, new) = (prev.len() + data.len(), m.len());
+                            *prev = m;
+                            if let Some(w) = shared.find(*id) {
+                                // (the bytes Python takes for these two: the merged frame's)
+                                w.inbox_bytes.fetch_add(new, Ordering::Relaxed);
+                                w.inbox_bytes.fetch_sub(old, Ordering::Relaxed);
+                            }
+                            n += 1;
+                            continue;
+                        }
+                    }
+                }
+            }
+        }
+        dst.push(e);
+    }
+    if n > 0 {
+        shared.stats().merged += n;
+    }
+    dst
 }
 
 #[pymethods]
 impl Host {
-    /// Host(host, port, loop, on_batch, logger, raise_threads): binds at once (OSError with its errno as
-    /// asyncio.start_server raises it) and starts accepting; on_batch(batch) runs on the loop for everything that came
-    /// (batch.take()); logger: a logging.Logger for the stall line.
+    /// Host(host, port, logger, raise_threads=False, merge=True, record=None, record_out=False): binds at once (an
+    /// OSError with its errno as asyncio.start_server raises it) and starts accepting. take_wake() gives the event
+    /// loop's end of the wake pair (once); each byte on it means: take(). logger: a logging.Logger for the stall line.
     #[new]
-    #[pyo3(signature = (host, port, event_loop, on_batch, logger, raise_threads=false))]
-    fn new(host: &str, port: u16, event_loop: Py<PyAny>, on_batch: Py<PyAny>, logger: Py<PyAny>,
-           raise_threads: bool) -> PyResult<Self> {
+    #[pyo3(signature = (host, port, logger, raise_threads=false, merge=true, record=None, record_out=false))]
+    fn new(host: &str, port: u16, logger: Py<PyAny>, raise_threads: bool, merge: bool,
+           record: Option<std::path::PathBuf>, record_out: bool) -> PyResult<Self> {
         let listener = bind(host, port)?;
         let addr = listener.local_addr().map_err(|e| PyOSError::new_err(e.to_string()))?;
-        let closed = Arc::new(AtomicBool::new(false));
+        let (waker, wake_fd) = wake_pair().map_err(|e| PyOSError::new_err(format!("host: no wake pair: {e}")))?;
         let shared = Arc::new(Shared {
-            inbox: Mutex::new(Inbox { evs: Vec::new(), out: None, serial: 0, stall_logged: false }),
+            inbox: Mutex::new(Inbox::default()),
             cv: Condvar::new(),
+            waker: Mutex::new(Some(waker)),
             stop: AtomicBool::new(false),
-            closed: closed.clone(),
+            closed: AtomicBool::new(false),
             live: AtomicUsize::new(1), // (the accept thread)
+            merge,
+            record: record.map(|dir| record::Recording {
+                dir,
+                out: record_out,
+                stamp: std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_millis())
+                    .unwrap_or(0),
+            }),
             stats: Mutex::new(Stats::default()),
             conns: Mutex::new(Vec::new()),
         });
@@ -350,15 +397,14 @@ impl Host {
         let accept = spawn("bnge-io".into(), raise_threads, move || accept_loop(listener, sh, raise_threads, th))
             .map_err(|e| PyRuntimeError::new_err(format!("host: no accept thread: {e}")))?;
         let sh = shared.clone();
-        let sinks = Sinks { event_loop, on_batch, logger };
-        let deliver = spawn("bnge-deliver".into(), raise_threads, move || deliver_loop(sh, sinks))
-            .map_err(|e| PyRuntimeError::new_err(format!("host: no delivery thread: {e}")))?;
+        let watch = spawn("bnge-watch".into(), raise_threads, move || watch_loop(sh, logger))
+            .map_err(|e| PyRuntimeError::new_err(format!("host: no watchdog thread: {e}")))?;
         Ok(Host {
             shared,
             addr,
-            closed,
+            wake_fd: Mutex::new(Some(wake_fd)),
             accept: Mutex::new(Some(accept)),
-            deliver: Mutex::new(Some(deliver)),
+            watch: Mutex::new(Some(watch)),
             threads,
         })
     }
@@ -368,20 +414,78 @@ impl Host {
         self.addr.port()
     }
 
+    /// The event loop's end of the wake pair, a raw socket for socket.socket(fileno=...), which owns it from then on.
+    fn take_wake(&self) -> PyResult<i64> {
+        self.wake_fd
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .take()
+            .ok_or_else(|| PyRuntimeError::new_err("host: the wake socket was taken already"))
+    }
+
+    /// [(connection id, kind, value)]: everything that came since the last take, in order (poses merged, 1b). kind
+    /// 0: a new connection, value its Wire; 1: a frame's payload (bytes); 2: the reading ended, value None (a clean
+    /// EOF) or (errno or None, text, protocol error?); 3: the outgoing queue drained for a waiting drain() (None).
+    /// Each frame's wait for the lane is counted now.
+    fn take<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
+        let evs = {
+            let mut ib = self.shared.inbox();
+            ib.woken = false;
+            ib.stall_logged = false;
+            std::mem::take(&mut ib.evs)
+        };
+        let now = Instant::now();
+        let evs = join(&self.shared, evs);
+        let out = PyList::empty(py);
+        let mut waits = Vec::new();
+        for e in evs {
+            let item = match e {
+                Ev::Connect(w) => {
+                    let id = w.id;
+                    (id, 0u8, Py::new(py, Wire { core: w })?.into_any())
+                }
+                Ev::Frame(id, data, at) => {
+                    waits.push(now.saturating_duration_since(at).as_micros() as u64);
+                    if let Some(w) = self.shared.find(id) {
+                        w.inbox_bytes.fetch_sub(data.len(), Ordering::Relaxed);
+                    }
+                    (id, 1u8, PyBytes::new(py, &data).into_any().unbind())
+                }
+                Ev::End(id, None) => (id, 2u8, py.None()),
+                Ev::End(id, Some(e)) => {
+                    (id, 2u8, (e.errno, e.text, e.protocol).into_pyobject(py)?.into_any().unbind())
+                }
+                Ev::Drained(id) => (id, 3u8, py.None()),
+            };
+            out.append(item)?;
+        }
+        if !waits.is_empty() {
+            let mut s = self.shared.stats();
+            for w in waits {
+                s.wait_n += 1;
+                s.wait_max_us = s.wait_max_us.max(w);
+                if s.waits.len() < WAITS_MAX {
+                    s.waits.push(w.min(u32::MAX as u64) as u32);
+                }
+            }
+        }
+        Ok(out)
+    }
+
     fn is_serving(&self) -> bool {
-        !self.closed.load(Ordering::SeqCst)
+        !self.shared.closed.load(Ordering::SeqCst)
     }
 
     /// Stops accepting (asyncio's Server.close): open connections stay.
     fn close(&self, py: Python<'_>) {
-        if self.closed.swap(true, Ordering::SeqCst) {
+        if self.shared.closed.swap(true, Ordering::SeqCst) {
             return;
         }
         let h = self.accept.lock().unwrap_or_else(|p| p.into_inner()).take();
         py.detach(|| stop_accepting(self.addr, h));
     }
 
-    /// Ends everything: stops accepting, aborts the connections, stops the delivery and joins every thread (before
+    /// Ends everything: stops accepting, aborts the connections, stops the watchdog and joins every thread (before
     /// the interpreter finalizes: protocol.py's atexit hook and earthd's main_async call it).
     fn shutdown(&self, py: Python<'_>) {
         self.close(py);
@@ -399,20 +503,22 @@ impl Host {
         drop(conns);
         self.shared.stop.store(true, Ordering::SeqCst);
         self.shared.cv.notify_all();
-        let d = self.deliver.lock().unwrap_or_else(|p| p.into_inner()).take();
+        let w = self.watch.lock().unwrap_or_else(|p| p.into_inner()).take();
         let ts: Vec<JoinHandle<()>> = std::mem::take(&mut *self.threads.lock().unwrap_or_else(|p| p.into_inner()));
         py.detach(|| {
-            if let Some(d) = d {
-                let _ = d.join();
+            if let Some(w) = w {
+                let _ = w.join();
             }
             for t in ts {
                 let _ = t.join();
             }
         });
+        // (the wake pair's end here closes: the loop's end reads EOF)
+        self.shared.waker.lock().unwrap_or_else(|p| p.into_inner()).take();
     }
 
     /// The host's numbers since the last stats(reset=True): frames and bytes in and out, each frame's wait for the
-    /// Python lane (p50 / p99 / max ms), connections accepted.
+    /// Python lane (p50 / p99 / max ms), connections accepted, poses merged.
     #[pyo3(signature = (reset=false))]
     fn stats<'py>(&self, py: Python<'py>, reset: bool) -> PyResult<Bound<'py, PyDict>> {
         let mut s = self.shared.stats();
@@ -423,6 +529,7 @@ impl Host {
         d.set_item("bytes_out", s.bytes_out)?;
         d.set_item("connections", s.connections)?;
         d.set_item("waits", s.wait_n)?;
+        d.set_item("merged", s.merged)?;
         let mut w = s.waits.clone();
         w.sort_unstable();
         let pick = |q: f64| -> f64 {
@@ -460,94 +567,14 @@ fn stop_accepting(addr: SocketAddr, accept: Option<JoinHandle<()>>) {
 impl Drop for Host {
     fn drop(&mut self) {
         // (dropped by Python's GC without shutdown(): the threads are told to end, never joined here, where the GIL
-        // is held and the delivery thread may wait for it)
-        if !self.closed.swap(true, Ordering::SeqCst) {
+        // is held and the watchdog may wait for it)
+        if !self.shared.closed.swap(true, Ordering::SeqCst) {
             let h = self.accept.get_mut().unwrap_or_else(|p| p.into_inner()).take();
             let addr = self.addr;
             std::thread::spawn(move || stop_accepting(addr, h));
         }
         self.shared.stop.store(true, Ordering::SeqCst);
         self.shared.cv.notify_all();
-    }
-}
-
-/// A batch's events: the delivery thread adds to them until Python takes them (None after).
-struct BatchInner {
-    evs: Mutex<Option<Vec<Ev>>>,
-    serial: u64,
-}
-
-/// Everything that came since the last batch was taken, handed to the loop (earthfast.HostBatch).
-#[pyclass(module = "earthfast", name = "HostBatch", frozen)]
-pub struct Batch {
-    inner: Arc<BatchInner>,
-    shared: Arc<Shared>,
-}
-
-#[pymethods]
-impl Batch {
-    /// [(connection id, kind, value)] in the order they came, once (later calls: []). kind 0: a new connection,
-    /// value its Wire; 1: a frame's payload (bytes); 2: the reading ended, value None (a clean EOF) or (errno or
-    /// None, text, protocol error?); 3: the outgoing queue drained for a waiting drain() (None). Each frame's wait is
-    /// counted now (the loop runs this callback: the lane took them).
-    fn take<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
-        let evs = {
-            let mut g = self.inner.evs.lock().unwrap_or_else(|p| p.into_inner());
-            let evs = g.take().unwrap_or_default();
-            let mut ib = self.shared.inbox();
-            if ib.out.is_some_and(|o| o.0 == self.inner.serial) {
-                ib.out = None;
-                ib.stall_logged = false;
-            }
-            evs
-        };
-        let now = Instant::now();
-        let out = PyList::empty(py);
-        let mut waits = Vec::new();
-        for e in evs {
-            let item = match e {
-                Ev::Connect(w) => {
-                    let id = w.id;
-                    (id, 0u8, Py::new(py, Wire { core: w })?.into_any())
-                }
-                Ev::Frame(id, data, at) => {
-                    waits.push(now.saturating_duration_since(at).as_micros() as u64);
-                    if let Some(w) = self.find(id) {
-                        w.inbox_bytes.fetch_sub(data.len(), Ordering::Relaxed);
-                    }
-                    (id, 1u8, PyBytes::new(py, &data).into_any().unbind())
-                }
-                Ev::End(id, None) => (id, 2u8, py.None()),
-                Ev::End(id, Some(e)) => {
-                    (id, 2u8, (e.errno, e.text, e.protocol).into_pyobject(py)?.into_any().unbind())
-                }
-                Ev::Drained(id) => (id, 3u8, py.None()),
-            };
-            out.append(item)?;
-        }
-        if !waits.is_empty() {
-            let mut s = self.shared.stats();
-            for w in waits {
-                s.wait_n += 1;
-                s.wait_max_us = s.wait_max_us.max(w);
-                if s.waits.len() < WAITS_MAX {
-                    s.waits.push(w.min(u32::MAX as u64) as u32);
-                }
-            }
-        }
-        Ok(out)
-    }
-}
-
-impl Batch {
-    fn find(&self, id: u64) -> Option<Arc<WireCore>> {
-        self.shared
-            .conns
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .iter()
-            .filter_map(|w| w.upgrade())
-            .find(|w| w.id == id)
     }
 }
 
@@ -612,10 +639,21 @@ fn host_hold_gil(_py: Python<'_>, seconds: f64) {
     std::thread::sleep(Duration::from_secs_f64(seconds.clamp(0.0, 30.0)));
 }
 
+/// 1c: a host recording's records [(ns since the connection was accepted, bytes)] (tools/hostreplay.py).
+#[pyfunction]
+fn host_read_recording<'py>(py: Python<'py>, path: std::path::PathBuf) -> PyResult<Bound<'py, PyList>> {
+    let recs = py.detach(|| record::read(&path)).map_err(|e| PyOSError::new_err(format!("{}: {e}", path.display())))?;
+    let out = PyList::empty(py);
+    for (ns, data) in recs {
+        out.append((ns, PyBytes::new(py, &data)))?;
+    }
+    Ok(out)
+}
+
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Host>()?;
     m.add_class::<Wire>()?;
-    m.add_class::<Batch>()?;
     m.add_function(wrap_pyfunction!(host_hold_gil, m)?)?;
+    m.add_function(wrap_pyfunction!(host_read_recording, m)?)?;
     Ok(())
 }

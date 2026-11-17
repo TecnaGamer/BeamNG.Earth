@@ -5,7 +5,7 @@
 //! so the pending count (asyncio's get_write_buffer_size) falls as the kernel takes them. Python's drain() waits while
 //! the queue is "paused": over HIGH bytes, until it is at LOW or less again (asyncio's default water marks, with its
 //! hysteresis). No thread here ever takes the GIL: what Python must hear (a frame, the end, the queue drained) goes to
-//! the host's inbox, and the delivery thread hands it over.
+//! the host's inbox, which wakes the event loop.
 use std::collections::VecDeque;
 use std::io::{BufReader, ErrorKind, Write};
 use std::net::{Shutdown, TcpStream};
@@ -14,6 +14,7 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::time::Instant;
 
 use super::frame;
+use super::record::Rec;
 use super::{Ev, Shared};
 
 /// asyncio's default write-buffer water marks (FlowControlMixin: high 64 KiB, low a quarter of it)
@@ -61,6 +62,8 @@ pub struct WireCore {
     out_cv: Condvar,
     /// frame bytes read and not yet taken by Python
     pub inbox_bytes: AtomicUsize,
+    /// when it was accepted (the recorder counts its times from it)
+    t0: Instant,
     shared: Arc<Shared>,
 }
 
@@ -77,6 +80,7 @@ impl WireCore {
             out: Mutex::new(Out::default()),
             out_cv: Condvar::new(),
             inbox_bytes: AtomicUsize::new(0),
+            t0: Instant::now(),
             shared,
         }))
     }
@@ -96,9 +100,6 @@ impl WireCore {
         }
         o.q.push_back(data.to_vec());
         o.pending += data.len();
-        if o.pending > HIGH {
-            o.paused = true;
-        }
         drop(o);
         self.shared.count_out(1, 0);
         self.out_cv.notify_one();
@@ -127,6 +128,11 @@ impl WireCore {
     /// goes); false: no need to wait
     pub fn drain_wait(&self) -> bool {
         let mut o = self.out();
+        // (asyncio pauses once what the kernel has not taken is over HIGH: asyncio's write hands the bytes to the
+        // socket at once, the writer thread here a moment later, so the queue is judged when drain() asks)
+        if o.pending > HIGH {
+            o.paused = true;
+        }
         if o.paused && !o.aborted && o.lost.is_none() {
             o.want_drain = true;
             true
@@ -167,6 +173,8 @@ impl WireCore {
                 return;
             }
         };
+        // (1c: what goes out, with BNGE_HOST_RECORD_OUT=1; finished when this thread ends)
+        let mut rec = self.shared.record.as_ref().filter(|r| r.out).and_then(|r| Rec::open(r, self.id, "out", self.t0));
         loop {
             let chunk = {
                 let mut o = self.out();
@@ -187,6 +195,9 @@ impl WireCore {
                     o = self.out_cv.wait(o).unwrap_or_else(|p| p.into_inner());
                 }
             };
+            if let Some(r) = rec.as_mut() {
+                r.put(&chunk);
+            }
             let mut off = 0;
             while off < chunk.len() {
                 let end = (off + PIECE).min(chunk.len());
@@ -262,9 +273,14 @@ impl WireCore {
             }
         };
         let mut r = BufReader::with_capacity(64 * 1024, sock);
+        // (1c: every frame read, BNGE_HOST_RECORD; finished when this thread ends)
+        let mut rec = self.shared.record.as_ref().and_then(|r| Rec::open(r, self.id, "in", self.t0));
         let end = loop {
             match frame::read_frame(&mut r) {
                 Ok(Some(data)) => {
+                    if let Some(rc) = rec.as_mut() {
+                        rc.put(&data);
+                    }
                     if self.is_closing() {
                         continue; // (asyncio stops reading at close: nothing more reaches the handler)
                     }
@@ -282,6 +298,7 @@ impl WireCore {
                 Err(e) => break Some(End::from_frame(&e)),
             }
         };
+        drop(rec); // (the recording complete before Python hears the end)
         let end = {
             let o = self.out();
             if o.closing || o.aborted {

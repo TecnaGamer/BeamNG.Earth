@@ -53,7 +53,7 @@ def recv_all(s):
 
 
 def host_threads():
-    """Linux: this process's threads named by the host (bnge-io, bnge-deliver, bnge-rd-N, bnge-wr-N)."""
+    """Linux: this process's threads named by the host (bnge-io, bnge-watch, bnge-rd-N, bnge-wr-N)."""
     out = []
     for tid in os.listdir("/proc/self/task"):
         try:
@@ -353,6 +353,96 @@ class HostTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(line.startswith("host: 1 frames in (0.0 MB), 1 out (0.0 MB); loop wait p50 "), line)
         self.assertIn(" ms, p99 ", line)
 
+    async def test_poses_merged_while_the_lane_is_busy(self):
+        got = []
+
+        async def handler(r, w):
+            while True:
+                m = await protocol.read_message(r)
+                if m is None:
+                    break
+                got.append(m)
+                if m["type"] == "warm":
+                    w.write(protocol.encode({"type": "ok"}))
+        srv = await self.serve(handler)
+        s = self.connect(srv)
+        s.sendall(protocol.encode({"type": "warm"}))
+        await self.in_thread(recv_frame, s)
+
+        def pose(aid, x, gone=None):
+            m = {"type": "pose", "anchorId": aid, "x": x, "cam": {"x": x}}
+            if gone is not None:
+                m["slotsGone"] = gone
+            return protocol.encode(m)
+        frames = [pose(1, 0, [[1, 1]]), pose(1, 1, []), pose(1, 2, [[2, 2]]),
+                  protocol.encode({"type": "tile_request", "anchorId": 1}),
+                  pose(1, 3), pose(2, 4, {"1": [3, 3]}), pose(2, 5, {})]
+
+        def send_slowly():
+            for f in frames:
+                s.sendall(f)
+                time.sleep(0.05)
+        t = threading.Thread(target=send_slowly)
+        t.start()
+        time.sleep(1.0)             # (the loop busy while they come)
+        t.join()
+        for _ in range(100):
+            if len(got) >= 5:
+                break
+            await asyncio.sleep(0.02)
+        await asyncio.sleep(0.1)
+        self.assertEqual(got[1:], [
+            {"type": "pose", "anchorId": 1, "x": 2, "cam": {"x": 2}, "slotsGone": [[1, 1], [2, 2]]},
+            {"type": "tile_request", "anchorId": 1},
+            {"type": "pose", "anchorId": 1, "x": 3, "cam": {"x": 3}},
+            {"type": "pose", "anchorId": 2, "x": 5, "cam": {"x": 5}, "slotsGone": [[3, 3]]},
+        ], "consecutive poses of one anchor merged (the later one, slotsGone joined); none across another frame or "
+           "another anchor")
+        self.assertEqual(srv.stats()["merged"], 3)
+        self.assertIn("; 3 poses merged", srv.summary())
+
+    async def test_recording_round_trip(self):
+        import tempfile
+
+        import earthfast
+        tmp = tempfile.TemporaryDirectory(prefix="bnge-hostrec-")
+        self.addCleanup(tmp.cleanup)
+        done = asyncio.Event()
+
+        async def handler(r, w):
+            while True:
+                m = await protocol.read_message(r)
+                if m is None:
+                    break
+                w.write(protocol.encode({"type": "echo", "m": m}))
+            w.close()
+            done.set()
+        srv = await protocol.start_server(handler, "127.0.0.1", 0, rust=True, record=tmp.name, record_out=True)
+        self.servers.append(srv)
+        s = self.connect(srv)
+        sent = [protocol.encode({"type": "hello", "i": i}) for i in range(3)]
+        for f in sent:
+            s.sendall(f)
+            await self.in_thread(recv_frame, s)
+        s.shutdown(socket.SHUT_WR)
+        await asyncio.wait_for(done.wait(), 5)
+        self.assertIsNone(await self.in_thread(recv_frame, s))
+        ins = [n for n in os.listdir(tmp.name) if n.endswith(".in.zst")]
+        self.assertEqual(len(ins), 1, os.listdir(tmp.name))
+        got = earthfast.host_read_recording(os.path.join(tmp.name, ins[0]))
+        self.assertEqual([d for _, d in got], [f[4:] for f in sent], "every frame read, as read")
+        self.assertEqual([t for t, _ in got], sorted(t for t, _ in got))
+        out = []
+        for _ in range(100):        # (the writer thread finishes its file as it ends)
+            try:
+                out = earthfast.host_read_recording(os.path.join(tmp.name, ins[0].replace(".in.", ".out.")))
+            except OSError:
+                out = []
+            if len(out) == 3:
+                break
+            await asyncio.sleep(0.02)
+        self.assertEqual([json.loads(d[4:])["m"]["i"] for _, d in out], [0, 1, 2], "every chunk written")
+
     async def test_asyncio_by_default(self):
         if "BNGE_HOST" not in os.environ:
             self.assertFalse(protocol.HOST, "BNGE_HOST is off unless set (the asyncio path stays the default)")
@@ -409,7 +499,11 @@ class HostTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(res["n"], 8 << 20)
         self.assertLess(res["read_all"], marks["hold_to"] - 0.5, "the 8 MB went out while the GIL was held")
         self.assertGreater(res["sent"], marks["hold_from"])
-        self.assertEqual(marks["msg"], {"type": "during"})
+        for _ in range(250):
+            if "msg" in marks:
+                break
+            await asyncio.sleep(0.02)
+        self.assertEqual(marks.get("msg"), {"type": "during"})
         st = srv.stats()
         self.assertGreater(st["wait_max_ms"], 1500, "the frame was read during the hold and waited for the lane")
 
@@ -421,7 +515,7 @@ class HostTest(unittest.IsolatedAsyncioTestCase):
         await self.in_thread(recv_frame, s)
         names = host_threads()
         self.assertIn("bnge-io", names)
-        self.assertIn("bnge-deliver", names)
+        self.assertIn("bnge-watch", names)
         self.assertTrue(any(n.startswith("bnge-rd-") for n in names), names)
         s.close()
         srv.close()

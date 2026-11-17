@@ -426,6 +426,7 @@ dependencies = [
  "pollster",
  "pulldown-cmark",
  "pyo3",
+ "serde",
  "serde_json",
  "sha2",
  "texture-compressor",
