@@ -62,6 +62,8 @@ class DeckKSpeedTest(unittest.TestCase):
         self.assertGreaterEqual(float(on[mid].min()), need - 0.06, "the clearance held")
         self.assertLessEqual(float(on.max()), float(off.max()) + roads.DECK_K_OVER_M + 1e-9, "no higher than allowed")
         self.assertLess(bend(on, 4.0), 0.75 * bend(off, 4.0), "a gentler crest")
+        self.assertLessEqual(float(np.max(np.abs(np.diff(on)))) / 4.0,
+                             float(np.max(np.abs(np.diff(off)))) / 4.0 + roads.DECK_K_GRADE + 1e-3, "no steeper")
         np.testing.assert_array_equal(slow, off, "a 30 km/h road's radius is under today's: as before")
 
     def test_a_short_deck_keeps_todays_profile(self):

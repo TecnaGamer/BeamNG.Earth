@@ -5197,12 +5197,15 @@ DECK_DESIGN_GRADE = 0.05  # a deck climbs to (and leaves) what it must clear at 
 # road's design speed asks (AASHTO's crest K: R = 100 K, 1,050 m at 60 km/h, 2,530 m at 80, 9,390 m at 120: earthfast
 # deck_crest_radii, the design speed as the speed tapers take it), then half that, before today's DECK_CURVE_K
 # ladder (1,500 m down to 100 m): the first of the longer curves that holds the clearance as today's best does (within
-# 5 cm) without standing more than DECK_K_OVER_M higher wins, else today's result as it was. The ground envelope's
+# 5 cm) without standing more than DECK_K_OVER_M higher or climbing more than DECK_K_GRADE more steeply anywhere (a
+# longer crest leaves its tangents less room: an M5 deck at Almondsbury went 4.2 -> 4.9 % without this) wins, else
+# today's result as it was. The ground envelope's
 # curve_deck (300 m) the same: R, R/2, then 300 m, the first its bounds allow. A motorway flyover's hump rounded over
 # its whole length instead of 150 m (a 65 km/h crest). Off by default until reviewed in game; BNE_DECK_K_SPEED=on.
 DECK_K_SPEED = os.environ.get("BNE_DECK_K_SPEED", "off") == "on"
 DECK_K_RUNGS = (1.0, 0.5)   # shares of the design speed's crest radius tried, in order
-DECK_K_OVER_M = 0.25        # m a longer curve may stand over today's best at its highest
+DECK_K_OVER_M = 0.25        # m a longer curve may stand over today's best at its highest ...
+DECK_K_GRADE = 0.0025       # ... and steeper than its steepest grade
 APPROACH_GRADE = 0.08  # m/m: the approach road's grade read from the ground 12 m past an abutment, at most
 
 
@@ -5313,12 +5316,15 @@ def curve_profile(s, g, req, z0, zL, g0=0.0, gL=0.0, max_grade=None, lift=None, 
             best = (key, z)
     if DECK_K_SPEED and crest_r is not None and np.isfinite(crest_r):
         # (the design speed's longer curves first: the first holding what today's best holds, no more than
-        # DECK_K_OVER_M higher; today's best when none does)
+        # DECK_K_OVER_M higher nor DECK_K_GRADE steeper; today's best when none does)
         top = float(np.max(best[1]))
+        ds = np.maximum(np.diff(s), 1e-9)
+        steep = float(np.max(np.abs(np.diff(best[1]) / ds))) if len(s) > 1 else 0.0
         for r in [crest_r * f for f in DECK_K_RUNGS if crest_r * f > DECK_CURVE_K]:
             z = _curve_try(s, want, cap, z0, zL, g0, gL, step, L, r, iters)
             short = float(np.max(want - z))
-            if (short <= 0.05 or (best[0][0] == 1 and short <= best[0][1])) and float(np.max(z)) <= top + DECK_K_OVER_M:
+            if (short <= 0.05 or (best[0][0] == 1 and short <= best[0][1])) and float(np.max(z)) <= top + DECK_K_OVER_M \
+                    and float(np.max(np.abs(np.diff(z) / ds))) <= steep + DECK_K_GRADE:
                 log.debug("deck curve: R %.0f m (design speed's crest %.0f m)", r, crest_r)
                 best = (None, z)
                 break
