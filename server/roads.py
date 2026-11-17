@@ -11945,9 +11945,15 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
     box = (x0 - OVERLAP, y0 - OVERLAP, x1 + OVERLAP, y1 + OVERLAP)
     near = (x0 - context_m, y0 - context_m, x1 + context_m, y1 + context_m)
     import europewalks
+    import lanesections
 
     cells = list(cells)
     seen, bseen = {}, {}
+    # a road one cell has whole and its neighbours have as lane sections (lanesections.split: a cell whose lane data
+    # holds none of its parts is not split) taken once, as its sections, as the traffic graph does (navgraph.build): as
+    # both, each copy's lines were cut wherever the other copy ran, all of them, and the road's markings, edges and wear
+    # were never drawn (I-576 Southern Beltway, 2026-11-17)
+    replaced = lanesections.replaced_roads(cells) if lanesections.ON else set()
     for feats in cells:
         if feats is None or len(feats) == 0:
             continue
@@ -11956,7 +11962,7 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
         for i in range(len(feats)):
             if bspecs[i] is not None and str(feats.ids[i]) not in bseen:
                 bseen[str(feats.ids[i])] = (feats, i, bspecs[i])
-            if specs[i] is None or str(feats.ids[i]) in seen:
+            if specs[i] is None or str(feats.ids[i]) in seen or str(feats.ids[i]) in replaced:
                 continue
             seen[str(feats.ids[i])] = (feats, i, specs[i])
     placement = placement_context(cells, urban_fn, widths, left_hand)
