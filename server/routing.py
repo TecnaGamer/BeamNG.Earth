@@ -360,7 +360,10 @@ def plan(lat0, lon0, lat1, lon1, net=None, bearing=None, via=(), avoid_highways=
                 data = json.loads(body.decode("utf-8"))
             except (UnicodeDecodeError, ValueError) as e:
                 raise ValhallaUnavailable(f"not JSON: {e}") from None
-            r = parse_valhalla(data)
+            try:
+                r = parse_valhalla(data)
+            except (TypeError, KeyError, AttributeError, IndexError, OverflowError) as e:
+                raise ValhallaUnavailable(f"malformed answer: {type(e).__name__}") from None
             return dict(r, avoided=True)
         except ValhallaUnavailable:     # (a malformed answer: the normal route, no "no route" note)
             avoided = None

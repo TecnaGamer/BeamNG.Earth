@@ -100,6 +100,13 @@ class ValhallaTest(unittest.TestCase):
         r = routing.plan(42.36, -71.06, 42.365, -71.05, net, 90, avoid_highways=True)
         self.assertIsNone(r["avoided"], "a malformed answer: the normal route, no 'no route' note")
         self.assertEqual(len(net.urls), 2)
+        for bad_trip in (dict(TRIP["trip"], summary={"length": 0.9, "time": {"x": 1}}),
+                         dict(TRIP["trip"], legs=[dict(TRIP["trip"]["legs"][0], maneuvers=[{"type": [1],
+                                                  "length": 0.1, "time": 1, "begin_shape_index": 0}])])):
+            net = FakeNet([{"trip": bad_trip}, OSRM])
+            r = routing.plan(42.36, -71.06, 42.365, -71.05, net, 90, avoid_highways=True)
+            self.assertIsNone(r["avoided"])
+            self.assertEqual(len(net.urls), 2, "malformed field types: OSRM")
         net = FakeNet([OSRM])
         self.assertNotIn("avoided", routing.plan(42.36, -71.06, 42.365, -71.05, net, 90))
 
