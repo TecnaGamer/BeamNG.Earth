@@ -73,7 +73,10 @@ const TREE_MIN_M: u8 = 3;           // canopy at least this tall: a tree (Meta /
 const SHRUB_MIN_M: u8 = 1;          // ... at least this: a shrub where the land cover says trees
 const SKIRT_M: f64 = 3.0;
 /// gg_regions' mark on a region of open ground under the canopy model where the game placed no tree (stage 4)
-const UNPLACED: u32 = 0x4000_0000;           // canopy of SHRUB_MIN_M and over this far from a tree's crown is its skirt (gg_regions)
+const UNPLACED: u32 = 0x4000_0000;
+/// (stage 5) the Python side's mark on a texel whose capture-time shadow could not be relit (ggshade::gg_relight's
+/// lost: clipped umbra): its colour the kind's lit texels' round it, as UNPLACED's
+const LOST: u32 = 0x2000_0000;
 
 // gen_ground's borders (m)
 const PURE_M: f64 = 8.0;            // a texel this far inside its region: its photo colour is the region's own
@@ -225,9 +228,9 @@ fn pattern(k: u8, u: f64, v: f64, inside_m: f64, phase: f64) -> (f32, [f32; 3], 
     }
 }
 
-// the crowns' sun (unit vector east, north, up: from the north-west at 45 degrees, as the photos' shadows and
-// groundphoto.rs) and how strongly the canopy's slope shades them
-const SUN: (f32, f32, f32) = (-0.5, 0.5, 0.70710677);
+// how strongly the canopy's slope shades the crowns: (stage 5) from no direction (the steeper the darker, every side
+// alike), no longer from a fixed north-west sun (the game lights and shadows its trees itself, the Codex report on
+// harsh shadows: a baked directional term doubles up with it)
 const CANOPY_SHADE: f32 = 0.3;
 /// (stage 3, the in-game A/B of 2026-11-16) the ground under the trees: the game draws their crowns (trees.lua), so a
 /// wood's texels take the forest floor's colour (leaf litter and undergrowth) this far over the photo's canopy colour,
@@ -1144,7 +1147,8 @@ pub fn gen_ground<'py>(py: Python<'py>, s2: PyReadonlyArray3<'py, u8>, kind: PyR
         // (stage 4) open ground under the canopy model where the game placed no tree: the photo there is the canopy's
         // colour, not the ground's; its colour the region's (from texels without canopy), never a sample
         let dirty: Vec<bool> = (0..n * n).map(|i| {
-            floor_mode == 2 && region[i] & UNPLACED != 0 && !matches!(kind[i], TREE | WATER | PAVED | ROOF | NONE)
+            ((floor_mode == 2 && region[i] & UNPLACED != 0) || region[i] & LOST != 0)
+                && !matches!(kind[i], TREE | WATER | PAVED | ROOF | NONE)
         }).collect();
         // (stage 4) the open ground's colour for the texels under unplaced canopy (dirty): the kind's open texels round
         // each 8 m cell's middle (KIND_WIN), found once per cell and kind (not per texel), bilinear between the cells
@@ -1315,10 +1319,10 @@ pub fn gen_ground<'py>(py: Python<'py>, s2: PyReadonlyArray3<'py, u8>, kind: PyR
                         let hx = (at(r, cr) - at(r, cl)) / (((cr - cl).max(1)) as f32 * t as f32);
                         let hy = (at(ru, c) - at(rd, c)) / (((rd - ru).max(1)) as f32 * t as f32);
                         let len = (hx * hx + hy * hy + 1.0).sqrt();
-                        let lam = ((-hx * SUN.0 - hy * SUN.1 + SUN.2) / len).max(0.0);
+                        let lam = 1.0 / len;     // (the normal's up part: 1 flat, less on the flanks)
                         let skirt = k == TREE && hc < TREE_MIN_M as f32;
                         let shade = if skirt { CANOPY_SHADE * SKIRT_SHADE } else { CANOPY_SHADE };
-                        f *= (1.0 + shade * (lam / SUN.2 - 1.0)).clamp(0.45, 1.25);
+                        f *= (1.0 + shade * (lam - 1.0)).clamp(0.45, 1.25);
                         if skirt {
                             f *= SKIRT_LIFT;
                         }

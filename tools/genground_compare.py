@@ -124,6 +124,8 @@ def main():
     ap.add_argument("--no-truth", action="store_true")
     ap.add_argument("--label", default="gen", help="this generator's column and file names")
     ap.add_argument("--no-trees", dest="trees", action="store_false", help="as a server with --trees off")
+    ap.add_argument("--no-shade", dest="shade", action="store_false",
+                    help="(stage 5) the generator without taking the capture sun's shadows out (the before column)")
     ap.add_argument("--season", default="off", help="the generator's season grade (earthd --season: auto, fall, ...)")
     ap.add_argument("--also", nargs="*", default=[], help="earlier columns' finished images to show too (by label)")
     ap.add_argument("--truth-source", default="auto", help="tools/ortho_hi.py's SOURCE (naip: one export request; "
@@ -190,18 +192,33 @@ def main():
         for k in mapcells.cells_for_bbox(float(la_.min()), float(lo_.min()), float(la_.max()), float(lo_.max())):
             veg.cell(k)
         stats["trees_build_s"] = round(time.perf_counter() - t0, 1)
+    dem = None
+    if a.shade:                 # (stage 5: the ground's heights for the terrain's shadows, fetched here first)
+        import dem as demmod
+        dem = demmod.Dem(os.path.join(a.cache, "dem"), fetcher=f)
+        t0 = time.perf_counter()
+        e = genground.SHADE_PAD_M + genground.HALO_M + 2600.0       # (and the data cells' fits round the block)
+        la_, lo_, _ = frame.enu_to_geodetic(np.array([x0 - e, x0 + size + e]), np.array([x0 - e, x0 + size + e]), 0.0)
+        dem.prefetch(genground._dem_keys(la_, lo_))
+        e2 = genground.HALO_M + 2600.0
+        im.fetch_needed(frame, x0 - e2, x0 - e2, size + 2 * e2, int((size + 2 * e2) / genground.FIT_RES_B))
+        stats["shade_prefetch_s"] = round(time.perf_counter() - t0, 1)
+    else:
+        genground.shade = lambda rgb, *args, **kw: (rgb, args[6])
     times = []
     for _ in range(3):
         c0, w0 = time.process_time(), time.perf_counter()
         pend = set()
-        gen, _used = genground.render(im, frame, x0, x0, size, px, md, sf, None, pend, veg)
+        gen, _used = genground.render(im, frame, x0, x0, size, px, md, sf, None, pend, veg, dem)
         times.append((time.perf_counter() - w0, time.process_time() - c0))
     hx0, _hy0, hsize, hpx, h = genground.halo_square(x0, x0, size, px)
     c0, w0 = time.process_time(), time.perf_counter()
     kind, region, canopy, complete = genground.inputs(frame, hx0, hx0, hsize, hpx, md, sf, None, veg)[:4]
     stats["gen_inputs_wall_ms"] = round(1000 * (time.perf_counter() - w0), 1)
     stats["gen_inputs_cpu_ms"] = round(1000 * (time.process_time() - c0), 1)
-    again, _ = genground.render(im, frame, x0, x0, size, px, md, sf, None, set(), veg)
+    again, _ = genground.render(im, frame, x0, x0, size, px, md, sf, None, set(), veg, dem)
+    stats["shade_fits"] = [v[3] for v in genground._fits.values()]
+    stats["pending"] = sorted(str(p) for p in pend)
     im.close()
     stats["deterministic_rerun"] = bool(np.array_equal(again, gen))
     stats["complete"] = bool(complete) and not pend

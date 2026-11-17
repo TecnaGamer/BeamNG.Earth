@@ -3623,7 +3623,8 @@ def base_photo(lat, lon, x0, y0, size, px, tex, buildings, rock_zoom, path, cach
     if genground.ON and not quick:      # (earthd.Server.write_base)
         try:
             rgb, used = genground.render(im, frame, x0, y0, size, px, getattr(_s, "md", None),
-                                         getattr(_s, "surface", None), _s.widths, pending, _base_veg() if trees else None)
+                                         getattr(_s, "surface", None), _s.widths, pending, _base_veg() if trees else None,
+                                         getattr(_s, "dem", None))
         except imagerymod.ImageryError:
             return None
         except Exception as e:      # (the Sentinel-2 photo alone then)

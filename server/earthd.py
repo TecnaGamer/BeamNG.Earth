@@ -4758,7 +4758,8 @@ class Server:
                                   self.mapdata.versions() if self.mapdata is not None else None,
                                   self.road_widths is not None, self.surface is not None, anchor.zooms[0],
                                   terraincache.PHOTO_EXT, terraincache.NO_PACK, ("rules", Server.ground_rules(self)),
-                                  *((("genground", vegetationmod.VERSION, getattr(self, "veg", None) is not None),)
+                                  *((("genground", vegetationmod.VERSION, getattr(self, "veg", None) is not None,
+                                      ("shade", genground.SHADE_VERSION, getattr(self, "dem", None) is not None)),)
                                     if genground.ON else ()))
         except Exception as e:          # (no cache rather than no photo)
             log.debug("revisit: base photo key: %s: %s", type(e).__name__, e)
@@ -5301,7 +5302,7 @@ class Server:
                 try:
                     rgb, used = genground.render(self.imagery, anchor.frame, x0, y0, size, BASE_RENDER_PX,
                                                  self.mapdata, self.surface, self.road_widths, pending,
-                                                 getattr(self, "veg", None))
+                                                 getattr(self, "veg", None), getattr(self, "dem", None))
                 except Exception as e:      # (the Sentinel-2 photo alone then)
                     log.info("base photo %s: generated ground: %s: %s", (anchor.id, cx, cy), type(e).__name__, e)
                     rgb = None
@@ -5398,7 +5399,7 @@ class Server:
         # (the generated ground's map data first: data_ready also asks again for what is missing, with its backoff, and
         # an early return below would hold those retries, and their give-up, for good: Codex round 3)
         gen_ok = genground.data_ready(self.mapdata, anchor.frame, x0, y0, size, self.surface,
-                                      getattr(self, "veg", None)) if gen else True
+                                      getattr(self, "veg", None), getattr(self, "dem", None)) if gen else True
         if not self.imagery.lazy_ready(anchor.frame, x0, y0, size, BASE_RENDER_PX):
             return False
         road_data = surfacemod.PHOTO_ROADS_PENDING

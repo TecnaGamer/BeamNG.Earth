@@ -118,6 +118,7 @@ mod l0roads;
 mod groundphoto;
 mod genground;
 mod ggshapes;
+mod ggshade;
 mod layerfold;
 mod roadsurf;
 mod levelways;
@@ -6476,6 +6477,7 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 308: generated ground stage 2: gg_regions(..., line, line_kind, ...) and the surface / pattern kinds,
     // gen_ground(..., poly, pdir, pphase, ...), ggshapes::gg_fill_lines / gg_poly_axes
     ggshapes::register(m)?;
+    ggshade::register(m)?;
     // 309: gg_poly_axes(..., skip): linear (a histogram of the edge directions), all of a polygon's rings, clip edges left
     // out (Codex review of 308)
     // 310: stage 3 perf: gg_grid (the texel grid and its Web-Mercator metres, rectangles), the edge-table polygon fill,
@@ -6486,6 +6488,8 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // cells, 32 integer normals, a lag test), the surfaces' palette by the support of their photo colour
     // 313: stage 4: gg_discs (where the game's trees stand), gg_regions(..., floor, skirt), gen_ground(..., floor,
     // floor_mode): the forest floor follows the placed trees
-    m.add("VERSION", 313)?;
+    // 314: stage 5: ggshade (gg_sun_fit, gg_relight: the capture sun's shadows out of the Sentinel-2 colour);
+    // gen_ground's LOST texels, its crowns' shading from no direction
+    m.add("VERSION", 314)?;
     Ok(())
 }
