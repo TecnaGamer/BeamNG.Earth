@@ -138,6 +138,8 @@ Baden-Wurttemberg (`owsproxy.lgl-bw.de`), Lower Saxony (`opendata.lgln.niedersac
 - **Country and state borders, big town names** (Natural Earth): the world map.
 - **US Interstates and US routes** (Natural Earth): the world map's Highways layer.
 - **Climate zones** (Beck et al. Köppen-Geiger map): which trees grow where and which landscape sounds play.
+- **Ecoregions** (RESOLVE Ecoregions 2017): which regional trees grow where (the Mediterranean's, the steppe
+  junipers, the desert's creosote).
 - **Oil wells and refineries** (OpenStreetMap, exported once): pump jacks, refinery sounds.
 - **Bridge types** (the US National Bridge Inventory and Wikidata): trusses, arches, suspension and cable-stayed
   bridges, and their real spans and heights.

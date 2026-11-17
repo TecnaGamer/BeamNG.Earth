@@ -65,7 +65,9 @@ VERSION = 35          # (the cached cells hold their groups: 14 for the regional
                       # 33: the open's oaks the open broadleaves (oak_open had two young oaks and one veteran)
                       # 34: the conifers in the open too (no bare-trunked crowd-grown firs and pines by roads)
                       # and palms by the climate: coconut palms in the tropics, fan / date palms elsewhere
-                      # 35: Portugal's and Galicia's eucalypt plantations (eucalypt_share)
+                      # 35: Portugal's and Galicia's eucalypt plantations (eucalypt_share); the regional rules by
+                      # RESOLVE's ecoregions (ecoregion.py) where boxes and climates stood: the Mediterranean's
+                      # trees, the creosote, the steppe junipers; the Cantabrian oak woods
 TREE_MIN_M = 3.0
 # The canopy raster, the scatter grids and the crown radii are in Web Mercator units (EPSG:3857: a metre there is
 # cos(lat) metres on the ground) and were tuned by eye at mid latitudes. Past them the same pixel counts covered less
@@ -127,23 +129,25 @@ CLUMP_ROAD_MARGIN_M = {"motorway": 3.0, "motorway_link": 2.0, "trunk": 2.5, "tru
                        "primary_link": 1.0, "secondary": 1.5, "tertiary": 1.0}
 CLUMP_ROAD_MARGIN_DEFAULT_M = 0.5
 CLUMP_SHIFT_M = 4.0
-# The Mediterranean basin's Cs climates (Beck et al.'s Koppen-Geiger classes 8-10: Csa, Csb, Csc) inside its box: holm
-# and cork oaks, olives, maritime pines, cypresses (Italy's stock trees, trees.lua's "mediterranean"; the asset survey
-# 2026-11-10 found them loaded with Italy's folder but unused). California's Cs keeps the West Coast's own groups.
-MED_KOPPEN = (8, 9, 10)
-MED_BOX = (28.0, -10.5, 46.5, 42.0)         # south, west, north, east
+# The Mediterranean basin's lowland ecoregions (35: RESOLVE's Ecoregions 2017, ecoregion.py; before, Beck et al.'s Cs
+# climates inside a box, which took Galicia's and northern Portugal's oak woods and the Black Sea's and missed North
+# Africa's and the Adriatic's maquis): holm and cork oaks, olives, maritime pines, cypresses (Italy's stock trees,
+# trees.lua's "mediterranean"; the asset survey 2026-11-10 found them loaded with Italy's folder but unused). The
+# Palearctic's Mediterranean biome without its montane forests (Corsica's, the Pindus's, the Apennines', northwest
+# Iberia's, inner Anatolia's: oaks, beeches, firs). California's keeps the West Coast's own groups.
+ECO_MED = (785, 787, 789, 790, 791, 792, 793, 794, 795, 796, 797, 798, 799, 803, 804, 805, 806)
 # More regional trees (the asset survey 2026-11-10, the stock shapes the flora supports; earthfast.regional_groups):
 # - Australia: eucalypts most of its trees (West Coast USA's eucalyptus_double / _tall, eucalyptus_group far).
 # - Temperate Europe's river banks: a share of the broadleaves within RIPARIAN_M of water are poplars (Automation Test
 #   Track's s_poplar_large: the black and hybrid poplars along the Loire, the Po, the Danube; willows and alders have no
 #   stock shape).
-# - North America's hot deserts (Koppen BWh, Beck et al. class 4: the Mojave, Sonoran and Chihuahuan): most desert
-#   shrubs are creosote bushes (Automation Test Track's shrub_a-c, the creosote of West Coast USA's desert).
+# - North America's hot deserts (35: their ecoregions, the Mojave, Sonoran, Chihuahuan, Baja California's and the Gulf
+#   of California's; before, Koppen BWh in a box): most desert shrubs are creosote bushes (Automation Test Track's
+#   shrub_a-c, the creosote of West Coast USA's desert; Larrea tridentata's range).
 ZONE_MED, ZONE_RIPARIAN, ZONE_HOT_DESERT = 1, 2, 3
 RIPARIAN_BOX = (42.0, -10.0, 60.0, 30.0)
 RIPARIAN_M = 30.0
-HOT_DESERT_KOPPEN = (4,)
-HOT_DESERT_BOX = (22.0, -120.0, 38.5, -98.0)
+ECO_CREOSOTE = (426, 428, 431, 433, 435)
 ROAD_CLEAR_M = 1.5          # trees kept this far off a road's edge (its width by class below)
 TREE_PIT_M = 0.4            # m past a road's edge (+ the push's 0.6) where a top over the road lands: a sidewalk's
                             # tree pit by the curb (pushed out of the full corridor, Boston Street's trees landed on the
@@ -267,28 +271,20 @@ def _in_box(lat, lon, box):
 
 def zones(lat, lon, riparian=None):
     """Per point: its regional zone for earthfast.regional_groups (ZONE_*; 0 none)."""
+    import ecoregion
     lat, lon = np.asarray(lat, np.float64), np.asarray(lon, np.float64)
-    z = np.where(mediterranean(lat, lon), ZONE_MED, 0).astype(np.uint8)
+    eco = ecoregion.eco_many(lat, lon)
+    z = np.where(np.isin(eco, ECO_MED), ZONE_MED, 0).astype(np.uint8)
     if riparian is not None:
         z[(z == 0) & np.asarray(riparian, bool) & _in_box(lat, lon, RIPARIAN_BOX)] = ZONE_RIPARIAN
-    box = _in_box(lat, lon, HOT_DESERT_BOX)
-    if box.any():
-        import climate
-        hot = np.zeros(len(lat), bool)
-        hot[box] = np.isin(climate.koppen_many(lat[box], lon[box]), HOT_DESERT_KOPPEN)
-        z[hot & (z == 0)] = ZONE_HOT_DESERT
+    z[(z == 0) & np.isin(eco, ECO_CREOSOTE)] = ZONE_HOT_DESERT
     return np.ascontiguousarray(z)
 
 
 def mediterranean(lat, lon):
-    """Per point: in the Mediterranean basin's Cs climates (MED_KOPPEN inside MED_BOX)."""
-    lat, lon = np.asarray(lat, np.float64), np.asarray(lon, np.float64)
-    box = (lat >= MED_BOX[0]) & (lat <= MED_BOX[2]) & (lon >= MED_BOX[1]) & (lon <= MED_BOX[3])
-    out = np.zeros(lat.shape, bool)
-    if box.any():
-        import climate
-        out[box] = np.isin(climate.koppen_many(lat[box], lon[box]), MED_KOPPEN)
-    return np.ascontiguousarray(out)
+    """Per point: in the Mediterranean basin's lowland ecoregions (ECO_MED)."""
+    import ecoregion
+    return np.ascontiguousarray(np.isin(ecoregion.eco_many(lat, lon), ECO_MED))
 
 
 def _north_america(lat, lon):
@@ -333,6 +329,9 @@ K_HOT_ARID = (4, 6)                             # BWh BSh: the broadleaves Italy
 BOREAL_LAT = 55.0           # (a Dfc / ET class south of this is a mountain's: continental shares)
 BROAD_SHARES = {"boreal": (1.0, 0.0, 0.0), "continental": (0.40, 0.42, 0.18), "oceanic": (0.20, 0.45, 0.35),
                 "med": (0.05, 0.95, 0.0), "subtropical": (0.10, 0.70, 0.20), "cold_arid": (0.30, 0.70, 0.0)}
+# (35) by the ecoregion where the Koppen class misleads: the Cantabrian and northwest Iberian oak woods (Galicia,
+# northern Portugal, Asturias: Quercus robur and pyrenaica, birches; beeches only in the mountains, BEECH_UPHILL)
+ECO_BROAD_SHARES = {648: (0.25, 0.75, 0.0), 800: (0.25, 0.75, 0.0)}
 BEECH_UPHILL = 0.5          # the beeches' share gained over the montane belt (from the birches and oaks)
 # spruces (of the conifers): SPRUCE_LAT's share by latitude in the lowlands, rising over the montane belt (MONTANE_M
 # below the spruce line) to SPRUCE_MOUNTAIN halfway up it (the firs and spruces of the montane belt); the line
@@ -362,6 +361,10 @@ K_RAINFOREST = (1, 2)
 K_TROPICS = (1, 2, 3)             # Af Am Aw: the coconut palms' (34)
 REDWOOD_MIN_M = 25.0
 STEPPE_JUNIPER = 0.6
+# (35) the juniper woodlands' ecoregions: Anatolia's steppes and Taurus, the Elburz, the Kopet Dag, eastern Iran,
+# Baluchistan and Afghanistan, the Alai and western Tian Shan, Oman's Al-Hajar, the Asir, the High Atlas, Spain's
+# Meseta (J. thurifera)
+ECO_JUNIPER = (59, 652, 694, 695, 721, 723, 727, 730, 756, 757, 758, 792, 804, 814, 816, 834)
 # (35) the eucalypt plantations of Portugal and Galicia (Eucalyptus globulus; E. nitens higher up in Galicia): a
 # quarter of both forests (Portugal's IFN6 2015: 845 000 ha of 3.2 M, its first species; Galicia's IFN4: about 30 %),
 # most of them in the Atlantic lowlands north of the Tagus, few in the Alentejo's cork and holm oak montado or on the
@@ -377,7 +380,8 @@ EUC_FROM = None             # (set below: the groups a plantation replaces)
 
 def redwood_belt(lat, lon):
     """The coast redwoods' fog belt (Big Sur to the Oregon line, ~40-60 km inland): a strip east of the coast, its
-    edge from -122.0 at 37 N to -124.25 at 42 N."""
+    edge from -122.0 at 37 N to -124.25 at 42 N. (35: kept over RESOLVE's Northern California coastal forests, which
+    leave out Muir Woods' and Big Sur's canyons at 0.05 degrees.)"""
     lat, lon = np.asarray(lat, np.float64), np.asarray(lon, np.float64)
     return (lat > 35.8) & (lat < 42.3) & (lon < -122.0 - 0.45 * (lat - 37.0)) & (lon > -125.0)
 RAINFOREST_PALM_KEEP = 0.4
@@ -431,6 +435,8 @@ def species_groups(group, height, lat, lon, lcls, koppen, elev, u_broad, u_conif
     k = np.asarray(koppen)
     built = np.asarray(lcls) == WC["built"]
     ea = eurasia(lat, lon)
+    import ecoregion
+    eco = ecoregion.eco_many(lat, lon)
     z = np.zeros(len(g)) if elev is None else np.asarray(elev, np.float64)
     line = spruce_line(lat)
     fade = np.clip((MOUNTAIN_FADE[1] - lat) / (MOUNTAIN_FADE[1] - MOUNTAIN_FADE[0]), 0.0, 1.0)
@@ -454,6 +460,8 @@ def species_groups(group, height, lat, lon, lcls, koppen, elev, u_broad, u_conif
         for name, m in (("boreal", boreal), ("oceanic", np.isin(k, K_OCEANIC)), ("med", np.isin(k, K_MED)),
                         ("subtropical", np.isin(k, K_SUBTROPICAL)), ("cold_arid", np.isin(k, K_COLD_ARID))):
             sh[m] = BROAD_SHARES[name]
+        for e_, share in ECO_BROAD_SHARES.items():
+            sh[eco == e_] = share
         uphill = np.where(boreal, 0.0, montane)
         gain = np.minimum(BEECH_UPHILL * uphill, sh[:, 0] + sh[:, 1])
         rest = np.maximum(sh[:, 0] + sh[:, 1], 1e-9)
@@ -482,11 +490,12 @@ def species_groups(group, height, lat, lon, lcls, koppen, elev, u_broad, u_conif
     # (34) coconut-type palms only in the tropics' climates (Af, Am, Aw): any other palm (California's, Florida's north,
     # the Mediterranean's, the Gulf's) the fan and date palms (the gallery 2026-11-17: the palm group mixed both)
     g[(g == G_PALM) & ~np.isin(k, K_TROPICS)] = G_PALM_DRY
-    # (34) the cold steppes' and deserts' open country outside North America (BSk, BWk: Anatolia, Iran, Central Asia,
-    # Spain's meseta): its low trees junipers (Juniperus excelsa / polycarpos / seravschanica / thurifera; Utah's
-    # shapes, as regional_groups does in the dry West), STEPPE_JUNIPER of them
+    # (34) the Old World's juniper woodlands' open country (35: their ecoregions, ECO_JUNIPER; before, any BSk / BWk
+    # outside North America, which put junipers on the Kazakh and Mongolian steppes): its low trees junipers
+    # (Juniperus excelsa / polycarpos / seravschanica / thurifera / procera; Utah's shapes, as regional_groups does in
+    # the dry West), STEPPE_JUNIPER of them
     c_ = np.asarray(lcls)
-    steppe = ~na & np.isin(k, K_COLD_ARID) & np.isin(c_, (WC["shrub"], WC["grass"], WC["bare"])) & (h < 9.0)
+    steppe = np.isin(eco, ECO_JUNIPER) & np.isin(c_, (WC["shrub"], WC["grass"], WC["bare"])) & (h < 9.0)
     g[steppe & np.isin(g, (G_DECIDUOUS, G_OAK, G_BIRCH, G_CONIFER, G_PINE_EU, G_SPRUCE))
       & (np.asarray(u_palm) < STEPPE_JUNIPER)] = G_JUNIPER
     # (34) the coast redwoods only in their fog belt (the gallery 2026-11-17: pine_west's tallest were redwoods, drawn

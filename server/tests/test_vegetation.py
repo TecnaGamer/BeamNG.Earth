@@ -491,8 +491,9 @@ class ShrubTest(unittest.TestCase):
 
     def test_steppe_junipers(self):
         import climate
-        for (lat, lon), lc, want in (((38.5, 33.0), "grass", veg.G_JUNIPER), ((38.5, 33.0), "tree", None),
-                                     ((52.2, 21.0), "grass", None)):
+        for (lat, lon), lc, want in (((39.9, 32.9), "grass", veg.G_JUNIPER), ((39.9, 32.9), "tree", None),
+                                     ((52.2, 21.0), "grass", None), ((48.0, 68.0), "grass", None),
+                                     ((40.6, -2.6), "shrub", veg.G_JUNIPER)):
             la, lo = np.array([lat]), np.array([lon])
             k = climate.koppen_many(la, lo)
             g = veg.species_groups(np.array([veg.G_DECIDUOUS], np.uint8), np.array([6.0]), la, lo,
@@ -606,6 +607,10 @@ class RegionalTest(unittest.TestCase):
         self.assertEqual(self.g(veg.G_DECIDUOUS, 9, 48.14, 11.58, 50, u=0.1), veg.G_DECIDUOUS, "Munich")
         self.assertEqual(self.g(veg.G_DECIDUOUS, 9, 34.05, -118.25, 10, u=0.5), veg.G_OAK_WEST, "California")
         self.assertEqual(self.g(veg.G_SHRUB, 1, 41.9, 12.5, 10, u=0.1), veg.G_SHRUB, "bushes are not trees")
+        # (35) by the ecoregions: North Africa's and the Adriatic's maquis in, Galicia's oak woods out
+        self.assertEqual(self.g(veg.G_DECIDUOUS, 6, 36.8, 10.18, 10, u=0.5), veg.G_MEDITERRANEAN, "Tunis")
+        self.assertEqual(self.g(veg.G_DECIDUOUS, 14, 43.5, 16.44, 10, u=0.5), veg.G_MEDITERRANEAN, "Split")
+        self.assertEqual(self.g(veg.G_DECIDUOUS, 9, 42.88, -8.55, 10, u=0.5), veg.G_DECIDUOUS, "Santiago")
 
     def test_more_regional_trees(self):
         """2026-11-10 asset survey: Australia's eucalypts, temperate Europe's riverside poplars, the Mojave's creosote."""
