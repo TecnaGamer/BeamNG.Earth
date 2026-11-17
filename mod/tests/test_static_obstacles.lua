@@ -1,5 +1,5 @@
 local script=arg[0]
-local root=script:match('^(.*[/\\])')..'../beamng_earth/lua/vehicle/extensions/beamngEarth/'
+local root=(script:match('^(.*[/\\])') or './')..'../beamng_earth/lua/vehicle/extensions/beamngEarth/'
 local M=dofile(root..'staticObstacles.lua')
 local checks=0
 local function check(v,msg)checks=checks+1;assert(v,msg)end

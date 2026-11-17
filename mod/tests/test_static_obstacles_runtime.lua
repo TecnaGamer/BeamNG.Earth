@@ -1,5 +1,5 @@
 -- Exercise the controller with real geometry and simulated public vehicle APIs.
-local root=arg[0]:match('^(.*[/\\])')..'../beamng_earth/lua/vehicle/extensions/beamngEarth/'
+local root=(arg[0]:match('^(.*[/\\])') or './')..'../beamng_earth/lua/vehicle/extensions/beamngEarth/'
 local M=dofile(root..'staticObstacles.lua')
 M.setEnabled(true)
 local n=0

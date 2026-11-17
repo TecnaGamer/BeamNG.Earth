@@ -1,4 +1,4 @@
-local root=arg[0]:match('^(.*[/\\])')..'../beamng_earth/lua/vehicle/extensions/beamngEarth/'
+local root=(arg[0]:match('^(.*[/\\])') or './')..'../beamng_earth/lua/vehicle/extensions/beamngEarth/'
 local S=dofile(root..'staticObstacles.lua')
 local M=dofile(root..'oncomingPass.lua')
 local checks=0

@@ -366,7 +366,8 @@
     "lon1": {"type": "num"},
     "bearing": {"type": "num", "optional": true, "doc": "the GPS (routing.py); bearing: the car's heading, the route starts that way"},
     "download": {"type": "str", "optional": true, "doc": "the \"Download along route\" setting: off / ahead / route (route_download)"},
-    "via": {"type": "list", "optional": true, "doc": "[[lat, lon], ...] waypoints on the way (routing.MAX_VIA; GitHub #935)"}
+    "via": {"type": "list", "optional": true, "doc": "[[lat, lon], ...] waypoints on the way (routing.MAX_VIA; GitHub #935)"},
+    "avoid": {"type": "bool", "optional": true, "doc": "the \"GPS: avoid highways\" setting (routing.plan avoid_highways; PR #1263)"}
    }
   },
   "where": {
@@ -595,7 +596,8 @@
     "error": {"type": "str", "optional": true},
     "elev": {"type": ["list", "dict"], "optional": true, "doc": "OSRM; elev: the map's profile (routing.resample, dem.sample)"},
     "legs": {"type": "list", "optional": true, "doc": "with via: [[dist_m, dur_s], ...] per leg"},
-    "steps": {"type": "list", "optional": true, "doc": "OSRM maneuvers (routing.parse; the API's gpsRoute().steps)"}
+    "steps": {"type": "list", "optional": true, "doc": "OSRM maneuvers (routing.parse; the API's gpsRoute().steps)"},
+    "avoided": {"type": "bool", "optional": true, "doc": "with avoid: true Valhalla's route without motorways, false it has none (the normal route), absent: not reached"}
    }
   },
   "route_download": {

@@ -235,6 +235,9 @@ def decode_polyline(s, precision=6):
     character outside the encoding's range or an overlong number, or leaves the lat / lon ranges."""
     if not isinstance(s, str) or len(s) > SHAPE_MAX_CHARS:
         raise ValueError("bad shape")
+    scale = {5: 1e5, 6: 1e6}.get(precision)     # (exact powers of ten: no C library pow, test_determinism)
+    if scale is None:
+        raise ValueError("bad precision")
     pts, i, lat, lon = [], 0, 0, 0
     while i < len(s):
         for axis in (0, 1):
@@ -252,7 +255,7 @@ def decode_polyline(s, precision=6):
                     break
             d = ~(v >> 1) if v & 1 else v >> 1
             lat, lon = (lat + d, lon) if axis == 0 else (lat, lon + d)
-        la, lo = lat / 10.0 ** precision, lon / 10.0 ** precision
+        la, lo = lat / scale, lon / scale
         if not (-90.0 <= la <= 90.0 and -180.0 <= lo <= 180.0):
             raise ValueError("bad shape")
         pts.append((la, lo))

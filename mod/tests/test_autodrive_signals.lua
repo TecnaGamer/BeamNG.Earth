@@ -1,4 +1,4 @@
-local root=arg[0]:match('^(.*[/\\])')..'../beamng_earth/lua/vehicle/extensions/beamngEarth/'
+local root=(arg[0]:match('^(.*[/\\])') or './')..'../beamng_earth/lua/vehicle/extensions/beamngEarth/'
 local M=dofile(root..'trafficSignals.lua')
 local n=0
 local function check(v,msg)n=n+1;assert(v,msg)end
