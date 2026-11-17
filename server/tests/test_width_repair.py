@@ -115,6 +115,27 @@ class WidthRepair(unittest.TestCase):
                 self.assertEqual(kept(home)[0], keep)
                 self.assertEqual(kept(other)[0], keep)
 
+    def test_the_widest_section_keeps_the_width_after_the_lane_section_split(self):
+        """mapdata splits a merged highway into its lane sections (lanesections.split) before any width is read: each
+        section's osm_lanes is its own count and its lane parts are cleared. The 2-lane section kept the 22 m only
+        while the road was whole (Codex round 2): every section carries the road's most lanes (LANE_MAX)."""
+        import lanesections
+        parts = [(0.0, 0.5, 11, {"lanes": "2"}), (0.5, 1.0, 12, {"lanes": "4"})]
+        f = layer("trunk", width=22.0, osm_width=22.0, lanes=2, oneway=True, parts=parts, line=[(0, 0), (600, 0)])
+        g = lanesections.split(f)
+        self.assertGreater(len(g), len(f), "split into its sections")
+        self.assertEqual(sorted(int(n) for n in g.attrs["osm_lanes"]), [2, 4])
+        self.assertEqual(g.attrs[lanesections.LANE_MAX].tolist(), [4] * len(g))
+        for i in range(len(g)):
+            self.assertIsNotNone(roads.mapped_rule_width(g, i), i)
+            self.assertIsNotNone(roads.mapped_osm_width(g, i), i)
+            self.assertAlmostEqual(roads.road_specs(g)[i].width, 22.0, places=4)
+        # (two lanes all along: no sections, and the 22 m is a right-of-way)
+        two = layer("trunk", width=22.0, lanes=2, oneway=True, line=[(0, 0), (600, 0)],
+                    parts=[(0.0, 0.5, 11, {"lanes": "2"}), (0.5, 1.0, 12, {"lanes": "2"})])
+        h = lanesections.split(two)
+        self.assertTrue(all(roads.mapped_rule_width(h, i) is None for i in range(len(h))))
+
     def test_a_layer_without_the_home_cell_at_hand_decides_on_its_own(self):
         f = layer("trunk", width=22.0, lanes=4, oneway=True)
         f.__dict__["_bnge_cell"] = ("14/0/0", "roads", "{}")
