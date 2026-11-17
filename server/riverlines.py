@@ -69,33 +69,64 @@ class RoadClearance:
     def __init__(self, segs):
         self.segs = np.asarray(segs, np.float64).reshape(-1, 5)
         self.grid = {}
+        if not len(self.segs):
+            return
+        # every segment's grid squares at once (a loop per segment and square: with from_features' loop per point the
+        # main process's busiest job of a motorway drive, 9 % of its time, made again for every 1.6 km, 2026-11-17)
         g = CLEAR_GRID_M
-        for k, (x0, y0, x1, y1, hw) in enumerate(self.segs):
-            for gx in range(int(math.floor((min(x0, x1) - hw) / g)), int(math.floor((max(x0, x1) + hw) / g)) + 1):
-                for gy in range(int(math.floor((min(y0, y1) - hw) / g)), int(math.floor((max(y0, y1) + hw) / g)) + 1):
-                    self.grid.setdefault((gx, gy), []).append(k)
+        x0, y0, x1, y1, hw = self.segs.T
+        gx0 = np.floor((np.minimum(x0, x1) - hw) / g).astype(np.int64)
+        gx1 = np.floor((np.maximum(x0, x1) + hw) / g).astype(np.int64)
+        gy0 = np.floor((np.minimum(y0, y1) - hw) / g).astype(np.int64)
+        gy1 = np.floor((np.maximum(y0, y1) + hw) / g).astype(np.int64)
+        nx, ny = gx1 - gx0 + 1, gy1 - gy0 + 1
+        k = np.repeat(np.arange(len(self.segs)), nx * ny)
+        at = np.arange(len(k)) - np.repeat(np.cumsum(nx * ny) - nx * ny, nx * ny)    # a square's place in its segment's
+        gx, gy = gx0[k] + at // ny[k], gy0[k] + at % ny[k]
+        order = np.lexsort((k, gy, gx))
+        gx, gy, k = gx[order], gy[order], k[order]
+        first = np.flatnonzero(np.r_[True, (gx[1:] != gx[:-1]) | (gy[1:] != gy[:-1])])
+        for a, b in zip(first.tolist(), np.r_[first[1:], len(k)].tolist()):
+            self.grid[(int(gx[a]), int(gy[a]))] = k[a:b].tolist()
+
+    @staticmethod
+    def cell_segs(frame, f):
+        """A cell's road segments (x0, y0, x1, y1, half width) in frame, made once per Features and frame."""
+        import roads as roadsmod
+        if f is None or len(f) == 0 or f.attrs.get("class") is None:
+            return np.zeros((0, 5), np.float64)
+        memo = f.__dict__.get("_river_clear_segs")
+        if memo is not None and memo[0] is frame:
+            return memo[1]
+        classes = f.attrs["class"]
+        lls, hws = [], []
+        for i in range(len(f)):
+            hw = ROAD_HALF_M.get(str(classes[i]))
+            if hw is None:
+                continue
+            for part in roadsmod.ground_parts(f, i):
+                ll = np.asarray(part, np.float64)
+                if len(ll) >= 2:
+                    lls.append(ll)
+                    hws.append(hw)
+        if not lls:
+            segs = np.zeros((0, 5), np.float64)
+        else:
+            n = np.array([len(ll) for ll in lls])
+            ll = np.concatenate(lls)
+            e, nn, _ = frame.geodetic_to_enu(ll[:, 1], ll[:, 0], np.zeros(len(ll)))
+            e, nn = np.asarray(e, np.float64), np.asarray(nn, np.float64)
+            pair = np.ones(len(ll) - 1, bool)
+            pair[np.cumsum(n)[:-1] - 1] = False         # (not from a part's last point to the next part's first)
+            a = np.flatnonzero(pair)
+            segs = np.stack([e[a], nn[a], e[a + 1], nn[a + 1], np.repeat(np.array(hws, np.float64), n)[a]], -1)
+        f.__dict__["_river_clear_segs"] = (frame, segs)
+        return segs
 
     @classmethod
     def from_features(cls, frame, feats_list):
-        import roads as roadsmod
-        segs = []
-        for f in feats_list:
-            if f is None or len(f) == 0 or f.attrs.get("class") is None:
-                continue
-            classes = f.attrs["class"]
-            for i in range(len(f)):
-                hw = ROAD_HALF_M.get(str(classes[i]))
-                if hw is None:
-                    continue
-                for part in roadsmod.ground_parts(f, i):
-                    ll = np.asarray(part, np.float64)
-                    if len(ll) < 2:
-                        continue
-                    e, n, _ = frame.geodetic_to_enu(ll[:, 1], ll[:, 0], np.zeros(len(ll)))
-                    e, n = np.asarray(e), np.asarray(n)
-                    for a in range(len(ll) - 1):
-                        segs.append((e[a], n[a], e[a + 1], n[a + 1], hw))
-        return cls(segs)
+        segs = [cls.cell_segs(frame, f) for f in feats_list]
+        return cls(np.concatenate(segs) if segs else np.zeros((0, 5), np.float64))
 
     def __call__(self, pts, search_m=60.0):
         """The distance (m) from each point (n, 2) to the nearest road edge within search_m (else inf)."""

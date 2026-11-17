@@ -127,6 +127,22 @@ class RoadClearanceTest(unittest.TestCase):
         self.assertEqual(d[1], 0.0)
         self.assertTrue(np.isinf(d[2]), "no road within the search radius")
 
+    def test_every_square_a_segment_touches_lists_it(self):
+        """The grid is made for all segments at once: each square lists, in order, the segments whose box with the
+        road's half width reaches into it (as the loop per segment and square listed them)."""
+        rng = np.random.default_rng(3)
+        a = rng.uniform(-900.0, 900.0, (300, 2))
+        b = a + rng.uniform(-260.0, 260.0, (300, 2))
+        segs = np.column_stack([a, b, rng.choice([2.5, 4.0, 7.0], 300)])
+        segs[0] = (-64.0, 0.0, 64.0, 128.0, 4.0)                    # (ends on the grid's lines)
+        want, g = {}, riverlines.CLEAR_GRID_M
+        for k, (x0, y0, x1, y1, hw) in enumerate(segs):
+            for gx in range(math.floor((min(x0, x1) - hw) / g), math.floor((max(x0, x1) + hw) / g) + 1):
+                for gy in range(math.floor((min(y0, y1) - hw) / g), math.floor((max(y0, y1) + hw) / g) + 1):
+                    want.setdefault((gx, gy), []).append(k)
+        self.assertEqual(riverlines.RoadClearance(segs).grid, want)
+        self.assertEqual(riverlines.RoadClearance([]).grid, {})
+
     def test_width_capped_beside_a_road(self):
         """A river along y = 0 with a road along y = 10: its width stops short of the road; without the road
         it keeps its width by class."""
