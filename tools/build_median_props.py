@@ -164,7 +164,10 @@ SE_PLATES = {"f17": ((128, 128), (174, 244), 0.855, 1.20, "plate"), "f18_11": ((
              "t200": ((640, 384), (244, 93), 0.855, 0.326, "plate"), "c1": ((896, 384), (244, 244), 0.60, 0.60, "disc"),
              "b3": ((128, 640), (243, 244), 0.60, 0.60, "plate"), "e1": ((384, 640), (183, 244), 0.90, 1.20, "plate"),
              "e2": ((128, 896), (183, 244), 0.90, 1.20, "plate"), "f2": ((768, 768), (483, 500), 1.93, 2.00, "plate"),
-             "e16": ((384, 896), (244, 98), 0.75, 0.30, "plate"), "e16_l": ((384, 896), (-244, 98), 0.75, 0.30, "plate")}
+             "e16": ((384, 896), (244, 98), 0.75, 0.30, "plate"), "e16_l": ((384, 896), (-244, 98), 0.75, 0.30, "plate"),
+             "e9": ((128, 896), (244, 195), 0.75, 0.60, "plate", "bne_se_signs"),
+             "e10": ((384, 896), (244, 195), 0.75, 0.60, "plate", "bne_se_signs")}
+# (a sixth field: the sheet, the first's bne_se_signs: E9, E10 6 kap. 1 §, S1 0.75 wide x S2 0.60 m, drawn to that shape)
 SE_LOW, SE_LOW_PLATED, SE_GAP = 1.5, 1.2, 0.05      # m: a sign's lower edge (1 kap. 13, 17 §§: 1.0-2.0 m), with T2 under it
 SE_OVER_WALK = 2.1          # m: ... over a sidewalk, a town street's (1 kap. 13 §: at least 2.1 m)
 # group of the rows (guardrails.GROUPS) -> plates bottom up, lower edge of the lowest, both faces drawn, poles' x
@@ -176,7 +179,8 @@ SE_SIGNS = {"se_f17": (("f17",), SE_LOW, False, (0.0,)), "se_f17_400": (("t400",
             "se_c1": (("c1",), SE_LOW, False, (0.0,)), "se_b3": (("b3",), 2.0, True, (0.0,)),
             "se_e1": (("e1",), SE_LOW, False, (0.0,)), "se_e2": (("e2",), SE_LOW, False, (0.0,)),
             "se_c1_t": (("c1",), SE_OVER_WALK, False, (0.0,)), "se_e16_r": (("e16",), SE_OVER_WALK, False, (0.0,)),
-            "se_e16_l": (("e16_l",), SE_OVER_WALK, False, (0.0,))}
+            "se_e16_l": (("e16_l",), SE_OVER_WALK, False, (0.0,)), "se_e9": (("e9",), SE_OVER_WALK, False, (0.0,)),
+            "se_e10": (("e10",), SE_OVER_WALK, False, (0.0,))}
 SE_R = 0.03                 # m: the plates' corners
 
 
@@ -200,14 +204,15 @@ def se_sign(group, near):
     m = Mesh(8)
     z = low
     for name in plates:
-        (cx, cy), (pw, ph), w, h, shape = SE_PLATES[name]
+        (cx, cy), (pw, ph), w, h, shape, *sheet = SE_PLATES[name]
+        sheet = sheet[0] if sheet else "bne_se_signs2"
         edge = outline(w, h, shape, 2 if near else 1)
         mid = z + h / 2
         uv = [((cx + x / w * pw) / 1024, 1 - (cy - q / h * ph) / 1024) for x, q in edge]
         front, back = -B1_POST - B1_DEPTH, -B1_POST
-        m.face("bne_se_signs2", [(x, front, mid + q) for x, q in edge], uv)
+        m.face(sheet, [(x, front, mid + q) for x, q in edge], uv)
         if both:        # (a face each way: its picture reads the same from behind)
-            m.face("bne_se_signs2", [(-x, back, mid + q) for x, q in edge], uv)
+            m.face(sheet, [(-x, back, mid + q) for x, q in edge], uv)
         else:
             m.face("bne_cable_steel", [(x, back, mid + q) for x, q in reversed(edge)])
         if near:

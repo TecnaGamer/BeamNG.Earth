@@ -1,9 +1,11 @@
-"""The textures of Sweden's signs: Transportstyrelsen's own artwork on two sheets, bne_se_signs.png (C31, B1) and
+"""The textures of Sweden's signs: Transportstyrelsen's own artwork on two sheets, bne_se_signs.png (C31, B1, A19, E9,
+E10) and
 bne_se_signs2.png (the signs of server/sesigns.py).
 
     python tools/build_swedish_signs.py <folder of the downloaded PNGs: c31-3.png ... c31-12.png, b1-1.png,
                                          f17-1.png, f18-2.png, f18-5.png, f18-6.png, t2-1.png, c1-1.png, b3-1.png,
-                                         e-11.png, e2-1.png, f2-1.png, a19-1.png, e16-1.png>
+                                         e-11.png, e2-1.png, f2-1.png, a19-1.png, e16-1.png,
+                                         e9-1.png, e10-1.png>
 
 The artwork is the agency's PNGs of the signs (transportstyrelsen.se, vagmarken: C31 30 to 120 km/h as c31-3 to c31-12,
 B1 as b1-1; fetched 2026-11-02), drawn in its Tratex. Each stands centred in a cell of 256 px on the signs' red, which
@@ -24,6 +26,9 @@ OUT = os.path.join(HERE, "..", "mod", "beamng_earth", "levels", "beamng_earth", 
                    "bne_se_signs.png")
 CELL, ART = 256, 244    # px: a cell, the artwork's longer side in it
 RED = (238, 58, 66)     # the artwork's #EE3A42
+# width / height of the signs whose web picture has another shape: E9, E10 S1 0.75 x S2 0.60 m (TSFS 2019:74 6 kap. 1 §,
+# its figure: S1 the width), the agency's PNG 399 x 286 px
+SHAPE = {"e9-1.png": 0.75 / 0.60, "e10-1.png": 0.75 / 0.60}
 COLOURS = 48            # enough for the anti-aliased edges; keeps the sheet to some 70 KB
 
 
@@ -141,11 +146,13 @@ def sheet2(src):
 
 def main(src):
     sheet = Image.new("RGB", (CELL * 4, CELL * 4), RED)
-    names = [f"c31-{n}.png" for n in range(3, 13)] + ["b1-1.png", "a19-1.png"]
+    names = [f"c31-{n}.png" for n in range(3, 13)] + ["b1-1.png", "a19-1.png", "e9-1.png", "e10-1.png"]
     for k, name in enumerate(names):
         im = Image.open(os.path.join(src, name)).convert("RGBA")
         s = ART / max(im.size)
         im = im.resize((round(im.width * s), round(im.height * s)), Image.LANCZOS)
+        if name in SHAPE:       # (the agency's picture is not the sign's shape: drawn to it)
+            im = im.resize((ART, round(ART / SHAPE[name])), Image.LANCZOS)
         x, y = (k % 4) * CELL + (CELL - im.width) // 2, (k // 4) * CELL + (CELL - im.height) // 2
         sheet.paste(im, (x, y), im)
     sheet.quantize(COLOURS, dither=Image.Dither.NONE).save(OUT, optimize=True)
