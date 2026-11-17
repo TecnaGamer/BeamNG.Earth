@@ -146,11 +146,13 @@ def main():
                         # height, as their ground: a deck 9 km from the region's origin stood 6.2 m "under" its ground)
                         xy = np.asarray(xy, np.float64)
                         _la, _lo, h = frame.enu_to_geodetic(xy[:, 0], xy[:, 1], np.asarray(z, np.float64))
-                        decks.append((fid, xy[:, :2], np.asarray(h, np.float64), float(sp.width) / 2))
+                        # (with its depth: the clearance it was solved for, grademetrics.clearance)
+                        decks.append((fid, xy[:, :2], np.asarray(h, np.float64), float(sp.width) / 2,
+                                      float(view.depth_of(fid))))
                 except Exception as e:
                     print(f"{name}: decks: {type(e).__name__}: {e}", file=sys.stderr)
                     decks = []
-            for _f, xy, z, _h in decks:     # (a check of the frames: a deck's ends stand on its abutments' ground)
+            for _f, xy, z, *_ in decks:     # (a check of the frames: a deck's ends stand on its abutments' ground)
                 g = ground(np.asarray(xy, np.float64)[[0, -1], :2])
                 deck_ground.extend((np.asarray(z, np.float64)[[0, -1]] - g).tolist())
 

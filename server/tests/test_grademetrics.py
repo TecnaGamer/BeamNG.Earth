@@ -103,6 +103,18 @@ class ClearanceTest(unittest.TestCase):
         self.assertEqual(gm.clearance([("road", road)], own, {"road"}), [])
         self.assertEqual(gm.clearance([("road", road)], low, set()), [])
 
+    def test_a_thin_deck_clears_with_its_own_depth(self):
+        # (a 1.4 m slab over the road by its headroom and that slab: clear; by a long span's 2.2 m depth it was "low")
+        road = plan(np.c_[S, np.zeros_like(S)], np.zeros_like(S))
+        deck_xy = np.c_[np.full(21, 50.0), np.linspace(-20.0, 20.0, 21)]
+        thin = float(roads.deck_road_clear(1.4))
+        self.assertLess(thin, float(roads.DECK_ROAD_CLEAR))
+        z = np.full(21, thin + 0.1)
+        self.assertEqual(gm.clearance([("road", road)], [("deck", deck_xy, z, 6.0, 1.4)], {"road"}), [])
+        self.assertEqual(len(gm.clearance([("road", road)], [("deck", deck_xy, z, 6.0)], {"road"})), 1)
+        rows = gm.clearance([("road", road)], [("deck", deck_xy, z - 0.5, 6.0, 1.4)], {"road"})
+        self.assertAlmostEqual(rows[0]["dz"], 0.4, places=6)
+
 
 class SummaryTest(unittest.TestCase):
 

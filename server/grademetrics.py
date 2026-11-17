@@ -190,10 +190,12 @@ def profiles(plans, ceilings, ground):
 
 
 def clearance(plans, decks, names):
-    """[{x, y, dz, a, b}] of the road samples under a deck closer to its surface than roads.DECK_ROAD_CLEAR: dz the
-    shortfall (m). plans: [(fid, Plan)]; decks: [(fid, xy (k, 2), z (k,), half width)]; names: the roads to look at."""
+    """[{x, y, dz, a, b}] of the road samples under a deck closer to its surface than the deck's clearance
+    (roads.deck_road_clear of its depth: the headroom, its margin and its slab and girders, which the deck was solved
+    with; roads.DECK_ROAD_CLEAR, a long span's, when the deck gives none): dz the shortfall (m). plans: [(fid, Plan)];
+    decks: [(fid, xy (k, 2), z (k,), half width[, depth])]; names: the roads to look at. (Lagos' thin slabs, 1.4 m,
+    cleared their roads by 6.4 m and counted as low against a long span's 2.2 m depth, 2026-11-17.)"""
     import roads as roadsmod
-    need = float(roadsmod.DECK_ROAD_CLEAR)
     if not decks:
         return []
     seg = _Segments([d[1] for d in decks])
@@ -212,7 +214,9 @@ def clearance(plans, decks, names):
         worst = {}
         for q, zq in zip(xy[under], z[under]):
             for j, (dist, sj, t) in seg.near(q, reach).items():
-                dfid, dxy, dz, half = decks[j]
+                dfid, dxy, dz, half = decks[j][:4]
+                need = float(roadsmod.deck_road_clear(decks[j][4]) if len(decks[j]) > 4 and decks[j][4] is not None
+                             else roadsmod.DECK_ROAD_CLEAR)
                 if dist > half:
                     continue
                 gap = _z_at(np.asarray(dz, np.float64), sj, t) - float(zq)
