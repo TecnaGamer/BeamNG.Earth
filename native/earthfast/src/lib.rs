@@ -6600,6 +6600,8 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(roadnet::eustreets::eu_street_pass, m)?)?;
     // 401: R2a's European street pass (roadnet::eustreets = _road_specs' europewalks pass: the filter, middle point,
     // mapped width and frontage; europewalks.plan and country_for as callbacks)
-    m.add("VERSION", 401)?;
+    m.add_function(wrap_pyfunction!(roadnet::levelkinds::level_kind_mask, m)?)?;
+    // 402: R2a's level kinds (roadnet::levelkinds::level_kind_mask = _bridge_specs' "has a range of that kind" loop)
+    m.add("VERSION", 402)?;
     Ok(())
 }

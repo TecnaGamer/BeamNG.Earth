@@ -65,3 +65,24 @@ pub fn lower_is(s: &str, key: &str) -> bool {
     debug_assert!(key.is_ascii() && !key.contains('k'));
     s.is_ascii() && s.len() == key.len() && s.eq_ignore_ascii_case(key)
 }
+
+/// Python's unpacking of x into exactly n names (`a, b, c = x`, `for a, b, c in ...`): its values; ValueError unless it
+/// holds n (its iterator asked for at most n + 1, as CPython's unpacking does), a non-iterable's TypeError.
+pub fn unpack<'py>(x: &Bound<'py, PyAny>, n: usize) -> PyResult<Vec<Bound<'py, PyAny>>> {
+    let mut it = x.try_iter()?;
+    let mut got = Vec::with_capacity(n);
+    while got.len() < n {
+        match it.next() {
+            Some(v) => got.push(v?),
+            None => {
+                return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                    "not enough values to unpack (expected {n}, got {})", got.len())));
+            }
+        }
+    }
+    if let Some(v) = it.next() {
+        v?;
+        return Err(pyo3::exceptions::PyValueError::new_err(format!("too many values to unpack (expected {n})")));
+    }
+    Ok(got)
+}
