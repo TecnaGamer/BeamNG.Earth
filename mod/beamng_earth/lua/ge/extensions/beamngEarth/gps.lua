@@ -246,6 +246,12 @@ local function clearArrows()
 end
 
 local function core() return rawget(_G, 'beamngEarth_core') end
+-- the "GPS: avoid highways" setting (GitHub #330); the route is planned again when it changes (update)
+local function avoidHighways()
+  local s = rawget(_G, 'beamngEarth_settings')
+  return s ~= nil and s.get('routeAvoidHighways') == true
+end
+local routedAvoid           -- its value the route was last asked with
 
 -- Pure: the compass bearing (degrees, 0 north, clockwise) of a direction (x east, y north), or nil when it is ~vertical.
 function M.compass(dx, dy)
@@ -274,7 +280,7 @@ local function requestRoute(player)
     for k, w in ipairs(vias) do via[k] = { w.lat, w.lon } end
   end
   if c.requestRoute(nextId, player.lat, player.lon, dest.lat, dest.lon, b, via) then
-    pendingId, lastRequest = nextId, os.clock()
+    pendingId, lastRequest, routedAvoid = nextId, os.clock(), avoidHighways()
   end
 end
 
@@ -352,6 +358,7 @@ function M.status()
            remaining = info and info.remaining, eta = info and info.eta, routeVersion = route and route.version or 0,
            progress = progress, planning = pendingId ~= nil, routeError = routeError, pendingId = pendingId,
            autodrive = auto, autoNodes = autoPath and #autoPath or nil, off = info and info.off, arrows = routedTo,
+           avoided = route and route.avoided, avoidHighways = avoidHighways(),
            routeDownload = downloadProgress, replans = M.noProgressReplans, recoveries = M.autoRecoveries,
            waypoints = #vias > 0 and M.waypoints() or nil, legs = route and route.legs or nil }
 end
@@ -1286,6 +1293,11 @@ function M.update(anchor, player)
     stillSince, progRemaining, progAt, stuckTries = nil, nil, nil, 0
   end
   -- the planned route: asked once (and on re-routes), taken when it arrives
+  if pendingId and avoidHighways() ~= routedAvoid then       -- (the setting changed: that answer is the old one's)
+    local c = core()
+    if c and c.takeRoute then c.takeRoute(pendingId) end
+    pendingId = nil
+  end
   if pendingId then
     local c = core()
     local r = c and c.takeRoute and c.takeRoute(pendingId)
@@ -1294,7 +1306,7 @@ function M.update(anchor, player)
       if r.points and #r.points >= 2 and (tonumber(r.dist) or 0) >= 1 then
         routeVersion = routeVersion + 1
         route = { points = r.points, dist = r.dist, dur = r.dur, version = routeVersion, elev = r.elev, legs = r.legs,
-          steps = r.steps }
+        avoided = r.avoided, steps = r.steps }
         routeError, enu, routedTo, leastRemaining, routeFails = nil, nil, nil, nil, 0
         autoForce = true
       else
@@ -1305,7 +1317,7 @@ function M.update(anchor, player)
     elseif now - lastRequest > 30 then
       pendingId = nil                      -- no answer: try again below
     end
-  elseif M.retryRoute(route, now - lastRequest, routeFails) then
+  elseif avoidHighways() ~= routedAvoid or M.retryRoute(route, now - lastRequest, routeFails) then
     requestRoute(player)
   end
 
