@@ -122,14 +122,14 @@ Sources: VGU 2024 (remiss version 0.9) and TSFS 2019:74, requirement numbers in 
 |---|---|---|
 | F17, F17 + T2 400/300/200 m | Just before the first merge arrow (20 m), the plate 400/300/200 m before the arrows, both sides (the median one halfway to the oncoming carriageway where the two are drawn close); VGU's 50 m before the 2.5 m point came too late in the game. On two-lane stretches of 300 m or more, or shorter ones the map tags `merge_to_*` (not an on-ramp's acceleration lane); two lanes are measured back through a wider carriageway beside an exit lane | 16, 18 |
 | F18 | Where a plain road becomes a section, or forks into a pair of carriageways | 4 |
-| F2 | 350 m before a spansk sväng, outside towns | 3 |
+| F2 | 350 m before a spansk sväng on a 2+1 road, outside towns | 3 (counted before the 2+1 requirement) |
 | C1 | Both sides of the end of an exit ramp from a fast road, and of a spansk sväng's link | 10 |
 | E1, E2 | Where a motorway begins and ends, and on its ramps | 16, 9 |
 | B3 | Both sides of a painted crossing without signals, at 60 km/h or less | 181 in about 3 km² of Borås |
 
-**Spansk sväng.** The data has no turn bans, so it is told by shape: a one-way link leaving a main road of 70 km/h or more on the right, 20-300 m long, that crosses back or ends beside it. Scored against OpenStreetMap's `no_left_turn` relations across Sweden: 148 hits, 92% with a ban, against 42% for plain right slip roads. Service roads are left out.
+**Spansk sväng.** F2 goes only on a confirmed 2+1 road. That is a two-way road in `motesfri.sections` (with the 1+1 connectors between overtaking sections); or a one-way carriageway with a mapped lane count of 2 or 1, next to an opposing one with the other count; or a one-lane one-way piece within 400 m of a section, because OpenStreetMap splits the road into short one-way pieces with no lane tags around the junction's island (Rv 27 south of Borås, 57.6600, 12.9184: a section 236 m north, another 1.1 km south). Ordinary 1+1 and 2+2 roads, unknown lane splits away from a section and short turn pockets do not get one. The data has no turn bans, so the turning link itself is told by shape: a one-way link leaving a main road of 70 km/h or more on the right, 20-300 m long, that crosses back or ends beside it. Service roads are left out. Before the 2+1 requirement the shape rule found 148 links across Sweden, 92% of them on a road with OpenStreetMap's `no_left_turn`, against 42% of plain right slip roads. In a 6 km square around the test spot below the requirement keeps 2 of the 3 links; the one it drops is on a plain 1+1 road.
 
-**How to test in game.** Not yet checked in game. Stop the running server, then start this branch's: `cd ~/.cache/bngearth-dev && ./run_server.sh` (no leading `!` in fish).
+**How to test in game.** Only F17 has been checked in game. Stop the running server, then run `./run_server.sh` from this branch's checkout.
 
 | Check | Coordinates |
 |---|---|
@@ -204,5 +204,5 @@ Rural roads with a surface tag (OpenStreetMap tags, as delivered through Overtur
 - **Widths of gravel and private roads.** No official width was found for gravel or private roads, so the repo's existing STYLE values stay.
 - **Lane ends with no barrier move.** Where a section meets a short way with no lane split tagged, the barrier cannot tell where to go, so it keeps its offset and the lane line stops at the joint. 2 of 13 lane ends in the two sampled areas.
 - **Wide single lanes.** Past a two-way lane end the road keeps its width, so a connector between sections can have a single lane near 6 m wide.
-- **Spansk sväng.** About 8% of what the shape detector finds has no mapped ban, measured on a sample of Sweden.
+- **Spansk sväng.** About 8% of what the shape rule found had no mapped ban, measured across Sweden before the 2+1 requirement, which should leave fewer. A real spansk sväng on a 2+1 road whose lanes are not mapped, away from any section, gets no F2.
 - **Dashes at joins.** The dashes of two ways do not meet at a join. A fit was tried and reverted, because it moved TSFS's 9.0 m dash to 8.8 m, off the official figure.
