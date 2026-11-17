@@ -239,6 +239,14 @@ JUNCTION_END_M = 10.0       # m: a same-class road ending this close to the othe
 JUNCTION_TAPER_M = 40.0     # m along the side road the height change is eased in over (half the road when shorter)
 JUNCTION_MAX_M = 6.0        # m: a bigger difference is left as it was (bad data; Perm, GitHub #414: 4-5 m steps where a
                             # 30 m DEM smeared an embankment into the junctions)
+# A higher-ranked road ending on a lower road's middle (not at its ends: those are the end snap's) is met by the lower
+# road: it takes the end's height at the nearest point (eased over JUNCTION_TAPER_M both ways, up to JUNCTION_MAX_M), and
+# holds it across the higher road's carriageway + JUNCTION_HOLD_PAD_M, back to its own profile at most
+# JUNCTION_HOLD_GRADE steep. The end snap moves only a road's own end onto a road of its rank or higher, so the two
+# profiles stayed apart (Mt Fuji, the Subaru Line's 5th station: a secondary ends on the parking lot's service loop,
+# 0.70 m higher), and the grade holds the higher road's round end at its height while the lower road gives way over
+# YIELD_RAMP_M: a 0.73 m near-vertical edge across the loop. BNE_JUNCTION_MAJOR_END=0 turns it off.
+JUNCTION_MAJOR_END_ON = os.environ.get("BNE_JUNCTION_MAJOR_END", "1") != "0"
 # The grade guard (grade_guard; docs/new/003_grade-guard): the last pass over a cell's plans. Per class: the steepest
 # grade a road of it may have unless the ground itself is steeper there (GUARD_GRADE, over the ground's own + 2 %), and
 # the window rule (GUARD_WINDOW: the points WIN_N m before and after standing within WIN_H of each other, the point
@@ -1620,7 +1628,8 @@ def snap_junctions(plans, specs):
     a residential street joining a tertiary road meets it at its already adjusted height. With the coarse easing
     (BNE_COARSE_EASE=1) also the crossings (GitHub #414, Perm: service roads crossing a primary at a shared node stood
     as 4-5 m walls across it): where a road runs over a higher-ranked road's carriageway away from its own ends, it takes
-    that road's height there. plans: [Plan], specs: their Specs. In Rust (earthfast.snap_junctions: 15 CPU-s of a
+    that road's height there. A higher-ranked road's end on a lower road's middle is met by the lower road
+    (JUNCTION_MAJOR_END_ON). plans: [Plan], specs: their Specs. In Rust (earthfast.snap_junctions: 15 CPU-s of a
     teleport's road plans in Python, 2026-10-30)."""
     if not plans:
         return
@@ -1640,7 +1649,7 @@ class _Junctions:
 
     def __init__(self, plans):
         import fast
-        fast.require(144, "the junctions' heights")
+        fast.require(306, "the junctions' heights")
         self.plans = plans
         n = [len(p.xy) for p in plans]
         self.off = np.concatenate([[0], np.cumsum(n)]).astype(np.int64)
@@ -1657,7 +1666,8 @@ class _Junctions:
         import fast
         self.z, changed = fast._ef.snap_junctions(self.xy, self.z, self.off, rank, self.half, self.abut, self.boxes,
                                                   JUNCTION_REACH_M, JUNCTION_END_M, JUNCTION_TAPER_M, JUNCTION_MAX_M,
-                                                  bool(COARSE_EASE_ON))
+                                                  bool(COARSE_EASE_ON), bool(JUNCTION_MAJOR_END_ON),
+                                                  JUNCTION_HOLD_PAD_M, JUNCTION_HOLD_GRADE)
         changed = np.asarray(changed, bool)
         self.touched |= changed
         return changed

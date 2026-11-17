@@ -495,7 +495,7 @@
   }
  },
  "dc_capitol_crossing_1083": {
-  "steps": 134,
+  "steps": 132,
   "parts": {
    "bridge:07c9b0e6-db11-491b-a91d-955981528c9f": {
     "step_m": 0.0367,
@@ -558,7 +558,7 @@
     "lift_g": 4.2656
    },
    "ground:8de3d046-3ac9-4dac-a4a0-d791c5cf566b": {
-    "step_m": 1.0393,
+    "step_m": 1.0011,
     "grade": 0.0,
     "lift_g": 0.0
    },
