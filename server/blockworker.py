@@ -61,9 +61,6 @@ _dem_t = threading.local()
 class _State:
     def __init__(self, cache_dir, offline, roads, grading, road_widths, surface, airports=False, sea=False,
                  gas_stations=False):
-        if os.environ.get("BNGE_WORLD_BUNDLE") and not (roads and grading):
-            from worldbundle import BundleError
-            raise BundleError("Pinned road plans require roads and grading enabled")
         self.cache_dir = cache_dir
         import revisit
         revisit.CACHE_DIR = cache_dir

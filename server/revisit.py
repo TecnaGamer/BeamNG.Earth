@@ -632,7 +632,7 @@ def older(cache_dir, now=None):
     """The generations a stale scope may fall back to: those of the file that are not this one, were the server's own
     within STALE_DAYS and had the same build switches, newest first, STALE_GENS at most. [] with the switch off, the
     revisit cache off or a pinned world."""
-    if not (STALE_ON and ON) or os.environ.get("BNGE_WORLD_BUNDLE"):
+    if not (STALE_ON and ON):
         return []
     now = time.time() if now is None else now
     cur = generation()
@@ -940,7 +940,7 @@ def store(cache_dir, kind, k, blobs, extra=None, where=None, code=None, until=No
     the place it stands, for the map's cache view (a sidecar line; code: its code value there, format_marker's for a
     format-keyed item, else code_key); until (unix s): kept only until then (Build.kept_until: built on an answer that
     expires), load finds none after it. Never raises; False when not kept."""
-    if not ON or kind in SKIP or os.environ.get("BNGE_WORLD_BUNDLE"):
+    if not ON or kind in SKIP:
         return False
     if until is not None:
         if until <= time.time():
@@ -1002,7 +1002,7 @@ def load(cache_dir, kind, k):
 
 
 def _load(cache_dir, kind, k):
-    if not ON or kind in SKIP or os.environ.get("BNGE_WORLD_BUNDLE"):
+    if not ON or kind in SKIP:
         return None
     path = _path(cache_dir, kind, k)
     try:
@@ -1049,7 +1049,7 @@ def locate(cache_dir, kind, k):
 
 
 def _locate(cache_dir, kind, k):
-    if not ON or kind in SKIP or os.environ.get("BNGE_WORLD_BUNDLE"):
+    if not ON or kind in SKIP:
         return None
     try:
         loc = revisitpack.store_for(cache_dir).locate(kind, k)

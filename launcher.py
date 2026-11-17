@@ -2206,9 +2206,6 @@ def main():
         return
     tee_log()
     ensure_ca_certs()
-    if len(sys.argv) > 1 and sys.argv[1] == "--world-cache":
-        from tools import world_cache
-        raise SystemExit(world_cache.main(sys.argv[2:]))
     if hand_over():
         return
     prune_old_copies()

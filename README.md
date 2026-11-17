@@ -644,10 +644,6 @@ With Docker: `ghcr.io/tecnagamer/beamng.earth-server:<version>`, the Linux host 
 its environment (`BEAMMP_AUTH_KEY`, `BEAMMP_NAME`, `BNGE_WEATHER`, ...; see "Docker" in the server zip's guide,
 [beammp/README.md](beammp/README.md#docker)).
 
-**Shared road plans** (experimental, off by default): `BeamNG.Earth --world-cache export|serve|fetch|verify` packs
-the road plans one machine has built into a checked bundle that other players can fetch and reuse, so their
-companions skip planning those roads; see [docs/SHARED_WORLD.md](docs/SHARED_WORLD.md).
-
 The server keeps its players' shared world building in `Resources/Server/BeamNGEarth/store` (up to `G.SHARE_STORE_MB`,
 2 GB by default; the pieces used longest ago go first) and sends at most `G.SHARE_OUT_KBPS` (1 MB/s) of it, both near
 the top of `main.lua`. **Share helper** (in testing): to let the server's machine build ahead of its players, run
