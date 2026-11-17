@@ -6469,6 +6469,9 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // under the point's ground where that stands higher (gradebins::under_deck)
     // 307: a road running beside a covered tunnel's section in the open keeps its own ground past the section's
     // painted edge (gradebins::TUNNEL)
-    m.add("VERSION", 307)?;
+    // 308: grade_points: a road's lanes and its rank's hold end at its wall's face (or fall), the ground steps there
+    // between two roads at other levels (gradebins::pair0 / pair1: the lower road's lanes no longer reach past its
+    // face over the other's carriageway)
+    m.add("VERSION", 308)?;
     Ok(())
 }

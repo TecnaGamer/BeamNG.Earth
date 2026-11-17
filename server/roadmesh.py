@@ -2458,8 +2458,10 @@ def _retaining_walls(walls, origin, P, T, UV, M, nv):
         cop_hi = np.c_[b - tw * cop[:, None], top] - origin
         quads = [(face_lo, face_hi, foot, top, face_m), (face_hi, cop_hi, None, float(np.mean(cop)), face_m)]
         if (thick > cop + 0.01).any():          # the soil behind the coping (a parapet is all stone)
-            # (a mountain pass road's: the rocky ground of the slopes round it, WALL_SCREE; grass elsewhere)
-            quads.append((cop_hi, back_hi, None, float(np.mean(thick - cop)), 6 if w.get("mountain") else 4))
+            # (a mountain pass road's: the rocky ground of the slopes round it, WALL_SCREE; grass elsewhere; where two
+            # roads at other levels meet, the higher one's edge on it: its face's concrete, roads.retaining_walls)
+            quads.append((cop_hi, back_hi, None, float(np.mean(thick - cop)),
+                          face_m if w.get("carries") else 6 if w.get("mountain") else 4))
         if w.get("parapet"):                    # a parapet's back, seen from the valley
             bot = foot
         else:                                   # a retaining wall's back: down into the ground behind it (where the

@@ -69,7 +69,9 @@ TODAY = {
         not_built=3,            # the second tube of the road tunnel: the map flags it as under construction
         shape_p95=5.0,
         under_laws=0, steeper=1, graded=60,
-        dug=(66, 64),           # a link 7.3 m: the motorway's cutting 5 m under it, 9 m beside it (a wall in the real one)
+        dug=(51, 49),           # a 6 m road 5 m, the exit ramp 2.3 m (its own plan under the DEM). Was 66 / 64 with a link road 7.3 m
+                                # under its survey height beside the ramp in its cutting: the ramp's lanes reached on past
+                                # its wall's face over the link's (a wall holds the link in the real place: grading.level_walls)
         filled=(5, 2),          # 1.8 m at most (was 8.3, 76 per mille): the road into the Gotthard tunnel, its mouth read on the face
         rail_low=-9.7, rail_high=0.2),
     "kempttal_viaduct": dict(

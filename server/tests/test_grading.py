@@ -1977,3 +1977,60 @@ class ShapeSolvedOnceTest(unittest.TestCase):
                 self.assertEqual(ma, mb)
                 self.assertEqual(np.asarray(za).tobytes(), np.asarray(zb).tobytes(), "the very heights")
 
+
+
+class LevelWallsTest(unittest.TestCase):
+    def _pair(self, gap=9.3, dz=7.2):
+        """Goeschenen's link road over the exit ramp in its cutting (the ramp's plan: a motorway's 14 m carriageway, core
+        8 m out, rank 118, dug; the link road's: 8.3 m carriageway, core 5.15 m out, rank 116, on the ground 7.2 m up,
+        their centre lines 9.3 m apart, the carriageways overlapping 1.85 m in plan), both along x."""
+        x = np.arange(0.0, 121.0, 4.0)
+        low = grading.Plan(np.c_[x, np.zeros(len(x))], np.zeros(len(x)), 8.0, road_half=7.0)
+        low.rid, low.rank = 1, 118
+        high = grading.Plan(np.c_[x, np.full(len(x), gap)], np.full(len(x), dz), 5.15, road_half=4.15)
+        high.rid, high.rank = 2, 116
+        return [("ramp", low), ("link", high)]
+
+    def test_neither_road_is_moved_by_the_other(self):
+        """Two carriageways overlapping in plan at heights no slope bridges in the room between them meet at one line
+        (as deep in the one as in the other, 6.075 m from the ramp's centre). Each road keeps its own ground on its own
+        side of it: the ramp's lanes up to the face, the link's from the face on to its far edge. Before, the ramp's
+        lanes (and its rank's hold) reached on past the face over the link's carriageway and the link road, on the
+        ground, was dug 7.3 m under itself at its own centre line (the survey's truth replay: 66 per mille of the roads'
+        points dug)."""
+        plans = self._pair()
+        self.assertEqual(grading.level_walls(plans, [None, None]), 2)
+        low, high = plans[0][1], plans[1][1]
+        line = (9.3 + 7.0 - 4.15) / 2
+        np.testing.assert_allclose(np.asarray(low.cut)[:, 0], line)            # (the link on its left)
+        np.testing.assert_allclose(np.asarray(low.cut)[:, 1], 7.2)
+        self.assertTrue(np.isnan(np.asarray(low.cut)[:, 3]).all())
+        np.testing.assert_allclose(np.asarray(high.cut)[:, 3], 9.3 - line)       # (its fall: the same line)
+        self.assertTrue(np.isnan(np.asarray(high.cut)[:, 4]).all())
+        y = np.arange(-6.0, 15.01, 0.25)
+        z = grading.grade_points(np.full(len(y), 60.0), y, np.full(len(y), 7.2), [p for _f, p in plans], lift=0.0)
+        ramp = (y <= line - 0.25) & (y >= -7.0)         # (the ramp's lanes: up to its face)
+        self.assertLess(float(np.abs(z[ramp]).max()), 0.05, np.round(z, 2).tolist())
+        link = (y >= line + 0.75) & (y <= 9.3 + 4.15)   # (the link's lanes from the face on, a yield ramp past it)
+        self.assertLess(float(np.abs(z[link] - 7.2).max()), 0.05, np.round(z, 2).tolist())
+
+    def test_one_level_and_far_apart_unchanged(self):
+        """The link 1.5 m over the ramp (one level: WALL_CUT_M), or 30 m from it (their grounds clear of each other): no
+        line between them, the plans as they were."""
+        for gap, dz in ((9.3, 1.5), (30.0, 7.2)):
+            plans = self._pair(gap, dz)
+            self.assertEqual(grading.level_walls(plans, [None, None]), 0)
+            self.assertIsNone(plans[0][1].cut)
+            self.assertIsNone(plans[1][1].cut)
+
+    def test_the_line_is_the_walls_one(self):
+        """level_boundary, the grading's and the walls' (roads.retaining_walls) one line: from each road's centre, the
+        lower's face and the higher's fall at the same place, nothing at one level or apart."""
+        face, fall = grading.level_boundary(9.3, 7.0, 8.0, 4.15, 5.15, 7.2)
+        self.assertAlmostEqual(float(face), 6.075)
+        self.assertTrue(np.isnan(fall))
+        face, fall = grading.level_boundary(9.3, 4.15, 5.15, 7.0, 8.0, -7.2)
+        self.assertTrue(np.isnan(face))
+        self.assertAlmostEqual(float(fall), 9.3 - 6.075)
+        self.assertTrue(np.isnan(grading.level_boundary(9.3, 7.0, 8.0, 4.15, 5.15, 1.5)).all())
+        self.assertTrue(np.isnan(grading.level_boundary(30.0, 7.0, 8.0, 4.15, 5.15, 7.2)).all())
