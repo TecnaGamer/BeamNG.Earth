@@ -177,7 +177,10 @@ def profiles(plans, ceilings, ground):
         made = over & (gr > gg + MADE_STEEP_DG)
         d2, d2g = _second_diff(s, z), _second_diff(s, g)
         dev = z - g
-        out.append({"fid": fid, "n": int(len(z)), "grade": float(gr.max()) if n else 0.0, "ceiling": ceil,
+        jb = int(np.argmax(d2)) + 1 if len(d2) else 0        # (the middle sample of the worst pitch change)
+        jd = int(np.argmax(np.abs(dev)))
+        out.append({"bump_at": {"x": float(xy[jb, 0]), "y": float(xy[jb, 1])},
+                    "dev_at": {"x": float(xy[jd, 0]), "y": float(xy[jd, 1]), "dz": float(dev[jd])},"fid": fid, "n": int(len(z)), "grade": float(gr.max()) if n else 0.0, "ceiling": ceil,
                     "over": int(over.sum()), "made_steep": int(made.sum()),
                     "made_steep_at": [float(v) for v in xy[i[:n][made][:1]].ravel()] if made.any() else None,
                     "bump": float(d2.max()) if len(d2) else 0.0, "bump_p99": float(np.percentile(d2, 99)) if len(d2) else 0.0,
@@ -249,12 +252,16 @@ def summary(junctions, seams, profs, clear, cpu_s=None):
                             for p in sorted(made, key=lambda p: -(p["grade"] - p["ceiling"]))[:WORST_N]]},
         "bump": {"p99_median": float(np.median(bumps)) if len(bumps) else 0.0,
                  "ground_p99_median": float(np.median(bumps_g)) if len(bumps_g) else 0.0,
-                 "max": float(max((p["bump"] for p in profs), default=0.0))},
+                 "max": float(max((p["bump"] for p in profs), default=0.0)),
+                 "worst": [{"fid": p["fid"], "bump": p["bump"], **p["bump_at"]}
+                           for p in sorted(profs, key=lambda p: -p["bump"])[:WORST_N] if "bump_at" in p]},
         "ground": {"median": float(np.median(dev)) if len(dev) else 0.0,
                    "p95": float(np.percentile(dev, 95)) if len(dev) else 0.0,
                    "max": float(dev.max()) if len(dev) else 0.0,
                    "fill_share": float((sdev > 0.3).mean()) if len(sdev) else 0.0,
-                   "cut_share": float((sdev < -0.3).mean()) if len(sdev) else 0.0},
+                   "cut_share": float((sdev < -0.3).mean()) if len(sdev) else 0.0,
+                   "worst": [{"fid": p["fid"], **p["dev_at"]}
+                             for p in sorted(profs, key=lambda p: -abs(p["dev_at"]["dz"]))[:WORST_N] if "dev_at" in p]},
         "clearance": {**steps(clear), "through_deck": int(sum(1 for r in clear if r.get("gap", need) < THROUGH_DECK_M))},
         "cpu_s": cpu_s,
     }

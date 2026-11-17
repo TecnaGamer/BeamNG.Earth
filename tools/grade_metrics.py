@@ -158,12 +158,13 @@ def main():
 
             def geo(rows, frame=frame):
                 for r in rows:
-                    if "x" in r:
+                    if "x" in r and "lat" not in r:
                         la, lo, _ = frame.enu_to_geodetic(r["x"], r["y"], 0.0)
                         r["lat"], r["lon"] = round(float(la), 6), round(float(lo), 6)
             geo(junctions)
             geo(seams)
             geo(clear)
+            geo([p[k] for p in profs for k in ("bump_at", "dev_at") if k in p])
         for planner in list(store.planners.values()):     # (any cell planned while measuring: no place's)
             with planner.lock:
                 seen_cells.update(str(k) for k in planner.cells)
