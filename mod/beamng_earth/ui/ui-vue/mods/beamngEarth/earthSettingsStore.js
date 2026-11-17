@@ -157,6 +157,7 @@ export const settingsSchema = [
         options: [ { label: "Bottom left", value: "bottom-left" }, { label: "Bottom right", value: "bottom-right" }, { label: "Top left", value: "top-left" }, { label: "Top right", value: "top-right" } ] },
       { id: "creditsSize", type: "select", default: "small", name: "Data credits size", desc: "Text size of the data credits.", showIf: c => c.creditsVisible !== false,
         options: [ { label: "Small", value: "small" }, { label: "Normal", value: "normal" } ] },
+      { id: "mainMenuTile", type: "bool", default: true, name: "BeamNG.Earth on the main menu", desc: "A BeamNG.Earth tile in the place of Quick-Start Experiences on the game's main menu: a click starts BeamNG.Earth where you left off. Quick-Start stays on the menu's Discover page. Off: the stock tile. Takes effect the next time the main menu opens." },
     ],
   },
   {

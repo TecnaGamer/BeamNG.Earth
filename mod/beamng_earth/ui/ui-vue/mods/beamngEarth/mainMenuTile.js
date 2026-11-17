@@ -21,10 +21,14 @@ const HIDDEN_ATTR = "data-beamng-earth-hidden"
 // the Lua the click runs: the level list's own start, at the "Where you left off" spawn point
 export const START_LUA = `freeroam_freeroam.startFreeroamByName(${JSON.stringify(LEVEL)}, ${JSON.stringify(SPAWN)})`
 // one quick connect to the companion server's local port (the game allows sockets to the local host)
-export const SERVER_LUA = "(function() local ok, up = pcall(function() local s = require('socket').tcp() " +
-  "s:settimeout(0.25) local r = s:connect('127.0.0.1', 47613) s:close() return r == 1 end) " +
-  "return (ok and up == true) and 'up' or 'down' end)()"
-const SERVER_POLL_MS = 3000
+// (the port net.lua uses, -bngeport included; each probe is a connection the server logs: every 15 s, not 3)
+export const SERVER_LUA = "(function() local ok, up = pcall(function() local n = require('beamngEarth/net') " +
+  "local s = require('socket').tcp() s:settimeout(0.25) local r = s:connect(n.HOST or '127.0.0.1', n.PORT or 47613) " +
+  "s:close() return r == 1 end) return (ok and up == true) and 'up' or 'down' end)()"
+const SERVER_POLL_MS = 15000
+// the setting (Interface: "BeamNG.Earth on the main menu", the user 2026-11-17: the tile as a toggle); on unless it is off
+export const SETTING_LUA = "(beamngEarth_settings and beamngEarth_settings.get and " +
+  "beamngEarth_settings.get('mainMenuTile') == false) and 'off' or 'on'"
 
 export function isMenuRoute(route) { return MENU_ROUTES.has(route && route.name) }
 
@@ -139,13 +143,28 @@ function watchDom() {
 }
 function unwatchDom() { observer && observer.disconnect(); observer = null }
 
-function onRoute(route) {
+function off() { stopPolling(); unwatchDom(); unmount() }
+
+function show() {
   try {
-    if (!isMenuRoute(route)) { stopPolling(); unwatchDom(); unmount(); return }
     mount()
     watchDom()
     startPolling()
-  } catch (e) { console.error(TAG, e); stopPolling(); unwatchDom(); unmount() }
+  } catch (e) { console.error(TAG, e); off() }
+}
+
+function onRoute(route) {
+  try {
+    if (!isMenuRoute(route)) { off(); return }
+    const a = api()
+    if (!a || !a.engineLua) { show(); return }
+    // the setting read each time the menu comes up (changed in a level's settings page: the next menu follows it)
+    a.engineLua(SETTING_LUA, v => {
+      const r = window.vueRouter
+      if (r && !isMenuRoute(r.currentRoute.value)) return
+      if (v === "off") off(); else show()
+    })
+  } catch (e) { console.error(TAG, e); off() }
 }
 
 export async function startTile(waitMs = 60000) {

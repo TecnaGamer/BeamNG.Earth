@@ -61,6 +61,7 @@ test("menu routes only", () => {
   assert.ok(T.isMenuRoute({ name: "menu" }))
   assert.ok(!T.isMenuRoute({ name: "play" }))
   assert.ok(!T.isMenuRoute(null))
-  assert.match(T.SERVER_LUA, /47613/)
+  assert.match(T.SERVER_LUA, /n\.PORT/)         // (net.lua's port, -bngeport included)
+  assert.match(T.SETTING_LUA, /mainMenuTile/)    // (the Interface setting; on unless it is off)
   assert.match(T.SERVER_LUA, /'up' or 'down'/)
 })
