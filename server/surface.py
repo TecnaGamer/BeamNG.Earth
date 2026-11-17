@@ -323,10 +323,12 @@ def paint_roads(idx, lat, lon, feats_list, square, urban_fn=None, widths=None, e
             if europewalks.grassy_verges(country, float(x[mid]), float(y[mid])):
                 add(grass_verge, c, r, width / 2 + ROAD_EDGE_M + 2.6)
 
-    copies = roadsmod.copies_of(feats_list)     # (each joint's taper from its own cell: roads.joint_desc)
+    copies = () if quick else roadsmod.copies_of(feats_list)  # (each joint's taper from its own cell: roads.joint_desc)
     import geodesy
-    placement = roadsmod.placement_context(feats_list, urban_fn, widths)   # (where the road tiles draw them)
-    pfr = geodesy.EnuFrame(la_c, lo_c) if placement.on else None
+    pfr = None
+    if not quick:
+        placement = roadsmod.placement_context(feats_list, urban_fn, widths)   # (where the road tiles draw them)
+        pfr = geodesy.EnuFrame(la_c, lo_c) if placement.on else None
 
     def taper_of(f):
         return roadsmod.road_tapers(f, urban_fn, widths)
@@ -378,21 +380,22 @@ def paint_roads(idx, lat, lon, feats_list, square, urban_fn=None, widths=None, e
                     add(lawn, np.asarray(c, np.float64), np.asarray(r, np.float64), mw / 2)
     for la, lo, spec in extra:
         line(np.asarray(lo), np.asarray(la), spec, False)
-    # ramp gores, paved (gore_fills, in a frame at the grid's middle)
-    import geodesy
-    gfr = geodesy.EnuFrame(la_c, lo_c)
-    gb = gfr.geodetic_to_enu(np.array([float(np.min(lat)), float(np.max(lat))]),
-                             np.array([float(np.min(lon)), float(np.max(lon))]), np.zeros(2))
-    for hw_, mid in gore_fills(gfr, feats_list, (float(np.min(gb[0])) - 300, float(np.min(gb[1])) - 300,
-                                                 float(np.max(gb[0])) + 300, float(np.max(gb[1])) + 300), urban_fn, widths,
-                               quick=quick):
-        gla, glo, _ = gfr.enu_to_geodetic(mid[:, 0], mid[:, 1], np.zeros(len(mid)))
-        c, r = to_px(np.asarray(glo), np.asarray(gla))
-        c, r = np.asarray(c, np.float64), np.asarray(r, np.float64)
-        sk = segs.setdefault("paved", ([], [])) if "paved" in segs else None
-        if sk is not None:
-            sk[0].append(np.stack([c[:-1], r[:-1], c[1:], r[1:]], axis=1))
-            sk[1].append(np.maximum(hw_[:-1], hw_[1:]) / square)
+    # ramp gores, paved (gore_fills, in a frame at the grid's middle; skipped in quick mode where roads_skin drapes it)
+    if not quick:
+        import geodesy
+        gfr = geodesy.EnuFrame(la_c, lo_c)
+        gb = gfr.geodetic_to_enu(np.array([float(np.min(lat)), float(np.max(lat))]),
+                                 np.array([float(np.min(lon)), float(np.max(lon))]), np.zeros(2))
+        for hw_, mid in gore_fills(gfr, feats_list, (float(np.min(gb[0])) - 300, float(np.min(gb[1])) - 300,
+                                                     float(np.max(gb[0])) + 300, float(np.max(gb[1])) + 300), urban_fn, widths,
+                                   quick=quick):
+            gla, glo, _ = gfr.enu_to_geodetic(mid[:, 0], mid[:, 1], np.zeros(len(mid)))
+            c, r = to_px(np.asarray(glo), np.asarray(gla))
+            c, r = np.asarray(c, np.float64), np.asarray(r, np.float64)
+            sk = segs.setdefault("paved", ([], [])) if "paved" in segs else None
+            if sk is not None:
+                sk[0].append(np.stack([c[:-1], r[:-1], c[1:], r[1:]], axis=1))
+                sk[1].append(np.maximum(hw_[:-1], hw_[1:]) / square)
     fast.require(91, "mask_segments")
 
     def mask(dst):
@@ -404,15 +407,16 @@ def paint_roads(idx, lat, lon, feats_list, square, urban_fn=None, widths=None, e
     out = idx.copy()
     out[mask(lawn)] = LAWN
     # roundabout footprints: lawn under the grass photo fill (photo_roads), so tyres feel grass not asphalt scar
-    for lonlat in _island_lonlat_rings(feats_list, urban_fn, widths, lat0=la_c, lon0=lo_c, lat=lat, lon=lon,
-                                       quick=quick):
-        c, r = to_px(lonlat[:, 0], lonlat[:, 1])
-        c, r = np.asarray(c, np.float64), np.asarray(r, np.float64)
-        if c.max() < 0 or c.min() > w or r.max() < 0 or r.min() > h:
-            continue
-        im = Image.new("L", (w, h), 0)
-        ImageDraw.Draw(im).polygon(list(zip(c.tolist(), r.tolist())), fill=255)
-        out[np.asarray(im) > 0] = LAWN
+    if not quick:
+        for lonlat in _island_lonlat_rings(feats_list, urban_fn, widths, lat0=la_c, lon0=lo_c, lat=lat, lon=lon,
+                                           quick=quick):
+            c, r = to_px(lonlat[:, 0], lonlat[:, 1])
+            c, r = np.asarray(c, np.float64), np.asarray(r, np.float64)
+            if c.max() < 0 or c.min() > w or r.max() < 0 or r.min() > h:
+                continue
+            im = Image.new("L", (w, h), 0)
+            ImageDraw.Draw(im).polygon(list(zip(c.tolist(), r.tolist())), fill=255)
+            out[np.asarray(im) > 0] = LAWN
     v = mask(verge)
     # the rounded corners of curbless junctions (roadcorners.py): asphalt as their roads (ROAD_EDGE_M past the arc), a
     # verge round them

@@ -967,4 +967,48 @@ do
   roads.COLLIDE_CHECK_S, roads.BEHIND_JUMP_M = check, jump
   getPlayerVehicle = nil
 end
+
+do -- Highway speed (>= HIGH_SPEED_MS): hasDueForward detects waiting forward road surface,
+   -- and surfaceKeys samples every TILE_M/2 out to URGENT_SURFACE_FAST_S * v
+  roads.clear()
+  local prevSF = roads.SURFACE_FIRST
+  roads.SURFACE_FIRST = true
+  local hwCar = { pos = vec3(128, 128, 0.5) }
+  function hwCar:getPosition() return self.pos end
+  function hwCar:getVelocity() return vec3(55, 0, 0) end
+  getPlayerVehicle = function() return hwCar end
+  local geodesy = require('beamngEarth/geodesy')
+  local geotile = require('beamngEarth/geotile')
+  local fakeAnchor = geodesy.newAnchor(47.855, 11.405)
+  local g = { try = function() return false end, tryUrgent = function() return false end, charge = function() end, chargeMotion = function() end }
+  local hwPlayer = { x = hwCar.pos.x, y = hwCar.pos.y, vx = 55, vy = 0, speed = 55 }
+  local prevCC = roads.COLLIDE_CHECK_S
+  roads.COLLIDE_CHECK_S = 0
+  roads.update(g, 9, hwPlayer, nil, fakeAnchor, 0.05, 0.05)
+  roads.COLLIDE_CHECK_S = prevCC
+  local lat, lon = fakeAnchor:worldToGeodetic(hwCar.pos.x + 120, hwCar.pos.y, 0)
+  local gx, gy = geotile.tileOf(lat, lon)
+  local fwdKey = geotile.key(gx, gy)
+  local ok1 = roads.onGeoTile({
+    anchorId = 9,
+    key = fwdKey,
+    data = {},
+  }, 9, fakeAnchor)
+  local ok2 = roads.onSkin({
+    anchorId = 9,
+    key = fwdKey,
+    data = { road = { shape = '/t/hw_rd.cdae', pos = { 0, 0, 0 } } },
+  }, 9)
+  T.check(ok1 == true and ok2 == true, 'hw onGeoTile+onSkin accepted')
+  T.check(roads.hasDueForward(), 'hasDueForward: true while immediate forward road surface (<= max(150, 3*v)) waits in walkQ')
+  -- Verify surfaceKeys at 55 m/s reaches ~330 m (6 s * 55 m/s) in 128 m steps AND covers lateral flanks (TILE_M*0.5 = 128 m) for curves
+  local sk = roads._surfaceKeys(hwCar.pos, { x = 1, y = 0 }, 55)
+  local countSk = 0
+  for _ in pairs(sk) do countSk = countSk + 1 end
+  T.check(countSk >= 5, 'surfaceKeys covers forward + flanking geotiles along ~330 m at 55 m/s (got ' .. countSk .. ')')
+  T.check(sk['9:1_1'] == true and sk['9:1_0'] == true, 'surfaceKeys covers flanking curved highway tile keys')
+  roads.SURFACE_FIRST = prevSF
+  getPlayerVehicle = nil
+  roads.clear()
+end
 T.done('test_roads')

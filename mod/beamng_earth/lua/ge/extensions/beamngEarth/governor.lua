@@ -133,7 +133,10 @@ M.RESERVE_FREE_MS = 0.5
 -- after a slow frame, chargeEngine, or the urgent units before it): a busy frame is never made busier, and a run of
 -- urgent units is paced by the bucket again once they have overdrawn it.
 M.URGENT_ROOM_MS = 4.0
+M.URGENT_ROAD_ROOM_MS = 10.0
 M.URGENT_DEBT_MS = 10.0
+M.URGENT_ROAD_DEBT_MS = 25.0
+M.URGENT_HIGH_DEBT_MS = 45.0
 
 -- Unit kind of a textured .cdae import from its far_tile.tex (px): cdaeTex<px> for a size with a
 -- prior, else (FORMAT 3 tiles have no tex) 'cdaeTex'.
@@ -381,12 +384,16 @@ function Gov:try(kind, lane)
 end
 
 -- May an urgent unit of this kind run now, tokens or not (URGENT_ROOM_MS above)? The caller charges it as any unit.
-function Gov:tryUrgent(kind)
+-- highPriority (e.g. high-speed road skins) is render-only without reloadCollision: bypasses heavyPending, gets
+-- URGENT_ROAD_ROOM_MS of frame headroom, and tolerates up to URGENT_HIGH_DEBT_MS of engine debt.
+function Gov:tryUrgent(kind, highPriority)
   self.used[kind] = true
-  if self.blocked or self.heavyFrame == self.frame or self.heavyPending then return false end
+  if self.blocked or self.heavyFrame == self.frame or (not highPriority and self.heavyPending) then return false end
   if self.frameUnits > 0 then return false end
-  if self.frameSpent + self.frameDef + self.frameOther > M.URGENT_ROOM_MS then return false end
-  if self.tokens < -M.URGENT_DEBT_MS then return false end
+  local room = highPriority and M.URGENT_ROAD_ROOM_MS or M.URGENT_ROOM_MS
+  if self.frameSpent + self.frameDef + self.frameOther > room then return false end
+  local maxDebt = highPriority and M.URGENT_HIGH_DEBT_MS or (kind == 'roadDrive' and M.URGENT_ROAD_DEBT_MS or M.URGENT_DEBT_MS)
+  if self.tokens < -maxDebt then return false end
   return true
 end
 

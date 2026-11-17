@@ -148,7 +148,8 @@ def follow_table(size=1024, square=None):
             "COMMIT_DIST": F["COMMIT_DIST" + t], "HARD_COMMIT_DIST": F["HARD_COMMIT_DIST" + t],
             "MIN_LEAD": F["MIN_LEAD" + t],
             "EDGE_MARGIN": F["EDGE_MARGIN" + t], "REACH": F["REACH" + t], "LOOKAHEAD_S": F["LOOKAHEAD_S" + t],
-            "RECHECK_S": F["RECHECK_S" + t], "FAST_MODE_V": F["FAST_V" + t]}
+            "RECHECK_S": F["RECHECK_S" + t], "FAST_MODE_V": F["FAST_V" + t],
+            "PREP_HIGH_V": F["PREP_HIGH_V" + t]}
 
 
 def rebase_table(size=1024, square=None):
@@ -164,6 +165,18 @@ def follow_mode(vx, vy, size=1024):
     if vx * vx + vy * vy > T["FAST_MODE_V"] * T["FAST_MODE_V"]:
         return FOLLOW["LOOKAHEAD_FAST_S"], FOLLOW["REACH_FAST"], FOLLOW["PREP_AHEAD_FAST_S"]
     return T["LOOKAHEAD_S"], T["REACH"], 0
+
+
+def follow_prep_ahead(vx, vy, size=1024, ahead=0.0):
+    """follow.prepAhead: velocity-scaled prepare-test lookahead (s) above PREP_HIGH_V."""
+    T = follow_table(size)
+    sp = math.hypot(vx or 0, vy or 0)
+    if sp > T["PREP_HIGH_V"] and sp > 1e-6:
+        n, sq, _w, _t = _block(size)
+        edge_dist = (n * sq / 2 - sq) - T["PREPARE_DIST"]
+        want_m = min(FOLLOW["PREP_AHEAD_MAX_M"], max(0.0, sp * FOLLOW["PREP_EDGE_S"] - edge_dist))
+        return max(ahead, want_m / sp)
+    return ahead
 
 
 def snap(v, size=1024):
@@ -220,7 +233,8 @@ def follow_centre_ahead(px, py, vx, vy, cx, cy, size=1024):
     """follow.centreAhead: the block's centre still ahead of a player whose target MIN_LEAD sets."""
     T = follow_table(size)
     lead, v2 = T["MIN_LEAD"], vx * vx + vy * vy
-    if lead <= 0 or v2 <= FOLLOW["MIN_LEAD_V"] ** 2 or v2 * T["LOOKAHEAD_S"] ** 2 >= lead * lead:
+    if (lead <= 0 or v2 <= FOLLOW["MIN_LEAD_V"] ** 2 or v2 > T["PREP_HIGH_V"] ** 2
+            or v2 * T["LOOKAHEAD_S"] ** 2 >= lead * lead):
         return False
     return (cx - px) * vx + (cy - py) * vy > 0 and cheb(px, py, cx, cy) <= lead + T["GRID"]
 
@@ -274,7 +288,8 @@ def follow_decide(px, py, vx, vy, cx, cy, pending, now=0.0, retry_at=0.0, gate=N
         if pd > reach:
             return ("discard",)
         return None
-    if cheb(px + vx * ahead, py + vy * ahead, cx, cy) <= T["PREPARE_DIST"] or now < retry_at:
+    pahead = follow_prep_ahead(vx, vy, size, ahead)
+    if cheb(px + vx * pahead, py + vy * pahead, cx, cy) <= T["PREPARE_DIST"] or now < retry_at:
         return None
     if follow_centre_ahead(px, py, vx, vy, cx, cy, size):
         return None

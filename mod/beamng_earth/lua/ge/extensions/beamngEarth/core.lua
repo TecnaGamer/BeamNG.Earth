@@ -1138,8 +1138,9 @@ end
 -- (onUpdate: the server's messages a frame, up to a budget; on M: core.lua is at Lua's 200-locals limit)
 -- In the loading cover coverMs a frame (and coverDecode times net's decode share): every message at once there made
 -- single 230-470 ms frames of tile imports at loads and teleports (Windows, game perf report 2026-11-12, #5).
-M._netq = { q = {}, head = 1, cost = {}, budgetMs = 4.0, busyMs = 12.0, busyN = 24, drainDiv = 16,
+M._netq = { q = {}, head = 1, rq = {}, rhead = 1, cost = {}, budgetMs = 4.0, busyMs = 12.0, busyN = 24, drainDiv = 16,
   coverMs = 30.0, coverDecode = 4,
+  roadPrio = { roads_tile = true, roads_skin = true, roads_exact = true, roads_drop = true },
   -- handled at once, ahead of the queue: the terrain's and the UI's answers (a player on dev.151, 2026-11-03: holds for
   -- terrain grew over a session, even at 19 mph, a block's terrain_ready waiting behind hundreds of tile messages)
   -- (and a block's photo and patches with it, in their order: a photo update queued behind tiles while its block was
@@ -1186,8 +1187,16 @@ function M._loadCover()
   return true
 end
 function M.netCosts() return M._netq.cost end      -- {type = {n, ms, max}}: probes
-function M.netBacklog() return #M._netq.q - M._netq.head + 1 + (net.decodeBacklog and net.decodeBacklog() or 0) end  -- (+ those not decoded yet)
-if net.setUrgent then net.setUrgent(M._netq.urgent) end  -- (net.lua decodes these at once while other payloads wait to be decoded)
+function M.netBacklog()
+  local nq = M._netq
+  return (#nq.q - nq.head + 1) + (#nq.rq - nq.rhead + 1) + (net.decodeBacklog and net.decodeBacklog() or 0)
+end  -- (+ those not decoded yet)
+if net.setUrgent then
+  local u = {}
+  for k, v in pairs(M._netq.urgent) do u[k] = v end
+  for k, v in pairs(M._netq.roadPrio) do u[k] = v end
+  net.setUrgent(u)
+end  -- (net.lua decodes urgent + roadPrio ahead of far_tile/veg_tile decode backlogs)
 
 local function onMessage(msg)
   local t = msg.type
@@ -1996,7 +2005,8 @@ local function updateWorld(dt)
   -- nor between a rebase's two phases (st.rebasing): the car is already in the new frame while st.anchorId is still the
   -- old one, and the server, reading that position in the old frame, dropped every road tile around the car at each
   -- rebase (2026-10-17, 100 mph on the salt flats: 42 road tiles -> 0 at the rebase)
-  if st.poseTimer >= POSE_INTERVAL and net.isReady() and anchorKnown() and not st.rebasing then
+  local poseInterval = (pl.speed or 0) > 25 and (M.POSE_INTERVAL_FAST or 0.2) or POSE_INTERVAL
+  if st.poseTimer >= poseInterval and net.isReady() and anchorKnown() and not st.rebasing then
     st.poseTimer = 0
     local c = st.cam
     -- held: previous anchors of this server's session only (the far field's older sessions' anchor
@@ -3017,14 +3027,26 @@ local function onUpdate(dtReal, dtSim)
     if dD > 0 then al.cur.decode, al.cur.total = al.cur.decode + dD, al.cur.total + dD end
     al.kb = collectgarbage('count')        -- (the decode counted once: not again as the frame's growth)
     for _, msg in ipairs(msgs) do
-      if nq.urgent[msg.type] then handle(msg) else nq.q[#nq.q + 1] = msg end
+      if nq.urgent[msg.type] then handle(msg)
+      elseif nq.roadPrio and nq.roadPrio[msg.type] then nq.rq[#nq.rq + 1] = msg
+      else nq.q[#nq.q + 1] = msg end
     end
-    local waiting = #nq.q - nq.head + 1
+    local waiting = (#nq.rq - nq.rhead + 1) + (#nq.q - nq.head + 1)
     local budget = cover and nq.coverMs or ((waiting >= nq.busyN) and nq.busyMs or nq.budgetMs)
     -- (and at least 1/drainDiv of what waits: under a fixed budget a slower PC's backlog grew for the whole drive)
     local minN, done = math.ceil(waiting / nq.drainDiv), 0
     local n0 = hitchClock()
+    while nq.rhead <= #nq.rq do
+      local msg = nq.rq[nq.rhead]
+      nq.rq[nq.rhead] = nil
+      nq.rhead = nq.rhead + 1
+      handle(msg)
+      done = done + 1
+      if done >= minN and hitchClock() - n0 >= budget then break end
+    end
+    if nq.rhead > #nq.rq then nq.rq, nq.rhead = {}, 1 end
     while nq.head <= #nq.q do
+      if done >= minN and hitchClock() - n0 >= budget then break end
       local msg = nq.q[nq.head]
       nq.head = nq.head + 1       -- (the slot kept: holes would make #nq.q, where the next ones go, unreliable)
       handle(msg)
@@ -3099,6 +3121,14 @@ local function onUpdate(dtReal, dtSim)
     roads.update(gov, st.anchorId, st.player, M.viewAway(), st.anchor, dtSim or dtReal, dtReal)
     gasstations.update(gov)
     t = mark('roads', t)
+    local roadDue = (not cover) and roads.hasDueForward and roads.hasDueForward() or false
+    if roadDue then
+      gov._roadYieldN = (gov._roadYieldN or 0) + 1
+      gov.roadYield = (gov._roadYieldN % 3) ~= 0
+    else
+      gov._roadYieldN = 0
+      gov.roadYield = false
+    end
     farfield.update(gov, (gov.w1 or dtReal * 1000) / 1000, st.cam, st.player)
     t = mark('far', t)
     sea.update(st.anchorId, st.player)

@@ -106,8 +106,12 @@ for _, c in ipairs({ { 0, 0, 120, 0 }, { 1000, 1000, 100, -100 }, { -333, 777, -
   T.check(c[1] - (cx - 512) >= 250 and (cx + 510) - c[1] >= 250 and c[2] - (cy - 512) >= 250 and (cy + 510) - c[2] >= 250,
     string.format('player (%g,%g) >= 250 m inside block (%d,%d)', c[1], c[2], cx, cy))
 end
--- 40 m/s geometry: prepare past 128 m, commit past 192 m
-T.check(d(128, 0, 40, 0, 0, 0, nil, 0, 0) == nil, '512: at 128 m: no request')
+-- town & highway geometry: below PREP_HIGH_V prepare waits until past 128 m; above PREP_HIGH_V prepare fires earlier; commit past 192 m
+T.check(d(128, 0, 25, 0, 0, 0, nil, 0, 0) == nil, '512: below highway speed at 128 m: no request')
+a, cx, cy = d(-100, 0, 45, 0, 0, 0, nil, 0, 0)
+T.check(a == 'prepare' and cx == 128 and cy == 0, '512: 45 m/s (162 km/h) at -100 m (> 13 s from edge): prepares early')
+a, cx, cy = d(-120, 0, 67, 0, 0, 0, nil, 0, 0)
+T.check(a == 'prepare' and cx == 128 and cy == 0, '512: 67 m/s (241 km/h) at -120 m (> 9 s from edge): prepares early')
 a, cx, cy = d(129, 0, 40, 0, 0, 0, nil, 0, 0)
 T.check(a == 'prepare' and cx == 384 and cy == 0, '512: past 128 m: prepare snap128(p + 5 s v)')
 pend = { cx = 256, cy = 0, ready = true }
@@ -197,7 +201,8 @@ T.near(f.timeTo(0, 0, 100, 0, 0, 0, 360), 3.6, 1e-12, 'timeTo along x')
 T.near(f.timeTo(0, 0, -100, 50, 0, 0, 360), 3.6, 1e-12, 'timeTo: the first axis to reach the distance')
 T.check(f.timeTo(400, 0, 100, 0, 0, 0, 360) == 0 and f.timeTo(5, 5, 0, 0, 0, 0, 360) == math.huge, 'timeTo: past it / at rest')
 -- fast mode (|v| > 150 m/s): the prepare test 0.75 s ahead, target 3 s ahead within 420 m
-T.check(d(0, 0, 150, 0, 0, 0, nil, 0, 0) == nil, '150 m/s at the centre: normal mode, nothing')
+T.check(d(0, 0, 25, 0, 0, 0, nil, 0, 0) == nil, '25 m/s at the centre: below highway prepare threshold, nothing')
+T.check(f.reachFor(150, 0) == 260, '150 m/s: still normal mode reach (260 m)')
 a, cx, cy = d(0, 0, 200, 0, 0, 0, nil, 0, 0)
 T.check(a == 'prepare' and cx == 384 and cy == 0, '200 m/s: the test point 150 m ahead prepares; 600 m -> clamped to 384')
 T.check(f.reachFor(200, 0) == 420 and f.reachFor(100, 0) == 260, 'reach per mode')

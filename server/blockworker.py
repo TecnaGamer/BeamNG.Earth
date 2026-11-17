@@ -571,7 +571,8 @@ def plan_cell(aid, lat, lon, key):
     if g is None or getattr(g, "store", None) is None or g.shared is None:
         return False
     k = mapcells.CellKey(int(key[0]), int(key[1]), int(key[2]))
-    g.store.planner_of_cell(k)._cell_plans(k)
+    with xproc.favoured():
+        g.store.planner_of_cell(k)._cell_plans(k)
     return g.shared.has(k)
 
 
@@ -770,7 +771,7 @@ def _take_pads(fuel_pads):
 
 
 def build(aid, lat, lon, hm_zoom, q, cx, cy, size, out_dir, name, ter_name=None, fuel_pads=None, provisional=False,
-          ground_at=(0.0, 0.0)):
+          ground_at=(0.0, 0.0), quick_paint=False):
     """_build, given up (pools.Abandoned) once a teleport leaves anchor aid (_abandon_check)."""
     _BUILDING[0] += 1               # (the pool's one job thread: _warm_loop reads it)
     import revisit
@@ -778,7 +779,7 @@ def build(aid, lat, lon, hm_zoom, q, cx, cy, size, out_dir, name, ter_name=None,
     try:
         with _abandon_check(out_dir, aid):
             return _build(aid, lat, lon, hm_zoom, q, cx, cy, size, out_dir, name, ter_name, fuel_pads, provisional,
-                          ground_at)
+                          ground_at, quick_paint)
     finally:
         revisit.unwind(depth)
         _BUILDING[0] -= 1
@@ -815,7 +816,7 @@ def stale_probe(aid, lat, lon, hm_zoom, q, cx, cy, size, gens, fuel_pads=None):
 
 
 def _build(aid, lat, lon, hm_zoom, q, cx, cy, size, out_dir, name, ter_name=None, fuel_pads=None, provisional=False,
-           ground_at=(0.0, 0.0)):
+           ground_at=(0.0, 0.0), quick_paint=False):
     """Build and write the block (heightmap PNG name in out_dir, its surface masks beside it, and the
     .ter ter_name if given). fuel_pads: the gas station pads around it (the server's: _take_pads). Returns the info
     dict of earthd's make_heightmap (without seconds / zoom / base)."""
@@ -913,7 +914,7 @@ def _build(aid, lat, lon, hm_zoom, q, cx, cy, size, out_dir, name, ter_name=None
             before = idx
             idx = surfacemod.paint_roads(idx, keep["lat"], keep["lon"], road_feats, heightmap.SQUARE,
                                          _s.surface.urban, None if provisional else _s.widths, _open_tunnels(g, keep),
-                                         quick=provisional)
+                                         quick=provisional or quick_paint)
             if not (idx != before).any():   # (drawn roads over it, none painted: Discord's gravel mountain roads)
                 import roads as roadsmod
                 la0, la1 = float(np.min(keep["lat"])), float(np.max(keep["lat"]))
@@ -3585,7 +3586,7 @@ def roadsurf_area(lat0, lon0, lat1, lon1):
 
 
 def base_photo(lat, lon, x0, y0, size, px, tex, buildings, rock_zoom, path, cache, fuel_pads=None, out_px=None,
-               quick=False):
+               quick=False, skip_roads=False):
     """earthd.Server.write_base here, for a server without its imagery analyses (a small machine): the block's base
     photo from the imagery tiles on disk, its building footprints filled and its cliffs as rock, written to path
     (PNG) and packed into the game's terrain texture cache (cache: terraincache.base_entry's arguments but the rgb).
@@ -3613,7 +3614,7 @@ def base_photo(lat, lon, x0, y0, size, px, tex, buildings, rock_zoom, path, cach
     rgb = np.asarray(rgb, np.uint8)
     if quick:
         import surface as surfacemod
-        if roadsmod.ROADS_IN_GROUND:
+        if roadsmod.ROADS_IN_GROUND and not skip_roads:
             try:
                 rgb = surfacemod.paint_square(rgb, frame, x0, y0, size, getattr(_s, "surface", None), _s.widths,
                                               simple=True)

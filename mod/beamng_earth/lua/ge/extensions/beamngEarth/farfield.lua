@@ -1486,7 +1486,7 @@ function M.update(gov, dt, cam, player)
   --    own imagery material gets the Material first, as a separate unit (satmat.lua); a re-sent key
   --    or a sibling sharing the name re-uses it for free.
   local imported = false
-  while true do
+  while not gov.roadYield do
     local inst = peekImport(cam)
     if not inst then break end
     if inst.material and not inst.mat and not inst.matFailed then

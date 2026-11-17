@@ -417,7 +417,13 @@ class Areas:
             fuel = (world_fuel_steps((st[2], st[3]) for st in geo)
                     if md is not None and getattr(self.s, "gas_stations", False)
                     and hasattr(md, "osm_fuel_cached") else [])
-            return lidar + fuel + geo
+            surf = ([("roadsurf", CELL_Z, x, y) for x, y in tiles(CELL_Z, 0)]
+                    if md is not None and getattr(self.s, "surface", None) is not None
+                    and hasattr(self.s, "prebuild_roadsurf") else [])
+            plans = ([("plan", CELL_Z, x, y) for x, y in tiles(CELL_Z, CELL_RING)]
+                     if md is not None and getattr(self.s, "grading", False)
+                     and hasattr(self.s, "prebuild_plan") else [])
+            return lidar + fuel + surf + plans + geo
         raise ValueError(f"unknown area phase {phase!r}")
 
     def steps(self, box, mode=DEFAULT_MODE, route=None):
@@ -441,6 +447,10 @@ class Areas:
             return self.s.dem.has(step[1], step[2], step[3])
         if kind == "geo":
             return self.s.geo_prebuilt(step[2], step[3]) is not None
+        if kind == "plan":
+            return not hasattr(self.s, "plan_prebuilt") or bool(self.s.plan_prebuilt(step[1], step[2], step[3]))
+        if kind == "roadsurf":
+            return not hasattr(self.s, "roadsurf_prebuilt") or bool(self.s.roadsurf_prebuilt(step[1], step[2], step[3]))
         if kind == "lidar":
             return roadz.PROVIDER is None or roadz.PROVIDER.lidar_on_disk(step[1:4])
         if kind == "fuel":
@@ -906,7 +916,10 @@ class Areas:
         as many as the road processes building them). The number failed, or None when the pass stops (waiting,
         paused, set slow)."""
         from concurrent.futures import ThreadPoolExecutor
-        groups = [[st for st in todo if st[0] not in ("lidar", "geo")], [st for st in todo if st[0] == "lidar"],
+        groups = [[st for st in todo if st[0] not in ("lidar", "roadsurf", "plan", "geo")],
+                  [st for st in todo if st[0] == "lidar"],
+                  [st for st in todo if st[0] == "roadsurf"],
+                  [st for st in todo if st[0] == "plan"],
                   [st for st in todo if st[0] == "geo"]]
         failed = 0
         stop = threading.Event()
@@ -928,7 +941,7 @@ class Areas:
             if not group:
                 continue
             width = FAST_THREADS
-            if group[0][0] == "geo":
+            if group[0][0] in ("geo", "plan", "roadsurf"):
                 pool = getattr(self.s, "fast_pool", None) or getattr(self.s, "road_pool", None)
                 width = max(2, 2 * int(getattr(pool, "workers", 2) or 2))
             with ThreadPoolExecutor(min(width, len(group)), thread_name_prefix="areas-fast") as ex:
@@ -992,6 +1005,13 @@ class Areas:
                 write = len(world) % 25 == 0
             if write:
                 self._write_world(a["id"], world)
+            return
+        if kind == "plan":
+            if not self.s.prebuild_plan(st[1], st[2], st[3]):
+                raise RuntimeError("grading plan not complete")
+            return
+        if kind == "roadsurf":
+            self.s.prebuild_roadsurf(st[1], st[2], st[3])
             return
         if kind == "lidar":
             if roadz.PROVIDER is not None and any(roadz.PROVIDER.lines(src, st[1:4]) is None

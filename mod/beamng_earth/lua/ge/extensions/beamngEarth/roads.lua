@@ -76,10 +76,14 @@ M.DELETE_NEAR_M = 200       -- a collider deleted this close to the player count
 -- FAST_MS the COLLIDE_LEAD_S reach is ahead of the car only (COLLIDE_M max), beside and behind it COLLIDE_M min;
 -- and a collider the car reaches within URGENT_S is made solid at once (URGENT_GAP_S between those rebuilds at most).
 M.FAST_MS = 25
+M.HIGH_SPEED_MS = 28
 M.SIDE_PENALTY = 4          -- nextWalk at FAST_MS: m along the path a metre sideways counts as (server roads.py)
-M.LEAD_MAX_M = 2000         -- ... and what every tile behind the car comes after
+M.LEAD_MAX_M = 5000         -- ... and what every tile behind the car comes after (matches server roads.LEAD_MAX_M)
 M.URGENT_S = 6
 M.URGENT_GAP_S = 1
+M.NEAR_FIRST_LEAD_S = 12    -- s ahead kept in 'near' governor lane at >= HIGH_SPEED_MS
+M.URGENT_SURFACE_FAST_S = 6 -- s ahead for urgent road/walk surfaces at >= HIGH_SPEED_MS
+M.CORRIDOR_COL_PENALTY = 300 -- m penalty for off-corridor colliders (bldcol/walkcol) at >= HIGH_SPEED_MS
 -- Rebuild by deadline (NEED, 2026-11-13; game perf report: a 45 mph Steam Deck drive in Baltimore ran 70 rebuilds in
 -- 4.8 min, each a ~51 ms frame: the physics threads held ~8-17 ms and the physics finishing late by as much again;
 -- they outweighed the block swaps). The old rule rebuilt as soon as any collider made since the last rebuild had its
@@ -2395,20 +2399,25 @@ function M.update(gov, currentAnchor, player, view, a, dtSim, dtReal)
   updateCollideRange()
   step('collideRange')
   local forced = nil
-  if #walkQ > 0 and sinceUrgent >= M.URGENT_EVERY_FRAMES and not (gov.isHeavyFrame and gov:isHeavyFrame()) then
+  local urgentEvery = lastSpeed >= M.HIGH_SPEED_MS and 1 or M.URGENT_EVERY_FRAMES
+  if #walkQ > 0 and sinceUrgent >= urgentEvery and not (gov.isHeavyFrame and gov:isHeavyFrame()) then
     local surface
     forced, surface = M.urgentWalk(walkQ, gov.blocked)
     -- (a drawn surface: only into a frame with room for it, governor.lua tryUrgent; else it waits its turn as any mesh)
-    if forced and surface and gov.tryUrgent and not gov:tryUrgent(M.walkKind(walkQ[forced].what)) then forced = nil end
+    local urgentRoad = lastSpeed >= M.HIGH_SPEED_MS and walkQ[forced] and walkQ[forced].what == 'road'
+    if forced and surface and gov.tryUrgent and not gov:tryUrgent(M.walkKind(walkQ[forced].what), urgentRoad) then
+      forced = nil
+    end
   end
   sinceUrgent = sinceUrgent + 1
   local dueSaid = false
+  local nearFirst = lastSpeed >= M.HIGH_SPEED_MS and math.max(M.NEAR_FIRST_M, lastSpeed * M.NEAR_FIRST_LEAD_S) or M.NEAR_FIRST_M
   while #walkQ > 0 do
-    -- (lanes, governor.lua: a mesh within NEAR_FIRST_M of the car, or a forced one, is 'near'; the rest 'mid', which
-    -- shares with the far tiles while they wait)
+    -- (lanes, governor.lua: a mesh within NEAR_FIRST_M (or NEAR_FIRST_LEAD_S at highway speed) of the car, or a forced
+    -- one, is 'near'; the rest 'mid', which shares with the far tiles while they wait)
     local idx, key, nearest = forced, nil, nil
     if not idx then idx, key, nearest = M.nextWalk(walkQ) end
-    local lane = (key and key > M.NEAR_FIRST_M) and 'mid' or 'near'     -- (no car: as before, unrestricted)
+    local lane = (key and key > nearFirst) and 'mid' or 'near'     -- (no car: as before, unrestricted)
     local kind = M.walkKind(walkQ[idx].what)
     -- (DUE: the queue's nearest mesh within the due reach raises the governor's target; the next one, waiting for
     -- tokens while due work waits, keeps them from the far tiles)
@@ -2501,6 +2510,7 @@ function M.update(gov, currentAnchor, player, view, a, dtSim, dtReal)
   -- (NEED: a fast car's pending colliders wait for their deadline, not for RELOAD_EVERY_S; what else set the flag
   -- (trees, props, deletes near the car) keeps the timer)
   if due and not urgent and M.NEED and lastSpeed >= M.FAST_MS and M.onlyColliderDirt(dirtySrc) then due = false end
+  if due and not urgent and M.NEED and lastSpeed >= M.HIGH_SPEED_MS and sinceReload() < M.ROLL_DEFER_S * 1000 then due = false end
   if due and not holdActive and reloadWaits < M.RELOAD_WAIT_FRAMES and gov.roomFor and not gov:roomFor(M.RELOAD_ROOM_MS) then
     reloadWaits = reloadWaits + 1
     due = false
@@ -2693,13 +2703,14 @@ function M.nextWalk(q)
   for i, e in ipairs(q) do
     local t = tiles[e.key]
     local k = 1e9
-    local behind = false
+    local behind, sideDist = false, math.huge
     if t and t.cx then
       local dx, dy = t.cx - p.x, t.cy - p.y
       k = math.sqrt(dx * dx + dy * dy)
       if dir then         -- moving: by the way along the path ahead, sideways counting SIDE_PENALTY times (the server's
         local along = dx * dir.x + dy * dir.y               -- roads.path_key); behind the car after all of those
         local side = math.abs(dx * dir.y - dy * dir.x)
+        sideDist = side
         if along < -M.TILE_M / 2 then k, behind = k * 3 + M.LEAD_MAX_M, true     -- (its centre half a tile behind: left behind)
         else k = math.max(0, along) + M.SIDE_PENALTY * math.max(0, side - M.TILE_M / 2) end
       end
@@ -2713,14 +2724,50 @@ function M.nextWalk(q)
     if (e.renderOnly or e.what == 'wire') and not (M.SURFACE_FIRST and (e.what == 'road' or e.what == 'walk')) then
       k = k + (M.RENDER_AFTER_M or 1e6)
     end
+    if lastSpeed >= M.HIGH_SPEED_MS and not e.renderOnly and e.what ~= 'deck' and e.what ~= 'tunnel'
+        and e.what ~= 'road' and e.what ~= 'walk' and (not dir or sideDist > M.TILE_M) then
+      k = k + M.CORRIDOR_COL_PENALTY
+    end
     if e.what == 'deck' or e.what == 'tunnel' then k = math.max(0, k - M.DRIVE_FIRST_M) end
     if k < bestKey then best, bestKey = i, k end
   end
   return best, bestKey, nearest
 end
 
+-- True when a forward colliding drive surface (deck, tunnel) within dueReach or immediate road surface under/just
+-- ahead (<= max(150, lastSpeed * 3) m) is still queued in walkQ.
+function M.hasDueForward()
+  if #walkQ == 0 or not M.DUE then return false end
+  local p = playerNow()
+  if not p then return false end
+  local colReach = M.dueReach(lastSpeed)
+  local roadReach = math.max(150, lastSpeed * 3)
+  local dir = orderDir
+  for _, e in ipairs(walkQ) do
+    local isDrive = e.what == 'deck' or e.what == 'tunnel'
+    if isDrive or e.what == 'road' then
+      local reach = isDrive and colReach or roadReach
+      local t = tiles[e.key]
+      if t and t.cx then
+        local dx, dy = t.cx - p.x, t.cy - p.y
+        if dir then
+          local along = dx * dir.x + dy * dir.y
+          local side = math.abs(dx * dir.y - dy * dir.x)
+          if along >= -M.TILE_M / 2 and along + M.SIDE_PENALTY * math.max(0, side - M.TILE_M / 2) <= reach then
+            return true
+          end
+        elseif dx * dx + dy * dy <= reach * reach then
+          return true
+        end
+      end
+    end
+  end
+  return false
+end
+
 -- The road tiles whose drawn surfaces are urgent (URGENT_SURFACES): the one under the car at p and those it reaches
--- within URGENT_SURFACE_S along dir (a set of tile keys; geotiles and anchor tiles alike).
+-- within URGENT_SURFACE_S (URGENT_SURFACE_FAST_S at >= HIGH_SPEED_MS) along dir (plus lateral flanks at high speed
+-- for curved highways, with zero table allocations).
 local function surfaceKeys(p, dir, v)
   local keys = {}
   local function add(x, y)
@@ -2732,9 +2779,25 @@ local function surfaceKeys(p, dir, v)
   end
   add(p.x, p.y)
   if dir then
-    local d = math.max(M.URGENT_SURFACE_MIN_M, (v or 0) * M.URGENT_SURFACE_S)
-    add(p.x + dir.x * d * 0.5, p.y + dir.y * d * 0.5)
-    add(p.x + dir.x * d, p.y + dir.y * d)
+    local high = v and v >= M.HIGH_SPEED_MS
+    local surfS = high and M.URGENT_SURFACE_FAST_S or M.URGENT_SURFACE_S
+    local d = math.max(M.URGENT_SURFACE_MIN_M, (v or 0) * surfS)
+    local stepM = high and (M.TILE_M * 0.5) or (d * 0.5)
+    local latOff = M.TILE_M * 0.5
+    local function addSample(s)
+      local ax, ay = p.x + dir.x * s, p.y + dir.y * s
+      add(ax, ay)
+      if high and s >= M.TILE_M then
+        add(ax - dir.y * latOff, ay + dir.x * latOff)
+        add(ax + dir.y * latOff, ay - dir.x * latOff)
+      end
+    end
+    local s = stepM
+    while s < d do
+      addSample(s)
+      s = s + stepM
+    end
+    addSample(d)
   end
   return keys
 end

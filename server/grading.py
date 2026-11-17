@@ -2390,13 +2390,14 @@ class _Planner:
                 try:
                     # (the corrected decks within reach of the cell first: its plans' own elevation reads them while
                     # it is planned, _elev_decked; the decks of the cells its plans read anyway, _decks_near's)
-                    dg = self._cell_deck_patches(key)
-                    stack = self._dg_local.__dict__.setdefault("stack", [])
-                    stack.append(self._stack_entry(key, dg))
-                    try:
-                        got = self._make_cell(key)
-                    finally:
-                        stack.pop()
+                    with roadsmod.suppress_photo_faults():
+                        dg = self._cell_deck_patches(key)
+                        stack = self._dg_local.__dict__.setdefault("stack", [])
+                        stack.append(self._stack_entry(key, dg))
+                        try:
+                            got = self._make_cell(key)
+                        finally:
+                            stack.pop()
                     if got is not None:
                         got = tuple(got) + (dg,)
                         with self.lock:
@@ -2532,7 +2533,8 @@ class _Planner:
                     stack = self._dg_local.__dict__.setdefault("stack", [])
                     stack.append(self._stack_entry(key, dg))
                     try:
-                        got = self._make_cell_roads(key)
+                        with roadsmod.suppress_photo_faults():
+                            got = self._make_cell_roads(key)
                     finally:
                         stack.pop()
                 if got is not None:
