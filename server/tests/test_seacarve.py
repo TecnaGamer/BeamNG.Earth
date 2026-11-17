@@ -186,6 +186,32 @@ class SeaCarveTest(unittest.TestCase):
             with self.assertRaises((ValueError, OSError)):   # Windows mmap rejects a truncated mapping with OSError
                 seacarve._open_raw(p)
 
+    def test_rasters_in_memory_as_blocks_bit_for_bit(self):
+        """A cell decoded in a process is kept as its blocks (_in_blocks), not three full planes: the land blocks share
+        one slot, and what is read back is the raster bit for bit, a -0.0 depth or another NaN in a land block too."""
+        n = 1026
+        rng = np.random.default_rng(5)
+        depth = np.zeros((n, n), np.float32)
+        level = np.full((n, n), np.nan, np.float32)
+        outline = np.zeros((n, n), bool)
+        depth[100:140, 600:700] = rng.random((40, 100), np.float32) * 3
+        level[98:142, 598:702] = 212.3
+        depth[900, 5] = -0.0                                                # (a rounded -0.0: not land's +0.0)
+        level[7, 900] = np.array(0x7fc00001, np.uint32).view(np.float32)   # (another NaN)
+        got = seacarve._in_blocks((depth, level, outline))
+        self.assertTrue(all(isinstance(a, seacarve._Blocks) for a in got))
+        self.assertLess(got[0].data.base.nbytes, 0.1 * n * n * seacarve.RAW_DTYPE.itemsize)
+        for a, b in zip(got, (depth, level, outline)):
+            self.assertEqual(a.shape, (n, n))
+            whole = np.asarray(a)
+            self.assertEqual(whole.dtype, b.dtype)
+            self.assertEqual(whole.tobytes(), b.tobytes())
+            j, i = rng.integers(0, n, 3000), rng.integers(0, n, 3000)
+            self.assertEqual(a[j, i].tobytes(), b[j, i].tobytes())
+        self.assertIsNone(seacarve._in_blocks(None))
+        odd = (np.zeros((3, 4), np.float32),) * 3                          # (not a square raster: as it is)
+        self.assertIs(seacarve._in_blocks(odd), odd)
+
     def test_raw_copy_and_older_cells(self):
         """Read back memory-mapped (the raw copy) and from a cell cached before the raw copies (converted): the
         same water as the build."""

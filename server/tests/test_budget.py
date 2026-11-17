@@ -55,7 +55,17 @@ class BudgetTest(unittest.TestCase):
     def test_small_caches(self):
         with mock.patch.object(budget, "total_gb", return_value=64.0):     # (Auto's cap: the desktop sizes)
             self.assertFalse(budget.apply(False))
-        self.assertEqual(dem.MEM_TILES, self.saved[0], "the desktop sizes stay")
+        # (the desktop sizes stay, the decoded DEM tiles at most dem.PACKED_MEM_TILES with the packed mirror)
+        self.assertEqual(dem.MEM_TILES, min(self.saved[0], dem.PACKED_MEM_TILES) if dem.MIRROR_ZSTD else self.saved[0],
+                         "the desktop sizes stay")
+        dem.MEM_TILES = self.saved[0]
+        with mock.patch.object(budget, "total_gb", return_value=64.0), mock.patch.object(dem, "MIRROR_ZSTD", False):
+            budget.apply(False)
+        self.assertEqual(dem.MEM_TILES, self.saved[0], "memory-mapped .npy tiles: shared, the desktop's 512")
+        dem.MEM_TILES = self.saved[0]
+        with mock.patch.object(budget, "total_gb", return_value=64.0), mock.patch.object(dem, "MIRROR_ZSTD", True):
+            budget.apply(False)
+        self.assertEqual(dem.MEM_TILES, dem.PACKED_MEM_TILES, "packed tiles: each process's own")
         with mock.patch.object(budget, "total_gb", return_value=14.5):     # (a Steam Deck: not a lean tier)
             self.assertTrue(budget.apply(True))
         self.assertEqual((dem.MEM_TILES, roadwidth.WALL_CELLS, mapdata.MEM_MB),
