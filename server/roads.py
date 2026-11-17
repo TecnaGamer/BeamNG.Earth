@@ -2551,21 +2551,16 @@ def joint_desc(copies, fn):
     """The tapers / shifts (fn(feats)[i]: ((lon, lat, ...), ...)) of a road from its copies [(feats, i)] in the cells at
     hand, each joint's from the copy in the cell the joint lies in: that cell holds every road meeting there, a copy
     elsewhere may not and found another (a Springfield Interchange ramp's deck tapered in one cell and not in the
-    next, a 0.9 m step; deckedges.py 2026-10-31). A joint whose cell is not at hand: any copy's. Pure."""
-    import mapcells
-    out, other = {}, {}
+    next, a 0.9 m step; deckedges.py 2026-10-31). A joint whose cell is not at hand: any copy's. Pure
+    (earthfast roadnet::copies::joint_desc)."""
+    import fast
+    fast.require(378, "joint_desc")
+    cells, rows = [], []
     for f, i in copies:
         cid = f.__dict__.get("_bnge_cell")
-        cid = cid[0] if cid else None
-        for d in fn(f)[i] or ():
-            key = (round(d[0], 6), round(d[1], 6))
-            if cid is None or str(mapcells.cell_of(d[1], d[0])) == cid:
-                out[key] = d
-            else:
-                other.setdefault(key, d)
-    for key, d in other.items():
-        out.setdefault(key, d)
-    return tuple(out[k] for k in sorted(out))
+        cells.append(cid[0] if cid else None)
+        rows.append(fn(f)[i] or ())
+    return fast._ef.joint_desc(cells, rows)
 
 
 def _id_rows(f):

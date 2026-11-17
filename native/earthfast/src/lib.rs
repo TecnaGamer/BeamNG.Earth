@@ -115,6 +115,7 @@ mod roadwear;
 mod roadtone;
 mod railbeds;
 mod railxing;
+mod roadnet;
 mod osmtagshards;
 mod buildyears;
 mod buildcolours;
@@ -6528,6 +6529,9 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 377 (first numbered 375): grade_points: a road holds its carriageway whole only over no approach of its rank
     // leading onto a bridge (gradebins Pt.arank: the Stonehouse Bridge's deck end stepped 1.6 m into the gyratory it
     // runs into, GitHub #1374)
-    m.add("VERSION", 377)?;
+    m.add_function(wrap_pyfunction!(roadnet::copies::joint_desc, m)?)?;
+    // 378: the road revamp's R2a (roadnet: the spec inputs' Python glue ported byte for byte): roadnet::copies::joint_desc
+    // (roads.joint_desc: each joint from the copy in its own cell, keys by Python's round(x, 6))
+    m.add("VERSION", 378)?;
     Ok(())
 }
