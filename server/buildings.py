@@ -2516,7 +2516,7 @@ def eave_ring(ring, d):
     if len(r) < 3 or d <= 0:
         return None
     e = np.roll(r, -1, 0) - r                                   # edge i: r[i] -> r[i+1]
-    L = np.hypot(e[:, 0], e[:, 1])
+    L = dnp.hypot(e[:, 0], e[:, 1])
     if (L < 1e-6).any():
         return None
     n = np.stack([e[:, 1], -e[:, 0]], 1) / L[:, None]           # outward (right of a counter-clockwise ring)
