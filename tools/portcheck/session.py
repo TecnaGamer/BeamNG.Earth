@@ -10,8 +10,8 @@ trees, buildings, gas stations) on a work copy of the corpus cache (offline) and
 mod's side as core.lua does: its hello (every capability of the mod tree beside the server: geotiles, road / far /
 global geotiles, flat vegetation, deck guard, ready set ...), the graphics message (the place's view_m), a declared
 teleport to the place, commit, then a pose every 0.25 s with a chase camera looking north, pooled shapes given back
-(slotsGone) as their far tiles go. It ends settle_s after far_done once no message has named a file for 5 s (or at
---timeout).
+(slotsGone) as their far tiles go. It ends settle_s after far_done once the loading line is all done and no message
+has named a file for QUIET_S (or at --timeout).
 
 Recorded in OUT/sessions/<place>/:
   messages.jsonl   every message received ({"i", "t", "m"}), each file path in it (a string under /temp/beamngEarth/)
@@ -49,7 +49,8 @@ SID_RE = re.compile(r"\d{8}-\d{6}-[0-9a-f]{4}")
 MAT_RE = re.compile(r"(bngEarth[A-Za-z]*)_[0-9a-f]{4}_\d{5}")
 SID_RE_B = re.compile(rb"\d{8}-\d{6}-[0-9a-f]{4}")
 MAT_RE_B = re.compile(rb"(bngEarth[A-Za-z]*)_[0-9a-f]{4}_\d{5}")
-QUIET_S = 5.0               # s without a message naming a file before the session may end
+QUIET_S = 20.0              # s without a message naming a file before the session may end (the horizon ring, the
+                            # far bridges and retextures come late: 5 s ended runs before them, other tiles in each)
 # the mod's hello capabilities: (field, Lua file under the mod's beamngEarth folder, the constant's pattern)
 CAPS = (("geoTiles", "geotile.lua", r"^M\.Z\s*=\s*(\d+)"),
         ("roadGeo", "roads.lua", r"^M\.ROAD_GEO\s*=\s*(\d+)"),
@@ -90,6 +91,7 @@ class Recorder:
         os.makedirs(self.blobs, exist_ok=True)
         self.f = open(os.path.join(out, "messages.jsonl"), "w", encoding="utf-8")
         self.n, self.t0, self.last_file = 0, time.monotonic(), time.monotonic()
+        self.progress = None        # (the last load_progress: the session ends once it is all done)
         self.memo = {}
 
     def capture(self, vpath, depth=0):
@@ -216,7 +218,8 @@ def play(a, c, rec, place):
     end, last_pose, done_at = time.monotonic() + a.timeout, 0.0, None
     while time.monotonic() < end:
         now = time.monotonic()
-        if done_at is not None and now - done_at >= place.get("settle_s", 20) and now - rec.last_file >= QUIET_S:
+        if done_at is not None and now - done_at >= place.get("settle_s", 20) and now - rec.last_file >= QUIET_S \
+                and loaded(rec.progress):
             break
         if now - last_pose >= 0.25:
             last_pose = now
@@ -232,6 +235,8 @@ def play(a, c, rec, place):
         typ = m.get("type")
         if m.get("anchorId") != aid:
             continue
+        if typ == "load_progress":
+            rec.progress = m
         if typ == "far_tile" and m.get("slotSerial") is not None and m.get("material"):
             slots[m["key"]] = (int(m["material"].rsplit("_", 1)[1]), m["slotSerial"])
         elif typ in ("far_swap", "far_remove"):
@@ -241,6 +246,16 @@ def play(a, c, rec, place):
         elif typ == "far_done" and done_at is None:
             done_at = time.monotonic()
     return {"anchor": aid, "far_done": done_at is not None}
+
+
+def loaded(p):
+    """The loading line's counts all done (ground, roads, trees, far: [done, wanted]) and no download in flight."""
+    if p is None:
+        return False
+    try:
+        return all(p[k][0] >= p[k][1] for k in ("ground", "roads", "trees", "far")) and not p.get("net", [0])[0]
+    except (KeyError, TypeError, IndexError):
+        return True             # (another shape: the quiet rule alone)
 
 
 def copy_plans(work, dst):

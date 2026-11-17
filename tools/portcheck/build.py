@@ -141,10 +141,10 @@ def main():
     a.cache, a.out = os.path.abspath(os.path.expanduser(a.cache)), os.path.abspath(os.path.expanduser(a.out))
     a.server_dir = os.path.abspath(a.server_dir)
     pcommon.check_cache(a.cache)
+    if a.one:               # (the parent checked: the child's cache is the work copy under --out)
+        return child(a)
     pcommon.check_apart(a.cache, a.out)
     pcommon.check_cache(a.out)
-    if a.one:
-        return child(a)
     pcommon.nice_self()
     os.makedirs(a.out, exist_ok=True)
     os.makedirs(a.cache, exist_ok=True)
