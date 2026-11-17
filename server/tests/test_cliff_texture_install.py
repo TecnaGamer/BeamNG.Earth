@@ -22,7 +22,7 @@ class CliffTextureInstallTest(unittest.TestCase):
 
     def test_single_opt_in_prepares_all_category_maps(self):
         cliffs = {path: e for path, e in modtextures.manifest().items() if "/cliff/" in path}
-        self.assertEqual(len(cliffs), 26)
+        self.assertEqual(len(cliffs), 27)
         with patch.object(modtextures, "_sha256_file", return_value="test-source"):
             self.assertFalse(modtextures.plan(entries=cliffs, env={}))
             self.assertFalse(modtextures.plan(entries=cliffs, env={"BNE_CLIFF_ROAD_CUTS": "1"}))

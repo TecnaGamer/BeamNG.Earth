@@ -1,4 +1,4 @@
-//! Cliff boundary geometry: filtered contours, buried rims and terrain normals.
+//! Opaque cliff rims: filtered coverage contours and shared material blend coordinates.
 use crate::dm::Dm;
 use numpy::{ndarray::Array2, IntoPyArray, PyArray2, PyReadonlyArray2, PyUntypedArrayMethods};
 use pyo3::{exceptions::PyValueError, prelude::*};
@@ -15,6 +15,7 @@ const RIM_NOISE_COARSE: f64 = 6.0;
 const RIM_NOISE_FINE: f64 = 2.0;
 const RIM_NOISE_FINE_WEIGHT: f64 = 0.3;
 const RIM_NOISE_STRENGTH: f64 = 0.8;
+const MASK_HALF_TEXEL: f64 = 0.5 / 16.0;
 
 fn blur_axis(input: &[f64], w: usize, h: usize, step: f64, vertical: bool) -> Vec<f64> {
     let radius = (CONTOUR_RADIUS_M / step).ceil().min(32.) as isize;
@@ -279,6 +280,109 @@ pub fn cliff_transition_clip<'py>(
             .into_pyarray(py),
         Array2::from_shape_vec((count, width), out_a).unwrap().into_pyarray(py),
     ))
+}
+
+fn linear(v: f64) -> f64 {
+    if v <= 0.04045 {
+        v / 12.92
+    } else {
+        ((v + 0.055) / 1.055).dpowf(2.4)
+    }
+}
+fn srgb(v: f64) -> f64 {
+    if v <= 0.0031308 {
+        v * 12.92
+    } else {
+        1.055 * v.dpowf(1. / 2.4) - 0.055
+    }
+}
+
+/// Mean-preserving tint compensation: the rock keeps its interior colour while
+/// the opaque rim tends to the cached satellite colour, not a white overlay.
+#[pyfunction]
+pub fn cliff_transition_attributes<'py>(
+    py: Python<'py>,
+    colors: PyReadonlyArray2<'py, f64>,
+    rgb: PyReadonlyArray2<'py, f64>,
+    weights: PyReadonlyArray2<'py, f64>,
+    reference: [f64; 3],
+) -> PyResult<(Bound<'py, PyArray2<f64>>, Bound<'py, PyArray2<f64>>)> {
+    let n = colors.shape()[0];
+    if colors.shape() != [n, 4]
+        || rgb.shape() != [n, 3]
+        || weights.shape() != [n, 1]
+        || reference.iter().any(|x| !x.is_finite() || *x <= 0.)
+    {
+        return Err(PyValueError::new_err("invalid cliff transition attributes"));
+    }
+    let (c, r, b) = (colors.as_array(), rgb.as_array(), weights.as_array());
+    if c.iter().chain(r.iter()).chain(b.iter()).any(|x| !x.is_finite()) {
+        return Err(PyValueError::new_err("nonfinite cliff transition attributes"));
+    }
+    let (out, uv) = py.detach(|| {
+        let mut out = Vec::with_capacity(n * 4);
+        let mut uv = Vec::with_capacity(n * 2);
+        for i in 0..n {
+            let w = b[[i, 0]].clamp(0., 1.);
+            // Interior vertices retain their authored tint exactly. Avoid the
+            // linear/sRGB conversions that only the terrain collar needs.
+            if w == 0. {
+                out.extend((0..4).map(|ch| c[[i, ch]]));
+                uv.extend([MASK_HALF_TEXEL, 0.5]);
+                continue;
+            }
+            let valid = (0..3).any(|ch| r[[i, ch]] > 8.);
+            for ch in 0..3 {
+                // At the outer boundary a valid terrain colour replaces the
+                // rock completely. Its old linear tint has zero weight.
+                let old = if w == 1. && valid {
+                    0.
+                } else {
+                    linear((c[[i, ch]] / 255.).clamp(0., 1.))
+                };
+                let mean = reference[ch];
+                let target = if valid {
+                    linear((r[[i, ch]] / 255.).clamp(0., 1.))
+                } else {
+                    old * mean
+                };
+                let tint = ((1. - w) * old * mean + w * target) / ((1. - w) * mean + w);
+                out.push((srgb(tint.clamp(0., 1.)) * 255.).round());
+            }
+            out.push(c[[i, 3]]);
+            uv.extend([MASK_HALF_TEXEL + w * (1. - 2. * MASK_HALF_TEXEL), 0.5]);
+        }
+        (out, uv)
+    });
+    Ok((
+        Array2::from_shape_vec((n, 4), out).unwrap().into_pyarray(py),
+        Array2::from_shape_vec((n, 2), uv).unwrap().into_pyarray(py),
+    ))
+}
+
+/// Keep subsequent heightmap relief inside the same geometric rim taper.
+/// UV1 stores the shared mask coordinate; endpoints remain completely buried.
+#[pyfunction]
+pub fn cliff_transition_relief_weights<'py>(
+    py: Python<'py>,
+    weights: PyReadonlyArray2<'py, f64>,
+    uv: PyReadonlyArray2<'py, f64>,
+) -> PyResult<Bound<'py, PyArray2<f64>>> {
+    let n = weights.shape()[0];
+    if weights.shape() != [n, 1] || uv.shape() != [n, 2] {
+        return Err(PyValueError::new_err("invalid cliff relief taper arrays"));
+    }
+    let w = weights.as_array();
+    let u = uv.as_array();
+    let out: Vec<_> = py.detach(|| {
+        (0..n)
+            .map(|i| {
+                let blend = ((u[[i, 0]] - MASK_HALF_TEXEL) / (1. - 2. * MASK_HALF_TEXEL)).clamp(0., 1.);
+                w[[i, 0]] * (1. - blend)
+            })
+            .collect()
+    });
+    Ok(Array2::from_shape_vec((n, 1), out).unwrap().into_pyarray(py))
 }
 
 /// Match the terrain's slope at contact, rather than lighting the buried collar

@@ -6530,6 +6530,8 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(cliffstrips::cliff_strip_tint, m)?)?;
     m.add_function(wrap_pyfunction!(cliffstrips::cliff_strip_mesh, m)?)?;
     m.add_function(wrap_pyfunction!(clifftransition::cliff_transition_surface, m)?)?;
+    m.add_function(wrap_pyfunction!(clifftransition::cliff_transition_attributes, m)?)?;
+    m.add_function(wrap_pyfunction!(clifftransition::cliff_transition_relief_weights, m)?)?;
     m.add_function(wrap_pyfunction!(clifftransition::cliff_transition_normals, m)?)?;
     m.add_function(wrap_pyfunction!(clifftransition::cliff_transition_fill_gaps, m)?)?;
     m.add_function(wrap_pyfunction!(clifftransition::cliff_transition_clip, m)?)?;
@@ -6573,6 +6575,6 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(cliffcuts::cliff_road_clearance, m)?)?;
     m.add_function(wrap_pyfunction!(cliffcuts::cliff_cut_ends, m)?)?;
     m.add_function(wrap_pyfunction!(cliffcuts::cliff_cut_sustained, m)?)?;
-    m.add("VERSION", 312)?;
+    m.add("VERSION", 311)?;
     Ok(())
 }

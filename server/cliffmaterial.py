@@ -2,12 +2,9 @@
 from functools import lru_cache
 from pathlib import Path
 
-import json
 import numpy as np
 import clifftypes
 from clifftypes import NATURAL, LIMESTONE_CUT, ARID_CUT, CANYON
-
-MEANS = json.loads(Path(__file__).with_name('cliff_material_means.json').read_text())
 
 WIDTH_M = 91.44
 HEIGHT_M = 91.44

@@ -13,6 +13,7 @@ from test_clifflod import surface, boundary
 class CliffStreamTest(unittest.TestCase):
     def test_parts_cover_every_face_with_exact_attributes(self):
         rock = surface(37)
+        rock.uvs2 = rock.uvs * 3 + .13
         rock.colors[:,0] = np.arange(len(rock.positions)) % 255
         rock.tri_materials = np.arange(len(rock.tris)) % len(cliffmaterial.MATERIALS)
         with patch.object(cliffrocks, 'STREAM_TRIANGLES', 256):
@@ -23,7 +24,7 @@ class CliffStreamTest(unittest.TestCase):
         actual = []
         for part in parts:
             ids = np.array([source[tuple(v)] for v in part.positions])
-            for name in ('normals','uvs','colors'):
+            for name in ('normals','uvs','uvs2','colors'):
                 np.testing.assert_array_equal(getattr(part,name),getattr(rock,name)[ids])
             actual.extend(zip(map(tuple,ids[part.tris]),part.tri_materials))
             self.assertGreater(part.lod_scale,0)
@@ -56,6 +57,7 @@ class CliffStreamTest(unittest.TestCase):
 
     def test_small_legacy_mesh_and_all_material_families(self):
         rock = surface(7)
+        rock.uvs2 = rock.uvs.copy()
         part, = cliffrocks.stream_parts(rock)
         self.assertEqual(part.lod_scale,1)
         for family in range(len(cliffmaterial.MATERIALS)):
@@ -65,7 +67,7 @@ class CliffStreamTest(unittest.TestCase):
                 cliffrocks.write(str(path),part)
                 shape = cdae.decode(path.read_bytes())
                 self.assertEqual([m['name'] for m in shape['materials']],[cliffmaterial.MATERIALS[family]])
-                self.assertEqual(shape['meshes'][0]['tverts2'][0],0)
+                self.assertEqual(shape['meshes'][0]['tverts2'][0],len(part.positions))
                 self.assertNotIn('Collision-1', shape['names'])
 
     def test_weak_lod_reduction_is_not_serialized(self):

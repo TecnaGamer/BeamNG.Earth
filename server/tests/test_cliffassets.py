@@ -44,7 +44,7 @@ class CliffAssetTest(unittest.TestCase):
             name = Path(path).name
             with Image.open(SOURCES / entry["source"]) as image:
                 self.assertLessEqual(max(image.size), 4096, name)
-                if name not in {"rock_grain.normal.dds"} and "_far" not in name:
+                if name not in {"rock_grain.normal.dds", "terrain_rim.data.dds"} and "_far" not in name:
                     self.assertEqual(image.size, (4096, 4096), name)
 
     def test_private_rock_detail_paths_match_runtime_cache(self):

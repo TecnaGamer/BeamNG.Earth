@@ -54,12 +54,13 @@ def simplify(rock, cell_m, prepared=None, fallback=None):
             prepared['accepted_labels'] = labels
         return fast._ef.cliff_lod_output(pos, tri, keep, mapping,
             np.ascontiguousarray(rock.uvs, float), np.ascontiguousarray(rock.colors, float),
-            np.ascontiguousarray(material, np.int32),
-            None if rock.normals is None else np.ascontiguousarray(rock.normals, float))
+            np.ascontiguousarray(material, np.int32), rock.terrain_blend,
+            None if rock.normals is None else np.ascontiguousarray(rock.normals, float),
+            None if rock.uvs2 is None else np.ascontiguousarray(rock.uvs2, float))
     # Pathological input remains intact rather than producing an unsafe coarse mesh.
     return dict(positions=p, tris=t, uvs=rock.uvs, colors=rock.colors,
                 normals=rock.normals, tri_materials=material,
-                tangent_uvs=rock.uvs)
+                uvs2=getattr(rock,'uvs2',None), tangent_uvs=rock.uvs if rock.terrain_blend else getattr(rock,'uvs2',None))
 
 
 @profile_step('Cliff render LODs')

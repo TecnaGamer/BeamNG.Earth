@@ -187,7 +187,7 @@ def pyinstaller(work, ico, onefile, ver=None, boot=None):
            "--add-data", f"{os.path.join(server, 'threedmr_position_fixes.json')}{SEP}."]
     # Cliff geometry inputs are read beside the server modules, including in a frozen app.
     for name in ("cliff_height.png", "cliff_cut_height.png", "cliff_arid_cut_height.png",
-                 "cliff_canyon_height.png", "cliff_material_means.json"):
+                 "cliff_canyon_height.png", "cliff_transition_means.json"):
         cmd += ["--add-data", f"{os.path.join(server, name)}{SEP}."]
     # the sources' fingerprint (peerwork.code_id: compute-sharing helpers build only for the same code)
     sys.path.insert(0, server)

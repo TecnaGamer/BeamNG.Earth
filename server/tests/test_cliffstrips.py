@@ -58,8 +58,8 @@ class ProjectedStrips(unittest.TestCase):
         for ns in (None,normals):
             for tint in (colors, colors.astype(float), colors.astype(float)/255):
                 for budget in (0,1,80,cs.PATCH_FACES_MAX):
-                    rock = SimpleNamespace(positions=p,tris=tri,normals=ns,colors=tint,
-                                           tri_materials=families)
+                    rock = SimpleNamespace(positions=p,tris=tri,normals=ns,colors=colors,
+                                           strip_colors=tint,tri_materials=families)
                     ground = lambda xy: xy[:,1]*.075
                     with patch.object(cs,'PATCH_FACES_MAX',budget), patch.object(reference,'PATCH_FACES_MAX',budget):
                         actual = cs.prepare(rock,ground)
@@ -479,23 +479,30 @@ class ProductionStrips(unittest.TestCase):
         self.assertTrue(all(len(s.tris)<=8000 for s,c in parts))
         self.assertLessEqual(len(parts),cs.PARTS_MAX)
 
-    def test_strip_uses_the_same_mineral_tint_as_the_face(self):
+    def test_strip_uses_rock_color_even_when_satellite_rim_is_dark_or_green(self):
         from cliffrocks import Mesh
         from cliffcolors import linear, srgb
-        from cliffmaterial import MEANS
-        p=np.array([[-6.,-8.,-6.],[6.,-8.,6.],[6.,8.,6.],[-6.,8.,-6.]])
-        t=np.array([[0,1,2],[0,2,3]])
-        colors=np.tile([150,120,100,255],(4,1)).astype(np.uint8)
+        import json
+        p = np.array([[-6.,-8.,-6.],[6.,-8.,6.],[6.,8.,6.],[-6.,8.,-6.]])
+        t = np.array([[0,1,2],[0,2,3]])
+        original = np.tile([150,120,100,255], (4,1)).astype(np.uint8)
+        means = np.array(json.loads(Path(cs.__file__).with_name('cliff_transition_means.json').read_text()))
         for family in (0,3):
-            rock=Mesh(p,t,np.zeros((4,2)),colors,tri_materials=np.full(2,family))
-            parts=cs.tile_parts(rock,lambda xy:np.zeros(len(xy)))
-            self.assertTrue(parts)
-            expected=np.rint(srgb(linear(colors[0,:3]/255)*MEANS[family])*255)
-            for strip,tint in parts:
-                np.testing.assert_allclose(tint[:,:3],np.tile(expected,(len(tint),1)),atol=1)
-                self.assertGreater(strip.threshold.max(),.99)
-                self.assertLess(strip.threshold.min(),.5)
-                self.assertTrue((strip.positions[:,2]>=cs.GROUND_CLEARANCE_M).all())
+            outputs = []
+            for rim_color in ([4,5,6,255],[50,230,30,255]):
+                rock = Mesh(p,t,np.zeros((4,2)),np.tile(rim_color,(4,1)).astype(np.uint8),
+                            tri_materials=np.full(2,family),uvs2=np.tile([15.5/16,.5],(4,1)),
+                            terrain_blend=True,strip_colors=original)
+                parts = cs.tile_parts(rock,lambda xy:np.zeros(len(xy)))
+                self.assertTrue(parts)
+                expected = np.rint(srgb(linear(original[0,:3]/255)*means[family])*255)
+                for strip,colors in parts:
+                    np.testing.assert_allclose(colors[:,:3],np.tile(expected,(len(colors),1)),atol=1)
+                    self.assertGreater(strip.threshold.max(),.99)
+                    self.assertLess(strip.threshold.min(),.5)
+                    self.assertTrue((strip.positions[:,2] >= cs.GROUND_CLEARANCE_M).all())
+                outputs.append(np.concatenate([c for _,c in parts]))
+            np.testing.assert_array_equal(*outputs)
 
     def test_native_strip_mesh_preserves_welding_shading_and_uvs(self):
         import fast

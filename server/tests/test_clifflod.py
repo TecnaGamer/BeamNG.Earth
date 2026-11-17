@@ -90,29 +90,34 @@ class CliffLodTest(unittest.TestCase):
         tri = np.array([[2, 0, 1], [3, 3, 4]], np.int64)
         keep = np.array([True, False])
         uv = np.arange(14, dtype=float).reshape(7, 2)
+        uv2 = uv+20
         color = np.full((7, 4), 255., dtype=float)
         color[0, :3], color[1, :3] = [0, 1, 2], [1, 2, 3]
         normal = np.array([[1, 0, 0], [-1, 0, 0], [0, 3, 4], [2, 0, 0],
                            [0, 0, 1], [1, 0, 0], [1, 0, 0]], dtype=float)
         material = np.array([2, 1], np.int32)
-        result = fast._ef.cliff_lod_output(pos, tri, keep, mapping, uv, color, material, normal)
-        np.testing.assert_array_equal(result['positions'], pos[:3])
-        np.testing.assert_array_equal(result['tris'], tri[:1])
-        np.testing.assert_array_equal(result['tri_materials'], [2])
-        np.testing.assert_array_equal(result['uvs'], [[1, 2], [4, 5], [6, 7]])
-        np.testing.assert_array_equal(result['colors'][0], [0, 2, 2, 255])
-        self.assertEqual(result['colors'].dtype, np.uint8)
-        np.testing.assert_array_equal(result['normals'], [[0, 0, 0], [0, .6, .8], [1, 0, 0]])
-        result = fast._ef.cliff_lod_output(pos, tri, np.zeros(2, bool), mapping, uv, color, material, None)
+        for blend in (False, True):
+            result = fast._ef.cliff_lod_output(pos, tri, keep, mapping, uv, color, material, blend, normal, uv2)
+            np.testing.assert_array_equal(result['positions'], pos[:3])
+            np.testing.assert_array_equal(result['tris'], tri[:1])
+            np.testing.assert_array_equal(result['tri_materials'], [2])
+            np.testing.assert_array_equal(result['uvs'], [[1, 2], [4, 5], [6, 7]])
+            np.testing.assert_array_equal(result['uvs2'], result['uvs']+20)
+            np.testing.assert_array_equal(result['tangent_uvs'], result['uvs'] if blend else result['uvs2'])
+            np.testing.assert_array_equal(result['colors'][0], [0, 2, 2, 255])
+            self.assertEqual(result['colors'].dtype, np.uint8)
+            np.testing.assert_array_equal(result['normals'], [[0, 0, 0], [0, .6, .8], [1, 0, 0]])
+        result = fast._ef.cliff_lod_output(pos, tri, np.zeros(2, bool), mapping, uv, color, material, False, None, None)
         self.assertEqual(result['positions'].shape, (0, 3))
         self.assertEqual(result['colors'].shape, (0, 4))
         self.assertIsNone(result['normals'])
-        self.assertEqual(result['tangent_uvs'].shape, (0, 2))
+        self.assertIsNone(result['uvs2'])
+        self.assertIsNone(result['tangent_uvs'])
         for invalid in (color[:, :3], color-256, color+np.nan):
             with self.assertRaises(ValueError):
-                fast._ef.cliff_lod_output(pos, tri, keep, mapping, uv, invalid, material, None)
+                fast._ef.cliff_lod_output(pos, tri, keep, mapping, uv, invalid, material, False, None, None)
         with self.assertRaises(ValueError):
-            fast._ef.cliff_lod_output(pos, tri, keep, mapping*0, uv, color, material, None)
+            fast._ef.cliff_lod_output(pos, tri, keep, mapping*0, uv, color, material, False, None, None)
 
     def test_native_restore_reverts_whole_clusters_to_finer_baseline(self):
         import fast
@@ -215,6 +220,7 @@ class CliffLodTest(unittest.TestCase):
 
     def test_shared_preparation_preserves_each_lod_and_reuses_source_clearance(self):
         rock = surface(65)
+        rock.uvs2 = rock.uvs*3
         rock.lod_ground = lambda p: 2*p[:, 1]+2*np.cos(.6*p[:, 0])
         rock.positions[:, 2] = rock.lod_ground(rock.positions)+.35
         rock.normals = cdae.face_normal_sum(rock.positions, rock.tris)
@@ -352,7 +358,7 @@ class CliffLodTest(unittest.TestCase):
             normals = rng.normal(size=(n, 3))
             colors = rng.integers(0, 256, (n, 4)).astype(float)
             material = np.zeros(len(t), np.int32)
-            actual = fast._ef.cliff_lod_output(pos, tri, keep, m, uv, colors, material, normals)
+            actual = fast._ef.cliff_lod_output(pos, tri, keep, m, uv, colors, material, False, normals, None)
             used = np.unique(tri[keep])
             for key, values in (('uvs', uv), ('normals', normals), ('colors', colors)):
                 expected = np.column_stack([np.bincount(m, weights=values[:, c]) for c in range(values.shape[1])])/w[:, None]

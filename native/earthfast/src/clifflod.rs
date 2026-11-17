@@ -597,7 +597,9 @@ pub fn cliff_lod_output<'py>(
     uvs: PyReadonlyArray2<'py, f64>,
     colors: PyReadonlyArray2<'py, f64>,
     materials: PyReadonlyArray1<'py, i32>,
+    terrain_blend: bool,
     normals: Option<PyReadonlyArray2<'py, f64>>,
+    uvs2: Option<PyReadonlyArray2<'py, f64>>,
 ) -> PyResult<Bound<'py, PyDict>> {
     let (p, t, keep, map, uv, color, material) = (
         positions.as_array(),
@@ -609,6 +611,7 @@ pub fn cliff_lod_output<'py>(
         materials.as_array(),
     );
     let normal = normals.as_ref().map(|a| a.as_array());
+    let uv2 = uvs2.as_ref().map(|a| a.as_array());
     let n = map.len();
     if p.ncols() != 3
         || t.ncols() != 3
@@ -617,6 +620,7 @@ pub fn cliff_lod_output<'py>(
         || uv.dim() != (n, 2)
         || color.dim() != (n, 4)
         || normal.is_some_and(|a| a.dim() != (n, 3))
+        || uv2.is_some_and(|a| a.dim() != (n, 2))
         || map.iter().chain(t.iter()).any(|&v| v < 0 || v as usize >= p.nrows())
         || color.iter().any(|v| !v.is_finite() || !(0.0..=255.0).contains(v))
     {
@@ -624,7 +628,7 @@ pub fn cliff_lod_output<'py>(
             "aligned trial geometry, vertex channels and byte-range colors required",
         ));
     }
-    let (pos, tri, uv, color, normal, material) = py.detach(|| {
+    let (pos, tri, uv, color, normal, material, uv2) = py.detach(|| {
         let map: Vec<usize> = map.iter().map(|&v| v as usize).collect();
         let mut populated = vec![false; p.nrows()];
         for &v in &map {
@@ -664,17 +668,20 @@ pub fn cliff_lod_output<'py>(
             compact(color).mapv(|v| v.round_ties_even() as u8),
             normal,
             faces.iter().map(|&i| material[i]).collect::<Vec<_>>(),
+            uv2.map(compact),
         ))
     })?;
     let result = PyDict::new(py);
     result.set_item("positions", pos.into_pyarray(py))?;
     result.set_item("tris", tri.into_pyarray(py))?;
     let uv = uv.into_pyarray(py);
+    let uv2 = uv2.map(|a| a.into_pyarray(py));
     result.set_item("uvs", &uv)?;
     result.set_item("colors", color.into_pyarray(py))?;
     result.set_item("normals", normal.map(|a| a.into_pyarray(py)))?;
     result.set_item("tri_materials", material.into_pyarray(py))?;
-    result.set_item("tangent_uvs", &uv)?;
+    result.set_item("uvs2", &uv2)?;
+    result.set_item("tangent_uvs", uv2.as_ref().map(|a| if terrain_blend { &uv } else { a }))?;
     Ok(result)
 }
 

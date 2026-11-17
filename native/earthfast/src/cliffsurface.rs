@@ -137,7 +137,7 @@ pub fn cliff_mesh_finish<'py>(
     if p.ncols() != 3
         || t.ncols() != 3
         || a.nrows() != p.nrows()
-        || a.ncols() < 9 // UV, normal, RGBA; any trailing geometric attributes are interpolated too.
+        || a.ncols() < 11
         || origin.iter().any(|v| !v.is_finite())
         || t.iter().any(|v| *v < 0 || *v as usize >= p.nrows())
         || base > i64::MAX as usize - p.nrows()
