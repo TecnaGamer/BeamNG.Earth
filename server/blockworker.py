@@ -2148,8 +2148,14 @@ def _write_geo_content(out_dir, vfs_dir, tile, P):
                 continue
             info = _shape_info(src, e["pos"], what)
             dst = names[what]
-            with open(src, "rb") as fh:
-                _write_bytes(os.path.join(out_dir, dst), fh.read())
+            # (moved there, not read and written again: each shape was created, written, read twice and deleted
+            # here and created and written a second time beside it; the "write" stage was 0.6 s of a road tile's
+            # 4 s on Windows, 32 s of a drive, 2026-11-17)
+            try:
+                staging.replace(src, os.path.join(out_dir, dst))
+            except OSError:             # (the staging folder on another volume, the file held: copied, as before)
+                with open(src, "rb") as fh:
+                    _write_bytes(os.path.join(out_dir, dst), fh.read())
             e["shape"] = f"{vfs_dir}/{dst}"
             e.update(info)
             parts[what] = dict(info)
