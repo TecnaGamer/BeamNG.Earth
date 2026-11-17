@@ -3084,7 +3084,8 @@ def tunnel_profiles(aid, frame, elev, g=None):
             # (the cover read with the bridges under mapped decks taken out, as the plans read it: one ground for the
             # plans' tunnel networks and these; the portals graded from the elevation as read, apply takes them out)
             t.raw = g.tunnel_ground
-            t.ends = lambda la, lo: g.apply(la, lo, raw(la, lo), gradingmod.ROAD_LIFT, roads_only=True)    # noqa: E731
+            t.ends = lambda la, lo, base=None: g.apply(la, lo, raw(la, lo) if base is None else base,
+                                                       gradingmod.ROAD_LIFT, roads_only=True)    # noqa: E731
     return roadsmod.ChainView(_chain_store("tunnels", roadsmod.TunnelProfiles, elev, setup), frame)
 
 

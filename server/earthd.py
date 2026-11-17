@@ -4643,7 +4643,8 @@ class Server:
                     if g is not None:
                         # (the cover as the plans read it: Grader.tunnel_ground, blockworker.tunnel_profiles)
                         t.raw = g.tunnel_ground
-                        t.ends = lambda la, lo: g.apply(la, lo, raw(la, lo), gradingmod.ROAD_LIFT, roads_only=True)
+                        t.ends = lambda la, lo, base=None: g.apply(la, lo, raw(la, lo) if base is None else base,
+                                                       gradingmod.ROAD_LIFT, roads_only=True)
                 cls = roadsmod.TunnelProfiles
             cs = stores[kind] = roadsmod.ChainStore(cls, cell_fn, elev, setup)
         return roadsmod.ChainView(cs, anchor.frame)

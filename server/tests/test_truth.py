@@ -32,7 +32,10 @@ TODAY = {
         shape_p95=7.2,          # m: the Sihl viaduct's decks, solved up to 7.9 m off the real ones
         under_laws=2, steeper=2,
         dug=(7, 8),             # per mille of the ground roads' points, 3.3 m at the deepest
-        filled=(19, 39),        # the motorway at its tunnels' mouths, up to 6.5 m
+        filled=(36, 35),        # 5.8 m at most (was 6.5): the roads beside the tunnel's low arch near its mouth, raised to its
+                                # cover (arch_raise). Its mouths are right now (floor 449.4 / 436.3 against the survey's 450.6 /
+                                # 436); with the far one 5 m high the whole tube was one low arch and its road laws had no answer
+                                # (7.8 m short), so the roads were left as they were: 19 without the shapes hid it
         rail_low=None, rail_high=None),     # (no railway bridge here)
     "zurich_europabruecke": dict(
         unmatched=5,            # (22 before: 9 were the tracks over a pedestrian underpass, a path now, as the map has it)
@@ -67,7 +70,7 @@ TODAY = {
         shape_p95=5.0,
         under_laws=0, steeper=1, graded=60,
         dug=(66, 64),           # a link 7.3 m: the motorway's cutting 5 m under it, 9 m beside it (a wall in the real one)
-        filled=(76, 75),        # the road into the Gotthard tunnel 8.3 m: its mouth read on the face over it
+        filled=(5, 2),          # 1.8 m at most (was 8.3, 76 per mille): the road into the Gotthard tunnel, its mouth read on the face
         rail_low=-9.7, rail_high=0.2),
     "kempttal_viaduct": dict(
         unmatched=0, not_built=0, right=6,
