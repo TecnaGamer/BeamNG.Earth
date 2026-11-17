@@ -6,7 +6,6 @@ import glob
 import json
 import os
 import re
-import socket
 import sys
 import tempfile
 import types
@@ -49,8 +48,6 @@ def fresh_keys():
         revisit._code.clear()
     import bakepack
     bakepack._switches.clear()
-    import peerwork
-    peerwork._switches.clear()
 
 
 class ChoiceTest(unittest.TestCase):
@@ -201,23 +198,6 @@ class KeysTest(unittest.TestCase):
         with mock.patch.dict(os.environ, {"BNE_ROADZ_HK": "off", "BNE_HKDTM": "off", "BNE_BRIDGE_PROFILE": "curve"}):
             fresh_keys()
             self.assertEqual(bakepack._expect_for(MD(), "w1s1")["switches"], e0["switches"])
-
-    def test_helper_refuses_other_switches(self):
-        import peerwork
-        helper = peerwork.Helper.__new__(peerwork.Helper)
-        helper.workers = 1
-        a, b = socket.socketpair()
-        self.addCleanup(a.close)
-        self.addCleanup(b.close)
-        a.settimeout(5)
-        fresh_keys()
-        peerwork.send_msg(a, {"op": "hello", "protocol": peerwork.PROTOCOL, "version": peerwork.version(),
-                              "code": peerwork.code_id(), "switches": "0123456789abcdef"})
-        helper.handle(b, ("127.0.0.1", 0))
-        h, _ = peerwork.recv_msg(a)
-        self.assertFalse(h["ok"])
-        self.assertIn("build switches", h["error"])
-        self.assertEqual(h["switches"], peerwork.switches())
 
     def test_decoded_elevation_mirror(self):
         import dem

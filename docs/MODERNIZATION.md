@@ -58,7 +58,7 @@ Evidence in the current tree:
 | Terrain consistency | `grading.py` caches geographic plans independent of the local anchor. Road profiles already use median rejection, class-dependent smoothing, junction blending, bridge/tunnel separation and raceway protection. |
 | Rendering/physics | Lua `core`, `follow`, `terrain`, `farfield`, `roads`, `governor`, `mpanchor`: timed integration, floating origins and collision management. These engine behaviors require in-game acceptance. |
 | Multiplayer | `beammp/Server/BeamNGEarth` and client `mpsession`, `mpanchor`. BeamMP owns vehicle transport; Earth supplies coordinate transforms and membership metadata. |
-| Compute sharing | `peerwork.py` supports explicit helper workers and version/code fingerprint checks. Automatic player group sharing is commented out upstream, not a currently working feature. Do not expose its old sharing port as a requirement. |
+| Compute sharing | `peerwork.py` (explicit helper workers, v1 group sharing) removed 2026-11-16 (the Rust port plan's phase 0d); BeamMP sharing v2 (`mpshare.py`) shares plans through the BeamMP connection. |
 | Observability | Existing server logs, netfetch counters, frame/performance logs, cache summaries, `tools/drive.py`, `tools/benchmark.py` and `probes/`. Historical figures in older design docs are not new baseline measurements. |
 
 The older `ARCHITECTURE.md` contains historical designs and superseded probes. Use source and the current
@@ -166,7 +166,7 @@ the existing caches and worker architecture instead of introducing Redis, a new 
 services before evidence shows a benefit.
 
 Existing helpers use plain TCP plus a code fingerprint, not authenticated encrypted transport; they must not
-be exposed unchanged as a public cache service. `peerwork.code_id`, `world_signature` and `revisit.code_key`
+be exposed unchanged as a public cache service. `world_signature` and `revisit.code_key`
 are useful starting points, but are not portable complete manifests: they include different subsets of source,
 native binaries, layout/settings and provider information. The initial proof should use one bounded region,
 an operator-run cache, two isolated client caches and different local anchors. Validate the full artifact

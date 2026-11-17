@@ -370,6 +370,18 @@ def source_id(here):
     return h.hexdigest()
 
 
+def all_source_id(here):
+    """A fingerprint of every server source (server/*.py; CRLF read as LF: a Windows checkout is the same code): a
+    packaged app's CODE_ID (tools/build_app.py), which blockcache's code id reads where no earthd.py is beside it.
+    (Compute sharing v1's peerwork.source_id until 2026-11-16: the same bytes.)"""
+    h = hashlib.sha256()
+    for name in sorted(os.listdir(here)):
+        if name.endswith(".py"):
+            with open(os.path.join(here, name), "rb") as f:
+                h.update(name.encode() + b"\0" + f.read().replace(b"\r\n", b"\n"))
+    return h.hexdigest()[:16]
+
+
 # BNE_* settings that change no item's content (the cache's own, how far ahead tiles are wanted): not build switches.
 # BNE_NETSTATS_PROC: earthd sets it (the telemetry's download counts, a folder under the player's own cache) before
 # its workers start, so every worker's keys held the cache folder's path and whether telemetry was on; the telemetry
