@@ -3904,11 +3904,9 @@ def _spec_inputs(feats):
     po, ro, co = (np.ascontiguousarray(x, np.int64) for x in (feats.part_off, feats.ring_off, feats.coord_off))
     ll = np.ascontiguousarray(feats.lonlat, np.float64).reshape(-1, 2)
     eu = np.zeros(n, bool)
-    if europewalks.enabled():
-        for i in np.flatnonzero(cls == pos.get("tertiary", -2)).tolist():
-            p0, p1 = co[ro[po[i]]], co[ro[po[i + 1]]]
-            if p1 > p0:
-                eu[i] = europewalks.country_for(*ll[p0 + (p1 - p0) // 2]) is not None
+    if europewalks.enabled():       # (a tertiary road in a supported European territory at its middle point)
+        eu = np.fromiter((c is not None for c in europewalks.road_countries(feats, cls == pos.get("tertiary", -2))),
+                         bool, n)
     sides = sc["sides"]
     elig = sc["elig"]               # (a cycleway is a street only with its pavements mapped on it: STYLE's "cycleway")
     se = np.zeros(n, bool)

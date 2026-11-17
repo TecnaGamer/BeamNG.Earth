@@ -44,7 +44,8 @@ class IslandTest(unittest.TestCase):
         east = [(60., 50.), (63.2, 55.), (63.2, 77.), (60., 82.)]
         feats = features([west, east], ["tertiary"] * 2, widths=[(0, 3.), (1, 3.)])
         feats.rules["oneway"] = rules([(0, 1.), (1, 1.)], "float")
-        with patch.dict(os.environ, {"BNE_EU_ROAD_DETAILS": "on"}), patch("europewalks.country_for", return_value="FR"):
+        with patch.dict(os.environ, {"BNE_EU_ROAD_DETAILS": "on"}), patch("europewalks.country_for", return_value="FR"), \
+                patch("europewalks.road_countries", lambda feats, mask: ["FR" if m else None for m in mask]):
             walks, signs = [], []
             chunks = roads.build_tile(FRAME, 0, 0, [feats], flat, walks=walks, props=[], signs=signs)
             self.assertEqual(len(signs), 1)

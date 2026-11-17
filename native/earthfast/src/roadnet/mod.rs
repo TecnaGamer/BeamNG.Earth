@@ -8,6 +8,7 @@
 pub mod assembly;
 pub mod columns;
 pub mod copies;
+pub mod countries;
 pub mod laneflow;
 pub mod lanesplit;
 pub mod pyfloat;
