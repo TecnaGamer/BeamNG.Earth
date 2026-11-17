@@ -460,8 +460,8 @@ M.CATALOG = {
   },
   -- dead trees in the forests (species_groups' SNAG_SHARE)
   snag_broad = { { ECA .. 'trees/trees_oak/tree_oak_dead_b', 8.7 }, { ECA .. 'trees/trees_oak/tree_oak_dead_a', 12.54 } },
-  snag_conifer = { { ECA .. 'trees/trees_douglasfir/tree_douglasfir_dead', 7.31 },
-    { ECA .. 'trees/trees_douglasfir/tree_douglasfir_dead_02', 13.96 } },
+  -- (tree_douglasfir_dead is a fallen fir, 15 m long: dead wood's since 2026-11-17, not a standing snag)
+  snag_conifer = { { ECA .. 'trees/trees_douglasfir/tree_douglasfir_dead_02', 13.96 } },
   -- warm towns' palms outside the tropics (species_groups' DRY_PALMS): West Coast USA's fan palms, Italy's date palms
   palm_dry = {
     { WCA .. 'trees/trees_palm/fanpalm_short', 10.6 }, { WCA .. 'trees/trees_palm/fanpalm_skirt', 11.7 },
@@ -501,6 +501,9 @@ M.CATALOG = {
   deadwood = {
     { ECA .. 'trees/trees_douglasfir/tree_douglasfir_chopped', 1.0 }, { ECA .. 'trees/trees_douglasfir/fir_dead_branches', 1.51 },
     { ECA .. 'trees/trees_beech/tree_beech_dead_a', 2.07 }, { ECA .. 'trees/trees_beech/tree_beech_dead_b', 2.98 },
+    -- a fallen fir, 15 m long (its bounds 7.3 m high with the broken branches up; given as 2.9 so dead wood's 1-3 m
+    -- items draw it at about its own size: the gallery 2026-11-17, it was a standing snag's shape)
+    { ECA .. 'trees/trees_douglasfir/tree_douglasfir_dead', 2.9 },
   },
   oak_clump = { { ECA .. 'trees/trees_oak/tree_oak_forest_group', 18.4 } },
   beech_clump = { { ECA .. 'trees/trees_beech/tree_beech_forest_group', 23.8 },
