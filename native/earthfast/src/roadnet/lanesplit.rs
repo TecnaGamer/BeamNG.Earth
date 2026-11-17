@@ -47,6 +47,41 @@ pub struct Cols<'py> {
     shoulder: (f64, f64, i64),
 }
 
+/// The layer's offsets fit together (n features, parts, rings, points): IndexError where one points past its array
+/// or runs backwards (numpy's index error; never a panic on a malformed layer).
+pub(crate) fn check_offsets(n: usize, po: &[i64], ro: &[i64], co: &[i64], points: usize) -> PyResult<()> {
+    let bad = |what: &str| Err(pyo3::exceptions::PyIndexError::new_err(format!("a road layer's {what} out of range")));
+    if po.len() < n + 1 {
+        return bad("part offsets");
+    }
+    for w in po[..n + 1].windows(2) {
+        if w[0] < 0 || w[1] < w[0] {
+            return bad("part offsets");
+        }
+    }
+    if po[n] as usize + 1 > ro.len() {
+        return bad("ring offsets");
+    }
+    for w in ro[..po[n] as usize + 1].windows(2) {
+        if w[0] < 0 || w[1] < w[0] {
+            return bad("ring offsets");
+        }
+    }
+    let rings = ro[po[n] as usize] as usize;
+    if rings + 1 > co.len() {
+        return bad("coordinate offsets");
+    }
+    for w in co[..rings + 1].windows(2) {
+        if w[0] < 0 || w[1] < w[0] {
+            return bad("coordinate offsets");
+        }
+    }
+    if co[rings] as usize > points {
+        return bad("coordinates");
+    }
+    Ok(())
+}
+
 fn table<'py>(t: Option<Bound<'py, PyAny>>, n: usize) -> PyResult<Option<(Vec<i64>, Bound<'py, PyAny>)>> {
     let Some(t) = t.filter(|t| !t.is_none()) else { return Ok(None) };
     let maj: PyReadonlyArray1<i64> = t.call_method1("majors", (n,))?.extract()?;
@@ -67,6 +102,10 @@ impl<'py> Cols<'py> {
            lane_w_default: f64, shoulder: (f64, f64, i64)) -> PyResult<Self> {
         let n = ids.len();
         let a = lonlat.as_array();
+        check_offsets(n, po.as_slice()?, ro.as_slice()?, co.as_slice()?, a.nrows())?;
+        if kind.len()? < n {
+            return Err(pyo3::exceptions::PyIndexError::new_err("lane sections: fewer kinds than features"));
+        }
         Ok(Cols {
             py,
             ids,
@@ -179,11 +218,22 @@ fn arc(ll: &[[f64; 2]]) -> Vec<f64> {
     s
 }
 
-/// np.arange(start, stop, step) of floats: ceil((stop - start) / step) values, start + i * ((start + step) - start).
-fn arange(start: f64, stop: f64, step: f64) -> Vec<f64> {
+/// np.arange(start, stop, step) of floats: ceil((stop - start) / step) values, start + i * ((start + step) - start);
+/// numpy's errors: ValueError for a length that is NaN, OverflowError past the index range, MemoryError past what
+/// could be allocated.
+fn arange(start: f64, stop: f64, step: f64) -> PyResult<Vec<f64>> {
     let len = ((stop - start) / step).ceil();
+    if len.is_nan() {
+        return Err(pyo3::exceptions::PyValueError::new_err("arange: cannot compute length"));
+    }
+    if !(len >= i64::MIN as f64 && len <= i64::MAX as f64) {
+        return Err(pyo3::exceptions::PyOverflowError::new_err("arange: overflow while computing length"));
+    }
     if !(len > 0.0) {
-        return Vec::new();
+        return Ok(Vec::new());
+    }
+    if len > (1u64 << 36) as f64 {
+        return Err(pyo3::exceptions::PyMemoryError::new_err("arange: unable to allocate"));
     }
     let len = len as usize;
     let mut out = Vec::with_capacity(len);
@@ -196,19 +246,115 @@ fn arange(start: f64, stop: f64, step: f64) -> Vec<f64> {
             out.push(start + (i as f64) * delta);
         }
     }
-    out
+    Ok(out)
+}
+
+/// numpy's binary_search_with_guess (compiled_base.c): the index of the last xp <= key from a guess, -1 / len outside;
+/// with numpy's comparisons in its order, so a NaN in xp lands where numpy's does.
+fn search_with_guess(key: f64, arr: &[f64], guess: i64) -> i64 {
+    const CACHE: i64 = 8;
+    let len = arr.len() as i64;
+    let at = |k: i64| arr[k as usize];
+    let (mut imin, mut imax) = (0i64, len);
+    if key > at(len - 1) {
+        return len;
+    } else if key < at(0) {
+        return -1;
+    }
+    if len <= 4 {
+        let mut i = 1;
+        while i < len && key >= at(i) {
+            i += 1;
+        }
+        return i - 1;
+    }
+    let mut guess = guess;
+    if guess > len - 3 {
+        guess = len - 3;
+    }
+    if guess < 1 {
+        guess = 1;
+    }
+    if key < at(guess) {
+        if key < at(guess - 1) {
+            imax = guess - 1;
+            if guess > CACHE && key >= at(guess - CACHE) {
+                imin = guess - CACHE;
+            }
+        } else {
+            return guess - 1;
+        }
+    } else if key < at(guess + 1) {
+        return guess;
+    } else if key < at(guess + 2) {
+        return guess + 1;
+    } else {
+        imin = guess + 2;
+        if guess < len - CACHE - 1 && key < at(guess + CACHE) {
+            imax = guess + CACHE;
+        }
+    }
+    while imin < imax {
+        let imid = imin + ((imax - imin) >> 1);
+        if key >= at(imid) {
+            imin = imid + 1;
+        } else {
+            imax = imid;
+        }
+    }
+    imin - 1
+}
+
+/// np.interp(x, xp, fp) (numpy's arr_interp, its search carrying its guess from one x to the next): NaN for a NaN x,
+/// fp[0] / fp[-1] outside, the sample's own value on it, the slope's other side where one side gives NaN. xp, fp
+/// non-empty and of one length.
+fn np_interp_all(x: &[f64], xp: &[f64], fp: &[f64]) -> Vec<f64> {
+    let n = xp.len();
+    let (lval, rval) = (fp[0], fp[n - 1]);
+    if n == 1 {
+        return x.iter().map(|&v| if v < xp[0] { lval } else if v > xp[0] { rval } else { fp[0] }).collect();
+    }
+    let mut j: i64 = 0;
+    x.iter().map(|&v| {
+        if v.is_nan() {
+            return v;
+        }
+        j = search_with_guess(v, xp, j);
+        if j == -1 {
+            lval
+        } else if j == n as i64 {
+            rval
+        } else if j == n as i64 - 1 {
+            fp[j as usize]
+        } else {
+            let k = j as usize;
+            if xp[k] == v {
+                fp[k]
+            } else {
+                let slope = (fp[k + 1] - fp[k]) / (xp[k + 1] - xp[k]);
+                let mut r = slope * (v - xp[k]) + fp[k];
+                if r.is_nan() {
+                    r = slope * (v - xp[k + 1]) + fp[k + 1];
+                    if r.is_nan() && fp[k] == fp[k + 1] {
+                        r = fp[k];
+                    }
+                }
+                r
+            }
+        }
+    }).collect()
 }
 
 /// _sample(ll, a, b, dense): the line between fractions a and b of its length (its own vertices more than 1 cm in,
 /// and dense: every STEP_M not within 1 cm of one), np.interp'd; and the points' stations from its start.
-fn sample(ll: &[[f64; 2]], a: f64, b: f64, dense: bool) -> (Vec<[f64; 2]>, Vec<f64>) {
+fn sample(ll: &[[f64; 2]], a: f64, b: f64, dense: bool) -> PyResult<(Vec<[f64; 2]>, Vec<f64>)> {
     let s = arc(ll);
     let total = s[s.len() - 1];
     let (u, v) = (a * total, b * total);
     let inner0: Vec<f64> = s.iter().copied().filter(|&x| x > u + 0.01 && x < v - 0.01).collect();
     let mut inner = inner0.clone();
     if dense {
-        let mut stations = arange(u + STEP_M, v - 0.01, STEP_M);
+        let mut stations = arange(u + STEP_M, v - 0.01, STEP_M)?;
         if !inner0.is_empty() {
             let m = inner0.len();
             stations.retain(|&st| {
@@ -243,9 +389,10 @@ fn sample(ll: &[[f64; 2]], a: f64, b: f64, dense: bool) -> (Vec<[f64; 2]>, Vec<f
     at.push(v);
     let lon: Vec<f64> = ll.iter().map(|p| p[0]).collect();
     let lat: Vec<f64> = ll.iter().map(|p| p[1]).collect();
-    let pts = at.iter().map(|&x| [crate::np_interp(x, &s, &lon), crate::np_interp(x, &s, &lat)]).collect();
+    let (plon, plat) = (np_interp_all(&at, &s, &lon), np_interp_all(&at, &s, &lat));
+    let pts = plon.iter().zip(&plat).map(|(&x, &y)| [x, y]).collect();
     let st = at.iter().map(|&x| x - u).collect();
-    (pts, st)
+    Ok((pts, st))
 }
 
 /// _ease(s, length, reach, ends): the eased share of the change at each station.
@@ -490,9 +637,15 @@ fn sections<'py>(c: &Cols<'py>, i: usize) -> PyResult<Option<(Vec<Row<'py>>, i64
 /// One joint spec: (tangent, target, tail, class, turning).
 type Joint = ([f64; 2], f64, bool, String, i64);
 
-fn key_of(p: [f64; 2]) -> (u64, u64) {
+/// A joint's key: (lon, lat) by numpy's round(x, 6), -0.0 as 0.0; None for a NaN one (Python's key tuples of NaN
+/// equal nothing: such a joint is never found, as there).
+fn key_of(p: [f64; 2]) -> Option<(u64, u64)> {
     let z = |v: f64| if v == 0.0 { 0.0f64 } else { v };
-    (z(np_round(p[0], 6)).to_bits(), z(np_round(p[1], 6)).to_bits())
+    let (x, y) = (np_round(p[0], 6), np_round(p[1], 6));
+    if x.is_nan() || y.is_nan() {
+        return None;
+    }
+    Some((z(x).to_bits(), z(y).to_bits()))
 }
 
 /// _joint_specs(f): {joint key: [specs]} of every lane section's auxiliary lane at the section's own ends.
@@ -533,7 +686,9 @@ fn joint_specs(c: &Cols<'_>) -> PyResult<BTreeMap<(u64, u64), Vec<Joint>>> {
                 let target = off + (side * direction * (n - turning)) as f64 * lane_m / 2.0
                     + c.grid(&cls, n) * direction as f64;
                 let tail = (end == 0) == (direction > 0);
-                joints.entry(key_of(e)).or_default().push((t, target, tail, cls.clone(), turning));
+                if let Some(key) = key_of(e) {
+                    joints.entry(key).or_default().push((t, target, tail, cls.clone(), turning));
+                }
             }
         }
     }
@@ -607,9 +762,19 @@ struct Job<'py> {
     prof: Option<Bound<'py, PyDict>>,
 }
 
-/// Python's round(x) of a float to an int (ties to even).
-fn pyround_int(x: f64) -> i64 {
-    x.round_ties_even() as i64
+/// Python's round(x) of a float to an int (ties to even): ValueError for NaN, OverflowError for an infinity.
+fn pyround_int(x: f64) -> PyResult<i128> {
+    if x.is_nan() {
+        return Err(pyo3::exceptions::PyValueError::new_err("cannot convert float NaN to integer"));
+    }
+    if x.is_infinite() {
+        return Err(pyo3::exceptions::PyOverflowError::new_err("cannot convert float infinity to integer"));
+    }
+    let r = x.round_ties_even();
+    if r.abs() >= 1e38 {
+        return Err(pyo3::exceptions::PyOverflowError::new_err("a lane section's fraction past any id"));
+    }
+    Ok(r as i128)
 }
 
 /// lanesections.split's plan: None where the layer is kept as it is, else its jobs sorted by id [(fid, feature, a, b,
@@ -676,7 +841,7 @@ pub fn lane_split_jobs<'py>(py: Python<'py>, ids: Vec<String>, kind: PyReadonlyA
             if !common_grid || (shift.abs() - extra / 2.0).abs() > 0.05 {
                 extra = 0.0;
             }
-            let (mut p, s) = sample(ll, r.a, r.b, extra != 0.0);
+            let (mut p, s) = sample(ll, r.a, r.b, extra != 0.0)?;
             let length = s[s.len() - 1];
             let mut reach = [0.0f64, 0.0];
             let mut ends = [1.0f64, 1.0];
@@ -729,7 +894,7 @@ pub fn lane_split_jobs<'py>(py: Python<'py>, ids: Vec<String>, kind: PyReadonlyA
                 pl.append(PyList::new(py, [q[0], q[1]])?)?;
             }
             prof.set_item("line", pl)?;
-            let fid = format!("{}~lanes{:09}-{:09}", c.ids[i], pyround_int(r.a * 1e9), pyround_int(r.b * 1e9));
+            let fid = format!("{}~lanes{:09}-{:09}", c.ids[i], pyround_int(r.a * 1e9)?, pyround_int(r.b * 1e9)?);
             jobs.push(Job { fid, i, a: r.a, b: r.b, line: Some(p), tags: Some(r.tags.clone()), n: Some(r.n),
                             prof: Some(prof) });
         }
@@ -771,11 +936,12 @@ fn ramp_mouths<'py>(c: &Cols<'py>, jobs: &mut [Job<'py>], layer: &Bound<'py, PyA
                 return Err(pyo3::exceptions::PyIndexError::new_err("index 0 is out of bounds for axis 0 with size 0"));
             }
             for node in [c.ll[r0], c.ll[r1 - 1]] {
-                let key = key_of(node);
                 let source = ctx.call1((node[1], node[0]))?;
                 if !source.is_none() {
                     let theirs = joints_from_py(&joint_specs.call1((source,))?)?;
-                    joints.insert(key, theirs.get(&key).cloned().unwrap_or_default());
+                    if let Some(key) = key_of(node) {
+                        joints.insert(key, theirs.get(&key).cloned().unwrap_or_default());
+                    }
                 }
             }
         }
@@ -806,7 +972,7 @@ fn ramp_mouths<'py>(c: &Cols<'py>, jobs: &mut [Job<'py>], layer: &Bound<'py, PyA
         for end in [0usize, 1] {
             let k = raw.len();
             let node = if end == 0 { raw[0] } else { raw[k - 1] };
-            let Some(cands) = joints.get(&key_of(node)) else { continue };
+            let Some(cands) = key_of(node).and_then(|k| joints.get(&k)) else { continue };
             if cands.len() != 1 {
                 continue;
             }
@@ -822,7 +988,7 @@ fn ramp_mouths<'py>(c: &Cols<'py>, jobs: &mut [Job<'py>], layer: &Bound<'py, PyA
             if *cls != c.cls_str(i)? || turning != ramp_lanes || main_tail == ((end == 0) == dpos) {
                 continue;
             }
-            let (line, stations) = sample(raw, 0.0, 1.0, true);
+            let (line, stations) = sample(raw, 0.0, 1.0, true)?;
             let sc = [111320.0 * node[1].to_radians().dcos(), 110540.0];
             let xy: Vec<[f64; 2]> = line.iter().map(|q| [(q[0] - node[0]) * sc[0], (q[1] - node[1]) * sc[1]]).collect();
             let mut dr = if end == 0 {

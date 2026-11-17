@@ -44,6 +44,10 @@ pub fn lane_flow_rows<'py>(py: Python<'py>, part_off: PyReadonlyArray1<'py, i64>
     let (po, ro, co) = (part_off.as_slice()?, ring_off.as_slice()?, coord_off.as_slice()?);
     let ll = lonlat.as_array();
     let n = po.len().saturating_sub(1);
+    super::lanesplit::check_offsets(n, po, ro, co, ll.nrows())?;
+    if counts.len() < n || links.len()? < n {
+        return Err(pyo3::exceptions::PyValueError::new_err("lane_flow_rows: counts or links shorter than the layer"));
+    }
     let mut pts = vec![0.0f64; n * 4];
     let mut npts = vec![0i64; n];
     for i in 0..n {
@@ -153,6 +157,9 @@ pub fn lane_flow_rows<'py>(py: Python<'py>, part_off: PyReadonlyArray1<'py, i64>
 pub fn lane_flow_lists<'py>(got: PyReadonlyArray1<'py, f64>, ramp: PyReadonlyArray1<'py, f64>,
                             attrs: PyReadonlyArray2<'py, f64>) -> PyResult<(Vec<Option<i64>>, Vec<Option<i64>>)> {
     let (g, r, a) = (got.as_slice()?, ramp.as_slice()?, attrs.as_array());
+    if a.nrows() < g.len() || a.ncols() < 3 {
+        return Err(pyo3::exceptions::PyIndexError::new_err("lane_flow_lists: attrs shorter than the counts"));
+    }
     let out = (0..g.len()).map(|i| if g[i].is_finite() && !(a[[i, 2]] > 0.5) { Some(g[i] as i64) } else { None })
         .collect();
     let fixed = r.iter().map(|&v| if v.is_finite() { Some(v as i64) } else { None }).collect();

@@ -1552,6 +1552,9 @@ fn wall_ray<T: Copy + Into<f64>>(keys: &[i64], first: &[i64], counts: &[i64], se
 /// numpy.interp at x of the increasing xp, fp.
 fn np_interp(x: f64, xp: &[f64], fp: &[f64]) -> f64 {
     let n = xp.len();
+    if x.is_nan() {
+        return x;                   // (numpy's arr_interp: a NaN x is NaN)
+    }
     if x <= xp[0] {
         return fp[0];
     }
@@ -1559,7 +1562,8 @@ fn np_interp(x: f64, xp: &[f64], fp: &[f64]) -> f64 {
         return fp[n - 1];
     }
     // the last j with xp[j] <= x
-    let j = match xp.binary_search_by(|v| v.partial_cmp(&x).unwrap()) {
+    // (a NaN in xp: ordered after x, never a panic; numpy's own search differs there, every caller's xp is finite)
+    let j = match xp.binary_search_by(|v| v.partial_cmp(&x).unwrap_or(std::cmp::Ordering::Greater)) {
         Ok(mut k) => {
             while k + 1 < n && xp[k + 1] <= x {
                 k += 1;

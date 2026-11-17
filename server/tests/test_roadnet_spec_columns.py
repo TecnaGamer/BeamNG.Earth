@@ -305,6 +305,31 @@ class SpecColumnsParityTest(unittest.TestCase):
             for key in want:
                 self.same(got[key], want[key], f"{what} {key}")
 
+    def test_short_columns_raise_not_panic(self):
+        """Columns shorter than the layer (or a sidewalk column longer than it): a Python exception, never a Rust
+        panic (Codex review of d0888ef3)."""
+        f = random_layer(random.Random(3), 6)
+        n = len(f)
+        for unbuilt, cls, sub in ((np.zeros(n - 2, bool), f.attrs.get("class"), None),
+                                  (np.zeros(n, bool), np.array(["motorway"] * (n - 1), object), None),
+                                  (np.zeros(n, bool), np.array(["motorway"] * n, object), np.array(["road"] * (n - 1)))):
+            try:
+                fast._ef.spec_columns(n, list(STYLE), unbuilt, cls, sub, None, None, None, None, None)
+            except Exception as e:      # noqa: BLE001
+                self.assertIsInstance(e, ValueError)
+            except BaseException as e:  # noqa: BLE001
+                self.fail(f"{type(e).__name__}: {e}")
+        try:
+            fast._ef.cycle_streets(2, np.array(["cycleway"] * 4, object), np.array(["both"] * 4, object))
+        except Exception as e:          # noqa: BLE001
+            self.assertIsInstance(e, IndexError)
+        except BaseException as e:      # noqa: BLE001
+            self.fail(f"{type(e).__name__}: {e}")
+        with self.assertRaises(IndexError):
+            ref_cycle_streets(type("L", (), {"attrs": {"class": np.array(["cycleway"] * 4, object),
+                                                       "osm_sidewalk": np.array(["both"] * 4, object)},
+                                             "__len__": lambda self: 2})())
+
     def test_large_ints_and_overflow(self):
         f = random_layer(random.Random(1), 3)
         f.attrs["osm_lanes"] = np.array([10 ** 400, "3", None], object)

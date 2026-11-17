@@ -614,6 +614,70 @@ class LaneSplitParityTest(unittest.TestCase):
                 sections += sum(p is not None for p in got.attrs[PROFILE])
         self.assertGreater(sections, int(os.environ.get("LANESPLIT_CASES", "400")) // 2)
 
+    def outcome(self, fn, *args):
+        """("ok", the result) or ("raised", the exception's class); a Rust panic (PanicException, a BaseException
+        that `except Exception` does not catch) fails the test."""
+        try:
+            return "ok", fn(*args)
+        except Exception as e:      # noqa: BLE001 (the class is the point)
+            return "raised", type(e)
+        except BaseException as e:  # noqa: BLE001
+            self.fail(f"{type(e).__name__}: {e}")
+
+    def test_non_finite_map_data_raises_as_python_did(self):
+        """Lane fractions and coordinates that are NaN / infinite / huge (railtags copies the source rules' starts and
+        ends into the lane parts unchecked): the same exception class as the Python, or the same layer; never a
+        panic (Codex review of d0888ef3: a NaN fraction reached np.interp's unwrap)."""
+        nan, inf = float("nan"), float("inf")
+        fractions = [
+            [(0.0, nan, "1", {"lanes": "2"}), (nan, 1.0, "2", {"lanes": "3"})],
+            [(nan, 0.5, "1", {"lanes": "2"}), (0.5, 1.0, "2", {"lanes": "3"})],
+            [(0.0, 0.5, "1", {"lanes": "2"}), (0.5, nan, "2", {"lanes": "3"})],
+            [(0.0, inf, "1", {"lanes": "2"}), (inf, 1.0, "2", {"lanes": "3"})],
+            [(-inf, 0.5, "1", {"lanes": "2"}), (0.5, 1.0, "2", {"lanes": "3"})],
+            [(0.0, 1e300, "1", {"lanes": "2"}), (1e300, 1.0, "2", {"lanes": "3"})],
+            [(0.0, nan, "1", {"lanes": "3"}),
+             (nan, 1.0, "2", {"lanes": "4", "placement": "middle_of:2", "turn:lanes": "none|none|none|slight_right"})],
+            [(0.0, 0.6, "1", {"lanes": "3"}),
+             (0.6, 1.0, "2", {"lanes": "4", "placement": "middle_of:2", "turn:lanes": "none|none|none|slight_right"})],
+        ]
+        lines = [[(0, 0), (1000, 0)], [(0, 0), (500, 0), (500, 0), (1000, 0)]]
+        cases = 0
+        for parts in fractions:
+            for pts in lines:
+                for bad_point in (None, 0, 1, -1):
+                    f = highway([pts, [(1000, 0), (1120, -8), (1300, -40)]])
+                    f.rules["subclass"] = rules([(1, "link")])
+                    f.attrs["osm_lanes"] = np.array([np.nan, 1.0])
+                    if bad_point is not None:
+                        k = bad_point if bad_point >= 0 else len(pts) - 1
+                        f.lonlat = f.lonlat.copy()
+                        f.lonlat[k] = (np.nan, f.lonlat[k][1]) if k % 2 else (f.lonlat[k][0], np.inf)
+                    pa = np.empty(2, object)
+                    pa[0] = parts
+                    f.attrs[railtags.LANE_PARTS] = pa
+                    for ctx in (None, lambda la, lo: f):
+                        want = self.outcome(split, f, None, ctx)
+                        got = self.outcome(lanesections.split, f, None, ctx)
+                        self.assertEqual(got[0], want[0], (parts, bad_point))
+                        if want[0] == "raised":
+                            self.assertIs(got[1], want[1], (parts, bad_point))
+                        else:
+                            same_layer(got[1], want[1], f"{parts} {bad_point}")
+                        cases += 1
+        self.assertEqual(cases, len(fractions) * len(lines) * 4 * 2)
+
+    def test_malformed_offsets_raise_not_panic(self):
+        """A layer whose offsets point past its arrays: an IndexError from every roadnet kernel that reads offsets,
+        never a panic."""
+        f = random_layer(random.Random(7))
+        f.coord_off = f.coord_off.copy()
+        f.coord_off[-1] += 5
+        for fn in (lanesections.split, lambda f: roads._lengths(f), lambda f: roads._lane_flow_rows(f)):
+            f.__dict__.pop("_lane_flow_rows", None)
+            got = self.outcome(fn, f)
+            self.assertEqual(got, ("raised", IndexError))
+
     def test_ease_offset_and_tag_parts(self):
         rng = random.Random(3831)
         for k in range(300):

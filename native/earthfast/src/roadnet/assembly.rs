@@ -175,6 +175,10 @@ pub fn dual_apply<'py>(py: Python<'py>, specs: Vec<Bound<'py, PyAny>>, d: Bound<
     let kept: Vec<bool> = col(&d, "w32")?;
     let dirs: Vec<i64> = col(&d, "dir")?;
     let med: Vec<f64> = col(&d, "median")?;
+    let m = changed.len();
+    if specs.len() < m || width.len() < m || kept.len() < m || dirs.len() < m || med.len() < m {
+        return Err(pyo3::exceptions::PyIndexError::new_err("dual_apply: the kernel's columns and the specs of other lengths"));
+    }
     let mut out = specs.clone();
     for (i, &c) in changed.iter().enumerate() {
         if c == 0 {

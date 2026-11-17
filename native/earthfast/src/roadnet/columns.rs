@@ -32,6 +32,9 @@ fn cycle_street_flags(n: usize, cls: Option<&Bound<'_, PyAny>>, tags: Option<&Bo
     let mut out = vec![false; n];
     let (Some(cls), Some(tags)) = (items(cls)?, items(tags)?) else { return Ok(out) };
     for (i, (c, v)) in cls.iter().zip(tags.iter()).enumerate() {
+        if i >= n {
+            return Err(pyo3::exceptions::PyIndexError::new_err(format!("index {i} is out of bounds for axis 0 with size {n}")));
+        }
         if py_str(c)? == "cycleway" && matches!(sidewalk_code(v)?, Some(0..=2)) {
             out[i] = true;
         }
@@ -109,6 +112,7 @@ pub fn layer_lengths<'py>(py: Python<'py>, part_off: PyReadonlyArray1<'py, i64>,
     if n == 0 {
         return Ok(out.into_pyarray(py));
     }
+    super::lanesplit::check_offsets(n, po, ro, co, ll.nrows())?;
     let a: Vec<i64> = (0..n).map(|i| co[ro[po[i] as usize] as usize]).collect();
     let b: Vec<i64> = (0..n).map(|i| co[ro[po[i + 1] as usize] as usize]).collect();
     let cnt: Vec<i64> = a.iter().zip(&b).map(|(x, y)| y - x).collect();
@@ -167,6 +171,12 @@ pub fn spec_columns<'py>(py: Python<'py>, n: usize, names: Vec<String>, unbuilt:
         Some(v) => v.iter().take(n).map(|x| Ok(pos(&py_str(x)?).unwrap_or(-1))).collect::<PyResult<_>>()?,
         None => vec![pos("unknown").unwrap_or(-1); n],
     };
+    let short = |what: &str| -> PyResult<()> {
+        Err(pyo3::exceptions::PyValueError::new_err(format!("spec_columns: a {what} column shorter than the layer")))
+    };
+    if unbuilt.len() < n {
+        short("unbuilt")?;
+    }
     if code.len() != n {
         return Err(pyo3::exceptions::PyValueError::new_err("spec_columns: a class column shorter than the layer"));
     }
@@ -174,6 +184,9 @@ pub fn spec_columns<'py>(py: Python<'py>, n: usize, names: Vec<String>, unbuilt:
         Some(v) => v.iter().take(n).map(|x| Ok(py_str(x)? == "road")).collect::<PyResult<_>>()?,
         None => vec![true; n],
     };
+    if road.len() != n {
+        short("subtype")?;
+    }
     let mut elig: Vec<bool> = (0..n).map(|i| road[i] && code[i] >= 0 && !unbuilt[i]).collect();
     let ring: Vec<bool> = match items(junction.as_ref())? {
         Some(v) => v.iter().take(n).map(|x| { let s = py_str(x)?; Ok(s == "roundabout" || s == "circular") })
