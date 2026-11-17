@@ -35,7 +35,9 @@ import numpy as np
 log = logging.getLogger("earthd.vsolve")
 
 MODE = os.environ.get("BNE_VSOLVE", "off").strip().lower()
-ON = MODE == "on"                   # (the solve's heights used)
+SOLO = MODE == "solo"               # (an experiment: the solve's heights, from the rules alone: the passes it replaces
+                                    # skipped, docs/research/2026-11-17-vsolve-solo.md)
+ON = MODE == "on" or SOLO           # (the solve's heights used)
 SHADOW = MODE == "shadow" or ON     # (the solve run, beside the passes or in their place)
 
 JOIN_M = 1.0            # m: a road's end this close to another road's centre line meets it there (grademetrics.JUNCTION_R_M)

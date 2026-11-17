@@ -104,7 +104,7 @@ def plans_format():
     # plans are thrown away)
     import vsolve
     # (and the one vertical solve's, opt-in: BNE_VSOLVE=on)
-    return f"{PLANS_FORMAT}.{roads.FACTS_FORMAT}" + (".gg1" if grading.GUARD_ON else "") + (".vs1" if vsolve.ON else "")
+    return f"{PLANS_FORMAT}.{roads.FACTS_FORMAT}" + (".gg1" if grading.GUARD_ON else "") + (".vs2" if vsolve.SOLO else ".vs1" if vsolve.ON else "")
 
 
 FRAMES = "r10"          # the plans' frames: their planning regions' (geotiles.PLAN_Z), not an anchor's
