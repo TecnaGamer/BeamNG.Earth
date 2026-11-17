@@ -8525,10 +8525,10 @@ class Connection:
         try:
             lat, lon = float(msg["lat"]), float(msg["lon"])
             out["lines"] = await asyncio.get_running_loop().run_in_executor(
-                self.s.search_pool, buslinesmod.near, lat, lon, self.s.net)
+                self.s.search_pool, buslinesmod.near, lat, lon, self.s.net, self.s.cache_dir)
         except Exception as e:          # offline, rate limited, a bad answer: the game says so
-            out["error"] = f"{type(e).__name__}: {e}"[:200]
-            log.warning("bus lines: %s", out["error"])
+            out["error"] = buslinesmod.error_text(e)[:500]
+            log.warning("bus lines: %s: %s", type(e).__name__, e)
         self.send(out)
 
     async def stations(self, msg):

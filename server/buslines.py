@@ -3,18 +3,30 @@ routes missions in city"; the user, 2026-11-17: "yes start the bus lines").
 
 A line is a route=bus relation (https://wiki.openstreetmap.org/wiki/Tag:route%3Dbus): its number (ref), colour, where it
 goes (from, to) and its stops in order, the members with a stop or platform role (Public Transport v2: each stop is a
-stop_position on the road, usually followed by the platform beside it). One bounded Overpass request per place, on
-demand only (the game's Bus lines button), and kept for the session: no geometry is downloaded, only the stops.
+stop_position on the road, usually followed by the platform beside it). One bounded Overpass lookup per place
+(one alternate endpoint on an outage), on demand only (the game's Bus lines button). Successful replies are kept
+for the session and for 30 days on disk: no geometry is downloaded, only the stops.
 
 Measured 2026-11-17, a 1.3 x 1.8 km box in central Göteborg: 85 lines, all Public Transport v2, every stop named.
 """
+import hashlib
 import json
+import logging
 import math
+import os
+from pathlib import Path
+import tempfile
+import time
 import urllib.parse
 
+import netfetch
+
 OVERPASS_URL = "https://overpass-api.de/api/interpreter"
+OVERPASS_FALLBACK_URL = "https://overpass.private.coffee/api/interpreter"
+log = logging.getLogger(__name__)
 RADIUS_M = 700.0                # lines with a stop within this of the player
 SNAP_DEG = 0.005                # the request's centre is rounded to this, so a few metres' drive asks nothing new
+CACHE_TTL_S = 30 * 86400
 MAX_LINES = 40
 MAX_STOPS = 120
 DEFAULT_COLOUR = "#ff6600"      # the stock bus mode's route colour (missionTypes/busMode/constructor.lua)
@@ -24,14 +36,20 @@ _cache = {}
 
 
 def overpass_url(lat, lon):
-    """The request for the lines with a member within RADIUS_M of lat, lon: the relations (their members, in order), the
+    """The request for the lines with a stop within RADIUS_M of lat, lon: the relations (their members, in order), the
     stop and platform nodes, and the platforms mapped as areas (their centres). Only numbers enter Overpass QL."""
     lat, lon = round(float(lat) / SNAP_DEG) * SNAP_DEG, round(float(lon) / SNAP_DEG) * SNAP_DEG
     dlat = RADIUS_M / 111_320.0
     dlon = dlat / max(math.cos(math.radians(lat)), 0.01)
     box = f"{lat - dlat:.5f},{lon - dlon:.5f},{lat + dlat:.5f},{lon + dlon:.5f}"
-    query = (f"[out:json][timeout:60];rel({box})[type=route][route=bus]->.r;.r out body;node(r.r);out body;"
-             "way(r.r)[public_transport=platform];out tags center;")
+    # Select nearby stops first, then their parent bus routes. A relation bbox query also walks the routes' road
+    # members (including through routes with no nearby stop); selecting stops avoids that unnecessary work.
+    query = (f'[out:json][timeout:25][maxsize:16777216];('
+             f'node({box})[highway=bus_stop];'
+             f'node({box})["public_transport"~"^(platform|stop_position)$"];'
+             f'way({box})[public_transport=platform];)->.near;'
+             '(rel(bn.near)[type=route][route=bus];rel(bw.near)[type=route][route=bus];)->.r;'
+             '.r out body;node(r.r);out body;way(r.r)[public_transport=platform];out tags center;')
     return OVERPASS_URL + "?" + urllib.parse.urlencode({"data": query})
 
 
@@ -138,14 +156,85 @@ def _ref_key(ref):
     return (not ref[:1].isdigit(), int(digits) if digits else 0, ref)
 
 
-def near(lat, lon, net):
-    """The lines near lat, lon (parse), from one Overpass request per snapped place, kept for the session. net:
-    netfetch's fetcher (its overpass-api.de policy: one request at a time, a daily budget). Raises on a failed request."""
+def error_text(error):
+    """Keep the failure reason visible: the encoded query URL otherwise fills the whole game message."""
+    text = str(error)
+    url = getattr(error, "url", None)
+    if url:
+        text = text.replace(url, urllib.parse.urlsplit(url).netloc)
+    return f"{type(error).__name__}: {text}"
+
+
+def _cache_path(cache_dir, url):
+    return Path(cache_dir) / "buslines" / (hashlib.sha256(url.encode()).hexdigest() + ".json")
+
+
+def _read_cache(path):
+    try:
+        if not 0 <= time.time() - path.stat().st_mtime <= CACHE_TTL_S:
+            return None
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(data, dict) and isinstance(data.get("elements"), list) and not data.get("remark"):
+            return data
+    except (OSError, ValueError):
+        pass
+    return None
+
+
+def _write_cache(path, data):
+    temporary = None
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=path.parent,
+                                         prefix=".buslines-", delete=False) as stream:
+            temporary = stream.name
+            json.dump(data, stream, ensure_ascii=False)
+        os.replace(temporary, path)
+    except OSError as error:
+        log.warning("bus lines cache: %s", error)
+    finally:
+        if temporary is not None:
+            try:
+                os.unlink(temporary)
+            except OSError:
+                pass
+
+
+def near(lat, lon, net, cache_dir=None):
+    """One bounded, cached lookup per snapped place. Try one alternate endpoint on connection/server failure.
+    Offline mode, budgets, throttling and other refusals are respected without contacting another service."""
     url = overpass_url(lat, lon)
     data = _cache.get(url)
+    path = _cache_path(cache_dir, url) if cache_dir is not None else None
+    if data is None and path is not None:
+        data = _read_cache(path)
+        if data is not None:
+            _cache[url] = data
     if data is None:
-        data = json.loads(net.get(url, kind="demand").body)
-        if data.get("remark") and not data.get("elements"):
-            raise ValueError("Overpass did not complete: " + str(data["remark"])[:120])
-        _cache[url] = data
+        failures = []
+        for endpoint in (OVERPASS_URL, OVERPASS_FALLBACK_URL):
+            request_url = endpoint + "?" + urllib.parse.urlsplit(url).query
+            try:
+                data = json.loads(net.get(request_url, kind="demand").body)
+                if data.get("remark"):
+                    raise ValueError("Overpass did not complete: " + str(data["remark"])[:120])
+            except netfetch.Offline:
+                raise
+            except (netfetch.HostUnavailable, netfetch.FetchFailed) as error:
+                # A 4xx refusal or malformed query is not fixed by asking another server.
+                if getattr(error, "status", None) is not None and error.status < 500:
+                    raise
+                log.warning("bus lines endpoint: %s", error_text(error))
+                failures.append(error_text(error))
+                continue
+            # Validate before storing: malformed replies must not survive a server restart.
+            if not isinstance(data, dict) or not isinstance(data.get("elements"), list):
+                raise ValueError("Overpass returned no elements list")
+            parse(data, float(lat), float(lon))
+            _cache[url] = data
+            if path is not None:
+                _write_cache(path, data)
+            break
+        else:
+            raise ValueError("; ".join(failures))
     return parse(data, float(lat), float(lon))

@@ -459,7 +459,7 @@ built in `main_async` and handed to `Dem`, `Imagery`, `weather.fetch` and `gravi
 | `downloads.sourceforge.net` (EGM2008) | 1/s, 1 | 1 | — | no | — |
 | `stac.overturemaps.org` (map data: the Overture STAC index) | 5/s, 10 | 2 | 5,000 | above half a bucket | 30 days |
 | `overturemaps-us-west-2.s3.us-west-2.amazonaws.com`, `overturemapswestus2.blob.core.windows.net` (Overture GeoParquet, AWS then the Azure mirror), `esa-worldcover.s3.eu-central-1.amazonaws.com`, `dataforgood-fb-data.s3.amazonaws.com` (canopy height) | 20/s, 40 | 4 | — | above half a bucket | never |
-| `overpass-api.de` (map category search, on Enter only: interactive, no retries, breaker after one failure) | 0.1/s, 1 | 1 | 50 (hard 100) | no | 1 day |
+| `overpass-api.de`, `overpass.private.coffee` (fallback for bus-line outages; map category search and Bus lines: interactive, no retries, breaker after one failure; 4 s connect / 65 s read timeout) | 0.1/s, 1 | 1 | 50 (hard 100) | no | 1 day |
 | `vector.openstreetmap.org`, `build.protomaps.com` | never at runtime (`PolicyDenied`) | | | | |
 | any other host | 2/s, 4 | 2 | 5,000 | no | 30 days |
 
@@ -1005,6 +1005,11 @@ Cross-component (server ↔ mod):
   `CALM_TIMEOUT`, so poses would go out meanwhile).
   `test_protocol_agreement.SessionsAgreementTest`: `sessions` on both sides (the mod's constructors,
   `farfield.folderOf` against the server's paths, adoption and release over the protocol).
+
+## Bus lines
+
+Bus-line lookups select nearby stops first and then their parent routes. Completed replies are stored in the
+download cache under `buslines/` for 30 days and can be reused offline or after a world-server restart.
 
 ## Attribution
 

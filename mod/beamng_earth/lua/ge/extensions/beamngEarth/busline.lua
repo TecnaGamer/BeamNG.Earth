@@ -50,6 +50,7 @@ function M.triggerName(line, i) return M.TRIGGER .. tostring(line.id) .. '_' .. 
 -- the lines near the player
 
 function M.request()
+  if pending then return false end -- keep the current request ID; repeated clicks must not start more lookups
   local api, core = M.api(), M.core()
   local lat, lon
   if api and api.position then lat, lon = api.position() end
@@ -265,10 +266,10 @@ local function draw()
       if im.Button('Stop driving the line') then M.stop() end
       im.Separator()
     end
-    if im.Button('Find lines here') then lines = nil M.request() end
+    if im.Button('Find lines here') and not pending then lines = nil M.request() end
     im.SameLine()
     if im.Button('Get a city bus') then M.getBus() end
-    if pending then im.TextUnformatted('Asking OpenStreetMap ...') end
+    if pending then im.TextUnformatted('Finding bus lines (may take up to a minute) ...') end
     if linesError then im.TextUnformatted(linesError) end
     if lines and #lines == 0 and not pending and not linesError then im.TextUnformatted('No bus lines mapped here') end
     for i, l in ipairs(lines or {}) do

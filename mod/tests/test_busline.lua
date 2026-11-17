@@ -85,6 +85,7 @@ B._reset()
 local asked = {}
 B.core = function() return { requestBusLines = function(id, la, lo) asked[#asked + 1] = id return true end } end
 T.check(B.request(), 'asked')
+T.check(not B.request() and #asked == 1, 'repeated clicks keep the pending lookup')
 B.onLines({ id = 999, lines = { line() } })
 T.check(B.lines() == nil, 'another answer: ignored')
 B.onLines({ id = asked[1], lines = { line() }, attribution = 'x' })
