@@ -75,6 +75,16 @@ class DeckKSpeedTest(unittest.TestCase):
         mid = np.abs(ln[:, 0] - 100.0) <= roads.DECK_ROAD_HALF
         self.assertGreaterEqual(float(on[mid].min()), float(off[mid].min()) - 0.05)
 
+    def test_the_chain_is_never_steeper_or_higher(self):
+        """deck_profile's guard: the chain with the longer crests only when no part is DECK_K_GRADE steeper nor
+        DECK_K_OVER_M higher than without them."""
+        ln = overpass(L=100.0)
+        base = [np.linspace(0.0, 4.0, len(ln))]                     # 4 %
+        self.assertTrue(roads._no_worse([ln], base, [base[0] + 0.2]))
+        self.assertFalse(roads._no_worse([ln], base, [base[0] + 0.3]), "higher")
+        self.assertFalse(roads._no_worse([ln], base, [np.linspace(0.0, 4.4, len(ln))]), "steeper")
+        self.assertFalse(roads._no_worse([ln], base, [np.r_[base[0][:-1], np.nan]]), "NaN")
+
     def test_curve_deck_radii(self):
         import fast
         s = np.arange(0.0, 401.0, 4.0)

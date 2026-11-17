@@ -4842,8 +4842,37 @@ def deck_profile(lines, ground_fn, crossings=(), clear=None, grade=None, lift=No
     """deck_profile_once, then repeated with the deck-over-deck requirements: where two parts of
     different levels cross, the higher one clears the lower one's deck by `clear` (2026-10-11: crossing
     decks clipped into each other). pins: points where a ground road goes on from a joint of decks (abutments too: _pin).
-    crest: per part the crest radius (m) its road's design speed asks (DECK_K_SPEED: deck_crest_radii), or None.
-    Pure given ground_fn."""
+    crest: per part the crest radius (m) its road's design speed asks (DECK_K_SPEED: deck_crest_radii), or None:
+    the chain with them kept only where no part stands more than DECK_K_OVER_M higher nor climbs more than DECK_K_GRADE
+    more steeply than the chain without them (a branch leaving a trunk with a longer crest took a steeper start: an
+    M5 deck at Almondsbury 4.2 -> 4.9 %), else the chain without. Pure given ground_fn."""
+    if DECK_K_SPEED and crest is not None:
+        base = _deck_profile(lines, ground_fn, crossings, clear, grade, lift, levels, widths, pins, None)
+        new = _deck_profile(lines, ground_fn, crossings, clear, grade, lift, levels, widths, pins, crest)
+        return new if _no_worse(lines, base, new) else base
+    return _deck_profile(lines, ground_fn, crossings, clear, grade, lift, levels, widths, pins, None)
+
+
+def _no_worse(lines, base, new):
+    """Does every part of new stand at most DECK_K_OVER_M over base's highest and climb at most DECK_K_GRADE more
+    steeply than base's steepest (deck_profile's DECK_K_SPEED guard)? Pure."""
+    if base is None or new is None or len(base) != len(new):
+        return False
+    for ln, a, b in zip(lines, base, new):
+        a, b = np.asarray(a, np.float64), np.asarray(b, np.float64)
+        if len(a) != len(b) or not np.isfinite(b).all() and np.isfinite(a).all():
+            return False
+        if len(a) < 2 or not np.isfinite(a).all() or not np.isfinite(b).all():
+            continue
+        ds = np.maximum(dnp.hypot(*np.diff(np.asarray(ln, np.float64)[:, :2], axis=0).T), 1e-6)
+        if float(b.max()) > float(a.max()) + DECK_K_OVER_M + 1e-9 or \
+                float(np.max(np.abs(np.diff(b)) / ds)) > float(np.max(np.abs(np.diff(a)) / ds)) + DECK_K_GRADE + 1e-9:
+            return False
+    return True
+
+
+def _deck_profile(lines, ground_fn, crossings, clear, grade, lift, levels, widths, pins, crest):
+    """deck_profile's solve (crest as there, used as given)."""
     zs = deck_profile_once(lines, ground_fn, crossings, clear, grade, lift, pins=pins, crest=crest)
     n_road = len(crossings)
     if levels is None or len(lines) < 2:
