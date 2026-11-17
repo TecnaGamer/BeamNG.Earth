@@ -6462,6 +6462,6 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     farsel::register(m)?;
     // (304 also) far_select_nodes and far_global_select return the selection's slack (the move under which it stays the
     // same: earthd's selection gate skips only selections that could not change)
-    m.add("VERSION", 305)?;
+    m.add("VERSION", 306)?;
     Ok(())
 }
