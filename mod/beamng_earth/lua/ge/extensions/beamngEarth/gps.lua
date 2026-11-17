@@ -1141,10 +1141,12 @@ local function autoKeep(nodes, now)
     return
   end
   local c = core()
-  local healthy = not (c and c.serverHealthy) or c.serverHealthy()
+  local ready = c and (c.autodriveReady or c.serverHealthy)
+  local healthy = not ready or ready()
   if not healthy then
     if not paused then veh:queueLuaCommand('ai.setMode("stop")') end
     paused, stillSince = true, nil
+    progRemaining, progAt, stuckTries = nil, nil, 0 -- waiting for the world is not failed driving
     return
   elseif paused then
     paused, routedTo = false, nil         -- back: the path given again
@@ -1182,6 +1184,31 @@ function M.recoverPick(segs, rx, ry, hx, hy, x, y, hx2, hy2, pz, ahead)
   return M.nearestEdge3(segs, x, y, pz, hx2, hy2, within)
 end
 
+-- Pure: centre the body in a legal lane, rather than the road's centre line.
+-- Narrow lanes may share the centre line, but the whole body must still fit on the road.
+function M.recoveryOffset(nodes, point, halfWidth, rightHandDrive)
+  local s = point.segment
+  local a, b = nodes[s.a], nodes[s.b]
+  local edge = M.edge(nodes, s.a, s.b)
+  local ra, rb = edge.inRadius, edge.outRadius
+  if edge.inNode == s.b then ra, rb = rb, ra end
+  local radius = (ra or a.radius or 0) * (1-point.t) + (rb or b.radius or 0) * point.t
+  if radius < halfWidth then return nil end
+  local from = (b.pos.x-a.pos.x)*point.dx + (b.pos.y-a.pos.y)*point.dy >= 0 and s.a or s.b
+  local lanes = edge.lanes
+  if lanes and edge.inNode and edge.inNode ~= from then
+    lanes = lanes:reverse():gsub('[+-]', function(c) return c == '+' and '-' or '+' end)
+  end
+  lanes = lanes or (edge.oneWay and '+' or (rightHandDrive and '+-' or '-+'))
+  local best
+  for i = 1, #lanes do if lanes:sub(i,i) == '+' then
+    local offset = -radius + (i-.5)*2*radius/#lanes
+    if not best or math.abs(offset) < math.abs(best) then best = offset end
+  end end
+  local room = radius-halfWidth
+  return best and math.max(-room, math.min(room, best))
+end
+
 -- The car put back on the road AUTO_RECOVER_M ahead along route e (from segment i, fraction t): on the graph edge nearest
 -- that point that may be driven the route's way, facing that way, on the ground. Returns true when it was placed.
 recoverAhead = function(e, nodes, i, t)
@@ -1205,14 +1232,18 @@ recoverAhead = function(e, nodes, i, t)
   if not bp or d > M.ON_GRAPH_M then return false end
   local hl = math.sqrt(bp.dx * bp.dx + bp.dy * bp.dy)
   if hl < 1e-6 then return false end
-  local pos = vec3(bp.x, bp.y, z + 2)
-  -- the ground under the chosen edge, looked for from just above it: from 40 m up the ray found a bridge over that road
-  -- first and the car was set down on the bridge (another road) instead
+  local half = veh:getSpawnWorldOOBB():getHalfExtents()
+  local rules = require('beamngEarth/navgraph').rules or {}
+  local offset = M.recoveryOffset(nodes, bp, math.abs(half.x), rules.rightHandDrive)
+  if not offset then return false end
+  -- in a legal lane (PR #1282), on the ground under it looked for from just over the chosen edge's height (#1395: from
+  -- 40 m up the ray found a bridge over that road first and the car was set down on the bridge instead)
+  local pos = vec3(bp.x + bp.dy / hl * offset, bp.y - bp.dx / hl * offset, z + 2)
   local ray = rawget(_G, 'castRayStatic')
-  local hit = ray and ray(vec3(bp.x, bp.y, z + M.RECOVER_RAY_UP_M), vec3(0, 0, -1), M.RECOVER_RAY_UP_M + 8)
-  if hit and hit < M.RECOVER_RAY_UP_M + 8 then pos.z = z + M.RECOVER_RAY_UP_M - hit + 0.5 end
+  local hit = ray and ray(vec3(pos.x, pos.y, z + M.RECOVER_RAY_UP_M), vec3(0, 0, -1), M.RECOVER_RAY_UP_M + 8)
+  if hit and hit < M.RECOVER_RAY_UP_M + 8 then pos.z = z + M.RECOVER_RAY_UP_M - hit + math.abs(half.z) + 0.3 end
   local ok = pcall(spawn.safeTeleport, veh, pos, quatFromDir(vec3(bp.dx / hl, bp.dy / hl, 0), vec3(0, 0, 1)), nil, nil,
-    false, nil, true)
+    false, true, true)
   if ok then log('I', 'beamngEarth', string.format('autodrive: no progress, the car put on the route ahead at (%.0f, %.0f)',
     pos.x, pos.y)) end
   return ok
