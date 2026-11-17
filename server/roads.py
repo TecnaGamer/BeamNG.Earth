@@ -7789,6 +7789,17 @@ class BridgeProfiles:
                     loaded.add(str(key))
                     self._load(key, pool, ground)
                     grew = True
+            if self.CANON_LOAD:
+                # (and every cell the chain's parts lie in: the cells read are then the chain's own, the same from
+                # whichever of its parts the solve started; their keys' order)
+                xy = np.concatenate([np.asarray(pool[k][1], np.float64)[:, :2] for k in sorted(comp)])
+                la, lo, _ = self.frame.enu_to_geodetic(xy[:, 0], xy[:, 1], 0.0)
+                cells = {str(c): c for c in mapcells.cells_of(np.asarray(la), np.asarray(lo))}
+                for c in sorted(cells):
+                    if c not in loaded and len(loaded) < CHAIN_CELLS:
+                        loaded.add(c)
+                        self._load(cells[c], pool, ground)
+                        grew = True
             if not grew:
                 return sorted(comp)
 
@@ -8091,14 +8102,43 @@ class BridgeProfiles:
         solved_only: only those solved already; part_ids: return (fid, j) rather than fid."""
         out = []
         for key, feats, i in todo:
+            ring = None
+            if self.CANON_LOAD and feats is not None:
+                # A piece is drawn only when a copy of its road in a cell it lies in has it under this key. A road's
+                # copies have their own level ranges, so a piece that a neighbour cell's copy (the one a tile asked
+                # through) keys otherwise is in no solve that starts from its own cells; it was drawn only once some
+                # other tile's solve had read that neighbour, so whether a far-bridge tile counted it was the asking
+                # order's (tools/portcheck, Fells Point, 2026-11-16).
+                ring = dict(_keyed(self.keys_of, self.parts_of, feats, i))[key[1]]
+                if not self._held_in(key, ring):
+                    continue
             got = self._take(key)       # (with its note: whoever builds on a solve made short is short too)
             if got is None and not solved_only:
-                ring = dict(_keyed(self.keys_of, self.parts_of, feats, i))[key[1]]
-                got = self._chain_of(key, [(float(p[1]), float(p[0])) for p in (ring[0], ring[-1])])
+                if ring is None:
+                    ring = dict(_keyed(self.keys_of, self.parts_of, feats, i))[key[1]]
+                # (CANON_LOAD: from every cell the piece lies in, not its ends' alone)
+                pts = ring if self.CANON_LOAD else (ring[0], ring[-1])
+                got = self._chain_of(key, [(float(p[1]), float(p[0])) for p in pts])
             if got is not None:
                 spec, xy, z, lon = got
                 out.append((key if part_ids else self._part_id(key), spec, xy, z, lon))
         return out
+
+    def _held_in(self, key, ring):
+        """Does a cell the piece's ring (lon, lat) lies in hold piece key (its copy of the road keys it so)?"""
+        cells = {str(c): c for c in mapcells.cells_of(np.asarray(ring, np.float64)[:, 1],
+                                                       np.asarray(ring, np.float64)[:, 0])}
+        memo = self.__dict__.setdefault("_held_keys", {})     # id(a cell's entries) -> (entries, their keys)
+        for name in sorted(cells):
+            parts = self._cell_entries(cells[name])[0]
+            hit = memo.get(id(parts))
+            if hit is None or hit[0] is not parts:
+                if len(memo) > 256:
+                    memo.clear()
+                hit = memo[id(parts)] = (parts, {k for k, _v in parts})
+            if key in hit[1]:
+                return True
+        return False
 
     def _chain_of(self, key, ends, adopt=True):
         """Solve the chain of part key (its ring's ends (lat, lon) say where to start loading): its parts into done.

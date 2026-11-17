@@ -682,6 +682,33 @@ class BridgeProfilesTest(unittest.TestCase):
         # (over the street the west cell holds: the east cell's stub alone left the deck on the ground, 9.9 m)
         self.assertGreater(float(decks[0]["a"].max()), 15.0, "over the street")
 
+    def test_piece_drawn_whatever_was_solved_before(self):
+        """A bridge piece that the asking copy of its road keys otherwise than the cells it lies in (each copy's own
+        level ranges) is drawn, or not, the same whether or not some earlier solve published it under the asking
+        copy's key (_held_in): at Fells Point such a piece was drawn only after another tile's solve had read the
+        asking cell, a far-bridge tile's part count changing with the asking order (2026-11-16)."""
+        import mapcells
+        import roads
+        from test_roads import features
+        home = mapcells.cell_of(LAT, LON)
+        east = (home.bounds()[2] - LON) * M_LON
+        c = [(east + 50, 0), (east + 350, 0)]                    # wholly in the east cell
+        west = features([c], ["primary"], levels=[(0, 1.0, 0.0, 1.0)], ids=["c"])
+        eastf = features([c], ["primary"], levels=[(0, 1.0, 0.05, 1.0)], ids=["c"])     # (another key there)
+        self.assertNotEqual(roads.part_keys(west, 0, "bridge"), roads.part_keys(eastf, 0, "bridge"))
+        flat = lambda la, lo: np.full(np.shape(la), 10.0)
+        box_c = (east + 150, -50, east + 250, 50)
+        got = []
+        for published in (False, True):
+            bp = roads.BridgeProfiles(FRAME, lambda key: west if key == home else eastf, flat)
+            if published:       # (a solve that read the west cell published the west copy's piece)
+                other = roads.BridgeProfiles(FRAME, lambda key: west, flat)
+                other.parts([west], box_c)
+                bp.done.update(other.done)
+            got.append(sorted((fid, z.tobytes()) for fid, spec, xy, z, lon in bp.parts([west], box_c)))
+        self.assertEqual(got[0], got[1])
+        self.assertEqual(got[0], [], "the east cell's copy has no piece under the west copy's key")
+
     def test_crossing_decks_stack_by_level(self):
         import roads
         from test_roads import features
