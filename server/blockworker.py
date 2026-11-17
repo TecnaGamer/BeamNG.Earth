@@ -3584,8 +3584,20 @@ def roadsurf_area(lat0, lon0, lat1, lon1):
     return len(roadsurf.measure_area(getattr(_s, "md", None), lat0, lon0, lat1, lon1))
 
 
+def _base_veg():
+    """This process's Vegetation for the generated ground's tree floor (genground.tree_floor: its cache read, cells never
+    built here), as _veg_geo's."""
+    import vegetation as vegetationmod
+    if getattr(_s, "veg", None) is None and getattr(_s, "md", None) is not None:
+        v = vegetationmod.Vegetation(_s.md, _s.cache_dir)
+        v.dem = _s.dem
+        v.surface, v.widths = _s.surface, _s.widths
+        _s.veg = v
+    return getattr(_s, "veg", None)
+
+
 def base_photo(lat, lon, x0, y0, size, px, tex, buildings, rock_zoom, path, cache, fuel_pads=None, out_px=None,
-               quick=False):
+               quick=False, trees=False):
     """earthd.Server.write_base here, for a server without its imagery analyses (a small machine): the block's base
     photo from the imagery tiles on disk, its building footprints filled and its cliffs as rock, written to path
     (PNG) and packed into the game's terrain texture cache (cache: terraincache.base_entry's arguments but the rgb).
@@ -3611,7 +3623,8 @@ def base_photo(lat, lon, x0, y0, size, px, tex, buildings, rock_zoom, path, cach
     if genground.ON and not quick:      # (earthd.Server.write_base)
         try:
             rgb, used = genground.render(im, frame, x0, y0, size, px, getattr(_s, "md", None),
-                                         getattr(_s, "surface", None), _s.widths, pending)
+                                         getattr(_s, "surface", None), _s.widths, pending, _base_veg() if trees else None,
+                                         getattr(_s, "dem", None))
         except imagerymod.ImageryError:
             return None
         except Exception as e:      # (the Sentinel-2 photo alone then)

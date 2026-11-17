@@ -234,7 +234,7 @@ def gen(s2, kind, ox, oy, canopy=None):
     return EF.gen_ground(np.ascontiguousarray(s2), np.ascontiguousarray(kind, np.uint8),
                          np.ascontiguousarray(kind.astype(np.uint32)), np.ascontiguousarray(canopy, np.uint8),
                          np.zeros((n, n), np.uint32), np.zeros((0, 2)), np.zeros(0), float(ox), float(oy), 1.0,
-                         int(-oy), int(ox))
+                         int(-oy), int(ox), None, 0)
 
 
 def two_fields(n, col, a, b, blur=12):

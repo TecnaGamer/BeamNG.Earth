@@ -147,7 +147,10 @@ class SeasonTest(unittest.TestCase):
                 return np.full_like(rgb, 7)
 
         rgb, _ = gg.render(Im(), geodesy.EnuFrame(40.0, -77.0), -32.0, -32.0, 64.0, 64, None, None)
-        self.assertEqual(calls, ["render", ("season", (64 + 2 * int(gg.HALO_M),) * 2 + (3,))])
+        # (the block's photo, then (stage 5) its data cell's for the sun fit; the season last, over the ground)
+        self.assertEqual(calls[0], "render")
+        self.assertEqual(calls[-1], ("season", (64 + 2 * int(gg.HALO_M),) * 2 + (3,)))
+        self.assertNotIn(("season", (64 + 2 * int(gg.HALO_M),) * 2 + (3,)), calls[:-1])
         self.assertTrue((rgb == 7).all(), "the graded generated ground, cut to the block")
 
 
