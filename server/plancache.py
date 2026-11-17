@@ -102,7 +102,13 @@ def plans_format():
     import grading
     # (the grade guard, off by default, makes other plans: its own key, so that the two never mix and nobody else's
     # plans are thrown away)
-    return f"{PLANS_FORMAT}.{roads.FACTS_FORMAT}" + (".gg1" if grading.GUARD_ON else "")
+    # (so do the shapes, off by default too, and with them the road laws and the flanks, each on unless switched off:
+    # a place planned with BNE_SHAPES=1 was read back without it, and the other way round, the decks of one solver on
+    # the approaches of the other)
+    shapes = ""
+    if grading.SHAPES_ON:
+        shapes = ".sh1" + ("" if grading.ROAD_LAWS_ON else "l0") + ("" if grading.FLANKS_ON else "f0")
+    return f"{PLANS_FORMAT}.{roads.FACTS_FORMAT}" + (".gg1" if grading.GUARD_ON else "") + shapes
 
 
 FRAMES = "r10"          # the plans' frames: their planning regions' (geotiles.PLAN_Z), not an anchor's
