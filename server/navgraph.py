@@ -385,7 +385,7 @@ def _deck_z(decks, fid, x, y):
     decks a _Roads: a point on none of fid's own parts reads its road family's others' within SECTION_DECK_M."""
     got = _part_z(decks.get(fid, ()), x, y, 1.5)
     if got is None and isinstance(decks, _Roads):
-        got = _part_z(decks.related(fid), x, y, decks.reach(fid))
+        got = _part_z(decks.related(fid), x, y, decks.reach(fid), end_tol=1.5)
     return got
 
 
@@ -410,18 +410,29 @@ def _section_shifts(feats_list):
     return out
 
 
-def _part_z(parts, x, y, reach):
-    """_deck_z on these parts within reach m of their lines."""
+def _part_z(parts, x, y, reach, end_tol=None):
+    """_deck_z on these parts within reach m of their lines; end_tol: and no more than end_tol m past a part's ends
+    along it (a family's wider reach is sideways only, for a section's placement: a ground node 3 m past a deck's end
+    took the deck's height, Codex review of PR #1395)."""
     best = None
     for part in parts:
         xy, z = part[:2]
         a, b = xy[:-1], xy[1:]
         d = b - a
         L2 = np.maximum((d * d).sum(1), 1e-12)
-        t = np.clip(((np.array([x, y]) - a) * d).sum(1) / L2, 0, 1)
+        raw = ((np.array([x, y]) - a) * d).sum(1) / L2
+        t = np.clip(raw, 0, 1)
         q = a + t[:, None] * d
         dist = dnp.hypot(q[:, 0] - x, q[:, 1] - y)
         k = int(dist.argmin())
+        if end_tol is not None:
+            past = 0.0
+            if k == 0 and raw[0] < 0.0:
+                past = float(-raw[0] * np.sqrt(L2[0]))
+            if k == len(raw) - 1 and raw[k] > 1.0:
+                past = max(past, float((raw[k] - 1.0) * np.sqrt(L2[k])))
+            if past > end_tol:
+                continue
         if dist[k] < reach and (best is None or dist[k] < best[0]):
             best = (float(dist[k]), float(z[k] + t[k] * (z[k + 1] - z[k])))
     return None if best is None else best[1]
