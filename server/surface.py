@@ -44,9 +44,12 @@ import staging
 log = logging.getLogger("earthd.surface")
 
 VERSION = 1
-# (TerrainMaterial name, BeamNG ground model). The last one is the level's own dirt material: the
-# default, and the one every block had before (an all-zero sample falls to the later layer on ties,
-# docs/research/2026-10-10-world-data-sources.md §4.4, so DIRT goes last).
+# (TerrainMaterial name, BeamNG ground model). Index 15 is the level's own dirt material: the default, and the one every
+# block had before. An all-zero sample of an imported mask set falls to the later layer on ties
+# (docs/research/2026-10-10-world-data-sources.md §4.4), so a block's listing ends with DIRT (used_materials).
+# Indices are persisted (blockcache keeps a block's material index map, and a stale generation of it is shown after an
+# update: blockcache.Build.stale_hit), so they never change meaning: new materials are appended (2026-11-16, Codex review:
+# inserting them before dirt turned a cached block's dirt into forest floor).
 # Names carry their own prefix: "bngEarthSnow" is the weather's Precipitation object (weather.lua), and
 # a TerrainMaterial of that name was never made - its layer fell back to asphalt (in-game 2026-10-11).
 MATERIALS = (
@@ -69,15 +72,26 @@ MATERIALS = (
     ("bngEarthGroundPavers", "ASPHALT_OLD"),
     ("bngEarthGroundBrick", "COBBLESTONE"),
     ("beamngEarthDirt", "DIRT"),
+    # More of the stock maps' own ground (2026-11-16, the user: "see how the vanilla maps use color and texture for the
+    # ground"): forest floor (East Coast USA's / Italy's forest_floor: litter, needles, roots; the tyres' grass), dry
+    # grass (Utah's / West Coast USA's; arid grassland), crop soil (farmland and cropland: the dirt's ground model, no
+    # 3D grass), sand (beaches: they had the gravel layer; the tyres' SAND as the golf bunkers')
+    ("bngEarthGroundForest", "GRASS"),
+    ("bngEarthGroundDryGrass", "GRASS"),
+    ("bngEarthGroundCrop", "DIRT"),
+    ("bngEarthGroundSand", "SAND"),
 )
 ASPHALT, GRASS, DUSTY, LOOSE, ROCK, SNOW, MUD, COBBLE, LAWN, \
-    GOLF_ROUGH, GOLF_FAIRWAY, GOLF_GREEN, GOLF_BUNKER, PAVERS, BRICK, DIRT = range(len(MATERIALS))
+    GOLF_ROUGH, GOLF_FAIRWAY, GOLF_GREEN, GOLF_BUNKER, PAVERS, BRICK, DIRT, \
+    FOREST, DRYGRASS, CROP, SAND = range(len(MATERIALS))
 # WorldCover class -> material (§5.4 of the world-data research). Built-up land is the plain dirt layer
 # (2026-10-14): its yards, lawns and lots took the asphalt layer's grey detail and macro textures, which
 # washed whole towns pale grey in the street photos (Moab, Frederick); the roads are painted asphalt anyway
-# (paint_roads), and the photo's own colours now show through.
-CLASS_MATERIAL = {0: DIRT, 10: GRASS, 20: DUSTY, 30: GRASS, 40: DIRT, 50: DIRT, 60: LOOSE, 70: SNOW,
+# (paint_roads), and the photo's own colours now show through. Tree cover is the forest floor, cropland crop soil
+# (2026-11-16: both had the grass and the dirt layers); grassland in an arid climate dry grass (classify).
+CLASS_MATERIAL = {0: DIRT, 10: FOREST, 20: DUSTY, 30: GRASS, 40: CROP, 50: DIRT, 60: LOOSE, 70: SNOW,
                   80: MUD, 90: MUD, 95: MUD, 100: GRASS}
+DRY_KOPPEN = (4, 5, 6, 7)   # Koppen B (arid: BWh BWk BSh BSk; climate.py): grassland there is dry grass
 # Lawns (2026-10-14, street photos of Ocean City, Lancaster, Frederick, Moab): built-up land between the
 # buildings is mostly mown grass, which the dirt layer drew pale and bare. A share of it is LAWN, in patches
 # of smooth noise on a fixed world grid: most of it where the climate is humid, less in the dry West (yards
@@ -137,9 +151,18 @@ def classify(classes, u, square, lat=None, lon=None):
             sub = idx[urban]
             sub[lawns(np.asarray(lat, np.float64)[urban], np.asarray(lon, np.float64)[urban])] = np.uint8(LAWN)
             idx[urban] = sub
+        grass = classes == 30
+        if grass.any():
+            import climate
+            dry = np.isin(climate.koppen_many(np.asarray(lat, np.float64)[grass], np.asarray(lon, np.float64)[grass]),
+                          DRY_KOPPEN)
+            if dry.any():               # (idx is _LUT's own new array: written in place)
+                sub = idx[grass]
+                sub[dry] = np.uint8(DRYGRASS)
+                idx[grass] = sub
     sand = beaches.sand_grid(classes, square)      # a beach's grassland pixels: bare sand, no grass (GitHub #578)
     if sand.any():
-        idx = np.where(sand, np.uint8(LOOSE), idx)
+        idx = np.where(sand, np.uint8(SAND), idx)
     u = np.asarray(u, np.float64)
     if min(u.shape) < 2:            # no slope from a single row / column
         return idx.astype(np.uint8)
@@ -428,7 +451,7 @@ def paint_roads(idx, lat, lon, feats_list, square, urban_fn=None, widths=None, e
         # Material layers drive BeamNG's stock GroundCover. Keep the strip green
         # even on WorldCover's built-up village pixels, while roads and footways
         # still win below.
-        out[mask(grass_verge) & np.isin(out, (GRASS, LAWN, DIRT))] = GRASS
+        out[mask(grass_verge) & np.isin(out, (GRASS, LAWN, DIRT, FOREST, DRYGRASS, CROP))] = GRASS
     if footpaths[0]:
         out[mask(footpaths)] = ROAD_MATERIAL["paved"]
     for k in ROAD_ORDER:
@@ -1002,7 +1025,7 @@ def road_mask(frame, x0, y0, size, px, surface, widths=None, corners=True):
 # the ground cover goes by the layer samples (2 m then, 1 m since 2026-11-01), and tufts stood on the asphalt along its
 # edges in many places (the user, 2026-10-20: "grass on the road")
 VERGE_M = 1.0 + 0.5 * heightmap.SQUARE     # (1.5 m at 1 m squares, 2 m at 2 m)
-VERGE_FROM = (GRASS, LAWN, DUSTY)
+VERGE_FROM = (GRASS, LAWN, DUSTY, FOREST, DRYGRASS)
 VERGE = DIRT
 AISLE_STALLS_M = 5.5        # a parking aisle's stall rows (parking.LOT_SPOT_D_M), painted with it
 PARKING_CLASSES = {"parking"}     # Overture infrastructure (transit) polygons drawn as asphalt: no grass on a lot
@@ -1023,8 +1046,8 @@ FARM_ROAD_CLEAR_M = 4.0     # furrows stop this far short of a dirt road's edge
 
 
 def paint_fields(idx, lat, lon, feats_list):
-    """idx with farmland polygons drawn as dirt (the whole field: the furrows are only in the photo). Pure."""
-    return _paint(idx, lat, lon, feats_list, _farmland, DIRT)
+    """idx with farmland polygons drawn as crop soil (the whole field: the furrows are only in the photo). Pure."""
+    return _paint(idx, lat, lon, feats_list, _farmland, CROP)
 
 
 def paint_grass(idx, lat, lon, feats_list):
@@ -1171,7 +1194,7 @@ def paint_frontage_pads(idx, lat, lon, pads, material=ASPHALT):
         hit = polygon.contains_points(xy, np.c_[x.ravel(), y.ravel()])
         y, x = y.ravel()[hit], x.ravel()[hit]
         if material == GRASS:
-            keep = np.isin(out[y, x], (DIRT, LAWN, DUSTY))
+            keep = np.isin(out[y, x], (DIRT, LAWN, DUSTY, FOREST, DRYGRASS, CROP))
             y, x = y[keep], x[keep]
         out[y, x] = material
     return out
@@ -1482,7 +1505,7 @@ def photo_lawns(out_dir, ter_name, mask_names_, rgb):
 
 def used_materials(idx):
     """The MATERIALS indices a block's .ter lists: those its samples use (holes aside), plus what photo_lawns may
-    turn them into (LAWN -> DIRT, SNOW -> LOOSE), in MATERIALS order. Each distinct material a .ter lists costs
+    turn them into (LAWN -> DIRT, SNOW -> LOOSE), in MATERIALS order, DIRT last. Each distinct material a .ter lists costs
     the engine's first draw after the swap ~20 ms (in-game probes 2026-10-18 at Tower Bridge: one material
     55-80 ms, three 80-180, all ten 250-560 ms in RenderShadows, whether a sample uses them or not)."""
     u = set(np.unique(np.asarray(idx, np.uint8)).tolist())
@@ -1491,7 +1514,9 @@ def used_materials(idx):
         u.add(DIRT)
     if SNOW in u:
         u.add(LOOSE)
-    return sorted(u) or [DIRT]
+    # (MATERIALS order, DIRT last: an imported mask set's all-zero sample takes the last layer, the default dirt as
+    # before the layers appended after it)
+    return sorted(u, key=lambda i: (i == DIRT, i)) or [DIRT]
 
 
 # Fewer ground layers per block (the user, 2026-11-11: "combine the ground layers and reduce them without reducing
@@ -1511,14 +1536,15 @@ def used_materials(idx):
 # pair one ground model), then folds its least used land-cover layers whatever their size: a visible but rare loss,
 # against a 250-560 ms swap with ten materials (in-game probes 2026-10-18). BNE_LAYER_FOLD=off: every layer kept.
 FOLD_ON = os.environ.get("BNE_LAYER_FOLD", "on").lower() not in ("off", "0", "false", "no")
-FOLD_FROM = (GRASS, LAWN, DUSTY, ROCK, SNOW)
+FOLD_FROM = (GRASS, LAWN, DUSTY, ROCK, SNOW, FOREST, DRYGRASS, CROP, SAND)
 FOLD_SHARE = 0.01
 FOLD_CORE_R_M = 2.0
 FOLD_CORE_M2 = 256.0
 LAYER_CAP = 9
 # (dropped, kept): golf greens and fairways are the same grass at another grain, fairways mown lawns, a rough long
 # grass; brick and setts both stone paving; pavers the asphalt's ground model
-LOOKALIKE = ((GOLF_GREEN, GOLF_FAIRWAY), (BRICK, COBBLE), (GOLF_FAIRWAY, LAWN), (GOLF_ROUGH, GRASS), (PAVERS, ASPHALT))
+LOOKALIKE = ((GOLF_GREEN, GOLF_FAIRWAY), (BRICK, COBBLE), (GOLF_FAIRWAY, LAWN), (GOLF_ROUGH, GRASS), (PAVERS, ASPHALT),
+             (DRYGRASS, GRASS), (CROP, DIRT), (FOREST, GRASS))
 
 
 def core_radius(square):
