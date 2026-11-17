@@ -971,6 +971,7 @@ roads.clear()
 roads.setEnabled(true)
 local cliffTile = {chunks={}, cliff={shape='/t/cliff.cdae',pos={0,0,0}},
   cliff2={shape='/t/cliff2.cdae',pos={0,0,0}},
+  cliffCol1={shape='/t/cliff_col.cdae',pos={0,0,0}},
   cliffStrip1={shape='/t/cliff_strip.cdae',pos={0,0,0}}}
 require('beamngEarth/cliffcontact').ready = true -- private cache prepared at hello
 T.check(roads.onTile({anchorId=7,key='0_0',data=cliffTile,n=0},7), 'accept streamed cliff parts')
@@ -985,12 +986,18 @@ local function cliffObjects()
   end
   return count
 end
-T.check(cliffObjects()==3, 'both cliff faces and contact strip are imported')
+T.check(cliffObjects()==4, 'cliff faces, collision and contact strip are imported')
+for _,o in pairs(S.objects) do
+  local path=o.fields and o.fields.shapeName
+  if path and tostring(path):find('/t/cliff',1,true) then
+    T.check(o.fields.collisionType == (path == '/t/cliff_col.cdae' and 'Collision Mesh' or 'None'), 'only the cliff collision proxy collides')
+  end
+end
 roads.onDrop({anchorId=7,key='0_0'})
 for _=1,12 do roads.update(gov,7,{x=0,y=0,z=0}) end
 T.check(not roads.cliffPiecesReady('0_0',7) and cliffObjects()==0, 'tile removal removes all cliff parts')
 require('beamngEarth/cliffcontact').ready = false
 roads.onTile({anchorId=7,key='0_0',data=cliffTile,n=0},7)
 for _=1,12 do roads.update(gov,7,{x=0,y=0,z=0}) end
-T.check(cliffObjects()==2 and roads.cliffPiecesReady('0_0',7), 'missing private stock skips contacts but keeps cliff faces')
+T.check(cliffObjects()==3 and roads.cliffPiecesReady('0_0',7), 'missing private stock skips contacts but keeps cliff faces')
 T.done('test_roads')

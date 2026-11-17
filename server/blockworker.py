@@ -2100,7 +2100,7 @@ def _write_geo_content(out_dir, vfs_dir, tile, P):
         lean = "bldcol" in parts
         import cliffscene
         for what, info in parts.items():
-            info["col"] = what in GEO_COLLIDING or cliffscene.is_face(what) or (what.startswith("bld") and not lean)
+            info["col"] = what in GEO_COLLIDING or cliffscene.is_collision(what) or (what.startswith("bld") and not lean)
         data["key"] = tile.key
         _scene = getattr(P, "scene", None)
         if _scene is not None:      # buildings, footprint share (perfsummary.lua; [0, 0] too: known empty, not unknown)

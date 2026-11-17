@@ -76,8 +76,9 @@ class CliffStreamTest(unittest.TestCase):
             self.assertEqual(clifflod.levels(rock),[])
 
     def test_all_piece_paths_are_declared(self):
+        import cliffscene
         files = roads.shape_files(1,2,3)
-        self.assertEqual(len([k for k in files if k.startswith('cliff') and not k.startswith('cliffStrip')]),cliffrocks.STREAM_PARTS_MAX)
+        self.assertEqual(len([k for k in files if cliffscene.is_face(k)]),cliffrocks.STREAM_PARTS_MAX)
         self.assertTrue(files['cliff'].endswith('cliff_1_2_3.cdae'))
         self.assertTrue(files['cliff64'].endswith('cliff_1_2_3_64.cdae'))
 
@@ -95,6 +96,30 @@ class CliffStreamTest(unittest.TestCase):
             self.assertTrue(all('collisionMesh' not in v for v in parts))
             self.assertNotIn('cliffDecals',data)
             self.assertEqual(len(data['talus']['items']),1)
+
+    def test_collision_parts_cover_the_exact_surface_in_small_invisible_meshes(self):
+        import cliffscene
+        rock = surface(37)
+        with tempfile.TemporaryDirectory() as tmp:
+            data = {}
+            cliffscene.write(data, tmp, '/test', 1, 2, 3, (0,0,0), rock)
+            triangles = []
+            for what, part in data.items():
+                if not cliffscene.is_collision(what):
+                    continue
+                shape = cdae.read(Path(tmp, Path(part['shape']).name))
+                self.assertIn('Collision-1', shape['names'])
+                mesh, = [m for m in shape['meshes'] if m['type'] != 4]
+                arrays = cdae.mesh_arrays(mesh)
+                ids = arrays['indices'].reshape(-1,3)
+                self.assertLessEqual(len(ids), cliffscene.COLLISION_TRIANGLES)
+                # Compiled shapes reverse triangle winding.
+                triangles.extend(tuple(map(tuple, t)) for t in arrays['verts'][ids[:,::-1]])
+                self.assertEqual(data['colliders'][what], [part['bounds']])
+            expected = [tuple(map(tuple, t)) for t in rock.positions.astype(np.float32)[rock.tris]]
+            # Compare vertex sets as encoding can rotate each triangle's starting index.
+            self.assertEqual(sorted(tuple(sorted(t)) for t in triangles),
+                             sorted(tuple(sorted(t)) for t in expected))
 
     def test_strip_publishes_support_bounds(self):
         import json

@@ -30,11 +30,15 @@ local M = {}
 M.CLIFF_WHATS, M.CLIFF_STRIPS = {}, {}
 for i = 1, 64 do M.CLIFF_WHATS[i] = i == 1 and 'cliff' or ('cliff'..i) end
 for i = 1, 24 do M.CLIFF_STRIPS[i] = 'cliffStrip'..i end
+M.CLIFF_COLLIDERS = {}
+for i = 1, 256 do M.CLIFF_COLLIDERS[i] = 'cliffCol'..i end
+function M.isCliffCollider(what) return type(what) == 'string' and what:match('^cliffCol%d+$') ~= nil end
 function M.isCliff(what) return what == 'cliff' or (type(what) == 'string' and what:match('^cliff%d+$') ~= nil) end
 function M.isCliffStrip(what) return type(what) == 'string' and what:match('^cliffStrip%d+$') ~= nil end
 local function withCliffs(list)
   for _, what in ipairs(M.CLIFF_WHATS) do list[#list+1] = what end
   for _, what in ipairs(M.CLIFF_STRIPS) do list[#list+1] = what end
+  for _, what in ipairs(M.CLIFF_COLLIDERS) do list[#list+1] = what end
   return list
 end
 
@@ -797,6 +801,7 @@ local anchorObj = nil       -- the current anchor (geodesy) the geotiles are pla
 M.CONTENT_WHATS = { 'signs', 'deck', 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'wire', 'tunnel', 'rail', 'rail2', 'rail3', 'railcol', 'railcol2', 'railcol3', 'buscol' }
 M.SKIN_WHATS = { 'road', 'walk', 'walkcol' }
 for _, what in ipairs(M.CLIFF_WHATS) do M.CONTENT_WHATS[#M.CONTENT_WHATS+1] = what end
+for _, what in ipairs(M.CLIFF_COLLIDERS) do M.CONTENT_WHATS[#M.CONTENT_WHATS+1] = what end
 for _, what in ipairs(M.CLIFF_STRIPS) do M.SKIN_WHATS[#M.SKIN_WHATS+1] = what end
 
 local swapState = nil        -- a generation swap being staged: { gen, parts, tiles } (M.swapBegin)
@@ -2495,7 +2500,7 @@ function M.update(gov, currentAnchor, player, view, a, dtSim, dtReal)
       loadMaterials()
       local isRoad = q.what == 'road' or q.what == 'wire' or q.renderOnly   -- render-only meshes
       -- the buildings' and sidewalks' lean meshes are a collision detail (server cdae collision_only): never drawn
-      local collide = (q.what == 'bldcol' or q.what == 'walkcol' or q.what == 'railcol' or q.what == 'buscol') and 'Collision Mesh' or not isRoad
+      local collide = (q.what == 'bldcol' or q.what == 'walkcol' or q.what == 'railcol' or q.what == 'buscol' or M.isCliffCollider(q.what)) and 'Collision Mesh' or not isRoad
       local ok, id = pcall(createWalk, walk, staged and 'None' or collide)
       if ok then slotMade(id, walk.shape, (q.what == 'deck' or q.what == 'tunnel') and t.waterguard or nil) end
       if staged and not ok then                    -- (a shape that cannot be made: the swap must not commit)

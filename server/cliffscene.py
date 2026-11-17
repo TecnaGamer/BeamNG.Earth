@@ -7,6 +7,8 @@ import os
 
 FACE_PARTS = 64
 CONTACT_PARTS = 24
+COLLISION_PARTS = 256
+COLLISION_TRIANGLES = 2048
 
 
 def shape_files(aid, tx, ty):
@@ -16,11 +18,17 @@ def shape_files(aid, tx, ty):
              for k in range(1, FACE_PARTS + 1)}
     faces.update({f"cliffStrip{k}": f"cliff_strip_{stem}_{k}.cdae"
                   for k in range(1, CONTACT_PARTS + 1)})
+    faces.update({f"cliffCol{k}": f"cliff_col_{stem}_{k}.cdae"
+                  for k in range(1, COLLISION_PARTS + 1)})
     return faces
 
 
 def is_face(what):
     return what == "cliff" or (what.startswith("cliff") and what[5:].isdigit())
+
+
+def is_collision(what):
+    return what.startswith("cliffCol") and what[8:].isdigit()
 
 
 def skin_files(key, aid):
@@ -46,8 +54,11 @@ def write_contacts(data, out_dir, vfs_dir, names, patches, tile, frame, drawn, q
 def write(data, out_dir, vfs_dir, aid, tx, ty, origin, rock):
     if rock is None:
         return
+    import numpy as np
+    import cdae
     import cliffrocks
     import cliffstrips
+    import fast
 
     data.update(debugCliffs=rock.debug_coverage, debugCliffCuts=rock.debug_cuts,
                 debugCliffRocks=rock.debug_rocks)
@@ -57,11 +68,23 @@ def write(data, out_dir, vfs_dir, aid, tx, ty, origin, rock):
         return {"shape": f"{vfs_dir}/{files[what]}", "pos": list(origin),
                 "bounds": positions.min(axis=0).tolist() + positions.max(axis=0).tolist()}
 
-    # Cliff skins render over the collidable terrain. Do not export unused collision proxies.
+    # Drawn detail stays independent of the nearby collision island.
     for k, part in enumerate(cliffrocks.stream_parts(rock), 1):
         what = "cliff" if k == 1 else f"cliff{k}"
         cliffrocks.write(os.path.join(out_dir, files[what]), part)
         data[what] = entry(what, part.positions)
+    # Exact face geometry, partitioned before the engine builds collision acceleration.
+    # Large single meshes make first-use collision cooking disproportionately expensive.
+    groups = fast._ef.cliff_stream_parts(np.ascontiguousarray(rock.positions, float),
+        np.ascontiguousarray(rock.tris, np.int64), COLLISION_TRIANGLES, COLLISION_PARTS)
+    for k, faces in enumerate(groups, 1):
+        vertices, triangles = np.unique(rock.tris[np.asarray(faces, np.int64)], return_inverse=True)
+        positions = rock.positions[vertices]
+        what = f"cliffCol{k}"
+        cdae.write(os.path.join(out_dir, files[what]), positions, triangles.reshape(-1, 3),
+                   material="bne_cliff_strata", collision_only=True)
+        data[what] = entry(what, positions)
+        data.setdefault("colliders", {})[what] = [data[what]["bounds"]]
     for k, part in enumerate(rock.strips, 1):
         what = f"cliffStrip{k}"
         cliffstrips.write(os.path.join(out_dir, files[what]), part)
