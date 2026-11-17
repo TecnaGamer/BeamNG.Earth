@@ -78,6 +78,7 @@ mod dirtsteps;
 mod gridinterp;
 mod dejunction;
 mod streetlabels;
+mod host;
 mod perfclean;
 mod membudget;
 mod mdhtml;
@@ -6478,6 +6479,7 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 306: genground::gg_fill_polys / gg_regions / gen_ground (the generated ground, BNE_GEN_GROUND: a block's 1 m base
     // colour from Sentinel-2 and the map's regions instead of a 1 m aerial photo; server/genground.py)
     genground::register(m)?;
+    host::register(m)?;
     // 307: gen_ground(..., gr, gc): its sampling lattices on the global texel grid, the caller's square with a halo
     // (Codex review of 306: overlapping blocks drew the same ground in other colours)
     // 308: generated ground stage 2: gg_regions(..., line, line_kind, ...) and the surface / pattern kinds,
@@ -6505,6 +6507,15 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 370: genground::gen_ground_pair(..., floor_mode, gaps) (the ground and its canopy version in one pass: the far
     // rings' and the block's forest floor fade through the mips, byte for byte two gen_ground calls; gaps: the block's
     // unplaced gaps in the photo's colour in the canopy version too)
-    m.add("VERSION", 370)?;
+    // the Rust port's phase 1 (the game connection in Rust), first numbered 360-362 on its branch:
+    // 360: the game connection in Rust (the Rust port's phase 1, plan section 4): Host / Wire / HostBatch, host_hold_gil
+    // (protocol.HostServer / HostStream)
+    // 361: the host wakes the loop through a local socket pair (Host.take_wake / take; no GIL in the hand-over, the
+    // HostBatch class gone), Host(..., merge, record, record_out): the pose merge (1b) and the recorder (1c),
+    // host_read_recording
+    // 362: Wire.consumed / unread: the read side's flow control (asyncio's StreamReader: reading stops past 128 KiB the
+    // handler has not consumed, goes on at 64 KiB; Codex review of 28c35fc0), poses merged as they come
+    // 371: phase 1 merged onto 370 (the host as 362 had it)
+    m.add("VERSION", 371)?;
     Ok(())
 }

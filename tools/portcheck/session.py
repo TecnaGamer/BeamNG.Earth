@@ -42,6 +42,10 @@ import pcommon  # noqa: E402
 
 RECOMMENDED = ["--deshadow", "full", "--near-visual", "detail", "--airports", "on", "--sea", "on", "--trees", "on",
                "--buildings", "on", "--gas-stations", "on"]        # (launcher.RECOMMENDED: test_portcheck checks it)
+# options pinned beside the launcher's: --season auto (the default) grades the imagery and the trees by today's date at
+# the place, so two sessions on either side of midnight differed in 413 of 499 far textures and the base photos
+# (2026-11-16 / 17, fells_point and laramie); a fixed season keeps the comparison to the code
+PINNED_ARGS = ["--season", "fall"]
 VFS = "/temp/beamngEarth/"
 # the session's own names, masked in what is recorded: earthd's session id (Server.sid: time + 4 hex) and the pooled
 # far materials named by it and their slot (bngEarthFar_<4 hex>_<slot>: which slot a tile gets is the send order's)
@@ -160,7 +164,8 @@ def run_session(a, name, place, work, out):
     with open(os.path.join(user, "settings", "beamngEarth.json"), "w") as f:
         json.dump({"teleportPriority": True}, f)
     cmd = [sys.executable, os.path.join(a.server_dir, "earthd.py"), "--port", "0", "--user-dir", user,
-           "--cache-dir", work, "--update-check", "off", "--telemetry", "off", "--companion-feed", "off"] + RECOMMENDED
+           "--cache-dir", work, "--update-check", "off", "--telemetry", "off", "--companion-feed", "off"] + RECOMMENDED \
+        + PINNED_ARGS
     if not a.online:
         cmd.append("--offline")
     env = dict(os.environ, PYTHONUNBUFFERED="1", BNE_REVISIT="off", **pcommon.PINNED_ENV)

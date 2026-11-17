@@ -1173,6 +1173,8 @@ TURBINE_PER_POSE = 2       # bounded batches: only populated cells request terra
 
 
 class Server:
+    host = None                 # the game connection's protocol.HostServer (BNGE_HOST=on, main_async), else None
+
     def __init__(self, user_dir, cache_dir, tile_workers=3, kfun=None,
                  hysteresis=farfield.HYSTERESIS, radius=farfield.RADIUS, far_format="cdae",
                  imagery=imagerymod.DEFAULT_CHAIN, near_visual="mesh", tex_near=TEX_NEAR, tex_far=TEX_FAR,
@@ -12502,6 +12504,10 @@ async def main_async(args, restart=None):
             if line:
                 rate = net.throughput()     # (a slow connection shows here: GitHub #241's stuck-looking roads)
                 log.info("net: %s%s", line, "" if rate is None else f"; large downloads at {rate:.2f} MB/s")
+            if server.host is not None:     # (the game connection in Rust: its traffic and the lane's waits)
+                hl = server.host.summary()
+                if hl:
+                    log.info("%s", hl)
             for c in list(server.connections):     # a host that came back while nobody posed
                 c.refresh_status()
             if server.degraded and not server.imagery_down():
@@ -12654,10 +12660,12 @@ async def main_async(args, restart=None):
             await asyncio.get_running_loop().run_in_executor(None, server.addons().autostart)
     except Exception as e:      # (an add-on that does not start never stops the server)
         log.warning("add-ons: autostart: %s: %s", type(e).__name__, e)
-    log.info("startup: opening the local connection")
-    srv = await asyncio.start_server(
-        lambda r, w: Connection(server, r, w).run(), "127.0.0.1", args.port)
-    port = srv.sockets[0].getsockname()[1]
+    log.info("startup: opening the local connection%s", " (in Rust: BNGE_HOST=on)" if protocol.HOST else "")
+    # (asyncio's server, or with BNGE_HOST=on earthfast's host: the socket, the framing and the writes in Rust, the
+    # handlers on this loop as before; the Rust port's phase 1)
+    srv = await protocol.start_server(lambda r, w: Connection(server, r, w).run(), "127.0.0.1", args.port)
+    server.host = srv if isinstance(srv, protocol.HostServer) else None
+    port = protocol.listen_port(srv)
     print(f"earthd listening on 127.0.0.1:{port} session {server.sid} -> {server.out_dir} "
           f"(far tiles: {fmt}, near visual: {server.near_visual}, cells: {server.layout.cells} "
           f"(format {server.layout.format}), block: {server.layout.block}, "
@@ -12676,6 +12684,8 @@ async def main_async(args, restart=None):
     try:
         await serve(srv, server, restart)
     finally:
+        if server.host is not None:     # (the host's threads ended before anything they could reach closes)
+            server.host.shutdown()
         pl = server.__dict__.get("_preloader")
         if pl is not None:          # (before the network and the disk cache close: its running part ends first)
             await pl.shutdown()
