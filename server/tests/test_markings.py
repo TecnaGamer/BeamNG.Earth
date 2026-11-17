@@ -20,6 +20,10 @@ class StyleTest(unittest.TestCase):
         self.assertEqual(markings.style(None, -100.0).centre, "line_yellow", "unknown: by longitude")
         self.assertEqual(markings.style(None, 10.0).centre, "line_white")
         self.assertEqual(markings.style("SE").centre_rural, (3.0, 9.0))
+        self.assertEqual(markings.style("PL").centre_rural, (4.0, 8.0))
+        self.assertEqual(markings.style("PL").centre_urban, (2.0, 4.0))
+        self.assertEqual(markings.style("PL").centre, "line_white", "Poland's permanent markings are white")
+        self.assertEqual(markings.style("PL").edge_motorway, 0.24)
 
 
 class DashTest(unittest.TestCase):
@@ -172,6 +176,42 @@ class SwedenTest(unittest.TestCase):
                                  False, "SE")
         mids = {round(float(ln[0][1]), 1) for lk, _, ln in ex if lk.get("kind") == "centre"}
         self.assertEqual(len(mids), 4, f"each way's two lines, on its own side of the middle: {mids}")
+
+
+class PolandTest(unittest.TestCase):
+    LINE = np.array([[0.0, 0, 0], [118, 0, 0]])
+
+    lines = staticmethod(SwedenTest.lines)
+
+    def extras(self, width=7.0, cls="primary", urban=False, oneway=False, osm=None):
+        sp = roads.Spec(width, "paved", urban, cls, oneway)
+        return roads.extras(sp, self.LINE, 19.0, country="PL", osm=osm)
+
+    def test_a_rural_road_is_p1a_with_a_0_12_m_edge_line(self):
+        ex = self.extras()
+        self.assertEqual({(w, n) for w, _, n in self.lines(ex, "centre")}, {(0.12, 4.0)}, "P-1a: 4 + 8 m")
+        self.assertEqual(len(self.lines(ex, "centre")), 10)
+        self.assertEqual({(w, n) for w, _, n in self.lines(ex, "edge")}, {(0.12, 118.0)}, "P-7d, solid")
+
+    def test_a_town_road_is_p1b(self):
+        got = self.lines(self.extras(urban=True), "centre")
+        self.assertEqual({(w, n) for w, _, n in got}, {(0.12, 2.0)}, "P-1b: 2 + 4 m")
+        self.assertEqual(len(got), 20)
+
+    def test_a_motorway_has_a_0_24_m_edge_and_0_12_m_lane_lines(self):
+        ex = self.extras(14.0, "motorway", oneway=True)
+        self.assertEqual({(w, n) for w, _, n in self.lines(ex, "edge")}, {(0.24, 118.0)}, "P-7b")
+        lanes = self.lines(self.extras(14.0, "motorway", oneway=True), "lane")
+        self.assertEqual({(w, n) for w, _, n in lanes}, {(0.12, 4.0)})
+
+    def test_a_road_under_5_8_m_has_no_centre_line(self):
+        self.assertEqual(self.lines(self.extras(5.7), "centre"), [])
+        self.assertTrue(self.lines(self.extras(5.9), "centre"))
+
+    def test_no_overtaking_is_one_solid_line(self):
+        # (current behaviour: only Sweden, GB and the yellow-centre styles draw a double line, P-4 is not drawn yet)
+        osm = {"lanes:forward": "1", "lanes:backward": "1", "overtaking": "no"}
+        self.assertEqual(self.lines(self.extras(osm=osm), "centre"), [(0.12, 0.0, 118.0)])
 
 
 class AiLanesTest(unittest.TestCase):

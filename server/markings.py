@@ -55,6 +55,15 @@ WARNING_BELOW_M = 6.5       # a narrower road has a warning line, not a double s
 # a 2+1 road (VGU 2024 table 12.5, K237686): no centre line, a solid left edge line each side of the barrier, its outer
 # edge at least 0.20 m from it (the model's posts are 0.04 m a side), and a solid right edge line
 BARRIER_LINE_W, BARRIER_LINE_M, MOTESFRI_EDGE_W = 0.30, 0.04 + 0.20 + 0.15, 0.20
+# Poland. Rozporządzenie MI z 3.07.2003 w sprawie szczegółowych warunków technicznych dla znaków i sygnałów drogowych oraz
+# urządzeń bezpieczeństwa ruchu drogowego i warunków ich umieszczania na drogach (t.j. Dz.U. 2019 poz. 2311), załącznik
+# nr 2: pt 1 permanent markings are white (yellow only for temporary ones); P-1/P-2a 0.12 m; P-1a 4 + 8 m where the
+# limit is over 70 km/h (2.2.1.1), P-1b 2 + 4 m up to 70 km/h (2.2.1.2): Poland picks by the speed limit, approximated
+# here as rural / urban; no lane-separation line on a two-way carriageway narrower than 5.80 m (2.2.1); P-4 is two
+# 0.12 m lines; P-7d edge line 0.12 m (2.2.2.2), P-7b 0.24 m on motorways, expressways and dual carriageways.
+_PL = Style(centre="line_white", w=0.12, w_motorway=0.12, edge=0.12, edge_motorway=0.24,
+            centre_rural=(4.0, 8.0), centre_urban=(2.0, 4.0), lane_rural=(4.0, 8.0), lane_urban=(2.0, 4.0),
+            lane_motorway=(4.0, 8.0), left_edge=None, double_centre_urban=False, double_gap=0.12, min_centre_m=5.8)
 _NL = _DE._replace(centre_rural=(3.0, 9.0), lane_rural=(3.0, 9.0), lane_motorway=(3.0, 9.0), edge_motorway=0.20)
 _JP = Style(centre="line_white", w=0.15, w_motorway=0.15, edge=0.15, edge_motorway=0.20,
             centre_rural=(5.0, 5.0), centre_urban=(5.0, 5.0), lane_rural=(6.0, 9.0), lane_urban=(5.0, 5.0),
@@ -71,7 +80,7 @@ _YELLOW = _WHITE._replace(centre="line_yellow")
 
 STYLES = {"US": _US, "CA": _CA, "GB": _GB, "IE": _GB, "IM": _GB, "JE": _GB, "GG": _GB, "DE": _DE, "AT": _DE,
           "CH": _DE, "LI": _DE, "LU": _DE, "FR": _FR, "MC": _FR, "BE": _FR, "NL": _NL, "JP": _JP, "AU": _AU, "NZ": _AU,
-          "SE": _SE}
+          "SE": _SE, "PL": _PL}
 # where centre lines are yellow (outside the US and Canada): the Americas, Norway, Finland, South Korea, China, Taiwan,
 # Thailand (research table 4.4)
 YELLOW_CENTRE = {"MX", "GT", "BZ", "HN", "SV", "NI", "CR", "PA", "CU", "DO", "HT", "PR", "JM", "BS", "TT", "CO", "VE",
