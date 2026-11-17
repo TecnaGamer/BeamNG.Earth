@@ -78,6 +78,7 @@ mod dirtsteps;
 mod gridinterp;
 mod dejunction;
 mod streetlabels;
+mod host;
 mod perfclean;
 mod membudget;
 mod mdhtml;
