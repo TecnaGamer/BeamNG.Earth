@@ -44,9 +44,12 @@ import staging
 log = logging.getLogger("earthd.surface")
 
 VERSION = 1
-# (TerrainMaterial name, BeamNG ground model). The last one is the level's own dirt material: the
-# default, and the one every block had before (an all-zero sample falls to the later layer on ties,
-# docs/research/2026-10-10-world-data-sources.md §4.4, so DIRT goes last).
+# (TerrainMaterial name, BeamNG ground model). Index 15 is the level's own dirt material: the default, and the one every
+# block had before. An all-zero sample of an imported mask set falls to the later layer on ties
+# (docs/research/2026-10-10-world-data-sources.md §4.4), so a block's listing ends with DIRT (used_materials).
+# Indices are persisted (blockcache keeps a block's material index map, and a stale generation of it is shown after an
+# update: blockcache.Build.stale_hit), so they never change meaning: new materials are appended (2026-11-16, Codex review:
+# inserting them before dirt turned a cached block's dirt into forest floor).
 # Names carry their own prefix: "bngEarthSnow" is the weather's Precipitation object (weather.lua), and
 # a TerrainMaterial of that name was never made - its layer fell back to asphalt (in-game 2026-10-11).
 MATERIALS = (
@@ -68,6 +71,7 @@ MATERIALS = (
     # user, 2026-11-11: "instead could we paint the plaza and apply a texture to it like the roads")
     ("bngEarthGroundPavers", "ASPHALT_OLD"),
     ("bngEarthGroundBrick", "COBBLESTONE"),
+    ("beamngEarthDirt", "DIRT"),
     # More of the stock maps' own ground (2026-11-16, the user: "see how the vanilla maps use color and texture for the
     # ground"): forest floor (East Coast USA's / Italy's forest_floor: litter, needles, roots; the tyres' grass), dry
     # grass (Utah's / West Coast USA's; arid grassland), crop soil (farmland and cropland: the dirt's ground model, no
@@ -76,11 +80,10 @@ MATERIALS = (
     ("bngEarthGroundDryGrass", "GRASS"),
     ("bngEarthGroundCrop", "DIRT"),
     ("bngEarthGroundSand", "SAND"),
-    ("beamngEarthDirt", "DIRT"),
 )
 ASPHALT, GRASS, DUSTY, LOOSE, ROCK, SNOW, MUD, COBBLE, LAWN, \
-    GOLF_ROUGH, GOLF_FAIRWAY, GOLF_GREEN, GOLF_BUNKER, PAVERS, BRICK, FOREST, DRYGRASS, CROP, SAND, \
-    DIRT = range(len(MATERIALS))
+    GOLF_ROUGH, GOLF_FAIRWAY, GOLF_GREEN, GOLF_BUNKER, PAVERS, BRICK, DIRT, \
+    FOREST, DRYGRASS, CROP, SAND = range(len(MATERIALS))
 # WorldCover class -> material (§5.4 of the world-data research). Built-up land is the plain dirt layer
 # (2026-10-14): its yards, lawns and lots took the asphalt layer's grey detail and macro textures, which
 # washed whole towns pale grey in the street photos (Moab, Frederick); the roads are painted asphalt anyway
@@ -1502,7 +1505,7 @@ def photo_lawns(out_dir, ter_name, mask_names_, rgb):
 
 def used_materials(idx):
     """The MATERIALS indices a block's .ter lists: those its samples use (holes aside), plus what photo_lawns may
-    turn them into (LAWN -> DIRT, SNOW -> LOOSE), in MATERIALS order. Each distinct material a .ter lists costs
+    turn them into (LAWN -> DIRT, SNOW -> LOOSE), in MATERIALS order, DIRT last. Each distinct material a .ter lists costs
     the engine's first draw after the swap ~20 ms (in-game probes 2026-10-18 at Tower Bridge: one material
     55-80 ms, three 80-180, all ten 250-560 ms in RenderShadows, whether a sample uses them or not)."""
     u = set(np.unique(np.asarray(idx, np.uint8)).tolist())
@@ -1511,7 +1514,9 @@ def used_materials(idx):
         u.add(DIRT)
     if SNOW in u:
         u.add(LOOSE)
-    return sorted(u) or [DIRT]
+    # (MATERIALS order, DIRT last: an imported mask set's all-zero sample takes the last layer, the default dirt as
+    # before the layers appended after it)
+    return sorted(u, key=lambda i: (i == DIRT, i)) or [DIRT]
 
 
 # Fewer ground layers per block (the user, 2026-11-11: "combine the ground layers and reduce them without reducing

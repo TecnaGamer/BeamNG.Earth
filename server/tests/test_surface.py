@@ -4,6 +4,7 @@ rows as the heightmap's), the cached land cover that never waits for the network
 writing the masks next to the heightmap and naming them in the terrain message."""
 import os
 import sys
+import struct
 import tempfile
 import unittest
 
@@ -44,7 +45,45 @@ class ClassifyTest(unittest.TestCase):
         for a, b in sf.LOOKALIKE:
             self.assertEqual(sf.MATERIALS[a][1], sf.MATERIALS[b][1], (sf.MATERIALS[a], sf.MATERIALS[b]))
         self.assertEqual(sf.MATERIALS[sf.DIRT], ("beamngEarthDirt", "DIRT"))
-        self.assertEqual(sf.DIRT, len(sf.MATERIALS) - 1, "the default material goes last (ties pick the later layer)")
+
+    # MATERIALS as of 899a9f75 (before the layers of 2026-11-16): the indices blockcache kept blocks under
+    OLD_MATERIALS = (("bngEarthGroundAsphalt", "ASPHALT_OLD"), ("bngEarthGroundGrass", "GRASS"),
+                     ("bngEarthGroundDusty", "DIRT_DUSTY"), ("bngEarthGroundLoose", "DIRT_DUSTY_LOOSE"),
+                     ("bngEarthGroundRock", "ROCK"), ("bngEarthGroundSnow", "SNOW"), ("bngEarthGroundMud", "MUD"),
+                     ("bngEarthGroundCobble", "COBBLESTONE"), ("bngEarthGroundLawn", "GRASS"),
+                     ("bngEarthGroundGolfRough", "GRASS"), ("bngEarthGroundGolfFairway", "GRASS"),
+                     ("bngEarthGroundGolfGreen", "GRASS"), ("bngEarthGroundGolfBunker", "SAND"),
+                     ("bngEarthGroundPavers", "ASPHALT_OLD"), ("bngEarthGroundBrick", "COBBLESTONE"),
+                     ("beamngEarthDirt", "DIRT"))
+
+    def test_persisted_indices_keep_their_materials(self):
+        """A block kept before new layers (blockcache: its material index map; a stale generation is shown after an
+        update) means the same materials now: every old index names the same material and ground model, in the
+        block's .ter (write_ter's material list) and its masks (Codex review 2026-11-16: index 15, dirt, had become
+        the forest floor)."""
+        self.assertEqual(sf.MATERIALS[:len(self.OLD_MATERIALS)], self.OLD_MATERIALS)
+        old = np.arange(64 * 64, dtype=np.int64).reshape(64, 64) % len(self.OLD_MATERIALS)
+        idx = old.astype(np.uint8)
+        with tempfile.TemporaryDirectory() as d:
+            name, used = sf.write_ter(d, "old.ter", np.zeros((64, 64), np.uint16), idx)
+            data = open(os.path.join(d, name), "rb").read()
+            n = struct.unpack_from("<I", data, 1)[0]
+            off = 5 + 2 * n * n
+            lay = np.frombuffer(data[off:off + n * n], np.uint8).reshape(n, n)
+            o, names = off + n * n + 4, []
+            for _ in range(struct.unpack_from("<I", data, off + n * n)[0]):
+                names.append(data[o + 1:o + 1 + data[o]].decode())
+                o += 1 + data[o]
+            self.assertEqual(names[-1], "beamngEarthDirt", "the listing ends with the default dirt")
+            kept = lay != heightmap.TER_HOLE            # (write_ter's edge holes)
+            self.assertGreater(int(kept.sum()), 60 * 60)
+            got = np.array(names, object)[lay[kept]]
+            want = np.array([m for m, _ in self.OLD_MATERIALS], object)[old[kept]]
+            self.assertTrue((got == want).all(), "every sample its old material")
+            masks = sf.write_masks(idx, d, "old")
+            for i, (m, _) in enumerate(self.OLD_MATERIALS):
+                mk = np.array(Image.open(os.path.join(d, masks[i])))
+                self.assertTrue(np.array_equal(mk == 255, old == i), m)
 
     def test_unknown_class_is_dirt(self):
         self.assertEqual(sf.classify(np.array([[7, 255]], np.uint8), np.zeros((1, 2)), 2.0).tolist(), [[sf.DIRT, sf.DIRT]])
