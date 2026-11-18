@@ -18,6 +18,7 @@ M.TICK_S = 0.25             -- s between two checks while a line is driven
 M.SKIP_AHEAD = 3            -- at one of this many later stops: the ones before it were missed
 M.ROUTE_AHEAD = 8           -- stops after the next the GPS routes through: 9 and the bus's place, Valhalla's
                             -- most (routing.VALHALLA_MAX_LOCATIONS: "Exceeded max locations: 10", 2026-11-17)
+M.REQUEST_TIMEOUT_S = 90    -- s: a lookup with no answer by then is given up (the server's first Västtrafik wait is 45 s)
 M.TRIGGER = 'bne_bus_'      -- the stops' names on the bus's line (tasklist[i][1])
 
 -- Replaceable for the tests
@@ -30,6 +31,7 @@ end
 M.vehicle = function() return rawget(_G, 'getPlayerVehicle') and getPlayerVehicle(0) or nil end
 
 local lines, linesError, attribution, pending, nextId = nil, nil, nil, nil, 0
+local pendingAge, pendingSession = 0, nil  -- the pending lookup's age (s) and the server session it went to
 local run = nil             -- the line being driven: { line, idx, served, missed, inside, dwell, here, time, bus, doors }
 local tick = 0
 local winOpen = nil
@@ -50,8 +52,25 @@ function M.triggerName(line, i) return M.TRIGGER .. tostring(line.id) .. '_' .. 
 ------------------------------------------------------------------------------------------
 -- the lines near the player
 
+local function sessionId()
+  local core = M.core()
+  local ok, st = pcall(function() return core and core._state and core._state() end)
+  return ok and st and st.sessionId or nil
+end
+
+-- A pending lookup that will never be answered: the server restarted (a new session: a server without bus lines
+-- ignored it, or it was lost with the old one) or no answer within REQUEST_TIMEOUT_S. Then the window was stuck on
+-- "Finding bus lines" and Find lines here did nothing until Lua reloaded (2026-11-18).
+function M.stale()
+  if not pending then return nil end
+  if sessionId() ~= pendingSession then return 'restarted' end
+  if pendingAge >= M.REQUEST_TIMEOUT_S then return 'timeout' end
+  return nil
+end
+
 function M.request()
-  if pending then return false end -- keep the current request ID; repeated clicks must not start more lookups
+  if pending and not M.stale() then return false end -- repeated clicks must not start more lookups
+  pending = nil
   local api, core = M.api(), M.core()
   local lat, lon
   if api and api.position then lat, lon = api.position() end
@@ -59,7 +78,8 @@ function M.request()
   if not (core and core.requestBusLines) then linesError = 'BeamNG.Earth is not loaded' return false end
   nextId = nextId + 1
   if not core.requestBusLines(nextId, lat, lon) then linesError = 'Companion server not connected' return false end
-  pending, linesError = nextId, nil
+  pending, linesError, lines = nextId, nil, nil
+  pendingAge, pendingSession = 0, sessionId()
   return true
 end
 
@@ -267,7 +287,7 @@ local function draw()
       if im.Button('Stop driving the line') then M.stop() end
       im.Separator()
     end
-    if im.Button('Find lines here') and not pending then lines = nil M.request() end
+    if im.Button('Find lines here') then M.request() end
     im.SameLine()
     if im.Button('Get a city bus') then M.getBus() end
     if pending then im.TextUnformatted('Finding bus lines (may take up to a minute) ...') end
@@ -290,6 +310,16 @@ local function draw()
 end
 
 function M.onUpdate(dtReal)
+  if pending then
+    pendingAge = pendingAge + (dtReal or 0)
+    local why = M.stale()
+    if why == 'restarted' and winOpen then M.request()  -- the new server: ask it
+    elseif why then
+      pending = nil
+      linesError = why == 'timeout' and 'No answer from the companion server: try Find lines here again'
+        or 'The companion server restarted: try Find lines here again'
+    end
+  end
   if winOpen then draw() end
   if not run then return end
   tick = tick + (dtReal or 0)
@@ -315,6 +345,9 @@ function M.onQuickAccessLoaded()
 end
 M.onExtensionLoaded = function() M.onQuickAccessLoaded() end
 
-function M._reset() lines, linesError, attribution, pending, run, tick, winOpen = nil, nil, nil, nil, nil, 0, nil end
+function M._reset()
+  lines, linesError, attribution, pending, run, tick, winOpen = nil, nil, nil, nil, nil, 0, nil
+  pendingAge, pendingSession = 0, nil
+end
 
 return M

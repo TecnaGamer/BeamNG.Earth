@@ -94,4 +94,32 @@ T.check(#B.lines() == 1, 'the answer')
 B.core = function() return { requestBusLines = function() return false end } end
 T.check(not B.request() and select(2, B.lines()) == 'Companion server not connected', 'not connected: said')
 
+-- a lookup that is never answered must not leave the window stuck (2026-11-18: asked an older server without bus
+-- lines, then the server restarted: "Finding bus lines" for good, and Find lines here did nothing)
+B._reset()
+local session = 's1'
+asked = {}
+B.core = function() return { requestBusLines = function(id) asked[#asked + 1] = id return true end,
+  _state = function() return { sessionId = session } end } end
+T.check(B.request(), 'asked the first server')
+B.onUpdate(B.REQUEST_TIMEOUT_S - 1)
+T.check(select(3, B.lines()) and not B.request() and #asked == 1, 'still waiting: no second lookup')
+B.onUpdate(1)
+local _, err, busy = B.lines()
+T.check(not busy and err and err:find('No answer', 1, true), 'no answer in time: given up, said')
+T.check(B.request() and #asked == 2, 'Find lines here works again')
+session = 's2'
+B.onUpdate(0.1)
+T.check(not select(3, B.lines()) and select(2, B.lines()):find('restarted', 1, true), 'window shut: restart said')
+B.open()
+T.check(#asked == 3 and select(3, B.lines()), 'opening the window asks the new server')
+session = 's3'
+B.onUpdate(0.1)
+T.check(#asked == 4 and select(3, B.lines()), 'window open: the restarted server is asked at once')
+B.onLines({ id = asked[3], lines = { line() } })
+T.check(B.lines() == nil, "the old server's answer: ignored")
+B.onLines({ id = asked[4], lines = { line() } })
+T.check(#B.lines() == 1 and not select(3, B.lines()), "the new server's answer")
+B._reset()
+
 T.done('test_busline')
