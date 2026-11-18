@@ -128,6 +128,7 @@ mod roadtone;
 mod railbeds;
 mod raildrawn;
 mod railspans;
+mod osmml;
 mod railxing;
 mod roadnet;
 mod structures;
@@ -6699,6 +6700,9 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(railspans::rail_underpass_distance, m)?)?;
     // 487: the full port's railways._span_underpasses / _clip / _underpass_masks / _underpass_distance (railspans: a
     // node window's parts over the road tunnels and cut to the window in one call)
-    m.add("VERSION", 487)?;
+    m.add_function(wrap_pyfunction!(osmml::osm_over_ml, m)?)?;
+    // 489: OpenStreetMap over machine-learned building outlines (osmml::osm_over_ml: an ML outline where OSM maps a
+    // cell's buildings, or overlapping an OSM one, left out; the user, 2026-11-18). 488 is another branch's
+    m.add("VERSION", 489)?;
     Ok(())
 }

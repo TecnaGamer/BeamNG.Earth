@@ -56,7 +56,8 @@ WALL_CELLS = 48          # cells of building walls kept per process (budget.py: 
 # A cell's walls also on disk (store_dir), float32 in the cell's frame (within a few km of its centre: sub-mm): every
 # server process built them from the buildings of the 9 cells around, ~0.6 s a cell on a Steam Deck, and the block
 # process, the road processes and the server each did it again (7.4 s of a 15 s Baltimore block, 2026-10-20)
-WALLS_VERSION = 2         # (2: a cell's own buildings only, 2026-10-27)
+WALLS_VERSION = 3         # (2: a cell's own buildings only, 2026-10-27; 3: without the machine-learned outlines OSM's
+                          # buildings make stale, osmml.py, 2026-11-18)
 
 PREFETCH_THREADS = 8    # cells' walls built at once (prefetch)
 
@@ -308,7 +309,23 @@ def store_dir(cache_dir, md):
     """The walls' folder for map data md (its release) under cache_dir, or None."""
     if not cache_dir or md is None:
         return None
-    return os.path.join(cache_dir, "roadwidth", f"v{WALLS_VERSION}", str(getattr(md, "release", "x")))
+    return os.path.join(cache_dir, "roadwidth", walls_folder(), _source(md))
+
+
+def walls_folder():
+    """The walls' version folder: v<WALLS_VERSION>, -allml with every machine-learned outline (BNE_OSM_OVER_ML=0)."""
+    import osmml
+    return f"v{WALLS_VERSION}" if osmml.ON else f"v{WALLS_VERSION}-allml"
+
+
+def _source(md):
+    """The map data's release folder name for the walls: its release, and the tiles' source key when the buildings
+    come from Overture's tiles (the parquet cells' outlines are not the same: walls of one never read for the other)."""
+    rel = str(getattr(md, "release", "x"))
+    if getattr(md, "pmtiles", None) is not None:
+        import pmtiles
+        rel += "-" + pmtiles.source_key()
+    return rel
 
 
 def _memo_key(fid, ll):
@@ -371,13 +388,16 @@ class RoadWidths:
         path = (os.path.join(self.store_dir, str(key.z), str(key.x), f"{key.y}.npy")
                 if self.store_dir and hasattr(key, "z") else None)
         segs = _read_segs(path) if path else None
+        complete, stand_in = True, False
         if segs is None:
-            parts, complete = [], True
+            parts = []
             for k2 in (key,):
                 try:
                     feats = self.cell_fn(k2)
                 except Exception:
                     feats, complete = None, False       # (not kept: built again once the cell is at hand)
+                if feats is not None and getattr(feats, "__dict__", {}).get("_bnge_fallback"):
+                    complete, stand_in = False, True    # (the parquet cell for the tiles': mapdata._decoded_layer)
                 if feats is not None and len(feats):
                     parts.append(polygon_walls(feats, frame))
             # float32 as the file keeps them, so a process that built them and one that read them agree
@@ -388,7 +408,7 @@ class RoadWidths:
                 if segs is None:
                     segs = (np.concatenate(parts) if parts else np.zeros((0, 4))).astype(np.float32)
         walls = None
-        if path:            # the bucket index beside them (memory-mapped too), made once
+        if path and not stand_in:   # the bucket index beside them (memory-mapped too), made once
             index = _read_index(path, len(segs))
             if index is not None:
                 walls = Walls(segs, index)
@@ -401,6 +421,8 @@ class RoadWidths:
                         walls = Walls(segs, index)
         if walls is None:
             walls = Walls(segs)
+        if stand_in:
+            return frame, walls                 # (a stand-in cell's: not kept, built again from the tiles' next time)
         with self.lock:
             got = self.walls.setdefault(str(key), (frame, walls))
             self.walls.move_to_end(str(key))

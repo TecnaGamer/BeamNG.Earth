@@ -68,6 +68,7 @@ import mapgeom
 import maprasters
 import bnwt
 import netfetch
+import osmml
 import overture
 import pmtiles
 import rangeread
@@ -658,6 +659,8 @@ class MapData:
             v["street_edges"] = europewalks.VERSION
         if levelways.ON:
             v["levelways"] = levelways.VERSION
+        if not osmml.ON:                        # (every machine-learned outline kept: keyed only while off)
+            v["osm_over_ml"] = False
         v["dem"] = dem_identity()               # (the elevation the plans, facts and tiles are made on: pinned per release)
         return v
 
@@ -1237,6 +1240,12 @@ class MapData:
                         self._dec_store(key, layer, dec, f, ctx, vers)
                 if layer == "buildings":
                     f = mapgeom.drop_huge(f, BUILDING_MAX_M2)
+                    # (OpenStreetMap over machine-learned outlines where OSM maps the cell's buildings: osmml.py)
+                    f = osmml.apply(f, _key(key))
+                    if MapData._pmt(self, layer) and isinstance(prov, dict) and prov.get("format") == "parquet":
+                        # (the tiles failed and the parquet cell stood in: what is kept from it under the tiles'
+                        # keys, roadwidth's walls, is not made from it)
+                        f.__dict__["_bnge_fallback"] = True
                 if layer == "roads":
                     f.__dict__["_bnge_gradesep"] = gradesep.hook(self, key)
                     f.__dict__["_bnge_neighbours"] = gradesep.neighbours_hook(self, key)
