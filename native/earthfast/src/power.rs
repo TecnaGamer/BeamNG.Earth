@@ -225,10 +225,10 @@ fn yard_of(yards: &[(i64, Vec<Vec<(f64, f64)>>)], x: f64, y: f64) -> i64 {
 /// its conductors with it; one whose gantries fit
 /// nowhere is no end: no span on to it (the line stops at its last tower). The conductors at the gantries hang at the
 /// ground under each gantry (ground(x (n,), y (n,)) -> z, None: the end's own ground) plus the arm's height.
-/// (towers (t, 4) [x, y, z, yaw degrees counter-clockwise from +x], ends (e, 6) [x, y, z, heading radians, ground
-/// under the left gantry, under the right one], wire points (w, 3), wire offsets (k + 1), each wire's supports
-/// (k, 10) [kind, x, y, z, yaw degrees] at its first point then at its last: kind 1 a tower (its row's values), 0 a
-/// line end's gantry: a span is drawn by one tile, its towers by theirs).
+/// (towers (t, 4) [x, y, z, yaw degrees counter-clockwise from +x], ends (e, 7) [x, y, z, heading radians, ground
+/// under the left gantry, under the right one, its yard's id (-1: none)], wire points (w, 3), wire offsets (k + 1),
+/// each wire's supports (k, 10) [kind, x, y, z, yaw degrees] at its first point then at its last: kind 1 a tower (its
+/// row's values), 0 a line end's gantry: a span is drawn by one tile, its towers by theirs).
 #[pyfunction]
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub fn power_line_layout<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, off: PyReadonlyArray1<'py, i64>,
@@ -391,10 +391,10 @@ pub fn power_line_layout<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, 
         }
     }
     let ends: Vec<f64> = ends.iter().filter(|e| e.fits)
-        .flat_map(|e| [e.e[0], e.e[1], e.e[2], e.e[3], e.zl, e.zr]).collect();
-    let (t, e, w, k) = (towers.len() / 4, ends.len() / 6, wp.len() / 3, sup.len() / 10);
+        .flat_map(|e| [e.e[0], e.e[1], e.e[2], e.e[3], e.zl, e.zr, e.yard as f64]).collect();
+    let (t, e, w, k) = (towers.len() / 4, ends.len() / 7, wp.len() / 3, sup.len() / 10);
     Ok((numpy::ndarray::Array2::from_shape_vec((t, 4), towers).unwrap().into_pyarray(py),
-        numpy::ndarray::Array2::from_shape_vec((e, 6), ends).unwrap().into_pyarray(py),
+        numpy::ndarray::Array2::from_shape_vec((e, 7), ends).unwrap().into_pyarray(py),
         numpy::ndarray::Array2::from_shape_vec((w, 3), wp).unwrap().into_pyarray(py), wo.into_pyarray(py),
         numpy::ndarray::Array2::from_shape_vec((k, 10), sup).unwrap().into_pyarray(py)))
 }

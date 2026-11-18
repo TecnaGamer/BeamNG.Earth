@@ -170,6 +170,20 @@ class LineTest(unittest.TestCase):
         # (the first line: no span into the yard, it ends at its last tower)
         self.assertFalse(any(0.0 < p[0] < 35.0 and abs(p[1]) < 6.5 for p in last))
 
+    def test_overlapping_yards_anchor_an_end_once(self):
+        # Codex's review of 9618c426: two overlapping yard polygons both holding an end anchored its kit in each (two
+        # coincident gantry pairs; the second's gantries past its own fence). The end carries its yard: anchored once
+        from test_roads import FRAME
+        big, small = square(0, -30, 60, 60), square(10, -4, 40, 8)     # (the end in both; the gantries only in big)
+        line = np.array([[-200, 0, 0], [-100, 0, 0], [30, 0, 0]], np.float64)
+        _, ends, _, _, _ = layout([line], [False, False, True], yards=[big, small], yard_id=[0, 1], full=True)
+        self.assertEqual(len(ends), 1)
+        self.assertEqual(ends[0][6], 0.0)
+        props = []
+        powerlines._yards(FRAME, lambda la, lo: np.zeros(np.shape(la)), [("big", [big]), ("small", [small])], ends,
+                          (-1e4, -1e4, 1e4, 1e4), props)
+        self.assertEqual(sum(1 for r in props if r[0] == "gantry"), 2)
+
     def test_an_end_moves_only_within_its_own_yard(self):
         # Codex's review of 117bdde7: the search tested the gantries against every ring together, so a moved end could
         # sit in a hole of its yard (the yard's kit skips an anchor there) or straddle two adjacent yards
@@ -201,7 +215,7 @@ class LineTest(unittest.TestCase):
             return 100.0 + 0.2 * np.asarray(x) + 0.1 * np.asarray(y)
         _, ends, wp, wo, _ = layout([line], [False, False, True, True], yards=[yard_ring], ground=ground, full=True)
         self.assertEqual(len(ends), 1)
-        ex, ey, ez, w, zl, zr = ends[0]
+        ex, ey, ez, w, zl, zr = ends[0][:6]
         self.assertTrue(np.allclose([ex, ey], [20.0, -4.0]))               # (moved: the north gantry inside)
         self.assertEqual(len(asked), 2)
         got, _ = yard_full([yard_ring], anchors=ends[:, [0, 1, 3, 4, 5]])
@@ -450,6 +464,53 @@ class TowerFootprintTest(unittest.TestCase):
         self.assertEqual(run(["power_tower", "power_tower"]), ({powerlines.G_PYLON}, 6))
         self.assertEqual(run([]), ({powerlines.G_PYLON}, 6))
         self.assertEqual(run(["power_pole", "power_tower"]), ({powerlines.G_PYLON}, 6), "no majority: the towers")
+
+    def test_a_span_into_a_yard_beyond_the_tiles_cells(self):
+        """Codex's review of 9618c426: a span drawn here (its middle in the tile) ends 1 km off in a small yard whose map
+        cell is beyond the tile's 500 m lookup: the yard was not loaded, its vertex taken for a tower, the conductors
+        hung on a tower its own tile never draws. The yard of every laid-out vertex's cell is read now."""
+        import mapcells
+        import mapgeom
+        import roads
+        from test_roads import FRAME
+        from types import SimpleNamespace
+        for tx in range(-12, 13):       # (a tile whose far vertex lies in a cell beyond its lookup)
+            x0, y0, x1, y1 = roads.tile_bbox(tx, 0)
+            mid = (x0 + x1) / 2
+            far, near = mid - 950.0, mid + 950.0
+            la, lo, _ = FRAME.enu_to_geodetic(np.array([far, near]), np.array([100.0, 100.0]), 0.0)
+            far_cell = mapcells.cell_of(float(la[0]), float(lo[0]))
+            if far_cell not in roads.cells_of_tile(FRAME, tx, 0, margin=powerlines.MAX_SPAN_M / 4):
+                break
+        else:
+            self.skipTest("no such tile near the test frame")
+        ring = np.array([[far - 30, 70], [far + 30, 70], [far + 30, 130], [far - 30, 130], [far - 30, 70]])
+        rla, rlo, _ = FRAME.enu_to_geodetic(ring[:, 0], ring[:, 1], 0.0)
+
+        def features(with_yard):
+            n = 2 if with_yard else 1
+            coords = [np.column_stack([lo, la])] + ([np.column_stack([rlo, rla])] if with_yard else [])
+            return mapgeom.Features(
+                layer="infrastructure", ids=np.array(["line", "yard"][:n]),
+                kind=np.array([mapgeom.LINE, mapgeom.POLYGON][:n], np.uint8),
+                part_off=np.arange(n + 1, dtype=np.int64), ring_off=np.arange(n + 1, dtype=np.int64),
+                coord_off=np.r_[0, np.cumsum([len(c) for c in coords])].astype(np.int64),
+                lonlat=np.vstack(coords),
+                attrs={"class": np.array(["power_line", "substation"][:n]),
+                       "tags": np.array(['{"power":"line","voltage":"220000"}', "{}"][:n], object)}, rules={})
+        plain, yard = features(False), features(True)
+
+        class Md:
+            def cell(self, key, layers, kind):
+                return SimpleNamespace(layers={"infrastructure": yard if key == far_cell else plain}
+                                       if "infrastructure" in layers else {"roads": None})
+        props, wires = [], []
+        powerlines.tile_lines(FRAME, tx, 0, Md(), lambda la_, lo_: np.zeros(np.shape(la_)), props, wires)
+        self.assertEqual(len(wires), len(powerlines.ARMS))
+        ends = [np.asarray(w[0])[0] if abs(np.asarray(w[0])[0][0] - far) < 10 else np.asarray(w[0])[-1] for w in wires]
+        self.assertTrue(all(abs(p[0] - far) < 10 for p in ends))
+        # (on the gantries, GANTRY_H over the frame's ground there; a tower's arms hang 15.65 m and more up)
+        self.assertTrue(all(abs(p[2] - powerlines.GANTRY_H) < 1.0 for p in ends), [p[2] for p in ends])
 
     def test_uses_actual_mapped_width(self):
         # The pivot is outside the class-default 8 m road, but not a source-mapped 24 m carriageway.

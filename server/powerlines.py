@@ -294,9 +294,13 @@ def _tile_lines(frame, tx, ty, md, elev, props, wires, clearance):
                 for ring in part:
                     if len(ring) >= 2:
                         into += [(fid, r) for r in _near(frame, np.asarray(ring, np.float64), (x0, y0, x1, y1))]
-    subs = _substations(frame, cells, md)
-    fast.require(434, "power_line_layout")
-    ends = np.zeros((0, 6))
+    # (the substations of the cells round the tile and of every cell a laid-out line vertex is in: a span drawn here
+    # may end at a yard 1 km off, beyond the cells round the tile; Codex's review of 9618c426)
+    import mapcells
+    reach = {mapcells.cell_of(float(q[1]), float(q[0])) for _, r in lines + poles for q in np.asarray(r, np.float64)}
+    subs = _substations(frame, list(cells) + sorted(reach - set(cells), key=str), md)
+    fast.require(435, "power_line_layout")
+    ends = np.zeros((0, 7))
     for group, h, arms, clear_m, wire_r, these in ((G_PYLON, PYLON_H, ARMS, TOWER_ROAD_CLEAR_M, WIRE_R, lines),
                                                   (G_POLE, POLE_H, POLE_ARMS, POLE_ROAD_CLEAR_M, POLE_WIRE_R, poles)):
         got = _lay(frame, md, elev, subs, these, group, h, arms, clear_m, wire_r, (x0, y0, x1, y1), props, wires,
@@ -308,9 +312,9 @@ def _tile_lines(frame, tx, ty, md, elev, props, wires, clearance):
 
 def _lay(frame, md, elev, subs, lines, group, h, arms, clear_m, wire_r, box, props, wires, clearance):
     """The towers (group, h m tall; conductors at arms) and conductors of lines [(fid, lon/lat ring)] (tile_lines);
-    returns their ends (n, 6: power_line_layout's) at the substations."""
+    returns their ends (n, 7: power_line_layout's, the last their yard: the index into subs) at the substations."""
     from polygon import Path
-    ends = np.zeros((0, 6))
+    ends = np.zeros((0, 7))
     x0, y0, x1, y1 = box
     if lines:
         lines.sort(key=lambda q: q[0])          # (the same order in every tile: shared towers decided alike)
@@ -345,7 +349,7 @@ def _lay(frame, md, elev, subs, lines, group, h, arms, clear_m, wire_r, box, pro
             if clearance is None or clearance.clear(row):
                 props.append(row)
         wires.extend(span_wires(wp, wo, sup, group, h, wire_r))
-    return np.asarray(ends, np.float64).reshape(-1, 6)
+    return np.asarray(ends, np.float64).reshape(-1, 7)
 
 
 def tower_row(group, h, x, y, z, yaw):
@@ -377,9 +381,9 @@ def ground_at(frame, elev):
 
 
 def _yards(frame, elev, subs, ends, box, props):
-    """The substations' yards (props rows) with the lines' ends (n, 6: _lay's) at their gantries (tile_lines); the
+    """The substations' yards (props rows) with the lines' ends (n, 7: _lay's) at their gantries, each in its own yard
+    only (its last column: the index into subs; tile_lines); the
     gantries at the ground the conductors were hung from (power_line_layout's), the rest at the ground under each."""
-    from polygon import Path
     x0, y0, x1, y1 = box
     if not subs:
         return
@@ -388,13 +392,11 @@ def _yards(frame, elev, subs, ends, box, props):
     parts = np.array([[k, groups.index(g), x, y] for k, (_, ps) in enumerate(KITS) for g, x, y in ps], np.float64)
     # the line ends of every line near (not only the tile's), each in its substation
     rows = []
-    for _, rings in subs:
+    for k, (_, rings) in enumerate(subs):
         rp = np.ascontiguousarray(np.concatenate(rings), np.float64)
         ro = np.cumsum([0] + [len(r) for r in rings]).astype(np.int64)
-        here = np.zeros(len(ends), bool)
-        if len(ends):
-            for ring in rings:
-                here ^= Path(ring).contains_points(ends[:, :2])
+        # (each end in the yard layout chose for it: overlapping yards anchored one end twice)
+        here = np.asarray(ends[:, 6], np.float64) == k if len(ends) else np.zeros(0, bool)
         anchors = np.ascontiguousarray(ends[here][:, [0, 1, 3, 4, 5]], np.float64).reshape(-1, 5)
         got, fence = fast._ef.substation_yard(rp, ro, kits, parts, YARD_GAP, anchors, 0, list(ANCHOR_AT),
                                               YARD_MAX_KITS, FENCE_LEN, [x0, y0, x1, y1])
