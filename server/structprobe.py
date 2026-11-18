@@ -1164,6 +1164,154 @@ def _refuse_player_cache(cache):
     return cache
 
 
+# ---------------------------------------------------------------- RS S2b: chain discovery as a fixpoint
+def fixpoint(lat, lon, R, cache, offline=False, seeds=3, solve=2):
+    """BNE_DECK_STRUCT=shadow's chain discovery (roads.BridgeProfiles._closure) at a real place, from every bridge
+    part within R of (lat, lon): (1) discovery alone, each part's closure from `seeds` random orders of its first
+    reads (its ring's cells shuffled): one answer per part and the same answer from every part of a chain (the
+    chain, capped or not); (2) `solve` full runs of a fresh ChainStore asking every part in a random order (the
+    first in key order), each ask's cell list shuffled: the same chains, owners (the region that published each
+    part), window decisions and published parts (z, piers, trusses) byte for byte. {"parts", "chains", "capped",
+    "problems": [...]} (empty problems: the property holds)."""
+    import random
+    import hashlib
+    import blockworker as bw
+    import mapcells
+    import roads as roadsmod
+    import structures
+    if not structures.SHADOW:
+        raise SystemExit("--fixpoint needs BNE_DECK_STRUCT=shadow")
+    os.environ.setdefault("BNE_REVISIT_SKIP", "roads")
+    bw.init(cache, bool(offline), True, True, True, False, None, logging.ERROR, False, True)
+    s = bw._s
+    cell_fn = lambda key: s.md.cell(key, layers=("roads",), kind="demand").layers.get("roads")     # noqa: E731
+    elev = lambda la, lo: np.asarray(s.dem.sample(np.asarray(la), np.asarray(lo), 15), np.float64)  # noqa: E731
+    dlat, dlon = R / 111320.0, R / (111320.0 * np.cos(np.radians(lat)))      # det-ok: the check's search box only
+    ga, go = np.meshgrid(np.linspace(lat - dlat, lat + dlat, 9), np.linspace(lon - dlon, lon + dlon, 9))
+    keys = sorted({str(c): c for c in mapcells.cells_of(ga.ravel(), go.ravel())}.items())
+    todo = {}
+    for _n, ck in keys:
+        feats = cell_fn(ck)
+        if feats is None or not len(feats):
+            continue
+        bs = roadsmod.BridgeProfiles.specs_of(feats)
+        for i in range(len(feats)):
+            if bs[i] is None:
+                continue
+            for j, ring in roadsmod._keyed(roadsmod.BridgeProfiles.keys_of, roadsmod.BridgeProfiles.parts_of,
+                                           feats, i):
+                k = (str(feats.ids[i]), j)
+                ring = np.asarray(ring, np.float64)
+                near = (np.abs(ring[:, 1] - lat) <= dlat) & (np.abs(ring[:, 0] - lon) <= dlon)
+                if k not in todo and near.any():
+                    todo[k] = (feats, i, ring)
+    order = sorted(todo)
+    problems = []
+
+    def store_of(cs, k):
+        ring = todo[k][2]
+        return cs.store_at(float(ring[0, 1]), float(ring[0, 0]))
+
+    # (1) discovery alone (one store set: the cells' entries made once, kept whole for this check)
+    answers = {}
+    entries = {}
+    orig_entries = roadsmod.BridgeProfiles._cell_entries
+
+    def cell_entries(self, key):
+        hit = entries.get((id(self), str(key)))
+        if hit is None:
+            hit = entries[(id(self), str(key))] = orig_entries(self, key)
+        return hit
+    roadsmod.BridgeProfiles._cell_entries = cell_entries
+    cs = roadsmod.ChainStore(roadsmod.BridgeProfiles, cell_fn, elev, bw._bridge_setup)
+    cs.KEPT = 1 << 20
+    for k in order:
+        got = set()
+        for seed in range(seeds):
+            rnd = random.Random(f"{seed}:{k}")
+            st = store_of(cs, k)
+            ring = todo[k][2]
+            pts = [(float(p[1]), float(p[0])) for p in ring]
+            rnd.shuffle(pts)
+            pool, ground, loaded = {}, {}, set()
+            for la_, lo_ in pts:
+                c = mapcells.cell_of(la_, lo_)
+                if str(c) not in loaded:
+                    loaded.add(str(c))
+                    st._load(c, pool, ground)
+            if k not in pool:
+                got.add(("absent",))
+                continue
+            try:
+                comp = st._resolve(k, pool, ground, loaded)
+                got.add(("chain", tuple(sorted(str(x) for x in comp)), tuple(sorted(loaded))))
+            except roadsmod._Capped:
+                got.add(("capped",))
+        if len(got) != 1:
+            problems.append(f"discovery: {k}: {len(got)} answers")
+        answers[k] = sorted(got)[0]
+    roadsmod.BridgeProfiles._cell_entries = orig_entries
+    entries.clear()
+    for k, a in answers.items():
+        if a[0] != "chain":
+            continue
+        for x in a[1]:
+            kx = next((t for t in todo if str(t) == x), None)
+            # (a key its own ring's cells do not hold under that key is never asked: parts_todo's _held_in)
+            if kx is not None and answers.get(kx, a)[0] != "absent" and answers.get(kx, a)[:2] != a[:2]:
+                problems.append(f"discovery: {k} and {x}: different chains: {a[:2]} / {answers.get(kx)[:2]}; "
+                                f"stores {store_of(cs, k).region} / {store_of(cs, kx).region}")
+    # (2) full solves
+    runs = []
+    for seed in range(solve):
+        rnd = random.Random(seed)
+        ask = list(order)
+        if seed:
+            rnd.shuffle(ask)
+        windows = set()
+        orig = roadsmod.BridgeProfiles._chain_of
+        orig_res = roadsmod.BridgeProfiles._resolve
+
+        def chain_of(self, key, ends, adopt=True, rnd=rnd):
+            ends = list(ends)
+            rnd.shuffle(ends)
+            return orig(self, key, ends, adopt)
+
+        def resolve(self, start, pool, ground, loaded, grow=True, windows=windows):
+            if not grow:
+                windows.add(str(start))
+            return orig_res(self, start, pool, ground, loaded, grow)
+        roadsmod.BridgeProfiles._chain_of, roadsmod.BridgeProfiles._resolve = chain_of, resolve
+        try:
+            cs = roadsmod.ChainStore(roadsmod.BridgeProfiles, cell_fn, elev, bw._bridge_setup)
+            for k in ask:
+                feats, i, _ring = todo[k]
+                st = store_of(cs, k)
+                st.parts_todo([(k, feats, i)])
+        finally:
+            roadsmod.BridgeProfiles._chain_of, roadsmod.BridgeProfiles._resolve = orig, orig_res
+        pub = {}
+        for region, st in sorted(cs.stores.items()):
+            with st.lock:
+                for k, v in st.done.items():
+                    h = hashlib.sha256(np.asarray(v[1], np.float64).tobytes() + np.asarray(v[2], np.float64).tobytes()
+                                       + repr(st.piers.get(k)).encode()).hexdigest()[:16]
+                    pub[(region, str(k))] = h
+                for ck, beams in st.trusses.items():
+                    pub[(region, "truss", str(ck))] = hashlib.sha256(repr(beams).encode()).hexdigest()[:16]
+        runs.append((pub, sorted(windows)))
+    for n, (pub, win) in enumerate(runs[1:], 1):
+        if pub != runs[0][0]:
+            diff = sorted(set(pub.items()) ^ set(runs[0][0].items()))[:5]
+            problems.append(f"published: run {n} differs from run 0 ({len(diff)}+): {diff}")
+        if set(win) != set(runs[0][1]):
+            # (which parts a window solve was STARTED from depends on who asked; what it published is in `pub`)
+            pass
+    chains = {a[1] for a in answers.values() if a[0] == "chain"}
+    return {"parts": len(order), "chains": len(chains), "capped": sum(1 for a in answers.values() if a[0] == "capped"),
+            "published": len(runs[0][0]) if runs else 0, "problems": problems}
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("lat", type=float)
@@ -1175,6 +1323,9 @@ def main():
     ap.add_argument("--timing", help="wall clock / CPU / memory here")
     ap.add_argument("--offline", action="store_true", help="no network: the cache's data only (a seeded cache)")
     ap.add_argument("--server", help="score this server/ checkout instead of the one beside this file")
+    ap.add_argument("--fixpoint", type=int, metavar="SEEDS",
+                    help="RS S2b: check chain discovery's fixpoint property here (BNE_DECK_STRUCT=shadow) with SEEDS "
+                         "random orders per part and two full solves; JSON to --json; exit 1 when it fails")
     a = ap.parse_args()
     here = os.path.dirname(os.path.abspath(__file__))
     if a.server:
@@ -1184,6 +1335,16 @@ def main():
         sys.path.insert(0, here)
     cache = _refuse_player_cache(a.cache)
     t0 = time.time()
+    if a.fixpoint:
+        res = fixpoint(a.lat, a.lon, a.r, cache, a.offline, seeds=a.fixpoint)
+        print(json.dumps({k: v for k, v in res.items() if k != "problems"}), len(res["problems"]), "problems")
+        for p in res["problems"][:20]:
+            print("  ", p)
+        if a.json:
+            with open(a.json, "w") as f:
+                json.dump(res, f, sort_keys=True, default=str)
+        sys.stdout.flush()
+        os._exit(1 if res["problems"] else 0)
     try:
         # (BNE_DECK_STRUCT=shadow: the published chains' JSONs also when their solve read something short, marked:
         # an offline seed without the sea's bathymetry makes every coastal chain short, structures.ACCEPT_SHORT)
@@ -1215,7 +1376,7 @@ def main():
             f.write("\n")
     st = sys.modules.get("structures")
     if st is not None:      # (BNE_DECK_STRUCT=shadow: the chain JSONs its background writer still holds)
-        drained = st.flush(120.0)
+        drained = st.flush(900.0)      # (S2b: the writer solves each chain again, without the pairwise mechanisms)
         if st.SHADOW:
             print("structures:", " ".join(f"{k} {v}" for k, v in sorted(st.STATS.items())))
         if not drained or st.STATS.get("dropped") or st.STATS.get("failed"):

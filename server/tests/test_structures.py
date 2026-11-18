@@ -494,5 +494,286 @@ class GroupsTest(unittest.TestCase):
         self.assertTrue(all(1 not in e[:2] for e in got["edges"]))
 
 
+def ask_all(cell_fn, boxes, feats_list, seed, capped_cells=None):
+    """S2b fixpoint: a fresh store asks every box of `boxes` {name: box} in a random order (seed), each with its cells'
+    Features in a random order and the asked piece's ring points shuffled (the cells its first reads come from): the
+    published parts {key: z bytes}, trusses and shadow digests, and per asked key the chain and whether it was capped
+    (_resolve's answer)."""
+    import random
+    rnd = random.Random(seed)
+    names = sorted(boxes)
+    rnd.shuffle(names)
+    seen = {}
+    orig_resolve, orig_chain_of = roads.BridgeProfiles._resolve, roads.BridgeProfiles._chain_of
+
+    def resolve(self, start, pool, ground, loaded, grow=True):
+        try:
+            comp = orig_resolve(self, start, pool, ground, loaded, grow)
+        except roads._Capped:
+            seen.setdefault(str(start), set()).add("capped")
+            raise
+        seen.setdefault(str(start), set()).add((grow, tuple(sorted(str(k) for k in comp))))
+        return comp
+
+    def chain_of(self, key, ends, adopt=True):
+        ends = list(ends)
+        rnd.shuffle(ends)
+        return orig_chain_of(self, key, ends, adopt)
+    patches = [mock.patch.object(roads.BridgeProfiles, "_resolve", resolve),
+               mock.patch.object(roads.BridgeProfiles, "_chain_of", chain_of)]
+    if capped_cells is not None:
+        patches.append(mock.patch.object(roads, "CHAIN_CELLS", capped_cells))
+    flat = lambda la, lo: np.full(np.shape(la), 10.0)             # noqa: E731
+    with tempfile.TemporaryDirectory() as d, mock.patch.object(revisit, "CACHE_DIR", d), \
+            mock.patch.object(structures, "SHADOW", True), patches[0], patches[1], \
+            (patches[2] if len(patches) > 2 else mock.patch.object(roads, "CHAIN_CELLS", roads.CHAIN_CELLS)):
+        bp = roads.BridgeProfiles(FRAME, cell_fn, flat)
+        for n in names:
+            fl = list(feats_list)
+            rnd.shuffle(fl)
+            bp.parts(fl, boxes[n])
+        self_flush()
+        docs = read_docs(d)
+        done = sorted((str(k), np.asarray(v[2], np.float64).tobytes()) for k, v in bp.done.items())
+        trusses = sorted((str(k), repr(v)) for k, v in bp.trusses.items())
+    dig = sorted((n, d.get("digest"), tuple(g["digest"] for g in d.get("groups", ())), tuple(d.get("parts", ())))
+                 for n, d in docs.items())
+    return done, trusses, dig, docs, seen
+
+
+def end_on_scene():
+    """S2b (Codex's third order dependence of incremental discovery): deck A's free end stands on deck B (one level in
+    the legacy store, OSM layers 1 and 2: never one structure, so only the legacy end-on test pairs them), and a ground
+    road G goes on from A's end 2 m away: G makes A's end an abutment (no end-on pair). B lies in cell Y alone, 5.5 m
+    from its north edge; A comes from Y's north neighbour YN straight down onto B's north half; G lies in YN alone.
+    (cell_fn, boxes, the cells' Features)"""
+    home = mapcells.cell_of(LAT, LON)
+    ykey = mapcells.CellKey(home.z, home.x + 1, home.y)
+    ynkey = mapcells.CellKey(home.z, home.x + 1, home.y - 1)
+    yw, _ys, ye, yn = ykey.bounds()
+    xw, xe = (yw - LON) * M_LON, (ye - LON) * M_LON
+    y_n = (yn - LAT) * M_LAT
+    xm = (xw + xe) / 2
+    b = [(xm - 300, y_n - 5.5), (xm + 300, y_n - 5.5)]
+    a = [(xm, y_n + 400), (xm, y_n + 200), (xm, y_n - 1.5)]
+    g = [(xm + 1.0, y_n + 0.3), (xm + 300, y_n + 150)]
+    fy = features([a, b], ["primary", "primary"], flags=[(0, "is_bridge"), (1, "is_bridge")], ids=["A", "B"])
+    fy.attrs["osm_layer"] = np.array([1.0, 2.0])
+    fyn = features([a, g], ["primary", "residential"], flags=[(0, "is_bridge")], ids=["A", "G"])
+    fyn.attrs["osm_layer"] = np.array([1.0, np.nan])
+    cell_fn = lambda key: fy if key == ykey else fyn if key == ynkey else None      # noqa: E731
+    boxes = {"A": (xm - 5, y_n + 350, xm + 5, y_n + 360), "B": (xm + 250, y_n - 9, xm + 260, y_n - 3)}
+    return cell_fn, boxes, [fy, fyn]
+
+
+class FixpointTest(unittest.TestCase):
+    """S2b: chain discovery on the switch path is a fixpoint of the complete local set (roads.BridgeProfiles._closure):
+    the same chains, owners, window decisions and published parts whatever deck is asked first and whatever the cell
+    order."""
+
+    def test_a_provisional_end_on_never_caps(self):
+        """Codex's case: from B, the end-on pair with A was judged before G's cell was read; A and B together need two
+        cells, over a budget of one, so B went to window solves. Now B is settled (its halo read) before any of its
+        pairs counts: G is there, A's end is an abutment, B's chain is itself (1 cell) from either order."""
+        cell_fn, boxes, fl = end_on_scene()
+        got = []
+        for seed in range(6):
+            with self.subTest(seed=seed):
+                done, trusses, dig, docs, seen = ask_all(cell_fn, boxes, fl, seed, capped_cells=1)
+                whole = [v for v in docs.values() if v.get("capped") is None]
+                self.assertTrue(any(m["key"].startswith("B:") for v in whole for m in v["members"]
+                                    if m["kind"] != "outside"), "B's chain solved whole")
+                self.assertFalse(any(m["key"].startswith("A:") for v in whole for m in v["members"]
+                                     if m["kind"] != "outside"), "A (two cells) capped")
+                got.append((done, trusses, dig))
+        self.assertTrue(all(g == got[0] for g in got))
+
+    def test_random_seeds_and_cell_orders(self):
+        """The S1 scene (a chain over a cell edge, its twin, a T ramp, an upper level; twin2 beside), the wide-deck
+        case across a cell edge and the end-on case: every random first deck and cell order publishes the same parts,
+        trusses and shadow JSONs, and each asked part's chain is one answer."""
+        home, west, eastf, box_a, box_b = scene(twin2=True)
+        boxes = {"a": box_a, "b": box_b, "ramp": (box_a[0] + 90, 40, box_a[0] + 110, 60),
+                 "twin2": (box_a[0] + 60, -30, box_a[0] + 80, -10)}
+        cases = [(lambda key: west if key == home else eastf, boxes, [west, eastf], None),
+                 end_on_scene() + (1,)]
+        for n, (cell_fn, bx, fl, cap) in enumerate(cases):
+            ref = None
+            for seed in range(8):
+                with self.subTest(case=n, seed=seed):
+                    done, trusses, dig, _docs, seen = ask_all(cell_fn, bx, fl, seed, capped_cells=cap)
+                    self.assertTrue(done)
+                    # (a window's structure is built too: never a None stored under a live key, Codex round 2)
+                    self.assertNotIn("None", [t for _k, t in trusses])
+                    chains = {k: sorted(v, key=repr) for k, v in seen.items()}
+                    for k, v in chains.items():
+                        grown = [c for c in v if c != "capped" and c[0]]
+                        self.assertLessEqual(len(grown) + ("capped" in v), 1, (k, v))
+                    if ref is None:
+                        ref = (done, trusses, dig)
+                    self.assertEqual((done, trusses, dig), ref)
+
+
+def window_scene():
+    """S2b part 1 fix (Codex high on 1ced286a): one chain b - a - c - d end to end along a row of map cells, over a
+    budget of 2 cells (window solves). a (the lowest key) lies in both overlapping windows of the blocks of a and of
+    c; b only in a's window, d only in c's. (cell_fn, boxes {name: box}, {box name: its cells' Features})"""
+    home = mapcells.cell_of(LAT, LON)
+    w0 = (home.bounds()[0] - LON) * M_LON
+    cw = (home.bounds()[2] - home.bounds()[0]) * M_LON
+    y = 900.0
+    x = lambda k, f: w0 + (k - home.x % roads.CHAIN_BLOCK + f) * cw          # noqa: E731 (k: cells from a block's first)
+    parts = {"b": [(x(-1, 0.3), y), (x(0, 0.9), y)], "a": [(x(0, 0.9), y), (x(1, 0.95), y)],
+             "c": [(x(1, 0.95), y), (x(3, 0.05), y)], "d": [(x(3, 0.05), y), (x(3, 0.9), y)]}
+
+    def cells_of(ln):
+        ln = np.asarray(ln, np.float64)
+        return {str(c) for c in mapcells.cells_of(LAT + ln[:, 1] / M_LAT, LON + ln[:, 0] / M_LON)}
+    feats = {}
+    for k in range(-3, 7):
+        ck = mapcells.CellKey(home.z, home.x + k, home.y)
+        ids = [i for i in sorted(parts) if str(ck) in cells_of(np.linspace(parts[i][0], parts[i][1], 50))]
+        if ids:
+            feats[str(ck)] = features([parts[i] for i in ids], ["primary"] * len(ids),
+                                      flags=[(j, "is_bridge") for j in range(len(ids))], ids=ids)
+    boxes, asked = {}, {}
+    for i, ((x0, _), (x1, _)) in parts.items():
+        m = (x0 + x1) / 2
+        boxes[i] = (m - 5, y - 5, m + 5, y + 5)
+        asked[i] = [feats[c] for c in sorted(cells_of([(m - 5, y), (m + 5, y)])) if c in feats]
+    return (lambda key: feats.get(str(key))), boxes, asked
+
+
+class WindowStructureTest(unittest.TestCase):
+    """S2b part 1 fix: on the switch path a window solve's live structure (trusses, their piers) is the legacy path's
+    exactly, its decks too; the switch only writes diagnostics there."""
+
+    def run_windows(self, order, shadow):
+        cell_fn, boxes, asked = window_scene()
+
+        def structure(_self, chain, infra_out=None):         # (what the structure was made from, as its beams)
+            made = repr(sorted((round(float(xy[0][0]), 1), round(float(xy[-1][0]), 1), np.asarray(z).tobytes())
+                               for xy, z, _w in chain))
+            return [made], [made]
+        flat = lambda la, lo: np.full(np.shape(la), 10.0)             # noqa: E731
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(revisit, "CACHE_DIR", d), \
+                mock.patch.object(structures, "SHADOW", shadow), mock.patch.object(roads, "CHAIN_CELLS", 2), \
+                mock.patch.object(roads.BridgeProfiles, "_structure", structure):
+            bp = roads.BridgeProfiles(FRAME, cell_fn, flat)
+            for n in order:
+                bp.parts(asked[n], boxes[n])
+            self_flush()
+            done = sorted((str(k), np.asarray(v[2], np.float64).tobytes()) for k, v in bp.done.items())
+            trusses = sorted((str(k), repr(v)) for k, v in bp.trusses.items())
+            piers = sorted((str(k), repr(v)) for k, v in bp.piers.items())
+        return done, trusses, piers
+
+    def test_overlapping_windows_as_switch_off(self):
+        """Two overlapping windows sharing their lowest piece a, asked in either order: the live decks, beams and
+        piers on the switch path are the switch-off ones (1ced286a: the window's structure was keyed by min(wcap) and
+        made from every capped part of the window, b a c or a c d, the first window to commit winning). The decks
+        are the same in both orders. (The structure under a window's lowest piece follows the order in which its
+        windows commit: the legacy path's own behaviour, switch off byte-identical, kept)"""
+        decks = None
+        for order in (("a", "c"), ("c", "a"), ("b", "d"), ("d", "b")):
+            with self.subTest(order=order):
+                off = self.run_windows(order, False)
+                on = self.run_windows(order, True)
+                self.assertEqual(on, off)
+                self.assertEqual(len(on[0]), 4)
+                self.assertEqual(len(on[1]), 1)
+                decks = decks or on[0]
+                self.assertEqual(on[0], decks)
+
+
+class JointHeightsTest(unittest.TestCase):
+    """S2b part 1: the joint height solve (structures.heights: earthfast.structure_heights), shadow only."""
+
+    def twins(self, dz=0.8, link=False):
+        xs = np.linspace(0.0, 600.0, 151)
+        za = np.full(len(xs), 10.0)
+        zb = 10.0 + dz * 4.0 * (xs / 600.0) * (1.0 - xs / 600.0)
+        m = lambda k, y, z: {"key": k, "fid": k, "cls": "primary", "xy": np.c_[xs, np.full(len(xs), y)],  # noqa: E731
+                             "z": z, "half": 4.0, "kind": structures.ROAD, "level": 1.0}
+        members = [m("a:0", 0.0, za), m("b:0", 9.0, zb)]
+        got = structures.groups(members)
+        raw = {"z": [za, zb], "floors": [], "under": [8.35, 8.35], "rank": [2, 2], "link": [False, link]}
+        return members, got, raw
+
+    def test_twins_meet(self):
+        """Twins 9 m apart, one 0.8 m higher mid-span: one structure; the joint heights meet within 2 cm in the
+        middle (each half way: equal weights), the abutments (pinned: plan neutral) as they were."""
+        members, got, raw = self.twins()
+        self.assertEqual(got["root"], [0, 0])
+        out = structures.heights(members, 2, got, raw)
+        st = out["structures"][0]
+        self.assertEqual(st["status"], "solved")
+        self.assertGreater(st["today"]["twin_dz_mm"], 700)
+        self.assertLessEqual(st["joint"]["twin_free_mm"], 20)     # (the abutments pinned: their eases as they were)
+        za, zb = out["z_joint"]
+        self.assertEqual((za[0], zb[-1]), (10000, 10000))
+        self.assertLessEqual(abs(za[75] - zb[75]), 20)
+        self.assertLess(abs(za[75] - 10400), 50)
+        self.assertEqual(out["digest"], structures.heights(members, 2, got, raw)["digest"])
+
+    def test_a_ramp_bends(self):
+        """The same with b a link: the mainline (weight 10) moves 1/11 of the gap, the ramp the rest."""
+        members, got, raw = self.twins(link=True)
+        za, zb = structures.heights(members, 2, got, raw)["z_joint"]
+        self.assertLess(abs(za[75] - 10000), 100)
+        self.assertLessEqual(abs(za[75] - zb[75]), 20)
+
+    def test_in_the_shadow_json(self):
+        """The shadow JSON carries z_in_mm and z_joint_mm beside z_mm for every chain member and a joint section;
+        the same whichever tile asks first."""
+        _decks, docs = run(scene()[3])
+        doc = chain_doc(docs)
+        self.assertEqual(doc["format"], 3)
+        for m in doc["members"]:
+            if m["kind"] == "outside":
+                self.assertIsNone(m.get("z_joint_mm"))
+                continue
+            self.assertEqual(len(m["z_joint_mm"]), len(m["z_mm"]))
+            self.assertEqual(len(m["z_in_mm"]), len(m["z_mm"]))
+        self.assertTrue(doc["joint"]["structures"])
+        self.assertTrue({s["status"] for s in doc["joint"]["structures"]} <= set(structures.STATUS))
+        other = chain_doc(run(scene()[4], order=-1)[1])
+        self.assertEqual(other["joint"]["digest"], doc["joint"]["digest"])
+
+    def test_over_budget_falls_back_and_the_queue_goes_on(self):
+        """A dense synthetic structure (80 decks 0.2 m apart, 2 km, every pair an edge: millions of coupling
+        candidates) is over the native solve's budgets (heights.rs Budget, counted before anything is made): today's
+        heights with status "budget", at once, and the writer's next job (the twins) is solved."""
+        import time
+        n = 80
+        xs = np.linspace(0.0, 2000.0, 501)
+        members = [{"key": f"d{k}:0", "fid": f"d{k}", "cls": "primary", "xy": np.c_[xs, np.full(len(xs), 0.2 * k)],
+                    "z": np.full(len(xs), 11.0 + 0.001 * k), "half": 4.0, "kind": structures.ROAD, "level": 1.0}
+                   for k in range(n)]
+        beside = structures.EDGE_KINDS.index("BESIDE")
+        dense = {"root": [0] * n, "dup": list(range(n)), "conflicts": [],
+                 "edges": [(a, b, beside, 0, 0.0) for a in range(n) for b in range(a + 1, n)]}
+        raw = {"z": [np.full(len(xs), 10.0 + 0.01 * k) for k in range(n)], "floors": [], "under": [8.35] * n,
+               "rank": [2] * n, "link": [False] * n}
+        tw_members, tw_got, tw_raw = self.twins()
+        out = []
+
+        def dense_job():
+            t0 = time.monotonic()
+            got = structures.heights(members, n, dense, raw)
+            out.append(("dense", got, time.monotonic() - t0))
+        with tempfile.TemporaryDirectory() as d:
+            self.assertTrue(structures._submit(dense_job, d))
+            self.assertTrue(structures._submit(lambda: out.append(("twins", structures.heights(tw_members, 2, tw_got,
+                                                                                               tw_raw), 0.0)), d))
+            self_flush()
+        self.assertEqual([o[0] for o in out], ["dense", "twins"])
+        got, took = out[0][1], out[0][2]
+        self.assertLess(took, 10.0)        # (the counts alone: ~0.1 s; a loose bound for a busy machine)
+        self.assertEqual({s["status"] for s in got["structures"]}, {"budget"})
+        self.assertEqual(got["z_joint"][7], [11007] * len(xs))       # (today's heights, in mm)
+        self.assertEqual(out[1][1]["structures"][0]["status"], "solved")
+
+
 if __name__ == "__main__":
     unittest.main()

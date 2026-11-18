@@ -6700,6 +6700,9 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(railspans::rail_underpass_distance, m)?)?;
     // 487: the full port's railways._span_underpasses / _clip / _underpass_masks / _underpass_distance (railspans: a
     // node window's parts over the road tunnels and cut to the window in one call)
+    m.add_function(wrap_pyfunction!(structures::heights::structure_heights, m)?)?;
+    // 488: road revamp RS step S2b part 1 (structures::heights::structure_heights: one joint height solve per
+    // structure, BNE_DECK_STRUCT=shadow's JSON alone; given 485-489, past 487 so that a 487 module fails the start check)
     m.add_function(wrap_pyfunction!(osmml::osm_over_ml, m)?)?;
     // 489: OpenStreetMap over machine-learned building outlines (osmml::osm_over_ml: an ML outline where OSM maps a
     // cell's buildings, or overlapping an OSM one, left out; the user, 2026-11-18). 488 is another branch's
