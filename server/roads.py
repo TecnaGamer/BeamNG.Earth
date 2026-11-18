@@ -7634,6 +7634,12 @@ CORNER_CONCRETE_M = 4.0  # m: a concrete street this close to a curb return fill
 AT_GRADE_M = 3.0        # m: a road crossing a deck within AT_GRADE_REACH_M of an abutment that cannot get this
 AT_GRADE_REACH_M = 12.0     # high over it is a junction at grade (the intersection a ramp starts from)
 CHAIN_CELLS = 12        # map cells read at most to close one bridge chain
+# BNE_DECK_STRUCT=shadow (RS S2a fix): the cells the closure reads only for its halo (structures.halo: within reach of
+# the chain, holding none of its parts) have this budget of their own, apart from CHAIN_CELLS (the cells that hold the
+# chain's parts): a chain of 7 cells beside a cell row touched 7 empty ones and went to window solves (Codex review).
+# Discovery stays bounded: the halo's reach (under 73 m) is far below a map cell's side at any latitude the cells
+# cover (zoom 14, past 85 degrees: over 200 m), so a halo cell is one of the 8 round a chain cell: at most 8 x 12.
+CHAIN_HALO_CELLS = 8 * CHAIN_CELLS
 # A chain longer than CHAIN_CELLS cells (a long viaduct, a causeway) is solved in windows that do not depend on who
 # asks (BridgeProfiles.CANON_LOAD): the map cells are grouped in CHAIN_BLOCK x CHAIN_BLOCK blocks on the cells' own
 # grid; a piece is solved with the chain's parts in its block's cells and CHAIN_MARGIN cells round them, and only the
@@ -8194,9 +8200,19 @@ class BridgeProfiles:
             for a, b, _, _ in over:
                 crossing.setdefault(keys[a], set()).add(keys[b])
                 crossing.setdefault(keys[b], set()).add(keys[a])
+            # (BNE_DECK_STRUCT=shadow, RS S2a fix: every test of the closure below by half widths capped at
+            # structures.HALF_MAX_M, the widest its cell halo allows for: a 100 m deck's raw width paired it, beside
+            # or by an end on it, with a deck whose halo never reached its cell, so the deck asked first decided the
+            # chain (Codex review). Off: the raw widths, as before)
+            if self.STRUCTURES and structures.SHADOW:
+                halves = [structures.half_of(pool[k][0].width) for k in keys]
+                widths = [2.0 * h for h in halves]
+            else:
+                widths = [pool[k][0].width for k in keys]
+                halves = [pool[k][0].width / 2 for k in keys]
             # and side by side / one over the other (solved apart, the Queensboro Bridge's two upper roadways met at
             # a 0.5 m step and its tiles' decks at different heights stood as blocks in the lanes, 2026-10-17)
-            for a, b in _deck_beside([pool[k][1] for k in keys], [pool[k][0].width for k in keys]):
+            for a, b in _deck_beside([pool[k][1] for k in keys], widths):
                 crossing.setdefault(keys[a], set()).add(keys[b])
                 crossing.setdefault(keys[b], set()).add(keys[a])
             # (BNE_DECK_STRUCT=shadow, RS S2a "one owner": and every pair that could be one structure, within the
@@ -8207,8 +8223,7 @@ class BridgeProfiles:
                     crossing.setdefault(keys[a], set()).add(keys[b])
                     crossing.setdefault(keys[b], set()).add(keys[a])
             # and a free end joining another part's end (_end_joins): solved as one
-            for a, b in self._end_join_pairs([pool[k][1] for k in keys], [pool[k][0].width / 2 for k in keys], ground,
-                                             [pool[k][3] for k in keys]):
+            for a, b in self._end_join_pairs([pool[k][1] for k in keys], halves, ground, [pool[k][3] for k in keys]):
                 crossing.setdefault(keys[a], set()).add(keys[b])
                 crossing.setdefault(keys[b], set()).add(keys[a])
             comp, stack = {start}, [start]
@@ -8232,7 +8247,10 @@ class BridgeProfiles:
             if not grow:
                 return sorted(comp)
             grew = False
-            for p in ends:
+            # (BNE_DECK_STRUCT=shadow, RS S2a fix: the cells below, every chain point's and the halo's, each with its
+            # own budget; the loose ends' cells are among the chain points')
+            struct = self.CANON_LOAD and self.STRUCTURES and structures.SHADOW
+            for p in (() if struct else ends):
                 la, lo, _ = self.frame.enu_to_geodetic(np.array([p[0]]), np.array([p[1]]), 0.0)
                 key = mapcells.cell_of(float(la[0]), float(lo[0]))
                 if str(key) not in loaded and len(loaded) >= CHAIN_CELLS and self.CANON_LOAD:
@@ -8245,14 +8263,35 @@ class BridgeProfiles:
                 # (and every cell the chain's parts lie in: the cells read are then the chain's own, the same from
                 # whichever of its parts the solve started; their keys' order)
                 xy = np.concatenate([np.asarray(pool[k][1], np.float64)[:, :2] for k in sorted(comp)])
-                if self.STRUCTURES and structures.SHADOW:
-                    # (RS S2a: and the cells within reach of them (structures.halo, per part), where a deck that could
-                    # be one structure with a chain part may lie in a cell none of the chain's points reach: Codex)
-                    half = max(float(pool[k][0].width) / 2 for k in comp)
-                    xy = np.concatenate([structures.halo(np.asarray(pool[k][1], np.float64)[:, :2], half)
-                                         for k in sorted(comp)])
                 la, lo, _ = self.frame.enu_to_geodetic(xy[:, 0], xy[:, 1], 0.0)
                 cells = {str(c): c for c in mapcells.cells_of(np.asarray(la), np.asarray(lo))}
+                if struct:
+                    # (RS S2a: and the cells within reach of them (structures.halo, per part, by its own width), where
+                    # a deck that could be one structure with a chain part may lie in a cell none of the chain's points
+                    # reach: Codex. The fix: the chain's own cells alone count against CHAIN_CELLS, the halo's against
+                    # CHAIN_HALO_CELLS (a halo cell that holds a part is a chain cell at the next pass); both sets only
+                    # grow with the chain, so whether it is capped does not depend on who asked)
+                    if len(cells) > CHAIN_CELLS:
+                        raise _Capped()
+                    hxy = np.concatenate([structures.halo(np.asarray(pool[k][1], np.float64)[:, :2],
+                                                          float(pool[k][0].width) / 2) for k in sorted(comp)])
+                    la, lo, _ = self.frame.enu_to_geodetic(hxy[:, 0], hxy[:, 1], 0.0)
+                    hal = {str(c): c for c in mapcells.cells_of(np.asarray(la), np.asarray(lo)) if str(c) not in cells}
+                    if len(hal) > CHAIN_HALO_CELLS:
+                        raise _Capped()
+                    # (and a hard bound on all the cells this closure reads, whatever its parts' copies did between
+                    # passes: roads come whole in every cell they touch, so a part's copy and the chain's footprint
+                    # only grow; a part kept as another, longer copy (_load) can leave cells read behind)
+                    if len(loaded | set(cells) | set(hal)) > CHAIN_CELLS + CHAIN_HALO_CELLS:
+                        raise _Capped()
+                    for c in sorted(set(cells) | set(hal)):
+                        if c not in loaded:
+                            loaded.add(c)
+                            self._load(cells[c] if c in cells else hal[c], pool, ground)
+                            grew = True
+                    if not grew:
+                        return sorted(comp)
+                    continue
                 for c in sorted(cells):
                     if c not in loaded:
                         if len(loaded) >= CHAIN_CELLS:

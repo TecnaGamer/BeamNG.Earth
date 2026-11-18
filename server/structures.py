@@ -8,7 +8,10 @@ Step S2a (earthfast 481), the groundwork of the joint height solve; BNE_DECK_STR
 - ONE OWNER: a chain's closure (roads.BridgeProfiles._resolve) also holds every pair of deck parts that could be one
   structure whatever their heights and outlines (touch: earthfast.structure_touch, the grouping's own edge tests up to
   the design's 6 m with every height limit and outline passing) and reads the cells within reach of the chain (halo),
-  so every structure edge lies inside one chain and a structure has the chain's owner. Retires, on the switch path, the
+  so every structure edge lies inside one chain and a structure has the chain's owner. S2a fix (BNE_DECK_STRUCT 3):
+  the reach allows for the widest deck the kernels take (HALF_MAX_M: half widths capped there), so discovery is the
+  same from either deck of a pair; the halo's cells have their own budget (roads.CHAIN_HALO_CELLS), apart from the
+  CHAIN_CELLS cells that hold the chain's parts, so empty cells near a cell edge never put a chain in window solves. Retires, on the switch path, the
   closure's 1.5 m beside touch (MERGE_TOUCH_M) as what decides which decks share a solve: pairs that were one structure
   lay in two chains at S1 ("outside" conflicts).
 - Members are unique (the kernel's duplicates: one way kept twice under two part keys by two cells' copies).
@@ -56,7 +59,14 @@ KIND_NAMES = ("road", "walk", "rail", "tunnel")
 WALK_CLASSES = frozenset(("footway", "path", "cycleway", "pedestrian", "steps", "bridleway", "corridor", "track_foot"))
 OUTSIDE_NEAR_M = 8.0    # m (+ the widest half width) round the chain's box: the pool's other parts offered as outside
 TOUCH_M = 6.0           # m edge to edge: the farthest structure edge (the design's; the kernel's OUTLINE_GAP_M)
-OTHER_HALF_M = 20.0     # m: the widest other deck's half width the closure's cell halo allows for (a 40 m deck)
+# m: the widest half width the grouping and the closure take (structure_touch / structure_groups' half widths are
+# capped at it: a wider deck groups as a 60 m one). It bounds how far a deck's centre line can lie from a chain line
+# and still be one structure with it, so the closure's cell halo (halo) reaches every such deck from EITHER side.
+# S2a's halo allowed for a 40 m other deck while the specs make wider ones (lanes x lane width, no cap) and the
+# kernels took their real widths: a 60 m deck found an 8 m one beside it across a cell edge, never the other way
+# round, and the chain published first decided the structure (Codex review of S2a). The structures corpus's widest
+# deck: 26 m (SF's Yerba Buena stack).
+HALF_MAX_M = 30.0
 DEBUG_DIR = ("debug", "structures")
 QUEUE_MAX = 4096        # jobs waiting for the writer (more: dropped, STATS["dropped"], a dropped-<pid>.json marker)
 LEVEL_SOURCES = ("overture", "osm", "default")
@@ -127,6 +137,11 @@ def level_source(v):
     return LEVEL_SOURCES[v[6][1]] if len(v) > 6 else None
 
 
+def half_of(width):
+    """A deck's half width as the grouping and the closure take it: capped at HALF_MAX_M."""
+    return min(float(width) / 2, HALF_MAX_M)
+
+
 def kind_of(spec):
     return WALK if str(getattr(spec, "cls", "")) in WALK_CLASSES else ROAD
 
@@ -148,7 +163,7 @@ def touch(entries, keys):
     fid_of = {f: n for n, f in enumerate(fids)}
     got = fast._ef.structure_touch(
         np.ascontiguousarray(np.concatenate(pts)), np.asarray(off, np.int64),
-        np.asarray([float(v[0].width) / 2 for v in entries], np.float64),
+        np.asarray([half_of(v[0].width) for v in entries], np.float64),
         np.asarray([kind_of(v[0]) for v in entries], np.int64),
         np.asarray([level_of(v) for v in entries], np.float64),
         np.asarray([fid_of[str(k[0])] for k in keys], np.int64))
@@ -156,16 +171,17 @@ def touch(entries, keys):
 
 
 def halo(xy, half):
-    """Points whose map cells hold every cell within reach of the chain line points xy (k, 2, its parts' lines one
-    after the other) whose widest half width is half: reach = half + OTHER_HALF_M + TOUCH_M (+ 10 %), the farthest a
-    deck's centre line can lie from a chain line and still be one structure with it. The lines are sampled every reach
-    / 2 and each sample gives the corners and edge middles of the square of side 2 x reach round it (far smaller than
-    a map cell: the cells it touches are its corners' and middles'), so the union of the squares covers the buffer;
-    Codex review: eight fixed offsets missed a wide deck's cell and cell corners."""
+    """Points whose map cells hold every cell within reach of the chain line points xy (k, 2, one part's line) of half
+    width half: reach = min(half, HALF_MAX_M) + HALF_MAX_M + TOUCH_M (+ 10 %), the farthest any deck's centre line
+    (its half width capped at HALF_MAX_M, as the kernels take it) can lie from this line and still be one structure
+    with it: the same bound seen from either deck of a pair. The line is sampled every reach / 2 and each sample
+    gives the corners and edge middles of the square of side 2 x reach round it (far smaller than a map cell: the
+    cells it touches are its corners' and middles'), so the union of the squares covers the buffer; Codex review:
+    eight fixed offsets missed a wide deck's cell and cell corners."""
     xy = np.asarray(xy, np.float64).reshape(-1, 2)
     if not len(xy):
         return xy
-    reach = 1.1 * (float(half) + OTHER_HALF_M + TOUCH_M)
+    reach = 1.1 * (min(float(half), HALF_MAX_M) + HALF_MAX_M + TOUCH_M)
     pts = [xy]
     seg = np.diff(xy, axis=0)
     n = np.ceil(np.sqrt(seg[:, 0] * seg[:, 0] + seg[:, 1] * seg[:, 1]) / (reach / 2)).astype(np.int64)
@@ -197,7 +213,7 @@ def groups(members, outlines=()):
     ooff = np.r_[0, np.cumsum([len(r) for r in rings])].astype(np.int64)
     root, dup, edges, rejected, conflicts = fast._ef.structure_groups(
         np.ascontiguousarray(np.concatenate(pts) if pts else np.zeros((0, 3))), np.asarray(off, np.int64),
-        np.asarray([float(m["half"]) for m in members], np.float64),
+        np.asarray([half_of(2.0 * float(m["half"])) for m in members], np.float64),
         np.asarray([int(m["kind"]) for m in members], np.int64),
         np.asarray([np.nan if m.get("level") is None else float(m["level"]) for m in members], np.float64),
         np.asarray([fid_of[str(m["fid"])] for m in members], np.int64),
