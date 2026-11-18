@@ -5,7 +5,8 @@ One direction at a time, each in seconds and with no build:
   1. the survey alone: its levels order every real crossing (what a level rule can rest on);
   2. the heuristics alone: gradeshapes' order and joins given the survey's own kinds and levels;
   3. the solver alone: the shapes it solves from those true facts on Earth's ground, against the real heights;
-  4. Earth's reading of the map: the order its own members give the real crossings;
+  4. Earth's reading of the map: the order its own members give the real crossings (and which it cannot give: a way with
+     no member along it, or one the map has and Earth builds nothing of: paths, street trams, roads under construction);
   5. the laws against the real roads: the clearance and the grade they ask, and what was built;
   6. what Earth builds: its graded ground under the survey's roads on the ground (a road dug or filled where the real
      one lies on its ground), and its railway bed against the survey's tracks (minutes: the place graded whole).
@@ -24,14 +25,20 @@ SURVEY_M = 1.5          # m: the survey's own accuracy (0.2-1.5 m): a shape near
 # what holds today, per place
 TODAY = {
     "zurich_brunau": dict(
-        unmatched=12,           # real crossings with no line of Earth's along one of the two (not judged)
+        unmatched=8,            # real crossings with no member of Earth's along one of the two (not judged; 12 before): Earth's
+                                # line ends or turns off within 20 m of the crossing (5), one line along both ways (2), a
+                                # motorway tunnel the shapes leave out: a feature that is all tunnel (1)
+        not_built=3,            # (the way is a path in the map: Earth builds none)
         shape_p95=7.2,          # m: the Sihl viaduct's decks, solved up to 7.9 m off the real ones
         under_laws=2, steeper=2,
         dug=(7, 8),             # per mille of the ground roads' points, 3.3 m at the deepest
         filled=(19, 39),        # the motorway at its tunnels' mouths, up to 6.5 m
         rail_low=None, rail_high=None),     # (no railway bridge here)
     "zurich_europabruecke": dict(
-        unmatched=22,           # (9 of them: the tracks over a 10 m road's underpass)
+        unmatched=5,            # (22 before: 9 were the tracks over a pedestrian underpass, a path now, as the map has it)
+                                # Earth's line ends within 20 m of the crossing (2), one line along both ways (2), two lines
+                                # along the bridge, one of them its deck, which reads right (1)
+        not_built=5,            # 4 street trams on the ground, 1 a path under a bridge
         shape_p95=5.8,          # m: a service road's deck 3.8 m lower than it is; the roads under the tracks 1-2 m deeper
         under_laws=0, steeper=2,
         dug=(0, 0), filled=(0, 5),
@@ -40,7 +47,8 @@ TODAY = {
         #                         (GRADE at 2.5 %: +0.7 .. +0.9, at 2.8 %: -0.4 .. -0.1; the other places' lows then 0.1-0.9
         #                         lower, PopoliTest in test_findground.py has the numbers)
     "zurich_duttweilerbruecke": dict(
-        unmatched=22,           # (20 before the replay's roads came as the server hands them on: gradesep)
+        unmatched=3,            # (22 before): Earth's rail ends at the crossing (1), one rail deck along both ways (2)
+        not_built=14,           # 8 street trams on the ground, 6 paths under or on the bridges: Earth builds none
         shape_p95=3.4,
         under_laws=2, steeper=1,
         dug=(3, 3),             # 3.3 m at the deepest. (12 while every rail bridge dug the road under it)
@@ -54,14 +62,15 @@ TODAY = {
         #                         law (2 %; the survey's flyover ramps are 3.3-4.1 %): 2.5 % makes this -9.2, 2.8 % -9.6
         #                         (-8.8 before a crossover of the viaduct, 6 m under it at both ends, joined it: -8.6)
     "goeschenen_gotthard_portal": dict(
-        unmatched=5,
+        unmatched=1,            # (5 before): a tertiary road ends at the crossing
+        not_built=3,            # the second tube of the road tunnel: the map flags it as under construction
         shape_p95=5.0,
         under_laws=0, steeper=1, graded=60,
         dug=(66, 64),           # a link 7.3 m: the motorway's cutting 5 m under it, 9 m beside it (a wall in the real one)
         filled=(76, 75),        # the road into the Gotthard tunnel 8.3 m: its mouth read on the face over it
         rail_low=-9.7, rail_high=0.2),
     "kempttal_viaduct": dict(
-        unmatched=2, right=4,
+        unmatched=0, not_built=0, right=6,
         shape_p95=4.6,          # m: the viaduct's deck at its ends
         under_laws=0, steeper=0, graded=60,
         dug=(1, 0), filled=(0, 0), rail_low=-1.0, rail_high=0.1),
@@ -120,12 +129,14 @@ def test_earths_reading_of_the_map_orders_every_real_crossing_it_has_both_lines_
     r = measured(site)["earth_orders"]
     assert r["reversed"] == 0 and r["at grade"] == 0, measured(site)["earth_orders_wrong"]
     assert r["right"] >= TODAY[site].get("right", 20), "(most of the place's crossings are matched and read)"
-    assert r["unmatched"] <= TODAY[site]["unmatched"], "(no more crossings left unjudged than today)"
+    assert r["unmatched"] <= TODAY[site]["unmatched"], measured(site)["unmatched_why"]
+    assert r["not built"] <= TODAY[site]["not_built"], "(no more of the ways Earth builds nothing of than today)"
 
 
-@pytest.mark.parametrize("site", _goal(set(SITES), "real crossings with no line of Earth's along one of the two"))
+@pytest.mark.parametrize("site", _goal({s for s in SITES if TODAY[s]["unmatched"]},
+                                          "real crossings with no member of Earth's along one of the two"))
 def test_every_real_crossing_is_judged(site):
-    assert measured(site)["earth_orders"]["unmatched"] == 0
+    assert measured(site)["earth_orders"]["unmatched"] == 0, measured(site)["unmatched_why"]
 
 
 @pytest.mark.parametrize("site", SITES)
@@ -205,3 +216,13 @@ def test_the_survey_reads_as_lines_with_heights():
     up = [ws[c.i] if c.dz > 0 else ws[c.j] for c in over]
     assert {ln.layer for ln in up} == {"road", "rail"}, "(one track over the bridge, the bridge over another)"
     assert np.all([4.0 < abs(c.dz) < 12.0 for c in over])
+
+
+def test_a_way_with_stairs_is_a_path_not_a_road():
+    # (the Europabruecke's "10 m road" under the tracks: a pedestrian underpass whose ends drop 4.7 m in 14 m; its 9 crossings
+    # with the tracks were read as a road's, and left unjudged: the map has footways and steps there)
+    site = truth.load("zurich_europabruecke")
+    stairs = [ln for ln in site.lines if ln.attrs["kunstbaute"] in truth.STAIRS]
+    assert any(ln.attrs["objektart"] == "10m Strasse" for ln in stairs)
+    assert all(ln.cls == "path" for ln in stairs)
+    assert not [ln for ln in truth.ways(site) if ln.attrs["kunstbaute"] in truth.STAIRS]

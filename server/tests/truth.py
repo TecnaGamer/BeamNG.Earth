@@ -26,6 +26,7 @@ PATH_CLASS = {"2m Weg": "path", "1m Weg": "path", "2m Wegfragment": "path", "1m 
 HALF_M = {"Autobahn": 5.0, "Autostrasse": 5.0, "10m Strasse": 5.0, "8m Strasse": 4.0, "6m Strasse": 3.0,
           "4m Strasse": 2.0, "3m Strasse": 1.5}
 BRIDGE = {"Bruecke", "Bruecke mit Galerie", "Gedeckte Bruecke", "Bruecke mit Treppe"}
+STAIRS = {"Treppe", "Bruecke mit Treppe", "Unterfuehrung mit Treppe"}
 TUNNEL = {"Tunnel", "Unterfuehrung", "Unterfuehrung mit Treppe", "Galerie"}
 NODE_M = 0.3            # m: two lines' ends this close in plan and height are one node of the network
 SAME_LEVEL_M = 1.0      # m: lines crossing nearer in height than this meet (a junction), not one over the other
@@ -42,8 +43,11 @@ def load(name):
         for r in d[key]:
             xyz = np.asarray(r["xyz"], np.float64).reshape(-1, 3)
             art = r["objektart"]
-            cls = "rail" if layer == "rail" else ROAD_CLASS.get(art) or PATH_CLASS.get(art)
             kb = r["kunstbaute"]
+            # (a way with stairs is one nobody drives, whatever its OBJEKTART says: Europabruecke's "10m Strasse" under
+            # the tracks is a pedestrian underpass, 100 m long, 4 m deep, with stairs at both ends, and the map has it as
+            # footways and steps)
+            cls = "rail" if layer == "rail" else "path" if kb in STAIRS else ROAD_CLASS.get(art) or PATH_CLASS.get(art)
             kind = "bridge" if kb in BRIDGE else "tunnel" if kb in TUNNEL else "ground"
             try:
                 level = int(r["stufe"])
@@ -215,12 +219,14 @@ def ground_fn(rep, ws):
 
 
 def _near(line, p):
-    """(distance m, unit tangent) of polyline line (k, 2) at its nearest point to p."""
+    """(distance m, unit tangent, whether the nearest point is the line's end: p lies past it) of polyline line (k, 2)
+    at its nearest point to p."""
     a, ab = line[:-1], np.diff(line, axis=0)
     t = np.clip(((p - a) * ab).sum(1) / np.maximum((ab * ab).sum(1), 1e-12), 0.0, 1.0)
     d = np.hypot(*(a + t[:, None] * ab - p).T)
     k = int(np.argmin(d))
-    return float(d[k]), ab[k] / max(float(np.hypot(*ab[k])), 1e-9)
+    past = (k == 0 and t[k] <= 0.0) or (k == len(ab) - 1 and t[k] >= 1.0)
+    return float(d[k]), ab[k] / max(float(np.hypot(*ab[k])), 1e-9), bool(past)
 
 
 def earth_members(name, site):
@@ -243,38 +249,149 @@ def earth_members(name, site):
     return out
 
 
+@functools.lru_cache(maxsize=None)
+def map_lines(name):
+    """[SimpleNamespace(xy (k, 2) in the place's frame, sub (the map's subtype: "road" | "rail"), cls, built (whether
+    Earth builds a road, a tunnel, a bridge or a track of it: roads.road_specs / bridge_specs / tunnel_specs,
+    railways.drawn; the paths, footways and steps the roads leave out are not), tram (a street tram: Earth builds none
+    on the ground))] of every line of the place's map cells, each once: what the map says is there, before Earth's own
+    reading of it (earth_members) leaves any out."""
+    import railways
+    import roads as roadsmod
+    rep = replay(name)
+    out, seen = [], set()
+    for f in rep.cells.values():
+        if not len(f):
+            continue
+        xy = f.xy_in(rep.frame)
+        rs, bs, ts = roadsmod.road_specs(f, None, None), roadsmod.bridge_specs(f), roadsmod.tunnel_specs(f)
+        sub, cls = f.attrs["subtype"], f.attrs["class"]
+        for i in range(len(f)):
+            rail = str(sub[i]) == "rail"
+            got = railways.drawn(f, i, bridges=True) if rail else None
+            for part in f.parts(i, xy):
+                for ring in part:
+                    key = (str(f.ids[i]), len(ring), round(float(ring[0][0]), 1), round(float(ring[0][1]), 1))
+                    if len(ring) < 2 or key in seen:
+                        continue
+                    seen.add(key)
+                    out.append(SimpleNamespace(xy=np.asarray(ring, np.float64), sub=str(sub[i]), cls=str(cls[i]),
+                                               built=got is not None if rail else any(x[i] is not None for x in (rs, bs, ts)),
+                                               tram=bool(got) and got[0] == "tram"))
+    return out
+
+
+def _boxes(lines):
+    return np.array([np.r_[ln.min(0) - MATCH_M, ln.max(0) + MATCH_M] for ln in lines]).reshape(-1, 4)
+
+
+def _along_points(ln, p, s):
+    """(unit direction of the surveyed way ln at p, its points MATCH_ALONG_M each side of p (s m along it))."""
+    tt = _near(ln.xyz[:, :2], p)[1]
+    sl = arclen(ln.xyz)
+    sv = np.clip(s + np.array(MATCH_ALONG_M), 0.0, sl[-1])
+    return tt, np.c_[np.interp(sv, sl, ln.xyz[:, 0]), np.interp(sv, sl, ln.xyz[:, 1])]
+
+
+def _score(line, p, tt, pts):
+    """None, or (minus the points compared, their mean distance m): how well polyline line (k, 2) follows a surveyed way
+    at p going the unit direction tt, with pts the points along the way each side of p. It follows it when it lies within
+    MATCH_M of the way at p and goes its way (MATCH_COS), has p between its ends, and keeps within MATCH_M of the way's
+    points along it as far as it goes (a point past its end says nothing: a deck lies under the way on one side of the
+    crossing and ends, the road goes on in the next member; the map cuts a place's lines into members as it likes, the
+    survey does not). Lower is better: the one compared at the most points, then the nearest."""
+    d0, t, past = _near(line, p)
+    if d0 > MATCH_M or abs(float(t @ tt)) < MATCH_COS or past:
+        return None
+    got = [_near(line, pt) for pt in pts]
+    d = [x[0] for x in got if not (x[2] and x[0] > MATCH_M)]
+    if max(d) > MATCH_M:
+        return None
+    # (a line that has ended before some of the way's points, a deck or a rail piece the map cut, follows the way only if
+    # it lies on it: MATCH_M is a carriageway's width off, kept for a line that goes the whole stretch. Gotthard's road
+    # tunnel crossed a service road ending at its mouth, 7.7 m off it over three of five points)
+    if len(d) < len(pts) and float(np.mean(d)) > MATCH_M / 2:
+        return None
+    return -len(d), float(np.mean(d))
+
+
+def _followers(lines, boxes, p, tt, pts, accept=None):
+    """The indices of the lines of `lines` that follow a surveyed way at p (_score), the best scored first."""
+    got = []
+    for q in np.flatnonzero((boxes[:, 0] <= p[0]) & (boxes[:, 2] >= p[0]) & (boxes[:, 1] <= p[1]) & (boxes[:, 3] >= p[1])):
+        if accept is None or accept(q):
+            sc = _score(lines[q], p, tt, pts)
+            if sc is not None:
+                got.append((sc, int(q)))
+    return [q for _sc, q in sorted(got)]
+
+
+def _following(lines, boxes, p, tt, pts, accept=None):
+    """The index of the line of `lines` that follows a surveyed way at p (_score), or None: the best scored."""
+    got = _followers(lines, boxes, p, tt, pts, accept)
+    return got[0] if got else None
+
+
+NOT_BUILT = "not built"
+
+
+def _unjudged(ln, p, s, mem, boxes, maps, mboxes):
+    """(NOT_BUILT or "", why) no member of Earth's is along the surveyed way ln at p (s m along it): what the map has
+    there, and what Earth does with it. NOT_BUILT: the map has the way, and Earth builds nothing of it (a path, a footway
+    or steps, a street tram on the ground, a road flagged as under construction): no order of it to read."""
+    tt, pts = _along_points(ln, p, s)
+    rail = ln.layer == "rail"
+    on_map = [maps[q] for q in _followers([m.xy for m in maps], mboxes, p, tt, pts, lambda q: (maps[q].sub == "rail") == rail)]
+    if on_map:
+        # (a street tram's bridge pieces are built (railways.drawn), its track on the ground is not)
+        built = [m for m in on_map if m.built and not (m.tram and ln.kind != "bridge")]
+        if not built:
+            m = on_map[0]
+            if m.tram:
+                return NOT_BUILT, "the map has it as a street tram (Earth builds none on the ground)"
+            return NOT_BUILT, f"the map has it as {m.cls} (Earth builds none of it: a path, steps, or a road under construction)"
+        return "", f"the map has it as {built[0].cls} (Earth builds it, its shapes have no member along it)"
+    lines = [np.asarray(m.line, np.float64)[:, :2] for m in mem]
+    for q in np.flatnonzero((boxes[:, 0] <= p[0]) & (boxes[:, 2] >= p[0]) & (boxes[:, 1] <= p[1]) & (boxes[:, 3] >= p[1])):
+        if (mem[q].kind in ("rail", "rail_deck")) == rail:
+            d0, t, _past = _near(lines[q], p)
+            if d0 <= MATCH_M and abs(float(t @ tt)) >= MATCH_COS:
+                return "", f"Earth's {mem[q].kind} {mem[q].cls} is along it on one side of the crossing only"
+    return "", "no line in the map along it"
+
+
 def earth_orders(name):
     """How Earth's reading of the map orders the place's real separations: {"right", "reversed", "at grade" (no
-    order: no clearance held), "unmatched" (one of the two lines has no line of Earth's along it, or both have the
-    same one)} -> [(upper's tag, lower's tag, Earth's two members' kind/level)]. A railway's tunnel is left out (Earth
-    draws none)."""
+    order: no clearance held), "unmatched" (no member of Earth's is along one of the two ways, or one is along both:
+    a blind spot), NOT_BUILT (one of the ways is one the map has and Earth builds nothing of: nothing to order)} ->
+    [(upper's tag, lower's tag, Earth's two members' kind/level; for the last two why: a clause for each way with none)].
+    A railway's tunnel is left out (Earth draws none).
+
+    A line of Earth's is along a surveyed way (_following) where it lies within MATCH_M of the way at the crossing,
+    goes its way, has the crossing between its ends, and keeps within MATCH_M of the way along it each side as far as it
+    goes. (It was: and along the whole 20 m each side. A deck ends before that where the map cuts a bridge into pieces
+    and its neighbour carries on: a rail bridge the survey crosses 15 m from the end of Earth's 23 m deck was never
+    read.)"""
     import gradeshapes
     site = load(name)
     ws = ways(site)
     mem = earth_members(name, site)
     lines = [np.asarray(m.line, np.float64)[:, :2] for m in mem]
-    boxes = np.array([np.r_[ln.min(0) - MATCH_M, ln.max(0) + MATCH_M] for ln in lines])
+    boxes = _boxes(lines)
+    maps = map_lines(name)
+    mboxes = _boxes([m.xy for m in maps])
 
-    def match(ln, p, s):
-        # (the line of Earth's that follows the surveyed one along MATCH_ALONG_M each side of the crossing, not the
+    def followers(ln, p, s):
+        # (the lines of Earth's that follow the surveyed one along MATCH_ALONG_M each side of the crossing, not the
         # nearest at the crossing's point: the road under a bridge lies nearer that point than the bridge's own
         # carriageway line, 3 m off the survey's one line for both)
-        _d, tt = _near(ln.xyz[:, :2], p)
-        sl = arclen(ln.xyz)
-        sv = np.clip(s + np.array(MATCH_ALONG_M), 0.0, sl[-1])
-        pts = np.c_[np.interp(sv, sl, ln.xyz[:, 0]), np.interp(sv, sl, ln.xyz[:, 1])]
-        best = None
-        for q in np.flatnonzero((boxes[:, 0] <= p[0]) & (boxes[:, 2] >= p[0]) & (boxes[:, 1] <= p[1]) & (boxes[:, 3] >= p[1])):
-            if (mem[q].kind in ("rail", "rail_deck")) != (ln.layer == "rail"):
-                continue
-            d0, t = _near(lines[q], p)
-            if d0 > MATCH_M or abs(float(t @ tt)) < MATCH_COS:
-                continue
-            d = [_near(lines[q], pt)[0] for pt in pts]
-            if max(d) <= MATCH_M and (best is None or float(np.mean(d)) < best[0]):
-                best = (float(np.mean(d)), int(q))
-        return None if best is None else best[1]
-    out = {"right": [], "reversed": [], "at grade": [], "unmatched": []}
+        tt, pts = _along_points(ln, p, s)
+        return _followers(lines, boxes, p, tt, pts, lambda q: (mem[q].kind in ("rail", "rail_deck")) == (ln.layer == "rail"))
+
+    def match(ln, p, s):
+        got = followers(ln, p, s)
+        return got[0] if got else None
+    out = {"right": [], "reversed": [], "at grade": [], "unmatched": [], NOT_BUILT: []}
     for c in separations(ws, box=site.half):
         a, b = ws[c.i], ws[c.j]
         if (a.layer == "rail" and a.kind == "tunnel") or (b.layer == "rail" and b.kind == "tunnel"):
@@ -283,11 +400,26 @@ def earth_orders(name):
         tag = (f"{u.cls}/{u.kind}/{u.level}", f"{d.cls}/{d.kind}/{d.level}")
         ea, eb = match(a, c.xy, c.si), match(b, c.xy, c.sj)
         if ea is None or eb is None or ea == eb:
-            out["unmatched"].append(tag + ("",))
+            why = [(w,) + _unjudged(w, c.xy, s, mem, boxes, maps, mboxes) for w, e, s in ((a, ea, c.si), (b, eb, c.sj)) if e is None]
+            out[NOT_BUILT if any(code for _w, code, _t in why) else "unmatched"].append(
+                tag + ("; ".join(f"{w.cls}/{w.kind}: {t}" for w, _c, t in why)
+                       or f"one line of Earth's ({mem[ea].kind} {mem[ea].cls}) is along both",))
             continue
         got = gradeshapes._over(mem[ea], mem[eb])
         how = f"{mem[ea].kind}/{mem[ea].level:g} | {mem[eb].kind}/{mem[eb].level:g}"
-        out["right" if got == ("i" if c.dz > 0 else "j") else "at grade" if got is None else "reversed"].append(tag + (how,))
+        want = "i" if c.dz > 0 else "j"
+        if got != want:
+            # (a wrong order is a finding only if no other reading of the plan gives the right one: where the road under a
+            # bridge lies within a metre of the bridge's line, both its deck and that road follow the way, and the plan
+            # cannot say which is the bridge. The nearest is taken for the way; a verdict that the other reading
+            # reverses is not read)
+            fa, fb = followers(a, c.xy, c.si), followers(b, c.xy, c.sj)
+            alt = [(x, y) for x in fa for y in fb if x != y and gradeshapes._over(mem[x], mem[y]) == want]
+            if alt:
+                out["unmatched"].append(tag + ("two lines of Earth's follow one of the ways, and the plan cannot say which is it "
+                                               f"(the other reading, {mem[alt[0][0]].kind} | {mem[alt[0][1]].kind}, is right)",))
+                continue
+        out["right" if got == want else "at grade" if got is None else "reversed"].append(tag + (how,))
     return out
 
 
@@ -480,6 +612,7 @@ def report(name):
             "solved_minus_real": {f"{k[0]} {k[1]}": [round(float(np.median(v)), 2), round(float(np.percentile(np.abs(v), 95)), 2),
                                                     round(float(np.abs(v).max()), 2), len(v)] for k, v in sorted(err.items())},
             "earth_orders": {k: len(v) for k, v in eo.items()},
+            "unmatched_why": dict(collections.Counter(t[2] for t in eo["unmatched"])),
             "earth_orders_wrong": dict(collections.Counter(f"{u} over {d}: {k} ({how})" for k in ("reversed", "at grade")
                                                            for u, d, how in eo[k])),
             "real_clearances": len(cl), "real_under_the_laws": sum(1 for dz, need, _u, _d in cl if dz < need),
