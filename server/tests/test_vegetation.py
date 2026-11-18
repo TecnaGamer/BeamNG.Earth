@@ -337,7 +337,8 @@ class SpeciesTest(unittest.TestCase):
         # (36) North America's broadleaves by its own shares (broad_shares): Maryland's oaks, hardly any birches
         self.assertEqual(self.g(veg.G_DECIDUOUS, 39.3, -76.6, u=0.1), veg.G_OAK, "Maryland")
         self.assertEqual(self.g(veg.G_DECIDUOUS, 39.3, -76.6, u=0.9), veg.G_BEECH, "its maples and beeches")
-        self.assertEqual(self.g(veg.G_CONIFER, 39.3, -76.6, u=0.1), veg.G_CONIFER)
+        # (43) its conifers no longer the generic group (Douglas firs): mostly pines this far south
+        self.assertEqual(self.g(veg.G_CONIFER, 39.3, -76.6, u=0.9), veg.G_PINE_EU, "Maryland's pines")
         self.assertEqual(self.g(veg.G_MEDITERRANEAN, 41.9, 12.5, u=0.1), veg.G_MEDITERRANEAN, "Rome's own trees")
         self.assertEqual(self.g(veg.G_PALM, 25.8, -80.2, lcls=50, palm=0.0), veg.G_PALM, "Miami")
 
@@ -774,6 +775,22 @@ class ShareRulesTest(unittest.TestCase):
                                    np.full(n, 0.5), u, np.full(n, 0.9), np.full(n, 0.9))
             spruce = float(np.mean(g == veg.G_SPRUCE))
             self.assertGreaterEqual(spruce, want_min - 0.01, where)
+
+    def test_north_america_conifers(self):
+        """(43) Canada's and New England's generic conifers mostly spruce-shaped (NFI: pines 15 % of the conifers), the
+        Great Lakes' more pines; none left Douglas firs (the generic group)."""
+        import climate
+        for (lat, lon), lo, hi, where in (((54.0, -100.0), 0.75, 0.95, "Manitoba's boreal forest"),
+                                          ((47.0, -92.0), 0.5, 0.8, "Minnesota's pinelands")):
+            n = 2000
+            la, lo_ = np.full(n, lat), np.full(n, lon)
+            u = (np.arange(n) + 0.5) / n
+            g = veg.species_groups(np.full(n, veg.G_CONIFER, np.uint8), np.full(n, 14.0), la, lo_,
+                                   np.full(n, veg.WC["tree"]), climate.koppen_many(la, lo_), np.full(n, 300.0),
+                                   np.full(n, 0.5), u, np.full(n, 0.9), np.full(n, 0.9))
+            self.assertFalse((g == veg.G_CONIFER).any(), where)
+            spruce = float(np.mean(g == veg.G_SPRUCE))
+            self.assertTrue(lo <= spruce <= hi, f"{where}: {spruce:.2f}")
 
     def test_pine_woods_broadleaves(self):
         mixed = self._shares(53.6, 17.9, 26, 0.0, 0.3)

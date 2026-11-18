@@ -41,7 +41,7 @@ import staging
 
 log = logging.getLogger("earthd.vegetation")
 
-VERSION = 43          # (the cached cells hold their groups: 14 for the regional rules of GitHub #110; 16: the roads'
+VERSION = 44          # (the cached cells hold their groups: 14 for the regional rules of GitHub #110; 16: the roads'
                       # drawn widths and sidewalks kept clear; 17: BC's lidar canopy heights, mapdata's canopy layer 2;
                       # 18: the rounded junction corners kept clear, roadcorners.py; 19: one tree per flat crown,
                       # thin_tops; 20: none on or beside a bridge deck, _mask_decks; 21: orchard rows, canopy trees
@@ -84,6 +84,7 @@ VERSION = 43          # (the cached cells hold their groups: 14 for the regional
                       # 41: the leaf type the mean of LC100's and ESA CCI's (leaftype.PATHS)
                       # 42: Europe's conifer share half ForestPaths' genus map's, its genera from it (treegenus.py)
                       # 43: the species' stands one ragged grid (stand_cells); the maps read on a grid (_on_grid)
+                      # 44: North America's generic conifers spruces and pines (NA_SPRUCE_LAT)
 TREE_MIN_M = 3.0
 # The canopy raster, the scatter grids and the crown radii are in Web Mercator units (EPSG:3857: a metre there is
 # cos(lat) metres on the ground) and were tuned by eye at mid latitudes. Past them the same pixel counts covered less
@@ -506,6 +507,12 @@ JAPAN_SHARES = (0.15, 0.40, 0.45)
 #   beeches (maples, beech, tulip tree, basswood) NA_BEECH of the rest
 NA_BIRCH_LAT = ((32.0, 0.02), (38.0, 0.04), (42.0, 0.10), (46.0, 0.30), (50.0, 0.60), (54.0, 0.90))
 NA_BEECH = 0.42
+# (43) the spruce-shaped share of North America's generic conifers by latitude: the mid-Atlantic's and the
+# Appalachians' conifers mostly pines (Virginia, pitch, shortleaf, eastern white pine) and hemlocks, the north's
+# spruces and firs (Canada's NFI: 85 %)
+NA_SPRUCE_LAT = ((38.0, 0.25), (42.0, 0.5), (45.0, 0.8), (48.0, 0.85))
+NA_SPRUCE_LAKES = 0.65              # (Minnesota, Wisconsin, Michigan, Ontario's south: the red, white and jack pines)
+GREAT_LAKES_BOX = (41.5, -97.5, 49.5, -78.0)    # south, west, north, east
 # - elsewhere outside the tropics and Eurasia (the pampas', the Highveld's, the Middle East's planted and riverside
 #   trees: oaks, planes, poplars, elms; birches hardly)
 OTHER_SHARES = (0.03, 0.62, 0.35)
@@ -793,6 +800,17 @@ def species_groups(group, height, lat, lon, lcls, koppen, elev, u_broad, u_conif
             p_tg = (tg[:, treegenus.LARIX] + tg[:, treegenus.PICEA] + tg[:, treegenus.OTHER_NEEDLE]) / needle
         p = np.where(~np.isnan(p_tg) & (needle > TREEGENUS_MIN), p_tg, p)
         g[con] = np.where(np.asarray(u_conifer)[con] < p[con], G_SPRUCE, G_PINE_EU)
+    # (43) North America's remaining generic conifers (the regional kernel's dry West, Pacific coast and Southeast pines
+    # aside: the boreal forest, the Rockies' north, the Great Lakes, New England): spruces' shapes for its spruces,
+    # firs, hemlocks, Douglas firs, cedars and larches, the pines' for its jack, lodgepole, red and white pines (Canada's
+    # NFI 2020, growing stock: spruce 44.3 %, pine 11.7 %, fir 8.3 %, hemlock 6.2 %, Douglas fir 3.5 %, cedar and other
+    # 3.0 %, larch 1.5 %: pines 15 % of the conifers; Maine: spruce/fir 33 % of the forest, pines 7 %); the Great Lakes'
+    # sands more pines (NA_SPRUCE_LAKES), the mid-Atlantic's mostly pines (NA_SPRUCE_LAT). Before, all of them Douglas firs (the generic conifer).
+    nac = _north_america(lat, lon) & (g == G_CONIFER)
+    if nac.any():
+        p = dnp.interp(lat, [a for a, _ in NA_SPRUCE_LAT], [b for _, b in NA_SPRUCE_LAT])
+        p = np.where(_in_box(lat, lon, GREAT_LAKES_BOX), np.minimum(p, NA_SPRUCE_LAKES), p)
+        g[nac] = np.where(np.asarray(u_conifer)[nac] < p[nac], G_SPRUCE, G_PINE_EU)
     # broadleaves: Italy's in the hot deserts and steppes; birch / oak / beech by the climate, more beeches uphill
     g[ea & (g == G_DECIDUOUS) & _in(k, K_HOT_ARID)] = G_MEDITERRANEAN
     # (36) everywhere outside the tropics (before, Eurasia only: elsewhere the generic group, a quarter of whose
