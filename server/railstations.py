@@ -42,6 +42,15 @@ LINE_WIDTH_M = 4.0          # a platform mapped as a line: the strip's width on 
 ISLAND_MAX_M = 14.0         # an island platform between two tracks is at most this wide
 SYNTH_LEN_M = {"station": 250.0, "halt": 150.0}
 SYNTH_WIDTH_M = 4.0
+# Railway-at-road fixes (the user's in-game reports r63 / r64 / r92, 2026-11-17; Revamped roads switch set): a platform
+# worked out from the track (no platform mapped) stops short of the roads and walkways it would cross, and a station
+# point that says it has no passengers gets none (_off_roads, _no_passengers). Off by default until reviewed in game.
+ROAD_FIT = os.environ.get("BNE_RAIL_ROAD_FIT", "off") == "on"
+ROAD_CLEAR_M = 2.5          # m past a carriageway's half width a worked-out platform keeps clear (its kerb and footway)
+WALK_CLEAR_M = 1.0          # m past a walkway's half width (one crossing the platform's line)
+WALK_CLEAR_CLASSES = {"footway": 2.0, "path": 1.5, "cycleway": 2.5, "pedestrian": 3.0, "steps": 2.0,
+                      "bridleway": 2.0}         # class -> width (m) when the map has none
+SYNTH_MIN_M = 30.0          # m: a worked-out platform shorter than this is none (_synth's own minimum)
 BUILDING_NEAR_M = 160.0
 ROOF_NEAR_M = 6.0           # a roof this near a platform (or overlapping it) covers it
 LINK_JOIN_M = 2.5           # ways whose ends are this near are one link
@@ -654,8 +663,9 @@ def assemble(items, seeds, country=None, hubs=None, me=0):
     st.links = _links(near, st.tracks, plats, st.hub)
     synth_canopies(st)
 
-    # worked out from the track: no platform mapped
-    if not plats:
+    # worked out from the track: no platform mapped (with BNE_RAIL_ROAD_FIT, none for a station the map says has no
+    # passengers: public_transport=no / passenger=no on all its points)
+    if not plats and not (ROAD_FIT and _no_passengers(seeds)):
         pl = _synth(st, near, all_tracks, edge_m)
         if pl is not None:
             st.platforms, st.synth = [pl], True
@@ -689,6 +699,11 @@ def _synth(st, near, tracks, edge_m):
         side = 1.0 if float(dnp.dot(bc - line[len(line) // 2], nrm[len(line) // 2])) >= 0 else -1.0
     else:
         side = 1.0
+    if ROAD_FIT:
+        keep = _off_roads(line, nrm * side, edge_m, near, ss, arc)
+        if keep is None:
+            return None
+        line, nrm = line[keep], nrm[keep]
     inner, outer = line + nrm * side * edge_m, line + nrm * side * (edge_m + SYNTH_WIDTH_M)
     ring = _ccw(np.vstack((inner, outer[::-1])))
     pl = Platform("synth:" + str(tid), ring, {}, mapped=False)
@@ -700,6 +715,63 @@ def _synth(st, near, tracks, edge_m):
         if abs(bs.dist_to_path(xy, p) - edge_m) < 0.05:
             pl.snapped[i], pl.tidx[i] = True, 0
     return pl
+
+
+def _no_passengers(seeds):
+    """Do the map's station points of a seed group all say the station has no passengers (public_transport=no or
+    passenger=no: a freight station, a closed one, an operating point; OSM's railway=station is any of them)?"""
+    pts = [s for s in seeds if s["layer"] == "infrastructure"]
+    return bool(pts) and all((s.get("tags") or {}).get("public_transport") == "no"
+                             or (s.get("tags") or {}).get("passenger") == "no" for s in pts)
+
+
+def _ground_way(it):
+    return it["layer"] == "roads" and it["sub"] != "rail" and len(it["xy"]) >= 2 \
+        and float(it.get("level") or 0.0) == 0.0 and not _bridge_or_tunnel(it)
+
+
+def _off_roads(line, out, edge_m, near, ss, arc):
+    """BNE_RAIL_ROAD_FIT: the indices of the synthesized platform's line samples (line (k, 2), out (k, 2) the unit side
+    the platform lies on) to keep, or None: the platform's cross-section (edge_m .. edge_m + SYNTH_WIDTH_M from the
+    track's axis) off every ground carriageway of near (its half width by class, or a wider mapped width, + ROAD_CLEAR_M:
+    its kerbs and footways) and off the walkways crossing it (their width + WALK_CLEAR_M). Of the runs left, the one at
+    the station's point (arc, along ss) else the longest, at least SYNTH_MIN_M long. A platform worked out from a bare
+    station point ran 250 m along the track, straight across a level crossing (Hahnstaetten, the user's report r92,
+    2026-11-17). Pure."""
+    import roads
+    cars, walks = {}, {}
+    for it in near:
+        if not _ground_way(it):
+            continue
+        cls = str(it["cls"])
+        w = _num((it.get("tags") or {}).get("width"))
+        if cls in WALK_CLEAR_CLASSES:
+            walks[str(it["id"])] = (np.asarray(it["xy"], np.float64), max(w or 0.0, WALK_CLEAR_CLASSES[cls]) / 2.0)
+        elif cls in roads.STYLE:
+            cars[str(it["id"])] = (np.asarray(it["xy"], np.float64), max(w or 0.0, roads.STYLE[cls][0]) / 2.0)
+    offs = (edge_m, edge_m + SYNTH_WIDTH_M / 2.0, edge_m + SYNTH_WIDTH_M)
+    pts = np.concatenate([line + out * o for o in offs])
+    blocked = np.zeros(len(pts), bool)
+    if cars:
+        blocked |= roads._on_carriageways(pts, cars, ROAD_CLEAR_M)
+    mid = line + out * offs[1]
+    crossing = {k: v for k, v in walks.items() if len(_crossings(v[0], [("platform", mid)]))}
+    if crossing:
+        blocked |= roads._on_carriageways(pts, crossing, WALK_CLEAR_M)
+    blocked = blocked.reshape(len(offs), len(line)).any(axis=0)
+    if not blocked.any():
+        return np.arange(len(line))
+    free = np.flatnonzero(~blocked)
+    if not len(free):
+        return None
+    runs = np.split(free, np.flatnonzero(np.diff(free) > 1) + 1)
+    at = int(np.argmin(np.abs(ss - arc)))
+    run = next((r for r in runs if r[0] <= at <= r[-1]), None)
+    if run is None:
+        run = max(runs, key=lambda r: (float(ss[r[-1]] - ss[r[0]]), -int(r[0])))
+    if len(run) < 2 or float(ss[run[-1]] - ss[run[0]]) < SYNTH_MIN_M:
+        return None
+    return run
 
 
 def _arc_of(xy, s, p):

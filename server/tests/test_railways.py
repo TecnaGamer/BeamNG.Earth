@@ -1242,3 +1242,92 @@ class StreetRunningTest(unittest.TestCase):
         street = (np.array([[90.0, -20.0], [90.0, 20.0]]), 12.0)       # the track's end at x = 100 on its carriageway
         ends = railways.dead_ends(track, finals, {"t": 1}, near, [street])
         self.assertEqual([round(float(p[0])) for p, _d, _z in ends], [0])
+
+
+class RoadFitTest(unittest.TestCase):
+    """BNE_RAIL_ROAD_FIT (railways.RAIL_ROAD_FIT): the user's in-game reports r63 / r64 / r92 (2026-11-17): buffer stops at
+    the ends of sidings mapped up to each side of a paved-over crossing (Hahnstaetten), and the 3D track stopping up to
+    2 m short of the crossing's deck (Schleiden's Oleftalbahn)."""
+
+    @staticmethod
+    def part(fid, x0, x1, y=0.0):
+        xy = np.c_[np.arange(x0, x1 + 1e-9, railways.STEP_M), np.full(int(round((x1 - x0) / railways.STEP_M)) + 1, y)]
+        return (fid, "standard_gauge", "ground", xy)
+
+    def ends(self, rails, street, fit=True):
+        finals = [np.zeros(len(r[3])) for r in rails]
+        near = (-500.0, -500.0, 500.0, 500.0)
+        with unittest.mock.patch.object(railways, "RAIL_ROAD_FIT", fit):
+            return sorted(round(float(p[0])) for p, _d, _z in railways.dead_ends(rails, finals, {}, near, [street]))
+
+    def test_no_buffer_stop_where_the_line_goes_on_past_the_road(self):
+        street = (np.array([[100.0, -30.0], [100.0, 30.0]]), 3.5)
+        cut = [self.part("a", 0.0, 80.0), self.part("b", 120.0, 200.0)]       # (a siding each side of the street)
+        self.assertEqual(self.ends(cut, street, fit=False), [0, 80, 120, 200], "off: as before")
+        self.assertEqual(self.ends(cut, street), [0, 200], "no stop facing the street, the line going on beyond it")
+        alone = [self.part("a", 0.0, 80.0)]                                     # (a siding's end 16 m before a street)
+        self.assertEqual(self.ends(alone, street), [0, 80])
+        other = [self.part("a", 0.0, 80.0), self.part("b", 120.0, 200.0, y=8.0)]   # (another line, not this one's)
+        self.assertEqual(self.ends(other, street), [0, 80, 120, 200])
+        at = [self.part("a", 0.0, 90.0)]                                        # (mapped up to the street's edge)
+        self.assertEqual(self.ends(at, street, fit=False), [0, 90])
+        self.assertEqual(self.ends(at, street), [0], "ends at the road")
+
+    def test_a_worn_line_cut_at_a_street_just_ends(self):
+        line = [self.part("w", 0.0, 200.0)]
+        street = (np.array([[100.0, -30.0], [100.0, 30.0]]), 3.0, "residential")
+        with unittest.mock.patch.object(railways, "WORN_CUT_CLASSES", {1: frozenset(roads.STYLE)}):
+            cut = railways._cut_worn_at_motorways(line, {"w": 1}, [street])
+        self.assertEqual(len(cut), 2)
+        self.assertEqual(self.ends(cut, street[:2]), [0, 200])
+
+    @staticmethod
+    def crossing(c):
+        f = features([[(0.0, 100.0), (250.0, 100.0)], [(c, 0.0), (c, 250.0)]], ["standard_gauge", "secondary"],
+                     subtypes=["rail", "road"])
+        (ln, hw), = railways.crossings(FRAME, [f], roads.tile_bbox(0, 0), reach=50.0)
+        x0 = railways.parts(FRAME, [f], roads.tile_bbox(0, 0), clip=True)[0][3][0, 0]
+        return f, float(np.interp(100.0, ln[:, 1], ln[:, 0])), hw + railways.CROSSING_PAD_M, float(x0)
+
+    def mesh_x(self, fit):
+        _f, cx, edge, x0 = self.crossing(120.0)
+        c = 120.0 + 1.9 - ((cx - edge - x0) % railways.STEP_M)     # (the crossing's edge 1.9 m past a 2 m point)
+        f, cx, edge, x0 = self.crossing(c)
+        self.assertAlmostEqual((cx - edge - x0) % railways.STEP_M, 1.9, delta=0.02)
+        with unittest.mock.patch.object(railways, "RAIL_ROAD_FIT", fit):
+            P, T, UV, mats, M = railways.tile_mesh(FRAME, 0, 0, [f], flat)
+        steel = P[np.unique(T[np.asarray(M) == mats.index(railways.STEEL)])][:, 0]
+        return f, cx, edge, float(steel[steel < cx].max()), float(steel[steel > cx].min())
+
+    def test_the_track_runs_on_to_the_crossing_edge(self):
+        _f, c, edge, west, east = self.mesh_x(False)
+        self.assertGreater(c - edge - west, 1.5, "off: the rails stop at the last 2 m point")
+        _f, c, edge, west, east = self.mesh_x(True)
+        tol = 0.01
+        self.assertAlmostEqual(west, c - edge, delta=tol)
+        self.assertAlmostEqual(east, c + edge, delta=tol)
+        self.assertLessEqual(west, c - edge + 1e-6, "never onto the crossing")
+        self.assertGreaterEqual(east, c + edge - 1e-6)
+
+    def test_the_deck_meets_the_track(self):
+        """rails.py's deck runs exactly between the 3D track's ends (railways._run_ends), its rails at the track's gauge."""
+        import rails
+        import railxing
+        f, c, edge, west, east = self.mesh_x(True)
+        for xing in (True, False):
+            with unittest.mock.patch.object(railxing, "ENABLED", xing), \
+                    unittest.mock.patch.object(railways, "RAIL_ROAD_FIT", True):
+                ch = rails.tile_chunks(FRAME, 0, 0, [f])
+            look = rails.DECK["m"] if xing else rails.STREET_TRACK["m"]
+            deck = [np.asarray(k["n"]) for k in ch if k["m"] == look]
+            self.assertEqual(len(deck), 1)
+            x = deck[0][:, 0]
+            self.assertAlmostEqual(float(x.min()), west, delta=0.01)
+            self.assertAlmostEqual(float(x.max()), east, delta=0.01)
+            if xing:
+                on = [np.asarray(k["n"]) for k in ch if k["m"] == rails.RAIL["m"]]
+                self.assertEqual(len(on), 2)
+                for r in on:
+                    self.assertAlmostEqual(float(r[:, 0].min()), float(x.min()), delta=0.01, msg="no rail past it")
+                ys = sorted(float(r[0, 1]) for r in on)
+                self.assertAlmostEqual(ys[1] - ys[0], railways.GAUGE_M + railways.RAIL_HEAD, delta=0.002)

@@ -83,6 +83,12 @@ FOOT_CLEAR = os.environ.get("BNE_FOOT_CLEAR", "off") == "on"
 # lines across country roads in South Wales, Rheinland-Pfalz, Indiana). BNE_RAIL_LIFECYCLE=on; off by default until
 # reviewed in game (a disused street track, as Fells Point's trolley lines, then stops at every street it crosses).
 RAIL_LIFECYCLE = os.environ.get("BNE_RAIL_LIFECYCLE", "off") == "on"
+# Railway-at-road fixes (the user's in-game reports r63 / r64 / r92, 2026-11-17; the Revamped roads switch set): a track
+# that ends at a road with its line going on beyond it (a worn line cut at the road, a siding mapped up to each side of
+# a paved-over crossing) gets no buffer stop there (dead_ends, _across_road); the 3D track at a level crossing runs on
+# to exactly where the crossing's deck begins, not to the last 2 m sample before it (_run_ends; rails.py's deck starts
+# there too). Off by default until reviewed in game (railstations.ROAD_FIT: the platforms).
+RAIL_ROAD_FIT = os.environ.get("BNE_RAIL_ROAD_FIT", "off") == "on"
 CONCRETE = "bne_bridge_concrete"    # (roadmesh.DECK_SIDE: the decks and piers)
 SLEEPER = "bne_rail_sleeper"        # weathered concrete sleepers (bne_bridge_concrete stood out near-white, 2026-10-25)
 COLLIDER = "bne_rail_collider"    # a rail's physics-only box (never drawn): the inner face a flange rides along, tile_mesh
@@ -1503,6 +1509,60 @@ def _blocked(xy, z, crossers):
                                              *pack, float(CROSSING_DZ)), bool)
 
 
+RUN_END_SAMPLES = 40        # points tried along a STEP_M section for a crossing's edge (5 cm apart) ...
+RUN_END_BISECT = 6          # ... then halvings between the two round it (under a millimetre)
+
+
+def _run_ends(xy, zb, blk, crossers):
+    """BNE_RAIL_ROAD_FIT: (xy', zb', blk', src) with a point added at each edge of a level crossing (where blk changes
+    between two sections' points): the last point off the crossing (_blocked: the carriageway's half width +
+    CROSSING_PAD_M), RUN_END_SAMPLES to a section, bed height between its neighbours'. src: each point's index in xy,
+    -1 for an added one. The track's drawn runs ended at the last 2 m point off the crossing, up to 2 m (2 / sin on a
+    skew) short of the deck rails.py lays from that same edge: bare ground between them (Schleiden's Oleftalbahn, the
+    user's reports r63 / r64). Pure."""
+    xy = np.asarray(xy, np.float64)
+    n = len(xy)
+    edges = np.flatnonzero(blk[:-1] != blk[1:])
+    if not len(edges):
+        return xy, zb, blk, np.arange(n)
+    t = np.arange(1, RUN_END_SAMPLES, dtype=np.float64) / RUN_END_SAMPLES
+    add = {}
+    for k in edges.tolist():
+        pts = xy[k][None, :] + (xy[k + 1] - xy[k])[None, :] * t[:, None]
+        on = _blocked(pts, zb[k] + (zb[k + 1] - zb[k]) * t, crossers)
+        tt = np.r_[0.0, t, 1.0]
+        if not blk[k]:              # (onto the crossing: the last point before its first one on it)
+            i = int(np.argmax(on)) + 1 if on.any() else len(t) + 1
+            t_off, t_on = float(tt[i - 1]), float(tt[i])
+        else:                       # (off it: the first point after its last one on it)
+            i = int(len(t) - 1 - np.argmax(on[::-1])) + 1 if on.any() else 0
+            t_on, t_off = float(tt[i]), float(tt[i + 1])
+        for _ in range(RUN_END_BISECT):     # (to a millimetre: rails.py's deck finds the same edge from its side)
+            tm = 0.5 * (t_off + t_on)
+            pm = xy[k] + (xy[k + 1] - xy[k]) * tm
+            if _blocked(pm[None, :], np.array([zb[k] + (zb[k + 1] - zb[k]) * tm]), crossers)[0]:
+                t_on = tm
+            else:
+                t_off = tm
+        if 0.0 < t_off < 1.0:
+            add[k] = t_off
+    if not add:
+        return xy, zb, blk, np.arange(n)
+    rows, zs, bs_, src = [], [], [], []
+    for k in range(n):
+        rows.append(xy[k])
+        zs.append(zb[k])
+        bs_.append(bool(blk[k]))
+        src.append(k)
+        if k in add:
+            tb = add[k]
+            rows.append(xy[k] + (xy[k + 1] - xy[k]) * tb)
+            zs.append(zb[k] + (zb[k + 1] - zb[k]) * tb)
+            bs_.append(False)
+            src.append(-1)
+    return np.asarray(rows), np.asarray(zs, np.float64), np.asarray(bs_, bool), np.asarray(src, np.int64)
+
+
 _CROSSER_PACK = [(None, None)]  # [(the crossers list, its packed arrays)]: a tile's parts ask with the same list
 
 
@@ -2360,8 +2420,47 @@ def dead_ends(rails, finals, worn, near, carriage=None):
                                                    0.0).any():
                 continue                        # (a street track ending in the street: no buffer stop on the road)
             d = xy[i] - xy[j]
-            out.append((p, d / max(float(dnp.hypot(*d)), 1e-9), float(zb[i]) + RAIL_TOP_M))
+            d = d / max(float(dnp.hypot(*d)), 1e-9)
+            if RAIL_ROAD_FIT and carriage and _across_road(p, d, n_part, rails, carriage):
+                continue                        # (its line goes on past the road: a cut, not the end of the track)
+            out.append((p, d, float(zb[i]) + RAIL_TOP_M))
     return out
+
+
+ACROSS_M = 40.0             # m ahead of a track's end looked along for a road and a track beyond it (_across_road)
+ACROSS_STEP_M = 0.5
+ACROSS_JOIN_M = 3.0         # m from that line ahead a track's point beyond the road is the line going on
+ROAD_END_M = 8.5            # m: a track ending this near a carriageway it runs into ends at the road (WORN_CUT_M and a
+                            # STEP_M: where _cut_worn_at_motorways leaves a cut line's end)
+
+
+def _across_road(p, d, n_part, rails, carriage):
+    """BNE_RAIL_ROAD_FIT: does the track ending at p (running into it along the unit d) end at a road rather than at a
+    buffer stop: the line ahead meets a carriageway of carriage ([(centreline, half width)]) within ROAD_END_M, or within
+    ACROSS_M with another track part of rails (not n_part) lying within ACROSS_JOIN_M of that line past the carriageway's
+    first point (the line going on beyond the road)? A worn line cut at a road (_cut_worn_at_motorways: WORN_CUT_M from
+    its edge) and the sidings mapped up to each side of a paved-over crossing (Hahnstaetten's, the user's report r92) end
+    so; a siding's end farther before a street, with no track beyond, keeps its stop. Pure."""
+    import roads
+    ahead = p[None, :] + d[None, :] * np.arange(ACROSS_STEP_M, ACROSS_M + 1e-9, ACROSS_STEP_M)[:, None]
+    on = roads._on_carriageways(ahead, {n: (np.asarray(ln, np.float64)[:, :2], float(hw))
+                                        for n, (ln, hw) in enumerate(carriage) if len(ln) >= 2}, 0.0)
+    if not on.any():
+        return False
+    if (int(np.argmax(on)) + 1) * ACROSS_STEP_M <= ROAD_END_M:
+        return True
+    a = ahead[int(np.argmax(on))]
+    b = ahead[-1]
+    ab = b - a
+    L2 = max(float(dnp.dot(ab, ab)), 1e-9)
+    for o, (*_x, oxy) in enumerate(rails):
+        if o == n_part:
+            continue
+        q = np.asarray(oxy, np.float64)[:, :2]
+        t = np.clip(dnp.vecdot(q - a, ab[None, :]) / L2, 0.0, 1.0)
+        if float(np.min(dnp.hypot(*(a[None, :] + t[:, None] * ab[None, :] - q).T))) < ACROSS_JOIN_M:
+            return True
+    return False
 
 
 def buffer_rows(ends):
@@ -2552,6 +2651,17 @@ def tile_mesh(frame, tx, ty, cells, ground, sign_style=None, far_ground=None, re
                 zb = _flush(s, zb, blk, np.asarray(ground(xy[blk]), np.float64))
                 top = zb + BALLAST_H
                 finals[n_part] = zb
+                if RAIL_ROAD_FIT:   # (the track runs on to the crossing's exact edge: rails.py's deck starts there)
+                    xy, zb, blk, src = _run_ends(xy, zb, blk, crossers)
+                    if len(src) != len(s):
+                        near_src = np.maximum.accumulate(np.where(src >= 0, src, -1))
+                        near_src = np.where(near_src >= 0, near_src, 0)
+                        sw = sw[near_src]
+                        u2 = _left(xy)              # (an added point: square to its segment; the others as they were)
+                        u2[src >= 0] = u[src[src >= 0]]
+                        u, s, top = u2, _arc(xy), zb + BALLAST_H
+                        inside = (xy[:, 0] >= ex[0] - STEP_M) & (xy[:, 0] <= ex[2] + STEP_M) & \
+                                 (xy[:, 1] >= ex[1] - STEP_M) & (xy[:, 1] <= ex[3] + STEP_M)
             cut = blk | ~inside
             # the ballast's sides to the ground beside: wider where the bed stands high (a ramp's embankment)
             near = BALLAST_TOP_M + BALLAST_SLOPE * (BALLAST_H + BALLAST_FOOT_M)

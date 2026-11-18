@@ -81,6 +81,10 @@ NOT_LISTED = {
     "BNE_STALE_REVISIT": "no build switch at all (revisit.NOT_SWITCHES)",
     "BNE_FOOT_CLEAR": "railway tiles only (railways.FOOT_CLEAR: a footbridge that cannot clear drops its walls over the "
                       "road); not yet proven plan-neutral both ways, so it stays keyed with the Revamped roads setting",
+    "BNE_RAIL_ROAD_FIT": "railway tiles and station meshes only (railways.RAIL_ROAD_FIT: buffer stops, the 3D track's "
+                         "ends at a level crossing; rails.py's crossing deck; railstations.ROAD_FIT: worked-out "
+                         "platforms); not yet proven plan-neutral both ways, so it stays keyed with the Revamped "
+                         "roads setting",
 }
 # Functions of the planning closure that read the environment by a computed name: the keys' own (they hash the
 # switches' names and values), the proxy settings (a fixed list of proxy variables)

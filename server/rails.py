@@ -113,6 +113,57 @@ def _sleepers(xy, s, step, length, box, on_road):
     return list(zip(c[keep] - n, c[keep] + n))
 
 
+DECK_FINE_M = 0.05              # m between the points a crossing's deck ends are found at (railways.RAIL_ROAD_FIT)
+DECK_SEARCH_M = 8.0             # m past a street run's ends they are looked for (a skew crossing's pad is longer)
+DECK_BISECT = 6                 # halvings between the two points round each end (under a millimetre)
+
+
+def _deck_line(piece, a, b, eligible):
+    """railways.RAIL_ROAD_FIT: the line (k, 2) of a level crossing's deck for the street run piece[a..b] of a 3D track
+    (piece every SAMPLE_M): along the track from the first to the last point within a carriageway's half width +
+    railways.CROSSING_PAD_M (the edge railways._run_ends ends the 3D track at), found every DECK_FINE_M round the run;
+    None when no point of it is in that reach. Pure."""
+    import railways
+    import roads
+    s = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(piece, axis=0).T))]
+    lo, hi = max(0.0, float(s[a]) - DECK_SEARCH_M), min(float(s[-1]), float(s[b]) + DECK_SEARCH_M)
+    if hi - lo < DECK_FINE_M:
+        return None
+    t = np.arange(lo, hi + 1e-9, DECK_FINE_M)
+    fine = np.c_[np.interp(t, s, piece[:, 0]), np.interp(t, s, piece[:, 1])]
+    on = roads._on_carriageways(fine, eligible, railways.CROSSING_PAD_M)
+    if not on.any():
+        return None
+    mid = 0.5 * (float(s[a]) + float(s[b]))
+    cand = np.flatnonzero(on)
+    k = int(cand[np.argmin(np.abs(t[cand] - mid))])
+    i = k
+    while i > 0 and on[i - 1]:
+        i -= 1
+    j = k
+    while j + 1 < len(on) and on[j + 1]:
+        j += 1
+    if j <= i:
+        return None
+
+    def edge(k, out):               # (between fine[k] on it and fine[out] off it, to a millimetre: railways._run_ends)
+        if out < 0 or out >= len(t):
+            return float(t[k])
+        t_on, t_off = float(t[k]), float(t[out])
+        for _ in range(DECK_BISECT):
+            tm = 0.5 * (t_on + t_off)
+            pm = np.array([[np.interp(tm, s, piece[:, 0]), np.interp(tm, s, piece[:, 1])]])
+            if roads._on_carriageways(pm, eligible, railways.CROSSING_PAD_M)[0]:
+                t_on = tm
+            else:
+                t_off = tm
+        return t_on
+    ta, tb = edge(i, i - 1), edge(j, j + 1)
+    inner = piece[(s > ta) & (s < tb)]
+    ends = np.array([[np.interp(v, s, piece[:, 0]), np.interp(v, s, piece[:, 1])] for v in (ta, tb)])
+    return np.vstack([ends[:1], inner, ends[1:]])
+
+
 CROSS_WINDOW_M = 30.0           # m of track either side of where it crosses a carriageway's centre line (_crossing_windows)
 
 
@@ -214,7 +265,8 @@ def tile_chunks(frame, tx, ty, cells, country=None, urban_fn=None):
                         town_ways[(fid, k)] = carriageways[(fid, k)]
                 else:
                     tracks.append((kind, xy, meshed, got[1] if meshed else 0,
-                                   meshed and got[1] and railways.RAIL_LIFECYCLE and railways.heritage(feats, i)))
+                                   meshed and got[1] and railways.RAIL_LIFECYCLE and railways.heritage(feats, i),
+                                   railways.osm_gauge(feats, i) if meshed and railways.RAIL_ROAD_FIT else None))
     if not tracks:
         return []
 
@@ -229,7 +281,7 @@ def tile_chunks(frame, tx, ty, cells, country=None, urban_fn=None):
 
     ballast, sleepers, rails = [], [], []
     todo = []
-    for kind, xy, meshed, wear, kept in tracks:
+    for kind, xy, meshed, wear, kept, g in tracks:
         # (a worn line's street track only across the roads its 3D track is not cut at: railways.WORN_CUT_CLASSES,
         # #918; else its old bed came back as street rails across the motorway, wyo-backroads' PR #1117; a heritage
         # line's railways.HERITAGE_CUT_CLASSES)
@@ -241,11 +293,11 @@ def tile_chunks(frame, tx, ty, cells, country=None, urban_fn=None):
             # line in reach tested against every carriageway cost a tile ~0.1 s, 2026-10-25)
             # (and where it runs down a street: railways.street_along cuts its 3D track there, Fells Point's trolley
             # tracks down Thames Street, the user's report 16)
-            todo += [(kind, w, meshed, eligible)
+            todo += [(kind, w, meshed, eligible, g)
                      for w in _crossing_windows(xy, cw_lines, railways.street_spans(xy, list(eligible.values())))]
         else:
-            todo.append((kind, xy, meshed, eligible))
-    for kind, xy, meshed, eligible in todo:
+            todo.append((kind, xy, meshed, eligible, g))
+    for kind, xy, meshed, eligible, g in todo:
         bw, sl, sw, step = TRACK[kind]
         off = GAUGE_M[kind] / 2 + HEAD_M / 2
         full = roads.densify(xy, SAMPLE_M)
@@ -261,6 +313,20 @@ def tile_chunks(frame, tx, ty, cells, country=None, urban_fn=None):
             for a, b, street in _runs(on_road(piece, eligible)):
                 run = piece[a:b + 1]
                 if len(run) < 2:
+                    continue
+                if street and meshed and kind in ("rail", "narrow") and railways.RAIL_ROAD_FIT:
+                    # (the crossing from exactly where railways.py's 3D track stops to where it starts again: the
+                    # carriageway's half width + its CROSSING_PAD_M, railways._run_ends; its rails at the 3D track's gauge)
+                    deck = _deck_line(piece, a, b, eligible)
+                    if deck is None:
+                        continue
+                    off2 = (g or GAUGE_M[kind]) / 2 + railways.RAIL_HEAD / 2
+                    if railxing.ENABLED:
+                        sleepers.append(_chunk(DECK, DECK_W, deck))
+                        for side in (off2, -off2):
+                            rails.append(_chunk(RAIL, DECK_RAIL_W, roads.offset_polyline(deck, side)))
+                    else:
+                        rails.append(_chunk(STREET_TRACK, STREET_TRACK["w"], deck))
                     continue
                 if street:
                     if railxing.ENABLED and meshed and kind in ("rail", "narrow"):
