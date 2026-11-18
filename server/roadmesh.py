@@ -2550,6 +2550,15 @@ def tunnel(chunks, origin, walls=()):
         mat = 3 if stone else 5                               # (its portal faces: 2, the stone in daylight; a full
                                                             # tube's inside: 5, TUNNEL_INNER)
         sec = _tunnel_section(hw, th, low, box=low and not stone and portals.ON)    # (a major road's low tube: a box)
+        import norway_tunnels
+        rock = bool(c.get("norway_rock"))
+        looks = c.get("norway_portal_style") or (None, None)
+        if rock:
+            angle = np.arctan2(sec[:,1]/th, sec[:,0]/hw)
+            # Fractured crown, smoothly continuous at every chunk end. Gains clearance only.
+            sec[:,1] += .16*np.sin(4*angle+.5)**2 * np.clip(sec[:,1]/th,0.,1.)
+            mat = 6
+            stone = True
         k, m = len(mid), len(sec)
         rows = np.empty((m, k, 3))
         for j, (off, h) in enumerate(sec):
@@ -2582,11 +2591,13 @@ def tunnel(chunks, origin, walls=()):
             M.append(mat)
             nv += 2 * k
         # the lamps: under the vault along both lines, every other step, faced down (a long tunnel's; not under an arch)
-        if not low:
+        if not low and not rock:
             nv = _tunnel_lamps(P, T, UV, M, nv, mid, u, z, hw, origin)
         fits = c.get("fit") or (None, None)
         new_portal = portals.ON
-        if new_portal and not low and c.get("ground") is not None and len(c["ground"]) == len(c["n"]) and k >= 2:
+        if rock or any(looks):
+            nv = _add_blocks(P, T, UV, M, nv, norway_tunnels.shell(mid,u,z,sec,hw,th,origin), 6 if rock else 0)
+        elif new_portal and not low and c.get("ground") is not None and len(c["ground"]) == len(c["n"]) and k >= 2:
             # the tube's outside where the ground does not cover it (portals.cover: a box, soil on its top); the
             # chunk's ground at the ribbon's rows, by the arc along it
             cn = np.asarray(c["n"], np.float64)[:, :2]
@@ -2607,6 +2618,19 @@ def tunnel(chunks, origin, walls=()):
             if not end:
                 continue
             fitd = fits[0 if at == 0 else 1] if new_portal else None
+            style = looks[0 if at == 0 else 1]
+            if style:
+                direction = mid[at] - mid[1 if at == 0 else -2]
+                outv = direction / max(float(dnp.hypot(*direction)), 1e-9)
+                leftv = u[at]
+                near = [False,False]
+                for i,sg in enumerate((1.,-1.)):
+                    test = mid[at] + leftv*sg*(hw+2.) + outv*3.
+                    near[i] = any(len(w["base"]) and np.min(np.linalg.norm(np.asarray(w["base"])[:,:2]-test,axis=1)) < 5.
+                                  for w in walls)
+                mouth = norway_tunnels.mouth_mesh(np.r_[mid[at],z[at]]-origin,leftv,outv,sec,th,hw,style,fitd,near)
+                nv = _add_blocks(P,T,UV,M,nv,mouth,6 if style == "rock" else 0)
+                continue
             if fitd is not None:
                 # the mouth's structure from the ground round it (portals.structure: collar, headwall, wing walls);
                 # in concrete (a park's low arch: stone)

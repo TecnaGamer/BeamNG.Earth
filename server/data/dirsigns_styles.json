@@ -21,6 +21,148 @@
   },
   "distance_round": [[20, 1], [100000, 5]],
   "countries": {
+    "NO": {
+      "verified": false,
+      "board": {
+        "freeway": {
+          "bg": [
+            0,
+            80,
+            154
+          ],
+          "ink": [
+            255,
+            255,
+            255
+          ],
+          "trim": [
+            255,
+            255,
+            255
+          ]
+        },
+        "road": {
+          "bg": [
+            255,
+            197,
+            0
+          ],
+          "ink": [
+            0,
+            0,
+            0
+          ],
+          "trim": [
+            0,
+            0,
+            0
+          ]
+        },
+        "urban": {
+          "bg": [
+            255,
+            197,
+            0
+          ],
+          "ink": [
+            0,
+            0,
+            0
+          ],
+          "trim": [
+            0,
+            0,
+            0
+          ]
+        }
+      },
+      "plates": {
+        "n": [
+          0,
+          [
+            255,
+            255,
+            255
+          ],
+          [
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0
+          ]
+        ],
+        "f": [
+          0,
+          [
+            255,
+            255,
+            255
+          ],
+          [
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0
+          ]
+        ],
+        "e": [
+          0,
+          [
+            0,
+            126,
+            71
+          ],
+          [
+            255,
+            255,
+            255
+          ],
+          [
+            255,
+            255,
+            255
+          ]
+        ]
+      },
+      "networks": [
+        {
+          "network": "no:national",
+          "plate": "n"
+        },
+        {
+          "network": "no:riksvei",
+          "plate": "n"
+        },
+        {
+          "network": "no:riksveg",
+          "plate": "n"
+        },
+        {
+          "network": "no:regional",
+          "plate": "f"
+        },
+        {
+          "network": "no:fylkesvei",
+          "plate": "f"
+        },
+        {
+          "network": "no:fylkesveg",
+          "plate": "f"
+        },
+        {
+          "network": "e-road",
+          "plate": "e"
+        }
+      ]
+    },
     "UA": {
       "verified": false,
       "board": {"freeway": {"bg": [0, 110, 60], "ink": [255, 255, 255], "trim": [255, 255, 255]},

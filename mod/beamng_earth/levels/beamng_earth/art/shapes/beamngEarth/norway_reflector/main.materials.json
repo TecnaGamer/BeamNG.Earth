@@ -1,0 +1,20 @@
+{
+  "bngNorwayReflectorPost": {
+    "name": "bngNorwayReflectorPost",
+    "mapTo": "bngNorwayReflectorPost",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "3c2be1ec-3b4d-4dbf-9e04-998ca23b8b51",
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/norway_reflector/norway_reflector_post.png",
+        "metallicFactor": 0,
+        "roughnessFactor": 0.85
+      },
+      {},
+      {},
+      {}
+    ],
+    "doubleSided": false
+  }
+}

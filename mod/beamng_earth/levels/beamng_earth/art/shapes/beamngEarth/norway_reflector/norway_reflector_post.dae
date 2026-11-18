@@ -1,0 +1,112 @@
+<?xml version='1.0' encoding='utf-8'?>
+<COLLADA xmlns="http://www.collada.org/2005/11/COLLADASchema" version="1.4.1">
+  <asset>
+    <contributor>
+      <author>Blender User</author>
+      <authoring_tool>Blender 4.5.16 LTS commit date:2026-11-09, commit time:14:39, hash:3f6797307da5</authoring_tool>
+    </contributor>
+    <created>2026-11-16T19:22:33</created>
+    <modified>2026-11-16T19:22:33</modified>
+    <unit name="meter" meter="1" />
+    <up_axis>Z_UP</up_axis>
+  </asset>
+  <library_images>
+    <image id="nor_reflector_image" name="nor_reflector_image">
+      <init_from>norway_reflector_post.png</init_from>
+    </image>
+  </library_images>
+  <library_geometries>
+    <geometry id="Cube_001-mesh" name="NorwayReflectorPost">
+      <mesh>
+        <source id="Cube_001-mesh-positions">
+          <float_array id="Cube_001-mesh-positions-array" count="30">-0.6535883 0.4038032 -1 -0.6535883 0.4038032 1 0 0.5923905 1 0 0.5923905 -1 0.6535883 0.4038032 -1 0.6535883 0.4038032 1 -1 0 -1 -1 0 1 1 0 -1 1 0 1</float_array>
+          <technique_common>
+            <accessor source="#Cube_001-mesh-positions-array" count="10" stride="3">
+              <param name="X" type="float" />
+              <param name="Y" type="float" />
+              <param name="Z" type="float" />
+            </accessor>
+          </technique_common>
+        </source>
+        <source id="Cube_001-mesh-normals">
+          <float_array id="Cube_001-mesh-normals-array" count="27">-0.7589829 0.6511107 0 -0.5407463 0.8411857 0 -7.57308e-06 1 0 0.5407584 0.8411781 0 7.57555e-06 1 0 -0.5407583 0.8411781 0 0.5407464 0.8411857 0 0.7589829 0.6511107 0 0 -1 0</float_array>
+          <technique_common>
+            <accessor source="#Cube_001-mesh-normals-array" count="9" stride="3">
+              <param name="X" type="float" />
+              <param name="Y" type="float" />
+              <param name="Z" type="float" />
+            </accessor>
+          </technique_common>
+        </source>
+        <source id="Cube_001-mesh-map-0">
+          <float_array id="Cube_001-mesh-map-0-array" count="60">0 1 0.173206 0 0 0 0.5 1 0.826794 0 0.5 0 0.173206 1 0.5 0 0.173206 0 0.826794 1 1 0 0.826794 0 0 1 0.173206 1 0.173206 0 0.5 1 0.826794 1 0.826794 0 0.173206 1 0.5 1 0.5 0 0.826794 1 1 1 1 0 0.96 0 0.96 0 0.96 1 0.96 0 0.96 1 0.96 1</float_array>
+          <technique_common>
+            <accessor source="#Cube_001-mesh-map-0-array" count="30" stride="2">
+              <param name="S" type="float" />
+              <param name="T" type="float" />
+            </accessor>
+          </technique_common>
+        </source>
+        <vertices id="Cube_001-mesh-vertices">
+          <input semantic="POSITION" source="#Cube_001-mesh-positions" />
+        </vertices>
+        <triangles count="10" material="nor_reflector_binding">
+          <input semantic="VERTEX" source="#Cube_001-mesh-vertices" offset="0" />
+          <input semantic="NORMAL" source="#Cube_001-mesh-normals" offset="1" />
+          <input semantic="TEXCOORD" source="#Cube_001-mesh-map-0" offset="2" set="0" />
+          <p>7 0 0 0 1 1 6 0 2 2 2 3 4 3 4 3 4 5 1 5 6 3 4 7 0 1 8 5 6 9 8 7 10 4 3 11 7 0 12 1 5 13 0 1 14 2 2 15 5 6 16 4 3 17 1 5 18 2 2 19 3 4 20 5 6 21 9 7 22 8 7 23 6 8 24 8 8 25 9 8 26 6 8 27 9 8 28 7 8 29</p>
+        </triangles>
+      </mesh>
+    </geometry>
+  </library_geometries>
+  <library_effects>
+    <effect id="nor_reflector_effect">
+      <profile_COMMON>
+        <newparam sid="nor_reflector_surface">
+          <surface type="2D">
+            <init_from>nor_reflector_image</init_from>
+          </surface>
+        </newparam>
+        <newparam sid="nor_reflector_sampler">
+          <sampler2D>
+            <source>nor_reflector_surface</source>
+          </sampler2D>
+        </newparam>
+        <technique sid="common">
+          <lambert>
+            <diffuse>
+              <texture texture="nor_reflector_sampler" texcoord="UVMap" />
+            </diffuse>
+            <ambient>
+              <color>0.18 0.18 0.18 1</color>
+            </ambient>
+          </lambert>
+        </technique>
+      </profile_COMMON>
+    </effect>
+  </library_effects>
+  <library_materials>
+    <material id="nor_reflector_material" name="bngNorwayReflectorPost">
+      <instance_effect url="#nor_reflector_effect" />
+    </material>
+  </library_materials>
+  <library_visual_scenes>
+    <visual_scene id="Scene" name="Scene">
+      <node id="NorwayReflectorPost" name="NorwayReflectorPost" type="NODE">
+        <matrix sid="transform">0.05834134 0 0 0 0 0.04839517 0 0 0 0 0.5033373 0.5033373 0 0 0 1</matrix>
+        <instance_geometry url="#Cube_001-mesh" name="NorwayReflectorPost">
+          <bind_material>
+            <technique_common>
+              <instance_material symbol="nor_reflector_binding" target="#nor_reflector_material">
+                <bind_vertex_input semantic="UVMap" input_semantic="TEXCOORD" input_set="0" />
+              </instance_material>
+            </technique_common>
+          </bind_material>
+        </instance_geometry>
+      </node>
+    </visual_scene>
+  </library_visual_scenes>
+  <scene>
+    <instance_visual_scene url="#Scene" />
+  </scene>
+</COLLADA>

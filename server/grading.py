@@ -1011,6 +1011,9 @@ def plan_roads(frame, parts, elev, abut=None, ext=None, pins=None, cuts=True, co
         p = _plan(xy, zx, spec, ab, (nb, na), step, bank_xy=bank_xy,
                   bank_ext=(len(bank_before), len(bank_after)),
                   banked=not (RING_LEVEL_ON and rings is not None and rings[j]), coarse=coarse)
+        if p is not None and not coarse:
+            import nvdb_terrain_v0514
+            nvdb_terrain_v0514.grade_plan(p, lonlat, spec, shoulder(spec), T_MAX)
         # (road roughness, PR #639 by subformatdnb: off unless BNE_BUMPS > 0; cached plans keep whatever they were
         # planned with, so a change takes effect on places planned after it)
         out.append(bumps.apply(frame, p, spec, ab) if bumps.SCALE > 0 else p)
@@ -2704,11 +2707,14 @@ class _Planner:
                     log.debug("grading: road chains of %s: %s: %s", key, type(e).__name__, e)
             pclip = []
             pparts = []                         # (fid, spec, lon/lat ring) of each plan (roadcorners.grade_rows)
+            import norway_tunnels
+            norwegian_mouths = norway_tunnels.entrances(roadsmod, feats, self.frame, key)
             coarse = COARSE_EASE_ON and self._coarse(key)
             for fid, part, cl, p in zip(ids, parts, clipped, plan_roads(self.frame, parts, self.elev, abut, ext, pins,
                                                                          coarse=coarse, obs=self._obs(key),
                                                                          decks=self._decks_near(key), rings=rings)):
                 if p is not None:
+                    norway_tunnels.approach_grade(self.frame, p, part[1], norwegian_mouths)
                     p.rid = road_id(fid)
                     import lanesections
                     fi = feats.index(fid)

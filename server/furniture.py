@@ -1364,7 +1364,12 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
     if poleprofiles.kit_enabled(pole_profile):
         import regionalmarkers
         country_at=poleprofiles.country_selector(pole_profile,pole_frame)
-        rows.extend(regionalmarkers.place(roads, box, country_at, lighting=lighting))
+        # BNE_NO_AUTO_DELINEATORS_V01: no guessed roadside reflector posts in Norway.
+        # Preserve chevrons, road signs, guardrails, and delineators outside Norway.
+        regional_rows = regionalmarkers.place(roads, box, country_at, lighting=lighting)
+        rows.extend(r for r in regional_rows
+                    if not ((r[0].startswith("eu_marker_") or r[0] in ("fr_j1", "fr_j6"))
+                            and country_at(float(r[1]), float(r[2]), float(r[3])) == "NO"))
         import regionalstops
         rows=regionalstops.localize(rows,pole_profile,pole_frame,country_at)
         import regionaltraffic
@@ -1378,6 +1383,14 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
     # (the tile's own, at their mapped points: not moved off the clearance like a guessed one)
     rows += [list(r) for r in mapped_lamps if _owns(box, r[1], r[2])]
     rows = citylamps.localize(rows, poleprofiles.lamp_country_selector(pole_profile, pole_frame))
+    # BNE_NO_NVDB_SIGNS_FURNITURE_V04: hide duplicate generated give-way props
+    # only near the eight survey signpoints and only with the test enabled.
+    if pole_frame is not None:
+        import norway_nvdb_signs_v06 as _no_nvdb  # BNE_NO_NVDB_SIGNS_NATIONWIDE_V06
+        rows = _no_nvdb.suppress_furniture_yields(rows, pole_frame)
+        # BNE_NVDB_DESTINATIONS_V07: suppress speculative Norwegian give-way furniture.
+        import norway_nvdb_destinations_v07 as no_dest
+        rows = no_dest.suppress_furniture_yields(rows, pole_frame)
     return under_decks(rows + lamp_lenses(rows), list(decks), wires)
 
 

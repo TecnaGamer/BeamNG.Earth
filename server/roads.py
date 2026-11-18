@@ -2475,11 +2475,13 @@ def deck_width_fn(frame, cells):
             return None
         tp = joint_desc(got, deck_tapers)
         bs = bridge_specs(got[0][0])[got[0][1]]
-        if not tp or bs is None:
+        if bs is None:
             return None
         pts = np.asarray(pts, np.float64)
         la, lo, _ = frame.enu_to_geodetic(pts[:, 0], pts[:, 1], 0.0)
-        return taper_widths(bs.width, tp, lo, la)
+        # Norwegian NVDB bridge width, including untapered bridge decks.
+        import nvdb_bridge_fixes_v059
+        return nvdb_bridge_fixes_v059.bridge_widths(lo, la, bs.width, tp)
     return ws_of
 
 
@@ -2487,8 +2489,9 @@ def taper_widths(width, tapers, lon, lat):
     """Per point (lon, lat arrays) the drawn width of a road width m wide with these tapers (road_tapers), smoothstepped
     from the width at each joint to its own over the taper's length; None where no taper reaches any point (width
     all along). Deterministic from absolute positions: every tile draws a road alike."""
+    # Norwegian NVDB road widths apply on untapered roads, too.
     if not tapers:
-        return None
+        tapers = ()
     lon, lat = np.asarray(lon, np.float64), np.asarray(lat, np.float64)
     out, hit = np.full(lon.shape, float(width)), False
     for tlon, tlat, target, span in tapers:
@@ -2498,6 +2501,13 @@ def taper_widths(width, tapers, lon, lat):
             hit = True
             t = np.clip(d / span, 0.0, 1.0)
             out += np.where(near, (target - width) * (1.0 - t * t * (3.0 - 2.0 * t)), 0.0)
+    # Strictly Norway-only; the width loader queues I/O rather than blocking.
+    if (len(lon) >= 2 and 57.5 <= float(np.mean(lat)) <= 72.0
+            and 3.9 <= float(np.mean(lon)) <= 32.5):
+        from nvdb_width_profile_v03 import at_points
+        measured = at_points(lon, lat, width, out if hit else None)
+        if measured is not None:
+            return measured
     return out if hit else None
 
 
@@ -8868,6 +8878,12 @@ class TunnelProfiles(BridgeProfiles):
                 if not fl.get("buried"):
                     kinds = portal_cover(kinds, (g if gc is None else gc) - floor, pool[k][0], s)
                 kinds = self._cover_roads(xy, s, kinds, ground, (g if gc is None else gc) - floor)
+            surveyed_no = False
+            if not underwater and not self._drowned.get(self._part_id(k)):
+                import norway_tunnels
+                name = str(pool[k][5] or "") if len(pool[k]) > 5 else ""
+                floor, kinds, surveyed_no = norway_tunnels.bore_profile(
+                    self, xy, s, pool[k][0], name, g, floor, kinds)
             secs, i = [], 0
             while i < len(kinds):
                 j = i
@@ -8877,7 +8893,7 @@ class TunnelProfiles(BridgeProfiles):
                 i = j + 1
             # neighbouring sections share their end sample (no gap between a portal and the open road)
             secs = [(a if n == 0 else a - 1, b, kd) for n, (a, b, kd) in enumerate(secs)]
-            if not underwater:
+            if not underwater and not surveyed_no:
                 floor = self._observed_floor(k, pool, xy, s, floor, secs,
                                              tuple(jdeg.get(e, 0) > 1 for e in jends.get(k, (None, None))))
             cover = (g if gc is None else gc) - floor
@@ -8915,7 +8931,7 @@ class TunnelProfiles(BridgeProfiles):
                     ups.append(float(np.clip(cv + PORTAL_GROUND_M - th, PORTAL_UP_MIN, roadmesh.PORTAL_FRAME)))
                 mouths = (n == 0 or secs[n - 1][2] == 0, n == len(secs) - 1 or secs[n + 1][2] == 0)
                 mouths = (mouths[0] and not (a == 0 and pinned[0]), mouths[1] and not (b == len(xy) - 1 and pinned[1]))
-                if underwater:
+                if underwater or surveyed_no:
                     joined = tuple(jdeg.get(e, 0) > 1 for e in jends.get(k, (None, None)))
                     mouths = (mouths[0] and not (a == 0 and joined[0]),
                               mouths[1] and not (b == len(xy) - 1 and joined[1]))
@@ -9629,6 +9645,11 @@ def block_tunnel_holes(tunnels, cell_fn, frame, keep, cx, cy, square, rail_parts
     if parts:
         mask = tunnel_hole_mask(parts, u, cx, cy, square, getattr(tunnels, "heights", None),
                                 getattr(tunnels, "mouths", None))
+        if mask is not None:
+            import norway_tunnels
+            import roadmesh
+            norway_tunnels.clear_lips(mask, parts, frame, u, cx, cy, square,
+                                      getattr(tunnels, "heights", {}), getattr(tunnels, "mouths", {}), roadmesh.TUNNEL_H)
         if mask is not None and mask.any():
             mask = spare_carriageways(mask, parts, cells, frame, cx, cy, square)
     if rail:
@@ -10133,6 +10154,9 @@ def retaining_walls(frame, roads, elev, exact, decks=()):
         nl = np.stack([-d[:, 1], d[:, 0]], axis=1)
         width = spec.width if spec.mountain else max(spec.width, carriageway(spec.cls, spec.kind, True, None, spec.oneway))
         core = width / 2 + grading.shoulder(spec)
+        import nvdb_bridge_fixes_v059
+        width, core = nvdb_bridge_fixes_v059.wall_width_core(
+            frame, pts, spec, width, core, grading.shoulder(spec))
         # (the grading's sharp cuttings end the core sooner; its flat strip behind a wall reaches past the core)
         steps = np.arange(width / 2 + 0.5, core + grading.WALL_FLAT_M + 1.51, 1.0)
         for side in (1.0, -1.0):
@@ -10290,7 +10314,9 @@ def retaining_walls(frame, roads, elev, exact, decks=()):
                                                                    others, fid),
                             "edge": xy[sl] + out_n[sl] * (rh + CLIFF_EDGE_M)})
             i = j + 1
-    return out
+    # Conservative removal of short artificial concrete wall nubs at bridge ends.
+    import nvdb_bridge_fixes_v059
+    return nvdb_bridge_fixes_v059.clean_walls(frame, out, decks)
 
 
 TWIN_SHARE = 0.8        # a tunnel part beside another for this share of its length (their tubes overlapping) ...
@@ -10421,9 +10447,13 @@ def _tunnel_chunks(tunnels, cells, exact, terrain_paint=True):
         pts = np.c_[xy, z]
         # A covered road needs its own colliding floor even when its mapped surface normally belongs to the
         # terrain paint (rock/grass). That paint lies on the hill/seabed above the bore, never inside it.
-        look = _deck_look(spec)
+        import norway_tunnels
+        is_aurs = (getattr(tunnels,"frame",None) is not None and spec.cls not in CONCRETE_WALL_CLASSES
+                   and norway_tunnels.near_bore(tunnels.frame, xy))
+        look = DIRT_LOOK["gravel"] if is_aurs else _deck_look(spec)
         lines = [] if look is None else [({**look, "deck": True, "tunnel": True, "no_tube": n in twinned}, spec.width, pts)]
-        for look, w, line in rampmerges.trim(fid, extras(spec, pts, lon, defer_dashes=True), layouts):
+        markings = [] if is_aurs else extras(spec, pts, lon, defer_dashes=True)
+        for look, w, line in rampmerges.trim(fid, markings, layouts):
             if look["m"] not in (SIDEWALK["m"], GUTTER["m"], EDGE_DECAL["m"]):     # (no ground beside a deck)
                 lines.append((look, w, line))
         jobs.append((fid, (pts[0, :2], pts[-1, :2]), lines, spec))
@@ -10479,6 +10509,11 @@ def _tunnel_chunks(tunnels, cells, exact, terrain_paint=True):
     import portals                  # (the ground round each mouth: its headwall, wing walls and the tube's cover)
     import sys
     out = portals.fit(sys.modules[__name__], tunnels, cells, out, parts)
+    import norway_tunnels
+    if portals.ON:
+        norway_tunnels.tag_chunks(tunnels, out)
+    if hasattr(tunnels, "mouth"):
+        out.extend(norway_tunnels.aprons(sys.modules[__name__], tunnels, cells, parts, exact))
     return roadmarkings.paint(out)
 
 
@@ -11140,6 +11175,9 @@ def _deck_chunks(decks, exact, ground_fn=None, depths=None, walks=None, shift_of
                     ws = width_of(fid, c) if width_of else None
                     if ws is not None:          # (tapering into another deck: roadmesh.ribbons' "ws")
                         ch["ws"] = [round(float(x + dw - spec.width), 3) for x in ws]
+                        if getattr(ws, "_nvdb_matched", False):
+                            import nvdb_bridge_fixes_v059
+                            ch["ws"] = nvdb_bridge_fixes_v059.structural_deck_widths(ch["ws"], c, pts)
                     if ch["m"] == DECK_CONCRETE["m"]:
                         ch["tu"] = round(max(1.0, dw / DECK_CONCRETE_TILE_M), 3)
                     if depths and fid in depths:
@@ -11181,6 +11219,9 @@ def _deck_chunks(decks, exact, ground_fn=None, depths=None, walks=None, shift_of
                             ws = width_of(fid, c) if width_of else None
                             if ws is not None:          # (tapering into another deck: roadmesh.ribbons' "ws")
                                 ch["ws"] = [round(float(x + w - spec.width), 3) for x in ws]
+                                if getattr(ws, "_nvdb_matched", False):
+                                    import nvdb_bridge_fixes_v059
+                                    ch["ws"] = nvdb_bridge_fixes_v059.structural_deck_widths(ch["ws"], c, pts)
                             ch["tdir"] = _travel(spec)  # (roadmesh: opposite traffic beside it, a median)
                             if depths and fid in depths:
                                 ch["dd"] = round(float(depths[fid]), 3)     # (roadmesh.deck: its slab and girders)
@@ -11872,7 +11913,7 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
         ws = None                               # (tapered where it meets a road of another width: road_tapers)
         if fid in seen:
             tp = joint_desc(road_copies.get(fid, [seen[fid][:2]]), lambda f: road_tapers(f, urban_fn, widths, left_hand))
-            if tp:
+            if tp or (57.5 <= float(frame.lat0) <= 72.0 and 3.9 <= float(frame.lon0) <= 32.5):
                 tla, tlo, _ = frame.enu_to_geodetic(pts[:, 0], pts[:, 1], 0.0)
                 ws = taper_widths(spec.width, tp, tlo, tla)
         half = spec.width / 2 if ws is None else (ws[:-1] + ws[1:]) / 4  # surface paints each segment at its mean
@@ -11895,6 +11936,12 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
             ex = section_lines(ex, *seen[fid][:2], spec, pts, frame, lon, left_hand, line_country, ws)
             if str(country or "").upper() == "SE":
                 ex = way_lines(ex, *seen[fid][:2], spec, pts, lon, left_hand, country, ws, sh)
+        # Use confidently matched Norwegian NVDB 99 paint where cached.
+        if str(line_country or country or "").upper() == "NO" and spec.kind == "paved":
+            import nvdb_marking_overlay_v046
+            _lat, _lon, _ = frame.enu_to_geodetic(pts[:, 0], pts[:, 1], np.zeros(len(pts)))
+            ex = nvdb_marking_overlay_v046.adjust(
+                ex, pts, _lon, _lat, ws if ws is not None else spec.width, spec)
         ex = rampmerges.trim(fid, ex, merge_layouts)
         # (every other road (ne) at its half width + CUT_MARGIN; edge lines not at a road it goes straight on in,
         # centre lines nor at its stems; French paint not at its continuations)
