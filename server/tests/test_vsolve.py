@@ -203,16 +203,13 @@ class JoinTest(unittest.TestCase):
         self.assertIsNone(vsolve._joint_caps([a, b], [np.zeros(len(S))] * 2, dips, None))
 
 
-if __name__ == "__main__":
-    unittest.main()
-
 
 @unittest.skipUnless(have_kernel(), "earthfast's carriageway_profiles")
 class OnTest(unittest.TestCase):
     """BNE_VSOLVE=on (the RFC's step 3): the solve's heights in the plans, under their own cache key."""
 
     def setUp(self):
-        p = unittest.mock.patch.multiple(vsolve, ON=True, SHADOW=True)
+        p = unittest.mock.patch.multiple(vsolve, ON=True, SHADOW=True, SOLO=False)
         p.start()
         self.addCleanup(p.stop)
 
@@ -383,3 +380,28 @@ class CapsTest(unittest.TestCase):
         """Within APPROACH_MIN_CROSS_M of a deck's real end, a junction at grade: no cap."""
         xs, got = self._caps([[(5, 2), (5, 40)]])
         self.assertTrue(got is None or not np.isfinite(got[np.abs(xs - 5.0) < 1.0]).any())
+
+
+class DefaultModeTest(unittest.TestCase):
+    """BNE_VSOLVE unset (the RFC's step 4): on where the native kernel has the solve, off on an older build."""
+
+    def test_on_with_the_kernel_off_without(self):
+        import fast
+        for ef, mode in ((SimpleNamespace(VERSION=vsolve.KERNEL_MIN), "on"),
+                         (SimpleNamespace(VERSION=vsolve.KERNEL_MIN + 1), "on"),
+                         (SimpleNamespace(VERSION=vsolve.KERNEL_MIN - 1), "off"),
+                         (None, "off")):
+            with unittest.mock.patch.object(fast, "_ef", ef, create=True):
+                self.assertEqual(vsolve._default_mode(), mode, ef)
+
+    def test_the_environment_still_decides(self):
+        import importlib
+        for env, on in (("off", False), ("shadow", False), ("on", True), ("solo", True)):
+            with unittest.mock.patch.dict(os.environ, {"BNE_VSOLVE": env}):
+                mod = importlib.reload(vsolve)
+                self.assertEqual((mod.MODE, mod.ON), (env, on))
+        importlib.reload(vsolve)
+
+
+if __name__ == "__main__":
+    unittest.main()

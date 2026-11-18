@@ -127,6 +127,8 @@ grade and clearance, and its CPU stays within today's per cell.
 3. **Opt-in** (`BNE_VSOLVE=on`): the solver's plans used, the passes as the fallback. Driven in game on the benchmark
    places; `PLANS_FORMAT` bumped by the maintainer.
 4. **Default on**, then the passes it replaces removed one PR at a time, with their tests rewritten as constraint tests.
+   (`BNE_VSOLVE` unset is on where the native kernel has the solve, `vsolve.KERNEL_MIN`; `BNE_VSOLVE=off` the passes
+   alone: `docs/research/2026-11-18-vsolve-default-on.md`.)
 
 Each step is small enough to review and revert. Steps 1-2 change no plan.
 

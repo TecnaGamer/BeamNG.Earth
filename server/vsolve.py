@@ -23,9 +23,10 @@ least-squares problem on the carriageway solver's kernel (carriageways.solve: ea
   share_corridors' rule, on its pairs: corridor rows, where a solve's heights broke it, round by round).
 
 BNE_VSOLVE=shadow runs it beside the passes: their plans are used and kept as always; the solve's are only kept
-in memory for tools/grade_metrics.py to measure (Planner._vsolve). BNE_VSOLVE=on (the RFC's step 3, opt-in) runs it
-the same and uses its heights for the cell's ground roads, the passes' where it falls back; its plans under their own
-cache key (plancache.plans_format). Off by default, and off it costs nothing.
+in memory for tools/grade_metrics.py to measure (Planner._vsolve). BNE_VSOLVE=on (the RFC's step 3) runs it the
+same and uses its heights for the cell's ground roads, the passes' where it falls back; its plans under their own cache
+key (plancache.plans_format). On by default (the RFC's step 4) where the native kernel has the solve (KERNEL_MIN);
+off, as before, on an older build. BNE_VSOLVE=off: the passes alone, and off it costs nothing.
 Pure: the same plans in give the same heights out.
 """
 import logging
@@ -38,7 +39,22 @@ import dnp
 
 log = logging.getLogger("earthd.vsolve")
 
-MODE = os.environ.get("BNE_VSOLVE", "off").strip().lower()
+KERNEL_MIN = 482        # earthfast's VERSION with the solve's soft couplings (481) and corridor pairs (482)
+
+
+def _default_mode():
+    """BNE_VSOLVE unset: "on" where the native kernel has the solve (the RFC's step 4), "off" on an older build. Off
+    there rather than on and failing in every cell: the plans are the passes' either way, but on they were cached under
+    the solve's key (plancache.plans_format) and kept after the kernel was rebuilt."""
+    try:
+        import fast
+        version = int(getattr(getattr(fast, "_ef", None), "VERSION", 0) or 0)
+    except Exception:
+        version = 0
+    return "on" if version >= KERNEL_MIN else "off"
+
+
+MODE = (os.environ.get("BNE_VSOLVE") or "").strip().lower() or _default_mode()
 SOLO = MODE == "solo"               # (an experiment: the solve's heights, from the rules alone: the passes it replaces
                                     # skipped, docs/research/2026-11-17-vsolve-solo.md)
 ON = MODE == "on" or SOLO           # (the solve's heights used)
@@ -53,6 +69,12 @@ JOIN_REACH_M = 3.0      # m past a road's carriageway edge an end no road comes 
                         # JOIN_END_M, still meets it, at its nearest point (grading.JUNCTION_REACH_M, the passes' snap:
                         # Silistra's track ended 1.6 m off the next one's centre line, so the solve held it at its
                         # profile, 3.4 m over the other where the dip under the bridge took that one down). -inf: none
+REACH_ON = os.environ.get("BNE_VSOLVE_REACH", "off") == "on"   # the reach in the solve's joins: off by default. On, it
+                        # took Silistra's 3.4 m step away (drivability 5.8 -> 1.4), but Tokyo's cells joined ends
+                        # differently: 4 seams over 30 cm (up to 1.87 m, 0 without), with the limits below as well
+JOIN_REACH_DZ_M = 0.5   # m: ... only an end whose profile is this near that road's there (more: likely two levels; at
+                        # any difference up to JOIN_DZ_M, Tokyo's cells joined ends differently, 4 seams up to 1.87 m);
+                        # and never an end cut at the cell's box, which is no end of its road
 JOINT_FLAT_M = 12.0     # m: a junction no higher than the deepest dip any of its roads has this near it (soft, a cap:
                         # grading.UNDER_JOINT_FLAT_M, the underpass rule's; a Vienna Südtiroler Platz junction of four
                         # primary roads stayed at its profile, held by all four, 0.27 m over the dip on one of them 4 m
@@ -119,12 +141,13 @@ def _cls(spec):
     return (getattr(spec, "cls", None) or "").removesuffix("_link")
 
 
-def joins(xys, z0, r=JOIN_M, dz=JOIN_DZ_M, r_end=None, halves=None):
+def joins(xys, z0, r=JOIN_M, dz=JOIN_DZ_M, r_end=None, halves=None, cut=()):
     """[(a, ia, b, ib, sj, t)]: plan a's end sample ia (0 or -1) meets plan b at its sample ib (the nearest), at t
     along its segment sj, each pair of ends once, crossings no nodes; an end no line comes within r of, another plan's
     end within r_end (JOIN_END_M by default; at that end: t 0); an end that meets neither, the nearest line within its
-    road's half width (halves: per plan, m; None: none) and JOIN_REACH_M of it. xys: per plan (n, 2); z0: per plan its
-    profile (n,), whose difference over dz says two levels. Pure."""
+    road's half width (halves: per plan, m; None: none) and JOIN_REACH_M of it, its profile within JOIN_REACH_DZ_M of
+    that line's; cut: the (plan, sample) ends cut at the box (no end of the road: no reach). xys: per plan (n, 2); z0:
+    per plan its profile (n,), whose difference over dz says two levels. Pure."""
     import grademetrics as gm
     r_end = JOIN_END_M if r_end is None else r_end
     seg = gm._Segments(xys)
@@ -144,9 +167,10 @@ def joins(xys, z0, r=JOIN_M, dz=JOIN_DZ_M, r_end=None, halves=None):
                     for ib in (0, len(q) - 1):
                         if float(dnp.hypot(*(q[ib] - p))) <= r_end:
                             hits[b] = (0.0, ib if ib == 0 else ib - 1, 0.0 if ib == 0 else 1.0)
-            if not hits and far > r:
+            if not hits and far > r and (a, ia) not in cut:
                 near = [(h[0] - halves[b], b, h) for b, h in seg.near(p, far).items()
-                        if b != a and len(xys[b]) > 1 and h[0] <= halves[b] + JOIN_REACH_M]
+                        if b != a and len(xys[b]) > 1 and h[0] <= halves[b] + JOIN_REACH_M
+                        and abs(float(z0[a][ia]) - _at(z0[b], h[1], h[2])) <= JOIN_REACH_DZ_M]
                 if near:
                     _e, b, (_d, sj, t) = min(near, key=lambda v: v[0])
                     hits[b] = (0.0, sj, t)
@@ -166,7 +190,18 @@ def joins(xys, z0, r=JOIN_M, dz=JOIN_DZ_M, r_end=None, halves=None):
     return out
 
 
-def nodes(xys, z0, r=JOIN_M, dz=JOIN_DZ_M, halves=None):
+def _halves(plans):
+    """Per plan its road's half width for joins' reach, or None: the reach off (REACH_ON)."""
+    return [float(getattr(p, "road_half", 0.0) or 0.0) for p in plans] if REACH_ON else None
+
+
+def _at(z, sj, t):
+    """z (n,) at t along its segment sj."""
+    z = np.asarray(z, np.float64)
+    return float(z[sj] + t * (z[min(sj + 1, len(z) - 1)] - z[sj]))
+
+
+def nodes(xys, z0, r=JOIN_M, dz=JOIN_DZ_M, halves=None, cut=()):
     """The junctions (joins' pairs grouped, union-find): per node {(plan, sample): offset}, the height of the node
     being the sample's profile plus its offset (0 for a road's end; where an end lands between a road's samples, that
     road's profile there less its nearest sample's: on a 15 % road the nearest sample alone missed by up to 15 cm,
@@ -179,7 +214,7 @@ def nodes(xys, z0, r=JOIN_M, dz=JOIN_DZ_M, halves=None):
             k = parent[k]
         return k
     offs = {}
-    for a, ia, b, ib, sj, t in joins(xys, z0, r, dz, halves=halves):
+    for a, ia, b, ib, sj, t in joins(xys, z0, r, dz, halves=halves, cut=cut):
         ka = (a, ia if ia >= 0 else len(xys[a]) + ia)
         kb = (b, ib)
         if ib in (0, len(xys[b]) - 1):
@@ -222,8 +257,8 @@ def problem(plans, specs, z0, ceilings, ranks, pins=(), dips=None, grade_rows=Tr
     r0 = float(rk.min()) if len(rk) else 0.0
     chains, couplings = [], []
     stiff = np.zeros(len(plans))
-    node_list = nodes(xys, z0, halves=[float(getattr(p, "road_half", 0.0) or 0.0) for p in plans]) \
-        if "nodes" not in drop else []
+    node_list = nodes(xys, z0, halves=_halves(plans),
+                      cut={(a, i) for a, i, _h in pins}) if "nodes" not in drop else []
     in_node = {k for m in node_list for k in m}
     held = {}
     for (a, i, h) in pins:
@@ -336,7 +371,7 @@ def solve(plans, specs, z0, ceilings, ranks, pins=(), dips=None, budget=BUDGET_S
     if corridors is not None:
         corridors = _corridor_bands(corridors, z0, dips, floors)
     if joints:
-        caps = _joint_caps(plans, z0, dips, caps)
+        caps = _joint_caps(plans, z0, dips, caps, pins)
     if not plans:
         info.update(joins=0, elapsed_s=0.0)
         return [], info
@@ -378,7 +413,7 @@ def solve(plans, specs, z0, ceilings, ranks, pins=(), dips=None, budget=BUDGET_S
     return out, info
 
 
-def _joint_caps(plans, z0, dips, caps):
+def _joint_caps(plans, z0, dips, caps, pins=()):
     """caps with every junction (nodes) capped at the deepest dip any of its roads has within JOINT_FLAT_M of it:
     the underpass rule's flat junction. caps itself when no junction is near a dip. Pure."""
     if dips is None or all(d is None for d in dips):
@@ -393,7 +428,8 @@ def _joint_caps(plans, z0, dips, caps):
             got = arcs[j] = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(xys[j], axis=0).T))]
         return got
     out = None
-    for m in nodes(xys, zz, halves=[float(getattr(p, "road_half", 0.0) or 0.0) for p in plans]):
+    for m in nodes(xys, zz, halves=_halves(plans),
+                   cut={(a, i) for a, i, _h in pins}):
         h = np.inf
         for j, i in m:
             d = dips[j]
