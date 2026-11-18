@@ -2409,6 +2409,19 @@ def _foot_limits(xy, side, foot, others, crossers):
             return
         pi = p[i]
         a, b = line[:-1], line[1:]
+        # Only the segments within those points' widest limit of their box: a segment further off is further than its
+        # limit from each of them, so the nearest of the rest clips the same points by the same sums, or none does.
+        # (A track's line is sampled every 2 m and a road's runs across the tile: every vertex of a piece was
+        # measured against every segment of each, 42 lines a piece, a tenth of the CPU of a tile with tracks,
+        # 2026-11-18.)
+        far = float(r[i].max())
+        p_lo, p_hi, s_lo, s_hi = pi.min(0), pi.max(0), np.minimum(a, b), np.maximum(a, b)
+        off = ((s_lo[:, 0] - far > p_hi[0]) | (s_hi[:, 0] + far < p_lo[0])
+               | (s_lo[:, 1] - far > p_hi[1]) | (s_hi[:, 1] + far < p_lo[1]))
+        if off.all():
+            return
+        if off.any():
+            a, b = a[~off], b[~off]
         ab = b - a
         ab2 = np.maximum((ab * ab).sum(1), 1e-9)
         t = np.clip(((pi[:, None, :] - a[None]) * ab[None]).sum(2) / ab2[None], 0.0, 1.0)
