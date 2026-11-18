@@ -8066,6 +8066,12 @@ class BridgeProfiles:
                     fid = str(feats.ids[i])
                     if bs[i] is not None:
                         lvls = self.levels_of(feats, i)
+                        # (BNE_DECK_STRUCT=shadow, RS S2a: each part's grouping level and its source as a 7th field,
+                        # structures.part_levels: the OSM layer where no Overture level rule covers it)
+                        glv = None
+                        if self.STRUCTURES and structures.SHADOW:
+                            spans = _bridge_level_spans(feats, i)
+                            glv = structures.part_levels(feats, i, spans, len(lvls) // max(1, len(spans)))
                         best = {}
                         for j, (pk, ring) in enumerate(_keyed(self.keys_of, self.parts_of, feats, i)):
                             if (fid, pk) in best and len(ring) <= best[(fid, pk)][4]:
@@ -8074,6 +8080,8 @@ class BridgeProfiles:
                             best[(fid, pk)] = (bs[i], densify(_dedupe(np.stack([e, n], axis=1)), DECK_STEP),
                                               float(np.mean(ring[:, 0])), lvls[j] if j < len(lvls) else 1.0, len(ring),
                                               str(names[i]) if names is not None else "")     # (roadz: name matching)
+                            if glv is not None:
+                                best[(fid, pk)] += (glv[j] if j < len(glv) else (best[(fid, pk)][3], 2),)
                         parts.extend(best.items())
                     if rs[i] is not None:
                         lines = []
@@ -8191,6 +8199,13 @@ class BridgeProfiles:
             for a, b in _deck_beside([pool[k][1] for k in keys], [pool[k][0].width for k in keys]):
                 crossing.setdefault(keys[a], set()).add(keys[b])
                 crossing.setdefault(keys[b], set()).add(keys[a])
+            # (BNE_DECK_STRUCT=shadow, RS S2a "one owner": and every pair that could be one structure, within the
+            # design's 6 m edge to edge by the grouping's own rules (structures.touch): every structure edge inside one
+            # chain. At 1.5 m alone, 33 pairs of the structures corpus lay in two chains, 2026-11-18)
+            if self.STRUCTURES and structures.SHADOW:
+                for a, b in structures.touch([pool[k] for k in keys], keys):
+                    crossing.setdefault(keys[a], set()).add(keys[b])
+                    crossing.setdefault(keys[b], set()).add(keys[a])
             # and a free end joining another part's end (_end_joins): solved as one
             for a, b in self._end_join_pairs([pool[k][1] for k in keys], [pool[k][0].width / 2 for k in keys], ground,
                                              [pool[k][3] for k in keys]):
@@ -8230,6 +8245,12 @@ class BridgeProfiles:
                 # (and every cell the chain's parts lie in: the cells read are then the chain's own, the same from
                 # whichever of its parts the solve started; their keys' order)
                 xy = np.concatenate([np.asarray(pool[k][1], np.float64)[:, :2] for k in sorted(comp)])
+                if self.STRUCTURES and structures.SHADOW:
+                    # (RS S2a: and the cells within reach of them (structures.halo, per part), where a deck that could
+                    # be one structure with a chain part may lie in a cell none of the chain's points reach: Codex)
+                    half = max(float(pool[k][0].width) / 2 for k in comp)
+                    xy = np.concatenate([structures.halo(np.asarray(pool[k][1], np.float64)[:, :2], half)
+                                         for k in sorted(comp)])
                 la, lo, _ = self.frame.enu_to_geodetic(xy[:, 0], xy[:, 1], 0.0)
                 cells = {str(c): c for c in mapcells.cells_of(np.asarray(la), np.asarray(lo))}
                 for c in sorted(cells):
@@ -8554,6 +8575,7 @@ class BridgeProfiles:
 
     owner_of = None     # owner_of(self, comp, pool) -> the profiles that solve chain comp (ChainStore: the one of its
                         # first part's region), or None: this one
+    region_of = None    # region_of(self, comp, pool) -> owner_of's region, with no side effect (ChainStore._region_of)
 
     def parts_todo(self, todo, solved_only=False, part_ids=False):
         """[(fid, spec, xy, z, lon)] of the parts todo [((fid, j), feats, i)], each solved with its chain (once);
@@ -8738,18 +8760,18 @@ class BridgeProfiles:
         own = None if key in mine else (pool[key][0], pool[key][1], zs[comp.index(key)], pool[key][2])
         pre = {k: self._precommit(k, v, ground) for k, v in keep.items()}
         beams = tpiers = None
-        # (BNE_DECK_STRUCT=shadow, road revamp RS S1: the chain's structure groups as a JSON, from what this solve read
-        # alone: its pool, its heights, the bridge outlines its structure reads; nothing published changes. A window
-        # solve's chain (CHAIN_CELLS capped) is the legacy path in v1: a marker per window, whichever solves first)
+        # (BNE_DECK_STRUCT=shadow, road revamp RS: the chain's structure groups as a JSON, from what this solve read
+        # alone: its pool, its heights, the bridge outlines its structure reads (infra); nothing published changes.
+        # Handed to structures' background writer only AFTER the publish below, and only when this solve is the one
+        # published: S1 wrote it here, staged, from solves that then lost, were short or were a fallback, with the
+        # grouping and the file inside the build's fault window (Codex review of S1). A window solve's chain
+        # (CHAIN_CELLS capped) is the legacy path in v1: a marker per window)
         shadow = self.STRUCTURES and structures.SHADOW
         infra = [] if (shadow and fresh and block is None) else None
         if fresh:
             chain = [(v[1], v[2], v[0].width) for v in (keep.get(k) or before[k] for k in comp) if v is not None]
             beams, tpiers = self._structure(chain) if infra is None else self._structure(chain, infra)
-        if infra is not None:
-            structures.shadow(self, comp, pool, zs, infra)
-        elif shadow and block is not None:
-            structures.capped(self, comp, block)
+        won = False
         with self.lock:
             publish = []
             for k in comp:
@@ -8770,9 +8792,34 @@ class BridgeProfiles:
             if fresh and ck not in self.trusses:
                 self.trusses[ck] = beams
                 self.piers[("truss", ck)] = tpiers
-            if own is not None:         # (the asked piece's middle in another block than its asker's: not kept)
-                return own
-            return self._take_locked(key)
+                won = True
+            # (the asked piece's middle in another block than its asker's: not kept)
+            got = own if own is not None else self._take_locked(key)
+        if shadow:
+            # the published solve: the chain's own owner (not a fallback after its owner's solve failed: `owner`),
+            # read complete, every part of it and (a whole chain's) its structure published by this solve
+            # (an owner's own solve, asked by another store's adoption with adopt False, checks its ownership of the
+            # chain it resolved itself: a snapshot whose chain starts in another store's region is not this one's.
+            # By region, looked up with no side effect: a store evicted and made again for the same region is the
+            # same owner, and the check touches no store (Codex review, rounds 1 and 2))
+            mine = owner is None or owner is self
+            try:
+                if mine and self.region_of is not None:
+                    mine = self.region_of(self, comp, pool) == getattr(self, "region", None)
+            except Exception as ex:         # (a shadow: never in the solve's way)
+                log.debug("chain %s: owner: %s: %s", key, type(ex).__name__, ex)
+                mine = False
+            # (a short solve: none, unless a developer's probe asked for those too, marked: structures.ACCEPT_SHORT)
+            short_ = bool(n_short or n_lidar)
+            canon = mine and (not short_ or structures.ACCEPT_SHORT)
+            whole = block is None and won and len(publish) == len(comp)
+            window = block is not None and bool(publish)
+            if canon and (whole or window):
+                import revisit
+                structures.published(self, comp, pool, zs, infra, block, revisit.CACHE_DIR, short_)
+            else:
+                structures.skipped("owner" if not mine else "short" if not canon else "lost")
+        return got
 
     def _ends_ll(self, xy):
         """(lat, lon) of a deck line's two ends (this frame's world)."""
@@ -9813,6 +9860,7 @@ class ChainStore:
             import geotiles
             got = self.cls(geotiles.frame(region[0], region[1], geotiles.CHAIN_Z), self.cell_fn, self.elev)
             got.owner_of = self._owner
+            got.region_of = self._region_of
             got.region = region
             if self.setup is not None:
                 self.setup(got)
@@ -9830,6 +9878,15 @@ class ChainStore:
         first = min(comp)
         (la, lo), _ = prof._ends_ll(pool[first][1])
         return self.store_at(la, lo)
+
+    @staticmethod
+    def _region_of(prof, comp, pool):
+        """The region of the store that owns chain comp (_owner's), looked up without making or touching a store
+        (BNE_DECK_STRUCT=shadow's ownership check)."""
+        import geotiles
+        (la, lo), _ = prof._ends_ll(pool[min(comp)][1])
+        t = geotiles.tile_of(float(la), float(lo), geotiles.CHAIN_Z)
+        return (int(t[0]), int(t[1]))
 
 
 class _Mapper:

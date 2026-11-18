@@ -427,9 +427,11 @@ def keyed_env(k):
 # rounded dug floor (2026-11-17). BNE_DIRT_BUMP / BNE_DIRT_BANK 2 (Rough dirt roads): their random numbers from
 # earthfast.DirtNoise (integer splitmix64, the same on every platform), no longer numpy's Generator (2026-11-18).
 # BNE_DECK_STRUCT 1: the road revamp's structures (track RS) at step S1, shadow only (structures.py: a JSON per chain,
-# no output change); each later step bumps it. BNE_LEVEL_SPACING 5: one clearance per crossing from its own road's class.
+# no output change); each later step bumps it. 2 (S2a): the chain closure holds every pair that could be one structure
+# (structures.touch, 6 m: more parts can share a chain solve), unique members, OSM layer levels, the JSON only from the
+# published solve, written in the background. BNE_LEVEL_SPACING 5: one clearance per crossing from its own road's class.
 SWITCH_VERSIONS = {"BNE_LEVEL_SPACING": 5, "BNE_FAST_DECK_GROUND": 2, "BNE_UNDER_SPEED": 2, "BNE_FAST_GAP": 5,
-                   "BNE_RACEWAY_DIG": 2, "BNE_DIRT_BUMP": 2, "BNE_DIRT_BANK": 2, "BNE_DECK_STRUCT": 1}
+                   "BNE_RACEWAY_DIG": 2, "BNE_DIRT_BUMP": 2, "BNE_DIRT_BANK": 2, "BNE_DECK_STRUCT": 2}
 
 
 def keyed_value(k, v):

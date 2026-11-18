@@ -6689,6 +6689,10 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(structures::groups::structure_groups, m)?)?;
     // 480: road revamp RS step S1 (structures::groups::structure_groups: which decks of one bridge chain form one
     // structure; roads writes them as a shadow JSON per chain, BNE_DECK_STRUCT=shadow). 472-479 left to other branches
-    m.add("VERSION", 480)?;
+    m.add_function(wrap_pyfunction!(structures::groups::structure_touch, m)?)?;
+    // 481: RS step S2a: structure_groups takes an outside flag per member (its own kind kept: an outside conflict only
+    // where the pair could be one structure) and returns each member's duplicate (one way under two part keys);
+    // structure_touch, the pairs the chain closure must hold (BridgeProfiles._resolve on the switch path)
+    m.add("VERSION", 481)?;
     Ok(())
 }
