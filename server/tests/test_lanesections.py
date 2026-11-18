@@ -163,7 +163,8 @@ class RampMouths(unittest.TestCase):
         p = f.parts(i)[0][0]
         e, n, _ = FRAME.geodetic_to_enu(p[:, 1], p[:, 0], 0.)
         lane = roads.LANE_W["motorway"]
-        grid = lanesections._grid("motorway", 4, lane)
+        # (a motorway's travel lanes stand left of its pavement's centre by half its wider shoulder: 4 lanes)
+        grid = (roads.SHOULDER_WIDE_M if 4 >= roads.SHOULDER_WIDE_LANES else roads.SHOULDER_M) / 2.
         self.assertAlmostEqual(n[0], grid - 1.5 * lane - lane / 2, delta=.08)
         self.assertLess(abs(n[-1] + 60.), .3)
         self.assertGreater(np.diff(e).min(), 0.)

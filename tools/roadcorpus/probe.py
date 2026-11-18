@@ -695,6 +695,14 @@ def probe(server, cache, lat, lon, R, checks, entrance, offline=False):
         if want("missing"):
             res["missing_deck"] = sorted(missing, key=lambda r: (-r[0], r[3], r[4]))
 
+    # ---- racetracks (road revamp R1k: the track surface wins)
+    if want("track"):
+        try:
+            res["track"] = track_check(np, roads, gradingmod, blockworker, s, g, frame, flist, ground, R, ll, inside,
+                                       to_ll, elev)
+        except Exception as ex:
+            errors.append(f"track: {type(ex).__name__}: {ex}")
+
     # ---- tunnels (tools/tunnelscan.py on this process's state)
     if want("tunnels"):
         here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -731,9 +739,155 @@ def probe(server, cache, lat, lon, R, checks, entrance, offline=False):
     return res
 
 
+TRACK_DZ_M = 0.05           # m the drawn track may leave its own smoothed surface (nothing else grades it)
+TRACK_BREACH_M = 0.3        # m: less than this between a tube's vault and the track over it: the tube through the track
+TRACK_STEP_M = 2.0
+
+
+def track_check(np, roads, gradingmod, blockworker, s, g, frame, flist, ground, R, ll, inside, to_ll, elev):
+    """Racetracks (highway=raceway; road revamp R1k, "the track surface wins"): along every raceway on the ground (its
+    centre line and both edges less 0.5 m, every TRACK_STEP_M) the terrain block's ground (graded, the low arches'
+    soil raised over them: roads.arch_raise) against the track's own smoothed surface (grading's raceway smoothing on
+    the bare ground): surface [max |dz| m, samples over TRACK_DZ_M, fid, where]; a tunnel tube under it with less than
+    TRACK_BREACH_M between its vault and the track: breach [m, tunnel part, where]; a tunnel's open section (no tube)
+    across it: open_under [fid, where]; a bridge on a raceway the map does not tag (a grade separation): bridges [m,
+    fid, where]; a road's mapped tunnel crossing under a raceway built as no tunnel: opened [fid, where]."""
+    import roadmesh
+    out = {"surface": [], "breach": [], "open_under": [], "bridges": [], "opened": [], "track_m": 0}
+    races = [(fid, spec, gl) for fid, sub, cls, spec, gl in ground if cls == "raceway"]
+    box = (-R - 150.0, -R - 150.0, R + 150.0, R + 150.0)
+    # the map's raceway bridges vs the ones built; mapped tunnels under raceways vs the ones built
+    rlines = [gl for _f, _s, gl in races]
+    seen = set()
+
+    def dist(line, p):          # (point p to polyline line)
+        a, ab = line[:-1], np.diff(line, axis=0)
+        t = np.clip(((p - a) * ab).sum(1) / np.maximum((ab * ab).sum(1), 1e-12), 0.0, 1.0)
+        return float(np.hypot(*(a + t[:, None] * ab - p).T).min())
+    for f in flist:
+        for i in range(len(f)):
+            fid = str(f.ids[i])
+            if fid in seen or str(f.attrs["subtype"][i]) != "road":
+                continue
+            seen.add(fid)
+            is_race = "class" in f.attrs and str(f.attrs["class"][i]) == "raceway"
+            want = "bridge" if is_race else "tunnel"
+            tagged = roads._parts_by_level_new(f, i, want, rngs=roads.tag_level_ranges(f, i))
+            built = roads._parts_by_level(f, i, want)
+
+            def enu(ring):
+                ring = np.asarray(ring, np.float64)
+                e, n, _ = frame.geodetic_to_enu(ring[:, 1], ring[:, 0], 0.0)
+                return np.stack([np.asarray(e), np.asarray(n)], 1)
+
+            def mid(xy):
+                sa = np.r_[0.0, np.cumsum(np.hypot(*np.diff(xy, axis=0).T))]
+                t = sa[-1] / 2
+                return np.array([np.interp(t, sa, xy[:, 0]), np.interp(t, sa, xy[:, 1])]), float(sa[-1])
+            tl = [enu(r) for r in tagged if len(r) >= 2]
+            bl = [enu(r) for r in built if len(r) >= 2]
+            if is_race:
+                for xy in bl:
+                    m, L = mid(xy)
+                    if inside(m) and not any(dist(t, m) < 3.0 for t in tl):
+                        out["bridges"].append([round(L, 1), fid, ll(m)])
+            elif tl and rlines:
+                for xy, cr in zip(tl, roads._crossings_by(rlines, tl)):
+                    m, _L = mid(xy)
+                    if cr and inside(m) and not any(dist(b, m) < 3.0 for b in bl):
+                        out["opened"].append([fid, ll(m)])
+    if not races:
+        return out
+    tun = blockworker.tunnel_profiles(None, frame, elev, g)
+    parts = list(tun.parts(flist, box))
+    heights = dict(getattr(tun, "heights", {}) or {})
+    mouths = getattr(tun, "mouths", None)
+    opens = list(tun.open_parts(flist, box))
+    for fid, spec, gl in races:
+        line, _st = gradingmod.resample(gl, TRACK_STEP_M)
+        if len(line) < 2:
+            continue
+        t = np.gradient(line, axis=0)
+        t /= np.maximum(np.hypot(t[:, 0], t[:, 1]), 1e-9)[:, None]
+        nrm = np.stack([-t[:, 1], t[:, 0]], axis=1)
+        o = max(spec.width / 2 - 0.5, 0.0)
+        pts = np.concatenate([line, line + nrm * o, line - nrm * o])
+        keep = np.hypot(pts[:, 0], pts[:, 1]) <= R
+        if not keep.any():
+            continue
+        pts = pts[keep]
+        out["track_m"] += int(round(keep[:len(line)].sum() * TRACK_STEP_M))
+        la, lo = to_ll(pts)
+        base = np.asarray(blockworker.ground(frame, la, lo, s.dem.sample(la, lo, 15)), np.float64)
+        g.apply(la, lo, base, gradingmod.ROAD_LIFT)
+        # (again, its cells planned now: a point on two raceways' bands takes the nearest one whose cell is planned
+        # (grading.raceway_ground), so the first answer can differ from a later one by which cells were planned)
+        got = np.asarray(g.apply(la, lo, base, gradingmod.ROAD_LIFT), np.float64)
+        # (the planners' own smoothing, each in its region's frame, on the ground apply smooths: decks' bridges out)
+        b2 = np.asarray(g.deck_ground(la, lo, base), np.float64) if hasattr(g, "deck_ground") else base
+        ref = b2.copy()
+        on = np.zeros(len(la), bool)    # (on the drawn band: the planners' own raceway lines, as placed and rounded)
+        for pl, idx in g.store.planners_of(la, lo):
+            idx = np.arange(len(la)) if idx is None else idx
+            pe, pn, _ = pl.frame.geodetic_to_enu(la[idx], lo[idx], 0.0)
+            ref[idx] = pl._raceway_ground(np.asarray(pe), np.asarray(pn), b2[idx])
+            m = pl._on_kept(np.asarray(pe, np.float64), np.asarray(pn, np.float64))
+            if m is not None:
+                on[idx] = m
+
+        def up(z):
+            return np.asarray(frame.geodetic_to_enu(la, lo, z)[2], np.float64)
+        zr, zg = up(ref), up(got)
+        zb = np.asarray(roads.arch_raise(parts, heights, pts[:, 0], pts[:, 1], zg, mouths), np.float64)
+        dz = np.where(on, zb - zr, 0.0)
+        bad = np.abs(dz) > TRACK_DZ_M
+        if bad.any():
+            k = int(np.argmax(np.abs(dz)))
+            out["surface"].append([round(float(dz[k]), 2), int(bad.sum()), fid, ll(pts[k])])
+        # tubes under it
+        for pid, pspec, pxy, pz, _lon in parts:
+            pxy = np.asarray(pxy, np.float64)[:, :2]
+            pz = np.asarray(pz, np.float64)
+            if len(pxy) < 2 or not np.isfinite(pz).all():
+                continue
+            hw = pspec.width / 2 + roadmesh.TUNNEL_SHOULDER
+            lo_, hi_ = pxy.min(0) - hw, pxy.max(0) + hw
+            sel = np.flatnonzero((pts[:, 0] >= lo_[0]) & (pts[:, 0] <= hi_[0]) & (pts[:, 1] >= lo_[1])
+                                 & (pts[:, 1] <= hi_[1]))
+            if not len(sel):
+                continue
+            th = float(heights.get(pid, roadmesh.TUNNEL_H))
+            worst = None
+            for j in sel.tolist():
+                zf = roads.tunnel_floor_at([(pid, pspec, pxy, pz, None)], pts[j, 0], pts[j, 1])
+                if zf is None:
+                    continue
+                room = float(zb[j] - (zf + th))
+                if worst is None or room < worst[0]:
+                    worst = (room, j)
+            if worst is not None and worst[0] < TRACK_BREACH_M:
+                out["breach"].append([round(worst[0], 2), str(pid)[:40], ll(pts[worst[1]])])
+        for pid, pspec, pxy, _pz, _lon in opens:
+            pxy = np.asarray(pxy, np.float64)[:, :2]
+            if len(pxy) >= 2 and roads._crossings_by([gl], [pxy])[0]:
+                c = roads._crossings_by([gl], [pxy])[0][0][2]
+                if inside(c):
+                    out["open_under"].append([str(pid)[:40], ll(c)])
+    for k in out:
+        if isinstance(out[k], list):
+            out[k] = sorted(out[k], key=lambda r: json.dumps(r))
+    return out
+
+
 def summarise(res):
     """Blockers and defects per category (the plan's section 5.3 scorecard)."""
     out = {}
+    if "track" in res:
+        t = res["track"]
+        blk = len(t["breach"]) + len(t["bridges"]) + sum(1 for r in t["surface"] if abs(r[0]) > 0.3)
+        out["track"] = {"blocker": blk, "defect": blk + len(t["opened"]) + len(t["open_under"])
+                        + sum(1 for r in t["surface"] if abs(r[0]) <= 0.3),
+                        "worst_dz": max((abs(r[0]) for r in t["surface"]), default=0.0), "track_m": t["track_m"]}
     if "deck_grade" in res:
         dg = res["deck_grade"]
         out["steep_deck"] = {"defect": sum(1 for r in dg if r[0] > r[1] + 1.0), "blocker": sum(1 for r in dg if r[0] > 15),

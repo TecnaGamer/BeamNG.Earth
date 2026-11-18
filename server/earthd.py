@@ -3515,6 +3515,8 @@ class Server:
         radar_props, speed_traps = radars.tile_rows(anchor.frame, box, self.mapdata, elev, self.road_widths, urban)
         if radar_props:
             props = (props or []) + radar_props
+        import racedig              # (BNE_RACEWAY_DIG: no prop, pole or wire end on a racetrack's band)
+        racedig.tile_clear(anchor.frame, cells, props, wires, elev)
         return roadsmod.write_tile(self.out_dir, self.vfs_dir, aid, tx, ty, chunks, walks if self.sidewalks else None,
                                    mesh, dmesh, bld, props, wires, park, tunnel_mesh=tmesh, fuel=fuel,
                                    rail_mesh=rmesh, guardrail_rows=guardrail_rows, garage_sound=garage_sound,
@@ -7809,7 +7811,7 @@ class Connection:
             try:
                 r = await asyncio.get_running_loop().run_in_executor(
                     self.s.ui_pool, routingmod.plan, float(msg["lat0"]), float(msg["lon0"]), float(msg["lat1"]),
-                    float(msg["lon1"]), self.s.net, msg.get("bearing"), routingmod.via_points(msg.get("via")))
+                    float(msg["lon1"]), self.s.net, msg.get("bearing"), routingmod.via_points(msg.get("via")), msg.get("avoid") is True)
                 out.update(r)
                 out.pop("error", None)
                 break
@@ -7831,8 +7833,9 @@ class Connection:
                     self.s.ui_pool, self._route_elevation, out["points"])
             except Exception as e:
                 log.debug("route elevation: %s: %s", type(e).__name__, e)
-        log.info("route %d (%s, %s -> %s, %s): %d points, %.1f km%s", int(msg.get("id") or 0), msg.get("lat0"),
+        log.info("route %d (%s, %s -> %s, %s): %d points, %.1f km%s%s", int(msg.get("id") or 0), msg.get("lat0"),
                  msg.get("lon0"), msg.get("lat1"), msg.get("lon1"), len(out["points"]), out["dist"] / 1000,
+                 {True: ", highways avoided", False: ", highways not avoided"}.get(out.get("avoided"), ""),
                  (" (" + out["error"] + ")") if "error" in out else "")
         self.send(out)
         if "error" not in out:

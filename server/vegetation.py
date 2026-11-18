@@ -1441,8 +1441,13 @@ def _road_segs(f, shape, chm, clear=ROAD_CLEAR_M, specs=None, walks=False, margi
         if s is None:   # them; the street trees, pushed to the curb, stand in pits at its edge: GitHub #424 / #425)
             return 0.0
         return s.width / 2 + (s.walk if walks and getattr(s, "walk", 0) and roadsmod.has_sidewalks(s) else 0.0)
+    import racedig
+
+    def margin(c):      # (BNE_RACEWAY_DIG: a racetrack's band kept clear, racedig.PROP_CLEAR_M)
+        m = clear if margins is None else margins.get(c, clear)
+        return max(m, racedig.PROP_CLEAR_M) if racedig.ON and c == "raceway" else m
     hw_m = np.array([max(ROAD_HALF_WIDTH_M.get(str(cls[i]), ROAD_HALF_DEFAULT_M), drawn(sp[i]))
-                     + (clear if margins is None else margins.get(str(cls[i]), clear)) for i in sel], np.float64)
+                     + margin(str(cls[i])) for i in sel], np.float64)
     # every ring's segments on the CHM grid, its half width in grid pixels (a 3857 metre is 1 / cos(lat) of a ground
     # metre), rings off the grid left out (earthfast road_segments, 2026-10-23: the per-ring Python loop it
     # replaced gave the same segments); then the distances and the nearest road's push, without the GIL

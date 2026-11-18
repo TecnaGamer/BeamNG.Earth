@@ -18,7 +18,7 @@ MARGIN_M = 80.0                 # m round the tile for the roads and signals loo
 DRIVE_CLASSES = frozenset(("motorway", "trunk", "primary", "secondary", "tertiary", "residential", "unclassified",
                            "living_street", "service"))
 MAX_VERTS = 52000               # signmesh's limit is 60000
-KERNEL = 375                    # earthfast's street_sign_* kernels
+KERNEL = 404                    # earthfast's street_sign_* kernels
 _CACHE = {}
 _CACHE_MAX = 128
 

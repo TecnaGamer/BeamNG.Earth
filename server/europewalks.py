@@ -90,15 +90,37 @@ def _locality(country, lon, lat):
     return min(candidates, default=(0., "", ""))[1:]
 
 
-def country_for(lon, lat):
+def _border_path():
+    """The border bands' file of countrybounds.bundled(), None without border data (its Absent)."""
     from countrybounds import bundled
-    from europeinfra import COUNTRIES
+    return getattr(bundled(), "path", None)
 
-    # Covers the supported territories and the eastern end of Russia.
-    if lat < 25. or -168. < lon < -33.:
-        return None
-    country = bundled().at(lat, lon)
-    return country if country in COUNTRIES else None
+
+def _countries():
+    from europeinfra import COUNTRIES
+    return sorted(COUNTRIES)
+
+
+def country_for(lon, lat):
+    """The supported territory (europeinfra.COUNTRIES) at a point, else None: none south of 25 N or between 168 W and
+    33 W (the territories and the eastern end of Russia), else countrybounds' code there (earthfast
+    roadnet::countries; the border data asked only for a point past that box test)."""
+    import fast
+    fast.require(391, "europe_countries")
+    return fast._ef.europe_countries(_border_path, np.array([lon], np.float64), np.array([lat], np.float64),
+                                     _countries())[0]
+
+
+def road_countries(feats, mask):
+    """country_for at the middle point of each road of mask (bool, one per feature; its first point p0, the first past
+    it p1, lonlat[p0 + (p1 - p0) // 2]), None for the others and a road without points (earthfast
+    roadnet::countries::europe_road_countries)."""
+    import fast
+    fast.require(391, "europe_road_countries")
+    return fast._ef.europe_road_countries(
+        _border_path, np.ascontiguousarray(feats.part_off, np.int64), np.ascontiguousarray(feats.ring_off, np.int64),
+        np.ascontiguousarray(feats.coord_off, np.int64), np.ascontiguousarray(feats.lonlat, np.float64).reshape(-1, 2),
+        np.ascontiguousarray(mask, bool), _countries())
 
 
 def grassy_verges(country, lon, lat):

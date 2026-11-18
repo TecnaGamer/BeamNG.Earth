@@ -40,6 +40,7 @@ import dnp
 
 import bumps
 import mapcells
+import racedig
 import railways as railwaysmod
 import roads as roadsmod
 import seatiles
@@ -2789,6 +2790,11 @@ class _Planner:
             if ctx:                 # (the raised junctions' roads on ramps no steeper than RAMP_GRADE, after every snap)
                 log.debug("grading: ramp envelope of %s: %d raised, %d held", key, len(ctx[0]), len(ctx[1]))
                 try:
+                    # (its floor no higher than the plans now: the dips under the decks and the snaps after the first
+                    # envelope lowered roads, and the floor taken before them stood a dipped slip road back up to its
+                    # undipped height, 6.9 m over the dipped trunk it leaves at its gore: Sao Paulo's 23 de Maio under
+                    # the Radial Leste-Oeste, GitHub #1329)
+                    ctx = (ctx[0], ctx[1], _floor_now(ctx[2], plans) if RAMP_FLOOR_NOW else ctx[2])
                     ramp_envelope(plans, pspecs, *ctx)
                 except Exception as e:
                     _caught(e)
@@ -6492,6 +6498,8 @@ class _Planner:
             # a street's smoothed profile 1 m over a dip in the ground over Vienna's A23 tunnel fell back to that dip
             # in the strip over the tube, a ledge at each edge of it, 2026-11-12)
             keep &= base.ravel() - out >= OVER_TUNNEL_SMALL_M
+            if race is not None and racedig.ON:
+                keep &= ~race       # (a racetrack over the tunnel: its surface, the tube dug under it, racedig)
             out[keep] = base.ravel()[keep]
         return out.reshape(shape)
 
@@ -7688,6 +7696,23 @@ BREAK_GRADE = 0.12          # ... and a raised road climbing faster than this (a
 RAMP_GRADE = 0.06            # the steepest a road is left climbing to a raised junction or approach (ramp_envelope)
 RAMP_NODE_M = 1.5           # m: road ends this close are one node
 RAMP_REACH_M = 400.0        # m along the roads from a raised one the envelope goes at most
+
+
+RAMP_FLOOR_NOW = os.environ.get("BNE_RAMP_FLOOR_NOW", "on") != "off"
+
+
+def _floor_now(floor, plans):
+    """ramp_envelope's floor (the plans before any ramp) no higher than the plans (fid, Plan) are now, where a plan has
+    the same vertices: a road the passes since lowered (a dip under a deck, a snap) is not raised back over it. Pure."""
+    if floor is None:
+        return None
+    out = []
+    for f, (_fid, p) in zip(floor, plans):
+        f = np.asarray(f, np.float64)
+        z = np.asarray(p.z, np.float64)
+        out.append(np.minimum(f, z) if len(f) == len(z) else f)
+    out += [np.asarray(f, np.float64) for f in floor[len(out):]]
+    return out
 
 
 def ramp_envelope(plans, specs, seeds, held=(), floor=None):
