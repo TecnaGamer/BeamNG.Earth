@@ -21,6 +21,7 @@ TWO_WAY_W_M = 8.0         # a two-way's width when OpenStreetMap gives no lane c
 LANE_M = 3.3
 MAX_SHIFT_M = 5.0
 KEY_DEG = 1e-6
+_KEY_SPAN = 1 << 30      # (a rounded point's longitude and latitude in one int64: |lat / KEY_DEG| < 2^29)
 
 
 def _oneway(feats, i):
@@ -37,14 +38,27 @@ def apply(feats, left_hand=False):
         return 0
     ll = feats.lonlat
     co, ro, po = feats.coord_off, feats.ring_off, feats.part_off
-    rings = []          # (feature, first coord, last coord) of each line's first ring
-    for i in range(len(feats)):
-        r = ro[po[i]]
-        rings.append((i, int(co[r]), int(co[r + 1]) - 1))
-    at = {}             # rounded point -> [(feature, coord index)] for every coordinate of every line
-    for i, a, b in rings:
-        for c in range(a, b + 1):
-            at.setdefault((round(ll[c, 0] / KEY_DEG), round(ll[c, 1] / KEY_DEG)), []).append((i, c))
+    # (feature, first coord, last coord) of each line's first ring
+    n = len(feats)
+    r0 = np.asarray(ro)[np.asarray(po)[:n]]
+    first = np.asarray(co)[r0].astype(np.int64)
+    last = np.asarray(co)[r0 + 1].astype(np.int64) - 1
+    rings = list(zip(range(n), first.tolist(), last.tolist()))
+    # every coordinate of every line's first ring (feature, coord index), sorted by its rounded point, each
+    # point's in the lines' order: what meets a line's end is looked up there (was a dict of every coordinate built in
+    # Python, ~1 s of a motorway drive's map ahead)
+    lens = np.maximum(last - first + 1, 0)
+    feat = np.repeat(np.arange(n, dtype=np.int64), lens)
+    coord = np.repeat(first - (np.cumsum(lens) - lens), lens) + np.arange(int(lens.sum()), dtype=np.int64)
+    keys = (np.rint(ll[coord, 0] / KEY_DEG).astype(np.int64) * _KEY_SPAN
+            + np.rint(ll[coord, 1] / KEY_DEG).astype(np.int64))
+    order = np.argsort(keys, kind="stable")
+    keys = keys[order]
+
+    def meets(lon, lat):
+        k = round(lon / KEY_DEG) * _KEY_SPAN + round(lat / KEY_DEG)
+        lo, hi = np.searchsorted(keys, k, "left"), np.searchsorted(keys, k, "right")
+        return [(int(feat[o]), int(coord[o])) for o in order[lo:hi]]
     lanes = feats.attrs.get("osm_lanes")
     moved = 0
     for i, a, b in rings:
@@ -52,8 +66,7 @@ def apply(feats, left_hand=False):
         if not ow or b - a < 1:
             continue
         for end, nxt, sign in ((a, a + 1, 1), (b, b - 1, -1)):
-            key = (round(ll[end, 0] / KEY_DEG), round(ll[end, 1] / KEY_DEG))
-            others = [(j, c) for j, c in at.get(key, ()) if j != i]
+            others = [(j, c) for j, c in meets(ll[end, 0], ll[end, 1]) if j != i]
             two = [(j, c) for j, c in others if _oneway(feats, j) == 0]
             if not two or any(_oneway(feats, j) for j, _ in others):
                 continue        # only a one-way meeting two-way roads (a one-way chain, or three one-ways: left alone)
