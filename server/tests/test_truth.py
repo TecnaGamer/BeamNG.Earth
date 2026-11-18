@@ -37,6 +37,8 @@ TODAY = {
         dug=(0, 0), filled=(0, 5),
         rail_low=2.6,           # m: the Letzigraben flyover's ramp. It is 13 m over the tracks it crosses 270 m on, which
         rail_high=3.1),         # Earth's clears by a track's headroom, and climbs to them at 4 %: Earth's at its 2 %
+        #                         (GRADE at 2.5 %: +0.7 .. +0.9, at 2.8 %: -0.4 .. -0.1; the other places' lows then 0.1-0.9
+        #                         lower, PopoliTest in test_findground.py has the numbers)
     "zurich_duttweilerbruecke": dict(
         unmatched=22,           # (20 before the replay's roads came as the server hands them on: gradesep)
         shape_p95=3.4,
@@ -44,7 +46,12 @@ TODAY = {
         dug=(3, 3),             # 3.3 m at the deepest. (12 while every rail bridge dug the road under it)
         filled=(0, 0),
         rail_low=-8.8,          # m: the Wipkingen viaduct, 13 m over its streets, stands 10 to 13 m up (was at their
-        rail_high=0.4),         # level at its joints, -13.2); the flyover over it and the tracks is 9 m short of 18
+        rail_high=0.4),         # level at its joints, -13.2); the Letzigraben flyover is 9 m short of the survey's 18 m
+        #                         over the tracks it crosses: no bridge crosses another here, in the map or the survey
+        #                         (the flyover, level 3 in the survey, crosses tracks on the ground, which the law asks
+        #                         6.5 m over, and one road bridge, 6.6 m under it), so the 11 m it climbs over the
+        #                         chord between its ends are no crossing's (measured 2026-11-18). The railway's grade
+        #                         law (2 %; the survey's flyover ramps are 3.3-4.1 %): 2.5 % makes this -9.2, 2.8 % -9.6
     "goeschenen_gotthard_portal": dict(
         unmatched=5,
         shape_p95=5.0,

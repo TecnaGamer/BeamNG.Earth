@@ -160,8 +160,16 @@ class PopoliTest(unittest.TestCase):
     the two tracks of the Roma - Pescara line and a service road under them 45 m on, each a short tunnel in the map,
     the tracks with no bridge of their own there (the server spans them: gradesep), the ground level across both."""
 
-    def test_the_roads_go_down_under_the_tracks_and_a_track_stays_on_its_ground(self):
+    _beds = None
+
+    @classmethod
+    def beds(cls):
+        """[bed - ground m] of each track at each road it crosses over (two tracks over two roads), after asserting the
+        roads' side (they go down, and clear the deck); the replay graded once."""
+        if cls._beds is not None:
+            return cls._beds
         rep = interchanges.load("popoli_ss17_underpass")
+        tc = cls("test_the_roads_go_down_under_the_tracks_and_a_track_stays_on_its_ground")
         with mock.patch.object(revisit, "ON", False):
             md = SimpleNamespace(cell=lambda key, **kw: SimpleNamespace(layers={"roads": rep.cells.get(str(key))}))
             store = grading.PlanStore(md, rep.sample)
@@ -172,8 +180,8 @@ class PopoliTest(unittest.TestCase):
             cells = [md.cell(k).layers.get("roads") for k in railways.cells_near(rep.frame, box, 0.0)]
             tun = railways.road_underpasses(rep.frame, cells, box, 0.0)
             rails = railways.parts(rep.frame, cells, box, reach=0.0, clip=True, underpasses=tun)
-            self.assertEqual(railways.plain_underpasses(rep.frame, cells, box, rails, 0.0, tun), [],
-                             "no track rises: the roads under them are in their own tunnels")
+            tc.assertEqual(railways.plain_underpasses(rep.frame, cells, box, rails, 0.0, tun), [],
+                           "no track rises: the roads under them are in their own tunnels")
             bridges = [xy for _f, _c, kind, xy in rails if kind == "bridge"]
             beds = []
             for hits in roads._crossings_by(bridges, [line for line, _half in tun]):
@@ -182,11 +190,51 @@ class PopoliTest(unittest.TestCase):
                     ground = float(rep.sample(la, lo)[0])
                     road = float(grader.apply(la, lo, rep.sample(la, lo), grading.ROAD_LIFT)[0])
                     bed = float(np.asarray(planner._track_bed(np.asarray(pt, np.float64)[None]))[0])
-                    self.assertLess(road, ground - 3.0, "the road goes down")
-                    self.assertGreaterEqual(bed - road, roads.MIN_BRIDGE_HEADROOM_M + DEPTH - 0.05, "and clears the deck")
+                    tc.assertLess(road, ground - 3.0, "the road goes down")
+                    tc.assertGreaterEqual(bed - road, roads.MIN_BRIDGE_HEADROOM_M + DEPTH - 0.05, "and clears the deck")
                     beds.append(bed - ground)
-        self.assertEqual(len(beds), 4, "two tracks over two roads")
-        self.assertLess(abs(min(beds)), 0.3, "a track over them stays on its ground")
+        tc.assertEqual(len(beds), 4, "two tracks over two roads")
+        PopoliTest._beds = beds
+        return beds
+
+    def test_the_roads_go_down_under_the_tracks_and_a_track_stays_on_its_ground(self):
+        self.assertLess(abs(min(self.beds())), 0.3, "a track over them stays on its ground")
+
+    @unittest.expectedFailure
+    def test_both_tracks_stay_on_their_ground(self):
+        """The goal (in the real place both tracks are on one level): the second track's bed stands 4.3 m (at the service
+        road) to 5.9 m (the SR17) over the ground, the first on it. Measured step by step, 2026-11-18: no road or track
+        rise applies here (plain_underpasses gives none); the lift is the railway's grade law meeting the elevation along
+        the line. The line's highest bridge end, at (542, 550) in the replay's frame (270.7 m), run out at GRADE (2 %) over
+        the 850 m of track to the tunnels stands at 254.2 m; the elevation there is 248.3 m: it falls 22.4 m, 2.6 % on
+        average (10 % over one 160 m stretch of hillside), so the bridge at (313, 397), 280 m on, is held 8 m over its
+        ground, and the lift (railways._stepless) runs on along the ground track for 480 m to the tunnels. Run out along
+        the decks alone (not through the ground track between two) both tracks stay on their ground here, and the Gotthard
+        site's bridges at (-229, -526) stand 4-5 m lower, further from the survey's (5th percentile -9.7 -> -13.4): the
+        same run-out is right there, so it is the law's value that is in question, not the run-out. What the survey has
+        for it (tests/truth.py, 100 m stretches of the tracks at its five places): a track on the ground 2.5 % at the 99th
+        percentile, 2.8 % at the steepest (the Gotthard line); a track on a bridge 4.1 % (the Letzigraben flyover's
+        ramps). railways.GRADE is 2 %. At 2.8 % both tracks stay on
+        their ground (+0.0 to +0.5 m), at 2.5 % they stand 2.4-2.9 m over it; the rail bridges' bed against the survey
+        then (5th percentile of bed - real): Europabruecke +2.6 -> +0.7 (2.5 %) / -0.4 (2.8 %), Duttweilerbruecke -8.8 ->
+        -9.2 / -9.6, Gotthard -9.7 -> -10.3 / -10.6, Kempttal -1.0 -> -1.1 / -1.2: the flyover's ramp better, the places
+        where the real bridge stands higher than the law carries it, lower. Left at 2 % (a law is not tuned to one
+        place); see test_one_grade_law_for_a_track."""
+        self.assertLess(max(abs(b) for b in self.beds()), 0.3)
+
+
+class RailGradeLawTest(unittest.TestCase):
+    @unittest.expectedFailure
+    def test_one_grade_law_for_a_track(self):
+        """The steepest a track climbs is decided in three places: railways.GRADE (2 %, the decks' ramps, the approaches,
+        the lifts carried along the line), gradeshapes.max_grade (2.5 %, the shapes' laws for a track) and
+        railroadseam.SPREAD_GRADE (2 %, a literal, 'railways.GRADE' in its comment). The survey's tracks climb 2.5 % over
+        100 m at the 99th percentile (2.8 % the steepest, 4.1 % on a bridge: see PopoliTest), so the law is a measured
+        value, once."""
+        import railroadseam
+        track = SimpleNamespace(kind="rail", cls="rail", kmh=None)
+        self.assertEqual(gradeshapes.max_grade(track), railways.GRADE)
+        self.assertEqual(railroadseam.SPREAD_GRADE, railways.GRADE)
 
 
 if __name__ == "__main__":
