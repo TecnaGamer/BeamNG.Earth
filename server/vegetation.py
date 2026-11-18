@@ -357,6 +357,10 @@ STAND_CELL_M = 80.0         # a stand's size about (ground m); its edges ragged 
 STAND_JITTER = 0.35
 STAND_MIX = 0.3             # this share of the trees picks its species on its own (a stand's admixture; 0.15 made
                             # one-species blocks, the user's test at Gorzyce 2026-11-17)
+BROAD_STAND_MIX = 0.55      # (35) the broadleaves' species more mixed than the conifers' stands: an oak-hornbeam or
+                            # beech wood is a mix tree by tree, its birches scattered pioneers, not blocks (the user's
+                            # test at Syrynka 2026-11-18: an 80 m wall of birches); pines and spruces are planted in
+                            # stands
 # Koppen classes (Beck et al.) -> (birch, oak, beech) shares of the broadleaves
 K_BOREAL = (19, 20, 23, 24, 27, 28, 29, 30)     # Dsc Dsd Dwc Dwd Dfc Dfd ET EF
 K_CONTINENTAL = (17, 18, 21, 22, 25, 26)        # Dsa Dsb Dwa Dwb Dfa Dfb
@@ -366,7 +370,17 @@ K_SUBTROPICAL = (11, 14)                        # Cwa Cfa
 K_COLD_ARID = (5, 7)                            # BWk BSk
 K_HOT_ARID = (4, 6)                             # BWh BSh: the broadleaves Italy's (olives, holm oaks), not oaks
 BOREAL_LAT = 55.0           # (a Dfc / ET class south of this is a mountain's: continental shares)
-BROAD_SHARES = {"boreal": (1.0, 0.0, 0.0), "continental": (0.40, 0.42, 0.18), "oceanic": (0.20, 0.45, 0.35),
+# (35) the continental climates' (Dfb, Dfa, Dwb...) by continental_shares, not one triple: the birches' share of the
+# broadleaves rises eastwards (the national inventories: Germany ~10 %: birch 4.5 % of the forest of ~45 % broadleaves;
+# Poland ~22 %: 6.8 % of ~31 %; Belarus and European Russia over half), lower in the forest steppe's south (Ukraine:
+# oaks); the beeches (standing in for the hornbeams, limes and maples too: smooth grey bark, oval crowns) end at their
+# range's eastern edge (Fagus sylvatica: eastern Poland, the Carpathians), the oaks take the rest. Was a flat 0.40
+# birches: walls of them in Silesia's oak-hornbeam woods (the user's test at Syrynka, 2026-11-18).
+CONT_BIRCH_LON = ((10.0, 0.10), (20.0, 0.20), (28.0, 0.45), (40.0, 0.60), (60.0, 0.60), (90.0, 0.45))
+CONT_BIRCH_SOUTH = (46.0, 52.0, 0.4)        # the birches' share times 0.4 at 46 N rising to all of it at 52 N
+CONT_BEECH_LON = (20.0, 26.0)               # the beeches' part of the rest: CONT_BEECH up to the first, none east
+CONT_BEECH = 0.45                           # of the second (the uphill gain, BEECH_UPHILL, still adds them)
+BROAD_SHARES = {"boreal": (1.0, 0.0, 0.0), "continental": (0.20, 0.44, 0.36), "oceanic": (0.12, 0.48, 0.40),
                 "med": (0.05, 0.95, 0.0), "subtropical": (0.10, 0.70, 0.20), "cold_arid": (0.30, 0.70, 0.0)}
 # (35) by the ecoregion where the Koppen class misleads: the Cantabrian and northwest Iberian oak woods (Galicia,
 # northern Portugal, Asturias: Quercus robur and pyrenaica, birches; beeches only in the mountains, BEECH_UPHILL)
@@ -474,8 +488,19 @@ def stand_u(mx, my, gx, gy, lat, salt):
     return _hash01(cx, cy, salt)
 
 
-def _mixed(stand, single, u_mix):
-    return np.where(u_mix < STAND_MIX, single, stand)
+def _mixed(stand, single, u_mix, mix=None):
+    return np.where(u_mix < (STAND_MIX if mix is None else mix), single, stand)
+
+
+def continental_shares(lat, lon):
+    """Per tree: the continental climates' (birch, oak, beech) shares of the broadleaves (CONT_*), an (n, 3) array."""
+    lat, lon = np.asarray(lat, np.float64), np.asarray(lon, np.float64)
+    south = CONT_BIRCH_SOUTH
+    birch = np.interp(lon, [a for a, _ in CONT_BIRCH_LON], [b for _, b in CONT_BIRCH_LON]) * \
+        np.clip(south[2] + (1.0 - south[2]) * (lat - south[0]) / (south[1] - south[0]), south[2], 1.0)
+    beech = CONT_BEECH * np.clip((CONT_BEECH_LON[1] - lon) / (CONT_BEECH_LON[1] - CONT_BEECH_LON[0]), 0.0, 1.0)
+    rest = 1.0 - birch
+    return np.stack([birch, rest * (1.0 - beech), rest * beech], axis=1)
 
 
 def eurasia(lat, lon):
@@ -521,7 +546,7 @@ def species_groups(group, height, lat, lon, lcls, koppen, elev, u_broad, u_conif
     g[ea & (g == G_DECIDUOUS) & _in(k, K_HOT_ARID)] = G_MEDITERRANEAN
     dec = ea & (g == G_DECIDUOUS)
     if dec.any():
-        sh = np.tile(np.array(BROAD_SHARES["continental"]), (len(g), 1))
+        sh = continental_shares(lat, lon)
         boreal = _in(k, K_BOREAL) & (lat >= BOREAL_LAT)
         for name, m in (("boreal", boreal), ("oceanic", _in(k, K_OCEANIC)), ("med", _in(k, K_MED)),
                         ("subtropical", _in(k, K_SUBTROPICAL)), ("cold_arid", _in(k, K_COLD_ARID))):
@@ -1228,7 +1253,7 @@ class Vegetation:
                 elev = np.zeros(len(group))
                 elev[need] = e
         u_single = _hash01(gx, gy, 32)
-        u_broad = _mixed(stand_u(tmx, tmy, gx, gy, clat, 51), u_single, u_mix)
+        u_broad = _mixed(stand_u(tmx, tmy, gx, gy, clat, 51), u_single, u_mix, BROAD_STAND_MIX)
         u_con = _mixed(stand_u(tmx, tmy, gx, gy, clat, 61), u_single, u_mix)
         return species_groups(group, th, tlat, tlon, lcls, k, elev, u_broad, u_con, _hash01(gx, gy, 33),
                               _hash01(gx, gy, 34), _hash01(gx, gy, 35),
