@@ -521,9 +521,10 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
         if feats is None or len(feats) == 0:
             continue
         rspecs = roads.road_specs(feats, urban_fn, widths, left_hand)      # the roads the road tiles (and their props) see
+        navspecs = roads.navigation_specs(feats, rspecs, urban_fn, left_hand)
         bspecs = roads.bridge_specs(feats)
         tspecs = roads.tunnel_specs(feats)
-        specs = [sp if sp is not None else bs if bs is not None else ts for sp, bs, ts in zip(rspecs, bspecs, tspecs)]
+        specs = [sp if sp is not None else bs if bs is not None else ts for sp, bs, ts in zip(navspecs, bspecs, tspecs)]
         rules = feats.rules
         sub = rules.get("subclass")
         con = rules.get("connectors")

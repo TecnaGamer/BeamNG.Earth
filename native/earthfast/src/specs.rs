@@ -785,7 +785,8 @@ fn centre_gap(a: ArrayView2<f64>, b: ArrayView2<f64>, gap1: f64) -> f64 {
 
 /// dual_carriageways on specs (in place): returns, per feature, what changed: 0 nothing, 1 the width (a nameless
 /// pair capped), 2 the median and width (a one-way carriageway), 3 one-way, dir, width and median.
-fn dual(l: &Layer, rules: &RoadRules, prm: &Prm, specs: &mut [Option<Sp>], european: bool, left_hand: bool)
+fn dual(l: &Layer, rules: &RoadRules, prm: &Prm, specs: &mut [Option<Sp>], european: bool, left_hand: bool,
+        require_overlap: bool)
         -> Vec<u8> {
     let n = l.n;
     let mut changed = vec![0u8; n];
@@ -837,7 +838,8 @@ fn dual(l: &Layer, rules: &RoadRules, prm: &Prm, specs: &mut [Option<Sp>], europ
                 if i == j {
                     continue;
                 }
-                let (share, side) = dual_side_core(view(ti), view(tj), prm.dual_gap0, prm.dual_gap1, prm.dual_cos);
+                let (share, side) = dual_side_core(view(ti), view(tj), prm.dual_gap0, prm.dual_gap1, prm.dual_cos,
+                                                  require_overlap);
                 if share >= prm.dual_share && side.abs() > 0.5 {
                     let sj = input[j].as_ref().unwrap();
                     if european && rules.has(si.cls, F_TERTIARY) && !(si.oneway && sj.oneway) && l.eu_country[i] {
@@ -1040,12 +1042,13 @@ impl RoadRules {
     /// "frontage" (n, 2), NaN where not asked).
     #[allow(clippy::too_many_arguments)]
     #[pyo3(signature = (geo, cols, built, raw_off, raw_rng, flow_fn, regional_fn, urban_fn, prm, european, left_hand,
-                        region_tab=None))]
+                        region_tab=None, require_overlap=false))]
     fn road_specs<'py>(&self, py: Python<'py>, geo: Geom<'py>, cols: Bound<'py, PyDict>, built: Vec<bool>,
                        raw_off: PyReadonlyArray1<'py, i64>, raw_rng: PyReadonlyArray2<'py, f64>,
                        flow_fn: Bound<'py, PyAny>, regional_fn: Bound<'py, PyAny>, urban_fn: Option<Bound<'py, PyAny>>,
                        prm: HashMap<String, f64>, european: bool, left_hand: bool,
-                       region_tab: Option<numpy::PyReadonlyArray3<'py, f64>>) -> PyResult<Bound<'py, PyDict>> {
+                       region_tab: Option<numpy::PyReadonlyArray3<'py, f64>>, require_overlap: bool)
+                       -> PyResult<Bound<'py, PyDict>> {
         let prm = Prm::new(&prm)?;
         let rtab = match region_tab {
             Some(t) => {
@@ -1226,7 +1229,7 @@ impl RoadRules {
                 sp.urban = false;
                 sp.median = None;
             }
-            dual(&l, self, &prm, &mut out, european, left_hand);
+            dual(&l, self, &prm, &mut out, european, left_hand, require_overlap);
             // a primary's divided carriageways built up on one side only: rural (after the pairing)
             for j in 0..n {
                 let Some(sp) = out[j].as_ref() else { continue };
@@ -1460,7 +1463,7 @@ impl RoadRules {
         for s in sp.iter_mut().flatten() {
             s.w32 = true;
         }
-        let changed = py.detach(|| dual(&l, self, &prm, &mut sp, european, left_hand));
+        let changed = py.detach(|| dual(&l, self, &prm, &mut sp, european, left_hand, false));
         let d = PyDict::new(py);
         d.set_item("changed", changed.into_pyarray(py))?;
         spec_cols(py, &d, &sp, &self.names)?;

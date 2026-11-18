@@ -3404,7 +3404,30 @@ def _unbuilt_all(feats):
 
 
 
-def _road_specs(feats, urban_fn, left_hand, towns=None):
+def navigation_specs(feats, specs, urban_fn=None, left_hand=False):
+    """Navigation directions with real carriageway overlap; retain the rendered road's dimensions.
+
+    The drawing also pairs nearby end caps to choose widths and medians. That heuristic must not
+    turn consecutive pieces of a two-way street into opposing one-way dead ends in the AI graph.
+    Keep these directions separate from the physical specs and their persistent caches.
+    """
+    if feats.attrs.get("name") is None:
+        return specs
+    memo = feats.__dict__.setdefault("_navigation_directions", {})
+    key = _street_spec_key(urban_fn, None, left_hand)
+    directions = memo.get(key)
+    if directions is None:
+        import revisit
+        faults = revisit.thread_faults()
+        corrected = _road_specs(feats, urban_fn, left_hand, require_overlap=True)
+        directions = [None if sp is None else (sp.oneway, sp.dir) for sp in corrected]
+        if revisit.thread_faults() == faults:
+            memo[key] = directions
+    return [sp if sp is None or direction is None else sp._replace(oneway=direction[0], dir=direction[1])
+            for sp, direction in zip(specs, directions)]
+
+
+def _road_specs(feats, urban_fn, left_hand, towns=None, require_overlap=False):
     """road_specs' making (earthfast.RoadRules.road_specs: the class / rule / tag widths, the land cover's town test,
     Sweden's reading, roundabout rings, divided carriageways, rural connectors, OpenStreetMap's sidewalks and the pass
     roads, a layer at once); towns: a list that gets each feature's town by the land cover before the overrides
@@ -3418,7 +3441,7 @@ def _road_specs(feats, urban_fn, left_hand, towns=None):
     uf = None if urban_fn is None else (lambda la, lo: np.asarray(urban_fn(la, lo), bool))   # (one call: per-call cost)
     d = _road_rules().road_specs(inp["geo"], inp["cols"], inp["built"], off, rng, _flow_fn(feats, inp),
                                  lambda: sorted(regional_unpaved(feats)), uf, _spec_prm(), european, bool(left_hand),
-                                 _width_table() if WIDTH_MODEL_ON else None)
+                                 _width_table() if WIDTH_MODEL_ON else None, require_overlap)
     out = _specs_of(d, inp, _marking_states(feats))
     if towns is not None:
         towns[:] = d["towns"].tolist()
