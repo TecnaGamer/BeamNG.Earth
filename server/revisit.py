@@ -361,6 +361,10 @@ def source_id(here):
     """The fingerprint of source_closure's files and the native module (a packaged app's REVISIT_ID, tools/build_app.py)."""
     h = hashlib.sha1()
     names = source_closure(here) + sorted(n for n in os.listdir(here) if n.startswith("earthfast"))
+    # Cliff relief and calibrated colour means affect geometry and vertex tint,
+    # even when their Python readers have not changed.
+    names += sorted(n for n in os.listdir(here)
+                    if n.startswith("cliff_") and n.endswith(("_height.png", "_means.json")))
     for name in names:
         try:
             with open(os.path.join(here, name), "rb") as f:

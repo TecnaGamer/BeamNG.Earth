@@ -611,6 +611,7 @@ def main():
     ap = argparse.ArgumentParser(description=f"Install BeamNG.Earth {version()}: the mod into BeamNG.drive and "
                                              "the companion server's Python packages into .venv.")
     ap.add_argument("--user-dir", help="BeamNG.drive user folder (default: found automatically)")
+    ap.add_argument("--game-dir", help="BeamNG.drive installation for optional private cliff contact textures")
     ap.add_argument("--yes", "-y", action="store_true", help="answer yes to every question (replace an older mod copy, "
                                                              "pick the first user folder found)")
     ap.add_argument("--no-venv", action="store_true", help="only install the mod; skip the Python environment")
@@ -625,6 +626,9 @@ def main():
     user_dir = choose_user_dir(args)
     try:
         install_mod(user_dir, args.yes, args.dry_run)
+        if not args.dry_run:
+            import cliffstock
+            cliffstock.prepare_enabled(args.game_dir, user_dir, diagnostic=say)
     except OSError as e:
         fail(f"could not copy the mod: {e}\n  Close BeamNG.drive if it is running and try again.")
     if args.no_venv:

@@ -150,12 +150,13 @@ class FarRestoreTest(unittest.TestCase):
             tex = {"path": self.tex_src, "px": 256, "mask": None, "chain": ["usgs"], "tone": 1.0, "leaf_on": True,
                    "season_mode": "auto", "keep_fin": len(self.NAME)}
             args = (LAT0, LON0, tile, 14, None, 13, False, self.LAYOUT)
-            blockworker._keep_fin(blockworker._far_tile_key(*args, tex), self.built, tex, None, (850, {"usgs": 3}))
+            blockworker._keep_fin(blockworker._far_tile_key(*args, tex), self.built, tex, None,
+                                  (850, {"usgs": 3}), LAT0, LON0)
             self.assertEqual(self.built.shape_plain[1:], (len(self.NAME), 256))
             plain = dict(tex)
             plain.pop("keep_fin")
             blockworker._keep_fin(blockworker._far_tile_key(*args, dict(tex, px=128)), self.built, plain, None,
-                                  (850, {}))          # (no keep_fin: not kept)
+                                  (850, {}), LAT0, LON0)          # (no keep_fin: not kept)
             revisitpack.reset()
             spec = ("tile", tile, 14, None, 13, False, self.LAYOUT, tex)
             got = blockworker.far_restore_find(1, LAT0, LON0, [spec + ([512, 256, 128],), spec + ([512, 128],)])

@@ -927,6 +927,8 @@ class TileInfo:
     credits: frozenset = frozenset()    # data-credit source ids (credits.tile_sources; --credits on only)
     tex_px: int = 0                     # its texture's size (Server.tile_tex_px; 0: tex_size of its level)
     shape: str | None = None    # its shape file when not tile_name(): a copy under a new material name (reslot)
+    cliff_colors: bool = False  # only these tiles need a mesh refresh when their photo changes
+    mesh_rev: int = 0           # latest immutable cliff-color mesh; survives material reslotting
     tile: object = None         # the farfield tile it was built for (Tile, GTile, Piece)
     coarse: bool = False        # a coarse cover's texture (Server.coarse_texture: rendered again when sent after it)
     frame: tuple | None = None  # a global tile's frame (lat, lon): its geometry is in that frame's world
@@ -3664,6 +3666,7 @@ class Server:
         it names has the value given here (the map's cache view, covermap.py). One function: a new setting that
         changes what is built goes into its revisit key, its store site's revisit.sig and here, under the same name.
         Per-anchor parts (the height quantum, country, lamp rules, driving side) are the place's, not settings."""
+        from cliffsettings import SETTINGS as cliff_settings
         im = self.imagery
         md = self.mapdata.versions() if self.mapdata is not None and hasattr(self.mapdata, "versions") else None
         return {
@@ -3671,6 +3674,7 @@ class Server:
             "sidewalks": bool(self.sidewalks),
             "lift": float(DETAIL_ROAD_LIFT if self.near_visual == "detail" else 0.0),
             "buildings": bool(self.buildings),
+            "cliffs": cliff_settings.cache_key,
             "gas_stations": bool(self.gas_stations),
             "pole_profile": Server.pole_profile(self),
             "de_junctions": designsmod.enabled(self.dej_on),
@@ -5740,6 +5744,7 @@ class Server:
         out = [os.path.join(self.out_dir, name), os.path.join(self.out_dir, stem + ".dds"),
                os.path.join(self.out_dir, stem + "_road.dds")]
         out += [os.path.join(self.out_dir, f"{stem}_r{r}.dds") for r in range(1, rev + 1)]
+        out += [os.path.join(self.out_dir, f"{stem}_r{r}.cdae") for r in range(1, rev + 1)]
         if texture is not None and os.path.join(self.out_dir, texture) not in out:
             out.append(os.path.join(self.out_dir, texture))
         if name.endswith(".dae"):
@@ -6275,22 +6280,12 @@ class Server:
                                            self.layout)
                 built = None
             else:
-                base = self.airports.wrap(self.dem) if self.airports is not None else self.dem
-                if self.sea is not None:
-                    base = seacarvemod.SeaDem(base, None)
-                built = farfield.build_global(base, tile.z, tile.x, tile.y, zoom, gref, self.layout)
+                built = self._tile_geometry(anchor, tile)
         else:
             q = self.anchor_q(anchor) if lvl <= 0 else None
             ref_zoom = anchor.zooms[lvl - 1] if lvl > 0 else None
             zoom = anchor.zooms[max(lvl, 0)]
             part = self.piece_parts.get((anchor.id, node.key)) if node is not tile else None
-            g = self.grader_for(anchor) if self.far_pool is None else None   # graded like the block (levels <= 0)
-            base = self.airports.wrap(self.dem) if self.airports is not None else self.dem
-            if self.sea is not None:
-                base = seacarvemod.SeaDem(base, self.sea if lvl <= seacarvemod.CARVE_MAX_LEVEL else None)
-            # (past them: the bridges the elevation holds under decks taken out where already found, DeckGroundDem)
-            src = (gradingmod.GradedDem(base, g) if lvl <= 0 else gradingmod.DeckGroundDem(base, g)) \
-                if g is not None else base
             analyses = self.deshadow is not None or self.colormatch is not None
             if quick and analyses and self.far_pool is not None and self.imagery is not None and node is tile:
                 # the 3D map at a place not seen yet (photos still to come): the quick texture from the raw photos in
@@ -6374,8 +6369,7 @@ class Server:
                                            zoom, q, ref_zoom, self.near_visual in BLOCK_DRAWN, self.layout)
                 built = None
             else:
-                built = farfield.build_tile(anchor.frame, src, node, zoom, q, ref_zoom,
-                                            with_sink=self.near_visual in BLOCK_DRAWN, layout=self.layout)
+                built = self._tile_geometry(anchor, node)
         t1 = time.perf_counter()
         geo_wait = 0.0
         material = texture = used = None
@@ -6471,8 +6465,25 @@ class Server:
                 while len(self.piece_parts) > PIECE_PARTS:
                     self.piece_parts.popitem(last=False)
             built = farfield.clip_built(built, tile.quad)
+        from cliffsettings import SETTINGS as cliff_settings
+        cliff_context = {}
+        photo = None
+        if cliff_settings.natural:
+            cliff_texture = os.path.join(self.out_dir, texture) if material is not None else None
+            cliff_context = dict(cliff_frame=self.tile_where(anchor, tile)[0], cliff_surface=self.surface,
+                                 cliff_texture=cliff_texture)
+            photo = farrestoremod.photo_identity(cliff_texture) if cliff_texture is not None else None
+            # Global worker photos may have been corrected here. Cache the shape
+            # against the final bytes, never pair its earlier colors with a new photo.
+            base_key = getattr(built, "fin_base_key", None)
+            if is_global and base_key is not None and material is not None and self.fin_name_len() and \
+                    getattr(built, "shape_photo", None) != photo:
+                farrestoremod.keep(self.cache_dir, farrestoremod.key(base_key, px_t, len(material), photo),
+                                   built, px_t, len(material), **cliff_context)
         t2 = time.perf_counter()
         sp = getattr(built, "shape_plain", None) if node is tile else None
+        if cliff_settings.natural and getattr(built, "shape_photo", None) != photo:
+            sp = None
         if sp is not None and material is not None and self.far_format == "cdae" and cdae.PACKED and \
                 sp[1] == len(material) and sp[2] == px_t:
             # (the worker encoded it, kept for the bulk restore: only the name stamped in here; farrestore.py)
@@ -6481,7 +6492,7 @@ class Server:
             size = len(data)
         else:
             size = farfield.write_built(path, built, self.far_format, material or farfield.MATERIAL,
-                                        textured=material is not None, tex_px=px_t)
+                                        textured=material is not None, tex_px=px_t, **cliff_context)
         dt = time.perf_counter() - t0
         self.build_stats.append(dt)
         tex_s = t2 - t1 - geo_wait
@@ -6494,6 +6505,7 @@ class Server:
         info = TileInfo(built.pos, built.err, built.sink, built.skirt, built.grid, size, dt,
                         material, texture, tex_bytes, tex_s, credits=sources, err_n=built.lod_err)
         info.tile = tile
+        info.cliff_colors = bool(getattr(built, "cliff_colors", False))
         info.tex_px = px_t
         info.coarse = coarse is not None
         if is_global:
@@ -6675,7 +6687,9 @@ class Server:
                 if gtex is None:
                     why["global texture"] = why.get("global texture", 0) + 1
                     continue
-                specs.append(("global", tile.z, tile.x, tile.y, zoom, gref, self.layout, [p_], n_name))
+                from cliffsettings import SETTINGS as cliff_settings
+                photo = farrestoremod.photo_identity(gtex[0]["tex.dds"].path) if cliff_settings.natural else None
+                specs.append(("global", tile.z, tile.x, tile.y, zoom, gref, self.layout, [p_], n_name, photo))
             else:
                 lvl = tile.level
                 q = self.anchor_q(anchor) if lvl <= 0 else None
@@ -6745,6 +6759,7 @@ class Server:
                             size, t2 - t0, material, texture, tex_bytes, 0.0, credits=sources,
                             err_n=extra.get("err_n"))
             info.tile = tile
+            info.cliff_colors = bool(extra.get("cliff_colors", False))
             info.tex_px = px
             info.coarse = False
             if gtex is not None:
@@ -6855,7 +6870,67 @@ class Server:
         except Exception as e:          # the tile without its asphalt layer
             log.debug("road mask of %s: %s", tile.key, e)
 
+    def _tile_geometry(self, anchor, tile):
+        """Geometry for direct builds and photo-driven cliff refreshes, without retaining meshes in RAM."""
+        base = self.airports.wrap(self.dem) if self.airports is not None else self.dem
+        if isinstance(tile, farfield.GTile):
+            zoom = farfield.global_dem_zoom(tile.z, self.layout.cells)
+            ref = farfield.global_dem_zoom(tile.z + 1, self.layout.cells)
+            if self.far_pool is not None:
+                return self.far_pool.submit(blockworker.far_global_geometry, tile.z, tile.x, tile.y,
+                                            zoom, ref, self.layout).result()
+            if self.sea is not None:
+                base = seacarvemod.SeaDem(base, None)
+            return farfield.build_global(base, tile.z, tile.x, tile.y, zoom, ref, self.layout)
+        node = tile.base if isinstance(tile, farfield.Piece) else tile
+        lvl = node.level
+        zoom = anchor.zooms[max(lvl, 0)]
+        ref = anchor.zooms[lvl - 1] if lvl > 0 else None
+        q = self.anchor_q(anchor) if lvl <= 0 else None
+        if self.far_pool is not None:
+            built = self.far_pool.submit(blockworker.far_geometry, anchor.id, anchor.lat, anchor.lon, node,
+                                        zoom, q, ref, self.near_visual in BLOCK_DRAWN, self.layout).result()
+        else:
+            if self.sea is not None:
+                base = seacarvemod.SeaDem(base, self.sea if lvl <= seacarvemod.CARVE_MAX_LEVEL else None)
+            grader = self.grader_for(anchor)
+            src = (gradingmod.GradedDem(base, grader) if lvl <= 0 else gradingmod.DeckGroundDem(base, grader)) \
+                if grader is not None else base
+            built = farfield.build_tile(anchor.frame, src, node, zoom, q, ref,
+                                        with_sink=self.near_visual in BLOCK_DRAWN, layout=self.layout)
+        return farfield.clip_built(built, tile.quad) if node is not tile else built
+
     def retexture(self, anchor, tile, prev):
+        """Refresh the photo and, when enabled, its baked cliff colors at a new immutable shape path."""
+        info = self._retexture(anchor, tile, prev)
+        from cliffsettings import SETTINGS
+        if not SETTINGS.natural or not prev.cliff_colors or self.far_format != "cdae" or \
+                info.rev == prev.rev or info.material is None:
+            return info
+        built = self._tile_geometry(anchor, tile)
+        ck = self.far_ck(anchor.id, tile.key)
+        name = f"{os.path.splitext(self.tile_name(*ck))[0]}_r{info.rev}.cdae"
+        texture = os.path.join(self.out_dir, info.texture)
+        context = dict(cliff_frame=self.tile_where(anchor, tile)[0], cliff_surface=self.surface,
+                       cliff_texture=texture)
+        base_key = getattr(built, "fin_base_key", None)
+        if isinstance(tile, farfield.GTile) and base_key is not None and self.fin_name_len():
+            photo = farrestoremod.photo_identity(texture)
+            farrestoremod.keep(self.cache_dir, farrestoremod.key(base_key, info.tex_px, len(info.material), photo),
+                               built, info.tex_px, len(info.material), **context)
+        plain = getattr(built, "shape_plain", None)
+        path = os.path.join(self.out_dir, name)
+        if plain is not None and cdae.PACKED:
+            data = farrestoremod.stamp(plain[0], plain[1], info.material)
+            self.write_file(path, data)
+            size = len(data)
+        else:
+            size = farfield.write_built(path, built, "cdae", info.material,
+                                        textured=True, tex_px=info.tex_px, **context)
+        return replace(info, shape=name, mesh_rev=info.rev, bytes=size,
+                       cliff_colors=bool(getattr(built, "cliff_colors", False)))
+
+    def _retexture(self, anchor, tile, prev):
         """Worker thread: render a stale tile's texture again (its colour-match regions are ready now)
         under the next revision's file name; the shape and its material name stay. Network trouble:
         the previous TileInfo, still stale."""
@@ -7205,7 +7280,10 @@ class Server:
         tile by now).
         On failure the tile keeps its name: the caller builds it again rather than send it with another tile's name."""
         new = self.matslots.take(ck)
-        src = os.path.join(self.out_dir, self.tile_name(*ck))
+        source = self.tile_name(*ck)
+        if info.mesh_rev:
+            source = f"{os.path.splitext(source)[0]}_r{info.mesh_rev}.cdae"
+        src = os.path.join(self.out_dir, source)
         pooled = self.far_format == "cdae"
         name = matslotsmod.MatSlots.file(new) if pooled else f"{os.path.splitext(self.tile_name(*ck))[0]}_s{next(self.reslot_serial)}.{self.far_format}"
         try:
@@ -7435,8 +7513,26 @@ class Server:
     def _send_retex(self, ck, info):
         """far_retex to every connection showing (or holding) the tile: its new texture."""
         for c in self._retex_viewers(ck):
-            c.send({"type": "far_retex", "anchorId": c.active if ck[0] == GLOBAL_AID else ck[0], "key": ck[1],
-                    "texture": f"{self.vfs_dir}/{info.texture}"})
+            aid = c.active if ck[0] == GLOBAL_AID else ck[0]
+            message = {"type": "far_retex", "anchorId": aid, "key": ck[1],
+                       "texture": f"{self.vfs_dir}/{info.texture}"}
+            if info.mesh_rev:
+                tile = info.tile
+                replacement = dict(type="far_tile", anchorId=aid, key=ck[1], level=tile.level,
+                                   shape=f"{self.vfs_dir}/{info.shape}", pos=list(info.pos), err=info.err,
+                                   skirt=info.skirt, state="group", material=info.material,
+                                   texture=message["texture"], detail=True, tex=info.tex_px)
+                if info.sink is not None:
+                    replacement["sink"] = info.sink
+                if isinstance(tile, farfield.GTile):
+                    replacement.update(frame=list(info.frame), pos=[0, 0, info.pos[2]], poly=list(tile.quad))
+                elif isinstance(tile, farfield.Piece):
+                    replacement["poly"] = list(tile.poly)
+                if info.shape.startswith("slot_"):
+                    replacement["slotSerial"] = serial = next(self.slot_serial)
+                    c.slot_holds[matslotsmod.MatSlots.number(info.material)] = serial
+                message["replacement"] = replacement
+            c.send(message)
             self.retex_stats["sent"] += 1
             c.credits.poke(c)               # the new texture's sources (the corrected one names S2 too)
 
@@ -8535,6 +8631,23 @@ class Connection:
                 log.debug("stations: %s", out["error"])
         self.send(out)
 
+    async def debug_map(self, msg):
+        """Bounded, read-only placement overlays; never starts world generation."""
+        import debuglayers
+        out = {"type": "debug_map_result", "id": msg.get("id")}
+        try:
+            if getattr(self, "_debug_map_busy", False):
+                out["error"] = "Debug layer busy; retrying"
+            else:
+                self._debug_map_busy = True
+                try:
+                    out.update(await asyncio.get_running_loop().run_in_executor(self.s.place_pool, debuglayers.query, self, msg))
+                finally:
+                    self._debug_map_busy = False
+        except (ValueError, OSError) as e:
+            out["error"] = str(e)[:200]
+        self.send(out)
+
     async def cache_map(self, msg):
         """The map's cache view {"id", "z", "x0", "y0", "x1", "y1", "mode"?} -> cache_map_result {"id", "z", "x0",
         "y0", "w", "h", "cells" (base64, a level per cell), "gen", "ready", "error"?} (covermap.CoverMap.query)."""
@@ -8943,6 +9056,10 @@ class Connection:
                  "farFormat": self.s.far_format, "material": farfield.MATERIAL,
                  "nearVisual": self.s.near_visual, "attribution": self.s.attribution()}
             import budget
+            from cliffsettings import SETTINGS as cliff_settings
+            from cliffsettings import available as cliffs_available
+            m["cliffs"] = {"available": cliffs_available(), "natural": cliff_settings.natural,
+                           "roadCuts": cliff_settings.road_cuts}
             if budget.TIER in ("lean", "emergency"):    # (a low-memory machine: the mod warns on the emergency tier)
                 m["memoryTier"] = budget.TIER
                 note = budget.memory_notice(tier_=budget.TIER)
@@ -9103,6 +9220,8 @@ class Connection:
             self.spawn(self.map_tiles(msg))
         elif kind == "geocode":                 # the map's search box: addresses and places (geocode.py)
             self.spawn(self.geocode(msg))
+        elif kind == "debug_map":
+            self.spawn(self.debug_map(msg))
         elif kind == "cache_map":               # the map's cache view: what is cached where (covermap.py)
             self.spawn(self.cache_map(msg))
         elif kind == "area_plan":               # the map's picked area: the estimate for its confirm box (areas.py)
@@ -13286,6 +13405,8 @@ def main():
             log.info("the settings page: the server on %s", ", ".join(chosen))
     except Exception as e:          # (the defaults then)
         log.warning("could not read the settings page's server choices: %s", e)
+    import cliffsettings
+    cliffsettings.capture_startup()
     try:            # (the same moment's start-time values for the settings page's restart button: srvrestart.py)
         args.start_settings, args.start_fixed = (srvrestartmod.start_view(
             args.user_dir, square=heightmap.SQUARE, hand=hand) if args.user_dir else (None, []))

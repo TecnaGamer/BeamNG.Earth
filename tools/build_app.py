@@ -158,6 +158,7 @@ def pyinstaller(work, ico, onefile, ver=None, boot=None):
            # (the mod's DDS textures' lossless sources: modtextures.py makes the DDS at install)
            "--add-data", f"{os.path.join(ROOT, 'mod', 'texture_sources')}{SEP}mod/texture_sources",
            "--hidden-import", "modtextures",
+           "--hidden-import", "cliffstock",
            "--add-data", f"{os.path.join(ROOT, 'VERSION')}{SEP}.",
            "--add-data", f"{os.path.join(ROOT, 'LICENSE')}{SEP}.",
            "--add-data", f"{os.path.join(ROOT, 'CREDITS.md')}{SEP}.",
@@ -187,6 +188,10 @@ def pyinstaller(work, ico, onefile, ver=None, boot=None):
            "--add-data", f"{os.path.join(server, 'ky_interstate_medians.json')}{SEP}.",
            # threedmr.position_fix's offline table (probe/position_audit.json's own OSM-measured corrections)
            "--add-data", f"{os.path.join(server, 'threedmr_position_fixes.json')}{SEP}."]
+    # Cliff geometry inputs are read beside the server modules, including in a frozen app.
+    for name in ("cliff_height.png", "cliff_cut_height.png", "cliff_arid_cut_height.png",
+                 "cliff_canyon_height.png", "cliff_transition_means.json"):
+        cmd += ["--add-data", f"{os.path.join(server, name)}{SEP}."]
     # every server source's fingerprint (blockcache._code_id: earthd's own copy of the block build is in no revisit
     # closure)
     sys.path.insert(0, server)

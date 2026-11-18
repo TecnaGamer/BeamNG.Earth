@@ -29,6 +29,16 @@
   "weather.aloft": ["ms", "fromDeg"]
  },
  "mod_to_server": {
+  "debug_map": {
+   "fields": {
+    "id": {"type": "int"},
+    "layer": {"type": "str"},
+    "s": {"type": "num"},
+    "w": {"type": "num"},
+    "n": {"type": "num"},
+    "e": {"type": "num"}
+   }
+  },
   "hello": {
    "doc": "sessions: the session folders whose files the mod's objects still use (farfield.heldSessions; a restarted server keeps an earlier run's folder named here, docs/ROADMAP.md \"Robustness\" 3)",
    "fields": {
@@ -509,6 +519,17 @@
   }
  },
  "server_to_mod": {
+  "debug_map_result": {
+   "fields": {
+    "id": {"type": "int"},
+    "layers": {"type": "list", "optional": true},
+    "legend": {"type": "list", "optional": true},
+    "features": {"type": "list", "optional": true},
+    "note": {"type": "str", "optional": true},
+    "enabled": {"type": "dict", "optional": true},
+    "error": {"type": "str", "optional": true}
+   }
+  },
   "server_list": {
    "fields": {
     "servers": {"type": "list", "optional": true},
@@ -746,6 +767,7 @@
   },
   "hello": {
    "fields": {
+    "cliffs": {"type": "dict", "optional": true},
     "runtimeProfiler": {"type": "int", "optional": true},
     "waterguard": {"type": "int", "optional": true},
     "protocol": {"type": "int"},
@@ -917,6 +939,7 @@
   "far_retex": {
    "doc": "--colormatch / --deshadow: a shown (or held) tile's texture rendered again under a new name (additive, protocol 4; exercised by RetexMessagesTest, a session whose colour-match regions turn ready)",
    "fields": {
+    "replacement": {"type": "dict", "optional": true},
     "anchorId": {"type": "int"},
     "key": {"type": "str"},
     "texture": {"type": "str"}

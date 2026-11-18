@@ -1,10 +1,24 @@
-//! Geometry kernels for the world server (server/fast.py wraps them, with the Python versions as the fallback).
+//! Geometry kernels for the world server.
 //! All coordinates are metres in the anchor's local frame, f64.
 // Determinism (the Rust port plan's section 2.6; native/earthfast/clippy.toml lists the methods and types): no platform
 // maths (dm::Dm instead), no powi / mul_add, no std HashMap / HashSet iteration order into an output, no std hasher
 // whose keys vary per process or per Rust release. A site that needs one anyway carries a narrow #[allow(...)] with its
 // reason; `cargo clippy` fails on a new one.
 #![deny(clippy::disallowed_methods, clippy::disallowed_types, clippy::iter_over_hash_type)]
+mod cliffcuts;
+mod cliffsurface;
+mod cliffappearance;
+mod cliffphoto;
+mod cliffplacement;
+mod clifffar;
+mod cliffstock;
+mod cliffground;
+mod cliffselect;
+mod clifflod;
+mod cliffdetail;
+mod cliffstream;
+mod cliffstrips;
+mod clifftransition;
 use crate::dm::Dm;
 mod dm;
 mod demsample;
@@ -6504,6 +6518,90 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     ggshade::register(m)?;
     // 309: gg_poly_axes(..., skip): linear (a histogram of the edge directions), all of a polygon's rings, clip edges left
     // out (Codex review of 308)
+    // 342: opt-in dynamic cliff generation, placement and material preparation.
+    // 343: canyon contact strips follow the rendered terrain-blended rim.
+    m.add_function(wrap_pyfunction!(clifflod::cliff_lod_edges, m)?)?;
+    m.add_function(wrap_pyfunction!(clifflod::cliff_lod_prepare, m)?)?;
+    m.add_function(wrap_pyfunction!(clifflod::cliff_lod_trial, m)?)?;
+    m.add_function(wrap_pyfunction!(clifflod::cliff_lod_validate, m)?)?;
+    m.add_function(wrap_pyfunction!(clifflod::cliff_lod_retreat, m)?)?;
+    m.add_function(wrap_pyfunction!(clifflod::cliff_lod_ground, m)?)?;
+    m.add_function(wrap_pyfunction!(clifflod::cliff_lod_clearance, m)?)?;
+    m.add_function(wrap_pyfunction!(clifflod::cliff_lod_reduce, m)?)?;
+    m.add_function(wrap_pyfunction!(cliffdetail::cliff_detail_subdivide, m)?)?;
+    m.add_function(wrap_pyfunction!(cliffdetail::cliff_detail_weights, m)?)?;
+    m.add_function(wrap_pyfunction!(cliffdetail::cliff_detail_displace, m)?)?;
+    m.add_function(wrap_pyfunction!(cliffsurface::cliff_height_sample, m)?)?;
+    m.add_function(wrap_pyfunction!(cliffsurface::cliff_terrain_envelope, m)?)?;
+    m.add_function(wrap_pyfunction!(cliffsurface::cliff_cut_chart, m)?)?;
+    m.add_function(wrap_pyfunction!(cliffsurface::cliff_refine_grid, m)?)?;
+    m.add_function(wrap_pyfunction!(cliffsurface::cliff_grid_normals, m)?)?;
+    m.add_function(wrap_pyfunction!(cliffsurface::cliff_mesh_layout, m)?)?;
+    m.add_function(wrap_pyfunction!(cliffsurface::cliff_surface_uv, m)?)?;
+    m.add_function(wrap_pyfunction!(cliffsurface::cliff_mesh_finish, m)?)?;
+    m.add_function(wrap_pyfunction!(cliffsurface::cliff_mesh_clip, m)?)?;
+    m.add_function(wrap_pyfunction!(cliffcuts::cliff_cut_toes, m)?)?;
+    m.add_function(wrap_pyfunction!(clifflod::cliff_lod_output, m)?)?;
+    m.add_function(wrap_pyfunction!(clifflod::cliff_lod_restore, m)?)?;
+    m.add_function(wrap_pyfunction!(clifflod::cliff_lod_clusters, m)?)?;
+    m.add_function(wrap_pyfunction!(cliffstream::cliff_stream_parts, m)?)?;
+    m.add_function(wrap_pyfunction!(cliffstrips::cliff_strip_project, m)?)?;
+    m.add_function(wrap_pyfunction!(cliffstrips::cliff_strip_domains, m)?)?;
+    m.add_function(wrap_pyfunction!(cliffstrips::cliff_contact_runs, m)?)?;
+    m.add_function(wrap_pyfunction!(cliffstrips::cliff_contact_order, m)?)?;
+    m.add_function(wrap_pyfunction!(cliffstrips::cliff_contact_patches, m)?)?;
+    m.add_function(wrap_pyfunction!(cliffstrips::cliff_contact_map, m)?)?;
+    m.add_function(wrap_pyfunction!(cliffstream::cliff_contact_batches, m)?)?;
+    m.add_function(wrap_pyfunction!(cliffstrips::cliff_terrain_sample, m)?)?;
+    m.add_function(wrap_pyfunction!(cliffstrips::cliff_terrain_faces, m)?)?;
+    m.add_function(wrap_pyfunction!(cliffstrips::cliff_strip_tint, m)?)?;
+    m.add_function(wrap_pyfunction!(cliffstrips::cliff_strip_mesh, m)?)?;
+    m.add_function(wrap_pyfunction!(clifftransition::cliff_transition_surface, m)?)?;
+    m.add_function(wrap_pyfunction!(clifftransition::cliff_transition_attributes, m)?)?;
+    m.add_function(wrap_pyfunction!(clifftransition::cliff_transition_relief_weights, m)?)?;
+    m.add_function(wrap_pyfunction!(clifftransition::cliff_transition_normals, m)?)?;
+    m.add_function(wrap_pyfunction!(clifftransition::cliff_transition_fill_gaps, m)?)?;
+    m.add_function(wrap_pyfunction!(clifftransition::cliff_transition_clip, m)?)?;
+    m.add_function(wrap_pyfunction!(cliffselect::cliff_select, m)?)?;
+    m.add_function(wrap_pyfunction!(cliffappearance::cliff_families, m)?)?;
+    m.add_function(wrap_pyfunction!(cliffappearance::cliff_rock_tints, m)?)?;
+    m.add_function(wrap_pyfunction!(cliffappearance::cliff_color_transfer, m)?)?;
+    m.add_function(wrap_pyfunction!(cliffappearance::cliff_material_tints, m)?)?;
+    m.add_function(wrap_pyfunction!(cliffphoto::cliff_photo_queries, m)?)?;
+    m.add_function(wrap_pyfunction!(cliffphoto::cliff_photo_tints, m)?)?;
+    m.add_function(wrap_pyfunction!(cliffplacement::cliff_base_seeds, m)?)?;
+    m.add_function(wrap_pyfunction!(cliffplacement::cliff_base_cells, m)?)?;
+    m.add_function(wrap_pyfunction!(cliffplacement::cliff_sample_surface, m)?)?;
+    m.add_function(wrap_pyfunction!(cliffplacement::cliff_footprint_queries, m)?)?;
+    m.add_function(wrap_pyfunction!(cliffplacement::cliff_rough_faces, m)?)?;
+    m.add_function(wrap_pyfunction!(cliffstock::cliff_contact_maps, m)?)?;
+    m.add_function(wrap_pyfunction!(cliffstock::cliff_contact_color_factor, m)?)?;
+    m.add_function(wrap_pyfunction!(cliffground::cliff_ground_maps, m)?)?;
+    m.add_function(wrap_pyfunction!(cliffplacement::cliff_outcrop_candidates, m)?)?;
+    m.add_function(wrap_pyfunction!(cliffplacement::cliff_surface_normals, m)?)?;
+    m.add_function(wrap_pyfunction!(cliffplacement::cliff_seat_companions, m)?)?;
+    m.add_function(wrap_pyfunction!(clifffar::cliff_far_candidates, m)?)?;
+    m.add_function(wrap_pyfunction!(clifffar::cliff_far_layout, m)?)?;
+    m.add_function(wrap_pyfunction!(clifffar::cliff_far_boundaries, m)?)?;
+    m.add_function(wrap_pyfunction!(clifffar::cliff_far_sample_colors, m)?)?;
+    m.add_function(wrap_pyfunction!(clifffar::cliff_far_detail_row, m)?)?;
+    m.add_function(wrap_pyfunction!(clifffar::cliff_far_photo_field, m)?)?;
+    m.add_function(wrap_pyfunction!(clifffar::cliff_far_projection_axes, m)?)?;
+    m.add_function(wrap_pyfunction!(cliffplacement::cliff_owned, m)?)?;
+    m.add_function(wrap_pyfunction!(cliffplacement::cliff_allowed_cells, m)?)?;
+    m.add_function(wrap_pyfunction!(cliffplacement::cliff_companion_candidates, m)?)?;
+    m.add_function(wrap_pyfunction!(cliffplacement::cliff_outcrop_poses, m)?)?;
+    m.add_function(wrap_pyfunction!(cliffplacement::cliff_rubble_poses, m)?)?;
+    m.add_function(wrap_pyfunction!(cliffplacement::cliff_rubble_selection, m)?)?;
+    m.add_function(wrap_pyfunction!(cliffplacement::cliff_rubble_candidates, m)?)?;
+    m.add_function(wrap_pyfunction!(cliffselect::cliff_components, m)?)?;
+    m.add_function(wrap_pyfunction!(cliffselect::cliff_grow, m)?)?;
+    m.add_function(wrap_pyfunction!(cliffselect::cliff_extend, m)?)?;
+    m.add_function(wrap_pyfunction!(cliffsurface::cliff_surface, m)?)?;
+    m.add_function(wrap_pyfunction!(cliffcuts::cliff_cut_select, m)?)?;
+    m.add_function(wrap_pyfunction!(cliffcuts::cliff_road_clearance, m)?)?;
+    m.add_function(wrap_pyfunction!(cliffcuts::cliff_cut_ends, m)?)?;
+    m.add_function(wrap_pyfunction!(cliffcuts::cliff_cut_sustained, m)?)?;
     // 310: stage 3 perf: gg_grid (the texel grid and its Web-Mercator metres, rectangles), the edge-table polygon fill,
     // the capsule-interval line fill, value_noises on the kernels' threads (all the same output)
     // 311: stage 3 steps 2-3: gg_regions(..., t) with the bounded hedgerow skirt; gen_ground's field-edge barriers and

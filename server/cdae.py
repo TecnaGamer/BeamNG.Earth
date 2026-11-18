@@ -535,13 +535,15 @@ def encode(positions, tris, normals=None, uvs=None, material="bngEarthDae", uvs2
     for d in parts:
         Pp = np.asarray(d["positions"], np.float64).reshape(-1, 3)
         Tp, TMp = _sorted_tris(d["tris"], d.get("tri_materials"), nmat)
-        bp, lop, hip, ntp = _mesh_data(Pp, Tp, TMp, nmat, None, d.get("uvs"), None, None, d.get("colors"))
+        bp, lop, hip, ntp = _mesh_data(Pp, Tp, TMp, nmat, d.get("normals"), d.get("uvs"),
+                                      d.get("uvs2"), d.get("tangent_uvs"), d.get("colors"))
         lo, hi = np.minimum(lo, lop), np.maximum(hi, hip)
         drawn.append((bp, ntp))
     for size, d in (lods or []):
         Pl = np.asarray(d["positions"], np.float64).reshape(-1, 3)
         Tl, TMl = _sorted_tris(d["tris"], d.get("tri_materials"), nmat)
-        bl, lol, hil, ntl = _mesh_data(Pl, Tl, TMl, nmat, None, d.get("uvs"), None, None, d.get("colors"))
+        bl, lol, hil, ntl = _mesh_data(Pl, Tl, TMl, nmat, d.get("normals"), d.get("uvs"),
+                                      d.get("uvs2"), d.get("tangent_uvs"), d.get("colors"))
         lo, hi = np.minimum(lo, lol), np.maximum(hi, hil)
         levels.append((float(size), bl, ntl))
     cols = []

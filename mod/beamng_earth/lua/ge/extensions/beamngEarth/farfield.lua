@@ -811,8 +811,14 @@ local function startGroup(g, cam)
     local a = pending[key]
     if a then
       local cur = live[key]
-      if cur and not seen[cur] then rems[#rems + 1], seen[cur] = cur, true end
-      adds[#adds + 1] = a
+      if a.retexture and a.failed and cur then
+        -- A color update must not open a hole when its replacement fails.
+        pending[key] = nil
+        doom(a, true)
+      else
+        if cur and not seen[cur] then rems[#rems + 1], seen[cur] = cur, true end
+        adds[#adds + 1] = a
+      end
     elseif not live[key] then
       unknown = key
     end
@@ -989,6 +995,28 @@ function M.onRetex(msg)
   local key, tex = msg.key ~= nil and tostring(msg.key), msg.texture
   if msg.anchorId ~= anchorId or not key or type(tex) ~= 'string' or tex == '' then
     counters.retexStale = counters.retexStale + 1
+    return
+  end
+  -- Cliff colors are baked into vertices. A photo correction can therefore
+  -- include a new shape at a distinct path; use the normal import/swap queue so
+  -- the old surface remains visible until the replacement has loaded.
+  local replacement = msg.replacement
+  if type(replacement) == 'table' then
+    local current = pending[key] or live[key]
+    if not current or current.doomed or not satmat.isNewer(current.texture, tex)
+        or replacement.anchorId ~= anchorId or tostring(replacement.key) ~= key
+        or type(replacement.shape) ~= 'string' or replacement.shape == current.shape
+        or type(replacement.pos) ~= 'table' or replacement.texture ~= tex then
+      counters.retexStale = counters.retexStale + 1
+      return
+    end
+    local waiting = pending[key] ~= nil
+    replacement.state = current.prefetch and 'prefetch' or 'group'
+    M.onTile(replacement)
+    pending[key].retexture = true
+    -- An already-pending tile belongs to a server swap (or is only prefetched).
+    -- Replace its pending entry without showing it ahead of that group.
+    if not waiting then M.onSwap({ anchorId = anchorId, add = { key } }) end
     return
   end
   local hit = false
