@@ -1748,6 +1748,49 @@ class TunnelCoverRoadsTest(unittest.TestCase):
         np.testing.assert_array_equal(far, kinds)          # a road far from the arch: as it was
 
 
+class RingHeightsTest(unittest.TestCase):
+    def test_heights_of_the_points_the_tile_is_drawn_from(self):
+        """A tile's roads' heights at the ends of the segments that reach it alone (a motorway's carriageway is one ring
+        for km), both ends of one that crosses it with neither end in it; a dirt strip's whole (its line is rounded
+        whole before it is cut); a ring that reaches none, its nearest point. The rest hold the nearest's height."""
+        box = (0.0, 0.0, 100.0, 100.0)
+        e = np.r_[-3000.0, -1000.0, -10.0, 50.0, 400.0, 3000.0,     # through the tile
+                  -500.0, 1500.0,                                     # one segment across it
+                  -900.0, -300.0, -200.0,                             # a strip far off
+                  300.0, 900.0]                                       # beside it, none reaching it
+        n = np.r_[50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 30.0, 30.0, 0.0, 0.0, 0.0, 300.0, 300.0]
+        sizes = [6, 2, 3, 2]
+        want = roads.heights_wanted(e, n, sizes, box, [False, False, True, False])
+        np.testing.assert_array_equal(want, [False, False, True, True, True, False, True, True, True, True, True,
+                                             True, False])
+        h = roads.held_heights(np.where(want, np.arange(13.0), np.nan), want, sizes)
+        np.testing.assert_array_equal(h, [2, 2, 2, 3, 4, 4, 6, 7, 8, 9, 10, 11, 11])
+
+    def test_a_long_carriageway_tile_asks_the_ground_near_it_alone(self):
+        """build_tile's ground lookups along a road 6 km long whose points lie 500 m apart: the ends of the segments that
+        reach the tile alone, at their own heights."""
+        x = np.arange(-3000.0, 3001.0, 500.0) + 12800.0
+        f = features([[(float(v), 7750.0) for v in x]], ["primary"])
+
+        def ground(la, lo):
+            e, _n, _ = FRAME.geodetic_to_enu(np.asarray(la), np.asarray(lo), np.zeros(np.shape(la)))
+            return 10.0 + 0.01 * np.asarray(e)
+        read = []
+
+        def elev(la, lo):
+            e, _n, _ = FRAME.geodetic_to_enu(np.asarray(la), np.asarray(lo), np.zeros(np.shape(la)))
+            read.extend(np.asarray(e).ravel().tolist())
+            return ground(la, lo)
+        out = []
+        roads.build_tile(FRAME, 50, 30, [f], elev, roads_out=out)
+        self.assertEqual(len(out), 1)
+        self.assertLessEqual(max(abs(v - (50.5 * roads.TILE)) for v in read), 1000.0)
+        pts = out[0][2]
+        near = np.abs(pts[:, 0] - 50.5 * roads.TILE) <= 700.0      # (12300, 12800, 13300)
+        self.assertEqual(int(near.sum()), 3)
+        la, lo, _ = FRAME.enu_to_geodetic(pts[near, 0], pts[near, 1], np.zeros(3))
+        np.testing.assert_allclose(pts[near, 2], FRAME.geodetic_to_enu(la, lo, ground(la, lo))[2], atol=1e-3)
+
 class WorldConventionTest(unittest.TestCase):
     def test_a_roads_line_lies_where_the_ground_puts_it_whatever_its_height(self):
         """The road lines' x, y are their points' at h = 0 (as the ground's samples: heightmap.surface), their z at the
@@ -1877,6 +1920,46 @@ class RetainingWallTest(unittest.TestCase):
         self.assertTrue(got(sp._replace(mountain=True)))
         self.assertFalse(got(sp))
 
+
+    def _long_walls(self, x0, x1, ground_x):
+        """retaining_walls of the tile (0..256 m) beside a primary road along y = 0 from x0 to x1 (points every 5 m) at 10
+        m, the ground 10 m + ground_x(east m, north m); and the east-most and west-most ground it read."""
+        spec = roads.road_specs(features([[(0.0, 0.0), (200.0, 0.0)]], ["primary"]), None)[0]
+        x = np.arange(x0, x1 + 1.0, 5.0)
+        pts = np.c_[x, np.zeros(len(x)), np.full(len(x), 10.0)]
+        read = []
+
+        def elev(la, lo):
+            e, n, _ = FRAME.geodetic_to_enu(np.asarray(la), np.asarray(lo), np.zeros(np.shape(la)))
+            read.extend([float(np.min(e)), float(np.max(e))])
+            return 10.0 + ground_x(np.asarray(e), np.asarray(n))
+        walls = [w for w in roads.retaining_walls(FRAME, [("r", spec, pts, LON)], elev, (0.0, -128.0, 256.0, 128.0))
+                 if "base" in w]
+        return walls, min(read), max(read)
+
+    def test_a_long_road_reads_its_ground_round_the_tile_alone(self):
+        """A motorway's carriageway is one road for km: its tile's walls read the ground round the tile, not along its
+        whole length (13 map cells' road plans made for one tile, 9 s at 257 km/h, 2026-11-18), and they are the walls
+        the whole road's ground gives (the same road cut short round the tile: its samples where the long one's are).
+        A cutting that runs into the tile from far off is read back to its end: its wall is the whole cut's."""
+        import grading
+        rh = roads.carriageway("primary", "paved", True, None, False) / 2
+        edge = rh + grading.shoulder(roads.Spec(2 * rh, "paved", False, "primary")) + grading.WALL_FLAT_M
+
+        def cut(xa, xb):
+            return lambda e, n: np.where((e > xa) & (e < xb), np.clip((n - edge) / 0.8, 0.0, 1.0) * 3.0, 0.0)
+        for name, ground, short, reach in (("in the tile", cut(100.0, 160.0), (-200.0, 456.0), (-400.0, 700.0)),
+                                           ("from far off", cut(-1500.0, 150.0), (-1600.0, 456.0), (-2600.0, 700.0))):
+            with self.subTest(name):
+                walls, west, east = self._long_walls(-3000.0, 3256.0, ground)
+                ref, _, _ = self._long_walls(*short, ground)
+                self.assertTrue(walls, "the cutting's wall")
+                self.assertEqual(len(walls), len(ref))
+                for w, r in zip(walls, ref):
+                    for k in ("base", "top", "back_top", "foot", "thick"):
+                        np.testing.assert_array_equal(w[k], r[k])
+                self.assertGreater(west, reach[0], "nothing read far west of the tile")
+                self.assertLess(east, reach[1], "nothing read far east of the tile")
 
 class BatchedHelpersTest(unittest.TestCase):
     """The blockers' segments made in one go (2026-10-25): the same arrays as the line-by-line loop they replace."""

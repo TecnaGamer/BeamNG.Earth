@@ -10108,6 +10108,44 @@ def hairpin_extra(frame, spec, xy):
     return None if ws is None else (ws - spec.width) / 2
 
 
+WALL_WINDOW_N = 16      # samples (WALL_STEP apart) past a road's last in the tile its walls' ground is read at least
+
+
+def _wall_ground(sides, centres, inside, ground):
+    """retaining_walls' ground: (per side's probe line the graded ground along it, per road the graded ground along its
+    centre line, per road the window (a, b) of its samples read). Read over a window of each road round its samples in
+    the tile (inside), grown until neither of its ends holds a cut over WALL_KEEP_M within WALL_GAP_N + 1 samples (or
+    is the road's end): every wall run in the tile and every run it joins over a gap lie whole in it (_wall_runs), its
+    walls those of the whole road's. 0 outside it on both lines (no cut). Read whole, a motorway's carriageway (one
+    road for km) planned its whole length's map cells for each of its tiles, 2026-11-18."""
+    win = []
+    for r, c in enumerate(centres):
+        idx = np.flatnonzero(inside[r])
+        win.append((max(0, int(idx[0]) - WALL_WINDOW_N), min(len(c), int(idx[-1]) + 1 + WALL_WINDOW_N)))
+    g = [np.zeros(len(p)) for p in sides]
+    zc = [np.zeros(len(c)) for c in centres]
+    tail = WALL_GAP_N + 1
+    todo = list(range(len(centres)))
+    while todo:                         # (one ground call per round: its cost is per call)
+        G = ground(np.concatenate([q for r in todo for q in (sides[2 * r][win[r][0]:win[r][1]],
+                                                              sides[2 * r + 1][win[r][0]:win[r][1]],
+                                                              centres[r][win[r][0]:win[r][1]])]))
+        k, again = 0, []
+        for r in todo:
+            a, b = win[r]
+            m = b - a
+            g[2 * r][a:b], g[2 * r + 1][a:b], zc[r][a:b] = G[k:k + m], G[k + m:k + 2 * m], G[k + 2 * m:k + 3 * m]
+            k += 3 * m
+            keep = [g[2 * r + s][a:b] - zc[r][a:b] > WALL_KEEP_M for s in (0, 1)]
+            grow_a = a > 0 and any(kp[:tail].any() for kp in keep)
+            grow_b = b < len(centres[r]) and any(kp[-tail:].any() for kp in keep)
+            if grow_a or grow_b:
+                step = max(WALL_WINDOW_N, m)
+                win[r] = (max(0, a - step) if grow_a else a, min(len(centres[r]), b + step) if grow_b else b)
+                again.append(r)
+        todo = again
+    return g, zc, win
+
 def retaining_walls(frame, roads, elev, exact, decks=()):
     """Stone retaining walls along the ground roads cut deeper than grading.WALL_CUT_M into the ground (the grading
     leaves the ground at its natural height right behind them): [dict(base (k, 2) the wall's face line, top (k,),
@@ -10157,39 +10195,32 @@ def retaining_walls(frame, roads, elev, exact, decks=()):
     def ground(P):
         la, lo, _ = frame.enu_to_geodetic(P[:, 0], P[:, 1], np.zeros(len(P)))
         return np.asarray(frame.geodetic_to_enu(la, lo, np.asarray(elev(la, lo), np.float64))[2], np.float64)
-    nprobe = sum(len(P) for P in pts_all)
-    g_all = ground(np.concatenate(pts_all + centres))
-    g = g_all[:nprobe]
+    g, zcs, win = _wall_ground(pts_all, centres, [item[4] for item in info[::2]], ground)
     # the road's height along it from the ground it is painted into, not a straight line between its map points: those
     # can be 100 m apart, and across a creek whose bridge has no deck the line ran 3 m over the drawn road, which read as
     # a raised road and got parapets down to the ground (GitHub #782, Western Australia: 3.5 m stone walls both sides of
     # Port Gregory Road at its creek crossings)
-    k = nprobe
-    for n, item in enumerate(info):
-        if n % 2 == 0:                  # (two sides a road: one centre line)
-            zc = g_all[k:k + len(item[0])]
-            k += len(item[0])
-        info[n] = (item[0], zc) + tuple(item[2:])
+    for n, item in enumerate(info):     # (two sides a road: one centre line)
+        info[n] = (item[0], zcs[n // 2]) + tuple(item[2:])
     # the graded ground at the steps out from the road only where a wall or a parapet can stand: a side whose probe
     # finds no cutting (_wall_runs) and that gets no parapets has no use for them (most of a town's streets: 8 of 9 of
     # the ground lookups, 2026-10-25)
-    probes, k = [], 0
-    for xy, z, out_n, core, inside, rh, steps, concrete, fid, rural, parapets, max_h, _mtn, _hx in info:
-        gg = g[k:k + len(xy)]
-        k += len(xy)
+    probes = []
+    for (xy, z, out_n, core, inside, rh, steps, concrete, fid, rural, parapets, max_h, _mtn, _hx), gg in zip(info, g):
         need = len(steps) and (parapets is not None or _wall_runs(gg - z).any())
         probes.append((gg, need))
     sp = []
-    for (xy, z, out_n, core, inside, rh, steps, *_r), (gg, need) in zip(info, probes):
+    for n, ((xy, z, out_n, core, inside, rh, steps, *_r), (gg, need)) in enumerate(zip(info, probes)):
         if need:
-            sp.extend(xy + out_n * o for o in steps)
+            a, b = win[n // 2]
+            sp.extend(xy[a:b] + out_n[a:b] * o for o in steps)
     gsteps = ground(np.concatenate(sp)) if sp else np.zeros(0)
     out, k = [], 0
     others = {fid: (np.asarray(pts, np.float64)[:, :2], spec.width / 2) for fid, spec, pts, _ in roads if len(pts) >= 2}
     others = _Segs(others)          # (one table for all the carriageway tests below)
     bend_of = {}
-    for (xy, z, out_n, core, inside, rh, steps, concrete, fid, rural, parapets, max_h, mountain, hx), (gg, need) in \
-            zip(info, probes):
+    for n, ((xy, z, out_n, core, inside, rh, steps, concrete, fid, rural, parapets, max_h, mountain, hx), (gg, need)) in \
+            enumerate(zip(info, probes)):
         key = (id(xy), len(xy))
         if key not in bend_of:          # (a tight bend: no wall into it, grading.bend_zone)
             bend_of[key] = grading.bend_zone(xy)
@@ -10199,8 +10230,10 @@ def retaining_walls(frame, roads, elev, exact, decks=()):
         ground_at = None
         top_g = gg
         if need:                    # the wall where the graded ground starts to climb (a sharp cutting: before the core's edge)
-            gs = gsteps[k:k + len(xy) * len(steps)].reshape(len(steps), len(xy)).T
-            k += len(xy) * len(steps)
+            a, b = win[n // 2]          # (outside its window at the road's height: no climb, _wall_ground)
+            gs = np.repeat(z[:, None], len(steps), axis=1)
+            gs[a:b] = gsteps[k:k + (b - a) * len(steps)].reshape(len(steps), b - a).T
+            k += (b - a) * len(steps)
             up = gs - z[:, None] > WALL_STEP_UP_M
             first = np.argmax(up, axis=1)
             # (the grading's flat strip in front of the climb: the terrain's 2 m lattice draws a step at an angle to it
@@ -11411,6 +11444,44 @@ def line_through(roads):
     return pairs, stems, {f for f, n in count.items() if n >= 2}
 
 
+def heights_wanted(e, n, sizes, box, whole=None):
+    """Which points of rings (east e, north n of their points, sizes points each, one ring after another) a tile's roads
+    are drawn from: the ends of every segment that reaches box (a segment longer than the tile crosses it with neither
+    end in it); every point of a ring whole[r] (a dirt strip: its whole line is rounded and simplified before it is cut,
+    _surface_pieces, its heights with it); a ring none of whose segments reaches box, its point nearest to it. Pure."""
+    x0, y0, x1, y1 = box
+    want = np.zeros(len(e), bool)
+    k = 0
+    for r, m in enumerate(sizes):
+        ee, nn, w = e[k:k + m], n[k:k + m], want[k:k + m]
+        if whole is not None and whole[r]:
+            w[:] = True
+        elif m >= 2:
+            hit = ((np.minimum(ee[:-1], ee[1:]) <= x1) & (np.maximum(ee[:-1], ee[1:]) >= x0)
+                   & (np.minimum(nn[:-1], nn[1:]) <= y1) & (np.maximum(nn[:-1], nn[1:]) >= y0))
+            w[:-1] |= hit
+            w[1:] |= hit
+        if m and not w.any():
+            w[int(np.argmin(np.maximum(np.maximum(x0 - ee, ee - x1), np.maximum(y0 - nn, nn - y1))))] = True
+        k += m
+    return want
+
+
+def held_heights(h, want, sizes):
+    """h (per point of rings of sizes points each) with every point not in want at the height of the nearest point in
+    want along its ring (a stand-in nothing in the tile is drawn from: heights_wanted). Pure."""
+    out = np.array(h, np.float64, copy=True)
+    k = 0
+    for m in sizes:
+        w = np.flatnonzero(want[k:k + m])
+        if 0 < len(w) < m:
+            i = np.arange(m)
+            j = np.clip(np.searchsorted(w, i), 1, len(w) - 1) if len(w) > 1 else np.ones(m, int)
+            lo, hi = w[j - 1], w[np.minimum(j, len(w) - 1)]
+            out[k:k + m] = out[k + np.where(i - lo <= hi - i, lo, hi)]
+        k += m
+    return out
+
 def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=None, widths=None, props=None,
                lines=None, wires=None, town=None, park=None, left_hand=False, structures=(), mph=True, tunnels=None,
                buried=0.0, lamp_region=None, country=None,
@@ -11487,12 +11558,19 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
     if rings:                                   # one elevation call for every ring (the grader's cost
         lon = np.concatenate([r[:, 0] for _, _, r in rings])     # is per call: 2026-10-11 profile,
         lat = np.concatenate([r[:, 1] for _, _, r in rings])     # 1,240 calls took 7 of a tile's 8 s)
-        h = np.asarray(elev(lat, lon), np.float64)
         # east / north of the point at h = 0, as the ground's (heightmap.surface: its samples' lat / lon at plane
         # z 0) and every outline's (mapgeom.enu_xy); up of the point at its height. At its height the point lands
         # h x distance / earth radius farther out: US-163 in Utah at 1650 m, 13 km out, the lines lay 2.8 m east and
         # 2.0 m north of the asphalt and grip painted into the ground (the user's screenshot, 2026-10-29)
         e, n, _ = frame.geodetic_to_enu(lat, lon, 0.0)
+        # (the heights of the points the tile draws from alone: a motorway's carriageway is one ring for km, and its
+        # whole length's ground planned 13 map cells' roads for one tile, 9 s at 257 km/h, 2026-11-18)
+        sizes = [len(r) for _, _, r in rings]
+        want = heights_wanted(np.asarray(e, np.float64), np.asarray(n, np.float64), sizes, near,
+                              [bool(DIRT_STRIPS and spec.kind in DIRT_LOOK) for _, spec, _ in rings])
+        h = np.empty(len(lat))
+        h[want] = np.asarray(elev(lat[want], lon[want]), np.float64)
+        h = held_heights(h, want, sizes)
         u = frame.geodetic_to_enu(lat, lon, h)[2]
         k = 0
         for fid, spec, ring in rings:
