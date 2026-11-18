@@ -686,6 +686,70 @@ class TowerFootprintTest(unittest.TestCase):
         built = {tuple(r) for r in yard_props if r[0] == "gantry"}
         self.assertTrue(hung and hung <= built, (hung, built))
 
+    def line_world(self, xs, pole_at=(), fail=()):
+        """(frame, layer, i, md): an untagged line along x (xs, at y 100) and power=pole points at the x in pole_at;
+        md.cell gives the layer for every cell (the points only in their own cells) and raises for the cells of fail."""
+        import mapcells
+        import mapgeom
+        from test_roads import FRAME
+        from types import SimpleNamespace
+        ll = lambda xy: np.column_stack(FRAME.enu_to_geodetic(np.asarray(xy)[:, 0], np.asarray(xy)[:, 1], 0.0)[1::-1])
+        def cell_at(x):
+            la, lo, _ = FRAME.enu_to_geodetic(np.array([x]), np.array([100.0]), 0.0)
+            return mapcells.cell_of(float(np.ravel(la)[0]), float(np.ravel(lo)[0]))
+        line = ll([[x, 100.0] for x in xs])
+
+        def features(items):
+            n = len(items)
+            return mapgeom.Features(
+                layer="infrastructure", ids=np.array([q[0] for q in items]), kind=np.array([q[1] for q in items], np.uint8),
+                part_off=np.arange(n + 1, dtype=np.int64), ring_off=np.arange(n + 1, dtype=np.int64),
+                coord_off=np.r_[0, np.cumsum([len(q[4]) for q in items])].astype(np.int64),
+                lonlat=np.vstack([q[4] for q in items]), attrs={"class": np.array([q[2] for q in items]),
+                                                              "tags": np.array([q[3] for q in items], object)}, rules={})
+        per_cell = {}
+        for x in pole_at:
+            per_cell.setdefault(cell_at(x), []).append((f"p{x}", mapgeom.POINT, "power_pole", "{}", ll([[x, 100.0]])))
+        bad = {cell_at(x) for x in fail}
+        a = ("a", mapgeom.LINE, "power_line", "{}", line)
+
+        class Md:
+            def cell(self, key, layers, kind):
+                if key in bad:
+                    raise OSError("unreadable")
+                return SimpleNamespace(layers={"infrastructure": features([a] + per_cell.get(key, []))})
+        return FRAME, features([a]), 0, Md()
+
+    def test_a_line_class_reads_along_the_line(self):
+        # Codex's review of 8ac4b974: the class read only the cells at a line's two ends, so a pole corridor mapped
+        # between them (no voltage, no supports at its ends) became a pylon line; CLASS_SAMPLES cells along it now
+        xs = [0.0, 1000.0, 2000.0, 3000.0, 4000.0, 5000.0, 6000.0]
+        frame, f, i, md = self.line_world(xs, pole_at=(2000.0, 3000.0, 4000.0))
+        self.assertTrue(powerlines._line_class(md, f, i, "{}", {}))
+        _, f, i, md = self.line_world(xs)
+        self.assertFalse(powerlines._line_class(md, f, i, "{}", {}))
+
+    def test_a_line_class_survives_an_unreadable_cell(self):
+        import revisit
+        xs = [0.0, 1000.0, 2000.0, 3000.0, 4000.0, 5000.0, 6000.0]
+        _, f, i, md = self.line_world(xs, pole_at=(3000.0,), fail=(6000.0,))
+        before = revisit.faults()
+        self.assertTrue(powerlines._line_class(md, f, i, "{}", {}))         # (the readable cells' poles)
+        self.assertGreater(revisit.faults(), before)
+
+    @yards_on
+    def test_a_line_laid_out_nowhere_here_is_not_classed(self):
+        # Codex's review of 8ac4b974: the tile's scan classed every line its cells hold, a long one with no vertex
+        # near the tile too (its far cells read, an unreadable one losing the tile's power lines); only lines with a
+        # run here are classed now
+        from test_roads import FRAME
+        _, f, i, md = self.line_world([30000.0, 31000.0, 32000.0])
+        asked = []
+        real = powerlines._line_class
+        with mock.patch.object(powerlines, "_line_class", lambda *a: asked.append(a) or real(*a)):
+            powerlines.tile_lines(FRAME, 0, 0, md, lambda la_, lo_: np.zeros(np.shape(la_)), [], [])
+        self.assertEqual(asked, [])
+
     def test_a_clipped_run_does_not_hide_the_yard_approach(self):
         # Codex's review of 732f777f: a line laid out round the tile (its run clipped there) was skipped by the feeder
         # search, so its approach to a yard beyond the run was never laid out; only the vertices no run covers are added

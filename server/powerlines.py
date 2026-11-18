@@ -303,26 +303,41 @@ FEED_REACH_M = 400.0        # m round a yard a mapped vertex may lie and still b
                             # out of a station's ground: its size)
 
 
+CLASS_SAMPLES = 5               # vertices along a line (its ends and three between) whose map cells give its class
+
+
 def _line_class(md, f, i, t, memo):
     """Does line i of layer f (tags t) run on poles (the pole lines' group), the same answer in every tile: its voltage
-    (low_voltage), else its mapped supports (on_poles) as the map cells at its two ends hold them, those cells read
-    whichever tile asks (memo: cell -> its support keys). The tile's own cells' supports made a feeder whose poles are
-    mapped only near its yard a pylon line in the span's tile and a pole line in the yard's: two layouts, two ends
-    (Codex's review of 732f777f)."""
+    (low_voltage), else its mapped supports (on_poles) as the map cells of CLASS_SAMPLES of its vertices evenly along it
+    (its two ends among them) hold them, those cells read whichever tile asks (memo: cell -> its support keys). The
+    tile's own cells' supports made a feeder whose poles are mapped only near its yard a pylon line in the span's tile
+    and a pole line in the yard's (Codex's review of 732f777f); its two end cells alone missed a pole corridor mapped
+    between them (Codex's review of 8ac4b974). A cell that cannot be read counts no supports and marks the tile short
+    (revisit.fault: not kept), never losing the tile's power lines."""
     import mapcells
     if low_voltage(t):
         return True
     rings = [np.asarray(r, np.float64) for part in f.parts(i) for r in part if len(r)]
     if not rings:
         return False
+    every = np.concatenate([r[:, :2] for r in rings])
+    at = sorted({int(round(k * (len(every) - 1) / (CLASS_SAMPLES - 1))) for k in range(CLASS_SAMPLES)})
+    keys = sorted({mapcells.cell_of(float(every[j, 1]), float(every[j, 0])) for j in at}, key=str)
     pk, tk = [], []
-    for lon, lat in (rings[0][0][:2], rings[-1][-1][:2]):
-        key = mapcells.cell_of(float(lat), float(lon))
+    for key in keys:
         got = memo.get(key)
         if got is None:
-            g = md.cell(key, layers=("infrastructure",), kind="demand").layers.get("infrastructure")
-            ok = g is not None and len(g.kind) and g.attrs.get("class") is not None
-            got = memo[key] = _support_keys(g) if ok else (np.zeros(0, np.int64), np.zeros(0, np.int64))
+            empty = (np.zeros(0, np.int64), np.zeros(0, np.int64))
+            try:
+                g = md.cell(key, layers=("infrastructure",), kind="demand").layers.get("infrastructure")
+                ok = g is not None and len(g.kind) and g.attrs.get("class") is not None
+                got = _support_keys(g) if ok else empty
+            except Exception as ex:     # (OSError, a decode error)
+                import revisit
+                revisit.fault(here=True)
+                log.warning("power lines: cell %s for a line's class unread: %s: %s", key, type(ex).__name__, ex)
+                got = empty
+            memo[key] = got
         pk.append(got[0])
         tk.append(got[1])
     return bool(on_poles(rings, np.unique(np.concatenate(pk)), np.unique(np.concatenate(tk))))
@@ -446,17 +461,18 @@ def _tile_lines(frame, tx, ty, md, elev, props, wires, clearance):
                 continue
             seen.add(fid)
             rings = [r for part in f.parts(i) for r in part if len(r)]
-            if YARDS_ON:                # (one class per line, whichever tile asks: _line_class)
+            runs = [(pk, rk, ring, _near_ranges(frame, ring, (x0, y0, x1, y1)))
+                    for pk, part in enumerate(f.parts(i)) for rk, ring in enumerate(part)
+                    for ring in (np.asarray(ring, np.float64),) if len(ring) >= 2]
+            if YARDS_ON:                # (one class per line, whichever tile asks: _line_class; only a line laid out)
+                if not any(ranges for *_, ranges in runs):
+                    continue
                 into = poles if _line_class(md, f, i, t, memo) else lines
             else:
                 into = poles if low_voltage(t) or (rings and on_poles(rings, pole_keys, tower_keys)) else lines
-            for pk, part in enumerate(f.parts(i)):
-                for rk, ring in enumerate(part):
-                    if len(ring) >= 2:
-                        ring = np.asarray(ring, np.float64)
-                        ranges = _near_ranges(frame, ring, (x0, y0, x1, y1))
-                        into += [(fid, ring[a:b + 1]) for a, b in ranges]
-                        cover.setdefault((fid, pk, rk), []).extend(ranges)
+            for pk, rk, ring, ranges in runs:
+                into += [(fid, ring[a:b + 1]) for a, b in ranges]
+                cover.setdefault((fid, pk, rk), []).extend(ranges)
     # (the substations of the cells round the tile and of every cell a laid-out line vertex is in: a span drawn here
     # may end at a yard 1 km off, beyond the cells round the tile; Codex's review of 9618c426)
     if YARDS_ON:
