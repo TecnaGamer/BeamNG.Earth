@@ -60,6 +60,7 @@ mod deautobahn;
 mod speedsigns;
 mod roadsigns;
 mod townsigns_de;
+mod streetsigns;
 mod dirsigns;
 mod dirsigns_face;
 mod cachemap;
@@ -6606,5 +6607,12 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 403: R2a's lane section layer (roadnet::splitlayer::lane_split_layer = lanesections.split's new-layer assembly:
     // the columns gathered, the sections' values, LANE_MAX, the geometry and rule rows, the cut points' connectors)
     m.add("VERSION", 403)?;
+    // 404 (on 403; written as 223 on 222): street-name signs on the traffic signals' mast arms (streetsigns.rs;
+    // server/streetsigns.py)
+    m.add_function(wrap_pyfunction!(streetsigns::street_sign_signals, m)?)?;
+    m.add_function(wrap_pyfunction!(streetsigns::street_sign_cross, m)?)?;
+    m.add_function(wrap_pyfunction!(streetsigns::street_sign_abbrev, m)?)?;
+    m.add_function(wrap_pyfunction!(streetsigns::street_sign_mesh, m)?)?;
+    m.add("VERSION", 404)?;
     Ok(())
 }

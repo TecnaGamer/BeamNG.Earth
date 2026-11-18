@@ -15,5 +15,6 @@ T.check(found, 'a sign tile\'s rsigns field is one of the sign shapes')
 local kept = {}
 for _, what in ipairs(roads.SIGN_WHATS) do kept[what] = true end
 T.check(kept.exits and kept.mileposts and kept.merges and kept.speeds and kept.dirs, 'and the older ones are still there')
+T.check(kept.streets, 'a sign tile\'s streets field (street-name signs, server streetsigns.py) is one of the sign shapes')
 
 T.done('test_roadsigns')
