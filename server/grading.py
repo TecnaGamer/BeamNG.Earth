@@ -2707,11 +2707,14 @@ class _Planner:
                     log.debug("grading: road chains of %s: %s: %s", key, type(e).__name__, e)
             pclip = []
             pparts = []                         # (fid, spec, lon/lat ring) of each plan (roadcorners.grade_rows)
+            import norway_tunnels
+            norwegian_mouths = norway_tunnels.entrances(roadsmod, feats, self.frame, key)
             coarse = COARSE_EASE_ON and self._coarse(key)
             for fid, part, cl, p in zip(ids, parts, clipped, plan_roads(self.frame, parts, self.elev, abut, ext, pins,
                                                                          coarse=coarse, obs=self._obs(key),
                                                                          decks=self._decks_near(key), rings=rings)):
                 if p is not None:
+                    norway_tunnels.approach_grade(self.frame, p, part[1], norwegian_mouths)
                     p.rid = road_id(fid)
                     import lanesections
                     fi = feats.index(fid)

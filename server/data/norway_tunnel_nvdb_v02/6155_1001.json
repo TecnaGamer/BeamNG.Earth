@@ -1,0 +1,41 @@
+{
+  "schema": 2,
+  "source": "Statens vegvesen / NVDB V4 (NLOD)",
+  "lat": 61.549004,
+  "lon": 10.0062711,
+  "radius_m": 1250,
+  "fetched_utc": "2026-11-18T22:07:14.028440+00:00",
+  "records": {
+    "69": [
+      {
+        "id": 671668070,
+        "lat": 61.54876325,
+        "lon": 10.00595113,
+        "kind": 69,
+        "shape": "arch",
+        "properties": {
+          "lengde": 42.0,
+          "type tverrsnitt": "Sirkulært/buet"
+        }
+      }
+    ],
+    "67": [
+      {
+        "id": 671668071,
+        "lat": 61.55408388,
+        "lon": 9.96753079,
+        "kind": 67
+      }
+    ],
+    "581": []
+  },
+  "counts": {
+    "69": 1,
+    "67": 1,
+    "581": 0
+  },
+  "errors": {},
+  "geometry_hints": {},
+  "detail_warnings": {},
+  "ok": true
+}

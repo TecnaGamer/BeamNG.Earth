@@ -8878,6 +8878,12 @@ class TunnelProfiles(BridgeProfiles):
                 if not fl.get("buried"):
                     kinds = portal_cover(kinds, (g if gc is None else gc) - floor, pool[k][0], s)
                 kinds = self._cover_roads(xy, s, kinds, ground, (g if gc is None else gc) - floor)
+            surveyed_no = False
+            if not underwater and not self._drowned.get(self._part_id(k)):
+                import norway_tunnels
+                name = str(pool[k][5] or "") if len(pool[k]) > 5 else ""
+                floor, kinds, surveyed_no = norway_tunnels.bore_profile(
+                    self, xy, s, pool[k][0], name, g, floor, kinds)
             secs, i = [], 0
             while i < len(kinds):
                 j = i
@@ -8887,7 +8893,7 @@ class TunnelProfiles(BridgeProfiles):
                 i = j + 1
             # neighbouring sections share their end sample (no gap between a portal and the open road)
             secs = [(a if n == 0 else a - 1, b, kd) for n, (a, b, kd) in enumerate(secs)]
-            if not underwater:
+            if not underwater and not surveyed_no:
                 floor = self._observed_floor(k, pool, xy, s, floor, secs,
                                              tuple(jdeg.get(e, 0) > 1 for e in jends.get(k, (None, None))))
             cover = (g if gc is None else gc) - floor
@@ -8925,7 +8931,7 @@ class TunnelProfiles(BridgeProfiles):
                     ups.append(float(np.clip(cv + PORTAL_GROUND_M - th, PORTAL_UP_MIN, roadmesh.PORTAL_FRAME)))
                 mouths = (n == 0 or secs[n - 1][2] == 0, n == len(secs) - 1 or secs[n + 1][2] == 0)
                 mouths = (mouths[0] and not (a == 0 and pinned[0]), mouths[1] and not (b == len(xy) - 1 and pinned[1]))
-                if underwater:
+                if underwater or surveyed_no:
                     joined = tuple(jdeg.get(e, 0) > 1 for e in jends.get(k, (None, None)))
                     mouths = (mouths[0] and not (a == 0 and joined[0]),
                               mouths[1] and not (b == len(xy) - 1 and joined[1]))
@@ -9639,6 +9645,11 @@ def block_tunnel_holes(tunnels, cell_fn, frame, keep, cx, cy, square, rail_parts
     if parts:
         mask = tunnel_hole_mask(parts, u, cx, cy, square, getattr(tunnels, "heights", None),
                                 getattr(tunnels, "mouths", None))
+        if mask is not None:
+            import norway_tunnels
+            import roadmesh
+            norway_tunnels.clear_lips(mask, parts, frame, u, cx, cy, square,
+                                      getattr(tunnels, "heights", {}), getattr(tunnels, "mouths", {}), roadmesh.TUNNEL_H)
         if mask is not None and mask.any():
             mask = spare_carriageways(mask, parts, cells, frame, cx, cy, square)
     if rail:
@@ -10436,9 +10447,13 @@ def _tunnel_chunks(tunnels, cells, exact, terrain_paint=True):
         pts = np.c_[xy, z]
         # A covered road needs its own colliding floor even when its mapped surface normally belongs to the
         # terrain paint (rock/grass). That paint lies on the hill/seabed above the bore, never inside it.
-        look = _deck_look(spec)
+        import norway_tunnels
+        is_aurs = (getattr(tunnels,"frame",None) is not None and spec.cls not in CONCRETE_WALL_CLASSES
+                   and norway_tunnels.near_bore(tunnels.frame, xy))
+        look = DIRT_LOOK["gravel"] if is_aurs else _deck_look(spec)
         lines = [] if look is None else [({**look, "deck": True, "tunnel": True, "no_tube": n in twinned}, spec.width, pts)]
-        for look, w, line in rampmerges.trim(fid, extras(spec, pts, lon, defer_dashes=True), layouts):
+        markings = [] if is_aurs else extras(spec, pts, lon, defer_dashes=True)
+        for look, w, line in rampmerges.trim(fid, markings, layouts):
             if look["m"] not in (SIDEWALK["m"], GUTTER["m"], EDGE_DECAL["m"]):     # (no ground beside a deck)
                 lines.append((look, w, line))
         jobs.append((fid, (pts[0, :2], pts[-1, :2]), lines, spec))
@@ -10494,6 +10509,11 @@ def _tunnel_chunks(tunnels, cells, exact, terrain_paint=True):
     import portals                  # (the ground round each mouth: its headwall, wing walls and the tube's cover)
     import sys
     out = portals.fit(sys.modules[__name__], tunnels, cells, out, parts)
+    import norway_tunnels
+    if portals.ON:
+        norway_tunnels.tag_chunks(tunnels, out)
+    if hasattr(tunnels, "mouth"):
+        out.extend(norway_tunnels.aprons(sys.modules[__name__], tunnels, cells, parts, exact))
     return roadmarkings.paint(out)
 
 

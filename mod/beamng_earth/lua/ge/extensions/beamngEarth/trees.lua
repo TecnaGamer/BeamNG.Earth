@@ -36,6 +36,13 @@ M.TILE_CAP = { { 300, 6000 }, { 700, 2400 }, { 1500, 900 }, { 1e9, 400 } }
 M.CLUMP_M = 200
 M.FAR_ONLY = { conifer_clump = true, deciduous_clump = true, oak_west_clump = true, mediterranean_clump = true,
   eucalyptus_clump = true }
+-- Norway-only v0.7: retain a bounded number of additional *existing* off-road
+-- forest-group impostors on distant slopes. No new meshes, draw distance,
+-- collision, or changes to the normal trees/roadside object budget.
+M.NORWAY_BACKDROP = { norway_conifer_backdrop = true, norway_deciduous_backdrop = true }
+M.NORWAY_DENSE_FOREST = true
+M.NORWAY_BACKDROP_BONUS = { { 300, 0, 0 }, { 700, 0.90, 72 },
+  { 1500, 0.86, 104 }, { 1e9, 0.76, 72 } } -- tile distance, desired rank, maximum extra groups/tile at Normal
 -- small props only near the player (2026-10-14, Fells Point at street level: ~10 ms a frame for the Forest
 -- with a door on every house out to 300 m): the tile distance (m) beyond which a group is not shown
 -- rocks only over the fine ground (farfield.NEAR_RADII: L0 within 400 m): beyond it the coarser tiles round off the
@@ -1333,6 +1340,55 @@ local function tileThreshold(d, t)
 end
 M.tileThreshold = tileThreshold
 
+-- Increase only the two Norwegian forest backdrops, never individual trees or
+-- road furniture. Their existing rank order makes the selection deterministic.
+-- We keep the usual capped threshold for every other row and allow at most
+-- bonusCap * quality.cap additional backdrops, so the cost stays bounded.
+function M.norwayBackdropThreshold(d, t, base)
+  if not M.NORWAY_DENSE_FOREST or d <= 300 * M.distanceScale() then return base end
+  local tier
+  for _, v in ipairs(M.NORWAY_BACKDROP_BONUS) do
+    if d <= v[1] * M.distanceScale() then tier = v; break end
+  end
+  if not tier then return base end
+  local q = M.QUALITY_LEVELS[M.quality] or M.QUALITY_LEVELS.normal
+  local wanted = math.min(1.0, tier[2] * q.rank)
+  local maxExtra = math.floor(tier[3] * q.cap + 0.5)
+  if maxExtra == 0 or wanted <= base then return base end
+
+  local ranks = t.ranksNorwayBackdrop
+  if ranks == false then return base end
+  if not ranks then
+    local f, s, names = t.f, t.s, t.groups or GROUPS
+    local isBackdrop = {}
+    for id, name in ipairs(names) do
+      if M.NORWAY_BACKDROP[name] then isBackdrop[id - 1] = true end
+    end
+    if not next(isBackdrop) then
+      t.ranksNorwayBackdrop = false
+      return base
+    end
+    ranks = {}
+    for i = 1, t.n do
+      local b = (i - 1) * s
+      if isBackdrop[f[b + F_GROUP]] then ranks[#ranks + 1] = f[b + F_RANK] end
+    end
+    table.sort(ranks)
+    t.ranksNorwayBackdrop = ranks
+  end
+
+  -- First group that the ordinary cap/ring did NOT already render.
+  local lo, hi = 1, #ranks + 1
+  while lo < hi do
+    local mid = math.floor((lo + hi) / 2)
+    if ranks[mid] < base then lo = mid + 1 else hi = mid end
+  end
+  if lo > #ranks then return base end
+  -- Exclusive rank cutoff prevents more than maxExtra additional objects.
+  if lo + maxExtra <= #ranks then wanted = math.min(wanted, ranks[lo + maxExtra]) end
+  return math.max(base, wanted)
+end
+
 -- M.suppress(group, x, y) -> true hides that item (set by navgraph.lua); M.refresh(group) re-runs the rows of every
 -- tile with an item of that group (every tile without one) after it changes. navgraph applies its signals every time
 -- its graph changes, a few times a minute while driving: all 5,300 tiles of a drive through LA rescanned each time
@@ -1770,6 +1826,7 @@ function M.update(anchorId, player, view, frameMs, fill)
       local dCar = boxDist(player, t)
       local dist = view and math.min(boxDist(view, t), dCar) or dCar
       local want = tileThreshold(dist, t)
+      local backdropWant = M.norwayBackdropThreshold(dist, t, want)
       local capD = dist
       if leadM > 0 and t.furn and (t.cx - player.x) * lhx + (t.cy - player.y) * lhy > -(t.half or 128) then
         capD = math.max(0, dist - leadM)
@@ -1783,7 +1840,8 @@ function M.update(anchorId, player, view, frameMs, fill)
       local mine = nearD and not isBehind
       local near = mine or nearFocus(t) or false
       t.byFocus = (near and not mine) or nil      -- (solid for another player's car only: every item sent with a box)
-      if t.moved or want ~= t.shown or band ~= t.band or near ~= t.near or t.pending then
+      if t.moved or want ~= t.shown or backdropWant ~= t.backdropShown
+          or band ~= t.band or near ~= t.near or t.pending then
         nOrder = nOrder + 1
         oKeys[nOrder], oD[nOrder] = key, dist
         oWant[nOrder], oBand[nOrder], oNear[nOrder], oCapD[nOrder] = want, band, near, capD
@@ -1818,10 +1876,11 @@ function M.update(anchorId, player, view, frameMs, fill)
   -- a pass over a tile's rows stopped (its frame's time or items, or no Forest yet): the next pass for the same targets
   -- goes on from row i, or from the first row it left for another frame (skipped: its shapes were full), not from
   -- the tile's first row (a dense tile's 6000 rows looked at again in every frame of its pass)
-  local function stop(t, i, skipped, want, band, near)
+  local function stop(t, i, skipped, want, backdropWant, band, near)
     t.pending = true
     dirty = true
-    t.scan = { from = math.min(i, skipped or i), want = want, band = band, near = near }
+    t.scan = { from = math.min(i, skipped or i), want = want, backdropWant = backdropWant,
+      band = band, near = near }
     finish()
   end
   local t, fd = nil, nil                    -- the tile looked at, and its Forest data (made when it first needs an item)
@@ -1838,6 +1897,7 @@ function M.update(anchorId, player, view, frameMs, fill)
     local want, band, near = oWant[at], oBand[at], oNear[at]
     local capDist = oCapD[at] or dist
     t, fd, cb = tiles[oKeys[at]], nil, nil
+    local backdropWant = M.norwayBackdropThreshold(dist, t, want)
     if t.moved then
       -- a moved geotile: its items made again at its placement (the first loop, next pass). Near, it must collide;
       -- far, the engine draws its items' distant impostors without the Forest's transform: a rebase's 767 m shift
@@ -1846,18 +1906,20 @@ function M.update(anchorId, player, view, frameMs, fill)
       dirty = true
       goto nexttile
     end
-    if want ~= t.shown or band ~= t.band or near ~= t.near or t.pending then
+    if want ~= t.shown or backdropWant ~= t.backdropShown
+        or band ~= t.band or near ~= t.near or t.pending then
       if rowsScanned > M.ROWS_PER_FRAME then dirty = true; finish(); return end   -- (its pass in a later frame: pending kept)
       t.pending = false
       local scan = t.scan
-      local from = scan and scan.want == want and scan.band == band and scan.near == near and scan.from or 1
+      local from = scan and scan.want == want and scan.backdropWant == backdropWant
+        and scan.band == band and scan.near == near and scan.from or 1
       t.scan = nil
       local f, s, names = t.f, t.s, t.groups or GROUPS
       rowsScanned = rowsScanned + math.max(0, t.n - from + 1)
       local skipped = nil
       for i = from, t.n do
         if (i - from) % CHECK_ROWS == CHECK_ROWS - 1 and elapsed() > limit then
-          stop(t, i, skipped, want, band, near); return
+          stop(t, i, skipped, want, backdropWant, band, near); return
         end
         local b = (i - 1) * s
         local r = f[b + F_RANK]
@@ -1894,12 +1956,13 @@ function M.update(anchorId, player, view, frameMs, fill)
         -- something (townsigns.lua: a tree in front of a town sign); no call at all when nothing hides (every row)
         if g and (M.suppress or next(M.hiders)) and hidden(g, f[b + F_X], f[b + F_Y], t.anchor, t, f[b + F_Z]) then r = 2 end
         local solid = near and not M.NO_COLLIDE[g or '']
-        if r < want and (not t.made[i] or (t.solid[i] == true) ~= solid) then
+        local itemWant = M.NORWAY_BACKDROP[g] and backdropWant or want
+        if r < itemWant and (not t.made[i] or (t.solid[i] == true) ~= solid) then
           local sh, sc = shapeOf(t, i)
-          if budget <= 0 then stop(t, i, skipped, want, band, near); return end
+          if budget <= 0 then stop(t, i, skipped, want, backdropWant, band, near); return end
           if allow(sh) then
             local d = data()
-            if not d then stop(t, i, skipped, want, band, near); return end      -- (a new Forest: next frame)
+            if not d then stop(t, i, skipped, want, backdropWant, band, near); return end      -- (a new Forest: next frame)
             if t.made[i] then removeItem(d, t.made[i], t.madeShape[i]); budget = budget - 1; liveItems = liveItems - 1 end  -- solid <-> not
             t.made[i] = makeItem(d, t, i, sh, sc, solid, g, t.variant)
             if t.made[i] then liveItems = liveItems + 1 end
@@ -1923,25 +1986,30 @@ function M.update(anchorId, player, view, frameMs, fill)
               end
             end
             budget = budget - 1
-            if elapsed() > limit then stop(t, i + 1, skipped, want, band, near); return end
+            if elapsed() > limit then stop(t, i + 1, skipped, want, backdropWant, band, near); return end
           else skipped = skipped or i end          -- another frame (this one's shapes are full)
-        elseif r >= want and t.made[i] then
-          if budget <= 0 then stop(t, i, skipped, want, band, near); return end
+        elseif r >= itemWant and t.made[i] then
+          if budget <= 0 then stop(t, i, skipped, want, backdropWant, band, near); return end
           if allow(t.madeShape[i] or '') then
             local d = data()
-            if not d then stop(t, i, skipped, want, band, near); return end
+            if not d then stop(t, i, skipped, want, backdropWant, band, near); return end
             removeItem(d, t.made[i], t.madeShape[i])
             t.made[i], t.solid[i], t.madeShape[i] = nil, nil, nil
             liveItems = liveItems - 1
             budget = budget - 1
-            if elapsed() > limit then stop(t, i + 1, skipped, want, band, near); return end
+            if elapsed() > limit then stop(t, i + 1, skipped, want, backdropWant, band, near); return end
           else skipped = skipped or i end
         end
       end
       t.shown = want
+      t.backdropShown = backdropWant
       t.band = band
       t.near = near
-      if skipped then t.pending = true; t.scan = { from = skipped, want = want, band = band, near = near }; dirty = true end
+      if skipped then
+        t.pending = true
+        t.scan = { from = skipped, want = want, backdropWant = backdropWant, band = band, near = near }
+        dirty = true
+      end
     end
     ::nexttile::
   end
@@ -2001,6 +2069,7 @@ function M.keepupMissing(px, py, r)
     local dist = math.sqrt(bx * bx + by * by)
     if dist <= r and not t.drop and (t.geo or not t.ghost) then
       local want = tileThreshold(dist, t)
+      local backdropWant = M.norwayBackdropThreshold(dist, t, want)
       local f, s, names = t.f, t.s, t.groups or GROUPS
       local pl = t.geo and t.pl
       local lx, ly, ax, ay = px, py, 1, 0
@@ -2028,8 +2097,9 @@ function M.keepupMissing(px, py, r)
             if dist <= M.CLUMP_M then rk = 2 end
           elseif f[b + F_SCALE] < 0 and dist > M.CLUMP_M then rk = 2 end
           if g and (M.groupOff[g] or not M.CATALOG[g]) then rk = 2 end
-          if rk < want and g and (M.suppress or next(M.hiders)) and hidden(g, x, y, t.anchor, t, f[b + F_Z]) then rk = 2 end
-          if rk < want then
+          local itemWant = M.NORWAY_BACKDROP[g] and backdropWant or want
+          if rk < itemWant and g and (M.suppress or next(M.hiders)) and hidden(g, x, y, t.anchor, t, f[b + F_Z]) then rk = 2 end
+          if rk < itemWant then
             local wx, wy = x, y
             if pl then wx, wy = geotile.apply(pl, x, y, f[b + F_Z]) end
             local ddx, ddy = wx - px, wy - py
