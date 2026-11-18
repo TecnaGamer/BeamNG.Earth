@@ -682,6 +682,7 @@ FAST_GAP = os.environ.get("BNE_FAST_GAP", "off") == "on"
 FAST_GAP_CLASSES = ("motorway", "trunk")
 FAST_GAP_ON_M = 0.5         # m off a landing's approach line a sample is on it at most (the same map line's)
 FAST_GAP_START_M = 6.0      # m from a deck end the first part of its approach may start (heading on, FAST_GAP_COS)
+FAST_GAP_LINK_M = 3.0       # m from a part's far end the next may start (a lane section's joint offset 2 m sideways)
 FAST_GAP_COS = 0.707        # (within 45 degrees)
 FAST_GAP_CHAIN_M = 250.0    # m of approach followed: past the line's reach and any part's extensions into it
 FAST_GAP_JOIN_M = 0.75      # m: a deck end this near another deck's, which goes on from it, is a joint, no landing
@@ -6061,8 +6062,9 @@ class _Planner:
     def _landing_chain(self, end, v, cls):
         """FAST_GAP: the approach line (k, 2) of a deck end (direction v into the road, the deck's class cls): from the
         end, the ground part of class cls (not a link) starting at it (within FAST_GAP_START_M, heading on within
-        FAST_GAP_COS), then at each of its far ends the part of that class going on most straight (CHAIN_JOIN_M, the
-        least key of equals), FAST_GAP_CHAIN_M long at most; None without one. From the map round the end alone (its
+        FAST_GAP_COS), then at each of its far ends the part of that class going on most straight (one joined there,
+        CHAIN_JOIN_M, before one starting within FAST_GAP_LINK_M; the least key of equals), FAST_GAP_CHAIN_M long at
+        most; None without one. From the map round the end alone (its
         cells' ground parts, as plans place them): the same whoever asks. Kept per end."""
         key = (round(float(end[0]), 1), round(float(end[1]), 1), str(cls))
         memo = self.__dict__.setdefault("_landing_memo", {})
@@ -6098,7 +6100,7 @@ class _Planner:
                 for rev in (False, True):
                     q = g[::-1] if rev else g
                     d0 = float(dnp.hypot(*(q[0] - at)))
-                    if d0 > (FAST_GAP_START_M if first else CHAIN_JOIN_M):
+                    if d0 > (FAST_GAP_START_M if first else FAST_GAP_LINK_M):
                         continue
                     w = roadsmod._dir_at(q, True)
                     cs = float(dnp.dot(w, u))
@@ -6107,8 +6109,10 @@ class _Planner:
                         cs = min(cs, float(dnp.dot(gap, u)))
                     if cs < FAST_GAP_COS:
                         continue
-                    if best is None or (-cs, kk, rev) < best[0]:
-                        best = ((-cs, kk, rev), kk, q)
+                    # (a part joined at the node before one that starts beside it: a lane section's offset joint)
+                    rank = (d0 > CHAIN_JOIN_M, -cs, kk, rev)
+                    if best is None or rank < best[0]:
+                        best = (rank, kk, q)
             if best is None:
                 break
             _s, kk, q = best
