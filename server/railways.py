@@ -1646,12 +1646,13 @@ FIT_SMOOTH_N = 10            # points (STEP_M) either side the natural ground is
 
 
 def _beds_fit(frame, rails, ground, nat, underpasses, load=None, elev=None):
-    """BNE_RAIL_ROAD_FIT: _beds with the points railprofile's lattice has no bed for laid on the natural ground (nat)
-    averaged FIT_SMOOTH_N points either side along the part (_smooth_ground: the same at a point in every tile, a window
-    of the part's own points), not railways.profile in the tile's window (graded within GRADED_NEAR_M of the asking tile,
-    natural past it, a bridge's lift carried along its clipped parts): the bed the mesh draws and the crossing records
-    test, the same whichever tile asks. Without the lattice at all (BNE_RAIL_PROFILE off, no load or elevation): _beds,
-    every bed the window's. Where the lattice has every point: _beds' own."""
+    """BNE_RAIL_ROAD_FIT: _beds with a ground track's points railprofile's lattice has no bed for laid from what does not
+    change with the asking tile: across a gap between points it has, linearly along the part from the two (_fill_gaps:
+    an approach's lift kept), past its last one held level, and a part it has nothing of on the natural ground (nat)
+    averaged FIT_SMOOTH_N points either side along the part (_smooth_ground); not railways.profile in the tile's window
+    (graded within GRADED_NEAR_M of the asking tile, natural past it): the bed the mesh draws and the crossing records
+    test, the same whichever tile asks. Bridges, tunnels and trams as _beds lays them (their clearances, portal grades
+    and decks), and without the lattice at all (BNE_RAIL_PROFILE off, no load or elevation) _beds for every part."""
     import railprofile
     if not (railprofile.ENABLED and load is not None and elev is not None and rails):
         return _beds(frame, rails, ground, underpasses, load, elev)
@@ -1659,13 +1660,44 @@ def _beds_fit(frame, rails, ground, nat, underpasses, load=None, elev=None):
     new = railprofile.beds(frame, ("beds", lat0, lon0), load, point_ground(frame, elev, ("nodes", lat0, lon0)), rails)
     if new is None:
         return _beds(frame, rails, ground, underpasses, load, elev)
+    old = None
     out = []
-    for z, (_f, _c, _k, xy) in zip(new, rails):
+    for n, (z, (_f, c, kind, xy)) in enumerate(zip(new, rails)):
         z = np.asarray(z, np.float64)
         if not np.isfinite(z).all():
-            z = np.where(np.isfinite(z), z, _smooth_ground(xy, nat))
+            if kind != "ground" or c == "tram":
+                if old is None:         # (_beds' own: the lattice where it has the point, profile's past it)
+                    old = _beds(frame, rails, ground, underpasses, load, elev)
+                z = np.asarray(old[n][0], np.float64)
+            elif np.isfinite(z).any():
+                z = _fill_gaps(xy, z)
+            else:
+                z = _smooth_ground(xy, nat)
         out.append((z, np.asarray(ground(xy), np.float64)))
     return out
+
+
+def _fill_gaps(xy, z):
+    """z (n,) with its NaN runs filled along the part (xy (n, 2)): between two finite points linearly by the arc from the
+    first (each section's length summed from it, the same wherever the part was clipped), past the last finite point
+    held at it. Pure."""
+    xy = np.asarray(xy, np.float64)[:, :2]
+    z = np.array(z, np.float64)
+    fin = np.isfinite(z)
+    idx = np.flatnonzero(~fin)
+    seg = dnp.hypot(*np.diff(xy, axis=0).T)
+    for run in np.split(idx, np.flatnonzero(np.diff(idx) > 1) + 1) if len(idx) else []:
+        a, b = int(run[0]) - 1, int(run[-1]) + 1
+        if a < 0 and b >= len(z):
+            continue
+        if a < 0:
+            z[run] = z[b]
+        elif b >= len(z):
+            z[run] = z[a]
+        else:
+            s = np.cumsum(seg[a:b])         # (from point a: sections a..b-1)
+            z[run] = z[a] + (z[b] - z[a]) * (s[:-1] / s[-1] if s[-1] > 0.0 else 0.0)
+    return z
 
 
 def _smooth_ground(xy, nat, n=FIT_SMOOTH_N):

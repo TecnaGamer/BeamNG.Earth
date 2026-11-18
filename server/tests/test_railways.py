@@ -1556,17 +1556,20 @@ class RoadFitTest(unittest.TestCase):
         return xy, r
 
     @staticmethod
-    def lattice(missing):
-        """railprofile's lattice standing in: the natural ground (10 m: flat) at each point, NaN where missing(xy) holds
-        (a point no node has)."""
+    def lattice(missing, bed=None):
+        """railprofile's lattice standing in: bed(xy) (default the natural ground, 10 m: flat) at each point, NaN where
+        missing(xy) holds (a point no node has) and for a tram (railprofile's own)."""
         import contextlib
         import railprofile
 
         def beds(_frame, _key, _load, _ground, rails_):
             out = []
-            for _f, _c, _k, xy_ in rails_:
-                z = np.full(len(xy_), 10.0)
-                z[np.asarray(missing(np.asarray(xy_)[:, :2]), bool)] = np.nan
+            for _f, c_, _k, xy_ in rails_:
+                q = np.asarray(xy_)[:, :2]
+                z = np.full(len(xy_), 10.0) if bed is None else np.asarray(bed(q), np.float64)
+                z[np.asarray(missing(q), bool)] = np.nan
+                if c_ == "tram":
+                    z[:] = np.nan
                 out.append(z)
             return out
         stack = contextlib.ExitStack()
@@ -1779,3 +1782,43 @@ class RoadFitTest(unittest.TestCase):
             if gap > 0.0:               # (between them the visible track: at least its two edge points)
                 mid = (x2[:, 0] >= panels[0][2][-1][0] - 1e-9) & (x2[:, 0] <= panels[1][2][0][0] + 1e-9)
                 self.assertFalse(b2[mid].any())
+
+    def test_missing_lattice_beds_keep_bridges_and_approach_lifts(self):
+        """Codex on 783eb768: every missing lattice bed went to the natural ground, so a tram bridge (railprofile never
+        has trams) lay on the terrain under it and a raised approach with a missing stretch dropped to the ground (and a
+        road under it became a level crossing). Bridges, tunnels and trams keep _beds' own; a ground part's gap is filled
+        between the lattice's points either side."""
+        lattice_kw = {"load": lambda k: None, "bed_elev": lambda la, lo: la * 0.0}
+        # (a raised approach: the lattice's ramp 4 m up at x 120, its points 100..140 missing; a road under it there)
+        f = features([[(-100.0, 100.0), (400.0, 100.0)], [(120.0, 0.0), (120.0, 250.0)]], ["standard_gauge", "secondary"],
+                     subtypes=["rail", "road"])
+
+        def ramp(q):
+            return 10.0 + np.clip(4.0 - np.abs(q[:, 0] - 120.0) * 0.02, 0.0, None)
+        with self.lattice(lambda q: np.abs(q[:, 0] - 120.0) < 20.0, ramp), \
+                unittest.mock.patch.object(railways, "RAIL_ROAD_FIT", True):
+            rec = railways.crossing_records(FRAME, 0, 0, [f], flat, far_ground=flat, **lattice_kw)
+            mesh = railways.tile_mesh(FRAME, 0, 0, [f], flat, far_ground=flat, records=rec, **lattice_kw)
+        (xy, zb, r), = [(xy, zb, r) for (fid, _c, _k, xy), (zb, _zg), r in zip(rec["rails"], rec["prof"], rec["runs"])
+                        if fid == "id000"]
+        gap = np.abs(xy[:, 0] - 120.0) < 20.0
+        self.assertGreater(float(zb[gap].min()), 13.0, "the approach's lift kept across the missing stretch")
+        self.assertIsNone(r, "the road 3.6 m under the approach: no crossing")
+        self.assertIsNotNone(mesh)
+        # (a tram bridge: no lattice bed at all; _beds' own, its deck as railways.profile lays it)
+        t = features([[(-100.0, 140.0), (400.0, 140.0)]], ["tram"], subtypes=["rail"], flags=[(0, "is_bridge")])
+        with self.lattice(lambda q: np.zeros(len(q), bool)), \
+                unittest.mock.patch.object(railways, "RAIL_ROAD_FIT", True):
+            rec = railways.crossing_records(FRAME, 0, 0, [t], flat, far_ground=flat, **lattice_kw)
+            want = railways._beds(FRAME, rec["rails"], rec["ground"], [], lattice_kw["load"], lattice_kw["bed_elev"])
+        self.assertTrue(rec["rails"])
+        for (zb, _g), (zw, _gw) in zip(rec["prof"], want):
+            np.testing.assert_array_equal(zb, zw)
+
+    def test_a_lattice_gap_is_filled_the_same_wherever_the_part_is_clipped(self):
+        line = np.c_[np.arange(0.0, 400.0, railways.STEP_M), np.full(200, 0.0)]
+        z = 10.0 + 0.03 * line[:, 0]
+        z[90:110] = np.nan
+        a, b = railways._fill_gaps(line[:150], z[:150]), railways._fill_gaps(line[50:], z[50:])
+        np.testing.assert_array_equal(a[50:150], b[:100])
+        np.testing.assert_allclose(a[90:110], 10.0 + 0.03 * line[90:110, 0], atol=1e-9)
