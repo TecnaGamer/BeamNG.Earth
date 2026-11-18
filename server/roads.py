@@ -9613,18 +9613,14 @@ ARCH_SIDE_M = 1.0           # m beside a low arch's tube its soil is raised too
 ARCH_SOIL_MIN = 0.6         # m of ground kept over a low arch's vault (arch_raise)
 
 
-def arch_raise(parts, heights, px, py, z, mouths=None):
-    """z (ground heights at the anchor-frame points px, py) raised over the low arches among parts (TunnelProfiles
-    parts; heights: their tubes, TunnelProfiles.heights) to ARCH_SOIL_MIN over the vault, beside it too, but for
-    their mouths (LOW_HOLE_M, cut there by tunnel_hole_mask): the ground dipping into a low tube near its mouths
-    made one-sided terrain triangles from the road's level up to the soil, seen as dark wedges in the opening from
-    outside (Central Park, 2026-10-17). Pure."""
-    import fast
+def arch_parts(parts, heights, mouths=None):
+    """The low arches among parts (arch_raise's arguments) as arch_raise_over takes them: [(xy, zf, hw, th, m0, m1,
+    lo, hi)] per arch, its tube's line and floor as the kernel reads them (contiguous), the reach beside it, its height,
+    whether each mouth is cut, and the box of its reach. Made once for a set of arches: _over_arches asked arch_raise
+    for every plan of a cell and every offset across it, ~4 ms of a call's numbers for each, the same for the same
+    arches (61050 calls of a replay of 27 junctions: 35 of its 402 profiled CPU-s). Pure."""
     import roadmesh
-    z = np.array(z, np.float64, copy=True)
-    fast.require(0, "arch_raise_part")
-    px = np.ascontiguousarray(px, np.float64)
-    py = np.ascontiguousarray(py, np.float64)
+    out = []
     for fid, spec, xy, zf, _lon in parts:
         th = (heights or {}).get(fid)
         if th is None or th >= roadmesh.TUNNEL_H - 0.05:
@@ -9634,17 +9630,45 @@ def arch_raise(parts, heights, px, py, z, mouths=None):
         if len(xy) < 2 or not np.isfinite(zf).all():
             continue
         hw = spec.width / 2 + roadmesh.TUNNEL_SHOULDER + ARCH_SIDE_M
-        # the Rust kernel (per part) on the points in its box
         m0, m1 = (mouths or {}).get(fid, (True, True))
-        lo, hi = xy.min(0) - hw, xy.max(0) + hw
+        out.append((np.ascontiguousarray(xy), np.ascontiguousarray(zf), float(hw), float(th), bool(m0), bool(m1),
+                    xy.min(0) - hw, xy.max(0) + hw))
+    return out
+
+
+def arches_near(arches, xy, reach):
+    """The arches of arch_parts whose box meets the box of the line xy (k, 2) widened by reach m: the only ones that can
+    raise a ground height within reach of the line (arch_raise_over reads a point against an arch's box first)."""
+    xy = np.asarray(xy, np.float64)[:, :2]
+    lo, hi = xy.min(0) - reach, xy.max(0) + reach
+    return [a for a in arches if a[6][0] <= hi[0] and a[7][0] >= lo[0] and a[6][1] <= hi[1] and a[7][1] >= lo[1]]
+
+
+def arch_raise_over(arches, px, py, z):
+    """z (ground heights at the anchor-frame points px, py) raised over arches (arch_parts') as arch_raise does. Pure."""
+    import fast
+    z = np.array(z, np.float64, copy=True)
+    fast.require(0, "arch_raise_part")
+    px = np.ascontiguousarray(px, np.float64)
+    py = np.ascontiguousarray(py, np.float64)
+    for xy, zf, hw, th, m0, m1, lo, hi in arches:
+        # the Rust kernel (per part) on the points in its box
         k = np.flatnonzero((px >= lo[0]) & (px <= hi[0]) & (py >= lo[1]) & (py <= hi[1]))
         if len(k):
             zk = np.ascontiguousarray(z[k])
-            fast._ef.arch_raise_part(zk, np.ascontiguousarray(px[k]), np.ascontiguousarray(py[k]),
-                                     np.ascontiguousarray(xy), np.ascontiguousarray(zf), float(hw), float(th),
-                                     float(ARCH_SOIL_MIN), float(LOW_HOLE_M), bool(m0), bool(m1))
+            fast._ef.arch_raise_part(zk, np.ascontiguousarray(px[k]), np.ascontiguousarray(py[k]), xy, zf, hw, th,
+                                     float(ARCH_SOIL_MIN), float(LOW_HOLE_M), m0, m1)
             z[k] = zk
     return z
+
+
+def arch_raise(parts, heights, px, py, z, mouths=None):
+    """z (ground heights at the anchor-frame points px, py) raised over the low arches among parts (TunnelProfiles
+    parts; heights: their tubes, TunnelProfiles.heights) to ARCH_SOIL_MIN over the vault, beside it too, but for
+    their mouths (LOW_HOLE_M, cut there by tunnel_hole_mask): the ground dipping into a low tube near its mouths
+    made one-sided terrain triangles from the road's level up to the soil, seen as dark wedges in the opening from
+    outside (Central Park, 2026-10-17). Pure."""
+    return arch_raise_over(arch_parts(parts, heights, mouths), px, py, z)
 
 
 def tunnel_floor_at(parts, x, y):
