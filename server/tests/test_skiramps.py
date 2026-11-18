@@ -356,6 +356,30 @@ class GapLanding(unittest.TestCase):
         self.assertTrue(np.allclose(stale.z, plan("road#1").z))
         self.assertTrue(np.allclose(plan("other#0").z, ref.z), "(another feature: never)")
 
+    def test_stale_unsplit_piece_shares_the_start(self):
+        # (Codex review of round 5: the plan's one unsplit piece (from a short home copy without the bridge) starts where
+        # the clean split's near-bank piece does, which a piece's ordinal (both #0) could not tell apart: by its ends
+        # (_piece_id) it is not the landing's piece; its far-bank samples, lane-placed round in front of this bank's
+        # deck end, go by where they lie (5.7 m off the approach) and take nothing)
+        ap = self.approach(0.0)
+
+        def raw(la, lo):
+            e, n, _ = self.frame.geodetic_to_enu(la, lo, 0.0)
+            x = np.asarray(e, np.float64)
+            return np.where(x < 0.0, 53.0 - 0.037 * x, 50.0 + 0.037 * x)        # (this bank higher)
+        near = self.lonlat(np.array([[-200.0, 0.0], [0.0, 0.0]]))               # (the clean near-bank piece)
+        unsplit = self.lonlat(np.array([[-200.0, 0.0], [150.0, 0.0]]))          # (the stale one over both banks)
+        own = grading._piece_id("road", near)
+        self.assertNotEqual(grading._piece_id("road", unsplit), own)
+        self.assertEqual(grading._piece_id("road", near.copy()), own)
+        lands = [(ap, "motorway", [ap[[2, 1]], ap[[1, 0]]], [], frozenset({own}), OUT)]
+        s2 = np.sqrt(0.5)
+        far_xy = self.dense(np.array([-0.66, 5.66]), np.array([-0.66 + 150.0 * s2, 5.66 + 150.0 * s2]))
+        ref = grading.plan_roads(self.frame, [(self.lonlat(far_xy), self.spec)], raw, cuts=False)[0]
+        got = grading.plan_roads(self.frame, [(self.lonlat(far_xy), self.spec)], raw, cuts=False, landings=lands,
+                                 part_ids=[grading._piece_id("road", unsplit)])[0]
+        self.assertTrue(np.allclose(got.z, ref.z))
+
     def test_diagonal_connector_placed_copy(self):
         # (Codex review of round 5: the first ground piece starts 3 m on and 2 m aside of the deck end, a diagonal
         # connector; the road placed 8 m to the other side: its first samples are ahead of the deck end along the deck,
@@ -586,6 +610,26 @@ class RawLinesShort(unittest.TestCase):
         self.assertTrue(b.n)
         self.assertEqual(f.__dict__["_level_ranges"], {})
         self.assertNotIn(str(k), g.__dict__.get("_raw_lines_memo", {}))
+
+    def test_busy_reader_fallback_stays_its_own(self):
+        # (Codex review of round 5: an ordinary reader while another thread makes the layer's ranges makes its missing
+        # row itself (its faults its own): kept out of the memo, so the build's setdefault cannot publish it done; the
+        # owner's rows go in)
+        site, key = self.layer()
+        f = site.cells[key].__class__.__new__(site.cells[key].__class__)
+        f.__dict__.update({kk: v for kk, v in site.cells[key].__dict__.items() if not kk.startswith("_")})
+        f.__dict__["_ranges_state"] = "busy"
+        f.__dict__["_ranges_owner"] = -1                    # (another thread's build)
+        f.__dict__["_level_ranges"] = {}
+        with mock.patch.object(roads, "LIDAR_GAPS_ON", False):
+            got = roads.level_ranges(f, 0, _home=False)
+            self.assertIsInstance(got, list)
+            self.assertEqual(f.__dict__["_level_ranges"], {}, "a busy reader's row stays its own")
+            self.assertEqual(roads._level_memo(f, [0, 1]), {0: got, 1: roads.level_ranges(f, 1, _home=False)})
+            self.assertEqual(f.__dict__["_level_ranges"], {})
+            f.__dict__["_ranges_owner"] = threading.get_ident()      # (this thread's build: its rows go in)
+            roads._level_many(f, [0])
+            self.assertEqual(f.__dict__["_level_ranges"], {0: got})
 
     def test_cell_ranges_mark_a_short_entry(self):
         import time

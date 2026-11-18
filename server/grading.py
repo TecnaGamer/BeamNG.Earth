@@ -2747,13 +2747,14 @@ class _Planner:
                     continue
                 if specs[i] is None:
                     continue
-                for gj, ring in enumerate(roadsmod.ground_parts(feats, i)):     # not bridges / tunnels
+                for ring in roadsmod.ground_parts(feats, i):     # not bridges / tunnels
+                    pid = _piece_id(feats.ids[i], ring) if FAST_GAP else None     # (FAST_GAP: its mapped piece)
                     ring = placement.ring(self.frame, feats, i, ring, specs[i])
                     pieces = self._near_cell(np.asarray(ring, np.float64), box)
                     for r in pieces:
                         parts.append((r, specs[i]))
                         ids.append(str(feats.ids[i]))
-                        pids.append(_piece_id(feats.ids[i], gj))     # (FAST_GAP: its mapped ground piece)
+                        pids.append(pid)
                         clipped.append(len(pieces) > 1 or r is not ring)
                         rings.append(roadsmod.is_ring(feats, i))
             pspecs = []
@@ -3007,8 +3008,9 @@ class _Planner:
             for i in range(len(feats)):
                 if specs[i] is None or specs[i].cls in UNGRADED:
                     continue
-                for gj, ring in enumerate(roadsmod.ground_parts(feats, i)):
-                    rows.append((i, placement.ring(self.frame, feats, i, np.asarray(ring, np.float64), specs[i]), gj))
+                for ring in roadsmod.ground_parts(feats, i):
+                    rows.append((i, placement.ring(self.frame, feats, i, np.asarray(ring, np.float64), specs[i]),
+                                 _piece_id(feats.ids[i], ring) if FAST_GAP else None))
             if rows:            # (the frame's conversion once for all: it is per call)
                 allr = np.concatenate([r for _, r, _g in rows])
                 e, n, _ = self.frame.geodetic_to_enu(allr[:, 1], allr[:, 0], 0.0)
@@ -3016,7 +3018,7 @@ class _Planner:
                 k0 = 0
                 for i, ring, gj in rows:
                     out.append((en[k0:k0 + len(ring)], profile_sigma(specs[i]), road_id(str(feats.ids[i])), ring,
-                                specs[i], str(feats.ids[i]), _piece_id(feats.ids[i], gj)))
+                                specs[i], str(feats.ids[i]), gj))
                     k0 += len(ring)
         with self.lock:
             if len(memo) > 64:
@@ -6127,10 +6129,10 @@ class _Planner:
                 rngs = roadsmod.home_ranges(f, i, h[0], h[1], list(row)) if h is not None else list(row)
                 for kind, sp, want in (("bridges", rs[i], "bridge"), ("ground", rs[i], "ground")):
                     ps = roadsmod._parts_by_level_new(f, i, want, rngs=list(rngs))
-                    for gj, ring in enumerate(ps):          # (ground_parts' pieces and order: the same ranges)
+                    for ring in ps:                         # (ground_parts' pieces: the same ranges)
                         ring = np.asarray(ring, np.float64)
                         if len(ring) >= 2:
-                            rows.append((kind, sp, ring, _piece_id(f.ids[i], gj)))
+                            rows.append((kind, sp, ring, _piece_id(f.ids[i], ring)))
             if rows:
                 allr = np.concatenate([r for _k, _s, r, _f in rows])
                 e, n, _ = self.frame.geodetic_to_enu(allr[:, 1], allr[:, 0], 0.0)
@@ -7954,10 +7956,15 @@ def gap_line(zb):
     return float(a), float(b), reach
 
 
-def _piece_id(fid, j):
-    """FAST_GAP: the id of feature fid's j-th ground piece (ground_parts' order): a sample's own road piece, so one
-    feature's pieces on a bridge's two banks are told apart. Pure."""
-    return f"{fid}#{int(j)}"
+def _piece_id(fid, ring):
+    """FAST_GAP: the id of feature fid's ground piece ring (its mapped lon/lat polyline, as ground_parts gives it, before
+    any lane placement): the feature and the piece's two ends, so one feature's pieces on a bridge's two banks are told
+    apart, and pieces made from other ranges (a layer's kept ground_parts from a short home copy, one unsplit piece over
+    both banks) never match the landing's. Pure."""
+    r = np.asarray(ring, np.float64)
+    if not len(r):
+        return f"{fid}#"
+    return f"{fid}#{r[0, 0]:.7f},{r[0, 1]:.7f},{r[-1, 0]:.7f},{r[-1, 1]:.7f}"
 
 
 def _piece_feature(pid):
@@ -8010,7 +8017,7 @@ def gap_apply(z, pts, approach, line, own=None, other=None, sid=None, own_ids=No
     lanes are placed (FAST_GAP_ID_M off at most) and not behind the deck's end
     (FAST_GAP_BACK_M along out_dir, the deck's direction out into the road: the same feature's piece on the bridge's
     other bank), never when it is another feature's; a sample of no known road, or of another piece of one of the
-    approach's features (its ordinal may stem from other ranges), where it lies on the approach (FAST_GAP_ON_M) and,
+    approach's features (it may stem from other ranges), where it lies on the approach (FAST_GAP_ON_M) and,
     with own and other (the approach's parts' lines, the other ground roads' lines round it), no nearer another road
     than one of its parts. Which samples, and their
     heights, are the approach's and the map's alone, whichever plan or placed copy has them. z itself when nothing is
@@ -8023,9 +8030,9 @@ def gap_apply(z, pts, approach, line, own=None, other=None, sid=None, own_ids=No
     known = np.zeros(len(pts), bool)
     mine = np.zeros(len(pts), bool)
     if sid is not None and own_ids is not None:
-        # (a piece of one of the approach's features but not one of its pieces is not known: its ordinal may stem from
-        # other ranges than the landing's (a layer's kept ground_parts from a short home copy since replaced), so it
-        # goes by where it lies, as one of no known road)
+        # (a piece of one of the approach's features but not one of its pieces is not known: it may stem from other
+        # ranges than the landing's (a layer's kept ground_parts from a short home copy since replaced), so it goes by
+        # where it lies, as one of no known road)
         feats_ = {_piece_feature(q) for q in own_ids}
         known = np.array([q is not None and _piece_feature(q) not in feats_ for q in sid], bool)
         mine = np.array([q is not None and str(q) in own_ids for q in sid], bool)
