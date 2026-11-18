@@ -41,7 +41,7 @@ import staging
 
 log = logging.getLogger("earthd.vegetation")
 
-VERSION = 37          # (the cached cells hold their groups: 14 for the regional rules of GitHub #110; 16: the roads'
+VERSION = 38          # (the cached cells hold their groups: 14 for the regional rules of GitHub #110; 16: the roads'
                       # drawn widths and sidewalks kept clear; 17: BC's lidar canopy heights, mapdata's canopy layer 2;
                       # 18: the rounded junction corners kept clear, roadcorners.py; 19: one tree per flat crown,
                       # thin_tops; 20: none on or beside a bridge deck, _mask_decks; 21: orchard rows, canopy trees
@@ -76,6 +76,8 @@ VERSION = 37          # (the cached cells hold their groups: 14 for the regional
                       # North America's, East Asia's, Japan's, the oceanic climates' by latitude), the spruces' west
                       # of Poland by SPRUCE_CENTRAL
                       # 37: one top per broadleaf crown (crown_spacing: the thinning by the leaf type and biome)
+                      # 38: the conifer share kept to the leaf type map (conifer_odds), the beech belt,
+                      # the pine woods' birches
 TREE_MIN_M = 3.0
 # The canopy raster, the scatter grids and the crown radii are in Web Mercator units (EPSG:3857: a metre there is
 # cos(lat) metres on the ground) and were tuned by eye at mid latitudes. Past them the same pixel counts covered less
@@ -343,6 +345,22 @@ def _conifer_share(lat, lon):
     return np.where(np.isnan(m), coarse, m)
 
 
+CONIFER_TILT_H = 12.0           # (37) the taller trees more likely the conifers: a tree's weight its height over this,
+CONIFER_TILT = (0.5, 1.2)       # within these
+
+
+def conifer_odds(share, height, is_tree=None):
+    """Per tree: the chance that it is a conifer, the local share tilted by its height (the tall ones more likely, the
+    short ones the broadleaf scrub) with the cell's mean kept to the share: 1 - (1 - share) ** (w / mean w). (37:
+    was share * w, which took a third of the trees off every conifer forest: Bory Tucholskie's 0.97 pines made 66 %
+    conifers, Finland's 49 %.)"""
+    share = np.clip(np.asarray(share, np.float64), 0.0, 1.0)
+    w = np.clip(np.asarray(height, np.float64) / CONIFER_TILT_H, *CONIFER_TILT)
+    wt = w if is_tree is None else w[np.asarray(is_tree, bool)]
+    a = w / (float(np.mean(wt)) if wt.size else 1.0)
+    return 1.0 - dnp.power(1.0 - share, a)
+
+
 def _conifer_share_coarse(lat, lon):
     """The regional share of conifers (a coarse climate stand-in where the leaf type map has no forest). Beyond North
     America (2026-10-15: Douglas firs stood in Punjab's fields): few in the tropics and subtropics, the pines of the
@@ -423,7 +441,14 @@ OTHER_SHARES = (0.03, 0.62, 0.35)
 # (35) by the ecoregion where the Koppen class misleads: the Cantabrian and northwest Iberian oak woods (Galicia,
 # northern Portugal, Asturias: Quercus robur and pyrenaica, birches; beeches only in the mountains, BEECH_UPHILL)
 ECO_BROAD_SHARES = {648: (0.25, 0.75, 0.0), 800: (0.25, 0.75, 0.0)}
-BEECH_UPHILL = 0.5          # the beeches' share gained over the montane belt (from the birches and oaks)
+BEECH_UPHILL = 0.85         # the beeches' share gained over the beech belt (from the birches and oaks)
+# (37) the beech belt (submontane and montane: the oak-hornbeam woods give way to beech, fir and sycamore; Bieszczady
+# NP: beech ~60 % of the forest, oaks hardly any above 500 m) from BEECH_BELT_M[0] below the spruce line, whole at
+# BEECH_BELT_M[1] below it (50 N: 334 to 734 m; 46 N, the Alps: 494 to 894; 36 N, Honshu: 894 to 1294). Was the
+# montane belt (700 m below the line to the line) and 0.5: the Bieszczady at 700 m half oaks.
+BEECH_BELT_M = (800.0, 400.0)
+PINE_WOOD_SHARE = (0.5, 0.9)    # (37) the forest's conifer share over which its beeches become birches and oaks
+PINE_WOOD_BIRCH = 0.6           # (of those: the rest oaks)
 # spruces (of the conifers): SPRUCE_LAT's share by latitude in the lowlands, rising over the montane belt (MONTANE_M
 # below the spruce line) to SPRUCE_MOUNTAIN halfway up it (the firs and spruces of the montane belt); the line
 # SPRUCE_LINE_M at 50 N, SPRUCE_LINE_PER_DEG lower a degree north. The mountains' effect fades out north of
@@ -436,6 +461,8 @@ SPRUCE_LAT = ((45.0, 0.08), (50.0, 0.10), (55.0, 0.28), (60.0, 0.45), (65.0, 0.3
 # Poland's conifers ~13 % spruce and fir)
 SPRUCE_CENTRAL = ((45.0, 0.20), (48.0, 0.45), (52.0, 0.35), (55.0, 0.35), (60.0, 0.50), (65.0, 0.40), (70.0, 0.20))
 SPRUCE_LON = (16.0, 21.0)
+SPRUCE_PLAIN_M = (120.0, 350.0)     # (37) SPRUCE_CENTRAL's share from nothing at the first height to whole at the second
+SPRUCE_PLAIN_LAT = 56.0
 SPRUCE_MOUNTAIN = 0.85
 SPRUCE_LINE_M = 1100.0
 SPRUCE_LINE_PER_DEG = 40.0
@@ -546,10 +573,11 @@ def continental_shares(lat, lon):
     return np.stack([birch, rest * (1.0 - beech), rest * beech], axis=1)
 
 
-def broad_shares(lat, lon, koppen, eco, montane=None):
+def broad_shares(lat, lon, koppen, eco, montane=None, conifer=None):
     """Per tree: the (birch, oak, beech) shares of the broadleaves anywhere outside the tropics (the constants above:
     Eurasia's by its climates, East Asia's, Japan's, North America's, the rest's; ECO_BROAD_SHARES; more beeches
-    uphill), an (n, 3) array."""
+    uphill: montane, the beech belt's [0, 1] at each tree; fewer in the conifer forests: conifer, the forest's
+    conifer share there), an (n, 3) array."""
     lat, lon = np.asarray(lat, np.float64), np.asarray(lon, np.float64)
     k = np.asarray(koppen)
     n = len(lat)
@@ -577,6 +605,20 @@ def broad_shares(lat, lon, koppen, eco, montane=None):
     sh[boreal] = BROAD_SHARES["boreal"]
     for e_, share in ECO_BROAD_SHARES.items():
         sh[np.asarray(eco) == e_] = share
+    if conifer is not None:
+        # (37) the broadleaves of a pine or spruce forest (the lowlands' sands and bogs, the boreal and hemiboreal
+        # forests: Bory Tucholskie, the Landes, Brandenburg, the Great Lakes' pinelands) its pioneers, birches and
+        # aspens, and oaks: the beeches (maples, limes, hornbeams) want the richer soils of the mixed and broadleaf
+        # woods. Not in the warm climates (the Mediterranean's and the subtropics' pine woods: oaks already).
+        cold = _in(k, K_BOREAL + K_CONTINENTAL + K_OCEANIC + K_COLD_ARID)
+        f = np.clip((np.asarray(conifer, np.float64) - PINE_WOOD_SHARE[0]) / (PINE_WOOD_SHARE[1] - PINE_WOOD_SHARE[0]),
+                    0.0, 1.0) * cold
+        if montane is not None:
+            f = f * (1.0 - montane)          # (the mountains' spruce-fir-beech woods keep their beeches)
+        moved = sh[:, 2] * f
+        sh[:, 2] -= moved
+        sh[:, 0] += moved * PINE_WOOD_BIRCH
+        sh[:, 1] += moved * (1.0 - PINE_WOOD_BIRCH)
     if montane is not None:
         uphill = np.where(boreal, 0.0, montane)
         gain = np.minimum(BEECH_UPHILL * uphill, sh[:, 0] + sh[:, 1])
@@ -626,7 +668,12 @@ def species_groups(group, height, lat, lon, lcls, koppen, elev, u_broad, u_conif
         east = dnp.interp(lat, [a for a, _ in SPRUCE_LAT], [b for _, b in SPRUCE_LAT])
         west = dnp.interp(lat, [a for a, _ in SPRUCE_CENTRAL], [b for _, b in SPRUCE_CENTRAL])
         t = np.clip((lon - SPRUCE_LON[0]) / (SPRUCE_LON[1] - SPRUCE_LON[0]), 0.0, 1.0)
-        base = west + (east - west) * t
+        # (37) central Europe's spruces are its uplands' (Bavaria, Bohemia, the Harz): its plain's conifers
+        # (Brandenburg's, Pomerania's, the Netherlands') pines, as Poland's; north of SPRUCE_PLAIN_LAT the lowland
+        # spruces are the boreal forest's own
+        upland = np.clip((z - SPRUCE_PLAIN_M[0]) / (SPRUCE_PLAIN_M[1] - SPRUCE_PLAIN_M[0]), 0.0, 1.0)
+        upland = np.where(lat >= SPRUCE_PLAIN_LAT, 1.0, upland)
+        base = east + (west - east) * (1.0 - t) * upland
         p = base + (SPRUCE_MOUNTAIN - base) * np.clip(2.0 * montane, 0.0, 1.0)      # (no pines from mid-belt up)
         g[con] = np.where(np.asarray(u_conifer)[con] < p[con], G_SPRUCE, G_PINE_EU)
     # broadleaves: Italy's in the hot deserts and steppes; birch / oak / beech by the climate, more beeches uphill
@@ -635,7 +682,8 @@ def species_groups(group, height, lat, lon, lcls, koppen, elev, u_broad, u_conif
     # shapes are birches, chose by height alone)
     dec = (g == G_DECIDUOUS) & (np.abs(lat) >= 23.5)
     if dec.any():
-        sh = broad_shares(lat, lon, k, eco, montane)
+        beech_up = np.clip((z - (line - BEECH_BELT_M[0])) / (BEECH_BELT_M[0] - BEECH_BELT_M[1]), 0.0, 1.0) * fade
+        sh = broad_shares(lat, lon, k, eco, beech_up, _conifer_share(lat, lon))
         u = np.asarray(u_broad)
         pick = np.where(u < sh[:, 0], G_BIRCH, np.where(u < sh[:, 0] + sh[:, 1], G_OAK, G_BEECH)).astype(np.uint8)
         g[dec] = pick[dec]
@@ -1147,7 +1195,7 @@ class Vegetation:
         ea = eurasia(tlat, tlon)
         if ea.any():
             u1 = np.where(ea, _mixed(stand_u(tmx, tmy, gx, gy, clat, 41), u1, u_mix), u1)
-        conifer = u1 < _conifer_share(tlat, tlon) * np.clip(th / 12.0, 0.5, 1.2)
+        conifer = u1 < conifer_odds(_conifer_share(tlat, tlon), th, is_tree)
         group = np.where(is_tree, np.where(conifer, G_CONIFER, G_DECIDUOUS), G_SHRUB).astype(np.uint8)
         group = regional(group, th, tlat, tlon, lcls, _hash01(gx, gy, 7),
                          riparian=None if near_water is None else near_water[jj, ii])

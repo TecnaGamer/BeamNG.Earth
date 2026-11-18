@@ -721,6 +721,43 @@ class CrownSpacingTest(unittest.TestCase):
                             (lat, lon, s))
 
 
+class ShareRulesTest(unittest.TestCase):
+    """(38) the conifer share kept to the map, the beech belt, the pine woods' broadleaves."""
+
+    def test_conifer_odds_keep_the_share(self):
+        h = np.linspace(3.0, 30.0, 2000)
+        for s in (0.05, 0.3, 0.7, 0.97):
+            p = veg.conifer_odds(np.full(len(h), s), h)
+            self.assertAlmostEqual(float(p.mean()), s, delta=0.04, msg=f"share {s}")
+            self.assertLess(float(p[0]), float(p[-1]), "the tall trees more likely conifers")
+        self.assertEqual(float(veg.conifer_odds(np.array([1.0]), np.array([4.0]))[0]), 1.0)
+        self.assertEqual(float(veg.conifer_odds(np.array([0.0]), np.array([25.0]))[0]), 0.0)
+
+    def _shares(self, lat, lon, k, beech_up=0.0, conifer=None):
+        n = 1
+        sh = veg.broad_shares(np.full(n, lat), np.full(n, lon), np.full(n, k), np.zeros(n, int),
+                              np.full(n, beech_up), None if conifer is None else np.full(n, conifer))
+        return sh[0]
+
+    def test_beech_belt(self):
+        z = np.array([250.0, 700.0])
+        line = veg.spruce_line(49.15)
+        up = np.clip((z - (line - veg.BEECH_BELT_M[0])) / (veg.BEECH_BELT_M[0] - veg.BEECH_BELT_M[1]), 0, 1)
+        low, mid = (self._shares(49.15, 22.48, 26, u) for u in up)
+        self.assertGreater(mid[2], 0.6, "the Bieszczady at 700 m: mostly beeches")
+        self.assertLess(mid[1], 0.15, "hardly any oaks")
+        self.assertGreater(low[1], 0.4, "the foothills' oaks")
+
+    def test_pine_woods_broadleaves(self):
+        mixed = self._shares(53.6, 17.9, 26, 0.0, 0.3)
+        pine = self._shares(53.6, 17.9, 26, 0.0, 0.95)
+        self.assertLess(pine[2], 0.02, "no beeches among Bory Tucholskie's pines")
+        self.assertGreater(pine[0], mixed[0], "their birches")
+        self.assertAlmostEqual(float(pine.sum()), 1.0, places=6)
+        warm = self._shares(40.0, 15.0, 8, 0.0, 0.95)                # Csa: unchanged
+        self.assertTrue(np.allclose(warm, self._shares(40.0, 15.0, 8, 0.0, 0.3)))
+
+
 if __name__ == "__main__":
     unittest.main()
 
