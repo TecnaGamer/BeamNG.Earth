@@ -682,7 +682,8 @@ ABUT_MAX_M = 8.0            # m filled at most
 # its deck (a 9 % deck, 1.5 g). BNE_FAST_GAP=on.
 FAST_GAP = os.environ.get("BNE_FAST_GAP", "off") == "on"
 FAST_GAP_CLASSES = ("motorway", "trunk")
-FAST_GAP_ON_M = 3.0         # m off a landing's approach line a sample is on it at most (a placed lane section's)
+FAST_GAP_ON_M = 3.0         # m off a landing's approach line a sample of no known road is on it at most ...
+FAST_GAP_ID_M = 12.0        # ... and one of its own roads' (a lane placement's shift: left_of on a four-lane road)
 FAST_GAP_START_M = 6.0      # m from a deck end the first part of its approach may start (heading on, FAST_GAP_COS)
 FAST_GAP_LINK_M = 3.0       # m from a part's far end the next may start (a lane section's joint offset 2 m sideways)
 FAST_GAP_COS = 0.707        # (within 45 degrees)
@@ -933,7 +934,7 @@ def field_heights(frame, elev, xy, r, sigma):
 
 
 def plan_roads(frame, parts, elev, abut=None, ext=None, pins=None, cuts=True, coarse=False, obs=None, decks=None,
-               rings=None, landings=None):
+               rings=None, landings=None, part_ids=None, ext_ids=None):
     """plan_road for many (lonlat, spec) parts with one elev call (its cost is per call); abut: per part (start, end)
     flags, the ends leading onto a bridge (fill_abutment); ext: per part (before, after), the lines (k, 2) in the frame
     from its start / end outward along the part the road goes on in (Grader._extensions), or None: their ground is in
@@ -943,8 +944,10 @@ def plan_roads(frame, parts, elev, abut=None, ext=None, pins=None, cuts=True, co
     decks: [(line (k, 2) in the frame, half width)] crossing over the roads, their ground read beside them
     (deck_capped; not on coarse elevation); rings: per part, True for a mapped roundabout's ring (roads.is_ring: not
     banked, RING_LEVEL_ON); landings: the fast roads' deck ends round the parts [(approach line (k, 2) from the deck
-    end on, class, its parts' lines, the other ground roads' lines round it)] in the frame (FAST_GAP: gap_line,
-    gap_apply), or None. Pure given elev and obs."""
+    end on, class, its parts' lines, the other ground roads' lines round it, its parts' feature ids)] in the frame
+    (FAST_GAP: gap_line, gap_apply), or None; part_ids, ext_ids: the features of the parts and of their extensions (per
+    part (before, after), None unknown), whose samples a landing then takes by their road (gap_apply). Pure given elev
+    and obs."""
     if not parts:
         return []
     ll = np.concatenate([lonlat for lonlat, _ in parts])
@@ -1017,8 +1020,8 @@ def plan_roads(frame, parts, elev, abut=None, ext=None, pins=None, cuts=True, co
     if len(rays):
         rla, rlo, _ = frame.enu_to_geodetic(rays[:, 0], rays[:, 1], 0.0)
         zr = np.split(np.asarray(elev(rla, rlo), np.float64), np.cumsum(nray)[:-1])
-        lines_ = [(np.asarray(ap, np.float64), c_, own_, other_, gap_line(zr[n]))
-                  for n, (ap, c_, own_, other_) in enumerate(landings)]
+        lines_ = [(np.asarray(ap, np.float64), c_, own_, other_, ids_, gap_line(zr[n]))
+                  for n, (ap, c_, own_, other_, ids_) in enumerate(landings)]
     out, k = [], 0
     if obs is not None and hasattr(obs, "prepare"):     # (its parts' questions at once: _Planner._obs)
         obs.prepare([pr[0] for pr in prof if pr is not None])
@@ -1062,9 +1065,11 @@ def plan_roads(frame, parts, elev, abut=None, ext=None, pins=None, cuts=True, co
             # (every sample of the part and of its extensions on a landing's line: the same height whichever part,
             # extension or cell has it)
             q_ = np.concatenate([before[:nb], xy, after[:na]])
-            for ap_, c_, own_, other_, ln_ in lines_:
+            eid = ext_ids[j] if ext_ids is not None else (None, None)
+            sid = [eid[0]] * nb + [None if part_ids is None else str(part_ids[j])] * len(xy) + [eid[1]] * na
+            for ap_, c_, own_, other_, ids_, ln_ in lines_:
                 if c_ == spec.cls and ln_ is not None:
-                    zx = gap_apply(zx, q_, ap_, ln_, own_, other_)
+                    zx = gap_apply(zx, q_, ap_, ln_, own_, other_, sid, ids_)
         # Curvature and its runoff need the joined-road context too. Computing
         # banking on xy alone puts a partial curvature window at every map
         # segment end, even where the longitudinal profile is continuous.
@@ -2758,11 +2763,14 @@ class _Planner:
                 except Exception as e:      # no fills rather than no grading
                     _caught(e)
                     log.debug("grading: abutments of %s: %s: %s", key, type(e).__name__, e)
-            ext = pins = None
+            ext = pins = ext_ids = None
             if CHAIN_ON and parts:
                 try:
                     self._chain_cands(key, feats, specs)        # (this cell's own: its specs are at hand)
-                    ext = self._extensions(parts, ids)
+                    if FAST_GAP:        # (and the extensions' own roads: a sample's provenance, gap_apply)
+                        ext, ext_ids = self._extensions(parts, ids, with_ids=True)
+                    else:
+                        ext = self._extensions(parts, ids)
                     pins = self._pins(parts, ids, ext, key)
                 except Exception as e:      # each part smoothed alone rather than no grading
                     _caught(e)
@@ -2780,7 +2788,8 @@ class _Planner:
             for fid, part, cl, p in zip(ids, parts, clipped, plan_roads(self.frame, parts, self.elev, abut, ext, pins,
                                                                          coarse=coarse, obs=self._obs(key),
                                                                          decks=self._decks_near(key), rings=rings,
-                                                                         landings=landings)):
+                                                                         landings=landings, part_ids=ids,
+                                                                         ext_ids=ext_ids)):
                 if p is not None:
                     p.rid = road_id(fid)
                     import lanesections
@@ -3013,10 +3022,11 @@ class _Planner:
             self._marks_at("_chain_memo", key)
         return out
 
-    def _extensions(self, parts, ids):
+    def _extensions(self, parts, ids, with_ids=False):
         """plan_roads' ext of a cell's parts [(lonlat, spec)] (ids: their features'): per part (before, after), the line
         from each end outward along the part the road goes on in there (earthfast.chain_extensions), 3 sigma of its
-        smoothing long, or None."""
+        smoothing long, or None. with_ids: (ext, the features those lines are of: per part (before, after), the feature
+        id or None) (FAST_GAP: a sample's own road)."""
         import fast
         fast.require(69, "road chains")
         f64 = np.float64
@@ -3050,6 +3060,7 @@ class _Planner:
             qll = np.asarray(q_cell, np.float64).reshape(-1, 2)
             q_cell = mapcells.cells_of(qll[:, 1], qll[:, 0])
         out = [[None, None] for _ in parts]
+        oid = [[None, None] for _ in parts]
         for key in sorted(set(q_cell), key=str):
             cands = self._chain_cands(key)
             qs = [i for i, c in enumerate(q_cell) if c == key]
@@ -3064,6 +3075,10 @@ class _Planner:
             for j, i in enumerate(qs):
                 if off[j + 1] - off[j] >= 2:
                     out[i // 2][i % 2] = np.asarray(pts[off[j]:off[j + 1]])
+                    if with_ids:
+                        oid[i // 2][i % 2] = _extension_source(cands, out[i // 2][i % 2])
+        if with_ids:
+            return [tuple(o) for o in out], [tuple(o) for o in oid]
         return [tuple(o) for o in out]
 
     def _cand_arrays(self, key, cands):
@@ -3170,9 +3185,12 @@ class _Planner:
                 continue            # (_stronger_z below)
             try:
                 parts = [(part, asks[n][0][4]) for n, (part, _last, _whole) in jobs]
-                ext = self._extensions(parts, [asks[n][0][5] for n, _p in jobs])
+                pids = [asks[n][0][5] for n, _p in jobs]
+                ext, eids = self._extensions(parts, pids, with_ids=True) if FAST_GAP else \
+                    (self._extensions(parts, pids), None)
                 plans = plan_roads(self.frame, parts, self.elev, None, ext, cuts=False,
-                                   landings=self._landings_of(parts), **self._strong_args(cell, parts[0][0]))
+                                   landings=self._landings_of(parts), part_ids=pids, ext_ids=eids,
+                                   **self._strong_args(cell, parts[0][0]))
                 for (n, (part, last, whole)), p in zip(jobs, plans):
                     self._strong_keep(asks[n][0], keys[n], p, last, whole)
             except Exception as e:      # one at a time, each its own failure (_stronger_z)
@@ -3249,9 +3267,11 @@ class _Planner:
         try:
             part, last, whole = self._strong_part(cand, at_last)
             # (the profile alone: its cutting's walls cost most of a plan and no height, 2026-10-25)
-            p = plan_roads(self.frame, [(part, cand[4])], self.elev, None,
-                           self._extensions([(part, cand[4])], [cand[5]]), cuts=False,
-                           landings=self._landings_of([(part, cand[4])]), **self._strong_args(cell, part))[0]
+            ext, eids = self._extensions([(part, cand[4])], [cand[5]], with_ids=True) if FAST_GAP else \
+                (self._extensions([(part, cand[4])], [cand[5]]), None)
+            p = plan_roads(self.frame, [(part, cand[4])], self.elev, None, ext, cuts=False,
+                           landings=self._landings_of([(part, cand[4])]), part_ids=[cand[5]], ext_ids=eids,
+                           **self._strong_args(cell, part))[0]
             self._strong_keep(cand, k, p, last, whole)
         except Exception as e:      # not held rather than no grading
             _caught(e)
@@ -6054,8 +6074,9 @@ class _Planner:
     @_marked("_raw_lines_memo", lambda self, k: str(k))
     def _raw_lines(self, k):
         """FAST_GAP: cell k's roads as mapped, in the frame, before any lane placement (the same copy whichever cell
-        or plan asks): {"bridges": [(line (m, 2), class, link)], "ground": [(line, class, link, built)]}. Kept per
-        cell when read complete."""
+        or plan asks): {"bridges": [(line (m, 2), class, link)], "ground": [(line, class, link, built, feature id)]}.
+        Kept per cell when read complete (nothing read short, and the layer's level ranges not made short:
+        roads._cell_ranges' _ranges_short_until; such a layer is said short to every reader)."""
         got, res = self._memo_get("_raw_lines_memo", str(k))
         if got:
             return res
@@ -6071,20 +6092,26 @@ class _Planner:
                     for ring in ps:
                         ring = np.asarray(ring, np.float64)
                         if len(ring) >= 2:
-                            rows.append((kind, sp, ring))
+                            rows.append((kind, sp, ring, str(f.ids[i])))
             if rows:
-                allr = np.concatenate([r for _k, _s, r in rows])
+                allr = np.concatenate([r for _k, _s, r, _f in rows])
                 e, n, _ = self.frame.geodetic_to_enu(allr[:, 1], allr[:, 0], 0.0)
                 xy = np.stack([np.asarray(e, np.float64), np.asarray(n, np.float64)], axis=1)
                 k0 = 0
-                for kind, sp, ring in rows:
+                for kind, sp, ring, fid in rows:
                     line = xy[k0:k0 + len(ring)]
                     k0 += len(ring)
                     cls = getattr(sp, "cls", None)
                     if kind == "bridges":
                         out[kind].append((line, cls, _is_link(sp)))
                     else:
-                        out[kind].append((line, cls, _is_link(sp), sp.kind in roadsmod.BUILT))
+                        out[kind].append((line, cls, _is_link(sp), sp.kind in roadsmod.BUILT, fid))
+        if f is not None and f.__dict__.get("_ranges_short_until") is not None:
+            # (its level ranges were made short, or taken from a short shared entry: the layer keeps them, and a read
+            # of it again says nothing. Short here too, every time, and never kept: roads._cell_ranges' mark)
+            import revisit
+            revisit.fault()
+            return out
         return self._memo_put("_raw_lines_memo", str(k), out, cap=256)
 
     def _gap_cells(self, la, lo, reach):
@@ -6095,7 +6122,8 @@ class _Planner:
         return sorted(set(mapcells.cells_for_points(la, lo, pad, padlon)), key=str)
 
     def _fast_landings(self, la, lo):
-        """FAST_GAP: [(approach line (k, 2), class, its parts' lines, the other ground roads' lines round it)] of the
+        """FAST_GAP: [(approach line (k, 2), class, its parts' lines, the other ground roads' lines round it, its
+        parts' feature ids)] of the
         free ends of the motorways' and trunks' decks (FAST_GAP_CLASSES, not links') within FAST_GAP_CHAIN_M +
         FAST_GAP_FAR_M of the points (lat, lon), on the map's own lines (_raw_lines), in the frame, each once (by its end
         rounded to 0.1 m: the least of its copies), those with an approach (_landing_chain). A deck end another deck
@@ -6123,13 +6151,13 @@ class _Planner:
         for _k, r in sorted(best.items()):
             got = self._landing_chain(r[0], r[1], r[2], r[3], r[4])
             if got is not None:
-                out.append((got[0], r[4], got[1], got[2]))
+                out.append((got[0], r[4], got[1], got[2], got[3]))
         return out
 
     @_marked("_landing_memo", lambda self, ex, ey, vx, vy, cls: (ex, ey, vx, vy, cls))
     def _landing_chain(self, ex, ey, vx, vy, cls):
         """FAST_GAP: (approach line (k, 2), its parts' lines, the other ground roads' lines round its first
-        FAST_GAP_FAR_M + FAST_GAP_ON_M) of a deck end (ex, ey; direction (vx, vy) into the road; the deck's class cls),
+        FAST_GAP_FAR_M + FAST_GAP_ID_M, its parts' feature ids) of a deck end (ex, ey; direction (vx, vy) into the road; the deck's class cls),
         on the map's own lines (_raw_lines): from the end, the ground part of class cls (not a link) starting at it
         (within FAST_GAP_START_M, heading on within FAST_GAP_COS), then at each of its far ends the part of that class
         going on most straight (one joined there, CHAIN_JOIN_M, before one starting within FAST_GAP_LINK_M; the least
@@ -6143,21 +6171,21 @@ class _Planner:
         la, lo, _ = self.frame.enu_to_geodetic(np.array([ex]), np.array([ey]), 0.0)
         cand, rest, seen = [], [], set()
         for k in self._gap_cells(la, lo, FAST_GAP_CHAIN_M + 20.0):
-            for g, gc, lk, built in self._raw_lines(k)["ground"]:
+            for g, gc, lk, built, gfid in self._raw_lines(k)["ground"]:
                 g = np.asarray(g, np.float64)[:, :2]
                 kk = (round(float(g[0, 0]), 2), round(float(g[0, 1]), 2), round(float(g[-1, 0]), 2),
                       round(float(g[-1, 1]), 2), len(g))
                 if len(g) < 2 or kk in seen:
                     continue
                 seen.add(kk)
-                (cand if gc == cls and not lk and built else rest).append((kk, g))
+                (cand if gc == cls and not lk and built else rest).append((kk, g, gfid))
         cand.sort(key=lambda r: r[0])
         rest.sort(key=lambda r: r[0])
         pts, used, at, u, total, first = [end[None]], [], end, v, 0.0, True
         while total < FAST_GAP_CHAIN_M:
             best = None
-            for kk, g in cand:
-                if any(kk == q for q, _g in used):
+            for kk, g, gfid in cand:
+                if any(kk == q for q, _g, _f in used):
                     continue
                 for rev in (False, True):
                     q = g[::-1] if rev else g
@@ -6174,11 +6202,11 @@ class _Planner:
                     # (a part joined at the node before one that starts beside it: a lane section's offset joint)
                     rank = (d0 > CHAIN_JOIN_M, -cs, kk, rev)
                     if best is None or rank < best[0]:
-                        best = (rank, kk, q, g)
+                        best = (rank, kk, q, g, gfid)
             if best is None:
                 break
-            _r, kk, q, g = best
-            used.append((kk, g))
+            _r, kk, q, g, gfid = best
+            used.append((kk, g, gfid))
             pts.append(q)
             total += float(dnp.hypot(*np.diff(q, axis=0).T).sum())
             at, u, first = q[-1], roadsmod._dir_at(q, False), False
@@ -6187,12 +6215,12 @@ class _Planner:
             ap = np.vstack(pts)
             ap = ap[np.r_[True, dnp.hypot(*np.diff(ap, axis=0).T) > 1e-6]]
             if len(ap) >= 2:
-                own_keys = {q for q, _g in used}
+                own_keys = {q for q, _g, _f in used}
                 near = _along(ap, np.arange(0.0, FAST_GAP_FAR_M + 1e-6, PROFILE_STEP))
-                lo_, hi_ = near.min(0) - FAST_GAP_ON_M - 1.0, near.max(0) + FAST_GAP_ON_M + 1.0
-                other = [g for kk, g in cand + rest if kk not in own_keys
+                lo_, hi_ = near.min(0) - FAST_GAP_ID_M - 1.0, near.max(0) + FAST_GAP_ID_M + 1.0
+                other = [g for kk, g, _f in cand + rest if kk not in own_keys
                          and not ((g.max(0) < lo_).any() or (g.min(0) > hi_).any())]
-                res = (ap, [g for _q, g in used], other)
+                res = (ap, [g for _q, g, _f in used], other, frozenset(f for _q, _g, f in used))
         return self._memo_put("_landing_memo", key, res)
 
     def _end_never_raised(self, xy):
@@ -7888,6 +7916,21 @@ def gap_line(zb):
     return float(a), float(b), reach
 
 
+def _extension_source(cands, ext):
+    """The feature id of the candidate line (_chain_cands') an extension ext (k, 2) runs along: the first whose end is
+    within CHAIN_JOIN_M of ext's node and whose line ext's next point lies on (1 mm), or None. Pure."""
+    ext = np.asarray(ext, np.float64)[:, :2]
+    if len(ext) < 2:
+        return None
+    for c in cands:
+        g = np.asarray(c[0], np.float64)[:, :2]
+        if len(g) < 2 or min(float(dnp.hypot(*(g[0] - ext[0]))), float(dnp.hypot(*(g[-1] - ext[0])))) > CHAIN_JOIN_M:
+            continue
+        if float(_on_line(ext[1:2], g)[1][0]) <= 1e-3:
+            return c[5]
+    return None
+
+
 def _along(line, d):
     """Points (n, 2) d m along polyline line (k, 2) from its start (clipped to its length). Pure."""
     line = np.asarray(line, np.float64)[:, :2]
@@ -7924,11 +7967,13 @@ def _nearest_off(pts, lines):
     return best
 
 
-def gap_apply(z, pts, approach, line, own=None, other=None):
+def gap_apply(z, pts, approach, line, own=None, other=None, sid=None, own_ids=None):
     """FAST_GAP: z (n,) at a fast road's samples pts (n, 2) raised to a landing's line (gap_line's (a, b, reach), its
-    arc measured along its approach line (k, 2) from the deck's end) where they lie on that approach (FAST_GAP_ON_M)
-    within the reach and, with own and other (the approach's parts' lines, the other ground roads' lines round it), no
-    nearer another road than one of its parts: by FAST_GAP_MAX_M at most, never lowered. Which samples, and their
+    arc measured along its approach line (k, 2) from the deck's end), by FAST_GAP_MAX_M at most, never lowered, within
+    the reach: a sample of a known road (sid: per sample the feature id, or None) takes it when that road is one of the
+    approach's parts (own_ids), however its lanes are placed (FAST_GAP_ID_M off at most), and never otherwise; a sample
+    of no known road where it lies on the approach (FAST_GAP_ON_M) and, with own and other (the approach's parts' lines,
+    the other ground roads' lines round it), no nearer another road than one of its parts. Which samples, and their
     heights, are the approach's and the map's alone, whichever plan or placed copy has them. z itself when nothing is
     raised. Pure."""
     a, b, reach = line
@@ -7936,11 +7981,17 @@ def gap_apply(z, pts, approach, line, own=None, other=None):
     if not len(pts) or len(approach) < 2:
         return z
     s_, off = _on_line(pts, approach)
-    on = (off <= FAST_GAP_ON_M) & (s_ <= reach)
+    known = np.zeros(len(pts), bool)
+    mine = np.zeros(len(pts), bool)
+    if sid is not None and own_ids is not None:
+        known = np.array([q is not None for q in sid], bool)
+        mine = np.array([q is not None and str(q) in own_ids for q in sid], bool)
+    on = ~known & (off <= FAST_GAP_ON_M) & (s_ <= reach)
     if on.any() and other:
         idx = np.flatnonzero(on)
-        mine = _nearest_off(pts[idx], own if own else [approach])
-        on[idx] = mine <= _nearest_off(pts[idx], other)
+        near = _nearest_off(pts[idx], own if own else [approach])
+        on[idx] = near <= _nearest_off(pts[idx], other)
+    on |= mine & (off <= FAST_GAP_ID_M) & (s_ <= reach)
     if not on.any():
         return z
     z = np.asarray(z, np.float64)

@@ -810,6 +810,9 @@ def _cell_ranges(feats, load_only=False):
             if mem.get("until") is not None:
                 import revisit
                 revisit.fault()         # (made short of something: what is built on it now is not kept either)
+                # (and said on the layer: whoever reads its ranges later, the layer's own memos, knows them short;
+                # grading._raw_lines keeps nothing built on them)
+                st["_ranges_short_until"] = mem["until"]
             raw, lvl = st.setdefault("_raw_level_ranges", {}), st.setdefault("_level_ranges", {})
             mraw, mlvl = mem["raw"], mem["lvl"]     # (shared: level_ranges and the rest hand out copies)
             for i in range(len(feats)):
@@ -891,6 +894,8 @@ def _cell_ranges(feats, load_only=False):
         log.info("cell facts %s made in %.2f s (pid %d)%s", st.get("_bnge_cell"), time.perf_counter() - t0, os.getpid(),
                  "" if revisit.thread_faults() == f0 else " short")
     clean = revisit.thread_faults() == f0
+    if not clean:                       # (the layer's ranges made short: said on it, as for a short shared entry)
+        st["_ranges_short_until"] = time.monotonic() + FACTS_SHORT_S
     mk = _ranges_mem_key(st)
     if mk is not None:                  # (the lidar rule's too: a cell's answer stays the same for the session)
         with _FACTS_LOCK:

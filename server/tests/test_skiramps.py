@@ -115,7 +115,7 @@ class SwitchVersions(unittest.TestCase):
             new, old = self.keys({k: "on"})
             self.assertNotEqual(new, old, k + ": its reviewed meaning")
         # (and the earlier versions' keys miss too: FAST_GAP and LEVEL_SPACING at 3, Codex round 4)
-        for k, was in (("BNE_FAST_GAP", 2), ("BNE_LEVEL_SPACING", 2)):
+        for k, was in (("BNE_FAST_GAP", 2), ("BNE_FAST_GAP", 3), ("BNE_LEVEL_SPACING", 2)):
             with mock.patch.dict(revisit.SWITCH_VERSIONS, {k: was}):
                 prev, _old = self.keys({k: "on"})
             new, _old = self.keys({k: "on"})
@@ -229,8 +229,8 @@ class GapLanding(unittest.TestCase):
         twin = ap + np.array([0.0, 3.0])
         raw = self.raw_for(ap, twin)
         road_map, stub_map = ap[[2, 1]], ap[[1, 0]]                       # (the map's own lines)
-        lands = [(ap, "motorway", [road_map, stub_map], [twin[[2, 1]], twin[[1, 0]]]),
-                 (twin, "motorway", [twin[[2, 1]], twin[[1, 0]]], [road_map, stub_map])]
+        lands = [(ap, "motorway", [road_map, stub_map], [twin[[2, 1]], twin[[1, 0]]], frozenset({"road", "stub"})),
+                 (twin, "motorway", [twin[[2, 1]], twin[[1, 0]]], [road_map, stub_map], frozenset({"troad", "tstub"}))]
         # the road, ending 4 m short of the deck, as one cell's lane placement puts it: shift m sideways (a lane
         # section's placed copy); the stub on to the deck as mapped
         road_xy = self.dense(ap[2], ap[1]) + np.array([0.0, -shift])
@@ -268,15 +268,112 @@ class GapLanding(unittest.TestCase):
         self.check(0.0, shift=1.0)
         self.check(35.0, shift=1.0)
 
+    def test_placed_by_its_road(self):
+        # (Codex round 5: a four-lane motorway's lanes placed left_of: its plan 4 m off the mapped line, the other
+        # carriageway's mapped line 6 m off on the same side, one terrain for both. Taken by its road, the placed copy
+        # and the stub as mapped meet at one height; the other carriageway's road (another feature) takes nothing from
+        # this landing, nor does the placed copy when its road is not known (4 m off, nearer the other's line))
+        ap = self.approach(0.0)
+        twin = ap + np.array([0.0, -6.0])
+
+        def raw(la, lo):
+            e, n, _ = self.frame.geodetic_to_enu(la, lo, 0.0)
+            pts = np.stack([np.asarray(e, np.float64), np.asarray(n, np.float64)], axis=1)
+            s_, _off = grading._on_line(pts, ap)
+            return 50.0 + 0.037 * s_ - 4.0 * np.clip(1.0 - s_ / 14.0, 0.0, 1.0)
+        road_map, stub_map = ap[[2, 1]], ap[[1, 0]]
+        lands = [(ap, "motorway", [road_map, stub_map], [twin[[2, 1]], twin[[1, 0]]], frozenset({"road", "stub"}))]
+        road_xy = self.dense(ap[2], ap[1]) + np.array([0.0, -4.0])
+        stub_xy = self.dense(ap[1], ap[0])
+        kw = dict(cuts=False, landings=lands)
+        joint = 50.0 + 0.037 * 4.0
+        r = grading.plan_roads(self.frame, [(self.lonlat(road_xy), self.spec)], raw, part_ids=["road"],
+                               ext_ids=[(None, "stub")], ext=[(None, stub_xy)], **kw)[0]
+        s_ = grading.plan_roads(self.frame, [(self.lonlat(stub_xy), self.spec)], raw, part_ids=["stub"], **kw)[0]
+        self.assertAlmostEqual(float(r.z[-1]), joint, delta=0.03)
+        self.assertAlmostEqual(float(s_.z[0]), joint, delta=0.02)
+        bare = grading.plan_roads(self.frame, [(self.lonlat(road_xy), self.spec)], raw, **kw)[0]
+        self.assertLess(float(bare.z[-1]), joint - 0.5)
+        tw = grading.plan_roads(self.frame, [(self.lonlat(self.dense(twin[1], twin[0])), self.spec)], raw,
+                                part_ids=["tstub"], **kw)[0]
+        self.assertLess(float(tw.z[-1]), 50.0 - 1.0, "the other carriageway: nothing from this landing")
+
     def test_off_the_line_untouched(self):
         # (a road crossing the approach, not on its line, keeps its own ground)
         ap = self.approach(0.0)
         raw = self.raw_for(ap, ap + np.array([0.0, 300.0]))
         la, lo, _ = self.frame.enu_to_geodetic(np.full(21, -6.0), np.linspace(-20.0, 20.0, 21), 0.0)
         cross = grading.plan_roads(self.frame, [(np.c_[lo, la], self.spec)], raw, cuts=False,
-                                   landings=[(ap, "motorway", [ap], [])])[0]
+                                   landings=[(ap, "motorway", [ap], [], frozenset())])[0]
         ref = grading.plan_roads(self.frame, [(np.c_[lo, la], self.spec)], raw, cuts=False)[0]
         self.assertTrue(np.allclose(cross.z, ref.z))
+
+
+class RawLinesShort(unittest.TestCase):
+    """Codex round 5: a cell layer whose level ranges were made short (or taken from a short shared entry) keeps them,
+    and a read of it again says nothing; _raw_lines says it short every time and keeps nothing built on it, and keeps
+    the cell once a layer read complete comes."""
+
+    def planner(self, layer):
+        import geodesy
+        g = object.__new__(grading._Planner)
+        g.lock = threading.Lock()
+        g.frame = geodesy.EnuFrame(54.037418, 12.606645)
+        g.widths = None
+        g.md = mock.Mock()
+        g.md.cell = lambda k, **kw: mock.Mock(layers={"roads": layer})
+        return g
+
+    def layer(self):
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import interchanges
+        site = interchanges.load("a20_921", "interchange")
+        return site, sorted(site.cells)[0]
+
+    def test_short_layer_never_kept(self):
+        import mapcells
+        site, key = self.layer()
+        f = site.cells[key]
+        k = mapcells.CellKey(*(int(v) for v in key.split("/")))
+        g = self.planner(f)
+        with mock.patch.object(roads, "LIDAR_GAPS_ON", False):
+            roads.ground_parts(f, 0)                    # (its ranges made on this layer)
+            f.__dict__["_ranges_short_until"] = 1e18    # (as roads._cell_ranges marks a short one)
+            for attempt in range(2):                    # (the faulted read, then a retry on the same layer)
+                with revisit.scope() as b:
+                    g._raw_lines(k)
+                self.assertTrue(b.n, f"attempt {attempt}: said short")
+                self.assertNotIn(str(k), g.__dict__.get("_raw_lines_memo", {}), "nothing kept")
+            fresh = site.cells[key].__class__.__new__(site.cells[key].__class__)
+            fresh.__dict__.update({kk: v for kk, v in f.__dict__.items() if kk != "_ranges_short_until"})
+            g.md.cell = lambda k_, **kw: mock.Mock(layers={"roads": fresh})
+            with revisit.scope() as b:                  # (the dependency back: a layer read complete)
+                got = g._raw_lines(k)
+            self.assertFalse(b.n)
+            self.assertIn(str(k), g._raw_lines_memo)
+            with revisit.scope() as b:
+                self.assertIs(g._raw_lines(k), got)
+            self.assertFalse(b.n, "kept clean, read clean")
+
+    def test_cell_ranges_mark_a_short_entry(self):
+        import time
+        site, key = self.layer()
+        f = site.cells[key].__class__.__new__(site.cells[key].__class__)
+        f.__dict__.update({kk: v for kk, v in site.cells[key].__dict__.items() if not kk.startswith("_")})
+        f.__dict__["_bnge_cell"] = ("skiramps-test", "roads", "x")
+        mk = roads._ranges_mem_key(f.__dict__)
+        n = len(site.cells[key])
+        with roads._FACTS_LOCK:
+            roads._FACTS_MEM[mk] = {"raw": [[]] * n, "lvl": [[]] * n, "rule": False,
+                                    "until": time.monotonic() + 100.0}
+        try:
+            with revisit.scope() as b:
+                roads._cell_ranges(f)
+            self.assertTrue(b.n)
+            self.assertIsNotNone(f.__dict__.get("_ranges_short_until"))
+        finally:
+            with roads._FACTS_LOCK:
+                roads._FACTS_MEM.pop(mk, None)
 
 
 class GapLandingCells(unittest.TestCase):

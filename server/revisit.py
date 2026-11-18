@@ -418,8 +418,8 @@ def keyed_env(k):
 # decks (2026-11-17); 3: its approach fills ask the chain's railways their own clearance (Codex round 3). The
 # ski-ramp switches at their Codex review meanings (2026-11-17): BNE_FAST_DECK_GROUND 2 (a fast deck beside a ramp
 # caps its fill too), BNE_UNDER_SPEED 2 (motorways and trunks only, a joined dip ending before its junction),
-# BNE_FAST_GAP 3 (each landing's own approach on the map's own lines, round 4).
-SWITCH_VERSIONS = {"BNE_LEVEL_SPACING": 3, "BNE_FAST_DECK_GROUND": 2, "BNE_UNDER_SPEED": 2, "BNE_FAST_GAP": 3}
+# BNE_FAST_GAP 4 (each landing's own approach on the map's own lines, its samples taken by their road, round 5).
+SWITCH_VERSIONS = {"BNE_LEVEL_SPACING": 3, "BNE_FAST_DECK_GROUND": 2, "BNE_UNDER_SPEED": 2, "BNE_FAST_GAP": 4}
 
 
 def keyed_value(k, v):
