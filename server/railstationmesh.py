@@ -4,8 +4,9 @@ safety line. In the road mesh's form (positions relative to origin, tris, uvs, [
 tile's road mesh like busstationmesh's (blockworker._with_rail_stations). A tile takes the triangles whose centre lies in
 its box, so every tile that sees a station makes the same one and the pieces join.
 
-Heights: the ground under a track is graded to its bed line (railways.GRADE_HALF_M either side), so the drawn ground at a
-platform's edge IS the bed there; the rail head stands RAIL_TOP_M over it (railways.RAIL_TOP_M) and the platform top
+Heights: the track's own bed (railways.track_beds: what the track mesh draws); without one (a stub, no map) the ground under
+a track, graded to its bed line (railways.GRADE_HALF_M either side), so the drawn ground at a platform's edge IS the bed
+there on open ground; the rail head stands RAIL_TOP_M over it (railways.RAIL_TOP_M) and the platform top
 HEIGHT over that (the mapped `height`, else the country's norm: railstations.norm). One height reference per platform:
 the edge's points, smoothed along it, weighted by distance for the points inside.
 """
@@ -17,6 +18,7 @@ import dnp
 import busstationmesh as bm
 import busstations as bs
 import railbridges
+import railways
 import railcrossings
 import railunderpass
 import railstations as rs
@@ -113,23 +115,27 @@ def _ref_tracks(pl):
     """The tracks the platform's height follows: those its edge was put by, else the nearest one within REF_REACH_M."""
     used = sorted({int(k) for k in pl.tidx[pl.snapped]})
     if used:
-        return [pl.tracks[k][1] for k in used]
+        return [pl.tracks[k] for k in used]
     best = None
-    for _tid, xy in pl.tracks:
+    for tid, xy in pl.tracks:
         d = min(bs.dist_to_path(xy, p) for p in pl.ring[::max(1, len(pl.ring) // 12)])
         if d < REF_REACH_M and (best is None or d < best[0]):
-            best = (d, xy)
-    return [best[1]] if best else []
+            best = (d, tid, xy)
+    return [(best[1], best[2])] if best else []
 
 
-def reference(frame, elev, pl):
-    """[(poly (k, 2), z (k,))] the rail head's height along each track the platform stands by: the drawn ground at points
-    every REF_STEP_M of the track within REF_NEAR_M of the platform (and a window past its ends), smoothed along the track (the
-    DEM's noise out of it; the ground under a track is graded to its bed, so it is the bed), plus the rail head over the bed.
-    [] without a track. top_z reads it as a profile along the track: a platform is as flat across as a track is."""
+def reference(frame, elev, pl, bed=None):
+    """[(poly (k, 2), z (k,))] the rail head's height along each track the platform stands by, at points every REF_STEP_M of
+    the track within REF_NEAR_M of the platform (and a window past its ends): the track's own bed where the railways draw one
+    (bed(track id, xy) -> (the bed, NaN where none; whether that part is a bridge): railways.track_beds), else the drawn ground there, smoothed along the
+    track (the DEM's noise out of it; on open ground the ground under a track is graded to its bed, so it is the bed); plus
+    the rail head over the bed. Where the track runs over a road (a bridge, an embankment over an underpass) the ground
+    under it is the road, 4 to 7 m under the bed: the platform stood there, beside the elevated track, in the road's way
+    (Vienna's A23: its slab 1.4 m over the primary under the viaduct, trucks into it). [] without a track. top_z reads it
+    as a profile along the track: a platform is as flat across as a track is."""
     out = []
     ring = pl.ring[::max(1, len(pl.ring) // 160)]
-    for xy in _ref_tracks(pl):
+    for tid, xy in _ref_tracks(pl):
         q = _resample(np.asarray(xy, float), REF_STEP_M)
         if len(q) < 2:
             continue
@@ -142,8 +148,12 @@ def reference(frame, elev, pl):
         sel = q[lo:hi + 1]
         if len(sel) < 2:
             continue
-        z = _smooth(_smooth(bm.ground(frame, elev, sel), SMOOTH_N), SMOOTH_N) + RAIL_TOP_M
-        out.append((sel, z))
+        z = _smooth(_smooth(bm.ground(frame, elev, sel), SMOOTH_N), SMOOTH_N)
+        zb = bed(tid, sel)[0] if bed is not None else None
+        if zb is not None:
+            zb = np.asarray(zb, float)
+            z = np.where(np.isfinite(zb), zb, z)
+        out.append((sel, z + RAIL_TOP_M))
     return out
 
 
@@ -233,9 +243,11 @@ def bands(ring, step=BAND_M):
     return out
 
 
-def _slab(mesh, frame, elev, ref, ring, height):
+def _slab(mesh, frame, elev, ref, ring, height, bed=None):
     """The slab of a platform: its top in bands across the platform (bands), every point at the reference height + height
-    (the same function along the cut lines on both sides: no cracks); the kerb wall from below the ground to the top."""
+    (the same function along the cut lines on both sides: no cracks); the kerb wall from below the ground to the top, where
+    the track is on a bridge (bed(None, xy)[1]: that part of the railway is a deck) only the deck's depth: the
+    platform is part of that structure, the ground far under it is the road it spans, not a foot to stand on."""
     dense = bm._densify(ring, bm.SLAB_STEP_M)
     fb = lambda xy: bm.ground(frame, elev, xy) + RAIL_TOP_M
     for piece in bands(dense):
@@ -246,7 +258,11 @@ def _slab(mesh, frame, elev, ref, ring, height):
         mesh.add(TOP[0], np.column_stack((piece, zt)), piece / TOP[1], T)
     zd = bm.ground(frame, elev, dense)
     zt = top_z(ref, dense, fb) + height
-    bm.walls(mesh, KERB[0], KERB[1], dense, np.minimum(zd, zt - 0.3) - bm.SLAB_FOOT_M, zt)
+    foot = np.minimum(zd, zt - 0.3) - bm.SLAB_FOOT_M
+    if bed is not None:
+        on_deck = np.asarray(bed(None, dense)[1], bool)
+        foot = np.where(on_deck, zt - railways.DECK_D, foot)
+    bm.walls(mesh, KERB[0], KERB[1], dense, foot, zt)
     return dense, zt
 
 
@@ -382,7 +398,9 @@ def _ramps(mesh, frame, elev, ref, pl, height):
             g0 = float(bm.ground(frame, elev, start[None])[0])
             if z0 - g0 < RAMP_MIN_H_M:
                 continue
-            length = min(RAMP_MAX_M, (z0 - g0) / RAMP_SLOPE)
+            length = (z0 - g0) / RAMP_SLOPE
+            if length > RAMP_MAX_M:                      # (a platform on a viaduct or a high embankment: no ramp reaches the ground)
+                continue
             line = np.c_[start[0] + t[0] * np.arange(0.0, length + 0.5, 1.0), start[1] + t[1] * np.arange(0.0, length + 0.5, 1.0)]
             line = line[:max(2, int(length) + 1)]
             s_ = np.arange(len(line)) * 1.0
@@ -397,16 +415,16 @@ def _near(pl, box, margin=TILE_MARGIN_M):
     return not (hi[0] < box[0] - margin or lo[0] > box[2] + margin or hi[1] < box[1] - margin or lo[1] > box[3] + margin)
 
 
-def build(frame, box, stations, elev, mesh, tactile=True, collide=False):
+def build(frame, box, stations, elev, mesh, tactile=True, collide=False, bed=None):
     """The platforms (and, drawn, the roofs) of stations that reach the tile box into mesh (a busstationmesh._Mesh);
-    collide: for the lean collider, the slabs and the roofs' columns."""
+    collide: for the lean collider, the slabs and the roofs' columns; bed: reference's."""
     for st in stations:
         for pl in st.platforms:
             if not _near(pl, box) or len(pl.ring) < 3:
                 continue
             h = platform_height(pl, st.country, len(st.platforms))
-            ref = reference(frame, elev, pl)
-            _slab(mesh, frame, elev, ref, pl.ring, h)
+            ref = reference(frame, elev, pl, bed)
+            _slab(mesh, frame, elev, ref, pl.ring, h, bed)
             if tactile and ref:
                 _strips(mesh, ref, pl, h, frame, elev)
             if ref:
@@ -421,18 +439,18 @@ def build(frame, box, stations, elev, mesh, tactile=True, collide=False):
                 railcrossings.add(mesh, frame, elev, st, ln, collide=collide)
 
 
-def mesh(frame, box, stations, elev, origin, overlap=False):
+def mesh(frame, box, stations, elev, origin, overlap=False, bed=None):
     """The station meshes of the tile box (x0, y0, x1, y1): (V, T, UV, mats, idx) in the road mesh's form, or None."""
     m = bm._Mesh()
-    build(frame, box, stations, elev, m)
+    build(frame, box, stations, elev, m, bed=bed)
     return m.result(box, origin, overlap)
 
 
-def collision(frame, box, stations, elev, origin):
+def collision(frame, box, stations, elev, origin, bed=None):
     """(mesh, boxes) the platforms' lean collision of the tile box: the slabs' tops and kerb walls, as busstationmesh's, and
     their 20 m boxes [x0, y0, z0, x1, y1, z1] (frame metres); (None, []) without any."""
     m = bm._Mesh()
-    build(frame, box, stations, elev, m, tactile=False, collide=True)
+    build(frame, box, stations, elev, m, tactile=False, collide=True, bed=bed)
     got = m.result(box, origin)
     if got is None:
         return None, []

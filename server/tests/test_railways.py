@@ -956,6 +956,28 @@ class UnderpassNeighbourTest(unittest.TestCase):
         plain = railways.tile_mesh(FRAME, 0, 0, [f], flat)
         self.assertEqual(len(plain), 5, "without return_decks the mesh tuple is unchanged")
 
+    def test_tile_decks_are_the_meshs_decks_made_before_the_road_tiles_walls(self):
+        """The road tile's retaining walls stand under a rail bridge as under a road's deck (Vienna's Erzherzog-Karl-
+        Strasse: the walls of the busway's and the carriageways' cutting rose through the rail decks over them, 11 of
+        the 15 crossings cutting): tile_decks is the deck list tile_mesh hands back, made first, and says how far under
+        its line a rail deck reaches (the ballast's top over its underside, DECK_D), not the road decks' 2.2 m."""
+        f = features([[(-400.0, 100.0), (100.0, 100.0)], [(100.0, 100.0), (150.0, 100.0)],
+                      [(150.0, 100.0), (640.0, 100.0)]], ["standard_gauge"] * 3, subtypes=["rail"] * 3,
+                     flags=[(1, "is_bridge")])
+        decks = railways.tile_decks(FRAME, 0, 0, [f], flat)
+        self.assertEqual(len(decks), 1)
+        self.assertEqual(decks[0]["under"], railways.DECK_D)
+        self.assertNotEqual(decks[0]["under"], roads.WALL_DECK_UNDER_M)
+        _mesh, made = railways.tile_mesh(FRAME, 0, 0, [f], flat, return_decks=True)
+        self.assertEqual(len(made), 1)
+        np.testing.assert_allclose(decks[0]["n"], made[0]["n"])
+        self.assertEqual((decks[0]["w"], decks[0]["under"]), (made[0]["w"], made[0]["under"]))
+        self.assertEqual(railways.tile_decks(FRAME, 0, 0, [], flat), [])
+        ground_only = features([[(-400.0, 100.0), (640.0, 100.0)]], ["standard_gauge"], subtypes=["rail"])
+        self.assertEqual(railways.tile_decks(FRAME, 0, 0, [ground_only], flat), [])
+        model = lambda xy: np.ones(len(xy), bool)    # noqa: E731
+        self.assertEqual(railways.tile_decks(FRAME, 0, 0, [f], flat, under=model), [], "a model's bridge: no deck")
+
     def test_a_rail_bridge_under_a_model_bridge_is_not_drawn(self):
         """GitHub #1071: Perth's Narrows and Mount Henry bridges' 3dmr models carry their railways; the rail decks were
         drawn through them. The bridge is left out, the track on the ground either side stays."""
@@ -1162,3 +1184,18 @@ class StreetRunningTest(unittest.TestCase):
         street = (np.array([[90.0, -20.0], [90.0, 20.0]]), 12.0)       # the track's end at x = 100 on its carriageway
         ends = railways.dead_ends(track, finals, {"t": 1}, near, [street])
         self.assertEqual([round(float(p[0])) for p, _d, _z in ends], [0])
+
+
+class BedAtBridgeTest(unittest.TestCase):
+    def test_bed_at_says_whether_the_part_is_a_bridge(self):
+        """A station's platform stands by the track's bed and, on a bridge, as deep as its deck (railstationmesh._slab)."""
+        rails = [("g", "standard_gauge", "ground", np.array([[0.0, 0.0], [10.0, 0.0]])),
+                 ("g", "standard_gauge", "bridge", np.array([[10.0, 0.0], [20.0, 0.0]]))]
+        beds = [np.array([5.0, 5.0]), np.array([5.0, 9.0])]
+        xy = np.array([[5.0, 1.0], [15.0, 1.0], [40.0, 0.0]])
+        z = railways.bed_at(rails, beds, xy, "g")
+        zb, deck = railways.bed_at(rails, beds, xy, "g", bridge=True)
+        np.testing.assert_allclose(z, zb)
+        np.testing.assert_allclose(zb[:2], [5.0, 7.0])
+        self.assertEqual(deck.tolist(), [False, True, True])         # (the farthest point: the nearest part, the bridge's end)
+        self.assertTrue(np.isnan(railways.bed_at(rails, beds, xy, "other")).all())
