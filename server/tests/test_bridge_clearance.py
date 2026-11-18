@@ -191,8 +191,12 @@ class TwinLiftTest(TestCase):
 class SemiApproachIntegrationTest(TestCase):
     def test_approach_and_generated_deck_clear_the_law_headroom(self):
         fixture = approaches.OverpassIntegrationTest("test_deck_clears_the_lanes")
-        separation, grade = fixture.deck_over_lanes(True)
+        separation, approach, deck = fixture.deck_over_lanes(True)
         # (the deck's own depth: roads.deck_depth of the 70 m bridge's span)
         usable = separation - roads.deck_depth(roads.geom_span([np.c_[np.linspace(-35, 35, 36), np.zeros(36)]]))
         self.assertGreaterEqual(float(usable.min()), roads.MIN_BRIDGE_HEADROOM_M)
-        self.assertLessEqual(grade, roads.DECK_MAX_GRADE)
+        # (two roads, two laws: the approach road's ramp within its own road's grade, the generated deck within the
+        # deck law. They were one number, the approach read 100 m out against the deck's: the legacy ramp's 0.05 passed
+        # it and the shapes' ground there 0.0)
+        self.assertLessEqual(approach, approaches.approach_law() * 1.05, "the approach is a ramp, not a wall")
+        self.assertLessEqual(deck, roads.DECK_MAX_GRADE, "the generated deck climbs no steeper than the deck law")

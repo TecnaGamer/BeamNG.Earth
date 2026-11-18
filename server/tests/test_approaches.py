@@ -239,10 +239,18 @@ def switch(name, on):
     return old
 
 
+def approach_law(cls="secondary"):
+    """The steepest grade the approach road of an overpass may hold: the legacy ramp's, with the shapes its road class's
+    max grade (gradeshapes'). Not the deck's (roads.DECK_MAX_GRADE): a road's ramp and a bridge's deck are two roads."""
+    if grading.SHAPES_ON:
+        return gradeshapes.max_grade(gradeshapes.Member("a", None, "ground", cls, None, 0, 4.0, None, None))
+    return grading.APPROACH_GRADE
+
+
 class OverpassIntegrationTest(unittest.TestCase):
     def deck_over_lanes(self, on):
         """(the deck's height over the lanes at both, the steepest grade on the approach road from the abutment out to
-        400 m). on: the legacy approach pass (not under the shapes: switch)."""
+        400 m, the deck's own steepest grade). on: the legacy approach pass (not under the shapes: switch)."""
         old = switch("APPROACH_ON", on)
         try:
             f = overpass()
@@ -261,24 +269,22 @@ class OverpassIntegrationTest(unittest.TestCase):
             out = np.arange(40.0, 400.1, 4.0)
             road = elev(*FRAME.enu_to_geodetic(-out, np.zeros(len(out)), 0.0)[:2])
             self.lanes = lanes - 10.0
-            return np.interp(at, s, z) - lanes, float(np.abs(np.diff(road)).max() / 4.0)
+            deck = float(np.max(np.abs(np.diff(np.asarray(z, np.float64)) / np.diff(s))))
+            return np.interp(at, s, z) - lanes, float(np.abs(np.diff(road)).max() / 4.0), deck
         finally:
             grading.APPROACH_ON = old
 
     def test_deck_clears_the_lanes(self):
         if not grading.SHAPES_ON:
             # (the legacy pass's own proof: without it the deck stands low over the motorway)
-            before, _ = self.deck_over_lanes(False)
+            before, _, _ = self.deck_over_lanes(False)
             self.assertLess(before.max(), 4.0, "the bug: the deck low over the motorway")
-        after, grade = self.deck_over_lanes(True)
+        after, grade, _ = self.deck_over_lanes(True)
         depth = roads.deck_depth(roads.geom_span([np.c_[np.linspace(-35, 35, 36), np.zeros(36)]]))
         self.assertGreaterEqual(after.min(), roads.deck_road_clear(depth) - 0.05, after)
         under = after.min() - depth     # (the deck's slab and girders, from its span)
         self.assertGreater(under, roads.MIN_BRIDGE_HEADROOM_M, "the law's headroom under the girders")
-        # (the approach's grade: the legacy ramp's, with the shapes the road's own class's max grade, gradeshapes')
-        law = gradeshapes.max_grade(gradeshapes.Member("a", None, "ground", "secondary", None, 0, 4.0, None, None)) \
-            if grading.SHAPES_ON else grading.APPROACH_GRADE
-        self.assertLessEqual(grade, law * 1.05, "the approach is a ramp, not a wall")
+        self.assertLessEqual(grade, approach_law() * 1.05, "the approach is a ramp, not a wall")
         self.assertLess(np.abs(self.lanes).max(), 0.2, "the motorway is not raised")
 
     def test_motorway_over_a_road_not_raised(self):
