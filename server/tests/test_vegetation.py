@@ -334,7 +334,9 @@ class SpeciesTest(unittest.TestCase):
             self.assertEqual(self.g(veg.G_DECIDUOUS, 68.0, 25.0, elev=200, u=u), veg.G_BIRCH, "Lapland: birches")
 
     def test_the_americas_and_others_keep_theirs(self):
-        self.assertEqual(self.g(veg.G_DECIDUOUS, 39.3, -76.6, u=0.1), veg.G_DECIDUOUS, "Maryland")
+        # (36) North America's broadleaves by its own shares (broad_shares): Maryland's oaks, hardly any birches
+        self.assertEqual(self.g(veg.G_DECIDUOUS, 39.3, -76.6, u=0.1), veg.G_OAK, "Maryland")
+        self.assertEqual(self.g(veg.G_DECIDUOUS, 39.3, -76.6, u=0.9), veg.G_BEECH, "its maples and beeches")
         self.assertEqual(self.g(veg.G_CONIFER, 39.3, -76.6, u=0.1), veg.G_CONIFER)
         self.assertEqual(self.g(veg.G_MEDITERRANEAN, 41.9, 12.5, u=0.1), veg.G_MEDITERRANEAN, "Rome's own trees")
         self.assertEqual(self.g(veg.G_PALM, 25.8, -80.2, lcls=50, palm=0.0), veg.G_PALM, "Miami")
@@ -581,7 +583,8 @@ class ShrubTest(unittest.TestCase):
         rlon, rlat = md.lonlat(100, 400)
         d = np.hypot((trees.lon - rlon) * 85000, (trees.lat - rlat) * 111000)
         self.assertEqual(int(trees.group[np.argmin(d)]), veg.G_DECIDUOUS_OPEN, "the street tree")
-        self.assertEqual(int(trees.group[np.argmax(d)]), veg.G_DECIDUOUS, "the free crown, 300 m off")
+        self.assertIn(int(trees.group[np.argmax(d)]), (veg.G_DECIDUOUS, veg.G_BIRCH, veg.G_OAK, veg.G_BEECH),
+                      "the free crown, 300 m off: a forest broadleaf (36: by its species)")
         import os
         root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
         path = os.path.join(root, "mod/beamng_earth/lua/ge/extensions/beamngEarth/trees.lua")

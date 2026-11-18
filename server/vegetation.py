@@ -72,7 +72,9 @@ VERSION = 36          # (the cached cells hold their groups: 14 for the regional
                       # by biome (_world_groups: savanna, laurel, pine_maritime; the tropics' and the south's pines,
                       # the south's beeches); the maquis by RESOLVE's Mediterranean biome
                       # 36: fewer birches west of Belarus (continental_shares), the broadleaves mixed tree by tree
-                      # (BROAD_STAND_MIX)
+                      # (BROAD_STAND_MIX); the broadleaves' shares everywhere outside the tropics (broad_shares:
+                      # North America's, East Asia's, Japan's, the oceanic climates' by latitude), the spruces' west
+                      # of Poland by SPRUCE_CENTRAL
 TREE_MIN_M = 3.0
 # The canopy raster, the scatter grids and the crown radii are in Web Mercator units (EPSG:3857: a metre there is
 # cos(lat) metres on the ground) and were tuned by eye at mid latitudes. Past them the same pixel counts covered less
@@ -379,11 +381,37 @@ BOREAL_LAT = 55.0           # (a Dfc / ET class south of this is a mountain's: c
 # range's eastern edge (Fagus sylvatica: eastern Poland, the Carpathians), the oaks take the rest. Was a flat 0.40
 # birches: walls of them in Silesia's oak-hornbeam woods (the user's test at Syrynka, 2026-11-18).
 CONT_BIRCH_LON = ((10.0, 0.10), (20.0, 0.20), (28.0, 0.45), (40.0, 0.60), (60.0, 0.60), (90.0, 0.45))
-CONT_BIRCH_SOUTH = (46.0, 52.0, 0.4)        # the birches' share times 0.4 at 46 N rising to all of it at 52 N
+CONT_BIRCH_SOUTH = ((40.0, 0.1), (46.0, 0.3), (50.0, 0.5), (54.0, 1.0))  # (latitude, factor): fewer to the south
+                                            # (Anatolia's, the Balkans', Ukraine's forest steppe: oaks; Ukraine's
+                                            # birch ~8 % of a forest of ~57 % broadleaves)
 CONT_BEECH_LON = (20.0, 26.0)               # the beeches' part of the rest: CONT_BEECH up to the first, none east
 CONT_BEECH = 0.45                           # of the second (the uphill gain, BEECH_UPHILL, still adds them)
 BROAD_SHARES = {"boreal": (1.0, 0.0, 0.0), "continental": (0.20, 0.44, 0.36), "oceanic": (0.12, 0.48, 0.40),
-                "med": (0.05, 0.95, 0.0), "subtropical": (0.10, 0.70, 0.20), "cold_arid": (0.30, 0.70, 0.0)}
+                "med": (0.05, 0.95, 0.0), "subtropical": (0.05, 0.70, 0.25), "cold_arid": (0.30, 0.70, 0.0)}
+# (36) the rest of the world's broadleaves by region (broad_shares; the stock shapes stand in: the beeches for the
+# maples, limes, hornbeams, tulip trees; the oaks for the hickories, ashes, elms):
+# - the oceanic climates: the birches' share by latitude (France ~5 %: birch 2-3 % of a forest of ~70 % broadleaves;
+#   Great Britain ~18 %: the NFI's birch beside oak, ash, sycamore, beech; Norway's coast mostly birch)
+OCEANIC_BIRCH_LAT = ((45.0, 0.05), (50.0, 0.10), (55.0, 0.20), (60.0, 0.40))
+# - East Asia's temperate forests (east of EAST_ASIA_LON: Manchuria, Korea, the Russian Far East: Mongolian oak,
+#   Asian white birch, maples, limes; Japan's cool temperate belt: Japanese beech first, Quercus crispula, birches)
+EAST_ASIA_LON = 100.0
+EAST_ASIA_BIRCH_LAT = ((35.0, 0.05), (40.0, 0.12), (45.0, 0.30), (50.0, 0.45))   # (Korea's and north China's oaks
+EAST_ASIA_BEECH = 0.35                      # and pines in the south; Manchuria's birches in the north), the beeches
+                                            # (maples, limes) this part of the rest
+# - the cold steppes' (BSk, BWk) broadleaves: the birch groves (kolki) of the forest steppe in the north, the planted
+#   poplars, elms and locusts (oaks stand in) of the south's towns and shelterbelts
+COLD_ARID_BIRCH_LAT = ((40.0, 0.05), (46.0, 0.15), (52.0, 0.50))
+JAPAN_BOX = (30.0, 128.5, 46.0, 146.5)      # south, west, north, east
+JAPAN_SHARES = (0.15, 0.40, 0.45)
+# - North America outside the dry West (the USFS FIA's eastern hardwoods: oak-hickory first, maples and beech, the
+#   birches only in the north's northern hardwoods and the boreal aspen-birch): the birches' share by latitude, the
+#   beeches (maples, beech, tulip tree, basswood) NA_BEECH of the rest
+NA_BIRCH_LAT = ((32.0, 0.02), (38.0, 0.04), (42.0, 0.10), (46.0, 0.30), (50.0, 0.60), (54.0, 0.90))
+NA_BEECH = 0.42
+# - elsewhere outside the tropics and Eurasia (the pampas', the Highveld's, the Middle East's planted and riverside
+#   trees: oaks, planes, poplars, elms; birches hardly)
+OTHER_SHARES = (0.03, 0.62, 0.35)
 # (35) by the ecoregion where the Koppen class misleads: the Cantabrian and northwest Iberian oak woods (Galicia,
 # northern Portugal, Asturias: Quercus robur and pyrenaica, birches; beeches only in the mountains, BEECH_UPHILL)
 ECO_BROAD_SHARES = {648: (0.25, 0.75, 0.0), 800: (0.25, 0.75, 0.0)}
@@ -393,7 +421,13 @@ BEECH_UPHILL = 0.5          # the beeches' share gained over the montane belt (f
 # SPRUCE_LINE_M at 50 N, SPRUCE_LINE_PER_DEG lower a degree north. The mountains' effect fades out north of
 # MOUNTAIN_FADE (the boreal lowlands' own shares). Above the line SPRUCE_TAKES_BROAD of the broadleaves are spruces too
 # (the upper montane belt: the Tatras, the Alps).
-SPRUCE_LAT = ((45.0, 0.08), (50.0, 0.08), (55.0, 0.20), (60.0, 0.35), (65.0, 0.30), (70.0, 0.20))
+SPRUCE_LAT = ((45.0, 0.08), (50.0, 0.10), (55.0, 0.28), (60.0, 0.45), (65.0, 0.35), (70.0, 0.20))
+# (36) west of SPRUCE_LON[0] (Germany, Czechia, Austria, Switzerland, Scandinavia: Norway spruce planted and native
+# from the uplands down; the inventories: Germany's conifers ~46 % spruce, Czechia's ~70 %, Sweden's ~50 %) the
+# spruces' share by SPRUCE_CENTRAL, east of SPRUCE_LON[1] by SPRUCE_LAT (Poland's, Belarus' and Russia's pine lands:
+# Poland's conifers ~13 % spruce and fir)
+SPRUCE_CENTRAL = ((45.0, 0.20), (48.0, 0.45), (52.0, 0.35), (55.0, 0.35), (60.0, 0.50), (65.0, 0.40), (70.0, 0.20))
+SPRUCE_LON = (16.0, 21.0)
 SPRUCE_MOUNTAIN = 0.85
 SPRUCE_LINE_M = 1100.0
 SPRUCE_LINE_PER_DEG = 40.0
@@ -497,12 +531,52 @@ def _mixed(stand, single, u_mix, mix=None):
 def continental_shares(lat, lon):
     """Per tree: the continental climates' (birch, oak, beech) shares of the broadleaves (CONT_*), an (n, 3) array."""
     lat, lon = np.asarray(lat, np.float64), np.asarray(lon, np.float64)
-    south = CONT_BIRCH_SOUTH
     birch = np.interp(lon, [a for a, _ in CONT_BIRCH_LON], [b for _, b in CONT_BIRCH_LON]) * \
-        np.clip(south[2] + (1.0 - south[2]) * (lat - south[0]) / (south[1] - south[0]), south[2], 1.0)
+        np.interp(lat, [a for a, _ in CONT_BIRCH_SOUTH], [b for _, b in CONT_BIRCH_SOUTH])
     beech = CONT_BEECH * np.clip((CONT_BEECH_LON[1] - lon) / (CONT_BEECH_LON[1] - CONT_BEECH_LON[0]), 0.0, 1.0)
     rest = 1.0 - birch
     return np.stack([birch, rest * (1.0 - beech), rest * beech], axis=1)
+
+
+def broad_shares(lat, lon, koppen, eco, montane=None):
+    """Per tree: the (birch, oak, beech) shares of the broadleaves anywhere outside the tropics (the constants above:
+    Eurasia's by its climates, East Asia's, Japan's, North America's, the rest's; ECO_BROAD_SHARES; more beeches
+    uphill), an (n, 3) array."""
+    lat, lon = np.asarray(lat, np.float64), np.asarray(lon, np.float64)
+    k = np.asarray(koppen)
+    n = len(lat)
+    ea = eurasia(lat, lon)
+    na = _north_america(lat, lon)
+    sh = np.tile(np.array(OTHER_SHARES), (n, 1))
+    sh[ea] = continental_shares(lat, lon)[ea]
+    boreal = _in(k, K_BOREAL) & (lat >= BOREAL_LAT)
+    oceanic = _in(k, K_OCEANIC)
+    for name, m in (("oceanic", oceanic), ("med", _in(k, K_MED)), ("subtropical", _in(k, K_SUBTROPICAL)),
+                    ("cold_arid", _in(k, K_COLD_ARID))):
+        sh[ea & m] = BROAD_SHARES[name]
+    ob = np.interp(lat, [a for a, _ in OCEANIC_BIRCH_LAT], [b for _, b in OCEANIC_BIRCH_LAT])
+    m = ea & oceanic
+    sh[m] = np.stack([ob, (1.0 - ob) * 0.5, (1.0 - ob) * 0.5], axis=1)[m]
+    cb = np.interp(lat, [a for a, _ in COLD_ARID_BIRCH_LAT], [b for _, b in COLD_ARID_BIRCH_LAT])
+    m = ea & _in(k, K_COLD_ARID)
+    sh[m] = np.stack([cb, 1.0 - cb, np.zeros(n)], axis=1)[m]
+    eb = np.interp(lat, [a for a, _ in EAST_ASIA_BIRCH_LAT], [b for _, b in EAST_ASIA_BIRCH_LAT])
+    m = ea & (lon >= EAST_ASIA_LON) & ~_in(k, K_MED + K_COLD_ARID)
+    sh[m] = np.stack([eb, (1.0 - eb) * (1.0 - EAST_ASIA_BEECH), (1.0 - eb) * EAST_ASIA_BEECH], axis=1)[m]
+    sh[ea & _in_box(lat, lon, JAPAN_BOX)] = JAPAN_SHARES
+    nb = np.interp(lat, [a for a, _ in NA_BIRCH_LAT], [b for _, b in NA_BIRCH_LAT])
+    sh[na] = np.stack([nb, (1.0 - nb) * (1.0 - NA_BEECH), (1.0 - nb) * NA_BEECH], axis=1)[na]
+    sh[boreal] = BROAD_SHARES["boreal"]
+    for e_, share in ECO_BROAD_SHARES.items():
+        sh[np.asarray(eco) == e_] = share
+    if montane is not None:
+        uphill = np.where(boreal, 0.0, montane)
+        gain = np.minimum(BEECH_UPHILL * uphill, sh[:, 0] + sh[:, 1])
+        rest = np.maximum(sh[:, 0] + sh[:, 1], 1e-9)
+        sh[:, 0] -= gain * sh[:, 0] / rest
+        sh[:, 1] -= gain * sh[:, 1] / rest
+        sh[:, 2] += gain
+    return sh
 
 
 def eurasia(lat, lon):
@@ -541,26 +615,19 @@ def species_groups(group, height, lat, lon, lcls, koppen, elev, u_broad, u_conif
     # conifers: pines, spruces from the latitude's share up to SPRUCE_MOUNTAIN at the spruce line
     con = ea & (g == G_CONIFER)
     if con.any():
-        base = np.interp(lat, [a for a, _ in SPRUCE_LAT], [b for _, b in SPRUCE_LAT])
+        east = np.interp(lat, [a for a, _ in SPRUCE_LAT], [b for _, b in SPRUCE_LAT])
+        west = np.interp(lat, [a for a, _ in SPRUCE_CENTRAL], [b for _, b in SPRUCE_CENTRAL])
+        t = np.clip((lon - SPRUCE_LON[0]) / (SPRUCE_LON[1] - SPRUCE_LON[0]), 0.0, 1.0)
+        base = west + (east - west) * t
         p = base + (SPRUCE_MOUNTAIN - base) * np.clip(2.0 * montane, 0.0, 1.0)      # (no pines from mid-belt up)
         g[con] = np.where(np.asarray(u_conifer)[con] < p[con], G_SPRUCE, G_PINE_EU)
     # broadleaves: Italy's in the hot deserts and steppes; birch / oak / beech by the climate, more beeches uphill
     g[ea & (g == G_DECIDUOUS) & _in(k, K_HOT_ARID)] = G_MEDITERRANEAN
-    dec = ea & (g == G_DECIDUOUS)
+    # (36) everywhere outside the tropics (before, Eurasia only: elsewhere the generic group, a quarter of whose
+    # shapes are birches, chose by height alone)
+    dec = (g == G_DECIDUOUS) & (np.abs(lat) >= 23.5)
     if dec.any():
-        sh = continental_shares(lat, lon)
-        boreal = _in(k, K_BOREAL) & (lat >= BOREAL_LAT)
-        for name, m in (("boreal", boreal), ("oceanic", _in(k, K_OCEANIC)), ("med", _in(k, K_MED)),
-                        ("subtropical", _in(k, K_SUBTROPICAL)), ("cold_arid", _in(k, K_COLD_ARID))):
-            sh[m] = BROAD_SHARES[name]
-        for e_, share in ECO_BROAD_SHARES.items():
-            sh[eco == e_] = share
-        uphill = np.where(boreal, 0.0, montane)
-        gain = np.minimum(BEECH_UPHILL * uphill, sh[:, 0] + sh[:, 1])
-        rest = np.maximum(sh[:, 0] + sh[:, 1], 1e-9)
-        sh[:, 0] -= gain * sh[:, 0] / rest
-        sh[:, 1] -= gain * sh[:, 1] / rest
-        sh[:, 2] += gain
+        sh = broad_shares(lat, lon, k, eco, montane)
         u = np.asarray(u_broad)
         pick = np.where(u < sh[:, 0], G_BIRCH, np.where(u < sh[:, 0] + sh[:, 1], G_OAK, G_BEECH)).astype(np.uint8)
         g[dec] = pick[dec]
@@ -1247,6 +1314,7 @@ class Vegetation:
         import climate
         k = climate.koppen_many(tlat, tlon)
         need = eurasia(tlat, tlon) & np.isin(group, (G_CONIFER, G_DECIDUOUS))
+        need |= _north_america(tlat, tlon) & (group == G_DECIDUOUS)      # (36) the Appalachians' beeches uphill
         need |= _in_box(tlat, tlon, EUC_BOX) & np.isin(group, EUC_FROM)      # (35) the plantations' uplands
         elev = None
         if need.any():
