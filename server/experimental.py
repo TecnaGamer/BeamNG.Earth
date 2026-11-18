@@ -33,8 +33,9 @@ FEATURES = (
                        "BNE_TUNNEL_ROAD_OVER": "on",
                        # the ski-ramp fixes (the clearance study's causes 1-3; BNE_UNDER_SPEED left out: no gain)
                        "BNE_FAST_DECK_ENDS": "on", "BNE_FAST_GAP": "on", "BNE_FAST_DECK_GROUND": "on",
-                       # racetracks without street poles; substations kept to their fences (the user's report 95)
-                       "BNE_RACEWAY_PROPS": "on", "BNE_POWER_YARDS": "on",
+                       # racetracks without street poles (BNE_POWER_YARDS left out: one open Codex high, feeders
+                       # classified differently by the span and yard tiles)
+                       "BNE_RACEWAY_PROPS": "on",
                        # railways at roads (the user's reports r61-r64, r80, r92)
                        "BNE_RAIL_ROAD_FIT": "on", "BNE_RAIL_SEAM_NATURAL": "on"}, None),
     ("expEuScenery", {"BNE_EU_ROAD_DETAILS": "on", "BNE_FR_ROADS": "on", "BNE_FR_HOUSES": "on"}, None),
