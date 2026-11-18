@@ -72,6 +72,7 @@ def beside_min(la, lb):
     """m two parallel decks of lengths la, lb must run side by side (BESIDE, BESIDE_OUTLINE, twin_dz)."""
     return min(BESIDE_MIN_M, BESIDE_SHORT * min(la, lb))
 OUTLINE_GAP_M = 6.0
+CONFLICT_DZ = 2.0       # m: one OSM level, a geometry test met, farther apart than this: a data conflict (the design)
 EDGE_ORDER = ("JOIN", "END_ON", "OVERLAP_ALONG", "OVERLAP_CROSS", "BESIDE", "BESIDE_OUTLINE")
 
 _OFF = 1 << 24          # raster keys: (i + _OFF) * _MUL + (j + _OFF)
@@ -640,7 +641,9 @@ def predict_groups(members, outlines=(), R=None, frame_ll=None):
     order, footprints quantised to 1 mm. members [{"key", "fid", "cls", "xy" (k, 2), "z" (k,), "half", "walk"}];
     outlines: OSM man_made=bridge outline rings (k, 2) (BESIDE_OUTLINE's evidence). Edges (per unordered pair the first
     of EDGE_ORDER that holds): JOIN, END_ON, OVERLAP_ALONG, OVERLAP_CROSS, BESIDE, BESIDE_OUTLINE, each within its
-    height limit (BESIDE's length: beside_min, the design's 20 m or 80 % of a shorter deck; its gap from -TWIN_TOUCH_M); walkways never join roads (rail and tunnels are not bridge parts). Pairs that pass a geometry test
+    height limit (members' "level": their OSM layer / Overture level, None unknown; an edge across two levels is
+    counted (cross_level_edges), one level farther apart than CONFLICT_DZ where a test's geometry holds is a data
+    conflict) (BESIDE's length: beside_min, the design's 20 m or 80 % of a shorter deck; its gap from -TWIN_TOUCH_M); walkways never join roads (rail and tunnels are not bridge parts). Pairs that pass a geometry test
     but not its height limit are counted per edge kind (an overpass is OVERLAP_CROSS over its limit)."""
     dnp = _dnp()
     ll = frame_ll or (lambda p: [round(float(p[0]), 1), round(float(p[1]), 1)])
@@ -651,6 +654,15 @@ def predict_groups(members, outlines=(), R=None, frame_ll=None):
     n = len(members)
     edges = {}                  # (i, j) -> (kind, dz)
     rejected = {k: 0 for k in EDGE_ORDER}
+    conflicts = set()           # (i, j): one OSM level, a geometry test met, |dz| over CONFLICT_DZ (the map's data)
+
+    def level(i):
+        return members[i].get("level")
+
+    def reject(kind, i, j, dz):
+        rejected[kind] += 1
+        if level(i) is not None and level(i) == level(j) and float(dz) > CONFLICT_DZ:
+            conflicts.add((min(i, j), max(i, j)))
 
     def put(i, j, kind, dz):
         a, b = min(i, j), max(i, j)
@@ -678,7 +690,7 @@ def predict_groups(members, outlines=(), R=None, frame_ll=None):
             if abs(z - z2) <= JOIN_DZ:
                 put(i, j, "JOIN", abs(z - z2))
             else:
-                rejected["JOIN"] += 1
+                reject("JOIN", i, j, abs(z - z2))
     lines = [(m["xy"], m["z"], m["half"], m["key"]) for m in members]
     idx = SegIndex(lines, pad=1.0)
     free_ends = [k for k in range(len(ends)) if k not in joined]
@@ -698,7 +710,7 @@ def predict_groups(members, outlines=(), R=None, frame_ll=None):
             if abs(z - zb[r]) <= END_ON_DZ:
                 put(i, j, "END_ON", abs(z - zb[r]))
             else:
-                rejected["END_ON"] += 1
+                reject("END_ON", i, j, abs(z - zb[r]))
     # the footprint tests from samples
     pr = _pairs(members, GROUP_STEP, OUTLINE_GAP_M + 12.0)
     if pr is not None:
@@ -723,14 +735,14 @@ def predict_groups(members, outlines=(), R=None, frame_ll=None):
                 if float(pr["piece"][good].sum()) >= ALONG_MIN_M:
                     put(a, b, "OVERLAP_ALONG", dz[good].max())
                 else:
-                    rejected["OVERLAP_ALONG"] += 1
+                    reject("OVERLAP_ALONG", a, b, dz[along].min())
             cross = ks[(pr["dist"][ks] <= hb[ks]) & (ang[ks] > ALONG_DEG)]
             if len(cross):
                 good = cross[dz[cross] <= CROSS_DZ]
                 if len(good):
                     put(a, b, "OVERLAP_CROSS", dz[good].min())
                 else:
-                    rejected["OVERLAP_CROSS"] += 1
+                    reject("OVERLAP_CROSS", a, b, dz[cross].min())
             need = beside_min(lengths[a], lengths[b])
             par = ks[(pr["gap"][ks] >= -TWIN_TOUCH_M) & (ang[ks] <= BESIDE_DEG)]
             near = par[pr["gap"][par] <= BESIDE_GAP_M]
@@ -739,7 +751,7 @@ def predict_groups(members, outlines=(), R=None, frame_ll=None):
                 if float(pr["piece"][good].sum()) >= need:
                     put(a, b, "BESIDE", dz[good].max())
                 else:
-                    rejected["BESIDE"] += 1
+                    reject("BESIDE", a, b, dz[near].min())
             wide = par[(pr["gap"][par] > BESIDE_GAP_M) & (pr["gap"][par] <= OUTLINE_GAP_M)]
             if paths and float(pr["piece"][wide].sum()) >= need:
                 good = wide[dz[wide] <= BESIDE_DZ]
@@ -753,7 +765,7 @@ def predict_groups(members, outlines=(), R=None, frame_ll=None):
                 if held:
                     put(a, b, "BESIDE_OUTLINE", dz[good].max())
                 elif float(pr["piece"][good].sum()) < need:
-                    rejected["BESIDE_OUTLINE"] += 1
+                    reject("BESIDE_OUTLINE", a, b, dz[wide].min())
     # union-find in sorted-key order (the smaller key the root)
     parent = list(range(n))
 
@@ -786,15 +798,19 @@ def predict_groups(members, outlines=(), R=None, frame_ll=None):
         out.append({"root": members[root]["key"][:10], "n": len(mem),
                     "members": [members[i]["key"][:10] for i in mem],
                     "classes": sorted({str(members[i]["cls"]) for i in mem}),
+                    "levels": sorted({"?" if level(i) is None else str(level(i)) for i in mem}),
                     "edges": [list(e) for e in es], "at": ll(c)})
     by = {k: 0 for k in EDGE_ORDER}
     for (a, b), kd in edges.items():
         if inside(a) or inside(b):
             by[kd[0]] += 1
     single = sum(1 for root, mem in groups.items() if len(mem) == 1 and inside(mem[0]))
+    cross_level = sum(1 for (a, b) in edges if (inside(a) or inside(b)) and level(a) is not None
+                      and level(b) is not None and level(a) != level(b))
+    conf = sorted([members[a]["key"][:10], members[b]["key"][:10]] for a, b in conflicts if inside(a) or inside(b))
     out.sort(key=lambda g: (-g["n"], g["root"]))
     return {"n": len(out), "grouped": sum(g["n"] for g in out), "single": single, "edges": by,
-            "height_rejected": rejected, "list": out}
+            "height_rejected": rejected, "cross_level_edges": cross_level, "data_conflicts": conf, "list": out}
 
 
 def _near(xy, R):
@@ -848,9 +864,11 @@ def text_summary(res):
              + ", ".join(f"{k} {v}" for k, v in res["groups"]["edges"].items() if v)
              + "; over the height limit " + ", ".join(f"{k} {v}" for k, v in res["groups"]["height_rejected"].items()
                                                       if v)]
+    lines.append(f"  edges across OSM levels {res['groups']['cross_level_edges']}, data conflicts (one level, "
+                 f"> {CONFLICT_DZ} m) {len(res['groups']['data_conflicts'])}")
     for g in res["groups"]["list"][:8]:
-        lines.append(f"  group {g['root']} x{g['n']} at {g['at'][0]},{g['at'][1]} {'/'.join(g['classes'])}: "
-                     + ", ".join(sorted({e[0] for e in g["edges"]})))
+        lines.append(f"  group {g['root']} x{g['n']} at {g['at'][0]},{g['at'][1]} {'/'.join(g['classes'])} levels "
+                     f"{'/'.join(g['levels'])}: " + ", ".join(sorted({e[0] for e in g["edges"]})))
     if res.get("errors"):
         lines.append(f"errors: {len(res['errors'])} (first: {res['errors'][0]})")
     return "\n".join(lines)
@@ -1023,6 +1041,14 @@ def collect(lat, lon, R, cache, offline=False):
                                  s.md.cell(k, layers=("infrastructure",), kind="demand").layers.get("infrastructure"))
             except Exception as ex:
                 errors.append(f"cell {k}: {type(ex).__name__}: {ex}"[:300])
+    where = {}
+    for ck in sorted(feats):
+        f = feats[ck][0]
+        if f is not None:
+            for i in range(len(f)):
+                where.setdefault(str(f.ids[i]), (f, i))
+    for m in members:
+        m["level"] = _member_level(where.get(m["fid"]), m["xy"], frame)
     outlines = []
     for ck in sorted(feats):
         f, inf = feats[ck]
@@ -1066,6 +1092,40 @@ def collect(lat, lon, R, cache, offline=False):
     return {"tops": tops, "ribbons": ribbons, "cuts": cuts, "parapets": parapets, "pads": pads,
             "members": members, "carriageways": carriageways, "ends": ends, "crossed": crossed,
             "outlines": outlines, "errors": errors, "tiles": len(tiles), "frame": frame}
+
+
+def _member_level(fi, xy, frame):
+    """The OSM level of a member: its feature's Overture level rule at the member's middle (its fraction of the
+    feature's length), else the feature's osm_layer, else None."""
+    if fi is None:
+        return None
+    f, i = fi
+    rule = getattr(f, "rules", {}).get("level")
+    if rule is not None and len(rule.rows(i)):
+        line = np.concatenate([np.asarray(r, np.float64) for part in f.parts(i) for r in part])
+        e_, n_, _ = frame.geodetic_to_enu(line[:, 1], line[:, 0], 0.0)
+        g = np.c_[np.asarray(e_, np.float64), np.asarray(n_, np.float64)]
+        s = arc(g)
+        mid = np.asarray(xy, np.float64)[len(xy) // 2, :2]
+        idx = SegIndex([(g, np.zeros(len(g)), 0.0, 0)], pad=1e6, cell=1e7)
+        _pi, si, dist, _t, _z, sa = idx.query(mid[None, :])
+        if len(dist) and s[-1] > 0:
+            frac = float(sa[int(np.argmin(dist))]) / float(s[-1])
+            for r in rule.rows(i).tolist():
+                if float(rule.start[r]) <= frac <= float(rule.end[r]):
+                    try:
+                        return int(float(rule.value[r]))
+                    except (TypeError, ValueError):
+                        break
+    osm = f.attrs.get("osm_layer")
+    if osm is not None:
+        try:
+            v = float(osm[i])
+        except (TypeError, ValueError):
+            v = float("nan")
+        if np.isfinite(v):
+            return int(v)
+    return None
 
 
 def _refuse_player_cache(cache):
