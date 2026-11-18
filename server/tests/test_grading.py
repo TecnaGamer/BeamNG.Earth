@@ -2034,3 +2034,15 @@ class LevelWallsTest(unittest.TestCase):
         self.assertAlmostEqual(float(fall), 9.3 - 6.075)
         self.assertTrue(np.isnan(grading.level_boundary(9.3, 7.0, 8.0, 4.15, 5.15, 1.5)).all())
         self.assertTrue(np.isnan(grading.level_boundary(30.0, 7.0, 8.0, 4.15, 5.15, 7.2)).all())
+
+
+class UnderDeckTest(unittest.TestCase):
+    """A road under a deck may only go down in the road laws (_road_laws' under): under it is beside its line within
+    its half width (+ ROAD_LAWS_DECK_M), not past its ends, where the ground it ends on is."""
+
+    def test_past_a_decks_ends_is_not_under_it(self):
+        # (a 15 m half wide deck from x = 0 to 100 along y = 0, bent at x = 50)
+        segs = grading._deck_segments([(np.array([[0.0, 0.0], [50.0, 0.0], [100.0, 5.0]]), 15.0)],
+                                      grading.ROAD_LAWS_DECK_M)
+        pts = np.array([[50.0, 14.0], [95.0, 18.0], [50.0, 17.0], [115.0, 6.5], [-15.0, 0.0], [-0.5, 10.0], [0.5, 10.0]])
+        self.assertEqual(grading._under_decks(pts, segs).tolist(), [True, True, False, False, False, False, True])
