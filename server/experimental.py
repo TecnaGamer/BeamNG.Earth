@@ -32,7 +32,10 @@ FEATURES = (
                        "BNE_FOOT_CLEAR": "on", "BNE_RAIL_LIFECYCLE": "on", "BNE_RACEWAY_DIG": "on",
                        "BNE_TUNNEL_ROAD_OVER": "on",
                        # the ski-ramp fixes (the clearance study's causes 1-3; BNE_UNDER_SPEED left out: no gain)
-                       "BNE_FAST_DECK_ENDS": "on", "BNE_FAST_GAP": "on", "BNE_FAST_DECK_GROUND": "on"}, None),
+                       "BNE_FAST_DECK_ENDS": "on", "BNE_FAST_GAP": "on", "BNE_FAST_DECK_GROUND": "on",
+                       # racetracks without street poles (BNE_POWER_YARDS left out: one open Codex high, feeders
+                       # classified differently by the span and yard tiles)
+                       "BNE_RACEWAY_PROPS": "on"}, None),
     ("expEuScenery", {"BNE_EU_ROAD_DETAILS": "on", "BNE_FR_ROADS": "on", "BNE_FR_HOUSES": "on"}, None),
     ("expDropRails", {"BNE_DROP_RAILS": "on"}, None),                     # droprails.enabled
     ("expEntranceFlares", {"BNE_ENTRANCE_FLARES": "on"}, None),           # roads.flares_enabled

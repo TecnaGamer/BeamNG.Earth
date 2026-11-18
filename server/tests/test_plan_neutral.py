@@ -84,6 +84,9 @@ NOT_LISTED = {
                             "Revamped roads setting",
     "BNE_FOOT_CLEAR": "railway tiles only (railways.FOOT_CLEAR: a footbridge that cannot clear drops its walls over the "
                       "road); not yet proven plan-neutral both ways, so it stays keyed with the Revamped roads setting",
+    "BNE_RACEWAY_PROPS": "road tiles' props only (furniture.RACEWAY_PROPS: no street poles, wires or lamps along a "
+                         "racetrack); comes with the Revamped roads setting, whose other switches the plans read, so "
+                         "not proving it plan-neutral costs no shared plans; it stays keyed",
 }
 # Functions of the planning closure that read the environment by a computed name: the keys' own (they hash the
 # switches' names and values), the proxy settings (a fixed list of proxy variables)

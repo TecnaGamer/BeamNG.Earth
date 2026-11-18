@@ -448,6 +448,159 @@ class PropsTest(unittest.TestCase):
         self.assertEqual(len(wires), 1)
         self.assertEqual(n, 3)
 
+    def test_an_assembly_goes_as_one(self):
+        # the user's reports 56/59/66/70 (Daytona, Atlanta 2026-11-17): a lit raceway's utility pole just inside the
+        # band went, its cobra-head arm 7 m up and the wire ending 0.8 m farther out stayed in the air
+        import furniture
+        lines = [(np.array([[-100.0, 0.0], [100.0, 0.0]]), 7.0)]
+        pole = lambda x, y, z=0.0: [furniture.G_POLE, x, y, z, 90.0, 1.0, 9.2, 0.0]
+        arm = lambda x, y, z=0.0: [furniture.G_POLELAMP, x, y, z + furniture.POLE_LAMP_Z, 90.0, 1.0, 1.1, 0.0]
+        rows = [pole(0.0, 8.7), arm(0.0, 8.7),              # inside the band (9 m): all of it goes
+                pole(40.0, 9.6), arm(40.0, 9.6),            # outside: stays
+                pole(-40.0, 8.0, 5.0), arm(-40.0, 8.0, 5.0)]  # on a deck 5 m over the track: stays, arm and all
+        props = rows + furniture.lamp_lenses(rows)
+        self.assertEqual(len(props), 12)
+        wires = [[[0.0, 8.7 + d, 7.8], [40.0, 9.6 + d, 7.8]] for d in (-0.8, 0.0, 0.8)]   # (the 0.8 one ends at 9.5)
+        wires += [[[40.0, 9.6 + d, 7.8], [80.0, 9.6 + d, 7.8]] for d in (0.0, 0.8)]      # (between kept poles)
+        racedig.clear_props(props, wires, lines, lambda x, y: np.zeros(len(x)))
+        self.assertEqual(sorted({(r[1], round(r[2], 1)) for r in props if r[0] in (furniture.G_POLE,
+                                                                                  furniture.G_POLELAMP)}),
+                         [(-40.0, 8.0), (40.0, 9.6)])
+        lenses = [r for r in props if r[0] in (furniture.G_LENS, furniture.G_GLOW)]
+        self.assertEqual(len(lenses), 4, "the kept arms' lenses and glows, none of the dropped one's")
+        self.assertTrue(all(abs(r[1]) > 1.0 for r in lenses))
+        self.assertEqual(len(wires), 2, "every wire of the dropped pole, the kept poles' span stays")
+        self.assertTrue(all(w[0][0] == 40.0 for w in wires))
+
+    def test_a_lamp_lens_follows_its_post(self):
+        # a post outside the band, its head over the track: the lens stays with the post (judged alone, a lens over
+        # the band with no ground given went)
+        import furniture
+        lines = [(np.array([[-100.0, 0.0], [100.0, 0.0]]), 7.0)]
+        post = [furniture.G_LAMP, 0.0, 10.0, 0.0, 270.0, 1.0, 9.0, 0.0]
+        props = [post] + furniture.lamp_lenses([post])
+        self.assertLess(abs(props[1][2]), 9.0, "(the head over the band)")
+        racedig.clear_props(props, [], lines, None)
+        self.assertEqual(len(props), 3)
+        post = [furniture.G_LAMP, 0.0, 8.0, 0.0, 270.0, 1.0, 9.0, 0.0]
+        props = [post] + furniture.lamp_lenses([post])
+        racedig.clear_props(props, [], lines, lambda x, y: np.zeros(len(x)))
+        self.assertEqual(props, [])
+
+    def test_a_pylon_takes_its_wires(self):
+        import powerlines
+        lines = [(np.array([[-100.0, 0.0], [100.0, 0.0]]), 7.0)]
+        props = [[powerlines.G_PYLON, 0.0, 8.5, 0.0, 0.0, 1.0, 35.8, 0.0]]
+        # (its far conductor ends 4.12 m out, off the band)
+        wires = [[[0.0, 12.62, 20.0], [300.0, 12.62, 20.0]], [[50.0, 300.0, 20.0], [60.0, 300.0, 20.0]]]
+        racedig.clear_props(props, wires, lines, lambda x, y: np.zeros(len(x)))
+        self.assertEqual(props, [])
+        self.assertEqual(len(wires), 1)
+
+    def test_a_span_goes_with_the_next_tiles_pole(self):
+        # Codex's review of 1bc9f8cb: the span is this tile's (its first pole's), the pole at its other end the next
+        # tile's, on the band (culled there); the wire's end 1 m off it and off the band went by no geometric test
+        import furniture
+        lines = [(np.array([[30.0, -100.0], [30.0, 100.0]]), 7.0)]          # the band to x = 30 + 7 + 2 = 39 ... 21
+        a = [furniture.G_POLE, -20.0, 0.0, 0.0, 0.0, 1.0, 9.2, 0.0]
+        b = [furniture.G_POLE, 38.5, 0.0, 0.0, 0.0, 1.0, 9.2, 0.0]           # (the next tile's row)
+        line = np.c_[np.linspace(-20.0, 39.6, 9), np.full(9, 0.0), np.full(9, 7.8)]
+        wires = furniture.with_ends([line], a, b) + [line.copy()]
+        props = [list(a)]
+        racedig.clear_props(props, wires, lines, lambda x, y: np.zeros(len(x)))
+        self.assertEqual(props, [a])
+        self.assertEqual(len(wires), 1)
+        self.assertIsNone(furniture.wire_ends(wires[0]))
+        # its pole on a deck over the track (5 m over the ground there): it stays, and the span with it
+        b2 = list(b)
+        b2[3] = 5.0
+        wires = furniture.with_ends([line], a, b2)
+        racedig.clear_props([list(a)], wires, lines, lambda x, y: np.zeros(len(x)))
+        self.assertEqual(len(wires), 1)
+
+    def test_the_far_supports_road_cells_are_read(self):
+        # Codex's review of 26580e0c: a power span's far tower may stand 1 km off, by a raceway in no road cell of the
+        # span's tile; its own tile culls it, so the span's tile must read the cells round it for the band
+        from unittest import mock
+        import furniture
+        import mapcells
+        frame = geodesy.EnuFrame(33.38, -84.32)
+        near, far = [furniture.G_POLE, 0.0, 0.0, 0.0, 0.0, 1.0, 9.2, 0.0], ["pylon", 800.0, 0.0, 0.0, 0.0, 1.0, 35.8, 0.0]
+        line = np.c_[np.linspace(0.0, 800.0, 9), np.full(9, 4.5), np.full(9, 20.0)]
+        la, lo, _ = frame.enu_to_geodetic(np.array([800.0]), np.array([0.0]), 0.0)
+        far_cell = mapcells.cell_of(float(np.ravel(la)[0]), float(np.ravel(lo)[0]))
+
+        class Md:
+            def cell(self, key, layers=(), kind="demand"):
+                return mock.Mock(layers={"roads": ("roads", key)})
+
+        def bands(frame_, cells):       # (the raceway by the far tower: only in the far tower's cell)
+            if any(c == ("roads", far_cell) for c in cells):
+                return [(np.array([[700.0, -8.0], [900.0, -8.0]]), 7.0)]
+            return []
+        flat = lambda la_, lo_: np.zeros(np.shape(la_))
+        with mock.patch.object(racedig, "ON", True), mock.patch.object(racedig, "bands", bands):
+            wires = furniture.with_ends([line], near, far)
+            racedig.tile_clear(frame, [], [list(near)], wires, flat)
+            self.assertEqual(len(wires), 1, "(the tile's own cells: no band, the span stayed)")
+            racedig.tile_clear(frame, [], [list(near)], wires, flat, Md())
+            self.assertEqual(wires, [])
+
+    def test_an_unreadable_support_cell_costs_only_its_spans(self):
+        # Codex's review of 12b731e1: a far support's road cell that cannot be read (OSError) aborted the whole road
+        # tile; now the tile completes, the spans needing that cell are left out and the tile is not kept (a fault)
+        from unittest import mock
+        import furniture
+        import mapcells
+        import revisit
+        frame = geodesy.EnuFrame(33.38, -84.32)
+        near = [furniture.G_POLE, 0.0, 0.0, 0.0, 0.0, 1.0, 9.2, 0.0]
+        far = ["pylon", 6000.0, 0.0, 0.0, 0.0, 1.0, 35.8, 0.0]     # (another map cell)
+        other = [furniture.G_POLE, 40.0, 0.0, 0.0, 0.0, 1.0, 9.2, 0.0]
+        la, lo, _ = frame.enu_to_geodetic(np.array([6000.0]), np.array([0.0]), 0.0)
+        far_cell = mapcells.cell_of(float(np.ravel(la)[0]), float(np.ravel(lo)[0]))
+
+        class Md:
+            def cell(self, key, layers=(), kind="demand"):
+                if key == far_cell:
+                    raise OSError("unreadable")
+                return mock.Mock(layers={"roads": ("roads", key)})
+        line = np.c_[np.linspace(0.0, 6000.0, 9), np.full(9, 4.5), np.full(9, 20.0)]
+        short = np.c_[np.linspace(0.0, 40.0, 5), np.full(5, 0.8), np.full(5, 7.8)]
+        wires = furniture.with_ends([line], near, far) + furniture.with_ends([short], near, other)
+        before = revisit.faults()
+        flat = lambda la_, lo_: np.zeros(np.shape(la_))
+        with mock.patch.object(racedig, "ON", True), mock.patch.object(racedig, "bands", lambda f, c: []):
+            racedig.tile_clear(frame, [], [list(near)], wires, flat, Md())
+        self.assertEqual(len(wires), 1)
+        self.assertEqual(furniture.wire_ends(wires[0])[1][1], 40.0)
+        self.assertGreater(revisit.faults(), before)
+
+    def test_a_support_by_the_antimeridian(self):
+        # Codex's review of 117bdde7: a support whose 60 m box crosses +-180 deg made min / max of its longitudes the
+        # whole world (over 4,096 cells: ValueError, the road tile lost); the span's own tile is west of the crossing
+        from unittest import mock
+        import furniture
+        frame = geodesy.EnuFrame(10.0, 179.99)
+        la, lo, _ = frame.enu_to_geodetic(np.array([1090.0]), np.array([0.0]), 0.0)
+        self.assertGreater(float(np.ravel(lo)[0]), 179.9995)                # (within 60 m of the antimeridian)
+        near = [furniture.G_POLE, 0.0, 0.0, 0.0, 0.0, 1.0, 9.2, 0.0]
+        far = ["pylon", 1090.0, 0.0, 0.0, 0.0, 1.0, 35.8, 0.0]
+        line = np.c_[np.linspace(0.0, 1090.0, 9), np.full(9, 4.5), np.full(9, 20.0)]
+        cells = racedig.support_cells(frame, furniture.with_ends([line], near, far))
+        far_cells = cells[(1090.0, 0.0)]
+        self.assertTrue(0 < len(far_cells) <= 4, far_cells)
+        self.assertEqual({k.x for k in far_cells}, {0, (1 << far_cells[0].z) - 1})    # (both sides of it)
+
+        class Md:
+            def cell(self, key, layers=(), kind="demand"):
+                return mock.Mock(layers={"roads": ("roads", key)})
+        wires = furniture.with_ends([line], near, far)
+        flat = lambda la_, lo_: np.zeros(np.shape(la_))
+        with mock.patch.object(racedig, "ON", True), mock.patch.object(racedig, "bands", lambda f, c: []):
+            racedig.tile_clear(frame, [], [list(near)], wires, flat, Md())
+        self.assertEqual(len(wires), 1)
+
     def test_no_raceway_nothing_dropped(self):
         props = [["pole", 0.0, 0.0, 0.0, 0.0]]
         self.assertEqual(racedig.clear_props(props, [], [], None), 0)

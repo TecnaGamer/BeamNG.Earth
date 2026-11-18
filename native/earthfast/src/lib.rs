@@ -87,6 +87,7 @@ mod mdhtml;
 mod reportpack;
 mod farrestore;
 mod roadlanes;
+mod propassembly;
 mod waytags;
 mod pmtiles;
 mod underdeck;
@@ -6619,6 +6620,24 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // layered rule for BNE_RACEWAY_DIG: a raceway ending on another gives way to it, raceway_dominance)
     // 440: racejoin's joins with their reach (5-tuples), raceway_join_reach, through lines at a node; race_dig_floor's
     // round_up_at (the coordinator's range 440-449 for this branch)
+    m.add_function(wrap_pyfunction!(propassembly::assembly_cull, m)?)?;
+    m.add_function(wrap_pyfunction!(propassembly::wire_cull, m)?)?;
+    // 430: street furniture assemblies culled as one (propassembly; racedig.clear_props, under_decks)
+    // 431: Codex's review of 1bc9f8cb: assembly_cull (any structural member culls the assembly, lenses follow;
+    // replaces prop_assemblies / assembly_drop), wire_cull (a span goes with its end supports culled in this tile or
+    // the next; replaces wire_ends_at_supports); power_line_layout takes the yards' rings and the gantries' offset (a
+    // line end moved with its gantries inside the fence)
+    // 432: Codex round 2: power_line_layout returns each wire's supports and the ground under each end's gantries
+    // (ends (e, 6)), takes the kit's gantries / anchor and a ground callback, and drops an end whose gantries fit
+    // nowhere; substation_yard returns a z column (an anchored gantry's ground)
+    // 433: power_line_layout merges a line end only into an earlier end of the same yard whose gantries stand
+    // 434: power_line_layout takes each yard ring's yard id: a line end moves and merges within its own yard only
+    // 435: power_line_layout's ends carry their yard's id (e, 7): each anchored in its own yard only
+    // 436: power_line_layout's wire supports give a line end's gantry row (kind 2: its place, ground, yaw)
+    // 437: power_line_layout keeps the vertices either side of a yard's edge (start-independent line ends)
+    // 438: BNE_POWER_YARDS: power_line_layout keeps yard-edge vertices only with yards given; a gantry fits with
+    // its whole footprint; substation_yard clips an anchored kit only with anchors (a, 5)
+    // 439: a gantry's footprint has no yard ring vertex under it (a hole inside it)
     m.add("VERSION", 440)?;
     Ok(())
 }

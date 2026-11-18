@@ -24,6 +24,7 @@ A raceway is OpenStreetMap's highway=raceway, appended to the roads layer with i
 (osmtags.raceway_features). Off by default while it is measured (tools/roadcorpus, category 19); every BNE_* switch is
 in the plans' and cells' keys (revisit.switches_key). Not here (later road revamp phases): raceways on the AI graph
 (decision D20), generated kerbs and run-off (D17, only as mapped by default), raceway profiles in the road model."""
+import logging
 import math
 import os
 
@@ -31,6 +32,7 @@ import numpy as np
 
 import dnp
 
+log = logging.getLogger("earthd.racedig")
 ON = os.environ.get("BNE_RACEWAY_DIG", "off") == "on"
 FID_PREFIX = "osm-raceway-"
 BAND_MARGIN_M = 2.0         # m past a raceway's carriageway that is its band (kerbs, apron: grading.UNGRADED_MARGIN_M)
@@ -114,36 +116,70 @@ def bands(frame, cells):
     return out
 
 
+# An assembly goes as one (furniture.assemblies; the user's reports 56, 59, 66, 70 at Daytona and Atlanta, 2026-11-17:
+# a lit raceway's utility pole 0.7 m inside the band went, its cobra-head arm 7 m up was taken for a prop on a deck
+# over the track and stayed, and of its three wires the one ending 0.8 m farther out stayed: an arm and one wire in the
+# air). A wire with an end within a dropped support's reach, or whose own end support goes (this tile's or the
+# next's: furniture.with_ends), goes with it (furniture.wire_cull; in Rust).
+
+
 def clear_props(props, wires, lines, ground=None):
     """props (furniture rows [group, x, y, z, ...] in the frame) and wires (lists of [x, y, z] points, or (points,
     radius)) without those inside a raceway's carriageway + PROP_CLEAR_M (lines: bands()), in place; a prop standing
     PROP_DECK_M or more over the ground there (ground(x (n,), y (n,)) -> z, the graded ground; None: none kept) is on
-    a deck over the track and stays. Wires: those with an end on the band (a dropped pole's) go."""
+    a deck over the track and stays. A row mounted on another (furniture.assemblies) goes or stays with it. Wires:
+    those with an end on the band, at a dropped support or whose end's own support goes (furniture.wire_cull) go."""
     if not lines:
         return 0
     dropped = 0
+    culled = []
     if props:
         xy = np.array([[float(r[1]), float(r[2])] for r in props], np.float64).reshape(-1, 2)
         inside = near(xy, lines, PROP_CLEAR_M)
+        had = bool(inside.any())
         if inside.any() and ground is not None:
             k = np.flatnonzero(inside)
             gz = np.asarray(ground(xy[k, 0], xy[k, 1]), np.float64)
             pz = np.array([float(props[j][3]) for j in k], np.float64)
             inside[k[pz - gz >= PROP_DECK_M]] = False
+        if had:                     # (an assembly as one: a pole's arm, a post's lens go or stay with it)
+            import furniture
+            inside = furniture.assembly_drop(inside, props)
         if inside.any():
             keep = [r for r, bad in zip(props, inside) if not bad]
+            culled = [r for r, bad in zip(props, inside) if bad]
             dropped += len(props) - len(keep)
             props[:] = keep
     if wires:
-        ends, which = [], []
+        import furniture
+        ends, which, sup = [], [], []
         for n_, w in enumerate(wires):
             pts = w[0] if isinstance(w, tuple) else w
             if len(pts) >= 1:
-                ends.append([float(pts[0][0]), float(pts[0][1])])
-                ends.append([float(pts[-1][0]), float(pts[-1][1])])
+                own, mounted = furniture.wire_ends(w), furniture.wire_mounted(w)
+                for k, p in enumerate((pts[0], pts[-1])):
+                    if own and own[k] is not None:
+                        sup.append((len(ends), own[k]))
+                        if mounted[k] is not None:      # (its arm: the assembly as one, assembly_cull)
+                            sup.append((len(ends), mounted[k]))
+                    ends.append([float(p[0]), float(p[1])])
                 which += [n_, n_]
         if ends:
-            bad = near(np.array(ends, np.float64), lines, PROP_CLEAR_M)
+            ends = np.array(ends, np.float64)
+            bad = near(ends, lines, PROP_CLEAR_M)
+            cut = np.zeros(len(ends), bool)
+            if sup:                 # (each span's own supports judged as the props are, the next tile's pole too)
+                q = np.array([[float(r[1]), float(r[2])] for _, r in sup], np.float64)
+                gone = near(q, lines, PROP_CLEAR_M)
+                if gone.any() and ground is not None:
+                    k = np.flatnonzero(gone)
+                    gz = np.asarray(ground(q[k, 0], q[k, 1]), np.float64)
+                    pz = np.array([float(sup[j][1][3]) for j in k], np.float64)
+                    gone[k[pz - gz >= PROP_DECK_M]] = False
+                for (j, _), g in zip(sup, gone):
+                    cut[j] |= bool(g)
+            if culled or cut.any():
+                bad |= furniture.wire_cull(ends, cut, culled)
             drop = {which[j] for j in np.flatnonzero(bad).tolist()}
             if drop:
                 wires[:] = [w for n_, w in enumerate(wires) if n_ not in drop]
@@ -326,18 +362,84 @@ def tube_height(th, cap, floor, a, b):
     return float(min(th, float(room.min())))
 
 
-def tile_clear(frame, cells, props, wires, elev):
+SUPPORT_CELL_M = 60.0       # m round a span's support whose road cells are read for its bands (a raceway's half width,
+                            # the band's margin and PROP_CLEAR_M, with room)
+
+
+def support_cells(frame, wires):
+    """{(x, y) of a support at the ends of wires (furniture.wire_ends): the map cells (keys) within SUPPORT_CELL_M of
+    it}: a span is drawn by one tile and its far support may stand 1 km off, near a raceway in no road cell of this
+    tile (Codex's review of 26580e0c)."""
+    import furniture
+    import mapcells
+    pts = [(float(r[1]), float(r[2])) for w in wires or () for e in (furniture.wire_ends(w),) if e
+           for r in e if r is not None]
+    if not pts:
+        return {}
+    xy = np.array(sorted(set(pts)), np.float64)
+    m = SUPPORT_CELL_M
+    corners = [frame.enu_to_geodetic(xy[:, 0] + dx, xy[:, 1] + dy, 0.0)[:2]
+               for dx, dy in ((-m, -m), (m, -m), (m, m), (-m, m))]
+    la = np.stack([np.atleast_1d(np.asarray(c[0], np.float64)) for c in corners], 1)
+    lo = np.stack([np.atleast_1d(np.asarray(c[1], np.float64)) for c in corners], 1)
+    _, lo_mid, _ = frame.enu_to_geodetic(xy[:, 0], xy[:, 1], 0.0)
+    out = {}
+    for k, (x, y) in enumerate(xy.tolist()):
+        # (the box's longitudes round the support's own, wrapped: west of it to east of it, west > east across the
+        # antimeridian, as cells_for_bbox takes them; min / max of +179.99 and -179.99 was the whole world)
+        mid = float(np.atleast_1d(lo_mid)[k])
+        rel = (lo[k] - mid + 180.0) % 360.0 - 180.0
+        west = (mid + float(rel.min()) + 180.0) % 360.0 - 180.0
+        east = (mid + float(rel.max()) + 180.0) % 360.0 - 180.0
+        try:
+            out[(x, y)] = mapcells.cells_for_bbox(float(la[k].min()), west, float(la[k].max()), east)
+        except ValueError:          # (no sane box: its spans are judged unread, tile_clear)
+            out[(x, y)] = [None]
+    return out
+
+
+def tile_clear(frame, cells, props, wires, elev, md=None):
     """clear_props for a road tile (frame; cells: its roads layers; elev(lat, lon) -> geodetic m, the graded ground):
-    in place, nothing when off or the tile has no raceway."""
+    in place, nothing when off or the tile has no raceway. md: the map data, for the road cells round the supports at
+    the far ends of the tile's spans (support_cells: the bands that cull them in their own tiles)."""
     if not ON or not (props or wires):
         return 0
+    unread = set()
+    if md is not None and wires:
+        near_cells = support_cells(frame, wires)
+        keys = sorted({k for ks in near_cells.values() for k in ks}, key=lambda k: (k is not None, str(k)))
+        if keys:
+            import mapcells
+            got, bad = [], set()
+            for k in keys:              # (one by one: a cell that cannot be read costs only the spans that need it)
+                if k is None:
+                    bad.add(k)
+                    continue
+                try:
+                    got += [cd.layers.get("roads") for cd in mapcells.load_cells(md, [k], ("roads",))]
+                except Exception as ex:     # (OSError, a decode error: the tile is still built, not kept)
+                    bad.add(k)
+                    log.warning("racedig: road cell %s round a span's support unread: %s: %s", k, type(ex).__name__,
+                                ex)
+            cells = list(cells) + got
+            if bad:
+                import revisit
+                revisit.fault(here=True)
+                unread = {xy for xy, ks in near_cells.items() if any(k in bad for k in ks)}
     lines = bands(frame, cells)
+    dropped = 0
+    if unread:                          # (a span whose support's band could not be read: left out, as if culled)
+        import furniture
+        keep = [w for w in wires if not any(r is not None and (float(r[1]), float(r[2])) in unread
+                                            for r in (furniture.wire_ends(w) or ()))]
+        dropped = len(wires) - len(keep)
+        wires[:] = keep
     if not lines:
-        return 0
+        return dropped
 
     def ground(x, y):
         la, lo, _ = frame.enu_to_geodetic(np.asarray(x, np.float64), np.asarray(y, np.float64), 0.0)
         la, lo = np.asarray(la), np.asarray(lo)
         return np.asarray(frame.geodetic_to_enu(la, lo, np.asarray(elev(la, lo), np.float64))[2], np.float64)
-    return clear_props(props, wires, lines, ground)
+    return dropped + clear_props(props, wires, lines, ground)
 
