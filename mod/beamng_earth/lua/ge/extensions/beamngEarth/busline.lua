@@ -28,6 +28,7 @@ M.gps = function() return require('beamngEarth/gps') end
 M.say = function(text, seconds)
   if ui_message then pcall(ui_message, text, seconds or 6, 'beamngEarthBus') end
 end
+M.log = function(text) if log then pcall(log, 'I', 'beamngEarth.busline', text) end end
 M.vehicle = function() return rawget(_G, 'getPlayerVehicle') and getPlayerVehicle(0) or nil end
 
 local lines, linesError, attribution, pending, nextId = nil, nil, nil, nil, 0
@@ -74,17 +75,23 @@ function M.request()
   local api, core = M.api(), M.core()
   local lat, lon
   if api and api.position then lat, lon = api.position() end
-  if not lat then linesError = 'Not in the BeamNG.Earth world yet' return false end
-  if not (core and core.requestBusLines) then linesError = 'BeamNG.Earth is not loaded' return false end
+  if not lat then linesError = 'Not in the BeamNG.Earth world yet' M.log(linesError) return false end
+  if not (core and core.requestBusLines) then linesError = 'BeamNG.Earth is not loaded' M.log(linesError) return false end
   nextId = nextId + 1
-  if not core.requestBusLines(nextId, lat, lon) then linesError = 'Companion server not connected' return false end
+  if not core.requestBusLines(nextId, lat, lon) then
+    linesError = 'Companion server not connected' M.log(linesError) return false
+  end
+  M.log(string.format('lookup %d at %.5f, %.5f (session %s)', nextId, lat, lon, tostring(sessionId())))
   pending, linesError, lines = nextId, nil, nil
   pendingAge, pendingSession = 0, sessionId()
   return true
 end
 
 function M.onLines(msg)
-  if type(msg) ~= 'table' or msg.id ~= pending then return end
+  if type(msg) ~= 'table' then return end
+  M.log(string.format('answer %s: %d lines%s%s', tostring(msg.id), type(msg.lines) == 'table' and #msg.lines or -1,
+    msg.error and (', error ' .. tostring(msg.error)) or '', msg.id ~= pending and ' (not the pending one: ignored)' or ''))
+  if msg.id ~= pending then return end
   pending = nil
   lines = type(msg.lines) == 'table' and msg.lines or {}
   linesError = msg.error and ('Could not get the bus lines: ' .. tostring(msg.error)) or nil
@@ -268,6 +275,7 @@ end
 -- the window
 
 function M.open()
+  M.log('window opened')
   winOpen = true
   if not lines and not pending then M.request() end
 end
@@ -315,6 +323,7 @@ function M.onUpdate(dtReal)
     local why = M.stale()
     if why == 'restarted' and winOpen then M.request()  -- the new server: ask it
     elseif why then
+      M.log('lookup ' .. tostring(pending) .. ' given up: ' .. why)
       pending = nil
       linesError = why == 'timeout' and 'No answer from the companion server: try Find lines here again'
         or 'The companion server restarted: try Find lines here again'

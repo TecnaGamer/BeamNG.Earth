@@ -5,6 +5,7 @@ local dir = arg[0]:match('^(.*)[/\\]') or '.'
 dofile(dir .. '/stubs.lua')
 
 local B = require('beamngEarth/busline')
+B.log = function() end
 
 -- a world where lat/lon are metres (lat * 1000 = y), a bus the test moves, and what the bus and the player hear
 local pos, vel, jbeam, cmds, said, routed, cleared = { x = 0, y = 0, z = 5 }, { x = 0, y = 0, z = 0 }, 'citybus', {}, {}, {}, 0
