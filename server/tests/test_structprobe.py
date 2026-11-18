@@ -140,6 +140,17 @@ class Groups(unittest.TestCase):
         self.assertGreaterEqual(g["height_rejected"]["OVERLAP_CROSS"], 1)
         self.assertEqual(g["single"], 1)                # (the overpass)
 
+    def test_short_twins(self):
+        # two carriageways on one 17 m deck (E6 Vist), 1 m apart: BESIDE though they never run 20 m side by side
+        ms = [member("n", (0, 0), (17, 0), 8.0, 4.0), member("s", (0, 9), (17, 9), 8.0, 4.01)]
+        g = sp.predict_groups([dict(m) for m in ms], R=1000.0)
+        self.assertEqual(g["n"], 1)
+        self.assertEqual({e[0] for e in g["list"][0]["edges"]}, {"BESIDE"})
+        self.assertEqual(sp.twin_dz(ms, R=1000.0)["pairs"], 1)
+        # a 6 m piece beside a long deck joins it too (0.8 x 6 m beside it is enough)
+        ms = [member("n", (0, 0), (100, 0), 8.0, 4.0), member("s", (40, 9), (46, 9), 8.0, 4.01)]
+        self.assertEqual(sp.predict_groups([dict(m) for m in ms], R=1000.0)["edges"]["BESIDE"], 1)
+
 
 class Seams(unittest.TestCase):
     def test_step(self):

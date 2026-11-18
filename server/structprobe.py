@@ -54,6 +54,7 @@ SKEW_REACH_M = 40.0     # m along the deck from a free end to the crossing it is
 SKEW_OVER = 3.0         # degrees: the design's skew target
 SKEW_NEAR_M = 1.0       # m: a crossing nearer the end than this is a road joining it, not crossed
 SKEW_MIN_CROSS = 15.0   # degrees: a line meeting the deck flatter than this runs along it
+SKEW_BEND_DEG = 30.0    # degrees: a deck turning more between the crossing and its end is not that crossing's end
 GROUP_STEP = 1.0        # m between the grouping tests' samples
 BIN_M = 8.0             # m: overlap / hole cells pooled for the worst-places list
 WALK_CLASSES = ("footway", "path", "cycleway", "pedestrian", "steps", "bridleway", "corridor", "track_foot")
@@ -63,6 +64,13 @@ END_ON_DZ = 0.5
 ALONG_MIN_M, ALONG_DEG, ALONG_DZ = 2.0, 30.0, 1.0
 CROSS_DZ = 0.6
 BESIDE_GAP_M, BESIDE_MIN_M, BESIDE_DEG, BESIDE_DZ = 2.5, 20.0, 25.0, 1.0
+BESIDE_SHORT = 0.8      # ... or this share of the shorter deck when that is shorter (an addition to the design's rule:
+                        # E6 Vist's twins on one ~17 m deck never run 20 m side by side)
+
+
+def beside_min(la, lb):
+    """m two parallel decks of lengths la, lb must run side by side (BESIDE, BESIDE_OUTLINE, twin_dz)."""
+    return min(BESIDE_MIN_M, BESIDE_SHORT * min(la, lb))
 OUTLINE_GAP_M = 6.0
 EDGE_ORDER = ("JOIN", "END_ON", "OVERLAP_ALONG", "OVERLAP_CROSS", "BESIDE", "BESIDE_OUTLINE")
 
@@ -510,8 +518,9 @@ def _pairs(members, step, pad):
 
 def twin_dz(members, R, frame_ll=None):
     """Height differences across close parallel decks of one level (BESIDE: gap <= BESIDE_GAP_M, within BESIDE_DEG,
-    |dz| <= BESIDE_DZ) where they run so for >= BESIDE_MIN_M: max, p95 of the samples, pairs, pairs over TWIN_OVER."""
+    |dz| <= BESIDE_DZ) where they run so for beside_min: max, p95 of the samples, pairs, pairs over TWIN_OVER."""
     pr = _pairs(members, TWIN_STEP, BESIDE_GAP_M + 12.0)
+    lengths = [float(arc(m["xy"])[-1]) for m in members]
     ll = frame_ll or (lambda p: [round(float(p[0]), 1), round(float(p[1]), 1)])
     res = {"pairs": 0, "max": 0.0, "p95": 0.0, "n_over": 0, "worst": []}
     if pr is None:
@@ -531,7 +540,7 @@ def twin_dz(members, R, frame_ll=None):
         for k in ks:
             by.setdefault(int(pr["a"][k]), []).append(k)
         length = max(float(pr["piece"][v].sum()) for v in by.values())
-        if length < BESIDE_MIN_M:
+        if length < beside_min(lengths[int(pr["a"][ks[0]])], lengths[int(pr["b"][ks[0]])]):
             continue
         inr = [k for k in ks if float(pr["p"][k][0] * pr["p"][k][0] + pr["p"][k][1] * pr["p"][k][1]) <= R * R]
         if not inr:
@@ -579,10 +588,12 @@ def _crossings(a, b):
 def skew_errors(ends, members, crossed, R, frame_ll=None):
     """At each free member end (ends [(member index, 0 | 1 (start | end), end line unit direction (2,))]) with a
     crossed line (crossed [(xy (k, 2), tag, fid)]: not the member's own) crossing its member within SKEW_REACH_M of it: the angle between the
-    drawn end line and the crossed line there (0 = the end parallel to the crossed road, as built over a skew
+    drawn end line and the crossed line there (a deck turning more than SKEW_BEND_DEG between them left out, counted
+    as curved; 0 = the end parallel to the crossed road, as built over a skew
     crossing), and the crossing angle (90 = square)."""
     ll = frame_ll or (lambda p: [round(float(p[0]), 1), round(float(p[1]), 1)])
     items = []
+    curved = 0
     for mi, at, end_dir in ends:
         m = members[mi]
         xy = np.asarray(m["xy"], np.float64)[:, :2]
@@ -609,6 +620,11 @@ def skew_errors(ends, members, crossed, R, frame_ll=None):
         if best is None:
             continue
         reach, pt, cdir, mdir, tag = best
+        t = xy[-1] - xy[-2] if at == 1 else xy[1] - xy[0]
+        t = t / max(float(_dnp().hypot(t[0], t[1])), 1e-12)
+        if float(angle_deg(t, mdir)[0]) > SKEW_BEND_DEG:
+            curved += 1         # (the deck turns between the crossing and its end: not that crossing's end)
+            continue
         err = float(angle_deg(np.asarray(end_dir, np.float64), cdir)[0])
         cross = float(angle_deg(mdir, cdir)[0])
         items.append([round(err, 2), round(cross, 2)] + ll(p) + [m["key"][:10], str(tag)[:16], round(reach, 1)])
@@ -616,7 +632,7 @@ def skew_errors(ends, members, crossed, R, frame_ll=None):
     errs = np.array([r[0] for r in items])
     return {"ends": len(items), "max": round(float(errs.max()), 2) if len(errs) else 0.0,
             "mean": round(float(errs.mean()), 2) if len(errs) else 0.0,
-            "n_over": int((errs > SKEW_OVER).sum()), "worst": items[:12]}
+            "n_over": int((errs > SKEW_OVER).sum()), "curved": curved, "worst": items[:12]}
 
 
 def predict_groups(members, outlines=(), R=None, frame_ll=None):
@@ -624,7 +640,7 @@ def predict_groups(members, outlines=(), R=None, frame_ll=None):
     order, footprints quantised to 1 mm. members [{"key", "fid", "cls", "xy" (k, 2), "z" (k,), "half", "walk"}];
     outlines: OSM man_made=bridge outline rings (k, 2) (BESIDE_OUTLINE's evidence). Edges (per unordered pair the first
     of EDGE_ORDER that holds): JOIN, END_ON, OVERLAP_ALONG, OVERLAP_CROSS, BESIDE, BESIDE_OUTLINE, each within its
-    height limit; walkways never join roads (rail and tunnels are not bridge parts). Pairs that pass a geometry test
+    height limit (BESIDE's length: beside_min, the design's 20 m or 80 % of a shorter deck; its gap from -TWIN_TOUCH_M); walkways never join roads (rail and tunnels are not bridge parts). Pairs that pass a geometry test
     but not its height limit are counted per edge kind (an overpass is OVERLAP_CROSS over its limit)."""
     dnp = _dnp()
     ll = frame_ll or (lambda p: [round(float(p[0]), 1), round(float(p[1]), 1)])
@@ -694,6 +710,7 @@ def predict_groups(members, outlines=(), R=None, frame_ll=None):
         if len(outlines):
             from polygon import Path
             paths = [Path(np.asarray(o, np.float64)[:, :2]) for o in outlines if len(o) >= 3]
+        lengths = [float(arc(m["xy"])[-1]) for m in members]
         acc = {}
         for k in range(len(pr["a"])):
             a, b = int(pr["a"][k]), int(pr["b"][k])
@@ -714,27 +731,28 @@ def predict_groups(members, outlines=(), R=None, frame_ll=None):
                     put(a, b, "OVERLAP_CROSS", dz[good].min())
                 else:
                     rejected["OVERLAP_CROSS"] += 1
-            par = ks[(pr["gap"][ks] >= 0.0) & (ang[ks] <= BESIDE_DEG)]
+            need = beside_min(lengths[a], lengths[b])
+            par = ks[(pr["gap"][ks] >= -TWIN_TOUCH_M) & (ang[ks] <= BESIDE_DEG)]
             near = par[pr["gap"][par] <= BESIDE_GAP_M]
-            if float(pr["piece"][near].sum()) >= BESIDE_MIN_M:
+            if float(pr["piece"][near].sum()) >= need:
                 good = near[dz[near] <= BESIDE_DZ]
-                if float(pr["piece"][good].sum()) >= BESIDE_MIN_M:
+                if float(pr["piece"][good].sum()) >= need:
                     put(a, b, "BESIDE", dz[good].max())
                 else:
                     rejected["BESIDE"] += 1
             wide = par[(pr["gap"][par] > BESIDE_GAP_M) & (pr["gap"][par] <= OUTLINE_GAP_M)]
-            if paths and float(pr["piece"][wide].sum()) >= BESIDE_MIN_M:
+            if paths and float(pr["piece"][wide].sum()) >= need:
                 good = wide[dz[wide] <= BESIDE_DZ]
                 pa = pr["p"][good]
                 held = False
                 for path in paths:
                     ins = path.contains_points(pa)
-                    if float(pr["piece"][good][ins].sum()) >= BESIDE_MIN_M:
+                    if float(pr["piece"][good][ins].sum()) >= need:
                         held = True
                         break
                 if held:
                     put(a, b, "BESIDE_OUTLINE", dz[good].max())
-                elif float(pr["piece"][good].sum()) < BESIDE_MIN_M:
+                elif float(pr["piece"][good].sum()) < need:
                     rejected["BESIDE_OUTLINE"] += 1
     # union-find in sorted-key order (the smaller key the root)
     parent = list(range(n))
