@@ -5157,7 +5157,7 @@ class _Planner:
                 # a road with none has no cover under it)
                 near = roadsmod.arches_near(low_arches, np.asarray(p.xy, np.float64), float(p.half) + 1.0)
                 if near:
-                    lo = _cover_under(p, lambda x, y: roadsmod.arch_raise_over(near, x, y, np.full(len(x), -np.inf)))
+                    lo = _cover_under(p, lambda x, y, z: roadsmod.arch_cover_over(near, x, y, z))
                     short = np.asarray(p.z, np.float64) < lo - roadlaws.MIN_MOVE_M
                     if not np.isfinite(lo).any():
                         lo = None
@@ -7817,11 +7817,11 @@ ARCH_COVER_STEP_M = 0.5     # m between the points along and across a road where
 
 
 def _cover_under(p, cover):
-    """(n,) the height each point of plan p must keep for the ground under its core to stay at cover(x, y) ((k,) heights,
-    -inf: none) or over it: the highest cover under the core (half p.half either side of its line, read every
-    ARCH_COVER_STEP_M along and across it) between the point's neighbours, the ground between two points being their
-    line. At its points alone, the edge of a tube's footprint between two of them, or under the edge of the road where
-    it crosses at an angle, stayed under the cover (_over_arches). Pure."""
+    """(n,) the height each point of plan p must keep for the ground under its core to stay at cover(x, y, z) ((k,)
+    heights, -inf: none; z the road's height there) or over it: the highest cover under the core (half p.half either
+    side of its line, read every ARCH_COVER_STEP_M along and across it) between the point's neighbours, the ground
+    between two points being their line. At its points alone, the edge of a tube's footprint between two of them, or
+    under the edge of the road where it crosses at an angle, stayed under the cover (_over_arches). Pure."""
     xy = np.asarray(p.xy, np.float64)[:, :2]
     n = len(xy)
     s = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(xy, axis=0).T))]
@@ -7834,10 +7834,11 @@ def _cover_under(p, cover):
     nrm = np.c_[-d[:, 1] / ln, d[:, 0] / ln]
     half = float(p.half)
     k = max(1, int(np.ceil(half / ARCH_COVER_STEP_M)))
+    zr = np.interp(fine, s, np.asarray(p.z, np.float64))        # (the road's height at each: cover reads it against the floor)
     cv = np.full(len(fine), -np.inf)
     for off in np.linspace(-half, half, 2 * k + 1):
         q = at + off * nrm
-        cv = np.maximum(cv, np.asarray(cover(q[:, 0], q[:, 1]), np.float64))
+        cv = np.maximum(cv, np.asarray(cover(q[:, 0], q[:, 1], zr), np.float64))
     # (each point's neighbours' span is a run of the ascending `fine`: its ends by search, the maxima of the runs in one
     # pass, not a mask over all of fine for every point: 4 CPU-s of a replay of 27 junctions)
     i = np.arange(n)
@@ -7984,6 +7985,7 @@ def _tunnel_z_hook(frame, lines, fids):
 
 if SHAPES_ON:
     roadsmod.TUNNEL_Z_HOOK = _tunnel_z_hook
+roadsmod.ROAD_CORE_HOOK = lambda spec: plan_halves(spec)[1]
 
 
 def cells_of_points(lat, lon):

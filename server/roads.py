@@ -35,6 +35,7 @@ import numpy as np
 import dmath
 import dnp
 
+import gradelaw
 import junctions
 import mapcells
 import mapgeom
@@ -5767,6 +5768,9 @@ BURY_CLASSES = {"motorway", "motorway_link", "trunk", "trunk_link", "primary", "
 ROAD_OVER_ON = os.environ.get("BNE_TUNNEL_ROAD_OVER", "on") != "off"  # cover_roads: only roads over the tunnel's level
 BORE_FIT = os.environ.get("BNE_TUNNEL_BORE_FIT", "on") != "off"   # a tube no taller than the room under a road over it
 BORE_FIT_M = 0.7        # m kept between a tube's vault and a road over it (arch_raise's soil + 0.1)
+BORE_DIP = os.environ.get("BNE_TUNNEL_BORE_DIP", "on") != "off"   # a tube goes down under the roads over it
+BORE_DIP_STEP_M = 2.0   # m: a road over a tube is read at this step along it
+BORE_DIP_ROUNDS = 3     # the floor's dips are found again (the sections they cover) at most this many times
 BORE_FIT_MAX_M = 250.0  # m: covered sections up to this long are fitted under the roads over them; in a longer one
                         # the piece under such a road is a section of its own (bore_pieces)
 TUNNEL_FULL_H = 6.8     # m: roadmesh.TUNNEL_H (a full tube's height: the shorter ones are kept in heights)
@@ -5814,6 +5818,75 @@ def portal_cover(kinds, cover, spec, s=None):
     fast.require(248, "tunnel_portal_cover")
     return np.asarray(fast._ef.tunnel_portal_cover(np.ascontiguousarray(kinds), cover, s, PORTAL_SHALLOW_COVER_M,
                                                    SECTION_MIN_M, PORTAL_RUN_ON), np.int64)
+
+
+def low_tube_h(spec):
+    """m: the lowest tube (floor to vault) of a tunnel road: a motorway's box clears a truck (MAJOR_LOW_H, its top in a
+    mound if need be), else TUNNEL_LOW_H. Pure."""
+    return MAJOR_LOW_H if spec is not None and spec.cls in CONCRETE_WALL_CLASSES else TUNNEL_LOW_H
+
+
+def _foot_arcs(line, s, P, chunk=256, with_index=False):
+    """(arc m along line (arcs s) of the point nearest each of P (k, 2), the distance to it); with_index: and
+    (its segment, how far along it, 0-1). Pure."""
+    line, P = np.asarray(line, np.float64), np.asarray(P, np.float64)
+    a, ab = line[:-1], line[1:] - line[:-1]
+    l2 = np.maximum((ab * ab).sum(1), 1e-12)
+    arc, off = np.empty(len(P)), np.empty(len(P))
+    seg, frac = np.empty(len(P), np.int64), np.empty(len(P))
+    for i0 in range(0, len(P), chunk):      # (in blocks: a long tunnel's (points, segments) would be large)
+        p = P[i0:i0 + chunk]
+        t = np.clip(((p[:, None, :] - a[None]) * ab[None]).sum(2) / l2[None], 0.0, 1.0)
+        v = a[None] + t[..., None] * ab[None] - p[:, None, :]
+        d = dnp.hypot(v[..., 0], v[..., 1])
+        j = np.argmin(d, axis=1)
+        r = np.arange(len(p))
+        arc[i0:i0 + chunk] = s[j] + t[r, j] * (s[j + 1] - s[j])
+        off[i0:i0 + chunk] = d[r, j]
+        seg[i0:i0 + chunk], frac[i0:i0 + chunk] = j, t[r, j]
+    return (arc, off, (seg, frac)) if with_index else (arc, off)
+
+
+def roads_over_tube(arc, zr, s, floor, cover, kinds):
+    """Mask of the road points (arcs arc, heights zr) that lie over a tube of the tunnel line (arcs s, floor, the ground
+    over it cover, sections kinds): over a covered sample and its floor, and where the ground over the floor or the
+    road over it is at least TUNNEL_LOW_H; less of both, the road is at the tunnel's level (its own road going on, a
+    road in the cutting: beside a tube, not over one, cover_roads' rule). The road itself counts: a service road on
+    an embankment the elevation model does not show, 3.8 m over a short tube's floor under 2 m of its ground. Pure."""
+    arc, zr = np.asarray(arc, np.float64), np.asarray(zr, np.float64)
+    if not len(arc):
+        return np.zeros(0, bool)
+    q = np.clip(np.rint(np.interp(arc, s, np.arange(len(s)))).astype(np.int64), 0, len(s) - 1)
+    over = zr - np.interp(arc, s, floor)
+    return np.isfinite(zr) & (np.asarray(kinds)[q] > 0) & (over > 0.0)         & ((np.asarray(cover)[q] >= TUNNEL_LOW_H) | (over >= TUNNEL_LOW_H))
+
+
+def bore_dips(arc, zr, s, floor, low_h, ends=None, grade=None):
+    """[(sample, z)] the floor is to go no higher than so that a tube of the lowest height low_h and BORE_FIT_M of arch
+    and soil fit under the road points (arcs arc, heights zr) over it: where less room than that is left, the sample
+    nearest the point, the road's height less BORE_FIT_M and low_h; the lowest of a sample's. Not the first and last
+    samples (the portals'). A tunnel under anything goes down (findground's third rule): the floor is the hull of the
+    raw ground, the line between the portals, which knows nothing of the roads over it, so the tube stood through
+    them (Porte Maillot's Peripherique tunnels, 4.5-5 m under the slip roads over them for a 5 m tube) or, when
+    arch_raise asked the road up over it, a deck above it forbade that (the arch cover 0.6 m over what the road's
+    height may be: an infeasible network).
+    ends, grade: the floor's heights at its two ends and the steepest grade the tunnel's road may hold (gradelaw: by
+    its class and speed, the law the shapes and the road laws read): no dip lies lower than that reaches from a portal. A road 5 m from a portal over a
+    tube asked it 6 m down there, a 160 % ramp inside the tunnel (Porte Maillot's 219 m Peripherique tube: its floor
+    kinked 1.7 m and its grade went from 0.18 to 1.6); the road over it is then the one that gives. Pure."""
+    arc, zr = np.asarray(arc, np.float64), np.asarray(zr, np.float64)
+    if not len(arc) or len(s) < 3:
+        return []
+    s = np.asarray(s, np.float64)
+    q = np.clip(np.rint(np.interp(arc, s, np.arange(len(s)))).astype(np.int64), 1, len(s) - 2)
+    need = zr - BORE_FIT_M - low_h
+    if ends is not None and grade is not None:
+        need = np.maximum(need, np.maximum(ends[0] - grade * s[q], ends[1] - grade * (s[-1] - s[q])))
+    best = {}
+    for i, z, f in zip(q, need, np.asarray(floor, np.float64)[q]):
+        if z < f - 1e-3:
+            best[int(i)] = min(best.get(int(i), np.inf), float(z))
+    return sorted(best.items())
 
 
 def bore_pieces(s, kinds, floor, crossings, min_m=SECTION_MIN_M):
@@ -7492,6 +7565,8 @@ OBS_END_MAX_M = float(os.environ.get("BNE_OBS_END_MAX", "inf"))  # m a measured 
 
 DECK_Z_HOOK = None      # grading sets it (BNE_INTERCHANGE + carriageways): hook(frame, lines) -> [z (k,) or None] per
                         # deck line, in the frame's up metres
+ROAD_CORE_HOOK = None   # grading sets it: hook(spec) -> half m of the road's graded core (grading.plan_halves): what the
+                        # ground under a road is graded over, and so what a tunnel's arch cover is read under (_over_arches)
 TUNNEL_Z_HOOK = None    # grading sets it (BNE_SHAPES): hook(frame, lines, fids) -> [z (k,) or None] per tunnel line: the
                         # road's height its interchange's shape solved (TunnelProfiles._shaped), in the frame's up metres
 
@@ -8618,6 +8693,7 @@ class TunnelProfiles(BridgeProfiles):
         self.caps = {}              # sub-part fid -> a low arch's stone top's depth at its start and end (None: the
                                     # full roadmesh.LOW_CAP_M), stopping short of a road over its mouth (_road_caps)
         self._hw = {}               # (fid, "g") -> half the carriageway of a ground road in `ground` (_load)
+        self._core = {}             # (fid, "g") -> half the road's graded core, the grading's Plan.half (ROAD_CORE_HOOK)
         self.mouths = {}            # sub-part fid -> (its start is a portal, its end is one): not where a low arch
                                     # meets a full tunnel inside the hill (no hole, no portal face there)
         self._tls = threading.local()   # a thread's solved sections, kept with its parts (_commit) or dropped
@@ -9040,6 +9116,7 @@ class TunnelProfiles(BridgeProfiles):
             g = np.asarray(gfn(xy), np.float64)
             g_raw = g
             underwater = k in underwater_floors
+            road_pts = (np.zeros(0), np.zeros(0))     # (the roads over the tube: arcs, heights)
             # (the graded ground only at the ends that are portals: a joint inside the hill takes the network's floor,
             # and asking for its ground planned the roads of its cell for nothing)
             at = [e for e in (0, 1) if underwater or not np.isfinite(pins.get(k, (np.nan, np.nan))[e])]
@@ -9091,16 +9168,36 @@ class TunnelProfiles(BridgeProfiles):
                 cover_ground = np.where(np.asarray(d) > .5, np.maximum(g, lz), g)
                 kinds = np.where(cover_ground - floor >= TUNNEL_COVER - .02, 2, 0)
             else:
+                road_pts = self._road_points(xy, s, ground, pool[k][0]) if BORE_FIT or BORE_DIP else road_pts
                 sides = tunnel_side_ground(xy, s, g_raw, pool[k][0], gfn, ground)
-                fl = {}
-                floor, kinds = tunnel_sections(s, g, cover_g=gc, sides=sides, flags=fl,
-                                               portals=(not pinned[0], not pinned[1]),
-                                               net_buried=self._part_id(k) in self.__dict__.get("_net_buried", ()))
-                if not fl.get("buried"):
-                    kinds = portal_cover(kinds, (g if gc is None else gc) - floor, pool[k][0], s)
-                kinds = self._cover_roads(xy, s, kinds, ground, (g if gc is None else gc) - floor)
+                low_h = low_tube_h(pool[k][0])
+                for rounds in range(BORE_DIP_ROUNDS + 1):
+                    fl = {}
+                    floor, kinds = tunnel_sections(s, g, cover_g=gc, sides=sides, flags=fl,
+                                                   portals=(not pinned[0], not pinned[1]),
+                                                   net_buried=self._part_id(k) in self.__dict__.get("_net_buried", ()))
+                    if not fl.get("buried"):
+                        kinds = portal_cover(kinds, (g if gc is None else gc) - floor, pool[k][0], s)
+                    kinds = self._cover_roads(xy, s, kinds, ground, (g if gc is None else gc) - floor)
+                    if not BORE_DIP or not len(road_pts[0]) or rounds == BORE_DIP_ROUNDS:
+                        break
+                    # (a tube that goes down under a road may cover more of the ground: its sections again)
+                    on = roads_over_tube(*road_pts, s, floor, (g if gc is None else gc) - floor, kinds)
+                    dips = bore_dips(road_pts[0][on], road_pts[1][on], s, floor, low_h, (g[0], g[-1]),
+                                     gradelaw.road_grade(pool[k][0].cls, pool[k][0].kmh))
+                    if not dips:
+                        break
+                    # (the floor the hull of the ground with the dips in it, the cover read on the ground as it was)
+                    if gc is None:
+                        gc = g.copy()
+                    g = g.copy()
+                    for q, z in dips:
+                        g[q] = min(g[q], z)
                 if BORE_FIT and s[-1] > BORE_FIT_MAX_M:     # (a shorter part's sections are fitted whole)
-                    kinds = bore_pieces(s, kinds, floor, self._bore_crossings(xy, s, ground))
+                    on = roads_over_tube(*road_pts, s, floor, (g if gc is None else gc) - floor, kinds)
+                    kinds = bore_pieces(s, kinds, floor, self._bore_crossings(xy, s, ground)
+                                        + [(a_, BORE_DIP_STEP_M + TUNNEL_ROAD_CLEAR_M, z_)
+                                           for a_, z_ in zip(road_pts[0][on], road_pts[1][on])])
             secs, i = [], 0
             while i < len(kinds):
                 j = i
@@ -9114,6 +9211,7 @@ class TunnelProfiles(BridgeProfiles):
                 floor = self._observed_floor(k, pool, xy, s, floor, secs,
                                              tuple(jdeg.get(e, 0) > 1 for e in jends.get(k, (None, None))))
             cover = (g if gc is None else gc) - floor
+            over = roads_over_tube(*road_pts, s, floor, cover, kinds)
             log.debug("tunnel %s: sections %s over %.0f m", k, secs, s[-1])
             subs = {}
             for n, (a, b, kd) in enumerate(secs):
@@ -9121,8 +9219,7 @@ class TunnelProfiles(BridgeProfiles):
                     subs[n] = (0, None, None, None, None)
                     continue
                 th = roadmesh.TUNNEL_H
-                low_h = MAJOR_LOW_H if pool[k][0] is not None and pool[k][0].cls in CONCRETE_WALL_CLASSES \
-                    else TUNNEL_LOW_H         # (a motorway's box clears a truck, its top in a mound if need be)
+                low_h = low_tube_h(pool[k][0])
                 if kd == 1:
                     c_ = cover[a:b + 1]
                     k0, k1 = int(len(c_) * 0.2), max(int(len(c_) * 0.8), int(len(c_) * 0.2) + 1)
@@ -9139,7 +9236,8 @@ class TunnelProfiles(BridgeProfiles):
                     # (the tube under a road or a railway crossing over it: no taller than the room under it allows; a
                     # section is one height, so only a short one: one road near the Gotthard tunnel's portal made all
                     # 17 km of it a low arch)
-                    fit = self._bore_fit(xy[a:b + 1], s[a:b + 1], floor[a:b + 1], ground)
+                    fit = self._bore_fit(xy[a:b + 1], s[a:b + 1], floor[a:b + 1], ground,
+                                         (road_pts[0][over], road_pts[1][over]))
                     if fit is not None and fit < th:
                         th = float(max(fit, low_h))
                 ups = []
@@ -9224,7 +9322,7 @@ class TunnelProfiles(BridgeProfiles):
         if str(key) in done:            # (the same half widths each time: once per cell)
             return
         import revisit
-        hw = {}
+        hw, core = {}, {}
         with revisit.scope() as read:   # (the read and its specs: a spec rule's lookup that fell back counts too)
             feats = self.cell_fn(key)
             if feats is not None and len(feats):
@@ -9232,7 +9330,10 @@ class TunnelProfiles(BridgeProfiles):
                 for i in range(len(feats)):
                     if rs[i] is not None:
                         hw[(str(feats.ids[i]), "g")] = rs[i].width / 2
+                        if ROAD_CORE_HOOK is not None:
+                            core[(str(feats.ids[i]), "g")] = float(ROAD_CORE_HOOK(rs[i]))
         self._hw.update(hw)             # (this solve uses them either way)
+        self._core.update(core)
         if read.complete:
             done.add(str(key))          # (only once made complete: a short one is made again by the next solve)
 
@@ -9250,6 +9351,41 @@ class TunnelProfiles(BridgeProfiles):
                     lines.append(ln)
                     halves.append(hw)
         return cover_roads(xy, s, kinds, lines, halves, cover)
+
+    def _road_points(self, xy, s, ground, spec):
+        """(arc m along tunnel line xy (arcs s), height) of the points, every BORE_DIP_STEP_M along the ground roads,
+        whose graded core (ROAD_CORE_HOOK: the carriageway and the flat ground beside it, what _over_arches reads the
+        cover under) lies within the tube's footprint (the tunnel's half width and its shoulder: not only where the two
+        lines cross, a slip road runs over the flank of a tube): the roads' height as graded. Porte Maillot's
+        slip roads over the Peripherique's tubes, 5 to 8 m off their lines along 70 m, no line of theirs crossing."""
+        import roadmesh
+        xy = np.asarray(xy, np.float64)[:, :2]
+        none = np.zeros(0), np.zeros(0)
+        if spec is None or len(xy) < 2 or not ground:
+            return none
+        half = float(spec.width) / 2 + roadmesh.TUNNEL_SHOULDER
+        lo, hi = xy.min(axis=0) - half - 20.0, xy.max(axis=0) + half + 20.0
+        pts, reach = [], []
+        for gk, lns in ground.items():
+            hw = self._core.get(gk, self._hw.get(gk))
+            if hw is None:
+                continue
+            for ln in lns:
+                ln = np.asarray(ln, np.float64).reshape(-1, 2)
+                if len(ln) < 2 or (ln.max(axis=0) < lo).any() or (ln.min(axis=0) > hi).any():
+                    continue
+                a = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(ln, axis=0).T))]
+                t = np.linspace(0.0, a[-1], max(2, int(math.ceil(a[-1] / BORE_DIP_STEP_M)) + 1))
+                pts.append(np.stack([np.interp(t, a, ln[:, 0]), np.interp(t, a, ln[:, 1])], axis=1))
+                reach.append(np.full(len(t), hw + half))
+        if not pts:
+            return none
+        P, reach = np.concatenate(pts), np.concatenate(reach)
+        arc, off = _foot_arcs(xy, s, P)
+        on = off <= reach
+        if not on.any():
+            return none
+        return arc[on], np.asarray(self._ground(P[on]), np.float64)
 
     def _bore_crossings(self, xy, s, ground):
         """[(arc m, reach m, height)] of the ground roads crossing over tunnel line xy (arc s) as bore_pieces takes
@@ -9284,7 +9420,7 @@ class TunnelProfiles(BridgeProfiles):
         zr = np.asarray(self._ground(np.asarray(pts, np.float64)), np.float64)
         return [(arc, reach, float(z)) for (arc, reach), z in zip(out, zr)]
 
-    def _bore_fit(self, xy, s, floor, ground):
+    def _bore_fit(self, xy, s, floor, ground, over=None):
         """m: the tallest tube (floor to vault) that stays BORE_FIT_M under every ground road and railway crossing over
         the section (xy, arc s, floor) as graded (TunnelProfiles' ground), or None: none crosses it. A 6.8 m tube under
         a road 4-5 m over the floor stood through that road's lanes (Paris's A6b at Porte d'Italie, GitHub #1172; I-395
@@ -9300,10 +9436,14 @@ class TunnelProfiles(BridgeProfiles):
                 if 0.5 < arc < s[-1] - 0.5:
                     pts.append(pt)
                     arcs.append(arc)
-        if not pts:
+        zr = np.asarray(self._ground(np.asarray(pts, np.float64)), np.float64) if pts else np.zeros(0)
+        arcs = np.asarray(arcs, np.float64)
+        if over is not None and len(over[0]):         # (the road points over the tube, not only where the lines cross)
+            ins = (over[0] > s[0]) & (over[0] < s[-1])
+            arcs, zr = np.r_[arcs, over[0][ins]], np.r_[zr, over[1][ins]]
+        if not len(arcs):
             return None
-        zr = np.asarray(self._ground(np.asarray(pts, np.float64)), np.float64)
-        room = zr - np.interp(np.asarray(arcs), s, floor) - BORE_FIT_M
+        room = zr - np.interp(arcs, s, floor) - BORE_FIT_M
         room = room[np.isfinite(room)]
         return float(room.min()) if len(room) else None
 
@@ -9836,6 +9976,33 @@ def arch_raise_over(arches, px, py, z):
                                      float(ARCH_SOIL_MIN), float(LOW_HOLE_M), m0, m1)
             z[k] = zk
     return z
+
+
+def arch_cover_over(arches, px, py, z):
+    """(k,) the height the ground over the low arches (arch_parts') is kept at at the points px, py (-inf: no arch's
+    cover) for a road at height z there: arch_raise_over's, but only over a tube. A road less than TUNNEL_LOW_H over
+    the tube's floor is at the tunnel's level (its own road going on, a road along it in the cutting: cover_roads'
+    rule), beside the tube, not over one, and no cover is asked of it: the road a road law lifts onto it would be
+    lifted out of its cutting by the tube's height (Porte Maillot's slip roads 0.3 m over the floor, 9 m off the
+    line of a 5 m tube, on the edge of its footprint, asked 5.9 m up onto the vault's cover, 6 m over the road a deck
+    held, bounds that cannot hold). Pure."""
+    px = np.ascontiguousarray(px, np.float64)
+    py = np.ascontiguousarray(py, np.float64)
+    z = np.broadcast_to(np.asarray(z, np.float64), px.shape)
+    out = np.full(px.shape, -np.inf)
+    for a in arches:
+        xy, zf = a[0], a[1]
+        c = arch_raise_over([a], px, py, np.full(px.shape, -np.inf))
+        k = np.flatnonzero(np.isfinite(c))
+        if not len(k):
+            continue
+        # (the floor under each point: at the nearest point of the tube's line)
+        _arc, _off, at = _foot_arcs(xy, np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(xy, axis=0).T))],
+                                    np.c_[px[k], py[k]], with_index=True)
+        f = zf[at[0]] + at[1] * (zf[at[0] + 1] - zf[at[0]])
+        over = z[k] - f >= TUNNEL_LOW_H
+        out[k[over]] = np.maximum(out[k[over]], c[k[over]])
+    return out
 
 
 def arch_raise(parts, heights, px, py, z, mouths=None):

@@ -665,3 +665,17 @@ def test_the_maps_levels_order_two_structures_of_one_kind_and_a_track_as_a_road(
     assert ix._over(mem("ground", 0, "primary"), mem("rail", 0)) is None, "(a level crossing)"
     assert ix._over(mem("deck", 1, "primary"), mem("deck", 1, "primary")) is None
     assert ix._over(mem("deck", -1, "primary"), mem("ground", 0, "primary")) == "i", "(a bridge is over the ground)"
+
+
+def test_a_deck_ending_at_a_tunnels_mouth_is_where_its_structure_leaves_the_ground():
+    # La Defense: a deck's start joined a road tunnel's end at its mouth, no road on the ground there: no end of the
+    # structure was found, so the deck's chain was its own and its natural line began at the mouth, the ground of the
+    # hill over the tube (a system of 67 pieces infeasible: 4.7 m of rise asked in 20 m of deck from the mouth)
+    m = [Member("tun", _line(0, -200, 0, 0, 41), "tunnel", "motorway", 90, -1, 12.0, None),
+         Member("br", _line(0, 0, 0, 120, 31), "deck", "motorway", 90, 1, 12.0, None),
+         Member("gr", _line(0, 120, 0, 400, 31), "ground", "motorway", 90, 0, 12.0, None),
+         Member("st", _line(-100, 60, 100, 60, 31), "ground", "residential", 30, 0, 5.0, None)]
+    net = ix.Net(m)
+    rel = {i: ix._relations(net, i) for i in range(len(m))}
+    links, leave = ix._Verdicts(net, rel, lambda i: i, None).links()
+    assert (1, 0) in leave and (1, 1) in leave

@@ -297,6 +297,43 @@ class JunctionTest(unittest.TestCase):
                                                                             # the passes left, not hidden here)
 
 
+    def test_an_end_past_a_roads_end_is_not_on_it(self):
+        # (14/8296/5635 near Porte Maillot: a service road ends 9.5 m past a primary's abutment end, at the node on the bridge that goes on from
+        # it, the two sharing that node; the T search's reach, the primary's half width + 3 m, was a disc round its end and
+        # landed the service road on the abutment's height, 0.6 m over its own, under the bridge it could only go down
+        # under: its network had no answer. The carriageway ends square: REACH_M past it)
+        x = np.arange(-100.0, 1.0, 4.0)
+        main = plan(np.c_[x, 0 * x], 100.6 + 0 * x, half=6.0, abut=(False, True))
+        t = np.arange(0.0, 41.0, 4.0)
+        side = plan(np.c_[9.5 + 0 * t, t], 100.0 + 0 * t)
+        info = {}
+        roadlaws.apply([main, side], [spec("primary"), spec("service")], diagnostics=info, meets=lambda i, j: True)
+        self.assertEqual(info["landed"], [])
+        self.assertAlmostEqual(float(side.z[0]), 100.0, delta=0.01)
+        # (the same end within REACH_M of the carriageway's end is a junction)
+        side = plan(np.c_[2.5 + 0 * t, t], 100.0 + 0 * t)
+        info = {}
+        roadlaws.apply([main, side], [spec("primary"), spec("service")], diagnostics=info, meets=lambda i, j: True)
+        self.assertIn((1, 0), info["landed"])
+
+
+class BoundsAtSamplesTest(unittest.TestCase):
+    def test_a_floor_at_a_point_beside_a_road_that_may_only_go_down_is_no_conflict(self):
+        # (14/8295/5634 and 14/8296/5633 near Porte Maillot: a shape's floor at a plan point 31.688 over the cap, the road's own height, at the sample beside it
+        # under a deck 31.683: the road rising between them, the bound moved to the sample as it was held no network)
+        x = np.arange(0.0, 60.1, 2.5)
+        z = 100.0 + 0.03 * x
+        p = plan(np.c_[x, 0 * x], z, half=3.0)
+        lo = np.full(len(x), -np.inf)
+        lo[4] = z[4] - 0.001
+        under = np.zeros(len(x), bool)
+        under[3] = True
+        info = {}
+        roadlaws.apply([p], [spec("residential")], under=lambda i: under,
+                       bounds=lambda i: (lo, np.full(len(x), np.inf)), diagnostics=info)
+        self.assertEqual(info["infeasible"], 0, info.get("failed"))
+
+
 class ThreeSampleCouplingTest(unittest.TestCase):
     def test_a_height_between_two_samples_of_another_chain(self):
         import carriageways
