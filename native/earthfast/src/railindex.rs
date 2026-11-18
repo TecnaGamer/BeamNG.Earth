@@ -16,13 +16,14 @@ use crate::levels::np_sum;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
-use numpy::{IntoPyArray, PyReadonlyArray1, PyReadonlyArray2};
+use numpy::{IntoPyArray, PyArray2, PyArrayMethods, PyReadonlyArray1, PyReadonlyArray2, PyUntypedArrayMethods};
 use pyo3::exceptions::{PyMemoryError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList, PySet, PyString, PyTuple};
 
 pub(crate) type P = [f64; 2];
 
+const GROUND: u8 = 0;
 const BRIDGE: u8 = 1;
 const TUNNEL: u8 = 2;
 const OTHER: u8 = 3;
@@ -33,8 +34,10 @@ const TRAM: i8 = 3;
 /// Points of a resampling past which numpy's arange would not allocate (MemoryError; a line of 2e9 m).
 const RESAMPLE_MAX: f64 = 1e9;
 
-/// A ring of 2 points or more of a feature: lon / lat and the same points in the frame (xy_in's).
+/// A ring of 2 points or more of a feature: its first coordinate's row in the layer, lon / lat and the same points in
+/// the frame (xy_in's).
 struct Ring {
+    start: usize,
     ll: Vec<P>,
     xy: Vec<P>,
 }
@@ -77,6 +80,27 @@ struct Cached {
 /// The pieces' memo entries kept per feature (the latest first).
 const CACHED_MAX: usize = 2;
 
+/// A feature's ground pieces with no level ranges: roads.ground_parts' rings (the objects, held: their ids the key)
+/// in the frame.
+struct GroundCached {
+    ids: Vec<usize>,
+    _keep: Vec<Py<PyAny>>,
+    pieces: Vec<Piece>,
+}
+
+/// A ground_parts ring as enu_xy reads it: a view of the layer's lonlat (its first row, its length) or other points.
+enum GRing {
+    View(usize, usize, Vec<P>),
+    Pts(Vec<P>),
+}
+
+/// The layer's lonlat buffer (enu_xy's view test): its address, strides (bytes) and shape.
+struct LonLat {
+    ptr: usize,
+    strides: [isize; 2],
+    rows: usize,
+}
+
 #[pyclass(module = "earthfast", frozen)]
 pub struct RailIndex {
     rows: Vec<Row>,
@@ -86,7 +110,9 @@ pub struct RailIndex {
     min_part: f64,
     min_part_m: f64,
     short_tunnel_m: f64,
+    lonlat: LonLat,
     cache: Mutex<Vec<Vec<Cached>>>,
+    ground: Mutex<Vec<Option<GroundCached>>>,
 }
 
 /// The code points of a str (a lone surrogate too: Python's order of str).
@@ -123,7 +149,7 @@ impl RailIndex {
                         origin, rot, step, min_part, min_part_m, short_tunnel_m))]
     #[allow(clippy::too_many_arguments)]
     fn new(rows: PyReadonlyArray1<'_, i64>, part_off: PyReadonlyArray1<'_, i64>, ring_off: PyReadonlyArray1<'_, i64>,
-           coord_off: PyReadonlyArray1<'_, i64>, lonlat: PyReadonlyArray2<'_, f64>, xy: PyReadonlyArray2<'_, f64>,
+           coord_off: PyReadonlyArray1<'_, i64>, lonlat: Bound<'_, PyArray2<f64>>, xy: PyReadonlyArray2<'_, f64>,
            boxes: PyReadonlyArray2<'_, f64>, cls: PyReadonlyArray1<'_, i64>, wear: PyReadonlyArray1<'_, i64>,
            len_m: PyReadonlyArray1<'_, f64>, fids: Vec<Bound<'_, PyString>>, heritage: Vec<bool>,
            gauge: PyReadonlyArray1<'_, f64>, origin: PyReadonlyArray1<'_, f64>, rot: PyReadonlyArray2<'_, f64>,
@@ -131,7 +157,11 @@ impl RailIndex {
         let rows = offsets(&rows, "row")?;
         let (po, ro, co) = (offsets(&part_off, "part_off")?, offsets(&ring_off, "ring_off")?,
                             offsets(&coord_off, "coord_off")?);
-        let (ll, xyv) = (points(&lonlat, "lonlat")?, points(&xy, "xy")?);
+        let lonlat_ro = lonlat.readonly();
+        let (ll, xyv) = (points(&lonlat_ro, "lonlat")?, points(&xy, "xy")?);
+        let st = lonlat.strides();
+        let lonlat = LonLat { ptr: lonlat.data() as usize, strides: [st[0], st.get(1).copied().unwrap_or(0)],
+                              rows: ll.len() };
         if xyv.len() != ll.len() {
             return Err(PyValueError::new_err("RailIndex: xy needs a point per lonlat point"));
         }
@@ -162,7 +192,7 @@ impl RailIndex {
                     }
                     let (a, b) = (co[g], co[g + 1]);
                     if b - a >= 2 {
-                        rings.push(Ring { ll: ll[a..b].to_vec(), xy: xyv[a..b].to_vec() });
+                        rings.push(Ring { start: a, ll: ll[a..b].to_vec(), xy: xyv[a..b].to_vec() });
                     }
                 }
             }
@@ -181,6 +211,7 @@ impl RailIndex {
             });
         }
         let cache = Mutex::new((0..n).map(|_| Vec::new()).collect());
+        let ground = Mutex::new((0..n).map(|_| None).collect());
         Ok(RailIndex {
             rows: out,
             origin: [o[0], o[1], o[2]],
@@ -190,7 +221,9 @@ impl RailIndex {
             min_part,
             min_part_m,
             short_tunnel_m,
+            lonlat,
             cache,
+            ground,
         })
     }
 
@@ -398,29 +431,90 @@ impl RailIndex {
                 0
             }
         };
-        let mut out = Vec::new();
-        for pc in slot[pos].pieces.iter_mut() {
-            if tram && pc.kind != BRIDGE {
-                continue;                   // (street track stays draped in rails.py)
+        within(&mut slot[pos].pieces, near, tram, self.step)
+    }
+
+    /// The parts of row k within near when it has no level ranges: roads.ground_parts' rings (_pieces' path for
+    /// them: that memo's rings, whatever ranges it was made with), kept while they are the same objects.
+    fn take_ground(&self, k: usize, rings: Vec<(Py<PyAny>, GRing)>, near: &[f64; 4], tram: bool)
+                   -> PyResult<Vec<(u8, Arc<Vec<P>>)>> {
+        let ids: Vec<usize> = rings.iter().map(|(o, _)| o.as_ptr() as usize).collect();
+        let mut cache = self.ground.lock().unwrap_or_else(|e| e.into_inner());
+        let slot = &mut cache[k];
+        if slot.as_ref().is_none_or(|g| g.ids != ids) {
+            let row = &self.rows[k];
+            let mut keep = Vec::with_capacity(rings.len());
+            let mut pieces = Vec::with_capacity(rings.len());
+            for (o, g) in rings {
+                let xy: Vec<P> = match g {
+                    GRing::View(start, n, pts) => match row.rings.iter().find(|r| r.start == start && r.xy.len() == n) {
+                        Some(r) => r.xy.clone(),
+                        None => self.enu(&pts),
+                    },
+                    GRing::Pts(pts) => self.enu(&pts),
+                };
+                pieces.push(Piece { kind: GROUND, bbox: bbox(&xy), xy, res: None });
+                keep.push(o);
             }
-            if !box_hit(&pc.bbox, near) || !clips(&pc.xy, near) {
-                continue;
-            }
-            if pc.res.is_none() {
-                pc.res = Some(resample(&pc.xy, self.step).map(Arc::new));
-            }
-            match pc.res.as_ref().expect("resampled") {
-                Ok(v) => {
-                    if v.len() >= 2 {
-                        out.push((pc.kind, v.clone()));
-                    }
-                }
-                Err(ResErr::Memory) => return Err(PyMemoryError::new_err("rail part resampling: too many points")),
-                Err(ResErr::Value(m)) => return Err(PyValueError::new_err(*m)),
+            *slot = Some(GroundCached { ids, _keep: keep, pieces });
+        }
+        within(&mut slot.as_mut().expect("ground pieces").pieces, near, tram, self.step)
+    }
+
+    /// The frame's (e, n) of lon / lat points (geodetic_to_enu at h 0).
+    fn enu(&self, p: &[P]) -> Vec<P> {
+        p.iter().map(|q| {
+            let (e, n, _u) = crate::g2e_one(q[1], q[0], 0.0, &self.origin, &self.rot);
+            [e, n]
+        }).collect()
+    }
+
+    /// A ground_parts ring as mapgeom.enu_xy takes it: a view of the layer's lonlat (the same dtype, strides and
+    /// columns, inside it) is sliced from xy_in, anything else converted.
+    fn ground_ring(&self, o: &Bound<'_, PyAny>) -> PyResult<GRing> {
+        let a = o.cast::<PyArray2<f64>>().map_err(|_| {
+            pyo3::exceptions::PyTypeError::new_err("rail_parts_select: a ground part is a float64 (k, 2) array")
+        })?;
+        let pts = points(&a.readonly(), "a ground part")?;
+        let st = a.strides();
+        let (ptr, l) = (a.data() as usize as isize, &self.lonlat);
+        if !pts.is_empty() && st.len() == 2 && st[0] == l.strides[0] && st[1] == l.strides[1] && a.shape()[1] == 2
+            && l.strides[0] > 0 {
+            let d = ptr - l.ptr as isize;
+            let (off, rem) = (d.div_euclid(l.strides[0]), d.rem_euclid(l.strides[0]));
+            if rem == 0 && off >= 0 && off as usize + pts.len() <= l.rows {
+                return Ok(GRing::View(off as usize, pts.len(), pts));
             }
         }
-        Ok(out)
+        Ok(GRing::Pts(pts))
     }
+}
+
+/// The pieces within near (box, clip test) resampled, in order (a tram's ground pieces left out: its street track
+/// stays draped in rails.py); a resampling's error raised.
+fn within(pieces: &mut [Piece], near: &[f64; 4], tram: bool, step: f64) -> PyResult<Vec<(u8, Arc<Vec<P>>)>> {
+    let mut out = Vec::new();
+    for pc in pieces.iter_mut() {
+        if tram && pc.kind != BRIDGE {
+            continue;
+        }
+        if !box_hit(&pc.bbox, near) || !clips(&pc.xy, near) {
+            continue;
+        }
+        if pc.res.is_none() {
+            pc.res = Some(resample(&pc.xy, step).map(Arc::new));
+        }
+        match pc.res.as_ref().expect("resampled") {
+            Ok(v) => {
+                if v.len() >= 2 {
+                    out.push((pc.kind, v.clone()));
+                }
+            }
+            Err(ResErr::Memory) => return Err(PyMemoryError::new_err("rail part resampling: too many points")),
+            Err(ResErr::Value(m)) => return Err(PyValueError::new_err(*m)),
+        }
+    }
+    Ok(out)
 }
 
 /// A level range list as railways._pieces_of reads it: (start, end, kind) triples, kind "bridge" / "tunnel" / other.
@@ -446,13 +540,14 @@ fn ranges_of(v: &Bound<'_, PyAny>) -> PyResult<Vec<(f64, f64, u8)>> {
 /// subtype column) within near (x0, y0, x1, y1): [(fid, class, kind, xy (k, 2))] sorted by (fid, kind, x0, y0). Each
 /// feature once, from the cell holding its longest copy (1 m longer than the first); its wear into wear_of (a heritage
 /// line's id into kept with lifecycle), its OSM gauge into gauges (when given); level_ranges(cells[c], i) asked for
-/// each feature taken, in the Python's order; trams' bridges only.
+/// each feature taken, in the Python's order, and ground_parts(cells[c], i) for one without any (railways._pieces);
+/// trams' bridges only.
 #[pyfunction]
-#[pyo3(signature = (indexes, cells, near, level_ranges, wear_of, kept, gauges, tunnels, lifecycle))]
+#[pyo3(signature = (indexes, cells, near, level_ranges, ground_parts, wear_of, kept, gauges, tunnels, lifecycle))]
 #[allow(clippy::too_many_arguments)]
 pub fn rail_parts_select<'py>(py: Python<'py>, indexes: Vec<Option<Bound<'py, RailIndex>>>,
                               cells: Vec<Bound<'py, PyAny>>, near: (f64, f64, f64, f64),
-                              level_ranges: Bound<'py, PyAny>, wear_of: Bound<'py, PyDict>, kept: Bound<'py, PySet>,
+                              level_ranges: Bound<'py, PyAny>, ground_parts: Bound<'py, PyAny>, wear_of: Bound<'py, PyDict>, kept: Bound<'py, PySet>,
                               gauges: Option<Bound<'py, PyDict>>, tunnels: bool, lifecycle: bool)
                               -> PyResult<Bound<'py, PyList>> {
     if cells.len() != indexes.len() {
@@ -493,12 +588,12 @@ pub fn rail_parts_select<'py>(py: Python<'py>, indexes: Vec<Option<Bound<'py, Ra
             taken.push((ci, k));
         }
     }
-    // (the wear, gauge and level ranges of each in turn, as the Python asked them; a failure stops there, after the
-    // parts of the ones before it: a resampling's error before it comes first)
-    let mut rngs = Vec::with_capacity(taken.len());
-    let mut failed = None;
+    // (each in turn as the Python went: its wear and gauge, its level ranges (ground_parts' rings without any), its
+    // pieces in the window; a failure stops there)
+    let mut got: Vec<(usize, usize, u8, Arc<Vec<P>>)> = Vec::new();
     for &(ci, k) in &taken {
-        let r = &ix[ci].expect("an index").rows[k];
+        let x = ix[ci].expect("an index");
+        let r = &x.rows[k];
         let fid = r.fid.bind(py);
         if r.wear != 0 {
             wear_of.set_item(fid, r.wear)?;
@@ -511,23 +606,21 @@ pub fn rail_parts_select<'py>(py: Python<'py>, indexes: Vec<Option<Bound<'py, Ra
                 g.set_item(fid, r.gauge)?;
             }
         }
-        match level_ranges.call1((&cells[ci], r.i)).and_then(|v| ranges_of(&v)) {
-            Ok(v) => rngs.push(v),
-            Err(e) => {
-                failed = Some(e);
-                break;
+        let rr = ranges_of(&level_ranges.call1((&cells[ci], r.i))?)?;
+        let parts = if rr.is_empty() {
+            let mut rings = Vec::new();
+            for o in ground_parts.call1((&cells[ci], r.i))?.try_iter()? {
+                let o = o?;
+                let g = x.ground_ring(&o)?;
+                rings.push((o.unbind(), g));
             }
-        }
-    }
-    let mut got: Vec<(usize, usize, u8, Arc<Vec<P>>)> = Vec::new();
-    for (&(ci, k), rr) in taken.iter().zip(rngs) {
-        let x = ix[ci].expect("an index");
-        for (kind, v) in x.take(k, rr, tunnels, &near, x.rows[k].cls == TRAM)? {
+            x.take_ground(k, rings, &near, r.cls == TRAM)?
+        } else {
+            x.take(k, rr, tunnels, &near, r.cls == TRAM)?
+        };
+        for (kind, v) in parts {
             got.push((ci, k, kind, v));
         }
-    }
-    if let Some(e) = failed {
-        return Err(e);
     }
     // (Python's sort of (fid, kind, x0, y0): stable; the first points are finite, every point of a resampled line is)
     let key = |g: &(usize, usize, u8, Arc<Vec<P>>)| -> (&[u32], &str, f64, f64) {

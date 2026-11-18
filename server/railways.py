@@ -322,11 +322,12 @@ def parts(frame, cells, box, reach=REACH_M, clip=False, worn=None, gauges=None, 
     # cut short in some cells, and its level ranges (fractions of its length) then land 100+ m off in the short one:
     # a rail bridge over a road at 60.7771,11.21896 laid on the ground across it, a 2.3 m hump, GitHub #1137. The
     # layers' rail features in their RailIndex, the window's selection, pieces, clip test, resampling and sort one call:
-    # earthfast.rail_parts_select; roads.level_ranges asked for each feature taken)
+    # earthfast.rail_parts_select; roads.level_ranges asked for each feature taken, roads.ground_parts for one without
+    # any, as _pieces)
     idx = [_rail_index(feats, frame) if feats is not None and len(feats) and "subtype" in feats.attrs else None
            for feats in cells]
-    out = fast._ef.rail_parts_select(idx, cells, tuple(float(v) for v in near), roads.level_ranges, wear_of, kept,
-                                     gauges, TUNNELS_ON, RAIL_LIFECYCLE)
+    out = fast._ef.rail_parts_select(idx, cells, tuple(float(v) for v in near), roads.level_ranges, roads.ground_parts,
+                                     wear_of, kept, gauges, TUNNELS_ON, RAIL_LIFECYCLE)
     if any(kind == "ground" and wear_of.get(fid) for fid, _c, kind, _xy in out):
         out = _cut_worn_at_motorways(out, wear_of, motorway_crossings(frame, cells, box, reach), kept, cut_ends)
     out = _drop_stubs(out)
@@ -358,7 +359,7 @@ def _rail_index(feats, frame):
     ids = feats.ids
     ix = fast._ef.RailIndex(
         rows.astype(np.int64), np.asarray(feats.part_off, np.int64), np.asarray(feats.ring_off, np.int64),
-        np.asarray(feats.coord_off, np.int64), np.asarray(feats.lonlat, np.float64).reshape(-1, 2),
+        np.asarray(feats.coord_off, np.int64), _lonlat(feats),
         np.asarray(xin, np.float64).reshape(-1, 2), np.asarray(feats.boxes(frame), np.float64).reshape(-1, 4)[rows],
         np.array([cls_of[i] for i in rl], np.int64), np.array([wear_at[i] for i in rl], np.int64),
         np.array([roads._feature_length_m(feats, i) for i in rl], np.float64), [str(ids[i]) for i in rl],
@@ -401,11 +402,19 @@ def road_underpasses(frame, cells, box, reach=REACH_M):
         lays.append(feats)
         specs.append(sp)
         idx.append(_underpass_index(feats, frame, sp))
-    out, ground = fast._ef.rail_underpass_select(idx, tuple(float(v) for v in near),
-                                                 lambda k, i: _underpass_entry(lays[k], frame, specs[k], i))
-    for k in ground:
-        roads.road_specs(lays[k])           # (asked as before where a road's map tunnel is missing from its ranges)
-    return out
+    # (a road's spec every call: its tunnel spec, or the layer's road_specs at the first road taken with a map tunnel
+    # missing from its ranges: specs made while a download failed are made again)
+    return fast._ef.rail_underpass_select(idx, specs, tuple(float(v) for v in near),
+                                          lambda k, i: _underpass_entry(lays[k], frame, specs[k], i),
+                                          lambda k: roads.road_specs(lays[k]), UNDERPASS_SIDE_M)
+
+
+def _lonlat(feats):
+    """feats.lonlat itself where it is (N, 2) float64 (RailIndex tells its ground_parts views by it), else a copy."""
+    ll = feats.lonlat
+    if isinstance(ll, np.ndarray) and ll.dtype == np.float64 and ll.ndim == 2 and ll.shape[1] == 2:
+        return ll
+    return np.asarray(ll, np.float64).reshape(-1, 2)
 
 
 def _underpass_index(feats, frame, specs):
@@ -429,11 +438,12 @@ def _underpass_index(feats, frame, specs):
 
 
 def _underpass_entry(feats, frame, specs, i):
-    """(missing, id, [(xy (k, 2) in frame, half width)]): road i's tunnel parts with the map's tunnels that gradesep
-    made ground (missing from its ranges: Nashville's Carney Street keeps that clearance evidence, also when another
-    tunnel on the feature remains; retained tunnels keep their cleared portal ends), for the UnderpassIndex."""
-    sp = specs[i]
-    rings = roads.tunnel_parts(feats, i) if sp is not None else []
+    """(spec, missing, id, tunnel parts, missing tunnels): road i's tunnel geometry in frame for the UnderpassIndex: its
+    tunnel parts when it has a tunnel spec (retained tunnels keep their cleared portal ends) and the map's tunnels that
+    gradesep made ground (missing from its ranges: Nashville's Carney Street keeps that clearance evidence, also when
+    another tunnel on the feature remains), each an (k, 2) array."""
+    spec = specs[i] is not None
+    rings = roads.tunnel_parts(feats, i) if spec else []
     tagged = ([(a, b, kind) for a, b, kind in roads.tag_level_ranges(feats, i) if kind == "tunnel"]
               if _tunnel_tagged(feats)[i] else [])
     missing = []
@@ -441,15 +451,11 @@ def _underpass_entry(feats, frame, specs, i):
         effective = [(a, b) for a, b, kind in roads.raw_level_ranges(feats, i) if kind == "tunnel"]
         missing = [(a, b, kind) for a, b, kind in tagged
                    if not any(c <= a + roads.MIN_PART and d >= b - roads.MIN_PART for c, d in effective)]
-    if missing:
-        sp = sp or roads.road_specs(feats)[i]
-        if sp is not None:
-            rings += roads._parts_by_level_new(feats, i, "tunnel", rngs=missing)
-    if sp is None:
-        return bool(missing), str(feats.ids[i]), []
-    half = sp.width / 2 + UNDERPASS_SIDE_M
-    return bool(missing), str(feats.ids[i]), [
-        (np.ascontiguousarray(np.column_stack(mapgeom.enu_xy(feats, frame, ring)), np.float64), half) for ring in rings]
+    gone = roads._parts_by_level_new(feats, i, "tunnel", rngs=missing) if missing else []
+
+    def enu(rs):
+        return [np.ascontiguousarray(np.column_stack(mapgeom.enu_xy(feats, frame, r)), np.float64) for r in rs]
+    return spec, bool(missing), str(feats.ids[i]), enu(rings), enu(gone)
 
 
 # Where the elevation is only the coarse global model (dem.coarse_at; the server sets COARSE_AT to its Dem's), a rail
