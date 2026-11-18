@@ -127,6 +127,7 @@ mod roadwear;
 mod roadtone;
 mod railbeds;
 mod raildrawn;
+mod railspans;
 mod railxing;
 mod roadnet;
 mod structures;
@@ -6693,6 +6694,11 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(raildrawn::rail_drawn_cols, m)?)?;
     // 486: the full port's railways.drawn / wear (raildrawn::rail_drawn_cols: a layer's drawn class and wear per
     // feature in one pass, the glue reading the columns). 484 and 485 are other branches'
-    m.add("VERSION", 486)?;
+    m.add_function(wrap_pyfunction!(railspans::rail_span_clip, m)?)?;
+    m.add_function(wrap_pyfunction!(railspans::rail_underpass_hits, m)?)?;
+    m.add_function(wrap_pyfunction!(railspans::rail_underpass_distance, m)?)?;
+    // 487: the full port's railways._span_underpasses / _clip / _underpass_masks / _underpass_distance (railspans: a
+    // node window's parts over the road tunnels and cut to the window in one call)
+    m.add("VERSION", 487)?;
     Ok(())
 }

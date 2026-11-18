@@ -86,14 +86,15 @@ class UnderpassMetadataTest(unittest.TestCase):
             self.assertTrue(any(p[2] == "bridge" for p in parts))
 
 
-class UnderpassMaskCostTest(unittest.TestCase):
-    """_underpass_masks measures only a part's points inside the tunnel's padded box (a central London cell's rail beds
-    measured every point of km-long lines against every tunnel in every node window: 41-45 CPU-s a cell, 2026-11-13),
-    with the masks the whole-line measure gave."""
+class UnderpassMaskTest(unittest.TestCase):
+    """_underpass_masks (earthfast.rail_underpass_hits: only a part's points inside the tunnel's padded box measured; a
+    central London cell's rail beds measured every point of km-long lines against every tunnel in every node window:
+    41-45 CPU-s a cell, 2026-11-13) masks no point the whole-line measure leaves out, and a crossing on one track does
+    not mask the double track beside it unless their runs join."""
 
     @staticmethod
     def whole(rails, line, half, margin):
-        """The masks' covered candidates as every point was measured (before), for the comparison."""
+        """The covered candidates as every point of every part measured gives them, for the comparison."""
         pad = half + margin
         direction = line[-1] - line[0]
         out = []
@@ -105,7 +106,7 @@ class UnderpassMaskCostTest(unittest.TestCase):
             out.append((d <= pad) & (cross > railways.UNDERPASS_MIN_SIN))
         return out
 
-    def test_only_box_points_measured_same_masks(self):
+    def test_masks_within_whole_measure(self):
         rng = np.random.default_rng(7)
         n = 4000                                    # (a 12 km line every STEP_M)
         s = np.arange(n) * railways.STEP_M
@@ -113,12 +114,6 @@ class UnderpassMaskCostTest(unittest.TestCase):
         rails = [("a", "rail", "ground", long_line),
                  ("b", "rail", "ground", long_line + [0.0, 4.5]),           # (its double track)
                  ("c", "rail", "ground", np.c_[np.full(300, 40.0), np.arange(300) * 3.0 - 450.0])]
-        seen = []
-        real = railways._underpass_distance
-
-        def counting(xy, line):
-            seen.append(len(xy))
-            return real(xy, line)
         hits = 0
         for _ in range(20):
             c = rails[int(rng.integers(3))][3][int(rng.integers(300))]
@@ -127,14 +122,54 @@ class UnderpassMaskCostTest(unittest.TestCase):
             line = np.array([c - 25.0 * d, c + 25.0 * d])
             half, margin = float(rng.uniform(3, 10)), float(rng.uniform(2, 12))
             want = self.whole(rails, line, half, margin)
-            seen.clear()
-            with mock.patch.object(railways, "_underpass_distance", counting):
-                got = railways._underpass_masks(rails, line, half, margin)
-            self.assertLess(max(seen, default=0), 200, "only the points near the tunnel measured")
+            got = railways._underpass_masks(rails, line, half, margin)
             for g, w in zip(got, want):
                 self.assertFalse((g & ~w).any(), "nothing the whole measure left out")
             hits += sum(bool(g.any()) for g in got)
         self.assertGreater(hits, 10, "tunnels across the tracks found")
+
+    def test_crossing_track_only(self):
+        """A tunnel under one track whose end stops short of the track beside it: only the crossed track's points."""
+        xs = np.arange(0.0, 200.0, railways.STEP_M)
+        rails = [("a", "rail", "ground", np.c_[xs, np.zeros(len(xs))]),
+                 ("b", "rail", "ground", np.c_[xs, np.full(len(xs), 4.5)])]
+        line = np.array([[100.0, -20.0], [100.0, 2.0]])
+        a, b = railways._underpass_masks(rails, line, 3.0, 2.0)
+        self.assertTrue(a.any())
+        self.assertFalse(b.any())
+        got = railways._underpass_hits(rails, [(line, 3.0)], 2.0)[0]
+        self.assertEqual(list(got), [0])
+        np.testing.assert_array_equal(got[0][0], np.flatnonzero(a))
+        _d, t = railways._underpass_distance(rails[0][3][a], line)
+        np.testing.assert_array_equal(got[0][1], t)
+        at = int(np.flatnonzero(rails[0][3][:, 0] == 100.0)[0])            # (on the line, 20 m along its 22)
+        self.assertAlmostEqual(float(got[0][1][list(got[0][0]).index(at)]), 20.0 / 22.0, places=12)
+        d, t = railways._underpass_distance(np.array([[100.0, 5.0], [103.0, -20.0]]), line)
+        np.testing.assert_allclose(d, [3.0, 3.0])
+        np.testing.assert_allclose(t, [1.0, 0.0])
+
+    def test_span_clip(self):
+        """The track over a tunnel made a bridge piece, the ground pieces cut to the window, a stub left out."""
+        xs = np.arange(0.0, 400.0, railways.STEP_M)
+        rails = [("a", "rail", "ground", np.c_[xs, np.zeros(len(xs))]),
+                 ("b", "rail", "bridge", np.c_[xs, np.full(len(xs), 50.0)])]
+        line = np.array([[100.0, -20.0], [100.0, 20.0]])
+        got = railways._span_clip(rails, [(line, 3.0)], (0.0, -10.0, 300.0, 60.0))
+        self.assertEqual([k for _f, _c, k, _xy in got], ["ground", "bridge", "ground", "bridge"])
+        g0, br, g1, deck = (p[3] for p in got)
+        self.assertEqual(g0[-1].tolist(), br[0].tolist())                   # (shared end points)
+        self.assertEqual(br[-1].tolist(), g1[0].tolist())
+        self.assertLess(br[0, 0], 100.0 - 3.0)
+        self.assertGreater(br[-1, 0], 100.0 + 3.0)
+        self.assertEqual(g1[-1, 0], 302.0)                                  # (one point past the window)
+        self.assertIs(deck, rails[1][3])                                    # (a deck stays whole)
+        self.assertIs(railways._span_clip(rails, []), rails)
+        gen = railways._span_clip(rails, (t for t in [(line, 3.0)]), (0.0, -10.0, 300.0, 60.0))
+        self.assertEqual([(k, p.tolist()) for _f, _c, k, p in gen], [(k, p.tolist()) for _f, _c, k, p in got])
+        whole = railways._span_clip(rails, [], (-1e9, -1e9, 1e9, 1e9))
+        self.assertTrue(all(a[3] is b[3] for a, b in zip(whole, rails)))
+        self.assertEqual(railways._span_clip([("s", "rail", "ground", np.array([[0.0, 0.0], [1e4, 0.0]]))], [],
+                                             (100.0, -1.0, 200.0, 1.0)), [])
 
 
 if __name__ == "__main__":
