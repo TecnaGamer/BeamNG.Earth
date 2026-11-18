@@ -12155,7 +12155,9 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
         specs = road_specs(feats, urban_fn, widths, left_hand)
         bspecs = bridge_specs(feats)
         for i in range(len(feats)):
-            if bspecs[i] is not None and str(feats.ids[i]) not in bseen:
+            # (a replaced road's deck too: its sections, "<id>~lanesN-M", carry the road's bridge tags and decks of
+            # their own, so the whole copy's deck would be a second one over them, PR #1451 triage)
+            if bspecs[i] is not None and str(feats.ids[i]) not in bseen and str(feats.ids[i]) not in replaced:
                 bseen[str(feats.ids[i])] = (feats, i, bspecs[i])
             if specs[i] is None or str(feats.ids[i]) in seen or str(feats.ids[i]) in replaced:
                 continue
