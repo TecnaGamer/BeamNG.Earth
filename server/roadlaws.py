@@ -321,6 +321,29 @@ def apply(plans, specs, held=None, under=None, skip=(), diagnostics=None, natura
     def end_arc(k, e):
         return arc_of(k, 0.0 if e == 0 else float(arcs[k][-1]))
 
+    def part_at(r, s, way):
+        """(plan, its own arc) of run r's point at its arc s: the part holding it, at a joint the one going on from it
+        way (+1 up the run's arcs, -1 down them); past the run's ends its end part's end."""
+        got = []
+        for k2, _rev in R[r]["parts"]:
+            _r, rev2, s0 = loc[k2]
+            if s0 - 1e-6 <= s <= s0 + float(arcs[k2][-1]) + 1e-6:
+                got.append(k2)
+        if not got:
+            got = [R[r]["parts"][0 if s < R[r]["sv"][0] else -1][0]]
+        k2 = got[-1] if way > 0 else got[0]
+        _r, rev2, s0 = loc[k2]
+        sp = float(np.clip(arcs[k2][-1] - (s - s0) if rev2 else s - s0, 0.0, arcs[k2][-1]))
+        return k2, sp
+
+    def z_on(k2, sp):
+        """Plan k2's own height at its arc sp, past its ends carried on along its end segment."""
+        ar, z = arcs[k2], zs[k2]
+        if len(ar) < 2 or 0.0 <= sp <= ar[-1]:
+            return float(np.interp(sp, ar, z))
+        q = 0 if sp < 0.0 else len(ar) - 2
+        return float(z[q] + (z[q + 1] - z[q]) * (sp - ar[q]) / max(float(ar[q + 1] - ar[q]), 1e-9))
+
     landed = []                     # (plan, the plan it lands on): its ground need not yield to that one's (grading)
 
     def land(k, e, main, onto):
@@ -329,50 +352,66 @@ def apply(plans, specs, held=None, under=None, skip=(), diagnostics=None, natura
         within LANDING_TOL x st. Main's height there as its plan ends up: its two samples round the point and its own
         detail between them (a plan keeps its change, not the resampled profile), not its nearest sample's (4 m apart, a
         16 % ramp's nearest sample stood 0.3 m over the node a side road landed at); a held main's own heights (it
-        keeps them whatever its samples solve to: a side road landed on its solve stood apart from it)."""
+        keeps them whatever its samples solve to: a side road landed on its solve stood apart from it), on the one part
+        of main the mouth is on (at a joint, the part the way out goes along) and that part's own grade: the passes may
+        leave two parts apart at their joint (each keeps its own heights), and the run's profile there is the first
+        part's point and the next part's beyond it, a step between two plans no plan has: the High Five's secondary
+        230c31f9, at the node where 8ff47da6 at the ground (176.6) goes on into fe6285a3 held on an abutment's fill
+        6.5 m up, was pinned to the fill's height at its mouth and to the ground's 4 m on (160 %, its law 10 %), and
+        its network was left as it was (Popoli's roundabout the same at 0.93 m)."""
         r, i = end_sample(k, e)
         ra, sa = main
-        a0, a1, f = between(ra, sa)
+        a0, a1, _f = between(ra, sa)
         if r == ra and i in (a0, a1):
             return
-        held = bool(R[ra]["held"][a0] and R[ra]["held"][a1] and not R[r]["held"][i])   # (both held: each its own)
+        md = run_dir(ra, a0)
+        c = float(dnp.dot(_dir_out(xys[k], e), md)) if md is not None else 0.0
+        k0, sp0 = part_at(ra, sa, 1 if c >= 0.0 else -1)        # (the part the way out goes along)
+        ar = arcs[k0]
+        q0 = int(np.clip(np.searchsorted(ar, sp0, "right") - 1, 0, len(ar) - 1))
+        q1 = int(np.clip(np.searchsorted(ar, sp0, "left"), 0, len(ar) - 1))
+        held = bool(hold[k0][q0] and hold[k0][q1] and not R[r]["held"][i])     # (both held: each its own)
 
         def pin(j, lo, hi):
             R[r]["lo"][j] = max(float(R[r]["lo"][j]), lo)
             R[r]["hi"][j] = min(float(R[r]["hi"][j]), hi)
 
-        def detail(b0, b1, g, s):
-            """m main's own plan stands over its samples' line at its arc s (0 off its ends)."""
-            x = R[ra]
-            if not x["S"][0] <= s <= x["S"][-1]:
-                return 0.0
-            return float(np.interp(s, x["S"], x["Z"])) - ((1.0 - g) * float(x["t"][b0]) + g * float(x["t"][b1]))
+        def couple(j, s, k2, band):
+            """Sample j at main's height at its arc s within band, as main's part k2 ends up there: its two samples
+            round s and k2's own detail between them (its own heights less its own at the samples, plus the solve)."""
+            b0, b1, g = between(ra, s)
+            v = 0.0
+            if R[ra]["S"][0] <= s <= R[ra]["S"][-1]:
+                _r, rev2, s0 = loc[k2]
+                sk = s0 + (arcs[k2][-1] - arcs[k2] if rev2 else arcs[k2])
+                o = np.argsort(sk)
+                ow = np.interp(R[ra]["sv"][[b0, b1]], sk[o], zs[k2][o])
+                sp = float(np.clip(arcs[k2][-1] - (s - s0) if rev2 else s - s0, 0.0, arcs[k2][-1]))
+                v = z_on(k2, sp) - ((1.0 - g) * float(ow[0]) + g * float(ow[1]))
+            if band == 0.0 and abs(v) < 1e-9:   # (an "eq" coupling's value is 0: a band of none for the rest)
+                cps.append((r, j, ra, b0, "eq", 0.0, ra, b1, g))
+            else:
+                cps.extend([(r, j, ra, b0, "ge", v - band, ra, b1, g), (r, j, ra, b0, "le", v + band, ra, b1, g)])
         if held:
-            zm = float(np.interp(sa, R[ra]["S"], R[ra]["Z"]))
+            zm = z_on(k0, sp0)
             pin(i, zm, zm)
         else:
-            v = detail(a0, a1, f, sa)          # (an "eq" coupling's value is 0: a band of none for the rest)
-            cps.extend([(r, i, ra, a0, "eq", 0.0, ra, a1, f)] if abs(v) < 1e-9 else
-                       [(r, i, ra, a0, "ge", v, ra, a1, f), (r, i, ra, a0, "le", v, ra, a1, f)])
+            couple(i, sa, k0, 0.0)
         m = len(R[r]["sv"])
         if i not in (0, m - 1) or m < 3 or r == ra:
             return
         R[r]["junction"][0 if i == 0 else 1] = True
         landed.append((idx[k], idx[onto], r))
-        md = run_dir(ra, a0)
         if md is None:
             return
         j = 1 if i == 0 else m - 2
         st = abs(float(R[r]["sv"][j] - R[r]["sv"][i]))
-        along = st * float(dnp.dot(_dir_out(xys[k], e), md))   # (m along main's samples the way out of it reaches)
+        along = st * c                  # (m along main's samples the way out of it reaches)
         if held:
-            zm = float(np.interp(sa + along, R[ra]["S"], R[ra]["Z"]))
+            zm = z_on(k0, sp0 - along if loc[k0][1] else sp0 + along)
             pin(j, zm - LANDING_TOL * st, zm + LANDING_TOL * st)
         else:
-            b0, b1, g = between(ra, sa + along)
-            v = detail(b0, b1, g, sa + along)
-            cps.append((r, j, ra, b0, "ge", v - LANDING_TOL * st, ra, b1, g))
-            cps.append((r, j, ra, b0, "le", v + LANDING_TOL * st, ra, b1, g))
+            couple(j, sa + along, part_at(ra, sa + along, -1 if c >= 0.0 else 1)[0], LANDING_TOL * st)
     paired = set()
     for run in rs:
         for (k, rev), (k2, rev2) in zip(run, run[1:]):
