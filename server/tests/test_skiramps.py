@@ -356,10 +356,9 @@ class GapLanding(unittest.TestCase):
         self.assertTrue(np.allclose(stale.z, plan("road#1").z))
         self.assertTrue(np.allclose(plan("other#0").z, ref.z), "(another feature: never)")
 
-    def test_stale_unsplit_piece_shares_the_start(self):
-        # (Codex review of round 5: the plan's one unsplit piece (from a short home copy without the bridge) starts where
-        # the clean split's near-bank piece does, which a piece's ordinal (both #0) could not tell apart: by its ends
-        # (_piece_id) it is not the landing's piece; its far-bank samples, lane-placed round in front of this bank's
+    def test_stale_unsplit_piece_takes_nothing(self):
+        # (Codex review of round 5: the plan's one unsplit piece (from a short home copy without the bridge) is not the
+        # clean landing's near-bank piece (PieceIds): its far-bank samples, lane-placed round in front of this bank's
         # deck end, go by where they lie (5.7 m off the approach) and take nothing)
         ap = self.approach(0.0)
 
@@ -367,17 +366,12 @@ class GapLanding(unittest.TestCase):
             e, n, _ = self.frame.geodetic_to_enu(la, lo, 0.0)
             x = np.asarray(e, np.float64)
             return np.where(x < 0.0, 53.0 - 0.037 * x, 50.0 + 0.037 * x)        # (this bank higher)
-        near = self.lonlat(np.array([[-200.0, 0.0], [0.0, 0.0]]))               # (the clean near-bank piece)
-        unsplit = self.lonlat(np.array([[-200.0, 0.0], [150.0, 0.0]]))          # (the stale one over both banks)
-        own = grading._piece_id("road", near)
-        self.assertNotEqual(grading._piece_id("road", unsplit), own)
-        self.assertEqual(grading._piece_id("road", near.copy()), own)
-        lands = [(ap, "motorway", [ap[[2, 1]], ap[[1, 0]]], [], frozenset({own}), OUT)]
+        lands = [(ap, "motorway", [ap[[2, 1]], ap[[1, 0]]], [], frozenset({"road#7/2"}), OUT)]
         s2 = np.sqrt(0.5)
         far_xy = self.dense(np.array([-0.66, 5.66]), np.array([-0.66 + 150.0 * s2, 5.66 + 150.0 * s2]))
         ref = grading.plan_roads(self.frame, [(self.lonlat(far_xy), self.spec)], raw, cuts=False)[0]
         got = grading.plan_roads(self.frame, [(self.lonlat(far_xy), self.spec)], raw, cuts=False, landings=lands,
-                                 part_ids=[grading._piece_id("road", unsplit)])[0]
+                                 part_ids=["road#7/1"])[0]
         self.assertTrue(np.allclose(got.z, ref.z))
 
     def test_own_piece_behind_the_deck_end(self):
@@ -699,6 +693,38 @@ class RawLinesShort(unittest.TestCase):
         finally:
             with roads._FACTS_LOCK:
                 roads._FACTS_MEM.pop(mk, None)
+
+
+class PieceIds(unittest.TestCase):
+    """Codex review of round 5: a ground piece's id is the same in every clean map cell's copy of its feature, however
+    far its deck reaches in each (roads' part keys), tells the two banks of a bridge apart, and never matches a piece
+    made from ranges without that bridge (one unsplit piece over both banks)."""
+
+    def test_ids(self):
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import interchanges
+        site = interchanges.load("a20_921", "interchange")
+        f = site.cells[sorted(site.cells)[0]]
+        with mock.patch.object(roads, "LIDAR_GAPS_ON", False):
+            found = 0
+            for i in range(len(f)):
+                rngs = roads.level_ranges(f, i)
+                br = [(a, b, k) for a, b, k in rngs if k == "bridge" and 0.05 < a and b < 0.95]
+                if not br:
+                    continue
+                ps = roads._parts_by_level_new(f, i, "ground", rngs=rngs)
+                clean = grading._piece_ids(f, i, len(ps), rngs)
+                if len(ps) < 2 or None in clean:
+                    continue
+                found += 1
+                self.assertEqual(len(set(clean)), len(clean), "the banks told apart")
+                a, b, k = br[0]                 # (another copy's deck reaching 2 % further each way)
+                longer = [(max(0.0, a - 0.02), min(1.0, b + 0.02), k) if (a, b, k) == br[0] else r for r in rngs]
+                self.assertEqual(grading._piece_ids(f, i, len(ps), longer), clean)
+                bare = [r for r in rngs if r[2] != "bridge"]
+                ps0 = roads._parts_by_level_new(f, i, "ground", rngs=bare)
+                self.assertFalse(set(grading._piece_ids(f, i, len(ps0), bare)) & set(clean), "the unsplit piece")
+            self.assertGreater(found, 0)
 
 
 class ExtensionOwner(unittest.TestCase):

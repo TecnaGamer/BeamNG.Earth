@@ -2747,8 +2747,9 @@ class _Planner:
                     continue
                 if specs[i] is None:
                     continue
-                for ring in roadsmod.ground_parts(feats, i):     # not bridges / tunnels
-                    pid = _piece_id(feats.ids[i], ring) if FAST_GAP else None     # (FAST_GAP: its mapped piece)
+                gps = roadsmod.ground_parts(feats, i)                         # not bridges / tunnels
+                gids = _piece_ids(feats, i, len(gps)) if FAST_GAP else [None] * len(gps)   # (FAST_GAP: its pieces)
+                for ring, pid in zip(gps, gids):
                     ring = placement.ring(self.frame, feats, i, ring, specs[i])
                     pieces = self._near_cell(np.asarray(ring, np.float64), box)
                     for r in pieces:
@@ -3008,9 +3009,10 @@ class _Planner:
             for i in range(len(feats)):
                 if specs[i] is None or specs[i].cls in UNGRADED:
                     continue
-                for ring in roadsmod.ground_parts(feats, i):
-                    rows.append((i, placement.ring(self.frame, feats, i, np.asarray(ring, np.float64), specs[i]),
-                                 _piece_id(feats.ids[i], ring) if FAST_GAP else None))
+                gps = roadsmod.ground_parts(feats, i)
+                gids = _piece_ids(feats, i, len(gps)) if FAST_GAP else [None] * len(gps)
+                for ring, pid in zip(gps, gids):
+                    rows.append((i, placement.ring(self.frame, feats, i, np.asarray(ring, np.float64), specs[i]), pid))
             if rows:            # (the frame's conversion once for all: it is per call)
                 allr = np.concatenate([r for _, r, _g in rows])
                 e, n, _ = self.frame.geodetic_to_enu(allr[:, 1], allr[:, 0], 0.0)
@@ -6134,10 +6136,11 @@ class _Planner:
                     if sp is None:
                         continue
                     ps = roadsmod._parts_by_level_new(f, i, want, rngs=list(rngs))
-                    for ring in ps:                         # (ground_parts' pieces: the same ranges)
+                    pids = _piece_ids(f, i, len(ps), list(rngs)) if want == "ground" else [None] * len(ps)
+                    for ring, pid in zip(ps, pids):         # (ground_parts' pieces: the same ranges)
                         ring = np.asarray(ring, np.float64)
                         if len(ring) >= 2:
-                            rows.append((kind, sp, ring, _piece_id(f.ids[i], ring)))
+                            rows.append((kind, sp, ring, pid))
             if rows:
                 allr = np.concatenate([r for _k, _s, r, _f in rows])
                 e, n, _ = self.frame.geodetic_to_enu(allr[:, 1], allr[:, 0], 0.0)
@@ -7961,19 +7964,23 @@ def gap_line(zb):
     return float(a), float(b), reach
 
 
-def _piece_id(fid, ring):
-    """FAST_GAP: the id of feature fid's ground piece ring (its mapped lon/lat polyline, as ground_parts gives it, before
-    any lane placement): the feature and the piece's two ends, so one feature's pieces on a bridge's two banks are told
-    apart, and pieces made from other ranges (a layer's kept ground_parts from a short home copy, one unsplit piece over
-    both banks) never match the landing's. Pure."""
-    r = np.asarray(ring, np.float64)
-    if not len(r):
-        return f"{fid}#"
-    return f"{fid}#{r[0, 0]:.7f},{r[0, 1]:.7f},{r[-1, 0]:.7f},{r[-1, 1]:.7f}"
+def _piece_ids(feats, i, n, rngs=None):
+    """FAST_GAP: the ids of feature i's n ground pieces (ground_parts' order; made from level ranges rngs when given, as
+    _parts_by_level_new(..., rngs=rngs)): the feature, the piece's key (roads' part key: the same in every map cell's
+    copy of the feature, however far its decks reach in each) and how many ground pieces the feature has, so one
+    feature's pieces on a bridge's two banks are told apart, and pieces made from other ranges (a layer's kept
+    ground_parts from a short home copy without a bridge: one unsplit piece over both banks) never match the landing's.
+    [None] * n (no known piece) when the keys do not line up with the pieces."""
+    keys = roadsmod._part_keys_new(feats, i, "ground", rngs) if rngs is not None else \
+        roadsmod.part_keys(feats, i, "ground")
+    if len(keys) != n:
+        return [None] * n
+    fid = str(feats.ids[i])
+    return [f"{fid}#{int(k)}/{n}" for k in keys]
 
 
 def _piece_feature(pid):
-    """The feature id of a _piece_id (a plain feature id as itself). Pure."""
+    """The feature id of a _piece_ids id (a plain feature id as itself). Pure."""
     q = str(pid)
     return q.rsplit("#", 1)[0] if "#" in q else q
 
@@ -8017,7 +8024,7 @@ def _nearest_off(pts, lines):
 def gap_apply(z, pts, approach, line, own=None, other=None, sid=None, own_ids=None, out_dir=None):
     """FAST_GAP: z (n,) at a fast road's samples pts (n, 2) raised to a landing's line (gap_line's (a, b, reach), its
     arc measured along its approach line (k, 2) from the deck's end), by FAST_GAP_MAX_M at most, never lowered, within
-    the reach: a sample of a known road piece (sid: per sample its ground piece's id, _piece_id, or None) takes it when
+    the reach: a sample of a known road piece (sid: per sample its ground piece's id, _piece_ids, or None) takes it when
     that piece is one of the approach's (own_ids: one feature's pieces on a bridge's two banks told apart), however its
     lanes are placed (FAST_GAP_ID_M off at most) and not behind the deck's end
     (FAST_GAP_BACK_M along out_dir, the deck's direction out into the road: the same feature's piece on the bridge's

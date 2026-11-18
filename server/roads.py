@@ -1621,7 +1621,7 @@ def _parts_by_level_new(feats, i, want, rngs=None):
     return out
 
 
-def _part_keys_new(feats, i, want):
+def _part_keys_new(feats, i, want, rngs=None):
     """A key per _parts_by_level_new(feats, i, want) piece, in its order, the same in every map cell's copy of the
     feature: its ring's number, the start of the range as the map has it (raw_level_ranges, its pieces of that kind)
     that it overlaps most, and its number among the pieces on that one. A long road's copies have different range
@@ -1629,8 +1629,9 @@ def _part_keys_new(feats, i, want):
     one copy's part 5 for another's (the A4's deck over a track at Glaireuse never built, one 4.4 km away twice,
     #1020); nor are its final ends (_skew_decks lengthens a deck over the roads each copy's cell has crossing under it:
     one A11 deck 15-44 m in eight copies, PR #1013), so a copy's longer deck and a shorter one share the key and the
-    stores keep one. A piece over no such range (the lidar's elevated stretch) keys by its own start."""
-    rngs = level_ranges(feats, i)
+    stores keep one. A piece over no such range (the lidar's elevated stretch) keys by its own start. rngs: the level
+    ranges to take (level_ranges' by default), as _parts_by_level_new's."""
+    rngs = level_ranges(feats, i) if rngs is None else rngs
     raw = raw_level_ranges(feats, i)
     if want == "ground":
         pieces, rawp = ground_ranges(rngs), ground_ranges(raw)
