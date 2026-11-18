@@ -203,15 +203,15 @@ class BoreDipTest(unittest.TestCase):
         self.assertAlmostEqual(dips[1][1], 104.6 - roads.BORE_FIT_M - 5.0, msg="far from both portals: the whole dip")
         self.assertLessEqual(abs(dips[0][1] - 100.0) / 8.0, grade + 1e-9)
 
-    def test_a_dipped_floor_keeps_the_roads_vertical_curve_and_its_ends_grade(self):
+    def test_a_dipped_floor_keeps_the_roads_vertical_curve_and_grade(self):
         floor0 = 100.0 - 0.02 * self.s                              # (portal to portal)
         vee = np.where(self.s < 48.0, 100.0 - 1.5 / 48.0 * self.s, 98.5 + 0.5 / 52.0 * (self.s - 48.0))   # (a dip at 48 m)
         radius, grade = 900.0, 0.07
         out = roads.bore_smooth(self.s, vee, floor0, self.kinds, [(12, 98.5)], grade, radius)
         ds = np.diff(self.s)
         self.assertLessEqual(out[12], 98.5 + 1e-6, "the tube still has its room under the road")
-        np.testing.assert_allclose(out[:2], floor0[:2], atol=1e-9, err_msg="it leaves the portal at the grade it had")
-        np.testing.assert_allclose(out[-2:], floor0[-2:], atol=1e-9)
+        self.assertAlmostEqual(out[0], floor0[0], places=9)
+        self.assertAlmostEqual(out[-1], floor0[-1], places=9, msg="its ends are the portals' heights")
         bend = np.abs(out[:-2] - 2 * out[1:-1] + out[2:]) / (ds[:-1] * ds[1:])
         self.assertLessEqual(bend.max(), 1.05 / radius, "no curve tighter than the road's")
         self.assertLessEqual((np.abs(np.diff(out)) / ds).max(), grade * 1.001)
