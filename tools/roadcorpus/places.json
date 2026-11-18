@@ -1,5 +1,5 @@
 {
-  "_doc": "The road revamp corpus (plan .claude/work/road-revamp-plan-2026-11-16.md section 5; complaints survey section 3). Frozen: add places, never move one (a moved place is a new id). rank: the complaint survey's top-20 item; cat: the plan's section 5.1 category; star: reported on 1.10.x and still broken then; sets: top10 (one place per top-10 complaint), top20, claimed (claimed fixed but still reported), bisect (1.10 regressions), standard (section 5.2 cases), pr (cases from the open road PRs, 2026-11-16 triage; not in the R0 baseline yet). r: probe radius in m. focus: the summary keys that matter most there.",
+  "_doc": "The road revamp corpus (plan .claude/work/road-revamp-plan-2026-11-16.md section 5; complaints survey section 3). Frozen: add places, never move one (a moved place is a new id). rank: the complaint survey's top-20 item; cat: the plan's section 5.1 category; star: reported on 1.10.x and still broken then; sets: top10 (one place per top-10 complaint), top20, claimed (claimed fixed but still reported), bisect (1.10 regressions), standard (section 5.2 cases), pr (cases from the open road PRs, 2026-11-16 triage; not in the R0 baseline yet), guard (cases an R1j fix must not undo: a9988122's junction raise, 2026-11-17). r: probe radius in m. focus: the summary keys that matter most there.",
   "places": [
     {"id": "dublin_m50", "name": "Dublin M50 overpass", "rank": 1, "cat": 1, "lat": 53.39707, "lon": -6.33128, "r": 400, "star": true, "sets": ["top10", "top20"], "focus": ["clearance", "deck_deck"]},
     {"id": "nordschleife_a", "name": "Nordschleife bridge ends A", "rank": 2, "cat": 2, "lat": 50.33774, "lon": 6.95127, "r": 300, "star": true, "sets": ["top10", "top20", "bisect"], "focus": ["end_step", "steep_deck"]},
@@ -20,7 +20,7 @@
     {"id": "grossglockner", "name": "Grossglockner hairpins", "rank": 17, "cat": 16, "lat": 47.15618, "lon": 12.81424, "r": 400, "star": true, "sets": ["top20"], "focus": ["spikes", "widths"]},
     {"id": "warsaw_kerbs", "name": "Warsaw kerbs on carriageway", "rank": 18, "cat": 17, "lat": 52.22799, "lon": 21.00159, "r": 300, "star": true, "sets": ["top20"], "focus": ["humps", "widths"]},
     {"id": "iceland_ai", "name": "Iceland AI (#1390)", "rank": 19, "cat": 18, "lat": 64.26572, "lon": -21.83369, "r": 300, "star": false, "issue": 1390, "sets": ["top20"], "focus": ["tunnels", "end_step"]},
-    {"id": "atlanta_track", "name": "Atlanta Motor Speedway", "rank": 20, "cat": 19, "lat": 33.38590, "lon": -84.31918, "r": 500, "star": true, "sets": ["top20"], "focus": ["end_step", "clearance"]},
+    {"id": "atlanta_track", "name": "Atlanta Motor Speedway", "rank": 20, "cat": 19, "lat": 33.38590, "lon": -84.31918, "r": 500, "star": true, "sets": ["top20", "racetracks"], "focus": ["end_step", "clearance"]},
 
     {"id": "sneppenbrua", "name": "Sneppenbrua E6, Steinkjer", "rank": 5, "cat": 5, "lat": 64.01613, "lon": 11.48967, "r": 400, "star": true, "issue": 803, "sets": ["claimed"], "focus": ["overlap", "deck_deck", "end_step"]},
     {"id": "porte_italie", "name": "Paris Porte d'Italie A6b", "rank": 6, "cat": 6, "lat": 48.81611, "lon": 2.36028, "r": 500, "star": true, "issue": 1172, "sets": ["claimed"], "focus": ["tunnels"]},
@@ -58,6 +58,20 @@
     {"id": "popoli_rail", "name": "Popoli SR17 under the railway (PR #1341)", "rank": 0, "cat": 3, "lat": 42.171, "lon": 13.8247, "r": 300, "star": false, "sets": ["pr"], "focus": ["rail_block"]},
     {"id": "popoli_a25", "name": "Popoli over the A25 tubes (PR #1341)", "rank": 0, "cat": 9, "lat": 42.1777, "lon": 13.8268, "r": 300, "star": false, "sets": ["pr"], "focus": ["tunnels"]},
     {"id": "assaku", "name": "Assaku, Tallinn opening under decks (PR #1375)", "rank": 0, "cat": 1, "lat": 59.3786, "lon": 24.8436, "r": 300, "star": false, "sets": ["pr"], "focus": ["clearance"]},
-    {"id": "i40_median", "name": "I-40 median barriers (PR #1407)", "rank": 0, "cat": 7, "lat": 36.02876, "lon": -87.17503, "r": 300, "star": false, "sets": ["pr"], "focus": ["spikes"]}
+    {"id": "i40_median", "name": "I-40 median barriers (PR #1407)", "rank": 0, "cat": 7, "lat": 36.02876, "lon": -87.17503, "r": 300, "star": false, "sets": ["pr"], "focus": ["spikes"]},
+    {"id": "wesley_chapel", "name": "Wesley Chapel Overpass Rd over I-75 (#1043, junction raise guard)", "rank": 0, "cat": 1, "lat": 28.273701, "lon": -82.326974, "r": 300, "star": false, "issue": 1043, "sets": ["guard"], "focus": ["clearance", "humps", "end_step"]},
+    {"id": "findlay_ddi", "name": "Findlay I-75 diverging diamond (#1045, junction raise guard)", "rank": 0, "cat": 1, "lat": 41.087606, "lon": -83.659754, "r": 300, "star": false, "issue": 1045, "sets": ["guard"], "focus": ["clearance", "humps", "end_step"]},
+
+    {"id": "daytona_trioval", "name": "Daytona tri-oval tunnel (#1352)", "rank": 20, "cat": 19, "lat": 29.190725, "lon": -81.068510, "r": 400, "star": true, "issue": 1352, "sets": ["racetracks"], "focus": ["track", "tunnels"]},
+    {"id": "daytona_turn1", "name": "Daytona turn 1 tunnel (#1220)", "rank": 20, "cat": 19, "lat": 29.181881, "lon": -81.074736, "r": 300, "star": true, "issue": 1220, "sets": ["racetracks"], "focus": ["track", "tunnels"]},
+    {"id": "talladega_trioval", "name": "Talladega tri-oval and turn 1 tunnels (#1350)", "rank": 20, "cat": 19, "lat": 33.564047, "lon": -86.059943, "r": 450, "star": true, "issue": 1350, "sets": ["racetracks"], "focus": ["track", "tunnels"]},
+    {"id": "talladega_back", "name": "Talladega backstretch tunnel", "rank": 20, "cat": 19, "lat": 33.574103, "lon": -86.069306, "r": 300, "star": false, "sets": ["racetracks"], "focus": ["track", "tunnels"]},
+    {"id": "atlanta_turn", "name": "Atlanta Motor Speedway turn tunnel", "rank": 20, "cat": 19, "lat": 33.380700, "lon": -84.315559, "r": 300, "star": false, "sets": ["racetracks"], "focus": ["track", "tunnels"]},
+    {"id": "iowa_speedway", "name": "Iowa Speedway infield tunnel (#1220)", "rank": 20, "cat": 19, "lat": 41.672800, "lon": -93.011200, "r": 300, "star": true, "issue": 1220, "sets": ["racetracks"], "focus": ["track", "tunnels"]},
+    {"id": "pocono_tunnel", "name": "Pocono infield tunnel (#1220)", "rank": 20, "cat": 19, "lat": 41.060581, "lon": -75.508795, "r": 300, "star": true, "issue": 1220, "sets": ["racetracks"], "focus": ["track", "tunnels"]},
+    {"id": "watkins_glen", "name": "Watkins Glen tunnels (#1220)", "rank": 20, "cat": 19, "lat": 42.337250, "lon": -76.927564, "r": 650, "star": true, "issue": 1220, "sets": ["racetracks"], "focus": ["track", "tunnels"]},
+    {"id": "reims_gueux", "name": "Reims-Gueux (guard: no tunnel)", "rank": 0, "cat": 19, "lat": 49.10725, "lon": 3.50679, "r": 400, "star": false, "sets": ["racetracks"], "focus": ["track"]},
+    {"id": "knockhill", "name": "Knockhill start line (#588)", "rank": 0, "cat": 19, "lat": 56.13099, "lon": -3.50621, "r": 400, "star": false, "issue": 588, "sets": ["racetracks"], "focus": ["track"]},
+    {"id": "tsukuba", "name": "Tsukuba hairpin tunnel, minor road guard (#1010)", "rank": 0, "cat": 19, "lat": 36.14994, "lon": 139.91883, "r": 350, "star": false, "issue": 1010, "sets": ["racetracks"], "focus": ["track", "widths"]}
   ]
 }

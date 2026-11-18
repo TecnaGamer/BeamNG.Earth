@@ -1643,7 +1643,7 @@ local function onMessage(msg)
   elseif t == 'route_result' then
     -- (legs and steps too: gps.lua reads them for the API's gpsRoute().legs / .steps; GitHub #1259)
     if msg.id then routeResults[msg.id] = { points = msg.points or {}, dist = msg.dist, dur = msg.dur, error = msg.error,
-      elev = msg.elev, legs = msg.legs, steps = msg.steps } end
+      elev = msg.elev, legs = msg.legs, steps = msg.steps, avoided = msg.avoided } end
   elseif t == 'route_download' then
     -- the planned route's corridor prefetch (server routeahead.py): total/done tile+cell count, shown on the map
     gps.onRouteDownload(msg)
@@ -2150,20 +2150,29 @@ end
 ------------------------------------------------------------------------------------------
 -- robustness: the edge guard and the connection banner (docs/ROADMAP.md "Robustness" 1, 2)
 
-local function terrainStuck()
+local function terrainStuck(allowPending)
   local tp = st.terrainPending
-  if tp and not tp.ready and tp.sentAt and st.clock - tp.sentAt > STUCK_S then return true end
+  if not allowPending and tp and not tp.ready and tp.sentAt and st.clock - tp.sentAt > STUCK_S then return true end
   return st.terrainErrorAt ~= nil and st.clock - st.terrainErrorAt < ERROR_HOLD_S
 end
 
 -- Can the server move the physics block? Connected, its hello arrived, an anchor block committed
 -- (terrain-follow never moves the level-start flat block), no resync pending (a server that came
 -- back: until it commits, nothing follows) and terrain requests answered.
-local function serverHealthy()
-  return net.isConnected() and st.sessionId ~= nil and st.block ~= nil and not st.resync and not terrainStuck()
+local function serverHealthy(allowPending)
+  return net.isConnected() and st.sessionId ~= nil and st.block ~= nil and not st.resync and not terrainStuck(allowPending)
 end
 
 M.serverHealthy = function() return serverHealthy() end
+-- A late prefetch does not remove the ground already loaded. Let the AI keep
+-- using it; the edge guard still uses normal health and protects its boundary.
+-- Connection loss, resync and actual terrain errors continue to hold Autodrive.
+M.autodriveReady = function()
+  local g = st.guard
+  -- An overdue prefetch may wait while usable ground remains. Brake before
+  -- its warning becomes a whole-game edge pause; a healthy moving block keeps following normally.
+  return serverHealthy(true) and not (g.pausedByUs or g.mode == 'hold' or (g.mode == 'warn' and not g.healthy))
+end
 M.mpStatus = function() return mpanchor.status() end -- console: beamngEarth_core.mpStatus()
 
 -- The collidable area of the block in use (the anchor's, else the level-start flat block), or nil.
@@ -3712,7 +3721,7 @@ end
 function M.requestRoute(id, lat0, lon0, lat1, lon1, bearing, via)
   if not net.isConnected() then return false end
   net.send({ type = 'route', id = id, lat0 = lat0, lon0 = lon0, lat1 = lat1, lon1 = lon1, bearing = bearing,
-    via = via, download = settings.get('routeDownload') })
+    via = via, download = settings.get('routeDownload'), avoid = settings.get('routeAvoidHighways') and true or nil })
   return true
 end
 function M.takeRoute(id)

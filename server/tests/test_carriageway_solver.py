@@ -8,9 +8,20 @@ from unittest import mock
 
 import numpy as np
 
-# run_tests runs modules in separate processes: exercise carriageways even when the product default is off.
+# run_tests runs modules in separate processes: exercise carriageways even when the product default is off. Put back
+# when the module is done (tearDownModule): in one process (unittest discover) the switches leaked into the later
+# modules' worker processes and test_drivability scored 18 sites with carriageways on.
+_ENV_BEFORE = {k: os.environ.get(k) for k in ("BNE_INTERCHANGE", "BNE_CARRIAGEWAYS")}
 os.environ["BNE_INTERCHANGE"] = "1"
 os.environ["BNE_CARRIAGEWAYS"] = "on"
+
+
+def tearDownModule():
+    for k, v in _ENV_BEFORE.items():
+        if v is None:
+            os.environ.pop(k, None)
+        else:
+            os.environ[k] = v
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 import carriageways as cw
 import fast

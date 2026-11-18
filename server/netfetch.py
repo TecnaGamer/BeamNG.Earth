@@ -400,6 +400,13 @@ def _regional_policies():
 
 
 POLICIES.update(_regional_policies())
+
+# (routing.py: "Avoid highways", #330; FOSSGIS's Valhalla, the user's OK 2026-11-17): the normal route waits for it, so
+# it is asked once, briefly (a slow or stalled service: the normal route after a few s; Codex review of PR #1263)
+POLICIES["valhalla1.openstreetmap.de"] = HostPolicy(rate=0.5, burst=1.0, max_conc=1, daily_budget=300, daily_hard=500,
+                                                    cache_ttl=DAY, miss_ttl=None, max_wait=2.0, timeout=6.0,
+                                                    connect_timeout=3.0, max_attempts=1, optional=True, gzip=True)
+
 # swisstopo's WMTS (SWISSIMAGE, the "swiss" photos): the FSDI's General Terms of Use (geo.admin.ch/en/general-terms-of-use-
 # fsdi, §2.3's table, read 2026-11-13) allow wmts.geo.admin.ch 1'200 requests / minute (20/s; 631 M a year in all;
 # doubled on 2025-01-01, geo.admin.ch/en/change-limits-fair-use) as fair use, and desktop applications are fair use. The
@@ -412,6 +419,7 @@ POLICIES["wmts.geo.admin.ch"] = replace(POLICIES["wmts.geo.admin.ch"], rate=15.0
 # can use web services"; the server's own caps: 4096 px images). One request at a time (~1.4 s each) kept a cold
 # Manhattan's photos fetching for 177 s: 3 at once at 2/s, still a few times under what one map viewer asks for.
 POLICIES["orthos.its.ny.gov"] = replace(POLICIES["orthos.its.ny.gov"], rate=2.0, burst=6.0, max_conc=3)
+
 # The project's own tile host (cdn.py, imagery "bngs2": Cloudflare R2 behind its CDN; tile packs, ~64 tiles a request)
 _CDN_HOST = os.environ.get("BNGE_CDN_BASE", "https://tiles.tgforever.net").split("://", 1)[-1].split("/", 1)[0]
 POLICIES[_CDN_HOST] = HostPolicy(rate=50.0, burst=200.0, max_conc=16, daily_budget=60000, allow_prefetch=True,
@@ -509,6 +517,7 @@ ROLES = {
     "overpass-api.de": "nearby category search on Enter",
     "query.wikidata.org": "notable category search on Enter",
     "routing.openstreetmap.de": "GPS routes",
+    "valhalla1.openstreetmap.de": "GPS routes without highways (the normal route meanwhile)",
     "earth.tgforever.net": "the BeamNG.Earth server list in BeamMP",
     "raw.githubusercontent.com": "the update check",
     "api.github.com": "one-click updates",

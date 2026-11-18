@@ -49,6 +49,10 @@ class LimitTest(unittest.TestCase):
         self.assertIsNone(budget.desktop_sizes(0))
         dem, md, shed, rot, road, far = budget.desktop_sizes(16384.0)
         self.assertEqual((dem, md, shed, rot), (512, 256, 3000, 4000))
+        # the map data cache goes on growing with the limit past 16 GB (a 48 GB PC's Auto, 24 GB: a dense city's road
+        # tiles decoded their cells' layers again and again in 256 MB)
+        self.assertEqual(budget.desktop_sizes(24576.0)[1], 384)
+        self.assertEqual(budget.desktop_sizes(20480.0)[1], 320)
         small = budget.desktop_sizes(budget.limit_mb(24.0))
         self.assertLess(small[0], 512)
         self.assertGreaterEqual(small[4], 3)

@@ -2126,7 +2126,7 @@ class Server:
         g = self.grader_for(anchor)
 
         def raw(la, lo):
-            return self.ground(anchor.frame, la, lo, self.dem.sample(la, lo, zoom))
+            return self.ground(anchor.frame, la, lo, self.dem.sample(la, lo, zoom), g)
 
         def elev(la, lo):
             z = raw(la, lo)
@@ -2170,7 +2170,7 @@ class Server:
         g = self.grader_for(anchor)
 
         def raw(la, lo):
-            return self.ground(None, la, lo, self.dem.sample(la, lo, zoom))
+            return self.ground(None, la, lo, self.dem.sample(la, lo, zoom), g)
 
         def elev(la, lo):
             z = raw(la, lo)
@@ -2359,7 +2359,7 @@ class Server:
         g = self.grader_for(anchor)
 
         def elev(la_, lo_):         # the physics ground, lifted under roads (as the road tiles')
-            z = self.ground(anchor.frame, la_, lo_, self.dem.sample(la_, lo_, zoom))
+            z = self.ground(anchor.frame, la_, lo_, self.dem.sample(la_, lo_, zoom), g)
             return g.apply(la_, lo_, z, gradingmod.ROAD_LIFT) if g is not None else z
         decks = {}
         try:            # the bridges' deck heights (the road tiles' BridgeProfiles, one per anchor)
@@ -2551,7 +2551,7 @@ class Server:
         zoom = anchor.zooms[0]
 
         def elev(la, lo):
-            z = self.ground(anchor.frame, la, lo, self.dem.sample(la, lo, zoom))
+            z = self.ground(anchor.frame, la, lo, self.dem.sample(la, lo, zoom), g)
             return g.apply(la, lo, z, gradingmod.ROAD_LIFT) if g is not None else z
         urban = self.surface.urban if self.surface is not None and hasattr(self.surface, "urban") else None
         towns = None
@@ -2604,7 +2604,7 @@ class Server:
             zoom, g = anchor.zooms[0], self.grader_for(anchor)
 
             def elev(la, lo):
-                z = self.ground(anchor.frame, la, lo, self.dem.sample(la, lo, zoom))
+                z = self.ground(anchor.frame, la, lo, self.dem.sample(la, lo, zoom), g)
                 return g.apply(la, lo, z, gradingmod.ROAD_LIFT) if g is not None else z
             parts, n = terrainpatchmod.build(anchor.frame, elev, box, path)
         return [(f"{self.vfs_dir}/{os.path.basename(p)}", c) for p, c in parts], n
@@ -3159,7 +3159,7 @@ class Server:
         g = self.grader_for(anchor)
 
         def elev(la, lo):           # the physics ground (lifted under roads: grading.ROAD_LIFT)
-            z = self.ground(anchor.frame, la, lo, self.dem.sample(la, lo, zoom))
+            z = self.ground(anchor.frame, la, lo, self.dem.sample(la, lo, zoom), g)
             return g.apply(la, lo, z, gradingmod.ROAD_LIFT) if g is not None else z
         walks = []
         with self.grader_lock:
@@ -3515,6 +3515,8 @@ class Server:
         radar_props, speed_traps = radars.tile_rows(anchor.frame, box, self.mapdata, elev, self.road_widths, urban)
         if radar_props:
             props = (props or []) + radar_props
+        import racedig              # (BNE_RACEWAY_DIG: no prop, pole or wire end on a racetrack's band)
+        racedig.tile_clear(anchor.frame, cells, props, wires, elev)
         return roadsmod.write_tile(self.out_dir, self.vfs_dir, aid, tx, ty, chunks, walks if self.sidewalks else None,
                                    mesh, dmesh, bld, props, wires, park, tunnel_mesh=tmesh, fuel=fuel,
                                    rail_mesh=rmesh, guardrail_rows=guardrail_rows, garage_sound=garage_sound,
@@ -3843,9 +3845,11 @@ class Server:
         z = self.dem.sample(la, lo, gradingmod.PROFILE_ZOOM)
         return self.lids.apply(la, lo, z) if getattr(self, "lids", None) is not None else z
 
-    def ground(self, frame, la, lo, z):
-        """blockworker.ground here: runways graded in, the sea floor carved, the land off the roads roughened."""
-        z = np.asarray(z, np.float64) + gradingmod.terrain_bumps(np.asarray(la, np.float64), np.asarray(lo, np.float64))
+    def ground(self, frame, la, lo, z, grader=None):
+        """blockworker.ground here: runways graded in, the sea floor carved, the land off the roads roughened (off the
+        built roads' sides with grader, the Grader that grades it after this)."""
+        z = np.asarray(z, np.float64) + gradingmod.terrain_bumps(np.asarray(la, np.float64), np.asarray(lo, np.float64),
+                                                                 grader)
         if self.airports is not None:
             z = self.airports.apply(la, lo, z)
         if getattr(self, "lids", None) is not None:
@@ -4510,7 +4514,7 @@ class Server:
             if provisional:             # the runways only (the sea floor waits on the water cells)
                 return self.airports.apply(la, lo, z) if self.airports is not None else z
             t1 = time.perf_counter()
-            z = self.ground(anchor.frame, la, lo, z)
+            z = self.ground(anchor.frame, la, lo, z, g)
             part_s["sea"] += time.perf_counter() - t1
             if g is None:
                 return z
@@ -4616,7 +4620,7 @@ class Server:
             g = self.grader_for(anchor)
 
             def elev(la, lo):
-                z = self.ground(anchor.frame, la, lo, self.dem.sample(la, lo, gradingmod.PROFILE_ZOOM))
+                z = self.ground(anchor.frame, la, lo, self.dem.sample(la, lo, gradingmod.PROFILE_ZOOM), g)
                 return g.apply(la, lo, z, gradingmod.ROAD_LIFT) if g is not None else z
             self.tunnels_of(anchor, elev, g)
             box = (e - r, n - r, e + r, n + r)
@@ -7807,7 +7811,7 @@ class Connection:
             try:
                 r = await asyncio.get_running_loop().run_in_executor(
                     self.s.ui_pool, routingmod.plan, float(msg["lat0"]), float(msg["lon0"]), float(msg["lat1"]),
-                    float(msg["lon1"]), self.s.net, msg.get("bearing"), routingmod.via_points(msg.get("via")))
+                    float(msg["lon1"]), self.s.net, msg.get("bearing"), routingmod.via_points(msg.get("via")), msg.get("avoid") is True)
                 out.update(r)
                 out.pop("error", None)
                 break
@@ -7829,8 +7833,9 @@ class Connection:
                     self.s.ui_pool, self._route_elevation, out["points"])
             except Exception as e:
                 log.debug("route elevation: %s: %s", type(e).__name__, e)
-        log.info("route %d (%s, %s -> %s, %s): %d points, %.1f km%s", int(msg.get("id") or 0), msg.get("lat0"),
+        log.info("route %d (%s, %s -> %s, %s): %d points, %.1f km%s%s", int(msg.get("id") or 0), msg.get("lat0"),
                  msg.get("lon0"), msg.get("lat1"), msg.get("lon1"), len(out["points"]), out["dist"] / 1000,
+                 {True: ", highways avoided", False: ", highways not avoided"}.get(out.get("avoided"), ""),
                  (" (" + out["error"] + ")") if "error" in out else "")
         self.send(out)
         if "error" not in out:
