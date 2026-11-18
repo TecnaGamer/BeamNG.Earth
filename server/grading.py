@@ -1309,6 +1309,16 @@ def dirt_taper(s_, length):
     return tap * tap * (3.0 - 2.0 * tap)
 
 
+def _dirt_noise(seed):
+    """The dirt profile's random numbers (earthfast.DirtNoise, dirtnoise.rs): integer splitmix64, Irwin-Hall normals and
+    multiplication-method Poisson counts, the same bits on every platform. numpy's Generator drew them before, and its
+    normal and poisson call the platform's C maths library (glibc, the UCRT and Apple's differ in last bits: one flipped
+    accept / reject shifted the whole road's stream, GitHub #1169)."""
+    import fast
+    fast.require(470, "the dirt profile's noise (DirtNoise)")
+    return fast._ef.DirtNoise(int(seed))
+
+
 def dirt_bumps(xy, spec, n, ext=(0, 0), step=PROFILE_STEP):
     """What a minor dirt road is really like, one value per profile sample (n samples, ext: how many lie past the
     part's ends): a soft undulation plus discrete damage -- potholes, broken patches (a step with soft edges) and the
@@ -1332,13 +1342,13 @@ def dirt_bumps(xy, spec, n, ext=(0, 0), step=PROFILE_STEP):
     n = n_core
     s_ = np.arange(n, dtype=np.float64) * float(step)
     seed = (int(round(float(xy[0, 0]) * 7.0)) * 7919 + int(round(float(xy[0, 1]) * 7.0)) * 104729) & 0x7FFFFFFF
-    rng = np.random.default_rng(seed)
+    rng = _dirt_noise(seed)
     out = np.zeros(n)
     share2 = 0.0
     for knot_m, wshare in DIRT_UNDULATION_WAVES:           # the road's own soft rise and fall
         if s_[-1] < knot_m:
             continue
-        knots = rng.normal(0.0, 1.0, int(s_[-1] / knot_m) + 3)
+        knots = rng.normals(int(s_[-1] / knot_m) + 3)
         t = s_ / knot_m
         i0 = np.clip(np.floor(t).astype(int), 0, len(knots) - 2)
         f = t - i0
@@ -1361,19 +1371,19 @@ def dirt_bumps(xy, spec, n, ext=(0, 0), step=PROFILE_STEP):
 
     length = float(s_[-1]) if len(s_) else 0.0
     if length > 10.0:
-        for _ in range(int(rng.poisson(max(1.0, length / DIRT_POTHOLE_EVERY_M)))):
-            bowl(float(rng.uniform(0.0, length)), float(rng.uniform(*DIRT_POTHOLE_W_M)),
-                 float(rng.uniform(*DIRT_POTHOLE_D_M)) * DIRT_ROUGH * scale)
-        for _ in range(int(rng.poisson(max(1.0, length / DIRT_PATCH_EVERY_M)))):   # broken patch: a step, soft edges
-            c = float(rng.uniform(0.0, length))
-            w = float(rng.uniform(*DIRT_PATCH_W_M))
-            d = float(rng.uniform(*DIRT_PATCH_D_M)) * DIRT_ROUGH * scale * (1.0 if rng.random() < 0.5 else -1.0)
+        for _ in range(rng.poisson(max(1.0, length / DIRT_POTHOLE_EVERY_M))):
+            bowl(rng.uniform(0.0, length), rng.uniform(*DIRT_POTHOLE_W_M),
+                 rng.uniform(*DIRT_POTHOLE_D_M) * DIRT_ROUGH * scale)
+        for _ in range(rng.poisson(max(1.0, length / DIRT_PATCH_EVERY_M))):   # broken patch: a step, soft edges
+            c = rng.uniform(0.0, length)
+            w = rng.uniform(*DIRT_PATCH_W_M)
+            d = rng.uniform(*DIRT_PATCH_D_M) * DIRT_ROUGH * scale * (1.0 if rng.uniform(0.0, 1.0) < 0.5 else -1.0)
             edge = 0.35 * w
             add(c, 0.5 * w + 4.0 * edge, lambda x, c=c, w=w, d=d, edge=edge:
                 d * 0.5 * (dnp.tanh((x - (c - 0.5 * w)) / edge) - dnp.tanh((x - (c + 0.5 * w)) / edge)))
-        for _ in range(int(rng.poisson(max(0.3, length / DIRT_PIT_EVERY_M)))):      # the odd deep pit
-            bowl(float(rng.uniform(0.0, length)), float(rng.uniform(*DIRT_PIT_W_M)),
-                 float(rng.uniform(*DIRT_PIT_D_M)) * DIRT_ROUGH * scale)
+        for _ in range(rng.poisson(max(0.3, length / DIRT_PIT_EVERY_M))):      # the odd deep pit
+            bowl(rng.uniform(0.0, length), rng.uniform(*DIRT_PIT_W_M),
+                 rng.uniform(*DIRT_PIT_D_M) * DIRT_ROUGH * scale)
         if DIRT_BASE_M > 0.0 and length > 1.5 * DIRT_BASE_M:   # keep the terrain's own course: no net rise or fall
             k = max(1, int(DIRT_BASE_M / max(step, 1e-6)))
             pad = k // 2
@@ -1497,13 +1507,13 @@ def dirt_bank(xy, spec, ext=(0, 0), step=PROFILE_STEP):
         return None
     s_ = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(xy, axis=0).T))]
     seed = (int(round(float(xy[0, 0]) * 11.0)) * 2654435761 + int(round(float(xy[0, 1]) * 11.0)) * 40503) & 0x7FFFFFFF
-    rng = np.random.default_rng(seed)
+    rng = _dirt_noise(seed)
     out = np.zeros(len(xy))
     norm = 0.0
     for size, share in DIRT_BANK_WAVES:
         if s_[-1] < size:
             continue
-        knots = rng.uniform(-1.0, 1.0, int(s_[-1] / size) + 3)
+        knots = rng.uniforms(-1.0, 1.0, int(s_[-1] / size) + 3)
         t = s_ / size
         i0 = np.clip(np.floor(t).astype(int), 0, len(knots) - 2)
         f = t - i0

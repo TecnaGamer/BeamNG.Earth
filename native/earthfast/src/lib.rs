@@ -75,6 +75,7 @@ mod farglobal;
 mod farpvs;
 mod farsel;
 mod dirtsteps;
+mod dirtnoise;
 mod racedig;
 mod racejoin;
 mod railfit;
@@ -6131,6 +6132,7 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<clearance::Clearance>()?;
     m.add_class::<clearance::DeckLevels>()?;
     m.add_function(wrap_pyfunction!(dirtsteps::dirt_step_clamp, m)?)?;
+    m.add_class::<dirtnoise::DirtNoise>()?;
     m.add_function(wrap_pyfunction!(gridinterp::grid_bilinear2, m)?)?;
     m.add_function(wrap_pyfunction!(streetlabels::polyline_label_points, m)?)?;
     m.add_function(wrap_pyfunction!(levels::bridge_level_spans, m)?)?;
@@ -6650,9 +6652,11 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // as they are now; 420's rail_run_ends, rail_deck_line and rail_seam_natural gone (Python and module ship together)
     // 422: rail_crossing_runs takes rail_out (the outer rail kept off a shallow crossing's lane); 423: rail_road_ends
     // takes the parts' gauges and reads their ends only
-    // 442 (first numbered 373, then 404 on the vsolve branch): carriageway_profiles(..., coupling_penalty): soft
+    // 470: dirtnoise::DirtNoise (grading.dirt_bumps / dirt_bank's random numbers: integer splitmix64, Irwin-Hall
+    // normals, multiplication-method Poisson; numpy's Generator called the platform libm)
+    // 471 (first numbered 373, then 404 and 442 on the vsolve branch): carriageway_profiles(..., coupling_penalty): soft
     // couplings, one slack each at an exact L1 penalty (the one vertical solve's grade rows, server/vsolve.py); "le"
     // couplings and one-sample couplings (b None)
-    m.add("VERSION", 442)?;
+    m.add("VERSION", 471)?;
     Ok(())
 }

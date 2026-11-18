@@ -25,7 +25,7 @@ def spec(cls):
 
 def have_kernel():
     try:
-        fast.require(442, "carriageway_profiles' soft couplings")
+        fast.require(471, "carriageway_profiles' soft couplings")
         return True
     except Exception:
         return False
