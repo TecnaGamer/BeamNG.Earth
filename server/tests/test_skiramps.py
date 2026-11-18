@@ -781,6 +781,26 @@ class PieceIds(unittest.TestCase):
                                  "kept pieces from other ranges: their feature only")
             self.assertGreater(found, 0)
 
+    def test_kept_stale_pieces_are_short(self):
+        # (Codex review of round 5: a layer's kept ground pieces from other ranges than its own now (a short home copy
+        # since recovered a bridge): the plan's build is said short, every time (nothing on them kept); its own: not)
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import interchanges
+        site = interchanges.load("a20_921", "interchange")
+        f = site.cells[sorted(site.cells)[0]]
+        with mock.patch.object(roads, "LIDAR_GAPS_ON", False):
+            i = next(i for i in range(len(f)) if any(k == "bridge" for _a, _b, k in roads.level_ranges(f, i))
+                     and len(roads.ground_parts(f, i)) >= 2)
+            with revisit.scope() as b:
+                grading._piece_ids(f, i, roads.ground_parts(f, i))
+            self.assertFalse(b.n)
+            stale = roads._parts_by_level_new(f, i, "ground", rngs=[])     # (one unsplit piece)
+            for _attempt in range(2):
+                with revisit.scope() as b:
+                    ids = grading._piece_ids(f, i, stale)
+                self.assertTrue(b.n)
+                self.assertEqual(ids, [f"{f.ids[i]}#?"] * len(stale))
+
 
 class ExtensionOwner(unittest.TestCase):
     """Codex review of round 5: an extension's road is the one the native selector chose. Two candidates share their

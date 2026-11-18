@@ -7981,7 +7981,8 @@ def _piece_ids(feats, i, pieces, rngs=None):
     one feature's pieces on a bridge's two banks are told apart and pieces made from other ranges (one unsplit piece
     over both banks) never match the landing's. The keys are made from the very ranges that give these pieces: pieces
     that rngs do not give (a layer's kept ground_parts from a short home copy since replaced) have none, only their
-    feature ("fid#?": one of the landing's features' goes by where it lies, another feature's never takes its line)."""
+    feature ("fid#?": one of the landing's features' goes by where it lies, another feature's never takes its line),
+    and, from the layer's ranges (rngs None), the build is said short: nothing planned on them is kept."""
     n = len(pieces)
     if rngs is not None:
         return _piece_ids_new(feats, i, pieces, list(rngs))
@@ -7989,9 +7990,13 @@ def _piece_ids(feats, i, pieces, rngs=None):
     memo = feats.__dict__.setdefault("_piece_ids", {})      # (a layer's kept pieces, the same ranges: made once)
     got = memo.get(i)
     if got is not None and got[0] == rngs and len(got[1]) == n and all(a is b for a, b in zip(got[1], pieces)):
-        return list(got[2])
-    out = _piece_ids_new(feats, i, pieces, rngs)
-    memo[i] = (rngs, list(pieces), out)
+        out = got[2]
+    else:
+        out = _piece_ids_new(feats, i, pieces, rngs)
+        memo[i] = (rngs, list(pieces), out)
+    if out and out[0].endswith("#?"):
+        import revisit                  # (pieces kept from other ranges than the layer's now: what is built on them
+        revisit.fault()                 # is not kept, every time)
     return list(out)
 
 
