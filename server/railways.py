@@ -12,6 +12,7 @@ around the tile). The ballast's sides go down past the ground, a low
 embankment on the flat and a tall one on a ramp. Short mapped road tunnels also create supported spans when the upper rail lacks a bridge tag.
 Where a road crosses at grade, the track stops either side of the
 carriageway (a level crossing: the road's own surface across it). Tunnels are left out. Pure given its inputs."""
+import heapq
 import math
 import re
 
@@ -21,7 +22,9 @@ import numpy as np
 import dmath
 import dnp
 
+import findground
 import footbridges
+import gradelaw
 import mapgeom
 import railxing
 import roads
@@ -39,6 +42,10 @@ NARROW_GAUGE_M = 1.0
 STEP_M = 2.0                # m between cross-sections, from each part's start (the same at every tile)
 SMOOTH_M = 10.0             # m either side the bed's height is averaged over: the real elevation, its DEM bumps out
                             # (50 lifted the bed off the ground, the user, 2026-10-25: "follow the real elevation")
+AT_GRADE_END_M = 6.0        # m: a road crossing a bridge closer than this to its structure's end meets it at grade (grading's
+                            # APPROACH_MIN_CROSS_M): no road dips there, so findground's cost law is not asked and the
+                            # bridge rises (a 7 m rail bridge over a roundabout: the arms have no room to dip, the
+                            # drivability ratchet's Compiegne, 3.9 -> 41.4 when they were asked to)
 GRADE = 0.05                # THE grade law of a track, read by everything that climbs one (the decks' and the approaches' ramps,
                             # the lifts run along the line, the shapes' laws gradeshapes.max_grade, the seam's spread
                             # railroadseam): 5 %, a car game's (the user, 2026-11-18: "rail grade to 5% is a car game after
@@ -596,12 +603,14 @@ def _seg_arc(line, pt, s):
 
 
 class _Rise(tuple):
-    """(xy, half width) of a plain road's piece a rail bridge rises over (as road_underpasses' entries), with clear: m
-    the track's bed stands over the road's ground there at least (plain_underpasses)."""
+    """(xy, half width) of a plain road's piece a rail bridge may rise over (as road_underpasses' entries), with clear: m
+    the track's bed stands over the road's ground there at least, and grade: the grade the road dips at (the bridge
+    rises only where findground says it is the one that moves: profile)."""
 
-    def __new__(cls, xy, half, clear):
+    def __new__(cls, xy, half, clear, grade):
         t = super().__new__(cls, (xy, half))
         t.clear = float(clear)
+        t.grade = float(grade)
         return t
 
 
@@ -622,8 +631,8 @@ def plain_underpasses(frame, cells, box, rails, reach=REACH_M, tunnels=None):
         tunnels = road_underpasses(frame, cells, box, reach)
     limits = height_limits(frame, cells)
     depth = DECK_D - BALLAST_H
-    ways = [(line, half, None) for line, half in crossings(frame, cells, box, reach) if len(line) >= 2]
-    ways += [(xy, BALLAST_TOP_M, roads.deck_rail_clear(depth)) for (_fid, _c, kind, xy) in rails
+    ways = [(line, half, None, g) for line, half, g in graded_crossings(frame, cells, box, reach) if len(line) >= 2]
+    ways += [(xy, BALLAST_TOP_M, roads.deck_rail_clear(depth), GRADE) for (_fid, _c, kind, xy) in rails
              if kind == "ground" and len(xy) >= 2]
     out = []
     # (every segment of the mapped tunnels at once: a crossing is in one when it lies within OWN_TUNNEL_M of any, the
@@ -632,7 +641,7 @@ def plain_underpasses(frame, cells, box, rails, reach=REACH_M, tunnels=None):
     own = [tl for tl, _th in tunnels if len(tl) >= 2]
     own_a = np.concatenate([tl[:-1] for tl in own]) if own else None
     own_b = np.concatenate([tl[1:] for tl in own]) if own else None
-    for (line, half, track), hits in zip(ways, roads._crossings_by(bridges, [w[0] for w in ways])):
+    for (line, half, track, grade), hits in zip(ways, roads._crossings_by(bridges, [w[0] for w in ways])):
         if not hits:
             continue
         sl = _arc(line)
@@ -654,7 +663,7 @@ def plain_underpasses(frame, cells, box, rails, reach=REACH_M, tunnels=None):
             else:
                 sign = roads.limit_at(limits, pt, LIMIT_NEAR_M) if limits else None
                 clear = roads.signed_road_clear(sign, depth) if sign is not None else roads.deck_road_clear(depth)
-            out.append(_Rise(piece, half + UNDERPASS_SIDE_M, clear))
+            out.append(_Rise(piece, half + UNDERPASS_SIDE_M, clear, grade))
     return out
 
 
@@ -1133,6 +1142,12 @@ def _pieces_and_levels(feats, i, rngs):
 
 def crossings(frame, cells, box, reach=REACH_M):
     """[(xy (k, 2), half width)]: the ground roads near box (their carriageways cut the track at grade)."""
+    return [(xy, half) for xy, half, _g in graded_crossings(frame, cells, box, reach)]
+
+
+def graded_crossings(frame, cells, box, reach=REACH_M):
+    """[(xy (k, 2), half width, the grade the road may hold)]: crossings' roads with their grade law (gradelaw.road_grade:
+    what findground weighs a cut of them by)."""
     near = (box[0] - reach, box[1] - reach, box[2] + reach, box[3] + reach)
     seen, out = set(), []
     for feats in cells:
@@ -1147,7 +1162,7 @@ def crossings(frame, cells, box, reach=REACH_M):
             seen.add(fid)
             for ring in roads.ground_parts(feats, i):
                 e, n = mapgeom.enu_xy(feats, frame, ring)
-                out.append((np.column_stack((e, n)), sp.width / 2))
+                out.append((np.column_stack((e, n)), sp.width / 2, gradelaw.road_grade(sp.cls, sp.kmh)))
     return out
 
 
@@ -1512,6 +1527,35 @@ def _switch_split(rails):
     return parts, owner
 
 
+def _structure_run(rails, edges, ends, n, sc):
+    """(m from arc sc of structure part n along the structure to its nearest end each way (toward the part's start, its
+    end; inf where it goes on with no end), the structure being the bridge and tunnel parts joined end to end): an end is
+    a node a ground track ends at, or where no other structure part goes on. The bridge's own run, findground's cost
+    law: what of a rise its length climbs at the track's grade before an approach has to."""
+    at = {}
+    for k, (_c, _cls, kind, _xy) in enumerate(rails):
+        if kind in ("bridge", "tunnel") and edges[k][0] != edges[k][1]:
+            at.setdefault(edges[k][0], []).append(k)
+            at.setdefault(edges[k][1], []).append(k)
+    out = []
+    for first, d0 in ((edges[n][0], float(sc)), (edges[n][1], float(edges[n][2][-1] - sc))):
+        best, heap, seen = math.inf, [(d0, first, n)], set()
+        while heap:
+            d, node, frm = heapq.heappop(heap)
+            if node in seen:
+                continue
+            seen.add(node)
+            more = [k for k in at.get(node, ()) if k != frm]
+            if node in ends or not more:
+                best = d
+                break
+            for k in more:
+                a, b, s = edges[k]
+                heapq.heappush(heap, (d + float(s[-1]), b if node == a else a, k))
+        out.append(best)
+    return tuple(out)
+
+
 def profile(rails, ground, underpasses=()):
     """Per part: bed and ground heights (_profile's, the structure parts joined at the switches on them cut for it:
     _switch_split, and the heights of each part's own points handed back)."""
@@ -1573,9 +1617,9 @@ def _profile(rails, ground, underpasses=()):
         masks, along = _underpass_cover(rails, u[0], u[1], DECK_HALF_M + STEP_M, boxes)
         if along:
             crossings.append((u[0], u[1], {n: (masks[n], t) for n, t in along.items()},
-                              getattr(u, "clear", UNDERPASS_CLEAR_M + DECK_D - BALLAST_H)))
+                              getattr(u, "clear", UNDERPASS_CLEAR_M + DECK_D - BALLAST_H), getattr(u, "grade", None)))
     over_part = {}                              # part -> the crossings over it, in order (each one raises the bed again)
-    for c, (_line, _half, covers, _clear) in enumerate(crossings):
+    for c, (_line, _half, covers, _clear, _grade) in enumerate(crossings):
         for n in covers:
             over_part.setdefault(n, []).append(c)
     mouths = np.concatenate([c[0][[0, -1]] for c in crossings]) if crossings else np.empty((0, 2))
@@ -1607,8 +1651,18 @@ def _profile(rails, ground, underpasses=()):
         for c in over_part.get(n, ()):
             over, t = crossings[c][2][n]
             z0, z1 = mouth_z[c]
+            want = z0 + (z1 - z0) * t[over] + crossings[c][3]
+            if crossings[c][4] is not None:
+                # (a plain way: the bridge rises over it, or the way goes under the track (grading's underpass), by
+                # findground: the lack is what the bed falls short by, the run the bridge has to its structure's ends
+                lack = want - zb[n][over]
+                k = int(np.argmax(lack))
+                ends_m = _structure_run(rails, edges, ends, n, float(np.mean(sx[over])))     # (the road's own crossing)
+                if min(ends_m) >= AT_GRADE_END_M and findground.leaves(findground.GROUND, findground.BRIDGE, float(lack[k]), ends_m,
+                                                                       GRADE, crossings[c][4]) != "upper":
+                    continue
             req = zb[n].copy()
-            req[over] = np.maximum(req[over], z0 + (z1 - z0) * t[over] + crossings[c][3])
+            req[over] = np.maximum(req[over], want)
             zb[n] = _envelope(sx, req)
         for node, h in ((a, zb[n][0]), (b, zb[n][-1])):
             seeds[node] = max(seeds.get(node, -np.inf), float(h))

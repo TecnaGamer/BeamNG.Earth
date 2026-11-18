@@ -1393,6 +1393,10 @@ class UnderDipTest(unittest.TestCase):
         self.assertIsNone(grading.under_dip(d, 4.0, (20.0, 300.0)), "no room even at UNDER_MAX_GRADE")
 
 
+# (the legacy pass's own behaviour, pinned: under BNE_SHAPES the deck's rise is the shapes' and findground's cost law is asked
+# of every span, which prices a rise the frontage roads would hold down as free: a motorway under a deck whose ramps cannot
+# rise is the legacy pass's dip, as these tests hold)
+@unittest.mock.patch.object(grading, "SHAPES_ON", False)
 class UnderpassShortfallTest(unittest.TestCase):
     @unittest.mock.patch.object(grading, "ROAD_LAWS_ON", False)     # (the dip's own rule; a motorway's laws lengthen it)
     def test_road_under_gives_way_for_what_the_ramps_could_not_raise(self):
@@ -1543,6 +1547,10 @@ class StreetRunsTest(unittest.TestCase):
         self.assertFalse(grading.dead_end(lines[0][0], lines[0], wall))
 
 
+# (the legacy pass's own behaviour, pinned: under BNE_SHAPES the deck's rise is the shapes' and findground's cost law is asked
+# of every span, which prices a rise the frontage roads would hold down as free: a motorway under a deck whose ramps cannot
+# rise is the legacy pass's dip, as these tests hold)
+@unittest.mock.patch.object(grading, "SHAPES_ON", False)
 class CoarseUnderpassTest(unittest.TestCase):
     @unittest.mock.patch.object(grading, "ROAD_LAWS_ON", False)     # (the dip's own rule; the laws lengthen its ramps)
     def test_a_street_dip_stays_on_the_street_on_coarse_elevation(self):
@@ -1838,32 +1846,48 @@ class RailDeckHeightTest(unittest.TestCase):
     of its mapped ends, down the slopes of the street's cutting, and the track's level found beyond them: 37.3 m where
     the railways lay its bed at 40.1 (a neighbouring deck's level carried along the line), the deck drawn there. The
     street was dug for the shapes' deck, 8.75 m under the drawn one where 6.15 m clears it, and the track's fill beside
-    it stood 10.5 m tall. The shapes read the track's height and its deck's depth from the railways (track_beds), and
-    a rail bridge over a street on the ground is the railways' to raise (findground, railways.plain_underpasses): the
-    street stays on its ground and clears the deck the railways draw."""
+    it stood 10.5 m tall. A street meeting a bridge within railways.AT_GRADE_END_M of its structure's end (here 3.5 m)
+    meets it at grade: no road dips in so few metres (asked to, the roundabout there scored 3.9 -> 41.4 on the
+    drivability ratchet: grades of 40 %), so findground's cost law is not asked and the track rises over the street,
+    which stays on its ground; the same law says the street goes down under a bridge long enough to dip it
+    (test_findground)."""
 
-    def test_the_railways_deck_clears_the_street_which_stays_on_its_ground(self):
+    def setup_street(self):
         import railprofile
-        import railways
         railprofile._NODES.clear()
         f = features([[(-600.0, 0.0), (-3.5, 0.0)], [(-3.5, 0.0), (3.5, 0.0)], [(3.5, 0.0), (600.0, 0.0)],
                       [(0.0, -150.0), (0.0, 150.0)]],
                      ["standard_gauge"] * 3 + ["secondary"], subtypes=["rail"] * 3 + ["road"],
                      flags=[(1, "is_bridge")], ids=["r0", "r1", "r2", "street"])
+        return f, lambda la, lo: np.full(np.shape(la), 30.0)
 
-        def elev(la, lo):
-            return np.full(np.shape(la), 30.0)
+    def test_the_track_rises_over_the_street_at_a_bridge_too_short_to_dip_it_under(self):
+        import railprofile
+        import railways
+        f, elev = self.setup_street()
         g = grading._Planner(FRAME, FakeMD(f), elev)
         try:
-            prof = g._shape_region_calc(mapcells.cell_of(LAT, LON), "test")
             bed = float(np.asarray(g._track_bed(np.array([[0.0, 0.0]])), np.float64)[0])
+            la, lo, _ = FRAME.enu_to_geodetic(np.array([0.0, 0.0, 0.0]), np.array([0.0, 60.0, 140.0]), 0.0)
+            z = np.asarray(grading.Grader(FRAME, FakeMD(f), elev).apply(la, lo, elev(la, lo), grading.ROAD_LIFT), np.float64)
         finally:
             railprofile._NODES.clear()
-        self.assertFalse([1 for _xy, _z, mode in prof.get("street", ()) if mode == "cut"], "the street is not dug")
         underside = bed - (railways.DECK_D - railways.BALLAST_H)    # (the railways' bed, the deck drawn on it)
         headroom = grading._gsh.HEADROOM_M + grading._gsh.HEADROOM_MARGIN_M
-        self.assertGreaterEqual(underside - 30.0, headroom - 0.01, "the street on its ground clears the deck as drawn")
-        self.assertAlmostEqual(underside - 30.0, headroom, delta=0.05, msg="and the track rises no higher")
+        self.assertGreater(bed, 30.0 + headroom, "the track rises over the street")
+        self.assertGreaterEqual(underside - float(z[0]), headroom - 0.1, "and clears it")
+        self.assertAlmostEqual(float(z[0]), 30.0, delta=0.3, msg="the street stays on its ground")
+
+    def test_the_cost_law_is_the_same_for_the_track_and_the_street(self):
+        f, elev = self.setup_street()
+        import gradelaw
+        import railways
+        clear = grading._gsh.HEADROOM_M + grading._gsh.HEADROOM_MARGIN_M + (railways.DECK_D - railways.BALLAST_H)
+        fill = grading.findground.fill_run(clear, (3.5, 3.5), railways.GRADE)
+        dip = grading.findground.dip_run(clear, gradelaw.road_grade("secondary"))
+        self.assertGreater(fill, dip)
+        self.assertEqual(grading.findground.leaves("ground", "bridge", clear, (3.5, 3.5), railways.GRADE,
+                                                   gradelaw.road_grade("secondary")), "lower")
 
     def test_the_railways_are_made_once_for_a_deck_not_once_for_each_point_read(self):
         # the shapes read a rail deck's height at every point of every crossing: the railways near it made for each

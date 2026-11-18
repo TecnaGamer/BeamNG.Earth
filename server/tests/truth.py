@@ -453,13 +453,8 @@ def solved(name):
     site = load(name)
     mem, ws = members(site)
     ground = ground_fn(replay(name), ws)
-    net, systems = ix.find_systems(mem)
-    err, failed, false_joins = {}, 0, 0
-    for sysm in systems:
-        false_joins += sum(1 for a, sa, b, sb in sysm["joins"] if abs(z_at(ws[a], sa) - z_at(ws[b], sb)) > SAME_LEVEL_M)
-        pcs = ix.pieces(net, sysm)
-        smp = ix.sample(net, pcs)
 
+    def make_fixed(net):
         def fixed(i, s):
             # (what the shapes do not move: a road at its ground; a track at its own surveyed height, as Earth's
             # shapes read the railways' bed (the elevation under a railway's bridge is the valley's, not the track's))
@@ -469,6 +464,15 @@ def solved(name):
             else:
                 z = ground(np.stack([np.interp(sv, net.s[i], net.lines[i][:, 0]), np.interp(sv, net.s[i], net.lines[i][:, 1])], axis=1))
             return np.asarray(z, np.float64) if np.ndim(s) else float(z[0])
+        return fixed
+
+    net, systems = ix.find_systems(mem, lambda net_: (ground, make_fixed(net_)))
+    fixed = make_fixed(net)
+    err, failed, false_joins = {}, 0, 0
+    for sysm in systems:
+        false_joins += sum(1 for a, sa, b, sb in sysm["joins"] if abs(z_at(ws[a], sa) - z_at(ws[b], sb)) > SAME_LEVEL_M)
+        pcs = ix.pieces(net, sysm)
+        smp = ix.sample(net, pcs)
         zs = ix.solve_shape(net, sysm, pcs, smp, [ground(x["xy"]) for x in smp], fixed)
         if zs is None:
             failed += 1
