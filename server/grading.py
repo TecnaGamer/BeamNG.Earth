@@ -670,17 +670,19 @@ ABUT_MIN_M = 0.3            # m: a smaller fill at the end is left out
 ABUT_MAX_M = 8.0            # m filled at most
 # A fast road near a deck end reads its own line across the elevation's gap (ski ramps, 2026-11-17): at each landing
 # (the free end of a motorway's or trunk's deck) its approach, the ground parts of the deck's class joined end to end
-# from it (_landing_chain: the road a car drives off the deck on, whatever its pieces, bends included), and one line,
-# the grade of the ground read along that approach (gap_line); every sample of any plan lying on the approach's line
-# (FAST_GAP_ON_M) within the line's reach is filled up to it (gap_apply), up to FAST_GAP_MAX_M: one height per point
-# whichever part (a lane section's stub between the road and the deck, the road ending short of it), extension or
-# cell has it, and nothing for the other carriageway beside it (Codex, rounds 2 and 3). The A20's lidar opening under a track
+# from it (_landing_chain: the road a car drives off the deck on, whatever its pieces, bends included), on the map's
+# own lines (the features' rings as mapped, before any cell's lane placement: the same copy whoever asks), and one line,
+# the grade of the ground read along that approach (gap_line); every sample of any plan within FAST_GAP_ON_M of the
+# approach and nearer one of its parts than any other ground road's line, within the line's reach, is filled up to it
+# (gap_apply), up to FAST_GAP_MAX_M: one height per point whichever part (a lane section's stub between the road and
+# the deck, the road ending short of it, a lane section's placed copy), extension or cell has it, and nothing for the
+# other carriageway beside it (Codex, rounds 2 to 4). The A20's lidar opening under a track
 # bridge near Rostock is 10 m deep and wider than the mapped bridge: filled 8 m at most, both ends stood 2 m low and
 # the 16-19 m decks joined them at 13-20 % (5.35 g); the A7 over the B 27 at Thulba ran 1.2 m into its hole 4 m short of
 # its deck (a 9 % deck, 1.5 g). BNE_FAST_GAP=on.
 FAST_GAP = os.environ.get("BNE_FAST_GAP", "off") == "on"
 FAST_GAP_CLASSES = ("motorway", "trunk")
-FAST_GAP_ON_M = 0.5         # m off a landing's approach line a sample is on it at most (the same map line's)
+FAST_GAP_ON_M = 3.0         # m off a landing's approach line a sample is on it at most (a placed lane section's)
 FAST_GAP_START_M = 6.0      # m from a deck end the first part of its approach may start (heading on, FAST_GAP_COS)
 FAST_GAP_LINK_M = 3.0       # m from a part's far end the next may start (a lane section's joint offset 2 m sideways)
 FAST_GAP_COS = 0.707        # (within 45 degrees)
@@ -941,7 +943,8 @@ def plan_roads(frame, parts, elev, abut=None, ext=None, pins=None, cuts=True, co
     decks: [(line (k, 2) in the frame, half width)] crossing over the roads, their ground read beside them
     (deck_capped; not on coarse elevation); rings: per part, True for a mapped roundabout's ring (roads.is_ring: not
     banked, RING_LEVEL_ON); landings: the fast roads' deck ends round the parts [(approach line (k, 2) from the deck
-    end on, class)] in the frame (FAST_GAP: gap_line, gap_apply), or None. Pure given elev and obs."""
+    end on, class, its parts' lines, the other ground roads' lines round it)] in the frame (FAST_GAP: gap_line,
+    gap_apply), or None. Pure given elev and obs."""
     if not parts:
         return []
     ll = np.concatenate([lonlat for lonlat, _ in parts])
@@ -992,7 +995,7 @@ def plan_roads(frame, parts, elev, abut=None, ext=None, pins=None, cuts=True, co
     # line per landing, whichever part or cell asks it)
     rays, nray = [], []
     if landings:
-        for ap, _c in landings:
+        for ap, *_r in landings:
             q = _along(np.asarray(ap, np.float64), np.arange(0.0, FAST_GAP_FAR_M + 1e-6, PROFILE_STEP))
             rays.append(q)
             nray.append(len(q))
@@ -1014,7 +1017,8 @@ def plan_roads(frame, parts, elev, abut=None, ext=None, pins=None, cuts=True, co
     if len(rays):
         rla, rlo, _ = frame.enu_to_geodetic(rays[:, 0], rays[:, 1], 0.0)
         zr = np.split(np.asarray(elev(rla, rlo), np.float64), np.cumsum(nray)[:-1])
-        lines_ = [(np.asarray(ap, np.float64), c_, gap_line(zr[n])) for n, (ap, c_) in enumerate(landings)]
+        lines_ = [(np.asarray(ap, np.float64), c_, own_, other_, gap_line(zr[n]))
+                  for n, (ap, c_, own_, other_) in enumerate(landings)]
     out, k = [], 0
     if obs is not None and hasattr(obs, "prepare"):     # (its parts' questions at once: _Planner._obs)
         obs.prepare([pr[0] for pr in prof if pr is not None])
@@ -1058,9 +1062,9 @@ def plan_roads(frame, parts, elev, abut=None, ext=None, pins=None, cuts=True, co
             # (every sample of the part and of its extensions on a landing's line: the same height whichever part,
             # extension or cell has it)
             q_ = np.concatenate([before[:nb], xy, after[:na]])
-            for ap_, c_, ln_ in lines_:
+            for ap_, c_, own_, other_, ln_ in lines_:
                 if c_ == spec.cls and ln_ is not None:
-                    zx = gap_apply(zx, q_, ap_, ln_)
+                    zx = gap_apply(zx, q_, ap_, ln_, own_, other_)
         # Curvature and its runoff need the joined-road context too. Computing
         # banking on xy alone puts a partial curvature window at every map
         # segment end, even where the longitudinal profile is continuous.
@@ -6020,26 +6024,89 @@ class _Planner:
         allp = np.concatenate(want)
         return self._fast_landings(allp[:, 1], allp[:, 0]) or None
 
-    def _fast_landings(self, la, lo):
-        """FAST_GAP: [(approach line (k, 2), class)] of the free ends of the motorways' and trunks' decks
-        (FAST_GAP_CLASSES, not links') within FAST_GAP_CHAIN_M + FAST_GAP_FAR_M of the points (lat, lon), in the frame,
-        each once (by its end rounded to 0.1 m: the least of its copies), those with an approach (_landing_chain). A
-        deck end another deck goes on from (FAST_GAP_JOIN_M) is a joint, no landing. A function of the map round the
-        points."""
+    def _memo_get(self, name, key):
+        """(True, entry) of self.<name>[key] (its marks said: _marks_seen), or (False, None)."""
+        with self.lock:
+            memo = self.__dict__.setdefault(name, {})
+            if key in memo:
+                self._marks_seen(name, key)
+                return True, memo[key]
+        return False, None
+
+    def _memo_put(self, name, key, res, cap=4096):
+        """res kept as self.<name>[key] when its making read nothing short (this thread's making scope: _marked), and
+        returned; made short, returned unkept (its faults are this thread's already). An entry another thread kept
+        first is the one returned, with its marks."""
+        st = getattr(_MAKING, "stack", None)
+        b = st[-1] if st else None
+        if b is not None and (b.n or b.lidar):
+            return res
+        with self.lock:
+            memo = self.__dict__.setdefault(name, {})
+            if key not in memo:
+                if len(memo) > cap:
+                    memo.clear()
+                memo[key] = res
+                self._marks_at(name, key)
+            self._marks_seen(name, key)
+            return memo[key]
+
+    @_marked("_raw_lines_memo", lambda self, k: str(k))
+    def _raw_lines(self, k):
+        """FAST_GAP: cell k's roads as mapped, in the frame, before any lane placement (the same copy whichever cell
+        or plan asks): {"bridges": [(line (m, 2), class, link)], "ground": [(line, class, link, built)]}. Kept per
+        cell when read complete."""
+        got, res = self._memo_get("_raw_lines_memo", str(k))
+        if got:
+            return res
+        f = self.md.cell(k, layers=("roads",), kind="demand").layers.get("roads")
+        out = {"bridges": [], "ground": []}
+        if f is not None and len(f):
+            bs = roadsmod.bridge_specs(f)
+            rs = roadsmod.road_specs(f, None, self.widths)
+            rows = []
+            for i in range(len(f)):
+                for kind, sp, ps in (("bridges", bs[i], roadsmod.bridge_parts(f, i) if bs[i] is not None else ()),
+                                     ("ground", rs[i], roadsmod.ground_parts(f, i) if rs[i] is not None else ())):
+                    for ring in ps:
+                        ring = np.asarray(ring, np.float64)
+                        if len(ring) >= 2:
+                            rows.append((kind, sp, ring))
+            if rows:
+                allr = np.concatenate([r for _k, _s, r in rows])
+                e, n, _ = self.frame.geodetic_to_enu(allr[:, 1], allr[:, 0], 0.0)
+                xy = np.stack([np.asarray(e, np.float64), np.asarray(n, np.float64)], axis=1)
+                k0 = 0
+                for kind, sp, ring in rows:
+                    line = xy[k0:k0 + len(ring)]
+                    k0 += len(ring)
+                    cls = getattr(sp, "cls", None)
+                    if kind == "bridges":
+                        out[kind].append((line, cls, _is_link(sp)))
+                    else:
+                        out[kind].append((line, cls, _is_link(sp), sp.kind in roadsmod.BUILT))
+        return self._memo_put("_raw_lines_memo", str(k), out, cap=256)
+
+    def _gap_cells(self, la, lo, reach):
+        """FAST_GAP: the cells round the points (lat, lon) and reach m past them, in their keys' order."""
         la, lo = np.asarray(la, np.float64), np.asarray(lo, np.float64)
-        pad = (FAST_GAP_CHAIN_M + FAST_GAP_FAR_M) / 111320.0
+        pad = reach / 111320.0
         padlon = pad / max(0.05, dmath.cos(math.radians(float(np.mean(la)))))
-        cells = sorted(set(mapcells.cells_for_points(la, lo, pad, padlon)), key=str)
+        return sorted(set(mapcells.cells_for_points(la, lo, pad, padlon)), key=str)
+
+    def _fast_landings(self, la, lo):
+        """FAST_GAP: [(approach line (k, 2), class, its parts' lines, the other ground roads' lines round it)] of the
+        free ends of the motorways' and trunks' decks (FAST_GAP_CLASSES, not links') within FAST_GAP_CHAIN_M +
+        FAST_GAP_FAR_M of the points (lat, lon), on the map's own lines (_raw_lines), in the frame, each once (by its end
+        rounded to 0.1 m: the least of its copies), those with an approach (_landing_chain). A deck end another deck
+        goes on from (FAST_GAP_JOIN_M) is a joint, no landing. A function of the map round the points."""
         ends = []                       # (end, direction into the deck, class)
-        for k in cells:
-            hc = self._cell_enu(k, ground=False)
-            bcls = hc.get("bridge_cls") or [None] * len(hc["bridges"])
-            for e, bi in zip(np.asarray(hc["ends"], np.float64).reshape(-1, 2), hc["end_of"]):
-                b = np.asarray(hc["bridges"][bi], np.float64)[:, :2]
-                if len(b) < 2:
-                    continue
-                at0 = float(dnp.hypot(*(b[0] - e))) <= float(dnp.hypot(*(b[-1] - e)))
-                ends.append((e, roadsmod._dir_at(b, True) if at0 else -roadsmod._dir_at(b, False), bcls[bi]))
+        for k in self._gap_cells(la, lo, FAST_GAP_CHAIN_M + FAST_GAP_FAR_M):
+            for b, cls, link in self._raw_lines(k)["bridges"]:
+                for at0 in (True, False):
+                    e = b[0] if at0 else b[-1]
+                    ends.append((np.asarray(e, np.float64), roadsmod._dir_at(b, True) if at0
+                                 else -roadsmod._dir_at(b, False), None if link else cls))
         best = {}                       # (end rounded to 0.1 m -> its copy: the least by its values, whoever asks)
         for e, d, c in ends:
             if c not in FAST_GAP_CLASSES:
@@ -6054,48 +6121,43 @@ class _Planner:
                 best[key] = row
         out = []
         for _k, r in sorted(best.items()):
-            ap = self._landing_chain(np.array(r[:2]), np.array(r[2:4]), r[4])
-            if ap is not None:
-                out.append((ap, r[4]))
+            got = self._landing_chain(r[0], r[1], r[2], r[3], r[4])
+            if got is not None:
+                out.append((got[0], r[4], got[1], got[2]))
         return out
 
-    def _landing_chain(self, end, v, cls):
-        """FAST_GAP: the approach line (k, 2) of a deck end (direction v into the road, the deck's class cls): from the
-        end, the ground part of class cls (not a link) starting at it (within FAST_GAP_START_M, heading on within
-        FAST_GAP_COS), then at each of its far ends the part of that class going on most straight (one joined there,
-        CHAIN_JOIN_M, before one starting within FAST_GAP_LINK_M; the least key of equals), FAST_GAP_CHAIN_M long at
-        most; None without one. From the map round the end alone (its
-        cells' ground parts, as plans place them): the same whoever asks. Kept per end."""
-        key = (round(float(end[0]), 1), round(float(end[1]), 1), str(cls))
-        memo = self.__dict__.setdefault("_landing_memo", {})
-        with self.lock:
-            if key in memo:
-                return memo[key]
-        la, lo, _ = self.frame.enu_to_geodetic(np.array([float(end[0])]), np.array([float(end[1])]), 0.0)
-        pad = (FAST_GAP_CHAIN_M + 20.0) / 111320.0
-        padlon = pad / max(0.05, dmath.cos(math.radians(float(la[0]))))
-        cells = sorted(set(mapcells.cells_for_points(la, lo, pad, padlon)), key=str)
-        cand, seen = [], set()
-        for k in cells:
-            c = self._cell_enu(k)
-            links = c.get("ground_link") or [False] * len(c["ground"])
-            for (gl, _h, gc), lk in zip(c["ground"], links):
-                g = np.asarray(gl, np.float64)[:, :2]
-                if gc != cls or lk or len(g) < 2:
-                    continue
+    @_marked("_landing_memo", lambda self, ex, ey, vx, vy, cls: (ex, ey, vx, vy, cls))
+    def _landing_chain(self, ex, ey, vx, vy, cls):
+        """FAST_GAP: (approach line (k, 2), its parts' lines, the other ground roads' lines round its first
+        FAST_GAP_FAR_M + FAST_GAP_ON_M) of a deck end (ex, ey; direction (vx, vy) into the road; the deck's class cls),
+        on the map's own lines (_raw_lines): from the end, the ground part of class cls (not a link) starting at it
+        (within FAST_GAP_START_M, heading on within FAST_GAP_COS), then at each of its far ends the part of that class
+        going on most straight (one joined there, CHAIN_JOIN_M, before one starting within FAST_GAP_LINK_M; the least
+        key of equals), FAST_GAP_CHAIN_M long at most; None without one. Kept per exact end, direction and class when
+        read complete (_memo_put); a short read is said to every caller (_marked)."""
+        key = (ex, ey, vx, vy, cls)
+        got, res = self._memo_get("_landing_memo", key)
+        if got:
+            return res
+        end, v = np.array([ex, ey], np.float64), np.array([vx, vy], np.float64)
+        la, lo, _ = self.frame.enu_to_geodetic(np.array([ex]), np.array([ey]), 0.0)
+        cand, rest, seen = [], [], set()
+        for k in self._gap_cells(la, lo, FAST_GAP_CHAIN_M + 20.0):
+            for g, gc, lk, built in self._raw_lines(k)["ground"]:
+                g = np.asarray(g, np.float64)[:, :2]
                 kk = (round(float(g[0, 0]), 2), round(float(g[0, 1]), 2), round(float(g[-1, 0]), 2),
                       round(float(g[-1, 1]), 2), len(g))
-                if kk in seen:
+                if len(g) < 2 or kk in seen:
                     continue
                 seen.add(kk)
-                cand.append((kk, g))
+                (cand if gc == cls and not lk and built else rest).append((kk, g))
         cand.sort(key=lambda r: r[0])
-        pts, used, at, u, total = [np.asarray(end, np.float64)[None]], set(), np.asarray(end, np.float64), v, 0.0
-        first = True
+        rest.sort(key=lambda r: r[0])
+        pts, used, at, u, total, first = [end[None]], [], end, v, 0.0, True
         while total < FAST_GAP_CHAIN_M:
             best = None
             for kk, g in cand:
-                if kk in used:
+                if any(kk == q for q, _g in used):
                     continue
                 for rev in (False, True):
                     q = g[::-1] if rev else g
@@ -6112,26 +6174,26 @@ class _Planner:
                     # (a part joined at the node before one that starts beside it: a lane section's offset joint)
                     rank = (d0 > CHAIN_JOIN_M, -cs, kk, rev)
                     if best is None or rank < best[0]:
-                        best = (rank, kk, q)
+                        best = (rank, kk, q, g)
             if best is None:
                 break
-            _s, kk, q = best
-            used.add(kk)
+            _r, kk, q, g = best
+            used.append((kk, g))
             pts.append(q)
             total += float(dnp.hypot(*np.diff(q, axis=0).T).sum())
             at, u, first = q[-1], roadsmod._dir_at(q, False), False
-        got = None
-        if len(pts) > 1:
-            got = np.vstack(pts)
-            keep = np.r_[True, dnp.hypot(*np.diff(got, axis=0).T) > 1e-6]
-            got = got[keep]
-            if len(got) < 2:
-                got = None
-        with self.lock:
-            if len(memo) > 4096:
-                memo.clear()
-            memo.setdefault(key, got)
-            return memo[key]
+        res = None
+        if used:
+            ap = np.vstack(pts)
+            ap = ap[np.r_[True, dnp.hypot(*np.diff(ap, axis=0).T) > 1e-6]]
+            if len(ap) >= 2:
+                own_keys = {q for q, _g in used}
+                near = _along(ap, np.arange(0.0, FAST_GAP_FAR_M + 1e-6, PROFILE_STEP))
+                lo_, hi_ = near.min(0) - FAST_GAP_ON_M - 1.0, near.max(0) + FAST_GAP_ON_M + 1.0
+                other = [g for kk, g in cand + rest if kk not in own_keys
+                         and not ((g.max(0) < lo_).any() or (g.min(0) > hi_).any())]
+                res = (ap, [g for _q, g in used], other)
+        return self._memo_put("_landing_memo", key, res)
 
     def _end_never_raised(self, xy):
         """Is the bridge end at xy (within APPROACH_TOUCH_M, its home cell's nearest) a motorway's or trunk's own deck
@@ -7728,7 +7790,10 @@ def bridge_lifts(line, all_bridges, ground_lines, z_at, chain=None, rail_lines=(
         else:
             clear = np.full(len(zu_e), roadsmod.deck_road_clear(depth))
         if limits:
-            for n, (p, r) in enumerate(zip(pts[far], rail[far])):
+            # (LEVEL_SPACING with the classes: the chain's other parts' railways keep their flag here too, a road sign
+            # near one never lowering its 6.0 m; otherwise as before)
+            rmask = rail_cl if (roadsmod.LEVEL_SPACING and classes is not None) else rail
+            for n, (p, r) in enumerate(zip(pts[far], rmask[far])):
                 h = None if r else roadsmod.road_sign_at(limits, p)
                 if h is not None:
                     clear[n] = float(roadsmod.signed_road_clear(h, depth))
@@ -7849,17 +7914,33 @@ def _on_line(pts, line):
     return sl[k] + t[i, k] * L[k], dd[i, k]
 
 
-def gap_apply(z, pts, approach, line):
+def _nearest_off(pts, lines):
+    """m from each point (n, 2) to the nearest of lines [(k, 2)] (inf without any). Pure."""
+    best = np.full(len(pts), np.inf)
+    for ln in lines:
+        ln = np.asarray(ln, np.float64)[:, :2]
+        if len(ln) >= 2:
+            best = np.minimum(best, _on_line(pts, ln)[1])
+    return best
+
+
+def gap_apply(z, pts, approach, line, own=None, other=None):
     """FAST_GAP: z (n,) at a fast road's samples pts (n, 2) raised to a landing's line (gap_line's (a, b, reach), its
-    arc measured along its approach line (k, 2) from the deck's end) where they lie on that approach (FAST_GAP_ON_M) within
-    the reach: by FAST_GAP_MAX_M at most, never lowered. Which samples, and their heights, are the approach's alone,
-    whichever plan has them. z itself when nothing is raised. Pure."""
+    arc measured along its approach line (k, 2) from the deck's end) where they lie on that approach (FAST_GAP_ON_M)
+    within the reach and, with own and other (the approach's parts' lines, the other ground roads' lines round it), no
+    nearer another road than one of its parts: by FAST_GAP_MAX_M at most, never lowered. Which samples, and their
+    heights, are the approach's and the map's alone, whichever plan or placed copy has them. z itself when nothing is
+    raised. Pure."""
     a, b, reach = line
     pts = np.asarray(pts, np.float64)[:, :2]
     if not len(pts) or len(approach) < 2:
         return z
     s_, off = _on_line(pts, approach)
     on = (off <= FAST_GAP_ON_M) & (s_ <= reach)
+    if on.any() and other:
+        idx = np.flatnonzero(on)
+        mine = _nearest_off(pts[idx], own if own else [approach])
+        on[idx] = mine <= _nearest_off(pts[idx], other)
     if not on.any():
         return z
     z = np.asarray(z, np.float64)

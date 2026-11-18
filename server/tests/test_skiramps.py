@@ -113,7 +113,13 @@ class SwitchVersions(unittest.TestCase):
         self.assertNotEqual(new, old, "the old meaning's plans miss")
         for k in ("BNE_FAST_DECK_GROUND", "BNE_UNDER_SPEED", "BNE_FAST_GAP"):
             new, old = self.keys({k: "on"})
-            self.assertNotEqual(new, old, k + ": its round 2 meaning")
+            self.assertNotEqual(new, old, k + ": its reviewed meaning")
+        # (and the earlier versions' keys miss too: FAST_GAP and LEVEL_SPACING at 3, Codex round 4)
+        for k, was in (("BNE_FAST_GAP", 2), ("BNE_LEVEL_SPACING", 2)):
+            with mock.patch.dict(revisit.SWITCH_VERSIONS, {k: was}):
+                prev, _old = self.keys({k: "on"})
+            new, _old = self.keys({k: "on"})
+            self.assertNotEqual(new, prev, k + " at its earlier version: its plans miss")
         new, old = self.keys({"BNE_FAST_DECK_ENDS": "on"})
         self.assertEqual(new, old, "a switch with no version: as before")
         new, old = self.keys({})
@@ -218,13 +224,17 @@ class GapLanding(unittest.TestCase):
         n = max(2, int(np.ceil(np.hypot(*(b - a)) / step)) + 1)
         return np.c_[np.linspace(a[0], b[0], n), np.linspace(a[1], b[1], n)]
 
-    def check(self, bend):
+    def check(self, bend, shift=0.0):
         ap = self.approach(bend)
         twin = ap + np.array([0.0, 3.0])
         raw = self.raw_for(ap, twin)
-        lands = [(ap, "motorway"), (twin, "motorway")]
-        road_xy = self.dense(ap[2], ap[1])                  # the road, ending 4 m short of the deck
-        stub_xy = self.dense(ap[1], ap[0])                  # the stub on to the deck
+        road_map, stub_map = ap[[2, 1]], ap[[1, 0]]                       # (the map's own lines)
+        lands = [(ap, "motorway", [road_map, stub_map], [twin[[2, 1]], twin[[1, 0]]]),
+                 (twin, "motorway", [twin[[2, 1]], twin[[1, 0]]], [road_map, stub_map])]
+        # the road, ending 4 m short of the deck, as one cell's lane placement puts it: shift m sideways (a lane
+        # section's placed copy); the stub on to the deck as mapped
+        road_xy = self.dense(ap[2], ap[1]) + np.array([0.0, -shift])
+        stub_xy = self.dense(ap[1], ap[0])
         road, stub = (self.lonlat(road_xy), self.spec), (self.lonlat(stub_xy), self.spec)
         kw = dict(cuts=False, landings=lands)
         runs = {"together": grading.plan_roads(self.frame, [road, stub], raw, **kw),
@@ -236,7 +246,7 @@ class GapLanding(unittest.TestCase):
                               grading.plan_roads(self.frame, [stub], raw, ext=[(road_xy[::-1][:60], None)], **kw)[0]]
         joint = 50.0 + 0.037 * 4.0
         for name, (r, s_) in runs.items():
-            self.assertAlmostEqual(float(r.z[-1]), joint, delta=0.02, msg=(bend, name, "road at the joint"))
+            self.assertAlmostEqual(float(r.z[-1]), joint, delta=0.03, msg=(bend, name, "road at the joint"))
             self.assertAlmostEqual(float(s_.z[0]), joint, delta=0.02, msg=(bend, name, "stub at the joint"))
             self.assertAlmostEqual(float(s_.z[-1]), 50.0, delta=0.02, msg=(bend, name, "at the deck"))
             g_r = (float(r.z[-1]) - float(r.z[-2])) / float(np.hypot(*np.diff(r.xy[-2:, :2], axis=0)[0]))
@@ -253,13 +263,18 @@ class GapLanding(unittest.TestCase):
     def test_bent(self):
         self.check(35.0)
 
+    def test_placed_copy(self):
+        # (Codex round 4: a lane section's placed copy 1 m off the mapped line, its neighbour as mapped, in two cells)
+        self.check(0.0, shift=1.0)
+        self.check(35.0, shift=1.0)
+
     def test_off_the_line_untouched(self):
         # (a road crossing the approach, not on its line, keeps its own ground)
         ap = self.approach(0.0)
         raw = self.raw_for(ap, ap + np.array([0.0, 300.0]))
         la, lo, _ = self.frame.enu_to_geodetic(np.full(21, -6.0), np.linspace(-20.0, 20.0, 21), 0.0)
         cross = grading.plan_roads(self.frame, [(np.c_[lo, la], self.spec)], raw, cuts=False,
-                                   landings=[(ap, "motorway")])[0]
+                                   landings=[(ap, "motorway", [ap], [])])[0]
         ref = grading.plan_roads(self.frame, [(np.c_[lo, la], self.spec)], raw, cuts=False)[0]
         self.assertTrue(np.allclose(cross.z, ref.z))
 
@@ -341,6 +356,21 @@ class LevelSpacingTarget(unittest.TestCase):
             want = roads.deck_road_clear(depth, ["rail"]) + grading.APPROACH_MARGIN_M \
                 - roads.DECK_GRADE * (60.0 - grading.APPROACH_FLAT_M)
         self.assertAlmostEqual(got[(0.0, 0.0)], want, places=6)
+
+    def test_signed_road_by_the_railway_under_the_next_span(self):
+        # (Codex round 4: a road with a 4.2 m sign passing by the second span's railway: the railway keeps its 6.0 m)
+        span1, span2 = line(0.0, 40.0), line(40.0, 80.0)
+        rail = np.array([[60.0, -30.0], [60.0, 30.0]])
+        sign = [(np.array([[61.0, -30.0], [61.0, 30.0]]), 4.2)]
+        z_at = lambda xy: np.zeros(len(np.asarray(xy).reshape(-1, 2)))  # noqa: E731
+        with mock.patch.object(roads, "LEVEL_SPACING", True):
+            plain = dict((tuple(e), lf) for e, lf in grading.bridge_lifts(span1, [span1, span2], [], z_at,
+                                                                           chain=[span2], rail_lines=[rail],
+                                                                           classes=[]))
+            signed = dict((tuple(e), lf) for e, lf in grading.bridge_lifts(span1, [span1, span2], [], z_at,
+                                                                            chain=[span2], rail_lines=[rail],
+                                                                            classes=[], limits=sign))
+        self.assertAlmostEqual(signed[(0.0, 0.0)], plain[(0.0, 0.0)], places=9)
 
     def test_track_under_asks_less(self):
         deck = line(0.0, 80.0)

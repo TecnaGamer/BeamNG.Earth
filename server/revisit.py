@@ -415,10 +415,11 @@ def keyed_env(k):
 # this version, so the plans, facts, packs and shares made under its old meaning miss rather than mix with the new ones
 # at their seams. Only where it is set: the default namespace (the switch unset) keeps its keys. BNE_LEVEL_SPACING 2:
 # the clearance study's class table (4.9 / 4.5 / 4.0 / 2.5 / 6.0 m) and its use by the underpass dips and the measured
-# decks (2026-11-17). The ski-ramp switches at their Codex round 2 meaning (2026-11-17): BNE_FAST_DECK_GROUND 2 (a
-# fast deck beside a ramp caps its fill too), BNE_UNDER_SPEED 2 (motorways and trunks only, a joined dip ending before
-# its junction), BNE_FAST_GAP 2 (one line per landing).
-SWITCH_VERSIONS = {"BNE_LEVEL_SPACING": 2, "BNE_FAST_DECK_GROUND": 2, "BNE_UNDER_SPEED": 2, "BNE_FAST_GAP": 2}
+# decks (2026-11-17); 3: its approach fills ask the chain's railways their own clearance (Codex round 3). The
+# ski-ramp switches at their Codex review meanings (2026-11-17): BNE_FAST_DECK_GROUND 2 (a fast deck beside a ramp
+# caps its fill too), BNE_UNDER_SPEED 2 (motorways and trunks only, a joined dip ending before its junction),
+# BNE_FAST_GAP 3 (each landing's own approach on the map's own lines, round 4).
+SWITCH_VERSIONS = {"BNE_LEVEL_SPACING": 3, "BNE_FAST_DECK_GROUND": 2, "BNE_UNDER_SPEED": 2, "BNE_FAST_GAP": 3}
 
 
 def keyed_value(k, v):
