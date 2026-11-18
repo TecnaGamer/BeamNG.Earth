@@ -166,6 +166,13 @@ M.LOOKS = {
   bngEarthGroundDryGrass = look('grass/t_dirt_dry_grass/t_dirt_dry_grass', 2, 'grass/macro_dry_grass_02/t_macro_dry_grass_02', 16),
   bngEarthGroundCrop = look('soil/dirt_crumbly/t_dirt_crumbly', 2, 'soil/macro_holes/t_macro_holes', 16),
   bngEarthGroundSand = look('sand/t_sand/t_sand', 2, 'sand/t_macro_sand/t_macro_sand', 32),
+  -- Australia (server/surface.py RED_DIRT, CANE; the same in tools/make_level_assets.py). The red / ochre soil: the stock
+  -- sand detail, stronger than the grey-brown dirt's, pulls the photo toward ochre. Sugarcane: the grass detail (the tall crop
+  -- is groundcover.lua's bngEarthGC_long_grass_distant_cane).
+  bngEarthGroundRedDirt = look('sand/t_sand/t_sand', 2, 'sand/t_macro_sand/t_macro_sand', 32, 0.35),
+  bngEarthGroundCane = look('grass/t_grass_01/t_grass_01', 2, 'grass/macro_dry_grass_02/t_macro_dry_grass_02', 16, 0.2),
+  -- the vegetation palettes' long dry grass (server/surface.py DRY_LONG; groundcover.lua): a light grass detail, the photo's own colour
+  bngEarthGroundDryLong = look('grass/t_grass_01/t_grass_01', 2, 'grass/macro_dry_grass_02/t_macro_dry_grass_02', 16, 0.2),
 }
 -- The tile layers' stand-ins when the server could not write their PNGs (terraintex.py: no game folder, a failed
 -- decode): the stock asphalt grain they had before, not a missing texture (a cobbled street plainer than before)

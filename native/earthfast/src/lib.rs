@@ -53,6 +53,9 @@ mod levels;
 mod levelrules;
 mod tapers;
 mod islands;
+mod aubuild;
+mod austates;
+mod aulines;
 mod ribbons;
 mod groundpaint;
 mod medians;
@@ -5969,6 +5972,15 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(dual_side, m)?)?;
     m.add_function(wrap_pyfunction!(deck_crossings, m)?)?;
     m.add_function(wrap_pyfunction!(point_inside, m)?)?;
+    m.add_function(wrap_pyfunction!(aubuild::rect_hits, m)?)?;
+    m.add_function(wrap_pyfunction!(aubuild::rect_hits_any, m)?)?;
+    m.add_class::<austates::AuStates>()?;
+    m.add_function(wrap_pyfunction!(aubuild::qld_brick_uv, m)?)?;
+    m.add_function(wrap_pyfunction!(aubuild::au_fence_keep, m)?)?;
+    m.add_function(wrap_pyfunction!(aulines::line_dists, m)?)?;
+    m.add_function(wrap_pyfunction!(aulines::lines_clear, m)?)?;
+    m.add_function(wrap_pyfunction!(aulines::line_nearest, m)?)?;
+    m.add_function(wrap_pyfunction!(aulines::segs_min_dist, m)?)?;
     m.add_function(wrap_pyfunction!(geodetic_to_enu, m)?)?;
     m.add_function(wrap_pyfunction!(enu_to_geodetic, m)?)?;
     m.add_function(wrap_pyfunction!(geodetic_to_enu_c, m)?)?;
@@ -6605,6 +6617,11 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(roadnet::splitlayer::lane_split_layer, m)?)?;
     // 403: R2a's lane section layer (roadnet::splitlayer::lane_split_layer = lanesections.split's new-layer assembly:
     // the columns gathered, the sections' values, LANE_MAX, the geometry and rule rows, the cut points' connectors)
-    m.add("VERSION", 403)?;
+    // 404: aubuild::rect_hits / rect_hits_any (buildings._rect_hits: the AU side fences', carports' and awnings' clearance test)
+    // 405: austates::AuStates (climate.au_state / in_australia: the Australian states' outlines, cells deduped in Rust)
+    // 406: aubuild::qld_brick_uv (buildings._qld_brick_scale / _qld_brick_fit: the QLD brick sheet's scale and placement per wall)
+    // 407: aulines (line_nearest, segs_min_dist, lines_clear, line_dists: aurails' / kantstolpar's / warnsigns' distance tests, motesfri._distance bit for bit)
+    // 408: aubuild::au_fence_keep (buildings._au_side_fences: which fence pieces stand clear, all at once)
+    m.add("VERSION", 408)?;
     Ok(())
 }

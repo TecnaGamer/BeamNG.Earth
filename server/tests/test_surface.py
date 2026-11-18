@@ -84,6 +84,8 @@ class ClassifyTest(unittest.TestCase):
             for i, (m, _) in enumerate(self.OLD_MATERIALS):
                 mk = np.array(Image.open(os.path.join(d, masks[i])))
                 self.assertTrue(np.array_equal(mk == 255, old == i), m)
+        # Australia's layers, appended after the 2026-11-16 ones (RED_DIRT, CANE, DRY_LONG): the last three
+        self.assertEqual((sf.RED_DIRT, sf.CANE, sf.DRY_LONG), (len(sf.MATERIALS) - 3, len(sf.MATERIALS) - 2, len(sf.MATERIALS) - 1))
 
     def test_unknown_class_is_dirt(self):
         self.assertEqual(sf.classify(np.array([[7, 255]], np.uint8), np.zeros((1, 2)), 2.0).tolist(), [[sf.DIRT, sf.DIRT]])
@@ -108,6 +110,19 @@ class ClassifyTest(unittest.TestCase):
         self.assertLess(moab, east - 0.05, "Moab: fewer (the photo decides in detail mode: photo_lawns)")
         grass = np.full((2, 2), 30, np.uint8)
         self.assertTrue((sf.classify(grass, np.zeros((2, 2)), 2.0, np.full((2, 2), 39.3), np.full((2, 2), -76.6)) == sf.GRASS).all())
+
+    def test_australian_towns_have_fewer_lawns(self):
+        def share(lat, lon):
+            la, lo = np.meshgrid(np.linspace(lat, lat + 0.02, 200), np.linspace(lon, lon + 0.02, 200))
+            idx = sf.classify(np.full(la.shape, 50, np.uint8), np.zeros(la.shape), 2.0, la, lo)
+            return float((idx == sf.LAWN).mean())
+        brisbane, longreach, townsville = share(-27.48, 153.00), share(-23.45, 144.25), share(-19.27, 146.80)
+        cairns, melbourne, baltimore = share(-16.93, 145.75), share(-37.82, 144.95), share(39.28, -76.60)
+        for name, v in (("Brisbane Cfa", brisbane), ("Longreach BSh", longreach), ("Townsville Aw", townsville)):
+            self.assertAlmostEqual(v, sf.LAWN_SHARE_AU, delta=0.08, msg=name)
+        self.assertGreater(cairns, 0.8, "Cairns (Af / Am) keeps the humid share")
+        self.assertGreater(melbourne, 0.8, "Melbourne (Cfb) keeps the humid share")
+        self.assertGreater(baltimore, 0.8, "outside Australia unchanged")
 
     def test_photo_lawns_only_where_the_photo_is_green(self):
         import tempfile
@@ -1110,6 +1125,64 @@ class GolfSurfaceTest(unittest.TestCase):
         self.assertTrue(np.array_equal(out[40, 40], expect))
         self.assertTrue(np.array_equal(out[2, 2], [40, 40, 40]))
         self.assertTrue(np.array_equal(rgb[40, 40], [40, 40, 40]))
+
+
+class AustraliaGroundTest(unittest.TestCase):
+    """red soils and sugarcane (surface.red_soil, au_ground, cane_belt, classify)."""
+
+    def grid(self, lat, lon, n=4):
+        la = np.full((n, n), lat)
+        lo = np.full((n, n), lon)
+        return la, lo
+
+    def test_cropland_is_cane_in_the_belt_only(self):
+        classes = np.full((4, 4), 40, np.uint8)
+        u = np.zeros((4, 4))
+        la, lo = self.grid(-21.14, 149.19)
+        self.assertTrue((sf.classify(classes, u, 2.0, la, lo) == sf.CANE).all())
+        la, lo = self.grid(-33.9, 151.2)                # (elsewhere upstream's crop soil, CROP)
+        self.assertTrue((sf.classify(classes, u, 2.0, la, lo) == sf.CROP).all())
+        la, lo = self.grid(36.5, -118.3)
+        self.assertTrue((sf.classify(classes, u, 2.0, la, lo) == sf.CROP).all())
+        # grass in the belt is the cleared land's long dry grass (veg_palettes "cleared")
+        la, lo = self.grid(-21.14, 149.19)
+        self.assertTrue((sf.classify(np.full((4, 4), 30, np.uint8), u, 2.0, la, lo) == sf.DRY_LONG).all())
+
+    def test_red_soil_inland_not_on_the_coast(self):
+        idx = np.full((4, 4), sf.DIRT, np.uint8)
+        la, lo = self.grid(-23.7, 133.9)        # Alice Springs: arid
+        self.assertTrue((sf.au_ground(idx, la, lo) == sf.RED_DIRT).all())
+        la, lo = self.grid(-27.47, 153.03)      # Brisbane: Cfa
+        self.assertIs(sf.au_ground(idx, la, lo), idx)
+        la, lo = self.grid(-20.7, 139.5)        # Mount Isa: dry
+        self.assertTrue((sf.au_ground(idx, la, lo) == sf.RED_DIRT).all())
+
+    def test_only_bare_ground_turns_red_and_nowhere_else(self):
+        la, lo = self.grid(-23.7, 133.9)
+        idx = np.array([[sf.GRASS, sf.ASPHALT, sf.DIRT, sf.LOOSE]] * 4, np.uint8)
+        out = sf.au_ground(idx, la, lo)
+        self.assertEqual(out[0].tolist(), [sf.GRASS, sf.ASPHALT, sf.RED_DIRT, sf.RED_DIRT])
+        la, lo = self.grid(36.5, -118.3)
+        self.assertIs(sf.au_ground(idx, la, lo), idx)
+        la, lo = self.grid(51.5, -0.1)
+        self.assertIs(sf.au_ground(idx, la, lo), idx)
+
+    def test_palette_ground_cover(self):
+        """au_cover: the NVIS palette's ground on vegetated land (woodland: long dry grass, shrubland: dusty,
+        rainforest: none); other land covers, other countries and unclassified (cleared) land stay as classify made them."""
+        tree = np.full((4, 4), 10, np.uint8)
+        u = np.zeros((4, 4))
+        cases = (((-23.31, 150.60), sf.DRY_LONG), ((-23.70, 133.88), sf.DUSTY),      # central Queensland woodland, Alice Springs
+                 ((-16.17, 145.40), sf.DIRT), ((-23.38, 150.51), sf.DRY_LONG))   # + a central Queensland city (cleared: grazing land)                                       # the Daintree: rainforest
+        for (lat, lon), want in cases:
+            la, lo = self.grid(lat, lon)
+            self.assertTrue((sf.classify(tree, u, 2.0, la, lo) == want).all(), (lat, lon))
+            built = sf.classify(np.full((4, 4), 50, np.uint8), u, 2.0, la, lo)
+            self.assertFalse(np.isin(built, (sf.DRY_LONG, sf.DUSTY)).any(), "built-up land keeps its own")
+        for lat, lon in ((36.5, -118.3), (51.5, -0.1)):        # the US, England
+            la, lo = self.grid(lat, lon)
+            self.assertTrue((sf.classify(tree, u, 2.0, la, lo) == sf.FOREST).all(), (lat, lon))   # (upstream's forest floor)
+        self.assertIn(sf.DRY_LONG, sf.VERGE_FROM)
 
 
 if __name__ == "__main__":

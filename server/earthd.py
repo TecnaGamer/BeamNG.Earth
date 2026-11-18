@@ -94,9 +94,11 @@ import cdae  # noqa: E402
 import colormatch as colormatchmod  # noqa: E402
 import credits as creditsmod  # noqa: E402
 import secrossings  # noqa: E402
+import season as seasonmod  # noqa: E402
 import covermap as covermapmod  # noqa: E402
 import areas as areasmod  # noqa: E402
 import surface as surfacemod  # noqa: E402
+import climate as climatemod  # noqa: E402  # anchor_ready.koppen
 import navgraph as navgraphmod  # noqa: E402
 import distanttraffic          # noqa: E402
 import prewarm as prewarmmod  # noqa: E402
@@ -4574,6 +4576,7 @@ class Server:
                                         blockworker._us_square_looks(anchor.frame)) if lots else idx
             if hasattr(self.surface, "paint_ground_pads"):
                 idx = self.surface.paint_ground_pads(idx, keep["lat"], keep["lon"])
+            idx = surfacemod.au_ground(idx, keep["lat"], keep["lon"])     # red soil in dry Australia
             stages["roadPaint"] = time.perf_counter() - t1
             idx = surfacemod.fold_layers(idx, land, heightmap.SQUARE, stages)   # (fewer layers: a cheaper swap)
             complete = complete and roads_complete
@@ -9421,7 +9424,7 @@ class Connection:
                "q": info["q"]}
         if info.get("layers"):      # --surface on: one mask per material, MATERIALS order
             # only the .ter's own materials, in its order (surface.write_ter; all of them for an older block)
-            use = info.get("mats") or range(len(surfacemod.MATERIALS))
+            use = info.get("mats") or range(len(info["layers"]))     # (MATERIALS grew; a block lists its own masks)
             out["layers"] = [f"{self.s.vfs_dir}/{info['layers'][i]}" for i in use]
             out["materials"] = [list(surfacemod.MATERIALS[i]) for i in use]
         if info.get("base"):        # detail mode: the base photo over the block's world size
@@ -9710,8 +9713,22 @@ class Connection:
                  "groundZ": gz, "floorZ": floor_z, "terrain": self.terrain_msg(key, info), "provisional": provisional}
         if place is not None:           # (the player's spot off the origin, echoed: core places the car there)
             ready["px"], ready["py"] = place
+        if seasonmod.evergreen(lat, lon):   # no autumn colour in the trees' leaves here (seasonlook.setEvergreen)
+            ready["evergreen"] = True
         if self.s.gas_stations:         # the shapes of the region's gas stations, preloaded (only that region's)
             ready["fuelShapes"] = gasstationsmod.style_shapes(gasstationsmod.style_of(lat, lon))
+            import streetamenities       # AU payphones and post boxes
+            ready["fuelShapes"] = ready["fuelShapes"] + streetamenities.shapes_at(lat, lon)
+        try:                            # (protocol addition, optional): the Koppen-Geiger class (1-30, 0 = sea) at the anchor,
+            ready["koppen"] = int(climatemod.koppen_at(lat, lon))   # for the mod's grass mix (groundcover.setClimate)
+        except Exception as e:          # (the mod behaves as before without it)
+            log.debug("anchor %d: no climate class: %s: %s", anchor.id, type(e).__name__, e)
+        try:                            # (protocol addition, optional): the grass's dry share by month where a vegetation
+            months = seasonmod.grass_dry_months(lat, lon)       # palette covers the anchor (groundcover.setClimate)
+            if months:
+                ready["grassDry"] = months
+        except Exception as e:
+            log.debug("anchor %d: no grass months: %s: %s", anchor.id, type(e).__name__, e)
         progress["done"] = True
         self.send(ready)
         self.status(f"Terrain ready ({time.perf_counter() - t0:.1f} s)")
