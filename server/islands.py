@@ -44,6 +44,34 @@ def _length(pts):
     return float(np.sum(dnp.hypot(*np.diff(pts[:, :2], axis=0).T)))
 
 
+def _lengths(pts_list):
+    """[_length(pts) of each of pts_list] (None where it has fewer than 2 points), the hypots of all their steps in one
+    call: _graph measured each road on its own, 4 numpy calls a road, a third of a traffic island search (islands.find
+    for the far photos' paint and the road tiles). The same steps, the same sums of the same values."""
+    out = [None] * len(pts_list)
+    idx, parts = [], []
+    for k, pts in enumerate(pts_list):
+        if len(pts) < 2:
+            continue
+        p = np.asarray(pts)
+        if p.dtype != np.float64 or p.ndim != 2:
+            out[k] = _length(pts)       # (as it was)
+            continue
+        idx.append(k)
+        parts.append(p[:, :2])
+    if not parts:
+        return out
+    xy = np.concatenate(parts)
+    d = np.diff(xy, axis=0)
+    h = dnp.hypot(d[:, 0], d[:, 1])     # (the steps across two roads' joins are measured too, never read)
+    at = 0
+    for k, p in zip(idx, parts):
+        n = len(p)
+        out[k] = float(np.sum(h[at:at + n - 1]))
+        at += n
+    return out
+
+
 def _offset(pts, d):
     """pts (k, >=2) moved d m to its left (mitred joints, as roads.offset_polyline)."""
     import roads
@@ -74,11 +102,11 @@ def _graph(roads_list):
         grid.setdefault((math.floor(nodes[k][0] / JOIN_M), math.floor(nodes[k][1] / JOIN_M)), []).append(k)
         return k
     edges = []
-    for fid, spec, pts, _ in roads_list:
+    lengths = _lengths([r[2] for r in roads_list])
+    for (fid, spec, pts, _), L in zip(roads_list, lengths):
         if len(pts) < 2:
             continue
         a, b = node_of(pts[0]), node_of(pts[-1])
-        L = _length(pts)
         if L <= 0:
             continue
         edges.append((fid, spec, pts, a, b, L))
