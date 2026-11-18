@@ -11,6 +11,8 @@ desktop sizes.
 """
 import os
 import sys
+import threading
+import time
 
 SMALL_GB = 20.0             # below this much RAM: the small profile (a Steam Deck shows ~14.5 GB)
 TINY_GB = 13.0              # ... and below this (an 8 or 12 GB PC) its smaller sizes (TINY_*)
@@ -1050,6 +1052,42 @@ WIN_THREAD_TIME_CRITICAL = 15   # (the share's thread: it only sleeps and sets t
 BACKGROUND_NICE = 4
 BACKGROUND_SHARE = 0.125
 BACKGROUND_PERIOD_S = 2.0
+# ... unless the car is about to need what it works on (due): with the floor alone the map ahead fell from 104 s in
+# front of a 300 km/h car to 46 s, one cell in ten begun as the car reached it (and the road tiles planned its roads
+# themselves meanwhile, 20 s of their waits), 2026-11-18. Work due stays in the inherited class until it is done.
+_DUE = {}           # running job (due) -> the time.time() from which it is urgent
+_DUE_LOCK = threading.Lock()
+_DUE_NOW = []       # background's: this process into its inherited class now
+
+
+class due:
+    """with due(at): what this block works on is urgent from the time.time() `at` on (None: work for later, as
+    ever): a background process (background) keeps its inherited class while such a block runs in it, from that
+    moment. Any thread; elsewhere than Windows it only keeps the time."""
+
+    def __init__(self, at):
+        self.at = None if at is None else float(at)
+
+    def __enter__(self):
+        if self.at is not None:
+            with _DUE_LOCK:
+                _DUE[self] = self.at
+            if pressed():
+                for up in list(_DUE_NOW):
+                    up()
+        return self
+
+    def __exit__(self, *exc):
+        with _DUE_LOCK:
+            _DUE.pop(self, None)
+        return False
+
+
+def pressed(now=None):
+    """Is a job of this process (due) urgent by now (time.time())?"""
+    now = time.time() if now is None else now
+    with _DUE_LOCK:
+        return any(at <= now for at in _DUE.values())
 
 
 def _kernel32():
@@ -1090,11 +1128,10 @@ def lower_priority(nice, worker=False):
 
 def background(k32, sleep=None, rounds=None, start=None):
     """This process in Windows' idle class, and in the class it has now for BACKGROUND_SHARE of every
-    BACKGROUND_PERIOD_S (a thread of its own, the processes each at their own moment of the period, by their pid).
+    BACKGROUND_PERIOD_S (a thread of its own, the processes each at their own moment of the period, by their pid) and
+    while a job of it is urgent (due).
     k32: kernel32 (_kernel32); sleep, rounds, start: the tests' (a clock, an end, the thread's start). Returns the
     change made, None when the process is in the idle class already."""
-    import threading
-    import time
     sleep = sleep or time.sleep
     me = k32.GetCurrentProcess()
     own = int(k32.GetPriorityClass(me) or 0)
@@ -1113,9 +1150,11 @@ def background(k32, sleep=None, rounds=None, start=None):
             n += 1
             k32.SetPriorityClass(me, own)
             sleep(high)
-            k32.SetPriorityClass(me, WIN_IDLE)
+            if not pressed():           # (work the car is about to need: its class until it is done, due)
+                k32.SetPriorityClass(me, WIN_IDLE)
             sleep(BACKGROUND_PERIOD_S - high)
 
+    _DUE_NOW.append(lambda: k32.SetPriorityClass(me, own))
     if start is None:
         threading.Thread(target=run, name="priority-share", daemon=True).start()
     else:

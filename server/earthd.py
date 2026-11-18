@@ -341,6 +341,10 @@ MAP_AHEAD_S = 120.0
 MAP_AHEAD_MIN_M = 1500.0
 MAP_AHEAD_MAX_M = 10000.0
 MAP_AHEAD_MOVE_M = 200.0        # m the player moves before the list is made again
+# s before the car is near a cell from which its map ahead job is no longer work for later (budget.due; Windows: the
+# worker's own priority class instead of the idle one): a cell takes ~7-12 s at that priority, its road tiles are asked
+# for ~10 s and its trees ~20 s before the car
+MAP_AHEAD_URGENT_S = 30.0
 MAP_AHEAD_SIDE_K = 2.0          # a cell beside the path comes as much later as driving this many times its distance
 MAP_AHEAD_LAYERS = AHEAD_LAYERS + ("canopy", "landcover", "places")     # (places: the road tiles' gas stations)
 # the loading map (Server.load_map; the mod's debug window loadmap.lua, opened by its setting): a map cell's state
@@ -4343,8 +4347,10 @@ class Server:
                 plan = getattr(self, "map_ahead_plan", None)
             try:
                 towns = bool(getattr(self, "towns_on", False)) and Server.towns_enabled(self)
+                # (work for later in its process until the car is MAP_AHEAD_URGENT_S from the cell: budget.due)
+                due = None if ahead is None else time.time() + ahead - MAP_AHEAD_URGENT_S
                 dt = self.map_ahead_pool.submit(blockworker.warm_map, key, MAP_AHEAD_LAYERS,
-                                                self.veg is not None, towns, plan).result()
+                                                self.veg is not None, towns, plan, due).result()
                 self.map_ahead_stats["cells"] += 1
                 self.map_ahead_stats["s"] += dt or 0.0
                 self.map_ahead_state[key] = (LOAD_MAP_READY, dt or 0.0)

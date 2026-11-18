@@ -710,7 +710,7 @@ def _towns_warm(key):
     _towns_warm_ex.submit(run)
 
 
-def warm_map(key, layers, veg=True, towns=False, plan=None):
+def warm_map(key, layers, veg=True, towns=False, plan=None, due=None):
     """Map data cell key ((z, x, y)) built into the disk caches ahead of the car (earthd.Server.map_ahead): its
     layers (MapData.cell) and its vegetation cell (Vegetation.cell, which reads its 3 x 3 neighbours' roads,
     buildings and water). On a first visit a trees geotile spent ~56 s on its cell's map data and 0.01 s on its
@@ -719,7 +719,14 @@ def warm_map(key, layers, veg=True, towns=False, plan=None):
     communes' village points and land cover, 9-14 s at 300 km/h). plan: (anchor id, lat, lon): the cell's road plans
     too (plan_cell, into the run's plan cache: the grading every road and trees tile of the cell reads its ground
     through; unplanned, the first trees tile of each new cell waited 3-14 s for them and its road tiles up to 6 s,
-    2026-11-16). Seconds."""
+    2026-11-16). due: the time.time() from which the car is about to need the cell (budget.due: this process, work
+    for later otherwise, at the server's own priority from then). Seconds."""
+    import budget
+    with budget.due(due):
+        return _warm_map(key, layers, veg, towns, plan)
+
+
+def _warm_map(key, layers, veg, towns, plan):
     import vegetation as vegetationmod
     if _s.md is None:
         return 0.0

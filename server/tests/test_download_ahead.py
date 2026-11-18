@@ -102,10 +102,11 @@ class FakeMapAheadPool:
         self.keys = []
         self.lock = threading.Lock()
 
-    def submit(self, fn, key, layers, veg, towns=False, plan=None):
+    def submit(self, fn, key, layers, veg, towns=False, plan=None, due=None):
         with self.lock:
             self.keys.append(key)
             self.towns, self.plan = towns, plan
+            self.due = getattr(self, "due", []) + [due]
         return FakeFuture()
 
 
@@ -146,6 +147,11 @@ class MapAheadTest(unittest.TestCase):
         self.assertGreaterEqual(ys[0], max(ys) - 1, "the cells around the car first")
         # (the guess spreads with the distance: the last cells are the far end's, a row of them at most beside it)
         self.assertLessEqual(ys[-1], min(ys) + 1, "the farthest north last")
+        # each with the moment the car is MAP_AHEAD_URGENT_S from it: at once round the car, later further on
+        import time
+        due, now = s.map_ahead_pool.due, time.time()
+        self.assertLess(due[0], now)
+        self.assertGreater(due[-1], now + 60.0 - earthd.MAP_AHEAD_URGENT_S)
         earthd.Server.map_ahead(s, a, 50.0, 0.0, 0.0, 40.0)     # less than MAP_AHEAD_MOVE_M later: no new list
         self.assertEqual(s.map_ahead_last[1], 0.0)
         earthd.Server.map_ahead(s, a, 0.0, 300.0, 0.0, 40.0)    # further on: only new cells

@@ -310,6 +310,34 @@ class BackgroundTest(unittest.TestCase):
         self.assertLess(slept[0], budget.BACKGROUND_PERIOD_S)
         self.assertEqual(k.cls, budget.WIN_IDLE)
 
+    def test_work_the_car_is_about_to_need_keeps_its_class(self):
+        k, runs, now = self.K32(budget.WIN_BELOW_NORMAL), [], [1000.0]
+        job = budget.due(1003.0)        # (urgent from 1003 on)
+
+        def sleep(s):
+            k.calls.append(("sleep", s))
+            now[0] += s
+        with mock.patch.object(budget.time, "time", lambda: now[0]), mock.patch.object(budget, "_DUE_NOW", []):
+            budget.background(k, sleep=sleep, rounds=3, start=runs.append)
+            self.assertFalse(budget.pressed())
+            with job:
+                self.assertFalse(budget.pressed(), "not yet")
+                self.assertEqual(k.cls, budget.WIN_IDLE)
+                k.calls.clear()
+                now[0] = 1000.0
+                with mock.patch.object(budget.os, "getpid", lambda: 0):
+                    runs[0]()
+            classes = [c[1] for c in k.calls if c[0] == "class"]
+            # (its share of rounds 1 and 2 ends at 1000.25 and 1002.25: idle again; round 3's at 1004.25: urgent)
+            self.assertEqual(classes, [budget.WIN_BELOW_NORMAL, budget.WIN_IDLE, budget.WIN_BELOW_NORMAL,
+                                       budget.WIN_IDLE, budget.WIN_BELOW_NORMAL])
+            self.assertFalse(budget.pressed(), "done: work for later again")
+            k.cls = budget.WIN_IDLE
+            with budget.due(now[0] - 1.0):
+                self.assertEqual(k.cls, budget.WIN_BELOW_NORMAL, "urgent as it begins: its class at once")
+            with budget.due(None):
+                self.assertFalse(budget.pressed())
+
     def test_an_idle_process_stays_as_it_is(self):
         k, runs = self.K32(budget.WIN_IDLE), []
         self.assertIsNone(budget.background(k, start=runs.append))
