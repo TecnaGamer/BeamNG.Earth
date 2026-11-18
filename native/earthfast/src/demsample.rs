@@ -82,6 +82,31 @@ const DETACH_MIN: usize = 4096;
 /// read (the copy then costs at most about what the bilinear does) and at least DETACH_MIN: a call below holds the
 /// GIL for well under a millisecond (deshadow's padded 1250 x 1250 grid: ~1.6 M points on a few tiles, copied).
 const SNAPSHOT_POINTS_PER_TILE: usize = 1024;
+/// ... and when the copies take at most this many bytes (by the tiles' area: a box of many tiles, or a huge tile that
+/// is one broadcast scalar, is read in place with the GIL held instead).
+const SNAPSHOT_MAX_BYTES: usize = 64 << 20;
+
+/// Whether the tiles of a box are copied out for a bilinear without the GIL (see the constants above).
+fn snapshot(points: usize, tiles: usize, tile: usize) -> bool {
+    let bytes = tile.checked_mul(tile).and_then(|a| a.checked_mul(4)).and_then(|b| b.checked_mul(tiles));
+    points >= DETACH_MIN && points >= SNAPSHOT_POINTS_PER_TILE.saturating_mul(tiles)
+        && bytes.is_some_and(|b| b <= SNAPSHOT_MAX_BYTES)
+}
+
+static BORROW_API: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// rust-numpy's shared borrow checking set up (its first borrow imports numpy's multiarray module and looks its capsule
+/// up: Python that could run hooks), on a private array, before any caller array is checked and borrowed.
+fn borrow_api_ready(py: Python<'_>) -> PyResult<()> {
+    use numpy::PyArrayMethods;
+    use std::sync::atomic::Ordering;
+    if !BORROW_API.load(Ordering::Acquire) {
+        let a = PyArray1::<f64>::zeros(py, 1, false);
+        drop(a.try_readonly().map_err(|e| PyValueError::new_err(format!("dem_sample: {e}")))?);
+        BORROW_API.store(true, Ordering::Release);
+    }
+    Ok(())
+}
 
 /// f() with the GIL released when n points make it worth it (f touches no Python object).
 fn gil_free<T: Send>(py: Python<'_>, n: usize, f: impl FnOnce() -> T + Send) -> T {
@@ -356,7 +381,7 @@ fn sample_box(cfg: &Cfg, lat: &[f64], lon: &[f64], fetch: &Bound<'_, PyAny>, pol
     }
     let guards: Vec<PyReadonlyArray2<'_, f32>> = arrs.iter().map(borrowed).collect::<PyResult<_>>()?;
     let bad = |_| PyValueError::new_err("dem_sample: a pixel outside the tiles read");
-    let out = if np >= DETACH_MIN && np >= SNAPSHOT_POINTS_PER_TILE * nkeys {
+    let out = if snapshot(np, nkeys, tu) {
         // (copies of the tiles: read with the GIL released, no Python thread can write them meanwhile)
         let owned: Vec<numpy::ndarray::Array2<f32>> = guards.iter().map(|g| g.as_array().to_owned()).collect();
         drop(guards);
@@ -390,6 +415,7 @@ pub fn dem_sample<'py>(py: Python<'py>, lat: Bound<'py, PyAny>, lon: Bound<'py, 
         return Err(PyValueError::new_err("dem_sample: zoom up to 30, tiles of 2 to 2^20 pixels, up to 2^20 a box"));
     }
     // (the coordinates copied out: no borrow of the caller's arrays is held while Python runs a callback)
+    borrow_api_ready(py)?;
     let (mut la, mut lo) = (coords(&lat)?, coords(&lon)?);
     if la.len() != lo.len() {
         return Err(PyValueError::new_err("dem_sample: lat and lon differ in length"));
@@ -421,4 +447,18 @@ pub fn dem_sample<'py>(py: Python<'py>, lat: Bound<'py, PyAny>, lon: Bound<'py, 
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(dem_sample, m)?)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::snapshot;
+
+    #[test]
+    fn snapshot_budget() {
+        assert!(snapshot(1 << 20, 4, 512));                 // 4 MiB of copies
+        assert!(!snapshot(1 << 30, 1024, 512));             // 1 GiB: read in place
+        assert!(!snapshot(1 << 20, 1, 1 << 20));            // a 4 TiB tile (a broadcast scalar): in place
+        assert!(!snapshot(usize::MAX, usize::MAX, usize::MAX));
+        assert!(!snapshot(4095, 1, 512));                   // too few points to detach
+    }
 }

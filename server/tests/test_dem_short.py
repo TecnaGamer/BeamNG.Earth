@@ -389,6 +389,61 @@ class SampleReadsOnlyItsTilesTest(unittest.TestCase):
                                   lambda keys: [tile for _ in keys], lambda la, lo: None)
         self.assertEqual(got.tolist(), [0.0])
 
+    def test_borrow_api_set_up_before_checks(self):
+        """rust-numpy's borrow checking is set up (its first use imports numpy's multiarray module and looks a capsule
+        up: Python hooks can run) before a caller's array is checked: a hook there that changes the input array makes
+        the check refuse it (TypeError), never a borrow of an array changed after its check (a fresh process: the set
+        up happens once)."""
+        import subprocess
+        code = r'''
+import sys
+sys.path.insert(0, sys.argv[1])
+import numpy as np
+import fast
+try:
+    import numpy._core.multiarray as ma
+except ImportError:
+    import numpy.core.multiarray as ma
+lat, lon = np.array([40.0, 40.001]), np.array([-73.9, -73.9])
+called = []
+def hook(name):
+    if name == "_RUST_NUMPY_BORROW_CHECKING_API" and not called:
+        called.append(name)
+        lat.resize((1, 2), refcheck=False)
+    raise AttributeError(name)
+ma.__getattr__ = hook
+try:
+    fast._ef.dem_sample(lat, lon, 12, 512, 84.9, 1024, 16, 4, 2,
+                        lambda keys: [np.zeros((512, 512), np.float32) for _ in keys], lambda a, b: None)
+    print("RESULT ok", len(called))
+except (TypeError, ValueError) as e:
+    print("RESULT", type(e).__name__, len(called))
+'''
+        r = subprocess.run([sys.executable, "-c", code, str(Path(__file__).resolve().parents[1])],
+                           capture_output=True, text=True, timeout=120)
+        self.assertIn("RESULT TypeError 1", r.stdout, r.stdout + r.stderr[-2000:])
+
+    def test_snapshot_budget(self):
+        """The tiles are copied out for a bilinear without the GIL only within a byte budget: a huge tile that is one
+        broadcast scalar (4 TiB as a copy) and a box of 81 tiles (81 MiB) are read in place, with the same heights."""
+        import fast
+        lat = np.linspace(10.0, 11.0, 5000)
+        lon = np.linspace(20.0, 21.0, 5000)
+        big = np.broadcast_to(np.float32(5.0), (1 << 20, 1 << 20))
+        got = fast._ef.dem_sample(lat, lon, 0, 1 << 20, 84.9, 1024, 16, 4, 2,
+                                  lambda keys: [big for _ in keys], lambda a, b: None)
+        self.assertEqual(set(got.tolist()), {5.0})
+        z, x0, y0 = 12, 2000, 1500
+        px, py = np.meshgrid(np.linspace(x0 * T + 0.7, (x0 + 9) * T - 1.3, 300),
+                             np.linspace(y0 * T + 0.7, (y0 + 9) * T - 1.3, 300))
+        lat, lon = self._lat_lon(z, px.ravel(), py.ravel())
+        with tempfile.TemporaryDirectory() as d:
+            dem = StandInDem(d)
+            whole = dem.sample(lat, lon, z)                      # (90,000 points on 81 tiles: in place)
+            self.assertEqual(len(set(dem.loaded)), 81)
+            parts = np.concatenate([dem.sample(lat[i:i + 900], lon[i:i + 900], z) for i in range(0, len(lat), 900)])
+        np.testing.assert_array_equal(whole, parts)
+
     def test_shapes(self):
         """Broadcast lat / lon in, their shape out (a scalar: a 0-d array), float64."""
         z = 12
