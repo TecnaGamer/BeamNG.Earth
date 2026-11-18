@@ -152,6 +152,42 @@ class KeptStandInTest(unittest.TestCase):
             self.assertFalse(later.complete)
             self.assertIn((12, 1, 1), dem._lru_short)
 
+    def test_stand_in_never_replaces_a_complete_tile(self):
+        """A stand-in (a retry that failed again, _from_ancestor's inline load) put after another thread published
+        the same tile complete: the complete one stays, unmarked; a complete one replaces a stand-in."""
+        key = (12, 5, 7)
+        with tempfile.TemporaryDirectory() as d:
+            dem = StandInDem(d)
+            good = np.full((T, T), 9.0, np.float32)
+            with dem._lock:
+                dem._lru_put(key, good, None)
+                dem._lru_put(key, np.zeros((T, T), np.float32), (1, 0, 0.0))
+            self.assertIs(dem._lru[key], good)
+            self.assertNotIn(key, dem._lru_short)
+            other = (12, 6, 7)
+            with dem._lock:
+                dem._lru_put(other, np.zeros((T, T), np.float32), (1, 0, 0.0))
+                dem._lru_put(other, good, None)
+            self.assertIs(dem._lru[other], good)
+            self.assertNotIn(other, dem._lru_short)
+
+    def test_superseded_load_does_not_publish(self):
+        """A load whose key another load took over (the urgent lane's reload) publishes nothing when it finishes."""
+        from concurrent.futures import Future
+        key = (12, 5, 7)
+        with tempfile.TemporaryDirectory() as d:
+            dem = StandInDem(d)
+            old, new = Future(), Future()
+            old.set_result((np.zeros((T, T), np.float32), (1, 0, 0.0)))
+            new.set_result((np.full((T, T), 3.0, np.float32), None))
+            dem._inflight[key] = new
+            dem._finish(key, old)                   # (the superseded one, finishing late)
+            self.assertNotIn(key, dem._lru)
+            self.assertIs(dem._inflight[key], new)
+            dem._finish(key, new)
+            self.assertEqual(float(dem._lru[key][0, 0]), 3.0)
+            self.assertNotIn(key, dem._inflight)
+
     def test_evicted_marks_go(self):
         with tempfile.TemporaryDirectory() as d:
             dem = StandInDem(d, failing={(12, 0, 0)})
