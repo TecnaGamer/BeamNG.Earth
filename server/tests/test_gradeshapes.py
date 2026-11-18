@@ -324,6 +324,27 @@ def test_decks_at_different_levels_meet_end_to_end_only_on_a_map_node():
     assert len(systems) == 1 and _joined(net, systems[0], "upper", "lower")
 
 
+def test_a_roads_lane_sections_meeting_end_to_end_at_different_levels_are_joined_not_separated():
+    # Shanghai: one elevated road cut where its lane count changes ("<road>~lanes<a>-<b>"), the sections tagged levels 1
+    # and 2 by the map and sharing no node by the cut: taken for two decks one over the other, a clearance between
+    # two samples the joint holds equal: the system infeasible, left as it was. They are one road going on
+    def members(second):
+        return [Member("r~lanes0-1", _line(-300, 0, 0, 0, 76), "deck", "motorway", 20, 1, 3.0, None,
+                       frozenset({"a", "m1"})),
+                Member(second, _line(0, 0, 300, 0, 76), "deck", "motorway", 20, 2, 3.0, None, frozenset({"m2", "b"})),
+                Member("w", _line(-800, 0, -300, 0), "ground", "motorway", 20, 0, 3.0, None, frozenset({"w", "a"})),
+                Member("e", _line(300, 0, 800, 0), "ground", "motorway", 20, 0, 3.0, None, frozenset({"e", "b"})),
+                Member("s1", _line(-150, -300, -150, 300, 100), "ground", "secondary", 50, 0, 5.0, None,
+                       frozenset({"s1a", "s1b"})),
+                Member("s2", _line(150, -300, 150, 300, 100), "ground", "secondary", 50, 0, 5.0, None,
+                       frozenset({"s2a", "s2b"}))]
+    net, systems, shapes, emb = _run(members("r~lanes1-2"))
+    assert len(systems) == 1 and _joined(net, systems[0], "r~lanes0-1", "r~lanes1-2")
+    assert shapes[0][2] is not None
+    net, systems, shapes, emb = _run(members("other"))                # another road's deck there: a separation
+    assert len(systems) == 1 and not _joined(net, systems[0], "r~lanes0-1", "other")
+
+
 def _arc(c, r, a0, a1, n=48):
     a = np.radians(np.linspace(a0, a1, n))
     return np.asarray(c, np.float64) + r * np.stack([np.cos(a), np.sin(a)], axis=1)
