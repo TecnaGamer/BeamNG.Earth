@@ -33,8 +33,10 @@ UPDATE = "python server/tests/drivability.py --update {}"
 #       mooslacken 11.2 -> 16.3 the one worse): that is the I-20 question (a motorway over a local road: dug or raised), not
 #       the rail's. A defect, not fixed (the baseline holds it).
 #   casagranda_portal 35.0 -> 55.3, casagranda_bridge 37.4 -> 51.1: PR 34 (tunnel mouths: a tunnel's portal where a bridge
-#       goes on reads the ground line outward from the mouth, the gorge's floor 14 m under the deck: the tunnels and the
-#       bridge between them lowered 15 m, 31 % grade into the portal). A defect, not fixed (the baseline holds it).
+#       goes on read the ground line outward from the mouth, the gorge's floor 14 m under the deck: the tunnels and the
+#       bridge between them lowered 15 m, 31 % grade into the portal). Fixed: where a bridge goes on the portal is the
+#       structure's own height (roads.mouth_over_deck), 30.9 and 26.7, under both the old numbers (the bridge between the
+#       tunnels no longer climbs 5 m in its 31 m).
 #   riva_pontera_tunnel 20.6 -> 24.2 (the centre line of d4d83607 rises 1.8 m), boston_storrow_massave 26.1 -> 31.3,
 #       boston_bowker 81.6 -> 84.3, paris_maillot_ax 120.0 -> 124.5, tamar_bridge 20.7 -> 21.4: PR 33 (retaining walls: the wall
 #       line between two roads at other levels, which the harness reads as a step across it). The Riva one is a probable

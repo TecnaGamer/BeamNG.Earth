@@ -8530,8 +8530,16 @@ def _shallow_full_low(s, g, floor, kinds):
 # the ground at its end is the road's own level where it meets the mouth. So the road's last MOUTH_NEAR_M are its own
 # line from there to MOUTH_FAR_M back on, as a bridge's approach keeps its grade to the abutment (fill_abutment: which
 # only fills where the ground falls away, a mouth's ground is the hill over it, never the road: always). A tunnel's end
-# with no road joining it (Zurich Brunau: it goes on as a bridge, the node read 442.5 m off the face, the survey's road
-# 436) reads the same line outward from the mouth (TunnelProfiles._ends_ground).
+# with no road joining it (a road mapped short of its mouth) reads the same line outward from the mouth
+# (TunnelProfiles._ends_ground). Where a bridge goes on from the mouth that line is not the road: it is the ground under
+# the deck (Galleria Casagranda, the tunnels either side of a bridge over a gorge: the line read the gorge's wall and
+# floor, 58.0 m where the elevation at the node was 72.2 and the deck's own abutment stood, the tunnels and the bridge
+# between them dropped 15 m, a 31 % grade into the portal). The road there is the structure's own natural height: the line
+# between the ground at the two ends of the whole chain, the tunnel's other end and the bridge's far ends
+# (findground rule 1; Brunau's far portal, the tunnel going on as a viaduct, 436.2 m on the line between the tunnel's
+# other mouth and the viaduct's far abutment, the survey's road 436.0, the node 442.4: the face), and never above the
+# ground at the node, the face being the hill over the road (a tunnel's floor stands under the ground: the line between
+# Casagranda's ends is 23 m over its gorge's lip; TunnelProfiles._deck_mouth_ground).
 MOUTH_NEAR_M = 8.0          # m from the mouth the elevation is not the road's: the portal's face and its cutting ...
 MOUTH_FAR_M = 40.0          # ... the road's own grade read from there to this far
 MOUTH_STEP_M = 2.0          # m between the samples fill_mouth reads (grading.PROFILE_STEP)
@@ -8553,6 +8561,26 @@ def fill_mouth(z, at_end, step=MOUTH_STEP_M):
     q = p.copy()
     q[:n] = a + b * d[:n]
     return q[::-1] if at_end else q
+
+
+def mouth_over_deck(z_back, back_m, far, s=(), g=(), lift=DECK_CLEAR):
+    """The road's level at a tunnel's mouth where bridge parts go on from it, the lowest the bridge's own laws leave it:
+    on the structure's natural height, the straight line (findground rule 1; deck_heights) from z_back, the ground at
+    the tunnel's other end back_m m behind the mouth, to the ground at the far end of each deck part, far [(ground m,
+    length m)], weighted by 1 / their distances as a joint of decks is; and at least as high as the straight road from
+    the tunnel's other end that clears the ground g, s m past the mouth under the decks, by `lift` (deck_profile_once).
+    Over a gap it is the line to the far lip, over a bank the road standing on it. Pure."""
+    far = [(float(z), float(m)) for z, m in far if np.isfinite(z) and m > 0]
+    if not far:
+        return float("nan")
+    w = np.array([1.0 / max(back_m, 1e-6)] + [1.0 / m for _z, m in far])
+    line = float((np.array([z_back] + [z for z, _m in far]) * w).sum() / w.sum())
+    s, g = np.asarray(s, np.float64), np.asarray(g, np.float64)
+    ok = np.isfinite(s) & np.isfinite(g)
+    if not ok.any():
+        return line
+    clear = float(z_back + back_m * np.max((g[ok] + lift - z_back) / (s[ok] + back_m)))
+    return max(line, clear)
 
 
 class TunnelProfiles(BridgeProfiles):
@@ -8886,11 +8914,12 @@ class TunnelProfiles(BridgeProfiles):
                 got = self._pins[pid] = (float("nan"), float("nan"))
             return got
 
-    def _ends_ground(self, xy, out=None):
+    def _ends_ground(self, xy, out=None, on=None):
         """The ground at the portals xy (m, 2) (frame z): the roads' graded height where a road joins, and where none
-        does (a tunnel going on as a bridge, a road mapped short of its mouth) the ground read as the road's own level
-        at the mouth: out (m, 2), the unit direction away from the tunnel at each portal, the ground read that way
-        (fill_mouth), not the face the node stands on."""
+        does (a road mapped short of its mouth) the ground read as the road's own level at the mouth: out (m, 2), the
+        unit direction away from the tunnel at each portal, the ground read that way (fill_mouth), not the face the node
+        stands on. on: per portal the height (geodetic) a bridge going on from it gives instead, or None
+        (_deck_mouth_ground: the ground read that way is the gorge under the deck, not the road)."""
         if self.ends is None:
             return self._ground(xy)
         la, lo, _ = self.frame.enu_to_geodetic(xy[:, 0], xy[:, 1], 0.0)
@@ -8900,9 +8929,74 @@ class TunnelProfiles(BridgeProfiles):
             pts = xy[:, None, :] + d[None, :, None] * np.asarray(out, np.float64)[:, None, :]
             pla, plo, _ = self.frame.enu_to_geodetic(pts[..., 0].ravel(), pts[..., 1].ravel(), 0.0)
             z = np.asarray(self.raw(pla, plo), np.float64).reshape(len(xy), len(d))
-            base = np.array([fill_mouth(zi, False, MOUTH_STEP_M)[0] for zi in z], np.float64)
+            base = np.array([fill_mouth(zi, False, MOUTH_STEP_M)[0] if on is None or on[i] is None else on[i]
+                             for i, zi in enumerate(z)], np.float64)
         got = self.ends(la, lo) if base is None else self.ends(la, lo, base)
         return self.frame.geodetic_to_enu(la, lo, np.asarray(got, np.float64))[2]
+
+    def _decks_at(self, p):
+        """The deck lines (ENU xy, from p outward) of the bridge parts that go on from the portal at p: those with an end
+        within the join tolerance of it, each part's longest copy (a part comes clipped differently by the map cells
+        around: the map cell at each far end read until none is new, CHAIN_CELLS at most, as BridgeProfiles._resolve).
+        [] where no bridge goes on from it. Pure given the map."""
+        with self.lock:
+            decks = self.__dict__.get("_decks")
+            if decks is None:
+                decks = self.__dict__["_decks"] = BridgeProfiles(self.frame, self.cell_fn, self.elev)
+        pool, loaded = {}, set()
+
+        def load(q):
+            la, lo, _ = self.frame.enu_to_geodetic(np.array([q[0]]), np.array([q[1]]), 0.0)
+            ck = mapcells.cell_of(float(la[0]), float(lo[0]))
+            if str(ck) in loaded or len(loaded) >= CHAIN_CELLS:
+                return False
+            loaded.add(str(ck))
+            for k, v in decks._cell_entries(ck)[0]:
+                old = pool.get(k)
+                if old is None or v[4] > old[4]:
+                    pool[k] = v
+            return True
+        p = np.asarray(p, np.float64)[:2]
+        load(p)
+        while True:
+            out = []
+            for k in sorted(pool):
+                xy = np.asarray(pool[k][1], np.float64)[:, :2]
+                if float(dnp.hypot(*(xy[0] - p))) < 0.5:
+                    out.append(xy)
+                elif float(dnp.hypot(*(xy[-1] - p))) < 0.5:
+                    out.append(xy[::-1])
+            if not any([load(xy[-1]) for xy in out]):
+                return out
+
+    def _deck_mouth_ground(self, decks, line, at, z_back):
+        """The height (geodetic) of the portal at the end `at` (0 or 1) of the tunnel part `line` where the bridge parts
+        decks (_decks_at) go on from it, z_back the ground (frame z) at the part's other end: the road's level there is
+        the structure's own (mouth_over_deck), the ground read at the decks' far ends and under them from MOUTH_NEAR_M,
+        the portal's face and cutting, to MOUTH_FAR_M and short of MOUTH_NEAR_M of a deck's far end (the face or abutment
+        there); never over the ground at the node, the face being the hill over the road. A deck shorter than
+        MOUTH_NEAR_M is no more than the portal's own face: left out, and None where none is left (the ground read
+        outward is then the road's, as fill_mouth reads it)."""
+        line = np.asarray(line, np.float64)[:, :2]
+        p = line[0 if at == 0 else -1]
+        back = float(dnp.hypot(*np.diff(line, axis=0).T).sum())
+        far, s, pts = [], [], []
+        for d in decks:
+            arc = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(d, axis=0).T))]
+            if arc[-1] < MOUTH_NEAR_M:
+                continue
+            far.append((float(self._raw_ground(d[-1:])[0]), float(arc[-1])))
+            at_s = np.arange(MOUTH_NEAR_M, min(MOUTH_FAR_M, arc[-1] - MOUTH_NEAR_M) + 1e-6, MOUTH_STEP_M)
+            s.append(at_s)
+            pts.append(np.c_[np.interp(at_s, arc, d[:, 0]), np.interp(at_s, arc, d[:, 1])])
+        if not far:
+            return None
+        pts = np.concatenate(pts)
+        z = mouth_over_deck(z_back, back, far, np.concatenate(s), self._raw_ground(pts) if len(pts) else [])
+        if not np.isfinite(z):
+            return None
+        z = min(z, float(self._raw_ground(np.asarray([p], np.float64))[0]))
+        return float(np.asarray(self.frame.enu_to_geodetic(np.array([p[0]]), np.array([p[1]]), np.array([z]))[2])[0])
 
     def _solve(self, comp, pool, ground):
         """Per part: the floor (the hull of the ungraded ground, its ends at the roads' graded height at its portals,
@@ -8952,7 +9046,21 @@ class TunnelProfiles(BridgeProfiles):
             if at and not underwater:
                 away = np.array([xy[0] - xy[1], xy[-1] - xy[-2]], np.float64)[at]
                 away /= np.maximum(dnp.hypot(away[:, 0], away[:, 1]), 1e-9)[:, None]
-                ge[at] = np.asarray(self._ends_ground(xy[[0, -1]][at], away), np.float64)
+                ends_xy = xy[[0, -1]][at]
+                ge[at] = np.asarray(self._ends_ground(ends_xy, away), np.float64)
+                # (a portal a bridge goes on from takes its height from the chain's natural line, not the ground read
+                # outward under the deck: _deck_mouth_ground; its tunnel's other end as it was read)
+                decks = {e: self._decks_at(q) for e, q in zip(at, ends_xy)}
+                for i, e in enumerate(at):
+                    if not decks[e]:
+                        continue
+                    o = 1 - e
+                    pz = pins.get(k, (np.nan, np.nan))[o]
+                    # (the other end: the network's floor where it is a joint, its portal as read, else the ground)
+                    zb = float(pz) if np.isfinite(pz) else float(ge[o] if o in at and not decks[o] else g_raw[-o])
+                    h = self._deck_mouth_ground(decks[e], xy, e, zb)
+                    if h is not None:
+                        ge[e] = float(np.asarray(self._ends_ground(ends_xy[i:i + 1], away[i:i + 1], on=[h]))[0])
             g = g.copy()
             g[0], g[-1] = ge[0], ge[-1]
             pinned = [False, False]
