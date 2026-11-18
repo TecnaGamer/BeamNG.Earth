@@ -104,6 +104,15 @@ def _zig_on_path():
         os.environ["PATH"] = zdir + os.pathsep + os.environ.get("PATH", "")
 
 
+def _host_glibc():
+    """This machine's glibc as (major, minor); (0, 0) when unknown (a non-glibc libc: nothing to refuse)."""
+    try:
+        ver = os.confstr("CS_GNU_LIBC_VERSION").split()[-1]
+        return tuple(int(p) for p in ver.split(".")[:2])
+    except (AttributeError, ValueError, OSError, IndexError):
+        return (0, 0)
+
+
 def main():
     _zig_on_path()
     if "--fast" in sys.argv[1:]:
@@ -115,7 +124,8 @@ def main():
     if os.path.exists(FAST_MARK):
         os.remove(FAST_MARK)
     if sys.platform.startswith("linux") and not (shutil.which("cargo-zigbuild") and shutil.which("zig")) \
-            and "--host-glibc" not in sys.argv[1:]:
+            and "--host-glibc" not in sys.argv[1:] and _host_glibc() > tuple(map(int, LINUX_GLIBC.split("."))):
+        # (a host no newer than LINUX_GLIBC, such as CI's and the release's ubuntu-22.04 (2.35), builds as before)
         # (a release module built against this rolling distro's glibc (2.44) fails to load on older systems; an agent
         # worktree has no .claude/devtools, so a $PWD zig path came up empty and the build fell through silently,
         # 2026-11-18: refuse instead; --host-glibc for a local-only module)
