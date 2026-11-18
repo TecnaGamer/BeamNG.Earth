@@ -7642,6 +7642,12 @@ CORNER_CONCRETE_M = 4.0  # m: a concrete street this close to a curb return fill
 AT_GRADE_M = 3.0        # m: a road crossing a deck within AT_GRADE_REACH_M of an abutment that cannot get this
 AT_GRADE_REACH_M = 12.0     # high over it is a junction at grade (the intersection a ramp starts from)
 CHAIN_CELLS = 12        # map cells read at most to close one bridge chain
+# BNE_DECK_STRUCT=shadow (RS S2a fix): the cells the closure reads only for its halo (structures.halo: within reach of
+# the chain, holding none of its parts) have this budget of their own, apart from CHAIN_CELLS (the cells that hold the
+# chain's parts): a chain of 7 cells beside a cell row touched 7 empty ones and went to window solves (Codex review).
+# Discovery stays bounded: the halo's reach (under 73 m) is far below a map cell's side at any latitude the cells
+# cover (zoom 14, past 85 degrees: over 200 m), so a halo cell is one of the 8 round a chain cell: at most 8 x 12.
+CHAIN_HALO_CELLS = 8 * CHAIN_CELLS
 # A chain longer than CHAIN_CELLS cells (a long viaduct, a causeway) is solved in windows that do not depend on who
 # asks (BridgeProfiles.CANON_LOAD): the map cells are grouped in CHAIN_BLOCK x CHAIN_BLOCK blocks on the cells' own
 # grid; a piece is solved with the chain's parts in its block's cells and CHAIN_MARGIN cells round them, and only the
@@ -8074,6 +8080,12 @@ class BridgeProfiles:
                     fid = str(feats.ids[i])
                     if bs[i] is not None:
                         lvls = self.levels_of(feats, i)
+                        # (BNE_DECK_STRUCT=shadow, RS S2a: each part's grouping level and its source as a 7th field,
+                        # structures.part_levels: the OSM layer where no Overture level rule covers it)
+                        glv = None
+                        if self.STRUCTURES and structures.SHADOW:
+                            spans = _bridge_level_spans(feats, i)
+                            glv = structures.part_levels(feats, i, spans, len(lvls) // max(1, len(spans)))
                         best = {}
                         for j, (pk, ring) in enumerate(_keyed(self.keys_of, self.parts_of, feats, i)):
                             if (fid, pk) in best and len(ring) <= best[(fid, pk)][4]:
@@ -8082,6 +8094,8 @@ class BridgeProfiles:
                             best[(fid, pk)] = (bs[i], densify(_dedupe(np.stack([e, n], axis=1)), DECK_STEP),
                                               float(np.mean(ring[:, 0])), lvls[j] if j < len(lvls) else 1.0, len(ring),
                                               str(names[i]) if names is not None else "")     # (roadz: name matching)
+                            if glv is not None:
+                                best[(fid, pk)] += (glv[j] if j < len(glv) else (best[(fid, pk)][3], 2),)
                         parts.extend(best.items())
                     if rs[i] is not None:
                         lines = []
@@ -8194,14 +8208,30 @@ class BridgeProfiles:
             for a, b, _, _ in over:
                 crossing.setdefault(keys[a], set()).add(keys[b])
                 crossing.setdefault(keys[b], set()).add(keys[a])
+            # (BNE_DECK_STRUCT=shadow, RS S2a fix: every test of the closure below by half widths capped at
+            # structures.HALF_MAX_M, the widest its cell halo allows for: a 100 m deck's raw width paired it, beside
+            # or by an end on it, with a deck whose halo never reached its cell, so the deck asked first decided the
+            # chain (Codex review). Off: the raw widths, as before)
+            if self.STRUCTURES and structures.SHADOW:
+                halves = [structures.half_of(pool[k][0].width) for k in keys]
+                widths = [2.0 * h for h in halves]
+            else:
+                widths = [pool[k][0].width for k in keys]
+                halves = [pool[k][0].width / 2 for k in keys]
             # and side by side / one over the other (solved apart, the Queensboro Bridge's two upper roadways met at
             # a 0.5 m step and its tiles' decks at different heights stood as blocks in the lanes, 2026-10-17)
-            for a, b in _deck_beside([pool[k][1] for k in keys], [pool[k][0].width for k in keys]):
+            for a, b in _deck_beside([pool[k][1] for k in keys], widths):
                 crossing.setdefault(keys[a], set()).add(keys[b])
                 crossing.setdefault(keys[b], set()).add(keys[a])
+            # (BNE_DECK_STRUCT=shadow, RS S2a "one owner": and every pair that could be one structure, within the
+            # design's 6 m edge to edge by the grouping's own rules (structures.touch): every structure edge inside one
+            # chain. At 1.5 m alone, 33 pairs of the structures corpus lay in two chains, 2026-11-18)
+            if self.STRUCTURES and structures.SHADOW:
+                for a, b in structures.touch([pool[k] for k in keys], keys):
+                    crossing.setdefault(keys[a], set()).add(keys[b])
+                    crossing.setdefault(keys[b], set()).add(keys[a])
             # and a free end joining another part's end (_end_joins): solved as one
-            for a, b in self._end_join_pairs([pool[k][1] for k in keys], [pool[k][0].width / 2 for k in keys], ground,
-                                             [pool[k][3] for k in keys]):
+            for a, b in self._end_join_pairs([pool[k][1] for k in keys], halves, ground, [pool[k][3] for k in keys]):
                 crossing.setdefault(keys[a], set()).add(keys[b])
                 crossing.setdefault(keys[b], set()).add(keys[a])
             comp, stack = {start}, [start]
@@ -8225,7 +8255,10 @@ class BridgeProfiles:
             if not grow:
                 return sorted(comp)
             grew = False
-            for p in ends:
+            # (BNE_DECK_STRUCT=shadow, RS S2a fix: the cells below, every chain point's and the halo's, each with its
+            # own budget; the loose ends' cells are among the chain points')
+            struct = self.CANON_LOAD and self.STRUCTURES and structures.SHADOW
+            for p in (() if struct else ends):
                 la, lo, _ = self.frame.enu_to_geodetic(np.array([p[0]]), np.array([p[1]]), 0.0)
                 key = mapcells.cell_of(float(la[0]), float(lo[0]))
                 if str(key) not in loaded and len(loaded) >= CHAIN_CELLS and self.CANON_LOAD:
@@ -8240,6 +8273,33 @@ class BridgeProfiles:
                 xy = np.concatenate([np.asarray(pool[k][1], np.float64)[:, :2] for k in sorted(comp)])
                 la, lo, _ = self.frame.enu_to_geodetic(xy[:, 0], xy[:, 1], 0.0)
                 cells = {str(c): c for c in mapcells.cells_of(np.asarray(la), np.asarray(lo))}
+                if struct:
+                    # (RS S2a: and the cells within reach of them (structures.halo, per part, by its own width), where
+                    # a deck that could be one structure with a chain part may lie in a cell none of the chain's points
+                    # reach: Codex. The fix: the chain's own cells alone count against CHAIN_CELLS, the halo's against
+                    # CHAIN_HALO_CELLS (a halo cell that holds a part is a chain cell at the next pass); both sets only
+                    # grow with the chain, so whether it is capped does not depend on who asked)
+                    if len(cells) > CHAIN_CELLS:
+                        raise _Capped()
+                    hxy = np.concatenate([structures.halo(np.asarray(pool[k][1], np.float64)[:, :2],
+                                                          float(pool[k][0].width) / 2) for k in sorted(comp)])
+                    la, lo, _ = self.frame.enu_to_geodetic(hxy[:, 0], hxy[:, 1], 0.0)
+                    hal = {str(c): c for c in mapcells.cells_of(np.asarray(la), np.asarray(lo)) if str(c) not in cells}
+                    if len(hal) > CHAIN_HALO_CELLS:
+                        raise _Capped()
+                    # (and a hard bound on all the cells this closure reads, whatever its parts' copies did between
+                    # passes: roads come whole in every cell they touch, so a part's copy and the chain's footprint
+                    # only grow; a part kept as another, longer copy (_load) can leave cells read behind)
+                    if len(loaded | set(cells) | set(hal)) > CHAIN_CELLS + CHAIN_HALO_CELLS:
+                        raise _Capped()
+                    for c in sorted(set(cells) | set(hal)):
+                        if c not in loaded:
+                            loaded.add(c)
+                            self._load(cells[c] if c in cells else hal[c], pool, ground)
+                            grew = True
+                    if not grew:
+                        return sorted(comp)
+                    continue
                 for c in sorted(cells):
                     if c not in loaded:
                         if len(loaded) >= CHAIN_CELLS:
@@ -8562,6 +8622,7 @@ class BridgeProfiles:
 
     owner_of = None     # owner_of(self, comp, pool) -> the profiles that solve chain comp (ChainStore: the one of its
                         # first part's region), or None: this one
+    region_of = None    # region_of(self, comp, pool) -> owner_of's region, with no side effect (ChainStore._region_of)
 
     def parts_todo(self, todo, solved_only=False, part_ids=False):
         """[(fid, spec, xy, z, lon)] of the parts todo [((fid, j), feats, i)], each solved with its chain (once);
@@ -8746,18 +8807,18 @@ class BridgeProfiles:
         own = None if key in mine else (pool[key][0], pool[key][1], zs[comp.index(key)], pool[key][2])
         pre = {k: self._precommit(k, v, ground) for k, v in keep.items()}
         beams = tpiers = None
-        # (BNE_DECK_STRUCT=shadow, road revamp RS S1: the chain's structure groups as a JSON, from what this solve read
-        # alone: its pool, its heights, the bridge outlines its structure reads; nothing published changes. A window
-        # solve's chain (CHAIN_CELLS capped) is the legacy path in v1: a marker per window, whichever solves first)
+        # (BNE_DECK_STRUCT=shadow, road revamp RS: the chain's structure groups as a JSON, from what this solve read
+        # alone: its pool, its heights, the bridge outlines its structure reads (infra); nothing published changes.
+        # Handed to structures' background writer only AFTER the publish below, and only when this solve is the one
+        # published: S1 wrote it here, staged, from solves that then lost, were short or were a fallback, with the
+        # grouping and the file inside the build's fault window (Codex review of S1). A window solve's chain
+        # (CHAIN_CELLS capped) is the legacy path in v1: a marker per window)
         shadow = self.STRUCTURES and structures.SHADOW
         infra = [] if (shadow and fresh and block is None) else None
         if fresh:
             chain = [(v[1], v[2], v[0].width) for v in (keep.get(k) or before[k] for k in comp) if v is not None]
             beams, tpiers = self._structure(chain) if infra is None else self._structure(chain, infra)
-        if infra is not None:
-            structures.shadow(self, comp, pool, zs, infra)
-        elif shadow and block is not None:
-            structures.capped(self, comp, block)
+        won = False
         with self.lock:
             publish = []
             for k in comp:
@@ -8778,9 +8839,34 @@ class BridgeProfiles:
             if fresh and ck not in self.trusses:
                 self.trusses[ck] = beams
                 self.piers[("truss", ck)] = tpiers
-            if own is not None:         # (the asked piece's middle in another block than its asker's: not kept)
-                return own
-            return self._take_locked(key)
+                won = True
+            # (the asked piece's middle in another block than its asker's: not kept)
+            got = own if own is not None else self._take_locked(key)
+        if shadow:
+            # the published solve: the chain's own owner (not a fallback after its owner's solve failed: `owner`),
+            # read complete, every part of it and (a whole chain's) its structure published by this solve
+            # (an owner's own solve, asked by another store's adoption with adopt False, checks its ownership of the
+            # chain it resolved itself: a snapshot whose chain starts in another store's region is not this one's.
+            # By region, looked up with no side effect: a store evicted and made again for the same region is the
+            # same owner, and the check touches no store (Codex review, rounds 1 and 2))
+            mine = owner is None or owner is self
+            try:
+                if mine and self.region_of is not None:
+                    mine = self.region_of(self, comp, pool) == getattr(self, "region", None)
+            except Exception as ex:         # (a shadow: never in the solve's way)
+                log.debug("chain %s: owner: %s: %s", key, type(ex).__name__, ex)
+                mine = False
+            # (a short solve: none, unless a developer's probe asked for those too, marked: structures.ACCEPT_SHORT)
+            short_ = bool(n_short or n_lidar)
+            canon = mine and (not short_ or structures.ACCEPT_SHORT)
+            whole = block is None and won and len(publish) == len(comp)
+            window = block is not None and bool(publish)
+            if canon and (whole or window):
+                import revisit
+                structures.published(self, comp, pool, zs, infra, block, revisit.CACHE_DIR, short_)
+            else:
+                structures.skipped("owner" if not mine else "short" if not canon else "lost")
+        return got
 
     def _ends_ll(self, xy):
         """(lat, lon) of a deck line's two ends (this frame's world)."""
@@ -9821,6 +9907,7 @@ class ChainStore:
             import geotiles
             got = self.cls(geotiles.frame(region[0], region[1], geotiles.CHAIN_Z), self.cell_fn, self.elev)
             got.owner_of = self._owner
+            got.region_of = self._region_of
             got.region = region
             if self.setup is not None:
                 self.setup(got)
@@ -9838,6 +9925,15 @@ class ChainStore:
         first = min(comp)
         (la, lo), _ = prof._ends_ll(pool[first][1])
         return self.store_at(la, lo)
+
+    @staticmethod
+    def _region_of(prof, comp, pool):
+        """The region of the store that owns chain comp (_owner's), looked up without making or touching a store
+        (BNE_DECK_STRUCT=shadow's ownership check)."""
+        import geotiles
+        (la, lo), _ = prof._ends_ll(pool[min(comp)][1])
+        t = geotiles.tile_of(float(la), float(lo), geotiles.CHAIN_Z)
+        return (int(t[0]), int(t[1]))
 
 
 class _Mapper:
@@ -12052,18 +12148,26 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
     box = (x0 - OVERLAP, y0 - OVERLAP, x1 + OVERLAP, y1 + OVERLAP)
     near = (x0 - context_m, y0 - context_m, x1 + context_m, y1 + context_m)
     import europewalks
+    import lanesections
 
     cells = list(cells)
     seen, bseen = {}, {}
+    # a road one cell has whole and its neighbours have as lane sections (lanesections.split: a cell whose lane data
+    # holds none of its parts is not split) taken once, as its sections, as the traffic graph does (navgraph.build): as
+    # both, each copy's lines were cut wherever the other copy ran, all of them, and the road's markings, edges and wear
+    # were never drawn (I-576 Southern Beltway, 2026-11-17)
+    replaced = lanesections.replaced_roads(cells) if lanesections.ON else set()
     for feats in cells:
         if feats is None or len(feats) == 0:
             continue
         specs = road_specs(feats, urban_fn, widths, left_hand)
         bspecs = bridge_specs(feats)
         for i in range(len(feats)):
-            if bspecs[i] is not None and str(feats.ids[i]) not in bseen:
+            # (a replaced road's deck too: its sections, "<id>~lanesN-M", carry the road's bridge tags and decks of
+            # their own, so the whole copy's deck would be a second one over them, PR #1451 triage)
+            if bspecs[i] is not None and str(feats.ids[i]) not in bseen and str(feats.ids[i]) not in replaced:
                 bseen[str(feats.ids[i])] = (feats, i, bspecs[i])
-            if specs[i] is None or str(feats.ids[i]) in seen:
+            if specs[i] is None or str(feats.ids[i]) in seen or str(feats.ids[i]) in replaced:
                 continue
             seen[str(feats.ids[i])] = (feats, i, specs[i])
     placement = placement_context(cells, urban_fn, widths, left_hand)

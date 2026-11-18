@@ -540,6 +540,43 @@ class EmptyAndHugeTest(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr[-2000:])
         self.assertEqual(r.stdout.strip(), "MEMORYERROR", r.stderr[-2000:])
 
+    @unittest.skipUnless(sys.platform.startswith("linux"), "RLIMIT_AS")
+    def test_broadcast_operand_bounded_memory(self):
+        """A broadcast (10^6, 1, 1) operand times a (1, 1): the 8 MB result in 12 MiB of extra address space, as the
+        numpy Python returned it (Codex review: the kernel copied every broadcast element, held a block table and a
+        second copy of the result, MemoryError). Also a broadcast k (a (1, 3 * 10^6) row of one value: its products
+        summed as they are made, no k-long scratch, Codex review) and broadcast stacks on both sides."""
+        import subprocess
+        code = (
+            "import os, resource, sys\n"
+            f"sys.path.insert(0, {os.path.join(os.path.dirname(os.path.abspath(__file__)), '..')!r})\n"
+            "import numpy as np, dnp\n"
+            "a = np.broadcast_to(np.full((1, 1, 1), 1.5), (1_000_000, 1, 1))\n"
+            "b = np.full((1, 1), 3.0)\n"
+            "r = np.broadcast_to(np.full((1, 1), 0.5), (1, 3_000_000))\n"
+            "c = np.broadcast_to(np.full((1, 1), 2.0), (3_000_000, 1))\n"
+            "sa = np.broadcast_to(np.arange(6.0).reshape(1, 2, 3), (300_000, 2, 3))\n"
+            "sb = np.broadcast_to(np.arange(3.0).reshape(1, 3, 1), (300_000, 3, 1))\n"
+            "dnp.matmul(np.ones((1, 1)), b)\n"
+            "vm = int([l for l in open('/proc/self/status') if l.startswith('VmSize')][0].split()[1]) * 1024\n"
+            "resource.setrlimit(resource.RLIMIT_AS, (vm + (12 << 20), resource.RLIM_INFINITY))\n"
+            "out = dnp.matmul(a, b)\n"
+            "assert out.shape == (1_000_000, 1, 1) and bool((out == 4.5).all()), out\n"
+            "del out\n"
+            "s = dnp.matmul(r, c)\n"
+            "assert s.shape == (1, 1), s.shape\n"
+            "print(repr(float(s[0, 0])))\n"
+            "out = dnp.matmul(sa, sb)\n"
+            "assert out.shape == (300_000, 2, 1) and out[-1, 0, 0] == 5.0 and out[-1, 1, 0] == 14.0, out[-1]\n"
+            "print('OK')\n")
+        r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=120)
+        self.assertEqual(r.returncode, 0, r.stderr[-2000:])
+        lines = r.stdout.split()
+        self.assertEqual(lines[-1], "OK", r.stderr[-2000:])
+        want = ref_matmul(np.broadcast_to(np.full((1, 1), 0.5), (1, 3_000_000)),
+                          np.broadcast_to(np.full((1, 1), 2.0), (3_000_000, 1)))
+        self.assertEqual(float(lines[0]), float(want[0, 0]))
+
 
 class ContractTest(unittest.TestCase):
     def test_kernel_refuses_bad_strides(self):

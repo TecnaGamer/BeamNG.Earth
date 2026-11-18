@@ -58,9 +58,11 @@ def main():
     for path in sorted(glob.glob(os.path.join(a.shadow_dir, "*.json"))):
         with open(path, encoding="utf-8") as f:
             doc = json.load(f)
+        if "members" not in doc:        # (a window's marker, a dropped-jobs marker)
+            continue
         mem = {m["key"]: m for m in doc["members"]}
         for m in doc["members"]:
-            if m["kind"] == "outside" or not m.get("ll"):
+            if m["kind"] == "outside" or not m.get("ll") or m.get("dup_of"):      # (S2a: a duplicate drawn once)
                 continue
             pts = [px(q) for q in m["ll"]]
             if not any(inbox(p) for p in pts):

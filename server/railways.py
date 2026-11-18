@@ -332,17 +332,18 @@ def parts(frame, cells, box, reach=REACH_M, clip=False, worn=None, gauges=None, 
     for ci, feats in enumerate(cells):
         if feats is None or len(feats) == 0 or "subtype" not in feats.attrs:
             continue
+        _plain, cls_of, wear_at = _drawn_cols(feats)        # (drawn(feats, i, bridges=True), the layer's columns)
         for i in _box_hits(feats.boxes(frame), near, _is(feats.attrs["subtype"], ("rail",))):
             fid = str(feats.ids[i])
             if fid in seen or longest.get(fid, (0.0, ci))[1] != ci:
                 continue
-            got = drawn(feats, i, bridges=True)
-            if got is None:
+            k = cls_of[i]
+            if k < 0:
                 continue
-            c = got[0]
+            c, w = _DRAWN_CLASSES[k], wear_at[i]
             seen.add(fid)
-            if got[1]:
-                wear_of[fid] = got[1]
+            if w:
+                wear_of[fid] = w
                 if RAIL_LIFECYCLE and heritage(feats, i):
                     kept.add(fid)
             if gauges is not None:
@@ -842,9 +843,9 @@ def _drop_stubs(rails):
     return [r for r, (a, _b, _s) in zip(rails, edges) if r[1] == "tram" or total[find(a)] >= MIN_LINE_M]
 
 
-WEAR_FLAGS = (("is_abandoned", 2), ("is_disused", 1))    # a line's wear: 1 out of use, 2 abandoned (drawn worn: the
-# user, 2026-10-27, "id still like abandond lines to show. perhapse with some grass on them or sumilate wear")
-UNBUILT_FLAGS = ("is_under_construction",)              # not drawn (no track yet), as OSM's proposed lines
+# (a line's wear, drawn(): 1 out of use, 2 abandoned (drawn worn: the user, 2026-10-27, "id still like abandond lines
+# to show. perhapse with some grass on them or sumilate wear"); under construction: not drawn (no track yet), as OSM's
+# proposed lines; OSM's railway values (railtags.py) drawn with a wear or not at all: earthfast's raildrawn.rs)
 TUNNELS_ON = os.environ.get("BNE_RAIL_TUNNELS", "off") not in ("off", "0", "false", "")   # (plan 035: unproven in the game)
 TUNNEL_HALF_M = 3.9         # m: half the rail tunnel's inner width
 TUNNEL_WALL_H = 1.6         # m its walls stand straight over the ballast top before the vault springs
@@ -856,48 +857,56 @@ SHORT_TUNNEL_M = 60.0       # m: a "tunnel" this short is the line passing under
                             # tunnel too): track there (the track stopped either side of an overpass, 2026-10-25)
 
 
-def wear(feats, i):
-    """Feature i's wear by its flags over most of its length: 0 in use, 1 disused, 2 abandoned; None not built yet."""
-    t = feats.rules.get("flags")
-    if t is None or len(t.feature) == 0:
-        return 0
-    rows = [(float(t.end[j]) - float(t.start[j]), str(t.value[j])) for j in t.rows(i)]
-    if sum(L for L, v in rows if any(g in v for g in UNBUILT_FLAGS)) > 0.5:
+def _str_rows(a):
+    """A column as UCS-4 rows of each value's str(v or "") (numpy's unicode arrays as they are), None for None. An
+    object value's trailing NULs, which the rows' padding would drop, become one U+FFFF (the kernel only compares with
+    and searches for ASCII words and asks for emptiness: the same answers)."""
+    if a is None:
         return None
-    for flag, w in WEAR_FLAGS:
-        if sum(L for L, v in rows if flag in v) > 0.5:
-            return w
-    return 0
+    import fast
+    a = np.asarray(a)
+    if a.dtype.kind != "U":
+        s = [str(v or "") for v in a.tolist()]
+        a = np.array([x.rstrip("\0") + "￿" if x.endswith("\0") else x for x in s], dtype=str).reshape(-1)
+    return fast.ucs4(a)
+
+
+_DRAWN_CLASSES = ("standard_gauge", "narrow_gauge", "light_rail", "tram")   # (earthfast.rail_drawn_cols' class codes)
+
+
+def _drawn_cols(feats):
+    """(plain, bridges, wear) lists over feats' features: drawn()'s class code (_DRAWN_CLASSES, -1 not drawn) with
+    bridges False / True and its wear, made in one pass of the Rust a layer (earthfast.rail_drawn_cols; ~640k calls of
+    the Python a Manhattan visit) and kept on the layer while its columns are the same objects (railtags adds osm_*;
+    as RuleTable.rows and the layer's other memos, nothing edits a column in place). The flags' sums are Python 3.12+'s
+    compensated sum() (the release builds' 3.12): on a source install with 3.10 / 3.11, whose plain sum() could fall the
+    other side of half a line, the same answer as every other install."""
+    a, t = feats.attrs, feats.rules.get("flags")
+    src = (a.get("subtype"), a.get("class"), a.get("osm_railway"), a.get("osm_highway"), t,
+           *((t.feature, t.start, t.end, t.value) if t is not None else ()), RAIL_LIFECYCLE)
+    got = feats.__dict__.get("_rail_drawn")
+    if got is not None and len(got[0]) == len(src) and all(x is y for x, y in zip(got[0], src)):
+        return got[1]
+    import fast
+    fast.require(486, "rail_drawn_cols")
+    fl = None
+    if t is not None:
+        fl = (np.ascontiguousarray(t.feature, np.int64), np.ascontiguousarray(t.start, np.float64),
+              np.ascontiguousarray(t.end, np.float64), _str_rows(t.value))
+    plain, br, w = fast._ef.rail_drawn_cols(len(feats), *(_str_rows(c) for c in src[:4]), fl, RAIL_LIFECYCLE)
+    cols = (plain.tolist(), br.tolist(), w.tolist())
+    feats.__dict__["_rail_drawn"] = (src, cols)
+    return cols
 
 
 def drawn(feats, i, bridges=False):
-    """(class, wear) of a built railway track, or None. bridges also admits trams:
-    only their mapped bridge pieces belong in the 3D mesh; ground trams remain
-    street track in rails.py, not ballast, grading or inferred underpasses."""
-    sub = feats.attrs.get("subtype")
-    if sub is None or str(sub[i]) != "rail":
-        return None
-    w = wear(feats, i)
-    if w is None:
-        return None
-    cls = feats.attrs.get("class")
-    c = str(cls[i]) if cls is not None else "standard_gauge"
-    osm = feats.attrs.get("osm_railway")
-    if osm is not None and osm[i]:          # (OSM's own railway value: railtags.py, the weekly rail file)
-        v = str(osm[i])
-        if v == "tram":
-            return ("tram", w) if bridges else None
-        if v in OSM_RAILWAY_NOT:
-            return None
-        hw = feats.attrs.get("osm_highway")
-        if v == "abandoned" and hw is not None and hw[i]:
-            return None             # a rail trail: the rails are gone, a road or path runs on the old bed (#1103)
-        if v in OSM_RAILWAY_WEAR:
-            w = OSM_RAILWAY_WEAR[v]
-            return (c if c in DRAWN else "standard_gauge", w)
-    if c == "unknown" and w:
-        c = "standard_gauge"
-    return (c, w) if c in DRAWN or (bridges and c == "tram") else None
+    """(class, wear) of a built railway track, or None (wear: 0 in use, 1 disused, 2 abandoned, by OSM's railway value
+    or the line's flags over most of its length; a line under construction is not drawn). bridges also admits trams:
+    only their mapped bridge pieces belong in the 3D mesh; ground trams remain street track in rails.py, not ballast,
+    grading or inferred underpasses. The rules are earthfast.rail_drawn_cols' (a layer at a time)."""
+    plain, br, w = _drawn_cols(feats)
+    k = (br if bridges else plain)[i]
+    return None if k < 0 else (_DRAWN_CLASSES[k], w[i])
 
 
 def heritage(feats, i):
@@ -908,13 +917,6 @@ def heritage(feats, i):
     p = feats.attrs.get("osm_railway:preserved")
     return bool((u is not None and str(u[i] or "") == "tourism") or (p is not None and str(p[i] or "") == "yes"))
 
-
-# OpenStreetMap's railway values (railtags.py), when the weekly file has the line: drawn with this wear, or not at all
-OSM_RAILWAY_WEAR = {"rail": 0, "light_rail": 0, "narrow_gauge": 0, "preserved": 0, "disused": 1, "abandoned": 2}
-OSM_RAILWAY_NOT = {"proposed", "construction", "razed", "dismantled", "planned", "subway", "tram", "monorail",
-                   "funicular", "miniature", "platform"}
-if RAIL_LIFECYCLE:                  # (a historic route: nothing of it left to draw)
-    OSM_RAILWAY_NOT = OSM_RAILWAY_NOT | {"historic"}
 
 
 def osm_gauge(feats, i):
@@ -1172,25 +1174,27 @@ def _left(xy):
     return np.c_[-d[:, 1], d[:, 0]]
 
 
-def _avg(v, r):
-    """Running mean over 2r + 1 values, the ends extended along their grade (odd reflection: a straight grade stays
-    straight to its end, and two parts meeting at a joint meet at its height)."""
-    r = min(r, len(v) - 1)
-    if r < 1:
-        return np.asarray(v, np.float64)
-    pad = np.concatenate((2 * v[0] - v[r:0:-1], v, 2 * v[-1] - v[-2:-r - 2:-1]))
-    c = np.concatenate(([0.0], np.cumsum(pad)))
-    return (c[2 * r + 1:] - c[:-2 * r - 1]) / (2 * r + 1)
-
-
 def bed_heights(z):
     """The bed line over ground heights z (every STEP_M): averaged over SMOOTH_M either side, twice (a smooth
     vertical curve), through a ridge and over a dip alike: the grader (grade_plans) cuts and fills the ground to it."""
-    z = np.asarray(z, np.float64)
-    if len(z) < 3:
-        return z
-    r = max(1, int(round(SMOOTH_M / STEP_M)))
-    return _avg(_avg(z, r), r // 2)
+    return bed_heights_many([z])[0]
+
+
+def bed_heights_many(zs):
+    """[bed_heights(z) for z in zs], in one call of the Rust (earthfast.rail_bed_heights: each running mean over 2r + 1
+    values, the ends extended along their grade by odd reflection, so a straight grade stays straight to its end and two
+    parts meeting at a joint meet at its height; numpy's cumsum order). A line of fewer than 3 heights is its own bed
+    (the same array); an (n, 1) column gives the (n,) bed, as numpy's flattening cumsum did. numpy's floating-point
+    warnings are not raised (an accepted difference: nothing sets np.errstate on this path and the server's lines make
+    no non-finite beds, the online cold caches' every call)."""
+    import fast
+    fast.require(483, "rail_bed_heights")
+    zs = [np.asarray(z, np.float64) for z in zs]
+    # (the kernel reads aligned contiguous float64 lines: a packed record view is copied first)
+    got = iter(fast._ef.rail_bed_heights([np.require(z.reshape(-1) if z.ndim == 2 and z.shape[1] == 1 else z,
+                                                     None, ("C", "A")) for z in zs if len(z) >= 3],
+                                         max(1, int(round(SMOOTH_M / STEP_M)))))
+    return [z if len(z) < 3 else next(got) for z in zs]
 
 
 def _envelope(s, req, grade=GRADE):
@@ -1319,6 +1323,7 @@ def profile(rails, ground, underpasses=()):
         gi = [n for n, (_, _, kind, _) in enumerate(rails) if kind == "ground"]
         if len(gi) > 1:
             shared = dict(zip(gi, railxing.corridor_ground([rails[n][3] for n in gi], [zgs[n] for n in gi])))
+    on_ground, lifts = [], []                   # (the ground parts' beds: smoothed in one call, bed_heights_many)
     for n, ((_, _, kind, _), zg, (a, b, s)) in enumerate(zip(rails, zgs, edges)):
         if kind != "ground":
             zb.append(zg.copy())
@@ -1328,7 +1333,11 @@ def profile(rails, ground, underpasses=()):
             if node in level:                           # slope under it: lifted before the bed's smoothing)
                 lv, reach = level[node]
                 lifted = np.where(dist <= reach + STEP_M, np.maximum(lifted, lv), lifted)
-        zb.append(bed_heights(lifted))
+        zb.append(None)
+        on_ground.append(n)
+        lifts.append(lifted)
+    for n, bed in zip(on_ground, bed_heights_many(lifts)):
+        zb[n] = bed
     # Read the lower road at its mouths, not on the filled railway bed above it.
     boxes = _rail_boxes(rails) if underpasses else None
     crossings = [(line, half, _underpass_masks(rails, line, half, DECK_HALF_M + STEP_M, boxes))

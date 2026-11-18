@@ -313,27 +313,6 @@ def _gauss2(a, sigma):
     return sum(k[i] * p[:, i:i + a.shape[1]] for i in range(2 * r + 1))
 
 
-_UNREAD = np.zeros((TILE, TILE), np.float32)     # (a box's tile no point reads: never read, sample)
-_UNREAD.flags.writeable = False
-
-
-def _tiles_read(fx, fy, nx, ny):
-    """(nx * ny,) bools, row-major: the tiles of an nx x ny box (fx, fy: the points' pixel coordinates in it) whose
-    pixels earthfast.bilinear_tiles reads: each point's pixel (floor, clamped to the box as the kernel clamps it) and
-    the next one right and down, whatever their weights. Every tile where a coordinate is not finite (the kernel's
-    and numpy's conversions of those differ)."""
-    if not (np.isfinite(fx).all() and np.isfinite(fy).all()):
-        return np.ones(nx * ny, bool)
-    w, h = nx * TILE, ny * TILE
-    ix = np.clip(np.floor(fx), 0, w - 2).astype(np.int64)
-    iy = np.clip(np.floor(fy), 0, h - 2).astype(np.int64)
-    read = np.zeros((ny, nx), bool)
-    for dx in (0, 1):
-        for dy in (0, 1):
-            read[(iy + dy) // TILE, (ix + dx) // TILE] = True
-    return read.ravel()
-
-
 def _stale(marks):
     """A kept stand-in tile's time to be made again (Dem._lru_short's marks, SHORT_RETRY_S)."""
     return marks is not None and time.monotonic() - marks[2] > SHORT_RETRY_S
@@ -1695,60 +1674,36 @@ class Dem:
     def sample(self, lat, lon, zoom, progress=None):
         """Bilinear elevation (m) at arbitrary lat/lon arrays from zoom-level tiles. Points from polardem.FROM_LAT
         (84.9 deg) on (Mapterhorn's heights stop short of 85, Web Mercator at 85.05) come from the Copernicus DEM
-        (polardem.py; 0 m on the Arctic Ocean)."""
+        (polardem.py; 0 m on the Arctic Ocean). earthfast.dem_sample does the work (pixel coordinates, the box of
+        tiles or its groups, the tiles the bilinear reads: only those are asked, the bilinear on them in place); this
+        keeps the tile store and the polar DEM."""
         if zoom > max(MAX_ZOOM, FINE_ZOOM):
             raise ValueError(f"zoom {zoom} > {max(MAX_ZOOM, FINE_ZOOM)}")
         lat = np.asarray(lat, dtype=np.float64)
         lon = np.asarray(lon, dtype=np.float64)
-        shape = np.broadcast(lat, lon).shape
-        lat, lon = np.broadcast_to(lat, shape).ravel(), np.broadcast_to(lon, shape).ravel()
-        out = np.zeros(lat.shape, np.float64)
-        valid = np.abs(lat) < polardem.FROM_LAT
-        if not valid.all():                 # the polar caps: the Copernicus DEM (polardem.py)
-            px = 40075016.686 * dmath.cos(math.radians(MAX_LAT)) / (TILE * 2 ** zoom)
-            try:
-                out[~valid] = self.polar().sample(lat[~valid], lon[~valid], px)
-            except (netfetch.FetchError, OSError, ValueError) as e:
-                log.warning("polar DEM unavailable (%s): sea level there", e)
-        if not valid.any():
-            return out.reshape(shape)
-        lat, lon = lat[valid], lon[valid]
-        n = 2 ** zoom
-        w = n * TILE
-        # Global pixel coordinates; pixel centres sit at +0.5.
-        fx = (lon / 360.0 + 0.5) * w
-        fx -= w * np.round((fx - fx[0]) / w)    # unwrap across the antimeridian
-        fx -= 0.5
-        fy = (0.5 - dnp.arcsinh(dnp.tan(np.radians(lat))) / (2 * np.pi)) * w - 0.5
-        tx0, tx1 = int(math.floor(fx.min())) // TILE, int(math.floor(fx.max()) + 1) // TILE
-        ty0 = max(0, int(math.floor(fy.min())) // TILE)
-        ty1 = min(n - 1, int(math.floor(fy.max()) + 1) // TILE)
-        nx, ny = tx1 - tx0 + 1, ty1 - ty0 + 1
-        sparse = False
-        if SPARSE_MIN_TILES < nx * ny <= MAX_TILES_PER_SAMPLE:
-            # points along a line (a road's profile) in a large box: the whole box's tiles were fetched, decoded and
-            # copied into one mosaic (I-80 over the salt flats: a road tile's grading took minutes, 2026-10-17)
-            tid = (np.floor(fx).astype(np.int64) // TILE - tx0) * ny + (np.floor(fy).astype(np.int64) // TILE - ty0)
-            sparse = nx * ny > SPARSE_RATIO * len(np.unique(tid))
-        if nx * ny > MAX_TILES_PER_SAMPLE or sparse:
-            # spread-out points (all the roads of a cell with a long highway, 2026-10-12: every road tile of
-            # a session failed on one 53 x 82 box): sample groups of nearby tiles separately (the same values)
-            g = SPARSE_GROUP if sparse else max(1, int(math.isqrt(MAX_TILES_PER_SAMPLE)) - 1)
-            gx = (np.floor(fx).astype(np.int64) // TILE) // g
-            gy = (np.floor(fy).astype(np.int64) // TILE) // g
-            sub = np.zeros(len(lat), np.float64)
-            for key in np.unique(np.stack([gx, gy], 1), axis=0):
-                m = (gx == key[0]) & (gy == key[1])
-                sub[m] = self.sample(lat[m], lon[m], zoom, progress)
-            out[valid] = sub
-            return out.reshape(shape)
-        keys = [(zoom, tx % n, ty) for ty in range(ty0, ty1 + 1) for tx in range(tx0, tx1 + 1)]     # (row-major)
-        fx -= tx0 * TILE
-        fy -= ty0 * TILE
-        read = _tiles_read(fx, fy, nx, ny)
-        got = self.tiles([k for k, r in zip(keys, read) if r], progress)
-        # (sampled from the tiles in place: a mosaic of them copied on every call cost ~2 s per 16 city road tiles)
-        fast.require(76, "bilinear_tiles")
-        out[valid] = fast._ef.bilinear_tiles([np.asarray(got[k], np.float32) if r else _UNREAD
-                                              for k, r in zip(keys, read)], nx, TILE, fx, fy)
-        return out.reshape(shape)
+        if lat.shape == lon.shape:
+            shape = lat.shape
+            lat, lon = lat.ravel(), lon.ravel()
+        else:
+            shape = np.broadcast(lat, lon).shape
+            lat, lon = np.broadcast_to(lat, shape).ravel(), np.broadcast_to(lon, shape).ravel()
+        fast.require(484, "dem_sample")
+        return fast._ef.dem_sample(lat, lon, zoom, TILE, polardem.FROM_LAT, MAX_TILES_PER_SAMPLE, SPARSE_MIN_TILES,
+                                   SPARSE_RATIO, SPARSE_GROUP, lambda keys: self._sample_tiles(keys, progress),
+                                   lambda la, lo: self._polar_heights(la, lo, zoom)).reshape(shape)
+
+    def _sample_tiles(self, keys, progress):
+        """(dem_sample's fetch) the float32 heights of tiles keys (a list of (z, x, y)), in their order."""
+        got = self.tiles(keys, progress)
+        return [np.asarray(got[k], np.float32) for k in keys]
+
+    def _polar_heights(self, lat, lon, zoom):
+        """(dem_sample's polar) heights at points past polardem.FROM_LAT, None when the polar DEM can't be had."""
+        px = 40075016.686 * dmath.cos(math.radians(MAX_LAT)) / (TILE * 2 ** zoom)
+        try:
+            out = np.zeros(lat.shape, np.float64)
+            out[np.ones(lat.shape, bool)] = self.polar().sample(lat, lon, px)     # (numpy's assignment rules, as before)
+            return out
+        except (netfetch.FetchError, OSError, ValueError) as e:
+            log.warning("polar DEM unavailable (%s): sea level there", e)
+            return None
