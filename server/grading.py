@@ -2734,7 +2734,7 @@ class _Planner:
         if feats is not None and len(feats):
             specs = roadsmod.road_specs(feats, None, self.widths)
             placement = roadsmod.placement_context([feats], None, self.widths)     # (as the road tiles draw them)
-            parts, ids, clipped, rings = [], [], [], []
+            parts, ids, clipped, rings, pids = [], [], [], [], []
             box = self._clip_box(key)
             keeps = []
             for i in range(len(feats)):
@@ -2747,12 +2747,13 @@ class _Planner:
                     continue
                 if specs[i] is None:
                     continue
-                for ring in roadsmod.ground_parts(feats, i):     # not bridges / tunnels
+                for gj, ring in enumerate(roadsmod.ground_parts(feats, i)):     # not bridges / tunnels
                     ring = placement.ring(self.frame, feats, i, ring, specs[i])
                     pieces = self._near_cell(np.asarray(ring, np.float64), box)
                     for r in pieces:
                         parts.append((r, specs[i]))
                         ids.append(str(feats.ids[i]))
+                        pids.append(_piece_id(feats.ids[i], gj))     # (FAST_GAP: its mapped ground piece)
                         clipped.append(len(pieces) > 1 or r is not ring)
                         rings.append(roadsmod.is_ring(feats, i))
             pspecs = []
@@ -2790,7 +2791,7 @@ class _Planner:
             for fid, part, cl, p in zip(ids, parts, clipped, plan_roads(self.frame, parts, self.elev, abut, ext, pins,
                                                                          coarse=coarse, obs=self._obs(key),
                                                                          decks=self._decks_near(key), rings=rings,
-                                                                         landings=landings, part_ids=ids,
+                                                                         landings=landings, part_ids=pids,
                                                                          ext_ids=ext_ids)):
                 if p is not None:
                     p.rid = road_id(fid)
@@ -3006,16 +3007,16 @@ class _Planner:
             for i in range(len(feats)):
                 if specs[i] is None or specs[i].cls in UNGRADED:
                     continue
-                for ring in roadsmod.ground_parts(feats, i):
-                    rows.append((i, placement.ring(self.frame, feats, i, np.asarray(ring, np.float64), specs[i])))
+                for gj, ring in enumerate(roadsmod.ground_parts(feats, i)):
+                    rows.append((i, placement.ring(self.frame, feats, i, np.asarray(ring, np.float64), specs[i]), gj))
             if rows:            # (the frame's conversion once for all: it is per call)
-                allr = np.concatenate([r for _, r in rows])
+                allr = np.concatenate([r for _, r, _g in rows])
                 e, n, _ = self.frame.geodetic_to_enu(allr[:, 1], allr[:, 0], 0.0)
                 en = np.stack([np.asarray(e, np.float64), np.asarray(n, np.float64)], axis=1)
                 k0 = 0
-                for i, ring in rows:
+                for i, ring, gj in rows:
                     out.append((en[k0:k0 + len(ring)], profile_sigma(specs[i]), road_id(str(feats.ids[i])), ring,
-                                specs[i], str(feats.ids[i])))
+                                specs[i], str(feats.ids[i]), _piece_id(feats.ids[i], gj)))
                     k0 += len(ring)
         with self.lock:
             if len(memo) > 64:
@@ -3078,7 +3079,7 @@ class _Planner:
                 if off[j + 1] - off[j] >= 2:
                     out[i // 2][i % 2] = np.asarray(pts[off[j]:off[j + 1]])
                     if with_ids and int(which[j]) >= 0:
-                        oid[i // 2][i % 2] = cands[int(which[j])][5]       # (the selector's own choice)
+                        oid[i // 2][i % 2] = cands[int(which[j])][6]       # (the selector's own choice's piece)
         if with_ids:
             return [tuple(o) for o in out], [tuple(o) for o in oid]
         return [tuple(o) for o in out]
@@ -3187,11 +3188,12 @@ class _Planner:
                 continue            # (_stronger_z below)
             try:
                 parts = [(part, asks[n][0][4]) for n, (part, _last, _whole) in jobs]
-                pids = [asks[n][0][5] for n, _p in jobs]
-                ext, eids = self._extensions(parts, pids, with_ids=True) if FAST_GAP else \
-                    (self._extensions(parts, pids), None)
+                fids = [asks[n][0][5] for n, _p in jobs]
+                ext, eids = self._extensions(parts, fids, with_ids=True) if FAST_GAP else \
+                    (self._extensions(parts, fids), None)
                 plans = plan_roads(self.frame, parts, self.elev, None, ext, cuts=False,
-                                   landings=self._landings_of(parts), part_ids=pids, ext_ids=eids,
+                                   landings=self._landings_of(parts), part_ids=[asks[n][0][6] for n, _p in jobs],
+                                   ext_ids=eids,
                                    **self._strong_args(cell, parts[0][0]))
                 for (n, (part, last, whole)), p in zip(jobs, plans):
                     self._strong_keep(asks[n][0], keys[n], p, last, whole)
@@ -3225,7 +3227,7 @@ class _Planner:
 
     def _strong_part(self, cand, at_last):
         """(the lon/lat part planned for _stronger_z, whose end is asked for: its last point?, the whole part?)"""
-        xy, _sg, rid, ring, spec, fid = cand
+        xy, _sg, rid, ring, spec, fid = cand[:6]
         part = ring
         if float(dnp.hypot(*np.diff(xy, axis=0).T).sum()) > LONG_PART_M:
             end = xy[-1] if at_last else xy[0]
@@ -3272,7 +3274,7 @@ class _Planner:
             ext, eids = self._extensions([(part, cand[4])], [cand[5]], with_ids=True) if FAST_GAP else \
                 (self._extensions([(part, cand[4])], [cand[5]]), None)
             p = plan_roads(self.frame, [(part, cand[4])], self.elev, None, ext, cuts=False,
-                           landings=self._landings_of([(part, cand[4])]), part_ids=[cand[5]], ext_ids=eids,
+                           landings=self._landings_of([(part, cand[4])]), part_ids=[cand[6]], ext_ids=eids,
                            **self._strong_args(cell, part))[0]
             self._strong_keep(cand, k, p, last, whole)
         except Exception as e:      # not held rather than no grading
@@ -6125,10 +6127,10 @@ class _Planner:
                 rngs = roadsmod.home_ranges(f, i, h[0], h[1], list(row)) if h is not None else list(row)
                 for kind, sp, want in (("bridges", rs[i], "bridge"), ("ground", rs[i], "ground")):
                     ps = roadsmod._parts_by_level_new(f, i, want, rngs=list(rngs))
-                    for ring in ps:
+                    for gj, ring in enumerate(ps):          # (ground_parts' pieces and order: the same ranges)
                         ring = np.asarray(ring, np.float64)
                         if len(ring) >= 2:
-                            rows.append((kind, sp, ring, str(f.ids[i])))
+                            rows.append((kind, sp, ring, _piece_id(f.ids[i], gj)))
             if rows:
                 allr = np.concatenate([r for _k, _s, r, _f in rows])
                 e, n, _ = self.frame.geodetic_to_enu(allr[:, 1], allr[:, 0], 0.0)
@@ -7952,6 +7954,12 @@ def gap_line(zb):
     return float(a), float(b), reach
 
 
+def _piece_id(fid, j):
+    """FAST_GAP: the id of feature fid's j-th ground piece (ground_parts' order): a sample's own road piece, so one
+    feature's pieces on a bridge's two banks are told apart. Pure."""
+    return f"{fid}#{int(j)}"
+
+
 def _along(line, d):
     """Points (n, 2) d m along polyline line (k, 2) from its start (clipped to its length). Pure."""
     line = np.asarray(line, np.float64)[:, :2]
@@ -7991,8 +7999,9 @@ def _nearest_off(pts, lines):
 def gap_apply(z, pts, approach, line, own=None, other=None, sid=None, own_ids=None, out_dir=None):
     """FAST_GAP: z (n,) at a fast road's samples pts (n, 2) raised to a landing's line (gap_line's (a, b, reach), its
     arc measured along its approach line (k, 2) from the deck's end), by FAST_GAP_MAX_M at most, never lowered, within
-    the reach: a sample of a known road (sid: per sample the feature id, or None) takes it when that road is one of the
-    approach's parts (own_ids), however its lanes are placed (FAST_GAP_ID_M off at most) and not behind the deck's end
+    the reach: a sample of a known road piece (sid: per sample its ground piece's id, _piece_id, or None) takes it when
+    that piece is one of the approach's (own_ids: one feature's pieces on a bridge's two banks told apart), however its
+    lanes are placed (FAST_GAP_ID_M off at most) and not behind the deck's end
     (FAST_GAP_BACK_M along out_dir, the deck's direction out into the road: the same feature's piece on the bridge's
     other bank), and never otherwise; a sample
     of no known road where it lies on the approach (FAST_GAP_ON_M) and, with own and other (the approach's parts' lines,

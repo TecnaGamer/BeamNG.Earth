@@ -317,6 +317,27 @@ class GapLanding(unittest.TestCase):
         ref = grading.plan_roads(self.frame, [(self.lonlat(far_xy), self.spec)], raw, cuts=False)[0]
         self.assertTrue(np.allclose(far.z, ref.z))
 
+    def test_angled_placed_far_bank_piece(self):
+        # (Codex review of round 5: the same feature's far-bank piece leaves the deck at 45 degrees, placed 8 m aside so
+        # its first samples come round in front of this bank's deck end, 6 m from the approach: told apart by its own
+        # ground piece (road#1, the landing's road#0), it takes nothing; as the landing's own piece it would)
+        ap = self.approach(0.0)
+
+        def raw(la, lo):
+            e, n, _ = self.frame.geodetic_to_enu(la, lo, 0.0)
+            x = np.asarray(e, np.float64)
+            return np.where(x < 0.0, 53.0 - 0.037 * x, 50.0 + 0.037 * x)        # (this bank higher)
+        lands = [(ap, "motorway", [ap[[2, 1]], ap[[1, 0]]], [], frozenset({"road#0"}), OUT)]
+        s2 = np.sqrt(0.5)
+        far_xy = self.dense(np.array([-0.66, 5.66]), np.array([-0.66 + 150.0 * s2, 5.66 + 150.0 * s2]))
+
+        def plan(pid):
+            return grading.plan_roads(self.frame, [(self.lonlat(far_xy), self.spec)], raw, cuts=False,
+                                      landings=lands if pid else None, part_ids=[pid] if pid else None)[0]
+        ref = plan(None)
+        self.assertTrue(np.allclose(plan("road#1").z, ref.z))
+        self.assertFalse(np.allclose(plan("road#0").z, ref.z), "(the guard alone would not tell them apart)")
+
     def test_diagonal_connector_placed_copy(self):
         # (Codex review of round 5: the first ground piece starts 3 m on and 2 m aside of the deck end, a diagonal
         # connector; the road placed 8 m to the other side: its first samples are ahead of the deck end along the deck,
@@ -584,14 +605,14 @@ class ExtensionOwner(unittest.TestCase):
         t = np.radians(30.0)
         turn = np.array([[0.0, 0.0], [2.0, 0.0], [2.0 + 60.0 * np.cos(t), 60.0 * np.sin(t)]])
         straight = np.array([[0.0, 0.0], [2.0, 0.0], [62.0, 0.0]])
-        cands = [(turn, sg, grading.road_id("turn"), None, spec, "turn"),
-                 (straight, sg, grading.road_id("straight"), None, spec, "straight")]
+        cands = [(turn, sg, grading.road_id("turn"), None, spec, "turn", "turn#0"),
+                 (straight, sg, grading.road_id("straight"), None, spec, "straight", "straight#0")]
         g._chain_cands = lambda key, feats=None, specs=None: cands
         xs = np.linspace(-100.0, 0.0, 26)
         la, lo, _ = g.frame.enu_to_geodetic(xs, np.zeros(len(xs)), 0.0)
         ext, ids = g._extensions([(np.c_[lo, la], spec)], ["road"], with_ids=True)
         self.assertIsNotNone(ext[0][1])
-        self.assertEqual(ids[0][1], "straight")
+        self.assertEqual(ids[0][1], "straight#0")
         self.assertGreater(float(ext[0][1][-1][0]), 30.0, "along the straight one")
 
 
