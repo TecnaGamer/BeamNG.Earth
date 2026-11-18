@@ -111,7 +111,10 @@ class SwitchVersions(unittest.TestCase):
     def test_set_misses_unset_same(self):
         new, old = self.keys({"BNE_LEVEL_SPACING": "on"})
         self.assertNotEqual(new, old, "the old meaning's plans miss")
-        new, old = self.keys({"BNE_FAST_GAP": "on"})
+        for k in ("BNE_FAST_DECK_GROUND", "BNE_UNDER_SPEED", "BNE_FAST_GAP"):
+            new, old = self.keys({k: "on"})
+            self.assertNotEqual(new, old, k + ": its round 2 meaning")
+        new, old = self.keys({"BNE_FAST_DECK_ENDS": "on"})
         self.assertEqual(new, old, "a switch with no version: as before")
         new, old = self.keys({})
         self.assertEqual(new, old, "the default namespace")
