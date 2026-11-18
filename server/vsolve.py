@@ -32,6 +32,8 @@ import time
 
 import numpy as np
 
+import dnp
+
 log = logging.getLogger("earthd.vsolve")
 
 MODE = os.environ.get("BNE_VSOLVE", "off").strip().lower()
@@ -62,7 +64,7 @@ BUDGET_S = float(os.environ.get("BNE_VSOLVE_BUDGET_S", "60"))
 
 
 def _arc(xy):
-    return np.r_[0.0, np.cumsum(np.hypot(*np.diff(xy, axis=0).T))]
+    return np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(xy, axis=0).T))]
 
 
 def _grade_10m(xy, z, window=10.0):
@@ -183,11 +185,11 @@ def problem(plans, specs, z0, ceilings, ranks, pins=(), dips=None, grade_rows=Tr
     for n, (sp, z) in enumerate(zip(specs, z0)):
         xy = xys[n]
         m = len(z)
-        ds = np.hypot(*np.diff(xy, axis=0).T) if m > 1 else np.zeros(0)
+        ds = dnp.hypot(*np.diff(xy, axis=0).T) if m > 1 else np.zeros(0)
         step = max(float(np.median(ds)) if m > 1 else 2.0, 0.25)
         spread = SPREAD_M.get(_cls(sp), SPREAD_OTHER_M)
-        hold = RANK_W ** min(RANK_STEPS, (rk[n] - r0) / 2.0)     # (road_rank: 2 per class, a link 1 under)
-        lam = hold * (spread / (2.0 * step)) ** 4      # (the rank scales both: the same spread, a firmer hold at nodes)
+        hold = dnp.power(RANK_W, min(RANK_STEPS, (rk[n] - r0) / 2.0))     # (road_rank: 2 per class, a link 1 under)
+        lam = hold * dnp.power(spread / (2.0 * step), 4)      # (the rank scales both: the same spread, a firmer hold at nodes)
         w = np.full(m, hold)
         lo = np.full(m, -np.inf)
         hi = np.full(m, np.inf)
@@ -327,7 +329,7 @@ def _worst_grade(plans, zs, z0, ceilings, slack=1e-3):
         if ceilings[n] is None or len(z) < 2:
             continue
         xy = np.asarray(p.xy, np.float64)[:, :2]
-        ds = np.maximum(np.hypot(*np.diff(xy, axis=0).T), 1e-6)
+        ds = np.maximum(dnp.hypot(*np.diff(xy, axis=0).T), 1e-6)
         g = _ceiling(ceilings[n], xy, np.asarray(b, np.float64))
         excess = np.abs(np.diff(z)) - g * ds
         i = int(np.argmax(excess))
@@ -349,7 +351,7 @@ def _over_ceiling(plans, zs, z0, ceilings, extra, slack=1e-3, reach=GRADE_ROW_RE
         if ceil is None or len(z) < 2:
             continue
         xy = np.asarray(p.xy, np.float64)[:, :2]
-        ds = np.maximum(np.hypot(*np.diff(xy, axis=0).T), 1e-6)
+        ds = np.maximum(dnp.hypot(*np.diff(xy, axis=0).T), 1e-6)
         g = _ceiling(ceil, xy, np.asarray(b, np.float64))
         bad = np.flatnonzero(np.abs(np.diff(z)) > g * ds + slack)      # (z: this solve's heights)
         got = extra.setdefault(n, set())

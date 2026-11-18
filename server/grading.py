@@ -3075,7 +3075,7 @@ class _Planner:
             low = r < z - VSOLVE_DIP_TOUCH_M
             if low.any():   # (and a spread past the ramp's foot: the motorway under a held overpass rang 0.44 m past it)
                 xy = np.asarray(ground[i].xy, np.float64)[:, :2]
-                sa = np.r_[0.0, np.cumsum(np.hypot(*np.diff(xy, axis=0).T))]
+                sa = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(xy, axis=0).T))]
                 reach = vsolvemod.SPREAD_M.get(vsolvemod._cls(pspecs[i]), vsolvemod.SPREAD_OTHER_M)
                 sl = sa[low]
                 near = np.abs(sa[:, None] - sl[None, :]).min(axis=1) <= reach
@@ -3153,7 +3153,7 @@ class _Planner:
         ends = np.array([ln[e] for ln, _h in decks for e in (0, -1)], f64)
         joined = np.zeros(len(ends), bool)
         for i in range(len(ends)):
-            d = np.hypot(*(ends - ends[i]).T)
+            d = dnp.hypot(*(ends - ends[i]).T)
             d[i ^ 1] = np.inf                  # (its own other end)
             d[i] = np.inf
             joined[i] = bool((d <= VSOLVE_JOINT_M).any())
@@ -3168,9 +3168,9 @@ class _Planner:
                                     & (dbox[:, 3] >= pl[1])).tolist():
                 ln, h = decks[j]
                 a, ab = ln[:-1], np.diff(ln, axis=0)
-                lab = np.maximum(np.hypot(*ab.T), 1e-9)
+                lab = np.maximum(dnp.hypot(*ab.T), 1e-9)
                 t = np.clip(((xy[:, None, :] - a[None]) * ab[None]).sum(2) / (lab * lab)[None], 0.0, 1.0)
-                dist = np.hypot(*(a[None] + t[..., None] * ab[None] - xy[:, None, :]).transpose(2, 0, 1))
+                dist = dnp.hypot(*(a[None] + t[..., None] * ab[None] - xy[:, None, :]).transpose(2, 0, 1))
                 k = np.argmin(dist, axis=1)
                 r = np.arange(len(xy))
                 at = np.r_[0.0, np.cumsum(lab)][:-1][k] + t[r, k] * lab[k]
