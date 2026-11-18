@@ -26,6 +26,8 @@ import threading
 from collections import OrderedDict
 
 import numpy as np
+import dmath
+import dnp
 
 import bcproj
 import cog as cogmod
@@ -112,7 +114,7 @@ class LidarBC:
             return False
         s, w, n, e = self._index()[4]
         n2 = 2 ** z
-        lat = lambda yy: math.degrees(math.atan(math.sinh(math.pi * (1 - 2 * yy / n2))))     # noqa: E731
+        lat = lambda yy: math.degrees(dmath.atan(dmath.sinh(math.pi * (1 - 2 * yy / n2))))     # noqa: E731
         ts, tn = lat(y + 1), lat(y)
         tw, te = x / n2 * 360.0 - 180.0, (x + 1) / n2 * 360.0 - 180.0
         return ts < n and tn > s and tw < e and te > w
@@ -152,7 +154,7 @@ class LidarBC:
         n = 2 ** z
         i = (np.arange(size) + 0.5) / size
         lon1 = (x + i) / n * 360.0 - 180.0
-        lat1 = np.degrees(np.arctan(np.sinh(np.pi * (1 - 2 * (y + i) / n))))
+        lat1 = np.degrees(dnp.arctan(dnp.sinh(np.pi * (1 - 2 * (y + i) / n))))
         lat = np.broadcast_to(lat1[:, None], (size, size))
         lon = np.broadcast_to(lon1[None, :], (size, size))
         got = self.sample(lat, lon)
@@ -223,7 +225,7 @@ class LidarBC:
                 continue
             if coarse_m is not None and not c.stripped and c.sx < coarse_m:
                 co = None
-                for lv in range(int(math.log2(coarse_m / c.sx)), 0, -1):
+                for lv in range(int(dmath.log2(coarse_m / c.sx)), 0, -1):
                     co = self._cog(keys[j], lv)
                     if co is not None:
                         break
@@ -289,8 +291,8 @@ def despike(h, ok, spike_m=SPIKE_M, cap_m=TREE_CAP_M):
 def _affine(src, dst):
     """Least-squares affine map from src points (n, 2) to dst (n, 2): a function of (m, 2) arrays."""
     A = np.column_stack([src, np.ones(len(src))])
-    coef, *_ = np.linalg.lstsq(A, dst, rcond=None)
-    return lambda p: np.column_stack([p, np.ones(len(p))]) @ coef
+    coef, *_ = dnp.lstsq(A, dst, rcond=None)
+    return lambda p: dnp.matmul(np.column_stack([p, np.ones(len(p))]), coef)
 
 
 def sparse(lb, box, step_m=64.0, coarse_m=None):
@@ -328,7 +330,7 @@ def sparse(lb, box, step_m=64.0, coarse_m=None):
             continue
         if not c.stripped and coarse_m is not None and c.sx < coarse_m:
             co = None
-            for lv in range(int(math.log2(coarse_m / c.sx)), 0, -1):
+            for lv in range(int(dmath.log2(coarse_m / c.sx)), 0, -1):
                 co = lb._cog(keys[j], lv)
                 if co is not None:
                     break

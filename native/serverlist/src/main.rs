@@ -14,11 +14,19 @@
 //! Each server's "location" is the country its address is in (as BeamMP's own list has it, for the flag): DB-IP's
 //! IP to Country Lite table (CC BY 4.0, https://db-ip.com), downloaded next to the binary and fetched again weekly.
 //!
+//! Player reports from the game's reporter: reports.rs (POST /report; private GET /reports/list and
+//! /reports/<id>/<file> with the token).
+//!
+//! On-demand builds of the 1 m aerial packs: aerial.rs (POST /aerial/request, GET /aerial/status; BNGE_AERIAL_SPOOL).
+//!
 //! In memory only (servers announce again within a minute of a restart). Env: BNGE_LIST_ADDR (default 0.0.0.0:47640),
 //! BNGE_LIST_GEOIP (the table's path; default dbip-country-lite.csv.gz next to the binary).
 
+mod aerial;
 mod perf;
+mod reports;
 mod telemetry;
+mod uniques;
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -302,9 +310,14 @@ impl List {
 
 fn main() {
     let addr = std::env::var("BNGE_LIST_ADDR").unwrap_or_else(|_| "0.0.0.0:47640".to_string());
-    let server = Server::http(&addr).expect("listen");
+    // any panic ends the process (systemd starts it again): tiny_http's accept thread died on EMFILE and left the
+    // process running but answering nothing for two hours, 2026-11-11
+    std::panic::set_hook(Box::new(|info| {
+        eprintln!("panic: {info}");
+        std::process::abort();
+    }));
+    let server = Arc::new(Server::http(&addr).expect("listen"));
     eprintln!("bnge-serverlist on {addr}");
-    let mut list = List { entries: HashMap::new() };
     let geo = Arc::new(Mutex::new(Arc::new(Geo::default())));
     let keep = geo.clone();
     std::thread::spawn(move || keep_geo(keep));
@@ -319,118 +332,369 @@ fn main() {
         let _ = std::fs::File::open("/dev/urandom").and_then(|mut f| f.read_exact(&mut buf));
         u64::from_le_bytes(buf) ^ SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map(|d| d.as_nanos() as u64).unwrap_or(0)
     };
-    let mut perf = perf::Perf::new(Some(tel_dir.join("perf")), salt);
-    let mut tel = telemetry::Telemetry::new(Some(tel_dir));
+    let perf = perf::Perf::new(Some(tel_dir.join("perf")), salt);
+    let tel = telemetry::Telemetry::new(Some(tel_dir));
     // the advanced statistics (public since 2026-11-06, the user: exact country counts are fine): built at most once a
     // minute, a shared link must not make the collector rebuild 7 days of data-source hours per visitor
-    let mut advanced: Option<(Instant, String)> = None;
-    let mut perf_cache: HashMap<u64, (Instant, String)> = HashMap::new();
-    loop {
-        let unix_now = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
-        tel.tick(Instant::now(), unix_now);
-        perf.tick(Instant::now(), unix_now);
-        let mut req = match server.recv_timeout(Duration::from_secs(5)) {
-            Ok(Some(r)) => r,
-            Ok(None) => continue,
-            Err(_) => continue,
+    let state = Arc::new(Mutex::new(State { list: List { entries: HashMap::new() }, tel, perf, advanced: None,
+                                            perf_cache: HashMap::new(),
+                                            aerial: aerial::Aerial::new(std::env::var_os("BNGE_AERIAL_SPOOL")
+                                                .map(PathBuf::from)) }));
+    {
+        // (the 5 s tick: forget old installs, samples, today's files)
+        let st = state.clone();
+        std::thread::spawn(move || loop {
+            let unix_now = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+            {
+                let mut s = st.lock().unwrap_or_else(|e| e.into_inner());
+                s.tel.tick(Instant::now(), unix_now);
+                s.perf.tick(Instant::now(), unix_now);
+            }
+            std::thread::sleep(Duration::from_secs(5));
+        });
+    }
+    // player reports (reports.rs): their files next to the binary unless BNGE_REPORTS_DIR; the disk cap in GB
+    let rep_dir = std::env::var("BNGE_REPORTS_DIR").map(PathBuf::from).unwrap_or_else(|_| {
+        std::env::current_exe().ok().and_then(|e| e.parent().map(|p| p.join("reports"))).unwrap_or_else(|| PathBuf::from("reports"))
+    });
+    let mut lim = reports::Limits::default();
+    if let Some(gb) = std::env::var("BNGE_REPORTS_MAX_GB").ok().and_then(|v| v.parse::<f64>().ok()).filter(|g| *g > 0.0) {
+        lim.disk_cap = (gb * (1u64 << 30) as f64) as u64;
+    }
+    let reps = Arc::new(Mutex::new(reports::Reports::new(rep_dir.clone(), lim)));
+    {
+        let r = reps.lock().unwrap();
+        eprintln!("reports: {} kept in {} ({} MB)", r.count(), rep_dir.display(), r.used() >> 20);
+    }
+    {
+        // (the hourly retention sweep)
+        let r = reps.clone();
+        std::thread::spawn(move || loop {
+            let unix_now = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+            let gone = r.lock().unwrap_or_else(|e| e.into_inner()).sweep(unix_now);
+            if gone > 0 {
+                eprintln!("reports: {gone} day(s) past the retention removed");
+            }
+            std::thread::sleep(Duration::from_secs(3600));
+        });
+    }
+    let slots = Arc::new(Slots::default());
+    let mut workers = Vec::new();
+    for _ in 0..WORKERS {
+        let (server, st, geo, token) = (server.clone(), state.clone(), geo.clone(), token.clone());
+        let (reps, slots) = (reps.clone(), slots.clone());
+        workers.push(std::thread::spawn(move || loop {
+            let mut req = match server.recv() {
+                Ok(r) => r,
+                Err(_) => continue,
+            };
+            let path = req.url().split('?').next().unwrap_or("").to_string();
+            if *req.method() == Method::Post && path == "/report" {
+                // (its own thread: a big body read slowly must not hold a request thread)
+                upload(req, reps.clone(), slots.clone(), geo.clone());
+                continue;
+            }
+            if path == "/reports/list" || path.starts_with("/reports/") {
+                let resp = private_reports(&req, &path, &reps, &token);
+                let _ = req.respond(resp);
+                continue;
+            }
+            let mut body = Vec::new();
+            let read = if *req.method() == Method::Post {
+                req.as_reader().take(MAX_BODY as u64 + 1).read_to_end(&mut body)
+            } else {
+                Ok(0)
+            };
+            let now = Instant::now();
+            let unix_now = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+            let resp = {
+                let mut s = st.lock().unwrap_or_else(|e| e.into_inner());
+                handle(&mut s, &req, read, &body, &geo, &token, now, unix_now)
+            };
+            let _ = req.respond(resp);
+        }));
+    }
+    for w in workers {
+        let _ = w.join();
+    }
+}
+
+/// The upload threads reading report bodies: at most reports::UPLOADS within their first UPLOAD_S, at most
+/// STUCK_MAX in all (a read blocked by a client that stopped sending cannot be cut off: tiny_http gives no socket
+/// timeout; such a thread stops counting against the fresh slots after UPLOAD_S).
+#[derive(Default)]
+struct Slots {
+    live: Mutex<HashMap<u64, Instant>>,
+    next: std::sync::atomic::AtomicU64,
+}
+
+struct Slot(Arc<Slots>, u64);
+
+impl Drop for Slot {
+    fn drop(&mut self) {
+        self.0.live.lock().unwrap_or_else(|e| e.into_inner()).remove(&self.1);
+    }
+}
+
+fn take_slot(slots: &Arc<Slots>) -> Option<Slot> {
+    let mut live = slots.live.lock().unwrap_or_else(|e| e.into_inner());
+    let fresh = live.values().filter(|t| t.elapsed() < Duration::from_secs(reports::UPLOAD_S)).count();
+    if fresh >= reports::UPLOADS || live.len() >= reports::STUCK_MAX {
+        return None;
+    }
+    let id = slots.next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    live.insert(id, Instant::now());
+    Some(Slot(slots.clone(), id))
+}
+
+/// POST /report in a thread of its own: the body read within UPLOAD_S, checked (reports::parse), admitted (rate limits,
+/// disk), written outside the lock.
+fn upload(req: Request, reps: Arc<Mutex<reports::Reports>>, slots: Arc<Slots>, geo: Arc<Mutex<Arc<Geo>>>) {
+    // (the slot taken before the thread: a flood of uploads is refused here, not one thread each)
+    let Some(slot) = take_slot(&slots) else {
+        let _ = req.respond(json(503, "{\"error\":\"busy, try again later\"}".into()));
+        return;
+    };
+    std::thread::spawn(move || {
+        let mut req = req;
+        let unix_now = || SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+        let err = |code: u16, why: &str| json(code, format!("{{\"error\":\"{why}\"}}"));
+        let Some(ip) = client_ip(&req) else {
+            let _ = req.respond(err(400, "bad request"));
+            return;
         };
-        let now = Instant::now();
-        let path = req.url().split('?').next().unwrap_or("").to_string();
-        let resp = match (req.method(), path.as_str()) {
-            (Method::Get, "/servers") => {
-                let g = geo.lock().unwrap().clone();
-                json(200, serde_json::to_string(&list.servers(now, &g)).unwrap())
-            }
-            (Method::Post, "/announce") => {
-                let mut body = Vec::new();
-                let read = req.as_reader().take(MAX_BODY as u64 + 1).read_to_end(&mut body);
-                match (read, client_ip(&req)) {
-                    (Ok(n), _) if n > MAX_BODY => json(413, "{\"error\":\"too big\"}".into()),
-                    (Ok(_), Some(ip)) => match serde_json::from_slice::<Announce>(&body) {
-                        Ok(a) => match list.announce(ip, a, now) {
-                            Ok(()) => json(200, "{\"ok\":true}".into()),
-                            Err((code, why)) => json(code, format!("{{\"error\":\"{why}\"}}")),
-                        },
-                        Err(_) => json(400, "{\"error\":\"bad json\"}".into()),
-                    },
-                    _ => json(400, "{\"error\":\"bad request\"}".into()),
+        let max_body = reps.lock().unwrap_or_else(|e| e.into_inner()).lim.max_body;
+        if let Err((code, why)) = reps.lock().unwrap_or_else(|e| e.into_inner()).attempt(ip, unix_now()) {
+            let _ = req.respond(err(code, why));
+            return;
+        }
+        if req.body_length().is_some_and(|n| n > max_body) {
+            let _ = req.respond(err(413, "too big"));
+            return;
+        }
+        let t0 = Instant::now();
+        let mut body = Vec::new();
+        let mut buf = vec![0u8; 65536];
+        let mut failed = None;
+        {
+            let mut r = req.as_reader().take(max_body as u64 + 1);
+            loop {
+                if t0.elapsed() > Duration::from_secs(reports::UPLOAD_S) {
+                    failed = Some((408, "too slow"));
+                    break;
+                }
+                match r.read(&mut buf) {
+                    Ok(0) => break,
+                    Ok(n) => body.extend_from_slice(&buf[..n]),
+                    Err(_) => {
+                        failed = Some((400, "bad request"));
+                        break;
+                    }
                 }
             }
-            (Method::Post, "/telemetry") => {
-                let mut body = Vec::new();
-                let read = req.as_reader().take(MAX_BODY as u64 + 1).read_to_end(&mut body);
-                match (read, client_ip(&req)) {
-                    (Ok(n), _) if n > MAX_BODY => json(413, "{\"error\":\"too big\"}".into()),
-                    (Ok(_), Some(ip)) => match serde_json::from_slice::<telemetry::Report>(&body) {
-                        Ok(mut r) => {
-                            let cc = geo.lock().unwrap().country(ip);     // (the address itself is not kept)
-                            let (id, p) = (r.id(), r.perf.take());
-                            match tel.report(ip, cc, r, now, unix_now) {
-                                Ok(()) => {
-                                    if let (Some(p), Some((v, os))) = (p, tel.info(&id)) {
-                                        perf.add(&id, &v, &os, p, now, unix_now);   // (folded into totals, then dropped)
-                                    }
-                                    json(200, "{\"ok\":true}".into())
-                                }
-                                Err((code, why)) => json(code, format!("{{\"error\":\"{why}\"}}")),
-                            }
-                        }
-                        Err(_) => json(400, "{\"error\":\"bad json\"}".into()),
-                    },
-                    _ => json(400, "{\"error\":\"bad request\"}".into()),
-                }
+        }
+        drop(slot);
+        if failed.is_none() && body.len() > max_body {
+            failed = Some((413, "too big"));
+        }
+        if let Some((code, why)) = failed {
+            let _ = req.respond(err(code, why));
+            return;
+        }
+        let parsed = {
+            let r = reps.lock().unwrap_or_else(|e| e.into_inner());
+            reports::parse(&body, &r.lim)
+        };
+        drop(body);
+        let p = match parsed {
+            Ok(p) => p,
+            Err((code, why)) => {
+                let _ = req.respond(err(code, why));
+                return;
             }
-            (Method::Get, "/stats") => json(200, tel.public(now, unix_now).to_string()),
-            (Method::Get, "/stats/now") => json(200, tel.now(now, unix_now).to_string()),
-            (Method::Get, "/stats/range") => {
-                // ?from=<unix s>&to=<unix s> (to defaults to now)
-                let q = req.url().split_once('?').map(|x| x.1).unwrap_or("");
-                let arg = |k: &str| q.split('&').find_map(|kv| kv.strip_prefix(k).and_then(|v| v.strip_prefix('=')))
-                    .and_then(|v| v.parse::<u64>().ok());
-                match arg("from") {
-                    Some(from) => match tel.range(now, unix_now, from, arg("to").unwrap_or(unix_now)) {
-                        Ok(v) => json(200, v.to_string()),
+        };
+        let now = unix_now();
+        let admitted = {
+            let mut r = reps.lock().unwrap_or_else(|e| e.into_inner());
+            r.admit(&p, ip, now).map(|t| {
+                let f = r.path_of(&t);
+                (t, f)
+            })
+        };
+        let (ticket, folder) = match admitted {
+            Ok(x) => x,
+            Err((code, why)) => {
+                let _ = req.respond(err(code, why));
+                return;
+            }
+        };
+        let table = geo.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let meta = reports::Reports::meta(&p, &ticket, now, &table.country(ip)); // (the address itself is not kept)
+        let wrote = reports::Reports::write(&folder, &p, &meta);
+        let id = reports::show_id(&ticket.id);
+        let ok = wrote.is_ok();
+        if let Err(e) = &wrote {
+            eprintln!("reports: writing {}: {e}", folder.display());
+        }
+        reps.lock().unwrap_or_else(|e| e.into_inner()).finish(ticket, ok.then_some(meta));
+        let _ = req.respond(if ok {
+            eprintln!("reports: {id} received ({} {}, {} bytes)", p.kind, p.v, p.files.iter().map(|f| f.1.len()).sum::<usize>());
+            json(200, format!("{{\"ok\":true,\"id\":\"{id}\"}}"))
+        } else {
+            err(500, "could not store the report")
+        });
+    });
+}
+
+/// GET /reports/list and /reports/<id>/<file>: the token only (404 without one configured, 401 with a wrong one).
+fn private_reports(req: &Request, path: &str, reps: &Arc<Mutex<reports::Reports>>, token: &Option<String>)
+                   -> Response<std::io::Cursor<Vec<u8>>> {
+    let nf = || json(404, "{\"error\":\"not found\"}".into());
+    if token.is_none() {
+        return nf();
+    }
+    let auth = req.headers().iter().find(|h| h.field.equiv("Authorization")).map(|h| h.value.as_str().to_string());
+    if !reports::authorized(token, auth.as_deref()) {
+        return json(401, "{\"error\":\"token\"}".into());
+    }
+    if *req.method() != Method::Get {
+        return json(405, "{\"error\":\"method\"}".into());
+    }
+    let r = reps.lock().unwrap_or_else(|e| e.into_inner());
+    if path == "/reports/list" {
+        return json(200, r.list(&reports::query(req.url())).to_string());
+    }
+    let mut parts = path.trim_start_matches("/reports/").splitn(2, '/');
+    let (Some(id), Some(name)) = (parts.next(), parts.next()) else { return nf() };
+    let Some((p, ctype)) = r.file(id, name) else { return nf() };
+    drop(r);
+    match std::fs::read(&p) {
+        Ok(bytes) => Response::from_data(bytes)
+            .with_header(Header::from_bytes(&b"Content-Type"[..], ctype.as_bytes()).unwrap())
+            .with_header(Header::from_bytes(&b"Cache-Control"[..], &b"no-store"[..]).unwrap()),
+        Err(_) => nf(),
+    }
+}
+
+/// The collector's state, shared by the request threads (main): each reads its request's body and writes its
+/// response outside the lock (a slow client held the one loop, and the accepted connections piled up until the
+/// process ran out of file descriptors: "No file descriptors available", 502 for two hours, 2026-11-11).
+struct State {
+    list: List,
+    tel: telemetry::Telemetry,
+    perf: perf::Perf,
+    advanced: Option<(Instant, String)>,
+    perf_cache: HashMap<u64, (Instant, String)>,
+    aerial: aerial::Aerial,
+}
+
+const WORKERS: usize = 16; // request threads
+
+#[allow(clippy::too_many_arguments)]
+fn handle(s: &mut State, req: &Request, read: std::io::Result<usize>, body: &[u8], geo: &Arc<Mutex<Arc<Geo>>>,
+          token: &Option<String>, now: Instant, unix_now: u64) -> Response<std::io::Cursor<Vec<u8>>> {
+    let path = req.url().split('?').next().unwrap_or("").to_string();
+    match (req.method(), path.as_str()) {
+        (Method::Get, "/servers") => {
+            let g = geo.lock().unwrap().clone();
+            json(200, serde_json::to_string(&s.list.servers(now, &g)).unwrap())
+        }
+        (Method::Post, "/announce") => {
+            match (read, client_ip(req)) {
+                (Ok(n), _) if n > MAX_BODY => json(413, "{\"error\":\"too big\"}".into()),
+                (Ok(_), Some(ip)) => match serde_json::from_slice::<Announce>(body) {
+                    Ok(a) => match s.list.announce(ip, a, now) {
+                        Ok(()) => json(200, "{\"ok\":true}".into()),
                         Err((code, why)) => json(code, format!("{{\"error\":\"{why}\"}}")),
                     },
-                    None => json(400, "{\"error\":\"from\"}".into()),
-                }
+                    Err(_) => json(400, "{\"error\":\"bad json\"}".into()),
+                },
+                _ => json(400, "{\"error\":\"bad request\"}".into()),
             }
-            (Method::Get, "/stats/private") => {
-                let auth = req.headers().iter().find(|h| h.field.equiv("Authorization")).map(|h| h.value.as_str().to_string());
-                match (&token, auth) {
-                    (Some(t), Some(a)) if a == format!("Bearer {t}") => json(200, tel.private(now, unix_now).to_string()),
-                    (Some(_), _) => json(401, "{\"error\":\"token\"}".into()),
-                    (None, _) => json(404, "{\"error\":\"not found\"}".into()),
-                }
+        }
+        (Method::Post, "/telemetry") => {
+            match (read, client_ip(req)) {
+                (Ok(n), _) if n > MAX_BODY => json(413, "{\"error\":\"too big\"}".into()),
+                (Ok(_), Some(ip)) => match serde_json::from_slice::<telemetry::Report>(body) {
+                    Ok(mut r) => {
+                        let cc = geo.lock().unwrap().country(ip);     // (the address itself is not kept)
+                        let (id, p) = (r.id(), r.perf.take());
+                        match s.tel.report(ip, cc, r, now, unix_now) {
+                            Ok(()) => {
+                                if let (Some(p), Some((v, os))) = (p, s.tel.info(&id)) {
+                                    s.perf.add(&id, &v, &os, p, now, unix_now);   // (folded into totals, then dropped)
+                                }
+                                json(200, "{\"ok\":true}".into())
+                            }
+                            Err((code, why)) => json(code, format!("{{\"error\":\"{why}\"}}")),
+                        }
+                    }
+                    Err(_) => json(400, "{\"error\":\"bad json\"}".into()),
+                },
+                _ => json(400, "{\"error\":\"bad request\"}".into()),
             }
-            (Method::Get, "/stats/performance") => {
-                // ?days=N (1-400, default 7; 0: everything kept); built at most once a minute per range
-                let q = req.url().split_once('?').map(|x| x.1).unwrap_or("");
-                let days = q.split('&').find_map(|kv| kv.strip_prefix("days=")).and_then(|v| v.parse::<u64>().ok())
-                    .unwrap_or(7).min(400);
-                let fresh = perf_cache.get(&days).is_some_and(|(at, _)| now.duration_since(*at) < Duration::from_secs(60));
-                if !fresh {
-                    perf_cache.insert(days, (now, perf.public(unix_now, days).to_string()));
-                }
-                json(200, perf_cache[&days].1.clone())
+        }
+        (Method::Post, "/aerial/request") => match (read, client_ip(req)) {
+            (Ok(n), _) if n > 4096 => json(413, "{\"state\":\"refused\"}".into()),
+            (Ok(_), Some(ip)) => {
+                let (code, b) = s.aerial.request(ip, body, now);
+                json(code, b)
             }
-            (Method::Get, "/performance") | (Method::Get, "/performance/") => html(include_str!("performance.html")),
-            (Method::Get, "/stats/advanced") => {
-                if advanced.as_ref().is_none_or(|(at, _)| now.duration_since(*at) > Duration::from_secs(60)) {
-                    let mut v = tel.private(now, unix_now);
-                    v["errors7d"] = perf.errors(unix_now);
-                    advanced = Some((now, v.to_string()));
-                }
-                json(200, advanced.as_ref().unwrap().1.clone())
+            _ => json(400, "{\"state\":\"refused\"}".into()),
+        },
+        (Method::Get, "/aerial/status") => {
+            let (code, b) = s.aerial.status(req.url().split_once('?').map(|x| x.1).unwrap_or(""));
+            json(code, b)
+        }
+        (Method::Get, "/stats") => json(200, s.tel.public(now, unix_now).to_string()),
+        (Method::Get, "/stats/now") => json(200, s.tel.now(now, unix_now).to_string()),
+        (Method::Get, "/stats/range") => {
+            // ?from=<unix s>&to=<unix s> (to defaults to now)
+            let q = req.url().split_once('?').map(|x| x.1).unwrap_or("");
+            let arg = |k: &str| q.split('&').find_map(|kv| kv.strip_prefix(k).and_then(|v| v.strip_prefix('=')))
+                .and_then(|v| v.parse::<u64>().ok());
+            match arg("from") {
+                Some(from) => match s.tel.range(now, unix_now, from, arg("to").unwrap_or(unix_now)) {
+                    Ok(v) => json(200, v.to_string()),
+                    Err((code, why)) => json(code, format!("{{\"error\":\"{why}\"}}")),
+                },
+                None => json(400, "{\"error\":\"from\"}".into()),
             }
-            (Method::Get, "/players") | (Method::Get, "/players/") => html(include_str!("players.html")),
-            (Method::Get, "/players/advanced") => html(include_str!("advanced.html")),
-            (Method::Get, "/players/private") => Response::from_string("")
-                .with_status_code(301)
-                .with_header(Header::from_bytes(&b"Location"[..], &b"/players/advanced"[..]).unwrap()),
-            _ => json(404, "{\"error\":\"not found\"}".into()),
-        };
-        let _ = req.respond(resp);
+        }
+        (Method::Get, "/stats/private") => {
+            let auth = req.headers().iter().find(|h| h.field.equiv("Authorization")).map(|h| h.value.as_str().to_string());
+            match (token, auth) {
+                (Some(t), Some(a)) if a == format!("Bearer {t}") => json(200, s.tel.private(now, unix_now).to_string()),
+                (Some(_), _) => json(401, "{\"error\":\"token\"}".into()),
+                (None, _) => json(404, "{\"error\":\"not found\"}".into()),
+            }
+        }
+        (Method::Get, "/stats/performance") => {
+            // ?days=N (1-400, default 7; 0: everything kept); built at most once a minute per range
+            let q = req.url().split_once('?').map(|x| x.1).unwrap_or("");
+            let days = q.split('&').find_map(|kv| kv.strip_prefix("days=")).and_then(|v| v.parse::<u64>().ok())
+                .unwrap_or(7).min(400);
+            let fresh = s.perf_cache.get(&days).is_some_and(|(at, _)| now.duration_since(*at) < Duration::from_secs(60));
+            if !fresh {
+                s.perf_cache.insert(days, (now, s.perf.public(unix_now, days).to_string()));
+            }
+            json(200, s.perf_cache[&days].1.clone())
+        }
+        (Method::Get, "/performance") | (Method::Get, "/performance/") => html(include_str!("performance.html")),
+        (Method::Get, "/stats/advanced") => {
+            if s.advanced.as_ref().is_none_or(|(at, _)| now.duration_since(*at) > Duration::from_secs(60)) {
+                let mut v = s.tel.private(now, unix_now);
+                v["errors7d"] = s.perf.errors(unix_now);
+                s.advanced = Some((now, v.to_string()));
+            }
+            json(200, s.advanced.as_ref().unwrap().1.clone())
+        }
+        (Method::Get, "/players") | (Method::Get, "/players/") => html(include_str!("players.html")),
+        (Method::Get, "/players/advanced") => html(include_str!("advanced.html")),
+        (Method::Get, "/players/private") => Response::from_string("")
+            .with_status_code(301)
+            .with_header(Header::from_bytes(&b"Location"[..], &b"/players/advanced"[..]).unwrap()),
+        _ => json(404, "{\"error\":\"not found\"}".into()),
     }
 }
 

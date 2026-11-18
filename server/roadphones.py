@@ -5,6 +5,7 @@ import hashlib
 import json
 from pathlib import Path
 import numpy as np
+import dnp
 
 DATA=Path(__file__).with_name('data')/'fr_sos_phones.json.gz'
 
@@ -53,15 +54,15 @@ def on_highways(frame,roads,box,pad=25.):
         if countrybounds.bundled().at(phone['lat'],phone['lon'])!='FR':continue
         p=phone['point'].copy();best=None
         for fid,sp,line,*_ in highways:
-            line=np.asarray(line,float);d=np.diff(line,axis=0);l2=(d[:,:2]**2).sum(1)
+            line=np.asarray(line,float);d=np.diff(line,axis=0);l2=(d[:,:2] * d[:,:2]).sum(1)
             u=np.clip(((p[:2]-line[:-1,:2])*d[:,:2]).sum(1)/np.maximum(l2,1e-9),0,1)
-            q=line[:-1]+u[:,None]*d;ds=np.linalg.norm(q[:,:2]-p[:2],axis=1);k=int(ds.argmin())
+            q=line[:-1]+u[:,None]*d;ds=dnp.norm(q[:,:2]-p[:2],axis=1);k=int(ds.argmin())
             if ds[k]>22 or ds[k]<sp.width/2+.5 or l2[k]<1e-9:continue
             key=(float(ds[k]),str(fid))
             if best is None or key<best[0]:best=(key,fid,q[k],d[k,:2]/np.sqrt(l2[k]))
         if best is None:continue
         _,fid,q,t=best
         if any(_seg_dist_min(p[:2],line)<half+.5 for half,line in all_lines):continue
-        p[2]=q[2];n=p[:2]-q[:2];n/=max(np.linalg.norm(n),1e-9)
+        p[2]=q[2];n=p[:2]-q[:2];n/=max(dnp.norm(n),1e-9)
         out.append(dict(phone,point=p,roadpoint=q,travel=t,normal=n,road_id=fid))
     return out

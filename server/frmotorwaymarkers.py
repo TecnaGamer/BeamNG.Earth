@@ -10,6 +10,7 @@ import math
 from pathlib import Path
 
 import numpy as np
+import dnp
 
 import frroadmesh
 import furniture
@@ -63,29 +64,29 @@ def _median(highways, at):
         points, tangents = furniture._at(line, s)
         q, tangent = points[0], tangents[0]
         delta = at[:2] - q[:2]
-        if float(delta @ delta) <= 34.0**2 and abs(float(delta @ tangent)) < 2.5:
+        if float(dnp.matmul(delta, delta)) <= 34.0**2 and abs(float(dnp.matmul(delta, tangent))) < 2.5:
             near.append((fid, q, tangent * spec.dir, spec.width / 2))
     pairs = []
     for (fa, a, ta, wa), (fb, b, tb, wb) in combinations(near, 2):
         cross = b[:2] - a[:2]
-        gap = np.linalg.norm(cross) - wa - wb
+        gap = dnp.norm(cross) - wa - wb
         if not (-.25 <= gap <= 22.0 and abs(a[2] - b[2]) < 1.25
-                and float(ta @ tb) < -.92 and abs(float(cross @ ta)) < 3.2):
+                and float(dnp.matmul(ta, tb)) < -.92 and abs(float(dnp.matmul(cross, ta))) < 3.2):
             continue
         # The median sits to the left of each carriageway on French motorways.
         if signplacement.cross(ta, cross) <= 0 or signplacement.cross(tb, -cross) <= 0:
             continue
-        normal = cross / np.linalg.norm(cross)
+        normal = cross / dnp.norm(cross)
         centre = (a + b) / 2
         centre[:2] += normal * (wa - wb) / 2
-        distance = np.linalg.norm(centre[:2] - at[:2])
+        distance = dnp.norm(centre[:2] - at[:2])
         if distance <= 22.0:
             pairs.append((distance, centre, ta, normal, gap, (fa, fb)))
     pairs.sort(key=lambda pair: pair[0])
     if not pairs:
         return None
     best = pairs[0]
-    if any(p[0] - best[0] < 1.5 and np.linalg.norm(p[1][:2] - best[1][:2]) > 1.5 for p in pairs[1:]):
+    if any(p[0] - best[0] < 1.5 and dnp.norm(p[1][:2] - best[1][:2]) > 1.5 for p in pairs[1:]):
         return None
     return best[1:]
 
@@ -97,11 +98,11 @@ def _concrete(centre, travel, rows):
             continue
         q = np.asarray(row[1:4], float)
         along = np.asarray(row[11:13], float)
-        if abs(float(travel @ along)) < .9:
+        if abs(float(dnp.matmul(travel, along))) < .9:
             continue
-        offset = float((centre[:2] - q[:2]) @ along)
+        offset = float(dnp.matmul(centre[:2] - q[:2], along))
         q[:2] += along * offset
-        if abs(offset) <= 1.40 and np.linalg.norm(q[:2] - centre[:2]) < .45:
+        if abs(offset) <= 1.40 and dnp.norm(q[:2] - centre[:2]) < .45:
             q[2] += row[6] + offset * row[13]
             return q
     return None

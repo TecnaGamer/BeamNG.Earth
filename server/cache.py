@@ -15,7 +15,10 @@ Layout of the cache root (~/.cache/beamng-earth by default):
   airports/           the same (airports.py: OurAirports' CSV files, ~17 MB, the last good copy kept for
                       offline use; airports.py replaces it weekly and deletes the old generation itself)
   revisit/ seacarve/ peercache/ roadwidth/   MANAGED as well (since 2026-11-03), besides their own limits
-                      (revisit's, seacarve.RAW_MB, peerwork.CACHE_BYTES, roadwidth.STORE_MB, cut back at server start)
+                      (revisit's, seacarve.RAW_MB, roadwidth.STORE_MB, cut back at server start; peercache/: compute
+                      sharing v1's, gone since 2026-11-16, emptied at start)
+  blocks/             MANAGED too (blockcache.py: the graded terrain blocks' chunks and entries), besides its own
+                      limit (blockcache.budget_mb: a share of this cap, cut back at start and by the writers)
   mapdata-mirror/     counted and cleared (MIRRORED), not evicted file by file: pruned whole by mapdata (MIRROR_MB)
   netstats/ (and anything else)           not tracked: the daily request budgets must survive a clear
 
@@ -26,7 +29,8 @@ per request: one dict update under a lock. At start a background thread walks th
 this module) and merges it with the index; until then ready is False and nothing is evicted.
 
 Eviction (a background thread): when the tracked bytes exceed the cap, least recently used files go
-until LOW_WATER (90 %) of the cap is left, at most every EVICT_S. Never evicted: gravity/, files this
+until LOW_WATER (90 %) of the cap is left, at most every EVICT_S; the raw elevation tiles (KEEP_PREFIXES) are passed over
+while they are at most KEEP_SHARE of that (dear to download again, small beside the rest). Never evicted: gravity/, files this
 server process used within PROTECT_S (an hour: the area around the player), and markers (_marker: empty files such
 as "no seams", and the tile columns' miss indexes, missindex.py: they save requests; clear() removes them).
 The start-up walk also hands the old per-tile 404 marker files (<y>.404) to missindex (migrate_misses, a thread of
@@ -61,12 +65,25 @@ log = logging.getLogger("earthd.cache")
 LAYOUT_VERSION = 1
 VERSION_FILE = "VERSION"
 INDEX_FILE = "index.tsv"
+# The start-up walk waits this long after the server starts and yields the interpreter every WALK_YIELD_N files: it
+# only readies eviction, and over a 672k-file cache it was ~19 CPU-s in the server's process during the first place's
+# loading (py-spy, a cold teleport 2026-11-11), beside the far textures and plans that share the interpreter
+WALK_DELAY_S = float(os.environ.get("BNGE_CACHE_WALK_DELAY_S", "90"))
+WALK_YIELD_N = 500
 INDEX_HEADER = "# beamng-earth cache index 1"
 # evicted and cleared. The app's built caches too (2026-11-03, a player's cache 25 GB under a 20 GB cap: they were
 # left out of the count and of "Clear cache"): a missing file of theirs is a miss, made again; their own limits stay
 MANAGED = ("dem", "imagery", "colormatch", "deshadow", "mapdata", "revisit", "seacarve", "roadwidth", "peercache",
-           "raw", "plans", "roadz", "vegetation", "pagesdata", "decoded", "mapterhorn")
+           "raw", "plans", "roadz", "vegetation", "pagesdata", "decoded", "mapterhorn", "blocks", "decisions",
+           "lidarz")
 CLEAR_KEEP_S = 600.0        # "Clear cache" keeps the files used this recently (the place around the player now)
+# Downloads that are dear to fetch again and small beside what is made from them: the elevation tiles (Mapterhorn: one
+# maintainer on donations, 53 M requests a day from players, 2026-11-11). A cold place's are ~160 MB of its ~2.8 GB in
+# the cache (the decoded mirror, revisit, map data, sea floor, photos), so plain least-recently-used eviction under the
+# 20 GB default cap dropped them after ~7 other places and a return downloaded every one again. Eviction now passes
+# over them while they are at most KEEP_SHARE of what it cuts down to (their own oldest go first beyond that).
+KEEP_PREFIXES = ("dem/mapterhorn/", "dem/aws-terrarium/")
+KEEP_SHARE = 0.25
 MIRRORED = ("mapdata-mirror",)      # counted and cleared, never evicted file by file (a cell's files and its "ok" go
                                     # together: mapdata prunes it whole, MIRROR_MB)
 KEPT = ("gravity", "airports")                              # counted only
@@ -172,6 +189,7 @@ class Cache(NoCache):
         self._disk_warned = False
         self._dirty = False
         self.ready = False          # the start-up walk is done
+        self._walk_now = threading.Event()      # the start-up walk wanted now (walk_soon), not after WALK_DELAY_S
         self._ready_ev = threading.Event()
         self._last_evict = None
         self._last_save = self.started
@@ -390,6 +408,7 @@ class Cache(NoCache):
         """Walk the tracked directories once: sizes, and the mtime as the last use of files the index
         does not know; index entries without a file are dropped; files past their LIFETIMES go."""
         found = {}
+        n_seen = 0
         legacy = {}             # folder -> its old <y>.404 marker files (migrate_misses)
         for top in MANAGED + MIRRORED + KEPT:
             stack = [os.path.join(self.root, top)]
@@ -401,6 +420,9 @@ class Cache(NoCache):
                     continue
                 with it:
                     for de in it:
+                        n_seen += 1
+                        if n_seen % WALK_YIELD_N == 0:
+                            time.sleep(0.001)       # (the interpreter to the world's threads: WALK_YIELD_N)
                         try:
                             if de.is_dir(follow_symlinks=False):
                                 stack.append(de.path)
@@ -486,7 +508,22 @@ class Cache(NoCache):
         order = self._unpinned(order, lambda item: item[1])
         self._last_evict = self.now()
         n = b = 0
-        for _, key in order:
+        kept = self._kept_bytes()
+        held = []
+        for item in order:
+            key = item[1]
+            if self._used <= target:
+                break
+            keep = key.startswith(KEEP_PREFIXES)
+            if keep and kept <= KEEP_SHARE * target:
+                held.append(item)               # (taken only if the rest is not enough)
+                continue
+            got = self._remove(key, floor, empty_too=False)
+            if got is not None:
+                n, b = n + 1, b + got
+                if keep:
+                    kept -= got
+        for _, key in held:
             if self._used <= target:
                 break
             got = self._remove(key, floor, empty_too=False)
@@ -499,16 +536,37 @@ class Cache(NoCache):
                      _gb(self._used), _gb(cap) if cap else "unlimited")
         return n, b
 
+    def _kept_bytes(self):
+        """Bytes of the tracked KEEP_PREFIXES files."""
+        with self._lock:
+            return sum(e[0] or 0 for k, e in self._entries.items() if k.startswith(KEEP_PREFIXES))
+
     def _unpinned(self, items, key_of):
         """items without the ones whose key is in a saved area (pinned; outside the lock: a batch call)."""
         pinned = self.pinned
-        if pinned is None or not items:
+        if not items:
             return items
-        try:
-            mask = pinned([key_of(it) for it in items])
-        except Exception as e:      # (no pins rather than no eviction)
-            log.warning("cache: saved areas not checked: %s", e)
-            return items
+        keys = [key_of(it) for it in items]
+        mask = [False] * len(keys)
+        if pinned is not None:
+            try:
+                mask = list(pinned(keys))
+            except Exception as e:      # (no pins rather than no eviction)
+                log.warning("cache: saved areas not checked: %s", e)
+        try:                            # (and the prebaked input tiles' downloaded regions: bnwt.download_region)
+            import bnwt
+            got = bnwt.pinned_keys(self.root, keys)
+            if got is not None:
+                mask = [a or b for a, b in zip(mask, got)]
+        except Exception as e:
+            log.warning("cache: downloaded regions not checked: %s", e)
+        try:                            # (the shared decision archives' downloaded regions: decisions.download_region)
+            import decisions
+            got = decisions.pinned_keys(self.root, keys)
+            if got is not None:
+                mask = [a or b for a, b in zip(mask, got)]
+        except Exception as e:
+            log.warning("cache: downloaded decision regions not checked: %s", e)
         return [it for it, p in zip(items, mask) if not p]
 
     def keys(self):
@@ -555,11 +613,16 @@ class Cache(NoCache):
                 self.on_change(key, False)
             return e[0] or 0
 
+    def walk_soon(self):
+        """Start the start-up walk now instead of after WALK_DELAY_S (a clear, the map's cache view: they wait for it)."""
+        self._walk_now.set()
+
     def clear(self, wait=60.0):
         """"Clear cache": every MANAGED (and MIRRORED) file but the ones used within CLEAR_KEEP_S (the place around the
         player; a file still in a producer's memory is fetched or built again if it is needed after all; gravity/,
         airports/ and netstats/ stay). Waits up to `wait` s for the start-up walk. Returns
         (files, bytes)."""
+        self.walk_soon()
         if not self.managed or not self._ready_ev.wait(wait):
             return 0, 0
         # (only the last CLEAR_KEEP_S: everything this session had used stayed, and after a long drive "Clear cache"
@@ -673,6 +736,9 @@ class Cache(NoCache):
         return n
 
     def _run(self):
+        self._walk_now.wait(WALK_DELAY_S)       # (at once when something needs it: walk_soon)
+        if self._closed:
+            return
         try:
             self.scan()
         except Exception:
@@ -706,6 +772,7 @@ class Cache(NoCache):
         """Stop the thread and save the index (the server's shutdown)."""
         self._closed = True
         self._wake.set()
+        self._walk_now.set()
         if self._thread is not None:
             self._thread.join(5.0)
         if self.ready:

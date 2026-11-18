@@ -16,6 +16,8 @@ import math
 import re
 
 import numpy as np
+import dmath
+import dnp
 
 import exitsigns
 
@@ -91,8 +93,8 @@ def references():
             before = ordered[max(0, i-1)]
             after = ordered[min(len(ordered)-1, i+1)]
             delta = centres[after]-centres[before]
-            delta *= [math.cos(math.radians(float(centres[mile][1]))), 1.]
-            norm = float(np.linalg.norm(delta))
+            delta *= [dmath.cos(math.radians(float(centres[mile][1]))), 1.]
+            norm = float(dnp.norm(delta))
             directions = {d for d, _ in stations[mile] if d}
             if not directions:
                 # These two sources use statewide Interstate mileage. MI carries the
@@ -136,7 +138,7 @@ def query(frame, box):
 
 
 def _metric(points, at):
-    return (np.asarray(points, float)-at)*[111320.*math.cos(math.radians(float(at[1]))), 111320.]
+    return (np.asarray(points, float)-at)*[111320.*dmath.cos(math.radians(float(at[1]))), 111320.]
 
 
 def unique_objects(objects):
@@ -149,7 +151,7 @@ def unique_objects(objects):
         info = obj['mile_marker']
         key = (info['route'],info['mile'],info['direction'])
         point = np.array([obj['lon'],obj['lat']])
-        if any(np.linalg.norm(_metric([p],point)) < 750. for p in groups[key]):
+        if any(dnp.norm(_metric([p],point)) < 750. for p in groups[key]):
             continue
         groups[key].append(point)
         out.append(obj)
@@ -224,8 +226,8 @@ def osm_records(main_ways, coords, markers, route_ways=(), mile_step=1., extend_
             origin = points.mean(axis=0)
             xy = _metric(points, origin)
             ab = np.diff(xy, axis=0)
-            lengths = np.linalg.norm(ab, axis=1)
-            lengths2 = np.maximum(lengths**2, 1e-12)
+            lengths = dnp.norm(ab, axis=1)
+            lengths2 = np.maximum(lengths * lengths, 1e-12)
             ss = np.r_[0., np.cumsum(lengths)]
             found = []
             low,high = points.min(axis=0)-.003,points.max(axis=0)+.003
@@ -236,7 +238,7 @@ def osm_records(main_ways, coords, markers, route_ways=(), mile_step=1., extend_
                     continue
                 q = _metric([point], origin)[0]
                 t = np.clip(((q-xy[:-1])*ab).sum(1)/lengths2, 0., 1.)
-                dist = np.linalg.norm(xy[:-1]+t[:, None]*ab-q, axis=1)
+                dist = dnp.norm(xy[:-1]+t[:, None]*ab-q, axis=1)
                 k = int(dist.argmin())
                 if marker_direction and marker_direction != posteds[k]:
                     continue
@@ -329,9 +331,9 @@ def place(frame, objects, pavements, box, elev, chunks=()):
         seen.add(key)
         q = exitsigns._xy(frame, [[obj['lon'],obj['lat']]])[0]
         axis = np.asarray(info['axis'], float)
-        if not np.isfinite(axis).all() or np.linalg.norm(axis) < .1:
+        if not np.isfinite(axis).all() or dnp.norm(axis) < .1:
             continue
-        axis /= np.linalg.norm(axis)
+        axis /= dnp.norm(axis)
         candidates = []
         for i in exitsigns._near_rows(pavements, q, MAX_SNAP_M):
             fid, spec, line, width = pavements[i]
@@ -343,8 +345,8 @@ def place(frame, objects, pavements, box, elev, chunks=()):
             travel = near[7]*(spec.dir or 1)
             # Do not slide a post along the highway to the end of a clipped span,
             # across a tunnel gap, or to a distant nearby interchange leg.
-            along = abs(float((near[6]-q)@travel))
-            if float(travel@axis) > .35 and along <= 18.:
+            along = abs(float(dnp.matmul(near[6]-q, travel)))
+            if float(dnp.matmul(travel, axis)) > .35 and along <= 18.:
                 candidates.append((near[0], str(fid), near, travel, width))
         if not candidates:
             continue
@@ -354,7 +356,7 @@ def place(frame, objects, pavements, box, elev, chunks=()):
             continue
         right = np.array([travel[1],-travel[0]])
         cross = roadlanes.cross(line)
-        edge = abs((cross[k]*(1.-t)+cross[k+1]*t)@right)*width/2.
+        edge = abs(dnp.matmul(cross[k]*(1.-t)+cross[k+1]*t, right))*width/2.
         centre = None
         for gap in (1.2, 2., 3., 4.5, 6., 8., 10., 12.):
             trial = at+right*(edge+gap+WIDTH/2.)

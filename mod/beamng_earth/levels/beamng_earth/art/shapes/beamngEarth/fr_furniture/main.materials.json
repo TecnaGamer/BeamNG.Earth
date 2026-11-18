@@ -15,7 +15,7 @@
         ],
         "metallicFactor": 0,
         "roughnessFactor": 0.8,
-        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/fr_furniture/wood_grain.png"
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/fr_furniture/wood_grain.dds"
       }
     ],
     "doubleSided": false

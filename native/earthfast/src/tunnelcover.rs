@@ -5,6 +5,7 @@
 
 use numpy::{IntoPyArray, PyArray1, PyReadonlyArray1, PyReadonlyArray2};
 use pyo3::prelude::*;
+use crate::dm::Dm;
 
 /// Arc positions along polyline a (with arc lengths sa) where it crosses polyline b, and the sine of the angle there.
 fn hits(a: &[[f64; 2]], sa: &[f64], b: &[[f64; 2]]) -> Vec<(f64, f64)> {
@@ -49,6 +50,49 @@ pub fn tunnel_cover_roads<'py>(
     reach: f64,
     min_gap: f64,
 ) -> PyResult<Bound<'py, PyArray1<i64>>> {
+    cover_roads_core(py, xy, s, kinds, None, 0.0, pts, starts, halves, clear, min_sin, reach, min_gap)
+}
+
+/// tunnel_cover_roads leaving out the roads crossing where the ground over the tunnel's floor (cover, per sample) is
+/// under min_cover: a road there is at the tunnel road's own level (a street the ramp leaves at grade), not over a
+/// tube; carried over it, the tube's top stood metres out of the street (I-395's ramps under Washington's streets).
+#[pyfunction]
+#[allow(clippy::too_many_arguments)]
+pub fn tunnel_cover_roads_over<'py>(
+    py: Python<'py>,
+    xy: PyReadonlyArray2<'py, f64>,
+    s: PyReadonlyArray1<'py, f64>,
+    kinds: PyReadonlyArray1<'py, i64>,
+    cover: PyReadonlyArray1<'py, f64>,
+    min_cover: f64,
+    pts: PyReadonlyArray2<'py, f64>,
+    starts: PyReadonlyArray1<'py, i64>,
+    halves: PyReadonlyArray1<'py, f64>,
+    clear: f64,
+    min_sin: f64,
+    reach: f64,
+    min_gap: f64,
+) -> PyResult<Bound<'py, PyArray1<i64>>> {
+    let c: Vec<f64> = cover.as_array().to_vec();
+    cover_roads_core(py, xy, s, kinds, Some(&c), min_cover, pts, starts, halves, clear, min_sin, reach, min_gap)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn cover_roads_core<'py>(
+    py: Python<'py>,
+    xy: PyReadonlyArray2<'py, f64>,
+    s: PyReadonlyArray1<'py, f64>,
+    kinds: PyReadonlyArray1<'py, i64>,
+    cover: Option<&[f64]>,
+    min_cover: f64,
+    pts: PyReadonlyArray2<'py, f64>,
+    starts: PyReadonlyArray1<'py, i64>,
+    halves: PyReadonlyArray1<'py, f64>,
+    clear: f64,
+    min_sin: f64,
+    reach: f64,
+    min_gap: f64,
+) -> PyResult<Bound<'py, PyArray1<i64>>> {
     let xa = xy.as_array();
     let a: Vec<[f64; 2]> = (0..xa.nrows()).map(|i| [xa[[i, 0]], xa[[i, 1]]]).collect();
     let s: Vec<f64> = s.as_array().to_vec();
@@ -84,6 +128,20 @@ pub fn tunnel_cover_roads<'py>(
             continue;
         }
         for (sc, sin) in hits(&a, &s, &p[b0..b1]) {
+            if let Some(c) = cover {
+                if c.len() == n {
+                    let q = s.partition_point(|&v| v < sc).min(n - 1);
+                    let cv = if q == 0 {
+                        c[0]
+                    } else {
+                        let t = (sc - s[q - 1]) / (s[q] - s[q - 1]).max(1e-9);
+                        c[q - 1] + t * (c[q] - c[q - 1])
+                    };
+                    if cv.is_finite() && cv < min_cover {
+                        continue;
+                    }
+                }
+            }
             crossings.push((sc, (hw[r] + clear) / sin.max(min_sin)));
         }
     }
@@ -148,7 +206,7 @@ pub(crate) fn tunnel_reach_core(a: &[[f64; 2]], s: &[f64], ranges: &[[f64; 2]], 
         for (sc, sin) in hits(&a, &s, &p[b0..b1]) {
             // (the crossing point, to tell a junction: the other line ends there)
             let at = point_at(&a, &s, sc);
-            let d = |e: [f64; 2]| ((e[0] - at[0]).powi(2) + (e[1] - at[1]).powi(2)).sqrt();
+            let d = |e: [f64; 2]| ((e[0] - at[0]).sq() + (e[1] - at[1]).sq()).sqrt();
             if d(e0) < end_m || d(e1) < end_m {
                 continue;
             }
@@ -211,7 +269,7 @@ fn alongside(a: &[[f64; 2]], s: &[f64], t: f64, p: &[[f64; 2]], st: &[usize], hw
                 continue;
             }
             let u = (((at[0] - q[0]) * ex + (at[1] - q[1]) * ey) / el2).clamp(0.0, 1.0);
-            let d = ((q[0] + u * ex - at[0]).powi(2) + (q[1] + u * ey - at[1]).powi(2)).sqrt();
+            let d = ((q[0] + u * ex - at[0]).sq() + (q[1] + u * ey - at[1]).sq()).sqrt();
             if d < hw[r] + clear && (ux * ey - uy * ex).abs() / el2.sqrt() < min_sin {
                 return true;
             }

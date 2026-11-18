@@ -24,11 +24,28 @@ STOCK = PoleStyle("pole", 9.2)
 RECESSED = PoleStyle("pole_concrete_recessed", 8.5, ((0.25, 0.0, 7.85),), 0.025)
 WOOD = PoleStyle("fr_wood_pole", 8.5, RECESSED.wire_anchors, RECESSED.wire_radius)
 EU_WOOD = PoleStyle("eu_wood_pole", 8.5, RECESSED.wire_anchors, RECESSED.wire_radius)
+# What a car hits and what must clear a carriageway (furniture.COLLISION_BOXES; furniture.RoadClearance), for every
+# group a style can name. Read 2026-11-11 from each shape's Colmesh (bne_eu_pole_*, bne_fr_wood_neutral,
+# bne_pole_concrete_recessed: all modelled 8.5 m tall, so a row's height over 8.5 is its scale), bounds rounded outwards
+# to 1 cm: the trunk or the A-frame's legs, not the cross-arm. A group without a box is "clear" everywhere, and the
+# Czech A-frame poles and the others stood in the lanes of Police nad Metuji's roundabout (the user, 2026-11-11).
+_TRUNK = (-0.12, -0.14, -0.01, 0.15, 0.14, 8.51)
+_POLE_BOXES = {
+    "pole_concrete_recessed": (-0.21, -0.14, -0.01, 0.21, 0.14, 8.51),
+    "fr_wood_pole": (-0.15, -0.13, -0.01, 0.15, 0.13, 8.51),
+    "eu_wood_pole": (-0.15, -0.13, -0.01, 0.15, 0.13, 8.51),
+    "eu_pole_wood_a": (-0.76, -0.11, -0.02, 0.76, 0.11, 8.52),
+    "eu_pole_wood_h": (-1.01, -0.11, -0.01, 1.01, 0.11, 8.51),
+}
+COLLISION_BOXES = {g: (8.5, (b,)) for g, b in _POLE_BOXES.items()}
 FR_KIT = "fr-varied-furniture-v3"
 EU_KIT = europeinfra.VERSION
 # Explicit country/territory coverage, including the requested RU/TR presets.
 # Overseas territories keep their own codes. Geometry families can be shared.
 EUROPE_COUNTRIES = europeinfra.COUNTRIES
+for _family in europeinfra.POLE_LAYOUTS:
+    COLLISION_BOXES.setdefault("eu_pole_" + _family, (8.5, (_TRUNK,)))
+POLE_GROUPS = ("pole",) + tuple(g for g in COLLISION_BOXES)
 FR_DEMO = "fr-recessed-demo-v1"
 FR_ALL = "fr-recessed-all-v1"
 

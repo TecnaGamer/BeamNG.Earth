@@ -5,6 +5,7 @@
 //! road tile (per-feature numpy, string sorts, a union-find), each layer walked again for the nine cells round it.
 //! The Python's numbers bit for bit: numpy's pairwise sums and interp, libm's hypot / cos, CPython's math.hypot in the
 //! union's distance test, Python's min (the first of equals).
+use crate::dm::Dm;
 
 use std::collections::HashMap;
 
@@ -126,12 +127,12 @@ fn metric(ll: &ArrayView2<f64>, xy: &ArrayView2<f64>, co: &[i64], ro: &[i64], po
     }
     let (a, b) = ring?;
     let lat: Vec<f64> = (a..b).map(|k| ll[[k, 1]]).collect();
-    let c = (np_sum(&lat) / ((b - a) as f64)).to_radians().cos();
+    let c = (np_sum(&lat) / ((b - a) as f64)).to_radians().dcos();
     let (mut ss, mut se) = (vec![0.0f64; b - a], vec![0.0f64; b - a]);
     for k in a + 1..b {
         let j = k - a;
-        ss[j] = ss[j - 1] + ((ll[[k, 0]] - ll[[k - 1, 0]]) * c).hypot(ll[[k, 1]] - ll[[k - 1, 1]]);
-        se[j] = se[j - 1] + (xy[[k, 0]] - xy[[k - 1, 0]]).hypot(xy[[k, 1]] - xy[[k - 1, 1]]);
+        ss[j] = ss[j - 1] + ((ll[[k, 0]] - ll[[k - 1, 0]]) * c).dhypot(ll[[k, 1]] - ll[[k - 1, 1]]);
+        se[j] = se[j - 1] + (xy[[k, 0]] - xy[[k - 1, 0]]).dhypot(xy[[k, 1]] - xy[[k - 1, 1]]);
     }
     let (sl, el) = (ss[b - a - 1], se[b - a - 1]);
     if sl <= 0.0 || el <= 0.0 {
@@ -300,11 +301,14 @@ pub fn gradesep_underpasses<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64
                                  kinds: PyReadonlyArray1<'py, i64>, groups: PyReadonlyArray1<'py, i64>, prm: Vec<f64>,
                                  cut_side: Vec<f64>, ground: Bound<'py, PyAny>) -> PyResult<Bound<'py, PyArray1<bool>>> {
     let (xy, st, kinds, groups) = (pts.as_array(), us(&starts.as_array()), kinds.as_array(), groups.as_array());
-    if prm.len() != 7 || st.len() != kinds.len() + 1 || groups.len() != kinds.len() {
+    if !(prm.len() == 7 || prm.len() == 8) || st.len() != kinds.len() + 1 || groups.len() != kinds.len() {
         return Err(PyValueError::new_err("gradesep_underpasses: sizes differ"));
     }
     let (touch, end_m, portal_out, short_tunnel, under_cover, open_cover, sep) =
         (prm[0], prm[1], prm[2], prm[3], prm[4], prm[5], prm[6]);
+    // prm[7] (238): a crossing by an over line's end that another ground line goes on from counts (a junction standing
+    // over the tunnel, its arms crossing it within END_M of the node: Vienna's S1 under Rautenweg, GitHub #1083)
+    let joined_ends = prm.len() > 7 && prm[7] != 0.0;
     let nl = kinds.len();
     let mut keep = vec![true; nl];
     let cand: Vec<usize> = (0..nl).filter(|&l| kinds[l] == 3).collect();
@@ -316,7 +320,7 @@ pub fn gradesep_underpasses<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64
     let prep = py.detach(|| {
         let lens: Vec<f64> = cand.iter().map(|&c| {
             let p = line(c);
-            np_sum(&(1..p.len()).map(|k| (p[k][0] - p[k - 1][0]).hypot(p[k][1] - p[k - 1][1])).collect::<Vec<_>>())
+            np_sum(&(1..p.len()).map(|k| (p[k][0] - p[k - 1][0]).dhypot(p[k][1] - p[k - 1][1])).collect::<Vec<_>>())
         }).collect();
         let mut parent: Vec<usize> = (0..cand.len()).collect();
         fn find(parent: &mut [usize], mut x: usize) -> usize {
@@ -402,6 +406,28 @@ pub fn gradesep_underpasses<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64
         let mut ask: Vec<[f64; 2]> = Vec::new();
         let mut at: Vec<(usize, usize, usize, usize, f64)> = Vec::new();
         let mut drop = Vec::new();
+        let end_pts = |l: usize| -> [[f64; 2]; 2] {
+            let (a, b) = (st[l] as usize, st[l + 1] as usize - 1);
+            [[xy[[a, 0]], xy[[a, 1]]], [xy[[b, 0]], xy[[b, 1]]]]
+        };
+        // (joined_ends) an over line's end e another ground line goes on from (an end within touch), none of them the
+        // tunnel's own road (group g) and no tunnel piece ending within end_m of it (a portal's junction)
+        let goes_on = |o: usize, e: [f64; 2], g: i64| -> bool {
+            let mut on = false;
+            for &q in &over {
+                if q == o || st[q + 1] < st[q] + 2 {
+                    continue;
+                }
+                if end_pts(q).iter().any(|f| (f[0] - e[0]).dhypot(f[1] - e[1]) < touch) {
+                    if groups[q] == g {
+                        return false;
+                    }
+                    on = true;
+                }
+            }
+            on && !cand.iter().any(|&t| st[t + 1] >= st[t] + 2
+                                   && end_pts(t).iter().any(|f| (f[0] - e[0]).dhypot(f[1] - e[1]) < end_m))
+        };
         for (p, &c) in cand.iter().enumerate() {
             let mut ptv: Vec<[f64; 2]> = Vec::new();
             let mut owners: Vec<usize> = Vec::new();
@@ -409,8 +435,10 @@ pub fn gradesep_underpasses<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64
                 let o = over[pi];
                 let lo = line(o);
                 let ends = [lo[0], lo[lo.len() - 1]];
-                let d = pmin((ends[0][0] - pt[0]).hypot(ends[0][1] - pt[1]), (ends[1][0] - pt[0]).hypot(ends[1][1] - pt[1]));
-                if groups[o] != groups[c] && d >= end_m {
+                let d = pmin((ends[0][0] - pt[0]).dhypot(ends[0][1] - pt[1]), (ends[1][0] - pt[0]).dhypot(ends[1][1] - pt[1]));
+                let through = joined_ends && d < end_m && ends.iter()
+                    .all(|e| (e[0] - pt[0]).dhypot(e[1] - pt[1]) >= end_m || goes_on(o, *e, groups[c]));
+                if groups[o] != groups[c] && (d >= end_m || through) {
                     ptv.push(pt);
                     owners.push(o);
                 }
@@ -423,8 +451,8 @@ pub fn gradesep_underpasses<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64
             let m = lc.len();
             let u0 = [lc[0][0] - lc[1][0], lc[0][1] - lc[1][1]];
             let u1 = [lc[m - 1][0] - lc[m - 2][0], lc[m - 1][1] - lc[m - 2][1]];
-            let h0 = pmax(u0[0].hypot(u0[1]), 1e-9);
-            let h1 = pmax(u1[0].hypot(u1[1]), 1e-9);
+            let h0 = pmax(u0[0].dhypot(u0[1]), 1e-9);
+            let h1 = pmax(u1[0].dhypot(u1[1]), 1e-9);
             let portals = [[lc[0][0] + portal_out * u0[0] / h0, lc[0][1] + portal_out * u0[1] / h0],
                            [lc[m - 1][0] + portal_out * u1[0] / h1, lc[m - 1][1] + portal_out * u1[1] / h1]];
             let mut sides: Vec<[f64; 2]> = Vec::new();
@@ -437,7 +465,7 @@ pub fn gradesep_underpasses<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64
                         for j in 0..ol.len() - 1 {
                             let mx = 0.5 * (ol[j][0] + ol[j + 1][0]) - pt[0];
                             let my = 0.5 * (ol[j][1] + ol[j + 1][1]) - pt[1];
-                            let d = mx.hypot(my);
+                            let d = mx.dhypot(my);
                             // np.argmin: the first minimum, a NaN first of all
                             if j == 0 || (!bd.is_nan() && (d.is_nan() || d < bd)) {
                                 best = j;
@@ -450,7 +478,7 @@ pub fn gradesep_underpasses<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64
                     };
                     let nx = (k + 1).min(ol.len() - 1);
                     let t = [ol[nx][0] - ol[k][0], ol[nx][1] - ol[k][1]];
-                    let h = pmax(t[0].hypot(t[1]), 1e-9);
+                    let h = pmax(t[0].dhypot(t[1]), 1e-9);
                     let t = [t[0] / h, t[1] / h];
                     for &d in &cut_side {
                         sides.push([pt[0] + d * t[0], pt[1] + d * t[1]]);

@@ -10,6 +10,7 @@ from contextlib import contextmanager, nullcontext
 import functools
 import http.client
 import math
+import dnp
 import os
 import shutil
 import threading
@@ -442,7 +443,7 @@ class View:
                 values.sort()
                 row['responseP95Ms'] = values[max(0,math.ceil(len(values)*0.95)-1)]
                 avg=sum(values)/len(values)
-                row['jitterMs'] = math.sqrt(sum((v-avg)**2 for v in values)/len(values))
+                row['jitterMs'] = math.sqrt(sum(dnp.sq(v-avg) for v in values)/len(values))
             rows.append(row)
         rows.sort(key=lambda r:(-r['inflight'],-r['failures'],r['endpoint']))
         rx=sum(r['receivedBytes'] for r in rows);tx=sum(r['sentBytes'] for r in rows)

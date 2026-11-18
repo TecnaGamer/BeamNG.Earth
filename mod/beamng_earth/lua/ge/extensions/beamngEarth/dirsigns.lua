@@ -32,6 +32,7 @@ function M.valid(faces)
 end
 
 local function make(name, texture)
+  require('beamngEarth/texdbg').log('dirsign', name, texture)
   local ok = FS and FS:fileExists(texture)
   if not ok then log('W', 'beamngEarth', 'direction sign picture missing: ' .. tostring(texture)) end
   local m = scenetree.findObject(name)

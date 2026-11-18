@@ -82,13 +82,14 @@ class GeometryTest(unittest.TestCase):
         self.assertEqual(heightmap.snap(5000.0), 4992.0)
 
     def test_choose_q_and_block_params(self):
-        self.assertEqual(heightmap.choose_q(50), 1 / 256)
+        self.assertEqual(heightmap.choose_q(30), 1 / 1024)      # 64 m range (+ zBase's 16 m)
+        self.assertEqual(heightmap.choose_q(50), 1 / 512)
         self.assertEqual(heightmap.choose_q(600), 1 / 64)       # 1024 m range
         self.assertEqual(heightmap.choose_q(3000), 1 / 16)
         self.assertEqual(heightmap.choose_q(1e6), 1 / 16)
         q, zb, mh = heightmap.block_params(1234.5, 1500.0, 1 / 64)
-        self.assertEqual((q, zb, mh), (1 / 64, 1216.0, 1024.0))
-        self.assertEqual(zb % 64, 0)
+        self.assertEqual((q, zb, mh), (1 / 64, 1224.0, 1024.0))
+        self.assertEqual(zb % heightmap.ZBASE_STEP, 0)
         # Too much relief for the anchor's quantum: the next coarser one, for this block only.
         q, zb, mh = heightmap.block_params(0.0, 1500.0, 1 / 64)
         self.assertEqual((q, mh), (1 / 32, 2048.0))
@@ -148,7 +149,7 @@ class HeightmapTest(unittest.TestCase):
         self.assertGreater(png[:, -1].mean(), png[:, 0].mean())  # column 0 = west
         self.assertEqual((info["cx"], info["cy"]), (cx, cy))
         self.assertEqual(info["maxHeight"], info["q"] * 65536)
-        self.assertEqual(info["zBase"] % 64, 0)
+        self.assertEqual(info["zBase"] % heightmap.ZBASE_STEP, 0)
         self.assertLessEqual(info["zBase"], info["minU"] - 8)
         q = self.read()
         h = heightmap.heights(q, info["zBase"], info["maxHeight"])
@@ -228,7 +229,7 @@ class HeightmapTest(unittest.TestCase):
         q = self.read()
         # Flat ellipsoid: centre is highest; corners (0.72 km out for the 1 km block) drop d² / 2R.
         self.assertEqual(info["q"], heightmap.Q_DEFAULT)
-        self.assertEqual(info["zBase"], math.floor((info["minU"] - 8) / 64) * 64)
+        self.assertEqual(info["zBase"], math.floor((info["minU"] - 8) / heightmap.ZBASE_STEP) * heightmap.ZBASE_STEP)
         self.assertAlmostEqual(info["groundZ"], 0.0, delta=0.01)
         corner = heightmap.heights(q, info["zBase"], info["maxHeight"])[0, 0]
         self.assertAlmostEqual(corner, -(self.half ** 2 * 2) / (2 * 6371000), delta=0.02)

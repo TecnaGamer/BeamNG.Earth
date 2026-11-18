@@ -457,6 +457,7 @@ step(free, camNorth)
 farfield.onSwap(swap(2, 2, { '0_0_30' }))
 step(free, camNorth)
 farfield.onTile(tile(2, 0, 2, 30)) -- still queued at the switch
+do local b, s = farfield.brief(), farfield.stats(); T.check(b.queued == s.queued and b.queued > 0 and b.done == s.done, 'farfield.brief(): the stats queue and done without its walk') end
 local a3 = geodesy.newAnchor(a2:enuToGeodetic(5000, 0, 0))
 farfield.transform(a2:transformTo(a3))
 farfield.switchAnchor(3, true, { cx = 0, cy = 0 })
@@ -467,6 +468,7 @@ T.check(kept ~= nil and S.objects[kept] ~= nil, 'lossy anchor: its far_remove is
 held = farfield.heldAnchors()
 T.check(#held == 1 and held[1] == 2, 'heldAnchors: kept old tiles hold anchor 2')
 farfield.onDone({ type = 'far_done', anchorId = 3, count = 0 })
+do local b, s = farfield.brief(), farfield.stats(); T.check(b.queued == s.queued and b.done == s.done and b.done, 'farfield.brief() after far_done') end
 step(free, camNorth, 40)
 T.check(S.objects[kept] == nil and farfield.stats().old == 0, 'lossy anchor tiles deleted after far_done')
 

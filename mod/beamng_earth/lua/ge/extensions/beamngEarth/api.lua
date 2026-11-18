@@ -15,8 +15,10 @@
 --   onBeamNGEarthRouteArrived(info)   the GPS destination reached: info.lat / lon / name
 --   onBeamNGEarthWaypointReached(info) a GPS waypoint passed (1.2, has('gpsRoute')): info.lat / lon / name / left
 --   onBeamNGEarthAddonOptions(info)   an add-on's options were saved on its Options tab: info.id, info.values
--- or with api.on(event, fn) ('worldReady', 'teleported', 'routeArrived', 'addonOptions'), which returns a handle for
--- api.off(handle).
+--   onBeamNGEarthRebased(info)        the world's origin moved (1.7, has('rebase')): info.lat / lon the new origin,
+--                                     oldLat / oldLon the one before (nil at the first), anchorId, purpose
+-- or with api.on(event, fn) ('worldReady', 'teleported', 'routeArrived', 'addonOptions', 'rebased'), which returns a
+-- handle for api.off(handle).
 --
 -- Options (1.1, has('options')): an add-on declares them in its beamngEarth_addon.json ({"options": [{"key": "port",
 -- "label": "Port", "type": "int", "default": 47700, "min": 1024, "max": 65535}]}, docs/ADDONS.md); the player sets them
@@ -26,15 +28,18 @@
 -- cells on disk, one more later when some were missing: result.pending says whether another is coming).
 -- Pure reads are cheap (no allocation beyond the returned table); nothing here blocks or talks to the network itself
 -- (places only sends a request to the app, which answers from what it has).
+-- A wide search over what is already on disk (1.8, has('cachedPlaces')): opts.cachedOnly takes the map cells the app
+-- has and asks for no others, with no second answer, so opts.radius may go to 25 km; it must name opts.categories,
+-- and result.truncated says the reach was cut back to the app's cell cap.
 local M = {}
 
-M.MAJOR, M.MINOR = 1, 6
+M.MAJOR, M.MINOR = 1, 8
 local FEATURES = { pose = true, place = true, teleport = true, gps = true, notify = true, events = true, options = true,
   gpsRoute = true, inTunnel = true, weather = true, places = true, buildings = true, speedLimit = true,
-  routeGeometry = true, transform = true }
+  routeGeometry = true, transform = true, routeSteps = true, rebase = true, cachedPlaces = true }
 local EVENTS = { worldReady = 'onBeamNGEarthWorldReady', teleported = 'onBeamNGEarthTeleported',
   routeArrived = 'onBeamNGEarthRouteArrived', addonOptions = 'onBeamNGEarthAddonOptions',
-  waypointReached = 'onBeamNGEarthWaypointReached' }
+  waypointReached = 'onBeamNGEarthWaypointReached', rebased = 'onBeamNGEarthRebased' }
 
 local function core() return rawget(_G, 'beamngEarth_core') end
 local function state()
@@ -233,6 +238,14 @@ function M.gpsClear()
   if gps then gps.clear() end
 end
 
+-- Route legs are pairs of distance/time. Neither public read may hand an add-on the GPS's own rows.
+local function copyLegs(legs)
+  if type(legs) ~= 'table' then return nil end
+  local out = {}
+  for i, leg in ipairs(legs) do out[i] = { leg[1], leg[2] } end
+  return out
+end
+
 -- The GPS destination and the way there: { lat, lon, name, remaining (m), eta (s), planning, waypoints, legs }, or
 -- nil without one (waypoints: those still ahead, { { lat, lon, name }... }; legs: the planned route's { { dist m,
 -- dur s }... } from the start through each waypoint, with waypoints only).
@@ -241,7 +254,14 @@ function M.gps()
   local s = gps and gps.status and gps.status()
   if type(s) ~= 'table' then return nil end
   return { lat = s.lat, lon = s.lon, name = s.name, remaining = s.remaining, eta = s.eta, planning = s.planning == true,
-           waypoints = s.waypoints or {}, legs = s.legs, off = s.off, routeVersion = s.routeVersion }
+           waypoints = s.waypoints or {}, legs = copyLegs(s.legs), off = s.off, routeVersion = s.routeVersion }
+end
+
+local function copyRouteValue(value)
+  if type(value) ~= 'table' then return value end
+  local out = {}
+  for k, v in pairs(value) do out[k] = copyRouteValue(v) end
+  return out
 end
 
 -- The planned route (1.6, has('routeGeometry'); GitHub #1075): { version, points = { { lat, lon }... }, dist (m),
@@ -258,7 +278,8 @@ function M.gpsRoute()
     elev = {}
     for i, e in ipairs(r.elev) do elev[i] = { e[1], e[2] } end
   end
-  return { version = r.version, points = pts, dist = r.dist, dur = r.dur, elev = elev, legs = r.legs }
+  return { version = r.version, points = pts, dist = r.dist, dur = r.dur, elev = elev, legs = copyLegs(r.legs),
+    steps = copyRouteValue(r.steps) }       -- 1.7, has('routeSteps'); nil with an older companion
 end
 
 ------------------------------------------------------------------------------------------
@@ -285,6 +306,14 @@ function M.toGeo(x, y, z)
   local a = st and st.inOurLevel and st.anchor
   if not a or not a.worldToGeodetic then return nil end
   return a:worldToGeodetic(x, y, tonumber(z) or 0)
+end
+
+-- Is the world's origin being moved right now (1.7, has('rebase'))? True between a rebase's two frames: the vehicles
+-- are in the new frame already, toGame / toGeo and pose() still in the old one. Leave positions alone until
+-- onBeamNGEarthRebased, which comes in the frame that ends it.
+function M.rebasing()
+  local st = state()
+  return st ~= nil and st.rebasing ~= nil
 end
 
 -- A short message on the screen (the game's own messages), seconds (default 5).
@@ -320,19 +349,27 @@ local function placesRequest(lat, lon, opts, callback, buildings)
   placeReqs[placeReqId] = { fn = callback, t = clock }
   net.send({ type = 'places', id = placeReqId, lat = lat, lon = lon, radius = tonumber(opts.radius),
     categories = cats, limit = tonumber(opts.limit), cursor = type(opts.cursor) == 'string' and opts.cursor or nil,
-    buildings = buildings or opts.buildings == true, minConfidence = tonumber(opts.minConfidence) })
+    buildings = buildings or opts.buildings == true, minConfidence = tonumber(opts.minConfidence),
+    cachedOnly = opts.cachedOnly == true })
   return placeReqId
 end
 
 -- Overture's places round lat, lon (1.4, has('places')), every kind (not only the 3D map's). opts (all optional):
---   radius (m, default 1000, at most 3000), categories ({ 'gas_station', 'car_*', 'group:food' }: Overture
---   basic_category values, prefixes ending in '*', or the map's icon groups), limit (default 50, at most 200), cursor
---   (a result's next: the next page), minConfidence (0..1), buildings (true: the footprints too, as api.buildings).
+--   radius (m, default 1000, at most 3000, or 25000 with cachedOnly), categories ({ 'gas_station', 'car_*',
+--   'group:food' }: Overture basic_category values, prefixes ending in '*', or the map's icon groups), limit
+--   (default 50, at most 200), cursor (a result's next: the next page), minConfidence (0..1), buildings (true: the
+--   footprints too, as api.buildings), cachedOnly (1.8: only the cells the app already has, see below).
 -- callback(result) for each answer: { places = { { id, name, category, lat, lon, confidence, open }... } nearest first
 -- (open: Overture's operating_status, '' when not known), buildings (asked only), complete (every map cell round the
 -- point was read), pending (another answer for this request is coming), next (the next page's cursor, nil on the
--- last), error (why there are none: no map data, bad request, timed out) }. Returns the request's id, or nil and why.
+-- last), truncated (1.8: the reach was cut back to the app's cell cap), error (why there are none: no map data, bad
+-- request, timed out) }. Returns the request's id, or nil and why.
 -- Only places in map cells the app has or fetches in the background: nothing is downloaded ahead of the world.
+-- cachedOnly = true asks for no cell the app does not already have on disk: it queues no download of its own, the
+-- first answer is the only one (pending false, complete false where cells were missing), and radius may go to 25 km.
+-- Such a search past 3000 m must name categories, and result.truncated says its reach was cut back (far north a cell
+-- is small, so the cap comes sooner). Cheap, but it finds only what the player has already been near, and a cell
+-- whose stored copy is damaged is still rebuilt from its sources.
 function M.places(lat, lon, opts, callback) return placesRequest(lat, lon, opts, callback, false) end
 
 -- The buildings' footprints round lat, lon (1.4, has('buildings')): as places, with result.buildings
@@ -351,7 +388,7 @@ function M._onPlaces(msg)
   if not r then return end
   local result = { places = type(msg.places) == 'table' and msg.places or {}, complete = msg.complete == true,
     pending = msg.pending == true, next = type(msg.next) == 'string' and msg.next or nil,
-    error = type(msg.error) == 'string' and msg.error or nil,
+    error = type(msg.error) == 'string' and msg.error or nil, truncated = msg.truncated == true,
     buildings = type(msg.buildings) == 'table' and msg.buildings or nil }
   if not result.pending then placeReqs[msg.id] = nil end
   placesCall(r, result)

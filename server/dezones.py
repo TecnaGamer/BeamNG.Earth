@@ -6,6 +6,7 @@ sizes and faces). The rows are speedsigns' (_cell_rows: its seventh element, the
 from collections import namedtuple
 
 import numpy as np
+import dnp
 
 import designs
 import designsigns
@@ -53,7 +54,7 @@ def _arms(rows):
         pts, cons, (_, cls) = row[1], row[3], row[6]
         if cls not in designs.CLS or len(pts) < 2:
             continue
-        total = float(np.hypot(*np.diff(pts, axis=0).T).sum())
+        total = float(dnp.hypot(*np.diff(pts, axis=0).T).sum())
         if total < 1.0:
             continue
         here = []
@@ -80,7 +81,7 @@ def _arms(rows):
 
 def _at(pts, s):
     """(the point, the unit tangent along the line) at arc s (m) of the polyline pts (k, 2)."""
-    seg = np.hypot(*np.diff(pts, axis=0).T)
+    seg = dnp.hypot(*np.diff(pts, axis=0).T)
     cum = np.r_[0.0, np.cumsum(seg)]
     k = int(np.clip(np.searchsorted(cum, s, side="right") - 1, 0, len(seg) - 1))
     while seg[k] < 1e-9 and k > 0:
@@ -91,7 +92,7 @@ def _at(pts, s):
 
 def _cut(pts, a, b):
     """The polyline pts (k, 2) from arc a to arc b (m; b < a: backwards)."""
-    s = np.r_[0.0, np.cumsum(np.hypot(*np.diff(pts, axis=0).T))]
+    s = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(pts, axis=0).T))]
     lo, hi = min(a, b), max(a, b)
     inner = pts[(s > lo) & (s < hi)]
     line = np.vstack([_at(pts, lo)[0], inner, _at(pts, hi)[0]])
@@ -110,7 +111,7 @@ def _clears(rows, here, totals):
     def heading(a):
         r, at, sense, piece = a
         p, q = _at(rows[r][1], at)[0], _at(rows[r][1], at + sense * min(TANGENT_M, piece))[0]
-        return (q - p) / max(float(np.hypot(*(q - p))), 1e-9)
+        return (q - p) / max(float(dnp.hypot(*(q - p))), 1e-9)
 
     def drives(a, out):
         d = rows[a[0]][2][1]
@@ -123,7 +124,7 @@ def _clears(rows, here, totals):
         # two pieces, or a lone street; else the straight on test)
         if len({rows[a[0]][6][0] for a in here if a != arm}) > 1:
             u = heading(arm)
-            cands = sorted(((float(-heading(a) @ u), k) for k, a in enumerate(here) if a != arm and drives(a, False)),
+            cands = sorted(((float(dnp.matmul(-heading(a), u)), k) for k, a in enumerate(here) if a != arm and drives(a, False)),
                            reverse=True)
             if not cands:
                 continue
@@ -235,7 +236,7 @@ def zones(frame, box, context, left_hand=False, mph=False):
     cla, clo, _ = frame.enu_to_geodetic(np.array([x0, x1, x0, x1]), np.array([y0, y0, y1, y1]), 0.0)
     segs = _segments(context.pavements(frame, np.c_[clo, cla], left_hand), box, ZONE_REACH_M)
     side = -1.0 if left_hand else 1.0
-    totals = [float(np.hypot(*np.diff(r[1], axis=0).T).sum()) for r in rows]
+    totals = [float(dnp.hypot(*np.diff(r[1], axis=0).T).sum()) for r in rows]
 
     def limit(a):
         """The limit on arm a by the edge: its zone's, else the one posted there."""
@@ -303,9 +304,9 @@ def outside_zones(frame, signs, zones):
         """(distance of each road point to line, the line's direction at its nearest point)."""
         a, d = line[:-1], np.diff(line, axis=0)
         t = np.clip(((p[:, None] - a[None]) * d[None]).sum(-1) / np.maximum((d * d).sum(1), 1e-12)[None], 0.0, 1.0)
-        gap = np.sqrt(((a[None] + t[..., None] * d[None] - p[:, None]) ** 2).sum(-1))
+        gap = np.sqrt((dnp.sq(a[None] + t[..., None] * d[None] - p[:, None])).sum(-1))
         k = gap.argmin(1)
-        return gap[np.arange(len(p)), k], d[k] / np.maximum(np.hypot(d[k, 0], d[k, 1]), 1e-9)[:, None]
+        return gap[np.arange(len(p)), k], d[k] / np.maximum(dnp.hypot(d[k, 0], d[k, 1]), 1e-9)[:, None]
     for line in zones.lines:
         hit |= near(line)[0] <= ZONE_TOL_M
     for line, value in zones.clears:
@@ -342,7 +343,7 @@ def de_zone_mesh(table, origin):
         sign, kmh, size = int(round(sign)), int(round(kmh)), int(np.clip(round(size), 0, 2))
         if sign not in (1, 2) or kmh not in designsigns.ZONE_KMH or not np.isfinite([x, y, zg, zr]).all():
             continue
-        tl = max(np.hypot(tx, ty), 1e-9)
+        tl = max(dnp.hypot(tx, ty), 1e-9)
         row = (x, y, zg, tx / tl, ty / tl)
         side = designsigns.ZONE_SIZE[size]
         zc = max(zr + designsigns.LOW_M, zg + speedsigns.C31_MIN_GROUND) - zg + side / 2
@@ -361,7 +362,7 @@ def de_zone_mesh(table, origin):
                                           for i, j, q in ((4 * p, 4 * p + 1, 2), (4 * p, 4 * p + 2, 3))], 1, row)
         a = np.arange(9) * np.pi / 4.0
         px = -(designsigns.DEPTH_M + designsigns.POST_R_M)
-        around = np.column_stack([px + designsigns.POST_R_M * np.cos(a), designsigns.POST_R_M * np.sin(a)])
+        around = np.column_stack([px + designsigns.POST_R_M * dnp.cos(a), designsigns.POST_R_M * dnp.sin(a)])
         top = zc + side / 4
         pole = np.vstack([[(cx, cy, -designsigns.SINK_M), (cx, cy, top)] for cx, cy in around])
         add(pole, np.zeros((18, 2)), [t for j in range(8) for t in ((2 * j, 2 * j + 2, 2 * j + 3),

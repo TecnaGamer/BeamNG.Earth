@@ -160,6 +160,9 @@ def layercake_store(tmp, path):
 
 @unittest.skipIf(duckdb is None, "DuckDB not installed")
 class ShardsMatchLayercakeTest(unittest.TestCase):
+    """The archive in parts (several here: a part at most a third of the whole), as the planet's is."""
+    PARTS = True
+
     @classmethod
     def setUpClass(cls):
         fast.require(osmtagshards.NATIVE, "osmtagshards")
@@ -168,20 +171,35 @@ class ShardsMatchLayercakeTest(unittest.TestCase):
         write_parquet(cls.parquet, fixture_rows())
         cls.out = os.path.join(cls.tmp, "out")
         # (a small root: the archive needs leaf directories, as the planet's does)
-        cls.man = bt.build(cls.parquet, cls.out, workers=1, tmp=os.path.join(cls.tmp, "work"), log=lambda s: None,
-                           root_max=40, z=13)
+        kw = dict(workers=1, tmp=os.path.join(cls.tmp, "work"), log=lambda s: None, root_max=40, z=13)
+        cls.man = bt.build(cls.parquet, cls.out, part_bytes=0, **kw)
+        if cls.PARTS:
+            whole = cls.man["bytes"]
+            with mock.patch.object(bt, "PART_SLACK", 1024):
+                cls.man = bt.build(cls.parquet, cls.out, part_bytes=whole // 3 + 1024, **kw)
+            os.remove(os.path.join(cls.out, "osmtags.pmtiles"))
 
     @classmethod
     def tearDownClass(cls):
         import shutil
         shutil.rmtree(cls.tmp, ignore_errors=True)
 
+    def names(self):
+        return [p["archive"] for p in self.man["parts"]] if self.PARTS else ["osmtags.pmtiles"]
+
     def files(self):
-        with open(os.path.join(self.out, "osmtags.pmtiles"), "rb") as f:
-            arch = f.read()
+        out = {}
+        for n in self.names():
+            with open(os.path.join(self.out, n), "rb") as f:
+                out[f"{BASE}/{n}"] = f.read()
         with open(os.path.join(self.out, "manifest.json"), "rb") as f:
-            man = f.read()
-        return {f"{BASE}/manifest.json": man, f"{BASE}/osmtags.pmtiles": arch}
+            out[f"{BASE}/manifest.json"] = f.read()
+        return out
+
+    def cached(self, sh, name):
+        """The files called name under the build's cache folder (every part's)."""
+        return [os.path.join(d, f) for d, _, fs in os.walk(sh._dir(sh.manifest()[0])) for f in fs if f == name] \
+            + [d for d, _, _ in os.walk(sh._dir(sh.manifest()[0])) if os.path.basename(d) == name]
 
     def shards(self, cache, fetcher):
         with mock.patch.object(osmtagshards, "BASE", BASE):
@@ -197,9 +215,41 @@ class ShardsMatchLayercakeTest(unittest.TestCase):
 
     def test_manifest(self):
         m = self.man
-        self.assertEqual((m["format"], m["zoom"], m["archive"]), (1, 13, "osmtags.pmtiles"))
+        self.assertEqual((m["format"], m["zoom"]), (1, 13))
         self.assertTrue(osmtagshards.schema_ok(m["schema"]))
         self.assertGreater(m["tiles"], 1)
+        if not self.PARTS:
+            self.assertEqual(m["archive"], "osmtags.pmtiles")
+            self.assertNotIn("parts", m)
+            return
+        self.assertNotIn("archive", m)
+        ps = m["parts"]
+        self.assertGreaterEqual(len(ps), 3)
+        self.assertEqual([p["archive"] for p in ps], [f"osmtags-{i:03d}.pmtiles" for i in range(len(ps))])
+        self.assertEqual(sum(p["tiles"] for p in ps), m["tiles"])
+        self.assertEqual(sum(p["bytes"] for p in ps), m["bytes"])
+        for a, b in zip(ps, ps[1:]):
+            self.assertLess(a["last"], b["first"])
+        for p in ps:
+            self.assertLessEqual(p["first"], p["last"])
+            self.assertEqual(os.path.getsize(os.path.join(self.out, p["archive"])), p["bytes"])
+            self.assertLessEqual(p["bytes"], m["bytes"] // 3 + 1024)
+        self.assertEqual(osmtagshards.parts_of(m)[1][3], "p1")
+
+    def test_parts_of(self):
+        P = osmtagshards.parts_of
+        self.assertEqual(P({"archive": "a.pmtiles"}), [(0, None, "a.pmtiles", "")])
+        self.assertIsNone(P({}))
+        self.assertIsNone(P({"parts": []}))
+        self.assertIsNone(P({"parts": [{"archive": "a", "first": 5, "last": 9}, {"archive": "b", "first": 9,
+                                                                               "last": 20}]}), "overlapping runs")
+        self.assertIsNone(P({"parts": [{"archive": "a", "first": 5}]}))
+        m = {"parts": [{"archive": "a", "first": 5, "last": 9}, {"archive": "https://x/b", "first": 12, "last": 20}]}
+        m["_parts"] = P(m)
+        m["_firsts"] = [p[0] for p in m["_parts"]]
+        po = osmtagshards.TagShards.part_of
+        self.assertEqual([(po(m, t) or (None,) * 4)[2] for t in (4, 5, 9, 10, 12, 20, 21)],
+                         [None, "a", "a", None, "https://x/b", "https://x/b", None])
 
     def test_every_cell_as_the_layercake_reader_gives_it(self):
         store, _ = layercake_store(os.path.join(self.tmp, "lc1"), self.parquet)
@@ -240,11 +290,13 @@ class ShardsMatchLayercakeTest(unittest.TestCase):
         self.assertNotIn(900006, {w for k in self.cells() for w in osmtags.from_tile(sh.tile(k), k.bounds())[0]})
         # (one head, the leaves, then one read per tile: never again for the same tile)
         tiles = {self.tile_of(k) for k in self.cells()}
-        reads = [s for s in f.seen if s[0] == "osmtags.pmtiles"]
+        reads = [s for s in f.seen if s[0].endswith(".pmtiles")]
         self.assertGreater(self.man["tiles"], 4)
-        self.assertLessEqual(len(reads), 1 + self.man["tiles"] + len(tiles))
+        self.assertLessEqual(len(reads), len(self.names()) + self.man["tiles"] + len(tiles))
         self.assertEqual(len(reads), len(set(reads)), "each range read once")
-        self.assertTrue(os.listdir(os.path.join(sh._dir(sh.manifest()[0]), "leaf")), "the archive has leaves")
+        self.assertTrue(any(os.listdir(d) for d in self.cached(sh, "leaf")), "the archive has leaves")
+        if self.PARTS:
+            self.assertGreater(len({s[0] for s in reads}), 1, "tiles read from more than one part")
 
     def test_tile_ranges_are_osmtags_cell_test(self):
         rng = np.random.default_rng(3)
@@ -311,11 +363,15 @@ class ShardsMatchLayercakeTest(unittest.TestCase):
         ks = self.cells()
         sh.tile(ks[24])
         f.etag = '"b2"'                       # (the file behind the URL replaced)
-        far = next(k for k in ks if self.tile_of(k) != self.tile_of(ks[24])
+        m = sh.manifest()[1]
+
+        def part(k):
+            return sh.part_of(m, fast._ef.pmt_tile_id(m["zoom"], *self.tile_of(k)))
+        far = next(k for k in ks if self.tile_of(k) != self.tile_of(ks[24]) and part(k) == part(ks[24])
                    and self.shards(os.path.join(self.tmp, "c4b"), FakeFetcher(self.files())).tile(k) is not None)
         with self.assertRaises(osmtagshards.Changed):
             sh.tile(far)
-        self.assertFalse(os.path.exists(os.path.join(sh._dir(sh.manifest()[0]), "head.bin")))
+        self.assertFalse(self.cached(sh, "head.bin"))
 
     def test_a_manifest_this_does_not_read_is_not_used(self):
         files = self.files()
@@ -346,7 +402,20 @@ class ShardsMatchLayercakeTest(unittest.TestCase):
         self.assertEqual(len(heads), 1)
 
 
+class LegacyArchiveTest(ShardsMatchLayercakeTest):
+    """The first layout (one archive, the manifest's "archive"; --part-bytes 0) is read as before."""
+    PARTS = False
+
+
 class BuilderTest(unittest.TestCase):
+    def test_split_parts(self):
+        ents = [(t, t * 100, 100, 1) for t in range(10)]
+        with mock.patch.object(bt, "PART_SLACK", 0):
+            self.assertEqual(bt.split_parts(ents, 10_000), [(0, 10)])
+            self.assertEqual(bt.split_parts(ents, 350), [(0, 3), (3, 6), (6, 9), (9, 10)])     # 3 x (100 + 8) + ...
+            self.assertEqual(bt.split_parts(ents, 50), [(i, i + 1) for i in range(10)])       # (a tile over: alone)
+            self.assertEqual(bt.split_parts([], 50), [(0, 0)])
+
     def test_query_is_osmtags(self):
         """The tool is fetched alone by the data repo's Action: its copy of osmtags' query must stay the same."""
         self.assertEqual(bt.COLUMNS, osmtags.COLUMNS)

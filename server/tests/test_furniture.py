@@ -5,6 +5,7 @@ import math
 import re
 import sys
 import unittest
+from unittest import mock
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -12,6 +13,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import furniture  # noqa: E402
+import poleprofiles  # noqa: E402
 import roads  # noqa: E402
 
 
@@ -103,6 +105,25 @@ class LampTest(unittest.TestCase):
         hy = sorted(x[1] for x in rows if x[0] == furniture.G_HYDRANT)
         self.assertGreaterEqual(len(hy), 8)
         self.assertTrue(np.allclose(np.diff(hy), furniture.HYDRANT_SPACING / 2, atol=1.0), "alternating sides")
+
+
+class RacewayPropsTest(unittest.TestCase):
+    def test_a_lit_racetrack_gets_no_street_poles(self):
+        # the user's reports 56/59/66/70 (Daytona, Atlanta 2026-11-17): a raceway mapped lit=yes got a street's utility
+        # poles, wires and cobra-heads; BNE_RACEWAY_PROPS=on: none (an ordinary lit road keeps its)
+        track = road("osm-raceway-1", "raceway", True, width=14.0)
+        street = road("s", "residential", True, y=150.0)
+        lighting = {track[0]: "yes", street[0]: "yes"}
+        for on in (False, True):
+            with self.subTest(on=on), mock.patch.object(furniture, "RACEWAY_PROPS", on):
+                wires = []
+                rows = furniture.place([track, street], [], (0, 0, 512, 256), wires=wires, town=True,
+                                       lighting=lighting, region="na")
+                near_track = [r for r in rows if abs(r[2] - 50.0) < 20.0]
+                near_street = [r for r in rows if abs(r[2] - 150.0) < 20.0]
+                self.assertTrue(near_street)
+                self.assertEqual(not near_track, on, [r[0] for r in near_track])
+                self.assertEqual(any(abs(w[0][1] - 50.0) < 20.0 for w in wires), not on)
 
 
 class DevelopmentDecorationTest(unittest.TestCase):
@@ -405,7 +426,8 @@ class JunctionTest(unittest.TestCase):
         for rs, what in ((cross, furniture.G_SIGNAL), (tee, furniture.G_STOP)):
             for lh in (False, True):
                 rows = furniture.junction_props(rs, (0, 0, 256, 256), left_hand=lh)
-                self.assertTrue(rows and all(r[0] == what for r in rows), (what, lh))
+                group = furniture.G_SIGNAL_LEFT if lh and what == furniture.G_SIGNAL else what
+                self.assertTrue(rows and all(r[0] == group for r in rows), (what, lh))
                 for r in rows:
                     # the arm it stands at: the one whose direction from the junction is nearest the prop's
                     away = np.array([r[1] - 100.0, r[2] - 100.0])
@@ -414,13 +436,17 @@ class JunctionTest(unittest.TestCase):
                                        f"{what} at {r[1:3]} (left-hand: {lh}) faces the drivers coming in")
 
     def test_left_hand_signals_keep_their_boom_over_the_road(self):
-        """The stock boom's arm reaches to the drivers' left from its pole (a turn cannot mirror it): facing them, its
-        pole stands on their right in left-hand traffic too, so the arm hangs over the road, not the pavement. The signs
-        stand on the left (test_left_hand_traffic_stands_them_on_the_left)."""
+        """The reflected model stands on the left kerb, facing the same way, with its arm reaching over the road."""
         rs = [self.arm(f"a{i}", "tertiary", dx, dy) for i, (dx, dy) in enumerate([(1, 0), (-1, 0), (0, 1), (0, -1)])]
-        key = lambda r: (r[1], r[2], r[4])
-        self.assertEqual(sorted(map(key, furniture.junction_props(rs, (0, 0, 256, 256), left_hand=True))),
-                         sorted(map(key, furniture.junction_props(rs, (0, 0, 256, 256)))))
+        rows = furniture.junction_props(rs, (0, 0, 256, 256), left_hand=True)
+        self.assertEqual(len(rows), 4)
+        self.assertTrue(all(r[0] == furniture.G_SIGNAL_LEFT for r in rows))
+        for r in rows:
+            away = np.array(r[1:3]) - 100.0
+            u = np.asarray(max(([1, 0], [-1, 0], [0, 1], [0, -1]), key=lambda v: float(np.dot(v, away))))
+            right = np.array([-u[1], u[0]])
+            self.assertLess(float(away @ right), 0, "pole on the driver's left kerb")
+            self.assertGreater(float(self.front(r[4]) @ u), .99, "head still faces incoming traffic")
 
     def test_approach_pose(self):
         u = np.array([0.0, -1.0])           # the arm to the south: northbound drivers come in
@@ -428,7 +454,7 @@ class JunctionTest(unittest.TestCase):
             rh, lh = furniture.approach_pose(u, what), furniture.approach_pose(u, what, left_hand=True)
             self.assertEqual(rh[1], lh[1], f"{what}: one yaw on either side of the road")
             np.testing.assert_allclose(rh[0], [1.0, 0.0], err_msg="right-hand: the east kerb")
-            np.testing.assert_allclose(lh[0], [1.0, 0.0] if what == furniture.G_SIGNAL else [-1.0, 0.0])
+            np.testing.assert_allclose(lh[0], [-1.0, 0.0])
 
     def test_stop_on_the_stem_of_a_minor_t(self):
         rs = [self.arm("e", "residential", 1, 0), self.arm("w", "residential", -1, 0), self.arm("s", "residential", 0, -1)]
@@ -476,7 +502,8 @@ class JunctionTest(unittest.TestCase):
         sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tools"))
         import build_median_props as props
         from PIL import Image
-        sheet = np.asarray(Image.open(Path(props.OUT) / "bne_se_signs.png").convert("RGB")).astype(int)
+        __import__('sys').path.insert(0, __import__('os').path.join(__import__('os').path.dirname(__import__('os').path.abspath(__file__)), '..', '..', 'tools')); import mod_textures_dds as _mt
+        sheet = np.asarray(_mt.open_texture(Path(props.OUT) / "bne_se_signs.dds").convert("RGB")).astype(int)
         px = lambda x, z: sheet[int(props.B1_CELL[1] - z * props.B1_PX), int(props.B1_CELL[0] + x * props.B1_PX)]  # noqa: E731
         r, g, b = px(0.0, 0.05)
         self.assertTrue(r > 200 and g > 170 and b < 60, "the middle is yellow")
@@ -508,7 +535,8 @@ class SignAssetsTest(unittest.TestCase):
         self.assertIn("none", defaults)
         art = self.ROOT / "mod/beamng_earth/levels/beamng_earth/art/shapes/beamngEarth"
         for n in [str(k) + "kph" for k in furniture.SIGN_KMH] + ["_none"]:
-            self.assertTrue((art / f"sign_speed{n}.dae").exists() and (art / f"sign_speed{n}.png").exists(), n)
+            __import__('sys').path.insert(0, __import__('os').path.join(__import__('os').path.dirname(__import__('os').path.abspath(__file__)), '..', '..', 'tools')); import mod_textures_dds as _mt
+            self.assertTrue((art / f"sign_speed{n}.dae").exists() and _mt.is_shipped(art / f"sign_speed{n}.dds"), n)
 
 
 class RoundaboutTest(unittest.TestCase):
@@ -521,6 +549,62 @@ class RoundaboutTest(unittest.TestCase):
         self.assertTrue(furniture.junction_controls(arms, None), "three major arms: signals without the ring")
         self.assertEqual(furniture.junction_controls(arms, None, ring={"r1", "r2"}),
                          [(arms[2], furniture.G_YIELD)], "give-way on the entry, no signals on the ring")
+
+
+class UnderDeckAssemblyReviewTest(unittest.TestCase):
+    """Codex's review of 1bc9f8cb."""
+
+    def test_a_clear_pole_goes_with_its_blocked_arm(self):
+        # the pole just outside a deck's side (6.5 m off its centreline), its arm (on it: the same 5 cm cell) just
+        # inside, under the deck 8 m up: the arm would go through it, so the pole goes too, wires and all
+        deck = (np.array([[-50.0, 0.0, 8.0], [50.0, 0.0, 8.0]]), 5.5)
+        pole = [furniture.G_POLE, 0.0, 6.52, 0.0, 0.0, 1.0, 9.2, 0.0]
+        arm = [furniture.G_POLELAMP, 0.0, 6.48, furniture.POLE_LAMP_Z, 0.0, 1.0, 1.1, 0.0]
+        rows = [pole, arm] + furniture.lamp_lenses([arm])
+        wires = [np.array([[0.0, 7.32, 7.8], [0.0, 47.0, 7.8]])]
+        self.assertEqual(furniture.under_decks(rows, [deck], wires), [])
+        self.assertEqual(wires, [])
+
+    def test_a_span_goes_with_the_next_tiles_pole(self):
+        # a span drawn by its first pole's tile (this one): the pole at its other end is the next tile's, under a deck
+        # there (culled in that tile), its wire end 1 m off the deck's footprint and 4 m above the deck's reach of it:
+        # the wire went by no geometric test; it goes with its support now
+        deck = (np.array([[35.0, -6.0, 9.4], [60.0, -6.0, 9.4]]), 5.5)        # its side at y = 0.5
+        a = [furniture.G_POLE, 0.0, 0.2, 0.0, 90.0, 1.0, 9.2, 0.0]
+        b = [furniture.G_POLE, 40.0, 0.2, 0.0, 90.0, 1.0, 9.2, 0.0]          # (no row of this tile)
+        line = np.c_[np.linspace(0.0, 40.0, 9), np.full(9, 1.0), np.full(9, 7.8)]
+        wires = furniture.with_ends([line], a, b) + [line.copy()]
+        self.assertEqual(furniture.wire_ends(wires[0])[1][1], 40.0)
+        out = furniture.under_decks([a], [deck], wires)
+        self.assertEqual(out, [a])
+        self.assertEqual(len(wires), 1, "the tagged span goes, the untagged copy stays (no geometric reason)")
+        self.assertIsNone(furniture.wire_ends(wires[0]))
+
+    def test_a_span_goes_with_the_next_tiles_pole_culled_for_its_arm(self):
+        # Codex's review of 0cf9fd9b: the span carried only the far pole's row; that pole is culled in its own tile for
+        # its ARM reaching into a deck (assembly_cull), the pole itself clear, so the wire stayed. The span carries the
+        # whole assembly at each end now
+        deck = (np.array([[30.0, 0.0, 8.0], [60.0, 0.0, 8.0]]), 5.5)        # (its side at y = 6.5)
+        a = [furniture.G_POLE, -10.0, 6.52, 0.0, 0.0, 1.0, 9.2, 0.0]
+        b = [furniture.G_POLE, 40.0, 6.52, 0.0, 0.0, 1.0, 9.2, 0.0]          # (the next tile's, clear of the deck)
+        arm = [furniture.G_POLELAMP, 40.0, 6.48, furniture.POLE_LAMP_Z, 0.0, 1.0, 1.1, 0.0]   # (on it, in the deck)
+        line = np.c_[np.linspace(-10.0, 40.0, 9), np.full(9, 7.32), np.full(9, 7.8)]
+        wires = furniture.with_ends([line], a, b) + furniture.with_ends([line.copy()], a, b, None, arm)
+        self.assertEqual(furniture.under_decks([b, arm], [deck]), [])           # (its own tile: culled for the arm)
+        out = furniture.under_decks([list(a)], [deck], wires)
+        self.assertEqual(out, [a])
+        self.assertEqual(len(wires), 1, "the span with the pole's arm goes; without it, it stayed")
+        self.assertEqual(furniture.wire_mounted(wires[0]), (None, None))
+
+    def test_spans_carry_their_poles_rows(self):
+        style = poleprofiles.STOCK
+        run = [(0.0, 0.0, 1.0, 90.0, style), (40.0, 0.0, 2.0, 90.0, style), (80.0, 0.0, 3.0, 90.0, style)]
+        wires = furniture._own_spans(run, (-10.0, -10.0, 30.0, 10.0))      # (only the first span starts in the box)
+        self.assertEqual(len(wires), len(furniture.WIRE_ARMS))
+        for w in wires:
+            a, b = furniture.wire_ends(w)
+            self.assertEqual(a, [style.group, 0.0, 0.0, 1.0, 90.0, 1.0, style.height, 0.0])
+            self.assertEqual(b[1:4], [40.0, 0.0, 2.0])
 
 
 class UnderDeckTest(unittest.TestCase):
@@ -538,6 +622,26 @@ class UnderDeckTest(unittest.TestCase):
         self.assertEqual(out[1][2], 20.0)
         self.assertEqual(len(wires), 1)
         self.assertEqual(float(wires[0][0, 0]), 30.0)
+
+    def test_an_assembly_goes_as_one(self):
+        # a utility pole under a deck 9.4 m up goes (its top through it); its cobra-head arm 7 m up would fit and stayed
+        # in the air (the user's reports 56/59/66/70 for the same rule at racetracks, 2026-11-17)
+        import furniture
+        deck = (np.array([[-50.0, 0.0, 9.4], [50.0, 0.0, 9.4]]), 5.5)
+        pole = [furniture.G_POLE, 0.0, 2.0, 0.0, 0.0, 1.0, 9.2, 0.0]
+        arm = [furniture.G_POLELAMP, 0.0, 2.0, furniture.POLE_LAMP_Z, 0.0, 1.0, 1.1, 0.0]
+        rows = [pole, arm] + furniture.lamp_lenses([arm])
+        wires = [np.array([[0.0, 2.0 + 0.8, 7.8], [0.0, 2.0 + 0.8, 7.8]]),       # (a stub at the pole: no deck test)
+                 np.array([[30.0, 20.0, 7.9], [60.0, 20.0, 7.9]])]
+        self.assertEqual(furniture.under_decks(rows, [deck], wires), [])
+        self.assertEqual(len(wires), 1)
+        self.assertEqual(float(wires[0][0, 0]), 30.0)
+        # a post beside the deck, its head reaching under its edge: the lens stays with the post
+        deck = (np.array([[-50.0, 0.0, 8.0], [50.0, 0.0, 8.0]]), 5.5)
+        post = [furniture.G_LAMP, 0.0, 9.0, 0.0, 270.0, 1.0, 9.0, 0.0]
+        rows = [post] + furniture.lamp_lenses([post])
+        self.assertLess(rows[1][2], 6.5, "(the head under the deck's side)")
+        self.assertEqual(furniture.under_decks(rows, [deck]), rows)
 
     def test_props_on_the_deck_stay(self):
         import furniture

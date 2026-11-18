@@ -1,6 +1,7 @@
 //! Bounded, process-local reuse of raw WorldCover classes on the physics block's exact world lattice.
 //! Never caches slope/sea/road overrides. Source identity tokens are weak-reference objects for immutable
 //! MapData raster snapshots: retaining the tokens prevents pointer reuse without retaining the raster data.
+use crate::dm::Dm;
 use numpy::{IntoPyArray, PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
@@ -198,6 +199,8 @@ impl ClassGridCache {
         if complete && plan.generation == self.generation {
             for &(key, start) in &plan.chunks {
                 if !self.entries.contains_key(&key) && self.entries.len() >= self.limit {
+                    // (hash order: the LRU entry evicted, by distinct clock ticks; a cache, not an output)
+                    #[allow(clippy::disallowed_methods)]
                     if let Some((&old, _)) = self.entries.iter().min_by_key(|(_, e)| e.used) {
                         self.entries.remove(&old);
                     }
@@ -260,7 +263,7 @@ pub fn class_grid_bounds(
     if s - dy <= -85.05 || n + dy >= 85.05 || e - w > 180.0 {
         return Ok(None);
     }
-    let dx = metres / (111320.0 * s.abs().max(n.abs()).to_radians().cos()).max(1e-6);
+    let dx = metres / (111320.0 * s.abs().max(n.abs()).to_radians().dcos()).max(1e-6);
     if w - dx < -180.0 || e + dx > 180.0 {
         return Ok(None);
     }

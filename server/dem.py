@@ -15,6 +15,10 @@ tiles as context so neighbours agree), and deeper zooms there are that ground up
 25 m building bumps in Mexico City, a 28 m void fill over Botafogo's bay; 2026-10-15). Dem.ground_filter = False
 keeps the raw tiles and AWS (tests, comparisons).
 
+Zoom 13 and deeper come from Mapterhorn's regional PMTiles archives by range reads (mtarchive.py: Source Cooperative's
+mirror, then download.mapterhorn.com; the same bytes as the endpoint's), the tile endpoint only when neither can be
+read (2026-11-15); zooms 0-12 from the project's tile host's packs (MT_CDN_*) when its switch says so.
+
 Requests go through a netfetch.Fetcher (rate limit, retries, circuit breaker per host). When
 Mapterhorn cannot be asked (circuit open, rate limited, failing) the same tile comes from AWS
 (failover); if AWS fails too, DemUnavailable. 404s are remembered in the tile column's miss index (missindex.py)
@@ -27,7 +31,9 @@ import json
 import logging
 import math
 import missindex
+import mtarchive
 import os
+import sys
 import threading
 import time
 from collections import Counter, OrderedDict
@@ -39,6 +45,8 @@ from PIL import Image
 import cache as cachemod
 import dsmground
 import fast
+import dmath
+import dnp
 import hkdtm as hkdtmmod
 import hklidar
 import hrdem as hrdemmod
@@ -47,6 +55,7 @@ import netfetch
 import polardem
 import revisit
 import staging
+import xproc
 
 log = logging.getLogger("earthd.dem")
 
@@ -72,17 +81,45 @@ def _mirror_mb():
 
 
 MIRROR_MB = _mirror_mb()
-# (an experiment, off: the mirror's tiles packed, earthfast f32z.rs, ~11 % of the .npy, ~3 ms to unpack, but each
-# process's own array instead of shared mapped pages: measure the memory on a Steam Deck before turning it on)
-MIRROR_ZSTD = os.environ.get("BNGE_DEM_MIRROR_ZSTD") == "1"
+# The mirror's tiles packed (earthfast f32z.rs: ~13 % of the .npy, 120-175 KB a tile; 1.7 ms to pack, 0.7 ms to unpack
+# against ~4 ms to decode the WebP and fill its holes), each process's own array instead of shared mapped pages. On by
+# default since 2026-11-13: the plain .npy were 1.1-3.1 GB of a cold visit's 4.8-7.9 GB of disk writes, from ~0.15 GB
+# of WebP (expo baseline 2026-11-12). BNGE_DEM_MIRROR_ZSTD=0: the .npy (memory-mapped) as before.
+MIRROR_ZSTD = os.environ.get("BNGE_DEM_MIRROR_ZSTD", "1") != "0"
+# Decoded tiles kept per process with the packed mirror (budget.apply: a desktop's MEM_TILES at most this). Packed, a
+# tile in memory is the process's own 1 MB, no longer pages every process shares, and one read back from the mirror
+# costs ~0.5 ms (its 115 KB in the system's file cache, shared). A 24 GB machine's desktop size (429) filled in every
+# road, block, late and far-tile process: 25 road tiles round the A7 or Berlin each touched 545+ tiles; at 256 the
+# extra reads cost no measurable build time and every output stayed byte-identical (CT 115, 2026-11-16).
+PACKED_MEM_TILES = 256
 if MIRROR_ZSTD:
     fast.require(146, "the packed DEM mirror (f32_pack)")
 CLAIM_WAIT_S, CLAIM_POLL_S, CLAIM_STALE_S = 0.5, 0.01, 30.0     # (Dem._load_tile: another process making a tile)
 MIRROR_PRUNE_S = 120.0  # the mirror pruned at most this often per process (each prune walks it all)
 MIRROR_MAX_AGE_S = 30 * 86400
+SHORT_RETRY_S = 30.0        # s a stand-in tile (made while a download failed) is kept in memory before it is made again
 DECODED_VERSION = 4          # 2: tiles past the lidar's depth upsampled from its deepest tile, not z12; its holes
                              # filled (fill_holes); 3: Canada's HRDEM lidar (hrdem.py) from z13 down; 4: LidarBC,
                              # and z12 / z13 shifted to its ground (BIAS_*)
+# The mirror's own generation (its folder: decoded/v<DECODED_VERSION>m<MIRROR_GEN>), apart from DECODED_VERSION, which is
+# in the format-keyed caches' identity (mapdata.dem_identity: raising it plans every player's cells again). 2
+# (2026-11-18): before, a tile upsampled from a stand-in ancestor kept in memory (a Mapterhorn tile that failed, AWS's
+# in its place) could be written to the mirror as Mapterhorn's and read back as complete for 30 days; the older folder
+# is not read and goes first when the mirror is cut back (oldest written first). The cost: each tile is decoded again
+# once when next read (~10 ms CPU against ~0.7 ms to read it back; the 8-place corpus's 12,103 mirrored tiles ~120
+# CPU-s, ~15 s a place; a full 3 GB mirror ~20,000 tiles, ~200 CPU-s spread over the visits that read them) and written
+# again (~150 KB a tile).
+MIRROR_GEN = 2
+# The elevation's identity in the format-keyed caches (mapdata.dem_identity: road plans, cell facts, the road tiles and
+# the shared decisions' version key), pinned per app release (the user, 2026-11-16, the road revamp's decision D5: "Pin
+# per app release"): the plans made on one release's elevation are kept until a release changes what the ground
+# reads, and are never mixed with plans made on another. Raise it in the release whose elevation changes: a new source
+# read (a lidar, a DEM), a source's pinned build moved (the Mapterhorn CDN packs' release, the regional archives'
+# bindings), a filter or bias rule. The decoding (DECODED_VERSION) and the measured road heights (roadz.VERSION) are in
+# the key on their own; the BNE_* elevation switches (BNE_DEM_ZOOM, BNE_HRDEM...) through revisit.switches_key. What
+# the public Mapterhorn endpoint changes between releases is not followed (D5a): it reaches the plans with the next
+# release that raises this.
+ELEVATION_ID = 1
 MAX_ZOOM = 15               # AWS stops at z15 (the far field's zooms: zoom_for's default cap)
 # The near terrain and the road profiles read Mapterhorn's lidar one zoom deeper where it has it (the user, 2026-10-21:
 # "the terrain data gets smoothed ... sharper terrain features get lost": z16 is ~0.8 m a pixel at 48 N, z15 ~1.6 m, the
@@ -153,6 +190,56 @@ def coverage_index(doc):
     return out
 AWS = dict(name="aws-terrarium", ext="png", size=256,
            url="https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png")
+# Raw tiles whose disk write failed (a full disk: OSError 28) kept in memory instead, up to this many bytes per process,
+# and their 404s remembered here: the write's error failed the tile (and its far tile), whose next try downloaded the
+# same bytes again, every few seconds while the disk stayed full (telemetry 2026-11-11: 862k far tiles failed with
+# OSError 28 in 7 days, one line of earthd). MEM_MISSES: 404s kept so at most.
+MEM_RAW_BYTES = 96 * 1024 * 1024
+MEM_MISSES = 200000
+# Mapterhorn's z0-12 from the project's own tile host (cdn.py; the data repo's dem workflow, tools/build_mt_packs.py):
+# planet.pmtiles' tiles repacked as they are (the same bytes as tiles.mapterhorn.com: compared tile for tile, 2026-11-11)
+# into packs of 8 x 8 (tilepack.py; zooms 0-2 one pack each), so one request is 64 tiles and the Mapterhorn endpoint
+# (one maintainer, donations; players asked it 53 M times a day, 2026-11-11) is left the deeper zooms. index.bin: which
+# packs exist (tilepack.index_*), the last file of a release written: a pack it does not list is open sea, its 64 tiles
+# 404s without a request. Off unless the switch (cdn.json "dem" -> "bngmt") or BNGE_DEM_CDN (a release, or "off")
+# names a release; a pack that cannot be had falls back to the endpoint.
+MT_CDN_K = 3
+MT_CDN_MAX_ZOOM = GLOBAL_ZOOM
+MT_CDN_RETRY_S = 600.0              # the index not to be had: the endpoint alone, asked again after this
+PACK_WAIT_S = 8.0                   # another process fetching a pack: its tile waited for at most this long
+PACK_CLAIM_STALE_S = 30.0           # a pack claim older than this: its process ended mid-fetch
+# One download of a raw tile on the machine at a time (_fetch_raw): the server's processes (main, terrain blocks, far
+# tiles, road tiles) all start on a fresh place together and each met the same cold tiles, and the probes, the
+# prefetch and the loads of one process did not share an in-flight registry either (telemetry 2026-11-15: ~60 M
+# Mapterhorn requests a day). A process (or thread) that finds a tile being downloaded waits for it on disk (an
+# xproc lock file, <dem>/locks/<src>-<z>-<x>-<y>.lock: dead holders' broken, Windows too) for up to DL_WAIT_S, on to
+# DL_LIVE_S while its holder is alive and at it; then downloads it itself. The cache is looked at again once the lock
+# is had.
+SINGLE_FLIGHT = os.environ.get("BNGE_DEM_SINGLE_FLIGHT", "1") != "0"
+# Zoom 13 and deeper from Mapterhorn's regional PMTiles archives by range reads (mtarchive.py: Source Cooperative's
+# mirror, then download.mapterhorn.com), the tile endpoint only when neither can be read, and never for a prefetch or
+# a pre-download (BNGE_DEM_ARCHIVES=0: the endpoint, as before).
+ARCHIVES = mtarchive.ON
+SPECULATIVE = ("prefetch", "predownload", "background")
+DL_WAIT_S = 30.0
+DL_LIVE_S = 120.0
+DL_URGENT_WAIT_S = 10.0             # (the urgent lane's: no live wait)
+_MISS = ("no tile",)                # (_fetch_raw's ready(): a 404 another process remembered)
+# Callers of the raw reads (_note): the module that asked (frames of these skipped), for the telemetry's DEM detail.
+_SKIP_MODULES = frozenset(("dem", "runtimeprofiler", "contextlib", "functools", "threading",
+                           "concurrent.futures.thread", "concurrent.futures._base", "pools"))
+_cdn_env = os.environ.get("BNGE_DEM_CDN", "").strip()
+MT_CDN_RELEASE = None if _cdn_env.lower() in ("", "off", "0", "none") else _cdn_env
+
+
+def mt_cdn_base(release):
+    import imagery as imagerymod
+    return f"{imagerymod.CDN_BASE}/dem/mapterhorn/{release}"
+
+
+def _xkind(kind):
+    """A request kind as xproc ranks its lock holders."""
+    return kind if kind in xproc.KIND_RANK else "demand"
 
 
 class DemUnavailable(IOError):
@@ -161,8 +248,8 @@ class DemUnavailable(IOError):
 
 def zoom_for(lat, pixel_m, max_zoom=MAX_ZOOM):
     """Smallest zoom whose 512 px tile pixels are <= pixel_m at this latitude."""
-    c = 40075016.686 * max(math.cos(math.radians(min(abs(lat), MAX_LAT))), 1e-6)
-    return int(min(max_zoom, max(0, math.ceil(math.log2(c / (TILE * pixel_m))))))
+    c = 40075016.686 * max(dmath.cos(math.radians(min(abs(lat), MAX_LAT))), 1e-6)
+    return int(min(max_zoom, max(0, math.ceil(dmath.log2(c / (TILE * pixel_m))))))
 
 
 def decode_terrarium(data, size):
@@ -186,8 +273,8 @@ HOLE_FILL_MAX_PX = 24        # Rotterdam district read 67 % zeros at z9-z11, ~1 
 def hole_px(z, y):
     """fill_holes' rounds for tile row y at zoom z: HOLE_FILL_M in its pixels, 2 .. HOLE_FILL_MAX_PX."""
     n = 2 ** z
-    lat = math.degrees(math.atan(math.sinh(math.pi * (1 - 2 * (y + 0.5) / n))))
-    px = 40075016.686 * math.cos(math.radians(lat)) / n / TILE
+    lat = math.degrees(dmath.atan(dmath.sinh(math.pi * (1 - 2 * (y + 0.5) / n))))
+    px = 40075016.686 * dmath.cos(math.radians(lat)) / n / TILE
     return int(min(HOLE_FILL_MAX_PX, max(2, round(HOLE_FILL_M / px))))
 
 
@@ -211,19 +298,54 @@ def _tile_xy(lat, lon, z):
     """Web-Mercator tile (x, y) holding (lat, lon) at zoom z."""
     n = 2 ** z
     x = int((lon + 180.0) / 360.0 * n) % n
-    y = int((1.0 - math.asinh(math.tan(math.radians(max(-MAX_LAT, min(MAX_LAT, lat))))) / math.pi) / 2.0 * n)
+    y = int((1.0 - dmath.asinh(dmath.tan(math.radians(max(-MAX_LAT, min(MAX_LAT, lat))))) / math.pi) / 2.0 * n)
     return x, max(0, min(n - 1, y))
 
 
 def _gauss2(a, sigma):
     """A separable Gaussian blur of a small 2-D grid (edges held), pure numpy."""
     r = max(1, int(round(3 * sigma)))
-    k = np.exp(-0.5 * (np.arange(-r, r + 1) / sigma) ** 2)
+    k = dnp.exp(-0.5 * dnp.sq(np.arange(-r, r + 1) / sigma))
     k /= k.sum()
     p = np.pad(a, ((r, r), (0, 0)), mode="edge")
     a = sum(k[i] * p[i:i + a.shape[0]] for i in range(2 * r + 1))
     p = np.pad(a, ((0, 0), (r, r)), mode="edge")
     return sum(k[i] * p[:, i:i + a.shape[1]] for i in range(2 * r + 1))
+
+
+_UNREAD = np.zeros((TILE, TILE), np.float32)     # (a box's tile no point reads: never read, sample)
+_UNREAD.flags.writeable = False
+
+
+def _tiles_read(fx, fy, nx, ny):
+    """(nx * ny,) bools, row-major: the tiles of an nx x ny box (fx, fy: the points' pixel coordinates in it) whose
+    pixels earthfast.bilinear_tiles reads: each point's pixel (floor, clamped to the box as the kernel clamps it) and
+    the next one right and down, whatever their weights. Every tile where a coordinate is not finite (the kernel's
+    and numpy's conversions of those differ)."""
+    if not (np.isfinite(fx).all() and np.isfinite(fy).all()):
+        return np.ones(nx * ny, bool)
+    w, h = nx * TILE, ny * TILE
+    ix = np.clip(np.floor(fx), 0, w - 2).astype(np.int64)
+    iy = np.clip(np.floor(fy), 0, h - 2).astype(np.int64)
+    read = np.zeros((ny, nx), bool)
+    for dx in (0, 1):
+        for dy in (0, 1):
+            read[(iy + dy) // TILE, (ix + dx) // TILE] = True
+    return read.ravel()
+
+
+def _stale(marks):
+    """A kept stand-in tile's time to be made again (Dem._lru_short's marks, SHORT_RETRY_S)."""
+    return marks is not None and time.monotonic() - marks[2] > SHORT_RETRY_S
+
+
+def _replay(marks):
+    """A kept tile's marks (Dem._load_marked) said again in the reading thread: its builds are short too."""
+    if marks:
+        if marks[0]:
+            revisit.fault(here=True)
+        if marks[1]:
+            revisit.fault(lidar=True)
 
 
 class Dem:
@@ -247,6 +369,11 @@ class Dem:
         self._local = threading.local()
         self.mem_tiles = MEM_TILES if mem_tiles is None else mem_tiles
         self._lru = OrderedDict()       # (z, x, y) -> float32 [TILE, TILE]
+        # (z, x, y) -> (faults, lidar rule faults, when made) of a tile in _lru made while something it read failed (a
+        # stand-in for a download that failed): whoever reads the kept copy is short of it too (_replay; only its first
+        # readers were told: a cell planned later from the kept stand-in counted as complete), and it is made again
+        # after SHORT_RETRY_S (kept, it stood in for the session: no read of it was ever complete again)
+        self._lru_short = {}
         self._inflight = {}             # (z, x, y) -> Future
         self._lock = threading.Lock()
         self.stats = Counter()          # updated from fetch threads; read via stats_snapshot()
@@ -263,12 +390,46 @@ class Dem:
         self.hkdtm = (hkdtmmod.HkDtm(hklidar.at(os.path.dirname(cache_dir), self.fetcher)) if hkdtmmod.ON
                       else None)
         self.hkdtm_served = set()       # tile keys with Hong Kong's LiDAR heights in them
+        self._mem_raw = OrderedDict()   # (src name, z, x, y) -> bytes not written to disk (MEM_RAW_BYTES)
+        self._mem_raw_bytes = 0
+        self._mem_miss = OrderedDict()  # (src name, z, x, y) -> 404s not written to disk (MEM_MISSES)
+        self._nowrite_logged = False
+        self.cdn_release = MT_CDN_RELEASE   # the packs' release (MT_CDN_*), None: the endpoint alone
+        self._cdn_idx = None            # (release, index bytes) once read
+        self._cdn_failed_at = -1e18
+        self._pack_locks = {}           # pack key -> lock: one fetch of a pack at a time in this process
+        # zoom 13 and deeper from Mapterhorn's regional archives (mtarchive.py), the endpoint only when they cannot
+        # be read
+        self.archives = (mtarchive.Archives(cache_dir, self.fetcher, self._archive_items)
+                         if ARCHIVES and fast.AVAILABLE and fast._ef is not None
+                         and getattr(fast._ef, "VERSION", 0) >= mtarchive.NATIVE else None)
+        import multiprocessing
+        if SINGLE_FLIGHT and multiprocessing.current_process().name == "MainProcess":
+            self._prune_locks()
+
+    def _prune_locks(self):
+        """Download locks (_fetch_raw) left by processes that ended mid-download, older than a day: removed (a lock
+        is broken when its tile is asked again; one never asked again stayed)."""
+        d = os.path.join(self.cache_dir, "locks")
+        try:
+            names = os.listdir(d)
+        except OSError:
+            return
+        now = time.time()
+        for n in names:
+            p = os.path.join(d, n)
+            try:
+                if n.endswith(".lock") and now - os.path.getmtime(p) > 86400:
+                    os.remove(p)
+            except OSError:
+                continue
 
 
     def clear_memory(self):
         """Drop the decoded tiles kept in memory (budget.maybe_shed)."""
         with self._lock:
             self._lru.clear()
+            self._lru_short.clear()
     def _canada(self, key, a):
         """Tile key's heights a with Canada's lidar terrain (hrdem.py) put in where it has data (z13 and deeper)."""
         z, x, y = key
@@ -309,7 +470,7 @@ class Dem:
         if lb is None or z not in BIAS_ZOOMS:
             return a
         n = 2 ** z
-        lat_of = lambda yy: math.degrees(math.atan(math.sinh(math.pi * (1 - 2 * yy / n))))     # noqa: E731
+        lat_of = lambda yy: math.degrees(dmath.atan(dmath.sinh(math.pi * (1 - 2 * yy / n))))     # noqa: E731
         box = (lat_of(y + 1), x / n * 360.0 - 180.0, lat_of(y), (x + 1) / n * 360.0 - 180.0)
         s_, w_, n_, e_ = lb._index()[4]
         if box[0] > n_ or box[2] < s_ or box[1] > e_ or box[3] < w_:
@@ -335,7 +496,7 @@ class Dem:
             return a
         # the tile's own heights at the lidar points (bilinear on its pixel grid)
         fx = ((plon + 180.0) / 360.0 * n - x) * TILE - 0.5
-        fy = ((1 - np.arcsinh(np.tan(np.radians(plat))) / math.pi) / 2 * n - y) * TILE - 0.5
+        fy = ((1 - dnp.arcsinh(dnp.tan(np.radians(plat))) / math.pi) / 2 * n - y) * TILE - 0.5
         x0_ = np.clip(np.floor(fx).astype(np.int64), 0, TILE - 2)
         y0_ = np.clip(np.floor(fy).astype(np.int64), 0, TILE - 2)
         u = np.clip(fx - x0_, 0, 1)
@@ -434,8 +595,8 @@ class Dem:
         if not ok.any():
             return a
         n = 2 ** z
-        lat = math.degrees(math.atan(math.sinh(math.pi * (1 - 2 * (y + 0.5) / n))))
-        px = 40075016.686 * math.cos(math.radians(lat)) / n / TILE
+        lat = math.degrees(dmath.atan(dmath.sinh(math.pi * (1 - 2 * (y + 0.5) / n))))
+        px = 40075016.686 * dmath.cos(math.radians(lat)) / n / TILE
         w = hrdemmod.feather(ok, min(HRDEM_FEATHER_MAX_PX, max(2, round(HRDEM_FEATHER_M / px))))
         return (a * (1.0 - w) + h * w).astype(np.float32)
 
@@ -478,15 +639,19 @@ class Dem:
                 age = now - os.path.getmtime(path)
                 if age < COVERAGE_MAX_AGE_S:
                     with open(path, "rb") as f:
-                        c["index"], c["at"], c["failed"] = coverage_index(json.loads(f.read())), now - age, False
+                        doc = json.loads(f.read())
+                        c["index"], c["at"], c["failed"] = coverage_index(doc), now - age, False
+                        c["archives"] = mtarchive.archives_of(doc)
                         return c["index"]
             except (OSError, ValueError):
                 pass
             try:
                 body = self.fetcher.get(COVERAGE_URL, kind="demand").body
-                idx = coverage_index(json.loads(body))
+                doc = json.loads(body)
+                idx = coverage_index(doc)
                 if not idx:
                     raise ValueError("no z6 files listed")
+                c["archives"] = mtarchive.archives_of(doc)
                 os.makedirs(os.path.dirname(path), exist_ok=True)
                 tmp = f"{path}.{os.getpid()}.{threading.get_ident()}.tmp"
                 with open(tmp, "wb") as f:
@@ -510,12 +675,18 @@ class Dem:
         n = 2 ** COVERAGE_ZOOM
         lat = max(-MAX_LAT, min(MAX_LAT, float(lat)))
         x = int((float(lon) + 180.0) / 360.0 * n) % n
-        y = int((1.0 - math.asinh(math.tan(math.radians(lat))) / math.pi) / 2.0 * n)
+        y = int((1.0 - dmath.asinh(dmath.tan(math.radians(lat))) / math.pi) / 2.0 * n)
         if idx.get((x, max(0, min(n - 1, y))), GLOBAL_ZOOM) > GLOBAL_ZOOM:
             return False
-        if (self.lidarbc is not None or HRDEM_NEAR) and hrdemmod.covers(GLOBAL_ZOOM, *_tile_xy(lat, lon, GLOBAL_ZOOM)):
+        if (self.lidarbc is not None or HRDEM_NEAR) and hrdemmod.in_bounds(GLOBAL_ZOOM, *_tile_xy(lat, lon, GLOBAL_ZOOM)):
             return False
         return True
+
+    def _archive_items(self):
+        """The file list's regional archives (mtarchive.archives_of), or None while there is no list."""
+        if self._coverage() is None:
+            return None
+        return _coverage.get("archives")
 
     def _listed(self, z, x, y):
         """False when Mapterhorn's file list says it has no tile (z, x, y) (z > GLOBAL_ZOOM); True otherwise."""
@@ -530,45 +701,404 @@ class Dem:
         netfetch.FetchError when the host cannot deliver (netfetch.Deferred for a refused prefetch)."""
         if src is MAPTERHORN and z > GLOBAL_ZOOM and not self._listed(z, x, y):
             self._count(src["name"] + ":unlisted")
+            self._note(src, z, "unlisted")
             return None
         path = self._path(src, z, x, y)
         miss = os.path.join(self.cache_dir, src["name"], str(z), str(x), f"{y}.404")
         data = self.disk.read(path)         # None: not cached (or evicted a moment ago)
         if data is not None:
             self._count(src["name"] + ":disk")
+            self._note(src, z, "disk")
             return data
+        mk = (src["name"], z, x, y)
+        if self._mem_raw or self._mem_miss:
+            with self._lock:
+                data = self._mem_raw.get(mk)
+                if data is not None:
+                    self._mem_raw.move_to_end(mk)
+                elif mk in self._mem_miss:
+                    self._note(src, z, "miss")
+                    return None
+            if data is not None:
+                self._count(src["name"] + ":memory")
+                self._note(src, z, "memory")
+                return data
         url = src["url"].format(z=z, x=x, y=y)
         if self.fetcher.miss_alive(miss, url):
+            self._note(src, z, "miss")
             return None
-        os.makedirs(os.path.dirname(path), exist_ok=True)
+        if src is MAPTERHORN and z <= MT_CDN_MAX_ZOOM and self.cdn_release:
+            got = self._download_pack(z, x, y, kind)
+            if got is not False:
+                self._note(src, z, "cdn")
+                return got
+        return self._fetch_raw(src, z, x, y, url, path, miss, mk, kind)
+
+    def _fetch_raw(self, src, z, x, y, url, path, miss, mk, kind):
+        """Raw tile (z, x, y) from src's host (_download's network part): one download on the machine at a time
+        (SINGLE_FLIGHT); bytes, or None for a 404 (remembered)."""
+        # (one folder of their own: not among the tiles, whose folders the map's cache view counts by name)
+        lock = os.path.join(self.cache_dir, "locks", f"{src['name']}-{z}-{x}-{y}.lock")
+        mine = False
+        if SINGLE_FLIGHT:
+            def ready():
+                if os.path.exists(path):
+                    got = self.disk.read(path)
+                    if got is not None:
+                        return got
+                return _MISS if self.fetcher.miss_alive(miss, url) else None
+            # (the urgent lane's loads, the block under the car: waited for DL_URGENT_WAIT_S at most)
+            urgent = self.is_urgent() or threading.current_thread().name.startswith("dem-urgent")
+            got, mine = xproc.once(lock, ready, DL_URGENT_WAIT_S if urgent else DL_WAIT_S,
+                                   kind=_xkind(kind),
+                                   live_s=None if urgent else DL_LIVE_S, patient=True)
+            if got is not None:             # (another process's, or another thread's, download)
+                self._count(src["name"] + ":waited")
+                self._note(src, z, "waited")
+                return None if got is _MISS else got
         try:
-            data = self.fetcher.get(url, kind=kind).body
-        except netfetch.NotFound:
-            missindex.record(miss, self.disk)   # (again: its time starts the miss TTL)
-            self._count(src["name"] + ":404")
-            return None
-        except netfetch.FetchError:
-            self._count(src["name"] + ":error")
-            raise
+            if self.archives is not None and src is MAPTERHORN and z >= mtarchive.MIN_ZOOM:
+                got = self._from_archives([(z, x, y)], kind).get((z, x, y), False)
+                if got is not False:
+                    return got
+                if kind in SPECULATIVE and self.archives.region(z, x, y) is not None:
+                    # (an archive has it but cannot be read now: the endpoint is the demand's last resort, never a
+                    # guess's; with no file list at all every tile is asked as before)
+                    self._note(src, z, "deferred")
+                    raise netfetch.Deferred(f"mapterhorn {z}/{x}/{y}: the archives cannot be read now", url,
+                                            netfetch.host_of(url))
+            try:
+                data = self.fetcher.get(url, kind=kind).body
+            except netfetch.NotFound:
+                self._remember_miss([(mk, miss)])   # (again: its time starts the miss TTL)
+                self._count(src["name"] + ":404")
+                self._note(src, z, "404")
+                return None
+            except netfetch.Deferred:
+                self._count(src["name"] + ":error")
+                self._note(src, z, "deferred")
+                raise
+            except netfetch.FetchError:
+                self._count(src["name"] + ":error")
+                self._note(src, z, "error")
+                raise
+            self._keep(mk, path, data)
+            try:
+                missindex.clear(miss, self.disk)    # an expired miss: the host has data there now
+            except OSError:
+                pass
+            self._count(src["name"] + ":net")
+            self._note(src, z, "net")
+            return data
+        finally:
+            if mine:
+                xproc.release(lock)
+
+    def _from_archives(self, keys, kind):
+        """Mapterhorn tiles keys from the regional archives (mtarchive.py), written to the raw cache as the endpoint's
+        would be (a tile an archive lacks: its 404 remembered): {key: bytes or None} for those an archive answered;
+        the others left out (the endpoint's to ask). Raises netfetch.Deferred (a prefetch refused)."""
+        name = MAPTERHORN["name"]
+        got = self.archives.fetch(keys, kind)
+        misses = []
+        for (z, x, y), b in got.items():
+            mk = (name, z, x, y)
+            marker = os.path.join(self.cache_dir, name, str(z), str(x), f"{y}.404")
+            if b is None:
+                misses.append((mk, marker))
+                self._count(name + ":archive404")
+                self._note(MAPTERHORN, z, "archive404")
+                continue
+            self._keep(mk, self._path(MAPTERHORN, z, x, y), b)
+            try:
+                missindex.clear(marker, self.disk)
+            except OSError:
+                pass
+            self._count(name + ":archive")
+            self._note(MAPTERHORN, z, "archive")
+        if misses:
+            self._remember_miss(misses)
+        for k in keys:
+            if k not in got:
+                self._note(MAPTERHORN, k[0], "archive_err")
+        return got
+
+    def _archive_batch(self, keys, kind):
+        """Warm the raw cache for keys (Mapterhorn, zoom 13+) from the archives in as few range reads as they allow:
+        the keys with neither a decoded nor a raw tile nor a remembered 404, each this process's to fetch (its download
+        lock had at once; one another process holds is left to it), and where a z16 tile proves missing the tile its
+        heights will come from (the deepest of its z15 / z14 / z13 ancestors there; no request to find it: the
+        directories say). A cache warm only: what the loads then make is decided by them as before."""
+        if self.archives is None:
+            return
+        name = MAPTERHORN["name"]
+        todo = []
+        for k in dict.fromkeys(keys):
+            z, x, y = k
+            if z < mtarchive.MIN_ZOOM or not self._listed(z, x, y):
+                continue
+            if os.path.exists(self._path(MAPTERHORN, z, x, y)) or os.path.exists(self._mirror_path(k)):
+                continue
+            if (name,) + k in self._mem_raw or self._known_miss(*k):
+                continue
+            todo.append(k)
+        rounds = 0
+        while todo and rounds < 4:
+            rounds += 1
+            held = []
+            for k in todo:
+                lock = os.path.join(self.cache_dir, "locks", f"{name}-{k[0]}-{k[1]}-{k[2]}.lock")
+                if not SINGLE_FLIGHT or xproc.take(lock, _xkind(kind)):
+                    held.append((k, lock))
+            try:
+                got = self._from_archives([k for k, _ in held], kind) if held else {}
+            except netfetch.Deferred:
+                got = {}
+            finally:
+                if SINGLE_FLIGHT:
+                    for _, lock in held:
+                        xproc.release(lock)
+            # (a missing tile's heights come from its parent: z16 always, z15 / z14 with the ground filter)
+            nxt = []
+            for (z, x, y), b in got.items():
+                if b is None and z > mtarchive.MIN_ZOOM and (z > MAX_ZOOM or self.ground_filter):
+                    p = (z - 1, x >> 1, y >> 1)
+                    if (self._listed(*p) and not os.path.exists(self._path(MAPTERHORN, *p))
+                            and not os.path.exists(self._mirror_path(p)) and not self._known_miss(*p)):
+                        nxt.append(p)
+            todo = list(dict.fromkeys(nxt))
+
+    def _caller(self):
+        """The module that asked for the tiles this thread reads now (a pool task: the one that queued it)."""
+        c = getattr(self._local, "caller", None)
+        if c is not None:
+            return c
+        f = sys._getframe(1)
+        while f is not None and f.f_globals.get("__name__") in _SKIP_MODULES:
+            f = f.f_back
+        name = f.f_globals.get("__name__") if f is not None else None
+        return (name or "pool").rsplit(".", 1)[-1][:20]
+
+    def _as(self, caller, fn, *args):
+        """fn(*args) with this thread's reads counted as caller's (a pool task queued by caller)."""
+        prev = getattr(self._local, "caller", None)
+        self._local.caller = caller
+        try:
+            return fn(*args)
+        finally:
+            self._local.caller = prev
+
+    def _note(self, src, z, outcome):
+        """A raw tile read's telemetry detail (netfetch.note_detail): the source, the caller, the zoom, how it was
+        answered. No position."""
+        netfetch.note_detail(f"{src['name']}:{self._caller()}:{z}:{outcome}")
+
+    def _keep(self, mk, path, data):
+        """Downloaded tile bytes written to the disk cache; when that fails (a full disk, a folder that cannot be
+        written) kept in this process's memory instead (MEM_RAW_BYTES, the oldest dropped), so the tile is not failed
+        and downloaded again at its next try."""
         tmp = f"{path}.{threading.get_ident()}.tmp"
-        with open(tmp, "wb") as f:
-            f.write(data)
-        staging.replace_cached(tmp, path)
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(tmp, "wb") as f:
+                f.write(data)
+            staging.replace_cached(tmp, path)
+        except OSError as e:
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+            with self._lock:
+                old = self._mem_raw.pop(mk, None)
+                self._mem_raw_bytes -= len(old) if old is not None else 0
+                self._mem_raw[mk] = data
+                self._mem_raw_bytes += len(data)
+                while self._mem_raw_bytes > MEM_RAW_BYTES and len(self._mem_raw) > 1:
+                    self._mem_raw_bytes -= len(self._mem_raw.popitem(last=False)[1])
+                first, self._nowrite_logged = not self._nowrite_logged, True
+            self._count("dem:nowrite")
+            if first:
+                log.warning("dem: tiles cannot be written to the cache (%s: %s): kept in memory for this session",
+                            type(e).__name__, e)
+            return False
         self.disk.wrote(path, len(data))
-        missindex.clear(miss, self.disk)    # an expired miss: the host has data there now
-        self._count(src["name"] + ":net")
+        return True
+
+    def _remember_miss(self, items):
+        """404s [(memory key, marker path)] recorded in their columns' miss indexes (missindex.py); kept in memory
+        when that cannot be written."""
+        try:
+            missindex.record([m for _, m in items], self.disk)
+        except OSError:
+            with self._lock:
+                for mk, _ in items:
+                    self._mem_miss[mk] = True
+                while len(self._mem_miss) > MEM_MISSES:
+                    self._mem_miss.popitem(last=False)
+            self._count("dem:nowrite_miss")
+
+    # --- Mapterhorn's z0-12 from the project's tile host (MT_CDN_*) --------------------------------
+    def _cdn_index(self):
+        """The release's index.bin (bytes: tilepack.index_has), from disk or the tile host once; None when it cannot
+        be had (the endpoint alone for MT_CDN_RETRY_S)."""
+        rel = self.cdn_release
+        got = self._cdn_idx
+        if got is not None and got[0] == rel:
+            return got[1]
+        if time.monotonic() - self._cdn_failed_at < MT_CDN_RETRY_S:
+            return None
+        import tilepack
+        path = os.path.join(self.cache_dir, "bngmt", rel, "index.bin")
+        data = None
+        try:
+            with open(path, "rb") as f:
+                data = f.read()
+            tilepack.index_check(data)
+        except (OSError, tilepack.PackError):
+            data = None
+        if data is None:
+            try:
+                data = self.fetcher.get(mt_cdn_base(rel) + "/index.bin", kind="demand").body
+                tilepack.index_check(data)
+            except (netfetch.FetchError, tilepack.PackError) as e:
+                log.info("dem: the tile host's Mapterhorn packs (%s): no index (%s: %s): the endpoint meanwhile",
+                         rel, type(e).__name__, e)
+                self._cdn_failed_at = time.monotonic()
+                return None
+            try:
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                tmp = f"{path}.{os.getpid()}.{threading.get_ident()}.tmp"
+                with open(tmp, "wb") as f:
+                    f.write(data)
+                os.replace(tmp, path)
+            except OSError:
+                pass
+        self._cdn_idx = (rel, data)
         return data
+
+    def _download_pack(self, z, x, y, kind):
+        """Mapterhorn tile (z, x, y) (z <= MT_CDN_MAX_ZOOM) from its pack on the tile host: the pack fetched once and
+        every tile of it written to the cache as Mapterhorn's own (a tile it lacks: a 404 remembered, as the endpoint
+        would answer). The bytes, None (no tile there), or False: ask the endpoint (no index, the host failing, a
+        damaged pack)."""
+        import tilepack
+        idx = self._cdn_index()
+        if idx is None:
+            return False
+        k = min(MT_CDN_K, z)
+        (pz, px, py), _ = tilepack.pack_of(z, x, y, k)
+        name = MAPTERHORN["name"]
+
+        def miss(tz, tx, ty):
+            return (name, tz, tx, ty), os.path.join(self.cache_dir, name, str(tz), str(tx), f"{ty}.404")
+        if not tilepack.index_has(idx, pz, px, py):     # open sea: none of its tiles exists
+            self._remember_miss([miss(*tilepack.tile_at(pz, px, py, k, i)) for i in range(dnp.sq(1 << k))])
+            self._count("bngmt:unlisted")
+            return None
+        with self._lock:
+            lock = self._pack_locks.setdefault((pz, px, py), threading.Lock())
+        with lock:
+            path = self._path(MAPTERHORN, z, x, y)
+            data = self.disk.read(path)             # (another tile of the pack fetched it meanwhile)
+            if data is not None:
+                self._count(name + ":disk")
+                return data
+            with self._lock:
+                data = self._mem_raw.get((name, z, x, y))
+                if data is None and (name, z, x, y) in self._mem_miss:
+                    return None
+            if data is not None:
+                return data
+            # (one process fetches a pack, the others wait for its tiles on disk: a cold place's 25 packs were asked
+            # 48 times by the server's processes at once, 2026-11-12)
+            claim = os.path.join(self.cache_dir, "bngmt", self.cdn_release, "claims", f"{pz}_{px}_{py}")
+            if not self._pack_claim(claim):
+                got = self._pack_wait(path, miss(z, x, y)[1])
+                if got is not False:
+                    self._count("bngmt:waited")
+                    return got
+            try:
+                return self._fetch_pack(pz, px, py, k, x, y, kind, miss)
+            finally:
+                try:
+                    os.remove(claim)
+                except OSError:
+                    pass
+
+    def _pack_claim(self, claim):
+        """True: this process fetches the pack (its claim file made, or claims cannot be made here); False: another
+        process has fetched it within PACK_CLAIM_STALE_S."""
+        for _ in range(2):
+            try:
+                os.makedirs(os.path.dirname(claim), exist_ok=True)
+                os.close(os.open(claim, os.O_CREAT | os.O_EXCL | os.O_WRONLY))
+                return True
+            except FileExistsError:
+                try:
+                    if time.time() - os.path.getmtime(claim) < PACK_CLAIM_STALE_S:
+                        return False
+                    os.remove(claim)        # (a process that ended mid-pack)
+                except OSError:
+                    pass
+            except OSError:
+                return True
+        return True
+
+    def _pack_wait(self, path, marker):
+        """The tile another process's pack fetch writes at path: its bytes, None (the pack lacks it: its 404
+        recorded), or False when it did not come within PACK_WAIT_S (fetched here then)."""
+        end = time.monotonic() + PACK_WAIT_S
+        while time.monotonic() < end:
+            time.sleep(CLAIM_POLL_S * 2)
+            data = self.disk.read(path)
+            if data is not None:
+                return data
+            if missindex.known(marker):
+                return None
+        return False
+
+    def _fetch_pack(self, pz, px, py, k, x, y, kind, miss):
+        import tilepack
+        name = MAPTERHORN["name"]
+        url = f"{mt_cdn_base(self.cdn_release)}/{tilepack.path(pz, px, py)}"
+        try:
+            body = self.fetcher.get(url, kind=kind).body
+            tz_, tpx, tpy, tk, tiles = tilepack.parse(body)
+            if (tz_, tpx, tpy, tk) != (pz, px, py, k):
+                raise tilepack.PackError(f"pack {tz_}/{tpx}/{tpy} k{tk} where {pz}/{px}/{py} k{k} was asked")
+        except netfetch.Deferred:
+            raise                                   # (a prefetch refused: the caller waits, as for the endpoint)
+        except (netfetch.FetchError, tilepack.PackError) as e:
+            self._count("bngmt:fallback")
+            log.debug("dem: pack %s: %s: %s: the endpoint", url, type(e).__name__, e)
+            return False
+        out = None
+        misses = []
+        for i in range(dnp.sq(1 << k)):
+            tz, tx, ty = tilepack.tile_at(pz, px, py, k, i)
+            b = tiles.get(i)
+            if b is None:
+                misses.append(miss(tz, tx, ty))
+                continue
+            self._keep((name, tz, tx, ty), self._path(MAPTERHORN, tz, tx, ty), b)
+            if (tx, ty) == (x, y):
+                out = b
+        if misses:
+            self._remember_miss(misses)
+        self._count("bngmt:net")
+        return out
 
     def _ahead(self, keys):
         """Start the raw Mapterhorn downloads of keys at once (on disk afterwards, or a remembered 404); one request
         per tile however many ask. Returns their futures (result: the bytes or None; errors are left for the caller's
         own _download to meet)."""
         futs = []
+        caller = self._caller()
         with self._lock:
             for k in keys:
                 f = self._probing.get(k)
                 if f is None:
-                    f = self._probing[k] = self.probe_pool.submit(self._probe, k)
+                    f = self._probing[k] = self.probe_pool.submit(self._as, caller, self._probe, k)
                 futs.append(f)
         return futs
 
@@ -595,6 +1125,9 @@ class Dem:
         decoding them. Returns (downloaded, deferred): deferred when the host refused one (no spare tokens
         now): the rest waits for the next call. Errors skip the tile (asked again on demand)."""
         got = 0
+        keys = list(keys)
+        if self.archives is not None:       # (the zoom 13+ tiles first, in as few archive reads as they allow)
+            self._archive_batch(keys, "prefetch")
         for z, x, y in keys:
             if os.path.exists(self._path(MAPTERHORN, z, x, y)):
                 continue
@@ -631,14 +1164,14 @@ class Dem:
         filter also their z12 parents (a z15 tile without lidar is made from z12 ground)."""
         import mapcells
         dlat = radius_m / 111320.0
-        dlon = radius_m / (111320.0 * max(0.05, math.cos(math.radians(lat))))
+        dlon = radius_m / (111320.0 * max(0.05, dmath.cos(math.radians(lat))))
         x0, y0 = mapcells.tile_xy(lat + dlat, lon - dlon, zoom)
         x1, y1 = mapcells.tile_xy(lat - dlat, lon + dlon, zoom)
         cx, cy = mapcells.tile_xy(lat, lon, zoom)
         n = 2 ** zoom
         keys = [(zoom, x % n, y) for y in range(max(0, int(y0)), min(n - 1, int(y1)) + 1)
                 for x in range(int(math.floor(x0)), int(math.floor(x1)) + 1)]
-        keys.sort(key=lambda k: (k[1] + 0.5 - cx) ** 2 + (k[2] + 0.5 - cy) ** 2)
+        keys.sort(key=lambda k: dnp.sq(k[1] + 0.5 - cx) + dnp.sq(k[2] + 0.5 - cy))
         if self.ground_filter and zoom > GLOBAL_ZOOM:
             sh = zoom - GLOBAL_ZOOM
             parents = list(dict.fromkeys((GLOBAL_ZOOM, x >> sh, y >> sh) for _, x, y in keys))
@@ -679,8 +1212,13 @@ class Dem:
     def _mirror_path(self, key):
         z, x, y = key
         hk = "h" if self.hkdtm is not None and hkdtmmod.covers(z, x, y) else ""     # (made with Hong Kong's DTM)
-        return os.path.join(self.cache_dir, "decoded", f"v{DECODED_VERSION}", f"g{int(self.ground_filter)}{hk}", str(z),
-                            str(x), f"{y}{'.f32z' if MIRROR_ZSTD else '.npy'}")
+        # (made with the opt-in Canadian lidar, the settings page's Experimental switch: BNE_LIDARBC's own files and
+        # its bias, BNE_HRDEM_NEAR's whole HRDEM. Their tiles apart: off, the mirror's tiles as before)
+        hk += ("b" if getattr(self, "lidarbc", None) is not None else "") + \
+            ("n" if getattr(self, "hrdem_near", HRDEM_NEAR) else "")
+        return os.path.join(self.cache_dir, "decoded", f"v{DECODED_VERSION}m{MIRROR_GEN}",
+                            f"g{int(self.ground_filter)}{hk}", str(z), str(x),
+                            f"{y}{'.f32z' if MIRROR_ZSTD else '.npy'}")
 
     def _mirror_get(self, key, readback=False):
         """A tile from the decoded mirror (a read-only view of its memory map), or None. readback: _mirror_put's
@@ -773,8 +1311,11 @@ class Dem:
                 break
 
     def _partial(self):
-        """This load used a stand-in (a failed fetch): its tile is not mirrored."""
+        """This load used a stand-in (a failed fetch): its tile is not mirrored, and the builds reading it are short
+        (revisit.fault: a source whose failure is no failed download, a lidar sheet that raised OSError, said nothing
+        before, and the stand-in went into the LRU unmarked)."""
         self._local.partial = True
+        revisit.fault(here=True)
 
     def _load_tile(self, key):
         """A decoded tile: from the mirror, else made (_make_tile) and, when it is all Mapterhorn's data as it will
@@ -841,8 +1382,9 @@ class Dem:
 
     def _make_tile0(self, key):
         z, x, y = key
-        if z > MAX_ZOOM:                # (most places have no z16: its z15 parent asked alongside)
-            self._ahead([(MAX_ZOOM, x >> (z - MAX_ZOOM), y >> (z - MAX_ZOOM))])
+        # (a z16 tile's z15 parent is asked only once the z16 tile is found missing (_from_ancestor below): it was
+        # downloaded ahead alongside every z16 tile, used or not, a z15 request for every 4 z16 tiles of a lidar area
+        # that has them; where the file list has no z16 the z16 asks nothing and the parent comes at once)
         try:
             data = self._download(MAPTERHORN, z, x, y)
             a = None if data is None else self._decode(MAPTERHORN, z, x, y, data)
@@ -902,15 +1444,45 @@ class Dem:
     # --- the ground under the surface model ------------------------------
     def _lidar(self, x, y):
         """Has Mapterhorn deeper tiles (national lidar: a terrain model already) under z12 tile (x, y)? Two of
-        its z13 children asked, at once (404s are remembered)."""
-        self._wait(self._ahead([(GLOBAL_ZOOM + 1, 2 * x, 2 * y), (GLOBAL_ZOOM + 1, 2 * x + 1, 2 * y + 1)]))
-        for cx, cy in ((2 * x, 2 * y), (2 * x + 1, 2 * y + 1)):
+        its z13 children (diagonal): yes when either is there (404s are remembered). A child already on disk answers
+        without a request; otherwise they are asked one after the other, the second only when the first is missing
+        (both were downloaded at once before, the second wasted wherever the first was there: the same answer)."""
+        kids = ((GLOBAL_ZOOM + 1, 2 * x, 2 * y), (GLOBAL_ZOOM + 1, 2 * x + 1, 2 * y + 1))
+        for k in kids:
+            if os.path.exists(self._path(MAPTERHORN, *k)) and self._download(MAPTERHORN, *k) is not None:
+                return True
+        if self.archives is not None:
+            # (the children the cache knows nothing of answered by the regional archive's directories, no tile read:
+            # the endpoint's answer; a 404 remembered for a child it lacks, as the endpoint's would be)
+            name = MAPTERHORN["name"]
+            ask = [k for k in kids if self._listed(*k) and not self._known_miss(*k)]
             try:
-                if self._download(MAPTERHORN, GLOBAL_ZOOM + 1, cx, cy) is not None:
+                there = self.archives.exists(ask) if ask else {}
+            except netfetch.Deferred:
+                there = None
+            if there is not None and len(there) == len(ask):
+                gone = [((name,) + k, os.path.join(self.cache_dir, name, str(k[0]), str(k[1]), f"{k[2]}.404"))
+                        for k in ask if not there[k]]
+                if gone:
+                    self._remember_miss(gone)
+                for k in ask:
+                    self._note(MAPTERHORN, k[0], "index")
+                return any(there.values())
+        for k in kids:
+            try:
+                if self._download(MAPTERHORN, *k) is not None:
                     return True
             except netfetch.FetchError:
                 self._partial()
         return False
+
+    def _known_miss(self, z, x, y):
+        """Is Mapterhorn tile (z, x, y) a 404 the cache remembers (as _download reads it)?"""
+        name = MAPTERHORN["name"]
+        if (name, z, x, y) in self._mem_miss:
+            return True
+        return self.fetcher.miss_alive(os.path.join(self.cache_dir, name, str(z), str(x), f"{y}.404"),
+                                       MAPTERHORN["url"].format(z=z, x=x, y=y))
 
     def _raw12(self, x, y):
         """A z12 Mapterhorn tile as it is (zeros where there is none: the open sea)."""
@@ -951,8 +1523,8 @@ class Dem:
                     sc = slice(TILE - m, TILE) if dx < 0 else slice(0, m) if dx > 0 else slice(0, TILE)
                     big[r0:r1, c0:c1] = nb[sr, sc]
         n = 2 ** GLOBAL_ZOOM
-        lat = math.degrees(math.atan(math.sinh(math.pi * (1 - 2 * (y + 0.5) / n))))
-        px = 40075016.686 * math.cos(math.radians(lat)) / n / TILE
+        lat = math.degrees(dmath.atan(dmath.sinh(math.pi * (1 - 2 * (y + 0.5) / n))))
+        px = 40075016.686 * dmath.cos(math.radians(lat)) / n / TILE
         g = dsmground.ground(big, px)
         self._count("dem:ground12")
         return np.ascontiguousarray(g[m:m + TILE, m:m + TILE])
@@ -982,12 +1554,24 @@ class Dem:
         key = (z0, ax, ay)
         with self._lock:
             anc = self._lru.get(key)
-        if anc is None:
-            anc = self._load_tile(key)      # (in this thread: a pool worker waiting on the pool could deadlock)
-            with self._lock:
-                self._lru[key] = anc
-                while len(self._lru) > self.mem_tiles:
-                    self._lru.popitem(last=False)
+            marks = self._lru_short.get(key)
+            if anc is not None and _stale(marks):
+                anc = None
+        if anc is not None:
+            _replay(marks)
+            if marks:           # (an ancestor kept short: the tile made from it is a stand-in too, never mirrored)
+                self._partial()
+        else:
+            # (in this thread: a pool worker waiting on the pool could deadlock). It owns no future of the key, so it
+            # publishes a complete tile only: a stand-in stays this descendant's (its faults are this reader's, and the
+            # descendant is partial: _load_tile), not put in the LRU, where tiles() would hand it out ahead of the
+            # owner's healthy load still pending
+            anc, marks = self._load_marked(key)
+            if marks is None:
+                with self._lock:
+                    self._lru_put(key, anc, marks)
+            else:
+                self._partial()     # (the descendant made from it is a stand-in too: never mirrored)
         k = 2 ** d
         i = (np.arange(TILE) + 0.5) / k - 0.5
         u = np.clip((x - ax * k) * TILE / k + i, 0, TILE - 1)
@@ -1019,23 +1603,34 @@ class Dem:
     def tiles(self, keys, progress=None):
         """Fetch many tiles concurrently (deduplicated across callers)."""
         keys = list(dict.fromkeys(keys))
-        out, futs, new = {}, {}, []
+        if self.archives is not None:
+            # (the cold zoom 13+ tiles' raw bytes first, in as few archive range reads as they allow: each load then
+            # finds its tile on disk)
+            with self._lock:
+                cold = [k for k in keys if k[0] >= mtarchive.MIN_ZOOM and k not in self._lru and k not in self._inflight]
+            if cold:
+                self._archive_batch(cold, "demand")
+        out, futs, new, short = {}, {}, [], []
         urgent = getattr(self._local, "urgent", False)
         pool = self.urgent_pool if urgent else self.pool
+        caller = self._caller()
         if urgent and len(keys) >= 16 and log.isEnabledFor(logging.DEBUG):
             zs = Counter(k[0] for k in keys)
             log.debug("dem urgent: %d tiles %s", len(keys), dict(zs))
         with self._lock:
             for k in keys:
-                if k in self._lru:
+                if k in self._lru and not _stale(self._lru_short.get(k)):
                     self._lru.move_to_end(k)
                     out[k] = self._lru[k]
+                    short.append(self._lru_short.get(k))
                 elif k in self._inflight and not (urgent and not self._inflight[k].running()
                                                   and not self._inflight[k].done()):
                     futs[k] = self._inflight[k]
                 else:
-                    futs[k] = self._inflight[k] = pool.submit(self._load_tile, k)
+                    futs[k] = self._inflight[k] = pool.submit(self._as, caller, self._load_marked, k)
                     new.append(k)
+        for marks in short:     # (kept copies made short of something: this reader is too)
+            _replay(marks)
         # Outside the lock: the callback runs at once if the future is already done.
         for k in new:
             futs[k].add_done_callback(lambda f, k=k: self._finish(k, f))
@@ -1043,7 +1638,7 @@ class Dem:
         if progress:
             progress(done, len(keys))
         for k, fut in futs.items():
-            out[k] = fut.result()
+            out[k] = fut.result()[0]        # (its faults are this reader's: revisit.bind)
             done += 1
             if progress:
                 progress(done, len(keys))
@@ -1053,12 +1648,40 @@ class Dem:
         """Move a finished load from _inflight into the LRU (failures are dropped,
         so the next request retries instead of reusing a stale exception)."""
         with self._lock:
-            if self._inflight.get(key) is fut:
+            # (the load that owns the key publishes whatever it made; one an urgent reload took the key over from
+            # (superseded) publishes only a complete tile: its stand-in, finishing later, went over the newer answer,
+            # while its complete tile still replaces a stand-in the urgent one put in, _lru_put never the reverse)
+            owner = self._inflight.get(key) is fut
+            if owner:
                 del self._inflight[key]
             if not fut.cancelled() and fut.exception() is None:
-                self._lru[key] = fut.result()
-                while len(self._lru) > self.mem_tiles:
-                    self._lru.popitem(last=False)
+                a, marks = fut.result()
+                if owner or marks is None:
+                    self._lru_put(key, a, marks)
+
+    def _lru_put(self, key, a, marks):
+        """With self._lock held: tile key's heights a into the LRU, with marks (_load_marked's) kept beside it. A
+        stand-in (marks) never replaces a complete entry already there (a retry that failed again while another
+        thread's load of the same tile succeeded, _from_ancestor's inline load): the complete one stays."""
+        if marks is not None and key in self._lru and key not in self._lru_short:
+            self._lru.move_to_end(key)
+            return
+        self._lru[key] = a
+        self._lru.move_to_end(key)
+        if marks is None:
+            self._lru_short.pop(key, None)
+        else:
+            self._lru_short[key] = marks
+        while len(self._lru) > self.mem_tiles:
+            self._lru_short.pop(self._lru.popitem(last=False)[0], None)
+
+    def _load_marked(self, key):
+        """(_load_tile(key), its marks): (faults, lidar rule faults) when making it read something short (a stand-in
+        for a failed download), else None. Its faults reach this thread's builds as they happen (its own scope is
+        inside theirs)."""
+        with revisit.scope() as made:
+            a = self._load_tile(key)
+        return a, ((made.n, made.lidar, time.monotonic()) if made.n or made.lidar else None)
 
     def block_max(self, z, x, y, block):
         """Highest elevation in every block x block pixel square of tile (z, x, y): a (TILE / block)²
@@ -1082,7 +1705,7 @@ class Dem:
         out = np.zeros(lat.shape, np.float64)
         valid = np.abs(lat) < polardem.FROM_LAT
         if not valid.all():                 # the polar caps: the Copernicus DEM (polardem.py)
-            px = 40075016.686 * math.cos(math.radians(MAX_LAT)) / (TILE * 2 ** zoom)
+            px = 40075016.686 * dmath.cos(math.radians(MAX_LAT)) / (TILE * 2 ** zoom)
             try:
                 out[~valid] = self.polar().sample(lat[~valid], lon[~valid], px)
             except (netfetch.FetchError, OSError, ValueError) as e:
@@ -1096,7 +1719,7 @@ class Dem:
         fx = (lon / 360.0 + 0.5) * w
         fx -= w * np.round((fx - fx[0]) / w)    # unwrap across the antimeridian
         fx -= 0.5
-        fy = (0.5 - np.arcsinh(np.tan(np.radians(lat))) / (2 * np.pi)) * w - 0.5
+        fy = (0.5 - dnp.arcsinh(dnp.tan(np.radians(lat))) / (2 * np.pi)) * w - 0.5
         tx0, tx1 = int(math.floor(fx.min())) // TILE, int(math.floor(fx.max()) + 1) // TILE
         ty0 = max(0, int(math.floor(fy.min())) // TILE)
         ty1 = min(n - 1, int(math.floor(fy.max()) + 1) // TILE)
@@ -1120,10 +1743,12 @@ class Dem:
             out[valid] = sub
             return out.reshape(shape)
         keys = [(zoom, tx % n, ty) for ty in range(ty0, ty1 + 1) for tx in range(tx0, tx1 + 1)]     # (row-major)
-        got = self.tiles(keys, progress)
         fx -= tx0 * TILE
         fy -= ty0 * TILE
+        read = _tiles_read(fx, fy, nx, ny)
+        got = self.tiles([k for k, r in zip(keys, read) if r], progress)
         # (sampled from the tiles in place: a mosaic of them copied on every call cost ~2 s per 16 city road tiles)
         fast.require(76, "bilinear_tiles")
-        out[valid] = fast._ef.bilinear_tiles([np.asarray(got[k], np.float32) for k in keys], nx, TILE, fx, fy)
+        out[valid] = fast._ef.bilinear_tiles([np.asarray(got[k], np.float32) if r else _UNREAD
+                                              for k, r in zip(keys, read)], nx, TILE, fx, fy)
         return out.reshape(shape)

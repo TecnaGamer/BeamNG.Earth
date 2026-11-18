@@ -5,6 +5,7 @@ import os
 import sys
 import tempfile
 import shutil
+from contextlib import ExitStack
 from concurrent.futures import ThreadPoolExecutor
 from unittest import mock
 import unittest
@@ -12,11 +13,13 @@ import unittest
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 import netfetch  # noqa: E402
 import revisit  # noqa: E402
+import revisitpack  # noqa: E402
 
 
 class RevisitTest(unittest.TestCase):
     def test_an_item_comes_back_and_names_swap(self):
-        with tempfile.TemporaryDirectory() as d:
+        with tempfile.TemporaryDirectory() as d, ExitStack() as cleanup:
+            cleanup.callback(revisitpack.reset)  # close pack handles before removing the directory on Windows
             text = json.dumps({"road": {"shape": "/temp/s1/road_3_1_-2.cdae"},
                                "bld": {"shape": "/temp/s1/bld_3_1_-2.cdae"}}, separators=(",", ":"))
             self.assertEqual(revisit.shapes_in(text, "/temp/s1"), ["bld_3_1_-2.cdae", "road_3_1_-2.cdae"])
@@ -46,7 +49,8 @@ class RevisitTest(unittest.TestCase):
     def test_a_cells_road_facts_are_shared(self):
         import roads
         from test_roads import features
-        with tempfile.TemporaryDirectory() as d:
+        with tempfile.TemporaryDirectory() as d, ExitStack() as cleanup:
+            cleanup.callback(revisitpack.reset)
             old = revisit.CACHE_DIR
             revisit.CACHE_DIR = d
             try:
@@ -72,7 +76,8 @@ class RevisitTest(unittest.TestCase):
         """store(where=...) appends one line to this process's sidecar; compact() folds older files into one, the
         last line per item, without the items whose zip is gone; a file written after `before` stays as it is."""
         import time
-        with tempfile.TemporaryDirectory() as d:
+        with tempfile.TemporaryDirectory() as d, ExitStack() as cleanup:
+            cleanup.callback(revisitpack.reset)
             sig = revisit.sig(sidewalks=True, md={"overture": "2026-09-23.1"})
             ks = [revisit.key("roads", 39.28, -76.56, i) for i in range(3)]
             for i, k in enumerate(ks):

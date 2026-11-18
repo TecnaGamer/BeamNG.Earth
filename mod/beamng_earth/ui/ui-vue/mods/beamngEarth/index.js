@@ -13,6 +13,108 @@ import { lua } from "@/bridge"
 const TAB_ID = "beamngEarth"
 const MOD_ROOT = "/ui/ui-vue/mods/beamngEarth"
 const MAP_SOURCE = "beamngEarth.routes"
+// The mod loader may overlap async load/unload calls, including calls from different evaluated copies. Finish each
+// operation before starting the next, and let only the latest loaded copy unregister our shared UI sources.
+const LIFECYCLE = Symbol.for("beamngEarth.uiLifecycle")
+const LIFECYCLE_TIMEOUT_MS = 30_000
+const owner = {}
+let serversTab = null
+let pasteSupport = null
+let menuTile = null
+// A newer request makes the running operation's wait pointless (#1302): the game's UI mod loader runs again on every
+// UiModsChanged (BeamMP mounting/unmounting mods during a join) and awaits each mod's onUnload/onLoad in turn, so a load
+// stuck on a Lua reply or import that never comes held the next unload/load, and the whole UI, until the timeout.
+// A load no longer wanted (unloaded, or replaced by another load) and a running unload (its removals are already sent)
+// give way at once and end quietly; the newer request redoes what is needed.
+function supersede(lifecycle) {
+  const running = lifecycle.running
+  if (running && (running.label === "unload" || lifecycle.desired !== running.request)) {
+    running.stop(new Error(`BeamNG.Earth: UI ${running.label} superseded`), true)
+  }
+}
+// Our files gone (BeamMP unmounted this copy while the loader still lists it): a module request answered 404
+function missingFile(e) {
+  return /\b404\b/.test(String(e?.message ?? e))
+}
+function enqueue(label, operation) {
+  const lifecycle = window[LIFECYCLE] ||= { queue: Promise.resolve(), owner: null }
+  const request = { owner }
+  if (label === "load") lifecycle.desired = request
+  else if (lifecycle.desired?.owner === owner) lifecycle.desired = null
+  supersede(lifecycle)
+  const result = lifecycle.queue.then(async () => {
+    // superseded while queued: nothing to load
+    if (label === "load" && lifecycle.desired !== request) return
+    let expire
+    const expired = new Promise((_, reject) => { expire = reject })
+    const run = { active: true, expired, timedOut: false, retried: false, quiet: false,
+      error: new Error(`BeamNG.Earth: UI ${label} timed out after ${LIFECYCLE_TIMEOUT_MS} ms`) }
+    run.stop = (error, quiet) => {
+      if (!run.active) return
+      run.active = false
+      run.error = error
+      run.quiet = quiet
+      expire(error)
+    }
+    const entry = { label, request, stop: run.stop }
+    lifecycle.running = entry
+    run.onReply = () => {
+      // A backgrounded game can deliver a valid callback after the deadline. Retry the still-desired load
+      // from the beginning; never resume the expired continuation or revive an unloaded/replaced owner.
+      if (!run.timedOut || run.retried || lifecycle.desired !== request) return
+      run.retried = true
+      enqueue(label, operation).catch(e => console.error("BeamNG.Earth: UI recovery failed", e))
+    }
+    const timer = setTimeout(() => {
+      if (!run.active) return
+      run.timedOut = true
+      run.stop(run.error, false)
+    }, LIFECYCLE_TIMEOUT_MS)
+    try {
+      return await Promise.race([operation(lifecycle, run), expired])
+    } catch (e) {
+      if (run.quiet) {
+        if (run.gone) {
+          console.warn(`BeamNG.Earth: UI ${label} ended: ${run.gone}`)
+          // what this load registered before the missing file is rolled back now (its pages cannot open), on a
+          // context of its own (this run is over); the removals are sent at once, their replies are not awaited
+          if (label === "load" && lifecycle.owner === owner) {
+            lifecycle.owner = null
+            const cleanup = { active: true, expired: new Promise(() => {}), onReply() {}, error: null }
+            unloadUi(cleanup).catch(err => console.error("BeamNG.Earth: UI rollback failed", err))
+          }
+        }
+        return
+      }
+      throw e
+    } finally {
+      run.active = false
+      clearTimeout(timer)
+      if (lifecycle.running === entry) lifecycle.running = null
+    }
+  })
+  lifecycle.queue = result.catch(() => {}) // rejected or missing replies must not block later loads/cleanup
+  return result
+}
+function check(run) {
+  if (!run.active) throw run.error
+}
+async function step(run, action) {
+  check(run)
+  const pending = Promise.resolve(action())
+  pending.then(run.onReply, e => {
+    // a file of ours is gone: the rest would fail the same way (or register pages that cannot open); end quietly
+    if (missingFile(e) && run.active) {
+      run.gone = String(e?.message ?? e)
+      run.stop(new Error(`BeamNG.Earth: UI files not mounted (${run.gone})`), true)
+    }
+    run.onReply()
+  })
+  const result = await Promise.race([pending, run.expired])
+  // Timing out does not cancel a Lua command or import. Its late result must not resume stale UI work.
+  check(run)
+  return result
+}
 function mapRoutes(EarthMap, EarthWelcome, EarthSettings, EarthMap3d) {
   return [
   {
@@ -71,74 +173,133 @@ function toLuaRoutes(records) {
 }
 
 // The pause menu's BeamNG.Earth tab: the tab first (its buttons need it), then a side button per settings page
-async function registerPauseTab() {
+async function registerPauseTab(run) {
   try {
-    const store = await import("./earthSettingsStore.js")
-    await lua.extensions.ui_pause_actions.registerModTab({
+    const store = await step(run, () => import("./earthSettingsStore.js"))
+    await step(run, () => lua.extensions.ui_pause_actions.registerModTab({
       id: TAB_ID,
       label: "BeamNG.Earth",
       icon: "globe",
       card2ComponentName: `${MOD_ROOT}/EarthSettingsSide.vue`,
-    })
+    }))
     for (const [i, page] of store.settingsSchema.entries()) {
-      await lua.extensions.ui_pause_actions.registerModButton({
+      await step(run, () => lua.extensions.ui_pause_actions.registerModButton({
         id: store.pageId(page.name, i),
         tabId: TAB_ID,
         label: page.name,
         icon: store.PAGE_ICONS[page.name] || "cogOutline",
         componentName: `${MOD_ROOT}/EarthSettingsPage.vue`,
         props: { page: page.name },
-      })
+      }))
     }
   } catch (e) {
+    if (!run.active) throw e
     console.error("BeamNG.Earth: pause menu tab failed", e)
   }
 }
 
-async function registerMapRoute() {
+async function registerMapRoute(run) {
   try {
+    check(run)
     if (!window.bngRoutes || !lua.extensions.ui_router_routeManager) return
     // imported here, not at the top: a map that fails to compile must not cost the settings button
-    const routes = mapRoutes((await import("./EarthMap.vue")).default, (await import("./EarthWelcome.vue")).default,
-                             (await import("./EarthSettings.vue")).default, (await import("./EarthMap3d.vue")).default)
+    const routes = mapRoutes((await step(run, () => import("./EarthMap.vue"))).default,
+                             (await step(run, () => import("./EarthWelcome.vue"))).default,
+                             (await step(run, () => import("./EarthSettings.vue"))).default,
+                             (await step(run, () => import("./EarthMap3d.vue"))).default)
     window.bngRoutes.add([{ path: MAP_SOURCE, routes }])
-    const result = await lua.extensions.ui_router_routeManager.registerModRoutes(MAP_SOURCE, toLuaRoutes(routes))
+    const result = await step(run, () => lua.extensions.ui_router_routeManager.registerModRoutes(MAP_SOURCE, toLuaRoutes(routes)))
     if (!result?.success) {
       window.bngRoutes.remove([MAP_SOURCE])
       console.error("BeamNG.Earth: map route not registered", result?.errors)
     }
   } catch (e) {
+    if (!run.active) throw e
     console.error("BeamNG.Earth: map route failed", e)
   }
 }
 
-export async function onLoad() {
+async function loadUi(run) {
   // the old shared-Mods-tab button, if this UI session still has one (before the tab: its id is the first page's)
-  try { await lua.extensions.ui_pause_actions.unregisterModButton("beamngEarth-settings") } catch (e) { /* none */ }
-  await registerPauseTab()
+  try { await step(run, () => lua.extensions.ui_pause_actions.unregisterModButton("beamngEarth-settings")) }
+  catch (e) { if (!run.active) throw e /* otherwise no legacy button */ }
+  await registerPauseTab(run)
+  check(run)
+  // Ctrl+V in the mod's text boxes, through the engine's clipboard (paste.js: the game's browser has none of its own)
+  try {
+    const paste = await step(run, () => import("./paste.js"))
+    paste.installPaste()
+    pasteSupport = paste           // (removed through this at unload: no import then, our files may be gone)
+  } catch (e) { if (!run.active) throw e; console.error("BeamNG.Earth: paste support failed", e) }
   // tell the mod the page exists: its imgui window becomes a compact HUD (settings.lua)
   if (window.bngApi && window.bngApi.engineLua) {
     window.bngApi.engineLua("if beamngEarth_settings then beamngEarth_settings.setPageExists(true) end")
   }
   // an older version's map button, if this UI session still has one
-  try { await lua.extensions.ui_pause_actions.unregisterModButton("beamngEarth-map") } catch (e) { /* none */ }
-  await registerMapRoute()
+  try { await step(run, () => lua.extensions.ui_pause_actions.unregisterModButton("beamngEarth-map")) }
+  catch (e) { if (!run.active) throw e /* otherwise no legacy button */ }
+  await registerMapRoute(run)
   // the BeamNG.Earth servers tab in BeamMP's server browser (earthServers.js); its failure costs nothing else
-  try { (await import("./earthServers.js")).start() } catch (e) { console.error("BeamNG.Earth: servers tab failed", e) }
+  try {
+    serversTab = await step(run, () => import("./earthServers.js"))
+    serversTab.start()
+  } catch (e) {
+    if (!run.active) throw e
+    console.error("BeamNG.Earth: servers tab failed", e)
+  }
+  // BeamNG.Earth's tile in Quick-Start's place on the main menu (mainMenuTile.js); its failure costs nothing else
+  try {
+    menuTile = await step(run, () => import("./mainMenuTile.js"))
+    menuTile.startTile()
+  } catch (e) {
+    if (!run.active) throw e
+    console.error("BeamNG.Earth: main menu tile failed", e)
+  }
 }
 
-export async function onUnload() {
-  try { (await import("./earthServers.js")).stop() } catch (e) { /* never started */ }
-  await lua.extensions.ui_pause_actions.unregisterModTab(TAB_ID)       // (its buttons with it)
+async function unloadUi(run) {
+  check(run)
+  try { serversTab?.stop() } catch (e) { /* never started */ }
+  serversTab = null
+  try { menuTile?.stopTile() } catch (e) { /* never started */ }
+  menuTile = null
+  try { pasteSupport?.removePaste() } catch (e) { /* never installed */ }
+  pasteSupport = null
+  // Release local state first, and send both independent Lua removals without waiting on either callback.
+  // A missing pause-tab reply must not prevent route cleanup (or a later UI load).
   try {
     if (window.bngRoutes) window.bngRoutes.remove([MAP_SOURCE])
-    if (lua.extensions.ui_router_routeManager) {
-      await lua.extensions.ui_router_routeManager.unregisterModRoutes(MAP_SOURCE, { fallbackRoute: "play" })
-    }
-  } catch (e) {
-    console.error("BeamNG.Earth: map unload failed", e)
-  }
+  } catch (e) { console.error("BeamNG.Earth: map unload failed", e) }
   if (window.bngApi && window.bngApi.engineLua) {
     window.bngApi.engineLua("if beamngEarth_settings then beamngEarth_settings.setPageExists(false) end")
   }
+  const removals = [step(run, () => lua.extensions.ui_pause_actions.unregisterModTab(TAB_ID)).catch(e => {
+    if (!run.active) throw e
+    console.error("BeamNG.Earth: pause menu unload failed", e)
+  })]
+  if (lua.extensions.ui_router_routeManager) {
+    removals.push(step(run, () => lua.extensions.ui_router_routeManager.unregisterModRoutes(MAP_SOURCE, { fallbackRoute: "play" })).catch(e => {
+      if (!run.active) throw e
+      console.error("BeamNG.Earth: map unload failed", e)
+    }))
+  }
+  await Promise.all(removals)
+}
+
+export function onLoad() {
+  return enqueue("load", async (lifecycle, run) => {
+    // Retire the old browser before any awaited setup: a replacement that times out must not leave it alive.
+    const previousBrowser = window[Symbol.for("beamngEarth.servers")]
+    if (typeof previousBrowser === "function") previousBrowser()
+    lifecycle.owner = owner
+    await loadUi(run)
+  })
+}
+
+export function onUnload() {
+  return enqueue("unload", async (lifecycle, run) => {
+    if (lifecycle.owner !== owner) return
+    lifecycle.owner = null
+    await unloadUi(run)
+  })
 }

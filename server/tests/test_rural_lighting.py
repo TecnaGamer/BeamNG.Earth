@@ -42,16 +42,27 @@ class RuralLightingTest(unittest.TestCase):
         self.assertEqual(self.tile(f, cover), [])
         self.assertEqual(self.tile(f, cover, 1), [])
 
+    def test_wide_pavement_fringe_does_not_light_a_rural_freeway(self):
+        f, _ = self.corridor()
+        def cover(lat, lon):
+            _, n, _ = FRAME.geodetic_to_enu(np.asarray(lat), np.asarray(lon), 0.0)
+            # I-25 at the CO/WY border: WorldCover's built-up classification
+            # extends beyond the pavement and reaches the old 30 m probes.
+            return (abs(n - 50) < 45) | (abs(n - 80) < 45)
+        self.assertTrue(all(not sp.urban for sp in roads.road_specs(f, cover)))
+        self.assertEqual(self.tile(f, cover), [])
+        self.assertEqual(self.tile(f, cover, 1), [])
+
     def test_explicit_lighting_survives_rural_suppression(self):
         f, cover = self.corridor(tag="yes")
         self.assertTrue(self.tile(f, cover))
         self.assertTrue(self.tile(f, cover, 1))
 
-    def test_urban_and_interchange_lighting_remain(self):
+    def test_urban_lighting_remains_but_rural_ramps_need_evidence(self):
         self.assertTrue(self.tile(*self.corridor(urban=True)))
-        # a rural ramp is lit at its ends (furniture.PARTIAL_END_M, FHWA partial interchange lighting): the tile with
-        # its start at x = -300
         f, cover = self.corridor(link=True)
+        self.assertEqual(self.tile(f, cover, -2), [])
+        f, cover = self.corridor(link=True, tag="yes")
         self.assertTrue(self.tile(f, cover, -2))
 
     def test_explicit_unlit_overrides_urban_and_ramps(self):

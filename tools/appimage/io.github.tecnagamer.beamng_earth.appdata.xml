@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- AppStream metadata of the Linux AppImage. tools/build_app.py copies it to usr/share/metainfo/ in the AppDir.
+     appimagetool looks for <desktop file name>.appdata.xml there and, when appstreamcli is installed, runs
+     `appstreamcli validate-tree` on the AppDir: a warning fails that check and stops the build. So the component ID is
+     reverse-DNS (a plain "beamng-earth" warns), the file and the desktop file are named after it (a name that differs
+     from the ID warns), and the desktop file is also in usr/share/applications (missing there warns). Checked with
+     appstreamcli 0.15.2 (Ubuntu 22.04) and 1.0.5 (Debian 13); <developer> is the 1.0 form (0.15 only notes it). -->
+<component type="desktop-application">
+  <id>io.github.tecnagamer.beamng_earth</id>
+  <name>BeamNG.Earth</name>
+  <summary>Drive the real world in BeamNG.drive</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+  <developer id="io.github.tecnagamer">
+    <name>TecnaGamer</name>
+  </developer>
+  <description>
+    <p>
+      A 1:1 scale, streamed Earth for BeamNG.drive: drive anywhere on the planet on real elevation data and
+      satellite imagery, with roads, bridges, buildings and trees from open map data.
+    </p>
+    <p>
+      This app installs the BeamNG.Earth mod, starts the world server that builds the map around you as you drive,
+      and starts the game. It needs BeamNG.drive from Steam.
+    </p>
+  </description>
+  <launchable type="desktop-id">io.github.tecnagamer.beamng_earth.desktop</launchable>
+  <url type="homepage">https://github.com/TecnaGamer/BeamNG.Earth</url>
+  <url type="bugtracker">https://github.com/TecnaGamer/BeamNG.Earth/issues</url>
+  <categories>
+    <category>Game</category>
+  </categories>
+  <content_rating type="oars-1.1"/>
+</component>

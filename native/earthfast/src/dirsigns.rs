@@ -16,6 +16,7 @@
 //! is the straight one (the server scales it to a road's).
 //!
 //! Everything is a function of the data (sorted, hashed ties): the same board from every tile and anchor.
+use crate::dm::Dm;
 
 use std::collections::{HashMap, HashSet};
 
@@ -170,7 +171,7 @@ impl<'a> Places<'a> {
     /// away (min_d ..= max_d), not behind `heading`, within a cross-track of max(2.5 km, a quarter of the distance).
     fn ahead(&self, lon: f64, lat: f64, bearing: [f64; 2], heading: [f64; 2], cone: f64, min_d: f64, max_d: f64,
              used: &HashSet<usize>) -> Vec<Pick> {
-        let c = lat.to_radians().cos();
+        let c = lat.to_radians().dcos();
         let mut out = Vec::new();
         for i in 0..self.v.nrows() {
             if used.contains(&i) { continue; }
@@ -180,7 +181,7 @@ impl<'a> Places<'a> {
             let u = [dx / d, dy / d];
             if dot(u, heading) < BEHIND_COS { continue; }
             let cos = dot(u, bearing).clamp(-1.0, 1.0);
-            let off = cos.acos().to_degrees();
+            let off = cos.dacos().to_degrees();
             if off > cone { continue; }
             if d * (1.0 - cos * cos).sqrt() > 2500.0f64.max(0.25 * d) { continue; }
             out.push(Pick { idx: i, d, off });
@@ -191,7 +192,7 @@ impl<'a> Places<'a> {
 
 /// The compass-free angle of a unit vector (degrees counter-clockwise from east), 0..360.
 fn angle(v: [f64; 2]) -> f64 {
-    let a = v[1].atan2(v[0]).to_degrees();
+    let a = v[1].datan2(v[0]).to_degrees();
     if a < 0.0 { a + 360.0 } else { a }
 }
 
@@ -241,7 +242,7 @@ pub fn dirsign_place<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, ll: 
         let (a, b) = (off[r] as usize, off[r + 1] as usize);
         let mut s = vec![0.0f64; b.saturating_sub(a)];
         for k in a + 1..b {
-            s[k - a] = s[k - a - 1] + ((pts[[k, 0]] - pts[[k - 1, 0]]).powi(2) + (pts[[k, 1]] - pts[[k - 1, 1]]).powi(2)).sqrt();
+            s[k - a] = s[k - a - 1] + ((pts[[k, 0]] - pts[[k - 1, 0]]).sq() + (pts[[k, 1]] - pts[[k - 1, 1]]).sq()).sqrt();
         }
         net.roads.push(Road { a, b, s, hw: meta[[r, 0]], dir: meta[[r, 1]] as i64, rank: meta[[r, 2]] as i64,
                               urban: meta[[r, 3]] != 0.0, link: meta[[r, 4]] != 0.0 });
@@ -317,6 +318,7 @@ pub fn dirsign_place<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, ll: 
         b
     }).collect();
 
+    #[allow(clippy::disallowed_methods)] // hash order: collected, then sorted
     let mut nodes_sorted: Vec<i64> = at_node.keys().copied().collect();
     nodes_sorted.sort();
     let mut pend: Vec<Pending> = Vec::new();
@@ -431,7 +433,7 @@ pub fn dirsign_place<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, ll: 
             }
             let Some((q, t, road_xy)) = found else { continue };
             let gap = if rd.urban { URBAN_GAP_M } else { BOARD_GAP_M };
-            if placed.iter().any(|(p, d)| dot(*d, t) > SAME_WAY_COS && (p[0] - q[0]).powi(2) + (p[1] - q[1]).powi(2) < gap * gap) {
+            if placed.iter().any(|(p, d)| dot(*d, t) > SAME_WAY_COS && (p[0] - q[0]).sq() + (p[1] - q[1]).sq() < gap * gap) {
                 continue;
             }
             placed.push((q, t));
@@ -488,7 +490,7 @@ pub fn dirsign_place<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, ll: 
     let mut best: HashMap<(u64, i64, i64), u64> = HashMap::new();
     let cell_of = |p: &Pending| -> (i64, i64) {
         let dlat = repeat_m / M_PER_DEG;
-        let band = (p.jll[1].floor() + 0.5).to_radians().cos().max(0.05);
+        let band = (p.jll[1].floor() + 0.5).to_radians().dcos().max(0.05);
         ((p.jll[0] / (dlat / band)).floor() as i64, (p.jll[1] / dlat).floor() as i64)
     };
     if repeat_m > 0.0 {

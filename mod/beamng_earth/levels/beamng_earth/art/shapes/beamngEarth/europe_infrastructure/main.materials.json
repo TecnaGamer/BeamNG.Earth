@@ -158,7 +158,7 @@
         ],
         "metallicFactor": 0.0,
         "roughnessFactor": 0.85,
-        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/regional_poles/concrete_grain.png"
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/regional_poles/concrete_grain.dds"
       }
     ],
     "persistentId": "7984f1f1-cc99-5acb-a8e5-27cd384ca52a",
@@ -179,7 +179,7 @@
         ],
         "metallicFactor": 0.0,
         "roughnessFactor": 0.85,
-        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/fr_furniture/wood_grain.png"
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/fr_furniture/wood_grain.dds"
       }
     ],
     "persistentId": "4d87527e-faf4-59e6-a2e0-cea2efc66146",

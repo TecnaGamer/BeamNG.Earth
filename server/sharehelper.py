@@ -12,18 +12,20 @@ tools/bake_area.py does).
 
   python3 server/sharehelper.py --share-dir ~/BeamMP-Earth-Server/Resources/Server/BeamNGEarth --cache ~/.cache/bnge-helper --procs 4
 """
-import argparse
-import json
-import logging
-import math
-import multiprocessing
 import os
 import sys
-import time
-import zlib
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
+import npyguard  # noqa: E402,F401  (first: numpy's AVX-512 kernels held back before anything imports numpy)
+import argparse  # noqa: E402
+import json  # noqa: E402
+import logging  # noqa: E402
+import math  # noqa: E402
+import dmath  # noqa: E402
+import multiprocessing  # noqa: E402
+import time  # noqa: E402
+import zlib  # noqa: E402
 # (what it plans goes to other players: never with Hong Kong's measured heights or terrain, roadz.hk_cell)
 os.environ["BNE_ROADZ_HK"] = "off"
 os.environ["BNE_HKDTM"] = "off"
@@ -132,18 +134,18 @@ def wanted_cells(players, misses, code, have, sig=SIG):
 
     def dist(la, lo):
         return min(math.hypot((la - p["lat"]) * 111320.0,
-                              (lo - p["lon"]) * 111320.0 * math.cos(math.radians(p["lat"]))) for p in mine)
+                              (lo - p["lon"]) * 111320.0 * dmath.cos(math.radians(p["lat"]))) for p in mine)
     for p in mine:
         la, lo = p["lat"], p["lon"]
         centres = [(la, lo, RADIUS_M)]
         h = p.get("h")
         if isinstance(h, (int, float)):
             d = AHEAD_V * AHEAD_S
-            centres.append((la + d * math.cos(math.radians(h)) / 111320.0,
-                            lo + d * math.sin(math.radians(h)) / (111320.0 * max(math.cos(math.radians(la)), 0.01)),
+            centres.append((la + d * dmath.cos(math.radians(h)) / 111320.0,
+                            lo + d * dmath.sin(math.radians(h)) / (111320.0 * max(dmath.cos(math.radians(la)), 0.01)),
                             RADIUS_M * 0.6))
         for cl, cg, r in centres:
-            dl, dg = r / 111320.0, r / (111320.0 * max(math.cos(math.radians(cl)), 0.01))
+            dl, dg = r / 111320.0, r / (111320.0 * max(dmath.cos(math.radians(cl)), 0.01))
             for k in mapcells.cells_for_bbox(cl - dl, cg - dg, cl + dl, cg + dg, max_cells=800):
                 cell = (k.z, k.x, k.y)
                 if cell not in out and not have(cell):

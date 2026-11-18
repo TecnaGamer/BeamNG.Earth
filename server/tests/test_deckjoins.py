@@ -210,6 +210,47 @@ class GroundGapTest(unittest.TestCase):
 
 
 
+class JoinedAtTheEndTest(unittest.TestCase):
+    """The roads joined at a bridge's end node (the road going on, a side street through the node) are not roads
+    crossing under it: the bridge keeps its mapped range (earthfast levelrules END_EPS_M). The crossing's place along
+    the bridge and the bridge's end are the same number only to the last bit: 4 of these 60 bridges (glibc 2.44) took
+    a joined road for a crossing and grew up to 30 m (roads.SKEW_MAX_M) back along their road, which ones depending
+    on the C library's hypot (glibc 2.35 against 2.44: Vienna's S1 / Rautenweg built other decks on GitHub's Ubuntu
+    22.04 runner than on the PC, 2026-11-12)."""
+
+    def test_no_bridge_grows_over_a_road_joined_at_its_end(self):
+        import random
+        rnd = random.Random(11)
+        grown = []
+        for k in range(60):
+            line, x, y = [], rnd.uniform(-5, 5), -200.0
+            for _ in range(rnd.randint(4, 9)):
+                line.append((x, y))
+                x, y = x + rnd.uniform(-9, 9), y + rnd.uniform(20, 60)
+            end = line[-1]
+            on = [end, (end[0] + rnd.uniform(-6, 6), end[1] + rnd.uniform(40, 90))]
+            side = [(end[0] - rnd.uniform(30, 70), end[1] - rnd.uniform(-30, 30)), end,
+                    (end[0] + rnd.uniform(30, 70), end[1] + rnd.uniform(-30, 30))]
+            length = float(np.hypot(*np.diff(np.array(line), axis=0).T).sum())
+            f = features([line, on, side], ["secondary", "secondary", "residential"],
+                         flags=[(0, "is_bridge", round(1.0 - 12.0 / length, 6), 1.0)])    # (its last 12 m a bridge)
+            raw = roads.raw_level_ranges(f, 0)
+            got = roads._skew_decks(f, 0, list(raw))
+            self.assertEqual(len(got), 1)
+            if abs(got[0][0] - raw[0][0]) * length > 1e-3 or got[0][1:] != raw[0][1:]:
+                grown.append((k, raw, got))
+        self.assertEqual(grown, [])
+
+    def test_a_road_under_it_still_counts(self):
+        """... and a street crossing under the bridge 2 m before its end still lengthens it."""
+        line = [(0.0, -200.0), (3.0, -100.0), (1.0, 0.0)]
+        f = features([line, [(1.0, 0.0), (2.0, 80.0)], [(-60.0, -30.0), (60.0, 26.0)]],
+                     ["secondary", "secondary", "residential"], flags=[(0, "is_bridge", 0.94, 1.0)])
+        raw = roads.raw_level_ranges(f, 0)
+        got = roads._skew_decks(f, 0, list(raw))
+        self.assertLess(got[0][0], raw[0][0] - 0.01)
+
+
 @unittest.skipUnless(NATIVE, "earthfast 105")
 class PinnedJointTest(unittest.TestCase):
     """Two decks leaving a joint a street goes on from on the ground (Charles Street over I-83: the decks' joint is

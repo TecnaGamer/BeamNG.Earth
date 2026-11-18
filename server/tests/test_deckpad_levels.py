@@ -37,8 +37,27 @@ class DeckPadLevelsTest(unittest.TestCase):
             pads = self.pads(order)
             self.assertEqual(len(pads), 2)
             self.assertEqual(sorted(float(p[1][2]) for p in pads), [10.0, 20.0])
-            for ring, centre, _ in pads:
+            for ring, centre, *_ in pads:
                 np.testing.assert_allclose(ring[:, 2], centre[2], atol=1e-9)
+
+    @unittest.skipUnless(getattr(fast._ef, "VERSION", 0) >= 241, "earthfast 241 (pad_links)")
+    def test_joints_a_short_part_links_share_one_pad(self):
+        # a dual carriageway's two joints 12 m apart (a junction on a lid), a cross street through both: one pad, the
+        # hull of both joints' parts; with the link longer than PAD_MERGE_M, two
+        def deck(fid, a, b, z=10.0):
+            return (fid, SimpleNamespace(width=8.0), np.array([a, b], float), np.array([z, z]))
+        def decks(gap):
+            return [deck("x", [0.0, 0.0], [0.0, gap]), deck("w0", [0.0, 0.0], [-30.0, 0.0]),
+                    deck("e0", [0.0, 0.0], [30.0, 0.0]), deck("w1", [0.0, gap], [-30.0, gap]),
+                    deck("e1", [0.0, gap], [30.0, gap]), deck("s", [0.0, 0.0], [0.0, -30.0]),
+                    deck("n", [0.0, gap], [0.0, gap + 30.0])]
+        pads = self.pads(decks(12.0))
+        self.assertEqual(len(pads), 1)
+        ring, centre, _walls, joints = pads[0]
+        self.assertEqual(len(joints), 2)
+        np.testing.assert_allclose(centre[:2], [0.0, 6.0], atol=1e-9)
+        self.assertTrue(roads.pad_inside(pads, np.array([[6.0, 6.0]]))[0], "the median between the joints is paved")
+        self.assertEqual(len(self.pads(decks(30.0))), 2)
 
     def test_ground_endpoint_below_a_bridge_does_not_join_it(self):
         bridge = self.deck("bridge", [30.0, 0.0], 20.0)

@@ -9,6 +9,7 @@
 //! Each class keeps its tiles in a BTreeMap ordered by (z, x, y): a view's grid walks only the columns under the view
 //! at each zoom, so a query costs the tiles near the view, not the whole cache, and adding or removing a key is one
 //! map update (the cache's hook: new and removed keys only).
+use crate::dm::Dm;
 
 use std::collections::{BTreeMap, HashMap};
 
@@ -89,6 +90,7 @@ fn coverage(m: &Tiles, gz: u8, x0: u32, y0: u32, w: u32, h: u32, cov: &mut [f32]
             }
         } else {
             let s = (z - gz) as u32;
+            #[allow(clippy::disallowed_methods)] // powi: 0.25^s is exact (a power of two) whatever computes it
             let part = 0.25f32.powi(s as i32);
             let (tx0, tx1) = (x0 << s, ((x0 + w) << s) - 1);
             let (ty0, ty1) = (y0 << s, ((y0 + h) << s) - 1);
@@ -202,6 +204,7 @@ impl CoverIndex {
             let s = (CZ - gz) as u32;
             let mut nfull = vec![0u64; n];
             let mut nany = vec![0u64; n];
+            #[allow(clippy::iter_over_hash_type, clippy::disallowed_methods)] // hash order: integer counts per pixel
             for (&(x, y), &m) in masks.iter() {
                 let (i, j) = (((x as u64) >> s) - x0l, ((y as u64) >> s) - y0l);
                 let k = (j * wl + i) as usize;
@@ -343,7 +346,7 @@ pub fn tile_of(lat: f64, lon: f64, z: u8) -> (u32, u32) {
     let n = (1u64 << z) as f64;
     let lat = lat.clamp(-85.051_128_779_806_6, 85.051_128_779_806_6).to_radians();
     let x = ((lon + 180.0) / 360.0 * n).floor().clamp(0.0, n - 1.0);
-    let y = ((1.0 - lat.tan().asinh() / std::f64::consts::PI) / 2.0 * n).floor().clamp(0.0, n - 1.0);
+    let y = ((1.0 - lat.dtan().dasinh() / std::f64::consts::PI) / 2.0 * n).floor().clamp(0.0, n - 1.0);
     (x as u32, y as u32)
 }
 
@@ -354,7 +357,7 @@ pub fn rect_tiles(s: f64, w: f64, n: f64, e: f64) -> Vec<(u8, u32, u32)> {
         return vec![];
     }
     let span = ((e - w) / 360.0).max(1e-9);
-    let z = ((1.0 / span).log2().floor() as i64).clamp(6, 16) as u8;
+    let z = ((1.0 / span).dlog2().floor() as i64).clamp(6, 16) as u8;
     let (xa, ya) = tile_of(n, w, z);
     let (xb, yb) = tile_of(s, e, z);
     let mut out = Vec::new();

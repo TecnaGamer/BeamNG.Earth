@@ -16,7 +16,7 @@ except ImportError:         # no binary for this platform / Python: require() sa
     _ef = None
 
 AVAILABLE = _ef is not None
-MIN_VERSION = 210 # the newest kernel signature the server calls (earthd checks it at start)
+MIN_VERSION = 480 # the newest kernel signature the server calls (earthd checks it at start)
 
 
 class NativeMissing(RuntimeError):
@@ -31,6 +31,28 @@ def require(version, what):
         raise NativeMissing(f"{what} needs the server's native module (earthfast) version {version} or newer, "
                             f"{'none was loaded' if have is None else f'version {have} was'}: rebuild it with "
                             "python3 tools/build_native.py, or use a release build")
+
+
+class _Missing:
+    """In place of the module when it is missing or too old: every function raises NativeMissing when called (so that
+    importing a module that binds kernels at import time still works, e.g. in the launcher)."""
+
+    def __init__(self, version, what):
+        self.version, self.what = version, what
+
+    def __getattr__(self, name):
+        def missing(*_a, **_k):
+            require(self.version, f"{self.what} ({name})")
+        return missing
+
+
+def native(version, what):
+    """The native module when it is loaded at VERSION >= version, else a stand-in whose functions raise NativeMissing."""
+    try:
+        require(version, what)
+        return _ef
+    except NativeMissing:
+        return _Missing(version, what)
 
 
 def segments(lines_hw):
@@ -128,6 +150,45 @@ def proc_tree(root):
     return _ef.proc_tree(int(root))
 
 
+def ram_limit_mb(setting_gb, total_mb):
+    """The server's RAM limit in MB (2^20 bytes): the settings page's Max RAM in GB (0: Auto) on a machine with
+    total_mb of RAM (0: unknown); native membudget.rs."""
+    require(257, "ram_limit_mb")
+    return _ef.ram_limit_mb(float(setting_gb or 0.0), float(total_mb or 0.0))
+
+
+def ram_auto_mb(total_mb):
+    require(257, "ram_auto_mb")
+    return _ef.ram_auto_mb(float(total_mb or 0.0))
+
+
+def ram_tier(limit_mb):
+    """'emergency', 'lean', 'small' or 'desktop' for a limit (MB)."""
+    require(257, "ram_tier")
+    return _ef.ram_tier(float(limit_mb))
+
+
+def ram_desktop_sizes(limit_mb):
+    """(DEM tiles, map data MB, shed MB, rotate MB, road processes at most, far processes at most) of the desktop tier
+    for a limit (MB)."""
+    require(257, "ram_desktop_sizes")
+    return _ef.ram_desktop_sizes(float(limit_mb))
+
+
+def ram_effective_mb(limit_mb, total_mb, avail_mb, reserve_mb):
+    """The limit in force (MB): lowered while the system has less than reserve_mb available (avail < 0: unknown)."""
+    require(257, "ram_effective_mb")
+    return _ef.ram_effective_mb(float(limit_mb), float(total_mb), float(avail_mb), float(reserve_mb))
+
+
+def ram_watch(limit_mb, total_mb, avail_mb, reserve_mb, over_s, since_shed_s, since_rotate_s, pools):
+    """The memory watchdog's step: (action 'ok' / 'shed' / 'rotate' / 'wait', pool index, the limit in force MB);
+    pools: [(its largest process's MB, has a backlog)]."""
+    require(257, "ram_watch")
+    return _ef.ram_watch(float(limit_mb), float(total_mb), float(avail_mb), float(reserve_mb), float(over_s),
+                         float(since_shed_s), float(since_rotate_s), [(float(a), bool(b)) for a, b in pools])
+
+
 def md_html(text, base, fold_details=False):
     """(html, [url, ...]): an add-on's Markdown (README, release notes) as the Add-ons page's safe HTML (native
     mdhtml.rs: our own tags only, links as indexes into the URL list; addons.py)."""
@@ -205,7 +266,7 @@ def lane_parts(codes, feature, start, end, ids, idx, tags, ask):
 def rail_seam_couple(xy, z, half, rxy, rz, off, rh, reach, slope, tol, max_move, grade):
     """railroadseam.couple's native work (railseam.rs): the moved bed heights (n,), or None when nothing moved. The
     roads flattened: their points rxy (m, 2), heights rz (m,), road r = rows off[r]:off[r + 1], half widths rh."""
-    require(172, "rail_seam_couple")
+    require(283, "rail_seam_couple")     # (283: a vertex keeps to its own band after the run-out)
     return _ef.rail_seam_couple(np.ascontiguousarray(xy, np.float64), np.ascontiguousarray(z, np.float64), float(half),
                                 np.ascontiguousarray(rxy, np.float64), np.ascontiguousarray(rz, np.float64),
                                 np.ascontiguousarray(off, np.int64), np.ascontiguousarray(rh, np.float64), float(reach),

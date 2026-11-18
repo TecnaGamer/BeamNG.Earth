@@ -9,6 +9,17 @@ import geodesy as g  # noqa: E402
 
 
 class GeodesyTest(unittest.TestCase):
+    def test_wgs84_segment_lengths_for_linear_references(self):
+        ring = np.array([[0., 0.], [1., 0.], [1., 1.]])
+        lengths = g.segment_lengths(ring)
+        self.assertAlmostEqual(lengths[0], g.A * np.pi / 180., delta=1e-5)
+        self.assertAlmostEqual(lengths[1], 110574.3885578, delta=1e-5)
+        np.testing.assert_allclose(g.segment_lengths(ring[::-1]), lengths[::-1], atol=1e-5)
+        np.testing.assert_allclose(g.segment_lengths([[179., 0.], [-179., 0.]]),
+                                   [2 * g.A * np.pi / 180.], atol=1e-5)
+        np.testing.assert_array_equal(g.segment_lengths([[10., 48.], [10., 48.]]), [0.])
+        self.assertEqual(len(g.segment_lengths([[0., 0.]])), 0)
+
     def test_known_ecef(self):
         cases = [
             ((0, 0, 0), (g.A, 0, 0)),

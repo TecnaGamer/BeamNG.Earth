@@ -12,6 +12,7 @@ its track at the road's edge). Trams get all their ground track here; mapped tra
 import math
 
 import numpy as np
+import dnp
 
 import railxing
 
@@ -100,7 +101,7 @@ def _sleepers(xy, s, step, length, box, on_road):
         return []
     k = np.clip(np.searchsorted(s, at, side="right") - 1, 0, len(xy) - 2)
     d = xy[k + 1] - xy[k]
-    L = np.maximum(np.hypot(d[:, 0], d[:, 1]), 1e-9)
+    L = np.maximum(dnp.hypot(d[:, 0], d[:, 1]), 1e-9)
     t = d / L[:, None]
     c = xy[k] + t * (at - s[k])[:, None]
     inside = (c[:, 0] >= x0 - g) & (c[:, 0] <= x1 + g) & (c[:, 1] >= y0 - g) & (c[:, 1] <= y1 + g)
@@ -115,26 +116,27 @@ def _sleepers(xy, s, step, length, box, on_road):
 CROSS_WINDOW_M = 30.0           # m of track either side of where it crosses a carriageway's centre line (_crossing_windows)
 
 
-def _crossing_windows(xy, lines):
-    """The stretches of track xy (k, 2) within CROSS_WINDOW_M of where it crosses a carriageway centre line (lines),
-    overlapping ones joined: [(k, 2)]. Pure."""
+def _crossing_windows(xy, lines, extra=()):
+    """The stretches of track xy (k, 2) within CROSS_WINDOW_M of where it crosses a carriageway centre line (lines), and
+    the arc ranges extra [(a, b)] (railways.street_spans: where it runs down a street), overlapping ones joined:
+    [(k, 2)]. Pure."""
     import roads
     cr = roads._crossings([xy], lines) if lines else []
-    if not cr:
+    if not cr and not extra:
         return []
-    s = np.r_[0.0, np.cumsum(np.hypot(*np.diff(xy, axis=0).T))]
+    s = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(xy, axis=0).T))]
     spans = []
-    for arc in sorted(c[1] for c in cr):
-        a, b = max(0.0, arc - CROSS_WINDOW_M), min(float(s[-1]), arc + CROSS_WINDOW_M)
+    ranges = [(max(0.0, arc - CROSS_WINDOW_M), min(float(s[-1]), arc + CROSS_WINDOW_M)) for arc in (c[1] for c in cr)]
+    for a, b in sorted(ranges + [(float(a), float(b)) for a, b in extra]):
         if spans and a <= spans[-1][1]:
-            spans[-1][1] = b
+            spans[-1][1] = max(spans[-1][1], b)
         else:
             spans.append([a, b])
     out = []
     for a, b in spans:
         inner = xy[(s > a) & (s < b)]
-        out.append(np.vstack([[np.interp(a, s, xy[:, 0]), np.interp(a, s, xy[:, 1])], inner,
-                              [np.interp(b, s, xy[:, 0]), np.interp(b, s, xy[:, 1])]]))
+        out.append(np.vstack([[dnp.interp(a, s, xy[:, 0]), dnp.interp(a, s, xy[:, 1])], inner,
+                              [dnp.interp(b, s, xy[:, 0]), dnp.interp(b, s, xy[:, 1])]]))
     return out
 
 
@@ -159,15 +161,19 @@ def tram_lines(frame, tx, ty, cells):
     return out
 
 
-def tile_chunks(frame, tx, ty, cells, country=None, urban_fn=None):
+def tile_chunks(frame, tx, ty, cells, country=None, urban_fn=None, records=None):
     """The track chunks of road tile (tx, ty) (anchor frame): ballast, sleepers, then the rails (material order: the
     road mesh draws them in that order). cells: the roads Features of the cells touching the tile. Sweden (country),
-    in town (urban_fn, as road_specs): a tram beside a carriageway is street track on paving (GATUSPAR_M)."""
+    in town (urban_fn, as road_specs): a tram beside a carriageway is street track on paving (GATUSPAR_M).
+    records: railways.crossing_records of the tile (BNE_RAIL_ROAD_FIT): the level crossings of the 3D tracks then come
+    from them alone (crossing_decks: the deck from the track's last point before the crossing to its first after it,
+    the cut railways.tile_mesh makes from the same records), none from the carriageways here."""
     import railways
     import roads
     box = roads.tile_bbox(tx, ty)
     reach = max(t[0] for t in TRACK.values()) + MARGIN_M
     carriageways, town_ways, tracks, seen = {}, {}, [], set()
+    road_classes = {}
     sweden = str(country or "").upper() == "SE"
     llb = _lonlat_box(frame, box, reach + 20.0)
     for feats in cells:
@@ -206,45 +212,59 @@ def tile_chunks(frame, tx, ty, cells, country=None, urban_fn=None):
                     continue
                 if kind is None:
                     carriageways[(fid, k)] = (xy, specs[i].width / 2)
+                    road_classes[(fid, k)] = str(cls[i]).removesuffix("_link")
                     if sweden and specs[i].urban:
                         town_ways[(fid, k)] = carriageways[(fid, k)]
                 else:
-                    tracks.append((kind, xy, meshed))
-    if not tracks:
+                    tracks.append((kind, xy, meshed, got[1] if meshed else 0,
+                                   meshed and got[1] and railways.RAIL_LIFECYCLE and railways.heritage(feats, i)))
+    fit = railways.RAIL_ROAD_FIT and records is not None
+    if not tracks and not fit:
         return []
 
-    def on_road(pts):
-        return roads._on_carriageways(pts, carriageways, -ON_ROAD_INSET_M)
+    def on_road(pts, eligible):
+        return roads._on_carriageways(pts, eligible, -ON_ROAD_INSET_M)
 
     def in_street(pts):
         return roads._on_carriageways(pts, town_ways, GATUSPAR_M) if town_ways else np.zeros(len(pts), bool)
 
-    def no_sleeper(pts):
-        return on_road(pts) | in_street(pts)
+    def no_sleeper(pts, eligible):
+        return on_road(pts, eligible) | in_street(pts)
 
     ballast, sleepers, rails = [], [], []
-    cw_lines = [ln for ln, _hw in carriageways.values()]
     todo = []
-    for kind, xy, meshed in tracks:
+    for kind, xy, meshed, wear, kept in tracks:
+        if fit and meshed and kind in ("rail", "narrow"):
+            continue                    # (their crossings: the records', below)
+        # (a worn line's street track only across the roads its 3D track is not cut at: railways.WORN_CUT_CLASSES,
+        # #918; else its old bed came back as street rails across the motorway, wyo-backroads' PR #1117; a heritage
+        # line's railways.HERITAGE_CUT_CLASSES)
+        excluded = (railways.HERITAGE_CUT_CLASSES if kept else railways.WORN_CUT_CLASSES).get(wear, ())
+        eligible = {key: value for key, value in carriageways.items() if road_classes[key] not in excluded}
+        cw_lines = [ln for ln, _hw in eligible.values()]
         if meshed and kind != "tram":
             # (a main line's only street track is where it crosses a road: just those stretches, every metre of every
             # line in reach tested against every carriageway cost a tile ~0.1 s, 2026-10-25)
-            todo += [(kind, w, meshed) for w in _crossing_windows(xy, cw_lines)]
+            # (and where it runs down a street: railways.street_along cuts its 3D track there, Fells Point's trolley
+            # tracks down Thames Street, the user's report 16)
+            todo += [(kind, w, meshed, eligible)
+                     for w in _crossing_windows(xy, cw_lines, railways.street_spans(xy, list(eligible.values())))]
         else:
-            todo.append((kind, xy, meshed))
-    for kind, xy, meshed in todo:
+            todo.append((kind, xy, meshed, eligible))
+    for kind, xy, meshed, eligible in todo:
         bw, sl, sw, step = TRACK[kind]
         off = GAUGE_M[kind] / 2 + HEAD_M / 2
         full = roads.densify(xy, SAMPLE_M)
-        s = np.r_[0.0, np.cumsum(np.hypot(*np.diff(full, axis=0).T))]
-        for a, b in (() if meshed else _sleepers(full, s, step, sl, box, no_sleeper if kind == "tram" else on_road)):
+        s = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(full, axis=0).T))]
+        gap = (lambda q, e=eligible: no_sleeper(q, e)) if kind == "tram" else (lambda q, e=eligible: on_road(q, e))
+        for a, b in (() if meshed else _sleepers(full, s, step, sl, box, gap)):
             sleepers.append(_chunk(SLEEPER, sw, (a, b)))
         for piece in roads.clip_polyline(full, box[0] - MARGIN_M, box[1] - MARGIN_M, box[2] + MARGIN_M,
                                          box[3] + MARGIN_M):
             piece = roads.densify(piece, SAMPLE_M)
             if len(piece) < 2:
                 continue
-            for a, b, street in _runs(on_road(piece)):
+            for a, b, street in _runs(on_road(piece, eligible)):
                 run = piece[a:b + 1]
                 if len(run) < 2:
                     continue
@@ -273,4 +293,32 @@ def tile_chunks(frame, tx, ty, cells, country=None, urban_fn=None):
                     ballast.append(_chunk(BALLAST, bw, part))
                     for side in (off, -off):
                         rails.append(_chunk(RAIL, HEAD_M, roads.offset_polyline(part, side)))
+    if fit:
+        crossing_decks(records, box, sleepers, rails)
     return ballast + sleepers + rails
+
+
+def crossing_decks(records, box, sleepers, rails):
+    """railways.RAIL_ROAD_FIT: the level crossings of railways.crossing_records (railways.crossing_panels: from the 3D
+    track's last point before each crossing to its first after it) as chunks of the tile (box): with BNE_RAIL_XING the
+    rubber deck (into sleepers) and its two rails at the 3D track's gauge (into rails), else the street track decal;
+    each cut MARGIN_M past the tile box (the road mesh cuts them at it, the next tile lays the rest from its own records:
+    the same crossing)."""
+    import roads
+    for _fid, _cls, line, half_g in sorted(_panels(records), key=lambda e: (e[0], float(e[2][0, 0]), float(e[2][0, 1]))):
+        for piece in roads.clip_polyline(line, box[0] - MARGIN_M, box[1] - MARGIN_M, box[2] + MARGIN_M,
+                                         box[3] + MARGIN_M):
+            piece = roads.densify(piece, SAMPLE_M)[:, :2]
+            if len(piece) < 2:
+                continue
+            if railxing.ENABLED:
+                sleepers.append(_chunk(DECK, DECK_W, piece))
+                for side in (half_g, -half_g):
+                    rails.append(_chunk(RAIL, DECK_RAIL_W, roads.offset_polyline(piece, side)))
+            else:
+                rails.append(_chunk(STREET_TRACK, STREET_TRACK["w"], piece))
+
+
+def _panels(records):
+    import railways
+    return railways.crossing_panels(records)

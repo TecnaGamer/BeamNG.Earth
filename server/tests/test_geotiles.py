@@ -138,8 +138,8 @@ print(enc(out))
 
 @unittest.skipUnless(LUAJIT, "luajit")
 class LuaAgreementTest(unittest.TestCase):
-    """geotile.lua against earthfast's geotiles.rs: keys, centres, bounds and quad corners bit for bit; placements to
-    1e-9 (Lua's geodesy iterates its latitudes, the Rust is Heikkinen's closed form)."""
+    """geotile.lua against earthfast's geotiles.rs: keys bit for bit; centres and bounds to 1e-12 deg, quad corners
+    and placements to 1e-9 (Lua's geodesy iterates its latitudes, the Rust is Heikkinen's closed form)."""
 
     def test_agrees(self):
         rng = np.random.default_rng(7)
@@ -172,10 +172,15 @@ class LuaAgreementTest(unittest.TestCase):
         want_keys = [list(geotiles.tile_of(la, lo, z)) for la, lo, z in points]
         self.assertEqual(got["keys"], want_keys, "keys bit for bit")
         for (z, x, y), lt in zip(tiles, got["tiles"]):
-            self.assertEqual(lt, list(geotiles.info(x, y, z)), f"tile {z}/{x}/{y} centre and bounds bit for bit")
+            # (to 1e-12 deg: Web Mercator's inverse is the libm crate's atan / sinh in the server, the C library's in
+            # LuaJIT; the tile keys above stay bit for bit)
+            np.testing.assert_allclose(lt, list(geotiles.info(x, y, z)), rtol=0, atol=1e-12,
+                                       err_msg=f"tile {z}/{x}/{y} centre and bounds")
         for q, lq in zip(quads, got["quads"]):
             rq = geotiles.quad(geodesy.EnuFrame(q[0], q[1]), q[3], q[4], q[2]).ravel().tolist()
-            self.assertEqual(lq, rq, "quad corners bit for bit")
+            # (to 1e-9 m: the server's projection is the libm crate's maths on every platform, LuaJIT's the C
+            # library of the machine it runs on, GitHub #1169; the mod uses the corners for distances only)
+            np.testing.assert_allclose(lq, rq, rtol=0, atol=1e-9, err_msg="quad corners")
         for q, lp in zip(places, got["places"]):
             r, t, c = geotiles.placement(geodesy.EnuFrame(q[0], q[1]), geodesy.EnuFrame(q[2], q[3]), q[4:7])
             np.testing.assert_allclose(lp["r"], r.ravel(), atol=1e-12)

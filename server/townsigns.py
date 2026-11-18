@@ -11,6 +11,8 @@ import json
 import math
 from pathlib import Path
 import numpy as np
+import dmath
+import dnp
 from geotiles import box_owns
 import poleprofiles
 import signmesh
@@ -128,7 +130,7 @@ def bundled_europe():return EuropeanData()
 
 
 def bearing_vector(bearing):
-    a=math.radians(bearing);return np.array([math.sin(a),math.cos(a)])
+    a=math.radians(bearing);return np.array([dmath.sin(a),dmath.cos(a)])
 
 
 def entry_direction(record,road_tangent,towards_centre=None):
@@ -150,9 +152,9 @@ def entry_direction(record,road_tangent,towards_centre=None):
         except (ValueError,TypeError):pass
     if d is not None:
         return -d if record.get('kind')=='end' else d
-    if towards_centre is not None and np.linalg.norm(towards_centre)>30:
-        dot=float(road_tangent@towards_centre)
-        if abs(dot)/np.linalg.norm(towards_centre)>.15:return road_tangent*(1 if dot>0 else -1)
+    if towards_centre is not None and dnp.norm(towards_centre)>30:
+        dot=float(dnp.matmul(road_tangent, towards_centre))
+        if abs(dot)/dnp.norm(towards_centre)>.15:return road_tangent*(1 if dot>0 else -1)
     return None
 
 
@@ -162,7 +164,7 @@ def _nearest(point,roads,way=None,way_ids=None):
         if spec.cls not in CLASSES or spec.link or len(line)<2:continue
         a,b=np.asarray(line[:-1]),np.asarray(line[1:]);d=b[:,:2]-a[:,:2];l2=np.sum(d*d,axis=1)
         t=np.clip(np.sum((point-a[:,:2])*d,axis=1)/np.maximum(l2,1e-9),0,1)
-        proj=a+t[:,None]*(b-a);dist=np.linalg.norm(proj[:,:2]-point,axis=1);i=int(np.argmin(dist))
+        proj=a+t[:,None]*(b-a);dist=dnp.norm(proj[:,:2]-point,axis=1);i=int(np.argmin(dist))
         if dist[i]>40 or l2[i]<1e-6:continue
         # Prefer a matching source way, then distance and stable road id.
         rank=(0 if way and (way_ids or {}).get(fid)==way else 1,float(dist[i]),str(fid))
@@ -229,7 +231,7 @@ def place(frame,roads,box,profile,ground=None,urban=None,data=None,way_ids=None,
             if country=='DE':h=plan.top+.06
             if country=='FR' and signmesh.valid_route(s.get('ref','')):h=plan.top+.28
             posts.append(['fr_signpost',round(q[0],3),round(q[1],3),round(q[2],3),
-                          round(math.degrees(math.atan2(right[1],right[0])),2),1.,h,0.])
+                          round(math.degrees(dmath.atan2(right[1],right[0])),2),1.,h,0.])
         records.append({'id':s['id'],'name':s['name'],'source':source,'pos':p.tolist(),
                         'route':signmesh.valid_route(s.get('ref','')) if country=='FR' else '',
                         'country':country,'board_type':'built-up' if style is None else style.meaning,
@@ -313,20 +315,20 @@ def _estimated(frame,roads,box,urban,data,emit,country_at=None):
             if any(v is None for v in samples):continue
             flags=built(samples)
             if np.mean(flags[:8])>.25 or np.mean(flags[8:])<.65:continue
-            dist=np.linalg.norm(coords-point[:2],axis=1)
+            dist=dnp.norm(coords-point[:2],axis=1)
             if country_at is not None:
                 code=country_at(*point)
                 if code not in europeinfra.KITS:continue
                 dist=np.where([p.get('country',code)==code for p in places],dist,np.inf)
             k=int(np.argmin(dist))
-            if dist[k]>2200 or float((coords[k]-point[:2])@direction)<60:continue
+            if dist[k]>2200 or float(dnp.matmul(coords[k]-point[:2], direction))<60:continue
             place=places[k]
             # A perpendicular street's mapped entrance must not hide this one.
             def same_approach(sign,q,mapped_fid):
                 delta=q-point[:2]
                 return ((sign.get('place_id')==place['id'] or signmesh.clean(sign['name'])==signmesh.clean(place['name']))
-                        and ((mapped_fid==fid and np.linalg.norm(delta)<450)
-                             or (np.linalg.norm(delta)<240 and abs(delta[0]*direction[1]-delta[1]*direction[0])<45)))
+                        and ((mapped_fid==fid and dnp.norm(delta)<450)
+                             or (dnp.norm(delta)<240 and abs(delta[0]*direction[1]-delta[1]*direction[0])<45)))
             if any(same_approach(sign,q,mapped_fid) for sign,q,mapped_fid in mapped_xy):continue
             candidate={'id':'estimated:'+str(fid)+':'+str(round(station,1)),'name':place['name'],'kind':'both',
                        'country':place.get('country'),'place':place.get('place'),
@@ -334,7 +336,7 @@ def _estimated(frame,roads,box,urban,data,emit,country_at=None):
             candidates.append((str(fid),station,candidate,point,direction,spec))
     accepted=[]
     for fid,station,record,point,direction,spec in sorted(candidates,key=lambda v:(v[0],v[1])):
-        if any(name==record['name'] and np.linalg.norm(point[:2]-q[:2])<100 and float(direction@d)>.7
+        if any(name==record['name'] and dnp.norm(point[:2]-q[:2])<100 and float(dnp.matmul(direction, d))>.7
                for name,q,d in accepted):continue
         accepted.append((record['name'],point,direction))
         emit(record,point,direction,spec,'estimated')

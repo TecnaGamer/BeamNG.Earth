@@ -1,0 +1,897 @@
+{
+ "format": 2,
+ "states": {
+  "AK": {
+   "name": "Alaska",
+   "face": "faces/ak.dds",
+   "board": "photo",
+   "width_m": 5.8,
+   "height_m": 3.2,
+   "support": "timber",
+   "source_page": "https://commons.wikimedia.org/wiki/File:Welcome_to_Alaska_sign_on_the_Yukon_Highway.jpg",
+   "author": "Richard Martin",
+   "license": "CC BY 2.0",
+   "license_url": "https://creativecommons.org/licenses/by/2.0/",
+   "date": "2008-06-26 13:53"
+  },
+  "AL": {
+   "name": "Alabama",
+   "face": "faces/al.dds",
+   "board": "photo",
+   "width_m": 4.5,
+   "height_m": 3.6,
+   "support": "metal",
+   "source_page": "https://commons.wikimedia.org/wiki/File:Welcome_to_Sweet_Home_Alabama_(Jackson).jpg",
+   "author": "Oreocooke",
+   "license": "CC0",
+   "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+   "date": "2025-06-28 10:10:32"
+  },
+  "AR": {
+   "name": "Arkansas",
+   "face": "faces/ar.dds",
+   "board": "photo",
+   "width_m": 5.2,
+   "height_m": 3.7,
+   "support": "metal",
+   "source_page": "https://commons.wikimedia.org/wiki/File:St-Francis-Arkansas-welcome-sign-ar.jpg",
+   "author": "Brian Stansberry (photographer)",
+   "license": "CC BY 4.0",
+   "license_url": "https://creativecommons.org/licenses/by/4.0/",
+   "date": "2017-10-01"
+  },
+  "AZ": {
+   "name": "Arizona",
+   "face": null,
+   "board": "generic",
+   "why_generic": "AZ DOT Flickr photo: reuse terms not verified"
+  },
+  "CA": {
+   "name": "California",
+   "face": "faces/ca.dds",
+   "board": "photo",
+   "width_m": 4.8,
+   "height_m": 3.15,
+   "support": "metal",
+   "source_page": "https://commons.wikimedia.org/wiki/File:California-Inyo-Nevada_border_signs.jpg",
+   "author": "Mxn",
+   "license": "CC BY-SA 4.0",
+   "license_url": "https://creativecommons.org/licenses/by-sa/4.0/",
+   "date": "2026-01-10 14:18:24"
+  },
+  "CO": {
+   "name": "Colorado",
+   "face": "faces/co.dds",
+   "board": "photo",
+   "width_m": 3.048,
+   "height_m": 2.1336,
+   "support": "timber",
+   "shape": "zigzag",
+   "source_page": "https://commons.wikimedia.org/wiki/File:Colorful_Colorado_Near_Four_Corners_USA.jpg",
+   "author": "Flickr user: Sebastian Bergmann Siegburg, Germany http://sebastian-bergmann.de",
+   "license": "CC BY-SA 2.0",
+   "license_url": "https://creativecommons.org/licenses/by-sa/2.0/",
+   "date": ""
+  },
+  "CT": {
+   "name": "Connecticut",
+   "face": null,
+   "board": "generic",
+   "why_generic": "governor's press artwork: reuse terms not verified"
+  },
+  "DC": {
+   "name": "District of Columbia",
+   "face": null,
+   "board": "none"
+  },
+  "DE": {
+   "name": "Delaware",
+   "face": "faces/de.dds",
+   "board": "photo",
+   "width_m": 4.8,
+   "height_m": 2.75,
+   "support": "metal",
+   "source_page": "https://commons.wikimedia.org/wiki/File:2017-08-12_15_33_55_View_east_along_Delaware_State_Route_279_(Elkton_Road)_at_McIntire_Drive,_entering_Newark,_New_Castle_County,_Delaware_from_Iron_Hill,_Cecil_County,_Maryland.jpg",
+   "author": "Famartin",
+   "license": "CC BY-SA 4.0",
+   "license_url": "https://creativecommons.org/licenses/by-sa/4.0/",
+   "date": "2017-08-12 15:33:55"
+  },
+  "FL": {
+   "name": "Florida",
+   "face": null,
+   "board": "generic",
+   "why_generic": "FDOT press artwork: reuse terms not verified"
+  },
+  "GA": {
+   "name": "Georgia",
+   "face": "faces/ga.dds",
+   "board": "photo",
+   "width_m": 4.8,
+   "height_m": 3.25,
+   "support": "metal",
+   "source_page": "https://commons.wikimedia.org/wiki/File:GA94_WB,_Charlton_County,_Welcome_to_Georgia.jpg",
+   "author": "Mjrmtg",
+   "license": "CC BY 4.0",
+   "license_url": "https://creativecommons.org/licenses/by/4.0/",
+   "date": "2024-07-05 12:43:43"
+  },
+  "HI": {
+   "name": "Hawaii",
+   "face": null,
+   "board": "none"
+  },
+  "IA": {
+   "name": "Iowa",
+   "face": null,
+   "board": "generic",
+   "why_generic": "radio station web page image: reuse terms not verified"
+  },
+  "ID": {
+   "name": "Idaho",
+   "face": "faces/id.dds",
+   "board": "photo",
+   "width_m": 5.4,
+   "height_m": 2.9,
+   "support": "metal",
+   "source_page": "https://commons.wikimedia.org/wiki/File:Welcome_to_Idaho_(from_Utah)_on_1-15,_Aug_17.jpg",
+   "author": "An Errant Knight",
+   "license": "CC BY-SA 4.0",
+   "license_url": "https://creativecommons.org/licenses/by-sa/4.0/",
+   "date": "2017-08-20 13:52:20"
+  },
+  "IL": {
+   "name": "Illinois",
+   "face": "faces/il.dds",
+   "board": "photo",
+   "width_m": 5.4,
+   "height_m": 2.7,
+   "support": "metal",
+   "source_page": "https://commons.wikimedia.org/wiki/File:Welcome_to_Illinois_Sign_-_US67_Rock_Island_(44320554331).jpg",
+   "author": "formulanone from Huntsville, United States",
+   "license": "CC BY-SA 2.0",
+   "license_url": "https://creativecommons.org/licenses/by-sa/2.0/",
+   "date": "2016-06-24 14:58"
+  },
+  "IN": {
+   "name": "Indiana",
+   "face": null,
+   "board": "generic",
+   "why_generic": "INDOT press photo: reuse terms not verified"
+  },
+  "KS": {
+   "name": "Kansas",
+   "face": "faces/ks.dds",
+   "board": "photo",
+   "width_m": 6.0,
+   "height_m": 2.6,
+   "support": "metal",
+   "source_page": "https://commons.wikimedia.org/wiki/File:Welcome_to_Kansas_4892142218.jpg",
+   "author": "CGP Grey",
+   "license": "CC BY 2.0",
+   "license_url": "https://creativecommons.org/licenses/by/2.0/",
+   "date": "2009-08-06 17:09"
+  },
+  "KY": {
+   "name": "Kentucky",
+   "face": "faces/ky.dds",
+   "board": "photo",
+   "width_m": 6.0,
+   "height_m": 2.0,
+   "support": "metal",
+   "source_page": "https://commons.wikimedia.org/wiki/File:Welcome_to_Kentucky_-_October_2023_-_Sarah_Stierch.jpg",
+   "author": "Missvain",
+   "license": "CC BY 4.0",
+   "license_url": "https://creativecommons.org/licenses/by/4.0/",
+   "date": "Taken on 22 October 2023"
+  },
+  "LA": {
+   "name": "Louisiana",
+   "face": "faces/la.dds",
+   "board": "photo",
+   "width_m": 6.0,
+   "height_m": 2.8,
+   "support": "metal",
+   "source_page": "https://commons.wikimedia.org/wiki/File:Welcome_to_Louisiana_sign_Delta,_Louisiana_I-20.jpg",
+   "author": "Ktkvtsh",
+   "license": "CC BY 4.0",
+   "license_url": "https://creativecommons.org/licenses/by/4.0/",
+   "date": "2026-03-27 12:33:17"
+  },
+  "MA": {
+   "name": "Massachusetts",
+   "face": "faces/ma.dds",
+   "board": "photo",
+   "width_m": 2.4,
+   "height_m": 2.2,
+   "support": "metal",
+   "source_page": "https://commons.wikimedia.org/wiki/File:Welcome_to_Massachusetts,_MA_Route_96,_Douglas_MA.jpg",
+   "author": "John Phelan",
+   "license": "CC BY-SA 4.0",
+   "license_url": "https://creativecommons.org/licenses/by-sa/4.0/",
+   "date": "2017-05-27 14:03:38"
+  },
+  "MD": {
+   "name": "Maryland",
+   "face": "faces/md.dds",
+   "board": "photo",
+   "width_m": 4.8,
+   "height_m": 4.1,
+   "support": "metal",
+   "outline": [
+    [
+     0.0,
+     0.5075987841945289
+    ],
+    [
+     0.06459948320413436,
+     0.49544072948328266
+    ],
+    [
+     0.08785529715762273,
+     0.3434650455927052
+    ],
+    [
+     0.1421188630490956,
+     0.2188449848024316
+    ],
+    [
+     0.21963824289405684,
+     0.12462006079027356
+    ],
+    [
+     0.3152454780361757,
+     0.05167173252279635
+    ],
+    [
+     0.4186046511627907,
+     0.0060790273556231
+    ],
+    [
+     0.5322997416020672,
+     0.00303951367781155
+    ],
+    [
+     0.6408268733850129,
+     0.0364741641337386
+    ],
+    [
+     0.7260981912144703,
+     0.0911854103343465
+    ],
+    [
+     0.7932816537467701,
+     0.18541033434650456
+    ],
+    [
+     0.8397932816537468,
+     0.2917933130699088
+    ],
+    [
+     0.8630490956072352,
+     0.3860182370820669
+    ],
+    [
+     0.9534883720930233,
+     0.3708206686930091
+    ],
+    [
+     0.9974160206718347,
+     0.9483282674772037
+    ],
+    [
+     0.0,
+     1.0
+    ]
+   ],
+   "post_top": 0.55,
+   "source_page": "https://commons.wikimedia.org/wiki/File:2021-08-07_14_08_56_Welcome_to_Maryland_sign_along_westbound_U.S._Route_50_(George_Washington_Highway)_just_before_crossing_the_Gorman-Gormania_Bridge_over_North_Branch_Potomac_River_from_Gormania,_West_Virginia_to_Gorman,_Maryland.jpg",
+   "author": "Famartin",
+   "license": "CC BY-SA 4.0",
+   "license_url": "https://creativecommons.org/licenses/by-sa/4.0/",
+   "date": "2021-08-07 14:08:56"
+  },
+  "ME": {
+   "name": "Maine",
+   "face": null,
+   "board": "generic",
+   "why_generic": "Maine Turnpike photo: reuse terms not verified"
+  },
+  "MI": {
+   "name": "Michigan",
+   "face": "faces/mi.dds",
+   "board": "photo",
+   "width_m": 6.0,
+   "height_m": 2.05,
+   "support": "metal",
+   "source_page": "https://commons.wikimedia.org/wiki/File:I-94_EB_at_Indiana-Michigan_state_line_(October_2021).jpg",
+   "author": "AlphaBeta135",
+   "license": "CC BY 4.0",
+   "license_url": "https://creativecommons.org/licenses/by/4.0/",
+   "date": "Taken on 16 October 2021, 09:04:48"
+  },
+  "MN": {
+   "name": "Minnesota",
+   "face": "faces/mn.dds",
+   "board": "photo",
+   "width_m": 5.4,
+   "height_m": 2.7,
+   "support": "metal",
+   "outline": [
+    [
+     0.08,
+     0
+    ],
+    [
+     0.92,
+     0
+    ],
+    [
+     1,
+     0.1
+    ],
+    [
+     1,
+     0.9
+    ],
+    [
+     0.92,
+     1
+    ],
+    [
+     0.08,
+     1
+    ],
+    [
+     0,
+     0.9
+    ],
+    [
+     0,
+     0.1
+    ]
+   ],
+   "source_page": "https://commons.wikimedia.org/wiki/File:Welcome_to_Minnesota_-_Grand_Portage_Border_Crossing_(51608094292).jpg",
+   "author": "Tony Webster",
+   "license": "CC BY 2.0",
+   "license_url": "https://creativecommons.org/licenses/by/2.0/",
+   "date": "2021-10-19 08:22"
+  },
+  "MO": {
+   "name": "Missouri",
+   "face": "faces/mo.dds",
+   "board": "photo",
+   "width_m": 5.8,
+   "height_m": 3.3,
+   "support": "metal",
+   "source_page": "https://commons.wikimedia.org/wiki/File:Missouri_Welcomes_You_sign_I-155_2013-05-11_001.jpg",
+   "author": "Thomas R Machnitzki (thomasmachnitzki.com)",
+   "license": "CC BY 3.0",
+   "license_url": "https://creativecommons.org/licenses/by/3.0/",
+   "date": "2013-05-11"
+  },
+  "MS": {
+   "name": "Mississippi",
+   "face": "faces/ms.dds",
+   "board": "photo",
+   "width_m": 6.0,
+   "height_m": 3.1,
+   "support": "metal",
+   "source_page": "https://commons.wikimedia.org/wiki/File:Welcome_to_Mississippi_sign.jpg",
+   "author": "Quintin Soloviev",
+   "license": "CC BY 4.0",
+   "license_url": "https://creativecommons.org/licenses/by/4.0/",
+   "date": ""
+  },
+  "MT": {
+   "name": "Montana",
+   "face": null,
+   "board": "generic",
+   "why_generic": "governor's press artwork: reuse terms not verified"
+  },
+  "NC": {
+   "name": "North Carolina",
+   "face": "faces/nc.dds",
+   "board": "photo",
+   "width_m": 5.4,
+   "height_m": 2.7,
+   "support": "metal",
+   "source_page": "https://commons.wikimedia.org/wiki/File:Welcome_To_The_State.jpg",
+   "author": "idkdkak",
+   "license": "CC BY-SA 4.0",
+   "license_url": "https://creativecommons.org/licenses/by-sa/4.0/",
+   "date": "2022-01-14"
+  },
+  "ND": {
+   "name": "North Dakota",
+   "face": null,
+   "board": "generic",
+   "why_generic": "NDDOT press artwork: reuse terms not verified"
+  },
+  "NE": {
+   "name": "Nebraska",
+   "face": "faces/ne.dds",
+   "board": "photo",
+   "width_m": 6.0,
+   "height_m": 2.8,
+   "support": "metal",
+   "source_page": "https://commons.wikimedia.org/wiki/File:Nebraska_-_The_Good_Life_-_State_of_Nebraska_Welcome_Sign_(29992583177).jpg",
+   "author": "Tony Webster from Minneapolis, Minnesota, United States",
+   "license": "CC BY 2.0",
+   "license_url": "https://creativecommons.org/licenses/by/2.0/",
+   "date": "2018-09-22 09:56"
+  },
+  "NH": {
+   "name": "New Hampshire",
+   "face": null,
+   "board": "generic",
+   "why_generic": "state artwork marked public domain only through a PD-MUTCD claim (not an MUTCD design)"
+  },
+  "NJ": {
+   "name": "New Jersey",
+   "face": null,
+   "board": "generic",
+   "why_generic": "public domain photo, but the face is ~120 px wide: unreadable"
+  },
+  "NM": {
+   "name": "New Mexico",
+   "face": "faces/nm.dds",
+   "board": "photo",
+   "width_m": 6.0,
+   "height_m": 2.65,
+   "support": "metal",
+   "source_page": "https://commons.wikimedia.org/wiki/File:2016-03-21_10_04_58_%22Welcome_to_New_Mexico%22_sign_along_eastbound_Interstate_40_entering_McKinley_County,_New_Mexico_from_Apache_County,_Arizona.jpg",
+   "author": "Famartin",
+   "license": "CC BY-SA 4.0",
+   "license_url": "https://creativecommons.org/licenses/by-sa/4.0/",
+   "date": "2016-03-21 10:04:58"
+  },
+  "NV": {
+   "name": "Nevada",
+   "face": "faces/nv.dds",
+   "board": "photo",
+   "width_m": 4.8,
+   "height_m": 3.2,
+   "support": "metal",
+   "source_page": "https://commons.wikimedia.org/wiki/File:2015-11-04_14_16_38_%22Welcome_to_Nevada%22_sign_along_southbound_Interstate_15_entering_Clark_County,_Nevada_from_Mohave_County,_Arizona.jpg",
+   "author": "Famartin",
+   "license": "CC BY-SA 4.0",
+   "license_url": "https://creativecommons.org/licenses/by-sa/4.0/",
+   "date": "2015-11-04 14:16:38"
+  },
+  "NY": {
+   "name": "New York",
+   "face": "faces/ny.dds",
+   "board": "photo",
+   "width_m": 6.0,
+   "height_m": 3.9,
+   "support": "metal",
+   "source_page": "https://commons.wikimedia.org/wiki/File:2015-08-20_13_20_10_%22Welcome_to_New_York%22_and_%22Governor_Thomas_E_Dewey_Thruway%22_signs_along_northbound_Interstate_287_and_State_Route_17_entering_Hillburn,_New_York_from_Mahwah,_New_Jersey.jpg",
+   "author": "Famartin",
+   "license": "CC BY-SA 4.0",
+   "license_url": "https://creativecommons.org/licenses/by-sa/4.0/",
+   "date": "2015-08-20 13:20:10"
+  },
+  "OH": {
+   "name": "Ohio",
+   "face": null,
+   "board": "generic",
+   "why_generic": "ODOT drawing tagged as a US trademark; public domain claim through the Ohio MUTCD supplement"
+  },
+  "OK": {
+   "name": "Oklahoma",
+   "face": null,
+   "board": "generic",
+   "why_generic": "ODOT press artwork: reuse terms not verified"
+  },
+  "OR": {
+   "name": "Oregon",
+   "face": "faces/or.dds",
+   "board": "photo",
+   "width_m": 4.0,
+   "height_m": 3.76,
+   "support": "monument",
+   "outline": [
+    [
+     0.0,
+     0.7613488975356679
+    ],
+    [
+     0.03170731707317073,
+     0.6433203631647212
+    ],
+    [
+     0.05,
+     0.556420233463035
+    ],
+    [
+     0.06951219512195123,
+     0.3657587548638132
+    ],
+    [
+     0.07682926829268293,
+     0.08171206225680934
+    ],
+    [
+     0.08170731707317073,
+     0.028534370946822308
+    ],
+    [
+     0.11097560975609756,
+     0.010376134889753566
+    ],
+    [
+     0.1524390243902439,
+     0.0
+    ],
+    [
+     0.17804878048780487,
+     0.014267185473411154
+    ],
+    [
+     0.2280487804878049,
+     0.011673151750972763
+    ],
+    [
+     0.27682926829268295,
+     0.04539559014267185
+    ],
+    [
+     0.3097560975609756,
+     0.08949416342412451
+    ],
+    [
+     0.32682926829268294,
+     0.1582360570687419
+    ],
+    [
+     0.34512195121951217,
+     0.16472114137483787
+    ],
+    [
+     0.39878048780487807,
+     0.14526588845654995
+    ],
+    [
+     0.44390243902439025,
+     0.14526588845654995
+    ],
+    [
+     0.4926829268292683,
+     0.1608300907911803
+    ],
+    [
+     0.5378048780487805,
+     0.14785992217898833
+    ],
+    [
+     0.6219512195121951,
+     0.12840466926070038
+    ],
+    [
+     0.7,
+     0.10894941634241245
+    ],
+    [
+     0.7475609756097561,
+     0.11154345006485085
+    ],
+    [
+     0.7951219512195122,
+     0.12062256809338522
+    ],
+    [
+     0.8646341463414634,
+     0.11932555123216602
+    ],
+    [
+     0.9024390243902439,
+     0.12321660181582361
+    ],
+    [
+     0.9365853658536586,
+     0.1543450064850843
+    ],
+    [
+     0.9548780487804878,
+     0.19455252918287938
+    ],
+    [
+     0.9926829268292683,
+     0.2438391699092088
+    ],
+    [
+     0.975609756097561,
+     0.2905317769130999
+    ],
+    [
+     0.9707317073170731,
+     0.3942931258106355
+    ],
+    [
+     0.947560975609756,
+     0.44487678339818415
+    ],
+    [
+     0.9365853658536586,
+     0.496757457846952
+    ],
+    [
+     0.9597560975609756,
+     0.5123216601815823
+    ],
+    [
+     0.9707317073170731,
+     0.5512321660181583
+    ],
+    [
+     0.9646341463414634,
+     0.6044098573281452
+    ],
+    [
+     0.9780487804878049,
+     0.7367055771725033
+    ],
+    [
+     0.9890243902439024,
+     0.8793774319066148
+    ],
+    [
+     0.9951219512195122,
+     0.9494163424124513
+    ],
+    [
+     0.9804878048780488,
+     0.9844357976653697
+    ],
+    [
+     0.9573170731707317,
+     0.9987029831387808
+    ],
+    [
+     0.11585365853658537,
+     1.0
+    ],
+    [
+     0.07560975609756097,
+     0.9831387808041504
+    ],
+    [
+     0.0524390243902439,
+     0.9351491569390402
+    ],
+    [
+     0.01951219512195122,
+     0.8469520103761349
+    ],
+    [
+     0.014634146341463415,
+     0.814526588845655
+    ],
+    [
+     0.0024390243902439024,
+     0.7821011673151751
+    ]
+   ],
+   "source_page": "https://commons.wikimedia.org/wiki/File:Welcome_to_Oregon_sign_I-5_northbound_2025.jpg",
+   "author": "PortlandAppraisalBlog",
+   "license": "CC BY-SA 4.0",
+   "license_url": "https://creativecommons.org/licenses/by-sa/4.0/",
+   "date": "2025-11-10 15:19:24"
+  },
+  "PA": {
+   "name": "Pennsylvania",
+   "face": "faces/pa.dds",
+   "board": "photo",
+   "width_m": 6.0,
+   "height_m": 3.1,
+   "support": "metal",
+   "source_page": "https://commons.wikimedia.org/wiki/File:I-70_wb_Pennsylvania_welcome_sign,_Aug._2024.jpg",
+   "author": "Mr. Matt?",
+   "license": "CC BY-SA 4.0",
+   "license_url": "https://creativecommons.org/licenses/by-sa/4.0/",
+   "date": ""
+  },
+  "RI": {
+   "name": "Rhode Island",
+   "face": "faces/ri.dds",
+   "board": "photo",
+   "width_m": 3.4,
+   "height_m": 3.5,
+   "support": "metal",
+   "inscription_aliases": [
+    "Discover Beautiful Rhode Island"
+   ],
+   "source_page": "https://commons.wikimedia.org/wiki/File:20180524_-_25_-_Tiverton,_RI.jpg",
+   "author": "Andre Carrotflower",
+   "license": "CC BY-SA 4.0",
+   "license_url": "https://creativecommons.org/licenses/by-sa/4.0/",
+   "date": "2018-05-24"
+  },
+  "SC": {
+   "name": "South Carolina",
+   "face": "faces/sc.dds",
+   "board": "photo",
+   "width_m": 5.8,
+   "height_m": 1.5,
+   "support": "metal",
+   "source_page": "https://commons.wikimedia.org/wiki/File:South_Carolina_I95nb_Welcome.jpg",
+   "author": "Michael Rivera",
+   "license": "CC BY-SA 4.0",
+   "license_url": "https://creativecommons.org/licenses/by-sa/4.0/",
+   "date": "2019-06-07 15:09:37"
+  },
+  "SD": {
+   "name": "South Dakota",
+   "face": "faces/sd.dds",
+   "board": "photo",
+   "width_m": 5.4,
+   "height_m": 2.7,
+   "support": "metal",
+   "source_page": "https://commons.wikimedia.org/wiki/File:South_Dakota_Sandhills.JPG",
+   "author": "Jeffrey Beall",
+   "license": "CC BY 4.0",
+   "license_url": "https://creativecommons.org/licenses/by/4.0/",
+   "date": "2020-07-27"
+  },
+  "TN": {
+   "name": "Tennessee",
+   "face": null,
+   "board": "generic",
+   "why_generic": "TDOT press artwork: reuse terms not verified"
+  },
+  "TX": {
+   "name": "Texas",
+   "face": "faces/tx.dds",
+   "board": "photo",
+   "width_m": 5.4,
+   "height_m": 3.6,
+   "support": "metal",
+   "source_page": "https://commons.wikimedia.org/wiki/File:Welcome_to_Texas_sign.jpg",
+   "author": "Eden Aviv",
+   "license": "CC0",
+   "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+   "date": "2023-08-01 12:02:09"
+  },
+  "UT": {
+   "name": "Utah",
+   "face": "faces/ut.dds",
+   "board": "photo",
+   "width_m": 6.0,
+   "height_m": 3.0,
+   "support": "metal",
+   "source_page": "https://commons.wikimedia.org/wiki/File:Welcome_to_Utah_sign_(US_40),_Sep_17.jpg",
+   "author": "An Errant Knight",
+   "license": "CC BY-SA 4.0",
+   "license_url": "https://creativecommons.org/licenses/by-sa/4.0/",
+   "date": "2017-09-18 15:32:17"
+  },
+  "VA": {
+   "name": "Virginia",
+   "face": "faces/va.dds",
+   "board": "photo",
+   "width_m": 6.0,
+   "height_m": 2.8,
+   "support": "metal",
+   "source_page": "https://commons.wikimedia.org/wiki/File:2017-06-12_15_45_41_%27Welcome_to_Virginia%27_sign_along_eastbound_U.S._Route_58_(Wilderness_Road)_entering_Lee_County,_Virginia_from_Claiborne_County,_Tennessee_crop.jpg",
+   "author": "User:Famartin",
+   "license": "CC BY-SA 4.0",
+   "license_url": "https://creativecommons.org/licenses/by-sa/4.0/",
+   "date": "2017-06-12 15:45:41"
+  },
+  "VT": {
+   "name": "Vermont",
+   "face": null,
+   "board": "generic",
+   "why_generic": "state artwork marked public domain only through a PD-MUTCD claim (not an MUTCD design)"
+  },
+  "WA": {
+   "name": "Washington",
+   "face": "faces/wa.dds",
+   "board": "photo",
+   "width_m": 4.8,
+   "height_m": 3.3,
+   "support": "metal",
+   "source_page": "https://commons.wikimedia.org/wiki/File:Welcome_to_Washington,_Interstate_82_Near_Umatilla,_Oregon_(265659312).jpg",
+   "author": "Ken Lund from Reno, Nevada, USA",
+   "license": "CC BY-SA 2.0",
+   "license_url": "https://creativecommons.org/licenses/by-sa/2.0/",
+   "date": "2006-10-06 11:46"
+  },
+  "WI": {
+   "name": "Wisconsin",
+   "face": "faces/wi.dds",
+   "board": "photo",
+   "width_m": 2.4,
+   "height_m": 3.8,
+   "support": "timber",
+   "outline": [
+    [
+     0.037914691943127965,
+     0.005571030640668524
+    ],
+    [
+     0.3933649289099526,
+     0.04735376044568245
+    ],
+    [
+     0.5165876777251185,
+     0.027855153203342618
+    ],
+    [
+     0.6161137440758294,
+     0.04178272980501393
+    ],
+    [
+     0.7440758293838863,
+     0.14484679665738162
+    ],
+    [
+     0.8388625592417062,
+     0.27019498607242337
+    ],
+    [
+     0.8341232227488151,
+     0.32590529247910865
+    ],
+    [
+     0.95260663507109,
+     0.41225626740947074
+    ],
+    [
+     0.909952606635071,
+     0.5515320334261838
+    ],
+    [
+     0.7962085308056872,
+     0.7019498607242339
+    ],
+    [
+     0.7582938388625592,
+     0.9972144846796658
+    ],
+    [
+     0.26540284360189575,
+     0.9860724233983287
+    ],
+    [
+     0.08056872037914692,
+     0.6908077994428969
+    ],
+    [
+     0.037914691943127965,
+     0.362116991643454
+    ],
+    [
+     0.0,
+     0.22562674094707522
+    ]
+   ],
+   "clearance_m": 1.0,
+   "source_page": "https://commons.wikimedia.org/wiki/File:Wisconsin_Welcomes_You.jpg",
+   "author": "HelgaVonSlapya",
+   "license": "CC BY-SA 4.0",
+   "license_url": "https://creativecommons.org/licenses/by-sa/4.0/",
+   "date": "2018-06-16 19:45:48"
+  },
+  "WV": {
+   "name": "West Virginia",
+   "face": "faces/wv.dds",
+   "board": "photo",
+   "width_m": 5.4,
+   "height_m": 1.6,
+   "support": "metal",
+   "source_page": "https://commons.wikimedia.org/wiki/File:Welcome_to_West_Virginia_sign_(May_2021).jpg",
+   "author": "Sean Dudley",
+   "license": "CC0",
+   "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+   "date": "2021-05-24"
+  },
+  "WY": {
+   "name": "Wyoming",
+   "face": null,
+   "board": "generic",
+   "why_generic": "WYDOT artwork via a news site: reuse terms not verified"
+  }
+ }
+}

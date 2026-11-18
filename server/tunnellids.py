@@ -27,6 +27,8 @@ import threading
 from collections import OrderedDict
 
 import numpy as np
+import dmath
+import dnp
 
 ON = os.environ.get("BNE_TUNNEL_LIDS", "off").lower() in ("1", "on", "true")
 
@@ -46,13 +48,13 @@ M_LAT = 111320.0
 def _resample(xy, step):
     """(xy, s): the polyline xy every ~step m (its vertices' arc lengths s). Pure."""
     xy = np.asarray(xy, np.float64)
-    d = np.hypot(*np.diff(xy, axis=0).T)
+    d = dnp.hypot(*np.diff(xy, axis=0).T)
     s0 = np.r_[0.0, np.cumsum(d)]
     if s0[-1] <= 0:
         return xy[:1], np.zeros(1)
     n = max(1, int(math.ceil(s0[-1] / step)))
     s = np.linspace(0.0, s0[-1], n + 1)
-    return np.c_[np.interp(s, s0, xy[:, 0]), np.interp(s, s0, xy[:, 1])], s
+    return np.c_[dnp.interp(s, s0, xy[:, 0]), dnp.interp(s, s0, xy[:, 1])], s
 
 
 def _cross(a, b, p, q):
@@ -71,8 +73,8 @@ def _cross(a, b, p, q):
 
 def _crossings(T, R):
     """[(s along T, s along R, sine of the angle)] where the polylines T and R cross. Pure."""
-    sT = np.r_[0.0, np.cumsum(np.hypot(*np.diff(T, axis=0).T))]
-    sR = np.r_[0.0, np.cumsum(np.hypot(*np.diff(R, axis=0).T))]
+    sT = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(T, axis=0).T))]
+    sR = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(R, axis=0).T))]
     out = []
     lo, hi = T.min(axis=0), T.max(axis=0)
     for j in range(len(R) - 1):
@@ -85,7 +87,7 @@ def _crossings(T, R):
                 continue
             t, u = got
             a, b = T[i + 1] - T[i], q - p
-            la, lb = np.hypot(*a), np.hypot(*b)
+            la, lb = dnp.hypot(*a), dnp.hypot(*b)
             if la <= 0 or lb <= 0:
                 continue
             sin = abs(a[0] * b[1] - a[1] * b[0]) / (la * lb)
@@ -99,16 +101,16 @@ def _along(R, s0, ds, reach):
     """Points of the polyline R from arc length s0 on in direction ds (+1 / -1) every LID_STEP_M up to reach, carried
     on straight past its end (a road ending at a junction short of the bank goes on there): (points (k, 2), their
     distances from s0). Pure."""
-    sR = np.r_[0.0, np.cumsum(np.hypot(*np.diff(R, axis=0).T))]
+    sR = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(R, axis=0).T))]
     d = np.arange(0.0, reach + 1e-9, LID_STEP_M)
     s = s0 + ds * d
-    pts = np.c_[np.interp(s, sR, R[:, 0]), np.interp(s, sR, R[:, 1])]
+    pts = np.c_[dnp.interp(s, sR, R[:, 0]), dnp.interp(s, sR, R[:, 1])]
     past = (s < 0.0) | (s > sR[-1])
     if past.any():
         end = 0 if ds < 0 else len(R) - 1
         nb = 1 if ds < 0 else len(R) - 2
         u = R[end] - R[nb]
-        n = np.hypot(*u)
+        n = dnp.hypot(*u)
         if n > 0:
             u = u / n
             over = np.where(s < 0.0, -s, s - sR[-1])[past]
@@ -140,7 +142,7 @@ def lids_of(tunnels, roads, z_at):
             for s_t, s_r, sin in _crossings(T, R):
                 if sin < TUNNEL_ROAD_MIN_SIN:
                     continue
-                f = float(np.interp(s_t, sT, floor))
+                f = float(dnp.interp(s_t, sT, floor))
                 ends = []
                 for ds in (-1.0, 1.0):
                     pts, d = _along(R, s_r, ds, LID_REACH_M)
@@ -170,7 +172,7 @@ def lids_of(tunnels, roads, z_at):
             seg = T[m]
             mid = len(seg) // 2
             u = seg[min(mid + 1, len(seg) - 1)] - seg[max(mid - 1, 0)]
-            n = np.hypot(*u)
+            n = dnp.hypot(*u)
             if n <= 0:
                 continue
             nrm = np.array([-u[1], u[0]]) / n
@@ -178,7 +180,7 @@ def lids_of(tunnels, roads, z_at):
             for side in (-1.0, 1.0):
                 pts = seg[mid] + side * (thw + np.asarray(LID_BANK_M))[:, None] * nrm
                 banks.append(float(np.median(np.asarray(z_at(pts), np.float64))))
-            fm = float(np.interp(0.5 * (s1 + s2), sT, floor))
+            fm = float(dnp.interp(0.5 * (s1 + s2), sT, floor))
             if min(banks) < fm + TUNNEL_OPEN_COVER:
                 continue
             zj = min(min(banks), z1, z2)
@@ -202,9 +204,9 @@ def lid_z(lids, x, y):
         for i in range(len(xy) - 1):
             a, b = xy[i], xy[i + 1]
             ab = b - a
-            L2 = float(ab @ ab)
+            L2 = float(dnp.matmul(ab, ab))
             t = np.zeros(px.shape) if L2 <= 0 else np.clip(((px - a[0]) * ab[0] + (py - a[1]) * ab[1]) / L2, 0, 1)
-            d = np.hypot(px - (a[0] + t * ab[0]), py - (a[1] + t * ab[1]))
+            d = dnp.hypot(px - (a[0] + t * ab[0]), py - (a[1] + t * ab[1]))
             nz = z[i] + t * (z[i + 1] - z[i])
             w = d < best
             best = np.where(w, d, best)
@@ -250,7 +252,7 @@ class Lids:
         import roads as roadsmod
         lon0, lat0, lon1, lat1 = key.bounds()
         la0, lo0 = 0.5 * (lat0 + lat1), 0.5 * (lon0 + lon1)
-        k = M_LAT * math.cos(math.radians(la0))
+        k = M_LAT * dmath.cos(math.radians(la0))
         feats = self._feats(key)
         if feats is None or not len(feats):
             return la0, lo0, []
@@ -286,14 +288,14 @@ class Lids:
         zz = z_a.ravel().copy()
         pad = (LID_REACH_M + 20.0) / M_LAT
         try:
-            keys = mapcells.cells_for_points(la_, lo_, pad, pad / max(0.05, math.cos(math.radians(float(la_.mean())))))
+            keys = mapcells.cells_for_points(la_, lo_, pad, pad / max(0.05, dmath.cos(math.radians(float(la_.mean())))))
         except Exception:
             return z
         for key in keys:
             lat0, lon0, lids = self._cell(key)
             if not lids:
                 continue
-            k = M_LAT * math.cos(math.radians(lat0))
+            k = M_LAT * dmath.cos(math.radians(lat0))
             got = lid_z(lids, (lo_ - lon0) * k, (la_ - lat0) * M_LAT)
             zz = np.where(np.isnan(got), zz, np.fmax(zz, got))
         return zz.reshape(shape) if shape else zz.reshape(())[()]

@@ -13,7 +13,11 @@ import json
 import logging
 import math
 
+import threading
+
 import numpy as np
+import dmath
+import dnp
 
 import mapcells
 import mapgeom
@@ -110,7 +114,7 @@ def is_shelter(feats, i):
 
 def _yaw(dx, dy):
     """Degrees that turn a Forest item's local +x toward (dx, dy)."""
-    return math.degrees(math.atan2(dy, dx)) % 360.0
+    return math.degrees(dmath.atan2(dy, dx)) % 360.0
 
 
 def _side(fid):
@@ -136,7 +140,7 @@ def _area(ring):
     if len(ring) < 3:
         return 0.0
     x, y = ring[:, 0], ring[:, 1]
-    return abs(float(np.dot(x, np.roll(y, -1)) - np.dot(y, np.roll(x, -1)))) * 0.5
+    return abs(float(dnp.dot(x, np.roll(y, -1)) - dnp.dot(y, np.roll(x, -1)))) * 0.5
 
 
 def _spot(feats, frame, i):
@@ -171,11 +175,11 @@ def _closest(roads, x, y):
         half = float(getattr(spec, "width", 0.0) or 0.0) * 0.5
         a, b = pts[:-1, :2], pts[1:, :2]
         ab = b - a
-        ab2 = np.maximum(ab[:, 0] ** 2 + ab[:, 1] ** 2, 1e-9)
+        ab2 = np.maximum(ab[:, 0] * ab[:, 0] + ab[:, 1] * ab[:, 1], 1e-9)
         t = np.clip(((px - a[:, 0]) * ab[:, 0] + (py - a[:, 1]) * ab[:, 1]) / ab2, 0.0, 1.0)
         cx = a[:, 0] + t * ab[:, 0]
         cy = a[:, 1] + t * ab[:, 1]
-        d = np.hypot(cx - px, cy - py)
+        d = dnp.hypot(cx - px, cy - py)
         k = int(np.argmin(d))
         edge = float(d[k]) - half
         if best is None or edge < best[0]:
@@ -192,7 +196,7 @@ def _posts(ox, oy, yaw, d=None):
     """The (4, 2) corners of a shelter's footprint (d: its Shelter, East Coast's when None): its posts."""
     d = d or ECU
     rad = math.radians(yaw)
-    ux, uy, vx, vy = math.cos(rad), math.sin(rad), -math.sin(rad), math.cos(rad)
+    ux, uy, vx, vy = dmath.cos(rad), dmath.sin(rad), -dmath.sin(rad), dmath.cos(rad)
     return np.array([[ox + sx * ux + sy * vx, oy + sx * uy + sy * vy]
                      for sx in (-d.front, d.back) for sy in (-d.half, d.half)], np.float64)
 
@@ -201,57 +205,55 @@ def _body_points(ox, oy, yaw, d=None):
     """The (9, 2) points of a shelter's footprint: corners, edge middles and centre."""
     d = d or ECU
     rad = math.radians(yaw)
-    ux, uy, vx, vy = math.cos(rad), math.sin(rad), -math.sin(rad), math.cos(rad)
+    ux, uy, vx, vy = dmath.cos(rad), dmath.sin(rad), -dmath.sin(rad), dmath.cos(rad)
     return np.array([[ox + sx * ux + sy * vx, oy + sx * uy + sy * vy]
                      for sx in (-d.front, (d.back - d.front) / 2.0, d.back) for sy in (-d.half, 0.0, d.half)],
                     np.float64)
 
 
-def _intrusion(ox, oy, yaw, roads, d=None):
-    """m the deepest point of the shelter's body is inside any carriageway (0 when none is)."""
-    worst = 0.0
-    pts9 = _body_points(ox, oy, yaw, d)
+_pack_memo = threading.local()
+
+
+def _packed(roads):
+    """(centre lines (N, 2) one after another, offsets (R + 1), half widths (R)) of the carriageways roads (build_tile's
+    (fid, spec, centreline (k, 3), lon)) for the native tests; the last list's kept per thread (a tile's shelters all
+    ask with the same one)."""
+    got = getattr(_pack_memo, "v", None)
+    if got is not None and got[0] is roads:
+        return got[1]
+    lines, halves = [], []
     for item in roads or ():
-        spec, pts = item[1], np.asarray(item[2], np.float64)
-        if len(pts) < 2:
-            continue
-        half = float(getattr(spec, "width", 0.0) or 0.0) * 0.5
-        a, b = pts[:-1, :2], pts[1:, :2]
-        ab = b - a
-        ab2 = np.maximum((ab * ab).sum(1), 1e-9)
-        for p in pts9:
-            t = np.clip(((p - a) * ab).sum(1) / ab2, 0.0, 1.0)
-            dist = np.hypot(*(p - (a + t[:, None] * ab)).T)
-            worst = max(worst, half - float(dist.min()))
-    return worst
+        pts = np.asarray(item[2], np.float64)
+        lines.append(pts[:, :2] if pts.ndim == 2 else pts.reshape(-1, 2))
+        halves.append(float(getattr(item[1], "width", 0.0) or 0.0) * 0.5)
+    off = np.zeros(len(lines) + 1, np.int64)
+    np.cumsum([len(ln) for ln in lines], out=off[1:])
+    xy = np.ascontiguousarray(np.concatenate(lines) if lines else np.zeros((0, 2)), np.float64)
+    packed = (xy, off, np.array(halves, np.float64))
+    _pack_memo.v = (roads, packed)
+    return packed
+
+
+def _intrusion(ox, oy, yaw, roads, d=None):
+    """m the deepest point of the shelter's body is inside any carriageway (0 when none is): earthfast
+    shelter_intrusion, each of its 9 points against each road's centre line."""
+    import fast
+    fast.require(235, "shelter_intrusion")
+    return fast._ef.shelter_intrusion(_body_points(ox, oy, yaw, d), *_packed(roads))
 
 
 def _clear_of_roads(ox, oy, yaw, roads, d=None):
-    """(x, y) of a shelter moved straight off every carriageway a post stands on or within POST_PAD_M of."""
+    """(x, y) of a shelter moved straight off every carriageway a post stands on or within POST_PAD_M of: each pass the
+    deepest post (earthfast shelter_worst_post) moved off its road's centre line, away from it on the shelter's side."""
+    import fast
+    fast.require(235, "shelter_worst_post")
+    packed = _packed(roads)
     for _ in range(CLEAR_PASSES):
-        worst = None
-        for item in roads or ():
-            spec, pts = item[1], np.asarray(item[2], np.float64)
-            if len(pts) < 2:
-                continue
-            half = float(getattr(spec, "width", 0.0) or 0.0) * 0.5
-            a, b = pts[:-1, :2], pts[1:, :2]
-            ab = b - a
-            ab2 = np.maximum((ab * ab).sum(1), 1e-9)
-            for p in _posts(ox, oy, yaw, d):
-                t = np.clip(((p - a) * ab).sum(1) / ab2, 0.0, 1.0)
-                foot = a + t[:, None] * ab
-                dist = np.hypot(*(p - foot).T)
-                k = int(np.argmin(dist))
-                short = half + POST_PAD_M - float(dist[k])
-                if short > 1e-3 and (worst is None or short > worst[0]):
-                    # (off the road's own centre line: the shelter's centre says which side it is on)
-                    n = np.array([ox, oy]) - foot[k]
-                    worst = (short, n / max(float(np.hypot(*n)), 1e-6))
+        worst = fast._ef.shelter_worst_post(_posts(ox, oy, yaw, d), float(ox), float(oy), *packed, float(POST_PAD_M))
         if worst is None:
             break
-        ox += float(worst[1][0]) * worst[0]
-        oy += float(worst[1][1]) * worst[0]
+        ox += float(worst[1]) * worst[0]
+        oy += float(worst[2]) * worst[0]
     return ox, oy
 
 
@@ -271,7 +273,7 @@ def _rail_short(ox, oy, yaw, rails, d=None):
         ab2 = np.maximum((ab * ab).sum(1), 1e-9)
         for p in _posts(ox, oy, yaw, d):
             t = np.clip(((p - a) * ab).sum(1) / ab2, 0.0, 1.0)
-            dist = float(np.hypot(*(p - (a + t[:, None] * ab)).T).min())
+            dist = float(dnp.hypot(*(p - (a + t[:, None] * ab)).T).min())
             worst = max(worst, float(item[1]) + POST_PAD_M - dist)
     return worst
 
@@ -283,7 +285,7 @@ def _clear_of_rails(ox, oy, yaw, roads, rails, d=None):
     if not rails or _rail_short(ox, oy, yaw, rails, d) <= 1e-3:
         return ox, oy
     rad = math.radians(yaw)
-    vx, vy = -math.sin(rad), math.cos(rad)             # local +y: along the curb
+    vx, vy = -dmath.sin(rad), dmath.cos(rad)             # local +y: along the curb
     for s in RAIL_SLIDES_M[1:]:
         cx, cy = _clear_of_roads(ox + s * vx, oy + s * vy, yaw, roads, d)
         if _rail_short(cx, cy, yaw, rails, d) <= 1e-3:
@@ -343,7 +345,7 @@ def _base_heights(frame, elev, xy, yaw, d=None):
     left the posts of a shelter on a bank hanging in the air; the lowest point sets the base on the ground and
     buries the uphill posts in the bank instead."""
     rad = np.radians(yaw)
-    ux, uy = np.cos(rad), np.sin(rad)           # local +x (away from the road)
+    ux, uy = dnp.cos(rad), dnp.sin(rad)           # local +x (away from the road)
     vx, vy = -uy, ux                            # local +y (along the curb)
     n = len(xy)
     px = [xy[:, 0]]

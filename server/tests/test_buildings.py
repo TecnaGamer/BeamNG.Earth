@@ -401,6 +401,203 @@ class SplitTest(unittest.TestCase):
             self.assertEqual(len(shape["meshes"]), 2)
 
 
+def _round(x, y, r=15.0, n=48):
+    a = np.linspace(0, 2 * np.pi, n, endpoint=False)
+    return np.stack([x + r * np.cos(a), y + r * np.sin(a)], 1)
+
+
+def _dense_items(count=40, corners=48):
+    """Round towers (~2k lite vertices each): 40 of them are past the 16-bit indices in one mesh."""
+    return [(bld.plan(_round((i % 8) * 40.0, (i // 8) * 40.0, n=corners), {"class": "", "height": 30, "num_floors": 10}),
+             0.0, 0.0) for i in range(count)]
+
+
+def _shape_meshes(path):
+    return [cdae.mesh_arrays(m) for m in cdae.read(path)["meshes"] if m["type"] == 0]
+
+
+class FarIndexLimitTest(unittest.TestCase):
+    """Players' "spiderweb" reports (2026-11-14): long thin triangles from buildings across the scene in dense cities.
+    The far building tiles and packs were one mesh of build(items, lite=True): a Manhattan pack 705k vertices, a far
+    tile 80k, past the engine's 16-bit indices. Every shape's mesh stays under them (several meshes in one shape)."""
+
+    def check(self, path, items):
+        ms = _shape_meshes(path)
+        self.assertTrue(all(len(m["verts"]) <= 65535 for m in ms), [len(m["verts"]) for m in ms])
+        self.assertGreater(len(ms), 1)
+        self.assertTrue(all(int(m["indices"].max()) < len(m["verts"]) for m in ms))
+        lite = bld.build(items, lite=True)
+        self.assertEqual(sum(len(m["indices"]) // 3 for m in ms), len(lite[2]), "every building drawn")
+
+    def test_far_tile(self):
+        items = _dense_items()
+        self.assertGreater(len(bld.build(items, lite=True)[0]), 65535)
+        with tempfile.TemporaryDirectory() as d, \
+                mock.patch.object(bld, "far_items", return_value=(items, [], (0.0, 0.0, 256.0, 256.0))):
+            vfs, n = bld.far_tile(None, 0, 0, None, None, d, "/x", "a")
+            self.assertEqual(n, len(items))
+            self.check(os.path.join(d, "bldfar_a_0_0.cdae"), items)
+
+    def test_far_geotile_and_pack(self):
+        import blockworker
+        import geotiles
+        items = _dense_items()
+        for kind in ("bldfar", "bldpack"):
+            z = blockworker.far_geo_zoom(kind)
+            tile = geotiles.geobox(*geotiles.tile_of(40.758, -73.985, z), z)
+            with tempfile.TemporaryDirectory() as d, \
+                    mock.patch.object(blockworker, "_far_cells_ready", return_value=True), \
+                    mock.patch.object(blockworker, "_s", mock.Mock(md=None, widths=None, surface=None)), \
+                    mock.patch.object(bld, "far_items", return_value=(items, [], tile.box)), \
+                    mock.patch.object(bld, "PACK_STYLE", "lite"):      # (the lite mesh: past the 16-bit indices)
+                data, shapes, n = blockworker._far_geo_build(kind, tile, 15, d, "/x", None)
+                self.assertEqual(n, len(items))
+                self.check(os.path.join(d, shapes["shape"]), items)
+        self.assertEqual(bld.PACK_STYLE, "sky", "the packs as the skyline's walls by default")
+
+    def test_skyline_meshes_cut_between_buildings(self):
+        items = _dense_items(120, corners=200)     # (~1k skyline vertices each)
+        meshes = bld._sky_mesh(items)
+        self.assertGreater(len(meshes), 1)
+        self.assertTrue(all(len(m[0]) <= bld.MAX_MESH_VERTS for m in meshes))
+        with tempfile.TemporaryDirectory() as d:
+            bld.write(os.path.join(d, "s.cdae"), meshes)
+            ms = _shape_meshes(os.path.join(d, "s.cdae"))
+        self.assertEqual([len(m["verts"]) for m in ms], [len(m[0]) for m in meshes])
+        self.assertEqual(sum(len(m["indices"]) for m in ms), sum(3 * len(m[2]) for m in meshes))
+        (one,) = bld._sky_mesh(items[:3])
+        self.assertLess(len(one[0]), bld.MAX_MESH_VERTS, "a small skyline stays one mesh")
+
+    def test_watertight_skyline_cut_by_its_closed_vertices(self):
+        """BNE_WATERTIGHT: closing adds each building's caps after the cut (Codex review of b2b87e51: 2900 boxes fit
+        sky_items' 60000-vertex estimate open, past 65535 closed, and the whole skyline was dropped)."""
+        import shells
+        items = [(bld.plan(rect((i % 60) * 25.0, (i // 60) * 25.0, 12, 10), {"class": "", "height": 12}), 0.0, 0.0)
+                 for i in range(2900)]
+        (opened,) = bld._sky_mesh(items)
+        self.assertLessEqual(len(opened[0]), bld.MAX_MESH_VERTS)
+        with mock.patch.object(shells, "ON", True), mock.patch.dict(bld.over_limit, {"buildings": 0}):
+            meshes = bld._sky_mesh(items)
+            self.assertIsNotNone(meshes)
+            self.assertGreater(sum(len(m[0]) for m in meshes), 65535, "(the case: past the indices once closed)")
+            self.assertTrue(all(len(m[0]) <= 65535 for m in meshes), [len(m[0]) for m in meshes])
+            self.assertEqual(bld.over_limit["buildings"], 0)
+            self.assertEqual(sum(len(m[2]) for m in meshes), len(shells.close(
+                *[np.asarray(a) for a in (opened[0], opened[2], opened[3])], (opened[1], opened[5]), skirt=False)[1]))
+
+    def test_watertight_far_tile(self):
+        """build_parts counts each building closed (build closes it) before its cut: the far tile under the indices."""
+        import shells
+        items = _dense_items()
+        with mock.patch.object(shells, "ON", True), tempfile.TemporaryDirectory() as d, \
+                mock.patch.object(bld, "far_items", return_value=(items, [], (0.0, 0.0, 256.0, 256.0))):
+            bld.far_tile(None, 0, 0, None, None, d, "/x", "a")
+            self.check(os.path.join(d, "bldfar_a_0_0.cdae"), items)
+
+    def test_a_building_past_the_indices_is_left_out(self):
+        items = _dense_items(3)
+        n1 = len(bld.build(items[:1], lite=True)[0])
+        with mock.patch.object(bld, "VERTS_MAX", n1 - 1), mock.patch.dict(bld.over_limit, {"buildings": 0}):
+            self.assertEqual(bld.build_parts(items, lite=True), [])
+            self.assertEqual(bld.over_limit["buildings"], 3)
+
+
+class PackStyleTest(unittest.TestCase):
+    """BNE_FARPACK_STYLE (2026-11-14): the far packs as the skyline's walls with day windows; the engine's shape load
+    grows with the vertices (Midtown's pack 728k lite: 86.5 ms on Windows DX11, 35k sky: 6.4 ms)."""
+
+    def items(self):
+        tall = [(bld.plan(rect((i % 6) * 40.0, (i // 6) * 40.0, 24, 18), {"class": "office", "height": 120,
+                                                                         "num_floors": 30}), 0.0, 0.0)
+                for i in range(12)]
+        low = [(bld.plan(rect(300.0 + i * 12.0, 0.0, 10, 8), {"class": "house", "height": 7, "num_floors": 2}),
+                0.0, 0.0) for i in range(6)]
+        return tall + low
+
+    def verts(self, meshes):
+        return sum(len(m[0]) for m in meshes)
+
+    def test_lite_is_build_parts(self):
+        items = self.items()
+        a, b = bld.pack_meshes(items, "lite"), bld.build_parts(items, lite=True)
+        self.assertEqual(len(a), len(b))
+        for x, y in zip(a, b):
+            np.testing.assert_array_equal(x[0], y[0])
+
+    def test_sky_fewer_vertices_day_windows(self):
+        items = self.items()
+        floors = [int(s.floors or 0) for s, _a, _b in items]
+        lite = self.verts(bld.pack_meshes(items, "lite"))
+        sky = bld.pack_meshes(items, "sky")
+        self.assertLess(self.verts(sky), lite / 3)
+        day = bld.MATERIALS.index(bld.SKY_WALL_DAY)
+        self.assertTrue(any((np.asarray(m[3]) == day).any() for m in sky), "walls in the day-window material")
+        self.assertEqual([int(s.floors or 0) for s, _a, _b in items], floors, "the items' specs not changed")
+        tall = bld.pack_meshes(items, "tall")
+        self.assertLessEqual(self.verts(sky), self.verts(tall))     # (sloped houses lite in both)
+        self.assertLess(self.verts(tall), lite)
+
+    def test_a_mapped_dome_keeps_its_dome_and_height(self):
+        """A domed building in a sky pack keeps the lite mesh: its dome and its whole height (the skyline's simplify
+        flattens the roof, and plan() took the dome's rise off the height: 40 m came out 20 m, Codex 2026-11-14)."""
+        dome = [(bld.plan(rect(0.0, 0.0, 40, 40), {"class": "civic", "height": 40, "roof_shape": "dome",
+                                                   "roof_height": 20}), 0.0, 0.0)]
+        top = lambda meshes: max(float(np.asarray(m[0])[:, 2].max()) for m in meshes)
+        lite, sky = bld.pack_meshes(dome, "lite"), bld.pack_meshes(dome, "sky")
+        self.assertAlmostEqual(top(sky), top(lite), places=3)
+        self.assertGreater(top(sky), 39.0)
+
+    def test_sky_top_matches_lite_for_every_roof(self):
+        """Only flat roofs without a steeple take the sky style: every sloped, domed or steepled building keeps the
+        lite mesh, so its top is the same in both (the review rounds' cases, 2026-11-14)."""
+        top = lambda meshes: max(float(np.asarray(m[0])[:, 2].max()) for m in meshes)
+        L = np.array([(0, 0), (20, 0), (20, 6), (6, 6), (6, 20), (0, 20)], float)
+        cases = [
+            (rect(0.0, 0.0, 40, 40), {"class": "civic", "height": 40, "roof_shape": "gabled", "roof_height": 20}),
+            (rect(0.0, 0.0, 40, 40), {"class": "civic", "height": 40, "roof_shape": "hipped", "roof_height": 20}),
+            (L, {"class": "house", "height": 20, "roof_shape": "hipped"}),
+            (rect(0.0, 0.0, 20, 10), {"class": "house", "height": 20, "roof_shape": "gabled",
+                                      "roof_orientation": "across"}),
+            (rect(0.0, 0.0, 20, 10), {"class": "house", "height": 80, "roof_shape": "gabled", "roof_height": 20}),
+            (rect(0.0, 0.0, 20, 10), {"class": "house", "height": 80, "roof_shape": "mansard", "roof_height": 20}),
+            (rect(0.0, 0.0, 20, 10), {"class": "house", "height": 80, "roof_shape": "round", "roof_height": 20}),
+            (L, {"class": "house", "height": 40, "roof_shape": "pyramidal", "roof_height": 10}),
+            (np.array([(0, 0), (10, 0), (10, 8), (0, 8)], float), {"class": "greenhouse", "height": 4,
+                                                                    "roof_shape": "gabled"}),
+            (rect(0.0, 0.0, 30, 15), {"class": "church", "height": 18}),
+            (rect(0.0, 0.0, 30, 20), {"class": "house", "height": 15, "roof_shape": "skillion", "roof_height": 7,
+                                      "roof_direction": 45}),
+            (rect(0.0, 0.0, 40, 30), {"class": "office", "height": 60}),          # (flat: sky, the same top)
+        ]
+        for ring, attrs in cases:
+            b = [(bld.plan(ring, attrs), 0.0, 0.0)]
+            self.assertAlmostEqual(top(bld.pack_meshes(b, "sky")), top(bld.pack_meshes(b, "lite")), delta=0.05,
+                                   msg=str(attrs))
+
+    def test_revisit_key_lite_unchanged(self):
+        import blockworker
+        import geotiles
+        import revisit
+        seen = []
+        with mock.patch.object(revisit, "load", side_effect=lambda _c, kind, k: seen.append((kind, k)) or None), \
+                mock.patch.object(blockworker, "_far_geo_build", return_value=None), \
+                mock.patch.object(blockworker, "_s", mock.Mock(cache_dir="/nonexistent", md=None)), \
+                mock.patch.object(blockworker, "_md_versions", return_value="v"), \
+                mock.patch.object(blockworker, "_nyc_key", return_value=None):
+            gx, gy = geotiles.tile_of(40.758, -73.985, geotiles.SKY_Z)
+            for style in ("lite", "sky", "tall"):
+                with mock.patch.object(bld, "PACK_STYLE", style):
+                    blockworker.far_geo("bldpack", gx, gy, 15, "/tmp/x", "/x")
+                    blockworker.far_geo("bldfar", gx * 4, gy * 4, 15, "/tmp/x", "/x")
+        packs = [k for kind, k in seen if kind == "bldpack"]
+        fars = [k for kind, k in seen if kind == "bldfar"]
+        self.assertEqual(len(set(packs)), 3, "a pack's key changes with the style")
+        self.assertEqual(len(set(fars)), 1, "the far tiles' keys do not")
+        with mock.patch.object(bld, "PACK_STYLE", "lite"):
+            self.assertEqual(packs[0], revisit.key("bldpack", "g", geotiles.key(gx, gy, geotiles.SKY_Z), 15, "v", None,
+                                                   None), "the lite key as before")
+
+
 class MeshTest(unittest.TestCase):
     def check_outward(self, ring, attrs):
         spec = bld.plan(ring, attrs)
@@ -477,7 +674,7 @@ class MeshTest(unittest.TestCase):
 
     def test_a_dome_in_the_skyline(self):
         spec = bld.plan(self.circle(12.0), {"class": "church", "height": 40.0, "roof_shape": "dome"})
-        P = bld._sky_mesh([(spec, 0.0, 0.0)])[0]
+        (P, *_), = bld._sky_mesh([(spec, 0.0, 0.0)])
         self.assertAlmostEqual(P[:, 2].max(), 40.0, delta=0.05)
 
     def test_a_round_roof_is_a_barrel_not_a_dome(self):
@@ -659,7 +856,7 @@ class NightWindowsTest(unittest.TestCase):
         for seed in (0.1, 0.2, 0.3, 0.4, 0.5):
             sp = bld.Spec(ring=ring, floors=10, floor_h=3.0, roof="flat", facade="bne_bld_fac_white", cls="office",
                           seed=seed, min_h=0.0, height=30.0, windows=None, roof_mat=None)
-            UV = np.asarray(bld._sky_mesh([(sp, 0.0, 0.0)])[1])
+            UV = np.asarray(bld._sky_mesh([(sp, 0.0, 0.0)])[0][1])
             starts.add((round(float(UV[0, 0]), 6), round(float(UV[0, 1] % 1.0), 6)))
             self.assertAlmostEqual(UV[0, 0] * bld.SKY_WIN_BAYS, round(UV[0, 0] * bld.SKY_WIN_BAYS), 6)
         self.assertGreater(len(starts), 3)
@@ -675,6 +872,15 @@ class DoorTest(unittest.TestCase):
         self.assertEqual(g, "door")
         self.assertAlmostEqual(y, -bld.DOOR_OUT_M, places=2)            # on the south wall (its panel just out of it)
         self.assertAlmostEqual(yaw, 0.0)                               # the wall runs +x
+
+    def test_no_door_under_a_building_off_the_ground(self):
+        # a building over the street (OSM min_level 1, a passage's part over its way): its door stood alone in the road
+        # under it (London's Sherwood Street, 2026-11-12)
+        spec = bld.plan(rect(0, 0, 10, 8), {"class": "house"})
+        spec.min_h = 4.5
+        road = (np.array([(-50.0, -6.0), (50.0, -6.0)]), 4.0)
+        self.assertEqual(bld.doors([(spec, 0.0, 0.0)], [road], 0.0, 0.0), [])
+        self.assertIsNone(spec.door)
 
     def test_main_street_shopfronts(self):
         shops = signed = 0
@@ -1783,7 +1989,7 @@ class FarLampTest(unittest.TestCase):
 
     def test_skyline_windows(self):
         spec = bld.plan(rect(0, 0, 30, 20), {"class": "", "height": 30.0}, 0)
-        P, UV, T, M, mats, C = bld._sky_mesh([(spec, 0.0, 0.0)])
+        (P, UV, T, M, mats, C), = bld._sky_mesh([(spec, 0.0, 0.0)])
         wall = mats.index(bld.SKY_WALL)
         self.assertIn(wall, set(M.tolist()), "the walls take the night window map")
         self.assertGreater(float(np.ptp(UV[:, 0])), 0.1, "spread along the walls")
@@ -1927,7 +2133,7 @@ class SpireTest(unittest.TestCase):
         ring = np.array([[0, 0], [5, 0], [5, 5], [0, 5]], float)
         sp = bld.plan(ring, {"class": "commercial", "height": 121.0, "facade_material": "metal",
                              "roof_shape": "pyramidal", "roof_height": 80.0}, 0, 40.713, -74.013)
-        P = bld._sky_mesh([(sp, 0.0, 0.0)])[0]
+        (P, *_), = bld._sky_mesh([(sp, 0.0, 0.0)])
         self.assertAlmostEqual(float(np.max(np.asarray(P)[:, 2])), 121.0, places=0)
 
 
@@ -2118,6 +2324,9 @@ class RealTagsTest(unittest.TestCase):
         self.assertEqual(bld.parse_color("copper"), (0.55, 0.75, 0.65))
         self.assertEqual(bld.parse_color("steel-blue"), (0.28, 0.45, 0.60))
         self.assertEqual(bld.parse_color("Dark Green"), (0.10, 0.35, 0.12))
+        self.assertEqual(bld.parse_color("DarkGreen"), (0.10, 0.35, 0.12))
+        self.assertEqual(bld.parse_color("light_gray"), bld.COLOR_NAMES["lightgray"])     # (OSM spellings)
+        self.assertEqual(bld.parse_color("dark-grey"), bld.COLOR_NAMES["darkgrey"])
         self.assertIsNone(bld.parse_color("invalid_color_xyz"))
         self.assertIsNone(bld.parse_color(None))
         self.assertIsNone(bld.parse_color(""))
@@ -2230,6 +2439,30 @@ class RealTagsTest(unittest.TestCase):
         self.assertLess(p2_rgba[0], 90)         # (muted toward its grey: facade_tone)
         self.assertGreater(p2_rgba[1], 200)
         self.assertEqual(p2_spec.roof, "hipped")
+
+    def test_bare_part_takes_the_first_of_equally_common_colours(self):
+        """A part without a colour takes its siblings' most common one; of equally common ones the first part's, in
+        every process: the choice went by a set's order (the process's string hashing), and a tile's buildings changed
+        from run to run (I-83, Baltimore: bld_p_-2_-1_2 in 1 of 6 hash seeds, 2026-11-12)."""
+        import subprocess
+        code = ("import sys; sys.path[:0] = [%r, %r]; import numpy as np, geodesy, buildings as bld; "
+                "from test_buildings import Feats; f = geodesy.EnuFrame(37.8, -122.4)\n"
+                "def ll(x, y, w, d):\n"
+                "    e = np.array([x, x + w, x + w, x, x]); n = np.array([y, y, y + d, y + d, y])\n"
+                "    la, lo, _ = f.enu_to_geodetic(e, n, 0.0); return np.stack([lo, la], 1)\n"
+                "b = Feats(['B1'], [ll(10, 10, 30, 30)], **{'class': ['commercial'], 'height': [30.0]})\n"
+                "parts = Feats(['P1', 'P2', 'P3'], [ll(10, 10, 10, 30), ll(20, 10, 10, 30), ll(30, 10, 10, 30)], "
+                "**{'building_id': ['B1'] * 3, 'height': [10.0, 20.0, 30.0], 'min_height': [0.0, 0.0, 0.0], "
+                "'facade_color': ['#ff0000', '#10ee20', '']})\n"
+                "items = bld.tile_buildings(f, 0.0, 0.0, 256.0, 256.0, [b], lambda la, lo: np.zeros(np.shape(la)), "
+                "part_layers=[parts])\n"
+                "s = {round(sp.height): sp for sp, _g0, _g1 in items}\n"
+                "print(bld._Looks(s[30].seed)[s[30].facade][1] == bld._Looks(s[10].seed)[s[10].facade][1])\n"
+                ) % (str(Path(__file__).resolve().parents[1]), str(Path(__file__).resolve().parent))
+        for seed in range(8):
+            out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True,
+                                 env=dict(os.environ, PYTHONHASHSEED=str(seed)), timeout=120)
+            self.assertEqual(out.stdout.strip(), "True", f"hash seed {seed}: {out.stdout} {out.stderr[-2000:]}")
 
 
 class ModelBridgeTest(unittest.TestCase):
@@ -2695,7 +2928,32 @@ class SkeletonRoofTest(unittest.TestCase):
         P = np.asarray(m.P).reshape(-1, 3)
         self.assertAlmostEqual(s.height, 6.0, delta=0.01)               # (walls to the eave)
         self.assertAlmostEqual(P[:, 2].max(), 9.0, delta=0.05)          # (the roof's top at the mapped height)
-        self.assertAlmostEqual(P[:, 2].min(), 6.0, delta=1e-6)
+        # (its eaves: EAVE_M out past the walls, as low as the slope carried on down that far)
+        k = math.tan(math.radians(bld.roof_pitch(s)))
+        self.assertAlmostEqual(P[:, 2].min(), 6.0 - bld.EAVE_M * k, delta=1e-6)
+        self.assertAlmostEqual(P[:, 0].min(), -bld.EAVE_M, delta=1e-6)
+        self.assertAlmostEqual(P[:, 1].max(), 14.0 + bld.EAVE_M, delta=1e-6)
+
+    def test_an_l_houses_eaves_round_its_inside_corner(self):
+        """Hipped skeleton roofs overhang their walls by EAVE_M as the box roofs do (an L house's roof stopped at its
+        walls, the only pitched roof without eaves; 450-600 mm eaves are most of an Australian brick house's look)."""
+        L = np.array([[0, 0], [12, 0], [12, 8], [5, 8], [5, 14], [0, 14]], float)
+        e = bld.eave_ring(L, 0.35)
+        np.testing.assert_allclose(e, [[-.35, -.35], [12.35, -.35], [12.35, 8.35], [5.35, 8.35], [5.35, 14.35],
+                                       [-.35, 14.35]], atol=1e-9)
+        s = bld.plan(L, {"class": "house"}, 0, -33.7, 151.1)
+        self.assertTrue(s.skel)
+        m = bld.Mesh()
+        bld._roof(m, s, np.asarray(s.ring, np.float64), s.height, bld._Looks(s.seed))
+        P = np.asarray(m.P).reshape(-1, 3)
+        self.assertLess(P[:, 2].min(), s.height)                        # (the eave under the walls' top)
+        self.assertLessEqual(P[:, 2].max() - s.height, bld.SKEL_CAP_M + 1e-6)   # (the cap: the same top as before)
+
+    def test_no_eaves_where_they_cannot_be_drawn(self):
+        sliver = np.array([[0, 0], [10, 0], [0, 0.3]], float)         # a corner sharper than SKEL_EAVE_MIN_COS
+        self.assertIsNone(bld.eave_ring(sliver, 0.35))
+        notch = np.array([[0, 0], [10, 0], [10, 5], [5.2, 5], [5.2, 4.8], [4.8, 4.8], [4.8, 5], [0, 5]], float)
+        self.assertIsNone(bld.eave_ring(notch, 0.35))                   # (its 0.4 m edge would turn over)
 
     def test_a_pitched_block_keeps_its_yard(self):
         import geodesy
@@ -2729,10 +2987,156 @@ class SkeletonGableTest(unittest.TestCase):
         self.assertGreaterEqual(int((M == fac).sum()), 2)               # (two gable walls: the arms' ends)
         P = np.asarray(m.P).reshape(-1, 3)
         self.assertAlmostEqual(P[:, 2].max(), 9.0, delta=0.05)
+        self.assertAlmostEqual(P[:, 2].min(), 6.0, delta=1e-6)          # (gables stand on the walls: no eaves)
 
 
 class RoofPhotoTest(unittest.TestCase):
     """Roof colours from the aerial photo (RoofPhoto, native roof_photo_colours)."""
+
+    def test_a_tile_near_the_car_fetches_its_photo_urgent(self):
+        # the road tiles round the car (blockworker.roads_geo: urgent_photos) ask for their roof photo ahead of the far
+        # field's photos from the same host; the others as before
+        import geodesy
+        asked = []
+
+        class Reader:
+            @staticmethod
+            def urgent():
+                import contextlib
+                asked.append("urgent")
+                return contextlib.nullcontext()
+
+            @staticmethod
+            def fetch_lazy(frame, x0, y0, size, px):
+                asked.append("fetch_lazy")
+                return 0
+
+            @staticmethod
+            def render(frame, x0, y0, size, px):
+                asked.append("render")
+                return np.zeros((px, px, 3), np.uint8), {"france": px * px}
+
+            @staticmethod
+            def lazy_state(frame, x0, y0, size, px):
+                return True, None, []
+
+        frame = geodesy.EnuFrame(46.17, 1.87)
+        with mock.patch.object(bld, "_photo_sources", return_value=("france",)), \
+                mock.patch.object(bld, "_photo_reader_live", return_value=Reader()):
+            with bld.urgent_photos(True):
+                f = bld.RoofPhotoFuture(frame, 0.0, 0.0, 100.0, 100.0, tempfile.gettempdir())
+            self.assertIsNotNone(f.fut.result(5)[0])
+            self.assertEqual(asked, ["urgent", "fetch_lazy", "render"])
+            asked.clear()
+            f = bld.RoofPhotoFuture(frame, 0.0, 0.0, 100.0, 100.0, tempfile.gettempdir())
+            self.assertIsNotNone(f.fut.result(5)[0])
+            self.assertEqual(asked, ["fetch_lazy", "render"])
+
+    class _Reader:
+        """A stand-in photo reader: render's texel counts (used), lazy_state's answer (ready, the deciding answers'
+        expiry), an ImageryError to raise."""
+
+        def __init__(self, used_share=1.0, ready=True, error=False, expiry=None):
+            self.used_share, self.ready, self.error, self.expiry = used_share, ready, error, expiry
+            self.asked = []
+
+        def urgent(self):
+            import contextlib
+            return contextlib.nullcontext()
+
+        def fetch_lazy(self, frame, x0, y0, size, px):
+            self.asked.append("fetch_lazy")
+            if self.error:
+                import imagery
+                raise imagery.ImageryError("md6in: HTTP 503")
+            return 1
+
+        def render(self, frame, x0, y0, size, px):
+            self.asked.append("render")
+            n = int(px * px * self.used_share)
+            return np.zeros((px, px, 3), np.uint8), {"md6in": n, "none": px * px - n}
+
+        def lazy_state(self, frame, x0, y0, size, px):
+            return self.ready, self.expiry, ([] if self.ready else [("md6in", 17, 0, 0)])
+
+    def photo_final(self, reader, online=True):
+        import geodesy
+        with mock.patch.object(bld, "_photo_sources", return_value=("md6in",)), \
+                mock.patch.object(bld, "_photo_reader_live", return_value=reader), \
+                mock.patch("streetfront._photo_reader", lambda *_a: reader):
+            return bld.roof_photo_final(geodesy.EnuFrame(39.2833, -76.5967), 0.0, 0.0, 100.0, 100.0,
+                                        tempfile.gettempdir(), online)
+
+    def test_a_photo_too_short_once_decided_is_final_until_its_answers_expire(self):
+        # 2026-11-13: every road tile of a Fells Point session faulted on its roofs' photo (797 not kept): md6in was
+        # remembered missing there. Online the lazy tiles are fetched first; a None is a fault only when the photo
+        # could not be had (a fetch failed, a lazy tile not decided yet); where the sources hold too little of the tile
+        # once all is decided it is final, but only until the first "nothing there" answer expires (a miss's TTL, and
+        # within NEG_RECHECK_S for the non-lazy sources' misses)
+        import time as _time
+        r = self._Reader()
+        ph, final, until = self.photo_final(r)
+        self.assertIsNotNone(ph)
+        self.assertEqual((final, until), (True, None))
+        self.assertEqual(r.asked, ["fetch_lazy", "render"])
+        now = _time.time()
+        ph, final, until = self.photo_final(self._Reader(used_share=0.5, ready=True))
+        self.assertEqual((ph, final), (None, True))
+        self.assertAlmostEqual(until, now + bld.NEG_RECHECK_S, delta=60)
+        ph, final, until = self.photo_final(self._Reader(used_share=0.5, ready=True, expiry=now + 600))
+        self.assertEqual((ph, final, until), (None, True, now + 600), "the miss that decides expires first")
+        ph, final, until = self.photo_final(self._Reader(used_share=0.5, ready=False))
+        self.assertEqual((ph, final), (None, False), "a lazy tile not decided: not yet")
+        ph, final, until = self.photo_final(self._Reader(error=True))
+        self.assertEqual((ph, final), (None, False), "a failed fetch: not had")
+        ph, final, until = self.photo_final(self._Reader(expiry=now + 900))
+        self.assertIsNotNone(ph)
+        self.assertEqual(until, now + 900, "a later source's photo where an earlier one's miss expires")
+        r = self._Reader(used_share=0.0, ready=False)
+        ph, final, until = self.photo_final(r, online=False)
+        self.assertEqual((ph, final), (None, False))
+        self.assertEqual(r.asked, ["render"], "offline: nothing fetched")
+        import geodesy
+        with mock.patch.object(bld, "_photo_sources", return_value=()):
+            self.assertEqual(bld.roof_photo_final(geodesy.EnuFrame(10.0, 10.0), 0, 0, 10, 10, "/nowhere", True),
+                             (None, True, None), "no regional photo there: for good")
+
+    def test_only_a_photo_not_had_faults_the_tile_and_an_expiring_answer_bounds_its_keep(self):
+        import time as _time
+        import geodesy
+        import revisit
+        frame = geodesy.EnuFrame(39.2833, -76.5967)
+        soon = _time.time() + 600
+        ring = [np.array([[10, 10], [30, 10], [30, 30], [10, 30]], float)]
+        for reader, faults, until in ((self._Reader(), 0, None),
+                                      (self._Reader(used_share=0.3, ready=True, expiry=soon), 0, soon),
+                                      (self._Reader(expiry=soon), 0, soon),
+                                      (self._Reader(used_share=0.3, ready=False), 1, None),
+                                      (self._Reader(error=True), 1, None)):
+            with mock.patch.object(bld, "_photo_sources", return_value=("md6in",)), \
+                    mock.patch.object(bld, "_photo_reader_live", return_value=reader):
+                f = bld.RoofPhotoFuture(frame, 0.0, 0.0, 100.0, 100.0, tempfile.gettempdir())
+                with revisit.scope() as b:
+                    f.colours(ring)
+                self.assertEqual((b.n, b.until), (faults, until), (reader.used_share, reader.ready, reader.error))
+                self.assertEqual(b.complete, faults == 0 and until is None)
+                self.assertEqual(b.kept_until(), (faults == 0, until))
+
+    def test_a_photo_late_past_the_wait_faults_the_tile(self):
+        import concurrent.futures
+        import revisit
+        f = bld.RoofPhotoFuture.__new__(bld.RoofPhotoFuture)
+        f.fut = concurrent.futures.Future()         # (never done)
+        with mock.patch.object(bld, "ROOF_PHOTO_WAIT_S", 0.05), revisit.scope() as b:
+            self.assertIsNone(f.colours([np.array([[0, 0], [5, 0], [5, 5]], float)]))
+        self.assertEqual(b.n, 1)
+
+    def test_which_geotiles_are_near_the_car(self):
+        import blockworker
+        import geotiles
+        gx, gy = geotiles.tile_of(46.1714, 1.8714)
+        self.assertTrue(blockworker._geo_near(gx, gy, 46.1714, 1.8714))
+        self.assertFalse(blockworker._geo_near(gx + 4, gy, 46.1714, 1.8714))
 
     def photo(self, roof=(180, 70, 50), tree=None):
         rgb = np.full((100, 100, 3), (90, 90, 90), np.uint8)           # 1 m pixels over [0, 100] x [0, 100]
@@ -3003,6 +3407,6 @@ class MappedRoofTest(unittest.TestCase):
         self.assertAlmostEqual(float(rise.min()), 0.0)
         self.assertAlmostEqual(float(rise.max()), 362.0, delta=0.5)
         self.assertAlmostEqual(float(rise[0]), 0.0, msg="low at the corner it faces (south-west)")
-        mesh = bld._sky_mesh([(spec, 0.0, 0.0)])
+        (mesh,) = bld._sky_mesh([(spec, 0.0, 0.0)])
         P = mesh[0]
         self.assertAlmostEqual(float(P[:, 2].max() - spec.height - spec.min_h), 362.0, delta=1.5)

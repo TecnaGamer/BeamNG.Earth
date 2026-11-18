@@ -49,6 +49,12 @@ table { width:100%; border-collapse:collapse } td { padding:5px 0; border-bottom
   <div class="tile"><div class="n" id="peak24">-</div><div class="l">24 h peak</div></div>
   <div class="tile"><div class="n" id="peakall">-</div><div class="l">all-time peak</div></div>
 </div>
+<div class="tiles">
+  <div class="tile"><div class="n" id="uday">-</div><div class="l">unique players today</div></div>
+  <div class="tile"><div class="n" id="uweek">-</div><div class="l">unique players, 7 days</div></div>
+  <div class="tile"><div class="n" id="umonth">-</div><div class="l">unique players, 30 days</div></div>
+  <div class="tile"><div class="n" id="uall">-</div><div class="l" id="uallL">unique players, all time</div></div>
+</div>
 <div class="card">
   <h2><span>Players over time</span><span class="note" id="rangeLabel"></span></h2>
   <div class="ranges" id="ranges">
@@ -89,6 +95,11 @@ async function live() {
   try {
     const s = await (await fetch(base + "stats/now", { cache: "no-store" })).json();
     setN(online, s.online); setN(playing, s.playing); setN(peak24, s.peak24h); setN(peakall, s.peakAll);
+    if (s.unique) {     // (estimated from per-day sketches: install ids are never kept)
+      setN(uday, s.unique.day); setN(uweek, s.unique.week); setN(umonth, s.unique.month); setN(uall, s.unique.all);
+      if (s.unique.since) uallL.textContent = "unique players since " +
+        new Date(s.unique.since * 1000).toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" });
+    }
     cc.innerHTML = s.countries.length ? s.countries.map(([c, n]) => {
       let name = c; try { if (c.length == 2) name = new Intl.DisplayNames([], { type: "region" }).of(c); } catch (e) {}
       return `<tr><td>${name}</td><td class="r">${fmt(n)}</td></tr>`; }).join("") : "<tr><td>No players online</td></tr>";

@@ -223,3 +223,247 @@ class HungDumpTest(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("Thread", r.stderr)               # (faulthandler's dump of the running threads)
         self.assertIn("None", r.stdout)                 # (and the job ran to its end: not stopped)
+
+
+class ElasticPoolTest(unittest.TestCase):
+    """pools.ElasticPool: the far-tile processes past the driving ones only while a burst uses them (GitHub #1114: 22
+    server processes in 1.9.x, every far-tile process kept for the session from the first loading boost on)."""
+
+    def _pool(self, **kw):
+        p = pools.ElasticPool("test", 1, 2, mp_context=SPAWN, idle_s=3600.0, **kw)
+        self.addCleanup(p.shutdown)
+        return p
+
+    def test_the_base_first_extras_only_for_a_burst(self):
+        import time
+        p = self._pool()
+        self.assertEqual(p.submit(abs, -1).result(timeout=60), 1)
+        self.assertIsNone(p.extra, "one job at a time: the base alone")
+        futs = [p.submit(time.sleep, 0.5) for _ in range(3)]
+        self.assertIsNotNone(p.extra, "the base busy: extras started")
+        self.assertEqual(p.inflight, 3)
+        for f in futs:
+            f.result(timeout=60)
+        self.assertEqual(p.extra_starts, 1)
+        self.assertEqual(p.workers, 3)
+
+    def test_no_extras_while_the_caller_wants_the_base_alone(self):
+        import time
+        p = self._pool()
+        p.want = lambda: 1                  # (earthd: Server.far_limit while driving)
+        futs = [p.submit(time.sleep, 0.2) for _ in range(3)]
+        for f in futs:
+            f.result(timeout=60)
+        self.assertIsNone(p.extra)
+        p.want = lambda: 3                  # (the 3D map open)
+        futs = [p.submit(time.sleep, 0.2) for _ in range(3)]
+        self.assertIsNotNone(p.extra)
+        for f in futs:
+            f.result(timeout=60)
+
+    def test_idle_extras_stop(self):
+        import time
+        p = self._pool()
+        futs = [p.submit(time.sleep, 0.2) for _ in range(3)]
+        for f in futs:
+            f.result(timeout=60)
+        ex = p.extra
+        deadline = time.monotonic() + 10
+        while ex.inflight and time.monotonic() < deadline:
+            time.sleep(0.05)                # (the done callbacks)
+        now = 1000.0
+        self.assertFalse(p.reap_step(now), "idle from now")
+        self.assertFalse(p.reap_step(now + p.idle_s - 1))
+        with self.assertLogs("earthd.pools", "INFO"):
+            self.assertTrue(p.reap_step(now + p.idle_s))
+        self.assertIsNone(p.extra)
+        self.assertEqual(p.extra_stops, 1)
+        self.assertEqual(p.submit(abs, -5).result(timeout=60), 5, "the base goes on")
+
+    def test_busy_extras_are_kept(self):
+        import time
+        p = self._pool()
+        futs = [p.submit(time.sleep, 1.5) for _ in range(2)]
+        self.assertIsNotNone(p.extra)
+        self.assertFalse(p.reap_step(0.0))
+        self.assertFalse(p.reap_step(10 ** 6), "a job in flight: kept")
+        for f in futs:
+            f.result(timeout=60)
+
+    def test_the_old_way_without_a_reaper(self):
+        p = pools.ElasticPool("test", 1, 2, mp_context=SPAWN, idle_s=0)
+        self.addCleanup(p.shutdown)
+        [f.result(timeout=60) for f in [p.submit(abs, -i) for i in range(3)]]
+        self.assertFalse(p.reap_step(10 ** 6))
+
+
+class RotateTest(unittest.TestCase):
+    """The memory watch (budget.ROTATE_MB): a pool whose process is over it gets fresh processes; the jobs already given
+    to the old ones finish there (none fails), the old processes exit; nothing with the ceiling off, under it, within
+    ROTATE_MIN_S of the last rotation or with a backlog."""
+
+    def setUp(self):
+        import budget
+        self.budget = budget
+        self._old = (budget.ROTATE_MB, budget.ROTATE_MIN_S)
+
+    def tearDown(self):
+        self.budget.ROTATE_MB, self.budget.ROTATE_MIN_S = self._old
+
+    def test_rotated_gracefully(self):
+        import time
+        b = self.budget
+        p = pools.RespawningPool("test", 1, mp_context=SPAWN)
+        try:
+            self.assertEqual(p.submit(abs, -1).result(timeout=60), 1)
+            old_pids = set(p.worker_mb())
+            self.assertTrue(old_pids)
+            running = p.submit(time.sleep, 1.5)
+            time.sleep(0.3)
+            b.ROTATE_MB, b.ROTATE_MIN_S = 0, 0.0
+            self.assertFalse(p._mem_step(time.monotonic() + 1), "off: never")
+            b.ROTATE_MB = 10 ** 9
+            self.assertFalse(p._mem_step(time.monotonic() + 1), "under the ceiling: no")
+            b.ROTATE_MB = 1                         # (every process is over 1 MB)
+            with self.assertLogs("earthd.pools", "INFO"):
+                self.assertTrue(p._mem_step(time.monotonic() + 1))
+            self.assertEqual(p.rotations, 1)
+            self.assertIsNone(running.result(timeout=60), "the job in the old process finished")
+            self.assertEqual(p.submit(abs, -2).result(timeout=60), 2)
+            self.assertTrue(set(p.worker_mb()).isdisjoint(old_pids), "new jobs run in new processes")
+            b.ROTATE_MIN_S = 3600.0
+            self.assertFalse(p._mem_step(time.monotonic()), "at most every ROTATE_MIN_S")
+        finally:
+            p.shutdown()
+
+    def test_not_with_a_backlog(self):
+        import time
+        b = self.budget
+        p = pools.RespawningPool("test", 1, mp_context=SPAWN)
+        try:
+            p.submit(abs, -1).result(timeout=60)
+            futs = [p.submit(time.sleep, 0.5) for _ in range(4)]
+            b.ROTATE_MB, b.ROTATE_MIN_S = 1, 0.0
+            self.assertFalse(p._mem_step(time.monotonic() + 1), "jobs waiting beyond the running ones: not now")
+            for f in futs:
+                f.result(timeout=60)
+            time.sleep(0.2)
+            with self.assertLogs("earthd.pools", "INFO"):
+                self.assertTrue(p._mem_step(time.monotonic() + 1))
+        finally:
+            p.shutdown()
+
+    def test_process_mb(self):
+        mb = self.budget.process_mb(os.getpid())
+        if sys.platform.startswith("linux") or sys.platform == "win32":
+            self.assertGreater(mb, 1.0)
+        self.assertIsNone(self.budget.process_mb(2 ** 22 + 12345))   # (no such process)
+
+
+class TasksPerChildTest(unittest.TestCase):
+    """The lean memory tiers' road process replaced after so many jobs (pools.tasks_per_child_kw): every job still
+    answered, by fresh processes, the queue kept. The pool's own queue on every Python, never the executor's
+    max_tasks_per_child (it hangs before CPython's gh-115634 fix: Python 3.12, the packaged app's)."""
+
+    def test_kwargs(self):
+        self.assertEqual(pools.tasks_per_child_kw(0), {})
+        self.assertEqual(pools.tasks_per_child_kw(None), {})
+        self.assertEqual(pools.tasks_per_child_kw(40), {"tasks_per_child": 40})
+        p = pools.RespawningPool("test", 1, mp_context=SPAWN, **pools.tasks_per_child_kw(40))
+        try:
+            self.assertNotIn("max_tasks_per_child", p._kwargs)
+            self.assertEqual(p.tasks_per_child, 40)
+        finally:
+            p.shutdown(wait=False)
+
+    def test_fresh_processes(self):
+        p = pools.RespawningPool("test", 1, mp_context=SPAWN, **pools.tasks_per_child_kw(2))
+        try:
+            futs = [p.submit(os.getpid) for _ in range(6)]
+            self.assertEqual(p.inflight, 6)
+            pids = [f.result(timeout=120) for f in futs]
+            self.assertEqual(len(pids), 6)
+            self.assertEqual([pids[0], pids[2], pids[4]], [pids[1], pids[3], pids[5]], pids)
+            self.assertEqual(len(set(pids)), 3, pids)
+            self.assertGreaterEqual(p.rotations, 2)
+        finally:
+            p.shutdown(wait=True)
+
+    def test_two_processes_errors_and_cancels(self):
+        import time
+        p = pools.RespawningPool("test", 2, mp_context=SPAWN, **pools.tasks_per_child_kw(2))
+        try:
+            slow = [p.submit(time.sleep, 0.6) for _ in range(2)]
+            bad = p.submit(int, "x")                    # (a job's own error reaches its caller)
+            gone = p.submit(os.getpid)
+            self.assertFalse(gone.running(), "queued behind the two running ones")
+            self.assertTrue(gone.cancel(), "a queued job can be cancelled (result_running's abandon)")
+            rest = [p.submit(os.getpid) for _ in range(8)]
+            for f in slow:
+                self.assertIsNone(f.result(timeout=120))
+            with self.assertRaises(ValueError):
+                bad.result(timeout=120)
+            pids = [f.result(timeout=120) for f in rest]
+            self.assertGreaterEqual(len(set(pids)), 2, pids)    # (11 jobs run, 4 a generation: three generations)
+            self.assertGreaterEqual(p.rotations, 2)
+            for _ in range(100):
+                if p.inflight == 0:
+                    break
+                time.sleep(0.05)
+            self.assertEqual(p.inflight, 0)
+        finally:
+            p.shutdown(wait=True)
+
+    def test_a_death_on_the_generations_last_job(self):
+        """The process dies on its generation's last job: the pool is made again and the next job answers (1.10.0-beta:
+        rotate() refused the broken pool for good and every later road, tree and far building job waited in the queue
+        for ever, the loading line stuck at a few %)."""
+        p = pools.RespawningPool("test", 1, mp_context=SPAWN, **pools.tasks_per_child_kw(2))
+        try:
+            self.assertEqual(p.submit(abs, -1).result(timeout=120), 1)
+            with self.assertLogs("earthd.pools", "WARNING"):
+                with self.assertRaises(BrokenProcessPool):
+                    p.submit(os._exit, 1).result(timeout=120)
+                self.assertEqual(p.submit(abs, -5).result(timeout=60), 5)
+        finally:
+            p.shutdown(wait=False, cancel_futures=True)     # (a queue that never moves: a failure, not a hang)
+
+    def test_quick_deaths_never_stop_the_queue(self):
+        """Two deaths within RESPAWN_S with a loading queue behind them: the queued jobs wait for the pool to be made
+        again (not failed one after the other until the generation is full, then never handed over)."""
+        import concurrent.futures
+        with unittest.mock.patch.object(pools, "RESPAWN_S", 2.0):
+            p = pools.RespawningPool("test", 1, mp_context=SPAWN, **pools.tasks_per_child_kw(40))
+            try:
+                self.assertEqual(p.submit(abs, -1).result(timeout=120), 1)
+                dying = [p.submit(os._exit, 1) for _ in range(2)]
+                rest = [p.submit(abs, -i) for i in range(60)]
+                done, waiting = concurrent.futures.wait(dying + rest, timeout=120)
+                self.assertFalse(waiting, f"{len(waiting)} jobs never answered")
+                for f in dying:
+                    self.assertIsInstance(f.exception(), BrokenProcessPool)
+                self.assertEqual([f.result() for f in rest], list(range(60)), "none of the queue failed")
+                self.assertEqual(p.submit(abs, -7).result(timeout=60), 7)
+            finally:
+                p.shutdown(wait=False, cancel_futures=True)
+
+    def test_shutdown_waits_for_the_queue(self):
+        import time
+        p = pools.RespawningPool("test", 1, mp_context=SPAWN, **pools.tasks_per_child_kw(1))
+        futs = [p.submit(time.sleep, 0.2) for _ in range(3)]
+        p.shutdown(wait=True)
+        self.assertTrue(all(f.done() and f.exception() is None for f in futs))
+        q = pools.RespawningPool("test", 1, mp_context=SPAWN, **pools.tasks_per_child_kw(1))
+        futs = [q.submit(time.sleep, 0.5) for _ in range(3)]
+        time.sleep(0.1)
+        q.shutdown(wait=False, cancel_futures=True)
+        self.assertTrue(futs[2].cancelled())
+
+    def test_budget_setting(self):
+        import budget
+        with unittest.mock.patch.dict(os.environ, {"BNGE_TASKS_PER_CHILD": ""}):
+            self.assertEqual(budget.tasks_per_child(), budget.LEAN_TASKS_PER_CHILD)
+        with unittest.mock.patch.dict(os.environ, {"BNGE_TASKS_PER_CHILD": "0"}):
+            self.assertEqual(budget.tasks_per_child(), 0)
+        with unittest.mock.patch.dict(os.environ, {"BNGE_TASKS_PER_CHILD": "7"}):
+            self.assertEqual(budget.tasks_per_child(), 7)

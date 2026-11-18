@@ -93,8 +93,15 @@ local tb = terrain.get()
 local asphalt = scenetree.findObject('bngEarthGroundAsphalt')
 T.check(asphalt.fields.baseColorBaseTex == '/temp/beamngEarth/s/hm_1_0_0_base.png' and asphalt.fields.baseColorBaseTexSize == '512',
   'base photo set on a surface layer, over the block size in samples (1024 m / 2 m)')
-T.check(asphalt.fields.baseColorDetailTex == '/assets/materials/terrain/asphalt/asphalt/t_asphalt_b.png',
-  'surface layer created with its own detail texture')
+T.check(asphalt.fields.baseColorDetailTex == '/temp/beamngEarth/terraintex/bne_rc_asphalt__asphalt__t_asphalt_b.png'
+  and asphalt.fields.normalDetailTex == '/assets/materials/terrain/asphalt/asphalt/t_asphalt_nm.png',
+  'surface layer created with its own detail texture (the colour as the server\'s zero-mean copy)')
+T.check(asphalt.fields.macroDistances == '0 0 100 200' and asphalt.fields.macroDistAtten == '0 1',
+  'the macro gone by 200 m (the block edge: the far tiles show the photo alone)')
+T.check(terrain.stockOf('/temp/beamngEarth/terraintex/bne_rc_soil__macro_clumply__t_macro_clumpy_b.png')
+  == '/assets/materials/terrain/soil/macro_clumply/t_macro_clumpy_b.png', 'stockOf: the copy\'s stock file')
+T.check(terrain.stockOf('/temp/beamngEarth/terraintex/bne_pavers_b.png') == nil
+  and terrain.stockOf('/assets/materials/terrain/soil/t_gravel/t_gravel_b.png') == nil, 'stockOf: other paths nil')
 T.check(asphalt.fields.baseColorDetailTexSize == '2' and asphalt.fields.baseColorMacroTexSize == '16',
   'repeat sizes in samples (4 m, 32 m on the 2 m block): they divide the 128 m block step')
 T.check(dirt.fields.baseColorBaseTex == '/temp/beamngEarth/s/hm_1_0_0_base.png' and dirt.fields.baseColorDetailTexSize == nil,
@@ -109,5 +116,24 @@ T.check(asphalt.fields.baseColorBaseTex == '/levels/beamng_earth/art/terrains/bn
 local n = #tb.updated
 terrain.load('/temp/hm.png', 2, 64, -512, -512, 0, { masks = { 'a.png', 'b.png', 'c.png' }, materials = mats })
 T.check(#tb.updated == n, 'nil (other modes): the base is not touched')
+
+-- A level material (its sizes in samples of the level's 1 m: main.materials.json) on the lighter 2 m ground: the same
+-- repeats in metres, set once per square from the level's values (GitHub #943)
+local lawn = createObject('TerrainMaterial'); lawn:registerObject('bngEarthGroundLawn')
+lawn:setField('baseColorDetailTexSize', 0, '2'); lawn:setField('baseColorMacroTexSize', 0, '64')
+lawn:setField('normalDetailTexSize', 0, '1')
+local mats2 = { mats[1], mats[2], mats[3], { 'bngEarthGroundLawn', 'GRASS' } }
+local masks2 = { masks = { 'a.png', 'b.png', 'c.png', 'd.png' }, materials = mats2 }
+terrain.load('/temp/hm.png', 2, 64, -512, -512, 0, masks2, '/temp/beamngEarth/s/hm_1_0_0_base.png', 1024)
+T.check(lawn.fields.baseColorDetailTexSize == '1' and lawn.fields.baseColorMacroTexSize == '32'
+  and lawn.fields.normalDetailTexSize == '1', "level material on 2 m squares: half the samples (at least 1)")
+terrain.load('/temp/hm.png', 2, 64, -512, -512, 0, masks2, '/temp/beamngEarth/s/hm_1_0_0_base.png', 1024)
+T.check(lawn.fields.baseColorDetailTexSize == '1' and lawn.fields.baseColorMacroTexSize == '32', 'set once (from the level values)')
+terrain.load('/temp/hm.png', 1, 64, -512, -512, 0, masks2, '/temp/beamngEarth/s/hm_1_0_0_base.png', 1024)
+T.check(lawn.fields.baseColorDetailTexSize == '2' and lawn.fields.baseColorMacroTexSize == '64',
+  "back on 1 m squares: the level's own values")
+T.check(dirt.fields.baseColorDetailTexSize == nil, "a level size left unset stays unset")
+T.check(terrain.levelSizeAt('64', 2) == 32 and terrain.levelSizeAt('1', 2) == 1 and terrain.levelSizeAt('', 2) == nil,
+  'levelSizeAt')
 
 T.done('test_detail_mode')

@@ -3,6 +3,7 @@
 //! geocentric latitude, lam the longitude). The Python loop over EGM2008's 2,191 degrees took 37.8 CPU-s of the server
 //! process per 15 minutes, under its one interpreter lock (.claude/work/rust_port_plan.md 6a, 2026-11-07). Same
 //! recursion, rescale points and zonal terms; the row products summed in f64 (Python: in the coefficients' dtype).
+use crate::dm::Dm;
 use numpy::{IntoPyArray, PyArray2, PyArray3, PyReadonlyArray1, PyReadonlyArray2};
 use pyo3::prelude::*;
 
@@ -11,12 +12,12 @@ fn row_sums<C: Copy + Into<f64>>(t: f64, u: f64, lam: f64, ra: &[f64], rb: &[f64
                                  off: &[i64], sect_next: &[f64], log_sect0: &[f64], every: usize, rescale: f64,
                                  nzonal: usize, nmax: usize) -> (Vec<f64>, Vec<f64>) {
     let n1 = nmax + 1;
-    let lu = u.ln();
+    let lu = u.dln();
     let mut log_s: Vec<f64> = (0..n1).map(|m| log_sect0[m] + m as f64 * lu).collect();
-    let w_of = |ls: f64| if ls > -650.0 { ls.max(-650.0).exp() } else { 0.0 };
+    let w_of = |ls: f64| if ls > -650.0 { ls.max(-650.0).dexp() } else { 0.0 };
     let mut w: Vec<f64> = log_s.iter().map(|&ls| w_of(ls)).collect();
-    let cm: Vec<f64> = (0..n1).map(|m| (m as f64 * lam).cos()).collect();
-    let sm: Vec<f64> = (0..n1).map(|m| (m as f64 * lam).sin()).collect();
+    let cm: Vec<f64> = (0..n1).map(|m| (m as f64 * lam).dcos()).collect();
+    let sm: Vec<f64> = (0..n1).map(|m| (m as f64 * lam).dsin()).collect();
     let mut wc: Vec<f64> = (0..n1).map(|m| w[m] * cm[m]).collect();
     let mut wsn: Vec<f64> = (0..n1).map(|m| w[m] * sm[m]).collect();
     let mut out = vec![0.0f64; n1 * 2 * ncol];
@@ -48,7 +49,7 @@ fn row_sums<C: Copy + Into<f64>>(t: f64, u: f64, lam: f64, ra: &[f64], rb: &[f64
                     if m < n {
                         p1[m] /= mag;
                     }
-                    log_s[m] += mag.ln();
+                    log_s[m] += mag.dln();
                     w[m] = w_of(log_s[m]);
                     wc[m] = w[m] * cm[m];
                     wsn[m] = w[m] * sm[m];

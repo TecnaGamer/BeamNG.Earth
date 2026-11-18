@@ -14,6 +14,7 @@ squares (1 m: the cut is by the engine's squares) that the structure itself does
 Pure given the ground function: the same on every tile, process and peer.
 """
 import numpy as np
+import dnp
 
 import busstationmesh as bm
 import busstations as bs
@@ -45,7 +46,7 @@ def levels(frame, elev, st, link):
     """(floor z, lid top z): the lid's top SINK_M under the lowest bed the link crosses, the floor CEIL_D + CLEAR_M under that."""
     path = np.asarray(link.xy, float)
     s = rb._arc(path)
-    pts = [[np.interp(a, s, path[:, 0]), np.interp(a, s, path[:, 1])] for _k, a in link.crosses] or [path[len(path) // 2]]
+    pts = [[dnp.interp(a, s, path[:, 0]), dnp.interp(a, s, path[:, 1])] for _k, a in link.crosses] or [path[len(path) // 2]]
     g = float(bm.ground(frame, elev, np.asarray(pts)).min())
     lid = g - SINK_M
     return lid - CEIL_D - CLEAR_M, lid
@@ -57,7 +58,7 @@ def flights(link, path):
     out = {}
     for e, fl in rb._end_flights(link, path).items():
         end = path[0 if e == 0 else -1]
-        if float(np.hypot(*(fl[0] - end))) > 0.05:
+        if float(dnp.hypot(*(fl[0] - end))) > 0.05:
             fl = np.vstack((end[None], fl))
         out[e] = np.asarray(fl, float)
     return out
@@ -87,7 +88,7 @@ def _lights(mesh, path, zlid, w):
     zc = zlid - CEIL_D - 0.02
     t, n = rb._normals(path)
     for at in np.arange(LIGHT_STEP_M / 2.0, s[-1], LIGHT_STEP_M):
-        p = np.array([np.interp(at, s, path[:, 0]), np.interp(at, s, path[:, 1])])
+        p = np.array([dnp.interp(at, s, path[:, 0]), dnp.interp(at, s, path[:, 1])])
         i = min(int(np.searchsorted(s, at)), len(path) - 1)
         u, nn = t[i], n[i]
         rect = np.array([p - u * 0.15 - nn * 0.5, p + u * 0.15 - nn * 0.5, p + u * 0.15 + nn * 0.5, p - u * 0.15 + nn * 0.5])
@@ -163,6 +164,21 @@ def hole_parts(frame, elev, st, link):
     return out
 
 
+def _reaches(link, box, square):
+    """Can the underpass link's holes (hole_parts: its passage and its pits' flights, half width plus the wall and side,
+    the kernel's squares reaching in from beyond) fall in box (x0, y0, x1, y1)? From its plan alone: its levels (the
+    graded ground at its crossings and pit tops) are not asked for a link that cannot (a station within reach of a
+    block reaches cells the block never plans: Dijon's ~4.6 s of a warm block's 15 s planning them, 2026-11-11)."""
+    path = rb.resample(link.xy)
+    if len(path) < 2:
+        return False
+    import roads as roadsmod
+    pts = np.vstack([path] + list(flights(link, path).values()))
+    pad = width_of(link) / 2.0 + WALL_T + HOLE_SIDE_M + roadsmod.TUNNEL_HOLE_MARGIN + 3.0 * square
+    lo, hi = pts.min(axis=0) - pad, pts.max(axis=0) + pad
+    return not (hi[0] < box[0] or lo[0] > box[2] or hi[1] < box[1] or lo[1] > box[3])
+
+
 def hole_mask(parts, u, cx, cy, square):
     """Where the terrain block (heights u [iy, ix], roads.tunnel_hole_mask's grid) is a hole for the underpasses `parts`."""
     import fast
@@ -195,7 +211,7 @@ def holes(md, frame, keep, cx, cy, square, elev):
         parts = []
         for st in railstations.stations_near(md, frame, box):
             for ln in st.links:
-                if ln.kind == "under":
+                if ln.kind == "under" and _reaches(ln, box, square):
                     parts += hole_parts(frame, elev, st, ln)
         if not parts:
             return None

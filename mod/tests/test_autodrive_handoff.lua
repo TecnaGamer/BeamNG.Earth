@@ -60,4 +60,69 @@ mapmgr.mapData = graph()
 T.check(A.drive({'c'}, 3, false, nil, .3) == 'start', 'one waypoint restarts after map replacement')
 T.check(A.drive({}, 3, false, nil, .3) == 'waiting', 'an empty waypoint list still holds')
 T.check(A.drive({'missing'}, 3, false, nil, .3) == 'waiting', 'an unknown single waypoint still holds')
+do
+  local savedObj, savedMap = obj, mapmgr.mapData
+  local function roads()
+    local md = graph()
+    md.positions = { a = {x=0,y=0,z=0}, b = {x=100,y=0,z=0}, c = {x=200,y=0,z=0}, d = {x=300,y=0,z=0} }
+    md.radius = {a=4,b=4,c=4,d=4}
+    return md
+  end
+  local md, ids, heading = roads(), {'b','c','d'}, {x=1,y=0,z=0}
+  T.check(same(A.forwardStart(ids, md, {x=102,y=2,z=0}, heading), 'c,d') and same(ids, 'b,c,d'),
+    'trim a passed prefix without mutating the requested route')
+  T.check(same(A.forwardStart(ids, md, {x=98,y=2,z=0}, heading), 'b,c,d'), 'a waypoint ahead remains mandatory')
+  T.check(same(A.forwardStart(ids, md, {x=100,y=2,z=0}, heading), 'c,d'), 'a waypoint at the front plane is reached')
+  T.check(same(A.forwardStart(ids, md, {x=102,y=6,z=0}, heading), 'b,c,d'), 'a nearby parallel road does not count as passing')
+  T.check(same(A.forwardStart(ids, md, {x=102,y=2,z=4}, heading), 'b,c,d'), 'a road on another level does not count as passing')
+  T.check(same(A.forwardStart(ids, md, {x=102,y=2,z=0}, {x=-1,y=0}), 'b,c,d'),
+    'an intended turn back to the waypoint is not removed')
+  md.graph.d.b, md.graph.b.d = {}, {}
+  T.check(same(A.forwardStart({'b','c','d','b'}, md, {x=102,y=2,z=0}, heading), 'c,d,b'),
+    'a later planned return to the starting waypoint remains in the route')
+  md.positions.c, md.positions.d = {x=100,y=100,z=0}, {x=100,y=200,z=0}
+  T.check(same(A.forwardStart(ids, md, {x=98,y=2,z=0}, heading), 'b,c,d'), 'a corner still ahead cannot be cut')
+  md.positions.c, md.positions.d = {x=100.01,y=0,z=0}, {x=200,y=0,z=0}
+  T.check(same(A.forwardStart(ids, md, {x=102,y=2,z=0}, heading), 'd'), 'a passed short connector can be skipped through its forward continuation')
+  md = roads(); md.graph.b.c = {inNode='c',inRadius=8,outRadius=2}
+  T.check(same(A.forwardStart(ids, md, {x=102,y=3,z=0}, heading), 'b,c,d'), 'reverse-stored edge radii keep their orientation')
+  md.positions.c = {x=100,y=0,z=0}
+  T.check(same(A.forwardStart(ids, md, {x=102,y=2,z=0}, heading), 'b,c,d'), 'a degenerate edge is left intact')
+  obj = { getFrontPosition = function() return {x=102,y=2,z=1} end,
+    getPosition = function() return {x=98,y=2,z=0} end, getDirectionVector = function() return heading end }
+  mapmgr.mapData = roads(); A.reset()
+  A.drive({'b','c','d'}, 6, false, nil, .3)
+  T.check(same(starts[#starts].wpTargetList, 'c,d'),
+    'a fresh handoff targets ahead of the native AI front even while the body reference is behind the waypoint')
+  T.check(A.drive({'b','c','d'}, 6, false, nil, .3) == 'keep',
+    'a repeated request does not reintroduce the passed first waypoint')
+  mapmgr.mapData = roads()
+  A.drive({'b','c'}, 6, false, nil, .3)
+  T.check(same(starts[#starts].wpTargetList, 'c'), 'a map replacement starts on the forward suffix')
+  A.drive({'b'}, 7, true, nil, .3)
+  T.check(same(starts[#starts].wpTargetList, 'b'), 'the final single waypoint remains available for arrival')
+  obj, mapmgr.mapData = savedObj, savedMap; A.reset()
+end
+local stopDistance, speedMode
+ai.setStopPoint = function(_, distance) stopDistance = distance end
+ai.setSpeedMode = function(mode) speedMode = mode end
+A.drive({'b','c'}, 4, true, 20, .3)
+A.approach(105)
+T.check(stopDistance == 100 and speedMode == 'limit', 'a selected speed no longer overrides the final stopping profile')
+speedMode = nil
+A.drive({'b','c'}, 5, true, nil, .3)
+A.approach(50)
+T.check(stopDistance == 45 and speedMode == nil, 'normal approaches retain legal-speed planning')
+A.approach(2)
+T.check(stopDistance == 0, 'a very near destination does not request a stop behind the car')
+ai.mode = 'disabled'; stopDistance = nil
+A.approach(50)
+T.check(stopDistance == nil, 'an approach update cannot restart a stopped local path')
+A.arrive()
+T.check(stops[#stops - 1] == 'manual' and stops[#stops] == 'stop',
+  'arrival activates braking with no old target to turn back toward')
+A.drive({'b','c'}, 5, false, nil, .3)
+T.check(starts[#starts].routeSpeedMode == 'legal', 'a new drive releases arrival control and restores its speed mode')
+A.stop('disabled')
+T.check(stops[#stops] == 'disabled', 'manual cancellation still releases control')
 T.done('test_autodrive_handoff')

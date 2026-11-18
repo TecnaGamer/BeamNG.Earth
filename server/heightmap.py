@@ -34,22 +34,41 @@ import numpy as np
 import staging
 from PIL import Image
 
-SIZE = 1024
-SQUARE = 1.0                        # m; exactly representable, so the lattice is exact
+
+
+def ground_square(environ=None):
+    """The session's block square (m between samples): BNGE_GROUND_SQUARE, 1 (the default: the stock maps' resolution)
+    or 2 (the lighter ground of the Low and Medium quality presets, GitHub #943: the same kilometre in 512² samples, a
+    quarter of the .ter to parse at each swap; the launcher sets it from the settings page's groundGrid). Read once, at
+    import: every block-size rule below and in the modules using them follows it."""
+    v = (os.environ if environ is None else environ).get("BNGE_GROUND_SQUARE", "").strip()
+    try:
+        sq = float(v) if v else 1.0
+    except ValueError:
+        sq = 1.0
+    return sq if sq in GROUND_SQUARES else 1.0
+
+
+GROUND_SQUARES = (1.0, 2.0)
+SQUARE = ground_square()            # m; exactly representable, so the lattice is exact
+SIZE = int(1024 / SQUARE)           # samples per edge of the 1 km block (1024 at 1 m, 512 at 2 m)
 FAR_SQUARE = 2.0                    # m: the far field's near tiles' lattice (every second block sample)
 HALF = SIZE * SQUARE / 2            # block position = centre - HALF
 VALID = (SIZE - 1) * SQUARE         # 1023 m: collidable extent from the SW corner (P1)
 GRID_BY_M = {1024.0: 128.0, 2048.0: 256.0}  # the centre grid (m) by the block's width (m)
 GRID = GRID_BY_M[SIZE * SQUARE]     # block centres are multiples of this
 CHUNK_ROWS = 256                    # bounds the geodesy temporaries
-CHUNK = 128                         # samples: ChunkCache's chunk, 128 m (the block's follow grid)
+CHUNK = int(128 / SQUARE)           # samples: ChunkCache's chunk, 128 m (the block's follow grid)
 CHUNK_CACHE = 512                   # chunks kept per frame (128 KB each: 64 MB, 8 blocks)
 CHUNK_GEO_CACHE = 128               # ... and their lat / lon this many (256 KB each: 32 MB, 2 blocks; PR #786: a moved
                                     # block's own chunks are all it reads them for, and all 512 were +128 MB a process)
-# Height quanta (m), finest first: 65536 Q = 256 ... 4096 m of range per block.
-Q_LADDER = (1 / 256, 1 / 128, 1 / 64, 1 / 32, 1 / 16)
+# Height quanta (m), finest first: 65536 Q = 64 ... 4096 m of range per block. On the 1 m ground the rounding is a
+# curvature of ~Q per m² the tyres feel: a quarter car's roughness (IRI) of Phoenix's roads (bumpscan, 2026-11-12) was
+# 3.2 m/km at 1/128, 1.8 at 1/256, 1.25 at 1/512, 0.99 at 1/1024 (0.82 unrounded): a flat place's blocks take 1/1024
+# or 1/512 now (a block's relief within 48 / 112 m).
+Q_LADDER = (1 / 1024, 1 / 512, 1 / 256, 1 / 128, 1 / 64, 1 / 32, 1 / 16)
 Q_DEFAULT = 1 / 64
-ZBASE_STEP = 64.0                   # zBase is a multiple of this (and so of every Q)
+ZBASE_STEP = 8.0                    # zBase is a multiple of this (and so of every Q; 64 m took 1/1024's whole range)
 ZBASE_MARGIN = 8.0                  # m below the lowest sample
 
 
@@ -134,6 +153,8 @@ class ChunkCache:
         self.cap = cap
         self.chunks = OrderedDict()             # (kx, ky) lattice chunk -> (CHUNK, CHUNK) float64 [j, i]
         self.geo = OrderedDict()                # (kx, ky) lattice chunk -> ((CHUNK, CHUNK) lat, (CHUNK, CHUNK) lon)
+        self.dirty = set()                      # chunks computed in a build that read something short (blockcache.py:
+                                                # never kept on disk, nor any block made with them)
         self.lock = threading.Lock()
 
     def get(self, k):
@@ -166,8 +187,17 @@ class ChunkCache:
                 self.geo.move_to_end(k)
                 self._trim_geo()
 
+    def mark_dirty(self, ks):
+        with self.lock:
+            self.dirty.update(k for k in ks if k in self.chunks)
+
+    def any_dirty(self, ks):
+        with self.lock:
+            return any(k in self.dirty for k in ks)
+
     def put(self, k, u, geo=None):
         with self.lock:
+            self.dirty.discard(k)
             self.chunks[k] = u
             self.chunks.move_to_end(k)
             if geo is not None:
@@ -176,16 +206,59 @@ class ChunkCache:
             while len(self.chunks) > self.cap:
                 evicted, _ = self.chunks.popitem(last=False)
                 self.geo.pop(evicted, None)
+                self.dirty.discard(evicted)
             self._trim_geo()
 
     def clear(self):
         with self.lock:
             self.chunks.clear()
             self.geo.clear()
+            self.dirty.clear()
 
 
-def grid_u_chunked(frame, elev_fn, cx, cy, size, cache, keep=None):
+def block_chunks(cx, cy, size=SIZE):
+    """[(ci, cj, (kx, ky))] of the CHUNK x CHUNK lattice chunks of the size² block centred at (cx, cy), row by row from
+    the south-west, or None when the block is not on the chunk grid."""
+    kx0, ky0 = lattice_index(cx, size), lattice_index(cy, size)
+    if kx0 % CHUNK or ky0 % CHUNK or size % CHUNK:
+        return None
+    nc = size // CHUNK
+    return [(ci, cj, (kx0 // CHUNK + ci, ky0 // CHUNK + cj)) for cj in range(nc) for ci in range(nc)]
+
+
+def chunk_grid(cx, cy, size, cache, disk):
+    """The block's heights from its chunks alone: the memory's (a ChunkCache, its dirty ones aside) and the disk's
+    (disk: blockcache.ChunkDisk; those it has are put in the memory too). None when one is in neither: nothing is
+    computed here."""
+    cells = block_chunks(cx, cy, size)
+    if cells is None:
+        return None
+    u = np.empty((size, size))
+    want = []
+    for ci, cj, k in cells:
+        got = cache.get(k) if cache is not None and not cache.any_dirty((k,)) else None
+        if got is None:
+            want.append((ci, cj, k))
+        else:
+            u[cj * CHUNK:(cj + 1) * CHUNK, ci * CHUNK:(ci + 1) * CHUNK] = got
+    if want:
+        if disk is None:
+            return None
+        got = disk.load([k for _, _, k in want])
+        for ci, cj, k in want:
+            if k in got:
+                u[cj * CHUNK:(cj + 1) * CHUNK, ci * CHUNK:(ci + 1) * CHUNK] = got[k]
+                if cache is not None:       # (the build that follows a miss reads them from the memory)
+                    cache.put(k, got[k])
+        if len(got) < len(want):
+            return None
+    return u
+
+
+def grid_u_chunked(frame, elev_fn, cx, cy, size, cache, keep=None, disk=None):
     """grid_u through a ChunkCache: elev_fn runs once, on the samples of the chunks the cache lacks.
+    disk (blockcache.ChunkDisk, optional): the chunks the memory lacks read from the disk first; the ones computed
+    here are handed to it (disk.computed) for the caller to keep once the block is known complete.
     Returns (u, the share of samples computed)."""
     kx0, ky0 = lattice_index(cx, size), lattice_index(cy, size)
     if kx0 % CHUNK or ky0 % CHUNK or size % CHUNK:
@@ -216,6 +289,15 @@ def grid_u_chunked(frame, elev_fn, cx, cy, size, cache, keep=None):
                     else:
                         need_geo.append((ci, cj, k))
 
+    if missing and disk is not None:        # (the disk's chunks: their lat / lon made below, as a geo-less memory hit's)
+        got = disk.load([k for _, _, k in missing])
+        if got:
+            for ci, cj, k in missing:
+                if k in got:
+                    u[cj * CHUNK:(cj + 1) * CHUNK, ci * CHUNK:(ci + 1) * CHUNK] = got[k]
+                    cache.put(k, got[k])
+            missing = [m for m in missing if m[2] not in got]
+
     if not missing and not need_geo:
         if keep is not None:
             keep["lat"], keep["lon"] = lat, lon
@@ -238,6 +320,8 @@ def grid_u_chunked(frame, elev_fn, cx, cy, size, cache, keep=None):
                 sl_y = slice(cj * CHUNK, (cj + 1) * CHUNK)
                 sl_x = slice(ci * CHUNK, (ci + 1) * CHUNK)
                 cache.put(k, u[sl_y, sl_x].copy(), geo=(full_lat[sl_y, sl_x].copy(), full_lon[sl_y, sl_x].copy()))
+                if disk is not None:
+                    disk.computed.append((k, u[sl_y, sl_x]))
         if keep is not None:
             keep["lat"], keep["lon"] = full_lat, full_lon
         return u, 1.0
@@ -280,6 +364,8 @@ def grid_u_chunked(frame, elev_fn, cx, cy, size, cache, keep=None):
             c = mu[n_ * CHUNK * CHUNK:(n_ + 1) * CHUNK * CHUNK].reshape(CHUNK, CHUNK)
             u[a, b] = c
             cache.put(k, c.copy(), geo=chunk_geo.get(k))
+            if disk is not None:
+                disk.computed.append((k, c))
 
     if keep is not None:
         keep["lat"], keep["lon"] = lat, lon
@@ -298,6 +384,16 @@ def choose_q(relief, ladder=Q_LADDER):
     need = relief * 1.1 + ZBASE_STEP + ZBASE_MARGIN
     for q in ladder:
         if 65535 * q >= need:
+            return q
+    return ladder[-1]
+
+
+def block_q(relief, ladder=Q_LADDER):
+    """Smallest quantum of the ladder a block with this relief fits (block_params' rule: its range above the rounded
+    down zBase, ZBASE_STEP + ZBASE_MARGIN at most, within 65534 Q)."""
+    need = relief + ZBASE_STEP + ZBASE_MARGIN
+    for q in ladder:
+        if need <= 65534 * q:
             return q
     return ladder[-1]
 
@@ -390,17 +486,21 @@ def height_at(qgrid, z_base, max_height, cx, cy, x, y, square=SQUARE):
 
 @profile_step('Heightmap generation')
 def generate(frame, elev_fn, path, cx=0.0, cy=0.0, ground_at=(0.0, 0.0), q=Q_DEFAULT, size=SIZE, keep=None,
-             chunks=None):
+             chunks=None, post=None, disk=None):
     """Build the size² block centred at (cx, cy) with height quantum q and write it to path.
     groundZ is the terrain height at ground_at (None if that point is outside the block). keep (a
     dict, optional) receives "lat", "lon" and "u" of the grid ([gy, gx], gy = north) and write_png's
-    "qgrid". chunks: a ChunkCache of this frame (the heights it holds are reused, the new ones added)."""
+    "qgrid". chunks: a ChunkCache of this frame (the heights it holds are reused, the new ones added).
+    post(u, keep): the grid's heights changed before they are written (a provisional block's L0 roads, l0roads.py;
+    needs keep, never with chunks: the chunks keep the heights as computed). disk: grid_u_chunked's (with chunks)."""
     if chunks is None:
         u = grid_u(frame, elev_fn, cx, cy, size, keep)
     else:
-        u, share = grid_u_chunked(frame, elev_fn, cx, cy, size, chunks, keep)
+        u, share = grid_u_chunked(frame, elev_fn, cx, cy, size, chunks, keep, disk)
         if keep is not None:
             keep["new_share"] = share       # (the share of samples computed: the rest from earlier blocks' chunks)
+    if post is not None and keep is not None:
+        u = post(u if chunks is None else u.copy(), keep)
     q, z_base, max_height, qgrid = write_png(path, u, q)
     if keep is not None:
         keep["u"] = u

@@ -7,7 +7,7 @@
     "persistentId": "00edd0dd-fe6b-5fbd-a730-f8cd2db1e45b",
     "Stages": [
       {
-        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/eu_surfaces/kerb.color.png",
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/eu_surfaces/kerb.color.dds",
         "baseColorFactor": [
           1,
           1,
@@ -28,7 +28,7 @@
     "persistentId": "0b0873ab-3529-5f03-8d66-b61035a97cb5",
     "Stages": [
       {
-        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/eu_surfaces/footway.color.png",
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/eu_surfaces/footway.color.dds",
         "baseColorFactor": [
           1,
           1,
@@ -62,7 +62,7 @@
         "roughnessFactor": 0.9,
         "metallicFactor": 0,
         "useAnisotropic": true,
-        "opacityMap": "/levels/beamng_earth/art/shapes/beamngEarth/dirt_fade_o.data.png",
+        "opacityMap": "/levels/beamng_earth/art/shapes/beamngEarth/dirt_fade_o.data.dds",
         "opacityMapUseUV": 1
       }
     ]
@@ -75,7 +75,7 @@
     "persistentId": "26c9cb1f-0566-585f-9ea2-2d5a8e1b30b7",
     "Stages": [
       {
-        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/eu_surfaces/tactile.color.png",
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/eu_surfaces/tactile.color.dds",
         "baseColorFactor": [
           1,
           1,
@@ -96,7 +96,7 @@
     "persistentId": "a472c16a-1ea1-5c6c-b133-4e504b1b124b",
     "Stages": [
       {
-        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/eu_surfaces/light_asphalt.color.png",
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/eu_surfaces/light_asphalt.color.dds",
         "baseColorFactor": [
           1,
           1,
@@ -117,7 +117,7 @@
     "persistentId": "1b67d290-d9a6-5bee-a2a2-cbc1f220957d",
     "Stages": [
       {
-        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/eu_surfaces/concrete.color.png",
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/eu_surfaces/concrete.color.dds",
         "baseColorFactor": [
           1,
           1,
@@ -138,7 +138,7 @@
     "persistentId": "3a5bd959-430e-5eb0-a65b-741d6bfa81ad",
     "Stages": [
       {
-        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/eu_surfaces/slabs.color.png",
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/eu_surfaces/slabs.color.dds",
         "baseColorFactor": [
           1,
           1,
@@ -159,7 +159,7 @@
     "persistentId": "03339626-3ac3-5c79-8b89-ab0c97f7562e",
     "Stages": [
       {
-        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/eu_surfaces/pavers.color.png",
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/eu_surfaces/pavers.color.dds",
         "baseColorFactor": [
           1,
           1,
@@ -180,7 +180,7 @@
     "persistentId": "53cab921-f427-5d5b-b098-c31cab61e048",
     "Stages": [
       {
-        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/eu_surfaces/pavers_mixed.color.png",
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/eu_surfaces/pavers_mixed.color.dds",
         "baseColorFactor": [
           1,
           1,
@@ -201,7 +201,7 @@
     "persistentId": "5917c19f-99e0-5ae7-b51f-05edf838ae0d",
     "Stages": [
       {
-        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/eu_surfaces/stone.color.png",
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/eu_surfaces/stone.color.dds",
         "baseColorFactor": [
           1,
           1,
@@ -222,7 +222,7 @@
     "persistentId": "778a36c4-b17b-5b9a-93b2-588f8c288277",
     "Stages": [
       {
-        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/eu_surfaces/gravel.color.png",
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/eu_surfaces/gravel.color.dds",
         "baseColorFactor": [
           1,
           1,

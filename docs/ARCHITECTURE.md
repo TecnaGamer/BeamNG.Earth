@@ -2,6 +2,7 @@
 
 Target: BeamNG.drive 0.39.4 (native Linux, Vulkan). Research date 2026-10-09.
 Raw research + adversarial verification: `docs/research/2026-10-09-research-raw.json`.
+Hosting (the tile CDN, the data workflows, the collector and builder services): [HOSTING.md](HOSTING.md).
 
 Game install: `~/.local/share/Steam/steamapps/common/BeamNG.drive`
 User folder (VFS root overlay): `~/.local/share/BeamNG/BeamNG.drive/current`
@@ -58,6 +59,7 @@ Same pattern as MSFS "anchor space", Cesium origin-shifting, and KSP floating or
 | reloadCollision | 2 048 tris: 0.5 ms; 8 192 tris: 2.3 ms (in an otherwise empty smallgrid). |
 | Ray tools | `castRayStatic(pos, dir, len)` returns the physics-collision distance (use it to verify drivability). The MCP `raycast` tool only sees render geometry. |
 | **Collision rebuild scales linearly with ALL collidable tris, and it blocks the frame** | ProceduralMesh: 131k tris 41 ms, 524k 162 ms (**~0.31 ms per 1k tris**). TSStatic 'Visible Mesh' costs about half (~0.15 ms per 1k). `reloadStaticCollision()` and `reloadCollision(false,true)` cost the same. There is **no cheaper path**. Budget: keep collidable geometry around ~100k tris (≈20–30 ms per rebuild). |
+| **What a rebuild costs on a Steam Deck (2026-11-14)** | Two parts, both by geometry, not by object count: the frame's Lua (the engine gathering every collider's mesh) ~3 ms + ~4-5 ms per MB of unique collision mesh, and the physics thread's tree build (`Loaded Static Collision`) ~2 ms + ~0.2 ms per 1k triangles; the terrain is re-added every time. Forest items share their meshes: 866 solid trees and props off cost 3 ms of 27 (their 0.7 MB), the 48 road-tile colliders 16 ms (3 MB). `reloadCollision(a, b)` in all four forms and `reloadStaticCollision` cost the same (9 variants, 10 calls each, parked in Fells Point), and fresh colliders with `prebuildCollisionData` 1 rebuilt no faster than with 0 (26 ms median both, 3 rounds) while each cost ~1.7 ms more to make. So merging props into one mesh a tile would make rebuilds dearer (unique MB); fewer road-tile colliders round the car is what helps (roads.lua BEHIND). |
 | ProceduralMesh render-only? | **No.** `disableCollision()` does NOT remove it from physics (ray still hits, rebuild cost unchanged). It has no collisionType field. **Far/render-only tiles must be TSStatic with `collisionType='None'`.** |
 | TSStatic from runtime-written .dae | Works. A `.dae` written by an external process into `<user>/temp/beamngEarth/` loads immediately via `shapeName='/temp/beamngEarth/x.dae'`, with its PNG texture (relative `init_from`). 8 192 tris: 51 ms spawn; **131k tris: 415 ms** (XML parse, main thread). Large single meshes do NOT hang (unlike ProceduralMesh). **Its collision appears only on a reload in a later frame**, not in the same frame as the spawn. Writer: `server/dae.py`. |
 | Drivability | A car drives on ProceduralMesh tiles normally (follows the surface; ground clearance stays constant). |
@@ -105,6 +107,18 @@ Same pattern as MSFS "anchor space", Cesium origin-shifting, and KSP floating or
   and navgraph node tables.
 - Output: atomic files in `<user>/temp/beamngEarth/<session>/` (versioned names,
   because the engine caches by path), plus small JSON control messages.
+- The game connection (protocol 4: a u32 LE length + UTF-8 JSON, at most 16 MiB a frame) is served by asyncio, or
+  with `BNGE_HOST=on` by earthfast's host (`native/earthfast/src/host`, the Rust port's phase 1; plan
+  `.claude/work/rust-port-plan-2026-11-15.md` section 4): Rust owns the listening socket, the reads, the framing, the
+  outgoing queue and the writes on threads of its own (`bnge-io` accepts, `bnge-rd-N` / `bnge-wr-N` per connection),
+  without the GIL. The hand-over needs no GIL either: the first frame into an empty inbox writes one byte to a local
+  socket pair the event loop reads like any socket, and the loop then takes everything that came as one batch
+  (`protocol.HostServer`; what comes while it is busy waits in that batch, consecutive poses of one anchor merged:
+  `BNGE_HOST_MERGE`). The handlers run unchanged on the loop, the "Python lane", through `protocol.HostStream`
+  (asyncio's reader / writer surface: drain's 64 / 16 KiB water marks, close flushes, abort drops). So frames keep
+  moving both ways while the loop or the GIL is held; each frame's wait for the lane is measured in Rust (the
+  once-a-minute `host:` line; `bnge-watch` logs `python lane: N frames waiting X s` past 2 s). `BNGE_HOST_RECORD=DIR`
+  (developers) records what the game sends for `tools/hostreplay.py` (private: the player's positions).
 
 ### Mod `beamng_earth`
 - Level `levels/beamng_earth/`: smallgrid skeleton **without GroundPlane**,
@@ -139,7 +153,11 @@ Physics geometry always comes from open data:
   national orthophotos near the player. Esri World Imagery is optional, using
   the user's own key.
 - **Buildings and roads:** Overture and OpenStreetMap, from extracts the server
-  holds itself. Never query the public Overpass API at runtime.
+  holds itself. Never query the public Overpass API for world data at runtime. The one
+  exception (the owner's OK, 2026-11-14): the map's category search ("race tracks",
+  "forests" ...) sends one small, cached Overpass query per Enter, never while typing
+  (`server/geocode.py`, netfetch policy `overpass-api.de`: interactive only, rate 0.1/s,
+  50 a day, named places only, the player's position rounded to 0.01°).
 - **Land cover and vegetation:** ESA WorldCover and Meta canopy height.
 - Both are read per global cell by the map-data pipeline (`server/mapdata.py`, "Map data" below).
 - **Gravity:** WGS84 normal gravity (Somigliana + free air) plus the EGM2008 anomalies (NGA,
@@ -863,6 +881,20 @@ three days of testing: dem 741 MB / 7.5k files, imagery 1.4 GB / 35k, deshadow 7
   anchor commit (a new frame) forgets the remembered ground height (`edgeguard.newFrame`).
   Offline: 30 m/s rests 15 m inside, braking <= 6.6 m/s^2; 134 m/s on a 512 block stays on it (cut to
   the profile when it engages); an aircraft at 500 m flies off untouched.
+- **Deck guard** (`deckguard.lua`, server `deckspans.py`; 2026-11-15, a BeamMP player fell through small bridges in
+  Baltimore whose road tiles came late): a deck is part of its road tile, and the block, which comes first, already
+  has the gap under it. For a mod that says `hello.deckGuard`, the server lists the map's tagged bridges of drivable
+  roads within 1.2 km of the car (`deck_spans`: chains of pieces joined at shared ends, which ends stand on the
+  ground), from the cells already on disk, in its own thread, again every 150 m / 4 s and sent only when changed.
+  Every 0.25 s (nothing at all while no span is within reach) the mod follows the car's path ahead (an arc at its turn
+  rate) for its braking distance + 2 s and finds the first place on a span the car drives onto (along it, entered at an
+  end at the deck's level, or already on it) whose road tile has not arrived (`roads.deckGrid`: every tile the span crosses, walked over the tile grid; no tile there; a tile in
+  makes its deck solid in time itself) where the block's ground lies 2 m or more under the deck's level (the
+  abutments' heights, `getTerrainHeight`): then a light drag, the speed capped to stop 12 m short (4 m/s^2, at most
+  7 m/s^2 taken off), a hold (simhold: our car only in BeamMP) if it cannot stop, a set-back if it went over anyway;
+  `pose.deckWait` names the tile (built first, `GeoTracker.deck_first`) and `guardHold` gives the server every core
+  while the car waits. No collider, no ray; plans, blocks and tiles unchanged. Tests: `test_deckguard.lua`,
+  `test_deckspans.py`.
 - **Session adoption** (server `Server._scan_sessions / claim_sessions / release_session /
   sweep_sessions`, mod `farfield.heldSessions`): see server/README.md "Run" and the protocol table
   (`hello.sessions`, `pose.sessions`; the server's own messages are unchanged, so a default session is
@@ -969,8 +1001,15 @@ three days of testing: dem 741 MB / 7.5k files, imagery 1.4 GB / 35k, deshadow 7
   which works with or without the library. Measured: a 3 km drive at 30 m/s, 10 block moves, zero
   blank-grass frames, no rebuild frame (each move only the import's ~25 ms frame), median 7.6 ms
   per frame versus 10.0 ms without it.
-- The same library (tools/gcpatch/README.md) also carries texkeep (2026-11-03; opt-in, BNGEARTH_TEXKEEP=1, until the
-  review's deadlock risk is fixed): it hooks the texture manager's
+- terfast (2026-11-13; tools/gcpatch/bngearth_terfast.c in the same library, enginepatch_terfast.py for the Windows
+  game): a .ter swap's TerrCell::init scanned every leaf cell's 65 x 65 samples three times with two divisions per
+  sample (bounds, layers, holes: ~80 % of the swap's main-thread time). Both functions are replaced and the hole
+  loop jumped over, the same results computed row by row (bit-identical; BNGEARTH_TERFAST_CHECK=1 runs both and
+  counts differences). Steam Deck: setFile's CPU 22.9 -> 1.9 ms a swap; Windows test PC: the swap call 53 -> 31 ms,
+  driving frames over 50 ms 10.9 -> 6.2 a minute. What remains of a swap is the frame after it (the material
+  texture rebuild: texkeep) and waits for the GPU device.
+- The same library (tools/gcpatch/README.md) also carries texkeep (2026-11-03; on by default on Linux since the
+  2026-11-14 teleport soaks, off with BNGEARTH_TEXKEEP_OFF=1): it hooks the texture manager's
   createTexture (vtable slot 5) for the terrain pack loader and hands back the packed terrain textures it kept from
   the last material rebuild, so a block swap or setBase no longer re-creates the unchanged packs (swap frame Render
   21.6 -> 13.0 ms median, setBase 83 -> 58 ms on the PC); and dtsmooth, a 95-byte rewrite of FrameTime::update so
@@ -1282,6 +1321,29 @@ CLI). The only change to an existing module: host policies in `netfetch.POLICIES
   (`BNGE_PMT_BASE=1` reads it anyway). Cells from the tiles live in their own folder (`overture-pmt<FORMAT>`) and
   `versions()["mapsrc"]` keys every plan, cell fact and tile built from them; when the tiles fail, the layer is built
   from parquet, kept with the parquet cells and marked a revisit fault.
+- **Our prebaked input tiles, BNWT** (`server/bnwt.py` + earthfast `bnwt.rs`, `tools/build_bnwt.py`, `bnwtunit.py`,
+  2026-11-13; off unless `BNGE_BNWT_URL` names where the archives are: http(s), `file://` or a folder): per z14 cell,
+  exactly what the runtime's own source gives, for four archives: `base` (water, land use, infrastructure: the parquet
+  path's cells), `transportation` (roads, connectors, route numbers), `buildings` (and parts), `places` (the last
+  three: Overture's tiles' cells, `pmtiles.Reader.query`, keyed by its FORMAT; places in their own licence section,
+  their unread `src_record` kept empty). An archive is `<base>/bnwt<FORMAT>/<release>/<name>.c<CONTENT>.index.json`
+  (coverage, source, layers) and its parts (PMTiles v3 files of at most 400 MB, so a CDN caches each whole; each a
+  contiguous range of Hilbert tile ids, so every quadtree square is one or two byte ranges). The codec is lossless (ids,
+  1e-7 degree grid coordinates with the off-grid doubles kept exactly, a clip's cut points coded as the cell's own
+  edges, every column's dtype and bytes, rule tables, the sources' counts; one zstd frame a tile, no cell in it), so a
+  cell from a tile is its source's cell bit for bit: same file, same cache keys, no plan or facts format bump. Tiles of
+  the same bytes are kept once per part (run-length directory entries): open sea (an ocean piece cut to the cell is the
+  cell's edges only) costs a few tiles per ocean piece. A cell with no tile is its source's empty layer. A cell not on
+  disk comes with its aligned 4x4 block (z12) in one range read. Anything it cannot answer (no archive, another format
+  / content / release / source in its index, a cell outside its coverage, a damaged tile) is read from the source
+  itself; an archive that failed is asked again after 10 min; its host has a netfetch lane of its own (2 s to connect,
+  2 tries: a host that does not answer costs ~4 s once). `bnwt.py region --bbox ...` downloads a region (resumable)
+  and pins it (`pins.json`: the cache cap never evicts its tiles). `CONTENT[name]` is bumped with any change of the
+  source's output for an archive's layers (tests/test_bnwt.py ContentGuard fingerprints that code). Builds: base per
+  unit of 16x16 cells, one query and the rows split to cells by the same steps as the cell query (the STAC file and
+  row-group tests in double, the rows' bbox test in the column's type: earthfast `bnwt_assign`; checked cell by cell
+  with `--check`), the others per cell through Overture's tiles; deterministic (same inputs, same bytes), resumable,
+  `--shard I/N` + `--assemble` for a job matrix.
 - **Rasters**: COG range reads with `cog.py` (classic/BigTIFF, Deflate/PackBits/none, predictor
   2, sparse tiles; no GDAL, no tifffile). A missing file (open ocean for WorldCover, no CHM
   coverage) is a 404 remembered by a marker; the cell gets class 0 / no canopy layer. (Checked

@@ -86,5 +86,56 @@ class UnderpassMetadataTest(unittest.TestCase):
             self.assertTrue(any(p[2] == "bridge" for p in parts))
 
 
+class UnderpassMaskCostTest(unittest.TestCase):
+    """_underpass_masks measures only a part's points inside the tunnel's padded box (a central London cell's rail beds
+    measured every point of km-long lines against every tunnel in every node window: 41-45 CPU-s a cell, 2026-11-13),
+    with the masks the whole-line measure gave."""
+
+    @staticmethod
+    def whole(rails, line, half, margin):
+        """The masks' covered candidates as every point was measured (before), for the comparison."""
+        pad = half + margin
+        direction = line[-1] - line[0]
+        out = []
+        for *_, xy in rails:
+            t = np.gradient(xy, axis=0)
+            cross = np.abs(t[:, 0] * direction[1] - t[:, 1] * direction[0])
+            cross /= np.maximum(np.sqrt((t * t).sum(1)) * np.sqrt((direction * direction).sum()), 1e-9)
+            d, _ = railways._underpass_distance(xy, line)
+            out.append((d <= pad) & (cross > railways.UNDERPASS_MIN_SIN))
+        return out
+
+    def test_only_box_points_measured_same_masks(self):
+        rng = np.random.default_rng(7)
+        n = 4000                                    # (a 12 km line every STEP_M)
+        s = np.arange(n) * railways.STEP_M
+        long_line = np.c_[s - 6000.0, 30.0 * np.sin(s / 900.0)]
+        rails = [("a", "rail", "ground", long_line),
+                 ("b", "rail", "ground", long_line + [0.0, 4.5]),           # (its double track)
+                 ("c", "rail", "ground", np.c_[np.full(300, 40.0), np.arange(300) * 3.0 - 450.0])]
+        seen = []
+        real = railways._underpass_distance
+
+        def counting(xy, line):
+            seen.append(len(xy))
+            return real(xy, line)
+        hits = 0
+        for _ in range(20):
+            c = rails[int(rng.integers(3))][3][int(rng.integers(300))]
+            d = rng.normal(size=2)
+            d /= np.hypot(*d)
+            line = np.array([c - 25.0 * d, c + 25.0 * d])
+            half, margin = float(rng.uniform(3, 10)), float(rng.uniform(2, 12))
+            want = self.whole(rails, line, half, margin)
+            seen.clear()
+            with mock.patch.object(railways, "_underpass_distance", counting):
+                got = railways._underpass_masks(rails, line, half, margin)
+            self.assertLess(max(seen, default=0), 200, "only the points near the tunnel measured")
+            for g, w in zip(got, want):
+                self.assertFalse((g & ~w).any(), "nothing the whole measure left out")
+            hits += sum(bool(g.any()) for g in got)
+        self.assertGreater(hits, 10, "tunnels across the tracks found")
+
+
 if __name__ == "__main__":
     unittest.main()

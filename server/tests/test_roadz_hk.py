@@ -19,6 +19,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import fast  # noqa: E402
 import geodesy  # noqa: E402
+import hkdtm  # noqa: E402
 import hklidar  # noqa: E402
 import mapcells  # noqa: E402
 import plancache  # noqa: E402
@@ -33,11 +34,24 @@ X0, Y0 = 840000.0, 826000.0                     # the fixture's HK1980 Grid orig
 
 
 def feature(oid, level, ref, name, xy):
+    """A TD line as the service answers it (lon / lat), at xy metres east / north of the fixture's origin."""
     xy = np.asarray(xy, np.float64)
     ll = np.c_[LON0 + xy[:, 0] / 1e5, LAT0 + xy[:, 1] / 1.1e5]
     attrs = {"OBJECTID": oid, "ELEVATION": level, "ROUTE_NUM": ref, "STREET_ENAME": name}
-    return ({"attributes": attrs, "geometry": {"paths": [ll.tolist()]}},
-            {"attributes": {"OBJECTID": oid}, "geometry": {"paths": [(xy + [X0, Y0]).tolist()]}})
+    return {"attributes": attrs, "geometry": {"paths": [ll.tolist()]}}
+
+
+def fixture_grid(lat, lon):
+    """The fixture's HK1980 Grid of feature()'s lon / lat: its metres from (X0, Y0) to the micrometre (the LiDAR
+    pixels' edges are whole metres, and its lines run along them)."""
+    return (X0 + np.round((np.asarray(lon, np.float64) - LON0) * 1e5, 6),
+            Y0 + np.round((np.asarray(lat, np.float64) - LAT0) * 1.1e5, 6))
+
+
+def setUpModule():
+    patch = mock.patch.object(roadzhk, "hkdtm", SimpleNamespace(grid=fixture_grid))
+    patch.start()
+    unittest.addModuleCleanup(patch.stop)
 
 
 # a ground road, a deck crossing over it, a higher deck crossing over that, a tunnel (metres east / north of X0, Y0)
@@ -63,7 +77,7 @@ def grids():
 
 class FakeFetcher:
     """The CSDI services for the fixture: the TD lines, the sheet index (two sheets a layer, side by side) and the
-    sheets. Counts the sheet downloads."""
+    sheets. Counts the sheet downloads and keeps the TD queries."""
 
     def __init__(self):
         dtm, dsm = grids()
@@ -78,6 +92,7 @@ class FakeFetcher:
                 self.sheets[layer].append({"attributes": {"TILE_NAME": name, "URL": url},
                                            "geometry": {"rings": [ring]}})
         self.downloads = []
+        self.td = []
 
     def get(self, url, **_kw):
         u = urllib.parse.urlsplit(url)
@@ -86,11 +101,8 @@ class FakeFetcher:
             self.downloads.append(u.path)
             body = self.zips[u.path]
         elif "td_rcd" in u.path:
-            if "objectIds" in q:
-                ids = {int(v) for v in q["objectIds"].split(",")}
-                d = {"features": [g for f, g in FEATURES if f["attributes"]["OBJECTID"] in ids]}
-            else:
-                d = {"features": [f for f, _g in FEATURES]}
+            self.td.append(q)
+            d = {"features": FEATURES}
         else:
             d = {"features": self.sheets[int(u.path.rsplit("/", 2)[-2])]}
         return SimpleNamespace(body=body if u.hostname == "bulkdata.csdi.gov.hk" else json.dumps(d).encode())
@@ -106,6 +118,7 @@ def east_north(lonlat):
     return (lonlat[:, 0] - LON0) * 1e5, (lonlat[:, 1] - LAT0) * 1.1e5
 
 
+@unittest.skipUnless(NATIVE, "earthfast roadz kernels")
 class LinesTest(unittest.TestCase):
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()
@@ -167,6 +180,52 @@ class LinesTest(unittest.TestCase):
         self.assertEqual(left, [])
 
 
+def deck_profile(dsm):
+    """(north, z) of the stations of a 120 m deck line up the y axis (x = 0) through rows(), the DSM dsm(x, y)."""
+    xy = np.c_[np.zeros(31), np.arange(31) * 4.0]
+    line = roadzhk.TdLine(1, "", "", xy * 0, xy)
+    runs = roadzhk.stations([line], lambda ll: np.ones(len(ll), bool))
+    (_ll, z, _lv, _ref, _name), = roadzhk.rows([line], runs, None, dsm)
+    return runs[0][2][:, 1], z
+
+
+def rough(x, y):
+    """Ground beside a deck as the DSM has it under trees and on a hillside: 5 to 13 m, a different height a pixel."""
+    return 5.0 + 8.0 * ((np.floor(x * 2) * 7919 + np.floor(y * 2) * 104729) % 1000) / 1000.0
+
+
+@unittest.skipUnless(NATIVE, "earthfast roadz kernels")
+class DeckSurfaceTest(unittest.TestCase):
+    """A deck's height along its line is one surface of the DSM, not a median of the reads across it."""
+
+    def test_clean_deck_reads_its_height(self):
+        y, z = deck_profile(lambda x, y: np.where(np.abs(x) <= 4.0, 20.0 + 0.03 * y, 5.0))
+        np.testing.assert_allclose(z, 20.0 + 0.03 * y, atol=0.05)
+
+    def test_line_near_the_edge_of_a_wide_deck(self):
+        y, z = deck_profile(lambda x, y: np.where((x >= -3.0) & (x <= 5.0), 20.0 + 0.06 * y, 5.0))
+        np.testing.assert_allclose(z, 20.0 + 0.06 * y, atol=0.1)
+
+    def test_narrow_sloping_deck_beside_rough_ground(self):
+        """A 3.2 m slip road with its line 0.3 m inside one edge and ground like a hillside beside it: the deck at
+        every station (the median of the reads across took the ground, whose reads were most of them)."""
+        y, z = deck_profile(lambda x, y: np.where((x >= -0.3) & (x <= 2.9), 20.0 + 0.06 * y, rough(x, y)))
+        np.testing.assert_allclose(z, 20.0 + 0.06 * y, atol=0.1)
+
+    def test_higher_surface_over_part_of_the_corridor_is_no_step(self):
+        """A deck 10 m higher (or a barrier wall) over half the corridor for 40 m of the line: the profile stays on
+        the lower deck, or has a gap, and never jumps to the other surface and back."""
+        def dsm(x, y):
+            over = (x >= -2.0) & (y >= 40.0) & (y <= 80.0)
+            return np.where(over, 30.0, np.where(np.abs(x) <= 6.0, 20.0, 5.0))
+        y, z = deck_profile(dsm)
+        ok = np.isfinite(z)
+        self.assertLessEqual(np.abs(np.diff(z[ok])).max(), 0.6, "a step of more than the grade a bridge has")
+        clear = (y < 36.0) | (y > 84.0)
+        np.testing.assert_allclose(z[clear], 20.0, atol=0.1)
+        np.testing.assert_allclose(z[ok], 20.0, atol=0.1, err_msg="the lower deck's surface, or none")
+
+
 class SourceTest(unittest.TestCase):
     def test_bounds_and_off_switch(self):
         self.assertIn("hk", roadz.sources_at(22.38, 114.2))
@@ -175,7 +234,7 @@ class SourceTest(unittest.TestCase):
         self.assertFalse(roadz.hk_cell(mapcells.cell_of(48.85, 2.35)))
         with mock.patch.object(roadz, "HK_ON", False):
             self.assertNotIn("hk", roadz.sources_at(22.38, 114.2))
-            self.assertNotIn("hk1", roadz.hk_tags(KEY))
+            self.assertNotIn(roadz.HK_CELLS, roadz.hk_tags(KEY))
 
     def test_credited_where_its_lines_are_kept(self):
         import credits
@@ -207,6 +266,95 @@ class SourceTest(unittest.TestCase):
         self.assertEqual(info["source"], "hk")
         self.assertAlmostEqual(info["offset"], 11.0 - 8.0, delta=0.5)
         np.testing.assert_allclose(z, 20.0 - info["offset"], atol=1e-6)
+
+
+class DenseLineTest(unittest.TestCase):
+    """The service draws some curves in vertices far closer than the LiDAR's pixels: a cell keeps them
+    VERTEX_MIN_M apart or more."""
+
+    @staticmethod
+    def arc(r, n):
+        t = np.linspace(0.0, np.pi / 2, n)
+        return np.c_[100.0 + r * np.cos(t), 50.0 + r * np.sin(t)]
+
+    def test_vertices_no_closer_than_the_pixels(self):
+        xy = self.arc(40.0, 20001)                  # 62.8 m of curve, a vertex every 3 mm
+        k = roadzhk._spaced(xy)
+        step = np.hypot(*np.diff(xy[k], axis=0).T)
+        self.assertEqual((k[0], k[-1]), (0, len(xy) - 1))
+        self.assertTrue((np.diff(k) > 0).all())
+        self.assertGreaterEqual(step[:-1].min(), roadzhk.VERTEX_MIN_M - 0.01)
+        self.assertLess(step.max(), roadzhk.VERTEX_MIN_M + 0.01)
+        self.assertLess(len(k), 130)
+
+    def test_the_line_stays_where_it_was(self):
+        xy = self.arc(8.0, 20001)                   # a tight slip road
+        kept = xy[roadzhk._spaced(xy)]
+        mid = (kept[:-1] + kept[1:]) / 2
+        self.assertLess(np.abs(np.hypot(mid[:, 0] - 100.0, mid[:, 1] - 50.0) - 8.0).max(), 0.005)
+
+    def test_ordinary_lines_untouched(self):
+        for xy in ([[0, 0], [30, 0]], [[0, 0], [0.5, 0], [9, 0], [9, 4]], [[0, 0], [0.2, 0]]):
+            np.testing.assert_array_equal(roadzhk._spaced(np.asarray(xy, np.float64)), np.arange(len(xy)))
+
+    def test_a_line_of_one_place_keeps_its_ends(self):
+        np.testing.assert_array_equal(roadzhk._spaced(np.zeros((500, 2))), [0, 499])
+
+    def test_a_dense_line_among_ordinary_ones(self):
+        xy = self.arc(40.0, 5001)
+        lines = roadzhk.parse_td([feature(9, 1, None, "RAMP", xy),
+                                  feature(1, 0, None, "SHA TIN ROAD", [[20, 50], [180, 50]])])
+        k = roadzhk._spaced(xy)
+        self.assertEqual([len(ln.xy) for ln in lines], [len(k), 2])
+        np.testing.assert_allclose(lines[0].xy, xy[k] + [X0, Y0], atol=1e-5)
+        np.testing.assert_allclose(lines[0].ll, np.c_[LON0 + xy[k, 0] / 1e5, LAT0 + xy[k, 1] / 1.1e5], rtol=0,
+                                   atol=1e-12)
+
+    def test_grid_metres_of_the_lon_lat(self):
+        """PROJ's EPSG:4326 -> EPSG:2326 of two places (test_hkdtm's reference): no second copy asked of the service."""
+        f = {"attributes": {"OBJECTID": 1, "ELEVATION": 0}, "geometry": {"paths": [[[114.208, 22.383],
+                                                                                   [114.18145, 22.37767]]]}}
+        with mock.patch.object(roadzhk, "hkdtm", hkdtm):
+            (line,) = roadzhk.parse_td([f])
+        np.testing.assert_allclose(line.xy, [[839473.3990, 827087.0747], [836739.2280, 826496.5293]], atol=1e-3)
+
+    @unittest.skipUnless(NATIVE, "earthfast roadz kernels")
+    def test_the_service_asked_once_a_cell_for_fewer_vertices(self):
+        with tempfile.TemporaryDirectory() as d:
+            fetcher = FakeFetcher()
+            roadz.RoadZ(d, fetcher, None).lines("hk", KEY)
+        (q,) = fetcher.td
+        self.assertEqual(q["outSR"], "4326")
+        self.assertGreater(float(q["maxAllowableOffset"]), 0.0)
+        self.assertLess(float(q["maxAllowableOffset"]) * 111320.0, 0.05, "under the LiDAR's pixel by far")
+
+    @unittest.skipUnless(NATIVE, "earthfast roadz kernels")
+    def test_a_dense_cell_of_before_not_read(self):
+        with tempfile.TemporaryDirectory() as d:
+            stale = os.path.join(d, "roadz", f"v{roadz.VERSION}", "hk2", str(KEY.z), str(KEY.x), f"{KEY.y}.npz")
+            os.makedirs(os.path.dirname(stale))
+            ll = np.c_[LON0 + np.arange(5) / 1e4, np.full(5, LAT0)]
+            roadz.Lines.build([(ll, np.full(5, 99.0), 0, "", "DENSE")]).save(stale)
+            ln = roadz.RoadZ(d, FakeFetcher(), None).lines("hk", KEY)
+        self.assertEqual(by_name(ln, "DENSE"), [])
+        self.assertTrue(by_name(ln, "SHA TIN ROAD"))
+
+
+@unittest.skipUnless(NATIVE, "earthfast roadz kernels")
+class StaleCellTest(unittest.TestCase):
+    """Cells built when a deck was the median of the reads across it are on users' disks: not read again."""
+
+    def test_cell_of_the_median_estimator_not_read(self):
+        with tempfile.TemporaryDirectory() as d:
+            stale = os.path.join(d, "roadz", f"v{roadz.VERSION}", "hk", str(KEY.z), str(KEY.x), f"{KEY.y}.npz")
+            os.makedirs(os.path.dirname(stale))
+            ll = np.c_[LON0 + np.arange(5) / 1e4, np.full(5, LAT0)]
+            roadz.Lines.build([(ll, np.full(5, 99.0), 1, "", "STALE")]).save(stale)
+            fetcher = FakeFetcher()
+            ln = roadz.RoadZ(d, fetcher, None).lines("hk", KEY)
+        self.assertEqual(by_name(ln, "STALE"), [])
+        self.assertTrue(by_name(ln, "SHA TIN ROAD"), "built from the LiDAR again")
+        self.assertTrue(fetcher.downloads)
 
 
 class SlowFetcher(FakeFetcher):
@@ -280,6 +428,12 @@ class NotSharedTest(unittest.TestCase):
             self.assertNotEqual(self.pc._revisit_key(tuple(KEY)), on)
             paris = self.pc._revisit_key(self.paris)
         self.assertEqual(self.pc._revisit_key(self.paris), paris)
+
+    def test_plans_of_the_median_estimator_not_reused(self):
+        import revisit
+        terrain = tuple(t for t in roadz.hk_tags(KEY) if t.startswith("hkdtm"))
+        median = revisit.format_key("plans", plancache.plans_format(), *self.pc.persist[1], tuple(KEY), "hk1", *terrain)
+        self.assertNotEqual(self.pc._revisit_key(tuple(KEY)), median)
 
     def test_share_tools_turn_it_off(self):
         root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..")

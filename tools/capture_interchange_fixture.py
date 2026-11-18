@@ -1,15 +1,16 @@
-"""Capture an offline replay of a reported interchange: its roads cells and the elevation round it.
+"""Capture an offline replay of a reported place (an interchange, a bad road): its roads cells and the elevation round it.
 
-    python tools/capture_interchange_fixture.py NAME LAT LON CACHE_DIR [--cells-m M]
+    python tools/capture_interchange_fixture.py NAME LAT LON CACHE_DIR [--cells-m M] [--prefix PREFIX]
     python tools/capture_interchange_fixture.py --repack FILE.npz     (an older capture in this format)
 
 Fetches what is missing into CACHE_DIR (a cache of its own: the map data and DEM tiles go there, nothing else is
-written) and writes server/tests/fixtures/interchange_NAME.npz:
+written) and writes server/tests/fixtures/PREFIX_NAME.npz (PREFIX: interchange, tests/interchanges.py; drive,
+tests/drivability.py):
   * the "roads" layer of every z14 cell within --cells-m (default 1200 m) of the point (Overture, as the server reads
     it: mapgeom.Features arrays, prefix cell<i>.),
   * the elevation the server's Dem.sample gives at zoom dem.FINE_ZOOM on two grids in the point's ENU frame: FINE_STEP_M
     within FINE_M, COARSE_STEP_M within COARSE_M (the planner plans whole cells: it asks far from the point too).
-These are inputs (raw elevation, before road grading), not solved heights. tests/interchanges.py replays them.
+These are inputs (raw elevation, before road grading), not solved heights. tests/interchanges.py (load) replays them.
 Stored compactly: the heights as whole centimetres, each row's steps (int16 unless one does not fit); the features
 without their cell-frame ENU copy (Features.localize makes it again) and with "" for a missing text value (no
 pickled object arrays).
@@ -87,6 +88,7 @@ def main():
     ap.add_argument("lon", type=float)
     ap.add_argument("cache")
     ap.add_argument("--cells-m", type=float, default=1200.0)
+    ap.add_argument("--prefix", default="interchange")
     a = ap.parse_args()
     cache = str(Path(a.cache).resolve())
     net = netfetch.Fetcher()
@@ -109,7 +111,7 @@ def main():
         return dem.sample(la, lo, demmod.FINE_ZOOM)
     data["fine_axis"], data["fine_z"] = grid(frame, sample, FINE_M, FINE_STEP_M)
     data["coarse_axis"], data["coarse_z"] = grid(frame, sample, COARSE_M, COARSE_STEP_M)
-    out = ROOT / "server" / "tests" / "fixtures" / f"interchange_{a.name}.npz"
+    out = ROOT / "server" / "tests" / "fixtures" / f"{a.prefix}_{a.name}.npz"
     n = data["fine_z"].size + data["coarse_z"].size
     save(out, data)
     print(f"{out}: {len(keys)} cells, {n} elevation samples, "

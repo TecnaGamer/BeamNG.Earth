@@ -26,6 +26,8 @@ import os
 import threading
 
 import numpy as np
+import dmath
+import dnp
 
 log = logging.getLogger("earthd.threedbag")
 
@@ -67,9 +69,9 @@ def rd_to_wgs(x, y):
     dx, dy = (float(x) - _X0) * 1e-5, (float(y) - _Y0) * 1e-5
     lat, lon = _PHI0, _LAM0
     for p, q, k in _RD_LAT:
-        lat += k * dx ** p * dy ** q / 3600.0
+        lat += k * dnp.power(dx, p) * dnp.power(dy, q) / 3600.0
     for p, q, k in _RD_LON:
-        lon += k * dx ** p * dy ** q / 3600.0
+        lon += k * dnp.power(dx, p) * dnp.power(dy, q) / 3600.0
     return lat, lon
 
 
@@ -77,9 +79,9 @@ def wgs_to_rd(lat, lon):
     dp, dl = 0.36 * (float(lat) - _PHI0), 0.36 * (float(lon) - _LAM0)
     x, y = _X0, _Y0
     for p, q, k in _WGS_X:
-        x += k * dp ** p * dl ** q
+        x += k * dnp.power(dp, p) * dnp.power(dl, q)
     for p, q, k in _WGS_Y:
-        y += k * dp ** p * dl ** q
+        y += k * dnp.power(dp, p) * dnp.power(dl, q)
     return x, y
 
 
@@ -327,7 +329,7 @@ class Matcher:
         self.grid = {}
         if recs:
             self.lat0 = recs[0]["lat"]
-            self.k = 111320.0 * math.cos(math.radians(self.lat0))
+            self.k = 111320.0 * dmath.cos(math.radians(self.lat0))
         for r in recs:
             self.grid.setdefault(self._cell(r["lat"], r["lon"]), []).append(r)
 
@@ -383,7 +385,7 @@ def credited_near(cache_dir, lat, lon, near_m):
     if not ON or not cache_dir or not in_nl(lat, lon):
         return False
     d = near_m / 111320.0
-    k = max(0.05, math.cos(math.radians(lat)))
+    k = max(0.05, dmath.cos(math.radians(lat)))
     for sq in squares_over(lat - d, lon - d / k, lat + d, lon + d / k):
         p = os.path.join(cache_dir, "3dbag", VERSION, f"{sq[0]}_{sq[1]}.json.gz")
         try:

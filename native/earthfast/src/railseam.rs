@@ -3,6 +3,7 @@
 //! the strictest, the moves run out along the track at its grade. Was numpy per vertex per road plan of the cell
 //! (a foot search of every near vertex on every road: ~5 s of a Manhattan cell's 35 s of planning, 2026-11-09). The
 //! same products and comparisons in the same order as the numpy version (elementwise: bit for bit).
+use crate::dm::Dm;
 
 use numpy::{IntoPyArray, PyArray1, PyReadonlyArray1, PyReadonlyArray2};
 use pyo3::prelude::*;
@@ -13,8 +14,12 @@ const CROSS_M: f64 = 2.0;                  // m of height between the bed and su
 /// (lo, hi) per vertex of xy: the heights the bed may have beside the roads (-inf / inf where none is near).
 /// Roads: their points rxy[off[r]..off[r+1]], heights rz, half widths rh (roads under two points are skipped).
 #[allow(clippy::too_many_arguments)]
+/// nat (grading.seam_on_ground, BNE_RAIL_SEAM_NATURAL): (the bed vertices' own ground (n,), the road points' ground (m,),
+/// the road points' own heights (m,)): the ground's own difference between a road's foot and the bed vertex, past what
+/// the room allows, is taken off the road's height (rz: with a crossing at grade's lowering) for the band; whether the
+/// road is a grade separation is read from its own heights (the third), neither lowered nor eased.
 pub fn bounds(xy: &[[f64; 2]], z: &[f64], half: f64, rxy: &[[f64; 2]], rz: &[f64], off: &[i64], rh: &[f64],
-              reach: f64, slope: f64, tol: f64) -> (Vec<f64>, Vec<f64>) {
+              reach: f64, slope: f64, tol: f64, nat: Option<(&[f64], &[f64], &[f64])>) -> (Vec<f64>, Vec<f64>) {
     let n = xy.len();
     let mut lo = vec![f64::NEG_INFINITY; n];
     let mut hi = vec![f64::INFINITY; n];
@@ -27,7 +32,7 @@ pub fn bounds(xy: &[[f64; 2]], z: &[f64], half: f64, rxy: &[[f64; 2]], rz: &[f64
         let a = xy[i.saturating_sub(1)];
         let b = xy[(i + 1).min(n - 1)];
         let d = [b[0] - a[0], b[1] - a[1]];
-        let len = d[0].hypot(d[1]);
+        let len = d[0].dhypot(d[1]);
         if len > 1e-9 {
             td[i] = [d[0] / len, d[1] / len];
         }
@@ -77,7 +82,7 @@ pub fn bounds(xy: &[[f64; 2]], z: &[f64], half: f64, rxy: &[[f64; 2]], rz: &[f64
                 let t = ((p[0] - a[0]) * ab[0] + (p[1] - a[1]) * ab[1]) / ab2;
                 let t = if t.is_nan() { t } else if t < 0.0 { 0.0 } else if t > 1.0 { 1.0 } else { t };
                 let f = [a[0] + t * ab[0], a[1] + t * ab[1]];
-                let dj = (p[0] - f[0]).hypot(p[1] - f[1]);
+                let dj = (p[0] - f[0]).dhypot(p[1] - f[1]);
                 d[j] = dj;
                 if j == 0 || (!best.is_nan() && (dj < best || dj.is_nan())) {
                     best = dj;
@@ -94,8 +99,15 @@ pub fn bounds(xy: &[[f64; 2]], z: &[f64], half: f64, rxy: &[[f64; 2]], rz: &[f64
             // approach cannot be taken to the road under it (the deck then fell to the road and the embankment
             // ended mid-span). At grade (within CROSS_M) the flush crossing still takes the road's height.
             let ab = [pts[k + 1][0] - pts[k][0], pts[k + 1][1] - pts[k][1]];
-            let l = ab[0].hypot(ab[1]);
-            if (zr - z[i]).abs() > CROSS_M && l > 1e-9 {
+            let l = ab[0].dhypot(ab[1]);
+            let zc = match nat {
+                None => zr,
+                Some((_g, _d, own)) => {
+                    let os = &own[s..e];
+                    os[k] + (os[k + 1] - os[k]) * tk
+                }
+            };
+            if (zc - z[i]).abs() > CROSS_M && l > 1e-9 {
                 let cross = (td[i][0] * ab[0] / l + td[i][1] * ab[1] / l).abs();
                 if cross < CROSS_COS {
                     continue;
@@ -103,8 +115,17 @@ pub fn bounds(xy: &[[f64; 2]], z: &[f64], half: f64, rxy: &[[f64; 2]], rz: &[f64
             }
             let room = (best - rh[r] - half).max(0.0);
             let allow = room / slope + tol;
-            lo[i] = lo[i].max(zr - allow);
-            hi[i] = hi[i].min(zr + allow);
+            let zb = match nat {
+                None => zr,
+                Some((gb, rdem, _own)) => {
+                    let rds = &rdem[s..e];
+                    let natd = (rds[k] + (rds[k + 1] - rds[k]) * tk) - gb[i];
+                    let excess = natd.abs() - allow;
+                    if excess > 0.0 { zr - if natd < 0.0 { -excess } else { excess } } else { zr }
+                }
+            };
+            lo[i] = lo[i].max(zb - allow);
+            hi[i] = hi[i].min(zb + allow);
         }
     }
     (lo, hi)
@@ -149,8 +170,59 @@ pub fn rail_seam_couple<'py>(py: Python<'py>, xy: PyReadonlyArray2<'py, f64>, z:
     if n < 2 {
         return Ok(None);
     }
-    let out = py.detach(|| {
-        let (lo, hi) = bounds(&pts, &zv, half, &rpts, &rzv, &offv, &rhv, reach, slope, tol);
+    let out = py.detach(|| couple(&pts, &zv, half, &rpts, &rzv, &offv, &rhv, reach, slope, tol, max_move, grade, None));
+    Ok(out.map(|v| v.into_pyarray(py)))
+}
+
+/// grading.seam_on_ground (BNE_RAIL_SEAM_NATURAL): railroadseam.couple with the ground's own slope between a road and the
+/// bed allowed (bounds' nat: ground (n,) under the bed's vertices, rdem (m,) under the roads' points, rown (m,) the
+/// roads' own heights for the grade-separation test; rz: the band's, a crossing at grade's lowering in); the moved bed
+/// heights, or None when nothing moved.
+#[pyfunction]
+#[pyo3(signature = (xy, z, ground, half, rxy, rz, rown, rdem, off, rh, reach, slope, tol, max_move, grade))]
+#[allow(clippy::too_many_arguments)]
+pub fn rail_seam_couple_ground<'py>(py: Python<'py>, xy: PyReadonlyArray2<'py, f64>, z: PyReadonlyArray1<'py, f64>,
+                                    ground: PyReadonlyArray1<'py, f64>, half: f64, rxy: PyReadonlyArray2<'py, f64>,
+                                    rz: PyReadonlyArray1<'py, f64>, rown: PyReadonlyArray1<'py, f64>,
+                                    rdem: PyReadonlyArray1<'py, f64>,
+                                    off: PyReadonlyArray1<'py, i64>, rh: PyReadonlyArray1<'py, f64>, reach: f64,
+                                    slope: f64, tol: f64, max_move: f64, grade: f64)
+                                    -> PyResult<Option<Bound<'py, PyArray1<f64>>>> {
+    let xyv = xy.as_array();
+    let rxyv = rxy.as_array();
+    if xyv.ncols() < 2 || rxyv.ncols() < 2 {
+        return Err(pyo3::exceptions::PyValueError::new_err("xy and rxy need two columns"));
+    }
+    let pts: Vec<[f64; 2]> = xyv.rows().into_iter().map(|r| [r[0], r[1]]).collect();
+    let rpts: Vec<[f64; 2]> = rxyv.rows().into_iter().map(|r| [r[0], r[1]]).collect();
+    let zv: Vec<f64> = z.as_array().iter().copied().collect();
+    let gv: Vec<f64> = ground.as_array().iter().copied().collect();
+    let rzv: Vec<f64> = rz.as_array().iter().copied().collect();
+    let rdv: Vec<f64> = rdem.as_array().iter().copied().collect();
+    let rov: Vec<f64> = rown.as_array().iter().copied().collect();
+    let offv: Vec<i64> = off.as_array().iter().copied().collect();
+    let rhv: Vec<f64> = rh.as_array().iter().copied().collect();
+    let n = zv.len();
+    if pts.len() != n || gv.len() != n || rzv.len() != rpts.len() || rdv.len() != rpts.len() || rov.len() != rpts.len()
+        || offv.len() != rhv.len() + 1 || offv.iter().any(|&o| o < 0 || o as usize > rpts.len())
+        || offv.windows(2).any(|w| w[1] < w[0]) {
+        return Err(pyo3::exceptions::PyValueError::new_err("rail_seam_couple_ground: inconsistent lengths"));
+    }
+    if n < 2 {
+        return Ok(None);
+    }
+    let out = py.detach(|| couple(&pts, &zv, half, &rpts, &rzv, &offv, &rhv, reach, slope, tol, max_move, grade,
+                                  Some((&gv, &rdv, &rov))));
+    Ok(out.map(|v| v.into_pyarray(py)))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn couple(pts: &[[f64; 2]], zv: &[f64], half: f64, rpts: &[[f64; 2]], rzv: &[f64], offv: &[i64], rhv: &[f64],
+          reach: f64, slope: f64, tol: f64, max_move: f64, grade: f64, nat: Option<(&[f64], &[f64], &[f64])>)
+          -> Option<Vec<f64>> {
+    let n = zv.len();
+    {
+        let (lo, hi) = bounds(pts, zv, half, rpts, rzv, offv, rhv, reach, slope, tol, nat);
         let both: Vec<bool> = (0..n).map(|i| lo[i].is_finite() && hi[i].is_finite()).collect();
         if !both.iter().any(|&b| b) {
             return None;
@@ -175,11 +247,23 @@ pub fn rail_seam_couple<'py>(py: Python<'py>, xy: PyReadonlyArray2<'py, f64>, z:
         }
         let mut s = vec![0.0f64; n];
         for k in 1..n {
-            s[k] = s[k - 1] + (pts[k][0] - pts[k - 1][0]).hypot(pts[k][1] - pts[k - 1][1]);
+            s[k] = s[k - 1] + (pts[k][0] - pts[k - 1][0]).dhypot(pts[k][1] - pts[k - 1][1]);
         }
         let up = tent(&s, &dv.iter().map(|&x| x.max(0.0)).collect::<Vec<_>>(), grade);
         let down = tent(&s, &dv.iter().map(|&x| (-x).max(0.0)).collect::<Vec<_>>(), grade);
-        Some((0..n).map(|k| zv[k] + if up[k] >= down[k] { up[k] } else { -down[k] }).collect::<Vec<f64>>())
-    });
-    Ok(out.map(|v| v.into_pyarray(py)))
+        // A vertex with a band of its own keeps to it: a move run out from another road's stretch of the track only
+        // fills the room this vertex's roads leave (between their two strictest bounds where they disagree, and out
+        // to its own move where that is clipped at max_move). Run out whole, a 3-5 m move down to a bus lane the
+        // track lies in carried 2 m down the track at its grade onto a street it crosses at grade 30 m on, its bed
+        // 2.3 m under that street's lanes: a 2.65 m step there (Kennedybruecke in Vienna, GitHub #1169).
+        Some((0..n).map(|k| {
+            let v = zv[k] + if up[k] >= down[k] { up[k] } else { -down[k] };
+            if !both[k] {
+                return v;
+            }
+            let own = zv[k] + dv[k];
+            let (a, b) = (lo[k].min(hi[k]).min(own), lo[k].max(hi[k]).max(own));
+            if v < a { a } else if v > b { b } else { v }
+        }).collect::<Vec<f64>>())
+    }
 }

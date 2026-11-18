@@ -19,6 +19,7 @@ import numpy as np
 from PIL import Image, ImageFilter
 
 import fast
+import dnp
 
 M_PER_DEG = 111320.0
 # leaf_on: the reference is vegetation where its green chromaticity g / (r + g + b) is above this (summer USGS at
@@ -136,5 +137,5 @@ def grade(rgb, xm, ym, amounts):
 def world_metres(lat, lon):
     """(east, north) metres of geodetic arrays, on a fixed world grid (noise anchors). Pure."""
     lat = np.asarray(lat, np.float64)
-    return (np.asarray(lon, np.float64) * M_PER_DEG * np.cos(np.radians(lat))).astype(np.float32), \
+    return (np.asarray(lon, np.float64) * M_PER_DEG * dnp.cos(np.radians(lat))).astype(np.float32), \
         (lat * M_PER_DEG).astype(np.float32)

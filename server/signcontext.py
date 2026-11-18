@@ -3,6 +3,7 @@ from collections import OrderedDict
 import threading
 
 import numpy as np
+import dnp
 
 import mapcells
 import mapgeom
@@ -58,7 +59,7 @@ class Context:
         if not len(points):
             return mapgeom.empty('roads')
         pad = MARGIN_M / 110540.
-        lon_pad = pad / max(.01, float(np.cos(np.radians(points[:, 1])).min()))
+        lon_pad = pad / max(.01, float(dnp.cos(np.radians(points[:, 1])).min()))
         keys = tuple(mapcells.cells_near_points(points[:, 1], points[:, 0], pad, lon_pad))
         with self.lock:
             got = self.cache.get(keys)

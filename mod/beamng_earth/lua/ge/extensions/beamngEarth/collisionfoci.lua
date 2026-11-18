@@ -17,8 +17,8 @@ M.TRAFFIC_R = 80        -- m: an AI traffic car
 M.MIN_SEPARATION_M = 30 -- a vehicle this close to the active car adds no focus (its island is the active car's)
 M.UPDATE_S = 0.5
 
--- Pure: the foci of vehicles { id, x, y, kind = 'player' | 'traffic' | 'parked' } other than the active one at
--- (ax, ay) (nil: none active). [{ x, y, r, trees, id, kind }]
+-- Pure: the foci of vehicles { id, x, y, z, kind = 'player' | 'traffic' | 'parked' } other than the active one at
+-- (ax, ay) (nil: none active). [{ x, y, z, r, trees, id, kind }]
 function M.compute(vehicles, activeId, ax, ay)
   local out = {}
   for _, v in ipairs(vehicles) do
@@ -26,7 +26,7 @@ function M.compute(vehicles, activeId, ax, ay)
       local far = not ax or ((v.x - ax) ^ 2 + (v.y - ay) ^ 2) > M.MIN_SEPARATION_M ^ 2
       if far then
         local player = v.kind == 'player'
-        out[#out + 1] = { x = v.x, y = v.y, r = player and M.PLAYER_R or M.TRAFFIC_R, trees = player, id = v.id,
+        out[#out + 1] = { x = v.x, y = v.y, z = v.z, r = player and M.PLAYER_R or M.TRAFFIC_R, trees = player, id = v.id,
           kind = v.kind }
       end
     end
@@ -93,6 +93,17 @@ function M.isWalker(o)
   return ok and name == M.WALKER_JBEAM
 end
 
+-- Is vehicle object o one of the game's own prop "vehicles" (PROP_JBEAMS)? Left out of the vehicles too: the stock
+-- police pre-spawns two spike strips at (0, 0, -52) on every level load. Earth has no ground there, so they fall
+-- forever (in game 2026-11-10: z -1.17e6 at 2100 m/s), and as 'player' cars each was an island of its own that moved
+-- every second: terrain patches and solid trees remade round it, a be:reloadCollision every 6 s even with the player
+-- parked (0 in 40 s with them left out).
+M.PROP_JBEAMS = { spikestrip = true }
+function M.isProp(o)
+  local ok, name = pcall(function() return o.getJBeamFilename and o:getJBeamFilename() end)
+  return ok and name ~= nil and M.PROP_JBEAMS[name] == true
+end
+
 -- The game's vehicles as { id, x, y, kind, controlled }: a locally occupied car is a player even if traffic or
 -- parking still lists it. Traffic's full data also contains player cars; its AI list does not.
 function M.vehicles()
@@ -125,11 +136,11 @@ function M.vehicles()
   local floats = ms and ms.isFloating
   for i = 0, be:getObjectCount() - 1 do
     local o = be:getObject(i)
-    if o and o.getPosition and not (floats and floats(o:getId())) and not M.isWalker(o) then
+    if o and o.getPosition and not (floats and floats(o:getId())) and not M.isWalker(o) and not M.isProp(o) then
       local id = o:getId()
       local p = o:getPosition()
       local occupied = localplayers.controlled(id, o, controlled)
-      out[#out + 1] = { id = id, x = p.x, y = p.y, controlled = occupied,
+      out[#out + 1] = { id = id, x = p.x, y = p.y, z = p.z, controlled = occupied,
         kind = occupied and 'player' or traffic[id] and 'traffic' or parked[id] and 'parked' or 'player' }
     end
   end

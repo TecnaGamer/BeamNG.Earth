@@ -3,7 +3,9 @@
 //! way. Like how steam tracks player count. More details info could be private").
 //!
 //! POST /telemetry   {"id": 32 hex (a random install id), "v", "os", "game", "mp", "interval",
-//!                    "sources": {host: {"req", "mb", "ok", "e4xx", "e404", "e429", "e5xx", "err", "retry"}}}
+//!                    "sources": {host: {"req", "mb", "ok", "e4xx", "e404", "e429", "e5xx", "err", "retry"}},
+//!                    "rid", "seq": the sender's run and the report's number (a report sent again counted once),
+//!                    "dem": {"<source>:<caller>:<zoom>:<outcome>": n} (the elevation reads; /stats/advanced dem24h)}
 //!                   from each player's companion server (server/telemetry.py) every 5 minutes. The sender's address
 //!                   gives its country (Geo) and is then dropped: no address, name or position is kept.
 //! GET  /stats       public: players online now (an install heard from in ONLINE_TTL) and in game, the peaks, the
@@ -36,6 +38,10 @@ const MAX_SPAN: u64 = 20 * 366 * 86400;
 const MAX_INSTALLS: usize = 200_000;
 const MAX_IDS_PER_IP: usize = 32; // distinct installs one address may report for in an hour
 const MAX_SOURCES: usize = 64;
+const RUN_KEEP_S: u64 = 7 * 86400; // a sender run's last counted report number kept this long after it
+const MAX_RUNS: usize = 400_000; // ... and this many runs at most (the oldest forgotten first)
+const MAX_DEM_IN: usize = 128; // DEM detail keys taken from one report (the client sends at most 64)
+const MAX_DEM_KEYS: usize = 2048; // ... and kept per hour
 pub const K_ANON: u32 = 5; // a country shown publicly from this many players online
 
 #[derive(Deserialize, Default)]
@@ -49,6 +55,15 @@ pub struct SourceIn {
     e5xx: Option<u64>,
     err: Option<u64>,
     retry: Option<u64>,
+    // our own limits (clients from 2026-11-11 on): background requests dropped, demand ones that waited (and ms),
+    // refused after waiting, refused by the daily budget
+    deferred: Option<u64>,
+    waited: Option<u64>,
+    #[serde(rename = "waitMs")]
+    wait_ms: Option<u64>,
+    #[serde(rename = "limitFail")]
+    limit_fail: Option<u64>,
+    budget: Option<u64>,
 }
 
 #[derive(Deserialize)]
@@ -62,6 +77,15 @@ pub struct Report {
     // the performance section (perf.rs), only from players who chose "Performance data"
     #[serde(default)]
     pub perf: Option<crate::perf::PerfIn>,
+    // (2026-11-15) the sender's run and the report's number in it: a report sent again because its answer was lost
+    // comes with the same pair, and its counts are taken once
+    #[serde(default)]
+    rid: Option<String>,
+    #[serde(default)]
+    seq: Option<u64>,
+    // the elevation tiles' raw reads, "<source>:<caller>:<zoom>:<outcome>" -> n (server/dem.py _note; no positions)
+    #[serde(default)]
+    dem: Option<HashMap<String, u64>>,
 }
 
 impl Report {
@@ -81,6 +105,16 @@ pub struct Source {
     pub e5xx: u64,
     pub err: u64,
     pub retry: u64,
+    #[serde(default)]
+    pub deferred: u64,
+    #[serde(default)]
+    pub waited: u64,
+    #[serde(default, rename = "waitMs")]
+    pub wait_ms: u64,
+    #[serde(default, rename = "limitFail")]
+    pub limit_fail: u64,
+    #[serde(default)]
+    pub budget: u64,
 }
 
 impl Source {
@@ -94,6 +128,11 @@ impl Source {
         self.e5xx += o.e5xx;
         self.err += o.err;
         self.retry += o.retry;
+        self.deferred += o.deferred;
+        self.waited += o.waited;
+        self.wait_ms += o.wait_ms;
+        self.limit_fail += o.limit_fail;
+        self.budget += o.budget;
     }
 }
 
@@ -103,6 +142,15 @@ pub struct Hour {
     pub online: u32,
     pub playing: u32,
     pub sources: BTreeMap<String, Source>,
+    // the elevation reads' detail (Report.dem), summed; at most MAX_DEM_KEYS an hour
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub dem: BTreeMap<String, u64>,
+}
+
+#[derive(Serialize, Deserialize, Default)]
+struct State {
+    hours: Vec<Hour>,
+    runs: Vec<(String, u64, u64)>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -136,14 +184,23 @@ pub struct Telemetry {
     dir: Option<PathBuf>,
     last_sample: u64,
     written: HashSet<u64>, // hours already in hours.jsonl
+    uniques: crate::uniques::Uniques, // distinct installs per day, ids not kept (uniques.rs)
+    // "<install id>:<run id>" -> (the highest report number counted, unix s): a report sent again (its answer lost) is
+    // not counted again, whichever runs of the install report in between; saved with the open hours' counts
+    // (state.json, save_state) so a
+    // restart keeps them (2026-11-15 Codex review: one pair per install, forgotten when another run reported or the
+    // collector restarted)
+    runs: HashMap<String, (u64, u64)>,
 }
 
 fn unix() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
 }
 
-fn clean(s: Option<String>, max: usize) -> String {
-    s.unwrap_or_default().chars().filter(|c| c.is_ascii_graphic() || *c == ' ').take(max).collect::<String>().trim().to_string()
+/// A version or system name as a report may give it: letters, digits and . _ + - only (anything else dropped; they were
+/// any printable ASCII, and the advanced page put them into its HTML: Codex review 2026-11-14).
+fn clean_name(s: Option<String>, max: usize) -> String {
+    s.unwrap_or_default().chars().filter(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '+' | '-')).take(max).collect()
 }
 
 fn host_ok(h: &str) -> bool {
@@ -152,10 +209,17 @@ fn host_ok(h: &str) -> bool {
 
 impl Telemetry {
     pub fn new(dir: Option<PathBuf>) -> Telemetry {
+        let uniques = crate::uniques::Uniques::new(dir.clone());
         let mut t = Telemetry { installs: HashMap::new(), per_ip: HashMap::new(), samples: VecDeque::new(),
                                 hours: BTreeMap::new(), dir, last_sample: 0, written: HashSet::new(),
-                                minutes: VecDeque::new(), last_minute: 0 };
+                                minutes: VecDeque::new(), last_minute: 0, uniques, runs: HashMap::new() };
         t.load();
+        // (the installs heard from in the last day, restored from installs.json: counted on their days too, the
+        // first start's seed)
+        let seen: Vec<(String, u64)> = t.installs.iter().map(|(id, i)| (id.clone(), i.seen_unix)).collect();
+        for (id, at) in seen {
+            t.uniques.saw(&id, at);
+        }
         t
     }
 
@@ -186,6 +250,19 @@ impl Telemetry {
                 }
             }
         }
+        // the hours not finished yet and the runs' report numbers, from one snapshot (state.json, save_state): what was
+        // counted and what may not be counted again come back together
+        let mut open_hours: Vec<Hour> = Vec::new();
+        if let Ok(text) = fs::read_to_string(dir.join("state.json")) {
+            if let Ok(st) = serde_json::from_str::<State>(&text) {
+                for (k, seq, at) in st.runs {
+                    if now.saturating_sub(at) <= RUN_KEEP_S {
+                        self.runs.insert(k, (seq, at));
+                    }
+                }
+                open_hours = st.hours;
+            }
+        }
         if let Ok(text) = fs::read_to_string(dir.join("minutes.jsonl")) {
             for line in text.lines() {
                 if let Ok((t, o, p)) = serde_json::from_str::<(u64, u32, u32)>(line) {
@@ -201,6 +278,7 @@ impl Telemetry {
                     if now.saturating_sub(h.h * 3600) <= HOUR_KEEP {
                         if now.saturating_sub(h.h * 3600) > SOURCE_KEEP {
                             h.sources.clear(); // (the peaks stay, the data-source sums go)
+                            h.dem.clear();
                         }
                         self.written.insert(h.h);
                         self.hours.insert(h.h, h);
@@ -216,6 +294,11 @@ impl Telemetry {
         let _ = fs::write(dir.join("minutes.jsonl"), m);
         let h: String = self.hours.values().map(|x| serde_json::to_string(x).unwrap() + "\n").collect();
         let _ = fs::write(dir.join("hours.jsonl"), h);
+        for h in open_hours {
+            if !self.written.contains(&h.h) && now.saturating_sub(h.h * 3600) <= HOUR_KEEP {
+                self.hours.insert(h.h, h);     // (its line goes to hours.jsonl when it is over, as before)
+            }
+        }
     }
 
     fn append(&self, file: &str, line: String) {
@@ -233,6 +316,23 @@ impl Telemetry {
         let tmp = dir.join("installs.json.tmp");
         if fs::write(&tmp, serde_json::to_string(&list).unwrap()).is_ok() {
             let _ = fs::rename(&tmp, dir.join("installs.json"));
+        }
+        self.save_state();
+    }
+
+    /// The hours not yet in hours.jsonl and the runs' report numbers in one file, written whole and renamed into
+    /// place (Codex review of 5776353e: the numbers were kept alone, so a restart within the hour lost an accepted
+    /// report's counts and then refused its resend). A report taken after the last snapshot loses both together: its
+    /// resend is counted.
+    fn save_state(&self) {
+        let Some(dir) = &self.dir else { return };
+        let st = State {
+            hours: self.hours.values().filter(|h| !self.written.contains(&h.h)).cloned().collect(),
+            runs: self.runs.iter().map(|(k, v)| (k.clone(), v.0, v.1)).collect(),
+        };
+        let tmp = dir.join("state.json.tmp");
+        if fs::write(&tmp, serde_json::to_string(&st).unwrap()).is_ok() {
+            let _ = fs::rename(&tmp, dir.join("state.json"));
         }
     }
 
@@ -279,20 +379,40 @@ impl Telemetry {
             }
             slot.1.push(id.clone());
         }
+        // a report sent again (its answer lost: the same run and number as the last one counted) is not counted again
+        let rid: String = r.rid.clone().unwrap_or_default().chars().filter(|c| c.is_ascii_hexdigit()).take(32).collect();
+        let seq = r.seq.unwrap_or(0);
+        let run_key = format!("{id}:{rid}");
+        let again = !rid.is_empty() && seq > 0 && self.runs.get(&run_key).is_some_and(|r| seq <= r.0);
+        if !rid.is_empty() && seq > 0 && !again {
+            self.runs.insert(run_key, (seq, unix_now));
+        }
         let hour = unix_now / 3600;
         let entry = self.hours.entry(hour).or_insert_with(|| Hour { h: hour, ..Default::default() });
-        if let Some(src) = r.sources {
+        if let Some(dem) = r.dem.filter(|_| !again) {
+            for (k, n) in dem.into_iter().take(MAX_DEM_IN) {
+                if !host_ok(&k) || entry.dem.len() >= MAX_DEM_KEYS && !entry.dem.contains_key(&k) {
+                    continue;
+                }
+                *entry.dem.entry(k.to_ascii_lowercase()).or_default() += n.min(10_000_000);
+            }
+        }
+        if let Some(src) = r.sources.filter(|_| !again) {
             for (host, s) in src.into_iter().take(MAX_SOURCES) {
                 if !host_ok(&host) || entry.sources.len() >= 512 && !entry.sources.contains_key(&host) {
                     continue;
                 }
                 let c = |v: Option<u64>| v.unwrap_or(0).min(10_000_000);
                 let add = Source { req: c(s.req), mb: s.mb.unwrap_or(0.0).clamp(0.0, 1.0e6), ok: c(s.ok), e4xx: c(s.e4xx),
-                                   e404: c(s.e404), e429: c(s.e429), e5xx: c(s.e5xx), err: c(s.err), retry: c(s.retry) };
+                                   e404: c(s.e404), e429: c(s.e429), e5xx: c(s.e5xx), err: c(s.err), retry: c(s.retry),
+                                   deferred: c(s.deferred), waited: c(s.waited),
+                                   wait_ms: s.wait_ms.unwrap_or(0).min(1_000_000_000), limit_fail: c(s.limit_fail),
+                                   budget: c(s.budget) };
                 entry.sources.entry(host.to_ascii_lowercase()).or_default().add(&add);
             }
         }
-        self.installs.insert(id, Install { seen: now, seen_unix: unix_now, v: clean(r.v, 24), os: clean(r.os, 12), cc,
+        self.uniques.saw(&id, unix_now);
+        self.installs.insert(id, Install { seen: now, seen_unix: unix_now, v: clean_name(r.v, 24), os: clean_name(r.os, 12), cc,
                                            game: r.game.unwrap_or(false), mp: r.mp.unwrap_or(false) });
         let (o, p) = self.online(now);
         let e = self.hours.get_mut(&hour).unwrap();
@@ -305,10 +425,18 @@ impl Telemetry {
     pub fn tick(&mut self, now: Instant, unix_now: u64) {
         self.installs.retain(|_, i| now.duration_since(i.seen) < Duration::from_secs(86400));
         self.per_ip.retain(|_, s| now.duration_since(s.0) < Duration::from_secs(3600));
+        self.runs.retain(|_, r| unix_now.saturating_sub(r.1) <= RUN_KEEP_S);
+        if self.runs.len() > MAX_RUNS {
+            let mut ages: Vec<u64> = self.runs.values().map(|r| r.1).collect();
+            ages.sort_unstable();
+            let cut = ages[self.runs.len() - MAX_RUNS];
+            self.runs.retain(|_, r| r.1 > cut);
+        }
         let minute = unix_now / 60 * 60;
         if minute > self.last_minute {
             self.last_minute = minute;
             self.save_installs(now);
+            self.uniques.save();
             let (o, p) = self.online(now);
             self.minutes.push_back((minute, o, p));
             self.append("minutes.jsonl", serde_json::to_string(&(minute, o, p)).unwrap());
@@ -334,7 +462,7 @@ impl Telemetry {
         let done: Vec<u64> = self.hours.keys().copied().filter(|h| *h < unix_now / 3600).collect();
         for h in done {
             if let Some(x) = self.hours.get(&h) {
-                if (!x.sources.is_empty() || x.online > 0) && !self.written.contains(&h) {
+                if (!x.sources.is_empty() || !x.dem.is_empty() || x.online > 0) && !self.written.contains(&h) {
                     self.append("hours.jsonl", serde_json::to_string(x).unwrap());
                     self.written.insert(h);
                 }
@@ -345,6 +473,7 @@ impl Telemetry {
         let src_cut = unix_now.saturating_sub(SOURCE_KEEP) / 3600;
         for (_, h) in self.hours.range_mut(..src_cut) {
             h.sources.clear();
+            h.dem.clear();
         }
         self.written.retain(|h| *h >= cut);
     }
@@ -393,6 +522,7 @@ impl Telemetry {
         }
         serde_json::json!({"online": o, "playing": p, "peak24h": peak24, "peakAll": peak_all, "peakAllAt": peak_at,
                            "history": hist, "daily": daily, "countries": countries, "sampleSeconds": SAMPLE_S,
+                           "unique": self.uniques.view(unix_now),
                            "onlineMeans": "a BeamNG.Earth app running now; playing: with the game connected"})
     }
 
@@ -400,7 +530,8 @@ impl Telemetry {
     pub fn now(&self, now: Instant, unix_now: u64) -> serde_json::Value {
         let p = self.public(now, unix_now);
         serde_json::json!({"t": unix_now, "online": p["online"], "playing": p["playing"], "peak24h": p["peak24h"],
-                           "peakAll": p["peakAll"], "peakAllAt": p["peakAllAt"], "countries": p["countries"]})
+                           "peakAll": p["peakAll"], "peakAllAt": p["peakAllAt"], "countries": p["countries"],
+                           "unique": p["unique"]})
     }
 
     /// Players over [from, to] (unix s): the finest series whose retention reaches `from` (1 min, 5 min, hourly
@@ -467,6 +598,7 @@ impl Telemetry {
         let week = unix_now.saturating_sub(7 * 86400) / 3600;
         let day = unix_now.saturating_sub(86400) / 3600;
         let mut last24: BTreeMap<String, Source> = BTreeMap::new();
+        let mut dem24: BTreeMap<String, u64> = BTreeMap::new();
         let mut hourly: Vec<serde_json::Value> = Vec::new();
         for h in self.hours.range(week..) {
             let src: BTreeMap<&String, &Source> = h.1.sources.iter().collect();
@@ -474,23 +606,38 @@ impl Telemetry {
                 for (k, s) in &src {
                     last24.entry((*k).clone()).or_default().add(s);
                 }
+                for (k, n) in &h.1.dem {
+                    *dem24.entry(k.clone()).or_default() += n;
+                }
             }
-            hourly.push(serde_json::json!({"t": h.0 * 3600, "online": h.1.online, "playing": h.1.playing, "sources": src}));
+            // (each hour's sources as their request counts only: the page shows nothing else, and every field of every
+            // source for 169 hours made /stats/advanced 2.5 MB, 2.85 MB of it this list)
+            let req: BTreeMap<&String, serde_json::Value> =
+                src.iter().filter(|(_, s)| s.req > 0).map(|(k, s)| (*k, serde_json::json!({"req": s.req}))).collect();
+            hourly.push(serde_json::json!({"t": h.0 * 3600, "online": h.1.online, "playing": h.1.playing, "sources": req}));
         }
         serde_json::json!({"versions": versions, "systems": systems, "countries": countries, "beammp": mp,
-                           "sources24h": last24, "hourly": hourly})
+                           "sources24h": last24, "dem24h": dem24, "hourly": hourly})
     }
 }
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn report_names_keep_version_characters_only() {
+        // (the advanced page rendered them as HTML: a version "<svg/onload=alert(1)>" ran in visitors' browsers)
+        assert_eq!(clean_name(Some("<svg/onload=alert(1)>".into()), 24), "svgonloadalert1");
+        assert_eq!(clean_name(Some("1.9.1-beta.dev.440".into()), 24), "1.9.1-beta.dev.440");
+        assert_eq!(clean_name(Some("windows".into()), 12), "windows");
+    }
+
     use super::*;
 
     fn rep(id: &str, game: bool, req: u64) -> Report {
         let mut s = HashMap::new();
         s.insert("overturemaps-us-west-2.s3.amazonaws.com".to_string(), SourceIn { req: Some(req), mb: Some(1.5), e429: Some(1), ..Default::default() });
         Report { id: id.into(), v: Some("1.8.2".into()), os: Some("linux".into()), game: Some(game), mp: Some(false), sources: Some(s),
-                 perf: None }
+                 perf: None, rid: None, seq: None, dem: None }
     }
 
     #[test]
@@ -518,6 +665,82 @@ mod tests {
         // gone after the online window
         let later = now + ONLINE_TTL + Duration::from_secs(1);
         assert_eq!(t.online(later), (0, 0));
+    }
+
+    #[test]
+    fn a_report_sent_again_is_counted_once_and_dem_detail_summed() {
+        let mut t = Telemetry::new(None);
+        let now = Instant::now();
+        let u = 1_800_000_000;
+        let ip: IpAddr = "203.0.113.9".parse().unwrap();
+        let id = format!("{:032x}", 77);
+        let mk = |seq: u64, req: u64| {
+            let mut r = rep(&id, true, req);
+            r.rid = Some("00aa11bb22cc33dd".into());
+            r.seq = Some(seq);
+            let mut d = HashMap::new();
+            d.insert("mapterhorn:grading:16:net".to_string(), req);
+            d.insert("bad key with spaces".to_string(), 5);
+            r.dem = Some(d);
+            r
+        };
+        let gap = MIN_GAP + Duration::from_secs(1);
+        let src = "overturemaps-us-west-2.s3.amazonaws.com";
+        t.report(ip, "DE".into(), mk(1, 10), now, u).unwrap();
+        t.report(ip, "DE".into(), mk(1, 10), now + gap, u).unwrap();       // (its answer was lost: sent again)
+        let q = t.private(now + gap, u);
+        assert_eq!(q["sources24h"][src]["req"], 10);
+        assert_eq!(q["dem24h"]["mapterhorn:grading:16:net"], 10);
+        assert!(q["dem24h"].get("bad key with spaces").is_none());
+        t.report(ip, "DE".into(), mk(2, 4), now + gap * 2, u).unwrap();
+        let q = t.private(now + gap * 2, u);
+        assert_eq!(q["sources24h"][src]["req"], 14);
+        assert_eq!(q["dem24h"]["mapterhorn:grading:16:net"], 14);
+        // a new run (rid) starts its numbers again; reports without them (older clients) are always counted
+        let mut r = mk(1, 1);
+        r.rid = Some("ffee".into());
+        t.report(ip, "DE".into(), r, now + gap * 3, u).unwrap();
+        t.report(ip, "DE".into(), rep(&id, true, 1), now + gap * 4, u).unwrap();
+        t.report(ip, "DE".into(), rep(&id, true, 1), now + gap * 5, u).unwrap();
+        assert_eq!(t.private(now + gap * 5, u)["sources24h"][src]["req"], 17);
+    }
+
+    #[test]
+    fn interleaved_runs_and_a_collector_restart_count_a_report_once() {
+        // (Codex review of 38d0dbda: one rid / seq per install, so run B's report made run A's resend new again; and a
+        // restart forgot them all)
+        let dir = std::env::temp_dir().join(format!("bnge_tel_runs_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let ip: IpAddr = "203.0.113.10".parse().unwrap();
+        let id = format!("{:032x}", 78);
+        let mk = |rid: &str, seq: u64, req: u64| {
+            let mut r = rep(&id, true, req);
+            r.rid = Some(rid.into());
+            r.seq = Some(seq);
+            r
+        };
+        let src = "overturemaps-us-west-2.s3.amazonaws.com";
+        let gap = MIN_GAP + Duration::from_secs(1);
+        let u = unix();
+        let now = Instant::now();
+        {
+            let mut t = Telemetry::new(Some(dir.clone()));
+            t.report(ip, "DE".into(), mk("aa", 1, 10), now, u).unwrap();          // run A, its answer lost
+            t.report(ip, "DE".into(), mk("bb", 1, 3), now + gap, u).unwrap();     // run B of the same install
+            t.report(ip, "DE".into(), mk("aa", 1, 10), now + gap * 2, u).unwrap(); // A sends it again
+            t.report(ip, "DE".into(), mk("bb", 1, 3), now + gap * 3, u).unwrap();  // and B
+            assert_eq!(t.private(now + gap * 3, u)["sources24h"][src]["req"], 13);
+            t.tick(now + gap * 3, u + 61);                 // (the minute's save)
+        }
+        let mut t = Telemetry::new(Some(dir.clone()));     // (restarted)
+        let later = Instant::now() + gap * 4;
+        t.report(ip, "DE".into(), mk("aa", 1, 10), later, u + 120).unwrap();       // A's resend after the restart
+        t.report(ip, "DE".into(), mk("aa", 2, 1), later + gap, u + 120).unwrap();  // A's next report: counted
+        let q = t.private(later + gap, u + 120);
+        // (Codex review of 5776353e: the marks survived the restart but the hour's counts did not: the accepted
+        // report's counts were lost and its resend refused)
+        assert_eq!(q["sources24h"][src]["req"], 14, "the hour's counts kept, the resend not counted, the new one");
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

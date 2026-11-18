@@ -462,6 +462,16 @@ T.check(places.notePosition(40.01, -75.0, 1100) and files[PF].lat == 40.01, 'lat
 T.check(not places.notePosition(nil, -75.0, 2000, true), 'a bad position: not written')
 places.noteTeleport(35.5, 139.7, 'x', 'teleport')
 T.check(files[PF].lat == 35.5 and places.lastPosition().lon == 139.7, 'a teleport: written at once')
+-- the car's heading too (the user, 2026-11-15: "also save and load your cars rotation"): degrees clockwise from true
+-- north, 0.1 degree, kept in [0, 360); none when not known (a teleport writes the place before the car is there)
+T.check(files[PF].heading == nil and places.lastPosition().heading == nil, 'a teleport: no heading')
+T.check(places.notePosition(35.6, 139.7, 5000, true, 123.456) and files[PF].heading == 123.5
+  and places.lastPosition().heading == 123.5, 'heading saved with the place (0.1 degree)')
+T.check(places.notePosition(35.6, 139.7, 5001, true, -90) and files[PF].heading == 270, 'heading kept in [0, 360)')
+T.check(places.notePosition(35.6, 139.7, 5002, true, 359.97) and files[PF].heading == 0, '359.97 rounds to 0')
+T.check(places.notePosition(35.6, 139.7, 5003, true, 0 / 0) and files[PF].heading == nil, 'NaN: no heading')
+T.check(places.validHeading('45') == 45 and places.validHeading(math.huge) == nil and places.validHeading(nil) == nil,
+  'validHeading: a number, finite')
 
 -- map links (the bug report form's location is an OpenStreetMap link; Google Maps' share links)
 do

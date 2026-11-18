@@ -8,6 +8,8 @@ import hashlib
 import math
 
 import numpy as np
+import dmath
+import dnp
 
 import busbays
 import busstations as bs
@@ -27,14 +29,14 @@ def _heading(st, bay):
         d = float(bs.path_dist(ln["xy"], bay.c[None])[0])
         if d < 6.0 and (best is None or d < best[0]):
             path = np.asarray(ln["xy"], float)
-            seg = np.hypot(*np.diff(path, axis=0).T)
-            k = int(np.argmin(np.hypot(*(0.5 * (path[:-1] + path[1:]) - bay.c).T))) if len(seg) else 0
+            seg = dnp.hypot(*np.diff(path, axis=0).T)
+            k = int(np.argmin(dnp.hypot(*(0.5 * (path[:-1] + path[1:]) - bay.c).T))) if len(seg) else 0
             dd = path[k + 1] - path[k]
-            if ln["oneway"] and float(np.hypot(*dd)) > 1e-6:
-                best = (d, dd / float(np.hypot(*dd)))
+            if ln["oneway"] and float(dnp.hypot(*dd)) > 1e-6:
+                best = (d, dd / float(dnp.hypot(*dd)))
     if best is not None:
         t = best[1]
-    return float(math.degrees(math.atan2(t[1], t[0])) % 360.0)
+    return float(math.degrees(dmath.atan2(t[1], t[0])) % 360.0)
 
 
 def _on_pavement(st, pts, yard):
@@ -76,7 +78,7 @@ def station_bays(st):
     for _h, b in cand:
         if len(out) >= PER_STATION:
             break
-        if all(float(np.hypot(*(np.asarray(b.c) - np.asarray(o[0].c)))) >= 14.0 for o in out):
+        if all(float(dnp.hypot(*(np.asarray(b.c) - np.asarray(o[0].c)))) >= 14.0 for o in out):
             out.append((b, _heading(st, b)))
     st._bus_bays = out
     return out
@@ -101,10 +103,10 @@ def rows(frame, md, box, elev):
         c = np.array([np.asarray(b.c, float)[:2] for b, _h in bays])
         hr = np.radians([h for _b, h in bays])
         cc = bs.to_frame(gf, frame, c)
-        tip = bs.to_frame(gf, frame, c + np.column_stack((np.cos(hr), np.sin(hr))))
+        tip = bs.to_frame(gf, frame, c + np.column_stack((dnp.cos(hr), dnp.sin(hr))))
         for (x, y), (tx_, ty_) in zip(cc.tolist(), tip.tolist()):
             if x0 <= x < x1 and y0 <= y < y1:
-                pend.append((x, y, float(math.degrees(math.atan2(ty_ - y, tx_ - x)) % 360.0)))
+                pend.append((x, y, float(math.degrees(dmath.atan2(ty_ - y, tx_ - x)) % 360.0)))
     if not pend:
         return []
     z = busstationmesh.ground(frame, elev, np.array([[p[0], p[1]] for p in pend]))

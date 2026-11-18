@@ -24,6 +24,7 @@ import numpy as np
 
 import exitsigns
 import fast
+import dnp
 import mapcells
 import roads
 import speedsigns
@@ -287,7 +288,7 @@ def steps_back(boards, rows, frame):
         for xy, m in lines:
             ab = np.diff(xy, axis=0)
             t = np.clip(((q - xy[:-1]) * ab).sum(1) / np.maximum((ab * ab).sum(1), 1e-12), 0.0, 1.0)
-            d = float(np.linalg.norm(xy[:-1] + t[:, None] * ab - q, axis=1).min())
+            d = float(dnp.norm(xy[:-1] + t[:, None] * ab - q, axis=1).min())
             if d < best:
                 best, meta = d, m
         if meta is not None and best <= 5.0 and int(meta[2]) == motorway and not meta[4]:

@@ -2,6 +2,7 @@
 //! detail and variety"): solar farms' panel tables, a container terminal's stacks, a trailer park's homes (area_grid),
 //! the cranes along a port's quays (edge_spots) and the boats moored along a marina's piers (berths). Pure geometry in
 //! the frame the server hands over; which places and which models is server/places.py's.
+use crate::dm::Dm;
 
 use std::collections::HashMap;
 
@@ -196,7 +197,7 @@ fn seg_point(p: P2, a: P2, b: P2) -> f64 {
     let (dx, dy) = (b.0 - a.0, b.1 - a.1);
     let l2 = dx * dx + dy * dy;
     let t = if l2 > 1e-12 { (((p.0 - a.0) * dx + (p.1 - a.1) * dy) / l2).clamp(0.0, 1.0) } else { 0.0 };
-    (p.0 - a.0 - t * dx).hypot(p.1 - a.1 - t * dy)
+    (p.0 - a.0 - t * dx).dhypot(p.1 - a.1 - t * dy)
 }
 
 fn cross(o: P2, a: P2, b: P2) -> f64 {
@@ -282,7 +283,7 @@ fn grid_core(rings: &[Vec<P2>], axis_deg: f64, size: [f64; 2], pitch: [f64; 2], 
         return out;
     }
     let (u, ar, br) = if axis_deg.is_finite() {
-        let u = (axis_deg.to_radians().cos(), axis_deg.to_radians().sin());
+        let u = (axis_deg.to_radians().dcos(), axis_deg.to_radians().dsin());
         let v = (-u.1, u.0);
         let (mut a, mut b) = ((f64::INFINITY, f64::NEG_INFINITY), (f64::INFINITY, f64::NEG_INFINITY));
         for r in rings {
@@ -306,7 +307,7 @@ fn grid_core(rings: &[Vec<P2>], axis_deg: f64, size: [f64; 2], pitch: [f64; 2], 
         }
     };
     let v = (-u.1, u.0);
-    let yaw = u.1.atan2(u.0).to_degrees().rem_euclid(360.0);
+    let yaw = u.1.datan2(u.0).to_degrees().rem_euclid(360.0);
     // the box's corners in (a, b): which grid cells reach it
     let (mut ba, mut bb) = ((f64::INFINITY, f64::NEG_INFINITY), (f64::INFINITY, f64::NEG_INFINITY));
     for (x, y) in [(bx[0], bx[1]), (bx[2], bx[1]), (bx[2], bx[3]), (bx[0], bx[3])] {
@@ -383,7 +384,7 @@ pub fn edge_spots<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, ring_of
             let mut next = spacing / 2.0;
             for i in 0..n {
                 let (p, q) = (r[i], r[(i + 1) % n]);
-                let l = (q.0 - p.0).hypot(q.1 - p.1);
+                let l = (q.0 - p.0).dhypot(q.1 - p.1);
                 if l < 1e-9 {
                     continue;
                 }
@@ -395,7 +396,7 @@ pub fn edge_spots<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, ring_of
                         if wet(c.0 + nrm.0 * probe, c.1 + nrm.1 * probe) && !wet(c.0 - nrm.0 * probe, c.1 - nrm.1 * probe) {
                             let (x, y) = (c.0 - nrm.0 * inset, c.1 - nrm.1 * inset);
                             if x >= bx[0] && x < bx[2] && y >= bx[1] && y < bx[3] {
-                                out.extend_from_slice(&[x, y, nrm.1.atan2(nrm.0).to_degrees().rem_euclid(360.0)]);
+                                out.extend_from_slice(&[x, y, nrm.1.datan2(nrm.0).to_degrees().rem_euclid(360.0)]);
                             }
                             break;
                         }
@@ -440,7 +441,7 @@ pub fn berths<'py>(py: Python<'py>, lines: PyReadonlyArray2<'py, f64>, line_off:
         }
         let first = (lp[[a0, 0]], lp[[a0, 1]]);
         let last = (lp[[a1 - 1, 0]], lp[[a1 - 1, 1]]);
-        if a1 >= a0 + 4 && (first.0 - last.0).hypot(first.1 - last.1) < 1e-6 {
+        if a1 >= a0 + 4 && (first.0 - last.0).dhypot(first.1 - last.1) < 1e-6 {
             closed_rings.push((a0..a1 - 1).map(|i| (lp[[i, 0]], lp[[i, 1]])).collect());
         }
         let h = if li < hw.len() { hw[li] } else { 1.0 };
@@ -455,7 +456,7 @@ pub fn berths<'py>(py: Python<'py>, lines: PyReadonlyArray2<'py, f64>, line_off:
             let mut k = 0usize;
             for i in a0..a1 - 1 {
                 let (p, q) = ((lp[[i, 0]], lp[[i, 1]]), (lp[[i + 1, 0]], lp[[i + 1, 1]]));
-                let l = (q.0 - p.0).hypot(q.1 - p.1);
+                let l = (q.0 - p.0).dhypot(q.1 - p.1);
                 if l < 1e-9 {
                     continue;
                 }
@@ -536,7 +537,7 @@ pub fn berths<'py>(py: Python<'py>, lines: PyReadonlyArray2<'py, f64>, line_off:
             }
         }
         if r.c.0 >= bx[0] && r.c.0 < bx[2] && r.c.1 >= bx[1] && r.c.1 < bx[3] {
-            out.extend_from_slice(&[r.c.0, r.c.1, r.u.1.atan2(r.u.0).to_degrees().rem_euclid(360.0), key]);
+            out.extend_from_slice(&[r.c.0, r.c.1, r.u.1.datan2(r.u.0).to_degrees().rem_euclid(360.0), key]);
         }
     }
     let k = out.len() / 4;
@@ -561,12 +562,12 @@ pub fn outline_panels<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, rin
             let n = r.len();
             for i in 0..n {
                 let (p, q) = (r[i], r[(i + 1) % n]);
-                let l = (q.0 - p.0).hypot(q.1 - p.1);
+                let l = (q.0 - p.0).dhypot(q.1 - p.1);
                 if l < 1e-6 {
                     continue;
                 }
                 let (dx, dy) = ((q.0 - p.0) / l, (q.1 - p.1) / l);
-                let yaw = dy.atan2(dx).to_degrees().rem_euclid(360.0);
+                let yaw = dy.datan2(dx).to_degrees().rem_euclid(360.0);
                 let m = (l / length).ceil() as usize;
                 for s in 1..=m {
                     let t = (s as f64 * length).min(l.max(length));
@@ -601,7 +602,7 @@ pub fn grid_marks<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, spacing
         for i in 0..p.nrows().saturating_sub(1) {
             let (a, b) = ((p[[i, 0]], p[[i, 1]], p[[i, 2]]), (p[[i + 1, 0]], p[[i + 1, 1]], p[[i + 1, 2]]));
             let (dx, dy) = (b.0 - a.0, b.1 - a.1);
-            let l = dx.hypot(dy);
+            let l = dx.dhypot(dy);
             if l < 1e-9 {
                 continue;
             }
@@ -654,14 +655,14 @@ fn corners_core(ring: &[P2], inset: f64, min_area: f64) -> Vec<P2> {
     for (ea, eb) in [(a.0, b.0), (a.1, b.0), (a.1, b.1), (a.0, b.1)] {
         let corner = (ea * u.0 + eb * v.0, ea * u.1 + eb * v.1);
         let best = ring.iter().copied().min_by(|p, q| {
-            let dp = (p.0 - corner.0).hypot(p.1 - corner.1);
-            let dq = (q.0 - corner.0).hypot(q.1 - corner.1);
+            let dp = (p.0 - corner.0).dhypot(p.1 - corner.1);
+            let dq = (q.0 - corner.0).dhypot(q.1 - corner.1);
             dp.partial_cmp(&dq).unwrap_or(std::cmp::Ordering::Equal)
         }).unwrap();
         let (dx, dy) = (c.0 - best.0, c.1 - best.1);
-        let l = dx.hypot(dy);
+        let l = dx.dhypot(dy);
         let pt = if l > inset { (best.0 + dx / l * inset, best.1 + dy / l * inset) } else { c };
-        if !out.iter().any(|q| (q.0 - pt.0).hypot(q.1 - pt.1) < 0.5) {
+        if !out.iter().any(|q| (q.0 - pt.0).dhypot(q.1 - pt.1) < 0.5) {
             out.push(pt);
         }
     }
@@ -693,7 +694,7 @@ fn street_core(p: &numpy::ndarray::ArrayView2<'_, f64>, segs: &Segs, pad: f64, r
             let l2 = dx * dx + dy * dy;
             let t = if l2 > 1e-12 { (((x - q[0]) * dx + (y - q[1]) * dy) / l2).clamp(0.0, 1.0) } else { 0.0 };
             let foot = (q[0] + t * dx, q[1] + t * dy);
-            let edge = (x - foot.0).hypot(y - foot.1) - q[4];
+            let edge = (x - foot.0).dhypot(y - foot.1) - q[4];
             if best.map_or(true, |b| edge < b.0) {
                 best = Some((edge, foot, q[4]));
             }
@@ -703,7 +704,7 @@ fn street_core(p: &numpy::ndarray::ArrayView2<'_, f64>, segs: &Segs, pad: f64, r
             edge = e;
             if e < pad {
                 let (ax, ay) = (x - foot.0, y - foot.1);
-                let l = ax.hypot(ay);
+                let l = ax.dhypot(ay);
                 if l > 1e-6 {
                     x = foot.0 + ax / l * (hw + pad);
                     y = foot.1 + ay / l * (hw + pad);
@@ -711,7 +712,7 @@ fn street_core(p: &numpy::ndarray::ArrayView2<'_, f64>, segs: &Segs, pad: f64, r
                 }
             }
             if edge <= reach {
-                yaw = (foot.1 - y).atan2(foot.0 - x).to_degrees().rem_euclid(360.0);
+                yaw = (foot.1 - y).datan2(foot.0 - x).to_degrees().rem_euclid(360.0);
             }
         }
         out.extend_from_slice(&[x, y, yaw, edge]);

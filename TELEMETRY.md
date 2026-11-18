@@ -68,7 +68,7 @@ Sent once per session, and again only when something changes.
 | graphics API | DX11 / DX12 / Vulkan | driver-specific problems |
 | game version | `0.40.5` | engine changes between updates |
 | game graphics settings | preset, mesh, textures, terrain, lighting, shadows, anisotropic, AA, vsync, depth of field, SSAO, motion blur, reflections, grass, display mode | to compare like with like |
-| BeamNG.Earth settings | quality preset, trees and their distance, ground cover, grass distance, rocks, night lights, distant traffic, view distance, terrain detail, building distance, ground photo size, object detail, roads, clouds, sky mode, map style | which of our options cost the most |
+| BeamNG.Earth settings | quality preset, trees and their distance, ground cover, grass distance, rocks, night lights, distant traffic, view distance, terrain detail, building distance, ground photo size, object detail, roads, clouds, sky mode, map style, frame pacing, full-priority loading | which of our options cost the most |
 | other mods (rounded) | 0, 1, 2-4, 5-9, ... | other mods can slow the game too |
 
 Amounts are rounded into steps, so they describe a class of machine rather than one machine. Only the settings named
@@ -85,6 +85,8 @@ We never send where you are. To know how demanding the scene was, a report says 
 | how you moved | seconds stopped and in speed bands (under 30, 30-60, 60-100, 100-150, over 150 mph), seconds with the 3D map open | high speed is where world generation falls behind |
 | teleports | how many | each teleport loads a new place |
 | session length | how long the game had been running, as one of: under 30 min / 30-60 min / 1-2 h / 2-4 h / over 4 h | to see whether long sessions get slower |
+| time since a teleport | seconds and hitches in steps: under 10 s / 10-30 s / 30 s-2 min / later | whether the stutter comes with loading a new place |
+| idle | seconds and hitches while the car has not moved and the camera has not changed for 2 minutes (away from the keyboard) | a game left running is not how it plays |
 
 ## 4. Performance and world-generation speed (Performance data)
 
@@ -93,10 +95,12 @@ Over each 5 minutes:
 | field | example | why |
 |---|---|---|
 | frame times | how many frames fell into fixed steps (gives average fps, 1% low, 95th / 99th percentile); frames while the game is paused or in the background are left out | how smooth the game was |
+| this window's own lows | the median, 99th and 99.9th percentile frame time of the 5 minutes (one number each, rounded to 0.25 ms) and how many frames took over 2x and 4x the median | a true 1% low per window, so one slow machine does not set everyone's figure |
 | the same per speed band | the steps for town speeds vs the highway | so fast driving is not hidden in an average |
-| hitches | how many frames over 50 / 100 / 250 / 1000 ms (and how many of those while loading after a teleport), and for the slow ones the name of the part that took longest (a BeamNG.Earth part such as `roads`, or an engine subsystem such as `RenderShadows`, or "outside" both) | which part to fix first |
+| hitches | how many frames over 50 / 100 / 250 / 1000 ms (and how many of those while loading after a teleport, and per speed band), and for the slow ones the name of the part that took longest (a BeamNG.Earth part such as `roads`, or an engine subsystem such as `RenderShadows`, or "outside" both), the frames over 1 s counted apart | which part to fix first |
+| what was going on in slow frames | counts by fixed names only: ground block swap, collision rebuild, far tiles imported or retextured, roads built, distant traffic, trees placed or new tree shapes, server messages handled, a vehicle spawned or removed, the catch-up boost, the map or a menu open, the world origin moving, a Lua garbage sweep, loading after a teleport, the car held for the ground | which of our jobs makes the stutter |
 | fps drops | how many, how long, the lowest (rounded) | stutter you notice |
-| memory (rounded) | the game's Lua memory and its garbage per minute; the BeamNG.Earth server's memory | running out of memory on 16 GB machines and the Steam Deck |
+| memory (rounded) | the game's Lua memory and its garbage per minute; the game's own memory (the most in the 5 minutes), the computer's free memory (the least), the graphics memory in use (the most); the BeamNG.Earth server's memory, its limit (the Max RAM for BeamNG.Earth setting: Auto or the amount chosen, rounded) and its memory tier, and how many worker processes it runs | running out of memory on 16 GB machines and the Steam Deck; long sessions filling the graphics memory |
 | terrain blocks | how long each new ground block was waited for, in steps | whether the world keeps up with you |
 | keeping up | seconds held at the edge of the ground, seconds held until the ground loads, seconds loading after a teleport, how many times and how long the server borrowed extra CPU cores | the "world can't keep up" problem |
 | road tiles | how many were waiting (rounded) | roads appearing late |
@@ -119,6 +123,26 @@ only numbers (and in section 2 short model names and settings values), so no pos
 | field | example | why |
 |---|---|---|
 | requests per map service | `basemap.nationalmap.gov`: 88 requests, 2.8 MB, 0 errors, 0 rate-limited | BeamNG.Earth downloads from free public services (map data, elevation, photos). These counts show us whether we are putting too much load on any of them, so we can cache or slow down before a service blocks everyone. |
+| elevation tile reads by part of the app | `mapterhorn:grading:16:net`: 12 (the elevation service, the part of BeamNG.Earth that asked, the zoom level, and whether the tile came from your disk, another of the app's processes, the project's tile host or the service itself) | to see which parts of the app ask the free elevation service most, so we can cut those requests. At most 64 such counts a report; no tile numbers or positions. |
+
+Each report also carries a random id of the app's current run and the report's number in that run, so a report that
+is sent again (because its answer got lost) is counted only once.
+
+## 7. Requests for aerial photo packs (main switch)
+
+Where the project's server has no prebuilt 1 m aerial photo pack for an area you drive in (US and open-data countries),
+the app may ask it to build one, so the next visit (yours or anyone's) loads faster. The request names only the
+~15 km map square, nothing else; it is sent at most once per square every 6 hours, only with the main switch on, and
+the server keeps the square to build it, not who asked (your address is used only in memory, for rate limits).
+With the main switch off, nothing is asked and the photos come from their usual sources.
+
+## 8. Requests for prebuilt road decisions (main switch)
+
+Where the project's server has no prebuilt road plans for an area of your version (when that feature is turned on),
+the app may ask it to build them, the same way as the aerial packs above: the request names only the ~8 km map square
+and the version, at most once per square every 6 hours, only with the main switch on, and the server keeps the square
+to build it, not who asked. Prebuilt plans are only ever made by the project's own machine and signed; nothing your
+computer makes is uploaded.
 
 ## What happens to the data
 
@@ -137,6 +161,33 @@ only numbers (and in section 2 short model names and settings values), so no pos
 - **Where**: the collector is a server run by the BeamNG.Earth project in the United States.
 - **Your install id**: the file `telemetry_id` in the BeamNG.Earth cache folder. Delete it and you get a new id; with
   the main switch off, no id is sent at all.
+
+## Reports you send
+
+Separate from the statistics above: the in-game reporter's **Send to the developers** (after Ctrl+Shift+E or a
+performance profile) sends one report, and only when you click **Send** in its window. It is an action you take each
+time, so it works whatever the usage-statistics switches say (also with them off), but never in offline mode.
+
+- **What**: the window lists every part and lets you read the files before sending: your title and description; the
+  screenshot (optional); the location, exact or rounded to about 1 km (optional; rounded also drops the map ids,
+  street names and nearby roads and buildings); the camera and the object under the screen's centre; game, PC and
+  graphics details, BeamNG.Earth's settings and the names of enabled mods; the last 60 s of frame times; weather and
+  time of day; the world server's version, settings, memory and loading state; the logs (optional: the world server's
+  last 300 lines, the game's warnings and errors of the last 10 minutes).
+- **Removed first**: user names, home folders (`C:\Users\<name>`, `/home/<name>`), the computer's name, e-mail and IP
+  addresses, also in the copy kept on your computer.
+- **Private**: sent to the BeamNG.Earth developers only (the project's server, earth.tgforever.net, `POST /report`).
+  Reports are **not published** and are never listed publicly; only the developers can read them, with a private
+  key.
+- **Stored**: each report as sent, with the time it arrived, the app version, the random install id (to group
+  reports from one computer) and the country it was sent from (looked up from the connection's address, like the
+  statistics above; the address itself is used only for rate limits in memory and is not stored).
+  **Kept 90 days**, then deleted.
+- **Limits**: at most 2 MB per report, 30 reports an hour and 100 a day per install.
+- The report id the window shows (like `K7QD-3M9X`) lets you point us to your report on Discord or GitHub.
+
+The code: `mod/beamng_earth/lua/ge/extensions/beamngEarth/reportsend.lua` (the window), `server/reportsend.py` and
+`native/earthfast/src/reportpack.rs` (the scrub and the send), `native/serverlist/src/reports.rs` (the collector).
 
 ## Who runs it
 
@@ -162,6 +213,9 @@ before any of it is sent.
   only while Performance data is ticked. The welcome screen asks everyone again first (also those who chose before).
 - **Releases**: from the release after 1.8.2, sections 2-5 are sent as on the development builds, only while
   Performance data is ticked. (Earlier releases measured them and kept them next to the last report without sending.)
+- **From the release after 1.9.1** (and the development builds before it): the window's own lows, what was going
+  on in slow frames, time since a teleport, idle time, the game's, the system's and the graphics memory and the server's
+  worker count (consent version 3: the welcome screen asks everyone again first).
 - **Being added**: a **What is sent** button that shows the last report exactly as it left your computer, and the
   public performance page.
 

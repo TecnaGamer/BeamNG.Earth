@@ -41,8 +41,34 @@ def _siblings(usable=None):
     return sorted(groups.items())
 
 
+FEW_CORES = 4               # a machine of this many physical cores or fewer (a Steam Deck): native_threads' rule
+
+
+def native_threads(server_cpus):
+    """The cap on the native kernels' threads per call (earthfast par.rs, BNGE_NATIVE_THREADS) for the server's CPU set,
+    or None for no cap of its own (the kernels stop at the process's CPU set and at 8 anyway). On a machine of FEW_CORES
+    physical cores or fewer, one thread per physical core of the server's set: the hyperthread siblings are left to the
+    server's other processes, whose kernels may run at the same time (a Steam Deck: 2 a call)."""
+    if not server_cpus:
+        return None
+    try:
+        if len(_siblings()) > FEW_CORES:
+            return None
+        return max(1, len(_siblings(sorted(server_cpus))))
+    except (OSError, ValueError):
+        return None
+
+
 def split(share=SERVER_SHARE):
-    """(server CPU set, game CPU set): the last cores (with their hyperthread siblings) for the server."""
+    """(server CPU set, game CPU set): the last cores (with their hyperthread siblings) for the server.
+
+    The share is counted in whole cores, a core being as many CPUs as the machine's widest core has. Where the cores
+    are not all alike (Intel since the 12th generation: efficiency cores of one thread, numbered after the performance
+    cores of two), the last cores are the single-thread ones, and a quarter of an i7-12700K's twelve cores was its
+    last three efficiency cores: 3 of 20 CPUs for the server and its worker processes (a recorded session 2026-11-13:
+    the event loop stalled 53 times, 555 s in all, a terrain block queued 812 s). So cores are taken from the end until
+    they hold that many CPUs, still never more than half of the cores: there the four efficiency cores and one
+    performance core. On a machine whose cores are alike this is the same split as before."""
     cores = _siblings()
     if len(cores) < 4:
         return None, None              # too few cores to split usefully
@@ -53,8 +79,13 @@ def split(share=SERVER_SHARE):
             k = max(1, min(len(cores) // 2, want))
     except ValueError:
         pass
-    server = {c for _, cpus in cores[-k:] for c in cpus}
-    game = {c for _, cpus in cores[:-k] for c in cpus}
+    need = k * max(len(cpus) for _, cpus in cores)
+    n = have = 0
+    while n < len(cores) // 2 and have < need:
+        n += 1
+        have += len(cores[-n][1])
+    server = {c for _, cpus in cores[-n:] for c in cpus}
+    game = {c for _, cpus in cores[:-n] for c in cpus}
     return server, game
 
 
@@ -63,6 +94,7 @@ def split(share=SERVER_SHARE):
 # seconds): the mod writes them to its settings file in the game's user folder (settings.lua M.FILE, as bmplaunch reads
 # beammpOnLaunch), read when the server starts. "auto" / "low": the defaults above.
 MOD_SETTINGS = ("settings", "beamngEarth.json")
+LIGHT_GROUND_PRESETS = ("low", "medium")   # the mod's quality presets whose groundGrid is "2" (settings.lua PRESETS)
 CORE_CHOICES = ("1", "2", "3", "4", "6", "8")
 PRIORITIES = ("low", "normal")
 
@@ -107,6 +139,19 @@ def player_settings(user_dir):
         out["teleport_full"] = env == "1"
     if d.get("models3dmr") is False:
         out["models3dmr"] = False
+    ram = str(d.get("maxRamGb", "auto"))       # the settings page's Max RAM for BeamNG.Earth (budget.SETTING_ENV)
+    try:
+        if ram != "auto" and 0 < float(ram) < 1e6:
+            out["max_ram_gb"] = float(ram)
+    except ValueError:
+        pass
+    # the Low / Medium presets' lighter ground (heightmap.ground_square); a file from before the setting existed follows
+    # its quality preset, as the mod's settings do (settings.lua: a knob a file lacks takes its preset's value)
+    grid = d.get("groundGrid")
+    if grid is None and str(d.get("quality", "")) in LIGHT_GROUND_PRESETS:
+        grid = "2"
+    if str(grid) == "2":
+        out["ground_square"] = "2"
     return out
 
 
@@ -123,6 +168,9 @@ def apply_player_settings(user_dir, nice, default_nice, environ=None):
     if chosen.get("priority") == "normal" and nice == default_nice:
         nice = 0
         notes.append("normal priority")
+    if chosen.get("max_ram_gb") and not environ.get("BNGE_MAX_RAM_GB"):
+        environ["BNGE_MAX_RAM_GB"] = f"{chosen['max_ram_gb']:g}"   # (budget.SETTING_ENV; the workers inherit it)
+        notes.append(f"at most {chosen['max_ram_gb']:g} GB of memory")
     if chosen.get("models3dmr") is False and not environ.get("BNE_3DMR"):
         environ["BNE_3DMR"] = "off"            # (threedmr.enabled; the worker processes inherit it)
         notes.append("no 3dmr.eu models")
@@ -237,11 +285,18 @@ def pin_tree(cpus, root=None):
     """Every thread of this process (or root) and of its descendants on cpus; the number of threads set (Windows: of
     processes)."""
     if cpus and WIN:
+        if root is None or root == os.getpid():
+            # (this process's tree: its worker processes as multiprocessing knows them, no snapshot of all running
+            # processes on the machine: CreateToolhelp32Snapshot across thousands of processes was a 6-9 s event
+            # loop stall while a teleport or catch-up boost came on under heavy CPU load, 2026-11-15)
+            import multiprocessing
+            pids = [os.getpid()] + [p.pid for p in multiprocessing.active_children() if p.pid]
+            return sum(_win_set(pid, cpus) for pid in pids)
         procs = _win_processes()
         kids = {}
         for pid, pp, _exe in procs:
             kids.setdefault(pp, []).append(pid)
-        todo, n, seen = [root or os.getpid()], 0, set()
+        todo, n, seen = [root], 0, set()
         while todo:
             pid = todo.pop()
             if pid in seen:

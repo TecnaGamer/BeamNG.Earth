@@ -11,6 +11,8 @@ roof) is busstationmesh.zone; furniture stands on it.
 import math
 
 import numpy as np
+import dmath
+import dnp
 
 import busbays
 import busstations as bs
@@ -33,10 +35,10 @@ def _roof_axes(ring):
     """(t, left, a0, a1, l0, l1): the unit axis of the roof's longest edge, its left normal and the ring's extents."""
     pts = bs._open(ring)
     segs = np.vstack((pts, pts[:1]))
-    best = max(zip(segs[:-1], segs[1:]), key=lambda s: float(np.hypot(*(s[1] - s[0]))))
+    best = max(zip(segs[:-1], segs[1:]), key=lambda s: float(dnp.hypot(*(s[1] - s[0]))))
     t = busbays._unit(best[1] - best[0])
     left = np.array([-t[1], t[0]])
-    along, lat = pts @ t, pts @ left
+    along, lat = dnp.matmul(pts, t), dnp.matmul(pts, left)
     return t, left, float(along.min()), float(along.max()), float(lat.min()), float(lat.max())
 
 
@@ -52,13 +54,13 @@ def _back_edges(st, ring, bays):
         pts = pts[::-1]
     out = []
     for a, b in zip(pts, np.roll(pts, -1, axis=0)):
-        length = float(np.hypot(*(b - a)))
+        length = float(dnp.hypot(*(b - a)))
         if length < MIN_EDGE_M:
             continue
         t = (b - a) / length
         o = np.array([t[1], -t[0]])                       # the right of a counter-clockwise ring: outward
         mid = (a + b) / 2.0
-        front = any(float(np.dot(bay.c - mid, o)) > 0 and bs.dist_to_path(np.array([a, b]), bay.c) <= FRONT_M
+        front = any(float(dnp.dot(bay.c - mid, o)) > 0 and bs.dist_to_path(np.array([a, b]), bay.c) <= FRONT_M
                     for bay in bays)
         if not bays:                                      # no bays: the side toward a building is the back
             room = min([bs.dist_to_path(it["xy"], mid + o * 4.0, True) for it in st.buildings] or [1e9])
@@ -70,7 +72,7 @@ def _back_edges(st, ring, bays):
 
 def _signed(pts):
     x, y = pts[:, 0], pts[:, 1]
-    return float(np.dot(x, np.roll(y, -1)) - np.dot(np.roll(x, -1), y)) * 0.5
+    return float(dnp.dot(x, np.roll(y, -1)) - dnp.dot(np.roll(x, -1), y)) * 0.5
 
 
 def _roof_furniture(st, canopy, bays):
@@ -105,7 +107,7 @@ def _platform_furniture(st, platform):
         start, end, mid_lat = xy[0], xy[-1], None
         t = busbays._unit(end - start)
         mid_lat = np.array([-t[1], t[0]])
-    length = float(np.hypot(*(end - start)))
+    length = float(dnp.hypot(*(end - start)))
     face = mid_lat
     if st.roads:
         mid = (start + end) / 2.0
@@ -114,7 +116,7 @@ def _platform_furniture(st, platform):
             dd, rq2, _ = busbays._nearest(r["xy"], False, mid)
             if dd < d:
                 d, rq = dd, rq2
-        face = mid_lat if float(np.dot(rq - mid, mid_lat)) >= 0 else -mid_lat
+        face = mid_lat if float(dnp.dot(rq - mid, mid_lat)) >= 0 else -mid_lat
     out = []
     if tags.get("bench") == "yes" and length >= 3.0:
         k = int(min(4, max(1, length // PLATFORM_BENCH_STEP_M)))
@@ -151,7 +153,7 @@ def bay_benches(st, have):
             continue
         if not bool(busstationmesh._walk_ok(st, p[None])[0]):
             continue
-        if any(float(np.hypot(p[0] - q[0], p[1] - q[1])) < BAY_BENCH_NEAR_M for q in list(have) + [(o[1], o[2]) for o in out]):
+        if any(float(dnp.hypot(p[0] - q[0], p[1] - q[1])) < BAY_BENCH_NEAR_M for q in list(have) + [(o[1], o[2]) for o in out]):
             continue
         out.append((BENCH, float(p[0]), float(p[1]), float(bay.n[0]), float(bay.n[1])))
     return out
@@ -179,9 +181,9 @@ def furniture(st):
     kept = []
     shelters = shelter_spots(st)
     for item in out:
-        if any(float(np.hypot(item[1] - s_[0], item[2] - s_[1])) < 2.2 for s_ in shelters):
+        if any(float(dnp.hypot(item[1] - s_[0], item[2] - s_[1])) < 2.2 for s_ in shelters):
             continue                                    # (not in a waiting shelter)
-        if all(float(np.hypot(item[1] - k[1], item[2] - k[2])) >= CLEAR_M for k in kept):
+        if all(float(dnp.hypot(item[1] - k[1], item[2] - k[2])) >= CLEAR_M for k in kept):
             kept.append(item)
     return kept
 
@@ -204,7 +206,7 @@ def lamps(st):
             continue
         if (st.lanes or st.mouths) and bool(bs.lane_blocked(st, p[None], pad=0.3, mouths=False)[0]):
             continue
-        if any(float(np.hypot(p[0] - q[0], p[1] - q[1])) < LAMP_SPACING_M for q in out):
+        if any(float(dnp.hypot(p[0] - q[0], p[1] - q[1])) < LAMP_SPACING_M for q in out):
             continue
         slab = any(bs.dist_to_path(pl["xy"], p, pl["kind"] == "polygon") <= 2.5 or
                    (pl["kind"] == "polygon" and bs.contains(pl["xy"], p)) for pl in st.platforms)
@@ -231,9 +233,9 @@ def _edge_points(st, step=3.0):
     keep = busstationkeep.Keepout(polys)
     cand, probe = [], []
     for r in polys:
-        area = float(np.dot(r[:, 0], np.roll(r[:, 1], -1)) - np.dot(np.roll(r[:, 0], -1), r[:, 1]))
+        area = float(dnp.dot(r[:, 0], np.roll(r[:, 1], -1)) - dnp.dot(np.roll(r[:, 0], -1), r[:, 1]))
         for a, b in zip(r, np.roll(r, -1, axis=0)):
-            ln = float(np.hypot(*(b - a)))
+            ln = float(dnp.hypot(*(b - a)))
             if ln < 1e-6:
                 continue
             t = (b - a) / ln
@@ -294,10 +296,10 @@ def _yard_lamps(st, taken):
 
     def apart(i, d):
         q = P[i]
-        return all(float(np.hypot(q[0] - o[0], q[1] - o[1])) >= d for o in out) and             all(float(np.hypot(q[0] - t[0], q[1] - t[1])) >= YARD_LAMP_BAY_M for t in taken)
+        return all(float(dnp.hypot(q[0] - o[0], q[1] - o[1])) >= d for o in out) and             all(float(dnp.hypot(q[0] - t[0], q[1] - t[1])) >= YARD_LAMP_BAY_M for t in taken)
     for mx, my in st.mouths:                                    # the exits first
-        near = [i for i in np.flatnonzero(free) if float(np.hypot(P[i][0] - mx, P[i][1] - my)) <= YARD_LAMP_MOUTH_M]
-        near.sort(key=lambda i: float(np.hypot(P[i][0] - mx, P[i][1] - my)))
+        near = [i for i in np.flatnonzero(free) if float(dnp.hypot(P[i][0] - mx, P[i][1] - my)) <= YARD_LAMP_MOUTH_M]
+        near.sort(key=lambda i: float(dnp.hypot(P[i][0] - mx, P[i][1] - my)))
         for i in near:
             if apart(i, YARD_LAMP_APART_M):
                 take(i)
@@ -356,7 +358,7 @@ def drop_stock_lamps(rows, frame, md, box, wires=None):
             for w in wires:
                 line = np.asarray(w[0] if isinstance(w, tuple) else w, float)
                 ends = line[[0, -1], :2] if len(line) else np.zeros((0, 2))
-                near = len(ends) and (np.hypot(*(ends[:, None, :] - poles[None, :, :]).transpose(2, 0, 1)) < 4.0).any()
+                near = len(ends) and (dnp.hypot(*(ends[:, None, :] - poles[None, :, :]).transpose(2, 0, 1)) < 4.0).any()
                 if not near:
                     kept.append(w)
             wires[:] = kept
@@ -394,10 +396,10 @@ def shelter_spots(st):
             continue
         if (st.lanes or st.mouths) and bool(bs.lane_blocked(st, p[None], pad=0.5, mouths=True)[0]):
             continue
-        if any(float(np.hypot(p[0] - q[0], p[1] - q[1])) < SHELTER_APART_M for q in [(o[0], o[1]) for o in out]):
+        if any(float(dnp.hypot(p[0] - q[0], p[1] - q[1])) < SHELTER_APART_M for q in [(o[0], o[1]) for o in out]):
             continue
         away = -bay.n
-        out.append((float(p[0]), float(p[1]), float(math.degrees(math.atan2(away[1], away[0])) % 360.0)))
+        out.append((float(p[0]), float(p[1]), float(math.degrees(dmath.atan2(away[1], away[0])) % 360.0)))
     st._shelters = out
     return out
 
@@ -442,10 +444,10 @@ def exit_signs(st):
         ends = [path] if ln["oneway"] else [path, path[::-1]]
         for p in ends:
             end = p[-1]
-            if not any(float(np.hypot(end[0] - mx, end[1] - my)) < 1.0 for mx, my in st.mouths):
+            if not any(float(dnp.hypot(end[0] - mx, end[1] - my)) < 1.0 for mx, my in st.mouths):
                 continue
             t = p[-1] - p[-2]
-            n = float(np.hypot(*t))
+            n = float(dnp.hypot(*t))
             if n < 1e-6:
                 continue
             t = t / n
@@ -456,7 +458,7 @@ def exit_signs(st):
                 if not bool(bs.lane_blocked(st, c[None], pad=0.3, core=True, mouths=False)[0]) and _off_streets(st, c):
                     q = c
                     break
-            if q is None or any(float(np.hypot(q[0] - o[0], q[1] - o[1])) < 4.0 for o in out):
+            if q is None or any(float(dnp.hypot(q[0] - o[0], q[1] - o[1])) < 4.0 for o in out):
                 continue
             out.append((float(q[0]), float(q[1]), float(yaw)))
     st._exit_signs = out
@@ -489,7 +491,7 @@ def rows(frame, md, box, elev, country_at=None, existing=None):
             if not (x0 <= x < x1 and y0 <= y < y1):
                 continue
             if existing and any(r[0] in (GIVEWAY, "stop", "fr_giveway_m9c", "giveway_b1") and
-                                float(np.hypot(r[1] - x, r[2] - y)) < EXIT_SIGN_CLEAR_M for r in existing):
+                                float(dnp.hypot(r[1] - x, r[2] - y)) < EXIT_SIGN_CLEAR_M for r in existing):
                 continue                                # (the street's own junction sign is there)
             sign_pend.append((x, y, yaw))
     if not pend and not lamp_pend and not sign_pend and not shelter_pend:
@@ -500,13 +502,13 @@ def rows(frame, md, box, elev, country_at=None, existing=None):
     if pend:
         z = busstationmesh.ground(frame, elev, np.array([[p[1], p[2]] for p in pend])) + SLAB_H_M
         for (group, x, y, fx, fy), zz in zip(pend, z):
-            yaw = math.degrees(math.atan2(fy, fx)) + (BENCH_YAW if group == BENCH else 0.0)
+            yaw = math.degrees(dmath.atan2(fy, fx)) + (BENCH_YAW if group == BENCH else 0.0)
             out.append([group, round(x, 2), round(y, 2), round(float(zz), 2), round(yaw % 360.0, 1), 1.0,
                         BENCH_H if group == BENCH else BIN_H, 0.0])
     if lamp_pend:
         z = busstationmesh.ground(frame, elev, np.array([[p[0], p[1]] for p in lamp_pend]))
         lamp_rows = [[LAMP, round(x, 2), round(y, 2), round(float(zz) + (SLAB_H_M if slab else 0.0), 2),
-                      round(math.degrees(math.atan2(dy, dx)) % 360.0, 1), 1.0, LAMP_H, 0.0]
+                      round(math.degrees(dmath.atan2(dy, dx)) % 360.0, 1), 1.0, LAMP_H, 0.0]
                      for (x, y, dx, dy, slab), zz in zip(lamp_pend, z)]
         if country_at is not None:
             import citylamps
@@ -547,7 +549,7 @@ def clear_of_stations(shelter_rows, frame, md, box):
                 hit = True
             else:
                 for bay in busbays.layout_bays(st):
-                    if float(np.hypot(*(bay.c - p))) <= bay.length / 2 + bay.width / 2 + SHELTER_BAY_M and                             bs.contains(busbays._rect(bay), p):
+                    if float(dnp.hypot(*(bay.c - p))) <= bay.length / 2 + bay.width / 2 + SHELTER_BAY_M and                             bs.contains(busbays._rect(bay), p):
                         hit = True
                         break
             if hit:

@@ -34,7 +34,7 @@ M.GRID_1024 = 256                  -- block centre grid by the block's width: 2 
 M.GRID_512 = 128                   -- ... and 1 km (512² at 2 m, 1024² at 1 m) (flat: modsim reads these)
 M.GRID = M.GRID_512
 M.WIDTH = M.N * M.SQUARE           -- m: the block's width (1 km or 2 km: follow / rebase tables)
-M.Q_LADDER = { 1 / 256, 1 / 128, 1 / 64, 1 / 32, 1 / 16 } -- height quanta, m (design 1.3)
+M.Q_LADDER = { 1 / 1024, 1 / 512, 1 / 256, 1 / 128, 1 / 64, 1 / 32, 1 / 16 } -- height quanta, m (design 1.3; server heightmap.Q_LADDER)
 M.Q_SCALE = 65536                  -- maxHeight = Q * Q_SCALE (P1)
 
 -- The session's block: `size` samples per side `square` m apart (hello.blockSize / squareSize), a block 1 or 2 km wide

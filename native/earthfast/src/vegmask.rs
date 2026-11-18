@@ -2,6 +2,7 @@
 //! was its Python loop over every building and water polygon). The same test as matplotlib's Path.contains_points
 //! (point_in_path: the crossing test multiplied out, no division), per pixel centre, XOR over a part's rings; each
 //! row tests only the edges that cross it.
+use crate::dm::Dm;
 
 use numpy::{PyReadonlyArray1, PyReadonlyArray2, PyReadwriteArray2};
 use pyo3::prelude::*;
@@ -44,7 +45,7 @@ pub fn mask_polys(py: Python<'_>, mut mask: PyReadwriteArray2<'_, u8>, lonlat: P
         let lon = ll[[k, 0]];
         let lat = ll[[k, 1]].clamp(-MAX_LAT, MAX_LAT);
         let x = lon.to_radians() * R;
-        let y = (std::f64::consts::PI / 4.0 + lat.to_radians() / 2.0).tan().ln() * R;
+        let y = (std::f64::consts::PI / 4.0 + lat.to_radians() / 2.0).dtan().dln() * R;
         ((x - x0) / dx, (y0 - y) / dy)
     }).collect();
     let mut marked = 0usize;
@@ -138,12 +139,12 @@ pub fn road_segments<'py>(py: Python<'py>, lonlat: PyReadonlyArray2<'py, f64>, c
                 }
                 let n = (b - a) as f64;
                 let mean_lat = (a..b).map(|k| ll[[k, 1]]).sum::<f64>() / n;
-                let hw = hm[fi] / (dx * mean_lat.to_radians().cos().max(0.05));
+                let hw = hm[fi] / (dx * mean_lat.to_radians().dcos().max(0.05));
                 let q: Vec<(f64, f64)> = (a..b).map(|k| {
                     let lon = ll[[k, 0]];
                     let lat = ll[[k, 1]].clamp(-MAX_LAT, MAX_LAT);
                     let x = lon.to_radians() * R;
-                    let y = (std::f64::consts::PI / 4.0 + lat.to_radians() / 2.0).tan().ln() * R;
+                    let y = (std::f64::consts::PI / 4.0 + lat.to_radians() / 2.0).dtan().dln() * R;
                     ((x - x0) / dx, (y0 - y) / dy)
                 }).collect();
                 let (mut cmin, mut rmin, mut cmax, mut rmax) = (f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY,

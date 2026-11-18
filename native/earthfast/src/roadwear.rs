@@ -11,6 +11,7 @@
 //! blockers: a road's straight continuation, a ramp's merge) and where it leaves the box: those cuts are hard, a strip
 //! piece fades in and out at its own ends only (roadmesh's fade uv, from each point's distance along the piece and the
 //! piece's length), so neighbouring tiles agree.
+use crate::dm::Dm;
 
 use std::collections::{HashMap, HashSet};
 
@@ -96,7 +97,7 @@ impl Line {
     fn new(x: Vec<f64>, y: Vec<f64>, z: Vec<f64>) -> Self {
         let mut s = vec![0.0; x.len()];
         for i in 1..x.len() {
-            s[i] = s[i - 1] + (x[i] - x[i - 1]).hypot(y[i] - y[i - 1]);
+            s[i] = s[i - 1] + (x[i] - x[i - 1]).dhypot(y[i] - y[i - 1]);
         }
         Line { x, y, z, s }
     }
@@ -114,7 +115,7 @@ impl Line {
     fn at(&self, s: f64) -> (f64, f64, f64, f64, f64) {
         let i = self.seg(s);
         let (dx, dy) = (self.x[i + 1] - self.x[i], self.y[i + 1] - self.y[i]);
-        let l = dx.hypot(dy).max(1e-9);
+        let l = dx.dhypot(dy).max(1e-9);
         let t = ((s - self.s[i]) / l).clamp(0.0, 1.0);
         (self.x[i] + t * dx, self.y[i] + t * dy, self.z[i] + t * (self.z[i + 1] - self.z[i]), dx / l, dy / l)
     }
@@ -123,14 +124,14 @@ impl Line {
         let n = self.x.len();
         let segn = |k: usize| {
             let (dx, dy) = (self.x[k + 1] - self.x[k], self.y[k + 1] - self.y[k]);
-            let l = dx.hypot(dy).max(1e-9);
+            let l = dx.dhypot(dy).max(1e-9);
             (-dy / l, dx / l)
         };
         if i == 0 { return segn(0); }
         if i >= n - 1 { return segn(n - 2); }
         let (a, b) = (segn(i - 1), segn(i));
         let (mx, my) = (a.0 + b.0, a.1 + b.1);
-        let ml = mx.hypot(my);
+        let ml = mx.dhypot(my);
         if ml < 1e-9 { return b; }
         let (mx, my) = (mx / ml, my / ml);
         let c = (mx * b.0 + my * b.1).clamp(0.5, 1.0);
@@ -154,7 +155,7 @@ impl Line {
         let mut res = Vec::with_capacity(out.len());
         for (k, p) in out.iter().enumerate() {
             if k > 0 {
-                acc += (p[0] - out[k - 1][0]).hypot(p[1] - out[k - 1][1]);
+                acc += (p[0] - out[k - 1][0]).dhypot(p[1] - out[k - 1][1]);
             }
             res.push([p[0], p[1], p[2], acc]);
         }
@@ -209,7 +210,7 @@ impl Blockers {
             let (dx, dy) = (sg[2] - sg[0], sg[3] - sg[1]);
             let l2 = (dx * dx + dy * dy).max(1e-12);
             let t = (((x - sg[0]) * dx + (y - sg[1]) * dy) / l2).clamp(0.0, 1.0);
-            if (x - (sg[0] + t * dx)).hypot(y - (sg[1] + t * dy)) < self.hw[k] {
+            if (x - (sg[0] + t * dx)).dhypot(y - (sg[1] + t * dy)) < self.hw[k] {
                 return true;
             }
         }
@@ -243,7 +244,7 @@ fn densify(p: &[[f64; 4]]) -> Vec<[f64; 4]> {
     for i in 0..p.len() {
         if i > 0 {
             let (a, b) = (p[i - 1], p[i]);
-            let d = (b[0] - a[0]).hypot(b[1] - a[1]);
+            let d = (b[0] - a[0]).dhypot(b[1] - a[1]);
             let n = (d / TEST_STEP_M).ceil() as usize;
             for k in 1..n {
                 let t = k as f64 / n as f64;
@@ -268,10 +269,10 @@ fn simplify(p: &[[f64; 4]]) -> Vec<[f64; 4]> {
         if j <= i + 1 { continue; }
         let (ax, ay, bx, by) = (p[i][0], p[i][1], p[j][0], p[j][1]);
         let (dx, dy) = (bx - ax, by - ay);
-        let l = dx.hypot(dy);
+        let l = dx.dhypot(dy);
         let (mut best, mut at) = (-1.0f64, i);
         for k in (i + 1)..j {
-            let d = if l < 1e-9 { (p[k][0] - ax).hypot(p[k][1] - ay) }
+            let d = if l < 1e-9 { (p[k][0] - ax).dhypot(p[k][1] - ay) }
                     else { ((p[k][0] - ax) * dy - (p[k][1] - ay) * dx).abs() / l };
             if d > best { best = d; at = k; }
         }
@@ -321,7 +322,7 @@ fn emit_quad(ctx: &Ctx, out: &mut Out, r: usize, c: (f64, f64, f64), t: (f64, f6
              across: f64, kind: i64, cell: i64) {
     let size = along.max(across);
     if !ctx.in_box(c.0, c.1, size / 2.0) || ctx.bl.blocked(r, c.0, c.1) { return; }
-    let (cs, sn) = (turn.cos(), turn.sin());
+    let (cs, sn) = (turn.dcos(), turn.dsin());
     let (ux, uy) = (t.0 * cs - t.1 * sn, t.0 * sn + t.1 * cs);   // along
     let (vx, vy) = (-uy, ux);                                   // left
     let (a, b) = (along / 2.0, across / 2.0);

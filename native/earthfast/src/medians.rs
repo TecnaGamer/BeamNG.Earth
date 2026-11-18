@@ -4,6 +4,7 @@
 //!
 //! Deterministic and tile-independent: modules lie on a grid of arc length along one carriageway (the one whose key is
 //! the lower of the pair), and a tile keeps the modules whose middle is in it, so neighbouring tiles agree.
+use crate::dm::Dm;
 
 use numpy::{IntoPyArray, PyArray2, PyReadonlyArray1, PyReadonlyArray2};
 use pyo3::prelude::*;
@@ -112,7 +113,7 @@ impl<'a> Net<'a> {
                     }
                     let t = (((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / l2).clamp(0.0, 1.0);
                     let q = [a[0] + t * dx, a[1] + t * dy];
-                    let d = (p[0] - q[0]).hypot(p[1] - q[1]);
+                    let d = (p[0] - q[0]).dhypot(p[1] - q[1]);
                     if d > r {
                         continue;
                     }
@@ -156,7 +157,7 @@ fn at(pts: &[[f64; 2]], a: usize, b: usize, cum: &[f64], s: f64) -> ([f64; 2], [
     }
     let seg = |j: usize| -> Option<[f64; 2]> {
         let (p, q) = (pts[a + j], pts[a + j + 1]);
-        let l = (q[0] - p[0]).hypot(q[1] - p[1]);
+        let l = (q[0] - p[0]).dhypot(q[1] - p[1]);
         if l < 1e-9 { None } else { Some([(q[0] - p[0]) / l, (q[1] - p[1]) / l]) }
     };
     let (p, q) = (pts[a + k2], pts[a + k2 + 1]);
@@ -170,7 +171,7 @@ fn at(pts: &[[f64; 2]], a: usize, b: usize, cum: &[f64], s: f64) -> ([f64; 2], [
         match (before, after) {
             (Some(x), Some(y)) => {
                 let m = [x[0] + y[0], x[1] + y[1]];
-                let l = m[0].hypot(m[1]);
+                let l = m[0].dhypot(m[1]);
                 if l < 1e-6 { u } else { [m[0] / l, m[1] / l] }
             }
             (Some(x), None) | (None, Some(x)) => x,
@@ -180,7 +181,7 @@ fn at(pts: &[[f64; 2]], a: usize, b: usize, cum: &[f64], s: f64) -> ([f64; 2], [
     let f = (t / len).clamp(0.0, 1.0);
     let (d0, d1) = (vdir(k2), vdir(k2 + 1));
     let m = [d0[0] * (1.0 - f) + d1[0] * f, d0[1] * (1.0 - f) + d1[1] * f];
-    let ml = m[0].hypot(m[1]);
+    let ml = m[0].dhypot(m[1]);
     let sm = if ml < 1e-6 { u } else { [m[0] / ml, m[1] / ml] };
     ([p[0] + u[0] * t, p[1] + u[1] * t], sm)
 }
@@ -237,7 +238,7 @@ impl<'a> Ctx<'a> {
                         continue;
                     }
                     let tt = (((c[0] - m[0]) * dx + (c[1] - m[1]) * dy) / l2).clamp(0.0, 1.0);
-                    let d = (c[0] - m[0] - tt * dx).hypot(c[1] - m[1] - tt * dy);
+                    let d = (c[0] - m[0] - tt * dx).dhypot(c[1] - m[1] - tt * dy);
                     let ln = l2.sqrt();
                     if d <= r && (dot([dx / ln, dy / ln], t)).abs() > 0.8 {
                         return true;
@@ -284,7 +285,7 @@ impl<'a> Ctx<'a> {
                 continue;
             }
             // (apart: to the other's nearest point, a distance that changes smoothly where the nearest point jumps)
-            let apart = dq[0].hypot(dq[1]);
+            let apart = dq[0].dhypot(dq[1]);
             let gap = apart - ha - self.half[l];
             // (decks further apart than the bridges' median join have their own parapets: none between them)
             if gap > if deck != 0 { self.max_deck_gap } else { self.max_gap } {
@@ -442,7 +443,7 @@ pub fn modules(pts: &[[f64; 2]], z: &[f64], off: &[usize], half: &[f64], flags: 
         }
         let mut cum = vec![0.0f64; b - a];
         for i in 1..b - a {
-            cum[i] = cum[i - 1] + (pts[a + i][0] - pts[a + i - 1][0]).hypot(pts[a + i][1] - pts[a + i - 1][1]);
+            cum[i] = cum[i - 1] + (pts[a + i][0] - pts[a + i - 1][0]).dhypot(pts[a + i][1] - pts[a + i - 1][1]);
         }
         let len = cum[b - a - 1];
         if len < ml {
@@ -463,9 +464,9 @@ pub fn modules(pts: &[[f64; 2]], z: &[f64], off: &[usize], half: &[f64], flags: 
                 let (s, e) = (off[l], off[l + 1] - 1);
                 for (q, u) in [(pts[s], [pts[s + 1][0] - pts[s][0], pts[s + 1][1] - pts[s][1]]),
                                (pts[e], [pts[e][0] - pts[e - 1][0], pts[e][1] - pts[e - 1][1]])] {
-                    let ln = u[0].hypot(u[1]).max(1e-9);
+                    let ln = u[0].dhypot(u[1]).max(1e-9);
                     let tl = ctx.travel(l, [u[0] / ln, u[1] / ln]);
-                    if (p[0] - q[0]).hypot(p[1] - q[1]) < 0.5 && dot(tl, t) > 0.9 {
+                    if (p[0] - q[0]).dhypot(p[1] - q[1]) < 0.5 && dot(tl, t) > 0.9 {
                         return true;
                     }
                 }
@@ -532,8 +533,8 @@ pub fn modules(pts: &[[f64; 2]], z: &[f64], off: &[usize], half: &[f64], flags: 
             }
             if ok {
                 let mid = [(cs[0][0] + cs[2][0]) / 2.0, (cs[0][1] + cs[2][1]) / 2.0];
-                let chord = (cs[2][0] - cs[0][0]).hypot(cs[2][1] - cs[0][1]);
-                if (cs[1][0] - mid[0]).hypot(cs[1][1] - mid[1]) < 0.5 && chord > 0.8 * ml && chord < 1.2 * ml {
+                let chord = (cs[2][0] - cs[0][0]).dhypot(cs[2][1] - cs[0][1]);
+                if (cs[1][0] - mid[0]).dhypot(cs[1][1] - mid[1]) < 0.5 && chord > 0.8 * ml && chord < 1.2 * ml {
                     res = Ok((ty0, cs[0], cs[2], spread, zs[0], zs[2]));
                 }
             } else if cont {
@@ -634,7 +635,7 @@ pub fn median_rows<'py>(py: Python<'py>, m: PyReadonlyArray2<'py, f64>, za: PyRe
             py_ += back[1] * 0.01;
             pz += 0.01;
         }
-        let yaw = fw[1].atan2(fw[0]).to_degrees();
+        let yaw = fw[1].datan2(fw[0]).to_degrees();
         let neg = |v: [f64; 3]| [-v[0], -v[1], -v[2]];
         let mut row = |g: f64, x: f64, y: f64, h: f64, c0: [f64; 3], c1: [f64; 3]| {
             out.extend_from_slice(&[g, x, y, pz, yaw, 0.0, h, rank, c0[0], c0[1], c0[2], c1[0], c1[1], c1[2],

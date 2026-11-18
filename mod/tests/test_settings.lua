@@ -46,6 +46,20 @@ T.check(settings.detectQuality({ name = 'AMD Custom GPU 0932 (RADV VANGOGH)', me
   'a Steam Deck gets Medium')
 T.check(settings.detectQuality({ name = 'Intel UHD 620', memoryMB = 1024 }) == 'low', 'a small GPU gets Low')
 T.check(settings.detectQuality({ name = 'AMD Radeon RX 7900 XTX', memoryMB = 24560 }) == 'high', 'a big GPU gets High')
+T.check(settings.detectQuality({ name = 'AMD Radeon RX 7900 XTX', memoryMB = 24560 }, 8 * 1073741824 - 300e6) == 'low',
+  'an 8 GB PC gets Low whatever its GPU (the server lean tier)')
+T.check(settings.detectQuality({ name = 'AMD Radeon RX 7900 XTX', memoryMB = 24560 }, 16 * 1073741824) == 'high',
+  'a 16 GB PC: by its GPU')
+T.check(settings.detectQuality({ name = 'AMD Custom GPU 0932 (RADV VANGOGH)', memoryMB = 6144 }, 15.5e9) == 'medium',
+  'a Steam Deck (16 GB) keeps Medium')
+do
+  local pick, why = settings.detectQuality(nil, 4 * 1073741824)
+  T.check(pick == 'low' and why:find('4 GB', 1, true) ~= nil, 'a 4 GB PC: Low, and why ' .. tostring(why))
+  local old = settings.LOW_RAM_GB
+  settings.LOW_RAM_GB = 0
+  T.check(settings.detectQuality(nil, 4 * 1073741824) == 'high', 'LOW_RAM_GB = 0: the memory not counted')
+  settings.LOW_RAM_GB = old
+end
 for _, p in ipairs(settings.PRESET_ORDER) do
   for _, k in ipairs(settings.PRESET_KEYS) do
     T.check(settings.validate(k, settings.PRESETS[p][k]) == settings.PRESETS[p][k], p .. ' preset: valid ' .. k)
@@ -234,6 +248,29 @@ settings.set('viewDistanceKm', 200)
 T.check(scenetree.theLevelInfo.visibleDistance == 100000 and post == 2, 'horizon after fixed: the level\'s 100 km back once')
 settings.set('viewDistanceMode', 'fixed')
 T.check(scenetree.theLevelInfo.visibleDistance == 200000 and post == 3, 'fixed again: 200 km')
+do  -- the 3D map open: no fixed distance (its view reaches as far as its eye), the fixed one back when it closes
+  local post0, active = post, true
+  beamngEarth_map3d = { isActive = function() return active end }
+  settings.set('viewDistanceKm', 1)
+  T.check(settings.fixedViewM() == nil, 'map open: no fixed view distance')
+  settings.reapplyView()
+  T.check(scenetree.theLevelInfo.visibleDistance == 100000, 'map open: the level\'s distance, not 1 km')
+  active = false
+  T.check(settings.fixedViewM() == 1000, 'map closed: 1 km')
+  scenetree.theLevelInfo.visibleDistance = 900000     -- (a globe view raised it meanwhile)
+  settings.reapplyView()
+  T.check(scenetree.theLevelInfo.visibleDistance == 1000, 'map closed: the fixed 1 km back, whatever was set meanwhile')
+  settings.set('viewDistanceKm', 100)                 -- (the default value, fixed)
+  active = true
+  settings.reapplyView()
+  scenetree.theLevelInfo.visibleDistance = 900000     -- (a globe view raised it)
+  active = false
+  settings.reapplyView()
+  T.check(scenetree.theLevelInfo.visibleDistance == 100000, 'map closed: a fixed 100 km (the default value) back too')
+  beamngEarth_map3d = nil
+  settings.set('viewDistanceKm', 200)
+  post = post0                                        -- (the checks below count postApply calls from here)
+end
 settings.uiReset()
 T.check(scenetree.theLevelInfo.visibleDistance == 100000 and post == 4, 'reset (horizon): back to 100 km (applied, it had changed)')
 settings.onClientPostStartMission()
@@ -411,6 +448,15 @@ do
   T.check(#sent == 3 and #sent[3] == 0, 'nothing missing any more: an empty list cancels the last one')
   settings.mapTiles(list)
   T.check(#sent == 3, 'and only once')
+  -- a sat tile with only its stand-in there (server maptiles.PROV_DIR): shown from its own path, still asked for
+  T.check(settings.mapTilePath('satp', 3, 2, 1) == '/temp/beamngEarth/maptiles/prov/3/2/1.jpg', 'stand-in path')
+  have[settings.mapTilePath('satp', 6, 1, 1)] = true
+  ready = settings.mapTiles({ { 6, 1, 1 }, { 6, 2, 1 } })
+  T.check(#ready == 1 and ready[1] == 'satp/6/1/1', 'a stand-in comes back as satp')
+  T.check(#sent == 4 and #sent[4] == 2 and sent[4][1][2] == 1, 'the tile with a stand-in is still asked for')
+  have[settings.mapTilePath('sat', 6, 1, 1)] = true
+  ready = settings.mapTiles({ { 6, 1, 1 } })
+  T.check(#ready == 1 and ready[1] == 'sat/6/1/1', 'the real tile once it is there')
   beamngEarth_core, FS = core0, fs0
 end
 
@@ -646,4 +692,46 @@ T.check(settings.load().townSigns == true, 'a version-1 file: on (false was the 
 files[settings.FILE] = { version = 2, townSigns = false }
 T.check(settings.load().townSigns == false, 'a version-2 file: the player turned them off')
 files[settings.FILE] = nil
+
+-- the Experimental page (2026-11-15: the server's BNE_* build switches, server/experimental.py FEATURES): every switch
+-- a bool, off by default, on the settings page; road signs off by default since version 3 (a version-2 file's true was
+-- the hidden switch's default), a version-3 file's choice kept
+do
+  local exp = { 'roadSigns', 'expNlRoadSigns', 'expRoadRevamp', 'expEuScenery', 'expDropRails', 'expEntranceFlares', 'expPriorityStops',
+    'expRoadBumps', 'expRoughDirt', 'expWearStrips', 'expGradeGuard', 'expPhotoSurface', 'expTerrainBumps', 'expCliffWalls',
+    'expTunnelLids', 'expSubseaTunnels', 'expAiTunnels', 'expRailCollide', 'expCatenary', 'expRailCrossings', 'expRailTunnels',
+    'expRailCurves', 'expWatertight', 'expCanadaLidar', 'expGenGround', 'expStaleRevisit' }
+  local inOrder = {}
+  for _, k in ipairs(settings.ORDER) do inOrder[k] = true end
+  for _, k in ipairs(exp) do
+    local s = settings.SCHEMA[k]
+    T.check(s and s.kind == 'bool' and s.default == false, 'experimental ' .. k .. ': a bool, off by default')
+    T.check(inOrder[k] and not settings.HIDDEN[k], 'experimental ' .. k .. ': on the settings page')
+  end
+  T.check(settings.VERSION >= 3, 'settings version 3: road signs a real switch')
+  files[settings.FILE] = nil
+  T.check(settings.load().roadSigns == false and settings.load().expRoadBumps == false, 'no file: all off')
+  files[settings.FILE] = { version = 2, roadSigns = true, expRoadBumps = true }
+  local v = settings.load()
+  T.check(v.roadSigns == false, 'a version-2 file: road signs off (true was the hidden default)')
+  T.check(v.expRoadBumps == true, 'a version-2 file: another experimental switch is the player\'s')
+  files[settings.FILE] = { version = 3, roadSigns = true }
+  T.check(settings.load().roadSigns == true, 'a version-3 file: the player turned road signs on')
+  files[settings.FILE] = nil
+  settings.load()
+end
+
+-- the map's preload of a place: picked (the box) or pointed at (hover: the light part), to core.preloadPlace
+do
+  local calls = {}
+  local core0 = beamngEarth_core
+  beamngEarth_core = { preloadPlace = function(lat, lon, hover) calls[#calls + 1] = { lat, lon, hover }; return true end }
+  T.check(settings.uiMapPreload(40.5, '-73.25').ok == true, 'a pick goes to the core')
+  T.check(calls[1][1] == 40.5 and calls[1][2] == -73.25 and calls[1][3] == false, 'a pick: not a hover')
+  settings.uiMapPreload(40.5, -73.25, true)
+  T.check(calls[2][3] == true, 'a hover says so')
+  beamngEarth_core = nil
+  T.check(settings.uiMapPreload(1, 2, true).ok == false, 'no core: nothing')
+  beamngEarth_core = core0
+end
 T.done('test_settings')

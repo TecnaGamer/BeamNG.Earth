@@ -10,6 +10,7 @@ import math
 import os
 
 import numpy as np
+import dnp
 
 import busbays
 import busstations as bs
@@ -80,7 +81,7 @@ def _ccw(xy):
 
 def _signed(xy):
     x, y = xy[:, 0], xy[:, 1]
-    return float(np.dot(x, np.roll(y, -1)) - np.dot(np.roll(x, -1), y)) * 0.5
+    return float(dnp.dot(x, np.roll(y, -1)) - dnp.dot(np.roll(x, -1), y)) * 0.5
 
 
 class DrawnGround:
@@ -132,7 +133,7 @@ def walls(mesh, mat, rep, xy, z0, z1):
     run = 0.0
     for i in range(n):
         j = (i + 1) % n
-        length = float(np.hypot(*(xy[j] - xy[i])))
+        length = float(dnp.hypot(*(xy[j] - xy[i])))
         if length < 1e-3:
             continue
         P = [(*xy[i], z0[i]), (*xy[j], z0[j]), (*xy[j], z1[j]), (*xy[i], z1[i])]
@@ -148,7 +149,7 @@ def _segment_quads(path, half):
     path = np.asarray(path, np.float64)
     for a, b in zip(path[:-1], path[1:]):
         d = b - a
-        length = float(np.hypot(*d))
+        length = float(dnp.hypot(*d))
         if length < 0.5:
             continue
         n = np.array([-d[1], d[0]]) / length * half
@@ -185,14 +186,14 @@ def _sd_ring(ring, pts):
     ring = bs._open(np.asarray(ring, float))
     a, b = ring, np.roll(ring, -1, axis=0)
     ab = b - a
-    ab2 = np.maximum((ab ** 2).sum(1), 1e-9)
+    ab2 = np.maximum((ab * ab).sum(1), 1e-9)
     d = np.empty(len(pts))
     step = max(1, 400000 // max(len(a), 1))
     for k in range(0, len(pts), step):
         q = pts[k:k + step]
         t = np.clip(((q[:, None, 0] - a[None, :, 0]) * ab[None, :, 0] + (q[:, None, 1] - a[None, :, 1]) * ab[None, :, 1])
                     / ab2[None, :], 0.0, 1.0)
-        d[k:k + step] = np.hypot(a[None, :, 0] + t * ab[None, :, 0] - q[:, None, 0],
+        d[k:k + step] = dnp.hypot(a[None, :, 0] + t * ab[None, :, 0] - q[:, None, 0],
                                  a[None, :, 1] + t * ab[None, :, 1] - q[:, None, 1]).min(1)
     inside = polygon.contains_points(ring, pts)
     return np.where(inside, d, -d)
@@ -233,7 +234,7 @@ def walk_field(st):
     for ln in st.lanes:
         f_ex = np.minimum(f_ex, bs.path_dist(ln["xy"], P) - ln["half"])
     for mx, my in st.mouths:
-        f_ex = np.minimum(f_ex, np.hypot(P[:, 0] - mx, P[:, 1] - my) - bs.MOUTH_R_M)
+        f_ex = np.minimum(f_ex, dnp.hypot(P[:, 0] - mx, P[:, 1] - my) - bs.MOUTH_R_M)
     F = np.maximum(f_plat, np.minimum(f_roof, f_ex)).reshape(ny + 1, nx + 1)
     st._walk = (x0, y0, F)
     return st._walk
@@ -298,8 +299,8 @@ def _kerb_heights(st, pts):
     h = np.full(len(pts), PLATFORM_H_M)
     for c, t, half in crossings(st):
         d = pts - c
-        along = np.abs(d @ t)
-        across = np.abs(d @ np.array([-t[1], t[0]]))
+        along = np.abs(dnp.matmul(d, t))
+        across = np.abs(dnp.matmul(d, np.array([-t[1], t[0]])))
         band = along <= ZEBRA_LEN_M / 2.0 + KERB_DROP_SIDE_M
         near = band & (across <= half + KERB_DROP_IN_M + KERB_DROP_RAMP_M + 1.0)
         if not near.any():
@@ -426,7 +427,7 @@ def _densify(ring, step):
     ring = _ccw(ring)
     out = []
     for a, b in zip(ring, np.roll(ring, -1, axis=0)):
-        k = max(1, int(math.ceil(float(np.hypot(*(b - a))) / step)))
+        k = max(1, int(math.ceil(float(dnp.hypot(*(b - a))) / step)))
         out += [a + (b - a) * (i / k) for i in range(k)]
     return np.asarray(out)
 
@@ -458,12 +459,12 @@ def _obb(ring):
     best = None
     for a, b in zip(ring, np.roll(ring, -1, axis=0)):
         d = b - a
-        ln = float(np.hypot(*d))
+        ln = float(dnp.hypot(*d))
         if ln < 0.5:
             continue
         t = d / ln
         n = np.array([-t[1], t[0]])
-        u, v = ring @ t, ring @ n
+        u, v = dnp.matmul(ring, t), dnp.matmul(ring, n)
         ext = (float(u.min()), float(u.max()), float(v.min()), float(v.max()))
         area = (ext[1] - ext[0]) * (ext[3] - ext[2])
         if best is None or area < best[0]:
@@ -503,11 +504,11 @@ def _gable(ring):
     pts = []
     for a, b in zip(ring, np.roll(ring, -1, axis=0)):
         pts.append(a)
-        la, lb = float(a @ n) - mid, float(b @ n) - mid
+        la, lb = float(dnp.matmul(a, n)) - mid, float(dnp.matmul(b, n)) - mid
         if la * lb < 0:
             pts.append(a + (b - a) * (la / (la - lb)))
     pts = np.asarray(pts)
-    lat = pts @ n - mid
+    lat = dnp.matmul(pts, n) - mid
     frac = 1.0 - np.minimum(np.abs(lat) / (width / 2.0), 1.0)
     halves = []
     for sign in (1.0, -1.0):
@@ -541,7 +542,7 @@ def _over_lane(st, ring):
     """Does a drive lane or a mouth lie under this roof?"""
     for ln in st.lanes:
         pts = bs._open(ln["xy"]) if len(ln["xy"]) > 2 else ln["xy"]
-        dense = np.vstack([a + (b - a) * (np.arange(0, max(1, int(np.hypot(*(b - a)) // 3))) / max(1, int(np.hypot(*(b - a)) // 3)))[:, None]
+        dense = np.vstack([a + (b - a) * (np.arange(0, max(1, int(dnp.hypot(*(b - a)) // 3))) / max(1, int(dnp.hypot(*(b - a)) // 3)))[:, None]
                            for a, b in zip(pts[:-1], pts[1:])]) if len(pts) > 1 else pts
         if any(bs.contains(ring, q) for q in dense):
             return True
@@ -602,7 +603,7 @@ def roofs(frame, elev, st, mesh, dem=None):
             rise = GABLE_RISE * width
 
             def zfun(P, zeave=zeave, nn=nn, mid=mid, width=width, rise=rise):
-                lat = np.asarray(P, float) @ nn - mid
+                lat = dnp.matmul(np.asarray(P, float), nn) - mid
                 return zeave + rise * (1.0 - np.minimum(np.abs(lat) / (width / 2.0), 1.0))
             for sel in halves:
                 _face(mesh, mat, rep, pts_g[sel], zfun)
@@ -617,12 +618,12 @@ def roofs(frame, elev, st, mesh, dem=None):
             _face(mesh, mat, rep, ring, lambda P, z=zbot: np.full(len(P), z), up=False)
             edge = _densify(ring, ROOF_STEP_M)
             walls(mesh, mat, rep, edge, zbot, ztop)
-        pts = [p for p in _column_points(ring, st) if all(float(np.hypot(*(p - q))) >= 1.5 for q in placed)]
+        pts = [p for p in _column_points(ring, st) if all(float(dnp.hypot(*(p - q))) >= 1.5 for q in placed)]
         placed += pts
         centre = bs.centroid(ring)
         for p in pts[::2 if cn["area"] < 2000 else 3]:                 # a fixture under the roof by every other column
             v = centre - p
-            d = float(np.hypot(*v))
+            d = float(dnp.hypot(*v))
             ax = v / d if d > 1e-6 else np.array([1.0, 0.0])
             q = p + ax * min(FIXTURE_IN_M, d * 0.5)
             pn = np.array([-ax[1], ax[0]])
@@ -647,12 +648,12 @@ def _column_points(ring, st=None):
     n = len(ring)
     for i in range(n):
         a, b = ring[i], ring[(i + 1) % n]
-        length = float(np.hypot(*(b - a)))
+        length = float(dnp.hypot(*(b - a)))
         k = max(1, int(math.ceil(length / COLUMN_STEP_M)))
         for s in range(k):
             p = a + (b - a) * (s / k)
             v = c - p
-            d = float(np.hypot(*v))
+            d = float(dnp.hypot(*v))
             pts.append(p + v / d * min(0.5, d * 0.2) if d > 1e-6 else p)
     x0, y0 = ring.min(0)
     x1, y1 = ring.max(0)
@@ -726,7 +727,7 @@ def lane_chunks(stations, box):
             if not ln["oneway"]:
                 continue
             path = np.asarray(ln["xy"], float)
-            seg = np.hypot(*np.diff(path, axis=0).T)
+            seg = dnp.hypot(*np.diff(path, axis=0).T)
             total = float(seg.sum())
             if total < 2 * ARROW_END_M + 2.0:
                 continue
@@ -783,7 +784,7 @@ def _walk_ok(st, pts):
 def _lane_frames(ln, step=1.0):
     """(centre points (k, 2), unit tangents (k, 2), arc lengths (k,)) every step along a lane."""
     path = np.asarray(ln["xy"], float)
-    seg = np.hypot(*np.diff(path, axis=0).T)
+    seg = dnp.hypot(*np.diff(path, axis=0).T)
     if not len(seg) or float(seg.sum()) < step:
         return np.zeros((0, 2)), np.zeros((0, 2)), np.zeros(0)
     cum = np.concatenate(([0.0], np.cumsum(seg)))
@@ -828,7 +829,7 @@ def crossings(st):
         ok = _walk_ok(st, c + nrm * reach) & _walk_ok(st, c - nrm * reach)
         ok &= (d > 6.0) & (d < d[-1] - 6.0)
         for mx, my in st.mouths:
-            ok &= np.hypot(c[:, 0] - mx, c[:, 1] - my) > bs.MOUTH_R_M + 3.0
+            ok &= dnp.hypot(c[:, 0] - mx, c[:, 1] - my) > bs.MOUTH_R_M + 3.0
         for r in rects:
             lo, hi = r.min(0) - ZEBRA_LEN_M, r.max(0) + ZEBRA_LEN_M
             for i in np.flatnonzero(ok & (c[:, 0] >= lo[0]) & (c[:, 0] <= hi[0]) & (c[:, 1] >= lo[1]) & (c[:, 1] <= hi[1])):
@@ -891,14 +892,14 @@ def edge_runs(st):
                 if lj != li:
                     ok &= bs.path_dist(other["xy"], p) > other["core"] + 0.3
             for mx, my in st.mouths:
-                ok &= np.hypot(p[:, 0] - mx, p[:, 1] - my) > bs.MOUTH_R_M
+                ok &= dnp.hypot(p[:, 0] - mx, p[:, 1] - my) > bs.MOUTH_R_M
             for r in rects:
                 lo, hi = r.min(0) - 1.0, r.max(0) + 1.0
                 for i in np.flatnonzero(ok & (p[:, 0] >= lo[0]) & (p[:, 0] <= hi[0]) & (p[:, 1] >= lo[1]) & (p[:, 1] <= hi[1])):
                     if bs.contains(r, p[i]) or bs.dist_to_path(r, p[i], True) < 0.8:
                         ok[i] = False
             for zc, _zt, zh in zebras:
-                ok &= np.hypot(p[:, 0] - zc[0], p[:, 1] - zc[1]) > ZEBRA_LEN_M / 2 + zh + 0.5
+                ok &= dnp.hypot(p[:, 0] - zc[0], p[:, 1] - zc[1]) > ZEBRA_LEN_M / 2 + zh + 0.5
             ok &= ~_walk_ok(st, p)
             for i, j in _runs(ok):
                 if d[j] - d[i] >= EDGE_MIN_RUN_M:
@@ -945,7 +946,7 @@ def _tips(st):
                 w = 2 * PLATFORM_HALF_W_M
             for a, b in ((xy[0], xy[1]), (xy[-1], xy[-2])):
                 d = a - b
-                ln = float(np.hypot(*d))
+                ln = float(dnp.hypot(*d))
                 if ln > 1e-6:
                     out.append((a, d / ln, w))
         elif pl["kind"] == "polygon" and len(bs._open(xy)) >= 3:
@@ -993,7 +994,7 @@ def _bollard(mesh, frame, elev, st, p, collide=False):
     """One bollard (an octagonal steel post with a rounded cap ring) on the slab at p."""
     zg = float(ground(frame, elev, np.asarray(p)[None])[0]) + float(_kerb_heights(st, np.asarray(p)[None])[0])
     a = np.linspace(0.0, 2.0 * np.pi, 9)[:-1]
-    ring = np.column_stack((p[0] + BOLLARD_R_M * np.cos(a), p[1] + BOLLARD_R_M * np.sin(a)))
+    ring = np.column_stack((p[0] + BOLLARD_R_M * dnp.cos(a), p[1] + BOLLARD_R_M * dnp.sin(a)))
     walls(mesh, STEEL[0], STEEL[1], ring, zg - 0.05, zg + BOLLARD_H_M)
     top_face(mesh, STEEL[0], STEEL[1], ring, zg + BOLLARD_H_M)
 

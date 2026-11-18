@@ -2,6 +2,7 @@
 //! #414, Perm's Solikamskaya Street on Copernicus' 30 m: service roads 7 m beside a primary stood 4-5 m above it, walls
 //! across every junction, where the street photos show it all at grade). A lower-ranked road near a higher-ranked one
 //! takes the higher one's height (equal ranks meet halfway), less what a real cross slope between their edges explains.
+use crate::dm::Dm;
 
 use numpy::{IntoPyArray, PyArray1, PyReadonlyArray1, PyReadonlyArray2};
 use pyo3::prelude::*;
@@ -15,7 +16,7 @@ fn nearest(xy: &[[f64; 2]], z: &[f64], a: usize, b: usize, x: f64, y: f64) -> (f
         let ll = (dx * dx + dy * dy).max(1e-12);
         let t = (((x - p[0]) * dx + (y - p[1]) * dy) / ll).clamp(0.0, 1.0);
         let (nx, ny) = (p[0] + t * dx, p[1] + t * dy);
-        let d = ((nx - x).powi(2) + (ny - y).powi(2)).sqrt();
+        let d = ((nx - x).sq() + (ny - y).sq()).sqrt();
         if d < bd {
             bd = d;
             bz = z[i] + t * (z[i + 1] - z[i]);
@@ -102,7 +103,7 @@ pub fn ease_coarse<'py>(
                 let gap = (d - half[k] - half[j]).max(0.0);
                 let excess = (diff.abs() - max_slope * gap).max(0.0) * diff.signum();
                 let share = if rank[k] > rank[j] { 1.0 } else { 0.5 };
-                let w = share * (-(past / reach).powi(2)).exp();
+                let w = share * (-(past / reach).sq()).dexp();
                 if w > bw {
                     bw = w;
                     bdelta = excess * w;
@@ -120,7 +121,7 @@ pub fn ease_coarse<'py>(
         let mut s = vec![0.0f64; b - a];
         for i in 1..(b - a) {
             let (p, q) = (pts[a + i - 1], pts[a + i]);
-            s[i] = s[i - 1] + ((q[0] - p[0]).powi(2) + (q[1] - p[1]).powi(2)).sqrt();
+            s[i] = s[i - 1] + ((q[0] - p[0]).sq() + (q[1] - p[1]).sq()).sqrt();
         }
         let sg = sigma.max(1e-6);
         for i in 0..(b - a) {
@@ -130,7 +131,7 @@ pub fn ease_coarse<'py>(
                 if u.abs() > 3.0 {
                     continue;
                 }
-                let w = (-0.5 * u * u).exp();
+                let w = (-0.5 * u * u).dexp();
                 num += w * dz[k];
                 den += w;
             }

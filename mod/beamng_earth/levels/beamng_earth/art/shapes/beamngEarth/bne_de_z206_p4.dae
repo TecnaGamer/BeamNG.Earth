@@ -37,8 +37,8 @@
 </library_geometries>
 <library_visual_scenes><visual_scene id="scene" name="scene">
 <node id="base00" name="base00"><node id="start01" name="start01">
-<node id="bne_de_z206_p432" name="bne_de_z206_p432"><instance_geometry url="#bne_de_z206_p432-g"><bind_material><technique_common><instance_material symbol="bne_cable_steel-mat" target="#bne_cable_steel-mat"/><instance_material symbol="bne_de_signs-mat" target="#bne_de_signs-mat"/></technique_common></bind_material></instance_geometry></node>
-<node id="bne_de_z206_p44" name="bne_de_z206_p44"><instance_geometry url="#bne_de_z206_p44-g"><bind_material><technique_common><instance_material symbol="bne_cable_steel-mat" target="#bne_cable_steel-mat"/><instance_material symbol="bne_de_signs-mat" target="#bne_de_signs-mat"/></technique_common></bind_material></instance_geometry></node>
+<node id="bne_de_z206_p4_L32" name="bne_de_z206_p4_L32"><instance_geometry url="#bne_de_z206_p432-g"><bind_material><technique_common><instance_material symbol="bne_cable_steel-mat" target="#bne_cable_steel-mat"/><instance_material symbol="bne_de_signs-mat" target="#bne_de_signs-mat"/></technique_common></bind_material></instance_geometry></node>
+<node id="bne_de_z206_p4_L4" name="bne_de_z206_p4_L4"><instance_geometry url="#bne_de_z206_p44-g"><bind_material><technique_common><instance_material symbol="bne_cable_steel-mat" target="#bne_cable_steel-mat"/><instance_material symbol="bne_de_signs-mat" target="#bne_de_signs-mat"/></technique_common></bind_material></instance_geometry></node>
 <node id="Colmesh_bne_de_z206_p4-1" name="Colmesh_bne_de_z206_p4-1"><instance_geometry url="#bne_de_z206_p4-col-g"><bind_material><technique_common><instance_material symbol="bne_cable_steel-mat" target="#bne_cable_steel-mat"/></technique_common></bind_material></instance_geometry></node>
 </node><node id="collision-1" name="collision-1"/></node>
 </visual_scene></library_visual_scenes>

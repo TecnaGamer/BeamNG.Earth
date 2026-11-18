@@ -59,10 +59,11 @@ pub fn f32_unpack<'py>(py: Python<'py>, data: &[u8]) -> PyResult<Bound<'py, PyAr
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::dm::Dm;
 
     #[test]
     fn round_trip_bits() {
-        let v: Vec<f32> = (0..4096).map(|i| 100.0 + (i as f32 * 0.37).sin() * 3.0 + if i % 97 == 0 { f32::NAN } else { 0.0 })
+        let v: Vec<f32> = (0..4096).map(|i| 100.0 + (i as f32 * 0.37).dsin() * 3.0 + if i % 97 == 0 { f32::NAN } else { 0.0 })
             .collect();
         let p = pack(&v, 1).unwrap();
         assert!(p.len() < 4 * v.len());

@@ -135,6 +135,57 @@ class ThroughputTest(unittest.TestCase):
         self.assertIsNone(g.throughput())
 
 
+class GzipTest(unittest.TestCase):
+    """A host with policy gzip: JSON asked for and sent compressed, decoded here; the counters keep the wire's bytes."""
+    JSON = b'{"entities": [' + b'{"id": "Q1", "label": "x"},' * 400 + b'{}]}'
+
+    def setUp(self):
+        import gzip
+        self.packed = gzip.compress(self.JSON)
+        self.pol = {"api.example": nf.HostPolicy(gzip=True), USGS: nf.HostPolicy()}
+
+    def test_asked_and_decoded(self):
+        f, _, _, tr = fetcher({"api.example": [(200, {"content-encoding": "gzip"}, self.packed, 0.0)]}, self.pol)
+        r = f.get("https://api.example/w/api.php")
+        self.assertEqual(r.body, self.JSON)
+        self.assertNotIn("content-encoding", r.headers)
+        self.assertEqual(tr.calls[0][2].get("Accept-Encoding"), "gzip")
+        self.assertEqual(f.host("api.example").total["bytes"], len(self.packed))
+
+    def test_not_asked_with_a_range_nor_by_other_hosts(self):
+        f, _, _, tr = fetcher(policies=self.pol)
+        f.get("https://api.example/file", headers={"Range": "bytes=0-9"})
+        f.get(url(USGS))
+        self.assertNotIn("Accept-Encoding", tr.calls[0][2])
+        self.assertNotIn("Accept-Encoding", tr.calls[1][2])
+
+    def test_a_caller_that_asks_itself_gets_the_bytes_as_sent(self):
+        """airports.py and bdtopo.py set Accept-Encoding and decode the body themselves."""
+        f, _, _, _ = fetcher({"api.example": [(200, {"content-encoding": "gzip"}, self.packed, 0.0)]}, self.pol)
+        r = f.get("https://api.example/x", headers={"Accept-Encoding": "gzip"})
+        self.assertEqual(r.body, self.packed)
+
+    def test_a_broken_stream_is_a_failed_attempt(self):
+        f, _, _, tr = fetcher({"api.example": [(200, {"content-encoding": "gzip"}, b"not gzip", 0.0)]}, self.pol)
+        with self.assertRaises(nf.FetchFailed):
+            f.get("https://api.example/x")
+        self.assertEqual(len(tr.calls), nf.HostPolicy().max_attempts)
+
+    def test_a_body_that_decodes_past_the_cap_is_a_failed_attempt(self):
+        f, _, _, _ = fetcher({"api.example": [(200, {"content-encoding": "gzip"}, self.packed, 0.0)]}, self.pol)
+        with mock.patch.object(nf, "GZIP_MAX_BYTES", len(self.JSON) - 1), self.assertRaises(nf.FetchFailed):
+            f.get("https://api.example/x")
+
+    def test_every_member_of_a_multi_member_stream(self):
+        """RFC 1952: members one after another; the cap counts them all."""
+        import gzip
+        two = self.packed + gzip.compress(b"tail")
+        f, _, _, _ = fetcher({"api.example": [(200, {"content-encoding": "gzip"}, two, 0.0)] * 2}, self.pol)
+        self.assertEqual(f.get("https://api.example/x").body, self.JSON + b"tail")
+        with mock.patch.object(nf, "GZIP_MAX_BYTES", len(self.JSON) + 2), self.assertRaises(nf.FetchFailed):
+            f.get("https://api.example/y")
+
+
 class TokenBucketTest(unittest.TestCase):
     def test_burst_then_rate(self):
         """N demand requests at t=0: `burst` less URGENT_TOKENS go at once, the rest 1/rate apart (the bucket keeps
@@ -198,6 +249,22 @@ class TokenBucketTest(unittest.TestCase):
         self.assertGreater(cm.exception.retry_after, 5.0)
         self.assertEqual(len(tr.calls), 1)
 
+
+    def test_waits_on_our_own_limit_are_counted(self):
+        # (telemetry's "waited on our limit" / "refused by our limit": netfetch COUNTERS waited, wait_ms, limit_fail)
+        pol = nf.with_policy(nf.POLICIES, USGS, rate=1.0, burst=1.0, max_wait=5.0)
+        f, clock, sleep, tr = fetcher(policies=pol)
+        f.get(url())
+        f.get(url(USGS, 1))                             # waits ~1 s for the next token
+        t = f.host(USGS).total
+        self.assertEqual(t["waited"], 1)
+        self.assertGreaterEqual(t["wait_ms"], 900)
+        pol = nf.with_policy(nf.POLICIES, USGS, rate=0.01, burst=1.0, max_wait=5.0)
+        f, clock, sleep, tr = fetcher(policies=pol)
+        f.get(url())
+        with self.assertRaises(nf.RateLimited):
+            f.get(url(USGS, 1))
+        self.assertEqual(f.host(USGS).total["limit_fail"], 1)
 
     def test_a_pause_while_waiting_gives_up(self):
         """A demand request waiting for a token when another worker's request meets a Retry-After does
@@ -563,6 +630,23 @@ class BreakerTest(unittest.TestCase):
         b.release_probe()                                       # it was dropped before the network
         self.assertEqual(b.allow()[:2], (True, True))
 
+    def test_may_try_once_the_open_time_is_over(self):
+        """may_try: false while open, true once a probe is due (is_open() stays true until a request probes),
+        false again while that probe is out."""
+        clock = FakeClock()
+        b = nf.CircuitBreaker(2, 30.0, 10.0, 900.0, clock)
+        self.assertTrue(b.may_try())
+        b.failure()
+        b.failure()
+        self.assertFalse(b.may_try())
+        clock.advance(10.0)
+        self.assertTrue(b.is_open())
+        self.assertTrue(b.may_try())
+        self.assertEqual(b.allow()[:2], (True, True))
+        self.assertFalse(b.may_try())                           # its probe is out
+        b.success()
+        self.assertTrue(b.may_try())
+
     def test_a_late_success_does_not_close_an_open_breaker(self):
         """A request sent before the host said Retry-After answers 200 afterwards: the breaker stays
         open (only its probe closes it), so demand keeps failing over at once instead of sleeping out
@@ -600,6 +684,24 @@ class BreakerTest(unittest.TestCase):
             self.assertFalse(b.failure())
             clock.advance(31.0)
         self.assertEqual(b.state, "closed")
+
+    def test_on_circuit_closed_callback_fires_on_recovery(self):
+        closed_hosts = []
+        pol = nf.with_policy(nf.POLICIES, USGS, max_attempts=1)
+        f, clock, sleep, tr = fetcher({USGS: [(502, {}, b"", 0)]}, policies=pol)
+        f.on_circuit_closed = lambda name: closed_hosts.append(name)
+        p = pol[USGS]
+        for i in range(p.breaker_threshold):
+            with self.assertRaises(nf.FetchFailed):
+                f.get(url(USGS, i))
+        self.assertEqual(f.host(USGS).breaker.state, "open")
+        self.assertEqual(closed_hosts, [])
+
+        clock.advance(p.breaker_open)
+        tr.script[USGS] = [(200, {}, b"ok", 0)]
+        self.assertEqual(f.get(url(USGS, 100)).body, b"ok")
+        self.assertEqual(f.host(USGS).breaker.state, "closed")
+        self.assertEqual(closed_hosts, [USGS])
 
 
 def terrarium_png(elev, size):
@@ -735,9 +837,21 @@ class ClassifyTest(unittest.TestCase):
 
 
 class PolicyTest(unittest.TestCase):
+    def test_category_overpass_timeout_and_breaker(self):
+        f, clock, sleep, tr = fetcher()
+        with mock.patch.object(tr, "request", side_effect=TimeoutError("slow Overpass")) as request:
+            with self.assertRaises(nf.FetchFailed):
+                f.get("https://overpass-api.de/api/interpreter?data=offline-test")
+            self.assertEqual(request.call_count, 1, "no automatic retry")
+            self.assertEqual(request.call_args.args[2], 4.0, "Overpass alone has the shorter timeout")
+            with self.assertRaises(nf.HostUnavailable):
+                f.get("https://overpass-api.de/api/interpreter?data=offline-test")
+            self.assertEqual(request.call_count, 1, "the breaker still prevents another request")
+        self.assertEqual(nf.POLICIES["query.wikidata.org"].timeout, 7.0)
+
     def test_denied_hosts(self):
         f, clock, sleep, tr = fetcher()
-        for host in ("overpass-api.de", "vector.openstreetmap.org", "build.protomaps.com"):
+        for host in ("vector.openstreetmap.org", "build.protomaps.com"):
             for kind in nf.KINDS:
                 with self.assertRaises(nf.PolicyDenied):
                     f.get(f"https://{host}/x", kind=kind)
@@ -855,7 +969,8 @@ class UserAgentTest(unittest.TestCase):
         except OSError:
             pass
         for _, u, headers in tr.calls:
-            self.assertEqual(headers, {"User-Agent": nf.USER_AGENT})
+            # (a gzip host's Accept-Encoding says nothing about the player)
+            self.assertEqual({k: v for k, v in headers.items() if k != "Accept-Encoding"}, {"User-Agent": nf.USER_AGENT})
             # the project URL is the one identifying part (its owner is the project, not the player)
             text = (u + " " + json.dumps(headers)).replace(nf.PROJECT_URL, "")
             for s in personal:
@@ -1010,7 +1125,7 @@ class OfflineTest(unittest.TestCase):
         got = []
         with mock.patch.object(sys, "argv", ["earthd.py", "--offline", "--nice", "0"]), \
                 mock.patch.object(earthd.logging, "basicConfig"), \
-                mock.patch.object(earthd, "main_async", lambda args: got.append(args)), \
+                mock.patch.object(earthd, "main_async", lambda args, *rest: got.append(args)), \
                 mock.patch.object(earthd.asyncio, "run", lambda coro: None):
             earthd.main()
             sys.argv[1:] = ["--nice", "0"]
@@ -1064,6 +1179,39 @@ class ProxyTransportTest(unittest.TestCase):
                 tr.request("https://example.com/path", {}, 20.0)
                 self.assertEqual(len(made), 1)
                 self.assertEqual(made[0].netloc, "example.com")
+
+    def test_a_whole_file_for_a_range_is_not_read(self):
+        # the CDN once answered a 9 KB range of a 2.4 GB archive with the whole file (HTTP 200): not read, the
+        # connection dropped, a 200 with no body for the caller (its range check fails as before)
+        self._env()
+        self.assertTrue(nf._range_ignored({"Range": "bytes=100-9099"}, str(2366306078)))
+        self.assertFalse(nf._range_ignored({"Range": "bytes=0-1023"}, "4096"))        # (a small file sent whole)
+        self.assertFalse(nf._range_ignored({}, str(2366306078)))
+        with mock.patch("netfetch.urllib.request.getproxies", return_value={}):
+            closed, read = [], []
+
+            class Conn:
+                def __init__(self, netloc, timeout=None, **kw):
+                    pass
+
+                def request(self, method, path, headers=None):
+                    pass
+
+                def getresponse(self):
+                    class R:
+                        status = 200
+                        def getheaders(self): return [("Content-Length", "2366306078")]
+                        def read(self): read.append(1); return b"x"
+                    return R()
+
+                def close(self):
+                    closed.append(1)
+
+            with mock.patch.object(nf.http.client, "HTTPSConnection", Conn):
+                st, hd, body = nf.HttpsTransport().request("https://example.com/a.pmtiles",
+                                                           {"Range": "bytes=100-9099"}, 20.0)
+            self.assertEqual((st, body, read), (200, b"", []))
+            self.assertTrue(closed)
 
     def test_https_proxy_uses_connect_tunnel(self):
         self._env(HTTPS_PROXY="http://proxy:8080")
@@ -1189,5 +1337,5 @@ class RolesTest(unittest.TestCase):
     def test_sources_md_names_every_source(self):
         doc = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "SOURCES.md"),
                    encoding="utf-8").read()
-        missing = [h for h, p in nf.POLICIES.items() if not p.denied and h not in doc]
+        missing = [h for h, p in nf.POLICIES.items() if not p.denied and h.split("#", 1)[0] not in doc]
         self.assertEqual(missing, [])

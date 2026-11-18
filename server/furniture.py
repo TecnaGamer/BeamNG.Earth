@@ -15,6 +15,8 @@ import math
 import os
 
 import numpy as np
+import dmath
+import dnp
 
 import citylamps
 import designsigns
@@ -84,9 +86,11 @@ def lamp_spacing(region, dense=False):
 
 
 def highway_lit(region, link, urban):
-    """Is a highway (HIGHWAY_CLASSES) lit: every ramp (in the country only at its ends: PARTIAL_END_M); the mainline in
-    built-up land, except where the state lights its interchanges only."""
-    return bool(link) or (bool(urban) and region != "na:ramps")
+    """Is a highway (HIGHWAY_CLASSES) lit: every ramp in built-up land, and in the country only at its ends
+    (PARTIAL_END_M) except in sparse regions (na:sparse), where a rural ramp needs mapped lighting as the rural mainline
+    does (wyo-backroads' PR #1117: I-25's unlit ramps from Carr to Cheyenne); the mainline in built-up land, except
+    where the state lights its interchanges only. Mapped lit=* wins over all of this (place)."""
+    return (bool(link) and (bool(urban) or region != "na:sparse")) or (bool(urban) and region != "na:ramps")
 LAMP_CURB_M = 0.5           # m from the curb onto the sidewalk
 POLE_SPACING = 45.0
 POLE_CLASSES = {"secondary", "tertiary", "residential", "unclassified"}
@@ -106,7 +110,7 @@ def _h01(*vals):
 
 
 def _arclen(p):
-    d = np.hypot(*np.diff(p[:, :2], axis=0).T)
+    d = dnp.hypot(*np.diff(p[:, :2], axis=0).T)
     return np.concatenate([[0.0], np.cumsum(d)])
 
 
@@ -117,7 +121,7 @@ def _project(line, q):
     L2 = np.maximum((d * d).sum(1), 1e-12)
     t = np.clip(((q[:, None, :] - a[None]) * d[None]).sum(2) / L2[None], 0, 1)
     p = a[None] + t[..., None] * d[None]
-    dist = np.hypot(*(q[:, None, :] - p).transpose(2, 0, 1))
+    dist = dnp.hypot(*(q[:, None, :] - p).transpose(2, 0, 1))
     k = dist.argmin(1)
     s = _arclen(line)
     return s[k] + t[np.arange(len(q)), k] * np.sqrt(L2[k])
@@ -139,7 +143,7 @@ def _at(line, s):
 def _yaw(dx, dy):
     """Degrees of a Forest item's rotation that turns its local +x toward (dx, dy) (trees.lua: setFromEuler
     with -yaw about z, the engine's clockwise headings)."""
-    return math.degrees(math.atan2(dy, dx)) % 360.0
+    return math.degrees(dmath.atan2(dy, dx)) % 360.0
 
 
 def _clear(p, others, own):
@@ -169,8 +173,8 @@ def wire_lines(poles, anchors=None, radius=None, max_span=80.0):
         k = max(2, int(math.ceil(span / WIRE_SEG_M)))
         t = np.linspace(0.0, 1.0, k + 1)
         for ax, ay, az in (anchors if anchors is not None else [(off, 0.0, WIRE_Z) for off in WIRE_ARMS]):
-            c0, s0 = math.cos(math.radians(w0)), math.sin(math.radians(w0))
-            c1, s1 = math.cos(math.radians(w1)), math.sin(math.radians(w1))
+            c0, s0 = dmath.cos(math.radians(w0)), dmath.sin(math.radians(w0))
+            c1, s1 = dmath.cos(math.radians(w1)), dmath.sin(math.radians(w1))
             a = np.array([x0 + c0 * ax - s0 * ay, y0 + s0 * ax + c0 * ay, z0 + az])
             b = np.array([x1 + c1 * ax - s1 * ay, y1 + s1 * ax + c1 * ay, z1 + az])
             p = a[None] + (b - a)[None] * t[:, None]
@@ -202,16 +206,16 @@ def wire_mesh(lines, origin, material_of=None, solid_of=None):
         run = 0.0
         for a, b in zip(line[:-1], line[1:]):
             d = b - a
-            L = float(np.linalg.norm(d))
+            L = float(dnp.norm(d))
             if L < 1e-6:
                 continue
             d /= L
             if solid:
                 ref = np.array([0.0, 0.0, 1.0]) if abs(d[2]) < 0.95 else np.array([1.0, 0.0, 0.0])
                 sd = np.cross(d, ref)
-                sd = sd / (np.linalg.norm(sd) or 1.0) * r
+                sd = sd / (dnp.norm(sd) or 1.0) * r
                 up = np.cross(sd, d)
-                up = up / (np.linalg.norm(up) or 1.0) * r
+                up = up / (dnp.norm(up) or 1.0) * r
                 i = len(P)
                 corners = (-sd - up, sd - up, sd + up, -sd + up)
                 P += [a + c for c in corners] + [b + c for c in corners]
@@ -226,10 +230,10 @@ def wire_mesh(lines, origin, material_of=None, solid_of=None):
             side = np.array([d[1] * 1.0 - d[2] * 0.0, d[2] * 0.0 - d[0] * 1.0, d[0] * 0.0 - d[1] * 0.0])
             if abs(d[0]) + abs(d[1]) < 1e-6:        # (a vertical wire: d x z is zero, the ribbons had no width and a
                 side = np.array([0.0, 1.0, 0.0])    # catenary's droppers were never drawn)
-            side = side / (np.linalg.norm(side) or 1.0) * r
+            side = side / (dnp.norm(side) or 1.0) * r
             up = np.array([side[1] * d[2] - side[2] * d[1], side[2] * d[0] - side[0] * d[2],
                            side[0] * d[1] - side[1] * d[0]])
-            up = up / (np.linalg.norm(up) or 1.0) * r
+            up = up / (dnp.norm(up) or 1.0) * r
             for v in (side, up):
                 i = len(P)
                 P += [a - v, b - v, b + v, a + v]
@@ -247,6 +251,7 @@ def wire_mesh(lines, origin, material_of=None, solid_of=None):
 MAJOR = {"primary", "secondary", "tertiary", "trunk"}
 MINOR = {"residential", "unclassified", "living_street"}
 G_SIGNAL, G_STOP, G_YIELD = "signal", "stop", "giveway"
+G_SIGNAL_LEFT = "signal_left"
 G_B1, B1_TOP = "giveway_b1", 2.30       # Sweden's yellow give-way sign (tools/build_median_props.py: its height)
 _SE_RANK = {"trunk": 4, "primary": 3, "secondary": 2, "tertiary": 1, "unclassified": 0, "residential": 0,
             "living_street": 0}         # which arm gives way at a Swedish junction
@@ -268,10 +273,10 @@ def _arms(roads):
     for fid, spec, pts, _ in roads:
         if len(pts) < 2:
             continue
-        length = float(np.sum(np.hypot(*np.diff(pts[:, :2], axis=0).T)))
+        length = float(np.sum(dnp.hypot(*np.diff(pts[:, :2], axis=0).T)))
         for p, q, start in ((pts[0], pts[1], True), (pts[-1], pts[-2], False)):
             d = q[:2] - p[:2]
-            L = float(np.hypot(*d))
+            L = float(dnp.hypot(*d))
             if L < 1e-3:
                 continue
             k = (round(float(p[0]) / JUNCTION_SNAP_M), round(float(p[1]) / JUNCTION_SNAP_M))
@@ -283,7 +288,7 @@ def _arms(roads):
         mp = np.array([np.asarray(ends[k][0][3][:2], np.float64) for k in multi])
         for k in [k for k, v in ends.items() if len(v) == 1]:
             p = np.asarray(ends[k][0][3][:2], np.float64)
-            d = np.hypot(*(mp - p).T)
+            d = dnp.hypot(*(mp - p).T)
             j = int(np.argmin(d))
             if d[j] <= ARM_JOIN_M:
                 ends[multi[j]].append(ends.pop(k)[0])
@@ -311,6 +316,11 @@ def _outbound(a):
 # three ranked arms (service roads, driveways, tracks are neither the road through nor stopped: no stop sign at
 # every driveway).
 PRIORITY_STOPS = os.environ.get("BNE_PRIORITY_STOPS", "off") == "on"
+# Racetracks get no street furniture along them (BNE_RACEWAY_PROPS=on, the Revamped roads setting; the user's reports
+# 56, 59, 66, 70 at Daytona and Atlanta, 2026-11-17): a raceway mapped lit=yes got a town street's wooden utility poles,
+# wires and cobra-head lamps 2.4 m off its edge, at its centreline's height on the banking (1-4 m of pole buried there),
+# where the aerials show the tracks' own tall floodlight masts behind the outer wall and in the car parks.
+RACEWAY_PROPS = os.environ.get("BNE_RACEWAY_PROPS", "off") == "on"
 PRIORITY_RANK = {"trunk": 9, "primary": 8, "secondary": 7, "tertiary": 6, "unclassified": 5, "residential": 4,
                  "living_street": 3}
 PRIORITY_DRIVABILITY = {3: 0.50, 4: 0.79, 5: 0.80, 6: 0.90, 7: 0.96, 8: 0.97, 9: 0.98}
@@ -410,7 +420,7 @@ def _is_signalled(arms, signals=None):
         return False
     c = np.array([sum(float(a[3][0]) for a in arms), sum(float(a[3][1]) for a in arms)]) / len(arms)
     reach = max(a[1].width for a in arms) / 2 + SIGNAL_NEAR_M
-    return bool((np.hypot(signals[:, 0] - c[0], signals[:, 1] - c[1]) <= reach).any())
+    return bool((dnp.hypot(signals[:, 0] - c[0], signals[:, 1] - c[1]) <= reach).any())
 
 
 MAPPED_ARM_M = 30.0         # m from its junction a mapped give-way or stop node is that junction's, and within half the arm
@@ -421,7 +431,7 @@ def _mapped_priority(a, priority):
     if priority is None or not len(priority):
         return None
     v = priority[:, :2] - np.asarray(a[3][:2], np.float64)
-    along = v @ a[2]
+    along = dnp.matmul(v, a[2])
     reach = min(MAPPED_ARM_M, a[5] / 2) if len(a) > 5 else MAPPED_ARM_M
     hit = (along > 0.0) & (along <= reach) & (np.abs(v[:, 0] * a[2][1] - v[:, 1] * a[2][0]) <= a[1].width / 2 + 1.0)
     if not hit.any():
@@ -470,7 +480,7 @@ def junction_controls(arms, k, link_ok=None, ring=None, signals=None, country=No
     if len(arms) == 3:
         # the stem: the arm least in line with another
         def straightest(a):
-            return max(-float(a[2] @ b[2]) for b in arms if b is not a)
+            return max(-float(dnp.matmul(a[2], b[2])) for b in arms if b is not a)
         incoming = [a for a in arms if not _outbound(a)]
         stem = min(incoming, key=straightest) if incoming else None
         return [(stem, G_STOP)] if all(a[1].cls in MINOR for a in arms) and stem is not None else []
@@ -528,7 +538,7 @@ def _seg_dist_min(p, line):
     d = b - a
     L2 = np.maximum((d * d).sum(1), 1e-12)
     t = np.clip(((p - a) * d).sum(1) / L2, 0, 1)
-    return float(np.hypot(*(a + t[:, None] * d - p).T).min())
+    return float(dnp.hypot(*(a + t[:, None] * d - p).T).min())
 
 
 def approach_pose(u, what, left_hand=False):
@@ -539,12 +549,11 @@ def approach_pose(u, what, left_hand=False):
     The yaw is the same on either side of the road: it is the turn that faces the model's front toward the drivers,
     and turning it the other way for left-hand traffic stood every head and sign with its back to them (GitHub #595,
     the UK). A sign stands on the kerb side traffic keeps to (the left where it drives on the left). The signal is the
-    stock boom (s_trafficlight_boom_sn): its arm reaches to the drivers' left from its pole, and a turn cannot mirror
-    it, so its pole stands on the drivers' right everywhere and the arm is over the road (on the left kerb and facing
-    them, the arm would hang over the pavement)."""
+    stock boom (s_trafficlight_boom_sn): its arm reaches to the drivers' left from its pole. Left-hand traffic uses
+    a reflected copy (signalshape.lua), so its pole can stand on the left kerb with its arm over the road too."""
     inc = -np.asarray(u, np.float64)[:2]
     right = np.array([inc[1], -inc[0]])         # the right of travel (along inc)
-    side = -right if left_hand and what != G_SIGNAL else right
+    side = -right if left_hand else right
     return side, round(_yaw(right[0], right[1]), 1)
 
 
@@ -583,8 +592,8 @@ def junction_props(roads, box, curb_h=0.15, left_hand=False, decks=(), signals=N
     """Signals at the junctions with a mapped traffic signal (signals: mapped_signals'; None: at urban junctions of
     two or more major roads), stop signs at urban junctions
     of minor roads (the minor arms meeting a major road; the stem of a T; half the four-way ones, hashed).
-    Each on the approach's right (approach_pose: a sign on its left where traffic drives on the left, a signal's
-    boom on its right everywhere), at the junction's edge, facing the drivers who come in. decks: [(centreline (k, 3),
+    Each on the approach's kerb side (left where traffic drives on the left), at the junction's edge, facing the
+    drivers who come in. decks: [(centreline (k, 3),
     half width)] of the bridge decks near (signal_spot).
     Sweden: junction_controls' rules, and the give-way signs in the country too.
     Germany (de_on, de_ctx: the tile's designs.context, and the junction's point inside Germany: designs.inside): the
@@ -666,7 +675,7 @@ def junction_props(roads, box, curb_h=0.15, left_hand=False, decks=(), signals=N
         for arm, what in put:
             side, yaw = approach_pose(arm[2], what, left_hand)
             b1 = yellow_b1 and what == G_YIELD
-            group = G_B1 if b1 else what
+            group = G_B1 if b1 else G_SIGNAL_LEFT if left_hand and what == G_SIGNAL else what
             if sign_obstacles is not None and what in (G_STOP, G_YIELD) and not b1:
                 # (PR #505: the sign where an approaching driver sees it, clear of the mapped obstacles)
                 import signplacement
@@ -809,6 +818,7 @@ COLLISION_BOXES = {
                    (-0.900, -0.348, 7.772, 0.901, 0.300, 8.000))),
     G_POLELAMP: (1.1, ((-2.891, -0.110, -0.365, 0.039, 0.110, 0.699),)),
     G_SIGNAL: (9.4, ((-0.277, -0.327, -0.397, 0.263, 0.296, 9.365),)),
+    G_SIGNAL_LEFT: (9.4, ((-0.263, -0.327, -0.397, 0.277, 0.296, 9.365),)),
     G_STOP: (3.0, ((-0.460, -0.028, -0.987, 0.436, 0.029, 3.004),)),
     G_YIELD: (3.0, ((-0.356, -0.042, -0.075, 0.357, 0.032, 3.336),)),
     G_HYDRANT: (1.5, ((-0.327, -0.377, -0.145, 0.327, 0.377, 1.324),)),
@@ -816,11 +826,19 @@ COLLISION_BOXES = {
     # Both catalog variants: each is scaled against its own catalog height (both 1.1 m).
     G_BIN: (1.1, ((-0.264, -0.264, -0.003, 0.264, 0.264, 1.111),)),
     "pylon": (35.8, ((-3.893, -4.152, -5.873, 3.893, 4.152, 29.818),)),
+    # West Coast USA's tower crane (areaprops.G_TC, s_crane_tower, 38.98 m: read from its LODs 2026-11-16): the 3.6 m
+    # lattice mast, then the jib and counter-jib turned with it (a crane on a construction site under the A7's
+    # Kalbach viaduct stood through the deck, a car hit its mast at 116 km/h, 2026-11-15)
+    "towercrane": (38.98, ((-1.81, -0.51, -0.5, 1.81, 3.11, 33.0), (-49.55, -2.02, 33.0, 14.42, 2.02, 38.98))),
+    # the classic lantern on its post (bne_fr_lantern, 5.4 m): its lantern head's footprint over the post's height (the
+    # Colmesh alone is the 0.12 m post to 4.65 m); the France kit's lamp (place: "fr_lantern")
+    "fr_lantern": (5.4, ((-0.30, -0.30, -0.01, 0.30, 0.30, 5.41),)),
     # the game's wooden power pole (powerlines.G_POLE): its Colmesh, the trunk and the cross-arm's head
     "hvpole": (9.96, ((-0.162, -0.162, -0.083, 0.162, 0.162, 5.803),
                       (-0.731, -0.189, 5.803, 0.769, 0.162, 9.948))),
 }
 COLLISION_BOXES.update(citylamps.COLLISION_BOXES)
+COLLISION_BOXES.update(poleprofiles.COLLISION_BOXES)     # (the regional poles: every group a pole style names)
 COLLISION_BOXES.update(designsigns.BOXES)
 ROAD_PROP_GAP_M = 0.15
 
@@ -829,8 +847,8 @@ def _box_distance2(a, b, low, high):
     """Squared distance of each 2D segment a..b to the closed axis-aligned rectangle low..high."""
     d = b - a
     d2 = np.maximum((d * d).sum(1), 1e-20)
-    best = np.minimum((np.maximum(np.maximum(low - a, a - high), 0.0) ** 2).sum(1),
-                      (np.maximum(np.maximum(low - b, b - high), 0.0) ** 2).sum(1))
+    best = np.minimum((dnp.sq(np.maximum(np.maximum(low - a, a - high), 0.0))).sum(1),
+                      (dnp.sq(np.maximum(np.maximum(low - b, b - high), 0.0))).sum(1))
     enter, leave = np.zeros(len(a)), np.ones(len(a))
     for axis in (0, 1):
         parallel = np.abs(d[:, axis]) < 1e-12
@@ -843,7 +861,7 @@ def _box_distance2(a, b, low, high):
     for corner in ((low[0], low[1]), (low[0], high[1]), (high[0], low[1]), (high[0], high[1])):
         v = np.asarray(corner) - a
         t = np.clip((v * d).sum(1) / d2, 0.0, 1.0)
-        best = np.minimum(best, ((v - t[:, None] * d) ** 2).sum(1))
+        best = np.minimum(best, (dnp.sq(v - t[:, None] * d)).sum(1))
     return best
 
 
@@ -943,13 +961,13 @@ class RoadClearance:
         headroom = roads.MIN_BRIDGE_HEADROOM_M + roads.BRIDGE_HEADROOM_MARGIN_M
         scale = max(0.3, min(2.5, float(row[6]) / shape[0]))  # trees.lua:M.pick (row[5] is unused)
         yaw = math.radians(float(row[4]))
-        c, s = math.cos(yaw), math.sin(yaw)
+        c, s = dmath.cos(yaw), dmath.sin(yaw)
         rotation = np.array([[c, -s], [s, c]])
         origin = np.asarray(row[1:3], np.float64)
         for box in shape[1]:
             low, high = np.asarray(box[:3]) * scale, np.asarray(box[3:]) * scale
-            corners = np.array([[low[0], low[1]], [low[0], high[1]],
-                                [high[0], low[1]], [high[0], high[1]]]) @ rotation.T + origin
+            corners = dnp.matmul(np.array([[low[0], low[1]], [low[0], high[1]],
+                                [high[0], low[1]], [high[0], high[1]]]), rotation.T) + origin
             reach = self.max_half + margin
             pick = self.candidates(corners.min(0) - reach, corners.max(0) + reach)
             if not len(pick):
@@ -971,10 +989,10 @@ class RoadClearance:
             if not valid.any():
                 continue
             delta = b[:, :2] - a[:, :2]
-            p = (a[:, :2] + enter[:, None] * delta - origin) @ rotation
-            q = (a[:, :2] + leave[:, None] * delta - origin) @ rotation
+            p = dnp.matmul(a[:, :2] + enter[:, None] * delta - origin, rotation)
+            q = dnp.matmul(a[:, :2] + leave[:, None] * delta - origin, rotation)
             distance2 = _box_distance2(p[valid], q[valid], low[:2], high[:2])
-            if (distance2 < (self.half[pick[valid]] + margin) ** 2).any():
+            if (distance2 < dnp.sq(self.half[pick[valid]] + margin)).any():
                 return False
         return True
 
@@ -992,7 +1010,7 @@ def lamp_lenses(rows):
                 continue
             heads = (head,)
         a = math.radians(r[4])
-        c, s_ = math.cos(a), math.sin(a)
+        c, s_ = dmath.cos(a), dmath.sin(a)
         k = r[6] / LAMP_H.get(r[0], r[6]) if r[6] else 1.0     # (a scaled lamp: its head scaled alike)
         group = ("fr_lantern_light" if r[0] == "fr_lantern" else G_HIGH_MAST_LENS if r[0] == "streetlight_high_mast"
                  else G_LENS)
@@ -1003,6 +1021,91 @@ def lamp_lenses(rows):
                     round(r[3] + hz - LENS_DROP_M, 2), yaw, 1.0, 1.0, r[7]]
             out += [lens, [G_GLOW] + lens[1:]]
     return out
+
+
+# Assemblies (the user's reports 56, 59, 66, 70 at Daytona and Atlanta, 2026-11-17: a utility pole culled, its
+# cobra-head arm 7 m up and the wire ending 0.8 m farther out left in the air): a row mounted on another goes or stays
+# with that row, never by its own place or height (racedig.clear_props, under_decks), and a culled support takes the
+# wires ending within its reach, and a span goes with the supports at its ends wherever they are (Span). The rules in
+# Rust (earthfast propassembly: assembly_cull, wire_cull); here the rows' arrays and their lamps' heads (lamp_lenses).
+ASSEMBLY_KERNEL = 431
+
+
+def _assembly_arrays(rows):
+    """(names, group, xy, keys, heads) of rows for the assembly kernels: the groups' names and each row's index into
+    them, the rows' x, y, their x, y, z rounded to 1 cm, and their lamps' heads [row, group, x, y, z (1 cm)]
+    (lamp_lenses)."""
+    names, index = [], {}
+
+    def gi(g):
+        g = str(g)
+        k = index.get(g)
+        if k is None:
+            k = index[g] = len(names)
+            names.append(g)
+        return k
+    group = np.array([gi(r[0]) for r in rows], np.int64)
+    xy = np.array([[float(r[1]), float(r[2])] for r in rows], np.float64).reshape(-1, 2)
+    keys = np.array([[round(float(v), 2) for v in r[1:4]] for r in rows], np.float64).reshape(-1, 3)
+    heads = [[i, gi(lens[0])] + [round(float(v), 2) for v in lens[1:4]]
+             for i, r in enumerate(rows) if len(r) >= 8 for lens in lamp_lenses([r])]
+    heads = np.array(heads, np.float64).reshape(-1, 5)
+    return names, group, np.ascontiguousarray(xy), np.ascontiguousarray(keys), np.ascontiguousarray(heads)
+
+
+def assembly_drop(hit, rows):
+    """(n,) bool: rows culled, from hit (each row judged alone): an assembly as one when any structural member is hit
+    (its support or post, a pole lamp on it), its lenses and glows following (earthfast assembly_cull)."""
+    import fast
+    fast.require(ASSEMBLY_KERNEL, "furniture assemblies")
+    names, group, xy, keys, heads = _assembly_arrays(rows)
+    return np.asarray(fast._ef.assembly_cull(names, group, xy, keys, heads, np.ascontiguousarray(hit, bool)), bool)
+
+
+class Span(np.ndarray):
+    """A wire's points (k, 3) that know the support rows at their two ends (ends: (row at the first point, row at the
+    last)): a span is drawn by the tile of its first pole only, so the pole at its other end may be no row of this tile,
+    yet the wire must go when that pole is culled (Codex's review of 1bc9f8cb). Used as the points themselves."""
+    ends = None
+    mounted = None
+
+
+def with_ends(wires, a, b, la=None, lb=None):
+    """wires (points, or (points, radius)) of one span tagged with its support rows a (at the first point) and b (None:
+    no support row there), and the rows mounted on them la, lb (a pole's arm, None for none): the whole assembly at
+    each end, whose verdict is the support's (assembly_cull; Codex's review of 0cf9fd9b: a far pole culled for its
+    arm under a deck left the span)."""
+    out = []
+    for w in wires:
+        pts, r = w if isinstance(w, tuple) else (w, None)
+        span = np.asarray(pts).view(Span)
+        span.ends = (None if a is None else list(a), None if b is None else list(b))
+        span.mounted = (None if la is None else list(la), None if lb is None else list(lb))
+        out.append(span if r is None else (span, r))
+    return out
+
+
+def wire_mounted(w):
+    """The rows mounted on the supports at a wire's two ends (with_ends), or (None, None)."""
+    return getattr(w[0] if isinstance(w, tuple) else w, "mounted", None) or (None, None)
+
+
+def wire_ends(w):
+    """The support rows (a, b) at a wire's two ends (with_ends), or None."""
+    return getattr(w[0] if isinstance(w, tuple) else w, "ends", None)
+
+
+def wire_cull(ends, cut, culled):
+    """(m,) bool: wire ends (m, 2) that go: their own support culled (cut (m,)), or within the reach of a wire support
+    among the culled rows (earthfast wire_cull)."""
+    import fast
+    fast.require(ASSEMBLY_KERNEL, "furniture assemblies")
+    ends = np.ascontiguousarray(np.asarray(ends, np.float64).reshape(-1, 2))
+    names = sorted({str(r[0]) for r in culled})
+    group = np.array([names.index(str(r[0])) for r in culled], np.int64)
+    xy = np.array([[float(r[1]), float(r[2])] for r in culled], np.float64).reshape(-1, 2)
+    return np.asarray(fast._ef.wire_cull(ends, np.ascontiguousarray(cut, bool), names, group,
+                                         np.ascontiguousarray(xy)), bool)
 
 
 def roads_with_points(roads, points, extra_m, least=MAPPED_ALONG_MIN):
@@ -1064,16 +1167,40 @@ def under_decks(rows, decks, wires=None):
     out = rows
     if rows:
         r = np.asarray([[q[1], q[2], q[3], q[3] + q[6]] for q in rows], np.float64)
-        hit = levels.blocked(np.ascontiguousarray(r[:, 0]), np.ascontiguousarray(r[:, 1]),
-                             np.ascontiguousarray(r[:, 2]), np.ascontiguousarray(r[:, 3]), float(DECK_HEADROOM_M))
+        hit = np.asarray(levels.blocked(np.ascontiguousarray(r[:, 0]), np.ascontiguousarray(r[:, 1]),
+                                        np.ascontiguousarray(r[:, 2]), np.ascontiguousarray(r[:, 3]),
+                                        float(DECK_HEADROOM_M)), bool)
+        if hit.any():               # (an assembly as one: a pole's arm, a post's lens go or stay with it)
+            hit = assembly_drop(hit, rows)
+        gone = [q for q, h in zip(rows, hit) if h]
         out = [q for q, h in zip(rows, hit) if not h]
+    else:
+        gone = []
     if wires is not None:
+        pts = [np.asarray(w[0] if isinstance(w, tuple) else w, np.float64) for w in wires]  # (PR #505: (points, style))
+        at = np.zeros(2 * len(pts), bool)
+        # (each span's own supports judged alike, the next tile's pole too: with_ends)
+        # (and the rows mounted on them: an arm into a deck culls its pole: assembly_cull)
+        sup = [(2 * n_ + k, q) for n_, w in enumerate(wires) for e in (wire_ends(w),) if e for k, q in enumerate(e)
+               if q is not None]
+        sup += [(2 * n_ + k, q) for n_, w in enumerate(wires) if wire_ends(w) for k, q in enumerate(wire_mounted(w))
+                if q is not None]
+        cut = np.zeros(2 * len(pts), bool)
+        if sup:
+            q = np.asarray([[r[1], r[2], r[3], r[3] + r[6]] for _, r in sup], np.float64)
+            hit = np.asarray(levels.blocked(np.ascontiguousarray(q[:, 0]), np.ascontiguousarray(q[:, 1]),
+                                            np.ascontiguousarray(q[:, 2]), np.ascontiguousarray(q[:, 3]),
+                                            float(DECK_HEADROOM_M)), bool)
+            for (j, _), h in zip(sup, hit):
+                cut[j] |= bool(h)
+        if (gone or cut.any()) and pts:
+            ends = [[p[k, 0], p[k, 1]] if len(p) else [np.inf, np.inf] for p in pts for k in (0, -1)]
+            at = wire_cull(ends, cut, gone)
         keep = []
-        for w in wires:
-            entry = w      # (PR #505: a wire may come as (points, style))
-            w = np.asarray(w[0] if isinstance(w, tuple) else w, np.float64)
+        for n_, (entry, w) in enumerate(zip(wires, pts)):
             if not levels.wire_hit(np.ascontiguousarray(w[:, 0]), np.ascontiguousarray(w[:, 1]),
-                                   np.ascontiguousarray(w[:, 2]), float(DECK_WIRE_M), float(DECK_HEADROOM_M)):
+                                   np.ascontiguousarray(w[:, 2]), float(DECK_WIRE_M), float(DECK_HEADROOM_M)) \
+                    and not (len(w) and (at[2 * n_] or at[2 * n_ + 1])):
                 keep.append(entry)
         wires[:] = keep
     return out
@@ -1233,13 +1360,16 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
                             wires.extend(_own_spans(run_poles, box))
                         run_poles = []
                         continue
-                    run_poles.append((pole[1], pole[2], pole[3], pole[4], pole_style))
+                    k = int(round((float(_project(line, q[None])[0]) - ph) / TOWN_POLE_SPACING))
+                    lamp = ([G_POLELAMP, round(float(q[0]), 2), round(float(q[1]), 2),
+                             round(float(p[2]) + POLE_LAMP_Z, 2), round(yaw, 1), 1.0, 1.1, 0.0]
+                            if lamp_ok(fid) and pole_lamp(spec.cls, k, region) else None)
+                    # (with its arm: the next tile's span to it goes when the arm culls the pole there)
+                    run_poles.append((pole[1], pole[2], pole[3], pole[4], pole_style, lamp))
                     if _owns(box, q[0], q[1]):
                         rows.append(pole)
-                        k = int(round((float(_project(line, q[None])[0]) - ph) / TOWN_POLE_SPACING))
-                        if lamp_ok(fid) and pole_lamp(spec.cls, k, region):
-                            rows.append([G_POLELAMP, round(float(q[0]), 2), round(float(q[1]), 2),
-                                         round(float(p[2]) + POLE_LAMP_Z, 2), round(yaw, 1), 1.0, 1.1, 0.0])
+                        if lamp is not None:
+                            rows.append(lamp)
                 if wires is not None and len(run_poles) > 1:
                     wires.extend(_own_spans(run_poles, box))
             rule = None
@@ -1283,6 +1413,8 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
     for fid, spec, line, _ in roads:
         if fid in lit or len(line) < 2:
             continue
+        if RACEWAY_PROPS and str(getattr(spec, "cls", "")) == "raceway":
+            continue            # (a racetrack's lit=yes is its floodlights: no street's poles, wires or lamps)
         # a street in built-up land (spec.urban: the land cover; the tile's `town` is only "not a dense core", true in
         # the countryside too) with no sidewalk run: lit from its edge; a country road: utility poles alone
         highway = spec.cls in HIGHWAY_CLASSES and (lighting.get(fid) == "yes"
@@ -1342,16 +1474,18 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
                     wires.extend(_own_spans(run, box))
                 run = []
                 continue
-            run.append((pole[1], pole[2], pole[3], pole[4], pole_style))
+            lamp = ([G_POLELAMP, round(float(q[0]), 2), round(float(q[1]), 2),
+                     round(float(p[2]) + POLE_LAMP_Z, 2), round(yaw, 1), 1.0, 1.1, 0.0]
+                    if drawn and pole_lamp(spec.cls, k, region) else None)
+            run.append((pole[1], pole[2], pole[3], pole[4], pole_style, lamp))
             if inside:
                 rows.append(pole)
-                if drawn and pole_lamp(spec.cls, k, region):
-                    rows.append([G_POLELAMP, round(float(q[0]), 2), round(float(q[1]), 2),
-                                 round(float(p[2]) + POLE_LAMP_Z, 2), round(yaw, 1), 1.0, 1.1, 0.0])
+                if lamp is not None:
+                    rows.append(lamp)
         if len(run) > 1 and wires is not None:
             wires.extend(_own_spans(run, box))
     # Poles were checked before joining their wire runs; signs before selecting their relocated spot.
-    rows = [r for r in rows if r[0] in (G_POLE, G_SIGNAL, G_STOP, G_YIELD) or clearance.clear(r)]
+    rows = [r for r in rows if r[0] in (G_POLE, G_SIGNAL, G_SIGNAL_LEFT, G_STOP, G_YIELD) or clearance.clear(r)]
     if poleprofiles.kit_enabled(pole_profile):
         import regionalmarkers
         country_at=poleprofiles.country_selector(pole_profile,pole_frame)
@@ -1372,6 +1506,11 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
     return under_decks(rows + lamp_lenses(rows), list(decks), wires)
 
 
+def _support_row(p):
+    """The props row of a run's pole (x, y, z, yaw, style): its pole's row as placed."""
+    return [p[4].group, p[0], p[1], p[2], p[3], 1.0, p[4].height, 0.0]
+
+
 def _own_spans(run, box):
     """The wires of the spans of a run of poles that start in the tile (each span drawn by one tile)."""
     x0, y0, x1, y1 = box
@@ -1380,7 +1519,9 @@ def _own_spans(run, box):
         if _owns(box, a[0], a[1]):
             sa, sb = a[4], b[4]
             if (sa.wire_anchors, sa.wire_radius) == (sb.wire_anchors, sb.wire_radius):
-                out.extend(wire_lines([a[:4], b[:4]], sa.wire_anchors, sa.wire_radius))
+                out.extend(with_ends(wire_lines([a[:4], b[:4]], sa.wire_anchors, sa.wire_radius),
+                                     _support_row(a), _support_row(b), a[5] if len(a) > 5 else None,
+                                     b[5] if len(b) > 5 else None))
             # Different electrical layouts (three conductors / one bundle): terminate
             # the run here. Inventing a three-to-one electrical connection is misleading;
             # dedicated transition hardware is outside this visual prototype's scope.

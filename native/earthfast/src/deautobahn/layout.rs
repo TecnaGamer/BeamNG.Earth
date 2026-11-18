@@ -4,6 +4,7 @@
 //! overhead, 350 mm beside the road, line pitch cap x 11/7 (BASt dWiSta 2022 Abb. 22-24; the RWB unit E = cap / 7).
 //! Structures: clear height >= 5.0 m to the sign (ZTV-ING Teil 8 Abschnitt 3), cantilever reach <= 12 m ("soll"),
 //! posts behind the barrier on concrete plinths; side boards on two posts 1.5 m from the edge, bottom 2.0 m (VwV-StVO).
+use crate::dm::Dm;
 use super::content::{Block, Content, Entry, Junction};
 use super::stations::{Board, Mount, Station};
 
@@ -792,7 +793,7 @@ pub(crate) fn assemble_fork(c: &Content, g: &Geo, dirs: [(f64, f64); 2], font: &
         if let Some(t) = b.plates.first() {
             p.items.push(Item::Plate { kind: plate_kind(t), text: plate_text(t), cy: margin + 1.15 * cap, cz: row_z, w: 2.3 * cap, h: 1.38 * cap });
         }
-        let ang = lat.atan2(fwd).to_degrees();
+        let ang = lat.datan2(fwd).to_degrees();
         let kind = if ang > 15.0 { Arrow::Diagonal(1.0) } else if ang < -15.0 { Arrow::Diagonal(-1.0) } else { Arrow::Up };
         p.items.push(Item::Arrow { kind, cy: w - margin - 0.9 * cap, cz: row_z, size: 1.6 * cap });
         p.lines = labels(&lines);

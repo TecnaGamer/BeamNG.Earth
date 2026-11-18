@@ -25,6 +25,7 @@ import zipfile
 from collections import namedtuple
 
 import numpy as np
+import dmath
 
 import netfetch
 import railtags
@@ -58,7 +59,7 @@ def tile_of(lat, lon, zoom=ZOOM):
     """(x, y) of the web-mercator tile at lat, lon."""
     n = 1 << zoom
     r = math.radians(lat)
-    return int((lon + 180.0) / 360.0 * n), int((1.0 - math.asinh(math.tan(r)) / math.pi) / 2.0 * n)
+    return int((lon + 180.0) / 360.0 * n), int((1.0 - dmath.asinh(dmath.tan(r)) / math.pi) / 2.0 * n)
 
 
 def tiles_over(south, west, north, east, box=BOX):
@@ -83,7 +84,7 @@ def credited_near(cache_dir, lat, lon, near_m, local=None):
     if not ON or not (cache_dir or local):
         return set()
     dlat = near_m / 110540.0
-    dlon = near_m / (111320.0 * max(0.1, math.cos(math.radians(lat))))
+    dlon = near_m / (111320.0 * max(0.1, dmath.cos(math.radians(lat))))
     got = set()
     for c in SOURCES:
         for x, y in tiles_over(lat - dlat, lon - dlon, lat + dlat, lon + dlon, c.box):
@@ -113,6 +114,14 @@ class Source:
         self.lock = threading.Lock()
         self.shards = {}            # (folder, x, y) -> {lat, lon, code, height, roof} arrays, or {} none there
         self.down_at = 0.0
+        self.sites = {}             # folder -> railtags.Shards: its manifest (pinned, refreshed daily), its "data" host
+
+    def _site(self, folder):
+        with self.lock:
+            s = self.sites.get(folder)
+            if s is None:
+                s = self.sites[folder] = railtags.Shards(self.cache_dir, self.fetcher, folder)
+            return s
 
     def shard(self, x, y, folder="lod2"):
         with self.lock:
@@ -151,7 +160,11 @@ class Source:
         if self.fetcher is None or time.time() - self.down_at < RETRY_S:
             return None
         try:
-            body = self.fetcher.get(f"{railtags.PAGES}/{folder}/{x}/{y}.npz", kind="demand").body
+            # (the folder's manifest names the host of its shards, data_url: R2 behind the CDN; none had (offline,
+            # an old manifest): Pages, as before)
+            site = self._site(folder)
+            site.version()
+            body = site.get(f"{x}/{y}.npz")
         except netfetch.NotFound:
             body = b""
         except Exception as e:      # (offline, or not published: the predicted roofs)

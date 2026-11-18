@@ -7,6 +7,7 @@
 //!   kept by its midpoint: in box mode the half-open box [x0, x1) x [y0, y1) (an anchor tile's square); in geotile mode
 //!   the place of the midpoint (world_to_geodetic at h = 0) picks the zoom-cz tile, kept when it lies under the
 //!   zoom-pz parent tile (px, py) and grouped by it.
+use crate::dm::Dm;
 
 use numpy::{IntoPyArray, PyArray2, PyReadonlyArray1, PyReadonlyArray2};
 use pyo3::exceptions::PyValueError;
@@ -21,7 +22,7 @@ fn normals(xy: &[[f64; 2]]) -> Vec<[f64; 2]> {
     let mut ns = Vec::with_capacity(n.saturating_sub(1));
     for k in 0..n.saturating_sub(1) {
         let (dx, dy) = (xy[k + 1][0] - xy[k][0], xy[k + 1][1] - xy[k][1]);
-        let mut l = dx.hypot(dy);
+        let mut l = dx.dhypot(dy);
         if l < 1e-9 {
             l = 1e-9;
         }
@@ -36,7 +37,7 @@ fn normals(xy: &[[f64; 2]]) -> Vec<[f64; 2]> {
     out[n - 1] = ns[ns.len() - 1];
     for k in 1..n.saturating_sub(1) {
         let mut m = [ns[k - 1][0] + ns[k][0], ns[k - 1][1] + ns[k][1]];
-        let mut ml = m[0].hypot(m[1]);
+        let mut ml = m[0].dhypot(m[1]);
         if ml < 1e-9 {
             ml = 1.0;
         }
@@ -157,7 +158,7 @@ mod tests {
         let n = normals(&[[0.0, 0.0], [10.0, 0.0], [10.0, 10.0]]);
         assert!((n[0][0] - 0.0).abs() < 1e-12 && (n[0][1] - 1.0).abs() < 1e-12);
         // the joint: the bisector over cos 45 deg (length sqrt 2)
-        assert!((n[1][0].hypot(n[1][1]) - 2f64.sqrt()).abs() < 1e-9);
+        assert!((n[1][0].dhypot(n[1][1]) - 2f64.sqrt()).abs() < 1e-9);
         assert!((n[2][0] + 1.0).abs() < 1e-12 && n[2][1].abs() < 1e-12);
     }
 }

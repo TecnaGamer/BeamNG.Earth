@@ -14,6 +14,7 @@ import json
 import os
 
 import numpy as np
+import dnp
 
 MOUNT_EXTRA = ("streetlight", "eu_lamp_steel", "eu_lamp_concrete", "catmast", "catmast_eu")
 SHIFT_M = 40.0              # m either way along the approach from the kernel's spot a pole may be
@@ -130,12 +131,12 @@ def pick(poles, board, junction_xy, left_hand):
         return None
     side = -1.0 if left_hand else 1.0
     q, t, road = np.asarray(board[0:2], np.float64), np.asarray(board[2:4], np.float64), np.asarray(board[4:6], np.float64)
-    t = t / max(float(np.hypot(*t)), 1e-9)
+    t = t / max(float(dnp.hypot(*t)), 1e-9)
     right = np.array([t[1] * side, -t[0] * side])
     d = poles[:, :2] - road
-    along, lat = d @ t, d @ right
-    latq = float((q - road) @ right)
-    to_j = np.hypot(poles[:, 0] - junction_xy[0], poles[:, 1] - junction_xy[1])
+    along, lat = dnp.matmul(d, t), dnp.matmul(d, right)
+    latq = float(dnp.matmul(q - road, right))
+    to_j = dnp.hypot(poles[:, 0] - junction_xy[0], poles[:, 1] - junction_xy[1])
     ok = (np.abs(along) <= SHIFT_M) & (lat >= LATERAL_M[0]) & (lat <= LATERAL_M[1]) & (to_j >= JUNCTION_CLEAR_M)
     if not ok.any():
         return None

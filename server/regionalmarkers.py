@@ -7,6 +7,8 @@ placement exclusions. Every object's country is tested at its actual position.
 """
 import math
 import numpy as np
+import dmath
+import dnp
 from geotiles import box_owns
 import europeinfra
 import delineatorprofiles
@@ -59,23 +61,23 @@ def place(roads, box, french_at, lighting=None):
                     # reflector is visible to the opposite direction of travel.
                     country=french_at(float(q[0]),float(q[1]),float(pos[2]))
                     leading=side*(1 if country in europeinfra.LEFT_HAND else -1)
-                    put('j6',q,pos[2],math.degrees(math.atan2(-tangent[0],tangent[1]))+(180 if leading<0 else 0),section)
+                    put('j6',q,pos[2],math.degrees(dmath.atan2(-tangent[0],tangent[1]))+(180 if leading<0 else 0),section)
         stations=np.arange(18,length-18,10.)
         if not len(stations):continue
         before,_=f._at(line,stations-15);at,_=f._at(line,stations);after,_=f._at(line,stations+15)
         last=-1000
         for s,a,p,b in zip(stations,before,at,after):
             u=p[:2]-a[:2];v=b[:2]-p[:2]
-            if min(np.linalg.norm(u),np.linalg.norm(v))<2:continue
-            u/=np.linalg.norm(u);v/=np.linalg.norm(v)
-            turn=math.atan2(u[0]*v[1]-u[1]*v[0],float(u@v))
+            if min(dnp.norm(u),dnp.norm(v))<2:continue
+            u/=dnp.norm(u);v/=dnp.norm(v)
+            turn=dmath.atan2(u[0]*v[1]-u[1]*v[0],float(dnp.matmul(u, v)))
             if abs(turn)<math.radians(18) or s-last<55:continue
-            last=s;t=u+v;t/=max(np.linalg.norm(t),1e-9)
+            last=s;t=u+v;t/=max(dnp.norm(t),1e-9)
             outside=np.array([t[1],-t[0]])*np.sign(turn)
             q=p[:2]+outside*(spec.width/2+1.5)
             if not all(f._seg_dist_min(q,l)>=h+.6 for h,l in lines):continue
             kind='j4_l' if turn>0 else 'j4_r'
-            if abs(turn)>=math.radians(32):put(kind,q,p[2],math.degrees(math.atan2(-u[0],u[1])))
+            if abs(turn)>=math.radians(32):put(kind,q,p[2],math.degrees(dmath.atan2(-u[0],u[1])))
             for offset in (-10.,10.):
                 pp,dd=f._at(line,np.array([s+offset]));pos,tan=pp[0],dd[0]
                 n=np.array([tan[1],-tan[0]])*np.sign(turn)
@@ -90,7 +92,7 @@ def place(roads, box, french_at, lighting=None):
                 if delineatorprofiles.policy(country).unlit and str((lighting or {}).get(fid)).lower() in {'yes','true','1','24/7'}:
                     continue
                 if all(f._seg_dist_min(q2,l)>=h+.6 for h,l in lines):
-                    put('j1',q2,pos[2],math.degrees(math.atan2(-tan[0],tan[1])))
+                    put('j1',q2,pos[2],math.degrees(dmath.atan2(-tan[0],tan[1])))
     for arms in f._arms(roads).values():
         if len(arms)<3:continue
         wide=max(a[1].width for a in arms)/2

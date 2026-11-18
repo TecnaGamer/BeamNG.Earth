@@ -41,6 +41,19 @@ def embankment(la, lo):
     return MARSH + np.clip(16.0 - np.abs(e - 60.0), 0.0, 8.0)
 
 
+def fill(la, lo):
+    """A motorway's 8 m fill along y = 0 (its top 12 m wide, 1:1 slopes) over the marsh, cut through by a street across
+    it at |x| < 8: the elevation (a lidar model) under a short overpass, I-405 at 34.0492 N 118.4486 W."""
+    e, n = enu(la, lo)
+    bank = np.clip(14.0 - np.abs(n), 0.0, 8.0)
+    return MARSH + np.where(np.abs(e) < 8.0, 0.0, bank)
+
+
+def overpass_road():
+    """A motorway along y = 0 from x -300 to 300, a 40 m bridge over the street (x -20 to 20)."""
+    return features([[(-300.0, 0.0), (300.0, 0.0)]], ["motorway"], flags=[(0, "is_bridge", 280.0 / 600, 320.0 / 600)])
+
+
 def deck_road():
     """A motorway along y = 0 from x -300 to 300, a bridge over its middle 360 m."""
     return features([[(-300.0, 0.0), (300.0, 0.0)]], ["motorway"], flags=[(0, "is_bridge", 0.2, 0.8)])
@@ -94,6 +107,32 @@ class DeckGroundTest(unittest.TestCase):
             on = self.grader(elev).apply(la, lo, elev(la, lo))
             off = self.grader(elev, on=False).apply(la, lo, elev(la, lo))
             np.testing.assert_allclose(on, off, atol=1e-9, err_msg=elev.__name__)
+
+    def test_abutment_on_its_fill_kept(self):
+        """A short overpass's ends stand on the approach's fill, which the elevation holds along the deck right up to
+        the street: no lowering at an end no other deck goes on from (DECK_GROUND_ABUT_M); I-405's decks read their
+        ends 5 m low (a 21 % climb on the deck, a ledge off the fill)."""
+        la, lo, _e, _n = grid([-19.0, -17.0, 17.0, 19.0], [0.0])
+        with mock.patch.object(grading, "DECK_GROUND_ON", True):
+            g = grading.Grader(FRAME, FakeMD(overpass_road()), fill)
+        z = g.apply(la, lo, fill(la, lo))
+        np.testing.assert_allclose(z, MARSH + 8.0, atol=0.5)
+        # (the street under the deck's middle is the marsh)
+        la, lo, _e, _n = grid([0.0], [0.0])
+        self.assertLess(float(g.apply(la, lo, fill(la, lo))[0]), MARSH + 0.5)
+
+    def test_abut_taper(self):
+        line = np.array([[0.0, 0.0], [60.0, 0.0]])
+        s = np.array([0.0, 5.0, 10.0, 30.0, 55.0, 60.0])
+        t = grading.deck_ground_abut_taper(line, s, [], fade=10.0)
+        np.testing.assert_allclose(t[[0, 2, 3, 4, 5]], [0.0, 1.0, 1.0, 0.5, 0.0], atol=1e-9)
+        # a deck going on past the far end (a viaduct's next part): a joint there, lowered as before
+        nxt = np.array([[60.0, 0.0], [200.0, 0.0]])
+        t = grading.deck_ground_abut_taper(line, s, [nxt], fade=10.0)
+        np.testing.assert_allclose(t[[0, 3, 5]], [0.0, 1.0, 1.0], atol=1e-9)
+        # ... but not a copy of the same deck, nor a twin carriageway's deck 14 m beside it
+        t = grading.deck_ground_abut_taper(line, s, [line.copy(), line + [0.0, 14.0]], fade=10.0)
+        np.testing.assert_allclose(t[[0, 5]], [0.0, 0.0], atol=1e-9)
 
     def test_kept_with_the_plans(self):
         """Another process reading the cell's plans from the plan cache corrects the ground the same, without the

@@ -14,6 +14,8 @@ import re
 import unicodedata
 
 import numpy as np
+import dmath
+import dnp
 import routeshields
 
 MAIN_CLASSES = ('motorway', 'trunk')
@@ -99,8 +101,8 @@ def index_records(main_ways, links, coords, node_tags):
                     incoming[b].append((a, wid, tags))
     def delta(a, b):
         p, q = np.asarray(coords[a]), np.asarray(coords[b])
-        return (q-p)*[111320.*math.cos(math.radians(float((p[1]+q[1])/2))), 111320.]
-    def unit(d): return d/max(float(np.linalg.norm(d)), 1e-9)
+        return (q-p)*[111320.*dmath.cos(math.radians(float((p[1]+q[1])/2))), 111320.]
+    def unit(d): return d/max(float(dnp.norm(d)), 1e-9)
     out = []
     for rid, source, tags in links:
         if len(source) < 2 or tags.get('access') in ('private', 'no') or tags.get('service') == 'emergency_access':
@@ -117,34 +119,34 @@ def index_records(main_ways, links, coords, node_tags):
         if len(ramp) < 2:
             continue
         rd = unit(delta(ramp[0], ramp[min(2, len(ramp)-1)]))
-        candidates = [(float(unit(delta(a, nid))@rd), a, wid, wt) for a, wid, wt in incoming[nid]]
+        candidates = [(float(dnp.matmul(unit(delta(a, nid)), rd)), a, wid, wt) for a, wid, wt in incoming[nid]]
         candidates.sort(key=lambda c: (-c[0], c[2], c[1]))
         if not candidates or candidates[0][0] < .15:
             continue
         _, previous, mid, mtags = candidates[0]
-        approach, visited, length = [nid, previous], {nid, previous}, float(np.linalg.norm(delta(previous, nid)))
+        approach, visited, length = [nid, previous], {nid, previous}, float(dnp.norm(delta(previous, nid)))
         main_ids = {mid}
         while length < APPROACH_M:
             at, after = approach[-1], approach[-2]
             d = unit(delta(at, after))
-            choices = [(float(unit(delta(a, at))@d), a, wid) for a, wid, _ in incoming[at]
+            choices = [(float(dnp.matmul(unit(delta(a, at)), d)), a, wid) for a, wid, _ in incoming[at]
                        if a not in visited]
             choices.sort(key=lambda c: (-c[0], c[2], c[1]))
             if not choices or choices[0][0] < .65 or (len(choices) > 1 and choices[0][0]-choices[1][0] < .12):
                 break
             _, a, wid = choices[0]
-            length += float(np.linalg.norm(delta(a, at)))
+            length += float(dnp.norm(delta(a, at)))
             approach.append(a); visited.add(a); main_ids.add(wid)
         # Retain enough of a split ramp to determine left/right even at a parallel tip.
         main_travel = unit(delta(previous, nid))
         right = np.array([main_travel[1], -main_travel[0]])
         offsets, run = [], 0.
         for a, b in zip(ramp[:-1], ramp[1:]):
-            step = float(np.linalg.norm(delta(a, b)))
+            step = float(dnp.norm(delta(a, b)))
             if run+step > 150.:
                 tip = delta(nid, a)+delta(a, b)*(150.-run)/max(step,1e-9)
-                offsets.append(float(tip@right)); break
-            offsets.append(float(delta(nid, b)@right)); run += step
+                offsets.append(float(dnp.matmul(tip, right))); break
+            offsets.append(float(dnp.matmul(delta(nid, b), right))); run += step
         # Use the first clear separation, before a loop ramp can turn across the highway.
         offset = next((v for v in offsets if abs(v) > 1.), max(offsets,key=abs,default=1.))
         side = 1 if offset >= 0 else -1
@@ -160,11 +162,11 @@ def index_records(main_ways, links, coords, node_tags):
 
 def _de_delta(coords, a, b):
     p, q = np.asarray(coords[a]), np.asarray(coords[b])
-    return (q-p)*[111320.*math.cos(math.radians(float((p[1]+q[1])/2))), 111320.]
+    return (q-p)*[111320.*dmath.cos(math.radians(float((p[1]+q[1])/2))), 111320.]
 
 
 def _de_unit(d):
-    return d/max(float(np.linalg.norm(d)), 1e-9)
+    return d/max(float(dnp.norm(d)), 1e-9)
 
 
 def de_walk(neighbours, coords, start, second, first_way, limit, downstream=False):
@@ -173,7 +175,7 @@ def de_walk(neighbours, coords, start, second, first_way, limit, downstream=Fals
     first_way, on to limit metres; upstream over incoming edges {node: [(from, way id, tags)]} or downstream over
     outgoing ones {node: [(to, way id, tags)]}. (nodes, s of each node from start, edges [[way id, s from, s to]],
     stop: 'limit' | 'end' | 'bend' | 'ambiguous')."""
-    step = float(np.linalg.norm(_de_delta(coords, second, start)))
+    step = float(dnp.norm(_de_delta(coords, second, start)))
     nodes, s, visited = [start, second], [0., step], {start, second}
     edges, stop = [[first_way, 0., step]], 'limit'
     while s[-1] < limit:
@@ -184,7 +186,7 @@ def de_walk(neighbours, coords, start, second, first_way, limit, downstream=Fals
             if other in visited or other not in coords:
                 continue
             d = _de_delta(coords, at, other) if downstream else _de_delta(coords, other, at)
-            choices.append((float(_de_unit(d)@travel), other, wid))
+            choices.append((float(dnp.matmul(_de_unit(d), travel)), other, wid))
         choices.sort(key=lambda c: (-c[0], c[2], c[1]))
         if not choices:
             stop = 'end'; break
@@ -193,7 +195,7 @@ def de_walk(neighbours, coords, start, second, first_way, limit, downstream=Fals
         if len(choices) > 1 and choices[0][0]-choices[1][0] < .12:
             stop = 'ambiguous'; break
         _, other, wid = choices[0]
-        length = float(np.linalg.norm(_de_delta(coords, at, other)))
+        length = float(dnp.norm(_de_delta(coords, at, other)))
         if edges[-1][0] == wid:
             edges[-1][2] = s[-1]+length
         else:
@@ -209,7 +211,7 @@ def _xy(frame, lonlat):
 
 def _station(path, distance):
     ab = np.diff(path[:, :2], axis=0)
-    lengths = np.linalg.norm(ab, axis=1)
+    lengths = dnp.norm(ab, axis=1)
     arc = np.r_[0., np.cumsum(lengths)]
     if len(arc) < 2 or arc[-1] < 1e-3:
         return None
@@ -265,7 +267,7 @@ def _clear(centre, radius, polygons):
         a, b = poly[:-1]-centre, poly[1:]-centre
         ab = b-a
         t = np.clip(-(a*ab).sum(1)/np.maximum((ab*ab).sum(1), 1e-12), 0., 1.)
-        if np.min(np.linalg.norm(a+t[:, None]*ab, axis=1)) < radius:
+        if np.min(dnp.norm(a+t[:, None]*ab, axis=1)) < radius:
             return False
         crosses = (a[:, 1] > 0.) != (b[:, 1] > 0.)
         hit = a[crosses, 0]-a[crosses, 1]*ab[crosses, 0]/ab[crosses, 1]
@@ -277,10 +279,10 @@ def _clear(centre, radius, polygons):
 def _spans(poly, at, travel, outward):
     """Paved intervals along a highway cross-section, including curved/looping ribbons."""
     a, b = poly[:-1]-at, poly[1:]-at
-    da, db = a@travel, b@travel
+    da, db = dnp.matmul(a, travel), dnp.matmul(b, travel)
     cuts = (da > 0.) != (db > 0.)
     hit = a[cuts]+(b-a)[cuts]*(-da[cuts]/(db-da)[cuts])[:, None]
-    lateral = np.sort(hit@outward)
+    lateral = np.sort(dnp.matmul(hit, outward))
     return list(zip(lateral[::2], lateral[1::2]))
 
 
@@ -317,7 +319,7 @@ def _compute_gore(extra, approach, ramp, pavements, ramp_mains, width_panel, max
             if not sp.link or sp.cls not in MAIN_CLASSES:
                 continue
             near = _nearest(q, [(fid, sp, line, 0.)])
-            if near[0] <= 35. and near[7]*(sp.dir or 1)@direction >= .5:
+            if near[0] <= 35. and dnp.matmul(near[7]*(sp.dir or 1), direction) >= .5:
                 choices.append((near[0], fid))
         if choices:
             fid = min(choices)[1]
@@ -338,8 +340,8 @@ def _compute_gore(extra, approach, ramp, pavements, ramp_mains, width_panel, max
         choices = []
         for fid, sp, line, width in main_rows:
             near = _nearest(q, [(fid, sp, line, 0.)])
-            travel = near[7]*(sp.dir or (1 if near[7]@direction >= 0. else -1))
-            if travel@direction < .5 or abs((q-near[6])@travel) > 2.:
+            travel = near[7]*(sp.dir or (1 if dnp.matmul(near[7], direction) >= 0. else -1))
+            if dnp.matmul(travel, direction) < .5 or abs(dnp.matmul(q-near[6], travel)) > 2.:
                 continue                 # no extrapolation beyond a missing through-road segment
             choices.append((near[0], fid, near, width, travel))
         if not choices:
@@ -349,7 +351,7 @@ def _compute_gore(extra, approach, ramp, pavements, ramp_mains, width_panel, max
         at = line[k]*(1.-t)+line[k+1]*t
         outward = np.array([travel[1], -travel[0]])*extra['side']
         cross = roadlanes.cross(line)
-        edge = abs((cross[k]*(1.-t)+cross[k+1]*t)@outward)*width/2
+        edge = abs(dnp.matmul(cross[k]*(1.-t)+cross[k+1]*t, outward))*width/2
         spans = [span for poly in ramp_polys for span in _spans(poly, at[:2], travel, outward)
                  if span[1] > edge]
         if not spans:
@@ -374,7 +376,7 @@ def _nearest(q, roads):
         l2 = np.maximum((ab * ab).sum(1), 1e-12)
         t = np.clip(((q - line[:-1, :2]) * ab).sum(1) / l2, 0., 1.)
         at = line[:-1, :2] + t[:, None] * ab
-        dist = np.linalg.norm(at - q, axis=1)
+        dist = dnp.norm(at - q, axis=1)
         k = int(dist.argmin())
         candidate = (float(dist[k]), fid, spec, line, k, float(t[k]), at[k], ab[k] / math.sqrt(l2[k]))
         if best is None or candidate[0] < best[0]:
@@ -384,7 +386,7 @@ def _nearest(q, roads):
 
 def _travel(near, direction):
     tangent = near[7]
-    return tangent if float(tangent @ direction) >= 0. else -tangent
+    return tangent if float(dnp.matmul(tangent, direction)) >= 0. else -tangent
 
 
 def _ground_z(frame, elev, point):
@@ -401,7 +403,7 @@ def _on_deck(point, chunks, radius):
         ab = np.diff(line[:, :2], axis=0)
         l2 = np.maximum((ab * ab).sum(1), 1e-12)
         t = np.clip(((point - line[:-1, :2]) * ab).sum(1) / l2, 0., 1.)
-        d = np.linalg.norm(line[:-1, :2] + t[:, None] * ab - point, axis=1)
+        d = dnp.norm(line[:-1, :2] + t[:, None] * ab - point, axis=1)
         if float(d.min()) < float(chunk.get('w', 0.)) / 2 + radius:
             return True
     return False
@@ -458,7 +460,7 @@ def place(frame, objects, roads, box, elev, chunks=(), left_hand=False, mph=True
                 continue
             spec = near[2]
             travel = near[7] * (spec.dir or 1) if spec.oneway else _travel(near, direction)
-            if float(travel @ direction) < .45:
+            if float(dnp.matmul(travel, direction)) < .45:
                 continue
             found.append((near[0], near, travel, row[3]))
         return min(found, key=lambda x: (x[0], x[1][1])) if found else None
@@ -493,7 +495,7 @@ def place(frame, objects, roads, box, elev, chunks=(), left_hand=False, mph=True
             cross = roadlanes.cross(line)
             # The fourth row value is its generated ribbon width. Its cross-section can
             # vary through lane-count changes, rather than being the native Spec width.
-            edge = abs((cross[k]*(1.-t)+cross[k+1]*t)@right)*paved_width/2.
+            edge = abs(dnp.matmul(cross[k]*(1.-t)+cross[k+1]*t, right))*paved_width/2.
             centre = at[:2] + right * side * (edge + 2. + width / 2.)
             # Never put a panel in a nearby road's pavement or on a bridge deck (a ramp still mapped as a bridge where it
             # comes down: not in the ground pavements; an EXIT 3 panel stood in the Fallsway's lane where the Jones
@@ -726,7 +728,7 @@ class Mesh:
                           (-width/2+radius,bottom+height-radius,90), (-width/2+radius,bottom+radius,180)):
             for angle in np.linspace(start,start+90.,7):
                 a = math.radians(angle)
-                outline.append((offset+y+radius*math.cos(a),z+radius*math.sin(a)))
+                outline.append((offset+y+radius*dmath.cos(a),z+radius*dmath.sin(a)))
         return np.asarray(outline)
 
     def rounded(self, width, bottom, height, radius, depth, material, back=False, front=True, offset=0.):
@@ -845,7 +847,7 @@ class Mesh:
                               [0.,1.],[-.22,.91],[-.37,.78],[-.46,.62],[-.50,.42],[-.50,.14],[-.46,.07],[-.32,.02]])
         else:
             angle=np.linspace(0.,2*math.pi,49)[:-1]
-            contour=np.c_[.49*np.cos(angle),.5+.49*np.sin(angle)]
+            contour=np.c_[.49*dnp.cos(angle),.5+.49*dnp.sin(angle)]
         outer=contour*[w,h]+[y,bottom]
         inner=(contour-[0.,.5])*[w-.055,h-.055]+[y,bottom+h*.5]
         # Separate faces at one depth; no stacked white fill under a coloured face.

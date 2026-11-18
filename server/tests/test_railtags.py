@@ -63,6 +63,40 @@ class RailTagsTest(unittest.TestCase):
             self.assertEqual(len(f._rail_nodes), 1)
             self.assertEqual(len(fetch.asked), n)
 
+    def test_preserved_joined_only_with_the_lifecycle_switch(self):
+        """railway:preserved (a heritage line, railways.heritage) is an attr only with BNE_RAIL_LIFECYCLE: off, the
+        road layer (and its cache) is the same whichever shard build it was joined from; an old shard (no such tag)
+        joins with the switch on as None, usage still there."""
+        from unittest import mock
+        f0 = features([[(0.0, 100.0), (250.0, 100.0)]], ["standard_gauge"], subtypes=["rail"])
+        lo, la = f0.lonlat[0]
+        key = mapcells.cell_of(float(la), float(lo))
+        sx, sy = key.x >> (key.z - 7), key.y >> (key.z - 7)
+
+        def joined(preserved, on):
+            f = features([[(0.0, 100.0), (250.0, 100.0)]], ["standard_gauge"], subtypes=["rail"])
+            f.attrs["src_record"] = np.array(["w11@3"])
+            t = {"railway": "disused", "usage": "tourism"}
+            if preserved:
+                t["railway:preserved"] = "yes"
+            shard = {"ways": {"11": t}, "nodes": []}
+            fetch = _Fetcher({"manifest.json": json.dumps({"built": "2026-10-30T03:00:00Z"}).encode(),
+                              f"/{sx}/{sy}.json.gz": gzip.compress(json.dumps(shard).encode())})
+            with tempfile.TemporaryDirectory() as d, mock.patch.object(railtags, "LIFECYCLE_ON", on):
+                railtags.RailTags(d, fetch).join(f, key)
+            return f
+        for preserved in (False, True):
+            off = joined(preserved, False)
+            self.assertNotIn("osm_railway:preserved", off.attrs)
+            self.assertEqual(off.attrs["osm_usage"][0], "tourism")
+        self.assertEqual(sorted(joined(False, False).attrs), sorted(joined(True, False).attrs))
+        self.assertEqual(joined(True, True).attrs["osm_railway:preserved"][0], "yes")
+        old = joined(False, True)
+        self.assertIsNone(old.attrs["osm_railway:preserved"][0], "an old shard: none")
+        self.assertEqual(old.attrs["osm_usage"][0], "tourism")
+        import railways
+        self.assertTrue(railways.heritage(old, 0), "usage=tourism alone is a heritage line")
+
     def test_no_shard_no_tags(self):
         f = features([[(0.0, 100.0), (250.0, 100.0)]], ["standard_gauge"], subtypes=["rail"])
         f.attrs["src_record"] = np.array(["w11@3"])
@@ -79,6 +113,36 @@ class RailTagsTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             railtags.RailTags(d, _Fetcher({})).join(f, mapcells.cell_of(float(la), float(lo)))
         self.assertNotIn("osm_railway", f.attrs)
+
+    def test_an_unreachable_shard_of_a_known_build_is_a_fault_and_joined_again(self):
+        """A known build whose shard cannot be had (a failed download): no tags, a revisit fault (what is built on
+        the untagged layer is not kept) and MapData joins again next time; before, the layer was marked joined for
+        that build and plans made without the lane / rail tags were kept as complete (Codex, 2026-11-14). A dataset
+        not published (no manifest) is no fault."""
+        import revisit
+        from mapdata import MapData
+        for cls, sub, cls_name in ((railtags.RailTags, "rail", "standard_gauge"), (railtags.LaneTags, "road", "primary")):
+            f = features([[(0.0, 100.0), (250.0, 100.0)]], [cls_name], subtypes=[sub])
+            f.attrs["src_record"] = np.array(["w21@3"])
+            lo, la = f.lonlat[0]
+            key = mapcells.cell_of(float(la), float(lo))
+            name = "rail" if cls is railtags.RailTags else "lanes"
+            fetch = _Fetcher({f"{name}/manifest.json": json.dumps({"built": "2026-11-14T03:00:00Z"}).encode()})
+            fetch.get = (lambda real: lambda url, *a, **k: (_ for _ in ()).throw(OSError("offline"))
+                         if url.endswith(".json.gz") else real(url, *a, **k))(fetch.get)
+            with tempfile.TemporaryDirectory() as d:
+                tags = cls(d, fetch)
+                with revisit.scope() as b:
+                    self.assertIs(tags.join(f, key), False, cls.__name__)
+                self.assertTrue(b.n, cls.__name__ + ": a fault")
+                md = SimpleNamespace(rail_tags=tags, lane_tags=tags)
+                flag = "_rails_built" if cls is railtags.RailTags else "_lanes_built"
+                with revisit.scope():
+                    (MapData._rails if cls is railtags.RailTags else MapData._lanes)(md, key, "roads", f)
+                self.assertNotIn(flag, f.__dict__, cls.__name__ + ": not marked joined")
+                with revisit.scope() as b2:     # (not published: no manifest, no fault)
+                    self.assertIsNone(cls(d + "/x", _Fetcher({})).join(f, key))
+                self.assertEqual(b2.n, 0, cls.__name__)
 
 
 
@@ -148,6 +212,68 @@ class OutageTest(unittest.TestCase):
             self.assertEqual(sum(u.endswith("/10/20.json.gz") for u in calls), 1)
 
 
+class DataHostTest(unittest.TestCase):
+    """A manifest's "data" (the build's files on the tile host, R2 behind the CDN; the manifest stays on Pages): the
+    shards are read there, Pages when it fails (not when it answers 404), and a manifest without one reads Pages."""
+
+    DATA = "https://tiles.test/data/rail/b1"
+
+    class Site:
+        def __init__(self, manifest, down=(), files=None):
+            self.manifest, self.down, self.calls = manifest, down, []
+            self.files = files if files is not None else {"/1/2.json.gz": gzip.compress(b'{"nodes": []}')}
+
+        def get(self, url, kind="demand", **_kw):
+            self.calls.append(url)
+            if url.endswith("manifest.json"):
+                return SimpleNamespace(body=json.dumps(self.manifest).encode())
+            if any(url.startswith(d) for d in self.down):
+                raise netfetch.FetchFailed(url + ": HTTP 522", url)
+            for k, v in self.files.items():
+                if url.endswith(k):
+                    return SimpleNamespace(body=v)
+            raise netfetch.NotFound(url)
+
+    def test_data_url(self):
+        self.assertEqual(railtags.data_url({"data": self.DATA + "/"}), self.DATA)
+        for bad in ({}, {"data": None}, {"data": "http://tiles.test/x"}, {"data": 5}, {"data": "https://"}, None, []):
+            self.assertIsNone(railtags.data_url(bad), bad)
+
+    def test_shards_from_the_data_host(self):
+        with tempfile.TemporaryDirectory() as d:
+            site = self.Site({"built": "b1", "data": self.DATA})
+            s = railtags.Shards(d, site, "rail")
+            self.assertEqual(s.shard(1, 2), {"nodes": []})
+            self.assertEqual(site.calls[1:], [f"{self.DATA}/1/2.json.gz"])
+            self.assertEqual(s.shard(5, 5), {}, "a 404 there: none")
+            self.assertEqual(site.calls[2:], [f"{self.DATA}/5/5.json.gz"], "not asked of Pages")
+            # (a fresh process: the pinned manifest names the host too)
+            site2 = self.Site({"built": "b1"})
+            s2 = railtags.Shards(d, site2, "rail")
+            self.assertEqual(s2.version(), "b1")
+            self.assertEqual(s2.data, self.DATA)
+            self.assertEqual(site2.calls, [])
+
+    def test_pages_when_the_data_host_fails(self):
+        with tempfile.TemporaryDirectory() as d:
+            site = self.Site({"built": "b1", "data": self.DATA}, down=("https://tiles.test",))
+            s = railtags.Shards(d, site, "rail")
+            self.assertEqual(s.shard(1, 2), {"nodes": []})
+            self.assertEqual(site.calls[1:], [f"{self.DATA}/1/2.json.gz", f"{s.base}/1/2.json.gz"])
+
+    def test_both_failing_is_not_none_there(self):
+        site = self.Site({}, down=("https://tiles.test",), files={})
+        with self.assertRaises(netfetch.FetchFailed):
+            railtags.fetch_data(site, self.DATA, "https://pages.test/rail", "1/2.json.gz")
+
+    def test_an_old_manifest_reads_pages(self):
+        with tempfile.TemporaryDirectory() as d:
+            site = self.Site({"built": "b0"})
+            s = railtags.Shards(d, site, "rail")
+            self.assertEqual(s.shard(1, 2), {"nodes": []})
+            self.assertEqual(site.calls[1:], [f"{s.base}/1/2.json.gz"])
+
+
 class KnownPinnedTest(unittest.TestCase):
     """Shards.known(): the pinned manifest's build before this run asked for it (the tiles' cache keys the same from
     a run's start: None until the manifest came before, 2026-11-04)."""
@@ -170,6 +296,28 @@ class KnownPinnedTest(unittest.TestCase):
                 self.assertEqual(s2.known(), "2026-11-08T00:00Z")
             finally:
                 railtags.ON = on
+
+    def test_a_pin_another_process_writes_later_is_seen(self):
+        """A process that looked before the manifest was pinned (another process fetched it a few seconds into a
+        first run) takes it once it is there: it kept None in its keys for the whole run before, and that run's plans,
+        cell facts and tiles were never found again (2026-11-13)."""
+        import json
+        import tempfile
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as d:
+            on = railtags.ON
+            railtags.ON = True
+            try:
+                s = railtags.Shards(d, None, "rail")
+                self.assertIsNone(s.known())
+                os.makedirs(s.dir)
+                with open(os.path.join(s.dir, "manifest.json"), "w") as fh:
+                    json.dump({"built": "2026-11-12T18:20:31Z"}, fh)
+                with mock.patch.object(railtags, "PIN_RECHECK_S", 0.0):
+                    self.assertEqual(s.known(), "2026-11-12T18:20:31Z")
+            finally:
+                railtags.ON = on
+
 
 def _shard_xy(lat, lon):
     key = mapcells.cell_of(lat, lon)

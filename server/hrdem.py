@@ -29,6 +29,8 @@ import threading
 from collections import OrderedDict
 
 import numpy as np
+import dmath
+import dnp
 
 import cog as cogmod
 import rangeread
@@ -42,6 +44,23 @@ ITEM_M = 500000.0
 NODATA_LIMIT = -1000.0          # heights below this are nodata (the files' -32767, whatever the tag says)
 # Where to ask at all: Canada's south (the DTM's extent), as lat / lon (south, west, north, east)
 BOUNDS = (41.6, -141.1, 62.0, -52.5)
+# ... less the US south of Canada: per 0.5-degree column of longitude from SOUTH_W0 east, the latitude below which no
+# tile is asked: Canada's southernmost land in the column and 0.25 degrees either side, less 0.15 degrees (17 km),
+# from Overture's borders (country_bands.bin, 0.01-degree samples; 2026-11-17). BOUNDS alone took in the northern US
+# down to 41.6 N, and a tester's drive in Massachusetts asked the mosaic's files for every lidar tile. Tiles that
+# reach within the margin are still asked, so a lidar project running past the border keeps its heights.
+SOUTH_W0, SOUTH_STEP = -141.5, 0.5
+SOUTH = (
+    60.10, 60.05, 60.00, 60.00, 59.75, 59.40, 59.15, 58.75, 58.75, 58.85, 59.00, 59.35, 59.10, 58.70, 58.45,
+    53.20, 52.70, 52.35, 51.95, 51.60, 51.35, 51.05, 50.80, 50.50, 50.40, 49.90, 49.65, 49.45, 49.05, 48.80,
+    48.60, 48.35, 48.30, 48.20, 48.10, 48.05, 48.05, 48.10, 48.80, 48.80, 48.80, 48.85, 48.80, 48.80, 48.85,
+    48.85, 48.85, 48.80, 48.80, 48.80, 48.80, 48.80, 48.80, 48.80, 48.80, 48.80, 48.80, 48.80, 48.80, 48.80,
+    48.80, 48.80, 48.80, 48.80, 48.80, 48.80, 48.80, 48.80, 48.80, 48.80, 48.80, 48.80, 48.80, 48.80, 48.80,
+    48.80, 48.80, 48.80, 48.80, 48.80, 48.80, 48.80, 48.80, 48.80, 48.80, 48.80, 48.85, 48.85, 48.85, 48.85,
+    48.80, 48.80, 48.80, 48.50, 48.35, 48.35, 48.35, 48.05, 48.00, 47.85, 47.85, 47.90, 47.80, 47.80, 47.80,
+    47.85, 47.90, 47.70, 47.50, 47.30, 47.10, 46.90, 46.45, 46.30, 45.90, 45.50, 41.60, 41.60, 41.60, 41.60,
+    41.80, 42.05, 42.10, 42.20, 42.35, 42.55, 43.45, 43.45, 43.45, 43.45, 43.55, 44.05, 44.35, 44.70, 44.80,
+    44.80, 44.85, 44.85, 44.85, 44.85, 44.85, 45.05, 45.20, 45.75, 46.80, 47.00, 45.50, 44.95, 44.10, 43.10)
 TILE = 512                      # dem.py's tile size
 TILE_CACHE_BYTES = 256 * 1024 * 1024
 LATTICE_M = 1.0                 # m: the terrain's lattice; finer mosaic pixels are not read (z16's 0.8 m: the 1 m overview)
@@ -55,26 +74,26 @@ _LAT1, _LAT2, _LAT0, _LON0 = map(math.radians, (49.0, 77.0, 49.0, -95.0))
 
 
 def _m(phi):
-    return math.cos(phi) / math.sqrt(1 - (_E * math.sin(phi)) ** 2)
+    return dmath.cos(phi) / math.sqrt(1 - dnp.sq(_E * dmath.sin(phi)))
 
 
 def _t(phi):
-    s = np.sin(phi)
-    return np.tan(np.pi / 4 - phi / 2) / ((1 - _E * s) / (1 + _E * s)) ** (_E / 2)
+    s = dnp.sin(phi)
+    return dnp.tan(np.pi / 4 - phi / 2) / dnp.power((1 - _E * s) / (1 + _E * s), _E / 2)
 
 
-_N = (math.log(_m(_LAT1)) - math.log(_m(_LAT2))) / (math.log(float(_t(_LAT1))) - math.log(float(_t(_LAT2))))
-_FF = _m(_LAT1) / (_N * float(_t(_LAT1)) ** _N)
-_R0 = _A * _FF * float(_t(_LAT0)) ** _N
+_N = (dmath.log(_m(_LAT1)) - dmath.log(_m(_LAT2))) / (dmath.log(float(_t(_LAT1))) - dmath.log(float(_t(_LAT2))))
+_FF = _m(_LAT1) / (_N * dnp.power(float(_t(_LAT1)), _N))
+_R0 = _A * _FF * dnp.power(float(_t(_LAT0)), _N)
 
 
 def lcc(lat, lon):
     """EPSG:3979 easting / northing (m) of WGS84 lat / lon (degrees; arrays)."""
     phi = np.radians(np.asarray(lat, np.float64))
     lam = np.radians(np.asarray(lon, np.float64))
-    r = _A * _FF * _t(phi) ** _N
+    r = _A * _FF * dnp.power(_t(phi), _N)
     th = _N * (lam - _LON0)
-    return r * np.sin(th), _R0 - r * np.cos(th)
+    return r * dnp.sin(th), _R0 - r * dnp.cos(th)
 
 
 def item_of(x, y):
@@ -87,22 +106,35 @@ def tile_lat_lon(z, x, y, size=TILE):
     n = 2 ** z
     i = (np.arange(size) + 0.5) / size
     lon = (x + i) / n * 360.0 - 180.0
-    lat = np.degrees(np.arctan(np.sinh(np.pi * (1 - 2 * (y + i) / n))))
+    lat = np.degrees(dnp.arctan(dnp.sinh(np.pi * (1 - 2 * (y + i) / n))))
     return np.broadcast_to(lat[:, None], (size, size)), np.broadcast_to(lon[None, :], (size, size))
 
 
 def tile_bounds(z, x, y):
     """(south, west, north, east) of tile (z, x, y)."""
     n = 2 ** z
-    lat = lambda yy: math.degrees(math.atan(math.sinh(math.pi * (1 - 2 * yy / n))))     # noqa: E731
+    lat = lambda yy: math.degrees(dmath.atan(dmath.sinh(math.pi * (1 - 2 * yy / n))))     # noqa: E731
     return lat(y + 1), x / n * 360.0 - 180.0, lat(y), (x + 1) / n * 360.0 - 180.0
 
 
-def covers(z, x, y):
-    """Whether tile (z, x, y) touches BOUNDS (where the mosaic is asked at all)."""
+def in_bounds(z, x, y):
+    """Whether tile (z, x, y) touches the BOUNDS rectangle: dem.coarse_at's "the Canadian lidar reads here" (the road
+    plans' coarse-elevation rules; kept as it was so no plan changes with covers' narrower ask, Codex review)."""
     s, w, n, e = tile_bounds(z, x, y)
     S, W, N, E = BOUNDS
     return s < N and n > S and w < E and e > W
+
+
+def covers(z, x, y):
+    """Whether tile (z, x, y) touches BOUNDS and reaches north of SOUTH (where the mosaic is asked at all)."""
+    if not in_bounds(z, x, y):
+        return False
+    s, w, n, e = tile_bounds(z, x, y)
+    a = math.floor((w - SOUTH_W0) / SOUTH_STEP)
+    b = math.floor((e - SOUTH_W0) / SOUTH_STEP)
+    if a < 0 or b >= len(SOUTH):
+        return True                     # (past the table: west of Alaska's panhandle, east of Maine)
+    return n > min(SOUTH[a:b + 1])
 
 
 class Hrdem:
@@ -147,8 +179,8 @@ class Hrdem:
         ex, ny = lcc(lat, lon)
         # the tile's ground pixel (m) at its centre: the mosaic level that is as fine as that or one finer
         clat = math.radians(float(lat[size // 2, 0]))
-        px = 40075016.686 * math.cos(clat) / 2 ** z / size
-        want = max(0, min(MAX_LEVEL, int(math.floor(math.log2(max(px, min_px, 1.0))))))
+        px = 40075016.686 * dmath.cos(clat) / 2 ** z / size
+        want = max(0, min(MAX_LEVEL, int(math.floor(dmath.log2(max(px, min_px, 1.0))))))
         out = np.zeros((size, size), np.float32)
         ok = np.zeros((size, size), bool)
         ix = np.floor(ex / ITEM_M).astype(np.int64)

@@ -68,7 +68,7 @@ def server(md, out):
     anchor = SimpleNamespace(id=1, lat=LAT, lon=LON, frame=FRAME, zooms=[15], bridges=None, tunnels=None)
     ns = SimpleNamespace(mapdata=md, anchors={1: anchor}, road_pool=None, far_bld_pool=None, sign_pool=None,
         gas_stations=False, surface=None,
-        grader_for=lambda a: None, ground=lambda f, la, lo, z: z, dem=FakeDem(),
+        grader_for=lambda a: None, ground=lambda f, la, lo, z, g=None: z, dem=FakeDem(),
         grader_lock=threading.Lock(), sea=None, buildings=False, road_widths=None,
         left_hand=lambda a: False, mph=lambda a: True, anchor_q=lambda a: None, buried=lambda a: 0.0,
         country=lambda a: 'US', lamp_region=lambda a: None, keep_fuel_pads=lambda pads: None,
@@ -115,7 +115,7 @@ class PipelineTest(unittest.TestCase):
             with mock.patch.object(blockworker, '_s', state), mock.patch.object(revisit, 'ON', True), \
                     mock.patch.object(revisit, 'SKIP', set()):
                 blockworker.roads_tile(1, LAT, LON, 15, 0, 0, str(first), '/temp/first', False, .05)
-                self.assertTrue(list(Path(root, 'revisit').rglob('*.zip')))
+                self.assertTrue(list(Path(root, 'revisit').rglob('*.rpk')))     # (kept in a pack)
                 with mock.patch.object(blockworker, '_roads_tile', side_effect=AssertionError('cache missed')):
                     path, _, pads = blockworker.roads_tile(
                         2, LAT, LON, 15, 0, 0, str(revisit_dir), '/temp/revisited', False, .05)

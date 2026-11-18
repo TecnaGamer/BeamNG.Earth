@@ -8,6 +8,7 @@
 //!   layer of a French cell, on the tiles' path: a grid of the records (~40 m bins), then an even-odd test against the
 //!   few records under each footprint's box.
 //! Both pure functions of their inputs.
+use crate::dm::Dm;
 
 use numpy::{IntoPyArray, PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2};
 use numpy::ndarray::Array2;
@@ -42,7 +43,7 @@ fn interior(xs: &[f64], ys: &[f64]) -> (f64, f64, f64) {
         return (f64::NAN, f64::NAN, 0.0);
     }
     let (x0, y0) = (xs[0], ys[0]);
-    let kx = M_PER_DEG * y0.to_radians().cos().max(0.01);
+    let kx = M_PER_DEG * y0.to_radians().dcos().max(0.01);
     // the area centroid in metres round the first vertex (shoelace)
     let (mut a2, mut cx, mut cy) = (0.0f64, 0.0f64, 0.0f64);
     for i in 0..n {

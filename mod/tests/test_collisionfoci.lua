@@ -53,12 +53,12 @@ do
     return { getId = function() return id end, getPosition = function() return { x = x, y = 0, z = 0 } end,
       getJBeamFilename = function() return jbeam end }
   end
-  local objs = { veh(1, 0, 'pickup'), veh(2, 900, 'unicycle'), veh(3, 50, 'etk800') }
+  local objs = { veh(1, 0, 'pickup'), veh(2, 900, 'unicycle'), veh(3, 50, 'etk800'), veh(4, 25000, 'spikestrip') }
   local oldBe = rawget(_G, 'be')
   be = { getObjectCount = function() return #objs end, getObject = function(_, i) return objs[i + 1] end }
   local ids = {}
   for _, v in ipairs(cf.vehicles()) do ids[#ids + 1] = v.id end
-  T.check(#ids == 2 and ids[1] == 1 and ids[2] == 3, 'the walker left out: ' .. table.concat(ids, ','))
+  T.check(#ids == 2 and ids[1] == 1 and ids[2] == 3, 'the walker and the spike strip left out: ' .. table.concat(ids, ','))
   be = oldBe
 end
 

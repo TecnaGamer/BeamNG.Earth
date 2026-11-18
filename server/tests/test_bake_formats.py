@@ -137,6 +137,10 @@ class PackTest(unittest.TestCase):
     def setUp(self):
         self.dir = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, self.dir, True)
+        import roadsurf     # (the photo's road surfaces off: their verdicts live in the machine's own cache, and a cell
+        old_on = roadsurf.ON    # with any is never read from a pack, by design)
+        roadsurf.ON = False
+        self.addCleanup(setattr, roadsurf, "ON", old_on)
 
     def test_round_trip_and_meta(self):
         os.makedirs(os.path.join(self.dir, bakepack.SUBDIR))

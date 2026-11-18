@@ -2,6 +2,7 @@
 //! profile into one mesh, with the lean collision mesh beside it. The Python's arithmetic and output order (its
 //! numpy operations one by one), so a tile's shapes stay as they were; the Python Builder gathers the pieces and
 //! calls this once (it was the larger half of a road geotile's skin: ~70 ms of ~165 in Fells Point, 2026-10-29).
+use crate::dm::Dm;
 
 use numpy::{IntoPyArray, PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2};
 use pyo3::exceptions::PyValueError;
@@ -86,7 +87,7 @@ fn interp(x: f64, xp: &[f64], fp: &[f64]) -> f64 {
 fn arclen(p: &[[f64; 3]]) -> Vec<f64> {
     let mut s = vec![0.0f64; p.len()];
     for i in 1..p.len() {
-        s[i] = s[i - 1] + (p[i][0] - p[i - 1][0]).hypot(p[i][1] - p[i - 1][1]);
+        s[i] = s[i - 1] + (p[i][0] - p[i - 1][0]).dhypot(p[i][1] - p[i - 1][1]);
     }
     s
 }
@@ -320,7 +321,7 @@ impl Mesh {
             let a = curb[(end + 1).min(k - 1)];
             let b = curb[if end >= 1 { end - 1 } else { 0 }];
             let (tx, ty) = (a[0] - b[0], a[1] - b[1]);
-            let l = tx.hypot(ty).max(1e-9);
+            let l = tx.dhypot(ty).max(1e-9);
             let want = [tx / l * sgn, ty / l * sgn, 0.0 * sgn];
             for j in 1..pr.len() as i64 - 1 {
                 let t = orient([0, j, j + 1], &local, want);
@@ -346,7 +347,7 @@ impl Mesh {
             arc = s2.iter().map(|&v| [interp(v, &s, &cx), interp(v, &s, &cy), interp(v, &s, &cz)]).collect();
             inward = s2.iter().map(|&v| {
                 let (x, y) = (interp(v, &s, &ix), interp(v, &s, &iy));
-                let n = x.hypot(y).max(1e-9);
+                let n = x.dhypot(y).max(1e-9);
                 [x / n, y / n]
             }).collect();
             s = s2;
@@ -407,7 +408,7 @@ impl Mesh {
         for w2 in out.windows(2) {
             let (a, b) = (w2[0], w2[1]);
             let t = [b[0] - a[0], b[1] - a[1]];
-            let l = t[0].hypot(t[1]).max(1e-9);
+            let l = t[0].dhypot(t[1]).max(1e-9);
             let mut nrm = [t[1] / l, -t[0] / l];
             let mid = [0.5 * (a[0] + b[0]), 0.5 * (a[1] + b[1])];
             if nrm[0] * (mid[0] - c[0]) + nrm[1] * (mid[1] - c[1]) < 0.0 {
@@ -415,7 +416,7 @@ impl Mesh {
             }
             let run = [nrm[0] * BACK_RUN * drop, nrm[1] * BACK_RUN * drop, -drop];
             let p = vec![a, b, [b[0] + run[0], b[1] + run[1], b[2] + run[2]], [a[0] + run[0], a[1] + run[1], a[2] + run[2]]];
-            let len = (b[0] - a[0]).hypot(b[1] - a[1]) / CURB_REPEAT_M;
+            let len = (b[0] - a[0]).dhypot(b[1] - a[1]) / CURB_REPEAT_M;
             let uv = vec![[0.0, v_light_low()], [len, v_light_low()], [len, v_band_low()], [0.0, v_band_low()]];
             let want = [mid[0] - c[0], mid[1] - c[1], 0.0];
             let local = p.clone();

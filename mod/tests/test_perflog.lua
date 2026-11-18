@@ -56,4 +56,25 @@ T.check(P.cause(200, { mod = { far = 30, roads = 25, trees = 20 }, engine = { Lu
   'ours spread over several parts: Lua')
 T.check(P.cause(200, { mod = {}, engine = { Render = 150 } }) == 'Render 150', 'other engine parts unchanged')
 T.check(#P.frame(0 / 0, now, ctx) == 0 and #P.frame(-1, now, ctx) == 0, 'bad frame times ignored')
+-- the minute's 1 % low and worst (lowAndWorst): one top-k pass, the same numbers as the old copy and sort
+do
+  math.randomseed(7)
+  local ok, cases = true, 0
+  for _, n in ipairs({ 1, 2, 5, 99, 100, 101, 250, 3600, 14400 }) do
+    for _ = 1, 3 do
+      local t = {}
+      for i = 1, n do t[i] = math.floor((8 + math.random() * 10 + (math.random() < 0.02 and math.random() * 80 or 0)) * 4) / 4 end
+      local a1, b1 = P.lowAndWorst(t)
+      P.TOPK_LOW = false
+      local a2, b2 = P.lowAndWorst(t)
+      P.TOPK_LOW = true
+      if a1 ~= a2 or b1 ~= b2 then ok = false end
+      cases = cases + 1
+    end
+  end
+  T.check(ok, 'lowAndWorst: the top-k pass equals the sort (' .. cases .. ' minutes, ties included)')
+  local t = { 3, 1, 2 }
+  P.lowAndWorst(t)
+  T.check(t[1] == 3 and t[2] == 1 and t[3] == 2, 'the frames are left as they were')
+end
 T.done('test_perflog')

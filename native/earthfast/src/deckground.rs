@@ -20,6 +20,7 @@
 //! Apply: at a point within a corrected deck's corridor (from foot to foot, `blend` m of fade past the feet and `end`
 //! m past the deck's ends), the ground is lowered toward the line between the feet (never raised), by that weight;
 //! of several decks, the deepest lowering (order independent).
+use crate::dm::Dm;
 
 use numpy::{IntoPyArray, PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2};
 use pyo3::prelude::*;
@@ -37,7 +38,7 @@ impl Line {
         let mut acc = 0.0;
         for i in 0..p.len() {
             if i > 0 {
-                acc += ((p[i][0] - p[i - 1][0]).powi(2) + (p[i][1] - p[i - 1][1]).powi(2)).sqrt();
+                acc += ((p[i][0] - p[i - 1][0]).sq() + (p[i][1] - p[i - 1][1]).sq()).sqrt();
             }
             arc.push(acc);
         }
@@ -158,7 +159,7 @@ impl Probe {
             }
         }
         for &phi in &self.dirs {
-            let (cs, sn) = (phi.cos(), phi.sin());
+            let (cs, sn) = (phi.dcos(), phi.dsin());
             let u = [cs * nrm[0] + sn * t[0], cs * nrm[1] + sn * t[1]];
             for &f in &self.fix {
                 let r = (line.half + f) / cs.max(0.05);
@@ -265,7 +266,7 @@ pub fn fit_deck(line: &Line, probe: &Probe, fit: &Fit, z: &[f64], masks: &[&Line
                 // (each side's nearest sample not inside another deck, nor past the deck's ends on a turned line)
                 let pick = |side: usize| (0..nf).map(|f| 1 + 2 * k + 2 * (d * nf + f) + side).find(|&j| {
                     ok[j] && (phi == 0.0 || {
-                        let shift = (line.half + probe.fix[(j - 1 - 2 * k) / 2 % nf]) * phi.tan().abs();
+                        let shift = (line.half + probe.fix[(j - 1 - 2 * k) / 2 % nf]) * phi.dtan().abs();
                         s - shift >= 0.0 && s + shift <= l
                     })
                 });
@@ -462,16 +463,20 @@ pub fn deck_ground_fit<'py>(py: Python<'py>, off: PyReadonlyArray1<'py, i64>, xy
     if counts.iter().sum::<usize>() != z.len() {
         return Err(pyo3::exceptions::PyValueError::new_err("deck_ground_fit: z does not match the probe"));
     }
+    // (each deck on its own, side by side: a cell's decks were fitted one after another, 4 % of its planning)
+    let mut starts = Vec::with_capacity(lines.len());
+    let mut at = 0;
+    for c in &counts {
+        starts.push(at);
+        at += c;
+    }
+    let (lines_, masks_, probe_, fit_, starts_, counts_) = (&lines, &masks, &probe, &fit, &starts, &counts);
     let got: Vec<Option<Patch>> = py.detach(|| {
-        let mut at = 0;
-        let mut out = Vec::with_capacity(lines.len());
-        for (i, line) in lines.iter().enumerate() {
-            let zs = &z[at..at + counts[i]];
-            at += counts[i];
-            let ms: Vec<&Line> = (mo[i] as usize..mo[i + 1] as usize).map(|j| &masks[mi[j] as usize]).collect();
-            out.push(fit_deck(line, &probe, &fit, zs, &ms));
-        }
-        out
+        crate::roadwalls::par_map(lines_.len(), 4, |i| {
+            let zs = &z[starts_[i]..starts_[i] + counts_[i]];
+            let ms: Vec<&Line> = (mo[i] as usize..mo[i + 1] as usize).map(|j| &masks_[mi[j] as usize]).collect();
+            fit_deck(&lines_[i], probe_, fit_, zs, &ms)
+        })
     });
     let active: Vec<bool> = got.iter().map(|g| g.is_some()).collect();
     let mut po = vec![0i64];
@@ -614,7 +619,7 @@ mod tests {
         let (pr, ft, l) = (probe(), fit(), deck());
         for ang in [90f64, 60.0, 40.0] {
             let a = ang.to_radians();
-            let (ux, uy) = (a.cos(), a.sin());
+            let (ux, uy) = (a.dcos(), a.dsin());
             let bank = move |x: f64, y: f64| {
                 let d = (x * uy - y * ux).abs();      // distance from the embankment's axis through (0, 0)
                 3.0 + 8.0 * ((15.0 - d) / 8.0).max(0.0).min(1.0)

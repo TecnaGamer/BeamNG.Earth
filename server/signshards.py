@@ -8,6 +8,7 @@ delta-coded (encode_path).
 import math
 
 import numpy as np
+import dmath
 
 ZOOM = 7
 FORMAT = 1
@@ -65,7 +66,7 @@ def tile(lat, lon):
     lat = min(max(float(lat), -85.05112878), 85.05112878)
     r = math.radians(lat)
     x = int(math.floor((float(lon) + 180.0) / 360.0 * n))
-    y = int(math.floor((1.0 - math.log(math.tan(r) + 1.0 / math.cos(r)) / math.pi) / 2.0 * n))
+    y = int(math.floor((1.0 - dmath.log(dmath.tan(r) + 1.0 / dmath.cos(r)) / math.pi) / 2.0 * n))
     return min(max(x, 0), n - 1), min(max(y, 0), n - 1)
 
 
@@ -74,7 +75,7 @@ def tile_bounds(x, y):
     n = 1 << ZOOM
 
     def lat(yy):
-        return math.degrees(math.atan(math.sinh(math.pi * (1 - 2 * yy / n))))
+        return math.degrees(dmath.atan(dmath.sinh(math.pi * (1 - 2 * yy / n))))
     return x / n * 360.0 - 180.0, lat(y + 1), (x + 1) / n * 360.0 - 180.0, lat(y)
 
 

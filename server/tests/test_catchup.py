@@ -5,13 +5,14 @@ import sys
 import time
 import types
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 import earthd  # noqa: E402
 
 
 def conn(behind=True):
-    s = types.SimpleNamespace(boost_on=False, calls=[])
+    s = types.SimpleNamespace(boost_on=False, calls=[], below_game=True)
 
     def load_boost(on, why, half_only=False):
         s.calls.append((on, why))
@@ -31,6 +32,17 @@ class CatchUpTest(unittest.TestCase):
         earthd.Connection.catch_up(c, 40.0)
         self.assertTrue(c.catchup and c.s.boost_on, "on again while still behind")
         self.assertEqual([on for on, _ in c.s.calls], [True, True])
+
+    def test_no_game_cores_lent_at_the_games_priority(self):
+        # ("World server priority: normal": its workers would take the game's own time on the lent cores)
+        c = conn()
+        c.s.below_game = False
+        earthd.Connection.catch_up(c, 40.0)
+        self.assertFalse(c.catchup or c.s.boost_on)
+        self.assertEqual(c.s.calls, [])
+        with mock.patch.object(earthd, "CATCHUP_LEND_AT_NORMAL", True):
+            earthd.Connection.catch_up(c, 40.0)
+        self.assertTrue(c.catchup and c.s.boost_on, "BNGE_CATCHUP_LEND_NORMAL=1: as before")
 
     def test_more_cores_when_behind_all_along(self):
         from unittest import mock

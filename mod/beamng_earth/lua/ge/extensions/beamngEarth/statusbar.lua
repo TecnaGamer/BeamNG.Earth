@@ -110,25 +110,78 @@ end
 
 local function u32(im, c) return im.GetColorU322(im.ImVec4(c[1], c[2], c[3], c[4])) end
 
-local layouts = {}       -- row -> { text, vw, fsz, w, h }: measured only when its text or the viewport changed
+local layouts = {}       -- row -> { text, vw, fsz, lines, w, h }: laid out only when its text or the viewport changed
 
--- One centred row (its own background) at y; returns the y under it.
+-- A row wider than this share of the viewport wraps (the user, 2026-11-12: "the loading bar gets cut off when to much
+-- text is shown": a long loading line ran off a narrow screen, the Steam Deck's 1280 px or a big UI font)
+M.MAX_W_FRAC = 0.9
+
+-- Pure: text in parts at its separators ('  |  ', ' · ' with any spaces round them): { {text, sep}, ... }, sep the
+-- separator before the part (nil for the first).
+local SEPS = { '|', '\194\183' }      -- (the middle dot in UTF-8)
+function M.parts(text)
+  local out, pos, sep = {}, 1, nil
+  while true do
+    local best, bs, be
+    for _, s in ipairs(SEPS) do
+      local i, j = text:find('%s+' .. s:gsub('%p', '%%%0') .. '%s+', pos)
+      if i and (not bs or i < bs) then best, bs, be = s, i, j end
+    end
+    if not bs then break end
+    out[#out + 1] = { text = text:sub(pos, bs - 1), sep = sep }
+    sep, pos = best, be + 1
+  end
+  out[#out + 1] = { text = text:sub(pos), sep = sep }
+  return out
+end
+
+-- Pure: the lines of text no wider than maxW (measure(s) -> width), broken only between parts (a part wider than
+-- maxW alone keeps a line of its own). The separator stays at the end of the line it closes.
+function M.wrap(text, maxW, measure)
+  if measure(text) <= maxW then return { text } end
+  local lines, line = {}, nil
+  local P = M.parts(text)
+  for i, p in ipairs(P) do
+    if not line then
+      line = p.text
+    else
+      local cand = line .. '  ' .. p.sep .. '  ' .. p.text
+      local after = P[i + 1] and (cand .. '  ' .. P[i + 1].sep) or cand     -- (with the separator it may end on)
+      if measure(after) <= maxW then
+        line = cand
+      else
+        lines[#lines + 1] = line .. '  ' .. p.sep
+        line = p.text
+      end
+    end
+  end
+  lines[#lines + 1] = line
+  return lines
+end
+
+-- One centred row (its own background, its lines wrapped to the viewport) at y; returns the y under it.
 local function drawRow(im, dl, vp, row, text, y)
   local vw, fsz = vp.Size.x, im.GetFontSize()
   local L = layouts[row]
   if not L or L.text ~= text or L.vw ~= vw or L.fsz ~= fsz then
-    local ts = im.CalcTextSize(text)
-    L = { text = text, vw = vw, fsz = fsz, w = ts.x, h = ts.y }
+    local function measure(s) return im.CalcTextSize(s).x end
+    local lines = M.wrap(text, math.max(100, vw * M.MAX_W_FRAC - 2 * M.PAD_X), measure)
+    local w, ws = 0, {}
+    for i, s in ipairs(lines) do ws[i] = measure(s); w = math.max(w, ws[i]) end
+    L = { text = text, vw = vw, fsz = fsz, lines = lines, ws = ws, w = w, lh = im.CalcTextSize(text).y }
+    L.h = L.lh * #lines
     layouts[row] = L
     M.measures = M.measures + 1
   end
   local x = vp.Pos.x + (vw - L.w) / 2
   local p, a, b = vecs[1], vecs[2], vecs[3]
-  p.x, p.y = x, y
   a.x, a.y = x - M.PAD_X, y - M.PAD_Y
   b.x, b.y = x + L.w + M.PAD_X, y + L.h + M.PAD_Y
   im.ImDrawList_AddRectFilled(dl, a, b, backU32, 4)
-  im.ImDrawList_AddText1(dl, p, textU32, text, nil)
+  for i, s in ipairs(L.lines) do
+    p.x, p.y = vp.Pos.x + (vw - L.ws[i]) / 2, y + (i - 1) * L.lh
+    im.ImDrawList_AddText1(dl, p, textU32, s, nil)
+  end
   return y + L.h + 2 * M.PAD_Y + M.ROW_GAP
 end
 

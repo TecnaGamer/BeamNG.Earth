@@ -260,9 +260,10 @@ class RuralTeeTest(unittest.TestCase):
 
     def test_straight_edges_end_at_the_tangents(self):
         chunks = self.build("DE")
-        t = 3.25 + junctions_pave()           # half the side road's width + the radius
-        decal = 3.25 + (roads.EDGE_DECAL_AT - 0.5) * roads.EDGE_DECAL["w"]
-        line = 3.25 - roads.EDGE_LINE["inset"]
+        h = roads.road_specs(tee())[0].width / 2     # (the tertiary's: the frame's measured rural width, WIDTH_TABLE)
+        t = h + junctions_pave()              # half the side road's width + the radius
+        decal = h + (roads.EDGE_DECAL_AT - 0.5) * roads.EDGE_DECAL["w"]
+        line = h - roads.EDGE_LINE["inset"]
         for m, off in ((DECAL, decal), ("line_white", line)):
             north = [np.array(c["n"]) for c in chunks if c["m"] == m and len(c["n"]) <= 10
                      and all(abs(q[1] - off) < 0.02 for q in c["n"])]

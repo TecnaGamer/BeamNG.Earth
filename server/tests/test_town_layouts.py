@@ -165,9 +165,10 @@ class AssetsTest(unittest.TestCase):
     def test_shared_atlas_alpha_uv_and_all_font_sources(self):
         data=sm.font();w,h=data['atlas_size']
         self.assertTrue(w<=4096 and h<=4096 and w&(w-1)==0 and h&(h-1)==0)
-        with Image.open(ART/'sign_font.png')as black,Image.open(ART/'sign_font_white.png')as white,Image.open(ART/'sign_font_opacity.data.png')as opacity:
-            self.assertEqual(black.size,(w,h));np.testing.assert_array_equal(black.getchannel('A'),opacity)
-            np.testing.assert_array_equal(white.getchannel('A'),opacity)
+        # (the opacity atlas: a BC4 DDS made at install from its source; the letters' colour is the material's)
+        import sys;sys.path.insert(0,str(Path(__file__).resolve().parents[2]/'tools'));import mod_textures_dds
+        with mod_textures_dds.open_texture(ART/'sign_font_opacity.data.dds')as opacity:
+            self.assertEqual(opacity.size,(w,h))
         for key,face in data['fonts'].items():
             for ch,g in face['glyphs'].items():
                 l,b,r,t=g['bounds'];u0,v0,u1,v1=g['uv']

@@ -27,6 +27,7 @@
 //!
 //! How (road_sign_mesh): the sign's outline (outline(), the atlas cell's: tools/build_sign_atlas.py) cut as geometry, a
 //! metal back, a round pole.
+use crate::dm::Dm;
 
 use std::collections::HashMap;
 
@@ -289,7 +290,7 @@ fn dead_length(net: &Net, e: usize, ends: &HashMap<i64, usize>, outgoing: &HashM
         let arms = *ends.get(&ed.to).unwrap_or(&0);
         if arms == 1 {
             let (p, _) = net.at(ed.road, if ed.fwd { ed.sb } else { ed.sa });
-            let shut = open.iter().any(|q| (q[0] - p[0]).powi(2) + (q[1] - p[1]).powi(2) < OPEN_END_M * OPEN_END_M);
+            let shut = open.iter().any(|q| (q[0] - p[0]).sq() + (q[1] - p[1]).sq() < OPEN_END_M * OPEN_END_M);
             return if shut { None } else { Some(total) };
         }
         if arms != 2 { return None; }
@@ -328,7 +329,7 @@ fn on_road(net: &Net, q: [f64; 2]) -> Option<(usize, f64)> {
             let (dx, dy) = (bx - ax, by - ay);
             let l2 = (dx * dx + dy * dy).max(1e-12);
             let t = (((q[0] - ax) * dx + (q[1] - ay) * dy) / l2).clamp(0.0, 1.0);
-            let d2 = (ax + t * dx - q[0]).powi(2) + (ay + t * dy - q[1]).powi(2);
+            let d2 = (ax + t * dx - q[0]).sq() + (ay + t * dy - q[1]).sq();
             if d2 <= CROSSING_ON_M * CROSSING_ON_M && best.map_or(true, |b| d2 < b.2) {
                 best = Some((r, rd.s[k - rd.a] + t * l2.sqrt(), d2));
             }
@@ -400,7 +401,7 @@ fn bends(net: &Net, e: usize, window: f64, min_turn: f64) -> Vec<Bend> {
     if steps < w + 2 { return Vec::new(); }
     let head: Vec<f64> = (0..steps).map(|k| {
         let d = travel(net, e, k as f64 * BEND_STEP_M, (k + 1) as f64 * BEND_STEP_M);
-        d[1].atan2(d[0])
+        d[1].datan2(d[0])
     }).collect();
     let tau = std::f64::consts::TAU;
     let dh: Vec<f64> = head.windows(2).map(|h| (h[1] - h[0] + std::f64::consts::PI).rem_euclid(tau) - std::f64::consts::PI).collect();
@@ -585,7 +586,7 @@ fn poles(signs: Vec<Sign>, pole: &[f64; N_POLE]) -> Vec<Sign> {
     for i in 0..n {
         if taken[i] { continue; }
         let s = &signs[i];
-        let near = |o: &Sign| dot(o.dir, s.dir) > SAME_WAY_COS && (o.xy[0] - s.xy[0]).powi(2) + (o.xy[1] - s.xy[1]).powi(2) < PANEL_GAP_M * PANEL_GAP_M;
+        let near = |o: &Sign| dot(o.dir, s.dir) > SAME_WAY_COS && (o.xy[0] - s.xy[0]).sq() + (o.xy[1] - s.xy[1]).sq() < PANEL_GAP_M * PANEL_GAP_M;
         if out.iter().any(near) || singles.iter().any(near) { continue; }
         singles.push(s.clone());
     }
@@ -606,7 +607,7 @@ pub fn plan(a: &Input) -> Vec<Sign> {
         let (p, q) = (a.off[r] as usize, a.off[r + 1] as usize);
         let mut s = vec![0.0f64; q.saturating_sub(p)];
         for k in p + 1..q {
-            s[k - p] = s[k - p - 1] + ((a.pts[[k, 0]] - a.pts[[k - 1, 0]]).powi(2) + (a.pts[[k, 1]] - a.pts[[k - 1, 1]]).powi(2)).sqrt();
+            s[k - p] = s[k - p - 1] + ((a.pts[[k, 0]] - a.pts[[k - 1, 0]]).sq() + (a.pts[[k, 1]] - a.pts[[k - 1, 1]]).sq()).sqrt();
         }
         let flags = if a.meta.ncols() > 5 { a.meta[[r, 5]] as i64 } else { 0 };
         let road = Road { a: p, b: q, s, hw: a.meta[[r, 0]], dir: a.meta[[r, 1]] as i64, rank: a.meta[[r, 2]] as i64,
@@ -671,7 +672,7 @@ pub fn plan(a: &Input) -> Vec<Sign> {
                 for &j in grid.get(&(c.rule, gx + dx, gy + dy)).map_or(&[][..], |v| &v[..]) {
                     let o = &cands[j];
                     if dot(o.dir, c.dir) > SAME_WAY_COS
-                        && (o.xy[0] - c.xy[0]).powi(2) + (o.xy[1] - c.xy[1]).powi(2) < gap * gap {
+                        && (o.xy[0] - c.xy[0]).sq() + (o.xy[1] - c.xy[1]).sq() < gap * gap {
                         near = true;
                         break 'scan;
                     }
@@ -723,7 +724,7 @@ pub fn plan(a: &Input) -> Vec<Sign> {
         }
         let Some((q, t, road_xy)) = found else { continue };
         if (0..a.avoid.nrows()).any(|k| dot([a.avoid[[k, 2]], a.avoid[[k, 3]]], t) > SAME_WAY_COS
-                                    && (a.avoid[[k, 0]] - q[0]).powi(2) + (a.avoid[[k, 1]] - q[1]).powi(2) < AVOID_M * AVOID_M) {
+                                    && (a.avoid[[k, 0]] - q[0]).sq() + (a.avoid[[k, 1]] - q[1]).sq() < AVOID_M * AVOID_M) {
             continue;
         }
         let size = if rd.urban { 0 } else if rd.rank >= PRIMARY { 2 } else { 1 };
@@ -784,18 +785,18 @@ fn round_poly(verts: &[[f64; 2]], r: f64) -> Vec<[f64; 2]> {
         let (vx, vy) = (b[0] - a[0], b[1] - a[1]);
         let (lu, lv) = ((ux * ux + uy * uy).sqrt(), (vx * vx + vy * vy).sqrt());
         let (ux, uy, vx, vy) = (ux / lu, uy / lu, vx / lv, vy / lv);
-        let half = (ux * vx + uy * vy).clamp(-1.0, 1.0).acos() / 2.0;
-        let d = r / half.tan();
+        let half = (ux * vx + uy * vy).clamp(-1.0, 1.0).dacos() / 2.0;
+        let d = r / half.dtan();
         let (bx, by) = (ux + vx, uy + vy);
         let lb = (bx * bx + by * by).sqrt();
-        let c = [a[0] + bx / lb * r / half.sin(), a[1] + by / lb * r / half.sin()];
-        let a0 = (a[1] + uy * d - c[1]).atan2(a[0] + ux * d - c[0]);
-        let a1 = (a[1] + vy * d - c[1]).atan2(a[0] + vx * d - c[0]);
+        let c = [a[0] + bx / lb * r / half.dsin(), a[1] + by / lb * r / half.dsin()];
+        let a0 = (a[1] + uy * d - c[1]).datan2(a[0] + ux * d - c[0]);
+        let a1 = (a[1] + vy * d - c[1]).datan2(a[0] + vx * d - c[0]);
         let tau = std::f64::consts::TAU;
         let da = (a1 - a0 + std::f64::consts::PI).rem_euclid(tau) - std::f64::consts::PI;
         for k in 0..=STEPS {
             let t = a0 + da * k as f64 / STEPS as f64;
-            out.push([c[0] + r * t.cos(), c[1] + r * t.sin()]);
+            out.push([c[0] + r * t.dcos(), c[1] + r * t.dsin()]);
         }
     }
     out
@@ -809,14 +810,14 @@ pub fn outline(shape: i64) -> Vec<[f64; 2]> {
         2 => round_poly(&[[0.0, -TRI_TOP], [1.0, -TRI_BOTTOM], [-1.0, -TRI_BOTTOM]], CORNER),
         3 => round_poly(&[[0.0, 0.98], [-0.98, 0.0], [0.0, -0.98], [0.98, 0.0]], CORNER),
         4 => {
-            let t = 0.98 * (std::f64::consts::PI / 8.0).tan();
+            let t = 0.98 * (std::f64::consts::PI / 8.0).dtan();
             vec![[t, 0.98], [-t, 0.98], [-0.98, t], [-0.98, -t], [-t, -0.98], [t, -0.98], [0.98, -t], [0.98, t]]
         }
         5 => round_poly(&[[0.97, 0.97], [-0.97, 0.97], [-0.97, -0.97], [0.97, -0.97]], 0.10),
         6 => round_poly(&[[0.97, 0.25], [-0.97, 0.25], [-0.97, -0.25], [0.97, -0.25]], 0.04),     // a long board, four times as wide as high
         _ => (0..32).map(|k| {
             let a = k as f64 * std::f64::consts::TAU / 32.0;
-            [0.99 * a.cos(), 0.99 * a.sin()]
+            [0.99 * a.dcos(), 0.99 * a.dsin()]
         }).collect(),
     }
 }
@@ -1060,7 +1061,7 @@ mod tests {
         let n = ((a1 - a0).abs() / 5.0).ceil().max(2.0) as usize;
         (0..=n).map(|k| {
             let a = (a0 + (a1 - a0) * k as f64 / n as f64).to_radians();
-            [cx + r * a.cos(), cy + r * a.sin()]
+            [cx + r * a.dcos(), cy + r * a.dsin()]
         }).collect()
     }
 
@@ -1200,7 +1201,7 @@ mod tests {
         for (i, a) in s.iter().enumerate() {
             for b in &s[i + 1..] {
                 if dot(a.dir, b.dir) > SAME_WAY_COS {
-                    assert!((a.xy[0] - b.xy[0]).powi(2) + (a.xy[1] - b.xy[1]).powi(2) >= PANEL_GAP_M * PANEL_GAP_M, "{s:?}");
+                    assert!((a.xy[0] - b.xy[0]).sq() + (a.xy[1] - b.xy[1]).sq() >= PANEL_GAP_M * PANEL_GAP_M, "{s:?}");
                 }
             }
         }
@@ -1245,7 +1246,7 @@ mod tests {
         for (i, a) in s.iter().enumerate() {
             for b in &s[i + 1..] {
                 if dot(a.dir, b.dir) > SAME_WAY_COS {
-                    assert!((a.xy[0] - b.xy[0]).powi(2) + (a.xy[1] - b.xy[1]).powi(2) >= PANEL_GAP_M * PANEL_GAP_M, "{s:?}");
+                    assert!((a.xy[0] - b.xy[0]).sq() + (a.xy[1] - b.xy[1]).sq() >= PANEL_GAP_M * PANEL_GAP_M, "{s:?}");
                 }
             }
         }
@@ -1287,7 +1288,7 @@ mod tests {
         let (l, r) = (of(&s, CHEVRON_LEFT), of(&s, CHEVRON_RIGHT));
         assert_eq!((l.len(), r.len()), (3, 3), "{s:?}");
         for c in l.iter().chain(r.iter()) {
-            let d = ((c.xy[0] + 25.0).powi(2) + (c.xy[1] - 25.0).powi(2)).sqrt();
+            let d = ((c.xy[0] + 25.0).sq() + (c.xy[1] - 25.0).sq()).sqrt();
             assert!(d > 25.0 + 4.0, "on the outside of the bend: {c:?} is {d} m from its centre");
         }
     }

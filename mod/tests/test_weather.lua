@@ -368,6 +368,55 @@ W.setMode('manual')
 near(sunB(), 0.9, 1e-6, 'manual: a value someone else set is left alone')
 W.setMode('real')
 
+do  -- a fixed 1 km view in real weather, then manual weather, then the real horizon: the floor apply wrote is let go
+  local savedS = rawget(_G, 'beamngEarth_settings')
+  local vmode = 'fixed'
+  beamngEarth_settings = { get = function(k) if k == 'viewDistanceMode' then return vmode end
+                                             if k == 'viewDistanceKm' then return 1 end end }
+  W.setMode('real')
+  W.onWeather({ cover = { low = 0, mid = 0, high = 0 }, rainMmH = 0, snowCmH = 0, visM = 80000, slTempC = 12,   -- (clear)
+    wind = { ms = 2, fromDeg = 180, gustMs = 3 }, baseAglM = 1500, lat = 36.58, lon = -118.29 })
+  run(W.LERP_S * 3)
+  check(select(1, W._viewFogOwned()) ~= nil, 'clear real weather, fixed 1 km: the floor owns the fog')
+  local floored = env.fog
+  check(floored and floored >= 0.003 * 0.98, 'real weather, fixed 1 km: at least the 1 km floor (' .. tostring(floored) .. ')')
+  W.setMode('manual')
+  run(1)
+  vmode = 'horizon'
+  run(1)
+  check(env.fog < floored * 0.5, 'real -> manual -> horizon: the fixed distance\'s fog let go (' .. tostring(env.fog) .. ')')
+  W.setMode('real')
+  W.onWeather({ cover = { low = 100, mid = 50, high = 0 }, rainMmH = 8, snowCmH = 0, visM = 5000, slTempC = 12,
+    wind = { ms = 5, fromDeg = 180, gustMs = 9 }, baseAglM = 600, lat = 36.58, lon = -118.29 })   -- (the weather before)
+  beamngEarth_settings = savedS
+  run(W.LERP_S * 3)
+end
+do  -- manual weather with a fixed 1 km view, real weather briefly, manual again, then the horizon: the density from before
+  local savedS = rawget(_G, 'beamngEarth_settings')
+  local vmode = 'fixed'
+  beamngEarth_settings = { get = function(k) if k == 'viewDistanceMode' then return vmode end
+                                             if k == 'viewDistanceKm' then return 1 end end }
+  W.setMode('manual')
+  env.fog = 4e-5
+  run(1)
+  check(env.fog >= 0.003 * 0.98, 'manual, fixed 1 km: raised to the floor')
+  W.onWeather({ cover = { low = 0, mid = 0, high = 0 }, rainMmH = 0, snowCmH = 0, visM = 80000, slTempC = 12,   -- (clear)
+    wind = { ms = 2, fromDeg = 180, gustMs = 3 }, baseAglM = 1500, lat = 36.58, lon = -118.29 })
+  local floorNow = env.fog
+  W.setMode('real')
+  run(1)
+  W.setMode('manual')
+  run(1)
+  vmode = 'horizon'
+  run(1)
+  -- (real weather started from the density under the floor, not from the floor: clear weather's own fog back, far under it)
+  check(env.fog < floorNow * 0.2, 'manual -> real briefly -> manual -> horizon: the floor\'s fog let go (' .. tostring(env.fog) .. ')')
+  W.setMode('real')
+  W.onWeather({ cover = { low = 100, mid = 50, high = 0 }, rainMmH = 8, snowCmH = 0, visM = 5000, slTempC = 12,
+    wind = { ms = 5, fromDeg = 180, gustMs = 9 }, baseAglM = 600, lat = 36.58, lon = -118.29 })   -- (the weather before)
+  beamngEarth_settings = savedS
+  run(W.LERP_S * 3)
+end
 -- the settings (beamngEarth_settings.set applies the mode again, as settings.lua does)
 local saved = {}
 beamngEarth_settings = { set = function(k, v)
@@ -597,5 +646,49 @@ do
   T.check(W.fogAltitudeShare(100000) == 0 and W.fogAltitudeShare(nil) == 1, 'fog: none from 100 km; no camera, all')
   T.check(not W.cloudsHiddenAt(5000, false) and W.cloudsHiddenAt(15000, false), 'clouds: hidden far above them')
   T.check(W.cloudsHiddenAt(11000, true) and not W.cloudsHiddenAt(9000, true), 'clouds: shown again lower (hysteresis)')
+end
+do  -- a fixed view distance: its fog (the scene ~95 % fogged where the engine stops drawing), none with the horizon
+  local function get(mode, km) return function(k) if k == 'viewDistanceMode' then return mode end return km end end
+  T.check(math.abs(W.viewFogFloor(get('fixed', 1)) - 0.003) < 1e-12, 'fixed 1 km: density 0.003')
+  T.check(math.abs(W.viewFogFloor(get('fixed', 20)) - 1.5e-4) < 1e-12, 'fixed 20 km: 1.5e-4')
+  T.check(W.viewFogFloor(get('horizon', 1)) == 0, 'the real horizon: no floor')
+  T.check(W.viewFogFloor(get('fixed', 0)) == 0 and W.viewFogFloor(get('fixed', nil)) == 0, 'no distance: no floor')
+  T.check(W.viewFogFloor(function() return nil end) == 0, 'no settings: no floor')
+  -- (the engine thins its fog with height: 2 km up under a 1 km fog height the density is e^2 more, the same 3 optical
+  -- depths at the clip; capped at the menu's maximum)
+  T.check(math.abs(W.viewFogFloor(get('fixed', 1), 2000, 1000) - 0.003 * math.exp(2)) < 1e-12, 'fixed 1 km at 2 km up')
+  T.check(W.viewFogFloor(get('fixed', 1), 9000, 1000) == W.FOG_DENSITY_MAX, 'capped at the menu maximum')
+end
+do  -- the fixed view distance's fog in manual weather (viewFog alone): raised, lowered with the floor, released
+  local fog, height = 4e-5, 1000
+  local e = { getFogDensity = function() return fog end, setFogDensity = function(v) fog = v end,
+              getFogAtmosphereHeight = function() return height end }
+  local saved = rawget(_G, 'beamngEarth_settings')
+  local mode, km = 'fixed', 1
+  beamngEarth_settings = { get = function(k) if k == 'viewDistanceMode' then return mode end return km end }
+  W._viewFog(e, false, 0)
+  T.check(math.abs(fog - 0.003) < 1e-12, 'manual weather, 1 km: raised to 0.003')
+  km = 20
+  W._viewFog(e, false, 0)
+  T.check(math.abs(fog - 1.5e-4) < 1e-12, '20 km: lowered with the floor (not left at the 1 km fog)')
+  km = 1
+  W._viewFog(e, false, 2000)
+  T.check(math.abs(fog - 0.003 * math.exp(2)) < 1e-12, '2 km up: the height-compensated floor')
+  W._viewFog(e, false, 0)
+  T.check(math.abs(fog - 0.003) < 1e-12, 'back down at sea level: lowered again')
+  W._viewFog(e, true, 0)
+  T.check(fog == 4e-5 and W._viewFogOwned() == nil, 'the 3D map open: the density it replaced back, released')
+  W._viewFog(e, false, 0)
+  mode = 'horizon'
+  W._viewFog(e, false, 0)
+  T.check(fog == 4e-5 and W._viewFogOwned() == nil, 'horizon: the density it replaced back')
+  mode = 'fixed'
+  W._viewFog(e, false, 0)
+  fog = 0.02                     -- (the menu set a thicker fog meanwhile)
+  W._viewFog(e, false, 0)
+  mode = 'horizon'
+  W._viewFog(e, false, 0)
+  T.check(fog == 0.02, 'a fog set by something else is never taken back')
+  beamngEarth_settings = saved
 end
 T.done('test_weather')

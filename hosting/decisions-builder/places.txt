@@ -1,0 +1,23 @@
+# The decisions builder's place list (run.py all / bnge-decisions-builder.service). One line per place:
+# "block X,Y" = one z12 block (16 z14 cells, ~7.5 x 7.5 km at these latitudes), or anything
+# tools/build_decisions.py --places takes ("lat,lon[,km]", a TEST_PLACES name, @top:N, @asked:FILE).
+# Order = build order: the most visited first (a build stopped by the disk guard / cache cap keeps what it made).
+
+# Manhattan
+block 1206,1539     # Midtown (Times Sq east), Upper East Side to ~96th St, Long Island City, Greenpoint
+block 1205,1540     # Lower Manhattan / Financial District, Jersey City, Red Hook
+block 1205,1539     # Hudson Yards / west Midtown edge, Hoboken, Weehawken
+block 1206,1540     # Brooklyn: Downtown, Williamsburg, Park Slope
+block 1206,1538     # Harlem, Upper West/East Side north of ~96th St, South Bronx
+block 1205,1538     # Washington Heights edge, Fort Lee, Palisades
+
+# Baltimore
+block 1176,1561     # Fells Point, Inner Harbor, downtown, Canton
+block 1175,1561     # west Baltimore, Pigtown, I-95 / I-395
+block 1176,1560     # north: Charles Village, Johns Hopkins, Druid Hill
+block 1177,1561     # east: Highlandtown, Dundalk, I-895 tunnel
+block 1176,1562     # south: Port Covington, Brooklyn, Curtis Bay
+block 1175,1560     # northwest
+block 1177,1560     # northeast
+block 1175,1562     # southwest: BWI side
+block 1177,1562     # southeast: Key Bridge side

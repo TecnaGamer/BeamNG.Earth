@@ -4,6 +4,7 @@ import os
 import sys
 import types
 import unittest
+from unittest.mock import patch
 
 import numpy as np
 
@@ -41,7 +42,8 @@ class Tables(unittest.TestCase):
     def test_the_first_wave_and_nowhere_else(self):
         for code in ("UA", "cz", "PL", "DE"):
             self.assertIsNotNone(roadsigns.system(code), code)
-        self.assertIsNone(roadsigns.system("NL"))
+        with patch.object(roadsigns, "NL_ON", False):
+            self.assertIsNone(roadsigns.system("NL"))
         self.assertIsNone(roadsigns.system(None))
 
     def test_atlas_drawings_match_the_roles(self):
@@ -141,6 +143,24 @@ class Poles(unittest.TestCase):
         self.assertAlmostEqual(t[2, 9], mount)
         self.assertAlmostEqual(t[0, 9], mount + sizes["square"][1] + 0.1)
 
+    def test_a_yellow_field_takes_its_own_cells_of_the_one_atlas(self):
+        """vienna_y (PL) and vienna_w share one atlas (2026-11-13): a warning triangle in PL takes its yellow cell
+        (variant_cells), any other sign the shared cell; in CZ every sign its role's cell. The merged sheet's yellow
+        cells are the old yellow sheet's drawings (mod/texture_sources, tools/build_sign_atlas.py --check)."""
+        roles, systems, by_id = roadsigns.tables()
+        rule = lambda name: float(systems["rules"].index(name))        # noqa: E731
+        signs = np.array([[0, 0, 1, 0, rule("warn.signals"), 1, 0, 0, 0, 0, 0],
+                          [50, 0, 1, 0, rule("reg.no_entry"), 1, 50, 0, 0, 1, 0]], float)
+        yellow = roles["variant_cells"]["yellow"]
+        pl = roadsigns.table(signs, np.zeros(2), np.zeros(2), roadsigns.system("PL"))
+        cz = roadsigns.table(signs, np.zeros(2), np.zeros(2), roadsigns.system("CZ"))
+        self.assertEqual(int(pl[0, 6]), yellow["warn.signals"])
+        self.assertEqual(int(cz[0, 6]), by_id["warn.signals"][0])
+        self.assertEqual(int(pl[1, 6]), int(cz[1, 6]))
+        self.assertEqual(int(pl[1, 6]), by_id["reg.no_entry"][0])
+        self.assertTrue(all(len(roles["roles"]) <= c < roles["cols"] * roles["rows"] for c in yellow.values()))
+        self.assertEqual(len(set(yellow.values())), len(yellow))
+
     def test_a_tile_of_roads_gives_signs_with_pole_and_slot(self):
         import fast
         if not hasattr(fast._ef, "road_sign_place"):
@@ -218,6 +238,26 @@ class Crossings(unittest.TestCase):
 
 
 class Switch(unittest.TestCase):
+    def test_netherlands_requires_its_own_opt_in(self):
+        with patch.object(roadsigns, "NL_ON", False):
+            self.assertIsNone(roadsigns.system("nl"))
+            self.assertIsNotNone(roadsigns.system("DE"))
+        with patch.object(roadsigns, "NL_ON", True):
+            self.assertIsNotNone(roadsigns.system("nl"))
+            self.assertIsNone(roadsigns.system(None))
+
+    def test_netherlands_only_reviewed_roles(self):
+        systems = roadsigns.tables()[1]
+        rows = np.zeros((len(systems["rules"]), 11))
+        rows[:, 4] = np.arange(len(rows))
+        got = roadsigns.supported(rows, systems["countries"]["NL"])
+        self.assertEqual({systems["rules"][int(i)] for i in got[:, 4]},
+                         {"prio.give_way", "prio.stop", "reg.no_entry", "mand.roundabout"})
+        self.assertEqual(roadsigns.supported(np.zeros((0, 11)), systems["countries"]["NL"]).shape, (0, 11))
+        # Countries without an allowlist retain their existing behaviour.
+        self.assertEqual(len(roadsigns.supported(rows, systems["countries"]["DE"])), len(rows))
+        self.assertEqual(len(roadsigns.supported(rows, systems["countries"]["UA"])), len(rows) - 2)
+
     def test_off_without_the_flag(self):
         class S:
             rsigns_on = True
@@ -238,6 +278,40 @@ class Switch(unittest.TestCase):
 
 
 class Mesh(unittest.TestCase):
+    def test_dutch_pilot_batches_the_four_roles_in_one_tile_mesh(self):
+        import fast
+        if not hasattr(fast._ef, "road_sign_mesh"):
+            self.skipTest("kernel without road signs")
+        systems = roadsigns.tables()[1]
+        rows = np.zeros((5, 11))
+        for i, role in enumerate(("prio.give_way", "prio.stop", "reg.no_entry", "mand.roundabout", "info.bus_stop")):
+            rows[i] = (10 + i * 5, 20, 1, 0, systems["rules"].index(role), 0, 10 + i * 5, 18, 1, i, 0)
+
+        class Frame:
+            def enu_to_geodetic(self, x, y, z):
+                return np.asarray(y), np.asarray(x), z
+
+            def geodetic_to_enu(self, lat, lon, h):
+                return np.asarray(lon), np.asarray(lat), np.asarray(h)
+
+        with patch.object(roadsigns, "NL_ON", True), patch.object(roadsigns, "place", return_value=rows):
+            mesh = roadsigns.build_tile(None, Frame(), 0, 0, lambda lat, lon: np.zeros_like(lat), None, country="NL")
+        p, t, uv, materials, mi = mesh
+        self.assertTrue(np.isfinite(p).all())
+        self.assertGreater(len(t), 0)
+        self.assertEqual(materials, ["bne_signs_vienna_w", "bne_exit_metal"])
+        self.assertEqual(set(mi.tolist()), {0, 1})
+        # Every face vertex belongs to one of the four reviewed atlas cells.
+        roles, _, by_id = roadsigns.tables()
+        face_uv = uv[t[mi == 0].ravel()]
+        allowed = np.zeros(len(face_uv), dtype=bool)
+        for role in systems["countries"]["NL"]["only"]:
+            cell = by_id[role][0]
+            u, v = (cell % roles["cols"]) / roles["cols"], 1 - (cell // roles["cols"] + 1) / roles["rows"]
+            allowed |= ((face_uv[:, 0] >= u - 1e-6) & (face_uv[:, 0] <= u + 1 / roles["cols"] + 1e-6)
+                        & (face_uv[:, 1] >= v - 1e-6) & (face_uv[:, 1] <= v + 1 / roles["rows"] + 1e-6))
+        self.assertTrue(allowed.all())
+
     def test_a_sign_is_mesh_on_two_materials(self):
         import fast
         if not hasattr(fast._ef, "road_sign_mesh"):

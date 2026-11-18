@@ -9,6 +9,7 @@ from functools import lru_cache
 import gzip,hashlib,json,math
 from pathlib import Path
 import numpy as np
+import dnp
 from geotiles import box_owns
 
 DATA_PATH=Path(__file__).with_name('data')/'fr_direction_signs.json.gz'
@@ -44,7 +45,7 @@ def add(frame,roads,box,french,mesh,ground=None,data=None):
         tx,ty,_=frame.geodetic_to_enu(s['towards'][1],s['towards'][0],0)
         target_hit=_nearest(np.array([tx,ty]),roads)
         if target_hit is None or target_hit[0][1]>12:continue
-        direction=np.array([tx-ox,ty-oy]);norm=np.linalg.norm(direction)
+        direction=np.array([tx-ox,ty-oy]);norm=dnp.norm(direction)
         if norm<2:continue
         direction/=norm;travel=np.array([-direction[1],direction[0]])
         p=p.copy();p[:2]=xy

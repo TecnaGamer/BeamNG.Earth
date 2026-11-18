@@ -226,7 +226,14 @@ def road_props():
             "speed_limits": [{"max_speed": {"value": 55, "unit": "mph"}},
                              {"max_speed": {"value": 40, "unit": "km/h"}, "when": {"heading": "forward"}}],
             "access_restrictions": [{"access_type": "denied", "when": {"heading": "backward"}},
-                                    {"access_type": "denied", "when": {"heading": "forward", "mode": ["foot"]}}],
+                                    {"access_type": "denied", "when": {"heading": "forward", "mode": ["foot"]}},
+                                    {"access_type": "denied", "between": [0.25, 0.5], "when": {"vehicle": [
+                                        {"dimension": "height", "comparison": "greater_than", "value": 3.3,
+                                         "unit": "m"}]}},
+                                    {"access_type": "denied", "between": [0.6, 0.7], "when": {"vehicle": [
+                                        {"dimension": "weight", "comparison": "greater_than", "value": 7.5,
+                                         "unit": "t"}, {"dimension": "height", "comparison": "greater_than",
+                                                        "value": 12, "unit": "ft"}]}}],
             "routes": [{"network": "US:I", "ref": "95", "between": [0.0, 0.75]}, {"network": "x"}],
             "sources": [SRC_REL,
                         {"dataset": "OpenStreetMap", "license": "ODbL-1.0", "record_id": "w10@3", "property": "",
@@ -349,6 +356,10 @@ class RoadsTest(Base):
         (v, s, e), = f.rules["max_speed_kmh"].for_feature(i)       # the unconditional limit only, mph to km/h
         self.assertAlmostEqual(v, 55 * 1.609344, places=4)
         self.assertEqual(f.rules["oneway"].for_feature(i), [(1.0, 0.0, 1.0)])     # backward denied; foot only: not
+        (v1, s1, e1), (v2, s2, e2) = f.rules["max_height_m"].for_feature(i)        # a maxheight sign: the height limits
+        self.assertAlmostEqual(v1, 3.3, places=5)
+        self.assertEqual((s1, e1), (0.25, 0.5))
+        self.assertAlmostEqual(v2, 12 * 0.3048, places=5)                           # (feet)
         self.assertEqual([c for c, _, _ in f.rules["connectors"].for_feature(i)], ["c0", "c1", "c2"])
         self.assertEqual(f.rules["connectors"].for_feature(i)[1][1:], (0.5, 0.5))
         self.assertEqual(self.sources[("OpenStreetMap", "ODbL-1.0")], 4)
@@ -410,6 +421,65 @@ class LongLineTest(Base):
             ox, oy = mapcells.owner(f.attrs["cx"][i:i + 1], f.attrs["cy"][i:i + 1])
             owners.append(int(ox[0]) == x and int(oy[0]) == CELL.y)
         self.assertEqual(owners, [True, False])
+
+    def cut_rail(self, cap):
+        """A rail across five tiles (T0..T4, west to east, one horizontal line) read from the middle one's cell with
+        the given cap, so that it comes cut: a bridge at 0.70-0.72 of the WHOLE line, a tunnel at 0.30-0.35, another
+        bridge in T0 at 0.05-0.08, a connector at the middle of each tile (its `at` the arc fraction there).
+        Returns (features, index of the line, (x of its start, x of its end) in world units)."""
+        xs = [CELL.x + k for k in range(5)]
+        x0, x1 = xs[0] * EXT + 100, xs[4] * EXT + 3996
+        props = {"id": "rail-long", "subtype": "rail", "class": "standard_gauge",
+                 "connectors": [{"connector_id": f"k{k}", "at": (xs[k] * EXT + 2048 - x0) / (x1 - x0)}
+                                for k in range(5)],
+                 "rail_flags": [{"values": ["is_bridge"], "between": [0.05, 0.08]},
+                                {"values": ["is_tunnel"], "between": [0.30, 0.35]},
+                                {"values": ["is_bridge"], "between": [0.70, 0.72]}],
+                 "level_rules": [{"value": 1, "between": [0.05, 0.08]}, {"value": -1, "between": [0.30, 0.35]},
+                                 {"value": 1, "between": [0.70, 0.72]}],
+                 "sources": [{"dataset": "OpenStreetMap", "license": "ODbL-1.0", "record_id": "w9@1"}]}
+        tiles = {}
+        for k, x in enumerate(xs):
+            a = (100 if k == 0 else -64, 2048)
+            b = (3996 if k == 4 else 4160, 2048)
+            tiles[(14, x, CELL.y)] = mvt({
+                "segment": [(2, [[a, b]], props)],
+                "connector": [(1, [[(2048, 2048)]], {"id": f"k{k}", "sources": [{"dataset": "OpenStreetMap"}]})]})
+        r, _ = self.reader({"transportation.pmtiles": archive(tiles)})
+        with mock.patch.dict(pmtiles.CAP, {14: cap}):
+            f, _ = r.query("roads", mapcells.CellKey(14, xs[2], CELL.y))
+        return f, f.index("rail-long"), (x0, x1)
+
+    @staticmethod
+    def span(f, i):
+        """x (world units) of the first and last vertex of the line as the cell has it."""
+        ring = f.parts(i)[0][0]
+        n = (1 << 14) * EXT
+        return [(lon + 180) / 360 * n for lon, _ in (ring[0], ring[-1])]
+
+    def test_a_cut_lines_ranges_are_put_on_the_line_we_have(self):
+        f, i, (x0, x1) = self.cut_rail(1)
+        a, b = self.span(f, i)
+        self.assertAlmostEqual(b - a, 3 * EXT, delta=2.0)           # (cut: three of the five tiles)
+        for name in ("level", "flags"):
+            rows = f.rules[name].for_feature(i)
+            # the T0 bridge (0.05-0.08) is off the line we have: dropped; the tunnel and the T3 bridge are where they
+            # are along it (the fraction of OUR line at the true x of the range's ends)
+            self.assertEqual(len(rows), 2, (name, rows))
+            for (_, s, e), (u, v) in zip(rows, ((0.30, 0.35), (0.70, 0.72))):
+                for got, frac in ((s, u), (e, v)):
+                    self.assertAlmostEqual(float(got), (x0 + frac * (x1 - x0) - a) / (b - a), delta=1e-3, msg=name)
+        c = f.rules["connectors"].for_feature(i)
+        self.assertEqual([x[0] for x in c], ["k1", "k2", "k3"])       # the connectors on the line we have
+        self.assertAlmostEqual(float(c[1][1]), (EXT + 2048) / (3 * EXT), delta=1e-3)
+
+    def test_a_line_that_comes_whole_keeps_its_ranges(self):
+        f, i, (x0, x1) = self.cut_rail(6)
+        a, b = self.span(f, i)
+        self.assertAlmostEqual(b - a, x1 - x0, delta=2.0)
+        self.assertEqual([(float(s), float(e)) for _, s, e in f.rules["level"].for_feature(i)],
+                         [(float(np.float32(s)), float(np.float32(e))) for s, e in ((.05, .08), (.30, .35), (.70, .72))])
+        self.assertEqual(len(f.rules["connectors"].for_feature(i)), 5)
 
 
 class BuildingsTest(Base):

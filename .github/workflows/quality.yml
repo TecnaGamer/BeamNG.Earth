@@ -8,6 +8,12 @@ on:
 permissions:
   contents: read
 
+# A newer push to the same pull request replaces its run under way (issue #1273). Keyed on the PR number, not head_ref:
+# fork PRs often share a branch name (patch-1). Called from release.yml (a push) or dispatched, there is no PR number:
+# the run's own id, a group of its own, never cancelled, and never release.yml's release-<ref> (no caller deadlock).
+concurrency:
+  group: quality-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
 
 # (the tests start servers through the launcher: never usage reports from CI, telemetry.py)
 env:
@@ -22,11 +28,11 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: "22"
       - name: Dependencies
@@ -39,7 +45,7 @@ jobs:
         run: python tools/build_native.py
       - name: Foundation regression and package gate
         run: python tools/quality_gate.py
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: quality-logs-${{ matrix.os }}

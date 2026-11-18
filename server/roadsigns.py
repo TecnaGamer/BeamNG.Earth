@@ -14,6 +14,7 @@ import numpy as np
 
 import exitsigns
 import fast
+import dnp
 import mapcells
 import mapgeom
 import islands
@@ -23,6 +24,7 @@ import speedsigns
 
 KERNEL = 162                    # earthfast VERSION with road_sign_place / road_sign_mesh
 ON = os.environ.get("BNE_ROADSIGNS", "off") == "on"
+NL_ON = os.environ.get("BNE_NL_ROADSIGNS", "off") == "on"
 DATA = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 SHAPES = {"circle": 0, "tri_up": 1, "tri_down": 2, "diamond": 3, "octagon": 4, "square": 5, "rect": 6}
 METAL = "bne_exit_metal"
@@ -56,7 +58,19 @@ def tables():
 
 def system(country):
     """The country's sign system (sign_systems.json), or None: no road signs there yet."""
+    if (country or "").upper() == "NL" and not NL_ON:
+        return None
     return tables()[1]["countries"].get((country or "").upper())
+
+
+def supported(signs, sys_row):
+    """Limit a pilot to reviewed roles; a new global rule must not silently opt a country in."""
+    allowed = sys_row.get("only")
+    off = sys_row.get("off", ())
+    rules = tables()[1]["rules"]
+    keep = [rules[int(r)] not in off and (allowed is None or rules[int(r)] in allowed)
+            for r in signs[:, 4]]
+    return signs[np.asarray(keep, dtype=bool)]
 
 
 def widest(sizes):
@@ -155,7 +169,7 @@ def tunnel_portals(feats, own):
         if not row[5] or row[5] == [(0.0, 1.0)]:
             continue
         pts = row[1]
-        s = np.concatenate([[0.0], np.cumsum(np.hypot(*np.diff(pts, axis=0).T))])
+        s = np.concatenate([[0.0], np.cumsum(dnp.hypot(*np.diff(pts, axis=0).T))])
         if s[-1] < TUNNEL_MIN_M:
             continue
         if ids is None:
@@ -163,14 +177,14 @@ def tunnel_portals(feats, own):
         i = ids.get(fid)
         if i is None:
             continue
-        at = lambda m, c: float(np.interp(min(max(m, 0.0), s[-1]), s, pts[:, c]))     # noqa: E731
+        at = lambda m, c: float(dnp.interp(min(max(m, 0.0), s[-1]), s, pts[:, c]))     # noqa: E731
         for a, b, kind in roads.level_ranges(feats, i):
             if kind != "tunnel" or (b - a) * s[-1] < TUNNEL_MIN_M:
                 continue
             for f, sgn in ((a, 1.0), (b, -1.0)):
                 m = f * s[-1]
                 tx, ty = at(m + 3.0, 0) - at(m - 3.0, 0), at(m + 3.0, 1) - at(m - 3.0, 1)
-                l = float(np.hypot(tx, ty))
+                l = float(dnp.hypot(tx, ty))
                 if l > 1e-6:
                     out.append((at(m, 0), at(m, 1), POI_TUNNEL, sgn * tx / l, sgn * ty / l))
     return np.array(out, np.float64).reshape(-1, 5)
@@ -281,7 +295,7 @@ def arrays(rows, box):
     con_at, con_id, con_off = [], [], [0]
     skip, skip_off = [], [0]
     ids = {}
-    for (line, pts, _m, cons, _lims, skips), mt, fl in rows:
+    for (line, pts, _m, cons, _lims, skips, *_zone), mt, fl in rows:      # (speedsigns rows: 7 fields since the zones)
         if (pts[:, 0].max() < x0 - m or pts[:, 0].min() > x1 + m or pts[:, 1].max() < y0 - m or pts[:, 1].min() > y1 + m):
             continue
         ll.append(line)
@@ -388,10 +402,12 @@ def table(signs, z_ground, z_road, sys_row):
     gap = float(systems["pole"]["gap_m"])
     width = np.zeros(len(signs))
     cells = []
+    # (a role whose drawing depends on the system's field colour has its own cell for that colour: variant_cells)
+    variants = roles.get("variant_cells", {}).get(roles["systems"].get(sys_row["atlas"]), {})
     for k, row in enumerate(signs):
         rule = systems["rules"][int(row[4])]
         cell, role = by_id[sys_row.get("roles", {}).get(rule, rule)]
-        cells.append((cell, role))
+        cells.append((variants.get(role["id"], cell), role))
         width[k] = sizes[role["shape"]][int(row[5])]
     out = np.zeros((len(signs), 10))
     for k, row in enumerate(signs):
@@ -410,7 +426,7 @@ def build_tile(md, frame, tx, ty, elev, context, decks=(), left_hand=False, mph=
         return None
     box = roads.tile_bbox(tx, ty)
     signs = place(md, frame, box, context, left_hand, mph, sys_row)
-    signs = signs[[tables()[1]["rules"][int(r)] not in sys_row.get("off", ()) for r in signs[:, 4]]] if len(signs) else signs
+    signs = supported(signs, sys_row)
     keep = [k for k in range(len(signs)) if not exitsigns._on_deck(signs[k, :2], decks, 1.5)]
     if not keep:
         return None

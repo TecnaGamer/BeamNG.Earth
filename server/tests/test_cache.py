@@ -85,6 +85,32 @@ class LruTest(Base):
         self.assertEqual(c.usage(), (7 * MB, 7))
         self.assertEqual(c.evict(), (0, 0), "under the cap: nothing")
 
+    def test_elevation_tiles_outlast_the_rest_up_to_their_share(self):
+        """The raw elevation tiles (KEEP_PREFIXES) are passed over while they are at most KEEP_SHARE of the low-water
+        target: older than every photo, they stay and the photos go; beyond the share their own oldest go."""
+        for i in range(4):
+            put(self.root, f"dem/mapterhorn/15/1/{i}.webp", MB, T0 - (20 - i) * DAY)      # the oldest of all
+        for i in range(8):
+            put(self.root, f"imagery/usgs/16/1/{i}.jpg", MB, T0 - (10 - i) * DAY)
+        self.clock.t += 7200
+        c = self.make(cap_gb=0.010)         # 12 MB in use, cap 10 MB -> 9 MB; the share 25 % of 9 MB = 2.25 MB
+        n, b = c.evict()
+        self.assertEqual((n, b), (3, 3 * MB))
+        # the 4 MB of tiles are above the share: their two oldest go first (down to 2 MB), then the oldest photo
+        self.assertEqual([exists(self.root, f"dem/mapterhorn/15/1/{i}.webp") for i in range(4)],
+                         [False, False, True, True])
+        self.assertEqual([exists(self.root, f"imagery/usgs/16/1/{i}.jpg") for i in range(8)], [False] + [True] * 7)
+        # a smaller cap: a photo goes before the tiles left (2 MB, within 25 % of the 8.06 MB target)
+        c.set_cap(0.00895)
+        c.evict()
+        self.assertTrue(exists(self.root, "dem/mapterhorn/15/1/3.webp"))
+        self.assertTrue(exists(self.root, "dem/mapterhorn/15/1/2.webp"))
+        self.assertEqual(c.usage()[0], 8 * MB)
+        with unittest.mock.patch.object(cachemod, "KEEP_SHARE", 0.0):     # (as before: plain LRU)
+            c.set_cap(0.004)
+            c.evict()
+        self.assertFalse(exists(self.root, "dem/mapterhorn/15/1/2.webp"))
+
     def test_a_disk_short_of_its_reserve_cuts_the_cache_back(self):
         """A cap larger than the disk's free space (or unlimited): when the disk has less than its reserve free, the
         tick evicts the least recently used files whatever the cap; files of this session's last hour stay."""
@@ -576,6 +602,7 @@ class ThreadTest(Base):
         self.assertTrue(os.path.exists(os.path.join(self.root, cachemod.INDEX_FILE)), "SAVE_S passed: saved")
 
     def test_background_thread(self):
+        self.enterContext(mock.patch.object(cachemod, "WALK_DELAY_S", 0.0))     # (its start-up walk at once)
         put(self.root, "imagery/usgs/16/1/0.jpg", MB, T0 - DAY)
         c = cachemod.Cache(self.root, 0.0001, now=self.clock)
         self.assertTrue(c._ready_ev.wait(10))
@@ -771,14 +798,6 @@ class ServerCacheTest(Base):
         self.assertEqual([m["type"] for m in msgs], ["hello"])
         self.assertFalse(os.path.exists(os.path.join(self.root, "c2", cachemod.VERSION_FILE)),
                          "Server() alone writes nothing into the cache root")
-
-    @unittest.skip("shared world building, commented out 2026-10-27 (off since 2026-10-23; the user: not coming back for a while): earthd.share_port")
-    def test_share_port(self):
-        """The BeamMP group service's port: this machine's BNGE_SHARE_PORT, else the BeamMP server's, else 47621."""
-        self.assertEqual(earthd.share_port(None, ""), earthd.peerworkmod.SHARE_PORT)
-        self.assertEqual(earthd.share_port(50000, ""), 50000)
-        self.assertEqual(earthd.share_port(50000, "51000"), 51000)
-        self.assertEqual(earthd.share_port(80, "x"), earthd.peerworkmod.SHARE_PORT, "unusable ones skipped")
 
     def test_cli(self):
         self.assertEqual(earthd.parse_cache_cap("12.5"), 12.5)

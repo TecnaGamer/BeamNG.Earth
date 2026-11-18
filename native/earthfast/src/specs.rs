@@ -10,6 +10,7 @@
 //! back through callbacks only when a road needs them, as the Python did), the opt-in French and European passes, and
 //! the Spec namedtuples. The numbers are the Python's bit for bit: numpy's pairwise sums, linspace and interp, libm's
 //! cos / hypot, Python's min / max (the first of equals) and round (half to even).
+use crate::dm::Dm;
 
 use std::collections::HashMap;
 
@@ -282,6 +283,7 @@ struct Layer<'a> {
     se_kind: Vec<i8>,
     se_tok: Vec<i32>,
     aisle: Vec<bool>,
+    region: Option<Vec<i64>>, // roads.WIDTH_REGIONS' index of the feature's region (None: all 0)
     built: [bool; 4],
 }
 
@@ -322,7 +324,7 @@ impl<'a> Layer<'a> {
             skind: col(d, "skind", n)?, stok: col(d, "stok", n)?, reg_pre: col(d, "reg_pre", n)?,
             name: opt_col(d, "name", n)?, eu_country: col(d, "eu_country", n)?, sides: col(d, "sides", n)?,
             sweden: col(d, "sweden", n)?, se_tag: col(d, "se_tag", n)?, se_kind: col(d, "se_kind", n)?,
-            se_tok: col(d, "se_tok", n)?, aisle: col(d, "aisle", n)?, built,
+            se_tok: col(d, "se_tok", n)?, aisle: col(d, "aisle", n)?, region: opt_col(d, "region", n)?, built,
         })
     }
 
@@ -483,7 +485,7 @@ fn urban_samples(ll: &[P], step_m: f64) -> Vec<P> {
         if p[1] > mx || mx.is_nan() { mx = p[1] }
     }
     let lat = 0.5 * (mn + mx);
-    let sx = 111320.0 * lat.to_radians().cos();
+    let sx = 111320.0 * lat.to_radians().dcos();
     let mut dist = vec![0.0f64; ll.len()];
     for k in 1..ll.len() {
         let (dx, dy) = ((ll[k][0] - ll[k - 1][0]) * sx, (ll[k][1] - ll[k - 1][1]) * 110540.0);
@@ -503,16 +505,16 @@ fn urban_samples(ll: &[P], step_m: f64) -> Vec<P> {
     }).collect()
 }
 
-/// roads._beside: the points d m left and right of each vertex of each line (counts of pts in turn).
-fn beside(pts: &[P], counts: &[usize], d: f64) -> (Vec<P>, Vec<P>) {
+/// roads._beside: the points ds[n] m left and right of each vertex of line n (counts of pts in turn).
+fn beside(pts: &[P], counts: &[usize], ds: &[f64]) -> (Vec<P>, Vec<P>) {
     let mut left = pts.to_vec();
     let mut right = pts.to_vec();
     let mut k = 0;
-    for &c in counts {
+    for (&c, &d) in counts.iter().zip(ds) {
         let p = &pts[k..k + c];
         if c >= 2 {
             let lat: Vec<f64> = p.iter().map(|q| q[1]).collect();
-            let mx = 111320.0 * (np_sum(&lat) / (c as f64)).to_radians().cos();
+            let mx = 111320.0 * (np_sum(&lat) / (c as f64)).to_radians().dcos();
             let m = [mx, 110540.0];
             let q: Vec<P> = p.iter().map(|v| [v[0] * m[0], v[1] * m[1]]).collect();
             for j in 0..c {
@@ -523,7 +525,7 @@ fn beside(pts: &[P], counts: &[usize], d: f64) -> (Vec<P>, Vec<P>) {
                 } else {
                     [(q[j + 1][0] - q[j - 1][0]) / 2.0, (q[j + 1][1] - q[j - 1][1]) / 2.0]
                 };
-                let h = t[0].hypot(t[1]);
+                let h = t[0].dhypot(t[1]);
                 let h = if h.is_nan() { h } else if h > 1e-9 { h } else { 1e-9 };
                 let t = [t[0] / h, t[1] / h];
                 let off = [(-t[1] * d) / m[0], (t[0] * d) / m[1]];
@@ -566,6 +568,7 @@ struct Prm {
     urban_sample: f64,
     urban_share: f64,
     urban_beside: f64,
+    urban_highway_beside: f64,
     urban_beside_share: f64,
     urban_both_share: f64,
     dual_gap0: f64,
@@ -580,6 +583,11 @@ struct Prm {
     mountain_max_lanes: f64,
     se_town_kmh: f64,
     edge_m: f64,
+    reg_beside: f64,
+    winding_on: bool,
+    winding_deg_km: f64,
+    winding_min_m: f64,
+    winding_step: f64,
 }
 
 impl Prm {
@@ -587,12 +595,18 @@ impl Prm {
         let g = |k: &str| prm_get(p, k);
         Ok(Prm {
             min_part: g("MIN_PART")?, urban_sample: g("URBAN_SAMPLE_M")?, urban_share: g("URBAN_SHARE")?,
-            urban_beside: g("URBAN_BESIDE_M")?, urban_beside_share: g("URBAN_BESIDE_SHARE")?,
+            urban_beside: g("URBAN_BESIDE_M")?, urban_highway_beside: g("URBAN_HIGHWAY_BESIDE_M")?,
+            urban_beside_share: g("URBAN_BESIDE_SHARE")?,
             urban_both_share: g("URBAN_BOTH_SHARE")?, dual_gap0: g("DUAL_GAP_M0")?, dual_gap1: g("DUAL_GAP_M1")?,
             dual_share: g("DUAL_SHARE")?, dual_cos: g("DUAL_COS")?, mountain_on: g("MOUNTAIN_ON")? != 0.0,
             mountain_switchbacks: g("MOUNTAIN_SWITCHBACKS")?, mountain_span: g("MOUNTAIN_SPAN_M")?,
             mountain_turn: g("MOUNTAIN_TURN_DEG")?, mountain_road: g("MOUNTAIN_ROAD_M")?,
             mountain_max_lanes: g("MOUNTAIN_MAX_LANES")?, se_town_kmh: g("SE_TOWN_MAX_KMH")?, edge_m: g("EDGE_M")?,
+            reg_beside: g("REGIONAL_BESIDE_SHARE")?,
+            winding_on: p.get("WINDING_ON").copied().unwrap_or(0.0) != 0.0,
+            winding_deg_km: p.get("WINDING_DEG_PER_KM").copied().unwrap_or(f64::INFINITY),
+            winding_min_m: p.get("WINDING_MIN_M").copied().unwrap_or(f64::INFINITY),
+            winding_step: p.get("WINDING_STEP_M").copied().unwrap_or(20.0),
         })
     }
 }
@@ -603,7 +617,7 @@ fn switchbacks(ll: &[P], span: f64, turn: f64) -> usize {
         return 0;
     }
     let lat: Vec<f64> = ll.iter().map(|p| p[1]).collect();
-    let kx = 111320.0 * (np_mean(&lat)).to_radians().cos();
+    let kx = 111320.0 * (np_mean(&lat)).to_radians().dcos();
     let mut flat = Vec::with_capacity(ll.len() * 2);
     for p in ll {
         flat.push((p[0] - ll[0][0]) * kx);
@@ -618,6 +632,98 @@ fn switchbacks(ll: &[P], span: f64, turn: f64) -> usize {
         }
     }
     c
+}
+
+/// (degrees of heading change per km, length m) of a lon/lat line, its heading read along chords of `step` m (a line
+/// resampled every step m: a densely drawn or jittery line counts no more turning than its shape has). A winding
+/// mountain road turns 300-1000 deg a km; a rural road through hills 50-200.
+pub fn winding(ll: &[P], step: f64) -> (f64, f64) {
+    if ll.len() < 2 {
+        return (0.0, 0.0);
+    }
+    let lat: Vec<f64> = ll.iter().map(|p| p[1]).collect();
+    let kx = 111320.0 * (np_mean(&lat)).to_radians().dcos();
+    let xy: Vec<[f64; 2]> = ll.iter().map(|p| [(p[0] - ll[0][0]) * kx, (p[1] - ll[0][1]) * 110540.0]).collect();
+    let mut s = vec![0.0f64; xy.len()];
+    for k in 1..xy.len() {
+        s[k] = s[k - 1] + (xy[k][0] - xy[k - 1][0]).dhypot(xy[k][1] - xy[k - 1][1]);
+    }
+    let total = s[s.len() - 1];
+    if total < 2.0 * step {
+        return (0.0, total);
+    }
+    let m = (total / step).floor() as usize;
+    let mut pts = Vec::with_capacity(m + 1);
+    let mut j = 0usize;
+    for q in 0..=m {
+        let at = q as f64 * step;
+        while j + 2 < s.len() && s[j + 1] < at {
+            j += 1;
+        }
+        let d = (s[j + 1] - s[j]).max(1e-9);
+        let t = ((at - s[j]) / d).clamp(0.0, 1.0);
+        pts.push([xy[j][0] + t * (xy[j + 1][0] - xy[j][0]), xy[j][1] + t * (xy[j + 1][1] - xy[j][1])]);
+    }
+    let mut turn = 0.0f64;
+    let mut prev: Option<f64> = None;
+    for w in pts.windows(2) {
+        let h = (w[1][1] - w[0][1]).datan2(w[1][0] - w[0][0]);
+        if let Some(p) = prev {
+            let mut d = h - p;
+            if d > std::f64::consts::PI {
+                d -= 2.0 * std::f64::consts::PI;
+            }
+            if d < -std::f64::consts::PI {
+                d += 2.0 * std::f64::consts::PI;
+            }
+            turn += d.abs();
+        }
+        prev = Some(h);
+    }
+    (turn.to_degrees() / (m as f64 * step) * 1000.0, total)
+}
+
+/// roads.WIDTH_REGIONS' default widths: (regions, classes, 5) of [town two-way, town one-way, rural two-way, rural
+/// one-way, a winding rural road's at most], NaN where the class formula stands.
+struct RegionTab {
+    r: usize,
+    c: usize,
+    v: Vec<f64>,
+}
+
+impl RegionTab {
+    fn get(&self, region: i64, c: usize, k: usize) -> f64 {
+        let r = region.max(0) as usize;
+        if r >= self.r || c >= self.c {
+            return f64::NAN;
+        }
+        self.v[(r * self.c + c) * 5 + k]
+    }
+}
+
+/// A road's width with the region's measured defaults (roads.WIDTH_TABLE) where the map gives no width: the class
+/// formula's w (RoadRules::cw) replaced by the region's default without a lane count; with a mapped lane count in town
+/// no parking lanes on top (lanes x LANE_W, the street's default the least). Highways and ramps keep cw's.
+#[allow(clippy::too_many_arguments)]
+fn region_width(rules: &RoadRules, rt: Option<&RegionTab>, region: i64, c: usize, built: bool, urban: bool,
+                rule_w: Option<f64>, oneway: bool, lanes: Option<i64>, link: bool, w: f64) -> f64 {
+    let Some(rt) = rt else { return w };
+    if rule_w.is_some() || !built || link || rules.has(c, F_MOTORWAY | F_TRUNK) {
+        return w;
+    }
+    let k = if urban { if oneway { 1 } else { 0 } } else if oneway { 3 } else { 2 };
+    let d = rt.get(region, c, k);
+    match lanes.filter(|&v| v != 0) {
+        None => if d.is_finite() { d } else { w },
+        Some(ln) if urban && rules.has(c, F_PARK) => {
+            // (the lanes, and the street's default width up to the lanes with a parking lane each side: a 4-lane
+            // street its lanes alone, a 2-lane one its street's width)
+            let drive = ln as f64 * rules.row(c).lw_or(rules.lane_w_default);
+            let street = if d.is_finite() { d } else { rules.cw(c, built, urban, None, oneway, None, false).0 };
+            pmax(drive, street.min(drive + 2.0 * rules.parking))
+        }
+        _ => w,
+    }
 }
 
 /// The Swedish reading (roads._swedish_specs) of the specs in place.
@@ -713,7 +819,7 @@ fn dual(l: &Layer, rules: &RoadRules, prm: &Prm, specs: &mut [Option<Sp>], europ
         let lines: Vec<(usize, usize)> = idx.iter().map(|&i| l.all_pts(i)).collect();
         let lat: Vec<f64> = lines.iter().flat_map(|&(a, b)| (a..b).map(|k| l.ll[[k, 1]])).collect();
         let lat0 = np_mean(&lat);
-        let m = [111320.0 * lat0.to_radians().cos(), 110540.0];
+        let m = [111320.0 * lat0.to_radians().dcos(), 110540.0];
         let r0 = l.pt(lines[0].0);
         let xy: Vec<Vec<f64>> = lines.iter().map(|&(a, b)| {
             let mut v = Vec::with_capacity(2 * (b - a));
@@ -933,12 +1039,24 @@ impl RoadRules {
     /// lon) -> bool (None: rural everywhere); prm: roads._spec_prm. Returns a dict of columns (spec_cols, "towns",
     /// "frontage" (n, 2), NaN where not asked).
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (geo, cols, built, raw_off, raw_rng, flow_fn, regional_fn, urban_fn, prm, european, left_hand))]
+    #[pyo3(signature = (geo, cols, built, raw_off, raw_rng, flow_fn, regional_fn, urban_fn, prm, european, left_hand,
+                        region_tab=None))]
     fn road_specs<'py>(&self, py: Python<'py>, geo: Geom<'py>, cols: Bound<'py, PyDict>, built: Vec<bool>,
                        raw_off: PyReadonlyArray1<'py, i64>, raw_rng: PyReadonlyArray2<'py, f64>,
                        flow_fn: Bound<'py, PyAny>, regional_fn: Bound<'py, PyAny>, urban_fn: Option<Bound<'py, PyAny>>,
-                       prm: HashMap<String, f64>, european: bool, left_hand: bool) -> PyResult<Bound<'py, PyDict>> {
+                       prm: HashMap<String, f64>, european: bool, left_hand: bool,
+                       region_tab: Option<numpy::PyReadonlyArray3<'py, f64>>) -> PyResult<Bound<'py, PyDict>> {
         let prm = Prm::new(&prm)?;
+        let rtab = match region_tab {
+            Some(t) => {
+                let a = t.as_array();
+                if a.shape()[2] != 5 {
+                    return Err(PyValueError::new_err("road_specs: region_tab (regions, classes, 5)"));
+                }
+                Some(RegionTab { r: a.shape()[0], c: a.shape()[1], v: a.iter().copied().collect() })
+            }
+            None => None,
+        };
         let l = Layer::new(geo.0.as_array(), &geo.1, &geo.2, &geo.3, &cols, built_of(&built)?)?;
         let n = l.n;
         let (ro, rr) = (raw_off.as_array(), raw_rng.as_array());
@@ -1007,6 +1125,8 @@ impl RoadRules {
                 kind = GRAVEL;
             }
             let (w, _) = self.cw(c, l.built(kind), false, rule_w, ow, ln.map(|v| v as f64), link);
+            let w = region_width(self, rtab.as_ref(), l.region.as_ref().map(|v| v[i]).unwrap_or(0), c, l.built(kind),
+                                 false, rule_w, ow, ln, link, w);
             out[i] = Some(Sp { width: w, w32: false, kind, urban: false, cls: c, oneway: ow, dir, kmh, gap,
                                median: None, lanes: ln, surf: l.stok[i], link, sides: -1, parking: true,
                                mountain: false });
@@ -1016,6 +1136,15 @@ impl RoadRules {
         if !asks.is_empty() {
             let urban_fn = urban_fn.unwrap();
             let lines: Vec<(usize, usize)> = asks.iter().map(|q| l.all_pts(q.i)).collect();
+            // (a motorway's or trunk road's built-up land further out, URBAN_HIGHWAY_BESIDE_M: WorldCover's built-up
+            // fringe of a wide rural freeway's own pavement reached the 30 m probes, I-25 at the Colorado / Wyoming line,
+            // wyo-backroads' PR #1117)
+            let reach: Vec<f64> = asks.iter().map(|q| if self.has(l.cls[q.i] as usize, F_MOTORWAY | F_TRUNK) {
+                prm.urban_highway_beside
+            } else {
+                prm.urban_beside
+            }).collect();
+            let edge: Vec<f64> = vec![prm.edge_m; asks.len()];
             let (pts, counts) = py.detach(|| {
                 let mut pts: Vec<P> = Vec::new();
                 let mut counts = Vec::with_capacity(lines.len());
@@ -1025,12 +1154,12 @@ impl RoadRules {
                     counts.push(s.len());
                     pts.extend(s);
                 }
-                let (lf, rt) = beside(&pts, &counts, prm.urban_beside);
+                let (lf, rt) = beside(&pts, &counts, &reach);
                 let mut all = pts.clone();
                 all.extend(lf);
                 all.extend(rt);
                 if european {
-                    let (el, er) = beside(&pts, &counts, prm.edge_m);
+                    let (el, er) = beside(&pts, &counts, &edge);
                     all.extend(el);
                     all.extend(er);
                 }
@@ -1063,11 +1192,17 @@ impl RoadRules {
                     && (!self.has(c, F_MOTORWAY | F_TRUNK) || mb >= prm.urban_both_share);
                 k += count;
                 let mut kind = l.skind[i];
-                if regional[i] && !urban {
+                // (a village's or subdivision's street: built-up land beside it, roads.REGIONAL_BESIDE_SHARE; a
+                // service road keeps the rule: a farm driveway runs through its farmyard's built-up land)
+                let streets = !self.has(c, F_SERVICE) && bmean(&by[sl.clone()]) >= prm.reg_beside;
+                if regional[i] && !urban && !streets {
                     kind = GRAVEL;
                 }
                 let ow = l.has_ow[i];
                 let (w, _) = self.cw(c, l.built(kind), urban, q.rule_w, ow, q.lanes.map(|v| v as f64), l.link[i]);
+                // (the region's measured default widths: roads.WIDTH_TABLE)
+                let w = region_width(self, rtab.as_ref(), l.region.as_ref().map(|v| v[i]).unwrap_or(0), c, l.built(kind),
+                                     urban, q.rule_w, ow, q.lanes, l.link[i], w);
                 out[i] = Some(Sp { width: w, w32: false, kind, urban, cls: c, oneway: ow, dir: q.dir, kmh: q.kmh,
                                    gap: q.gap, median: None, lanes: q.lanes, surf: l.stok[i], link: l.link[i],
                                    sides: -1, parking: true, mountain: false });
@@ -1145,6 +1280,36 @@ impl RoadRules {
                     sp.mountain = true;
                 }
             }
+            // winding rural roads (touge, alpine roads without hairpins enough for a pass road; a one-way mountain road
+            // of two lanes, Irohazaka's, too): at most the region's winding width (roads.WINDING_*)
+            if prm.winding_on {
+                if let Some(rt) = rtab.as_ref() {
+                    for i in 0..n {
+                        let Some(sp) = out[i].as_mut() else { continue };
+                        if sp.urban || sp.mountain || sp.kind != PAVED || sp.link || med_truthy(sp.median)
+                            || self.has(sp.cls, F_MOTORWAY) || l.mapped_w(i)
+                            || (sp.lanes.unwrap_or(0) as f64) > prm.mountain_max_lanes {
+                            continue;
+                        }
+                        let reg = l.region.as_ref().map(|v| v[i]).unwrap_or(0);
+                        let cap = rt.get(reg, sp.cls, 4);
+                        if !cap.is_finite() || cap >= sp.width {
+                            continue;
+                        }
+                        let a = l.co[l.ro[l.po[i]]];
+                        let b = l.co[l.ro[l.po[i] + 1]];
+                        if b < a + 3 {
+                            continue;
+                        }
+                        let ll: Vec<P> = (a..b).map(|k| l.pt(k)).collect();
+                        let (deg_km, len) = winding(&ll, prm.winding_step);
+                        if len >= prm.winding_min_m && deg_km >= prm.winding_deg_km {
+                            sp.width = cap;
+                            sp.w32 = false;
+                        }
+                    }
+                }
+            }
             out
         });
         let d = PyDict::new(py);
@@ -1197,6 +1362,52 @@ impl RoadRules {
         let d = PyDict::new(py);
         spec_cols(py, &d, &out, &self.names)?;
         Ok(d)
+    }
+
+    /// roads.width_repair (the road revamp plan's section 2.2 WIDTH repair, its upper side): whether each mapped width
+    /// vals[k] of feature feat[k] is no carriageway but a right-of-way / platform: wider than `factor` times its lanes'
+    /// width (class lane width, LANE_W_DEFAULT without; a two-way road two lanes at least) and a SHOULDER_M each side.
+    /// cls: STYLE class index (-1: not a road of STYLE: never); lanes: the map's count (-1: none); a motorway / trunk
+    /// without one has two, a link one (one-way) or two, any other road without a count is not tested (its count is
+    /// unknown: a wide multi-lane street keeps its mapped width). NaN / inf values: false. MA Route 2's 30.5 m (a 100 ft
+    /// right-of-way) on a two-lane rural trunk (GitHub #901).
+    #[allow(clippy::too_many_arguments)]
+    fn width_rejects<'py>(&self, py: Python<'py>, cls: PyReadonlyArray1<'py, i32>, oneway: PyReadonlyArray1<'py, bool>,
+                          link: PyReadonlyArray1<'py, bool>, lanes: PyReadonlyArray1<'py, i64>,
+                          feat: PyReadonlyArray1<'py, i64>, vals: PyReadonlyArray1<'py, f64>, factor: f64)
+                          -> PyResult<Bound<'py, PyArray1<bool>>> {
+        let (cls, oneway, link, lanes) = (cls.as_array(), oneway.as_array(), link.as_array(), lanes.as_array());
+        let (feat, vals) = (feat.as_array(), vals.as_array());
+        let n = cls.len();
+        if oneway.len() != n || link.len() != n || lanes.len() != n || feat.len() != vals.len() {
+            return Err(PyValueError::new_err("width_rejects: one class, oneway, link and lane count per feature, \
+                                              a feature per value"));
+        }
+        let mut out = vec![false; vals.len()];
+        for (k, o) in out.iter_mut().enumerate() {
+            let (i, v) = (feat[k], vals[k]);
+            if i < 0 || (i as usize) >= n || !v.is_finite() {
+                continue;
+            }
+            let i = i as usize;
+            if cls[i] < 0 {
+                continue;
+            }
+            let c = cls[i] as usize;
+            let ow = oneway[i];
+            let l = if lanes[i] > 0 {
+                lanes[i]
+            } else if link[i] {
+                if ow { 1 } else { 2 }
+            } else if self.has(c, F_MOTORWAY | F_TRUNK) {
+                2
+            } else {
+                continue;
+            };
+            let lb = if ow { l } else { l.max(2) } as f64;
+            *o = v > factor * lb * self.row(c).lw_or(self.lane_w_default) + 2.0 * self.shoulder;
+        }
+        Ok(out.into_pyarray(py))
     }
 
     /// roads._structure_width of features idx (NaN: None).
@@ -1284,7 +1495,7 @@ fn rural_connectors(l: &Layer, rules: &RoadRules, prm: &Prm, out: &mut [Option<S
         return;
     }
     let lat: Vec<f64> = points.iter().map(|p| p[1]).collect();
-    let scale = [111320.0 * np_mean(&lat).to_radians().cos(), 110540.0];
+    let scale = [111320.0 * np_mean(&lat).to_radians().dcos(), 110540.0];
     for &i in &cand {
         let Some(e) = ends(i) else { continue };
         if l.lens[i] > 2.0 * prm.urban_beside {

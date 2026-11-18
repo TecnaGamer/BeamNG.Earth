@@ -120,5 +120,48 @@ class JoinBedsTest(unittest.TestCase):
         self.assertEqual(float(out[1][0]), 103.0)
 
 
+class NodeMemoFaultTest(RailProfileTest):
+    """A node made on a short read of the ground is not kept (TecnaGamer's review of #1248): the build that read short is
+    built again on the full DEM, and that rebuild must make the node again, reading (and faulting) anew."""
+
+    def test_a_node_made_on_a_short_read_is_made_again(self):
+        import revisit
+        short = [True]
+
+        def ground(xy):
+            if short[0]:
+                revisit.fault()             # (as dem.py where a lidar sheet is not there yet)
+                return hill_xy(xy) - 5.0
+            return hill_xy(xy)
+        rails = railways.parts(FRAME, [self.f], roads.tile_bbox(0, 0), clip=True)
+        with revisit.scope() as b:
+            first = railprofile.beds(FRAME, "f", self.load, ground, rails)
+        self.assertFalse(b.complete, "the build itself saw the fault")
+        self.assertEqual(len(railprofile._NODES), 0, "no node kept")
+        short[0] = False
+        with revisit.scope() as b:
+            again = railprofile.beds(FRAME, "f", self.load, ground, rails)
+        self.assertTrue(b.complete)
+        self.assertGreater(len(railprofile._NODES), 0, "made on the full ground: kept")
+        gap = max(float(np.nanmax(z1 - z0)) for z0, z1 in zip(first, again))
+        self.assertAlmostEqual(gap, 5.0, places=3, msg="the rebuild has the full ground's beds")
+
+    def test_a_pool_tasks_fault_counts_too(self):
+        import revisit
+        from runtimeprofiler import ThreadPoolExecutor
+        pool = ThreadPoolExecutor(1)
+
+        def far(xy):
+            revisit.fault()
+            return hill_xy(xy)
+
+        def ground(xy):                     # (dem.py reads its tiles in its fetch pool)
+            return pool.submit(far, xy).result()
+        rails = railways.parts(FRAME, [self.f], roads.tile_bbox(0, 0), clip=True)
+        railprofile.beds(FRAME, "p", self.load, ground, rails)
+        pool.shutdown()
+        self.assertEqual(len(railprofile._NODES), 0)
+
+
 if __name__ == "__main__":
     unittest.main()

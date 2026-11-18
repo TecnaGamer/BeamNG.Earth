@@ -2,6 +2,7 @@
 //! hump; a flyover's untagged middle stretch; a road over a railway's short tunnel). Two calls: the crossings of the
 //! ground lines with where to read the ground on each side (gradesep_candidates), then, with those heights, the
 //! bridge spans on the upper lines (gradesep_spans). Pure and deterministic for a given input order.
+use crate::dm::Dm;
 
 use numpy::ndarray::Array2;
 use numpy::{IntoPyArray, PyArray2, PyReadonlyArray1, PyReadonlyArray2};
@@ -33,7 +34,7 @@ impl<'a> Lines<'a> {
         let mut arc = vec![0.0; xy.nrows()];
         for l in 0..st.len().saturating_sub(1) {
             for k in st[l] + 1..st[l + 1] {
-                arc[k] = arc[k - 1] + (xy[[k, 0]] - xy[[k - 1, 0]]).hypot(xy[[k, 1]] - xy[[k - 1, 1]]);
+                arc[k] = arc[k - 1] + (xy[[k, 0]] - xy[[k - 1, 0]]).dhypot(xy[[k, 1]] - xy[[k - 1, 1]]);
             }
         }
         Lines { xy, st, arc, ends: std::cell::OnceCell::new() }
@@ -89,7 +90,7 @@ impl<'a> Lines<'a> {
         let (i0, i1) = (self.st[l], self.st[l + 1]);
         let (a, b) = if last { (i1 - 2, i1 - 1) } else { (i0, i0 + 1) };
         let (dx, dy) = (self.xy[[b, 0]] - self.xy[[a, 0]], self.xy[[b, 1]] - self.xy[[a, 1]]);
-        let n = dx.hypot(dy).max(1e-12);
+        let n = dx.dhypot(dy).max(1e-12);
         (dx / n, dy / n)
     }
     /// The straightest line (not UNDER, a railway for a railway, a road for a road) joined to line l's end (last) or
@@ -115,7 +116,7 @@ impl<'a> Lines<'a> {
             }
             {
                 let q = self.end(o, oend);
-                if (q.0 - p.0).hypot(q.1 - p.1) >= tol {
+                if (q.0 - p.0).dhypot(q.1 - p.1) >= tol {
                     continue;
                 }
                 let e = self.dir(o, oend);
@@ -191,7 +192,7 @@ pub fn gradesep_candidates<'py>(
         for dx in -1..=1 {
             for dy in -1..=1 {
                 for &k in ends_grid.get(&(gx + dx, gy + dy)).map(|v| v.as_slice()).unwrap_or(&[]) {
-                    if (de[[k, 0]] - p.0).hypot(de[[k, 1]] - p.1) < touch {
+                    if (de[[k, 0]] - p.0).dhypot(de[[k, 1]] - p.1) < touch {
                         best = best.max(de[[k, 2]]);
                     }
                 }
@@ -349,13 +350,13 @@ pub fn gradesep_candidates<'py>(
                         continue;
                     }
                     let p = (px + t * rx, py_ + t * ry);
-                    if found.iter().any(|q| (q.0 - p.0).hypot(q.1 - p.1) < 1.0) {
+                    if found.iter().any(|q| (q.0 - p.0).dhypot(q.1 - p.1) < 1.0) {
                         continue;
                     }
                     found.push(p);
                     let sa = ln.arc[k] + t * (ln.arc[k + 1] - ln.arc[k]);
                     let sb = ln.arc[m] + u * (ln.arc[m + 1] - ln.arc[m]);
-                    let (ra, rb) = (rx.hypot(ry), sx.hypot(sy));
+                    let (ra, rb) = (rx.dhypot(ry), sx.dhypot(sy));
                     let sin = (den / (ra * rb).max(1e-12)).abs();
                     let (up, lo, su, sl, how) = if under(kind[b]) {
                         (a, b, sa, sb, 1.0)
@@ -364,7 +365,7 @@ pub fn gradesep_candidates<'py>(
                     } else {
                         let junction = [ln.end(a, false), ln.end(a, true), ln.end(b, false), ln.end(b, true)]
                             .iter()
-                            .any(|e| (e.0 - p.0).hypot(e.1 - p.1) < end_m);
+                            .any(|e| (e.0 - p.0).dhypot(e.1 - p.1) < end_m);
                         if junction {
                             continue;
                         }
@@ -557,7 +558,7 @@ fn cut(xy: &[[f64; 2]], a: f64, b: f64) -> Vec<[f64; 2]> {
     let mut s = Vec::with_capacity(xy.len());
     s.push(0.0f64);
     for k in 1..xy.len() {
-        let d = (xy[k][0] - xy[k - 1][0]).hypot(xy[k][1] - xy[k - 1][1]);
+        let d = (xy[k][0] - xy[k - 1][0]).dhypot(xy[k][1] - xy[k - 1][1]);
         let last = *s.last().unwrap();
         s.push(last + d);
     }
@@ -623,7 +624,7 @@ fn gather_row(lay: &Layer, i: usize, r: i64, g: &mut Gathered) {
                 }
                 if lay.pk[q] < 0 {
                     let seg: Vec<f64> = (1..piece.len())
-                        .map(|k| (piece[k][0] - piece[k - 1][0]).hypot(piece[k][1] - piece[k - 1][1]))
+                        .map(|k| (piece[k][0] - piece[k - 1][0]).dhypot(piece[k][1] - piece[k - 1][1]))
                         .collect();
                     let l = crate::levels::np_sum(&seg);
                     let (f, e) = (piece[0], piece[piece.len() - 1]);
@@ -818,21 +819,21 @@ pub fn lines_covered<'py>(
             let (x, y) = (xy[[k, 0]], xy[[k, 1]]);
             bb[i] = [bb[i][0].min(x), bb[i][1].min(y), bb[i][2].max(x), bb[i][3].max(y)];
             if k > a {
-                len[i] += (x - xy[[k - 1, 0]]).hypot(y - xy[[k - 1, 1]]);
+                len[i] += (x - xy[[k - 1, 0]]).dhypot(y - xy[[k - 1, 1]]);
             }
         }
     }
     let near = |x: f64, y: f64, j: usize| -> bool {
         let (a, b) = (starts[j] as usize, starts[j + 1] as usize);
         if b - a == 1 {
-            return (x - xy[[a, 0]]).hypot(y - xy[[a, 1]]) <= tol;
+            return (x - xy[[a, 0]]).dhypot(y - xy[[a, 1]]) <= tol;
         }
         for k in a..b.saturating_sub(1) {
             let (x0, y0, x1, y1) = (xy[[k, 0]], xy[[k, 1]], xy[[k + 1, 0]], xy[[k + 1, 1]]);
             let (dx, dy) = (x1 - x0, y1 - y0);
             let l2 = dx * dx + dy * dy;
             let t = if l2 > 0.0 { (((x - x0) * dx + (y - y0) * dy) / l2).clamp(0.0, 1.0) } else { 0.0 };
-            if (x - x0 - t * dx).hypot(y - y0 - t * dy) <= tol {
+            if (x - x0 - t * dx).dhypot(y - y0 - t * dy) <= tol {
                 return true;
             }
         }

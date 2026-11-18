@@ -5,6 +5,7 @@ its height in trees.lua's DE_SIGNS (HEIGHTS: rows carry it, so the mesh is drawn
 as built). A group is a face alone, over its 1002 plate (_p<k>, k an index into PLATES) or over another face
 (_<face>: UNDER), in one of three sizes (SIZES: a suffix, Größe 1, 2 and 3). And its zone signs (ZONE_*: the sign tiles' dezones.de_zone_mesh, no group)."""
 import math
+import dmath
 
 # the kernel's 1002 pictures in its order (native dejunction.rs PATTERNS): the other arms' slots, then the priority
 # pair's; D the approach (down on the plate), L left, A ahead, R right
@@ -57,12 +58,12 @@ def rounded(n, first, r_in, radius, segs):
     for k in range(n):
         a = math.radians(first) + 2 * half * k
         if radius <= 0 or segs <= 0:
-            d = r_in / math.cos(half)
-            out.append((d * math.cos(a), d * math.sin(a)))
+            d = r_in / dmath.cos(half)
+            out.append((d * dmath.cos(a), d * dmath.sin(a)))
             continue
-        d = (r_in - radius) / math.cos(half)            # (the arc's centre: radius in from both sides)
-        out += [(d * math.cos(a) + radius * math.cos(a - half + 2 * half * j / segs),
-                 d * math.sin(a) + radius * math.sin(a - half + 2 * half * j / segs))
+        d = (r_in - radius) / dmath.cos(half)            # (the arc's centre: radius in from both sides)
+        out += [(d * dmath.cos(a) + radius * dmath.cos(a - half + 2 * half * j / segs),
+                 d * dmath.sin(a) + radius * dmath.sin(a - half + 2 * half * j / segs))
                 for j in range(segs + (radius < r_in))]
     return out
 

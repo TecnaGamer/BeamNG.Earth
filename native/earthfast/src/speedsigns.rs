@@ -25,6 +25,7 @@
 //! 2B-1: 24x30 in, 30x36 multi-lane, 36x48 expressway, 48x60 freeway); Canada: Rb-1 ("MAXIMUM", the number, "km/h");
 //! elsewhere the Vienna Convention's C14 (white disc, red ring, the number; 600 / 750 / 900 mm). Lettering: the sign
 //! atlas (server/sign_glyphs.json, Roadgeek 2014 Series EEM), condensed for the round signs.
+use crate::dm::Dm;
 
 use std::collections::HashMap;
 
@@ -282,7 +283,7 @@ pub fn speed_sign_place<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, l
         let (a, b) = (off[r] as usize, off[r + 1] as usize);
         let mut s = vec![0.0f64; b.saturating_sub(a)];
         for k in a + 1..b {
-            s[k - a] = s[k - a - 1] + ((pts[[k, 0]] - pts[[k - 1, 0]]).powi(2) + (pts[[k, 1]] - pts[[k - 1, 1]]).powi(2)).sqrt();
+            s[k - a] = s[k - a - 1] + ((pts[[k, 0]] - pts[[k - 1, 0]]).sq() + (pts[[k, 1]] - pts[[k - 1, 1]]).sq()).sqrt();
         }
         let road = Road { a, b, s, hw: meta[[r, 0]], dir: meta[[r, 1]] as i64, rank: meta[[r, 2]] as i64,
                           urban: meta[[r, 3]] != 0.0, link: meta[[r, 4]] != 0.0 };
@@ -414,7 +415,7 @@ pub fn speed_sign_place<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, l
                     let (sk, sk1) = (rd.s[k - ka], rd.s[k + 1 - ka]);
                     if sk1 <= ed.sa || sk >= ed.sb { continue; }
                     let (p, q) = ([ll[[k, 0]], ll[[k, 1]]], [ll[[k + 1, 0]], ll[[k + 1, 1]]]);
-                    let band = (((p[1] + q[1]) * 0.5).floor() + 0.5).to_radians().cos().max(0.05);
+                    let band = (((p[1] + q[1]) * 0.5).floor() + 0.5).to_radians().dcos().max(0.05);
                     let dlon = dlat / band;
                     let mut ts: Vec<f64> = Vec::new();
                     for (c, step) in [(0usize, dlon), (1usize, dlat)] {
@@ -555,7 +556,7 @@ pub fn speed_sign_place<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, l
         let Some((q, t, road_xy)) = found else { continue };
         // one panel a spot: overlapping map lines (two pieces of one road) put a second one there
         if placed.iter().any(|(p, d)| dot(*d, t) > SAME_WAY_COS
-                             && (p[0] - q[0]).powi(2) + (p[1] - q[1]).powi(2) < PANEL_GAP_M * PANEL_GAP_M) {
+                             && (p[0] - q[0]).sq() + (p[1] - q[1]).sq() < PANEL_GAP_M * PANEL_GAP_M) {
             continue;
         }
         placed.push((q, t));
@@ -665,7 +666,7 @@ impl Mesh {
         let uv = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]];
         for k in 0..8 {
             let (a, b) = (k as f64 * std::f64::consts::TAU / 8.0, (k + 1) as f64 * std::f64::consts::TAU / 8.0);
-            let (pa, pb) = ([x0 + r * a.cos(), r * a.sin()], [x0 + r * b.cos(), r * b.sin()]);
+            let (pa, pb) = ([x0 + r * a.dcos(), r * a.dsin()], [x0 + r * b.dcos(), r * b.dsin()]);
             self.quad([[pa[0], pa[1], z0], [pb[0], pb[1], z0], [pb[0], pb[1], z1], [pa[0], pa[1], z1]], m, uv);
         }
     }
@@ -701,7 +702,7 @@ pub(crate) fn rounded(w: f64, z0: f64, h: f64, r: f64) -> Vec<[f64; 2]> {
                             (-w / 2.0 + r, z0 + h - r, 90.0), (-w / 2.0 + r, z0 + r, 180.0)] {
         for k in 0..7 {
             let a = (start + 15.0 * k as f64).to_radians();
-            out.push([cy + r * a.cos(), cz + r * a.sin()]);
+            out.push([cy + r * a.dcos(), cz + r * a.dsin()]);
         }
     }
     out
@@ -710,7 +711,7 @@ pub(crate) fn rounded(w: f64, z0: f64, h: f64, r: f64) -> Vec<[f64; 2]> {
 fn circle(r: f64, zc: f64) -> Vec<[f64; 2]> {
     (0..48).map(|k| {
         let a = k as f64 * std::f64::consts::TAU / 48.0;
-        [r * a.cos(), zc + r * a.sin()]
+        [r * a.dcos(), zc + r * a.dsin()]
     }).collect()
 }
 

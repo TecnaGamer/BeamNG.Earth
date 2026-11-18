@@ -136,4 +136,16 @@ P.setCompact(true);P.draw(true)
 T.check(sent[#sent].enabled == false, 'disabling unsubscribes')
 T.check(P.snapshot().frames == 0, 'disabling clears samples')
 T.check(not P.enabled and settingsWrites[#settingsWrites][1]=='runtimeProfiler' and settingsWrites[#settingsWrites][2]==false, 'Stop profiling persists the disabled setting')
+
+-- the car held while the world loads, apart from slow frames (2026-11-11)
+P.setEnabled(true)
+now = now + 10000
+P.update(16, {}, true, true, send, 'edge'); P.update(80, {}, true, true, send, 'edge'); P.update(70, {}, true, true, send)
+local hv = P.snapshot()
+T.check(hv.held.frames == 2 and hv.held.slow == 1 and hv.slowPlaying == 1 and hv.held.why.edge == 96, 'held frames apart')
+local ht = P.heldText(hv)
+T.check(ht and ht:find('Car held while the world loads: 0.1 s (at the edge of the ground)', 1, true)
+  and ht:find('while playing: 1', 1, true), 'held line: ' .. tostring(ht))
+P.setEnabled(false)
+
 T.done('profiler')

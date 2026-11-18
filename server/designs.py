@@ -15,6 +15,7 @@ from collections import namedtuple
 import numpy as np
 
 import fast
+import dnp
 import furniture
 import germany
 from designsigns import (  # noqa: F401 (the signs' catalogue, re-exported: designs.GROUPS, .PLATES ...)
@@ -137,11 +138,11 @@ def _on_line(line, p):
     """(arc length from line[0] of each point's nearest point on the polyline line (k, 2), its distance from it, signed
     + toward the right of a driver coming in along the line toward line[0]) of points p (n, 2)."""
     d = np.diff(line, axis=0)
-    keep = np.hypot(d[:, 0], d[:, 1]) > 1e-9                # (a repeated vertex is no segment)
+    keep = dnp.hypot(d[:, 0], d[:, 1]) > 1e-9                # (a repeated vertex is no segment)
     a, d = line[:-1][keep], d[keep]
-    seg = np.hypot(d[:, 0], d[:, 1])
+    seg = dnp.hypot(d[:, 0], d[:, 1])
     t = np.clip(((p[:, None, :] - a[None]) * d[None]).sum(-1) / (seg * seg)[None], 0.0, 1.0)
-    gap = np.hypot(*(a[None] + t[..., None] * d[None] - p[:, None, :]).transpose(2, 0, 1))
+    gap = dnp.hypot(*(a[None] + t[..., None] * d[None] - p[:, None, :]).transpose(2, 0, 1))
     k = np.argmin(gap, axis=1)
     i = np.arange(len(p))
     v = p - a[k]
@@ -168,13 +169,13 @@ def mapped_arms(arms, rows, lines=None):
     right = np.zeros((len(rows), len(arms)), bool)
     for j, a in enumerate(arms):
         line = None if lines is None or lines[j] is None else np.asarray(lines[j], np.float64)[:, :2]
-        length = float(np.hypot(*np.diff(line, axis=0).T).sum()) if line is not None and len(line) >= 2 else 0.0
+        length = float(dnp.hypot(*np.diff(line, axis=0).T).sum()) if line is not None and len(line) >= 2 else 0.0
         if length > 1e-9:
             along, side = _on_line(line, rows[:, :2])
         else:
             u = np.asarray(a[2], np.float64)[:2]
             v = rows[:, :2] - np.asarray(a[3][:2], np.float64)
-            along = v @ u
+            along = dnp.matmul(v, u)
             side = v[:, 1] * u[0] - v[:, 0] * u[1]      # (toward the drivers' right coming in along -u: (-u.y, u.x))
             length = a[5] if len(a) > 5 else np.inf
         reach = min(furniture.MAPPED_ARM_M, length / 2)
@@ -342,7 +343,7 @@ def _no_junction(arms):
     two = [a for a in arms if not (a[1].oneway and getattr(a[1], "dir", 0))]
     if not len(leave) == len(come) == len(two) == 1:
         return False
-    return float(np.dot(np.asarray(leave[0][2], np.float64)[:2], np.asarray(come[0][2], np.float64)[:2])) > SPLIT_DOT
+    return float(dnp.dot(np.asarray(leave[0][2], np.float64)[:2], np.asarray(come[0][2], np.float64)[:2])) > SPLIT_DOT
 
 
 def inside(ctx, x, y):
@@ -452,7 +453,7 @@ def _pieces(roads):
 def _arm_line(a, pieces):
     """The centreline (k, 3) of arm a's road from its junction out: the piece of its road (pieces: _pieces') that ends
     at the junction."""
-    pts = min(pieces[a[0]], key=lambda q: float(np.hypot(*(q[0 if a[4] else -1, :2] - a[3][:2]))))
+    pts = min(pieces[a[0]], key=lambda q: float(dnp.hypot(*(q[0 if a[4] else -1, :2] - a[3][:2]))))
     return pts if a[4] else pts[::-1]
 
 
@@ -490,7 +491,7 @@ def _within(points, anchors, reach):
     q = np.asarray(anchors, np.float64).reshape(-1, 2)
     if not len(p) or not len(q):
         return np.zeros(len(p), bool)
-    return (np.hypot(p[:, None, 0] - q[None, :, 0], p[:, None, 1] - q[None, :, 1]) <= reach).any(axis=1)
+    return (dnp.hypot(p[:, None, 0] - q[None, :, 0], p[:, None, 1] - q[None, :, 1]) <= reach).any(axis=1)
 
 
 ZEBRA_KMH = 50.0        # km/h a road may have at most for a Fußgängerüberweg (VwV-StVO zu § 26 Rn. 1)
@@ -540,7 +541,7 @@ def junction_paint(decided, roads, ctx, crosswalks, cuts, ramps, nodes=None, sig
     keep = np.ones(len(mids), bool)
     by_junction = np.ones(len(mids), bool)  # (a junction of decided near: it decides)
     for i, m in enumerate(mids):
-        d = np.hypot(at[:, 0] - m[0], at[:, 1] - m[1]) if len(at) else np.zeros(0)
+        d = dnp.hypot(at[:, 0] - m[0], at[:, 1] - m[1]) if len(at) else np.zeros(0)
         j = int(np.argmin(d)) if len(d) else -1
         if j >= 0 and d[j] <= JUNCTION_PAINT_M:
             keep[i] = not german[j] or lit[j]
@@ -732,7 +733,7 @@ def junction_rows(arms, ctl, ctx, urban, left_hand, spot, ring_arms=()):
         group = f"de_{face}" + (f"_p{plate}" if plate >= 0 else "") + size_suffix(getattr(arm[1], "kmh", None))
         at = spot(arm, group, side, yaw, back)
         tries = RETRY_307
-        while face == "z307" and at is not None and any(np.hypot(at[0] - r[1], at[1] - r[2]) < APART_307_M
+        while face == "z307" and at is not None and any(dnp.hypot(at[0] - r[1], at[1] - r[2]) < APART_307_M
                                                         for r in rows):
             # (spot does not know the rows just placed: the junction's own sign pushed out onto the 307's spot)
             if not tries:
@@ -750,7 +751,7 @@ def junction_rows(arms, ctl, ctx, urban, left_hand, spot, ring_arms=()):
     out = [furniture._outbound(a) for a in arms]
 
     def dot(a, b):
-        return float(np.dot(np.asarray(a[2], np.float64)[:2], np.asarray(b[2], np.float64)[:2]))
+        return float(dnp.dot(np.asarray(a[2], np.float64)[:2], np.asarray(b[2], np.float64)[:2]))
     if any(isinstance(w, str) for _, w, _ in ctl):
         at = {id(a): i for i, a in enumerate(arms)}
         for a, w, _ in ctl:

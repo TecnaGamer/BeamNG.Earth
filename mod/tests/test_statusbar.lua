@@ -39,4 +39,26 @@ T.check(sb.location().street == '' and sb.request(30, p, true).online == true, '
 sb.onResult({ street = 'John Muir Trail' })
 q = sb.request(40, { x = 0, y = 0, lat = 43.911, lon = 5.2005 }, true)
 T.check(q and q.online == true and sb.location().street == '', 'a teleport to another place: asked, old street gone')
+
+-- a long row wraps between its parts (the user, 2026-11-12: "the loading bar gets cut off when to much text is shown")
+do
+  local long = 'Loading 14%  |  downloading 5 files · worldwide satellite photos · 2.5 MB/s  ·  ground  ·  roads & buildings 3/40'
+    .. '  ·  trees 0/12  ·  distant land 10/405'
+  local P = sb.parts(long)
+  T.check(#P == 8 and P[1].text == 'Loading 14%' and P[1].sep == nil and P[2].text == 'downloading 5 files'
+    and P[2].sep == '|' and P[3].sep == '\194\183' and P[8].text == 'distant land 10/405', 'split at | and · (' .. #P .. ')')
+  local function measure(s) return #s * 7 end                  -- (7 px a byte)
+  T.check(#sb.wrap('Loading 40%', 300, measure) == 1, 'a short row: one line')
+  local lines = sb.wrap(long, 300, measure)
+  local fits, whole = true, {}
+  for i, s in ipairs(lines) do
+    if measure(s) > 300 then fits = false end
+    whole[i] = s
+  end
+  T.check(#lines >= 3 and fits, 'every line within the width (' .. #lines .. ' lines)')
+  T.check(lines[1]:sub(1, 11) == 'Loading 14%' and (lines[1]:sub(-1) == '|' or lines[1]:sub(-2) == '\194\183'), 'the separator closes its line')
+  local joined = table.concat(whole, ' '):gsub('%s+', ' ')
+  T.check(joined == long:gsub('%s+', ' '), 'nothing lost, nothing broken inside a part')
+  T.check(#sb.wrap('averyveryverylongpartwithoutseparators', 50, measure) == 1, 'a part wider than the screen: its own line')
+end
 T.done('test_statusbar')

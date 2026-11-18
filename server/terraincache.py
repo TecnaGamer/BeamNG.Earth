@@ -12,6 +12,10 @@ source paths of the packed texture, concatenated. The base-colour texture packs 
 and A from aoBaseTex, so its key is xxh64(base + base + base + ao) (paths exactly as the material's fields,
 VFS form), printed as 16 hex digits; the files on disk are lower case.
 
+The same rule keys every packed texture (2026-11-14, 36 of the game's own files matched): a slot's colour is
+xxh64(colour * 3 + ao), its pack xxh64(roughness + height + normal + normal); terrainprefill.py writes those of every
+ground material at the server's start.
+
 base_entry(user_dir, base_vfs, ao_vfs, rgb, ao_value) writes that cache file for a photo (BC7 sRGB with its
 mips, as the game's own: DXGI 99, bc7.py), after the photo itself exists. Returns its path.
 """
@@ -124,9 +128,10 @@ def stored_photo(rgb):
     return b.getvalue()
 
 
-def base_entry(user_dir, base_vfs, ao_vfs, rgb, ao_value):
+def base_entry(user_dir, base_vfs, ao_vfs, rgb, ao_value, fade=None):
     """Write the packed base texture (RGB = the photo, A = the flat AO value) into the game's cache, atomically.
-    Call after the photo file itself is written (the cache must be the newer one)."""
+    Call after the photo file itself is written (the cache must be the newer one). fade (canopy rgb, texel m): the
+    generated ground's forest floor faded out through the mips (bc7.dds fade; None: as before)."""
     if NO_PACK:
         return None
     d = cache_dir(user_dir)
@@ -136,6 +141,6 @@ def base_entry(user_dir, base_vfs, ao_vfs, rgb, ao_value):
     path = os.path.join(d, base_key(base_vfs, ao_vfs) + ".dds")
     tmp = staging.tmp_for(path)
     with open(tmp, "wb") as f:
-        f.write(bc7.dds(rgba))
+        f.write(bc7.dds(rgba, fade) if fade is not None else bc7.dds(rgba))
     staging.replace(tmp, path)
     return path

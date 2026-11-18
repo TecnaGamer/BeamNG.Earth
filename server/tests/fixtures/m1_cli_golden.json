@@ -5115,14 +5115,13 @@
   ]
  ],
  "hello": {
-  "attribution": "Elevation: Mapterhorn (see mapterhorn.com/attribution), AWS Terrain Tiles / Mapzen",
+  "attribution": "Elevation: Mapterhorn (https://mapterhorn.com/attribution), AWS Terrain Tiles / Mapzen",
   "cells": 64,
   "farFormat": "cdae",
   "format": 4,
   "material": "bngEarthFar_v3",
   "nearVisual": "mesh",
   "protocol": 4,
-  "serverVersion": "0.4.0",
   "type": "hello"
  },
  "predict": [

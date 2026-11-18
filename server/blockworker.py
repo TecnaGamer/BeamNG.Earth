@@ -14,15 +14,22 @@ lon, [mapcells.CellKey]), the latest list replacing the earlier one.
 """
 from runtimeprofiler import step as profile_step
 import collections
+import json
+import math
 import logging
 import os
 import queue
+import sys
 import threading
 import time
 
 import numpy as np
+import dmath
+import dnp
 
 import secrossings
+import streetparking
+import blockcache
 import dem as demmod
 import development as developmentmod
 import farfield
@@ -30,6 +37,7 @@ import furniture
 import geodesy
 import grading as gradingmod
 import heightmap
+import l0roads
 import mapdata as mapdatamod
 import mappedpoles
 import netfetch
@@ -46,20 +54,29 @@ import xproc
 log = logging.getLogger("earthd.blockworker")
 
 _s = None       # this process's state (init)
+_TRACE = os.environ.get("BNGE_FARTRACE") == "1"
+_dem_t = threading.local()
 
 
 class _State:
     def __init__(self, cache_dir, offline, roads, grading, road_widths, surface, airports=False, sea=False,
                  gas_stations=False):
-        if os.environ.get("BNGE_WORLD_BUNDLE") and not (roads and grading):
-            from worldbundle import BundleError
-            raise BundleError("Pinned road plans require roads and grading enabled")
         self.cache_dir = cache_dir
         import revisit
         revisit.CACHE_DIR = cache_dir
         self.imagery = None         # (its settings, imagery.Imagery from the disk alone): far_tile's textures
         net = netfetch.Fetcher(offline=offline)
         self.dem = demmod.Dem(os.path.join(cache_dir, "dem"), fetcher=net)
+        if _TRACE:          # (BNGE_FARTRACE: the DEM's share of a far tile's time, _far_tile)
+            _orig = self.dem.tiles
+
+            def _timed(keys, progress=None, _o=_orig):
+                t0 = time.perf_counter()
+                try:
+                    return _o(keys, progress)
+                finally:
+                    _dem_t.v = getattr(_dem_t, "v", 0.0) + time.perf_counter() - t0
+            self.dem.tiles = _timed
         import railways as _railways    # (coarse elevation: rail decks raised over the roads under them)
         _railways.COARSE_AT = self.dem.coarse_at
         # (and no separation in the ground under a rail bridge: railways.flat_rail_crossing)
@@ -107,12 +124,30 @@ class _State:
             budget.register_shed(rw.clear_memory)
         import roads as _roads
         budget.register_shed(_roads.clear_facts_memory)
+        import paintlist            # (the photos' paint lists: they hold their cells' layers)
+        budget.register_shed(paintlist.clear)
         budget.register_shed(self._clear_chunks)
+        import rangeread            # (the remote files' block LRU, up to rangeread.MEM_BYTES: kept by a shed before)
+        budget.register_shed(rangeread.clear_memory)
 
     def _clear_chunks(self):
         with self.lock:
             for c in self.chunks.values():
                 c.clear()
+
+    def late_reset(self):
+        """A late process drops its whole planning state (late_job): the plan store with every planner's memory (cells'
+        plans, road stages, kept geometry, deck corrections, packs, plan sets, tunnel networks), the chain stores made
+        on its plans, the anchors' and the geotile frames' graders with their mapped copies. The next job starts
+        from the disk alone."""
+        with self.lock:
+            self.__dict__.pop("plan_store", None)
+            self.__dict__.get("chain_stores", {}).clear()
+            self.graders.clear()
+            self.chunks.clear()
+            self.late_resets = self.__dict__.get("late_resets", 0) + 1
+        with _geo_lock:
+            _geo_graders.clear()
 
     def anchor(self, aid, lat, lon):
         """(Grader or None, ChunkCache) of an anchor; only the last few anchors are kept."""
@@ -133,10 +168,12 @@ class _State:
                     grader.tunnel_raw = lambda la, lo: ground(None, la, lo,
                         self.dem.sample(la, lo, gradingmod.PROFILE_ZOOM))
                     grader.dem = self.dem          # (its urgent lane: _plan_missing)
-                    grader.shared = plancache.for_grader(self.cache_dir, grader, self.widths, grader.wet)
+                    grader.shared = _plan_cache(self.cache_dir, grader, self.widths)
                 self.graders[aid] = grader
                 self.chunks[aid] = heightmap.ChunkCache()    # no cached unpinned state after a failed setup
-                for old in sorted(self.chunks)[:-ANCHORS_KEPT]:
+                # (never the anchor just set up: a late job of an older anchor, after two newer ones, evicted its own
+                # and failed with KeyError, "Future exception was never retrieved" in a BeamMP player's log 2026-11-10)
+                for old in [a for a in sorted(self.chunks)[:-ANCHORS_KEPT] if a != aid]:
                     del self.chunks[old], self.graders[old]
             return self.graders[aid], self.chunks[aid]
 
@@ -160,11 +197,15 @@ def load_airports(cache_dir, dem):
 
 
 def _rss_mb():
-    try:
-        with open("/proc/self/statm") as f:
-            return int(f.read().split()[1]) * os.sysconf("SC_PAGE_SIZE") / 1e6
-    except (OSError, ValueError):
-        return 0.0
+    """This process's memory in RAM, in MB (budget.resident_mb: Windows too, where this read 0)."""
+    import budget
+    return budget.resident_mb() or 0.0
+
+
+def _held_mb():
+    """... and what the memory ceiling counts (budget.memory_mb: resident + swapped; Windows: private bytes)."""
+    import budget
+    return budget.memory_mb() or 0.0
 
 
 def _trace_memory(every_s=60.0, top=10):
@@ -197,9 +238,100 @@ def _trace_memory(every_s=60.0, top=10):
             else:
                 top_sites = [(f"{os.path.basename(st.traceback[0].filename)}:{st.traceback[0].lineno}", st.size)
                              for st in snap.statistics("lineno")[:top]]
-            log.info("memory pid %d: rss %.0f MB, traced %.0f MB; top: %s", os.getpid(), _rss_mb(), total / 1e6,
+            # (held: what the memory ceiling counts, budget.memory_mb; the tracer's own tables are part of it)
+            log.info("memory pid %d: rss %.0f MB, held %.0f MB (%.0f the tracer's), traced %.0f MB; top: %s",
+                     os.getpid(), _rss_mb(), _held_mb(), tracemalloc.get_tracemalloc_memory() / 1e6, total / 1e6,
                      "; ".join(f"{k} {v / 1e6:.0f} MB" for k, v in top_sites))
     threading.Thread(target=loop, daemon=True, name="trace-mem").start()
+
+
+def held_memory(roots, min_mb=2.0, exclude=()):
+    """[(MB, name)] of the numpy arrays and bytes reachable from each (name, object) of roots, each object counted for
+    the first root that reaches it, biggest first, those of at least min_mb (BNGE_MEMATTR_S; also tests). exclude:
+    objects never walked into (the server's own: its attributes' bound methods lead back to all of it)."""
+    import gc
+    import numpy as np
+    seen, out = {id(o) for o in exclude}, []
+    skip = (str, int, float, bool, type(None))
+    for name, root in roots:
+        tot, stack = 0, [root]
+        while stack:
+            o = stack.pop()
+            if id(o) in seen:
+                continue
+            seen.add(id(o))
+            if isinstance(o, np.ndarray):
+                if o.base is None:
+                    tot += o.nbytes
+                else:
+                    stack.append(o.base)
+                continue
+            if isinstance(o, (bytes, bytearray)):
+                tot += len(o)
+                continue
+            if isinstance(o, skip) or isinstance(o, type) or callable(o) and not hasattr(o, "__dict__"):
+                continue
+            if type(o).__name__ == "module":
+                continue
+            stack.extend(gc.get_referents(o))
+        if tot >= min_mb * 2 ** 20:
+            out.append((round(tot / 2 ** 20, 1), name))
+    return sorted(out, reverse=True)
+
+
+def _mallinfo():
+    """glibc's malloc in this process (Linux; BNGE_MEMATTR_S): "malloc N MB in use, F free, M mmapped", or "": the
+    native allocations tracemalloc never sees (the Rust module's, the C libraries') against what Python holds."""
+    try:
+        import ctypes
+
+        class MI2(ctypes.Structure):
+            _fields_ = [(n, ctypes.c_size_t) for n in ("arena", "ordblks", "smblks", "hblks", "hblkhd", "usmblks",
+                                                       "fsmblks", "uordblks", "fordblks", "keepcost")]
+        libc = ctypes.CDLL("libc.so.6")
+        libc.mallinfo2.restype = MI2
+        m = libc.mallinfo2()
+        return (f"malloc {(m.uordblks + m.hblkhd) / 2 ** 20:.0f} MB in use, {m.fordblks / 2 ** 20:.0f} free, "
+                f"{m.hblkhd / 2 ** 20:.0f} mmapped")
+    except Exception:
+        return ""
+
+
+def _memattr_loop(every_s, extra_roots=None, exclude=()):
+    """BNGE_MEMATTR_S=s (debug, no tracemalloc: cheap enough for a drive): every s this worker's memory and which of
+    its state's attributes and its modules' dicts hold the most array memory (held_memory). extra_roots: () -> [(name,
+    object)] more roots (the server's own process: its Server's attributes, earthd main_async)."""
+    def loop():
+        log = logging.getLogger("earthd.worker")
+        here = os.path.dirname(os.path.abspath(__file__))
+        while True:
+            time.sleep(every_s)
+            try:
+                import budget
+                roots = [(f"_s.{k}", v) for k, v in list(vars(_s).items())] if _s is not None else []
+                if extra_roots is not None:
+                    roots += extra_roots()
+                # (objects one level down: "server.dem._lru", not all of server.dem)
+                deep = []
+                for name, v in roots:
+                    d = getattr(v, "__dict__", None)
+                    if isinstance(d, dict) and not isinstance(v, type) and type(v).__name__ != "module":
+                        deep += [(f"{name}.{k}", x) for k, x in list(d.items())]
+                    else:
+                        deep.append((name, v))
+                roots = deep
+                for mname, mod in list(sys.modules.items()):
+                    if (getattr(mod, "__file__", "") or "").startswith(here):
+                        roots += [(f"{mname}.{k}", v) for k, v in list(vars(mod).items())
+                                  if isinstance(v, (dict, list, set, collections.OrderedDict)) and v]
+                t0 = time.perf_counter()
+                got = held_memory(roots, exclude=exclude)
+                log.info("memory pid %d: %.0f MB (%.0f private, %s); held arrays: %s (%.1f s)", os.getpid(),
+                         budget.memory_mb() or 0, budget.memory_mb(private=True) or 0, _mallinfo(),
+                         "; ".join(f"{n} {mb:.0f}" for mb, n in got[:12]), time.perf_counter() - t0)
+            except Exception as e:
+                log.info("memory attribution: %s: %s", type(e).__name__, e)
+    threading.Thread(target=loop, daemon=True, name="mem-attr").start()
 
 
 def init(cache_dir, offline, roads, grading, road_widths, surface, warm_q, log_level=logging.INFO, airports=False,
@@ -223,14 +355,99 @@ def init(cache_dir, offline, roads, grading, road_widths, surface, warm_q, log_l
     budget.apply()              # (this process's caches: smaller on a small machine)
     if os.environ.get("BNGE_TRACEMALLOC"):      # debug: this worker's memory (earthd's trace_mem)
         _trace_memory()
+    if os.environ.get("BNGE_MEMATTR_S"):        # debug: which caches hold this worker's arrays
+        _memattr_loop(float(os.environ["BNGE_MEMATTR_S"]))
     import sampler
     sampler.maybe_start(f".{os.getpid()}")      # BNGE_SAMPLE: this worker's own sampling profile (debugging)
     xproc.PRIORITY = nice
     _s = _State(cache_dir, offline, roads, grading, road_widths, surface, airports, sea, gas_stations)
     threading.Thread(target=_watch_parent, args=(os.getppid(),), daemon=True, name="parent-watch").start()
     if warm_q is not None:      # (only the block pools plan roads ahead: the far, road and far building pools pass None)
+        blockcache.warm()       # (and build blocks: their cache's code id now)
         threading.Thread(target=_read_warm, args=(warm_q,), daemon=True, name="warm-read").start()
         threading.Thread(target=_warm_loop, daemon=True, name="roads-ahead").start()
+
+
+LATE_RUN = "-late"
+_LATE = [False]             # this is a process of the late pool (init_late)
+_LATE_JOB = [0]             # a late job is running in it (late_job; one job at a time in a pool's process)
+
+
+def _plan_cache(cache_dir, grader, widths):
+    """The grader's plan cache (plancache.for_grader); a late process's passes over its run's plans and road stages
+    made short of something (PlanCache.fresh: they are what it makes again; complete ones are read)."""
+    pc = plancache.for_grader(cache_dir, grader, widths, grader.wet)
+    if pc is not None and _LATE[0] and hasattr(pc, "fresh"):
+        pc.fresh = True
+    return pc
+
+
+def late_job(kept, fn, *a, **kw):
+    """fn(*a, **kw) as a late process's job: in a fault scope of its own, and unless nothing was read short and
+    kept() says its result is in the revisit cache, the process's whole planning state is dropped after it
+    (_State.late_reset). A first try that read something short left it in the planners' memory (short plans and road
+    stages, kept geometry on the lidar rule, deck corrections, mapped copies), and every later try of the cell or
+    geotile read it again, also after the cell's plans had been made complete and kept: memory is never read again
+    from the disk. Nothing is invalidated piece by piece: a state that saw a fault is not used again."""
+    import revisit
+    clean = False
+    _LATE_JOB[0] += 1
+    try:
+        with revisit.scope() as b:
+            out = fn(*a, **kw)
+            clean = not (b.n or b.lidar) and bool(kept())
+            return out
+    finally:
+        _LATE_JOB[0] -= 1
+        if not clean:
+            _s.late_reset()
+
+
+def init_late(*initargs):
+    """init for the late pool's processes (latework.py: road content a session built short, built again once its lidar
+    is in): a plan run and lidar-decision run of their own (plancache.RUN_ENV, xproc.RUN_ENV + LATE_RUN), so they read
+    none of the session's rule decisions nor what was planned short on them (its run's plan files, cell facts and
+    carriageway regions); what they make complete is kept in the revisit cache, as any process's."""
+    late_env()
+    _LATE[0] = True
+    import revisit          # (why a late build was not kept, logged: blockworker._geo_content's "not kept" line)
+    revisit.SITES = True
+    init(*initargs)
+
+
+LATE_AID = -2       # (the late pool's planning anchor: the plans are the planning regions', whatever the anchor)
+
+
+def late_plan(z, x, y):
+    """latework: map cell (z, x, y)'s road plans made here (the late pool: its own plan and lidar-decision run, the
+    lidar waited for), kept in the revisit cache when complete. True when they are kept (made now or before), False
+    when still short, None when this process does not grade."""
+    import mapcells
+    import revisit
+    import roadz
+    k = mapcells.CellKey(int(z), int(x), int(y))
+    la, lo = k.center()
+    g, _ = _s.anchor(LATE_AID, la, lo)
+    if g is None or getattr(g, "store", None) is None or g.shared is None or g.shared.persist is None:
+        return None
+    rk = g.shared._revisit_key(k)
+    if revisit.has(_s.cache_dir, "plans", rk):
+        return True
+
+    def plan():
+        with roadz.precache_gaps_wait():
+            g.store.planner_of_cell(k)._cell_plans(k)
+    # (a job of its own planning state: dropped whole after a try that read anything short, late_job)
+    late_job(lambda: revisit.has(_s.cache_dir, "plans", rk), plan)
+    return revisit.has(_s.cache_dir, "plans", rk)
+
+
+def late_env():
+    """The late pool's own plan and lidar-decision runs in this process's environment (init_late)."""
+    import plancache
+    for env in (plancache.RUN_ENV, xproc.RUN_ENV):
+        if os.environ.get(env) and not os.environ[env].endswith(LATE_RUN):
+            os.environ[env] += LATE_RUN
 
 
 def _watch_parent(ppid):
@@ -267,15 +484,20 @@ def _wait_process(pid):
 PARENT_POLL_S = 2.0
 
 
+WARM_RECHECK_S = 1.0        # s between _warm_loop's looks at the cells other processes were planning
+_BUILDING = [0]             # blocks being built in this process now (build)
+_FIRST = [0]                # a first block's cells being planned in this process now (plan_first)
+
+
 def _read_warm(warm_q):
     while True:
         try:
-            aid, lat, lon, keys = warm_q.get()
+            aid, lat, lon, keys, *rest = warm_q.get()
         except (EOFError, OSError):
             return
         try:
             while True:         # only the latest list matters
-                aid, lat, lon, keys = warm_q.get_nowait()
+                aid, lat, lon, keys, *rest = warm_q.get_nowait()
         except queue.Empty:
             pass
         if not keys:            # (earthd.main's first item: it starts the queue's feeder thread early)
@@ -285,7 +507,33 @@ def _read_warm(warm_q):
             continue
         with _s.cv:
             _s.want = [(g, k) for k in keys]
+            # (earthd.Server.warm_roads: this process only reads them while it builds a block, _warm_loop)
+            _s.warm_read_only = bool(rest and rest[0])
             _s.cv.notify()
+
+
+def _warm_next(want, read_only):
+    """The next (grader, cell) of want for _warm_loop, or None. The cells not in this process's memory yet: one whose
+    plans are in the run's plan cache is read; one that is not is planned here, unless read_only (the requested
+    blocks' process while it builds a block and the prefetch lane's plans them: Server.warm_roads; idle between two
+    blocks of a drive it plans ahead as before) or another process is planning it now
+    (the next one instead of waiting for that one: plancache.PlanCache.busy)."""
+    for g, k in want:
+        if g.planned(k):
+            continue
+        sh = getattr(g, "shared", None)
+        has = getattr(sh, "has", None)
+        busy = getattr(sh, "busy", None)
+        if has is None or busy is None:     # (no plan cache of a run: planned here, as before)
+            return g, k
+        try:
+            if has(k):
+                return g, k
+            if not read_only and not busy(k):
+                return g, k
+        except Exception:
+            return g, k
+    return None
 
 
 def _warm_loop():
@@ -293,9 +541,14 @@ def _warm_loop():
         with _s.cv:
             job = None
             while job is None:
-                job = next(((g, k) for g, k in _s.want if not g.planned(k)), None)
+                # (none beside a first block's cell being planned in this process, plan_first: the two would share
+                # one interpreter lock, and the block waits for that cell)
+                job = None if _FIRST[0] > 0 else \
+                    _warm_next(_s.want, getattr(_s, "warm_read_only", False) and _BUILDING[0] > 0)
                 if job is None:
-                    _s.cv.wait()
+                    # (the cells other processes are planning now are looked at again: no pose may come to say so)
+                    # ... nor that this process's block is built: the cells left are planned here then)
+                    _s.cv.wait(WARM_RECHECK_S if _FIRST[0] > 0 or any(not g.planned(k) for g, k in _s.want) else None)
         try:
             t0 = time.perf_counter()
             job[0].warm(job[1])
@@ -305,6 +558,60 @@ def _warm_loop():
             with _s.cv:
                 _s.want = [w for w in _s.want if w[1] != job[1]]
 
+
+
+def plan_cell(aid, lat, lon, key):
+    """Plan map cell key (z, x, y) for the server's own process (grading.PlanStore.delegate; aid, lat, lon: an anchor,
+    for the store's settings): True when its plans are in the run's plan cache after."""
+    import mapcells
+    g, _ = _s.anchor(aid, lat, lon)
+    if g is None or getattr(g, "store", None) is None or g.shared is None:
+        return False
+    k = mapcells.CellKey(int(key[0]), int(key[1]), int(key[2]))
+    g.store.planner_of_cell(k)._cell_plans(k)
+    return g.shared.has(k)
+
+
+def first_cells(lat, lon, cx, cy, half):
+    """The map cells a block of anchor (lat, lon) at (cx, cy), half wide, plans before it grades (plan_ahead's points,
+    Grader.prepare's cells): earthd.Server.plan_first hands them to the processes."""
+    frame = geodesy.EnuFrame(lat, lon)
+    xs = cx + np.linspace(-half, half, 5)
+    ys = cy + np.linspace(-half, half, 5)
+    X, Y = np.meshgrid(xs, ys)
+    la, lo, _ = frame.enu_to_geodetic(X.ravel(), Y.ravel(), 0.0)
+    return gradingmod.cells_of_points(np.asarray(la), np.asarray(lo))
+
+
+def plan_first(aid, lat, lon, key, out_dir):
+    """One of a teleport's first block's map cells planned in this process (earthd.Server.plan_first: each of the
+    block's cells in a process of its own from the request on, instead of all of them on the block process's one
+    interpreter lock once its provisional block is out), at the terrain blocks' priority (xproc.favoured, the urgent
+    elevation lane); the block and the road tiles read the plans from the run's plan cache as any other process's.
+    True when planned here, False when it was planned or being planned already, None when this process does not
+    grade. Given up once a teleport leaves the anchor (pools.Abandoned)."""
+    import mapcells
+    with _abandon_check(out_dir, aid):
+        g, _ = _s.anchor(aid, lat, lon)
+        if g is None or getattr(g, "store", None) is None or g.shared is None:
+            return None
+        k = mapcells.CellKey(int(key[0]), int(key[1]), int(key[2]))
+        if g.planned(k):
+            return False
+        try:
+            if g.shared.has(k) or g.shared.busy(k):
+                return False
+        except Exception:       # (planned here: its claim says who makes them)
+            pass
+        import contextlib
+        urgent = getattr(getattr(g, "dem", None), "urgent", None)
+        _FIRST[0] += 1
+        try:
+            with xproc.favoured(), (urgent() if urgent is not None else contextlib.nullcontext()):
+                g.store.planner_of_cell(k)._cell_plans(k)
+        finally:
+            _FIRST[0] -= 1
+        return True
 
 
 @profile_step('Road plans ahead')
@@ -340,11 +647,28 @@ def _level_yards_of(holder, z, la, lo):
     return grader.apply(la, lo, z)
 
 
-def ground(frame, la, lo, z):
+def sea_ahead(frame, cx, cy, half):
+    """The sea floors of the block's cells built in the background (seacarve.SeaCarver.prefetch_points) beside its road
+    plans (plan_ahead), so its heights wait for the slower of the two, not the sum."""
+    sea = getattr(_s, "sea", None)
+    if sea is None or not hasattr(sea, "prefetch_points"):
+        return
+    try:
+        xs = cx + np.linspace(-half, half, 9)
+        X, Y = np.meshgrid(xs, cy + np.linspace(-half, half, 9))
+        la, lo, _ = frame.enu_to_geodetic(X.ravel(), Y.ravel(), 0.0)
+        sea.prefetch_points(np.asarray(la), np.asarray(lo))
+    except Exception as e:      # (the carve builds them itself then)
+        log.debug("sea ahead of block (%s, %s): %s: %s", cx, cy, type(e).__name__, e)
+
+
+def ground(frame, la, lo, z, grader=None):
     """The DEM heights z at (la, lo) shaped before the road grading: runways graded in (--airports on),
-    the sea floor carved in (--sea on), and the land off the roads roughened (grading.terrain_bumps)."""
+    the sea floor carved in (--sea on), and the land off the roads roughened (grading.terrain_bumps; grader: the
+    Grader that grades it after this, which keeps the bumps off the built roads' sides)."""
     import grading
-    z = np.asarray(z, np.float64) + grading.terrain_bumps(np.asarray(la, np.float64), np.asarray(lo, np.float64))
+    z = np.asarray(z, np.float64) + grading.terrain_bumps(np.asarray(la, np.float64), np.asarray(lo, np.float64),
+                                                          grader)
     if _s.airports is not None:
         z = _s.airports.apply(la, lo, z)
     if getattr(_s, "lids", None) is not None:
@@ -368,9 +692,38 @@ def veg_geo(aid, lat, lon, zoom, gx, gy, out_dir, vfs_dir, flat=False):
     CPU-s of a Manhattan session's 250 on its one interpreter, beside the far textures, the road plans and the map
     layers (the user, 2026-11-01: "trees, poles, sidewalks struggle to keep up")."""
     import geotiles
-    import vegetation as vegetationmod
+    import revisit
     if _s.md is None:
         return None
+    # (kept in the revisit cache, kind "vegg", since 2026-11-13: no anchor in a geotile's trees; an older generation's
+    # are shown with its block and road tiles, revisit.stale, instead of none until the plans are made again)
+    if not revisit.ON or getattr(_s, "cache_dir", None) is None:
+        return _veg_geo(aid, lat, lon, zoom, gx, gy, out_dir, vfs_dir, flat)
+    tkey = geotiles.key(gx, gy)
+    name = f"veg_{tkey}.flat.json" if flat else f"veg_{tkey}.json"
+    k = revisit.key("vegg", str(tkey), int(zoom), bool(flat), _md_versions(), ("rules", _ground_rules()))
+    got = revisit.load(_s.cache_dir, "vegg", k)
+    if got is not None:
+        blobs, extra = got
+        _write_bytes(os.path.join(out_dir, name), blobs["veg.json"])
+        return f"{vfs_dir}/{name}", int(extra["n"]), tuple(extra["frame"]), extra["pivot"]
+    with revisit.scope() as f0:
+        res = _veg_geo(aid, lat, lon, zoom, gx, gy, out_dir, vfs_dir, flat)
+    if res is not None and revisit.ON and f0.complete:
+        try:
+            with open(os.path.join(out_dir, name), "rb") as f:
+                data = f.read()
+            revisit.store(_s.cache_dir, "vegg", k, {"veg.json": data},
+                          {"n": int(res[1]), "frame": list(res[2]), "pivot": res[3]})
+        except Exception as ex:          # (not kept rather than no tile)
+            log.debug("revisit: trees geotile %s not kept: %s: %s", tkey, type(ex).__name__, ex)
+    return res
+
+
+def _veg_geo(aid, lat, lon, zoom, gx, gy, out_dir, vfs_dir, flat=False):
+    """veg_geo's build."""
+    import geotiles
+    import vegetation as vegetationmod
     if getattr(_s, "veg", None) is None:
         v = vegetationmod.Vegetation(_s.md, _s.cache_dir)
         v.dem = _s.dem
@@ -379,7 +732,7 @@ def veg_geo(aid, lat, lon, zoom, gx, gy, out_dir, vfs_dir, flat=False):
     g, _ = _s.anchor(aid, lat, lon)
 
     def raw(la, lo):
-        return ground(None, la, lo, _s.dem.sample(la, lo, zoom))
+        return ground(None, la, lo, _s.dem.sample(la, lo, zoom), g)
 
     def elev(la, lo):
         z = raw(la, lo)
@@ -404,7 +757,8 @@ def veg_geo_many(aid, lat, lon, zoom, tiles, out_dir, vfs_dir, flat=False):
         try:
             out.append(veg_geo(aid, lat, lon, zoom, gx, gy, out_dir, vfs_dir, flat))
         except Exception as e:
-            out.append(e)
+            import revisit
+            out.append(None if isinstance(e, revisit.StaleMiss) else e)
     return out
 
 def _take_pads(fuel_pads):
@@ -416,6 +770,51 @@ def _take_pads(fuel_pads):
 
 def build(aid, lat, lon, hm_zoom, q, cx, cy, size, out_dir, name, ter_name=None, fuel_pads=None, provisional=False,
           ground_at=(0.0, 0.0)):
+    """_build, given up (pools.Abandoned) once a teleport leaves anchor aid (_abandon_check)."""
+    _BUILDING[0] += 1               # (the pool's one job thread: _warm_loop reads it)
+    import revisit
+    depth = revisit.depth()         # (the block cache's scope, blockcache.Build: closed if the build raised)
+    try:
+        with _abandon_check(out_dir, aid):
+            return _build(aid, lat, lon, hm_zoom, q, cx, cy, size, out_dir, name, ter_name, fuel_pads, provisional,
+                          ground_at)
+    finally:
+        revisit.unwind(depth)
+        _BUILDING[0] -= 1
+
+
+def stale_probe(aid, lat, lon, hm_zoom, q, cx, cy, size, gens, fuel_pads=None):
+    """earthd.Server.stale_probe in a block process (the one whose keys the blocks are kept and read under): is the
+    last block kept at anchor aid's block place (cx, cy) one of the older generations gens', and not this one's? Its
+    generation's id, or None. Nothing built."""
+    import revisit
+    _take_pads(fuel_pads)
+    g, _chunks = _s.anchor(aid, lat, lon)
+    depth = revisit.depth()
+    try:
+        bc = blockcache.begin(_s.cache_dir, geodesy.EnuFrame(lat, lon), hm_zoom, cx, cy, size, q,
+                              blockcache.settings(g is not None, getattr(_s, "md", None), _s.widths, _s.surface,
+                                                  getattr(_s, "sea", None), _s.airports, getattr(_s, "lids", None)),
+                              getattr(_s, "md", None), _s.surface, heightmap.ChunkCache())
+        if bc is None:
+            return None
+        ws = _s.surface is not None
+        if bc.latest_is_current() or bc._read(bc.block_key, None, bc.disk, ws) is not None:
+            return None                 # (this generation has it: nothing older shown)
+        for gen in gens:
+            if bc.stale_hit(gen, ws) is not None:
+                return gen["id"]
+        rec = bc.latest()
+        log.info("older versions: block (%s, %s) of anchor %d: %s", cx, cy, aid,
+                 "none kept at its place" if rec is None else
+                 f"the last one kept there is of another version (plans {rec['plans']}) or no longer whole")
+        return None
+    finally:
+        revisit.unwind(depth)
+
+
+def _build(aid, lat, lon, hm_zoom, q, cx, cy, size, out_dir, name, ter_name=None, fuel_pads=None, provisional=False,
+           ground_at=(0.0, 0.0)):
     """Build and write the block (heightmap PNG name in out_dir, its surface masks beside it, and the
     .ter ter_name if given). fuel_pads: the gas station pads around it (the server's: _take_pads). Returns the info
     dict of earthd's make_heightmap (without seconds / zoom / base)."""
@@ -430,15 +829,33 @@ def build(aid, lat, lon, hm_zoom, q, cx, cy, size, out_dir, name, ter_name=None,
     keep = {}
     grade_s = [0.0]
     part_s = {"dem": 0.0, "sea": 0.0, "tunnels": 0.0}  # (the rest of "heights": the stages' log, 2026-10-30)
+    bc = None
+    if not provisional and ter_name is not None:     # (the disk's copy of a graded block: blockcache.py)
+        t1 = time.perf_counter()
+        bc = blockcache.begin(_s.cache_dir, frame, hm_zoom, cx, cy, size, q,
+                              blockcache.settings(g is not None, getattr(_s, "md", None), _s.widths, _s.surface,
+                                                  getattr(_s, "sea", None), _s.airports, getattr(_s, "lids", None)),
+                              getattr(_s, "md", None), _s.surface, chunks)
+        got = bc.hit(out_dir, name, ter_name, tuple(ground_at), _s.surface is not None) if bc is not None else None
+        if bc is None:
+            import revisit
+            if revisit.stale_only():        # (an older version's block alone was asked for: none to be had)
+                raise revisit.StaleMiss("block")
+        if got is not None:
+            got["stages"] = {"heights": 0.0, "anchor": anchor_s, "blockCache": time.perf_counter() - t1,
+                             "newShare": 0.0}
+            got["started"], got["finished"] = started, time.time()
+            return got
 
     def elev(la, lo):
+        xproc.check_cancel()        # (a chunk of the block's grid at a time: given up once a teleport leaves aid)
         t1 = time.perf_counter()
         z = _s.dem.sample(la, lo, hm_zoom)
         t2 = time.perf_counter()
         if provisional:
             part_s["dem"] += t2 - t1
             return _level_yards_of(_s, _s.airports.apply(la, lo, z) if _s.airports is not None else z, la, lo)
-        z = ground(frame, la, lo, z)
+        z = ground(frame, la, lo, z, g)
         part_s["dem"] += t2 - t1
         part_s["sea"] += time.perf_counter() - t2
         if g is None:
@@ -450,6 +867,8 @@ def build(aid, lat, lon, hm_zoom, q, cx, cy, size, out_dir, name, ter_name=None,
     import roads as roadsmod
     t1 = time.perf_counter()
     plan_ahead(g, frame, cx, cy, size * heightmap.SQUARE / 2)
+    if not provisional:
+        sea_ahead(frame, cx, cy, size * heightmap.SQUARE / 2)
     plan_s = time.perf_counter() - t1
     gen = elev
     if ter_name is not None and getattr(_s, "md", None) is not None and not provisional:
@@ -465,10 +884,13 @@ def build(aid, lat, lon, hm_zoom, q, cx, cy, size, out_dir, name, ter_name=None,
             z = roadsmod.block_arch_raise(tun, cell_fn, frame, la, lo, z, (cx - half, cy - half, cx + half, cy + half))
             part_s["arch"] = part_s.get("arch", 0.0) + time.perf_counter() - t1
             return z
+    l0_st = {}                  # (a provisional block's L0 roads: its painted roads' corridors flattened, l0roads.py)
     info = heightmap.generate(frame, gen, os.path.join(out_dir, name), cx, cy, q=q, size=size, keep=keep,
-                              chunks=chunks, ground_at=tuple(ground_at))
+                              chunks=chunks, ground_at=tuple(ground_at),
+                              post=l0roads.post_for(frame, _s.surface, cx, cy, size, l0_st) if provisional else None,
+                              disk=bc.disk if bc is not None else None)
     stages = {"heights": time.perf_counter() - t0, "grading": grade_s[0], **part_s, "anchor": anchor_s, "plan": plan_s,
-              "newShare": float(keep.get("new_share", 1.0))}
+              "newShare": float(keep.get("new_share", 1.0)), **l0_st}
     idx = None
     if _s.surface is not None:
         t1 = time.perf_counter()
@@ -477,6 +899,7 @@ def build(aid, lat, lon, hm_zoom, q, cx, cy, size, out_dir, name, ter_name=None,
         idx = surfacemod.classify(classes, keep["u"], heightmap.SQUARE, keep["lat"], keep["lon"])
         if _s.sea is not None and not provisional:  # under water: the bed (no grass growing through the surface)
             idx[_s.sea.depth(keep["lat"], keep["lon"]) > WATER_BED_M] = surfacemod.MUD
+        land = idx.copy()               # (the land cover before the paint: surface.fold_layers)
         road_feats, roads_complete = _s.surface.roads(keep["lat"], keep["lon"])
         stages["landcover"] = time.perf_counter() - t1
         t1 = time.perf_counter()
@@ -513,17 +936,24 @@ def build(aid, lat, lon, hm_zoom, q, cx, cy, size, out_dir, name, ter_name=None,
         if hasattr(_s.surface, "paint_ground_pads"):
             idx = _s.surface.paint_ground_pads(idx, keep["lat"], keep["lon"])
         stages["roadPaint"] = time.perf_counter() - t1
+        idx = surfacemod.fold_layers(idx, land, heightmap.SQUARE, stages)   # (fewer layers: a cheaper swap)
         info["layers"] = surfacemod.write_masks(idx[::-1], out_dir, name[:-4])
         info["surfaceComplete"] = complete and roads_complete
         info["roadsComplete"] = roads_complete
     if ter_name is not None:
         t1 = time.perf_counter()
+        pre = None if idx is None else idx.copy()      # (the block cache's: before the holes)
         if not provisional:
             idx = _tunnel_holes(aid, frame, elev, keep, cx, cy, idx, info, g)
         info["ter"], mats = surfacemod.write_ter(out_dir, ter_name, keep["qgrid"], idx)
         if mats is not None:          # the .ter's own material list (MATERIALS indices)
             info["mats"] = mats
         stages["ter"] = time.perf_counter() - t1
+        if bc is not None:
+            t1 = time.perf_counter()
+            bc.finish(info, keep, pre, idx, g)
+            stages["blockCache"] = time.perf_counter() - t1
+            stages["chunksRead"] = float(bc.disk.read)
     info["stages"] = stages
     info["started"], info["finished"] = started, time.time()
     return info
@@ -572,6 +1002,28 @@ def _nav_bridges(aid, frame, elev):
                               prefer=_chain_store("bridges", roadsmod.BridgeProfiles, elev, _bridge_setup))
 
 
+class _NavBand:
+    """The AI graph's grader for grading.terrain_bumps: its road band past NAV_GRADED_M from the graph's centre (x, y)
+    only from the cells planned already, as the graph's road lift (Grader.apply planned_only): with BNE_TERRAIN_BUMPS
+    on, the band planned every cell of the graph's 2.2 km window (Codex review of PR #1407; that planning held a
+    Windows PC's road processes for minutes, 2026-10-25)."""
+
+    def __init__(self, g, frame, x, y):
+        self.g, self.frame, self.x, self.y = g, frame, x, y
+
+    def road_band(self, lat, lon, reach):
+        lat = np.asarray(lat, np.float64).ravel()
+        lon = np.asarray(lon, np.float64).ravel()
+        e, n, _ = self.frame.geodetic_to_enu(lat, lon, 0.0)
+        near = np.maximum(np.abs(np.asarray(e) - self.x), np.abs(np.asarray(n) - self.y)) <= NAV_GRADED_M
+        out = np.zeros(lat.shape, bool)
+        if near.any():
+            out[near] = self.g.road_band(lat[near], lon[near], reach)
+        if (~near).any():
+            out[~near] = self.g.road_band(lat[~near], lon[~near], reach, planned_only=True)
+        return out
+
+
 def navgraph(aid, lat, lon, zoom, x, y, out_dir, vfs_dir, serial, left_hand, mph, rules):
     """earthd.Server.build_navgraph here (a road-tile process): the AI road graph around (x, y) written to out_dir;
     returns (vfs path, nodes, edges), in a road process (in the server's interpreter it cost 13 s of its CPU in a
@@ -583,10 +1035,11 @@ def navgraph(aid, lat, lon, zoom, x, y, out_dir, vfs_dir, serial, left_hand, mph
     w = navgraphmod.WINDOW_M + 200.0
     la, lo, _ = frame.enu_to_geodetic(np.array([x - w, x + w]), np.array([y - w, y + w]), 0.0)
     keys = mapcells.cells_for_bbox(float(la.min()), float(lo.min()), float(la.max()), float(lo.max()))
-    feats = [_s.md.cell(k, layers=("roads",), kind="demand").layers.get("roads") for k in keys]
+    feats = [cd.layers.get("roads") for cd in mapcells.load_cells(_s.md, keys, ("roads",))]
 
     def elev(la_, lo_):         # the physics ground, lifted under roads (as the road tiles'); past their reach
-        z = ground(frame, la_, lo_, _s.dem.sample(la_, lo_, zoom))     # (NAV_GRADED_M) only under cells planned already
+        # (NAV_GRADED_M) only under cells planned already, the terrain bumps' road band too (_NavBand)
+        z = ground(frame, la_, lo_, _s.dem.sample(la_, lo_, zoom), _NavBand(g, frame, x, y) if g is not None else None)
         if g is None:
             return z
         la_, lo_, z = np.asarray(la_, np.float64), np.asarray(lo_, np.float64), np.asarray(z, np.float64)
@@ -608,11 +1061,10 @@ def navgraph(aid, lat, lon, zoom, x, y, out_dir, vfs_dir, serial, left_hand, mph
                                              bridges.depth_of(fid)))
     except Exception as e:          # no decks: the graph follows the ground under bridges
         log.debug("navgraph decks: %s: %s", type(e).__name__, e)
-    tun = {}
-    try:            # (the tunnels the road tiles build: the AI drives through them, navgraph.build; off: AI_TUNNELS)
-        for fid, _spec, xy, z, _lon in () if not navgraphmod.AI_TUNNELS else tunnel_profiles(aid, frame, elev, g).parts(feats, (x - w, y - w, x + w, y + w)):
-            tun.setdefault(navgraphmod.part_fid(fid), []).append((np.asarray(xy, np.float64)[:, :2],
-                                                               np.asarray(z, np.float64)))
+    tun, open_tun = {}, {}
+    try:
+        tun, open_tun = navgraphmod.tunnel_floors(tunnel_profiles(aid, frame, elev, g), feats,
+                                               (x - w, y - w, x + w, y + w))
     except Exception as e:          # no tunnels: their stretches stay the minimap's only
         log.debug("navgraph tunnels: %s: %s", type(e).__name__, e)
     urban = _s.surface.urban if _s.surface is not None else None
@@ -624,7 +1076,7 @@ def navgraph(aid, lat, lon, zoom, x, y, out_dir, vfs_dir, serial, left_hand, mph
         if de_nodes:
             de_routes = _de_routes(_s.md, keys)
     nodes = secrossings.read(_s.md, frame, keys) if secrossings.wanted(rules.get("country"), de_nodes) else None
-    graph = navgraphmod.build(frame, feats, elev, (x, y), urban, decks=decks, tunnels=tun, widths=_s.widths,
+    graph = navgraphmod.build(frame, feats, elev, (x, y), urban, decks=decks, tunnels=tun, open_tunnels=open_tun, widths=_s.widths,
                               left_hand=left_hand,
                               mph=mph, signals=furniture.signals_for(_s.md, frame, keys), country=rules.get("country"),
                               priority=None if nodes is None else nodes["priority"],
@@ -642,7 +1094,7 @@ def terrain_patch(aid, lat, lon, zoom, box, path):
     frame = geodesy.EnuFrame(lat, lon)
 
     def elev(la, lo):
-        z = ground(frame, la, lo, _s.dem.sample(la, lo, zoom))
+        z = ground(frame, la, lo, _s.dem.sample(la, lo, zoom), g)
         return g.apply(la, lo, z, gradingmod.ROAD_LIFT) if g is not None else z
     return terrainpatch.build(frame, elev, box, path)
 
@@ -672,12 +1124,47 @@ def signs_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, left_hand=False, m
     """signstream.build_tile here: the highway signs of a road tile the mod has (from cody196's PR #363), in a road
     process: its map cells are warm there (and its town signs' towns: towns_on, the speed-limit signs then without
     Germany's general limits). Returns (vfs path of the sign tile's JSON, number of meshes)."""
+    import revisit
+    # (kept in the revisit cache, kind "signs", since 2026-11-13: a place visited again has its signs at once, and an
+    # older generation's are shown with its block and road tiles, revisit.stale)
+    src = getattr(_s.md, "highway_signs", None) if _s.md is not None else None
+    if src is None or not revisit.ON or getattr(_s, "cache_dir", None) is None:
+        return _signs_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, left_hand, mph, country, dirs, rsigns, dej,
+                           towns_on)
+    de = ()
+    if dej:
+        import designs
+        de = designs.cache_parts(True, geodesy.EnuFrame(lat, lon), designs.tile_reach(roadsmod_tile_bbox(tx, ty)))
+    try:
+        sv = src.version()
+    except Exception:
+        sv = None
+    k = revisit.key("signs", round(float(lat), 7), round(float(lon), 7), zoom, tx, ty, bool(left_hand), bool(mph),
+                    country, bool(dirs), bool(rsigns), bool(dej), bool(towns_on), _md_versions(), repr(sv),
+                    ("rules", _ground_rules()), *_radar_key(), *de)
+    return _revisit_tile("signs", k, aid, tx, ty, out_dir, vfs_dir, f"signs_{aid}_{tx}_{ty}.json",
+                         lambda: _signs_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, left_hand, mph, country,
+                                             dirs, rsigns, dej, towns_on),
+                         lambda res: {"n": int(res[1])}, lambda path, extra: (path, int(extra.get("n", 0))),
+                         files_of=_vfs_files)
+
+
+def _vfs_files(text, vfs_dir):
+    """The names of every file of vfs_dir a tile's JSON names anywhere (a sign tile's shapes and its boards' faces)."""
+    import re
+    pre = vfs_dir.rstrip("/") + "/"
+    return sorted({m for m in re.findall(r'"' + re.escape(pre) + r'([^"/]+)"', text)})
+
+
+def _signs_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, left_hand=False, mph=True, country=None, dirs=False,
+                rsigns=False, dej=False, towns_on=False):
+    """signs_tile's build."""
     import signstream
     g, _ = _s.anchor(aid, lat, lon)
     frame = geodesy.EnuFrame(lat, lon)
 
     def elev(la, lo):           # the graded ground, as the road tile's
-        z = ground(frame, la, lo, _s.dem.sample(la, lo, zoom))
+        z = ground(frame, la, lo, _s.dem.sample(la, lo, zoom), g)
         return g.apply(la, lo, z, gradingmod.ROAD_LIFT) if g is not None else z
     towns = None
     if towns_on and _s.md is not None and _s.surface is not None:
@@ -711,6 +1198,7 @@ def _radar_key():
 def _roads_tile_cached(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks, lift, buildings, left_hand, mph, q,
                        gas_stations, buried, lamp_region, country=None, pole_profile=None, de_junctions=False, towns_on=False, wear=None):
     import revisit
+    import roads as roadsmod      # (ROADS_IN_GROUND: a helper's per-client setting, init())
     import threedmr
     de = ()                         # (the German junction signs on near Germany: the border data in use too)
     if de_junctions:
@@ -718,9 +1206,12 @@ def _roads_tile_cached(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks,
         de = designs.cache_parts(True, geodesy.EnuFrame(lat, lon), designs.tile_reach(roadsmod_tile_bbox(tx, ty)))
     k = revisit.key("roads", round(float(lat), 7), round(float(lon), 7), zoom, tx, ty, bool(sidewalks), float(lift),
                     bool(buildings), bool(left_hand), bool(mph), None if q is None else float(q), bool(gas_stations),
-                    _s.md.versions() if _s.md is not None else None, float(buried), lamp_region, country,
+                    _md_versions(bool(buildings)), float(buried), lamp_region, country,
                     pole_profile, threedmr.FEATURE_VERSION, threedmr.local_signature(os.path.dirname(out_dir)),
-                    *_radar_key(), bool(towns_on), roadwear.wear_key(wear, lat), bool(de_junctions), *de)     # (the German junction parts last)
+                    *_radar_key(), bool(towns_on), roadwear.wear_key(wear, lat), bool(roadsmod.ROADS_IN_GROUND),
+                    *_surf_tags(geodesy.EnuFrame(lat, lon), *roadsmod_tile_bbox(tx, ty)),
+                    _nyc_key(geodesy.EnuFrame(lat, lon), roadsmod_tile_bbox(tx, ty)) if buildings else None,
+                    bool(de_junctions), *de)     # (the German junction parts last)
     wh = _where_enu(lat, lon, *roadsmod_tile_bbox(tx, ty),
                     sidewalks=bool(sidewalks), lift=float(lift), buildings=bool(buildings),
                     gas_stations=bool(gas_stations), de_junctions=bool(de_junctions), towns_on=bool(towns_on), road_wear=roadwear.tier_of(wear),
@@ -737,8 +1228,54 @@ def _roads_tile_cached(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks,
                                                for sid, rs in extra.get("pads", [])]), wh)
 
 
-def _md_versions():
-    return _s.md.versions() if _s.md is not None else None
+def _md_versions(buildings=False):
+    """The map data's versions (revisit keys); buildings: with the OSM building years' and colours' identities too (the
+    tiles that draw buildings: osmyears.identity, osmcolours.identity, MapData.versions(buildings=True))."""
+    md = _s.md
+    if md is None:
+        return None
+    if not buildings:
+        return md.versions()
+    import osmcolours
+    import osmyears
+    return dict(md.versions(), osmyears=osmyears.identity(md), osmcolours=osmcolours.identity(md))
+
+
+def _nyc_key(frame, box, cache_dir=None):
+    """New York's shard datasets' identities (nycmassing's setbacks, nyctanks' tanks) for the key of a tile that draws
+    buildings over ENU box (x0, y0, x1, y1) in frame: None far from the five boroughs (nycshards.identity_near: the key
+    as before), else the builds this process froze ("none" before one is pinned, "off" when off). cache_dir: where
+    their manifests are pinned (default the map data's: the Fetches' own)."""
+    cd = cache_dir or getattr(_s.md, "cache_dir", None) if _s is not None else cache_dir
+    if not cd:
+        return None
+    import nycshards
+    x0, y0, x1, y1 = (float(v) for v in tuple(box)[:4])
+    la, lo, _ = frame.enu_to_geodetic(np.array([x0, x1, x0, x1], np.float64), np.array([y0, y0, y1, y1], np.float64),
+                                      0.0)
+    # (cache_dir given: the main process's guess of a worker's key, earthd.Server.geo_content_key: never deciding the
+    # build there, nor waiting for a manifest)
+    return nycshards.identity_near(cd, float(np.min(la)), float(np.min(lo)), float(np.max(la)), float(np.max(lo)),
+                                   peek=cache_dir is not None)
+
+
+def _ground_rules():
+    """This process's ground rules fingerprint (blockcache.ground_rules: what changes the ground and the roads built
+    on it), in the key of every item that stands on that ground."""
+    return blockcache.ground_rules(bool(getattr(_s, "grading", False)), getattr(_s, "md", None),
+                                   getattr(_s, "widths", None), getattr(_s, "surface", None),
+                                   getattr(_s, "sea", None), getattr(_s, "airports", None),
+                                   getattr(_s, "lids", None))
+
+
+def _surf_tags(frame, x0, y0, x1, y1):
+    """() or (tag,): the photo's road surface verdicts this run uses over the box (frame's metres) and round it
+    (roadsurf.area_tags): a cached road or far tile made with other road kinds is not this one."""
+    import roadsurf
+    if not roadsurf.ON:
+        return ()
+    la, lo, _ = frame.enu_to_geodetic(np.array([x0, x1], np.float64), np.array([y0, y1], np.float64), np.zeros(2))
+    return roadsurf.area_tags(float(min(la)), float(min(lo)), float(max(la)), float(max(lo)))
 
 
 def roadsmod_tile_bbox(tx, ty):
@@ -761,9 +1298,9 @@ def _where_enu(lat, lon, x0, y0, x1, y1, **settings):
         return None
 
 
-def _revisit_tile(kind, k, aid, tx, ty, out_dir, vfs_dir, name, build, extra_of, result_of, where=None):
+def _revisit_tile(kind, k, aid, tx, ty, out_dir, vfs_dir, name, build, extra_of, result_of, where=None, files_of=None):
     """A tile written to out_dir as name (a JSON pointing to its shapes in vfs_dir) from the revisit cache (key k), or
-    built (build() -> its result) and kept there when complete (revisit.faults unchanged). extra_of(result): JSON data
+    built (build() -> its result) and kept there when complete (its revisit.scope clean). extra_of(result): JSON data
     kept with it; result_of(vfs path of name, that data): the result again on a hit. The session's names (vfs_dir, the
     anchor id) are taken out of the kept files and put back."""
     import revisit
@@ -777,17 +1314,20 @@ def _revisit_tile(kind, k, aid, tx, ty, out_dir, vfs_dir, name, build, extra_of,
                 data = revisit.swap(data.decode("utf-8"), back).encode("utf-8")
             _write_bytes(os.path.join(out_dir, revisit.swap(g, back)), data)
         return result_of(f"{vfs_dir}/{name}", extra or {})
-    f0 = revisit.faults()
-    res = build()
-    if res is not None and revisit.ON and revisit.faults() == f0:     # (complete: nothing it read failed or was missing)
+    with revisit.scope() as f0:         # (this build's faults alone: revisit.scope)
+        res = build()
+    keep, until = f0.kept_until()      # (keep: nothing it read failed or was missing; until: an answer it read expires)
+    if res is not None and revisit.ON and keep:
         try:
             with open(os.path.join(out_dir, name), encoding="utf-8") as f:
                 text = f.read()
             blobs = {revisit.swap(name, mine): revisit.swap(text, mine).encode("utf-8")}
-            for n in revisit.shapes_in(text, vfs_dir):
+            for n in (files_of or revisit.shapes_in)(text, vfs_dir):
+                if n == name:
+                    continue
                 with open(os.path.join(out_dir, n), "rb") as f:
                     blobs[revisit.swap(n, mine)] = f.read()
-            revisit.store(_s.cache_dir, kind, k, blobs, extra_of(res), where=where)
+            revisit.store(_s.cache_dir, kind, k, blobs, extra_of(res), where=where, until=until)
         except Exception as e:          # (not kept rather than no tile)
             log.debug("revisit: %s tile %d_%d not kept: %s: %s", kind, tx, ty, type(e).__name__, e)
     return res
@@ -827,7 +1367,65 @@ def _stage_clock():
         t = time.perf_counter()
         stages[name] = stages.get(name, 0.0) + t - clock[0]
         clock[0] = t
+        if xproc._cancelled():          # (a teleport left its place: _abandon_check)
+            import pools
+            raise pools.Abandoned()
     return stages, mark
+
+
+ABANDONED_FILE = "abandoned_anchors.json"     # (earthd.Server.write_abandoned: the anchors a teleport left)
+_abandoned_seen = {}            # path -> (mtime_ns, set of anchor ids)
+
+
+def abandoned(out_dir, aid):
+    """Did a teleport leave anchor aid (the server's ABANDONED_FILE in out_dir; read again when it changes)?"""
+    p = os.path.join(out_dir, ABANDONED_FILE)
+    try:
+        m = os.stat(p).st_mtime_ns
+    except OSError:
+        return False
+    got = _abandoned_seen.get(p)
+    if got is None or got[0] != m:
+        ids = _read_abandoned(p)
+        if ids is None:         # (unreadable now: the list last read, the file read again next time)
+            return got is not None and aid in got[1]
+        got = _abandoned_seen[p] = (m, ids)
+    return aid in got[1]
+
+
+ABANDONED_READ_TRIES = 5        # a read the server's rename holds off (Windows: PermissionError) tried this often ...
+ABANDONED_READ_WAIT_S = 0.002   # ... this long apart
+
+
+def _read_abandoned(p):
+    """The anchor ids in the file at p, or None: opened, read and closed at once (the server renames a new list over
+    it: a long-open reader holds that off on Windows); a sharing violation tried again a few times."""
+    for i in range(ABANDONED_READ_TRIES):
+        try:
+            with open(p, "rb") as f:
+                data = f.read()
+            return {int(v) for v in json.loads(data.decode("utf-8"))}
+        except PermissionError:
+            time.sleep(ABANDONED_READ_WAIT_S * (i + 1))
+        except (OSError, ValueError, TypeError):
+            return None
+    return None
+
+
+class _abandon_check:
+    """While a job of anchor aid runs: its waits for other processes' road plans (xproc.once) and its stages
+    (_stage_clock's mark) raise pools.Abandoned once a teleport leaves aid (the user, 2026-11-11: "stop generating
+    the old city"; a running graded first block and road tiles of the city left took 22-27 s more of the workers)."""
+
+    def __init__(self, out_dir, aid):
+        self.out_dir, self.aid = out_dir, aid
+
+    def __enter__(self):
+        xproc.set_cancel(lambda: abandoned(self.out_dir, self.aid))
+
+    def __exit__(self, *exc):
+        xproc.set_cancel(None)
+        return False
 
 
 class _Parts:
@@ -875,7 +1473,7 @@ def _dem_warm(frame, box, zoom):
             return int(math.floor((x / 360.0 + 0.5) * n))
 
         def row(y):
-            return int(math.floor((0.5 - math.asinh(math.tan(math.radians(y))) / (2 * math.pi)) * n))
+            return int(math.floor((0.5 - dmath.asinh(dmath.tan(math.radians(y))) / (2 * math.pi)) * n))
         r0, r1 = max(0, row(float(la.max()))), min(n - 1, row(float(la.min())))
         keys = [(int(zoom), c % n, r) for r in range(r0, r1 + 1) for c in range(col(float(lo.min())), col(float(lo.max())) + 1)]
     except Exception as e:      # (never in the tile's way: its samples fetch what they need as before)
@@ -918,7 +1516,8 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
     mark("warm")
     cell_keys = roadsmod.cells_of_tile(frame, tx, ty,
                                        200 if poleprofiles.kit_enabled(pole_profile) else roadsmod.OVERLAP)
-    cells = [_s.md.cell(k, layers=("roads",), kind="demand").layers.get("roads") for k in cell_keys]
+    import mapcells
+    cells = [cd.layers.get("roads") for cd in mapcells.load_cells(_s.md, cell_keys, ("roads",))]
     de_routes = ()
     if de_junctions:                # (the German junction signs' ref ranks: only near Germany)
         import designs
@@ -927,7 +1526,7 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
     mark("anchor")
 
     def elev(la, lo):           # the physics ground (lifted under roads: grading.ROAD_LIFT)
-        z = ground(frame, la, lo, _s.dem.sample(la, lo, zoom))
+        z = ground(frame, la, lo, _s.dem.sample(la, lo, zoom), g)
         return g.apply(la, lo, z, gradingmod.ROAD_LIFT) if g is not None else z
     P.elev = elev
     bridges = _bridges(None, frame, elev)
@@ -970,7 +1569,9 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
         import buildings as buildingsmod
         import nyctanks
         # (New York's measured rooftop tanks, asked for on a thread while the buildings are put together)
-        _tanks = nyctanks.Fetch(frame, box[0], box[1], box[2], box[3], cache_dir) if props is not None else None
+        # (its manifest pinned where the tile's key reads it: the map data's folder, blockworker._nyc_key)
+        _tanks = nyctanks.Fetch(frame, box[0], box[1], box[2], box[3],
+                                getattr(_s.md, "cache_dir", None) or cache_dir) if props is not None else None
         # stock towers, containers, billboards and barns; a replaced barn's id is left out of the buildings
         try:
             import worldprops
@@ -984,7 +1585,8 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
         # cutting stood over the cut; hashk014's PR #69)
         items, _custom = buildingsmod.road_tile_items(frame, tx, ty, _s.md, elev,
                                                       decks=_tile_decks(bridges, cells, tx, ty) + _tile_decks(tunnels, cells, tx, ty),
-                                                      skip=skip, cache_dir=cache_dir)
+                                                      skip=skip, cache_dir=cache_dir, urban_fn=urban, widths=_s.widths,
+                                                      left_hand=left_hand)
         _bridge_fps = buildingsmod.bridge_footprints(     # (each laid onto its mapped bridge, baked there)
             frame, tx, ty, cache_dir,
             cell_fn=lambda key: _s.md.cell(key, layers=("roads",), kind="demand").layers.get("roads"))
@@ -1037,7 +1639,10 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
              if towns_on and props is not None and out_dir is not None else None)
     chunks = roadsmod.build_tile(frame, tx, ty, cells, elev, urban, walks=walks, deck_context=ctx, bridges=bridges, widths=_s.widths,
                                  sign_obstacles=sign_obstacles,
-                                 walk_cuts=fuel_cuts,    # (the stations' made-up driveways: no sidewalk across them)
+                                 # (the stations' made-up driveways: no sidewalk across them; nor along a square's
+                                 # street-side parking rows, streetparking.plaza_bay_cuts)
+                                 walk_cuts=fuel_cuts + (streetparking.plaza_bay_cuts(frame, tx, ty, _s.md)
+                                                        if walks is not None and _s.md is not None else []),
                                  props=props, lines=lines, wires=wires, town=town, park=park,
                                  left_hand=left_hand, mph=mph, buried=buried, lamp_region=lamp_region, country=country,
                                  structures=buildingsmod.centres(items, tx, ty) if items else (),
@@ -1057,7 +1662,23 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
                                  cover_fn=getattr(getattr(_s, "surface", None), "classes", None))
     P.town_faces = town_faces
     mark("build_tile")
-    chunks += railsmod.tile_chunks(frame, tx, ty, cells, country, urban)     # railway and tram tracks on the ground
+    import railways
+    rail_rec = rail_early = None    # (BNE_RAIL_ROAD_FIT: one record of the level crossings, the track made first from it,
+    if railways.RAIL_ROAD_FIT:      # the decks here for the parts it drew)
+        _rcells = [cell_fn(k) for k in roadsmod.cells_of_tile(frame, tx, ty, railways.REACH_M)]
+        _rground = railways.point_ground(frame, elev, rkey)
+        _rfar = railways.point_ground(frame, lambda la, lo: ground(frame, la, lo, _s.dem.sample(la, lo, zoom)),
+                                      ("raw",) + tuple(rkey))
+        _rbed = getattr(getattr(_s, "plan_store", None), "elev", None)
+        rail_rec = railways.crossing_records(frame, tx, ty, _rcells, _rground, far_ground=_rfar, load=cell_fn,
+                                             bed_elev=_rbed)
+        rail_early_props = []
+        rail_early = railways.tile_mesh(frame, tx, ty, _rcells, _rground, far_ground=_rfar, return_decks=True,
+                                        load=cell_fn, bed_elev=_rbed, furniture=rail_early_props,
+                                        under=((lambda xy: buildingsmod._under_bridges(_bridge_fps, xy))
+                                               if _bridge_fps else None), records=rail_rec)
+    chunks += railsmod.tile_chunks(frame, tx, ty, cells, country, urban,      # railway and tram tracks on the ground
+                                   records=rail_rec)
     mark("rails")
     if _s.airports is not None:         # runway markings, drawn by the road mesh like the lane lines
         chunks += _s.airports.tile_chunks(frame, tx, ty, elev, roadsmod.tile_bbox)
@@ -1208,14 +1829,17 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
         except Exception as e:
             log.debug("catenary: %s: %s", type(e).__name__, e)
     rail_props = []                 # (buffer stops and the walk signs at footway crossings: railways.tile_mesh's furniture)
-    P.rmesh, rail_decks = railways.tile_mesh(frame, tx, ty, rcells, rground,
-                                 far_ground=railways.point_ground(
-                                     frame, lambda la, lo: ground(frame, la, lo, _s.dem.sample(la, lo, zoom)),
-                                     ("raw",) + tuple(rkey)),
-                                 return_decks=True, load=cell_fn,
-                                 bed_elev=getattr(getattr(_s, "plan_store", None), "elev", None), furniture=rail_props,
-                                 under=((lambda xy: buildingsmod._under_bridges(_bridge_fps, xy))
-                                        if _bridge_fps else None))
+    if rail_early is not None:      # (made above, before the decks: BNE_RAIL_ROAD_FIT)
+        (P.rmesh, rail_decks), rail_props = rail_early, rail_early_props
+    else:
+        P.rmesh, rail_decks = railways.tile_mesh(frame, tx, ty, rcells, rground,
+                                   far_ground=railways.point_ground(
+                                       frame, lambda la, lo: ground(frame, la, lo, _s.dem.sample(la, lo, zoom)),
+                                       ("raw",) + tuple(rkey)),
+                                   return_decks=True, load=cell_fn,
+                                   bed_elev=getattr(getattr(_s, "plan_store", None), "elev", None), furniture=rail_props,
+                                   under=((lambda xy: buildingsmod._under_bridges(_bridge_fps, xy))
+                                          if _bridge_fps else None), records=rail_rec)
     if rail_props:
         props = (props or []) + rail_props
     mark("railways")
@@ -1241,7 +1865,8 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
         # for one Szeged tile against 1.6.3's 4 and 16; the grading only moves ground near roads, which towers keep off)
         powerlines.tile_lines(frame, tx, ty, _s.md, lambda la, lo: ground(frame, la, lo, _s.dem.sample(la, lo, zoom)),
                               props, wires, clearance=clearance[0] if clearance else None)
-        mappedpoles.tile_poles(frame, tx, ty, _s.md, elev, props, wires, pole_profile, urban)
+        mappedpoles.tile_poles(frame, tx, ty, _s.md, elev, props, wires, pole_profile, urban,
+                               clearance=clearance[0] if clearance else None)
         import barriers
         import fences
         boundary_meshes = {}
@@ -1290,7 +1915,8 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
         except Exception as ex:
             log.warning("lights and fans: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
         try:           # (solar farms, container terminals, marinas, trailer parks, construction sites)
-            props.extend(places.tile_rows(frame, box, _s.md, elev, near_roads, country))
+            props.extend(places.tile_rows(frame, box, _s.md, elev, near_roads, country,
+                                          clearance=clearance[0] if clearance else None))
         except fast.NativeMissing:
             raise
         except Exception as ex:
@@ -1326,6 +1952,8 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
     radar_props, P.speed_traps = radars.tile_rows(frame, box, _s.md, elev, _s.widths, urban)
     if radar_props:
         props = (props or []) + radar_props
+    import racedig                  # (BNE_RACEWAY_DIG: no prop, pole or wire end on a racetrack's band)
+    racedig.tile_clear(frame, cells, props, wires, elev, _s.md)
     P.boundary_meshes = boundary_meshes if buildings else None
     P.signs = signs
     P.chunks, P.ctx, P.walks, P.box, P.origin = chunks, ctx, walks, box, (x0, y0, 0.0)
@@ -1407,7 +2035,7 @@ def _frame_grader(frame):
     gr.tunnel_raw = lambda la, lo: ground(None, la, lo, _s.dem.sample(la, lo, gradingmod.PROFILE_ZOOM))
     gr.dem = _s.dem
     if getattr(_s.plan_store, "shared", None) is None:
-        gr.shared = plancache.for_grader(_s.cache_dir, gr, _s.widths, gr.wet)
+        gr.shared = _plan_cache(_s.cache_dir, gr, _s.widths)
     with _geo_lock:
         got = _geo_graders.setdefault(k, gr)
         while len(_geo_graders) > GEO_FRAMES_KEPT:
@@ -1537,24 +2165,29 @@ def _geo_lat(key):
 
 
 def _geo_content_key(key, zoom, buildings, left_hand, mph, gas_stations, buried, lamp_region, country, md=None, pole_profile=None,
-                     models_dir=None, de_junctions=False, towns_on=False, wear=None):
+                     models_dir=None, de_junctions=False, towns_on=False, wear=None, rules=None, cache_dir=None):
     """The revisit key of a geotile's content (md: the map data's versions, when not this worker's: the server's own
     check, earthd.Server.geo_prebuilt; models_dir: the folder of the 3dmr.eu models' cache, whose local models are
     built in: threedmr.local_signature; de_junctions: the German junction signs, near Germany with the border data
     in use, designs.cache_parts over the content's reach in its own frame)."""
     import revisit
     import threedmr
+    import geotiles
+    z, gx, gy = geotiles.parse(key)
+    tile = geotiles.geobox(gx, gy, z)
     de = ()
     if de_junctions:
         import designs
-        import geotiles
-        z, gx, gy = geotiles.parse(key)
-        tile = geotiles.geobox(gx, gy, z)
         de = designs.cache_parts(True, tile.frame, designs.tile_reach(tile.box, GEO_SKIN_MARGIN_M))
     return revisit.key("roadsg", str(key), int(zoom), bool(buildings), bool(left_hand), bool(mph), bool(gas_stations),
-                       _md_versions() if md is None else md, float(buried), lamp_region, country, GEO_SKIN_MARGIN_M,
+                       _md_versions(bool(buildings)) if md is None else md, float(buried), lamp_region, country,
+                       GEO_SKIN_MARGIN_M,
                        pole_profile, threedmr.FEATURE_VERSION, threedmr.local_signature(models_dir), *_radar_key(),
-                       bool(towns_on), roadwear.wear_key(wear, _geo_lat(key)), bool(de_junctions), *de)     # (the German junction parts last)
+                       bool(towns_on), roadwear.wear_key(wear, _geo_lat(key)), *_surf_tags(tile.frame, *tile.box[:4]),
+                       # (the ground rules: rules, the server's own when it asks, earthd.Server.geo_content_key)
+                       ("rules", _ground_rules() if rules is None else rules),
+                       _nyc_key(tile.frame, tile.box, cache_dir) if buildings else None,
+                       bool(de_junctions), *de)     # (the German junction parts last)
 
 
 def prebuild_geo(gx, gy, zoom, scratch, buildings, left_hand, mph, gas_stations, buried=0.0, lamp_region=None,
@@ -1568,8 +2201,13 @@ def prebuild_geo(gx, gy, zoom, scratch, buildings, left_hand, mph, gas_stations,
     tile_key = geotiles.geobox(gx, gy).key
     k = _geo_content_key(tile_key, zoom, buildings, left_hand, mph, gas_stations, buried, lamp_region, country,
                          pole_profile=pole_profile, models_dir=os.path.dirname(scratch), de_junctions=de_junctions, towns_on=towns_on, wear=wear)
-    path = revisit._path(_s.cache_dir, "roadsg", k)
-    if not os.path.exists(path):
+    if _LATE[0] and not _LATE_JOB[0] and not revisit.has(_s.cache_dir, "roadsg", k):
+        # (the late pool's: a job of its own planning state, as late_plan; its geotile builds read the process's
+        # planners, whose memory kept a first try's short plans after the cells had been made complete and kept)
+        late_job(lambda: revisit.has(_s.cache_dir, "roadsg", k), prebuild_geo, gx, gy, zoom, scratch, buildings,
+                 left_hand, mph, gas_stations, buried, lamp_region, country, scratch_vfs, pole_profile, wait_gaps,
+                 de_junctions, towns_on, wear)
+    elif not revisit.has(_s.cache_dir, "roadsg", k):
         os.makedirs(scratch, exist_ok=True)
         try:
             if wait_gaps:       # (the fast mode's own road processes, the game paused: no live tile waits on them)
@@ -1590,7 +2228,51 @@ def prebuild_geo(gx, gy, zoom, scratch, buildings, left_hand, mph, gas_stations,
                     pass
             with _geo_lock:
                 _geo_inputs.pop(tile_key, None)
-    return k if os.path.exists(path) else None
+    return k if revisit.has(_s.cache_dir, "roadsg", k) else None
+
+
+def _skin_key(ckey, lat, lon, zoom, sidewalks, lift, q):
+    """The revisit key of an anchor's skin of the geotile whose content has key ckey (_geo_skin)."""
+    import revisit
+    import heightmap as heightmapmod
+    return revisit.key("rskin", ckey, round(float(lat), 7), round(float(lon), 7), int(zoom), bool(sidewalks),
+                       float(lift), None if q is None else float(q), ("rules", _ground_rules()),
+                       float(heightmapmod.SQUARE))
+
+
+def prebuild_geo_skin(aid, lat, lon, zoom, gx, gy, gzoom, scratch, scratch_vfs, sidewalks, lift, buildings, left_hand,
+                      mph, q, gas_stations, buried=0.0, lamp_region=None, country=None, pole_profile=None,
+                      de_junctions=False, towns_on=False, wear=None):
+    """An anchor shown from an older version (earthd Connection.stale_run): geotile (gx, gy)'s content and anchor aid's
+    skin of THIS version built into the revisit cache behind it (roads_geo into scratch, a folder beside the session's
+    as prebuild_geo's; its files removed after), nothing for the game. {"content": kept?, "skin": kept?}."""
+    import geotiles
+    import revisit
+    tile_key = geotiles.geobox(gx, gy).key
+    os.makedirs(scratch, exist_ok=True)
+
+    def keys():
+        ck = _geo_content_key(tile_key, gzoom, buildings, left_hand, mph, gas_stations, buried, lamp_region, country,
+                              pole_profile=pole_profile, models_dir=os.path.dirname(scratch),
+                              de_junctions=de_junctions, towns_on=towns_on, wear=wear)
+        return ck, _skin_key(ck, lat, lon, zoom, sidewalks, lift, q)
+    with revisit.stale(()):             # (this version's alone, whatever scope the caller is in)
+        ck, sk = keys()
+        if not (revisit.has(_s.cache_dir, "roadsg", ck) and revisit.has(_s.cache_dir, "rskin", sk)):
+            try:
+                roads_geo(aid, lat, lon, zoom, gx, gy, gzoom, scratch, scratch_vfs, sidewalks, lift, buildings,
+                          left_hand, mph, q, gas_stations, buried, lamp_region, country, True, True, None,
+                          pole_profile, de_junctions, towns_on, wear)
+            finally:
+                for name in list(geo_names(tile_key).values()) + list(geo_names(tile_key, aid).values()):
+                    try:
+                        os.remove(os.path.join(scratch, name))
+                    except OSError:
+                        pass
+                with _geo_lock:
+                    _geo_inputs.pop(tile_key, None)
+            ck, sk = keys()
+        return {"content": revisit.has(_s.cache_dir, "roadsg", ck), "skin": revisit.has(_s.cache_dir, "rskin", sk)}
 
 
 @profile_step('Road geometry')
@@ -1615,19 +2297,22 @@ def _geo_content(gx, gy, zoom, out_dir, vfs_dir, buildings, left_hand, mph, gas_
         return (f"{vfs_dir}/{names['json']}", int(extra.get("n", 0)), extra.get("info") or {},
                 [(sid, [(np.asarray(la), np.asarray(lo)) for la, lo in rs]) for sid, rs in extra.get("pads", [])])
     _stages, mark = _stage_clock()
-    f0 = revisit.faults()
-    g = _frame_grader(tile.frame)
-    walks_raw = []
-    P = _tile_parts(mark, tile.frame, tile, zoom, g, buildings, left_hand, mph, gas_stations, buried, lamp_region,
-                    country, None, ("g", tile.key), geotiles.centre(gx, gy), GEO_SKIN_MARGIN_M, walks_raw,
-                    pole_profile=pole_profile, cache_dir=os.path.dirname(out_dir), out_dir=out_dir, vfs_dir=vfs_dir,
-                    de_junctions=de_junctions, towns_on=towns_on, wear=wear)
-    P.walks_raw = walks_raw
-    path, n, info = _write_geo_content(out_dir, vfs_dir, tile, P)
+    with revisit.scope() as f0:         # (this build's faults alone: revisit.scope)
+        g = _frame_grader(tile.frame)
+        walks_raw = []
+        P = _tile_parts(mark, tile.frame, tile, zoom, g, buildings, left_hand, mph, gas_stations, buried, lamp_region,
+                        country, None, ("g", tile.key), geotiles.centre(gx, gy), GEO_SKIN_MARGIN_M, walks_raw,
+                        pole_profile=pole_profile, cache_dir=os.path.dirname(out_dir), out_dir=out_dir,
+                        vfs_dir=vfs_dir, de_junctions=de_junctions, towns_on=towns_on, wear=wear)
+        P.walks_raw = walks_raw
+        path, n, info = _write_geo_content(out_dir, vfs_dir, tile, P)
     info = dict(info or {}, fuel_tried=[list(t) for t in getattr(P, "fuel_tried", ())])     # (the station finder)
     mark("write")
     _geo_stats["content_built"] += 1
-    if revisit.ON and revisit.faults() == f0:     # (complete: nothing it read failed or was missing)
+    keep, until = f0.kept_until()      # (keep: nothing it read failed or was missing; until: an answer it read expires)
+    if revisit.ON and not keep and revisit.SITES:
+        log.info("revisit: road geotile %s not kept: %s", tile.key, f0.why_not())
+    if revisit.ON and keep:
         try:
             blobs = {}
             for what, name in names.items():
@@ -1655,7 +2340,7 @@ def _geo_content(gx, gy, zoom, out_dir, vfs_dir, buildings, left_hand, mph, gas_
             revisit.store(_s.cache_dir, "roadsg", k, blobs,
                           {"n": int(n), "info": info,
                            "pads": [[sid, [[np.asarray(la).tolist(), np.asarray(lo).tolist()] for la, lo in rs]]
-                                    for sid, rs in P.fuel_pads]}, where=wh)
+                                    for sid, rs in P.fuel_pads]}, where=wh, until=until)
         except Exception as ex:          # (not kept rather than no tile)
             log.debug("revisit: geotile %s not kept: %s: %s", tile.key, type(ex).__name__, ex)
     return path, n, info, P.fuel_pads
@@ -1760,8 +2445,8 @@ def _map_walks(src, dst, walks):
             c = dict(wk["corner"])
             c["arc"] = mp(c["arc"])
             c["outer"] = [tuple(v) for v in mp(np.asarray(c["outer"], np.float64).reshape(-1, 3))]
-            inw = np.asarray(c["inward"], np.float64).reshape(-1, 2) @ r2.T
-            c["inward"] = inw / np.maximum(np.hypot(*inw.T), 1e-12)[:, None]
+            inw = dnp.matmul(np.asarray(c["inward"], np.float64).reshape(-1, 2), r2.T)
+            c["inward"] = inw / np.maximum(dnp.hypot(*inw.T), 1e-12)[:, None]
             wk["corner"] = c
         else:
             wk["pts"] = mp(wk["pts"])
@@ -1793,7 +2478,60 @@ def _clip_mesh(mesh, origin, quad):
     return P2[used], remap[T2], UV2[used], mats, np.asarray(M)[src]
 
 
-def _geo_skin(aid, lat, lon, zoom, gx, gy, out_dir, vfs_dir, sidewalks, lift, q, content):
+def _geo_skin(aid, lat, lon, zoom, gx, gy, out_dir, vfs_dir, sidewalks, lift, q, content, ckey=None):
+    """_geo_skin_build, kept in the revisit cache (kind "rskin", since 2026-11-13: keyed by its content's key ckey, the
+    anchor and the skin's own settings; teleport anchors are snapped, so a place visited again asks for the same
+    skins): a revisit no longer drapes every tile again, and an older generation's skin is shown with the content and
+    block of that generation (revisit.stale). Its info has "h": the digest of its files (the server sends a skin
+    again only when it changed)."""
+    import hashlib
+    import json
+    import geotiles
+    import revisit
+    if ckey is None or not revisit.ON or getattr(_s, "cache_dir", None) is None:
+        return _geo_skin_build(aid, lat, lon, zoom, gx, gy, out_dir, vfs_dir, sidewalks, lift, q, content)
+    tile = geotiles.geobox(gx, gy)
+    names = geo_names(tile.key, aid)
+    mine = [(f"{vfs_dir}/", "@V@/"), (f"rs_{aid}_", "rs_@A@_")]
+    k = _skin_key(ckey, lat, lon, zoom, sidewalks, lift, q)
+    got = revisit.load(_s.cache_dir, "rskin", k)
+    if got is not None:
+        blobs, extra = got
+        back = [(b, a) for a, b in reversed(mine)]
+        for g_, data in blobs.items():
+            if g_.endswith(".json"):
+                d = json.loads(revisit.swap(data.decode("utf-8"), back))
+                d["anchorId"] = aid
+                data = json.dumps(d, separators=(",", ":")).encode("utf-8")
+            _write_bytes(os.path.join(out_dir, revisit.swap(g_, back)), data)
+        _geo_stats["skin_hits"] += 1
+        return f"{vfs_dir}/{names['json']}", {"lift": float(lift), "h": (extra or {}).get("h")}
+    with revisit.scope() as f0:
+        res = _geo_skin_build(aid, lat, lon, zoom, gx, gy, out_dir, vfs_dir, sidewalks, lift, q, content)
+    if res is None:
+        return None
+    try:
+        with open(os.path.join(out_dir, names["json"]), encoding="utf-8") as f:
+            d = json.loads(f.read())
+        d["anchorId"] = 0
+        blobs = {revisit.swap(names["json"], mine):
+                 revisit.swap(json.dumps(d, separators=(",", ":")), mine).encode("utf-8")}
+        for what in ("road", "walk", "walkcol"):
+            if isinstance(d.get(what), dict):
+                with open(os.path.join(out_dir, names[what]), "rb") as f:
+                    blobs[revisit.swap(names[what], mine)] = f.read()
+        dg = hashlib.sha1()
+        for n_ in sorted(blobs):
+            dg.update(n_.encode() + b"\0" + blobs[n_])
+        res[1]["h"] = dg.hexdigest()[:16]
+        if f0.complete:
+            revisit.store(_s.cache_dir, "rskin", k, blobs, {"h": res[1]["h"]})
+    except Exception as ex:          # (not kept rather than no skin)
+        log.debug("revisit: skin of geotile %s not kept: %s: %s", tile.key, type(ex).__name__, ex)
+    return res
+
+
+def _geo_skin_build(aid, lat, lon, zoom, gx, gy, out_dir, vfs_dir, sidewalks, lift, q, content):
     """Anchor aid's skin of geotile (gx, gy): the draped road surfaces (the road mesh and plazas: roadmesh.build on the
     anchor's lattice and height quantum q, follow) and the sidewalks (curbs on the drawn ground, their lean collision
     mesh), from the content's skin inputs mapped into the anchor's world, cut exactly at the tile's quad there (its
@@ -1820,7 +2558,7 @@ def _geo_skin(aid, lat, lon, zoom, gx, gy, out_dir, vfs_dir, sidewalks, lift, q,
     origin = (qx0, qy0, 0.0)
 
     def elev(la, lo):
-        z = ground(frame, la, lo, _s.dem.sample(la, lo, zoom))
+        z = ground(frame, la, lo, _s.dem.sample(la, lo, zoom), g)
         return g.apply(la, lo, z, gradingmod.ROAD_LIFT) if g is not None else z
     tunnels = tunnel_profiles(aid, frame, elev, g)
     cell_fn = lambda key: _s.md.cell(key, layers=("roads",), kind="demand").layers.get("roads")   # noqa: E731
@@ -1886,7 +2624,7 @@ def _geo_skin(aid, lat, lon, zoom, gx, gy, out_dir, vfs_dir, sidewalks, lift, q,
     return f"{vfs_dir}/{names['json']}", {"lift": float(lift)}
 
 
-_geo_stats = {"content_built": 0, "content_hits": 0, "skins": 0, "exact": 0}
+_geo_stats = {"content_built": 0, "content_hits": 0, "skins": 0, "skin_hits": 0, "exact": 0}
 
 
 def geo_stats():
@@ -1918,7 +2656,7 @@ def _geo_exact(aid, lat, lon, gx, gy, out_dir, vfs_dir, parts):
             continue
         piv = float(info.get("pivot", e.get("pivot", 0.0)))
         r, _t, c = geotiles.placement(tile.frame, frame, (0.0, 0.0, piv))
-        s = r.T @ c
+        s = dnp.matmul(r.T, c)
         with open(src, "rb") as f:
             blob = fast._ef.cdae_shear(f.read(), float(e["pos"][2]), float(s[0]), float(s[1]), float(s[2]), piv)
         name = f"rx_{aid}_{tile.key}_{what}.cdae"
@@ -1926,6 +2664,21 @@ def _geo_exact(aid, lat, lon, gx, gy, out_dir, vfs_dir, parts):
         out[what] = f"{vfs_dir}/{name}"
         _geo_stats["exact"] += 1
     return out
+
+
+URGENT_PHOTO_M = 500.0      # a road geotile whose centre is this near its anchor's place: its roof photo fetched urgent
+
+
+def _geo_near(gx, gy, lat, lon):
+    """Is geotile (gx, gy)'s centre within URGENT_PHOTO_M of (lat, lon) (the anchor's place: the car's)?"""
+    try:
+        import geotiles
+        la, lo = geotiles.centre(gx, gy)
+        dy = (float(la) - float(lat)) * 111320.0
+        dx = (float(lo) - float(lon)) * 111320.0 * dmath.cos(math.radians(float(lat)))
+        return math.hypot(dx, dy) <= URGENT_PHOTO_M
+    except Exception:           # (no urgency rather than no tile)
+        return False
 
 
 def roads_geo(aid, lat, lon, zoom, gx, gy, gzoom, out_dir, vfs_dir, sidewalks, lift, buildings, left_hand, mph, q,
@@ -1937,20 +2690,33 @@ def roads_geo(aid, lat, lon, zoom, gx, gy, gzoom, out_dir, vfs_dir, sidewalks, l
     rigid placement would leave off, roads.geo_exact_auto). Returns {"content": (vfs path, chunks, info,
     fuel pads) or None, "skin": (vfs path, info) or None, "exact": {what: vfs path}, "stages": {...}}."""
     watch = _stack_watch(f"road geotile {gx}_{gy}")
+    chk = _abandon_check(out_dir, aid)      # (given up once a teleport leaves aid: pools.Abandoned)
+    chk.__enter__()
     try:
         out = {"content": None, "skin": None, "exact": {}, "stages": {}}
         t0 = time.perf_counter()
         c0 = time.process_time()
 
+        near = _geo_near(gx, gy, lat, lon)
+
         def build_content():
-            return _geo_content(gx, gy, gzoom, out_dir, vfs_dir, buildings, left_hand, mph, gas_stations, buried,
-                                lamp_region, country, pole_profile, de_junctions=de_junctions, towns_on=towns_on, wear=wear)
+            import buildings as buildingsmod
+            with buildingsmod.urgent_photos(near):      # (the tiles round the car: their roof photos first)
+                return _geo_content(gx, gy, gzoom, out_dir, vfs_dir, buildings, left_hand, mph, gas_stations, buried,
+                                    lamp_region, country, pole_profile, de_junctions=de_junctions, towns_on=towns_on,
+                                    wear=wear)
         if content:
             out["content"] = build_content()
             out["stages"]["content"] = last_tile_stages()
         t1, c1 = time.perf_counter(), time.process_time()
         if skin:
-            out["skin"] = _geo_skin(aid, lat, lon, zoom, gx, gy, out_dir, vfs_dir, sidewalks, lift, q, build_content)
+            import geotiles
+            ckey = _geo_content_key(geotiles.geobox(gx, gy).key, gzoom, buildings, left_hand, mph, gas_stations, buried,
+                                    lamp_region, country, pole_profile=pole_profile,
+                                    models_dir=os.path.dirname(out_dir), de_junctions=de_junctions, towns_on=towns_on,
+                                    wear=wear)
+            out["skin"] = _geo_skin(aid, lat, lon, zoom, gx, gy, out_dir, vfs_dir, sidewalks, lift, q, build_content,
+                                    ckey)
             out["stages"]["skin"] = last_tile_stages()
         t2, c2 = time.perf_counter(), time.process_time()
         if exact == "auto":             # (a fresh content: the parts its anchor needs exact, roads.geo_exact_auto)
@@ -1964,6 +2730,7 @@ def roads_geo(aid, lat, lon, zoom, gx, gy, gzoom, out_dir, vfs_dir, sidewalks, l
                        "exact_s": time.perf_counter() - t2}
         return out
     finally:
+        chk.__exit__()
         watch.cancel()
 
 
@@ -2314,6 +3081,8 @@ def _open_tunnels(g, keep):
         return g.open_tunnels(keep["lat"], keep["lon"])
     except Exception:
         log.exception("open tunnel sections")
+        import revisit
+        revisit.fault()             # (a block painted without them is not kept: blockcache.py)
         return []
 
 
@@ -2329,6 +3098,8 @@ def _tunnel_holes(aid, frame, elev, keep, cx, cy, idx, info, g=None):
             frame, keep, cx, cy, heightmap.SQUARE, rail_parts=_rail_tunnel_parts(frame))
     except Exception:                   # no holes rather than no block
         log.exception("tunnel holes of block (%s, %s)", cx, cy)
+        import revisit
+        revisit.fault()                 # (one without them is not kept: blockcache.py)
         return idx
     import railunderpass            # (the railway stations' underpasses: their passages and pits are open where the ground was)
     under = railunderpass.holes(_s.md, frame, keep, cx, cy, heightmap.SQUARE, elev)
@@ -2369,18 +3140,24 @@ def tunnel_profiles(aid, frame, elev, g=None):
     return roadsmod.ChainView(_chain_store("tunnels", roadsmod.TunnelProfiles, elev, setup), frame)
 
 
-def far_buildings_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, lamp_region=None):
+def _urban_fn():
+    """The land cover's town test of this process's Surface (road_specs' urban_fn), or None."""
+    return getattr(getattr(_s, "surface", None), "urban", None)
+
+
+def far_buildings_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, lamp_region=None, left_hand=False):
     """earthd.Server.build_far_bld_tile here (road-tile pool): buildings.far_tile (from the revisit cache when built in
     this anchor's place before)."""
     import buildings as buildingsmod
     import revisit
     frame = geodesy.EnuFrame(lat, lon)
     k = revisit.key("bldfar", round(float(lat), 7), round(float(lon), 7), zoom, tx, ty,
-                    _s.md.versions() if _s.md is not None else None, lamp_region)
+                    _md_versions(True), lamp_region, bool(left_hand), _nyc_key(frame, roadsmod_tile_bbox(tx, ty)))
     return _revisit_tile("bldfar", k, aid, tx, ty, out_dir, vfs_dir, f"bldfar_{aid}_{tx}_{ty}.json",
                          lambda: buildingsmod.far_tile(frame, tx, ty, _s.md,
                                                        lambda la, lo: ground(frame, la, lo, _s.dem.sample(la, lo, zoom)),
-                                                       out_dir, vfs_dir, aid, lamp_region),
+                                                       out_dir, vfs_dir, aid, lamp_region, _urban_fn(), _s.widths,
+                                                       left_hand),
                          lambda res: {"n": int(res[1])},
                          lambda path, extra: (path, int(extra.get("n", 0))),
                          _where_enu(lat, lon, *roadsmod_tile_bbox(tx, ty), md=_md_versions()))
@@ -2393,7 +3170,7 @@ def skyline_tile(aid, lat, lon, zoom, ux, uy, out_dir, vfs_dir, lamp_region=None
     import revisit
     frame = geodesy.EnuFrame(lat, lon)
     k = revisit.key("bldsky", round(float(lat), 7), round(float(lon), 7), zoom, ux, uy,
-                    _s.md.versions() if _s.md is not None else None, lamp_region)
+                    _md_versions(True), lamp_region)
     u = buildingsmod.SKY_UNIT
     sx0, sy0, _, _ = roadsmod_tile_bbox(ux * u, uy * u)
     _, _, sx1, sy1 = roadsmod_tile_bbox(ux * u + u - 1, uy * u + u - 1)
@@ -2437,14 +3214,15 @@ def far_bridge_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir):
 # cached without an anchor in its key (revisit kinds "bldfar" / "bldsky" / "brfar", the key's first part "g"); the mod
 # keeps it across rebases and places it rigidly at its pivot (render-only: no skin, no exact variant).
 
-FAR_GEO = {"bldfar": "bf", "bldsky": "bs", "brfar": "bb"}       # kind -> its files' prefix (<prefix>_<key>[_<sub>])
+FAR_GEO = {"bldfar": "bf", "bldsky": "bs", "brfar": "bb", "bldpack": "bp", "bldhz": "bh"}   # kind -> files' prefix (<prefix>_<key>[_<sub>])
 FAR_LAMP_ROUND = 1          # decimals of the lamps' coordinates
 
 
 def far_geo_zoom(kind):
     """The geotile zoom of a far kind."""
     import geotiles
-    return {"bldfar": geotiles.FAR_Z, "bldsky": geotiles.SKY_Z, "brfar": geotiles.BRIDGE_Z}[kind]
+    return {"bldfar": geotiles.FAR_Z, "bldsky": geotiles.SKY_Z, "brfar": geotiles.BRIDGE_Z, "bldpack": geotiles.SKY_Z,
+            "bldhz": 12}[kind]
 
 
 def far_geo_names(kind, key):
@@ -2454,8 +3232,8 @@ def far_geo_names(kind, key):
     return {"json": f"{pre}_{key}.json", "shape": f"{pre}_{key}.cdae"}
 
 
-def far_geo_piece(key, sub):
-    return f"{FAR_GEO['brfar']}_{key}_{sub}.cdae"
+def far_geo_piece(key, sub, kind="brfar"):
+    return f"{FAR_GEO[kind]}_{key}_{sub}.cdae"
 
 
 def _lamps_by_geotile(frame, lamps):
@@ -2532,11 +3310,13 @@ def _far_geo_build(kind, tile, gzoom, out_dir, vfs_dir, lamp_region):
     data = {"v": 1, "key": tile.key, "frame": [float(frame.lat0), float(frame.lon0)]}
     names = far_geo_names(kind, tile.key)
     shapes = {}
-    if kind == "bldfar":
+    if kind in ("bldfar", "bldpack"):  # (a pack: the far buildings of a whole skyline square, buildings.PACK_*)
         if not _far_cells_ready((kind, tile.key), *buildingsmod.far_needs(frame, tile, None)):
             return None
-        items, lamps, _box = buildingsmod.far_items(frame, tile, None, _s.md, raw, lamp_region)
-        mesh = buildingsmod.build(items, lite=True)
+        items, lamps, _box = buildingsmod.far_items(frame, tile, None, _s.md, raw, lamp_region, _urban_fn(), _s.widths)
+        # (meshes under the 16-bit indices, one shape; a pack's in buildings.PACK_STYLE)
+        mesh = (buildingsmod.pack_meshes(items) if kind == "bldpack" else buildingsmod.build_parts(items, lite=True)) \
+            or None
         n = len(items)
     elif kind == "bldsky":
         keys = roadsmod.cells_of_tile(frame, tile, None, margin=0.0)
@@ -2549,6 +3329,30 @@ def _far_geo_build(kind, tile, gzoom, out_dir, vfs_dir, lamp_region):
         n = len(picked) if mesh is not None else 0
         if mesh is None:
             lamps = []
+    elif kind == "bldhz":               # the horizon ring: the tall buildings' index, a piece per skyline square (bldhz)
+        import bldhz
+        pieces, n = {}, 0
+        hz_zoom = min(int(gzoom), bldhz.DEM_ZOOM)
+
+        def hz_ground(la, lo):          # (a coarser DEM: the buildings' feet 5-120 km off, no fine tiles fetched there)
+            return ground(None, la, lo, _s.dem.sample(la, lo, hz_zoom))
+        sq = bldhz.squares(tile, hz_ground, _s.md)
+        if sq is None:                  # (its index tile not had now: asked again later)
+            return None
+        for sub, picked in sq.items():
+            m = buildingsmod._sky_mesh(picked) if picked else None
+            if not m:
+                continue
+            fname = far_geo_piece(tile.key, sub, "bldhz")
+            buildingsmod.write(os.path.join(out_dir, fname), m)
+            e = {"shape": f"{vfs_dir}/{fname}", "pos": [x0, y0, 0.0]}
+            e.update(_shape_info(os.path.join(out_dir, fname), e["pos"], "bldhz"))
+            pieces[sub] = e
+            shapes[sub] = fname
+            n += len(picked)
+        if pieces:
+            data["parts"] = pieces
+        return data, shapes, n
     else:                               # brfar: the slabs in a piece per road geotile under it
         keys = roadsmod.cells_of_tile(frame, tile, None, margin=0.0)
         if not _far_cells_ready((kind, tile.key), keys, ("roads",)):
@@ -2584,6 +3388,14 @@ def _far_geo_build(kind, tile, gzoom, out_dir, vfs_dir, lamp_region):
     return data, shapes, n
 
 
+def _bldhz_key(gx, gy):
+    """A horizon tile's inputs for its revisit key: the index's format and its source's identity (bldhz sig: the data
+    site's frozen build, or the local tile's SHA-1)."""
+    import bldhz
+    src = bldhz.source(_s.md)
+    return (f"hz={bldhz.FORMAT}",) + (tuple(src.sig(gx, gy)) if src is not None else ("none",))
+
+
 def traffic_geo(gx, gy, gzoom, out_dir, vfs_dir, left_hand=False, mph=True, far=False):
     """Visual traffic routes, independent of the AI graph and of the far buildings (distanttraffic.py)."""
     import distanttraffic
@@ -2604,12 +3416,17 @@ def far_geo(kind, gx, gy, gzoom, out_dir, vfs_dir, lamp_region=None):
     <prefix>_<key>.json (+ its shapes); returns (vfs path of the JSON, count, frame (lat, lon), pivot, {what: shape
     file name}) or None when its cells are not at hand yet."""
     import json
+    import buildings as buildingsmod
     import geotiles
     import revisit
     z = far_geo_zoom(kind)
     tile = geotiles.geobox(gx, gy, z)
     names = far_geo_names(kind, tile.key)
-    k = revisit.key(kind, "g", tile.key, int(gzoom), _md_versions(), lamp_region)
+    style = buildingsmod.PACK_STYLE if kind == "bldpack" else "lite"
+    k = revisit.key(kind, "g", tile.key, int(gzoom), _md_versions(kind != "brfar"), lamp_region,
+                    _nyc_key(tile.frame, tile.box) if kind in ("bldfar", "bldpack") else None,
+                    *((f"style={style}",) if style != "lite" else ()),     # (the lite packs' keys as before)
+                    *(_bldhz_key(gx, gy) if kind == "bldhz" else ()))
     frame_ll = (float(tile.frame.lat0), float(tile.frame.lon0))
     got = revisit.load(_s.cache_dir, kind, k)
     if got is not None:
@@ -2621,8 +3438,8 @@ def far_geo(kind, gx, gy, gzoom, out_dir, vfs_dir, lamp_region=None):
         _far_geo_stats["hits"] += 1
         return (f"{vfs_dir}/{names['json']}", int(extra.get("n", 0)), frame_ll, float(extra.get("pivot", 0.0)),
                 dict(extra.get("shapes") or {}))
-    f0 = revisit.faults()
-    res = _far_geo_build(kind, tile, gzoom, out_dir, vfs_dir, lamp_region)
+    with revisit.scope() as f0:         # (this build's faults alone: revisit.scope)
+        res = _far_geo_build(kind, tile, gzoom, out_dir, vfs_dir, lamp_region)
     if res is None:
         return None
     data, shapes, n = res
@@ -2632,7 +3449,7 @@ def far_geo(kind, gx, gy, gzoom, out_dir, vfs_dir, lamp_region=None):
     _write_bytes(os.path.join(out_dir, names["json"]), text.encode("utf-8"))
     _far_geo_stats["built"] += 1
     pivot = float(data.get("pivot", 0.0))
-    if revisit.ON and revisit.faults() == f0:     # (complete: nothing it read failed or was missing)
+    if revisit.ON and f0.complete:     # (complete: nothing it read failed or was missing)
         try:
             blobs = {names["json"]: text.replace(f"{vfs_dir}/", "@V@/").encode("utf-8")}
             for fname in shapes.values():
@@ -2654,9 +3471,11 @@ def far_geo_stats():
     return dict(_far_geo_stats)
 
 
-def base_entry(user_dir, base_vfs, ao_vfs, rgb, ao_value):
+def base_entry(user_dir, base_vfs, ao_vfs, rgb, ao_value, fade=None):
     """terraincache.base_entry here (its BC7 encode is the base photo's main cost)."""
-    return terraincache.base_entry(user_dir, base_vfs, ao_vfs, rgb, ao_value)
+    if fade is None:
+        return terraincache.base_entry(user_dir, base_vfs, ao_vfs, rgb, ao_value)
+    return terraincache.base_entry(user_dir, base_vfs, ao_vfs, rgb, ao_value, fade)
 
 
 def far_geometry(aid, lat, lon, tile, zoom, q, ref_zoom, with_sink, layout):
@@ -2668,9 +3487,9 @@ def far_geometry(aid, lat, lon, tile, zoom, q, ref_zoom, with_sink, layout):
     got = revisit.load(_s.cache_dir, "fargeo", k)
     if got is not None:
         return _built_from(got[0]["built.npz"], got[1])
-    f0 = revisit.faults()
-    built = _far_geometry(aid, lat, lon, tile, zoom, q, ref_zoom, with_sink, layout)
-    if revisit.ON and revisit.faults() == f0:
+    with revisit.scope() as f0:         # (this build's faults alone: revisit.scope)
+        built = _far_geometry(aid, lat, lon, tile, zoom, q, ref_zoom, with_sink, layout)
+    if revisit.ON and f0.complete:
         blob, meta = _built_blob(built)
         revisit.store(_s.cache_dir, "fargeo", k, {"built.npz": blob}, meta,
                       where=_where_enu(lat, lon, *tile.bbox, layout=repr(layout), md=_md_versions()))
@@ -2685,12 +3504,12 @@ def far_global_geometry(z, x, y, zoom, ref_zoom, layout):
     got = revisit.load(_s.cache_dir, "fargeo", k)
     if got is not None:
         return _built_from(got[0]["built.npz"], got[1])
-    f0 = revisit.faults()
-    base = _s.airports.wrap(_s.dem) if _s.airports is not None else _s.dem
-    if _s.sea is not None:
-        base = seacarvemod.SeaDem(base, None)       # (carving stops at seacarve.CARVE_MAX_LEVEL < the global levels)
-    built = farfield.build_global(base, z, x, y, zoom, ref_zoom, layout)
-    if revisit.ON and revisit.faults() == f0:
+    with revisit.scope() as f0:         # (this build's faults alone: revisit.scope)
+        base = _s.airports.wrap(_s.dem) if _s.airports is not None else _s.dem
+        if _s.sea is not None:
+            base = seacarvemod.SeaDem(base, None)       # (carving stops at seacarve.CARVE_MAX_LEVEL < the global levels)
+        built = farfield.build_global(base, z, x, y, zoom, ref_zoom, layout)
+    if revisit.ON and f0.complete:
         blob, meta = _built_blob(built)
         la, lo = farfield.global_frame_ll(z, x, y)
         revisit.store(_s.cache_dir, "fargeo", k, {"built.npz": blob}, meta,
@@ -2759,7 +3578,14 @@ def far_global_tile(z, x, y, zoom, ref_zoom, layout, tex):
     import geotiles
     import imagery as imagerymod
     import rockface as rockfacemod
+    if _TRACE:
+        t0, c0 = time.perf_counter(), time.process_time()
+        _dem_t.v = 0.0
     built = far_global_geometry(z, x, y, zoom, ref_zoom, layout)
+    _keep_fin_global(z, x, y, zoom, ref_zoom, layout, built, tex["px"], tex.get("keep_fin"))
+    if _TRACE:
+        log.info("fartrace worker global %s: geometry %.0f ms (cpu %.0f, dem %.0f)", (z, x, y),
+                 1000 * (time.perf_counter() - t0), 1000 * (time.process_time() - c0), 1000 * _dem_t.v)
     im = _imagery(tex)
     px = tex["px"]
     try:
@@ -2778,14 +3604,14 @@ def far_global_tile(z, x, y, zoom, ref_zoom, layout, tex):
                                    -s / 2, -s / 2, s / (g.shape[1] - 1))
         except Exception as e:
             log.debug("rock faces of global %s: %s", (z, x, y), e)
-    n = imagerymod.write_dds(tex["path"], rgb)
+    n = imagerymod.write_dds(tex["path"], rgb, imagerymod.FAR_SRGB)
     return built, (n, used)
 
 
 def _imagery(tex):
     """This process's imagery.Imagery for the server's chain settings (tex: chain, tone, leaf_on, season_mode): the
-    imagery tiles on disk alone (strict: a missing tile fails the render), or, for a compute-sharing helper
-    (tex["online"], peerwork.py), fetched as needed."""
+    imagery tiles on disk alone (strict: a missing tile fails the render), or, with tex["online"], fetched as
+    needed."""
     import imagery as imagerymod
     online = bool(tex.get("online"))
     fin = tuple(sorted((tex.get("fin") or {}).items()))
@@ -2806,8 +3632,27 @@ def _imagery(tex):
     return ims[key]
 
 
+def roadsurf_area(lat0, lon0, lat1, lon1):
+    """earthd._roadsurf_area here: the photo's verdicts on the untagged minor roads of the cells under the box
+    (roadsurf.measure_area, from the z17 tiles on the disk). Returns the cells measured."""
+    import roadsurf
+    return len(roadsurf.measure_area(getattr(_s, "md", None), lat0, lon0, lat1, lon1))
+
+
+def _base_veg():
+    """This process's Vegetation for the generated ground's tree floor (genground.tree_floor: its cache read, cells never
+    built here), as _veg_geo's."""
+    import vegetation as vegetationmod
+    if getattr(_s, "veg", None) is None and getattr(_s, "md", None) is not None:
+        v = vegetationmod.Vegetation(_s.md, _s.cache_dir)
+        v.dem = _s.dem
+        v.surface, v.widths = _s.surface, _s.widths
+        _s.veg = v
+    return getattr(_s, "veg", None)
+
+
 def base_photo(lat, lon, x0, y0, size, px, tex, buildings, rock_zoom, path, cache, fuel_pads=None, out_px=None,
-               quick=False):
+               quick=False, trees=False, canopy=False):
     """earthd.Server.write_base here, for a server without its imagery analyses (a small machine): the block's base
     photo from the imagery tiles on disk, its building footprints filled and its cliffs as rock, written to path
     (PNG) and packed into the game's terrain texture cache (cache: terraincache.base_entry's arguments but the rgb).
@@ -2817,7 +3662,9 @@ def base_photo(lat, lon, x0, y0, size, px, tex, buildings, rock_zoom, path, cach
     the gas station pads around it (_take_pads). px: the imagery's render size, out_px: the photo's (enlarged before
     the roads are painted in: earthd.BASE_PX). quick: earthd.Server.write_quick_base's stand-in (the imagery and the
     roads at px, then enlarged; no roofs' mask, road ghosts or rock): the main process's ran 5-6 s beside the rest of
-    its threads at 185 mph (2026-10-31), here ~1 s."""
+    its threads at 185 mph (2026-10-31), here ~1 s. With the generated ground on, the packed copy fades its forest
+    floor out through the mips (earthd.Server.write_base); canopy: its canopy version (or None) returned too, a
+    fourth element."""
     _take_pads(fuel_pads)
     import imagery as imagerymod
     import roads as roadsmod
@@ -2828,8 +3675,24 @@ def base_photo(lat, lon, x0, y0, size, px, tex, buildings, rock_zoom, path, cach
     im = _imagery(tex)
     frame = geodesy.EnuFrame(lat, lon)
     pending = set()
+    import genground
+    rgb = can = None
+    if genground.ON and not quick:      # (earthd.Server.write_base)
+        try:
+            cout = []
+            rgb, used = genground.render(im, frame, x0, y0, size, px, getattr(_s, "md", None),
+                                         getattr(_s, "surface", None), _s.widths, pending, _base_veg() if trees else None,
+                                         getattr(_s, "dem", None), canopy_out=cout)
+            can = genground.canopy_if_differs(rgb, cout)
+        except imagerymod.ImageryError:
+            return None
+        except Exception as e:      # (the Sentinel-2 photo alone then)
+            log.info("base photo: generated ground: %s: %s", type(e).__name__, e)
+            rgb = can = None
+            pending.discard(genground.GEN_PENDING)
     try:
-        rgb, used = im.render(frame, x0, y0, size, px, pending)
+        if rgb is None:
+            rgb, used = im.render(frame, x0, y0, size, px, pending)
     except imagerymod.ImageryError:
         return None
     rgb = np.asarray(rgb, np.uint8)
@@ -2849,6 +3712,8 @@ def base_photo(lat, lon, x0, y0, size, px, tex, buildings, rock_zoom, path, cach
         user_dir, base_vfs, ao_vfs, ao_value = cache
         terraincache.base_entry(user_dir, base_vfs, ao_vfs, rgb, ao_value)
         return rgb, used, pending
+    # (the canopy version follows every step: what a step paints, as painted; a copy, a step may paint in place)
+    rgb0 = rgb.copy() if can is not None else rgb
     if buildings and _s.md is not None:
         try:
             mask = buildingsmod.photo_mask(frame, x0, y0, size, px, _s.md)
@@ -2862,7 +3727,10 @@ def base_photo(lat, lon, x0, y0, size, px, tex, buildings, rock_zoom, path, cach
             rgb = surfacemod.unghost_square(rgb, frame, x0, y0, size, getattr(_s, "surface", None), _s.widths)
         except Exception as e:      # the photo stays as it is
             log.info("base photo: road ghosts: %s", e)
+    can = genground.keep_painted(rgb0, rgb, can)
     rgb = surfacemod.enlarge(rgb, out_px or px)
+    can = surfacemod.enlarge(can, out_px or px) if can is not None else None
+    rgb1 = np.array(rgb, np.uint8, copy=True) if can is not None else rgb
     if roadsmod.ROADS_IN_GROUND:          # (earthd.Server.write_base)
         try:
             rgb = surfacemod.paint_square(rgb, frame, x0, y0, size, getattr(_s, "surface", None), _s.widths,
@@ -2877,13 +3745,19 @@ def base_photo(lat, lon, x0, y0, size, px, tex, buildings, rock_zoom, path, cach
         rgb = rockfacemod.rock(rgb, frame, x0, y0, size, U, x0, y0, size / (n - 1))
     except Exception as e:
         log.debug("base photo: rock faces: %s", e)
+    can = genground.keep_painted(rgb1, rgb, can)
     tmp = staging.tmp_for(path)
     # (terraincache.stored_photo: the game reads the packed cache entry, this file only if that is stale)
     with open(tmp, "wb") as f:
         f.write(terraincache.stored_photo(rgb))
     staging.replace(tmp, path)
     user_dir, base_vfs, ao_vfs, ao_value = cache
-    terraincache.base_entry(user_dir, base_vfs, ao_vfs, rgb, ao_value)
+    if can is not None:         # (the forest floor faded out through the mips, as the far tiles')
+        terraincache.base_entry(user_dir, base_vfs, ao_vfs, rgb, ao_value, (can, size / rgb.shape[0]))
+    else:
+        terraincache.base_entry(user_dir, base_vfs, ao_vfs, rgb, ao_value)
+    if canopy:
+        return rgb, used, pending, can
     return rgb, used, pending
 
 
@@ -2896,10 +3770,7 @@ def far_tile(aid, lat, lon, tile, zoom, q, ref_zoom, with_sink, layout, tex):
     built in this anchor's place before (and its texture) comes from the revisit cache."""
     import revisit
     mask = tex.get("mask") if tex.get("mask") and tex["mask"][1] else None
-    k = revisit.key("far", *_far_key(lat, lon, tile, zoom, q, ref_zoom, with_sink, layout), tex["px"],
-                    mask[1] if mask else 0, tuple(tex["chain"]), tex["tone"], tex["leaf_on"], tex["season_mode"],
-                    bool(tex.get("online")), _s.widths is not None, _s.surface is not None,
-                    *((tuple(sorted(tex["fin"].items())),) if tex.get("fin") else ()))
+    k = _far_tile_key(lat, lon, tile, zoom, q, ref_zoom, with_sink, layout, tex)
     got = revisit.load(_s.cache_dir, "far", k)
     quick = bool(tex.get("quick"))      # (the 3D map's quick render: never kept, its sharper one comes later)
     if got is not None:
@@ -2907,10 +3778,13 @@ def far_tile(aid, lat, lon, tile, zoom, q, ref_zoom, with_sink, layout, tex):
         if mask and "mask.dds" in blobs:
             revisit.place(blobs["mask.dds"], mask[0])       # (a kept file: hard-linked, nothing written)
         revisit.place(blobs["tex.dds"], tex["path"])
-        return _built_from(blobs["built.npz"], extra), (int(extra["tex_bytes"]), extra["used"])
-    f0 = revisit.faults()
-    built, got = _far_tile(aid, lat, lon, tile, zoom, q, ref_zoom, with_sink, layout, tex, mask)
-    if got is not None and revisit.ON and revisit.faults() == f0 and not quick:
+        built, got = _built_from(blobs["built.npz"], extra), (int(extra["tex_bytes"]), extra["used"])
+        if not quick:
+            _keep_fin(k, built, tex, mask, got)
+        return built, got
+    with revisit.scope() as f0:         # (this build's faults alone: revisit.scope)
+        built, got = _far_tile(aid, lat, lon, tile, zoom, q, ref_zoom, with_sink, layout, tex, mask)
+    if got is not None and revisit.ON and f0.complete and not quick:
         try:
             blob, meta = _built_blob(built)
             blobs = {"built.npz": blob, "tex.dds": revisit.Side(tex["path"])}     # (linked in, not copied)
@@ -2921,26 +3795,150 @@ def far_tile(aid, lat, lon, tile, zoom, q, ref_zoom, with_sink, layout, tex):
                           where=_where_enu(lat, lon, *tile.bbox, layout=repr(layout), md=_md_versions(),
                                            chain=tuple(tex["chain"]), tone=tex["tone"], leaf_on=tex["leaf_on"],
                                            season_mode=tex["season_mode"]))
+            _keep_fin(k, built, tex, mask, got)
         except Exception as e:          # (not kept rather than no tile)
             log.debug("revisit: far tile %s not kept: %s: %s", (tile.level, tile.i, tile.j), type(e).__name__, e)
     return built, got
 
 
+def _far_tile_key(lat, lon, tile, zoom, q, ref_zoom, with_sink, layout, tex):
+    """far_tile's revisit key: what the tile and its texture are built from (farrestore's items are keyed on it)."""
+    import revisit
+    import surface as surfacemod
+    mask = tex.get("mask") if tex.get("mask") and tex["mask"][1] else None
+    surf = ()           # (a near far tile has the roads painted into its photo: the photo's road surfaces in its key)
+    if tile.size / max(int(tex["px"]), 1) <= surfacemod.PHOTO_ROADS_MAX_TEXEL:
+        surf = _surf_tags(geodesy.EnuFrame(lat, lon), *tile.bbox)
+    import genground
+    import imagery as imagerymod
+    _gx, _gy, gsize = imagerymod.gutter_square(0.0, 0.0, tile.size, int(tex["px"]))
+    if genground.far_strength(tile.level) is not None and genground.far_texel(gsize, int(tex["px"])) is not None \
+            and not tex.get("quick"):
+        surf = (*surf, genground.far_key(getattr(_s, "md", None), tex.get("gen_trees")))
+    return revisit.key("far", *_far_key(lat, lon, tile, zoom, q, ref_zoom, with_sink, layout), tex["px"],
+                       mask[1] if mask else 0, tuple(tex["chain"]), tex["tone"], tex["leaf_on"], tex["season_mode"],
+                       bool(tex.get("online")), _s.widths is not None, _s.surface is not None,
+                       *((tuple(sorted(tex["fin"].items())),) if tex.get("fin") else ()), *surf)
+
+
+def _keep_fin(k, built, tex, mask, got):
+    """The far tile's finished shape kept for the bulk restore (farrestore.py) when the server asked for it
+    (tex["keep_fin"]: its pooled names' length, given only when the texture is final) and none is kept yet."""
+    n = tex.get("keep_fin")
+    if not n or got is None:
+        return
+    import farrestore
+    fk = farrestore.key(k, tex["px"], n)
+    if farrestore.has(_s.cache_dir, fk):
+        return
+    import revisit
+    sides = {"tex.dds": revisit.Side(tex["path"])}
+    if mask and os.path.exists(mask[0]):
+        sides["mask.dds"] = revisit.Side(mask[0])
+    farrestore.keep(_s.cache_dir, fk, built, tex["px"], n, sides,
+                    {"tex_bytes": int(got[0]), "used": {str(a): int(c) for a, c in (got[1] or {}).items()}})
+
+
+def _keep_fin_global(z, x, y, zoom, ref_zoom, layout, built, px, n):
+    """A global far tile's shape kept for the bulk restore (its texture is the server's "fartex"): when its geometry
+    is kept (complete) and the server asked (n: its pooled names' length)."""
+    if not n:
+        return
+    import farrestore
+    import revisit
+    kg = revisit.key("fargeo", *_far_global_key(z, x, y, zoom, ref_zoom, layout))
+    fk = farrestore.key(kg, px, n)
+    if farrestore.has(_s.cache_dir, fk) or not revisit.has(_s.cache_dir, "fargeo", kg):
+        return
+    farrestore.keep(_s.cache_dir, fk, built, px, n)
+
+
+def far_restore_find(aid, lat, lon, specs):
+    """The far tiles of specs that the revisit cache holds finished (farrestore.py): per spec (loc, {side: kept
+    file}, texture px) or None. A spec: ("tile", tile, zoom, q, ref_zoom, with_sink, layout, tex, pxs) (far_tile's
+    arguments; tex with keep_fin) or ("global", z, x, y, zoom, ref_zoom, layout, pxs, name_len); pxs: the texture
+    sizes to look for, the first found. Nothing is read but the packs' indexes."""
+    import farrestore
+    import revisit
+    out = []
+    for sp in specs:
+        got = None
+        try:
+            if sp[0] == "tile":
+                _, tile, zoom, q, ref_zoom, with_sink, layout, tex, pxs = sp
+                for px in pxs:
+                    t = dict(tex, px=px)
+                    k = _far_tile_key(lat, lon, tile, zoom, q, ref_zoom, with_sink, layout, t)
+                    got = farrestore.locate(_s.cache_dir, farrestore.key(k, px, tex["keep_fin"]))
+                    if got is not None:
+                        got = got + (px,)
+                        break
+            else:
+                _, z, x, y, zoom, ref_zoom, layout, pxs, n = sp
+                kg = revisit.key("fargeo", *_far_global_key(z, x, y, zoom, ref_zoom, layout))
+                for px in pxs:
+                    got = farrestore.locate(_s.cache_dir, farrestore.key(kg, px, n))
+                    if got is not None:
+                        got = got + (px,)
+                        break
+        except Exception as e:      # (that tile the usual way)
+            log.debug("far restore: %s: %s: %s", sp[:2], type(e).__name__, e)
+            got = None
+        out.append(got)
+    return out
+
+
 def _far_tile(aid, lat, lon, tile, zoom, q, ref_zoom, with_sink, layout, tex, mask):
+    if not _TRACE:
+        return _far_tile_(aid, lat, lon, tile, zoom, q, ref_zoom, with_sink, layout, tex, mask)
+    t0, c0 = time.perf_counter(), time.process_time()
+    _dem_t.v = 0.0
+    _geo_t.v = 0.0
+    try:
+        return _far_tile_(aid, lat, lon, tile, zoom, q, ref_zoom, with_sink, layout, tex, mask)
+    finally:
+        log.info("fartrace worker L%d %s: %.0f ms (cpu %.0f), geometry %.0f ms (dem %.0f)", tile.level, tile.key,
+                 1000 * (time.perf_counter() - t0), 1000 * (time.process_time() - c0), 1000 * _geo_t.v,
+                 1000 * _dem_t.v)
+
+
+_geo_t = threading.local()
+
+
+def _far_tile_(aid, lat, lon, tile, zoom, q, ref_zoom, with_sink, layout, tex, mask):
     import imagery as imagerymod
     import rockface as rockfacemod
+    tg = time.perf_counter()
     built = _far_geometry(aid, lat, lon, tile, zoom, q, ref_zoom, with_sink, layout)    # (its CPU counted here)
+    _geo_t.v = time.perf_counter() - tg
     im = _imagery(tex)
     frame = geodesy.EnuFrame(lat, lon)
     x0, y0, _, _ = tile.bbox
     px = tex["px"]
     sq = imagerymod.gutter_square(x0, y0, tile.size, px)
-    try:
-        im.quick_all = bool(tex.get("quick"))
+    import genground
+    rgb = None
+    genground.clear_fade()
+    if genground.ON and not tex.get("quick"):  # (the generated ground's near rings: earthd.Server.render_tile)
         try:
-            rgb, used = im.render(frame, *sq, px)
-        finally:
-            im.quick_all = False
+            got = genground.render_far(im, frame, *sq, px, getattr(_s, "md", None), _paint_surface(), _s.widths,
+                                       None, True if tex.get("gen_trees") else None, level=tile.level)
+            if got is not None:
+                rgb, used = got
+        except imagerymod.ImageryError:     # (a square's photo not on disk: the server fetches it, far_fetch, and asks
+            return built, None              # again)
+        except Exception as e:      # (the plain photo, not kept: made again)
+            log.debug("far tile %s: generated ground: %s: %s", tile.key, type(e).__name__, e)
+            import revisit
+            revisit.fault()
+            rgb = None
+    try:
+        if rgb is None:
+            im.quick_all = bool(tex.get("quick"))
+            try:
+                rgb, used = im.render(frame, *sq, px, gutter=True)
+            finally:
+                im.quick_all = False
     except imagerymod.ImageryError:
         return built, None
     if built.grid is not None:          # (earthd.Server.rock_faces)
@@ -2953,18 +3951,49 @@ def _far_tile(aid, lat, lon, tile, zoom, q, ref_zoom, with_sink, layout, tex, ma
     if roadsmod.ROADS_IN_GROUND:          # (earthd.Server.road_faces)
         try:
             import surface as surfacemod
-            rgb = surfacemod.paint_square(rgb, frame, *sq, getattr(_s, "surface", None), _s.widths)
+            # (the server's pads with the job; a helper's: none. The far pool's processes had no Surface, and the
+            # textures made here went without their roads painted in)
+            rgb = surfacemod.paint_square(rgb, frame, *sq, _paint_surface(), _s.widths, pads=tex.get("pads") or ())
         except Exception as e:
             log.debug("road faces of %s: %s", tile.key, e)
     if mask:                            # (earthd.Server.write_road_mask)
         try:
             import surface as surfacemod
-            m = surfacemod.road_mask(frame, *sq, mask[1], getattr(_s, "surface", None), _s.widths)
+            m = surfacemod.road_mask(frame, *sq, mask[1], _paint_surface(), _s.widths)
             if m is not None:
                 imagerymod.write_dds(mask[0], np.repeat(m[..., None], 3, axis=2))
         except Exception as e:
             log.debug("road mask of %s: %s", tile.key, e)
-    return built, (imagerymod.write_dds(tex["path"], rgb), used)
+    return built, (genground.write_far_dds(tex["path"], rgb, imagerymod.FAR_SRGB), used)
+
+
+def _paint_surface():
+    """The Surface this process paints roads into photos with: its own, or (the far pool's processes, which make no
+    land-cover masks) one made for the paint on first use, its gas station pads handed in with each job."""
+    surf = getattr(_s, "surface", None)
+    if surf is None and getattr(_s, "md", None) is not None:
+        surf = getattr(_s, "paint_surface", None)
+        if surf is None:
+            import surface as surfacemod
+            surf = _s.paint_surface = surfacemod.Surface(_s.md)
+    return surf
+
+
+def far_paint(lat, lon, x0, y0, size, rgb, pads):
+    """earthd.Server.road_faces here: the photo rgb over [x0, x0 + size]² of the anchor's frame with its cells' roads
+    painted in (surface.paint_square from the paint lists this process keeps, paintlist.py; pads: the server's gas
+    station and runway pads there). Returns (rgb, faults, lidar faults): what the paint read short (revisit.fault; at
+    least one when its scope is incomplete), for the server's texture build (revisit.carry: not kept then)."""
+    import revisit
+    import surface as surfacemod
+    surf = _paint_surface()
+    if surf is None:
+        return rgb, 0, 0
+    with revisit.scope() as b:
+        out = surfacemod.paint_square(rgb, geodesy.EnuFrame(lat, lon), x0, y0, size, surf, _s.widths, pads=pads or ())
+    # (incomplete without a count of its own: a fault of a thread no scope covers, this process's Surface fetching in
+    # the background meanwhile; told as one)
+    return out, b.n if b.complete or b.n or b.lidar else 1, b.lidar
 
 
 # --- CPU accounting ---------------------------------------------------------------------------------------------------
@@ -2989,18 +4018,26 @@ def _accounted(fn):
             now = time.monotonic()
             if now - _cpu_logged[0] >= CPU_LOG_S:
                 _cpu_logged[0] = now
-                shared = [g.shared.stats for g in list(getattr(_s, "graders", {}).values())
-                          if g is not None and g.shared is not None]
-                if os.environ.get("BNGE_DEM_STATS") and getattr(_s, "dem", None) is not None:
-                    # (measuring the decoded DEM mirror: its tiles written here vs the decodes it saved here)
-                    st = getattr(_s.dem, "stats", {}) or {}
-                    log.info("worker %d dem: %s", os.getpid(), {k: v for k, v in st.items() if k.startswith("dem:")})
-                log.debug("worker %d cpu: %s%s", os.getpid(),
-                          ", ".join(f"{k} {v[0]} jobs {v[1]:.1f} s" for k, v in sorted(_cpu.items())),
-                          "; shared road plans " + ", ".join(f"{k} {sum(st[k] for st in shared):.0f}"
-                                                             for k in ("read", "written", "waited", "wait_s"))
-                          if shared else "")
+                try:
+                    _log_cpu()
+                except Exception as e:     # (a log line never fails the job it follows: a test's stand-in state, 2026-11-16)
+                    log.debug("worker cpu log: %s", e)
     return run
+
+
+def _log_cpu():
+    """The periodic per-worker CPU line (_accounted)."""
+    shared = [g.shared.stats for g in list(getattr(_s, "graders", {}).values())
+              if g is not None and g.shared is not None]
+    if os.environ.get("BNGE_DEM_STATS") and getattr(_s, "dem", None) is not None:
+        # (measuring the decoded DEM mirror: its tiles written here vs the decodes it saved here)
+        st = getattr(_s.dem, "stats", {}) or {}
+        log.info("worker %d dem: %s", os.getpid(), {k: v for k, v in st.items() if k.startswith("dem:")})
+    log.debug("worker %d cpu: %s%s", os.getpid(),
+              ", ".join(f"{k} {v[0]} jobs {v[1]:.1f} s" for k, v in sorted(_cpu.items())),
+              "; shared road plans " + ", ".join(f"{k} {sum(st[k] for st in shared):.0f}"
+                                                 for k in ("read", "written", "waited", "wait_s"))
+              if shared else "")
 
 
 build = _accounted(build)
@@ -3012,5 +4049,6 @@ base_entry = _accounted(base_entry)
 far_geometry = _accounted(far_geometry)
 far_global_geometry = _accounted(far_global_geometry)
 far_tile = _accounted(far_tile)
+far_paint = _accounted(far_paint)
 base_photo = _accounted(base_photo)
 navgraph = _accounted(navgraph)

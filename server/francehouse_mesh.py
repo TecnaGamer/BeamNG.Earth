@@ -2,6 +2,8 @@
 import math
 
 import numpy as np
+import dmath
+import dnp
 
 
 def model_box(ring):
@@ -56,7 +58,7 @@ def beam(m, a, d, out, s0, z0, s1, z1, material, width=.13, coarse=False):
     q = (ax + dx * s1, ay + dy * s1, float(z1))
     n = (float(out[0]), float(out[1]), 0.)
     axis = (q[0] - p[0], q[1] - p[1], q[2] - p[2])
-    length = math.sqrt(axis[0] ** 2 + axis[1] ** 2 + axis[2] ** 2)
+    length = math.sqrt(axis[0] * axis[0] + axis[1] * axis[1] + axis[2] * axis[2])
     if length < .05:
         return
     e = (axis[0] / length, axis[1] / length, axis[2] / length)
@@ -126,7 +128,7 @@ def roof(m, spec, ze, mats):
     style = spec.fr_house
     c, u, hl, hw = model_box(ring)
     v = np.array([-u[1], u[0]])
-    eave, tangent = style["eave"], math.tan(math.radians(spec.pitch))
+    eave, tangent = style["eave"], dmath.tan(math.radians(spec.pitch))
     L, W, z = hl + eave, hw + eave, ze - eave * tangent
     rise, top = W * tangent, ze + hw * tangent
     rm, wall = mats[spec.roof_mat], mats[style["wall"]]
@@ -139,7 +141,7 @@ def roof(m, spec, ze, mats):
         stz = [entry for i, entry in enumerate(stz) if i == 0 or entry != stz[i - 1]]
         if stz[-1] == stz[0]:
             stz.pop()
-        uv = [(s / 2.4, (W - abs(t)) / max(math.cos(math.radians(spec.pitch)), .1) / 2.4) for s, t, _ in stz]
+        uv = [(s / 2.4, (W - abs(t)) / max(dmath.cos(math.radians(spec.pitch)), .1) / 2.4) for s, t, _ in stz]
         face(m, [p(*r) for r in stz], rm, (0, 0, 1), uv)
     if spec.roof == "hipped":
         r = 0. if L - W < .01 else L - W
@@ -197,7 +199,7 @@ def roof_details(m, spec, ze, mats):
     st = spec.fr_house
     c, u, L, W = model_box(b.drawn_ring(spec))
     v = np.array([-u[1], u[0]])
-    tangent, peak = math.tan(math.radians(spec.pitch)), ze + W * math.tan(math.radians(spec.pitch))
+    tangent, peak = dmath.tan(math.radians(spec.pitch)), ze + W * dmath.tan(math.radians(spec.pitch))
     if st["chimney"]:
         brick = mats[b.custom_look("bne_fr_house_brick", (.65, .42, .33))]
         for sign in (-1, 1) if st["region"] == "brittany" else (1,):
@@ -234,10 +236,10 @@ def draw(m, spec, gmin, gmax, mats, lite=False, collision=False):
     base = b.base_z(spec, gmin, gmax)
     bottom = gmin - (b.FOUNDATION_M if collision else b.SKIRT_LITE_M if lite else b.SKIRT_M)
     top = base + spec.height
-    front = spec.door[0] if spec.door else max(range(len(ring)), key=lambda i: np.linalg.norm(ring[(i + 1) % len(ring)] - ring[i]))
+    front = spec.door[0] if spec.door else max(range(len(ring)), key=lambda i: dnp.norm(ring[(i + 1) % len(ring)] - ring[i]))
     for i, a in enumerate(ring):
         bb = ring[(i + 1) % len(ring)]
-        length = float(np.linalg.norm(bb - a))
+        length = float(dnp.norm(bb - a))
         d = (bb - a) / length
         out = np.array([d[1], -d[0]])
         panel(m, a, d, out, 0, length, bottom, top, mats[st["wall"]], 0.)
@@ -286,7 +288,7 @@ def draw(m, spec, gmin, gmax, mats, lite=False, collision=False):
     if spec.roof in {"gabled", "half-hipped"}:
         c, u, L, W = model_box(ring)
         v = np.array([-u[1], u[0]])
-        rise = W * math.tan(math.radians(spec.pitch))
+        rise = W * dmath.tan(math.radians(spec.pitch))
         allowance = rise * (.55 if spec.roof == "half-hipped" else 1.)
         if allowance > 1.4:
             for sign in (-1, 1):

@@ -5,6 +5,7 @@ link is required; proximity alone must never turn a frontage road into a merge.
 No extra pavement is invented outside the existing road/terrain footprint.
 """
 import numpy as np
+import dnp
 
 import roadmarkings
 import roadlayoutcache
@@ -20,7 +21,7 @@ _cache = roadlayoutcache.LayoutCache(max_entries=12, max_bytes=24 * 1024 * 1024)
 
 def sample(line, at):
     s = roadmarkings.arc(line)
-    return np.column_stack([np.interp(np.atleast_1d(at), s, line[:, d]) for d in range(3)])
+    return np.column_stack([dnp.interp(np.atleast_1d(at), s, line[:, d]) for d in range(3)])
 
 
 def project(line, points):
@@ -46,18 +47,18 @@ def _chain(first, station, mains, entry, reach=REACH):
     ids = {fid}
     while roadmarkings.arc(path)[-1] < reach:
         tangent = path[-1, :2] - path[-2, :2]
-        if np.linalg.norm(tangent) < 1e-9:
+        if dnp.norm(tangent) < 1e-9:
             tangent = line[-1, :2] - line[-2, :2]
-        tangent /= max(np.linalg.norm(tangent), 1e-9)
+        tangent /= max(dnp.norm(tangent), 1e-9)
         choices = []
         for row in mains:
             if row[0] in ids or abs(row[1].width - spec.width) > .25:
                 continue
             p = oriented(row)
-            if np.linalg.norm(p[0, :2] - path[-1, :2]) > JOIN or abs(p[0, 2]-path[-1, 2]) > HEIGHT:
+            if dnp.norm(p[0, :2] - path[-1, :2]) > JOIN or abs(p[0, 2]-path[-1, 2]) > HEIGHT:
                 continue
             direction = p[1, :2] - p[0, :2]
-            score = direction @ tangent / max(np.linalg.norm(direction), 1e-9)
+            score = dnp.matmul(direction, tangent) / max(dnp.norm(direction), 1e-9)
             if score > .9:
                 choices.append((-score, row[0], p))
         if not choices:
@@ -90,7 +91,7 @@ def _main_edge(path, ids, mains, entry, side, geometry=None):
 
 def _at_edge(edge, stations):
     at, points = edge
-    return np.column_stack([np.interp(stations, at, points[:, d]) for d in range(3)])
+    return np.column_stack([dnp.interp(stations, at, points[:, d]) for d in range(3)])
 
 
 def _supported(points, rows, pavement=None, clearance=.2):
@@ -100,7 +101,7 @@ def _supported(points, rows, pavement=None, clearance=.2):
         axis, widths = pavement(fid, sp, line) if pavement else (line, sp.width)
         at, near, _, _, distance = project(axis, points)
         widths = np.asarray(widths)
-        half = widths/2 if widths.ndim == 0 else np.interp(at, roadmarkings.arc(axis), widths)/2
+        half = widths/2 if widths.ndim == 0 else dnp.interp(at, roadmarkings.arc(axis), widths)/2
         fits |= (distance <= half-clearance) & (np.abs(points[:, 2]-near[:, 2]) <= HEIGHT)
     return fits
 
@@ -114,7 +115,7 @@ def _lane_continuation(plan, main, mains, geometry, pavement=None):
     import roads
     origin = plan['source'][0]
     forward = sample(plan['path'], min(10., roadmarkings.arc(plan['path'])[-1]))[0] - origin
-    forward /= max(np.linalg.norm(forward[:2]), 1e-9)
+    forward /= max(dnp.norm(forward[:2]), 1e-9)
     choices = []
     for fid, sp, line, lon in mains:
         if fid in plan['mains'] or not sp.lanes or not main[1].lanes or sp.lanes <= main[1].lanes:
@@ -123,16 +124,16 @@ def _lane_continuation(plan, main, mains, geometry, pavement=None):
         at_join = -1 if orientation > 0 else 0
         other = -2 if at_join == -1 else 1
         tangent = line[other] - line[at_join]
-        tangent /= max(np.linalg.norm(tangent[:2]), 1e-9)
-        if (np.linalg.norm(line[at_join, :2] - origin[:2]) > JOIN
-                or abs(line[at_join, 2] - origin[2]) > HEIGHT or tangent[:2] @ forward[:2] > -.9):
+        tangent /= max(dnp.norm(tangent[:2]), 1e-9)
+        if (dnp.norm(line[at_join, :2] - origin[:2]) > JOIN
+                or abs(line[at_join, 2] - origin[2]) > HEIGHT or dnp.matmul(tangent[:2], forward[:2]) > -.9):
             continue
         pts, widths = geometry(fid, sp, line) if geometry else (line, sp.width)
         side = plan['side'] * orientation
         edge = roads.offset_polyline(pts, side * (np.asarray(widths)/2 - roads.edge_inset(sp, side)))[at_join]
         guide = _at_edge(plan['main_edge'], [0.])[0]
         normal = np.array([-forward[1], forward[0]]) * plan['side']
-        span = float((edge[:2] - guide[:2]) @ normal)
+        span = float(dnp.matmul(edge[:2] - guide[:2], normal))
         drive = roads.lane_layout(sp)[0] / sp.lanes
         if abs(span - drive * (sp.lanes-main[1].lanes)) < .5:
             choices.append((fid, edge, span))
@@ -143,14 +144,14 @@ def _lane_continuation(plan, main, mains, geometry, pavement=None):
     at = np.linspace(0., end, max(3, int(np.ceil(end)) + 1))
     guide = _at_edge(plan['main_edge'], at)
     t = at / max(end, 1e-9)
-    guide += t[:, None]**3 * (plan['guide'][-1] - guide[-1])
+    guide += dnp.power(t[:, None], 3) * (plan['guide'][-1] - guide[-1])
     tangent = project(plan['path'], guide)[2]
     normal = np.c_[-tangent[:, 1], tangent[:, 0]] * plan['side']
     span = span0 + (plan['span'][-1] - span0) * t*t*(3.-2.*t)
     outer = guide.copy()
     outer[:, :2] += normal * span[:, None]
-    outer += (1.-t[:, None])**3 * (edge - outer[0])
-    outer += t[:, None]**3 * (plan['outer'][-1] - outer[-1])
+    outer += dnp.power(1.-t[:, None], 3) * (edge - outer[0])
+    outer += dnp.power(t[:, None], 3) * (plan['outer'][-1] - outer[-1])
     # Never extend the new lane beyond the mapped pavement's union.
     def supported(points):
         rows = [r for r in mains if r[0] in plan['mains'] | {fid}] + [plan['row']]
@@ -182,7 +183,7 @@ def _extend(plan, main, station, mains, neighbours, geometry=None, pavement=None
     back, ids = _chain(main, roadmarkings.arc(main[2])[-1] - station, mains,
                        not plan['entry'], reach=EXTEND)
     path = np.vstack([back[::-1][:-1], plan['path']])
-    path = path[np.r_[True, np.linalg.norm(np.diff(path[:, :2], axis=0), axis=1) > 1e-6]]
+    path = path[np.r_[True, dnp.norm(np.diff(path[:, :2], axis=0), axis=1) > 1e-6]]
     old_start, end = project(path, plan['guide'][[0, -1]])[0]
     start = max(0., old_start - EXTEND)
     ids = ids | plan['mains']
@@ -211,13 +212,13 @@ def _extend(plan, main, station, mains, neighbours, geometry=None, pavement=None
     original_at = project(path, plan['guide'])[0]
     original = at >= old_start
     for d in range(3):
-        guide[original, d] = np.interp(at[original], original_at, plan['guide'][:, d])
+        guide[original, d] = dnp.interp(at[original], original_at, plan['guide'][:, d])
     guide[-1] = plan['guide'][-1]
     t = (at-start) / (end-start)
     span = plan['span'][-1] * t*t*(2-t)
     outer = guide.copy()
     outer[:, :2] += normal * span[:, None]
-    outer += t[:, None]**3 * (plan['outer'][-1] - outer[-1])
+    outer += dnp.power(t[:, None], 3) * (plan['outer'][-1] - outer[-1])
     # A little extra inset keeps the straight chords between samples inside the
     # pavement at the concave corner where the two road buffers join.
     paint = roadmarkings.profile(plan['spec'].state).solid / 2 + .05
@@ -268,7 +269,7 @@ def _pavement_split(main, station, mains, entry, away, side, width):
     previous = None
     for start in np.arange(0., length, REACH):
         at = np.linspace(start, min(start + REACH, length), int(min(REACH, length-start)/STEP)+2)
-        points = np.column_stack([np.interp(at, source_station, inner[:, d]) for d in range(3)])
+        points = np.column_stack([dnp.interp(at, source_station, inner[:, d]) for d in range(3)])
         s, near, _, lateral, _ = project(path, points)
         gap = lateral * side - main[1].width / 2
         valid = (s >= 0.) & (s <= roadmarkings.arc(path)[-1]) & (np.abs(points[:, 2]-near[:, 2]) <= HEIGHT)
@@ -292,7 +293,7 @@ def plans(rows, terminals=None, geometry=None, pavement=None):
     artificial joins at the boundary between a ground part and a bridge part.
     """
     import roads
-    rows = [(fid, sp, p[np.r_[True, np.linalg.norm(np.diff(p[:, :2], axis=0), axis=1) > 1e-6]], lon)
+    rows = [(fid, sp, p[np.r_[True, dnp.norm(np.diff(p[:, :2], axis=0), axis=1) > 1e-6]], lon)
             for fid, sp, p, lon in rows if len(p) >= 2]
     rows = [r for r in rows if len(r[2]) >= 2]
     mains = [r for r in rows if r[1].kind == 'paved' and r[1].oneway and not r[1].link and not getattr(r[1], 'roundabout', False)
@@ -307,13 +308,13 @@ def plans(rows, terminals=None, geometry=None, pavement=None):
             continue
         travel = source if sp.dir >= 0 else source[::-1]
         for entry, away in ((False, travel), (True, travel[::-1])):
-            if terminals is not None and not any(np.linalg.norm(away[0, :2]-q[:2]) < .1 for q in terminals.get(fid, ())):
+            if terminals is not None and not any(dnp.norm(away[0, :2]-q[:2]) < .1 for q in terminals.get(fid, ())):
                 continue
             length = roadmarkings.arc(away)[-1]
             if length < 12.:
                 continue
             direction = sample(away, min(12., length))[0, :2] - away[0, :2]
-            direction /= max(np.linalg.norm(direction), 1e-9)
+            direction /= max(dnp.norm(direction), 1e-9)
             choices = []
             ex, ey = float(away[0, 0]), float(away[0, 1])
             near_mains = np.flatnonzero((main_boxes[:, 0] <= ex) & (ex <= main_boxes[:, 2]) &
@@ -321,7 +322,7 @@ def plans(rows, terminals=None, geometry=None, pavement=None):
             for row in (mains[i] for i in near_mains):
                 p = row[2][::(-1 if (row[1].dir or 1) * (-1 if entry else 1) < 0 else 1)]
                 s, q, tangent, _, distance = project(p, away[:1])
-                if distance[0] > JOIN or abs(q[0, 2]-away[0, 2]) > HEIGHT or tangent[0] @ direction < .75:
+                if distance[0] > JOIN or abs(q[0, 2]-away[0, 2]) > HEIGHT or dnp.matmul(tangent[0], direction) < .75:
                     continue
                 if roadmarkings.arc(p)[-1] - s[0] < 2.:
                     continue
@@ -356,7 +357,7 @@ def plans(rows, terminals=None, geometry=None, pavement=None):
                 outer_edge, inner_edge = outer_edge[::-1], inner_edge[::-1]
             def boundary(line, stations):
                 station = project(away, line)[0]
-                return np.column_stack([np.interp(stations, station, line[:, d]) for d in range(3)])
+                return np.column_stack([dnp.interp(stations, station, line[:, d]) for d in range(3)])
             inner_distance = project(path, boundary(inner_edge, at))[3] * side
             outer_distance = project(path, boundary(outer_edge, at))[3] * side
             separated = np.flatnonzero(inner_distance >= edge_distance)
@@ -369,8 +370,8 @@ def plans(rows, terminals=None, geometry=None, pavement=None):
             if ms[end] > roadmarkings.arc(path)[-1] or np.max(np.abs(rp[:end+1, 2]-near[:end+1, 2])) > HEIGHT:
                 continue
             # Exact full-width boundary and zero-width taper tip, independent of sampling/tile edges.
-            far = float(np.interp(0., inner_distance[:end+1] - edge_distance[:end+1], at[:end+1]))
-            tip = float(np.interp(0., outer_distance[:end+1] - edge_distance[:end+1], at[:end+1]))
+            far = float(dnp.interp(0., inner_distance[:end+1] - edge_distance[:end+1], at[:end+1]))
+            tip = float(dnp.interp(0., outer_distance[:end+1] - edge_distance[:end+1], at[:end+1]))
             if far - tip < 4.:
                 continue
             ra = np.linspace(tip, far, max(3, int(np.ceil(far-tip)) + 1))
@@ -383,11 +384,11 @@ def plans(rows, terminals=None, geometry=None, pavement=None):
             t = np.clip((available - available[0]) / max(available[-1] - available[0], 1e-9), 0., 1.)
             # Zero slope at the merge tip, original ramp slope at the far end.
             span = drive * t * t * (2 - t)
-            guide += t[:, None] ** 3 * (boundary(inner_edge, [far])[0] - guide[-1])
+            guide += dnp.power(t[:, None], 3) * (boundary(inner_edge, [far])[0] - guide[-1])
             outer = guide.copy()
             outer[:, :2] += normal * span[:, None]
             outer[:, 2] += t * (rp[:, 2] - near[:, 2])
-            outer += t[:, None] ** 3 * (raw_outer[-1] - outer[-1])
+            outer += dnp.power(t[:, None], 3) * (raw_outer[-1] - outer[-1])
             # Every stroke remains supported by existing asphalt, including on curves.
             paint = roadmarkings.profile(sp.state).solid / 2
             ramp_row = (fid, sp, source, lon)
@@ -572,7 +573,7 @@ def through_joins(rows, going_on):
             by_id.setdefault(fid, []).append((p[0], p[-1]))
     out = set()
     for fid, other in going_on:
-        if any(np.linalg.norm(end[:2]-start[:2]) < JOIN and abs(end[2]-start[2]) < HEIGHT
+        if any(dnp.norm(end[:2]-start[:2]) < JOIN and abs(end[2]-start[2]) < HEIGHT
                for _, end in by_id.get(fid, ()) for start, _ in by_id.get(other, ())):
             out.update(((fid, other), (other, fid)))
     return out
@@ -592,11 +593,11 @@ def connections(rows):
             continue
         for end, other in ((0, 1), (-1, -2)):
             travel = (line[other, :2]-line[end, :2]) * (spec.dir or 1) * (1 if end == 0 else -1)
-            travel /= max(np.linalg.norm(travel), 1e-9)
+            travel /= max(dnp.norm(travel), 1e-9)
             for mid, ms, main, _ in mains:
                 _, near, tangent, _, dist = project(main, line[[end]])
                 if (dist[0] > JOIN or abs(near[0, 2]-line[end, 2]) > HEIGHT
-                        or tangent[0] @ travel * (ms.dir or 1) < .75):
+                        or dnp.matmul(tangent[0], travel) * (ms.dir or 1) < .75):
                     continue
                 side = project(main, line[[other]])[3][0]
                 if abs(side) > .05:

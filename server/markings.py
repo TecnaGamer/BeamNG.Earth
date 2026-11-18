@@ -11,6 +11,7 @@ from collections import namedtuple
 import numpy as np
 
 import fast
+import dnp
 
 # colour: the centre line's material; widths in m; patterns (dash, gap) in m. centre_rural / centre_urban: the centre
 # line of a two-way road (None: solid); lane_* the lines between lanes of one direction; edge: the edge line's width;
@@ -67,10 +68,13 @@ _WHITE = Style(centre="line_white", w=0.12, w_motorway=0.15, edge=0.15, edge_mot
                centre_rural=(6.0, 12.0), centre_urban=(3.0, 6.0), lane_rural=(3.0, 9.0), lane_urban=(3.0, 9.0),
                lane_motorway=(3.0, 9.0), left_edge=None, double_centre_urban=False, double_gap=0.12, min_centre_m=5.5)
 _YELLOW = _WHITE._replace(centre="line_yellow")
+# Norway: the line next to oncoming traffic is yellow on a divided road too (the left edge of each carriageway, both
+# sides of a median barrier: E6 at Vist, Mapillary 871850046696980; the user's report, 2026-11-17)
+_NO = _YELLOW._replace(left_edge="line_yellow")
 
 STYLES = {"US": _US, "CA": _CA, "GB": _GB, "IE": _GB, "IM": _GB, "JE": _GB, "GG": _GB, "DE": _DE, "AT": _DE,
           "CH": _DE, "LI": _DE, "LU": _DE, "FR": _FR, "MC": _FR, "BE": _FR, "NL": _NL, "JP": _JP, "AU": _AU, "NZ": _AU,
-          "SE": _SE}
+          "SE": _SE, "NO": _NO}
 # where centre lines are yellow (outside the US and Canada): the Americas, Norway, Finland, South Korea, China, Taiwan,
 # Thailand (research table 4.4)
 YELLOW_CENTRE = {"MX", "GT", "BZ", "HN", "SV", "NI", "CR", "PA", "CU", "DO", "HT", "PR", "JM", "BS", "TT", "CO", "VE",
@@ -221,18 +225,18 @@ def _nearest(poly, p):
     L2 = np.maximum((ab * ab).sum(1), 1e-12)
     t = np.clip(((p[:2] - a) * ab).sum(1) / L2, 0, 1)
     q = a + t[:, None] * ab
-    d = np.hypot(*(q - p[:2]).T)
+    d = dnp.hypot(*(q - p[:2]).T)
     k = int(np.argmin(d))
     return q[k], float(d[k])
 
 
 def _resample(pts, step):
-    seg = np.hypot(*np.diff(pts[:, :2], axis=0).T)
+    seg = dnp.hypot(*np.diff(pts[:, :2], axis=0).T)
     s = np.r_[0.0, np.cumsum(seg)]
     if s[-1] < step:
         return pts.copy(), s
     t = np.arange(0.0, s[-1], step)
-    return np.stack([np.interp(t, s, pts[:, c]) for c in range(3)], 1), t
+    return np.stack([dnp.interp(t, s, pts[:, c]) for c in range(3)], 1), t
 
 
 def gores(roads_):
@@ -253,21 +257,33 @@ def gores(roads_):
         for end in (0, -1):
             e = p[end]
             hit = None
+            sample, _station = _resample(p if end == 0 else p[::-1], 1.0)
+            look = sample[min(30, len(sample) - 1)]
             for mf, ms, mp in majors:
                 if mf == fid:
                     continue
                 _, d = _nearest(mp, e)
-                if d < 1.5 and (hit is None or d < hit[2]):
-                    hit = (ms, mp, d)
+                # A placement-aware slip lane starts outside the reference
+                # line. Choose the through continuation, not a section ending
+                # at the fork or the opposite carriageway across the median.
+                dz = abs(float(mp[np.argmin(dnp.norm(mp[:, :2] - e[:2], axis=1)), 2] - e[2]))
+                score = d + _nearest(mp, look)[1]
+                if d <= ms.width / 2 + 1.5 and dz < 2. and (hit is None or score < hit[2]):
+                    hit = (ms, mp, score)
             if hit is None:
                 continue
             ms, mp, _ = hit
+            import roads
+            # Gores meet the painted driving edges; shoulders remain outside
+            # the channelizing lines and must not swallow the painted wedge.
+            mw = roads.lane_layout(ms)[0]
+            rw = roads.lane_layout(sp)[0]
             q, s = _resample(p if end == 0 else p[::-1], 1.0)
             q = q[s <= GORE_REACH_M]
             gaps, sides = [], []
             for x in q:
                 m, d = _nearest(mp, x)
-                gaps.append(d - ms.width / 2 - sp.width / 2)
+                gaps.append(d - mw / 2 - rw / 2)
                 sides.append((x[:2] - m) / max(d, 1e-9))
             gaps = np.asarray(gaps)
             inside = np.flatnonzero((gaps >= GORE_MIN_M) & (gaps <= GORE_MAX_M))
@@ -277,24 +293,25 @@ def gores(roads_):
             k1 = k0
             while k1 + 1 < len(q) and GORE_MIN_M <= gaps[k1 + 1] <= GORE_MAX_M:
                 k1 += 1
-            eL = np.array([np.r_[q[k][:2] - sides[k] * sp.width / 2, q[k][2]] for k in range(k0, k1 + 1)])
+            eL = np.array([np.r_[q[k][:2] - sides[k] * rw / 2, q[k][2]] for k in range(k0, k1 + 1)])
             out.append(("channel", GORE_CHANNEL_W, eL))
             # the wedge itself, paved (surface.photo_roads / paint_roads): its middle line and half width per point
-            mids = np.array([np.r_[q[k][:2] - sides[k] * (sp.width / 2 + gaps[k] / 2), q[k][2]]
+            mids = np.array([np.r_[q[k][:2] - sides[k] * (rw / 2 + gaps[k] / 2), q[k][2]]
                              for k in range(max(k0 - 3, 0), k1 + 1)])
             out.append(("fill", np.array([gaps[k] / 2 + 0.5 for k in range(max(k0 - 3, 0), k1 + 1)]), mids))
             # chevrons (MUTCD 3B.25): a V across the wedge, its point toward the traffic coming at it: at an exit
             # (the ramp starts at the shared end) toward that end, at an entrance away from it
-            up = -1.0 if end == 0 else 1.0
+            exit_ = (end == 0) == (getattr(sp, "dir", 0) >= 0)
+            up = -1.0 if exit_ else 1.0
             for k in range(k0, k1 + 1, int(GORE_STEP_M)):
-                a = np.r_[q[k][:2] - sides[k] * sp.width / 2, q[k][2]]
+                a = np.r_[q[k][:2] - sides[k] * rw / 2, q[k][2]]
                 m, _ = _nearest(mp, q[k])
-                b = np.r_[m + sides[k] * ms.width / 2, q[k][2]]
+                b = np.r_[m + sides[k] * mw / 2, q[k][2]]
                 kk = min(k + 1, len(q) - 1)
                 t = q[kk][:2] - q[max(kk - 1, 0)][:2]
-                t = t / max(float(np.hypot(*t)), 1e-9)
+                t = t / max(float(dnp.hypot(*t)), 1e-9)
                 apex = 0.5 * (a + b)
-                apex[:2] += up * t * float(np.hypot(*(a - b)[:2])) / 2      # (45 degrees each arm)
+                apex[:2] += up * t * float(dnp.hypot(*(a - b)[:2])) / 2      # (45 degrees each arm)
                 out.append(("stripe", GORE_W, np.stack([a, apex])))
                 out.append(("stripe", GORE_W, np.stack([apex, b])))
     return out
@@ -319,9 +336,9 @@ Z341_W, Z341_DASH, Z341_GAP = 0.50, 0.50, 0.25
 def _way_in(line, s, at, spec, left_hand):
     """(point on the centreline, unit vector of the way in, unit vector to its kerb, (lo, hi) m along that from the
     centreline of the half of the road coming in) at m along an arm's centreline line (s: its stations)."""
-    c = np.array([np.interp(at, s, line[:, k]) for k in range(3)])
-    q = np.array([np.interp(at + 1.0, s, line[:, k]) for k in range(2)])
-    t = (c[:2] - q) / max(float(np.hypot(*(c[:2] - q))), 1e-6)
+    c = np.array([dnp.interp(at, s, line[:, k]) for k in range(3)])
+    q = np.array([dnp.interp(at + 1.0, s, line[:, k]) for k in range(2)])
+    t = (c[:2] - q) / max(float(dnp.hypot(*(c[:2] - q))), 1e-6)
     n = np.array([t[1], -t[0]]) * (-1.0 if left_hand else 1.0)
     half = spec.width / 2
     return c, t, n, ((0.3 - half, half - 0.3) if spec.oneway else (0.2, half - 0.3))
@@ -334,7 +351,7 @@ def _past_crossing(along, st, crosswalks, spec, at, gap, room):
     for cw in crosswalks:
         if cw.get("stop"):
             continue
-        d = np.hypot(*(along[:, :2] - 0.5 * (cw["a"][:2] + cw["b"][:2])).T)
+        d = dnp.hypot(*(along[:, :2] - 0.5 * (cw["a"][:2] + cw["b"][:2])).T)
         i = int(np.argmin(d))
         if d[i] < spec.width / 2 + 1.0 and float(st[i]) - cw["w"] / 2 - start < room:
             at = max(at, float(st[i]) + cw["w"] / 2 + gap)
@@ -350,14 +367,14 @@ def stop_lines(arms, crosswalks, mapped=None, left_hand=False, w=M13_W):
     import furniture
     out, cuts = [], {}
     for fid, spec, line, wide, what in arms:
-        s = np.r_[0.0, np.cumsum(np.hypot(*np.diff(line[:, :2], axis=0).T))]
+        s = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(line[:, :2], axis=0).T))]
         if s[-1] < 1.0:
             continue
         st = np.arange(0.0, min(s[-1], M14_LOOK_M), 1.0)
-        along = np.stack([np.interp(st, s, line[:, k]) for k in range(3)], 1)
+        along = np.stack([dnp.interp(st, s, line[:, k]) for k in range(3)], 1)
         at = wide + M14_KERB_M
         if mapped is not None and len(mapped):      # (within half the arm: further up it is the next junction's)
-            d = np.hypot(along[:, None, 0] - mapped[:, 0], along[:, None, 1] - mapped[:, 1])
+            d = dnp.hypot(along[:, None, 0] - mapped[:, 0], along[:, None, 1] - mapped[:, 1])
             on = d.min(0) < spec.width / 2
             near = st[d[:, on].argmin(0)] if on.any() else st[:0]
             near = near[near <= min(s[-1] / 2, wide + furniture.SIGNAL_NEAR_M)]
@@ -371,7 +388,7 @@ def stop_lines(arms, crosswalks, mapped=None, left_hand=False, w=M13_W):
         c, _, n, (lo, hi) = _way_in(line, s, at, spec, left_hand)
         out.append({"a": np.r_[c[:2] + n * lo, c[2]], "b": np.r_[c[:2] + n * hi, c[2]], "w": w, "stop": True})
         u = (along[1, :2] - along[0, :2]) if len(along) > 1 else line[1, :2] - line[0, :2]
-        cuts.setdefault(fid, []).append((line[0, :2].copy(), u / max(float(np.hypot(*u)), 1e-6), at))
+        cuts.setdefault(fid, []).append((line[0, :2].copy(), u / max(float(dnp.hypot(*u)), 1e-6), at))
     return out, cuts
 
 
@@ -389,7 +406,7 @@ def wait_lines(arms, crosswalks, left_hand=False):
     for ln in lines:
         a, b = np.asarray(ln["a"], np.float64), np.asarray(ln["b"], np.float64)
         d = b - a
-        span = float(np.hypot(*d[:2]))
+        span = float(dnp.hypot(*d[:2]))
         count = int((span + Z341_GAP) // pitch)
         if count < 1:
             continue
@@ -408,14 +425,14 @@ def give_way_lines(arms, crosswalks, left_hand=False):
     teeth, gone = [], set()
     pitch = M14_BASE + M14_GAP
     for _, spec, line, wide in arms:
-        s = np.r_[0.0, np.cumsum(np.hypot(*np.diff(line[:, :2], axis=0).T))]
+        s = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(line[:, :2], axis=0).T))]
         if s[-1] < 1.0:
             continue
         st = np.arange(0.0, min(s[-1], M14_LOOK_M), 1.0)
-        along = np.stack([np.interp(st, s, line[:, k]) for k in range(3)], 1)
+        along = np.stack([dnp.interp(st, s, line[:, k]) for k in range(3)], 1)
         at = wide + M14_KERB_M
         for j, cw in enumerate(crosswalks):
-            d = np.hypot(*(along[:, :2] - 0.5 * (cw["a"][:2] + cw["b"][:2])).T)
+            d = dnp.hypot(*(along[:, :2] - 0.5 * (cw["a"][:2] + cw["b"][:2])).T)
             i = int(np.argmin(d))
             if cw.get("stop") and d[i] < spec.width / 2 + 1.0:
                 gone.add(j)
@@ -474,7 +491,7 @@ def _arrow_kind(token):
 
 def _point_back(line, d):
     """(point (3,), unit direction (2,) of travel) d m before the end of line (k, 3), or None (shorter)."""
-    seg = np.hypot(*np.diff(line[:, :2], axis=0).T)
+    seg = dnp.hypot(*np.diff(line[:, :2], axis=0).T)
     s = np.r_[0.0, np.cumsum(seg)]
     at = s[-1] - d
     if at < 2.0:

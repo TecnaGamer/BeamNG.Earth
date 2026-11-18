@@ -5,6 +5,8 @@ import math
 import unicodedata
 
 import numpy as np
+import dmath
+import dnp
 
 import frroadmesh
 import furniture
@@ -123,7 +125,7 @@ class RoadGraph:
         )
         for part in near:
             spec, line, way, ring = self.parts[part]
-            distances = np.hypot(*(line[:, :2] - point).T)
+            distances = dnp.hypot(*(line[:, :2] - point).T)
             for i in np.flatnonzero(distances <= reach):
                 for sense, outward in ((1, line[i:]), (-1, line[i::-1])):
                     if len(outward) > 1 and _length(outward[1, :2] - outward[0, :2]) >= 0.05:
@@ -142,7 +144,7 @@ def _match(arms, at, hint, way, outbound, ring=False):
             continue
         sample, _ = furniture._at(arm.line, np.array([min(length, 18.0)]))
         ray = sample[0, :2] - arm.vertex[:2]
-        alignment = float(ray @ aim) / max(_length(ray), 0.01)
+        alignment = float(dnp.matmul(ray, aim)) / max(_length(ray), 0.01)
         if alignment < 0.81:
             continue
         same = way is not None and arm.way == way
@@ -176,7 +178,7 @@ def _continuation(graph, arm, outbound, stop_at_junction=False):
         if option.ring != arm.ring or not option.end or abs(option.vertex[2] - at[2]) > 1.15:
             continue
         ray = option.line[1, :2] - option.vertex[:2]
-        angle = float(ray @ tail) / _length(ray)
+        angle = float(dnp.matmul(ray, tail)) / _length(ray)
         if stop_at_junction and option.part != arm.part and -0.85 < angle <= 0.82:
             return None
         if option.allows(outbound) and angle > (-0.15 if arm.ring else 0.82):
@@ -222,7 +224,7 @@ def _ring_path(graph, entry):
 
 def _ring_reaches(path, leaving):
     for entry in path:
-        distances = np.hypot(*(entry.line[:, :2] - leaving.vertex[:2]).T)
+        distances = dnp.hypot(*(entry.line[:, :2] - leaving.vertex[:2]).T)
         match = int(np.argmin(distances))
         if (
             distances[match] <= (1.8 if leaving.end or match == len(entry.line) - 1 else 0.20)
@@ -307,7 +309,7 @@ def _straight_labels(sites):
                 continue
             pts, _ = furniture._at(leave.line, np.array([12.0]))
             ray = pts[0, :2] - leave.vertex[:2]
-            if float(incoming @ ray) >= .88 * _length(incoming) * _length(ray):
+            if float(dnp.matmul(incoming, ray)) >= .88 * _length(incoming) * _length(ray):
                 labels.setdefault((arm.part, -arm.sense), []).append((arm.vertex, panel))
     return labels
 
@@ -323,7 +325,7 @@ def _downstream_label(graph, branch, labels):
         stations = furniture._arclen(branch.line)
         choices = []
         for point, panel in labels.get((branch.part, branch.sense), ()):
-            distance = np.hypot(*(branch.line[:, :2] - point[:2]).T)
+            distance = dnp.hypot(*(branch.line[:, :2] - point[:2]).T)
             at = int(np.argmin(distance))
             if distance[at] <= .20 and 1.8 < stations[at] <= reach:
                 choices.append((stations[at], SOURCE_ORDER[panel['source']], panel))
@@ -518,7 +520,7 @@ def _panels(at, approach, outlets, urban, locality):
             sample, _ = furniture._at(leave.line, np.array([12.0]))
             direction = sample[0, :2] - leave.vertex[:2]
         angle = math.degrees(
-            math.atan2(signplacement.cross(travel, direction), float(travel @ direction))
+            dmath.atan2(signplacement.cross(travel, direction), float(dnp.matmul(travel, direction)))
         )
         if abs(angle) > 143.0:
             continue
@@ -597,7 +599,7 @@ def _position(
         station = furniture._project(line, site[None])[0]
         if 2.0 <= station <= min(38.0, length - 9.0):
             points, outward = furniture._at(line, np.array([station]))
-            offset = float((site - points[0, :2]) @ _right(-outward[0]))
+            offset = float(dnp.matmul(site - points[0, :2], _right(-outward[0])))
             if half <= offset <= half + 9.0:
                 candidates.append((station, site, None))
     stations = [s for s in (ADVANCE_STATIONS if advance else LOCAL_STATIONS) if s <= length - 9.0]
@@ -632,9 +634,9 @@ def _position(
         if mount is not None:
             index, row = mount
             yaw = math.radians(row[4])
-            axis = np.array([-math.sin(yaw), math.cos(yaw)])
-            offset = float((fixed - c) @ right)
-            if not (half + .20 <= offset <= half + 3.8 and float(axis @ into) >= .91
+            axis = np.array([-dmath.sin(yaw), dmath.cos(yaw)])
+            offset = float(dnp.matmul(fixed - c, right))
+            if not (half + .20 <= offset <= half + 3.8 and float(dnp.matmul(axis, into)) >= .91
                     and abs(row[3] - points[0, 2]) < 1.0):
                 continue
             spots = [fixed + .016 * axis]
@@ -644,7 +646,7 @@ def _position(
             setbacks = (width / 2 + .65, .65, 1.05, width / 2 + 1.35, width / 2 + 2.3, width / 2 + 3.2)
             spots = [c + right * (half + setback) for setback in setbacks]
         for q in spots:
-            if any(float((q - eye) @ into) < 0.62 * _length(q - eye) for eye in eyes):
+            if any(float(dnp.matmul(q - eye, into)) < 0.62 * _length(q - eye) for eye in eyes):
                 continue
             facing = q - (eyes[0] + eyes[1]) / 2
             facing /= _length(facing)
@@ -735,11 +737,11 @@ def _exit_position(graph, leave, width, clearance):
             setbacks = (width / 2 + .55, .63, 1., width / 2 + 1.15, width / 2 + 2., width / 2 + 3.)
             for setback in setbacks:
                 q = p[:2] + side * right * (half + setback)
-                if float((q - eyes[0]) @ into) < 0:
+                if float(dnp.matmul(q - eyes[0], into)) < 0:
                     continue
                 facing = q - (eyes[0] + eyes[1]) / 2
                 facing /= _length(facing)
-                points_to = float(_right(facing) @ outward)
+                points_to = float(dnp.matmul(_right(facing), outward))
                 if abs(points_to) < .23 or not clearance.face(q, p[2], facing, width, eyes):
                     continue
                 z = clearance.obstacles.z(q, p[2])
