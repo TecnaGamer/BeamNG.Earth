@@ -11,6 +11,7 @@ mod devctx;
 mod reach;
 mod devraster;
 mod roofs;
+mod onewayjoin;
 mod domes;
 mod roofphoto;
 mod gravity;
@@ -6661,6 +6662,8 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<roadnet::countries::CountryLookup>()?;
     // 451: R2a's scalar country lookup (roadnet::countries::CountryLookup: europewalks.country_for made once, its
     // territories' set kept)
+    m.add_function(wrap_pyfunction!(onewayjoin::oneway_join_ends, m)?)?;
+    // 452: the full port's oneway_joins.apply (onewayjoin::oneway_join_ends: one-way ends moved to the two-way's lane)
     m.add("VERSION", 470)?;
     Ok(())
 }
