@@ -22,6 +22,9 @@ M.SKIP_AHEAD = 3            -- at one of this many later stops: the ones before 
 M.ROUTE_AHEAD = 8           -- stops after the next the GPS routes through: 9 and the bus's place, Valhalla's
                             -- most (routing.VALHALLA_MAX_LOCATIONS: "Exceeded max locations: 10", 2026-11-17)
 M.REQUEST_TIMEOUT_S = 90    -- s: a lookup with no answer by then is given up (the server's first Västtrafik wait is 45 s)
+M.BUSES = { citybus = true,  -- vehicles with a bus controller (signs, doors): the stock Wentward DT40L
+  capsule = true }           -- the Cycjos Capsule (repo mod), its own controller with the stock events
+                            -- (any other vehicle that answers bus_onTriggerTick with its doors counts too)
 M.TRIGGER = 'bne_bus_'      -- the stops' names on the bus's line (tasklist[i][1])
 
 -- Replaceable for the tests
@@ -164,7 +167,7 @@ end
 
 local function isBus()
   local veh = M.vehicle()
-  return (veh and veh.getJBeamFilename and veh:getJBeamFilename() or '') == 'citybus'
+  return M.BUSES[veh and veh.getJBeamFilename and veh:getJBeamFilename() or ''] == true
 end
 
 function M.start(line, from)
@@ -257,6 +260,7 @@ end
 function M.onBusUpdate(state)
   if run and type(state) == 'table' and state.event == 'onTriggerTick'
      and state.triggerName == M.triggerName(run.line, run.idx) then
+    run.bus = true                  -- it answered: a bus controller, whatever the model (from now on its doors count)
     run.doors = state.bus_dooropen == true
   end
 end

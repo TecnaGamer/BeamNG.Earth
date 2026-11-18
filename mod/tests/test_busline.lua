@@ -129,4 +129,19 @@ B.onLines({ id = asked[4], lines = { line() } })
 T.check(#B.lines() == 1 and not select(3, B.lines()), "the new server's answer")
 B._reset()
 
+-- other buses: the Cycjos Capsule by name; any vehicle whose controller answers the trigger tick
+B._reset()
+jbeam = 'capsule'
+T.check(B.start(line(), 1) and B.running().bus, 'the Capsule is a bus')
+B.stop()
+jbeam = 'somebus'
+T.check(B.start(line(), 1) and not B.running().bus, 'an unknown model: not a bus yet')
+at(0, false) doors(false)
+T.check(B.running().bus and not B.running().doors, 'it answered with its doors: a bus, doors shut')
+wait(B.DWELL_S)
+T.check(B.running().served == 0, 'a bus that answered: standing is not enough, the doors must open')
+B.stop()
+jbeam = 'citybus'
+B._reset()
+
 T.done('test_busline')
