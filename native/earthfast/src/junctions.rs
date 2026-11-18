@@ -75,7 +75,7 @@ fn line_x(p: P2, d: P2, q: P2, e: P2) -> Option<P2> {
 }
 
 /// np.linspace(start, stop, k) (k >= 2).
-fn linspace(start: f64, stop: f64, k: usize) -> Vec<f64> {
+pub(crate) fn linspace(start: f64, stop: f64, k: usize) -> Vec<f64> {
     let div = (k - 1) as f64;
     let delta = stop - start;
     let step = delta / div;

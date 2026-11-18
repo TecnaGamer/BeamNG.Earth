@@ -118,9 +118,10 @@ class SwitchVersions(unittest.TestCase):
         for k in ("BNE_FAST_DECK_GROUND", "BNE_UNDER_SPEED", "BNE_FAST_GAP"):
             new, old = self.keys({k: "on"})
             self.assertNotEqual(new, old, k + ": its reviewed meaning")
-        # (and the earlier versions' keys miss too: FAST_GAP and LEVEL_SPACING at 3, Codex round 4; FAST_GAP at 4)
+        # (and the earlier versions' keys miss too: FAST_GAP and LEVEL_SPACING at 3, Codex round 4; FAST_GAP at 4;
+        # LEVEL_SPACING at 4, the chain's one target before each crossing's own)
         for k, was in (("BNE_FAST_GAP", 2), ("BNE_FAST_GAP", 3), ("BNE_FAST_GAP", 4), ("BNE_LEVEL_SPACING", 2),
-                        ("BNE_LEVEL_SPACING", 3)):
+                        ("BNE_LEVEL_SPACING", 3), ("BNE_LEVEL_SPACING", 4)):
             with mock.patch.dict(revisit.SWITCH_VERSIONS, {k: was}):
                 prev, _old = self.keys({k: "on"})
             new, _old = self.keys({k: "on"})
@@ -958,36 +959,82 @@ class UnderSpeed(unittest.TestCase):
 
 
 class LevelSpacingTarget(unittest.TestCase):
-    """R1f: an approach fill asks the clearance of the roads under the chain, as the deck solve does."""
+    """R1f: each crossing asks its own road's clearance (roads.crossing_clear), the same in the deck solve, the approach
+    fills and the dip under it; a deck over a track no longer climbs for a motorway under another of its parts."""
 
-    def test_branched_chain_one_target(self):
-        # (Codex review of 48db74bc: a branched chain, a footway under one span, a motorway under another, a branch
-        # leaving at the joint over a track: every span's dip, the approach fill and the deck ask one target, the
-        # chain's (roads.chain_under_classes over all its parts), never a span's own crossings' 0.9 m short of it)
+    def solve(self, classes, levels=None, lines=None):
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        from test_roads import features
+        from test_roadmesh import FRAME
+        lines = lines or [[(-400, 0), (400, 0)], [(-200, -60), (-200, 60)], [(200, -60), (200, 60)]]
+        f = features(lines, classes, levels=levels or [(0, 1.0, 0.0, 1.0)], ids=[f"p{i}" for i in range(len(lines))])
+        flat = lambda la, lo: np.full(np.shape(la), 10.0)  # noqa: E731
+        with mock.patch.object(roads, "LEVEL_SPACING", True):
+            bp = roads.BridgeProfiles(FRAME, lambda key: f, flat)
+            got = {fid: (xy, z) for fid, _sp, xy, z, _lon in bp.parts([f], (-500, -500, 500, 500))}
+            return got, bp
+
+    def test_deck_solve_per_crossing(self):
+        # (a long deck over a track at x = -200 and a motorway at x = +200, 400 m apart: each crossing at its own road's
+        # clearance; the chain's one target stood the deck 0.9 m higher over the track)
+        got, bp = self.solve(["primary", "track", "motorway"])
+        xy, z = got["p0"]
+        d = bp.depth_of("p0")
+        with mock.patch.object(roads, "LEVEL_SPACING", True):
+            want_t, want_m = float(roads.crossing_clear(d, "track")), float(roads.crossing_clear(d, "motorway"))
+        over_t = float(np.interp(-200.0, xy[:, 0], z)) - 10.0
+        over_m = float(np.interp(200.0, xy[:, 0], z)) - 10.0
+        self.assertGreaterEqual(over_m, want_m - 0.05)
+        self.assertGreaterEqual(over_t, want_t - 0.05)
+        self.assertLess(over_t, want_m - 0.5, "the track's own target, not the motorway's")
+        got2, _bp = self.solve(["primary", "motorway", "motorway"])
+        self.assertAlmostEqual(float(np.interp(200.0, got2["p0"][0][:, 0], got2["p0"][1])) - 10.0, over_m, places=3,
+                               msg="the motorway's crossing as with a motorway under the other end too")
+
+    def test_stack_lower_part_its_own_class(self):
+        # (a stack: the upper deck over the lower part asks the lower part's own road's clearance)
+        gaps = {}
+        for low in ("track", "motorway"):
+            got, bp = self.solve([low, "primary"], levels=[(0, 1.0, 0.2, 0.8), (1, 2.0, 0.2, 0.8)],
+                                 lines=[[(-300, 0), (300, 0)], [(0, -300), (0, 300)]])
+            lo_xy, lo_z = got["p0"]
+            hi_xy, hi_z = got["p1"]
+            gaps[low] = (float(hi_z[int(np.argmin(np.abs(hi_xy[:, 1])))] - lo_z[int(np.argmin(np.abs(lo_xy[:, 0])))]),
+                         bp.depth_of("p1"))
+        for low, (gap, d) in gaps.items():
+            with mock.patch.object(roads, "LEVEL_SPACING", True):
+                self.assertGreaterEqual(gap, float(roads.crossing_clear(d, low)) - 0.6, (low, gap))
+        self.assertLess(gaps["track"][0], gaps["motorway"][0] - 0.5, gaps)
+
+    def test_approach_fill_per_crossing(self):
+        # (a two-span chain, a track under the first span 20 m from the abutment, a motorway under the second 60 m off:
+        # each crossing's own clearance, falling at DECK_GRADE from it, the higher of the two asked)
         span1, span2 = line(0.0, 40.0), line(40.0, 80.0)
-        branch = np.array([[40.0, 0.0], [70.0, 30.0]])
-        allb = [span1, span2, branch]
-        foot = np.array([[20.0, -20.0], [20.0, 20.0]])
-        mway = np.array([[60.0, -20.0], [60.0, 20.0]])
-        track = np.array([[45.0, 20.0], [65.0, 10.0]])
-        ground, gcl = [foot, mway, track], ["footway", "motorway", "track"]
-        whole = roads.chain_under_classes(allb, ground, gcl)
-        self.assertEqual(whole, ["footway", "motorway", "track"])
+        track = np.array([[20.0, -30.0], [20.0, 30.0]])
+        mway = np.array([[60.0, -30.0], [60.0, 30.0]])
+        z_at = lambda xy: np.zeros(len(np.asarray(xy).reshape(-1, 2)))  # noqa: E731
         with mock.patch.object(roads, "LEVEL_SPACING", True):
-            for b in allb:
-                chain_l, lower = grading.chain_target_parts(b, allb, ["primary"] * 3, [1, 1, 1])
-                self.assertEqual(lower, [])
-                self.assertEqual(roads.chain_under_classes([b] + chain_l, ground, gcl, lower), whole)
-            self.assertEqual(roads.lower_clear(whole), roads.LOWER_CLEAR_M["motorway"])
-            self.assertLess(roads.lower_clear(["footway"]), roads.lower_clear(whole), "(a span's own: short of it)")
+            depth = roads.deck_depth(roads.geom_span([span1, span2]))
 
-    def test_stack_lower_part_counts(self):
-        # (a stack: the chain's part on the lower level is a road under its upper parts, for every stage alike)
-        upper, lower_p = line(0.0, 40.0), line(40.0, 80.0)
+            def want(cls, at):
+                return float(roads.crossing_clear(depth, cls)) + grading.APPROACH_MARGIN_M \
+                    - roads.DECK_GRADE * max(at - grading.APPROACH_FLAT_M, 0.0)
+
+            for classes in (["track", "motorway"], ["track", "track"], ["motorway", "track"]):
+                got = dict((tuple(e), lf) for e, lf in grading.bridge_lifts(span1, [span1, span2], [track, mway], z_at,
+                                                                             chain=[span2], classes=classes))
+                self.assertAlmostEqual(got[(0.0, 0.0)], max(want(classes[0], 20.0), want(classes[1], 60.0)), places=6,
+                                       msg=classes)
+
+    def test_dip_target_is_the_crossing_s(self):
+        # (grading's dip and the deck solve ask one number at a crossing: crossing_clear of its road's class, whatever
+        # else the chain crosses)
         with mock.patch.object(roads, "LEVEL_SPACING", True):
-            _c, lower = grading.chain_target_parts(upper, [upper, lower_p], ["primary", "track_link"], [2, 1])
-        self.assertEqual(lower, ["track"])
-        self.assertEqual(roads.chain_under_classes([upper], [], [], lower), ["track"])
+            for cls in ("motorway", "residential", "track", "footway", None):
+                self.assertIsInstance(roads.crossing_clear(1.2, cls), roads.RoadClear)
+                self.assertAlmostEqual(float(roads.crossing_clear(1.2, cls)),
+                                       roads.deck_road_clear(1.2, None if cls is None else [cls]))
+            self.assertAlmostEqual(float(roads.crossing_clear(1.2, None)), roads.LOWER_CLEAR_UNKNOWN_M + 1.3)
 
     def test_railway_under_the_next_span(self):
         # (Codex round 3: a railway under the chain's next part counted as a road, its 6.0 m given as a road's)

@@ -237,6 +237,21 @@ class KeptStandInTest(unittest.TestCase):
             self.assertEqual(float(dem._lru[k2][0, 0]), 4.0)
             self.assertNotIn(k2, dem._lru_short)
 
+    def test_old_mirror_generation_not_read(self):
+        """A tile in the mirror's older folder (decoded/v<DECODED_VERSION>/, where a child of a stand-in ancestor may
+        have been written as complete before 2026-11-18) is not read: the tile is made again."""
+        from unittest import mock
+        key = (12, 5, 7)
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(demmod, "MIRROR_MB", 100.0):
+            dem = StandInDem(d)
+            new = dem._mirror_path(key)
+            self.assertIn(f"v{demmod.DECODED_VERSION}m{demmod.MIRROR_GEN}", new)
+            old = new.replace(f"v{demmod.DECODED_VERSION}m{demmod.MIRROR_GEN}", f"v{demmod.DECODED_VERSION}")
+            with mock.patch.object(dem, "_mirror_path", lambda k: old):     # (written where the older code wrote)
+                self.assertIsNotNone(dem._mirror_put(key, np.full((T, T), 1.0, np.float32)))
+                self.assertIsNotNone(dem._mirror_get(key))                  # (the file itself reads)
+            self.assertIsNone(dem._mirror_get(key))
+
     def test_evicted_marks_go(self):
         with tempfile.TemporaryDirectory() as d:
             dem = StandInDem(d, failing={(12, 0, 0)})

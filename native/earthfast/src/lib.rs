@@ -7,10 +7,16 @@
 #![deny(clippy::disallowed_methods, clippy::disallowed_types, clippy::iter_over_hash_type)]
 use crate::dm::Dm;
 mod dm;
+mod dmmatmul;
 mod devctx;
 mod reach;
 mod devraster;
 mod roofs;
+mod onewayjoin;
+mod osmrows;
+mod textcol;
+mod osmjoin;
+mod lanesjoin;
 mod domes;
 mod roofphoto;
 mod gravity;
@@ -121,6 +127,7 @@ mod roadtone;
 mod railbeds;
 mod railxing;
 mod roadnet;
+mod structures;
 mod osmtagshards;
 mod buildyears;
 mod buildcolours;
@@ -6655,11 +6662,39 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // takes the parts' gauges and reads their ends only
     // 470: dirtnoise::DirtNoise (grading.dirt_bumps / dirt_bank's random numbers: integer splitmix64, Irwin-Hall
     // normals, multiplication-method Poisson; numpy's Generator called the platform libm)
-    // 471 (first numbered 373, then 404 and 442 on the vsolve branch): carriageway_profiles(..., coupling_penalty): soft
-    // couplings, one slack each at an exact L1 penalty (the one vertical solve's grade rows, server/vsolve.py); "le"
-    // couplings and one-sample couplings (b None)
-    // 472: corridor::plan_corridor_pairs (the one vertical solve's corridor rows: share_corridors' pairs, their
-    // geometry alone)
-    m.add("VERSION", 472)?;
+    m.add_function(wrap_pyfunction!(roadnet::specjson::specs_json, m)?)?;
+    m.add_function(wrap_pyfunction!(roadnet::specjson::specs_from_json, m)?)?;
+    // 450: R2a's spec storage (roadnet::specjson: roads._spec_json and spec_from_json / _specs_from, the cell facts'
+    // "specs" and the plans' openings; the coordinator's range 450-459 for road-r2a5)
+    m.add_class::<roadnet::countries::CountryLookup>()?;
+    // 451: R2a's scalar country lookup (roadnet::countries::CountryLookup: europewalks.country_for made once, its
+    // territories' set kept)
+    m.add_function(wrap_pyfunction!(onewayjoin::oneway_join_ends, m)?)?;
+    // 452: the full port's oneway_joins.apply (onewayjoin::oneway_join_ends: one-way ends moved to the two-way's lane)
+    m.add_function(wrap_pyfunction!(osmrows::osm_rows, m)?)?;
+    m.add_function(wrap_pyfunction!(osmrows::osm_tags, m)?)?;
+    // 453: the full port's OpenStreetMap tag rows (osmrows: osmtags._rows, tags_and_ways' tag dicts)
+    m.add_function(wrap_pyfunction!(textcol::text_column, m)?)?;
+    // 454: the full port's mapgeom.text_column (textcol: the decode's text attributes as one "<U" array)
+    m.add_function(wrap_pyfunction!(osmjoin::osm_join, m)?)?;
+    // 455: the full port's osmtags.join columns (osmjoin: way ids, the same-named ways, the float and text columns,
+    // the lanes of the same-named way going the same way; roadlanes.join stays Python)
+    m.add_function(wrap_pyfunction!(lanesjoin::lane_count, m)?)?;
+    m.add_function(wrap_pyfunction!(lanesjoin::lanes_need, m)?)?;
+    m.add_function(wrap_pyfunction!(lanesjoin::lanes_join, m)?)?;
+    // 456: the full port's roadlanes.count and roadlanes.join (lanesjoin: the OSM counts, the highway boxes asked of
+    // the geometry, the geometry match through dm::interp)
+    m.add_function(wrap_pyfunction!(dmmatmul::dm_matmul, m)?)?;
+    // 472: the full port's dnp.matmul / dnp.dot (dmmatmul: numpy's matmul rules, the products summed in the Python's
+    // order, numpy's floating-point errors reported as np.errstate says)
+    m.add_function(wrap_pyfunction!(structures::groups::structure_groups, m)?)?;
+    // 480: road revamp RS step S1 (structures::groups::structure_groups: which decks of one bridge chain form one
+    // structure; roads writes them as a shadow JSON per chain, BNE_DECK_STRUCT=shadow). 472-479 left to other branches
+    // 481 (first numbered 373, then 404, 442 and 471 on the vsolve branch): carriageway_profiles(..., coupling_penalty):
+    // soft couplings, one slack each at an exact L1 penalty (the one vertical solve's grade rows, server/vsolve.py);
+    // "le" couplings and one-sample couplings (b None)
+    // 482 (first 472): corridor::plan_corridor_pairs (the one vertical solve's corridor rows: share_corridors' pairs,
+    // their geometry alone)
+    m.add("VERSION", 482)?;
     Ok(())
 }

@@ -239,7 +239,7 @@ pub fn underpass_offsets<'py>(
             // (a longer ramp ends jflat before the nearest junction (3+ lines) it would reach, never shorter than the dip at
             // grade had: the roads joining there get no more of it than before. Run on through a junction, a trunk's
             // 1 m dip, 52 -> 208 m long, put a drop on a slip road 75 m on, blended back over jfade: a crest on it)
-            #[allow(clippy::iter_over_hash_type)] // (a minimum: the order does not matter)
+            #[allow(clippy::iter_over_hash_type, clippy::disallowed_methods)] // (a minimum: the order does not matter)
             let jd = dist.iter().filter(|(n, _)| degree[**n] > 2).map(|(_, d)| *d).fold(f64::INFINITY, f64::min);
             run = run.min((jd - flat - jflat).max(run0));      // (and clear of its common drop's reach)
         }

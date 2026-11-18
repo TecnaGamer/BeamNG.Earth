@@ -23,6 +23,14 @@ use pyo3::prelude::*;
 
 use crate::polyproject;
 
+/// v * v: f64::powi(v, 2) written out (the determinism lints: powi's exponent may call compiler-rt). powi(v, 2) is
+/// exactly v * v (LLVM folds the constant exponent to one fmul; compiler-rt's __powidf2 squares once and multiplies by
+/// 1.0): the same bits, racejoin_sq_is_powi checks it.
+#[inline]
+fn sq(v: f64) -> f64 {
+    v * v
+}
+
 /// One raceway segment's smoothed surface (grading.raceway_surface's (line, stations, offsets, surface)).
 pub struct Zone {
     pub line: Vec<f64>, // k x 2
@@ -138,8 +146,8 @@ pub struct Join {
 pub fn reach_of(zl: &[f64], zk: usize, zds: f64, zs_end: f64, zhw: f64, gl: &[f64], gk: usize, ghw: f64, jx: f64,
                 jy: f64, blend: f64) -> (f64, f64) {
     let k = zk;
-    let d0 = (zl[0] - jx).powi(2) + (zl[1] - jy).powi(2);
-    let d1 = (zl[2 * (k - 1)] - jx).powi(2) + (zl[2 * (k - 1) + 1] - jy).powi(2);
+    let d0 = sq(zl[0] - jx) + sq(zl[1] - jy);
+    let d1 = sq(zl[2 * (k - 1)] - jx) + sq(zl[2 * (k - 1) + 1] - jy);
     let reach = zhw + ghw + blend;
     // (each sample projected as the walk reaches it, the walk stopping at the first out of reach: a short overlap
     // costs a few projections, not the whole line's; Codex review of d40a5fcb)
@@ -320,7 +328,7 @@ pub fn dominance(lines: &[Vec<f64>], hw: &[f64]) -> Vec<Vec<Join>> {
     let ends_at = |z: usize, px: f64, py: f64| -> bool {
         let l = &lines[z];
         let n = k[z];
-        !closed[z] && [0, n - 1].iter().any(|&e| ((l[2 * e] - px).powi(2) + (l[2 * e + 1] - py).powi(2)).sqrt() <= NODE_M)
+        !closed[z] && [0, n - 1].iter().any(|&e| (sq(l[2 * e] - px) + sq(l[2 * e + 1] - py)).sqrt() <= NODE_M)
     };
     let going_on = |a: (f64, f64), b: (f64, f64)| a.0 * b.0 + a.1 * b.1 < -0.8;
     let mut out: Vec<Vec<Join>> = vec![Vec::new(); nz];
@@ -479,6 +487,23 @@ pub fn raceway_join_reach(z: PyReadonlyArray2<'_, f64>, zds: f64, zs_end: f64, z
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    #[allow(clippy::disallowed_methods)]    // (the old expression, compared once)
+    fn racejoin_sq_is_powi() {
+        let mut x: u64 = 0x9e37_79b9_7f4a_7c15;
+        for _ in 0..200_000 {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            let v = f64::from_bits(x);
+            let w = (x as f64 / u64::MAX as f64 - 0.5) * 2e4;
+            for t in [v, w, -w, 0.0, -0.0, f64::MIN_POSITIVE, 1e-300, 1e300, f64::INFINITY, f64::NAN] {
+                let (a, b) = (t.powi(2), super::sq(t));
+                assert!(a.to_bits() == b.to_bits() || (a.is_nan() && b.is_nan()), "{t:e}");
+            }
+        }
+    }
+
     use super::*;
 
     /// A straight raceway along x (y = y0), half width hw, its surface f(station, offset).

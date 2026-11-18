@@ -101,6 +101,15 @@ SHORT_RETRY_S = 30.0        # s a stand-in tile (made while a download failed) i
 DECODED_VERSION = 4          # 2: tiles past the lidar's depth upsampled from its deepest tile, not z12; its holes
                              # filled (fill_holes); 3: Canada's HRDEM lidar (hrdem.py) from z13 down; 4: LidarBC,
                              # and z12 / z13 shifted to its ground (BIAS_*)
+# The mirror's own generation (its folder: decoded/v<DECODED_VERSION>m<MIRROR_GEN>), apart from DECODED_VERSION, which is
+# in the format-keyed caches' identity (mapdata.dem_identity: raising it plans every player's cells again). 2
+# (2026-11-18): before, a tile upsampled from a stand-in ancestor kept in memory (a Mapterhorn tile that failed, AWS's
+# in its place) could be written to the mirror as Mapterhorn's and read back as complete for 30 days; the older folder
+# is not read and goes first when the mirror is cut back (oldest written first). The cost: each tile is decoded again
+# once when next read (~10 ms CPU against ~0.7 ms to read it back; the 8-place corpus's 12,103 mirrored tiles ~120
+# CPU-s, ~15 s a place; a full 3 GB mirror ~20,000 tiles, ~200 CPU-s spread over the visits that read them) and written
+# again (~150 KB a tile).
+MIRROR_GEN = 2
 # The elevation's identity in the format-keyed caches (mapdata.dem_identity: road plans, cell facts, the road tiles and
 # the shared decisions' version key), pinned per app release (the user, 2026-11-16, the road revamp's decision D5: "Pin
 # per app release"): the plans made on one release's elevation are kept until a release changes what the ground
@@ -1207,8 +1216,9 @@ class Dem:
         # its bias, BNE_HRDEM_NEAR's whole HRDEM. Their tiles apart: off, the mirror's tiles as before)
         hk += ("b" if getattr(self, "lidarbc", None) is not None else "") + \
             ("n" if getattr(self, "hrdem_near", HRDEM_NEAR) else "")
-        return os.path.join(self.cache_dir, "decoded", f"v{DECODED_VERSION}", f"g{int(self.ground_filter)}{hk}", str(z),
-                            str(x), f"{y}{'.f32z' if MIRROR_ZSTD else '.npy'}")
+        return os.path.join(self.cache_dir, "decoded", f"v{DECODED_VERSION}m{MIRROR_GEN}",
+                            f"g{int(self.ground_filter)}{hk}", str(z), str(x),
+                            f"{y}{'.f32z' if MIRROR_ZSTD else '.npy'}")
 
     def _mirror_get(self, key, readback=False):
         """A tile from the decoded mirror (a read-only view of its memory map), or None. readback: _mirror_put's

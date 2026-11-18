@@ -145,6 +145,7 @@ def run_place(p, server, root, label, online, checks=None, era=None):
     for f_ in (js, tj, log, js + ".tmp"):   # (no earlier run's result left to be scored as this one's; no link)
         if os.path.lexists(f_):
             os.remove(f_)
+    shutil.rmtree(os.path.join(out, p["id"] + ".structures"), ignore_errors=True)
     if PROBE[0] == "struct":        # (today's checkout's probe, scoring the server given: --server)
         base = ["nice", "-n", "15", sys.executable, os.path.join(REPO, "server", "structprobe.py"),
                 repr(p["lat"]), repr(p["lon"]), repr(float(p.get("struct_r", p["r"]))), "--server", server,
@@ -202,6 +203,11 @@ def run_place(p, server, root, label, online, checks=None, era=None):
         with open(tj, "w") as f:
             json.dump({"mode": mode, "rc": rc}, f, sort_keys=True)
             f.write("\n")
+    shadow = os.path.join(work, "debug", "structures")     # (BNE_DECK_STRUCT=shadow's chain JSONs: kept with the results)
+    if os.path.isdir(shadow):
+        dst = os.path.join(out, p["id"] + ".structures")
+        shutil.rmtree(dst, ignore_errors=True)
+        shutil.copytree(shadow, dst)
     shutil.rmtree(work, ignore_errors=True)
     return rc
 

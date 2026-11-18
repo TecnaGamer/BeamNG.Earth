@@ -138,7 +138,9 @@ class HighwayLanesTest(unittest.TestCase):
     def test_highway_name_alone_does_not_supply_lanes(self):
         f = highway()
         f.attrs["name"] = np.array(["Interstate 65"])
-        box = dict(bx0=f.lonlat[0, 0], by0=f.lonlat[0, 1], bx1=f.lonlat[-1, 0], by1=f.lonlat[-1, 1])
+        # (Python floats, as osm_tags makes them: osm_join refuses numpy scalars, whose errors follow np.errstate)
+        box = dict(bx0=float(f.lonlat[0, 0]), by0=float(f.lonlat[0, 1]), bx1=float(f.lonlat[-1, 0]),
+                   by1=float(f.lonlat[-1, 1]))
         osmtags.join(f, {99: dict(box, name="Interstate 65", lanes=4, osm_oneway="yes")})
         self.assertTrue(np.isnan(f.attrs["osm_lanes"][0]))
         self.assertEqual(roads.road_specs(f)[0].lanes, 2)
