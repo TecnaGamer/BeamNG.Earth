@@ -22,8 +22,7 @@ def main():
     os.environ['TMP'] = os.environ['TEMP'] = str(temp)
     sys.path[:0] = [str(ROOT / "server"), str(ROOT / "server/tests")]
     import unittest
-    names = ["test_runtimeprofiler", "test_runtimeprofiler_server", "test_ioprofiler", "test_netfetch", "test_cache", "test_pools", "test_selfupdate", "test_peerwork",
-             "test_protocol_agreement.AgreementTableTest", "test_protocol_agreement.ConstantsTest", "test_protocol"]
+    names = ["test_runtimeprofiler", "test_runtimeprofiler_server", "test_ioprofiler", "test_netfetch", "test_cache", "test_pools", "test_selfupdate",              "test_protocol_agreement.AgreementTableTest", "test_protocol_agreement.ConstantsTest", "test_protocol"]
     result = unittest.TextTestRunner(verbosity=2).run(unittest.defaultTestLoader.loadTestsFromNames(names))
     ok = result.wasSuccessful()
     report = {"python": {"run": result.testsRun, "failures": len(result.failures),

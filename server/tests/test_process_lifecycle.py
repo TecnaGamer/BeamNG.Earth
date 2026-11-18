@@ -97,7 +97,6 @@ class ProcessLifecycleTest(unittest.TestCase):
 
     def start(self, kind, direct=False):
         env = dict(os.environ, BNGEARTH_PARENT=str(os.getpid()))
-        env.pop("BNGE_WORLD_BUNDLE", None)
         env.pop("BNGE_TRACEMALLOC", None)
         env.pop("BNGE_SAMPLE", None)
         env["PYTHONPATH"] = os.pathsep.join(dict.fromkeys(

@@ -38,13 +38,9 @@
     <!-- Add-ons: the page is the add-ons' own view (EarthAddons.vue) -->
     <EarthAddons v-if="category.addons" />
 
-    <template v-for="(item, index) in rows" :key="item.id">
-      <BngCardHeading
-        v-if="item.section && item.section !== rows[index - 1]?.section"
-        class="earth-section-heading"
-      >{{ item.section }}</BngCardHeading>
-      <div v-if="item.sectionIntro && item.section !== rows[index - 1]?.section" class="earth-intro">{{ item.sectionIntro }}</div>
     <BngRow
+      v-for="item in rows"
+      :key="item.id"
       class="earth-row"
       :vertical="item.type === 'text' || item.type === 'path' || item.type === 'contributors'"
       @mouseenter="setHelp(item)"
@@ -133,7 +129,6 @@
         <div class="earth-note" :class="{ 'is-error': pathMsg[item.what] && !pathMsg[item.what].ok }">{{ pathNote(item) }}</div>
       </div>
     </BngRow>
-    </template>
 
     <!-- Developer: the overlay presets (session only) -->
     <div v-if="category.devPresets" class="earth-presets">
@@ -181,7 +176,6 @@ function applyNumber(item) {
 
 <style scoped lang="scss">
 /* Only spacing: the cards, rows and controls are the game's own */
-.earth-section-heading { margin-top: 1em; }
 .earth-number-input { width: 7em; }
 .earth-main {
   display: flex;

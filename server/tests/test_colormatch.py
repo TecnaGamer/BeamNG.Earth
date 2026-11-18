@@ -1223,7 +1223,7 @@ class ServerRetextureTest(unittest.TestCase):
         px = s.tex_size(tile.level)
         rgb, _ = s.imagery.render(a.frame, *imagery.gutter_square(x0, y0, tile.size, px), px)
         with open(p1, "rb") as f1:
-            self.assertEqual(f1.read(), imagery.encode_dds(rgb))
+            self.assertEqual(f1.read(), imagery.encode_dds(rgb, imagery.FAR_SRGB))
         s._evict_tile(ck)                           # a later full build takes the next name
         self.assertEqual(s.tex_rev[ck], 2)
         self.assertEqual(s.texture_name(a.id, tile.key, s.tex_rev[ck]), f"far_{a.id}_0_0_0_r2.dds")

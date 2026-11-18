@@ -41,6 +41,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import earthd  # noqa: E402
+import protocol  # noqa: E402
 import geodesy  # noqa: E402
 import modsim  # noqa: E402
 import test_server  # noqa: E402
@@ -305,9 +306,9 @@ class _Running:
         self.thread.start()
 
         async def start():
-            return await asyncio.start_server(lambda r, w: earthd.Connection(s, r, w).run(), "127.0.0.1", 0)
+            return await protocol.start_server(lambda r, w: earthd.Connection(s, r, w).run(), "127.0.0.1", 0)
         self.srv = asyncio.run_coroutine_threadsafe(start(), self.loop).result(10)
-        self.port = self.srv.sockets[0].getsockname()[1]
+        self.port = protocol.listen_port(self.srv)
         self.alive = True
 
     def call(self, fn, *args):

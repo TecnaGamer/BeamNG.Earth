@@ -140,5 +140,74 @@ class HoldMouthTest(unittest.TestCase):
         self.assertTrue(np.array_equal(grading._Planner._hold_mouth(z, a), z))
 
 
+class GradeMatchBankEndTest(unittest.TestCase):
+    """_grade_match reads each end as its approach is laid (fill_abutment): a stream bridge whose map line ends down the
+    bank on one side is not tilted by that end's low ground (Alsfeld, B 62 over a stream: 2.6 m over a 16 m deck)."""
+
+    def planner(self, ground):
+        import threading
+        import geodesy
+        g = object.__new__(grading._Planner)
+        g.lock = threading.Lock()
+        g.frame = geodesy.EnuFrame(50.7563, 9.2870)
+        bridge = np.array([[0.0, 0.0], [16.0, 0.0]])
+        g._cell_enu = lambda k, ground=True: {"ends": bridge, "end_of": [0, 0], "bridges": [bridge],
+                                                "bridge_cls": ["primary"]}
+
+        def elev(la, lo):
+            x, _y, _ = g.frame.geodetic_to_enu(np.asarray(la, np.float64), np.asarray(lo, np.float64), 0.0)
+            return ground(np.asarray(x, np.float64))
+        g.elev = elev
+        return g
+
+    @staticmethod
+    def stream(x):
+        # the road's flat 243.25 m, a stream's 3.5 m valley from x = -6 to 9 (its bed at x = 3): the bridge's west end
+        # (x = 0) on the bank 3 m down, its east end (x = 16) on the flat
+        return np.where((x > -6.0) & (x < 9.0), 243.25 - 3.5 * np.cos(np.clip((x - 3.0) / 6.0, -1, 1) * np.pi / 2), 243.25)
+
+    def test_end_down_the_bank_is_not_matched(self):
+        g = self.planner(self.stream)
+        self.assertLess(float(self.stream(np.array([0.0]))[0]), 241.0)     # (the end's own ground: down the bank)
+        self.assertIsNone(g._grade_match(np.array([0.0, 0.0])))
+        self.assertIsNone(g._grade_match(np.array([16.0, 0.0])))
+
+    def test_off_switch_brings_the_old_match_back(self):
+        from unittest import mock
+        with mock.patch.object(grading, "SEAM_FILLED_ON", False):
+            g = self.planner(self.stream)
+            a = g._grade_match(np.array([0.0, 0.0]))
+            b = g._grade_match(np.array([16.0, 0.0]))
+        self.assertGreater(a, 0.5)
+        self.assertLess(b, -0.5)
+
+    def test_real_step_between_the_ends_is_still_shared(self):
+        # the ground really differs on either side (flat at 398.1 m to the west, 401.3 m to the east): matched as before
+        g = self.planner(lambda x: np.where(x < 8.0, 398.1, 401.3))
+        a = g._grade_match(np.array([0.0, 0.0]))
+        b = g._grade_match(np.array([16.0, 0.0]))
+        self.assertGreater(a, 0.5)
+        self.assertLess(b, -0.5)
+        self.assertAlmostEqual(a, -b, places=6)
+
+    def test_an_end_on_a_hills_brow_is_not_filled_above_its_ground(self):
+        # a track up a hill: the ground falls ever more steeply west of the bridge's lower end (x = 0) and rises past
+        # its upper one; fill_abutment's line through the far slope would read the lower end 4 m over the higher one
+        # (Riva del Garda's Pontera hill, test_drivability): matched on the ground at the ends, as with the switch off
+        def hill(x):
+            return np.where(x < 0.0, 195.0 + 0.2 * x - 0.008 * x * x, 195.0 + 0.2 * x)
+        from unittest import mock
+        g = self.planner(hill)
+        line = np.array([[0.0, 0.0], [16.0, 0.0]])
+        self.assertGreater(g._end_filled(line, False), hill(np.array([16.0]))[0] + 1.0)     # (the bare fill: over the top)
+        self.assertAlmostEqual(g._end_filled(line, False, past=True), 195.0, places=3)
+        a = g._grade_match(np.array([0.0, 0.0]))
+        b = g._grade_match(np.array([16.0, 0.0]))
+        with mock.patch.object(grading, "SEAM_FILLED_ON", False):
+            g = self.planner(hill)
+            self.assertEqual((a, b), (g._grade_match(np.array([0.0, 0.0])), g._grade_match(np.array([16.0, 0.0]))))
+        self.assertGreater(a, 0.5)                                          # (the lower end's approach raised, as before)
+
+
 if __name__ == "__main__":
     unittest.main()
