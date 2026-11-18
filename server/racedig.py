@@ -103,7 +103,7 @@ def bands(frame, cells):
 # An assembly goes as one (furniture.assemblies; the user's reports 56, 59, 66, 70 at Daytona and Atlanta, 2026-11-17:
 # a lit raceway's utility pole 0.7 m inside the band went, its cobra-head arm 7 m up was taken for a prop on a deck
 # over the track and stayed, and of its three wires the one ending 0.8 m farther out stayed: an arm and one wire in the
-# air). A wire with an end within furniture.support_reach of a dropped support goes with it.
+# air). A wire with an end within a dropped support's reach goes with it (furniture.wire_ends_at; in Rust).
 
 
 def clear_props(props, wires, lines, ground=None):
@@ -111,27 +111,26 @@ def clear_props(props, wires, lines, ground=None):
     radius)) without those inside a raceway's carriageway + PROP_CLEAR_M (lines: bands()), in place; a prop standing
     PROP_DECK_M or more over the ground there (ground(x (n,), y (n,)) -> z, the graded ground; None: none kept) is on
     a deck over the track and stays. A row mounted on another (furniture.assemblies) goes or stays with it. Wires:
-    those with an end on the band or at a dropped support (furniture.support_reach) go."""
+    those with an end on the band or at a dropped support (furniture.wire_ends_at) go."""
     if not lines:
         return 0
     dropped = 0
-    gone_supports = []
+    culled = []
     if props:
         xy = np.array([[float(r[1]), float(r[2])] for r in props], np.float64).reshape(-1, 2)
         inside = near(xy, lines, PROP_CLEAR_M)
-        import furniture
-        parent = furniture.assemblies(props) if inside.any() else np.full(len(props), -1, np.int64)
+        had = bool(inside.any())
         if inside.any() and ground is not None:
             k = np.flatnonzero(inside)
             gz = np.asarray(ground(xy[k, 0], xy[k, 1]), np.float64)
             pz = np.array([float(props[j][3]) for j in k], np.float64)
             inside[k[pz - gz >= PROP_DECK_M]] = False
-        own = parent >= 0
-        inside[own] = inside[parent[own]]
+        if had:                     # (an assembly as one: a pole's arm, a post's lens go or stay with it)
+            import furniture
+            inside = furniture.assembly_drop(inside, props)
         if inside.any():
             keep = [r for r, bad in zip(props, inside) if not bad]
-            gone_supports = [(float(r[1]), float(r[2]), str(r[0])) for r, bad in zip(props, inside)
-                             if bad and furniture.wire_support(r[0])]
+            culled = [r for r, bad in zip(props, inside) if bad]
             dropped += len(props) - len(keep)
             props[:] = keep
     if wires:
@@ -145,11 +144,9 @@ def clear_props(props, wires, lines, ground=None):
         if ends:
             ends = np.array(ends, np.float64)
             bad = near(ends, lines, PROP_CLEAR_M)
-            if gone_supports:
-                at = np.array([[x, y] for x, y, _ in gone_supports], np.float64)
-                reach = np.array([furniture.support_reach(g) for _, _, g in gone_supports], np.float64)
-                d = dnp.hypot(ends[:, None, 0] - at[None, :, 0], ends[:, None, 1] - at[None, :, 1])
-                bad |= (d <= reach[None, :]).any(axis=1)
+            if culled:
+                import furniture
+                bad |= furniture.wire_ends_at(ends, culled)
             drop = {which[j] for j in np.flatnonzero(bad).tolist()}
             if drop:
                 wires[:] = [w for n_, w in enumerate(wires) if n_ not in drop]

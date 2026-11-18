@@ -86,6 +86,7 @@ mod mdhtml;
 mod reportpack;
 mod farrestore;
 mod roadlanes;
+mod propassembly;
 mod waytags;
 mod pmtiles;
 mod underdeck;
@@ -6605,6 +6606,11 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(roadnet::splitlayer::lane_split_layer, m)?)?;
     // 403: R2a's lane section layer (roadnet::splitlayer::lane_split_layer = lanesections.split's new-layer assembly:
     // the columns gathered, the sections' values, LANE_MAX, the geometry and rule rows, the cut points' connectors)
-    m.add("VERSION", 403)?;
+    m.add_function(wrap_pyfunction!(propassembly::prop_assemblies, m)?)?;
+    m.add_function(wrap_pyfunction!(propassembly::assembly_drop, m)?)?;
+    m.add_function(wrap_pyfunction!(propassembly::wire_ends_at_supports, m)?)?;
+    // 430: street furniture assemblies culled as one (propassembly: prop_assemblies = furniture.assemblies'
+    // matching, assembly_drop, wire_ends_at_supports = the wire supports' reach; racedig.clear_props, under_decks)
+    m.add("VERSION", 430)?;
     Ok(())
 }

@@ -1026,63 +1026,52 @@ def lamp_lenses(rows):
 # Assemblies (the user's reports 56, 59, 66, 70 at Daytona and Atlanta, 2026-11-17: a utility pole culled, its
 # cobra-head arm 7 m up and the wire ending 0.8 m farther out left in the air): a row mounted on another goes or stays
 # with that row, never by its own place or height (racedig.clear_props, under_decks), and a culled support takes the
-# wires ending within its reach.
-MOUNTED = frozenset({G_POLELAMP, G_LENS, G_GLOW, G_HIGH_MAST_LENS, "fr_lantern_light"})
-MOUNT_M = 0.05              # m: a pole lamp is on the support at its x, y (both rows rounded to 1 cm)
-SUPPORT_REACH_M = 1.5       # m from a support's x, y its wires end (WIRE_ARMS 0.8, the regional poles' 1.1,
-PYLON_REACH_M = 5.0         # powerlines' wooden pole 1.07); a lattice pylon's (powerlines.ARMS 4.12)
-
-
-def wire_support(group):
-    """Does a row of this group carry wires (a utility pole of any style, a power line's pole or pylon)?"""
-    import busfurniture
-    import powerlines
-    g = str(group)
-    return g != G_POLELAMP and (busfurniture._is_pole(g) or g in (powerlines.G_POLE, powerlines.G_PYLON))
-
-
-def support_reach(group):
-    """m from a support's x, y within which its wires end."""
-    import powerlines
-    return PYLON_REACH_M if str(group) == powerlines.G_PYLON else SUPPORT_REACH_M
+# wires ending within its reach. The rules in Rust (earthfast propassembly: prop_assemblies, assembly_drop,
+# wire_ends_at_supports); here the rows' arrays and their lamps' heads (lamp_lenses).
+ASSEMBLY_KERNEL = 430
 
 
 def assemblies(rows):
     """(n,) int: the index of the row each of rows is mounted on (the root of a chain: a lens on a pole lamp is the
-    pole's), -1 for none: a pole lamp on the support at its x, y; a lens or glow on the lamp whose lamp_lenses row it
-    is. A mounted row with no such row among rows has -1 (judged by itself)."""
-    parent = np.full(len(rows), -1, np.int64)
-    if not any(str(r[0]) in MOUNTED for r in rows):
-        return parent
-    supports, heads = {}, {}
-    for i, r in enumerate(rows):
-        g = str(r[0])
-        if wire_support(g):
-            supports.setdefault((round(float(r[1]) / MOUNT_M), round(float(r[2]) / MOUNT_M)), i)
-        if len(r) >= 8 and (g not in MOUNTED or g == G_POLELAMP):    # (a pole lamp has a head too)
-            for lens in lamp_lenses([r]):
-                heads.setdefault((str(lens[0]),) + tuple(round(float(v), 2) for v in lens[1:4]), i)
-    for i, r in enumerate(rows):
-        g = str(r[0])
-        if g not in MOUNTED:
-            continue
-        if g == G_POLELAMP:
-            kx, ky = round(float(r[1]) / MOUNT_M), round(float(r[2]) / MOUNT_M)
-            for dx in (0, -1, 1):           # (a rounding at a cell's edge)
-                for dy in (0, -1, 1):
-                    j = supports.get((kx + dx, ky + dy))
-                    if j is not None and parent[i] < 0:
-                        parent[i] = j
-        else:
-            j = heads.get((g,) + tuple(round(float(v), 2) for v in r[1:4]))
-            if j is not None:
-                parent[i] = j
-    for i in range(len(rows)):
-        j = parent[i]
-        while j >= 0 and parent[j] >= 0:
-            j = parent[j]
-        parent[i] = j
-    return parent
+    pole's), -1 for none: a pole lamp on the wire support at its x, y; a lens or glow on the lamp whose lamp_lenses row
+    it is. A mounted row with no such row among rows has -1 (judged by itself)."""
+    import fast
+    fast.require(ASSEMBLY_KERNEL, "furniture assemblies")
+    names, index = [], {}
+
+    def gi(g):
+        g = str(g)
+        k = index.get(g)
+        if k is None:
+            k = index[g] = len(names)
+            names.append(g)
+        return k
+    group = np.array([gi(r[0]) for r in rows], np.int64)
+    xy = np.array([[float(r[1]), float(r[2])] for r in rows], np.float64).reshape(-1, 2)
+    keys = np.array([[round(float(v), 2) for v in r[1:4]] for r in rows], np.float64).reshape(-1, 3)
+    heads = [[i, gi(lens[0])] + [round(float(v), 2) for v in lens[1:4]]
+             for i, r in enumerate(rows) if len(r) >= 8 for lens in lamp_lenses([r])]
+    heads = np.array(heads, np.float64).reshape(-1, 5)
+    return np.asarray(fast._ef.prop_assemblies(names, group, np.ascontiguousarray(xy), np.ascontiguousarray(keys),
+                                               np.ascontiguousarray(heads)), np.int64)
+
+
+def assembly_drop(hit, rows):
+    """(n,) bool: hit (a verdict per row of rows: culled) with every mounted row's its support's or lamp's."""
+    import fast
+    fast.require(ASSEMBLY_KERNEL, "furniture assemblies")
+    return np.asarray(fast._ef.assembly_drop(np.ascontiguousarray(hit, bool), assemblies(rows)), bool)
+
+
+def wire_ends_at(ends, culled):
+    """(m,) bool: wire ends (m, 2) within the reach of a wire support among the culled rows."""
+    import fast
+    fast.require(ASSEMBLY_KERNEL, "furniture assemblies")
+    ends = np.ascontiguousarray(np.asarray(ends, np.float64).reshape(-1, 2))
+    names = sorted({str(r[0]) for r in culled})
+    group = np.array([names.index(str(r[0])) for r in culled], np.int64)
+    xy = np.array([[float(r[1]), float(r[2])] for r in culled], np.float64).reshape(-1, 2)
+    return np.asarray(fast._ef.wire_ends_at_supports(ends, names, group, np.ascontiguousarray(xy)), bool)
 
 
 def roads_with_points(roads, points, extra_m, least=MAPPED_ALONG_MIN):
@@ -1148,34 +1137,25 @@ def under_decks(rows, decks, wires=None):
                                         np.ascontiguousarray(r[:, 2]), np.ascontiguousarray(r[:, 3]),
                                         float(DECK_HEADROOM_M)), bool)
         if hit.any():               # (an assembly as one: a pole's arm, a post's lens go or stay with it)
-            parent = assemblies(rows)
-            own = parent >= 0
-            hit[own] = hit[parent[own]]
-        gone = [q for q, h in zip(rows, hit) if h and wire_support(q[0])] if hit.any() else []
+            hit = assembly_drop(hit, rows)
+        gone = [q for q, h in zip(rows, hit) if h]
         out = [q for q, h in zip(rows, hit) if not h]
     else:
         gone = []
     if wires is not None:
+        pts = [np.asarray(w[0] if isinstance(w, tuple) else w, np.float64) for w in wires]  # (PR #505: (points, style))
+        at = np.zeros(2 * len(pts), bool)
+        if gone and pts:
+            ends = [[p[k, 0], p[k, 1]] if len(p) else [np.inf, np.inf] for p in pts for k in (0, -1)]
+            at = wire_ends_at(ends, gone)
         keep = []
-        for w in wires:
-            entry = w      # (PR #505: a wire may come as (points, style))
-            w = np.asarray(w[0] if isinstance(w, tuple) else w, np.float64)
+        for n_, (entry, w) in enumerate(zip(wires, pts)):
             if not levels.wire_hit(np.ascontiguousarray(w[:, 0]), np.ascontiguousarray(w[:, 1]),
                                    np.ascontiguousarray(w[:, 2]), float(DECK_WIRE_M), float(DECK_HEADROOM_M)) \
-                    and not (len(w) and _at_support(w, gone)):
+                    and not (len(w) and (at[2 * n_] or at[2 * n_ + 1])):
                 keep.append(entry)
         wires[:] = keep
     return out
-
-
-def _at_support(w, supports):
-    """Does wire w ((k, 3) points) end within support_reach of one of supports (rows)?"""
-    for q in supports:
-        reach = support_reach(q[0])
-        for p in (w[0], w[-1]):
-            if dnp.hypot(float(p[0]) - float(q[1]), float(p[1]) - float(q[2])) <= reach:
-                return True
-    return False
 
 
 def off_buildings(rows, rings, groups=(G_STREET_TREE,), clear=STREET_TREE_WALL_M):
