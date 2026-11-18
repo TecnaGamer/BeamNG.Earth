@@ -10,6 +10,7 @@ import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 import grading  # noqa: E402
+import gradeshapes  # noqa: E402
 import roads  # noqa: E402
 from test_roads import features, FRAME  # noqa: E402
 from test_grading import FakeMD  # noqa: E402
@@ -225,10 +226,24 @@ class UnderDeckReachTest(unittest.TestCase):
         self.assertAlmostEqual(cut[0], flat[0] - 6.6, places=9)
 
 
+def switch(name, on):
+    """Set a legacy pass's switch for a test and give back what to restore. With BNE_SHAPES=1 the approach lifts, the
+    junction raise and the ramp envelope are off by design (gradeshapes' solved shapes and embankments replace them, the
+    flags are read at import) and are never turned on: both at once is a mixture no run has (the tests forced them on
+    and measured the lifts laid over the shapes' own embankments: 15.93 m approach against a 14.92 m deck end, a deck
+    12.8 m over a motorway the underpass pass had lowered), so under the shapes the same case is graded as it stands
+    and what the test asserts is the outcome."""
+    old = getattr(grading, name)
+    if not grading.SHAPES_ON:
+        setattr(grading, name, on)
+    return old
+
+
 class OverpassIntegrationTest(unittest.TestCase):
     def deck_over_lanes(self, on):
-        old = grading.APPROACH_ON
-        grading.APPROACH_ON = on
+        """(the deck's height over the lanes at both, the steepest grade on the approach road from the abutment out to
+        400 m). on: the legacy approach pass (not under the shapes: switch)."""
+        old = switch("APPROACH_ON", on)
         try:
             f = overpass()
             g = grading.Grader(FRAME, FakeMD(f), flat_elev)
@@ -242,22 +257,28 @@ class OverpassIntegrationTest(unittest.TestCase):
             s = np.r_[0.0, np.cumsum(np.hypot(*np.diff(np.asarray(xy)[:, :2], axis=0).T))]
             at = [float(np.interp(x, np.asarray(xy)[:, 0], s)) for x in (-12.0, 12.0)]
             lanes = elev(*FRAME.enu_to_geodetic(np.array([-12.0, 12.0]), np.array([0.0, 0.0]), 0.0)[:2])
-            # and the approach road 100 m out: on its ramp, not a wall
-            ramp = elev(*FRAME.enu_to_geodetic(np.array([-135.0, -137.0]), np.array([0.0, 0.0]), 0.0)[:2])
+            # and the approach road out to 400 m: on its ramp, not a wall (the steepest step of 4 m along it)
+            out = np.arange(40.0, 400.1, 4.0)
+            road = elev(*FRAME.enu_to_geodetic(-out, np.zeros(len(out)), 0.0)[:2])
             self.lanes = lanes - 10.0
-            return np.interp(at, s, z) - lanes, abs(ramp[1] - ramp[0]) / 2.0
+            return np.interp(at, s, z) - lanes, float(np.abs(np.diff(road)).max() / 4.0)
         finally:
             grading.APPROACH_ON = old
 
     def test_deck_clears_the_lanes(self):
-        before, _ = self.deck_over_lanes(False)
-        self.assertLess(before.max(), 4.0, "the bug: the deck low over the motorway")
+        if not grading.SHAPES_ON:
+            # (the legacy pass's own proof: without it the deck stands low over the motorway)
+            before, _ = self.deck_over_lanes(False)
+            self.assertLess(before.max(), 4.0, "the bug: the deck low over the motorway")
         after, grade = self.deck_over_lanes(True)
         depth = roads.deck_depth(roads.geom_span([np.c_[np.linspace(-35, 35, 36), np.zeros(36)]]))
         self.assertGreaterEqual(after.min(), roads.deck_road_clear(depth) - 0.05, after)
         under = after.min() - depth     # (the deck's slab and girders, from its span)
         self.assertGreater(under, roads.MIN_BRIDGE_HEADROOM_M, "the law's headroom under the girders")
-        self.assertLessEqual(grade, grading.APPROACH_GRADE * 1.05)
+        # (the approach's grade: the legacy ramp's, with the shapes the road's own class's max grade, gradeshapes')
+        law = gradeshapes.max_grade(gradeshapes.Member("a", None, "ground", "secondary", None, 0, 4.0, None, None)) \
+            if grading.SHAPES_ON else grading.APPROACH_GRADE
+        self.assertLessEqual(grade, law * 1.05, "the approach is a ramp, not a wall")
         self.assertLess(np.abs(self.lanes).max(), 0.2, "the motorway is not raised")
 
     def test_motorway_over_a_road_not_raised(self):
@@ -278,8 +299,7 @@ class JunctionRaiseTest(unittest.TestCase):
     The junction rises with the approach and the roads leaving it ramp down (grading JUNCTION_RAISE_ON)."""
 
     def deck_over_lanes(self, on):
-        old = grading.JUNCTION_RAISE_ON
-        grading.JUNCTION_RAISE_ON = on
+        old = switch("JUNCTION_RAISE_ON", on)
         try:
             a, b = (43 - 35) / 86, (43 + 35) / 86
             f = features([[(-43, 0), (43, 0)], [(-400, 0), (-43, 0)], [(43, 0), (400, 0)],
@@ -302,14 +322,16 @@ class JunctionRaiseTest(unittest.TestCase):
             grading.JUNCTION_RAISE_ON = old
 
     def test_the_junction_rises_and_the_deck_clears_the_freeway(self):
-        before, _ = self.deck_over_lanes(False)
         after, lanes = self.deck_over_lanes(True)
         depth = roads.deck_depth(roads.geom_span([np.c_[np.linspace(-35, 35, 36), np.zeros(36)]]))
         # (the real cases' slip lanes and twin carriageway capped the stub's ramp; this plain junction already
         # clears without the raise: the raise must keep it so, and never lower it)
-        self.assertGreaterEqual(after.min(), roads.deck_road_clear(depth) - 0.3, (before, after))
-        self.assertGreaterEqual(after.min(), before.min() - 0.05)
-        self.assertLess(np.abs(lanes).max(), 0.2, "the freeway is not raised")
+        self.assertGreaterEqual(after.min(), roads.deck_road_clear(depth) - 0.3, after)
+        self.assertGreater(after.min() - depth, roads.MIN_BRIDGE_HEADROOM_M, "the law's headroom under the girders")
+        if not grading.SHAPES_ON:           # (the raise switched off, the legacy pass's own comparison)
+            before, _ = self.deck_over_lanes(False)
+            self.assertGreaterEqual(after.min(), before.min() - 0.05, (before, after))
+        self.assertLess(np.abs(lanes).max(), 0.2, "the freeway is neither raised nor dug")
 
 
 class JunctionRaiseFalseLiftTest(unittest.TestCase):
@@ -350,13 +372,14 @@ class JunctionRaiseFalseLiftTest(unittest.TestCase):
         # (the junction's roads: the cross streets 20-60 m off it, the road on past it)
         pts = [(x, y) for x in (-43.0, 43.0) for y in (-60.0, -40.0, -20.0, 20.0, 40.0, 60.0)] + \
               [(x, 0.0) for x in (-100.0, -70.0, 70.0, 100.0)]
-        before = self.graded(cut_elev, f, pts, JR_TRUSTED=False, LIFT_UNDER_BESIDE=False)
         after = self.graded(cut_elev, f, pts)
-        self.assertGreater(before.max(), 2.0, "the case raised its junction before the fix")
-        self.assertLess(after.max(), 0.5, (before.round(1), after.round(1)))
-        # (either alone: the junction raise asking the road under's own ground, or the abutment's lift reading it)
-        for knobs in ({"JR_TRUSTED": False}, {"LIFT_UNDER_BESIDE": False}):
-            self.assertLess(self.graded(cut_elev, f, pts, **knobs).max(), 0.5, knobs)
+        if not grading.SHAPES_ON:       # (the legacy fixes' own proof: the two switched off, the case as it was)
+            before = self.graded(cut_elev, f, pts, JR_TRUSTED=False, LIFT_UNDER_BESIDE=False)
+            self.assertGreater(before.max(), 2.0, "the case raised its junction before the fix")
+            # (either alone: the junction raise asking the road under's own ground, or the abutment's lift reading it)
+            for knobs in ({"JR_TRUSTED": False}, {"LIFT_UNDER_BESIDE": False}):
+                self.assertLess(self.graded(cut_elev, f, pts, **knobs).max(), 0.5, knobs)
+        self.assertLess(after.max(), 0.5, after.round(1))
 
     def test_a_freeways_own_deck_is_no_raised_junctions(self):
         # (a motorway on the ground over a street on its own deck, 20 m on to the gore where a link leaves: its
