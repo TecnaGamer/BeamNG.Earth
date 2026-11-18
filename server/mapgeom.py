@@ -319,6 +319,53 @@ def drop_huge(f, max_m2):
     return replace(f, lonlat=lonlat, en=en)
 
 
+def _ranges(a, b):
+    """The indices of the ranges [a[k], b[k]) one after another (int64)."""
+    ln = np.asarray(b, np.int64) - np.asarray(a, np.int64)
+    total = int(ln.sum())
+    if total == 0:
+        return np.zeros(0, np.int64)
+    first = np.concatenate([[0], np.cumsum(ln)[:-1]])
+    return np.repeat(np.asarray(a, np.int64) - first, ln) + np.arange(total, dtype=np.int64)
+
+
+def take(f, keep):
+    """The features of f whose keep (bool, one per feature) is set, in their order: geometry, en, own, clipped, attrs
+    and rules (renumbered) with them. f itself when every one is kept. Pure."""
+    keep = np.asarray(keep, bool)
+    if len(keep) != len(f):
+        raise ValueError("take: keep needs a value per feature")
+    if keep.all():
+        return f
+    rows = np.flatnonzero(keep)
+    part_off = np.asarray(f.part_off, np.int64)
+    ring_off = np.asarray(f.ring_off, np.int64)
+    coord_off = np.asarray(f.coord_off, np.int64)
+    p0, p1 = part_off[rows], part_off[rows + 1]
+    parts = _ranges(p0, p1)
+    r0, r1 = ring_off[parts], ring_off[parts + 1]
+    rings = _ranges(r0, r1)
+    c0, c1 = coord_off[rings], coord_off[rings + 1]
+    coords = _ranges(c0, c1)
+    new_part_off = np.r_[0, np.cumsum(p1 - p0)].astype(np.int64)
+    new_ring_off = np.r_[0, np.cumsum(r1 - r0)].astype(np.int64)
+    new_coord_off = np.r_[0, np.cumsum(c1 - c0)].astype(np.int64)
+    out = Features(f.layer, f.ids[rows], np.asarray(f.kind)[rows], new_part_off, new_ring_off, new_coord_off,
+                   np.asarray(f.lonlat, np.float64).reshape(-1, 2)[coords],
+                   None if f.en is None else np.asarray(f.en)[coords],
+                   None if f.own is None else np.asarray(f.own)[rows],
+                   None if f.clipped is None else np.asarray(f.clipped)[rows])
+    out.attrs = {k: np.asarray(v)[rows] for k, v in f.attrs.items()}
+    new_index = np.full(len(f), -1, np.int64)
+    new_index[rows] = np.arange(len(rows))
+    for k, r in f.rules.items():
+        fi = new_index[np.asarray(r.feature, np.int64)] if len(r.feature) else np.zeros(0, np.int64)
+        m = fi >= 0
+        out.rules[k] = RuleTable(fi[m].astype(np.int32), np.asarray(r.value)[m], np.asarray(r.start)[m],
+                                 np.asarray(r.end)[m])
+    return out
+
+
 def empty(layer):
     return Features(layer, np.zeros(0, "<U1"), np.zeros(0, np.uint8), np.zeros(1, np.int64),
                     np.zeros(1, np.int64), np.zeros(1, np.int64), np.zeros((0, 2), np.float64))

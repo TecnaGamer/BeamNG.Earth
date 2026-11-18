@@ -24,6 +24,7 @@ import dmath
 import dnp
 import landmarks
 import mapgeom
+import osmml
 import nycmassing
 import osmcolours
 import osmyears
@@ -5116,6 +5117,37 @@ def _small_rows(f, frame, a, min_size):
     return ok & (h < SMALL_MARGIN * min_size[0]) & (area < SMALL_MARGIN * min_size[1])
 
 
+def ml_box_centres(f, frame):
+    """(cx, cy) in frame per feature of buildings layer f: a machine-learned outline's lon/lat box centre (NaN for any
+    other source), or None without one. The tile that draws an ML outline is its box centre's: the centre its map cell
+    owns it by (Features.own), the one cell that judges it (osmml: its copies elsewhere are left out), so the tile is
+    one that reads that cell; an asymmetric outline's ring mean can lie past a cell edge from its box centre. Kept per
+    frame."""
+    key = (frame.lat0, frame.lon0, frame.h0)
+    memo = f.__dict__.setdefault("_ml_centres", {})
+    if key in memo:
+        return memo[key]
+    src = f.__dict__.get("_osmml_src")
+    if src is None:
+        src = f.__dict__["_osmml_src"] = osmml.sources(f)
+    ml = np.flatnonzero(src == 2)
+    got = None
+    if len(ml):
+        if f.attrs.get("cx") is not None and f.attrs.get("cy") is not None:     # (the centre mapdata owned it by)
+            lon, lat = np.asarray(f.attrs["cx"], np.float64)[ml], np.asarray(f.attrs["cy"], np.float64)[ml]
+        else:
+            b = f.lonlat_boxes()[ml]
+            lon, lat = (b[:, 0] + b[:, 2]) / 2, (b[:, 1] + b[:, 3]) / 2
+        e, n, _ = frame.geodetic_to_enu(lat, lon, 0.0)
+        cx, cy = np.full(len(f), np.nan), np.full(len(f), np.nan)
+        cx[ml], cy[ml] = e, n
+        got = (cx, cy)
+    if len(memo) >= 2:
+        memo.pop(next(iter(memo)))
+    memo[key] = got
+    return got
+
+
 def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=(), west_town=False, roads_xy=None,
                    tunnels_xy=None, garages_xy=None, supports=None, bridges_xy=None, water_xy=None, decks=None,
                    ml_roads_xy=None, ways_xy=None, skip=frozenset(), min_size=None, own=None, house_land_layers=(),
@@ -5161,8 +5193,12 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
         a = f.attrs
         ids = getattr(f, "ids", None)
         rows = range(len(f.kind))
+        ml_c = None
         if isinstance(f, mapgeom.Features):     # only the buildings whose centre may be in the tile (the exact test below)
             cx_, cy_ = f.outer_centres(frame)
+            ml_c = ml_box_centres(f, frame)
+            if ml_c is not None:                # (a machine-learned outline's centre is its box's: ml_box_centres)
+                cx_, cy_ = np.where(np.isnan(ml_c[0]), cx_, ml_c[0]), np.where(np.isnan(ml_c[1]), cy_, ml_c[1])
             m = CENTRE_PREFILTER_M
             near_ = (cx_ >= x0 - m) & (cx_ < x1 + m) & (cy_ >= y0 - m) & (cy_ < y1 + m)
             if min_size is None:                # ... and the long ones reaching into it (its pieces: ground_pieces)
@@ -5200,6 +5236,8 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
             e, n = mapgeom.enu_xy(f, frame, outer)
             k = len(e) - 1             # the same reduction as np.mean, without its wrapper (36k calls a tile set)
             cx, cy = float(e[:-1].sum() / k), float(n[:-1].sum() / k)
+            if ml_c is not None and not np.isnan(ml_c[0][i]):
+                cx, cy = float(ml_c[0][i]), float(ml_c[1][i])
             edge = not (x0 <= cx < x1 and y0 <= cy < y1) if own is None else not own.owns(cx, cy)
             if edge and (min_size is not None or float(dnp.hypot(np.ptp(e), np.ptp(n))) < SPLIT_MIN_L
                          or (a.get("src_record") is not None and landmarks.of(a["src_record"][i]) is not None)

@@ -28,6 +28,7 @@ import dnp
 
 import geodesy
 import mapcells
+import revisit
 import staging
 
 log = logging.getLogger("earthd.roadwidth")
@@ -56,13 +57,20 @@ WALL_CELLS = 48          # cells of building walls kept per process (budget.py: 
 # A cell's walls also on disk (store_dir), float32 in the cell's frame (within a few km of its centre: sub-mm): every
 # server process built them from the buildings of the 9 cells around, ~0.6 s a cell on a Steam Deck, and the block
 # process, the road processes and the server each did it again (7.4 s of a 15 s Baltimore block, 2026-10-20)
-WALLS_VERSION = 2         # (2: a cell's own buildings only, 2026-10-27)
+WALLS_VERSION = 3         # (2: a cell's own buildings only, 2026-10-27; 3: without the machine-learned outlines OSM's
+                          # buildings make stale, osmml.py, 2026-11-18)
 
 PREFETCH_THREADS = 8    # cells' walls built at once (prefetch)
 
 
 class Walls:
     """Building wall segments (metres, a local frame) with a bucket index for ray casts."""
+
+    # made from a parquet cell standing in for the tiles' (mapdata's _bnge_fallback) or a cell whose buildings could
+    # not be read, or with such a cell's: what is
+    # measured on them is neither stored, nor kept in memory (walls, sets, widths, clearances), nor kept by the build
+    # (revisit.fault), so once the tiles are back the tiles' buildings are measured
+    stand_in = False
 
     def __init__(self, segs, index=None):
         """index: (buckets (3, B) int64 rows key, first, count, seg_of (P,) int64) as index_arrays() gives (the
@@ -308,7 +316,23 @@ def store_dir(cache_dir, md):
     """The walls' folder for map data md (its release) under cache_dir, or None."""
     if not cache_dir or md is None:
         return None
-    return os.path.join(cache_dir, "roadwidth", f"v{WALLS_VERSION}", str(getattr(md, "release", "x")))
+    return os.path.join(cache_dir, "roadwidth", walls_folder(), _source(md))
+
+
+def walls_folder():
+    """The walls' version folder: v<WALLS_VERSION>, -allml with every machine-learned outline (BNE_OSM_OVER_ML=0)."""
+    import osmml
+    return f"v{WALLS_VERSION}" if osmml.ON else f"v{WALLS_VERSION}-allml"
+
+
+def _source(md):
+    """The map data's release folder name for the walls: its release, and the tiles' source key when the buildings
+    come from Overture's tiles (the parquet cells' outlines are not the same: walls of one never read for the other)."""
+    rel = str(getattr(md, "release", "x"))
+    if getattr(md, "pmtiles", None) is not None:
+        import pmtiles
+        rel += "-" + pmtiles.source_key()
+    return rel
 
 
 def _memo_key(fid, ll):
@@ -371,13 +395,16 @@ class RoadWidths:
         path = (os.path.join(self.store_dir, str(key.z), str(key.x), f"{key.y}.npy")
                 if self.store_dir and hasattr(key, "z") else None)
         segs = _read_segs(path) if path else None
+        complete, stand_in = True, False
         if segs is None:
-            parts, complete = [], True
+            parts = []
             for k2 in (key,):
                 try:
                     feats = self.cell_fn(k2)
-                except Exception:
-                    feats, complete = None, False       # (not kept: built again once the cell is at hand)
+                except Exception:                   # (not kept, as a stand-in's: built again once the cell is at hand)
+                    feats, complete, stand_in = None, False, True
+                if feats is not None and getattr(feats, "__dict__", {}).get("_bnge_fallback"):
+                    complete, stand_in = False, True    # (the parquet cell for the tiles': mapdata._decoded_layer)
                 if feats is not None and len(feats):
                     parts.append(polygon_walls(feats, frame))
             # float32 as the file keeps them, so a process that built them and one that read them agree
@@ -388,7 +415,7 @@ class RoadWidths:
                 if segs is None:
                     segs = (np.concatenate(parts) if parts else np.zeros((0, 4))).astype(np.float32)
         walls = None
-        if path:            # the bucket index beside them (memory-mapped too), made once
+        if path and not stand_in:   # the bucket index beside them (memory-mapped too), made once
             index = _read_index(path, len(segs))
             if index is not None:
                 walls = Walls(segs, index)
@@ -401,6 +428,9 @@ class RoadWidths:
                         walls = Walls(segs, index)
         if walls is None:
             walls = Walls(segs)
+        if stand_in:
+            walls.stand_in = True
+            return frame, walls                 # (a stand-in cell's: not kept, built again from the tiles' next time)
         with self.lock:
             got = self.walls.setdefault(str(key), (frame, walls))
             self.walls.move_to_end(str(key))
@@ -452,9 +482,10 @@ class RoadWidths:
             if got is not None:
                 self.combos.move_to_end(ck)
                 return got
-        frame, segs = None, []
+        frame, segs, stand_in = None, [], False
         for k in keys:
             f, w = self._walls(k)
+            stand_in |= w.stand_in
             sg = np.asarray(w.segs, np.float64)
             if frame is None:
                 frame = f
@@ -472,12 +503,16 @@ class RoadWidths:
                     fast.require(198, "reframe_segs")
                     sg = fast._ef.reframe_segs(np.ascontiguousarray(sg, np.float64), f.origin, f.rot, frame.origin,
                                                frame.rot)
-                    with self.lock:
-                        self.reframed[rk] = (w, sg)
-                        while len(self.reframed) > REFRAMED:
-                            self.reframed.popitem(last=False)
+                    if not w.stand_in:
+                        with self.lock:
+                            self.reframed[rk] = (w, sg)
+                            while len(self.reframed) > REFRAMED:
+                                self.reframed.popitem(last=False)
             segs.append(sg)
         got = (frame, Walls(np.concatenate(segs) if segs else np.zeros((0, 4))))
+        if stand_in:
+            got[1].stand_in = True
+            return got
         with self.lock:
             got = self.combos.setdefault(ck, got)
             while len(self.combos) > COMBOS:
@@ -517,8 +552,8 @@ class RoadWidths:
         for i, k in enumerate(keys):
             frame, walls = self._walls(k)
             rs = walls.__dict__.get("_rs")
-            if walls.segs.dtype != np.float32 or walls.segs.ndim != 2:
-                usable[i] = False       # (walls of another kind: get / cap's own way)
+            if walls.segs.dtype != np.float32 or walls.segs.ndim != 2 or walls.stand_in:
+                usable[i] = False       # (walls of another kind, or a stand-in cell's: get / cap's own way)
                 packed.append(None)
                 continue
             if rs is None:
@@ -570,6 +605,9 @@ class RoadWidths:
             e, n, _ = frame.geodetic_to_enu(ll[:, 1], ll[:, 0], 0.0)
             row = measure_row(np.c_[e, n], walls)
             res = split(row) if row is not None else None
+        if walls.stand_in:
+            revisit.fault(here=True)
+            return res
         with self.lock:
             if len(self.memo) >= MEMO_MAX:      # (unbounded, it grew for a whole session in every road worker)
                 self.memo.clear()
@@ -589,6 +627,9 @@ class RoadWidths:
         if len(walls.segs):
             e, n, _ = frame.geodetic_to_enu(ll[:, 1], ll[:, 0], 0.0)
             res = clearance_row(np.c_[e, n], walls)
+        if walls.stand_in:
+            revisit.fault(here=True)
+            return res
         with self.lock:
             if len(self.caps) >= MEMO_MAX:
                 self.caps.clear()
@@ -601,5 +642,7 @@ class RoadWidths:
         if dnp.norm(np.ptp(lonlat, axis=0) * scale) > 1300.:
             return None
         frame, walls = self._near_walls(lonlat)
+        if walls.stand_in:
+            revisit.fault(here=True)
         xy = frame.geodetic_to_enu(lonlat[:, 1], lonlat[:, 0], 0.)[:2]
         return verge_frontage(np.column_stack(xy), walls, width)

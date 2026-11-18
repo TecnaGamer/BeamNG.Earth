@@ -68,6 +68,7 @@ import mapgeom
 import maprasters
 import bnwt
 import netfetch
+import osmml
 import overture
 import pmtiles
 import rangeread
@@ -213,6 +214,8 @@ def digest_arrays(arrays):
 # the walls, ~90-160 MB, 2026-10-20); a mirrored layer is decompressed once per machine and its pages shared, dropped
 # instead of swapped under memory pressure. At most MIRROR_MB on disk (the least recently read go first); the vector
 # layers' `en` (the cell frame's metres, Features.localize) is kept with them.
+STAND_IN_S = 30.0           # s a parquet cell standing in for the tiles' is served from memory (cell()), then the
+                            # tiles asked again (a memory hit does not extend it)
 BUILD_WAIT_S = 180.0        # a cell layer another process is building is waited for this long (xproc.once)
 MIRROR_MB = 2048
 MIRROR_PRUNE_S = 120.0  # the mirror pruned at most this often per process (each prune walks it all)
@@ -357,6 +360,16 @@ def _savez_deflated(path, arrays, level):
         for key, val in arrays.items():
             with zf.open(key + ".npy", "w", force_zip64=True) as fh:
                 np.lib.format.write_array(fh, np.asanyarray(val), allow_pickle=True)
+
+class StandIn(dict):
+    """A layer's arrays from the parquet cell standing in for the tiles' (MapData.layer_arrays): a dict, marked."""
+
+
+def _stand_in_stale(f):
+    """Is decoded layer f a stand-in (_bnge_fallback: when it was decoded) older than STAND_IN_S?"""
+    t = getattr(f, "__dict__", {}).get("_bnge_fallback")
+    return t is not None and time.monotonic() - t > STAND_IN_S
+
 
 class MapData:
     """See the module docstring. fetcher: the server's netfetch.Fetcher (None: one of its own);
@@ -659,6 +672,8 @@ class MapData:
             v["street_edges"] = europewalks.VERSION
         if levelways.ON:
             v["levelways"] = levelways.VERSION
+        if not osmml.ON:                        # (every machine-learned outline kept: keyed only while off)
+            v["osm_over_ml"] = False
         v["dem"] = dem_identity()               # (the elevation the plans, facts and tiles are made on: pinned per release)
         return v
 
@@ -1051,7 +1066,9 @@ class MapData:
         return feats
 
     def layer_arrays(self, key, layer, kind="demand"):
-        """(arrays, hit) of one cell's layer: from the cache, or built and cached."""
+        """(arrays, hit) of one cell's layer: from the cache, or built and cached. A StandIn (a dict) when the tiles
+        failed and these are the parquet cell's, stored or built now, with or without a provenance record
+        (_decoded_layer marks the layer)."""
         if layer not in ALL_LAYERS:
             raise ValueError(f"unknown map layer {layer!r}; choose from {', '.join(ALL_LAYERS)}")
         key = _key(key)
@@ -1075,7 +1092,7 @@ class MapData:
                     ppath = self.path(key, layer, parquet=True)
                     if not os.path.exists(ppath):
                         self._store(ppath, arrays)
-                    return self._mirrored(key, layer, ppath, arrays), False
+                    return StandIn(self._mirrored(key, layer, ppath, arrays)), False
                 self._store(path, arrays)
             finally:
                 if mine:
@@ -1209,12 +1226,14 @@ class MapData:
             t0 = time.perf_counter()
             arrays, hit = self.layer_arrays(key, layer, kind)
             t1 = time.perf_counter()
+            fallback = isinstance(arrays, StandIn)
             arrays = dict(arrays)
             prov = json.loads(str(arrays.pop("provenance")))
             en = arrays.pop("en.local", None)
             if layer in VECTOR_LAYERS:
                 # (the roads as they were left here before, by this or another process: roadlayercache.py)
-                dec, vers = self._dec_key(key, layer, arrays) if layer == "roads" else (None, {})
+                # (not for a stand-in: its parquet arrays are never stamped with, or stored under, the tiles' file)
+                dec, vers = self._dec_key(key, layer, arrays) if layer == "roads" and not fallback else (None, {})
                 f = self._dec_load(key, layer, dec) if dec is not None else None
                 made = f is None
                 if made:
@@ -1238,6 +1257,13 @@ class MapData:
                         self._dec_store(key, layer, dec, f, ctx, vers)
                 if layer == "buildings":
                     f = mapgeom.drop_huge(f, BUILDING_MAX_M2)
+                    # (OpenStreetMap over machine-learned outlines where OSM maps the cell's buildings: osmml.py)
+                    f = osmml.apply(f, _key(key))
+                if fallback:
+                    # (the tiles failed and the parquet cell stood in, a stored one or one built now, empty or not:
+                    # what is kept under the tiles' keys is not made from it, roadwidth's walls, widths and
+                    # clearances; and a build that takes the layer is not kept: _cell_collect)
+                    f.__dict__["_bnge_fallback"] = time.monotonic()     # (when: STAND_IN_S)
                 if layer == "roads":
                     f.__dict__["_bnge_gradesep"] = gradesep.hook(self, key)
                     f.__dict__["_bnge_neighbours"] = gradesep.neighbours_hook(self, key)
@@ -1271,11 +1297,12 @@ class MapData:
         key = _key(key)
         with self._mem_lock:
             got = self._mem.get((str(key), layer))
-        if got is not None:
-            return got[0]
-        lat_c, lon_c = key.center()
-        entry, _hit, _dt = self._decoded_layer(key, layer, kind, geodesy.EnuFrame(lat_c, lon_c, 0.0), remember=False)
-        return entry[0]
+        if got is None or _stand_in_stale(got[0]):
+            lat_c, lon_c = key.center()
+            got, _hit, _dt = self._decoded_layer(key, layer, kind, geodesy.EnuFrame(lat_c, lon_c, 0.0), remember=False)
+        if getattr(got[0], "__dict__", {}).get("_bnge_fallback"):
+            revisit.fault(here=True)            # (the parquet cell standing in for the tiles': as _cell_collect)
+        return got[0]
 
     def cells(self, keys, layers=LAYERS, kind="demand"):
         """[cell(key, layers, kind) for key in keys], their layers loaded side by side: the loops that asked for a
@@ -1305,6 +1332,9 @@ class MapData:
             for layer in layers:
                 k = (str(key), layer)
                 got = self._mem.get(k)
+                if got is not None and _stand_in_stale(got[0]):
+                    self._mem_bytes -= self._mem.pop(k)[2]      # (the tiles asked again)
+                    got = None
                 if got is not None:
                     self._mem.move_to_end(k)
                     mem[layer] = got
@@ -1359,6 +1389,10 @@ class MapData:
             else:
                 entry, hit, dt = results[layer]
                 cd.layers[layer], prov, _ = entry
+            if getattr(cd.layers[layer], "__dict__", {}).get("_bnge_fallback"):
+                # (the parquet cell standing in for the tiles': _build's fault was its loader's, in the pool; a build
+                # that takes it later, from memory too, is not kept either)
+                revisit.fault(here=True)
             if layer == "buildings":
                 self._bdtopo(key, layer, cd.layers[layer])
             elif layer == "roads" and getattr(cd.layers[layer], "__dict__", {}).get("_lidar_rule"):
