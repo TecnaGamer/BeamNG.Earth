@@ -662,57 +662,81 @@ def _underpass_distance(xy, line):
     return dist, along
 
 
+class _RailIndex:
+    """What _underpass_masks reads of rails, made once for every tunnel of a call: each part's box (x0, y0, x1, y1), its
+    tangents (np.gradient of the whole part, the same for every tunnel: asked at its points near each one) and its
+    zeros (one read-only mask per part for a tunnel with nothing near it)."""
+
+    def __init__(self, rails):
+        self.boxes = np.zeros((len(rails), 4))
+        for n, (*_, xy) in enumerate(rails):
+            self.boxes[n, :2] = xy.min(0)
+            self.boxes[n, 2:] = xy.max(0)
+        self.zeros = [np.zeros(len(xy), bool) for *_, xy in rails]
+        for z in self.zeros:
+            z.flags.writeable = False
+        self._tangent = [None] * len(rails)
+
+    def tangent(self, n, xy):
+        if self._tangent[n] is None:
+            self._tangent[n] = np.gradient(xy, axis=0)
+        return self._tangent[n]
+
+
 def _rail_boxes(rails):
-    """(n, 4) the boxes (x0, y0, x1, y1) of the rails' parts, for _underpass_masks (made once for every tunnel of a
-    call: each tunnel took every part's min and max again, ~6 of a cold Le Mans block + 4 tiles' ~50 CPU-s)."""
-    out = np.zeros((len(rails), 4))
-    for n, (*_, xy) in enumerate(rails):
-        out[n, :2] = xy.min(0)
-        out[n, 2:] = xy.max(0)
-    return out
+    """_RailIndex of the rails' parts, for _underpass_masks (made once for every tunnel of a call: each tunnel took every
+    part's min and max again, ~6 of a cold Le Mans block + 4 tiles' ~50 CPU-s)."""
+    return _RailIndex(rails)
 
 
-def _underpass_masks(rails, line, half, margin, boxes=None):
-    """Points near a tunnel, connected locally to a track that actually crosses it.
-
-    A crossing on one track must not qualify a neighbouring track. Connect only
-    the runs inside the tunnel's padded footprint: this preserves source-feature
-    splits without following a turnout or a returning track far outside it.
-    boxes: _rail_boxes(rails), made once by a caller with several tunnels.
-    """
-    masks = [np.zeros(len(xy), bool) for *_, xy in rails]
-    candidates, runs, owners = [], [], []
+def _underpass_cover(rails, line, half, margin, index=None):
+    """(masks, along): _underpass_masks's masks and, for each part n with a point covered, {n: its points' fractions along
+    the tunnel (_underpass_distance's: k floats, 0 off the points measured)}. Every part's points near the tunnel are
+    measured in one pass (points x the tunnel's segments in one array) and the tangents of a part are made once for all
+    the tunnels, and the fractions kept: profile measured the covered points again for every part and tunnel (67460
+    calls in a Zurich + Gotthard replay: 79 of 308 profiled CPU-s, a dense yard's 500 parts and 128 rises in one
+    window). index: _rail_boxes(rails), made once by a caller with several tunnels."""
+    index = _rail_boxes(rails) if index is None else index
+    masks = list(index.zeros)                   # (nothing near: no run; the zeros mask, never written to)
     pad = half + margin
     near = (*(line.min(0) - pad), *(line.max(0) + pad))
     direction = line[-1] - line[0]
-    hit = set(_box_hits(_rail_boxes(rails) if boxes is None else boxes, near))
-    for n, (*_, xy) in enumerate(rails):
-        if n not in hit:
-            candidates.append(masks[n])         # (nothing near: no run; the zeros mask, never written to)
-            continue
-        # (only the points inside the tunnel's padded box: one outside it is more than pad from every point of the
-        # line, so never covered. A part is a whole feature's line, km long, and a central London cell's rail beds
-        # measured every one of its points against every tunnel in every node window: 65-83 CPU-s a cell, its plans
-        # past the other processes' waits, the cell planned by several at once, a road tile past 300 s and its road
-        # processes restarted, 2026-11-13. The same values at those points, elementwise.)
-        covered = np.zeros(len(xy), bool)
+    sel = []
+    # (only the points inside the tunnel's padded box: one outside it is more than pad from every point of the
+    # line, so never covered. A part is a whole feature's line, km long, and a central London cell's rail beds
+    # measured every one of its points against every tunnel in every node window: 65-83 CPU-s a cell, its plans
+    # past the other processes' waits, the cell planned by several at once, a road tile past 300 s and its road
+    # processes restarted, 2026-11-13. The same values at those points, elementwise.)
+    for n in _box_hits(index.boxes, near):
+        xy = rails[n][3]
         idx = np.flatnonzero((xy[:, 0] >= near[0]) & (xy[:, 0] <= near[2])
                              & (xy[:, 1] >= near[1]) & (xy[:, 1] <= near[3]))
         if len(idx):
-            tangent = np.gradient(xy, axis=0)[idx]
-            cross = np.abs(tangent[:, 0] * direction[1] - tangent[:, 1] * direction[0])
-            cross /= np.maximum(dnp.norm(tangent, axis=1) * dnp.norm(direction), 1e-9)
-            distance, _ = _underpass_distance(xy[idx], line)
-            covered[idx] = (distance <= pad) & (cross > UNDERPASS_MIN_SIN)
-        candidates.append(covered)
-        spans = covered[:-1] | covered[1:]
-        cuts = np.flatnonzero(np.diff(np.concatenate(([False], spans, [False]))))
-        for a, b in zip(cuts[::2], cuts[1::2]):
-            runs.append(xy[a:b + 1])
-            owners.append((n, a, b))
+            sel.append((n, idx))
+    candidates, runs, owners, fractions = {}, [], [], {}
+    if sel:
+        tangent = np.concatenate([index.tangent(n, rails[n][3])[idx] for n, idx in sel])
+        cross = np.abs(tangent[:, 0] * direction[1] - tangent[:, 1] * direction[0])
+        cross /= np.maximum(dnp.norm(tangent, axis=1) * dnp.norm(direction), 1e-9)
+        distance, along = _underpass_distance(np.concatenate([rails[n][3][idx] for n, idx in sel]), line)
+        ok = (distance <= pad) & (cross > UNDERPASS_MIN_SIN)
+        k = 0
+        for n, idx in sel:
+            xy = rails[n][3]
+            covered = np.zeros(len(xy), bool)
+            covered[idx] = ok[k:k + len(idx)]
+            frac = np.zeros(len(xy))
+            frac[idx] = along[k:k + len(idx)]
+            k += len(idx)
+            candidates[n], fractions[n] = covered, frac
+            spans = covered[:-1] | covered[1:]
+            cuts = np.flatnonzero(np.diff(np.concatenate(([False], spans, [False]))))
+            for a, b in zip(cuts[::2], cuts[1::2]):
+                runs.append(xy[a:b + 1])
+                owners.append((n, a, b))
     crossings = roads._crossings(runs, [line])
     if not crossings:
-        return masks
+        return masks, {}
     _nodes, edges, adj = roads._chain_graph(runs)
     connected = {node for n, _s, _xy in crossings for node in edges[n][:2]}
     pending = list(connected)
@@ -721,10 +745,26 @@ def _underpass_masks(rails, line, half, margin, boxes=None):
             if node not in connected:
                 connected.add(node)
                 pending.append(node)
+    written = []
     for (n, a, b), (start, _end, _s) in zip(owners, edges):
         if start in connected:
+            if masks[n] is index.zeros[n]:
+                masks[n] = np.zeros(len(rails[n][3]), bool)
+                written.append(n)
             masks[n][a:b + 1] = candidates[n][a:b + 1]
-    return masks
+    return masks, {n: fractions[n] for n in written if masks[n].any()}
+
+
+def _underpass_masks(rails, line, half, margin, boxes=None):
+    """Points near a tunnel, connected locally to a track that actually crosses it.
+
+    A crossing on one track must not qualify a neighbouring track. Connect only
+    the runs inside the tunnel's padded footprint: this preserves source-feature
+    splits without following a turnout or a returning track far outside it.
+    boxes: _rail_boxes(rails), made once by a caller with several tunnels. The masks of a part nothing is near are
+    shared and read only (_underpass_cover).
+    """
+    return _underpass_cover(rails, line, half, margin, boxes)[0]
 
 
 def _span_underpasses(rails, tunnels):
@@ -1409,9 +1449,16 @@ def profile(rails, ground, underpasses=()):
     # Read the lower road at its mouths, not on the filled railway bed above it.
     boxes = _rail_boxes(rails) if underpasses else None
     # (the bed over a road's tunnel by the tunnel's own height; over a plain road by the road's headroom: _Rise.clear)
-    crossings = [(u[0], u[1], _underpass_masks(rails, u[0], u[1], DECK_HALF_M + STEP_M, boxes),
-                  getattr(u, "clear", UNDERPASS_CLEAR_M + DECK_D - BALLAST_H)) for u in underpasses]
-    crossings = [c for c in crossings if any(m.any() for m in c[2])]
+    crossings = []                              # (line, half, {part: (mask, fractions along line)}, clear)
+    for u in underpasses:
+        masks, along = _underpass_cover(rails, u[0], u[1], DECK_HALF_M + STEP_M, boxes)
+        if along:
+            crossings.append((u[0], u[1], {n: (masks[n], t) for n, t in along.items()},
+                              getattr(u, "clear", UNDERPASS_CLEAR_M + DECK_D - BALLAST_H)))
+    over_part = {}                              # part -> the crossings over it, in order (each one raises the bed again)
+    for c, (_line, _half, covers, _clear) in enumerate(crossings):
+        for n in covers:
+            over_part.setdefault(n, []).append(c)
     mouths = np.concatenate([c[0][[0, -1]] for c in crossings]) if crossings else np.empty((0, 2))
     mouth_z = np.asarray(ground(mouths), np.float64).reshape(-1, 2) if len(mouths) else []
     ends = {}                                   # node -> the ground parts' bed there (a bridge's ends)
@@ -1436,14 +1483,14 @@ def profile(rails, ground, underpasses=()):
         zb_ = inner[b] if b in inner else float(np.mean(ends[b])) if b in ends else float(g[-1])
         za = max(za, level[a][0]) if a in level and a not in inner else za      # (the track's level beyond its ends)
         zb_ = max(zb_, level[b][0]) if b in level and b not in inner else zb_
-        zb[n] = deck_heights(_arc(xy), g, za, zb_)
-        for (line, _half, masks, clear), (z0, z1) in zip(crossings, mouth_z):
-            over = masks[n]
-            if over.any():
-                _distance, t = _underpass_distance(xy[over], line)
-                req = zb[n].copy()
-                req[over] = np.maximum(req[over], z0 + (z1 - z0) * t + clear)
-                zb[n] = _envelope(_arc(xy), req)
+        sx = _arc(xy)
+        zb[n] = deck_heights(sx, g, za, zb_)
+        for c in over_part.get(n, ()):
+            over, t = crossings[c][2][n]
+            z0, z1 = mouth_z[c]
+            req = zb[n].copy()
+            req[over] = np.maximum(req[over], z0 + (z1 - z0) * t[over] + crossings[c][3])
+            zb[n] = _envelope(sx, req)
         for node, h in ((a, zb[n][0]), (b, zb[n][-1])):
             seeds[node] = max(seeds.get(node, -np.inf), float(h))
     if seeds and STEPLESS_ON:
