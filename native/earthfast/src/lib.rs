@@ -14,6 +14,7 @@ mod roofs;
 mod onewayjoin;
 mod osmrows;
 mod textcol;
+mod osmjoin;
 mod domes;
 mod roofphoto;
 mod gravity;
@@ -6671,6 +6672,9 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 453: the full port's OpenStreetMap tag rows (osmrows: osmtags._rows, tags_and_ways' tag dicts)
     m.add_function(wrap_pyfunction!(textcol::text_column, m)?)?;
     // 454: the full port's mapgeom.text_column (textcol: the decode's text attributes as one "<U" array)
+    m.add_function(wrap_pyfunction!(osmjoin::osm_join, m)?)?;
+    // 455: the full port's osmtags.join columns (osmjoin: way ids, the same-named ways, the float and text columns,
+    // the lanes of the same-named way going the same way; roadlanes.join stays Python)
     m.add("VERSION", 470)?;
     Ok(())
 }
