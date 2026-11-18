@@ -1540,9 +1540,11 @@ def crossing_records(frame, tx, ty, cells, ground, sign_style=None, far_ground=N
     crossing_panels), so the two cannot disagree. The tile's rail parts, beds and crossers as tile_mesh makes them
     (its arguments' meaning); per ground part (_part_crossings) a road cuts it only where its centre line crosses that
     part or the part runs down it (street_along), with the at-grade test that cuts the track (_blocked's, at the bed
-    before its flush, the road every STEP_M on its graded surface near the tile, XING_GRADED_M, the natural ground past
-    it: the same at a point in every tile), each run at most XING_RUN_MAX_M past its anchor, and each crossing's two
-    edges found with that same test. A dict: tunnels, ground (mixed), worn,
+    the roads every STEP_M on their graded surface near the tile (XING_GRADED_M), the natural ground past it, against
+    the track's bed on the DEM (railprofile's lattice, else profiled on the natural ground): the same at a point in
+    every tile), each run at most XING_RUN_MAX_M past its anchor,
+    each street-running stretch qualified on its own (STREET_ALONG_M), and each crossing's two edges found with that
+    same test. A dict: tunnels, ground (mixed), worn,
     gauges, cut (end_key of the cut ends), rails, prof, all_cr, cr, crossers, runs (per part: None or {blk, runs,
     start_t, end_t}), half_g (per part: the rails' half gauge), sign_style."""
     cells = list(cells)
@@ -1568,29 +1570,40 @@ def crossing_records(frame, tx, ty, cells, ground, sign_style=None, far_ground=N
         for line, hw in cr:
             crossers.append((line, hw, zc[k:k + len(line)]))
             k += len(line)
-    # (the at-grade test of the records on heights no tile's window changes: the roads every STEP_M (a segment's start
-    # within STEP_M of the nearest point), their graded surface within XING_GRADED_M of the tile, where a run reaching
-    # it can be, the same at a point whichever tile asks (point_ground); past it the natural ground. The graded ground
-    # of each tile's own window (_mixed) at a sparse road's segment start 60 m off told one tile "at grade" and the
-    # next "not")
+    # (the at-grade test of the records on heights no tile's window changes, both sides of it: the roads every STEP_M
+    # (a segment's start within STEP_M of the nearest point) on their graded surface within XING_GRADED_M of the tile,
+    # where a run reaching it can be, the same at a point whichever tile asks (point_ground), the natural ground past
+    # it; the roads within XING_GRADED_M of the tile, whatever tracks the tile has; the track's bed below. Each tile's
+    # own window (_mixed) told one tile "at grade" and the next "not": a sparse road's segment start 60 m off, a bed
+    # profiled on the graded ground in one tile and the natural in the next)
     nat = far_ground if far_ground is not None else graded
-    xcrossers = []
-    if crossers:
-        dense = [(roads.densify(np.asarray(line, np.float64)[:, :2], STEP_M)[:, :2], hw) for line, hw, _z in crossers]
-        allp = np.concatenate([ln for ln, _hw in dense])
-        near = ((allp[:, 0] >= box[0] - XING_GRADED_M) & (allp[:, 0] <= box[2] + XING_GRADED_M)
-                & (allp[:, 1] >= box[1] - XING_GRADED_M) & (allp[:, 1] <= box[3] + XING_GRADED_M))
-        zx = np.empty(len(allp))
+
+    def level(q):
+        q = np.asarray(q, np.float64).reshape(-1, 2)
+        near = ((q[:, 0] >= box[0] - XING_GRADED_M) & (q[:, 0] <= box[2] + XING_GRADED_M)
+                & (q[:, 1] >= box[1] - XING_GRADED_M) & (q[:, 1] <= box[3] + XING_GRADED_M))
+        z = np.empty(len(q))
         if near.any():
-            zx[near] = np.asarray(graded(allp[near]), np.float64).ravel()
+            z[near] = np.asarray(graded(q[near]), np.float64).ravel()
         if (~near).any():
-            zx[~near] = np.asarray(nat(allp[~near]), np.float64).ravel()
+            z[~near] = np.asarray(nat(q[~near]), np.float64).ravel()
+        return z
+    pool = (crossings(frame, cells, box, reach=XING_GRADED_M) + list(tunnels)) if rails else []
+    xcrossers = []
+    if pool:
+        dense = [(roads.densify(np.asarray(line, np.float64)[:, :2], STEP_M)[:, :2], hw) for line, hw in pool]
+        zx = level(np.concatenate([ln for ln, _hw in dense]))
         k = 0
         for line, hw in dense:
             xcrossers.append((line, hw, zx[k:k + len(line)]))
             k += len(line)
+    # (the track's side: its bed before any flush on ground no tile's window changes: railprofile's lattice on the
+    # grader's DEM where it has the point (prof's own), else railways.profile on the natural ground, not on the window)
+    level_beds = (prof if far_ground is None else
+                  _beds(frame, rails, nat, tunnels + coarse_underpasses(frame, cells, box, rails), load, bed_elev)
+                  if rails else [])
     runs = [_part_crossings(xy, zb, xcrossers) if kind == "ground" and c != "tram" else None
-            for (_f, c, kind, xy), (zb, _zg) in zip(rails, prof)]
+            for (_f, c, kind, xy), (zb, _zg) in zip(rails, level_beds)]
     half_g = [gauges.get(fid, gauge(c, sign_style)) / 2 + RAIL_HEAD / 2 for fid, c, _k, _xy in rails]
     return {"tunnels": tunnels, "ground": ground, "worn": worn, "gauges": gauges, "cut": cut, "rails": rails,
             "prof": prof, "all_cr": all_cr, "cr": cr, "crossers": crossers, "runs": runs, "half_g": half_g,
@@ -1598,9 +1611,12 @@ def crossing_records(frame, tx, ty, cells, ground, sign_style=None, far_ground=N
 
 
 def _part_crossings(xy, zb, crossers):
-    """crossing_records' of one ground part (xy (n, 2), bed zb (n,) before any flush): None without a crossing, else
+    """crossing_records' of one ground part (xy (n, 2), its level zb (n,)): None without a crossing, else
     {blk (n,), runs (r, 2), start_t (r,), end_t (r,)} (earthfast.rail_crossing_runs): the anchors are where each
-    crosser's centre line crosses the part (the section holding the crossing point) and where the part runs down it."""
+    crosser's centre line crosses the part (the section holding the crossing point) and each stretch of it that runs
+    down the street on its own (STREET_INSET_M inside the carriageway for STREET_ALONG_M or more: street_along's rule
+    per stretch, not summed over the part, which a distant stretch only one tile holds made a short brush by the seam
+    a cut in that tile alone)."""
     import fast
     fast.require(FIT_NATIVE, "level crossing records")
     xy = np.ascontiguousarray(np.asarray(xy, np.float64)[:, :2])
@@ -1616,14 +1632,18 @@ def _part_crossings(xy, zb, crossers):
             ar.append(c)
             alo.append(k)
             ahi.append(k + 1)
-    for c, m in enumerate(street_along([xy], lines)):
-        if m is None:
+    lo_, hi_ = xy.min(0), xy.max(0)
+    for c, (line, hw) in enumerate(lines):
+        if hw <= STREET_INSET_M:
             continue
-        idx = np.flatnonzero(m)
-        for run in np.split(idx, np.flatnonzero(np.diff(idx) > 1) + 1):
-            ar.append(c)
-            alo.append(int(run[0]))
-            ahi.append(int(run[-1]))
+        if ((line.min(0) - hw) > hi_).any() or ((line.max(0) + hw) < lo_).any():
+            continue
+        idx = np.flatnonzero(roads._on_carriageways(xy, {0: (line, hw)}, -STREET_INSET_M))
+        for run in (np.split(idx, np.flatnonzero(np.diff(idx) > 1) + 1) if len(idx) else []):
+            if len(run) * STEP_M >= STREET_ALONG_M:
+                ar.append(c)
+                alo.append(int(run[0]))
+                ahi.append(int(run[-1]))
     if not ar:
         return None
     blk, runs, ts, te = fast._ef.rail_crossing_runs(xy, np.ascontiguousarray(np.asarray(zb, np.float64)), *pack,

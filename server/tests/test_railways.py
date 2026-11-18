@@ -1545,3 +1545,54 @@ class RoadFitTest(unittest.TestCase):
         self.assertIsNone(runs_of(lambda q: on_road(q, 6.0, 10.0), flat))
         # a fill across a dip: the natural ground 3 m down, the graded road at the track's level
         self.assertIsNotNone(runs_of(flat, lambda q: on_road(q, 7.0, 10.0)))
+
+    def record_of(self, f, tx, ground, far_ground=None, fid="id000"):
+        with unittest.mock.patch.object(railways, "RAIL_ROAD_FIT", True):
+            rec = railways.crossing_records(FRAME, tx, 0, [f], ground, far_ground=far_ground)
+        (xy, r), = [(xy, r) for (i, _c, _k, xy), r in zip(rec["rails"], rec["runs"]) if i == fid]
+        return xy, r
+
+    @staticmethod
+    def runs_xy(xy, r):
+        return [] if r is None else [(round(float(xy[a, 0]), 6), round(float(xy[b, 0]), 6), float(t0), float(t1))
+                                     for (a, b), t0, t1 in zip(r["runs"].tolist(), r["start_t"].tolist(),
+                                                               r["end_t"].tolist())]
+
+    def test_a_shallow_crossing_past_the_seam_on_a_fill_is_one_crossing(self):
+        """Codex on 2285667b: the bed the records tested was profiled on each tile's window (graded within 40 m of it,
+        natural past it): a shallow crossing anchored 50 m past the seam, on a fill the grading made, had a graded bed in
+        one tile and a natural one in the next, on either side of CROSSING_DZ, its run reaching back over the seam. The
+        records test the bed on the natural ground (railprofile's lattice in the server) in every tile."""
+        ang = np.radians(5.0)
+        ax, ay = 305.0, 100.0
+        road = [(ax - 200.0 * np.cos(ang), ay - 200.0 * np.sin(ang)), (ax + 200.0 * np.cos(ang), ay + 200.0 * np.sin(ang))]
+        f = features([[(-300.0, 100.0), (900.0, 100.0)], road], ["standard_gauge", "secondary"],
+                     subtypes=["rail", "road"])
+        for fill, crossing in ((1.0, True), (2.5, False)):
+            def graded(q, fill=fill):           # (a fill round the anchor, road and ground alike)
+                q = np.asarray(q, np.float64).reshape(-1, 2)
+                return np.where(np.abs(q[:, 0] - ax) < 30.0, 10.0 + fill, 10.0)
+            got, blk = [], []
+            for tx in (0, 1):
+                xy, r = self.record_of(f, tx, graded, far_ground=flat)
+                got.append(self.runs_xy(xy, r))
+                blk.append(r is not None and bool(r["blk"][np.abs(xy[:, 0] - ax) < 28.0].any()))
+            self.assertEqual(got[0], got[1], f"fill {fill}: the same crossing in both tiles")
+            self.assertEqual(blk, [crossing, crossing], f"fill {fill}: at grade on the fill or not, in both")
+            if crossing:
+                self.assertLess(min(a for a, _b, _t0, _t1 in got[0]), 260.0, "its run over the seam")
+
+    def test_a_brush_by_the_seam_is_no_street_running_whatever_one_tile_sees_further_on(self):
+        """Codex on 2285667b: street_along qualified a road by its samples on the whole clipped part: a 6 m brush by the
+        seam became a cut in the tile that also held a 30 m street-running stretch 350 m on, not in the other. Each
+        stretch qualifies on its own."""
+        f = features([[(-300.0, 100.0), (900.0, 100.0)],
+                      [(240.0, 112.0), (252.0, 102.0), (254.0, 102.0), (266.0, 112.0), (580.0, 112.0),
+                       (592.0, 102.0), (632.0, 102.0), (644.0, 112.0)]],
+                     ["standard_gauge", "secondary"], subtypes=["rail", "road"])
+        for tx in (0, 1):
+            xy, r = self.record_of(f, tx, flat)
+            near = np.abs(xy[:, 0] - 253.0) < 20.0
+            self.assertFalse(r is not None and r["blk"][near].any(), f"tile {tx}: nothing cut by the brush")
+        xy, r = self.record_of(f, 1, flat)
+        self.assertTrue(r is not None and r["blk"][np.abs(xy[:, 0] - 615.0) < 10.0].any(), "the street running cut")
