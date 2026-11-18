@@ -1,0 +1,17 @@
+{
+  "state": "installed",
+  "originals": {
+    "server/vegetation.py": "6921961a15fa683b71cceaea1287ae059fe451ddd080ea3abe7d1bf7dc75b289",
+    "mod/beamng_earth/lua/ge/extensions/beamngEarth/trees.lua": "379a84a41c43c84017904b1b7e4e8535bede4850727fbe335b82605b6ee4dbc4",
+    "server/norway_sr16.py": "6140c646ee932b4db13976f3f2372682d0489b3c7c6bcbbe8425a4b40e39c6e9",
+    "server/norway_outline.py": "660423dae58073e715301022e5493b406a9041b6fd2dba21e106e310a3acdd7a",
+    "server/norway_outline.json": "3259541053aac2b537ef1c1f76a5dc751a3368bbdf096becb0b137a55355fe6e"
+  },
+  "patched": {
+    "server/vegetation.py": "1a5fd024271ee49b29b5b00ff20b13f5653136ba4e8b29f20ac371671e605cb0",
+    "mod/beamng_earth/lua/ge/extensions/beamngEarth/trees.lua": "eb345f3a80168039ff62d03bf7ae9910d1b6a76d94b5681cc637f3b470bb12ab",
+    "server/norway_sr16.py": "6140c646ee932b4db13976f3f2372682d0489b3c7c6bcbbe8425a4b40e39c6e9",
+    "server/norway_outline.py": "660423dae58073e715301022e5493b406a9041b6fd2dba21e106e310a3acdd7a",
+    "server/norway_outline.json": "3259541053aac2b537ef1c1f76a5dc751a3368bbdf096becb0b137a55355fe6e"
+  }
+}

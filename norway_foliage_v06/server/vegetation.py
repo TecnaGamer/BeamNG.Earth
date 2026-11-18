@@ -1,0 +1,2296 @@
+"""Trees, bushes and rocks per map-data cell (docs/ROADMAP.md v1.9 "Cities & nature"; the user, 2026-10-13:
+"trees, rocks and other decoration").
+
+    veg = Vegetation(md, cache_dir)
+    items = veg.cell(key)          # Items: lon, lat, height, radius, kind, group, rank, yaw, scale
+
+Deterministic (ROADMAP "Principle: deterministic generation"): every item is a pure function of the
+cell's map data and VERSION; its random choices (species, yaw, size, thinning rank) hash its position.
+
+- Trees: the tops of Meta/WRI's 1.2 m canopy height model (CHMv2), local maxima of the lightly
+  smoothed heights, in a window that grows with the height (a crown about 0.12 h + 1 m across), taller
+  than TREE_MIN_M. Not on buildings (the CHM counts roofs, solar panels: Kayenta), roads (a trunk in
+  the lane, under canopy that overhangs it) or water.
+- Bushes: canopy maxima from BUSH_MIN_M to TREE_MIN_M, and a hashed scatter over shrubland.
+- Rocks: a hashed scatter over bare / sparse land (WorldCover 60), thinner over shrubs and grass.
+- Groups: deciduous / conifer by a regional mix and height, shrub, rock (the mod maps groups to its
+  stock shapes).
+- Orchards (land_use class orchard): trees in lines along the long side, and the canopy's trees
+  inside the orchard left out so the rows are not filled in at random.
+- Farmland: shrubs in a line down the gap between the dirt crop rows.
+"""
+import functools
+import logging
+import math
+import os
+import threading
+import time
+from collections import OrderedDict
+from dataclasses import dataclass
+
+import numpy as np
+
+import beaches
+import fast
+import dmath
+import dnp
+
+import mapcells
+import norway_outline
+import norway_sr16
+import pacer
+import staging
+
+log = logging.getLogger("earthd.vegetation")
+
+VERSION = 34          # (34: clustered Norwegian undergrowth, roadside groundcover and fuller birch variants;
+                      # 33: Norway dense conifer reference, reduced synthetic highland saplings;
+                      # 32: Norway road-corridor 3D trees, far-slope stock billboard clumps;
+                      # 31: Norway country-boundary mask and experimental 3D native forest groups;
+                      # 30: NIBIO SR16 WMS forest-type overlay and conservative gap-fill saplings;
+                      # 29: Nordic foliage profile, road-width-aware clearance and fern understory;
+                      # the cached cells hold their groups: 14 for the regional rules of GitHub #110; 16: the roads'
+                      # drawn widths and sidewalks kept clear; 17: BC's lidar canopy heights, mapdata's canopy layer 2;
+                      # 18: the rounded junction corners kept clear, roadcorners.py; 19: one tree per flat crown,
+                      # thin_tops; 20: none on or beside a bridge deck, _mask_decks; 21: orchard rows, canopy trees
+                      # inside an orchard left out; 22: shrub lines between the crop rows; 23: both of those, the
+                      # orchard rows and the deck mask; 24: no rocks or bushes on a beach's sand, beaches.py; 25: the
+                      # Mediterranean basin's own trees, G_MEDITERRANEAN; 26: the far clumps, CLUMP_OF, and the
+                      # vineyards' rows, vineyard_items; the round bales after the harvest, bale_items; 27: no bushes in a bus station's yard, PR #1023;
+                      # 28: lengths in ground metres at every latitude, _merc_k; ties among flat crowns by a hash)
+TREE_MIN_M = 3.0
+# The canopy raster, the scatter grids and the crown radii are in Web Mercator units (EPSG:3857: a metre there is
+# cos(lat) metres on the ground) and were tuned by eye at mid latitudes. Past them the same pixel counts covered less
+# ground: at 69 N tops were searched and thinned over radii 2.1x too small and the bushes' grids were 4.6x as dense
+# (a player's Lapland forest, 2026-11-14: "way too many trees", a grid pattern far away). _merc_k scales those lengths
+# to what they were at MERC_REF_LAT, so the tuned look holds everywhere (and the tropics are no longer a little sparse).
+MERC_REF_LAT = 40.0
+CROWN_SPACING = 0.5          # tops kept this many crown radii apart (0.8 looked sparse: the user, 2026-10-13)
+BUSH_MIN_M = 1.0
+KIND_TREE, KIND_BUSH, KIND_ROCK = 0, 1, 2
+GROUPS = ("deciduous", "conifer", "shrub", "rock", "pine_west", "palm", "juniper", "desert_shrub", "desert_rock",
+          "oak_west", "tropical", "mediterranean", "conifer_clump", "deciduous_clump", "oak_west_clump",
+          "mediterranean_clump", "vine", "straw_n", "straw_s", "silage_n", "silage_s", "eucalyptus",
+          "eucalyptus_clump", "poplar", "creosote", "fern", "norway_spruce", "norway_pine", "norway_birch",
+          "norway_spruce_far", "norway_pine_far", "norway_birch_far", "norway_conifer_backdrop",
+          "norway_deciduous_backdrop", "norway_floorcover")
+(G_DECIDUOUS, G_CONIFER, G_SHRUB, G_ROCK, G_PINE_WEST, G_PALM, G_JUNIPER, G_DESERT_SHRUB, G_DESERT_ROCK,
+ G_OAK_WEST, G_TROPICAL, G_MEDITERRANEAN, G_CONIFER_CLUMP, G_DECIDUOUS_CLUMP, G_OAK_WEST_CLUMP,
+ G_MEDITERRANEAN_CLUMP, G_VINE, G_STRAW_N, G_STRAW_S, G_SILAGE_N, G_SILAGE_S, G_EUCALYPTUS, G_EUCALYPTUS_CLUMP,
+ G_POPLAR, G_CREOSOTE, G_FERN, G_NORWAY_SPRUCE, G_NORWAY_PINE, G_NORWAY_BIRCH,
+ G_NORWAY_SPRUCE_FAR, G_NORWAY_PINE_FAR, G_NORWAY_BIRCH_FAR,
+ G_NORWAY_CONIFER_BACKDROP, G_NORWAY_DECIDUOUS_BACKDROP, G_NORWAY_FLOORCOVER) = range(35)
+# Far clumps (GitHub #1074, "trees cost too much"; the asset survey 2026-11-10): a forest's canopy trees gathered on a
+# world-fixed grid of about CLUMP_CELL_M squares (a whole number of them a geotile: none straddles two); a square with
+# CLUMP_MIN of them gets one item of a stock clump shape (trees.lua's *_clump groups: East Coast USA's
+# tree_douglasfir_group_low / tree_oak_forest_group / tree_beech_forest_group, West Coast USA's oak_a_distant, Italy's
+# holm_oak_filler_center, 4-8 trees each, the materials of the single trees they stand for). The mod shows the clump
+# beyond its near ring (trees.lua CLUMP_M) and the square's trees, flagged by a negative scale, only within it: a far
+# forest tile of ~900 single trees becomes ~150 clumps. Other groups (palms, junipers, tropical trees) stay single.
+CLUMP_OF = {G_CONIFER: G_CONIFER_CLUMP, G_PINE_WEST: G_CONIFER_CLUMP, G_DECIDUOUS: G_DECIDUOUS_CLUMP,
+            G_OAK_WEST: G_OAK_WEST_CLUMP, G_MEDITERRANEAN: G_MEDITERRANEAN_CLUMP, G_EUCALYPTUS: G_EUCALYPTUS_CLUMP,
+            G_NORWAY_SPRUCE: G_CONIFER_CLUMP, G_NORWAY_PINE: G_CONIFER_CLUMP,
+            G_NORWAY_BIRCH: G_DECIDUOUS_CLUMP}
+CLUMP_GROUPS = tuple(sorted(set(CLUMP_OF.values())))
+CLUMP_CELL_M = 18.0
+CLUMP_MIN = 3
+CLUMP_ROWS_MAX = 2000       # clump rows a tile sends at most (beside TILE_ROWS_MAX's single items)
+# The Mediterranean basin's Cs climates (Beck et al.'s Koppen-Geiger classes 8-10: Csa, Csb, Csc) inside its box: holm
+# and cork oaks, olives, maritime pines, cypresses (Italy's stock trees, trees.lua's "mediterranean"; the asset survey
+# 2026-11-10 found them loaded with Italy's folder but unused). California's Cs keeps the West Coast's own groups.
+MED_KOPPEN = (8, 9, 10)
+MED_BOX = (28.0, -10.5, 46.5, 42.0)         # south, west, north, east
+# More regional trees (the asset survey 2026-11-10, the stock shapes the flora supports; earthfast.regional_groups):
+# - Australia: eucalypts most of its trees (West Coast USA's eucalyptus_double / _tall, eucalyptus_group far).
+# - Temperate Europe's river banks: a share of the broadleaves within RIPARIAN_M of water are poplars (Automation Test
+#   Track's s_poplar_large: the black and hybrid poplars along the Loire, the Po, the Danube; willows and alders have no
+#   stock shape).
+# - North America's hot deserts (Koppen BWh, Beck et al. class 4: the Mojave, Sonoran and Chihuahuan): most desert
+#   shrubs are creosote bushes (Automation Test Track's shrub_a-c, the creosote of West Coast USA's desert).
+ZONE_MED, ZONE_RIPARIAN, ZONE_HOT_DESERT = 1, 2, 3
+RIPARIAN_BOX = (42.0, -10.0, 60.0, 30.0)
+RIPARIAN_M = 30.0
+HOT_DESERT_KOPPEN = (4,)
+HOT_DESERT_BOX = (22.0, -120.0, 38.5, -98.0)
+ROAD_CLEAR_M = 1.5          # trees kept this far off a road's edge (its width by class below)
+TREE_PIT_M = 0.4            # m past a road's edge (+ the push's 0.6) where a top over the road lands: a sidewalk's
+                            # tree pit by the curb (pushed out of the full corridor, Boston Street's trees landed on the
+                            # row houses at the back of the sidewalk and all went; Mapillary: one every ~8 m, 2026-10-17)
+PATH_CLASSES = {"footway", "path", "steps", "cycleway", "bridleway", "pedestrian"}   # no corridor: street trees
+                            # stand in the sidewalk (mapped as a footway: Boston Street's row sat on its line)
+ROAD_HALF_WIDTH_M = {"motorway": 7.0, "trunk": 6.0, "primary": 5.5, "secondary": 5.0, "tertiary": 4.5,
+                     "residential": 4.0, "service": 3.0, "unclassified": 3.5, "living_street": 3.0}
+ROAD_HALF_DEFAULT_M = 2.5
+SCATTER_CELL_M = 6.0        # the hashed scatter's grid (one candidate per cell)
+# class: (bush, rock). Tree cover (10) gets an understory (Columbia's photos: forest edges are thickets
+# of shrubs and vines under the trees; ours were bare ground between trunks), also under the canopy.
+SCATTER_P = {10: (0.30, 0.0), 20: (0.10, 0.04), 30: (0.01, 0.003), 60: (0.0, 0.08), 100: (0.02, 0.02)}
+UNDERSTORY = 10
+BUILT_NEAR_M = 60.0         # bare ground with built-up land this far around gets no scatter (squares, lots)
+# Rocks on bare ground lie on slopes, outcrops and fans, not on flat playas, salt pans and dry lake beds (the
+# Bonneville Salt Flats had a rock every ~75 m2, the user 2026-10-20; photos: a bare white crust for miles). A bare
+# cell's rock is kept with the share of the ground's slope between these (the DEM ROCK_SLOPE_D m either side, at
+# ROCK_SLOPE_ZOOM: coarse tiles, few downloads); without a DEM, as before.
+ROCK_SLOPE = (0.02, 0.10)
+BARREN_NEAR_M = 20.0        # m: a canopy top on bare ground or snow needs vegetated land this near (_build)
+ROCK_SLOPE_D = 40.0
+ROCK_SLOPE_ZOOM = 12
+# Forest edges along roads in humid country (Columbia's photos: a wall of shrubs, saplings and vines from the
+# ground up, where ours showed bare trunks over grass): a denser band of bigger bushes within EDGE_M of a road.
+EDGE_M = 7.0
+EDGE_CELL_M = 3.0
+EDGE_P = 0.4
+# The Norway revamp uses an actual land outline: never apply these experimental
+# vegetation changes to Sweden or Finland, even right at the border.
+NORDIC_EDGE_M = 9.0
+NORDIC_EDGE_CELL_M = 2.8
+NORDIC_EDGE_P = 0.52
+NORDIC_FOREST_SCATTER_P = 0.24  # expected clustered mean, not a uniform chance at every point
+NORDIC_PATCH_M = 24.0       # smooth, deterministic undergrowth islands instead of independent bright dots
+NORDIC_FLOORCOVER_NEAR_M = 22.0  # visible near road only; replaces existing bushes, never adds extra rows
+NORDIC_FLOORCOVER_SHARE = 0.36
+SR16_GAP_CELL_M = 15.0      # 0.3 had a 9 m / 32 % artificial sapling grid: thousands per square km
+SR16_GAP_P = 0.09          # a few saplings only; CHM remains the source for real forest tree positions
+ROAD_DETAIL_M = 45.0       # Norwegian land within this many ground metres of a road gets individual 3D trees
+FAR_SINGLE_KEEP = 0.55     # non-clumped far trees kept (others omitted to reduce distant forest draw overhead)
+MEM_CELLS = 16
+WARM_M = 1200.0              # cells within this of the player are built ahead (warm_around)
+WC = {"tree": 10, "shrub": 20, "grass": 30, "crop": 40, "built": 50, "bare": 60, "snow": 70,
+      "water": 80, "wetland": 90, "mangrove": 95, "moss": 100}
+
+
+@dataclass
+class Items:
+    lon: np.ndarray
+    lat: np.ndarray
+    height: np.ndarray          # m (trees: the CHM top; bushes and rocks: their size)
+    radius: np.ndarray          # m (crown / footprint)
+    kind: np.ndarray            # uint8 KIND_*
+    group: np.ndarray           # uint8 GROUPS index
+    rank: np.ndarray            # float32 in [0, 1): thinning (a level shows those below its threshold)
+    yaw: np.ndarray             # degrees
+    scale: np.ndarray           # size variation (around 1)
+
+    def __len__(self):
+        return len(self.lon)
+
+    def take(self, sel):
+        return Items(*(getattr(self, f)[sel] for f in ("lon", "lat", "height", "radius", "kind", "group",
+                                                       "rank", "yaw", "scale")))
+
+
+def _hash01(a, b, salt):
+    """Deterministic uniform [0, 1) from two integer arrays and a salt."""
+    a = np.asarray(a, np.uint64)
+    b = np.asarray(b, np.uint64)
+    x = a * np.uint64(0x9E3779B97F4A7C15) ^ (b + np.uint64(salt)) * np.uint64(0xC2B2AE3D27D4EB4F)
+    x ^= x >> np.uint64(31)
+    x *= np.uint64(0xBF58476D1CE4E5B9)
+    x ^= x >> np.uint64(29)
+    return (x >> np.uint64(11)).astype(np.float64) / float(1 << 53)
+
+
+def _patch_field(px, py, metres, latitude, salt):
+    """Smooth world-fixed noise: nearby shrubs form stands instead of a salt-and-pepper grid.
+
+    Only affects Norway candidate probabilities. Adjacent map cells sample the
+    same four corners, so patches cannot jump at a tile boundary.
+    """
+    step = metres * _merc_k(latitude)
+    x, y = np.asarray(px, np.float64) / step, np.asarray(py, np.float64) / step
+    i, j = np.floor(x).astype(np.int64), np.floor(y).astype(np.int64)
+    a, b = x - i, y - j
+    a, b = a * a * (3 - 2 * a), b * b * (3 - 2 * b)
+    lo = _hash01(i, j, salt) * (1 - a) + _hash01(i + 1, j, salt) * a
+    hi = _hash01(i, j + 1, salt) * (1 - a) + _hash01(i + 1, j + 1, salt) * a
+    return lo * (1 - b) + hi * b
+
+
+def _merc_k(lat):
+    """Web Mercator length per tuned length at latitude lat (1 at MERC_REF_LAT, 2.14 at 69 N, 0.77 at the equator)."""
+    c = dmath.cos(dmath.radians(min(abs(float(lat)), 85.0)))
+    return dmath.cos(dmath.radians(MERC_REF_LAT)) / max(c, 0.05)
+
+
+def _shift_max(a, r):
+    """The maximum over the disc of radius r around each pixel ((dj - r)^2 + (di - r)^2 <= r * r + r; outside the
+    array -inf; float32). earthfast disc_max (2026-10-23: the numpy version's full-array pass per disc offset)."""
+    fast.require(64, "disc_max")
+    return fast._ef.disc_max(np.ascontiguousarray(a, np.float32), int(r))
+
+
+def _dilate(m, r):
+    """Bool mask grown by r pixels (a square window, separable)."""
+    out = m.copy()
+    for axis in (0, 1):
+        acc = out.copy()
+        for k in range(1, r + 1):
+            acc[tuple(slice(k, None) if a == axis else slice(None) for a in range(2))] |= \
+                out[tuple(slice(None, -k) if a == axis else slice(None) for a in range(2))]
+            acc[tuple(slice(None, -k) if a == axis else slice(None) for a in range(2))] |= \
+                out[tuple(slice(k, None) if a == axis else slice(None) for a in range(2))]
+        out = acc
+    return out
+
+
+def _dry_west(lat, lon):
+    lat, lon = np.asarray(lat), np.asarray(lon)
+    return (lon < -102.0) & (lat > 25.0) & (lat < 46.0) & ~((lon < -121.0) & (lat > 37.0))
+
+
+def _nordic(lat, lon):
+    """Compatibility name for exact Norway-land containment (array-safe)."""
+    return norway_outline.contains(lat, lon)
+
+
+def _norway_tree_groups(previous, lat, lon):
+    """Swap trees on Norwegian land into species-specific stock-model families.
+
+    SR16 already chose the dominant stand species when available. Without SR16
+    this falls back to the CHM-derived conifer/broadleaf groups, never blocking
+    the forest while the NIBIO service is offline.
+    """
+    g = np.asarray(previous, np.uint8).copy()
+    inside = _nordic(lat, lon)
+    g[inside & (g == G_CONIFER)] = G_NORWAY_SPRUCE
+    g[inside & (g == G_PINE_WEST)] = G_NORWAY_PINE
+    g[inside & (g == G_DECIDUOUS)] = G_NORWAY_BIRCH
+    return g
+
+
+def _near_road(lat, lon, road, chm, metres=ROAD_DETAIL_M):
+    """Fast vectorized road corridor lookup for points on the CHM grid.
+
+    A summed-area table tests a ground-metre square around each point. Unlike
+    growing the entire road mask repeatedly, this is linear in the CHM grid
+    area plus the number of trees. Coordinates include neighbouring road cells.
+    """
+    yy, xx = np.broadcast_arrays(np.asarray(lat, np.float64), np.asarray(lon, np.float64))
+    out = np.zeros(xx.size, bool)
+    if not out.size or not road.any():
+        return out.reshape(xx.shape)
+    px, py = _to3857(xx.ravel(), yy.ravel())
+    cols = np.floor((px-chm.x0)/chm.dx).astype(np.int64)
+    rows = np.floor((chm.y0-py)/chm.dy).astype(np.int64)
+    h,w = road.shape
+    valid = (cols>=0)&(cols<w)&(rows>=0)&(rows<h)
+    if not valid.any():
+        return out.reshape(xx.shape)
+    # Mercator metres per ground metre; use the southernmost point for a
+    # conservative radius across this small map-data cell.
+    scale = 1.0/max(0.05,float(np.cos(np.radians(np.max(np.abs(yy))))))
+    rx = max(1,int(math.ceil(metres*scale/chm.dx)))
+    ry = max(1,int(math.ceil(metres*scale/chm.dy)))
+    ii = np.flatnonzero(valid)
+    x0=np.maximum(0,cols[ii]-rx)
+    x1=np.minimum(w-1,cols[ii]+rx)+1
+    y0=np.maximum(0,rows[ii]-ry)
+    y1=np.minimum(h-1,rows[ii]+ry)+1
+    integral=np.pad(road.astype(np.int64),((1,0),(1,0))).cumsum(0).cumsum(1)
+    out[ii]=(integral[y1,x1]-integral[y0,x1]-integral[y1,x0]+integral[y0,x0])>0
+    return out.reshape(xx.shape)
+
+
+def _roadside_backdrop(tree, road, chm):
+    """Keep 3D stock trees near Norwegian roads, use cheap stock LOD groups beyond.
+
+    Dense forest's existing CLUMP_OF pass has already grouped 4-8 trees into
+    one stock forest filler. Make an off-road filler *always* visible and drop
+    its high-detail members; stock shape LODs/imposters handle viewing distance.
+    Unclumped sparse trees keep their species but are lightly thinned.
+    """
+    if not len(tree):
+        return tree
+    far = _nordic(tree.lat,tree.lon) & ~_near_road(tree.lat,tree.lon,road,chm)
+    if not far.any():
+        return tree
+    groups=tree.group.copy()
+    for original, replacement in ((G_CONIFER_CLUMP,G_NORWAY_CONIFER_BACKDROP),
+                                  (G_DECIDUOUS_CLUMP,G_NORWAY_DECIDUOUS_BACKDROP),
+                                  (G_NORWAY_SPRUCE,G_NORWAY_SPRUCE_FAR),
+                                  (G_NORWAY_PINE,G_NORWAY_PINE_FAR),
+                                  (G_NORWAY_BIRCH,G_NORWAY_BIRCH_FAR)):
+        groups[far & (groups==original)]=replacement
+    # Negative-scale members are represented by an existing forest clump.
+    # They are not needed again as individual 3D objects away from roads.
+    member = far & (tree.kind==KIND_TREE) & (tree.scale<0)
+    sparse = far & (tree.kind==KIND_TREE) & (tree.scale>=0) \
+             & np.isin(groups,(G_NORWAY_SPRUCE_FAR,G_NORWAY_PINE_FAR,G_NORWAY_BIRCH_FAR))
+    keep=~member & ~(sparse & (tree.rank>FAR_SINGLE_KEEP))
+    return Items(tree.lon[keep],tree.lat[keep],tree.height[keep],tree.radius[keep],
+                 tree.kind[keep],groups[keep],tree.rank[keep],tree.yaw[keep],tree.scale[keep])
+
+
+def _sr16_groups(previous, types, u):
+    """Use NIBIO's forest-class mixture with the existing BeamNG stock foliage groups.
+
+    Classification comes from SRVTRESLAG's colour classes. Unknown/nonforest
+    leaves the original canopy height model's group unchanged; the WMS is a
+    forest *stand* map, not a survey of individual tree trunks.
+    """
+    g = np.asarray(previous, np.uint8).copy()
+    t = np.asarray(types, np.uint8)
+    u = np.asarray(u, np.float64)
+    g[t == norway_sr16.SPRUCE] = G_CONIFER
+    g[t == norway_sr16.PINE] = G_PINE_WEST
+    g[t == norway_sr16.BROADLEAF] = G_DECIDUOUS
+    mixed_conifer = t == norway_sr16.CONIFER_MIX
+    g[mixed_conifer] = np.where(u[mixed_conifer] < 0.55, G_CONIFER, G_PINE_WEST)
+    mixed = t == norway_sr16.MIXED
+    # SR16 MIXED is a stand class, not a literal 38% birch instruction. The
+    # previous mixture looked overly broadleaf in conifer-heavy valley views.
+    g[mixed] = np.where(u[mixed] < 0.20, G_DECIDUOUS,
+                        np.where(u[mixed] < 0.68, G_CONIFER, G_PINE_WEST))
+    return g
+
+
+def regional(group, height, lat, lon, lcls, u, riparian=None):
+    """The groups of a region (the stock maps' species: West Coast USA's pines, oaks and palms, Utah's junipers
+    and desert bushes, Johnson Valley's rocks, Jungle Rock Island's palms and tropical trees) from the generic
+    ones, by a coarse climate from the position and the land cover class at the item (until a species map): the Rust
+    kernel earthfast.regional_groups (its rules there). u: a hashed [0, 1) per item; riparian: per item, within
+    RIPARIAN_M of water (None: none). Pure."""
+    fast.require(201, "regional_groups")
+    f64 = np.float64
+    n = np.size(group)
+    bc = lambda a, t: np.ascontiguousarray(np.broadcast_to(np.asarray(a, t), (n,)))     # noqa: E731
+    la, lo = bc(lat, f64), bc(lon, f64)
+    return np.asarray(fast._ef.regional_groups(
+        bc(group, np.uint8), bc(height, f64), la, lo, bc(lcls, np.uint8), bc(u, f64),
+        [G_DECIDUOUS, G_CONIFER, G_SHRUB, G_ROCK, G_PINE_WEST, G_PALM, G_JUNIPER, G_DESERT_SHRUB, G_DESERT_ROCK,
+         G_OAK_WEST, G_TROPICAL], [WC["shrub"], WC["bare"], WC["grass"], WC["built"]],
+        zones(la, lo, None if riparian is None else bc(riparian, bool)),
+        [G_MEDITERRANEAN, G_EUCALYPTUS, G_POPLAR, G_CREOSOTE]), np.uint8)
+
+
+def _in_box(lat, lon, box):
+    return (lat >= box[0]) & (lat <= box[2]) & (lon >= box[1]) & (lon <= box[3])
+
+
+def zones(lat, lon, riparian=None):
+    """Per point: its regional zone for earthfast.regional_groups (ZONE_*; 0 none)."""
+    lat, lon = np.asarray(lat, np.float64), np.asarray(lon, np.float64)
+    z = np.where(mediterranean(lat, lon), ZONE_MED, 0).astype(np.uint8)
+    if riparian is not None:
+        z[(z == 0) & np.asarray(riparian, bool) & _in_box(lat, lon, RIPARIAN_BOX)] = ZONE_RIPARIAN
+    box = _in_box(lat, lon, HOT_DESERT_BOX)
+    if box.any():
+        import climate
+        hot = np.zeros(len(lat), bool)
+        hot[box] = np.isin(climate.koppen_many(lat[box], lon[box]), HOT_DESERT_KOPPEN)
+        z[hot & (z == 0)] = ZONE_HOT_DESERT
+    return np.ascontiguousarray(z)
+
+
+def mediterranean(lat, lon):
+    """Per point: in the Mediterranean basin's Cs climates (MED_KOPPEN inside MED_BOX)."""
+    lat, lon = np.asarray(lat, np.float64), np.asarray(lon, np.float64)
+    box = (lat >= MED_BOX[0]) & (lat <= MED_BOX[2]) & (lon >= MED_BOX[1]) & (lon <= MED_BOX[3])
+    out = np.zeros(lat.shape, bool)
+    if box.any():
+        import climate
+        out[box] = np.isin(climate.koppen_many(lat[box], lon[box]), MED_KOPPEN)
+    return np.ascontiguousarray(out)
+
+
+def _north_america(lat, lon):
+    lat, lon = np.asarray(lat), np.asarray(lon)
+    return (lat > 24.0) & (lon > -170.0) & (lon < -50.0)
+
+
+def _conifer_share(lat, lon):
+    """The regional share of conifers (a coarse climate stand-in until a species map). Beyond North America
+    (2026-10-15: Douglas firs stood in Punjab's fields): few in the tropics and subtropics, the pines of the
+    Mediterranean, the boreal north."""
+    lat, lon = np.asarray(lat, np.float64), np.asarray(lon, np.float64)
+    west = lon < -100.0
+    share = np.where(west, 0.7, 0.2)
+    share = np.where(np.abs(lat) > 45.0, np.maximum(share, 0.6), share)
+    alat = np.abs(lat)
+    other = np.where(alat < 23.5, 0.02, np.where(alat < 35.0, 0.08, np.where(alat <= 45.0, 0.2, share)))
+    mediterranean = (lat > 30.0) & (lat < 46.0) & (lon > -10.0) & (lon < 40.0)
+    other = np.where(mediterranean, 0.3, other)
+    return np.where(_north_america(lat, lon), share, other)
+
+
+class Vegetation:
+    def __init__(self, md, cache_dir=None):
+        self.md = md
+        self.sr16 = norway_sr16.SR16(cache_dir, offline=bool(getattr(getattr(md, "fetcher", None), "offline", False)))
+        self.dem = None                 # (set by the server: rocks on bare ground by slope, ROCK_SLOPE)
+        self.surface = self.widths = None   # (set by the server: the roads' drawn widths, roads.road_specs)
+        self.dir = os.path.join(cache_dir, "vegetation", f"v{VERSION}") if cache_dir else None
+        self._mem = OrderedDict()
+        self._lock = threading.Lock()
+        self._cell_locks = {}
+        self._tl = threading.local()    # per build thread: .dem_failed (the DEM could not answer: _load keeps no cell)
+        self._warm_at, self._warm_thread = None, None   # warm_around's latest (lat, lon, radius_m), for the warm thread
+        self._warm_cv = threading.Condition()
+        self._on_disk = set()           # cells whose file ready() found (the warm thread's: each file checked once)
+
+    def cell(self, key):
+        """The Items of map-data cell key ((z, x, y) or CellKey)."""
+        k = (int(key[1]), int(key[2]))
+        with self._lock:
+            if k in self._mem:
+                self._mem.move_to_end(k)
+                return self._mem[k]
+            lock = self._cell_locks.setdefault(k, threading.Lock())
+        with lock:
+            with self._lock:
+                if k in self._mem:
+                    return self._mem[k]
+            items = self._load(*k)
+            with self._lock:
+                self._mem[k] = items
+                while len(self._mem) > MEM_CELLS:
+                    self._mem.popitem(last=False)
+            return items
+
+    def warm_around(self, lat, lon, radius_m=WARM_M):
+        """Build the cells within radius_m of (lat, lon) in the background (nearest first): the tiles
+        near a teleport's destination then find them ready instead of waiting ~3.5 s each. The event loop's, at every
+        pose: only the place is kept here, the warm thread picks the cells (their file checks, up to 64 a pose, held
+        the loop on a busy hard drive: GitHub #1054)."""
+        with self._warm_cv:
+            self._warm_at = (lat, lon, radius_m)
+            if self._warm_thread is None:
+                self._warm_thread = threading.Thread(target=self._warm_loop, daemon=True, name="veg-warm")
+                self._warm_thread.start()
+            self._warm_cv.notify()
+
+    def _warm_cells(self, lat, lon, radius_m):
+        """The cells within radius_m of (lat, lon) not built yet, nearest first (the warm thread's: file checks)."""
+        d = radius_m / 111320.0
+        dl = d / max(dmath.cos(math.radians(lat)), 0.01)
+        try:
+            keys = mapcells.cells_for_bbox(lat - d, lon - dl, lat + d, lon + dl, max_cells=64)
+        except ValueError:
+            return []
+        keys = sorted(keys, key=lambda k: dnp.sq(k.center()[0] - lat) + dnp.sq((k.center()[1] - lon) * dmath.cos(math.radians(lat))))
+        return [(int(k.x), int(k.y)) for k in keys if not self.ready(k)]
+
+    def _warm_loop(self):
+        cells = []
+        while True:
+            pacer.hold()                # (a teleport's first block first)
+            with self._warm_cv:
+                while not cells and self._warm_at is None:
+                    self._warm_cv.wait()
+                at, self._warm_at = self._warm_at, None
+            if at is not None:          # a newer place: its nearest cells first
+                cells = self._warm_cells(*at)
+                if not cells:
+                    continue
+            x, y = cells.pop(0)
+            try:
+                if self.ready((mapcells.ZOOM, x, y)):
+                    continue            # (built before: on disk)
+                self.cell((mapcells.ZOOM, x, y))
+            except Exception as e:
+                import netfetch
+                if isinstance(e, netfetch.HostUnavailable):
+                    # (a host's circuit breaker open, or offline: expected, and the cell is built when it is asked
+                    # for; a traceback a cell was the first week's third most frequent error, ~5.5k)
+                    log.debug("vegetation: warming cell %s skipped: %s", (x, y), e)
+                else:
+                    log.exception("vegetation: building cell %s", (x, y))
+
+    def ready(self, key):
+        k = (int(key[1]), int(key[2]))
+        with self._lock:
+            if k in self._mem:
+                return True
+        if k in self._on_disk:
+            return True
+        p = self._path(*k)
+        if p and os.path.exists(p):
+            self._on_disk.add(k)        # (the warm thread asks at every new place: each cell's file checked once)
+            return True
+        return False
+
+    def _path(self, x, y):
+        rel = getattr(self.md, "release", "x")
+        return os.path.join(self.dir, str(rel), str(x), f"{y}.npz") if self.dir else None
+
+    def _load(self, x, y):
+        p = self._path(x, y)
+        fields = ("lon", "lat", "height", "radius", "kind", "group", "rank", "yaw", "scale")
+        if p and os.path.exists(p):
+            # (a damaged file, empty or cut short after a crash: removed and built again, staging.read_npz)
+            got = staging.read_npz(p, lambda f: Items(*(f[n] for n in fields)), "trees cell")
+            if got is not None:
+                return got
+        self._tl.dem_failed = False
+        self._tl.sr16_failed = False
+        items = self._build(x, y)
+        # (a cell built while the DEM could not answer, offline or no tile, lacks its slope rocks: it serves this
+        # session but is not kept, so the next one builds it whole. From cristivasile's PR #295. No DEM at all,
+        # self.dem None, is a setting, not a failure)
+        if p and not self._tl.dem_failed and not self._tl.sr16_failed:
+            os.makedirs(os.path.dirname(p), exist_ok=True)
+            tmp = f"{p}.{os.getpid()}.{threading.get_ident()}.tmp"
+            with open(tmp, "wb") as fh:
+                np.savez_compressed(fh, **{n: getattr(items, n) for n in fields})
+            staging.replace_cached(tmp, p)
+        return items
+
+    # --- the build ------------------------------------------------------------------------------
+    def _specs(self, f):
+        """roads.road_specs of features f as the roads are drawn (the server's land cover and measured widths)."""
+        import roads as roadsmod
+        try:
+            return roadsmod.road_specs(f, getattr(self.surface, "urban", None), self.widths)
+        except Exception as e:          # (the class widths alone)
+            log.debug("vegetation: road specs: %s: %s", type(e).__name__, e)
+            return [None] * len(f.kind)
+
+    def _build(self, x, y):
+        key = (mapcells.ZOOM, x, y)
+        cd = self.md.cell(key, layers=("canopy", "landcover", "buildings", "roads", "water"))
+        chm = cd.layers.get("canopy")
+        lc = cd.layers.get("landcover")
+        if chm is None:
+            return _empty()
+        h = np.where(chm.data == (chm.nodata if chm.nodata is not None else 255), 0, chm.data).astype(np.float32)
+        # pixel centres (EPSG:3857) of the CHM window, cut to the cell (the window may be larger)
+        n_r, n_c = h.shape
+        mx = chm.x0 + (np.arange(n_c) + 0.5) * chm.dx
+        my = chm.y0 - (np.arange(n_r) + 0.5) * chm.dy
+        lon0, lat0, lon1, lat1 = cd.bounds
+        sr16_map = self.sr16.cell(x, y, cd.bounds)
+        if self.sr16.enabled and norway_outline.intersects_bbox(cd.bounds) \
+                and sr16_map is None:
+            # A cache written during a WMS outage must not permanently suppress
+            # the real data once the user reconnects. Serve the CHM fallback now.
+            self._tl.sr16_failed = True
+        ex0, ey0 = _to3857(lon0, lat0)
+        ex1, ey1 = _to3857(lon1, lat1)
+        ci = (mx >= ex0) & (mx < ex1)
+        rj = (my > ey0) & (my <= ey1)
+        if not ci.any() or not rj.any():
+            return _empty()
+        # the blocked pixels: buildings, roads, water (on the CHM grid, with the neighbours' features)
+        blocked = np.zeros(h.shape, bool)
+        road = np.zeros(h.shape, bool)
+        curb = np.zeros(h.shape, bool)      # the roads themselves (+ TREE_PIT_M): where a street tree may not land
+        push = np.zeros((3,) + h.shape, np.float32)
+        push[2] = np.inf
+        deck = np.zeros(h.shape, bool)      # bridge decks (+ DECK_CLEAR_M): no tree on, beside or moved off one
+        lon0_, lat0_, lon1_, lat1_ = cd.bounds
+        near_water = np.zeros(h.shape, bool) if _in_box((lat0_ + lat1_) / 2, (lon0_ + lon1_) / 2, RIPARIAN_BOX) \
+            else None                       # (within RIPARIAN_M of a river, lake or shore: riverside poplars)
+        road_cells = []
+        for dy in (-1, 0, 1):
+            for dx in (-1, 0, 1):
+                kk = (mapcells.ZOOM, x + dx, y + dy)
+                try:
+                    c2 = cd if (dx, dy) == (0, 0) else self.md.cell(kk, layers=("buildings", "roads", "water"))
+                except Exception as e:          # a neighbour not at hand: its features unmasked
+                    log.debug("vegetation: neighbour %s: %s", kk, e)
+                    continue
+                _mask_polys(c2.layers.get("buildings"), blocked, chm, 1.0)
+                _mask_polys(c2.layers.get("water"), blocked, chm, 0.0, kind=3)
+                _mask_roads(c2.layers.get("roads"), road, chm, specs=self._specs, walks=True)
+                _mask_roads(c2.layers.get("roads"), curb, chm, push, clear=TREE_PIT_M, specs=self._specs)
+                _mask_decks(c2.layers.get("roads"), deck, chm, self._specs)
+                if near_water is not None:
+                    _mask_near(c2.layers.get("water"), near_water, chm, RIPARIAN_M)
+                road_cells.append(c2.layers.get("roads"))
+        # the rounded corners of curbless junctions (roadcorners.py): no tree, bush or rock on their asphalt
+        _mask_corners(road_cells, (road, curb), chm, cd.bounds, getattr(self.surface, "urban", None), self.widths)
+        # smoothed heights (3 x 3 mean), then the local maxima by height band
+        p = np.pad(h, 1, mode="edge")
+        hs = sum(p[a:a + n_r, b:b + n_c] for a in range(3) for b in range(3)) / 9.0
+        tops = np.zeros(h.shape, bool)
+        k = _merc_k((lat0 + lat1) / 2)     # (the radii below in pixels at MERC_REF_LAT: scaled to the ground's)
+        for lo_m, hi_m, r in ((BUSH_MIN_M, TREE_MIN_M, 1), (TREE_MIN_M, 8.0, 2), (8.0, 15.0, 3), (15.0, 1e9, 4)):
+            band = (hs >= lo_m) & (hs < hi_m)
+            if band.any():
+                tops |= band & (hs >= _shift_max(hs, max(1, int(round(r * k)))))
+        tops &= ~blocked
+        tops[~rj, :] = False
+        tops[:, ~ci] = False
+        # street trees: a top over a road corridor (its crown overhangs the street) moves just out of it,
+        # onto the verge / sidewalk by the curb, unless that lands on a building, water or another road
+        tops &= ~deck                       # (over a deck: the crown of a tree below it, or none; not moved off it
+        blocked |= deck                     # onto the river or the bank under the deck, East Pratt Street 2026-10-31)
+        on_road = tops & road
+        tops &= ~road
+        rj_, ri_ = np.nonzero(on_road)
+        if len(rj_):
+            nc = np.rint(ri_ + push[0, rj_, ri_]).astype(np.int64)
+            nr = np.rint(rj_ + push[1, rj_, ri_]).astype(np.int64)
+            ok = (nc >= 0) & (nc < n_c) & (nr >= 0) & (nr < n_r)
+            ok[ok] &= ~blocked[nr[ok], nc[ok]] & ~curb[nr[ok], nc[ok]]
+            moved = np.zeros(h.shape, bool)
+            moved[nr[ok], nc[ok]] = True
+            moved[~rj, :] = False
+            moved[:, ~ci] = False
+            hs = hs.copy()
+            hs[nr[ok], nc[ok]] = np.maximum(hs[nr[ok], nc[ok]], hs[rj_[ok], ri_[ok]])     # keep its height
+            tops |= moved
+        blocked |= road
+        jj, ii = np.nonzero(tops)
+        # one top per crown (flat crowns had several); a crown's radius in pixels as at MERC_REF_LAT (chm.dx / k), and
+        # equal heights (a canopy raster upsampled into flat plateaus) ranked by a hash of the global pixel, not by
+        # position: the position order left the tops of a plateau on a regular lattice, rows seen from afar
+        gx0 = np.floor((mx[ii] + 20037508.342789244) / chm.dx).astype(np.int64)
+        gy0 = np.floor((20037508.342789244 - my[jj]) / chm.dy).astype(np.int64)
+        tie = (_hash01(gx0, gy0, 29) * 1e-3).astype(np.float32)
+        jj, ii = _thin(jj, ii, hs[jj, ii] + tie, chm.dx, k)
+        th = hs[jj, ii]
+        tlon, tlat = _to4326(mx[ii], my[jj])
+        is_tree = th >= TREE_MIN_M
+        # the landcover class at each top (rocks / bushes scatter below)
+        lcls = lc.sample(tlon, tlat) if lc is not None else np.zeros(len(tlon), np.uint8)
+        is_tree &= lcls != WC["water"]
+        # canopy heights on bare ground or permanent snow with no vegetated land around: the canopy map misreading
+        # bright ground (the Bonneville Salt Flats had ~19k "trees" up to 21 m tall on bare salt, 2026-10-20). By
+        # its definition bare land has under 10 % plant cover; an edge tree, or one by an oasis, has some within
+        # BARREN_NEAR_M and stays
+        barren = np.flatnonzero((lcls == WC["bare"]) | (lcls == WC["snow"])) if lc is not None else []
+        if len(barren):
+            k = max(0.05, float(dnp.cos(np.radians(tlat[barren[0]]))))
+            dm = BARREN_NEAR_M / k
+            near = np.zeros(len(barren), bool)
+            for ox, oy in ((dm, 0.0), (-dm, 0.0), (0.0, dm), (0.0, -dm)):
+                lo2, la2 = _to4326(mx[ii[barren]] + ox, my[jj[barren]] + oy)
+                near |= ~np.isin(lc.sample(lo2, la2), (WC["bare"], WC["snow"], WC["water"]))
+            keep = np.ones(len(jj), bool)
+            keep[barren[~near]] = False
+            jj, ii, th, tlon, tlat, lcls, is_tree = jj[keep], ii[keep], th[keep], tlon[keep], tlat[keep], lcls[keep], \
+                is_tree[keep]
+        # hashed choices keyed on the global pixel (z17 Web-Mercator index: the CHM grid)
+        gx = np.floor((mx[ii] + 20037508.342789244) / chm.dx).astype(np.int64)
+        gy = np.floor((20037508.342789244 - my[jj]) / chm.dy).astype(np.int64)
+        u1, u2, u3, u4 = (_hash01(gx, gy, s) for s in (1, 2, 3, 4))
+        nordic = _nordic(tlat, tlon)
+        # A low canopy tree is not automatically a birch. v0.2 multiplied the
+        # Nordic conifer share by height/12 (halving it for a 6 m tree), which
+        # made forests look overwhelmingly broadleaf during an SR16 outage.
+        # The SR16 stand class below still wins wherever NIBIO data exists.
+        conifer_share = np.where(nordic, np.where(tlat >= 67.0, 0.76, 0.85), _conifer_share(tlat, tlon))
+        conifer = u1 < np.where(nordic, conifer_share,
+                                conifer_share * np.clip(th / 12.0, 0.5, 1.2))
+        group = np.where(is_tree, np.where(conifer, G_CONIFER, G_DECIDUOUS), G_SHRUB).astype(np.uint8)
+        group = regional(group, th, tlat, tlon, lcls, _hash01(gx, gy, 7),
+                         riparian=None if near_water is None else near_water[jj, ii])
+        # SR16 determines the dominant stand class; individual canopy tops keep their positions.
+        # All selected groups already exist in the game's original trees.lua catalog.
+        if sr16_map is not None and len(group):
+            mapped = sr16_map.sample(tlon, tlat)
+            group = np.where(is_tree, _sr16_groups(group, mapped, _hash01(gx, gy, 31)), group).astype(np.uint8)
+        group = np.where(is_tree, _norway_tree_groups(group, tlat, tlon), group).astype(np.uint8)
+        kind = np.where(is_tree, KIND_TREE, KIND_BUSH).astype(np.uint8)
+        jitter = chm.dx * 0.5
+        tlon2, tlat2 = _to4326(mx[ii] + (u3 - 0.5) * jitter, my[jj] + (u4 - 0.5) * jitter)
+        tree = Items(tlon2, tlat2, th.astype(np.float32), (0.12 * th + 1.0).astype(np.float32), kind, group,
+                     _hash01(gx, gy, 5).astype(np.float32), (u2 * 360.0).astype(np.float32),
+                     (0.85 + 0.3 * _hash01(gx, gy, 6)).astype(np.float32))
+        # squares, pedestrian areas and parking lots: no scattered bushes or rocks (a real tree there stays).
+        # An orchard keeps its planted rows and loses the canopy's trees inside it.
+        paved = np.zeros(h.shape, bool)
+        orchard = np.zeros(h.shape, bool)
+        vines = np.zeros(h.shape, bool)
+        lu = None
+        try:
+            cl = self.md.cell((mapcells.ZOOM, x, y), layers=("land_use", "infrastructure"))
+            lu, inf = cl.layers.get("land_use"), cl.layers.get("infrastructure")
+            if lu is not None and len(lu) and lu.attrs.get("subtype") is not None:
+                _mask_polys(lu, paved, chm, 0.0, select=lu.attrs["subtype"].astype(str) == "pedestrian")
+            if inf is not None and len(inf) and inf.attrs.get("class") is not None:
+                _mask_polys(inf, paved, chm, 0.0,
+                            select=np.isin(inf.attrs["class"].astype(str), ("parking", "bus_station")))   # (a bus station's yard: no bushes)
+            if lu is not None and len(lu) and lu.attrs.get("class") is not None:
+                lclass = lu.attrs["class"].astype(str)
+                _mask_polys(lu, orchard, chm, 0.0, select=lclass == "orchard")
+                _mask_polys(lu, vines, chm, 0.0, select=lclass == "vineyard")
+        except Exception as e:                  # not at hand: scattered as before
+            log.debug("vegetation: land use of %s: %s", (x, y), e)
+        if orchard.any():
+            keep = _keep_off_mask(tree, orchard, chm)
+            tree, lcls = tree.take(keep), lcls[keep]
+        if vines.any():             # (the vines' own canopy read as bushes all over a vineyard: its rows stand there)
+            keep = _keep_off_mask(tree, vines, chm) | (tree.height >= VINE_TREE_M)
+            tree, lcls = tree.take(keep), lcls[keep]
+        if sr16_map is not None:
+            saplings, sapling_cls = self._sr16_saplings(cd, sr16_map, lc,
+                                                       blocked | paved | orchard | vines, chm, hs)
+            if len(saplings):
+                tree = _concat(tree, saplings)
+                lcls = np.concatenate((lcls, sapling_cls))
+        tree = clumps(tree, lcls, (lat0 + lat1) / 2)
+        tree = _roadside_backdrop(tree, road, chm)
+        scatter = self._scatter(cd, lc, blocked | paved | orchard | vines, chm, hs, road)
+        edge = self._edge(cd, lc, blocked | orchard | vines, road, chm, hs, sr16_map)
+        bounds = (lon0, lat0, lon1, lat1)
+        planted = orchard_items(lu, chm, blocked, bounds)
+        hedges = farm_foliage(lu, chm, blocked, bounds)
+        rows = vineyard_items(lu, chm, blocked, bounds)
+        bales = bale_items(lu, chm, blocked, bounds)
+        return _concat_all([tree, scatter, edge, planted, hedges, rows, bales])
+
+    def _sr16_saplings(self, cd, sr16_map, lc, blocked, chm, hs):
+        """Fill some mapped forest gaps with young trees, never roads, rock or farmland.
+
+        SR16 measures the surrounding forest stand, not the precise trunk. The
+        canopy model remains authoritative for large trees; small infill is only
+        placed on WorldCover tree pixels without detected existing vegetation.
+        """
+        if lc is None:
+            return _empty(), np.empty(0, np.uint8)
+        lon0, lat0, lon1, lat1 = cd.bounds
+        ex0, ey0 = _to3857(lon0, lat0)
+        ex1, ey1 = _to3857(lon1, lat1)
+        step = SR16_GAP_CELL_M * _merc_k((lat0 + lat1) / 2)
+        gi = np.arange(math.floor(ex0 / step), math.ceil(ex1 / step))
+        gj = np.arange(math.floor(ey0 / step), math.ceil(ey1 / step))
+        GI, GJ = np.meshgrid(gi, gj)
+        GI, GJ = GI.ravel(), GJ.ravel()
+        px = (GI + _hash01(GI, GJ, 41)) * step
+        py = (GJ + _hash01(GI, GJ, 42)) * step
+        valid = (px >= ex0) & (px < ex1) & (py >= ey0) & (py < ey1)
+        valid &= _hash01(GI, GJ, 43) < SR16_GAP_P
+        if not valid.any():
+            return _empty(), np.empty(0, np.uint8)
+        px, py, GI, GJ = px[valid], py[valid], GI[valid], GJ[valid]
+        cc = np.floor((px - chm.x0) / chm.dx).astype(np.int64)
+        rr = np.floor((chm.y0 - py) / chm.dy).astype(np.int64)
+        inside = (cc >= 0) & (cc < hs.shape[1]) & (rr >= 0) & (rr < hs.shape[0])
+        inside[inside] &= ~blocked[rr[inside], cc[inside]] & (hs[rr[inside], cc[inside]] < TREE_MIN_M)
+        if not inside.any():
+            return _empty(), np.empty(0, np.uint8)
+        px, py, GI, GJ = px[inside], py[inside], GI[inside], GJ[inside]
+        lon, lat = _to4326(px, py)
+        lcls = lc.sample(lon, lat)
+        types = sr16_map.sample(lon, lat)
+        forest = (lcls == WC["tree"]) & (types >= norway_sr16.SPRUCE) & (types <= norway_sr16.MIXED)
+        if not forest.any():
+            return _empty(), np.empty(0, np.uint8)
+        lon, lat, lcls, types, GI, GJ = (a[forest] for a in (lon, lat, lcls, types, GI, GJ))
+        size = 3.0 + 2.5 * _hash01(GI, GJ, 44)
+        group = _sr16_groups(np.full(len(lon), G_CONIFER, np.uint8), types, _hash01(GI, GJ, 45))
+        inside_norway = _nordic(lat, lon)
+        if not inside_norway.all():
+            lon, lat, lcls, size, group, GI, GJ = (a[inside_norway] for a in (lon, lat, lcls, size, group, GI, GJ))
+        group = _norway_tree_groups(group, lat, lon)
+        out = Items(lon, lat, size.astype(np.float32), (size * 0.12 + 1.0).astype(np.float32),
+                    np.full(len(lon), KIND_TREE, np.uint8), group,
+                    _hash01(GI, GJ, 46).astype(np.float32),
+                    (360.0 * _hash01(GI, GJ, 47)).astype(np.float32),
+                    (0.85 + 0.3 * _hash01(GI, GJ, 48)).astype(np.float32))
+        return out, lcls
+
+    def _edge(self, cd, lc, blocked, road, chm, hs, sr16_map=None):
+        """Norway-only thicket, plus unchanged legacy roadside foliage elsewhere."""
+        if lc is None or not road.any():
+            return _empty()
+        if norway_outline.intersects_bbox(cd.bounds):
+            # Two deterministic grids: the original grid is used outside the
+            # border, the Norway grid inside it. A border tile changes nothing
+            # on the Swedish/Finnish side, including candidate spacing.
+            return _concat(self._edge_variant(cd, lc, blocked, road, chm, hs, sr16_map, False),
+                           self._edge_variant(cd, lc, blocked, road, chm, hs, sr16_map, True))
+        return self._edge_variant(cd, lc, blocked, road, chm, hs, sr16_map, False)
+
+    def _edge_variant(self, cd, lc, blocked, road, chm, hs, sr16_map, nordic):
+        lon0, lat0, lon1, lat1 = cd.bounds
+        if _dry_west(np.array([(lat0 + lat1) / 2]), np.array([(lon0 + lon1) / 2]))[0]:
+            return _empty()
+        band_m = NORDIC_EDGE_M if nordic else EDGE_M
+        band = _dilate(road, max(1, int(round(band_m / chm.dx)))) & ~blocked
+        if not band.any():
+            return _empty()
+        ex0, ey0 = _to3857(lon0, lat0)
+        ex1, ey1 = _to3857(lon1, lat1)
+        s = (NORDIC_EDGE_CELL_M if nordic else EDGE_CELL_M) * _merc_k((lat0 + lat1) / 2)
+        GI, GJ = np.meshgrid(np.arange(math.floor(ex0 / s), math.ceil(ex1 / s)),
+                             np.arange(math.floor(ey0 / s), math.ceil(ey1 / s)))
+        GI, GJ = GI.ravel(), GJ.ravel()
+        px = (GI + _hash01(GI, GJ, 21)) * s
+        py = (GJ + _hash01(GI, GJ, 22)) * s
+        c_ = np.floor((px - chm.x0) / chm.dx).astype(np.int64)
+        r_ = np.floor((chm.y0 - py) / chm.dy).astype(np.int64)
+        ok = (px >= ex0) & (px < ex1) & (py >= ey0) & (py < ey1) & (c_ >= 0) & (c_ < hs.shape[1]) \
+            & (r_ >= 0) & (r_ < hs.shape[0])
+        ok[ok] &= band[r_[ok], c_[ok]]
+        if nordic:
+            # Mean ~0.52, as before, but neighbouring bushes favour the same
+            # 24-m-wide patches. No extra vegetation rows or global work.
+            probability = np.clip(0.10 + 0.84 * _patch_field(
+                px, py, NORDIC_PATCH_M, (lat0 + lat1) / 2, 61), 0.10, 0.94)
+        else:
+            probability = EDGE_P
+        ok &= _hash01(GI, GJ, 23) < probability
+        if not ok.any():
+            return _empty()
+        GI, GJ, px, py = GI[ok], GJ[ok], px[ok], py[ok]
+        lon, lat = _to4326(px, py)
+        belongs = _nordic(lat, lon)
+        selected = belongs if nordic else ~belongs
+        if not selected.any():
+            return _empty()
+        cls = lc.sample(lon, lat)
+        has_canopy = hs[r_[ok], c_[ok]] >= TREE_MIN_M
+        forest = (cls == WC["tree"]) & has_canopy   # old behaviour when SR16 is not available
+        if sr16_map is not None:
+            sr = sr16_map.sample(lon, lat)
+            mapped_forest = (sr >= norway_sr16.SPRUCE) & (sr <= norway_sr16.MIXED)
+            # Real SR16 stands can contain canopy-height gaps; let a handful of
+            # small roadside bushes grow there too, but never on bare rock/fields.
+            forest |= mapped_forest & np.isin(cls, (WC["tree"], WC["shrub"]))
+        forest &= selected
+        if not forest.any():
+            return _empty()
+        GI, GJ, lon, lat, cls = GI[forest], GJ[forest], lon[forest], lat[forest], cls[forest]
+        size = (0.9 if nordic else 1.2) + (2.0 if nordic else 1.8) * _hash01(GI, GJ, 24)
+        n = len(lon)
+        groups = regional(np.full(n, G_SHRUB, np.uint8), size, lat, lon, cls, _hash01(GI, GJ, 25))
+        if nordic:
+            fern = _hash01(GI, GJ, 32) < 0.26
+            groups = np.where(fern, G_FERN, groups).astype(np.uint8)
+            size = np.where(fern, 0.65 + 0.65 * _hash01(GI, GJ, 33), size)
+        return Items(lon, lat, size.astype(np.float32), (size * 0.6).astype(np.float32),
+                     np.full(n, KIND_BUSH, np.uint8), groups,
+                     _hash01(GI, GJ, 26).astype(np.float32), (_hash01(GI, GJ, 27) * 360.0).astype(np.float32),
+                     (0.8 + 0.4 * _hash01(GI, GJ, 28)).astype(np.float32))
+
+    def _slope(self, px, py):
+        """The ground's slope (rise over run) at Web Mercator points (px, py), from the DEM ROCK_SLOPE_D m either side
+        in x and y; None when the DEM cannot say."""
+        k = dnp.cos(np.radians(_to4326(px[:1], py[:1])[1][0]))       # Web Mercator m per ground m (one cell)
+        d = ROCK_SLOPE_D / max(k, 0.05)
+        x = np.concatenate([px + d, px - d, px, px])
+        y = np.concatenate([py, py, py + d, py - d])
+        lon, lat = _to4326(x, y)
+        try:
+            z = np.asarray(self.dem.sample(lat, lon, ROCK_SLOPE_ZOOM), np.float64).reshape(4, len(px))
+        except Exception as e:          # (offline, no tile): rocks as without a DEM
+            log.debug("vegetation: no slope: %s", e)
+            self._tl.dem_failed = True
+            return None
+        return dnp.hypot(z[0] - z[1], z[2] - z[3]) / (2 * ROCK_SLOPE_D)
+
+    def _scatter(self, cd, lc, blocked, chm, hs, road=None):
+        """Bushes and rocks on a hashed SCATTER_CELL_M grid over shrubland, grass and bare ground."""
+        if lc is None:
+            return _empty()
+        lon0, lat0, lon1, lat1 = cd.bounds
+        ex0, ey0 = _to3857(lon0, lat0)
+        ex1, ey1 = _to3857(lon1, lat1)
+        s = SCATTER_CELL_M * _merc_k((lat0 + lat1) / 2)  # (in ground metres as at MERC_REF_LAT)
+        gi = np.arange(math.floor(ex0 / s), math.ceil(ex1 / s))
+        gj = np.arange(math.floor(ey0 / s), math.ceil(ey1 / s))
+        GI, GJ = np.meshgrid(gi, gj)
+        GI, GJ = GI.ravel(), GJ.ravel()
+        px = (GI + _hash01(GI, GJ, 11)) * s
+        py = (GJ + _hash01(GI, GJ, 12)) * s
+        keep = (px >= ex0) & (px < ex1) & (py >= ey0) & (py < ey1)
+        px, py, GI, GJ = px[keep], py[keep], GI[keep], GJ[keep]
+        lon, lat = _to4326(px, py)
+        nordic_here = _nordic(lat, lon)
+        cls = lc.sample(lon, lat)
+        u = _hash01(GI, GJ, 13)
+        pb = np.zeros(len(px))
+        pr = np.zeros(len(px))
+        for c, (b, r) in SCATTER_P.items():
+            pb = np.where(cls == c, b, pb)
+            pr = np.where(cls == c, r, pr)
+        # Keep roughly the v0.5 item budget while growing forest-floor shrubs
+        # in green patches. SR16's species/positions are left untouched.
+        if np.any(nordic_here & (cls == WC["tree"])):
+            patch = _patch_field(px, py, NORDIC_PATCH_M, (lat0 + lat1) / 2, 62)
+            pb = np.where(nordic_here & (cls == WC["tree"]),
+                          0.06 + 0.36 * patch, pb)
+        # on the CHM grid: not blocked, no canopy there already (the trees are the CHM's)
+        c_ = np.floor((px - chm.x0) / chm.dx).astype(np.int64)
+        r_ = np.floor((chm.y0 - py) / chm.dy).astype(np.int64)
+        ok = (c_ >= 0) & (c_ < hs.shape[1]) & (r_ >= 0) & (r_ < hs.shape[0])
+        free = np.zeros(len(px), bool)
+        free[ok] = ~blocked[r_[ok], c_[ok]] & ((hs[r_[ok], c_[ok]] < BUSH_MIN_M) | (cls[ok] == UNDERSTORY))
+        # bare land in a town is a square, a lot or a building site, not a rock field (desert rocks stood on
+        # Mexico City's Zocalo, 2026-10-15): none where built-up land is around (2 of 4 points BUILT_NEAR_M away)
+        bare = np.flatnonzero(free & (cls == WC["bare"]))
+        if len(bare):
+            near = np.zeros(len(bare), np.int64)
+            for dx, dy in ((BUILT_NEAR_M, 0.0), (-BUILT_NEAR_M, 0.0), (0.0, BUILT_NEAR_M), (0.0, -BUILT_NEAR_M)):
+                lo2, la2 = _to4326(px[bare] + dx, py[bare] + dy)
+                near += lc.sample(lo2, la2) == WC["built"]
+            free[bare[near >= 2]] = False
+        # a beach's sand (beaches.py, GitHub #578): neither rocks nor bushes
+        # (only the points that would get one: a few % of them, the test samples ~70 points round each)
+        sandy = np.flatnonzero(free & (u < pr + pb) & ((cls == WC["bare"]) | (cls == WC["grass"])))
+        if len(sandy):
+            sec = 1.0 / dnp.cos(np.radians(lat[sandy]))      # (Web Mercator metres per ground metre)
+            pxs, pys = px[sandy], py[sandy]
+
+            def at(idx, dx, dy):
+                return lc.sample(*_to4326(pxs[idx] + dx * sec[idx], pys[idx] + dy * sec[idx]))
+            free[sandy[beaches.sand_points(cls[sandy], at)]] = False
+        rock = free & (u < pr)
+        bare_rock = np.flatnonzero(rock & (cls == WC["bare"]))
+        if len(bare_rock) and self.dem is not None:
+            slope = self._slope(px[bare_rock], py[bare_rock])
+            if slope is not None:
+                lo_s, hi_s = ROCK_SLOPE
+                keep = _hash01(GI[bare_rock], GJ[bare_rock], 19) < np.clip((slope - lo_s) / (hi_s - lo_s), 0.0, 1.0)
+                rock[bare_rock[~keep]] = False
+                free[bare_rock[~keep]] = False     # (nor a bush there: bare ground stays bare)
+        bush = free & ~rock & (u < pr + pb)
+        sel = rock | bush
+        n = int(sel.sum())
+        size = 0.4 + 1.6 * dnp.sq(_hash01(GI[sel], GJ[sel], 14))
+        groups = regional(np.where(rock[sel], G_ROCK, G_SHRUB), size, lat[sel], lon[sel], cls[sel],
+                          _hash01(GI[sel], GJ[sel], 18)) if n else np.empty(0, np.uint8)
+        if n:
+            fern = nordic_here[sel] & bush[sel] & (cls[sel] == WC["tree"]) \
+                   & (_hash01(GI[sel], GJ[sel], 34) < 0.12)
+            groups = np.where(fern, G_FERN, groups).astype(np.uint8)
+            size = np.where(fern, 0.6 + 0.7 * _hash01(GI[sel], GJ[sel], 35), size)
+            if road is not None and road.any():
+                # Existing rows only: replace some roadside shrubs with short
+                # stock clover carpets. No collision and hidden beyond 180 m
+                # by trees.lua. A terrain texture pass would be separate.
+                near = _near_road(lat[sel], lon[sel], road, chm,
+                                  metres=NORDIC_FLOORCOVER_NEAR_M)
+                floor = near & nordic_here[sel] & bush[sel] \
+                        & np.isin(cls[sel], (WC["tree"], WC["shrub"])) \
+                        & (_hash01(GI[sel], GJ[sel], 63) < NORDIC_FLOORCOVER_SHARE)
+                groups = np.where(floor, G_NORWAY_FLOORCOVER, groups).astype(np.uint8)
+                size = np.where(floor, 0.19 + 0.07 * _hash01(GI[sel], GJ[sel], 64), size)
+        return Items(lon[sel], lat[sel], size.astype(np.float32), (size * 0.6).astype(np.float32),
+                     np.where(rock[sel], KIND_ROCK, KIND_BUSH).astype(np.uint8), groups,
+                     _hash01(GI[sel], GJ[sel], 15).astype(np.float32),
+                     (_hash01(GI[sel], GJ[sel], 16) * 360.0).astype(np.float32),
+                     (0.8 + 0.4 * _hash01(GI[sel], GJ[sel], 17)).astype(np.float32)) if n else _empty()
+
+
+def _thin(jj, ii, h, px, k=1.0):
+    """Non-maximum suppression: the tallest tops first, each removing the others within its crown
+    radius (0.12 h + 1 m, times CROWN_SPACING). Deterministic (ties broken by position). earthfast thin_tops
+    (2026-10-23: the same tops as the Python loop it replaced). k (_merc_k): the pixels judged at the tuned scale, their
+    indices divided by k (thin_tops' radius and its 1.5 px floor are in pixels: at 69 N a pixel is 0.47 of one at
+    MERC_REF_LAT on the ground, and the floor let ~3x the trees stand)."""
+    if len(jj) == 0:
+        return jj, ii
+    fast.require(64, "thin_tops")
+    sj, si = (jj, ii) if k == 1.0 else (np.rint(jj / k), np.rint(ii / k))
+    keep = fast._ef.thin_tops(np.ascontiguousarray(sj, np.int64), np.ascontiguousarray(si, np.int64),
+                              np.ascontiguousarray(h, np.float32), float(CROWN_SPACING), float(px))
+    return jj[keep], ii[keep]
+
+
+def _empty():
+    z = np.zeros(0)
+    return Items(z, z, z.astype(np.float32), z.astype(np.float32), z.astype(np.uint8), z.astype(np.uint8),
+                 z.astype(np.float32), z.astype(np.float32), z.astype(np.float32))
+
+
+def _concat(a, b):
+    return Items(*(np.concatenate([getattr(a, f), getattr(b, f)]) for f in
+                   ("lon", "lat", "height", "radius", "kind", "group", "rank", "yaw", "scale")))
+
+
+R = 6378137.0
+
+
+def _to3857(lon, lat):
+    lon = np.asarray(lon, np.float64)
+    lat = np.clip(np.asarray(lat, np.float64), -85.0511287798066, 85.0511287798066)
+    return np.radians(lon) * R, dnp.log(dnp.tan(np.pi / 4 + np.radians(lat) / 2)) * R
+
+
+def _to4326(x, y):
+    x = np.asarray(x, np.float64)
+    y = np.asarray(y, np.float64)
+    return np.degrees(x / R), np.degrees(2 * dnp.arctan(dnp.exp(y / R)) - np.pi / 2)
+
+
+# Planted rows (Overture land_use class orchard). Spacing grows, by whole steps, on a huge orchard so one
+# cell does not emit a forest of its own; the lattice is fixed in the world so a row continues across a
+# cell edge when both pieces share an axis.
+ORCHARD_ALONG_M = 2.5       # along a row
+ORCHARD_ACROSS_M = 3.0      # between rows
+ORCHARD_MIN_M2 = 600.0
+ORCHARD_POLY_MAX = 3500
+ORCHARD_CELL_MAX = 4500
+# Crop rows (surface.FARM_ROW_M): a line of shrubs down the middle of each gap between the dirt furrows.
+# Spacing along the row grows when a field would emit too many.
+FARM_BUSH_ALONG = 6.0
+FARM_BUSH_POLY = 500
+FARM_BUSH_CELL = 2000
+FARM_MIN_M2 = 800.0
+
+
+def _keep_off_mask(items, mask, chm):
+    """Per item: its position is not on a set pixel of mask (canopy trees inside an orchard go)."""
+    if len(items) == 0 or mask is None or not np.any(mask):
+        return np.ones(len(items), bool)
+    x, y = _to3857(items.lon, items.lat)
+    c = np.floor((x - chm.x0) / chm.dx).astype(np.int64)
+    r = np.floor((chm.y0 - y) / chm.dy).astype(np.int64)
+    n_r, n_c = mask.shape
+    inside = (r >= 0) & (r < n_r) & (c >= 0) & (c < n_c)
+    drop = np.zeros(len(items), bool)
+    drop[inside] = mask[r[inside], c[inside]]
+    return ~drop
+
+
+def clump_cell(lat):
+    """The clump grid's square (Web Mercator m) at latitude lat: a whole number of them a geotile (geotiles.Z), each
+    about CLUMP_CELL_M on the ground."""
+    import geotiles
+    tile = 2.0 * math.pi * R / (1 << geotiles.Z)
+    k = max(1, int(round(tile * max(dmath.cos(math.radians(lat)), 0.05) / CLUMP_CELL_M)))
+    return tile / k
+
+
+def clumps(tree, lcls, lat):
+    """tree (a cell's canopy Items) with the far clumps added (CLUMP_OF, earthfast.veg_clumps) and the trees they
+    stand for flagged (a negative scale: trees.lua shows them only within its near ring). lcls: the land cover class
+    of each; lat: the cell's (clump_cell). Street trees (built-up land) stay single."""
+    if len(tree) < CLUMP_MIN:
+        return tree
+    fast.require(201, "veg_clumps")
+    x, y = _to3857(tree.lon, tree.lat)
+    table = [255] * len(GROUPS)
+    for g, c in CLUMP_OF.items():
+        table[g] = c
+    member, cx, cy, ch, cr, cg, cu = fast._ef.veg_clumps(
+        np.ascontiguousarray(x, np.float64), np.ascontiguousarray(y, np.float64),
+        np.ascontiguousarray(tree.group, np.uint8), np.ascontiguousarray(tree.kind, np.uint8),
+        np.ascontiguousarray(tree.height, np.float32), np.ascontiguousarray(tree.rank, np.float32),
+        np.ascontiguousarray(lcls, np.uint8), table, KIND_TREE, WC["built"], clump_cell(lat), CLUMP_MIN)
+    if not len(cx):
+        return tree
+    member = np.asarray(member, bool)
+    scale = tree.scale.copy()
+    scale[member] = -np.abs(scale[member])
+    tree = Items(tree.lon, tree.lat, tree.height, tree.radius, tree.kind, tree.group, tree.rank, tree.yaw, scale)
+    lon, la = _to4326(np.asarray(cx), np.asarray(cy))
+    h = np.asarray(ch, np.float32)
+    n = len(lon)
+    return _concat(tree, Items(lon, la, h, (0.3 * h + 2.0).astype(np.float32), np.full(n, KIND_TREE, np.uint8),
+                               np.asarray(cg, np.uint8), np.asarray(cr, np.float32),
+                               (np.asarray(cu) * 360.0).astype(np.float32), np.ones(n, np.float32)))
+
+
+def _fid_key(fid):
+    x = 1469598103934665603
+    for b in str(fid).encode():
+        x ^= b
+        x = (x * 1099511628211) & 0xFFFFFFFFFFFFFFFF
+    return x
+
+
+def _lattice(xy, holes, u, along, across, phase_a, phase_b, max_steps=300):
+    """The points (i along + phase_a) u + (j across + phase_b) v (Web Mercator m, v = u turned left) inside ring xy
+    and outside holes (lon / lat rings), i-major (earthfast.field_lattice); None when a side would take more than
+    max_steps."""
+    rings = [np.asarray(xy, np.float64)]
+    for hole in holes:
+        hole = np.asarray(hole, np.float64)
+        if len(hole) >= 3:
+            rings.append(np.column_stack(_to3857(hole[:, 0], hole[:, 1])))
+    off = np.cumsum([0] + [len(r) for r in rings]).astype(np.int64)
+    fast.require(201, "field_lattice")
+    got = fast._ef.field_lattice(np.ascontiguousarray(np.concatenate(rings)), off, (float(u[0]), float(u[1])),
+                                 float(along), float(across), float(phase_a), float(phase_b), int(max_steps))
+    return None if got is None else np.asarray(got[0])
+
+
+def orchard_items(feats, chm, blocked, bounds=None):
+    """Trees in lines on land_use class orchard: along the long side, one line every ORCHARD_ACROSS_M.
+    blocked is the canopy grid's buildings, roads and water. bounds (lon0, lat0, lon1, lat1) keeps a tree
+    in this cell. None of the random canopy."""
+    if feats is None or len(getattr(feats, "kind", ())) == 0 or feats.attrs.get("class") is None:
+        return _empty()
+    cls = np.asarray(feats.attrs["class"]).astype(str)
+    ids = getattr(feats, "ids", None)
+    xs, ys, hs, yaws, ranks, us = [], [], [], [], [], []
+    seen = set()
+    for i in np.flatnonzero((np.asarray(feats.kind) == 3) & (cls == "orchard")):
+        fid = ids[i] if ids is not None else i
+        if str(fid) in seen:
+            continue
+        seen.add(str(fid))
+        parts = feats.parts(int(i))
+        if not parts or not parts[0] or len(parts[0][0]) < 3:
+            continue
+        ring = np.asarray(parts[0][0], np.float64)
+        if len(ring) >= 2 and np.allclose(ring[0], ring[-1]):
+            ring = ring[:-1]
+        x, y = _to3857(ring[:, 0], ring[:, 1])
+        xy = np.column_stack([x, y])
+        area = abs(float(dnp.dot(x, np.roll(y, -1)) - dnp.dot(y, np.roll(x, -1)))) * 0.5
+        if area < ORCHARD_MIN_M2:
+            continue
+        u = _orchard_axis(xy)
+        v = np.array([-u[1], u[0]])
+        span_a = float((dnp.matmul(xy, u)).max() - (dnp.matmul(xy, u)).min())
+        span_b = float((dnp.matmul(xy, v)).max() - (dnp.matmul(xy, v)).min())
+        along, across = ORCHARD_ALONG_M, ORCHARD_ACROSS_M
+        factor = 1
+        while factor < 16 and (area / (along * across) > ORCHARD_POLY_MAX or span_a / along > 300
+                               or span_b / across > 300):
+            factor += 1
+            along, across = ORCHARD_ALONG_M * factor, ORCHARD_ACROSS_M * factor
+        phase_a = float(_hash01(np.array([_fid_key(fid)], np.uint64), np.array([1], np.uint64), 11)[0]) * along
+        phase_b = float(_hash01(np.array([_fid_key(fid)], np.uint64), np.array([2], np.uint64), 11)[0]) * across
+        pts = _lattice(xy, parts[0][1:], u, along, across, phase_a, phase_b)
+        if pts is None:
+            continue
+        if len(pts) == 0:
+            continue
+        key = np.uint64(_fid_key(fid))
+        jit_a = (_hash01(np.full(len(pts), key), np.arange(len(pts), dtype=np.uint64), 3) - 0.5) * 0.6
+        jit_b = (_hash01(np.full(len(pts), key), np.arange(len(pts), dtype=np.uint64), 4) - 0.5) * 0.3
+        pts = pts + jit_a[:, None] * u + jit_b[:, None] * v
+        if blocked is not None and np.any(blocked):
+            c = np.floor((pts[:, 0] - chm.x0) / chm.dx).astype(np.int64)
+            r = np.floor((chm.y0 - pts[:, 1]) / chm.dy).astype(np.int64)
+            n_r, n_c = blocked.shape
+            ok = (r >= 0) & (r < n_r) & (c >= 0) & (c < n_c)
+            bad = np.zeros(len(pts), bool)
+            bad[ok] = blocked[r[ok], c[ok]]
+            pts = pts[~bad]
+        if len(pts) == 0:
+            continue
+        if bounds is not None:
+            lon0, lat0, lon1, lat1 = bounds
+            ex0, ey0 = _to3857(lon0, lat0)
+            ex1, ey1 = _to3857(lon1, lat1)
+            pts = pts[(pts[:, 0] >= ex0) & (pts[:, 0] < ex1) & (pts[:, 1] > ey0) & (pts[:, 1] <= ey1)]
+        if len(pts) == 0:
+            continue
+        lon, lat = _to4326(pts[:, 0], pts[:, 1])
+        uh = _hash01(np.full(len(pts), key), np.arange(len(pts), dtype=np.uint64), 5)
+        yaw0 = math.degrees(dmath.atan2(float(u[1]), float(u[0])))
+        xs.append(lon)
+        ys.append(lat)
+        hs.append(4.2 + 2.3 * uh)
+        yaws.append(yaw0 + (uh - 0.5) * 24.0)
+        ranks.append(uh * 0.18)
+        us.append(uh)
+    if not xs:
+        return _empty()
+    lon, lat = np.concatenate(xs), np.concatenate(ys)
+    height = np.concatenate(hs).astype(np.float32)
+    yaw = np.concatenate(yaws).astype(np.float32)
+    rank = np.concatenate(ranks).astype(np.float32)
+    u = np.concatenate(us)
+    if len(lon) > ORCHARD_CELL_MAX:
+        keep = np.sort(np.argpartition(rank, ORCHARD_CELL_MAX - 1)[:ORCHARD_CELL_MAX])
+        lon, lat, height, yaw, rank, u = lon[keep], lat[keep], height[keep], yaw[keep], rank[keep], u[keep]
+    group = np.full(len(lon), G_DECIDUOUS, np.uint8)
+    group = regional(group, height, lat, lon, np.full(len(lon), WC["crop"], np.uint8), u)
+    return Items(lon, lat, height, (0.12 * height + 1.0).astype(np.float32),
+                 np.full(len(lon), KIND_TREE, np.uint8), group, rank, yaw, np.ones(len(lon), np.float32))
+
+
+# Vineyards (Overture land_use class vineyard; the asset survey's #11): Italy's grape_vine_group, three rows 2.45 m
+# apart and 15.9 m long, end to end along the field's dominant edge (_edge_axis; aerials of Saint-Emilion and Napa,
+# 2026-11-10: the rows run along the parcel's sides, 1.5-3 m apart), an item's ends inside the field and off its
+# roads and buildings. The
+# canopy's "bushes" inside a vineyard (the vines themselves, read from the canopy heights) are left out.
+VINE_ALONG_M = 15.9
+VINE_ACROSS_M = 7.35
+VINE_H_M = 2.6              # the shape's height (trees.lua CATALOG.vine)
+VINE_MIN_M2 = 300.0
+VINE_CELL_MAX = 40000
+VINE_TREE_M = 4.0           # a canopy top this tall in a vineyard is a tree, kept
+EDGE_AXIS_DEG = 8.0         # _edge_axis: edges this near a direction count for it
+
+
+def _blocked_at(pts, chm, blocked):
+    """Per Web Mercator point (m, 2): on a set pixel of the canopy-grid mask blocked."""
+    c = np.floor((pts[:, 0] - chm.x0) / chm.dx).astype(np.int64)
+    r = np.floor((chm.y0 - pts[:, 1]) / chm.dy).astype(np.int64)
+    n_r, n_c = blocked.shape
+    ok = (r >= 0) & (r < n_r) & (c >= 0) & (c < n_c)
+    bad = np.zeros(len(pts), bool)
+    bad[ok] = blocked[r[ok], c[ok]]
+    return bad
+
+
+def _field_rings(feats, cls_name, min_m2):
+    """(fid, ring (Web Mercator m, open), its holes (lon / lat rings), area m2 (Web Mercator)) of each land use
+    polygon of class cls_name, once per id."""
+    if feats is None or len(getattr(feats, "kind", ())) == 0 or feats.attrs.get("class") is None:
+        return
+    cls = np.asarray(feats.attrs["class"]).astype(str)
+    ids = getattr(feats, "ids", None)
+    seen = set()
+    for i in np.flatnonzero((np.asarray(feats.kind) == 3) & (cls == cls_name)):
+        fid = ids[i] if ids is not None else i
+        if str(fid) in seen:
+            continue
+        seen.add(str(fid))
+        parts = feats.parts(int(i))
+        if not parts or not parts[0] or len(parts[0][0]) < 3:
+            continue
+        ring = np.asarray(parts[0][0], np.float64)
+        if len(ring) >= 2 and np.allclose(ring[0], ring[-1]):
+            ring = ring[:-1]
+        x, y = _to3857(ring[:, 0], ring[:, 1])
+        area = abs(float(dnp.dot(x, np.roll(y, -1)) - dnp.dot(y, np.roll(x, -1)))) * 0.5
+        if area >= min_m2:
+            yield fid, np.column_stack([x, y]), parts[0][1:], area
+
+
+def vineyard_items(feats, chm, blocked, bounds=None):
+    """The rows of vines of land_use class vineyard (VINE_*): G_VINE items, yaw along the rows. blocked: the canopy
+    grid's buildings, roads and water; bounds (lon0, lat0, lon1, lat1) keeps an item in this cell."""
+    from polygon import Path
+    xs, ys, yaws, us = [], [], [], []
+    for fid, xy, holes, area in _field_rings(feats, "vineyard", VINE_MIN_M2):
+        u = _edge_axis(xy)
+        key = np.uint64(_fid_key(fid))
+        sec = 1.0 / max(dmath.cos(math.radians(float(_to4326(xy[:1, 0], xy[:1, 1])[1][0]))), 0.05)   # (merc m / m)
+        along, across = VINE_ALONG_M * sec, VINE_ACROSS_M * sec
+        phase_a = float(_hash01(np.array([key]), np.array([1], np.uint64), 31)[0]) * along
+        phase_b = float(_hash01(np.array([key]), np.array([2], np.uint64), 31)[0]) * across
+        pts = _lattice(xy, holes, u, along, across, phase_a, phase_b)
+        if pts is None or len(pts) == 0:
+            continue
+        # the item's ends (a metre in from them) in the field too, and every one of its three points free
+        k = (0.5 * VINE_ALONG_M - 1.0) * sec
+        ends = [pts + k * u, pts - k * u]
+        ok = np.ones(len(pts), bool)
+        path = Path(xy)
+        for e in ends:
+            ok &= np.asarray(path.contains_points(e), bool)
+        for hole in holes:
+            hole = np.asarray(hole, np.float64)
+            if len(hole) >= 3:
+                hp = Path(np.column_stack(_to3857(hole[:, 0], hole[:, 1])))
+                for e in ends:
+                    ok &= ~np.asarray(hp.contains_points(e), bool)
+        if blocked is not None and np.any(blocked):
+            for p in [pts] + ends:
+                ok &= ~_blocked_at(p, chm, blocked)
+        pts = pts[ok]
+        if bounds is not None and len(pts):
+            ex0, ey0 = _to3857(bounds[0], bounds[1])
+            ex1, ey1 = _to3857(bounds[2], bounds[3])
+            pts = pts[(pts[:, 0] >= ex0) & (pts[:, 0] < ex1) & (pts[:, 1] > ey0) & (pts[:, 1] <= ey1)]
+        if len(pts) == 0:
+            continue
+        uh = _hash01(np.full(len(pts), key), np.arange(len(pts), dtype=np.uint64), 32)
+        yaw0 = math.degrees(dmath.atan2(float(u[1]), float(u[0])))
+        xs.append(pts[:, 0])
+        ys.append(pts[:, 1])
+        yaws.append(yaw0 + 180.0 * (uh < 0.5))
+        us.append(uh)
+    if not xs:
+        return _empty()
+    x, y, yaw, u = np.concatenate(xs), np.concatenate(ys), np.concatenate(yaws), np.concatenate(us)
+    rank = (u * 0.15).astype(np.float32)
+    if len(x) > VINE_CELL_MAX:
+        keep = np.sort(np.argpartition(rank, VINE_CELL_MAX - 1)[:VINE_CELL_MAX])
+        x, y, yaw, u, rank = x[keep], y[keep], yaw[keep], u[keep], rank[keep]
+    lon, lat = _to4326(x, y)
+    n = len(lon)
+    h = (VINE_H_M * (0.95 + 0.1 * _hash01(np.arange(n, dtype=np.uint64), np.full(n, 7, np.uint64), 33))).astype(
+        np.float32)
+    return Items(lon, lat, h, np.full(n, 1.2, np.float32), np.full(n, KIND_BUSH, np.uint8),
+                 np.full(n, G_VINE, np.uint8), rank, yaw.astype(np.float32), np.ones(n, np.float32))
+
+
+# Round bales on fields after the harvest (the asset survey's #16): the stock race props s_haybaleround_large_01
+# (straw, on land_use class farmland: the cereals' straw) and s_haybaleround_alt_01 (wrapped silage, on meadows),
+# along windrows BALE_ACROSS_M apart down the field's dominant edge, one every ~BALE_ALONG_M, some left out. An OSM
+# farmland polygon often spans many fields (the Beauce's, 2026-11-10 aerial: one polygon over dozens of fields, the
+# bales' blocks crossed them): only a polygon up to BALE_FIELD_MAX_M2, a field, is baled, BALE_SHARE of them (a hash of
+# its id), a headland BALE_EDGE_M wide left clear. The season is the mod's (trees.lua SEASON: its groups by hemisphere, the
+# date's month): straw in July-September, silage May-September (the south: six months on); none in the tropics.
+BALE_ALONG_M = 38.0
+BALE_ACROSS_M = 14.0
+BALE_FIELD_MAX_M2 = 40e4
+BALE_EDGE_M = 8.0
+BALE_SHARE = 0.2
+BALE_KEEP = 0.75
+BALE_JITTER_M = 9.0
+BALE_H_M = 1.25             # the shapes' height (trees.lua CATALOG.straw_* / silage_*)
+BALE_MIN_M2 = 3000.0
+BALE_CELL_MAX = 6000
+BALE_GROUPS = (G_STRAW_N, G_STRAW_S, G_SILAGE_N, G_SILAGE_S)
+BALE_CLASSES = {"farmland": (G_STRAW_N, G_STRAW_S), "meadow": (G_SILAGE_N, G_SILAGE_S)}
+
+
+def bale_items(feats, chm, blocked, bounds=None):
+    """Round bales on a share of the fields (BALE_*): items of the BALE_GROUPS by the field's class and hemisphere.
+    blocked: the canopy grid's buildings, roads and water; bounds (lon0, lat0, lon1, lat1) keeps a bale in this cell."""
+    xs, ys, yaws, gs, us = [], [], [], [], []
+    for cls_name, (g_north, g_south) in BALE_CLASSES.items():
+        for fid, xy, holes, area in _field_rings(feats, cls_name, BALE_MIN_M2):
+            lat = float(_to4326(xy[:1, 0], xy[:1, 1])[1][0])
+            if abs(lat) < 23.5:
+                continue
+            sec = 1.0 / max(dmath.cos(math.radians(lat)), 0.05)
+            if area > BALE_FIELD_MAX_M2 * sec * sec:
+                continue                    # (many fields in one polygon: no field's edges to follow)
+            key = np.uint64(_fid_key(fid))
+            if float(_hash01(np.array([key]), np.array([0], np.uint64), 42)[0]) >= BALE_SHARE:
+                continue
+            u = _edge_axis(xy)
+            along, across = BALE_ALONG_M * sec, BALE_ACROSS_M * sec
+            phase_a = float(_hash01(np.array([key]), np.array([1], np.uint64), 41)[0]) * along
+            phase_b = float(_hash01(np.array([key]), np.array([2], np.uint64), 41)[0]) * across
+            pts = _lattice(xy, holes, u, along, across, phase_a, phase_b, max_steps=800)
+            if pts is None or len(pts) == 0:
+                continue
+            idx = np.arange(len(pts), dtype=np.uint64)
+            baled = _hash01(np.full(len(pts), key), idx, 43) < BALE_KEEP
+            pts, idx = pts[baled], idx[baled]
+            pts = pts + ((_hash01(np.full(len(pts), key), idx, 44) - 0.5) * 2 * BALE_JITTER_M * sec)[:, None] * u
+            if len(pts):                    # (the headland: BALE_EDGE_M in from the field's edge, every way)
+                from polygon import Path
+                path, v = Path(xy), np.array([-u[1], u[0]])
+                for d in (u, -u, v, -v):
+                    pts = pts[np.asarray(path.contains_points(pts + d * BALE_EDGE_M * sec), bool)]
+            if blocked is not None and np.any(blocked):
+                pts = pts[~_blocked_at(pts, chm, blocked)]
+            if bounds is not None and len(pts):
+                ex0, ey0 = _to3857(bounds[0], bounds[1])
+                ex1, ey1 = _to3857(bounds[2], bounds[3])
+                pts = pts[(pts[:, 0] >= ex0) & (pts[:, 0] < ex1) & (pts[:, 1] > ey0) & (pts[:, 1] <= ey1)]
+            if len(pts) == 0:
+                continue
+            uh = _hash01(np.full(len(pts), key), np.arange(len(pts), dtype=np.uint64), 45)
+            yaw0 = math.degrees(dmath.atan2(float(u[1]), float(u[0])))
+            xs.append(pts[:, 0])
+            ys.append(pts[:, 1])
+            yaws.append(yaw0 + 90.0 + (uh - 0.5) * 50.0)
+            gs.append(np.full(len(pts), g_north if lat >= 0 else g_south, np.uint8))
+            us.append(uh)
+    if not xs:
+        return _empty()
+    x, y, yaw, g, u = (np.concatenate(a) for a in (xs, ys, yaws, gs, us))
+    rank = (u * 0.3).astype(np.float32)
+    if len(x) > BALE_CELL_MAX:
+        keep = np.sort(np.argpartition(rank, BALE_CELL_MAX - 1)[:BALE_CELL_MAX])
+        x, y, yaw, g, u, rank = x[keep], y[keep], yaw[keep], g[keep], u[keep], rank[keep]
+    lon, lat = _to4326(x, y)
+    n = len(lon)
+    h = (BALE_H_M * (0.95 + 0.25 * u)).astype(np.float32)      # (1.2-1.5 m bales)
+    return Items(lon, lat, h, np.full(n, 0.8, np.float32), np.full(n, KIND_BUSH, np.uint8), g, rank,
+                 yaw.astype(np.float32), np.ones(n, np.float32))
+
+
+def farm_foliage(feats, chm, blocked, bounds=None):
+    """Shrubs in lines between the crop rows of land_use class farmland (surface.FARM_ROW_M): one line down
+    the middle of each gap between the dirt furrows. Roads (blocked) are left bare, so a dirt track through a
+    field is not planted. bounds (lon0, lat0, lon1, lat1) keeps a shrub in this cell."""
+    if feats is None or len(getattr(feats, "kind", ())) == 0 or feats.attrs.get("class") is None:
+        return _empty()
+    import geodesy
+    import surface as sf
+    from polygon import Path
+    cls = np.asarray(feats.attrs["class"]).astype(str)
+    ids = getattr(feats, "ids", None)
+    xs, ys, hs, yaws, ranks, us = [], [], [], [], [], []
+    seen = set()
+    row = sf.FARM_ROW_M
+    for i in np.flatnonzero((np.asarray(feats.kind) == 3) & (cls == "farmland")):
+        fid = ids[i] if ids is not None else i
+        if str(fid) in seen:
+            continue
+        seen.add(str(fid))
+        parts = feats.parts(int(i))
+        if not parts or not parts[0] or len(parts[0][0]) < 3:
+            continue
+        ring = np.asarray(parts[0][0], np.float64)
+        if len(ring) >= 2 and np.allclose(ring[0], ring[-1]):
+            ring = ring[:-1]
+        frame = geodesy.EnuFrame(float(np.mean(ring[:, 1])), float(np.mean(ring[:, 0])))
+        e, n, _ = frame.geodetic_to_enu(ring[:, 1], ring[:, 0], np.zeros(len(ring)))
+        xy = np.column_stack([np.asarray(e, np.float64), np.asarray(n, np.float64)])
+        area = abs(float(dnp.dot(xy[:, 0], np.roll(xy[:, 1], -1)) - dnp.dot(xy[:, 1], np.roll(xy[:, 0], -1)))) * 0.5
+        if area < FARM_MIN_M2:
+            continue
+        c = xy.mean(axis=0)
+        u = _orchard_axis(xy)
+        v = np.array([-float(u[1]), float(u[0])])
+        rel = xy - c
+        span_a = float((dnp.matmul(rel, u)).max() - (dnp.matmul(rel, u)).min())
+        span_b = float((dnp.matmul(rel, v)).max() - (dnp.matmul(rel, v)).min())
+        along = FARM_BUSH_ALONG
+        est = max(span_a, 1.0) / along * max(span_b, 1.0) / row
+        while est > FARM_BUSH_POLY and along < 24.0:
+            along += 4.0
+            est = max(span_a, 1.0) / along * max(span_b, 1.0) / row
+        phase = sf._field_phase(fid, xy)
+        target = (phase + 0.5 * (sf.FARM_FURROW_M + row)) % row
+        amin, amax = float((dnp.matmul(rel, u)).min()), float((dnp.matmul(rel, u)).max())
+        bmin, bmax = float((dnp.matmul(rel, v)).min()), float((dnp.matmul(rel, v)).max())
+        i0, i1 = math.floor(amin / along), math.ceil(amax / along)
+        j0, j1 = math.floor((bmin - target) / row), math.ceil((bmax - target) / row)
+        if i1 < i0 or j1 < j0 or i1 - i0 > 400 or j1 - j0 > 200:
+            continue
+        ii, jj = np.meshgrid(np.arange(i0, i1 + 1), np.arange(j0, j1 + 1), indexing="ij")
+        pts = c + (ii.ravel() * along)[:, None] * u + (target + jj.ravel() * row)[:, None] * v
+        inside = np.asarray(Path(xy).contains_points(pts), bool)
+        pts = pts[inside]
+        if len(pts) == 0:
+            continue
+        key = np.uint64(_fid_key(fid))
+        jit = (_hash01(np.full(len(pts), key), np.arange(len(pts), dtype=np.uint64), 21) - 0.5) * 0.8
+        pts = pts + jit[:, None] * u
+        la, lo, _ = frame.enu_to_geodetic(pts[:, 0], pts[:, 1], np.zeros(len(pts)))
+        la, lo = np.asarray(la, np.float64), np.asarray(lo, np.float64)
+        if blocked is not None and np.any(blocked):
+            x, y = _to3857(lo, la)
+            cc = np.floor((x - chm.x0) / chm.dx).astype(np.int64)
+            rr = np.floor((chm.y0 - y) / chm.dy).astype(np.int64)
+            n_r, n_c = blocked.shape
+            ok = (rr >= 0) & (rr < n_r) & (cc >= 0) & (cc < n_c)
+            bad = np.zeros(len(pts), bool)
+            bad[ok] = blocked[rr[ok], cc[ok]]
+            la, lo = la[~bad], lo[~bad]
+        if len(la) == 0:
+            continue
+        if bounds is not None:
+            lon0, lat0, lon1, lat1 = bounds
+            keep = (lo >= lon0) & (lo < lon1) & (la > lat0) & (la <= lat1)
+            la, lo = la[keep], lo[keep]
+        if len(la) == 0:
+            continue
+        uh = _hash01(np.full(len(la), key), np.arange(len(la), dtype=np.uint64), 22)
+        yaw0 = math.degrees(dmath.atan2(float(u[1]), float(u[0])))
+        xs.append(lo)
+        ys.append(la)
+        hs.append(1.3 + 0.7 * uh)
+        yaws.append(yaw0 + (uh - 0.5) * 16.0)
+        ranks.append(uh * 0.2)
+        us.append(uh)
+    if not xs:
+        return _empty()
+    lon, lat = np.concatenate(xs), np.concatenate(ys)
+    height = np.concatenate(hs).astype(np.float32)
+    yaw = np.concatenate(yaws).astype(np.float32)
+    rank = np.concatenate(ranks).astype(np.float32)
+    u = np.concatenate(us)
+    if len(lon) > FARM_BUSH_CELL:
+        keep = np.sort(np.argpartition(rank, FARM_BUSH_CELL - 1)[:FARM_BUSH_CELL])
+        lon, lat, height, yaw, rank, u = lon[keep], lat[keep], height[keep], yaw[keep], rank[keep], u[keep]
+    group = np.full(len(lon), G_SHRUB, np.uint8)
+    group = regional(group, height, lat, lon, np.full(len(lon), WC["crop"], np.uint8), u)
+    return Items(lon, lat, height, (0.4 * height).astype(np.float32),
+                 np.full(len(lon), KIND_BUSH, np.uint8), group, rank, yaw, np.ones(len(lon), np.float32))
+
+
+def _edge_axis(xy):
+    """The way a field's rows run (vineyards, hay windrows): its dominant edge direction, a unit vector pointing east
+    (north when north-south); earthfast.edge_axis (the principal axis of an odd shape ran across its rows:
+    Saint-Emilion's parcels, 2026-11-10 aerial)."""
+    fast.require(201, "edge_axis")
+    return np.array(fast._ef.edge_axis(np.ascontiguousarray(xy, np.float64), EDGE_AXIS_DEG))
+
+
+def _orchard_axis(xy):
+    """Unit long-side axis of a ring in metres, pointing east, or north when it runs north-south."""
+    p = np.asarray(xy, np.float64)
+    if len(p) >= 2 and np.allclose(p[0], p[-1]):
+        p = p[:-1]
+    d = p - p.mean(axis=0)
+    if len(d) < 2:
+        return np.array([1.0, 0.0])
+    cov = dnp.matmul(d.T, d)
+    tr = float(cov[0, 0] + cov[1, 1])
+    det = float(cov[0, 0] * cov[1, 1] - cov[0, 1] * cov[0, 1])
+    lam = tr / 2.0 + math.sqrt(max(tr * tr / 4.0 - det, 0.0))
+    if abs(float(cov[0, 1])) > 1e-8:
+        vx, vy = lam - float(cov[1, 1]), float(cov[0, 1])
+    elif float(cov[0, 0]) >= float(cov[1, 1]):
+        vx, vy = 1.0, 0.0
+    else:
+        vx, vy = 0.0, 1.0
+    nrm = math.hypot(vx, vy) or 1.0
+    u = np.array([vx / nrm, vy / nrm])
+    if u[0] < -1e-9 or (abs(u[0]) <= 1e-9 and u[1] < 0):
+        u = -u
+    return u
+
+
+def _mask_polys(f, mask, chm, grow_m, kind=3, select=None):
+    """Mark the polygons of Features f (buildings, water) on the CHM-grid mask (bool, C order): every pixel whose
+    centre lies inside a part (its rings XOR'd, matplotlib's point-in-path test), within the part's box grown by
+    grow_m (select: a bool per feature, only those). The native module's (earthfast mask_polys, 2026-10-23: the same
+    pixels as the per-polygon Python loop it replaced, 13x faster: half of a tree cell's build)."""
+    if f is None:
+        return
+    fast.require(62, "vegetation mask_polys")
+    feats = np.flatnonzero((f.kind == kind) & (True if select is None else select)).astype(np.int64)
+    if not len(feats):
+        return
+    fast._ef.mask_polys(mask.view(np.uint8), np.ascontiguousarray(f.lonlat, np.float64),
+                        np.ascontiguousarray(f.coord_off, np.int64), np.ascontiguousarray(f.ring_off, np.int64),
+                        np.ascontiguousarray(f.part_off, np.int64), feats, float(chm.x0), float(chm.y0),
+                        float(chm.dx), float(chm.dy), grow_m / chm.dx)
+
+
+def _mask_corners(road_cells, masks, chm, bounds, urban=None, widths=None, grow=ROAD_CLEAR_M):
+    """Mark the rounded corners of the junctions among road_cells (road Features; roadcorners.pads, their arcs grown by
+    grow m) that may reach the cell's bounds (lon0, lat0, lon1, lat1) on each CHM-grid mask of masks: a tree whose top
+    lands on one is not moved off it (no road corridor pushes it: _build drops it), nor is a bush or rock scattered."""
+    import mapgeom
+    import roadcorners
+    cells = [f for f in road_cells if isinstance(f, mapgeom.Features) and len(f)]
+    if not cells:
+        return
+    try:
+        pads = roadcorners.pads(cells, urban, widths, lonlat_bounds=tuple(bounds), grow=grow)
+    except Exception as e:      # (the roads' masks alone)
+        log.debug("vegetation: road corners: %s: %s", type(e).__name__, e)
+        return
+    if not pads:
+        return
+    feats = mapgeom.build("roadcorners", np.array([str(i) for i in range(len(pads))]),
+                          [(mapgeom.POLYGON, [[np.c_[lo, la]]]) for la, lo in pads])
+    for m in masks:
+        _mask_polys(feats, m, chm, 0.0)
+
+
+DECK_CLEAR_M = 2.0          # m past a bridge deck's edge (its sidewalks and parapets) no tree stands
+
+
+def _mask_decks(f, mask, chm, specs):
+    """Mark the bridge decks of road Features f on the CHM-grid mask: each bridge piece (roads.bridge_parts) its deck
+    wide (roads.bridge_specs, and the sidewalks it carries: roads.deck_walks with specs(f), the ground widths) +
+    DECK_CLEAR_M either side. A street tree whose crown is over a road moves to its edge (_mask_roads' push): over a
+    deck that edge is the river or the bank below it, where the trees stood in the air or up through the deck."""
+    if f is None or not len(f.kind):
+        return
+    import roads as roadsmod
+    try:
+        bspecs = roadsmod.bridge_specs(f)
+    except Exception as e:              # (no bridge to keep clear: as _specs)
+        log.debug("vegetation: bridge specs: %s: %s", type(e).__name__, e)
+        return
+    if not any(b is not None for b in bspecs):
+        return
+    ground = specs(f) if specs is not None else roadsmod.road_specs(f)
+    n_r, n_c = mask.shape
+    segs, hws = [], []
+    for i, b in enumerate(bspecs):
+        if b is None:
+            continue
+        walk = roadsmod.deck_walks(f, i, ground)
+        half_m = b.width / 2 + (walk[0] if walk else 0.0) + DECK_CLEAR_M      # (one side's: as wide either side)
+        for ring in roadsmod.bridge_parts(f, i):
+            ring = np.asarray(ring, np.float64)
+            if len(ring) < 2:
+                continue
+            x, y = _to3857(ring[:, 0], ring[:, 1])
+            c, r = (np.asarray(x) - chm.x0) / chm.dx, (chm.y0 - np.asarray(y)) / chm.dy
+            hw = half_m / (chm.dx * max(0.05, dmath.cos(math.radians(float(ring[:, 1].mean())))))
+            if c.max() < -hw or r.max() < -hw or c.min() > n_c + hw or r.min() > n_r + hw:
+                continue
+            segs.append(np.stack([c[:-1], r[:-1], c[1:], r[1:]], axis=1))
+            hws.append(np.full(len(c) - 1, hw))
+    if segs:
+        fast._ef.road_corridors(mask, None, np.ascontiguousarray(np.concatenate(segs), np.float64),
+                                np.ascontiguousarray(np.concatenate(hws), np.float64))
+
+
+def _mask_near(f, mask, chm, dist_m):
+    """Mark the CHM-grid pixels within dist_m (ground m) of Features f's lines and polygon outlines (water: its rivers'
+    lines and its lakes' and the sea's shores; inside a polygon is water, masked as such)."""
+    if f is None or not len(f.kind):
+        return
+    fast.require(63, "road_segments")
+    sel = np.flatnonzero((f.kind == 2) | (f.kind == 3)).astype(np.int64)
+    if not len(sel):
+        return
+    n_r, n_c = mask.shape
+    segs, hws = fast._ef.road_segments(np.ascontiguousarray(f.lonlat, np.float64),
+                                       np.ascontiguousarray(f.coord_off, np.int64),
+                                       np.ascontiguousarray(f.ring_off, np.int64),
+                                       np.ascontiguousarray(f.part_off, np.int64), sel,
+                                       np.full(len(sel), float(dist_m)), float(chm.x0), float(chm.y0), float(chm.dx),
+                                       float(chm.dy), n_r, n_c)
+    if len(hws):
+        fast._ef.road_corridors(mask, None, np.ascontiguousarray(segs), np.ascontiguousarray(hws))
+
+
+def _mask_roads(f, mask, chm, push=None, clear=ROAD_CLEAR_M, specs=None, walks=False):
+    """Mark road corridors (half width + clear) on the CHM-grid mask (footpaths left out): the half width the road is
+    drawn with (specs(f): roads.road_specs; walks: with its sidewalks) or its class's, the wider. push (optional, (3, rows,
+    cols) float32: dx, dy in px and the distance to the nearest road, inf where none) gets, per corridor
+    pixel, the move that takes it just out of its nearest road's corridor (street trees: vegetation._build). With the
+    class widths alone a city street's trees stood in its parking lanes: 136 of 536 trunks in Baltimore, 215 of 1358 in
+    Seattle on a drawn carriageway (the user, 2026-10-28: "make sure no trees spawn on the road")."""
+    if f is None:
+        return
+    n_r, n_c = mask.shape
+    cls = f.attrs.get("class", np.full(len(f.kind), "", object))
+    fast.require(63, "road_segments")
+    sel = [i for i in np.flatnonzero(f.kind == 2) if str(cls[i]) not in PATH_CLASSES]
+    if not sel:
+        return
+    sp = specs(f) if specs is not None else [None] * len(f.kind)
+    import roads as roadsmod
+
+    def drawn(s):       # the drawn half width, its sidewalks too (walks: the canopy's trees and the bushes keep off
+        if s is None:   # them; the street trees, pushed to the curb, stand in pits at its edge: GitHub #424 / #425)
+            return 0.0
+        return s.width / 2 + (s.walk if walks and getattr(s, "walk", 0) and roadsmod.has_sidewalks(s) else 0.0)
+    lon0, lat0 = _to4326(chm.x0, chm.y0 - chm.dy * n_r)
+    lon1, lat1 = _to4326(chm.x0 + chm.dx * n_c, chm.y0)
+    nordic = norway_outline.fully_inside_bbox((lon0, lat0, lon1, lat1))
+
+    def half_width(i):
+        actual = drawn(sp[i])
+        fallback = ROAD_HALF_WIDTH_M.get(str(cls[i]), ROAD_HALF_DEFAULT_M)
+        # The NVDB fork passes its measured carriageway width through road_specs. For rural
+        # Nordic roads use the width *actually rendered*, instead of forcing a broad default
+        # secondary/tertiary corridor. If specs are unavailable, keep the old safe default.
+        return (actual if nordic and actual >= 1.5 else max(fallback, actual)) + clear
+
+    hw_m = np.array([half_width(i) for i in sel], np.float64)
+    # every ring's segments on the CHM grid, its half width in grid pixels (a 3857 metre is 1 / cos(lat) of a ground
+    # metre), rings off the grid left out (earthfast road_segments, 2026-10-23: the per-ring Python loop it
+    # replaced gave the same segments); then the distances and the nearest road's push, without the GIL
+    segs, hws = fast._ef.road_segments(np.ascontiguousarray(f.lonlat, np.float64),
+                                       np.ascontiguousarray(f.coord_off, np.int64),
+                                       np.ascontiguousarray(f.ring_off, np.int64),
+                                       np.ascontiguousarray(f.part_off, np.int64), np.asarray(sel, np.int64), hw_m,
+                                       float(chm.x0), float(chm.y0), float(chm.dx), float(chm.dy), n_r, n_c)
+    if len(hws):
+        fast._ef.road_corridors(mask, push, np.ascontiguousarray(segs), np.ascontiguousarray(hws))
+
+
+# --- tiles for the mod --------------------------------------------------------------------------------
+TILE = 256.0                # m, as the road tiles (roads.tile_bbox)
+TILE_ROWS_MAX = 6000        # items a tile sends at most, the lowest ranks: the most the mod shows of one (trees.lua
+                            # TILE_CAP). Dense forest has 10-20k a tile: Bodø's 145 tiles held 1.66 M rows in the game's
+                            # Lua (394 MB of heap, 1.25 s garbage collection pauses on a Steam Deck; GitHub #66)
+SEND_M = 1280.0             # tiles this close to the player (Euclidean, to the square's nearest point) are sent
+DROP_M = 1536.0             # ... and dropped beyond this
+BUILD_PER_POSE = 8
+TRACK_MOVE_M = 8.0          # a geotile tracker passes again once the car, camera or a focus moved this much ...
+TRACK_MAX_S = 2.0           # ... or this long after its last pass, or something it sent, built or redoes changed
+
+
+class JsonRows(str):
+    """tile_items' rows already as their JSON text (as_json; write_tile writes it as is); n: how many; audio, biome:
+    the tile's forest ambience (_ambience)."""
+    n = 0
+    audio = ()
+    biome = (0, 0)
+
+
+# The forest ambience (the mod's ambience.lua feeds the stock core_audioForest): the trees and bushes of a tile in
+# squares of AUDIO_CELL_M (12 a tile; the stock nodes are ~20 m apart), sized by height as the stock classes (a third
+# and two thirds of the 95th percentile's volume: 0.69 and 0.87 of its height, ~22 m)
+AUDIO_CELL_M = 256.0 / 12
+AUDIO_H_MID = 15.0
+AUDIO_H_LARGE = 19.0
+AUDIO_SOUND = [g for g in range(len(GROUPS)) if g not in (G_ROCK, G_DESERT_ROCK, G_VINE) + CLUMP_GROUPS
+               + BALE_GROUPS + (G_NORWAY_CONIFER_BACKDROP,G_NORWAY_DECIDUOUS_BACKDROP)]
+
+
+def _ambience(group, e, n, z, height, lat, lon):
+    """(audio, biome) of a tile's items: audio its sound nodes as one flat list of [x, y, z, depth, size, count] rows
+    (earthfast.audio_nodes), biome its ambience set and variant (earthfast.audio_biome)."""
+    fast.require(80, "audio_nodes")
+    f64 = lambda a: np.ascontiguousarray(a, np.float64)     # noqa: E731
+    g = np.ascontiguousarray(group, np.uint8)
+    nodes = fast._ef.audio_nodes(g, f64(e), f64(n), f64(z), f64(height), AUDIO_SOUND, AUDIO_CELL_M, AUDIO_H_MID,
+                                 AUDIO_H_LARGE)
+    nodes[:, :4] = np.round(nodes[:, :4], 1)
+    nodes[:, 4] = np.round(nodes[:, 4], 2)
+    import climate
+    biome = fast._ef.audio_biome(g, float(lat), float(lon), [G_DESERT_SHRUB, G_DESERT_ROCK, G_JUNIPER],
+                                 climate.koppen_at(float(lat), float(lon)))
+    return nodes.ravel().tolist(), list(biome)
+
+
+def _no_items(as_json, lat, lon):
+    if not as_json:
+        return []
+    out = JsonRows("[]")
+    out.audio, out.biome = _ambience([], [], [], [], [], lat, lon)
+    return out
+
+
+# no tree or bush where the roads' grading moved the ground this much (a cutting's or an embankment's face: cleared in
+# life; drawn on the terrain's 2 m squares the face is steeper than the exact ground the items stand on, a tree on it
+# 2-10 m over or under the drawn slope: Pittsburgh's Mount Washington, 2026-10-31, .claude/devtools/floattrees.py).
+# Rocks stay (sunk into the ground: _sink_rocks)
+GRADED_CLEAR_M = 1.5
+
+
+def _off_graded(it, e, n, zg, raw):
+    """(it, e, n, zg) without the trees and bushes standing where the graded ground zg is GRADED_CLEAR_M or more off
+    the DEM's (raw(lat, lon); None: all kept)."""
+    if raw is None or not len(it):
+        return it, e, n, zg
+    zr = np.asarray(raw(it.lat, it.lon), np.float64)
+    keep = (np.abs(zg - zr) < GRADED_CLEAR_M) | np.isin(it.group, (G_ROCK, G_DESERT_ROCK))
+    if keep.all():
+        return it, e, n, zg
+    return it.take(keep), e[keep], n[keep], zg[keep]
+
+
+def _capped(it):
+    """The rows a tile sends (sorted indices): the TILE_ROWS_MAX lowest ranks of its single items, and the
+    CLUMP_ROWS_MAX lowest of its far clumps beside them (they never show where the single ones do)."""
+    clump = np.isin(it.group, CLUMP_GROUPS)
+    out = []
+    for sel, cap in ((np.flatnonzero(~clump), TILE_ROWS_MAX), (np.flatnonzero(clump), CLUMP_ROWS_MAX)):
+        if len(sel) > cap:
+            sel = sel[np.argpartition(it.rank[sel], cap - 1)[:cap]]
+        out.append(sel)
+    return np.sort(np.concatenate(out))
+
+
+def tile_items(frame, tx, ty, veg, cell_ready, elev, sea=None, as_json=False, raw=None):
+    """The items of anchor tile (tx, ty), each [group, x, y, z, yaw, scale, height, rank] in the anchor
+    frame, the ground z from elev(lat, lon) (the DEM shaped as the block's ground: runways, carved
+    water). None when a cell under it is not at hand yet (veg cells are built in the background). raw(lat, lon): the
+    ground before the roads' grading (_off_graded)."""
+    import roads as roadsmod
+    x0, y0, x1, y1 = roadsmod.tile_bbox(tx, ty)
+    la, lo, _ = frame.enu_to_geodetic(np.array([x0, x1, x0, x1]), np.array([y0, y0, y1, y1]), np.zeros(4))
+    keys = mapcells.cells_for_bbox(float(la.min()), float(lo.min()), float(la.max()), float(lo.max()))
+    clat, clon = float(la.mean()), float(lo.mean())
+    parts = []
+    for k in keys:
+        if not cell_ready(k):
+            return None
+        parts.append(veg.cell(k))
+    items = parts[0] if len(parts) == 1 else _concat_all(parts)
+    if len(items) == 0:
+        return _no_items(as_json, clat, clon)
+    e, n, _ = frame.geodetic_to_enu(items.lat, items.lon, np.zeros(len(items)))
+    e, n = np.asarray(e), np.asarray(n)
+    sel = (e >= x0) & (e < x1) & (n >= y0) & (n < y1)
+    if not sel.any():
+        return _no_items(as_json, clat, clon)
+    it = items.take(sel)
+    e, n = e[sel], n[sel]
+    if sea is not None:                 # nothing in the water (lakes, rivers, sea: their carved beds)
+        dry = sea.water(it.lat, it.lon)[0] <= 0
+        it, e, n = it.take(dry), e[dry], n[dry]
+    if len(it) == 0:
+        return _no_items(as_json, clat, clon)
+    if len(it) > TILE_ROWS_MAX:         # dense forest: the lowest ranks only (the mod shows no more of a tile)
+        keep = _capped(it)
+        it, e, n = it.take(keep), e[keep], n[keep]
+    zg = np.asarray(elev(it.lat, it.lon), np.float64)
+    it, e, n, zg = _off_graded(it, e, n, zg, raw)
+    if len(it) == 0:
+        return _no_items(as_json, clat, clon)
+    _, _, z = frame.geodetic_to_enu(it.lat, it.lon, zg)
+    z = _sink_rocks(frame, it, e, n, np.asarray(z, np.float64), elev)
+    if as_json:
+        # Rust: the same text json.dumps would write for the rows below, without a Python list per tree
+        fast.require(0, "veg_rows_json")
+        f64 = lambda a: np.ascontiguousarray(a, np.float64)     # noqa: E731
+        out = JsonRows(fast._ef.veg_rows_json(np.ascontiguousarray(it.group, np.int64), f64(e), f64(n), f64(z),
+                                               f64(it.yaw), f64(it.scale), f64(it.height), f64(it.rank)))
+        out.n = len(it)
+        out.audio, out.biome = _ambience(it.group, e, n, z, it.height, clat, clon)
+        return out
+    return [[int(g), round(float(a), 2), round(float(b), 2), round(float(c), 2), round(float(yw), 1),
+             round(float(sc), 3), round(float(h), 1), round(float(r), 4)]
+            for g, a, b, c, yw, sc, h, r in zip(it.group, e, n, np.asarray(z), it.yaw, it.scale, it.height, it.rank)]
+
+
+def geo_tile_items(gx, gy, veg, cell_ready, elev, sea=None, as_json=False, raw=None):
+    """The items of geotile (gx, gy) (geotiles.Z: the global grid, no anchor) in the tile's own frame (geotiles.frame:
+    x, y of each at h = 0, z at its ground), as tile_items' rows, and the tile's pivot (the median of the items'
+    z, m in that frame: the mod places the tile there, geotile.lua). Each item is in the one tile its lat / lon falls
+    in (the grid partitions the Earth: no item twice, none lost, whatever the anchor). (rows, pivot), or None when
+    its map cell is not at hand yet. raw(lat, lon): the ground before the roads' grading (_off_graded)."""
+    import geotiles
+    frame = geotiles.frame(gx, gy)
+    key = mapcells.CellKey(*geotiles.tile_cell(gx, gy))
+    clat, clon = geotiles.centre(gx, gy)
+    if not cell_ready(key):
+        return None
+    items = veg.cell(key)
+    if len(items) == 0:
+        return _no_items(as_json, clat, clon), 0.0
+    tx, ty = geotiles.tile_of(items.lat, items.lon)
+    sel = (tx == gx) & (ty == gy)
+    if not sel.any():
+        return _no_items(as_json, clat, clon), 0.0
+    it = items.take(sel)
+    e, n, _ = frame.geodetic_to_enu(it.lat, it.lon, np.zeros(len(it)))
+    e, n = np.asarray(e), np.asarray(n)
+    if sea is not None:
+        dry = sea.water(it.lat, it.lon)[0] <= 0
+        it, e, n = it.take(dry), e[dry], n[dry]
+    if len(it) == 0:
+        return _no_items(as_json, clat, clon), 0.0
+    if len(it) > TILE_ROWS_MAX:
+        keep = _capped(it)
+        it, e, n = it.take(keep), e[keep], n[keep]
+    zg = np.asarray(elev(it.lat, it.lon), np.float64)
+    it, e, n, zg = _off_graded(it, e, n, zg, raw)
+    if len(it) == 0:
+        return _no_items(as_json, clat, clon), 0.0
+    _, _, z = frame.geodetic_to_enu(it.lat, it.lon, zg)
+    z = _sink_rocks(frame, it, e, n, np.asarray(z, np.float64), elev)
+    pivot = round(float(np.median(z)), 2)
+    if as_json:
+        fast.require(0, "veg_rows_json")
+        f64 = lambda a: np.ascontiguousarray(a, np.float64)     # noqa: E731
+        out = JsonRows(fast._ef.veg_rows_json(np.ascontiguousarray(it.group, np.int64), f64(e), f64(n), f64(z),
+                                               f64(it.yaw), f64(it.scale), f64(it.height), f64(it.rank)))
+        out.n = len(it)
+        out.audio, out.biome = _ambience(it.group, e, n, z, it.height, clat, clon)
+        return out, pivot
+    return [[int(g), round(float(a), 2), round(float(b), 2), round(float(c), 2), round(float(yw), 1),
+             round(float(sc), 3), round(float(h), 1), round(float(r), 4)]
+            for g, a, b, c, yw, sc, h, r in zip(it.group, e, n, np.asarray(z), it.yaw, it.scale, it.height,
+                                                it.rank)], pivot
+
+
+ROCK_SINK = 0.35            # a rock sinks this share of its height per unit of ground slope (1 = 45 degrees) ...
+ROCK_SINK_MAX = 0.6         # ... up to this share: on a steep slope its downhill side stood clear of the ground and
+                            # its flat underside showed (Stelvio pass, the user's report 2026-10-17)
+SLOPE_STEP_M = 1.5
+
+
+def _sink_rocks(frame, it, e, n, z, elev):
+    """z with the rocks lowered into sloping ground (ROCK_SINK)."""
+    rock = (it.group == G_ROCK) | (it.group == G_DESERT_ROCK)
+    if not rock.any():
+        return z
+    k = np.flatnonzero(rock)
+    d = SLOPE_STEP_M
+    ex = np.concatenate([e[k] + d, e[k] - d, e[k], e[k]])
+    ny = np.concatenate([n[k], n[k], n[k] + d, n[k] - d])
+    la, lo, _ = frame.enu_to_geodetic(ex, ny, np.zeros(len(ex)))
+    _, _, zz = frame.geodetic_to_enu(la, lo, np.asarray(elev(la, lo), np.float64))
+    zz = np.asarray(zz, np.float64).reshape(4, len(k))
+    slope = dnp.hypot(zz[0] - zz[1], zz[2] - zz[3]) / (2 * d)
+    z = z.copy()
+    z[k] -= np.minimum(ROCK_SINK * slope, ROCK_SINK_MAX) * it.height[k]
+    return z
+
+
+def _concat_all(parts):
+    out = parts[0]
+    for p in parts[1:]:
+        out = _concat(out, p)
+    return out
+
+
+FLAT_STRIDE = 8             # numbers an item in a flat tile: tile_items' row, in its order
+
+
+def flat_json(rows):
+    """tile_items' rows (a list, or its JsonRows text) as the JSON text of one flat array, FLAT_STRIDE numbers an item,
+    the same numbers as json.dumps writes in the rows: no table per item in the game's Lua, which every garbage
+    collection walks (trees.lua). The JsonRows text is flattened as text, without Python objects."""
+    import json
+    if isinstance(rows, JsonRows):
+        return "[" + rows[2:-2].replace("],[", ",") + "]" if len(rows) > 2 else "[]"
+    return json.dumps([v for r in rows for v in r], separators=(",", ":"))
+
+
+def write_tile(out_dir, vfs_dir, aid, tx, ty, rows, flat=False, geo=None):
+    """The tile's file: {"groups", "items": rows}, or with flat (a mod that reads it: hello.vegFlat) {"groups",
+    "stride": FLAT_STRIDE, "flat": [...]} (flat_json) under its own name. (vfs path, items). geo: a geotile's
+    {"key", "frame", "pivot"} (geo_tile_items; aid unused): in the file too, its name the key's (no anchor)."""
+    import json
+    stem = geo["key"] if geo is not None else f"{aid}_{tx}_{ty}"
+    name = f"veg_{stem}.flat.json" if flat else f"veg_{stem}.json"
+    path = os.path.join(out_dir, name)
+    tmp = staging.tmp_for(path)
+    with open(tmp, "w") as f:
+        # (the tile's sound: the forest cloud's nodes and biome, ambience.lua; tile_items as_json's rows carry them)
+        sound = {"audio": rows.audio, "biome": rows.biome} if isinstance(rows, JsonRows) else {}
+        if geo is not None:             # (the tile's frame and pivot: the mod places it, geotile.lua)
+            sound = dict(sound, frame=list(geo["frame"]), pivot=geo["pivot"])
+        if flat:
+            head = dict({"groups": list(GROUPS)}, **sound, stride=FLAT_STRIDE, flat=[])
+            f.write(json.dumps(head, separators=(",", ":"))[:-3] + flat_json(rows) + "}")
+        elif isinstance(rows, JsonRows):  # (tile_items as_json: the items' text, as json.dumps writes them)
+            head = dict({"groups": list(GROUPS)}, **sound, items=[])
+            f.write(json.dumps(head, separators=(",", ":"))[:-3] + rows + "}")
+        else:
+            f.write(json.dumps({"groups": list(GROUPS), "items": rows}, separators=(",", ":")))  # the C encoder
+    staging.replace(tmp, path)
+    return f"{vfs_dir}/{name}", rows.n if isinstance(rows, JsonRows) else len(rows)
+
+
+def _squares_near(x, y, m, size):
+    """(i, j) of the size x size squares of the grid whose nearest point is within m of (x, y): a disc (Euclidean, as
+    roads.tiles_near; 2026-10-28, it was the square)."""
+    i0, i1 = math.floor((x - m) / size), math.floor((x + m) / size)
+    j0, j1 = math.floor((y - m) / size), math.floor((y + m) / size)
+    out = []
+    for i in range(i0, i1 + 1):
+        dx = max(i * size - x, x - (i + 1) * size, 0.0)
+        for j in range(j0, j1 + 1):
+            dy = max(j * size - y, y - (j + 1) * size, 0.0)
+            if dx * dx + dy * dy <= m * m:
+                out.append((i, j))
+    return out
+
+
+class Tracker:
+    """Per connection: which tiles of a kind the mod has (as roads.Tracker): vegetation tiles by default
+    (messages veg_tile / veg_drop); the far buildings use one too (buildings.FAR_*)."""
+
+    def __init__(self, send_m=SEND_M, drop_m=DROP_M, per_pose=BUILD_PER_POSE, kind="veg", skip_m=None, group=None,
+                 unit=1, inner=None, geo=False, z=None, group_z=None, rebuild_history=True):
+        # group G (the far buildings under the skyline tiles): every tile of a G x G group whose square comes within
+        # send_m is wanted (a skyline tile shows only while none of its tiles do: no overlap, no hole). unit U (the
+        # skyline tiles): keys are U x U squares of road tiles; inner (m, G): squares whose G-group comes within m are
+        # not wanted (the far buildings' own groups)
+        self.group, self.unit, self.inner = group, unit, inner
+        self.aid = None
+        self.sent = set()
+        self.building = set()
+        self.send_m, self.drop_m, self.per_pose, self.kind = send_m, drop_m, per_pose, kind
+        # skip_m: tiles within this (as roads.tiles_near: a disc) are not built: the far buildings under the road
+        # tiles, which carry the full buildings (the mod would hide them at once; ~36 of a teleport's ~196 tiles)
+        self.skip_m = skip_m
+        # its own threads (per_pose): in the loop's shared executor the tiles queued behind other trackers' builds
+        # blocked on the road processes, which re-plan every road cell for a new anchor: after a rebase at 90 mph
+        # not one tree tile came for minutes (2026-10-17, salt flats)
+        self.pool = None
+        self.futs = {}
+        # geo: keys are geotiles (geotiles.Z, the global grid): what was sent stays sent across anchors (the mod
+        # re-places it at a rebase, geotile.lua), the tiles near a point found by their quads in the anchor's world
+        # (on_pose's frame); build(gx, gy) and the messages carry the tile's frame and pivot
+        self.geo = bool(geo)
+        # (geotiles of zoom z: geotiles.Z by default; group_z: whole groups, every tile under each zoom-group_z tile
+        # that comes within send_m (the far buildings under the skyline's squares); inner (m, _): the tiles within m
+        # not wanted (the skyline: where the far buildings' squares are, those being its own tiles))
+        self.z, self.group_z = z, group_z
+        self.frame = None
+        self._quads = {}            # (anchor id, key) -> its quad in that anchor's world
+        self.rebuilt = 0            # tiles built again for a key sent before (diagnostics: 0 with geo)
+        self.ever = set() if rebuild_history else None
+        # (geotiles: redo_all, the tiles sent asked for again, sent again only where their file changed; digests: the
+        # sent files' digests are kept for that, earthd's stale mode turns it on)
+        self.redo, self.sent_h, self.digests = set(), {}, False
+        self.epoch = 0              # (drop_all: a build started before it lands unwanted)
+        self._gate = None           # (_on_pose_geo: the last pass's inputs, TRACK_MOVE_M)
+
+    def redo_all(self):
+        """Every geotile sent is asked for again (earthd Connection.stale_run's swap: they may be an older version's);
+        one whose file comes back the same is not sent."""
+        if self.geo:
+            self.redo = set(self.sent)
+            self._gate = None
+
+    def close(self):
+        if self.pool is not None:
+            self.pool.shutdown(wait=False, cancel_futures=True)
+
+    def forget(self):
+        """The mod has none of the tiles sent (its level loaded again, earthd Connection.forget_world): every one is
+        wanted again (those building land as new ones)."""
+        self.sent = set()
+        self.aid = None
+        self._gate = None
+
+    def progress(self):
+        """(done, wanted) of the tiles round the car at the last pose (done: sent to the mod); (0, 0) before one."""
+        car = getattr(self, "car", ())
+        return sum(1 for k in car if k in self.sent), len(car)
+
+    def on_pose(self, conn, aid, x, y, loop, build, view=None, foci=(), frame=None, tree=None):
+        """As roads.Tracker.on_pose: the tiles within send_m of the car (x, y) and of the camera when it is away
+        (view), the car's first; dropped beyond drop_m of both. foci: other vehicles' collision foci (x, y, r, ...)
+        whose trees collide: the tiles within r + 128 m of each, after the car's and camera's, kept within r + 256 m.
+        tree: the car's time-to-reach tree (reach.Tree; geotiles only): the car's tiles in its order
+        (reach.order_geotiles: right round the car, then along the way it goes) instead of nearest first."""
+        import roads as roadsmod
+        if self.geo:
+            return self._on_pose_geo(conn, aid, x, y, loop, build, view, foci, frame, tree)
+        if aid != self.aid:
+            for f in self.futs.values():
+                f.cancel()                  # the old anchor's that have not started
+            self.aid, self.sent, self.building, self.futs = aid, set(), set(), {}
+        if self.pool is None:
+            from runtimeprofiler import ThreadPoolExecutor
+            self.pool = ThreadPoolExecutor(self.per_pose, thread_name_prefix=f"{self.kind}-tile")
+        spots = [(x, y)] + ([tuple(view)] if view else [])
+        skip = {k for p in spots for k in roadsmod.tiles_near(*p, self.skip_m)} if self.skip_m else ()
+        if self.inner is not None:          # (the skyline: not where the far buildings' groups are)
+            skip = {k for p in spots for k in self._near(*p, self.inner[0], unit=self.unit, group=self.inner[1])}
+        car = set(self._near(x, y, self.send_m))
+        self.car = car - set(skip)          # (progress: the loading line's tiles)
+        seen = set(self._near(*view, self.send_m)) - car if view else set()
+        others = set()
+        for f in foci:
+            others.update(self._near(f[0], f[1], min(self.send_m, f[2] + roadsmod.TILE / 2)))
+        others -= car | seen
+        want = [k for k in car | seen | others if k not in self.sent and k not in self.building and k not in skip]
+        if self.unit == 1:
+            car_key = roadsmod.view_key(conn, aid, x, y)
+            cam_key = roadsmod.view_key(conn, aid, *view) if seen else None
+        else:                               # (keys in larger squares: nearest first)
+            car_key = lambda k: self._dist(k, x, y)     # noqa: E731
+            cam_key = (lambda k: self._dist(k, *view)) if seen else None    # noqa: E731
+
+        def focus_d(k):
+            return min(self._dist(k, f[0], f[1]) for f in foci)
+        want.sort(key=lambda k: (2, focus_d(k)) if k in others else (1, cam_key(k)) if k in seen else (0, car_key(k)))
+        # at most per_pose in flight: each waits in a thread of the loop's shared executor, and a teleport's
+        # hundreds (one per pose, uncapped) held every thread while the road tiles under the car waited for one
+        # (Sinaia 2026-10-15: bare ground for minutes)
+        for tx, ty in want[:max(0, self.per_pose - len(self.building))]:
+            self.building.add((tx, ty))
+            # (the tile's file read in the worker, not on the event loop: staging.build_inline; the build's own
+            # arguments as before)
+            job = functools.partial(staging.build_inline, build, getattr(getattr(conn, "s", None), "out_dir", None),
+                                    False)
+            fut = self.futs[(tx, ty)] = loop.run_in_executor(self.pool, job, aid, tx, ty)
+            fut.add_done_callback(lambda f, k=(tx, ty), a=aid: self._built(conn, a, k, f))
+        for k in [k for k in list(self.sent) if all(self._dist(k, *p) > self.drop_m for p in spots)
+                  and all(self._dist(k, f[0], f[1]) > f[2] + roadsmod.TILE for f in foci)]:
+            self.sent.discard(k)
+            conn.send({"type": f"{self.kind}_drop", "anchorId": aid, "key": f"{k[0]}_{k[1]}"})
+
+    def _on_pose_geo(self, conn, aid, x, y, loop, build, view, foci, frame, tree=None):
+        """on_pose for geotiles: the same rules (send_m, drop_m, the camera's, other cars' foci; group_z's whole groups,
+        inner's tiles left out), the tiles' quads in the anchor's world (frame: its EnuFrame); an anchor change keeps
+        what was sent and in flight."""
+        import geotiles
+        if frame is None:
+            return
+        if aid != self.aid:
+            self.aid, self.frame = aid, frame
+            self._quads = {k: v for k, v in self._quads.items() if k[0] == aid}
+        if self.pool is None:
+            from runtimeprofiler import ThreadPoolExecutor
+            self.pool = ThreadPoolExecutor(self.per_pose, thread_name_prefix=f"{self.kind}-geo")
+        z = self.z or geotiles.Z
+        spots = [(x, y)] + ([tuple(view)] if view else [])
+        # (a pose that changes nothing this tracker goes by: no pass; the car, the camera and the other cars' foci
+        # within TRACK_MOVE_M of the last pass's, nothing sent, built or asked again since, at most TRACK_MAX_S ago)
+        now = time.monotonic()
+
+        def gate_key():
+            return (aid, id(frame), view is None, len(foci), id(tree), self.send_m, self.drop_m, self.inner,
+                    self.group_z, z, len(self.sent), len(self.building), len(self.redo), self.epoch, self.per_pose)
+        cont = [float(v) for p in spots for v in p[:2]] + [float(v) for f in foci for v in f[:3]]
+        last = getattr(self, "_gate", None)
+        if last is not None and last[0] == gate_key() and now - last[2] < TRACK_MAX_S and len(cont) == len(last[1]) \
+                and all(abs(a - b) <= TRACK_MOVE_M for a, b in zip(cont, last[1])) \
+                and not (last[3] and len(self.building) < self.per_pose):
+            return
+
+        def near(px, py, r):
+            """Keys within r of (px, py), nearest first (each tile by its own quad)."""
+            if self.group_z is None:
+                return [(a, b) for a, b, _d in geotiles.tiles_near(frame, px, py, r, z)]
+            keys = [c for a, b, _d in geotiles.tiles_near(frame, px, py, r, self.group_z)
+                    for c in geotiles.children(a, b, self.group_z, z)]
+            if not keys:
+                return keys
+            d = geotiles.dists(self.frame, keys, z, [(px, py)])[:, 0].tolist()     # (_geo_dist(own=True) of each)
+            return [k for _d, k in sorted(zip(d, keys))]
+        skip = set()
+        if self.inner is not None:
+            for p in spots:
+                skip.update((a, b) for a, b, _d in geotiles.tiles_near(frame, p[0], p[1], self.inner[0], z))
+        car = [k for k in near(x, y, self.send_m) if k not in skip]
+        if tree is not None and car:
+            import reach
+            try:
+                car = reach.order_geotiles(tree, frame, car, x, y, z)
+            except Exception as e:      # (nearest first, as before)
+                log.debug("%s geotiles in the tree's order: %s: %s", self.kind, type(e).__name__, e)
+        self.car = set(car)
+        seen = [k for k in near(*view, self.send_m) if k not in skip] if view else []
+        others = []
+        for f in foci:
+            others += [k for k in near(f[0], f[1], min(self.send_m, f[2] + 128.0)) if k not in skip]
+        order, done = [], set()
+        for k in car + seen + others:           # (nearest first)
+            if k not in done:
+                done.add(k)
+                order.append(k)
+        self.redo &= self.sent
+        want = [k for k in order if (k not in self.sent or k in self.redo) and k not in self.building]
+        n_go = max(0, self.per_pose - len(self.building))
+        more = len(want) > n_go             # (left for a later pass: the gate lets that one through)
+        for gx, gy in want[:n_go]:
+            self.building.add((gx, gy))
+            # (the tile's file read in the worker, not on the event loop: staging.build_inline)
+            job = functools.partial(staging.build_inline, build, getattr(getattr(conn, "s", None), "out_dir", None),
+                                    self.digests or (gx, gy) in self.redo)
+            fut = self.futs[(gx, gy)] = loop.run_in_executor(self.pool, job, gx, gy)
+            fut.add_done_callback(lambda f, k=(gx, gy), e=self.epoch: self._built_geo(conn, k, f, e))
+        for k in self._far_sent(spots, foci):
+            self.sent.discard(k)
+            self.sent_h.pop(k, None)
+            conn.send({"type": f"{self.kind}_drop", "anchorId": aid, "key": geotiles.key(*k, z)})
+            gone = getattr(getattr(conn, "s", None), "geo_dropped", None)
+            if callable(gone):              # (its session files: deleted once no game has it, GitHub #599)
+                gone(self.kind, k, geotiles.key(*k, z))
+        self._gate = (gate_key(), cont, now, more)
+
+    def _far_sent(self, spots, foci):
+        """The sent tiles farther than drop_m from every spot and than its reach + 256 m from every focus (_geo_dist
+        of each pair, by group when group_z): one batch call (earthfast.geo_tiles_dist; tile by tile from Python they
+        were whole seconds of a busy event loop, 2026-11-07)."""
+        import geotiles
+        sent = list(self.sent)
+        if not sent:
+            return []
+        z = self.z or geotiles.Z
+        keys, kz = sent, z
+        if self.group_z is not None:
+            keys, kz = [geotiles.parent(k[0], k[1], z, self.group_z) for k in sent], self.group_z
+        pts = [tuple(p[:2]) for p in spots] + [(f[0], f[1]) for f in foci]
+        if not pts:
+            return sent
+        d = geotiles.dists(self.frame, keys, kz, pts)
+        far = np.ones(len(sent), bool)
+        if spots:
+            far &= (d[:, :len(spots)] > self.drop_m).all(axis=1)
+        if foci:
+            far &= (d[:, len(spots):] > np.asarray([f[2] + 256.0 for f in foci], np.float64)).all(axis=1)
+        return [k for k, f in zip(sent, far.tolist()) if f]
+
+    def _geo_dist(self, k, x, y, own=False):
+        """m from (x, y) to geotile k's quad in the anchor's world (to its group's, group_z, unless own)."""
+        import geotiles
+        z = self.z or geotiles.Z
+        if self.group_z is not None and not own:
+            k, z = geotiles.parent(k[0], k[1], z, self.group_z), self.group_z
+        ck = (self.aid, z, k)
+        q = self._quads.get(ck)
+        if q is None:
+            q = self._quads[ck] = geotiles.quad(self.frame, k[0], k[1], z)
+            if len(self._quads) > 20000:
+                self._quads.clear()
+        return geotiles.quad_dist(q, x, y)
+
+    def drop_all(self, conn):
+        """Every geotile sent dropped (a drop message each) and the builds in flight left unwanted (their results are
+        not sent): the kind turned off while its tiles show (the horizon ring at the Near building distance, Codex
+        review: with no more poses its tiles were never dropped)."""
+        import geotiles
+        z = self.z or geotiles.Z
+        self.epoch += 1
+        for f in list(self.futs.values()):
+            f.cancel()
+        self.futs, self.building = {}, set()
+        gone = getattr(getattr(conn, "s", None), "geo_dropped", None)
+        for k in sorted(self.sent):
+            conn.send({"type": f"{self.kind}_drop", "anchorId": self.aid, "key": geotiles.key(*k, z)})
+            if callable(gone):
+                gone(self.kind, k, geotiles.key(*k, z))
+        self.sent, self.sent_h, self.redo, self.car = set(), {}, set(), set()
+
+    def _built_geo(self, conn, key, fut, epoch=None):
+        import geotiles
+        if epoch is not None and epoch != self.epoch:
+            return                      # (started before drop_all: unwanted)
+        self.building.discard(key)
+        self.futs.pop(key, None)
+        if fut.cancelled():
+            return
+        try:
+            res = fut.result()
+        except Exception as e:
+            log.debug("%s geotile %s: %s: %s", self.kind, key, type(e).__name__, e)
+            return
+        pre = res if isinstance(res, staging.Inlined) else None
+        if pre is not None:
+            res = pre.res
+        if res is None:
+            return
+        path, n, frame, pivot = res[:4]
+        shapes = res[4] if len(res) > 4 else None       # (the far geotiles': {what: shape file}, pooled paths below)
+        again = key in self.redo
+        self.redo.discard(key)
+        if self.digests or again:
+            h = pre.digest if pre is not None else None
+            if h is None:
+                try:
+                    import hashlib
+                    with open(os.path.join(conn.s.out_dir, os.path.basename(path)), "rb") as f:
+                        h = hashlib.sha1(f.read()).digest()
+                except (OSError, AttributeError):
+                    pass
+            if again and h is not None and self.sent_h.get(key) == h and key in self.sent:
+                return                  # (the same tile as the one the mod has)
+            self.sent_h[key] = h
+        if self.ever is not None:
+            if key in self.ever:
+                self.rebuilt += 1
+            self.ever.add(key)
+        self.sent.add(key)
+        m = {"type": f"{self.kind}_tile", "anchorId": self.aid, "key": geotiles.key(*key, self.z or geotiles.Z),
+             "path": path, "n": n, "frame": [float(frame[0]), float(frame[1])], "pivot": float(pivot)}
+        s = getattr(conn, "s", None)
+        out_dir = getattr(s, "out_dir", None)
+        data = pre.data if pre is not None else staging.inline_json(out_dir, path) if out_dir else None
+        if data is not None:
+            m["data"] = data
+        pool = getattr(s, "pool_shapes", None)
+        if shapes and pool is not None:
+            slots = pool(conn, shapes)
+            if slots:
+                m["slots"] = slots
+        conn.send(m)
+
+    def _near(self, x, y, m, unit=None, group=None):
+        """Keys (tiles, or unit x unit squares of tiles) whose square, or whose group's square, comes within m."""
+        import roads as roadsmod
+        unit = self.unit if unit is None else unit
+        group = self.group if group is None else group
+        if group:                           # (whole groups of `group` tiles; keys in `unit` squares)
+            gs = roadsmod.TILE * group
+            per = group // unit
+            return [(gx * per + i, gy * per + j) for gx, gy in _squares_near(x, y, m, gs)
+                    for i in range(per) for j in range(per)]
+        if unit == 1:
+            return roadsmod.tiles_near(x, y, m)
+        return _squares_near(x, y, m, roadsmod.TILE * unit)
+
+    def _dist(self, k, x, y):
+        """m (Euclidean, as _near) from (x, y) to key k's square, or to its group's (the far buildings under the
+        skyline)."""
+        import roads as roadsmod
+        size = roadsmod.TILE * (self.group or self.unit)
+        per = (self.group // self.unit) if self.group else 1
+        x0, y0 = (k[0] // per) * size, (k[1] // per) * size
+        return roadsmod.box_gap(x0, y0, x0 + size, y0 + size, x, y)
+
+    def _built(self, conn, aid, key, fut):
+        if aid != self.aid:                 # (an old anchor's: the same key may be in flight for the new one)
+            return
+        self.building.discard(key)
+        self.futs.pop(key, None)
+        if fut.cancelled():
+            return
+        try:
+            res = fut.result()
+        except Exception as e:
+            log.debug("%s tile %s: %s: %s", self.kind, key, type(e).__name__, e)
+            return
+        pre = res if isinstance(res, staging.Inlined) else None
+        if pre is not None:
+            res = pre.res
+        if res is None:                 # its cells not at hand yet: asked again on a later pose
+            return
+        path, n = res
+        self.sent.add(key)
+        m = {"type": f"{self.kind}_tile", "anchorId": aid, "key": f"{key[0]}_{key[1]}", "path": path, "n": n}
+        out_dir = getattr(getattr(conn, "s", None), "out_dir", None)
+        data = pre.data if pre is not None else staging.inline_json(out_dir, path) if out_dir else None
+        if data is not None:                # (the game need not open the file: staging.inline_json)
+            m["data"] = data
+        pool = getattr(getattr(conn, "s", None), "pool_shapes", None)
+        if self.kind in ("bldfar", "bldsky", "brfar", "bldpack") and pool is not None:     # its mesh at a pooled shape path (matslots.py)
+            slots = pool(conn, {"shape": f"{self.kind}_{aid}_{key[0]}_{key[1]}.cdae"})
+            if slots:
+                m["slots"] = slots
+        conn.send(m)

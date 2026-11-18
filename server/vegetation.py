@@ -36,12 +36,20 @@ import dmath
 import dnp
 
 import mapcells
+import norway_outline
+import norway_sr16
 import pacer
 import staging
 
 log = logging.getLogger("earthd.vegetation")
 
-VERSION = 28          # (the cached cells hold their groups: 14 for the regional rules of GitHub #110; 16: the roads'
+VERSION = 34          # (34: clustered Norwegian undergrowth, roadside groundcover and fuller birch variants;
+                      # 33: Norway dense conifer reference, reduced synthetic highland saplings;
+                      # 32: Norway road-corridor 3D trees, far-slope stock billboard clumps;
+                      # 31: Norway country-boundary mask and experimental 3D native forest groups;
+                      # 30: NIBIO SR16 WMS forest-type overlay and conservative gap-fill saplings;
+                      # 29: Nordic foliage profile, road-width-aware clearance and fern understory;
+                      # the cached cells hold their groups: 14 for the regional rules of GitHub #110; 16: the roads'
                       # drawn widths and sidewalks kept clear; 17: BC's lidar canopy heights, mapdata's canopy layer 2;
                       # 18: the rounded junction corners kept clear, roadcorners.py; 19: one tree per flat crown,
                       # thin_tops; 20: none on or beside a bridge deck, _mask_decks; 21: orchard rows, canopy trees
@@ -63,11 +71,15 @@ KIND_TREE, KIND_BUSH, KIND_ROCK = 0, 1, 2
 GROUPS = ("deciduous", "conifer", "shrub", "rock", "pine_west", "palm", "juniper", "desert_shrub", "desert_rock",
           "oak_west", "tropical", "mediterranean", "conifer_clump", "deciduous_clump", "oak_west_clump",
           "mediterranean_clump", "vine", "straw_n", "straw_s", "silage_n", "silage_s", "eucalyptus",
-          "eucalyptus_clump", "poplar", "creosote")
+          "eucalyptus_clump", "poplar", "creosote", "fern", "norway_spruce", "norway_pine", "norway_birch",
+          "norway_spruce_far", "norway_pine_far", "norway_birch_far", "norway_conifer_backdrop",
+          "norway_deciduous_backdrop", "norway_floorcover")
 (G_DECIDUOUS, G_CONIFER, G_SHRUB, G_ROCK, G_PINE_WEST, G_PALM, G_JUNIPER, G_DESERT_SHRUB, G_DESERT_ROCK,
  G_OAK_WEST, G_TROPICAL, G_MEDITERRANEAN, G_CONIFER_CLUMP, G_DECIDUOUS_CLUMP, G_OAK_WEST_CLUMP,
  G_MEDITERRANEAN_CLUMP, G_VINE, G_STRAW_N, G_STRAW_S, G_SILAGE_N, G_SILAGE_S, G_EUCALYPTUS, G_EUCALYPTUS_CLUMP,
- G_POPLAR, G_CREOSOTE) = range(25)
+ G_POPLAR, G_CREOSOTE, G_FERN, G_NORWAY_SPRUCE, G_NORWAY_PINE, G_NORWAY_BIRCH,
+ G_NORWAY_SPRUCE_FAR, G_NORWAY_PINE_FAR, G_NORWAY_BIRCH_FAR,
+ G_NORWAY_CONIFER_BACKDROP, G_NORWAY_DECIDUOUS_BACKDROP, G_NORWAY_FLOORCOVER) = range(35)
 # Far clumps (GitHub #1074, "trees cost too much"; the asset survey 2026-11-10): a forest's canopy trees gathered on a
 # world-fixed grid of about CLUMP_CELL_M squares (a whole number of them a geotile: none straddles two); a square with
 # CLUMP_MIN of them gets one item of a stock clump shape (trees.lua's *_clump groups: East Coast USA's
@@ -76,7 +88,9 @@ GROUPS = ("deciduous", "conifer", "shrub", "rock", "pine_west", "palm", "juniper
 # beyond its near ring (trees.lua CLUMP_M) and the square's trees, flagged by a negative scale, only within it: a far
 # forest tile of ~900 single trees becomes ~150 clumps. Other groups (palms, junipers, tropical trees) stay single.
 CLUMP_OF = {G_CONIFER: G_CONIFER_CLUMP, G_PINE_WEST: G_CONIFER_CLUMP, G_DECIDUOUS: G_DECIDUOUS_CLUMP,
-            G_OAK_WEST: G_OAK_WEST_CLUMP, G_MEDITERRANEAN: G_MEDITERRANEAN_CLUMP, G_EUCALYPTUS: G_EUCALYPTUS_CLUMP}
+            G_OAK_WEST: G_OAK_WEST_CLUMP, G_MEDITERRANEAN: G_MEDITERRANEAN_CLUMP, G_EUCALYPTUS: G_EUCALYPTUS_CLUMP,
+            G_NORWAY_SPRUCE: G_CONIFER_CLUMP, G_NORWAY_PINE: G_CONIFER_CLUMP,
+            G_NORWAY_BIRCH: G_DECIDUOUS_CLUMP}
 CLUMP_GROUPS = tuple(sorted(set(CLUMP_OF.values())))
 CLUMP_CELL_M = 18.0
 CLUMP_MIN = 3
@@ -126,6 +140,19 @@ ROCK_SLOPE_ZOOM = 12
 EDGE_M = 7.0
 EDGE_CELL_M = 3.0
 EDGE_P = 0.4
+# The Norway revamp uses an actual land outline: never apply these experimental
+# vegetation changes to Sweden or Finland, even right at the border.
+NORDIC_EDGE_M = 9.0
+NORDIC_EDGE_CELL_M = 2.8
+NORDIC_EDGE_P = 0.52
+NORDIC_FOREST_SCATTER_P = 0.24  # expected clustered mean, not a uniform chance at every point
+NORDIC_PATCH_M = 24.0       # smooth, deterministic undergrowth islands instead of independent bright dots
+NORDIC_FLOORCOVER_NEAR_M = 22.0  # visible near road only; replaces existing bushes, never adds extra rows
+NORDIC_FLOORCOVER_SHARE = 0.36
+SR16_GAP_CELL_M = 15.0      # 0.3 had a 9 m / 32 % artificial sapling grid: thousands per square km
+SR16_GAP_P = 0.09          # a few saplings only; CHM remains the source for real forest tree positions
+ROAD_DETAIL_M = 45.0       # Norwegian land within this many ground metres of a road gets individual 3D trees
+FAR_SINGLE_KEEP = 0.55     # non-clumped far trees kept (others omitted to reduce distant forest draw overhead)
 MEM_CELLS = 16
 WARM_M = 1200.0              # cells within this of the player are built ahead (warm_around)
 WC = {"tree": 10, "shrub": 20, "grass": 30, "crop": 40, "built": 50, "bare": 60, "snow": 70,
@@ -163,6 +190,22 @@ def _hash01(a, b, salt):
     return (x >> np.uint64(11)).astype(np.float64) / float(1 << 53)
 
 
+def _patch_field(px, py, metres, latitude, salt):
+    """Smooth world-fixed noise: nearby shrubs form stands instead of a salt-and-pepper grid.
+
+    Only affects Norway candidate probabilities. Adjacent map cells sample the
+    same four corners, so patches cannot jump at a tile boundary.
+    """
+    step = metres * _merc_k(latitude)
+    x, y = np.asarray(px, np.float64) / step, np.asarray(py, np.float64) / step
+    i, j = np.floor(x).astype(np.int64), np.floor(y).astype(np.int64)
+    a, b = x - i, y - j
+    a, b = a * a * (3 - 2 * a), b * b * (3 - 2 * b)
+    lo = _hash01(i, j, salt) * (1 - a) + _hash01(i + 1, j, salt) * a
+    hi = _hash01(i, j + 1, salt) * (1 - a) + _hash01(i + 1, j + 1, salt) * a
+    return lo * (1 - b) + hi * b
+
+
 def _merc_k(lat):
     """Web Mercator length per tuned length at latitude lat (1 at MERC_REF_LAT, 2.14 at 69 N, 0.77 at the equator)."""
     c = dmath.cos(dmath.radians(min(abs(float(lat)), 85.0)))
@@ -193,6 +236,112 @@ def _dilate(m, r):
 def _dry_west(lat, lon):
     lat, lon = np.asarray(lat), np.asarray(lon)
     return (lon < -102.0) & (lat > 25.0) & (lat < 46.0) & ~((lon < -121.0) & (lat > 37.0))
+
+
+def _nordic(lat, lon):
+    """Compatibility name for exact Norway-land containment (array-safe)."""
+    return norway_outline.contains(lat, lon)
+
+
+def _norway_tree_groups(previous, lat, lon):
+    """Swap trees on Norwegian land into species-specific stock-model families.
+
+    SR16 already chose the dominant stand species when available. Without SR16
+    this falls back to the CHM-derived conifer/broadleaf groups, never blocking
+    the forest while the NIBIO service is offline.
+    """
+    g = np.asarray(previous, np.uint8).copy()
+    inside = _nordic(lat, lon)
+    g[inside & (g == G_CONIFER)] = G_NORWAY_SPRUCE
+    g[inside & (g == G_PINE_WEST)] = G_NORWAY_PINE
+    g[inside & (g == G_DECIDUOUS)] = G_NORWAY_BIRCH
+    return g
+
+
+def _near_road(lat, lon, road, chm, metres=ROAD_DETAIL_M):
+    """Fast vectorized road corridor lookup for points on the CHM grid.
+
+    A summed-area table tests a ground-metre square around each point. Unlike
+    growing the entire road mask repeatedly, this is linear in the CHM grid
+    area plus the number of trees. Coordinates include neighbouring road cells.
+    """
+    yy, xx = np.broadcast_arrays(np.asarray(lat, np.float64), np.asarray(lon, np.float64))
+    out = np.zeros(xx.size, bool)
+    if not out.size or not road.any():
+        return out.reshape(xx.shape)
+    px, py = _to3857(xx.ravel(), yy.ravel())
+    cols = np.floor((px-chm.x0)/chm.dx).astype(np.int64)
+    rows = np.floor((chm.y0-py)/chm.dy).astype(np.int64)
+    h,w = road.shape
+    valid = (cols>=0)&(cols<w)&(rows>=0)&(rows<h)
+    if not valid.any():
+        return out.reshape(xx.shape)
+    # Mercator metres per ground metre; use the southernmost point for a
+    # conservative radius across this small map-data cell.
+    scale = 1.0/max(0.05,float(np.cos(np.radians(np.max(np.abs(yy))))))
+    rx = max(1,int(math.ceil(metres*scale/chm.dx)))
+    ry = max(1,int(math.ceil(metres*scale/chm.dy)))
+    ii = np.flatnonzero(valid)
+    x0=np.maximum(0,cols[ii]-rx)
+    x1=np.minimum(w-1,cols[ii]+rx)+1
+    y0=np.maximum(0,rows[ii]-ry)
+    y1=np.minimum(h-1,rows[ii]+ry)+1
+    integral=np.pad(road.astype(np.int64),((1,0),(1,0))).cumsum(0).cumsum(1)
+    out[ii]=(integral[y1,x1]-integral[y0,x1]-integral[y1,x0]+integral[y0,x0])>0
+    return out.reshape(xx.shape)
+
+
+def _roadside_backdrop(tree, road, chm):
+    """Keep 3D stock trees near Norwegian roads, use cheap stock LOD groups beyond.
+
+    Dense forest's existing CLUMP_OF pass has already grouped 4-8 trees into
+    one stock forest filler. Make an off-road filler *always* visible and drop
+    its high-detail members; stock shape LODs/imposters handle viewing distance.
+    Unclumped sparse trees keep their species but are lightly thinned.
+    """
+    if not len(tree):
+        return tree
+    far = _nordic(tree.lat,tree.lon) & ~_near_road(tree.lat,tree.lon,road,chm)
+    if not far.any():
+        return tree
+    groups=tree.group.copy()
+    for original, replacement in ((G_CONIFER_CLUMP,G_NORWAY_CONIFER_BACKDROP),
+                                  (G_DECIDUOUS_CLUMP,G_NORWAY_DECIDUOUS_BACKDROP),
+                                  (G_NORWAY_SPRUCE,G_NORWAY_SPRUCE_FAR),
+                                  (G_NORWAY_PINE,G_NORWAY_PINE_FAR),
+                                  (G_NORWAY_BIRCH,G_NORWAY_BIRCH_FAR)):
+        groups[far & (groups==original)]=replacement
+    # Negative-scale members are represented by an existing forest clump.
+    # They are not needed again as individual 3D objects away from roads.
+    member = far & (tree.kind==KIND_TREE) & (tree.scale<0)
+    sparse = far & (tree.kind==KIND_TREE) & (tree.scale>=0) \
+             & np.isin(groups,(G_NORWAY_SPRUCE_FAR,G_NORWAY_PINE_FAR,G_NORWAY_BIRCH_FAR))
+    keep=~member & ~(sparse & (tree.rank>FAR_SINGLE_KEEP))
+    return Items(tree.lon[keep],tree.lat[keep],tree.height[keep],tree.radius[keep],
+                 tree.kind[keep],groups[keep],tree.rank[keep],tree.yaw[keep],tree.scale[keep])
+
+
+def _sr16_groups(previous, types, u):
+    """Use NIBIO's forest-class mixture with the existing BeamNG stock foliage groups.
+
+    Classification comes from SRVTRESLAG's colour classes. Unknown/nonforest
+    leaves the original canopy height model's group unchanged; the WMS is a
+    forest *stand* map, not a survey of individual tree trunks.
+    """
+    g = np.asarray(previous, np.uint8).copy()
+    t = np.asarray(types, np.uint8)
+    u = np.asarray(u, np.float64)
+    g[t == norway_sr16.SPRUCE] = G_CONIFER
+    g[t == norway_sr16.PINE] = G_PINE_WEST
+    g[t == norway_sr16.BROADLEAF] = G_DECIDUOUS
+    mixed_conifer = t == norway_sr16.CONIFER_MIX
+    g[mixed_conifer] = np.where(u[mixed_conifer] < 0.55, G_CONIFER, G_PINE_WEST)
+    mixed = t == norway_sr16.MIXED
+    # SR16 MIXED is a stand class, not a literal 38% birch instruction. The
+    # previous mixture looked overly broadleaf in conifer-heavy valley views.
+    g[mixed] = np.where(u[mixed] < 0.20, G_DECIDUOUS,
+                        np.where(u[mixed] < 0.68, G_CONIFER, G_PINE_WEST))
+    return g
 
 
 def regional(group, height, lat, lon, lcls, u, riparian=None):
@@ -267,6 +416,7 @@ def _conifer_share(lat, lon):
 class Vegetation:
     def __init__(self, md, cache_dir=None):
         self.md = md
+        self.sr16 = norway_sr16.SR16(cache_dir, offline=bool(getattr(getattr(md, "fetcher", None), "offline", False)))
         self.dem = None                 # (set by the server: rocks on bare ground by slope, ROCK_SLOPE)
         self.surface = self.widths = None   # (set by the server: the roads' drawn widths, roads.road_specs)
         self.dir = os.path.join(cache_dir, "vegetation", f"v{VERSION}") if cache_dir else None
@@ -372,11 +522,12 @@ class Vegetation:
             if got is not None:
                 return got
         self._tl.dem_failed = False
+        self._tl.sr16_failed = False
         items = self._build(x, y)
         # (a cell built while the DEM could not answer, offline or no tile, lacks its slope rocks: it serves this
         # session but is not kept, so the next one builds it whole. From cristivasile's PR #295. No DEM at all,
         # self.dem None, is a setting, not a failure)
-        if p and not self._tl.dem_failed:
+        if p and not self._tl.dem_failed and not self._tl.sr16_failed:
             os.makedirs(os.path.dirname(p), exist_ok=True)
             tmp = f"{p}.{os.getpid()}.{threading.get_ident()}.tmp"
             with open(tmp, "wb") as fh:
@@ -407,6 +558,12 @@ class Vegetation:
         mx = chm.x0 + (np.arange(n_c) + 0.5) * chm.dx
         my = chm.y0 - (np.arange(n_r) + 0.5) * chm.dy
         lon0, lat0, lon1, lat1 = cd.bounds
+        sr16_map = self.sr16.cell(x, y, cd.bounds)
+        if self.sr16.enabled and norway_outline.intersects_bbox(cd.bounds) \
+                and sr16_map is None:
+            # A cache written during a WMS outage must not permanently suppress
+            # the real data once the user reconnects. Serve the CHM fallback now.
+            self._tl.sr16_failed = True
         ex0, ey0 = _to3857(lon0, lat0)
         ex1, ey1 = _to3857(lon1, lat1)
         ci = (mx >= ex0) & (mx < ex1)
@@ -508,10 +665,23 @@ class Vegetation:
         gx = np.floor((mx[ii] + 20037508.342789244) / chm.dx).astype(np.int64)
         gy = np.floor((20037508.342789244 - my[jj]) / chm.dy).astype(np.int64)
         u1, u2, u3, u4 = (_hash01(gx, gy, s) for s in (1, 2, 3, 4))
-        conifer = u1 < _conifer_share(tlat, tlon) * np.clip(th / 12.0, 0.5, 1.2)
+        nordic = _nordic(tlat, tlon)
+        # A low canopy tree is not automatically a birch. v0.2 multiplied the
+        # Nordic conifer share by height/12 (halving it for a 6 m tree), which
+        # made forests look overwhelmingly broadleaf during an SR16 outage.
+        # The SR16 stand class below still wins wherever NIBIO data exists.
+        conifer_share = np.where(nordic, np.where(tlat >= 67.0, 0.76, 0.85), _conifer_share(tlat, tlon))
+        conifer = u1 < np.where(nordic, conifer_share,
+                                conifer_share * np.clip(th / 12.0, 0.5, 1.2))
         group = np.where(is_tree, np.where(conifer, G_CONIFER, G_DECIDUOUS), G_SHRUB).astype(np.uint8)
         group = regional(group, th, tlat, tlon, lcls, _hash01(gx, gy, 7),
                          riparian=None if near_water is None else near_water[jj, ii])
+        # SR16 determines the dominant stand class; individual canopy tops keep their positions.
+        # All selected groups already exist in the game's original trees.lua catalog.
+        if sr16_map is not None and len(group):
+            mapped = sr16_map.sample(tlon, tlat)
+            group = np.where(is_tree, _sr16_groups(group, mapped, _hash01(gx, gy, 31)), group).astype(np.uint8)
+        group = np.where(is_tree, _norway_tree_groups(group, tlat, tlon), group).astype(np.uint8)
         kind = np.where(is_tree, KIND_TREE, KIND_BUSH).astype(np.uint8)
         jitter = chm.dx * 0.5
         tlon2, tlat2 = _to4326(mx[ii] + (u3 - 0.5) * jitter, my[jj] + (u4 - 0.5) * jitter)
@@ -544,9 +714,16 @@ class Vegetation:
         if vines.any():             # (the vines' own canopy read as bushes all over a vineyard: its rows stand there)
             keep = _keep_off_mask(tree, vines, chm) | (tree.height >= VINE_TREE_M)
             tree, lcls = tree.take(keep), lcls[keep]
+        if sr16_map is not None:
+            saplings, sapling_cls = self._sr16_saplings(cd, sr16_map, lc,
+                                                       blocked | paved | orchard | vines, chm, hs)
+            if len(saplings):
+                tree = _concat(tree, saplings)
+                lcls = np.concatenate((lcls, sapling_cls))
         tree = clumps(tree, lcls, (lat0 + lat1) / 2)
-        scatter = self._scatter(cd, lc, blocked | paved | orchard | vines, chm, hs)
-        edge = self._edge(cd, lc, blocked | orchard | vines, road, chm, hs)
+        tree = _roadside_backdrop(tree, road, chm)
+        scatter = self._scatter(cd, lc, blocked | paved | orchard | vines, chm, hs, road)
+        edge = self._edge(cd, lc, blocked | orchard | vines, road, chm, hs, sr16_map)
         bounds = (lon0, lat0, lon1, lat1)
         planted = orchard_items(lu, chm, blocked, bounds)
         hedges = farm_foliage(lu, chm, blocked, bounds)
@@ -554,19 +731,80 @@ class Vegetation:
         bales = bale_items(lu, chm, blocked, bounds)
         return _concat_all([tree, scatter, edge, planted, hedges, rows, bales])
 
-    def _edge(self, cd, lc, blocked, road, chm, hs):
-        """The thicket along forest edges beside roads (EDGE_*), outside the dry West."""
+    def _sr16_saplings(self, cd, sr16_map, lc, blocked, chm, hs):
+        """Fill some mapped forest gaps with young trees, never roads, rock or farmland.
+
+        SR16 measures the surrounding forest stand, not the precise trunk. The
+        canopy model remains authoritative for large trees; small infill is only
+        placed on WorldCover tree pixels without detected existing vegetation.
+        """
+        if lc is None:
+            return _empty(), np.empty(0, np.uint8)
+        lon0, lat0, lon1, lat1 = cd.bounds
+        ex0, ey0 = _to3857(lon0, lat0)
+        ex1, ey1 = _to3857(lon1, lat1)
+        step = SR16_GAP_CELL_M * _merc_k((lat0 + lat1) / 2)
+        gi = np.arange(math.floor(ex0 / step), math.ceil(ex1 / step))
+        gj = np.arange(math.floor(ey0 / step), math.ceil(ey1 / step))
+        GI, GJ = np.meshgrid(gi, gj)
+        GI, GJ = GI.ravel(), GJ.ravel()
+        px = (GI + _hash01(GI, GJ, 41)) * step
+        py = (GJ + _hash01(GI, GJ, 42)) * step
+        valid = (px >= ex0) & (px < ex1) & (py >= ey0) & (py < ey1)
+        valid &= _hash01(GI, GJ, 43) < SR16_GAP_P
+        if not valid.any():
+            return _empty(), np.empty(0, np.uint8)
+        px, py, GI, GJ = px[valid], py[valid], GI[valid], GJ[valid]
+        cc = np.floor((px - chm.x0) / chm.dx).astype(np.int64)
+        rr = np.floor((chm.y0 - py) / chm.dy).astype(np.int64)
+        inside = (cc >= 0) & (cc < hs.shape[1]) & (rr >= 0) & (rr < hs.shape[0])
+        inside[inside] &= ~blocked[rr[inside], cc[inside]] & (hs[rr[inside], cc[inside]] < TREE_MIN_M)
+        if not inside.any():
+            return _empty(), np.empty(0, np.uint8)
+        px, py, GI, GJ = px[inside], py[inside], GI[inside], GJ[inside]
+        lon, lat = _to4326(px, py)
+        lcls = lc.sample(lon, lat)
+        types = sr16_map.sample(lon, lat)
+        forest = (lcls == WC["tree"]) & (types >= norway_sr16.SPRUCE) & (types <= norway_sr16.MIXED)
+        if not forest.any():
+            return _empty(), np.empty(0, np.uint8)
+        lon, lat, lcls, types, GI, GJ = (a[forest] for a in (lon, lat, lcls, types, GI, GJ))
+        size = 3.0 + 2.5 * _hash01(GI, GJ, 44)
+        group = _sr16_groups(np.full(len(lon), G_CONIFER, np.uint8), types, _hash01(GI, GJ, 45))
+        inside_norway = _nordic(lat, lon)
+        if not inside_norway.all():
+            lon, lat, lcls, size, group, GI, GJ = (a[inside_norway] for a in (lon, lat, lcls, size, group, GI, GJ))
+        group = _norway_tree_groups(group, lat, lon)
+        out = Items(lon, lat, size.astype(np.float32), (size * 0.12 + 1.0).astype(np.float32),
+                    np.full(len(lon), KIND_TREE, np.uint8), group,
+                    _hash01(GI, GJ, 46).astype(np.float32),
+                    (360.0 * _hash01(GI, GJ, 47)).astype(np.float32),
+                    (0.85 + 0.3 * _hash01(GI, GJ, 48)).astype(np.float32))
+        return out, lcls
+
+    def _edge(self, cd, lc, blocked, road, chm, hs, sr16_map=None):
+        """Norway-only thicket, plus unchanged legacy roadside foliage elsewhere."""
         if lc is None or not road.any():
             return _empty()
+        if norway_outline.intersects_bbox(cd.bounds):
+            # Two deterministic grids: the original grid is used outside the
+            # border, the Norway grid inside it. A border tile changes nothing
+            # on the Swedish/Finnish side, including candidate spacing.
+            return _concat(self._edge_variant(cd, lc, blocked, road, chm, hs, sr16_map, False),
+                           self._edge_variant(cd, lc, blocked, road, chm, hs, sr16_map, True))
+        return self._edge_variant(cd, lc, blocked, road, chm, hs, sr16_map, False)
+
+    def _edge_variant(self, cd, lc, blocked, road, chm, hs, sr16_map, nordic):
         lon0, lat0, lon1, lat1 = cd.bounds
         if _dry_west(np.array([(lat0 + lat1) / 2]), np.array([(lon0 + lon1) / 2]))[0]:
             return _empty()
-        band = _dilate(road, max(1, int(round(EDGE_M / chm.dx)))) & ~blocked
+        band_m = NORDIC_EDGE_M if nordic else EDGE_M
+        band = _dilate(road, max(1, int(round(band_m / chm.dx)))) & ~blocked
         if not band.any():
             return _empty()
         ex0, ey0 = _to3857(lon0, lat0)
         ex1, ey1 = _to3857(lon1, lat1)
-        s = EDGE_CELL_M * _merc_k((lat0 + lat1) / 2)     # (in ground metres as at MERC_REF_LAT)
+        s = (NORDIC_EDGE_CELL_M if nordic else EDGE_CELL_M) * _merc_k((lat0 + lat1) / 2)
         GI, GJ = np.meshgrid(np.arange(math.floor(ex0 / s), math.ceil(ex1 / s)),
                              np.arange(math.floor(ey0 / s), math.ceil(ey1 / s)))
         GI, GJ = GI.ravel(), GJ.ravel()
@@ -576,22 +814,45 @@ class Vegetation:
         r_ = np.floor((chm.y0 - py) / chm.dy).astype(np.int64)
         ok = (px >= ex0) & (px < ex1) & (py >= ey0) & (py < ey1) & (c_ >= 0) & (c_ < hs.shape[1]) \
             & (r_ >= 0) & (r_ < hs.shape[0])
-        ok[ok] &= band[r_[ok], c_[ok]] & (hs[r_[ok], c_[ok]] >= TREE_MIN_M)     # under the forest's canopy
-        ok &= _hash01(GI, GJ, 23) < EDGE_P
+        ok[ok] &= band[r_[ok], c_[ok]]
+        if nordic:
+            # Mean ~0.52, as before, but neighbouring bushes favour the same
+            # 24-m-wide patches. No extra vegetation rows or global work.
+            probability = np.clip(0.10 + 0.84 * _patch_field(
+                px, py, NORDIC_PATCH_M, (lat0 + lat1) / 2, 61), 0.10, 0.94)
+        else:
+            probability = EDGE_P
+        ok &= _hash01(GI, GJ, 23) < probability
         if not ok.any():
             return _empty()
         GI, GJ, px, py = GI[ok], GJ[ok], px[ok], py[ok]
         lon, lat = _to4326(px, py)
+        belongs = _nordic(lat, lon)
+        selected = belongs if nordic else ~belongs
+        if not selected.any():
+            return _empty()
         cls = lc.sample(lon, lat)
-        forest = cls == WC["tree"]          # not under street trees in town
+        has_canopy = hs[r_[ok], c_[ok]] >= TREE_MIN_M
+        forest = (cls == WC["tree"]) & has_canopy   # old behaviour when SR16 is not available
+        if sr16_map is not None:
+            sr = sr16_map.sample(lon, lat)
+            mapped_forest = (sr >= norway_sr16.SPRUCE) & (sr <= norway_sr16.MIXED)
+            # Real SR16 stands can contain canopy-height gaps; let a handful of
+            # small roadside bushes grow there too, but never on bare rock/fields.
+            forest |= mapped_forest & np.isin(cls, (WC["tree"], WC["shrub"]))
+        forest &= selected
         if not forest.any():
             return _empty()
         GI, GJ, lon, lat, cls = GI[forest], GJ[forest], lon[forest], lat[forest], cls[forest]
-        size = 1.2 + 1.8 * _hash01(GI, GJ, 24)
+        size = (0.9 if nordic else 1.2) + (2.0 if nordic else 1.8) * _hash01(GI, GJ, 24)
         n = len(lon)
+        groups = regional(np.full(n, G_SHRUB, np.uint8), size, lat, lon, cls, _hash01(GI, GJ, 25))
+        if nordic:
+            fern = _hash01(GI, GJ, 32) < 0.26
+            groups = np.where(fern, G_FERN, groups).astype(np.uint8)
+            size = np.where(fern, 0.65 + 0.65 * _hash01(GI, GJ, 33), size)
         return Items(lon, lat, size.astype(np.float32), (size * 0.6).astype(np.float32),
-                     np.full(n, KIND_BUSH, np.uint8),
-                     regional(np.full(n, G_SHRUB, np.uint8), size, lat, lon, cls, _hash01(GI, GJ, 25)),
+                     np.full(n, KIND_BUSH, np.uint8), groups,
                      _hash01(GI, GJ, 26).astype(np.float32), (_hash01(GI, GJ, 27) * 360.0).astype(np.float32),
                      (0.8 + 0.4 * _hash01(GI, GJ, 28)).astype(np.float32))
 
@@ -611,7 +872,7 @@ class Vegetation:
             return None
         return dnp.hypot(z[0] - z[1], z[2] - z[3]) / (2 * ROCK_SLOPE_D)
 
-    def _scatter(self, cd, lc, blocked, chm, hs):
+    def _scatter(self, cd, lc, blocked, chm, hs, road=None):
         """Bushes and rocks on a hashed SCATTER_CELL_M grid over shrubland, grass and bare ground."""
         if lc is None:
             return _empty()
@@ -628,6 +889,7 @@ class Vegetation:
         keep = (px >= ex0) & (px < ex1) & (py >= ey0) & (py < ey1)
         px, py, GI, GJ = px[keep], py[keep], GI[keep], GJ[keep]
         lon, lat = _to4326(px, py)
+        nordic_here = _nordic(lat, lon)
         cls = lc.sample(lon, lat)
         u = _hash01(GI, GJ, 13)
         pb = np.zeros(len(px))
@@ -635,6 +897,12 @@ class Vegetation:
         for c, (b, r) in SCATTER_P.items():
             pb = np.where(cls == c, b, pb)
             pr = np.where(cls == c, r, pr)
+        # Keep roughly the v0.5 item budget while growing forest-floor shrubs
+        # in green patches. SR16's species/positions are left untouched.
+        if np.any(nordic_here & (cls == WC["tree"])):
+            patch = _patch_field(px, py, NORDIC_PATCH_M, (lat0 + lat1) / 2, 62)
+            pb = np.where(nordic_here & (cls == WC["tree"]),
+                          0.06 + 0.36 * patch, pb)
         # on the CHM grid: not blocked, no canopy there already (the trees are the CHM's)
         c_ = np.floor((px - chm.x0) / chm.dx).astype(np.int64)
         r_ = np.floor((chm.y0 - py) / chm.dy).astype(np.int64)
@@ -673,10 +941,26 @@ class Vegetation:
         sel = rock | bush
         n = int(sel.sum())
         size = 0.4 + 1.6 * dnp.sq(_hash01(GI[sel], GJ[sel], 14))
+        groups = regional(np.where(rock[sel], G_ROCK, G_SHRUB), size, lat[sel], lon[sel], cls[sel],
+                          _hash01(GI[sel], GJ[sel], 18)) if n else np.empty(0, np.uint8)
+        if n:
+            fern = nordic_here[sel] & bush[sel] & (cls[sel] == WC["tree"]) \
+                   & (_hash01(GI[sel], GJ[sel], 34) < 0.12)
+            groups = np.where(fern, G_FERN, groups).astype(np.uint8)
+            size = np.where(fern, 0.6 + 0.7 * _hash01(GI[sel], GJ[sel], 35), size)
+            if road is not None and road.any():
+                # Existing rows only: replace some roadside shrubs with short
+                # stock clover carpets. No collision and hidden beyond 180 m
+                # by trees.lua. A terrain texture pass would be separate.
+                near = _near_road(lat[sel], lon[sel], road, chm,
+                                  metres=NORDIC_FLOORCOVER_NEAR_M)
+                floor = near & nordic_here[sel] & bush[sel] \
+                        & np.isin(cls[sel], (WC["tree"], WC["shrub"])) \
+                        & (_hash01(GI[sel], GJ[sel], 63) < NORDIC_FLOORCOVER_SHARE)
+                groups = np.where(floor, G_NORWAY_FLOORCOVER, groups).astype(np.uint8)
+                size = np.where(floor, 0.19 + 0.07 * _hash01(GI[sel], GJ[sel], 64), size)
         return Items(lon[sel], lat[sel], size.astype(np.float32), (size * 0.6).astype(np.float32),
-                     np.where(rock[sel], KIND_ROCK, KIND_BUSH).astype(np.uint8),
-                     regional(np.where(rock[sel], G_ROCK, G_SHRUB), size, lat[sel], lon[sel], cls[sel],
-                              _hash01(GI[sel], GJ[sel], 18)),
+                     np.where(rock[sel], KIND_ROCK, KIND_BUSH).astype(np.uint8), groups,
                      _hash01(GI[sel], GJ[sel], 15).astype(np.float32),
                      (_hash01(GI[sel], GJ[sel], 16) * 360.0).astype(np.float32),
                      (0.8 + 0.4 * _hash01(GI[sel], GJ[sel], 17)).astype(np.float32)) if n else _empty()
@@ -1353,8 +1637,19 @@ def _mask_roads(f, mask, chm, push=None, clear=ROAD_CLEAR_M, specs=None, walks=F
         if s is None:   # them; the street trees, pushed to the curb, stand in pits at its edge: GitHub #424 / #425)
             return 0.0
         return s.width / 2 + (s.walk if walks and getattr(s, "walk", 0) and roadsmod.has_sidewalks(s) else 0.0)
-    hw_m = np.array([max(ROAD_HALF_WIDTH_M.get(str(cls[i]), ROAD_HALF_DEFAULT_M), drawn(sp[i])) + clear
-                     for i in sel], np.float64)
+    lon0, lat0 = _to4326(chm.x0, chm.y0 - chm.dy * n_r)
+    lon1, lat1 = _to4326(chm.x0 + chm.dx * n_c, chm.y0)
+    nordic = norway_outline.fully_inside_bbox((lon0, lat0, lon1, lat1))
+
+    def half_width(i):
+        actual = drawn(sp[i])
+        fallback = ROAD_HALF_WIDTH_M.get(str(cls[i]), ROAD_HALF_DEFAULT_M)
+        # The NVDB fork passes its measured carriageway width through road_specs. For rural
+        # Nordic roads use the width *actually rendered*, instead of forcing a broad default
+        # secondary/tertiary corridor. If specs are unavailable, keep the old safe default.
+        return (actual if nordic and actual >= 1.5 else max(fallback, actual)) + clear
+
+    hw_m = np.array([half_width(i) for i in sel], np.float64)
     # every ring's segments on the CHM grid, its half width in grid pixels (a 3857 metre is 1 / cos(lat) of a ground
     # metre), rings off the grid left out (earthfast road_segments, 2026-10-23: the per-ring Python loop it
     # replaced gave the same segments); then the distances and the nearest road's push, without the GIL
@@ -1394,7 +1689,7 @@ AUDIO_CELL_M = 256.0 / 12
 AUDIO_H_MID = 15.0
 AUDIO_H_LARGE = 19.0
 AUDIO_SOUND = [g for g in range(len(GROUPS)) if g not in (G_ROCK, G_DESERT_ROCK, G_VINE) + CLUMP_GROUPS
-               + BALE_GROUPS]
+               + BALE_GROUPS + (G_NORWAY_CONIFER_BACKDROP,G_NORWAY_DECIDUOUS_BACKDROP)]
 
 
 def _ambience(group, e, n, z, height, lat, lon):

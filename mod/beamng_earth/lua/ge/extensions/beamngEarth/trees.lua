@@ -171,6 +171,46 @@ M.CATALOG = {
     { ECA .. 'trees/trees_douglasfir/tree_douglasfir_large_b', 21.4 }, { ECA .. 'trees/trees_douglasfir/tree_douglasfir_large_d', 21.7 },
     { IT .. 'trees/trees_italy/scots_pine', 18.9 },
   },
+  -- Norway near-road 3D trees: BeamNG stock shapes with working textures,
+  -- collision and built-in LOD/billboard details. No experimental DAE assets.
+  norway_spruce = {
+    { ECA .. 'trees/trees_douglasfir/tree_douglasfir_small_b', 11.2 },
+    { ECA .. 'trees/trees_douglasfir/tree_douglasfir_small_a', 13.4 },
+    { ECA .. 'trees/trees_douglasfir/tree_douglasfir_large_c', 18.9 },
+    { ECA .. 'trees/trees_douglasfir/tree_douglasfir_large_a', 19.6 },
+    { ECA .. 'trees/trees_douglasfir/tree_douglasfir_large_b', 21.4 },
+    { ECA .. 'trees/trees_douglasfir/tree_douglasfir_large_d', 21.7 },
+  },
+  norway_pine = {
+    -- User reference: full, long drooping branch conifer (East Coast Douglas fir).
+    -- We deliberately reuse that shape family for pines too; the previous
+    -- Italy/WCA pines looked too sparse and out of place in this Norway scene.
+    { ECA .. 'trees/trees_douglasfir/tree_douglasfir_small_b', 11.2 },
+    { ECA .. 'trees/trees_douglasfir/tree_douglasfir_small_a', 13.4 },
+    { ECA .. 'trees/trees_douglasfir/tree_douglasfir_large_c', 18.9 },
+    { ECA .. 'trees/trees_douglasfir/tree_douglasfir_large_a', 19.6 },
+    { ECA .. 'trees/trees_douglasfir/tree_douglasfir_large_b', 21.4 },
+    { ECA .. 'trees/trees_douglasfir/tree_douglasfir_large_d', 21.7 },
+  },
+  norway_birch = {
+    { ECA .. 'trees/trees_aspen/tree_aspen_small_a', 8.3 },
+    { ECA .. 'trees/trees_aspen/tree_aspen_small_c', 9.7 },
+    { ECA .. 'trees/trees_aspen/tree_aspen_forest_b', 18.5 },
+  },
+  -- Sparse forest far from a road: the same stock species with billboard LODs.
+  norway_spruce_far = { { ECA .. 'trees/trees_douglasfir/tree_douglasfir_small_b', 11.2 },
+                        { ECA .. 'trees/trees_douglasfir/tree_douglasfir_large_a', 19.6 } },
+  norway_pine_far = { { ECA .. 'trees/trees_douglasfir/tree_douglasfir_small_b', 11.2 },
+                      { ECA .. 'trees/trees_douglasfir/tree_douglasfir_large_a', 19.6 } },
+  norway_birch_far = { { ECA .. 'trees/trees_aspen/tree_aspen_small_a', 8.3 },
+                       { ECA .. 'trees/trees_aspen/tree_aspen_forest_b', 18.5 } },
+  -- Short, broad green carpets along Norwegian road edges and between birches.
+  -- Replaces existing shrub rows; stock Hirochi clover material, not a new DAE.
+  norway_floorcover = { { HIR .. 'groundcover/Clover_closetop', 0.17 } },
+  -- Low-cost forest groups for dense back slopes. Unlike the existing
+  -- *_clump groups they are visible in both near and far distance bands.
+  norway_conifer_backdrop = { { ECA .. 'trees/trees_douglasfir/tree_douglasfir_group_low', 22.6 } },
+  norway_deciduous_backdrop = { { ECA .. 'trees/trees_beech/tree_beech_forest_group', 23.8 } },
   shrub = {
     { ECA .. 'trees/ECA_coast_bush/generibush', 1.8 }, { ECA .. 'trees/trees_aspen/tree_aspen_bush_a', 2.2 },
     { ECA .. 'trees/trees_douglasfir/tree_douglasfir_bush_a', 2.7 }, { ECA .. 'trees/trees_oak/tree_oak_bush_c', 3.1 },
@@ -597,6 +637,15 @@ local MATERIALS = {
   '/art/shapes/objects/windows_doors_reflective',
 }
 
+-- Far slope scenery has no collision; roadside stock trees still collide.
+M.NO_COLLIDE.norway_spruce_far = true
+M.NO_COLLIDE.norway_pine_far = true
+M.NO_COLLIDE.norway_birch_far = true
+M.NO_COLLIDE.norway_conifer_backdrop = true
+M.NO_COLLIDE.norway_deciduous_backdrop = true
+M.NO_COLLIDE.norway_floorcover = true
+M.GROUP_MAX_M.norway_floorcover = 180
+
 local stopwatch = require('beamngEarth/stopwatch')
 M.clock = stopwatch.new      -- the tree frame's clock (FRAME_MS; tests: their own)
 local tiles = {}        -- key "a:tx_ty" -> { anchor, cx, cy, f (flat items), s (stride), n, made = { i -> item }, shown }
@@ -875,6 +924,14 @@ end
 -- item's rank; else the nearest. Returns shape, scale.
 function M.pick(group, h, rank)
   local list = M.CATALOG[group] or M.CATALOG.deciduous
+  -- A larger share of Norwegian birches gets the fuller stock aspen forest
+  -- crown. Its scale still uses the model's REAL 18.5 m height; no fake
+  -- height entries, unknown assets, or broadleaf/conifer cross-mapping.
+  if (group == 'norway_birch' or group == 'norway_birch_far') and h >= 11.0
+      and math.floor(rank * 7919) % 5 < 3 then
+    local forest = { ECA .. 'trees/trees_aspen/tree_aspen_forest_b', 18.5 }
+    return forest[1], math.max(0.3, math.min(2.5, h / forest[2]))
+  end
   local cands = {}
   for _, range in ipairs({ { 0.8, 1.25 }, { 0.6, 1.6 } }) do      -- near its size first, then wider
     for _, v in ipairs(list) do
