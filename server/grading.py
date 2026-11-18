@@ -2446,6 +2446,9 @@ def shape_heights(z, zs, modes):
     return np.where(put, zs, z), put
 
 
+_SHAPE_SOLVE_LOCK = threading.Lock()    # (every planner's shapes solved / solving tables: short holds)
+
+
 class _Planner:
     """The road plans of one planning region (geotiles.PLAN_Z), in its frame, per map cell, made once (worker threads;
     it fetches the road cells it lacks). store: the PlanStore it belongs to (its other regions, its settings)."""
@@ -4706,16 +4709,35 @@ class _Planner:
             smp = _gsh.sample(net, pcs)
             ck = self._shape_sys_key(net, sysm, smp)
             cache = self.__dict__.setdefault("_shape_solved", {})   # (this grading's: its ground, its frame)
-            hit = cache.get(ck)
+            solving = self.__dict__.setdefault("_shape_solving", {})
             diag = {}
+            # (one thread solves a system, the others asking for it meanwhile wait for its answer: the regions round a
+            # system are planned on as many threads, each found the cache empty and solved the same system at the same
+            # time, Brunau's 4 regions 4 times, 6 of the 8 s of its solves)
+            while True:
+                with _SHAPE_SOLVE_LOCK:
+                    hit = cache.get(ck)
+                    ev = None if hit is not None else solving.get(ck)
+                    if hit is None and ev is None:
+                        ev = solving[ck] = threading.Event()
+                        break
+                if hit is not None:
+                    break
+                ev.wait()
             if hit is not None:
                 ground, zs, diag = hit
             else:
-                ground = [self._ground_line(x["xy"]) for x in smp]
-                zs = _gsh.solve_shape(net, sysm, pcs, smp, ground, fixed_z, diag)
-                if len(cache) >= 4096:
-                    cache.clear()
-                cache[ck] = (ground, zs, diag)
+                try:
+                    ground = [self._ground_line(x["xy"]) for x in smp]
+                    zs = _gsh.solve_shape(net, sysm, pcs, smp, ground, fixed_z, diag)
+                    with _SHAPE_SOLVE_LOCK:
+                        if len(cache) >= 4096:
+                            cache.clear()
+                        cache[ck] = (ground, zs, diag)
+                finally:
+                    with _SHAPE_SOLVE_LOCK:
+                        solving.pop(ck, None)
+                    ev.set()
             if zs is None:          # (no answer: the system as it is, and why in the log; no stand-in)
                 failed += 1
                 log.error("grading: SHAPES infeasible system in region %s: %d pieces, %d crossings, %d ends; %s; "
