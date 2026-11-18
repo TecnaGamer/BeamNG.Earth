@@ -289,6 +289,10 @@ def _yard_cells(frame, rings):
         return []
 
 
+FEED_REACH_M = 400.0        # m round a yard a mapped vertex may lie and still be placed into it (off a road: CLEAR_SEARCH_M;
+                            # out of a station's ground: its size)
+
+
 def _feeders(frame, md, subs, layers, cells, seen, lines, poles):
     """Every power line ending in one of subs (its vertices in a yard, with one neighbour each side), from the cells
     the yards reach, added to lines / poles where not laid out yet (seen: their ids): a line end merges into an earlier
@@ -309,6 +313,11 @@ def _feeders(frame, md, subs, layers, cells, seen, lines, poles):
     pole_keys = np.unique(np.concatenate([q for q, _ in sup])) if sup else np.zeros(0, np.int64)
     tower_keys = np.unique(np.concatenate([t for _, t in sup])) if sup else np.zeros(0, np.int64)
     yards = [[Path(np.asarray(r, np.float64)[:, :2]) for r in rings] for _, rings in subs]
+    envelopes = []
+    for _, rings in subs:
+        xy = np.concatenate([np.asarray(r, np.float64)[:, :2] for r in rings])
+        envelopes.append((float(xy[:, 0].min()) - FEED_REACH_M, float(xy[:, 1].min()) - FEED_REACH_M,
+                          float(xy[:, 0].max()) + FEED_REACH_M, float(xy[:, 1].max()) + FEED_REACH_M))
     for f in every:
         cls, tags = f.attrs["class"].astype(str), f.attrs.get("tags")
         for i in np.flatnonzero((cls == "power_line") & (f.kind == 2)):
@@ -324,16 +333,29 @@ def _feeders(frame, md, subs, layers, cells, seen, lines, poles):
                     ring = np.asarray(ring, np.float64)
                     if len(ring) < 2:
                         continue
+                    # (only the vertices a placement could bring into a yard: a long way's others never read its roads
+                    # and stations; Codex's review of 08f31f7c)
+                    e0, n0, _ = frame.geodetic_to_enu(ring[:, 1], ring[:, 0], np.zeros(len(ring)))
+                    e0, n0 = np.asarray(e0, np.float64), np.asarray(n0, np.float64)
+                    near = np.zeros(len(ring), bool)
+                    for bx0, by0, bx1, by1 in envelopes:
+                        near |= (e0 >= bx0) & (e0 <= bx1) & (n0 >= by0) & (n0 <= by1)
+                    if not near.any():
+                        continue
+                    idx = np.flatnonzero(near)
                     # (its vertices where the layout stands them: the yards it ends in read alike in every tile;
                     # Codex's review of 0cf9fd9b: the raw mapped points disagreed with the moved ones)
-                    e, n = _placed(frame, md, ring, POLE_ROAD_CLEAR_M if pole else TOWER_ROAD_CLEAR_M, (0, 0, 0, 0))
+                    e, n = _placed(frame, md, ring[idx], POLE_ROAD_CLEAR_M if pole else TOWER_ROAD_CLEAR_M,
+                                   (0, 0, 0, 0))
                     xy = np.column_stack([np.asarray(e, np.float64), np.asarray(n, np.float64)])
-                    here = np.zeros(len(ring), bool)
+                    inside = np.zeros(len(idx), bool)
                     for paths in yards:
-                        inn = np.zeros(len(ring), bool)
+                        inn = np.zeros(len(idx), bool)
                         for path in paths:
                             inn ^= path.contains_points(xy)
-                        here |= inn
+                        inside |= inn
+                    here = np.zeros(len(ring), bool)
+                    here[idx] = inside
                     if not here.any():
                         continue
                     keep = here.copy()

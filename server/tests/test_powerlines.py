@@ -630,6 +630,29 @@ class TowerFootprintTest(unittest.TestCase):
         self.assertEqual(hung, built)
 
     @yards_on
+    def test_a_long_feeder_reads_only_round_the_yard(self):
+        """Codex's review of 08f31f7c: the feeder search placed every vertex of a candidate way (its roads' and
+        stations' cells read along all of it, a 100 km way's for one tile). Only the vertices within FEED_REACH_M of a
+        yard are placed now."""
+        import mapcells
+        from test_roads import FRAME
+        tx, _, far, md = self.far_yard_world(feeder=True, feeder_end=-5.0,
+                                             feeder_from=(-8000.0, -6000.0, -4000.0, -2000.0))
+        asked = []
+        real = md.cell
+
+        def cell(key, layers, kind):
+            if "roads" in layers:
+                asked.append(key)
+            return real(key, layers, kind)
+        md.cell = cell
+        powerlines.tile_lines(FRAME, tx, 0, md, lambda la_, lo_: np.zeros(np.shape(la_)), [], [])
+        la, lo, _ = FRAME.enu_to_geodetic(np.array([far - 8000.0]), np.array([108.0]), 0.0)
+        remote = mapcells.cell_of(float(la[0]), float(lo[0]))
+        self.assertTrue(asked)
+        self.assertNotIn(remote, asked)
+
+    @yards_on
     def test_feeders_read_where_the_layout_stands_them(self):
         """Codex's review of 0cf9fd9b: the feeder search tested the mapped points, the layout the points moved off the
         roads and out of the bus stations' ground: a feeder mapped 5 m outside the yard, moved 18 m into it, ended in
