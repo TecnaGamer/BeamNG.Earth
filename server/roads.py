@@ -4831,7 +4831,7 @@ DUAL_DECK_M = 30.0      # m: parts of one level parallel within this are one dec
 
 
 def deck_profile(lines, ground_fn, crossings=(), clear=None, grade=None, lift=None, levels=None, widths=None, pins=None,
-                 crest=None, fast=False):
+                 crest=None, fast=False, level_clear=None):
     """deck_profile_once, then repeated with the deck-over-deck requirements: where two parts of
     different levels cross, the higher one clears the lower one's deck by `clear` (2026-10-11: crossing
     decks clipped into each other). pins: points where a ground road goes on from a joint of decks (abutments too: _pin).
@@ -4839,12 +4839,16 @@ def deck_profile(lines, ground_fn, crossings=(), clear=None, grade=None, lift=No
     the chain with them kept only where no part stands more than DECK_K_OVER_M higher at any of its points nor climbs
     more than DECK_K_GRADE more steeply on any of its segments than the chain without them (_no_worse; a branch leaving
     a trunk with a longer crest took a steeper start: an M5 deck at Almondsbury 4.2 -> 4.9 %), else the chain without.
-    fast: a motorway's or trunk's chain (deck_curve's FAST_DECK_ENDS rule). Pure given ground_fn."""
+    fast: a motorway's or trunk's chain (deck_curve's FAST_DECK_ENDS rule). level_clear: per part the clearance a
+    higher part asks over it (LEVEL_SPACING: its own road's class, a RoadClear), or None: `clear`. Pure given
+    ground_fn."""
     if DECK_K_SPEED and crest is not None:
-        base = _deck_profile(lines, ground_fn, crossings, clear, grade, lift, levels, widths, pins, None, fast)
-        new = _deck_profile(lines, ground_fn, crossings, clear, grade, lift, levels, widths, pins, crest, fast)
+        base = _deck_profile(lines, ground_fn, crossings, clear, grade, lift, levels, widths, pins, None, fast,
+                             level_clear)
+        new = _deck_profile(lines, ground_fn, crossings, clear, grade, lift, levels, widths, pins, crest, fast,
+                            level_clear)
         return new if _no_worse(lines, base, new) else base
-    return _deck_profile(lines, ground_fn, crossings, clear, grade, lift, levels, widths, pins, None, fast)
+    return _deck_profile(lines, ground_fn, crossings, clear, grade, lift, levels, widths, pins, None, fast, level_clear)
 
 
 def _no_worse(lines, base, new):
@@ -4870,7 +4874,8 @@ def _no_worse(lines, base, new):
     return True
 
 
-def _deck_profile(lines, ground_fn, crossings, clear, grade, lift, levels, widths, pins, crest, fast=False):
+def _deck_profile(lines, ground_fn, crossings, clear, grade, lift, levels, widths, pins, crest, fast=False,
+                  level_clear=None):
     """deck_profile's solve (crest as there, used as given)."""
     zs = deck_profile_once(lines, ground_fn, crossings, clear, grade, lift, pins=pins, crest=crest, fast=fast)
     n_road = len(crossings)
@@ -4887,13 +4892,16 @@ def _deck_profile(lines, ground_fn, crossings, clear, grade, lift, levels, width
     # 41 m over the Willamette, 2026-10-19)
     for _ in range(1 if bridge_profile_mode() == "curve" else 4):
         extra = []
+        # (LEVEL_SPACING: the clearance of the lower part's own road, level_clear; else `clear`)
         for i, j, si, sj in over:
             if levels[i] == levels[j]:
                 continue
             hi, lo, sh, sl = (i, j, si, sj) if levels[i] > levels[j] else (j, i, sj, si)
-            extra.append((hi, sh, float(dnp.interp(sl, arcs[lo], zs[lo])), None, levels[hi]))
+            extra.append((hi, sh, float(dnp.interp(sl, arcs[lo], zs[lo])),
+                          None if level_clear is None else level_clear[lo], levels[hi]))
         for hi, sh, lo, sl in stacks:               # a deck over another along it (an upper roadway)
-            extra.append((hi, sh, float(dnp.interp(sl, arcs[lo], zs[lo])), None, levels[hi]))
+            extra.append((hi, sh, float(dnp.interp(sl, arcs[lo], zs[lo])),
+                          None if level_clear is None else level_clear[lo], levels[hi]))
         if not extra:
             break
         new = deck_profile_once(lines, ground_fn, list(crossings) + extra, clear, grade, lift, n_road=n_road,
@@ -7495,8 +7503,9 @@ DECK_SPAN_RATIO = 22.0  # a deck is its main span / this deep (girder bridges ru
 # roads 4.7, service / track 4.0, foot and cycle ways 2.7, a railway 6.5: electrified or unknown) + the deck's depth
 # D (0.045 of its main span, 0.7-4.0 m: a precast girder's ratio; the mesh draws the same depth) + LEVEL_MARGIN_M, not
 # 6.0 m of headroom + 0.15 m + a depth of 0.9-2.2 m (8.35 m a level with the full depth): a stack's levels ~1-2 m
-# lower each, its ramps gentler. A chain takes the clearance of the highest class it crosses (one chain, one clear;
-# the most demanding road under it, 5.0 m when unknown). Off by default until reviewed in game; BNE_LEVEL_SPACING=on.
+# lower each, its ramps gentler. Each crossing takes the clearance of the road crossing there (crossing_clear: a deck
+# over a footway asks a footway's, whatever else its chain crosses; LOWER_CLEAR_UNKNOWN_M when unknown). Off by default
+# until reviewed in game; BNE_LEVEL_SPACING=on.
 LEVEL_SPACING = os.environ.get("BNE_LEVEL_SPACING", "off") == "on"
 # (clearance study 2026-11-17: the unsigned clearances the main road standards keep: US interstates 16 ft (4.9 m),
 # UK 16 ft 6 in (5.03 m) on every unsigned road, Germany 4.50 m + 0.20 m, the Netherlands 4.50 m, France 4.75 m on main
@@ -7677,14 +7686,13 @@ def _crossings(lines, ground_lines):
     return [(pi, arc, np.array([x, y])) for pi, _g, arc, x, y in got]
 
 
-def chain_under_classes(lines, ground_lines, ground_cls, lower_cls=()):
-    """LEVEL_SPACING: the road classes a bridge chain's one clearance target is for (lower_clear of them), the same for
-    its deck (BridgeProfiles._solve), its approach fills (grading.bridge_lifts) and the dips of the roads under it
-    (grading's underpasses): of every ground line crossing under any of the chain's parts lines (ground_cls: per ground
-    line its class, None unknown), and lower_cls, the classes of its own parts on a lower level (a stack). Pure."""
-    got = fast_crossing_ground(lines, ground_lines)
-    out = {str(ground_cls[g]) for g in got if g < len(ground_cls) and ground_cls[g] is not None}
-    return sorted(out | {str(c) for c in lower_cls if c is not None})
+def crossing_clear(depth, cls):
+    """LEVEL_SPACING: RoadClear, m a deck's road stands over one road crossing under it of class cls (None: unknown):
+    deck_road_clear of that road's class alone. Each crossing asks its own (one chain, many targets): the deck solve
+    (BridgeProfiles._solve, and over a stack's lower part), the approach fills (grading.bridge_lifts) and the dip of the
+    road under it (grading's underpasses) all take it from the crossing road's class, so a deck over a footway no
+    longer climbs for a motorway under another of its parts. Pure."""
+    return RoadClear(deck_road_clear(depth, None if cls is None else [str(cls)]))
 
 
 def fast_crossing_ground(lines, ground_lines):
@@ -8258,8 +8266,17 @@ class BridgeProfiles:
         # (a road under with a height limit: that limit under the girders, its own clearance: road_sign_at)
         lims = self._limits_near(lines, ground) if ROAD_SIGNED_ON and cr else []
         signs = [road_sign_at(lims, c[2]) for c in cr] if lims else [None] * len(cr)
-        required = [(c[0], c[1], z) if h is None else (c[0], c[1], z, signed_road_clear(h, depth))
-                    for c, z, h in zip(cr, road_z, signs)]
+        if LEVEL_SPACING:
+            # (each road crossing under the chain its own class's clearance, the one grading's dip under it and its
+            # approach fills ask: crossing_clear; a height limit first as before)
+            gcls = self.__dict__.get("_gcls", {})
+            gk = [gcls.get(k) for k, v in ground.items() if k[1] == "g" for _g in v]
+            gi = fast_crossing_ground(lines, gl) if cr else []
+            required = [(c[0], c[1], z, crossing_clear(depth, gk[g] if g < len(gk) else None) if h is None
+                         else signed_road_clear(h, depth)) for c, z, h, g in zip(cr, road_z, signs, gi)]
+        else:
+            required = [(c[0], c[1], z) if h is None else (c[0], c[1], z, signed_road_clear(h, depth))
+                        for c, z, h in zip(cr, road_z, signs)]
         dd = self.__dict__.setdefault("depth", {})
         for k in comp:
             dd[k] = DECK_FULL_DEPTH if depth is None else depth
@@ -8271,15 +8288,8 @@ class BridgeProfiles:
         if not water and nav > 0 and bridge_profile_mode() == "curve":
             water = self._gap(lines, nav, depth)
         levels = [pool[k][3] for k in comp]
-        under = None                        # (LEVEL_SPACING: the classes the chain's clearance is for)
-        if LEVEL_SPACING:
-            gcls = self.__dict__.get("_gcls", {})
-            gk = [gcls.get(k) for k, v in ground.items() if k[1] == "g" for _g in v]
-            lower = ()
-            if len(set(levels)) > 1:        # (a stack: its lower parts are roads under it too)
-                top = max(levels)
-                lower = [str(pool[k][0].cls) for k, lv in zip(comp, levels) if lv < top]
-            under = chain_under_classes(lines, gl, gk, lower)
+        # (LEVEL_SPACING: a part of a stack under a higher one asks its own road's clearance, as a road under it would)
+        level_clear = [crossing_clear(depth, pool[k][0].cls) for k in comp] if LEVEL_SPACING else None
         rails = [(c[0], c[1], z, deck_road_clear(depth, ["rail"] if LEVEL_SPACING else None))
                  for c, z in zip(rcr, rail_z)]
         pins = _ground_pins(lines, gl)          # (once: pure in lines and gl, which stay)
@@ -8291,9 +8301,9 @@ class BridgeProfiles:
                                       and not getattr(pool[k][0], "link", False) for k in comp)
 
         def solve(ground_fn):
-            return deck_profile(lines, ground_fn, required + rails + water, clear=deck_road_clear(depth, under),
+            return deck_profile(lines, ground_fn, required + rails + water, clear=deck_road_clear(depth),
                                 levels=levels, widths=[pool[k][0].width for k in comp], pins=pins, crest=crest,
-                                fast=fast)
+                                fast=fast, level_clear=level_clear)
         base = self._landing_ground(lines, gl)
         zs = solve(base)
         # a free end standing on another deck: solved again with it at that deck's height as drawn (measured too:
