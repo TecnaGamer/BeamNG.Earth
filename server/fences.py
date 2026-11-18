@@ -44,7 +44,10 @@ WALL_ON_ROAD_M = 0.3        # m past a carriageway's edge no wall panel stands, 
 WALL_LEVEL_M = 3.0          # m: a carriageway this far above or below the wall is not the one it runs along
 WALL_DECK_REACH_M = 4.0     # m past a deck's edge a bridge wall (its own layer/bridge tags) still stands on it
                             # (a road passing under a rail viaduct)
-CHAIN_TYPES = {"chain_link", "chainlink", "chain-link", "chain", "wire_mesh", "welded_mesh"}
+CHAIN_TYPES = {"chain_link", "chainlink", "chain-link", "chain"}
+MAPPED_CHAIN_TYPES = CHAIN_TYPES | {"wire_mesh", "welded_mesh"}
+MAPPED_BOUNDARIES_ON = os.environ.get("BNE_MAPPED_BOUNDARIES", "off") == "on"
+PANEL_SCALE_MIN, PANEL_SCALE_MAX = 0.5, 2.0
 NOISE_TYPES = {"noise_barrier", "noisebarrier", "sound_barrier"}
 BBOX_PAD_M = 8.0
 ALONG_EDGE_M = 4.0      # m past a deck's edge an untagged barrier running along it is its parapet (ALONG_*)
@@ -111,7 +114,7 @@ def _tags(feats, i):
     return {str(k).strip().lower(): str(v).strip().lower() for k, v in values.items()}
 
 
-def kind_of(feats, i, tags=None):
+def kind_of(feats, i, tags=None, *, mapped=None):
     """'chainlink' or 'noisewall' when the mapped line is one, else None."""
     classes = feats.attrs.get("class")
     cls = str(classes[i]).strip().lower() if classes is not None else ""
@@ -119,10 +122,13 @@ def kind_of(feats, i, tags=None):
     barrier = tags.get("barrier", "")
     fence_type = tags.get("fence_type") or tags.get("fence:type") or ""
     wall = tags.get("wall") or ""
-    if cls in CHAIN_TYPES or barrier in CHAIN_TYPES or fence_type in CHAIN_TYPES:
+    if mapped is None:
+        mapped = MAPPED_BOUNDARIES_ON
+    chain_types = MAPPED_CHAIN_TYPES if mapped else CHAIN_TYPES
+    if cls in chain_types or barrier in chain_types or fence_type in chain_types:
         return G_CHAIN
     if cls in ("fence",) or barrier == "fence":
-        return G_CHAIN if fence_type in CHAIN_TYPES else None
+        return None
     if cls in NOISE_TYPES or barrier in NOISE_TYPES or wall in NOISE_TYPES:
         return G_WALL
     return None
@@ -161,7 +167,8 @@ def _place(group, centre, tangent, scale=1.0):
     if group == G_CHAIN:
         return cx + CHAIN_OX * scale * tx, cy + CHAIN_OX * scale * ty, _yaw(tx, ty)
     # the noise wall's long axis is local +y, so local +x points to the right of the line
-    return (cx - scale * (WALL_ACROSS * ty + WALL_ALONG * tx), cy + scale * (WALL_ACROSS * tx - WALL_ALONG * ty),
+    return (cx - (WALL_ACROSS * scale) * ty - (WALL_ALONG * scale) * tx,
+            cy + (WALL_ACROSS * scale) * tx - (WALL_ALONG * scale) * ty,
             _yaw(ty, -tx))
 
 
@@ -710,11 +717,14 @@ def rows(frame, infra_fn, box, elev, decks=(), roads=(), french=False, carriagew
                     lv = float("nan")
                 if lv == lv:
                     hint = True if lv > 0 else (False if lv < 0 else None)
-            tags = _tags(feats, i)
-            heights = feats.attrs.get("height")
-            height = metres(tags.get("height"), metres(heights[i] if heights is not None else None,
-                CHAIN_H if group == G_CHAIN else WALL_H))
-            scale = height / (CHAIN_H if group == G_CHAIN else WALL_H)
+            base_height = CHAIN_H if group == G_CHAIN else WALL_H
+            scale = 1.0
+            if MAPPED_BOUNDARIES_ON:
+                tags = _tags(feats, i)
+                heights = feats.attrs.get("height")
+                height = metres(tags.get("height"), metres(heights[i] if heights is not None else None, base_height))
+                scale = min(PANEL_SCALE_MAX, max(PANEL_SCALE_MIN, height / base_height))
+            height = base_height * scale
             length = (CHAIN_LEN if group == G_CHAIN else WALL_LEN) * scale
             for pi, part in enumerate(feats.parts(i)):
                 if not part or len(part[0]) < 2:

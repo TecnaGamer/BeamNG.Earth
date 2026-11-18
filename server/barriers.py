@@ -8,6 +8,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
+import dnp
 import geodesy
 import mapgeom
 import roads
@@ -56,11 +57,11 @@ class Run:
 
 
 def _arc(xy):
-    return np.r_[0.0, np.cumsum(np.linalg.norm(np.diff(xy, axis=0), axis=1))]
+    return np.r_[0.0, np.cumsum(dnp.norm(np.diff(xy, axis=0), axis=1))]
 
 
 def _at(xy, s, at):
-    return np.column_stack([np.interp(at, s, xy[:, j]) for j in range(2)])
+    return np.column_stack([dnp.interp(at, s, xy[:, j]) for j in range(2)])
 
 
 def _project(xy, q, stations=None):
@@ -68,7 +69,7 @@ def _project(xy, q, stations=None):
     l2 = (d * d).sum(1)
     t = np.clip(((q - xy[:-1]) * d).sum(1) / l2, 0, 1)
     p = xy[:-1] + t[:, None] * d
-    ds = np.linalg.norm(p - q, axis=1)
+    ds = dnp.norm(p - q, axis=1)
     k = int(np.argmin(ds))
     s = _arc(xy) if stations is None else stations
     return float(ds[k]), float(s[k] + t[k] * (s[k + 1] - s[k])), p[k], d[k] / np.sqrt(l2[k])
@@ -88,7 +89,7 @@ def _style(kind, tags):
     ft = str((tags.get("fence_type") or tags.get("fence:type", ""))).strip().lower()
     if ft == "concrete":
         return "panel", "bne_bridge_concrete"
-    if ft in fences.CHAIN_TYPES:
+    if ft in fences.MAPPED_CHAIN_TYPES:
         return "mesh", "bne_barrier_mesh"
     if ft in {"slatted", "picket"}:
         return "picket", WOOD
@@ -121,7 +122,7 @@ def plan(frame, cells, box, stats=None):
                 continue
             seen.add(str(fid))
             tags = _tags(f, i)
-            existing = fences.kind_of(f, i)
+            existing = fences.kind_of(f, i, tags, mapped=True)
             kind = str(tags.get("barrier") or (cls[i] if cls is not None else ""))
             if existing is not None:
                 kind = "fence" if existing == fences.G_CHAIN else "wall"
@@ -149,14 +150,14 @@ def plan(frame, cells, box, stats=None):
                     if f.kind[i] not in (mapgeom.POINT, mapgeom.LINE):
                         continue
                     q = xy.mean(0)
-                    width = np.linalg.norm(xy[-1] - xy[0]) if len(xy) > 1 else GATE_WIDTH_M
+                    width = dnp.norm(xy[-1] - xy[0]) if len(xy) > 1 else GATE_WIDTH_M
                     width = metres(tags.get("maxwidth:physical"), None, 0.5, 20) or metres(
                         tags.get("width"), width if 0.5 <= width <= 20 else GATE_WIDTH_M, 0.5, 20)
                     gates.append((str(fid), q, width, kind))
                     continue
                 if f.kind[i] != mapgeom.LINE or len(xy) < 2:
                     continue                # hedge areas and point fences are not linear boundary geometry
-                keep = np.r_[True, np.linalg.norm(np.diff(xy, axis=0), axis=1) > 1e-6]
+                keep = np.r_[True, dnp.norm(np.diff(xy, axis=0), axis=1) > 1e-6]
                 ll, xy = geo[0][keep], xy[keep]
                 if len(xy) < 2 or not roads.clip_polyline(xy, *near):
                     continue
@@ -177,7 +178,7 @@ def plan(frame, cells, box, stats=None):
             stats["unmatched"] += 1
             continue
         hits = [h for h in hits if h[0] <= min(MATCH_M, hits[0][0] + 0.15)]
-        if any(np.linalg.norm(h[2] - hits[0][2]) > 0.25 or abs(h[3] @ hits[0][3]) < 0.97 for h in hits[1:]):
+        if any(dnp.norm(h[2] - hits[0][2]) > 0.25 or abs(dnp.dot(h[3], hits[0][3])) < 0.97 for h in hits[1:]):
             stats["ambiguous"] += 1
             continue
         stats["resolved"] += 1
@@ -187,7 +188,7 @@ def plan(frame, cells, box, stats=None):
     for r in runs:
         gaps = list(r.gaps)
         length = r.s[-1]
-        if np.linalg.norm(r.xy[0] - r.xy[-1]) < 1e-6:
+        if dnp.norm(r.xy[0] - r.xy[-1]) < 1e-6:
             gaps += [(lo + length, hi + length, k) for lo, hi, k in r.gaps if lo < 0]
             gaps += [(lo - length, hi - length, k) for lo, hi, k in r.gaps if hi > length]
         merged = []
@@ -218,7 +219,7 @@ def suppress_fences(props, runs):
         if row[0] != "fence":
             return True
         p = np.asarray(row[1:3])
-        d = np.array([np.cos(np.radians(row[4])), np.sin(np.radians(row[4]))]) * 2.7
+        d = np.array([dnp.cos(np.radians(row[4])), dnp.sin(np.radians(row[4]))]) * 2.7
         for r in runs:
             # Include the mapped run's gate gaps: a made-up panel must not fill a mapped opening.
             if any(_project(r.xy, q)[0] < 1.0 for q in (p - d, p, p + d)):
@@ -275,7 +276,7 @@ class _Mesh:
 
     def prism(self, a, b, width, za, zb, height, material, station=0.0):
         d = b - a
-        length = np.linalg.norm(d)
+        length = dnp.norm(d)
         if length < 1e-6:
             return
         normal = np.array([-d[1], d[0]]) / length
@@ -284,7 +285,7 @@ class _Mesh:
         p[:, 2] = za + _PRISM_P[:, 0] * (zb - za) + _PRISM_P[:, 2] * height
         uv = _PRISM_UV.copy()
         uv[:-8, 0] = uv[:-8, 0] * length + station * roadmesh.UV_M
-        uv[:-8, 1] = np.interp(uv[:-8, 1] / roadmesh.UV_M, [0, 1, 2, 3, 4],
+        uv[:-8, 1] = dnp.interp(uv[:-8, 1] / roadmesh.UV_M, [0, 1, 2, 3, 4],
                               [0, width, width + height, 2 * width + height, 2 * (width + height)]) * roadmesh.UV_M
         uv[-8:] *= [width, height]     # planar end caps
         self.add(p, _PRISM_T, uv, material)
@@ -292,13 +293,13 @@ class _Mesh:
     def wall(self, run, spans, z):
         """Continuous sides between true bends/gaps; shared source mitres and UV phase survive tile cuts."""
         delta = np.diff(run.xy, axis=0)
-        tangent = delta / np.linalg.norm(delta, axis=1)[:, None]
+        tangent = delta / dnp.norm(delta, axis=1)[:, None]
         segment_n = np.c_[-tangent[:, 1], tangent[:, 0]]
         vertex_n = roadmesh._normals(run.xy)
-        if np.linalg.norm(run.xy[0] - run.xy[-1]) < 1e-6:
+        if dnp.norm(run.xy[0] - run.xy[-1]) < 1e-6:
             vertex_n = roadmesh._normals(np.r_[run.xy[-2:-1], run.xy, run.xy[1:2]])[1:-1]
         # Each side owns its normal at a cusp: never collapse the cross-section at an out-and-back node.
-        cusp = np.linalg.norm(vertex_n, axis=1) < 0.1
+        cusp = dnp.norm(vertex_n, axis=1) < 0.1
         limit = (MAX_VERTS - 8) // 8       # barrier_solid's four face strips and two caps
         if limit < 2:
             raise ValueError("boundary vertex budget cannot hold a wall section")
@@ -317,7 +318,7 @@ class _Mesh:
             normals[at_node & cusp[node]] = segment_n[seg[at_node & cusp[node]]]
             if at_node[-1] and cusp[node[-1]]:
                 normals[-1] = segment_n[max(0, node[-1] - 1)]
-            width = run.width * np.linalg.norm(normals, axis=1)
+            width = run.width * dnp.norm(normals, axis=1)
             for start in range(0, len(ss) - 1, limit - 1):
                 sl = slice(start, start + limit)
                 profile = np.zeros((len(ss[sl]), 4, 2))
@@ -332,7 +333,7 @@ class _Mesh:
             if group:
                 prev = group[-1][0]
                 a, b = prev[2][1] - prev[2][0], span[2][1] - span[2][0]
-                straight = a @ b > 0 and abs(a[0] * b[1] - a[1] * b[0]) <= 1e-7 * np.linalg.norm(a) * np.linalg.norm(b)
+                straight = dnp.dot(a, b) > 0 and abs(a[0] * b[1] - a[1] * b[0]) <= 1e-7 * dnp.norm(a) * dnp.norm(b)
                 if abs(prev[1] - span[0]) > 1e-6 or not straight:
                     emit(group)
                     group = []
@@ -482,6 +483,8 @@ def tile_meshes(runs, box, ground, road_lines=()):
 
 def tile(frame, tx, ty, md, ground, road_lines, props, exclude_fids=()):
     """One optional boundary build shared by both tile producers; failures preserve existing scenery."""
+    if not fences.MAPPED_BOUNDARIES_ON:
+        return {}, None
     runs = load(frame, tx, ty, md)
     if exclude_fids:
         runs = [r for r in runs if r.fid not in exclude_fids]

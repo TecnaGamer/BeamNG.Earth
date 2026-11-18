@@ -35,10 +35,18 @@ def runs(f, box=(0, 0, 256, 256), stats=None):
 
 
 class BarrierTest(unittest.TestCase):
+    def test_opt_out_never_reads_map_data_or_suppresses_props(self):
+        props = [["fence", 50., 10., 10., 0., 1.]]
+        with patch.object(barriers.fences, "MAPPED_BOUNDARIES_ON", False), patch.object(barriers, "load") as load:
+            self.assertEqual(barriers.tile(FRAME, 0, 0, None, ground, [], props), ({}, None))
+        load.assert_not_called()
+        self.assertEqual(props, [["fence", 50., 10., 10., 0., 1.]])
+
     def test_regional_renderer_keeps_source_ownership(self):
         f = infra([[(10, 10), (90, 10)], [(10, 20), (90, 20)]], ["wall", "wall"])
         planned = runs(f)
-        with patch.object(barriers, "load", return_value=planned), \
+        with patch.object(barriers.fences, "MAPPED_BOUNDARIES_ON", True), \
+                patch.object(barriers, "load", return_value=planned), \
                 patch.object(barriers, "tile_meshes", return_value={}) as build:
             barriers.tile(FRAME, 0, 0, None, ground, [], [], exclude_fids={planned[0].fid})
         self.assertEqual([r.fid for r in build.call_args.args[0]], [planned[1].fid])
@@ -313,7 +321,8 @@ class CurrentPipelineTest(unittest.TestCase):
         f = infra([[(45, 20), (45, 80)]], ["fence"])
         planned = runs(f)
         xy = np.array([[50., 0.], [50., 100.]])
-        for cls in (*roads.STYLE, None, ""):
+        vehicle_classes = [cls for cls in roads.STYLE if cls not in barriers.PATH_CLASSES]
+        for cls in (*vehicle_classes, None, ""):
             with self.subTest(cls=cls):
                 elev = Mock(side_effect=AssertionError("cleared boundary needs no elevation"))
                 self.assertEqual(barriers.tile_meshes(planned, (0, 0, 256, 256), elev, [(xy, 6., cls)]), {})
@@ -324,7 +333,8 @@ class CurrentPipelineTest(unittest.TestCase):
         f = infra([[(10, 10), (90, 10)]], ["fence"])
         props = [["fence", 50., 10., 10., 0., 1.]]
         original = [row[:] for row in props]
-        with patch.object(barriers, "load", return_value=runs(f)), patch.object(
+        with patch.object(barriers.fences, "MAPPED_BOUNDARIES_ON", True), \
+                patch.object(barriers, "load", return_value=runs(f)), patch.object(
                 barriers, "tile_meshes", side_effect=ValueError("budget")):
             meshes, clearance = barriers.tile(FRAME, 0, 0, None, ground, [], props)
         self.assertEqual(meshes, {})

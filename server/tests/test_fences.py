@@ -35,6 +35,17 @@ class KindTest(unittest.TestCase):
 
 
 class PlaceTest(unittest.TestCase):
+    def setUp(self):
+        self.frame = geodesy.EnuFrame(39.2834, -76.5934, 0.0)
+        self.enterContext(mock.patch.object(fences, "MAPPED_BOUNDARIES_ON", True))
+
+    def test_opt_out_keeps_stock_panel_size(self):
+        f = self.line("fence", {"fence_type": "chain_link", "height": "10"}, [[10., 50.], [90., 50.]])
+        with mock.patch.object(fences, "MAPPED_BOUNDARIES_ON", False):
+            rows = self.rows(f)
+        self.assertTrue(rows)
+        self.assertTrue(all(row[5:7] == [1., fences.CHAIN_H] for row in rows))
+
     def test_scaled_noise_wall_fits_the_road_without_reviving_a_gate_panel(self):
         wall = self.line("wall", {"wall": "noise_barrier", "height": "4.8"}, [[10., 9.], [90., 9.]])
         spec = type("S", (), {"width": 14.})()
@@ -62,9 +73,6 @@ class PlaceTest(unittest.TestCase):
                               french=True, french_data=(regional, {"line-1"}))
         self.assertEqual(got, regional)
         build.assert_not_called()
-
-    def setUp(self):
-        self.frame = geodesy.EnuFrame(39.2834, -76.5934, 0.0)
 
     def line(self, cls, tags, xy, fid="line-1", level=None):
         xy = np.asarray(xy, np.float64)
@@ -101,13 +109,14 @@ class PlaceTest(unittest.TestCase):
                     f.attrs["height"] = np.array([9.])  # source tags take precedence
                     rows = self.rows(f)
                     self.assertGreater(len(rows), 2)
-                    np.testing.assert_allclose([r[6] for r in rows], height)
+                    scale = min(2., max(.5, height / base))
+                    np.testing.assert_allclose([r[6] for r in rows], base * scale)
                     self.assertAlmostEqual(float(np.median(np.diff(sorted(r[1] for r in rows)))),
-                                           pitch * height / base, delta=.03)
-                    shift = fences.CHAIN_OX * height / base if group == fences.G_CHAIN else -fences.WALL_ALONG * height / base
+                                           pitch * scale, delta=.03)
+                    shift = fences.CHAIN_OX * scale if group == fences.G_CHAIN else -fences.WALL_ALONG * scale
                     centres = np.array([r[1] - shift for r in rows])
-                    np.testing.assert_allclose((centres - 10.) / (pitch * height / base) % 1., .5, atol=.015)
-                    lift = fences.CHAIN_LIFT * height / base if group == fences.G_CHAIN else 0.
+                    np.testing.assert_allclose((centres - 10.) / (pitch * scale) % 1., .5, atol=.015)
+                    lift = fences.CHAIN_LIFT * scale if group == fences.G_CHAIN else 0.
                     np.testing.assert_allclose([r[3] for r in rows], 5. + lift, atol=.02)
 
     def test_height_attribute_and_invalid_tag_fallback(self):

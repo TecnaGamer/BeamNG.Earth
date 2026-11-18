@@ -1,6 +1,7 @@
 # Mapped boundaries
 
-With buildings enabled, near road tiles draw mapped, ground-level fences, ordinary walls and linear hedges from
+Set `BNE_MAPPED_BOUNDARIES=on` before starting Earth to try mapped boundaries. The switch defaults to off.
+With the switch and buildings enabled, near road tiles draw mapped, ground-level fences, ordinary walls and linear hedges from
 the existing Overture infrastructure layer. Closed linear ways remain boundaries; polygon hedge areas do not
 become perimeter fences. Guardrails, retaining walls and elevated/underground boundaries are separate systems.
 
@@ -25,7 +26,8 @@ Valid physical dimensions accept metres, centimetres and explicit feet/inches. M
 
 Timber fences use open rails; recorded railings use vertical metal bars. Pickets, panels, plain wire,
 barbed wire and electric fences use simple construction-specific geometry. Existing chain-link and noise-wall
-assets retain their stock renderer when no valid physical width requires a dimensioned mesh; electric and barbed combinations are visual details, without shock physics.
+assets retain their stock renderer when no valid physical width requires a dimensioned mesh. Stock panel scale is limited
+to 0.5–2 times the authored size, including spacing and placement offsets. Electric and barbed combinations are visual details.
 Walls use existing brick, stone or concrete materials. Hedges are continuous, leaf-textured volumes using the
 installed game's cypress textures, not individual shrubs. Missing fence construction uses timber rails.
 These are documented visual fallbacks, not measured local dimensions or exact replicas of every fence type.

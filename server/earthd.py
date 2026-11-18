@@ -3460,9 +3460,9 @@ class Server:
             boundary_meshes = {}
             try:
                 regional = (fences.french_rows(anchor.frame, infra_fn, box, elev, near_roads)
-                            if frontage_country == "FR" else ([], set()))
+                            if fences.MAPPED_BOUNDARIES_ON and frontage_country == "FR" else None)
                 boundary_meshes, gate_clearance = barriers.tile(anchor.frame, tx, ty, self.mapdata,
-                    railways.point_ground(anchor.frame, elev), lines, props, exclude_fids=regional[1])
+                    railways.point_ground(anchor.frame, elev), lines, props, exclude_fids=regional[1] if regional else ())
                 props.extend(fences.rows(anchor.frame, infra_fn, box, elev, decks=[
                     {"n": np.column_stack((xy, z)), "w": spec.width} for _f, spec, xy, z, _l in deck_parts] + rail_decks,
                     roads=near_roads, french=frontage_country == "FR", gate_clearance=gate_clearance, french_data=regional))
