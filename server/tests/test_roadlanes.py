@@ -11,7 +11,6 @@ import navgraph
 import markings
 import osmtags
 import railtags
-import rampoverrides
 import roadlanes
 import roads
 from test_roads import FRAME, features, flat, rules
@@ -221,18 +220,58 @@ class HighwayLanesTest(unittest.TestCase):
         self.assertIsNone(sp.lanes)
         self.assertEqual(sp.width, roads.ring_width(None))
 
-    def test_exit76_correction_is_confined_to_the_source_way_and_bounds(self):
-        f = highway(link=True)
-        west, south, east, north = rampoverrides.KY_I65_EXIT76_BOUNDS
-        f.lonlat[:] = [[west + .0001, south + .0001], [east - .0001, north - .0001]]
-        wid = rampoverrides.KY_I65_EXIT76_WAY
-        f.attrs["src_record"] = np.array([f"w{wid}@9"])
-        osmtags.join(f, {wid: {"lanes": 3}})
-        self.assertEqual(f.attrs["osm_lanes"][0], 3, "downloaded tag kept")
-        self.assertEqual(roads.road_specs(f)[0].lanes, 1)
-        f.lonlat[:, 0] += .01
+
+class RampLaneRuleTest(unittest.TestCase):
+    """A motorway link mapped with more lanes than its diverge gives takes what it gives (roads._lane_overrides,
+    tapers::ramp_lane_rule; in place of rampoverrides' I-65 Exit 76 correction: the same shape at Upton, a lanes=3
+    exit from a 3-lane mainline going on with 3)."""
+
+    @staticmethod
+    def diverge(main_in=3, main_out=3, link=3, link_tags=None):
+        f = highway([[(0, 0), (100, 0)], [(100, 0), (200, 0)], [(100, 0), (180, -30)]])
+        f.rules["subclass"] = rules([(2, "link")])
+        tags = {1: {"lanes": main_in}, 2: {"lanes": main_out}, 3: dict({"lanes": link}, **(link_tags or {}))}
+        return osmtags.join(f, tags)
+
+    def test_an_exit_mapped_wider_than_its_diverge(self):
+        f = self.diverge()
+        self.assertEqual(f.attrs["osm_lanes"][2], 3, "the downloaded tag kept")
+        specs = roads.road_specs(f)
+        self.assertEqual([specs[0].lanes, specs[1].lanes, specs[2].lanes], [3, 3, 1])
+
+    def test_kept_where_the_map_says_more(self):
+        self.assertEqual(roads.road_specs(self.diverge(link_tags={"width": 12.0}))[2].lanes, 3, "a mapped width")
+        f = self.diverge()
+        f.attrs["osm_turn_lanes"] = np.array([None, None, "left|through|right"], dtype=object)
         roadlanes.invalidate(f)
-        self.assertEqual(roads.road_specs(f)[0].lanes, 3)
+        self.assertEqual(roads.road_specs(f)[2].lanes, 3, "turn:lanes")
+        self.assertEqual(roads.road_specs(self.diverge(main_in=5))[2].lanes, 3, "a diverge that gives two lanes")
+        self.assertEqual(roads.road_specs(self.diverge(link=2))[2].lanes, 2, "under three lanes: not checked")
+
+    def test_a_ramp_splitting_from_a_ramp_is_not_checked(self):
+        # (a ramp fanning out to its terminal: 1 lane splits into a 1-lane branch and the 3-lane approach to a signal)
+        f = highway([[(0, 0), (100, 0)], [(100, 0), (200, 0)], [(100, 0), (180, -30)]])
+        f.rules["subclass"] = rules([(0, "link"), (1, "link"), (2, "link")])
+        osmtags.join(f, {1: {"lanes": 1}, 2: {"lanes": 1}, 3: {"lanes": 3}})
+        self.assertEqual(roads.road_specs(f)[2].lanes, 3)
+
+    def test_switch(self):
+        with mock.patch.object(roads, "RAMP_LANE_RULE", False):
+            self.assertEqual(roads.road_specs(self.diverge())[2].lanes, 3)
+
+    def test_switch_off_in_the_lane_flow_too(self):
+        # (Codex review of the R1 branch: off, the lane flow solve still took the rule's count, so a road the link
+        # feeds took 1 lane instead of its 3; off must be the map's counts everywhere)
+        def fed():
+            f = highway([[(0, 0), (100, 0)], [(100, 0), (200, 0)], [(100, 0), (180, -30)], [(180, -30), (300, -60)]])
+            f.attrs["class"] = np.array(["motorway", "motorway", "motorway", "primary"])
+            f.rules["subclass"] = rules([(2, "link")])
+            return osmtags.join(f, {1: {"lanes": 3}, 2: {"lanes": 3}, 3: {"lanes": 3}})
+        self.assertEqual(roads.lane_flow(fed())[3], 1, "on: the road it feeds takes the corrected count")
+        with mock.patch.object(roads, "RAMP_LANE_RULE", False):
+            f = fed()
+            self.assertEqual(roads.lane_flow(f)[3], 3)
+            self.assertEqual([sp.lanes for sp in roads.road_specs(f)], [3, 3, 3, 3])
 
 
 if __name__ == "__main__":

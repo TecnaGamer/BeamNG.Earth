@@ -387,6 +387,16 @@ class RespawningPool:
                 if pool is not self._gen_pool:      # (rotated, recycled or made again meanwhile: a new generation)
                     self._gen_pool, self._gen_jobs = pool, 0
                 full = self._gen_jobs >= limit
+                # A broken executor (its process died: the system short of memory, a native crash, a process that
+                # could not start) is made again here, at most every RESPAWN_S, the jobs kept in the queue meanwhile.
+                # Before 1.10.1 only a submit made it again: a generation that filled while broken asked rotate()
+                # (which refuses a broken pool) for good, and two deaths within RESPAWN_S failed the queued jobs one
+                # after the other until the generation was full; every later road, tree and far building job then
+                # waited in the queue for ever (the loading line stuck at a few %, 1.10.0-beta, low Max RAM: the
+                # compact layouts' road processes)
+                if getattr(pool, "_broken", False) and self._gen_active == 0 and (self._gen or full):
+                    job = pool
+                    break
                 if full and self._gen_active == 0:
                     job = None
                     break
@@ -400,12 +410,20 @@ class RespawningPool:
                 self._gen_cv.wait(timeout=1.0)
         if job is None:                 # (outside _gen_cv: rotate takes self._lock, under which done callbacks may run)
             if not self.rotate(f"{limit} jobs done"):
-                time.sleep(0.2)         # (broken: the next job's submit makes it again, a new generation)
+                time.sleep(0.2)         # (broken meanwhile: made again at the next step)
+            return
+        if not isinstance(job, tuple):  # (the broken executor: made again, a new generation; too soon: wait)
+            try:
+                self._renew(job)
+            except BrokenProcessPool:
+                time.sleep(0.5)
             return
         outer, fn, args, kwargs = job
         try:
             inner = self._to_pool(fn, args, kwargs)
         except BaseException as e:
+            with self._gen_cv:          # (never handed to a process: not one of the generation's jobs)
+                self._gen_jobs = max(0, self._gen_jobs - 1)
             self._gen_done(None, outer, e)
             return
         inner.add_done_callback(lambda f, o=outer: self._gen_done(f, o))

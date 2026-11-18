@@ -45,6 +45,7 @@ import dmath
 import dnp
 
 NEED = 218                  # earthfast farpvs.rs (far_pvs)
+TEX_NEED = 304              # ... far_pvs_tex_px (Set.tex_px / hidden)
 ENABLED = os.environ.get("BNGE_FAR_PVS", "1") != "0"
 TEX_PX = int(os.environ.get("BNGE_FAR_PVS_PX", "128"))     # a hidden tile's texture (the coarse cover's FIRST_RAMP_TEX_PX)
 MIN_LEVEL = 1               # finer levels always full (the ground round the player)
@@ -156,21 +157,6 @@ class Rings:
             self.slopes.append(np.ascontiguousarray(sl))
             self.reach = half
         self.radius = float(radius)
-
-    def tile_ground(self, bbox):
-        """(lowest ground, steepest slope (tan)) under a footprint (anchor plane bbox, a cell round it) from the finest
-        ring holding it whole, or None when none does."""
-        x0, y0, x1, y1 = bbox
-        for (lo, _, rx0, ry0, cell), sl in zip(self.rings, self.slopes):
-            n = lo.shape[0]
-            i0, j0 = int(math.floor((x0 - rx0) / cell)) - 1, int(math.floor((y0 - ry0) / cell)) - 1
-            i1, j1 = int(math.floor((x1 - rx0) / cell)) + 1, int(math.floor((y1 - ry0) / cell)) + 1
-            if i0 < 0 or j0 < 0 or i1 >= n or j1 >= n:
-                continue
-            w = sl[j0:j1 + 1, i0:i1 + 1]
-            s = float(w.max()) if SLOPE_QUANTILE >= 1.0 else float(np.quantile(w, SLOPE_QUANTILE))
-            return float(lo[j0:j1 + 1, i0:i1 + 1].min()), s
-        return None
 
     def region_top(self, cx, cy, half):
         """The highest ground of a square (the finest ring holding it)."""
@@ -324,43 +310,42 @@ class Set:
         got = self.px_cache.get(key)
         if got is not None and got[0] == (bbox, full, top):
             return got[1]
-        px = full
-        hidden = self.hidden(key, bbox, level)
-        if SLOPE_SIZING:
-            px = self._screen_px(bbox, level, size, full, top)
-        if hidden:
-            px = min(px, TEX_PX)
-        self.px_cache[key] = ((bbox, full, top), px)
-        return px
+        return self.tex_px_many([(key, bbox, level, size, full, up)])[0]
 
-    def _screen_px(self, bbox, level, size, full, top=None):
-        top = top or full
-        if self.eye_top is None:
-            return full
-        x0, y0, x1, y1 = bbox
-        dx = max(x0 - (self.cx + self.half), (self.cx - self.half) - x1, 0.0)
-        dy = max(y0 - (self.cy + self.half), (self.cy - self.half) - y1, 0.0)
-        d = math.hypot(dx, dy)
-        # (the near rings, under SLOPE_MIN_LEVEL or within SLOPE_NEAR_M: never smaller, larger where the screen resolves
-        # more of them: the slopes 1-2 km round a valley road were 2 m texels, Ouray 2026-11-11)
-        near = level < SLOPE_MIN_LEVEL or d < SLOPE_NEAR_M
-        if near and top <= full:
-            return full
-        if near:
-            need = d / (self.ppr * OVERSAMPLE)
-        else:
-            g = self.field.rings.tile_ground(bbox)
-            if g is None:
-                return full
-            zmin, slope = g
-            sin_a = min(1.0, max(0.0, (self.eye_top - zmin) / d) + d / (2 * R_OCC) + slope)
-            need = d / (self.ppr * OVERSAMPLE) * max(1.0, 1.0 / (ANISO * max(sin_a, 1e-6)))
-        px = full
-        while px * 2 <= top and size / px > need:       # (coarser than the screen resolves: larger, up to top)
-            px *= 2
-        while not near and px > SLOPE_PX_MIN and size / (px // 2) <= need:
-            px //= 2
-        return px
+    def tex_px_many(self, tiles):
+        """tex_px of many tiles [(key, bbox, level, size, full, up)] in one native call (earthfast far_pvs_tex_px,
+        without the GIL: earthd's far texture checks ask it for every far tile when a set comes in); kept per key."""
+        out = [None] * len(tiles)
+        rows, at = [], []
+        for q, (key, bbox, level, size, full, up) in enumerate(tiles):
+            top = max(full, up) if (UP_ON and up) else full
+            got = self.px_cache.get(key)
+            if got is not None and got[0] == (tuple(bbox), full, top):
+                out[q] = got[1]
+                continue
+            rows.append((*bbox, level, size, full, top))
+            at.append(q)
+        if rows:
+            px, hid = self._kernel(rows)
+            for q, p, h in zip(at, px, hid):
+                key, bbox, level, _size, full, up = tiles[q]
+                top = max(full, up) if (UP_ON and up) else full
+                bbox = tuple(bbox)
+                self.px_cache[key] = ((bbox, full, top), p)
+                self.cache[key] = (bbox, h)
+                out[q] = p
+        return out
+
+    def _kernel(self, rows):
+        fast.require(TEX_NEED, "far PVS texture sizes")
+        rings = self.field.rings
+        return fast._ef.far_pvs_tex_px(
+            self.sats, [(lo, sl, x0, y0, cell) for (lo, _hi, x0, y0, cell), sl in zip(rings.rings, rings.slopes)],
+            (float(self.cx), float(self.cy), float(self.half), float(self.reach),
+             None if self.eye_top is None else float(self.eye_top), float(self.ppr), bool(self.empty)),
+            (MIN_LEVEL, NEAR_M, SLOPE_MIN_LEVEL, SLOPE_NEAR_M, OVERSAMPLE, ANISO, R_OCC, SLOPE_PX_MIN, TEX_PX,
+             SLOPE_SIZING, SLOPE_QUANTILE),
+            np.asarray(rows, np.float64).reshape(-1, 8))
 
     def valid_at(self, aid, x, y, eye):
         """The set still holds for a player at (x, y) of anchor aid with the camera eye m above sea level."""
@@ -376,29 +361,9 @@ class Set:
         got = self.cache.get(key)
         if got is not None and got[0] == bbox:
             return got[1]
-        h = self._hidden(bbox, level)
+        h = bool(self._kernel([(*bbox, level, 1.0, 1, 1)])[1][0])
         self.cache[key] = (bbox, h)
         return h
-
-    def _hidden(self, bbox, level):
-        if level < MIN_LEVEL or self.empty:
-            return False
-        x0, y0, x1, y1 = bbox
-        r = self.half + NEAR_M
-        if x0 < self.cx + r and x1 > self.cx - r and y0 < self.cy + r and y1 > self.cy - r:
-            return False
-        if x0 < -self.reach or y0 < -self.reach or x1 > self.reach or y1 > self.reach:
-            return False                    # (not wholly in the rings)
-        for sat, rx0, ry0, b, n in self.sats:
-            i0 = max(0, int(math.floor((x0 - rx0) / b)) - 1)
-            j0 = max(0, int(math.floor((y0 - ry0) / b)) - 1)
-            i1 = min(n, int(math.floor((x1 - rx0) / b)) + 2)
-            j1 = min(n, int(math.floor((y1 - ry0) / b)) + 2)
-            if i0 >= i1 or j0 >= j1:
-                continue
-            if sat[j1, i1] - sat[j0, i1] - sat[j1, i0] + sat[j0, i0] > 0:
-                return False
-        return True
 
 
 def eye_class_for(clear):

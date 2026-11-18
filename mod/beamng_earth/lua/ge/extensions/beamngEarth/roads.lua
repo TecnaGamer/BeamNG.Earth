@@ -3199,6 +3199,60 @@ function M.ahead(x, y, hx, hy, dist)
   return out
 end
 
+-- The deck guard's question (deckguard.lua): has the road tile at (x, y) of the current anchor come? 'missing' (and the
+-- tile's key: a geotile's as the server names it) while no tile is there yet; else 'ready', whether its deck collider is
+-- made or not (a tile that came has its deck queued, made by the urgent imports and turned solid by the NEED rebuilds
+-- before the car reaches it, this module's own job), or it has no deck there at all (the server built none). Roads
+-- off: 'ready' (no deck ever comes).
+function M.deckAt(x, y)
+  if not M.enabled then return 'ready' end
+  if M.geo then
+    local k = M.geoKeyAt(x, y)
+    if not k then return 'ready' end
+    local t = tiles[geoKey(k)]
+    if not t then return 'missing', k end
+    return 'ready'
+  end
+  if not anchorId then return 'ready' end
+  local sq = math.floor(x / M.TILE_M) .. '_' .. math.floor(y / M.TILE_M)
+  local t = tiles[tileKey(anchorId, sq)]
+  if not t or t.ghost then return 'missing', sq end
+  return 'ready'
+end
+
+-- The road tiles as a grid for the deck guard's walk along a span (deckguard.lua scanSpan: every tile the span's line
+-- crosses, not points on it): xy(x, y) -> the fractional cell of the current anchor's world point (a geotile's Web-
+-- Mercator x, y at geotile.Z; an anchor tile's x / TILE_M, y / TILE_M), at(ix, iy) -> deckAt's answer for that tile.
+local function mercFrac(lat, lon)
+  local n = 2 ^ geotile.Z
+  local la = math.max(-geotile.MAX_LAT, math.min(geotile.MAX_LAT, lat)) * math.pi / 180.0
+  return (lon + 180.0) / 360.0 * n, (1.0 - math.log(math.tan(la) + 1.0 / math.cos(la)) / math.pi) / 2.0 * n
+end
+M.deckGrid = {
+  xy = function(x, y)
+    if M.geo then
+      local a = anchorObj
+      if not a then return x / M.TILE_M, y / M.TILE_M end
+      return mercFrac(a:worldToGeodetic(x, y, 0))
+    end
+    return x / M.TILE_M, y / M.TILE_M
+  end,
+  at = function(ix, iy)
+    if not M.enabled then return 'ready' end
+    if M.geo then
+      if not anchorObj then return 'ready' end
+      local k = geotile.key(ix, iy)
+      if not tiles[geoKey(k)] then return 'missing', k end
+      return 'ready'
+    end
+    if not anchorId then return 'ready' end
+    local sq = ix .. '_' .. iy
+    local t = tiles[tileKey(anchorId, sq)]
+    if not t or t.ghost then return 'missing', sq end
+    return 'ready'
+  end,
+}
+
 -- The server's hello: road tiles as geotiles (hello.roadGeo == M.ROAD_GEO) or the anchor's.
 function M.setGeo(on) M.geo = on and true or false end
 

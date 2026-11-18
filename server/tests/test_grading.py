@@ -1635,3 +1635,60 @@ class ContinuationHoldTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class BumpsOffRoadSidesTest(unittest.TestCase):
+    """terrain_bumps with a grader: none within BUMP_CLEAR_M of a built road's core (a median's barrier stood module by
+    module on them, jagged: I-40, the user's report 2026-11-16), fading in past it without a ledge, the same value
+    however the points are asked (a block's grid, a few scattered points), and as before far from the roads."""
+
+    def setUp(self):
+        for name, val in (("TERRAIN_BUMPS_ON", True), ("TERRAIN_ROUGH_M", 0.35)):
+            p = unittest.mock.patch.object(grading, name, val)
+            p.start()
+            self.addCleanup(p.stop)
+        f = features([[(-400, 20), (400, 20)]], ["residential"])
+        self.g = grading.Grader(FRAME, FakeMD(f), lambda la, lo: np.full(np.shape(la), 10.0))
+
+    def _across(self, ys, x=None):
+        x = np.linspace(-150.0, 150.0, 601) if x is None else x
+        X, Y = np.meshgrid(x, np.asarray(ys, np.float64))
+        la, lo, _ = FRAME.enu_to_geodetic(X.ravel(), Y.ravel(), 0.0)
+        return np.asarray(la), np.asarray(lo), X.shape
+
+    def test_none_beside_the_road_full_far_off(self):
+        half = float(max(p.half for p in self.g.plans(*self._across([20.0])[:2])))
+        la, lo, shape = self._across([20.0, 20.0 + half + 2.0, -60.0, 120.0])
+        got = np.asarray(grading.terrain_bumps(la, lo, self.g)).reshape(shape)
+        plain = np.asarray(grading.terrain_bumps(la, lo)).reshape(shape)
+        self.assertEqual(float(np.abs(got[:2]).max()), 0.0, "on the road and just past its core: no bumps")
+        self.assertGreater(float(plain[:2].std()), 0.1, "(there were bumps there before)")
+        self.assertTrue(np.array_equal(got[2:], plain[2:]), "far off the road: the bumps as before")
+
+    def test_fades_in_without_a_ledge(self):
+        x = np.linspace(-50.0, 50.0, 21)
+        ys = np.arange(20.0, 60.0, 0.25)
+        la, lo, shape = self._across(ys, x)
+        got = np.asarray(grading.terrain_bumps(la, lo, self.g)).reshape(shape)
+        plain = np.asarray(grading.terrain_bumps(la, lo)).reshape(shape)
+        steepest = float(np.abs(np.diff(plain, axis=0)).max())
+        self.assertLessEqual(float(np.abs(np.diff(got, axis=0)).max()), 1.2 * steepest,
+                             "no steeper than the bumps themselves across the band's edge (no ledge)")
+        self.assertEqual(float(np.abs(got[ys <= 30.0]).max()), 0.0, "smooth well past the core")
+        self.assertGreater(float(got[ys >= 50.0].std()), 0.25, "full past the band")
+
+    def test_same_value_however_asked(self):
+        la, lo, _ = self._across(np.arange(10.0, 50.0, 1.0))
+        grid = np.asarray(grading.terrain_bumps(la, lo, self.g))
+        pick = np.arange(0, len(la), 997)
+        lone = np.asarray(grading.terrain_bumps(la[pick], lo[pick], self.g))
+        self.assertTrue(np.array_equal(grid[pick], lone))
+        one = grading.terrain_bumps(la[pick[3]], lo[pick[3]], self.g)
+        self.assertEqual(float(one), float(grid[pick[3]]))
+
+    def test_dirt_roads_keep_them(self):
+        f = features([[(-400, 20), (400, 20)]], ["track"])
+        g = grading.Grader(FRAME, FakeMD(f), lambda la, lo: np.full(np.shape(la), 10.0))
+        la, lo, _ = self._across([24.0])
+        self.assertTrue(np.array_equal(np.asarray(grading.terrain_bumps(la, lo, g)),
+                                       np.asarray(grading.terrain_bumps(la, lo))))

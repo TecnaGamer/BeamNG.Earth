@@ -721,7 +721,9 @@ from collections import OrderedDict
 
 _memo = OrderedDict()
 _memo_lock = threading.Lock()
-MEMO_N = 12
+MEMO_N = 64     # groups kept (about 20 kB each). 12 were too few in a city of stations: nine road tiles in central
+                # Sydney use 18 groups, and each one pushed out was laid out again for the next tile (their median 2.9 s
+                # with 12, 1.0 s with 64; the same files built, 2026-11-15)
 SEED_DEG = (0.006, 0.0045)      # (lon, lat) seeds this near each other (about 450 m) are read together
 GROUP_PAD_DEG = (0.0045, 0.0035)
 TILE_REACH_M = 420.0            # a station this close to a tile is made in it (its pieces that fall in the tile are kept)

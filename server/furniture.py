@@ -821,6 +821,10 @@ COLLISION_BOXES = {
     # Both catalog variants: each is scaled against its own catalog height (both 1.1 m).
     G_BIN: (1.1, ((-0.264, -0.264, -0.003, 0.264, 0.264, 1.111),)),
     "pylon": (35.8, ((-3.893, -4.152, -5.873, 3.893, 4.152, 29.818),)),
+    # West Coast USA's tower crane (areaprops.G_TC, s_crane_tower, 38.98 m: read from its LODs 2026-11-16): the 3.6 m
+    # lattice mast, then the jib and counter-jib turned with it (a crane on a construction site under the A7's
+    # Kalbach viaduct stood through the deck, a car hit its mast at 116 km/h, 2026-11-15)
+    "towercrane": (38.98, ((-1.81, -0.51, -0.5, 1.81, 3.11, 33.0), (-49.55, -2.02, 33.0, 14.42, 2.02, 38.98))),
     # the classic lantern on its post (bne_fr_lantern, 5.4 m): its lantern head's footprint over the post's height (the
     # Colmesh alone is the 0.12 m post to 4.65 m); the France kit's lamp (place: "fr_lantern")
     "fr_lantern": (5.4, ((-0.30, -0.30, -0.01, 0.30, 0.30, 5.41),)),

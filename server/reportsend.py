@@ -32,6 +32,7 @@ import urllib.error
 import urllib.request
 
 import fast
+import netfetch
 
 log = logging.getLogger("earthd.reports")
 
@@ -418,7 +419,7 @@ def post(url, body, timeout=TIMEOUT_S):
     """(status, answer dict) of one POST; status 0: no answer (network)."""
     req = urllib.request.Request(url, body, {"Content-Type": "application/json", "User-Agent": "BeamNG.Earth"})
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
+        with urllib.request.urlopen(req, timeout=timeout, context=netfetch.windows_ssl_context()) as r:
             return r.status, json.loads(r.read(4096) or b"{}")
     except urllib.error.HTTPError as e:
         try:

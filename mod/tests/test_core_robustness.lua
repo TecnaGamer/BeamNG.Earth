@@ -280,7 +280,8 @@ T.check(pumpUntil(function() return #received('hello') == 2 end, 60), 'reconnect
 T.check(has(last('hello').sessions, 's1'), 'hello.sessions names the old session (its tiles are on screen)')
 local nA = #received('prepare_anchor')
 serverSend({ type = 'hello', protocol = 4, format = 4, serverVersion = '0.4.0', sessionId = 's2', farFormat = 'cdae',
-  material = 'bngEarthFar_v3', nearVisual = 'mesh' })
+  material = 'bngEarthFar_v3', nearVisual = 'mesh', restartable = true,     -- (6b: the settings page's restart)
+  startSettings = { groundGrid = '1', expAiTunnels = false, serverCores = 'auto' } })
 T.check(pumpUntil(function() return #received('prepare_anchor') == nA + 1 end, 10), 'resync requested')
 local rs = last('prepare_anchor')
 T.check(rs.lat == req.lat and rs.lon == req.lon, 'resync at the same origin')
@@ -346,11 +347,15 @@ local nPt = #received('prepare_terrain')
 T.check(pumpUntil(function() return #received('prepare_terrain') > nPt end, 40), 'terrain-follow asks')
 frames(20)
 T.check(st().guard.mode == 'off', 'just asked: the guard waits (the server may be slow)')
+T.check(core.autodriveReady(), 'pending optional terrain alone does not stop Autodrive well inside loaded ground')
+T.check(pumpUntil(function() return st().guard.mode == 'warn' end, 60 * 20), 'late terrain reaches the loaded-edge warning')
+T.check(not core.autodriveReady(), 'Autodrive brakes at the late-ground warning before the common guard pauses')
 for _ = 1, 60 * 20 do frame() end
 T.check(veh.pos.x <= ex1 - edgeguard.STOP_M + 0.5 and simTimeAuthority.paused,
   string.format('unanswered for STUCK_S: paused %.1f m inside the edge', ex1 - veh.pos.x))
 T.check(shown() == 'Paused at the edge of the loaded ground until the BeamNG.Earth server answers terrain requests again (resume to drive back)',
   'banner: the server does not answer terrain requests')
+T.check(not core.autodriveReady(), 'a guard-owned pause never permits Autodrive recovery toward the edge')
 pt = last('prepare_terrain')
 serverSend({ type = 'terrain_ready', requestId = pt.requestId, anchorId = 1, cx = pt.cx, cy = pt.cy,
   heightmap = '/temp/beamngEarth/s2/hm_1_f.png', size = 1024, squareSize = 2, zBase = 0, maxHeight = 1024, q = 1 / 64 })
@@ -358,6 +363,14 @@ T.check(pumpUntil(function() return st().block.cx == pt.cx end, 100), 'the answe
 setGround(pt.cx, pt.cy)
 frames(2)
 T.check(st().guard.mode ~= 'hold' and not st().guard.pausedByUs and not shown(), 'answered: the guard holds nothing, the banner hidden')
+T.check(core.autodriveReady(), 'committed terrain releases the Autodrive warning hold')
+do
+  local g = st().guard
+  local mode, healthy = g.mode, g.healthy
+  g.mode, g.healthy = 'warn', true
+  T.check(core.autodriveReady(), 'a healthy following block does not create unnecessary warning braking')
+  g.mode, g.healthy = mode, healthy
+end
 -- a terrain_error: held for ERROR_HOLD_S
 veh.vel = vec3(0, 0, 0)
 b = st().block
@@ -389,6 +402,91 @@ T.check(shown() ~= nil, 'back in play: shown')
 serverSend({ type = 'status', text = 'Far field ready', backlog = 0 })
 frames(2)
 T.check(core.banner().id ~= 'offline', 'the note gone: the offline line goes')
+
+------------------------------------------------------------------------------------------
+-- 6b. the settings page's "Restart world server" (srvrestart.lua): the button offered for a setting read only at the
+-- server's start, the request, the car held from the server's yes while it is gone and comes back as a new session,
+-- let go for the resync's commit, released once the world is back; the banner says "Restarting", never "Lost"
+
+do
+  local sr = require('beamngEarth/srvrestart')
+  local order = { 'groundGrid', 'expAiTunnels', 'serverCores' }
+  local mine = { groundGrid = '1', expAiTunnels = true, serverCores = 'auto' }
+  local rs0 = core.restartState(mine, order)
+  T.check(rs0.restartable == true and #rs0.pending == 1 and rs0.pending[1] == 'expAiTunnels' and not rs0.busy,
+    'a switch changed since the server started: pending, and the server can restart')
+  T.check(#core.restartState({ groundGrid = '1', expAiTunnels = false }, order).pending == 0, 'as started: nothing pending')
+  veh.pos, veh.vel = vec3(b.cx, b.cy, 0.5), vec3(0, 0, 0)
+  simTimeAuthority.paused = false       -- (the player resumed the game section 5's terrain error paused)
+  frames(5)
+  -- (the road tiles round the car: the test says when they are in)
+  local roadsM = require('beamngEarth/roads')
+  local readyAround0 = roadsM.readyAround
+  local roadsReady = false
+  roadsM.readyAround = function() return roadsReady end
+  local nHello, nA6 = #received('hello'), #received('prepare_anchor')
+  -- the key the server wrote in the game's folder (server srvrestart.write_key): without it nothing is sent
+  local keyFile = nil
+  local readFile0 = rawget(_G, 'readFile')
+  readFile = function(p) return p == core.RESTART_KEY_FILE and keyFile or nil end
+  local okK, whyK = core.restartServer()
+  T.check(okK == false and whyK:find('restart key', 1, true) and last('server_restart') == nil,
+    'no key in the game\'s folder: refused here, nothing sent')
+  keyFile = '0123456789abcdef0123456789abcdef\n'
+  T.check(core.restartServer() == true and last('server_restart') ~= nil, 'the button sends server_restart')
+  T.check(last('server_restart').key == '0123456789abcdef0123456789abcdef', '... with the key')
+  T.check(select(2, core.restartServer()) == 'a restart is under way', 'once: a second press is refused')
+  frames(2)
+  T.check(not simTimeAuthority.paused, 'asked: the car not held before the server says yes')
+  serverSend({ type = 'server_restart', ok = true })
+  frames(2)
+  T.check(core._restart.phase == 'stopping' and simTimeAuthority.paused and core._restart.ours,
+    'the server said yes: the car held (the game paused)')
+  T.check(shown() and shown():find('Restarting the world server', 1, true), 'banner: restarting: ' .. tostring(shown()))
+  server.failErr, server.down = 'closed', true
+  frames(3)
+  T.check(core._restart.phase == 'starting' and simTimeAuthority.paused, 'the server gone: waiting for it, still held')
+  T.check(shown():find('Restarting the world server', 1, true) and not shown():find('Lost the BeamNG.Earth server', 1, true),
+    'banner: restarting, not "lost": ' .. tostring(shown()))
+  local ui6 = (function() beamngEarth_core = core; local u = settings.uiState(); beamngEarth_core = nil; return u end)()
+  T.check(ui6.status.restart and ui6.status.restart.busy == true and ui6.status.restart.restartable == false,
+    'the settings page: busy, no button while it is gone')
+  frames(60)
+  server.down = false
+  T.check(pumpUntil(function() return #received('hello') == nHello + 1 end, 80), 'reconnected after the restart: hello')
+  serverSend({ type = 'hello', protocol = 4, format = 4, serverVersion = '0.4.0', sessionId = 's3', farFormat = 'cdae',
+    material = 'bngEarthFar_v3', nearVisual = 'mesh', restartable = true,
+    startSettings = { groundGrid = '1', expAiTunnels = true, serverCores = 'auto' } })
+  T.check(pumpUntil(function() return #received('prepare_anchor') == nA6 + 1 end, 10), 'the new server: resync requested')
+  T.check(core._restart.phase == 'loading' and simTimeAuthority.paused, 'the new session: still held while the world loads')
+  local rs6 = last('prepare_anchor')
+  serverSend({ type = 'anchor_ready', requestId = rs6.requestId, anchorId = 1, lat = rs6.lat, lon = rs6.lon, groundZ = 0,
+    terrain = { cx = rs6.cx, cy = rs6.cy, heightmap = '/temp/beamngEarth/s3/hm_1_r.png', size = 1024, squareSize = 2,
+      zBase = 0, maxHeight = 1024, q = 1 / 64 } })
+  local nC = #received('commit_anchor')
+  T.check(pumpUntil(function() return #received('commit_anchor') == nC + 1 end, 40),
+    'the resync commits (the hold let go for it: vehicles move only with physics running)')
+  frames(3)
+  T.check(core._restart.phase == 'loading' and simTimeAuthority.paused and core._restart.ours,
+    'committed, the road tiles round the car not in yet: held again')
+  roadsReady = true
+  T.check(pumpUntil(function() return core._restart.phase == 'done' end, 40) and not simTimeAuthority.paused
+    and not core._restart.ours, 'the world back: done, the car let go')
+  frames(1)
+  T.check(shown() == sr.TEXT.done, 'banner: restarted: ' .. tostring(shown()))
+  T.check(#core.restartState(mine, order).pending == 0, 'the new server started with the switch: nothing pending')
+  T.check(pumpUntil(function() return core._restart.phase == nil end, 60 * 10), 'the line goes after a few seconds')
+  setGround(rs6.cx, rs6.cy)
+  -- a refusal (an older or hand-started server): said, the car never held
+  serverSend({ type = 'hello', protocol = 4, format = 4, serverVersion = '0.4.0', sessionId = 's3', farFormat = 'cdae',
+    material = 'bngEarthFar_v3', nearVisual = 'mesh' })
+  frames(3)
+  local okR, whyR = core.restartServer()
+  T.check(okR == false and whyR:find('not started by the BeamNG.Earth app', 1, true), 'a server without a supervisor: no restart')
+  T.check(core.restartState(mine, order).restartable == false, '... and no button')
+  roadsM.readyAround = readyAround0
+  readFile = readFile0
+end
 
 ------------------------------------------------------------------------------------------
 -- 7. an error inside the guard: off once, logged, never thrown

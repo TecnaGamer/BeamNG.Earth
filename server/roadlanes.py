@@ -71,7 +71,7 @@ def invalidate(feats):
                     roads._FACTS_MEM.pop(key, None)
     for key in ("_road_specs", "_sign_specs", "_sign_rows", "_bridge_specs", "_tunnel_specs", "_generated_lanes",
                 "_raw_level_ranges", "_level_ranges", "_ranges_state", "_lane_flow_rows", "_lane_flow",
-                "_lane_flow_home", "_lane_shifts", "_road_tapers", "_deck_tapers", "_lane_overrides", "_ramp_junction",
+                "_lane_flow_home", "_ramp_rule_home", "_lane_shifts", "_road_tapers", "_deck_tapers", "_lane_overrides", "_ramp_junction",
                 "_placement_rows", "_structure_w", "_structure_w_bridges", "_level_layer", "_spec_inputs",
                 "_map_surface_values", "_lengths_all", "_raw_flat", "_raw_flat_kinds", "_lane_section_joints"):
         feats.__dict__.pop(key, None)
@@ -245,8 +245,5 @@ def generated_counts(feats):
         np.ascontiguousarray(feats.coord_off, np.int64), np.ascontiguousarray(feats.lonlat, np.float64).reshape(-1, 2),
         (float(origin[0]), float(origin[1])), (float(scale[0]), float(scale[1])), con_f, con_s, con_v)
     counts = [None if c < 0 else c for c in got.tolist()]
-    import rampoverrides
-    for i, lanes in rampoverrides.lane_counts(feats).items():
-        counts[i] = lanes
     feats._generated_lanes = counts
     return counts

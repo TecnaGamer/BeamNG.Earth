@@ -524,6 +524,60 @@ class ClumpTest(unittest.TestCase):
         again = veg.clumps(it, lc, LAT)
         self.assertTrue(np.array_equal(again.lon, out.lon) and np.array_equal(again.yaw, out.yaw), "deterministic")
 
+    def test_a_forest_road_through_a_square_keeps_its_clumps_off_it(self):
+        # the user, 2026-11-16 ("take into consideration if the road is blocked by other buildings or trees"): a track
+        # through a square of 20 m firs (a clump's radius 8 m), three each side 7-8.5 m off its line; the square's one
+        # clump stood on its lanes
+        cell = veg.clump_cell(LAT)
+        k = 1.0 / np.cos(np.radians(LAT))               # Web Mercator m per ground m
+        sx = np.floor((-8524000.0 + 20037508.342789244) / cell) * cell - 20037508.342789244
+        sy = np.floor((4764000.0 + 20037508.342789244) / cell) * cell - 20037508.342789244
+        mid = sy + cell / 2
+
+        def firs(off):
+            xs = sx + cell * np.array([0.1, 0.5, 0.9, 0.15, 0.55, 0.85])
+            lon, lat = veg._to4326(xs, mid + k * np.asarray(off, float))
+            return self._items(lat, lon, [veg.G_CONIFER] * 6)
+        it, lc = firs([7.0, 8.5, 8.0, -8.0, -8.5, -7.0])
+        before = veg.clumps(it, lc, LAT)
+        self.assertEqual(len(before), 7, "no roads: one clump")
+        _, cy0 = veg._to3857(before.lon[6:], before.lat[6:])
+        self.assertLess(abs(float(cy0[0]) - mid) / k, 1.0, "on the track's line")
+        # the track on a CHM-like grid round the square (1 Web Mercator m pixels)
+        chm = SimpleNamespace(x0=sx - 100.0, y0=sy + cell + 100.0, dx=1.0, dy=1.0)
+        a, b = veg._to4326(np.array([sx - 80.0, sx + cell + 80.0]), np.array([mid, mid]))
+        road = Feats(2, [[(float(a[0]), float(b[0])), (float(a[1]), float(b[1]))]], ["track"])
+        segs = veg._road_segs(road, (int(cell) + 200, int(cell) + 200), chm, veg.CLUMP_ROAD_MARGIN_DEFAULT_M,
+                              margins=veg.CLUMP_ROAD_MARGIN_M)
+        self.assertIsNotNone(segs)
+        out = veg.clumps(it, lc, LAT, roads=veg.ClumpRoads([segs], chm))
+        self.assertEqual(len(out), 8, "one clump each side of the track")
+        self.assertTrue(np.all(out.scale[:6] < 0), "every fir a clump's")
+        _, cy = veg._to3857(out.lon[6:], out.lat[6:])
+        reach = veg.ROAD_HALF_DEFAULT_M + veg.CLUMP_ROAD_MARGIN_DEFAULT_M
+        for c, rad in zip(cy, out.radius[6:]):
+            self.assertGreaterEqual(abs(float(c) - mid) / k, reach + float(rad) - 0.05, "clear of the track")
+        again = veg.clumps(it, lc, LAT, roads=veg.ClumpRoads([segs], chm))
+        self.assertTrue(np.array_equal(again.lon, out.lon) and np.array_equal(again.lat, out.lat), "deterministic")
+        # firs 3-5 m off the line: no clump fits beside the track (it would move 6 m): they stay single
+        it, lc = firs([3.0, 5.0, 4.0, -4.0, -5.0, -3.0])
+        out = veg.clumps(it, lc, LAT, roads=veg.ClumpRoads([segs], chm))
+        self.assertEqual(len(out), 6)
+        self.assertTrue(np.all(out.scale > 0), "shown far as single trees")
+        # (Codex review of cff64d91) a clump moved off the track must stay in its own cell (the next cell's tiles never
+        # show it) and off water and buildings (the tiles drop a clump in water): else its firs stay single
+        it, lc = firs([7.0, 8.5, 8.0, -8.0, -8.5, -7.0])
+        n = int(cell) + 200
+        wet = np.zeros((n, n), bool)
+        wet[: int(round(chm.y0 - mid)), :] = True          # water from the track's line up (north)
+        out = veg.clumps(it, lc, LAT, roads=veg.ClumpRoads([segs], chm, blocked=wet))
+        self.assertEqual(len(out), 7, "the north side's clump would stand in the water: left out")
+        self.assertEqual(list(out.scale[:6] < 0), [False, False, False, True, True, True])
+        own = (sx - 100.0, sy - 100.0, sx + 100.0, mid + k * 9.0)     # the cell ends 9 m north of the track
+        out = veg.clumps(it, lc, LAT, roads=veg.ClumpRoads([segs], chm, own=own))
+        self.assertEqual(len(out), 7, "the north side's clump would leave the cell: left out")
+        self.assertEqual(list(out.scale[:6] < 0), [False, False, False, True, True, True])
+
     def test_street_trees_and_palms_stay_single(self):
         x0, y0 = -8524000.0, 4764000.0
         lon, lat = veg._to4326(np.array([x0, x0 + 1, x0 + 2]), np.array([y0, y0 + 1, y0]))

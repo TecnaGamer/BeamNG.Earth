@@ -214,6 +214,72 @@ def replace_cached(tmp, path):
 INLINE_MAX = 1 << 20        # bytes: a session file this small or smaller goes inside its message (inline_json)
 
 
+def inline_raw(out_dir, vfs_path, max_bytes=INLINE_MAX, digest=False):
+    """A worker thread's inline_json: the session file's text as protocol.RawJson (spliced into its message as it is;
+    a file with \\u escapes parsed and written again as real UTF-8, as inline_json's message would carry it), or None
+    as inline_json. digest: (raw, its bytes' SHA-1) instead (the trackers' same-file check)."""
+    import hashlib
+    import json
+    import protocol
+    raw = h = None
+    try:
+        path = os.path.join(out_dir, os.path.basename(vfs_path))
+        with open(path, "rb") as f:
+            data = f.read(max_bytes + 1) if not digest else f.read()
+        if digest:
+            h = hashlib.sha1(data).digest()
+        if len(data) <= max_bytes:
+            text = data.decode("utf-8").strip()
+            if b"\\u" in data:
+                text = json.dumps(json.loads(text), separators=(",", ":"), ensure_ascii=False)
+            if text[:1] in ("{", "[") and text[-1:] in ("}", "]"):
+                raw = protocol.RawJson(text)
+    except (OSError, ValueError):
+        pass
+    return (raw, h) if digest else raw
+
+
+class Inlined:
+    """A tracker build's result with its files' inline data read in the worker (build_inline): the event loop sends
+    it without opening or parsing a file. files: {vfs path: RawJson or None}; data: the first file's."""
+    __slots__ = ("res", "data", "digest", "files")
+
+    def __init__(self, res, data, digest=None, files=None):
+        self.res, self.data, self.digest, self.files = res, data, digest, files or {}
+
+
+def build_inline(build, out_dir, digest, *args):
+    """Worker thread: build(*args), and when it made a file (its result's first item, a vfs path) the file's inline
+    data (inline_raw; with its SHA-1 when digest). Returns an Inlined."""
+    res = build(*args)
+    if res is None or not out_dir:
+        return Inlined(res, None)
+    if digest:
+        raw, h = inline_raw(out_dir, res[0], digest=True)
+        return Inlined(res, raw, h, {res[0]: raw})
+    raw = inline_raw(out_dir, res[0])
+    return Inlined(res, raw, None, {res[0]: raw})
+
+
+def build_inline_paths(build, out_dir, paths_of, *args):
+    """Worker thread: build(*args) and the inline data of each file paths_of(result) names (a list of vfs paths).
+    Returns an Inlined."""
+    res = build(*args)
+    files = {}
+    if res is not None and out_dir:
+        for p in paths_of(res):
+            if p and p not in files:
+                files[p] = inline_raw(out_dir, p)
+    return Inlined(res, None, None, files)
+
+
+def inline_from(pre, out_dir, vfs_path):
+    """The inline data of a session file: read in the worker (pre: an Inlined naming it), else inline_json here."""
+    if pre is not None and vfs_path in pre.files:
+        return pre.files[vfs_path]
+    return inline_json(out_dir, vfs_path) if out_dir else None
+
+
 def inline_json(out_dir, vfs_path, max_bytes=INLINE_MAX):
     """The parsed JSON of a session file (vfs_path's name in out_dir), to send inside its message (its "data") so the
     game does not open the file: on Windows the game's first read of a file the server just wrote took 6.8 ms on

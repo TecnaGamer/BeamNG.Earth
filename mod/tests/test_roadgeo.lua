@@ -8,17 +8,6 @@ local dir = (arg[0]:match('^(.*)[/\\]') or '.')
 local T = dofile(dir .. '/testlib.lua')
 local S = dofile(dir .. '/stubs.lua')
 
--- Simulated frames must advance the rebuild clock even within one OS clock tick.
-local clockMs = 0
-function hptimer()
-  local last = clockMs
-  return { stopAndReset = function()
-    local elapsed = clockMs - last
-    last = clockMs
-    return elapsed
-  end }
-end
-
 -- the modules the rows go to, recorded
 local calls = {}
 local function rec(mod)
@@ -50,11 +39,6 @@ getPlayerVehicle = function() return { getPosition = function() return vec3(car.
 local geodesy = require('beamngEarth/geodesy')
 local geotile = require('beamngEarth/geotile')
 local roads = require('beamngEarth/roads')
-local update = roads.update
-roads.update = function(...)
-  clockMs = clockMs + 1
-  return update(...)
-end
 roads.setGeo(true)
 roads.setSession('s1')
 
@@ -62,7 +46,8 @@ local gov = {}
 function gov:try() return true end
 function gov:charge() end
 function gov:chargeMotion() end
--- Drain imports, then allow deferred collision work to run.
+-- frames until the import queues are empty, then a few more (the deferred collision rebuild fires after them): the
+-- per-frame budget is wall-clock, so a fixed 6 frames left work queued on a slow CI runner (windows-latest, 2026-11-14)
 local function run(aid, a)
   local n = 0
   repeat roads.update(gov, aid, car, nil, a); n = n + 1 until (roads.queued() == 0 and n >= 6) or n >= 2000
@@ -115,6 +100,13 @@ end
 T.check(roads.onTile({ anchorId = 1, key = key, path = '/s/rg.json', n = 0, frame = { clat, clon }, h = 'abc' }, 1, A),
   'a geotile accepted')
 run(1, A)
+do  -- the deck guard's grid (deckguard.lua scanSpan): this tile in, its neighbour missing, in the geotiles' own cells
+  local fx, fy = roads.deckGrid.xy(car.x, car.y)
+  T.check(math.floor(fx) == gx and math.floor(fy) == gy, 'deckGrid.xy: the geotile under the point')
+  T.check(roads.deckGrid.at(gx, gy) == 'ready' and roads.deckAt(car.x, car.y) == 'ready', 'deckGrid.at: the tile in')
+  local st, k = roads.deckGrid.at(gx + 1, gy)
+  T.check(st == 'missing' and k == geotile.key(gx + 1, gy), 'deckGrid.at: its neighbour missing, by its key')
+end
 local bc = objsWith('rg_bldcol')
 T.check(#bc == 1 and #objsWith('rg_bld.') == 1 and #objsWith('rg_deck') == 1, 'its parts made once')
 local sign = objsWith('rg_signs')[1]
@@ -287,7 +279,10 @@ roads.reset()
 -- collider defers on the tile, a near one marks at once, deferred dirt is promoted when the player arrives, a
 -- rebuild in between makes it solid (be:reloadCollision is global), and a rebase still rebuilds at once
 do
-  roads.RELOAD_EVERY_S, roads.COLLIDE_CHECK_S = 0, 0
+  -- (-1, not 0: the rebuild rule is sinceReload() > RELOAD_EVERY_S, and a CI runner without socket times with
+  -- os.clock, 1 ms steps on Windows: two rebuilds in one ms read 0 apart and 0 > 0 kept the second one back,
+  -- windows-latest 2026-11-17 "reloads 1, want 2")
+  roads.RELOAD_EVERY_S, roads.COLLIDE_CHECK_S = -1, 0
   -- (a rebuild waits after RELOAD_ROOM_MS of imports in a frame, measured on the wall clock: a slow CI runner's frames
   -- spent that and the promoted rebuild came after run()'s updates, windows-latest 2026-11-10)
   local room = roads.RELOAD_ROOM_MS
@@ -297,7 +292,7 @@ do
   local function rc(want, what)
     local got = reloads()
     if got ~= want then
-      print(string.format('  %s: reloads %d, want %d, queued %d, test clock %d ms', what, got, want, roads.queued(), clockMs))
+      print(string.format('  %s: reloads %d, want %d, queued %d, os.clock %.2f', what, got, want, roads.queued(), os.clock()))
     end
     T.check(got == want, what)
   end

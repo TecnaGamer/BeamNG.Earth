@@ -169,6 +169,7 @@ def main():
     meta = {"bake_format": bakepack.BAKE_FORMAT, "plans_format": plancache.PLANS_FORMAT,
             "facts_format": __import__("roads").FACTS_FORMAT, "frames": plancache.FRAMES,
             "signature": next(iter(sigs)) if sigs else None, "versions": versions[0] if versions else None,
+            "switches": bakepack.switches(),    # (the build switches the items were made with: bakepack._expect_for)
             "bbox": [s, w, n, e], "made": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
     items = wr.close(meta)
     print(f"{a.out}: {items} items ({n_plans} plans, {n_facts} facts), {os.path.getsize(a.out) / 1e6:.1f} MB, "

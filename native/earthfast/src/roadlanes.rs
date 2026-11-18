@@ -163,7 +163,7 @@ fn str_rows<'a>(a: &'a numpy::ndarray::ArrayView2<u32>, what: &str) -> PyResult<
     }
 }
 
-/// Per feature: roadlanes.generated_counts before rampoverrides (-1: None). base, total, fwd, bwd, both: the attrs
+/// Per feature: roadlanes.generated_counts (-1: None). base, total, fwd, bwd, both: the attrs
 /// columns lane_count (else osm_lanes), osm_lane_total, osm_lanes_forward, osm_lanes_backward, osm_lanes_both_ways
 /// (None: absent); oneway / oneway_has: the oneway rule's major value per feature and whether it has one; eligible:
 /// a motorway / trunk, not a ramp nor a roundabout; hw: its class code (1 motorway, 2 trunk); the layer's geometry
@@ -353,18 +353,21 @@ fn continuations(dir: &numpy::ndarray::ArrayView1<f64>, has: &numpy::ndarray::Ar
             choices.insert(*a, near[0]);
         }
     }
-    Ok(choices.iter().filter(|(a, b)| choices.get(b) == Some(a)).map(|(a, b)| (*a, *b)).collect())
+    #[allow(clippy::disallowed_methods)] // hash order: the matches collected into a map (looked up by key only)
+    let joins = choices.iter().filter(|(a, b)| choices.get(b) == Some(a)).map(|(a, b)| (*a, *b)).collect();
+    Ok(joins)
 }
 
 /// roads.py _lane_flow_local's solve over a cell's roads layer and those round it: per layer its road ids as UCS-4
 /// (n, w) (a NumPy str array's code points, zero-padded), its roads' first and last points (n, 4: lon, lat, lon, lat),
-/// their point counts (n,) and lane_flow attrs rows (n, 4). Each road id once, the first layer's first (as NumPy's
-/// unique over the layers in order); returns (n0,) for the first layer's roads: the count found (NaN: none, or the
-/// road's id is an earlier row's).
+/// their point counts (n,) and lane_flow attrs rows (n, 5: lane_flow's 4, then 1 for a motorway link the ramp lane
+/// rule checks: tapers::ramp_lane_rule). Each road id once, the first layer's first (as NumPy's unique over the layers
+/// in order); the ramp rule's counts go into the solve as the map's. Returns ((n0,), (n0,)) for the first layer's
+/// roads: the count found (NaN: none, or the road's id is an earlier row's) and the ramp rule's count (NaN: none).
 #[pyfunction]
 pub fn lane_flow_cells<'py>(py: Python<'py>, ids: Vec<PyReadonlyArray2<'py, u32>>, pts: Vec<PyReadonlyArray2<'py, f64>>,
                             npts: Vec<PyReadonlyArray1<'py, i64>>, attrs: Vec<PyReadonlyArray2<'py, f64>>,
-                            max_lanes: f64) -> PyResult<Bound<'py, PyArray1<f64>>> {
+                            max_lanes: f64) -> PyResult<(Bound<'py, PyArray1<f64>>, Bound<'py, PyArray1<f64>>)> {
     let k = ids.len();
     if pts.len() != k || npts.len() != k || attrs.len() != k {
         return Err(PyValueError::new_err("lane_flow_cells: per-layer lists of different lengths"));
@@ -376,7 +379,7 @@ pub fn lane_flow_cells<'py>(py: Python<'py>, ids: Vec<PyReadonlyArray2<'py, u32>
     let mut work = 0usize;
     for l in 0..k {
         let r = idv[l].nrows();
-        if ptv[l].nrows() != r || npv[l].len() != r || atv[l].nrows() != r || ptv[l].ncols() < 4 || atv[l].ncols() < 4 {
+        if ptv[l].nrows() != r || npv[l].len() != r || atv[l].nrows() != r || ptv[l].ncols() < 4 || atv[l].ncols() < 5 {
             return Err(PyValueError::new_err("lane_flow_cells: a layer's arrays of different lengths"));
         }
         work += r * (idv[l].ncols() + 8);
@@ -391,6 +394,7 @@ pub fn lane_flow_cells<'py>(py: Python<'py>, ids: Vec<PyReadonlyArray2<'py, u32>
         let mut seen: HashSet<IdKey, FxBuild> = HashSet::with_capacity_and_hasher(total, Default::default());
         let mut first = vec![false; total];
         let mut counted: Vec<(NodeKey, NodeKey, [f64; 4])> = Vec::new();
+        let mut cand: Vec<bool> = Vec::new();           // per counted road: the ramp lane rule checks it
         let mut mine: Vec<usize> = Vec::new();         // per counted road: its row in the first layer, or n0
         let mut g = 0;
         for (l, rows) in rows_of.iter().enumerate() {
@@ -401,6 +405,7 @@ pub fn lane_flow_cells<'py>(py: Python<'py>, ids: Vec<PyReadonlyArray2<'py, u32>
                     if a[[r, 0]] != 0.0 && np[r] >= 2 {
                         counted.push((key(p[[r, 0]], p[[r, 1]]), key(p[[r, 2]], p[[r, 3]]),
                                       [a[[r, 0]], a[[r, 1]], a[[r, 2]], a[[r, 3]]]));
+                        cand.push(a[[r, 4]] > 0.5);
                         mine.push(if l == 0 { r } else { n0 });
                     }
                 }
@@ -408,8 +413,9 @@ pub fn lane_flow_cells<'py>(py: Python<'py>, ids: Vec<PyReadonlyArray2<'py, u32>
             }
         }
         let mut out = vec![f64::NAN; n0];
+        let mut ramp = vec![f64::NAN; n0];
         if counted.is_empty() {
-            return out;
+            return (out, ramp);
         }
         let mut layers: Vec<(usize, usize, usize)> = Vec::with_capacity(k);     // (layer, first global row, rows)
         let mut base = 0;
@@ -418,17 +424,25 @@ pub fn lane_flow_cells<'py>(py: Python<'py>, ids: Vec<PyReadonlyArray2<'py, u32>
             base += rows.len();
         }
         let (first, ptv, atv, npv) = (&first, &ptv, &atv, &npv);
-        let blockers = layers.into_iter().flat_map(move |(l, b, m)| {
+        let blockers: Vec<NodeKey> = layers.into_iter().flat_map(move |(l, b, m)| {
             (0..m).filter(move |&r| first[b + r] && atv[l][[r, 0]] == 0.0 && npv[l][r] >= 2)
                 .flat_map(move |r| [key(ptv[l][[r, 0]], ptv[l][[r, 1]]), key(ptv[l][[r, 2]], ptv[l][[r, 3]])])
-        });
+        }).collect();
+        // (a link the ramp rule corrects counts so in the solve too: the roads it merges into take its lanes)
+        let fixed = crate::tapers::ramp_lane_rule(&counted, &cand, blockers.iter().copied());
+        for (c, v) in fixed.iter().enumerate() {
+            if !v.is_nan() {
+                counted[c].2[1] = *v;
+            }
+        }
         let got = lane_flow_core(&counted, blockers, max_lanes);
         for (c, &r) in mine.iter().enumerate() {
             if r < n0 {
                 out[r] = got[c];
+                ramp[r] = fixed[c];
             }
         }
-        out
+        (out, ramp)
     });
-    Ok(out.into_pyarray(py))
+    Ok((out.0.into_pyarray(py), out.1.into_pyarray(py)))
 }
