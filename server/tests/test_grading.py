@@ -1717,6 +1717,39 @@ class DirtEndsTest(unittest.TestCase):
         xy = np.stack([np.arange(0.0, 200.0, 2.0), np.zeros(100)], 1)
         self.assertIsNone(grading.dirt_bumps(xy, spec, 100))
 
+class AbutEndsTest(unittest.TestCase):
+    """Which road ends lead onto a bridge (_Planner._abut_ends): those within APPROACH_TOUCH_M of its end, except a
+    junction behind a ground part that reaches the end itself. Riva del Garda, Via Gardesana: a way's 1.03 m of ground
+    between a junction and its bridge; the junction's three roads (the approach, the stub, a side road) and the stub's
+    own start all stood within 2.5 m of the bridge's end, so all were abutments, held at their own heights: the stub
+    took the hillside's raw 28 % fall in its metre (0.86 m under the approach at the same node) and the approach's
+    8 % under-deck ground stood over the stub's own surface. With the game's abutment slope under decks (native 306)
+    the stub's own fall showed: a 0.30 m step into a primary road's bridge."""
+
+    def touch(self, pe, bridge_end=(0.0, 0.0)):
+        key = mapcells.cell_of(LAT, LON)
+        planner = types.SimpleNamespace(frame=FRAME, _cell_enu=lambda home, ground=True: {"ends": np.array([bridge_end])})
+        return grading._Planner._abut_ends(planner, key, np.array(pe, np.float64)).tolist()
+
+    def test_a_junction_behind_a_stub_is_no_abutment(self):
+        # (the junction J 1.05 m before the bridge's end: the approach ends there, a stub runs on from it to the
+        # bridge's end, a side road starts there)
+        got = self.touch([[-60.0, 0.0], [-1.05, 0.0],         # the approach: start, end at J
+                          [-1.05, 0.0], [0.04, 0.0],          # the stub: J, the bridge's end
+                          [-1.05, 0.0], [30.0, 30.0]])        # the side road: J, far
+        self.assertEqual(got, [False, False, False, True, False, False])
+
+    def test_a_road_ending_short_of_the_bridge_still_leads_onto_it(self):
+        # (no end at the bridge's end: the map's gaps, up to APPROACH_TOUCH_M, stay abutments)
+        got = self.touch([[-60.0, 0.0], [-2.0, 0.0], [0.0, 40.0], [0.0, 1.5]])
+        self.assertEqual(got, [False, True, False, True])
+
+    def test_two_roads_ending_at_the_bridge_both_lead_onto_it(self):
+        # (a bridge between two carriageways' ends: each its own abutment)
+        got = self.touch([[-60.0, 0.0], [-0.3, 0.0], [0.0, 40.0], [0.2, 0.9]])
+        self.assertEqual(got, [False, True, False, True])
+
+
 if __name__ == "__main__":
     unittest.main()
 
