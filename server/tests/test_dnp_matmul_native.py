@@ -544,8 +544,8 @@ class EmptyAndHugeTest(unittest.TestCase):
     def test_broadcast_operand_bounded_memory(self):
         """A broadcast (10^6, 1, 1) operand times a (1, 1): the 8 MB result in 12 MiB of extra address space, as the
         numpy Python returned it (Codex review: the kernel copied every broadcast element, held a block table and a
-        second copy of the result, MemoryError). Also a broadcast k (a (1, 10^6) row of one value) and broadcast
-        stacks on both sides."""
+        second copy of the result, MemoryError). Also a broadcast k (a (1, 3 * 10^6) row of one value: its products
+        summed as they are made, no k-long scratch, Codex review) and broadcast stacks on both sides."""
         import subprocess
         code = (
             "import os, resource, sys\n"
@@ -553,8 +553,8 @@ class EmptyAndHugeTest(unittest.TestCase):
             "import numpy as np, dnp\n"
             "a = np.broadcast_to(np.full((1, 1, 1), 1.5), (1_000_000, 1, 1))\n"
             "b = np.full((1, 1), 3.0)\n"
-            "r = np.broadcast_to(np.full((1, 1), 0.5), (1, 1_000_000))\n"
-            "c = np.broadcast_to(np.full((1, 1), 2.0), (1_000_000, 1))\n"
+            "r = np.broadcast_to(np.full((1, 1), 0.5), (1, 3_000_000))\n"
+            "c = np.broadcast_to(np.full((1, 1), 2.0), (3_000_000, 1))\n"
             "sa = np.broadcast_to(np.arange(6.0).reshape(1, 2, 3), (300_000, 2, 3))\n"
             "sb = np.broadcast_to(np.arange(3.0).reshape(1, 3, 1), (300_000, 3, 1))\n"
             "dnp.matmul(np.ones((1, 1)), b)\n"
@@ -573,8 +573,8 @@ class EmptyAndHugeTest(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr[-2000:])
         lines = r.stdout.split()
         self.assertEqual(lines[-1], "OK", r.stderr[-2000:])
-        want = ref_matmul(np.broadcast_to(np.full((1, 1), 0.5), (1, 1_000_000)),
-                          np.broadcast_to(np.full((1, 1), 2.0), (1_000_000, 1)))
+        want = ref_matmul(np.broadcast_to(np.full((1, 1), 0.5), (1, 3_000_000)),
+                          np.broadcast_to(np.full((1, 1), 2.0), (3_000_000, 1)))
         self.assertEqual(float(lines[0]), float(want[0, 0]))
 
 

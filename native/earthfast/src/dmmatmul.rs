@@ -47,6 +47,7 @@ use numpy::{Element, PyArray, PyArrayDescrMethods, PyArrayDyn, PyArrayMethods, P
 use pyo3::exceptions::{PyMemoryError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
+use std::mem::MaybeUninit;
 
 const OVER: u8 = 1;
 const INVALID: u8 = 2;
@@ -126,30 +127,36 @@ fn flags<T: Fl>(x: T, y: T, r: T) -> u8 {
     }
 }
 
-/// numpy's pairwise sum (loops_utils.h.src, @TYPE@_pairwise_sum) of v, the reduce loop's own: below 8 one by one
-/// from -0.0 (not reached from matmul: k > 8 here, the halves 64 or more), to 128 eight accumulators, above that the two halves (the first a multiple of 8). TRACK: the flags of
-/// every add. depth: the recursion's (0 the reduce loop's call): the operands' order where two NaNs meet is the
+/// numpy's pairwise sum (loops_utils.h.src, @TYPE@_pairwise_sum) of v(lo) .. v(lo + n - 1), the reduce loop's own
+/// (v called once per element, in increasing order: the matmul's products made as the sum reads them, no k-long
+/// scratch): below 8 one by one from -0.0 (not reached from matmul: k > 8 here, the halves 64 or more), to 128 eight
+/// accumulators, above that the two halves (the first a multiple of 8). TRACK: the flags of every add. depth: the recursion's (0 the reduce loop's call): the operands' order where two NaNs meet is the
 /// compiled wheel's (numpy 2.5's x86-64 build: the function inlined into itself once, so the two code copies
 /// alternate by depth: at an even depth r3 + r2 and r5 + r4 in the accumulators' tree and the halves first + second,
 /// at an odd depth r2 + r3, r4 + r5 and second + first; fitted on every NaN pair placement, tests/test_dnp_matmul_native.py).
-fn pairwise<T: Fl, const TRACK: bool>(v: &[T], depth: u32, fl: &mut u8) -> T {
-    let n = v.len();
+fn pairwise<T: Fl, const TRACK: bool, F: FnMut(usize) -> T>(v: &mut F, lo: usize, n: usize, depth: u32, fl: &mut u8)
+                                                                -> T {
     if n < 8 {
         let mut res = T::NEG_ZERO;
-        for &x in v {
+        for i in 0..n {
+            let x = v(lo + i);
             let r = ad(res, x);
             if TRACK { *fl |= flags(res, x, r); }
             res = r;
         }
         res
     } else if n <= PW_BLOCKSIZE {
-        let mut r = [v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7]];
+        let mut r = [T::ZERO; 8];
+        for (j, x) in r.iter_mut().enumerate() {
+            *x = v(lo + j);
+        }
         let mut i = 8;
         while i < n - (n % 8) {
-            for j in 0..8 {
-                let s = ad(r[j], v[i + j]);
-                if TRACK { *fl |= flags(r[j], v[i + j], s); }
-                r[j] = s;
+            for (j, rj) in r.iter_mut().enumerate() {
+                let x = v(lo + i + j);
+                let s = ad(*rj, x);
+                if TRACK { *fl |= flags(*rj, x, s); }
+                *rj = s;
             }
             i += 8;
         }
@@ -167,15 +174,15 @@ fn pairwise<T: Fl, const TRACK: bool>(v: &[T], depth: u32, fl: &mut u8) -> T {
         let cd = add(c, d, fl);
         let mut res = add(ab, cd, fl);
         while i < n {
-            res = add(res, v[i], fl);
+            res = add(res, v(lo + i), fl);
             i += 1;
         }
         res
     } else {
         let mut n2 = n / 2;
         n2 -= n2 % 8;
-        let x = pairwise::<T, TRACK>(&v[..n2], depth + 1, fl);
-        let y = pairwise::<T, TRACK>(&v[n2..], depth + 1, fl);
+        let x = pairwise::<T, TRACK, F>(v, lo, n2, depth + 1, fl);
+        let y = pairwise::<T, TRACK, F>(v, lo + n2, n - n2, depth + 1, fl);
         let s = if depth.is_multiple_of(2) { ad(x, y) } else { ad(y, x) };
         if TRACK { *fl |= flags(x, y, s); }
         s
@@ -260,9 +267,8 @@ struct Mm<T> {
 
 impl<T: Fl> Mm<T> {
     /// The products summed in the Python's order into out (the result in C order, written whole); TRACK: only each
-    /// ufunc call's flags (k <= 8: [mul0, -, mul1, add1, ..]; k > 8: [mul, reduce]), out untouched. prods: the
-    /// pairwise sum's scratch (k reserved by the caller where pw).
-    fn run<const TRACK: bool>(&self, ops: &mut [u8], out: &mut [T], prods: &mut Vec<T>) {
+    /// ufunc call's flags (k <= 8: [mul0, -, mul1, add1, ..]; k > 8: [mul, reduce]), out untouched.
+    fn run<const TRACK: bool>(&self, ops: &mut [u8], out: &mut [MaybeUninit<T>]) {
         let (n, k, m) = (self.n, self.k, self.m);
         let (a, b) = (&self.a[..], &self.b[..]);
         let (an, ak, bk, bm) = (self.an, self.ak, self.bk, self.bm);
@@ -304,7 +310,7 @@ impl<T: Fl> Mm<T> {
                         }
                         if !TRACK {
                             // SAFETY: one of the block's n * m outputs from pos, within out by the assert above
-                            unsafe { *out.get_unchecked_mut(pos + i * m + j) = s; }
+                            unsafe { out.get_unchecked_mut(pos + i * m + j).write(s); }
                         }
                     }
                 }
@@ -315,17 +321,20 @@ impl<T: Fl> Mm<T> {
                     for j in 0..m {
                         let bj = ob + j * bm;
                         let s = if self.pw {
-                            prods.clear();
-                            for q in 0..k {
+                            let mut fm = 0u8;
+                            let mut prod = |q: usize| {
                                 let (x, y) = (ga(ai + q * ak), gb(bj + q * bk));
                                 let p = mu(x, y);
-                                if TRACK { ops[0] |= flags(x, y, p); }
-                                prods.push(p);
-                            }
+                                if TRACK { fm |= flags(x, y, p); }
+                                p
+                            };
                             let mut fl = 0u8;
-                            let ps = pairwise::<T, TRACK>(prods, 0, &mut fl);
+                            let ps = pairwise::<T, TRACK, _>(&mut prod, 0, k, 0, &mut fl);
                             let s = ad(T::ZERO, ps);
-                            if TRACK { ops[1] |= fl | flags(T::ZERO, ps, s); }
+                            if TRACK {
+                                ops[0] |= fm;
+                                ops[1] |= fl | flags(T::ZERO, ps, s);
+                            }
                             s
                         } else {
                             let mut s = T::ZERO;
@@ -343,7 +352,7 @@ impl<T: Fl> Mm<T> {
                         };
                         if !TRACK {
                             // SAFETY: pos < the block's end, within out by the assert above
-                            unsafe { *out.get_unchecked_mut(pos) = s; }
+                            unsafe { out.get_unchecked_mut(pos).write(s); }
                         }
                         pos += 1;
                     }
@@ -577,38 +586,37 @@ fn compute<'py, T: Fl>(py: Python<'py>, ua: &Bound<'py, PyUntypedArray>, ub: &Bo
         k_inner(&dims, &iter_strides(&sha, &sta, nd), &iter_strides(&shb, &stb, nd))
     };
     let mm = Mm { a: oa.v, b: ob.v, st, sta, stb, an, ak, bk, bm, n, k, m, pw };
-    let mut prods = Vec::new();
-    if pw {
-        prods.try_reserve_exact(k).map_err(|_| PyMemoryError::new_err("dm_matmul: no memory for the result"))?;
-    }
-    // the sums into out (the GIL released for big work), then numpy reports the flags the Python's calls set
-    let fill = |out: &mut [T], prods: &mut Vec<T>| -> PyResult<()> {
+    // the sums into out (the GIL released for big work), then numpy reports the flags the Python's calls set; out
+    // whole afterwards (run writes every element), returned initialised
+    let fill = |out: &mut [MaybeUninit<T>]| -> PyResult<&[T]> {
         let mut none = [0u8; 0];
         if total.saturating_mul(k) > DETACH_WORK {
-            py.detach(|| mm.run::<false>(&mut none, out, prods));
+            py.detach(|| mm.run::<false>(&mut none, out));
         } else {
-            mm.run::<false>(&mut none, out, prods);
+            mm.run::<false>(&mut none, out);
         }
-        if !out.iter().all(|v| v.finite()) {
+        // SAFETY: run::<false> wrote every one of out's elements (the blocks' n * m outputs each, in turn)
+        let done = unsafe { std::slice::from_raw_parts(out.as_ptr() as *const T, out.len()) };
+        if !done.iter().all(|v| v.finite()) {
             let mut ops = vec![0u8; if k <= 8 { 2 * k } else { 2 }];
-            mm.run::<true>(&mut ops, &mut [], prods);
+            mm.run::<true>(&mut ops, &mut []);
             report::<T>(py, &ops, k)?;
         }
-        Ok(())
+        Ok(done)
     };
     if shape.is_empty() {
-        let mut out = [T::ZERO];
-        fill(&mut out, &mut prods)?;
-        return scalar::<T>(py, out[0]);
+        let mut out = [MaybeUninit::<T>::uninit()];
+        let v = fill(&mut out)?[0];
+        return scalar::<T>(py, v);
     }
     let arr = new_array::<T>(py, &shape, false)?;
-    {
-        // SAFETY: the new array is C-contiguous and aligned, of total elements, and held only here (no Python object
-        // refers to it, so nothing reads or writes it while the GIL is released); it is written whole before it is
-        // returned, and dropped unreturned where report raises
-        let out = unsafe { arr.as_slice_mut()? };
-        fill(out, &mut prods)?;
-    }
+    // SAFETY: the new array's data: C-contiguous and aligned, of total elements, held only here (no Python object
+    // refers to it, so nothing reads or writes it while the GIL is released), its memory not yet initialised (viewed
+    // as MaybeUninit until written whole); dropped unreturned where report raises
+    let out = unsafe {
+        std::slice::from_raw_parts_mut((*arr.as_array_ptr()).fields.data as *mut MaybeUninit<T>, total)
+    };
+    fill(out)?;
     Ok(arr.into_any())
 }
 
@@ -650,9 +658,9 @@ mod tests {
         let mut fl = 0u8;
         let v: Vec<f64> = (0..300).map(|i| (i as f64) * 0.1).collect();
         // exact sums of tenths: compare against a plain sum of the same values (within rounding) and the 8-block
-        let p = pairwise::<f64, false>(&v, 0, &mut fl);
+        let p = pairwise::<f64, false, _>(&mut |i| v[i], 0, v.len(), 0, &mut fl);
         assert!((p - 4485.0).abs() < 1e-9);
-        assert_eq!(pairwise::<f64, false>(&[1.0, 2.0, 3.0], 0, &mut fl), 6.0);
+        assert_eq!(pairwise::<f64, false, _>(&mut |i| [1.0, 2.0, 3.0][i], 0, 3, 0, &mut fl), 6.0);
         assert_eq!(flags(f64::MAX, f64::MAX, f64::MAX + f64::MAX), OVER);
         assert_eq!(flags(f64::INFINITY, 0.0, f64::INFINITY * 0.0), INVALID);
         assert_eq!(flags(f64::NAN, 1.0, f64::NAN), 0);
