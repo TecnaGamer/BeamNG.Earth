@@ -6658,6 +6658,9 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(roadnet::specjson::specs_from_json, m)?)?;
     // 450: R2a's spec storage (roadnet::specjson: roads._spec_json and spec_from_json / _specs_from, the cell facts'
     // "specs" and the plans' openings; the coordinator's range 450-459 for road-r2a5)
+    m.add_class::<roadnet::countries::CountryLookup>()?;
+    // 451: R2a's scalar country lookup (roadnet::countries::CountryLookup: europewalks.country_for made once, its
+    // territories' set kept)
     m.add("VERSION", 470)?;
     Ok(())
 }

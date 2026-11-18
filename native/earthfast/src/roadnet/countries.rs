@@ -116,3 +116,27 @@ pub fn europe_road_countries<'py>(index: Bound<'py, PyAny>, part_off: CArr1<'py,
     }
     Ok(out)
 }
+
+/// europewalks.country_for's lookup, made once (europewalks._lookup): the supported territories' set kept (the scalar
+/// path built it from a sorted list and two one-point arrays at every call: as much CPU as the spec JSON on a European
+/// layer, 2026-11-18). index: () -> the border file's path or None, asked at every point past the box test as before.
+#[pyclass(frozen, module = "earthfast")]
+pub struct CountryLookup {
+    index: Py<PyAny>,
+    countries: BTreeSet<String>,
+}
+
+#[pymethods]
+impl CountryLookup {
+    #[new]
+    fn new(index: Py<PyAny>, countries: Vec<String>) -> Self {
+        CountryLookup { index, countries: countries.into_iter().collect() }
+    }
+
+    /// country_for(lon, lat). Input contract (R2a): lon / lat numbers (int, float, numpy scalars: read as float64, as
+    /// np.array([lon], np.float64) read them); text and other objects without __float__ TypeError.
+    fn at(&self, py: Python<'_>, lon: f64, lat: f64) -> PyResult<Option<String>> {
+        let mut b = Borders { index: self.index.bind(py).clone(), last: None };
+        country_for(&mut b, lon, lat, &self.countries)
+    }
+}
