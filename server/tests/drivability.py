@@ -152,7 +152,9 @@ def measure(name, threads=1, approach=None):
         box = (-RADIUS_M, -RADIUS_M, RADIUS_M, RADIUS_M)
         tunnels = roads.TunnelProfiles(site.frame, lambda k: site.cells.get(str(k)), elev)
         tunnels.raw = site.sample
-        tunnels.ends = lambda la, lo: grader.apply(la, lo, site.sample(la, lo), grading.ROAD_LIFT, roads_only=True)
+        # (as the game's: the ground read as the road's own level at a portal arrives as `base`, earthd / blockworker)
+        tunnels.ends = lambda la, lo, base=None: grader.apply(la, lo, site.sample(la, lo) if base is None else base,
+                                                               grading.ROAD_LIFT, roads_only=True)
         report = Report()
         _measure_ground(report, cells, site.frame, ground, roads)
         structures = [s for surface, profiles in
