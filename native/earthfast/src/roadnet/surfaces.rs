@@ -125,12 +125,42 @@ impl SurfaceRules {
     /// roads.surface_kind(cls, surface): "paved", "cobble", "gravel" or "dirt" (cls: STYLE's class, another or None
     /// as "unknown").
     fn kind(&self, py: Python<'_>, cls: &Bound<'_, PyAny>, surface: &Bound<'_, PyAny>) -> PyResult<&'static str> {
-        let c = if cls.is_instance_of::<PyString>() { Some(py_str(cls)?) } else { None };
         let t = match opt_str(surface)? {
             None => None,
             Some(s) => Some(token_of(py, &s)?),
         };
-        Ok(KINDS[self.kind_of_token(c.as_deref(), t.as_deref()) as usize])
+        if let Ok(c) = cls.cast_exact::<PyString>() {
+            return Ok(KINDS[self.kind_of_token(Some(c.to_str()?), t.as_deref()) as usize]);
+        }
+        // (any other class value as the Python asked it, at its own points: `cls != "track"` its rich comparison,
+        // STYLE.get(cls) a dict's lookup, its hash and ==; a str subclass's __str__ is never asked: Codex round 2 on
+        // ec3397ee)
+        if let Some(s) = t.as_deref() {
+            if self.paved.contains(s) {
+                return Ok(KINDS[PAVED as usize]);
+            }
+            if self.cobble.contains(s) {
+                return Ok(KINDS[COBBLE as usize]);
+            }
+            if self.gravel.contains(s) {
+                return Ok(KINDS[GRAVEL as usize]);
+            }
+            if s == "unpaved" && cls.ne("track")? {
+                return Ok(KINDS[GRAVEL as usize]);
+            }
+            if self.unpaved.contains(s) {
+                return Ok(KINDS[DIRT as usize]);
+            }
+        }
+        let style = pyo3::types::PyDict::new(py);
+        for (k, v) in &self.style_paved {
+            style.set_item(k, *v)?;
+        }
+        let paved = match style.get_item(cls)? {
+            Some(v) => v.is_truthy()?,
+            None => self.unknown_paved,
+        };
+        Ok(KINDS[if paved { PAVED } else { DIRT } as usize])
     }
 
     /// _spec_inputs' surface columns: {"skind" int8 (surface_kind of each class and value), "stok" int32 (its token's
