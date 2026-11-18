@@ -580,6 +580,22 @@ class UnderDeckAssemblyReviewTest(unittest.TestCase):
         self.assertEqual(len(wires), 1, "the tagged span goes, the untagged copy stays (no geometric reason)")
         self.assertIsNone(furniture.wire_ends(wires[0]))
 
+    def test_a_span_goes_with_the_next_tiles_pole_culled_for_its_arm(self):
+        # Codex's review of 0cf9fd9b: the span carried only the far pole's row; that pole is culled in its own tile for
+        # its ARM reaching into a deck (assembly_cull), the pole itself clear, so the wire stayed. The span carries the
+        # whole assembly at each end now
+        deck = (np.array([[30.0, 0.0, 8.0], [60.0, 0.0, 8.0]]), 5.5)        # (its side at y = 6.5)
+        a = [furniture.G_POLE, -10.0, 6.52, 0.0, 0.0, 1.0, 9.2, 0.0]
+        b = [furniture.G_POLE, 40.0, 6.52, 0.0, 0.0, 1.0, 9.2, 0.0]          # (the next tile's, clear of the deck)
+        arm = [furniture.G_POLELAMP, 40.0, 6.48, furniture.POLE_LAMP_Z, 0.0, 1.0, 1.1, 0.0]   # (on it, in the deck)
+        line = np.c_[np.linspace(-10.0, 40.0, 9), np.full(9, 7.32), np.full(9, 7.8)]
+        wires = furniture.with_ends([line], a, b) + furniture.with_ends([line.copy()], a, b, None, arm)
+        self.assertEqual(furniture.under_decks([b, arm], [deck]), [])           # (its own tile: culled for the arm)
+        out = furniture.under_decks([list(a)], [deck], wires)
+        self.assertEqual(out, [a])
+        self.assertEqual(len(wires), 1, "the span with the pole's arm goes; without it, it stayed")
+        self.assertEqual(furniture.wire_mounted(wires[0]), (None, None))
+
     def test_spans_carry_their_poles_rows(self):
         style = poleprofiles.STOCK
         run = [(0.0, 0.0, 1.0, 90.0, style), (40.0, 0.0, 2.0, 90.0, style), (80.0, 0.0, 3.0, 90.0, style)]

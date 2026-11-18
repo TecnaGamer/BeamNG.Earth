@@ -1067,18 +1067,27 @@ class Span(np.ndarray):
     last)): a span is drawn by the tile of its first pole only, so the pole at its other end may be no row of this tile,
     yet the wire must go when that pole is culled (Codex's review of 1bc9f8cb). Used as the points themselves."""
     ends = None
+    mounted = None
 
 
-def with_ends(wires, a, b):
+def with_ends(wires, a, b, la=None, lb=None):
     """wires (points, or (points, radius)) of one span tagged with its support rows a (at the first point) and b (None:
-    no support row there, a substation's gantry)."""
+    no support row there), and the rows mounted on them la, lb (a pole's arm, None for none): the whole assembly at
+    each end, whose verdict is the support's (assembly_cull; Codex's review of 0cf9fd9b: a far pole culled for its
+    arm under a deck left the span)."""
     out = []
     for w in wires:
         pts, r = w if isinstance(w, tuple) else (w, None)
         span = np.asarray(pts).view(Span)
         span.ends = (None if a is None else list(a), None if b is None else list(b))
+        span.mounted = (None if la is None else list(la), None if lb is None else list(lb))
         out.append(span if r is None else (span, r))
     return out
+
+
+def wire_mounted(w):
+    """The rows mounted on the supports at a wire's two ends (with_ends), or (None, None)."""
+    return getattr(w[0] if isinstance(w, tuple) else w, "mounted", None) or (None, None)
 
 
 def wire_ends(w):
@@ -1171,15 +1180,19 @@ def under_decks(rows, decks, wires=None):
         pts = [np.asarray(w[0] if isinstance(w, tuple) else w, np.float64) for w in wires]  # (PR #505: (points, style))
         at = np.zeros(2 * len(pts), bool)
         # (each span's own supports judged alike, the next tile's pole too: with_ends)
+        # (and the rows mounted on them: an arm into a deck culls its pole: assembly_cull)
         sup = [(2 * n_ + k, q) for n_, w in enumerate(wires) for e in (wire_ends(w),) if e for k, q in enumerate(e)
                if q is not None]
+        sup += [(2 * n_ + k, q) for n_, w in enumerate(wires) if wire_ends(w) for k, q in enumerate(wire_mounted(w))
+                if q is not None]
         cut = np.zeros(2 * len(pts), bool)
         if sup:
             q = np.asarray([[r[1], r[2], r[3], r[3] + r[6]] for _, r in sup], np.float64)
             hit = np.asarray(levels.blocked(np.ascontiguousarray(q[:, 0]), np.ascontiguousarray(q[:, 1]),
                                             np.ascontiguousarray(q[:, 2]), np.ascontiguousarray(q[:, 3]),
                                             float(DECK_HEADROOM_M)), bool)
-            cut[[j for j, _ in sup]] = hit
+            for (j, _), h in zip(sup, hit):
+                cut[j] |= bool(h)
         if (gone or cut.any()) and pts:
             ends = [[p[k, 0], p[k, 1]] if len(p) else [np.inf, np.inf] for p in pts for k in (0, -1)]
             at = wire_cull(ends, cut, gone)
@@ -1347,13 +1360,16 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
                             wires.extend(_own_spans(run_poles, box))
                         run_poles = []
                         continue
-                    run_poles.append((pole[1], pole[2], pole[3], pole[4], pole_style))
+                    k = int(round((float(_project(line, q[None])[0]) - ph) / TOWN_POLE_SPACING))
+                    lamp = ([G_POLELAMP, round(float(q[0]), 2), round(float(q[1]), 2),
+                             round(float(p[2]) + POLE_LAMP_Z, 2), round(yaw, 1), 1.0, 1.1, 0.0]
+                            if lamp_ok(fid) and pole_lamp(spec.cls, k, region) else None)
+                    # (with its arm: the next tile's span to it goes when the arm culls the pole there)
+                    run_poles.append((pole[1], pole[2], pole[3], pole[4], pole_style, lamp))
                     if _owns(box, q[0], q[1]):
                         rows.append(pole)
-                        k = int(round((float(_project(line, q[None])[0]) - ph) / TOWN_POLE_SPACING))
-                        if lamp_ok(fid) and pole_lamp(spec.cls, k, region):
-                            rows.append([G_POLELAMP, round(float(q[0]), 2), round(float(q[1]), 2),
-                                         round(float(p[2]) + POLE_LAMP_Z, 2), round(yaw, 1), 1.0, 1.1, 0.0])
+                        if lamp is not None:
+                            rows.append(lamp)
                 if wires is not None and len(run_poles) > 1:
                     wires.extend(_own_spans(run_poles, box))
             rule = None
@@ -1458,12 +1474,14 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
                     wires.extend(_own_spans(run, box))
                 run = []
                 continue
-            run.append((pole[1], pole[2], pole[3], pole[4], pole_style))
+            lamp = ([G_POLELAMP, round(float(q[0]), 2), round(float(q[1]), 2),
+                     round(float(p[2]) + POLE_LAMP_Z, 2), round(yaw, 1), 1.0, 1.1, 0.0]
+                    if drawn and pole_lamp(spec.cls, k, region) else None)
+            run.append((pole[1], pole[2], pole[3], pole[4], pole_style, lamp))
             if inside:
                 rows.append(pole)
-                if drawn and pole_lamp(spec.cls, k, region):
-                    rows.append([G_POLELAMP, round(float(q[0]), 2), round(float(q[1]), 2),
-                                 round(float(p[2]) + POLE_LAMP_Z, 2), round(yaw, 1), 1.0, 1.1, 0.0])
+                if lamp is not None:
+                    rows.append(lamp)
         if len(run) > 1 and wires is not None:
             wires.extend(_own_spans(run, box))
     # Poles were checked before joining their wire runs; signs before selecting their relocated spot.
@@ -1502,7 +1520,8 @@ def _own_spans(run, box):
             sa, sb = a[4], b[4]
             if (sa.wire_anchors, sa.wire_radius) == (sb.wire_anchors, sb.wire_radius):
                 out.extend(with_ends(wire_lines([a[:4], b[:4]], sa.wire_anchors, sa.wire_radius),
-                                     _support_row(a), _support_row(b)))
+                                     _support_row(a), _support_row(b), a[5] if len(a) > 5 else None,
+                                     b[5] if len(b) > 5 else None))
             # Different electrical layouts (three conductors / one bundle): terminate
             # the run here. Inventing a three-to-one electrical connection is misleading;
             # dedicated transition hardware is outside this visual prototype's scope.

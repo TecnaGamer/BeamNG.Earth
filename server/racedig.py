@@ -142,10 +142,12 @@ def clear_props(props, wires, lines, ground=None):
         for n_, w in enumerate(wires):
             pts = w[0] if isinstance(w, tuple) else w
             if len(pts) >= 1:
-                own = furniture.wire_ends(w)
+                own, mounted = furniture.wire_ends(w), furniture.wire_mounted(w)
                 for k, p in enumerate((pts[0], pts[-1])):
                     if own and own[k] is not None:
                         sup.append((len(ends), own[k]))
+                        if mounted[k] is not None:      # (its arm: the assembly as one, assembly_cull)
+                            sup.append((len(ends), mounted[k]))
                     ends.append([float(p[0]), float(p[1])])
                 which += [n_, n_]
         if ends:
@@ -160,7 +162,8 @@ def clear_props(props, wires, lines, ground=None):
                     gz = np.asarray(ground(q[k, 0], q[k, 1]), np.float64)
                     pz = np.array([float(sup[j][1][3]) for j in k], np.float64)
                     gone[k[pz - gz >= PROP_DECK_M]] = False
-                cut[[j for j, _ in sup]] = gone
+                for (j, _), g in zip(sup, gone):
+                    cut[j] |= bool(g)
             if culled or cut.any():
                 bad |= furniture.wire_cull(ends, cut, culled)
             drop = {which[j] for j in np.flatnonzero(bad).tolist()}
