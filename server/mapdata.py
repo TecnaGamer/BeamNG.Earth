@@ -360,10 +360,11 @@ def _savez_deflated(path, arrays, level):
 
 class MapData:
     """See the module docstring. fetcher: the server's netfetch.Fetcher (None: one of its own);
-    release: the Overture release (overture.RELEASE)."""
+    release: the Overture release (default: overture.effective(), the process's own)."""
 
-    def __init__(self, cache_dir=DEFAULT_CACHE, fetcher=None, release=overture.RELEASE,
+    def __init__(self, cache_dir=DEFAULT_CACHE, fetcher=None, release=None,
                  threads=overture.DUCKDB_THREADS):
+        release = release or overture.effective()      # (the process's release, frozen: overture.effective)
         self.cache_dir = cache_dir
         self.fetcher = fetcher if fetcher is not None else netfetch.Fetcher()
         self.release = release
@@ -1858,7 +1859,8 @@ def main(argv=None):
     ap.add_argument("--dump", action="store_true", help="print counts, timings and sizes (JSON)")
     ap.add_argument("--png", help="write a preview PNG of the cell(s) here")
     ap.add_argument("--cache-dir", default=DEFAULT_CACHE)
-    ap.add_argument("--release", default=overture.RELEASE, help="Overture release (default: the pinned one)")
+    ap.add_argument("--release", default=None,
+                    help="Overture release (default: overture.effective(): BNGE_OVERTURE_RELEASE, else the pinned one)")
     ap.add_argument("--offline", action="store_true", help="disk cache only")
     ap.add_argument("--latest", action="store_true", help="print the newest Overture release and exit")
     ap.add_argument("-v", action="store_true")
@@ -1870,8 +1872,10 @@ def main(argv=None):
         if a.latest:
             latest = overture.latest_release(fetcher)
             print(json.dumps({"pinned": overture.RELEASE, "latest": latest,
-                              "update": "set overture.RELEASE (server/overture.py) to the latest id; cells "
-                                        "are cached per release, so nothing else changes"}))
+                              "schemas": list(overture.SUPPORTED_SCHEMAS),
+                              "update": "the data repo's cdn.json {\"overture\": {\"release\": ...}} once the "
+                                        "release's products are built (or overture.RELEASE, the fallback); cells "
+                                        "are cached per release"}))
             return 0
         if a.key:
             center = mapcells.parse(a.key)

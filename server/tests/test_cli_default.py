@@ -198,6 +198,9 @@ class CliDefaultTest(unittest.TestCase):
         # (the telemetry choice's region defaults and consent version: TELEMETRY.md; the region from this machine)
         self.assertIn(got["hello"].pop("privacyRegion"), ("neutral", "perf_off", "all"))
         self.assertEqual(got["hello"].pop("telemetryConsent"), 3)
+        # (2026-11-18: the map data's release, the build's own without a supervisor: overturepick.py)
+        import overturepick
+        self.assertEqual(got["hello"].pop("overtureRelease"), overturepick.RELEASE)
         # The 1 m lattice holds M1's 2 m samples (terrain_png) and the ones between them, so its highest one can only
         # be higher; its lowest, zBase and q are M1's here.
         self.assertGreaterEqual(got["terrain"].pop("maxU"), want["terrain"].pop("maxU"))

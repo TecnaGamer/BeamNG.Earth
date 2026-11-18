@@ -303,6 +303,10 @@ local function requestAnchor(lat, lon, purpose, cx, cy, place)
     setStatus('Companion server not connected (127.0.0.1:' .. net.PORT .. ')')
     return false
   end
+  if st.releaseHold then      -- (a server of other map data than this level's world: nothing is asked of it)
+    setStatus(M._releaseHoldText())
+    return false
+  end
   local id = nextId()
   if purpose == 'teleport' then st.loadingFault = nil end
   st.pending = { requestId = id, purpose = purpose, lat = lat, lon = lon, sentAt = st.clock, cx = cx, cy = cy,
@@ -1241,6 +1245,7 @@ local function onMessage(msg)
     -- now waits for the new server, srvrestart.lua)
     st.startSettings, st.startFixed, st.restartable = nil, nil, false
     M._srvrestart.disconnected(M._restart, st.clock)
+    M._relpin.disconnected(M._relpinState)     -- (a level started from now on is pinned by the next server's hello)
     st.serverNote, st.serverNoteDetail, st.terrainErrorAt = nil, nil, nil
     -- an auto-teleport lost with the connection is retried on the next hello
     if not st.anchor then st.autoTeleportDone = false end
@@ -1271,6 +1276,11 @@ local function onMessage(msg)
     st.startFixed = type(msg.startFixed) == 'table' and msg.startFixed or nil     -- (set by hand: never pending)
     st.restartable = msg.restartable == true
     M._srvrestart.hello(M._restart, st.clock, msg.sessionId)
+    -- the map data's release (releasepin.lua): this level's world is of the release it was pinned to; a server of
+    -- another one (or of none after a known one) streams nothing into it (st.releaseHold, below)
+    st.releaseHold = M._relpin.hello(M._relpinState, msg.overtureRelease, st.inOurLevel, msg.sessionId) == 'mismatch'
+      or nil
+    pcall(mpsession.setRelease, M._relpin.pinned(M._relpinState))     -- (the level's: BeamMP poses carry it)
     M._trafficvisuals.session(msg.sessionId, msg.trafficVisuals == M._trafficvisuals.PROTO)
     st.refreshLater = nil       -- (a restarted server numbers its anchors from 1 again)
     roads.setSession(msg.sessionId)   -- the road / building tiles' pooled shape files belong to this server
@@ -1388,7 +1398,10 @@ local function onMessage(msg)
     serverCreditsByArea = type(msg.imageryCredits) == 'table' and msg.imageryCredits or nil
     serverOtherCredits = type(msg.otherCredits) == 'string' and msg.otherCredits or nil
     pcall(places.syncLevel)     -- the level select's place pictures (the server makes the missing ones)
-    if st.anchor then
+    if st.releaseHold then
+      st.resync = st.anchor ~= nil    -- (the block does not follow, no anchor is asked: nothing of the other release)
+      M._releaseMismatch(msg.overtureRelease)
+    elseif st.anchor then
       -- A (re)started server knows nothing of our anchor: re-register the SAME geodetic origin under
       -- a new anchorId. The transform is then the identity, so nothing in the world moves (a shift
       -- here could happen close to the origin, where camshift cannot tell positions from offsets).
@@ -2018,7 +2031,7 @@ local function updateWorld(dt)
   end
 
   -- a resync the server could not build (anchor_error: offline, never visited) is asked again
-  if st.resync and not st.pending and st.sessionId and st.clock >= st.retryAt then
+  if st.resync and not st.pending and st.sessionId and st.clock >= st.retryAt and not st.releaseHold then
     requestAnchor(st.anchor.lat, st.anchor.lon, 'resync', resyncHint())
   end
 
@@ -3268,6 +3281,9 @@ end
 local function onLevelStart()
   -- the connection outlives levels: keep its session, the request id sequence and the rest of its hello
   M._resetKeepingConnection()
+  -- (this level's world is of the LIVE connection's map data release, or of the next hello's: releasepin.lua)
+  M._relpin.levelStart(M._relpinState)
+  pcall(mpsession.setRelease, M._relpin.pinned(M._relpinState))
   farfield.forget()
   terrain.onLevelChanged()
   st.inOurLevel = getCurrentLevelIdentifier() == LEVEL_ID
@@ -3807,6 +3823,27 @@ end
 -- player let go themselves (resumed the game) is theirs from then on. Nothing runs per frame without a restart.
 M._srvrestart = require('beamngEarth/srvrestart')
 M._restart = M._srvrestart.new()
+M._relpin = require('beamngEarth/releasepin')
+M._relpinState = M._relpin.new()
+function M._releaseHoldText()
+  return 'The world server uses other map data than this level was built with: load the level again'
+end
+-- A server of another map data release than this level's world (releasepin.lua, st.releaseHold): the world stays as it
+-- is (no anchor, no resync, the block does not follow: old roads never meet new terrain) and the player is told to
+-- load the level again. Nothing restarts by itself (no loops); a later hello of the level's release lifts the hold.
+function M._releaseMismatch(serverRelease)
+  local pin = M._relpin.pinned(M._relpinState)
+  log('W', 'beamngEarth', string.format("the world server reads map data %s, this level's world %s: held (load the "
+    .. 'level again)', tostring(serverRelease or M._relpin.NONE), tostring(pin)))
+  setStatus(M._releaseHoldText())
+  local gh = rawget(_G, 'guihooks')
+  if gh and gh.trigger and M._releaseToasted ~= st.sessionId then
+    M._releaseToasted = st.sessionId
+    pcall(gh.trigger, 'toastrMsg', { type = 'warning', title = 'BeamNG.Earth: map data changed',
+      msg = 'The world server now uses other map data than this level was built with. Load the level again to '
+        .. 'continue building the world.', config = { timeOut = 30000 } })
+  end
+end
 M._restartCtx = {}
 M.RESTART_KEY_FILE = '/temp/beamngEarth/restart.key'     -- (server srvrestart.KEY_FILE in its session root)
 function M.restartKey()

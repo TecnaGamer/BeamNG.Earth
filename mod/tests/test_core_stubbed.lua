@@ -229,7 +229,7 @@ local function warned(pat)
   for _, w in ipairs(warnings) do if w:match(pat) then return true end end
   return false
 end
-serverSend({ type = 'hello', protocol = 4, format = 3, serverVersion = '0.4.0', sessionId = 's1', farFormat = 'cdae',
+serverSend({ type = 'hello', overtureRelease = '2026-11-18.0', protocol = 4, format = 3, serverVersion = '0.4.0', sessionId = 's1', farFormat = 'cdae',
   material = 'bngEarthFar_v3', nearVisual = 'terrain', attribution = 'Imagery: test credits; Elevation: test' })
 T.check(pumpUntil(function() return #received('prepare_anchor') == 1 end), 'auto-teleport requested in our level')
 do -- the level start's teleport is the first recent place (places.lua; no file API here: memory only)
@@ -575,7 +575,7 @@ T.check(farfield.nearVisual() == 'terrain', 'terrain near visual')
 local roadsMod = require('beamngEarth/roads')
 local roadClears, realClear = 0, roadsMod.clear
 roadsMod.clear = function(...) roadClears = roadClears + 1; return realClear(...) end
-serverSend({ type = 'hello', protocol = 4, format = 3, serverVersion = '0.4.0', sessionId = 's2', farFormat = 'cdae',
+serverSend({ type = 'hello', overtureRelease = '2026-11-18.0', protocol = 4, format = 3, serverVersion = '0.4.0', sessionId = 's2', farFormat = 'cdae',
   material = 'bngEarthFar_v9', nearVisual = 'mesh' })
 T.check(pumpUntil(function() return #received('prepare_anchor') == nAnchor + 1 end, 10), 'resync requested on hello')
 T.check(not core.autodriveReady(), 'an outstanding resync still holds Autodrive')
@@ -699,13 +699,13 @@ local function said(pat)
   for _, w in ipairs(infos) do if w:match(pat) then return true end end
   return false
 end
-serverSend({ type = 'hello', protocol = 4, format = 4, cells = 64, serverVersion = '0.4.0', sessionId = 's3',
+serverSend({ type = 'hello', overtureRelease = '2026-11-18.0', protocol = 4, format = 4, cells = 64, serverVersion = '0.4.0', sessionId = 's3',
   farFormat = 'cdae', material = 'bngEarthFar_v3', nearVisual = 'mesh' })
 frames(2)
 T.check(crossover.cells() == 64 and crossover.defaultErr(0) == 1, 'hello.cells 64: crossover.defaultErr from it')
 T.check(farfield.stats().exactLevel == -1, 'hello.cells 64: the exact level (exactMiss metric) is L-1')
 T.check(not said('Format mismatch'), 'FORMAT 4 accepted')
-serverSend({ type = 'hello', protocol = 4, format = 5, serverVersion = '0.4.0', sessionId = 's4', farFormat = 'cdae',
+serverSend({ type = 'hello', overtureRelease = '2026-11-18.0', protocol = 4, format = 5, serverVersion = '0.4.0', sessionId = 's4', farFormat = 'cdae',
   material = 'bngEarthFar_v3', nearVisual = 'mesh' })
 frames(2)
 T.check(said('Format mismatch: server 5, mod 3/4'), 'an unknown format is reported')
@@ -718,7 +718,7 @@ local lattice = require('beamngEarth/lattice')
 local rebase = require('beamngEarth/rebase')
 veh.vel = vec3(0, 0, 0)
 local nA = #received('prepare_anchor')
-serverSend({ type = 'hello', protocol = 4, format = 4, cells = 64, blockSize = 512, serverVersion = '0.4.0', sessionId = 's5',
+serverSend({ type = 'hello', overtureRelease = '2026-11-18.0', protocol = 4, format = 4, cells = 64, blockSize = 512, serverVersion = '0.4.0', sessionId = 's5',
   farFormat = 'cdae', material = 'bngEarthFar_v3', nearVisual = 'mesh' })
 T.check(pumpUntil(function() return #received('prepare_anchor') == nA + 1 end, 10), '512: resync requested on hello')
 T.check(lattice.N == 512 and lattice.HALF == 512 and follow.GRID == 128 and follow.REACH == 260 and follow.PREPARE_DIST == 128
@@ -765,7 +765,7 @@ T.check(calls.importMaps == impFlat + 1 and tb.lastImport.path:match('beamngEart
 T.check(tb.lastImport.maps[1].path:match('beamngEarth_layer_512%.png$') ~= nil and tb.pos.x == -512 and tb.pos.y == -512,
   '512: flat block 1024 m centred on the origin')
 -- a server without hello.blockSize: back to the v1.3.1 block
-serverSend({ type = 'hello', protocol = 4, format = 4, cells = 64, serverVersion = '0.4.0', sessionId = 's6',
+serverSend({ type = 'hello', overtureRelease = '2026-11-18.0', protocol = 4, format = 4, cells = 64, serverVersion = '0.4.0', sessionId = 's6',
   farFormat = 'cdae', material = 'bngEarthFar_v3', nearVisual = 'mesh' })
 frames(3)
 T.check(lattice.N == 1024 and follow.GRID == 256 and follow.REACH == 420 and rebase.STALE_DIST == 450,
@@ -784,7 +784,7 @@ T.check(scenetree.theLevelInfo.visibleDistance == 100000 and sky.atmoPlanetRadiu
 serverSend({ type = 'status', text = 'x', backlog = 0, radius = 300000 })
 frames(3)
 T.check(scenetree.theLevelInfo.visibleDistance == 100000 and postApplies == 0, 'status.radius without hello.horizon: ignored')
-serverSend({ type = 'hello', protocol = 4, format = 4, cells = 64, horizon = true, serverVersion = '0.4.0',
+serverSend({ type = 'hello', overtureRelease = '2026-11-18.0', protocol = 4, format = 4, cells = 64, horizon = true, serverVersion = '0.4.0',
   sessionId = 's7', farFormat = 'cdae', material = 'bngEarthFar_v3', nearVisual = 'mesh' })
 frames(3)
 T.check(sky.atmoPlanetRadius == 6371, 'hello.horizon: sky planet radius 6371 km')
@@ -812,12 +812,12 @@ T.check(sky.atmoPlanetRadius == 6371, 'level start in horizon mode: planet radiu
 T.near(scenetree.theLevelInfo.visibleDistance, 440000, 1e-6, 'level start: visibleDistance from the known radius')
 -- a server without horizon: the level's values back
 local pa = postApplies
-serverSend({ type = 'hello', protocol = 4, format = 4, cells = 64, serverVersion = '0.4.0', sessionId = 's8',
+serverSend({ type = 'hello', overtureRelease = '2026-11-18.0', protocol = 4, format = 4, cells = 64, serverVersion = '0.4.0', sessionId = 's8',
   farFormat = 'cdae', material = 'bngEarthFar_v3', nearVisual = 'mesh' })
 frames(3)
 T.check(sky.atmoPlanetRadius == 6360, 'no hello.horizon: the level\'s sky planet radius back')
 T.check(scenetree.theLevelInfo.visibleDistance == 100000 and postApplies == pa + 1, 'no hello.horizon: 100 km back, with postApply')
-serverSend({ type = 'hello', protocol = 4, format = 4, cells = 64, horizon = true, serverVersion = '0.4.0',
+serverSend({ type = 'hello', overtureRelease = '2026-11-18.0', protocol = 4, format = 4, cells = 64, horizon = true, serverVersion = '0.4.0',
   sessionId = 's9', farFormat = 'cdae', material = 'bngEarthFar_v3', nearVisual = 'mesh' })
 frames(3)
 serverSend({ type = 'status', text = 'x', backlog = 0, radius = 500000 })
@@ -837,7 +837,7 @@ beamngEarth_weather = { onGravity = function(m) gotGravity = m end, clearGravity
 serverSend({ type = 'gravity', v = 1, g = 9.7867, lat = 36.58, lon = -118.29, h = 4400, source = 'egm2008' })
 frames(2)
 T.check(gotGravity and gotGravity.g == 9.7867 and gotGravity.source == 'egm2008', 'gravity message handed to beamngEarth_weather')
-serverSend({ type = 'hello', protocol = 4, format = 4, cells = 64, horizon = true, serverVersion = '0.4.0',
+serverSend({ type = 'hello', overtureRelease = '2026-11-18.0', protocol = 4, format = 4, cells = 64, horizon = true, serverVersion = '0.4.0',
   sessionId = 's10', farFormat = 'cdae', material = 'bngEarthFar_v3', nearVisual = 'mesh' })
 frames(3)
 T.check(cleared == 1, 'hello: the previous session\'s gravity cleared')
@@ -872,7 +872,7 @@ T.check(#drawnCredits == 0, 'credits: hidden while the pause menu is open')
 core.onUiChangedState('play', 'menu')
 frames(1)
 T.check(#drawnCredits == 1, 'credits: back after the pause menu')
-serverSend({ type = 'hello', protocol = 4, format = 4, cells = 64, horizon = true, serverVersion = '0.4.0',
+serverSend({ type = 'hello', overtureRelease = '2026-11-18.0', protocol = 4, format = 4, cells = 64, horizon = true, serverVersion = '0.4.0',
   sessionId = 's11', farFormat = 'cdae', material = 'bngEarthFar_v3', nearVisual = 'mesh', attribution = 'Elevation: s11' })
 drawnCredits = {}
 frames(3)
@@ -953,7 +953,7 @@ end
 local function sentCaches() return received('cache') end
 local nCache = #sentCaches()
 beamngEarth_settings = { cacheCapGb = function() return 50 end }
-serverSend({ type = 'hello', protocol = 4, format = 4, cells = 64, horizon = true, serverVersion = '0.4.0',
+serverSend({ type = 'hello', overtureRelease = '2026-11-18.0', protocol = 4, format = 4, cells = 64, horizon = true, serverVersion = '0.4.0',
   sessionId = 's12', farFormat = 'cdae', material = 'bngEarthFar_v3', nearVisual = 'mesh' })
 frames(3)
 T.check(#sentCaches() == nCache + 1 and sentCaches()[nCache + 1].capGb == 50, 'hello: the page\'s cache cap sent')
@@ -999,7 +999,7 @@ do
     session = function(id, available) seen.id, seen.available = id, available end,
     reset = function() seen = {} end,
     hasWork = function() return false end, update = function() end, onTeleport = function() end }
-  serverSend({ type = 'hello', protocol = 4, format = 4, cells = 64, sessionId = 'traffic-reload',
+  serverSend({ type = 'hello', overtureRelease = '2026-11-18.0', protocol = 4, format = 4, cells = 64, sessionId = 'traffic-reload',
     streamLease = 1, leaseId = 'game-owner',
     farFormat = 'cdae', material = 'bngEarthFar_v3', nearVisual = 'mesh', trafficVisuals = 2 })
   frames(3)
@@ -1121,7 +1121,7 @@ do -- a computer with too little memory (the server's emergency tier): one warni
     end
     if oldGh and oldGh.trigger then return oldGh.trigger(name, data) end
   end }
-  local hello = { type = 'hello', protocol = 4, format = 4, cells = 64, serverVersion = '0.4.0', sessionId = 's5',
+  local hello = { type = 'hello', overtureRelease = '2026-11-18.0', protocol = 4, format = 4, cells = 64, serverVersion = '0.4.0', sessionId = 's5',
     farFormat = 'cdae', material = 'bngEarthFar_v3', nearVisual = 'mesh', memoryTier = 'emergency',
     memoryNote = 'This computer has 4 GB of memory.' }
   serverSend(hello)
@@ -1131,7 +1131,7 @@ do -- a computer with too little memory (the server's emergency tier): one warni
   serverSend(hello)
   core.onUpdate(0.05, 0.05)
   T.check(#toasts == 1, 'the same server session: not again')
-  serverSend({ type = 'hello', protocol = 4, format = 4, cells = 64, serverVersion = '0.4.0', sessionId = 's6',
+  serverSend({ type = 'hello', overtureRelease = '2026-11-18.0', protocol = 4, format = 4, cells = 64, serverVersion = '0.4.0', sessionId = 's6',
     farFormat = 'cdae', material = 'bngEarthFar_v3', nearVisual = 'mesh', memoryTier = 'lean', memoryNote = 'x' })
   core.onUpdate(0.05, 0.05)
   T.check(#toasts == 1, 'the lean tier: no toast (the app window says it)')
@@ -1139,7 +1139,7 @@ do -- a computer with too little memory (the server's emergency tier): one warni
 end
 -- the settings page's "Restart world server": the hello comes at the main menu, a level starts (and ends) after it;
 -- the server's start-time settings and its restart capability outlive both (the user, 2026-11-15: no button)
-serverSend({ type = 'hello', protocol = 4, format = 4, cells = 64, serverVersion = '0.4.0', sessionId = 's99r',
+serverSend({ type = 'hello', overtureRelease = '2026-11-18.0', protocol = 4, format = 4, cells = 64, serverVersion = '0.4.0', sessionId = 's99r',
   farFormat = 'cdae', material = 'bngEarthFar_v3', nearVisual = 'mesh', restartable = true,
   startSettings = { groundGrid = '1', expAiTunnels = false }, startFixed = { 'serverCores' } })
 for _ = 1, 3 do core.onUpdate(0.05, 0.05) end

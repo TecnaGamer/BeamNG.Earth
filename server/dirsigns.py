@@ -26,6 +26,7 @@ import exitsigns
 import fast
 import dnp
 import mapcells
+import overture
 import roads
 import speedsigns
 import staging
@@ -68,7 +69,13 @@ def places():
         raw = f.read()
     if hashlib.sha256(raw).hexdigest() != PLACES_SHA256:
         raise ValueError("place snapshot checksum mismatch")
-    return Places(json.loads(gzip.decompress(raw)))
+    doc = json.loads(gzip.decompress(raw))
+    # (the switch file may name a newer Overture release than the snapshot's, overture.effective: the signs keep the
+    # bundled snapshot, one list for the whole world and pinned by this build (PLACES_SHA256, in the tiles' code key),
+    # so no two neighbouring boards read different lists; a town founded or renamed since waits for the next build)
+    if doc.get("release") != overture.effective():
+        log.info("dirsigns: place snapshot of Overture %s (the map data: %s)", doc.get("release"), overture.effective())
+    return Places(doc)
 
 
 @lru_cache(maxsize=1)

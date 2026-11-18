@@ -176,6 +176,11 @@ def main():
     import mpshare
     import plancache
     os.makedirs(a.cache, exist_ok=True)
+    # (the map data's Overture release, decided once as a player's app decides it, before the pool starts and before
+    # anything reads map data: its plans' expect is of it, and players of another release have another code: never
+    # mixed, overturepick.choose_for_process)
+    import overturepick
+    log.info("helper: Overture release %s", overturepick.choose_for_process(a.cache))
     plancache.start_run(a.cache)
     # (a cell whose lidar answer is late keeps the rule and its plans are not kept: wait for it, as bake_area does; the
     # items' codes are the bake expect's, without the build switches, so the players still match)

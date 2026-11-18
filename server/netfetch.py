@@ -595,6 +595,10 @@ class BadResponse(FetchFailed):
     """A 200 that is not the data (an HTML error page from a tile host)."""
 
 
+class TooLarge(BadResponse):
+    """A body past the caller's max_bytes (Fetcher.get), on the wire or decoded: not read further, not asked again."""
+
+
 @dataclass
 class Response:
     status: int
@@ -1058,8 +1062,15 @@ class HttpsTransport:
                                 headers.get("Range"))
                     conn.close()
                     return r.status, rh, b""
-                body = r.read()
+                cap = getattr(_body_cap, "n", None)
+                body = r.read() if cap is None else r.read(cap + 1)     # (Fetcher.get's max_bytes: one byte past)
+                if cap is not None and len(body) <= cap and r.length:
+                    # (a bounded read ends short at EOF without IncompleteRead: the declared length not met)
+                    raise http.client.IncompleteRead(body, r.length)
                 out = r.status, rh, body
+                if cap is not None and not r.isclosed():    # (the rest not read: the connection is not given back)
+                    conn.close()
+                    return out
             except (http.client.HTTPException, OSError):
                 conn.close()
                 if not reused:          # a fresh connection failed: that is the attempt's result (the
@@ -1075,27 +1086,32 @@ class HttpsTransport:
 
 GZIP_MAX_BYTES = 256 * 1024 * 1024    # a gzip answer decoded to more than this is a failed attempt (a gzip bomb)
 _ENCODED = ("content-encoding", "content-length")     # (describe the bytes on the wire, not the decoded body)
+_body_cap = threading.local()   # n: the bytes past which the transport stops reading a body (Fetcher.get max_bytes)
 
 
-def _gunzip(rh, body):
+class _GzipTooLarge(OSError):
+    """_gunzip: the body decodes past its limit."""
+
+
+def _gunzip(rh, body, limit=GZIP_MAX_BYTES):
     """(headers, body) decoded when the answer says Content-Encoding: gzip (a request of ours that asked for it), else
-    as they came. Every member of a multi-member stream (RFC 1952) is decoded. A broken or truncated stream, or one that
-    decodes past GZIP_MAX_BYTES in all, raises OSError (a failed attempt, retried as one)."""
+    as they came. Every member of a multi-member stream (RFC 1952) is decoded. A broken or truncated stream raises
+    OSError (a failed attempt, retried as one); one that decodes past limit bytes in all _GzipTooLarge (an OSError)."""
     rh = rh or {}
     if not body or rh.get("content-encoding", "").strip().lower() != "gzip":
         return rh, body
     out, rest = [], body
-    room = GZIP_MAX_BYTES
+    room = limit
     while rest:
         if room <= 0:       # (max_length 0 would mean no limit)
-            raise OSError(f"gzip body decodes past {GZIP_MAX_BYTES >> 20} MB")
+            raise _GzipTooLarge(f"gzip body decodes past {limit} bytes")
         d = zlib.decompressobj(16 + zlib.MAX_WBITS)
         try:
             part = d.decompress(rest, room)
         except zlib.error as e:
             raise OSError(f"bad gzip body: {e}") from None
         if d.unconsumed_tail:
-            raise OSError(f"gzip body decodes past {GZIP_MAX_BYTES >> 20} MB")
+            raise _GzipTooLarge(f"gzip body decodes past {limit} bytes")
         if not d.eof:
             raise OSError("bad gzip body: truncated")
         out.append(part)
@@ -1710,20 +1726,22 @@ class Fetcher:
         with self._rng_lock:
             return self.rng.uniform(0.0, min(p.max_delay, p.base_delay * 2 ** attempt))
 
-    def get(self, url, *, kind="demand", headers=None, lane=None):
+    def get(self, url, *, kind="demand", headers=None, lane=None, max_bytes=None):
         """GET url under its host's policy: a Response with status 2xx, or one of the errors above. lane: a name of
         its own (its own rate bucket, breaker and day's count under the host's policy): one kind of request whose
-        failures must not shut another out (the status bar's town lookups and the map's search, GitHub #350)."""
+        failures must not shut another out (the status bar's town lookups and the map's search, GitHub #350).
+        max_bytes: a body longer than this, on the wire or decoded, raises TooLarge (no more than one byte past it is
+        read; a small document from a host we do not control: the switch file)."""
         if kind != "predownload":
-            return self._get(url, kind, headers, lane)
+            return self._get(url, kind, headers, lane, max_bytes)
         prev = getattr(_quiet, "on", False)
         _quiet.on = True        # (its failures mark no build incomplete: revisit.fault)
         try:
-            return self._get(url, kind, headers, lane)
+            return self._get(url, kind, headers, lane, max_bytes)
         finally:
             _quiet.on = prev
 
-    def _get(self, url, kind, headers, lane):
+    def _get(self, url, kind, headers, lane, max_bytes=None):
         h, probe = self._admit(url, kind, lane)
         p = h.policy
         attempts = 1 if probe else max(1, p.max_attempts)
@@ -1756,12 +1774,29 @@ class Fetcher:
                     netstate.begin(h.name)  # (the loading line's "downloading" part, across the server's processes)
                     body = wire = None        # (wire: as it came, before _gunzip; what the counters count)
                     try:
-                        status, rh, body = ioprofiler.request(
-                            self.transport, url, hd,
-                            p.timeout if p.connect_timeout is None else (p.connect_timeout, p.timeout))
+                        _body_cap.n = max_bytes
+                        try:
+                            status, rh, body = ioprofiler.request(
+                                self.transport, url, hd,
+                                p.timeout if p.connect_timeout is None else (p.connect_timeout, p.timeout))
+                        finally:
+                            _body_cap.n = None
                         wire = body
+                        if max_bytes is not None and len(wire or b"") > max_bytes:
+                            raise TooLarge(f"{url}: body past {max_bytes} bytes", url, h.name, status=status)
                         if gz:
-                            rh, body = _gunzip(rh, body)
+                            rh, body = _gunzip(rh, body, GZIP_MAX_BYTES if max_bytes is None else max_bytes)
+                    except TooLarge:
+                        self._count(h, "errors")
+                        raise
+                    except _GzipTooLarge as e:
+                        self._count(h, "errors")
+                        if max_bytes is None:       # (a gzip bomb: a failed attempt, as before)
+                            self._failed(h, gate)
+                            probe = False
+                            err = FetchFailed(f"{url}: {type(e).__name__}: {e}", url, h.name)
+                            continue
+                        raise TooLarge(f"{url}: {e}", url, h.name, status=status) from None
                     except (http.client.HTTPException, OSError) as e:
                         self._count(h, "errors")
                         self._failed(h, gate)

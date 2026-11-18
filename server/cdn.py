@@ -27,24 +27,29 @@ built and signed by the project's builder for each release); BNGE_DECISIONS=on /
 measures in the USGS 3DEP point clouds, built and signed by the project's builder); BNGE_LIDARZ=on / off overrides
 the switch.
 
+"overture" ({"overture": {"release": "2026-12-16.0"}}): the Overture release the map data is read from instead of the
+build's own (overture.RELEASE), once the project's pipeline has built its products. Not read here: the server's
+supervisor decides it once per app session (overturepick.Pick: listed in Overture's STAC catalogue, a schema this
+build reads, one short deadline) and hands it to every server it starts (overturepick.RELEASE_ENV). The switch file
+is not signed: the most an edit of it can do is pick a release Overture lists, of a schema this build reads.
+
 "dem" / "bngmt": Mapterhorn's z0-12 elevation tiles repacked (dem.MT_CDN_*, the data repo's dem workflow), the release
 the packs were built from; the server's BNGE_DEM_CDN (a release, or "off") overrides it.
 """
-import json
 import logging
 import os
 import time
 
 import aerialpacks as aerialpacksmod
 import imagery as imagerymod
+import overturepick
 
 log = logging.getLogger("earthd.cdn")
 
 CDN_BASE = imagerymod.CDN_BASE
 # (in the data repo itself, read raw: a commit flips it for everyone within ~an hour, no site rebuild)
-SWITCH_URL = os.environ.get("BNGE_CDN_SWITCH",
-                            "https://raw.githubusercontent.com/TecnaGamer/BeamNG.Earth-data/main/cdn.json")
-SWITCH_TTL_S = 3600.0
+SWITCH_URL = overturepick.SWITCH_URL     # (BNGE_CDN_SWITCH, else the data repo's cdn.json)
+SWITCH_TTL_S = overturepick.SWITCH_TTL_S
 CDN_HOST = CDN_BASE.split("://", 1)[-1].split("/", 1)[0]
 S2 = imagerymod.SOURCES["bngs2"]
 BEFORE = "usgs"             # the chain position: ahead of this source (after the regional and NAIP ones)
@@ -54,28 +59,23 @@ def switch(fetcher, cache_dir):
     """The switch file's dict (from the net at most every SWITCH_TTL_S, else the copy on disk), {} when unknown."""
     path = os.path.join(cache_dir, "cdn", "cdn.json")
     try:
-        if time.time() - os.path.getmtime(path) < SWITCH_TTL_S:
-            with open(path) as fh:
-                return json.load(fh)
-    except (OSError, ValueError):
-        pass
+        fresh = time.time() - os.path.getmtime(path) < SWITCH_TTL_S
+    except OSError:
+        fresh = False
+    doc = overturepick.read_switch_file(path) if fresh else None    # (past SWITCH_MAX_BYTES: not read)
+    if doc is not None:
+        return doc
     try:
-        body = fetcher.get(SWITCH_URL, kind="demand").body
-        doc = json.loads(body)
-        if not isinstance(doc, dict):
-            raise ValueError("not an object")
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path + ".tmp", "w") as fh:
-            json.dump(doc, fh)
-        os.replace(path + ".tmp", path)
+        # (no more than SWITCH_MAX_BYTES read, on the wire and decoded: netfetch.TooLarge)
+        doc = overturepick.get_switch(
+            lambda url: fetcher.get(url, kind="demand", max_bytes=overturepick.SWITCH_MAX_BYTES).body)
+        if doc is None:
+            raise ValueError(f"not an object of at most {overturepick.SWITCH_MAX_BYTES} bytes")
+        overturepick.keep_switch(path, doc)     # (whole, a writer-unique temporary name: the app's pick writes it too)
         return doc
     except Exception as e:          # (offline, not there yet: the original sources)
         log.info("cdn: no switch file (%s: %s): off", type(e).__name__, e)
-        try:
-            with open(path) as fh:
-                return json.load(fh)
-        except (OSError, ValueError):
-            return {}
+        return overturepick.read_switch_file(path) or {}
 
 
 AER = "bngaer"
