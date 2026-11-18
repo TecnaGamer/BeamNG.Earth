@@ -1643,13 +1643,16 @@ def _crossing_pool(frame, cells, box, reach):
 
 
 FIT_SMOOTH_N = 10            # points (STEP_M) either side the natural ground is averaged over where the lattice has no bed
+FIT_GAP_M = 40.0            # m: a lattice gap this short or shorter, between two points it has, is filled between them
+                            # (any point within XING_RUN_MAX_M + its reach of a tile then has both inside the tile's
+                            # REACH_M window); a longer one, or one running to the part's end, on the natural ground
 
 
 def _beds_fit(frame, rails, ground, nat, underpasses, load=None, elev=None):
     """BNE_RAIL_ROAD_FIT: _beds with a ground track's points railprofile's lattice has no bed for laid from what does not
-    change with the asking tile: across a gap between points it has, linearly along the part from the two (_fill_gaps:
-    an approach's lift kept), past its last one held level, and a part it has nothing of on the natural ground (nat)
-    averaged FIT_SMOOTH_N points either side along the part (_smooth_ground); not railways.profile in the tile's window
+    change with the asking tile: across a short gap (FIT_GAP_M) between points it has, linearly along the part from the
+    two (_fill_gaps: an approach's lift kept), any other on the natural ground (nat) averaged FIT_SMOOTH_N points either
+    side along the part (_smooth_ground); not railways.profile in the tile's window
     (graded within GRADED_NEAR_M of the asking tile, natural past it): the bed the mesh draws and the crossing records
     test, the same whichever tile asks. Bridges, tunnels and trams as _beds lays them (their clearances, portal grades
     and decks), and without the lattice at all (BNE_RAIL_PROFILE off, no load or elevation) _beds for every part."""
@@ -1669,34 +1672,32 @@ def _beds_fit(frame, rails, ground, nat, underpasses, load=None, elev=None):
                 if old is None:         # (_beds' own: the lattice where it has the point, profile's past it)
                     old = _beds(frame, rails, ground, underpasses, load, elev)
                 z = np.asarray(old[n][0], np.float64)
-            elif np.isfinite(z).any():
-                z = _fill_gaps(xy, z)
             else:
-                z = _smooth_ground(xy, nat)
+                z = _fill_gaps(xy, z, nat)
         out.append((z, np.asarray(ground(xy), np.float64)))
     return out
 
 
-def _fill_gaps(xy, z):
-    """z (n,) with its NaN runs filled along the part (xy (n, 2)): between two finite points linearly by the arc from the
-    first (each section's length summed from it, the same wherever the part was clipped), past the last finite point
-    held at it. Pure."""
+def _fill_gaps(xy, z, nat):
+    """z (n,) with its NaN runs filled along the part (xy (n, 2)): a run between two finite points whose arc between them
+    is FIT_GAP_M or less linearly by the arc from the first (each section's length summed from it); any other run (longer,
+    or reaching the part's clipped end, where a tile cannot see its far point) from the natural ground averaged along the
+    part (_smooth_ground). The same at a point wherever the part was clipped, for every point within REACH_M -
+    FIT_GAP_M of the clip's ends. Pure given nat."""
     xy = np.asarray(xy, np.float64)[:, :2]
     z = np.array(z, np.float64)
-    fin = np.isfinite(z)
-    idx = np.flatnonzero(~fin)
+    idx = np.flatnonzero(~np.isfinite(z))
     seg = dnp.hypot(*np.diff(xy, axis=0).T)
+    smooth = None
     for run in np.split(idx, np.flatnonzero(np.diff(idx) > 1) + 1) if len(idx) else []:
         a, b = int(run[0]) - 1, int(run[-1]) + 1
-        if a < 0 and b >= len(z):
-            continue
-        if a < 0:
-            z[run] = z[b]
-        elif b >= len(z):
-            z[run] = z[a]
-        else:
-            s = np.cumsum(seg[a:b])         # (from point a: sections a..b-1)
+        s = np.cumsum(seg[a:b]) if a >= 0 and b < len(z) else None       # (from point a: sections a..b-1)
+        if s is not None and s[-1] <= FIT_GAP_M:
             z[run] = z[a] + (z[b] - z[a]) * (s[:-1] / s[-1] if s[-1] > 0.0 else 0.0)
+        else:
+            if smooth is None:
+                smooth = _smooth_ground(xy, nat)
+            z[run] = smooth[run]
     return z
 
 

@@ -1789,20 +1789,20 @@ class RoadFitTest(unittest.TestCase):
         road under it became a level crossing). Bridges, tunnels and trams keep _beds' own; a ground part's gap is filled
         between the lattice's points either side."""
         lattice_kw = {"load": lambda k: None, "bed_elev": lambda la, lo: la * 0.0}
-        # (a raised approach: the lattice's ramp 4 m up at x 120, its points 100..140 missing; a road under it there)
+        # (a raised approach: the lattice's ramp 4 m up at x 120, its points 106..134 missing; a road under it there)
         f = features([[(-100.0, 100.0), (400.0, 100.0)], [(120.0, 0.0), (120.0, 250.0)]], ["standard_gauge", "secondary"],
                      subtypes=["rail", "road"])
 
         def ramp(q):
             return 10.0 + np.clip(4.0 - np.abs(q[:, 0] - 120.0) * 0.02, 0.0, None)
-        with self.lattice(lambda q: np.abs(q[:, 0] - 120.0) < 20.0, ramp), \
+        with self.lattice(lambda q: np.abs(q[:, 0] - 120.0) < 14.0, ramp), \
                 unittest.mock.patch.object(railways, "RAIL_ROAD_FIT", True):
             rec = railways.crossing_records(FRAME, 0, 0, [f], flat, far_ground=flat, **lattice_kw)
             mesh = railways.tile_mesh(FRAME, 0, 0, [f], flat, far_ground=flat, records=rec, **lattice_kw)
         (xy, zb, r), = [(xy, zb, r) for (fid, _c, _k, xy), (zb, _zg), r in zip(rec["rails"], rec["prof"], rec["runs"])
                         if fid == "id000"]
-        gap = np.abs(xy[:, 0] - 120.0) < 20.0
-        self.assertGreater(float(zb[gap].min()), 13.0, "the approach's lift kept across the missing stretch")
+        gap = np.abs(xy[:, 0] - 120.0) < 14.0            # (28 m: under FIT_GAP_M)
+        self.assertGreater(float(zb[gap].min()), 13.5, "the approach's lift kept across the missing stretch")
         self.assertIsNone(r, "the road 3.6 m under the approach: no crossing")
         self.assertIsNotNone(mesh)
         # (a tram bridge: no lattice bed at all; _beds' own, its deck as railways.profile lays it)
@@ -1816,9 +1816,43 @@ class RoadFitTest(unittest.TestCase):
             np.testing.assert_array_equal(zb, zw)
 
     def test_a_lattice_gap_is_filled_the_same_wherever_the_part_is_clipped(self):
-        line = np.c_[np.arange(0.0, 400.0, railways.STEP_M), np.full(200, 0.0)]
+        """Codex on 81d8a18f: a gap's fill depended on whether the tile's clip held both its ends (one tile interpolated,
+        the next held the one end it saw). A gap of FIT_GAP_M or less is filled between its ends (both inside every
+        clip that draws near it), any other, or one running to the clip's end, on the natural ground: the same at
+        every point in both clips but within FIT_GAP_M of their ends."""
+        def hilly(q):
+            q = np.asarray(q, np.float64).reshape(-1, 2)
+            return 10.0 + 2.0 * np.sin(q[:, 0] / 23.0)
+        line = np.c_[np.arange(0.0, 800.0, railways.STEP_M), np.full(400, 0.0)]
         z = 10.0 + 0.03 * line[:, 0]
-        z[90:110] = np.nan
-        a, b = railways._fill_gaps(line[:150], z[:150]), railways._fill_gaps(line[50:], z[50:])
-        np.testing.assert_array_equal(a[50:150], b[:100])
-        np.testing.assert_allclose(a[90:110], 10.0 + 0.03 * line[90:110, 0], atol=1e-9)
+        z[90:100] = np.nan                                  # (18 m: filled between its ends)
+        z[200:300] = np.nan                                 # (200 m: the natural ground)
+        for lo, hi in ((0, 260), (150, 400), (0, 400), (230, 400)):     # (clips holding one, both or no end of it)
+            got = railways._fill_gaps(line[lo:hi], z[lo:hi], hilly)
+            full = railways._fill_gaps(line, z, hilly)
+            n = int(railways.FIT_GAP_M / railways.STEP_M) + railways.FIT_SMOOTH_N
+            inner = slice(n if lo else 0, (hi - lo) - n if hi < 400 else hi - lo)
+            np.testing.assert_array_equal(got[inner], full[lo:hi][inner], f"clip {lo}..{hi}")
+        full = railways._fill_gaps(line, z, hilly)
+        np.testing.assert_allclose(full[90:100], 10.0 + 0.03 * line[90:100, 0], atol=1e-9)
+        np.testing.assert_array_equal(full[200:300], railways._smooth_ground(line, hilly)[200:300])
+
+    def test_a_lattice_gap_across_the_seam_is_the_same_bed_in_both_tiles(self):
+        """Codex on 81d8a18f: a lattice gap across the seam whose far end lay outside one tile's window was held at its
+        near end there and interpolated in the next tile. Both tiles lay the same bed near the seam."""
+        f = features([[(-300.0, 100.0), (900.0, 100.0)]], ["standard_gauge"], subtypes=["rail"])
+        kw = {"load": lambda k: None, "bed_elev": lambda la, lo: la * 0.0}
+
+        def ramp(q):
+            return 10.0 + 0.02 * q[:, 0]
+        beds = []
+        for tx in (0, 1):
+            with self.lattice(lambda q: (q[:, 0] > 200.0) & (q[:, 0] < 470.0), ramp), \
+                    unittest.mock.patch.object(railways, "RAIL_ROAD_FIT", True):
+                rec = railways.crossing_records(FRAME, tx, 0, [f], flat, far_ground=flat, **kw)
+            (xy, zb), = [(xy, zb) for (fid, _c, _k, xy), (zb, _g) in zip(rec["rails"], rec["prof"]) if fid == "id000"]
+            near = np.abs(xy[:, 0] - 256.0) < 40.0
+            beds.append(dict(zip(np.round(xy[near, 0], 3).tolist(), zb[near].tolist())))
+        shared = sorted(set(beds[0]) & set(beds[1]))
+        self.assertTrue(shared)
+        self.assertEqual([beds[0][x] for x in shared], [beds[1][x] for x in shared])
