@@ -160,6 +160,47 @@ dm_scalar2!(dm_atan2 => libm::atan2, dm_pow => libm::pow, dm_hypot => libm::hypo
 
 const LIKELY_IN_CACHE_SIZE: usize = 8;
 
+// The NaN a result carries, as x86's SSE arithmetic (numpy's x86 wheels) makes it on every CPU: the first operand's when
+// it is a NaN, else the second's (quieted), else the "default NaN" of an invalid operation (inf - inf, 0 * inf), whose
+// sign is set on x86 (0xFFF8...) and clear on ARM. Which operand is first is numpy's compiled code's order (GCC put the
+// difference before the slope in the product: found on raw bits, tests/test_determinism.py). LLVM may swap a commutative
+// operation's operands and an ARM CPU makes the other default NaN: the NaN is chosen here instead.
+const X86_DEFAULT_NAN: u64 = 0xFFF8_0000_0000_0000;
+
+#[inline]
+fn x86_nan(r: f64, a: f64, b: f64) -> f64 {
+    if !r.is_nan() {
+        r
+    } else if a.is_nan() {
+        f64::from_bits(a.to_bits() | 0x0008_0000_0000_0000)
+    } else if b.is_nan() {
+        f64::from_bits(b.to_bits() | 0x0008_0000_0000_0000)
+    } else {
+        f64::from_bits(X86_DEFAULT_NAN)
+    }
+}
+
+#[inline]
+fn xsub(a: f64, b: f64) -> f64 { x86_nan(a - b, a, b) }
+#[inline]
+fn xdiv(a: f64, b: f64) -> f64 { x86_nan(a / b, a, b) }
+#[inline]
+fn xmul(a: f64, b: f64) -> f64 { x86_nan(a * b, a, b) }
+#[inline]
+fn xadd(a: f64, b: f64) -> f64 { x86_nan(a + b, a, b) }
+
+/// numpy's slope (dy[i+1] - dy[i]) / (dx[i+1] - dx[i]) and value slope * (x - dx[j]) + dy[j], NaNs as numpy's x86 code
+/// makes them (x86_nan; its product's operands in its order).
+#[inline]
+fn slope_of(fp: &[f64], xp: &[f64], i: usize) -> f64 {
+    xdiv(xsub(fp[i + 1], fp[i]), xsub(xp[i + 1], xp[i]))
+}
+
+#[inline]
+fn along(slope: f64, v: f64, x0: f64, y0: f64) -> f64 {
+    xadd(xmul(xsub(v, x0), slope), y0)
+}
+
 /// numpy's binary_search_with_guess: the index j of arr's bracket of key (arr[j] <= key < arr[j + 1] for a sorted
 /// arr), -1 left of arr[0], len right of arr[len - 1]; guess: the last answer (numpy's order of probes kept, so that an
 /// unsorted or NaN-holding arr gives numpy's answer too).
@@ -229,7 +270,7 @@ pub fn interp(x: &[f64], xp: &[f64], fp: &[f64], left: Option<f64>, right: Optio
     }
     // (numpy keeps the slopes when there are no more of them than points; the same division either way)
     let slopes: Option<Vec<f64>> = if n <= x.len() {
-        Some((0..n - 1).map(|i| (fp[i + 1] - fp[i]) / (xp[i + 1] - xp[i])).collect())
+        Some((0..n - 1).map(|i| slope_of(fp, xp, i)).collect())
     } else {
         None
     };
@@ -254,11 +295,11 @@ pub fn interp(x: &[f64], xp: &[f64], fp: &[f64], left: Option<f64>, right: Optio
             } else {
                 let slope = match &slopes {
                     Some(s) => s[k],
-                    None => (fp[k + 1] - fp[k]) / (xp[k + 1] - xp[k]),
+                    None => slope_of(fp, xp, k),
                 };
-                let mut r = slope * (v - xp[k]) + fp[k];
+                let mut r = along(slope, v, xp[k], fp[k]);
                 if r.is_nan() {         // (numpy: a NaN one way, the other way; still NaN on a level stretch: fp)
-                    r = slope * (v - xp[k + 1]) + fp[k + 1];
+                    r = along(slope, v, xp[k + 1], fp[k + 1]);
                     if r.is_nan() && fp[k] == fp[k + 1] {
                         r = fp[k];
                     }
@@ -497,6 +538,11 @@ mod tests {
         assert_eq!(r[3], 0.8);
         assert!(r[4].is_nan());
         let slope = (0.8f64 - 0.7) / (1.0 - 0.0);
-        assert_eq!(r[0].to_bits(), (slope * 0.3 + 0.7).to_bits());
+        assert_eq!(r[0].to_bits(), (0.3 * slope + 0.7).to_bits());
+        // (an invalid operation's NaN is x86's default, on every CPU: inf - inf in the slope)
+        let n = super::interp(&[1.0], &[0.0, 2.0], &[f64::INFINITY, f64::INFINITY], None, None);
+        assert_eq!(n[0].to_bits(), f64::INFINITY.to_bits());
+        let n = super::interp(&[1.0], &[0.0, 2.0], &[-f64::INFINITY, f64::INFINITY], None, None);
+        assert_eq!(n[0].to_bits(), 0xFFF8_0000_0000_0000);
     }
 }

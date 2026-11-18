@@ -225,11 +225,51 @@ class DeterministicMathsTest(unittest.TestCase):
                          ((0.5, [0, 1], [0, 1]), {"period": 2.0}), ((0.5, [0, 1], [0, 1]), {"left": 1j}),
                          ((np.longdouble(0.5), [0, 1], [0, 1]), {}), (("a", [0, 1], [0, 1]), {}),
                          ((0.5, np.array([0, 1], object), [0, 1]), {}), ((0.5, [0, 1], [0, 1]), {"right": [1, 2]})):
+            if isinstance(args[0], np.longdouble) and np.dtype(np.longdouble).itemsize <= 8:
+                continue        # (Windows, macOS arm64: long double is float64 itself)
             with self.assertRaises(TypeError, msg=(args, kw)):
                 dnp.interp(*args, **kw)
         for x in (True, 1, np.float32(0.25), np.int64(1), np.array([0, 1], np.uint8), np.float16(0.5)):
             self.assertEqual(np.asarray(dnp.interp(x, [0, 2], [1, 5])).tobytes(),
                              np.asarray(np.interp(x, [0, 2], [1, 5])).tobytes())  # det-ok: the reference
+
+    def test_interp_nan_bits(self):
+        """NaN results carry numpy's x86 bits on every CPU (raw-bit comparisons): the first NaN operand's payload in
+        numpy's operand order, x86's default NaN (sign set) for an invalid operation; ARM's default NaN has it clear."""
+        import struct
+
+        def f(u):
+            return struct.unpack("<d", struct.pack("<Q", u))[0]
+
+        def bits(a):
+            return [hex(v) for v in np.asarray(a, np.float64).view(np.uint64).ravel()]
+        tag = lambda t, neg=False: f((0xFFF8000000000000 if neg else 0x7FF8000000000000) | t)  # noqa: E731
+        inf = np.inf
+        fixed = [   # (x, xp, fp, bits: numpy 2.5.4's x86 wheel)
+            ([1.0], [0.0, np.nan], [-inf, np.nan], ["0x7ff8000000000000"]),
+            ([1.0], [0.0, 2.0], [-inf, inf], ["0xfff8000000000000"]),     # (inf * 1 - inf: x86's default NaN)
+            ([1.0], [0.0, 2.0], [inf, -inf], ["0xfff8000000000000"]),
+            ([1.0], [0.0, 2.0], [tag(3, True), 7.0], ["0xfff8000000000003"]),
+            ([1.0], [tag(1), 2.0], [5.0, tag(4)], ["0x7ff8000000000004"]),
+            ([1.0, 1.0, 1.0], [tag(1), 2.0], [5.0, tag(4)], ["0x7ff8000000000004"] * 3),     # (the kept slopes)
+        ]
+        for x, xp, fp, want in fixed:
+            self.assertEqual(bits(dnp.interp(x, xp, fp)), want, (x, xp, fp))
+        import platform
+        if platform.machine().lower() not in ("x86_64", "amd64"):
+            return
+        rng = np.random.default_rng(5)
+        for _ in range(3000):       # (x86: against numpy itself, tagged NaNs and infinities anywhere)
+            n = int(rng.integers(1, 9))
+            xp = np.sort(rng.integers(-4, 4, n).astype(float))
+            fp = rng.integers(-3, 3, n).astype(float)
+            for arr in (xp, fp):
+                for _k in range(int(rng.integers(0, 3))):
+                    arr[rng.integers(0, n)] = rng.choice([inf, -inf, tag(int(rng.integers(1, 99))),
+                                                          tag(int(rng.integers(1, 99)), True)])
+            x = np.r_[rng.integers(-5, 5, int(rng.integers(1, 12))) * 0.5, inf, -inf]
+            self.assertEqual(bits(dnp.interp(x, xp, fp)), bits(np.interp(x, xp, fp)),  # det-ok: the reference
+                             (x, xp, fp))
 
     @staticmethod
     def _interp_ref(x, xp, fp, left=None, right=None):
