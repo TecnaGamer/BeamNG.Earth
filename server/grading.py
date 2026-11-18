@@ -4954,6 +4954,7 @@ class _Planner:
         mouths = {fid: arches[fid][1] for fid, *_r in parts if arches[fid][1] is not None}
         rs = roadsmod.road_specs(feats, None, self.widths)
         spec_of = {str(feats.ids[i]): rs[i] for i in range(len(feats)) if rs[i] is not None}
+        low_arches = roadsmod.arch_parts(parts, heights, mouths)      # (the same arches for every plan and offset)
         # (not over its own tunnel: the ground parts of the arches' own roads, part ids "<feature>.<n>#<section>")
         mine = {fid.rsplit("#", 1)[0].rsplit(".", 1)[0] for fid, *_r in parts}
         specs, lows, hold = [], [], {}
@@ -4961,23 +4962,26 @@ class _Planner:
             sp = spec_of.get(str(fid))          # (a road's own plan: its feature's id; flanks, corners, beds are not)
             lo = None
             if sp is not None and str(fid) not in mine:
-                lo = _cover_under(p, lambda x, y: roadsmod.arch_raise(parts, heights, x, y, np.full(len(x), -np.inf),
-                                                                      mouths))
-                short = np.asarray(p.z, np.float64) < lo - roadlaws.MIN_MOVE_M
-                if not np.isfinite(lo).any():
-                    lo = None
-                elif short.any():
-                    # (free only as far as its laws need to climb onto the cover and back to any grade they allow: a
-                    # sag and a crest for the rise, a curve from its steepest grade, roadlaws.laws; held beyond, its
-                    # junctions and the passes' work there as they were, and its ends: a cell's edge)
-                    xy = np.asarray(p.xy, np.float64)[:, :2]
-                    s = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(xy, axis=0).T))]
-                    g, rad = roadlaws.laws(sp)
-                    rise = float(np.max(lo[short] - np.asarray(p.z, np.float64)[short]))
-                    w = 2.0 * math.sqrt(rad * rise) + rad * g + roadlaws.STEP_M
-                    h = (s < s[short].min() - w) | (s > s[short].max() + w)
-                    h[[0, -1]] = True
-                    hold[n] = h
+                # (only the arches within the cover's reach of the road: it reads the ground half its width either side;
+                # a road with none has no cover under it)
+                near = roadsmod.arches_near(low_arches, np.asarray(p.xy, np.float64), float(p.half) + 1.0)
+                if near:
+                    lo = _cover_under(p, lambda x, y: roadsmod.arch_raise_over(near, x, y, np.full(len(x), -np.inf)))
+                    short = np.asarray(p.z, np.float64) < lo - roadlaws.MIN_MOVE_M
+                    if not np.isfinite(lo).any():
+                        lo = None
+                    elif short.any():
+                        # (free only as far as its laws need to climb onto the cover and back to any grade they allow: a
+                        # sag and a crest for the rise, a curve from its steepest grade, roadlaws.laws; held beyond, its
+                        # junctions and the passes' work there as they were, and its ends: a cell's edge)
+                        xy = np.asarray(p.xy, np.float64)[:, :2]
+                        s = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(xy, axis=0).T))]
+                        g, rad = roadlaws.laws(sp)
+                        rise = float(np.max(lo[short] - np.asarray(p.z, np.float64)[short]))
+                        w = 2.0 * math.sqrt(rad * rise) + rad * g + roadlaws.STEP_M
+                        h = (s < s[short].min() - w) | (s > s[short].max() + w)
+                        h[[0, -1]] = True
+                        hold[n] = h
             specs.append(sp)
             lows.append(lo)
         if not hold:
@@ -7595,12 +7599,15 @@ def _cover_under(p, cover):
     for off in np.linspace(-half, half, 2 * k + 1):
         q = at + off * nrm
         cv = np.maximum(cv, np.asarray(cover(q[:, 0], q[:, 1]), np.float64))
-    out = np.full(n, -np.inf)
-    for i in range(n):
-        w = (fine >= s[max(i - 1, 0)] - 1e-9) & (fine <= s[min(i + 1, n - 1)] + 1e-9)
-        if w.any():
-            out[i] = float(cv[w].max())
-    return out
+    # (each point's neighbours' span is a run of the ascending `fine`: its ends by search, the maxima of the runs in one
+    # pass, not a mask over all of fine for every point: 4 CPU-s of a replay of 27 junctions)
+    i = np.arange(n)
+    lo = np.searchsorted(fine, s[np.maximum(i - 1, 0)] - 1e-9, "left")
+    hi = np.searchsorted(fine, s[np.minimum(i + 1, n - 1)] + 1e-9, "right")
+    ends = np.empty(2 * n, np.int64)
+    ends[0::2], ends[1::2] = lo, hi
+    top = np.maximum.reduceat(np.append(cv, -np.inf), ends)[0::2]      # (the appended -inf: a run may end at fine's end)
+    return np.where(lo < hi, top, -np.inf)
 
 
 def mapped_plan(p, fn):
