@@ -1184,6 +1184,13 @@ def main():
         sys.path.insert(0, here)
     cache = _refuse_player_cache(a.cache)
     t0 = time.time()
+    try:
+        # (BNE_DECK_STRUCT=shadow: the published chains' JSONs also when their solve read something short, marked:
+        # an offline seed without the sea's bathymetry makes every coastal chain short, structures.ACCEPT_SHORT)
+        import structures
+        structures.ACCEPT_SHORT = True
+    except ImportError:             # (a server tree from before RS)
+        pass
     inp = collect(a.lat, a.lon, a.r, cache, a.offline)
     frame = inp["frame"]
 
@@ -1206,6 +1213,16 @@ def main():
             json.dump({"wall_s": round(time.time() - t0, 1), "cpu_s": round(ru.ru_utime + ru.ru_stime, 1),
                        "max_rss_mb": round(ru.ru_maxrss / 1024.0)}, f, sort_keys=True)
             f.write("\n")
+    st = sys.modules.get("structures")
+    if st is not None:      # (BNE_DECK_STRUCT=shadow: the chain JSONs its background writer still holds)
+        drained = st.flush(120.0)
+        if st.SHADOW:
+            print("structures:", " ".join(f"{k} {v}" for k, v in sorted(st.STATS.items())))
+        if not drained or st.STATS.get("dropped") or st.STATS.get("failed"):
+            # (the chain JSONs are incomplete: a failed run, never one scored as whole; Codex review)
+            print("structures: the writer did not finish every chain: incomplete", flush=True)
+            sys.stdout.flush()
+            os._exit(3)
     sys.stdout.flush()
     sys.stderr.flush()
     # (the server's fetch / warm threads can keep the interpreter alive after the work: Tsing Ma's run sat 7 min at

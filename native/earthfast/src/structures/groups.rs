@@ -1,4 +1,6 @@
-//! structure_groups (earthfast 480, road revamp RS step S1): which decks of one bridge chain form one structure.
+//! structure_groups (earthfast 480, road revamp RS step S1; 481 step S2a): which decks of one bridge chain form one
+//! structure. structure_touch (481): the pairs a chain's closure must hold so every structure edge lies inside one
+//! chain (one owner per structure).
 //!
 //! Union-find over the members in their given order (the caller's sorted keys; the smaller index is the root), on
 //! footprints quantised to 1 mm, with the design's edge table ("Grouping"). Per unordered pair the first edge kind of
@@ -20,9 +22,14 @@
 //! Never a union (S0's design changes), recorded as a data conflict instead where the geometry and the height limit
 //! held: two members of different OSM levels (a HARD rule: Queensboro's, Fort Pitt's, Brisbane's and Lower Wacker's
 //! decks stand ~1 m apart in the game where they cross, so the height limits alone joined them), a walkway with a road,
-//! rail with road, a tunnel with anything, a member outside the chain (no height of its own: "outside", the chain's
-//! closure missed it). One OSM level whose decks meet a geometry test farther apart than CONFLICT_DZ is a data conflict
-//! too. Pairs whose geometry held but not the height limit are listed as rejected.
+//! rail with road, a tunnel with anything. A member outside the chain (no height of its own) that could be one
+//! structure with a chain member (every never-rule passes, the geometry holds) is an "outside" conflict: the chain's
+//! closure missed it (S2a: structure_touch closes it). One OSM level whose decks meet a geometry test farther apart
+//! than CONFLICT_DZ is a data conflict too. Pairs whose geometry held but not the height limit are listed as rejected.
+//!
+//! Members are unique (S2a): a member of the same OSM way, kind and line as an earlier one (each vertex within DUP_M
+//! of the other's line, both ways; one way kept under two part keys by two cells' copies, San Diego's c54ad200) is
+//! that one's duplicate: in its group, in no test.
 //!
 //! Deterministic: basic IEEE operations and sqrt only (angles by their tangents, no libm, no FMA), BTreeMaps, every
 //! loop in index order; a nearest segment's tie goes to the lower segment index.
@@ -39,14 +46,14 @@ pub const OVERLAP_ALONG: u8 = 2;
 pub const OVERLAP_CROSS: u8 = 3;
 pub const BESIDE: u8 = 4;
 pub const BESIDE_OUTLINE: u8 = 5;
-// member kinds (structures.py's ROAD ... OUTSIDE; a road and a walkway are told apart by kind != kind alone)
+// member kinds (structures.py's ROAD ... TUNNEL; a road and a walkway are told apart by kind != kind alone); a part
+// near the chain but not in it (its height not solved here) is flagged outside (Member::outside), its own kind kept
 #[allow(dead_code)]
 pub const ROAD: i64 = 0;
 #[allow(dead_code)]
 pub const WALK: i64 = 1;
 pub const RAIL: i64 = 2;
 pub const TUNNEL: i64 = 3;
-pub const OUTSIDE: i64 = 4;        // a part near the chain but not in it (its height not solved here)
 // data conflict reasons
 pub const C_LEVEL: u8 = 0;
 pub const C_DZ: u8 = 1;
@@ -69,6 +76,7 @@ pub const OUTLINE_GAP_M: f64 = 6.0;
 pub const TWIN_TOUCH_M: f64 = 0.5;  // m two BESIDE carriageways may overlap (one deck)
 pub const CONFLICT_DZ: f64 = 2.0;   // m: one OSM level farther apart than this where a geometry test held
 pub const STEP_M: f64 = 1.0;        // m between a member's samples (each stands for one piece of its length)
+pub const DUP_M: f64 = 0.1;         // m: a member this near another of its way (every vertex, both ways): a duplicate
 const TAN_ALONG: f64 = 0.5773502691896257;     // tan(30 degrees): OVERLAP_ALONG within, OVERLAP_CROSS over
 const TAN_BESIDE: f64 = 0.4663076581549986;    // tan(25 degrees): BESIDE and BESIDE_OUTLINE within
 const GRID_M: f64 = 16.0;
@@ -82,6 +90,7 @@ pub struct Member {
     pub kind: i64,
     pub level: f64,
     pub fid: i64,
+    pub outside: bool,
 }
 
 fn mm(v: f64) -> f64 {
@@ -89,7 +98,7 @@ fn mm(v: f64) -> f64 {
 }
 
 impl Member {
-    pub fn new(pts: &[[f64; 3]], half: f64, kind: i64, level: f64, fid: i64) -> Member {
+    pub fn new(pts: &[[f64; 3]], half: f64, kind: i64, level: f64, fid: i64, outside: bool) -> Member {
         let (mut xy, mut z, mut s): (Vec<[f64; 2]>, Vec<f64>, Vec<f64>) = (Vec::new(), Vec::new(), Vec::new());
         for p in pts {
             let q = [mm(p[0]), mm(p[1])];
@@ -105,7 +114,7 @@ impl Member {
             xy.push(q);
             z.push(mm(p[2]));
         }
-        Member { xy, z, s, half: mm(half), kind, level, fid }
+        Member { xy, z, s, half: mm(half), kind, level, fid, outside }
     }
 
     fn len(&self) -> f64 {
@@ -277,6 +286,7 @@ struct Rec {
 #[derive(Default)]
 pub struct Out {
     pub root: Vec<usize>,
+    pub dup: Vec<usize>,                                    // the member each one duplicates (itself: none)
     pub edges: Vec<(usize, usize, u8, bool, f64)>,          // (a, b, kind, united two groups, |dz|)
     pub rejected: Vec<(usize, usize, u8, f64)>,             // (a, b, kind, the least |dz|): over the height limit
     pub conflicts: Vec<(usize, usize, u8, u8, f64)>,        // (a, b, reason, kind, |dz|)
@@ -295,22 +305,13 @@ impl Acc<'_> {
         la.is_finite() && lb.is_finite() && la == lb
     }
 
-    /// Why a and b may never be one structure (None: they may).
+    /// Why a and b may never be one structure (None: they may; C_OUTSIDE: they may, but one is outside the chain).
     fn never(&self, a: usize, b: usize) -> Option<u8> {
-        let (ka, kb) = (self.ms[a].kind, self.ms[b].kind);
-        let (la, lb) = (self.ms[a].level, self.ms[b].level);
-        if ka == OUTSIDE || kb == OUTSIDE {
+        let r = never_rule(&self.ms[a], &self.ms[b]);
+        if r.is_none() && (self.ms[a].outside || self.ms[b].outside) {
             Some(C_OUTSIDE)
-        } else if ka == TUNNEL || kb == TUNNEL {
-            Some(C_TUNNEL)
-        } else if ka != kb && (ka == RAIL || kb == RAIL) {
-            Some(C_RAIL)
-        } else if ka != kb {
-            Some(C_WALK)
-        } else if la.is_finite() && lb.is_finite() && la != lb {
-            Some(C_LEVEL)
         } else {
-            None
+            r
         }
     }
 
@@ -338,8 +339,11 @@ impl Acc<'_> {
     /// The geometry of `kind` held, over its height limit (the least |dz| dz).
     fn over(&mut self, i: usize, j: usize, kind: u8, dz: f64) {
         let (a, b) = (i.min(j), i.max(j));
-        if self.ms[a].kind == OUTSIDE || self.ms[b].kind == OUTSIDE {
-            self.conflict(a, b, C_OUTSIDE, kind, f64::NAN);
+        if self.ms[a].outside || self.ms[b].outside {
+            // (no height of its own: an outside conflict only where nothing else rules the pair out)
+            if self.never(a, b) == Some(C_OUTSIDE) {
+                self.conflict(a, b, C_OUTSIDE, kind, f64::NAN);
+            }
             return;
         }
         let e = self.rejected.entry((a, b, kind)).or_insert(dz);
@@ -351,6 +355,76 @@ impl Acc<'_> {
             self.conflict(a, b, C_DZ, kind, dz);
         }
     }
+}
+
+/// The never-union rules of two members, outside the chain or not (None: they may be one structure).
+fn never_rule(ma: &Member, mb: &Member) -> Option<u8> {
+    let (ka, kb) = (ma.kind, mb.kind);
+    let (la, lb) = (ma.level, mb.level);
+    if ka == TUNNEL || kb == TUNNEL {
+        Some(C_TUNNEL)
+    } else if ka != kb && (ka == RAIL || kb == RAIL) {
+        Some(C_RAIL)
+    } else if ka != kb {
+        Some(C_WALK)
+    } else if la.is_finite() && lb.is_finite() && la != lb {
+        Some(C_LEVEL)
+    } else {
+        None
+    }
+}
+
+/// Every vertex of member m within DUP_M of line `line`.
+fn covers(idx: &Index, line: usize, m: &Member) -> bool {
+    m.xy.iter().all(|&p| idx.near(p, DUP_M).contains_key(&line))
+}
+
+/// The member each one duplicates (the first of its way, kind and line; itself when none), in the members' order.
+fn duplicates(ms: &[Member], idx: &Index) -> Vec<usize> {
+    let n = ms.len();
+    let mut dup: Vec<usize> = (0..n).collect();
+    for i in 0..n {
+        if ms[i].xy.len() < 2 {
+            continue;
+        }
+        for j in 0..i {
+            // (one way, one kind, one grouping level: copies on two levels stay two members, Codex review)
+            if dup[j] != j || ms[j].fid != ms[i].fid || ms[j].kind != ms[i].kind || ms[j].xy.len() < 2
+                || never_rule(&ms[i], &ms[j]).is_some() || (ms[j].len() - ms[i].len()).abs() > 2.0 * DUP_M {
+                continue;
+            }
+            if covers(idx, j, &ms[i]) && covers(idx, i, &ms[j]) {
+                dup[i] = j;
+                break;
+            }
+        }
+    }
+    dup
+}
+
+/// The pairs (i, j), i < j, that could be one structure whatever their heights and outlines: the edges of
+/// structure_groups_core's own tests in CLOSURE mode (every height 0, so every height limit holds; one outline round
+/// everything, so every BESIDE_OUTLINE candidate holds; every end free for END_ON whatever JOIN took it; no member
+/// a duplicate). Every edge structure_groups_core can find with any heights and any outlines is among them (each of its
+/// tests only narrows with them), and nothing else: proximity alone (one sample near) is no pair, a sustained run
+/// beside or an end on the other is (Codex review: a 6 m sample reach chained decks the grouping never joins).
+pub fn structure_touch_core(ms: &[Member]) -> Vec<(usize, usize)> {
+    let flat: Vec<Member> = ms.iter().map(|m| Member { xy: m.xy.clone(), z: vec![0.0; m.z.len()], s: m.s.clone(),
+        half: m.half, kind: m.kind, level: m.level, fid: m.fid, outside: false }).collect();
+    let mut bb = [f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY];
+    for m in &flat {
+        for p in &m.xy {
+            bb = [bb[0].min(p[0]), bb[1].min(p[1]), bb[2].max(p[0]), bb[3].max(p[1])];
+        }
+    }
+    if !bb[0].is_finite() {
+        return Vec::new();
+    }
+    let pad = 100.0;
+    let ring = vec![[bb[0] - pad, bb[1] - pad], [bb[2] + pad, bb[1] - pad], [bb[2] + pad, bb[3] + pad],
+                    [bb[0] - pad, bb[3] + pad]];
+    let out = groups_core(&flat, &[ring], true);
+    out.edges.iter().map(|&(a, b, _k, _u, _dz)| (a, b)).collect()
 }
 
 fn sum(recs: &[&Rec], piece: f64) -> f64 {
@@ -429,17 +503,23 @@ fn footprint(acc: &mut Acc, a: usize, b: usize, recs: &[Rec], piece: f64, outlin
 /// The groups of members ms (in their keys' order) with OSM bridge outline rings `outlines` (BESIDE_OUTLINE's
 /// evidence).
 pub fn structure_groups_core(ms: &[Member], outlines: &[Vec<[f64; 2]>]) -> Out {
+    groups_core(ms, outlines, false)
+}
+
+/// structure_groups_core; closure: structure_touch_core's mode (no duplicates, every end free for END_ON).
+fn groups_core(ms: &[Member], outlines: &[Vec<[f64; 2]>], closure: bool) -> Out {
     let n = ms.len();
     let mut acc = Acc { ms, edges: BTreeMap::new(), rejected: BTreeMap::new(), conflicts: BTreeMap::new() };
     let idx = Index::new(ms);
+    let dup = if closure { (0..n).collect() } else { duplicates(ms, &idx) };
     let max_half = ms.iter().fold(0.0f64, |m, x| m.max(x.half));
     let pair_ok = |i: usize, j: usize| {
-        i != j && ms[i].fid != ms[j].fid && !(ms[i].kind == OUTSIDE && ms[j].kind == OUTSIDE)
+        i != j && dup[i] == i && dup[j] == j && ms[i].fid != ms[j].fid && !(ms[i].outside && ms[j].outside)
     };
     // JOIN from the ends
     let mut ends: Vec<(usize, [f64; 2], f64)> = Vec::new();
     for (i, m) in ms.iter().enumerate() {
-        if m.xy.len() >= 2 {
+        if m.xy.len() >= 2 && dup[i] == i {
             ends.push((i, m.xy[0], m.z[0]));
             ends.push((i, m.xy[m.xy.len() - 1], m.z[m.z.len() - 1]));
         }
@@ -459,7 +539,7 @@ pub fn structure_groups_core(ms: &[Member], outlines: &[Vec<[f64; 2]>]) -> Out {
                 continue;
             }
             let dz = (z - z2).abs();
-            if dz <= JOIN_DZ && acc.never(i.min(j), i.max(j)).is_none() {
+            if !closure && dz <= JOIN_DZ && acc.never(i.min(j), i.max(j)).is_none() {
                 joined[k] = true;       // (taken: an end over or beside another deck's end stays free for END_ON)
             }
             if dz <= JOIN_DZ {
@@ -494,7 +574,7 @@ pub fn structure_groups_core(ms: &[Member], outlines: &[Vec<[f64; 2]>]) -> Out {
     }
     // the footprint tests from every member's samples (a member outside the chain: only as the other one)
     for a in 0..n {
-        if ms[a].kind == OUTSIDE {
+        if ms[a].outside || dup[a] != a {
             continue;
         }
         let (pts, piece) = samples(&ms[a]);
@@ -544,7 +624,8 @@ pub fn structure_groups_core(ms: &[Member], outlines: &[Vec<[f64; 2]>]) -> Out {
         }
         out.edges.push((a, b, kind, ra != rb, dz));
     }
-    out.root = (0..n).map(|i| find(&mut parent, i)).collect();
+    out.root = (0..n).map(|i| find(&mut parent, dup[i])).collect();
+    out.dup = dup;
     out.rejected = acc.rejected.iter().map(|(&(a, b, k), &dz)| (a, b, k, dz)).collect();
     out.conflicts = acc.conflicts.iter().map(|(&(a, b, r), &(k, dz))| (a, b, r, k, dz)).collect();
     out
@@ -555,39 +636,69 @@ type Rejected = Vec<(i64, i64, i64, f64)>;
 type Conflicts = Vec<(i64, i64, i64, i64, f64)>;
 
 /// roads / structures.py: the structure groups of one chain's members. pts (P, 3) x y z of every member's line,
-/// member k rows off[k]..off[k + 1]; half (N,) carriageway half widths; kind (N,) ROAD / WALK / RAIL / TUNNEL /
-/// OUTSIDE; level (N,) the OSM level (NaN: unknown); fid (N,) the OSM way (two parts of one way are never paired);
-/// outline rings opts (Q, 2), ring k rows ooff[k]..ooff[k + 1]. Members in their keys' order. Returns (root per member, edges
-/// [(a, b, kind, united, |dz|)], rejected [(a, b, kind, |dz|)], conflicts [(a, b, reason, kind, |dz|)]).
+/// member k rows off[k]..off[k + 1]; half (N,) carriageway half widths; kind (N,) ROAD / WALK / RAIL / TUNNEL;
+/// level (N,) the OSM level (NaN: unknown); fid (N,) the OSM way (two parts of one way are never paired); outside (N,)
+/// 1 for a part outside the chain (no height of its own); outline rings opts (Q, 2), ring k rows ooff[k]..ooff[k + 1].
+/// Members in their keys' order, the chain's first. Returns (root per member, the member each duplicates (itself:
+/// none), edges [(a, b, kind, united, |dz|)], rejected [(a, b, kind, |dz|)], conflicts [(a, b, reason, kind, |dz|)]).
 #[pyfunction]
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub fn structure_groups<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, off: PyReadonlyArray1<'py, i64>,
                              half: PyReadonlyArray1<'py, f64>, kind: PyReadonlyArray1<'py, i64>,
                              level: PyReadonlyArray1<'py, f64>, fid: PyReadonlyArray1<'py, i64>,
-                             opts: PyReadonlyArray2<'py, f64>, ooff: PyReadonlyArray1<'py, i64>)
-                             -> PyResult<(Vec<i64>, Edges, Rejected, Conflicts)> {
-    let (pts, half, kind, level, fid, opts) = (pts.as_array(), half.as_array(), kind.as_array(), level.as_array(),
-        fid.as_array(), opts.as_array());
-    let (off, ooff) = (off.as_array().to_vec(), ooff.as_array().to_vec());
-    let n = off.len().saturating_sub(1);
-    if pts.ncols() != 3 || opts.ncols() != 2 || half.len() != n || kind.len() != n || level.len() != n || fid.len() != n
-        || off.iter().any(|&v| v < 0 || v as usize > pts.nrows()) || off.windows(2).any(|w| w[1] < w[0])
-        || ooff.iter().any(|&v| v < 0 || v as usize > opts.nrows()) || ooff.windows(2).any(|w| w[1] < w[0]) {
+                             outside: PyReadonlyArray1<'py, i64>, opts: PyReadonlyArray2<'py, f64>,
+                             ooff: PyReadonlyArray1<'py, i64>)
+                             -> PyResult<(Vec<i64>, Vec<i64>, Edges, Rejected, Conflicts)> {
+    let (opts, ooff) = (opts.as_array(), ooff.as_array().to_vec());
+    if opts.ncols() != 2 || ooff.iter().any(|&v| v < 0 || v as usize > opts.nrows())
+        || ooff.windows(2).any(|w| w[1] < w[0]) {
         return Err(PyValueError::new_err("structure_groups: shapes or offsets do not agree"));
     }
-    let ms: Vec<Member> = (0..n).map(|k| {
-        let rows: Vec<[f64; 3]> = (off[k] as usize..off[k + 1] as usize)
-            .map(|r| [pts[[r, 0]], pts[[r, 1]], pts[[r, 2]]]).collect();
-        Member::new(&rows, half[k], kind[k], level[k], fid[k])
-    }).collect();
+    let ms = members(&pts, &off, &half, &kind, &level, &fid, Some(&outside), 3)?;
     let outlines: Vec<Vec<[f64; 2]>> = (0..ooff.len().saturating_sub(1)).map(|k| {
         (ooff[k] as usize..ooff[k + 1] as usize).map(|r| [mm(opts[[r, 0]]), mm(opts[[r, 1]])]).collect()
     }).collect();
     let out = py.detach(|| structure_groups_core(&ms, &outlines));
-    Ok((out.root.iter().map(|&r| r as i64).collect(),
+    Ok((out.root.iter().map(|&r| r as i64).collect(), out.dup.iter().map(|&r| r as i64).collect(),
         out.edges.iter().map(|&(a, b, k, u, dz)| (a as i64, b as i64, k as i64, u, dz)).collect(),
         out.rejected.iter().map(|&(a, b, k, dz)| (a as i64, b as i64, k as i64, dz)).collect(),
         out.conflicts.iter().map(|&(a, b, r, k, dz)| (a as i64, b as i64, r as i64, k as i64, dz)).collect()))
+}
+
+/// The members of the kernels' arrays (pts (P, 2 or 3): x y [z]; z NaN when 2 columns), checked.
+#[allow(clippy::too_many_arguments)]
+fn members(pts: &PyReadonlyArray2<f64>, off: &PyReadonlyArray1<i64>, half: &PyReadonlyArray1<f64>,
+           kind: &PyReadonlyArray1<i64>, level: &PyReadonlyArray1<f64>, fid: &PyReadonlyArray1<i64>,
+           outside: Option<&PyReadonlyArray1<i64>>, cols: usize) -> PyResult<Vec<Member>> {
+    let (pts, half, kind, level, fid) = (pts.as_array(), half.as_array(), kind.as_array(), level.as_array(),
+        fid.as_array());
+    let outside = outside.map(|o| o.as_array().to_vec());
+    let off = off.as_array().to_vec();
+    let n = off.len().saturating_sub(1);
+    if pts.ncols() != cols || half.len() != n || kind.len() != n || level.len() != n || fid.len() != n
+        || outside.as_ref().is_some_and(|o| o.len() != n)
+        || off.iter().any(|&v| v < 0 || v as usize > pts.nrows()) || off.windows(2).any(|w| w[1] < w[0]) {
+        return Err(PyValueError::new_err("structures: shapes or offsets do not agree"));
+    }
+    Ok((0..n).map(|k| {
+        let rows: Vec<[f64; 3]> = (off[k] as usize..off[k + 1] as usize)
+            .map(|r| [pts[[r, 0]], pts[[r, 1]], if cols == 3 { pts[[r, 2]] } else { f64::NAN }]).collect();
+        Member::new(&rows, half[k], kind[k], level[k], fid[k], outside.as_ref().is_some_and(|o| o[k] != 0))
+    }).collect())
+}
+
+/// roads.BridgeProfiles._resolve on the switch path (structures.touch): the pairs (i, j), i < j, of deck parts that
+/// could be one structure whatever their heights (structure_touch_core). pts (P, 2) x y of every part's line, part k
+/// rows off[k]..off[k + 1]; half, kind, level, fid as structure_groups'.
+#[pyfunction]
+#[allow(clippy::too_many_arguments)]
+pub fn structure_touch<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, off: PyReadonlyArray1<'py, i64>,
+                            half: PyReadonlyArray1<'py, f64>, kind: PyReadonlyArray1<'py, i64>,
+                            level: PyReadonlyArray1<'py, f64>, fid: PyReadonlyArray1<'py, i64>)
+                            -> PyResult<Vec<(i64, i64)>> {
+    let ms = members(&pts, &off, &half, &kind, &level, &fid, None, 2)?;
+    let out = py.detach(|| structure_touch_core(&ms));
+    Ok(out.iter().map(|&(a, b)| (a as i64, b as i64)).collect())
 }
 
 #[cfg(test)]
@@ -596,7 +707,7 @@ mod tests {
 
     fn line(pts: &[(f64, f64)], z: f64, half: f64, level: f64, fid: i64) -> Member {
         let p: Vec<[f64; 3]> = pts.iter().map(|&(x, y)| [x, y, z]).collect();
-        Member::new(&p, half, ROAD, level, fid)
+        Member::new(&p, half, ROAD, level, fid, false)
     }
 
     #[test]
@@ -692,10 +803,60 @@ mod tests {
     #[test]
     fn outside_parts_are_recorded_not_joined() {
         let mut far = line(&[(0.0, 10.0), (100.0, 10.0)], f64::NAN, 4.0, 1.0, 2);
-        far.kind = OUTSIDE;
-        let ms = [line(&[(0.0, 0.0), (100.0, 0.0)], 10.0, 4.0, 1.0, 1), far];
+        far.outside = true;
+        let mut other = line(&[(0.0, -10.0), (100.0, -10.0)], f64::NAN, 4.0, 2.0, 3);
+        other.outside = true;           // (another OSM level: never one structure, so no outside conflict)
+        let ms = [line(&[(0.0, 0.0), (100.0, 0.0)], 10.0, 4.0, 1.0, 1), far, other];
         let out = structure_groups_core(&ms, &[]);
-        assert_eq!(out.root, vec![0, 1]);
-        assert!(out.conflicts.iter().any(|c| c.2 == C_OUTSIDE));
+        assert_eq!(out.root, vec![0, 1, 2]);
+        assert!(out.conflicts.iter().any(|c| (c.0, c.1, c.2) == (0, 1, C_OUTSIDE)));
+        assert!(!out.conflicts.iter().any(|c| c.1 == 2));
+    }
+
+    #[test]
+    fn one_way_under_two_keys_is_one_member() {
+        // San Diego's c54ad200: the same way's line twice (1 cm apart), a twin beside it: the copy joins nothing itself
+        let ms = [line(&[(0.0, 0.0), (300.0, 0.0)], 10.0, 4.0, 1.0, 1),
+                  line(&[(0.0, 0.01), (150.0, 0.01), (300.0, 0.0)], 10.001, 4.0, 1.0, 1),
+                  line(&[(0.0, 9.0), (300.0, 9.0)], 10.2, 4.0, 1.0, 2)];
+        let out = structure_groups_core(&ms, &[]);
+        assert_eq!(out.dup, vec![0, 0, 2]);
+        assert_eq!(out.root, vec![0, 0, 0]);
+        assert!(out.edges.iter().all(|e| e.0 != 1 && e.1 != 1));
+        // another part of the same way (not its line) is no duplicate
+        let ms2 = [line(&[(0.0, 0.0), (300.0, 0.0)], 10.0, 4.0, 1.0, 1),
+                   line(&[(300.0, 0.0), (600.0, 0.0)], 10.0, 4.0, 1.0, 1)];
+        assert_eq!(structure_groups_core(&ms2, &[]).dup, vec![0, 1]);
+        // nor a copy on another grouping level (Codex review: kept, its level rule applies)
+        let ms3 = [line(&[(0.0, 0.0), (300.0, 0.0)], 10.0, 4.0, 1.0, 1),
+                   line(&[(0.0, 0.01), (300.0, 0.01)], 10.0, 4.0, 2.0, 1)];
+        assert_eq!(structure_groups_core(&ms3, &[]).dup, vec![0, 1]);
+    }
+
+    #[test]
+    fn the_closure_holds_every_edge() {
+        // structure_touch: every pair structure_groups_core makes an edge of whatever the heights and outlines, never
+        // another OSM level, a walkway with a road or two parts of one way, never a deck merely passing near
+        let mut walk = line(&[(0.0, 14.0), (100.0, 14.0)], 10.0, 1.5, 1.0, 5);
+        walk.kind = WALK;
+        let ms = [line(&[(0.0, 0.0), (100.0, 0.0)], 10.0, 4.0, 1.0, 1),
+                  line(&[(100.0, 0.3), (200.0, 0.3)], 10.1, 4.0, 1.0, 2),             // JOIN
+                  line(&[(0.0, 13.5), (100.0, 13.5)], 10.4, 4.0, 1.0, 3),             // 5.5 m edge to edge
+                  line(&[(50.0, 60.0), (50.0, 3.0)], 10.2, 3.0, 1.0, 4),              // END_ON
+                  walk,
+                  line(&[(0.0, 2.0), (100.0, 2.0)], 17.0, 4.0, 2.0, 6),               // another level over it
+                  line(&[(200.0, 0.3), (300.0, 0.3)], 10.1, 4.0, 1.0, 2),             // the same way as 1
+                  line(&[(110.0, 8.0), (110.0, 60.0)], 10.0, 4.0, 1.0, 7)];           // its end 3.7 m off 1's edge
+        let pairs = structure_touch_core(&ms);
+        assert!(pairs.iter().all(|&(a, b)| b != 7), "proximity alone is no pair: {pairs:?}");
+        for p in [(0, 1), (0, 2), (0, 3)] {
+            assert!(pairs.contains(&p), "{p:?} in {pairs:?}");
+        }
+        assert!(pairs.iter().all(|&(a, b)| a != 4 && b != 4 && a != 5 && b != 5 && (a, b) != (1, 6)), "{pairs:?}");
+        let ring = vec![[-5.0, -10.0], [105.0, -10.0], [105.0, 25.0], [-5.0, 25.0]];
+        let out = structure_groups_core(&ms, &[ring]);
+        for e in &out.edges {
+            assert!(pairs.contains(&(e.0, e.1)), "edge {:?} outside the closure", (e.0, e.1, e.2));
+        }
     }
 }
