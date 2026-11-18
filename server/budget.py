@@ -1039,19 +1039,20 @@ def trim():
 # far workers got nothing at all (a Windows player, i5-9400F, 1.6.1: "distant land 5/514", only the land near the car
 # loading). os.nice elsewhere only weights the share.
 WIN_BELOW_NORMAL = 0x4000
+# The work for later (the map ahead's, the far field's, the far buildings', the late pool's: BACKGROUND_NICE or nicer)
+# gives way to the work the car is about to need, as os.nice has it elsewhere. With every worker in the server's one
+# class, a road tile of 0.7 s of CPU took 2.3 s (4.4 s with its wait for a free road process, 292 tiles of a 300 km/h
+# drive on Windows, the server's 3 cores 2.8 in use, 2026-11-18): its three processes got 0.6 of a core between them
+# beside a map ahead 107 s in front of the car. So such a worker runs in the idle class, and for BACKGROUND_SHARE of
+# the time in the class it inherited: a floor under it, not the "nothing at all" above.
+WIN_IDLE = 0x40
+WIN_THREAD_TIME_CRITICAL = 15   # (the share's thread: it only sleeps and sets the class, and must run to raise it)
+BACKGROUND_NICE = 4
+BACKGROUND_SHARE = 0.125
+BACKGROUND_PERIOD_S = 2.0
 
 
-def lower_priority(nice, worker=False):
-    """This process below the game: os.nice(nice) where it exists; on Windows the "below normal" class for the
-    server (worker False, nice > 0); a worker keeps the class it inherited. Returns the change made, for the log
-    ("nice +n", "below normal", None)."""
-    if not nice or nice <= 0:
-        return None
-    if hasattr(os, "nice"):
-        os.nice(int(nice))
-        return f"nice +{int(nice)}"
-    if sys.platform != "win32" or worker:
-        return None
+def _kernel32():
     import ctypes
     from ctypes import wintypes
     k32 = ctypes.WinDLL("kernel32", use_last_error=True)
@@ -1059,9 +1060,67 @@ def lower_priority(nice, worker=False):
     k32.GetCurrentProcess.restype = wintypes.HANDLE
     k32.SetPriorityClass.argtypes = (wintypes.HANDLE, wintypes.DWORD)
     k32.SetPriorityClass.restype = wintypes.BOOL
+    k32.GetPriorityClass.argtypes = (wintypes.HANDLE,)
+    k32.GetPriorityClass.restype = wintypes.DWORD
+    k32.GetCurrentThread.restype = wintypes.HANDLE
+    k32.SetThreadPriority.argtypes = (wintypes.HANDLE, ctypes.c_int)
+    k32.SetThreadPriority.restype = wintypes.BOOL
+    return k32
+
+
+def lower_priority(nice, worker=False):
+    """This process below the game: os.nice(nice) where it exists; on Windows the "below normal" class for the
+    server (worker False, nice > 0); a worker keeps the class it inherited, one of BACKGROUND_NICE or nicer has it
+    for a share of the time only (background). Returns the change made, for the log ("nice +n", "below normal",
+    "idle, its class 1/8 of the time", None)."""
+    if not nice or nice <= 0:
+        return None
+    if hasattr(os, "nice"):
+        os.nice(int(nice))
+        return f"nice +{int(nice)}"
+    if sys.platform != "win32":
+        return None
+    k32 = _kernel32()
+    if worker:
+        return background(k32) if nice >= BACKGROUND_NICE else None
     if not k32.SetPriorityClass(k32.GetCurrentProcess(), WIN_BELOW_NORMAL):
         raise OSError("SetPriorityClass(below normal) failed")
     return "below normal"
+
+
+def background(k32, sleep=None, rounds=None, start=None):
+    """This process in Windows' idle class, and in the class it has now for BACKGROUND_SHARE of every
+    BACKGROUND_PERIOD_S (a thread of its own, the processes each at their own moment of the period, by their pid).
+    k32: kernel32 (_kernel32); sleep, rounds, start: the tests' (a clock, an end, the thread's start). Returns the
+    change made, None when the process is in the idle class already."""
+    import threading
+    import time
+    sleep = sleep or time.sleep
+    me = k32.GetCurrentProcess()
+    own = int(k32.GetPriorityClass(me) or 0)
+    if not own or own == WIN_IDLE:
+        return None
+    if not k32.SetPriorityClass(me, WIN_IDLE):
+        raise OSError("SetPriorityClass(idle) failed")
+    high = BACKGROUND_PERIOD_S * BACKGROUND_SHARE
+
+    def run():
+        # (above every thread of the server: it has to run to give the process its share when nothing else of it runs)
+        k32.SetThreadPriority(k32.GetCurrentThread(), WIN_THREAD_TIME_CRITICAL)
+        sleep((os.getpid() % 16) / 16.0 * BACKGROUND_PERIOD_S)
+        n = 0
+        while rounds is None or n < rounds:
+            n += 1
+            k32.SetPriorityClass(me, own)
+            sleep(high)
+            k32.SetPriorityClass(me, WIN_IDLE)
+            sleep(BACKGROUND_PERIOD_S - high)
+
+    if start is None:
+        threading.Thread(target=run, name="priority-share", daemon=True).start()
+    else:
+        start(run)
+    return f"idle, its class 1/{round(1 / BACKGROUND_SHARE)} of the time"
 
 
 # The server's event loop answers every message the game sends (a pose, a block request). In the "below normal" class

@@ -260,12 +260,63 @@ class PriorityTest(unittest.TestCase):
                    "k.GetCurrentProcess.restype=wintypes.HANDLE; k.GetPriorityClass.argtypes=(wintypes.HANDLE,); "
                    "print(budget.lower_priority({n}, {w}), hex(k.GetPriorityClass(k.GetCurrentProcess())))")
             self.assertEqual(self.run_child(get.format(n=10, w=False)), "below normal 0x4000")
-            for n in (3, 6, 9):
-                self.assertTrue(self.run_child(get.format(n=n, w=True)).startswith("None "), "a worker: as inherited")
+            self.assertTrue(self.run_child(get.format(n=3, w=True)).startswith("None "), "a worker: as inherited")
+            for n in (4, 6, 9):     # (the work for later: idle, its own class a share of the time)
+                self.assertEqual(self.run_child(get.format(n=n, w=True)), "idle, its class 1/8 of the time 0x40")
         elif hasattr(os, "nice"):
             # (+3, or up to the ceiling of 19 when the test itself already runs nice: a niced shell's gate run)
             got = self.run_child("import os; b=os.nice(0); budget.lower_priority(3); print(os.nice(0)-b, b)").split()
             self.assertEqual(int(got[0]), min(3, 19 - int(got[1])))
+
+
+class BackgroundTest(unittest.TestCase):
+    """background: the idle class, and the process's own class for BACKGROUND_SHARE of every period (any system:
+    kernel32 stood in for)."""
+
+    class K32:
+        def __init__(self, cls):
+            self.cls, self.calls, self.thread = cls, [], None
+
+        def GetCurrentProcess(self):
+            return -1
+
+        def GetCurrentThread(self):
+            return -2
+
+        def GetPriorityClass(self, h):
+            return self.cls
+
+        def SetPriorityClass(self, h, cls):
+            self.cls = cls
+            self.calls.append(("class", cls))
+            return 1
+
+        def SetThreadPriority(self, h, p):
+            self.thread = p
+            return 1
+
+    def test_its_class_for_a_share_of_the_time(self):
+        k, slept, runs = self.K32(budget.WIN_BELOW_NORMAL), [], []
+        how = budget.background(k, sleep=lambda s: (slept.append(s), k.calls.append(("sleep", s))), rounds=2,
+                                start=runs.append)
+        self.assertEqual(how, "idle, its class 1/8 of the time")
+        self.assertEqual(k.calls, [("class", budget.WIN_IDLE)], "idle at once, before its thread runs")
+        runs[0]()
+        self.assertEqual(k.thread, budget.WIN_THREAD_TIME_CRITICAL)
+        high = budget.BACKGROUND_PERIOD_S * budget.BACKGROUND_SHARE
+        self.assertEqual([c for c in k.calls[2:]],      # (after its own moment of the period: slept[0])
+                         [("class", budget.WIN_BELOW_NORMAL), ("sleep", high), ("class", budget.WIN_IDLE),
+                          ("sleep", budget.BACKGROUND_PERIOD_S - high)] * 2)
+        self.assertLess(slept[0], budget.BACKGROUND_PERIOD_S)
+        self.assertEqual(k.cls, budget.WIN_IDLE)
+
+    def test_an_idle_process_stays_as_it_is(self):
+        k, runs = self.K32(budget.WIN_IDLE), []
+        self.assertIsNone(budget.background(k, start=runs.append))
+        self.assertEqual((k.calls, runs), ([], []))
+
+    def test_only_the_work_for_later(self):
+        self.assertGreater(budget.BACKGROUND_NICE, 3, "the road tiles' and the trees' workers keep the server's class")
 
 
 class RaiseThreadTest(unittest.TestCase):
