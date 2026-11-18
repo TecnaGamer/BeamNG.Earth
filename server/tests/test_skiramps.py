@@ -385,6 +385,20 @@ class GapLanding(unittest.TestCase):
         self.assertEqual(float(z[0]), 50.0, "behind the deck end")
         self.assertEqual(float(z[1]), 60.0)
 
+    def test_no_known_piece_by_where_it_lies(self):
+        # (Codex review of round 5: a main part with no piece id (its pieces not from the ranges the ids are made of)
+        # goes by where it lies, as an extension's sample with none does, never as another feature's)
+        ap = self.approach(0.0)
+        raw = self.raw_for(ap, ap + np.array([0.0, 50.0]))
+        lands = [(ap, "motorway", [ap[[2, 1]], ap[[1, 0]]], [], frozenset({"road#1/2"}), OUT)]
+        road_xy = self.dense(np.array([-200.0, 0.0]), np.array([-1.0, 0.0]))
+        road = [(self.lonlat(road_xy), self.spec)]
+        none = grading.plan_roads(self.frame, road, raw, cuts=False, landings=lands, part_ids=[None])[0]
+        bare = grading.plan_roads(self.frame, road, raw, cuts=False, landings=lands)[0]
+        ref = grading.plan_roads(self.frame, road, raw, cuts=False)[0]
+        self.assertTrue(np.allclose(none.z, bare.z))
+        self.assertGreater(float(none.z[-1]) - float(ref.z[-1]), 1.0, "filled")
+
     def test_diagonal_connector_placed_copy(self):
         # (Codex review of round 5: the first ground piece starts 3 m on and 2 m aside of the deck end, a diagonal
         # connector; the road placed 8 m to the other side: its first samples are ahead of the deck end along the deck,
@@ -713,17 +727,19 @@ class PieceIds(unittest.TestCase):
                 if not br:
                     continue
                 ps = roads._parts_by_level_new(f, i, "ground", rngs=rngs)
-                clean = grading._piece_ids(f, i, len(ps), rngs)
+                clean = grading._piece_ids(f, i, ps, rngs)
                 if len(ps) < 2 or None in clean:
                     continue
                 found += 1
                 self.assertEqual(len(set(clean)), len(clean), "the banks told apart")
                 a, b, k = br[0]                 # (another copy's deck reaching 2 % further each way)
                 longer = [(max(0.0, a - 0.02), min(1.0, b + 0.02), k) if (a, b, k) == br[0] else r for r in rngs]
-                self.assertEqual(grading._piece_ids(f, i, len(ps), longer), clean)
+                ps1 = roads._parts_by_level_new(f, i, "ground", rngs=longer)
+                self.assertEqual(grading._piece_ids(f, i, ps1, longer), clean)
                 bare = [r for r in rngs if r[2] != "bridge"]
                 ps0 = roads._parts_by_level_new(f, i, "ground", rngs=bare)
-                self.assertFalse(set(grading._piece_ids(f, i, len(ps0), bare)) & set(clean), "the unsplit piece")
+                self.assertFalse(set(grading._piece_ids(f, i, ps0, bare)) & set(clean), "the unsplit piece")
+                self.assertEqual(grading._piece_ids(f, i, ps0, rngs), [None] * len(ps0), "kept pieces from other ranges")
             self.assertGreater(found, 0)
 
 

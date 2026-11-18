@@ -1068,7 +1068,8 @@ def plan_roads(frame, parts, elev, abut=None, ext=None, pins=None, cuts=True, co
             # extension or cell has it)
             q_ = np.concatenate([before[:nb], xy, after[:na]])
             eid = ext_ids[j] if ext_ids is not None else (None, None)
-            sid = [eid[0]] * nb + [None if part_ids is None else str(part_ids[j])] * len(xy) + [eid[1]] * na
+            pid_ = None if part_ids is None or part_ids[j] is None else str(part_ids[j])   # (None: no known piece)
+            sid = [eid[0]] * nb + [pid_] * len(xy) + [eid[1]] * na
             for ap_, c_, own_, other_, ids_, v_, ln_ in lines_:
                 if c_ == spec.cls and ln_ is not None:
                     zx = gap_apply(zx, q_, ap_, ln_, own_, other_, sid, ids_, v_)
@@ -2748,7 +2749,7 @@ class _Planner:
                 if specs[i] is None:
                     continue
                 gps = roadsmod.ground_parts(feats, i)                         # not bridges / tunnels
-                gids = _piece_ids(feats, i, len(gps)) if FAST_GAP else [None] * len(gps)   # (FAST_GAP: its pieces)
+                gids = _piece_ids(feats, i, gps) if FAST_GAP else [None] * len(gps)   # (FAST_GAP: its pieces)
                 for ring, pid in zip(gps, gids):
                     ring = placement.ring(self.frame, feats, i, ring, specs[i])
                     pieces = self._near_cell(np.asarray(ring, np.float64), box)
@@ -3010,7 +3011,7 @@ class _Planner:
                 if specs[i] is None or specs[i].cls in UNGRADED:
                     continue
                 gps = roadsmod.ground_parts(feats, i)
-                gids = _piece_ids(feats, i, len(gps)) if FAST_GAP else [None] * len(gps)
+                gids = _piece_ids(feats, i, gps) if FAST_GAP else [None] * len(gps)
                 for ring, pid in zip(gps, gids):
                     rows.append((i, placement.ring(self.frame, feats, i, np.asarray(ring, np.float64), specs[i]), pid))
             if rows:            # (the frame's conversion once for all: it is per call)
@@ -6136,7 +6137,7 @@ class _Planner:
                     if sp is None:
                         continue
                     ps = roadsmod._parts_by_level_new(f, i, want, rngs=list(rngs))
-                    pids = _piece_ids(f, i, len(ps), list(rngs)) if want == "ground" else [None] * len(ps)
+                    pids = _piece_ids(f, i, ps, list(rngs)) if want == "ground" else [None] * len(ps)
                     for ring, pid in zip(ps, pids):         # (ground_parts' pieces: the same ranges)
                         ring = np.asarray(ring, np.float64)
                         if len(ring) >= 2:
@@ -7964,15 +7965,34 @@ def gap_line(zb):
     return float(a), float(b), reach
 
 
-def _piece_ids(feats, i, n, rngs=None):
-    """FAST_GAP: the ids of feature i's n ground pieces (ground_parts' order; made from level ranges rngs when given, as
-    _parts_by_level_new(..., rngs=rngs)): the feature, the piece's key (roads' part key: the same in every map cell's
-    copy of the feature, however far its decks reach in each) and how many ground pieces the feature has, so one
-    feature's pieces on a bridge's two banks are told apart, and pieces made from other ranges (a layer's kept
-    ground_parts from a short home copy without a bridge: one unsplit piece over both banks) never match the landing's.
-    [None] * n (no known piece) when the keys do not line up with the pieces."""
-    keys = roadsmod._part_keys_new(feats, i, "ground", rngs) if rngs is not None else \
-        roadsmod.part_keys(feats, i, "ground")
+def _piece_ids(feats, i, pieces, rngs=None):
+    """FAST_GAP: the ids of feature i's ground pieces (lon/lat polylines, ground_parts' order) made from level ranges
+    rngs (level_ranges' as they are now by default): the feature, the piece's key (roads' part key: the same in every
+    map cell's copy of the feature, however far its decks reach in each) and how many ground pieces the feature has, so
+    one feature's pieces on a bridge's two banks are told apart and pieces made from other ranges (one unsplit piece
+    over both banks) never match the landing's. The keys are made from the very ranges that give these pieces: pieces
+    that rngs do not give (a layer's kept ground_parts from a short home copy since replaced) have none ([None] * n:
+    no known piece, which goes by where it lies)."""
+    n = len(pieces)
+    if rngs is not None:
+        return _piece_ids_new(feats, i, pieces, list(rngs))
+    rngs = list(roadsmod.level_ranges(feats, i))
+    memo = feats.__dict__.setdefault("_piece_ids", {})      # (a layer's kept pieces, the same ranges: made once)
+    got = memo.get(i)
+    if got is not None and got[0] == rngs and len(got[1]) == n and all(a is b for a, b in zip(got[1], pieces)):
+        return list(got[2])
+    out = _piece_ids_new(feats, i, pieces, rngs)
+    memo[i] = (rngs, list(pieces), out)
+    return list(out)
+
+
+def _piece_ids_new(feats, i, pieces, rngs):
+    n = len(pieces)
+    made = roadsmod._parts_by_level_new(feats, i, "ground", rngs=list(rngs))
+    if len(made) != n or any(np.shape(p) != np.shape(q) or not np.array_equal(np.asarray(p), np.asarray(q))
+                             for p, q in zip(made, pieces)):
+        return [None] * n
+    keys = roadsmod._part_keys_new(feats, i, "ground", list(rngs))
     if len(keys) != n:
         return [None] * n
     fid = str(feats.ids[i])
