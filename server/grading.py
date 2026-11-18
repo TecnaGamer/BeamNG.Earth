@@ -6114,7 +6114,8 @@ class _Planner:
                     if u is not None and now > u and st.get("_ranges_state") == "done":
                         st["_level_ranges"] = {}
                         st.pop("_ranges_short_until", None)
-                        st.pop("_lidar_rule", None)
+                        st.pop("_lidar_answers", None)  # (the lidar's answers and the rule for want of them asked
+                        st.pop("_lidar_rule", None)     # again together: never answers kept without their rule)
                         st["_ranges_state"] = None
                 roadsmod._cell_ranges(lay)
             with roadsmod._FACTS_LOCK:

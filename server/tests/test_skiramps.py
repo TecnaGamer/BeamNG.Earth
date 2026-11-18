@@ -726,6 +726,31 @@ class RawLinesShort(unittest.TestCase):
         self.assertGreater(len(got["bridges"]), 0)
         self.assertIs(g._raw_lines_memo[str(k)], got)
 
+    def test_recovery_asks_the_lidar_again(self):
+        # (Codex review of round 5: a layer made again past its short time drops the lidar's answers with the rule for
+        # want of them: never answers kept (partial) without their rule)
+        import mapcells
+        site, key = self.layer()
+        f = site.cells[key].__class__.__new__(site.cells[key].__class__)
+        f.__dict__.update({kk: v for kk, v in site.cells[key].__dict__.items() if not kk.startswith("_")})
+        k = mapcells.CellKey(*(int(v) for v in key.split("/")))
+        g = self.planner(f)
+        f.__dict__["_level_ranges"] = {i: [] for i in range(len(f))}
+        f.__dict__["_ranges_state"] = "done"
+        f.__dict__["_ranges_short_until"] = time.monotonic() - 1.0
+        f.__dict__["_lidar_answers"] = {"partial": []}
+        f.__dict__["_lidar_rule"] = True
+        asked = []
+        real = roads._lidar_answers
+
+        def answers(feats):
+            asked.append(feats is f and "_lidar_answers" not in feats.__dict__)
+            return real(feats)
+        with mock.patch.object(roads, "LIDAR_GAPS_ON", False), mock.patch.object(roads, "_lidar_answers", answers):
+            g._raw_lines(k)
+        self.assertNotEqual(f.__dict__.get("_lidar_answers"), {"partial": []})
+        self.assertNotIn("_lidar_rule", f.__dict__)
+
     def test_cell_ranges_mark_a_short_entry(self):
         import time
         site, key = self.layer()
