@@ -99,7 +99,9 @@ class NpyGuardTest(unittest.TestCase):
     def test_numpy_starts_with_it(self):
         """numpy imports with the names set (warnings as errors: no unknown name), on a CPU without those features
         too, and dispatches no AVX-512 kernel then."""
-        names = " ".join(npyguard._probe() or npyguard._wheel_names()) if npyguard._x86() else ""
+        # (this numpy's own AVX-512 targets: none on a wheel that dispatches nothing past X86_V3, e.g. the Windows
+        # wheels, where the PyPI names would be unknown to it, an ImportWarning)
+        names = " ".join(npyguard._probe() or ()) if npyguard._x86() else ""
         code = ("import sys; sys.path.insert(0, %r); import numpy, npyguard; "
                 "print(npyguard.avx512_active(), float(numpy.sort(numpy.arange(5.0))[::-1].sum()))" % SERVER)
         r = subprocess.run([sys.executable, "-W", "error", "-c", code], capture_output=True, text=True,
