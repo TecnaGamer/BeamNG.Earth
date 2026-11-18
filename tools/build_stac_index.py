@@ -31,6 +31,7 @@ def main():
     cache = os.path.abspath(os.path.expanduser(ap.parse_args().cache))
     raw = os.path.join(cache, "mapdata", "raw")
     index = overture.StacIndex(overture.RELEASE, raw, netfetch.default_fetcher())
+    index._bundled = {}     # (never the shipped bundle itself: a rerun would copy its own rows instead of Overture's)
     pairs = sorted({(v["theme"], v["type"]) for v in overture.LAYERS.values()})
     out = {"release": overture.RELEASE, "collections": {}}
     for theme, typ in pairs:
@@ -42,8 +43,10 @@ def main():
         out["collections"][f"{theme}/{typ}"] = {"license": c.get("license"), "files": rows}
         print(f"{theme}/{typ}: {len(rows)} files")
     path = os.path.join(HERE, "..", "server", f"overture_stac_{overture.RELEASE}.json.gz")
-    with gzip.open(path, "wt", encoding="utf-8") as f:
-        json.dump(out, f, separators=(",", ":"))
+    tmp = path + ".tmp"     # (written whole, then replaced: an interrupted run leaves the shipped bundle as it was)
+    with open(tmp, "wb") as raw_f, gzip.GzipFile(fileobj=raw_f, mode="wb", filename="", mtime=0) as f:
+        f.write(json.dumps(out, separators=(",", ":")).encode("utf-8"))     # (no name, no time: the same bytes each run)
+    os.replace(tmp, path)
     print(path, os.path.getsize(path), "bytes")
 
 

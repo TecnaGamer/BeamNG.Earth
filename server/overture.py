@@ -402,7 +402,7 @@ def _bundle(release):
     try:
         with gzip.open(BUNDLED.format(release=release), "rt", encoding="utf-8") as f:
             data = json.load(f)
-    except (OSError, ValueError):
+    except (OSError, ValueError, EOFError):     # (EOFError: a truncated gzip)
         return {}
     return data.get("collections", {}) if data.get("release") == release else {}
 
