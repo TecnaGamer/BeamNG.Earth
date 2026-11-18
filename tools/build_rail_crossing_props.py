@@ -247,6 +247,15 @@ def _geom(gid, m, mats):
             f'{blocks}</mesh></geometry>\n')
 
 
+def lod_name(name, size):
+    """A detail level's node name: the object's name and its size in px, which the engine reads as the name's trailing
+    number. A name ending in a digit gets the stock shapes' "_L" between (s_powerpole_3wire_L40; a bare "_" would read
+    as a minus sign: a detail never drawn). The user's report 60, Schleiden 2026-11-17: "bne_de_z306" + "32" read as
+    size 30632, so Germany's junction signs never drew their near level and stood without their posts, which only that
+    level has; likewise Sweden's se_c1 (132) / se_f17 (1732) ... and the French j1 / j3 / j6."""
+    return f"{name}_L{size}" if name[-1:].isdigit() else f"{name}{size}"
+
+
 def write_dae(path, name, lods, col):
     """lods: [(size px, Mesh)], nearest first; col: the collision Mesh."""
     mats = sorted({k for _, m in lods for k in m.tri} | set(col.tri))
@@ -254,7 +263,8 @@ def write_dae(path, name, lods, col):
     for size, m in lods:
         gid = f"{name}{size}-g"
         geoms += _geom(gid, m, mats)
-        nodes += (f'<node id="{name}{size}" name="{name}{size}"><instance_geometry url="#{gid}"><bind_material>'
+        nodes += (f'<node id="{lod_name(name, size)}" name="{lod_name(name, size)}"><instance_geometry url="#{gid}">'
+                  '<bind_material>'
                   '<technique_common>' + "".join(f'<instance_material symbol="{k}-mat" target="#{k}-mat"/>'
                                                  for k in mats if m.tri.get(k))
                   + '</technique_common></bind_material></instance_geometry></node>\n')
