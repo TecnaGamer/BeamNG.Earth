@@ -1299,13 +1299,15 @@ function M.mapControls(on)
       mapCtl.actionMap, mapCtl.trapHandledEvents = am, am.trapHandledEvents
       am.trapHandledEvents = true
     end
-  elseif not on and mapCtl then
-    if mapCtl.vt then mapCtl.vt.onActionEvent = mapCtl.vtOrig end
-    -- (pcall: the action map may be gone by now, a level unload)
-    if mapCtl.actionMap then pcall(function() mapCtl.actionMap.trapHandledEvents = mapCtl.trapHandledEvents end) end
-    for _, f in ipairs({ 'camMoveController', 'camMoveKey', 'zoomInOut', 'controllerZoom', 'zoom',
-        'onControllerSelect', 'onChangeUiFilter' }) do mapCtl.bm[f] = mapCtl[f] end
-    mapCtl = nil
+  elseif not on then
+    if mapCtl then
+      if mapCtl.vt then mapCtl.vt.onActionEvent = mapCtl.vtOrig end
+      -- (pcall: the action map may be gone by now, a level unload)
+      if mapCtl.actionMap then pcall(function() mapCtl.actionMap.trapHandledEvents = mapCtl.trapHandledEvents end) end
+      for _, f in ipairs({ 'camMoveController', 'camMoveKey', 'zoomInOut', 'controllerZoom', 'zoom',
+          'onControllerSelect', 'onChangeUiFilter' }) do mapCtl.bm[f] = mapCtl[f] end
+      mapCtl = nil
+    end
     pcall(popActionMap, 'BigMap')
     if filter and filter.addAction then pcall(filter.addAction, 0, 'beamngEarthMapBlocked', false) end
   end
@@ -1384,6 +1386,11 @@ end
 function M.onExtensionLoaded()
   M.load()
   M.applyAll()
+end
+
+function M.onExtensionUnloaded()
+  M.mapOpened(false)
+  M.redirectBigMap(false)
 end
 
 -- The one-time welcome (the user, 2026-10-15: "add a 1 time popup with info about this project"): shown a moment after
