@@ -1525,7 +1525,7 @@ RUN_END_SAMPLES = 40        # points tried along a STEP_M section for a crossing
 RUN_END_BISECT = 6          # ... then halvings between the two round it (under a millimetre)
 
 
-FIT_NATIVE = 421          # earthfast.VERSION of the railway-at-road kernels (railfit.rs)
+FIT_NATIVE = 422          # earthfast.VERSION of the railway-at-road kernels (railfit.rs)
 
 
 XING_RUN_MAX_M = 150.0      # m along a part a crossing's run reaches past where the road crosses it (or runs down it):

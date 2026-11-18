@@ -6615,6 +6615,7 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // railstations._off_roads; railseam::rail_seam_couple_ground = grading.seam_on_ground (BNE_RAIL_SEAM_NATURAL, r61 / r62 / r80)
     // 421: rail_crossing_runs, rail_road_ends (z_end, rail heads, cos, dz) and railseam::rail_seam_couple_ground (rown)
     // as they are now; 420's rail_run_ends, rail_deck_line and rail_seam_natural gone (Python and module ship together)
-    m.add("VERSION", 421)?;
+    // 422: rail_crossing_runs takes rail_out (the outer rail kept off a shallow crossing's lane)
+    m.add("VERSION", 422)?;
     Ok(())
 }

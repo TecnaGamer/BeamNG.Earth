@@ -75,7 +75,7 @@ def couple_ground(xy, z, ground, half, roads, rdem, lowered=(), lower_m=0.0):
             if j is not None:
                 _rxy, rz, _rh = roads[k]
                 zs[off[j]:off[j + 1]] = (np.asarray(rz, np.float64) - lower_m)[:off[j + 1] - off[j]]
-    fast.require(421, "rail_seam_couple_ground")
+    fast.require(422, "rail_seam_couple_ground")
     out = fast._ef.rail_seam_couple_ground(np.ascontiguousarray(xy), np.ascontiguousarray(z),
                                            np.ascontiguousarray(np.asarray(ground, np.float64)), float(half),
                                            np.ascontiguousarray(pts), np.ascontiguousarray(zs),
