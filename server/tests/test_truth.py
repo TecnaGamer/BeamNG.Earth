@@ -45,13 +45,14 @@ TODAY = {
         under_laws=2, steeper=1,
         dug=(3, 3),             # 3.3 m at the deepest. (12 while every rail bridge dug the road under it)
         filled=(0, 0),
-        rail_low=-8.8,          # m: the Wipkingen viaduct, 13 m over its streets, stands 10 to 13 m up (was at their
+        rail_low=-8.6,          # m: the Wipkingen viaduct, 13 m over its streets, stands 10 to 13 m up (was at their
         rail_high=0.4),         # level at its joints, -13.2); the Letzigraben flyover is 9 m short of the survey's 18 m
         #                         over the tracks it crosses: no bridge crosses another here, in the map or the survey
         #                         (the flyover, level 3 in the survey, crosses tracks on the ground, which the law asks
         #                         6.5 m over, and one road bridge, 6.6 m under it), so the 11 m it climbs over the
         #                         chord between its ends are no crossing's (measured 2026-11-18). The railway's grade
         #                         law (2 %; the survey's flyover ramps are 3.3-4.1 %): 2.5 % makes this -9.2, 2.8 % -9.6
+        #                         (-8.8 before a crossover of the viaduct, 6 m under it at both ends, joined it: -8.6)
     "goeschenen_gotthard_portal": dict(
         unmatched=5,
         shape_p95=5.0,

@@ -1421,7 +1421,107 @@ def approach_levels_many(xys, ground, grades=None):
     return [(found[2 * j], found[2 * j + 1]) for j in range(len(xys))]
 
 
+SWITCH_JOIN_M = 0.5         # m: a structure part's end this near another structure part's line (not near its ends) is
+                            # a switch on it (the chain graph's own tolerance for two ends)
+
+
+def _switch_split(rails):
+    """(parts, owner) with each structure part (bridge, tunnel) cut where another structure part's end lies on it, or
+    None where none is: the map cuts a viaduct into parts at the ends of its tracks, and a branch leaving the middle of
+    a through track (a crossover or a switch on the viaduct, the through track not cut there) joins no node of the
+    chain graph, which has them at part ends only. The branch's end was left alone and read the ground under the viaduct,
+    6 m under the through track at the Duttweilerbruecke's viaduct in Zurich (both ends of a 118 m crossover, 6.0 and
+    6.2 m). The cut puts a node where the branch's end lies (a vertex of the through part there: the part's point nearest
+    the line, inserted when no sample lies on it), so profile solves the branch and the through parts as one structure
+    (_inner_nodes). owner: per part of parts, (index in rails, the point's index in that part's rails entry per point of
+    the piece, -1 for an inserted one). A ground track ending on a viaduct's interior is not cut: it takes the
+    viaduct's bed through its own lift (profile). Pure."""
+    struct = [n for n, r in enumerate(rails) if r[2] in ("bridge", "tunnel") and len(r[3]) >= 2]
+    if len(struct) < 2:
+        return None
+    boxes = {n: (rails[n][3].min(0) - SWITCH_JOIN_M, rails[n][3].max(0) + SWITCH_JOIN_M) for n in struct}
+    cuts = {}                                   # through part -> {(segment, along): (segment, along, point)}
+    for n in struct:
+        xy = rails[n][3]
+        for end in (xy[0], xy[-1]):
+            for m in struct:
+                if m == n:
+                    continue
+                lo, hi = boxes[m]
+                if (end < lo).any() or (end > hi).any():
+                    continue
+                q = rails[m][3]
+                if min(float(dnp.hypot(*(q[0] - end))), float(dnp.hypot(*(q[-1] - end)))) <= SWITCH_JOIN_M:
+                    continue                    # (a node of the chain graph already)
+                a, ab = q[:-1], np.diff(q, axis=0)
+                t = np.clip(((end - a) * ab).sum(1) / np.maximum((ab * ab).sum(1), 1e-12), 0.0, 1.0)
+                at = a + t[:, None] * ab
+                d = dnp.hypot(*(at - end).T)
+                j = int(np.argmin(d))
+                if float(d[j]) > SWITCH_JOIN_M:
+                    continue
+                tj = float(t[j])
+                if tj < 1e-3:                   # (on a sample: cut there)
+                    c = (j, 0.0, None)
+                elif tj > 1.0 - 1e-3:
+                    c = (j + 1, 0.0, None)
+                else:
+                    c = (j, tj, at[j].copy())
+                mine = cuts.setdefault(m, {})
+                if not any((c[:2] == o[:2]) if c[2] is None or o[2] is None
+                           else float(dnp.hypot(*(c[2] - o[2]))) < 1e-3 for o in mine.values()):
+                    mine[c[:2]] = c
+    if not cuts:
+        return None
+    parts, owner = [], []
+    for n, r in enumerate(rails):
+        if n not in cuts:
+            parts.append(r)
+            owner.append((n, np.arange(len(r[3]))))
+            continue
+        xy = r[3]
+        lead, s = None, 0
+        for j, _t, pt in sorted(cuts[n].values(), key=lambda c: (c[0], c[1])):
+            if pt is None:
+                if j <= s and lead is None:
+                    continue
+                body, idx = xy[s:j + 1], list(range(s, j + 1))
+                nxt = (None, j)
+            else:
+                body, idx = np.vstack([xy[s:j + 1], pt[None]]), list(range(s, j + 1)) + [-1]
+                nxt = (pt, j + 1)
+            if lead is not None:
+                body, idx = np.vstack([lead[None], body]), [-1] + idx
+            if len(body) < 2:
+                continue
+            parts.append((r[0], r[1], r[2], body))
+            owner.append((n, np.array(idx)))
+            lead, s = nxt
+        body, idx = xy[s:], list(range(s, len(xy)))
+        if lead is not None:
+            body, idx = np.vstack([lead[None], body]), [-1] + idx
+        parts.append((r[0], r[1], r[2], body))
+        owner.append((n, np.array(idx)))
+    return parts, owner
+
+
 def profile(rails, ground, underpasses=()):
+    """Per part: bed and ground heights (_profile's, the structure parts joined at the switches on them cut for it:
+    _switch_split, and the heights of each part's own points handed back)."""
+    cut = _switch_split(rails) if rails else None
+    if cut is None:
+        return _profile(rails, ground, underpasses)
+    parts, owner = cut
+    got = _profile(parts, ground, underpasses)
+    out = [(np.full(len(r[3]), np.nan), np.full(len(r[3]), np.nan)) for r in rails]
+    for (n, idx), (zb, zg) in zip(owner, got):
+        keep = idx >= 0
+        out[n][0][idx[keep]] = np.asarray(zb, np.float64)[keep]
+        out[n][1][idx[keep]] = np.asarray(zg, np.float64)[keep]
+    return out
+
+
+def _profile(rails, ground, underpasses=()):
     """Per part: bed and ground heights. Underpasses reserve clearance above their lower road mouths.
     ground(xy (n, 2)) -> z. The resulting deck heights propagate along connected approach ramps.
     """
