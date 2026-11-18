@@ -594,7 +594,8 @@ class MapDataTest(Base):
     def test_stand_in_buildings_measure_nothing_kept(self):
         """A parquet-only cached buildings cell (no provenance format, empty) stands in when the tiles fail: the road
         widths and clearances measured on it are neither stored nor remembered (walls, sets, memos) and the build is
-        not kept; once the tiles are back, the same RoadWidths measures the tiles' buildings (Codex, 2026-11-18)."""
+        not kept; once the tiles are back (and the stand-in's STAND_IN_S past), the same RoadWidths and MapData measure
+        the tiles' buildings (Codex, 2026-11-18)."""
         import gc
         import overture
         import roadwidth
@@ -621,9 +622,14 @@ class MapDataTest(Base):
         self.assertEqual((rw.memo, rw.caps, len(rw.walls), len(rw.combos), len(rw.reframed)), ({}, {}, 0, 0, 0))
         self.assertFalse(os.path.exists(store) and any(fs for _, _, fs in os.walk(store)))
         self.assertFalse(os.path.exists(md.path(CELL, "buildings")))
-        # the tiles back (the stand-in cells out of memory): the tiles' building measured, kept
+        # the tiles back: the stand-in cells served from memory for STAND_IN_S (still not kept), then the tiles asked
+        # again on the same MapData: the tiles' building measured, kept
         f.down.clear()
-        md.clear_memory()
+        with revisit.scope() as b:
+            self.assertIsNone(rw.cap("r", ll))
+        self.assertFalse(b.complete)
+        self.assertEqual(rw.caps, {})
+        self.enterContext(mock.patch.object(mapdata, "STAND_IN_S", -1.0))
         with revisit.scope() as b:
             rw.measure_many([("r", ll, 3)])
             cap = rw.cap("r", ll)

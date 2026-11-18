@@ -164,6 +164,36 @@ class StoreTest(unittest.TestCase):
             gc.collect()
 
 
+    def test_failed_cell_not_kept(self):
+        """A cell whose buildings could not be read (cell_fn raised) gives no walls that are kept, so no width is
+        memoised on them; once it reads, the same RoadWidths measures its buildings."""
+        import tempfile
+        feats, home = self.houses()
+        state = {"up": False}
+
+        class F:
+            def __len__(self):
+                return len(feats.coord_off) - 1
+        F.lonlat, F.coord_off = feats.lonlat, feats.coord_off
+
+        def cell_fn(key):
+            if not state["up"]:
+                raise OSError("down")
+            return F()
+        with tempfile.TemporaryDirectory() as d:
+            rw = roadwidth.RoadWidths(cell_fn, d)
+            _, walls = rw._walls(home)
+            self.assertEqual(len(walls.segs), 0)
+            self.assertTrue(walls.stand_in)
+            self.assertEqual(len(rw.walls), 0)
+            state["up"] = True
+            _, walls = rw._walls(home)
+            self.assertGreater(len(walls.segs), 0)
+            self.assertFalse(walls.stand_in)
+            del rw, walls
+            gc.collect()
+
+
 class ManyTest(unittest.TestCase):
     """RoadWidths.measure_many: a cell's roads measured in one pass, the very numbers of one get / cap a road, a road
     across a cell's edge (the walls of both cells) included."""

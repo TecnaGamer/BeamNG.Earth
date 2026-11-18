@@ -66,7 +66,8 @@ PREFETCH_THREADS = 8    # cells' walls built at once (prefetch)
 class Walls:
     """Building wall segments (metres, a local frame) with a bucket index for ray casts."""
 
-    # made from a parquet cell standing in for the tiles' (mapdata's _bnge_fallback), or with such a cell's: what is
+    # made from a parquet cell standing in for the tiles' (mapdata's _bnge_fallback) or a cell whose buildings could
+    # not be read, or with such a cell's: what is
     # measured on them is neither stored, nor kept in memory (walls, sets, widths, clearances), nor kept by the build
     # (revisit.fault), so once the tiles are back the tiles' buildings are measured
     stand_in = False
@@ -400,8 +401,8 @@ class RoadWidths:
             for k2 in (key,):
                 try:
                     feats = self.cell_fn(k2)
-                except Exception:
-                    feats, complete = None, False       # (not kept: built again once the cell is at hand)
+                except Exception:                   # (not kept, as a stand-in's: built again once the cell is at hand)
+                    feats, complete, stand_in = None, False, True
                 if feats is not None and getattr(feats, "__dict__", {}).get("_bnge_fallback"):
                     complete, stand_in = False, True    # (the parquet cell for the tiles': mapdata._decoded_layer)
                 if feats is not None and len(feats):

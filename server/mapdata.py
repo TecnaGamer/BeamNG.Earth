@@ -214,6 +214,8 @@ def digest_arrays(arrays):
 # the walls, ~90-160 MB, 2026-10-20); a mirrored layer is decompressed once per machine and its pages shared, dropped
 # instead of swapped under memory pressure. At most MIRROR_MB on disk (the least recently read go first); the vector
 # layers' `en` (the cell frame's metres, Features.localize) is kept with them.
+STAND_IN_S = 30.0           # s a parquet cell standing in for the tiles' is served from memory (cell()), then the
+                            # tiles asked again (a memory hit does not extend it)
 BUILD_WAIT_S = 180.0        # a cell layer another process is building is waited for this long (xproc.once)
 MIRROR_MB = 2048
 MIRROR_PRUNE_S = 120.0  # the mirror pruned at most this often per process (each prune walks it all)
@@ -361,6 +363,12 @@ def _savez_deflated(path, arrays, level):
 
 class StandIn(dict):
     """A layer's arrays from the parquet cell standing in for the tiles' (MapData.layer_arrays): a dict, marked."""
+
+
+def _stand_in_stale(f):
+    """Is decoded layer f a stand-in (_bnge_fallback: when it was decoded) older than STAND_IN_S?"""
+    t = getattr(f, "__dict__", {}).get("_bnge_fallback")
+    return t is not None and time.monotonic() - t > STAND_IN_S
 
 
 class MapData:
@@ -1223,7 +1231,8 @@ class MapData:
             en = arrays.pop("en.local", None)
             if layer in VECTOR_LAYERS:
                 # (the roads as they were left here before, by this or another process: roadlayercache.py)
-                dec, vers = self._dec_key(key, layer, arrays) if layer == "roads" else (None, {})
+                # (not for a stand-in: its parquet arrays are never stamped with, or stored under, the tiles' file)
+                dec, vers = self._dec_key(key, layer, arrays) if layer == "roads" and not fallback else (None, {})
                 f = self._dec_load(key, layer, dec) if dec is not None else None
                 made = f is None
                 if made:
@@ -1253,7 +1262,7 @@ class MapData:
                     # (the tiles failed and the parquet cell stood in, a stored one or one built now, empty or not:
                     # what is kept under the tiles' keys is not made from it, roadwidth's walls, widths and
                     # clearances; and a build that takes the layer is not kept: _cell_collect)
-                    f.__dict__["_bnge_fallback"] = True
+                    f.__dict__["_bnge_fallback"] = time.monotonic()     # (when: STAND_IN_S)
                 if layer == "roads":
                     f.__dict__["_bnge_gradesep"] = gradesep.hook(self, key)
                     f.__dict__["_bnge_neighbours"] = gradesep.neighbours_hook(self, key)
@@ -1287,7 +1296,7 @@ class MapData:
         key = _key(key)
         with self._mem_lock:
             got = self._mem.get((str(key), layer))
-        if got is None:
+        if got is None or _stand_in_stale(got[0]):
             lat_c, lon_c = key.center()
             got, _hit, _dt = self._decoded_layer(key, layer, kind, geodesy.EnuFrame(lat_c, lon_c, 0.0), remember=False)
         if getattr(got[0], "__dict__", {}).get("_bnge_fallback"):
@@ -1322,6 +1331,9 @@ class MapData:
             for layer in layers:
                 k = (str(key), layer)
                 got = self._mem.get(k)
+                if got is not None and _stand_in_stale(got[0]):
+                    self._mem_bytes -= self._mem.pop(k)[2]      # (the tiles asked again)
+                    got = None
                 if got is not None:
                     self._mem.move_to_end(k)
                     mem[layer] = got
