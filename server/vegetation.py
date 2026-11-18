@@ -41,7 +41,7 @@ import staging
 
 log = logging.getLogger("earthd.vegetation")
 
-VERSION = 36          # (the cached cells hold their groups: 14 for the regional rules of GitHub #110; 16: the roads'
+VERSION = 37          # (the cached cells hold their groups: 14 for the regional rules of GitHub #110; 16: the roads'
                       # drawn widths and sidewalks kept clear; 17: BC's lidar canopy heights, mapdata's canopy layer 2;
                       # 18: the rounded junction corners kept clear, roadcorners.py; 19: one tree per flat crown,
                       # thin_tops; 20: none on or beside a bridge deck, _mask_decks; 21: orchard rows, canopy trees
@@ -75,6 +75,7 @@ VERSION = 36          # (the cached cells hold their groups: 14 for the regional
                       # (BROAD_STAND_MIX); the broadleaves' shares everywhere outside the tropics (broad_shares:
                       # North America's, East Asia's, Japan's, the oceanic climates' by latitude), the spruces' west
                       # of Poland by SPRUCE_CENTRAL
+                      # 37: one top per broadleaf crown (crown_spacing: the thinning by the leaf type and biome)
 TREE_MIN_M = 3.0
 # The canopy raster, the scatter grids and the crown radii are in Web Mercator units (EPSG:3857: a metre there is
 # cos(lat) metres on the ground) and were tuned by eye at mid latitudes. Past them the same pixel counts covered less
@@ -83,6 +84,13 @@ TREE_MIN_M = 3.0
 # to what they were at MERC_REF_LAT, so the tuned look holds everywhere (and the tropics are no longer a little sparse).
 MERC_REF_LAT = 40.0
 CROWN_SPACING = 0.5          # tops kept this many crown radii apart (0.8 looked sparse: the user, 2026-10-13)
+# (36) ... in the conifers' forests: their forest-grown crowns are narrow (radius ~0.07 h: 0.5 x (0.12 h + 1 m) is
+# ~1.9 m at 23 m). A broadleaf's crown is about twice as wide (~0.14 h), and at 0.5 one oak's, beech's or rainforest
+# tree's crown gave two or three tops a metre or two apart: trunks in pairs, walls of them (the user's test at
+# Syrynka 2026-11-18; real cells measured: the nearest neighbour's median 1.6-1.9 m in every biome, for 120-370
+# trees/ha, where a random stand of that density has ~3 m). crown_spacing blends them by the cell's leaf type.
+CROWN_SPACING_BROAD = 1.0
+CROWN_SPACING_TROPICAL = 1.05
 BUSH_MIN_M = 1.0
 KIND_TREE, KIND_BUSH, KIND_ROCK = 0, 1, 2
 GROUPS = ("deciduous", "conifer", "shrub", "rock", "pine_west", "palm", "juniper", "desert_shrub", "desert_rock",
@@ -1105,7 +1113,8 @@ class Vegetation:
         gx0 = np.floor((mx[ii] + 20037508.342789244) / chm.dx).astype(np.int64)
         gy0 = np.floor((20037508.342789244 - my[jj]) / chm.dy).astype(np.int64)
         tie = (_hash01(gx0, gy0, 29) * 1e-3).astype(np.float32)
-        jj, ii = _thin(jj, ii, hs[jj, ii] + tie, chm.dx, k)
+        jj, ii = _thin(jj, ii, hs[jj, ii] + tie, chm.dx, k,
+                       crown_spacing((lat0 + lat1) / 2.0, (lon0 + lon1) / 2.0))
         th = hs[jj, ii]
         tlon, tlat = _to4326(mx[ii], my[jj])
         is_tree = th >= TREE_MIN_M
@@ -1419,7 +1428,20 @@ class Vegetation:
         return climate_shrubs(it, cls[sel], understory=cls[sel] == UNDERSTORY)
 
 
-def _thin(jj, ii, h, px, k=1.0):
+def crown_spacing(lat, lon):
+    """(36) The thinning's crown spacing for a cell at (lat, lon): by its forests' leaf type (leaftype.py; the coarse
+    rule where the map has none) and biome, between CROWN_SPACING (the conifers' narrow forest-grown crowns: a radius
+    of ~0.07 h) and CROWN_SPACING_BROAD (the broadleaves': ~0.14 h; the tropics' CROWN_SPACING_TROPICAL)."""
+    import ecoregion as er
+    c = float(_conifer_share(np.array([lat]), np.array([lon]))[0])
+    bio = int(er.biome_of(er.eco_many(np.array([lat]), np.array([lon])))[0])
+    broad = CROWN_SPACING_TROPICAL if bio in (er.B_TROP_MOIST, er.B_TROP_DRY, er.B_TROP_GRASS, er.B_MANGROVE) \
+        else CROWN_SPACING_BROAD
+    c = min(max(c, 0.0), 1.0)
+    return c * CROWN_SPACING + (1.0 - c) * broad
+
+
+def _thin(jj, ii, h, px, k=1.0, spacing=None):
     """Non-maximum suppression: the tallest tops first, each removing the others within its crown
     radius (0.12 h + 1 m, times CROWN_SPACING). Deterministic (ties broken by position). earthfast thin_tops
     (2026-10-23: the same tops as the Python loop it replaced). k (_merc_k): the pixels judged at the tuned scale, their
@@ -1430,7 +1452,8 @@ def _thin(jj, ii, h, px, k=1.0):
     fast.require(64, "thin_tops")
     sj, si = (jj, ii) if k == 1.0 else (np.rint(jj / k), np.rint(ii / k))
     keep = fast._ef.thin_tops(np.ascontiguousarray(sj, np.int64), np.ascontiguousarray(si, np.int64),
-                              np.ascontiguousarray(h, np.float32), float(CROWN_SPACING), float(px))
+                              np.ascontiguousarray(h, np.float32),
+                              float(CROWN_SPACING if spacing is None else spacing), float(px))
     return jj[keep], ii[keep]
 
 

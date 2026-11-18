@@ -706,6 +706,21 @@ class DilateTest(unittest.TestCase):
         self.assertTrue(d[2:7, 2:7].all())
 
 
+class CrownSpacingTest(unittest.TestCase):
+    """(36) crown_spacing: the thinning's radius by the cell's leaf type and biome."""
+
+    def test_by_leaf_type_and_biome(self):
+        self.assertLess(veg.crown_spacing(62.0, 26.0), 0.6, "Finland's spruces and pines: narrow crowns")
+        self.assertLess(veg.crown_spacing(53.6, 17.9), 0.6, "Bory Tucholskie's pines")
+        self.assertGreater(veg.crown_spacing(49.99, 18.37), 0.85, "Silesia's oak-hornbeam woods: wide crowns")
+        self.assertGreater(veg.crown_spacing(41.0, -77.5), 0.85, "Pennsylvania's hardwoods")
+        self.assertAlmostEqual(veg.crown_spacing(-2.9, -60.0), veg.CROWN_SPACING_TROPICAL, places=2, msg="Amazonia")
+        for lat, lon in ((62.0, 26.0), (49.99, 18.37), (-2.9, -60.0), (0.0, -30.0)):
+            s = veg.crown_spacing(lat, lon)
+            self.assertTrue(veg.CROWN_SPACING <= s <= max(veg.CROWN_SPACING_BROAD, veg.CROWN_SPACING_TROPICAL),
+                            (lat, lon, s))
+
+
 if __name__ == "__main__":
     unittest.main()
 
