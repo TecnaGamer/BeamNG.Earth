@@ -1361,7 +1361,7 @@ CLI). The only change to an existing module: host policies in `netfetch.POLICIES
   file, up to ~0.75 GiB after a long drive). One dense city cell is
   3.3 MB of layer files and ~66 MB of raw blocks (they serve the neighbours too: the next cells
   cost 0-9 MB); a desert cell 60-90 KB and 35 MB.
-- **Release pinning**: `overture.RELEASE = "2026-09-23.1"`; `mapdata.py --latest` prints the newest;
+- **Release pinning**: `overture.RELEASE = "2026-11-18.0"`; `mapdata.py --latest` prints the newest;
   bump the constant (cells are cached per release; a data update may change a place, a restart
   never does). A pinned release Overture has deleted raises `ReleaseGone` for uncached cells (also
   when its STAC index is cached and the files answer 404).

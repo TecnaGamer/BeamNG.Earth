@@ -9143,7 +9143,7 @@ def corridor_pairs(plans, specs, ramps=True):
     CORRIDOR_ABUT_HOLD_M of its own bridge end, as the pass holds j there (the solve's rows: a Fells Point slip road
     beside a road's ramp onto its bridge followed it up 1 m, under that bridge's deck a cap took it down again 12 m on,
     and the cells either side of it, a cap in one and not the other, stepped 0.37 m at their seam); None without the
-    kernel's plan_corridor_pairs (earthfast 488) or with fewer than two plans in it. plans [(fid, Plan)], specs their Specs. Pure."""
+    kernel's plan_corridor_pairs (earthfast 490) or with fewer than two plans in it. plans [(fid, Plan)], specs their Specs. Pure."""
     import fast
     if len(plans) < 2 or getattr(fast, "_ef", None) is None or not hasattr(fast._ef, "plan_corridor_pairs"):
         return None

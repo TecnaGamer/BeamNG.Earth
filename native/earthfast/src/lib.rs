@@ -127,6 +127,7 @@ mod roadwear;
 mod roadtone;
 mod railbeds;
 mod raildrawn;
+mod railspans;
 mod railxing;
 mod roadnet;
 mod structures;
@@ -6694,11 +6695,16 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(raildrawn::rail_drawn_cols, m)?)?;
     // 486: the full port's railways.drawn / wear (raildrawn::rail_drawn_cols: a layer's drawn class and wear per
     // feature in one pass, the glue reading the columns). 484 and 485 are other branches'
-    // 487 (first numbered 373, then 404, 442, 471 and 481 on the vsolve branch): carriageway_profiles(...,
+    m.add_function(wrap_pyfunction!(railspans::rail_span_clip, m)?)?;
+    m.add_function(wrap_pyfunction!(railspans::rail_underpass_hits, m)?)?;
+    m.add_function(wrap_pyfunction!(railspans::rail_underpass_distance, m)?)?;
+    // 487: the full port's railways._span_underpasses / _clip / _underpass_masks / _underpass_distance (railspans: a
+    // node window's parts over the road tunnels and cut to the window in one call)
+        // 489 (first numbered 373, then 404, 442, 471, 481 and 487 on the vsolve branch): carriageway_profiles(...,
     // coupling_penalty): soft couplings, one slack each at an exact L1 penalty (the one vertical solve's grade rows,
     // server/vsolve.py); "le" couplings and one-sample couplings (b None)
-    // 488 (first 472, then 482): corridor::plan_corridor_pairs (the one vertical solve's corridor rows:
+    // 490 (first 472, then 482 and 488): corridor::plan_corridor_pairs (the one vertical solve's corridor rows:
     // share_corridors' pairs, their geometry alone)
-    m.add("VERSION", 488)?;
+    m.add("VERSION", 490)?;
     Ok(())
 }

@@ -309,7 +309,7 @@ def parts(frame, cells, box, reach=REACH_M, clip=False, worn=None, gauges=None, 
     within reach of box (x0, y0, x1, y1), resampled every STEP_M from each part's start, each feature once (by id).
     Each part must intersect that window: a feature's bbox can cover far-away bridges or a long bend around it.
     clip: the ground parts cut to their points within reach of box (a segment of line runs on for km, and every one of
-    its points was profiled for each cell and tile: _clip); the bridges stay whole (a deck runs between its ends).
+    its points was profiled for each cell and tile: _span_clip); the bridges stay whole (a deck runs between its ends).
     underpasses: road_underpasses(frame, cells, box, reach) when the caller has them already. cut_ends: a set given here
     gets the ends _cut_worn_at_motorways made (end_key: a worn line cut at a road just ends, dead_ends)."""
     cells = list(cells)
@@ -370,8 +370,8 @@ def parts(frame, cells, box, reach=REACH_M, clip=False, worn=None, gauges=None, 
         out = _cut_worn_at_motorways(out, wear_of, motorway_crossings(frame, cells, box, reach), kept, cut_ends)
     out = _drop_stubs(out)
     out = level_bridges(frame, cells, out, near)
-    out = _span_underpasses(out, road_underpasses(frame, cells, box, reach) if underpasses is None else underpasses)
-    return _clip(out, near) if clip else out
+    return _span_clip(out, road_underpasses(frame, cells, box, reach) if underpasses is None else underpasses,
+                      near if clip else None)
 
 
 
@@ -679,32 +679,16 @@ def coarse_underpasses(frame, cells, box, rails, reach=REACH_M):
 
 
 def _underpass_distance(xy, line):
-    """Distance to a finite tunnel centreline, and fraction along it, per point. Every segment at once (points x
-    segments) and the first nearest taken, as the loop over segments did, the same products per point."""
-    s = _arc(line)
-    a, d = line[:-1], np.diff(line, axis=0)
-    length = dnp.hypot(d[:, 0], d[:, 1])
-    keep = np.flatnonzero(length >= 1e-6)
-    dist = np.full(len(xy), np.inf)
-    along = np.zeros(len(xy))
-    if not len(keep) or not len(xy):
-        return dist, along
-    a, d, length = a[keep], d[keep], length[keep]
-    p = xy[:, None, :] - a[None]
-    t = np.clip((p[..., 0] * d[:, 0] + p[..., 1] * d[:, 1]) / (length * length), 0.0, 1.0)
-    dd = dnp.norm(xy[:, None, :] - (a[None] + t[..., None] * d[None]), axis=2)
-    dd[np.isnan(dd)] = np.inf                   # (never taken by the loop's dd < dist)
-    j = np.argmin(dd, axis=1)
-    i = np.arange(len(xy))
-    got = dd[i, j] < np.inf
-    dist[got] = dd[i, j][got]
-    along[got] = (s[keep[j[got]]] + t[i, j][got] * length[j[got]]) / max(s[-1], 1e-6)
-    return dist, along
+    """Distance to a finite tunnel centreline, and fraction along it, per point of xy (k, 2): the first nearest of its
+    segments (of length 1e-6 m or more), inf and 0 where none (earthfast.rail_underpass_distance). Pure."""
+    import fast
+    fast.require(487, "rail_underpass_distance")
+    xy, line = roads._lines64([xy, line])
+    return fast._ef.rail_underpass_distance(xy, line)
 
 
 def _rail_boxes(rails):
-    """(n, 4) the boxes (x0, y0, x1, y1) of the rails' parts, for _underpass_masks (made once for every tunnel of a
-    call: each tunnel took every part's min and max again, ~6 of a cold Le Mans block + 4 tiles' ~50 CPU-s)."""
+    """(n, 4) the boxes (x0, y0, x1, y1) of the rails' parts (coarse_underpasses' bridges)."""
     out = np.zeros((len(rails), 4))
     for n, (*_, xy) in enumerate(rails):
         out[n, :2] = xy.min(0)
@@ -712,108 +696,61 @@ def _rail_boxes(rails):
     return out
 
 
-def _underpass_masks(rails, line, half, margin, boxes=None):
-    """Points near a tunnel, connected locally to a track that actually crosses it.
-
-    A crossing on one track must not qualify a neighbouring track. Connect only
-    the runs inside the tunnel's padded footprint: this preserves source-feature
-    splits without following a turnout or a returning track far outside it.
-    boxes: _rail_boxes(rails), made once by a caller with several tunnels.
-    """
-    masks = [np.zeros(len(xy), bool) for *_, xy in rails]
-    candidates, runs, owners = [], [], []
-    pad = half + margin
-    near = (*(line.min(0) - pad), *(line.max(0) + pad))
-    direction = line[-1] - line[0]
-    hit = set(_box_hits(_rail_boxes(rails) if boxes is None else boxes, near))
-    for n, (*_, xy) in enumerate(rails):
-        if n not in hit:
-            candidates.append(masks[n])         # (nothing near: no run; the zeros mask, never written to)
-            continue
-        # (only the points inside the tunnel's padded box: one outside it is more than pad from every point of the
-        # line, so never covered. A part is a whole feature's line, km long, and a central London cell's rail beds
-        # measured every one of its points against every tunnel in every node window: 65-83 CPU-s a cell, its plans
-        # past the other processes' waits, the cell planned by several at once, a road tile past 300 s and its road
-        # processes restarted, 2026-11-13. The same values at those points, elementwise.)
-        covered = np.zeros(len(xy), bool)
-        idx = np.flatnonzero((xy[:, 0] >= near[0]) & (xy[:, 0] <= near[2])
-                             & (xy[:, 1] >= near[1]) & (xy[:, 1] <= near[3]))
-        if len(idx):
-            tangent = np.gradient(xy, axis=0)[idx]
-            cross = np.abs(tangent[:, 0] * direction[1] - tangent[:, 1] * direction[0])
-            cross /= np.maximum(dnp.norm(tangent, axis=1) * dnp.norm(direction), 1e-9)
-            distance, _ = _underpass_distance(xy[idx], line)
-            covered[idx] = (distance <= pad) & (cross > UNDERPASS_MIN_SIN)
-        candidates.append(covered)
-        spans = covered[:-1] | covered[1:]
-        cuts = np.flatnonzero(np.diff(np.concatenate(([False], spans, [False]))))
-        for a, b in zip(cuts[::2], cuts[1::2]):
-            runs.append(xy[a:b + 1])
-            owners.append((n, a, b))
-    crossings = roads._crossings(runs, [line])
-    if not crossings:
-        return masks
-    _nodes, edges, adj = roads._chain_graph(runs)
-    connected = {node for n, _s, _xy in crossings for node in edges[n][:2]}
-    pending = list(connected)
-    while pending:
-        for node, _length in adj[pending.pop()]:
-            if node not in connected:
-                connected.add(node)
-                pending.append(node)
-    for (n, a, b), (start, _end, _s) in zip(owners, edges):
-        if start in connected:
-            masks[n][a:b + 1] = candidates[n][a:b + 1]
-    return masks
-
-
-def _span_underpasses(rails, tunnels):
-    """Replace the ground track over mapped road tunnels with supported spans.
-
-    Keep the original sample lattice and shared endpoints, including across source
-    feature and tile boundaries. The margin keeps the approach ballast's feet out
-    of the carriageway as well as the bridge itself.
-    """
+def _underpass_hits(rails, tunnels, margin):
+    """Per tunnel of tunnels [(line, half width)]: {part index of rails: (its masked points (ascending), their fraction
+    along the tunnel)}, the parts with any. A part's points near the tunnel (half width + margin) where it crosses the
+    tunnel (UNDERPASS_MIN_SIN or squarer) are masked when their run inside the tunnel's padded box connects (ends within
+    0.5 m) to a run that actually crosses it: a crossing on one track must not qualify a neighbouring track, and only the
+    runs inside the footprint are connected (the source feature's splits kept, a turnout or a returning track far
+    outside it not followed). earthfast.rail_underpass_hits. Pure."""
+    tunnels = list(tunnels)
+    out = [{} for _ in tunnels]
     if not tunnels:
-        return rails
-    covered = [np.zeros(len(xy), bool) for *_, xy in rails]
-    boxes = _rail_boxes(rails)
-    for line, half in tunnels:
-        for keep, mask in zip(covered, _underpass_masks(rails, line, half, FOOT_MAX_M + STEP_M, boxes)):
-            keep |= mask
-    out = []
-    for (fid, cls, kind, xy), mask in zip(rails, covered):
-        if kind != "ground":
-            out.append((fid, cls, kind, xy))
-            continue
-        spans = mask[:-1] | mask[1:]
-        cuts = np.concatenate(([0], np.flatnonzero(spans[1:] != spans[:-1]) + 1, [len(spans)]))
-        for a, b in zip(cuts[:-1], cuts[1:]):
-            out.append((fid, cls, "bridge" if spans[a] else kind, xy[a:b + 1]))
+        return out
+    import fast
+    fast.require(487, "rail_underpass_hits")
+    ti, pi, ki, fr = fast._ef.rail_underpass_hits(roads._lines64([xy for *_, xy in rails]),
+                                                  roads._lines64([ln for ln, _h in tunnels]),
+                                                  [float(h) for _ln, h in tunnels], float(margin))
+    if not len(ti):
+        return out
+    cut = np.flatnonzero((np.diff(ti) != 0) | (np.diff(pi) != 0)) + 1
+    for a, b in zip(np.r_[0, cut].tolist(), np.r_[cut, len(ti)].tolist()):
+        out[int(ti[a])][int(pi[a])] = (ki[a:b], fr[a:b])
     return out
 
 
-def _clip(rails, near):
-    """rails with each ground part cut to its runs of points inside near (x0, y0, x1, y1), one STEP_M more each side
-    (the same sample points as the whole part: they lie every STEP_M from its start). Pure."""
+def _underpass_masks(rails, line, half, margin):
+    """(k,) bool per part of rails: _underpass_hits' points of one tunnel (line, half)."""
+    masks = [np.zeros(len(xy), bool) for *_, xy in rails]
+    for n, (idx, _t) in _underpass_hits(rails, [(line, half)], margin)[0].items():
+        masks[n][idx] = True
+    return masks
+
+
+def _span_clip(rails, tunnels, near=None):
+    """rails with each ground part's track over mapped road tunnels (_underpass_hits, FOOT_MAX_M + STEP_M past their half
+    width: the approach ballast's feet out of the carriageway too) made supported spans ("bridge" pieces), the sample
+    lattice and the shared end points kept (across source features and tiles too); then, near (x0, y0, x1, y1) given,
+    each ground piece cut to its runs of points inside near, one STEP_M more each side (the same sample points as the
+    whole part: they lie every STEP_M from its start), a run of one point left out. earthfast.rail_span_clip. Pure."""
+    tunnels = list(tunnels)     # (an iterable read once, as the Python's loop did)
+    if not tunnels and near is None:
+        return rails
+    import fast
+    fast.require(487, "rail_span_clip")
+    pi, ai, bi, br = fast._ef.rail_span_clip(roads._lines64([xy for *_, xy in rails]),
+                                             [kind == "ground" for _f, _c, kind, _xy in rails],
+                                             roads._lines64([ln for ln, _h in tunnels]), [float(h) for _ln, h in tunnels],
+                                             FOOT_MAX_M + STEP_M, None if near is None else tuple(map(float, near)))
     out = []
-    for fid, c, kind, xy in rails:
-        if kind != "ground":
-            out.append((fid, c, kind, xy))
-            continue
-        inside = (xy[:, 0] >= near[0]) & (xy[:, 0] <= near[2]) & (xy[:, 1] >= near[1]) & (xy[:, 1] <= near[3])
-        if inside.all():
-            out.append((fid, c, kind, xy))
-            continue
-        grow = inside.copy()
-        grow[1:] |= inside[:-1]
-        grow[:-1] |= inside[1:]
-        idx = np.flatnonzero(grow)
-        if not len(idx):
-            continue
-        for run in np.split(idx, np.flatnonzero(np.diff(idx) > 1) + 1):
-            if len(run) >= 2:
-                out.append((fid, c, kind, xy[run[0]:run[-1] + 1]))
+    for n, a, b, bridge in zip(pi.tolist(), ai.tolist(), bi.tolist(), br.tolist()):
+        r = rails[n]
+        xy = r[3]
+        if a == 0 and b == len(xy) - 1 and not bridge:
+            out.append(r if r[2] != "ground" or not tunnels else (r[0], r[1], r[2], xy[a:b + 1]))
+        else:
+            out.append((r[0], r[1], "bridge" if bridge else r[2], xy[a:b + 1]))
     return out
 
 
@@ -1339,11 +1276,10 @@ def profile(rails, ground, underpasses=()):
     for n, bed in zip(on_ground, bed_heights_many(lifts)):
         zb[n] = bed
     # Read the lower road at its mouths, not on the filled railway bed above it.
-    boxes = _rail_boxes(rails) if underpasses else None
-    crossings = [(line, half, _underpass_masks(rails, line, half, DECK_HALF_M + STEP_M, boxes))
-                 for line, half in underpasses]
-    crossings = [(line, half, masks) for line, half, masks in crossings if any(m.any() for m in masks)]
-    mouths = np.concatenate([ln[[0, -1]] for ln, _hw, _masks in crossings]) if crossings else np.empty((0, 2))
+    underpasses = list(underpasses)
+    crossings = [(line, half, hits) for (line, half), hits in
+                 zip(underpasses, _underpass_hits(rails, underpasses, DECK_HALF_M + STEP_M)) if hits]
+    mouths = np.concatenate([ln[[0, -1]] for ln, _hw, _hits in crossings]) if crossings else np.empty((0, 2))
     mouth_z = np.asarray(ground(mouths), np.float64).reshape(-1, 2) if len(mouths) else []
     ends = {}                                   # node -> the ground parts' bed there (a bridge's ends)
     for n, ((_, _, kind, _), (a, b, _)) in enumerate(zip(rails, edges)):
@@ -1367,10 +1303,10 @@ def profile(rails, ground, underpasses=()):
         za = max(za, level[a][0]) if a in level else za         # (the track's level beyond its ends)
         zb_ = max(zb_, level[b][0]) if b in level else zb_
         zb[n] = deck_heights(_arc(xy), g, za, zb_)
-        for (line, _half, masks), (z0, z1) in zip(crossings, mouth_z):
-            over = masks[n]
-            if over.any():
-                _distance, t = _underpass_distance(xy[over], line)
+        for (_line, _half, hits), (z0, z1) in zip(crossings, mouth_z):
+            got = hits.get(n)
+            if got is not None:
+                over, t = got
                 req = zb[n].copy()
                 req[over] = np.maximum(req[over], z0 + (z1 - z0) * t
                                        + UNDERPASS_CLEAR_M + DECK_D - BALLAST_H)
