@@ -81,6 +81,13 @@ function M.stop(mode)
   ai.setMode(mode or 'stop')
 end
 
+-- Mode alone is not enough: the engine can disable its update callback while a mode remains selected.
+-- GE polls this while Autodrive is enabled, so loss of control schedules a new route without waiting for a stall.
+function M.isActive()
+  return lastPath ~= nil and ai.mode == 'manual'
+    and (not ai.isDriving or ai.isDriving())
+end
+
 -- GE plans from the vehicle reference point; the stock AI drives from obj:getFrontPosition(). A queued restart
 -- can therefore target a node already behind the AI. Drop only the passed prefix on its outgoing road.
 function M.forwardStart(ids, md, p, heading)
@@ -139,7 +146,7 @@ function M.drive(ids, version, force, speed, aggression, offsetMph)
   end
   offsetMph = speed and 0 or (offsetMph or 0) -- the performance tool's absolute speed override takes precedence
   offsetSpeedLimits(md.graph, offsetMph)
-  local suffix = not force and ai.mode == 'manual' and md == lastMap and version == lastVersion
+  local suffix = not force and M.isActive() and md == lastMap and version == lastVersion
     and speed == lastSpeed and aggression == lastAggression and offsetMph == lastOffset and M.extension(lastPath, ids)
   local action
   if suffix then

@@ -86,6 +86,7 @@ local autoFinished = nil -- completed local endpoint: wait for a continuation in
 local autoSerial = nil  -- the graph (navgraph applies) they were taken from
 local autoForce = true -- restart after a stall/recovery, destination change or pause, even on the same path
 local autoBlocked = false
+local autoRequest = 0   -- ignore delayed controller reports after a newer handoff or toggle
 local stillSince = nil
 local progRemaining, progAt = nil, nil   -- the remaining route distance last seen go down, and when (AUTO_NOPROGRESS_S)
 local leastRemaining = nil  -- the least remaining route distance since the route came (BACKTRACK_M)
@@ -320,11 +321,13 @@ M.metric = metric
 
 function M.status()
   if not dest then return nil end
+  local waiting = paused or pathWait ~= nil or autoBlocked or autoPath == nil or autoFinished ~= nil
   return { lat = dest.lat, lon = dest.lon, name = dest.name, dist = info and info.dist, bearing = info and info.bearing,
            metric = metric(),
            remaining = info and info.remaining, eta = info and info.eta, routeVersion = route and route.version or 0,
            progress = progress, planning = pendingId ~= nil, routeError = routeError, pendingId = pendingId,
            autodrive = auto, speedOffsetMph = speedOffsetMph,
+           autodriveState = not auto and 'off' or waiting and 'waiting' or 'driving',
            autoNodes = autoPath and #autoPath or nil, off = info and info.off, arrows = routedTo,
            routeDownload = downloadProgress, replans = M.noProgressReplans, recoveries = M.autoRecoveries,
            waypoints = #vias > 0 and M.waypoints() or nil, legs = route and route.legs or nil }
@@ -691,6 +694,14 @@ function M.retryAutodrive()
   routedTo, autoForce = nil, true
 end
 
+function M.onAutodriveInactive(id, request)
+  local veh = auto and playerVeh()
+  if not veh or veh:getId() ~= id or request ~= autoRequest then return end
+  autoPath = nil
+  M.retryAutodrive()
+  lastCheck = -math.huge
+end
+
 -- settings.lua validates and persists the 5 mph steps. A live change replans at the next update,
 -- even when the route and graph are unchanged (the AI caches speed limits in its current plan).
 function M.setSpeedOffsetMph(mph)
@@ -923,6 +934,19 @@ local function driveArrowsPath(gm, nodes, target)
   end
   ids = joined
   if not ids or #ids == 0 then holdAutodrive(veh); return end
+  -- A smoothed marker path can temporarily lose its tail even though the road is unchanged. Replacing the
+  -- live route with that prefix makes the stock AI brake for an artificial endpoint, then accelerate again
+  -- on the next extension. Keep only an identical, still-connected suffix of the previously accepted route.
+  if not autoForce and target and not target.final and autoSerial == graphSerial() and autoPath then
+    local start
+    for k, id in ipairs(autoPath) do if id == ids[1] then start = k; break end end
+    if start then
+      local remaining = M.validFrom(autoPath, start, { nodes })
+      local matches = #remaining > #ids
+      for k, id in ipairs(ids) do if remaining[k] ~= id then matches = false; break end end
+      if matches then ids = remaining end
+    end
+  end
   if #ids == 1 and ids[1] == autoFinished then
     local n = nodes[ids[1]]
     local dx, dy, dz = p.x - n.pos.x, p.y - n.pos.y, p.z - (n.pos.z or p.z)
@@ -931,6 +955,7 @@ local function driveArrowsPath(gm, nodes, target)
     -- a replacement map alone does not make that endpoint a usable continuation.
     if dx * dx + dy * dy + dz * dz <= reach * reach then holdAutodrive(veh); return end
   end
+  autoRequest = autoRequest + 1
   veh:queueLuaCommand(M.aiCommand(ids))
   M.trace('path', ids, nodes, p)
   autoPath, autoSerial, stillSince = ids, graphSerial(), nil
@@ -1073,7 +1098,16 @@ local function setArrows(key, target, tail, nodes, projections)
   if pcall(gm.setPath, target, { clearPathOnReachingTarget = false }) then
     routedTo, arrowsSerial = key, serial
     -- (not before the route is in: the AI would set off on its own way toward the destination)
-    if auto and route ~= nil and not paused then pcall(driveArrowsPath, gm, nodes, projections) end    -- before the tail: the AI drives the graph part only
+    if auto and route ~= nil and not paused then
+      -- A failed handoff must not cache this target as successfully driven. Retry it on the next check.
+      local ok, err = pcall(driveArrowsPath, gm, nodes, projections) -- before the visual-only tail
+      if not ok then
+        local veh = playerVeh()
+        if veh then holdAutodrive(veh) end
+        routedTo = nil
+        if log then log('W', 'beamngEarth', 'autodrive route handoff: ' .. tostring(err)) end
+      end
+    end
     if tail then pcall(appendTail, gm, tail.e, tail.s, tail.z) end
     return true
   end
@@ -1084,6 +1118,7 @@ function M.setAutodrive(on, brake)
   on = on and true or false
   if on == auto then return auto end
   auto = on
+  autoRequest = autoRequest + 1
   autoFinished = nil
   autoPath, autoRoadPath, autoSerial, stillSince, paused, pathWait = nil, nil, nil, nil, false, nil
   autoForce, autoBlocked = true, false
@@ -1132,6 +1167,10 @@ local function autoKeep(nodes, now)
   elseif paused then
     paused, routedTo = false, nil         -- back: the path given again
     autoForce = true
+  end
+  if autoPath and not autoBlocked and not pathWait then
+    veh:queueLuaCommand(string.format([[if beamngEarth_autodrive and not beamngEarth_autodrive.isActive() then
+      obj:queueGameEngineLua("require('beamngEarth/gps').onAutodriveInactive(%d, %d)") end]], veh:getId(), autoRequest))
   end
   local v = veh.getVelocity and veh:getVelocity()
   local speed = v and math.sqrt(v.x * v.x + v.y * v.y) or 0
@@ -1286,9 +1325,8 @@ function M.update(anchor, player)
     end
     if route.dist and route.dist > 0 and route.dur then info.eta = route.dur * remaining / route.dist end
     if off > M.OFF_ROUTE_M and not pendingId and now - lastRequest > M.REROUTE_S then requestRoute(player) end
-    local tg
+    local tg, differentRoadLoaded
     if auto then
-      local differentRoadLoaded
       if nodes then tg, differentRoadLoaded = routeTarget(e, nodes, i, t) end
       if not tg then
         local veh = playerVeh()
@@ -1305,7 +1343,7 @@ function M.update(anchor, player)
         if progRemaining then stuckTries = 0 end
         progRemaining, progAt = info.remaining, now
       -- A completed path waits for streaming, but an unreachable loaded continuation still needs recovery.
-      elseif (not autoFinished or not tg) and now - progAt > M.AUTO_NOPROGRESS_S then
+      elseif (not autoFinished or not tg or differentRoadLoaded) and now - progAt > M.AUTO_NOPROGRESS_S then
         stuckTries = stuckTries + 1
         if stuckTries >= 2 then         -- the path given again did not help: onto the route ahead
           stuckTries = 0

@@ -308,7 +308,7 @@
         <button class="map-btn small" :disabled="!!state.cannotGo" @click="teleportNow(state.gps.lat, state.gps.lon, state.gps.name)">Teleport</button>
         <button class="map-btn small" :class="{ primary: state.gps.autodrive }" @click="setAutodrive(!state.gps.autodrive)"
                 :title="state.gps.autodrive ? 'Stop driving by itself' : 'Drive the route in lane, at the speed limit plus the cruise offset'">
-          {{ state.gps.autodrive ? "Autodrive on" : "Autodrive" }}
+          {{ state.gps.autodrive ? (state.gps.autodriveState === "waiting" ? "Autodrive waiting" : "Autodrive on") : "Autodrive" }}
         </button>
         <button class="map-btn small" @click="clearGps">Clear</button>
       </div>

@@ -88,7 +88,7 @@
           <button class="map-btn small" :disabled="!!ms.cannotGo || busy" @click="teleportTo(ms.gps.lat, ms.gps.lon, ms.gps.name)">Teleport</button>
           <button class="map-btn small" :class="{ primary: ms.gps.autodrive }" @click="setAutodrive(!ms.gps.autodrive)"
                   :title="ms.gps.autodrive ? 'Stop driving by itself' : 'Drive the route in lane, at the speed limit plus the cruise offset'">
-            {{ ms.gps.autodrive ? "Autodrive on" : "Autodrive" }}</button>
+            {{ ms.gps.autodrive ? (ms.gps.autodriveState === "waiting" ? "Autodrive waiting" : "Autodrive on") : "Autodrive" }}</button>
           <button class="map-btn small" @click="clearGps">Clear</button>
         </div>
         <AutodriveSpeed :offset="ms.gps.speedOffsetMph || 0" :send-lua="engineLua"

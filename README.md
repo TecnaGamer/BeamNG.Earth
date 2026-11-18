@@ -319,6 +319,8 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   85 mph on a 75 mph road, then 65 mph when the limit drops to 55. **Reset** returns to the speed limit.
   The offset is saved between drives and also available in Settings > World (−100 to +100 mph, in 5 mph steps).
   The AI still slows for turns, traffic and arrival; negative offsets have a 5 mph minimum target, or the road limit if lower.
+  **Autodrive waiting** means it is temporarily holding for road data or retrying its route; it resumes automatically.
+  Click the Autodrive button to cancel while waiting.
 - Saved places and recent places; "Where you left off" in the level select puts you back where you last drove (it
   is saved as you drive, at teleports and when the game closes).
 
