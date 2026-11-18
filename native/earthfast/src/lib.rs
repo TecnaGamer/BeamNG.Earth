@@ -6693,6 +6693,10 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 481: RS step S2a: structure_groups takes an outside flag per member (its own kind kept: an outside conflict only
     // where the pair could be one structure) and returns each member's duplicate (one way under two part keys);
     // structure_touch, the pairs the chain closure must hold (BridgeProfiles._resolve on the switch path)
-    m.add("VERSION", 481)?;
+    m.add_function(wrap_pyfunction!(railbeds::rail_bed_heights, m)?)?;
+    // 483: the full port's railways._avg / bed_heights (railbeds::rail_bed_heights: every ground part of one
+    // railways.profile in one call, numpy's cumsum order). (r2a7 was given 473-479, but dev's module is 480 already
+    // (rs-s1): VERSION has to pass 480 so that a 480 module, which lacks it, fails the start check)
+    m.add("VERSION", 483)?;
     Ok(())
 }
