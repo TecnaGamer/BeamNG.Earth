@@ -42,7 +42,8 @@ plans (cut and fill).
 import hashlib
 import heapq
 import math
-from collections import namedtuple
+import threading
+from collections import OrderedDict, namedtuple
 
 import numpy as np
 
@@ -307,12 +308,44 @@ def under_pairs(net, u, su, d, sd):
     cleared the sign at that point and its dip rose 0.2 m toward the deck's east edge, where the road's own ground
     stood 3.78 m under the girders and a 3.8 m truck in them. The lattice lies on d under a deck (the shape's unknown:
     any point of it), else on u (a part whose heights are read, fixed_z: once a lattice step along it). Made once a
-    crossing."""
+    crossing. Also kept for every net that meets the same two lines at the same place (_UNDER: a region grown cell by
+    cell and the regions round it each made a new net and made the same footprints again, 9,994 calls for ~2,000
+    crossings, 45 of the 87 profiled s of a Shanghai region's find)."""
     memo = net.__dict__.setdefault("_under", {})
     key = (u, round(float(su), 6), d, round(float(sd), 6))
     got = memo.get(key)
     if got is not None:
         return got
+    mu, md = net.m[u], net.m[d]
+    gkey = (_line_id(net, u), _line_id(net, d), mu.kind == "deck", float(mu.half), float(md.half), float(su), float(sd))
+    with _UNDER_LOCK:
+        kept = _UNDER.get(gkey)
+        if kept is not None:
+            _UNDER.move_to_end(gkey)
+    if kept is not None:
+        out = [(float(su), float(sd))] + list(zip(kept[0].tolist(), kept[1].tolist()))
+        memo[key] = out
+        return out
+    out = _under_pairs_calc(net, u, su, d, sd)
+    rest = out[1:]
+    with _UNDER_LOCK:
+        if gkey not in _UNDER:
+            _UNDER[gkey] = (np.array([p_[0] for p_ in rest], np.float64), np.array([p_[1] for p_ in rest], np.float64))
+            _UNDER_N[0] += len(rest) + 1
+            while _UNDER_N[0] > _UNDER_PAIRS_MAX and len(_UNDER) > 1:
+                _UNDER_N[0] -= len(_UNDER.popitem(last=False)[1][0]) + 1
+    memo[key] = out
+    return out
+
+
+_UNDER = OrderedDict()          # (the two lines, which is the deck, their half widths, the crossing) -> the footprint's
+_UNDER_LOCK = threading.Lock()  # pairs after the first (arrays), least recently used let go
+_UNDER_N = [0]
+_UNDER_PAIRS_MAX = 4_000_000    # pairs kept (16 bytes each)
+
+
+def _under_pairs_calc(net, u, su, d, sd):
+    """under_pairs, made (not looked up): [(su, sd)] and the footprint's pairs."""
     a_, sa, b_, sb = (d, sd, u, su) if net.m[u].kind == "deck" else (u, su, d, sd)
     la, lsa, lb, lsb = net.lines[a_], net.s[a_], net.lines[b_], net.s[b_]
     ha, hb = float(net.m[a_].half), float(net.m[b_].half)
@@ -333,7 +366,6 @@ def under_pairs(net, u, su, d, sd):
     lw = np.vstack([at_s(lb, lsb, wlo), lb[inner], at_s(lb, lsb, whi)])
     out = [(float(su), float(sd))]
     if whi <= wlo:
-        memo[key] = out
         return out
     nc = len(cv)
 
@@ -375,13 +407,13 @@ def under_pairs(net, u, su, d, sd):
     sP, sQ, ok = (np.concatenate(v) for v in zip(*got))
     sU, sD = (sQ, sP) if b_ == u else (sP, sQ)
     out += sorted(set(zip(np.round(sU[ok], 6).tolist(), np.round(sD[ok], 6).tolist())))
-    memo[key] = out
     return out
 
 
 def _road_of(m):
-    """The map road member m is part of: its key's feature id (a deck's or a ground part's), else its key."""
-    return m.key[0] if isinstance(m.key, tuple) else m.key
+    """The map road member m is part of: its key's feature id (a deck's or a ground part's), else its key. A lane
+    section ("<road>~lanes<a>-<b>", lanesections.py: one road cut where its lane count changes) is its road's."""
+    return str(m.key[0] if isinstance(m.key, tuple) else m.key).partition("~lanes")[0]
 
 
 def _end_meets(net, e, se, o, so, crossed):
@@ -399,7 +431,11 @@ def _end_meets(net, e, se, o, so, crossed):
     deck. Two decks of one map road meet only end to end, never one's end on the other's middle: a road passing
     over itself (Kawazu's Nanadaru loop, a spiral of one road at levels 1 to 3, its level-2 deck ending right over
     its level-1 deck on its heading where the level-3 one goes on) was taken for a merge, held at the deck under it
-    there and 8.35 m over it on the level-3 deck's start: the loop infeasible. crossed: e and o cross each other (a
+    there and 8.35 m over it on the level-3 deck's start: the loop infeasible. A road's own lane sections meeting end
+    to end are a road going on, whatever levels the map gave them and whether or not their node sets share a node
+    (one carriageway's sections were tagged level 1 and 2 in Shanghai's Yan'an elevated road): taken for a
+    separation, their clearance contradicted their joint (12.7 m round a loop of four), an infeasible system left
+    as it was. crossed: e and o cross each other (a
     road cannot meet the one it passes over or under a few metres on: Gravelly Hill's level-1 M6 deck under its
     level-3 one at 29 deg, its end 5 m past their crossing)."""
     me, mo = net.m[e], net.m[o]
@@ -407,7 +443,7 @@ def _end_meets(net, e, se, o, so, crossed):
         return True
     mapped = me.nodes is None or mo.nodes is None or bool(me.nodes & mo.nodes)    # (no nodes known: as they lie)
     if min(so, net.L[o] - so) <= JOIN_M:
-        return me.kind not in STRUCTURES or mapped
+        return me.kind not in STRUCTURES or mapped or _road_of(me) == _road_of(mo)
     if me.kind not in STRUCTURES:
         return mapped
     if me.kind == mo.kind == "deck" and not crossed and _road_of(me) != _road_of(mo) and mapped:
@@ -972,6 +1008,20 @@ def _loc_sorted_calc(x, i):
     return k[o], ms[o], lo_, hi_
 
 
+def _pieces_of(smp, i):
+    """The pieces (ascending) whose samples are on member i, or hold a joint's with it: the only ones _locate can find
+    anything in. Made once for the pieces' samples (on the first's): looked up for every sample of every piece, _locate
+    asked of each piece of a 1,300-piece Shanghai system 50 million times, 155 of the solve's 168 profiled s."""
+    by = smp[0].get("_by") if smp else None
+    if by is None:
+        by = {}
+        for p, x in enumerate(smp):
+            for j in set(np.unique(x["mem"]).tolist()) | {int(j) for _k, j, _s in x.get("joints", ())}:
+                by.setdefault(j, []).append(p)
+        smp[0]["_by"] = by
+    return by.get(int(i), ())
+
+
 def _locate(smp, p, i, s_):
     """The two samples of piece p on member i bracketing arc length s_ there, with the weight of the second, or
     None."""
@@ -988,7 +1038,7 @@ def _locate(smp, p, i, s_):
 
 def _var(pcs, smp, i, s_):
     """(piece, sample a, sample b, weight of b) of member i's unknown height at arc length s_, or None."""
-    for p in range(len(pcs)):
+    for p in _pieces_of(smp, i):
         got = _locate(smp, p, i, s_)
         if got is not None:
             return (p,) + got
@@ -1001,7 +1051,7 @@ def _vars(pcs, smp, i, sv):
     sv = np.asarray(sv, np.float64)
     n = len(sv)
     P, A, B, T = np.full(n, -1, np.int64), np.zeros(n, np.int64), np.zeros(n, np.int64), np.zeros(n)
-    for p in range(len(pcs)):
+    for p in _pieces_of(smp, i):
         got = _loc_sorted(smp[p], i)
         if got is None:
             continue
@@ -1027,7 +1077,9 @@ def _overlaps(pcs, smp):
     for q in range(len(pcs)):
         for k in range(len(smp[q]["mem"])):
             i, s_ = int(smp[q]["mem"][k]), float(smp[q]["ms"][k])
-            for p in range(q):
+            for p in _pieces_of(smp, i):
+                if p >= q:
+                    break
                 got = _locate(smp, p, i, s_)
                 if got is not None:
                     a, b, t = got

@@ -309,7 +309,7 @@ def track_beds(frame, cells, box, elev, load=None):
     return rails, [np.asarray(zb, np.float64) for zb, _zg in prof], worn
 
 
-def bed_at(rails, beds, xy, fid=None):
+def bed_at(rails, beds, xy, fid=None, distance=False):
     """The bed (n,) at points xy (n, 2) on a track's own line (track_beds' rails and beds): each point's on the part
     nearest it (of line fid only, when given), between the two samples of its segment there. NaN where there is no
     part (the railways lay none of that line: a stub they leave out). Pure.
@@ -320,10 +320,11 @@ def bed_at(rails, beds, xy, fid=None):
     crossing asked (379 calls, 11 of 200 CPU-s of a Zurich + Gotthard replay)."""
     xy = np.asarray(xy, np.float64).reshape(-1, 2)
     out = np.full(len(xy), np.nan)
+    near = np.full(len(xy), np.inf)
     use = [(np.asarray(pxy, np.float64), np.asarray(zb, np.float64)) for (f, _c, _kind, pxy), zb in zip(rails, beds)
            if not ((fid is not None and f != fid) or len(pxy) < 2)]
     if not use or not len(xy):
-        return out
+        return (out, near) if distance else out
     a = np.concatenate([p[:-1] for p, _z in use])
     ab = np.concatenate([np.diff(p, axis=0) for p, _z in use])
     z0 = np.concatenate([z[:-1] for _p, z in use])
@@ -337,7 +338,8 @@ def bed_at(rails, beds, xy, fid=None):
         j = np.argmin(d, axis=1)
         tj = t[np.arange(len(q)), j]
         out[i0:i0 + len(q)] = z0[j] + (z1[j] - z0[j]) * tj
-    return out
+        near[i0:i0 + len(q)] = d[np.arange(len(q)), j]
+    return (out, near) if distance else out
 
 
 def grade_plans(frame, cells, box, elev, load=None):
