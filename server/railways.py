@@ -245,8 +245,12 @@ def grade_plans(frame, cells, box, elev, load=None):
             # rail beds depended on which cells were planned before it, 2026-11-12)
             kxy = keys[miss] / 100.0
             la, lo, _ = frame.enu_to_geodetic(kxy[:, 0], kxy[:, 1], 0.0)
-            z = np.asarray(elev(la, lo), np.float64)
+            import revisit
+            with revisit.scope() as b:
+                z = np.asarray(elev(la, lo), np.float64)
             out[miss] = z
+            if not b.complete:      # (read short: not kept, so a later cell reading these points reads, and faults, anew;
+                return out          # kept, they were its heights without a word: its plans counted as complete)
             if len(memo) + len(miss) > GROUND_MEMO_MAX:
                 memo.clear()
             memo.put(np.ascontiguousarray(keys[miss]), np.ascontiguousarray(z, np.float64))

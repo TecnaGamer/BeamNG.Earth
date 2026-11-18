@@ -303,6 +303,36 @@ def _gauss2(a, sigma):
     return sum(k[i] * p[:, i:i + a.shape[1]] for i in range(2 * r + 1))
 
 
+_UNREAD = np.zeros((TILE, TILE), np.float32)     # (a box's tile no point reads: never read, sample)
+_UNREAD.flags.writeable = False
+
+
+def _tiles_read(fx, fy, nx, ny):
+    """(nx * ny,) bools, row-major: the tiles of an nx x ny box (fx, fy: the points' pixel coordinates in it) whose
+    pixels earthfast.bilinear_tiles reads: each point's pixel (floor, clamped to the box as the kernel clamps it) and
+    the next one right and down, whatever their weights. Every tile where a coordinate is not finite (the kernel's
+    and numpy's conversions of those differ)."""
+    if not (np.isfinite(fx).all() and np.isfinite(fy).all()):
+        return np.ones(nx * ny, bool)
+    w, h = nx * TILE, ny * TILE
+    ix = np.clip(np.floor(fx), 0, w - 2).astype(np.int64)
+    iy = np.clip(np.floor(fy), 0, h - 2).astype(np.int64)
+    read = np.zeros((ny, nx), bool)
+    for dx in (0, 1):
+        for dy in (0, 1):
+            read[(iy + dy) // TILE, (ix + dx) // TILE] = True
+    return read.ravel()
+
+
+def _replay(marks):
+    """A kept tile's marks (Dem._load_marked) said again in the reading thread: its builds are short too."""
+    if marks:
+        if marks[0]:
+            revisit.fault(here=True)
+        if marks[1]:
+            revisit.fault(lidar=True)
+
+
 class Dem:
     disk = cachemod.NONE    # the server's cache.Cache (last use per file, the size cap); set by earthd
     ground_filter = True    # surface-model areas: buildings out, deeper zooms from that ground (see above)
@@ -324,6 +354,10 @@ class Dem:
         self._local = threading.local()
         self.mem_tiles = MEM_TILES if mem_tiles is None else mem_tiles
         self._lru = OrderedDict()       # (z, x, y) -> float32 [TILE, TILE]
+        # (z, x, y) -> (faults, lidar rule faults) of a tile in _lru made while something it read failed (a stand-in
+        # for a download that failed): whoever reads the kept copy is short of it too (_lru_read). Only its first
+        # readers were told: a cell planned later from the kept stand-in counted as complete
+        self._lru_short = {}
         self._inflight = {}             # (z, x, y) -> Future
         self._lock = threading.Lock()
         self.stats = Counter()          # updated from fetch threads; read via stats_snapshot()
@@ -379,6 +413,7 @@ class Dem:
         """Drop the decoded tiles kept in memory (budget.maybe_shed)."""
         with self._lock:
             self._lru.clear()
+            self._lru_short.clear()
     def _canada(self, key, a):
         """Tile key's heights a with Canada's lidar terrain (hrdem.py) put in where it has data (z13 and deeper)."""
         z, x, y = key
@@ -1499,12 +1534,14 @@ class Dem:
         key = (z0, ax, ay)
         with self._lock:
             anc = self._lru.get(key)
-        if anc is None:
-            anc = self._load_tile(key)      # (in this thread: a pool worker waiting on the pool could deadlock)
+            marks = self._lru_short.get(key)
+        if anc is not None:
+            _replay(marks)
+        else:
+            # (in this thread: a pool worker waiting on the pool could deadlock)
+            anc, marks = self._load_marked(key)
             with self._lock:
-                self._lru[key] = anc
-                while len(self._lru) > self.mem_tiles:
-                    self._lru.popitem(last=False)
+                self._lru_put(key, anc, marks)
         k = 2 ** d
         i = (np.arange(TILE) + 0.5) / k - 0.5
         u = np.clip((x - ax * k) * TILE / k + i, 0, TILE - 1)
@@ -1543,7 +1580,7 @@ class Dem:
                 cold = [k for k in keys if k[0] >= mtarchive.MIN_ZOOM and k not in self._lru and k not in self._inflight]
             if cold:
                 self._archive_batch(cold, "demand")
-        out, futs, new = {}, {}, []
+        out, futs, new, short = {}, {}, [], []
         urgent = getattr(self._local, "urgent", False)
         pool = self.urgent_pool if urgent else self.pool
         caller = self._caller()
@@ -1555,12 +1592,15 @@ class Dem:
                 if k in self._lru:
                     self._lru.move_to_end(k)
                     out[k] = self._lru[k]
+                    short.append(self._lru_short.get(k))
                 elif k in self._inflight and not (urgent and not self._inflight[k].running()
                                                   and not self._inflight[k].done()):
                     futs[k] = self._inflight[k]
                 else:
-                    futs[k] = self._inflight[k] = pool.submit(self._as, caller, self._load_tile, k)
+                    futs[k] = self._inflight[k] = pool.submit(self._as, caller, self._load_marked, k)
                     new.append(k)
+        for marks in short:     # (kept copies made short of something: this reader is too)
+            _replay(marks)
         # Outside the lock: the callback runs at once if the future is already done.
         for k in new:
             futs[k].add_done_callback(lambda f, k=k: self._finish(k, f))
@@ -1568,7 +1608,7 @@ class Dem:
         if progress:
             progress(done, len(keys))
         for k, fut in futs.items():
-            out[k] = fut.result()
+            out[k] = fut.result()[0]        # (its faults are this reader's: revisit.bind)
             done += 1
             if progress:
                 progress(done, len(keys))
@@ -1581,9 +1621,26 @@ class Dem:
             if self._inflight.get(key) is fut:
                 del self._inflight[key]
             if not fut.cancelled() and fut.exception() is None:
-                self._lru[key] = fut.result()
-                while len(self._lru) > self.mem_tiles:
-                    self._lru.popitem(last=False)
+                self._lru_put(key, *fut.result())
+
+    def _lru_put(self, key, a, marks):
+        """With self._lock held: tile key's heights a into the LRU, with marks (_load_marked's) kept beside it."""
+        self._lru[key] = a
+        self._lru.move_to_end(key)
+        if marks is None:
+            self._lru_short.pop(key, None)
+        else:
+            self._lru_short[key] = marks
+        while len(self._lru) > self.mem_tiles:
+            self._lru_short.pop(self._lru.popitem(last=False)[0], None)
+
+    def _load_marked(self, key):
+        """(_load_tile(key), its marks): (faults, lidar rule faults) when making it read something short (a stand-in
+        for a failed download), else None. Its faults reach this thread's builds as they happen (its own scope is
+        inside theirs)."""
+        with revisit.scope() as made:
+            a = self._load_tile(key)
+        return a, ((made.n, made.lidar) if made.n or made.lidar else None)
 
     def block_max(self, z, x, y, block):
         """Highest elevation in every block x block pixel square of tile (z, x, y): a (TILE / block)²
@@ -1645,10 +1702,12 @@ class Dem:
             out[valid] = sub
             return out.reshape(shape)
         keys = [(zoom, tx % n, ty) for ty in range(ty0, ty1 + 1) for tx in range(tx0, tx1 + 1)]     # (row-major)
-        got = self.tiles(keys, progress)
         fx -= tx0 * TILE
         fy -= ty0 * TILE
+        read = _tiles_read(fx, fy, nx, ny)
+        got = self.tiles([k for k, r in zip(keys, read) if r], progress)
         # (sampled from the tiles in place: a mosaic of them copied on every call cost ~2 s per 16 city road tiles)
         fast.require(76, "bilinear_tiles")
-        out[valid] = fast._ef.bilinear_tiles([np.asarray(got[k], np.float32) for k in keys], nx, TILE, fx, fy)
+        out[valid] = fast._ef.bilinear_tiles([np.asarray(got[k], np.float32) if r else _UNREAD
+                                              for k, r in zip(keys, read)], nx, TILE, fx, fy)
         return out.reshape(shape)
