@@ -32,7 +32,7 @@ TODAY = {
         shape_p95=4.9,          # m: the Sihl viaduct's decks, solved up to 6.3 m off the real ones (was 7.9)
         under_laws=2, steeper=2,
         dug=(7, 8),             # per mille of the ground roads' points, 3.3 m at the deepest
-        filled=(14, 14),        # 2.3 m at most (was 6.5): the motorway at its tunnels' mouths. The mouths are right (floor
+        filled=(14, 13),        # 2.3 m at most (was 6.5): the motorway at its tunnels' mouths. The mouths are right (floor
                                 # 449.4 / 436.3 against the survey's 450.6 / 436); the roads beside the tunnel's low arch were
                                 # lifted to its cover (5.8 m) until the cover was asked over the tube's own footprint
         rail_low=None, rail_high=None),     # (no railway bridge here)
@@ -71,7 +71,7 @@ TODAY = {
         dug=(51, 49),           # a 6 m road 5 m, the exit ramp 2.3 m (its own plan under the DEM). Was 66 / 64 with a link road 7.3 m
                                 # under its survey height beside the ramp in its cutting: the ramp's lanes reached on past
                                 # its wall's face over the link's (a wall holds the link in the real place: grading.level_walls)
-        filled=(5, 2),          # 1.8 m at most (was 8.3, 76 per mille): the road into the Gotthard tunnel, its mouth read on the face
+        filled=(5, 0),          # 1.8 m at most (was 8.3, 76 per mille; 0.9 m with the shapes): the road into the Gotthard tunnel, its mouth read on the face
         rail_low=-9.7, rail_high=0.2),
     "kempttal_viaduct": dict(
         unmatched=0, not_built=0, right=6,
