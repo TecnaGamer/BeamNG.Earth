@@ -301,24 +301,163 @@ class SampleReadsOnlyItsTilesTest(unittest.TestCase):
             self.assertFalse(b.complete)
             self.assertNotIn((z, x0 + 1, y0 + 1), dem.loaded)
 
-    def test_tiles_read_matches_kernel(self):
-        """_tiles_read's tiles are exactly those whose pixels the kernel reads: NaN tiles in all others leave every
-        sample finite, at random points of a 3 x 3 box, edges and corners included."""
-        import fast
+    def test_asks_exactly_the_tiles_read(self):
+        """earthfast.dem_sample asks for exactly the tiles holding each point's pixel and the next one right and down
+        (the bilinear's four), at random points of a 3 x 3 box, tile edges and corners included; its bilinear never
+        reads a tile it did not ask (it would raise), and the heights are the planes' own."""
+        z = 12
+        x0, y0 = 2000, 1500
         rng = np.random.default_rng(11)
-        for _ in range(200):
-            nx, ny = int(rng.integers(1, 4)), int(rng.integers(1, 4))
-            if nx * ny < 2:
-                nx = 2
+        offs = [0.4, 0.6, T - 1.4, T - 0.6, T - 0.4, 200.3]
+        for _ in range(100):
             m = int(rng.integers(1, 6))
-            fx = rng.choice([rng.uniform(-3, nx * T + 3), float(rng.integers(0, nx) * T - 1) + 0.5,
-                             float(nx * T - 1)], m) if rng.random() < 0.5 else rng.uniform(-3, nx * T + 3, m)
-            fy = rng.uniform(-3, ny * T + 3, m)
-            read = demmod._tiles_read(np.asarray(fx, np.float64), fy, nx, ny)
-            tiles = [np.ones((T, T), np.float32) if r else np.full((T, T), np.nan, np.float32) for r in read]
-            out = fast._ef.bilinear_tiles(tiles, nx, T, np.asarray(fx, np.float64), fy)
-            self.assertTrue(np.isfinite(out).all(), (nx, ny, fx, fy, read))
+            px = np.array([(x0 + int(rng.integers(0, 3))) * T + float(rng.choice(offs)) for _ in range(m)])
+            py = np.array([(y0 + int(rng.integers(0, 3))) * T + float(rng.choice(offs)) for _ in range(m)])
+            lat, lon = self._lat_lon(z, px, py)
+            with tempfile.TemporaryDirectory() as d:
+                dem = StandInDem(d)
+                got = dem.sample(lat, lon, z)
+            want = {(z, int(np.floor(x) + dx) // T, int(np.floor(y) + dy) // T)
+                    for x, y in zip(px, py) for dx in (0, 1) for dy in (0, 1)}
+            self.assertEqual(set(dem.loaded), want, (px, py))
+            self.assertEqual(len(dem.loaded), len(want))
+            self.assertTrue(np.isfinite(got).all())
 
+    def test_bad_points(self):
+        """A longitude that is not finite raises ValueError (math.floor's, as before the port); a latitude that is not
+        finite goes to the polar DEM with the caps (sea level when it can't be had), the other points still sampled."""
+        z = 12
+        with tempfile.TemporaryDirectory() as d:
+            dem = StandInDem(d)
+            for bad in (np.nan, np.inf, -np.inf):
+                with self.assertRaises(ValueError):
+                    dem.sample(np.array([40.0, 40.0]), np.array([-73.9, bad]), z)
+            def no_polar():
+                raise OSError("no polar DEM here")
+            dem.polar = no_polar
+            with self.assertLogs("earthd.dem", "WARNING"):
+                got = dem.sample(np.array([np.nan, 40.0, 89.0]), np.array([-73.9, -73.9, 0.0]), z)
+            x = int(np.floor((-73.9 / 360.0 + 0.5) * 2 ** z))
+            self.assertEqual(got.tolist(), [0.0, float(x), 0.0])
+
+    def test_fetch_generator(self):
+        """dem_sample takes the fetch callback's whole result before it borrows any tile: a generator works, and one
+        that changes a tile it already yielded (resized: its memory moved) raises a Python exception instead of aborting the process
+        (a borrow held while the generator ran found its array changed under it)."""
+        z = 12
+        x0, y0 = 2000, 1500
+        pa = self._lat_lon(z, x0 * T + 100.3, y0 * T + 200.6)
+        pb = self._lat_lon(z, (x0 + 1) * T + 300.2, (y0 + 1) * T + 50.9)
+        lat, lon = np.array([pa[0], pb[0]]), np.array([pa[1], pb[1]])
+
+        class GenDem(StandInDem):
+            reshape = False
+
+            def _sample_tiles(self, keys, progress):
+                got = self.tiles(keys, progress)
+                first = None
+                for k in keys:
+                    a = np.array(got[k], np.float32)
+                    if first is None:
+                        first = a
+                    elif self.reshape:
+                        first.resize((T, T // 2), refcheck=False)   # (its memory reallocated)
+                    yield a
+
+        with tempfile.TemporaryDirectory() as d:
+            dem = GenDem(d)
+            self.assertEqual(dem.sample(lat, lon, z).tolist(), [float(x0), float(x0 + 1)])
+            dem.reshape = True
+            with self.assertRaises((TypeError, ValueError)):
+                dem.sample(lat, lon, z)
+
+    def test_unaligned_subclass_tile(self):
+        """A tile that is an unaligned view of an ndarray subclass whose copy() hands back itself is copied by
+        numpy.array, not its own copy(): the heights are the tile's."""
+        import fast
+
+        class Selfish(np.ndarray):
+            def copy(self, *a, **k):
+                return self
+
+        z = 12
+        lat, lon = self._lat_lon(z, 2000 * T + 100.3, 1500 * T + 200.6)
+        buf = np.zeros(T * T * 4 + 1, np.uint8)
+        tile = np.frombuffer(buf.data, np.float32, T * T, 1).reshape(T, T).view(Selfish)
+        self.assertFalse(tile.flags.aligned)
+        got = fast._ef.dem_sample(np.array([lat]), np.array([lon]), z, T, 84.9, 1024, 16, 4, 2,
+                                  lambda keys: [tile for _ in keys], lambda la, lo: None)
+        self.assertEqual(got.tolist(), [0.0])
+
+    def test_borrow_api_set_up_before_checks(self):
+        """rust-numpy's borrow checking is set up (its first use imports numpy's multiarray module and looks a capsule
+        up: Python hooks can run) before a caller's array is checked: a hook there that changes the input array makes
+        the check refuse it (TypeError), never a borrow of an array changed after its check (a fresh process: the set
+        up happens once)."""
+        import subprocess
+        code = r'''
+import sys
+sys.path.insert(0, sys.argv[1])
+import numpy as np
+import fast
+try:
+    import numpy._core.multiarray as ma
+except ImportError:
+    import numpy.core.multiarray as ma
+lat, lon = np.array([40.0, 40.001]), np.array([-73.9, -73.9])
+called = []
+def hook(name):
+    if name == "_RUST_NUMPY_BORROW_CHECKING_API" and not called:
+        called.append(name)
+        lat.resize((1, 2), refcheck=False)
+    raise AttributeError(name)
+ma.__getattr__ = hook
+try:
+    fast._ef.dem_sample(lat, lon, 12, 512, 84.9, 1024, 16, 4, 2,
+                        lambda keys: [np.zeros((512, 512), np.float32) for _ in keys], lambda a, b: None)
+    print("RESULT ok", len(called))
+except (TypeError, ValueError) as e:
+    print("RESULT", type(e).__name__, len(called))
+'''
+        r = subprocess.run([sys.executable, "-c", code, str(Path(__file__).resolve().parents[1])],
+                           capture_output=True, text=True, timeout=120)
+        self.assertIn("RESULT TypeError 1", r.stdout, r.stdout + r.stderr[-2000:])
+
+    def test_snapshot_budget(self):
+        """The tiles are copied out for a bilinear without the GIL only within a byte budget: a huge tile that is one
+        broadcast scalar (4 TiB as a copy) and a box of 81 tiles (81 MiB) are read in place, with the same heights."""
+        import fast
+        lat = np.linspace(10.0, 11.0, 5000)
+        lon = np.linspace(20.0, 21.0, 5000)
+        big = np.broadcast_to(np.float32(5.0), (1 << 20, 1 << 20))
+        got = fast._ef.dem_sample(lat, lon, 0, 1 << 20, 84.9, 1024, 16, 4, 2,
+                                  lambda keys: [big for _ in keys], lambda a, b: None)
+        self.assertEqual(set(got.tolist()), {5.0})
+        z, x0, y0 = 12, 2000, 1500
+        px, py = np.meshgrid(np.linspace(x0 * T + 0.7, (x0 + 9) * T - 1.3, 300),
+                             np.linspace(y0 * T + 0.7, (y0 + 9) * T - 1.3, 300))
+        lat, lon = self._lat_lon(z, px.ravel(), py.ravel())
+        with tempfile.TemporaryDirectory() as d:
+            dem = StandInDem(d)
+            whole = dem.sample(lat, lon, z)                      # (90,000 points on 81 tiles: in place)
+            self.assertEqual(len(set(dem.loaded)), 81)
+            parts = np.concatenate([dem.sample(lat[i:i + 900], lon[i:i + 900], z) for i in range(0, len(lat), 900)])
+        np.testing.assert_array_equal(whole, parts)
+
+    def test_shapes(self):
+        """Broadcast lat / lon in, their shape out (a scalar: a 0-d array), float64."""
+        z = 12
+        with tempfile.TemporaryDirectory() as d:
+            dem = StandInDem(d)
+            self.assertEqual(dem.sample(40.0, -73.9, z).shape, ())
+            g = dem.sample(np.array([[40.0], [40.01]]), np.array([-73.9, -73.8, -73.7]), z)
+            self.assertEqual((g.shape, g.dtype), ((2, 3), np.float64))
+            self.assertEqual(dem.sample(np.zeros(0), np.zeros(0), z).shape, (0,))
+            # (coordinates in a packed buffer, not aligned: copied before the kernel reads them)
+            lat = np.frombuffer(b"\0" + np.array([40.0, 40.01]).tobytes(), np.float64, 2, 1)
+            lon = np.frombuffer(b"\0" + np.array([-73.9, -73.8]).tobytes(), np.float64, 2, 1)
+            self.assertFalse(lat.flags.aligned)
+            np.testing.assert_array_equal(dem.sample(lat, lon, z), dem.sample(lat.copy(), lon.copy(), z))
 
 if __name__ == "__main__":
     unittest.main()
