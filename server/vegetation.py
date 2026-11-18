@@ -176,6 +176,40 @@ def _shift_max(a, r):
     return fast._ef.disc_max(np.ascontiguousarray(a, np.float32), int(r))
 
 
+def _disc_offsets(r):
+    """(dj, di) of the disc of radius r (_shift_max's: dj^2 + di^2 <= r * r + r) outside the 3 x 3 around its centre,
+    the nearest first."""
+    out = [(dj, di) for dj in range(-r, r + 1) for di in range(-r, r + 1)
+           if dj * dj + di * di <= r * r + r and max(abs(dj), abs(di)) > 1]
+    return sorted(out, key=lambda o: (o[0] * o[0] + o[1] * o[1], o))
+
+
+def _band_tops(hs, bands):
+    """The local maxima of the heights hs by band: the pixels of each band (lo, hi, r) as high as the highest of their
+    disc of radius r (_shift_max: band & (hs >= _shift_max(hs, r))). Every disc holds the 3 x 3 around its pixel, so
+    the tops are among the 3 x 3 maxima, ~2 % of the pixels: only those are compared with the rest of their disc, the
+    nearest pixels first, the ones already beaten dropped as it goes. A whole-array disc maximum per band (earthfast
+    disc_max, 4 a cell) was a third of a trees cell's build."""
+    n_r, n_c = hs.shape
+    tops = np.zeros(hs.shape, bool)
+    jj, ii = np.nonzero((hs >= min(lo for lo, _, _ in bands)) & (hs >= _shift_max(hs, 1)))
+    v = hs[jj, ii]
+    rmax = max([r for _, _, r in bands] + [1])
+    pad = np.full((n_r + 2 * rmax, n_c + 2 * rmax), -np.inf, np.float32)    # (outside the array: -inf, as disc_max)
+    pad[rmax:rmax + n_r, rmax:rmax + n_c] = hs
+    flat, w = pad.ravel(), n_c + 2 * rmax
+    at0 = (jj + rmax) * w + (ii + rmax)
+    for lo, hi, r in bands:
+        sel = np.flatnonzero((v >= lo) & (v < hi))
+        at, h = at0[sel], v[sel]
+        for dj, di in (_disc_offsets(r) if r > 1 else ()):
+            ok = h >= flat[at + (dj * w + di)]
+            if not ok.all():
+                sel, at, h = sel[ok], at[ok], h[ok]
+        tops[jj[sel], ii[sel]] = True
+    return tops
+
+
 def _dilate(m, r):
     """Bool mask grown by r pixels (a square window, separable)."""
     out = m.copy()
@@ -445,12 +479,9 @@ class Vegetation:
         # smoothed heights (3 x 3 mean), then the local maxima by height band
         p = np.pad(h, 1, mode="edge")
         hs = sum(p[a:a + n_r, b:b + n_c] for a in range(3) for b in range(3)) / 9.0
-        tops = np.zeros(h.shape, bool)
         k = _merc_k((lat0 + lat1) / 2)     # (the radii below in pixels at MERC_REF_LAT: scaled to the ground's)
-        for lo_m, hi_m, r in ((BUSH_MIN_M, TREE_MIN_M, 1), (TREE_MIN_M, 8.0, 2), (8.0, 15.0, 3), (15.0, 1e9, 4)):
-            band = (hs >= lo_m) & (hs < hi_m)
-            if band.any():
-                tops |= band & (hs >= _shift_max(hs, max(1, int(round(r * k)))))
+        tops = _band_tops(hs, [(lo_m, hi_m, max(1, int(round(r * k)))) for lo_m, hi_m, r in
+                               ((BUSH_MIN_M, TREE_MIN_M, 1), (TREE_MIN_M, 8.0, 2), (8.0, 15.0, 3), (15.0, 1e9, 4))])
         tops &= ~blocked
         tops[~rj, :] = False
         tops[:, ~ci] = False
