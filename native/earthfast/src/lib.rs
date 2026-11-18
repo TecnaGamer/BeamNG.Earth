@@ -7,6 +7,7 @@
 #![deny(clippy::disallowed_methods, clippy::disallowed_types, clippy::iter_over_hash_type)]
 use crate::dm::Dm;
 mod dm;
+mod dmmatmul;
 mod devctx;
 mod reach;
 mod devraster;
@@ -6681,6 +6682,9 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(lanesjoin::lanes_join, m)?)?;
     // 456: the full port's roadlanes.count and roadlanes.join (lanesjoin: the OSM counts, the highway boxes asked of
     // the geometry, the geometry match through dm::interp)
-    m.add("VERSION", 471)?;
+    m.add_function(wrap_pyfunction!(dmmatmul::dm_matmul, m)?)?;
+    // 472: the full port's dnp.matmul / dnp.dot (dmmatmul: numpy's matmul rules, the products summed in the Python's
+    // order, numpy's floating-point errors reported as np.errstate says)
+    m.add("VERSION", 472)?;
     Ok(())
 }

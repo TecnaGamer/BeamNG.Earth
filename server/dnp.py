@@ -21,6 +21,7 @@ import fast
 
 _ef = fast.native(264, "dnp")
 _ef_interp = fast.native(441, "dnp.interp")
+_ef_mm = fast.native(472, "dnp.matmul")
 
 _ATAN2, _POW, _HYPOT = 32, 33, 34
 
@@ -135,41 +136,50 @@ def power(x, y):
     return _binary(_POW, a, b)
 
 
-def matmul(a, b):
-    """a @ b (numpy's matmul rules: 1-D operands promoted and their axis removed, stacks broadcast) as elementwise
-    products summed over k in a fixed order."""
-    a, b = np.asarray(a), np.asarray(b)
+def _mm_cast(x, dt):
+    """x as dt, and its strides where the cast copied it (the copy's layout can differ from x's; the kernel orders a
+    sum by the layout the Python's ufuncs saw). Only the values x holds are cast: its broadcast (stride-0) axes stay
+    broadcast, so a huge broadcast view is never materialised (an empty result's operand included). Accepted
+    difference (Codex review of e16051bd): the cast happens before the kernel sees an empty result, so a narrower
+    operand whose logical shape is too big for numpy at the wider dtype (a float32 view of 2^59 x 2 elements as
+    float64) raises numpy's ValueError where the Python returned an empty array; the server's operands are float64."""
+    if x.dtype == dt:
+        return x, None
+    core = x[tuple(slice(0, 1) if s == 0 else slice(None) for s in x.strides)]
+    return np.broadcast_to(core.astype(dt), x.shape), x.strides
+
+
+def _mm(a, b):
+    """dnp.matmul of arrays: the kernel, or numpy's integer matmul (exact). float64 / float32 only: float16,
+    longdouble and complex operands raise TypeError (a contract change from the numpy arithmetic before earthfast
+    472, whose sums of those were numpy's; the server's calls are float64)."""
     if a.ndim == 0 or b.ndim == 0:
         raise ValueError("matmul: scalar operands are not allowed, use '*' instead")
     if a.dtype.kind not in "fc" and b.dtype.kind not in "fc":
-        return np.matmul(a, b)          # integers: exact
-    va, vb = a.ndim == 1, b.ndim == 1
-    if va:
-        a = a[None, :]
-    if vb:
-        b = b[:, None]
-    k = a.shape[-1]
-    if b.shape[-2] != k:
-        raise ValueError(f"matmul: shapes {a.shape} and {b.shape} not aligned")
-    if k == 0:
-        out = np.zeros(np.broadcast_shapes(a.shape[:-1] + (1,), b.shape[:-2] + (1, b.shape[-1])),
-                       np.result_type(a, b))
-    elif k <= 8:
-        out = a[..., :, 0:1] * b[..., 0:1, :]
-        for j in range(1, k):
-            out = out + a[..., :, j:j + 1] * b[..., j:j + 1, :]
-    else:
-        out = np.add.reduce(a[..., :, :, None] * b[..., None, :, :], axis=-2)
-    if va:
-        out = out[..., 0, :]
-    if vb:
-        out = out[..., 0]
-    return out if out.ndim else out[()]
+        return np.matmul(a, b)              # integers: exact
+    dt = np.result_type(a, b)
+    if dt.kind != "f" or dt.itemsize not in (4, 8):
+        raise TypeError(f"dnp.matmul: {dt} operands (float64 and float32 only: numpy's float16, longdouble and "
+                        "complex sums are not the kernel's)")
+    dt = np.float64 if dt.itemsize == 8 else np.float32
+    (a, sa), (b, sb) = _mm_cast(a, dt), _mm_cast(b, dt)
+    return _ef_mm.dm_matmul(a, b, sa, sb)
+
+
+def matmul(a, b):
+    """a @ b (numpy's matmul rules: 1-D operands promoted and their axis removed, stacks broadcast) as elementwise
+    products summed over k in a fixed order: the native kernel (earthfast 472, dmmatmul.rs: the order the numpy
+    arithmetic here had, BLAS's CPU-chosen kernels never asked)."""
+    if type(a) is _ND and type(b) is _ND and a.dtype is _F64D and b.dtype is _F64D:
+        return _ef_mm.dm_matmul(a, b)
+    return _mm(np.asarray(a), np.asarray(b))
 
 
 def dot(a, b):
     """np.dot for operands of up to 2 axes (and an N-axis a with a 1- or 2-axis b): matmul's products, a scalar
     operand multiplies."""
+    if type(a) is _ND and type(b) is _ND and a.dtype is _F64D and b.dtype is _F64D and a.ndim and 0 < b.ndim <= 2:
+        return _ef_mm.dm_matmul(a, b)
     a, b = np.asarray(a), np.asarray(b)
     if a.ndim == 0 or b.ndim == 0:
         return a * b
