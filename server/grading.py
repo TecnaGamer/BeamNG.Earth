@@ -741,36 +741,39 @@ def raceway_surface(frame, elev, xy, hw, sigma=None):
     return line, np.arange(k) * step, offs, zs[len(head):len(head) + k]
 
 
-def raceway_ground(e, n, base, zones, margin=None, dom=None, blend=0.0):
+def raceway_ground(e, n, base, zones, margin=None, joins=None, blend=0.0):
     """base (the ground at points e, n) as the raceways' smoothed surfaces (zones: [(line, stations, offsets, surface)]
     from raceway_surface): each point by its nearest zone it lies on (station on the segment, offset within), all of
     it on the carriageway, fading out over margin (UNGRADED_MARGIN_M) to base at its edge. A point on none keeps base.
-    dom (BNE_RACEWAY_DIG, racedig.ON): per zone the zones it gives way to (raceway_dominance); then the minor
-    zones first, each eased to its dominant's surface at the dominant's band edge over blend m on its own side, the
-    others over them (a raceway's carriageway never rewritten by one joining it: the user's Atlanta reports 65 / 70,
-    2026-11-17), and (surface, covered: the points on a zone) is returned. earthfast racejoin (Rust; dom None: the
-    numpy rule it replaced, bit for bit)."""
+    joins (BNE_RACEWAY_DIG, racedig.ON): per zone the joins where it gives way [(zone, x, y)] (raceway_dominance);
+    round each join the zone giving way is laid first, eased to the other's surface at that band's edge over blend m
+    on its own side, every zone elsewhere by the nearest line over it (a raceway's carriageway never rewritten by one
+    joining it: the user's Atlanta reports 65 / 70, 2026-11-17), and (surface, covered: the points on a zone) is
+    returned. earthfast racejoin (Rust; joins None: the numpy rule it replaced, bit for bit)."""
     margin = UNGRADED_MARGIN_M if margin is None else float(margin)
     e = np.ascontiguousarray(e, np.float64).ravel()
     n = np.ascontiguousarray(n, np.float64).ravel()
     base = np.ascontiguousarray(base, np.float64).ravel()
     if not len(e) or not zones:
         out = np.array(base, np.float64, copy=True)
-        return (out, np.zeros(len(e), bool)) if dom is not None else out
+        return (out, np.zeros(len(e), bool)) if joins is not None else out
     import fast
     fast.require(405, "raceway_ground")
     zs = [(np.ascontiguousarray(line, np.float64), np.ascontiguousarray(corr, np.float64), float(st[1] - st[0]),
            float(st[-1]), float(offs[0]), float(offs[1] - offs[0]), float(offs[-1])) for line, st, offs, corr in zones]
-    if dom is None:
+    if joins is None:
         return np.asarray(fast._ef.raceway_ground(e, n, base, zs, margin)[0], np.float64)
-    out, cov = fast._ef.raceway_ground(e, n, base, zs, margin, [list(map(int, d)) for d in dom], float(blend))
+    out, cov = fast._ef.raceway_ground(e, n, base, zs, margin,
+                                       [[(int(z), float(x), float(y)) for z, x, y in js] for js in joins],
+                                       float(blend))
     return np.asarray(out, np.float64), np.asarray(cov, bool)
 
 
 def raceway_dominance(lines):
-    """Per raceway line [(line (k, 2), its band's half width)] the sorted indices of the lines it gives way to: one end
-    of it on the other's band where the other passes through (or, the through raceway split at that junction, the
-    straightest pair of the others ending there): earthfast racejoin.dominance."""
+    """Per raceway line [(line (k, 2), its band's half width)] its joins [(the line it gives way to, x, y of its end
+    there)], each from the two lines alone: one end of it on the other's band where the other passes through, or both
+    end there without going on from each other and the other is wider (longer at equal widths): earthfast
+    racejoin.dominance."""
     if not lines:
         return []
     import fast
@@ -6483,13 +6486,13 @@ class _Planner:
         if not graded:
             return base
         out = grade_points(e, n, base.ravel(), pack, lift) if plans else np.array(base.ravel(), np.float64, copy=True)
-        if racedig.ON:      # (the raceways by their dominance where they meet, the band by its line: racedig)
-            race = self._on_kept(e, n, closed=True)
-            if race is not None:
-                idx = np.flatnonzero(race)
-                got, cov = self._raceway_ground(e[idx], n[idx], base.ravel()[idx], layered=True)
-                out[idx[cov]] = got[cov]
-                race[idx[~cov]] = False
+        if racedig.ON:      # (the raceways by their joins where they meet, the band by its sampled line: racedig)
+            race = None
+            band = self._raceway_band(e, n, base.ravel())
+            if band is not None and len(band[0]):
+                race = np.zeros(len(e), bool)
+                race[band[0]] = True
+                out[band[0]] = band[1]
         else:
             race = self._on_kept(e, n)
             if race is not None:            # (the terrain is a racetrack's surface: GitHub #143, smoothed: #833)
@@ -6572,12 +6575,9 @@ class _Planner:
         with self.lock:
             return any(self.keeps.values())
 
-    def _raceway_ground(self, e, n, base, layered=False):
-        """base at the points on a raceway (_on_kept) smoothed along it (raceway_ground; RACEWAY_SMOOTH_ON).
-        layered (BNE_RACEWAY_DIG): the raceways laid by their dominance (raceway_dominance, racedig.JOIN_BLEND_M):
-        (surface, covered) then."""
-        if not RACEWAY_SMOOTH_ON or self.elev is None:
-            return (base, np.ones(len(base), bool)) if layered else base
+    def _raceway_zones(self):
+        """(zones, kept): the raceways' smoothed surfaces (raceway_surface) of the UNGRADED roads kept by the planned
+        cells, each line once, and per zone its (key, line, band half width)."""
         with self.lock:
             lines = sorted({(round(float(xy[0, 0]), 2), round(float(xy[0, 1]), 2), round(float(xy[-1, 0]), 2),
                              round(float(xy[-1, 1]), 2), len(xy), round(float(hw), 3)): (xy, hw)
@@ -6611,32 +6611,66 @@ class _Planner:
             if got:
                 zones.append(got)
                 kept.append((key, xy, hw))
-        if not layered:
-            return raceway_ground(e, n, base, zones)
+        return zones, kept
+
+    def _raceway_joins(self, kept):
+        """raceway_dominance of the kept raceway lines (each join from its two lines alone), remembered by their keys."""
         dk = tuple(k for k, _xy, _hw in kept)
         with self.lock:
             dmemo = self.__dict__.setdefault("_raceway_dom", OrderedDict())
-            dom = dmemo.get(dk)
-        if dom is None:
-            dom = raceway_dominance([(xy, hw) for _k, xy, hw in kept])
+            got = dmemo.get(dk)
+        if got is None:
+            got = raceway_dominance([(xy, hw) for _k, xy, hw in kept])
             with self.lock:
-                dmemo[dk] = dom
+                dmemo[dk] = got
                 while len(dmemo) > 64:
                     dmemo.popitem(last=False)
-        return raceway_ground(e, n, base, zones, dom=dom, blend=racedig.JOIN_BLEND_M)
+        return got
 
-    def _on_kept(self, e, n, closed=False):
-        """Which points lie on an UNGRADED road's carriageway (+ UNGRADED_MARGIN_M), or None. closed
-        (BNE_RACEWAY_DIG): within it of the line itself, its vertices too (the test by segment left a wedge out on the
-        outside of every vertex: single samples of the ground under the band left graded by other roads, spikes of up
-        to 1.2 m along the outside of Atlanta's turns, the user's report 69, 2026-11-17)."""
+    def _raceway_ground(self, e, n, base, layered=False):
+        """base at the points on a raceway (_on_kept) smoothed along it (raceway_ground; RACEWAY_SMOOTH_ON).
+        layered (BNE_RACEWAY_DIG): the raceways laid by their joins (raceway_dominance, racedig.JOIN_BLEND_M):
+        (surface, covered) then."""
+        if not RACEWAY_SMOOTH_ON or self.elev is None:
+            return (base, np.ones(len(base), bool)) if layered else base
+        zones, kept = self._raceway_zones()
+        if not layered:
+            return raceway_ground(e, n, base, zones)
+        return raceway_ground(e, n, base, zones, joins=self._raceway_joins(kept), blend=racedig.JOIN_BLEND_M)
+
+    def _raceway_band(self, e, n, base):
+        """BNE_RACEWAY_DIG: (indices, heights) of the points (e, n) on a raceway's band as the raceways lay it
+        (_raceway_ground layered), or None. The band by the lines the surfaces are sampled on (each raceway's line
+        every RACEWAY_STEP_M, its vertices' outsides in: the over_tunnel test by segment left a wedge out at every
+        vertex, single samples left to other roads' grading, spikes of up to 2.3 m along the outside of Atlanta's
+        turn 3-4, the user's report 69, 2026-11-17; Codex review of 98a65723: the band by the map's own line and the
+        surface by the resampled one disagreed at corners)."""
+        if not len(e):
+            return None
+        pts = np.stack([np.asarray(e, np.float64), np.asarray(n, np.float64)], axis=1)
+        if not RACEWAY_SMOOTH_ON or self.elev is None:
+            with self.lock:
+                lines = [z for v in self.keeps.values() for z in v]
+            if not lines:
+                return None
+            idx = np.flatnonzero(racedig.near(pts, lines, 1e-9))
+            return (idx, np.asarray(base, np.float64)[idx]) if len(idx) else None
+        zones, kept = self._raceway_zones()
+        if not zones:
+            return None
+        idx = np.flatnonzero(racedig.near(pts, [(z[0], float(z[2][-1])) for z in zones], 1e-9))
+        if not len(idx):
+            return None
+        got, cov = raceway_ground(pts[idx, 0], pts[idx, 1], np.asarray(base, np.float64)[idx], zones,
+                                  joins=self._raceway_joins(kept), blend=racedig.JOIN_BLEND_M)
+        return idx[cov], got[cov]
+
+    def _on_kept(self, e, n):
+        """Which points lie on an UNGRADED road's carriageway (+ UNGRADED_MARGIN_M), or None."""
         with self.lock:
             zones = [z for v in self.keeps.values() for z in v]
         if not zones or not len(e):
             return None
-        if closed:
-            mask = racedig.near(np.stack([np.asarray(e, np.float64), np.asarray(n, np.float64)], axis=1), zones, 1e-9)
-            return mask if mask.any() else None
         import fast
         fast.require(0, "over_tunnel")
         mask = np.zeros(len(e), bool)
@@ -6865,6 +6899,9 @@ class Grader:
     _over_tunnels = _Planner._over_tunnels  # (a namespace with covers and lock: tests)
     _on_kept = _Planner._on_kept
     _raceway_ground = _Planner._raceway_ground
+    _raceway_zones = _Planner._raceway_zones
+    _raceway_joins = _Planner._raceway_joins
+    _raceway_band = _Planner._raceway_band
 
     def plans(self, lat, lon, roads_only=False):
         """The Plans touching the points' area (each road once), in this frame's world; roads_only: not the tunnels'

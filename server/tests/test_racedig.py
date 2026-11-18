@@ -181,7 +181,7 @@ class JoinTest(unittest.TestCase):
 
     def test_the_pit_road_gives_way_to_the_oval(self):
         grading, _zs, lines = self.zones()
-        self.assertEqual(grading.raceway_dominance(lines), [[], [0]])
+        self.assertEqual(grading.raceway_dominance(lines), [[], [(0, 0.0, 0.0)]])
 
     def test_the_oval_kept_and_the_pit_road_meets_it(self):
         grading, zs, lines = self.zones()
@@ -189,7 +189,7 @@ class JoinTest(unittest.TestCase):
         e = np.zeros_like(y)
         base = np.full_like(y, 5.0)
         old = grading.raceway_ground(e, y, base, zs)
-        new, cov = grading.raceway_ground(e, y, base, zs, dom=grading.raceway_dominance(lines),
+        new, cov = grading.raceway_ground(e, y, base, zs, joins=grading.raceway_dominance(lines),
                                           blend=racedig.JOIN_BLEND_M)
         alone = grading.raceway_ground(e, y, base, zs[:1])
         on = y >= -7.0                      # (the oval's carriageway)
@@ -209,20 +209,89 @@ class JoinTest(unittest.TestCase):
         e, n = rng.uniform(-30, 30, 500), rng.uniform(-30, 20, 500)
         base = rng.normal(8.0, 1.0, 500)
         old = grading.raceway_ground(e, n, base, zs)
-        new, _cov = grading.raceway_ground(e, n, base, zs, dom=[[], []])
+        new, _cov = grading.raceway_ground(e, n, base, zs, joins=[[], []])
         self.assertEqual(new.tobytes(), old.tobytes())
 
+    def test_joins_whatever_else_is_loaded(self):
+        # Codex review of 98a65723: the ownership came from the planner's loaded lines (a way relegated along its
+        # whole length once any loaded way dominated either end): cold and warmed planners, cells read in another
+        # order, graded the same join differently. Each join from its two lines, held only near itself
+        oval = np.array([[-200.0, 0.0], [200.0, 0.0]])
+        pit = np.array([[0.0, -80.0], [0.0, 0.0]])
+        far_end = np.array([[-60.0, -80.0], [0.0, -80.0]])          # (a third raceway ending on the pit road's far end)
+        far = np.array([[500.0, 500.0], [700.0, 500.0]])
+        hw = 9.0
+        g = np.arange(-30.0, 30.01, 0.5)
+        e, n = (v.ravel() for v in np.meshgrid(g, g - 15.0))
+        base = np.full(len(e), 3.0)
+        runs = []
+        for keeps in ({"a": [(oval, hw)], "b": [(pit, hw)]},
+                      {"z": [(far, hw)], "b": [(pit, hw)], "y": [(far_end, hw)], "a": [(oval, hw)]},
+                      {"b": [(pit, hw)], "a": [(oval, hw)], "y": [(far_end, hw)]}):
+            pl = _FakePlanner(keeps)
+            pl.elev = _banked
+            idx, z = pl._raceway_band(e, n, base)
+            runs.append((idx.tobytes(), z.tobytes()))
+        self.assertEqual(runs[0], runs[1])
+        self.assertEqual(runs[0], runs[2])
+
     def test_the_band_has_no_holes_at_vertices(self):
-        # report 69: points on the outside of a vertex lie beyond both of its segments' ends: the open test left them
-        # out (single samples left to other roads' grading, 1.2 m spikes along Atlanta's turn)
-        import threading
-        import types
+        # report 69: points on the outside of a vertex lie beyond both of its segments' ends: the segment test left
+        # them out (single samples left to other roads' grading, 2.3 m spikes along Atlanta's turn 3-4); and the band
+        # must be the line the surface is sampled on (Codex review of 98a65723: a 9 m band on a 90 degree corner, a
+        # point 8.91 m from the map's vertex is 9.62 m from the resampled line: in by one, out by the other)
         import grading
-        bend = np.array([[-50.0, 0.0], [0.0, 0.0], [50.0, -10.0]])      # (an 11 degree turn to the right at 0, 0)
-        pl = types.SimpleNamespace(lock=threading.Lock(), keeps={"k": [(bend, 9.0)]})
-        p = (np.array([0.5]), np.array([8.0]))          # (outside the turn, 8 m from the vertex)
-        self.assertIsNone(grading._Planner._on_kept(pl, *p))
-        self.assertTrue(grading._Planner._on_kept(pl, *p, closed=True)[0])
+        for bend, corner in ((np.array([[-50.0, 0.0], [0.0, 0.0], [50.0, -10.0]]), (0.25, 6.5)),     # 11 degrees
+                             (np.array([[-30.0, 0.0], [0.0, 0.0], [0.0, -30.0]]), (4.5, 4.5))):     # 90 degrees
+            pl = _FakePlanner({"k": [(bend, 9.0)]})
+            g = np.arange(-12.0, 12.01, 0.25)
+            e, n = (v.ravel() for v in np.meshgrid(g, g))
+            base = np.full(len(e), 3.0)
+            idx, z = pl._raceway_band(e, n, base)
+            zones, _kept = pl._raceway_zones()
+            line, _st, offs, _c = zones[0]
+            # every point within the band of the sampled line is taken, with the surface's height
+            a, b = line[:-1], line[1:]
+            d = b - a
+            pts = np.stack([e, n], 1)
+            t = np.clip(((pts[:, None] - a) * d).sum(2) / (d * d).sum(1), 0.0, 1.0)
+            dist = np.hypot(*(a + t[..., None] * d - pts[:, None]).transpose(2, 0, 1)).min(1)
+            want = np.flatnonzero(dist < float(offs[-1]) - 1e-6)
+            self.assertTrue(np.isin(want, idx).all(), np.setdiff1d(want, idx)[:5])
+            got, cov = grading.raceway_ground(e[idx], n[idx], base[idx], zones, joins=[[]],
+                                              blend=racedig.JOIN_BLEND_M)
+            self.assertTrue(cov.all())
+            self.assertEqual(z.tobytes(), got.tobytes())
+            # a point outside the corner, inside the carriageway (6.4-6.5 m out), at the track's height (10 m, not 3)
+            k = int(np.argmin(np.hypot(e - corner[0], n - corner[1])))
+            self.assertIn(k, set(idx.tolist()))
+            self.assertGreater(float(z[list(idx).index(k)]), 9.0)
+
+
+class _FakePlanner:
+    """grading._Planner's raceway pieces on a namespace: keeps, the frame, flat elevation, no marks."""
+
+    def __init__(self, keeps):
+        import threading
+        import grading
+        from test_roads import FRAME
+        self.lock = threading.Lock()
+        self.keeps = keeps
+        self.frame = FRAME
+        self.elev = lambda la, lo: np.full(np.shape(la), 10.0)
+        self._P = grading._Planner
+
+    def _marks_at(self, *a):
+        pass
+
+    def _raceway_zones(self):
+        return self._P._raceway_zones(self)
+
+    def _raceway_joins(self, kept):
+        return self._P._raceway_joins(self, kept)
+
+    def _raceway_band(self, e, n, base):
+        return self._P._raceway_band(self, e, n, base)
 
 
 class TunnelUnderTrackTest(unittest.TestCase):

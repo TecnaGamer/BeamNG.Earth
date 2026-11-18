@@ -19,6 +19,11 @@ import fast
 import dnp
 
 ON = os.environ.get("BNE_PORTALS", "1") != "0"
+# BNE_TUNNEL_ROAD_OVER (the Revamped roads setting, off by default): a road crossing over a mouth keeps its surface:
+# the headwall's top there no higher than that road (its ground read less PARAPET_MAX), not a parapet standing across
+# its lanes (the user's report 72, 2026-11-17: Atlanta Motor Speedway's infield tunnel, the service road passing over
+# its south mouth half blocked by the headwall and its soil top, 0.5-1 m over the road)
+ROAD_OVER_ON = os.environ.get("BNE_TUNNEL_ROAD_OVER", "off") == "on"
 VERSION = 259               # earthfast's portal kernels
 FACE_IN = (1.0, 3.0, 5.0)   # m inside the mouth's plane the ground behind the headwall is read (the highest of them:
                             # the grading flattens the approach a few metres into the mapped mouth, the hill's face
@@ -60,6 +65,7 @@ LOOKS = {
     3: (0.15, 0.0, 0.4, 0.5, 0.9, 0.6, 2.5, 0.3, 0.9, 0.45, 0.0, 0.6),
 }
 HOOD_FACE = 0.6             # the hill's face: the ground over the floor this share of the opening's height
+PARAPET_MAX = max(v[4] for v in LOOKS.values())     # (ROAD_OVER_ON: the highest parapet of any look)
 LOOK_SIDE = {0: 2.2, 1: FACE_SIDE, 2: 2.0, 3: FACE_SIDE}    # m of headwall beside the opening at most, per look
 
 
@@ -87,6 +93,16 @@ def _others(roads, cells, frame, parts):
             # roads and overlapped by the shoulders between)
             lines.append((len(lines), spec.width / 2 + roadmesh.TUNNEL_SHOULDER + TWIN_GAP, xy))
     return lines
+
+
+def _crossing(xy, p, t):
+    """Does the line xy cross the tube's axis t (unit) at more than 45 degrees where it passes nearest p?"""
+    a, b = xy[:-1], xy[1:]
+    d = b - a
+    tt = np.clip(((p - a) * d).sum(1) / np.maximum((d * d).sum(1), 1e-12), 0.0, 1.0)
+    j = int(np.argmin(dnp.hypot(*(a + tt[:, None] * d - p).T)))
+    u = d[j] / max(float(dnp.hypot(*d[j])), 1e-9)
+    return abs(float(u[0] * t[0] + u[1] * t[1])) < 0.7071
 
 
 def _through(lines, p, reach):
@@ -153,8 +169,15 @@ def fit(roads, tunnels, cells, chunks, parts):
                     lp = [p + ul * sg * (hw + reach + 0.5) + out * s for s in ws]
                     ok = all(oth.clear(q, None, ROAD_GAP) for q in lp)
                 wing_ok.append(ok)
+            # (ROAD_OVER_ON: which of the headwall's ground samples lie on another road's carriageway, a road crossing
+            # over the mouth among them: one through it at more than 45 degrees to the tube, not its own approach)
+            over = None
+            if ROAD_OVER_ON:
+                cross = fast.Others([ln for ln in others if ln[0] not in own or _crossing(ln[2], p, t)])
+                over = np.array([[not cross.clear(p + ul * x - out * s_in, None, 0.0) for x in fx]
+                                 for s_in in FACE_IN], bool)
             ends.append({"p": p, "ul": ul, "out": out, "fx": fx, "sides": sides, "wing_ok": wing_ok, "at": at,
-                         "i0": sum(len(q) for q in pts), "look": look})
+                         "i0": sum(len(q) for q in pts), "look": look, "over": over})
             for s_in in FACE_IN:
                 pts.append(p[None] + ul[None] * fx[:, None] - out[None] * s_in)
             for sg, reach in zip((1.0, -1.0), sides):
@@ -175,7 +198,10 @@ def fit(roads, tunnels, cells, chunks, parts):
                 continue
             i, nx, nw = en["i0"], len(en["fx"]), len(WING_S)
             zf = float(z[en["at"]])
-            face = np.max([g[i + q * nx:i + (q + 1) * nx] for q in range(len(FACE_IN))], axis=0) - zf
+            rows = [g[i + q * nx:i + (q + 1) * nx] for q in range(len(FACE_IN))]
+            if en["over"] is not None and en["over"].any():
+                rows = [np.where(en["over"][q], r - PARAPET_MAX, r) for q, r in enumerate(rows)]
+            face = np.max(rows, axis=0) - zf
             # the hill's face over the axis: how far in the graded approach goes on before it (a hood reaches out of
             # the face to the mouth: Laerdal's stands ~5 m out of its slope)
             setback = 0.0

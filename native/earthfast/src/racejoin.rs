@@ -8,12 +8,13 @@
 //! width) ends on the oval, the nearest-line rule cut the oval's banked surface along the line half way between the two
 //! centre lines and put the joining road's own surface on its side: a step of 0.3-0.7 m across the racing surface.
 //!
-//! The layered rule (`layered`): a raceway that ends on another raceway's band gives way to it (`dominance`: the other
-//! passes through there, or, where the through raceway is split at the junction, the straightest pair of the others
-//! ending there is the through route). The minor raceways are laid first (nearest line among them), each point's
-//! surface eased to the dominant raceway's surface at the dominant's band edge over `blend` m out from it (on the
-//! minor's own side; inside the dominant's band the dominant's surface itself), then the other raceways over them with
-//! their edge fade (`margin`) to what lies under them. Never a height inside the dominant's carriageway rewritten.
+//! The layered rule (`joins`): a raceway that ends on another raceway's band gives way to it there (`dominance`, from
+//! the two lines alone: the other passes through there; where both end there and do not go on from each other, the
+//! wider, then the longer, wins). Round each join (the giving way zone's points within the two half widths + `blend`
+//! of the join's end and within `blend` of the other's band) the giving way zone is laid first, eased to the other's
+//! surface at that band's edge (on its own side; inside the band the other's surface itself), then every zone
+//! elsewhere by the nearest-line rule over it, with its edge fade (`margin`) to what lies under it. Never a height
+//! inside the dominant's carriageway rewritten; away from joins nothing changes.
 //!
 //! Sums, products, min / max, floor and sqrt only (polyproject::project): the same bits on every platform.
 
@@ -117,9 +118,47 @@ fn extents(pts: &[f64]) -> (f64, f64, f64, f64) {
     (x0, y0, x1, y1)
 }
 
-/// (surface (m,), covered (m,)): base at the points pts (m x 2) as the raceways' surfaces (module doc). dom: per zone
-/// the zones it gives way to (`dominance`); None: the old nearest-line rule (dom and blend unused).
-pub fn ground(pts: &[f64], base: &[f64], zones: &[Zone], dom: Option<&[Vec<usize>]>, margin: f64, blend: f64)
+/// One join: zone `by` the zone giving way passes over, at the giving way zone's end (x, y).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Join {
+    pub by: usize,
+    pub x: f64,
+    pub y: f64,
+}
+
+/// The stations of zone z a join (z giving way to g at one of z's ends) holds over: from that end along z for as long
+/// as z's line stays within the two half widths + blend of g's line (a connector merging alongside the oval for 100 m
+/// gives way all along its overlap, not only within a radius of its end: a seam where the radius ended, r70), the
+/// two lines alone deciding it.
+fn join_reach(z: &Zone, g: &Zone, j: &Join, blend: f64) -> (f64, f64) {
+    let k = z.k;
+    let d0 = (z.line[0] - j.x).powi(2) + (z.line[1] - j.y).powi(2);
+    let d1 = (z.line[2 * (k - 1)] - j.x).powi(2) + (z.line[2 * (k - 1) + 1] - j.y).powi(2);
+    let reach = z.hw + g.hw + blend;
+    let r = polyproject::project(&g.line, 2, g.k, &z.line, 2, k);
+    let near = |i: usize| r.dist[i] <= reach;
+    let at = |i: usize| if i + 1 == k { z.s_end } else { i as f64 * z.ds };
+    if d0 <= d1 {
+        let mut i = 0;
+        while i + 1 < k && near(i + 1) {
+            i += 1;
+        }
+        (0.0, at(i) + z.ds)
+    } else {
+        let mut i = k - 1;
+        while i > 0 && near(i - 1) {
+            i -= 1;
+        }
+        (at(i) - z.ds, z.s_end)
+    }
+}
+
+/// (surface (m,), covered (m,)): base at the points pts (m x 2) as the raceways' surfaces (module doc). joins: per
+/// zone the joins where it gives way (`dominance`); None: the old nearest-line rule (joins and blend unused). A join
+/// holds only near itself: at the points of the giving way zone along its overlap with the other from the join's end
+/// (join_reach) and within blend of the other's band (every input a pure function of the two lines: the same answer
+/// whatever else the planner has loaded, Codex review of 98a65723).
+pub fn ground(pts: &[f64], base: &[f64], zones: &[Zone], joins: Option<&[Vec<Join>]>, margin: f64, blend: f64)
               -> (Vec<f64>, Vec<bool>) {
     let m = base.len();
     let mut out = base.to_vec();
@@ -128,57 +167,87 @@ pub fn ground(pts: &[f64], base: &[f64], zones: &[Zone], dom: Option<&[Vec<usize
         return (out, covered);
     }
     let ext = extents(pts);
-    let mut proj: Vec<Option<Proj>> = (0..zones.len()).map(|_| None).collect();
-    let layers: Vec<Vec<usize>> = match dom {
-        None => vec![(0..zones.len()).collect()],
-        Some(d) => vec![(0..zones.len()).filter(|&z| !d[z].is_empty()).collect(),
-                        (0..zones.len()).filter(|&z| d[z].is_empty()).collect()],
-    };
+    let nz = zones.len();
+    let mut proj: Vec<Option<Proj>> = (0..nz).map(|_| None).collect();
     let fade = pymax(margin, 1e-9);
-    for layer in layers {
+    let skip: Vec<bool> = zones.iter().map(|z| z.misses(z.hw, ext)).collect();
+    for zi in 0..nz {
+        if !skip[zi] {
+            proj[zi] = Some(project_all(&zones[zi], pts));
+        }
+    }
+    // per zone that gives way: at each point, the join that holds there (its dominant zone, the dominant's surface at
+    // its band's edge nearest the point, how far out of that band) or none
+    let mut active: Vec<Vec<Option<(f64, f64)>>> = vec![Vec::new(); nz];
+    if let Some(js) = joins {
+        if blend > 0.0 {
+            for zi in 0..nz {
+                if skip[zi] || js[zi].is_empty() {
+                    continue;
+                }
+                for j in &js[zi] {
+                    let gz = &zones[j.by];
+                    if proj[j.by].is_none() && !gz.misses(gz.hw + blend, ext) {
+                        proj[j.by] = Some(project_all(gz, pts));
+                    }
+                }
+                let z = &zones[zi];
+                let p = proj[zi].as_ref().unwrap();
+                let mut act = vec![None; m];
+                for j in &js[zi] {
+                    let g = j.by;
+                    let gz = &zones[g];
+                    if gz.misses(gz.hw + blend, ext) {
+                        continue;
+                    }
+                    let gp = proj[g].as_ref().unwrap();
+                    let (lo, hi) = join_reach(z, gz, j, blend);
+                    for i in 0..m {
+                        let (st, off) = (p.station[i], p.offset[i]);
+                        if !(st >= 0.0 && st <= z.s_end && off.abs() <= z.hw && st >= lo && st <= hi) {
+                            continue;
+                        }
+                        let (s2, o2) = (gp.station[i], gp.offset[i]);
+                        let dd = o2.abs() - gz.hw;
+                        if !(s2 >= 0.0 && s2 <= gz.s_end && dd <= blend) {
+                            continue;
+                        }
+                        if act[i].is_none_or(|(b, _): (f64, f64)| dd < b) {
+                            act[i] = Some((dd, gz.at(s2, o2.clamp(-gz.hw, gz.hw))));
+                        }
+                    }
+                }
+                active[zi] = act;
+            }
+        }
+    }
+    let on = |zi: usize, i: usize| -> Option<(f64, f64)> { active[zi].get(i).copied().flatten() };
+    // the zones giving way where their joins hold first, then every zone elsewhere over them
+    for layer in 0..2 {
+        if layer == 0 && active.iter().all(|a| a.is_empty()) {
+            continue;
+        }
         let mut best = vec![f64::INFINITY; m];
         let mut add = vec![0.0f64; m];
-        for &zi in &layer {
-            let z = &zones[zi];
-            if z.misses(z.hw, ext) {
+        for zi in 0..nz {
+            if skip[zi] || (layer == 0 && active[zi].is_empty()) {
                 continue;
             }
-            if proj[zi].is_none() {
-                proj[zi] = Some(project_all(z, pts));
-            }
-            let mine: Vec<usize> = match dom {
-                Some(d) if blend > 0.0 => d[zi].iter().copied()
-                    .filter(|&g| !zones[g].misses(zones[g].hw + blend, ext)).collect(),
-                _ => Vec::new(),
-            };
-            for &g in &mine {
-                if proj[g].is_none() {
-                    proj[g] = Some(project_all(&zones[g], pts));
-                }
-            }
+            let z = &zones[zi];
             let p = proj[zi].as_ref().unwrap();
             for i in 0..m {
+                let held = on(zi, i);
+                if (layer == 0) != held.is_some() {
+                    continue;
+                }
                 let (st, off, dist) = (p.station[i], p.offset[i], p.dist[i]);
                 if !(st >= 0.0 && st <= z.s_end && off.abs() <= z.hw && dist < best[i]) {
                     continue;
                 }
                 let mut c = z.at(st, off);
-                if !mine.is_empty() {
-                    // toward the dominant's surface at its band's edge (inside the band: its surface there)
-                    let (mut bd, mut zt) = (f64::INFINITY, c);
-                    for &g in &mine {
-                        let (gz, gp) = (&zones[g], proj[g].as_ref().unwrap());
-                        let (s2, o2) = (gp.station[i], gp.offset[i]);
-                        let dd = o2.abs() - gz.hw;
-                        if s2 >= 0.0 && s2 <= gz.s_end && dd <= blend && dd < bd {
-                            zt = gz.at(s2, o2.clamp(-gz.hw, gz.hw));
-                            bd = dd;
-                        }
-                    }
-                    if bd.is_finite() {
-                        let w = smooth(npclip(1.0 - bd.max(0.0) / blend, 0.0, 1.0));
-                        c += (zt - c) * w;
-                    }
+                if let Some((bd, zt)) = held {
+                    let w = smooth(npclip(1.0 - bd.max(0.0) / blend, 0.0, 1.0));
+                    c += (zt - c) * w;
                 }
                 let u = npclip((z.hw - off.abs()) / fade, 0.0, 1.0);
                 add[i] = (c - out[i]) * u * u * (3.0 - 2.0 * u);
@@ -193,11 +262,13 @@ pub fn ground(pts: &[f64], base: &[f64], zones: &[Zone], dom: Option<&[Vec<usize
     (out, covered)
 }
 
-/// Per raceway line (lines[i]: k x 2 flattened, its band's half width hw[i]), the lines it gives way to (module doc):
-/// an end of it on another's band (station on it, |offset| within its half width) where that one passes through (a
-/// closed loop, or the end more than its half width from that one's ends), or, where only ends meet there and 3 or
-/// more lines end on each other's band, the straightest pair of the others when straighter than this one with either.
-pub fn dominance(lines: &[Vec<f64>], hw: &[f64]) -> Vec<Vec<usize>> {
+/// Per raceway line (lines[i]: k x 2 flattened, its band's half width hw[i]), the joins where it gives way (module
+/// doc), each from the two lines alone: an end of it on another's band (station on it, |offset| within its half width)
+/// where the other passes through (a closed loop, or the end more than its half width from the other's ends); where
+/// the other ends there too, not when the two go on from each other (their ends' directions within ~37 degrees of
+/// opposite), else to the wider one, the longer at equal widths (a through raceway split at the junction: its pieces
+/// are the oval's).
+pub fn dominance(lines: &[Vec<f64>], hw: &[f64]) -> Vec<Vec<Join>> {
     let nz = lines.len();
     let k: Vec<usize> = lines.iter().map(|l| l.len() / 2).collect();
     let closed: Vec<bool> = (0..nz).map(|z| {
@@ -218,14 +289,15 @@ pub fn dominance(lines: &[Vec<f64>], hw: &[f64]) -> Vec<Vec<usize>> {
     let outdir = |z: usize, px: f64, py: f64| -> (f64, f64) {
         let l = &lines[z];
         let n = k[z];
-        let d0 = (l[0] - px).powi(2) + (l[1] - py).powi(2);
-        let d1 = (l[2 * (n - 1)] - px).powi(2) + (l[2 * (n - 1) + 1] - py).powi(2);
+        let d0 = (l[0] - px) * (l[0] - px) + (l[1] - py) * (l[1] - py);
+        let (lx, ly) = (l[2 * (n - 1)], l[2 * (n - 1) + 1]);
+        let d1 = (lx - px) * (lx - px) + (ly - py) * (ly - py);
         let (a, b) = if d0 <= d1 { (0, 3.min(n - 1)) } else { (n - 1, n.saturating_sub(4)) };
         let (vx, vy) = (l[2 * a] - l[2 * b], l[2 * a + 1] - l[2 * b + 1]);
         let len = (vx * vx + vy * vy).sqrt().max(1e-9);
         (vx / len, vy / len)
     };
-    let mut dom: Vec<Vec<usize>> = vec![Vec::new(); nz];
+    let mut out: Vec<Vec<Join>> = vec![Vec::new(); nz];
     for b in 0..nz {
         if k[b] < 2 || closed[b] {
             continue;
@@ -233,7 +305,6 @@ pub fn dominance(lines: &[Vec<f64>], hw: &[f64]) -> Vec<Vec<usize>> {
         let lb = &lines[b];
         for e in [0usize, k[b] - 1] {
             let (px, py) = (lb[2 * e], lb[2 * e + 1]);
-            let (mut thru, mut ending) = (Vec::new(), Vec::new());
             for a in 0..nz {
                 if a == b || k[a] < 2 {
                     continue;
@@ -243,39 +314,20 @@ pub fn dominance(lines: &[Vec<f64>], hw: &[f64]) -> Vec<Vec<usize>> {
                 if !(s0 >= 0.0 && s0 <= length[a] && o0.abs() <= hw[a]) {
                     continue;
                 }
-                if closed[a] || (s0 > hw[a] && s0 < length[a] - hw[a]) {
-                    thru.push(a);
+                let gives = if closed[a] || (s0 > hw[a] && s0 < length[a] - hw[a]) {
+                    true
                 } else {
-                    ending.push(a);
-                }
-            }
-            if !thru.is_empty() {
-                dom[b].extend(thru);
-            } else if ending.len() >= 2 {
-                let db = outdir(b, px, py);
-                let dirs: Vec<(f64, f64)> = ending.iter().map(|&z| outdir(z, px, py)).collect();
-                let mut best: Option<(f64, usize, usize)> = None;
-                for i in 0..ending.len() {
-                    for j in i + 1..ending.len() {
-                        let c = dirs[i].0 * dirs[j].0 + dirs[i].1 * dirs[j].1;
-                        if best.is_none_or(|q| c < q.0) {
-                            best = Some((c, ending[i], ending[j]));
-                        }
-                    }
-                }
-                let cb = dirs.iter().map(|d| db.0 * d.0 + db.1 * d.1).fold(f64::INFINITY, f64::min);
-                if let Some((c, p, q)) = best {
-                    if c < cb {
-                        dom[b].push(p);
-                        dom[b].push(q);
-                    }
+                    let (da, db) = (outdir(a, px, py), outdir(b, px, py));
+                    let going_on = da.0 * db.0 + da.1 * db.1 < -0.8;
+                    !going_on && (hw[a] > hw[b] || (hw[a] == hw[b] && length[a] > length[b]))
+                };
+                if gives {
+                    out[b].push(Join { by: a, x: px, y: py });
                 }
             }
         }
-        dom[b].sort_unstable();
-        dom[b].dedup();
     }
-    dom
+    out
 }
 
 type ZoneArgs<'py> = (PyReadonlyArray2<'py, f64>, PyReadonlyArray2<'py, f64>, f64, f64, f64, f64, f64);
@@ -304,13 +356,13 @@ fn zones_of(zs: &[ZoneArgs<'_>]) -> PyResult<Vec<Zone>> {
 
 /// grading.raceway_ground: (surface (m,), covered (m,) bool) of points (e, n) with base (m,) and the zones [(line (k,
 /// 2), surface (k, nt), stations[1] - stations[0], stations[-1], offsets[0], offsets[1] - offsets[0], offsets[-1])];
-/// dom None: the nearest-line rule, else per zone the indices of the zones it gives way to (layered, blend m).
+/// joins None: the nearest-line rule, else per zone [(the zone it gives way to, the join's x, y)] (blend m).
 #[pyfunction]
-#[pyo3(signature = (e, n, base, zones, margin, dom=None, blend=0.0))]
+#[pyo3(signature = (e, n, base, zones, margin, joins=None, blend=0.0))]
 #[allow(clippy::type_complexity)]
 pub fn raceway_ground<'py>(py: Python<'py>, e: PyReadonlyArray1<'py, f64>, n: PyReadonlyArray1<'py, f64>,
                            base: PyReadonlyArray1<'py, f64>, zones: Vec<ZoneArgs<'py>>, margin: f64,
-                           dom: Option<Vec<Vec<usize>>>, blend: f64)
+                           joins: Option<Vec<Vec<(usize, f64, f64)>>>, blend: f64)
                            -> PyResult<(Bound<'py, PyArray1<f64>>, Bound<'py, PyArray1<bool>>)> {
     let (ea, na, ba) = (e.as_array(), n.as_array(), base.as_array());
     let m = ba.len();
@@ -318,20 +370,23 @@ pub fn raceway_ground<'py>(py: Python<'py>, e: PyReadonlyArray1<'py, f64>, n: Py
         return Err(pyo3::exceptions::PyValueError::new_err("raceway_ground: e, n and base of one length"));
     }
     let zs = zones_of(&zones)?;
-    if let Some(d) = &dom {
-        if d.len() != zs.len() || d.iter().flatten().any(|&g| g >= zs.len()) {
-            return Err(pyo3::exceptions::PyValueError::new_err("raceway_ground: dom per zone, zone indices"));
+    let js: Option<Vec<Vec<Join>>> = joins.map(|v| v.into_iter()
+        .map(|l| l.into_iter().map(|(by, x, y)| Join { by, x, y }).collect()).collect());
+    if let Some(j) = &js {
+        if j.len() != zs.len() || j.iter().flatten().any(|q| q.by >= zs.len()) {
+            return Err(pyo3::exceptions::PyValueError::new_err("raceway_ground: joins per zone, zone indices"));
         }
     }
     let pts: Vec<f64> = (0..m).flat_map(|i| [ea[i], na[i]]).collect();
     let bv: Vec<f64> = ba.iter().copied().collect();
-    let (out, cov) = py.detach(|| ground(&pts, &bv, &zs, dom.as_deref(), margin, blend));
+    let (out, cov) = py.detach(|| ground(&pts, &bv, &zs, js.as_deref(), margin, blend));
     Ok((out.into_pyarray(py), cov.into_pyarray(py)))
 }
 
-/// grading.raceway_dominance: per line [(line (k, 2), band half width)] the sorted indices of the lines it gives way to.
+/// grading.raceway_dominance: per line [(line (k, 2), band half width)] its joins [(the line it gives way to, x, y)].
 #[pyfunction]
-pub fn raceway_dominance(py: Python<'_>, lines: Vec<(PyReadonlyArray2<'_, f64>, f64)>) -> PyResult<Vec<Vec<usize>>> {
+pub fn raceway_dominance(py: Python<'_>, lines: Vec<(PyReadonlyArray2<'_, f64>, f64)>)
+                         -> PyResult<Vec<Vec<(usize, f64, f64)>>> {
     let mut ls = Vec::with_capacity(lines.len());
     let mut hw = Vec::with_capacity(lines.len());
     for (l, h) in &lines {
@@ -342,7 +397,8 @@ pub fn raceway_dominance(py: Python<'_>, lines: Vec<(PyReadonlyArray2<'_, f64>, 
         ls.push((0..a.nrows()).flat_map(|r| [a[[r, 0]], a[[r, 1]]]).collect::<Vec<f64>>());
         hw.push(*h);
     }
-    Ok(py.detach(|| dominance(&ls, &hw)))
+    Ok(py.detach(|| dominance(&ls, &hw)).into_iter()
+        .map(|v| v.into_iter().map(|j| (j.by, j.x, j.y)).collect()).collect())
 }
 
 #[cfg(test)]
@@ -379,7 +435,7 @@ mod tests {
         let pit = zone_y(0.0, 60.0, 0.0, 9.0, -1.0);
         let zones = vec![oval, pit];
         let dom = dominance(&zones.iter().map(|z| z.line.clone()).collect::<Vec<_>>(), &[9.0, 9.0]);
-        assert_eq!(dom, vec![vec![], vec![0]]);
+        assert_eq!(dom, vec![vec![], vec![Join { by: 0, x: 0.0, y: 0.0 }]]);
         let pts: Vec<f64> = (0..=60).flat_map(|i| [0.0, i as f64]).collect();
         let base = vec![5.0; 61];
         let (old, _) = ground(&pts, &base, &zones, None, 2.0, 20.0);
@@ -400,23 +456,45 @@ mod tests {
     }
 
     #[test]
-    fn split_through_route_is_the_straight_pair() {
-        // the oval split at x = 0 into two ways meeting end to end, a pit road ending there from the side
-        let a: Vec<f64> = (0..=50).flat_map(|i| [-100.0 + 2.0 * i as f64, 0.0]).collect();
-        let b: Vec<f64> = (0..=50).flat_map(|i| [2.0 * i as f64, 0.0]).collect();
-        let c: Vec<f64> = (0..=20).flat_map(|i| [0.0, 40.0 - 2.0 * i as f64]).collect();
-        let dom = dominance(&[a.clone(), b.clone(), c.clone()], &[9.0, 9.0, 9.0]);
-        assert_eq!(dom, vec![vec![], vec![], vec![0, 1]]);
-        // two ways end to end alone: no one gives way
-        assert_eq!(dominance(&[a, b], &[9.0, 9.0]), vec![Vec::<usize>::new(), vec![]]);
-        // a road crossing the band away from its ends without ending there: no relation
-        let d: Vec<f64> = (0..=40).flat_map(|i| [10.0, -40.0 + 2.0 * i as f64]).collect();
-        let e: Vec<f64> = (0..=50).flat_map(|i| [-50.0 + 2.0 * i as f64, 0.0]).collect();
-        assert_eq!(dominance(&[e, d], &[9.0, 9.0]), vec![Vec::<usize>::new(), vec![]]);
+    fn a_join_holds_only_along_its_overlap() {
+        // a road that runs 60 m off the oval, bends in and joins it: away from the oval (past its overlap from the
+        // join) nothing changes; a point where both bands meet only by the old rule's crossing far from the join
+        // keeps the old answer
+        let oval = zone_x(-200.0, 200.0, 0.0, 9.0, |_, o| 0.1 * o);
+        let road = zone_y(-150.0, 60.0, 0.0, 9.0, -1.0);       // (x = -150, joining the oval at (-150, 0))
+        let lines: Vec<Vec<f64>> = vec![oval.line.clone(), road.line.clone()];
+        let dom = dominance(&lines, &[9.0, 9.0]);
+        assert_eq!(dom[1], vec![Join { by: 0, x: -150.0, y: 0.0 }]);
+        let (lo, hi) = join_reach(&road, &oval, &dom[1][0], 20.0);
+        assert!(lo >= 60.0 - 38.0 - 2.0 - 1e-9 && hi >= 60.0, "{lo} {hi}");
+        let zones = vec![oval, road];
+        // 45 m up the road (past its overlap): as the old rule
+        let pts = [-150.0, 45.0];
+        let (a, _) = ground(&pts, &[5.0], &zones, None, 2.0, 20.0);
+        let (b, _) = ground(&pts, &[5.0], &zones, Some(&dom), 2.0, 20.0);
+        assert_eq!(a[0].to_bits(), b[0].to_bits());
     }
 
     #[test]
-    fn nearest_rule_without_dom() {
+    fn split_through_route_and_continuations() {
+        // the oval split at x = 0 into two ways meeting end to end (the longer one 100 m, the other 60 m), a pit road
+        // ending there from the side: it gives way to both; the two oval pieces go on from each other
+        let a: Vec<f64> = (0..=50).flat_map(|i| [-100.0 + 2.0 * i as f64, 0.0]).collect();
+        let b: Vec<f64> = (0..=30).flat_map(|i| [2.0 * i as f64, 0.0]).collect();
+        let c: Vec<f64> = (0..=20).flat_map(|i| [0.0, 40.0 - 2.0 * i as f64]).collect();
+        let dom = dominance(&[a.clone(), b.clone(), c.clone()], &[9.0, 9.0, 9.0]);
+        assert!(dom[0].is_empty() && dom[1].is_empty(), "{dom:?}");
+        assert_eq!(dom[2].iter().map(|j| j.by).collect::<Vec<_>>(), vec![0, 1]);
+        // two ways end to end alone: no one gives way
+        assert!(dominance(&[a, b], &[9.0, 9.0]).iter().all(|v| v.is_empty()));
+        // a road crossing the band away from its ends without ending there: no join
+        let d: Vec<f64> = (0..=40).flat_map(|i| [10.0, -40.0 + 2.0 * i as f64]).collect();
+        let e: Vec<f64> = (0..=50).flat_map(|i| [-50.0 + 2.0 * i as f64, 0.0]).collect();
+        assert!(dominance(&[e, d], &[9.0, 9.0]).iter().all(|v| v.is_empty()));
+    }
+
+    #[test]
+    fn nearest_rule_without_joins() {
         let z = zone_x(0.0, 20.0, 0.0, 5.0, |s, o| s + 10.0 * o);
         let pts = [10.0, 1.0, 10.0, 4.5, 10.0, 6.0, 30.0, 0.0];
         let base = [100.0; 4];

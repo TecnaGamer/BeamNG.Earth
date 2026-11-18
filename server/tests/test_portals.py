@@ -49,6 +49,30 @@ class Entrance(unittest.TestCase):
         z0 = min(float(np.asarray(c["n"])[:, 2].min()) for c in tube)
         self.assertLess(P[:, 2].max(), z0 + th + max(lk[6] for lk in portals.LOOKS.values()) + 0.5)
 
+    def test_a_road_over_the_mouth_keeps_its_surface(self):
+        # the user's report 72 (Atlanta's infield tunnel, 2026-11-17): a service road passing over a mouth, 3 m in,
+        # had the headwall's parapet and soil top standing across its lanes. BNE_TUNNEL_ROAD_OVER: the headwall's
+        # ground read on that road less the highest parapet, so its top is the road's
+        from test_roads import features, FRAME
+        elev = _ridge()
+        x = -43.0               # (the mapped tube from x = -50; the road over it covered out to there: 7 m in)
+        def fg(on):
+            was = portals.ROAD_OVER_ON
+            portals.ROAD_OVER_ON = on
+            try:
+                f = features([[(-100, 0), (100, 0)], [(x, -60), (x, 60)]], ["service", "residential"],
+                             flags=[(0, "is_tunnel", 0.25, 0.75)])
+                tp = roads.TunnelProfiles(FRAME, lambda key: f, elev)
+                ch = [c for c in roads._tunnel_chunks(tp, [f], (-128.0, -128.0, 128.0, 128.0)) if c.get("tunnel")]
+                return [v for c in ch for ft in (c.get("fit") or []) if ft is not None for v in ft["fg"]]
+            finally:
+                portals.ROAD_OVER_ON = was
+        off, on = fg(False), fg(True)
+        self.assertTrue(off)
+        self.assertEqual(len(off), len(on))
+        self.assertTrue(all(b <= a + 1e-9 for a, b in zip(off, on)))
+        self.assertTrue(any(b < a - portals.PARAPET_MAX + 0.01 for a, b in zip(off, on)), (off, on))
+
     def test_flat_ground_beside_the_mouth_brings_the_headwall_down(self):
         # the headwall's top: the parapet over the ground where it is high, sloping down to end_min where it is low
         fitd = {"st": 1, "fx": [-8.0, -5.0, 0.0, 5.0, 8.0], "fg": [0.0, 0.0, 9.0, 0.0, 0.0], "ws": [2.0, 4.0],
