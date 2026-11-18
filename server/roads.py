@@ -7355,17 +7355,36 @@ def _crossings(lines, ground_lines):
     return [(pi, arc, np.array([x, y])) for pi, _g, arc, x, y in got]
 
 
+CROSSINGS_CHUNK = 8     # segments of a ground line the crossing kernel takes as one line (_crossings_by)
+
+
 def _crossings_by(lines, ground_lines):
     """_crossings for each of ground_lines apart, in one kernel call: [[(part index, arc m, point xy)] per ground line],
-    each list as _crossings(lines, [that line]) gives it. Pure."""
+    each list as _crossings(lines, [that line]) gives it. Pure.
+
+    A ground line goes to the kernel as runs of CROSSINGS_CHUNK segments, each run's box tested against the part's: the
+    kernel tests a ground line's box against a part's, then every segment of the line against every segment of the part,
+    and a rail yard's lines are all 100 m and more (500 lines, 25 bridges, 1.2 s a call: 20 of 200 CPU-s of a Zurich +
+    Gotthard replay). The runs of a line are in its order and the kernel lists a part's crossings by ground line, so
+    each line's crossings come in the order of the whole line's (the same points, the same arcs: its segments are the
+    same pairs)."""
     import fast
     lines, ground_lines = list(lines), list(ground_lines)
     out = [[] for _ in ground_lines]
     if not lines or not out:
         return out
     fast.require(240, "segment_crossings_lists")
-    for pi, g, arc, x, y in fast._ef.segment_crossings_lists(_lines64(lines), _lines64(ground_lines)):
-        out[g].append((pi, arc, np.array([x, y])))
+    pieces, owner = [], []
+    for g, ln in enumerate(_lines64(ground_lines)):
+        if len(ln) <= CROSSINGS_CHUNK + 1:
+            pieces.append(ln)
+            owner.append(g)
+            continue
+        for a in range(0, len(ln) - 1, CROSSINGS_CHUNK):
+            pieces.append(ln[a:a + CROSSINGS_CHUNK + 1])
+            owner.append(g)
+    for pi, c, arc, x, y in fast._ef.segment_crossings_lists(_lines64(lines), pieces):
+        out[owner[c]].append((pi, arc, np.array([x, y])))
     return out
 
 
