@@ -570,10 +570,9 @@ def limit_near(limits, pt):
     return any(len(xy) >= 2 and float(roads._seg_dist(p, xy[:-1], xy[1:]).min()) <= LIMIT_NEAR_M for xy, _h in limits)
 
 
-def _seg_arc(line, pt):
-    """The arc (m) along line of its point nearest pt."""
+def _seg_arc(line, pt, s):
+    """The arc (m) along line of its point nearest pt (s: _arc(line), made once for all the points asked)."""
     line = np.asarray(line, np.float64)[:, :2]
-    s = _arc(line)
     ab = np.diff(line, axis=0)
     t = np.clip(((pt - line[:-1]) * ab).sum(1) / np.maximum((ab * ab).sum(1), 1e-12), 0.0, 1.0)
     j = int(np.argmin(dnp.norm(line[:-1] + t[:, None] * ab - pt, axis=1)))
@@ -611,6 +610,12 @@ def plain_underpasses(frame, cells, box, rails, reach=REACH_M, tunnels=None):
     ways += [(xy, BALLAST_TOP_M, roads.deck_rail_clear(depth)) for (_fid, _c, kind, xy) in rails
              if kind == "ground" and len(xy) >= 2]
     out = []
+    # (every segment of the mapped tunnels at once: a crossing is in one when it lies within OWN_TUNNEL_M of any, the
+    # nearest of all the segments the nearest of each tunnel's; a call per tunnel and crossing was 7 of the 200 profiled
+    # CPU-s of a Zurich + Gotthard replay)
+    own = [tl for tl, _th in tunnels if len(tl) >= 2]
+    own_a = np.concatenate([tl[:-1] for tl in own]) if own else None
+    own_b = np.concatenate([tl[1:] for tl in own]) if own else None
     for (line, half, track), hits in zip(ways, roads._crossings_by(bridges, [w[0] for w in ways])):
         if not hits:
             continue
@@ -620,10 +625,9 @@ def plain_underpasses(frame, cells, box, rails, reach=REACH_M, tunnels=None):
             if track is not None and min(float(dnp.hypot(*(e - pt))) for e in (bridges[hit[0]][0], bridges[hit[0]][-1],
                                                                               line[0], line[-1])) < STEP_M:
                 continue                        # (a joint: the track runs on from the bridge, or ends at it)
-            if track is None and any(len(tl) >= 2 and float(roads._seg_dist(pt[None], tl[:-1], tl[1:]).min()) <= OWN_TUNNEL_M
-                                     for tl, _th in tunnels):
+            if track is None and own and float(roads._seg_dist(pt[None], own_a, own_b).min()) <= OWN_TUNNEL_M:
                 continue                        # (in its own mapped tunnel there)
-            sc = _seg_arc(line, pt)
+            sc = _seg_arc(line, pt, sl)
             a0, a1 = max(0.0, sc - RISE_PIECE_M), min(float(sl[-1]), sc + RISE_PIECE_M)
             if a1 - a0 < 1.0:
                 continue
