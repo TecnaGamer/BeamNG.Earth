@@ -1301,8 +1301,11 @@ class Dem:
                 break
 
     def _partial(self):
-        """This load used a stand-in (a failed fetch): its tile is not mirrored."""
+        """This load used a stand-in (a failed fetch): its tile is not mirrored, and the builds reading it are short
+        (revisit.fault: a source whose failure is no failed download, a lidar sheet that raised OSError, said nothing
+        before, and the stand-in went into the LRU unmarked)."""
         self._local.partial = True
+        revisit.fault(here=True)
 
     def _load_tile(self, key):
         """A decoded tile: from the mirror, else made (_make_tile) and, when it is all Mapterhorn's data as it will
@@ -1546,6 +1549,8 @@ class Dem:
                 anc = None
         if anc is not None:
             _replay(marks)
+            if marks:           # (an ancestor kept short: the tile made from it is a stand-in too, never mirrored)
+                self._partial()
         else:
             # (in this thread: a pool worker waiting on the pool could deadlock)
             anc, marks = self._load_marked(key)

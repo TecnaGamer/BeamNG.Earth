@@ -121,6 +121,37 @@ class KeptStandInTest(unittest.TestCase):
             self.assertTrue(later.complete)
             self.assertEqual(len(dem.loaded), 2)
 
+    def test_child_of_a_kept_short_ancestor_is_a_stand_in(self):
+        """A tile upsampled from a short ancestor read from memory is a stand-in itself: never mirrored (where a
+        restart would read it back without its marks)."""
+        with tempfile.TemporaryDirectory() as d:
+            dem = StandInDem(d, failing={(15, 2, 2)})
+            in_thread(lambda: dem._from_ancestor(16, 4, 4, 15))
+            seen = {}
+
+            def child():
+                dem._local.partial = False
+                dem._from_ancestor(16, 5, 5, 15)
+                seen["partial"] = dem._local.partial
+            _r, b = in_thread(child)
+            self.assertTrue(seen["partial"])
+            self.assertFalse(b.complete)
+
+    def test_partial_is_a_fault(self):
+        """Every stand-in (_partial: a lidar sheet that raised OSError too, no download fault) makes its readers
+        short, and its tile is kept marked."""
+        class LidarFailDem(StandInDem):
+            def _load_tile(self, key):
+                self._partial()         # (as _canada_fine on a sheet's OSError)
+                return np.zeros((T, T), np.float32)
+        with tempfile.TemporaryDirectory() as d:
+            dem = LidarFailDem(d)
+            _r, first = in_thread(lambda: dem.tiles([(12, 1, 1)]))
+            _r, later = in_thread(lambda: dem.tiles([(12, 1, 1)]))
+            self.assertFalse(first.complete)
+            self.assertFalse(later.complete)
+            self.assertIn((12, 1, 1), dem._lru_short)
+
     def test_evicted_marks_go(self):
         with tempfile.TemporaryDirectory() as d:
             dem = StandInDem(d, failing={(12, 0, 0)})
