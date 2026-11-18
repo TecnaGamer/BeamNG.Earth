@@ -12,6 +12,7 @@ import numpy as np
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, os.path.dirname(__file__))
 import findground  # noqa: E402
+import gradelaw  # noqa: E402
 import gradeshapes  # noqa: E402
 import grading  # noqa: E402
 import interchanges  # noqa: E402
@@ -50,13 +51,20 @@ class LeavesTest(unittest.TestCase):
         self.assertEqual(gradeshapes.WAY["tunnel"], T)
 
 
-class RailBridgeOverPlainRoadTest(unittest.TestCase):
-    """A 20 m rail bridge over a primary road, both on level ground."""
+class _RailOverRoad(unittest.TestCase):
+    """A rail bridge over a primary road, both on level ground. Whichever of the two moves is findground's cost law (the
+    bridge climbs the lack at the track's grade, railways.GRADE, over its own run first and only the rest is fill; the
+    road dips it and climbs out at its own, a cut each side): a 20 m bridge has 10 m of run each way where 5.8 m at 5 %
+    asks 117, so 214 m of fill against the primary's 130 m of cut (9 %): the road goes down under the track, which stays
+    on its ground. A viaduct of 300 m climbs it in its own run, free: the track rises over the road, which stays."""
+
+    LENGTH = 20.0
 
     def setUp(self):
+        half = self.LENGTH / 350.0 / 2.0
         self.f = features([[(-50.0, 100.0), (300.0, 100.0)], [(120.0, 20.0), (120.0, 180.0)]],
                           ["standard_gauge", "primary"], subtypes=["rail", "road"],
-                          flags=[(0, "is_bridge", 160.0 / 350.0, 180.0 / 350.0)])
+                          flags=[(0, "is_bridge", 170.0 / 350.0 - half, 170.0 / 350.0 + half)])
         self.box = roads.tile_bbox(0, 0)
         self.rails = railways.parts(FRAME, [self.f], self.box, clip=True)
 
@@ -66,24 +74,25 @@ class RailBridgeOverPlainRoadTest(unittest.TestCase):
             out.append((kind, xy, zb))
         return out
 
+    def over_the_road(self, rise):
+        return [float(zb[np.abs(xy[:, 0] - 120.0) <= rise[0][1]].min()) for kind, xy, zb in self.beds(rise) if kind == "bridge"]
+
+
+class RailBridgeOverPlainRoadTest(_RailOverRoad):
+    """The 20 m bridge: findground's law, the road goes down."""
+
     def test_the_map_wins_a_short_bridge_on_level_ground_is_a_bridge(self):
         self.assertIn("bridge", {kind for _f, _c, kind, _xy in self.rails})
 
-    def test_the_track_rises_over_the_road_by_the_laws_headroom(self):
+    def test_the_cost_law_says_the_road_goes_down_under_a_short_bridge(self):
         rise = railways.plain_underpasses(FRAME, [self.f], self.box, self.rails)
         self.assertEqual(len(rise), 1)
-        xy, half = rise[0]
-        self.assertAlmostEqual(rise[0].clear, roads.deck_road_clear(DEPTH))
-        self.assertLess(float(np.abs(xy[:, 0] - 120.0).max()), 0.5, "the road's own piece")
-        self.assertAlmostEqual(float(xy[:, 1].min()), 100.0 - railways.RISE_PIECE_M, delta=0.5)
-        self.assertAlmostEqual(float(xy[:, 1].max()), 100.0 + railways.RISE_PIECE_M, delta=0.5)
-        self.assertGreater(half, railways.UNDERPASS_SIDE_M)
-        over = [float(zb[np.abs(xy[:, 0] - 120.0) <= half].min()) for kind, xy, zb in self.beds(rise) if kind == "bridge"]
-        self.assertTrue(over)
-        self.assertGreaterEqual(min(over), Z0 + rise[0].clear - 1e-6, "the road's headroom under the deck, over the road")
-        for _kind, xy, zb in self.beds(rise):
-            run = np.hypot(*np.diff(xy, axis=0).T)
-            self.assertLessEqual(float(np.abs(np.diff(zb) / np.maximum(run, 1e-9)).max()), railways.GRADE + 1e-6)
+        lack = rise[0].clear
+        ends = (10.0, 10.0)
+        self.assertGreater(findground.fill_run(lack, ends, railways.GRADE), findground.dip_run(lack, rise[0].grade))
+        self.assertEqual(findground.leaves(G, B, lack, ends, railways.GRADE, rise[0].grade), "lower")
+        for kind, xy, zb in self.beds(rise):
+            self.assertLess(float(np.abs(zb - Z0).max()), 0.5, kind + ": the track stays on its ground")
 
     def test_without_the_rise_the_bridge_lies_on_the_ground(self):
         for kind, _xy, zb in self.beds([]):
@@ -132,6 +141,30 @@ class RailBridgeOverPlainRoadTest(unittest.TestCase):
                          "a tunnel of the road further on is not under the bridge")
 
 
+class RailViaductOverPlainRoadTest(_RailOverRoad):
+    """The 300 m viaduct over the same road: it climbs the rise in its own run, so the track rises and the road stays."""
+    LENGTH = 300.0
+
+    def test_the_track_rises_over_the_road_by_the_laws_headroom(self):
+        # (a viaduct: its own run carries the rise)
+        rise = railways.plain_underpasses(FRAME, [self.f], self.box, self.rails)
+        self.assertEqual(len(rise), 1)
+        xy, half = rise[0]
+        self.assertAlmostEqual(rise[0].clear, roads.deck_road_clear(DEPTH))
+        self.assertLess(float(np.abs(xy[:, 0] - 120.0).max()), 0.5, "the road's own piece")
+        self.assertAlmostEqual(float(xy[:, 1].min()), 100.0 - railways.RISE_PIECE_M, delta=0.5)
+        self.assertAlmostEqual(float(xy[:, 1].max()), 100.0 + railways.RISE_PIECE_M, delta=0.5)
+        self.assertGreater(half, railways.UNDERPASS_SIDE_M)
+        over = self.over_the_road(rise)
+        self.assertTrue(over)
+        self.assertGreaterEqual(min(over), Z0 + rise[0].clear - 1e-6, "the road's headroom under the deck, over the road")
+        ends = (150.0, 150.0)
+        self.assertEqual(findground.leaves(G, B, rise[0].clear, ends, railways.GRADE, rise[0].grade), "upper")
+        for _kind, xy, zb in self.beds(rise):
+            run = np.hypot(*np.diff(xy, axis=0).T)
+            self.assertLessEqual(float(np.abs(np.diff(zb) / np.maximum(run, 1e-9)).max()), railways.GRADE + 1e-6)
+
+
 class RiseRampTest(unittest.TestCase):
     """The rise over a road (plain_underpasses) is carried by the track at railways.GRADE: the bridge's bed stands where
     the ground track's ends, with no step (measured at Perth's Tonkin Highway, 2026-11-18: the 5.25 m rise of a 24 m
@@ -144,10 +177,12 @@ class RiseRampTest(unittest.TestCase):
 
     def setUp(self):
         self.clear = float(roads.deck_road_clear(DEPTH))
-        self.rails = [("a", "rail", "ground", self.line(-100.0, 100.0)), ("b", "rail", "bridge", self.line(100.0, 140.0)),
-                      ("c", "rail", "ground", self.line(140.0, 340.0))]
-        piece = np.c_[np.full(21, 120.0), np.linspace(75.0, 125.0, 21)]
-        self.rise = railways._Rise(piece, 6.0, self.clear)
+        # (a 120 m bridge, the road in its middle: 60 m of run to each end where the rise asks 117, so 114 m of fill
+        # against the primary's 130 m of cut: the bridge rises, and carries the rest of its rise onto the ground track)
+        self.rails = [("a", "rail", "ground", self.line(-100.0, 100.0)), ("b", "rail", "bridge", self.line(100.0, 220.0)),
+                      ("c", "rail", "ground", self.line(220.0, 420.0))]
+        piece = np.c_[np.full(21, 160.0), np.linspace(75.0, 125.0, 21)]
+        self.rise = railways._Rise(piece, 6.0, self.clear, gradelaw.road_grade("primary"))
         (self.za, _), (self.zb, _), (self.zc, _) = railways.profile(self.rails, level, [self.rise])
 
     def test_the_bridge_and_its_approaches_meet_with_no_step(self):
@@ -155,7 +190,7 @@ class RiseRampTest(unittest.TestCase):
         self.assertAlmostEqual(float(self.zb[-1]), float(self.zc[0]), places=6)
 
     def test_the_rise_is_over_the_road_by_its_headroom_and_never_steeper_than_the_grade_law(self):
-        self.assertGreaterEqual(float(self.zb.min()), Z0 + self.clear - railways.GRADE * 20.0 - 1e-6)
+        self.assertGreaterEqual(float(self.zb.min()), Z0 + self.clear - railways.GRADE * 60.0 - 1e-6)
         self.assertAlmostEqual(float(self.zb.max()), Z0 + self.clear, places=6)
         for xy, zb in zip((p[3] for p in self.rails), (self.za, self.zb, self.zc)):
             run = np.hypot(*np.diff(xy, axis=0).T)
@@ -170,7 +205,7 @@ class RiseRampTest(unittest.TestCase):
             self.assertAlmostEqual(float(zb[-1]), Z0, places=6)
         reach = (float(self.zc[0]) - Z0) / railways.GRADE
         self.assertLessEqual(reach, self.clear / railways.GRADE + 1e-6, "no longer than the rise needs")
-        self.assertGreater(reach, (self.clear - railways.GRADE * 20.0) / railways.GRADE, "and the rise is carried in full")
+        self.assertGreater(reach, (self.clear - railways.GRADE * 60.0) / railways.GRADE, "and the rise is carried in full")
 
 
 class ViaductJointTest(unittest.TestCase):

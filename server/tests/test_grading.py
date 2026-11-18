@@ -1838,32 +1838,48 @@ class RailDeckHeightTest(unittest.TestCase):
     of its mapped ends, down the slopes of the street's cutting, and the track's level found beyond them: 37.3 m where
     the railways lay its bed at 40.1 (a neighbouring deck's level carried along the line), the deck drawn there. The
     street was dug for the shapes' deck, 8.75 m under the drawn one where 6.15 m clears it, and the track's fill beside
-    it stood 10.5 m tall. The shapes read the track's height and its deck's depth from the railways (track_beds), and
-    a rail bridge over a street on the ground is the railways' to raise (findground, railways.plain_underpasses): the
-    street stays on its ground and clears the deck the railways draw."""
+    it stood 10.5 m tall. The shapes read the track's height and its deck's depth from the railways (track_beds); who
+    leaves the ground at a 7 m bridge over a street is findground's cost law (the bridge has 3.5 m of run each way where
+    5.8 m at the track's 5 % asks 117, so 227 m of fill against the street's 117 m of cut at its 10 %): the street goes
+    down under the track, which stays at its bed, and clears the deck the railways draw."""
 
-    def test_the_railways_deck_clears_the_street_which_stays_on_its_ground(self):
+    def setup_street(self):
         import railprofile
-        import railways
         railprofile._NODES.clear()
         f = features([[(-600.0, 0.0), (-3.5, 0.0)], [(-3.5, 0.0), (3.5, 0.0)], [(3.5, 0.0), (600.0, 0.0)],
                       [(0.0, -150.0), (0.0, 150.0)]],
                      ["standard_gauge"] * 3 + ["secondary"], subtypes=["rail"] * 3 + ["road"],
                      flags=[(1, "is_bridge")], ids=["r0", "r1", "r2", "street"])
+        return f, lambda la, lo: np.full(np.shape(la), 30.0)
 
-        def elev(la, lo):
-            return np.full(np.shape(la), 30.0)
+    def test_the_street_goes_down_under_the_deck_the_railways_draw_which_stays_at_its_bed(self):
+        import railprofile
+        import railways
+        f, elev = self.setup_street()
         g = grading._Planner(FRAME, FakeMD(f), elev)
         try:
-            prof = g._shape_region_calc(mapcells.cell_of(LAT, LON), "test")
             bed = float(np.asarray(g._track_bed(np.array([[0.0, 0.0]])), np.float64)[0])
+            la, lo, _ = FRAME.enu_to_geodetic(np.array([0.0, 0.0, 0.0]), np.array([0.0, 60.0, 140.0]), 0.0)
+            z = np.asarray(grading.Grader(FRAME, FakeMD(f), elev).apply(la, lo, elev(la, lo), grading.ROAD_LIFT), np.float64)
         finally:
             railprofile._NODES.clear()
-        self.assertFalse([1 for _xy, _z, mode in prof.get("street", ()) if mode == "cut"], "the street is not dug")
+        self.assertAlmostEqual(bed, 30.0, delta=0.05, msg="the track at its bed: it does not rise")
         underside = bed - (railways.DECK_D - railways.BALLAST_H)    # (the railways' bed, the deck drawn on it)
         headroom = grading._gsh.HEADROOM_M + grading._gsh.HEADROOM_MARGIN_M
-        self.assertGreaterEqual(underside - 30.0, headroom - 0.01, "the street on its ground clears the deck as drawn")
-        self.assertAlmostEqual(underside - 30.0, headroom, delta=0.05, msg="and the track rises no higher")
+        self.assertGreaterEqual(underside - float(z[0]), headroom - 0.01, "the street clears the deck as drawn")
+        self.assertAlmostEqual(underside - float(z[0]), headroom, delta=0.3, msg="and is dug no deeper")
+        self.assertAlmostEqual(float(z[2]), 30.0, delta=0.3, msg="back on its ground past its ramp")
+
+    def test_the_cost_law_is_the_same_for_the_track_and_the_street(self):
+        f, elev = self.setup_street()
+        import gradelaw
+        import railways
+        clear = grading._gsh.HEADROOM_M + grading._gsh.HEADROOM_MARGIN_M + (railways.DECK_D - railways.BALLAST_H)
+        fill = grading.findground.fill_run(clear, (3.5, 3.5), railways.GRADE)
+        dip = grading.findground.dip_run(clear, gradelaw.road_grade("secondary"))
+        self.assertGreater(fill, dip)
+        self.assertEqual(grading.findground.leaves("ground", "bridge", clear, (3.5, 3.5), railways.GRADE,
+                                                   gradelaw.road_grade("secondary")), "lower")
 
     def test_the_railways_are_made_once_for_a_deck_not_once_for_each_point_read(self):
         # the shapes read a rail deck's height at every point of every crossing: the railways near it made for each

@@ -42,6 +42,7 @@ import dnp
 import bumps
 import mapcells
 import findground
+import gradelaw
 import railways as railwaysmod
 import roads as roadsmod
 import seatiles
@@ -378,9 +379,12 @@ APPROACH_MAX_RUN = 320.0    # m: the longest ramp
 APPROACH_TOUCH_M = 2.5      # m: a road whose end is this close to an abutment leads onto the bridge
 APPROACH_MIN_CROSS_M = 6.0  # m: a road crossing a deck closer than this to its end is a junction at grade (not
                             # under it)
-RAIL_MIN_CROSS_M = 2.0      # m: ... and under a rail deck over a road with a height limit (a track's bridge over a
-                            # road is 10-12 m, a road's 6 m rule left it out; without a limit the 6 m rule stands: the
-                            # drivability ratchet's Compiegne roundabout dipped under a 7 m rail deck, 89 -> 113)
+RAIL_MIN_CROSS_M = 2.0      # m: ... and under a rail deck over a road with a height limit, or under one too short for that
+                            # (a track's bridge is a bridge, however short: the map says so; a 7 m one over a roundabout
+                            # is where findground's cost law decides which one moves). A long rail deck's ends keep the 6 m
+                            # rule: the roads at a viaduct's abutment are not under it, and the ramp's end clears them
+                            # only by the dip the law would then ask of them (measured at Zurich's Duttweilerbruecke: 1 m
+                            # dug along service roads 2-6 m from a viaduct's end)
 APPROACH_FLAT_M = 20.0      # m from an abutment the deck needs its full clearance (beyond: it may fall at DECK_GRADE)
 APPROACH_MARGIN_M = 0.3     # m over the clearance (the deck profile's smoothing takes a little off near its ends)
 JUNCTION_RAISE_ON = os.environ.get("BNE_JUNCTION_RAISE", "on") != "off"   # an approach's junction rises with it
@@ -4225,25 +4229,23 @@ class _Planner:
             n0 = [len(b) for b, _f, _r in uniq]
             uniq = _merge_span_chains(uniq)
             chained = {i for i, (b, _f, _r) in enumerate(uniq) if len(b) not in n0}
-        spans, rail_span = [], []
+        spans, rail_span, span_mapped = [], [], []
         ue = np.array([[b[0, :2], b[-1, :2]] for b, _f, _r in uniq], f64)        # (n, 2 ends, 2)
         stub = np.array([float(dnp.hypot(*np.diff(b[:, :2], axis=0).T).sum()) < UNDER_STUB_M for b, _f, _r in uniq])
         coarse = self._coarse(key)
         for n, (b, fixed, rail) in enumerate(uniq):
-            # (findground: a railway's bridge over a plain road leaves the ground itself (railways.plain_underpasses),
-            # the road stays on its ground; only under one that spans the road's own mapped tunnel does the road go
-            # down, the track staying at its bed. Every rail span dug the road under it: the streets under Zurich's
+            # (findground asks each crossing below, with what the elevation lacks: a mapped tunnel under a span is the
+            # road going down; a plain road is dug only where the cost law says so, else the bridge rises (a railway's
+            # by railways.profile, asking the same). Every rail span dug the road under it: the streets under Zurich's
             # Wipkingen viaduct, which stands 13 m over them)
             mapped_under = rail and railwaysmod.TUNNEL_AT_GRADE_ON and self._over_mapped_underpass(b)
-            under = findground.TUNNEL if mapped_under else findground.GROUND
-            if rail and findground.leaves(under, findground.BRIDGE) != "lower":
-                continue
             L = float(dnp.hypot(*np.diff(b, axis=0).T).sum())
             # (a carriageway's deck, any length, joined or not: its height is its profile's, the roads under it dip
             # to clear it)
             cw_deck = CW_ON and not rail and self._cw_z_at(b, b[:1]) is not None
             max_l = UNDER_CHAIN_MAX_M if n in chained else UNDER_MAX_BRIDGE_M
-            mc = RAIL_MIN_CROSS_M if rail and limits else APPROACH_MIN_CROSS_M     # (shorter: signed roads only)
+            # (a track's bridge is a bridge, however short: the map wins; a level crossing is no bridge in the map)
+            mc = RAIL_MIN_CROSS_M if rail and (limits or L < 2 * APPROACH_MIN_CROSS_M) else APPROACH_MIN_CROSS_M
             if L < 2 * mc or (L > max_l and not rail and not cw_deck):
                 continue
             d = dnp.hypot(ue[:, :, None, 0] - ue[n, None, None, :, 0], ue[:, :, None, 1] - ue[n, None, None, :, 1])
@@ -4253,6 +4255,7 @@ class _Planner:
             if rail or cw_deck or not (d < 0.75).any():
                 spans.append((b, L, fixed, rail))
                 rail_span.append(rail)
+                span_mapped.append(bool(mapped_under))
         if not spans:
             return
         gids = sorted(ground)
@@ -4260,21 +4263,22 @@ class _Planner:
         crs = roadsmod._crossings_by([b for b, _L, _f, _r in spans], lines)
         ez, raised = {}, set()
 
-        def deck_ends(j):           # (an overpass's abutments' ground, raised when it is: as high as its ramps could
-            got = ez.get(j)         # take them; asked only for one a road crosses under: every span's took 2 s a
-            if got is None:         # Canton cell, 2026-10-25)
+        def deck_ends(j, natural=False):    # (an overpass's abutments' ground, raised when it is: as high as its ramps
+            key = (j, natural)              # could take them; natural: not raised, the ground the deck's own line
+            got = ez.get(key)               # stands on (findground, rule 1). Asked only for one a road crosses under:
+            if got is None:                 # every span's took 2 s a Canton cell, 2026-10-25)
                 b, _L, fixed, rail = spans[j]
                 ends = np.array([b[0], b[-1]], f64)
                 ela, elo, _ = self.frame.enu_to_geodetic(ends[:, 0], ends[:, 1], 0.0)
                 got = np.asarray(self.elev(np.asarray(ela), np.asarray(elo)), f64).reshape(2).copy()
-                if not fixed or (XS_ON and not rail and self._xsolve(b) is not None):
+                if not natural and (not fixed or (XS_ON and not rail and self._xsolve(b) is not None)):
                     got[0] += self._end_raised(b[0])
                     got[1] += self._end_raised(b[-1])
                 if not rail:        # (or on its embankment's top, where its line ends down the slope: #684's fill)
                     got = np.maximum(got, [self._end_filled(b, False), self._end_filled(b, True)])
-                ez[j] = got
+                ez[key] = got
             return got
-        cands, decks, cand_xs, cand_cw = [], [], [], []
+        cands, decks, cand_xs, cand_cw, cand_nat = [], [], [], [], []
         signed = set()                  # (the candidates under a rail deck whose road has a height limit)
         for i, cr in enumerate(crs):
             if not cr:
@@ -4287,9 +4291,9 @@ class _Planner:
                 b, L, fixed, rail = spans[bi]
                 sign = (_limit_at(limits, pt) if RAIL_SIGNED_ON else None) if rail and limits else None
                 road_sign = None if rail else roadsmod.road_sign_at(limits, pt)
-                mc = RAIL_MIN_CROSS_M if sign is not None else APPROACH_MIN_CROSS_M
+                mc = RAIL_MIN_CROSS_M if rail and (sign is not None or L < 2 * APPROACH_MIN_CROSS_M) else APPROACH_MIN_CROSS_M
                 if L < 2 * mc:
-                    continue                    # (a short rail deck: a span only over a road with a height limit)
+                    continue                    # (a deck too short to span a road)
                 if arc_b < mc or arc_b > L - mc:
                     continue                    # a junction at the bridge's end
                 corridor = np.clip([arc_b - roadsmod.DECK_CLEAR_REACH_M, arc_b + roadsmod.DECK_CLEAR_REACH_M], 0.0, L)
@@ -4341,7 +4345,11 @@ class _Planner:
                     clear = float(roadsmod.signed_road_clear(road_sign, depth)) + ROAD_LIFT
                 cands.append((i, float(s[j] + t[j] * (s[j + 1] - s[j])), deck - clear))
                 decks.append((deck, fixed))
-                cand_xs.append((bi, pt))
+                cand_xs.append((bi, pt, arc_b))
+                # (the deck's natural height there: the line between its ends' ground, findground rule 1; a track's is
+                # its bed, which the railways have already raised or not by the same rule)
+                zn = deck_ends(bi, True) if not rail else None
+                cand_nat.append(deck if zn is None else float(zn[0] + (zn[1] - zn[0]) * arc_b / max(L, 1e-9)))
                 cand_cw.append(None if cz is None else deck - (CW_HEADROOM_M + roadsmod.deck_depth(
                     roadsmod.geom_span([b])) + ROAD_LIFT))
         if not cands:
@@ -4353,8 +4361,22 @@ class _Planner:
         requirements, xs_floor = [], []
         mapped_req = set()              # (requirements under a railway at grade over the road's mapped tunnel)
         floor = seatiles.SEA_E + UNDER_SEA_M
-        for n_c, ((i, sc, top), (deck, fixed), z, (bi, pt), top_cw) in enumerate(zip(cands, decks, zc, cand_xs,
-                                                                                         cand_cw)):
+        for n_c, ((i, sc, top), (deck, fixed), z, (bi, pt, arc_b), top_cw, nat) in enumerate(
+                zip(cands, decks, zc, cand_xs, cand_cw, cand_nat)):
+            # (findground: the road goes under a span that cannot be raised by approaches only where it says the road
+            # leaves the ground. The lack is what the deck as it stands falls short of the clearance over the road's
+            # ground; the deck's own run each way is its span to the crossing; a mapped tunnel under it is the road
+            # going down whatever the lack. A deck the legacy approach lifts raise (APPROACH_ON, not a never-raised
+            # one) is the lifts' to move, the road under giving way only for what their ramps could not raise: not asked
+            # here. Under the shapes they are the mover of every deck: asked of every span, so that exactly one way moves)
+            if fixed or SHAPES_ON:
+                who = findground.leaves(findground.TUNNEL if span_mapped[bi] else findground.GROUND, findground.BRIDGE,
+                                        z - top + max(deck - nat, 0.0), (arc_b, spans[bi][1] - arc_b),
+                                        railwaysmod.GRADE if rail_span[bi] else roadsmod.DECK_MAX_GRADE,
+                                        gradelaw.road_grade(ground[gids[i]][3]),
+                                        fills=SHAPES_ON or rail_span[bi] or not fixed)
+                if who != "lower":
+                    continue
             if top_cw is not None and _cw.family(ground[gids[i]][3]) is not None:
                 continue                        # (a carriageway under a carriageway's deck: solved together)
             if top_cw is not None:
@@ -4394,7 +4416,7 @@ class _Planner:
                     continue
             # (a railway over the road's own mapped short tunnel stays at its bed: railways.TUNNEL_AT_GRADE_ON; the road
             # dips the full clearance under it, without lidar's 1 m cap. The only rail spans here: findground)
-            mapped = rail_span[bi]
+            mapped = span_mapped[bi]
             if lidar and not fixed and deck < z + UNDER_LIDAR_DECK_M:
                 continue                        # (the ends' ground is not the deck: the road keeps its own, the deck
                                                 # rises; a never-raised deck, a railway's or a motorway's, cannot)
@@ -4729,6 +4751,35 @@ class _Planner:
         h_hi = np.array([np.max(ce), np.max(cn)]) + SHAPES_PAD_M
         box_lo, box_hi = h_lo - 200.0, h_hi + 200.0
         cap_lo, cap_hi = h_lo - SHAPES_CAP_M, h_hi + SHAPES_CAP_M
+
+        def make_fixed(net):
+            rail_memo = ({}, [])
+
+            def fixed_z(i, s_):
+                if np.ndim(s_):                 # (many: the ground read once for all, _ground_lines)
+                    sv_ = np.asarray(s_, np.float64)
+                    if net.m[i].kind in ("rail", "rail_deck"):
+                        return np.array([np.nan if z is None else z
+                                         for z in self._rail_tops(net, i, sv_.tolist(), rail_memo)])
+                    sv = np.clip(sv_[:, None] + np.linspace(-24.0, 24.0, 13)[None], 0.0, net.L[i])
+                    xy = np.stack([np.interp(sv, net.s[i], net.lines[i][:, 0]),
+                                   np.interp(sv, net.s[i], net.lines[i][:, 1])], axis=2)
+                    return self._ground_lines(xy)[:, 6]
+                m = net.m[i]
+                if m.kind in ("rail", "rail_deck"):     # (a track, on its deck or on the ground: its rails' top over the
+                    # bed the railways lay and draw it on, never a height of the shapes' own: its deck's mapped ends' ground,
+                    # down the slopes of the street's cutting under it, stood Compiegne's 7 m rail bridge 2.8 m under its
+                    # track, the street was dug that much too deep and the track's fill beside it stood 10.5 m tall)
+                    return self._rail_tops(net, i, [float(s_)], rail_memo)[0]   # (None: the railways lay none of it, no
+                    #                                                               track there to clear)
+                q = _gsh.at_s(net.lines[i], net.s[i], s_)
+                sv = np.clip(np.linspace(s_ - 24.0, s_ + 24.0, 13), 0.0, net.L[i])
+                xy = np.stack([np.interp(sv, net.s[i], net.lines[i][:, 0]),
+                               np.interp(sv, net.s[i], net.lines[i][:, 1])], axis=1)
+                return float(self._ground_line(xy)[6]) if len(xy) else None
+
+            return fixed_z
+
         byk, loaded = {}, set()
         while True:
             cla, clo, _ = self.frame.enu_to_geodetic(np.array([box_lo[0], box_hi[0], box_lo[0], box_hi[0]]),
@@ -4743,7 +4794,7 @@ class _Planner:
                         byk[m.key] = m
             members = [byk[q] for q in sorted(byk, key=str)
                        if ((byk[q].line >= box_lo) & (byk[q].line <= box_hi)).all(1).any()]
-            net, systems = _gsh.find_systems(members)
+            net, systems = _gsh.find_systems(members, lambda net_: (self._ground_line, make_fixed(net_)))
             mine = []
             n_lo, n_hi = box_lo.copy(), box_hi.copy()
             for sysm in systems:
@@ -4761,30 +4812,7 @@ class _Planner:
             box_lo, box_hi = n_lo, n_hi
         t1 = time.perf_counter()
 
-        rail_memo = ({}, [])
-
-        def fixed_z(i, s_):
-            if np.ndim(s_):                 # (many: the ground read once for all, _ground_lines)
-                sv_ = np.asarray(s_, np.float64)
-                if net.m[i].kind in ("rail", "rail_deck"):
-                    return np.array([np.nan if z is None else z
-                                     for z in self._rail_tops(net, i, sv_.tolist(), rail_memo)])
-                sv = np.clip(sv_[:, None] + np.linspace(-24.0, 24.0, 13)[None], 0.0, net.L[i])
-                xy = np.stack([np.interp(sv, net.s[i], net.lines[i][:, 0]),
-                               np.interp(sv, net.s[i], net.lines[i][:, 1])], axis=2)
-                return self._ground_lines(xy)[:, 6]
-            m = net.m[i]
-            if m.kind in ("rail", "rail_deck"):     # (a track, on its deck or on the ground: its rails' top over the
-                # bed the railways lay and draw it on, never a height of the shapes' own: its deck's mapped ends' ground,
-                # down the slopes of the street's cutting under it, stood Compiegne's 7 m rail bridge 2.8 m under its
-                # track, the street was dug that much too deep and the track's fill beside it stood 10.5 m tall)
-                return self._rail_tops(net, i, [float(s_)], rail_memo)[0]   # (None: the railways lay none of it, no
-                #                                                               track there to clear)
-            q = _gsh.at_s(net.lines[i], net.s[i], s_)
-            sv = np.clip(np.linspace(s_ - 24.0, s_ + 24.0, 13), 0.0, net.L[i])
-            xy = np.stack([np.interp(sv, net.s[i], net.lines[i][:, 0]),
-                           np.interp(sv, net.s[i], net.lines[i][:, 1])], axis=1)
-            return float(self._ground_line(xy)[6]) if len(xy) else None
+        fixed_z = make_fixed(net)
 
         shapes, failed, solved = [], 0, []
         for sysm in mine:

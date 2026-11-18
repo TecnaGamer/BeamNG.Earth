@@ -10,7 +10,7 @@ def _line(x0, y0, x1, y1, n=40):
 
 
 def _run(members, ground=lambda xy: np.zeros(len(xy))):
-    net, systems = ix.find_systems(members)
+    net, systems = ix.find_systems(members, lambda net_: (ground, lambda i, s: _fixed(net_, ground, i, s)))
     shapes = []
     for sysm in systems:
         pcs = ix.pieces(net, sysm)
@@ -360,25 +360,41 @@ def test_a_road_looping_over_itself_is_not_joined_to_its_own_deck_under_it():
 
 def test_a_deck_that_already_clears_keeps_its_natural_height_and_one_that_lacks_rises_by_the_lack():
     # findground, rules 1 to 3: a structure's natural height is the line between the ground at its ends; where that
-    # already leaves the clearance nothing moves, else it rises by what is lacking, as a whole. The ground rising 5 %
-    # across a street, 80 m of deck
-    need = ix.HEADROOM_M + ix.HEADROOM_MARGIN_M + ix.deck_depth(80.0)
+    # already leaves the clearance nothing moves, else it rises by what is lacking, as a whole (a deck long enough to
+    # climb the lack in its own run: the cost law). The ground rising 5 % across a street, 300 m of deck
+    need = ix.HEADROOM_M + ix.HEADROOM_MARGIN_M + ix.deck_depth(300.0)
 
     def solved(dip):
         gr = lambda xy: 0.05 * xy[:, 1] - dip * np.exp(-(xy[:, 1] / 6.0) ** 2)      # (the street in a cutting dip m deep)
         m = [Member("street", _line(-800, 0, 800, 0, 200), "ground", "residential", 40, 0, 4.0, None),
-             Member("deck", _line(0, -40, 0, 40, 17), "deck", "secondary", 60, 1, 5.0, None),
-             Member("south", _line(0, -600, 0, -40), "ground", "secondary", 60, 0, 5.0, None),
-             Member("north", _line(0, 40, 0, 600), "ground", "secondary", 60, 0, 5.0, None)]
+             Member("deck", _line(0, -150, 0, 150, 76), "deck", "secondary", 60, 1, 5.0, None),
+             Member("south", _line(0, -600, 0, -150), "ground", "secondary", 60, 0, 5.0, None),
+             Member("north", _line(0, 150, 0, 600), "ground", "secondary", 60, 0, 5.0, None)]
         net, systems, shapes, emb = _run(m, gr)
-        return [_shape_z(net, shapes, "deck", np.array([0.0, y])) for y in (-40.0, -20.0, 0.0, 20.0, 40.0)]
+        assert [c["moves"] for c in systems[0]["crossings"]] == ["up"]
+        return [_shape_z(net, shapes, "deck", np.array([0.0, y])) for y in (-150.0, -75.0, 0.0, 75.0, 150.0)]
     # (the street 14 m down: the line is 14 m over it, more than it asks: the deck is its line)
     z = solved(14.0)
-    assert np.abs(np.array(z) - np.array([-2.0, -1.0, 0.0, 1.0, 2.0])).max() < 0.05, z
+    assert np.abs(np.array(z) - np.array([-7.5, -3.75, 0.0, 3.75, 7.5])).max() < 0.15, z
     # (the street at the line's height: it lacks the clearance and rises by it, where it lacks it)
     z = solved(0.0)
     assert abs(z[2] - need) < 0.3, z
     assert z[4] >= z[0] - 1e-6, z
+
+
+def test_a_deck_too_short_to_climb_its_lack_leaves_a_longer_fill_than_the_streets_cut_and_the_street_goes_under():
+    # the same street and ground, 80 m of deck: 40 m of run to each end where 6.6 m at the deck's 6 % asks 110, so 140 m
+    # of fill against the residential street's 110 m of cut (a dip at its 12 %): the street goes down, the deck stays on its line
+    gr = lambda xy: 0.05 * xy[:, 1]
+    m = [Member("street", _line(-800, 0, 800, 0, 200), "ground", "residential", 40, 0, 4.0, None),
+         Member("deck", _line(0, -40, 0, 40, 21), "deck", "secondary", 60, 1, 5.0, None),
+         Member("south", _line(0, -600, 0, -40), "ground", "secondary", 60, 0, 5.0, None),
+         Member("north", _line(0, 40, 0, 600), "ground", "secondary", 60, 0, 5.0, None)]
+    net, systems, shapes, emb = _run(m, gr)
+    assert [c["moves"] for c in systems[0]["crossings"]] == ["down"]
+    z = [_shape_z(net, shapes, "deck", np.array([0.0, y])) for y in (-40.0, 0.0, 40.0)]
+    assert np.abs(np.array(z) - np.array([-2.0, 0.0, 2.0])).max() < 0.3, z       # (its natural line)
+    assert _shape_z(net, shapes, "deck", np.array([0.0, 0.0])) - _shape_z(net, shapes, "street", np.array([0.0, 0.0])) >=         ix.HEADROOM_M + ix.HEADROOM_MARGIN_M + ix.deck_depth(80.0) - 0.05
 
 
 def test_a_deck_lying_on_the_ground_at_its_ends_has_no_girders_to_keep_off_it_there():
@@ -453,11 +469,12 @@ def test_a_road_winding_over_itself_clears_its_own_turn_all_along_it_not_only_wh
         assert z2 - z1 >= need - 0.05, (np.degrees(a), z2 - z1)
 
 
-def test_a_road_under_a_rail_deck_stays_on_its_ground_under_the_overpass_beside_it():
+def test_a_road_under_a_rail_deck_and_a_short_motorway_deck_beside_it_is_dug_under_the_deck_and_the_deck_stays():
     # Perth's Tonkin Highway: a trunk road under the railway in the motorway's median and, 6 m on, under the motorway's
-    # deck. Both are bridges over a plain road (findground): the railways raise their own over it (not here: the track
-    # is given), the motorway's deck rises over it, and the road is not dug. (The road was dug under the track and the
-    # deck lifted 7.3 m over the road's ground, its carriageway raised beside a track left on the ground)
+    # deck. Both bridges are short over the road (findground's cost law: 14 m of run each side where the rise asks 106,
+    # the fill longer than the road's cut at its 9 %): the road goes under both (the railways' own pass for the track,
+    # here the motorway's deck at its ground and the road dug 6 m under it), not the road dug under the track and the
+    # deck lifted 7.3 m over the road's ground, its carriageway raised beside a track left on the ground
     m = [Member("trunk", _line(-500, 0, 500, 0, 126), "ground", "trunk", 70, 0, 7.0, None),
          Member("rdeck", _line(0, -10, 0, 10, 6), "rail_deck", "rail", None, 1, 2.0, None),
          Member("rs", _line(0, -500, 0, -10), "rail", "rail", None, 0, 2.0, None),
@@ -467,12 +484,12 @@ def test_a_road_under_a_rail_deck_stays_on_its_ground_under_the_overpass_beside_
          Member("mn", _line(8, 14, 8, 600), "ground", "motorway", 100, 0, 6.0, None)]
     net, systems, shapes, emb = _run(m)
     assert shapes[0][2] is not None
-    moved = {net.m[int(i)].key for _pcs, smp, _zs in shapes for x in smp for i in x["mem"]}
-    assert "trunk" not in moved and "rdeck" not in moved               # the road on its ground (0) under both
-    zm = _shape_z(net, shapes, "mdeck", np.array([8.0, 0.0]))
-    assert zm >= ix.HEADROOM_M + ix.HEADROOM_MARGIN_M + ix.deck_depth(28.0) - 0.05
-    pcs = emb.get(_key_index(net, "trunk")) if hasattr(emb, "get") else emb[_key_index(net, "trunk")]
-    assert not [1 for _s, _z, mode in pcs or () if mode == "cut"]
+    assert [c["moves"] for c in systems[0]["crossings"]] == ["down"]
+    assert abs(_shape_z(net, shapes, "mdeck", np.array([8.0, 0.0]))) < 0.5               # (the deck at its ground)
+    zt = _shape_z(net, shapes, "trunk", np.array([8.0, 0.0]))
+    assert -zt >= ix.HEADROOM_M + ix.HEADROOM_MARGIN_M + ix.deck_depth(28.0) - 0.6        # (and the road under it)
+    pcs = emb[_key_index(net, "trunk")]
+    assert any(mode == "cut" for _s, _z, mode in pcs)
 
 
 def test_overpasses_over_one_road_far_apart_stay_apart():
@@ -486,13 +503,15 @@ def test_overpasses_over_one_road_far_apart_stay_apart():
 def test_a_held_bridge_over_a_streets_mapped_tunnel_stays_at_its_ground_and_the_street_goes_under():
     # (grading's never-raised deck, the map's short tunnel under it: a 48 m bridge, an overpass by its length, raised
     # 8.3 m over the street's ground on its fills while the underpasses dug the street 6.9 m under it as well)
-    def members(held):
+    def members(held, half=24.0):
         return [Member("street", _line(-400, 0, 400, 0, 100), "ground", "residential", 40, 0, 4.0, None),
-                Member("deck", _line(0, -24, 0, 24, 13), "deck", "primary", 70, 1, 5.0, None, None, held),
-                Member("s", _line(0, -400, 0, -24), "ground", "primary", 70, 0, 5.0, None),
-                Member("n", _line(0, 24, 0, 400), "ground", "primary", 70, 0, 5.0, None)]
+                Member("deck", _line(0, -half, 0, half, 13), "deck", "primary", 70, 1, 5.0, None, None, held),
+                Member("s", _line(0, -400 - half, 0, -half), "ground", "primary", 70, 0, 5.0, None),
+                Member("n", _line(0, half, 0, 400 + half), "ground", "primary", 70, 0, 5.0, None)]
+    net, systems, shapes, emb = _run(members(False, 200.0))
+    assert [c["moves"] for c in systems[0]["crossings"]] == ["up"]       # (not held, long: an overpass)
     net, systems, shapes, emb = _run(members(False))
-    assert [c["moves"] for c in systems[0]["crossings"]] == ["up"]       # (not held: an overpass)
+    assert [c["moves"] for c in systems[0]["crossings"]] == ["down"]     # (not held, 48 m: 128 m of fill against 106 m of cut)
     net, systems, shapes, emb = _run(members(True))
     assert [c["moves"] for c in systems[0]["crossings"]] == ["down"]
     zd = _shape_z(net, shapes, "deck", np.array([0.0, 0.0]))
@@ -512,11 +531,11 @@ def test_a_signed_height_limit_holds_at_its_own_crossing_only():
     sign = lambda q: limit if abs(q[0] + 300.0) < 4.0 else None
     m = [Member("street", _line(-800, 0, 800, 0, 400), "ground", "residential", 40, 0, 4.0, sign)]
     for x, name in ((-300.0, "w"), (300.0, "e")):
-        m += [Member(name, _line(x, -30, x, 30, 13), "deck", "secondary", 60, 1, 5.0, None),
-              Member(name + "s", _line(x, -600, x, -30), "ground", "secondary", 60, 0, 5.0, None),
-              Member(name + "n", _line(x, 30, x, 600), "ground", "secondary", 60, 0, 5.0, None)]
+        m += [Member(name, _line(x, -250, x, 250, 101), "deck", "secondary", 60, 1, 5.0, None),
+              Member(name + "s", _line(x, -850, x, -250), "ground", "secondary", 60, 0, 5.0, None),
+              Member(name + "n", _line(x, 250, x, 850), "ground", "secondary", 60, 0, 5.0, None)]
     net, systems, shapes, emb = _run(m)
-    depth = ix.deck_depth(60.0)
+    depth = ix.deck_depth(500.0)
     zw = _shape_z(net, shapes, "w", np.array([-300.0, 0.0]))
     ze = _shape_z(net, shapes, "e", np.array([300.0, 0.0]))
     assert zw >= limit + ix.HEADROOM_MARGIN_M + depth - 0.05
