@@ -14,7 +14,7 @@ const CROSS_M: f64 = 2.0;                  // m of height between the bed and su
 /// (lo, hi) per vertex of xy: the heights the bed may have beside the roads (-inf / inf where none is near).
 /// Roads: their points rxy[off[r]..off[r+1]], heights rz, half widths rh (roads under two points are skipped).
 #[allow(clippy::too_many_arguments)]
-/// nat (grading.seam_on_ground, BNE_RAIL_SEAM_DEM): (the bed vertices' own ground (n,), the road points' ground (m,),
+/// nat (grading.seam_on_ground, BNE_RAIL_SEAM_NATURAL): (the bed vertices' own ground (n,), the road points' ground (m,),
 /// the road points' own heights (m,)): the ground's own difference between a road's foot and the bed vertex, past what
 /// the room allows, is taken off the road's height (rz: with a crossing at grade's lowering) for the band; whether the
 /// road is a grade separation is read from its own heights (the third), neither lowered nor eased.
@@ -174,7 +174,7 @@ pub fn rail_seam_couple<'py>(py: Python<'py>, xy: PyReadonlyArray2<'py, f64>, z:
     Ok(out.map(|v| v.into_pyarray(py)))
 }
 
-/// grading.seam_on_ground (BNE_RAIL_SEAM_DEM): railroadseam.couple with the ground's own slope between a road and the
+/// grading.seam_on_ground (BNE_RAIL_SEAM_NATURAL): railroadseam.couple with the ground's own slope between a road and the
 /// bed allowed (bounds' nat: ground (n,) under the bed's vertices, rdem (m,) under the roads' points, rown (m,) the
 /// roads' own heights for the grade-separation test; rz: the band's, a crossing at grade's lowering in); the moved bed
 /// heights, or None when nothing moved.

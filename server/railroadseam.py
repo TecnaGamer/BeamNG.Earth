@@ -53,7 +53,7 @@ def couple(xy, z, half, roads, lowered=(), lower_m=0.0):
 
 def couple_ground(xy, z, ground, half, roads, rdem, lowered=(), lower_m=0.0):
     """couple() with the ground's own slope between a road and the bed allowed (grading.seam_on_ground,
-    BNE_RAIL_SEAM_DEM): ground (n,) the DEM under the bed's vertices, rdem (m,) under the packed roads' points
+    BNE_RAIL_SEAM_NATURAL): ground (n,) the DEM under the bed's vertices, rdem (m,) under the packed roads' points
     (_packed(roads)[0]); per bed vertex and road foot the ground's own difference past what the room allows is taken off
     the road's height for the band, while whether the road crosses on a bridge (a grade separation) is still read from
     its own height, neither eased nor lowered for a crossing at grade elsewhere on it (railseam.rs bounds' nat). z

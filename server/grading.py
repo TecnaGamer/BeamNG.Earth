@@ -670,10 +670,11 @@ RAIL_YIELD_STEP_M = 2.0    # m between the cut bed line's points (the cut lands 
 # street, the parking and the track at grade there, the DEM and Street View agree); the E6 / Fv761 ramps at Vist
 # (Trondelag) stood the Nordlandsbanen's bed 3.3-4.9 m up for 130 m by its bridge (real: at the fields' level). The
 # drawn track (railprofile's bed on the DEM) lay buried in the mound. The ground's own difference past what the room
-# allows is taken off a road's height (seam_on_ground, earthfast.rail_seam_natural); within it, and what grading made of
-# a road (a cut, a fill), moves the bed as before. BNE_RAIL_SEAM_DEM=on; off by default until reviewed in game (the
-# Revamped roads switch set).
-RAIL_SEAM_DEM = os.environ.get("BNE_RAIL_SEAM_DEM", "off") == "on"
+# allows is taken off a road's height for the band (seam_on_ground, earthfast.rail_seam_couple_ground), while whether a
+# road crosses on a bridge is still told by its own height; within it, and what grading made of a road (a cut, a fill),
+# moves the bed as before. BNE_RAIL_SEAM_NATURAL=on (named anew after the separation test changed: plans kept under the
+# earlier BNE_RAIL_SEAM_DEM are never read for it); off by default until reviewed in game (the Revamped roads set).
+RAIL_SEAM_NATURAL = os.environ.get("BNE_RAIL_SEAM_NATURAL", "off") == "on"
 SEAMS_ON = os.environ.get("BNE_SEAMS", "on") != "off"
 SEAM_MIN_M = 0.05          # m: a carriageway road's abutment end this far off its deck's end is pulled back to it
 SEAM_GRADE = 0.03           # ... eased out along the road at this grade (XS_FIXED_GRADE's: a freeway's ramp) ...
@@ -2882,7 +2883,7 @@ class _Planner:
                             load=lambda k: self.md.cell(k, layers=("roads",), kind="demand").layers.get("roads")):
                         if beside:      # (the bed beside a road: where the ground between has room for its slope)
                             import railroadseam
-                            if RAIL_SEAM_DEM:
+                            if RAIL_SEAM_NATURAL:
                                 if seam is None:            # (the roads' points and their ground, once a cell)
                                     seam = (seam_pack(self.frame, self.elev, beside),)
                                 z = seam_on_ground(self.frame, self.elev, xy, z, beside, seam[0])
@@ -7073,7 +7074,7 @@ def _ground_at(frame, elev, xy):
 
 
 def seam_pack(frame, elev, beside):
-    """RAIL_SEAM_DEM: the grader's DEM under the roads' points as railroadseam packs them (_packed(beside)[0]), once a
+    """RAIL_SEAM_NATURAL: the grader's DEM under the roads' points as railroadseam packs them (_packed(beside)[0]), once a
     cell; None without a road of 2 points or more."""
     import railroadseam
     got = railroadseam._packed(beside)
@@ -7081,7 +7082,7 @@ def seam_pack(frame, elev, beside):
 
 
 def seam_on_ground(frame, elev, xy, z, beside, rdem):
-    """RAIL_SEAM_DEM: railroadseam.couple of the bed z (n,) on xy (n, 2) beside the roads beside with the ground's own
+    """RAIL_SEAM_NATURAL: railroadseam.couple of the bed z (n,) on xy (n, 2) beside the roads beside with the ground's own
     slope between them allowed (railroadseam.couple_ground; rdem: seam_pack(beside)): a road up the hillside beside the
     track asks nothing of the bed, a road graded off its ground still moves it as before; a road the track crosses on a
     bridge is still told by its own height; the crossings at grade (railways.seam_lowered) as before. Pure given elev."""

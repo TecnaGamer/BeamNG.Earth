@@ -95,7 +95,7 @@ class CoupleTest(unittest.TestCase):
 
 
 class NaturalSlopeTest(unittest.TestCase):
-    """grading.seam_on_ground (BNE_RAIL_SEAM_DEM): the ground's own slope between a road and the track asks nothing of
+    """grading.seam_on_ground (BNE_RAIL_SEAM_NATURAL): the ground's own slope between a road and the track asks nothing of
     the bed (Schleiden's Oleftalbahn below a road up the hillside, the user's reports r61 / r62; Vist's E6 ramps, r80);
     what grading made of a road still moves it, and the Nemiia case (a road on level ground over a bed below it) too."""
 

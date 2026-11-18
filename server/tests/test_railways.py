@@ -1561,8 +1561,9 @@ class RoadFitTest(unittest.TestCase):
     def test_a_shallow_crossing_past_the_seam_on_a_fill_is_one_crossing(self):
         """Codex on 2285667b: the bed the records tested was profiled on each tile's window (graded within 40 m of it,
         natural past it): a shallow crossing anchored 50 m past the seam, on a fill the grading made, had a graded bed in
-        one tile and a natural one in the next, on either side of CROSSING_DZ, its run reaching back over the seam. The
-        records test the bed on the natural ground (railprofile's lattice in the server) in every tile."""
+        one tile and a natural one in the next, on either side of CROSSING_DZ, its run reaching back over the seam. In
+        the server the bed is railprofile's lattice on the DEM, the same in every tile (here: the natural ground at the
+        point, standing in for it); the roads' graded heights and the runs then agree in both tiles."""
         ang = np.radians(5.0)
         ax, ay = 305.0, 100.0
         road = [(ax - 200.0 * np.cos(ang), ay - 200.0 * np.sin(ang)), (ax + 200.0 * np.cos(ang), ay + 200.0 * np.sin(ang))]
@@ -1573,8 +1574,11 @@ class RoadFitTest(unittest.TestCase):
                 q = np.asarray(q, np.float64).reshape(-1, 2)
                 return np.where(np.abs(q[:, 0] - ax) < 30.0, 10.0 + fill, 10.0)
             got, blk = [], []
+            lattice = lambda frame, rails_, nat, load=None, elev=None, drawn=None: [   # noqa: E731
+                np.asarray(nat(np.asarray(xy_)[:, :2]), np.float64) for _f, _c, _k, xy_ in rails_]
             for tx in (0, 1):
-                xy, r = self.record_of(f, tx, graded, far_ground=flat)
+                with unittest.mock.patch.object(railways, "_level_beds", lattice):
+                    xy, r = self.record_of(f, tx, graded, far_ground=flat)
                 got.append(self.runs_xy(xy, r))
                 blk.append(r is not None and bool(r["blk"][np.abs(xy[:, 0] - ax) < 28.0].any()))
             self.assertEqual(got[0], got[1], f"fill {fill}: the same crossing in both tiles")
@@ -1597,20 +1601,20 @@ class RoadFitTest(unittest.TestCase):
         xy, r = self.record_of(f, 1, flat)
         self.assertTrue(r is not None and r["blk"][np.abs(xy[:, 0] - 615.0) < 10.0].any(), "the street running cut")
 
-    def test_the_records_bed_is_the_same_at_a_point_whatever_the_tile(self):
-        """Codex on fbd6197a: with no lattice bed (railprofile off or without the point) the records profiled the bed
-        along the tile's clipped parts (railways.profile: smoothing and a bridge's approach lift run along them), so the
-        same point could get another bed in the next tile. The fallback is the natural ground at the point itself
-        (_level_beds): the same whatever part, clipped wherever, holds the point."""
-        def hilly(q):
-            q = np.asarray(q, np.float64).reshape(-1, 2)
-            return 10.0 + 3.0 * np.sin(q[:, 0] / 17.0) + 0.01 * q[:, 1]
-        line = np.c_[np.arange(-200.0, 700.0, railways.STEP_M), np.full(450, 100.0)]
-        a = [("t", "standard_gauge", "ground", line[:300])]          # (one tile's clip)
-        b = [("t", "standard_gauge", "ground", line[150:])]          # (the next one's)
-        za, zb = railways._level_beds(FRAME, a, hilly)[0], railways._level_beds(FRAME, b, hilly)[0]
-        np.testing.assert_array_equal(za[150:300], zb[:150])
-        np.testing.assert_array_equal(za, hilly(line[:300]))
+    def test_a_lower_road_under_a_raised_approach_is_no_crossing(self):
+        """Codex on 736a6b57: where railprofile's lattice has no bed the records tested the natural ground while the mesh
+        drew railways.profile's bed, a bridge's approach lift in it: a road crossing under the raised approach, level
+        with the ground, was taken for a level crossing and the raised track cut down to it. The records test the bed
+        the mesh draws there."""
+        line = np.c_[np.arange(0.0, 250.0, railways.STEP_M), np.full(125, 100.0)]
+        rails_ = [("t", "standard_gauge", "ground", line)]
+        raised = [(10.0 + np.clip(4.0 - np.abs(line[:, 0] - 120.0) * 0.02, 0.0, None), np.full(125, 10.0))]
+        z = railways._level_beds(FRAME, rails_, flat, drawn=raised)[0]       # (no lattice: the drawn bed)
+        np.testing.assert_array_equal(z, raised[0][0])
+        road = np.c_[np.full(60, 120.0), np.linspace(0.0, 250.0, 60)]
+        self.assertIsNone(railways._part_crossings(line, z, [(road, 4.0, np.full(60, 10.0))]),
+                          "4 m under the approach: no crossing")
+        self.assertIsNotNone(railways._part_crossings(line, np.full(125, 10.0), [(road, 4.0, np.full(60, 10.0))]))
 
     def test_a_vertex_budget_retry_lays_no_deck_for_a_track_it_left_out(self):
         """Codex on fbd6197a: the decks came from the whole record while a vertex budget's retry left the lowest-ranked

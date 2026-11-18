@@ -1597,11 +1597,9 @@ def crossing_records(frame, tx, ty, cells, ground, sign_style=None, far_ground=N
         for line, hw in dense:
             xcrossers.append((line, hw, zx[k:k + len(line)]))
             k += len(line)
-    # (the track's side: its bed before any flush from nothing a tile's window changes: railprofile's lattice on the
-    # grader's DEM where it has the point (the same bed in every tile), else the natural ground at the point itself:
-    # railways.profile's fallback carries a bridge's approach lift along the tile's clipped parts, which a bridge just
-    # past one tile's window did not reach in that tile)
-    level_beds = _level_beds(frame, rails, nat, load, bed_elev) if rails else []
+    # (the track's side: its bed before any flush: railprofile's lattice on the grader's DEM where it has the point (the
+    # same bed in every tile), else the bed tile_mesh draws there (prof: a raised approach stays one))
+    level_beds = _level_beds(frame, rails, nat, load, bed_elev, prof) if rails else []
     runs = [_part_crossings(xy, zb, xcrossers) if kind == "ground" and c != "tram" else None
             for (_f, c, kind, xy), zb in zip(rails, level_beds)]
     half_g = [gauges.get(fid, gauge(c, sign_style)) / 2 + RAIL_HEAD / 2 for fid, c, _k, _xy in rails]
@@ -1610,9 +1608,11 @@ def crossing_records(frame, tx, ty, cells, ground, sign_style=None, far_ground=N
             "sign_style": sign_style}
 
 
-def _level_beds(frame, rails, nat, load=None, elev=None):
+def _level_beds(frame, rails, nat, load=None, elev=None, drawn=None):
     """crossing_records' track heights per part: railprofile's lattice bed (as _beds reads it: the same in every tile)
-    where it has the point, else nat(xy) (the natural ground) there: nothing profiled along the tile's own parts."""
+    where it has the point, else the bed tile_mesh draws there (drawn: prof, railways.profile's fallback, a bridge's
+    approach lift in it: a raised approach is no level crossing with the road under it), else nat(xy). Where the
+    lattice has no bed the drawn track itself already differs between tiles; the crossing follows what is drawn."""
     import railprofile
     new = None
     if railprofile.ENABLED and load is not None and elev is not None and rails:
@@ -1623,7 +1623,10 @@ def _level_beds(frame, rails, nat, load=None, elev=None):
     for n, (_f, _c, _k, xy) in enumerate(rails):
         z = None if new is None else np.asarray(new[n], np.float64)
         if z is None or not np.isfinite(z).all():
-            g = np.asarray(nat(np.asarray(xy, np.float64)[:, :2]), np.float64).reshape(len(xy))
+            if drawn is not None:
+                g = np.asarray(drawn[n][0], np.float64).reshape(len(xy))
+            else:
+                g = np.asarray(nat(np.asarray(xy, np.float64)[:, :2]), np.float64).reshape(len(xy))
             z = g if z is None else np.where(np.isfinite(z), z, g)
         out.append(z)
     return out
