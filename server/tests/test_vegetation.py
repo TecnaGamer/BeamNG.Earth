@@ -549,7 +549,8 @@ class ShrubTest(unittest.TestCase):
                 ((14.5, -86.5), veg.G_CONIFER, tree, 900, 0.5, veg.G_PINE_WEST, "Honduras' pines"),
                 ((44.2, -0.8), veg.G_CONIFER, tree, 50, 0.5, veg.G_PINE_MARITIME, "the Landes"),
                 ((42.9, -8.5), veg.G_CONIFER, tree, 250, 0.99, veg.G_PINE_MARITIME, "Galicia"),
-                ((53.6, 17.9), veg.G_CONIFER, tree, 120, 0.5, None, "Bory Tucholskie: Scots pines")):
+                ((53.6, 17.9), veg.G_CONIFER, tree, 120, 0.5, None, "Bory Tucholskie: Scots pines"),
+                ((-37.5, 145.5), veg.G_DECIDUOUS, tree, 400, 0.99, veg.G_EUCALYPTUS, "Victoria's forests (38)")):
             la, lo = np.array([lat]), np.array([lon])
             g = int(veg.species_groups(np.array([grp], np.uint8), np.array([14.0]), la, lo, np.array([lc]),
                                        climate.koppen_many(la, lo), np.array([float(elev)]), np.array([0.5]),
@@ -747,6 +748,19 @@ class ShareRulesTest(unittest.TestCase):
         self.assertGreater(mid[2], 0.6, "the Bieszczady at 700 m: mostly beeches")
         self.assertLess(mid[1], 0.15, "hardly any oaks")
         self.assertGreater(low[1], 0.4, "the foothills' oaks")
+
+    def test_east_asia_conical_conifers(self):
+        import climate
+        for (lat, lon), want_min, where in (((31.9, 131.3), veg.CONICAL_JAPAN, "Miyazaki's sugi"),
+                                            ((24.5, 113.5), veg.CONICAL_CHINA, "Guangdong's Chinese fir")):
+            n = 2000
+            la, lo = np.full(n, lat), np.full(n, lon)
+            u = (np.arange(n) + 0.5) / n
+            g = veg.species_groups(np.full(n, veg.G_CONIFER, np.uint8), np.full(n, 14.0), la, lo,
+                                   np.full(n, veg.WC["tree"]), climate.koppen_many(la, lo), np.full(n, 50.0),
+                                   np.full(n, 0.5), u, np.full(n, 0.9), np.full(n, 0.9))
+            spruce = float(np.mean(g == veg.G_SPRUCE))
+            self.assertGreaterEqual(spruce, want_min - 0.01, where)
 
     def test_pine_woods_broadleaves(self):
         mixed = self._shares(53.6, 17.9, 26, 0.0, 0.3)

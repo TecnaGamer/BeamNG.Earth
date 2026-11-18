@@ -41,7 +41,7 @@ import staging
 
 log = logging.getLogger("earthd.vegetation")
 
-VERSION = 38          # (the cached cells hold their groups: 14 for the regional rules of GitHub #110; 16: the roads'
+VERSION = 39          # (the cached cells hold their groups: 14 for the regional rules of GitHub #110; 16: the roads'
                       # drawn widths and sidewalks kept clear; 17: BC's lidar canopy heights, mapdata's canopy layer 2;
                       # 18: the rounded junction corners kept clear, roadcorners.py; 19: one tree per flat crown,
                       # thin_tops; 20: none on or beside a bridge deck, _mask_decks; 21: orchard rows, canopy trees
@@ -78,6 +78,7 @@ VERSION = 38          # (the cached cells hold their groups: 14 for the regional
                       # 37: one top per broadleaf crown (crown_spacing: the thinning by the leaf type and biome)
                       # 38: the conifer share kept to the leaf type map (conifer_odds), the beech belt,
                       # the pine woods' birches
+                      # 39: Australia's forest broadleaves eucalypts, East Asia's conifers conical (sugi, Chinese fir)
 TREE_MIN_M = 3.0
 # The canopy raster, the scatter grids and the crown radii are in Web Mercator units (EPSG:3857: a metre there is
 # cos(lat) metres on the ground) and were tuned by eye at mid latitudes. Past them the same pixel counts covered less
@@ -463,6 +464,9 @@ SPRUCE_CENTRAL = ((45.0, 0.20), (48.0, 0.45), (52.0, 0.35), (55.0, 0.35), (60.0,
 SPRUCE_LON = (16.0, 21.0)
 SPRUCE_PLAIN_M = (120.0, 350.0)     # (37) SPRUCE_CENTRAL's share from nothing at the first height to whole at the second
 SPRUCE_PLAIN_LAT = 56.0
+CONICAL_JAPAN = 0.7                 # (38) the conical (spruce-shaped) share of Japan's conifers at least
+CONICAL_CHINA = 0.5                 # and of East Asia's south of CONICAL_CHINA_LAT
+CONICAL_CHINA_LAT = 32.0
 SPRUCE_MOUNTAIN = 0.85
 SPRUCE_LINE_M = 1100.0
 SPRUCE_LINE_PER_DEG = 40.0
@@ -674,6 +678,12 @@ def species_groups(group, height, lat, lon, lcls, koppen, elev, u_broad, u_conif
         upland = np.clip((z - SPRUCE_PLAIN_M[0]) / (SPRUCE_PLAIN_M[1] - SPRUCE_PLAIN_M[0]), 0.0, 1.0)
         upland = np.where(lat >= SPRUCE_PLAIN_LAT, 1.0, upland)
         base = east + (west - east) * (1.0 - t) * upland
+        # (38) East Asia's warm temperate conifers are mostly conical ones (Japan's sugi and hinoki plantations, ~40 %
+        # of its forest, against its red and black pines; southern China's and Taiwan's Chinese fir beside the Masson
+        # pine): the spruces' shapes (Douglas firs) for them, not the Scots pines'
+        base = np.where(_in_box(lat, lon, JAPAN_BOX), np.maximum(base, CONICAL_JAPAN), base)
+        base = np.where((lon >= EAST_ASIA_LON) & (lat < CONICAL_CHINA_LAT) & ~_in_box(lat, lon, JAPAN_BOX),
+                        np.maximum(base, CONICAL_CHINA), base)
         p = base + (SPRUCE_MOUNTAIN - base) * np.clip(2.0 * montane, 0.0, 1.0)      # (no pines from mid-belt up)
         g[con] = np.where(np.asarray(u_conifer)[con] < p[con], G_SPRUCE, G_PINE_EU)
     # broadleaves: Italy's in the hot deserts and steppes; birch / oak / beech by the climate, more beeches uphill
@@ -777,6 +787,10 @@ def _world_groups(g, lat, lon, lcls, eco, elev, u_stand):
     south = (lat < SOUTH_BEECH_LAT) & ((realm == er.R_NEOTROPIC) | ((realm == er.R_AUSTRALASIA)
                                                                    & ((lon > 160.0) | (lat < -39.5))))
     g[south & _in(g, BROAD_FROM)] = G_BEECH
+    # (38) Australia's other broadleaves (the regional kernel's eucalypts take most): its forests' and woodlands' are
+    # eucalypts too (mountain ash, messmate, stringybarks, boxes; the wattles below them), not East Coast USA's oaks
+    # and beeches (the reality check at the Victorian Alps' foothills: 11 %); the towns' planted oaks and planes kept
+    g[australia & ~built & ~south & _in(g, BROAD_FROM)] = G_EUCALYPTUS
     # the maritime and Mediterranean pines
     g[_in(g, CONIFER_FROM) & (med | _in(eco, ECO_MARITIME_PINE)) & (elev < MARITIME_PINE_M)] = G_PINE_MARITIME
     return g
