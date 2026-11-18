@@ -163,6 +163,18 @@ class Groups(unittest.TestCase):
         self.assertEqual(g["n"], 0)
         self.assertEqual(g["height_rejected"]["BESIDE_OUTLINE"], 0)
 
+    def test_outline_order(self):
+        # the decks apart in height over their first 30 m, together over the last 30: an outline round each half;
+        # the pair is one structure whichever outline comes first
+        n = member("n", (0, 0), (60, 0), 8.0, 4.0)
+        s_ = member("s", (0, 12), (60, 12), 8.0, 4.0)
+        s_["z"] = np.where(s_["xy"][:, 0] < 30.0, 6.0, 4.01)
+        first = np.array([[-5, -6], [29, -6], [29, 18], [-5, 18]], np.float64)
+        last = np.array([[31, -6], [65, -6], [65, 18], [31, 18]], np.float64)
+        for outlines in ([first, last], [last, first]):
+            g = sp.predict_groups([dict(n), dict(s_)], outlines, R=1000.0)
+            self.assertEqual(g["edges"]["BESIDE_OUTLINE"], 1)
+
     def test_short_twins(self):
         # two carriageways on one 17 m deck (E6 Vist), 1 m apart: BESIDE though they never run 20 m side by side
         ms = [member("n", (0, 0), (17, 0), 8.0, 4.0), member("s", (0, 9), (17, 9), 8.0, 4.01)]

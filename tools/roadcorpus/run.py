@@ -116,10 +116,14 @@ def _complete(js):
 
 def run_place(p, server, root, label, online, checks=None, era=None):
     out = os.path.join(root, "results", label)
+    real = os.path.realpath(os.path.expanduser("~/.cache/beamng-earth"))
+    for d in (out, os.path.join(root, "seed"), os.path.join(root, "work")):     # (before anything is made there)
+        rd = os.path.realpath(d)
+        if rd == real or rd.startswith(real + os.sep):
+            sys.exit(f"refused: {d} resolves into the player's cache")
     os.makedirs(out, exist_ok=True)
     seed = os.path.join(root, "seed" if not era else "seed-" + era, p["id"])
     work = os.path.join(root, "work", label, p["id"])
-    real = os.path.realpath(os.path.expanduser("~/.cache/beamng-earth"))
     for d in (seed, work, out):         # (never through a link into the player's cache)
         rd = os.path.realpath(d)
         if rd == real or rd.startswith(real + os.sep):
@@ -138,8 +142,8 @@ def run_place(p, server, root, label, online, checks=None, era=None):
                 if os.path.isdir(os.path.join(other, d)):
                     copy_tree(os.path.join(other, d), work)
     js, tj, log = (os.path.join(out, p["id"] + ext) for ext in (".json", ".timing.json", ".log"))
-    for f_ in (js, tj):                 # (no earlier run's result left to be scored as this one's)
-        if os.path.exists(f_):
+    for f_ in (js, tj, log, js + ".tmp"):   # (no earlier run's result left to be scored as this one's; no link)
+        if os.path.lexists(f_):
             os.remove(f_)
     if PROBE[0] == "struct":        # (today's checkout's probe, scoring the server given: --server)
         base = ["nice", "-n", "15", sys.executable, os.path.join(REPO, "server", "structprobe.py"),
@@ -296,9 +300,12 @@ def cmd_build(a):
         sys.exit(1)
 
 
-def write_struct_card(dirn, meta):
-    """The structures scorecard (server/structprobe.py's summaries per place): scorecard.json and summary.md."""
-    res = load(dirn)
+def write_struct_card(dirn, meta, ran=None, failed=()):
+    """The structures scorecard (server/structprobe.py's summaries per place): scorecard.json and summary.md. ran: the
+    places this build ran (only their results are scored, never an older run's file left in the folder); failed: those
+    that failed (listed apart, their partial results not scored)."""
+    res = {k: v for k, v in load(dirn).items()
+           if (ran is None or k in ran) and k not in set(failed)}
     by = {p["id"]: p for p in places()}
     keys = ("decks", "overlap_m2", "hole_m2", "parapet_in_cw_m", "seam_step_n", "seam_step_max", "twin_pairs",
             "twin_dz_max", "skew_ends", "skew_err_max", "groups", "grouped")
@@ -318,6 +325,9 @@ def write_struct_card(dirn, meta):
         lines.append(f"| {by.get(pid, {}).get('name', pid)} | " + " | ".join(str(sm.get(k, "-")) for k in keys)
                      + f" | {sm['errors']} |")
     card["totals"] = {k: round(v, 2) for k, v in tot.items()}
+    card["failed"] = sorted(failed)
+    if failed:
+        lines.append(f"Failed (not scored): {', '.join(sorted(failed))}")
     lines.append("| **total (overlap, hole, parapet, seams)** | " + " | ".join(
         f"**{round(tot[k], 2)}**" for k in ("overlap_m2", "hole_m2", "parapet_in_cw_m", "seam_step_n")) + " |")
     with open(os.path.join(dirn, "scorecard.json"), "w") as f:
@@ -343,7 +353,7 @@ def cmd_build_struct(a, server, rev, root, era=None):
             fails.append(p["id"])
             print(f"  FAILED rc={rc} (see results/{a.label}/{p['id']}.log)", flush=True)
     meta = {"label": a.label, "server": server, "rev": rev, "env": sorted(SWITCHES.items()), "probe": "struct"}
-    for ln in write_struct_card(os.path.join(root, "results", a.label), meta):
+    for ln in write_struct_card(os.path.join(root, "results", a.label), meta, {p["id"] for p in ps}, fails):
         print(ln)
     if fails:
         print("failed:", ",".join(fails))

@@ -775,18 +775,19 @@ def predict_groups(members, outlines=(), R=None, frame_ll=None):
             wide = par[(pr["gap"][par] > BESIDE_GAP_M) & (pr["gap"][par] <= OUTLINE_GAP_M)]
             if paths and float(pr["piece"][wide].sum()) >= need:
                 # (one outline holding both: A's samples and B's nearest points in it over the length)
-                held = None
+                held, passed = None, None       # (every outline tried: none's order decides)
                 for path in paths:
                     both = wide[path.contains_points(pr["p"][wide]) & path.contains_points(pr["q"][wide])]
-                    if float(pr["piece"][both].sum()) >= need:
-                        held = both
-                        break
-                if held is not None:
-                    good = held[dz[held] <= BESIDE_DZ]
-                    if float(pr["piece"][good].sum()) >= need:
-                        put(a, b, "BESIDE_OUTLINE", dz[good].max())
-                    else:
-                        reject("BESIDE_OUTLINE", a, b, dz[held].min())
+                    if float(pr["piece"][both].sum()) < need:
+                        continue
+                    held = both if held is None else held
+                    good = both[dz[both] <= BESIDE_DZ]
+                    if float(pr["piece"][good].sum()) >= need and (passed is None or dz[good].max() < passed):
+                        passed = float(dz[good].max())
+                if passed is not None:
+                    put(a, b, "BESIDE_OUTLINE", passed)
+                elif held is not None:
+                    reject("BESIDE_OUTLINE", a, b, dz[held].min())
     # union-find in sorted-key order (the smaller key the root)
     parent = list(range(n))
 
