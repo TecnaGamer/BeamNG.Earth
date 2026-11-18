@@ -2,7 +2,8 @@
 //! visit's profile, the decode's text attributes), byte for byte the numpy array the Python made:
 //! np.array(["" if x is None else str(x) for x in values], dtype=f"<U{width}"), width the longest's code points (1 at
 //! least). An exact str is read as it is; anything else through str() (its own __str__, as the list comprehension
-//! asked it), one value at a time in order. Text with lone surrogates (no UTF-8) is read through Python's UTF-32
+//! asked it), one value at a time in order, every str() before any length; a __str__ returning a str subclass takes
+//! the Python's own len() and np.array steps. Text with lone surrogates (no UTF-8) is read through Python's UTF-32
 //! encoding (surrogatepass), as numpy stores its code points.
 
 use numpy::IntoPyArray;
@@ -29,19 +30,42 @@ fn code_points(s: &Bound<'_, PyString>, out: &mut Vec<u32>) -> PyResult<usize> {
 
 #[pyfunction]
 pub fn text_column<'py>(py: Python<'py>, values: Bound<'py, PyAny>) -> PyResult<Bound<'py, PyAny>> {
-    let mut cps: Vec<u32> = Vec::new();
-    let mut lens: Vec<usize> = Vec::new();
+    // v = ["" if x is None else str(x) for x in values]: every str() asked first, in order
+    let mut strs: Vec<Option<Bound<'py, PyString>>> = Vec::new();
+    let mut exotic = false;
     for x in values.try_iter()? {
         let x = x?;
-        let n = if x.is_none() {
-            0
+        strs.push(if x.is_none() {
+            None
         } else if let Ok(s) = x.cast_exact::<PyString>() {
-            code_points(s, &mut cps)?
+            Some(s.clone())
         } else {
             let s = x.str()?;
-            code_points(&s, &mut cps)?
-        };
-        lens.push(n);
+            exotic |= !s.is_exact_instance_of::<PyString>();
+            Some(s)
+        });
+    }
+    if exotic {
+        // a __str__ returned a str subclass (its own len(), numpy's conversion of it): the Python's own steps,
+        // width = max([1] + [len(x) for x in v]), np.array(v, dtype=f"<U{width}")
+        let empty = PyString::new(py, "");
+        let v = pyo3::types::PyList::empty(py);
+        for s in &strs {
+            v.append(s.as_ref().unwrap_or(&empty))?;
+        }
+        let mut width = 1usize;
+        for s in v.iter() {
+            width = width.max(s.len()?);
+        }
+        let np = py.import("numpy")?;
+        let kw = pyo3::types::PyDict::new(py);
+        kw.set_item("dtype", format!("<U{width}"))?;
+        return np.call_method("array", (v,), Some(&kw));
+    }
+    let mut cps: Vec<u32> = Vec::new();
+    let mut lens: Vec<usize> = Vec::with_capacity(strs.len());
+    for s in &strs {
+        lens.push(match s { Some(s) => code_points(s, &mut cps)?, None => 0 });
     }
     let width = lens.iter().copied().max().unwrap_or(0).max(1);
     let mut buf = vec![0u32; lens.len() * width];

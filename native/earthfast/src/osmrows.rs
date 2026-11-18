@@ -23,7 +23,8 @@ enum Col<'py> {
     I64(CArr1<'py, i64>),
     F32(CArr1<'py, f32>),
     F64(CArr1<'py, f64>),
-    Bool(CArr1<'py, bool>),
+    /// a bool column's bytes (a uint8 view of it: numpy reads any nonzero byte as True, a Rust bool must be 0 or 1)
+    Bool(CArr1<'py, u8>),
 }
 
 impl<'py> Col<'py> {
@@ -45,7 +46,7 @@ impl<'py> Col<'py> {
             ('i', 8) => Col::I64(v.extract()?),
             ('f', 4) => Col::F32(v.extract()?),
             ('f', 8) => Col::F64(v.extract()?),
-            ('b', 1) => Col::Bool(v.extract()?),
+            ('b', 1) => Col::Bool(v.call_method1("view", (np.getattr("uint8")?,))?.extract()?),
             _ => return Err(refuse()),
         })
     }
@@ -71,6 +72,15 @@ impl<'py> Col<'py> {
         }
     }
 
+    /// int(col[i]) of an int64 column (id, frn), TypeError for another dtype.
+    fn int64(&self, i: i64) -> PyResult<i64> {
+        let k = np_index(self.len(), i)?;
+        match self {
+            Col::I64(a) => Ok(a.as_slice()?[k]),
+            _ => Err(pyo3::exceptions::PyTypeError::new_err("osm_rows: id / frn of another dtype than int64 (the contract)")),
+        }
+    }
+
     /// float(col[i]) of a float column.
     fn float(&self, i: i64) -> PyResult<f64> {
         let k = np_index(self.len(), i)?;
@@ -85,7 +95,7 @@ impl<'py> Col<'py> {
     fn flag(&self, i: i64) -> PyResult<bool> {
         let k = np_index(self.len(), i)?;
         match self {
-            Col::Bool(a) => Ok(a.as_slice()?[k]),
+            Col::Bool(a) => Ok(a.as_slice()?[k] != 0),
             _ => Err(pyo3::exceptions::PyTypeError::new_err("osm_rows: a flag column of another dtype")),
         }
     }
@@ -172,13 +182,13 @@ pub fn osm_rows<'py>(py: Python<'py>, t: Bound<'py, PyAny>, idx: CArr1<'py, i64>
         // in turn
         let mut row: Vec<Bound<'py, PyAny>> = Vec::with_capacity(names.len() + 4);
         fetch(&t, &mut cols, "id")?;
-        row.push(cols["id"].int(i)?.into_pyobject(py)?.into_any());
+        row.push(cols["id"].int64(i)?.into_pyobject(py)?.into_any());
         fetch(&t, &mut cols, "race")?;
         row.push(pyo3::types::PyBool::new(py, cols["race"].flag(i)?).to_owned().into_any());
         fetch(&t, &mut cols, "bus")?;
         row.push(pyo3::types::PyBool::new(py, cols["bus"].flag(i)?).to_owned().into_any());
         fetch(&t, &mut cols, "frn")?;
-        row.push(cols["frn"].int(i)?.into_pyobject(py)?.into_any());
+        row.push(cols["frn"].int64(i)?.into_pyobject(py)?.into_any());
         row.extend(vals);
         out.append(PyTuple::new(py, row)?)?;
     }

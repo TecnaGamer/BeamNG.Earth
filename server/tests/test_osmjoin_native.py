@@ -178,12 +178,59 @@ class OsmJoinParityTest(unittest.TestCase):
         self.assertGreater(named, 1000)
         self.assertGreater(laned, 1000)
 
+    def check_same(self, f, tags):
+        g = copy_layer(f)
+        seen = {}
+        want = outcome(ref_join, f, {w: dict(t) for w, t in tags.items()}, lambda a, b, ids, c: seen.update(ref=ids))
+        with mock.patch.object(roadlanes, "join", lambda a, b, ids, c: seen.update(new=list(ids))):
+            got = outcome(osmtags.join, g, {w: dict(t) for w, t in tags.items()})
+        self.assertEqual(got[0], want[0], (got, want))
+        if want[0] != "ok":
+            self.assertIs(got[1], want[1])
+            return
+        self.assertEqual(seen["new"], seen["ref"])
+        self.assertEqual(list(g.attrs), list(f.attrs))
+        for key in f.attrs:
+            a, b = g.attrs[key], f.attrs[key]
+            self.assertEqual((a.dtype, a.shape, a.tobytes()), (b.dtype, b.shape, b.tobytes()), key)
+
+    def test_lone_surrogates(self):
+        """Records and names with lone surrogates (valid Python str, no UTF-8): way ids by re's \\d, names as keys."""
+        rng = random.Random(7)
+        for k in range(300):
+            f, tags = case(rng)
+            n = len(f)
+            nm = ["Main\udc80", "Main", "\ud800", "Broadway"]
+            f.attrs["src_record"] = np.array([rng.choice(["w12\udc80", "w\udc80", "w3\ud800x", "w١٢", "w7@1", "r1"])
+                                              for _ in range(n)], dtype="<U8")
+            f.attrs["name"] = np.array([rng.choice(nm) for _ in range(n)], dtype="<U8")
+            for w, t in tags.items():
+                if rng.random() < 0.5:
+                    t["name"] = rng.choice(nm)
+                if rng.random() < 0.3:
+                    t["osm_oneway"] = rng.choice(["yes\udc80", "yes", "-1"])
+            tags.setdefault(12, {}).update(lanes=2)
+            self.check_same(f, tags)
+
+    def test_incomplete_boxes(self):
+        """A named way without all four box keys is skipped before any value is read (a non-number there too)."""
+        rng = random.Random(8)
+        for k in range(300):
+            f, tags = case(rng)
+            for t in tags.values():
+                if "bx0" not in t and rng.random() < 0.5:
+                    t["bx0"] = "invalid"
+                    t["name"] = "Main St"
+            self.check_same(f, tags)
+
     def test_contract(self):
         f, tags = case(random.Random(3))
 
         class D(dict):
             pass
-        for bad in ({1: D(lanes=2)}, {"1": {"lanes": 2}}, {1: {"lanes": [2]}}):
+        box = dict(name="Main St", bx0=0.0, by0=0.0, bx1=1.0, by1=1.0)
+        for bad in ({1: D(lanes=2)}, {"1": {"lanes": 2}}, {1: {"lanes": [2]}}, {1: dict(box, bx0="0")},
+                    {1: dict(box, by1=1)}, {1: dict(box, bx1=np.float32(1.0))}):
             with mock.patch.object(roadlanes, "join", lambda *a: None):
                 self.assertEqual(outcome(osmtags.join, copy_layer(f), bad), ("raised", TypeError), bad)
 

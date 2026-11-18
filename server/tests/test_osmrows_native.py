@@ -135,6 +135,26 @@ class OsmRowsParityTest(unittest.TestCase):
             bad(u)
             self.assertEqual(outcome(osmtags._rows, u, np.arange(4, dtype=np.int64)), ("raised", TypeError))
         self.assertEqual(outcome(osmtags._rows, D(t), np.arange(4, dtype=np.int64)), ("raised", TypeError))
+        for bad in (lambda t: t.__setitem__("id", t["id"].astype(np.int32)),
+                    lambda t: t.__setitem__("frn", t["frn"].astype(np.int32))):
+            u = dict(t)
+            bad(u)
+            self.assertEqual(outcome(osmtags._rows, u, np.arange(4, dtype=np.int64)), ("raised", TypeError))
+        for idx in ([0.9], [0, 1.0], (np.int64(1),), "01", np.arange(4, dtype=np.int32)):
+            self.assertEqual(outcome(osmtags._rows, t, idx), ("raised", TypeError), idx)
+        self.assertTrue(same(osmtags._rows(t, [3, 0, -1]), ref_rows(t, [3, 0, -1])))
+        self.assertTrue(same(osmtags._rows(t, []), ref_rows(t, [])))
+
+    def test_noncanonical_bool_bytes(self):
+        """A bool column whose bytes are not 0 / 1 (a byte buffer's view): numpy reads any nonzero byte as True."""
+        t = table(random.Random(2), 4)
+        idx = np.arange(4, dtype=np.int64)
+        for c in [k for k, v in t.items() if v.dtype == np.bool_]:
+            u = dict(t)
+            u[c] = np.frombuffer(bytes([0, 2, 255, 1]), dtype=np.bool_)
+            self.assertEqual(outcome(osmtags._rows, u, idx)[0], outcome(ref_rows, u, idx)[0], c)
+            if outcome(ref_rows, u, idx)[0] == "ok":
+                self.assertTrue(same(osmtags._rows(u, idx), ref_rows(u, idx)), c)
 
 
 class VersionSkewTest(unittest.TestCase):

@@ -463,7 +463,11 @@ def _rows(t, idx):
     numbers), idx an int64 array; anything else TypeError."""
     import fast
     fast.require(453, "osm_rows")
-    return fast._ef.osm_rows(t, idx if isinstance(idx, np.ndarray) else np.asarray(idx, np.int64), list(COLUMNS),
+    if not isinstance(idx, np.ndarray):
+        if type(idx) not in (list, tuple) or any(type(i) is not int for i in idx):
+            raise TypeError("osmtags._rows: idx is an int64 array or a list / tuple of ints (the contract)")
+        idx = np.array(idx, np.int64)
+    return fast._ef.osm_rows(t, idx, list(COLUMNS),
                              sorted(TEXT_COLUMNS), sorted(INT_COLUMNS))
 
 

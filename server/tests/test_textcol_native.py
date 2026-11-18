@@ -64,6 +64,37 @@ class TextColumnParityTest(unittest.TestCase):
             with self.assertRaises(ArithmeticError):
                 mapgeom.text_column(vals)
 
+    def test_str_returning_a_subclass(self):
+        """__str__ may return a str subclass: the Python's own len() (a lying one too) and numpy's conversion of it;
+        every str() before any len()."""
+        calls = []
+
+        class Long(str):
+            def __len__(self):
+                calls.append("len")
+                return 6
+
+        class Short(str):
+            def __len__(self):
+                return 1
+
+        class Makes:
+            def __init__(self, cls, text):
+                self.cls, self.text = cls, text
+
+            def __str__(self):
+                calls.append("str")
+                return self.cls(self.text)
+        for vals in ([Makes(Long, "x")], [Makes(Short, "wxyz"), "ab"], ["abc", None, Makes(Long, "é")],
+                     [Makes(Long, "a"), Makes(Long, "b")]):
+            calls.clear()
+            want = ref_text_column(vals)
+            ref_calls = list(calls)
+            calls.clear()
+            got = mapgeom.text_column(vals)
+            self.assertTrue(same(got, want), (vals, got, want))
+            self.assertEqual(calls, ref_calls)
+
     def test_arrays_in(self):
         for a in (np.array(["a", "bb", ""]), np.array([1.5, np.nan]), np.array(["x", None, 3], object), np.zeros(0)):
             self.assertTrue(same(mapgeom.text_column(a), ref_text_column(a)))

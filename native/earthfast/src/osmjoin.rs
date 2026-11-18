@@ -15,7 +15,7 @@ use pyo3::types::{PyDict, PyFloat, PyInt, PyList, PyString};
 
 use crate::dm::Dm;
 use crate::roadnet::countries::np_index;
-use crate::roadnet::pyobj::{py_float, py_str, CArr1, CArr2, Contract};
+use crate::roadnet::pyobj::{py_float, CArr1, CArr2, Contract};
 
 const NAME_MATCH_M: f64 = 25.0;
 const MAX_LANES: f64 = 12.0;
@@ -29,19 +29,37 @@ fn count(v: Option<&Bound<'_, PyAny>>) -> PyResult<Option<i64>> {
     })
 }
 
+/// str(v): an exact str as it is, anything else through str().
+fn text<'py>(v: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyString>> {
+    match v.cast_exact::<PyString>() {
+        Ok(s) => Ok(s.clone()),
+        Err(_) => v.str(),
+    }
+}
+
+/// A str's code points as a lookup key: its UTF-8, lone surrogates through surrogatepass (their 3-byte forms never
+/// occur in valid UTF-8, so two strs share a key only when they are equal).
+fn key(s: &Bound<'_, PyString>) -> PyResult<Vec<u8>> {
+    match s.to_str() {
+        Ok(v) => Ok(v.as_bytes().to_vec()),
+        Err(_) => Ok(s.call_method1("encode", ("utf-8", "surrogatepass"))?.cast::<pyo3::types::PyBytes>()?.as_bytes().to_vec()),
+    }
+}
+
 /// osmtags.way_id(record): int of the digits after a leading "w" (re's \d), else None. ASCII digits read here; a
-/// record whose digits run into any other numeric character is asked of the Python (re's Unicode \d).
-fn way_id<'py>(py: Python<'py>, s: &str, py_way_id: &Bound<'py, PyAny>) -> PyResult<Option<Bound<'py, PyAny>>> {
-    let Some(rest) = s.strip_prefix('w') else { return Ok(None) };
-    let digits: &str = &rest[..rest.find(|c: char| !c.is_ascii_digit()).unwrap_or(rest.len())];
-    let next = rest[digits.len()..].chars().next();
-    if matches!(next, Some(c) if !c.is_ascii() && c.is_numeric()) {
-        let got = py_way_id.call1((s,))?;
+/// record whose digits run into any non-ASCII character (re's Unicode \d) is asked of the Python.
+fn way_id<'py>(py: Python<'py>, rec: &Bound<'py, PyString>, k: &[u8], py_way_id: &Bound<'py, PyAny>)
+               -> PyResult<Option<Bound<'py, PyAny>>> {
+    let Some(rest) = k.strip_prefix(b"w") else { return Ok(None) };
+    let nd = rest.iter().position(|c| !c.is_ascii_digit()).unwrap_or(rest.len());
+    if matches!(rest.get(nd), Some(c) if !c.is_ascii()) {
+        let got = py_way_id.call1((rec,))?;
         return Ok(if got.is_none() { None } else { Some(got) });
     }
-    if digits.is_empty() {
+    if nd == 0 {
         return Ok(None);
     }
+    let digits = std::str::from_utf8(&rest[..nd]).expect("ASCII digits");
     Ok(Some(py.get_type::<PyInt>().call1((digits,))?))
 }
 
@@ -107,6 +125,7 @@ pub fn osm_join<'py>(py: Python<'py>, attrs: Bound<'py, PyAny>, tags: Bound<'py,
                      oneway_yes: Vec<String>, py_way_id: Bound<'py, PyAny>, text_column: Bound<'py, PyAny>)
                      -> PyResult<Bound<'py, PyList>> {
     let refuse = |what: &str| pyo3::exceptions::PyTypeError::new_err(format!("osm_join: {what} (the R2a input contract)"));
+    let np_f64 = py.import("numpy")?.getattr("float64")?;
     let k = Contract::new(py)?;
     let attrs = attrs.cast_exact::<PyDict>().map_err(|_| refuse("attrs is no exact dict"))?.clone();
     let tags = tags.cast_exact::<PyDict>().map_err(|_| refuse("tags is no exact dict"))?.clone();
@@ -135,33 +154,46 @@ pub fn osm_join<'py>(py: Python<'py>, attrs: Bound<'py, PyAny>, tags: Bound<'py,
     let mut ids: Vec<Option<Bound<'py, PyAny>>> = Vec::with_capacity(n);
     for i in 0..n {
         ids.push(match &recs {
-            Some(r) => way_id(py, &py_str(&r.get_item(i)?)?, &py_way_id)?,
+            Some(r) => {
+                let rec = text(&r.get_item(i)?)?;
+                way_id(py, &rec, &key(&rec)?, &py_way_id)?
+            }
             None => None,
         });
     }
-    // by_name: str(name) -> [(way, bx0, by0, bx1, by1)] of the named ways with a box, in the tags' order
+    // by_name: str(name) -> [(way, bx0, by0, bx1, by1)] of the named ways with a box (all four keys present), in the
+    // tags' order; a box's values exact floats (the contract: osm_tags' floats, whose arithmetic is the Python's)
     let boxed = |t: &Bound<'py, PyDict>| -> PyResult<Option<[f64; 4]>> {
-        let mut bx = [0.0; 4];
-        for (j, key) in ["bx0", "by0", "bx1", "by1"].iter().enumerate() {
-            match t.get_item(key)? {
-                Some(v) => bx[j] = crate::roadnet::pyobj::py_float_strict(&v)?,
-                None => return Ok(None),
+        for k in ["bx0", "by0", "bx1", "by1"] {
+            if !t.contains(k)? {
+                return Ok(None);
             }
+        }
+        let mut bx = [0.0; 4];
+        for (j, k) in ["bx0", "by0", "bx1", "by1"].iter().enumerate() {
+            let v = t.get_item(k)?.ok_or_else(|| pyo3::exceptions::PyKeyError::new_err(*k))?;
+            // an exact float or numpy.float64 (a float subclass with float's IEEE arithmetic); nothing else
+            if !(v.is_exact_instance_of::<PyFloat>() || v.get_type().is(&np_f64)) {
+                return Err(refuse("a box value is no float"));
+            }
+            bx[j] = v.cast::<PyFloat>()?.value();
         }
         Ok(Some(bx))
     };
-    let mut by_name: HashMap<String, Vec<Cand<'py>>> = HashMap::new();
+    let mut by_name: HashMap<Vec<u8>, Vec<Cand<'py>>> = HashMap::new();
     for (w, t) in tags.iter() {
         let t = t.cast_into::<PyDict>()?;
         let name = t.get_item("name")?;
         let truthy = match &name { Some(v) => v.is_truthy()?, None => false };
         if truthy {
             if let Some(bx) = boxed(&t)? {
-                by_name.entry(py_str(name.as_ref().unwrap())?).or_default().push(Cand { w: w.clone(), bx });
+                by_name.entry(key(&text(name.as_ref().unwrap())?)?).or_default().push(Cand { w: w.clone(), bx });
             }
         }
     }
     let names = attrs.get_item("name")?.filter(|v| !v.is_none());
+    // str(oneway) in ONEWAY_YES
+    let yes = |ow: &[u8]| oneway_yes.iter().any(|h| h.as_bytes() == ow);
     // named = [w if w in tags else _named_way(feats, i, by_name) for i, w in enumerate(ids)]
     let mut named: Vec<Option<Bound<'py, PyAny>>> = Vec::with_capacity(n);
     for (i, w) in ids.iter().enumerate() {
@@ -171,8 +203,8 @@ pub fn osm_join<'py>(py: Python<'py>, attrs: Bound<'py, PyAny>, tags: Bound<'py,
             continue;
         }
         let Some(nm) = &names else { named.push(None); continue };
-        let key = py_str(&nm.get_item(i)?)?;
-        named.push(match by_name.get(&key) { Some(c) => named_way(&g, i, c)?, None => None });
+        let k = key(&text(&nm.get_item(i)?)?)?;
+        named.push(match by_name.get(&k) { Some(c) => named_way(&g, i, c)?, None => None });
     }
     // classes[i] in roadlanes.HIGHWAYS (a set of str: the value's hash and ==): a str or numpy.str_ (a text column's
     // element: str's hash and ==) compared here, anything else asked of the set
@@ -245,7 +277,7 @@ pub fn osm_join<'py>(py: Python<'py>, attrs: Bound<'py, PyAny>, tags: Bound<'py,
     // a way without a lane count takes the same-named way's going the same way (one-way or not)
     let lanes = attrs.get_item("osm_lanes")?.ok_or_else(|| pyo3::exceptions::PyKeyError::new_err("osm_lanes"))?;
     let ows = attrs.get_item("osm_oneway")?.ok_or_else(|| pyo3::exceptions::PyKeyError::new_err("osm_oneway"))?;
-    let mut sense: HashMap<(String, bool), Vec<Cand<'py>>> = HashMap::new();
+    let mut sense: HashMap<(Vec<u8>, bool), Vec<Cand<'py>>> = HashMap::new();
     for (w, t) in tags.iter() {
         let t = t.cast_into::<PyDict>()?;
         if !t.contains("lanes")? {
@@ -257,9 +289,9 @@ pub fn osm_join<'py>(py: Python<'py>, attrs: Bound<'py, PyAny>, tags: Bound<'py,
             continue;
         }
         if let Some(bx) = boxed(&t)? {
-            let ow = match t.get_item("osm_oneway")? { Some(v) => py_str(&v)?, None => String::new() };
-            let key = (py_str(name.as_ref().unwrap())?, oneway_yes.contains(&ow));
-            sense.entry(key).or_default().push(Cand { w: w.clone(), bx });
+            let ow = match t.get_item("osm_oneway")? { Some(v) => key(&text(&v)?)?, None => Vec::new() };
+            let k = (key(&text(name.as_ref().unwrap())?)?, yes(&ow));
+            sense.entry(k).or_default().push(Cand { w: w.clone(), bx });
         }
     }
     if !sense.is_empty() {
@@ -270,11 +302,11 @@ pub fn osm_join<'py>(py: Python<'py>, attrs: Bound<'py, PyAny>, tags: Bound<'py,
                 if !(isnan && !hw(&class_at(i)?)?) {
                     continue;
                 }
-                let name = py_str(&nm.get_item(i)?)?;
-                let ow = py_str(&ows.get_item(i)?)?;
-                let key = (name, oneway_yes.contains(&ow));
+                let name = key(&text(&nm.get_item(i)?)?)?;
+                let ow = key(&text(&ows.get_item(i)?)?)?;
+                let k = (name, yes(&ow));
                 let empty: Vec<Cand<'py>> = Vec::new();
-                let cands = sense.get(&key).unwrap_or(&empty);
+                let cands = sense.get(&k).unwrap_or(&empty);
                 if let Some(w) = named_way(&g, i, cands)? {
                     let t = tags.get_item(&w)?.ok_or_else(|| pyo3::exceptions::PyKeyError::new_err("way"))?
                         .cast_into::<PyDict>()?;
