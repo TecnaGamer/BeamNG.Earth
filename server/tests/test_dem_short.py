@@ -371,6 +371,24 @@ class SampleReadsOnlyItsTilesTest(unittest.TestCase):
             with self.assertRaises((TypeError, ValueError)):
                 dem.sample(lat, lon, z)
 
+    def test_unaligned_subclass_tile(self):
+        """A tile that is an unaligned view of an ndarray subclass whose copy() hands back itself is copied by
+        numpy.array, not its own copy(): the heights are the tile's."""
+        import fast
+
+        class Selfish(np.ndarray):
+            def copy(self, *a, **k):
+                return self
+
+        z = 12
+        lat, lon = self._lat_lon(z, 2000 * T + 100.3, 1500 * T + 200.6)
+        buf = np.zeros(T * T * 4 + 1, np.uint8)
+        tile = np.frombuffer(buf.data, np.float32, T * T, 1).reshape(T, T).view(Selfish)
+        self.assertFalse(tile.flags.aligned)
+        got = fast._ef.dem_sample(np.array([lat]), np.array([lon]), z, T, 84.9, 1024, 16, 4, 2,
+                                  lambda keys: [tile for _ in keys], lambda la, lo: None)
+        self.assertEqual(got.tolist(), [0.0])
+
     def test_shapes(self):
         """Broadcast lat / lon in, their shape out (a scalar: a 0-d array), float64."""
         z = 12

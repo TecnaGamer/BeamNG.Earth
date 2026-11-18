@@ -55,6 +55,7 @@ pub(crate) fn bilinear_mosaic(ts: &[Option<ArrayView2<'_, f32>>], nx: usize, til
 
 struct Cfg {
     zoom: u32,
+    from_lat: f64,
     tile: i64,
     max_tiles: i64,
     sparse_min: i64,
@@ -87,21 +88,30 @@ fn gil_free<T: Send>(py: Python<'_>, n: usize, f: impl FnOnce() -> T + Send) -> 
     if n >= DETACH_MIN { py.detach(f) } else { f() }
 }
 
-/// obj as a numpy array of T, D (a type check: no borrow taken), copied by numpy first when its data are not aligned
-/// (a view into a packed buffer may not be; the views read here need aligned elements).
+/// obj as a numpy array of T, D (a type check: no borrow taken), copied first when its data are not aligned (a view
+/// into a packed buffer may not be; the views read here need aligned elements) by numpy.array (a base-class copy: no
+/// subclass's own copy method).
 fn normalised<'py, T: numpy::Element, D: numpy::ndarray::Dimension>(obj: Bound<'py, PyAny>)
     -> PyResult<Bound<'py, numpy::PyArray<T, D>>> {
     let a = obj.cast_into::<numpy::PyArray<T, D>>()?;
     if a.is_aligned() {
         return Ok(a);
     }
-    Ok(a.call_method0("copy")?.cast_into::<numpy::PyArray<T, D>>()?)
+    let py = a.py();
+    let kw = pyo3::types::PyDict::new(py);
+    kw.set_item("copy", true)?;
+    Ok(py.import("numpy")?.getattr("array")?.call((a,), Some(&kw))?.cast_into::<numpy::PyArray<T, D>>()?)
 }
 
-/// A read-only borrow of a (normalised) array, taken when no Python runs before it is released.
+/// A read-only borrow of a normalised array, taken after every Python step and released before the next: its type,
+/// rank and alignment checked again first (Python run since its normalising could have changed them).
 fn borrowed<'py, T: numpy::Element, D: numpy::ndarray::Dimension>(a: &Bound<'py, numpy::PyArray<T, D>>)
     -> PyResult<numpy::PyReadonlyArray<'py, T, D>> {
     use numpy::PyArrayMethods;
+    a.as_any().cast::<numpy::PyArray<T, D>>()?;
+    if !a.is_aligned() {
+        return Err(PyValueError::new_err("dem_sample: an array's data are not aligned"));
+    }
     a.try_readonly().map_err(|e| PyValueError::new_err(format!("dem_sample: {e}")))
 }
 
@@ -110,6 +120,69 @@ fn coords(obj: &Bound<'_, PyAny>) -> PyResult<Vec<f64>> {
     let a = normalised::<f64, numpy::Ix1>(obj.clone())?;
     let r = borrowed(&a)?;
     Ok(r.as_array().to_vec())
+}
+
+/// polar(lat, lon) of the points outside `valid` (the polar caps: the Copernicus DEM, polardem.py), called; its result
+/// (None: sea level) is put in by `put` once the caller has read what it reads after the call.
+fn polar_call<'py>(polar: &Bound<'py, PyAny>, la: &[f64], lo: &[f64], valid: &[bool]) -> PyResult<Bound<'py, PyAny>> {
+    let py = polar.py();
+    let pla: Vec<f64> = la.iter().zip(valid).filter(|p| !*p.1).map(|p| *p.0).collect();
+    let plo: Vec<f64> = lo.iter().zip(valid).filter(|p| !*p.1).map(|p| *p.0).collect();
+    polar.call1((PyArray1::from_vec(py, pla), PyArray1::from_vec(py, plo)))
+}
+
+fn polar_put(r: &Bound<'_, PyAny>, valid: &[bool], out: &mut [f64]) -> PyResult<()> {
+    if r.is_none() {
+        return Ok(());
+    }
+    let rv = coords(r)?;
+    if rv.len() != valid.iter().filter(|&&v| !v).count() {
+        return Err(PyValueError::new_err("dem_sample: polar returned another number of heights"));
+    }
+    let mut j = 0;
+    for (o, &v) in out.iter_mut().zip(valid) {
+        if !v {
+            *o = rv[j];
+            j += 1;
+        }
+    }
+    Ok(())
+}
+
+/// out's points in `valid` set from the box sample of those points of la / lo.
+#[allow(clippy::too_many_arguments)]
+fn put_valid(cfg: &Cfg, la: &[f64], lo: &[f64], valid: &[bool], out: &mut [f64], fetch: &Bound<'_, PyAny>,
+             polar: &Bound<'_, PyAny>, depth: u32) -> PyResult<()> {
+    let vla: Vec<f64> = la.iter().zip(valid).filter(|p| *p.1).map(|p| *p.0).collect();
+    let vlo: Vec<f64> = lo.iter().zip(valid).filter(|p| *p.1).map(|p| *p.0).collect();
+    let sub = sample_box(cfg, &vla, &vlo, fetch, polar, depth)?;
+    let mut j = 0;
+    for (o, &v) in out.iter_mut().zip(valid) {
+        if v {
+            *o = sub[j];
+            j += 1;
+        }
+    }
+    Ok(())
+}
+
+/// The Python's whole sample of Rust-owned points (a split group's: the polar caps looked at again, as its recursive
+/// call did).
+fn sample_points(cfg: &Cfg, la: &[f64], lo: &[f64], fetch: &Bound<'_, PyAny>, polar: &Bound<'_, PyAny>, depth: u32)
+    -> PyResult<Vec<f64>> {
+    let np = la.len();
+    let valid: Vec<bool> = gil_free(fetch.py(), np, || la.iter().map(|&a| a.abs() < cfg.from_lat).collect());
+    let nvalid = valid.iter().filter(|&&v| v).count();
+    if nvalid == np {
+        return sample_box(cfg, la, lo, fetch, polar, depth);
+    }
+    let mut out = vec![0.0f64; np];
+    let r = polar_call(polar, la, lo, &valid)?;
+    polar_put(&r, &valid, &mut out)?;
+    if nvalid > 0 {
+        put_valid(cfg, la, lo, &valid, &mut out, fetch, polar, depth)?;
+    }
+    Ok(out)
 }
 
 enum PlanErr {
@@ -234,7 +307,8 @@ fn plan(cfg: &Cfg, lat: &[f64], lon: &[f64]) -> Result<Plan, PlanErr> {
 }
 
 /// The heights of points that are all inside the caps (|lat| < from_lat), each call of the Python's sample on them.
-fn sample_box(cfg: &Cfg, lat: &[f64], lon: &[f64], fetch: &Bound<'_, PyAny>, depth: u32) -> PyResult<Vec<f64>> {
+fn sample_box(cfg: &Cfg, lat: &[f64], lon: &[f64], fetch: &Bound<'_, PyAny>, polar: &Bound<'_, PyAny>, depth: u32)
+    -> PyResult<Vec<f64>> {
     if lat.is_empty() {
         return Ok(Vec::new());
     }
@@ -247,7 +321,7 @@ fn sample_box(cfg: &Cfg, lat: &[f64], lon: &[f64], fetch: &Bound<'_, PyAny>, dep
             }
             let mut out = vec![0.0f64; np];
             for (idx, sla, slo) in groups {
-                let sub = sample_box(cfg, &sla, &slo, fetch, depth + 1)?;
+                let sub = sample_points(cfg, &sla, &slo, fetch, polar, depth + 1)?;
                 for (&i, v) in idx.iter().zip(sub) {
                     out[i] = v;
                 }
@@ -320,20 +394,16 @@ pub fn dem_sample<'py>(py: Python<'py>, lat: Bound<'py, PyAny>, lon: Bound<'py, 
     if la.len() != lo.len() {
         return Err(PyValueError::new_err("dem_sample: lat and lon differ in length"));
     }
-    let cfg = Cfg { zoom, tile, max_tiles, sparse_min, sparse_ratio, sparse_group };
+    let cfg = Cfg { zoom, from_lat, tile, max_tiles, sparse_min, sparse_ratio, sparse_group };
     let np = la.len();
     let valid: Vec<bool> = gil_free(py, np, || la.iter().map(|&a| a.abs() < from_lat).collect());
     let nvalid = valid.iter().filter(|&&v| v).count();
     if nvalid == np {
-        let out = if np > 0 { sample_box(&cfg, &la, &lo, &fetch, 0)? } else { Vec::new() };
+        let out = if np > 0 { sample_box(&cfg, &la, &lo, &fetch, &polar, 0)? } else { Vec::new() };
         return Ok(out.into_pyarray(py));
     }
     let mut out = vec![0.0f64; np];
-    // the polar caps: the Copernicus DEM (polardem.py)
-    let pla: Vec<f64> = la.iter().zip(&valid).filter(|p| !*p.1).map(|p| *p.0).collect();
-    let plo: Vec<f64> = lo.iter().zip(&valid).filter(|p| !*p.1).map(|p| *p.0).collect();
-    let k = pla.len();
-    let r = polar.call1((PyArray1::from_vec(py, pla), PyArray1::from_vec(py, plo)))?;
+    let r = polar_call(&polar, &la, &lo, &valid)?;
     if nvalid > 0 {
         // (the other points read again, as the Python took them after the polar DEM: by the first mask)
         (la, lo) = (coords(&lat)?, coords(&lon)?);
@@ -341,30 +411,9 @@ pub fn dem_sample<'py>(py: Python<'py>, lat: Bound<'py, PyAny>, lon: Bound<'py, 
             return Err(PyValueError::new_err("dem_sample: lat / lon changed length"));
         }
     }
-    if !r.is_none() {
-        let rv = coords(&r)?;
-        if rv.len() != k {
-            return Err(PyValueError::new_err("dem_sample: polar returned another number of heights"));
-        }
-        let mut j = 0;
-        for (o, &v) in out.iter_mut().zip(&valid) {
-            if !v {
-                *o = rv[j];
-                j += 1;
-            }
-        }
-    }
+    polar_put(&r, &valid, &mut out)?;
     if nvalid > 0 {
-        let vla: Vec<f64> = la.iter().zip(&valid).filter(|p| *p.1).map(|p| *p.0).collect();
-        let vlo: Vec<f64> = lo.iter().zip(&valid).filter(|p| *p.1).map(|p| *p.0).collect();
-        let sub = sample_box(&cfg, &vla, &vlo, &fetch, 0)?;
-        let mut j = 0;
-        for (o, &v) in out.iter_mut().zip(&valid) {
-            if v {
-                *o = sub[j];
-                j += 1;
-            }
-        }
+        put_valid(&cfg, &la, &lo, &valid, &mut out, &fetch, &polar, 0)?;
     }
     Ok(out.into_pyarray(py))
 }
