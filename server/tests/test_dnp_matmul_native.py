@@ -23,6 +23,12 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 import dnp  # noqa: E402
 import fast  # noqa: E402
 
+# The numpy build the kernel's two-NaN rule was fitted to (numpy 2.5.4's x86-64 wheel for CPython 3.14). numpy's
+# wheels for other Pythons are compiled apart and keep the other of two different NaNs in places (the mini PC's 3.12
+# wheel, gate batch212): the old Python's NaN payload was never the same everywhere; the kernel's is.
+FITTED_BUILD = (np.__version__ == "2.5.4" and sys.version_info[:2] == (3, 14)
+                and os.uname().machine in ("x86_64", "AMD64") if hasattr(os, "uname") else False)
+
 
 # ---- the Python versions (before earthfast 472), verbatim ----
 
@@ -236,7 +242,11 @@ class NaNTest(unittest.TestCase):
                     for x, y in ((a, b), (np.stack([a, b, a]), b), (a, np.stack([b] * m, axis=1)),
                                  (b, np.stack([a] * m, axis=1))):
                         got, want = outcome(dnp.matmul, x, y), outcome(ref_matmul, x, y)
-                        self.assertTrue(same(got[1], want[1]), (dt, k, p, q, x.shape, y.shape))
+                        if FITTED_BUILD:
+                            self.assertTrue(same(got[1], want[1]), (dt, k, p, q, x.shape, y.shape))
+                        else:   # (which of two different NaNs numpy keeps is its compiled build's: only NaN-ness)
+                            self.assertTrue(np.array_equal(np.isnan(got[1]), np.isnan(want[1])),
+                                            (dt, k, p, q, x.shape, y.shape))
 
 
 class FloatingPointErrorsTest(unittest.TestCase):
