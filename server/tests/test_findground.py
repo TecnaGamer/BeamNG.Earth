@@ -132,6 +132,47 @@ class RailBridgeOverPlainRoadTest(unittest.TestCase):
                          "a tunnel of the road further on is not under the bridge")
 
 
+class RiseRampTest(unittest.TestCase):
+    """The rise over a road (plain_underpasses) is carried by the track at railways.GRADE: the bridge's bed stands where
+    the ground track's ends, with no step (measured at Perth's Tonkin Highway, 2026-11-18: the 5.25 m rise of a 24 m
+    bridge ran 105 m out along each approach, every part's end equal at its joint; the 1 m ledge there is a motorway
+    deck beside it, not the track), and it runs out on the ground's own bed, no further than clear / GRADE."""
+
+    def line(self, x0, x1):
+        x = np.arange(x0, x1 + 1e-9, railways.STEP_M)
+        return np.c_[x, np.full(len(x), 100.0)]
+
+    def setUp(self):
+        self.clear = float(roads.deck_road_clear(DEPTH))
+        self.rails = [("a", "rail", "ground", self.line(-100.0, 100.0)), ("b", "rail", "bridge", self.line(100.0, 140.0)),
+                      ("c", "rail", "ground", self.line(140.0, 340.0))]
+        piece = np.c_[np.full(21, 120.0), np.linspace(75.0, 125.0, 21)]
+        self.rise = railways._Rise(piece, 6.0, self.clear)
+        (self.za, _), (self.zb, _), (self.zc, _) = railways.profile(self.rails, level, [self.rise])
+
+    def test_the_bridge_and_its_approaches_meet_with_no_step(self):
+        self.assertAlmostEqual(float(self.za[-1]), float(self.zb[0]), places=6)
+        self.assertAlmostEqual(float(self.zb[-1]), float(self.zc[0]), places=6)
+
+    def test_the_rise_is_over_the_road_by_its_headroom_and_never_steeper_than_the_grade_law(self):
+        self.assertGreaterEqual(float(self.zb.min()), Z0 + self.clear - railways.GRADE * 20.0 - 1e-6)
+        self.assertAlmostEqual(float(self.zb.max()), Z0 + self.clear, places=6)
+        for xy, zb in zip((p[3] for p in self.rails), (self.za, self.zb, self.zc)):
+            run = np.hypot(*np.diff(xy, axis=0).T)
+            self.assertLessEqual(float(np.abs(np.diff(zb) / run).max()), railways.GRADE + 1e-6)
+
+    def test_it_runs_out_along_the_track_at_the_grade_law_and_stops_on_the_ground(self):
+        for zb in (self.zc, self.za[::-1]):
+            joint = float(zb[0])
+            d = np.arange(len(zb)) * railways.STEP_M
+            want = np.maximum(Z0, joint - railways.GRADE * d)
+            self.assertLess(float(np.abs(zb - want).max()), 1e-6, "GRADE per metre down to the ground, then the ground")
+            self.assertAlmostEqual(float(zb[-1]), Z0, places=6)
+        reach = (float(self.zc[0]) - Z0) / railways.GRADE
+        self.assertLessEqual(reach, self.clear / railways.GRADE + 1e-6, "no longer than the rise needs")
+        self.assertGreater(reach, (self.clear - railways.GRADE * 20.0) / railways.GRADE, "and the rise is carried in full")
+
+
 class ViaductJointTest(unittest.TestCase):
     """A viaduct the map cuts in two over a valley: its joint is on the line between its ends, not on the valley's
     floor."""
