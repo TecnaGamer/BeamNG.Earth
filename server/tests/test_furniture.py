@@ -5,6 +5,7 @@ import math
 import re
 import sys
 import unittest
+from unittest import mock
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -103,6 +104,25 @@ class LampTest(unittest.TestCase):
         hy = sorted(x[1] for x in rows if x[0] == furniture.G_HYDRANT)
         self.assertGreaterEqual(len(hy), 8)
         self.assertTrue(np.allclose(np.diff(hy), furniture.HYDRANT_SPACING / 2, atol=1.0), "alternating sides")
+
+
+class RacewayPropsTest(unittest.TestCase):
+    def test_a_lit_racetrack_gets_no_street_poles(self):
+        # the user's reports 56/59/66/70 (Daytona, Atlanta 2026-11-17): a raceway mapped lit=yes got a street's utility
+        # poles, wires and cobra-heads; BNE_RACEWAY_PROPS=on: none (an ordinary lit road keeps its)
+        track = road("osm-raceway-1", "raceway", True, width=14.0)
+        street = road("s", "residential", True, y=150.0)
+        lighting = {track[0]: "yes", street[0]: "yes"}
+        for on in (False, True):
+            with self.subTest(on=on), mock.patch.object(furniture, "RACEWAY_PROPS", on):
+                wires = []
+                rows = furniture.place([track, street], [], (0, 0, 512, 256), wires=wires, town=True,
+                                       lighting=lighting, region="na")
+                near_track = [r for r in rows if abs(r[2] - 50.0) < 20.0]
+                near_street = [r for r in rows if abs(r[2] - 150.0) < 20.0]
+                self.assertTrue(near_street)
+                self.assertEqual(not near_track, on, [r[0] for r in near_track])
+                self.assertEqual(any(abs(w[0][1] - 50.0) < 20.0 for w in wires), not on)
 
 
 class DevelopmentDecorationTest(unittest.TestCase):

@@ -316,6 +316,11 @@ def _outbound(a):
 # three ranked arms (service roads, driveways, tracks are neither the road through nor stopped: no stop sign at
 # every driveway).
 PRIORITY_STOPS = os.environ.get("BNE_PRIORITY_STOPS", "off") == "on"
+# Racetracks get no street furniture along them (BNE_RACEWAY_PROPS=on, the Revamped roads setting; the user's reports
+# 56, 59, 66, 70 at Daytona and Atlanta, 2026-11-17): a raceway mapped lit=yes got a town street's wooden utility poles,
+# wires and cobra-head lamps 2.4 m off its edge, at its centreline's height on the banking (1-4 m of pole buried there),
+# where the aerials show the tracks' own tall floodlight masts behind the outer wall and in the car parks.
+RACEWAY_PROPS = os.environ.get("BNE_RACEWAY_PROPS", "off") == "on"
 PRIORITY_RANK = {"trunk": 9, "primary": 8, "secondary": 7, "tertiary": 6, "unclassified": 5, "residential": 4,
                  "living_street": 3}
 PRIORITY_DRIVABILITY = {3: 0.50, 4: 0.79, 5: 0.80, 6: 0.90, 7: 0.96, 8: 0.97, 9: 0.98}
@@ -1377,6 +1382,8 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
     for fid, spec, line, _ in roads:
         if fid in lit or len(line) < 2:
             continue
+        if RACEWAY_PROPS and str(getattr(spec, "cls", "")) == "raceway":
+            continue            # (a racetrack's lit=yes is its floodlights: no street's poles, wires or lamps)
         # a street in built-up land (spec.urban: the land cover; the tile's `town` is only "not a dense core", true in
         # the countryside too) with no sidewalk run: lit from its edge; a country road: utility poles alone
         highway = spec.cls in HIGHWAY_CLASSES and (lighting.get(fid) == "yes"
