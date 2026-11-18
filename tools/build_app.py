@@ -196,6 +196,17 @@ def pyinstaller(work, ico, onefile, ver=None, boot=None):
     with open(os.path.join(work, "REVISIT_ID"), "w", encoding="ascii") as f:
         f.write(revisit.source_id(server))
     cmd += ["--add-data", f"{os.path.join(work, 'REVISIT_ID')}{SEP}."]
+    # the AVX-512 targets of the numpy this app bundles (npyguard: held back on an AVX-512 CPU), from that numpy
+    # itself; the release workflow then runs the built executable's --check-numpy (numpy imports with them, -W error)
+    import json
+    import npyguard
+    names = npyguard._probe()
+    if names is None:
+        raise SystemExit("npyguard: could not ask this Python's numpy for its AVX-512 targets")
+    import importlib.metadata
+    with open(os.path.join(work, npyguard.FROZEN_FILE), "w", encoding="utf-8") as f:
+        json.dump({"numpy": importlib.metadata.version("numpy"), "names": list(names)}, f)
+    cmd += ["--add-data", f"{os.path.join(work, npyguard.FROZEN_FILE)}{SEP}."]
     cmd += ["--onefile"] if onefile else ["--onedir"]
     if IS_WIN:
         vf, mf = version_files(work, ver)

@@ -58,8 +58,7 @@ os.environ.setdefault("OMP_NUM_THREADS", "1")
 os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
 # numpy's AVX-512 kernels held back (an AVX-512 CPU's sorts of equal keys and SIMD maths are other bits than every
 # other player's): read by numpy at its import, inherited by the processes started from here (npyguard.py)
-import npyguard  # noqa: E402
-npyguard.apply()
+import npyguard  # noqa: E402,F401  (first: numpy's AVX-512 kernels held back before anything imports numpy)
 
 import argparse  # noqa: E402
 import asyncio  # noqa: E402

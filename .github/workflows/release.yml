@@ -103,6 +103,10 @@ jobs:
         run: |
           f=$(ls dist/*.AppImage)
           "$f" --appimage-extract-and-run --server --help > help.txt && head -3 help.txt
+      - name: numpy starts with its AVX-512 targets held back (server/npyguard.py, -W error)
+        run: |
+          f=$(ls dist/*.AppImage)
+          "$f" --appimage-extract-and-run --check-numpy
       - uses: actions/upload-artifact@v7
         with:
           name: linux
@@ -177,6 +181,11 @@ jobs:
         run: |
           f=$(ls dist/*.exe)
           "$f" --server --help > help.txt && head -3 help.txt
+      - name: numpy starts with its AVX-512 targets held back (server/npyguard.py, -W error)
+        shell: bash
+        run: |
+          f=$(ls dist/*.exe)
+          "$f" --check-numpy
       - name: Verify the Windows hosting executable
         run: python tools/build_host.py --platform windows --out build/host-smoke --smoke
       - uses: actions/upload-artifact@v7

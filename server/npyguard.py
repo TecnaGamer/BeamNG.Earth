@@ -5,14 +5,17 @@ numpy picks some kernels by the CPU at import: on an AVX-512 machine its quickso
 x86-simd-sort's AVX-512 code, whose order of equal keys is another one (the PC's AVX2 argsort and the scalar one
 already disagree on ties), and its transcendental functions take SVML routines. NPY_DISABLE_CPU_FEATURES, read when
 numpy is first imported, turns those targets off; numpy then takes the AVX2 (X86_V3) kernels, as on every other
-player's CPU. It must be in the environment before the process imports numpy: earthd.py applies it at its very top,
-and the processes it starts inherit it.
+player's CPU. It must be in the environment before the process imports numpy: importing this module sets it, and
+every entry point (earthd.py, sharehelper.py, the bake and build tools, portcheck) imports it first; the processes they
+start inherit it (tests/test_npyguard.py checks the entry points).
 
 Care: numpy refuses to start (RuntimeError) when a name in the variable is part of its compiled baseline, which a
 build for -march=x86-64-v4 (a distribution's own numpy) has; and an unknown name is an ImportWarning (an error under
--W error). So: nothing set off x86 or on a CPU without AVX-512 (nothing to hold back there); the release builds'
-numpy (a PyPI wheel, baseline X86_V2) by its version's names; any other numpy on an AVX-512 CPU asked in a short
-subprocess which AVX-512 targets it dispatches outside its baseline."""
+-W error). So: nothing set off x86 or on a CPU without AVX-512 (nothing to hold back there); the packaged app the names
+its build took from the numpy it bundled (tools/build_app.py, checked in the built executable: launcher.py
+--check-numpy); any other numpy on an AVX-512 CPU asked in a child of this interpreter with this process's sys.path
+which AVX-512 targets it dispatches outside its baseline, and used only when a second child imports numpy with them
+under -W error and dispatches no AVX-512 kernel then."""
 import os
 import platform
 import subprocess
@@ -23,11 +26,6 @@ ENV = "NPY_DISABLE_CPU_FEATURES"
 NAMES_2_4 = ("X86_V4", "AVX512_ICL", "AVX512_SPR")
 NAMES_OLD = ("AVX512F", "AVX512CD", "AVX512_KNL", "AVX512_KNM", "AVX512_SKX", "AVX512_CLX", "AVX512_CNL", "AVX512_ICL",
              "AVX512_SPR")
-_PROBE = ("import numpy._core._multiarray_umath as m\n"
-          "b = set(m.__cpu_baseline__)\n"
-          "print(' '.join(f for f in m.__cpu_dispatch__ if f.startswith(('X86_V4', 'AVX512', 'AVX10')) and f not in b))")
-
-
 def _x86():
     return platform.machine().lower() in ("x86_64", "amd64", "x86", "i386", "i686", "x64")
 
@@ -71,35 +69,114 @@ def _wheel_names():
     return NAMES_OLD if v is not None and v < (2, 4) else NAMES_2_4
 
 
-def _probe():
-    """numpy's own list (a subprocess of this interpreter: the parent must not import numpy before the variable is
-    set), or None when it cannot be asked."""
+FORCE_ENV = "BNGE_NPYGUARD_FORCE"       # "1": as on an AVX-512 CPU, whatever this one has (tests, the build's check)
+FROZEN_FILE = "npyguard_frozen.json"    # the packaged app's names, made from its own numpy by tools/build_app.py
+
+
+def _frozen_names():
+    """The packaged app's names: those tools/build_app.py took from the numpy it bundled (FROZEN_FILE beside the
+    modules; the release's build checks that the executable imports numpy with them under -W error: launcher.py
+    --check-numpy); the PyPI wheels' names for the numpy version where the file is missing."""
+    import json
     try:
-        r = subprocess.run([sys.executable, "-I", "-c", _PROBE], capture_output=True, text=True, timeout=60,
-                           env={k: v for k, v in os.environ.items() if k != ENV})
+        with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), FROZEN_FILE), encoding="utf-8") as fh:
+            return tuple(str(n) for n in json.load(fh)["names"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return _wheel_names()
+
+
+_PROBE = ("import json, sys\n"
+          "sys.path[:] = json.loads(sys.argv[1])\n"
+          "import numpy._core._multiarray_umath as m\n"
+          "b = set(m.__cpu_baseline__)\n"
+          "print(' '.join(f for f in m.__cpu_dispatch__ if f.startswith(('X86_V4', 'AVX512', 'AVX10')) and f not in b))")
+_CHECK = ("import json, sys, warnings\n"
+          "sys.path[:] = json.loads(sys.argv[1])\n"
+          "warnings.simplefilter('error')\n"
+          "import numpy\n"
+          "import npyguard\n"
+          "print(json.dumps(npyguard.avx512_active()))")
+
+
+def _child(code, names=None):
+    """code run by this interpreter with this process's own sys.path and environment (ENV: names, or none): isolated
+    (-I: not from the current folder, no PYTHON* variables, no user site folder), so the numpy it imports is the one this
+    process imports. The CompletedProcess, or None when it cannot run."""
+    import json
+    env = {k: v for k, v in os.environ.items() if k != ENV}
+    if names is not None:
+        env[ENV] = " ".join(names)
+    try:
+        return subprocess.run([sys.executable, "-I", "-c", code, json.dumps(sys.path)], capture_output=True,
+                              text=True, timeout=60, env=env)
     except Exception:
         return None
-    return tuple(r.stdout.split()) if r.returncode == 0 else None
+
+
+def _probe():
+    """The AVX-512 targets this process's numpy dispatches outside its baseline (asked in a child: this process must
+    not import numpy before the variable is set), or None when it cannot be asked."""
+    r = _child(_PROBE)
+    return tuple(r.stdout.split()) if r is not None and r.returncode == 0 else None
+
+
+def _validate(names):
+    """numpy imports in a child with names set, warnings as errors, and dispatches no AVX-512 kernel then."""
+    r = _child(_CHECK, names)
+    return r is not None and r.returncode == 0 and r.stdout.strip() == "[]"
 
 
 def features():
     """The names to put in NPY_DISABLE_CPU_FEATURES here, () when there is nothing to hold back (or no safe way)."""
-    if not _x86() or has_avx512() is False:
+    forced = os.environ.get(FORCE_ENV) == "1"
+    if not _x86() or not forced and has_avx512() is False:
         return ()
-    if getattr(sys, "frozen", False):       # (the packaged app: a PyPI wheel of numpy, baseline X86_V2)
-        return _wheel_names()
-    return _probe() or ()
+    if getattr(sys, "frozen", False):       # (the packaged app: its build's own names, checked by the build)
+        return _frozen_names()
+    names = _probe()
+    if not names or not _validate(names):   # (a numpy that would not start with them: dispatch as it is)
+        return ()
+    return names
 
 
 def apply(env=None):
     """Set NPY_DISABLE_CPU_FEATURES in env (default os.environ) unless it is set already (inherited from the parent
-    that set it, or the player's own); returns its value. Call before numpy is imported."""
+    that set it, or the player's own); returns its value. Call before numpy is imported: importing this module does it
+    for os.environ, so an entry point's first import is this module (tests/test_npyguard.py checks them)."""
     env = os.environ if env is None else env
     if ENV in env:
         return env[ENV]
     # (empty where nothing is held back: numpy reads that as no names, and the children need not ask again)
     env[ENV] = " ".join(features())
     return env[ENV]
+
+
+def self_check():
+    """(ok, message) in a process that has not imported numpy yet: this build's names set (whatever the CPU), numpy
+    imported with warnings as errors; ok when it starts, every name is one of its dispatch targets outside its baseline
+    and no AVX-512 kernel dispatches. The packaged app's check at build time (launcher.py --check-numpy)."""
+    if "numpy" in sys.modules:
+        return False, "numpy was imported before the check"
+    names = _frozen_names() if getattr(sys, "frozen", False) else (_probe() or ())
+    os.environ[ENV] = " ".join(names)
+    import warnings
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            import numpy  # noqa: F401
+            try:
+                import numpy._core._multiarray_umath as m
+            except ImportError:
+                import numpy.core._multiarray_umath as m
+    except Exception as e:
+        return False, f"numpy did not import with {ENV}={os.environ[ENV]!r}: {type(e).__name__}: {e}"
+    bad = [n for n in names if n not in m.__cpu_dispatch__ or n in m.__cpu_baseline__]
+    if bad:
+        return False, f"not numpy's dispatch targets outside its baseline: {bad}"
+    on = avx512_active()
+    if on:
+        return False, f"AVX-512 kernels still dispatched: {on}"
+    return True, f"numpy {numpy.__version__}: {ENV}={os.environ[ENV]!r}"
 
 
 def avx512_active():
@@ -109,3 +186,6 @@ def avx512_active():
     except ImportError:         # (numpy 1.x)
         import numpy.core._multiarray_umath as m
     return [f for f in m.__cpu_dispatch__ if f.startswith(("X86_V4", "AVX512", "AVX10")) and m.__cpu_features__.get(f)]
+
+
+apply()       # (on import: an entry point imports this module first, before anything imports numpy)

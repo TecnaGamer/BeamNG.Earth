@@ -2197,6 +2197,14 @@ def main():
         ensure_ca_certs()
         run_addon(sys.argv[2:])
         return
+    if len(sys.argv) > 1 and sys.argv[1] == "--check-numpy":
+        # (the release build's check: numpy imports with its AVX-512 targets held back, warnings as errors:
+        # server/npyguard.py)
+        sys.path.insert(0, os.path.join(ROOT, "server"))
+        import npyguard
+        ok, msg = npyguard.self_check()
+        print(("ok: " if ok else "FAILED: ") + msg, flush=True)
+        sys.exit(0 if ok else 1)
     if len(sys.argv) > 1 and sys.argv[1] == "--server":
         # (not tee_log: its output goes to server.log already. Teed, every line of the server's log was written a second
         # time into launcher.log, flushed line by line, and the launcher's own lines were trimmed out of it within a
