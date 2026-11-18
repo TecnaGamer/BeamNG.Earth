@@ -16,6 +16,8 @@ import math
 
 import numpy as np
 
+import dnp
+
 JUNCTION_R_M = 1.0      # m: a road's end this close to another road's centre line meets it there
 SEAM_EDGE_M = 0.5       # m: a plan's end this close to its cell's box edge is where the cell cut it (a seam, no node)
 SEAM_R_M = 1.0          # m: the next cell's piece of the same road this close to a seam end continues it
@@ -29,7 +31,7 @@ THROUGH_DECK_M = 2.5    # m: a road this little under a deck's surface meets the
 
 
 def _arc(xy):
-    return np.r_[0.0, np.cumsum(np.hypot(*np.diff(xy, axis=0).T))]
+    return np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(xy, axis=0).T))]
 
 
 class _Segments:
@@ -58,9 +60,9 @@ class _Segments:
                 for i, j in self.grid.get((gx + dx, gy + dy), ()):
                     a, b = self.lines[i][j], self.lines[i][j + 1]
                     d = b - a
-                    L2 = float(d @ d)
-                    t = 0.0 if L2 <= 0 else min(1.0, max(0.0, float((p - a) @ d) / L2))
-                    dist = float(np.hypot(*(a + t * d - p)))
+                    L2 = float(dnp.dot(d, d))
+                    t = 0.0 if L2 <= 0 else min(1.0, max(0.0, float(dnp.dot(p - a, d)) / L2))
+                    dist = float(dnp.hypot(*(a + t * d - p)))
                     if dist <= r and (i not in out or dist < out[i][0]):
                         out[i] = (dist, j, t)
         return out
@@ -221,7 +223,7 @@ def clearance(plans, decks, names):
                     continue
                 short = need - gap
                 if j not in worst or short > worst[j]["dz"]:
-                    cum = np.r_[0.0, np.cumsum(np.hypot(*np.diff(np.asarray(dxy, np.float64)[:, :2], axis=0).T))]
+                    cum = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(np.asarray(dxy, np.float64)[:, :2], axis=0).T))]
                     at = cum[sj] + t * (cum[sj + 1] - cum[sj])
                     worst[j] = {"x": float(q[0]), "y": float(q[1]), "dz": short, "gap": gap, "a": fid, "b": dfid,
                                 "from_end": float(min(at, cum[-1] - at)), "deck_len": float(cum[-1])}
