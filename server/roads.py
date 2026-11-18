@@ -416,7 +416,7 @@ def _ring_metric(ring):
 def _metric_point(ring, m, f):
     """The lon/lat point at fraction f of ring's length (m: its _ring_metric)."""
     s = m[5]
-    return np.array([np.interp(f * s[-1], s, ring[:, 0]), np.interp(f * s[-1], s, ring[:, 1])])
+    return np.array([dnp.interp(f * s[-1], s, ring[:, 0]), dnp.interp(f * s[-1], s, ring[:, 1])])
 
 
 def _metric_project(m, pt):
@@ -1527,8 +1527,8 @@ def sub_polyline(ring, a, b):
         return ring[:1]
     sa, sb = a * s[-1], b * s[-1]
     inner = ring[(s > sa) & (s < sb)]
-    pa = np.array([np.interp(sa, s, ring[:, d]) for d in range(ring.shape[1])])
-    pb = np.array([np.interp(sb, s, ring[:, d]) for d in range(ring.shape[1])])
+    pa = np.array([dnp.interp(sa, s, ring[:, d]) for d in range(ring.shape[1])])
+    pb = np.array([dnp.interp(sb, s, ring[:, d]) for d in range(ring.shape[1])])
     return np.vstack([pa, inner, pb])
 
 
@@ -4605,7 +4605,7 @@ def _tie_beside(lines, zs, specs, measured=None):
                     continue
                 # the part it runs beside from the fork (of the parts at it: the nearest ~15 m along)
                 a = 15.0 if e == 0 else arcs[i][-1] - 15.0
-                q = np.array([np.interp(a, arcs[i], pts[i][:, 0]), np.interp(a, arcs[i], pts[i][:, 1])])
+                q = np.array([dnp.interp(a, arcs[i], pts[i][:, 0]), dnp.interp(a, arcs[i], pts[i][:, 1])])
                 d, _ = project(j, q[None])
                 if best is None or d < best[0]:
                     best = (d, j, wj)
@@ -4830,9 +4830,9 @@ def _deck_profile(lines, ground_fn, crossings, clear, grade, lift, levels, width
             if levels[i] == levels[j]:
                 continue
             hi, lo, sh, sl = (i, j, si, sj) if levels[i] > levels[j] else (j, i, sj, si)
-            extra.append((hi, sh, float(np.interp(sl, arcs[lo], zs[lo])), None, levels[hi]))
+            extra.append((hi, sh, float(dnp.interp(sl, arcs[lo], zs[lo])), None, levels[hi]))
         for hi, sh, lo, sl in stacks:               # a deck over another along it (an upper roadway)
-            extra.append((hi, sh, float(np.interp(sl, arcs[lo], zs[lo])), None, levels[hi]))
+            extra.append((hi, sh, float(dnp.interp(sl, arcs[lo], zs[lo])), None, levels[hi]))
         if not extra:
             break
         new = deck_profile_once(lines, ground_fn, list(crossings) + extra, clear, grade, lift, n_road=n_road,
@@ -4873,7 +4873,7 @@ def _deck_stacks(lines, levels, widths, step=STACK_STEP_M):
             # was lifted 10 m over its twin, 2026-10-27)
             reach -= 0.5 * min(float(widths[i]), float(widths[j]))
             s = np.arange(0.0, arcs[i][-1], step)
-            q = np.c_[np.interp(s, arcs[i], pts[i][:, 0]), np.interp(s, arcs[i], pts[i][:, 1])]
+            q = np.c_[dnp.interp(s, arcs[i], pts[i][:, 0]), dnp.interp(s, arcs[i], pts[i][:, 1])]
             P, ab = pts[j][:-1], np.diff(pts[j], axis=0)
             L2 = np.maximum((ab * ab).sum(1), 1e-12)
             t = np.clip(((q[:, None, :] - P[None]) * ab[None]).sum(2) / L2[None], 0.0, 1.0)
@@ -4909,7 +4909,7 @@ def _deck_beside(lines, widths, step=STACK_STEP_M):
             continue
         si = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(p, axis=0).T))]
         t = np.arange(0.0, si[-1] + 1e-9, step)
-        qs.append(np.c_[np.interp(t, si, p[:, 0]), np.interp(t, si, p[:, 1])])
+        qs.append(np.c_[dnp.interp(t, si, p[:, 0]), dnp.interp(t, si, p[:, 1])])
     off = lambda arrs: np.r_[0, np.cumsum([len(a) for a in arrs])].astype(np.int64)      # noqa: E731
     pairs = fast._ef.deck_beside(np.ascontiguousarray(np.concatenate(qs) if qs else np.zeros((0, 2))), off(qs),
                                  np.ascontiguousarray(np.concatenate(pts) if pts else np.zeros((0, 2))), off(pts),
@@ -5049,8 +5049,8 @@ def deck_profile_once(lines, ground_fn, crossings=(), clear=None, grade=None, li
         d = _dijkstra(adj, {a: sc, b: s[-1] - sc})
         # a junction at grade (Queens Plaza, the user's report #55, 2026-10-17: a ramp's map line starts in the
         # intersection it climbs from; its deck rose 0.8 m over the cross street there, a hump across it)
-        flat = (ci < n_road and _road_crossing(cr) and float(np.interp(sc, s, dab[pi])) <= AT_GRADE_REACH_M
-                and float(np.interp(sc, s, cap[pi])) < zc + AT_GRADE_M)
+        flat = (ci < n_road and _road_crossing(cr) and float(dnp.interp(sc, s, dab[pi])) <= AT_GRADE_REACH_M
+                and float(dnp.interp(sc, s, cap[pi])) < zc + AT_GRADE_M)
         for k, (ea, eb, es) in enumerate(edges):
             dk = np.minimum(d[ea] + es, d[eb] + (es[-1] - es))
             if k == pi:
@@ -5356,7 +5356,7 @@ def _path_curve(lines, order, ground_fn, crossings, spans, clear, lift, max_grad
     # A rotation can put an integral length a few ulps above its metre station.
     n = max(int(math.ceil(L / DECK_CURVE_STEP - 1e-9)), 2)
     s = np.linspace(0.0, L, n + 1)
-    xy = np.c_[np.interp(s, S, P[:, 0]), np.interp(s, S, P[:, 1])]
+    xy = np.c_[dnp.interp(s, S, P[:, 0]), dnp.interp(s, S, P[:, 1])]
 
     def to_s(k, arc):
         o, rev, a = info[k]
@@ -5401,7 +5401,7 @@ def _path_curve(lines, order, ground_fn, crossings, spans, clear, lift, max_grad
     out = {}
     for k, rev in order:
         o, r, a = info[k]
-        out[k] = np.interp(o + (a[-1] - a if r else a), s, z)
+        out[k] = dnp.interp(o + (a[-1] - a if r else a), s, z)
     return out, xy, s, z
 
 
@@ -5528,7 +5528,7 @@ def deck_curve(lines, ground_fn, crossings=(), spans=(), clear=None, lift=None, 
         for nd, sn in seq:
             j = int(np.clip(np.searchsorted(s, sn), 0, len(s) - 1))
             t = tg[j] / max(dnp.hypot(*tg[j]), 1e-9)
-            zz, lst = solved.get(nd, (float(np.interp(sn, s, z)), []))
+            zz, lst = solved.get(nd, (float(dnp.interp(sn, s, z)), []))
             lst += [(t, float(gr[j])), (-t, -float(gr[j]))]
             solved[nd] = (zz, lst)
 
@@ -5629,12 +5629,12 @@ def _ease(lines, zs, ground_fn, lift=None):
             out.append(z)
             continue
         g = np.arange(0.0, L + 1e-9, 1.0)
-        zg = np.interp(g, s, z)
+        zg = dnp.interp(g, s, z)
         r = n // 2
         ext = np.r_[2 * zg[0] - zg[r:0:-1], zg, 2 * zg[-1] - zg[-2:-r - 2:-1]]
         sm = dnp.convolve(ext, np.ones(2 * r + 1) / (2 * r + 1), mode="valid")
         sm = sm + (zg[0] - sm[0]) + ((zg[-1] - sm[-1]) - (zg[0] - sm[0])) * g / L
-        zz = np.interp(s, g, sm)
+        zz = dnp.interp(s, g, sm)
         gz = np.asarray(ground_fn(xy), np.float64) + lift
         zz[0], zz[-1] = z[0], z[-1]
         out.append(_lift_smooth(s, zz, gz))
@@ -5659,7 +5659,7 @@ def _lift_smooth(s, z, floor, iters=8):
         return z
     # Uniform and end-inclusive: tiny rotation/length roundoff must not add an almost-zero final interval.
     g = np.linspace(0.0, s[-1], max(1, int(math.ceil(s[-1] - 1e-9))) + 1)
-    zg = np.interp(g, s, z)
+    zg = dnp.interp(g, s, z)
     # Within LIFT_EASE_M / 2 of an abutment, limit the lift to the landing grade,
     # but never put the deck under the ground itself.
     def bounded_floor(at, levels):
@@ -5667,14 +5667,14 @@ def _lift_smooth(s, z, floor, iters=8):
         cap = np.minimum(np.where(d0 < LIFT_EASE_M / 2 - 1e-8, z[0] + LIFT_END_GRADE * d0, np.inf),
                          np.where(d1 < LIFT_EASE_M / 2 - 1e-8, z[-1] + LIFT_END_GRADE * d1, np.inf))
         return np.maximum(np.minimum(levels, cap), levels - DECK_CLEAR)
-    fg = bounded_floor(g, np.interp(g, s, floor))
+    fg = bounded_floor(g, dnp.interp(g, s, floor))
     fs = bounded_floor(s, floor)
     r = int(LIFT_EASE_M // 2)
     inner = np.ones(len(g), bool)
     inner[0] = inner[-1] = False
     if not (fg[inner] > zg[inner] + 0.01).any() and not (fs[1:-1] > z[1:-1] + 0.01).any():
         out = np.array(z)
-        out[1:-1] = np.maximum(out[1:-1], np.maximum(fs, np.interp(s, g, fg))[1:-1])
+        out[1:-1] = np.maximum(out[1:-1], np.maximum(fs, dnp.interp(s, g, fg))[1:-1])
         return out
     # The metre grid can straddle a terrain peak sampled at a mapped vertex.
     # Feed each original requirement into both bracketing grid points before
@@ -5699,7 +5699,7 @@ def _lift_smooth(s, z, floor, iters=8):
         addition[0], addition[-1] = 0.0, 0.0
         zz = zg + addition
         short = np.where(inner, fg - zz, 0.0)
-        source_short = np.maximum(fs[1:-1] - z[1:-1] - np.interp(source, g, addition), 0.0)
+        source_short = np.maximum(fs[1:-1] - z[1:-1] - dnp.interp(source, g, addition), 0.0)
         if max(short.max(), source_short.max()) <= 0.01:
             break
         increase = np.maximum(short, 0.0)
@@ -5708,9 +5708,9 @@ def _lift_smooth(s, z, floor, iters=8):
         want += increase
     # Interpolate only the lift: resampling the solved profile itself could
     # lower an existing peak and lose its clearance at a mapped station.
-    out = z + np.interp(s, g, addition)
+    out = z + dnp.interp(s, g, addition)
     out[0], out[-1] = z[0], z[-1]
-    ff = np.maximum(fs, np.interp(s, g, fg))
+    ff = np.maximum(fs, dnp.interp(s, g, fg))
     out[1:-1] = np.maximum(out[1:-1], ff[1:-1])
     return out
 
@@ -5758,7 +5758,7 @@ def _no_sag(s, z):
                 break
         hull.append(p)
     hx, hy = zip(*hull)
-    return np.interp(s, hx, hy)
+    return dnp.interp(s, hx, hy)
 
 
 def _dedupe(xy, tol=0.5):
@@ -6443,10 +6443,10 @@ def way_lines(ex, feats, i, spec, pts, lon, left_hand, country, ws=None, shift=N
     import markings
     s = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(pts[:, :2], axis=0).T))]
     t = s / max(s[-1], 1e-9)
-    at = lambda f: np.array([[np.interp(f, t, pts[:, c]) for c in range(3)]])       # noqa: E731
+    at = lambda f: np.array([[dnp.interp(f, t, pts[:, c]) for c in range(3)]])       # noqa: E731
     out = [e for e in ex if e[0].get("kind") not in ("centre", "lane")]
-    cut = lambda v, a, b: None if v is None else np.r_[np.interp(a, t, v), np.asarray(v, np.float64)[(t > a) & (t < b)],
-                                                       np.interp(b, t, v)]                               # noqa: E731
+    cut = lambda v, a, b: None if v is None else np.r_[dnp.interp(a, t, v), np.asarray(v, np.float64)[(t > a) & (t < b)],
+                                                       dnp.interp(b, t, v)]                               # noqa: E731
     for a, b, _, tags in parts:
         piece = np.vstack([at(a), pts[(t > a) & (t < b)], at(b)])
         way_spec = spec._replace(lanes=markings._count((tags or {}).get("lanes")) or spec.lanes)
@@ -7542,7 +7542,7 @@ def _clearance_deficits(lines, zs, crossings, depth=None):
             continue
         lo, hi = max(0.0, sc - DECK_CLEAR_REACH_M), min(s[-1], sc + DECK_CLEAR_REACH_M)
         at = np.r_[lo, s[(s > lo) & (s < hi)], hi]
-        headroom = float(np.min(np.interp(at, s, zs[pi]))) - zc - (DECK_FULL_DEPTH if depth is None else depth)
+        headroom = float(np.min(dnp.interp(at, s, zs[pi]))) - zc - (DECK_FULL_DEPTH if depth is None else depth)
         if not np.isfinite(headroom) or headroom < MIN_BRIDGE_HEADROOM_M - 1e-6:
             out.append((pi, headroom))
     return out
@@ -7647,7 +7647,7 @@ def pier_sites(xy, z, width, ground_fn, road_lines=(), wet_fn=None, depth=None):
             sc = L * i / n + off * span
             if sc < 0.5 * span or sc > L - 0.5 * span:
                 continue
-            p = np.array([np.interp(sc, s, xy[:, 0]), np.interp(sc, s, xy[:, 1])])
+            p = np.array([dnp.interp(sc, s, xy[:, 0]), dnp.interp(sc, s, xy[:, 1])])
             j = min(int(np.searchsorted(s, sc)), len(s) - 1)
             t = xy[j] - xy[max(j - 1, 0)]
             t = t / max(float(dnp.hypot(*t)), 1e-9)
@@ -7658,7 +7658,7 @@ def pier_sites(xy, z, width, ground_fn, road_lines=(), wet_fn=None, depth=None):
                 hit = fast._ef.points_near_segments(foot, A, B, np.full(len(A), PIER_ROAD_M))
                 if np.asarray(hit).any():
                     continue
-            zt = float(np.interp(sc, s, z)) - under
+            zt = float(dnp.interp(sc, s, z)) - under
             g = float(ground_fn(p[None])[0])
             if zt - g < PIER_MIN_CLEAR:
                 continue
@@ -7801,7 +7801,7 @@ class BridgeProfiles:
                 for sc in np.arange(s[i], s[j] + 1e-6, WATER_STEP_M):
                     out_by = max(0.0, c0 - sc, sc - c1)
                     cc = max(c_low, c - DECK_DESIGN_GRADE * out_by) if nav > 0 else c
-                    out.append((k, float(sc), float(np.interp(sc, s, base)), cc))
+                    out.append((k, float(sc), float(dnp.interp(sc, s, base)), cc))
                 i = j + 1
         return out
 
@@ -8177,7 +8177,7 @@ class BridgeProfiles:
         for k, at, j, arc in ons:
             lj = np.asarray(lines[j], np.float64)[:, :2]
             sj = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(lj, axis=0).T))]
-            zt = float(np.interp(arc, sj, np.asarray(final[j], np.float64)))
+            zt = float(dnp.interp(arc, sj, np.asarray(final[j], np.float64)))
             if np.isfinite(zt) and abs(zt - float(final[k][at])) > END_ON_STEP_M:
                 q = np.asarray(lines[k], np.float64)[at, :2]
                 over[(float(q[0]), float(q[1]))] = zt
@@ -8244,7 +8244,7 @@ class BridgeProfiles:
                     la, lo, _ = self.frame.enu_to_geodetic(xy[:, 0], xy[:, 1], 0.0)
                     ok = np.isfinite(z)
                     s = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(xy, axis=0).T))]
-                    zf = np.interp(s, s[ok], np.asarray(z)[ok])         # (the ends past the last measurement: flat)
+                    zf = dnp.interp(s, s[ok], np.asarray(z)[ok])         # (the ends past the last measurement: flat)
                     got = np.asarray(self.frame.geodetic_to_enu(la, lo, zf)[2], np.float64)
             except Exception as ex:             # the inference rather than no bridge
                 log.debug("observed deck %s: %s: %s", k, type(ex).__name__, ex)
@@ -8329,7 +8329,7 @@ class BridgeProfiles:
             if o is not None and len(s) >= 2 and s[-1] > 0:
                 t = np.r_[np.arange(0.0, s[-1], 2.0), s[-1]]
                 t = t[np.r_[True, np.diff(t) > 0.25]]
-                step = np.interp(t, s, zz)
+                step = dnp.interp(t, s, zz)
                 g = np.abs(np.diff(step)) / np.maximum(np.diff(t), 0.5) if len(step) > 1 else np.zeros(1)
                 if len(g) and float(g.max()) > OBS_MAX_GRADE:
                     log.debug("observed deck %s: %.0f %% after the blend, the solve kept", comp[k], 100 * g.max())
@@ -9411,7 +9411,7 @@ class TunnelProfiles(BridgeProfiles):
                     continue
                 ok = np.isfinite(seg)
                 ss = s[a:b + 1]
-                filled = np.interp(ss, ss[ok], seg[ok])
+                filled = dnp.interp(ss, ss[ok], seg[ok])
                 inside0 = a == 0 and joints[0]
                 inside1 = b == last and joints[1]
                 if n > 0 and secs[n - 1][2]:            # (another covered section before it: no portal between)
@@ -9480,7 +9480,7 @@ class TunnelProfiles(BridgeProfiles):
         if not pts:
             return None
         zr = np.asarray(self._ground(np.asarray(pts, np.float64)), np.float64)
-        room = zr - np.interp(np.asarray(arcs), s, floor) - BORE_FIT_M
+        room = zr - dnp.interp(np.asarray(arcs), s, floor) - BORE_FIT_M
         room = room[np.isfinite(room)]
         return float(room.min()) if len(room) else None
 
@@ -10500,7 +10500,7 @@ def cliff_rows(walls, roads=()):
         at = 0.0
         while at <= s[-1]:
             i = min(int(np.searchsorted(s, at)), len(b) - 1)
-            hh = float(np.interp(at, s, top) - np.interp(at, s, road_z)) + CLIFF_SINK_M + CLIFF_OVER_M
+            hh = float(dnp.interp(at, s, top) - dnp.interp(at, s, road_z)) + CLIFF_SINK_M + CLIFF_OVER_M
             jit = _hash01(round(float(b[i, 0]), 1), round(float(b[i, 1]), 1))
             hh *= 0.9 + 0.2 * jit
             sh, frac, front, width, depth = CLIFF_SHAPES[1 if hh >= CLIFF_TALL_M else 0]
@@ -10510,7 +10510,7 @@ def cliff_rows(walls, roads=()):
                 at += 3.0
                 continue
             t = tw[i]
-            x, y = float(np.interp(at, s, b[:, 0])), float(np.interp(at, s, b[:, 1]))
+            x, y = float(dnp.interp(at, s, b[:, 0])), float(dnp.interp(at, s, b[:, 1]))
             jit2 = _hash01(round(float(b[i, 0]), 1), round(float(b[i, 1]), 1), "z")
             yaw = math.degrees(dmath.atan2(t[0], -t[1])) + (jit - 0.5) * 30.0
             while sc >= 0.2:            # (shrunk until its footprint is off every carriageway, this road's included)
@@ -10522,7 +10522,7 @@ def cliff_rows(walls, roads=()):
                 at += 3.0
                 continue
             hh = sc * sh
-            zb = float(np.interp(at, s, road_z)) - CLIFF_SINK_M - jit2 * 0.8 * sc
+            zb = float(dnp.interp(at, s, road_z)) - CLIFF_SINK_M - jit2 * 0.8 * sc
             rows.append(["cliff", round(px, 2), round(py, 2), round(zb + frac * hh, 2), round(yaw % 360.0, 1), 1.0,
                          round(hh, 2), round(jit, 3)])
             at += max(CLIFF_SPACING * width * sc, 1.5)
@@ -10577,7 +10577,7 @@ def retaining_walls(frame, roads, elev, exact, decks=()):
         if len(xy) < 2:
             continue
         seg = dnp.hypot(*np.diff(pts[:, :2], axis=0).T)
-        z = np.interp(s, np.r_[0.0, np.cumsum(seg)], pts[:, 2])
+        z = dnp.interp(s, np.r_[0.0, np.cumsum(seg)], pts[:, 2])
         inside = (xy[:, 0] >= x0 - 2) & (xy[:, 0] < x1 + 2) & (xy[:, 1] >= y0 - 2) & (xy[:, 1] < y1 + 2)
         if not inside.any():
             continue
@@ -10676,7 +10676,7 @@ def retaining_walls(frame, roads, elev, exact, decks=()):
             thick = np.minimum(thick, np.maximum(reach - 0.5, WALL_COPING_MIN_M))
             # the graded ground at the top's back edge (the steps', then the probe's: back_top)
             pd = core + grading.WALL_FLAT_M + grading.WALL_T_M + WALL_PROBE_M
-            ground_at = lambda d, idx: np.array([np.interp(d[n], np.r_[steps, pd], np.r_[gs[m], gg[m]])  # noqa: E731
+            ground_at = lambda d, idx: np.array([dnp.interp(d[n], np.r_[steps, pd], np.r_[gs[m], gg[m]])  # noqa: E731
                                                  for n, m in enumerate(idx)])
         if parapets is not None and need:
             par = _parapets(xy, z, out_n, rh, inside, steps, gs, others, fid, decks, *parapets)
@@ -10805,8 +10805,8 @@ def twin_tunnels(parts):
         if sj[-1] < 1.0:
             continue
         ss = np.linspace(0.0, sj[-1], max(2, int(sj[-1] / TWIN_STEP_M) + 1))
-        P = np.c_[np.interp(ss, sj, xa[:, 0]), np.interp(ss, sj, xa[:, 1])]
-        Z = np.interp(ss, sj, np.asarray(za, np.float64))
+        P = np.c_[dnp.interp(ss, sj, xa[:, 0]), dnp.interp(ss, sj, xa[:, 1])]
+        Z = dnp.interp(ss, sj, np.asarray(za, np.float64))
         for j in range(i + 1, len(parts)):
             fb, sb, xb, zb, _ = parts[j]
             if j in taken or len(xb) < 2:
@@ -10827,7 +10827,7 @@ def twin_tunnels(parts):
             _, qb = _line_near(q, xb)           # (q on xb: its floor by the arc to it)
             sb_at = np.array([tb[k] + dnp.hypot(*(qb[n] - xb[k])) for n, k in enumerate(
                 [int(np.argmin(dnp.hypot(*(xb[:-1] - p).T) + dnp.hypot(*(xb[1:] - p).T))) for p in qb])])
-            zq = np.interp(sb_at, tb, np.asarray(zb, np.float64))
+            zq = dnp.interp(sb_at, tb, np.asarray(zb, np.float64))
             if np.abs(Z[near] - zq[near]).max() > TWIN_DZ_M:
                 continue
             mid = np.c_[(P + q) / 2, (Z + zq) / 2]
@@ -11203,8 +11203,8 @@ def _abutment_end(part, ground_fn):
     if s[-1] <= PAD_ABUT_REACH_M:
         return part
     keep = s < PAD_ABUT_REACH_M
-    cut = np.array([np.interp(PAD_ABUT_REACH_M, s, line[:, 0]), np.interp(PAD_ABUT_REACH_M, s, line[:, 1])])
-    return (np.vstack([line[keep], cut]), np.r_[z[keep], np.interp(PAD_ABUT_REACH_M, s, z)], half)
+    cut = np.array([dnp.interp(PAD_ABUT_REACH_M, s, line[:, 0]), dnp.interp(PAD_ABUT_REACH_M, s, line[:, 1])])
+    return (np.vstack([line[keep], cut]), np.r_[z[keep], dnp.interp(PAD_ABUT_REACH_M, s, z)], half)
 
 
 # The pads of joints a deck part no longer than PAD_MERGE_M links are one pad, the hull of all their parts (GitHub #1083:
@@ -11682,9 +11682,9 @@ def drains(run, side, caps, walk_w=None):
     for a in sorted(at):
         pts = []
         for d in (a - DRAIN["len"] / 2, a + DRAIN["len"] / 2):
-            x = np.interp(d, s, curb[:, 0])
-            y = np.interp(d, s, curb[:, 1])
-            z = np.interp(d, s, curb[:, 2])
+            x = dnp.interp(d, s, curb[:, 0])
+            y = dnp.interp(d, s, curb[:, 1])
+            z = dnp.interp(d, s, curb[:, 2])
             k = min(int(np.searchsorted(s, d)), len(s) - 1)
             o = out[k] / max(dnp.hypot(*out[k]), 1e-9)
             pts.append([x - o[0] * (GUTTER["w"] / 2), y - o[1] * (GUTTER["w"] / 2), z])

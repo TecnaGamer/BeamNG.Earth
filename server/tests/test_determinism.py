@@ -31,7 +31,8 @@ import dnp  # noqa: E402
 NP_FUNCS = {"sin", "cos", "tan", "arcsin", "arccos", "arctan", "arctan2", "hypot", "exp", "expm1", "exp2", "log",
             "log2", "log10", "log1p", "power", "float_power", "arcsinh", "arccosh", "arctanh", "sinh", "cosh", "tanh",
             "cbrt", "dot", "matmul", "einsum", "inner", "vdot", "tensordot", "convolve", "correlate", "polyfit",
-            "cov", "corrcoef", "linalg", "logaddexp", "sinc"}
+            "cov", "corrcoef", "linalg", "logaddexp", "sinc",
+            "interp"}       # (numpy's C: slope * dx + y fused into one multiply-add by clang on arm64: dnp.interp)
 MATH_FUNCS = {"sin", "cos", "tan", "asin", "acos", "atan", "atan2", "exp", "expm1", "exp2", "log", "log2", "log10",
               "log1p", "pow", "sinh", "cosh", "tanh", "asinh", "acosh", "atanh", "cbrt"}
 RUST_METHODS = ("sin", "cos", "tan", "asin", "acos", "atan", "atan2", "sin_cos", "hypot", "exp", "exp2", "exp_m1", "ln",
@@ -163,6 +164,51 @@ class DeterministicMathsTest(unittest.TestCase):
         self.close(w, np.linalg.eigh(A.T @ A)[0], rtol=1e-10)   # det-ok: the reference
         self.close(np.abs(vec), np.abs(np.linalg.eigh(A.T @ A)[1]), rtol=1e-8)  # det-ok: the reference
         self.close(dnp.polyfit(self.x[:, 0], 2 * self.x[:, 0] + 1, 1), np.array([2.0, 1.0]), rtol=1e-12)
+
+    def test_interp(self):
+        """dnp.interp is np.interp with its multiply and add rounded apart: the bits of a reference made of separate
+        ufunc operations (numpy's x86 wheels' bits; clang's arm64 builds fuse them), numpy's edge rules kept."""
+        rng = np.random.default_rng(2026)
+        for _ in range(300):
+            n = int(rng.integers(1, 12))
+            xp = np.sort(rng.integers(-5, 5, n) * rng.choice([1.0, 0.37, 1.1e3 / 7]))     # (duplicates too)
+            fp = rng.normal(0.0, 100.0, n)
+            if rng.random() < 0.1:
+                fp[rng.integers(0, n)] = np.inf
+            x = np.r_[rng.uniform(-7.0, 7.0, 30) * (np.abs(xp).max() / 5 + 1), xp, np.nan, np.inf, -np.inf]
+            kw = {"left": -1.5, "right": 2.5} if rng.random() < 0.3 else {}
+            got = dnp.interp(x, xp, fp, **kw)
+            want = self._interp_ref(x, xp, fp, **kw)
+            self.assertEqual(got.tobytes(), want.tobytes(), (xp, fp, kw))
+            np.testing.assert_allclose(got, np.interp(x, xp, fp, **kw), rtol=1e-12, atol=1e-9)  # det-ok: reference
+        self.assertIsInstance(dnp.interp(0.5, [0.0, 1.0], [1.0, 3.0]), np.float64)
+        self.assertEqual(dnp.interp(0.5, [0.0, 1.0], [1.0, 3.0]), 2.0)
+        self.assertEqual(dnp.interp(np.arange(6).reshape(2, 3), [0, 5], [0, 10]).shape, (2, 3))
+        self.assertEqual(dnp.interp([np.nan], [1.0], [4.0])[0], 4.0)   # (one sample point: numpy's own rule)
+        with self.assertRaises(ValueError):
+            dnp.interp([1.0], [], [])
+        with self.assertRaises(ValueError):
+            dnp.interp([1.0], [0.0, 1.0], [0.0])
+
+    @staticmethod
+    def _interp_ref(x, xp, fp, left=None, right=None):
+        n = len(xp)
+        lval = fp[0] if left is None else left
+        rval = fp[-1] if right is None else right
+        if n == 1:
+            return np.where(x < xp[0], lval, np.where(x > xp[0], rval, fp[0]))
+        j = np.searchsorted(xp, x, side="right") - 1
+        k = np.clip(j, 0, n - 2)
+        with np.errstate(all="ignore"):
+            slope = (fp[k + 1] - fp[k]) / (xp[k + 1] - xp[k])
+            r = slope * (x - xp[k]) + fp[k]
+            r2 = slope * (x - xp[k + 1]) + fp[k + 1]
+        r = np.where(np.isnan(r), r2, r)
+        r = np.where(np.isnan(r) & (fp[k] == fp[k + 1]), fp[k], r)
+        jj = np.clip(j, 0, n - 1)
+        r = np.where((j >= 0) & ((j == n - 1) | (xp[jj] == x)), fp[jj], r)
+        r = np.where(x < xp[0], lval, np.where(x > xp[-1], rval, r))
+        return np.where(np.isnan(x), x, r).astype(np.float64)
 
     def test_known_bits(self):
         """Values pinned to the libm crate's bits where platform libraries are known to round otherwise."""

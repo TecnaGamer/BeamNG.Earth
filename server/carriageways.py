@@ -89,7 +89,7 @@ def sample(parts, chain, step=STEP_M):
         s = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(ln, axis=0).T))]
         m = max(2, int(math.ceil(s[-1] / step)) + 1)
         a = np.linspace(0.0, s[-1], m)
-        pts = np.stack([np.interp(a, s, ln[:, 0]), np.interp(a, s, ln[:, 1])], axis=1)
+        pts = np.stack([dnp.interp(a, s, ln[:, 0]), dnp.interp(a, s, ln[:, 1])], axis=1)
         if xs:
             pts = pts[1:]                               # (the joint once)
         xs.append(pts)

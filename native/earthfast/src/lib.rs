@@ -6617,6 +6617,6 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // layered rule for BNE_RACEWAY_DIG: a raceway ending on another gives way to it, raceway_dominance)
     // 440: racejoin's joins with their reach (5-tuples), raceway_join_reach, through lines at a node; race_dig_floor's
     // round_up_at (the coordinator's range 440-449 for this branch)
-    m.add("VERSION", 440)?;
+    m.add("VERSION", 441)?;
     Ok(())
 }

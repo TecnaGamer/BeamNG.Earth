@@ -151,8 +151,8 @@ def end_dirs(line):
     s = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(line, axis=0).T))]
     L = s[-1]
     a = min(10.0, L / 2)
-    p0 = np.array([np.interp(a, s, line[:, 0]), np.interp(a, s, line[:, 1])])
-    p1 = np.array([np.interp(L - a, s, line[:, 0]), np.interp(L - a, s, line[:, 1])])
+    p0 = np.array([dnp.interp(a, s, line[:, 0]), dnp.interp(a, s, line[:, 1])])
+    p1 = np.array([dnp.interp(L - a, s, line[:, 0]), dnp.interp(L - a, s, line[:, 1])])
     u0, u1 = line[0] - p0, line[-1] - p1
     return u0 / max(dnp.hypot(*u0), 1e-9), u1 / max(dnp.hypot(*u1), 1e-9)
 

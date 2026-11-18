@@ -624,7 +624,7 @@ def resample_line(xy, step):
         return xy[:1], np.zeros(min(1, len(xy)))
     m = max(1, int(math.ceil(s[-1] / step - 1e-9))) + 1
     t = np.linspace(0.0, s[-1], m)
-    return np.stack([np.interp(t, s, xy[:, 0]), np.interp(t, s, xy[:, 1])], 1), t
+    return np.stack([dnp.interp(t, s, xy[:, 0]), dnp.interp(t, s, xy[:, 1])], 1), t
 
 
 def datum_fit(z_src, z_dem):
@@ -1513,7 +1513,7 @@ class RoadZ:
         if len(s) < 2 or not np.isfinite(z).any():
             return None
         arc = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(xy, axis=0).T))]
-        sx, sy = np.interp(s, arc, xy[:, 0]), np.interp(s, arc, xy[:, 1])
+        sx, sy = dnp.interp(s, arc, xy[:, 0]), dnp.interp(s, arc, xy[:, 1])
         sla, slo, _ = frame.enu_to_geodetic(sx, sy, 0.0)
         return s, z, sx, sy, np.asarray(sla, np.float64), np.asarray(slo, np.float64), arc
 
@@ -1567,7 +1567,7 @@ class RoadZ:
                 continue
             keep = s <= m + 1e-6
             rows.append((np.stack([slo, sla], 1)[keep], z[keep], 1, "", ""))
-            ex, ey = np.interp(m, arc, xy[:, 0]), np.interp(m, arc, xy[:, 1])
+            ex, ey = dnp.interp(m, arc, xy[:, 0]), dnp.interp(m, arc, xy[:, 1])
             ela, elo, _ = frame.enu_to_geodetic(np.array([ex]), np.array([ey]), 0.0)
             gaps.append((str(fid), (float(ring[0, 0]), float(ring[0, 1])), (float(elo[0]), float(ela[0]))))
         return rows, gaps

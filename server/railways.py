@@ -492,7 +492,7 @@ def level_bridge(frame, bridge_xy, road_xy, at, elev=None):
     road_xy = np.asarray(road_xy, np.float64)[:, :2]
     s = _arc(road_xy)
     a = np.clip(at + np.asarray(FLAT_SAMPLE_M), 0.0, s[-1])
-    road = np.c_[np.interp(a, s, road_xy[:, 0]), np.interp(a, s, road_xy[:, 1])]
+    road = np.c_[dnp.interp(a, s, road_xy[:, 0]), dnp.interp(a, s, road_xy[:, 1])]
     outs = []                       # (the track's own ground past each end: a mapped bridge's end may lie on the cut's
     for i, j in ((0, 1), (-1, -2)):  # slope, Nachod's road 14 under the Kladska line, 1.3 m over the road there)
         d = b[i] - b[j]
@@ -575,7 +575,7 @@ def flat_rail_crossing(frame, bridge_xy, road_xy, at, elev=None):
     b = np.asarray(bridge_xy, np.float64)[:, :2]
     s = _arc(road_xy)
     a = np.clip(at + np.asarray(FLAT_SAMPLE_M), 0.0, s[-1])
-    pts = np.r_[np.c_[np.interp(a, s, road_xy[:, 0]), np.interp(a, s, road_xy[:, 1])], b[[0, -1]]]
+    pts = np.r_[np.c_[dnp.interp(a, s, road_xy[:, 0]), dnp.interp(a, s, road_xy[:, 1])], b[[0, -1]]]
     la, lo, _ = frame.enu_to_geodetic(pts[:, 0], pts[:, 1], 0.0)
     try:
         z = np.asarray(elev(np.asarray(la, np.float64), np.asarray(lo, np.float64)), np.float64).ravel()
@@ -660,7 +660,7 @@ def coarse_underpasses(frame, cells, box, rails, reach=REACH_M):
                 if a1 - a0 < 1.0:
                     continue
                 ss = np.linspace(a0, a1, max(3, int((a1 - a0) / STEP_M) + 1))
-                piece = np.c_[np.interp(ss, sl, line[:, 0]), np.interp(ss, sl, line[:, 1])]
+                piece = np.c_[dnp.interp(ss, sl, line[:, 0]), dnp.interp(ss, sl, line[:, 1])]
                 out.append((piece, half + UNDERPASS_SIDE_M))
     return out
 
@@ -1137,7 +1137,7 @@ def _resample(xy, step):
     t = np.append(np.arange(0.0, s[-1], step), s[-1])
     if len(t) > 2 and t[-1] - t[-2] < 0.25 * step:     # (no sliver section at the end)
         t = np.append(t[:-2], t[-1])
-    return np.column_stack((np.interp(t, s, xy[:, 0]), np.interp(t, s, xy[:, 1])))
+    return np.column_stack((dnp.interp(t, s, xy[:, 0]), dnp.interp(t, s, xy[:, 1])))
 
 
 def _arc(xy):
@@ -1460,7 +1460,7 @@ def seam_crossers(xy, zb, roads_):
         r = lines[k]
         rzz = np.asarray(rz, np.float64)[:len(r)]
         if hits and any(abs(float(rzz[int(np.argmin(dnp.hypot(*(r - pt).T)))])
-                            - (float(np.interp(arc, s, zb)) + RAIL_TOP_M)) < CROSSING_DZ for _p, arc, pt in hits):
+                            - (float(dnp.interp(arc, s, zb)) + RAIL_TOP_M)) < CROSSING_DZ for _p, arc, pt in hits):
             out.append((rxy, rz, rh))
     return out
 
@@ -1616,10 +1616,10 @@ def _sleepers(s, xy, u, top, i, j, gone=0.0):
         ss = ss[h >= gone]
     if not len(ss):
         return None
-    cx, cy = np.interp(ss, s, xy[:, 0]), np.interp(ss, s, xy[:, 1])
-    ux, uy = np.interp(ss, s, u[:, 0]), np.interp(ss, s, u[:, 1])
+    cx, cy = dnp.interp(ss, s, xy[:, 0]), dnp.interp(ss, s, xy[:, 1])
+    ux, uy = dnp.interp(ss, s, u[:, 0]), dnp.interp(ss, s, u[:, 1])
     un = np.c_[ux, uy] / np.maximum(dnp.hypot(ux, uy), 1e-9)[:, None]
-    zt = np.interp(ss, s, top) - SLEEPER_SINK
+    zt = dnp.interp(ss, s, top) - SLEEPER_SINK
     return np.c_[cx, cy], np.c_[un[:, 1], -un[:, 0]], un, zt, zt + SLEEPER_H
 
 
@@ -2114,7 +2114,7 @@ def street_spans(xy, cr, pad=4.0):
         return []
     s = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(xy, axis=0).T))]
     ss = np.arange(0.0, float(s[-1]) + 1e-9, STEP_M)
-    pts = np.c_[np.interp(ss, s, xy[:, 0]), np.interp(ss, s, xy[:, 1])]
+    pts = np.c_[dnp.interp(ss, s, xy[:, 0]), dnp.interp(ss, s, xy[:, 1])]
     hit = np.zeros(len(pts), bool)
     for m in street_along([pts], cr):
         if m is not None:
@@ -2166,7 +2166,7 @@ def _leaves_track(way, pt, track):
     dense = roads.densify(track, 1.0)[:, :2]
     for sgn in (-1.0, 1.0):
         a = float(np.clip(at + sgn * WALK_LEAVE_M, 0.0, s[-1]))
-        q = np.array([np.interp(a, s, way[:, 0]), np.interp(a, s, way[:, 1])])
+        q = np.array([dnp.interp(a, s, way[:, 0]), dnp.interp(a, s, way[:, 1])])
         if float(np.min(dnp.hypot(*(dense - q).T))) < WALK_LEAVE_OFF_M:
             return False
     return True

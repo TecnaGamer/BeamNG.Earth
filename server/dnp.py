@@ -9,9 +9,10 @@ turns such a bit into another road (Windows built a 0.78 g crest where Linux had
 Here: the transcendental functions are the native module's libm-crate ones (native/earthfast/src/dm.rs, the same as
 its kernels'; dmath.py is the scalar side), computed in float64 (a float32 input gives a float32 result); hypot is
 sqrt(x * x + y * y); products and norms are elementwise multiplies and numpy's add.reduce (fixed order); solve /
-lstsq / eigh are small native kernels. numpy's elementwise arithmetic, sqrt, sum / cumsum / mean, sort, interp, round
-and friends are exact or the same code everywhere and are used as they are. tests/test_determinism.py fails on a
-platform call in server/*.py.
+lstsq / eigh are small native kernels; interp is numpy's own algorithm in the native module (numpy's C code is
+compiled per platform, and a compiler that fuses its multiply and add gives other bits: the arm64 wheels). numpy's
+elementwise arithmetic, sqrt, sum / cumsum / mean, sort's values, round and friends are exact or the same code
+everywhere and are used as they are. tests/test_determinism.py fails on a platform call in server/*.py.
 """
 import numpy as np
 from numpy.lib.stride_tricks import sliding_window_view
@@ -19,6 +20,7 @@ from numpy.lib.stride_tricks import sliding_window_view
 import fast
 
 _ef = fast.native(264, "dnp")
+_ef_interp = fast.native(441, "dnp.interp")
 
 _ATAN2, _POW, _HYPOT = 32, 33, 34
 
@@ -206,6 +208,26 @@ def convolve(a, v, mode="full"):
     ap = np.concatenate([np.zeros(left), a, np.zeros(right)]) if left or right else a
     w = sliding_window_view(ap, m)
     return np.add.reduce(w * v[::-1], axis=-1) if len(w) else np.zeros(0)
+
+
+def interp(x, xp, fp, left=None, right=None):
+    """np.interp (float64; no period, no complex fp) by the native kernel: numpy's own algorithm line for line, its
+    slope * (x - xp[j]) + fp[j] rounded twice. numpy's C code is compiled per platform, and a compiler that contracts
+    (clang on the arm64 wheels) fuses that into one multiply-add: other last bits (the M1 Mac's railway beds, 36 of the
+    corpus's 116 plans, 2026-11-18). A scalar x gives a numpy float64, as numpy's."""
+    xa = np.asarray(x)
+    xpa, fpa = np.asarray(xp), np.asarray(fp)
+    if xpa.ndim != 1 or fpa.ndim != 1:
+        raise ValueError("dnp.interp: xp and fp must be 1-D")
+    if fpa.dtype.kind == "c" or xa.dtype.kind == "c":
+        raise TypeError("dnp.interp: complex values are not supported")
+    flat = xa.ravel() if xa.dtype == _F64D else np.asarray(xa, np.float64).ravel()
+    r = _ef_interp.dm_interp(np.ascontiguousarray(flat), np.ascontiguousarray(xpa, np.float64),
+                             np.ascontiguousarray(fpa, np.float64),
+                             None if left is None else float(left), None if right is None else float(right))
+    if xa.ndim == 0:
+        return _F64(r[0])
+    return r if xa.ndim == 1 else r.reshape(xa.shape)
 
 
 def polyfit(x, y, deg):

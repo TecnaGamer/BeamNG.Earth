@@ -215,8 +215,8 @@ def track_surface(frame, elev, races, pts, base):
             # onto another pass of the line; Codex reviews of b68ade87 / d40a5fcb)
             _s0, i0, kw, cum = starts[zi]
             idx = np.arange(i0, i0 + kw)
-            lo_w = float(np.interp(a, zst[idx], cum, left=-math.inf)) if a > float(zst[0]) else -math.inf
-            hi_w = float(np.interp(b, zst[idx], cum, right=math.inf)) if b < float(zst[-1]) else math.inf
+            lo_w = float(dnp.interp(a, zst[idx], cum, left=-math.inf)) if a > float(zst[0]) else -math.inf
+            hi_w = float(dnp.interp(b, zst[idx], cum, right=math.inf)) if b < float(zst[-1]) else math.inf
             js.append((pos[d], x, y, lo_w, hi_w))
         joins.append(js)
     return np.asarray(grading.raceway_ground(pts[:, 0], pts[:, 1], base, zones, margin=1e-6, joins=joins,

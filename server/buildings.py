@@ -1876,7 +1876,7 @@ def _portal_lift(frame, ring, x0, y0, tunnels_xy, elev):
         seg = dnp.hypot(*np.diff(ln, axis=0).T)
         s = np.concatenate(([0.0], np.cumsum(seg)))
         t = np.arange(0.0, s[-1] + 1e-9, 2.0)
-        p = np.stack([np.interp(t, s, ln[:, 0]), np.interp(t, s, ln[:, 1])], axis=1)
+        p = np.stack([dnp.interp(t, s, ln[:, 0]), dnp.interp(t, s, ln[:, 1])], axis=1)
         p = p[(p[:, 0] >= lo[0]) & (p[:, 0] <= hi[0]) & (p[:, 1] >= lo[1]) & (p[:, 1] <= hi[1])]
         if len(p):
             pts.append(p)
@@ -1945,7 +1945,7 @@ def _open_tunnels(frame, lines, x0, y0, elev):
         if arc[-1] < 0.5:
             continue
         s = np.unique(np.r_[np.arange(0.0, arc[-1], 2.0), arc[-1]])
-        p = np.stack([np.interp(s, arc, ln[:, 0]), np.interp(s, arc, ln[:, 1])], 1)
+        p = np.stack([dnp.interp(s, arc, ln[:, 0]), dnp.interp(s, arc, ln[:, 1])], 1)
         la, lo, _ = frame.enu_to_geodetic(p[:, 0] + x0, p[:, 1] + y0, np.zeros(len(p)))
         g = np.asarray(elev(np.asarray(la, np.float64), np.asarray(lo, np.float64)), np.float64)
         if not np.isfinite(g).all():
@@ -4082,7 +4082,7 @@ def road_spans(ring, line):
     if arc[-1] < ROAD_PASSAGE_RUN_M:
         return []
     t = np.unique(np.r_[np.arange(0.0, arc[-1], ROAD_PASSAGE_STEP_M), arc[-1]])
-    p = np.stack([np.interp(t, arc, line[:, 0]), np.interp(t, arc, line[:, 1])], 1)
+    p = np.stack([dnp.interp(t, arc, line[:, 0]), dnp.interp(t, arc, line[:, 1])], 1)
     deep = Path(ring).contains_points(p)
     if not deep.any():
         return []
@@ -6818,8 +6818,8 @@ def bridge_shift(fp, centre, lines):
     ua, ub = fp["u0"] + fp["du"] * have[0], fp["u0"] + fp["du"] * have[-1]
     span = np.arange(have[0], have[-1] + 1)          # (the gaps inside the deck: its neighbours' widths)
     ok = np.isfinite(lo[span])
-    lo[span] = np.interp(span, span[ok], lo[span][ok])
-    hi[span] = np.interp(span, span[ok], hi[span][ok])
+    lo[span] = dnp.interp(span, span[ok], lo[span][ok])
+    hi[span] = dnp.interp(span, span[ok], hi[span][ok])
     reach = BRIDGE_ALIGN_MAX_M + BRIDGE_ALIGN_NEAR_M
     pts, owner = [], []
     for xy in lines:

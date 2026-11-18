@@ -184,7 +184,7 @@ def _soft_parts(p):
 
     def sample(s):
         columns = np.c_[curb, out]
-        a = np.column_stack([np.interp(s, stations, v) for v in columns.T])
+        a = np.column_stack([dnp.interp(s, stations, v) for v in columns.T])
         return a[:, :3], a[:, 3:]
 
     def section(a, b, steps):
@@ -507,7 +507,7 @@ def _cut_slab(walk, edges, coverage):
         s = np.r_[lo, arc[(arc > lo) & (arc < hi)], hi]
         first, last = lo <= 1e-6, hi >= arc[-1] - 1e-6
         caps = walk["caps"]
-        w = dict(walk, pts=np.column_stack([np.interp(s, arc, v) for v in pts.T]),
+        w = dict(walk, pts=np.column_stack([dnp.interp(s, arc, v) for v in pts.T]),
                  caps=(caps[0] or not first, caps[1] or not last),
                  ramps=[(max(a, lo) - lo, min(b, hi) - lo) for a, b in walk.get("ramps", ()) if b > lo and a < hi])
         if "drain_ends" in w:

@@ -126,10 +126,10 @@ def forward_grid(epsg, lat, lon, step=16):
     def interp(G):
         rows = np.empty((h, len(ci)))
         for j in range(len(ci)):
-            rows[:, j] = np.interp(np.arange(h), ri, G[:, j])
+            rows[:, j] = dnp.interp(np.arange(h), ri, G[:, j])
         out = np.empty((h, w))
         cols = np.arange(w)
         for i in range(h):
-            out[i] = np.interp(cols, ci, rows[i])
+            out[i] = dnp.interp(cols, ci, rows[i])
         return out
     return interp(X), interp(Y)

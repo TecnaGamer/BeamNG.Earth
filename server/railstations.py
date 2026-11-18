@@ -468,7 +468,7 @@ def _inside_any(path, platforms, crosses):
     """Is every crossing of the path on a platform (a footway along a platform's end is not a crossing)?"""
     s = np.concatenate(([0.0], np.cumsum(dnp.hypot(*np.diff(path, axis=0).T))))
     for _k, arc in crosses:
-        p = np.array([np.interp(arc, s, path[:, 0]), np.interp(arc, s, path[:, 1])])
+        p = np.array([dnp.interp(arc, s, path[:, 0]), dnp.interp(arc, s, path[:, 1])])
         if not any(bs.contains(pl.ring, p) for pl in platforms):
             return False
     return True
@@ -498,7 +498,7 @@ def _canopy_ring(pl, run, centre_arc, length):
     if hi - lo < 20.0:
         return None
     ss = np.arange(lo, hi + 1e-6, CANOPY_STEP_M)
-    line = np.c_[np.interp(ss, s, pts[:, 0]), np.interp(ss, s, pts[:, 1])]
+    line = np.c_[dnp.interp(ss, s, pts[:, 0]), dnp.interp(ss, s, pts[:, 1])]
     t = np.zeros_like(line)
     t[1:-1] = line[2:] - line[:-2]
     t[0], t[-1] = line[1] - line[0], line[-1] - line[-2]
@@ -681,7 +681,7 @@ def _synth(st, near, tracks, edge_m):
     if hi - lo < 30.0:
         return None
     ss = np.arange(lo, hi + 1e-6, RESAMPLE_M)
-    cx, cy = np.interp(ss, s, xy[:, 0]), np.interp(ss, s, xy[:, 1])
+    cx, cy = dnp.interp(ss, s, xy[:, 0]), dnp.interp(ss, s, xy[:, 1])
     line = np.c_[cx, cy]
     nrm = _normals(line)
     if st.buildings:

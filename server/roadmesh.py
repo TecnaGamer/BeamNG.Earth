@@ -194,8 +194,8 @@ def _resample(pts, step, keep_vertices=False, corner_half=0.0):
                 reach = corner_half * np.sqrt((1 - cos[j]) / (1 + cos[j]))
                 keep &= original | (np.abs(t - s[j + 1]) >= reach + 1e-8)
             t = t[keep]
-    return (np.stack([np.interp(t, s, pts[:, 0]), np.interp(t, s, pts[:, 1])], axis=1), t,
-            np.interp(t, s, pts[:, 2]))
+    return (np.stack([dnp.interp(t, s, pts[:, 0]), dnp.interp(t, s, pts[:, 1])], axis=1), t,
+            dnp.interp(t, s, pts[:, 2]))
 
 
 def _normals(xy):
@@ -242,7 +242,7 @@ def ribbons(chunks, keep_none=False):
             hw = float(c["w"]) / 2
             if c.get("ws") is not None and len(c["ws"]) == len(p):     # (tapering: roads.deck_width_fn)
                 s0 = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(p[:, :2], axis=0).T))]
-                hw = (np.interp(s - s[0], s0, np.asarray(c["ws"], np.float64)) / 2)[:, None]
+                hw = (dnp.interp(s - s[0], s0, np.asarray(c["ws"], np.float64)) / 2)[:, None]
             n = _normals(xy) * hw
             out[k] = (xy + n, xy - n, s / float(c.get("tl") or 10.0), c["m"], layer_of(c), z)
             LAYERS_OF_MAT.setdefault(c["m"], set()).add(out[k][4])
@@ -2187,7 +2187,7 @@ def _fill_short(g, k):
         return g
     for a, b in zip(nz[:-1], nz[1:]):
         if 1 < b - a <= k + 1:
-            g[a + 1:b] = np.interp(np.arange(a + 1, b), [a, b], [g[a], g[b]])
+            g[a + 1:b] = dnp.interp(np.arange(a + 1, b), [a, b], [g[a], g[b]])
     return g
 
 
@@ -2599,7 +2599,7 @@ def tunnel(chunks, origin, walls=()):
             cn = np.asarray(c["n"], np.float64)[:, :2]
             sc = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(cn, axis=0).T))]
             sm = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(mid, axis=0).T))]
-            gr = np.interp(sm * (sc[-1] / max(float(sm[-1]), 1e-9)), sc, np.asarray(c["ground"], np.float64))
+            gr = dnp.interp(sm * (sc[-1] / max(float(sm[-1]), 1e-9)), sc, np.asarray(c["ground"], np.float64))
             # (no cover under a hood: it is the tube's outside from its mouth back to the hill's face)
             for e_, f_ in enumerate(fits if c.get("portal") else ()):
                 if f_ is not None and (c.get("portal") or (False, False))[e_]:
@@ -2749,8 +2749,8 @@ def _tunnel_lamps(P, T, UV, M, nv, mid, u, z, hw, origin):
         jj = max(j - 1, 0)
         t = mid[j] - mid[jj]
         t = t / max(float(dnp.hypot(*t)), 1e-9)
-        p = np.array([np.interp(sc, s, mid[:, 0]), np.interp(sc, s, mid[:, 1])])
-        zc = float(np.interp(sc, s, z))
+        p = np.array([dnp.interp(sc, s, mid[:, 0]), dnp.interp(sc, s, mid[:, 1])])
+        zc = float(dnp.interp(sc, s, z))
         uu = u[j]
         for side in (-1.0, 1.0):
             e = p + uu * side * (hw - TUNNEL_LAMP_IN)

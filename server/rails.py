@@ -135,8 +135,8 @@ def _crossing_windows(xy, lines, extra=()):
     out = []
     for a, b in spans:
         inner = xy[(s > a) & (s < b)]
-        out.append(np.vstack([[np.interp(a, s, xy[:, 0]), np.interp(a, s, xy[:, 1])], inner,
-                              [np.interp(b, s, xy[:, 0]), np.interp(b, s, xy[:, 1])]]))
+        out.append(np.vstack([[dnp.interp(a, s, xy[:, 0]), dnp.interp(a, s, xy[:, 1])], inner,
+                              [dnp.interp(b, s, xy[:, 0]), dnp.interp(b, s, xy[:, 1])]]))
     return out
 
 

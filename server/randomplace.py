@@ -90,7 +90,7 @@ def road_spot(md, lat, lon, radius_m=SEARCH_M, classes=ROAD_CLASSES):
                 at = s[j] + t * (s[j + 1] - s[j])
                 if s[-1] > 2 * END_CLEAR_M:
                     at = min(max(at, END_CLEAR_M), s[-1] - END_CLEAR_M)
-                q = np.array([np.interp(at, s, xy[:, 0]), np.interp(at, s, xy[:, 1])])
+                q = np.array([dnp.interp(at, s, xy[:, 0]), dnp.interp(at, s, xy[:, 1])])
                 best = (d, float(lat + q[1] / M_LAT), float(lon + q[0] / (M_LAT * k)), c)
     return best[1:] if best else None
 

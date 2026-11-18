@@ -188,7 +188,7 @@ def apply_cuts(line, cuts, near=40.0):
     if s[-1] <= 0:
         return []
     t = np.linspace(0.0, s[-1], max(2, int(s[-1] / 0.5) + 1))
-    d = np.stack([np.interp(t, s, pts[:, c]) for c in range(pts.shape[1])], axis=1)
+    d = np.stack([dnp.interp(t, s, pts[:, c]) for c in range(pts.shape[1])], axis=1)
     keep = np.ones(len(d), bool)
     alongs = []
     for X, u, tc in cuts:
@@ -240,11 +240,11 @@ def ramp_ranges(run, ramps):
         m = (lateral < 40.0)
         if not m.any():
             continue
-        a = np.interp(t0, along[m], s[m]) if np.all(np.diff(along[m]) > 0) else None
-        b = np.interp(t1, along[m], s[m]) if np.all(np.diff(along[m]) > 0) else None
+        a = dnp.interp(t0, along[m], s[m]) if np.all(np.diff(along[m]) > 0) else None
+        b = dnp.interp(t1, along[m], s[m]) if np.all(np.diff(along[m]) > 0) else None
         if a is None and np.all(np.diff(along[m]) < 0):
-            a = np.interp(t0, along[m][::-1], s[m][::-1])
-            b = np.interp(t1, along[m][::-1], s[m][::-1])
+            a = dnp.interp(t0, along[m][::-1], s[m][::-1])
+            b = dnp.interp(t1, along[m][::-1], s[m][::-1])
         if a is None or b is None:
             continue
         lo, hi = min(a, b), max(a, b)
