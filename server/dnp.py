@@ -21,6 +21,7 @@ import fast
 
 _ef = fast.native(264, "dnp")
 _ef_interp = fast.native(441, "dnp.interp")
+_ef_mm = fast.native(472, "dnp.matmul")
 
 _ATAN2, _POW, _HYPOT = 32, 33, 34
 
@@ -135,41 +136,38 @@ def power(x, y):
     return _binary(_POW, a, b)
 
 
-def matmul(a, b):
-    """a @ b (numpy's matmul rules: 1-D operands promoted and their axis removed, stacks broadcast) as elementwise
-    products summed over k in a fixed order."""
+def _mm_operands(a, b):
+    """matmul's operands as the kernel takes them: (a, b) exact float64 / float32 arrays of the result dtype (numpy's
+    promotion: an operand cast to it, as the Python's ufuncs cast it), or (None, a @ b) of two integer / bool
+    operands (numpy's integer matmul: exact). Other dtypes (float16, longdouble, complex, objects) are refused."""
     a, b = np.asarray(a), np.asarray(b)
     if a.ndim == 0 or b.ndim == 0:
         raise ValueError("matmul: scalar operands are not allowed, use '*' instead")
     if a.dtype.kind not in "fc" and b.dtype.kind not in "fc":
-        return np.matmul(a, b)          # integers: exact
-    va, vb = a.ndim == 1, b.ndim == 1
-    if va:
-        a = a[None, :]
-    if vb:
-        b = b[:, None]
-    k = a.shape[-1]
-    if b.shape[-2] != k:
-        raise ValueError(f"matmul: shapes {a.shape} and {b.shape} not aligned")
-    if k == 0:
-        out = np.zeros(np.broadcast_shapes(a.shape[:-1] + (1,), b.shape[:-2] + (1, b.shape[-1])),
-                       np.result_type(a, b))
-    elif k <= 8:
-        out = a[..., :, 0:1] * b[..., 0:1, :]
-        for j in range(1, k):
-            out = out + a[..., :, j:j + 1] * b[..., j:j + 1, :]
-    else:
-        out = np.add.reduce(a[..., :, :, None] * b[..., None, :, :], axis=-2)
-    if va:
-        out = out[..., 0, :]
-    if vb:
-        out = out[..., 0]
-    return out if out.ndim else out[()]
+        return None, np.matmul(a, b)        # integers: exact
+    dt = np.result_type(a, b)
+    if dt.kind != "f" or dt.itemsize not in (4, 8):
+        raise TypeError(f"dnp.matmul: {dt} operands (float64 and float32 only: numpy's float16, longdouble and "
+                        "complex sums are not the kernel's)")
+    dt = np.float64 if dt.itemsize == 8 else np.float32
+    return a.astype(dt, copy=False), b.astype(dt, copy=False)
+
+
+def matmul(a, b):
+    """a @ b (numpy's matmul rules: 1-D operands promoted and their axis removed, stacks broadcast) as elementwise
+    products summed over k in a fixed order: the native kernel (earthfast 472, dmmatmul.rs: the order the numpy
+    arithmetic here had, BLAS's CPU-chosen kernels never asked)."""
+    if type(a) is _ND and type(b) is _ND and a.dtype is _F64D and b.dtype is _F64D:
+        return _ef_mm.dm_matmul(a, b)
+    a, b = _mm_operands(a, b)
+    return b if a is None else _ef_mm.dm_matmul(a, b)
 
 
 def dot(a, b):
     """np.dot for operands of up to 2 axes (and an N-axis a with a 1- or 2-axis b): matmul's products, a scalar
     operand multiplies."""
+    if type(a) is _ND and type(b) is _ND and a.dtype is _F64D and b.dtype is _F64D and a.ndim and 0 < b.ndim <= 2:
+        return _ef_mm.dm_matmul(a, b)
     a, b = np.asarray(a), np.asarray(b)
     if a.ndim == 0 or b.ndim == 0:
         return a * b
