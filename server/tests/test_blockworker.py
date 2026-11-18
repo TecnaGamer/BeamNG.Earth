@@ -731,12 +731,13 @@ class ParentPidTest(unittest.TestCase):
                 mock.patch.object(blockworker.multiprocessing, "parent_process", return_value=SimpleNamespace(pid=4242)):
             self.assertEqual(blockworker._parent_pid(), 4242)
 
-    def test_windows_without_a_parent_watches_none(self):
+    def test_windows_outside_multiprocessing_asks_getppid(self):
+        # test_process_lifecycle starts init() with subprocess.Popen: its parent guard must still run there.
         from unittest import mock
         with mock.patch.object(blockworker.os, "name", "nt"), \
-                mock.patch.object(blockworker.os, "getppid", side_effect=AssertionError("os.getppid called")), \
+                mock.patch.object(blockworker.os, "getppid", return_value=777), \
                 mock.patch.object(blockworker.multiprocessing, "parent_process", return_value=None):
-            self.assertIsNone(blockworker._parent_pid())
+            self.assertEqual(blockworker._parent_pid(), 777)
 
     def test_elsewhere_the_parent_is_getppids(self):
         if os.name == "nt":

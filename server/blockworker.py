@@ -468,10 +468,14 @@ def _watch_parent(ppid):
 def _parent_pid():
     """The server's process id, None where it cannot be known. Windows: multiprocessing's record of the process that
     started this one (the parent wrote its own id), not os.getppid(): CPython makes that of PssCaptureSnapshot, which
-    Wine does not have, so under Wine / CrossOver the call killed the worker at once (GitHub #1389)."""
+    Wine does not have, so under Wine / CrossOver the call killed the worker at once (GitHub #1389). A process that
+    multiprocessing did not start still asks os.getppid(), so its parent guard keeps working there."""
     if os.name == "nt":
         parent = multiprocessing.parent_process()
-        return parent.pid if parent is not None else None
+        if parent is not None:
+            return parent.pid
+        # Not a multiprocessing child (a server or test that started this process itself): only os.getppid() knows
+        # the parent. Real Windows has PssCaptureSnapshot; under Wine this path is not reached by the block pools.
     return os.getppid()
 
 
