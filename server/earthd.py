@@ -1083,14 +1083,32 @@ def predict_request(px, py, vx, vy, cx, cy, rule=FOLLOW_RULES[2048.0], at=None):
     return predict_centre(px + vx * t, py + vy * t, vx, vy, lead, reach, rule.grid, rule.min_lead, rule.min_lead_v)
 
 
-def prefer_ready(ready, px, py, vx, vy, tx, ty, cx, cy, reach, lim):
+def ready_reach(px, py, vx, vy, rx, ry, reach, rule=None):
+    """follow.lua readyReach: is a player at (px, py) moving (vx, vy) near enough to the ready centre (rx, ry) to take
+    its block? Within reach on both axes, and (rule: the block's follow table) a grid step more on an axis where the
+    block lies ahead and the player comes a grid step nearer within the lead, never past the fast mode's reach."""
+    far = reach if rule is None else min(reach + rule.grid, max(reach, rule.fast_reach))
+
+    def near(p, v, c):
+        d = c - p
+        return abs(d) <= reach or (abs(d) <= far and d * v > 0 and abs(v) * rule.lead >= rule.grid)
+    return near(px, vx, rx) and near(py, vy, ry)
+
+
+class Ready(set):
+    """The centres of the blocks built or being built that a mod takes for its targets (Connection.blocks_known). far:
+    it takes one a grid step past its reach too (follow.lua readyReach; hello.readySet 2)."""
+    far = False
+
+
+def prefer_ready(ready, px, py, vx, vy, tx, ty, cx, cy, reach, lim, rule=None):
     """follow.lua preferReady: the centre of `ready` the mod asks for at (px, py) moving (vx, vy) instead of its target
-    (tx, ty), or None: within lim (READY_STEPS grid steps) of the target, the player within reach of it, not the
-    current centre (cx, cy); the nearest to the target, then the one furthest along the way."""
+    (tx, ty), or None: within lim (READY_STEPS grid steps) of the target, the player within reach of it (ready_reach),
+    not the current centre (cx, cy); the nearest to the target, then the one furthest along the way."""
     best, bd, ba = None, math.inf, -math.inf
     for c in ready:
         d = max(abs(c[0] - tx), abs(c[1] - ty))
-        if d <= lim and max(abs(px - c[0]), abs(py - c[1])) <= reach and c != (cx, cy):
+        if d <= lim and ready_reach(px, py, vx, vy, c[0], c[1], reach, rule) and c != (cx, cy):
             along = (c[0] - px) * vx + (c[1] - py) * vy
             if d < bd or (d == bd and along > ba):
                 best, bd, ba = c, d, along
@@ -1103,7 +1121,7 @@ def _asked_for(c, where, vx, vy, cx, cy, rule, ready, out):
     if ready is None:
         return c
     r = prefer_ready(list(ready) + out, where[0], where[1], vx, vy, c[0], c[1], cx, cy, rule.mode(vx, vy)[1],
-                     READY_STEPS * rule.grid)
+                     READY_STEPS * rule.grid, rule if getattr(ready, "far", False) else None)
     return c if r is None else (float(r[0]), float(r[1]))
 
 
@@ -9399,7 +9417,8 @@ class Connection:
                 m["turbineGeo"] = TURBINE_GEO
             # ... and the far field's levels from 3 up as global tiles when it places those (hello.globalFar:
             # farfield.lua's GLOBAL_FAR; geotiles phase 3b, --global-far): built once, kept across rebases
-            self.ready_set = msg.get("readySet") == 1      # (the mod takes 'terrain_ready_set': follow.preferReady)
+            self.ready_set = msg.get("readySet") in (1, 2)     # (the mod takes 'terrain_ready_set': follow.preferReady)
+            self.ready_far = msg.get("readySet") == 2   # (... and a block a grid step past its reach: follow.readyReach)
             # (the mod slows the car before a bridge whose road tile has not come: deckguard.lua, deck_spans)
             self.deck_guard = msg.get("deckGuard") == deckspansmod.PROTO
             self.global_far = (geo and msg.get("globalFar") == farfield.GLOBAL_PROTO and bool(self.s.global_far)
@@ -11792,8 +11811,10 @@ class Connection:
         if px is None:
             px, py = self.focus
         busy = getattr(self, "prefetch_busy", ())
-        return {(float(cx), float(cy)) for (a, cx, cy) in list(self.s.hm) + list(self.s.hm_inflight) + list(busy)
-                if a == aid and max(abs(cx - px), abs(cy - py)) <= READY_SET_M}
+        known = Ready((float(cx), float(cy)) for (a, cx, cy) in list(self.s.hm) + list(self.s.hm_inflight) + list(busy)
+                      if a == aid and max(abs(cx - px), abs(cy - py)) <= READY_SET_M)
+        known.far = getattr(self, "ready_far", False)
+        return known
 
     def load_map_blocks(self, aid):
         """The loading map's terrain blocks of anchor aid: [[west, south, east, north], BLOCK_* state, s] (s: the build's
@@ -11897,7 +11918,9 @@ class Connection:
         for _a, kx, ky in keys:
             if (kx, ky) == (b.cx, b.cy) or (kx, ky) == cur:
                 continue
-            if max(abs(kx - b.cx), abs(ky - b.cy)) <= lim and max(abs(where[0] - kx), abs(where[1] - ky)) <= reach:
+            if max(abs(kx - b.cx), abs(ky - b.cy)) <= lim \
+                    and ready_reach(where[0], where[1], *self.vel, kx, ky, reach,
+                                    rule if getattr(self, "ready_far", False) else None):
                 return True
         return False
 

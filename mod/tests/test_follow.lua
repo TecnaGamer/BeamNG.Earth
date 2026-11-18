@@ -370,5 +370,74 @@ do
   T.check(a == 'prepare' and tx == 384 and ty == 128 and preferred == true, 'prepare marks a ready block as preferred: '
     .. tostring(a) .. ' ' .. tostring(tx) .. ' ' .. tostring(preferred))
   f.setReady({})
+  -- a built block one grid step further on than the target (the server's prediction asked a moment later): taken
+  -- when it lies ahead on an axis the car drives along; the car held 4.2 s for its neighbour (A2, 330 km/h, 2026-11-18)
+  local vx, vy = -80, -45
+  local px, py = -5700, -6850
+  tx, ty = f.target(px, py, vx, vy)
+  T.check(tx == -5888 and ty == -7040, 'the target: the furthest centre within reach: ' .. tx .. ' ' .. ty)
+  T.check(f.readyReach(px, py, vx, vy, -5888, -7168, f.REACH), 'a grid step further on, ahead: within the ready reach')
+  T.check(not f.readyReach(px, py, vx, vy, -5888, -7296, f.REACH), 'two steps: not')
+  T.check(not f.readyReach(px, py, vx, vy, -5888, -6432, f.REACH), 'a step further behind: not')
+  T.check(not f.readyReach(px, py, -92, 0, -5888, -7168, f.REACH), 'to the side of the way the car goes: not')
+  T.check(not f.readyReach(px, py, vx, -20, -5888, -7168, f.REACH), 'not a grid step nearer within the lookahead: not')
+  T.check(not f.readyReach(px, py, 3 * vx, 3 * vy, px - 500, py - 500, f.REACH_FAST), 'the fast mode: its own reach')
+  T.check(f.readyReach(px, py, 3 * vx, 3 * vy, px - 420, py - 420, f.REACH_FAST), '... as before')
+  f.setReady({ { -5888, -7168 } })
+  a, tx, ty, preferred = f.decide(px, py, vx, vy, -5504, -6912, nil, 0, 0)
+  T.check(a == 'prepare' and tx == -5888 and ty == -7168 and preferred == true, 'the built block is asked for: '
+    .. tostring(a) .. ' ' .. tostring(tx) .. ' ' .. tostring(ty))
+  local pend = { cx = -5888, cy = -7168, ready = true, preferred = true }
+  T.check(f.decide(px, py, vx, vy, -5504, -6912, pend, 0, 0, nil, 0.3) == nil, '... and kept until its commit')
+  T.check(f.decide(px + 1.5 * vx, py + 1.5 * vy, vx, vy, -5504, -6912, pend, 0, 0, nil, 0.3) == 'commit',
+    '... which comes 1.5 s on')
+  pend.preferred = nil
+  T.check(f.decide(px, py, vx, vy, -5504, -6912, pend, 0, 0, nil, 0.3) == 'discard', 'a target that far off: dropped')
+  f.setReady({})
+  -- drives round a bend, 108-520 km/h, the server's block for every request one grid step further on: taken (no block
+  -- built from scratch), and the car never nearer than 180 m to its block's edge (the fast mode's own margin: 90 m)
+  local function sgn(v) return v > 0 and 1 or (v < 0 and -1 or 0) end
+  local function bend(speed, hdg, turn)
+    local qx, qy, cx, cy, pending, t, moves, taken, minEdge = 0, 0, 0, 0, nil, 0, 0, 0, math.huge
+    while t < 120 do
+      t = t + 1 / 30
+      hdg = hdg + turn / 30
+      local wx, wy = speed * math.cos(math.rad(hdg)), speed * math.sin(math.rad(hdg))
+      qx, qy = qx + wx / 30, qy + wy / 30
+      if pending and not pending.ready and t >= pending.at then pending.ready = true end
+      if not pending then
+        local ux, uy = f.target(qx, qy, wx, wy)
+        f.setReady({ { ux + f.GRID * sgn(wx), uy + f.GRID * sgn(wy) } })
+      end
+      local act, nx, ny, pref = f.decide(qx, qy, wx, wy, cx, cy, pending, t, 0, nil, 0.05)
+      if act == 'prepare' then
+        pending = { cx = nx, cy = ny, at = t + 0.05, preferred = pref }
+        if pref then taken = taken + 1 end
+      elseif act == 'commit' then cx, cy, pending, moves = pending.cx, pending.cy, nil, moves + 1
+      elseif act == 'discard' then pending = nil end
+      local g0x, g0y, g1x, g1y = lattice.groundBox(cx, cy)
+      minEdge = math.min(minEdge, qx - g0x, g1x - qx, qy - g0y, g1y - qy)
+    end
+    return moves, taken, minEdge
+  end
+  local worst, least = math.huge, math.huge
+  for _, sp in ipairs({ 30, 60, 92, 120, 145 }) do
+    for _, turn in ipairs({ 0, 1.5, 4 }) do
+      for _, hdg in ipairs({ 0, 20, 45, 200 }) do
+        local moves, taken, edge = bend(sp, hdg, turn)
+        worst, least = math.min(worst, edge), math.min(least, taken / moves)
+      end
+    end
+  end
+  T.check(worst >= 180 and least >= 0.5, string.format(
+    'blocks a grid step further on: >= 180 m inside the edge (%.0f m), at least half of the moves taken from them (%.2f)',
+    worst, least))
+  f.setReady({})
+  -- the 2 km block: its reach is the fast mode's already
+  lattice.configure(1024, 2.0)
+  f.configure()
+  T.check(not f.readyReach(0, 0, 60, 0, 600, 0, f.REACH) and f.readyReach(0, 0, 60, 0, 420, 0, f.REACH), '2 km: as before')
+  lattice.configure(512, 2.0)
+  f.configure()
 end
 T.done('test_follow')

@@ -263,7 +263,10 @@ function M.decide(px, py, vx, vy, cx, cy, pending, now, retryAt, gate, latency)
       end
     end
     -- a prepared centre that would no longer keep the player 600 m inside its edges is useless
-    if pd > reach then return 'discard' end
+    -- (a block taken from the ready set a grid step further on, M.readyReach: kept while that still holds)
+    if pd > reach and not (pending.preferred and M.readyReach(px, py, vx, vy, pending.cx, pending.cy, reach)) then
+      return 'discard'
+    end
     return nil
   end
   -- the prepare test point: the player (fast mode: PREP_AHEAD_FAST_S ahead)
@@ -293,14 +296,31 @@ function M.setReady(list)
   end
   M.ready = r
 end
+-- Pure: is a player at (px, py) moving at (vx, vy) near enough to the ready centre (rx, ry) to take its block? Within
+-- reach on both axes, and a grid step more on an axis where the block lies ahead and the player comes a grid step
+-- nearer within LOOKAHEAD_S, never past REACH_FAST (the fast mode's own reach: the player is that far inside the edge
+-- behind it and drives away from it). The target is the furthest centre within reach, so a block the server built one
+-- grid step further on (its prediction asked a moment later than the mod did) was never within reach: left unused,
+-- its neighbour built from scratch and the car held at the edge 4.2 s (the A2 at Herford, 330 km/h, 2026-11-18).
+function M.readyReach(px, py, vx, vy, rx, ry, reach)
+  local far = min(reach + M.GRID, max(reach, M.REACH_FAST))
+  local function near(p, v, c)
+    local d = c - p
+    if abs(d) <= reach then return true end
+    return abs(d) <= far and d * v > 0 and abs(v) * M.LOOKAHEAD_S >= M.GRID
+  end
+  return near(px, vx or 0, rx) and near(py, vy or 0, ry)
+end
+
 -- Pure (but for M.ready): the ready centre to ask for instead of the target (tx, ty), or nil: within READY_STEPS grid
--- steps of it, keeping the player within reach, not the current centre; the nearest to the target, then the one
--- furthest along the way the player goes.
+-- steps of it, keeping the player within reach (M.readyReach), not the current centre; the nearest to the target, then
+-- the one furthest along the way the player goes.
 function M.preferReady(px, py, vx, vy, tx, ty, cx, cy, reach)
   local best, bd, ba = nil, math.huge, -math.huge
   for _, c in pairs(M.ready) do
     local d = M.cheb(c[1], c[2], tx, ty)
-    if d <= M.READY_STEPS * M.GRID and M.cheb(px, py, c[1], c[2]) <= reach and not (c[1] == cx and c[2] == cy) then
+    if d <= M.READY_STEPS * M.GRID and M.readyReach(px, py, vx, vy, c[1], c[2], reach)
+        and not (c[1] == cx and c[2] == cy) then
       local along = (c[1] - px) * (vx or 0) + (c[2] - py) * (vy or 0)
       if d < bd or (d == bd and along > ba) then best, bd, ba = c, d, along end
     end

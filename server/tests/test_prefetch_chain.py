@@ -1,6 +1,7 @@
 """A fast player's chain of predicted blocks (earthd.predict_chain): the next requests in order, each one predict_request
 from the last, along the path; none standing; no repeats."""
 import os
+import shutil
 import sys
 import unittest
 import unittest.mock
@@ -81,6 +82,67 @@ class PrefetchChainTest(unittest.TestCase):
                                              earthd.READY_STEPS * rule.grid), (256.0, 128.0))
         self.assertIsNone(earthd.prefer_ready({(0.0, 0.0)}, 129.0, 0.0, v, 0.0, 384.0, 0.0, 0.0, 0.0, rule.reach,
                                               earthd.READY_STEPS * rule.grid), "never the block in use")
+
+    def test_a_built_block_a_grid_step_further_on(self):
+        """The mod's target is the furthest centre within its reach, so a block built one grid step further on (the
+        prediction asked a moment later than the mod did) was never within reach of the player: not taken, its
+        neighbour built from scratch with the car held 4.2 s (the A2 at Herford, 330 km/h, 2026-11-18). It is taken
+        when it lies ahead on an axis the car drives along (follow.lua readyReach), and the chain counts on that."""
+        rule = earthd.FOLLOW_RULES[1024.0]
+        px, py, vx, vy = -5700.0, -6850.0, -80.0, -45.0
+        lim = earthd.READY_STEPS * rule.grid
+        self.assertEqual(earthd.predict_centre(px, py, vx, vy, rule.lead, rule.reach, rule.grid, rule.min_lead,
+                                               rule.min_lead_v), (-5888.0, -7040.0), "the mod's target")
+        built = {(-5888.0, -7168.0)}
+        take = lambda *a, **k: earthd.prefer_ready(built, *a, -5888.0, -7040.0, -5504.0, -6912.0, rule.reach, lim, **k)  # noqa: E731
+        self.assertEqual(take(px, py, vx, vy, rule=rule), (-5888.0, -7168.0))
+        self.assertIsNone(take(px, py, vx, vy), "by the reach alone: not")
+        self.assertIsNone(take(px, py, -92.0, 0.0, rule=rule), "to the side of the way the car goes: not")
+        self.assertIsNone(take(px, py, vx, -20.0, rule=rule), "not a grid step nearer within the lead: not")
+        self.assertFalse(earthd.ready_reach(px, py, vx, vy, -5888.0, -7296.0, rule.reach, rule), "two steps: not")
+        self.assertFalse(earthd.ready_reach(px, py, 3 * vx, 3 * vy, px - 500.0, py - 500.0, rule.fast_reach, rule),
+                         "the fast mode: its own reach")
+        big = earthd.FOLLOW_RULES[2048.0]
+        self.assertFalse(earthd.ready_reach(0.0, 0.0, 60.0, 0.0, 600.0, 0.0, big.reach, big), "the 2 km block: as before")
+        self.assertTrue(earthd.ready_reach(0.0, 0.0, 60.0, 0.0, 420.0, 0.0, big.reach, big))
+        # the chain counts on it for a mod that says so (hello.readySet 2: earthd.Ready.far), not for an older one
+        import numpy as np
+        road = np.array([[-100.0, 0.0], [6000.0, 0.0]])
+        known = earthd.Ready({(384.0 + 128.0, 0.0)})        # (built a grid step past the first target)
+        args = (road, 0.0, 0.0, 85.0, 0.0, 0.0, 0.0, rule, 3, None, 40.0, 5000.0)
+        self.assertEqual(earthd.predict_route_chain(*args, ready=known)[0], (384.0, 0.0), "an older mod: its target")
+        known.far = True
+        chain = earthd.predict_route_chain(*args, ready=known)
+        self.assertEqual(chain[:2], [(512.0, 0.0), (512.0 + 384.0, 0.0)], "taken, and the chain goes on from it")
+
+    @unittest.skipIf(shutil.which("luajit") is None, "luajit not installed")
+    def test_ready_reach_as_the_mod(self):
+        """ready_reach against follow.lua's readyReach, the 1 km and the 2 km block, on a lattice of cases."""
+        import subprocess
+        import tempfile
+        mod = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "mod", "beamng_earth", "lua", "ge",
+                           "extensions")
+        cases = [(vx, vy, dx, dy) for vx in (-160.0, -80.0, -20.0, 0.0, 30.0, 92.0) for vy in (-45.0, 0.0, 26.0, 70.0)
+                 for dx in (-520.0, -388.0, -300.0, -260.0, 0.0, 261.0, 388.0, 389.0) for dy in (-420.0, -388.0, 0.0, 300.0)]
+        for size, sq, rule in ((512, 2.0, earthd.FOLLOW_RULES[1024.0]), (1024, 2.0, earthd.FOLLOW_RULES[2048.0])):
+            lua = [f"package.path = [[{mod}/?.lua;]] .. package.path",
+                   "local lattice = require('beamngEarth/lattice')", f"lattice.configure({size}, {sq})",
+                   "local f = require('beamngEarth/follow')", "f.configure()", "local out = {}"]
+            for vx, vy, dx, dy in cases:
+                lua.append(f"out[#out + 1] = f.readyReach(0, 0, {vx}, {vy}, {dx}, {dy}, f.reachFor({vx}, {vy})) and '1' or '0'")
+            lua.append("io.write(table.concat(out))")
+            with tempfile.NamedTemporaryFile("w", suffix=".lua", delete=False) as fh:
+                fh.write("\n".join(lua))
+            try:
+                got = subprocess.run(["luajit", fh.name], capture_output=True, text=True, check=True).stdout
+            finally:
+                os.remove(fh.name)
+            want = "".join("1" if earthd.ready_reach(0.0, 0.0, vx, vy, dx, dy, rule.mode(vx, vy)[1], rule) else "0"
+                           for vx, vy, dx, dy in cases)
+            self.assertEqual(got, want, size)
+            self.assertIn("1", got)
+            self.assertIn("0", got)
+
 
 
 class RebaseChainTest(unittest.TestCase):

@@ -1225,7 +1225,9 @@ local function onMessage(msg)
       -- (the game's own user folder: the server checks it writes its files there, GitHub #770)
       userPath = (FS and FS.getUserPath) and FS:getUserPath() or nil,
       deckGuard = M._deckguard.PROTO,  -- (it slows the car before a bridge whose road tile is late: 'deck_spans')
-      readySet = 1 })      -- (it takes a built block near its target: follow.preferReady, 'terrain_ready_set')
+      -- (it takes a built block near its target: follow.preferReady, 'terrain_ready_set'; 2: also one a grid step
+      -- past its reach on the way it drives, follow.readyReach)
+      readySet = 2 })
     setStatus('Connected to companion server')
   elseif t == '_disconnected' then
     -- (a generation swap: before its commit it is dropped at the next frame's step; from its commit on it is stepped
