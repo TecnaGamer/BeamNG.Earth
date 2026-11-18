@@ -124,6 +124,54 @@ pub fn power_off_roads(py: Python<'_>, roads: PyReadonlyArray2<'_, f64>, ends: P
     Ok((best[0], best[1]))
 }
 
+/// m round a gantry's centre (along the line and across it) that must be inside the yard
+const GANTRY_FOOT_M: f64 = 1.0;
+/// m: the farthest a line end moves (across the line, and into the yard along it) to get its gantries inside
+const END_SHIFT_MAX_M: f64 = 12.0;
+const END_SHIFT_STEP_M: f64 = 0.5;
+
+/// A line end at (x, y) heading w into its substation: (x, y) itself when both its gantries (gantry_lat either side of
+/// it, across the line) stand with GANTRY_FOOT_M round them inside the yards' rings, else the nearest end (moved across
+/// the line or into the yard along it, END_SHIFT_STEP_M steps, END_SHIFT_MAX_M at most; nearest first, then across
+/// before along, left before right) where they do; (x, y) when none does or no yard is given (the user's report 95's
+/// review: a line end 4 m inside a side fence stood a gantry 1.8 m past it).
+fn gantries_inside(yards: &[Vec<(f64, f64)>], x: f64, y: f64, w: f64, gantry_lat: f64) -> (f64, f64) {
+    if yards.is_empty() {
+        return (x, y);
+    }
+    let (ax, ay) = (w.dcos(), w.dsin());           // along the line, into the yard
+    let (cx, cy) = (-ay, ax);                       // across it
+    let m = GANTRY_FOOT_M;
+    let fits = |ex: f64, ey: f64| {
+        [-gantry_lat, gantry_lat].iter().all(|&l| {
+            let (gx, gy) = (ex + cx * l, ey + cy * l);
+            [(0.0, 0.0), (m, 0.0), (-m, 0.0), (0.0, m), (0.0, -m)].iter()
+                .all(|&(a, c)| in_rings(yards, gx + ax * a + cx * c, gy + ay * a + cy * c))
+        })
+    };
+    if !in_rings(yards, x, y) || fits(x, y) {
+        return (x, y);
+    }
+    let steps = (END_SHIFT_MAX_M / END_SHIFT_STEP_M).round() as i64;
+    let mut cand: Vec<(i64, i64, i64)> = Vec::new();    // (squared steps, along, across)
+    for t in 0..=steps {
+        for s in -steps..=steps {
+            if (t, s) != (0, 0) && t * t + s * s <= steps * steps {
+                cand.push((t * t + s * s, t, s));
+            }
+        }
+    }
+    cand.sort_by_key(|&(d, t, s)| (d, t, -s));
+    for (_, t, s) in cand {
+        let (ex, ey) = (x + ax * t as f64 * END_SHIFT_STEP_M + cx * s as f64 * END_SHIFT_STEP_M,
+                        y + ay * t as f64 * END_SHIFT_STEP_M + cy * s as f64 * END_SHIFT_STEP_M);
+        if fits(ex, ey) {
+            return (ex, ey);
+        }
+    }
+    (x, y)
+}
+
 /// The towers, line ends and conductors of lines given as their vertices (n, 3) (x, y in the anchor frame, z the
 /// ground) with offsets (m + 1) and stop (n,): the vertex lies in a substation. Consecutive vertices closer than
 /// min_span merged. A tower at every vertex not in a substation, turned along the line (the bisector of its two spans;
@@ -135,20 +183,29 @@ pub fn power_off_roads(py: Python<'_>, roads: PyReadonlyArray2<'_, f64>, ends: P
 /// height over the ground at a tower; lateral offset and height at a line end, mirrored when the span comes in from
 /// the end's other side, gantry_front out of the gantries toward the line) to the same arm of the next tower or end, a
 /// parabola sagging sag x the span at its middle, seg_m apart. Only the towers in the box x0, y0, x1, y1 and the spans
-/// whose middle is in it; every end. (towers (t, 4) [x, y, z, yaw degrees counter-clockwise from +x], ends (e, 4)
-/// [x, y, z, heading radians], wire points (w, 3), wire offsets (k + 1)).
+/// whose middle is in it; every end. An end whose gantries (gantry_lat either side, across the line) would stand past
+/// the yards' rings (yard_pts (q, 2), yard_off: ring offsets; even-odd) moves with them to where they fit
+/// (gantries_inside), its conductors with it. (towers (t, 4) [x, y, z, yaw degrees counter-clockwise from +x], ends
+/// (e, 4) [x, y, z, heading radians], wire points (w, 3), wire offsets (k + 1)).
 #[pyfunction]
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub fn power_line_layout<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, off: PyReadonlyArray1<'py, i64>,
                               stop: PyReadonlyArray1<'py, bool>, arms: PyReadonlyArray2<'py, f64>, sag: f64,
                               seg_m: f64, min_span: f64, max_span: f64, dedupe_m: f64, end_merge_m: f64,
-                              gantry_front: f64, bx: [f64; 4])
+                              gantry_front: f64, bx: [f64; 4], yard_pts: PyReadonlyArray2<'py, f64>,
+                              yard_off: PyReadonlyArray1<'py, i64>, gantry_lat: f64)
                               -> (Bound<'py, PyArray2<f64>>, Bound<'py, PyArray2<f64>>, Bound<'py, PyArray2<f64>>,
                                   Bound<'py, PyArray1<i64>>) {
     let (pts, off, stop, arms) = (pts.as_array(), off.as_array(), stop.as_array(), arms.as_array());
+    let (yp, yo) = (yard_pts.as_array(), yard_off.as_array());
+    let yards: Vec<Vec<(f64, f64)>> = (0..yo.len().saturating_sub(1))
+        .map(|k| (yo[k] as usize..yo[k + 1] as usize).map(|i| (yp[[i, 0]], yp[[i, 1]])).collect())
+        .filter(|r: &Vec<(f64, f64)>| r.len() >= 3)
+        .collect();
     let inside = |x: f64, y: f64| x >= bx[0] && x < bx[2] && y >= bx[1] && y < bx[3];
     let mut towers: Vec<f64> = Vec::new();
     let mut ends: Vec<[f64; 4]> = Vec::new();
+    let mut mapped: Vec<[f64; 3]> = Vec::new();     // (each end's own vertex: the merge reads the mapped places)
     let mut taken: HashSet<(i64, i64)> = HashSet::new();
     let cell = |x: f64, y: f64| ((x / dedupe_m).round() as i64, (y / dedupe_m).round() as i64);
     // a new spot (none within dedupe_m made before)
@@ -207,11 +264,14 @@ pub fn power_line_layout<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, 
             // the span's line end (heading into the substation), a nearby earlier one if any
             let end = if st[i] { Some((a, head + std::f64::consts::PI)) } else if st[i + 1] { Some((b, head)) } else { None };
             let end = end.map(|(p, w)| {
-                match ends.iter().find(|e| (e[0] - p[0]).dhypot(e[1] - p[1]) < end_merge_m) {
-                    Some(e) => *e,
+                match mapped.iter().position(|e| (e[0] - p[0]).dhypot(e[1] - p[1]) < end_merge_m) {
+                    Some(k) => ends[k],
                     None => {
-                        ends.push([p[0], p[1], p[2], w]);
-                        [p[0], p[1], p[2], w]
+                        // (its gantries inside the yard: the end moved with them where one stood past the fence)
+                        let (x, y) = gantries_inside(&yards, p[0], p[1], w, gantry_lat);
+                        mapped.push(p);
+                        ends.push([x, y, p[2], w]);
+                        [x, y, p[2], w]
                     }
                 }
             });

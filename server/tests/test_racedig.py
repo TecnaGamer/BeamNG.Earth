@@ -270,6 +270,27 @@ class PropsTest(unittest.TestCase):
         self.assertEqual(props, [])
         self.assertEqual(len(wires), 1)
 
+    def test_a_span_goes_with_the_next_tiles_pole(self):
+        # Codex's review of 1bc9f8cb: the span is this tile's (its first pole's), the pole at its other end the next
+        # tile's, on the band (culled there); the wire's end 1 m off it and off the band went by no geometric test
+        import furniture
+        lines = [(np.array([[30.0, -100.0], [30.0, 100.0]]), 7.0)]          # the band to x = 30 + 7 + 2 = 39 ... 21
+        a = [furniture.G_POLE, -20.0, 0.0, 0.0, 0.0, 1.0, 9.2, 0.0]
+        b = [furniture.G_POLE, 38.5, 0.0, 0.0, 0.0, 1.0, 9.2, 0.0]           # (the next tile's row)
+        line = np.c_[np.linspace(-20.0, 39.6, 9), np.full(9, 0.0), np.full(9, 7.8)]
+        wires = furniture.with_ends([line], a, b) + [line.copy()]
+        props = [list(a)]
+        racedig.clear_props(props, wires, lines, lambda x, y: np.zeros(len(x)))
+        self.assertEqual(props, [a])
+        self.assertEqual(len(wires), 1)
+        self.assertIsNone(furniture.wire_ends(wires[0]))
+        # its pole on a deck over the track (5 m over the ground there): it stays, and the span with it
+        b2 = list(b)
+        b2[3] = 5.0
+        wires = furniture.with_ends([line], a, b2)
+        racedig.clear_props([list(a)], wires, lines, lambda x, y: np.zeros(len(x)))
+        self.assertEqual(len(wires), 1)
+
     def test_no_raceway_nothing_dropped(self):
         props = [["pole", 0.0, 0.0, 0.0, 0.0]]
         self.assertEqual(racedig.clear_props(props, [], [], None), 0)

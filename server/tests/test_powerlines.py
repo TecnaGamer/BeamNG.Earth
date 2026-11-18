@@ -19,13 +19,16 @@ from power_reference import margin as road_margin  # noqa: E402
 BOX = [-1e4, -1e4, 1e4, 1e4]
 
 
-def layout(lines, stop=None):
+def layout(lines, stop=None, yards=()):
     pts = np.ascontiguousarray(np.concatenate(lines), np.float64)
     off = np.cumsum([0] + [len(r) for r in lines]).astype(np.int64)
     stop = np.zeros(len(pts), bool) if stop is None else np.asarray(stop, bool)
+    yp = np.ascontiguousarray(np.concatenate(yards) if len(yards) else np.zeros((0, 2)), np.float64)
+    yo = np.cumsum([0] + [len(r) for r in yards]).astype(np.int64)
     return fast._ef.power_line_layout(pts, off, stop, powerlines.ARMS, powerlines.SAG, powerlines.SEG_M,
                                       powerlines.MIN_SPAN_M, powerlines.MAX_SPAN_M, powerlines.DEDUPE_M,
-                                      powerlines.END_MERGE_M, powerlines.GANTRY_FRONT, BOX)
+                                      powerlines.END_MERGE_M, powerlines.GANTRY_FRONT, BOX, yp, yo,
+                                      powerlines.GANTRY_LAT)
 
 
 def yard(rings, anchors=np.zeros((0, 3))):
@@ -78,6 +81,32 @@ class LineTest(unittest.TestCase):
         first = np.array([wp[a] for a in wo[:-1]])
         first = first[first[:, 0] > 250]
         self.assertTrue(np.allclose(np.sort(first[:, 1]), lat))
+
+    def test_gantries_inside_a_yard_near_its_fence(self):
+        # Codex's review of 1bc9f8cb (report 95): a line end 3 m inside a side fence put a gantry 2.8 m past it; the
+        # end moves with its gantries until both stand inside, its conductors with it
+        yard = square(0, -30, 60, 33)                   # its north fence at y = 3
+        line = np.array([[-200, 0, 0], [-100, 0, 0], [20, 0, 0], [40, 0, 0]], np.float64)
+        stop = [False, False, True, True]
+        _, ends0, _, _ = layout([line], stop)
+        self.assertTrue(np.allclose(ends0[0][:2], [20.0, 0.0]))     # (no yard given: where it was)
+        towers, ends, wp, wo = layout([line], stop, yards=[yard])
+        self.assertEqual(len(ends), 1)
+        ex, ey, _, w = ends[0]
+        g = powerlines.GANTRY_LAT
+        for side in (-1.0, 1.0):                        # both gantries (across the line) 1 m inside every fence
+            gx, gy = ex - np.sin(w) * g * side, ey + np.cos(w) * g * side
+            self.assertTrue(1.0 <= gx <= 59.0 and -29.0 <= gy <= 2.0, (gx, gy))
+        self.assertTrue(np.allclose([ex, ey], [20.0, -4.0]), (ex, ey))     # (the nearest end that fits: 4 m in)
+        last = np.array([wp[b - 1] for b in wo[1:]])
+        last = last[last[:, 0] > 0.0]                   # (the spans into the yard)
+        self.assertEqual(len(last), len(powerlines.ARMS))
+        self.assertTrue(np.allclose(last[:, 0], ex - powerlines.GANTRY_FRONT))    # the conductors on the moved gantries
+        self.assertTrue(np.allclose(np.sort(last[:, 1]) - ey,
+                                    [-g - 1.75, -g, -g + 1.75, g - 1.75, g, g + 1.75]))
+        # a yard with room: the end stays where it is
+        _, ends, _, _ = layout([line], stop, yards=[square(0, -30, 60, 60)])
+        self.assertTrue(np.allclose(ends[0][:2], [20.0, 0.0]))
 
     def test_ends_merge(self):
         # two lines ending 12 m apart: one end, both lines' conductors on it

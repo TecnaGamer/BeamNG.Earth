@@ -293,7 +293,7 @@ def _tile_lines(frame, tx, ty, md, elev, props, wires, clearance):
                     if len(ring) >= 2:
                         into += [(fid, r) for r in _near(frame, np.asarray(ring, np.float64), (x0, y0, x1, y1))]
     subs = _substations(frame, cells, md)
-    fast.require(82, "power_line_layout")
+    fast.require(431, "power_line_layout")
     ends = np.zeros((0, 4))
     for group, h, arms, clear_m, wire_r, these in ((G_PYLON, PYLON_H, ARMS, TOWER_ROAD_CLEAR_M, WIRE_R, lines),
                                                   (G_POLE, POLE_H, POLE_ARMS, POLE_ROAD_CLEAR_M, POLE_WIRE_R, poles)):
@@ -331,8 +331,12 @@ def _lay(frame, md, elev, subs, lines, group, h, arms, clear_m, wire_r, box, pro
             for ring in rings:
                 here ^= Path(ring).contains_points(pts[:, :2])
             stop |= here
+        rings = [np.asarray(r, np.float64)[:, :2] for _, rs in subs for r in rs]
+        yard_pts = np.ascontiguousarray(np.concatenate(rings) if rings else np.zeros((0, 2)), np.float64)
+        yard_off = np.cumsum([0] + [len(r) for r in rings]).astype(np.int64)
         towers, ends, wp, wo = fast._ef.power_line_layout(pts, off, stop, arms, SAG, SEG_M, MIN_SPAN_M, MAX_SPAN_M,
-                                                          DEDUPE_M, END_MERGE_M, GANTRY_FRONT, [x0, y0, x1, y1])
+                                                          DEDUPE_M, END_MERGE_M, GANTRY_FRONT, [x0, y0, x1, y1],
+                                                          yard_pts, yard_off, GANTRY_LAT)
         for x, y, zz, yaw in towers:
             row = [group, round(float(x), 2), round(float(y), 2), round(float(zz), 2), round(float(yaw), 1),
                    1.0, h, 0.0]

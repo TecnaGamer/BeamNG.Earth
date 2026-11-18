@@ -1026,17 +1026,15 @@ def lamp_lenses(rows):
 # Assemblies (the user's reports 56, 59, 66, 70 at Daytona and Atlanta, 2026-11-17: a utility pole culled, its
 # cobra-head arm 7 m up and the wire ending 0.8 m farther out left in the air): a row mounted on another goes or stays
 # with that row, never by its own place or height (racedig.clear_props, under_decks), and a culled support takes the
-# wires ending within its reach. The rules in Rust (earthfast propassembly: prop_assemblies, assembly_drop,
-# wire_ends_at_supports); here the rows' arrays and their lamps' heads (lamp_lenses).
-ASSEMBLY_KERNEL = 430
+# wires ending within its reach, and a span goes with the supports at its ends wherever they are (Span). The rules in
+# Rust (earthfast propassembly: assembly_cull, wire_cull); here the rows' arrays and their lamps' heads (lamp_lenses).
+ASSEMBLY_KERNEL = 431
 
 
-def assemblies(rows):
-    """(n,) int: the index of the row each of rows is mounted on (the root of a chain: a lens on a pole lamp is the
-    pole's), -1 for none: a pole lamp on the wire support at its x, y; a lens or glow on the lamp whose lamp_lenses row
-    it is. A mounted row with no such row among rows has -1 (judged by itself)."""
-    import fast
-    fast.require(ASSEMBLY_KERNEL, "furniture assemblies")
+def _assembly_arrays(rows):
+    """(names, group, xy, keys, heads) of rows for the assembly kernels: the groups' names and each row's index into
+    them, the rows' x, y, their x, y, z rounded to 1 cm, and their lamps' heads [row, group, x, y, z (1 cm)]
+    (lamp_lenses)."""
     names, index = [], {}
 
     def gi(g):
@@ -1052,26 +1050,52 @@ def assemblies(rows):
     heads = [[i, gi(lens[0])] + [round(float(v), 2) for v in lens[1:4]]
              for i, r in enumerate(rows) if len(r) >= 8 for lens in lamp_lenses([r])]
     heads = np.array(heads, np.float64).reshape(-1, 5)
-    return np.asarray(fast._ef.prop_assemblies(names, group, np.ascontiguousarray(xy), np.ascontiguousarray(keys),
-                                               np.ascontiguousarray(heads)), np.int64)
+    return names, group, np.ascontiguousarray(xy), np.ascontiguousarray(keys), np.ascontiguousarray(heads)
 
 
 def assembly_drop(hit, rows):
-    """(n,) bool: hit (a verdict per row of rows: culled) with every mounted row's its support's or lamp's."""
+    """(n,) bool: rows culled, from hit (each row judged alone): an assembly as one when any structural member is hit
+    (its support or post, a pole lamp on it), its lenses and glows following (earthfast assembly_cull)."""
     import fast
     fast.require(ASSEMBLY_KERNEL, "furniture assemblies")
-    return np.asarray(fast._ef.assembly_drop(np.ascontiguousarray(hit, bool), assemblies(rows)), bool)
+    names, group, xy, keys, heads = _assembly_arrays(rows)
+    return np.asarray(fast._ef.assembly_cull(names, group, xy, keys, heads, np.ascontiguousarray(hit, bool)), bool)
 
 
-def wire_ends_at(ends, culled):
-    """(m,) bool: wire ends (m, 2) within the reach of a wire support among the culled rows."""
+class Span(np.ndarray):
+    """A wire's points (k, 3) that know the support rows at their two ends (ends: (row at the first point, row at the
+    last)): a span is drawn by the tile of its first pole only, so the pole at its other end may be no row of this tile,
+    yet the wire must go when that pole is culled (Codex's review of 1bc9f8cb). Used as the points themselves."""
+    ends = None
+
+
+def with_ends(wires, a, b):
+    """wires (points, or (points, radius)) of one span tagged with its support rows a (at the first point) and b."""
+    out = []
+    for w in wires:
+        pts, r = w if isinstance(w, tuple) else (w, None)
+        span = np.asarray(pts).view(Span)
+        span.ends = (list(a), list(b))
+        out.append(span if r is None else (span, r))
+    return out
+
+
+def wire_ends(w):
+    """The support rows (a, b) at a wire's two ends (with_ends), or None."""
+    return getattr(w[0] if isinstance(w, tuple) else w, "ends", None)
+
+
+def wire_cull(ends, cut, culled):
+    """(m,) bool: wire ends (m, 2) that go: their own support culled (cut (m,)), or within the reach of a wire support
+    among the culled rows (earthfast wire_cull)."""
     import fast
     fast.require(ASSEMBLY_KERNEL, "furniture assemblies")
     ends = np.ascontiguousarray(np.asarray(ends, np.float64).reshape(-1, 2))
     names = sorted({str(r[0]) for r in culled})
     group = np.array([names.index(str(r[0])) for r in culled], np.int64)
     xy = np.array([[float(r[1]), float(r[2])] for r in culled], np.float64).reshape(-1, 2)
-    return np.asarray(fast._ef.wire_ends_at_supports(ends, names, group, np.ascontiguousarray(xy)), bool)
+    return np.asarray(fast._ef.wire_cull(ends, np.ascontiguousarray(cut, bool), names, group,
+                                         np.ascontiguousarray(xy)), bool)
 
 
 def roads_with_points(roads, points, extra_m, least=MAPPED_ALONG_MIN):
@@ -1145,9 +1169,18 @@ def under_decks(rows, decks, wires=None):
     if wires is not None:
         pts = [np.asarray(w[0] if isinstance(w, tuple) else w, np.float64) for w in wires]  # (PR #505: (points, style))
         at = np.zeros(2 * len(pts), bool)
-        if gone and pts:
+        # (each span's own supports judged alike, the next tile's pole too: with_ends)
+        sup = [(2 * n_ + k, q) for n_, w in enumerate(wires) for e in (wire_ends(w),) if e for k, q in enumerate(e)]
+        cut = np.zeros(2 * len(pts), bool)
+        if sup:
+            q = np.asarray([[r[1], r[2], r[3], r[3] + r[6]] for _, r in sup], np.float64)
+            hit = np.asarray(levels.blocked(np.ascontiguousarray(q[:, 0]), np.ascontiguousarray(q[:, 1]),
+                                            np.ascontiguousarray(q[:, 2]), np.ascontiguousarray(q[:, 3]),
+                                            float(DECK_HEADROOM_M)), bool)
+            cut[[j for j, _ in sup]] = hit
+        if (gone or cut.any()) and pts:
             ends = [[p[k, 0], p[k, 1]] if len(p) else [np.inf, np.inf] for p in pts for k in (0, -1)]
-            at = wire_ends_at(ends, gone)
+            at = wire_cull(ends, cut, gone)
         keep = []
         for n_, (entry, w) in enumerate(zip(wires, pts)):
             if not levels.wire_hit(np.ascontiguousarray(w[:, 0]), np.ascontiguousarray(w[:, 1]),
@@ -1453,6 +1486,11 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
     return under_decks(rows + lamp_lenses(rows), list(decks), wires)
 
 
+def _support_row(p):
+    """The props row of a run's pole (x, y, z, yaw, style): its pole's row as placed."""
+    return [p[4].group, p[0], p[1], p[2], p[3], 1.0, p[4].height, 0.0]
+
+
 def _own_spans(run, box):
     """The wires of the spans of a run of poles that start in the tile (each span drawn by one tile)."""
     x0, y0, x1, y1 = box
@@ -1461,7 +1499,8 @@ def _own_spans(run, box):
         if _owns(box, a[0], a[1]):
             sa, sb = a[4], b[4]
             if (sa.wire_anchors, sa.wire_radius) == (sb.wire_anchors, sb.wire_radius):
-                out.extend(wire_lines([a[:4], b[:4]], sa.wire_anchors, sa.wire_radius))
+                out.extend(with_ends(wire_lines([a[:4], b[:4]], sa.wire_anchors, sa.wire_radius),
+                                     _support_row(a), _support_row(b)))
             # Different electrical layouts (three conductors / one bundle): terminate
             # the run here. Inventing a three-to-one electrical connection is misleading;
             # dedicated transition hardware is outside this visual prototype's scope.

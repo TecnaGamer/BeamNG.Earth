@@ -103,7 +103,8 @@ def bands(frame, cells):
 # An assembly goes as one (furniture.assemblies; the user's reports 56, 59, 66, 70 at Daytona and Atlanta, 2026-11-17:
 # a lit raceway's utility pole 0.7 m inside the band went, its cobra-head arm 7 m up was taken for a prop on a deck
 # over the track and stayed, and of its three wires the one ending 0.8 m farther out stayed: an arm and one wire in the
-# air). A wire with an end within a dropped support's reach goes with it (furniture.wire_ends_at; in Rust).
+# air). A wire with an end within a dropped support's reach, or whose own end support goes (this tile's or the
+# next's: furniture.with_ends), goes with it (furniture.wire_cull; in Rust).
 
 
 def clear_props(props, wires, lines, ground=None):
@@ -111,7 +112,7 @@ def clear_props(props, wires, lines, ground=None):
     radius)) without those inside a raceway's carriageway + PROP_CLEAR_M (lines: bands()), in place; a prop standing
     PROP_DECK_M or more over the ground there (ground(x (n,), y (n,)) -> z, the graded ground; None: none kept) is on
     a deck over the track and stays. A row mounted on another (furniture.assemblies) goes or stays with it. Wires:
-    those with an end on the band or at a dropped support (furniture.wire_ends_at) go."""
+    those with an end on the band, at a dropped support or whose end's own support goes (furniture.wire_cull) go."""
     if not lines:
         return 0
     dropped = 0
@@ -134,19 +135,32 @@ def clear_props(props, wires, lines, ground=None):
             dropped += len(props) - len(keep)
             props[:] = keep
     if wires:
-        ends, which = [], []
+        import furniture
+        ends, which, sup = [], [], []
         for n_, w in enumerate(wires):
             pts = w[0] if isinstance(w, tuple) else w
             if len(pts) >= 1:
-                ends.append([float(pts[0][0]), float(pts[0][1])])
-                ends.append([float(pts[-1][0]), float(pts[-1][1])])
+                own = furniture.wire_ends(w)
+                for k, p in enumerate((pts[0], pts[-1])):
+                    if own:
+                        sup.append((len(ends), own[k]))
+                    ends.append([float(p[0]), float(p[1])])
                 which += [n_, n_]
         if ends:
             ends = np.array(ends, np.float64)
             bad = near(ends, lines, PROP_CLEAR_M)
-            if culled:
-                import furniture
-                bad |= furniture.wire_ends_at(ends, culled)
+            cut = np.zeros(len(ends), bool)
+            if sup:                 # (each span's own supports judged as the props are, the next tile's pole too)
+                q = np.array([[float(r[1]), float(r[2])] for _, r in sup], np.float64)
+                gone = near(q, lines, PROP_CLEAR_M)
+                if gone.any() and ground is not None:
+                    k = np.flatnonzero(gone)
+                    gz = np.asarray(ground(q[k, 0], q[k, 1]), np.float64)
+                    pz = np.array([float(sup[j][1][3]) for j in k], np.float64)
+                    gone[k[pz - gz >= PROP_DECK_M]] = False
+                cut[[j for j, _ in sup]] = gone
+            if culled or cut.any():
+                bad |= furniture.wire_cull(ends, cut, culled)
             drop = {which[j] for j in np.flatnonzero(bad).tolist()}
             if drop:
                 wires[:] = [w for n_, w in enumerate(wires) if n_ not in drop]

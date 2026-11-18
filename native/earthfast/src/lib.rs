@@ -6606,11 +6606,13 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(roadnet::splitlayer::lane_split_layer, m)?)?;
     // 403: R2a's lane section layer (roadnet::splitlayer::lane_split_layer = lanesections.split's new-layer assembly:
     // the columns gathered, the sections' values, LANE_MAX, the geometry and rule rows, the cut points' connectors)
-    m.add_function(wrap_pyfunction!(propassembly::prop_assemblies, m)?)?;
-    m.add_function(wrap_pyfunction!(propassembly::assembly_drop, m)?)?;
-    m.add_function(wrap_pyfunction!(propassembly::wire_ends_at_supports, m)?)?;
-    // 430: street furniture assemblies culled as one (propassembly: prop_assemblies = furniture.assemblies'
-    // matching, assembly_drop, wire_ends_at_supports = the wire supports' reach; racedig.clear_props, under_decks)
-    m.add("VERSION", 430)?;
+    m.add_function(wrap_pyfunction!(propassembly::assembly_cull, m)?)?;
+    m.add_function(wrap_pyfunction!(propassembly::wire_cull, m)?)?;
+    // 430: street furniture assemblies culled as one (propassembly; racedig.clear_props, under_decks)
+    // 431: Codex's review of 1bc9f8cb: assembly_cull (any structural member culls the assembly, lenses follow;
+    // replaces prop_assemblies / assembly_drop), wire_cull (a span goes with its end supports culled in this tile or
+    // the next; replaces wire_ends_at_supports); power_line_layout takes the yards' rings and the gantries' offset (a
+    // line end moved with its gantries inside the fence)
+    m.add("VERSION", 431)?;
     Ok(())
 }

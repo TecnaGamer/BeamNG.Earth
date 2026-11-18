@@ -6,8 +6,10 @@
 //! - prop_assemblies: the row each row is mounted on (the root of a chain), -1 for none: a pole lamp ("polelamp") on
 //!   the wire support at its x, y (both rounded to MOUNT_M); a lens or a glow on the lamp whose head it is (the heads
 //!   given: furniture.lamp_lenses' rows of each row, rounded to 1 cm, matched exactly).
-//! - assembly_drop: a mounted row's verdict its root's.
-//! - wire_ends_at_supports: which wire ends lie within support_reach of a culled support among the culled rows.
+//! - assembly_cull: an assembly culled as one when any structural member is (its support or post, a pole lamp on it);
+//!   lenses and glows follow.
+//! - wire_cull: a wire end goes with its own support (culled in this tile or the next) or a culled support within
+//!   support_reach.
 //!
 //! Rounding and the distances as the Python they replace: round(x / MOUNT_M) to even, the libm hypot (Dm), compared
 //! with <=: the same rows and wires as before, bit for bit.
@@ -110,49 +112,61 @@ pub fn assemblies(names: &[String], group: &[i64], xy: &[[f64; 2]], keys: &[[f64
     parent
 }
 
-/// furniture.assemblies' kernel: (n,) the row each row is mounted on (the root of a chain), -1 for none. names: the
-/// groups' names, group (n,) each row's index into them, xy (n, 2) the rows' x, y, keys (n, 3) their x, y, z rounded to
-/// 1 cm, heads (h, 5) [row, group index, x, y, z (1 cm)]: furniture.lamp_lenses' rows of each row.
+/// The assemblies' verdicts: (n,) culled per row from hit (n,) (each row judged alone), an assembly culled as one when
+/// any of its structural members is (its support or post and a pole lamp on it: a clear pole whose arm reaches into a
+/// deck goes with its arm; Codex's review of 1bc9f8cb), its lenses and glows following (never culling it: a post beside
+/// a deck whose head reaches under the deck's side keeps its lens). names, group, xy, keys, heads: assemblies'.
+pub fn cull(names: &[String], group: &[i64], xy: &[[f64; 2]], keys: &[[f64; 3]], heads: &[[f64; 5]], hit: &[bool])
+            -> Vec<bool> {
+    let n = group.len().min(hit.len());
+    let parent = assemblies(names, &group[..n], &xy[..n], &keys[..n], heads);
+    let name = |i: usize| names.get(group[i] as usize).map(String::as_str).unwrap_or("");
+    let root = |i: usize| if parent[i] >= 0 { parent[i] as usize } else { i };
+    let mut out = vec![false; n];
+    for i in 0..n {
+        if hit[i] && (parent[i] < 0 || name(i) == POLELAMP) {
+            out[root(i)] = true;
+        }
+    }
+    (0..n).map(|i| if parent[i] >= 0 { out[root(i)] } else { out[i] || hit[i] }).collect()
+}
+
+/// cull's kernel (furniture.assembly_drop): names (the groups' names), group (n,) each row's index into them, xy (n, 2)
+/// the rows' x, y, keys (n, 3) their x, y, z rounded to 1 cm, heads (h, 5) [row, group index, x, y, z (1 cm)]:
+/// furniture.lamp_lenses' rows of each row; hit (n,) each row's own verdict.
 #[pyfunction]
-pub fn prop_assemblies<'py>(py: Python<'py>, names: Vec<String>, group: PyReadonlyArray1<'py, i64>,
-                            xy: PyReadonlyArray2<'py, f64>, keys: PyReadonlyArray2<'py, f64>,
-                            heads: PyReadonlyArray2<'py, f64>) -> Bound<'py, PyArray1<i64>> {
-    let (g, xv, kv, hv) = (group.as_array(), xy.as_array(), keys.as_array(), heads.as_array());
+#[allow(clippy::too_many_arguments)]
+pub fn assembly_cull<'py>(py: Python<'py>, names: Vec<String>, group: PyReadonlyArray1<'py, i64>,
+                          xy: PyReadonlyArray2<'py, f64>, keys: PyReadonlyArray2<'py, f64>,
+                          heads: PyReadonlyArray2<'py, f64>, hit: PyReadonlyArray1<'py, bool>)
+                          -> Bound<'py, PyArray1<bool>> {
+    let (g, xv, kv, hv, h) = (group.as_array(), xy.as_array(), keys.as_array(), heads.as_array(), hit.as_array());
     let n = g.len();
     let gs: Vec<i64> = g.iter().copied().collect();
     let xs: Vec<[f64; 2]> = (0..n).map(|i| [xv[[i, 0]], xv[[i, 1]]]).collect();
     let ks: Vec<[f64; 3]> = (0..n).map(|i| [kv[[i, 0]], kv[[i, 1]], kv[[i, 2]]]).collect();
     let hs: Vec<[f64; 5]> = (0..hv.shape()[0]).map(|k| [hv[[k, 0]], hv[[k, 1]], hv[[k, 2]], hv[[k, 3]], hv[[k, 4]]])
         .collect();
-    assemblies(&names, &gs, &xs, &ks, &hs).into_pyarray(py)
+    let hits: Vec<bool> = h.iter().copied().collect();
+    cull(&names, &gs, &xs, &ks, &hs, &hits).into_pyarray(py)
 }
 
-/// (n,) a verdict per row (hit: culled) with every mounted row's (parent >= 0, the root's index) its root's.
+/// (m,) for wire ends (m, 2): does the wire go there? Its own support culled (cut (m,): the support at that end, in
+/// this tile or the next, judged by the same rules: a span is drawn by the tile of its first pole, so the culled pole
+/// at its other end was no row here; Codex's review of 1bc9f8cb), or within support_reach of one of the culled rows
+/// (names[group[k]], xy (k, 2)) that carries wires (wire_support).
 #[pyfunction]
-pub fn assembly_drop<'py>(py: Python<'py>, hit: PyReadonlyArray1<'py, bool>, parent: PyReadonlyArray1<'py, i64>)
-                          -> Bound<'py, PyArray1<bool>> {
-    let (h, p) = (hit.as_array(), parent.as_array());
-    let out: Vec<bool> = (0..h.len()).map(|i| {
-        let j = p.get(i).copied().unwrap_or(-1);
-        if j >= 0 && (j as usize) < h.len() { h[j as usize] } else { h[i] }
-    }).collect();
-    out.into_pyarray(py)
-}
-
-/// (m,) for wire ends (m, 2): within support_reach of one of the culled rows (names[group[k]], xy (k, 2)) that carries
-/// wires (wire_support)?
-#[pyfunction]
-pub fn wire_ends_at_supports<'py>(py: Python<'py>, ends: PyReadonlyArray2<'py, f64>, names: Vec<String>,
-                                  group: PyReadonlyArray1<'py, i64>, xy: PyReadonlyArray2<'py, f64>)
-                                  -> Bound<'py, PyArray1<bool>> {
-    let (e, g, xv) = (ends.as_array(), group.as_array(), xy.as_array());
+pub fn wire_cull<'py>(py: Python<'py>, ends: PyReadonlyArray2<'py, f64>, cut: PyReadonlyArray1<'py, bool>,
+                      names: Vec<String>, group: PyReadonlyArray1<'py, i64>, xy: PyReadonlyArray2<'py, f64>)
+                      -> Bound<'py, PyArray1<bool>> {
+    let (e, c, g, xv) = (ends.as_array(), cut.as_array(), group.as_array(), xy.as_array());
     let sup: Vec<(f64, f64, f64)> = (0..g.len()).filter_map(|k| {
         let nm = names.get(g[k] as usize).map(String::as_str).unwrap_or("");
         wire_support(nm).then(|| (xv[[k, 0]], xv[[k, 1]], support_reach(nm)))
     }).collect();
     let out: Vec<bool> = (0..e.shape()[0]).map(|i| {
         let (x, y) = (e[[i, 0]], e[[i, 1]]);
-        sup.iter().any(|&(sx, sy, r)| (x - sx).dhypot(y - sy) <= r)
+        c.get(i).copied().unwrap_or(false) || sup.iter().any(|&(sx, sy, r)| (x - sx).dhypot(y - sy) <= r)
     }).collect();
     out.into_pyarray(py)
 }

@@ -13,6 +13,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import furniture  # noqa: E402
+import poleprofiles  # noqa: E402
 import roads  # noqa: E402
 
 
@@ -548,6 +549,46 @@ class RoundaboutTest(unittest.TestCase):
         self.assertTrue(furniture.junction_controls(arms, None), "three major arms: signals without the ring")
         self.assertEqual(furniture.junction_controls(arms, None, ring={"r1", "r2"}),
                          [(arms[2], furniture.G_YIELD)], "give-way on the entry, no signals on the ring")
+
+
+class UnderDeckAssemblyReviewTest(unittest.TestCase):
+    """Codex's review of 1bc9f8cb."""
+
+    def test_a_clear_pole_goes_with_its_blocked_arm(self):
+        # the pole just outside a deck's side (6.5 m off its centreline), its arm (on it: the same 5 cm cell) just
+        # inside, under the deck 8 m up: the arm would go through it, so the pole goes too, wires and all
+        deck = (np.array([[-50.0, 0.0, 8.0], [50.0, 0.0, 8.0]]), 5.5)
+        pole = [furniture.G_POLE, 0.0, 6.52, 0.0, 0.0, 1.0, 9.2, 0.0]
+        arm = [furniture.G_POLELAMP, 0.0, 6.48, furniture.POLE_LAMP_Z, 0.0, 1.0, 1.1, 0.0]
+        rows = [pole, arm] + furniture.lamp_lenses([arm])
+        wires = [np.array([[0.0, 7.32, 7.8], [0.0, 47.0, 7.8]])]
+        self.assertEqual(furniture.under_decks(rows, [deck], wires), [])
+        self.assertEqual(wires, [])
+
+    def test_a_span_goes_with_the_next_tiles_pole(self):
+        # a span drawn by its first pole's tile (this one): the pole at its other end is the next tile's, under a deck
+        # there (culled in that tile), its wire end 1 m off the deck's footprint and 4 m above the deck's reach of it:
+        # the wire went by no geometric test; it goes with its support now
+        deck = (np.array([[35.0, -6.0, 9.4], [60.0, -6.0, 9.4]]), 5.5)        # its side at y = 0.5
+        a = [furniture.G_POLE, 0.0, 0.2, 0.0, 90.0, 1.0, 9.2, 0.0]
+        b = [furniture.G_POLE, 40.0, 0.2, 0.0, 90.0, 1.0, 9.2, 0.0]          # (no row of this tile)
+        line = np.c_[np.linspace(0.0, 40.0, 9), np.full(9, 1.0), np.full(9, 7.8)]
+        wires = furniture.with_ends([line], a, b) + [line.copy()]
+        self.assertEqual(furniture.wire_ends(wires[0])[1][1], 40.0)
+        out = furniture.under_decks([a], [deck], wires)
+        self.assertEqual(out, [a])
+        self.assertEqual(len(wires), 1, "the tagged span goes, the untagged copy stays (no geometric reason)")
+        self.assertIsNone(furniture.wire_ends(wires[0]))
+
+    def test_spans_carry_their_poles_rows(self):
+        style = poleprofiles.STOCK
+        run = [(0.0, 0.0, 1.0, 90.0, style), (40.0, 0.0, 2.0, 90.0, style), (80.0, 0.0, 3.0, 90.0, style)]
+        wires = furniture._own_spans(run, (-10.0, -10.0, 30.0, 10.0))      # (only the first span starts in the box)
+        self.assertEqual(len(wires), len(furniture.WIRE_ARMS))
+        for w in wires:
+            a, b = furniture.wire_ends(w)
+            self.assertEqual(a, [style.group, 0.0, 0.0, 1.0, 90.0, 1.0, style.height, 0.0])
+            self.assertEqual(b[1:4], [40.0, 0.0, 2.0])
 
 
 class UnderDeckTest(unittest.TestCase):
