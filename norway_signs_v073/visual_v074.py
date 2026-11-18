@@ -118,7 +118,27 @@ def _icon(im,draw,part,rect,path,direction=None):
         poly([(.08,.85),(.08,.45),(.28,.58),(.28,.38),(.48,.53),(.48,.31),(.70,.48),(.74,.48),(.74,.12),(.85,.12),(.85,.85)])
 
 
-def render(row,lines,canvas=None):
+def letter_height_mm(row):
+    """Use the surveyed letter height, or one common estimate for unsurveyed panels."""
+    try:
+        mm = float(row.get('text_height_mm'))
+    except (ValueError, TypeError, OverflowError):
+        return 120.0
+    return mm if 35 <= mm <= 650 else 120.0
+
+
+def sign_font_path():
+    path = Path(__file__).resolve().parent.parent / 'data' / 'fonts' / 'Overpass-Bold.ttf'
+    return path if path.is_file() else Path('DejaVuSansCondensed.ttf')
+
+
+def nominal_em(cap_height, path):
+    # Pillow sizes a font by its em. NVDB measures the actual letter.
+    bounds = sh.font(200, path).getbbox('H')
+    return cap_height * 200 / max(1, bounds[3] - bounds[1])
+
+
+def render(row,lines,canvas=None,*,physical_height_m=None):
     from .layout_v077 import content_rows,wrap
     kind=str(row['kind']);code=str(row['code'])
     W,H=canvas or (1024,384)
@@ -127,9 +147,17 @@ def render(row,lines,canvas=None):
     tourist=code=='723.31'
     bg,fg=((143,70,28),(255,255,255)) if tourist else COLORS[row['color']]
     im=Image.new('RGB',(w,h),bg);draw=ImageDraw.Draw(im)
-    path=Path(__file__).resolve().parent.parent/'data'/'fonts'/'Overpass-Bold.ttf'
-    if not path.is_file():path=Path('DejaVuSansCondensed.ttf')
+    path = sign_font_path()
+    if physical_height_m is None:
+        physical_height_m = max(.25, float(row.get('height_mm') or 400) / 1000)
+    cap = h * letter_height_mm(row) / (1000 * physical_height_m)
     rows=content_rows(lines,kind)
+    if kind == '713':
+        # A trailing row containing only badges belongs to the single
+        # destination. Keep genuinely separate destinations on their own rows.
+        named = [r for r in rows if r[0]]
+        if len(named) == 1:
+            rows = [(named[0][0], named[0][1], [b for r in rows for b in r[2]])]
     if kind=='723' and not tourist:
         label=sh.route_label([p for line in lines for p in line])
         if not label:raise ValueError('Route marker has no number')
@@ -168,14 +196,16 @@ def render(row,lines,canvas=None):
     if shared:
         badges=shared;rows=[(t,d,[]) for t,d,_ in rows]
         if kind=='725' and len(rows)>1:
-            size=min(h*.20,(right-left)*.25)
-            bx=left
+            factors = [1.50 if part[0] == 'route' else 1 for part in badges]
+            gap = unit * .035
+            size = min(cap * 1.45, h * .22, (right-left-gap*(len(badges)-1))/sum(factors))
+            bx = (left+right-size*sum(factors)-gap*(len(badges)-1)) / 2
             for part in badges:
                 bw=size*(1.50 if part[0]=='route' else 1)
-                _icon(im,draw,part,(bx,top,bw,size),path);bx+=bw+unit*.07
+                _icon(im,draw,part,(bx,top,bw,size),path);bx+=bw+gap
             top+=size+unit*.065
         else:
-            size=min(h*(.65 if kind=='713' else .56 if kind=='711' else .43),(right-left)/max(3,len(badges)*2.3))
+            size=min(cap*1.55, h*.64, (right-left)/max(3,len(badges)*2.3))
             if tourist:size=min(h*.70,(right-left)*.22)
             for part in badges:
                 bw=size*(1.50 if part[0]=='route' else 1)
@@ -184,22 +214,40 @@ def render(row,lines,canvas=None):
                 else:
                     _icon(im,draw,part,(left,(h-size)/2,bw,size),path,direction=side or arrow);left+=bw+unit*.09
     # Balance wrapping at a readable size before reducing the uniform font.
-    preferred=min(h*(.56 if kind in ('711','713') else .34),(bottom-top)/max(1,len(rows))*.65)
-    if kind=='725':preferred=min(h*(.50 if len(rows)==1 else .23),(bottom-top)/max(1,len(rows))*.62)
-    chosen=None
-    for size in range(max(6,int(preferred)),5,-1):
-        f=sh.font(size,path);wrapped=[];max_width=0
-        for text,dist,badges in rows:
-            reserve=size*1.9*len(badges)
-            dw=draw.textlength(dist,font=f)+size*.8 if dist else 0
-            width=max(10,right-left-reserve-dw)
-            ls=wrap(draw,text,f,width)
+    def fit_rows(size):
+        f = sh.font(size, path)
+        wrapped = []
+        for text, dist, badges in rows:
+            reserve = size * 1.9 * len(badges)
+            dw = draw.textlength(dist,font=f) + size * .6 if dist else 0
+            width = right - left - reserve - dw
+            if width < 1:
+                return None
+            ls = wrap(draw, text, f, width)
             for j,line in enumerate(ls):
+                if draw.textlength(line,font=f) > width:
+                    return None
                 wrapped.append((line,dist if j==len(ls)-1 else '',badges if j==0 else [],reserve,dw))
-                max_width=max(max_width,draw.textlength(line,font=f)-width)
-        line_height=size*1.27
-        if len(wrapped)*line_height<=bottom-top and max_width<=0:
-            chosen=(f,wrapped,line_height,size);break
+        line_height = size * 1.16
+        if len(wrapped) * line_height <= bottom - top:
+            return f, wrapped, line_height, size
+        return None
+
+    # Try the intended physical size first. Short names never expand to fill
+    # spare room. Binary search is only needed when a board is too crowded.
+    hi = max(6, round(nominal_em(cap, path)))
+    chosen = fit_rows(hi)
+    if chosen is None:
+        lo = 6
+        hi -= 1
+        while lo <= hi:
+            mid = (lo + hi) // 2
+            candidate = fit_rows(mid)
+            if candidate is None:
+                hi = mid - 1
+            else:
+                chosen = candidate
+                lo = mid + 1
     if chosen is None:raise ValueError('Content cannot fit without clipping')
     f,wrapped,line_height,size=chosen
     if kind=='725':line_height=(bottom-top)/max(1,len(wrapped))

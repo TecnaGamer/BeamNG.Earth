@@ -343,6 +343,10 @@ def face_of(row, frame):
     e, n, _ = frame.geodetic_to_enu(np.array([lat, rlat]), np.array([lon, rlon]), np.zeros(2))
     q = np.array([e[0], n[0]], float)
     ref = np.array([e[1], n[1]], float)
+    return _face_from_xy(row, q, ref)
+
+
+def _face_from_xy(row, q, ref):
     off = q - ref
     dist = float(np.linalg.norm(off))
     if not np.isfinite(off).all() or not 1.2 <= dist <= 25.0:
@@ -428,7 +432,14 @@ def _runs_plain(lines, *, shape):
 def _draw_face(row, *, canvas=None):
     """Visual-only v0.7.4 renderer; NVDB interpretation and facing are unchanged."""
     from norway_signs_v073 import visual_v074
-    return visual_v074.render(row, _runs_plain(_render_lines(row), shape=row['kind']), canvas=canvas or _texture_canvas(row))
+    canvas = canvas or _texture_canvas(row)
+    if row['kind'] in PRIORITY:
+        from PIL import Image
+        asset = Path(__file__).parent / 'norway_signs_v073' / ('priority_' + row['kind'] + '.png')
+        with Image.open(asset) as art:
+            return art.convert('RGB').resize(canvas, Image.Resampling.LANCZOS)
+    return visual_v074.render(row, _runs_plain(_render_lines(row), shape=row['kind']),
+                              canvas=canvas, physical_height_m=_tile_dimensions(row)[1])
 
 
 def _arrow_symbol(draw, code, x, y, size, color):
@@ -465,13 +476,15 @@ def _font_for(draw, text, path, preferred, max_w):
 
 
 def _face_filename(row, out_dir):
-    from PIL import Image
     import imagery
-    key = hashlib.sha256(json.dumps(['0.8.2',row['code'],row['text'],row['color'],_texture_canvas(row)],
-                                    ensure_ascii=False, sort_keys=True).encode('utf-8')).hexdigest()[:18]
+    from norway_signs_v073.visual_v074 import letter_height_mm
+    canvas = _texture_canvas(row)
+    key_data = ['0.8.2', row['code'], row['text'], row['color'], canvas]
+    if row['kind'] != '723' or row['code'] == '723.31':
+        key_data = ['0.8.4', *key_data[1:], _tile_dimensions(row), letter_height_mm(row)]
+    key = hashlib.sha256(json.dumps(key_data, ensure_ascii=False, sort_keys=True).encode('utf-8')).hexdigest()[:18]
     name = 'bne_no_nvdb_%s' % key
     path = Path(out_dir) / (name + '.dds')
-    canvas = _texture_canvas(row)
     # Existing output already has the exact content/version/dimensions key.
     # Avoid expensive Pillow rendering on cache hits; validate the DDS header.
     try:
@@ -530,16 +543,53 @@ def _compute_tile_dimensions(row):
     kind=row['kind']
     default={'723':(.68,.43),'727':(1.2,.36),'713':(1.9,.36),
              '701':(2.5,1.1),'711':(1.85,.60),'725':(1.9,.70)}.get(kind,(1.5,.65))
+    if kind in PRIORITY:
+        # The mesh is measured tip-to-tip. Prefer a plausible recorded
+        # footprint and keep both axes equal for a true diamond.
+        for field in ('width_mm','height_mm'):
+            try:
+                span = float(row.get(field)) / 1000
+            except (TypeError, ValueError, OverflowError):
+                continue
+            if .35 <= span <= 1.6:
+                return span, span
+        return .72, .72
     if kind=='725' and row.get('text'):
         from norway_signs_v073.layout_v077 import content_rows
         rs=content_rows(_render_lines(row),'725')
         header=bool(len(rs)>1 and any(bs for _,_,bs in rs))
-        default=(1.9,max(.36,.12+.23*len(rs)+(.23 if header else 0)))
+        from norway_signs_v073.visual_v074 import letter_height_mm
+        cap = letter_height_mm(row) / 1000
+        row_pitch = max(.23, 1.90 * cap)
+        default = (1.9, max(.36, .12 + row_pitch * (len(rs) + int(header))))
     if kind=='711':default=(1.85,_compact_direction_height(row,1.85))
     if row['code']=='723.31':default=(1.6,.65)
+    if kind in ('713','727','725') and row.get('text') and not row.get('width_mm'):
+        from norway_signs_v073 import visual_v074 as art, shields_v074 as shields
+        from norway_signs_v073.layout_v077 import content_rows
+        rows = content_rows(_render_lines(row),kind)
+        cap = art.letter_height_mm(row) / 1000
+        path = art.sign_font_path()
+        metric = shields.font(200,path)
+        em = art.nominal_em(cap,path)
+        badges = [badge for _,_,bs in rows for badge in bs]
+        longest = max((metric.getlength(t) * em / 200 +
+                       (metric.getlength(d)*em/200 + em*.6 if d else 0)
+                       for t,d,_ in rows), default=0)
+        reserve = sum(cap*(2.45 if b[0]=='route' else 1.75) for b in badges)
+        if kind=='725' and len(rows)>1:
+            reserve = 0  # shared badge above the distance table
+        width = (longest + reserve + (.57*default[1] if kind=='713' else 0))/.87
+        default = min(5.5,max(default[0],width)),default[1]
     try:
         mw=float(row.get('width_mm'))/1000.
         raw_h=row.get('height_mm')
+        if kind == '725' and .5 <= mw <= 5.5:
+            try:
+                height = float(raw_h)/1000
+            except (TypeError, ValueError, OverflowError):
+                height = 0
+            return mw, height if .25 <= height <= 3.0 else default[1]
         if raw_h is None and .5<=mw<=5.5:
             try: th=float(row.get('text_height_mm'))/1000.
             except (TypeError,ValueError):th=0
@@ -563,7 +613,7 @@ def _compute_tile_dimensions(row):
 def _texture_canvas(row):
     """One pixel has the same physical scale on both mesh axes."""
     w,h=_tile_dimensions(row)
-    longest=2048
+    longest=512 if row['kind'] in PRIORITY else 2048
     scale=longest/max(w,h)
     return max(8,4*round(w*scale/4)),max(8,4*round(h*scale/4))
 
@@ -573,6 +623,8 @@ def _panel_mesh(row, pos, z, face, mat, origin, w, h, bottom, *, posts=True, pos
     arrow=row['kind']=='713' and catalog.arrow_side(row['code']) is not None
     two_sided=row.get('facing')=='tosidig' and catalog.double_sided_supported(row['code'])
     points=[(-.5,-.5),(.5,-.5),(.5,.5),(-.5,.5)]
+    if row['kind'] in PRIORITY:
+        points=[(0.,-.5),(.5,0.),(0.,.5),(-.5,0.)]
     centre=np.asarray(pos,float)
     front=np.asarray(face,float)
     front=front/max(1e-9,float(np.linalg.norm(front)))
@@ -720,34 +772,46 @@ def _mount_order(row):
     except (TypeError,ValueError): return (99,row['id'])
 
 
+def _owned_points(records, frame, box):
+    """Project a region's poles in one batch and resolve facing only in this tile."""
+    if not records:
+        return
+    points = np.asarray([r['point'] for r in records], dtype=np.float64)
+    lon, lat = np.ascontiguousarray(points.T)
+    east, north, _ = frame.geodetic_to_enu(lat, lon, 0.0)
+    # Same half-open ownership rule as base.in_box. Test exact edge coordinates.
+    inside = (box[0] <= east) & (east < box[2]) & (box[1] <= north) & (north < box[3])
+    owners = [i for i in np.flatnonzero(inside) if records[i]['kind'] != '701']
+    if not owners:
+        return
+    refs = np.asarray([records[i]['road'] for i in owners], dtype=np.float64)
+    rlon, rlat = np.ascontiguousarray(refs.T)
+    rx, ry, _ = frame.geodetic_to_enu(rlat, rlon, 0.0)
+    for i, ex, ny in zip(owners, rx, ry):
+        yield records[i], np.array([east[i], north[i]]), np.array([ex, ny])
+
+
 def build_tile(frame, box, elev, decks, out_dir, vfs_dir):
     """Measured-position destination faces; stacked plates share supports."""
     if not enabled(): return None,{}
     import exitsigns
     records=tile_records(frame,box)
     priorities=[]
-    for r in records:
-        if r['kind'] in PRIORITY:
-            xy=face_of(r,frame)
-            if xy is not None: priorities.append(xy[0])
     destinations=[]
-    for row in records:
-        if row['kind'] in PRIORITY: continue
-        # Do not pretend to draw a complex junction diagram as a text poster.
-        if row['kind']=='701': continue
-        projected=face_of(row,frame)
-        if projected is None: continue
-        q,ref,face=projected
-        if not base.in_box(q[0],q[1],box) or exitsigns._on_deck(q,decks,1.2): continue
-        # v0.7.2: do NOT drop 723 route shields co-located with 206/208.
-        # Place these above the priority diamond in the shared support area.
+    for row,q,ref in _owned_points(records, frame, box):
+        projected = _face_from_xy(row, q, ref)
+        if projected is None or exitsigns._on_deck(q, decks, 1.2):
+            continue
+        _, _, face = projected
+        if row['kind'] in PRIORITY:
+            priorities.append((row,q,ref,face))
+            continue
         distance=float(np.linalg.norm(q-ref))
         if distance>(12.0 if row['kind'] in ('713','723','727') else 18.):
-            # Avoid large map-offset artefacts on remote embankments.
             continue
-        if not _render_lines(row): continue
-        destinations.append((row,q,ref,face))
-    destinations=destinations[:MAX_PER_TILE]
+        if _render_lines(row):
+            destinations.append((row,q,ref,face))
+    destinations=destinations[:MAX_PER_TILE]+priorities
     if not destinations:return None,{}
     mats=['bne_dir_metal']; material_indices={'bne_dir_metal':0}; faces={}; prepared=[]
     for row,q,ref,face in destinations:
@@ -772,50 +836,13 @@ def build_tile(frame, box, elev, decks, out_dir, vfs_dir):
     # group only extremely close coordinates, not unrelated signs 0.95 m apart.
     indexed=[(r,q,face,idx,w,h,float(z[i])) for i,(r,q,_,face,idx,w,h) in enumerate(prepared)]
     meshes=[(p,t,uv,mats,mi) for p,t,uv,mi in
-            _mounting_meshes(indexed,priorities,[box[0],box[1]])]
+            _mounting_meshes(indexed,(),[box[0],box[1]])]
     return _merge_meshes(meshes),faces
 
 
 def build_priority_tile(frame, box, elev, decks, sys_row):
-    """Render the additional real 206/208 priority signs using existing Vienna atlas."""
-    if not enabled() or sys_row is None or sys_row.get('atlas') != 'vienna_w':
-        return None
-    import exitsigns, fast, roadsigns
-    records=tile_records(frame,box)
-    _,systems,by_id=roadsigns.tables()
-    cand=[]
-    for row in records:
-        if row['kind'] not in PRIORITY:
-            continue
-        p=face_of(row,frame)
-        if p is None:
-            continue
-        q,_,face=p
-        if not base.in_box(q[0],q[1],box) or exitsigns._on_deck(q,decks,1.2):
-            continue
-        role=PRIORITY[row['kind']]
-        if role not in by_id:
-            continue
-        cand.append((row,q,face,role))
-    if not cand:
-        return None
-    pts=np.asarray([q for _,q,_,_ in cand],float)
-    la,lo,_=frame.enu_to_geodetic(pts[:,0],pts[:,1],np.zeros(len(pts)))
-    h=np.asarray(elev(la,lo),float).ravel()
-    z=np.asarray(frame.geodetic_to_enu(la,lo,h)[2],float).ravel()
-    if len(z)!=len(pts) or not np.isfinite(z).all():
-        return None
-    tab=[]
-    for i,(row,q,face,role) in enumerate(cand):
-        cell,meta=by_id[role]
-        w=float(systems['sizes']['default'][meta['shape']][1])
-        tab.append([q[0],q[1],z[i],z[i],-face[0],-face[1],cell,roadsigns.SHAPES[meta['shape']],w,1.5])
-    roles=roadsigns.tables()[0]
-    p,t,uv,mi=fast._ef.road_sign_mesh(np.asarray(tab,float),roles['cols'],roles['rows'],
-                                      [float(box[0]),float(box[1]),0.])
-    if not len(t):
-        return None
-    return p,t,uv,['bne_signs_vienna_w',roadsigns.METAL],mi
+    """Compatibility hook. build_tile now mounts the surveyed 206/208 plates."""
+    return None
 
 
 def suppress_inferred_norway(signs):

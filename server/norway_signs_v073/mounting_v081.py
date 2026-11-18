@@ -61,6 +61,18 @@ def face_groups(records):
     return groups
 
 def face_grid(records,gap):
+    # A diamond and a single route badge are a common two-plate assembly.
+    # Honour distinct surveyed slots. Resolve missing or duplicate slots only
+    # for this identifiable pair, after support and face grouping.
+    if len(records) == 2:
+        first, second = sorted(records, key=lambda r:r[0]['kind'])
+        if (first[0]['kind'] in ('206','208') and second[0]['code'] in
+                ('723.11','723.12','723.13','723.14','723.15','723.16')):
+            first_slot, second_slot = slot(first[0]), slot(second[0])
+            if first_slot[0] is None or second_slot[0] is None or first_slot == second_slot:
+                def with_slot(rec, position):
+                    return (dict(rec[0], position_code=position), *rec[1:])
+                records = [with_slot(first,10), with_slot(second,20)]
     cells={};unknown=[];highest=max((slot(r[0])[0] or 0 for r in records),default=0)
     for r in records:
         level,col=slot(r[0])

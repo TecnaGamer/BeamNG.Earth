@@ -301,12 +301,13 @@ class Tracker:
         now = time.monotonic()
         want = [k for k in self.wanted if (k not in self.sent or k in self.stale)
                 and (aid, k) not in self.jobs and self.retry.get(k, 0.) <= now]
-        want.sort(key=lambda k: roads.tile_distance(*k, x, y))
+        self._order_tiles(want, x, y)
         if want and self.pool is None:
             self.pool = ThreadPoolExecutor(WORKERS, thread_name_prefix='highway-signs')
         for key in want[:max(0, WORKERS - len(self.jobs))]:
             future = loop.run_in_executor(self.pool, build, aid, *key)
             self.jobs[aid, key] = future
+            self._job_started(key, future)
             future.add_done_callback(lambda f, a=aid, k=key, r=self.revision: self._built(conn, a, k, r, f))
 
     def _built(self, conn, aid, key, revision, future):
@@ -345,6 +346,12 @@ class Tracker:
             slots = pool(conn, files)
             if slots:
                 message['slots'] = slots
+        if self._route:
+            message['norwaySignApproach'] = True
         conn.send(message)
         self.sent.add(key)
         self.stale.discard(key)
+
+
+from norway_signs_v073 import driving_v085 as _norway_driving
+Tracker = _norway_driving.tracker_class(Tracker, roads)

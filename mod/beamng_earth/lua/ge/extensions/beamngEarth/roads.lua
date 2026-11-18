@@ -1570,6 +1570,7 @@ function M.onTile(msg, currentAnchor, a)
   end
   -- a sign tile (key "s<tx>_<ty>"): its render-only sign shapes, kept in signData for setSignsEnabled
   tiles[key].signOnly = tostring(msg.key):match('^s%-?%d+_') ~= nil
+  tiles[key].norwaySignApproach = msg.norwaySignApproach == true
   tiles[key].signData = {}
   if type(data.dirs_faces) == 'table' then       -- the direction boards' Materials, before their shape (dirsigns.lua)
     require('beamngEarth/dirsigns').register(data.dirs_faces)
@@ -2693,10 +2694,16 @@ function M.nextWalk(q)
   for i, e in ipairs(q) do
     local t = tiles[e.key]
     local k = 1e9
-    local behind = false
+    local behind, nearSign = false, false
     if t and t.cx then
       local dx, dy = t.cx - p.x, t.cy - p.y
       k = math.sqrt(dx * dx + dy * dy)
+      if t.norwaySignApproach and t.signOnly and not t.ghost and not e.stage then
+        local reach = math.min(480, math.max(192, lastSpeed * 12) + M.TILE_M / 2)
+        nearSign = k <= reach and (not dir or
+          (dx * dir.x + dy * dir.y >= -M.TILE_M / 2 and
+           math.abs(dx * dir.y - dy * dir.x) <= M.TILE_M / 2 + 48))
+      end
       if dir then         -- moving: by the way along the path ahead, sideways counting SIDE_PENALTY times (the server's
         local along = dx * dir.x + dy * dir.y               -- roads.path_key); behind the car after all of those
         local side = math.abs(dx * dir.y - dy * dir.x)
@@ -2711,7 +2718,7 @@ function M.nextWalk(q)
     end
     if not behind and (not nearest or k < nearest) then nearest = k end
     if (e.renderOnly or e.what == 'wire') and not (M.SURFACE_FIRST and (e.what == 'road' or e.what == 'walk')) then
-      k = k + (M.RENDER_AFTER_M or 1e6)
+      k = k + (nearSign and math.min(32, M.RENDER_AFTER_M or 32) or (M.RENDER_AFTER_M or 1e6))
     end
     if e.what == 'deck' or e.what == 'tunnel' then k = math.max(0, k - M.DRIVE_FIRST_M) end
     if k < bestKey then best, bestKey = i, k end
