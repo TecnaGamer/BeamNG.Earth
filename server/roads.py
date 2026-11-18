@@ -10061,35 +10061,46 @@ def _deck_floor(xy, z, decks):
     """Per point xy (k, 2) at road heights z (k,): the underside (m) of the lowest bridge deck over it (deck chunks:
     "n" points [x, y, z], "w" m; within half its width + WALL_DECK_REACH_M of its nearest segment, WALL_DECK_OVER_M
     or more over z), +inf where none (earthfast.deck_floor: a numpy round per chunk was ~1.5 % of a road tile set's
-    CPU, I-83 Baltimore 2026-11-12). Pure."""
+    CPU, I-83 Baltimore 2026-11-12). A deck reaches "under" m below its surface where it says so (a railway's deck
+    reaches railways.DECK_D under its ballast, a road's WALL_DECK_UNDER_M: the same wall stops under either: the
+    walls rose through the rail bridges over the road in its cutting, Vienna's Erzherzog-Karl-Strasse, 2026-11-18). Pure."""
     import fast
     xy = np.asarray(xy, np.float64).reshape(-1, 2)
     z = np.asarray(z, np.float64)
-    pack = _deck_floor_pack(decks)
-    if pack is None or not len(xy):
-        return np.full(len(xy), np.inf)
+    packs = _deck_floor_pack(decks)
+    out = np.full(len(xy), np.inf)
+    if not packs or not len(xy):
+        return out
     fast.require(240, "deck_floor")
-    return np.asarray(fast._ef.deck_floor(np.ascontiguousarray(xy), np.ascontiguousarray(z), *pack,
-                                          float(WALL_DECK_OVER_M), float(WALL_DECK_UNDER_M)), np.float64)
+    for under, pack in packs:
+        out = np.minimum(out, np.asarray(fast._ef.deck_floor(np.ascontiguousarray(xy), np.ascontiguousarray(z), *pack,
+                                                              float(WALL_DECK_OVER_M), float(under)), np.float64))
+    return out
 
 
 _DECK_FLOOR_PACK = [(None, None)]   # [(the decks list, its packed arrays)]: one tile's walls ask with the same list
 
 
 def _deck_floor_pack(decks):
-    """(points (n, 3), starts (C + 1,), reach (C,): half the width + WALL_DECK_REACH_M) of the deck chunks, or None."""
+    """[(m under the surface, (points (n, 3), starts (C + 1,), reach (C,): half the width + WALL_DECK_REACH_M))] of the
+    deck chunks, one pack per depth they reach under their surface; None for no decks."""
     if not decks:
         return None
     last = _DECK_FLOOR_PACK[0]
     if last[0] is decks:
         return last[1]
-    ns = [np.asarray(ch["n"], np.float64)[:, :3] for ch in decks]
-    pts = np.ascontiguousarray(np.concatenate(ns)) if ns else np.zeros((0, 3))
-    starts = np.r_[0, np.cumsum([len(n) for n in ns])].astype(np.int64)
-    reach = np.array([float(ch.get("w") or 0) / 2 + WALL_DECK_REACH_M for ch in decks], np.float64)
-    pack = (pts, starts, reach)
-    _DECK_FLOOR_PACK[0] = (decks, pack)
-    return pack
+    by = {}
+    for ch in decks:
+        by.setdefault(float(ch.get("under", WALL_DECK_UNDER_M)), []).append(ch)
+    packs = []
+    for under, group in sorted(by.items()):
+        ns = [np.asarray(ch["n"], np.float64)[:, :3] for ch in group]
+        pts = np.ascontiguousarray(np.concatenate(ns)) if ns else np.zeros((0, 3))
+        starts = np.r_[0, np.cumsum([len(n) for n in ns])].astype(np.int64)
+        reach = np.array([float(ch.get("w") or 0) / 2 + WALL_DECK_REACH_M for ch in group], np.float64)
+        packs.append((under, (pts, starts, reach)))
+    _DECK_FLOOR_PACK[0] = (decks, packs)
+    return packs
 
 
 def _under_decks(xy, z, decks):
@@ -10596,8 +10607,15 @@ def retaining_walls(frame, roads, elev, exact, decks=()):
         if WALL_UNDER_DECK_ON:
             floor = _deck_floor(xy + out_n * face[:, None], z, decks)
             deck_ok = ~np.isfinite(floor) | (floor - z >= WALL_UNDER_MIN_H_M)
+            # (the wall's top between two points is a straight line: the point beside one under a deck, and the point
+            # under the lower of two decks side by side a decimetre apart, stand no higher than that underside, else
+            # the line from them leans through the deck's edge or its lower neighbour's slab: the walls of Vienna's
+            # Erzherzog-Karl-Strasse under its rail bridges cut them 0.01-0.11 m at each of the deck's edges)
+            floor_n = floor.copy()
+            floor_n[1:] = np.minimum(floor_n[1:], floor[:-1])
+            floor_n[:-1] = np.minimum(floor_n[:-1], floor[1:])
         else:
-            floor = np.full(len(xy), np.inf)
+            floor = floor_n = np.full(len(xy), np.inf)
             deck_ok = ~_under_decks(xy + out_n * core, z, decks)
         full = _wall_runs(gg - z) & deck_ok & ~bends
         # (no face standing on a carriageway: a hairpin's other leg, the same road, the Stelvio Pass 2026-10-21; where
@@ -10641,7 +10659,7 @@ def retaining_walls(frame, roads, elev, exact, decks=()):
                 cap = np.where(at[sl], np.inf, max_h)
                 tp = np.minimum(top_g[sl], z[sl] + np.where(np.isfinite(floor[sl]), floor[sl] - z[sl], cap)) + WALL_TOP_M
                 tp = z[sl] + WALL_TAPER_LOW_M + (tp - z[sl] - WALL_TAPER_LOW_M).clip(0) * taper[sl]
-                tp = np.minimum(tp, floor[sl])              # (under a deck: not through it)
+                tp = np.minimum(tp, floor_n[sl])            # (under a deck: not through it)
                 # (rock faces only as an experiment, BNE_CLIFF_WALLS=on, for tall rural cuts: the Stelvio's hairpins are
                 # walled in dry stone, tall cuts too, Mapillary 2026-10-21; the user chose stone walls for passes)
                 tall = CLIFF_WALLS_ON and float(np.max(top_g[sl] - z[sl])) > CLIFF_MIN_CUT_M
@@ -10650,7 +10668,7 @@ def retaining_walls(frame, roads, elev, exact, decks=()):
                 # slope above goes on from the wall's top, held up by it; flat at the top's height, a band of grass
                 # standing out in front of the slope read as a thick freestanding wall, the user 2026-10-31)
                 back_top = top if ground_at is None else np.maximum(top, np.minimum(np.minimum(
-                    ground_at(face[sl] + th, range(i, j + 1)), z[sl] + cap + BACK_TOP_OVER_M), floor[sl]))
+                    ground_at(face[sl] + th, range(i, j + 1)), z[sl] + cap + BACK_TOP_OVER_M), floor_n[sl]))
                 out.append({"base": base, "top": top, "back_top": back_top, "foot": z[sl] - WALL_FOOT_M,
                             "mountain": bool(mountain),
                             "toward": -out_n[sl], "thick": th,
@@ -11778,7 +11796,7 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
                signals=None, marks=None, roads_out=None, skin_margin=0.0, walks_raw=None, nodes=None,
                clearance_out=None, development=None, pole_profile=None, signs=None,
                sign_obstacles=None, roadside_jobs=None, towns=None, mapped_poles=None, de_on=False, de_routes=(),
-               driveways_out=None, mapped_lamps=None, wear=None, cover_fn=None):
+               driveways_out=None, mapped_lamps=None, wear=None, cover_fn=None, rail_decks=()):
     """The chunks of one tile. cells: the mapgeom.Features of the "roads" layer of every cell touching
     the tile; elev(lat, lon) -> metres (the DEM); urban_fn: as road_specs. Features in several cells are
     taken once (by id). The carriageways, then each road's sidewalks / gutters / markings (extras), cut
@@ -11806,7 +11824,8 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
     Germany's border (markings.style of germany.effective_country at the tile's middle). wear: the road wear's
     argument (roadwear.py: tyre polish, concrete joints, cracks, patches, manholes, oil spots, fallen leaves as chunks
     of the road mesh; a tier or {"tier", "season"}; None or 0: none); cover_fn(lat, lon) -> (WorldCover classes, complete): with wear, a rural road's asphalt edge
-    is the grassy one where grass grows to it, and its fallen leaves (roadwear.verges).
+    is the grassy one where grass grows to it, and its fallen leaves (roadwear.verges). rail_decks: [{"n", "w", "under"}] the railways' bridge decks round the tile
+    (railways.tile_decks): the retaining walls stand under them as under a road's deck.
     Pure given its inputs (sorted by feature id)."""
     own_box = tile_bbox(tx, ty)                 # (a geotile's knows its own points: box_owns)
     x0, y0, x1, y1 = own_box
@@ -11940,7 +11959,7 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
                 for c in split(densify(simplify(piece))):
                     if len(c) >= 2:
                         chunks.append(_chunk(look, lw, c))
-    decks_near = []                             # (retaining_walls: none under a bridge)
+    decks_near = list(rail_decks)               # (retaining_walls: none under a bridge, a railway's too: railways.tile_decks)
     traffic_decks = []                          # genuine bridge geometry only, never the tunnel vaults below
     deck_walk = {}                              # the bridges that carry sidewalks (deck_walks)
     for fid in bseen:

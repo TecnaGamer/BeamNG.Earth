@@ -309,10 +309,12 @@ def track_beds(frame, cells, box, elev, load=None):
     return rails, [np.asarray(zb, np.float64) for zb, _zg in prof], worn
 
 
-def bed_at(rails, beds, xy, fid=None, distance=False):
+def bed_at(rails, beds, xy, fid=None, distance=False, bridge=False):
     """The bed (n,) at points xy (n, 2) on a track's own line (track_beds' rails and beds): each point's on the part
     nearest it (of line fid only, when given), between the two samples of its segment there. NaN where there is no
-    part (the railways lay none of that line: a stub they leave out). Pure.
+    part (the railways lay none of that line: a stub they leave out). distance: (bed, how far the nearest part is);
+    bridge: (bed, on_bridge (n,) bool: that part is a bridge, a deck over what is under it); both: (bed, distance,
+    on_bridge). Pure.
 
     Every segment of every part at once (the nearest of all, the first on a tie: the earliest part, as parts taken one
     after another with a nearer one replacing it only when strictly nearer), the points in blocks that keep the
@@ -321,14 +323,20 @@ def bed_at(rails, beds, xy, fid=None, distance=False):
     xy = np.asarray(xy, np.float64).reshape(-1, 2)
     out = np.full(len(xy), np.nan)
     near = np.full(len(xy), np.inf)
-    use = [(np.asarray(pxy, np.float64), np.asarray(zb, np.float64)) for (f, _c, _kind, pxy), zb in zip(rails, beds)
-           if not ((fid is not None and f != fid) or len(pxy) < 2)]
+    on = np.zeros(len(xy), bool)
+
+    def answer():
+        got = (out,) + ((near,) if distance else ()) + ((on,) if bridge else ())
+        return got if len(got) > 1 else out
+    use = [(np.asarray(pxy, np.float64), np.asarray(zb, np.float64), kind == "bridge")
+           for (f, _c, kind, pxy), zb in zip(rails, beds) if not ((fid is not None and f != fid) or len(pxy) < 2)]
     if not use or not len(xy):
-        return (out, near) if distance else out
-    a = np.concatenate([p[:-1] for p, _z in use])
-    ab = np.concatenate([np.diff(p, axis=0) for p, _z in use])
-    z0 = np.concatenate([z[:-1] for _p, z in use])
-    z1 = np.concatenate([z[1:] for _p, z in use])
+        return answer()
+    a = np.concatenate([p[:-1] for p, _z, _b in use])
+    ab = np.concatenate([np.diff(p, axis=0) for p, _z, _b in use])
+    z0 = np.concatenate([z[:-1] for _p, z, _b in use])
+    z1 = np.concatenate([z[1:] for _p, z, _b in use])
+    deck = np.concatenate([np.full(len(p) - 1, b) for p, _z, b in use])
     length2 = np.maximum((ab * ab).sum(1), 1e-12)[None]
     block = max(1, 2_000_000 // len(a))
     for i0 in range(0, len(xy), block):
@@ -339,7 +347,8 @@ def bed_at(rails, beds, xy, fid=None, distance=False):
         tj = t[np.arange(len(q)), j]
         out[i0:i0 + len(q)] = z0[j] + (z1[j] - z0[j]) * tj
         near[i0:i0 + len(q)] = d[np.arange(len(q)), j]
-    return (out, near) if distance else out
+        on[i0:i0 + len(q)] = deck[j]
+    return answer()
 
 
 def grade_plans(frame, cells, box, elev, load=None):
@@ -2921,6 +2930,36 @@ def _foot_limits(xy, side, foot, others, crossers):
     return np.maximum(lim, BALLAST_TOP_M + 0.01)
 
 
+def _bridge_decks(rails, prof, carried):
+    """The bridge decks' centrelines of rails with their beds prof, a bridge a model carries (carried) left out:
+    [{"n": xy + z line (the bed plus its ballast), "w": width, "under": m the deck reaches under that line}]."""
+    return [{"n": np.column_stack((xy, zb + BALLAST_H)), "w": 2 * (TRAM_DECK_HALF_M if cls == "tram" else DECK_HALF_M),
+             "under": DECK_D}
+            for (_, cls, kind, xy), (zb, _zg), gone in zip(rails, prof, carried) if kind == "bridge" and not gone]
+
+
+def tile_decks(frame, tx, ty, cells, ground, far_ground=None, load=None, bed_elev=None, under=None):
+    """tile_mesh's bridge decks ([{"n", "w", "under"}], _bridge_decks') of the railways within REACH_M of the tile (tx,
+    ty), made before the road tile's retaining walls: a wall in a cutting stands up to the underside of a deck over the
+    road, a railway's too (the walls rose through the rail bridges over the busway and the carriageways of Vienna's
+    Erzherzog-Karl-Strasse: 11 of the 15 crossings the eval found cutting, 2026-11-18). The same beds as the mesh's (one
+    profile along the track: _beds), arguments as tile_mesh's. Pure given its inputs."""
+    cells = list(cells)
+    box = roads.tile_bbox(tx, ty)
+    tcls = []
+    tunnels = road_underpasses(frame, cells, box, classes=tcls)
+    rails = parts(frame, cells, box, clip=True, worn={}, underpasses=tunnels)    # (worn: as tile_mesh asks)
+    if not any(kind == "bridge" for _f, _c, kind, _xy in rails):
+        return []
+    ground = _mixed(ground, far_ground, box)
+    prof = _beds(frame, rails, ground,
+                 raising_underpasses(tunnels, tcls) + plain_underpasses(frame, cells, box, rails, tunnels=tunnels),
+                 load, bed_elev)
+    carried = [under is not None and kind == "bridge" and np.asarray(under(xy), bool).mean() >= 0.5
+               for _f, _c, kind, xy in rails]
+    return _bridge_decks(rails, prof, carried)
+
+
 def tile_mesh(frame, tx, ty, cells, ground, sign_style=None, far_ground=None, return_decks=False, load=None,
               bed_elev=None, _drop=frozenset(), furniture=None, under=None):
     """The road tile (tx, ty)'s railway mesh (roadmesh.write's (positions, tris, uvs, materials, tri material)) or
@@ -2960,10 +2999,7 @@ def tile_mesh(frame, tx, ty, cells, ground, sign_style=None, far_ground=None, re
         rails, prof = [rails[n] for n in keep], [prof[n] for n in keep]
     carried = [under is not None and kind == "bridge" and np.asarray(under(xy), bool).mean() >= 0.5
                for _f, _c, kind, xy in rails]
-    decks = ([{"n": np.column_stack((xy, zb + BALLAST_H)),
-               "w": 2 * (TRAM_DECK_HALF_M if cls == "tram" else DECK_HALF_M)}
-              for (_, cls, kind, xy), (zb, _zg), gone in zip(rails, prof, carried) if kind == "bridge" and not gone]
-             if return_decks else [])
+    decks = _bridge_decks(rails, prof, carried) if return_decks else []
     ground_lines = [xy for _f, c, kind, xy in rails if kind == "ground" and c != "tram"]
     all_cr = crossings(frame, cells, box, reach=50.0)
     cr = (true_crossers(ground_lines, all_cr) if TRUE_CROSSERS_ON else all_cr) + tunnels

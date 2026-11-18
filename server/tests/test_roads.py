@@ -1872,6 +1872,39 @@ class RetainingWallTest(unittest.TestCase):
         with mock.patch.object(roads, "WALL_UNDER_DECK_ON", False):
             self.assertFalse(under(walls(18.0)), "off: none under the deck")
 
+    def test_a_cutting_under_a_rail_deck_is_walled_up_to_its_underside(self):
+        """The same cutting under a railway's bridge (railways.tile_decks: its line is the bed plus its ballast, it
+        reaches DECK_D under it, not a road deck's WALL_DECK_UNDER_M): the walls stop at its underside, as under a road's
+        deck. Vienna's Erzherzog-Karl-Strasse: its walls (the tunnel mesh) rose through the rail bridges over the busway
+        and the carriageways, the eval's 11 crossings of a track and a tube; the rail decks were not among the decks the
+        walls were told of."""
+        import grading
+        import railways
+        rh = roads.carriageway("primary", "paved", True, None, False) / 2
+        edge = rh + grading.shoulder(roads.Spec(2 * rh, "paved", False, "primary")) + grading.WALL_FLAT_M
+        spec = roads.road_specs(features([[(0.0, 0.0), (200.0, 0.0)]], ["primary"]), None)[0]
+        pts = np.c_[np.arange(0.0, 201.0, 5.0), np.zeros(41), np.full(41, 10.0)]
+
+        def elev(la, lo):
+            _e, n, _ = FRAME.geodetic_to_enu(np.asarray(la), np.asarray(lo), np.zeros(np.shape(la)))
+            return 10.0 + np.clip((np.abs(n) - edge) / 0.8, 0.0, 1.0) * 8.0
+        bed = 17.0
+        deck = {"n": np.array([[100.0, -40.0, bed + railways.BALLAST_H], [100.0, 40.0, bed + railways.BALLAST_H]]),
+                "w": 2 * railways.DECK_HALF_M, "under": railways.DECK_D}
+        underside = bed + railways.BALLAST_H - railways.DECK_D
+
+        def tops(decks):
+            ws = [w for w in roads.retaining_walls(FRAME, [("r", spec, pts, LON)], elev, (0.0, -128.0, 256.0, 128.0),
+                                                   decks=decks) if "base" in w]
+            return [max(float(t), float(bt)) for w in ws for x, t, bt in zip(w["base"][:, 0], w["top"], w["back_top"])
+                    if abs(x - 100.0) < 2.0]
+        got = tops([deck])
+        self.assertTrue(got, "walls under the deck")
+        self.assertLessEqual(max(got), underside + 1e-6, "not through the rail deck")
+        self.assertGreater(max(got), underside - 0.5, "up to its underside, not the road decks' 2.2 m under it")
+        asroad = tops([{k: v for k, v in deck.items() if k != "under"}])
+        self.assertLess(max(asroad), max(got), "a road deck's depth would leave a gap under it")
+
     def test_walls_under_a_deck_are_concrete_on_a_minor_road_too(self):
         """Assaku's Jarve tee is a minor road: its cutting is walled in stone, but under the deck the wall is the
         abutment's, concrete (the reference photo: sloped concrete walls under the deck)."""

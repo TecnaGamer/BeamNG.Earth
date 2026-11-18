@@ -1610,7 +1610,17 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
     town_faces = {}                     # the town signs' faces the tile's props use (towns_on)
     towns = (town_signs(frame, tx, ty, out_dir, vfs_dir, town_faces)
              if towns_on and props is not None and out_dir is not None else None)
+    import railways
+    rcells = [cell_fn(k) for k in roadsmod.cells_of_tile(frame, tx, ty, railways.REACH_M)]
+    rground = railways.point_ground(frame, elev, rkey)
+    rfar = railways.point_ground(frame, lambda la, lo: ground(frame, la, lo, _s.dem.sample(la, lo, zoom)),
+                                 ("raw",) + tuple(rkey))
+    rbed = getattr(getattr(_s, "plan_store", None), "elev", None)
+    runder = ((lambda xy: buildingsmod._under_bridges(_bridge_fps, xy)) if _bridge_fps else None)
+    # (the railways' bridge decks before the road tile's retaining walls: they stand under them as under a road's deck)
     chunks = roadsmod.build_tile(frame, tx, ty, cells, elev, urban, walks=walks, deck_context=ctx, bridges=bridges, widths=_s.widths,
+                                 rail_decks=railways.tile_decks(frame, tx, ty, rcells, rground, far_ground=rfar, load=cell_fn,
+                                                                bed_elev=rbed, under=runder),
                                  sign_obstacles=sign_obstacles,
                                  # (the stations' made-up driveways: no sidewalk across them; nor along a square's
                                  # street-side parking rows, streetparking.plaza_bay_cuts)
@@ -1757,10 +1767,7 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
         log.warning("stone walls: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
     P.tmesh = roadmeshmod.tunnel(chunks, (x0, y0, 0.0), rwalls)
     mark("tunnel_mesh")
-    import railways
-    rcells = [cell_fn(k) for k in roadsmod.cells_of_tile(frame, tx, ty, railways.REACH_M)]
-    rground = railways.point_ground(frame, elev, rkey)
-    fra_kits = None                 # (the US: the FRA inventory's gates and lamps, else the road classes')
+    fra_kits = None                # (the US: the FRA inventory's gates and lamps, else the road classes')
     if getattr(_s, "fra", None) is not None:
         try:
             fra_kits = _s.fra.kits(frame, roadsmod.cells_of_tile(frame, tx, ty))
@@ -1787,13 +1794,8 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
             log.debug("catenary: %s: %s", type(e).__name__, e)
     rail_props = []                 # (buffer stops and the walk signs at footway crossings: railways.tile_mesh's furniture)
     P.rmesh, rail_decks = railways.tile_mesh(frame, tx, ty, rcells, rground,
-                                 far_ground=railways.point_ground(
-                                     frame, lambda la, lo: ground(frame, la, lo, _s.dem.sample(la, lo, zoom)),
-                                     ("raw",) + tuple(rkey)),
-                                 return_decks=True, load=cell_fn,
-                                 bed_elev=getattr(getattr(_s, "plan_store", None), "elev", None), furniture=rail_props,
-                                 under=((lambda xy: buildingsmod._under_bridges(_bridge_fps, xy))
-                                        if _bridge_fps else None))
+                                 far_ground=rfar, return_decks=True, load=cell_fn, bed_elev=rbed, furniture=rail_props,
+                                 under=runder)
     if rail_props:
         props = (props or []) + rail_props
     mark("railways")
@@ -2933,12 +2935,29 @@ def _station_collision(frame, box, elev, md):
             if rail:
                 import plazas
                 import railstationmesh
-                rc = railstationmesh.collision(frame, tuple(box), rail, elev, (float(box[0]), float(box[1]), 0.0))
+                rc = railstationmesh.collision(frame, tuple(box), rail, elev, (float(box[0]), float(box[1]), 0.0),
+                                               bed=_rail_beds(frame, box, md))
                 if rc[0] is not None:
                     got = rc if got is None else (plazas.merge(got[0], rc[0]), list(got[1]) + list(rc[1]))
         except Exception:
             log.exception("rail station collision of the tile at %s", tuple(round(float(v), 1) for v in box[:2]))
     return got
+
+
+def _rail_beds(frame, box, md):
+    """bed(track id or None, xy (k, 2)) -> (the rail's own bed there (railways.track_beds: the profile the track mesh draws, the
+    plans' heights), NaN where that line has no part; whether that part is a bridge): what a station's platforms stand by
+    (railstationmesh.reference, _slab). None without a map, a grader or a rail near the box."""
+    store = getattr(_s, "plan_store", None)
+    if md is None or store is None or getattr(store, "elev", None) is None:
+        return None
+    import railways
+    load = lambda key: md.cell(key, layers=("roads",), kind="demand").layers.get("roads")   # noqa: E731
+    rails, beds, _worn = railways.track_beds(frame, [load(k) for k in railways.cells_near(frame, box)], tuple(box),
+                                             store.elev, load)
+    if not rails:
+        return None
+    return lambda fid, xy: railways.bed_at(rails, beds, xy, fid, bridge=True)
 
 
 def _with_rail_stations(mesh, frame, box, elev, origin, md, quad=None, drawn_fn=None):
@@ -2958,7 +2977,7 @@ def _with_rail_stations(mesh, frame, box, elev, origin, md, quad=None, drawn_fn=
         import railstationmesh
         sm = railstationmesh.mesh(frame, tuple(box),  stations,
                                   busstationmesh.DrawnGround(drawn_fn) if drawn_fn is not None else elev, origin,
-                                  overlap=quad is not None)
+                                  overlap=quad is not None, bed=_rail_beds(frame, box, md))
         log.info("rail stations: %s in the tile at %s: %d triangles", [s.name or "?" for s in stations],
                  tuple(round(float(v)) for v in box[:2]), 0 if sm is None else len(sm[1]))
         if quad is not None:

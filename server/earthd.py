@@ -3247,7 +3247,18 @@ class Server:
             towns = self.towns.maker(anchor.frame, roadsmod.cells_of_tile(anchor.frame, tx, ty,
                                                                           blockworker.TOWNS_MARGIN_M),
                                      self.out_dir, self.vfs_dir, town_faces)
+        import railways
+        rcells = [cell_fn(k) for k in roadsmod.cells_of_tile(anchor.frame, tx, ty, railways.REACH_M)]
+        rground = railways.point_ground(anchor.frame, elev, (aid, anchor.lat, anchor.lon))
+        rfar = railways.point_ground(
+            anchor.frame, lambda la, lo: self.ground(anchor.frame, la, lo, self.dem.sample(la, lo, zoom)),
+            ("raw", aid, anchor.lat, anchor.lon))
+        rbed = getattr(getattr(self, "plan_store", None), "elev", None)
+        runder = ((lambda xy: buildingsmod._under_bridges(_bridge_fps, xy)) if _bridge_fps else None)
+        # (the railways' bridge decks before the road tile's retaining walls: they stand under them as under a road's deck)
         chunks = roadsmod.build_tile(anchor.frame, tx, ty, cells, elev, urban, walks=walks, deck_context=ctx, bridges=anchor.bridges,
+                                     rail_decks=railways.tile_decks(anchor.frame, tx, ty, rcells, rground, far_ground=rfar,
+                                                                    load=cell_fn, bed_elev=rbed, under=runder),
                                      sign_obstacles=sign_obstacles,
                                      walk_cuts=fuel_cuts,    # (the stations' made-up driveways: no sidewalk across them)
                                      widths=self.road_widths, props=props, lines=lines, wires=wires, town=town, park=park,
@@ -3381,19 +3392,9 @@ class Server:
         except Exception as ex:
             log.warning("stone walls: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
         tmesh = roadmeshmod.tunnel(chunks, (x0, y0, 0.0), rwalls)
-        import railways
         rail_props = []                 # (buffer stops and the walk signs at footway crossings: railways.tile_mesh's furniture)
-        rmesh, rail_decks = railways.tile_mesh(anchor.frame, tx, ty,
-                                   [cell_fn(k) for k in roadsmod.cells_of_tile(anchor.frame, tx, ty, railways.REACH_M)],
-                                   railways.point_ground(anchor.frame, elev, (aid, anchor.lat, anchor.lon)),
-                                   far_ground=railways.point_ground(
-                                       anchor.frame,
-                                       lambda la, lo: self.ground(anchor.frame, la, lo, self.dem.sample(la, lo, zoom)),
-                                       ("raw", aid, anchor.lat, anchor.lon)),
-                                   return_decks=True, load=cell_fn,
-                                   bed_elev=getattr(getattr(self, "plan_store", None), "elev", None), furniture=rail_props,
-                                   under=((lambda xy: buildingsmod._under_bridges(_bridge_fps, xy))
-                                          if _bridge_fps else None))
+        rmesh, rail_decks = railways.tile_mesh(anchor.frame, tx, ty, rcells, rground, far_ground=rfar,
+                                   return_decks=True, load=cell_fn, bed_elev=rbed, furniture=rail_props, under=runder)
         if rail_props:
             props = (props or []) + rail_props
         bld = None
