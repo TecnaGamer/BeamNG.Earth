@@ -47,11 +47,29 @@ import staging
 
 log = logging.getLogger("earthd.mapdata")
 
-# The pinned Overture release (update path: docs/ARCHITECTURE.md "Map data"; `mapdata.py --latest`
-# prints the newest one). Overture removes old releases from the buckets after some months: a
-# pinned release that is gone raises ReleaseGone for cells not cached yet.
-RELEASE = "2026-11-18.0"
-STAC_ROOT = "https://stac.overturemaps.org"
+# The build's own Overture release (overturepick.RELEASE: the fallback and the default; update path:
+# docs/ARCHITECTURE.md "Map data"; `mapdata.py --latest` prints the newest one). The release this process reads is
+# effective(): the one its supervisor picked for the app session (overturepick.Pick: the project's switch file, checked
+# against Overture's STAC catalogue), handed down in RELEASE_ENV, frozen per process at its first ask.
+from overturepick import RELEASE, RELEASE_ENV, RELEASE_RE, STAC_ROOT, SUPPORTED_SCHEMAS  # noqa: E402,F401
+import overturepick  # noqa: E402
+_EFFECTIVE = None
+_EFFECTIVE_LOCK = threading.Lock()
+
+
+def effective():
+    """The Overture release this process reads: RELEASE_ENV when it is a release id (its supervisor's pick; the
+    process's workers inherit it), else RELEASE. Frozen at the first call: a process never changes release (its
+    cells, plans, tiles and keys are of one release). Nothing sets RELEASE_ENV inside a server process."""
+    global _EFFECTIVE
+    if _EFFECTIVE is None:
+        with _EFFECTIVE_LOCK:
+            if _EFFECTIVE is None:
+                env = (os.environ.get("BNGE_OVERTURE_RELEASE") or "").strip()     # (RELEASE_ENV, by its name)
+                if env and not overturepick.valid(env):
+                    log.warning("overture: %s=%r is not a release id: %s", RELEASE_ENV, env, RELEASE)
+                _EFFECTIVE = env if overturepick.valid(env) else RELEASE
+    return _EFFECTIVE
 # DuckDB worker threads per query (the server is niced; the game comes first). One: the server runs many queries side
 # by side on its few cores, where a query's second thread only cost CPU (a fresh place's 60 road cells on one core:
 # 7.0 -> 4.8 CPU-s, 2026-11-04). BNGE_DUCKDB_THREADS=2: as before
@@ -367,7 +385,19 @@ class OvertureError(IOError):
 
 
 class ReleaseGone(OvertureError):
-    """The pinned release's STAC index is no longer published (bump overture.RELEASE)."""
+    """The release's STAC index or files are no longer published (404 / 410): logged once a process, loudly."""
+
+    def __init__(self, *args):
+        super().__init__(*args)
+        if not _GONE_LOGGED:
+            _GONE_LOGGED.append(True)
+            log.error("overture: the map data's release %s is no longer published by Overture (%s): places not "
+                      "visited before get no roads or buildings. %s", effective(), args[0] if args else "",
+                      "This build's own release is gone: update BeamNG.Earth." if effective() == RELEASE else
+                      f"The switch file's release is gone: this build's own is {RELEASE}.")
+
+
+_GONE_LOGGED = []
 
 
 class DuckDbMissing(OvertureError):
@@ -396,15 +426,87 @@ def intersects(b, bounds):
 BUNDLED = os.path.join(os.path.dirname(os.path.abspath(__file__)), "overture_stac_{release}.json.gz")
 
 
-def _bundle(release):
-    """{"theme/type": {"license", "files": [[name, bbox, urls, size], ...]}} of the release's shipped index, or {}."""
+def _bundle(release, cache_dir=None):
+    """{"theme/type": {"license", "files": [[name, bbox, urls, size], ...]}} of the release's shipped index, else of
+    the one kept on this machine under cache_dir (keep_local_bundle: a release the switch file moved to), or {}."""
+    got = overturepick.read_bundle(BUNDLED.format(release=release), release)     # (a truncated gzip: none)
+    if not got and cache_dir:
+        got = overturepick.read_bundle(overturepick.local_bundle_path(cache_dir, release), release)
+    return got
+
+
+def _cache_of(raw_dir):
+    """The cache folder of a raw_dir <cache>/mapdata/raw (where a local bundle is kept), else None."""
+    raw = os.path.normpath(raw_dir)
+    parent = os.path.dirname(raw)
+    if os.path.basename(raw) == "raw" and os.path.basename(parent) == "mapdata":
+        return os.path.dirname(parent)
+    return None
+
+
+def _stac_pairs():
+    return sorted({(v["theme"], v["type"]) for v in LAYERS.values()})
+
+
+def bundle_rows(index, kind="background"):
+    """The release's whole STAC index read through a StacIndex (every collection of LAYERS, every item), as the
+    bundle's {"theme/type": {"license", "files": [[name, bbox, urls, size], ...]}} (tools/build_stac_index.py: the
+    shipped one; keep_local_bundle)."""
+    out = {}
+    for theme, typ in _stac_pairs():
+        c = index.collection(theme, typ, kind=kind)
+        rows = []
+        for (name, urls, size), bb in zip(index.files(theme, typ, (-180.0, -90.0, 180.0, 90.0), kind=kind),
+                                          c["bboxes"]):
+            rows.append([name, [float(v) for v in bb], urls, size])
+        out[f"{theme}/{typ}"] = {"license": c.get("license"), "files": rows}
+    return out
+
+
+def write_bundle(path, release, collections):
+    """A bundle file written whole (a unique .tmp, then replaced), gzip without name or time (the same bytes each run)."""
     import gzip
+    tmp = f"{path}.{os.getpid()}.{threading.get_ident()}.tmp"
+    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
     try:
-        with gzip.open(BUNDLED.format(release=release), "rt", encoding="utf-8") as f:
-            data = json.load(f)
-    except (OSError, ValueError, EOFError):     # (EOFError: a truncated gzip)
-        return {}
-    return data.get("collections", {}) if data.get("release") == release else {}
+        with open(tmp, "wb") as raw_f, gzip.GzipFile(fileobj=raw_f, mode="wb", filename="", mtime=0) as f:
+            f.write(json.dumps({"release": release, "collections": collections}, separators=(",", ":")).encode("utf-8"))
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def keep_local_bundle(release, cache_dir, fetcher, kind="background"):
+    """A release other than the shipped one: its whole STAC index kept in cache_dir's cdn folder (not under the
+    cache's cap), so a later start can take it while Overture's STAC host does not answer (overturepick.fallback)
+    and its cells need no STAC request. Returns the release's schema (its catalogue's), or None when not kept."""
+    cat = json.loads(fetcher.get(f"{STAC_ROOT}/{release}/catalog.json", kind=kind).body)
+    if not isinstance(cat, dict) or cat.get("release:version") != release:
+        return None
+    schema = str(cat.get("schema:version"))
+    if schema not in SUPPORTED_SCHEMAS:
+        return None
+    path = overturepick.local_bundle_path(cache_dir, release)
+    if not overturepick.read_bundle(path, release):
+        index = StacIndex(release, os.path.join(cache_dir, "mapdata", "raw"), fetcher)
+        index._bundled = {}         # (from Overture's own index, never a bundle)
+        write_bundle(path, release, bundle_rows(index, kind))
+    return schema
+
+
+def note_session(cache_dir, fetcher):
+    """A game session started on this process's release (earthd, once, in the background): its whole STAC index kept
+    here when it is not the shipped one (keep_local_bundle), then noted as this machine's last session's release
+    (overturepick.write_last; overturepick.fallback reads it). The schema noted, or None (not noted)."""
+    rel = effective()
+    schema = SUPPORTED_SCHEMAS[0] if rel == RELEASE else keep_local_bundle(rel, cache_dir, fetcher)
+    if schema and overturepick.write_last(cache_dir, rel, schema):
+        return schema
+    return None
 
 
 class StacIndex:
@@ -414,7 +516,7 @@ class StacIndex:
         self.release, self.raw_dir, self.fetcher = release, raw_dir, fetcher
         self._coll = {}
         self._lock = threading.Lock()
-        self._bundled = _bundle(release)
+        self._bundled = _bundle(release, _cache_of(raw_dir))
 
     def _json(self, url, path, kind):
         try:
@@ -515,7 +617,8 @@ def _number_rows(con, dedup_if_repeated=None):
 class Reader:
     """Overture layers per cell (see the module docstring). threads: DuckDB threads per query."""
 
-    def __init__(self, raw_dir, fetcher, release=RELEASE, threads=DUCKDB_THREADS):
+    def __init__(self, raw_dir, fetcher, release=None, threads=DUCKDB_THREADS):
+        release = release or effective()        # (the process's release: never the constant on its own)
         self.raw_dir, self.fetcher, self.release, self.threads = raw_dir, fetcher, release, threads
         self.index = StacIndex(release, raw_dir, fetcher)
         self._remotes = OrderedDict()

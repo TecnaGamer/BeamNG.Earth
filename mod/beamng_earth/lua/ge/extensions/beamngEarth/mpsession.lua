@@ -428,15 +428,62 @@ local function onAnchors(data)
       if lat and mpanchor.setRemote(pid, a.aLat, a.aLon) then
         local id = tostring(tonumber(pid))
         anchors[id] = { aLat = tonumber(a.aLat), aLon = tonumber(a.aLon), lat = lat, lon = lon,
-          name = a.name, h = a.h }
+          name = a.name, h = a.h, rel = M.releaseId(a.rel) }
         n = n + 1
       end
     end
   end
   mpanchor.retainRemote(anchors)
+  M.noteReleases(myPid())
   if n ~= lastPlayers then
     lastPlayers = n
     log('I', 'beamngEarth', string.format('BeamMP: %d player(s) with BeamNG.Earth', n))
+  end
+end
+
+-- The map data's release of a world server (an Overture release id), else nil.
+function M.releaseId(rel)
+  return (type(rel) == 'string' and rel:match('^%d%d%d%d%-%d%d%-%d%d%.%d%d?$')) and rel or nil
+end
+
+-- The level's map data release (core: releasepin's pin, from the live server's hello; nil: not known yet): our poses
+-- carry it whether or not shared generation's share_hello was answered.
+function M.setRelease(rel) M._ownRelease = M.releaseId(rel) end
+function M.ownRelease() return M._ownRelease or (shareInfo and shareInfo.release) or nil end
+
+-- Pure: the players (anchors: the plugin's, each with its world server's release when its poses carry one) whose
+-- release is known and not ours, as { { pid, name, rel } } in pid order; {} when ours is not known.
+function M.otherReleases(own, list, me)
+  local out = {}
+  if not own then return out end
+  for pid, a in pairs(list or {}) do
+    if pid ~= me and type(a) == 'table' and a.rel and a.rel ~= own then
+      out[#out + 1] = { pid = pid, name = tostring(a.name or ('player ' .. pid)), rel = a.rel }
+    end
+  end
+  table.sort(out, function(x, y) return x.pid < y.pid end)
+  return out
+end
+
+-- Players whose world servers read other map data than ours (BeamMP shared generation v2): their plans' codes differ
+-- (the map data's versions are in them: mpshare.expect_code), so nothing is shared with them, by construction; the
+-- player is told once for each new set (a toast and the log), never per frame (at each bngeAnchors).
+function M.noteReleases(me)
+  local own = M.ownRelease()
+  local others = M.otherReleases(own, anchors, me)
+  if #others == 0 then return end
+  local parts = {}
+  for _, o in ipairs(others) do parts[#parts + 1] = o.name .. ' (' .. o.rel .. ')' end
+  local text = table.concat(parts, ', ')
+  if M._releasesNoted == text then return end
+  M._releasesNoted = text
+  log('W', 'beamngEarth', 'BeamMP: other map data than ours (' .. own .. '): ' .. text .. '; world building not shared')
+  local gh = rawget(_G, 'guihooks')
+  if gh and gh.trigger then
+    pcall(gh.trigger, 'toastrMsg', { type = 'warning', title = 'BeamNG.Earth: other map data',
+      msg = text .. ' build the world from other map data than yours (' .. own .. '). World building is not shared '
+        .. 'with them and roads may not line up where you meet. BeamNG.Earth picks its map data when it starts: '
+        .. 'restart it (the app) on the older side to match.', config = { timeOut = 30000 } })
   end
 end
 
@@ -861,7 +908,8 @@ local function updateFloating(owners)
 end
 
 function M.onShareInfo(msg)
-  shareInfo = { code = tostring(msg.code or ''), weight = tonumber(msg.weight) or 1 }
+  shareInfo = { code = tostring(msg.code or ''), weight = tonumber(msg.weight) or 1,
+    release = M.releaseId(msg.overtureRelease) }
   log('I', 'beamngEarth', 'BeamMP: sharing world building with the players near us (code ' .. shareInfo.code .. ')')
 end
 
@@ -1035,7 +1083,8 @@ function M.update(dt, anchor, player)
     end
     TriggerServerEvent('bngePose', jsonEncode({ v = M.PROTO, aLat = anchor.lat, aLon = anchor.lon, lat = lat,
       lon = lon, joined = joined, h = h and math.floor(h * 10 + 0.5) / 10 or nil,
-      sc = shareInfo and shareInfo.code or nil, sw = shareInfo and shareInfo.weight or nil }))
+      sc = shareInfo and shareInfo.code or nil, sw = shareInfo and shareInfo.weight or nil,
+      rel = M.ownRelease() }))     -- (our map data's release: the others are told on another)
     stats.poses = stats.poses + 1
     if joined then log('I', 'beamngEarth', string.format('BeamMP: first pose sent (%.5f, %.5f)', lat, lon)) end
     joined = false
@@ -1196,6 +1245,7 @@ end
 -- The session's end (BeamMP left, the level's end): the deactivated cars back on, everything forgotten.
 function M.reset()
   shareInfo = nil             -- (asked again in the next session)
+  M._releasesNoted = nil
   for gid in pairs(deactivated) do
     local veh = vehicle(gid)
     if veh then veh:setActive(1) end

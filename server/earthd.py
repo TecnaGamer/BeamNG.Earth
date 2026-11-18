@@ -8940,6 +8940,9 @@ class Connection:
                  "privacyRegion": privacyregionmod.region()[0], "telemetryConsent": TELEMETRY_CONSENT,
                  "runtimeProfiler": 2, "appVersion": updatesmod.local_version() or "",     # the release (VERSION): the players' reports
                  "sessionId": self.s.sid, "streamLease": 1, "leaseId": lease_id,
+                 # the map data's release this server reads (its supervisor's pick for the app session, frozen: the
+                 # mod pins its level's world to its live connection's and holds on another, releasepin.lua)
+                 "overtureRelease": _overture_release(),
                  "farFormat": self.s.far_format, "material": farfield.MATERIAL,
                  "nearVisual": self.s.near_visual, "attribution": self.s.attribution()}
             import budget
@@ -8988,6 +8991,7 @@ class Connection:
                     m["prewarm"] = self.s.prewarm_vfs
             # a game that outlived its server: keep the session folders its tiles still use
             self.s.claim_sessions(self, msg.get("sessions"))
+            _note_overture_session(self.s.cache_dir, self.s.net)
             # a mod that reads a vegetation tile as one flat array of numbers (no table per item in its Lua: trees.lua);
             # an older one gets the rows
             self.veg_flat = msg.get("vegFlat") is True
@@ -9073,7 +9077,7 @@ class Connection:
             import mpshare
             hub, new = self.s.share_hub(self.send)
             self.send({"type": "share_info", "code": mpshare.share_code(self.s.share_parts()),
-                       "weight": mpshare.share_weight()})
+                       "weight": mpshare.share_weight(), "overtureRelease": _overture_release()})
             if new:
                 self.spawn(self.share_pump(hub))
         elif kind == "share_group":             # the plugin's bngeGroup: the players near us that share our code
@@ -12771,6 +12775,36 @@ def parse_radii(text):
 OPEN_FILES = 65536      # raise_open_files: the soft limit wanted
 
 
+def _overture_release():
+    """The Overture release this process reads (overture.effective: RELEASE_ENV from its supervisor, frozen)."""
+    import overture
+    return overture.effective()
+
+
+_OVERTURE_NOTED = []
+
+
+def _note_overture_session(cache_dir, net):
+    """Once a process, at the first game's hello of a server its supervisor handed a release (overturepick
+    RELEASE_ENV): in the background, the release's whole STAC index kept here when it is not the shipped one, then the
+    release noted as this machine's last session's (overturepick.LAST_FILE: a later start whose pick gets no answer in
+    time takes it, overturepick.fallback)."""
+    import overturepick
+    if _OVERTURE_NOTED or overturepick.from_env() is None or getattr(net, "offline_flag", False):
+        return
+    _OVERTURE_NOTED.append(True)
+
+    def run():
+        import overture
+        try:
+            schema = overture.note_session(cache_dir, net)
+            log.info("Overture release %s: %s", overture.effective(),
+                     "noted for this machine's next starts" if schema else "not noted (its STAC index not kept)")
+        except Exception as e:      # (a later start then decides without it)
+            log.info("Overture release %s not noted: %s: %s", overture.effective(), type(e).__name__, e)
+    threading.Thread(target=run, name="overture-session", daemon=True).start()
+
+
 def raise_open_files():
     """Unix: the soft limit on open files raised to the hard one (at most OPEN_FILES), before any worker starts (they
     inherit it). Every decoded DEM tile a process keeps is a memory-mapped file (dem.py's mirror), and CPython's mmap
@@ -13245,6 +13279,8 @@ def main():
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO,
                         format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     log.info("download cache: %s", args.cache_dir)
+    import overture as overturemod     # (frozen here, before any worker starts: every process of this start reads it)
+    log.info("Overture release %s (this build's own: %s)", overturemod.effective(), overturemod.RELEASE)
     try:                # (the settings page's Experimental switches, put in this environment before the start)
         import experimental
         on = sorted({k for _sid, env, _n in experimental.FEATURES for k in env if os.environ.get(k)})

@@ -495,6 +495,9 @@ def main():
     airports.Store(a.cache, netfetch.Fetcher()).load()
     if "BNGE_DEM_CDN" not in os.environ:
         os.environ["BNGE_DEM_CDN"] = cdn.dem_release(netfetch.Fetcher(), a.cache) or "off"
+    # (the Overture release players' apps pick, or BNGE_OVERTURE_RELEASE for a candidate: in the vkey)
+    import overturepick
+    print("Overture release", overturepick.choose_for_process(a.cache), flush=True)
     work = os.path.join(a.cache, "dec_work")
     stats = []
     for name, s, w, n, e in places:
