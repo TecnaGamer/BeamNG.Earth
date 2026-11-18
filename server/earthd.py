@@ -3280,8 +3280,26 @@ class Server:
                                      de_on=designsmod.enabled(self.dej_on), de_routes=de_routes, mapped_lamps=mapped_lamps,
                                      wear=Server.wear_arg(self),
                                      cover_fn=getattr(self.surface, "classes", None))
-        # (railway and tram tracks on the ground)
-        chunks += railsmod.tile_chunks(anchor.frame, tx, ty, cells, self.country(anchor), urban)
+        # (railway and tram tracks on the ground; BNE_RAIL_ROAD_FIT: one record of the level crossings for the decks here
+        # and the 3D track below)
+        import railways
+        rail_rec = rail_early = None    # (the track made first from the records, the decks for the parts it drew)
+        if railways.RAIL_ROAD_FIT:
+            _rcells = [cell_fn(k) for k in roadsmod.cells_of_tile(anchor.frame, tx, ty, railways.REACH_M)]
+            _rground = railways.point_ground(anchor.frame, elev, (aid, anchor.lat, anchor.lon))
+            _rfar = railways.point_ground(
+                anchor.frame, lambda la, lo: self.ground(anchor.frame, la, lo, self.dem.sample(la, lo, zoom)),
+                ("raw", aid, anchor.lat, anchor.lon))
+            _rbed = getattr(getattr(self, "plan_store", None), "elev", None)
+            rail_rec = railways.crossing_records(anchor.frame, tx, ty, _rcells, _rground, far_ground=_rfar,
+                                                 load=cell_fn, bed_elev=_rbed)
+            rail_early_props = []
+            rail_early = railways.tile_mesh(anchor.frame, tx, ty, _rcells, _rground, far_ground=_rfar,
+                                            return_decks=True, load=cell_fn, bed_elev=_rbed,
+                                            furniture=rail_early_props,
+                                            under=((lambda xy: buildingsmod._under_bridges(_bridge_fps, xy))
+                                                   if _bridge_fps else None), records=rail_rec)
+        chunks += railsmod.tile_chunks(anchor.frame, tx, ty, cells, self.country(anchor), urban, records=rail_rec)
         if self.airports is not None:   # runway markings, drawn by the road mesh like the lane lines
             chunks += self.airports.tile_chunks(anchor.frame, tx, ty, elev, roadsmod.tile_bbox)
         x0, y0, _, _ = roadsmod.tile_bbox(tx, ty)
@@ -3398,17 +3416,20 @@ class Server:
         tmesh = roadmeshmod.tunnel(chunks, (x0, y0, 0.0), rwalls)
         import railways
         rail_props = []                 # (buffer stops and the walk signs at footway crossings: railways.tile_mesh's furniture)
-        rmesh, rail_decks = railways.tile_mesh(anchor.frame, tx, ty,
-                                   [cell_fn(k) for k in roadsmod.cells_of_tile(anchor.frame, tx, ty, railways.REACH_M)],
-                                   railways.point_ground(anchor.frame, elev, (aid, anchor.lat, anchor.lon)),
-                                   far_ground=railways.point_ground(
-                                       anchor.frame,
-                                       lambda la, lo: self.ground(anchor.frame, la, lo, self.dem.sample(la, lo, zoom)),
-                                       ("raw", aid, anchor.lat, anchor.lon)),
-                                   return_decks=True, load=cell_fn,
-                                   bed_elev=getattr(getattr(self, "plan_store", None), "elev", None), furniture=rail_props,
-                                   under=((lambda xy: buildingsmod._under_bridges(_bridge_fps, xy))
-                                          if _bridge_fps else None))
+        if rail_early is not None:      # (made above, before the decks: BNE_RAIL_ROAD_FIT)
+            (rmesh, rail_decks), rail_props = rail_early, rail_early_props
+        else:
+            rmesh, rail_decks = railways.tile_mesh(anchor.frame, tx, ty,
+                                     [cell_fn(k) for k in roadsmod.cells_of_tile(anchor.frame, tx, ty, railways.REACH_M)],
+                                     railways.point_ground(anchor.frame, elev, (aid, anchor.lat, anchor.lon)),
+                                     far_ground=railways.point_ground(
+                                         anchor.frame,
+                                         lambda la, lo: self.ground(anchor.frame, la, lo, self.dem.sample(la, lo, zoom)),
+                                         ("raw", aid, anchor.lat, anchor.lon)),
+                                     return_decks=True, load=cell_fn,
+                                     bed_elev=getattr(getattr(self, "plan_store", None), "elev", None), furniture=rail_props,
+                                     under=((lambda xy: buildingsmod._under_bridges(_bridge_fps, xy))
+                                            if _bridge_fps else None), records=rail_rec)
         if rail_props:
             props = (props or []) + rail_props
         bld = None

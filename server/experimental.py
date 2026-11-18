@@ -35,7 +35,9 @@ FEATURES = (
                        "BNE_FAST_DECK_ENDS": "on", "BNE_FAST_GAP": "on", "BNE_FAST_DECK_GROUND": "on",
                        # racetracks without street poles (BNE_POWER_YARDS left out: one open Codex high, feeders
                        # classified differently by the span and yard tiles)
-                       "BNE_RACEWAY_PROPS": "on"}, None),
+                       "BNE_RACEWAY_PROPS": "on",
+                       # railways at roads (the user's reports r61-r64, r80, r92)
+                       "BNE_RAIL_ROAD_FIT": "on", "BNE_RAIL_SEAM_NATURAL": "on"}, None),
     ("expEuScenery", {"BNE_EU_ROAD_DETAILS": "on", "BNE_FR_ROADS": "on", "BNE_FR_HOUSES": "on"}, None),
     ("expDropRails", {"BNE_DROP_RAILS": "on"}, None),                     # droprails.enabled
     ("expEntranceFlares", {"BNE_ENTRANCE_FLARES": "on"}, None),           # roads.flares_enabled

@@ -77,6 +77,7 @@ mod farsel;
 mod dirtsteps;
 mod racedig;
 mod racejoin;
+mod railfit;
 mod gridinterp;
 mod dejunction;
 mod streetlabels;
@@ -6638,6 +6639,17 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 438: BNE_POWER_YARDS: power_line_layout keeps yard-edge vertices only with yards given; a gantry fits with
     // its whole footprint; substation_yard clips an anchored kit only with anchors (a, 5)
     // 439: a gantry's footprint has no yard ring vertex under it (a hole inside it)
+    m.add_function(wrap_pyfunction!(railfit::rail_crossing_runs, m)?)?;
+    m.add_function(wrap_pyfunction!(railfit::rail_road_ends, m)?)?;
+    m.add_function(wrap_pyfunction!(railfit::station_platform_trim, m)?)?;
+    m.add_function(wrap_pyfunction!(railseam::rail_seam_couple_ground, m)?)?;
+    // 420: railfit (BNE_RAIL_ROAD_FIT, the reports r63 / r64 / r92): rail_crossing_runs = railways.crossing_records (the
+    // 3D track's cut and the crossing deck from one record), rail_road_ends = dead_ends' road test, station_platform_trim =
+    // railstations._off_roads; railseam::rail_seam_couple_ground = grading.seam_on_ground (BNE_RAIL_SEAM_NATURAL, r61 / r62 / r80)
+    // 421: rail_crossing_runs, rail_road_ends (z_end, rail heads, cos, dz) and railseam::rail_seam_couple_ground (rown)
+    // as they are now; 420's rail_run_ends, rail_deck_line and rail_seam_natural gone (Python and module ship together)
+    // 422: rail_crossing_runs takes rail_out (the outer rail kept off a shallow crossing's lane); 423: rail_road_ends
+    // takes the parts' gauges and reads their ends only
     m.add("VERSION", 440)?;
     Ok(())
 }
