@@ -22,7 +22,7 @@ import mapcells  # noqa: E402
 import revisit  # noqa: E402
 import roads  # noqa: E402
 import structures  # noqa: E402
-from test_roads import FRAME, LAT, LON, M_LON, features  # noqa: E402
+from test_roads import FRAME, LAT, LON, M_LAT, M_LON, features  # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -290,6 +290,90 @@ class GroupsTest(unittest.TestCase):
             group = {m["key"].split(":")[0]: m["group"] for m in doc["members"] if m["kind"] != "outside"}
             self.assertEqual(group.get("q"), group["p"], first)
             got.append(digests(docs))
+        self.assertEqual(got[0], got[1])
+
+    def test_a_wide_deck_across_a_cell_edge_either_order(self):
+        """S2a fix (Codex): a narrow deck and a wide one either side of a map cell's edge, each in its own cell's map
+        alone, each seed's own cell features alone in the first ask. 60 m wide, 2 m apart edge to edge (BESIDE): S2a's
+        halo allowed for a 40 m other deck, so from the narrow deck it never reached the wide deck's cell while the
+        wide deck's reached the narrow one's, and the deck asked first decided the chain; now one structure either
+        way. 100 m wide (past structures.HALF_MAX_M), 0.5 m apart edge to edge at their raw widths, the cell edge just
+        past the narrow deck's halo: the old 1.5 m beside test at raw widths paired them from the wide side alone;
+        capped, neither side pairs them.
+        Both orders publish the same parts, trusses and shadow JSONs."""
+        home = mapcells.cell_of(LAT, LON)
+        east = (home.bounds()[2] - LON) * M_LON
+        ekey = mapcells.cell_of(LAT, home.bounds()[2] + 1e-4)
+        probe = features([[(0, 0), (100, 0)]], ["primary"], levels=[(0, 1.0, 0.0, 1.0)], ids=["p"])
+        w = roads.bridge_specs(probe)[0].width
+        flat = lambda la, lo: np.full(np.shape(la), 10.0)             # noqa: E731
+        for wide, xp, xq, one in ((60.0, east + 0.5 - 32.0 - w / 2, east + 0.5, True),
+                                  (100.0, east - 1.1 * (w / 2 + 36.0) - 1.0,
+                                   east - 1.1 * (w / 2 + 36.0) - 1.0 + w / 2 + 50.5, False)):
+            self.assertGreater(east - xp, 1.1 * (w / 2 + 20.0 + structures.TOUCH_M))     # (past S2a's halo)
+            west = features([[(xp, -100), (xp, 100)]], ["primary"], levels=[(0, 1.0, 0.0, 1.0)], ids=["p"])
+            eastf = features([[(xq, -100), (xq, 100)]], ["primary"], levels=[(0, 1.0, 0.0, 1.0)], ids=["q"])
+            cell_fn = lambda key, a=west, b=eastf: a if key == home else b if key == ekey else None  # noqa: E731
+
+            def specs(feats, wide=wide):
+                return [s._replace(width=wide) if s is not None and str(feats.ids[i]) == "q" else s
+                        for i, s in enumerate(roads.bridge_specs(feats))]
+            boxes = {"p": (xp - 1, -20, xp + 1, 20), "q": (xq - 1, -20, xq + 1, 20)}
+            got = []
+            for first, seed in (("p", west), ("q", eastf)):
+                with self.subTest(wide=wide, first=first), tempfile.TemporaryDirectory() as d, \
+                        mock.patch.object(revisit, "CACHE_DIR", d), mock.patch.object(structures, "SHADOW", True):
+                    bp = roads.BridgeProfiles(FRAME, cell_fn, flat)
+                    bp.specs_of = specs
+                    self.assertEqual([fid for fid, *_r in bp.parts([seed], boxes[first])], [first])
+                    for box in boxes.values():
+                        bp.parts([west, eastf], box)
+                    self_flush()
+                    docs = read_docs(d)
+                    done = sorted((str(k), np.asarray(v[2], np.float64).tobytes()) for k, v in bp.done.items())
+                    trusses = sorted((str(k), repr(v)) for k, v in bp.trusses.items())
+                    doc = chain_doc(docs, "p")
+                    group = {m["key"].split(":")[0]: m["group"] for m in doc["members"] if m["kind"] != "outside"}
+                    self.assertEqual(group.get("q") == group["p"], one)
+                    got.append((done, trusses, digests(docs)))
+            self.assertEqual(got[0], got[1], wide)
+
+    def test_halo_cells_never_cap_a_chain(self):
+        """S2a fix (Codex): a chain of 7 map cells 20 m from a cell row's edge touches 7 empty cells of the next row
+        with its halo. Counted against CHAIN_CELLS they made 14 and the chain went to window solves (seams); with the
+        halo's own budget it is one solve, the same asked from either end. With no halo budget at all the same chain
+        is capped (the halo cells are there)."""
+        home = mapcells.cell_of(LAT, LON)
+        w_, s_, e_, _n = home.bounds()
+        cw = (e_ - w_) * M_LON
+        x0, y = (w_ - LON) * M_LON, (s_ - LAT) * M_LAT + 20.0
+        xs = [x0 + cw * (0.3 + 6.4 * t / 7) for t in range(8)]
+        lines = [[(xs[i] + (xs[i + 1] - xs[i]) * t / 8, y) for t in range(9)] for i in range(7)]
+        ids = [f"c{i}" for i in range(7)]
+        feats = features(lines, ["primary"] * 7, levels=[(i, 1.0, 0.0, 1.0) for i in range(7)], ids=ids)
+        cell_fn = lambda key: feats if key.y == home.y and key.z == home.z else None      # noqa: E731
+        flat = lambda la, lo: np.full(np.shape(la), 10.0)             # noqa: E731
+        got = []
+        for budget, box in ((roads.CHAIN_HALO_CELLS, (xs[0], y - 10, xs[0] + 50, y + 10)),
+                            (roads.CHAIN_HALO_CELLS, (xs[7] - 50, y - 10, xs[7], y + 10)),
+                            (0, (xs[0], y - 10, xs[0] + 50, y + 10))):
+            with self.subTest(budget=budget, box=box), tempfile.TemporaryDirectory() as d, \
+                    mock.patch.object(revisit, "CACHE_DIR", d), mock.patch.object(structures, "SHADOW", True), \
+                    mock.patch.object(roads, "CHAIN_HALO_CELLS", budget):
+                bp = roads.BridgeProfiles(FRAME, cell_fn, flat)
+                bp.parts([feats], box)
+                self_flush()
+                docs = read_docs(d)
+                capped = [v for v in docs.values() if v.get("capped") is not None]
+                whole = [v for v in docs.values() if v.get("capped") is None]
+                if budget:
+                    self.assertFalse(capped)
+                    self.assertEqual(len(whole), 1)
+                    self.assertEqual(sorted({m["key"].split(":")[0] for m in whole[0]["members"]}), ids)
+                    got.append(digests(docs))
+                else:
+                    self.assertTrue(capped)
+                    self.assertFalse(whole)
         self.assertEqual(got[0], got[1])
 
     def test_an_owners_solve_checks_its_own_chain(self):
