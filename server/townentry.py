@@ -488,12 +488,38 @@ def on_agglo(agglo, lat, lon):
     return out
 
 
+_RING_BOXES = {}            # id(ring) -> (ring, its box): _ring_box
+RING_BOXES_MAX = 8192
+
+
+def _ring_box(ring):
+    """(x0, y0, x1, y1) of a ring's vertices, kept per ring (a commune's rings are asked about for every road of
+    every tile near it)."""
+    got = _RING_BOXES.get(id(ring))
+    if got is not None and got[0] is ring:
+        return got[1]
+    r = np.asarray(ring, np.float64).reshape(-1, 2)
+    box = (float(r[:, 0].min()), float(r[:, 1].min()), float(r[:, 0].max()), float(r[:, 1].max()))
+    if len(_RING_BOXES) >= RING_BOXES_MAX:
+        _RING_BOXES.clear()
+    _RING_BOXES[id(ring)] = (ring, box)     # (the ring itself held: its id is its own while it is here)
+    return box
+
+
 def inside(parts, xy):
-    """Which points xy (n, 2) lie inside a polygon of parts (each a list of rings: outer first, then its holes)."""
+    """Which points xy (n, 2) lie inside a polygon of parts (each a list of rings: outer first, then its holes). A part
+    whose outer ring's box the points' box does not touch is not asked: none of them is inside it (a road's points
+    were counted against every vertex of every commune near the tile, 25 000 times in 62 motorway tiles)."""
     xy = np.asarray(xy, np.float64).reshape(-1, 2)
     hit = np.zeros(len(xy), bool)
+    if not len(xy):
+        return hit
+    x0, y0, x1, y1 = float(xy[:, 0].min()), float(xy[:, 1].min()), float(xy[:, 0].max()), float(xy[:, 1].max())
     for rings in parts:
         if not len(rings) or len(rings[0]) < 3:
+            continue
+        b = _ring_box(rings[0])
+        if x0 > b[2] or x1 < b[0] or y0 > b[3] or y1 < b[1]:
             continue
         here = polygon.contains_points(rings[0], xy)
         for hole in rings[1:]:
@@ -1279,16 +1305,44 @@ def _runs(s, st):
     return runs
 
 
-def _changes(line, communes, frame):
-    """[(s, a, b)]: the arc lengths along line (k, 3) where the state (state's, its short stretches taken out:
-    _runs) changes from a to b, each found to within STEP_M / 2**REFINE. The line's whole length is read, its last
-    stretch too, so a road made of several segments has each change in exactly one of them."""
+def _stations(line):
+    """(s, the points there) of _changes' stations along line, None for a line with no length."""
     L = furniture._arclen(line)[-1]
     if L <= 0:
-        return []
+        return None
     s = np.append(np.arange(0.0, L, STEP_M), L)
-    p, _ = furniture._at(line, s)
-    st = state(p[:, :2], communes, frame)
+    return s, furniture._at(line, s)[0]
+
+
+def _states_many(lines, communes, frame):
+    """Per line its _stations and their state, None for a line with no length: every line's stations in one state()
+    (each point's state is its own). A tile's roads asked every commune near it line by line, 15 000 counts of a
+    road's few points against a commune's whole boundary in 62 motorway tiles (2026-11-18)."""
+    got = [_stations(line) for line in lines]
+    have = [g for g in got if g is not None]
+    if not have:
+        return got
+    st = state(np.concatenate([p[:, :2] for _s, p in have]), communes, frame)
+    out, at = [], 0
+    for g in got:
+        if g is None:
+            out.append(None)
+            continue
+        out.append((g[0], st[at:at + len(g[0])]))
+        at += len(g[0])
+    return out
+
+
+def _changes(line, communes, frame, stations=None):
+    """[(s, a, b)]: the arc lengths along line (k, 3) where the state (state's, its short stretches taken out:
+    _runs) changes from a to b, each found to within STEP_M / 2**REFINE. The line's whole length is read, its last
+    stretch too, so a road made of several segments has each change in exactly one of them. stations: the line's of
+    _states_many, when a caller with several lines has them."""
+    if stations is None:
+        stations = _states_many([line], communes, frame)[0]
+    if stations is None:
+        return []
+    s, st = stations
     # (the stretches are of towns: the villages of one German Gemeinde grown together are one, no sign between them)
     town = _towns(communes)
     tk = town[st]
@@ -1495,7 +1549,8 @@ def town_signs(roads, communes, frame, box, left_hand=False, rings=(), mapped=No
         if spec.cls not in SIGN_CLASSES or spec.link or spec.kind != "paved":
             continue
         lines.append((spec, line))
-        changes += [(len(lines) - 1, s, a, b) for s, a, b in _changes(line, communes, frame)]
+    for n, ((_spec, line), stations) in enumerate(zip(lines, _states_many([ln for _sp, ln in lines], communes, frame))):
+        changes += [(n, s, a, b) for s, a, b in _changes(line, communes, frame, stations)]
     signs = []
     if mapped:
         changes, signs = mapped_signs(lines, changes, communes, frame, mapped, urban, mlines)
