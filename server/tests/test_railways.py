@@ -1471,3 +1471,37 @@ class RoadFitTest(unittest.TestCase):
                     q = mid + np.c_[-t2[:, 1], t2[:, 0]] * hg
                     d = np.min(np.hypot(*(steel[:, None, :2] - q[None, :, :]).T), axis=1)
                     self.assertGreater(float(d.min()), 0.2)
+
+    def test_a_sparse_road_graded_in_one_tile_only_is_the_same_crossing_in_both(self):
+        """Codex on b2a9b4b3: the at-grade test read a road's height at its segment's start through each tile's graded
+        window (_mixed): a sparse road whose one segment starts 130 m from the crossing, inside tile 0's window on a
+        3 m fill and outside tile 1's, was over the bed in tile 0 (no crossing, the track drawn) and at grade in tile 1
+        (cut, a deck). The records read the road every STEP_M on the natural ground (far_ground)."""
+        f = features([[(-100.0, 100.0), (500.0, 100.0)], [(200.0, -30.0), (300.0, 230.0)]],
+                     ["standard_gauge", "secondary"], subtypes=["rail", "road"])
+        start = FRAME.geodetic_to_enu(*FRAME.enu_to_geodetic(200.0, -30.0, 0.0)[:2], 0.0)[:2]
+        start = np.array([float(start[0]), float(start[1])])
+
+        def graded(q):              # (the road's start on a 3 m fill the grading made)
+            q = np.asarray(q, np.float64).reshape(-1, 2)
+            return np.where(np.hypot(*(q - start).T) < 20.0, 13.0, 10.0)
+        got = {}
+        for tx in (0, 1):
+            with unittest.mock.patch.object(railways, "RAIL_ROAD_FIT", True):
+                rec = railways.crossing_records(FRAME, tx, 0, [f], graded, far_ground=flat)
+            runs = [(xy, r) for (fid, _c, _k, xy), r in zip(rec["rails"], rec["runs"]) if fid == "id000"]
+            self.assertEqual(len(runs), 1)
+            xy, r = runs[0]
+            self.assertIsNotNone(r, f"tile {tx}: the crossing")
+            got[tx] = [(round(float(xy[a, 0]), 6), round(float(xy[b, 0]), 6), float(t0), float(t1))
+                       for (a, b), t0, t1 in zip(r["runs"].tolist(), r["start_t"].tolist(), r["end_t"].tolist())]
+        self.assertEqual(got[0], got[1])
+        # (today's test, through tile 0's window: no crossing there)
+        with unittest.mock.patch.object(railways, "RAIL_ROAD_FIT", False):
+            box = roads.tile_bbox(0, 0)
+            ground = railways._mixed(graded, flat, box)
+            (line, hw), = railways.crossings(FRAME, [f], box, reach=50.0)
+            xy = railways.parts(FRAME, [f], box, clip=True)[0][3]
+            blk = railways._blocked(xy, np.full(len(xy), 10.0),
+                                    [(line, hw, np.asarray(ground(line), np.float64))])
+            self.assertFalse(blk.any())

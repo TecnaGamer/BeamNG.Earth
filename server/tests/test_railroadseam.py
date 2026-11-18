@@ -173,6 +173,26 @@ class NaturalSlopeTest(unittest.TestCase):
         moved = rs.couple(xy, zb, railways.GRADE_HALF_M, eff, (), 0.0)
         self.assertLess(float(np.min(moved)), 102.0)
 
+    def test_a_road_crossing_at_grade_and_again_raised_keeps_its_separation(self):
+        """Codex on b2a9b4b3: a road crossing the track at grade is lowered (railways.seam_lowered: the flush crossing)
+        all along, and its second crossing 2.3 m over the bed on an approach read 1.75 m: at grade, the bed pulled up
+        to it. The separation test reads the road's own heights."""
+        import grading
+        import railways
+        frame = self.frame
+        elev = self.elev(0.0)
+        xy = straight(0.0, 101, 200.0)
+        zb = np.full(len(xy), 100.0)
+        road = np.array([[50.0, -30.0], [50.0, 30.0], [150.0, 30.0], [150.0, -30.0]])
+        rz = np.array([100.55, 100.55, 102.3, 102.3])          # (at grade at x 50, 2.3 m up at x 150)
+        beside = [(road, rz, 4.0)]
+        self.assertEqual(railways.seam_lowered(xy, zb, beside), (0,))
+        on = np.asarray(grading.seam_on_ground(frame, elev, xy, zb, beside, grading.seam_pack(frame, elev, beside)))
+        at = np.abs(xy[:, 0] - 150.0) < 6.0
+        np.testing.assert_allclose(on[at], 100.0, atol=1e-9)
+        old = rs.couple(xy, zb, railways.GRADE_HALF_M, beside, (0,), railways.SEAM_LOWER_M)   # (the plain path)
+        self.assertGreater(float(np.max(old[at])), 101.0, "couple's own lowered test takes it as at grade")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -6613,6 +6613,8 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 420: railfit (BNE_RAIL_ROAD_FIT, the reports r63 / r64 / r92): rail_crossing_runs = railways.crossing_records (the
     // 3D track's cut and the crossing deck from one record), rail_road_ends = dead_ends' road test, station_platform_trim =
     // railstations._off_roads; railseam::rail_seam_couple_ground = grading.seam_on_ground (BNE_RAIL_SEAM_DEM, r61 / r62 / r80)
-    m.add("VERSION", 420)?;
+    // 421: rail_crossing_runs, rail_road_ends (z_end, rail heads, cos, dz) and railseam::rail_seam_couple_ground (rown)
+    // as they are now; 420's rail_run_ends, rail_deck_line and rail_seam_natural gone (Python and module ship together)
+    m.add("VERSION", 421)?;
     Ok(())
 }

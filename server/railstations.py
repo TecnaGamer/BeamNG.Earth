@@ -51,7 +51,7 @@ WALK_CLEAR_M = 1.0          # m past a walkway's half width (one crossing the pl
 WALK_CLEAR_CLASSES = {"footway": 2.0, "path": 1.5, "cycleway": 2.5, "pedestrian": 3.0, "steps": 2.0,
                       "bridleway": 2.0}         # class -> width (m) when the map has none
 SYNTH_MIN_M = 30.0          # m: a worked-out platform shorter than this is none (_synth's own minimum)
-FIT_NATIVE = 420            # earthfast.VERSION of station_platform_trim (railfit.rs)
+FIT_NATIVE = 421            # earthfast.VERSION of station_platform_trim (railfit.rs)
 BUILDING_NEAR_M = 160.0
 ROOF_NEAR_M = 6.0           # a roof this near a platform (or overlapping it) covers it
 LINK_JOIN_M = 2.5           # ways whose ends are this near are one link

@@ -1525,7 +1525,7 @@ RUN_END_SAMPLES = 40        # points tried along a STEP_M section for a crossing
 RUN_END_BISECT = 6          # ... then halvings between the two round it (under a millimetre)
 
 
-FIT_NATIVE = 420          # earthfast.VERSION of the railway-at-road kernels (railfit.rs)
+FIT_NATIVE = 421          # earthfast.VERSION of the railway-at-road kernels (railfit.rs)
 
 
 def crossing_records(frame, tx, ty, cells, ground, sign_style=None, far_ground=None, load=None, bed_elev=None):
@@ -1534,7 +1534,8 @@ def crossing_records(frame, tx, ty, cells, ground, sign_style=None, far_ground=N
     crossing_panels), so the two cannot disagree. The tile's rail parts, beds and crossers as tile_mesh makes them
     (its arguments' meaning); per ground part (_part_crossings) a road cuts it only where its centre line crosses that
     part or the part runs down it (street_along), with the at-grade test that cuts the track (_blocked's, at the bed
-    before its flush), and each crossing's two edges found with that same test. A dict: tunnels, ground (mixed), worn,
+    before its flush, the road every STEP_M on the natural ground: far_ground, the same in every tile), and each
+    crossing's two edges found with that same test. A dict: tunnels, ground (mixed), worn,
     gauges, cut (end_key of the cut ends), rails, prof, all_cr, cr, crossers, runs (per part: None or {blk, runs,
     start_t, end_t}), half_g (per part: the rails' half gauge), sign_style."""
     cells = list(cells)
@@ -1559,7 +1560,19 @@ def crossing_records(frame, tx, ty, cells, ground, sign_style=None, far_ground=N
         for line, hw in cr:
             crossers.append((line, hw, zc[k:k + len(line)]))
             k += len(line)
-    runs = [_part_crossings(xy, zb, crossers) if kind == "ground" and c != "tram" else None
+    # (the at-grade test of the records on heights no tile's window changes: the roads every STEP_M with the natural
+    # ground under them, as the beds are on it (railprofile's lattice of the DEM): the graded ground of the window
+    # (_mixed) at a sparse road's segment start 60 m off told one tile "at grade" and the next "not")
+    nat = far_ground if far_ground is not None else ground
+    xcrossers = []
+    if crossers:
+        dense = [(roads.densify(np.asarray(line, np.float64)[:, :2], STEP_M)[:, :2], hw) for line, hw, _z in crossers]
+        zx = np.asarray(nat(np.concatenate([ln for ln, _hw in dense])), np.float64)
+        k = 0
+        for line, hw in dense:
+            xcrossers.append((line, hw, zx[k:k + len(line)]))
+            k += len(line)
+    runs = [_part_crossings(xy, zb, xcrossers) if kind == "ground" and c != "tram" else None
             for (_f, c, kind, xy), (zb, _zg) in zip(rails, prof)]
     half_g = [gauges.get(fid, gauge(c, sign_style)) / 2 + RAIL_HEAD / 2 for fid, c, _k, _xy in rails]
     return {"tunnels": tunnels, "ground": ground, "worn": worn, "gauges": gauges, "cut": cut, "rails": rails,
