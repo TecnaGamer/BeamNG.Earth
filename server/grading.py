@@ -6075,20 +6075,33 @@ class _Planner:
     def _raw_lines(self, k):
         """FAST_GAP: cell k's roads as mapped, in the frame, before any lane placement (the same copy whichever cell
         or plan asks): {"bridges": [(line (m, 2), class, link)], "ground": [(line, class, link, built, feature id)]}.
-        Kept per cell when read complete (nothing read short, and neither the layer's level ranges nor its features'
-        home copies' made short: _ranges_short; such a layer is said short to every reader)."""
+        Its pieces are made here from the level ranges of the very layers they come from (the layer's own, or its
+        features' home copies' as they are now: never the pieces another reader left in the layer's memory, which may
+        stem from a home copy since replaced). Kept per cell when read complete (nothing read short, and none of those
+        layers' ranges made short: roads._cell_ranges' _ranges_short_until; such a read is said short every time)."""
         got, res = self._memo_get("_raw_lines_memo", str(k))
         if got:
             return res
         f = self.md.cell(k, layers=("roads",), kind="demand").layers.get("roads")
         out = {"bridges": [], "ground": []}
+        short = False
         if f is not None and len(f):
             bs = roadsmod.bridge_specs(f)
             rs = roadsmod.road_specs(f, None, self.widths)
             rows = []
             for i in range(len(f)):
-                for kind, sp, ps in (("bridges", bs[i], roadsmod.bridge_parts(f, i) if bs[i] is not None else ()),
-                                     ("ground", rs[i], roadsmod.ground_parts(f, i) if rs[i] is not None else ())):
+                if bs[i] is None and rs[i] is None:
+                    continue
+                # (the ranges from the layer they come from now, its mark read off that very layer)
+                h = roadsmod.home_copy(f, i) if roadsmod.HOME_RANGES_ON else None
+                if h is not None:
+                    rngs = roadsmod.home_ranges(f, i, h[0], h[1], roadsmod.level_ranges(h[0], h[1], _home=False))
+                    short = short or h[0].__dict__.get("_ranges_short_until") is not None
+                else:
+                    rngs = roadsmod.level_ranges(f, i, _home=False)
+                    short = short or f.__dict__.get("_ranges_short_until") is not None
+                for kind, sp, want in (("bridges", bs[i], "bridge"), ("ground", rs[i], "ground")):
+                    ps = roadsmod._parts_by_level_new(f, i, want, rngs=list(rngs)) if sp is not None else ()
                     for ring in ps:
                         ring = np.asarray(ring, np.float64)
                         if len(ring) >= 2:
@@ -6106,10 +6119,9 @@ class _Planner:
                         out[kind].append((line, cls, _is_link(sp)))
                     else:
                         out[kind].append((line, cls, _is_link(sp), sp.kind in roadsmod.BUILT, fid))
-        if f is not None and _ranges_short(f):
-            # (its level ranges, or a home copy's its features took theirs from, were made short, or taken from a short
-            # shared entry: the layers keep them, and a read again says nothing. Short here too, every time, and never
-            # kept: roads._cell_ranges' mark)
+        if short:
+            # (ranges made short, or taken from a short shared entry: the layers keep them, and a read again says
+            # nothing. Short here too, every time, and never kept: roads._cell_ranges' mark)
             import revisit
             revisit.fault()
             return out
@@ -7915,23 +7927,6 @@ def gap_line(zb):
     if not near.any() or float(np.max(a + b * db[near] - zb[near])) < ABUT_MIN_M:
         return None
     return float(a), float(b), reach
-
-
-def _ranges_short(f):
-    """FAST_GAP: were cell layer f's level ranges, or those of any home copy (roads.home_copy) its features take theirs
-    from, made short (roads._cell_ranges' _ranges_short_until on the layer)? Pure given the layers."""
-    if f.__dict__.get("_ranges_short_until") is not None:
-        return True
-    if not roadsmod.HOME_RANGES_ON:
-        return False
-    seen = set()
-    for i in range(len(f)):
-        h = roadsmod.home_copy(f, i)
-        if h is not None and id(h[0]) not in seen:
-            seen.add(id(h[0]))
-            if h[0].__dict__.get("_ranges_short_until") is not None:
-                return True
-    return False
 
 
 def _along(line, d):

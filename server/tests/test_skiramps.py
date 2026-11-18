@@ -375,6 +375,42 @@ class RawLinesShort(unittest.TestCase):
                 self.assertTrue(b.n, f"attempt {attempt}: said short")
                 self.assertNotIn(str(k), g.__dict__.get("_raw_lines_memo", {}))
 
+    def test_home_copy_replaced(self):
+        # (Codex review of round 5: the requesting layer kept, its short home copy evicted and reloaded clean between
+        # reads: the second read's pieces come from the clean copy's ranges, not the short one's left in any memory)
+        import mapcells
+        site, key = self.layer()
+        f = site.cells[key]
+        f.__dict__.pop("_ranges_short_until", None)
+        k = mapcells.CellKey(*(int(v) for v in key.split("/")))
+        g = self.planner(f)
+
+        def copy():
+            h = f.__class__.__new__(f.__class__)
+            h.__dict__.update({kk: v for kk, v in f.__dict__.items() if not kk.startswith("_")})
+            return h
+        short_home, clean_home = copy(), copy()
+        short_home.__dict__["_level_ranges"] = {i: [(0.2, 0.8, "bridge")] for i in range(len(f))}
+        short_home.__dict__["_ranges_state"] = "done"
+        short_home.__dict__["_ranges_short_until"] = 1e18
+        home = [short_home]
+        with mock.patch.object(roads, "LIDAR_GAPS_ON", False), \
+                mock.patch.object(roads, "home_copy", lambda feats, i: (home[0], i) if feats is f else None):
+            with revisit.scope() as b:
+                first = g._raw_lines(k)
+            self.assertTrue(b.n)
+            self.assertNotIn(str(k), g.__dict__.get("_raw_lines_memo", {}))
+            home[0] = clean_home
+            with revisit.scope() as b:
+                second = g._raw_lines(k)
+            self.assertFalse(b.n)
+            self.assertIn(str(k), g._raw_lines_memo)
+            want = sum(len(roads._parts_by_level_new(f, i, "bridge", rngs=roads.level_ranges(clean_home, i, _home=False)))
+                       for i, sp in enumerate(roads.bridge_specs(f)) if sp is not None)
+        self.assertEqual(len(second["bridges"]), want, "the clean copy's pieces")
+        length = lambda r: round(sum(float(np.hypot(*np.diff(b[0], axis=0).T).sum()) for b in r["bridges"]), 3)  # noqa: E731
+        self.assertNotEqual(length(first), length(second), "not the short copy's")
+
     def test_cell_ranges_mark_a_short_entry(self):
         import time
         site, key = self.layer()
