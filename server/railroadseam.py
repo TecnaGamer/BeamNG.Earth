@@ -14,11 +14,12 @@ or more of height at a crossing angle) is not beside it: it is left alone, or th
 road under the deck. Pure given its inputs."""
 import numpy as np
 
+import railways
+
 SEAM_SLOPE = 3.0        # m of room a metre of height difference needs between two flat bands (the grader's SLOPE_RUN is 2)
 SEAM_TOL_M = 0.10       # m of difference allowed with no room at all
 REACH_M = 40.0          # m from the bed line a road is looked at
 MAX_MOVE_M = 6.0        # m the bed is moved at most (bad data: rather a step than a mountain)
-SPREAD_GRADE = 0.02     # the track's own grade, at which a move is run out along it (railways.GRADE)
 SEAM_CROSS_COS = 0.7071067811865476  # 45 deg: a road this far from parallel at the bed crosses it
 SEAM_CROSS_M = 2.0      # m of height between the bed and such a road: it crosses on a bridge, not beside it
 
@@ -46,8 +47,10 @@ def couple(xy, z, half, roads, lowered=(), lower_m=0.0):
             if j is not None:
                 rxy, rz, _rh = roads[k]
                 zs[off[j]:off[j + 1]] = (np.asarray(rz, np.float64) - lower_m)[:off[j + 1] - off[j]]
+    # (a move is run out along the track at the track's one grade law, railways.GRADE: this module's own SPREAD_GRADE, a 2 %
+    # literal with 'railways.GRADE' in its comment, stood beside the shapes' 2.5 % and railways' 2 %)
     out = fast.rail_seam_couple(xy, z, half, pts, zs, off, hw, REACH_M, SEAM_SLOPE, SEAM_TOL_M, MAX_MOVE_M,
-                                SPREAD_GRADE)
+                                railways.GRADE)
     return z if out is None else out
 
 

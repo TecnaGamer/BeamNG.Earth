@@ -1,7 +1,7 @@
 """The rail beds' heights as one surface over the anchor, the same for every tile and every grading cell (plan 035).
 
 railways.profile lays a bed along the lines inside ONE window (a tile's, a grading cell's): a bridge deck or a road tunnel
-just outside the window's edge changes the bed inside it (the deck's ramp climbs 2 % for hundreds of metres), so two
+just outside the window's edge changes the bed inside it (the deck's ramp climbs at railways.GRADE for as far as it reaches), so two
 tiles drew one rail at two heights, a step of 0.85 m at a seam in Kyiv (railcheck.py), and the grader's plan, laid with
 60 m of reach, differed from the mesh, laid with 200 m.
 

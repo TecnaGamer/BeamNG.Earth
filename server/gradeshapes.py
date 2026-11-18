@@ -46,6 +46,7 @@ import numpy as np
 
 import dnp
 import findground
+import railways
 
 STEP_M = 4.0                # m between a deck's or a dip's samples
 JOIN_M = 2.5                # m: two parts' ends (or an end and another's line) this close meet there
@@ -125,9 +126,10 @@ def speed(m):
 
 def max_grade(m):
     """The steepest grade member m may hold, by class and speed (AASHTO's design grades for a speed: 4 % at 120 km/h
-    to 15 % at 20; a link at least 6 %) plus GAME_GRADE_PLUS; a path 12 %; a track 2.5 %."""
+    to 15 % at 20; a link at least 6 %) plus GAME_GRADE_PLUS; a path 12 %; a track railways.GRADE (the one law of a track: this
+    was its own 2.5 %, beside railways' 2 % for the decks' ramps and the lifts, and the seam's literal 2 %)."""
     if m.kind in ("rail", "rail_deck"):
-        return 0.025
+        return railways.GRADE
     if m.cls in PATHS:
         return 0.12
     g = float(np.interp(speed(m), [20, 30, 40, 50, 60, 80, 100, 120], [0.15, 0.12, 0.10, 0.09, 0.08, 0.06, 0.05, 0.04]))

@@ -7,6 +7,7 @@ import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 import railroadseam as rs  # noqa: E402
+import railways  # noqa: E402
 
 
 def straight(y, n=51, x1=200.0):
@@ -53,7 +54,7 @@ class CoupleTest(unittest.TestCase):
         zb = np.full(len(x), 97.9)
         got = rs.couple(xy, zb, self.HALF, [(straight(0.0, 41, 400.0), np.full(41, 100.0), 8.6)])
         g = np.abs(np.diff(got)) / np.hypot(*np.diff(xy, axis=0).T)
-        self.assertLess(float(g.max()), 0.0201)
+        self.assertLessEqual(float(g.max()), railways.GRADE + 1e-4)
         self.assertAlmostEqual(float(got[-1]), 97.9, places=6, msg="far from the road it is its own again")
 
     def test_a_crossing_track_takes_the_roads_height(self):

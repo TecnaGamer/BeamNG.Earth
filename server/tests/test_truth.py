@@ -44,10 +44,12 @@ TODAY = {
         shape_p95=4.3,          # m: the roads under the tracks 1-2 m deeper (the dips 4.2 m off, the decks 3.1: was 5.7)
         under_laws=0, steeper=2,
         dug=(0, 0), filled=(0, 7),      # (with the shapes 5 before the decks kept their line: a deck's end 1.9 m over its road)
-        rail_low=2.6,           # m: the Letzigraben flyover's ramp. It is 13 m over the tracks it crosses 270 m on, which
-        rail_high=3.1),         # Earth's clears by a track's headroom, and climbs to them at 4 %: Earth's at its 2 %
-        #                         (GRADE at 2.5 %: +0.7 .. +0.9, at 2.8 %: -0.4 .. -0.1; the other places' lows then 0.1-0.9
-        #                         lower, PopoliTest in test_findground.py has the numbers)
+        rail_low=-2.6,          # m: the Letzigraben flyover's ramp. It is 13 m over the tracks it crosses 270 m on, which
+        rail_high=-0.4),        # Earth's clears by a track's headroom, and climbs to them at 4 %: the one law railways.GRADE
+        #                         (5 %, the user, 2026-11-18) stands it -2.6 .. -0.4 under the real ramp, median -1.3 (it was
+        #                         +2.5 .. +3.1 over, median +3.0, at 2 %: 3 m over the real one's climb; at 2.5 %: +0.7 .. +0.9,
+        #                         at 2.8 %: -0.4 .. -0.1). The low end is the ramp's foot, flat in Earth's bed (0.1 %) where the
+        #                         real one climbs 2.6 %
     "zurich_duttweilerbruecke": dict(
         unmatched=3,            # (22 before): Earth's rail ends at the crossing (1), one rail deck along both ways (2)
         not_built=14,           # 8 street trams on the ground, 6 paths under or on the bridges: Earth builds none
@@ -55,13 +57,16 @@ TODAY = {
         under_laws=2, steeper=1,
         dug=(3, 3),             # 3.3 m at the deepest. (12 while every rail bridge dug the road under it)
         filled=(0, 0),
-        rail_low=-8.6,          # m: the Wipkingen viaduct, 13 m over its streets, stands 10 to 13 m up (was at their
-        rail_high=0.4),         # level at its joints, -13.2); the Letzigraben flyover is 9 m short of the survey's 18 m
+        rail_low=-11.6,         # m: the Wipkingen viaduct, 13 m over its streets, stands 10 to 13 m up (was at their
+        rail_high=-0.5),        # level at its joints, -13.2); the Letzigraben flyover is 9 m short of the survey's 18 m
         #                         over the tracks it crosses: no bridge crosses another here, in the map or the survey
         #                         (the flyover, level 3 in the survey, crosses tracks on the ground, which the law asks
         #                         6.5 m over, and one road bridge, 6.6 m under it), so the 11 m it climbs over the
-        #                         chord between its ends are no crossing's (measured 2026-11-18). The railway's grade
-        #                         law (2 %; the survey's flyover ramps are 3.3-4.1 %): 2.5 % makes this -9.2, 2.8 % -9.6
+        #                         chord between its ends are no crossing's (measured 2026-11-18). The railway's one grade
+        #                         law, railways.GRADE: 2 % made this -8.6 (2.5 % -9.2, 2.8 % -9.6), 5 % -11.6: a deck
+        #                         stands as high as its crossings ask and its ramps fall away at the law's grade, which the
+        #                         survey's viaducts do at 1.5-2.7 % (the flyover's 4.1 % is one ramp of 100 m), so the
+        #                         steeper the law the further under the real decks that stand higher than they must
         #                         (-8.8 before a crossover of the viaduct, 6 m under it at both ends, joined it: -8.6)
     "goeschenen_gotthard_portal": dict(
         unmatched=1,            # (5 before): a tertiary road ends at the crossing
@@ -72,12 +77,15 @@ TODAY = {
                                 # under its survey height beside the ramp in its cutting: the ramp's lanes reached on past
                                 # its wall's face over the link's (a wall holds the link in the real place: grading.level_walls)
         filled=(5, 0),          # 1.8 m at most (was 8.3, 76 per mille; 0.9 m with the shapes): the road into the Gotthard tunnel, its mouth read on the face
-        rail_low=-9.7, rail_high=0.2),
+        rail_low=-14.9,         # m (-9.7 at 2 %): the short bridges over the gorge stand 15 m over the elevation at their ends (the
+        #                         real line on its terrace, the DEM below it) and Earth's bed there, 7 m over its ground at 2 %
+        #                         (the lift run out from the decks round it), is 1 m over it at 5 %
+        rail_high=0.1),
     "kempttal_viaduct": dict(
         unmatched=0, not_built=0, right=6,
         shape_p95=0.9,          # m: the viaduct's deck (was 4.6 at its ends)
         under_laws=0, steeper=0, graded=60,
-        dug=(1, 0), filled=(0, 0), rail_low=-1.0, rail_high=0.1),
+        dug=(1, 0), filled=(0, 0), rail_low=-1.5, rail_high=0.1),     # (-1.0 at 2 %)
 }
 RAIL_M = 2.0            # m: a railway bridge's bed nearer the real track than this is right (what a road under it needs)
 MODE = int(grading.SHAPES_ON)       # (dug, filled: without the shapes, with them (BNE_SHAPES=1): what Earth builds differs)
