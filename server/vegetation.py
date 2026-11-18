@@ -41,7 +41,7 @@ import staging
 
 log = logging.getLogger("earthd.vegetation")
 
-VERSION = 39          # (the cached cells hold their groups: 14 for the regional rules of GitHub #110; 16: the roads'
+VERSION = 40          # (the cached cells hold their groups: 14 for the regional rules of GitHub #110; 16: the roads'
                       # drawn widths and sidewalks kept clear; 17: BC's lidar canopy heights, mapdata's canopy layer 2;
                       # 18: the rounded junction corners kept clear, roadcorners.py; 19: one tree per flat crown,
                       # thin_tops; 20: none on or beside a bridge deck, _mask_decks; 21: orchard rows, canopy trees
@@ -79,6 +79,8 @@ VERSION = 39          # (the cached cells hold their groups: 14 for the regional
                       # 38: the conifer share kept to the leaf type map (conifer_odds), the beech belt,
                       # the pine woods' birches
                       # 39: Australia's forest broadleaves eucalypts, East Asia's conifers conical (sugi, Chinese fir)
+                      # 40: by EU-Forest's NFI plots: the Mediterranean's conifers kept, its evergreen share by
+                      # ecoregion; no spruce belt in dry climates; the Atlantic's spruces; the north's birches
 TREE_MIN_M = 3.0
 # The canopy raster, the scatter grids and the crown radii are in Web Mercator units (EPSG:3857: a metre there is
 # cos(lat) metres on the ground) and were tuned by eye at mid latitudes. Past them the same pixel counts covered less
@@ -282,12 +284,52 @@ def regional(group, height, lat, lon, lcls, u, riparian=None):
     n = np.size(group)
     bc = lambda a, t: np.ascontiguousarray(np.broadcast_to(np.asarray(a, t), (n,)))     # noqa: E731
     la, lo = bc(lat, f64), bc(lon, f64)
-    return np.asarray(fast._ef.regional_groups(
-        bc(group, np.uint8), bc(height, f64), la, lo, bc(lcls, np.uint8), bc(u, f64),
+    pre, lc, uu = bc(group, np.uint8), bc(lcls, np.uint8), bc(u, f64)
+    g = np.asarray(fast._ef.regional_groups(
+        pre, bc(height, f64), la, lo, lc, uu,
         [G_DECIDUOUS, G_CONIFER, G_SHRUB, G_ROCK, G_PINE_WEST, G_PALM, G_JUNIPER, G_DESERT_SHRUB, G_DESERT_ROCK,
          G_OAK_WEST, G_TROPICAL], [WC["shrub"], WC["bare"], WC["grass"], WC["built"]],
         zones(la, lo, None if riparian is None else bc(riparian, bool)),
         [G_MEDITERRANEAN, G_EUCALYPTUS, G_POPLAR, G_CREOSOTE]), np.uint8)
+    return _mediterranean_leaf(pre, g, la, lo, lc, uu)
+
+
+# (39) the Mediterranean's own trees by the forest inventories (EU-Forest, Mauri et al. 2017: the NFI plots' species,
+# each plot's species weighted 1/k): the kernel made MED_SHARE (0.75) of its broadleaves AND conifers Italy's
+# evergreen trees, which turned Spain's pine forests (its conifers 52 % of the plots' trees, 98 % of them pines) into
+# holm oaks and olives, and central Italy's deciduous oak woods (Q. cerris, pubescens: 90 % of its broadleaves) too.
+# Off town: a conifer stays a conifer (species_groups: the maritime and Mediterranean pines, the mountains' black and
+# Scots pines), a broadleaf is an evergreen one at the ecoregion's share (ECO_EVERGREEN, else MED_EVERGREEN), a
+# deciduous oak otherwise. The towns' trees keep the kernel's (their olives, holm oaks, cypresses).
+ECO_EVERGREEN = {793: 0.84, 799: 0.53, 792: 0.52, 805: 0.93, 795: 0.10, 806: 0.57, 803: 0.95, 787: 0.27,
+                 # (no plots: the ecoregion's own name) the Illyrian and southern Anatolian deciduous and montane
+                 # woods; the Chilean matorral's and the Cape's sclerophyll scrub and woods
+                 794: 0.4, 804: 0.3, 596: 0.9, 89: 0.9, 90: 0.9}
+ECO_NO_BEECH = (785, 787, 789, 790, 791, 792, 793, 796, 797, 798, 799, 803, 804, 805)     # (39: no beech belt)
+MED_EVERGREEN = 0.6             # (Greece's, Anatolia's, the Maghreb's, Chile's, the Cape's: no plots)
+
+
+def _mediterranean_leaf(pre, g, lat, lon, lcls, u):
+    """regional's groups (g) with the Mediterranean ecoregions' trees off town by their leaf type (pre: the groups
+    before; ECO_EVERGREEN). Pure."""
+    import ecoregion
+    cand = _in(pre, (G_CONIFER, G_DECIDUOUS)) & (lcls != WC["built"]) & _in(g, (G_CONIFER, G_DECIDUOUS,
+                                                                               G_MEDITERRANEAN))
+    if not cand.any():
+        return g
+    eco = ecoregion.eco_many(lat[cand], lon[cand])
+    med = _in(eco, ECO_MED)
+    if not med.any():
+        return g
+    g = g.copy()
+    idx = np.nonzero(cand)[0][med]
+    ev = np.full(len(idx), MED_EVERGREEN)
+    for e_, s in ECO_EVERGREEN.items():
+        ev[eco[med] == e_] = s
+    u2 = (u[idx] * 7919.0 + 0.31) % 1.0
+    p = pre[idx]
+    g[idx] = np.where(p == G_CONIFER, G_CONIFER, np.where(u2 < ev, G_MEDITERRANEAN, G_DECIDUOUS))
+    return g
 
 
 _LUTS = {}
@@ -411,6 +453,7 @@ CONT_BIRCH_LON = ((10.0, 0.10), (20.0, 0.20), (28.0, 0.45), (40.0, 0.60), (60.0,
 CONT_BIRCH_SOUTH = ((40.0, 0.1), (46.0, 0.3), (50.0, 0.5), (54.0, 1.0))  # (latitude, factor): fewer to the south
                                             # (Anatolia's, the Balkans', Ukraine's forest steppe: oaks; Ukraine's
                                             # birch ~8 % of a forest of ~57 % broadleaves)
+NORTH_BIRCH_LAT = ((55.0, 0.30), (58.0, 0.65), (60.0, 0.85), (62.0, 0.95))
 CONT_BEECH_LON = (20.0, 26.0)               # the beeches' part of the rest: CONT_BEECH up to the first, none east
 CONT_BEECH = 0.45                           # of the second (the uphill gain, BEECH_UPHILL, still adds them)
 BROAD_SHARES = {"boreal": (1.0, 0.0, 0.0), "continental": (0.20, 0.44, 0.36), "oceanic": (0.12, 0.48, 0.40),
@@ -419,7 +462,7 @@ BROAD_SHARES = {"boreal": (1.0, 0.0, 0.0), "continental": (0.20, 0.44, 0.36), "o
 # maples, limes, hornbeams, tulip trees; the oaks for the hickories, ashes, elms):
 # - the oceanic climates: the birches' share by latitude (France ~5 %: birch 2-3 % of a forest of ~70 % broadleaves;
 #   Great Britain ~18 %: the NFI's birch beside oak, ash, sycamore, beech; Norway's coast mostly birch)
-OCEANIC_BIRCH_LAT = ((45.0, 0.05), (50.0, 0.10), (55.0, 0.20), (60.0, 0.40))
+OCEANIC_BIRCH_LAT = ((45.0, 0.05), (50.0, 0.10), (55.0, 0.20), (60.0, 0.40), (63.0, 0.75), (66.0, 0.95))
 # - East Asia's temperate forests (east of EAST_ASIA_LON: Manchuria, Korea, the Russian Far East: Mongolian oak,
 #   Asian white birch, maples, limes; Japan's cool temperate belt: Japanese beech first, Quercus crispula, birches)
 EAST_ASIA_LON = 100.0
@@ -467,6 +510,9 @@ SPRUCE_PLAIN_LAT = 56.0
 CONICAL_JAPAN = 0.7                 # (38) the conical (spruce-shaped) share of Japan's conifers at least
 CONICAL_CHINA = 0.5                 # and of East Asia's south of CONICAL_CHINA_LAT
 CONICAL_CHINA_LAT = 32.0
+ATLANTIC_SPRUCE = 0.6               # (39) the spruces' share of the oceanic northwest's conifers at least
+ATLANTIC_SPRUCE_LAT = 50.0
+ATLANTIC_SPRUCE_LON = 13.0
 SPRUCE_MOUNTAIN = 0.85
 SPRUCE_LINE_M = 1100.0
 SPRUCE_LINE_PER_DEG = 40.0
@@ -572,6 +618,9 @@ def continental_shares(lat, lon):
     lat, lon = np.asarray(lat, np.float64), np.asarray(lon, np.float64)
     birch = dnp.interp(lon, [a for a, _ in CONT_BIRCH_LON], [b for _, b in CONT_BIRCH_LON]) * \
         dnp.interp(lat, [a for a, _ in CONT_BIRCH_SOUTH], [b for _, b in CONT_BIRCH_SOUTH])
+    # (39) the north's broadleaves birches whatever the longitude (EU-Forest's plots: southern Finland's 99 %, central
+    # Sweden's 88 %, the Baltic states' 40 %)
+    birch = np.maximum(birch, dnp.interp(lat, [a for a, _ in NORTH_BIRCH_LAT], [b for _, b in NORTH_BIRCH_LAT]))
     beech = CONT_BEECH * np.clip((CONT_BEECH_LON[1] - lon) / (CONT_BEECH_LON[1] - CONT_BEECH_LON[0]), 0.0, 1.0)
     rest = 1.0 - birch
     return np.stack([birch, rest * (1.0 - beech), rest * beech], axis=1)
@@ -661,6 +710,14 @@ def species_groups(group, height, lat, lon, lcls, koppen, elev, u_broad, u_conif
     z = np.zeros(len(g)) if elev is None else np.asarray(elev, np.float64)
     line = spruce_line(lat)
     fade = np.clip((MOUNTAIN_FADE[1] - lat) / (MOUNTAIN_FADE[1] - MOUNTAIN_FADE[0]), 0.0, 1.0)
+    # (39) the dry climates' mountains (Iberia's, the Atlas', Anatolia's, Central Asia's: Csa Csb Csc, BSk BWk BSh BWh)
+    # keep their pines (black, Scots, Aleppo, Brutia pines; EU-Forest: Spain's conifers 2 % firs) and their oaks: no
+    # spruce or beech belt (before: a third of Spain's mountain conifers spruces, León's broadleaves 30 % beeches)
+    # spruce belt; the beech belt kept in the Mediterranean's own beech mountains (the Apennines', Calabria's, the
+    # Balkans': EU-Forest's Calabria 30 % beeches), not in ECO_NO_BEECH (Iberia's, the Maghreb's, Anatolia's)
+    dry = _in(k, K_COLD_ARID + K_HOT_ARID)
+    beech_fade = fade * ~(dry | (_in(k, K_MED) & _in(eco, ECO_NO_BEECH)))
+    fade = fade * ~(dry | _in(k, K_MED))
     montane = np.clip((z - (line - MONTANE_M)) / MONTANE_M, 0.0, 1.0) * fade
     upper = np.clip((z - line) / SPRUCE_RAMP_M, 0.0, 1.0) * fade
     ua = np.asarray(u_snag if u_alt is None else u_alt)
@@ -682,6 +739,11 @@ def species_groups(group, height, lat, lon, lcls, koppen, elev, u_broad, u_conif
         # of its forest, against its red and black pines; southern China's and Taiwan's Chinese fir beside the Masson
         # pine): the spruces' shapes (Douglas firs) for them, not the Scots pines'
         base = np.where(_in_box(lat, lon, JAPAN_BOX), np.maximum(base, CONICAL_JAPAN), base)
+        # (39) the Atlantic's oceanic north (Ireland, Great Britain, Denmark, the Low Countries): its conifers the
+        # planted Sitka and Norway spruces first (EU-Forest's plots: Ireland's conifers 77 % spruces, Scotland's
+        # 64 %, Denmark's 67 %, England's 51 %, the Netherlands' 37 %)
+        atl = _in(k, K_OCEANIC) & (lat > ATLANTIC_SPRUCE_LAT) & (lon < ATLANTIC_SPRUCE_LON)
+        base = np.where(atl, np.maximum(base, ATLANTIC_SPRUCE), base)
         base = np.where((lon >= EAST_ASIA_LON) & (lat < CONICAL_CHINA_LAT) & ~_in_box(lat, lon, JAPAN_BOX),
                         np.maximum(base, CONICAL_CHINA), base)
         p = base + (SPRUCE_MOUNTAIN - base) * np.clip(2.0 * montane, 0.0, 1.0)      # (no pines from mid-belt up)
@@ -692,7 +754,7 @@ def species_groups(group, height, lat, lon, lcls, koppen, elev, u_broad, u_conif
     # shapes are birches, chose by height alone)
     dec = (g == G_DECIDUOUS) & (np.abs(lat) >= 23.5)
     if dec.any():
-        beech_up = np.clip((z - (line - BEECH_BELT_M[0])) / (BEECH_BELT_M[0] - BEECH_BELT_M[1]), 0.0, 1.0) * fade
+        beech_up = np.clip((z - (line - BEECH_BELT_M[0])) / (BEECH_BELT_M[0] - BEECH_BELT_M[1]), 0.0, 1.0) * beech_fade
         sh = broad_shares(lat, lon, k, eco, beech_up, _conifer_share(lat, lon))
         u = np.asarray(u_broad)
         pick = np.where(u < sh[:, 0], G_BIRCH, np.where(u < sh[:, 0] + sh[:, 1], G_OAK, G_BEECH)).astype(np.uint8)

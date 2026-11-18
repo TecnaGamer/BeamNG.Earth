@@ -141,6 +141,9 @@ Baden-Wurttemberg (`owsproxy.lgl-bw.de`), Lower Saxony (`opendata.lgln.niedersac
 - **Ecoregions** (RESOLVE Ecoregions 2017): which regional trees grow where (the Mediterranean's, the steppe
   junipers, the desert's creosote).
 - **Forest leaf types** (Copernicus Global Land Cover 100 m, 2019): how many of the trees are conifers.
+- **European tree species shares** (EU-Forest, Mauri et al. 2017, the national forest inventories' plots; CC0): a
+  few constants (the Mediterranean ecoregions' evergreen share, the Atlantic's spruces, the north's birches), and
+  the check `tools/veg_euforest_check.py`. The data file itself is not shipped.
 - **Oil wells and refineries** (OpenStreetMap, exported once): pump jacks, refinery sounds.
 - **Bridge types** (the US National Bridge Inventory and Wikidata): trusses, arches, suspension and cable-stayed
   bridges, and their real spans and heights.

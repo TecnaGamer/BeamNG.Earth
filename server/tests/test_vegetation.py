@@ -651,15 +651,28 @@ class RegionalTest(unittest.TestCase):
         """The Mediterranean basin's Cs climates take Italy's trees (holm / cork oaks, olives, maritime pines,
         cypresses) for most broadleaves and conifers; Munich and California keep theirs."""
         self.assertEqual(self.g(veg.G_DECIDUOUS, 9, 41.9, 12.5, 50, u=0.5), veg.G_MEDITERRANEAN, "Rome")
-        self.assertEqual(self.g(veg.G_CONIFER, 15, 43.3, 5.37, 10, u=0.5), veg.G_MEDITERRANEAN, "Marseille")
+        # (39) off town a conifer stays one (the maritime and Aleppo pines, species_groups); in town Italy's trees
+        self.assertEqual(self.g(veg.G_CONIFER, 15, 43.3, 5.37, 10, u=0.5), veg.G_CONIFER, "Marseille's pines")
+        self.assertEqual(self.g(veg.G_CONIFER, 15, 43.3, 5.37, 50, u=0.5), veg.G_MEDITERRANEAN, "Marseille in town")
         self.assertEqual(self.g(veg.G_DECIDUOUS, 9, 41.9, 12.5, 10, u=0.95), veg.G_DECIDUOUS, "a share stays")
         self.assertEqual(self.g(veg.G_DECIDUOUS, 9, 48.14, 11.58, 50, u=0.1), veg.G_DECIDUOUS, "Munich")
         self.assertEqual(self.g(veg.G_DECIDUOUS, 9, 34.05, -118.25, 10, u=0.5), veg.G_OAK_WEST, "California")
         self.assertEqual(self.g(veg.G_SHRUB, 1, 41.9, 12.5, 10, u=0.1), veg.G_SHRUB, "bushes are not trees")
         # (35) by the ecoregions: North Africa's and the Adriatic's maquis in, Galicia's oak woods out
-        self.assertEqual(self.g(veg.G_DECIDUOUS, 6, 36.8, 10.18, 10, u=0.5), veg.G_MEDITERRANEAN, "Tunis")
-        self.assertEqual(self.g(veg.G_DECIDUOUS, 14, 43.5, 16.44, 10, u=0.5), veg.G_MEDITERRANEAN, "Split")
+        self.assertEqual(self.g(veg.G_DECIDUOUS, 6, 36.8, 10.18, 50, u=0.5), veg.G_MEDITERRANEAN, "Tunis")
+        self.assertEqual(self.g(veg.G_DECIDUOUS, 14, 43.5, 16.44, 50, u=0.5), veg.G_MEDITERRANEAN, "Split")
         self.assertEqual(self.g(veg.G_DECIDUOUS, 9, 42.88, -8.55, 10, u=0.5), veg.G_DECIDUOUS, "Santiago")
+
+    def test_mediterranean_evergreen_share(self):
+        """(39) off town the evergreen broadleaves by the ecoregion's inventory share (ECO_EVERGREEN)."""
+        n = 4000
+        u = (np.arange(n) + 0.5) / n
+        for (lat, lon), lo, hi, where in (((38.5, -7.5), 0.75, 1.0, "the Alentejo's cork and holm oaks"),
+                                          ((43.0, 12.0), 0.0, 0.2, "Umbria's deciduous oaks")):
+            g = veg.regional(np.full(n, veg.G_DECIDUOUS, np.uint8), np.full(n, 10.0), np.full(n, lat),
+                             np.full(n, lon), np.full(n, veg.WC["tree"], np.uint8), u)
+            share = float(np.mean(g == veg.G_MEDITERRANEAN))
+            self.assertTrue(lo <= share <= hi, f"{where}: {share:.2f}")
 
     def test_more_regional_trees(self):
         """2026-11-10 asset survey: Australia's eucalypts, temperate Europe's riverside poplars, the Mojave's creosote."""
