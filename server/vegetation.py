@@ -41,7 +41,7 @@ import staging
 
 log = logging.getLogger("earthd.vegetation")
 
-VERSION = 42          # (the cached cells hold their groups: 14 for the regional rules of GitHub #110; 16: the roads'
+VERSION = 43          # (the cached cells hold their groups: 14 for the regional rules of GitHub #110; 16: the roads'
                       # drawn widths and sidewalks kept clear; 17: BC's lidar canopy heights, mapdata's canopy layer 2;
                       # 18: the rounded junction corners kept clear, roadcorners.py; 19: one tree per flat crown,
                       # thin_tops; 20: none on or beside a bridge deck, _mask_decks; 21: orchard rows, canopy trees
@@ -83,6 +83,7 @@ VERSION = 42          # (the cached cells hold their groups: 14 for the regional
                       # ecoregion; no spruce belt in dry climates; the Atlantic's spruces; the north's birches
                       # 41: the leaf type the mean of LC100's and ESA CCI's (leaftype.PATHS)
                       # 42: Europe's conifer share half ForestPaths' genus map's, its genera from it (treegenus.py)
+                      # 43: the species' stands one ragged grid (stand_cells); the maps read on a grid (_on_grid)
 TREE_MIN_M = 3.0
 # The canopy raster, the scatter grids and the crown radii are in Web Mercator units (EPSG:3857: a metre there is
 # cos(lat) metres on the ground) and were tuned by eye at mid latitudes. Past them the same pixel counts covered less
@@ -257,16 +258,21 @@ def _shift_max(a, r):
 
 
 def _dilate(m, r):
-    """Bool mask grown by r pixels (a square window, separable)."""
+    """Bool mask grown by r pixels (a square window, separable). (42) By doubling: a mask grown by d grown again by
+    s <= d + 1 is grown by d + s, so log2(r) passes an axis, not r (OPEN_ROAD_M's ~12 px: 4 passes for 12; the same
+    pixels)."""
     out = m.copy()
     for axis in (0, 1):
-        acc = out.copy()
-        for k in range(1, r + 1):
-            acc[tuple(slice(k, None) if a == axis else slice(None) for a in range(2))] |= \
-                out[tuple(slice(None, -k) if a == axis else slice(None) for a in range(2))]
-            acc[tuple(slice(None, -k) if a == axis else slice(None) for a in range(2))] |= \
-                out[tuple(slice(k, None) if a == axis else slice(None) for a in range(2))]
-        out = acc
+        d = 0
+        while d < r:
+            s = min(d + 1, r - d)
+            acc = out.copy()
+            acc[tuple(slice(s, None) if a == axis else slice(None) for a in range(2))] |= \
+                out[tuple(slice(None, -s) if a == axis else slice(None) for a in range(2))]
+            acc[tuple(slice(None, -s) if a == axis else slice(None) for a in range(2))] |= \
+                out[tuple(slice(s, None) if a == axis else slice(None) for a in range(2))]
+            out = acc
+            d += s
     return out
 
 
@@ -378,6 +384,24 @@ def _north_america(lat, lon):
     return (lat > 24.0) & (lon > -170.0) & (lon < -50.0)
 
 
+MAP_Q = 0.0025      # (42) the 0.05 degree maps read at this grid's points (~250 m): a tile's trees share a few hundred
+
+
+def _on_grid(fn, lat, lon):
+    """fn(lat, lon) (a smooth map's per point values, (n,) or (n, k)) read once per MAP_Q grid point the points round to,
+    not once per tree (a tile's 50-120 thousand trees, the maps read several times each: 13 ms a read). Pure."""
+    lat, lon = np.atleast_1d(np.asarray(lat, np.float64)), np.atleast_1d(np.asarray(lon, np.float64))
+    if len(lat) < 64:
+        return fn(lat, lon)
+    qi = np.round(lat / MAP_Q).astype(np.int64)
+    qj = np.round(lon / MAP_Q).astype(np.int64)
+    u, inv = np.unique(qi * 1000003 + qj, return_inverse=True)
+    first = np.zeros(len(u), np.int64)
+    first[inv[::-1]] = np.arange(len(inv))[::-1]
+    v = fn(qi[first] * MAP_Q, qj[first] * MAP_Q)
+    return np.asarray(v)[inv.reshape(-1)]
+
+
 def _conifer_share(lat, lon):
     """The share of conifers among the trees: (35) the forests' leaf type around the point (leaftype.py: Copernicus
     Land Cover 100 m's Forest Type, 2019), else the coarse rule below. South of the tropics no less than the coarse
@@ -385,7 +409,7 @@ def _conifer_share(lat, lon):
     broadleaves (Kaingaroa's 0.27, Biobio's 0.0)."""
     import leaftype
     lat, lon = np.asarray(lat, np.float64), np.asarray(lon, np.float64)
-    m = leaftype.conifer_share(lat, lon)
+    m = np.reshape(_on_grid(leaftype.conifer_share, lat, lon), lat.shape)
     coarse = _conifer_share_coarse(lat, lon)
     m = np.where(lat < -23.5, np.fmax(m, coarse), m)
     return np.where(np.isnan(m), coarse, m)
@@ -605,11 +629,22 @@ def stand_u(mx, my, gx, gy, lat, salt):
     """Per tree: a hashed [0, 1) shared by the trees of a stand (STAND_CELL_M squares of the Web Mercator grid at the
     ground length of lat, their edges ragged by a hashed jitter per tree). mx, my: Web Mercator m; gx, gy: the trees'
     global pixels (their own hashes). Pure: the same tree gets the same value from every cell build."""
+    cx, cy = stand_cells(mx, my, gx, gy, lat, salt)
+    return _hash01(cx, cy, salt)
+
+
+STAND_SHARED_SALT = 50      # (42) the species' stands (salts 51, 61, 91) share one ragged grid (stand_cells)
+
+
+def stand_cells(mx, my, gx, gy, lat, salt):
+    """Per tree: its stand's (cx, cy) on STAND_CELL_M squares, the edges ragged by the tree's hashed jitter (salt + 1,
+    salt + 2). (42) The species' stands share STAND_SHARED_SALT's (one grid, three hashes of it: 9 hashes a tile were
+    5; their own values still independent)."""
     s = STAND_CELL_M * _merc_k(lat)
     j = STAND_JITTER * s
     cx = np.floor((np.asarray(mx, np.float64) + (_hash01(gx, gy, salt + 1) - 0.5) * j) / s).astype(np.int64)
     cy = np.floor((np.asarray(my, np.float64) + (_hash01(gx, gy, salt + 2) - 0.5) * j) / s).astype(np.int64)
-    return _hash01(cx, cy, salt)
+    return cx, cy
 
 
 def _mixed(stand, single, u_mix, mix=None):
@@ -729,7 +764,7 @@ def species_groups(group, height, lat, lon, lcls, koppen, elev, u_broad, u_conif
     # (39) Europe's genera where ForestPaths' map has a say (treegenus.py): the conifers' pines against spruces, firs and
     # larches, the broadleaves' beeches and oaks from it, its other broadleaves by the rules below
     import treegenus
-    tg = treegenus.shares(lat, lon) if ea.any() else np.full((len(g), 7), np.nan)
+    tg = _on_grid(treegenus.shares, lat, lon) if ea.any() else np.full((len(g), 7), np.nan)
     con = ea & (g == G_CONIFER)
     if con.any():
         east = dnp.interp(lat, [a for a, _ in SPRUCE_LAT], [b for _, b in SPRUCE_LAT])
@@ -860,7 +895,7 @@ def _world_groups(g, lat, lon, lcls, eco, elev, u_stand):
     if u_stand is not None:
         cand = _in(g, BROAD_FROM) & ~hot & ~med & ~australia & (alat < 45.0)
         if cand.any():
-            evb = np.nan_to_num(leaftype.evergreen_broad_share(lat, lon), nan=0.0)
+            evb = np.nan_to_num(_on_grid(leaftype.evergreen_broad_share, lat, lon), nan=0.0)
             share = np.maximum(evb, np.where(laurel_eco, ECO_LAUREL_SHARE, 0.0))
             g[cand & (np.asarray(u_stand) < share)] = G_LAUREL
     # the south's beeches (Nothofagus)
@@ -1474,11 +1509,12 @@ class Vegetation:
                 elev = np.zeros(len(group))
                 elev[need] = e
         u_single = _hash01(gx, gy, 32)
-        u_broad = _mixed(stand_u(tmx, tmy, gx, gy, clat, 51), u_single, u_mix, BROAD_STAND_MIX)
-        u_con = _mixed(stand_u(tmx, tmy, gx, gy, clat, 61), u_single, u_mix)
+        cx, cy = stand_cells(tmx, tmy, gx, gy, clat, STAND_SHARED_SALT)
+        u_broad = _mixed(_hash01(cx, cy, 51), u_single, u_mix, BROAD_STAND_MIX)
+        u_con = _mixed(_hash01(cx, cy, 61), u_single, u_mix)
         return species_groups(group, th, tlat, tlon, lcls, k, elev, u_broad, u_con, _hash01(gx, gy, 33),
                               _hash01(gx, gy, 34), _hash01(gx, gy, 35),
-                              u_stand=stand_u(tmx, tmy, gx, gy, clat, 91))
+                              u_stand=_hash01(cx, cy, 91))
 
     def _slope(self, px, py):
         """The ground's slope (rise over run) at Web Mercator points (px, py), from the DEM ROCK_SLOPE_D m either side
