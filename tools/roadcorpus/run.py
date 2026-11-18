@@ -105,11 +105,25 @@ PROBE = ["road"]     # build --probe: "road" (probe.py) or "struct" (server/stru
 SEED_FROM = [None]  # build --seed-from ROOT2: a place without a seed here starts from ROOT2's (online: grown, kept)
 
 
+def _complete(js):
+    """A structprobe result there, with no tile or cell it could not build."""
+    try:
+        with open(js) as f:
+            return not json.load(f).get("errors")
+    except (OSError, ValueError):
+        return False
+
+
 def run_place(p, server, root, label, online, checks=None, era=None):
     out = os.path.join(root, "results", label)
     os.makedirs(out, exist_ok=True)
     seed = os.path.join(root, "seed" if not era else "seed-" + era, p["id"])
     work = os.path.join(root, "work", label, p["id"])
+    real = os.path.realpath(os.path.expanduser("~/.cache/beamng-earth"))
+    for d in (seed, work, out):         # (never through a link into the player's cache)
+        rd = os.path.realpath(d)
+        if rd == real or rd.startswith(real + os.sep):
+            sys.exit(f"refused: {d} resolves into the player's cache")
     shutil.rmtree(work, ignore_errors=True)
     os.makedirs(work)
     have_seed = os.path.isdir(seed) and not online
@@ -124,6 +138,9 @@ def run_place(p, server, root, label, online, checks=None, era=None):
                 if os.path.isdir(os.path.join(other, d)):
                     copy_tree(os.path.join(other, d), work)
     js, tj, log = (os.path.join(out, p["id"] + ext) for ext in (".json", ".timing.json", ".log"))
+    for f_ in (js, tj):                 # (no earlier run's result left to be scored as this one's)
+        if os.path.exists(f_):
+            os.remove(f_)
     if PROBE[0] == "struct":        # (today's checkout's probe, scoring the server given: --server)
         base = ["nice", "-n", "15", sys.executable, os.path.join(REPO, "server", "structprobe.py"),
                 repr(p["lat"]), repr(p["lon"]), repr(float(p.get("struct_r", p["r"]))), "--server", server,
@@ -145,7 +162,7 @@ def run_place(p, server, root, label, online, checks=None, era=None):
                 lf.write("\n== offline data missing; online ==\n")
                 lf.flush()
                 rc = subprocess.call(base, stdout=lf, stderr=subprocess.STDOUT, env=clean_env(), cwd=work)
-            if rc == 0:
+            if rc == 0 and (PROBE[0] != "struct" or _complete(js)):
                 for d in DATA_DIRS:
                     if os.path.isdir(os.path.join(work, d)):
                         copy_tree(os.path.join(work, d), seed)
@@ -155,10 +172,12 @@ def run_place(p, server, root, label, online, checks=None, era=None):
             lf.write("\n== offline failed; online ==\n")
             lf.flush()
             rc = subprocess.call(base, stdout=lf, stderr=subprocess.STDOUT, env=clean_env(), cwd=work)
-        if rc == 0 and PROBE[0] == "struct":    # (the seed grown by what the online run fetched)
+        if rc == 0 and PROBE[0] == "struct" and _complete(js):    # (the seed grown by what the online run fetched)
             for d in DATA_DIRS:
                 if os.path.isdir(os.path.join(work, d)):
                     copy_tree(os.path.join(work, d), seed)
+    if rc == 0 and PROBE[0] == "struct" and not _complete(js):
+        rc = 3                          # (tiles or cells it could not build: an incomplete place, failed)
     if rc == 0 and not os.path.isdir(seed) and mode == "online":
         tmp = seed + ".tmp"
         shutil.rmtree(tmp, ignore_errors=True)
@@ -253,7 +272,9 @@ def cmd_build(a):
     PROBE[0] = a.probe
     SEED_FROM[0] = a.seed_from
     if a.probe == "struct":
-        return cmd_build_struct(a, server, rev, root)
+        if era and a.seed_from:
+            sys.exit("--seed-from with a revision of another data era: its seeds are today's layout")
+        return cmd_build_struct(a, server, rev, root, era)
     for kv in a.env:
         k, _, v = kv.partition("=")
         if not k.startswith("BNE_"):
@@ -307,7 +328,7 @@ def write_struct_card(dirn, meta):
     return lines
 
 
-def cmd_build_struct(a, server, rev, root):
+def cmd_build_struct(a, server, rev, root, era=None):
     for kv in a.env:
         k, _, v = kv.partition("=")
         if not k.startswith("BNE_"):
@@ -317,7 +338,7 @@ def cmd_build_struct(a, server, rev, root):
     fails = []
     for k, p in enumerate(ps):
         print(f"[{k + 1}/{len(ps)}] {p['id']} ...", flush=True)
-        rc = run_place(p, server, root, a.label, a.online)
+        rc = run_place(p, server, root, a.label, a.online, era=era)
         if rc != 0:
             fails.append(p["id"])
             print(f"  FAILED rc={rc} (see results/{a.label}/{p['id']}.log)", flush=True)

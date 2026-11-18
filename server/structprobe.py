@@ -93,10 +93,28 @@ def raster_tris(tri, cell=RASTER_M):
     empty = (np.zeros(0, np.int64), np.zeros(0), np.zeros(0, np.int64))
     if not len(tri):
         return empty
+    area = (tri[:, 1, 0] - tri[:, 0, 0]) * (tri[:, 2, 1] - tri[:, 0, 1]) - \
+        (tri[:, 1, 1] - tri[:, 0, 1]) * (tri[:, 2, 0] - tri[:, 0, 0])
+    tri = np.where((area < 0)[:, None, None], tri[:, [0, 2, 1]], tri)     # (all counter-clockwise)
+    area = np.abs(area)
     ax, ay, az = tri[:, 0, 0], tri[:, 0, 1], tri[:, 0, 2]
     bx, by, bz = tri[:, 1, 0], tri[:, 1, 1], tri[:, 1, 2]
     cx, cy, cz = tri[:, 2, 0], tri[:, 2, 1], tri[:, 2, 2]
-    area = (bx - ax) * (cy - ay) - (by - ay) * (cx - ax)
+
+    def owns(px, py, qx, qy):
+        """A point on edge p -> q belongs to its triangle (the top-left rule: a shared edge runs the other way in
+        the neighbour, which then does not own it: no point counted twice, none dropped)."""
+        dy, dx = qy - py, qx - px
+        return (dy < 0) | ((dy == 0) & (dx < 0))
+
+    def side(px, py, qx, qy, x, y):
+        """Twice the signed area of (p, q, point), > 0 left of p -> q; from the edge's lexicographically first end,
+        so a shared edge seen the other way gives exactly the negated value (its rounding the same)."""
+        swap = (px > qx) | ((px == qx) & (py > qy))
+        ox, oy = np.where(swap, qx, px), np.where(swap, qy, py)
+        ex, ey = np.where(swap, px, qx), np.where(swap, py, qy)
+        w = (ex - ox) * (y - oy) - (ey - oy) * (x - ox)
+        return np.where(swap, -w, w)
     xmin, xmax = np.minimum(np.minimum(ax, bx), cx), np.maximum(np.maximum(ax, bx), cx)
     ymin, ymax = np.minimum(np.minimum(ay, by), cy), np.maximum(np.maximum(ay, by), cy)
     i0 = np.ceil((xmin - _JX) / cell - 0.5).astype(np.int64)
@@ -122,11 +140,12 @@ def raster_tris(tri, cell=RASTER_M):
         jj = j0[t] + loc % nj[t]
         x = (ii + 0.5) * cell + _JX
         y = (jj + 0.5) * cell + _JY
-        w_ab = (bx[t] - ax[t]) * (y - ay[t]) - (by[t] - ay[t]) * (x - ax[t])
-        w_bc = (cx[t] - bx[t]) * (y - by[t]) - (cy[t] - by[t]) * (x - bx[t])
-        w_ca = (ax[t] - cx[t]) * (y - cy[t]) - (ay[t] - cy[t]) * (x - cx[t])
-        pos = area[t] > 0
-        inside = np.where(pos, (w_ab >= 0) & (w_bc >= 0) & (w_ca >= 0), (w_ab <= 0) & (w_bc <= 0) & (w_ca <= 0))
+        w_ab = side(ax[t], ay[t], bx[t], by[t], x, y)
+        w_bc = side(bx[t], by[t], cx[t], cy[t], x, y)
+        w_ca = side(cx[t], cy[t], ax[t], ay[t], x, y)
+        inside = (((w_ab > 0) | ((w_ab == 0) & owns(ax[t], ay[t], bx[t], by[t])))
+                  & ((w_bc > 0) | ((w_bc == 0) & owns(bx[t], by[t], cx[t], cy[t])))
+                  & ((w_ca > 0) | ((w_ca == 0) & owns(cx[t], cy[t], ax[t], ay[t]))))
         a_ = area[t]
         z = (w_bc * az[t] + w_ca * bz[t] + w_ab * cz[t]) / a_
         keys.append(((ii + _OFF) * _MUL + (jj + _OFF))[inside])
@@ -499,19 +518,20 @@ def _pairs(members, step, pad):
         if not len(pts):
             continue
         sa = (np.arange(len(pts)) + 0.5) * piece
-        pi, si, dist, _t, zb, sb = idx.query(pts)
+        pi, si, dist, tq, zb, sb = idx.query(pts)
         keep = nearest_per_line(pi, si, dist, idx.line)
-        pi, si, dist, zb, sb = pi[keep], si[keep], dist[keep], zb[keep], sb[keep]
+        pi, si, dist, tq, zb, sb = pi[keep], si[keep], dist[keep], tq[keep], zb[keep], sb[keep]
         bi = idx.line[si]
         ok = bi != ai
         ok &= np.array([members[b]["fid"] != m["fid"] and members[b]["walk"] == m["walk"] for b in bi.tolist()],
                        bool) if len(bi) else ok
-        pi, si, dist, zb, sb, bi = pi[ok], si[ok], dist[ok], zb[ok], sb[ok], bi[ok]
+        pi, si, dist, tq, zb, sb, bi = pi[ok], si[ok], dist[ok], tq[ok], zb[ok], sb[ok], bi[ok]
+        q = idx.A[si] + tq[:, None] * (idx.B[si] - idx.A[si])       # (B's nearest point)
         if not len(pi):
             continue
         hb = np.array([members[b]["half"] for b in bi.tolist()])
         out.append(dict(a=np.full(len(pi), ai), b=bi, p=pts[pi], za=zz[pi], ua=u[pi], gap=dist - m["half"] - hb,
-                        dist=dist, zb=zb, ub=idx.u[si], sb=sb, sa=sa[pi], piece=np.full(len(pi), piece)))
+                        dist=dist, zb=zb, ub=idx.u[si], sb=sb, sa=sa[pi], piece=np.full(len(pi), piece), q=q))
     if not out:
         return None
     return {k: np.concatenate([o[k] for o in out]) for k in out[0]}
@@ -754,18 +774,19 @@ def predict_groups(members, outlines=(), R=None, frame_ll=None):
                     reject("BESIDE", a, b, dz[near].min())
             wide = par[(pr["gap"][par] > BESIDE_GAP_M) & (pr["gap"][par] <= OUTLINE_GAP_M)]
             if paths and float(pr["piece"][wide].sum()) >= need:
-                good = wide[dz[wide] <= BESIDE_DZ]
-                pa = pr["p"][good]
-                held = False
+                # (one outline holding both: A's samples and B's nearest points in it over the length)
+                held = None
                 for path in paths:
-                    ins = path.contains_points(pa)
-                    if float(pr["piece"][good][ins].sum()) >= need:
-                        held = True
+                    both = wide[path.contains_points(pr["p"][wide]) & path.contains_points(pr["q"][wide])]
+                    if float(pr["piece"][both].sum()) >= need:
+                        held = both
                         break
-                if held:
-                    put(a, b, "BESIDE_OUTLINE", dz[good].max())
-                elif float(pr["piece"][good].sum()) < need:
-                    reject("BESIDE_OUTLINE", a, b, dz[wide].min())
+                if held is not None:
+                    good = held[dz[held] <= BESIDE_DZ]
+                    if float(pr["piece"][good].sum()) >= need:
+                        put(a, b, "BESIDE_OUTLINE", dz[good].max())
+                    else:
+                        reject("BESIDE_OUTLINE", a, b, dz[held].min())
     # union-find in sorted-key order (the smaller key the root)
     parent = list(range(n))
 

@@ -48,6 +48,19 @@ class Raster(unittest.TestCase):
         self.assertEqual(len(np.unique(k)), 640)       # (no point on the shared diagonal counted twice)
         self.assertTrue(np.allclose(z, 1.0))
 
+    def test_shared_edge_on_raster_points(self):
+        # a square whose corners and diagonal lie on the raster's points: each point inside once (the top-left rule),
+        # no false overlap between the two triangles of one slab
+        x0, y0 = 0.5 * sp.RASTER_M + sp._JX, 0.5 * sp.RASTER_M + sp._JY
+        s = 8 * sp.RASTER_M
+        a, b, c, d = (x0, y0), (x0 + s, y0), (x0 + s, y0 + s), (x0, y0 + s)
+        for tris in ([[a, b, c], [a, c, d]], [[a, c, b], [a, d, c]]):        # (both windings)
+            tri = np.array([[p + (2.0,) for p in t] for t in tris], np.float64)
+            k, _z, _ = sp.raster_tris(tri)
+            self.assertEqual(len(k), len(np.unique(k)))
+            self.assertEqual(len(k), 64)                # (8 x 8: two of the four sides own their points)
+            self.assertEqual(len(sp.overlap_keys(k, _z)), 0)
+
 
 class OverlapHole(unittest.TestCase):
     def test_two_overlapping_decks(self):
@@ -139,6 +152,16 @@ class Groups(unittest.TestCase):
         self.assertEqual(kinds, {"BESIDE", "JOIN", "OVERLAP_ALONG"})
         self.assertGreaterEqual(g["height_rejected"]["OVERLAP_CROSS"], 1)
         self.assertEqual(g["single"], 1)                # (the overpass)
+
+    def test_outline_holds_both(self):
+        # two decks 4 m apart edge to edge (more than BESIDE's 2.5 m): one only when one bridge outline holds both
+        ms = [member("n", (0, 0), (60, 0), 8.0, 4.0), member("s", (0, 12), (60, 12), 8.0, 4.01)]
+        both = [np.array([[-5, -6], [65, -6], [65, 18], [-5, 18]], np.float64)]
+        one = [np.array([[-5, -6], [65, -6], [65, 6], [-5, 6]], np.float64)]
+        self.assertEqual(sp.predict_groups([dict(m) for m in ms], both, R=1000.0)["edges"]["BESIDE_OUTLINE"], 1)
+        g = sp.predict_groups([dict(m) for m in ms], one, R=1000.0)
+        self.assertEqual(g["n"], 0)
+        self.assertEqual(g["height_rejected"]["BESIDE_OUTLINE"], 0)
 
     def test_short_twins(self):
         # two carriageways on one 17 m deck (E6 Vist), 1 m apart: BESIDE though they never run 20 m side by side
