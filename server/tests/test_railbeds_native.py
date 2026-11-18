@@ -109,6 +109,21 @@ class BedHeightsTest(unittest.TestCase):
                       if np.isfinite(base).all() and (np.abs(base) < 1e15).all() else base):
                 self.assertTrue(same(railways.bed_heights(z), ref_bed_heights(z)))
 
+    def test_odd_byte_strides(self):
+        """A float64 view whose stride is no whole number of float64s (packed records): read as numpy reads it."""
+        rng = random.Random(9)
+        for _ in range(100):
+            n = rng.randint(0, 40)
+            for itemsize in (9, 12, 17):
+                rec = np.zeros(n, np.dtype([("z", "<f8"), ("pad", f"V{itemsize - 8}")], align=False))
+                rec["z"] = rand_line(rng, n)
+                z = rec["z"]
+                self.assertEqual(z.strides, (itemsize,) if n else z.strides)
+                self.assertTrue(same(railways.bed_heights(z), ref_bed_heights(z)))
+        with self.assertRaises(ValueError):         # (the kernel itself refuses such a view)
+            rec = np.zeros(8, np.dtype([("z", "<f8"), ("pad", "V1")]))
+            fast._ef.rail_bed_heights([rec["z"]], 5)
+
     def test_short_lines_are_themselves(self):
         for n in (0, 1, 2):
             z = np.arange(n, dtype=np.float64)

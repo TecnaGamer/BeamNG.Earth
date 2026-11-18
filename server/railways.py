@@ -1186,7 +1186,8 @@ def bed_heights_many(zs):
     import fast
     fast.require(481, "rail_bed_heights")
     zs = [np.asarray(z, np.float64) for z in zs]
-    got = iter(fast._ef.rail_bed_heights([z for z in zs if len(z) >= 3], max(1, int(round(SMOOTH_M / STEP_M)))))
+    got = iter(fast._ef.rail_bed_heights([np.ascontiguousarray(z) for z in zs if len(z) >= 3],
+                                         max(1, int(round(SMOOTH_M / STEP_M)))))
     return [z if len(z) < 3 else next(got) for z in zs]
 
 
