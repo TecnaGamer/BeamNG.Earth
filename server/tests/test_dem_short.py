@@ -340,6 +340,37 @@ class SampleReadsOnlyItsTilesTest(unittest.TestCase):
             x = int(np.floor((-73.9 / 360.0 + 0.5) * 2 ** z))
             self.assertEqual(got.tolist(), [0.0, float(x), 0.0])
 
+    def test_fetch_generator(self):
+        """dem_sample takes the fetch callback's whole result before it borrows any tile: a generator works, and one
+        that changes a tile it already yielded (resized: its memory moved) raises a Python exception instead of aborting the process
+        (a borrow held while the generator ran found its array changed under it)."""
+        z = 12
+        x0, y0 = 2000, 1500
+        pa = self._lat_lon(z, x0 * T + 100.3, y0 * T + 200.6)
+        pb = self._lat_lon(z, (x0 + 1) * T + 300.2, (y0 + 1) * T + 50.9)
+        lat, lon = np.array([pa[0], pb[0]]), np.array([pa[1], pb[1]])
+
+        class GenDem(StandInDem):
+            reshape = False
+
+            def _sample_tiles(self, keys, progress):
+                got = self.tiles(keys, progress)
+                first = None
+                for k in keys:
+                    a = np.array(got[k], np.float32)
+                    if first is None:
+                        first = a
+                    elif self.reshape:
+                        first.resize((T, T // 2), refcheck=False)   # (its memory reallocated)
+                    yield a
+
+        with tempfile.TemporaryDirectory() as d:
+            dem = GenDem(d)
+            self.assertEqual(dem.sample(lat, lon, z).tolist(), [float(x0), float(x0 + 1)])
+            dem.reshape = True
+            with self.assertRaises((TypeError, ValueError)):
+                dem.sample(lat, lon, z)
+
     def test_shapes(self):
         """Broadcast lat / lon in, their shape out (a scalar: a 0-d array), float64."""
         z = 12
