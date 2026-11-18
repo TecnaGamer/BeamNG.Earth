@@ -25,6 +25,17 @@ Step S2a (earthfast 481), the groundwork of the joint height solve; BNE_DECK_STR
   full queue drops the job, counted in STATS). The file's name holds the chain's key and the digest of its effective
   inputs (members, heights, outlines, frame), so two workers with different snapshots never overwrite each other.
 
+Step S2b part 1 (earthfast 488, BNE_DECK_STRUCT 4), still shadow only:
+- Chain discovery is a FIXPOINT (roads.BridgeProfiles._closure): a part's pairs count only once every cell of its line
+  and halo is read, nothing is capped or windowed before the closure is complete, and the answer is a function of
+  that complete local set (the chain with exactly its own cells + halo read). A window solve publishes only pieces
+  whose own closure is capped (roads.BridgeProfiles._capped).
+- ONE joint height solve per structure (heights(): earthfast.structure_heights): the chain profile solved WITHOUT the
+  pairwise mechanisms (roads._merge_overlaps / DeckMerge / DUAL_DECK_M, roads._tie_beside; BridgeProfiles._raw_solve,
+  in the writer) coupled per group edge, windows and eases, abutments pinned, clearances as an active set, a fallback
+  to today's heights recorded. The JSON gets each member's z_in_mm and z_joint_mm beside today's z_mm and a "joint"
+  section (per structure: status, couplings, metrics today vs joint). Nothing is published from it.
+
 off (the default) builds the same plans, facts and tiles as before (no code of this module runs). shadow's closure
 can put more parts in one chain solve (its heights solved together): the switch is in every cache key (revisit:
 SWITCH_VERSIONS, not PLAN_NEUTRAL).
@@ -49,9 +60,9 @@ import numpy as np
 
 log = logging.getLogger("earthd.structures")
 
-MODE = os.environ.get("BNE_DECK_STRUCT", "off")         # off / shadow (S1, S2a); on comes with S3
+MODE = os.environ.get("BNE_DECK_STRUCT", "off")         # off / shadow (S1, S2a, S2b part 1); on: S2b part 2
 SHADOW = MODE == "shadow"
-FORMAT = 2
+FORMAT = 3                  # (3: the joint heights, S2b part 1)
 EDGE_KINDS = ("JOIN", "END_ON", "OVERLAP_ALONG", "OVERLAP_CROSS", "BESIDE", "BESIDE_OUTLINE")
 REASONS = ("level", "dz", "walk", "rail", "tunnel", "outside")
 ROAD, WALK, RAIL, TUNNEL = 0, 1, 2, 3
@@ -275,6 +286,85 @@ def document(members, got, n_chain, ll=None):
             "digest": _digest({"groups": [g["digest"] for g in out_groups], "conflicts": own})}
 
 
+STATUS = ("solved", "pinned", "infeasible", "clearance", "grade", "solver")
+CLASS_DECK = -1         # earthfast.structure_heights' class code of a deck over a deck of the chain
+
+
+def heights(members, n_chain, got, raw):
+    """S2b part 1 (shadow): the joint heights of a chain's structures (earthfast.structure_heights) and what they WOULD
+    give against today's. members / n_chain / got: _chain_job's (the chain's first n_chain members, today's heights in
+    "z"); raw: roads.BridgeProfiles._raw_solve's (the profile without the pairwise mechanisms "z", the crossings'
+    "floors" (part index, x, y, floor m, class), per part "under" m, class "rank", "link"). A dict for the JSON:
+    {"z_joint": [mm per vertex] per member (outside members: None), "structures": [per group: its root's key, status,
+    couplings, pairs dropped by a pinned end, clearance windows, unmet ones, rounds, today's and the joint metrics in mm
+    (twin_dz; twin_free: the twin pairs not within their ease of a pinned abutment; seam) and grade change, clearance
+    margins per class in mm], "conflicts_same_level": the groups' same-level
+    dz conflicts (never coupled: recorded), "classes"}."""
+    import fast
+    fast.require(488, "structure_heights")
+    ms = members[:n_chain]
+    pts, off, zin, today = [], [0], [], []
+    for m, z in zip(ms, raw["z"]):
+        xy = np.asarray(m["xy"], np.float64).reshape(-1, 2)
+        z = np.asarray(z, np.float64).reshape(-1)
+        t = np.asarray(m["z"], np.float64).reshape(-1)
+        if len(z) != len(xy):
+            z = np.full(len(xy), np.nan)
+        pts.append(xy)
+        zin.append(z)
+        today.append(t)
+        off.append(off[-1] + len(xy))
+    root = [int(r) for r in got["root"][:n_chain]]
+    dup = [int(d) for d in (got.get("dup") or list(range(len(members))))[:n_chain]]
+    root = [r if r < n_chain else i for i, r in enumerate(root)]
+    dup = [d if d < n_chain else i for i, d in enumerate(dup)]
+    edges = [(int(a), int(b), int(k)) for a, b, k, _u, _dz in got["edges"]
+             if a < n_chain and b < n_chain and root[a] == root[b]]
+    classes = sorted({str(f[4]) for f in raw["floors"]})
+    code = {c: k for k, c in enumerate(classes)}
+    fl = [f for f in raw["floors"] if 0 <= int(f[0]) < n_chain]
+    z, rows, mt, mj, ct, cj = fast._ef.structure_heights(
+        np.ascontiguousarray(np.concatenate(pts) if pts else np.zeros((0, 2))), np.asarray(off, np.int64),
+        np.ascontiguousarray(np.concatenate(zin) if zin else np.zeros(0)),
+        np.ascontiguousarray(np.concatenate(today) if today else np.zeros(0)),
+        np.asarray([half_of(2.0 * float(m["half"])) for m in ms], np.float64),
+        np.asarray([np.nan if m.get("level") is None else float(m["level"]) for m in ms], np.float64),
+        np.asarray(root, np.int64), np.asarray(dup, np.int64),
+        np.asarray(raw["rank"], np.int64), np.asarray([1 if v else 0 for v in raw["link"]], np.int64),
+        np.asarray(raw["under"], np.float64), np.asarray(edges, np.int64).reshape(-1, 3),
+        np.asarray([(f[1], f[2], f[3]) for f in fl], np.float64).reshape(-1, 3),
+        np.asarray([int(f[0]) for f in fl], np.int64), np.asarray([code[str(f[4])] for f in fl], np.int64))
+    keys = [m["key"] for m in members]
+    cname = lambda c: "deck" if c == CLASS_DECK else classes[c]      # noqa: E731
+    met_t = {r: (a, f, b, c) for r, a, f, b, c in mt}
+    met_j = {r: (a, f, b, c) for r, a, f, b, c in mj}
+    cl_t, cl_j = {}, {}
+    for out, rows_ in ((cl_t, ct), (cl_j, cj)):
+        for r, c, v in rows_:
+            out.setdefault(r, {})[cname(c)] = _mm(v)
+    structs = []
+    for r, st, npairs, pruned, cwin, unmet, rounds, resid in rows:
+        a, f, b, c = met_t.get(r, (0.0, 0.0, 0.0, 0.0))
+        a2, f2, b2, c2 = met_j.get(r, (0.0, 0.0, 0.0, 0.0))
+        structs.append({"id": keys[r], "status": STATUS[st], "pairs": int(npairs), "pruned": int(pruned),
+                        "cwin": int(cwin), "unmet": int(unmet), "rounds": int(rounds), "resid_mm": _mm(resid),
+                        "members": sum(1 for i in range(n_chain) if root[i] == r and dup[i] == i),
+                        "today": {"twin_dz_mm": _mm(a), "twin_free_mm": _mm(f), "seam_mm": _mm(b),
+                                  "grade_chg": round(float(c), 4), "clear_mm": cl_t.get(r, {})},
+                        "joint": {"twin_dz_mm": _mm(a2), "twin_free_mm": _mm(f2), "seam_mm": _mm(b2),
+                                  "grade_chg": round(float(c2), 4), "clear_mm": cl_j.get(r, {})}})
+    zj = []
+    for i in range(len(members)):
+        if i < n_chain:
+            zj.append([_mm(v) for v in z[off[i]:off[i + 1]]])
+        else:
+            zj.append(None)
+    same = sum(1 for _a, _b, rs, _k, _dz in got["conflicts"] if REASONS[rs] == "dz")
+    return {"z_joint": zj, "structures": structs, "classes": classes, "conflicts_same_level": same,
+            "policy": "same-level dz conflicts and rejected pairs are never coupled (recorded)",
+            "digest": _digest([zj[:n_chain], structs])}
+
+
 def _outline_rings(infra):
     """The OSM bridge outline rings (man_made=bridge: the infrastructure layer's bridge polygons) of the
     infrastructure Features infra as lon/lat arrays, each feature once (by its id), in a canonical order. In the
@@ -314,10 +404,11 @@ def _write(cache_dir, name, doc):
     return path
 
 
-def _input_digest(members, rings, frame):
+def _input_digest(members, rings, frame, extra=b""):
     """The digest of a chain's effective inputs: its members (key, class, kind, level, half width, the line and its
-    heights in mm, outside), the outline rings (lon/lat to 1e-7 degree) and the frame."""
-    h = hashlib.sha256()
+    heights in mm, outside), the outline rings (lon/lat to 1e-7 degree), the frame and extra (S2b: the joint solve's
+    inputs)."""
+    h = hashlib.sha256(extra)
     h.update(repr((round(float(frame.lat0), 9), round(float(frame.lon0), 9))).encode())
     for m in members:
         h.update(repr((m["key"], m["cls"], int(m["kind"]), m.get("level"), _mm(m["half"]),
@@ -420,14 +511,15 @@ atexit.register(flush, 10.0)
 
 # ---- the chain solve's hand-off -----------------------------------------------------------------------------------
 
-def published(prof, comp, pool, zs, infra, block, cache_dir, short=False):
+def published(prof, comp, pool, zs, infra, block, cache_dir, short=False, raw=None):
     """BNE_DECK_STRUCT=shadow: the chain comp was PUBLISHED by this solve (roads.BridgeProfiles._chain_solve: its
     owner store's canonical solve, every part and the structure its own, read complete): its groups (block None; the
     heights zs in comp's order, pool the solve's parts {key: (spec, xy, lon, level, ...)}, infra the infrastructure
     Features its structure read) or, for a window solve (block: a chain over roads.CHAIN_CELLS cells, the legacy path
     in v1), a marker naming the window's parts, made and written by the background writer. Only copies taken here
     (the pool's arrays are the cells' cached ones, never changed). False when not handed over (a full queue: counted,
-    marked by the writer). Never raises."""
+    marked by the writer). raw (S2b): a callable the writer calls for the chain's profile without the pairwise
+    mechanisms (roads.BridgeProfiles._raw_solve: the joint height solve's input, heights()). Never raises."""
     try:
         if cache_dir is None or not comp:
             return False
@@ -446,7 +538,7 @@ def published(prof, comp, pool, zs, infra, block, cache_dir, short=False):
                   for k in sorted((k for k in pool if k not in inside), key=str)]
         rings = _outline_rings(infra)
         frame, region = prof.frame, getattr(prof, "region", None)
-        return _submit(lambda: _chain_job(cache_dir, ck, chain, others, rings, frame, region, short),
+        return _submit(lambda: _chain_job(cache_dir, ck, chain, others, rings, frame, region, short, raw),
                        cache_dir)
     except Exception as ex:             # (a shadow: never in the way of the chain's solve)
         STATS["failed"] += 1
@@ -464,9 +556,9 @@ def _member(k, spec, xy, z, level, src, outside):
             "outside": outside}
 
 
-def _chain_job(cache_dir, ck, chain, others, rings, frame, region, short=False):
+def _chain_job(cache_dir, ck, chain, others, rings, frame, region, short=False, raw=None):
     """The writer's work for one published chain: its members (the chain's, then the pool's other parts near it as
-    outside), the groups, the JSON named by the chain's key and its inputs' digest."""
+    outside), the groups, the joint heights (raw: S2b), the JSON named by the chain's key and its inputs' digest."""
     members = [_member(k, spec, xy, z, lv, src, False) for k, spec, xy, z, lv, src in chain]
     n_chain = len(members)
     allp = np.concatenate([m["xy"] for m in members])
@@ -487,7 +579,17 @@ def _chain_job(cache_dir, ck, chain, others, rings, frame, region, short=False):
         la, lo_, _ = frame.enu_to_geodetic(np.round(xy[:, 0], 3), np.round(xy[:, 1], 3), 0.0)
         return [[round(float(a), 7), round(float(b), 7)] for a, b in zip(la, lo_)]
     doc = document(members, got, n_chain, ll)
-    dig = _input_digest(members, rings, frame)
+    extra = b""
+    if raw is not None:
+        r = raw()
+        doc["joint"] = heights(members, n_chain, got, r)
+        for m, z in zip(doc["members"], doc["joint"].pop("z_joint")):
+            m["z_joint_mm"] = z
+        for m, z in zip(doc["members"], r["z"]):
+            m["z_in_mm"] = [_mm(v) for v in np.asarray(z, np.float64)]
+        extra = json.dumps([doc["members"][i]["z_in_mm"] for i in range(n_chain)] + [list(f) for f in r["floors"]]
+                           + [r["under"], r["rank"], r["link"]]).encode()
+    dig = _input_digest(members, rings, frame, extra)
     doc.update({"chain": f"{ck[0]}:{ck[1]}", "capped": None, "inputs": dig,
                 "frame": [float(frame.lat0), float(frame.lon0)], "region": region})
     if short:
