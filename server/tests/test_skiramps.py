@@ -178,6 +178,59 @@ class GapFill(unittest.TestCase):
         self.assertLessEqual(float(np.max(out - zb)), grading.FAST_GAP_MAX_M + 1e-9)
 
 
+class GapLanding(unittest.TestCase):
+    """Codex round 2: one line per landing. The A7 at Thulba ran into its hole through a 4 m lane-section stub between
+    the road and the deck: the stub and the road ending short of the deck, planned together or apart (two cells, either
+    order), with or without the stub as the road's extension, and a twin carriageway's deck end 12 m beside, meet at one
+    height, and every sample on the line takes the line's height."""
+
+    def setUp(self):
+        import geodesy
+        self.frame = geodesy.EnuFrame(50.198, 9.939)
+        self.spec = roads.Spec(11.5, "paved", False, "motorway")
+
+        def raw(la, lo):
+            x = np.asarray(self.frame.geodetic_to_enu(la, lo, 0.0)[0], np.float64)
+            road = 50.0 - 0.037 * x             # a 3.7 % motorway towards the deck at x = 0 (x < 0)
+            return np.where(x > -14.0, road - 4.0 * np.clip((x + 14.0) / 14.0, 0.0, 1.0), road)    # its opening
+        self.raw = raw
+        # landings: this deck's end (the road comes from -x) and its twin's, 12 m to the side
+        self.landings = [(np.array([0.0, 0.0]), np.array([-1.0, 0.0]), "motorway"),
+                         (np.array([0.0, 12.0]), np.array([-1.0, 0.0]), "motorway")]
+
+    def lonlat(self, a, b):
+        xs = np.arange(a, b + 1e-9, 2.0) if b > a else np.array([a, b])
+        if xs[-1] < b:
+            xs = np.r_[xs, b]
+        la, lo, _ = self.frame.enu_to_geodetic(xs, np.zeros(len(xs)), 0.0)
+        return np.c_[lo, la]
+
+    def test_split_approach_one_height(self):
+        road, stub = (self.lonlat(-200.0, -4.0), self.spec), (self.lonlat(-4.0, 0.0), self.spec)
+        kw = dict(cuts=False, landings=self.landings)
+        both = grading.plan_roads(self.frame, [road, stub], self.raw, **kw)
+        alone_s = grading.plan_roads(self.frame, [stub], self.raw, **kw)[0]
+        alone_r = grading.plan_roads(self.frame, [road], self.raw, **kw)[0]
+        sxy = np.array([[-4.0, 0.0], [-2.0, 0.0], [0.0, 0.0]])
+        ext = grading.plan_roads(self.frame, [road], self.raw, ext=[(None, sxy[[0, 2]])], **kw)[0]
+        for r in (both[0], alone_r, ext):
+            self.assertAlmostEqual(float(r.z[-1]), 50.0 - 0.037 * -4.0, delta=0.02, msg="on the line")
+        for s_ in (both[1], alone_s):
+            self.assertAlmostEqual(float(s_.z[0]), float(both[0].z[-1]), delta=0.02)
+            self.assertAlmostEqual(float(s_.z[-1]), 50.0, delta=0.02)
+        # (and its grade into the stub: the line's)
+        g = (float(both[0].z[-1]) - float(both[0].z[-2])) / float(np.hypot(*np.diff(both[0].xy[-2:, :2], axis=0)[0]))
+        self.assertAlmostEqual(g, -0.037, delta=0.005)
+
+    def test_off_the_line_untouched(self):
+        # (a road crossing the landing's ray, not heading along it, keeps its own ground)
+        la, lo, _ = self.frame.enu_to_geodetic(np.full(21, -6.0), np.linspace(-20.0, 20.0, 21), 0.0)
+        cross = grading.plan_roads(self.frame, [(np.c_[lo, la], self.spec)], self.raw, cuts=False,
+                                   landings=self.landings)[0]
+        ref = grading.plan_roads(self.frame, [(np.c_[lo, la], self.spec)], self.raw, cuts=False)[0]
+        self.assertTrue(np.allclose(cross.z, ref.z))
+
+
 class UnderSpeed(unittest.TestCase):
     """A lone 1 m dip on 6 % cosine ramps bends at 2 g^2 / d: 0.95 g at 130 km/h. A motorway's: within its radius."""
 
@@ -205,6 +258,24 @@ class UnderSpeed(unittest.TestCase):
         self.assertGreater(v * v * bend(old) / 9.81, 0.5)
         same = grading.underpass_offsets(ln, [(0, 400.0, 1.0, 0.0)], q)[0]
         self.assertTrue(np.array_equal(same, old), "0: the kernel's own grade")
+
+    def test_stops_before_a_junction(self):
+        # (Codex round 2: a trunk's 1 m dip, its ramp 52 -> 208 m long, ran on through a slip road joining 75 m on and
+        # its 20 m junction blend made a crest on the slip road. Now it ends before the junction: no leg bends more)
+        trunk_a, trunk_b = line(0.0, 475.0), line(475.0, 900.0)
+        slip = line(475.0, 700.0, 0.0, 120.0)
+        lns = [trunk_a, trunk_b, slip]
+        q = [(i, ln) for i, ln in enumerate(lns)]
+        g = grading.under_speed_grade("trunk", grading.SIGMA_MAJOR_M, 1.0)
+        old = grading.underpass_offsets(lns, [(0, 400.0, 1.0)], q)
+        new = grading.underpass_offsets(lns, [(0, 400.0, 1.0, g)], q)
+        self.assertAlmostEqual(float(new[0].min()), -1.0, places=6)
+        for o, n in zip(old, new):
+            ds = 4.0
+            bend = lambda z: float(np.max(np.abs(np.diff(z, 2)))) / (ds * ds) if len(z) > 2 else 0.0  # noqa: E731
+            self.assertLessEqual(bend(n), bend(o) + 1e-9)
+        self.assertTrue(np.allclose(new[2], old[2]), "the slip road: nothing more than before")
+        self.assertAlmostEqual(float(new[0][-1]), float(old[0][-1]), places=9, msg="the junction: as before")
 
 
 class LevelSpacingTarget(unittest.TestCase):
