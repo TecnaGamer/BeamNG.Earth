@@ -19,11 +19,14 @@
 3. The shape. The heights of the system's decks, and of the roads that go down under its crossings, in one problem:
    every crossing clears the vehicle height the road under needs (its signed limit, else by class; rail's catenary) plus
    the deck, and so does a deck all along another it runs over (a road winding over itself), not only where their
-   lines cross; every deck keeps its girders off the ground under it (but over a road dug under it); every deck holds
-   the grade its class and speed allow and the joints between decks meet. Within those, the
-   decks' own slopes are free, chosen for the least earthwork: the smallest embankment (or cut) where the shape meets
-   the roads on the ground at its ends, and the shallowest dip for a road going under. What must be at ground level (a
-   road under an overpass, a track over an underpass) is at its ground: the shape is placed on it.
+   lines cross; every deck keeps its girders off the ground under its span (_abutments: not where it lies on the
+   ground at its ends, nor over a road dug under it); every deck holds the grade its class and speed allow and the
+   joints between decks meet. Within those, a deck keeps its natural height (findground, rule 1: the line between the
+   ground at the ends of its chain) and rises as a whole by what its clearances lack (rule 3), never by a bump over
+   each of them with its ends falling away from it: its ends weigh where it meets the road on the ground (the smallest
+   embankment there), its line is held by its stiffness (W_STIFF). A road going under holds
+   the shallowest dip. What must be at ground level (a road under an overpass, a track over an underpass) is at its
+   ground: the shape is placed on it.
 
 4. The embankments. Where the shape's end does not meet the road on the ground it joins, that road leading up to it is
    an earth embankment (or a cut, for a road going down) as steep as the road's max grade, as long as it takes to
@@ -71,8 +74,8 @@ CONNECT_M = 400.0           # m: a road joining two decks' (or tunnels') ends no
 RAMP_MAX_M = 600.0          # m: the longest embankment or cut followed along a road
 DIP_MARGIN_M = 3.0          # m past the upper part's edge a road going under holds its dip before its cut ramps up
 FOOT_STEP_M = 1.0           # m between the points of a crossing's footprint (under_pairs)
-DECK_INNER_M = 10.0         # m from a deck's ends past which a span over the ground keeps its girders off it ...
-DECK_AIR_M = 0.5            # ... by this much
+DECK_MAX_GRADE = 0.06       # a deck climbs no steeper than this (the game's: roads.DECK_MAX_GRADE, grading sets it from there)
+DECK_AIR_M = 0.5            # m: a span over the ground keeps its girders this far off it (past its abutments: _abutments)
 SOFT_M = 0.6                # m: the rounding where an embankment meets the ground (a soft maximum)
 
 CLEAR_PATH_M = 3.0          # m: a path's headroom (no vehicle on it)
@@ -81,6 +84,7 @@ W_END = 1.0                 # a system end's embankment (per m, squared)
 W_HOLD = 100.0              # a short deck chain (a road dug under it) at its ground
 W_DIP = 0.5                 # a road's dip under its crossing
 W_SMOOTH = 0.2
+W_STIFF = 3.0e3             # a deck's line (per sample, squared: its bends), see _solve_shape_qp
 W_JOIN = 300.0
 
 Member = namedtuple("Member", "key line kind cls kmh level half limit nodes held", defaults=(None, False))
@@ -930,15 +934,24 @@ def _overlaps(pcs, smp):
     return out
 
 
+def deck_grade(m):
+    """The steepest grade a deck of road m may hold: its class's, and never more than a deck's own law (the approaches
+    and embankments keep the class's). With the class's alone a secondary's deck took 0.11, and its line, free over
+    the lanes, humped (ends 14.92, middle 17.03 over a motorway whose clearance asked 16.35) and dropped its ends
+    away from the embankment it lands on."""
+    return min(max_grade(m), DECK_MAX_GRADE)
+
+
 def _law(net, pc):
     m = net.m[pc["main"]]
-    return max_grade(m), curve_radius(m)
+    return (deck_grade(m) if pc["kind"] == "deck" else max_grade(m)), curve_radius(m)
 
 
 def solve_shape(net, sysm, pcs, smp, ground, fixed_z, diagnostics=None):
     """The shape: per piece its heights. The laws (grade, vertical curve by speed, clearance, joints) are hard
     constraints of one quadratic programme (the Rust kernel's, carriageways.solve); the costs: the embankment at the
-    shape's ends on the ground, the depth a road goes under to, a short deck held at its ground. None where the
+    shape's ends on the ground, a deck's line kept (its stiffness), the depth a road goes under to, a short deck held at
+    its ground. None where the
     kernel finds no answer (laws that cannot all hold): no stand-in, the system is left as it is and the caller says
     so (the conflict is the thing to fix). fixed_z(i, s): member i's height where the shape does not move it, at arc
     length s (None: not known), or at an array of them (an array, NaN: not known)."""
@@ -950,20 +963,91 @@ def solve_shape(net, sysm, pcs, smp, ground, fixed_z, diagnostics=None):
         return None
 
 
-def _deck_targets(net, sysm, pc, t):
-    """A deck's target and weights: toward the line between its ends' ground, held there if a road is dug under its
-    chain (_dug_under: a short one, a held one), else free but for the embankment where it meets the road on the
-    ground."""
+def _natural_lines(net, sysm, pcs, smp, ground):
+    """{deck piece: its natural height at its samples} (findground, rule 1): the line between the ground at the two
+    ends of its whole chain (the decks joined end to end are one structure, the line over their total length). A chain
+    with no two ends to take the line between (decks meeting three at a joint, a loop) has no such line: each of its
+    decks takes the line between its own ends' ground."""
+    piece_of = {pc["main"]: p for p, pc in enumerate(pcs) if pc["kind"] == "deck"}
+    link = {}                   # (piece, 0 its start | 1 its end) -> the (piece, end) joined to it; None: more than one
+    for i, si, j, sj in sysm["joins"]:
+        if i == j or i not in piece_of or j not in piece_of:
+            continue
+        if min(si, net.L[i] - si) > JOIN_M or min(sj, net.L[j] - sj) > JOIN_M:
+            continue            # (a deck's end on another's middle: a merge, not one structure)
+        a, b = (piece_of[i], int(si > net.L[i] / 2)), (piece_of[j], int(sj > net.L[j] / 2))
+        for u, v in ((a, b), (b, a)):
+            link[u] = v if u not in link else None
+    out, seen = {}, set()
+    for p in piece_of.values():
+        if p in seen:
+            continue
+        chain, todo = {p}, [p]
+        while todo:
+            q = todo.pop()
+            for e in (0, 1):
+                v = link.get((q, e))
+                if v is not None and v[0] not in chain:
+                    chain.add(v[0])
+                    todo.append(v[0])
+        seen |= chain
+        free = [(q, e) for q in sorted(chain) for e in (0, 1) if (q, e) not in link]
+        if len(free) != 2 or any(link.get((q, e), 0) is None for q in chain for e in (0, 1)):
+            for q in chain:
+                t = np.asarray(ground[q], np.float64)
+                out[q] = t[0] + (t[-1] - t[0]) * np.arange(len(t)) / max(len(t) - 1, 1)
+            continue
+        q, e = free[0]
+        walked, arc = [], 0.0                       # (the chain's decks from one free end to the other, each from
+        while True:                                 # where along the chain it starts, entered at its end e)
+            walked.append((q, e, arc))
+            arc += float(np.asarray(smp[q]["d"], np.float64)[-1])
+            if (q, 1 - e) not in link:
+                break
+            q, e = link[(q, 1 - e)]
+        (q0, e0, _), (q1, e1, _) = walked[0], walked[-1]
+        z0 = float(np.asarray(ground[q0], np.float64)[-e0])             # (e0 = 0: its first sample, 1: its last)
+        z1 = float(np.asarray(ground[q1], np.float64)[-1 + e1])         # (e1 = 0 entered at its start: left at its end)
+        for q, e, at in walked:
+            d = np.asarray(smp[q]["d"], np.float64)
+            out[q] = z0 + (z1 - z0) * (at + (d if e == 0 else d[-1] - d)) / max(arc, 1e-9)
+    return out
+
+
+def _deck_targets(net, sysm, pc, t, natural):
+    """A deck's target and weights: toward its natural height (_natural_lines), held there if a road is dug under its
+    chain (_dug_under: a short one, a held one). Only its ends on the road on the ground weigh (W_END: the embankment
+    there; where it goes on in another deck of its chain it has no end), its middle weighs nothing: what keeps its line
+    is its stiffness (W_STIFF), so the deck rises or falls as a whole by what its
+    clearances ask, not by a bump over each of them with its ends dropping from it at their grade."""
     i = pc["main"]
     n = len(t)
     joined = [s_ for a, sa, b, sb in sysm["joins"] for s_, m_ in ((sa, a), (sb, b)) if m_ == i]
     short = _dug_under(sysm["chain_of"].get(i, 0.0), i in sysm.get("held", ()))
-    target = t[0] + (t[-1] - t[0]) * np.arange(n) / max(n - 1, 1)
-    w = np.full(n, W_HOLD if short else 1e-6)
+    w = np.full(n, W_HOLD if short else 0.0)
     for k, s_end in ((0, 0.0), (n - 1, net.L[i])):
         if not any(abs(s_ - s_end) <= JOIN_M for s_ in joined):
             w[k] = W_HOLD if short else W_END
-    return target, w
+    return natural, w
+
+
+def _abutments(t, natural, depth, at_start, at_end):
+    """Bool per sample of a deck: in an abutment, the stretch from either end where its natural height stays within
+    the girders' depth of the ground (over it by up to depth + DECK_AIR_M, or under by the air): the deck lies on the
+    ground there (its fill, its abutment wall), no void under it to keep the girders out of. The floor is for the span
+    past it, over what the ground does under the line: where it falls away, and where it rises into it (the hill the
+    deck must pass over). A deck 12 m from its end on a slope still level with it (Kempttal's viaduct: the ground 0.0
+    and 1.5 m under its line at 12 and 20 m, 3.5 at 24) stood 2.7 m up over a ground it lies on, and a flat-footed
+    ramp (Duttweilerbruecke's service ramp, level with its ground all along) 2.5 m up at 24 m: with the deck's line
+    stiff that lifted a whole deck 5 m to 8 m over the real one."""
+    off = np.asarray(t, np.float64) - np.asarray(natural, np.float64)
+    ok = (off > -(depth + DECK_AIR_M)) & (off < DECK_AIR_M)
+    out = np.zeros(len(ok), bool)
+    if at_start:
+        out |= np.logical_and.accumulate(ok)
+    if at_end:
+        out |= np.logical_and.accumulate(ok[::-1])[::-1]
+    return out
 
 
 def _near_line(pts, line, reach):
@@ -1052,7 +1136,7 @@ def _stacked(net, sysm, pcs, smp):
             dist = dnp.hypot(*(a[None] + t[..., None] * ab[None] - xd[near, None, :]).transpose(2, 0, 1))
             k = np.argmin(dist, axis=1)
             under = np.flatnonzero(dist[np.arange(len(near)), k] <= half)
-            g = max(max_grade(net.m[mu]), max_grade(net.m[md]))
+            g = max(deck_grade(net.m[mu]), deck_grade(net.m[md]))
             for r_ in under.tolist():
                 n_, kk = int(near[r_]), int(k[r_])
                 tt = float(t[r_, kk])
@@ -1069,22 +1153,23 @@ def _stacked(net, sysm, pcs, smp):
 def _solve_shape_qp(net, sysm, pcs, smp, ground, fixed_z, diagnostics):
     import carriageways as _cw
     chains = []
-    for pc, x, t in zip(pcs, smp, ground):
+    natural = _natural_lines(net, sysm, pcs, smp, ground)
+    for p, (pc, x, t) in enumerate(zip(pcs, smp, ground)):
         t = np.asarray(t, np.float64)
         n = len(t)
         lo, hi = np.full(n, -np.inf), np.full(n, np.inf)
         if pc["kind"] == "deck":
-            target, w = _deck_targets(net, sysm, pc, t)
-            # (a span over the ground: its girders off it, a deck that crosses a road, a track or another deck too: a
-            # crossing holds a deck up only where it crosses. Kawazu's Nanadaru loop, one road's three decks crossing
-            # each other and two streets, had no floor at all: between its crossings each deck went the straight way
-            # between its ends' ground, its lowest turn 18 m inside the hill it winds round. A deck a road is dug
-            # under stays at its ground (_dug_under), and over a road the system digs the ground is that road's cut,
-            # the crossing's clearance its floor: _over_dips)
+            target, w = _deck_targets(net, sysm, pc, t, natural[p])
+            # (a span over the ground: its girders off it past its abutments (_abutments), a deck that crosses a road, a
+            # track or another deck too: a crossing holds a deck up only where it crosses. Kawazu's Nanadaru loop, one
+            # road's three decks crossing each other and two streets, had no floor at all: between its crossings each
+            # deck went the straight way between its ends' ground, its lowest turn 18 m inside the hill it winds round.
+            # A deck a road is dug under stays at its ground (_dug_under), and over a road the system digs the ground is
+            # that road's cut, the crossing's clearance its floor: _over_dips)
             if not _dug_under(sysm["chain_of"].get(pc["main"], 0.0), pc["main"] in sysm.get("held", ())):
-                dv = x["d"]
-                inner = (dv - dv[0] >= DECK_INNER_M) & (dv[-1] - dv >= DECK_INNER_M) & ~_over_dips(net, pcs, smp, x)
-                lo = np.where(inner, t + deck_depth(net.L[pc["main"]]) + DECK_AIR_M, -np.inf)
+                depth = deck_depth(net.L[pc["main"]])
+                inner = ~_abutments(t, target, depth, w[0] > 0.0, w[-1] > 0.0) & ~_over_dips(net, pcs, smp, x)
+                lo = np.where(inner, t + depth + DECK_AIR_M, -np.inf)
         else:
             target, w = t.copy(), np.full(n, W_DIP)
             hi = t.copy()                                   # (a road going under never rises over its ground)
@@ -1093,7 +1178,15 @@ def _solve_shape_qp(net, sysm, pcs, smp, ground, fixed_z, diagnostics):
         # step, and held at the mean its grade ran 1.8 % over the law there)
         dd = np.diff(np.asarray(x["d"], np.float64))
         step = float(dd[dd > 1e-6].min()) if (dd > 1e-6).any() else float(STEP_M)
-        chains.append(dict(t=target, w=w, lo=lo, hi=hi, grade=g, K=rad / 100.0, lam=1e-3, step=step, length=0.0))
+        # (a deck keeps its line, a road going under only its depth: W_STIFF is the least that makes a deck rise as a whole
+        # by what it lacks (with the deck's own grade law, deck_grade): on a bridge over a motorway with the embankments'
+        # top 6 m up its ends stand 14.92 m with the line free (1e-3), 15.42 with the deck law alone, 15.76 at 1000, on
+        # the embankment's 15.95 at 3000. Stiffer, a deck cannot bend toward its ends' ground at all: at 2e4 (the road
+        # shapes' own, carriageways.LAMBDA) a 515 m deck's end stood 1.8 m over the real road's, which Earth filled up
+        # to, and the ground roads filled or dug against the survey went from 39 / 0 / 0 to 44 / 3 / 2 per mille
+        # (Brunau, Europabruecke, Duettweilerbruecke), at 3000 to 40 / 0 / 0)
+        chains.append(dict(t=target, w=w, lo=lo, hi=hi, grade=g, K=rad / 100.0, lam=W_STIFF if pc["kind"] == "deck" else 1e-3,
+                           step=step, length=0.0))
     cps = []
     for i, si, j, sj in sysm["joins"]:
         x, y = _var(pcs, smp, i, si), _var(pcs, smp, j, sj)

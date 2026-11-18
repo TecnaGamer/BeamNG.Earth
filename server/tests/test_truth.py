@@ -29,10 +29,11 @@ TODAY = {
                                 # line ends or turns off within 20 m of the crossing (5), one line along both ways (2), a
                                 # motorway tunnel the shapes leave out: a feature that is all tunnel (1)
         not_built=3,            # (the way is a path in the map: Earth builds none)
-        shape_p95=7.2,          # m: the Sihl viaduct's decks, solved up to 7.9 m off the real ones
+        shape_p95=4.9,          # m: the Sihl viaduct's decks, solved up to 6.3 m off the real ones (was 7.9)
         under_laws=2, steeper=2,
         dug=(7, 8),             # per mille of the ground roads' points, 3.3 m at the deepest
-        filled=(36, 35),        # 5.8 m at most (was 6.5): the roads beside the tunnel's low arch near its mouth, raised to its
+        filled=(36, 38),        # (with the shapes 35 before the decks kept their line: deck ends 1-2 m over the roads they land on)
+                                # 5.8 m at most (was 6.5): the roads beside the tunnel's low arch near its mouth, raised to its
                                 # cover (arch_raise). Its mouths are right now (floor 449.4 / 436.3 against the survey's 450.6 /
                                 # 436); with the far one 5 m high the whole tube was one low arch and its road laws had no answer
                                 # (7.8 m short), so the roads were left as they were: 19 without the shapes hid it
@@ -42,9 +43,9 @@ TODAY = {
                                 # Earth's line ends within 20 m of the crossing (2), one line along both ways (2), two lines
                                 # along the bridge, one of them its deck, which reads right (1)
         not_built=5,            # 4 street trams on the ground, 1 a path under a bridge
-        shape_p95=5.8,          # m: a service road's deck 3.8 m lower than it is; the roads under the tracks 1-2 m deeper
+        shape_p95=4.3,          # m: the roads under the tracks 1-2 m deeper (the dips 4.2 m off, the decks 3.1: was 5.7)
         under_laws=0, steeper=2,
-        dug=(0, 0), filled=(0, 5),
+        dug=(0, 0), filled=(0, 7),      # (with the shapes 5 before the decks kept their line: a deck's end 1.9 m over its road)
         rail_low=2.6,           # m: the Letzigraben flyover's ramp. It is 13 m over the tracks it crosses 270 m on, which
         rail_high=3.1),         # Earth's clears by a track's headroom, and climbs to them at 4 %: Earth's at its 2 %
         #                         (GRADE at 2.5 %: +0.7 .. +0.9, at 2.8 %: -0.4 .. -0.1; the other places' lows then 0.1-0.9
@@ -52,7 +53,7 @@ TODAY = {
     "zurich_duttweilerbruecke": dict(
         unmatched=3,            # (22 before): Earth's rail ends at the crossing (1), one rail deck along both ways (2)
         not_built=14,           # 8 street trams on the ground, 6 paths under or on the bridges: Earth builds none
-        shape_p95=3.4,
+        shape_p95=2.3,          # m: a service ramp's deck (was 3.4)
         under_laws=2, steeper=1,
         dug=(3, 3),             # 3.3 m at the deepest. (12 while every rail bridge dug the road under it)
         filled=(0, 0),
@@ -67,7 +68,7 @@ TODAY = {
     "goeschenen_gotthard_portal": dict(
         unmatched=1,            # (5 before): a tertiary road ends at the crossing
         not_built=3,            # the second tube of the road tunnel: the map flags it as under construction
-        shape_p95=5.0,
+        shape_p95=2.7,          # m: the links' decks (was 5.0)
         under_laws=0, steeper=1, graded=60,
         dug=(51, 49),           # a 6 m road 5 m, the exit ramp 2.3 m (its own plan under the DEM). Was 66 / 64 with a link road 7.3 m
                                 # under its survey height beside the ramp in its cutting: the ramp's lanes reached on past
@@ -76,7 +77,7 @@ TODAY = {
         rail_low=-9.7, rail_high=0.2),
     "kempttal_viaduct": dict(
         unmatched=0, not_built=0, right=6,
-        shape_p95=4.6,          # m: the viaduct's deck at its ends
+        shape_p95=0.9,          # m: the viaduct's deck (was 4.6 at its ends)
         under_laws=0, steeper=0, graded=60,
         dug=(1, 0), filled=(0, 0), rail_low=-1.0, rail_high=0.1),
 }
@@ -123,7 +124,8 @@ def test_the_shapes_solved_from_the_true_facts_are_no_further_from_the_real_road
     assert _shape_p95(site) <= TODAY[site]["shape_p95"], measured(site)["solved_minus_real"]
 
 
-@pytest.mark.parametrize("site", _goal(set(SITES), "the solver's decks and dips stand metres off the real ones"))
+@pytest.mark.parametrize("site", _goal(set(SITES) - {"kempttal_viaduct"},
+                                          "the solver's decks and dips stand metres off the real ones"))
 def test_the_shapes_solved_from_the_true_facts_are_the_real_roads_within_the_surveys_accuracy(site):
     assert _shape_p95(site) <= SURVEY_M, measured(site)["solved_minus_real"]
 

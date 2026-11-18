@@ -59,10 +59,12 @@ def test_an_overpass_rises_over_a_motorway_on_embankments_at_the_approaches_max_
     z = _shape_z(net, shapes, "deck", np.array([0.0, 0.0]))
     assert z >= ix.HEADROOM_M + ix.HEADROOM_MARGIN_M + ix.deck_depth(60.0) - 0.05     # the motorway's headroom
     assert _key_index(net, "mway") not in emb                          # the motorway keeps its ground
-    # the deck slopes down toward its ends (less embankment) as far as its crest curve allows at its speed
+    # the deck keeps its natural line (level: its ends' ground is) and rises as a whole by what it lacks over the
+    # motorway: no more (it stood on a bump over the lanes with its ends falling away at their grade: a deck 1.1 m under
+    # the embankment it lands on)
     z_end = _shape_z(net, shapes, "deck", np.array([0.0, 30.0]))
-    R = ix.curve_radius(m[1])
-    assert z_end < z - 0.8 * 30.0 ** 2 / (2 * R)
+    assert 0.0 <= z - z_end < 0.3, (z, z_end)             # (the deck's own stiffness lets its crest curve a few dm)
+    assert z <= ix.HEADROOM_M + ix.HEADROOM_MARGIN_M + ix.deck_depth(60.0) + 0.1
     # the approach: an embankment turning onto its max grade and onto the ground through its curves
     g = ix.max_grade(m[3])
     for sv, zz, mode in emb[_key_index(net, "north")]:
@@ -143,8 +145,8 @@ def test_an_overpass_tilts_on_sloping_ground_so_each_end_needs_the_least_embankm
         assert _shape_z(net, shapes, "deck", np.array([0.0, y])) >= need - 0.05
     assert zn >= zs - 1e-6                                             # never tilted against the ground
     # a level deck at the crossing's height would stand zc - ground at its ends; the tilted one needs less embankment
-    # in all (the crest curve its speed asks limits how far both ends can fall away: the two are balanced)
-    assert (zs + 2.0) ** 2 + (zn - 2.0) ** 2 < 0.8 * ((zc + 2.0) ** 2 + (zc - 2.0) ** 2)
+    # in all (the deck keeps one straight line, so the two ends are balanced, not each as low as its grade lets it fall)
+    assert (zs + 2.0) ** 2 + (zn - 2.0) ** 2 < (zc + 2.0) ** 2 + (zc - 2.0) ** 2
     lens = {k: sum(abs(sv[-1] - sv[0]) for sv, _z, mo in emb[_key_index(net, k)] if mo == "fill")
             for k in ("south", "north")}
     assert lens["north"] < lens["south"]                               # uphill the ground comes up to meet it
@@ -356,6 +358,49 @@ def test_a_road_looping_over_itself_is_not_joined_to_its_own_deck_under_it():
     assert zc - _shape_z(net, shapes, a, np.array([0.0, 0.0])) >= need - 0.3
 
 
+def test_a_deck_that_already_clears_keeps_its_natural_height_and_one_that_lacks_rises_by_the_lack():
+    # findground, rules 1 to 3: a structure's natural height is the line between the ground at its ends; where that
+    # already leaves the clearance nothing moves, else it rises by what is lacking, as a whole. The ground rising 5 %
+    # across a street, 80 m of deck
+    need = ix.HEADROOM_M + ix.HEADROOM_MARGIN_M + ix.deck_depth(80.0)
+
+    def solved(dip):
+        gr = lambda xy: 0.05 * xy[:, 1] - dip * np.exp(-(xy[:, 1] / 6.0) ** 2)      # (the street in a cutting dip m deep)
+        m = [Member("street", _line(-800, 0, 800, 0, 200), "ground", "residential", 40, 0, 4.0, None),
+             Member("deck", _line(0, -40, 0, 40, 17), "deck", "secondary", 60, 1, 5.0, None),
+             Member("south", _line(0, -600, 0, -40), "ground", "secondary", 60, 0, 5.0, None),
+             Member("north", _line(0, 40, 0, 600), "ground", "secondary", 60, 0, 5.0, None)]
+        net, systems, shapes, emb = _run(m, gr)
+        return [_shape_z(net, shapes, "deck", np.array([0.0, y])) for y in (-40.0, -20.0, 0.0, 20.0, 40.0)]
+    # (the street 14 m down: the line is 14 m over it, more than it asks: the deck is its line)
+    z = solved(14.0)
+    assert np.abs(np.array(z) - np.array([-2.0, -1.0, 0.0, 1.0, 2.0])).max() < 0.05, z
+    # (the street at the line's height: it lacks the clearance and rises by it, where it lacks it)
+    z = solved(0.0)
+    assert abs(z[2] - need) < 0.3, z
+    assert z[4] >= z[0] - 1e-6, z
+
+
+def test_a_deck_lying_on_the_ground_at_its_ends_has_no_girders_to_keep_off_it_there():
+    # Kempttal's viaduct and Duttweilerbruecke's ramps lie on the ground for 20 m from their ends (the real decks within
+    # 0.2 m of it where a floor of 2.7 m was asked), then span the valley: the floor from 10 m on lifted the whole of
+    # the deck, stiff as it is, 3 to 5 m over the real one. Here the ground is level for 20 m from each end, then falls
+    # 12 % to a valley 7 m down: the girders keep off it where it has fallen away, the deck is on it before
+    def ground(xy):
+        u = 80.0 - np.abs(np.asarray(xy)[:, 1])
+        return -0.12 * np.minimum(np.maximum(u - 20.0, 0.0), 60.0)
+    m = [Member("river", _line(-800, 0, 800, 0, 200), "ground", "residential", 40, 0, 4.0, None),
+         Member("deck", _line(0, -80, 0, 80, 41), "deck", "secondary", 60, 1, 5.0, None),
+         Member("south", _line(0, -600, 0, -80), "ground", "secondary", 60, 0, 5.0, None),
+         Member("north", _line(0, 80, 0, 600), "ground", "secondary", 60, 0, 5.0, None)]
+    net, systems, shapes, emb = _run(m, ground)
+    x, z = shapes[0][1][0], shapes[0][2][0]
+    assert np.abs(z).max() < 0.1, z                  # (the line between the ends: level, and it clears everything)
+    floor = ix.deck_depth(160.0) + ix.DECK_AIR_M
+    # (the floor holds over the span: no sample of the valley is closer than it to the girders' height)
+    assert (z - ground(x["xy"]))[ground(x["xy"]) < -(floor + 0.01)].min() >= floor - 1e-6
+
+
 def test_a_long_deck_crossing_a_street_keeps_its_girders_off_a_hill_away_from_the_crossing():
     # Kawazu's Nanadaru loop: decks crossing streets and each other had no floor, held up only at their crossings;
     # between them each went the straight way between its ends' ground, its lowest turn 18 m inside the hill it winds
@@ -373,8 +418,9 @@ def test_a_long_deck_crossing_a_street_keeps_its_girders_off_a_hill_away_from_th
     assert zs is not None
     floor = ix.deck_depth(1000.0) + ix.DECK_AIR_M
     x, z = smp[0], zs[0]
-    inner = (x["d"] >= ix.DECK_INNER_M) & (x["d"][-1] - x["d"] >= ix.DECK_INNER_M)
-    assert (z - hill(x["xy"]))[inner].min() >= floor - 0.02
+    over = hill(x["xy"]) > ix.DECK_AIR_M            # (where the ground rises into the deck's natural line: not its abutments)
+    assert over.sum() > 20
+    assert (z - hill(x["xy"]))[over].min() >= floor - 0.02
     assert _shape_z(net, shapes, ("road", "deck", 1), np.array([150.0, 0.0])) >= 20.0 + floor - 0.1     # (its top)
 
 

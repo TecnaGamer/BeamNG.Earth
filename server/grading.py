@@ -350,6 +350,7 @@ _gsh.HEADROOM_M, _gsh.HEADROOM_MARGIN_M = roadsmod.MIN_BRIDGE_HEADROOM_M, roadsm
 _gsh.RAIL_HEADROOM_M = roadsmod.RAIL_HEADROOM_M
 _gsh.DECK_MIN_DEPTH_M, _gsh.DECK_FULL_DEPTH_M = roadsmod.DECK_MIN_DEPTH, roadsmod.DECK_FULL_DEPTH
 _gsh.DECK_SPAN_RATIO = roadsmod.DECK_SPAN_RATIO
+_gsh.DECK_MAX_GRADE = roadsmod.DECK_MAX_GRADE
 _gsh.RAIL_DECK_DEPTH_M = railwaysmod.RAIL_TOP_M + railwaysmod.DECK_D - railwaysmod.BALLAST_H
 SHAPES_PAD_M = 800.0        # m round a cell its systems and their ramps are read from (a ramp is at most RAMP_MAX_M)
 SHAPES_CAP_M = 4000.0       # m: the farthest a system is followed from the cell
