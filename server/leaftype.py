@@ -71,9 +71,22 @@ def _bilinear1(lat, lon, band, path):
         return np.where(den > 1e-9, num / np.maximum(den, 1e-9), np.nan)
 
 
+TREEGENUS_WEIGHT = 0.5     # (39) Europe: ForestPaths' genus map's share against the two maps' mean
+
+
 def conifer_share(lat, lon):
-    """Per point: the conifers' share of the forest (0-1); NaN where there is no forest about (the caller's rule)."""
-    return _bilinear(lat, lon, 0)
+    """Per point: the conifers' share of the forest (0-1); NaN where there is no forest about (the caller's rule).
+    (39) In Europe the genus map's (treegenus.py, ForestPaths 2020, 10 m) and the two leaf type maps' mean, half and
+    half: against the national inventories' areas (England 0.33, France 0.32, Poland 0.70, Saxony 0.63,
+    Baden-Wurttemberg 0.52) the error 0.050 for this mix, 0.062 for the genus map alone, 0.104 for LC100 and CCI
+    (England 0.61); against EU-Forest's plots (half of them, the other half unseen) 0.110 (the genus map was trained on
+    such plots: not an independent score)."""
+    m = _bilinear(lat, lon, 0)
+    import treegenus
+    g = np.reshape(treegenus.conifer_share(lat, lon), np.shape(m))
+    both = ~np.isnan(m) & ~np.isnan(g)
+    out = np.where(np.isnan(m), g, m)
+    return np.where(both, TREEGENUS_WEIGHT * g + (1.0 - TREEGENUS_WEIGHT) * m, out)
 
 
 def evergreen_broad_share(lat, lon):

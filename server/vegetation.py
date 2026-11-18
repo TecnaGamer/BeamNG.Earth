@@ -41,7 +41,7 @@ import staging
 
 log = logging.getLogger("earthd.vegetation")
 
-VERSION = 41          # (the cached cells hold their groups: 14 for the regional rules of GitHub #110; 16: the roads'
+VERSION = 42          # (the cached cells hold their groups: 14 for the regional rules of GitHub #110; 16: the roads'
                       # drawn widths and sidewalks kept clear; 17: BC's lidar canopy heights, mapdata's canopy layer 2;
                       # 18: the rounded junction corners kept clear, roadcorners.py; 19: one tree per flat crown,
                       # thin_tops; 20: none on or beside a bridge deck, _mask_decks; 21: orchard rows, canopy trees
@@ -82,6 +82,7 @@ VERSION = 41          # (the cached cells hold their groups: 14 for the regional
                       # 40: by EU-Forest's NFI plots: the Mediterranean's conifers kept, its evergreen share by
                       # ecoregion; no spruce belt in dry climates; the Atlantic's spruces; the north's birches
                       # 41: the leaf type the mean of LC100's and ESA CCI's (leaftype.PATHS)
+                      # 42: Europe's conifer share half ForestPaths' genus map's, its genera from it (treegenus.py)
 TREE_MIN_M = 3.0
 # The canopy raster, the scatter grids and the crown radii are in Web Mercator units (EPSG:3857: a metre there is
 # cos(lat) metres on the ground) and were tuned by eye at mid latitudes. Past them the same pixel counts covered less
@@ -306,6 +307,7 @@ ECO_EVERGREEN = {793: 0.84, 799: 0.53, 792: 0.52, 805: 0.93, 795: 0.10, 806: 0.5
                  # (no plots: the ecoregion's own name) the Illyrian and southern Anatolian deciduous and montane
                  # woods; the Chilean matorral's and the Cape's sclerophyll scrub and woods
                  794: 0.4, 804: 0.3, 596: 0.9, 89: 0.9, 90: 0.9}
+TREEGENUS_MIN = 0.01        # (39) the genus map's conifers (broadleaves) at least this share of the trees for its split
 ECO_NO_BEECH = (785, 787, 789, 790, 791, 792, 793, 796, 797, 798, 799, 803, 804, 805)     # (39: no beech belt)
 MED_EVERGREEN = 0.6             # (Greece's, Anatolia's, the Maghreb's, Chile's, the Cape's: no plots)
 
@@ -724,7 +726,10 @@ def species_groups(group, height, lat, lon, lcls, koppen, elev, u_broad, u_conif
     ua = np.asarray(u_snag if u_alt is None else u_alt)
     # the upper montane belt's broadleaves: most of them spruces
     g[ea & (g == G_DECIDUOUS) & (ua < SPRUCE_TAKES_BROAD * upper)] = G_CONIFER
-    # conifers: pines, spruces from the latitude's share up to SPRUCE_MOUNTAIN at the spruce line
+    # (39) Europe's genera where ForestPaths' map has a say (treegenus.py): the conifers' pines against spruces, firs and
+    # larches, the broadleaves' beeches and oaks from it, its other broadleaves by the rules below
+    import treegenus
+    tg = treegenus.shares(lat, lon) if ea.any() else np.full((len(g), 7), np.nan)
     con = ea & (g == G_CONIFER)
     if con.any():
         east = dnp.interp(lat, [a for a, _ in SPRUCE_LAT], [b for _, b in SPRUCE_LAT])
@@ -748,6 +753,10 @@ def species_groups(group, height, lat, lon, lcls, koppen, elev, u_broad, u_conif
         base = np.where((lon >= EAST_ASIA_LON) & (lat < CONICAL_CHINA_LAT) & ~_in_box(lat, lon, JAPAN_BOX),
                         np.maximum(base, CONICAL_CHINA), base)
         p = base + (SPRUCE_MOUNTAIN - base) * np.clip(2.0 * montane, 0.0, 1.0)      # (no pines from mid-belt up)
+        needle = tg[:, [treegenus.LARIX, treegenus.PICEA, treegenus.PINUS, treegenus.OTHER_NEEDLE]].sum(axis=1)
+        with np.errstate(invalid="ignore", divide="ignore"):
+            p_tg = (tg[:, treegenus.LARIX] + tg[:, treegenus.PICEA] + tg[:, treegenus.OTHER_NEEDLE]) / needle
+        p = np.where(~np.isnan(p_tg) & (needle > TREEGENUS_MIN), p_tg, p)
         g[con] = np.where(np.asarray(u_conifer)[con] < p[con], G_SPRUCE, G_PINE_EU)
     # broadleaves: Italy's in the hot deserts and steppes; birch / oak / beech by the climate, more beeches uphill
     g[ea & (g == G_DECIDUOUS) & _in(k, K_HOT_ARID)] = G_MEDITERRANEAN
@@ -757,6 +766,14 @@ def species_groups(group, height, lat, lon, lcls, koppen, elev, u_broad, u_conif
     if dec.any():
         beech_up = np.clip((z - (line - BEECH_BELT_M[0])) / (BEECH_BELT_M[0] - BEECH_BELT_M[1]), 0.0, 1.0) * beech_fade
         sh = broad_shares(lat, lon, k, eco, beech_up, _conifer_share(lat, lon))
+        broad = tg[:, [treegenus.FAGUS, treegenus.QUERCUS, treegenus.OTHER_BROAD]].sum(axis=1)
+        ok = ~np.isnan(broad) & (broad > TREEGENUS_MIN)
+        if ok.any():
+            with np.errstate(invalid="ignore", divide="ignore"):
+                f, q, o = (tg[:, i] / broad for i in (treegenus.FAGUS, treegenus.QUERCUS, treegenus.OTHER_BROAD))
+                r = sh / np.maximum(sh.sum(axis=1), 1e-9)[:, None]
+            sh_tg = np.stack([o * r[:, 0], q + o * r[:, 1], f + o * r[:, 2]], axis=1)
+            sh = np.where(ok[:, None], sh_tg, sh)
         u = np.asarray(u_broad)
         pick = np.where(u < sh[:, 0], G_BIRCH, np.where(u < sh[:, 0] + sh[:, 1], G_OAK, G_BEECH)).astype(np.uint8)
         g[dec] = pick[dec]

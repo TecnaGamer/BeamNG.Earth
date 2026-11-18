@@ -142,6 +142,8 @@ Baden-Wurttemberg (`owsproxy.lgl-bw.de`), Lower Saxony (`opendata.lgln.niedersac
   junipers, the desert's creosote).
 - **Forest leaf types** (Copernicus Global Land Cover 100 m, 2019, averaged with ESA CCI Land Cover 2020): how many of
   the trees are conifers.
+- **European tree genera** (ForestPaths European Tree Genus Map 2020, early access): Europe's pines, spruces,
+  larches, beeches and oaks, and half of its conifer share.
 - **European tree species shares** (EU-Forest, Mauri et al. 2017, the national forest inventories' plots; CC0): a
   few constants (the Mediterranean ecoregions' evergreen share, the Atlantic's spruces, the north's birches), and
   the check `tools/veg_euforest_check.py`. The data file itself is not shipped.

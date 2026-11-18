@@ -127,6 +127,7 @@ FEATURES = {
     "roadz:hk": "HK Gov TD and CEDD (DATA.GOV.HK, CSDI)",
     "air:ourairports": "OurAirports", "grav:egm2008": "NGA EGM2008", "climate:beck-kg": "Beck et al. (Koppen-Geiger)",
     "eco:resolve": "RESOLVE (Dinerstein et al. 2017)",
+    "genus:forestpaths": "ForestPaths European Tree Genus Map",
     "leaf:cci": "ESA CCI Land Cover (UCLouvain)",
     "leaf:lc100": "Copernicus Land Cover 100 m",
 }

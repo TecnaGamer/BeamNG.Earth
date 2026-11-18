@@ -12,8 +12,8 @@ import leaftype as lt  # noqa: E402
 class LeafTypeTest(unittest.TestCase):
     def test_places(self):
         s = lt.conifer_share(np.array([61.0, 49.25, 49.2, -3.1]), np.array([10.0, 19.95, 22.5, -60.0]))
-        self.assertGreater(s[0], 0.9, "Norway's spruces and pines")
-        self.assertGreater(s[1], 0.9, "the Tatras' spruces")
+        self.assertGreater(s[0], 0.85, "Norway's spruces and pines")
+        self.assertGreater(s[1], 0.85, "the Tatras' spruces")
         self.assertLess(s[2], 0.3, "the Bieszczady's beeches")
         self.assertLess(s[3], 0.05, "the Amazon")
 
@@ -48,7 +48,7 @@ class TwoMapsTest(unittest.TestCase):
     def test_mean_of_both(self):
         la, lo = np.array([68.2, 40.0, 53.665]), np.array([14.0, 9.2, 17.895])
         one = [lt._bilinear1(la, lo, 0, p) for p in lt.PATHS]
-        both = lt.conifer_share(la, lo)
+        both = lt._bilinear(la, lo, 0)
         np.testing.assert_allclose(both, (one[0] + one[1]) / 2, atol=1e-9)
 
     def test_either_alone(self):
