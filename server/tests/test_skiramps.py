@@ -338,6 +338,24 @@ class GapLanding(unittest.TestCase):
         self.assertTrue(np.allclose(plan("road#1").z, ref.z))
         self.assertFalse(np.allclose(plan("road#0").z, ref.z), "(the guard alone would not tell them apart)")
 
+    def test_stale_piece_ordinal(self):
+        # (Codex review of round 5: the plan's pieces from a layer's kept ground_parts, made from a short home copy that
+        # had no bridge: one unsplit piece, road#0; the landing from the clean copy, its approach the far bank's road#1.
+        # Another piece of the landing's own feature goes by where it lies: on the approach, it takes the line)
+        ap = self.approach(0.0)
+        lands = [(ap, "motorway", [ap[[2, 1]], ap[[1, 0]]], [], frozenset({"road#1"}), OUT)]
+        raw = self.raw_for(ap, ap + np.array([0.0, 50.0]))
+        road_xy = self.dense(np.array([-200.0, 0.0]), np.array([-1.0, 0.0]))
+
+        def plan(pid):
+            return grading.plan_roads(self.frame, [(self.lonlat(road_xy), self.spec)], raw, cuts=False,
+                                      landings=lands, part_ids=[pid])[0]
+        ref = grading.plan_roads(self.frame, [(self.lonlat(road_xy), self.spec)], raw, cuts=False)[0]
+        stale = plan("road#0")
+        self.assertGreater(float(stale.z[-1]) - float(ref.z[-1]), 1.0, "filled")
+        self.assertTrue(np.allclose(stale.z, plan("road#1").z))
+        self.assertTrue(np.allclose(plan("other#0").z, ref.z), "(another feature: never)")
+
     def test_diagonal_connector_placed_copy(self):
         # (Codex review of round 5: the first ground piece starts 3 m on and 2 m aside of the deck end, a diagonal
         # connector; the road placed 8 m to the other side: its first samples are ahead of the deck end along the deck,

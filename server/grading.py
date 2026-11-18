@@ -7960,6 +7960,12 @@ def _piece_id(fid, j):
     return f"{fid}#{int(j)}"
 
 
+def _piece_feature(pid):
+    """The feature id of a _piece_id (a plain feature id as itself). Pure."""
+    q = str(pid)
+    return q.rsplit("#", 1)[0] if "#" in q else q
+
+
 def _along(line, d):
     """Points (n, 2) d m along polyline line (k, 2) from its start (clipped to its length). Pure."""
     line = np.asarray(line, np.float64)[:, :2]
@@ -8003,9 +8009,10 @@ def gap_apply(z, pts, approach, line, own=None, other=None, sid=None, own_ids=No
     that piece is one of the approach's (own_ids: one feature's pieces on a bridge's two banks told apart), however its
     lanes are placed (FAST_GAP_ID_M off at most) and not behind the deck's end
     (FAST_GAP_BACK_M along out_dir, the deck's direction out into the road: the same feature's piece on the bridge's
-    other bank), and never otherwise; a sample
-    of no known road where it lies on the approach (FAST_GAP_ON_M) and, with own and other (the approach's parts' lines,
-    the other ground roads' lines round it), no nearer another road than one of its parts. Which samples, and their
+    other bank), never when it is another feature's; a sample of no known road, or of another piece of one of the
+    approach's features (its ordinal may stem from other ranges), where it lies on the approach (FAST_GAP_ON_M) and,
+    with own and other (the approach's parts' lines, the other ground roads' lines round it), no nearer another road
+    than one of its parts. Which samples, and their
     heights, are the approach's and the map's alone, whichever plan or placed copy has them. z itself when nothing is
     raised. Pure."""
     a, b, reach = line
@@ -8016,7 +8023,11 @@ def gap_apply(z, pts, approach, line, own=None, other=None, sid=None, own_ids=No
     known = np.zeros(len(pts), bool)
     mine = np.zeros(len(pts), bool)
     if sid is not None and own_ids is not None:
-        known = np.array([q is not None for q in sid], bool)
+        # (a piece of one of the approach's features but not one of its pieces is not known: its ordinal may stem from
+        # other ranges than the landing's (a layer's kept ground_parts from a short home copy since replaced), so it
+        # goes by where it lies, as one of no known road)
+        feats_ = {_piece_feature(q) for q in own_ids}
+        known = np.array([q is not None and _piece_feature(q) not in feats_ for q in sid], bool)
         mine = np.array([q is not None and str(q) in own_ids for q in sid], bool)
     on = ~known & (off <= FAST_GAP_ON_M) & (s_ <= reach)
     if on.any() and other:
