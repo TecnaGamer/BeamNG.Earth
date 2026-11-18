@@ -93,6 +93,8 @@ M.SCHEMA = {
   realGravity = { kind = 'bool', default = true, label = 'Real gravity' },
   -- the station finder's prompt when the fuel or charge runs low (finder.lua; the user, 2026-11-09)
   lowFuelPrompt = { kind = 'bool', default = true, label = 'Low fuel prompt' },
+  autodriveSpeedOffsetMph = { kind = 'number', default = 0, min = -100, max = 100, step = 5,
+    label = 'Autodrive speed offset (mph)' },
   -- grass and shrubs on the surface layers (groundcover.lua; needs the server's --surface on)
   groundCover = { kind = 'bool', default = true, label = 'Grass and shrubs' },
   groundCoverDensity = { kind = 'enum', default = 'normal', values = { 'low', 'normal', 'high' }, label = 'Grass density' },
@@ -211,7 +213,7 @@ M.ORDER = { 'quality', 'terrainDetail', 'lodPx', 'groundPhoto', 'groundGrid', 't
   'grassDistance', 'nightLights', 'roadDetail', 'distantTraffic', 'distantTrafficWithoutTraffic', 'distantTrafficQuality', 'rebaseDistance',
   'viewDistanceMode', 'viewDistanceKm', 'hazeStrength', 'skyMode', 'clouds',
   'weatherMode', 'realGravity', 'lowFuelPrompt', 'groundCover', 'groundCoverDensity', 'rocks', 'roads', 'highwaySigns', 'directionSigns', 'roadSigns', 'germanJunctionSigns', 'rumbleStrips', 'softDrag', 'deckGuard', 'townSigns', 'adaptiveTraffic', 'models3dmr',
-  'dashboardSatellite',
+  'dashboardSatellite', 'autodriveSpeedOffsetMph',
   'hudVisible', 'statusBar', 'profilerMode', 'runtimeProfiler',
   'placeNamesOnline', 'telemetry', 'telemetryPerf', 'telemetryNet', 'mapStyle', 'creditsVisible', 'beammpOnLaunch',
   'creditsCorner', 'creditsSize', 'cacheCapGb', 'routeDownload', 'serverCores', 'serverPriority', 'teleportPriority', 'maxRamGb', 'devOutlineKm',
@@ -323,6 +325,7 @@ function M.validate(key, v)
     if M.MIGRATE[key] and M.MIGRATE[key][v] ~= nil then v = M.MIGRATE[key][v] end
     local n = tonumber(v)
     if not n or n ~= n or n == math.huge or n == -math.huge then return nil, key .. ': not a number' end
+    if s.step then n = math.floor(n / s.step + 0.5) * s.step end
     return math.max(s.min, math.min(s.max, n))
   elseif s.kind == 'string' then
     if type(v) ~= 'string' and type(v) ~= 'number' then return nil, key .. ': not a string' end
@@ -662,6 +665,7 @@ M.APPLY = {
   profilerMode = function(v) require('beamngEarth/profiler').setMode(v) end,
   runtimeProfiler = function(v) require('beamngEarth/profiler').setEnabled(v) end,
   statusBar = function(v) require('beamngEarth/statusbar').enabled = v and true or false end,
+  autodriveSpeedOffsetMph = function(v) require('beamngEarth/gps').setSpeedOffsetMph(v) end,
   creditsCorner = function(v) credits.setCorner(v) end,
   creditsSize = function(v) credits.setSize(v) end,
   cacheCapGb = function()
@@ -1062,6 +1066,13 @@ end
 -- The map's GPS "Autodrive": the player's car drives itself along the route (gps.lua) / stops doing so.
 function M.uiGpsAutodrive(on)
   return { ok = true, autodrive = require('beamngEarth/gps').setAutodrive(on) }
+end
+
+-- Increment on the Lua side so rapid clicks cannot overwrite one another with a stale UI value.
+-- Zero resets to the road's speed limit; otherwise each click is exactly 5 mph.
+function M.uiGpsSpeedOffset(step)
+  if step ~= -5 and step ~= 0 and step ~= 5 then return { ok = false, error = 'Expected -5, 0 or 5 mph' } end
+  return M.set('autodriveSpeedOffsetMph', step == 0 and 0 or (M.get('autodriveSpeedOffsetMph') + step))
 end
 
 -- The GPS's planned route for the map's line: { version, points = {{lat, lon}...}, dist, dur } or nil.

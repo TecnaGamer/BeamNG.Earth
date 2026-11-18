@@ -125,4 +125,13 @@ A.drive({'b','c'}, 5, false, nil, .3)
 T.check(starts[#starts].routeSpeedMode == 'legal', 'a new drive releases arrival control and restores its speed mode')
 A.stop('disabled')
 T.check(stops[#stops] == 'disabled', 'manual cancellation still releases control')
+T.check(not A.isActive(), 'a cancelled controller is inactive')
+A.drive({'b','c'}, 8, false, nil, .3)
+ai.isDriving = function() return false end
+T.check(ai.mode == 'manual' and not A.isActive(), 'manual mode with a disabled update callback is inactive')
+T.check(A.drive({'b','c'}, 8, false, nil, .3) == 'start',
+  'an inactive native callback requires a fresh start instead of keeping an inert plan')
+ai.isDriving = function() return true end
+T.check(A.isActive(), 'a running native controller is active')
+A.stop('disabled')
 T.done('test_autodrive_handoff')

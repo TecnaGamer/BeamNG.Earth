@@ -344,4 +344,129 @@ do
     .. tostring(a) .. ' ' .. tostring(tx) .. ' ' .. tostring(preferred))
   f.setReady({})
 end
+-- I-40 capture: at 70 mph the old far-tile gate held a ready terrain block until the AI's local road
+-- was only 113 m long, producing a 70 -> 58 mph braking cycle. Move the collision block before that horizon.
+do
+  lattice.configure(1024, 1); f.configure(); f.setReady({})
+  local speed, closed = 70 * 0.44704, function() return false end
+  local p = {cx=384,cy=0,ready=true}
+  T.check(f.decide(160,0,speed,0,0,0,p,0,0,closed,1,true) == 'commit',
+    'Autodrive takes ready collision terrain before the AI brakes, even while cosmetic uncover tiles lag')
+  T.check(f.decide(160,0,speed,0,0,0,p,0,0,closed,1,false) ~= 'commit',
+    'manual driving keeps the original commit policy')
+  p.ready = false
+  T.check(f.decide(160,0,speed,0,0,0,p,0,0,closed,1,true) ~= 'commit', 'never commit unready terrain')
+  T.check(f.decide(160,0,speed,0,0,0,{cx=512,cy=0,ready=true},0,0,closed,1,true) ~= 'commit',
+    'an early commit cannot reduce the existing terrain safety margin')
+  T.check(f.decide(160,0,speed,0,0,0,{cx=-128,cy=0,ready=true},0,0,closed,1,true) ~= 'commit',
+    'a block behind the car is not a forward continuation')
+  T.check(f.decide(115,0,speed,0,0,0,nil,0,0,closed,1,true) == 'prepare',
+    'request the next block early enough to cover terrain and graph delivery')
+  T.check(f.decide(115,0,speed,0,0,0,nil,0,5,closed,1,true) == nil, 'early requests still respect retry backoff')
+  T.check(math.abs(f.forwardClearance(0,0,1,1,0,0) - 511 * math.sqrt(2)) < 1e-6,
+    'forward clearance follows a diagonal instead of measuring only the nearest box side')
+
+  for _, mph in ipairs({60,70,75,85}) do
+    for _, degrees in ipairs({0,30,45,90,180,225,270}) do
+      local sp, angle = mph * 0.44704, math.rad(degrees)
+      local vx, vy = sp * math.cos(angle), sp * math.sin(angle)
+      local cx, cy, pending, graphCx, graphCy, deliverAt = 0,0,nil,0,0,nil
+      local minimum, commits = math.huge,0
+      for step=0,2400 do
+        local now = step / 20
+        local px, py = vx * now, vy * now
+        if pending and now >= pending.at + 1 then pending.ready = true end
+        if deliverAt and now >= deliverAt then graphCx,graphCy,deliverAt = cx,cy,nil end
+        local action,tx,ty = f.decide(px,py,vx,vy,cx,cy,pending,now,0,closed,1,true)
+        if action == 'prepare' then pending={cx=tx,cy=ty,ready=false,at=now}
+        elseif action == 'discard' then pending=nil
+        elseif action == 'commit' then cx,cy,pending,deliverAt=pending.cx,pending.cy,nil,now+1; commits=commits+1 end
+        local roadAhead = f.forwardClearance(px,py,vx,vy,graphCx,graphCy) - f.AUTO_GRAPH_MARGIN
+        minimum = math.min(minimum,roadAhead)
+      end
+      local stop = sp * sp / (2 * f.AUTO_BRAKE_ACCEL)
+      T.check(minimum > stop and commits > 0 and commits < 30,
+        string.format('%d mph / %d deg: road horizon %.0f m stays beyond %.0f m braking, bounded moves %d',mph,degrees,minimum,stop,commits))
+    end
+  end
+end
+-- Traffic ahead must receive the same continuous road while the player drives manually. Its own position and
+-- speed decide the deadline; the new terrain still has to retain the player's full collision margin.
+do
+  lattice.configure(1024,1); f.configure(); f.setReady({})
+  local speed, closed = 70 * 0.44704, function() return false end
+  local car = {x=350,y=0,vx=speed,vy=0,sampleS=0.25}
+  local pending = {cx=384,cy=0,ready=true}
+  T.check(f.decide(160,0,speed,0,256,0,nil,0,0,closed,1,false,{{x=360,y=0,vx=speed,vy=0,sampleS=0.25}}) == 'prepare',
+    'traffic prepares more road even when the current centre is still ahead of the player')
+  T.check(f.decide(150,0,speed,0,128,0,pending,0,0,closed,1,false,{car}) == 'commit',
+    'traffic commits ready terrain before its endpoint braking, without Autodrive')
+  T.check(f.decide(150,0,speed,0,128,0,pending,0,0,closed,1,false) == nil,
+    'the same manual drive without traffic preserves the existing policy')
+  pending.ready = false
+  T.check(f.decide(150,0,speed,0,128,0,pending,0,0,closed,1,false,{car}) ~= 'commit', 'traffic cannot commit unloaded ground')
+  pending.ready,pending.cx = true,512
+  T.check(f.decide(150,0,speed,0,128,0,pending,0,0,closed,1,false,{car}) ~= 'commit', 'traffic cannot pull terrain beyond player safety reach')
+  for _, c in ipairs({{x=200,y=0,vx=-speed,vy=0}, {x=200,y=0,vx=0,vy=speed},
+      {x=200,y=0,vx=0,vy=0}, {x=-10,y=0,vx=speed,vy=0},
+      {x=301,y=0,vx=speed,vy=0}, {x=200,y=81,vx=speed,vy=0}}) do
+    T.check(f.trafficLead(0,0,speed,0,c) == 0, 'oncoming, crossing, stopped, behind or distant traffic cannot drag the terrain')
+  end
+  T.check(f.trafficLead(0,0,0,0,car) == 0, 'a parked player does not chase moving traffic')
+  T.check(f.trafficLead(0,0,speed,0,{x=200,y=5,vx=40,vy=0}) > f.autodriveLead(speed,0),
+    'the deadline follows the traffic car speed, including a faster car ahead')
+  f.setReady({{128,0}})
+  local act, nx = f.decide(160,0,speed,0,256,0,nil,0,0,closed,1,false,{{x=360,y=0,vx=speed,vy=0,sampleS=0.25}})
+  T.check(act == 'prepare' and nx == 384, 'a cached block behind cannot replace the needed forward extension')
+  f.setReady({})
+
+  local fast = 85 * 0.44704
+  local aheadCar = {x=30,y=0,vx=fast,vy=0,sampleS=0.25}
+  local request, fx, fy = f.decide(-169,0,fast,0,0,0,nil,0,0,closed,1,false,{aheadCar})
+  T.check(request == 'prepare' and fx == 128 and fy == 0, 'load the next traffic cell before entering its commit range')
+  local early = {cx=128,cy=0,ready=true}
+  T.check(f.decide(-169,0,fast,0,0,0,early,0,0,closed,1,false,{aheadCar}) == nil,
+    'an early-ready block waits until the player reaches its full safety margin')
+  aheadCar.x = 70
+  T.check(f.decide(-130,0,fast,0,0,0,early,1,0,closed,1,false,{aheadCar}) == 'commit',
+    'the prefetched cell commits when it becomes safe')
+  T.check(f.decide(-170,0,0,0,0,0,early,0,0,closed,1,false,{aheadCar}) == 'discard',
+    'stopping before the commit range cancels an unreachable future cell')
+  T.check(f.decide(-170,0,-fast,0,0,0,early,0,0,closed,1,false,{aheadCar}) == 'discard',
+    'turning away cancels an unreachable future cell')
+  local slowRequest, slowX = f.decide(0,0,fast,0,0,0,nil,0,0,closed,90,false,{{x=200,y=0,vx=fast,vy=0}})
+  T.check(slowRequest == 'prepare' and slowX <= f.REACH + f.GRID,
+    'a very slow prior terrain load cannot send the next request kilometres down the road')
+
+  for _, mph in ipairs({60,70,85}) do
+    for _, degrees in ipairs({0,30,45,90,180,225,270}) do
+      for _, gap in ipairs({100,200}) do
+        local sp, angle = mph * 0.44704, math.rad(degrees)
+        local ux, uy = math.cos(angle), math.sin(angle)
+        local vx, vy = sp * ux, sp * uy
+        local cx,cy = f.target(0,0,vx,vy)
+        local graphCx,graphCy,pending,deliverAt = cx,cy,nil,nil
+        local minimum, minEdge, commits = math.huge,math.huge,0
+        for step=0,2400 do
+          local now = step / 20
+          local px,py = vx*now,vy*now
+          local cars = {{x=px+gap*ux,y=py+gap*uy,vx=vx,vy=vy,sampleS=0.25}}
+          if pending and now >= pending.at + 1 then pending.ready = true end
+          if deliverAt and now >= deliverAt then graphCx,graphCy,deliverAt = cx,cy,nil end
+          local action,tx,ty = f.decide(px,py,vx,vy,cx,cy,pending,now,0,closed,1,false,cars)
+          if action == 'prepare' then pending={cx=tx,cy=ty,ready=false,at=now}
+          elseif action == 'discard' then pending=nil
+          elseif action == 'commit' then cx,cy,pending,deliverAt=pending.cx,pending.cy,nil,now+1; commits=commits+1 end
+          local road = f.forwardClearance(cars[1].x,cars[1].y,vx,vy,graphCx,graphCy) - f.AUTO_GRAPH_MARGIN
+          minimum = math.min(minimum,road)
+          minEdge = math.min(minEdge, f.HALF - f.SQUARE_SIZE - f.cheb(px,py,cx,cy))
+        end
+        local stop = sp*sp/(2*f.AUTO_BRAKE_ACCEL)
+        T.check(minimum > stop and minEdge >= f.EDGE_MARGIN and commits > 0 and commits < 60,
+          string.format('traffic %d m ahead, %d mph / %d deg: %.0f m road > %.0f m braking; player margin %.0f m, %d moves',
+            gap,mph,degrees,minimum,stop,minEdge,commits))
+      end
+    end
+  end
+end
 T.done('test_follow')

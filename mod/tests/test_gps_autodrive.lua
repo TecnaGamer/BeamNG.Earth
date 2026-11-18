@@ -18,15 +18,24 @@ local function fixture(path, y, radius, configure)
   f.map = { nodes = f.nodes, buildSerial = 1 }
   local env = setmetatable({}, { __index = _G })
   env.ai = { mode = 'disabled', driveUsingPath = function(args)
+    if f.failDrive then f.failDrive = false; error('simulated route handoff failure') end
     T.check(args.path == nil and args.wpTargetList ~= nil, 'fresh start uses lane-aware waypoint input')
     f.drives[#f.drives + 1] = args.wpTargetList
+    f.controllerActive = true
     env.ai.mode = 'manual'
   end, setMode = function(mode) env.ai.mode = mode; f.modes[#f.modes + 1] = mode end,
     setPath = function(path) f.extensions[#f.extensions + 1] = path end,
     setSpeedMode = function(mode) f.speedMode = mode end,
-    setStopPoint = function(_, distance) f.stopDistance = distance end }
+    setStopPoint = function(_, distance) f.stopDistance = distance end,
+    isDriving = function() return f.controllerActive ~= false end }
   env.mapmgr = { requestMap = function() f.requests = f.requests + 1 end }
-  env.obj = { queueGameEngineLua = function() G.retryAutodrive() end }
+  env.obj = { queueGameEngineLua = function(_, command)
+    local inactive, request = command:match('onAutodriveInactive%((%d+), (%d+)%)')
+    if inactive then
+      f.inactiveReport = { tonumber(inactive), tonumber(request) }
+      G.onAutodriveInactive(unpack(f.inactiveReport))
+    else G.retryAutodrive() end
+  end }
   env.extensions = { load = function()
     local loader = assert(loadfile(dir .. '/../beamng_earth/lua/vehicle/extensions/beamngEarth/autodrive.lua'))
     env.beamngEarth_autodrive = setfenv(loader, env)()
@@ -38,6 +47,7 @@ local function fixture(path, y, radius, configure)
       for other, e in pairs(n.links) do graph[id][other] = e; graph[other][id] = e end
     end
     env.mapmgr.mapData = { graph = graph }
+    f.vehicleGraph = graph
     G.onVehicleMapmgrUpdate(1)
   end
   f.route = { points = { { 0, 0 }, { 0, 0.01 }, { -0.006, 0.016 }, { -0.006, 0.04 } },
@@ -83,6 +93,51 @@ local function fixture(path, y, radius, configure)
   f.requestArrows = f.arrows
   f:step() -- accept it and drive the planner's path
   return f
+end
+
+-- A fluctuating local planner must not shorten a still-valid highway route and brake for a nearer endpoint.
+do
+  local f = fixture({ 'j', 's', 't' }, 2, 6, function(f)
+    f.nodes.s.pos, f.nodes.t.pos = {x=200,y=0,z=0}, {x=400,y=0,z=0}
+    f.route = { points={{0,0},{0,.2}},dist=2000,dur=120 }
+  end)
+  f.path = { 'j', 's' }; f.gps.onVehicleMapmgrUpdate(1); f:step()
+  T.check(#f.drives == 1 and #f.extensions == 0 and f.gps.status().autoNodes == 3,
+    'a shorter interim prefix on the same graph keeps the longer usable route')
+  f.path = { 's' }; f.x = 120; f.gps.onVehicleMapmgrUpdate(1); f:step()
+  T.check(#f.drives == 1 and f.gps.status().autoNodes == 2,
+    'keeping the longer route also trims nodes the car has passed')
+  f:mapArrives(); f:step()
+  T.check(#f.drives == 2 and table.concat(f.drives[2], ',') == 's,t',
+    'a replacement vehicle graph restarts the retained route through lane-aware waypoints')
+  f.serial, f.map.buildSerial = 2, 2; f:mapArrives(); f:step()
+  T.check(#f.drives == 3 and table.concat(f.drives[3], ',') == 's',
+    'a changed graph does not retain a tail from an older graph revision')
+end
+
+-- A failed handoff must not leave the target cached as though the AI accepted it.
+do
+  local f = fixture(nil, 2, 6, function(f) f.failDrive = true end)
+  T.check(#f.drives == 0 and f.gps.status().autodriveState == 'waiting',
+    'a handoff error reports waiting instead of claiming to be driving')
+  f:step()
+  T.check(#f.drives == 1 and f.gps.status().autodriveState == 'driving',
+    'a transient route handoff error retries without requiring manual movement')
+end
+
+-- The native controller can go inactive while the UI toggle and native manual mode remain selected.
+do
+  local f = fixture()
+  f.controllerActive = false; f:step()
+  T.check(#f.drives == 2 and f.controllerActive,
+    'an inactive controller restarts without waiting for a stopped car or manual movement')
+  f.gps.onAutodriveInactive(2, f.inactiveReport[2]); f:step()
+  T.check(#f.drives == 2, 'another vehicle cannot trigger the player controller retry')
+  f.gps.onAutodriveInactive(unpack(f.inactiveReport)); f:step()
+  T.check(#f.drives == 2, 'a delayed inactive report cannot restart a newer healthy route')
+  f.gps.setAutodrive(false); f.gps.onAutodriveInactive(unpack(f.inactiveReport)); f:step()
+  T.check(#f.drives == 2 and f.gps.status().autodriveState == 'off',
+    'a delayed inactive report cannot reactivate Autodrive after the user turns it off')
 end
 
 -- A shortest local route can bypass a sharp bend between the regular 250 m pins.
@@ -361,6 +416,12 @@ do
   f.x = 95; f.gps.onAiRouteDone(1)
   for _ = 1, 70 do f:step() end
   T.check(recoveries == 1, 'a completed local path still recovers when the continuation is loaded but disconnected')
+  recoveries = 0; f = gap(true, nil, 80)
+  f.nodes.w.radius, f.nodes.j.radius = 30, 30
+  f.gps.onAiRouteDone(1)
+  for _ = 1, 70 do f:step() end
+  T.check(recoveries == 1,
+    'a completed endpoint cannot hide a loaded continuation just because one projected target is still on the old edge')
   recoveries = 0; f = gap(false)
   for _ = 1, 350 do f:step() end
   T.check(recoveries == 0, 'an unloaded continuation still waits for the graph')
@@ -789,5 +850,24 @@ do
 end
 
 
+-- A live offset change must reach the vehicle even without a new route or streamed graph.
+do
+  local mph = 0.44704
+  local f = fixture(nil, nil, nil, function(f)
+    f.nodes.j.links.s.speedLimit = 75 * mph
+    f.nodes.s.links.t.speedLimit = 55 * mph
+  end)
+  local count = #f.drives
+  f.gps.setSpeedOffsetMph(5); f:step()
+  T.check(#f.drives == count + 1 and math.abs(f.vehicleGraph.j.s.speedLimit / mph - 80) < 1e-8,
+    'live +5 passes through the GE command and replans an unchanged vehicle route at 80 mph')
+  f.gps.setSpeedOffsetMph(10); f:step()
+  T.check(f.gps.status().speedOffsetMph == 10 and math.abs(f.vehicleGraph.j.s.speedLimit / mph - 85) < 1e-8
+    and math.abs(f.vehicleGraph.s.t.speedLimit / mph - 65) < 1e-8, 'the offset stays relative to changing road limits')
+  f.gps.setSpeedOffsetMph(-5); f:step()
+  T.check(math.abs(f.vehicleGraph.j.s.speedLimit / mph - 70) < 1e-8, 'live negative offset reduces cruise speed')
+  f.gps.setAutodrive(false)
+  T.check(math.abs(f.vehicleGraph.j.s.speedLimit / mph - 75) < 1e-8, 'disabling through GE restores vehicle limits')
+end
 os.clock, package.loaded['beamngEarth/navgraph'] = savedClock, savedNav
 T.done('test_gps_autodrive')
