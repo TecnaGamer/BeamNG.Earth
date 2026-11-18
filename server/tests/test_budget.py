@@ -2,6 +2,7 @@
 the system's out-of-memory guard, 2026-10-20)."""
 import os
 import sys
+import threading
 import unittest
 from unittest import mock
 
@@ -345,6 +346,75 @@ class BackgroundTest(unittest.TestCase):
 
     def test_only_the_work_for_later(self):
         self.assertGreater(budget.BACKGROUND_NICE, 3, "the road tiles' and the trees' workers keep the server's class")
+
+
+class RushTest(unittest.TestCase):
+    """rush: the calling thread one step above the server's others while a job the car needs by now runs."""
+
+    def run_with(self, body):
+        levels = []
+        with mock.patch.object(budget, "_thread_priority", lambda level: levels.append(level) or True), \
+                mock.patch.object(budget.time, "time", lambda: 1000.0), mock.patch.object(budget, "_RUSH", threading.local()):
+            body()
+        return levels
+
+    def test_from_its_moment_on(self):
+        def body():
+            with budget.rush(1000.0) as r:
+                self.assertTrue(r.on)
+        self.assertEqual(self.run_with(body), [budget.WIN_THREAD_ABOVE_NORMAL, budget.WIN_THREAD_NORMAL])
+
+    def test_not_before_and_not_work_for_later(self):
+        def body():
+            with budget.rush(1000.5) as r:
+                self.assertFalse(r.on)
+            with budget.rush(None) as r:
+                self.assertFalse(r.on)
+        self.assertEqual(self.run_with(body), [])
+
+    def test_one_inside_another(self):
+        def body():
+            with budget.rush(990.0):
+                with budget.rush(1001.0):
+                    pass
+                with budget.rush(995.0):
+                    pass
+        self.assertEqual(self.run_with(body), [budget.WIN_THREAD_ABOVE_NORMAL, budget.WIN_THREAD_NORMAL],
+                         "raised once, lowered when the outer one ends")
+
+    def test_back_to_normal_when_the_job_fails(self):
+        def body():
+            with self.assertRaises(KeyError):
+                with budget.rush(0.0):
+                    raise KeyError("x")
+        self.assertEqual(self.run_with(body)[-1], budget.WIN_THREAD_NORMAL)
+
+    def test_a_priority_that_cannot_be_set_does_not_stop_the_job(self):
+        def no(level):
+            raise OSError("no")
+        with mock.patch.object(budget, "_thread_priority", no), mock.patch.object(budget, "_RUSH", threading.local()):
+            with budget.rush(0.0) as r:
+                self.assertTrue(r.on)
+
+    def test_the_threads_own_step(self):
+        if sys.platform != "win32":
+            self.assertFalse(budget._thread_priority(budget.WIN_THREAD_ABOVE_NORMAL))
+            return
+        got = []
+
+        def run():          # (a thread of its own: the test runner's keeps its priority)
+            import ctypes
+            from ctypes import wintypes
+            k = ctypes.WinDLL("kernel32")
+            k.GetCurrentThread.restype = wintypes.HANDLE
+            k.GetThreadPriority.argtypes = (wintypes.HANDLE,)
+            with budget.rush(0.0):
+                got.append(k.GetThreadPriority(k.GetCurrentThread()))
+            got.append(k.GetThreadPriority(k.GetCurrentThread()))
+        t = threading.Thread(target=run)
+        t.start()
+        t.join()
+        self.assertEqual(got, [1, 0])
 
 
 class RaiseThreadTest(unittest.TestCase):

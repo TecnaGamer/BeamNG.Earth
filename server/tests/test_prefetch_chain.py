@@ -236,5 +236,60 @@ class RebaseChainTest(unittest.TestCase):
         self.assertNotIn((-256.0, -256.0), c.chain_wanted_at, "the new frame's are not this frame's wanted blocks")
 
 
+class RushTest(unittest.TestCase):
+    """What the car reaches within moments is built before the server's other work (budget.rush): the moments from
+    which a road geotile and a block are (Server.geo_rush_at, Server.block_rush_at)."""
+
+    def server(self, v=(96.0, 0.0), at=(0.0, 0.0), **conn):
+        import types
+        import geodesy
+        lat, lon = 52.2, 8.9
+        a = earthd.Anchor(2, lat, lon, geodesy.EnuFrame(lat, lon))
+        c = types.SimpleNamespace(active=2, focus=at, vel=v, rebase_to=None, **conn)
+        return types.SimpleNamespace(anchors={2: a}, connections=[c], follow=earthd.FOLLOW_RULES[1024.0]), a, c
+
+    def tile_at(self, a, x, y):
+        import geotiles
+        la, lo, _ = a.frame.enu_to_geodetic(x, y, 0.0)
+        return geotiles.tile_of(float(la), float(lo))
+
+    def test_a_road_tile_by_the_time_to_reach_it(self):
+        import budget
+        import geotiles
+        srv, a, c = self.server()
+        with unittest.mock.patch.object(earthd.time, "time", lambda: 1000.0):
+            gx, gy = self.tile_at(a, 3000.0, 0.0)
+            d = geotiles.quad_dist(geotiles.quad(a.frame, gx, gy), 0.0, 0.0)
+            self.assertAlmostEqual(earthd.Server.geo_rush_at(srv, gx, gy), 1000.0 + d / 96.0 - budget.RUSH_S, places=6)
+            self.assertGreater(earthd.Server.geo_rush_at(srv, gx, gy), 1000.0, "30 s ahead: not yet")
+            near = self.tile_at(a, 600.0, 0.0)
+            self.assertLess(earthd.Server.geo_rush_at(srv, *near), 1000.0, "6 s ahead: by now")
+            under = self.tile_at(a, 0.0, 0.0)
+            self.assertEqual(earthd.Server.geo_rush_at(srv, *under), 1000.0 - budget.RUSH_S, "the car is in it")
+            self.assertIsNone(earthd.Server.geo_rush_at(srv, *self.tile_at(a, -600.0, 0.0)), "passed")
+            c.vel = (0.0, 0.0)
+            self.assertIsNone(earthd.Server.geo_rush_at(srv, *near), "nobody on the way")
+            c.vel = (5.0, 0.0)
+            self.assertGreater(earthd.Server.geo_rush_at(srv, *near), 1000.0, "a slow car: only the tiles right ahead")
+
+    def test_a_block(self):
+        import budget
+        srv, a, c = self.server()
+        reach = earthd.FOLLOW_RULES[1024.0].fast_reach
+        with unittest.mock.patch.object(earthd.time, "time", lambda: 1000.0):
+            f = earthd.Server.block_rush_at
+            self.assertEqual(f(srv, 2, 3072.0, 0.0, earthd.LANE_REQUEST), 1000.0, "the mod waits for it")
+            self.assertAlmostEqual(f(srv, 2, 768.0, 128.0, earthd.LANE_PREFETCH),
+                                   1000.0 + (768.0 - reach) / 96.0 - budget.RUSH_S)
+            self.assertLess(f(srv, 2, 1152.0, 0.0, earthd.LANE_PREFETCH), 1000.0, "the mod asks for it within moments")
+            self.assertGreater(f(srv, 2, 3072.0, 0.0, earthd.LANE_PREFETCH), 1000.0, "the chain's far end: not yet")
+            self.assertIsNone(f(srv, 2, -768.0, 0.0, earthd.LANE_PREFETCH), "behind the car")
+            self.assertIsNone(f(srv, 5, 768.0, 0.0, earthd.LANE_PREFETCH), "nobody on that anchor")
+            c.rebase_to = (earthd.Anchor(5, 52.3, 8.9, a.frame), 0.0, 0.0)
+            self.assertEqual(f(srv, 5, 768.0, 0.0, earthd.LANE_PREFETCH), 1000.0, "past a rebase moments away")
+            c.rebase_to, c.vel = None, (0.0, 0.0)
+            self.assertIsNone(f(srv, 2, 768.0, 0.0, earthd.LANE_PREFETCH), "standing")
+
+
 if __name__ == "__main__":
     unittest.main()

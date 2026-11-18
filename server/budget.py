@@ -1186,6 +1186,61 @@ def raise_thread():
     return "thread above normal"
 
 
+# What the car reaches within moments is built before the rest of the server's work. The road tiles' processes shared
+# the server's cores thread for thread with everything else of its class (the server's own ~20 threads, the blocks 30 s
+# ahead, the trees, the map ahead's and the far buildings' urgent jobs): at 330 km/h on Windows (A2 / A33 at Bielefeld,
+# 3 server cores, 2026-11-18) the three got 0.75 of a core between them, a tile of 0.6 s of CPU took 2.3 s in its
+# process and waited 1.9 s for a free one before (152 of 449 tiles over 3 s, 4.3 s in the median), and 21 % of the
+# road tiles, their lane markings and guard rails with them, reached the game behind the car. A job the car needs
+# within RUSH_S (rush) runs one step above the server's other threads, as its event loop's does (raise_thread: inside
+# the server's class, below the game): the same CPU, spent first.
+RUSH_S = 10.0
+WIN_THREAD_NORMAL = 0
+_RUSH = threading.local()
+
+
+def _thread_priority(level):
+    """The calling thread at `level` inside its process's class (Windows: True when set). Nothing elsewhere: os.nice
+    only lowers."""
+    if sys.platform != "win32":
+        return False
+    k32 = _kernel32()
+    return bool(k32.SetThreadPriority(k32.GetCurrentThread(), level))
+
+
+class rush:
+    """with rush(at): the calling thread one step above the server's other threads (Windows) while this block runs,
+    when the car needs its work by now: time.time() is `at` or later as it begins (None: never; a job that begins
+    before is done well before the car is there). on: was it?"""
+
+    def __init__(self, at):
+        self.at = None if at is None else float(at)
+        self.on = False
+
+    def __enter__(self):
+        if self.at is not None and self.at <= time.time():
+            self.on = True
+            n = _RUSH.__dict__.get("n", 0)
+            _RUSH.n = n + 1
+            if n == 0:
+                try:
+                    _thread_priority(WIN_THREAD_ABOVE_NORMAL)
+                except Exception:       # (built at its usual priority rather than not at all)
+                    pass
+        return self
+
+    def __exit__(self, *exc):
+        if self.on:
+            self.on = False
+            _RUSH.n -= 1
+            if _RUSH.n == 0:
+                try:
+                    _thread_priority(WIN_THREAD_NORMAL)
+                except Exception:
+                    pass
+        return False
+
+
 def road_processes(cpus=None, gb=None):
     """Road-tile processes for a desktop (ROAD_PROCESSES_BY_CPU), 2 below them."""
     cpus = (os.cpu_count() or 1) if cpus is None else cpus

@@ -870,13 +870,15 @@ def _take_pads(fuel_pads):
 
 
 def build(aid, lat, lon, hm_zoom, q, cx, cy, size, out_dir, name, ter_name=None, fuel_pads=None, provisional=False,
-          ground_at=(0.0, 0.0)):
-    """_build, given up (pools.Abandoned) once a teleport leaves anchor aid (_abandon_check)."""
+          ground_at=(0.0, 0.0), rush=None):
+    """_build, given up (pools.Abandoned) once a teleport leaves anchor aid (_abandon_check). rush: the time.time()
+    from which the car needs the block within moments (budget.rush: before the server's other work from then)."""
     _BUILDING[0] += 1               # (the pool's one job thread: _warm_loop reads it)
+    import budget
     import revisit
     depth = revisit.depth()         # (the block cache's scope, blockcache.Build: closed if the build raised)
     try:
-        with _abandon_check(out_dir, aid):
+        with _abandon_check(out_dir, aid), budget.rush(rush):
             return _build(aid, lat, lon, hm_zoom, q, cx, cy, size, out_dir, name, ter_name, fuel_pads, provisional,
                           ground_at)
     finally:
@@ -2736,19 +2738,24 @@ def _geo_near(gx, gy, lat, lon):
 
 def roads_geo(aid, lat, lon, zoom, gx, gy, gzoom, out_dir, vfs_dir, sidewalks, lift, buildings, left_hand, mph, q,
               gas_stations, buried=0.0, lamp_region=None, country=None, content=True, skin=True, exact=None, pole_profile=None,
-              de_junctions=False, towns_on=False, wear=None, patient_until=None):
+              de_junctions=False, towns_on=False, wear=None, patient_until=None, rush=None):
     """earthd.Server.build_roads_geo here (road-tile pool; patient_until: the time.time() until which its content may
-    wait for what it can be built without, townentry.patience: the car is that close; None: as long as it takes): geotile (gx, gy)'s content (content: built in its own
+    wait for what it can be built without, townentry.patience: the car is that close; None: as long as it takes;
+    rush: the time.time() from which the car reaches the tile within moments, budget.rush: before the server's other
+    work from then): geotile (gx, gy)'s content (content: built in its own
     frame, or from the revisit cache; gzoom its DEM zoom, the rules its own place's), anchor aid's skin (skin) and its
     parts' exact variants for that anchor (exact: {what: {pivot}}, or "auto": those of the content built here that its
     rigid placement would leave off, roads.geo_exact_auto). Returns {"content": (vfs path, chunks, info,
     fuel pads) or None, "skin": (vfs path, info) or None, "exact": {what: vfs path}, "stages": {...}}."""
+    import budget
     import waits as waitsmod
     watch = _stack_watch(f"road geotile {gx}_{gy}")
     chk = _abandon_check(out_dir, aid)      # (given up once a teleport leaves aid: pools.Abandoned)
     chk.__enter__()
     waited = waitsmod.collect()             # (what this build's thread waited for, by name: the slow tile's log line)
     waits = waited.__enter__()
+    first = budget.rush(rush)
+    first.__enter__()
     try:
         out = {"content": None, "skin": None, "exact": {}, "stages": {}, "waits": waits}
         began = time.time()         # (the clock the server's process reads too: its wait before this process took it)
@@ -2790,9 +2797,10 @@ def roads_geo(aid, lat, lon, zoom, gx, gy, gzoom, out_dir, vfs_dir, sidewalks, l
             out["exact"] = _geo_exact(aid, lat, lon, gx, gy, out_dir, vfs_dir, exact)
         out["time"] = {"content_s": t1 - t0, "content_cpu": c1 - c0, "skin_s": t2 - t1, "skin_cpu": c2 - c1,
                        "exact_s": time.perf_counter() - t2, "own_cpu": time.thread_time() - own0,
-                       "began": began, "ended": time.time()}
+                       "began": began, "ended": time.time(), "rush": first.on}
         return out
     finally:
+        first.__exit__()
         waited.__exit__()
         chk.__exit__()
         watch.cancel()

@@ -3088,6 +3088,12 @@ class Server:
         """blockworker.roads_geo in a road process: geotile (gx, gy)'s content (once: kept by the mod across
         rebases), anchor aid's skin and exact variants. Its gas station pads kept for the ground's painters. None
         when the anchor is gone. Worker threads (roads.GeoTracker)."""
+        import budget
+        rush = Server.geo_rush_at(self, gx, gy)
+        with budget.rush(rush):         # (this thread too, which hands the tile on, as the process that builds it)
+            return Server._build_roads_geo(self, aid, gx, gy, content, skin, exact, rush)
+
+    def _build_roads_geo(self, aid, gx, gy, content, skin, exact, rush):
         anchor = self.anchors.get(aid)
         if anchor is None or self.mapdata is None or self.road_pool is None or Server.is_abandoned(self, aid):
             return None
@@ -3103,7 +3109,8 @@ class Server:
             self.vfs_dir, self.sidewalks, DETAIL_ROAD_LIFT if self.near_visual == "detail" else 0.0,
             self.buildings, lh, mph, self.anchor_q(anchor) if skin else None, self.gas_stations, buried, lamps,
             country, content, skin, exact, Server.pole_profile(self), designsmod.enabled(self.dej_on),
-            Server.towns_enabled(self), Server.wear_arg(self), None if patience is None else time.time() + patience)
+            Server.towns_enabled(self), Server.wear_arg(self), None if patience is None else time.time() + patience,
+            rush)
         cell_was = Server.geo_cell_state(self, gx, gy)
         t0, waited, asked = time.perf_counter(), [], time.time()
         try:
@@ -3124,13 +3131,14 @@ class Server:
                 # its end until this thread had the answer. The step-6 drive's tiles took 4-5 s with 0.7 s of content
                 # and skin and "queue 0.0": the queue's time ends when the executor takes the job, not a process)
                 log.info("road geotile %d_%d in %.1f s (queue %.1f, before its process %.1f, back %.1f; content %.1f s "
-                         "%.1f cpu, skin %.1f s %.1f cpu, exact %.1f s): %s; its thread %.1f cpu, waited: %s; map cell %s",
+                         "%.1f cpu, skin %.1f s %.1f cpu, exact %.1f s): %s; its thread %.1f cpu, waited: %s; map cell %s%s",
                          gx, gy, took, waited[0] if waited else 0.0,
                          max(0.0, tm["began"] - asked) if "began" in tm else 0.0,
                          max(0.0, time.time() - tm["ended"]) if "ended" in tm else 0.0, tm.get("content_s", 0.0),
                          tm.get("content_cpu", 0.0), tm.get("skin_s", 0.0), tm.get("skin_cpu", 0.0),
                          tm.get("exact_s", 0.0), top, tm.get("own_cpu", 0.0),
-                         waitsmod.text((res or {}).get("waits")) or "nothing", cell_was)
+                         waitsmod.text((res or {}).get("waits")) or "nothing", cell_was,
+                         "; before the server's other work" if tm.get("rush") else "")
         except poolsmod.Abandoned:
             return None                         # (a teleport left its anchor: not built)
         except concurrent.futures.TimeoutError as e:
@@ -4589,6 +4597,56 @@ class Server:
             best = eta if best is None else min(best, eta)
         return best
 
+    def geo_rush_at(self, gx, gy):
+        """The time.time() from which road geotile (gx, gy) is built before the server's other work (budget.rush):
+        budget.RUSH_S before the first moving player reaches it (its quad's distance in the player's anchor's world
+        over the car's speed; not a tile the car has passed), or None while nobody is on the way to it. Called as
+        Server.geo_rush_at(self, ...)."""
+        import budget
+        best = None
+        for c in list(getattr(self, "connections", ())):
+            vx, vy = getattr(c, "vel", None) or (0.0, 0.0)
+            v = math.hypot(vx, vy)
+            at = getattr(c, "focus", None)
+            frame = getattr(getattr(self, "anchors", {}).get(getattr(c, "active", None)), "frame", None)
+            if v < aheadpath.MIN_V or at is None or frame is None:
+                continue
+            quad = geotilesmod.quad(frame, gx, gy)
+            d = geotilesmod.quad_dist(quad, *at)
+            if d > 0.0 and (float(np.mean(quad[:, 0])) - at[0]) * vx + (float(np.mean(quad[:, 1])) - at[1]) * vy <= 0.0:
+                continue                # (behind the car)
+            best = d / v if best is None else min(best, d / v)
+        return None if best is None else time.time() + best - budget.RUSH_S
+
+    def block_rush_at(self, aid, cx, cy, lane):
+        """The time.time() from which block (aid, cx, cy) is built before the server's other work (budget.rush): now
+        for one the mod asked for (lane LANE_REQUEST) and for one of the anchor a player is about to rebase to
+        (Connection.rebase_to: asked for at its commit, moments away); a prefetched one budget.RUSH_S before the
+        first moving player on aid comes within its follow rule's furthest reach of the block's centre (from there
+        the mod asks for it). None while nobody is on the way to it. Called as Server.block_rush_at(self, ...)."""
+        import budget
+        if lane == LANE_REQUEST:
+            return time.time()
+        rule = getattr(self, "follow", None)
+        reach = max(rule.reach, rule.fast_reach) if rule is not None else 0.0
+        best = None
+        for c in list(getattr(self, "connections", ())):
+            to = getattr(c, "rebase_to", None)
+            if to is not None and to[0].id == aid:
+                return time.time()
+            if getattr(c, "active", None) != aid:
+                continue
+            vx, vy = getattr(c, "vel", None) or (0.0, 0.0)
+            v = math.hypot(vx, vy)
+            at = getattr(c, "focus", None)
+            if v < aheadpath.MIN_V or at is None:
+                continue
+            if (cx - at[0]) * vx + (cy - at[1]) * vy <= 0.0:
+                continue                # (behind the car)
+            eta = max(0.0, max(abs(cx - at[0]), abs(cy - at[1])) - reach) / v
+            best = eta if best is None else min(best, eta)
+        return None if best is None else time.time() + best - budget.RUSH_S
+
     def geo_patience(self, aid, gx, gy):
         """s road geotile (gx, gy)'s build may wait for the inputs it can be built without (blockworker.roads_geo's
         patience: the town signs' village points and land cover, the roofs' photo): until the first moving player on
@@ -4719,7 +4777,8 @@ class Server:
                     pfut = self.hm_proc[key] = submit(
                         job, anchor.id, anchor.lat, anchor.lon, anchor.hm_zoom, q, cx, cy,
                         self.layout.block, self.out_dir, self.hm_name(key), self.ter_name(key),
-                        fuel_pads=self.block_fuel_pads(anchor, cx, cy, self.layout.block * heightmap.SQUARE))
+                        fuel_pads=self.block_fuel_pads(anchor, cx, cy, self.layout.block * heightmap.SQUARE),
+                        rush=Server.block_rush_at(self, anchor.id, cx, cy, lane))
                     try:
                         info = poolsmod.result_running(pfut, None, abandon=gone)
                     finally:
