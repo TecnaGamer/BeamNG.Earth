@@ -476,6 +476,39 @@ class RawLinesShort(unittest.TestCase):
         self.assertEqual(f.__dict__["_level_ranges"], {}, "nothing written into the layer being loaded")
         self.assertNotIn(str(k), g.__dict__.get("_raw_lines_memo", {}))
 
+    def test_bridge_restored_with_the_clean_copy(self):
+        # (Codex review of round 5: the short home copy had no bridge, the layer's kept bridge_specs say none; the clean
+        # copy restores it: the retry emits and keeps its deck, its eligibility from the ranges read, not those specs)
+        import mapcells
+        site, key = self.layer()
+        f = site.cells[key]
+        f.__dict__.pop("_ranges_short_until", None)
+        k = mapcells.CellKey(*(int(v) for v in key.split("/")))
+        g = self.planner(f)
+
+        def copy():
+            h = f.__class__.__new__(f.__class__)
+            h.__dict__.update({kk: v for kk, v in f.__dict__.items() if not kk.startswith("_")})
+            return h
+        short_home, clean_home = copy(), copy()
+        short_home.__dict__["_level_ranges"] = {i: [] for i in range(len(f))}
+        short_home.__dict__["_ranges_state"] = "done"
+        short_home.__dict__["_ranges_short_until"] = 1e18
+        home = [short_home]
+        with mock.patch.object(roads, "LIDAR_GAPS_ON", False), \
+                mock.patch.object(roads, "home_copy", lambda feats, i: (home[0], i) if feats is f else None), \
+                mock.patch.object(roads, "bridge_specs", lambda feats: [None] * len(feats)):
+            with revisit.scope() as b:
+                first = g._raw_lines(k)
+            self.assertTrue(b.n)
+            home[0] = clean_home
+            with revisit.scope() as b:
+                second = g._raw_lines(k)
+            self.assertFalse(b.n)
+        self.assertEqual(len(first["bridges"]), 0)
+        self.assertGreater(len(second["bridges"]), 0, "the restored deck")
+        self.assertIs(g._raw_lines_memo[str(k)], second)
+
     def test_cell_ranges_mark_a_short_entry(self):
         import time
         site, key = self.layer()

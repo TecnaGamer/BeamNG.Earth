@@ -6094,11 +6094,12 @@ class _Planner:
             busy = True                 # (a layer another thread is making ranges for: nothing read from it, not even
             f = None                    # the specs, which read them too)
         if f is not None and len(f):
-            bs = roadsmod.bridge_specs(f)
+            # (a road's class from its road spec, its bridge and ground pieces from the ranges read below: never the
+            # layer's kept bridge_specs, made from ranges that may have been short since replaced)
             rs = roadsmod.road_specs(f, None, self.widths)
             rows = []
             for i in range(len(f)):
-                if bs[i] is None and rs[i] is None:
+                if rs[i] is None:
                     continue
                 # (the ranges from the layer they come from now, its mark read off that very layer; never from one
                 # another thread is making: a row read there is made here and written into its memory, where the
@@ -6113,7 +6114,7 @@ class _Planner:
                     rngs = roadsmod.home_ranges(f, i, h[0], h[1], roadsmod.level_ranges(h[0], h[1], _home=False))
                 else:
                     rngs = roadsmod.level_ranges(f, i, _home=False)
-                for kind, sp, want in (("bridges", bs[i], "bridge"), ("ground", rs[i], "ground")):
+                for kind, sp, want in (("bridges", rs[i], "bridge"), ("ground", rs[i], "ground")):
                     ps = roadsmod._parts_by_level_new(f, i, want, rngs=list(rngs)) if sp is not None else ()
                     for ring in ps:
                         ring = np.asarray(ring, np.float64)
