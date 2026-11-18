@@ -209,21 +209,35 @@ def decode(body):
         return {}
 
 
+def _near(s, geo_box):
+    """The indices (ascending) of shard s's records (lat > -90) within GEO_PAD_DEG of geo_box (south, west, north,
+    east): its records by latitude kept with the shard (Source.shards), a tile's band of them found by bisection."""
+    order = s.get("_by_lat")
+    if order is None:
+        order = np.argsort(s["lat"], kind="stable")
+        s["_lat_sorted"] = s["lat"][order]
+        s["_by_lat"] = order
+    bs, bw, bn, be = geo_box
+    ls = s["_lat_sorted"]
+    cand = order[np.searchsorted(ls, bs - GEO_PAD_DEG, "left"):np.searchsorted(ls, bn + GEO_PAD_DEG, "right")]
+    lo, la = s["lon"][cand], s["lat"][cand]
+    return np.sort(cand[(lo >= bw - GEO_PAD_DEG) & (lo <= be + GEO_PAD_DEG) & (la > -90.0)])
+
+
 class Records:
     """A tile's records in its frame, found by the footprint they stand in."""
 
     def __init__(self, frame, shards, x0, y0, x1, y1, geo_box=None):
         e, n, code, height, roof = [], [], [], [], []
         for s in shards:
-            k = (s["lat"] > -90.0)
             if geo_box is not None:     # (a z10 shard is ~25 km across, the tile a few hundred metres: only the
                 # records near the box's corners in degrees (geo_box: south, west, north, east; GEO_PAD_DEG wider than
-                # any bend of the frame's box there) go through geodetic_to_enu, the same ones kept below. Every
-                # record of the shard was turned to metres for each tile: a fifth of the far buildings' CPU)
-                bs, bw, bn, be = geo_box
-                la, lo = s["lat"], s["lon"]
-                k &= (la >= bs - GEO_PAD_DEG) & (la <= bn + GEO_PAD_DEG) & (lo >= bw - GEO_PAD_DEG) & \
-                    (lo <= be + GEO_PAD_DEG)
+                # any bend of the frame's box there) go through geodetic_to_enu, the same ones kept below, in the
+                # shard's order. Every record of the shard was turned to metres for each tile: a fifth of the far
+                # buildings' CPU)
+                k = _near(s, geo_box)
+            else:
+                k = (s["lat"] > -90.0)
             ee, nn, _ = frame.geodetic_to_enu(s["lat"][k], s["lon"][k], 0.0)
             keep = (ee >= x0) & (ee < x1) & (nn >= y0) & (nn < y1)
             e.append(ee[keep])
