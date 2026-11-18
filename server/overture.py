@@ -523,21 +523,31 @@ PREP_DEFER_S = 0.5              # s a deferred request waits before it asks agai
 PREP_RETRIES = 6                # failed passes tried again (the next one gives up for this process)
 PREP_BACKOFF_S = (5.0, 300.0)   # s after the first failed pass, doubled each time, at most the second
 PREP_MAX_S = 3600.0             # the whole job's effort (deferrals, passes, backoffs): past it the job gives up
+class PrepOutOfTime(OvertureError):
+    """The session's bundle prep past its bound (PREP_MAX_S): no request started, nothing noted after it."""
+
+
 # answers asking again will not change in this process: the release gone, the day's budget used up, --offline, a
-# policy that forbids it, a STAC index that contradicts itself
+# policy that forbids it, a STAC index that contradicts itself, the job's bound (PrepOutOfTime)
 _PREP_FINAL = (netfetch.NotFound, netfetch.BudgetExceeded, netfetch.PolicyDenied, netfetch.Offline, OvertureError)
 
 
 class _Patient:
     """A fetcher whose deferred requests wait PREP_DEFER_S (or the host's own retry_after) and ask again, until the
-    deadline (the job's bound): then the Deferred is raised."""
+    deadline (the job's bound): then the Deferred is raised. No request starts past the deadline (PrepOutOfTime; one
+    already asked ends within its host's own timeout)."""
 
     def __init__(self, fetcher, deadline, clock, sleep):
         self.fetcher, self.deadline, self.clock, self.sleep = fetcher, deadline, clock, sleep
         self.deferred = 0
 
+    def check(self):
+        if self.clock() > self.deadline:
+            raise PrepOutOfTime(f"session's STAC index prep past its {PREP_MAX_S:.0f} s")
+
     def get(self, url, kind="background", **kw):
         while True:
+            self.check()
             try:
                 return self.fetcher.get(url, kind=kind, **kw)
             except netfetch.Deferred as e:
@@ -556,9 +566,17 @@ def prepare_session(cache_dir, fetcher, clock=time.monotonic, sleep=time.sleep, 
     deadline = clock() + max_s
     patient = _Patient(fetcher, deadline, clock, sleep)
     failures = 0
+    rel = effective()
     while True:
         try:
-            return note_session(cache_dir, patient)
+            # (note_session's steps: the note only after the whole bundle is on disk, and within the bound)
+            schema = SUPPORTED_SCHEMAS[0] if rel == RELEASE else keep_local_bundle(rel, cache_dir, patient)
+            if not schema:
+                return None
+            patient.check()
+            if not overturepick.write_last(cache_dir, rel, schema):
+                raise OSError("the session's note not written")     # (a pass again: the bundle kept, no request)
+            return schema
         except _PREP_FINAL:
             raise
         except (netfetch.FetchError, OSError, ValueError) as e:     # (a network error, a timeout, a portal's page)

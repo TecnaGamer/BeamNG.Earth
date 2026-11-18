@@ -1064,6 +1064,9 @@ class HttpsTransport:
                     return r.status, rh, b""
                 cap = getattr(_body_cap, "n", None)
                 body = r.read() if cap is None else r.read(cap + 1)     # (Fetcher.get's max_bytes: one byte past)
+                if cap is not None and len(body) <= cap and r.length:
+                    # (a bounded read ends short at EOF without IncompleteRead: the declared length not met)
+                    raise http.client.IncompleteRead(body, r.length)
                 out = r.status, rh, body
                 if cap is not None and not r.isclosed():    # (the rest not read: the connection is not given back)
                     conn.close()

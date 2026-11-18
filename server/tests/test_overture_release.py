@@ -497,6 +497,36 @@ class SessionPrepTest(unittest.TestCase):
         self.assertLessEqual(clock2.t, 60.0)
         self.assertFalse(os.path.exists(self.last))
 
+    def test_no_request_or_note_past_the_bound(self):
+        """Slow successful requests (no deferral, no failure) still stop at the bound, and nothing is noted."""
+        stac = FakeStac()
+        clock = FakeClock()
+        real = stac.get
+
+        def slow(url, kind="demand", **kw):
+            clock.t += 40.0
+            return real(url, kind, **kw)
+        stac.get = slow
+        with self.assertRaises(self.overture.PrepOutOfTime):
+            self.overture.prepare_session(self.cache, stac, clock=clock, sleep=clock.sleep, max_s=100.0)
+        self.assertLessEqual(len(stac.asked), 3)
+        self.assertFalse(os.path.exists(self.last))
+
+    def test_note_write_failure_is_tried_again(self):
+        stac = FakeStac()
+        clock = FakeClock()
+        real, calls = op.write_last, []
+
+        def flaky(*a):
+            calls.append(a)
+            return False if len(calls) == 1 else real(*a)
+        with mock.patch.object(op, "write_last", flaky):
+            got = self.overture.prepare_session(self.cache, stac, clock=clock, sleep=clock.sleep)
+        self.assertEqual(got, op.SUPPORTED_SCHEMAS[0])
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(op.fallback(self.cache)[0], NEW)
+        self.assertEqual(len([u for u in stac.asked if u.endswith("/a.json")]), 1, "the bundle kept, not crawled again")
+
     def test_release_gone_is_final(self):
         stac = FakeStac()
         del stac.pages[f"{op.STAC_ROOT}/{NEW}/buildings/building/collection.json"]
@@ -551,6 +581,12 @@ class SwitchCapTest(unittest.TestCase):
             self.assertEqual(cdn.switch(netfetch.Fetcher(offline=True), cache), {})
             with open(path, "w") as fh:
                 json.dump({"overture": {"release": NEW}}, fh)
+            self.assertEqual(op.read_switch_file(path), {"overture": {"release": NEW}})
+            # under the cap as it came, past it written again ("1E5" -> 100000.0): the copy before kept
+            body = b'{"n":[' + b",".join([b"1E5"] * (op.SWITCH_MAX_BYTES // 4 - 4)) + b"]}"
+            doc = op.parse_switch(body)
+            self.assertIsNotNone(doc)
+            op.keep_switch(path, doc)
             self.assertEqual(op.read_switch_file(path), {"overture": {"release": NEW}})
 
     def _fetcher(self, body, gz):
@@ -610,6 +646,29 @@ class SwitchCapTest(unittest.TestCase):
         finally:
             netfetch._body_cap.n = None
         self.assertEqual((status, len(body)), (200, 1001))
+
+    def test_transport_capped_read_refuses_a_short_body(self):
+        """A fixed-length body cut short under the cap: IncompleteRead, as the unbounded read gave."""
+        import http.client
+        import socket
+        lsock = socket.socket()
+        lsock.bind(("127.0.0.1", 0))
+        lsock.listen(1)
+        self.addCleanup(lsock.close)
+
+        def serve():
+            c, _ = lsock.accept()
+            c.recv(65536)
+            c.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\n" + b'{"overture": {}}')
+            c.close()
+        threading.Thread(target=serve, daemon=True).start()
+        tr = netfetch.HttpsTransport()
+        netfetch._body_cap.n = 1000
+        try:
+            with self.assertRaises(http.client.IncompleteRead):
+                tr.request(f"http://127.0.0.1:{lsock.getsockname()[1]}/cdn.json", {}, 5.0)
+        finally:
+            netfetch._body_cap.n = None
 
 
 if __name__ == "__main__":

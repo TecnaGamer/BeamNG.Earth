@@ -123,12 +123,20 @@ def get_switch(get):
 
 
 def keep_switch(path, doc):
-    """The switch file's copy on disk (cdn.switch reads it while fresh), written whole under a writer-unique name."""
+    """The switch file's copy on disk (cdn.switch reads it while fresh), written whole under a writer-unique name; not
+    written (the copy before kept) when its form here is past SWITCH_MAX_BYTES (read_switch_file would refuse it: a
+    number or an escape can grow when written again)."""
     tmp = f"{path}.{os.getpid()}.{threading.get_ident()}.tmp"
     try:
+        body = json.dumps(doc).encode("utf-8")
+    except (TypeError, ValueError, RecursionError):
+        return
+    if len(body) > SWITCH_MAX_BYTES:
+        return
+    try:
         os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(tmp, "w", encoding="utf-8") as fh:
-            json.dump(doc, fh)
+        with open(tmp, "wb") as fh:
+            fh.write(body)
         os.replace(tmp, path)
     except OSError:
         try:
