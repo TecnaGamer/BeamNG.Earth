@@ -6689,6 +6689,10 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(structures::groups::structure_groups, m)?)?;
     // 480: road revamp RS step S1 (structures::groups::structure_groups: which decks of one bridge chain form one
     // structure; roads writes them as a shadow JSON per chain, BNE_DECK_STRUCT=shadow). 472-479 left to other branches
-    m.add("VERSION", 480)?;
+    m.add_function(wrap_pyfunction!(railbeds::rail_bed_heights, m)?)?;
+    // 481: the full port's railways._avg / bed_heights (railbeds::rail_bed_heights: every ground part of one
+    // railways.profile in one call, numpy's cumsum order). (r2a7 was given 473-479, but dev's module is 480 already
+    // (rs-s1): VERSION has to pass 480 so that a 480 module, which lacks it, fails the start check)
+    m.add("VERSION", 481)?;
     Ok(())
 }
