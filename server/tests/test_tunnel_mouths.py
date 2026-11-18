@@ -10,6 +10,7 @@ import unittest
 import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+import gradelaw  # noqa: E402
 import grading  # noqa: E402
 import mapcells  # noqa: E402
 import roads  # noqa: E402
@@ -157,6 +158,73 @@ class ArchFootprintTest(unittest.TestCase):
         soil = roads.arch_raise_over(self._arch(), x, y, ground)
         self.assertGreater(float(soil[2]), 105.0, "the terrain still gets its soil beside the tube")
         self.assertAlmostEqual(float(soil[3]), 100.0)
+
+    def test_a_road_at_the_tubes_level_is_not_asked_to_cover_it(self):
+        # Porte Maillot: slip roads 0.3 m over the floor, 9 m off the line of a 5 m tube on the edge of its footprint,
+        # asked 5.9 m up onto the vault's cover (6 m over the road a deck held: bounds that cannot hold)
+        x = np.full(3, 50.0)
+        y = np.full(3, 4.0)
+        ground = np.full(3, 100.0)
+        got = roads.arch_cover_over(self._arch(side=0.0), x, y, np.array([100.3, 103.5, 103.7]))
+        self.assertFalse(np.isfinite(got[0]) or np.isfinite(got[1]), "under TUNNEL_LOW_H over the floor: beside it")
+        self.assertAlmostEqual(float(got[2]), 105.0 + roads.ARCH_SOIL_MIN, places=3)
+        self.assertEqual(ground.shape, got.shape)
+
+
+class BoreDipTest(unittest.TestCase):
+    """A tunnel under anything goes down: the tube's floor leaves room for the lowest tube and the arch and soil under
+    a road over it, not only where the lines cross (Porte Maillot's Peripherique tunnels 4.5-5 m under slip roads over
+    their flanks, 5 m tubes through them)."""
+
+    def setUp(self):
+        self.s = np.arange(0.0, 101.0, 4.0)
+        self.floor = np.full(len(self.s), 100.0)
+        self.kinds = np.full(len(self.s), 2)
+        self.cover = np.full(len(self.s), 9.0)
+
+    def test_a_road_too_low_over_the_floor_dips_the_floor_under_it(self):
+        dips = roads.bore_dips([48.0, 49.0], [104.6, 104.9], self.s, self.floor, 5.0)
+        self.assertEqual([q for q, _z in dips], [12])
+        self.assertAlmostEqual(dips[0][1], 104.6 - roads.BORE_FIT_M - 5.0)
+
+    def test_a_road_with_room_leaves_the_floor_and_a_mouth_is_not_dipped(self):
+        self.assertEqual(roads.bore_dips([48.0], [106.0], self.s, self.floor, 5.0), [])
+        self.assertEqual(roads.bore_dips([0.0, 100.0, 4.0, 96.0], [101.0] * 4, self.s, self.floor, 5.0), [],
+                         "over the first and last SECTION_MIN_M: the mouth, not a tube")
+        got = roads.bore_dips([8.0, 92.0], [101.0, 101.0], self.s, self.floor, 5.0)
+        self.assertEqual([q for q, _z in got], [2, len(self.s) - 3])
+
+    def test_the_floor_goes_down_from_a_portal_no_steeper_than_the_roads_grade(self):
+        # (a road 8 m from a portal wants the floor 1.1 m down there: 14 %, over what the road may hold)
+        grade = gradelaw.road_grade("motorway")
+        dips = roads.bore_dips([8.0, 50.0], [104.6, 104.6], self.s, self.floor, 5.0, (100.0, 100.0), grade)
+        self.assertEqual([q for q, _z in dips], [2, 12])
+        self.assertAlmostEqual(dips[0][1], 100.0 - grade * 8.0)
+        self.assertAlmostEqual(dips[1][1], 104.6 - roads.BORE_FIT_M - 5.0, msg="far from both portals: the whole dip")
+        self.assertLessEqual(abs(dips[0][1] - 100.0) / 8.0, grade + 1e-9)
+
+    def test_a_dipped_floors_corners_are_rounded_by_the_roads_vertical_curve(self):
+        floor = np.where(self.s < 48.0, 100.0 - 0.02 * self.s, 100.0 - 0.96 + 0.02 * (self.s - 48.0))   # (a V at 48 m)
+        radius = 900.0
+        out = roads.bore_round(self.s, floor, radius)
+        d = 0.04
+        self.assertAlmostEqual(float(out[12] - floor[12]), radius * d * d / 8.0, places=6)
+        self.assertTrue((out >= floor - 1e-12).all(), "a corner is only ever rounded up, to the curve over it")
+        self.assertEqual((out[0], out[-1]), (floor[0], floor[-1]))
+        k = np.abs(np.diff(out, 2) / 16.0)
+        self.assertLessEqual(k.max(), 1.0 / radius + 1e-9, "no curve tighter than the road's")
+
+    def test_only_a_road_over_a_covered_tube_counts(self):
+        arc, zr = np.array([20.0, 40.0, 60.0]), np.array([104.0, 100.5, 104.0])
+        kinds = self.kinds.copy()
+        kinds[15:] = 0                                     # (open from 60 m)
+        on = roads.roads_over_tube(arc, zr, self.s, self.floor, np.full(len(self.s), 1.0), kinds)
+        self.assertEqual(on.tolist(), [True, False, False], "over it; at its level; where it is open")
+        # (the ground over a thin cover: a road on an embankment the elevation does not show still stands over it)
+        on = roads.roads_over_tube(arc, zr, self.s, self.floor, np.full(len(self.s), 1.0), self.kinds)
+        self.assertEqual(on.tolist(), [True, False, True])
+        on = roads.roads_over_tube(arc, zr, self.s, self.floor, self.cover, self.kinds)
+        self.assertEqual(on.tolist(), [True, True, True], "under deep ground the tube is under it however low the road")
 
 
 LIP_Z = 100.0                   # m: the road's level where the tunnel meets the bridge and where the bridge meets the ground

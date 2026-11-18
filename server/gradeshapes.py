@@ -645,7 +645,12 @@ class _Verdicts:
     def links(self):
         """({(deck, 0 its start | 1 its end): [(deck, end)]} the decks' ends joined end to end, {(deck, end)} the ends a
         road on the ground leaves from: where the structure leaves the ground. A deck's end on another's middle (a merge,
-        a ramp onto a viaduct) joins nothing here: the structure's ends are not looked for through it."""
+        a ramp onto a viaduct) joins nothing here: the structure's ends are not looked for through it. A deck's end
+        on a tunnel's end is where the structure goes under the ground, as on a road: the joint is the same relation
+        (_end_meets: JOIN_M, and between structures a node of the map they share), the tunnel's end the same end-to-end
+        test as a deck's. Left out, La Defense's deck at a tunnel mouth (a 67-piece system) had no end to find, the
+        whole chain's lack was asked of it, 4.7 m of rise in 20 m at the mouth (z 50.5), and the system was
+        infeasible."""
         if self._links is None:
             net, out, leave = self.net, {}, set()
             for i, rs in self.rel.items():
@@ -655,7 +660,7 @@ class _Verdicts:
                     if kind != "join" or j == i or min(si, net.L[i] - si) > JOIN_M:
                         continue
                     e = int(si > net.L[i] / 2)
-                    if net.m[j].kind == "ground":
+                    if net.m[j].kind == "ground" or (net.m[j].kind == "tunnel" and min(sj, net.L[j] - sj) <= JOIN_M):
                         leave.add((i, e))
                     elif net.m[j].kind == "deck" and min(sj, net.L[j] - sj) <= JOIN_M:
                         out.setdefault((i, e), []).append((j, int(sj > net.L[j] / 2)))

@@ -152,6 +152,25 @@ def _nearest(xy, P):
     return k, float(t[k]), float(d[k])
 
 
+def _past_carriageway(xy, P, seg, t, half):
+    """m from point P to the carriageway of the road (line xy, half width half) by its nearest point (seg, t) on the line,
+    the carriageway ending square at the line's ends: a point past an end is the distance to that end's edge, not the
+    radius of a disc round the end's centre (half + REACH_M wide). Pure."""
+    a, b = xy[seg], xy[seg + 1]
+    v = P - (a + (b - a) * t)
+    d = float(dnp.hypot(v[0], v[1]))
+    end = (seg == 0 and t <= 0.0) or (seg == len(xy) - 2 and t >= 1.0)
+    if not end:
+        return max(d - half, 0.0)
+    out = (a - b) if seg == 0 and t <= 0.0 else (b - a)           # (the way out of the end)
+    out = out / max(float(dnp.hypot(out[0], out[1])), 1e-12)
+    along = float(v[0] * out[0] + v[1] * out[1])
+    if along <= 0.0:
+        return max(d - half, 0.0)
+    side = abs(float(v[0] * out[1] - v[1] * out[0]))
+    return float(dnp.hypot(along, max(side - half, 0.0)))
+
+
 def _solve_networks(chains, ccps):
     """The chains' profiles ([array or None: left as it was]), each connected network (chains joined by couplings)
     solved on its own, once. Returns (profiles, stats: stats["failed"] [(chains, kernel info)] of those with none)."""
@@ -267,8 +286,12 @@ def apply(plans, specs, held=None, under=None, skip=(), diagnostics=None, natura
             ok = np.abs(S[jj] - sv) <= step / 2 + 1e-6
             hs |= ok & H[jj]
             ds |= ok & D[jj]
-            lo_s = np.where(ok, np.maximum(lo_s, LB[jj]), lo_s)
-            hi_s = np.where(ok, np.minimum(hi_s, HB[jj]), hi_s)
+            # (a bound is the plan point's: at the sample it stands the road's own rise between them from its height there,
+            # the same offset the sample's own height (t: where it may only go down) is from the point's. Taken as it was,
+            # a shape's floor at a point 31.688 over a cap 31.683 at the sample beside it (a road under a deck, falling
+            # between them), and 33.028 over 33.027 on another: no network could hold both)
+            lo_s = np.where(ok, np.maximum(lo_s, LB[jj] + (t - Z[jj])), lo_s)
+            hi_s = np.where(ok, np.minimum(hi_s, HB[jj] + (t - Z[jj])), hi_s)
         g_law = rad = 0.0
         rank = 0
         for k, _rev in run:
@@ -462,7 +485,9 @@ def apply(plans, specs, held=None, under=None, skip=(), diagnostics=None, natura
                     continue
                 reach = reach_all[j]
                 seg, tt, d = _nearest(xys[j], P)
-                if d <= reach and (best is None or d < best[0]) and                         (meets is None or meets(idx[k], idx[j]) is not False):
+                if d <= reach and (best is None or d < best[0]) and \
+                        _past_carriageway(xys[j], P, seg, tt, reach - REACH_M) <= REACH_M and \
+                        (meets is None or meets(idx[k], idx[j]) is not False):
                     best = (d, j, float(arcs[j][seg] + tt * (arcs[j][seg + 1] - arcs[j][seg])))
             if best is not None:
                 land(k, e, arc_of(best[1], best[2]), best[1])
