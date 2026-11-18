@@ -546,6 +546,26 @@ class UnderDeckTest(unittest.TestCase):
         self.assertEqual(len(wires), 1)
         self.assertEqual(float(wires[0][0, 0]), 30.0)
 
+    def test_an_assembly_goes_as_one(self):
+        # a utility pole under a deck 9.4 m up goes (its top through it); its cobra-head arm 7 m up would fit and stayed
+        # in the air (the user's reports 56/59/66/70 for the same rule at racetracks, 2026-11-17)
+        import furniture
+        deck = (np.array([[-50.0, 0.0, 9.4], [50.0, 0.0, 9.4]]), 5.5)
+        pole = [furniture.G_POLE, 0.0, 2.0, 0.0, 0.0, 1.0, 9.2, 0.0]
+        arm = [furniture.G_POLELAMP, 0.0, 2.0, furniture.POLE_LAMP_Z, 0.0, 1.0, 1.1, 0.0]
+        rows = [pole, arm] + furniture.lamp_lenses([arm])
+        wires = [np.array([[0.0, 2.0 + 0.8, 7.8], [0.0, 2.0 + 0.8, 7.8]]),       # (a stub at the pole: no deck test)
+                 np.array([[30.0, 20.0, 7.9], [60.0, 20.0, 7.9]])]
+        self.assertEqual(furniture.under_decks(rows, [deck], wires), [])
+        self.assertEqual(len(wires), 1)
+        self.assertEqual(float(wires[0][0, 0]), 30.0)
+        # a post beside the deck, its head reaching under its edge: the lens stays with the post
+        deck = (np.array([[-50.0, 0.0, 8.0], [50.0, 0.0, 8.0]]), 5.5)
+        post = [furniture.G_LAMP, 0.0, 9.0, 0.0, 270.0, 1.0, 9.0, 0.0]
+        rows = [post] + furniture.lamp_lenses([post])
+        self.assertLess(rows[1][2], 6.5, "(the head under the deck's side)")
+        self.assertEqual(furniture.under_decks(rows, [deck]), rows)
+
     def test_props_on_the_deck_stay(self):
         import furniture
         deck = (np.array([[-50.0, 0.0, 8.0], [50.0, 0.0, 8.0]]), 5.5)

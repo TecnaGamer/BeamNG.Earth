@@ -100,79 +100,18 @@ def bands(frame, cells):
     return out
 
 
-# An assembly goes as one (the user's reports 56, 59, 66, 70 at Daytona and Atlanta, 2026-11-17: a lit raceway's
-# utility pole 0.7 m inside the band went, its cobra-head arm 7 m up was taken for a prop on a deck over the track and
-# stayed, and of its three wires the one ending 0.8 m farther out stayed: an arm and one wire in the air):
-# - a row mounted on another (furniture.G_POLELAMP on the pole at its x, y; a lens and a glow at a lamp's head,
-#   furniture.lamp_lenses) goes or stays with that row, never by its own height;
-# - a wire with an end within SUPPORT_REACH_M of a dropped support (its cross-arm's reach) goes with it.
-MOUNT_M = 0.05              # m: a pole lamp is on the support at its x, y (both rows rounded to 1 cm)
-SUPPORT_REACH_M = 1.5       # m from a support's x, y its wires end (furniture.WIRE_ARMS 0.8, regional poles 1.1,
-PYLON_REACH_M = 5.0         # powerlines' wooden pole 1.07); a lattice pylon's (powerlines.ARMS 4.12)
-
-
-def _support(group):
-    """Does a row of this group carry wires (a utility pole of any style, a power line's pole or pylon)?"""
-    import busfurniture
-    import furniture
-    import powerlines
-    g = str(group)
-    return g != furniture.G_POLELAMP and (busfurniture._is_pole(g) or g in (powerlines.G_POLE, powerlines.G_PYLON))
-
-
-def _mounted_groups():
-    import furniture
-    return {furniture.G_POLELAMP, furniture.G_LENS, furniture.G_GLOW, furniture.G_HIGH_MAST_LENS, "fr_lantern_light"}
-
-
-def _assemblies(props):
-    """(parent (n,) int: the index of the row each row is mounted on, -1 for none) of props: a pole lamp on the support
-    at its x, y; a lens or glow on the lamp whose furniture.lamp_lenses row it is. A mounted row with no parent found
-    has -1 (judged by itself, as before)."""
-    import furniture
-    mounted = _mounted_groups()
-    parent = np.full(len(props), -1, np.int64)
-    if not any(str(r[0]) in mounted for r in props):
-        return parent
-    supports = {}
-    heads = {}
-    for i, r in enumerate(props):
-        g = str(r[0])
-        if _support(g):
-            supports.setdefault((round(float(r[1]) / MOUNT_M), round(float(r[2]) / MOUNT_M)), i)
-        if len(r) >= 8 and (g not in mounted or g == furniture.G_POLELAMP):    # (a pole lamp has a head too)
-            for lens in furniture.lamp_lenses([r]):
-                heads.setdefault((str(lens[0]),) + tuple(round(float(v), 2) for v in lens[1:4]), i)
-    for i, r in enumerate(props):
-        g = str(r[0])
-        if g not in mounted:
-            continue
-        if g == furniture.G_POLELAMP:
-            kx, ky = round(float(r[1]) / MOUNT_M), round(float(r[2]) / MOUNT_M)
-            for dx in (0, -1, 1):           # (a rounding at a cell's edge)
-                for dy in (0, -1, 1):
-                    j = supports.get((kx + dx, ky + dy))
-                    if j is not None and parent[i] < 0:
-                        parent[i] = j
-        else:
-            j = heads.get((g,) + tuple(round(float(v), 2) for v in r[1:4]))
-            if j is not None:
-                parent[i] = j
-    # (a lens on a pole lamp: its fate is the pole's)
-    for i in range(len(props)):
-        j = parent[i]
-        while j >= 0 and parent[j] >= 0:
-            j = parent[j]
-        parent[i] = j
-    return parent
+# An assembly goes as one (furniture.assemblies; the user's reports 56, 59, 66, 70 at Daytona and Atlanta, 2026-11-17:
+# a lit raceway's utility pole 0.7 m inside the band went, its cobra-head arm 7 m up was taken for a prop on a deck
+# over the track and stayed, and of its three wires the one ending 0.8 m farther out stayed: an arm and one wire in the
+# air). A wire with an end within furniture.support_reach of a dropped support goes with it.
 
 
 def clear_props(props, wires, lines, ground=None):
     """props (furniture rows [group, x, y, z, ...] in the frame) and wires (lists of [x, y, z] points, or (points,
     radius)) without those inside a raceway's carriageway + PROP_CLEAR_M (lines: bands()), in place; a prop standing
     PROP_DECK_M or more over the ground there (ground(x (n,), y (n,)) -> z, the graded ground; None: none kept) is on
-    a deck over the track and stays. A row mounted on another (_assemblies) goes or stays with it. Wires: those with an
-    end on the band or at a dropped support (SUPPORT_REACH_M) go."""
+    a deck over the track and stays. A row mounted on another (furniture.assemblies) goes or stays with it. Wires:
+    those with an end on the band or at a dropped support (furniture.support_reach) go."""
     if not lines:
         return 0
     dropped = 0
@@ -180,7 +119,8 @@ def clear_props(props, wires, lines, ground=None):
     if props:
         xy = np.array([[float(r[1]), float(r[2])] for r in props], np.float64).reshape(-1, 2)
         inside = near(xy, lines, PROP_CLEAR_M)
-        parent = _assemblies(props)
+        import furniture
+        parent = furniture.assemblies(props) if inside.any() else np.full(len(props), -1, np.int64)
         if inside.any() and ground is not None:
             k = np.flatnonzero(inside)
             gz = np.asarray(ground(xy[k, 0], xy[k, 1]), np.float64)
@@ -191,7 +131,7 @@ def clear_props(props, wires, lines, ground=None):
         if inside.any():
             keep = [r for r, bad in zip(props, inside) if not bad]
             gone_supports = [(float(r[1]), float(r[2]), str(r[0])) for r, bad in zip(props, inside)
-                             if bad and _support(r[0])]
+                             if bad and furniture.wire_support(r[0])]
             dropped += len(props) - len(keep)
             props[:] = keep
     if wires:
@@ -206,10 +146,8 @@ def clear_props(props, wires, lines, ground=None):
             ends = np.array(ends, np.float64)
             bad = near(ends, lines, PROP_CLEAR_M)
             if gone_supports:
-                import powerlines
                 at = np.array([[x, y] for x, y, _ in gone_supports], np.float64)
-                reach = np.array([PYLON_REACH_M if g == powerlines.G_PYLON else SUPPORT_REACH_M
-                                  for _, _, g in gone_supports], np.float64)
+                reach = np.array([furniture.support_reach(g) for _, _, g in gone_supports], np.float64)
                 d = dnp.hypot(ends[:, None, 0] - at[None, :, 0], ends[:, None, 1] - at[None, :, 1])
                 bad |= (d <= reach[None, :]).any(axis=1)
             drop = {which[j] for j in np.flatnonzero(bad).tolist()}
