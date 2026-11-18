@@ -1182,11 +1182,15 @@ def bed_heights_many(zs):
     """[bed_heights(z) for z in zs], in one call of the Rust (earthfast.rail_bed_heights: each running mean over 2r + 1
     values, the ends extended along their grade by odd reflection, so a straight grade stays straight to its end and two
     parts meeting at a joint meet at its height; numpy's cumsum order). A line of fewer than 3 heights is its own bed
-    (the same array)."""
+    (the same array); an (n, 1) column gives the (n,) bed, as numpy's flattening cumsum did. numpy's floating-point
+    warnings are not raised (an accepted difference: nothing sets np.errstate on this path and the server's lines make
+    no non-finite beds, the online cold caches' every call)."""
     import fast
     fast.require(481, "rail_bed_heights")
     zs = [np.asarray(z, np.float64) for z in zs]
-    got = iter(fast._ef.rail_bed_heights([np.ascontiguousarray(z) for z in zs if len(z) >= 3],
+    # (the kernel reads aligned contiguous float64 lines: a packed record view is copied first)
+    got = iter(fast._ef.rail_bed_heights([np.require(z.reshape(-1) if z.ndim == 2 and z.shape[1] == 1 else z,
+                                                     None, ("C", "A")) for z in zs if len(z) >= 3],
                                          max(1, int(round(SMOOTH_M / STEP_M)))))
     return [z if len(z) < 3 else next(got) for z in zs]
 

@@ -124,6 +124,24 @@ class BedHeightsTest(unittest.TestCase):
             rec = np.zeros(8, np.dtype([("z", "<f8"), ("pad", "V1")]))
             fast._ef.rail_bed_heights([rec["z"]], 5)
 
+    def test_unaligned_and_column_lines(self):
+        """A unit-stride float64 view at an odd byte offset (unaligned) and an (n, 1) column: as numpy ran them."""
+        rng = random.Random(13)
+        for _ in range(100):
+            n = rng.randint(0, 40)
+            src = rand_line(rng, n)
+            for off in (1, 3, 7):
+                z = np.ndarray(n, np.float64, np.zeros(8 * n + off, np.uint8), off)
+                z[...] = src
+                self.assertTrue(n == 0 or not z.flags.aligned)
+                self.assertTrue(same(railways.bed_heights(z), ref_bed_heights(z)))
+            col = src.reshape(n, 1)
+            want = ref_bed_heights(col)
+            got = railways.bed_heights(col)
+            self.assertTrue(same(got, want), f"{n}")
+            if n < 3:
+                self.assertIs(got, col)
+
     def test_short_lines_are_themselves(self):
         for n in (0, 1, 2):
             z = np.arange(n, dtype=np.float64)
