@@ -827,10 +827,18 @@ def track_check(np, roads, gradingmod, blockworker, s, g, frame, flist, ground, 
         b2 = np.asarray(g.deck_ground(la, lo, base), np.float64) if hasattr(g, "deck_ground") else base
         ref = b2.copy()
         on = np.zeros(len(la), bool)    # (on the drawn band: the planners' own raceway lines, as placed and rounded)
+        import inspect
+        import racedig as racedigmod
+        # (BNE_RACEWAY_DIG in a checkout that has it: the raceways laid by their dominance where they meet, as apply)
+        joined = getattr(racedigmod, "ON", False) and "layered" in inspect.signature(
+            type(g.store.planners_of(la[:1], lo[:1])[0][0])._raceway_ground).parameters
         for pl, idx in g.store.planners_of(la, lo):
             idx = np.arange(len(la)) if idx is None else idx
             pe, pn, _ = pl.frame.geodetic_to_enu(la[idx], lo[idx], 0.0)
-            ref[idx] = pl._raceway_ground(np.asarray(pe), np.asarray(pn), b2[idx])
+            if joined:
+                ref[idx] = pl._raceway_ground(np.asarray(pe), np.asarray(pn), b2[idx], layered=True)[0]
+            else:
+                ref[idx] = pl._raceway_ground(np.asarray(pe), np.asarray(pn), b2[idx])
             m = pl._on_kept(np.asarray(pe, np.float64), np.asarray(pn, np.float64))
             if m is not None:
                 on[idx] = m

@@ -29,7 +29,8 @@ FEATURES = (
     # builds yet make it a single experemental toggle"); each later revamp switch joins this set, not the page
     # (BNE_LEVEL_SPACING left out: on the 33-place ride corpus it made perth_915 and a5_underpass worse, 2026-11-17)
     ("expRoadRevamp", {"BNE_SPEED_TAPERS": "on", "BNE_DECK_K_SPEED": "on",
-                       "BNE_FOOT_CLEAR": "on", "BNE_RAIL_LIFECYCLE": "on", "BNE_RACEWAY_DIG": "on"}, None),
+                       "BNE_FOOT_CLEAR": "on", "BNE_RAIL_LIFECYCLE": "on", "BNE_RACEWAY_DIG": "on",
+                       "BNE_TUNNEL_ROAD_OVER": "on"}, None),
     ("expEuScenery", {"BNE_EU_ROAD_DETAILS": "on", "BNE_FR_ROADS": "on", "BNE_FR_HOUSES": "on"}, None),
     ("expDropRails", {"BNE_DROP_RAILS": "on"}, None),                     # droprails.enabled
     ("expEntranceFlares", {"BNE_ENTRANCE_FLARES": "on"}, None),           # roads.flares_enabled

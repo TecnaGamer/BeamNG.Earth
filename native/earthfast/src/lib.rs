@@ -76,6 +76,7 @@ mod farpvs;
 mod farsel;
 mod dirtsteps;
 mod racedig;
+mod racejoin;
 mod gridinterp;
 mod dejunction;
 mod streetlabels;
@@ -6609,6 +6610,13 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(roadnet::widthlanes::width_rejected, m)?)?;
     // 404: R2a's lane evidence and width repair (roadnet::widthlanes: roads._lane_evidence's loop, width_rejected's
     // body: the class codes, the candidates, the home copies' lanes, the trunk / one-way tests)
-    m.add("VERSION", 404)?;
+    m.add_function(wrap_pyfunction!(racejoin::raceway_ground, m)?)?;
+    m.add_function(wrap_pyfunction!(racejoin::raceway_dominance, m)?)?;
+    m.add_function(wrap_pyfunction!(racejoin::raceway_join_reach, m)?)?;
+    // 405 (404 taken by another branch the same day): racejoin (grading.raceway_ground in Rust, bit for bit, and its
+    // layered rule for BNE_RACEWAY_DIG: a raceway ending on another gives way to it, raceway_dominance)
+    // 440: racejoin's joins with their reach (5-tuples), raceway_join_reach, through lines at a node; race_dig_floor's
+    // round_up_at (the coordinator's range 440-449 for this branch)
+    m.add("VERSION", 440)?;
     Ok(())
 }
