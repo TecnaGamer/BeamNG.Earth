@@ -97,6 +97,9 @@ fn floor_i(v: f64) -> i64 {
 
 /// The heights of points that are all inside the caps (|lat| < from_lat), each call of the Python's sample on them.
 fn sample_box(cfg: &Cfg, lat: &[f64], lon: &[f64], fetch: &Bound<'_, PyAny>, depth: u32) -> PyResult<Vec<f64>> {
+    if lat.is_empty() {
+        return Ok(Vec::new());
+    }
     let py = fetch.py();
     let n: i64 = 1i64 << cfg.zoom;
     let t = cfg.tile;
@@ -217,7 +220,8 @@ fn sample_box(cfg: &Cfg, lat: &[f64], lon: &[f64], fetch: &Bound<'_, PyAny>, dep
     let mut it = arrs.iter();
     let ts: Vec<Option<ArrayView2<'_, f32>>> =
         read.iter().map(|&r| if r { it.next().map(|a| a.as_array()) } else { None }).collect();
-    let out = py.detach(|| bilinear_mosaic(&ts, nxu, tu, ArrayView1::from(&fx[..]), ArrayView1::from(&fy[..])))
+    // (with the GIL held: no Python thread can write a tile while it is read; ~10 us for a call's ~1,000 points)
+    let out = bilinear_mosaic(&ts, nxu, tu, ArrayView1::from(&fx[..]), ArrayView1::from(&fy[..]))
         .map_err(|_| PyValueError::new_err("dem_sample: a pixel outside the tiles read"))?;
     Ok(out.to_vec())
 }
@@ -235,8 +239,12 @@ pub fn dem_sample<'py>(py: Python<'py>, lat: Bound<'py, PyAny>, lon: Bound<'py, 
     if zoom > 30 || !(2..=1 << 20).contains(&tile) || !(1..=1 << 20).contains(&max_tiles) {
         return Err(PyValueError::new_err("dem_sample: zoom up to 30, tiles of 2 to 2^20 pixels, up to 2^20 a box"));
     }
-    let (lat, lon) = (aligned_f64(&lat)?, aligned_f64(&lon)?);
-    let (la, lo) = (lat.as_array(), lon.as_array());
+    // (the coordinates copied out: no borrow of the caller's arrays is held while Python runs a callback)
+    let read = |lat: &Bound<'py, PyAny>, lon: &Bound<'py, PyAny>| -> PyResult<(Vec<f64>, Vec<f64>)> {
+        let (a, b) = (aligned_f64(lat)?, aligned_f64(lon)?);
+        Ok((a.as_array().to_vec(), b.as_array().to_vec()))
+    };
+    let (mut la, mut lo) = read(&lat, &lon)?;
     if la.len() != lo.len() {
         return Err(PyValueError::new_err("dem_sample: lat and lon differ in length"));
     }
@@ -250,6 +258,13 @@ pub fn dem_sample<'py>(py: Python<'py>, lat: Bound<'py, PyAny>, lon: Bound<'py, 
         let plo: Vec<f64> = lo.iter().zip(&valid).filter(|p| !*p.1).map(|p| *p.0).collect();
         let k = pla.len();
         let r = polar.call1((PyArray1::from_vec(py, pla), PyArray1::from_vec(py, plo)))?;
+        if nvalid > 0 {
+            // (the other points read again, as the Python took them after the polar DEM: by the first mask)
+            (la, lo) = read(&lat, &lon)?;
+            if la.len() != valid.len() || lo.len() != valid.len() {
+                return Err(PyValueError::new_err("dem_sample: lat / lon changed length"));
+            }
+        }
         if !r.is_none() {
             let r = aligned_f64(&r)?;
             let rv = r.as_array();
@@ -265,7 +280,9 @@ pub fn dem_sample<'py>(py: Python<'py>, lat: Bound<'py, PyAny>, lon: Bound<'py, 
             }
         }
     }
-    if nvalid > 0 {
+    if nvalid == la.len() && nvalid > 0 {
+        out = sample_box(&cfg, &la, &lo, &fetch, 0)?;
+    } else if nvalid > 0 {
         let vla: Vec<f64> = la.iter().zip(&valid).filter(|p| *p.1).map(|p| *p.0).collect();
         let vlo: Vec<f64> = lo.iter().zip(&valid).filter(|p| *p.1).map(|p| *p.0).collect();
         let sub = sample_box(&cfg, &vla, &vlo, &fetch, 0)?;
