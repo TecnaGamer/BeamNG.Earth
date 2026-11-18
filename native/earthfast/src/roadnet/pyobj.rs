@@ -21,17 +21,19 @@ pub fn items<'py>(col: Option<&Bound<'py, PyAny>>) -> PyResult<Option<Vec<Bound<
     Ok(Some(list.iter().collect()))
 }
 
-/// str(v).
+/// str(v) (an exact str read as it is; a subclass, which may override __str__, through str(): Codex on bc34313f).
 pub fn py_str(v: &Bound<'_, PyAny>) -> PyResult<String> {
-    if let Ok(s) = v.cast::<PyString>() {
+    if let Ok(s) = v.cast_exact::<PyString>() {
         return Ok(s.to_str()?.to_owned());
     }
     Ok(v.str()?.to_str()?.to_owned())
 }
 
-/// float(v): Some(value), None where Python raised TypeError or ValueError (not a number); any other error raised.
+/// float(v): Some(value), None where Python raised TypeError or ValueError (not a number); any other error raised. An
+/// exact float read as it is; anything else, a float subclass too (an overridden __float__, one that raises), through
+/// float() (Codex on bc34313f).
 pub fn py_float(v: &Bound<'_, PyAny>) -> PyResult<Option<f64>> {
-    if let Ok(f) = v.cast::<PyFloat>() {
+    if let Ok(f) = v.cast_exact::<PyFloat>() {
         return Ok(Some(f.value()));
     }
     let py = v.py();
@@ -43,9 +45,9 @@ pub fn py_float(v: &Bound<'_, PyAny>) -> PyResult<Option<f64>> {
     }
 }
 
-/// float(v), every error raised.
+/// float(v), every error raised (an exact float read as it is, anything else through float()).
 pub fn py_float_strict(v: &Bound<'_, PyAny>) -> PyResult<f64> {
-    if let Ok(f) = v.cast::<PyFloat>() {
+    if let Ok(f) = v.cast_exact::<PyFloat>() {
         return Ok(f.value());
     }
     v.py().get_type::<PyFloat>().call1((v,))?.extract::<f64>()

@@ -142,14 +142,15 @@ impl<'py> Cols<'py> {
         }
     }
 
-    /// _col(f, "class", i) in roadlanes.HIGHWAYS.
+    /// _col(f, "class", i) in roadlanes.HIGHWAYS: an exact str compared as it is; anything else asked of a set of the
+    /// two, as Python's `in` asks it (its hash and ==; TypeError for an unhashable value: Codex on bc34313f).
     fn highway(&self, i: usize) -> PyResult<bool> {
         let Some(v) = Self::col(&self.cls, i)? else { return Ok(false) };
-        if let Ok(s) = v.cast::<PyString>() {
+        if let Ok(s) = v.cast_exact::<PyString>() {
             let s = s.to_str()?;
             return Ok(s == "motorway" || s == "trunk");
         }
-        Ok(false)
+        pyo3::types::PySet::new(self.py, ["motorway", "trunk"])?.contains(&v)
     }
 
     /// str(f.attrs["class"][i]).

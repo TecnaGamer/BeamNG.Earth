@@ -23,37 +23,31 @@ fn count(v: &Bound<'_, PyAny>, minimum: f64) -> PyResult<Option<i64>> {
     })
 }
 
-/// A column read as Python's c[i]: a list's or tuple's items, a 1-D numpy array's (tolist: the same values float()
-/// reads, the objects of an object array) for the dtypes whose items float() reads alike, else c[i] asked of it.
+/// A column read as Python's c[i], at the point the Python read it (no snapshot: an element's __float__ or a
+/// subclass's __getitem__ may change what a later read gives, as it did there; Codex on bc34313f): an exact list's or
+/// tuple's item directly (their indexing calls nothing back), c[i] of anything else.
 enum Col<'py> {
-    Items(Vec<Bound<'py, PyAny>>),
+    List(Bound<'py, PyList>),
+    Tuple(Bound<'py, PyTuple>),
     Obj(Bound<'py, PyAny>),
 }
 
 impl<'py> Col<'py> {
     fn new(c: &Bound<'py, PyAny>) -> PyResult<Col<'py>> {
-        if let Ok(l) = c.cast::<PyList>() {
-            return Ok(Col::Items(l.iter().collect()));
+        if let Ok(l) = c.cast_exact::<PyList>() {
+            return Ok(Col::List(l.clone()));
         }
-        if let Ok(t) = c.cast::<PyTuple>() {
-            return Ok(Col::Items(t.iter().collect()));
-        }
-        if let Ok(a) = c.cast::<numpy::PyUntypedArray>() {
-            use numpy::{PyArrayDescrMethods, PyUntypedArrayMethods};
-            let kind = a.dtype().kind() as char;
-            if a.ndim() == 1 && "biufUSO".contains(kind) {
-                let l = c.call_method0("tolist")?;
-                return Ok(Col::Items(l.cast_into::<PyList>()?.iter().collect()));
-            }
+        if let Ok(t) = c.cast_exact::<PyTuple>() {
+            return Ok(Col::Tuple(t.clone()));
         }
         Ok(Col::Obj(c.clone()))
     }
 
     fn get(&self, i: usize) -> PyResult<Bound<'py, PyAny>> {
+        let past = || pyo3::exceptions::PyIndexError::new_err("list index out of range");
         match self {
-            Col::Items(v) => v.get(i).cloned().ok_or_else(|| {
-                pyo3::exceptions::PyIndexError::new_err(format!("index {i} is out of bounds for axis 0"))
-            }),
+            Col::List(l) => if i < l.len() { l.get_item(i) } else { Err(past()) },
+            Col::Tuple(t) => if i < t.len() { t.get_item(i) } else { Err(past()) },
             Col::Obj(c) => c.get_item(i),
         }
     }
@@ -72,6 +66,11 @@ fn cols<'py>(v: Vec<Option<Bound<'py, PyAny>>>) -> PyResult<Vec<Option<Col<'py>>
 pub fn lane_evidence<'py>(py: Python<'py>, n: usize, counts: Vec<Option<Bound<'py, PyAny>>>, gen: Bound<'py, PyAny>,
                           dirs: Vec<Option<Bound<'py, PyAny>>>, parts: Option<Bound<'py, PyAny>>)
                           -> PyResult<Bound<'py, PyArray1<i64>>> {
+    if dirs.len() != 3 {
+        return Err(pyo3::exceptions::PyValueError::new_err(format!(
+            "lane_evidence: three direction columns (lanes:forward, lanes:backward, lanes:both_ways), not {}",
+            dirs.len())));
+    }
     let cs = cols(counts)?;
     let ds = cols(dirs)?;
     let gen = Col::new(&gen)?;
