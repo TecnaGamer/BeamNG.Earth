@@ -3250,7 +3250,7 @@ class _Planner:
                 caps[i] = c if caps[i] is None else np.fmin(caps[i], c)
         corridors = None
         if vsolvemod.CORRIDOR_ROWS_ON:  # (roads side by side at one height: share_corridors' rule, as rows)
-            corridors = corridor_pairs(plans[:n], pspecs)
+            corridors = corridor_pairs(plans[:n], pspecs, ramps=False)
         zs, info = vsolvemod.solve(ground, pspecs, z_before[:n], ceilings, ranks, pins, dips, caps=caps, floors=floors,
                                    corridors=corridors)
         if zs is None:          # (no feasible solve: the passes' heights, as the RFC's fallback; counted in info)
@@ -9152,11 +9152,14 @@ def share_corridors(plans, specs, decks=()):
     return len(idx)
 
 
-def corridor_pairs(plans, specs):
+def corridor_pairs(plans, specs, ramps=True):
     """share_corridors' pairs (above), for the one vertical solve's corridor rows (vsolve.CORRIDOR_ROWS_ON): per
     vertex i of a plan j, each plan k running beside it there (k's nearest segment si at t, the gap between the
     carriageways) of those whose heights may differ (two through roads keep their own: share_corridors' keys), as
-    arrays (j, i, k, si, t, gap, key j, key k: who follows whom, as in the pass); None without the kernel's plan_corridor_pairs (earthfast 472) or with fewer than two
+    arrays (j, i, k, si, t, gap, key j, key k: who follows whom, as in the pass); ramps False: none where k is within
+    CORRIDOR_ABUT_HOLD_M of its own bridge end, as the pass holds j there (the solve's rows: a Fells Point slip road
+    beside a road's ramp onto its bridge followed it up 1 m, under that bridge's deck a cap took it down again 12 m on,
+    and the cells either side of it, a cap in one and not the other, stepped 0.37 m at their seam); None without the kernel's plan_corridor_pairs (earthfast 472) or with fewer than two
     plans in it. plans [(fid, Plan)], specs their Specs. Pure."""
     import fast
     if len(plans) < 2 or getattr(fast, "_ef", None) is None or not hasattr(fast._ef, "plan_corridor_pairs"):
@@ -9172,6 +9175,13 @@ def corridor_pairs(plans, specs):
     j, i, k, si, tt, gap = fast._ef.plan_corridor_pairs(xy, off, wall, rh, key, abut, float(CORRIDOR_ANG_DEG),
                                                         float(CORRIDOR_GAP_M), float(CORRIDOR_ABUT_HOLD_M))
     keep = ~((key[j] >= CORRIDOR_THROUGH) & (key[k] >= CORRIDOR_THROUGH))
+    if not ramps and abut.any() and len(k):
+        lines = [np.asarray(p.xy, np.float64)[:, :2] for p in ps]
+        sa = [np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(q, axis=0).T))] for q in lines]
+        sk = np.array([sa[a][s] + u * (sa[a][s + 1] - sa[a][s]) for a, s, u in
+                       zip(k.tolist(), si.tolist(), tt.tolist())], np.float64)
+        lk = np.array([sa[a][-1] for a in k.tolist()], np.float64)
+        keep &= ~((abut[k, 0] & (sk <= CORRIDOR_ABUT_HOLD_M)) | (abut[k, 1] & (sk >= lk - CORRIDOR_ABUT_HOLD_M)))
     return tuple(np.asarray(a)[keep] for a in (j, i, k, si, tt, gap, key[j], key[k]))
 
 

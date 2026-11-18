@@ -45,6 +45,10 @@ ON = MODE == "on" or SOLO           # (the solve's heights used)
 SHADOW = MODE == "shadow" or ON     # (the solve run, beside the passes or in their place)
 
 JOIN_M = 1.0            # m: a road's end this close to another road's centre line meets it there (grademetrics.JUNCTION_R_M)
+JOIN_END_M = 2.5        # m: an end no road comes within JOIN_M of meets another road's end this close: the same junction,
+                        # drawn a little off (a Fells Point slip road's last vertex 2 m short of its junction in one cell's
+                        # plans, where the next cell's ended on it: held at its profile there, free in the other, a 0.36 m
+                        # seam between them)
 JOIN_DZ_M = 6.0         # m: ends whose profiles differ more meet at no node (two levels, or bad data: grading.JUNCTION_MAX_M)
 SPREAD_M = {"motorway": 120.0, "trunk": 120.0, "primary": 80.0, "secondary": 60.0, "tertiary": 50.0}
 SPREAD_OTHER_M = 40.0   # m over which a forced change spreads (grading.JUNCTION_TAPER_M)
@@ -107,11 +111,13 @@ def _cls(spec):
     return (getattr(spec, "cls", None) or "").removesuffix("_link")
 
 
-def joins(xys, z0, r=JOIN_M, dz=JOIN_DZ_M):
+def joins(xys, z0, r=JOIN_M, dz=JOIN_DZ_M, r_end=None):
     """[(a, ia, b, ib, sj, t)]: plan a's end sample ia (0 or -1) meets plan b at its sample ib (the nearest), at t
-    along its segment sj, each pair of ends once, crossings no nodes. xys: per plan (n, 2); z0: per plan its profile (n,), whose difference over dz says
-    two levels. Pure."""
+    along its segment sj, each pair of ends once, crossings no nodes; an end no line comes within r of, another plan's
+    end within r_end (JOIN_END_M by default; at that end: t 0). xys: per plan (n, 2); z0: per plan its profile (n,), whose difference over dz
+    says two levels. Pure."""
     import grademetrics as gm
+    r_end = JOIN_END_M if r_end is None else r_end
     seg = gm._Segments(xys)
     out, seen = [], set()
     for a, xy in enumerate(xys):
@@ -119,7 +125,16 @@ def joins(xys, z0, r=JOIN_M, dz=JOIN_DZ_M):
             continue
         for ia in (0, len(xy) - 1):
             p = xy[ia]
-            for b, (dist, sj, t) in seg.near(p, r).items():
+            hits = {b: h for b, h in seg.near(p, r).items() if b != a and h[0] <= r}
+            if not hits and r_end > r:
+                for b, (dist, sj, t) in seg.near(p, r_end).items():
+                    q = xys[b]
+                    if b == a or len(q) < 2:
+                        continue
+                    for ib in (0, len(q) - 1):
+                        if float(dnp.hypot(*(q[ib] - p))) <= r_end:
+                            hits[b] = (0.0, ib if ib == 0 else ib - 1, 0.0 if ib == 0 else 1.0)
+            for b, (dist, sj, t) in hits.items():
                 if b == a or dist > r:
                     continue
                 q = xys[b]
@@ -271,6 +286,16 @@ def problem(plans, specs, z0, ceilings, ranks, pins=(), dips=None, grade_rows=Tr
             # (|z_j - target| <= lim, on j alone: d_j >= c - lim, d_j <= c + lim)
             couplings.append((j, i, None, 0, "ge", c - lim, pen))
             couplings.append((j, i, None, 0, "le", c + lim, pen))
+        # (a road the rows move keeps its ends, as share_corridors' spline does, softly: lifted 1 m beside a road
+        # climbing to its bridge, a Fells Point slip road's smoothed correction ran on down to its free end, and took
+        # the junction there 1.3 m under its profile in the cell that owns it, where the next cell held that end at its
+        # profile: a 0.36 m seam between them)
+        for j in sorted({int(j_[r]) for r in rows}):
+            for e in (0, len(z0[j]) - 1):
+                if chains[j]["lo"][e] != chains[j]["hi"][e]:
+                    pen = CORRIDOR_PENALTY * stiff[j]
+                    couplings.append((j, e, None, 0, "ge", 0.0, pen))
+                    couplings.append((j, e, None, 0, "le", 0.0, pen))
     return chains, couplings, n_joins
 
 

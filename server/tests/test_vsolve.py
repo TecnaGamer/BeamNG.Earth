@@ -162,6 +162,20 @@ class JoinTest(unittest.TestCase):
         self.assertEqual(len(vsolve.joins([a, b], [np.zeros(len(S)), np.zeros(len(S))])), 1)
         self.assertEqual(vsolve.joins([a, b], [np.zeros(len(S)), np.full(len(S), 8.0)]), [])
 
+    def test_an_end_a_little_off_another_end_meets_it(self):
+        # (a road's last vertex drawn 2 m short of its junction, in one cell's plans and not the next's)
+        a = np.c_[S, np.zeros_like(S)]
+        b = np.c_[np.full(len(S), 202.0), S + 0.5]          # (starts 2 m past a's end, beside it)
+        got = vsolve.joins([a, b], [np.zeros(len(S)), np.zeros(len(S))])
+        self.assertEqual(len(got), 1)
+        self.assertEqual({(g[0], g[1] % len(S), g[2], g[3]) for g in got} & {(0, len(S) - 1, 1, 0), (1, 0, 0, len(S) - 1)},
+                         {(g[0], g[1] % len(S), g[2], g[3]) for g in got})
+
+    def test_an_end_a_little_off_a_road_between_its_ends_meets_none(self):
+        a = np.c_[S, np.zeros_like(S)]
+        b = np.c_[np.full(len(S), 100.0), S + 2.0]          # (2 m off a's middle: no end there, no junction)
+        self.assertEqual(vsolve.joins([a, b], [np.zeros(len(S)), np.zeros(len(S))]), [])
+
 
 if __name__ == "__main__":
     unittest.main()
@@ -243,6 +257,19 @@ class CorridorTest(unittest.TestCase):
         diff = np.abs(zs[1] - zs[0])
         self.assertLess(float(diff[45:56].max()), 0.4 + 0.05, info)            # (the bank the gap holds)
         self.assertLess(float(zs[1][50]), -1.0)
+        self.assertLess(abs(float(zs[1][0])), 0.02)                             # (its ends kept, as the pass's)
+        self.assertLess(abs(float(zs[1][-1])), 0.02)
+
+    def test_no_road_follows_another_up_its_ramp_onto_its_bridge(self):
+        plans, specs, _dips = self.roads()
+        plans[0].abut = (False, True)                       # (the primary goes onto a bridge at its end)
+        names = [("a", plans[0]), ("b", plans[1])]
+        every = grading.corridor_pairs(names, specs)
+        solve = grading.corridor_pairs(names, specs, ramps=False)
+        near = lambda pr: int(((pr[2] == 0) & (pr[1] >= len(S) - 10)).sum())  # noqa: E731
+        self.assertGreater(near(every), 0)
+        self.assertEqual(near(solve), 0)
+        self.assertGreater(len(solve[0]), 0)                                    # (beside the rest of it)
 
     def test_without_rows_it_stays_on_its_profile(self):
         plans, specs, dips = self.roads()

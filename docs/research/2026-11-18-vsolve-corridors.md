@@ -73,17 +73,69 @@ Solo mode (on mode in brackets where it differs), without the rows / two-sided /
   - Tokyo's worst seam in solo mode drops from 0.57 to 0.21 m.
 - **What they cost:** Athens' ground p95 rises by 0.11 m in solo mode and 0.09 m in on mode (against 0.62 m with the
   two-sided rows), and a few more roads are made steep (+1 to +9 per place).
-- **Still open:**
-  - The Fells Point seam (0.36 m at 39.26644, −76.59668, slip road `b5749112…`, between cells 14/4706/6245 and
-    14/4705/6245) was already there with the two-sided rows (0.31 m). Both cells give the slip road the same band, toward
-    `44168e28…`'s rule height 4.69 m. In 4706 it goes down from 5.40 to 5.30 m. In 4705, where its far end is not pinned,
-    something else lifts it to 5.66 m and the soft row loses. That is the cells' asymmetry again (Tokyo's seam, below),
-    not the rows' rule.
-  - The rows hold a road near its neighbour's rule height, so they leave a step wherever the solve moves the
-    neighbour itself (a junction, a grade row). That is the likely source of the steps they leave; not yet checked
-    one by one.
+- **Still open:** the rows hold a road near its neighbour's rule height, so they leave a step wherever the solve
+  moves the neighbour itself (a junction, a grade row). That is the likely source of the steps they leave; not yet
+  checked one by one.
+
+The table above is before the three fixes of the next section. Fells Point's 0.36 m seam came with the rows.
 
 So the rows are on wherever the solve runs. `BNE_VSOLVE` itself is still off by default.
+
+## Fells Point's seam: three fixes
+
+With the rows, Fells Point had a 0.36 m seam (39.26644, −76.59668), on slip road `b5749112…` between cells
+14/4706/6245 and 14/4705/6245. The two cells give it the same bands. Three things made them solve it apart, each fixed
+in the solve alone:
+
+- **The neighbour's ramp onto its bridge.** The slip road gives way to `44168e28…`, which climbs to its bridge's
+  abutment. The rows lifted the slip road up to 1 m along that ramp. 12 m on, the slip road passes under the deck, and
+  a cap there held it down. Only one of the two cells had that cap: its vertex sat 0.15 m on the other side of the
+  cap's own edge, because the cells draw the road's last 12 vertices up to 2 m apart (below). Following a road up its
+  ramp onto its bridge makes no sense: the ramp is that deck's approach, not ground both roads share. The pass already
+  holds a road near its own bridge ends (`CORRIDOR_ABUT_HOLD_M`, 25 m). For the solve, `corridor_pairs(...,
+  ramps=False)` now also leaves out the pairs within 25 m of the neighbour's bridge end. The measure still counts
+  every pair. **This fix takes the seam from 0.37 to 0.02 m.**
+- **A road the rows move keeps its ends.** The slip road's correction ran on, smoothed, down to its free end. In the
+  cell that owns that end, it took the junction there 1.3 m under its profile, while the other cell held the same end
+  at its profile. `share_corridors`' spline keeps a road's ends fixed. The solve now keeps the ends of a road the rows
+  move, as soft rows with the rows' penalty. The junction is at 3.97 m in both cells.
+- **An end a little off another end.** The cells draw the slip road's last vertices from the roads each has: in one,
+  it ends on its junction; in the other (which lacks the third road there), 2 m short. So the solve tied it to the
+  junction in one cell, and in the other held it at its profile as a cut end. An end that no road comes within
+  `JOIN_M` (1 m) of now meets another road's end within `JOIN_END_M` (2.5 m) (`vsolve.joins`). An end 2 m from the
+  middle of a road still meets none. In solo mode, this also takes away the step of
+  `test_grading.UnderpassTest.test_a_road_ending_short_of_the_junction_dips_with_it`'s bug case by itself. That test
+  turns it off to show the bug.
+
+The drawing difference itself is upstream of the solve (each cell places its roads from its own features), and is not
+changed here.
+
+## The 8 places with the rows
+
+Code with the one-sided rows and the three fixes, `--tiles 1`. Each cell is: passes / on / solo. In brackets: on /
+solo without the rows (the last table of this note).
+
+| place | junction ≥ 30 cm | worst seam (m) | made steep | ground p95 (m) | corridor ≥ 30 cm |
+|---|---|---|---|---|---|
+| Fells Point | 28 / 0 / 0 | 0.13 / 0.02 / 0.02 | 12 / 6 / 6 | 0.24 / 0.22 / 0.22 | 13 / **13** / 26 (129 / 80) |
+| Lauterbrunnen | 3 / 0 / 0 | 0.24 / 0.03 / 0.03 | 37 / 32 / 32 | 0.49 / 0.47 / 0.48 | 0 / 0 / 0 |
+| Amsterdam | 5 / 5 / 5 | 0.05 / 0.02 / 0.02 | 3 / 1 / 1 | 0.16 / 0.17 / 0.18 | 2 / 2 / 2 |
+| Lagos Island | 6 / 0 / 0 | 0.14 / 0.06 / 0.06 | 25 / 15 / 15 | 0.37 / 0.37 / 0.37 | 178 / 254 / 260 (728 / 810) |
+| Tokyo Shibuya | 66 / 8 / 8 | 0.63 / 0.21 / **0.21** | 156 / 89 / 91 | 0.29 / 0.29 / 0.29 | 507 / 907 / 1054 (2171 / 2123) |
+| Punjab farmland | 0 / 0 / 0 | 0.05 / 0.01 / 0.01 | 0 / 0 / 0 | 0.22 / 0.21 / 0.21 | 0 / 0 / 0 |
+| Rio Botafogo | 58 / 1 / 1 | 1.42 / 0.55 / 0.55 | 260 / 223 / 224 | 1.15 / 1.13 / 1.13 | 171 / 182 / 191 (524 / 523) |
+| Athens Omonia | 31 / 1 / 1 | 0.17 / 0.05 / 0.05 | 86 / 28 / 29 | 1.32 / 1.52 / 1.71 | 998 / 998 / 1087 (1908 / 1859) |
+| **total** | **197 / 15 / 15** | seams ≥ 30 cm: **10 / 1 / 1** | **579 / 394 / 398** | | **1869 / 2356 / 2620** (5462 / 5397) |
+
+- **Better than the passes:**
+  - junction steps: 197 → 15;
+  - seams ≥ 30 cm: 10 → 1. The one left is Rio's 0.55 m, where the passes leave 1.42 m;
+  - roads made steep: 579 → 394.
+- **Roads through decks:** 16 in on mode and in solo, against the passes' 17. Rio's street is under its deck in solo
+  mode again.
+- **Close to the passes:** steps between roads side by side, 1869 → 2356 (on) or 2620 (solo); without the rows, 5462.
+- **What the rows cost against no rows:** 26 more roads made steep over the 8 places (368 → 394 in on mode).
+  Athens' ground p95 rises 1.42 → 1.52 m in on mode and 1.58 → 1.71 m in solo; the passes give 1.32 m.
 
 ## Rio
 
@@ -164,4 +216,5 @@ With the rows on (four places measured), the corridor steps there are 36 / 195 /
 
 The data is in `2026-11-18-vsolve-corridors.json`: `shadow` (the passes, with the shadow solve under `vsolve`),
 `on`, `solo` (these three without the rows), `solo_corridor_rows` (Rio, Tokyo, Fells Point and Athens with the
-two-sided rows), and `solo_one_sided` and `on_one_sided` (the same four places with the one-sided rows).
+two-sided rows), `solo_one_sided` and `on_one_sided` (the same four places with the one-sided rows, before the
+three fixes), and `on_rows` and `solo_rows` (the 8 places with the rows and the three fixes).
