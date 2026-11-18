@@ -434,7 +434,7 @@ class RoadWidths:
             seg = dnp.hypot(np.diff(ll[:, 1]) * 111320.0, np.diff(ll[:, 0]) * 111320.0 * dnp.cos(np.radians(ll[:-1, 1])))
             s = np.r_[0.0, np.cumsum(seg)]
             t = np.r_[np.arange(0.0, s[-1], NEAR_STEP_M), s[-1]] if s[-1] > 0 else np.zeros(1)
-            lat, lon = np.interp(t, s, ll[:, 1]), np.interp(t, s, ll[:, 0])
+            lat, lon = dnp.interp(t, s, ll[:, 1]), dnp.interp(t, s, ll[:, 0])
             dlat = (NEAR_M + NEAR_STEP_M / 2) / 111320.0
             dlon = dlat / max(0.05, float(dnp.cos(np.radians(np.mean(lat)))))
             keys = sorted(mapcells.cells_near_points(lat, lon, dlat, dlon), key=str)

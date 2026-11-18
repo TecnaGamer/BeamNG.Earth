@@ -99,89 +99,26 @@ def split(f, frame=None, context=None):
     jobs = fast._ef.lane_split_jobs(*_cols(f), f, context, _joint_specs, lambda i, end: _structure_mouth(f, i, end))
     if jobs is None:
         return f
+    out = _new_layer(f, jobs)
+    return out.localize(frame) if frame is not None else out
+
+
+def _new_layer(f, jobs):
+    """The new layer of split's jobs (earthfast roadnet::splitlayer): each job a copy of its feature, or its section's
+    (or moved mouth's) line, with its columns (the section's profile, count and lane tags; every road with its road's
+    most lanes before the split clears its lane parts, LANE_MAX; the lane tag columns as objects: a section's tag strings
+    may be longer than its road's) and its rule rows (the sections' cut points' connectors after each job's own). Join
+    versions are retained; geometry / specification memos intentionally are not."""
     import roads
-    old = np.array([r[1] for r in jobs], np.int64)
-    attrs = {k: np.asarray(v)[old].copy() for k, v in f.attrs.items()}
-    attrs[PROFILE] = np.full(len(jobs), None, object)
-    # (each section, and every road kept whole, with its road's most lanes before the split clears its lane parts)
-    attrs[LANE_MAX] = np.ascontiguousarray(roads._lane_evidence(f)[old], np.int64)
-    # Object columns permit new tag strings longer than the dominant source's string.
-    for key in railtags.LANE_COLUMNS:
-        attrs[railtags.lane_attr(key)] = np.asarray(attrs.get(railtags.lane_attr(key), [None] * len(jobs)), object)
-    attrs["src_record"] = np.asarray(attrs.get("src_record", [""] * len(jobs)), object)
-    attrs["osm_lanes"] = np.asarray(attrs.get("osm_lanes", [np.nan] * len(jobs)), np.float64)
-    attrs[railtags.LANE_PARTS] = np.asarray(attrs.get(railtags.LANE_PARTS, [None] * len(jobs)), object)
-    # the new layer's geometry and rule rows gathered natively (lanesections.rs, kernel 235): each job a copy of its
-    # feature, or of its section's (or moved mouth's) line, and the rows over it
-    fast.require(235, "lane_split_coords")
-    moved = np.array([r[4] is not None for r in jobs], bool)
-    lines = [np.asarray(r[4], np.float64).reshape(-1, 2) for r in jobs if r[4] is not None]
-    p_off = np.r_[0, np.cumsum([len(r[4]) if r[4] is not None else 0 for r in jobs])].astype(np.int64)
-    po, ro, co, coords = fast._ef.lane_split_coords(
-        np.ascontiguousarray(f.part_off, np.int64), np.ascontiguousarray(f.ring_off, np.int64),
-        np.ascontiguousarray(f.coord_off, np.int64), np.ascontiguousarray(f.lonlat, np.float64).reshape(-1, 2), old,
-        moved, np.ascontiguousarray(np.concatenate(lines) if lines else np.zeros((0, 2)), np.float64), p_off)
-    if not len(coords):
-        coords = np.zeros(0, np.float64)
-    ja = np.array([r[2] for r in jobs], np.float64)
-    jb = np.array([r[3] for r in jobs], np.float64)
-    extra = []                                      # (job, connector id, at) of the sections' cut points
-    for z, (_fid, i, a, b, p, tags, n, prof) in enumerate(jobs):
-        if prof is None:
-            continue
-        for at, value in ((a, 0.), (b, 1.)):
-            if 0. < at < 1.:
-                extra.append((z, f"lane:{f.ids[i]}:{round(at * 1e9)}", value))
-        attrs[PROFILE][z] = prof
-        attrs["osm_lanes"][z] = n
-        # Preserve the section's tags, rather than repeating the dominant way's turn arrows.
-        for key in railtags.LANE_COLUMNS:
-            attrs[railtags.lane_attr(key)][z] = tags.get(key)
-        attrs[railtags.lane_attr("lanes")][z] = n
-        if railtags.lane_attr("placement") in attrs:
-            attrs[railtags.lane_attr("placement")][z] = None     # (in its line: prof["end_off"])
-        attrs[railtags.LANE_PARTS][z] = None
-    tables = {}
-    for name in list(f.rules) + ([] if "connectors" in f.rules else ["connectors"]):
-        table = f.rules.get(name)
-        if table is not None and len(table):
-            rows, zs, us, vs = fast._ef.lane_split_rules(
-                np.ascontiguousarray(table.feature, np.int64), np.ascontiguousarray(table.start, np.float64),
-                np.ascontiguousarray(table.end, np.float64), old, ja, jb)
-            values = np.asarray(table.value)[rows]
-        else:
-            rows = zs = np.zeros(0, np.int64)
-            us = vs = np.zeros(0)
-            values = None
-        if name == "connectors":
-            if extra:           # (after each job's own rows, in job order)
-                ez = np.array([e[0] for e in extra], np.int64)
-                order = np.lexsort((np.r_[np.arange(len(zs)), np.arange(len(ez))],
-                                    np.r_[np.zeros(len(zs), np.int64), np.ones(len(ez), np.int64)], np.r_[zs, ez]))
-                vals = np.empty(len(zs) + len(ez), object)
-                if len(zs):
-                    vals[:len(zs)] = list(values)
-                vals[len(zs):] = [e[1] for e in extra]
-                zs = np.r_[zs, ez][order]
-                us = np.r_[us, [e[2] for e in extra]][order]
-                vs = np.r_[vs, [e[2] for e in extra]][order]
-                values = vals[order]
-            if len(zs):
-                values = np.array(list(values), dtype=str)
-        if not len(zs):
-            tables[name] = f.rules[name] if name in f.rules and not len(f.rules[name]) else mapgeom.RuleTable(
-                np.zeros(0, np.int32), np.zeros(0, str), np.zeros(0), np.zeros(0))
-            continue
-        tables[name] = mapgeom.RuleTable(zs.astype(np.int32), values, np.asarray(us, np.float64),
-                                        np.asarray(vs, np.float64))
-    out = mapgeom.Features(f.layer, np.array([r[0] for r in jobs]), f.kind[old], po, ro, co, coords,
-                           own=None if f.own is None else f.own[old],
-                           clipped=None if f.clipped is None else f.clipped[old], attrs=attrs, rules=tables)
-    # Join versions are retained; geometry/specification memos intentionally are not.
+    fast.require(403, "lane_split_layer")
+    out = fast._ef.lane_split_layer(
+        f, jobs, lambda: roads._lane_evidence(f), PROFILE, LANE_MAX,
+        [(k, railtags.lane_attr(k)) for k in railtags.LANE_COLUMNS], railtags.lane_attr("lanes"),
+        railtags.lane_attr("placement"), railtags.LANE_PARTS, mapgeom.Features, mapgeom.RuleTable)
     for key in ("_lanes_built", "_rails_built"):
         if key in f.__dict__:
             out.__dict__[key] = f.__dict__[key]
-    return out.localize(frame) if frame is not None else out
+    return out
 
 
 def profile(f, i):
@@ -246,7 +183,7 @@ def growth(prof, lon, lat):
     # (the line's own metres to its source stations: geodesic, the same within millimetres)
     s = np.asarray(prof["stations"], np.float64)
     arc = np.r_[0., np.cumsum(dnp.hypot(*np.diff(line, axis=0).T))]
-    at = np.interp(at, arc, s)
+    at = dnp.interp(at, arc, s)
     return _ease(at, prof["length"], prof["reach"], prof["ends"]).reshape(np.shape(lon))
 
 

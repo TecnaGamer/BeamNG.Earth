@@ -695,6 +695,15 @@ def probe(server, cache, lat, lon, R, checks, entrance, offline=False):
         if want("missing"):
             res["missing_deck"] = sorted(missing, key=lambda r: (-r[0], r[3], r[4]))
 
+    # ---- ride (opt-in: --checks ride): the height profile a car drives along fast carriageways, ground and decks
+    # chained, and the clearances round them (bridge clearance study 2026-11-17)
+    if checks is not None and "ride" in checks:
+        try:
+            res["ride"] = ride_check(np, roads, gradingmod, blockworker, s, frame, ground, deck_list, deck_ends, R,
+                                     ll, inside, to_ll, elev_xy, arc, at, crossings)
+        except Exception as ex:
+            errors.append(f"ride: {type(ex).__name__}: {ex}")
+
     # ---- racetracks (road revamp R1k: the track surface wins)
     if want("track"):
         try:
@@ -737,6 +746,231 @@ def probe(server, cache, lat, lon, R, checks, entrance, offline=False):
             blockworker.init = orig
     res["summary"] = summarise(res)
     return res
+
+
+RIDE_V = {"motorway": 36.0, "trunk": 28.0, "primary": 25.0}    # m/s a car drives each class at (130, 100, 90 km/h)
+RIDE_JOIN_M = 6.0           # m: piece ends this near, heading on (RIDE_JOIN_COS), are one carriageway
+RIDE_JOIN_COS = math.cos(math.radians(40.0))
+RIDE_H = (10, 5)            # m: half chords of the vertical acceleration (the first: a launch's, the second: a jolt's)
+RIDE_EVENT_G = 0.3          # g: |vertical acceleration| reported as an event
+RIDE_LAUNCH_G = 0.5         # g over a crest: a launch (defect) ...
+RIDE_AIR_G = 1.0            # ... and the wheels leave the road at the class's speed (blocker)
+RIDE_MERGE_M = 40.0         # m: events nearer than this are one
+RIDE_UNDER_M = 60.0         # m from a deck crossing over the road: an event "under" an overpass
+RIDE_END_M = 15.0           # m from a deck end: an event at a deck end
+
+
+def ride_check(np, roads, gradingmod, blockworker, s, frame, ground, deck_list, deck_ends, R, ll, inside, to_ll,
+               elev_xy, arc, at, crossings):
+    """The ride along fast carriageways (RIDE_V's classes, links left out): ground pieces on the graded physics ground,
+    deck pieces on their profiles, chained end to end; the vertical acceleration of a car at the class's speed over
+    20 m and 10 m chords (+ a crest, - a sag), the 10 m grade, the graded ground vs the bare elevation (dig < 0, lift
+    > 0; on lidar the bare elevation is the real road), and the clearance of every deck over / under them. Pure given
+    the state."""
+    def raw_xy(xy):
+        la, lo = to_ll(xy)
+        z = blockworker.ground(frame, la, lo, s.dem.sample(la, lo, 15))
+        return np.asarray(frame.geodetic_to_enu(la, lo, np.asarray(z, np.float64))[2], np.float64)
+    def rcls(spec, cls):    # (a link's class "<cls>_link": RoadSpec.cls is its road's)
+        return None if cls is None else (cls + "_link" if getattr(spec, "link", False) else cls)
+    pieces = []         # (kind, fid, cls, xy, deck (s, z) or None)
+    for gid, sub, gcls, gspec, gl in ground:
+        if sub == "road" and rcls(gspec, gcls) in RIDE_V and len(gl) >= 2 and arc(gl)[-1] > 1.0:
+            pieces.append(("g", gid, gcls, gl, None))
+    for fid, xy, z, spec, s_ in deck_list:
+        cls = rcls(spec, getattr(spec, "cls", None))
+        if cls in RIDE_V and s_[-1] > 1.0:
+            pieces.append(("d", fid, cls, xy, (s_, z)))
+
+    def end_dir(xy, e):     # (end point, unit direction out of the piece there)
+        sa = arc(xy)
+        if e == 0:
+            p, q = xy[0], at(xy, sa, np.array([min(5.0, sa[-1])]))[0]
+        else:
+            p, q = xy[-1], at(xy, sa, np.array([max(0.0, sa[-1] - 5.0)]))[0]
+        u = p - q
+        return p, u / max(1e-9, float(np.hypot(*u)))
+    ends = [[end_dir(pc[3], e) for e in (0, 1)] for pc in pieces]
+    best = {}
+    for i, pc in enumerate(pieces):
+        for e in (0, 1):
+            p, u = ends[i][e]
+            cand = None
+            for j, pj in enumerate(pieces):
+                if j == i or pj[2] != pc[2]:
+                    continue
+                for f in (0, 1):
+                    q, w = ends[j][f]
+                    d = float(np.hypot(*(q - p)))
+                    if d >= RIDE_JOIN_M or float(np.dot(u, -w)) < RIDE_JOIN_COS:
+                        continue
+                    if cand is None or (d, j, f) < cand[0]:
+                        cand = ((d, j, f), (j, f))
+            if cand is not None:
+                best[(i, e)] = cand[1]
+    link = {k: v for k, v in best.items() if best.get(v) == k}
+    used, chains = set(), []
+    order = sorted(range(len(pieces)), key=lambda i: ((i, 0) in link and (i, 1) in link, pieces[i][1],
+                                                      round(float(pieces[i][3][0, 0]), 2),
+                                                      round(float(pieces[i][3][0, 1]), 2)))
+    for i0 in order:
+        if i0 in used:
+            continue
+        e_in = 0 if (i0, 0) not in link else (1 if (i0, 1) not in link else 0)
+        seq, i, e = [], i0, e_in
+        while i not in used:
+            used.add(i)
+            seq.append((i, e != 0))     # (entered at its end e: reversed when e = 1)
+            nxt = link.get((i, 1 - e))
+            if nxt is None:
+                break
+            i, e = nxt
+        chains.append(seq)
+    dends = np.asarray(deck_ends, np.float64).reshape(-1, 2)
+    # (deck crossings over fast ground pieces, and fast decks over any ground line)
+    under_rows, over_rows, xpts = [], [], []
+    for fid, xy, z, spec, s_ in deck_list:
+        depth = float(roads.deck_depth(roads.geom_span([xy])))
+        dcls = rcls(spec, getattr(spec, "cls", None))
+        for gid, sub, gcls, gspec, gl in ground:
+            if gid == fid:
+                continue
+            gcls = rcls(gspec, gcls) if sub == "road" else gcls
+            fast_under = sub == "road" and gcls in RIDE_V
+            if not fast_under and dcls not in RIDE_V:
+                continue
+            for a_, _b, pt in crossings(xy, gl):
+                if a_ < 8.0 or a_ > s_[-1] - 8.0:
+                    continue
+                if fast_under:
+                    xpts.append(pt)
+                if not inside(pt):
+                    continue
+                top = float(np.interp(a_, s_, z)) - float(elev_xy(np.asarray(pt))[0])
+                row = [round(top - depth, 2), round(top, 2), round(depth, 2), gcls, dcls, fid, gid, ll(pt)]
+                (under_rows if fast_under else over_rows).append(row)
+    xpts = np.asarray(xpts, np.float64).reshape(-1, 2)
+    events, jolts, chain_rows, devs, gl_m, dig1_m, humps = [], [], [], [], 0.0, 0.0, []
+    for seq in chains:
+        P, Z, K, D = [], [], [], []
+        for i, rev in seq:
+            kind, fid, cls, xy, dk = pieces[i]
+            sa = arc(xy)
+            t = np.arange(0.0, sa[-1] + 1e-9, 1.0)
+            if t[-1] < sa[-1] - 1e-6:
+                t = np.r_[t, sa[-1]]
+            if rev:
+                t = sa[-1] - t
+            p = at(xy, sa, t)
+            if kind == "d":
+                z = np.interp(t, dk[0], dk[1])
+                dig = np.full(len(t), np.nan)
+            else:
+                z = elev_xy(p)
+                dig = z - gradingmod.ROAD_LIFT - raw_xy(p)
+            if P:
+                last, prev = P[-1][-1], P[-1][-2] if len(P[-1]) > 1 else P[-1][-1]
+                u = last - prev
+                u = u / max(1e-9, float(np.hypot(*u)))
+                ahead = ((p - last) @ u) > 0.5
+                p, z, dig = p[ahead], z[ahead], dig[ahead]
+                if not len(p):
+                    continue
+            P.append(p)
+            Z.append(z)
+            K.append(np.full(len(p), kind == "d"))
+            D.append(dig)
+        if not P:
+            continue
+        P, Z, K, D = np.vstack(P), np.concatenate(Z), np.concatenate(K), np.concatenate(D)
+        sP = arc(P)
+        if sP[-1] < 40.0:
+            continue
+        cls = pieces[seq[0][0]][2]
+        v = RIDE_V[cls]
+        t = np.arange(0.0, sP[-1] + 1e-9, 1.0)
+        p = at(P, sP, t)
+        z = np.interp(t, sP, Z)
+        kd = np.interp(t, sP, K.astype(np.float64)) > 0.5
+        dg = np.interp(t, sP, np.nan_to_num(D, nan=0.0))
+        dgv = np.interp(t, sP, np.isfinite(D).astype(np.float64)) > 0.99
+        ins = np.hypot(*p.T) <= R
+        de = (np.min(np.hypot(*(p[:, None, :] - dends[None]).transpose(2, 0, 1)), axis=1)
+              if len(dends) else np.full(len(p), 1e9))
+        dx = (np.min(np.hypot(*(p[:, None, :] - xpts[None]).transpose(2, 0, 1)), axis=1)
+              if len(xpts) else np.full(len(p), 1e9))
+        lifts = []
+        for h in RIDE_H:
+            lg = np.zeros(len(z))
+            if len(z) > 2 * h:
+                lg[h:-h] = v * v * (2.0 * z[h:-h] - z[:-2 * h] - z[2 * h:]) / (h * h) / 9.81
+            lifts.append(lg)
+        gr = np.zeros(len(z))
+        if len(z) > 10:
+            gr[5:-5] = np.abs(z[10:] - z[:-10]) / 10.0
+        far = (t >= 12.0) & (t <= t[-1] - 12.0) & ins
+
+        def event(k):
+            lo_, hi_ = max(0, k - 60), min(len(z), k + 61)
+            dd = dg[lo_:hi_][dgv[lo_:hi_]]
+            where = "deck" if kd[k] else ("end" if de[k] < RIDE_END_M else "ground")
+            return [round(float(lifts[0][k]), 2), round(float(lifts[1][k]), 2),
+                    where, bool(dx[k] < RIDE_UNDER_M), round(float(dd[np.argmax(np.abs(dd))]), 2) if len(dd)
+                    else None, round(float(z[lo_:hi_].max() - z[lo_:hi_].min()), 2),
+                    round(100 * float(gr[k]), 1), cls, ll(p[k])]
+        # (each chord's crests and its sags found apart, each merged only with its own kind within RIDE_MERGE_M: a
+        # crest next to a deeper sag is its own event. The 20 m chord's are the events (launch / airborne / sag); the
+        # 10 m chord's, a short jolt the 20 m chord averages away, are listed as jolts)
+        for c, out_ in ((0, events), (1, jolts)):
+            for sign in (1.0, -1.0):
+                val = sign * lifts[c]
+                cand = np.flatnonzero(far & (val >= RIDE_EVENT_G))
+                cand = cand[np.argsort(-val[cand], kind="stable")]
+                taken = []
+                for k in cand:
+                    if any(abs(t[k] - t[q]) < RIDE_MERGE_M for q in taken):
+                        continue
+                    taken.append(int(k))
+                    out_.append(event(int(k)))
+        dump = os.environ.get("RIDE_DUMP")      # (debug, "lat,lon,r,file": the chains passing there, sample by sample)
+        if dump:
+            q_la, q_lo, q_r, q_file = dump.split(",")
+            pla, plo = to_ll(p)
+            near = np.flatnonzero(np.hypot((pla - float(q_la)) * 111320.0, (plo - float(q_lo)) * 111320.0
+                                           * math.cos(math.radians(float(q_la)))) <= float(q_r))
+            if len(near):
+                rng = list(range(max(0, near[0] - 150), min(len(t), near[-1] + 150)))
+                rawd, gd = raw_xy(p[rng]), elev_xy(p[rng])
+                with open(q_file, "a") as df:
+                    df.write(f"# chain {cls} len {t[-1]:.0f}\n")
+                    for q, k in enumerate(rng):
+                        df.write(f"{t[k]:.0f} {pla[k]:.6f} {plo[k]:.6f} z={z[k]:.2f} raw={rawd[q]:.2f} graded={gd[q]:.2f} "
+                                 f"dig={dg[k] if dgv[k] else float('nan'):.2f} deck={int(kd[k])} "
+                                 f"lift10={lifts[0][k]:.2f} lift5={lifts[1][k]:.2f} gr={gr[k]:.3f}\n")
+        gm = far & dgv & ~kd & (de > 30.0) & (dx > 30.0)      # (ground away from decks: the bare elevation is the road)
+        gl_m += float(gm.sum())
+        dig1_m += float((np.abs(dg[gm]) > 1.0).sum())
+        devs.extend(np.abs(dg[gm]).tolist())
+        chain_rows.append([round(float(t[-1])), int(ins.sum()), cls, round(100 * float(gr[far].max()), 1) if far.any()
+                           else 0.0, round(float(lifts[0][far].max()), 2) if far.any() else 0.0,
+                           round(float(lifts[0][far].min()), 2) if far.any() else 0.0, ll(p[len(p) // 2])])
+    for fid, xy, z, spec, s_ in deck_list:
+        cls = rcls(spec, getattr(spec, "cls", None))
+        if cls not in RIDE_V or s_[-1] < 20.0 or not inside(xy[len(xy) // 2]):
+            continue
+        line = z[0] + (z[-1] - z[0]) * s_ / s_[-1]
+        k = int(np.argmax(z - line))
+        humps.append([round(float(z[k] - line[k]), 2), round(float(s_[-1])), cls, fid, ll(xy[k])])
+    devs = np.asarray(devs, np.float64)
+    return {"events": sorted(events, key=lambda r: (-abs(r[0]), r[8])),
+            "jolts": sorted(jolts, key=lambda r: (-abs(r[1]), r[8])),
+            "chains": sorted(chain_rows, key=lambda r: (-r[0], r[6])),
+            "under": sorted(under_rows, key=lambda r: (r[0], r[5], r[7])),
+            "over": sorted(over_rows, key=lambda r: (r[0], r[5], r[7])),
+            "humps": sorted(humps, key=lambda r: (-r[0], r[3], r[4])),
+            "ground_m": int(round(gl_m)), "dig1_m": int(round(dig1_m)),
+            "dev_mean": round(float(devs.mean()), 3) if len(devs) else None,
+            "dev_p95": round(float(np.percentile(devs, 95)), 2) if len(devs) else None}
 
 
 TRACK_DZ_M = 0.05           # m the drawn track may leave its own smoothed surface (nothing else grades it)
@@ -827,10 +1061,18 @@ def track_check(np, roads, gradingmod, blockworker, s, g, frame, flist, ground, 
         b2 = np.asarray(g.deck_ground(la, lo, base), np.float64) if hasattr(g, "deck_ground") else base
         ref = b2.copy()
         on = np.zeros(len(la), bool)    # (on the drawn band: the planners' own raceway lines, as placed and rounded)
+        import inspect
+        import racedig as racedigmod
+        # (BNE_RACEWAY_DIG in a checkout that has it: the raceways laid by their dominance where they meet, as apply)
+        joined = getattr(racedigmod, "ON", False) and "layered" in inspect.signature(
+            type(g.store.planners_of(la[:1], lo[:1])[0][0])._raceway_ground).parameters
         for pl, idx in g.store.planners_of(la, lo):
             idx = np.arange(len(la)) if idx is None else idx
             pe, pn, _ = pl.frame.geodetic_to_enu(la[idx], lo[idx], 0.0)
-            ref[idx] = pl._raceway_ground(np.asarray(pe), np.asarray(pn), b2[idx])
+            if joined:
+                ref[idx] = pl._raceway_ground(np.asarray(pe), np.asarray(pn), b2[idx], layered=True)[0]
+            else:
+                ref[idx] = pl._raceway_ground(np.asarray(pe), np.asarray(pn), b2[idx])
             m = pl._on_kept(np.asarray(pe, np.float64), np.asarray(pn, np.float64))
             if m is not None:
                 on[idx] = m
@@ -955,6 +1197,21 @@ def summarise(res):
         dfc = sum(len(t.get(k, [])) for k in ("blocked", "left_out", "portal_open", "portal_deep", "mouth_step", "opened",
                                                "joint_step", "steep", "thin", "breaks_upper", "gap", "proud", "bare"))
         out["tunnels"] = {"blocker": blk, "defect": dfc, "parts": t.get("parts"), "built": t.get("built")}
+    if "ride" in res:
+        r = res["ride"]
+        ev, un = r["events"], r["under"]
+        out["ride"] = {"blocker": sum(1 for e in ev if e[0] >= RIDE_AIR_G),
+                       "defect": sum(1 for e in ev if e[0] >= RIDE_LAUNCH_G or e[0] <= -RIDE_LAUNCH_G),
+                       "launch": sum(1 for e in ev if e[0] >= RIDE_LAUNCH_G),
+                       "sag": sum(1 for e in ev if e[0] <= -RIDE_LAUNCH_G),
+                       "worst_crest": max((e[0] for e in ev), default=0.0),
+                       "jolt_crest": sum(1 for e in r.get("jolts", ()) if e[1] >= RIDE_AIR_G),
+                       "worst_jolt": max((e[1] for e in r.get("jolts", ())), default=0.0),
+                       "under_mw_lt40": sum(1 for u in un if u[3] in ("motorway", "trunk") and u[0] < 4.0),
+                       "under_mw_lt45": sum(1 for u in un if u[3] in ("motorway", "trunk") and u[0] < 4.5),
+                       "under_n": len(un), "over_n": len(r["over"]),
+                       "hump_max": max((h[0] for h in r["humps"]), default=0.0),
+                       "dig1_m": r["dig1_m"], "ground_m": r["ground_m"], "dev_mean": r["dev_mean"]}
     out["deck_nan"] = len(res.get("deck_nan", []))
     out["errors"] = len(res.get("errors", []))
     return out

@@ -642,7 +642,7 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
                         marks[sj] = f"s{fid}_{int(round(sj * 10))}d"
                         full.append(sj)
             full.append(order[-1])
-            xy = np.stack([np.interp(full, s, p[:, 0]), np.interp(full, s, p[:, 1])], 1)
+            xy = np.stack([dnp.interp(full, s, p[:, 0]), dnp.interp(full, s, p[:, 1])], 1)
             deck_xy = xy.copy()
             if placement.on:            # (the AI's lanes where the road tiles draw a placed carriageway's)
                 la_, lo_, _ = frame.enu_to_geodetic(xy[:, 0], xy[:, 1], 0.0)
@@ -681,7 +681,7 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
             profile = _speed_profile(xy, w, direction != 0, urban=bool(getattr(spec, "urban", True)))
             # (a pass road's widened hairpins: its half width there, roads.hairpin_extra on its whole line)
             hx = roads.hairpin_extra(frame, spec, np.asarray(p, np.float64)[:, :2])
-            hxm = np.zeros(len(full)) if hx is None else np.interp(full, s, hx)
+            hxm = np.zeros(len(full)) if hx is None else dnp.interp(full, s, hx)
             # this road's approaches at its two ends (the graph node next to the junction, whether traffic comes in)
             for end in (0, -1):
                 j, nb = (0, 1) if end == 0 else (len(names) - 1, len(names) - 2)
@@ -706,7 +706,7 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
                         lo_, hi_ = max(full[j], t0 * L), min(full[j + 1], t1 * L)
                         if hi_ > lo_:
                             arc = [lo_, (lo_ + hi_) / 2, hi_]
-                            checks.extend(zip(np.interp(arc, s, p[:, 0]), np.interp(arc, s, p[:, 1])))
+                            checks.extend(zip(dnp.interp(arc, s, p[:, 0]), dnp.interp(arc, s, p[:, 1])))
                     if open_tunnels and _open_floor_of(open_tunnels, fid, checks):
                         for nm_, _q in ends_in:
                             open_node[nm_] = fid

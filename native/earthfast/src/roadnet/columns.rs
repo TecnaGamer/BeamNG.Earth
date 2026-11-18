@@ -3,12 +3,13 @@
 
 use std::collections::BTreeMap;
 
-use numpy::{IntoPyArray, PyArray1, PyReadonlyArray1, PyReadonlyArray2};
+use numpy::{IntoPyArray, PyArray1};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
 use super::pyobj::{items, lower_is, py_float, py_float_strict, py_str, py_strip};
 use crate::dm::Dm;
+use super::pyobj::{CArr1, CArr2};
 
 /// roads.SIDEWALK_TAG's keys by the kernels' side code (roads._SIDES_OF: both, left, right, none).
 fn sidewalk_code(v: &Bound<'_, PyAny>) -> PyResult<Option<i8>> {
@@ -66,7 +67,7 @@ pub fn rule_cols_of(table: Option<&Bound<'_, PyAny>>, n: usize) -> PyResult<(Vec
     if table.getattr("feature")?.len()? == 0 || n == 0 {
         return Ok((has, val));
     }
-    let maj: PyReadonlyArray1<i64> = table.call_method1("majors", (n,))?.extract()?;
+    let maj: CArr1<i64> = table.call_method1("majors", (n,))?.extract()?;
     let maj = maj.as_slice()?;
     let value = table.getattr("value")?;
     for i in 0..n {
@@ -102,8 +103,8 @@ pub fn osm_values_of(col: Option<&Bound<'_, PyAny>>, n: usize, lo: Option<f64>, 
 /// two points: numpy's arithmetic over the layer's points in order (each feature's segments summed in order, as
 /// np.bincount's weights; segments across its parts' gaps counted, as there).
 #[pyfunction]
-pub fn layer_lengths<'py>(py: Python<'py>, part_off: PyReadonlyArray1<'py, i64>, ring_off: PyReadonlyArray1<'py, i64>,
-                          coord_off: PyReadonlyArray1<'py, i64>, lonlat: PyReadonlyArray2<'py, f64>)
+pub fn layer_lengths<'py>(py: Python<'py>, part_off: CArr1<'py, i64>, ring_off: CArr1<'py, i64>,
+                          coord_off: CArr1<'py, i64>, lonlat: CArr2<'py, f64>)
                           -> PyResult<Bound<'py, PyArray1<f64>>> {
     let (po, ro, co) = (part_off.as_slice()?, ring_off.as_slice()?, coord_off.as_slice()?);
     let ll = lonlat.as_array();
@@ -161,11 +162,11 @@ pub fn layer_lengths<'py>(py: Python<'py>, part_off: PyReadonlyArray1<'py, i64>,
 #[pyfunction]
 #[pyo3(signature = (n, names, unbuilt, cls, subtype, junction, smoothness, name, sidewalk, connectors))]
 #[allow(clippy::too_many_arguments)]
-pub fn spec_columns<'py>(py: Python<'py>, n: usize, names: Vec<String>, unbuilt: PyReadonlyArray1<'py, bool>,
+pub fn spec_columns<'py>(py: Python<'py>, n: usize, names: Vec<String>, unbuilt: CArr1<'py, bool>,
                          cls: Option<Bound<'py, PyAny>>, subtype: Option<Bound<'py, PyAny>>,
                          junction: Option<Bound<'py, PyAny>>, smoothness: Option<Bound<'py, PyAny>>,
                          name: Option<Bound<'py, PyAny>>, sidewalk: Option<Bound<'py, PyAny>>,
-                         connectors: Option<PyReadonlyArray1<'py, i64>>) -> PyResult<Bound<'py, PyDict>> {
+                         connectors: Option<CArr1<'py, i64>>) -> PyResult<Bound<'py, PyDict>> {
     let pos = |c: &str| names.iter().position(|x| x == c).map(|k| k as i32);
     let unbuilt = unbuilt.as_slice()?;
     let code: Vec<i32> = match items(cls.as_ref())? {

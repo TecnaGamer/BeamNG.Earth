@@ -209,7 +209,7 @@ def measure(name):
             s = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(xy, axis=0).T))]
             if s[-1] > STEP_M:
                 ss = np.arange(0.0, s[-1], STEP_M)
-                zz = np.interp(ss, s, z)
+                zz = dnp.interp(ss, s, z)
                 g = np.diff(zz) / STEP_M
                 if len(g):
                     grades.append(float(np.abs(g).max()))
@@ -221,7 +221,7 @@ def measure(name):
                 for t, p in _crossings(xy, gxy):
                     if min(t, s[-1] - t) < END_M:       # the deck's end on a road: a junction, not a crossing over it
                         continue
-                    zd = float(np.interp(t, s, z))
+                    zd = float(dnp.interp(t, s, z))
                     la, lo, _ = site.frame.enu_to_geodetic(np.array([p[0]]), np.array([p[1]]), 0.0)
                     zg = float(elev(la, lo)[0])
                     gap = zd - zg
@@ -238,7 +238,7 @@ def measure(name):
             if s[-1] < 3 * STEP_M:
                 continue
             ss = np.arange(0.0, s[-1], STEP_M)
-            px, py = np.interp(ss, s, gxy[:, 0]), np.interp(ss, s, gxy[:, 1])
+            px, py = dnp.interp(ss, s, gxy[:, 0]), dnp.interp(ss, s, gxy[:, 1])
             keep = dnp.hypot(px, py) <= R
             if keep.sum() < 3:
                 continue

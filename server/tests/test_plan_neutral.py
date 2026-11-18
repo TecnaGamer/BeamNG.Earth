@@ -66,7 +66,11 @@ NAME_TABLES = {("revisit", "PLAN_NEUTRAL"), ("revisit", "NOT_SWITCHES"), ("exper
 PLANS_READ = ("BNE_BUMPS", "BNE_DIRT_BANK", "BNE_DIRT_BUMP", "BNE_ENTRANCE_FLARES", "BNE_EU_ROAD_DETAILS",
               "BNE_FR_ROADS", "BNE_GRADE_GUARD", "BNE_HRDEM_NEAR", "BNE_LIDARBC", "BNE_PHOTO_SURFACE",
               "BNE_RAIL_CURVES", "BNE_RAIL_TUNNELS", "BNE_RAIL_XING", "BNE_SUBSEA_RELAX", "BNE_TERRAIN_BUMPS",
-              "BNE_TUNNEL_LIDS")
+              "BNE_TUNNEL_LIDS",
+              # (the Revamped roads setting: tapers, deck K, level spacing, footbridges, rail lifecycle, raceways)
+              "BNE_DECK_K_SPEED", "BNE_RACEWAY_DIG", "BNE_FAST_DECK_ENDS", "BNE_FAST_GAP", "BNE_FAST_DECK_GROUND", "BNE_RAIL_LIFECYCLE",
+              "BNE_RAIL_SEAM_NATURAL",
+              "BNE_SPEED_TAPERS")
 # Experimental switches the planning does not read that are still NOT on the list, and why (each keeps its keys)
 NOT_LISTED = {
     "BNE_GEN_GROUND": "its gated code (the base photo with other arguments: genground.render, blockworker.base_photo, "
@@ -76,6 +80,18 @@ NOT_LISTED = {
     "BNE_FR_HOUSES": "comes only with BNE_FR_ROADS and BNE_EU_ROAD_DETAILS (the EU scenery setting), which the plans "
                      "read; its gated code also stores into its callers' objects (buildings.tile_buildings)",
     "BNE_STALE_REVISIT": "no build switch at all (revisit.NOT_SWITCHES)",
+    "BNE_TUNNEL_ROAD_OVER": "road tiles' tunnel entrances only (portals.fit: the headwall's top under a road crossing "
+                            "over the mouth); not yet proven plan-neutral both ways, so it stays keyed with the "
+                            "Revamped roads setting",
+    "BNE_FOOT_CLEAR": "railway tiles only (railways.FOOT_CLEAR: a footbridge that cannot clear drops its walls over the "
+                      "road); not yet proven plan-neutral both ways, so it stays keyed with the Revamped roads setting",
+    "BNE_RACEWAY_PROPS": "road tiles' props only (furniture.RACEWAY_PROPS: no street poles, wires or lamps along a "
+                         "racetrack); comes with the Revamped roads setting, whose other switches the plans read, so "
+                         "not proving it plan-neutral costs no shared plans; it stays keyed",
+    "BNE_RAIL_ROAD_FIT": "railway tiles and station meshes only (railways.RAIL_ROAD_FIT: buffer stops, the 3D track's "
+                         "ends at a level crossing; rails.py's crossing deck; railstations.ROAD_FIT: worked-out "
+                         "platforms); not yet proven plan-neutral both ways, so it stays keyed with the Revamped "
+                         "roads setting",
 }
 # Functions of the planning closure that read the environment by a computed name: the keys' own (they hash the
 # switches' names and values), the proxy settings (a fixed list of proxy variables)

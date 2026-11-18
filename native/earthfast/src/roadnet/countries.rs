@@ -7,9 +7,10 @@ use pyo3::prelude::*;
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use numpy::{PyReadonlyArray1, PyReadonlyArray2};
+
 
 use crate::countrymap::{map, Map};
+use super::pyobj::{CArr1, CArr2};
 
 /// numpy's a[i] on an axis of `len` (a negative i counts from the end): the index, IndexError past either end.
 pub(crate) fn np_index(len: usize, i: i64) -> PyResult<usize> {
@@ -71,7 +72,7 @@ fn country_for(b: &mut Borders, lon: f64, lat: f64, countries: &BTreeSet<String>
 
 /// europewalks.country_for of each point (lons, lats); index: () -> the border file's path or None (see Borders).
 #[pyfunction]
-pub fn europe_countries<'py>(index: Bound<'py, PyAny>, lons: PyReadonlyArray1<'py, f64>, lats: PyReadonlyArray1<'py, f64>,
+pub fn europe_countries<'py>(index: Bound<'py, PyAny>, lons: CArr1<'py, f64>, lats: CArr1<'py, f64>,
                              countries: Vec<String>) -> PyResult<Vec<Option<String>>> {
     let (lo, la) = (lons.as_array(), lats.as_array());
     if lo.len() != la.len() {
@@ -87,9 +88,9 @@ pub fn europe_countries<'py>(index: Bound<'py, PyAny>, lons: PyReadonlyArray1<'p
 /// None for the others. The arrays indexed as numpy did (IndexError past an end, a negative index from the end).
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
-pub fn europe_road_countries<'py>(index: Bound<'py, PyAny>, part_off: PyReadonlyArray1<'py, i64>,
-                                  ring_off: PyReadonlyArray1<'py, i64>, coord_off: PyReadonlyArray1<'py, i64>,
-                                  lonlat: PyReadonlyArray2<'py, f64>, mask: PyReadonlyArray1<'py, bool>,
+pub fn europe_road_countries<'py>(index: Bound<'py, PyAny>, part_off: CArr1<'py, i64>,
+                                  ring_off: CArr1<'py, i64>, coord_off: CArr1<'py, i64>,
+                                  lonlat: CArr2<'py, f64>, mask: CArr1<'py, bool>,
                                   countries: Vec<String>) -> PyResult<Vec<Option<String>>> {
     let (po, ro, co, mask) = (part_off.as_slice()?, ring_off.as_slice()?, coord_off.as_slice()?, mask.as_slice()?);
     let ll = lonlat.as_array();
@@ -108,7 +109,8 @@ pub fn europe_road_countries<'py>(index: Bound<'py, PyAny>, part_off: PyReadonly
         }
         let (p0, p1) = (first(i as i64)?, first(i as i64 + 1)?);
         if p1 > p0 {
-            let k = np_index(ll.nrows(), p0 + (p1 - p0) / 2)?;
+            // (p0 + (p1 - p0) // 2 of numpy int64s: wrapping, floor division; never a panic from map data)
+            let k = np_index(ll.nrows(), p0.wrapping_add(p1.wrapping_sub(p0).div_euclid(2)))?;
             out[i] = country_for(&mut b, ll[[k, 0]], ll[[k, 1]], &countries)?;
         }
     }

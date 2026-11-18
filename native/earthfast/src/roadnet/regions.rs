@@ -2,8 +2,9 @@
 //! byte for byte the numpy they replaced: the even-odd crossing test, the intercept a.x + ((y - a.y) * (b.x - a.x)) /
 //! (b.y - a.y) compared with x (a NaN intercept never counts), the points outside a polygon's box never tested.
 
-use numpy::{IntoPyArray, PyArray1, PyReadonlyArray1, PyReadonlyArray2};
+use numpy::{IntoPyArray, PyArray1};
 use pyo3::prelude::*;
+use super::pyobj::{CArr1, CArr2};
 
 /// sweden.contains' test of one point: edges (a[i], a[(i + 1) % m]) of the closed outline crossed to the point's right,
 /// an odd count.
@@ -21,7 +22,7 @@ fn inside_outline(outline: &[[f64; 2]], x: f64, y: f64) -> bool {
     count % 2 == 1
 }
 
-fn points(a: &PyReadonlyArray2<'_, f64>, what: &str) -> PyResult<Vec<[f64; 2]>> {
+fn points(a: &CArr2<'_, f64>, what: &str) -> PyResult<Vec<[f64; 2]>> {
     let v = a.as_array();
     if v.ncols() < 2 {
         return Err(pyo3::exceptions::PyValueError::new_err(format!("{what}: (n, 2) points")));
@@ -31,8 +32,8 @@ fn points(a: &PyReadonlyArray2<'_, f64>, what: &str) -> PyResult<Vec<[f64; 2]>> 
 
 /// sweden.contains(lon, lat) for 1-D lon and lat of one length, given the outline (m, 2: lon, lat).
 #[pyfunction]
-pub fn outline_contains<'py>(py: Python<'py>, outline: PyReadonlyArray2<'py, f64>, lon: PyReadonlyArray1<'py, f64>,
-                             lat: PyReadonlyArray1<'py, f64>) -> PyResult<Bound<'py, PyArray1<bool>>> {
+pub fn outline_contains<'py>(py: Python<'py>, outline: CArr2<'py, f64>, lon: CArr1<'py, f64>,
+                             lat: CArr1<'py, f64>) -> PyResult<Bound<'py, PyArray1<bool>>> {
     let o = points(&outline, "outline_contains")?;
     let (x, y) = (lon.as_slice()?, lat.as_slice()?);
     if x.len() != y.len() {
@@ -56,8 +57,8 @@ pub struct PolygonIndex {
 impl PolygonIndex {
     /// PolygonIndex(lower (p, 2), upper (p, 2), [[ring (k, 2), ...] per polygon]).
     #[new]
-    fn new(lower: PyReadonlyArray2<'_, f64>, upper: PyReadonlyArray2<'_, f64>,
-           rings: Vec<Vec<PyReadonlyArray2<'_, f64>>>) -> PyResult<Self> {
+    fn new(lower: CArr2<'_, f64>, upper: CArr2<'_, f64>,
+           rings: Vec<Vec<CArr2<'_, f64>>>) -> PyResult<Self> {
         let lower = points(&lower, "PolygonIndex")?;
         let upper = points(&upper, "PolygonIndex")?;
         if lower.len() != rings.len() || upper.len() != rings.len() {
@@ -71,7 +72,7 @@ impl PolygonIndex {
     /// signstates.states' lookup of 1-D x (lon), y (lat) of one length: each point's first polygon (in order) whose
     /// box holds it and whose rings, by the even-odd count of all their edges (ring[:-1], ring[1:]), hold it; -1 for
     /// none (a NaN point none).
-    fn lookup<'py>(&self, py: Python<'py>, x: PyReadonlyArray1<'py, f64>, y: PyReadonlyArray1<'py, f64>)
+    fn lookup<'py>(&self, py: Python<'py>, x: CArr1<'py, f64>, y: CArr1<'py, f64>)
                    -> PyResult<Bound<'py, PyArray1<i64>>> {
         let (x, y) = (x.as_slice()?, y.as_slice()?);
         if x.len() != y.len() {
@@ -112,9 +113,9 @@ impl PolygonIndex {
 /// to the layer's) lies in the Japan box (lat0, lon0, lat1, lon1, bounds included), else 0.
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
-pub fn width_regions<'py>(py: Python<'py>, us_mask: PyReadonlyArray1<'py, bool>, part_off: PyReadonlyArray1<'py, i64>,
-                          ring_off: PyReadonlyArray1<'py, i64>, coord_off: PyReadonlyArray1<'py, i64>,
-                          lonlat: PyReadonlyArray2<'py, f64>, japan: (f64, f64, f64, f64), us: i64, jp: i64)
+pub fn width_regions<'py>(py: Python<'py>, us_mask: CArr1<'py, bool>, part_off: CArr1<'py, i64>,
+                          ring_off: CArr1<'py, i64>, coord_off: CArr1<'py, i64>,
+                          lonlat: CArr2<'py, f64>, japan: (f64, f64, f64, f64), us: i64, jp: i64)
                           -> PyResult<Bound<'py, PyArray1<i64>>> {
     let (po, ro, co) = (part_off.as_slice()?, ring_off.as_slice()?, coord_off.as_slice()?);
     let n = po.len().saturating_sub(1);

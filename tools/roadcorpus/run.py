@@ -36,7 +36,7 @@ DATA_DIRS = ("dem", "mapdata", "mapdata-mirror", "pagesdata", "roadz")
 # the categories shown in the summary: (scorecard key, label)
 CATS = (("clearance", "deck on road"), ("deck_deck", "stack"), ("end_step", "bridge end"), ("overlap", "deck overlap"),
         ("steep_deck", "steep deck"), ("unbridged", "unbridged"), ("rail_block", "rail block"), ("spikes", "spikes"), ("humps", "junction humps"),
-        ("widths", "width jumps"), ("tunnels", "tunnels"), ("missing_deck", "missing deck"), ("track", "racetrack"))
+        ("widths", "width jumps"), ("tunnels", "tunnels"), ("missing_deck", "missing deck"), ("track", "racetrack"), ("ride", "ride"))
 # extra columns: (label, scorecard key, field)
 EXTRA = (("wavy decks", "deck_shape", "wavy"), ("decks on ground", "deck_shape", "on_ground"),
          ("rail beds > 3 m", "rail_bed", "tall3"), ("unpaved m", "unpaved_m", None))
@@ -101,11 +101,33 @@ def copy_tree(src, dst):
     subprocess.check_call(["cp", "-a", "--reflink=auto", src, dst])
 
 
+PROBE = ["road"]     # build --probe: "road" (probe.py) or "struct" (server/structprobe.py, the structures track)
+SEED_FROM = [None]  # build --seed-from ROOT2: a place without a seed here starts from ROOT2's (online: grown, kept)
+
+
+def _complete(js):
+    """A structprobe result there, with no tile or cell it could not build."""
+    try:
+        with open(js) as f:
+            return not json.load(f).get("errors")
+    except (OSError, ValueError):
+        return False
+
+
 def run_place(p, server, root, label, online, checks=None, era=None):
     out = os.path.join(root, "results", label)
+    real = os.path.realpath(os.path.expanduser("~/.cache/beamng-earth"))
+    for d in (out, os.path.join(root, "seed"), os.path.join(root, "work")):     # (before anything is made there)
+        rd = os.path.realpath(d)
+        if rd == real or rd.startswith(real + os.sep):
+            sys.exit(f"refused: {d} resolves into the player's cache")
     os.makedirs(out, exist_ok=True)
     seed = os.path.join(root, "seed" if not era else "seed-" + era, p["id"])
     work = os.path.join(root, "work", label, p["id"])
+    for d in (seed, work, out):         # (never through a link into the player's cache)
+        rd = os.path.realpath(d)
+        if rd == real or rd.startswith(real + os.sep):
+            sys.exit(f"refused: {d} resolves into the player's cache")
     shutil.rmtree(work, ignore_errors=True)
     os.makedirs(work)
     have_seed = os.path.isdir(seed) and not online
@@ -113,10 +135,24 @@ def run_place(p, server, root, label, online, checks=None, era=None):
         for d in DATA_DIRS:
             if os.path.isdir(os.path.join(seed, d)):
                 copy_tree(os.path.join(seed, d), work)
+    elif not online and SEED_FROM[0] and not era:
+        other = os.path.join(os.path.expanduser(SEED_FROM[0]), "seed", p.get("seed_from", p["id"]))
+        if os.path.isdir(other):        # (its data as a start; what this place needs more is downloaded and kept)
+            for d in DATA_DIRS:
+                if os.path.isdir(os.path.join(other, d)):
+                    copy_tree(os.path.join(other, d), work)
     js, tj, log = (os.path.join(out, p["id"] + ext) for ext in (".json", ".timing.json", ".log"))
-    base = ["nice", "-n", "15", sys.executable, os.path.join(HERE, "probe.py"), "--server", server, "--cache", work,
-            "--lat", repr(p["lat"]), "--lon", repr(p["lon"]), "--r", repr(float(p["r"])), "--json", js,
-            "--timing", tj] + (["--checks", checks] if checks else [])
+    for f_ in (js, tj, log, js + ".tmp"):   # (no earlier run's result left to be scored as this one's; no link)
+        if os.path.lexists(f_):
+            os.remove(f_)
+    if PROBE[0] == "struct":        # (today's checkout's probe, scoring the server given: --server)
+        base = ["nice", "-n", "15", sys.executable, os.path.join(REPO, "server", "structprobe.py"),
+                repr(p["lat"]), repr(p["lon"]), repr(float(p.get("struct_r", p["r"]))), "--server", server,
+                "--cache", work, "--json", js, "--timing", tj]
+    else:
+        base = ["nice", "-n", "15", sys.executable, os.path.join(HERE, "probe.py"), "--server", server, "--cache",
+                work, "--lat", repr(p["lat"]), "--lon", repr(p["lon"]), "--r", repr(float(p["r"])), "--json", js,
+                "--timing", tj] + (["--checks", checks] if checks else [])
     mode = "offline" if have_seed else "online"
     with open(log, "w") as lf:
         rc = subprocess.call(base + (["--offline"] if have_seed else []), stdout=lf, stderr=subprocess.STDOUT,
@@ -124,13 +160,13 @@ def run_place(p, server, root, label, online, checks=None, era=None):
     if rc == 0 and have_seed and os.path.exists(js):
         with open(js) as f:
             errs = json.load(f).get("errors", [])
-        if any("offline" in e for e in errs):     # (a probe wanted data the seed has not got: fetched, seed grown)
+        if any("offline" in e for e in errs) or (PROBE[0] == "struct" and errs):     # (a probe wanted data the seed has not got: fetched, seed grown)
             mode = "online-after-offline-missing"
             with open(log, "a") as lf:
                 lf.write("\n== offline data missing; online ==\n")
                 lf.flush()
                 rc = subprocess.call(base, stdout=lf, stderr=subprocess.STDOUT, env=clean_env(), cwd=work)
-            if rc == 0:
+            if rc == 0 and (PROBE[0] != "struct" or _complete(js)):
                 for d in DATA_DIRS:
                     if os.path.isdir(os.path.join(work, d)):
                         copy_tree(os.path.join(work, d), seed)
@@ -140,6 +176,12 @@ def run_place(p, server, root, label, online, checks=None, era=None):
             lf.write("\n== offline failed; online ==\n")
             lf.flush()
             rc = subprocess.call(base, stdout=lf, stderr=subprocess.STDOUT, env=clean_env(), cwd=work)
+        if rc == 0 and PROBE[0] == "struct" and _complete(js):    # (the seed grown by what the online run fetched)
+            for d in DATA_DIRS:
+                if os.path.isdir(os.path.join(work, d)):
+                    copy_tree(os.path.join(work, d), seed)
+    if rc == 0 and PROBE[0] == "struct" and not _complete(js):
+        rc = 3                          # (tiles or cells it could not build: an incomplete place, failed)
     if rc == 0 and not os.path.isdir(seed) and mode == "online":
         tmp = seed + ".tmp"
         shutil.rmtree(tmp, ignore_errors=True)
@@ -231,6 +273,12 @@ def cmd_build(a):
         era = era_of(rev)
     else:
         server = os.path.realpath(a.server or os.path.join(REPO, "server"))
+    PROBE[0] = a.probe
+    SEED_FROM[0] = a.seed_from
+    if a.probe == "struct":
+        if era and a.seed_from:
+            sys.exit("--seed-from with a revision of another data era: its seeds are today's layout")
+        return cmd_build_struct(a, server, rev, root, era)
     for kv in a.env:
         k, _, v = kv.partition("=")
         if not k.startswith("BNE_"):
@@ -246,6 +294,66 @@ def cmd_build(a):
             print(f"  FAILED rc={rc} (see results/{a.label}/{p['id']}.log)", flush=True)
     meta = {"label": a.label, "server": server, "rev": rev, "env": sorted(SWITCHES.items())}
     for ln in write_scorecard(os.path.join(root, "results", a.label), meta):
+        print(ln)
+    if fails:
+        print("failed:", ",".join(fails))
+        sys.exit(1)
+
+
+def write_struct_card(dirn, meta, ran=None, failed=()):
+    """The structures scorecard (server/structprobe.py's summaries per place): scorecard.json and summary.md. ran: the
+    places this build ran (only their results are scored, never an older run's file left in the folder); failed: those
+    that failed (listed apart, their partial results not scored)."""
+    res = {k: v for k, v in load(dirn).items()
+           if (ran is None or k in ran) and k not in set(failed)}
+    by = {p["id"]: p for p in places()}
+    keys = ("decks", "overlap_m2", "hole_m2", "parapet_in_cw_m", "seam_step_n", "seam_step_max", "twin_pairs",
+            "twin_dz_max", "skew_ends", "skew_err_max", "groups", "grouped")
+    card = {"meta": meta, "places": {}}
+    lines = [f"# Structures scorecard: {meta.get('label')}", "",
+             f"Server: `{meta.get('server')}`" + (f", revision {meta['rev']}" if meta.get("rev") else ""), "",
+             "Definitions: server/structprobe.py. Targets (design): overlap 0, hole 0, parapet in carriageway 0, seam "
+             "steps > 5 cm 0, twin dz <= 2 cm, skew error <= 3 degrees.", "",
+             "| place | " + " | ".join(keys) + " | errors |", "|---|" + "---|" * (len(keys) + 1)]
+    tot = {k: 0.0 for k in ("overlap_m2", "hole_m2", "parapet_in_cw_m", "seam_step_n")}
+    for pid, r in sorted(res.items()):
+        sm = dict(r.get("summary", {}))
+        sm["errors"] = len(r.get("errors", []))
+        card["places"][pid] = sm
+        for k in tot:
+            tot[k] += float(sm.get(k, 0) or 0)
+        lines.append(f"| {by.get(pid, {}).get('name', pid)} | " + " | ".join(str(sm.get(k, "-")) for k in keys)
+                     + f" | {sm['errors']} |")
+    card["totals"] = {k: round(v, 2) for k, v in tot.items()}
+    card["failed"] = sorted(failed)
+    if failed:
+        lines.append(f"Failed (not scored): {', '.join(sorted(failed))}")
+    lines.append("| **total (overlap, hole, parapet, seams)** | " + " | ".join(
+        f"**{round(tot[k], 2)}**" for k in ("overlap_m2", "hole_m2", "parapet_in_cw_m", "seam_step_n")) + " |")
+    with open(os.path.join(dirn, "scorecard.json"), "w") as f:
+        json.dump(card, f, sort_keys=True, indent=1)
+        f.write("\n")
+    with open(os.path.join(dirn, "summary.md"), "w") as f:
+        f.write("\n".join(lines) + "\n")
+    return lines
+
+
+def cmd_build_struct(a, server, rev, root, era=None):
+    for kv in a.env:
+        k, _, v = kv.partition("=")
+        if not k.startswith("BNE_"):
+            sys.exit(f"--env {kv}: only BNE_* build switches")
+        SWITCHES[k] = v
+    ps = places(a.set, a.places)
+    fails = []
+    for k, p in enumerate(ps):
+        print(f"[{k + 1}/{len(ps)}] {p['id']} ...", flush=True)
+        rc = run_place(p, server, root, a.label, a.online, era=era)
+        if rc != 0:
+            fails.append(p["id"])
+            print(f"  FAILED rc={rc} (see results/{a.label}/{p['id']}.log)", flush=True)
+    meta = {"label": a.label, "server": server, "rev": rev, "env": sorted(SWITCHES.items()), "probe": "struct"}
+    for ln in write_struct_card(os.path.join(root, "results", a.label), meta, {p["id"] for p in ps}, fails):
         print(ln)
     if fails:
         print("failed:", ",".join(fails))
@@ -299,6 +407,10 @@ def main():
     b.add_argument("--online", action="store_true", help="ignore the seeds (download again)")
     b.add_argument("--checks", help="probe.py --checks (a narrow probe for bisects), default all")
     b.add_argument("--env", action="append", default=[], help="K=V: a BNE_* build switch the probe runs with")
+    b.add_argument("--probe", choices=("road", "struct"), default="road",
+                   help="struct: server/structprobe.py (the structures track; --set structures, --root "
+                        "~/bnge-tests/structures)")
+    b.add_argument("--seed-from", help="ROOT2: a place with no seed here starts from ROOT2/seed/<seed_from or id>")
     b.set_defaults(fn=cmd_build)
     c = sub.add_parser("compare")
     c.add_argument("a")

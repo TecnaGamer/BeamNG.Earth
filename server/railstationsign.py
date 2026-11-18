@@ -72,7 +72,7 @@ def _at(pts, frac, inset):
     """(x, y, nx, ny) the point `frac` along a run, `inset` m in from the edge, and the inward unit normal there."""
     s = np.concatenate(([0.0], np.cumsum(dnp.hypot(*np.diff(pts, axis=0).T))))
     at = s[-1] * frac
-    x, y = np.interp(at, s, pts[:, 0]), np.interp(at, s, pts[:, 1])
+    x, y = dnp.interp(at, s, pts[:, 0]), dnp.interp(at, s, pts[:, 1])
     k = min(max(int(np.searchsorted(s, at)), 1), len(pts) - 1)
     d = pts[k] - pts[k - 1]
     dl = float(dnp.hypot(*d))

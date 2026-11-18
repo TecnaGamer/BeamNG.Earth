@@ -858,8 +858,8 @@ class SeaCarver:
                             if t[-1] <= 0:
                                 continue
                             u = np.arange(0.0, t[-1], 0.5)
-                            ii = np.floor(np.interp(u, t, q[:, 0])).astype(np.int64)
-                            jj = np.floor(np.interp(u, t, q[:, 1])).astype(np.int64)
+                            ii = np.floor(dnp.interp(u, t, q[:, 0])).astype(np.int64)
+                            jj = np.floor(dnp.interp(u, t, q[:, 1])).astype(np.int64)
                             ok = (ii >= 0) & (ii < n) & (jj >= 0) & (jj < n)
                             out[jj[ok], ii[ok]] = True
         return out
@@ -876,7 +876,7 @@ class SeaCarver:
         if s[-1] <= 0:
             return []
         t = np.linspace(0.0, s[-1], max(2, int(math.ceil(s[-1] / LINE_STEP_PX)) + 1))
-        q = np.stack([np.interp(t, s, pts[:, 0]), np.interp(t, s, pts[:, 1])], -1)
+        q = np.stack([dnp.interp(t, s, pts[:, 0]), dnp.interp(t, s, pts[:, 1])], -1)
         # only the samples whose channel and bank can reach the raster, and one either side (their segments): each
         # sample's level is its own; the whole river's were read for every raster, a long river's ~20,000 at a time
         # (~300 km2 of DEM for one road tile on a first visit to rural Pennsylvania, 2026-10-27)

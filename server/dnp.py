@@ -9,9 +9,10 @@ turns such a bit into another road (Windows built a 0.78 g crest where Linux had
 Here: the transcendental functions are the native module's libm-crate ones (native/earthfast/src/dm.rs, the same as
 its kernels'; dmath.py is the scalar side), computed in float64 (a float32 input gives a float32 result); hypot is
 sqrt(x * x + y * y); products and norms are elementwise multiplies and numpy's add.reduce (fixed order); solve /
-lstsq / eigh are small native kernels. numpy's elementwise arithmetic, sqrt, sum / cumsum / mean, sort, interp, round
-and friends are exact or the same code everywhere and are used as they are. tests/test_determinism.py fails on a
-platform call in server/*.py.
+lstsq / eigh are small native kernels; interp is numpy's own algorithm in the native module (numpy's C code is
+compiled per platform, and a compiler that fuses its multiply and add gives other bits: the arm64 wheels). numpy's
+elementwise arithmetic, sqrt, sum / cumsum / mean, sort's values, round and friends are exact or the same code
+everywhere and are used as they are. tests/test_determinism.py fails on a platform call in server/*.py.
 """
 import numpy as np
 from numpy.lib.stride_tricks import sliding_window_view
@@ -19,6 +20,7 @@ from numpy.lib.stride_tricks import sliding_window_view
 import fast
 
 _ef = fast.native(264, "dnp")
+_ef_interp = fast.native(441, "dnp.interp")
 
 _ATAN2, _POW, _HYPOT = 32, 33, 34
 
@@ -206,6 +208,46 @@ def convolve(a, v, mode="full"):
     ap = np.concatenate([np.zeros(left), a, np.zeros(right)]) if left or right else a
     w = sliding_window_view(ap, m)
     return np.add.reduce(w * v[::-1], axis=-1) if len(w) else np.zeros(0)
+
+
+def _real(a, what):
+    """a as an array, TypeError unless its values are real numbers of at most float64's precision."""
+    a = np.asarray(a)
+    if a.dtype.kind not in "biuf" or (a.dtype.kind == "f" and a.dtype.itemsize > 8):
+        raise TypeError(f"dnp.interp: {what} must be real numbers (bool, int or float up to float64), not {a.dtype}")
+    return a
+
+
+def interp(x, xp, fp, left=None, right=None, period=None):
+    """np.interp by the native kernel: numpy's own algorithm line for line, its slope * (x - xp[j]) + fp[j] rounded
+    twice. numpy's C code is compiled per platform, and a compiler that contracts (clang on the arm64 wheels) fuses that
+    into one multiply-add: other last bits (the M1 Mac's railway beds, 36 of the corpus's 116 plans, 2026-11-18).
+
+    The contract: real-valued and non-periodic. x, xp, fp, left and right are real numbers (bool, int, float up to
+    float64); period, complex values and anything else are a TypeError. Within it the results are np.interp's bit for
+    bit (x86 wheels), its shapes and errors too: a scalar x gives a numpy float64, an empty x with empty xp and fp an
+    empty array, xp and fp of other lengths or empty a ValueError."""
+    if period is not None:
+        raise TypeError("dnp.interp: period is not supported (real-valued, non-periodic)")
+    xa, xpa, fpa = _real(x, "x"), _real(xp, "xp"), _real(fp, "fp")
+    for name, v in (("left", left), ("right", right)):
+        if v is not None:
+            _real(v, name)
+            if np.ndim(v):
+                raise TypeError(f"dnp.interp: {name} must be a scalar")
+    if xpa.ndim != 1 or fpa.ndim != 1:
+        raise ValueError("dnp.interp: xp and fp must be 1-D")
+    flat = xa.ravel() if xa.dtype == _F64D else np.asarray(xa, np.float64).ravel()
+    if xpa.size != fpa.size:            # (numpy's checks, in numpy's order: no sample points and no x is no error)
+        raise ValueError("fp and xp are not of the same length.")
+    if not xpa.size and not flat.size:
+        return np.zeros(xa.shape)
+    r = _ef_interp.dm_interp(np.ascontiguousarray(flat), np.ascontiguousarray(xpa, np.float64),
+                             np.ascontiguousarray(fpa, np.float64),
+                             None if left is None else float(left), None if right is None else float(right))
+    if xa.ndim == 0:
+        return _F64(r[0])
+    return r if xa.ndim == 1 else r.reshape(xa.shape)
 
 
 def polyfit(x, y, deg):

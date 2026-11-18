@@ -411,6 +411,29 @@ def keyed_env(k):
     return (k.startswith("BNE_") and k not in NOT_SWITCHES) or k in OUTPUT_ENV
 
 
+# A switch whose meaning changed after it could have been run (on dev, by a tester, in a pack): its value is keyed with
+# this version, so the plans, facts, packs and shares made under its old meaning miss rather than mix with the new ones
+# at their seams. Only where it is set: the default namespace (the switch unset) keeps its keys. BNE_LEVEL_SPACING 2:
+# the clearance study's class table (4.9 / 4.5 / 4.0 / 2.5 / 6.0 m) and its use by the underpass dips and the measured
+# decks (2026-11-17); 3: its approach fills ask the chain's railways their own clearance (Codex round 3); 4: the
+# deck, its approach fills and the dips under it ask one target, the whole chain's (roads.chain_under_classes). The
+# ski-ramp switches at their Codex review meanings (2026-11-17): BNE_FAST_DECK_GROUND 2 (a fast deck beside a ramp
+# caps its fill too), BNE_UNDER_SPEED 2 (motorways and trunks only, a joined dip ending before its junction),
+# BNE_FAST_GAP 4 (each landing's own approach on the map's own lines, its samples taken by their road, round 5), 5
+# (its samples taken by their own ground piece, never behind the deck end: the self-run reviews of round 5).
+# BNE_RACEWAY_DIG 2: the joins (a raceway ending on another gives way to it), the band on the sampled lines, the
+# rounded dug floor (2026-11-17).
+SWITCH_VERSIONS = {"BNE_LEVEL_SPACING": 4, "BNE_FAST_DECK_GROUND": 2, "BNE_UNDER_SPEED": 2, "BNE_FAST_GAP": 5,
+                   "BNE_RACEWAY_DIG": 2}
+
+
+def keyed_value(k, v):
+    """The text a set build switch k = v is hashed as (code_key, switches_key, bakepack.switches): k=v, its
+    SWITCH_VERSIONS version after it when it has one."""
+    n = SWITCH_VERSIONS.get(k)
+    return f"{k}={v}" if n is None else f"{k}={v}@v{n}"
+
+
 def code_key():
     """A hash of the code the cached items depend on (source_id; a packaged app's REVISIT_ID, written by its build) and
     the build switches (BNE_*), once per process."""
@@ -433,7 +456,7 @@ def code_key():
             h.update(got)
             for k in sorted(os.environ):                # (the build switches: BNE_*, OUTPUT_ENV)
                 if keyed_env(k):
-                    h.update(f"{k}={os.environ[k]}".encode())
+                    h.update(keyed_value(k, os.environ[k]).encode())
             import heightmap        # (the lighter ground's 2 m squares: road tiles drape on its lattice; 1 m keys as before)
             if heightmap.SQUARE != 1.0:
                 h.update(f"square={heightmap.SQUARE:g}".encode())
@@ -484,9 +507,9 @@ def _switch_keys():
             full, plans = hashlib.sha1(), hashlib.sha1()
             for k in sorted(os.environ):
                 if keyed_env(k):
-                    full.update(f"{k}={os.environ[k]}".encode())
+                    full.update(keyed_value(k, os.environ[k]).encode())
                     if k not in PLAN_NEUTRAL:
-                        plans.update(f"{k}={os.environ[k]}".encode())
+                        plans.update(keyed_value(k, os.environ[k]).encode())
             _switches.extend((full.hexdigest()[:16], plans.hexdigest()[:16]))
         return _switches[0], _switches[-1]
 

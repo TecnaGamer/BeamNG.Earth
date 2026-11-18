@@ -106,7 +106,7 @@ def _resample(xy, step):
     if s[-1] < 1e-6:
         return xy[:1]
     t = np.arange(0.0, s[-1], step)
-    return np.c_[np.interp(t, s, xy[:, 0]), np.interp(t, s, xy[:, 1])]
+    return np.c_[dnp.interp(t, s, xy[:, 0]), dnp.interp(t, s, xy[:, 1])]
 
 
 def _ref_tracks(pl):

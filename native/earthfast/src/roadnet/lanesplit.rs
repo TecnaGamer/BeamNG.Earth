@@ -5,13 +5,14 @@
 
 use std::collections::BTreeMap;
 
-use numpy::{IntoPyArray, PyReadonlyArray1, PyReadonlyArray2};
+use numpy::IntoPyArray;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList, PyString, PyTuple};
 
 use super::pyfloat::np_round;
 use super::pyobj::{py_float, py_str};
 use crate::dm::Dm;
+use super::pyobj::{CArr1, CArr2};
 
 const LINE: u8 = 2;
 const STEP_M: f64 = 4.0;
@@ -85,7 +86,7 @@ pub(crate) fn check_lonlat(cols: usize) -> PyResult<()> {
 
 fn table<'py>(t: Option<Bound<'py, PyAny>>, n: usize) -> PyResult<Option<(Vec<i64>, Bound<'py, PyAny>)>> {
     let Some(t) = t.filter(|t| !t.is_none()) else { return Ok(None) };
-    let maj: PyReadonlyArray1<i64> = t.call_method1("majors", (n,))?.extract()?;
+    let maj: CArr1<i64> = t.call_method1("majors", (n,))?.extract()?;
     Ok(Some((maj.as_slice()?.to_vec(), t.getattr("value")?)))
 }
 
@@ -95,8 +96,8 @@ fn opt(v: Option<Bound<'_, PyAny>>) -> Option<Bound<'_, PyAny>> {
 
 impl<'py> Cols<'py> {
     #[allow(clippy::too_many_arguments)]
-    fn new(py: Python<'py>, ids: Vec<String>, kind: PyReadonlyArray1<'py, u8>, po: PyReadonlyArray1<'py, i64>,
-           ro: PyReadonlyArray1<'py, i64>, co: PyReadonlyArray1<'py, i64>, lonlat: PyReadonlyArray2<'py, f64>,
+    fn new(py: Python<'py>, ids: Vec<String>, kind: CArr1<'py, u8>, po: CArr1<'py, i64>,
+           ro: CArr1<'py, i64>, co: CArr1<'py, i64>, lonlat: CArr2<'py, f64>,
            cls: Option<Bound<'py, PyAny>>, oneway: Option<Bound<'py, PyAny>>, subclass: Option<Bound<'py, PyAny>>,
            subclass_attr: Option<Bound<'py, PyAny>>, osm_lanes: Option<Bound<'py, PyAny>>,
            lane_total: Option<Bound<'py, PyAny>>, parts: Option<Bound<'py, PyAny>>, lane_w: BTreeMap<String, f64>,
@@ -141,14 +142,15 @@ impl<'py> Cols<'py> {
         }
     }
 
-    /// _col(f, "class", i) in roadlanes.HIGHWAYS.
+    /// _col(f, "class", i) in roadlanes.HIGHWAYS: an exact str compared as it is; anything else asked of a set of the
+    /// two, as Python's `in` asks it (its hash and ==; TypeError for an unhashable value: Codex on bc34313f).
     fn highway(&self, i: usize) -> PyResult<bool> {
         let Some(v) = Self::col(&self.cls, i)? else { return Ok(false) };
-        if let Ok(s) = v.cast::<PyString>() {
+        if let Ok(s) = v.cast_exact::<PyString>() {
             let s = s.to_str()?;
             return Ok(s == "motorway" || s == "trunk");
         }
-        Ok(false)
+        pyo3::types::PySet::new(self.py, ["motorway", "trunk"])?.contains(&v)
     }
 
     /// str(f.attrs["class"][i]).
@@ -733,9 +735,9 @@ fn joints_from_py(d: &Bound<'_, PyAny>) -> PyResult<BTreeMap<(u64, u64), Vec<Joi
 #[pyo3(signature = (ids, kind, po, ro, co, lonlat, cls, oneway, subclass, subclass_attr, osm_lanes, lane_total, parts,
                     lane_w, lane_w_default, shoulder))]
 #[allow(clippy::too_many_arguments)]
-pub fn lane_joint_specs<'py>(py: Python<'py>, ids: Vec<String>, kind: PyReadonlyArray1<'py, u8>,
-                             po: PyReadonlyArray1<'py, i64>, ro: PyReadonlyArray1<'py, i64>,
-                             co: PyReadonlyArray1<'py, i64>, lonlat: PyReadonlyArray2<'py, f64>,
+pub fn lane_joint_specs<'py>(py: Python<'py>, ids: Vec<String>, kind: CArr1<'py, u8>,
+                             po: CArr1<'py, i64>, ro: CArr1<'py, i64>,
+                             co: CArr1<'py, i64>, lonlat: CArr2<'py, f64>,
                              cls: Option<Bound<'py, PyAny>>, oneway: Option<Bound<'py, PyAny>>,
                              subclass: Option<Bound<'py, PyAny>>, subclass_attr: Option<Bound<'py, PyAny>>,
                              osm_lanes: Option<Bound<'py, PyAny>>, lane_total: Option<Bound<'py, PyAny>>,
@@ -786,9 +788,9 @@ fn pyround_int(x: f64) -> PyResult<i128> {
 #[pyo3(signature = (ids, kind, po, ro, co, lonlat, cls, oneway, subclass, subclass_attr, osm_lanes, lane_total, parts,
                     lane_w, lane_w_default, shoulder, layer, context, joint_specs, structure_mouth))]
 #[allow(clippy::too_many_arguments)]
-pub fn lane_split_jobs<'py>(py: Python<'py>, ids: Vec<String>, kind: PyReadonlyArray1<'py, u8>,
-                            po: PyReadonlyArray1<'py, i64>, ro: PyReadonlyArray1<'py, i64>,
-                            co: PyReadonlyArray1<'py, i64>, lonlat: PyReadonlyArray2<'py, f64>,
+pub fn lane_split_jobs<'py>(py: Python<'py>, ids: Vec<String>, kind: CArr1<'py, u8>,
+                            po: CArr1<'py, i64>, ro: CArr1<'py, i64>,
+                            co: CArr1<'py, i64>, lonlat: CArr2<'py, f64>,
                             cls: Option<Bound<'py, PyAny>>, oneway: Option<Bound<'py, PyAny>>,
                             subclass: Option<Bound<'py, PyAny>>, subclass_attr: Option<Bound<'py, PyAny>>,
                             osm_lanes: Option<Bound<'py, PyAny>>, lane_total: Option<Bound<'py, PyAny>>,
@@ -1028,14 +1030,14 @@ fn ramp_mouths<'py>(c: &Cols<'py>, jobs: &mut [Job<'py>], layer: &Bound<'py, PyA
 
 /// lanesections._ease(s, length, reach, ends) of stations s.
 #[pyfunction]
-pub fn lane_ease<'py>(py: Python<'py>, s: PyReadonlyArray1<'py, f64>, length: f64, reach: (f64, f64), ends: (f64, f64))
+pub fn lane_ease<'py>(py: Python<'py>, s: CArr1<'py, f64>, length: f64, reach: (f64, f64), ends: (f64, f64))
                       -> PyResult<Bound<'py, numpy::PyArray1<f64>>> {
     Ok(ease(s.as_slice()?, length, [reach.0, reach.1], [ends.0, ends.1]).into_pyarray(py))
 }
 
 /// lanesections._offset(ll, offsets): the lon / lat line moved offsets m (one, or one per point) to its left.
 #[pyfunction]
-pub fn lane_offset<'py>(py: Python<'py>, ll: PyReadonlyArray2<'py, f64>, d: PyReadonlyArray1<'py, f64>)
+pub fn lane_offset<'py>(py: Python<'py>, ll: CArr2<'py, f64>, d: CArr1<'py, f64>)
                         -> PyResult<Bound<'py, numpy::PyArray2<f64>>> {
     let a = ll.as_array();
     check_lonlat(a.ncols())?;

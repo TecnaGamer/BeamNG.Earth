@@ -194,6 +194,33 @@ class CountryParityTest(unittest.TestCase):
             n_raised += want[0] == "raised"
         self.assertGreater(n_raised, 50)
 
+    def test_extreme_offsets_wrap_as_numpy(self):
+        """Coordinate offsets near the int64 ends (map data never makes them, but no kernel may panic or differ by
+        build on them: Codex on 490d400d): numpy's p0 + (p1 - p0) // 2 wraps, a negative index counts from the end."""
+        import warnings
+        big, small = np.iinfo(np.int64).max, np.iinfo(np.int64).min
+        rng = random.Random(78)
+        seen = set()
+        for k in range(400):
+            f = layer(rng)
+            if not len(f) or len(f.lonlat) < 2:
+                continue
+            co = f.coord_off.copy()
+            j = rng.randrange(len(co))
+            co[j] = rng.choice([big, big - 1, big - 2, small, small + 1, small + 3, -1, -2])
+            if rng.random() < 0.5 and len(co) > 1:
+                j2 = rng.randrange(len(co))
+                co[j2] = rng.choice([big, small, small + 2, big - 5])
+            f.coord_off = co
+            mask = np.ones(len(f), bool)
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", RuntimeWarning)
+                want = outcome(lambda: ref_eu_column(f, mask))
+            got = outcome(lambda: europewalks.road_countries(f, mask))
+            self.assertEqual(got, want, (k, co.tolist()))
+            seen.add(want[0])
+        self.assertEqual(seen, {"ok", "raised"})
+
 
 if __name__ == "__main__":
     unittest.main()

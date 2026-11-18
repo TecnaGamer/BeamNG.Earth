@@ -128,7 +128,9 @@ def work_copy(src, dst):
         shutil.rmtree(dst)
     os.makedirs(os.path.dirname(os.path.abspath(dst)), exist_ok=True)
     if os.path.isdir(src):
-        subprocess.run(["cp", "-a", "--reflink=auto", src, dst], check=True)
+        # (macOS's cp has no --reflink: -c clones on APFS, the same copy-on-write idea)
+        subprocess.run(["cp", "-cR", src, dst] if sys.platform == "darwin" else ["cp", "-a", "--reflink=auto", src, dst],
+                       check=True)
     else:
         os.makedirs(dst)
     return dst

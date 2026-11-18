@@ -58,7 +58,7 @@ def candidates(fid, spec, line, country_at, lit=None):
                          for c, r in zip(codes, radii)])
         metric = np.r_[0., np.cumsum(np.diff(samples) * (1/gaps[:-1] + 1/gaps[1:]) / 2)]
         levels = np.arange(phase, metric[-1], 1.)
-        stations = np.interp(levels, metric, samples)
+        stations = dnp.interp(levels, metric, samples)
         pp, dd = f._at(line, stations)
         rr, tt = curvature(line, stations)
         for s, p, d, radius, turn in zip(stations, pp, dd, rr, tt):
