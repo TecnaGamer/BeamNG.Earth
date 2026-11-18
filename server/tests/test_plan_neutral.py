@@ -68,7 +68,7 @@ PLANS_READ = ("BNE_BUMPS", "BNE_DIRT_BANK", "BNE_DIRT_BUMP", "BNE_ENTRANCE_FLARE
               "BNE_RAIL_CURVES", "BNE_RAIL_TUNNELS", "BNE_RAIL_XING", "BNE_SUBSEA_RELAX", "BNE_TERRAIN_BUMPS",
               "BNE_TUNNEL_LIDS",
               # (the Revamped roads setting: tapers, deck K, level spacing, footbridges, rail lifecycle, raceways)
-              "BNE_DECK_K_SPEED", "BNE_LEVEL_SPACING", "BNE_RACEWAY_DIG", "BNE_RAIL_LIFECYCLE",
+              "BNE_DECK_K_SPEED", "BNE_RACEWAY_DIG", "BNE_RAIL_LIFECYCLE",
               "BNE_SPEED_TAPERS")
 # Experimental switches the planning does not read that are still NOT on the list, and why (each keeps its keys)
 NOT_LISTED = {
