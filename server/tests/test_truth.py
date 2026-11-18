@@ -43,7 +43,7 @@ TODAY = {
         not_built=5,            # 4 street trams on the ground, 1 a path under a bridge
         shape_p95=4.3,          # m: the roads under the tracks 1-2 m deeper (the dips 4.2 m off, the decks 3.1: was 5.7)
         under_laws=0, steeper=2,
-        dug=(0, 0), filled=(0, 7),      # (with the shapes 5 before the decks kept their line: a deck's end 1.9 m over its road)
+        dug=(0, 0), filled=(0, 6),      # (7 before findground's cost law: a bridge's road under it dips where that costs less earth than the deck's rise; with the shapes 5 before the decks kept their line: a deck's end 1.9 m over its road)
         rail_low=-2.6,          # m: the Letzigraben flyover's ramp. It is 13 m over the tracks it crosses 270 m on, which
         rail_high=-0.4),        # Earth's clears by a track's headroom, and climbs to them at 4 %: the one law railways.GRADE
         #                         (5 %, the user, 2026-11-18) stands it -2.6 .. -0.4 under the real ramp, median -1.3 (it was
@@ -55,7 +55,10 @@ TODAY = {
         not_built=14,           # 8 street trams on the ground, 6 paths under or on the bridges: Earth builds none
         shape_p95=2.3,          # m: a service ramp's deck (was 3.4)
         under_laws=2, steeper=1,
-        dug=(3, 3),             # 3.3 m at the deepest. (12 while every rail bridge dug the road under it)
+        dug=(6, 6),             # 3.3 m at the deepest. (12 while every rail bridge dug the road under it; 3 before findground's
+                                # cost law: one rail bridge 12 m from its structure's end, 5.2 m short of clearing a service
+                                # road there, is judged by the law (a rise of 91 m of fill against a dip of 61 m), the road
+                                # dipping 1 m or less along the service roads that meet it)
         filled=(0, 0),
         rail_low=-11.6,         # m: the Wipkingen viaduct, 13 m over its streets, stands 10 to 13 m up (was at their
         rail_high=-0.5),        # level at its joints, -13.2); the Letzigraben flyover is 9 m short of the survey's 18 m

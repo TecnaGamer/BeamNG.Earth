@@ -379,12 +379,12 @@ APPROACH_MAX_RUN = 320.0    # m: the longest ramp
 APPROACH_TOUCH_M = 2.5      # m: a road whose end is this close to an abutment leads onto the bridge
 APPROACH_MIN_CROSS_M = 6.0  # m: a road crossing a deck closer than this to its end is a junction at grade (not
                             # under it)
-RAIL_MIN_CROSS_M = 2.0      # m: ... and under a rail deck over a road with a height limit, or under one too short for that
-                            # (a track's bridge is a bridge, however short: the map says so; a 7 m one over a roundabout
-                            # is where findground's cost law decides which one moves). A long rail deck's ends keep the 6 m
-                            # rule: the roads at a viaduct's abutment are not under it, and the ramp's end clears them
-                            # only by the dip the law would then ask of them (measured at Zurich's Duttweilerbruecke: 1 m
-                            # dug along service roads 2-6 m from a viaduct's end)
+RAIL_MIN_CROSS_M = 2.0      # m: ... and under a rail deck over a road with a height limit (a track's bridge over a road
+                            # is 10-12 m, a road's 6 m rule left it out; without a limit the 6 m rule stands: the
+                            # drivability ratchet's Compiegne roundabout dipped under a 7 m rail deck, 89 -> 113, and again
+                            # when findground's cost law asked every rail span, 3.9 -> 41.4: a road cannot dip in the
+                            # few metres a roundabout's arms leave it; the railways' profile reads the same rule:
+                            # railways.AT_GRADE_END_M)
 APPROACH_FLAT_M = 20.0      # m from an abutment the deck needs its full clearance (beyond: it may fall at DECK_GRADE)
 APPROACH_MARGIN_M = 0.3     # m over the clearance (the deck profile's smoothing takes a little off near its ends)
 JUNCTION_RAISE_ON = os.environ.get("BNE_JUNCTION_RAISE", "on") != "off"   # an approach's junction rises with it
@@ -4245,7 +4245,7 @@ class _Planner:
             cw_deck = CW_ON and not rail and self._cw_z_at(b, b[:1]) is not None
             max_l = UNDER_CHAIN_MAX_M if n in chained else UNDER_MAX_BRIDGE_M
             # (a track's bridge is a bridge, however short: the map wins; a level crossing is no bridge in the map)
-            mc = RAIL_MIN_CROSS_M if rail and (limits or L < 2 * APPROACH_MIN_CROSS_M) else APPROACH_MIN_CROSS_M
+            mc = RAIL_MIN_CROSS_M if rail and limits else APPROACH_MIN_CROSS_M
             if L < 2 * mc or (L > max_l and not rail and not cw_deck):
                 continue
             d = dnp.hypot(ue[:, :, None, 0] - ue[n, None, None, :, 0], ue[:, :, None, 1] - ue[n, None, None, :, 1])
@@ -4291,7 +4291,7 @@ class _Planner:
                 b, L, fixed, rail = spans[bi]
                 sign = (_limit_at(limits, pt) if RAIL_SIGNED_ON else None) if rail and limits else None
                 road_sign = None if rail else roadsmod.road_sign_at(limits, pt)
-                mc = RAIL_MIN_CROSS_M if rail and (sign is not None or L < 2 * APPROACH_MIN_CROSS_M) else APPROACH_MIN_CROSS_M
+                mc = RAIL_MIN_CROSS_M if sign is not None else APPROACH_MIN_CROSS_M
                 if L < 2 * mc:
                     continue                    # (a deck too short to span a road)
                 if arc_b < mc or arc_b > L - mc:

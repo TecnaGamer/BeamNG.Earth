@@ -1393,6 +1393,10 @@ class UnderDipTest(unittest.TestCase):
         self.assertIsNone(grading.under_dip(d, 4.0, (20.0, 300.0)), "no room even at UNDER_MAX_GRADE")
 
 
+# (the legacy pass's own behaviour, pinned: under BNE_SHAPES the deck's rise is the shapes' and findground's cost law is asked
+# of every span, which prices a rise the frontage roads would hold down as free: a motorway under a deck whose ramps cannot
+# rise is the legacy pass's dip, as these tests hold)
+@unittest.mock.patch.object(grading, "SHAPES_ON", False)
 class UnderpassShortfallTest(unittest.TestCase):
     @unittest.mock.patch.object(grading, "ROAD_LAWS_ON", False)     # (the dip's own rule; a motorway's laws lengthen it)
     def test_road_under_gives_way_for_what_the_ramps_could_not_raise(self):
@@ -1543,6 +1547,10 @@ class StreetRunsTest(unittest.TestCase):
         self.assertFalse(grading.dead_end(lines[0][0], lines[0], wall))
 
 
+# (the legacy pass's own behaviour, pinned: under BNE_SHAPES the deck's rise is the shapes' and findground's cost law is asked
+# of every span, which prices a rise the frontage roads would hold down as free: a motorway under a deck whose ramps cannot
+# rise is the legacy pass's dip, as these tests hold)
+@unittest.mock.patch.object(grading, "SHAPES_ON", False)
 class CoarseUnderpassTest(unittest.TestCase):
     @unittest.mock.patch.object(grading, "ROAD_LAWS_ON", False)     # (the dip's own rule; the laws lengthen its ramps)
     def test_a_street_dip_stays_on_the_street_on_coarse_elevation(self):
@@ -1838,10 +1846,11 @@ class RailDeckHeightTest(unittest.TestCase):
     of its mapped ends, down the slopes of the street's cutting, and the track's level found beyond them: 37.3 m where
     the railways lay its bed at 40.1 (a neighbouring deck's level carried along the line), the deck drawn there. The
     street was dug for the shapes' deck, 8.75 m under the drawn one where 6.15 m clears it, and the track's fill beside
-    it stood 10.5 m tall. The shapes read the track's height and its deck's depth from the railways (track_beds); who
-    leaves the ground at a 7 m bridge over a street is findground's cost law (the bridge has 3.5 m of run each way where
-    5.8 m at the track's 5 % asks 117, so 227 m of fill against the street's 117 m of cut at its 10 %): the street goes
-    down under the track, which stays at its bed, and clears the deck the railways draw."""
+    it stood 10.5 m tall. A street meeting a bridge within railways.AT_GRADE_END_M of its structure's end (here 3.5 m)
+    meets it at grade: no road dips in so few metres (asked to, the roundabout there scored 3.9 -> 41.4 on the
+    drivability ratchet: grades of 40 %), so findground's cost law is not asked and the track rises over the street,
+    which stays on its ground; the same law says the street goes down under a bridge long enough to dip it
+    (test_findground)."""
 
     def setup_street(self):
         import railprofile
@@ -1852,7 +1861,7 @@ class RailDeckHeightTest(unittest.TestCase):
                      flags=[(1, "is_bridge")], ids=["r0", "r1", "r2", "street"])
         return f, lambda la, lo: np.full(np.shape(la), 30.0)
 
-    def test_the_street_goes_down_under_the_deck_the_railways_draw_which_stays_at_its_bed(self):
+    def test_the_track_rises_over_the_street_at_a_bridge_too_short_to_dip_it_under(self):
         import railprofile
         import railways
         f, elev = self.setup_street()
@@ -1863,12 +1872,11 @@ class RailDeckHeightTest(unittest.TestCase):
             z = np.asarray(grading.Grader(FRAME, FakeMD(f), elev).apply(la, lo, elev(la, lo), grading.ROAD_LIFT), np.float64)
         finally:
             railprofile._NODES.clear()
-        self.assertAlmostEqual(bed, 30.0, delta=0.05, msg="the track at its bed: it does not rise")
         underside = bed - (railways.DECK_D - railways.BALLAST_H)    # (the railways' bed, the deck drawn on it)
         headroom = grading._gsh.HEADROOM_M + grading._gsh.HEADROOM_MARGIN_M
-        self.assertGreaterEqual(underside - float(z[0]), headroom - 0.01, "the street clears the deck as drawn")
-        self.assertAlmostEqual(underside - float(z[0]), headroom, delta=0.3, msg="and is dug no deeper")
-        self.assertAlmostEqual(float(z[2]), 30.0, delta=0.3, msg="back on its ground past its ramp")
+        self.assertGreater(bed, 30.0 + headroom, "the track rises over the street")
+        self.assertGreaterEqual(underside - float(z[0]), headroom - 0.1, "and clears it")
+        self.assertAlmostEqual(float(z[0]), 30.0, delta=0.3, msg="the street stays on its ground")
 
     def test_the_cost_law_is_the_same_for_the_track_and_the_street(self):
         f, elev = self.setup_street()

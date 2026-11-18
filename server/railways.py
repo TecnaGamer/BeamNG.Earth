@@ -42,6 +42,10 @@ NARROW_GAUGE_M = 1.0
 STEP_M = 2.0                # m between cross-sections, from each part's start (the same at every tile)
 SMOOTH_M = 10.0             # m either side the bed's height is averaged over: the real elevation, its DEM bumps out
                             # (50 lifted the bed off the ground, the user, 2026-10-25: "follow the real elevation")
+AT_GRADE_END_M = 6.0        # m: a road crossing a bridge closer than this to its structure's end meets it at grade (grading's
+                            # APPROACH_MIN_CROSS_M): no road dips there, so findground's cost law is not asked and the
+                            # bridge rises (a 7 m rail bridge over a roundabout: the arms have no room to dip, the
+                            # drivability ratchet's Compiegne, 3.9 -> 41.4 when they were asked to)
 GRADE = 0.05                # THE grade law of a track, read by everything that climbs one (the decks' and the approaches' ramps,
                             # the lifts run along the line, the shapes' laws gradeshapes.max_grade, the seam's spread
                             # railroadseam): 5 %, a car game's (the user, 2026-11-18: "rail grade to 5% is a car game after
@@ -1653,9 +1657,9 @@ def _profile(rails, ground, underpasses=()):
                 # findground: the lack is what the bed falls short by, the run the bridge has to its structure's ends
                 lack = want - zb[n][over]
                 k = int(np.argmax(lack))
-                ends_m = _structure_run(rails, edges, ends, n, float(sx[over][k]))
-                if findground.leaves(findground.GROUND, findground.BRIDGE, float(lack[k]), ends_m, GRADE,
-                                     crossings[c][4]) != "upper":
+                ends_m = _structure_run(rails, edges, ends, n, float(np.mean(sx[over])))     # (the road's own crossing)
+                if min(ends_m) >= AT_GRADE_END_M and findground.leaves(findground.GROUND, findground.BRIDGE, float(lack[k]), ends_m,
+                                                                       GRADE, crossings[c][4]) != "upper":
                     continue
             req = zb[n].copy()
             req[over] = np.maximum(req[over], want)
