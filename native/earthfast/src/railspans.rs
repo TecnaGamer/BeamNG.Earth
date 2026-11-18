@@ -110,28 +110,26 @@ impl Tunnel {
     }
 }
 
-/// Proper crossing of polyline r (a run) and polyline g (the tunnel): segment_crossings_core's test (den beyond
-/// 1e-12, both fractions within [0, 1]), any pair.
-fn crosses(r: &[Pt], g: &[Pt]) -> bool {
-    for k in 0..g.len().saturating_sub(1) {
-        let (ax, ay) = (g[k][0], g[k][1]);
-        let (dx, dy) = (g[k + 1][0] - ax, g[k + 1][1] - ay);
-        for j in 0..r.len().saturating_sub(1) {
-            let (px, py) = (r[j][0], r[j][1]);
-            let (rx, ry) = (r[j + 1][0] - px, r[j + 1][1] - py);
-            let den = rx * dy - ry * dx;
-            if den.abs() <= 1e-12 || den.is_nan() {
-                continue;
-            }
-            let (apx, apy) = (ax - px, ay - py);
-            let t = (apx * dy - apy * dx) / den;
-            let u = (apx * ry - apy * rx) / den;
-            if (0.0..=1.0).contains(&t) && (0.0..=1.0).contains(&u) {
-                return true;
-            }
-        }
+/// Which runs (index ranges into pts) cross polyline g: roads._crossings(runs, [g]) through the kernel it called
+/// (segment_crossings_core: its boxes' rejection, then den beyond 1e-12 and both fractions within [0, 1]).
+fn crossing_runs(pts: &[Pt], runs: &[(usize, usize)], g: &[Pt]) -> Vec<bool> {
+    use numpy::ndarray::{ArrayView1, ArrayView2};
+    let mut flat: Vec<f64> = Vec::new();
+    let mut off: Vec<i64> = vec![0];
+    for &(a, b) in runs {
+        flat.extend(pts[a..=b].iter().flat_map(|q| [q[0], q[1]]));
+        off.push((flat.len() / 2) as i64);
     }
-    false
+    let gflat: Vec<f64> = g.iter().flat_map(|q| [q[0], q[1]]).collect();
+    let goff = [0i64, g.len() as i64];
+    let pa = ArrayView2::from_shape((flat.len() / 2, 2), &flat).expect("runs (n, 2)");
+    let ga = ArrayView2::from_shape((g.len(), 2), &gflat).expect("line (k, 2)");
+    let mut out = vec![false; runs.len()];
+    let got = crate::segment_crossings_core(pa, ArrayView1::from(&off[..]), ga, ArrayView1::from(&goff[..]));
+    for (pi, _g, _s, _x, _y) in got {
+        out[pi] = true;
+    }
+    out
 }
 
 /// The parts end to end (Rust-owned: the numpy borrows are let go before the GIL is).
@@ -256,7 +254,9 @@ fn masks(parts: &Parts, bx: &[[f64; 4]], tun: &Tunnel, margin: f64) -> Result<Ve
     if runs.is_empty() {
         return Ok(Vec::new());
     }
-    let crossing: Vec<bool> = runs.iter().map(|&(c, a, b)| crosses(&parts.xy(cand[c].0)[a..=b], line)).collect();
+    let spans: Vec<(usize, usize)> = runs.iter().map(|&(c, a, b)| (parts.off[cand[c].0] + a, parts.off[cand[c].0] + b))
+        .collect();
+    let crossing = crossing_runs(&parts.pts, &spans, line);
     if !crossing.iter().any(|&x| x) {
         return Ok(Vec::new());
     }
@@ -369,7 +369,7 @@ pub fn rail_underpass_distance<'py>(py: Python<'py>, xy: PyReadonlyArray2<'py, f
     Ok((d.into_pyarray(py), f.into_pyarray(py)))
 }
 
-/// railways._span_underpasses then (near given, not NaN) railways._clip: the parts (k, 2) with each ground part's
+/// railways._span_underpasses then (near given) railways._clip: the parts (k, 2) with each ground part's
 /// (ground flags) points over a tunnel (lines, halves, margin m) made "bridge" pieces, then each ground piece cut to its
 /// runs of points inside near (x0, y0, x1, y1), one point more each side. The pieces in order as (part, first point,
 /// last point, made a bridge); no tunnels: the parts as they are, before the cut.
@@ -378,7 +378,7 @@ pub fn rail_underpass_distance<'py>(py: Python<'py>, xy: PyReadonlyArray2<'py, f
 #[allow(clippy::type_complexity, clippy::too_many_arguments)]
 pub fn rail_span_clip<'py>(py: Python<'py>, parts: Vec<PyReadonlyArray2<'py, f64>>, ground: Vec<bool>,
                            lines: Vec<PyReadonlyArray2<'py, f64>>, halves: Vec<f64>, margin: f64,
-                           near: (f64, f64, f64, f64))
+                           near: Option<(f64, f64, f64, f64)>)
                            -> PyResult<(Bound<'py, PyArray1<i64>>, Bound<'py, PyArray1<i64>>, Bound<'py, PyArray1<i64>>,
                                         Bound<'py, PyArray1<bool>>)> {
     let pp = Parts::of(&parts, "rail_span_clip")?;
@@ -388,8 +388,8 @@ pub fn rail_span_clip<'py>(py: Python<'py>, parts: Vec<PyReadonlyArray2<'py, f64
     let tun = tunnels_of(&lines, &halves)?;
     drop(parts);
     drop(lines);
-    let near = [near.0, near.1, near.2, near.3];
-    let clip = !near.iter().any(|v| v.is_nan());
+    let clip = near.is_some();
+    let near = near.map_or([0.0; 4], |n| [n.0, n.1, n.2, n.3]);
     let got: Result<_, Fail> = py.detach(|| {
         // (part, a, b, bridge, ground) before the cut
         let mut pieces: Vec<(usize, usize, usize, bool, bool)> = Vec::new();

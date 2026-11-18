@@ -727,9 +727,6 @@ def _underpass_masks(rails, line, half, margin):
     return masks
 
 
-_NO_BOX = (math.nan,) * 4
-
-
 def _span_clip(rails, tunnels, near=None):
     """rails with each ground part's track over mapped road tunnels (_underpass_hits, FOOT_MAX_M + STEP_M past their half
     width: the approach ballast's feet out of the carriageway too) made supported spans ("bridge" pieces), the sample
@@ -743,7 +740,7 @@ def _span_clip(rails, tunnels, near=None):
     pi, ai, bi, br = fast._ef.rail_span_clip(roads._lines64([xy for *_, xy in rails]),
                                              [kind == "ground" for _f, _c, kind, _xy in rails],
                                              roads._lines64([ln for ln, _h in tunnels]), [float(h) for _ln, h in tunnels],
-                                             FOOT_MAX_M + STEP_M, _NO_BOX if near is None else tuple(map(float, near)))
+                                             FOOT_MAX_M + STEP_M, None if near is None else tuple(map(float, near)))
     out = []
     for n, a, b, bridge in zip(pi.tolist(), ai.tolist(), bi.tolist(), br.tolist()):
         r = rails[n]

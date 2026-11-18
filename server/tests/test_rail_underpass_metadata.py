@@ -142,6 +142,11 @@ class UnderpassMaskTest(unittest.TestCase):
         np.testing.assert_array_equal(got[0][0], np.flatnonzero(a))
         _d, t = railways._underpass_distance(rails[0][3][a], line)
         np.testing.assert_array_equal(got[0][1], t)
+        at = int(np.flatnonzero(rails[0][3][:, 0] == 100.0)[0])            # (on the line, 20 m along its 22)
+        self.assertAlmostEqual(float(got[0][1][list(got[0][0]).index(at)]), 20.0 / 22.0, places=12)
+        d, t = railways._underpass_distance(np.array([[100.0, 5.0], [103.0, -20.0]]), line)
+        np.testing.assert_allclose(d, [3.0, 3.0])
+        np.testing.assert_allclose(t, [1.0, 0.0])
 
     def test_span_clip(self):
         """The track over a tunnel made a bridge piece, the ground pieces cut to the window, a stub left out."""
