@@ -136,5 +136,28 @@ class GraderTest(unittest.TestCase):
         self.assertAlmostEqual(float(mine[0].z[at]), ROAD_Z, delta=0.3, msg="the road's level, not the face over it")
 
 
+class ArchFootprintTest(unittest.TestCase):
+    """A road's cover over a low arch is asked over the tube's own footprint (its width and walls), not the soil beside
+    it that the terrain gets (Zurich Brunau: the motorway 17 m from the tube's axis, its shoulder 0.7 m from the wall,
+    lifted 5.8 m to the vault's cover)."""
+
+    def _arch(self, **kw):
+        xy = np.c_[np.arange(0.0, 101.0, 4.0), np.zeros(26)]
+        spec = roads.Spec(14.0, "paved", False, "trunk")
+        parts = [("t#1", spec, xy, np.full(len(xy), 100.0), None)]
+        return roads.arch_parts(parts, {"t#1": 5.0}, {"t#1": (False, False)}, **kw)
+
+    def test_beside_the_tube_is_not_over_it(self):
+        x = np.full(4, 50.0)
+        y = np.array([0.0, 8.0, 8.7, 10.5])         # (the tube: 7 m half width + 1.2 m wall = 8.2; the soil to 9.2)
+        ground = np.full(4, 100.0)
+        tube = roads.arch_raise_over(self._arch(side=0.0), x, y, ground)
+        self.assertTrue((tube[:2] > 105.0).all(), "over the tube: the vault and its soil")
+        self.assertTrue(np.allclose(tube[2:], ground[2:]), "beside it: nothing asked of a road there")
+        soil = roads.arch_raise_over(self._arch(), x, y, ground)
+        self.assertGreater(float(soil[2]), 105.0, "the terrain still gets its soil beside the tube")
+        self.assertAlmostEqual(float(soil[3]), 100.0)
+
+
 if __name__ == "__main__":
     unittest.main()

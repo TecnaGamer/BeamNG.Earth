@@ -5050,7 +5050,11 @@ class _Planner:
         mouths = {fid: arches[fid][1] for fid, *_r in parts if arches[fid][1] is not None}
         rs = roadsmod.road_specs(feats, None, self.widths)
         spec_of = {str(feats.ids[i]): rs[i] for i in range(len(feats)) if rs[i] is not None}
-        low_arches = roadsmod.arch_parts(parts, heights, mouths)      # (the same arches for every plan and offset)
+        # (the tube's own footprint: its width and walls. The soil arch_raise puts beside it is the terrain's: a road
+        # whose core only touched that margin was beside the tube, not over it, and was lifted to the vault's cover
+        # all the same: Zurich Brunau's motorway 17 m from the tube's axis, its shoulder 0.7 m from the tube's wall,
+        # lifted 5.8 m, the road on the ground beside a tunnel that goes down)
+        low_arches = roadsmod.arch_parts(parts, heights, mouths, side=0.0)    # (the same arches for every plan and offset)
         # (not over its own tunnel: the ground parts of the arches' own roads, part ids "<feature>.<n>#<section>")
         mine = {fid.rsplit("#", 1)[0].rsplit(".", 1)[0] for fid, *_r in parts}
         specs, lows, hold = [], [], {}
