@@ -197,6 +197,34 @@ class OnTest(unittest.TestCase):
         self.assertAlmostEqual(float(z[1]), 10.0, delta=0.1, msg="back up past the ramp")
 
 
+@unittest.skipUnless(have_kernel(), "earthfast's carriageway_profiles")
+class SoloTest(unittest.TestCase):
+    """BNE_VSOLVE=solo: the solve without the passes it replaces, and the passes again where it finds no heights."""
+
+    @staticmethod
+    def heights(**modes):
+        import test_grading as tg
+        f = tg.features([[(-200, 0), (200, 0)], [(0, -20), (0, 20)], [(-60, 0), (-60, 80)]],
+                        ["residential", "motorway", "residential"], flags=[(1, "is_bridge")])
+        with unittest.mock.patch.multiple(vsolve, **modes):
+            g = grading.Grader(tg.FRAME, tg.FakeMD(f), lambda la, lo: np.full(np.shape(la), 10.0))
+            xs = np.arange(-200.0, 201.0, 5.0)
+            la, lo, _ = tg.FRAME.enu_to_geodetic(xs, np.zeros(len(xs)), 0.0)
+            return g.apply(la, lo, np.full(len(xs), 10.0))
+
+    def test_without_a_solve_the_plans_are_the_passes(self):
+        passes = self.heights(ON=False, SHADOW=False, SOLO=False)
+        with unittest.mock.patch.object(vsolve, "solve", side_effect=RuntimeError("no solve")), \
+                self.assertLogs("earthd.grading", "WARNING") as cm:
+            solo = self.heights(ON=True, SHADOW=True, SOLO=True)
+        self.assertTrue(any("no solve in solo mode" in m for m in cm.output))
+        np.testing.assert_array_equal(solo, passes)
+
+    def test_with_one_the_dip_is_the_solve_s(self):
+        solo = self.heights(ON=True, SHADOW=True, SOLO=True)
+        self.assertLess(float(solo[40]), 10.0 - 0.6 * grading.UNDER_CLEAR_M, "under the deck")
+
+
 class CapsTest(unittest.TestCase):
     """The caps under decks (grading's _vsolve_caps), on map data made by hand."""
 
