@@ -377,7 +377,7 @@ def _tile_lines(frame, tx, ty, md, elev, props, wires, clearance):
     reach = {mapcells.cell_of(float(q[1]), float(q[0])) for _, r in lines + poles for q in np.asarray(r, np.float64)}
     subs = _substations(frame, list(cells) + sorted(reach - set(cells), key=str), md)
     _feeders(frame, md, subs, layers, cells, seen, lines, poles)
-    fast.require(436, "power_line_layout")
+    fast.require(437, "power_line_layout")
     ends = np.zeros((0, 7))
     for group, h, arms, clear_m, wire_r, these in ((G_PYLON, PYLON_H, ARMS, TOWER_ROAD_CLEAR_M, WIRE_R, lines),
                                                   (G_POLE, POLE_H, POLE_ARMS, POLE_ROAD_CLEAR_M, POLE_WIRE_R, poles)):

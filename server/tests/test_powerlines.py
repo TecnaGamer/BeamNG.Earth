@@ -169,6 +169,19 @@ class LineTest(unittest.TestCase):
         self.assertEqual(len(wires), len(powerlines.ARMS), "the span into the yard goes, the one before stays")
         self.assertTrue(all(np.asarray(w[0])[:, 0].max() < -99.0 for w in wires))
 
+    def test_a_line_end_does_not_hang_on_where_its_run_starts(self):
+        # Codex's review of 58788443: the vertices closer than MIN_SPAN_M were dropped greedily from the run's start, so
+        # a tile whose run of a feeder began at its last approach vertex (the yard lookup's run) dropped the vertex in
+        # the yard (12 m on) and made no line end, while the yard's tile (its run from farther back) made one: the two
+        # merged other lines onto different gantries. The vertices either side of a yard's edge stay now
+        yard_ring = square(0, -30, 60, 60)
+        full = np.array([[-300, 0, 0], [-23, 0, 0], [-12, 0, 0], [0.5, 0, 0], [30, 0, 0]], np.float64)
+        st = [False, False, False, True, True]
+        _, ends_full, _, _ = layout([full], st, yards=[yard_ring])
+        _, ends_cut, _, _ = layout([full[2:]], st[2:], yards=[yard_ring])
+        self.assertEqual(len(ends_full), 1)
+        np.testing.assert_array_equal(ends_full, ends_cut)
+
     def test_no_gantries_where_none_fit(self):
         # Codex's review of 7bafc807: a yard too small for the gantries anywhere: no line end, no span into it (the
         # line ends at its last tower), and so no gantries in the yard

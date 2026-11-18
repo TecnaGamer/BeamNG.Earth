@@ -275,12 +275,16 @@ pub fn power_line_layout<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, 
     };
     let (mut wp, mut wo): (Vec<f64>, Vec<i64>) = (Vec::new(), vec![0]);
     for l in 0..off.len().saturating_sub(1) {
-        // the line's vertices, those closer than min_span to the last kept one left out
+        // the line's vertices, those closer than min_span to the last kept one left out, but never one either side of
+        // a yard's edge (its mapped approach: a line end, its heading and the gantries it merges onto read the same in
+        // every tile, however far back the tile's run of the line starts; Codex's review of 58788443)
         let (mut v, mut st): (Vec<[f64; 3]>, Vec<bool>) = (Vec::new(), Vec::new());
-        for i in off[l] as usize..off[l + 1] as usize {
+        let (i0, i1) = (off[l] as usize, off[l + 1] as usize);
+        for i in i0..i1 {
             let p = [pts[[i, 0]], pts[[i, 1]], pts[[i, 2]]];
+            let edge = (i > i0 && stop[i] != stop[i - 1]) || (i + 1 < i1 && stop[i] != stop[i + 1]);
             if let Some(q) = v.last() {
-                if (p[0] - q[0]).dhypot(p[1] - q[1]) < min_span {
+                if !edge && (p[0] - q[0]).dhypot(p[1] - q[1]) < min_span {
                     continue;
                 }
             }
