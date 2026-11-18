@@ -11,262 +11,78 @@ tapers (roads._section_tapers); its placement is then in its line (roads.Placeme
 shift: its neighbours meet it there). A segment whose ways all hold one count is left to roads.Placement.
 No geographic or feature-ID overrides. BNE_LANE_SECTIONS=off: none (as before).
 """
-import math
 import os
 import re
 
 import numpy as np
 
 import fast
-import dmath
 import dnp
 import geodesy
 import mapgeom
 import railtags
-import roadlanes
 
 ON = os.environ.get("BNE_LANE_SECTIONS", "on").lower() not in ("off", "0", "false")
-VERSION = 1                 # (mapdata.versions(): the derived caches are built again when it changes)
+VERSION = 3                 # (mapdata.versions(): the derived caches are built again when it changes; 2: a link's
+                            # mouth on its bridge or tunnel stays on its joint, _structure_mouth; 3: every section
+                            # carries its road's most lanes, LANE_MAX)
 PROFILE = "lane_section_profile"
-STEP_M = 4.0
-
-
-def _arc(ll):
-    return np.r_[0., np.cumsum(geodesy.segment_lengths(ll))]
-
-
-def _sample(ll, a, b, dense=True):
-    s = _arc(ll)
-    u, v = a * s[-1], b * s[-1]
-    # Source fractions are stored at lower precision than the vertices.
-    # A split within millimetres of a vertex must not create an extra tangent.
-    inner = s[(s > u + .01) & (s < v - .01)]
-    if dense:
-        stations = np.arange(u + STEP_M, v - .01, STEP_M)
-        if len(inner):
-            k = np.searchsorted(inner, stations)
-            clear = np.minimum(abs(stations - inner[np.minimum(k, len(inner) - 1)]),
-                               abs(stations - inner[np.maximum(k - 1, 0)])) > .01
-            stations = stations[clear]
-        inner = np.sort(np.r_[inner, stations])
-    if len(inner):
-        inner = inner[np.r_[True, np.diff(inner) > .01]]
-    at = np.r_[u, inner, v]
-    return np.column_stack([np.interp(at, s, ll[:, k]) for k in (0, 1)]), at - u
+LANE_MAX = "lane_evidence_max"  # attrs: the most lanes the map's lane data gave the road before it was split
+                                # (roads._lane_evidence of the unsplit layer): its mapped width is judged by them
+                                # (roads.width_rejected), not by the one section's count
 
 
 def _ease(s, length, reach, ends):
-    g = np.ones_like(s)
-    for end, span in enumerate(reach):
-        if span > 0:
-            t = np.clip((s if end == 0 else length - s) / span, 0., 1.)
-            g = np.minimum(g, ends[end] + (1. - ends[end]) * t * t * (3. - 2. * t))
-    return g
+    """The eased share of a section's change at stations s (earthfast roadnet::lanesplit::lane_ease)."""
+    fast.require(383, "lane_ease")
+    return fast._ef.lane_ease(np.ascontiguousarray(s, np.float64).reshape(-1), float(length),
+                              (float(reach[0]), float(reach[1])), (float(ends[0]), float(ends[1])))
 
 
 def _offset(ll, offsets):
+    """The lon / lat line ll moved offsets m (one, or one per point) to its left, in the ENU frame at its first point
+    (earthfast roadnet::lanesplit::lane_offset)."""
+    fast.require(383, "lane_offset")
+    return fast._ef.lane_offset(np.ascontiguousarray(np.asarray(ll, np.float64)[:, :2]),
+                                np.ascontiguousarray(np.atleast_1d(np.asarray(offsets, np.float64)).reshape(-1)))
+
+
+def _cols(f):
+    """Layer f's columns as roadnet::lanesplit reads them."""
     import roads
-    fr = geodesy.EnuFrame(float(ll[0, 1]), float(ll[0, 0]), 0.)
-    e, n, _ = fr.geodetic_to_enu(ll[:, 1], ll[:, 0], 0.)
-    p = roads.offset_polyline(np.c_[e, n, np.zeros(len(ll))], offsets)
-    la, lo, _ = fr.enu_to_geodetic(p[:, 0], p[:, 1], 0.)
-    return np.c_[lo, la]
-
-
-def _placement(tags, n, lane_m, direction):
-    v = str(tags.get("placement", ""))
-    m = re.fullmatch(r"(middle_of|left_of|right_of):(\d+)", v)
-    if not m or not 1 <= int(m[2]) <= n:
-        return None
-    # OSM lanes are numbered from travel-left, independent of driving side.
-    k = int(m[2]) - {"left_of": 1., "middle_of": .5, "right_of": 0.}[m[1]]
-    return (k - n / 2.) * lane_m * direction
-
-
-def _outer_lanes(tags, n):
-    """Travel side and count of a contiguous group of exit or merge lanes."""
-    vals = [set(v.split(";")) for v in str(tags.get("turn:lanes", "")).split("|")]
-    if len(vals) != n:
-        return 0, 0
-    for side, choices, ordered in ((-1, {"merge_to_left", "slight_right", "right"}, vals[::-1]),
-                                   (1, {"merge_to_right", "slight_left", "left"}, vals)):
-        count = 0
-        for value in ordered:
-            if not value & choices or "through" in value:
-                break
-            count += 1
-        if 0 < count < n and all(v <= {"", "none", "through"} for v in ordered[count:]):
-            return side, count
-    return 0, 0
-
-
-def _col(f, name, i):
-    """f.attrs[name][i], None without the column."""
-    col = f.attrs.get(name)
-    return col[i] if col is not None else None
-
-
-def _sections(f, i):
-    # (the cheap tests first: every feature of a cell is asked, a layer at each decode; a single way's stretch holds
-    # one count, roads.Placement's)
-    parts = f.attrs.get(railtags.LANE_PARTS)
-    if parts is None or not isinstance(parts[i], (list, tuple)) or len(parts[i]) < 2 or f.kind[i] != mapgeom.LINE:
-        return None
-    if _col(f, "class", i) not in roadlanes.HIGHWAYS:
-        return None
-    direction = roadlanes.rule(f, "oneway", i)
-    if not direction or roadlanes.is_link(f, i):
-        return None
-    rings = f.parts(i)
-    if len(rings) != 1 or len(rings[0]) != 1 or len(rings[0][0]) < 2:
-        return None
-    primary = roadlanes.count(_col(f, "osm_lanes", i))
-    primary = primary or roadlanes.count(_col(f, railtags.lane_attr("lanes"), i))
-    rows = sorted(parts[i], key=lambda r: r[0])
-    explicit = [roadlanes.count((r[3] or {}).get("lanes")) for r in rows]
-    if primary is None and all(n is not None for n in explicit):
-        primary = explicit[max(range(len(rows)), key=lambda k: rows[k][1] - rows[k][0])]
-    counts = [n or primary for n in explicit]
-    if not primary or any(n is None for n in counts) or float(_arc(rings[0][0])[-1]) < 1.:
-        return None
-    if len(set(counts)) < 2:
-        return None                 # (one count: roads.Placement moves a placed one, as for any road)
-    # Reject overlapping/gapped references; do not guess across incomplete source coverage.
-    if abs(rows[0][0]) > 1e-6 or abs(rows[-1][1] - 1.) > 1e-6 or any(
-            b <= a or (j and abs(a - rows[j - 1][1]) > 1e-6) for j, (a, b, *_rest) in enumerate(rows)):
-        return None
-    out = []
-    for (a, b, way, tags), n in zip(rows, counts):
-        tags = dict(tags or {})
-        sig = (n, tuple(sorted(tags.items())))
-        if out and out[-1][-1] == sig:
-            out[-1] = (out[-1][0], b, out[-1][2], tags, n, sig)
-        else:
-            out.append((a, b, way, tags, n, sig))
-    base = min(counts)
-    if len(set(counts)) == 1:
-        base -= max(_outer_lanes(r[3] or {}, base)[1] for r in rows)
-    return out, base, 1 if direction > 0 else -1
+    a = f.attrs
+    return ([str(x) for x in f.ids.tolist()], np.ascontiguousarray(f.kind, np.uint8),
+            np.ascontiguousarray(f.part_off, np.int64), np.ascontiguousarray(f.ring_off, np.int64),
+            np.ascontiguousarray(f.coord_off, np.int64), np.ascontiguousarray(f.lonlat, np.float64).reshape(-1, 2),
+            a.get("class"), f.rules.get("oneway"), f.rules.get("subclass"), a.get("subclass"), a.get("osm_lanes"),
+            a.get(railtags.lane_attr("lanes")), a.get(railtags.LANE_PARTS),
+            {str(k): float(v) for k, v in roads.LANE_W.items()}, float(roads.LANE_W_DEFAULT),
+            (float(roads.SHOULDER_M), float(roads.SHOULDER_WIDE_M), int(roads.SHOULDER_WIDE_LANES)))
 
 
 def _joint_specs(f):
+    """{(lon, lat) rounded to 6 places: [(tangent x, tangent y, target m, tail, class, turning)]}: every lane section's
+    auxiliary lane at its own ends where its placement and turn lanes put the lane's edge (a slip road's mouth there
+    moves out to it: split). Kept on f (earthfast roadnet::lanesplit::lane_joint_specs)."""
     cached = f.__dict__.get("_lane_section_joints")
     if cached is not None:
         return cached
-    joints = {}
-    import roads
-    for i in range(len(f)):
-        got = _sections(f, i)
-        if got is None:
-            continue
-        rows, base, direction = got
-        raw = f.parts(i)[0][0]
-        lane_m = roads.LANE_W.get(str(f.attrs["class"][i]), roads.LANE_W_DEFAULT)
-        for a, b, _way, tags, n, _sig in rows:
-            side, turning = _outer_lanes(tags, n)
-            off = _placement(tags, n, lane_m, direction)
-            if off is None or not side or not 0 < turning <= n - base:
-                continue
-            if abs(off - side * direction * (n - base) * lane_m / 2) > .05:
-                continue
-            for end, at in ((0, a), (-1, b)):
-                if at not in (0., 1.):
-                    continue
-                e = raw[end]
-                tangent = raw[1] - raw[0] if end == 0 else raw[-1] - raw[-2]
-                tangent = tangent * np.array([dmath.cos(math.radians(e[1])), 1.])
-                tangent = tangent / max(dnp.norm(tangent), 1e-12)
-                # (the lanes stand off the pavement's centre by roads.driving_offset: a motorway's wider shoulder on
-                # the right of travel)
-                target = off + side * direction * (n - turning) * lane_m / 2. + _grid(str(f.attrs["class"][i]), n,
-                                                                                       lane_m) * direction
-                tail = (end == 0) == (direction > 0)
-                key = tuple(np.round(e, 6))
-                joints.setdefault(key, []).append((tangent, target, tail, str(f.attrs["class"][i]), turning))
-    f.__dict__["_lane_section_joints"] = joints
+    fast.require(383, "lane_joint_specs")
+    joints = f.__dict__["_lane_section_joints"] = fast._ef.lane_joint_specs(*_cols(f))
     return joints
 
 
-def _grid(cls, n, lane_m):
-    """m the travel lanes of a one-way carriageway of class cls and n lanes stand left of travel off its pavement's
-    centre (roads.driving_offset of its default width: its right shoulder 1.5 x, its left 0.5 x the mean shoulder)."""
+def _structure_mouth(f, i, end):
+    """Whether link i's mouth (its end 0 / -1) is on a bridge or tunnel range the map gives it (roads.tag_level_ranges):
+    a deck's (a tube's) end at the joint it leaves its road from. Moved out to its lane, the deck's end left the joint the
+    chain solver and the grading join decks and roads at (roads.BridgeProfiles: END_JOIN_*, PIN_M; grading
+    APPROACH_TOUCH_M): the exit ramp's deck at the A7's junction with the B 286 at Schweinfurt (2026-11-16) began 4 m off
+    the A7's joint, its approach was raised 3.2 m for a deck taken to start on the ground, and the A7's deck beside it
+    went up 2 m within 2 m of its abutment, a wall at 116 km/h. Such a mouth stays on its joint, as without the
+    sections (BNE_LANE_SECTIONS=off); a mouth on the ground still goes out to its lane."""
     import roads
-    if cls != "motorway":
-        return 0.
-    cap = roads.SHOULDER_WIDE_M if n >= roads.SHOULDER_WIDE_LANES else roads.SHOULDER_M
-    return cap / 2.
-
-
-def _ramp_mouths(f, jobs, context=None):
-    """Resolve the physical slip-lane centre from explicit lane evidence.
-
-    A merged feature can extend outside its data cell. Resolve each mouth from
-    the data cell containing that mouth, so copies have identical geometry.
-    """
-    joints = dict(_joint_specs(f))
-    if context is not None:
-        for _fid, i, _a, _b, p, _tags, _n, _prof in jobs:
-            if (p is not None or _col(f, "class", i) not in roadlanes.HIGHWAYS or f.kind[i] != mapgeom.LINE
-                    or not roadlanes.is_link(f, i)):
-                continue
-            parts = f.parts(i)
-            if len(parts) != 1 or len(parts[0]) != 1:
-                continue
-            for node in parts[0][0][[0, -1]]:
-                key = tuple(np.round(node, 6))
-                # Even a local candidate must use the mouth's owner when this
-                # cell contains only some of the other incident roads.
-                source = context(float(node[1]), float(node[0]))
-                if source is not None:
-                    joints[key] = _joint_specs(source).get(key, [])
-    if not joints:
-        return jobs
-    result = []
-    for job in jobs:
-        fid, i, a, b, p, tags, n, prof = job
-        if p is not None or _col(f, "class", i) not in roadlanes.HIGHWAYS or f.kind[i] != mapgeom.LINE:
-            result.append(job)
-            continue
-        direction = roadlanes.rule(f, "oneway", i)
-        parts = f.parts(i)
-        if p is not None or not direction or not roadlanes.is_link(f, i) or len(parts) != 1 or len(parts[0]) != 1:
-            result.append(job)
-            continue
-        raw = parts[0][0]
-        if len(raw) < 2:
-            result.append(job)
-            continue
-        moved = None
-        for end in (0, -1):
-            candidates = joints.get(tuple(np.round(raw[end], 6)), ())
-            if len(candidates) != 1:
-                continue
-            tangent, target, main_tail, cls, turning = candidates[0]
-            ramp_lanes = roadlanes.count(_col(f, "osm_lanes", i)) or \
-                roadlanes.count(_col(f, railtags.lane_attr("lanes"), i)) or 1
-            if (cls != str(f.attrs["class"][i]) or turning != ramp_lanes or
-                    main_tail == ((end == 0) == (direction > 0))):
-                continue
-            line, stations = _sample(raw, 0., 1.)
-            sc = np.array([111320. * dmath.cos(math.radians(raw[end, 1])), 110540.])
-            xy = (line - raw[end]) * sc
-            dr = (raw[1] - raw[0]) * sc if end == 0 else (raw[-1] - raw[-2]) * sc
-            dr = dr / max(dnp.norm(dr), 1e-12)
-            dot = float(dnp.dot(dr, tangent))
-            if abs(dot) < .85:
-                continue
-            lateral = tangent[0] * xy[:, 1] - tangent[1] * xy[:, 0]
-            from_end = stations if end == 0 else stations[-1] - stations
-            reach = min(160., float(stations[-1]) * .45)
-            t = np.clip(from_end / max(reach, 1e-9), 0., 1.)
-            fade = 1. - t * t * (3. - 2. * t)
-            shift = np.sign(target) * np.maximum(abs(target) - lateral * np.sign(target), 0.) * fade / dot
-            # Two mouths of the same short link must share one geometry.
-            if moved is None:
-                moved = line
-            moved = _offset(moved, shift)
-        result.append((fid, i, a, b, moved, tags, n, prof) if moved is not None else job)
-    return result
+    at = 0. if end == 0 else 1.
+    return any(a - 1e-6 <= at <= b + 1e-6 for a, b, _kind in roads.tag_level_ranges(f, i))
 
 
 def split(f, frame=None, context=None):
@@ -277,141 +93,32 @@ def split(f, frame=None, context=None):
     """
     if f is None or not len(f) or PROFILE in f.attrs:
         return f
-    plans = {i: got for i in range(len(f)) if (got := _sections(f, i)) is not None}
-    # A cell may contain only a distant portion of a link whose mouth is in
-    # another cell. Its owner's evidence is still needed for stable geometry.
-    if not plans and context is None:
+    # (the sections, their lines and profiles and the slip roads' mouths: earthfast roadnet::lanesplit; None: the
+    # layer as it is)
+    fast.require(383, "lane_split_jobs")
+    jobs = fast._ef.lane_split_jobs(*_cols(f), f, context, _joint_specs, lambda i, end: _structure_mouth(f, i, end))
+    if jobs is None:
         return f
+    out = _new_layer(f, jobs)
+    return out.localize(frame) if frame is not None else out
+
+
+def _new_layer(f, jobs):
+    """The new layer of split's jobs (earthfast roadnet::splitlayer): each job a copy of its feature, or its section's
+    (or moved mouth's) line, with its columns (the section's profile, count and lane tags; every road with its road's
+    most lanes before the split clears its lane parts, LANE_MAX; the lane tag columns as objects: a section's tag strings
+    may be longer than its road's) and its rule rows (the sections' cut points' connectors after each job's own). Join
+    versions are retained; geometry / specification memos intentionally are not."""
     import roads
-    jobs = []
-    for i in range(len(f)):
-        if i not in plans:
-            jobs.append((str(f.ids[i]), i, 0., 1., None, None, None, None))
-            continue
-        rows, base, direction = plans[i]
-        ll = f.parts(i)[0][0]
-        lane_m = roads.LANE_W.get(str(f.attrs["class"][i]), roads.LANE_W_DEFAULT)
-        offsets = [_placement(tags, n, lane_m, direction) or 0. for _, _, _, tags, n, _ in rows]
-        base_offsets = [off for off, row in zip(offsets, rows) if row[4] == base] or [0.]
-        reference = base_offsets[0]
-        common_grid = max(base_offsets) - min(base_offsets) < .05
-        for j, (a, b, _way, tags, n, _sig) in enumerate(rows):
-            off = offsets[j]
-            shift = off - reference
-            extra = (n - base) * lane_m
-            if not common_grid or abs(abs(shift) - extra / 2) > .05:
-                extra = 0.
-            p, s = _sample(ll, a, b, dense=bool(extra))
-            length = float(s[-1])
-            reach, ends = [0., 0.], [1., 1.]
-            if extra:
-                for end, nb in ((0, j - 1), (1, j + 1)):
-                    if not 0 <= nb < len(rows):
-                        continue
-                    other = rows[nb][4]
-                    change = (n - other) * lane_m
-                    if change > 0. and abs(off - offsets[nb] - np.sign(shift) * change / 2) < .05:
-                        reach[end] = min(90., change * 20., length * .45)
-                        ends[end] = 1. - change / extra
-                side, turning = _outer_lanes(tags, n)
-                if side * direction != np.sign(shift):
-                    turning = 0
-                placed = reference + shift * _ease(s, length, reach, ends)
-            else:
-                placed, turning = off, 0
-            moved = bool(np.any(np.abs(np.atleast_1d(placed)) > 1e-9))
-            if moved:
-                p = _offset(p, placed)
-            ends_off = (float(np.atleast_1d(placed)[0]), float(np.atleast_1d(placed)[-1])) if moved else (0., 0.)
-            prof = {"offset": off, "shift": shift, "extra": extra, "turning": turning, "end_off": ends_off,
-                    "reach": reach, "ends": ends, "length": length, "phase": float(_arc(ll)[-1] * a),
-                    "stations": s.tolist(), "line": p.tolist()}
-            fid = f"{f.ids[i]}~lanes{round(a * 1e9):09d}-{round(b * 1e9):09d}"
-            jobs.append((fid, i, a, b, p, tags, n, prof))
-    jobs = _ramp_mouths(f, jobs, context)
-    if not plans and not any(r[4] is not None for r in jobs):
-        return f
-    jobs.sort(key=lambda r: r[0])
-    old = np.array([r[1] for r in jobs], np.int64)
-    attrs = {k: np.asarray(v)[old].copy() for k, v in f.attrs.items()}
-    attrs[PROFILE] = np.full(len(jobs), None, object)
-    # Object columns permit new tag strings longer than the dominant source's string.
-    for key in railtags.LANE_COLUMNS:
-        attrs[railtags.lane_attr(key)] = np.asarray(attrs.get(railtags.lane_attr(key), [None] * len(jobs)), object)
-    attrs["src_record"] = np.asarray(attrs.get("src_record", [""] * len(jobs)), object)
-    attrs["osm_lanes"] = np.asarray(attrs.get("osm_lanes", [np.nan] * len(jobs)), np.float64)
-    attrs[railtags.LANE_PARTS] = np.asarray(attrs.get(railtags.LANE_PARTS, [None] * len(jobs)), object)
-    # the new layer's geometry and rule rows gathered natively (lanesections.rs, kernel 235): each job a copy of its
-    # feature, or of its section's (or moved mouth's) line, and the rows over it
-    fast.require(235, "lane_split_coords")
-    moved = np.array([r[4] is not None for r in jobs], bool)
-    lines = [np.asarray(r[4], np.float64).reshape(-1, 2) for r in jobs if r[4] is not None]
-    p_off = np.r_[0, np.cumsum([len(r[4]) if r[4] is not None else 0 for r in jobs])].astype(np.int64)
-    po, ro, co, coords = fast._ef.lane_split_coords(
-        np.ascontiguousarray(f.part_off, np.int64), np.ascontiguousarray(f.ring_off, np.int64),
-        np.ascontiguousarray(f.coord_off, np.int64), np.ascontiguousarray(f.lonlat, np.float64).reshape(-1, 2), old,
-        moved, np.ascontiguousarray(np.concatenate(lines) if lines else np.zeros((0, 2)), np.float64), p_off)
-    if not len(coords):
-        coords = np.zeros(0, np.float64)
-    ja = np.array([r[2] for r in jobs], np.float64)
-    jb = np.array([r[3] for r in jobs], np.float64)
-    extra = []                                      # (job, connector id, at) of the sections' cut points
-    for z, (_fid, i, a, b, p, tags, n, prof) in enumerate(jobs):
-        if prof is None:
-            continue
-        for at, value in ((a, 0.), (b, 1.)):
-            if 0. < at < 1.:
-                extra.append((z, f"lane:{f.ids[i]}:{round(at * 1e9)}", value))
-        attrs[PROFILE][z] = prof
-        attrs["osm_lanes"][z] = n
-        # Preserve the section's tags, rather than repeating the dominant way's turn arrows.
-        for key in railtags.LANE_COLUMNS:
-            attrs[railtags.lane_attr(key)][z] = tags.get(key)
-        attrs[railtags.lane_attr("lanes")][z] = n
-        if railtags.lane_attr("placement") in attrs:
-            attrs[railtags.lane_attr("placement")][z] = None     # (in its line: prof["end_off"])
-        attrs[railtags.LANE_PARTS][z] = None
-    tables = {}
-    for name in list(f.rules) + ([] if "connectors" in f.rules else ["connectors"]):
-        table = f.rules.get(name)
-        if table is not None and len(table):
-            rows, zs, us, vs = fast._ef.lane_split_rules(
-                np.ascontiguousarray(table.feature, np.int64), np.ascontiguousarray(table.start, np.float64),
-                np.ascontiguousarray(table.end, np.float64), old, ja, jb)
-            values = np.asarray(table.value)[rows]
-        else:
-            rows = zs = np.zeros(0, np.int64)
-            us = vs = np.zeros(0)
-            values = None
-        if name == "connectors":
-            if extra:           # (after each job's own rows, in job order)
-                ez = np.array([e[0] for e in extra], np.int64)
-                order = np.lexsort((np.r_[np.arange(len(zs)), np.arange(len(ez))],
-                                    np.r_[np.zeros(len(zs), np.int64), np.ones(len(ez), np.int64)], np.r_[zs, ez]))
-                vals = np.empty(len(zs) + len(ez), object)
-                if len(zs):
-                    vals[:len(zs)] = list(values)
-                vals[len(zs):] = [e[1] for e in extra]
-                zs = np.r_[zs, ez][order]
-                us = np.r_[us, [e[2] for e in extra]][order]
-                vs = np.r_[vs, [e[2] for e in extra]][order]
-                values = vals[order]
-            if len(zs):
-                values = np.array(list(values), dtype=str)
-        if not len(zs):
-            tables[name] = f.rules[name] if name in f.rules and not len(f.rules[name]) else mapgeom.RuleTable(
-                np.zeros(0, np.int32), np.zeros(0, str), np.zeros(0), np.zeros(0))
-            continue
-        tables[name] = mapgeom.RuleTable(zs.astype(np.int32), values, np.asarray(us, np.float64),
-                                        np.asarray(vs, np.float64))
-    out = mapgeom.Features(f.layer, np.array([r[0] for r in jobs]), f.kind[old], po, ro, co, coords,
-                           own=None if f.own is None else f.own[old],
-                           clipped=None if f.clipped is None else f.clipped[old], attrs=attrs, rules=tables)
-    # Join versions are retained; geometry/specification memos intentionally are not.
+    fast.require(403, "lane_split_layer")
+    out = fast._ef.lane_split_layer(
+        f, jobs, lambda: roads._lane_evidence(f), PROFILE, LANE_MAX,
+        [(k, railtags.lane_attr(k)) for k in railtags.LANE_COLUMNS], railtags.lane_attr("lanes"),
+        railtags.lane_attr("placement"), railtags.LANE_PARTS, mapgeom.Features, mapgeom.RuleTable)
     for key in ("_lanes_built", "_rails_built"):
         if key in f.__dict__:
             out.__dict__[key] = f.__dict__[key]
-    return out.localize(frame) if frame is not None else out
+    return out
 
 
 def profile(f, i):
@@ -478,6 +185,31 @@ def growth(prof, lon, lat):
     arc = np.r_[0., np.cumsum(dnp.hypot(*np.diff(line, axis=0).T))]
     at = np.interp(at, arc, s)
     return _ease(at, prof["length"], prof["reach"], prof["ends"]).reshape(np.shape(lon))
+
+
+def unplaced(f, i, rings):
+    """rings (lon / lat pieces of section i's line: its ground_parts) moved back onto the map's line it was cut from,
+    off its placement (split moved a section's line out to where its lanes stand, by its offset eased along it: growth).
+    The bridge chain solver's ground roads (roads.BridgeProfiles._cell_entries): its decks are the map's lines, and a
+    section's end held its placement off the joint it meets them at. The A7's southbound section ending 2.0 m off its
+    junction with the decks over the B 286 at Schweinfurt (2026-11-16) was no ground road going on from that joint
+    (roads.PIN_M), so the joint was no abutment: the decks stood 2.8 m over the road at their start, a wall at 116 km/h.
+    rings themselves for any other road and a section left in place."""
+    prof = profile(f, i)
+    if not prof or not (prof.get("extra") or abs(float(prof.get("offset") or 0.)) > 1e-9):
+        return rings
+    out = []
+    for ring in rings:
+        ll = np.asarray(ring, np.float64)[:, :2]
+        if len(ll) < 2:
+            out.append(ring)
+            continue
+        if prof["extra"]:       # (split's: its reference offset plus its shift eased along it)
+            placed = prof["offset"] - prof["shift"] + prof["shift"] * growth(prof, ll[:, 0], ll[:, 1])
+        else:
+            placed = np.full(len(ll), float(prof["offset"]))
+        out.append(_offset(ll, -placed) if np.any(np.abs(placed) > 1e-9) else ring)
+    return out
 
 
 def phase(f, i):

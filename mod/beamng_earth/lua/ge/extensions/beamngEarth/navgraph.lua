@@ -173,7 +173,7 @@ end
 -- Contract isolated sub-metre seams on a continuous road with matching directed lane metadata. The stock marker
 -- planner merges points this close, but the vehicle AI given both nodes can make a sharp lane adjustment and stop.
 -- Keep junctions, clip boundaries, controls and changes in lanes/width/rules; the downstream node stays stable.
-function M.compactShortEdges(nodes, protected)
+function M.compactShortEdges(nodes, protected, step)
   local function other(id, except)
     local found
     for nextId in pairs(nodes[id].links) do
@@ -193,9 +193,13 @@ function M.compactShortEdges(nodes, protected)
       and a.rough == b.rough and a.rumble == b.rumble
   end
   local ids, removed = {}, 0
-  for id in pairs(nodes) do ids[#ids + 1] = id end
+  for id in pairs(nodes) do
+    ids[#ids + 1] = id
+    if step then step() end
+  end
   table.sort(ids)
   for _, a in ipairs(ids) do
+    if step then step() end
     local A = nodes[a]
     if A and not protected[a] then
       for b, e in pairs(A.links) do
@@ -216,6 +220,69 @@ function M.compactShortEdges(nodes, protected)
               P.links[b], B.links[p] = before, before
               before.outNode, before.outPos = b, B.pos
               nodes[a], removed = nil, removed + 1
+              break
+            end
+          end
+        end
+      end
+    end
+  end
+  return removed, ids
+end
+
+-- A straight shape node inside a junction's road radius can put the stock AI's preceding lane point past its
+-- turn point, reversing the turn normal. Remove only redundant approach geometry; keep the junction and controls.
+function M.compactJunctionApproaches(nodes, protected, step, ids)
+  local function degree(n)
+    local count = 0
+    for _ in pairs(n.links) do count = count + 1 end
+    return count
+  end
+  -- Reuse the seam pass's sorted IDs; removed nodes are skipped below. Keep appending neighbours for rechecks.
+  local queue, removed = ids or {}, 0
+  if not ids then
+    for id in pairs(nodes) do
+      queue[#queue + 1] = id
+      if step then step() end
+    end
+    table.sort(queue)
+  end
+  local i = 1
+  while i <= #queue do
+    if step then step() end
+    local a = queue[i]
+    i = i + 1
+    local A = nodes[a]
+    if A and not protected[a] and degree(A) == 2 then
+      for b, e in pairs(A.links) do
+        local B = nodes[b]
+        if degree(B) >= 3 then
+          local p = next(A.links)
+          if p == b then p = next(A.links, p) end
+          local P, before = nodes[p], A.links[p]
+          local forward = before.outNode == a and e.inNode == a
+          local reverse = before.inNode == a and e.outNode == a
+          local radius = e.inRadius
+          if not P.links[b] and (forward or reverse) and radius and radius == e.outRadius
+            and before.inRadius == radius and before.outRadius == radius
+            and before.oneWay == e.oneWay and before.lanes == e.lanes
+            and before.drivability == e.drivability and before.rough == e.rough and before.rumble == e.rumble
+            and before.posted == e.posted and type(before.speedLimit) == 'number' and type(e.speedLimit) == 'number' then
+            local dx, dy, dz = B.pos.x - P.pos.x, B.pos.y - P.pos.y, B.pos.z - P.pos.z
+            local ax, ay, az = A.pos.x - P.pos.x, A.pos.y - P.pos.y, A.pos.z - P.pos.z
+            local lenSq = dx * dx + dy * dy + dz * dz
+            local t = lenSq > 0 and (ax * dx + ay * dy + az * dz) / lenSq or -1
+            local gapSq = (A.pos.x - B.pos.x)^2 + (A.pos.y - B.pos.y)^2 + (A.pos.z - B.pos.z)^2
+            -- A shortcut must stay within 10 cm of the original line and must not fold back or skip a bend.
+            if t > 0 and t < 1 and gapSq <= radius * radius
+              and (ax - t * dx)^2 + (ay - t * dy)^2 + (az - t * dz)^2 <= 0.01 then
+              P.links[a], B.links[a] = nil, nil
+              P.links[b], B.links[p] = before, before
+              if forward then before.outNode, before.outPos = b, B.pos
+              else before.inNode, before.inPos = b, B.pos end
+              before.speedLimit = math.min(before.speedLimit, e.speedLimit)
+              nodes[a], removed = nil, removed + 1
+              queue[#queue + 1] = p -- another redundant point may now be the junction's nearest neighbour
               break
             end
           end
@@ -244,7 +311,10 @@ function M.toNodes(g, b, edgeM, leftHand, yieldEvery, halo, fastHalo)
   local function step()       -- (in a coroutine: a pause every yieldEvery items, buildNodes)
     if yieldEvery then
       steps = steps + 1
-      if steps % yieldEvery == 0 then coroutine.yield() end
+      if steps == yieldEvery then
+        steps = 0
+        coroutine.yield()
+      end
     end
   end
   for name, n in pairs(g.nodes) do
@@ -293,7 +363,8 @@ function M.toNodes(g, b, edgeM, leftHand, yieldEvery, halo, fastHalo)
     if sg.j then cut[sg.j] = true end
     for _, app in ipairs(sg.app or {}) do if app[1] then cut[app[1]] = true end end
   end
-  local removed = M.compactShortEdges(nodes, cut)
+  local removed, ids = M.compactShortEdges(nodes, cut, step)
+  removed = removed + M.compactJunctionApproaches(nodes, cut, step, ids)
   return nodes, nn - removed, ne - removed, cutList
 end
 

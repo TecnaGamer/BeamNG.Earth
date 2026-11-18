@@ -2,10 +2,12 @@
 -- arrive after another rebuild, whereas mapmgr.mapData identifies the graph the AI actually has.
 local M = {}
 local lastPath, lastMap, lastVersion, lastSpeed, lastAggression
+local lastBypass=false
 
 local function resetPath()
   lastPath, lastMap, lastVersion, lastSpeed, lastAggression = nil, nil, nil, nil, nil
   if beamngEarth_staticObstacles then beamngEarth_staticObstacles.reset() end
+  lastBypass=false
 end
 function M.reset()
   resetPath()
@@ -117,7 +119,7 @@ end
 function M.drive(ids, version, force, speed, aggression)
   local md = mapmgr.mapData
   if not valid(ids, md) then
-    M.stop()
+    M.hold()
     mapmgr.requestMap()
     return 'waiting'
   end
@@ -126,7 +128,8 @@ function M.drive(ids, version, force, speed, aggression)
     local front, ref = obj:getFrontPosition(), obj:getPosition()
     ids = M.forwardStart(ids, md, { x = front.x, y = front.y, z = ref.z }, obj:getDirectionVector())
   end
-  local suffix = not force and ai.mode == 'manual' and md == lastMap and version == lastVersion
+  local bypass=beamngEarth_oncomingPass and beamngEarth_oncomingPass.offLane() or false
+  local suffix = not force and bypass==lastBypass and ai.mode == 'manual' and md == lastMap and version == lastVersion
     and speed == lastSpeed and aggression == lastAggression and M.extension(lastPath, ids)
   local action
   if suffix then
@@ -135,8 +138,13 @@ function M.drive(ids, version, force, speed, aggression)
     -- In BeamNG 0.40, explicit path input leaves ego.currentSegment empty. The first plan then aims at the
     -- road centre instead of the occupied lane. Waypoint input runs getPointNodePath and seeds that segment;
     -- every adjacent node remains a waypoint so the local route still follows the GPS's chosen turns.
-    ai.driveUsingPath({ wpTargetList = ids, driveInLane = 'on', avoidCars = 'on', aggression = aggression,
-      routeSpeedMode = speed and 'set' or 'legal', routeSpeed = speed })
+    local args={ wpTargetList = ids, driveInLane = 'on', avoidCars = 'on', aggression = aggression,
+      routeSpeedMode = speed and 'set' or 'legal', routeSpeed = speed }
+    if bypass then
+      args.path=ids;args.wpTargetList=nil;args.driveInLane='off'
+      args.routeSpeed=math.min(3,speed or 3);args.routeSpeedMode='limit'
+    end
+    ai.driveUsingPath(args)
     action = 'start'
   end
   -- The engine may extend its own path table in place; retain an independent copy of the requested suffix.
@@ -150,6 +158,12 @@ function M.drive(ids, version, force, speed, aggression)
   end
   if beamngEarth_oncomingClearance then beamngEarth_oncomingClearance.bindMap() end
   if beamngEarth_maneuverClearance then beamngEarth_maneuverClearance.bindMap() end
+  if not beamngEarth_staticObstacles and extensions and extensions.load then
+    extensions.load('beamngEarth_staticObstacles')
+  end
+  if beamngEarth_staticObstacles then beamngEarth_staticObstacles.bindPath(lastPath,md,action=='start') end
+  if beamngEarth_oncomingPass then beamngEarth_oncomingPass.bindPath(md,action=='start') end
+  lastBypass=bypass
   return action
 end
 

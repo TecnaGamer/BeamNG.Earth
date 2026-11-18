@@ -107,6 +107,18 @@ Same pattern as MSFS "anchor space", Cesium origin-shifting, and KSP floating or
   and navgraph node tables.
 - Output: atomic files in `<user>/temp/beamngEarth/<session>/` (versioned names,
   because the engine caches by path), plus small JSON control messages.
+- The game connection (protocol 4: a u32 LE length + UTF-8 JSON, at most 16 MiB a frame) is served by asyncio, or
+  with `BNGE_HOST=on` by earthfast's host (`native/earthfast/src/host`, the Rust port's phase 1; plan
+  `.claude/work/rust-port-plan-2026-11-15.md` section 4): Rust owns the listening socket, the reads, the framing, the
+  outgoing queue and the writes on threads of its own (`bnge-io` accepts, `bnge-rd-N` / `bnge-wr-N` per connection),
+  without the GIL. The hand-over needs no GIL either: the first frame into an empty inbox writes one byte to a local
+  socket pair the event loop reads like any socket, and the loop then takes everything that came as one batch
+  (`protocol.HostServer`; what comes while it is busy waits in that batch, consecutive poses of one anchor merged:
+  `BNGE_HOST_MERGE`). The handlers run unchanged on the loop, the "Python lane", through `protocol.HostStream`
+  (asyncio's reader / writer surface: drain's 64 / 16 KiB water marks, close flushes, abort drops). So frames keep
+  moving both ways while the loop or the GIL is held; each frame's wait for the lane is measured in Rust (the
+  once-a-minute `host:` line; `bnge-watch` logs `python lane: N frames waiting X s` past 2 s). `BNGE_HOST_RECORD=DIR`
+  (developers) records what the game sends for `tools/hostreplay.py` (private: the player's positions).
 
 ### Mod `beamng_earth`
 - Level `levels/beamng_earth/`: smallgrid skeleton **without GroundPlane**,

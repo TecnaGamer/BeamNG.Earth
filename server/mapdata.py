@@ -123,6 +123,15 @@ VERSION = 2                     # pipeline version: bump when what a cell's laye
 # (osmtags.is_outline, a raceway that is a circuit site's outline left out, GitHub #1010: as #184, only cells fetched
 # after it; the cached ones with the next Overture release bump)
 LAYER_VERSIONS = {"roads": 9}
+
+
+def dem_identity():
+    """The elevation's identity in MapData.versions() (so in the road plans', cell facts', road tiles' and shared
+    decisions' keys; the road revamp's R1, 2026-11-16: plans made on another elevation were found under the same key
+    and kept): [dem.ELEVATION_ID (pinned per app release), dem.DECODED_VERSION, roadz.VERSION]."""
+    import dem
+    import roadz
+    return [int(dem.ELEVATION_ID), int(dem.DECODED_VERSION), int(roadz.VERSION)]
 LANE_CONTEXT_CELLS = 16       # neighbour cells' raw road layers kept for slip-road mouths (lanesections.split's context)
 # (LidarBC's measured canopy heights, maprasters.bc_canopy, are opt-in: BNE_BC_CANOPY=1 fills cells built after it;
 # no canopy version bump, which would fetch every player's canopy cells again)
@@ -649,6 +658,7 @@ class MapData:
             v["street_edges"] = europewalks.VERSION
         if levelways.ON:
             v["levelways"] = levelways.VERSION
+        v["dem"] = dem_identity()               # (the elevation the plans, facts and tiles are made on: pinned per release)
         return v
 
     def warm_manifests(self):
@@ -679,28 +689,6 @@ class MapData:
                 except Exception as e:
                     log.debug("manifest of %s: %s: %s", getattr(src, "name", src), type(e).__name__, e)
         threading.Thread(target=run, daemon=True, name="manifests").start()
-
-    def bundle_versions(self):
-        """Offline source identity for prepared road plans, including cached but not yet opened shards.
-
-        Prefer an actively used release over a later disk update. Missing manifests stay unknown;
-        malformed manifests reject export/pinning instead of silently inventing a source version.
-        This does not alter normal lazy source refresh or claim a complete raw-input snapshot.
-        """
-        from worldbundle import BundleError, cached_source_build
-        versions = self.versions()
-        for name, attr in (("rails", "rail_tags"), ("lanes", "lane_tags")):
-            source = getattr(self, attr, None)
-            if source is None:
-                continue
-            built = versions[name]
-            if built is None and source.dir:
-                built = cached_source_build(os.path.join(source.dir, "manifest.json"))
-            if built is not None and (not isinstance(built, str) or not 0 < len(built) <= 256
-                                      or any(ord(c) < 32 for c in built)):
-                raise BundleError("Invalid active source build identity")
-            versions[name] = built
-        return versions
 
     def _pmt(self, layer):
         """Does this layer come from Overture's tiles (pmtiles.py; BNGE_MAP_SOURCE)?"""

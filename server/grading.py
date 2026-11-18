@@ -40,6 +40,7 @@ import dnp
 
 import bumps
 import mapcells
+import racedig
 import railways as railwaysmod
 import roads as roadsmod
 import seatiles
@@ -676,6 +677,7 @@ SEAM_MOUTH_GRADE = 0.08     # ... and goes back to its own profile at this grade
 SEAM_DECK_GRADE = 0.01      # a single span between two abutments is not tilted more than this by the ground at its ends: the
                             # rest of their difference is shared between the two approaches (_grade_match) ...
 SEAM_MATCH_MAX_M = 4.0      # ... at most this each (bad data: rather a steep deck)
+SEAM_FILLED_ON = os.environ.get("BNE_SEAM_FILLED", "on") != "off"   # (_grade_match reads each end as filled: fill_abutment)
 
 
 def median_profile(z, step, width):
@@ -2712,7 +2714,9 @@ class _Planner:
                     p.rid = road_id(fid)
                     import lanesections
                     fi = feats.index(fid)
-                    if fi >= 0 and lanesections.profile(feats, fi):
+                    # (the graded core follows the tapers: a lane section's, and with the speed tapers every
+                    # road's, roads.SPEED_TAPERS)
+                    if fi >= 0 and (roadsmod.SPEED_TAPERS or lanesections.profile(feats, fi)):
                         la, lo, _ = self.frame.enu_to_geodetic(p.xy[:, 0], p.xy[:, 1], 0.)
                         tp = roadsmod.road_tapers(feats, None, self.widths)[fi]
                         ws = roadsmod.taper_widths(part[1].width, tp, lo, la)
@@ -2786,6 +2790,11 @@ class _Planner:
             if ctx:                 # (the raised junctions' roads on ramps no steeper than RAMP_GRADE, after every snap)
                 log.debug("grading: ramp envelope of %s: %d raised, %d held", key, len(ctx[0]), len(ctx[1]))
                 try:
+                    # (its floor no higher than the plans now: the dips under the decks and the snaps after the first
+                    # envelope lowered roads, and the floor taken before them stood a dipped slip road back up to its
+                    # undipped height, 6.9 m over the dipped trunk it leaves at its gore: Sao Paulo's 23 de Maio under
+                    # the Radial Leste-Oeste, GitHub #1329)
+                    ctx = (ctx[0], ctx[1], _floor_now(ctx[2], plans) if RAMP_FLOOR_NOW else ctx[2])
                     ramp_envelope(plans, pspecs, *ctx)
                 except Exception as e:
                     _caught(e)
@@ -4862,10 +4871,13 @@ class _Planner:
                                                            float(RAMP_GRADE))
         return best
 
-    def _end_filled(self, line, at_end):
+    def _end_filled(self, line, at_end, past=False):
         """m: the ground at a bridge's first (at_end False) or last end as fill_abutment lays its approach there, read
         straight on past the end (the approach roads' own plans are not made yet): its embankment's top where the
-        line ends down the slope, else the ground at the end. -inf when ABUT_FILL_ON is off."""
+        line ends down the slope, else the ground at the end. With past, never above the highest ground read past the
+        end: an embankment rises out of a hollow to the level the road comes from, and where the ground only falls
+        away from the end (a span on a hill's brow, the slope steepening below it) fill_abutment's line through the
+        far ground runs above every point of it. -inf when ABUT_FILL_ON is off."""
         if not ABUT_FILL_ON:
             return -np.inf
         b = np.asarray(line, np.float64)[:, :2]
@@ -4883,7 +4895,8 @@ class _Planner:
             _caught(e)
             log.debug("grading: fill past bridge end %s: %s: %s", np.round(p), type(e).__name__, e)
             return -np.inf
-        return float(fill_abutment(z, False)[0])
+        top = float(fill_abutment(z, False)[0])
+        return min(top, float(z.max())) if past else top
 
     @_marked("end_cache", lambda self, xy: (round(float(xy[0]) * 2), round(float(xy[1]) * 2)))
     def _end_lift(self, xy):
@@ -5896,6 +5909,16 @@ class _Planner:
         ends = np.array([bridge[0], bridge[-1]])
         ela, elo, _ = self.frame.enu_to_geodetic(ends[:, 0], ends[:, 1], 0.0)
         z = np.asarray(self.elev(ela, elo), np.float64).reshape(-1)
+        if SEAM_FILLED_ON:
+            # (each end as its approach is laid there: on its embankment's top where the map line ends down the bank,
+            # fill_abutment, as overpass_cands' deck_ends. A stream bridge's north end mapped 3 m down the bank by
+            # Alsfeld (B 62, 50.7563 N 9.2870 E) read 240.3 m against 243.3 at its south end on the same flat road:
+            # the north approach, already filled level, was raised 1.4 m more and the south one lowered 1.5 m, a
+            # crest and a 2.6 m drop over the 16 m deck that threw cars into the air at 80 km/h, 2026-11-16; at most
+            # the ground past the end: a 7 m track bridge on the hill above Riva del Garda's Pontera tunnel, the ground
+            # falling ever more steeply past its lower end, read 198.9 m there against 194.9 and 196.3 at its ends,
+            # turning the match round and stepping 0.29 m onto the deck, test_drivability)
+            z = np.maximum(z, [self._end_filled(bridge, False, past=True), self._end_filled(bridge, True, past=True)])
         deficit = abs(float(z[1] - z[0])) - SEAM_DECK_GRADE * L
         if deficit < 2 * APPROACH_MIN_LIFT:
             return None
@@ -6475,8 +6498,43 @@ class _Planner:
             # a street's smoothed profile 1 m over a dip in the ground over Vienna's A23 tunnel fell back to that dip
             # in the strip over the tube, a ledge at each edge of it, 2026-11-12)
             keep &= base.ravel() - out >= OVER_TUNNEL_SMALL_M
+            if race is not None and racedig.ON:
+                keep &= ~race       # (a racetrack over the tunnel: its surface, the tube dug under it, racedig)
             out[keep] = base.ravel()[keep]
         return out.reshape(shape)
+
+    def road_band(self, lat, lon, reach, planned_only=False):
+        """(n,) bool: the points within reach m of a built road's core (rank GRADE_RANK_BUILT or more: not the dirt
+        roads, tracks or railway beds) planned in the cells that grade them (_keys, planning those not yet planned;
+        planned_only: only the cells planned already, as apply's: the AI graph's wide window past NAV_GRADED_M)."""
+        lat = np.asarray(lat, np.float64).ravel()
+        lon = np.asarray(lon, np.float64).ravel()
+        out = np.zeros(lat.shape, bool)
+        if not len(lat):
+            return out
+        keys = self._keys(lat, lon)
+        if planned_only:
+            keys = self._planned_keys(keys)
+            if not keys:
+                return out
+        plans, pack = self._plan_set(keys, False)
+        if not plans:
+            return out
+        e, n, _ = self.frame.geodetic_to_enu(lat, lon, 0.0)
+        e, n = np.asarray(e, np.float64), np.asarray(n, np.float64)
+        pad = reach + float(np.max(pack.h, initial=0.0)) + 1.0
+        got = pack.near(e.min() - pad, n.min() - pad, e.max() + pad, n.max() + pad)
+        if got is None:
+            return out
+        a, b, h, rk = got[0], got[1], got[4], got[7]
+        keep = (np.asarray(rk) >= GRADE_RANK_BUILT) & (np.asarray(h) > 0.0)
+        if not keep.any():
+            return out
+        import fast
+        fast.require(0, "points_near_segments")
+        return np.asarray(fast._ef.points_near_segments(
+            np.ascontiguousarray(np.column_stack((e, n)), np.float64), np.ascontiguousarray(a[keep], np.float64),
+            np.ascontiguousarray(b[keep], np.float64), np.ascontiguousarray(h[keep] + reach, np.float64)), bool)
 
     def open_tunnels(self, lat, lon):
         """[(lat (k,), lon (k,), Spec)] of the tunnels' open sections planned near the points: roads on the ground
@@ -6821,6 +6879,17 @@ class Grader:
         for pl, idx in parts:
             out[idx] = pl.apply(la[idx], lo[idx], b[idx], lift, roads_only, planned_only)
         return out.reshape(base.shape)
+
+    def road_band(self, lat, lon, reach, planned_only=False):
+        """_Planner.road_band by the points' regions (n,) bool (the anchor plays no part)."""
+        lat = np.asarray(lat, np.float64).ravel()
+        lon = np.asarray(lon, np.float64).ravel()
+        out = np.zeros(lat.shape, bool)
+        for pl, idx in self.store.planners_of(lat, lon):
+            if idx is None:
+                return pl.road_band(lat, lon, reach, planned_only)
+            out[idx] = pl.road_band(lat[idx], lon[idx], reach, planned_only)
+        return out
 
     def deck_ground(self, lat, lon, base):
         """base at the points with the bridges the elevation holds under mapped decks taken out (DECK_GROUND_*), from
@@ -7629,6 +7698,23 @@ RAMP_NODE_M = 1.5           # m: road ends this close are one node
 RAMP_REACH_M = 400.0        # m along the roads from a raised one the envelope goes at most
 
 
+RAMP_FLOOR_NOW = os.environ.get("BNE_RAMP_FLOOR_NOW", "on") != "off"
+
+
+def _floor_now(floor, plans):
+    """ramp_envelope's floor (the plans before any ramp) no higher than the plans (fid, Plan) are now, where a plan has
+    the same vertices: a road the passes since lowered (a dip under a deck, a snap) is not raised back over it. Pure."""
+    if floor is None:
+        return None
+    out = []
+    for f, (_fid, p) in zip(floor, plans):
+        f = np.asarray(f, np.float64)
+        z = np.asarray(p.z, np.float64)
+        out.append(np.minimum(f, z) if len(f) == len(z) else f)
+    out += [np.asarray(f, np.float64) for f in floor[len(out):]]
+    return out
+
+
 def ramp_envelope(plans, specs, seeds, held=(), floor=None):
     """Raise, in place, the plans (fid, Plan) around the raised ones (indices seeds) so no road meets a higher one with a
     step and none climbs to it steeper than RAMP_GRADE. Nodes: road ends within RAMP_NODE_M of each other, and where a
@@ -8009,19 +8095,58 @@ def _hash01(i, j, salt=0):
 # on every ground path (provisional blocks and far tiles too) and kept off towns, water and building sites; on, it is
 # ~0.3-0.5 s of numpy per million samples on every block, road tile and far tile (2026-11-05 merge review).
 TERRAIN_BUMPS_ON = os.environ.get("BNE_TERRAIN_BUMPS", "off") == "on"
+# m past a built road's core (Plan.half) where the land stays smooth (terrain_bumps with a grader): a divided road's
+# median and its verges are graded land, and its barriers and rails stand on them. With the bumps there, a median's
+# concrete barrier stood module by module on them, jagged (I-40 near 36.029 N 87.175 W, the user's report 2026-11-16).
+# The lattice points within it hold no bump, so the bumps fade in over one lattice step past it (no ledge): smooth at
+# least BUMP_CLEAR_M - 9 m (the largest wave) past the core, full from BUMP_CLEAR_M + 9 m; a median up to ~2 x
+# BUMP_CLEAR_M wide (medians.MAX_GAP_M: 22 m) lies in both carriageways' bands, smooth across. T_MAX: the grading's
+# own reach. (Dirt roads and tracks keep the bumps beside them: PR #925's forest floor.)
+BUMP_CLEAR_M = T_MAX
+_CORNERS = ((0, 0), (1, 0), (0, 1), (1, 1))
 
 
-def terrain_bumps(lat, lon):
+def _bump_corner_values(i0, j0, size, grader):
+    """[4 x (n,)]: the wave's lattice values (_hash01 - 0.5) at the corners (i0 + di, j0 + dj) of _CORNERS (lattice step
+    size m), 0 at the lattice points within BUMP_CLEAR_M of a built road's core (grader.road_band). Each lattice point
+    is computed and asked once: on a grid over the points' corners when that is no larger than four per point (a
+    block's samples), else at the distinct corners."""
+    n = i0.size
+    imin, jmin = int(i0.min()), int(j0.min())
+    nx, ny = int(i0.max()) - imin + 2, int(j0.max()) - jmin + 2
+
+    def values(ii, jj):
+        la = jj * size / 110574.0
+        lo = ii * size / (111320.0 * dnp.cos(np.radians(la)))
+        v = _hash01(ii, jj, size) - 0.5
+        v[np.asarray(grader.road_band(la, lo, BUMP_CLEAR_M), bool).ravel()] = 0.0
+        return v
+    if nx * ny <= 4 * n:
+        gi, gj = np.meshgrid(np.arange(nx, dtype=np.int64) + imin, np.arange(ny, dtype=np.int64) + jmin)
+        grid = values(gi.ravel(), gj.ravel())
+        flat = (j0 - jmin) * nx + (i0 - imin)
+        return [grid[flat + dj * nx + di] for di, dj in _CORNERS]
+    key = np.concatenate([(i0 + di - imin) * ny + (j0 + dj - jmin) for di, dj in _CORNERS])
+    uniq, inv = np.unique(key, return_inverse=True)
+    v = values(uniq // ny + imin, uniq % ny + jmin)[inv.ravel()]
+    return [v[k * n:(k + 1) * n] for k in range(4)]
+
+
+def terrain_bumps(lat, lon, grader=None):
     """World-locked roughness of the land off the roads (m), the same value whatever process or tile asks: value noise
     at a few sizes, about TERRAIN_ROUGH_M (std). 0.0 (nothing added) unless TERRAIN_BUMPS_ON, or when BNE_TERRAIN_BUMP
-    is 0."""
+    is 0. grader (a Grader: the ground graded under the roads after this): none within BUMP_CLEAR_M of a built road's
+    core, fading in past it (its lattice points there hold no bump)."""
     if not TERRAIN_BUMPS_ON or TERRAIN_ROUGH_M <= 0.0:
         return 0.0
     la = np.asarray(lat, np.float64)
     lo = np.asarray(lon, np.float64)
-    y = la * 110574.0
-    x = lo * 111320.0 * dnp.cos(np.radians(la))
-    out = np.zeros(np.shape(la), np.float64)
+    shape = np.shape(la)
+    y = (la * 110574.0).ravel()
+    x = (lo * 111320.0 * dnp.cos(np.radians(la))).ravel()
+    ok = np.isfinite(x) & np.isfinite(y)
+    roads = grader is not None and getattr(grader, "road_band", None) is not None and ok.any()
+    out = np.zeros(x.shape, np.float64)
     norm = 0.0
     for size, share in TERRAIN_ROUGH_WAVES:
         fx = x / size
@@ -8032,16 +8157,21 @@ def terrain_bumps(lat, lon):
         ty = fy - j0
         sx = tx * tx * (3.0 - 2.0 * tx)
         sy = ty * ty * (3.0 - 2.0 * ty)
-        i0 = i0.astype(np.int64)
-        j0 = j0.astype(np.int64)
-        v00 = _hash01(i0, j0, size)
-        v10 = _hash01(i0 + 1, j0, size)
-        v01 = _hash01(i0, j0 + 1, size)
-        v11 = _hash01(i0 + 1, j0 + 1, size)
+        i0 = np.where(ok, i0, 0.0).astype(np.int64)
+        j0 = np.where(ok, j0, 0.0).astype(np.int64)
+        if not roads:
+            vs = [_hash01(i0 + di, j0 + dj, size) - 0.5 for di, dj in _CORNERS]
+        elif ok.all():
+            vs = _bump_corner_values(i0, j0, size, grader)
+        else:
+            vs = [np.zeros(x.shape, np.float64) for _ in _CORNERS]
+            for v, got in zip(vs, _bump_corner_values(i0[ok], j0[ok], size, grader)):
+                v[ok] = got
+        v00, v10, v01, v11 = vs
         v = (v00 * (1.0 - sx) + v10 * sx) * (1.0 - sy) + (v01 * (1.0 - sx) + v11 * sx) * sy
-        out += share * (v - 0.5)
+        out += share * v
         norm += share * share
-    return out * (TERRAIN_ROUGH_M / (0.1875 * math.sqrt(norm)))
+    return (out * (TERRAIN_ROUGH_M / (0.1875 * math.sqrt(norm)))).reshape(shape)
 
 
 class GradedDem:
@@ -8053,7 +8183,8 @@ class GradedDem:
     def sample(self, lat, lon, zoom, progress=None):
         base = self._dem.sample(lat, lon, zoom, progress) if progress is not None else self._dem.sample(lat, lon, zoom)
         # the land off the roads is rougher than the roads themselves (the grading flattens the road's own strip)
-        base = np.asarray(base, np.float64) + terrain_bumps(np.asarray(lat, np.float64), np.asarray(lon, np.float64))
+        base = np.asarray(base, np.float64) + terrain_bumps(np.asarray(lat, np.float64), np.asarray(lon, np.float64),
+                                                            self._grader)
         return self._grader.apply(lat, lon, base)
 
     def __getattr__(self, name):

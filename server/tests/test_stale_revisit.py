@@ -118,8 +118,6 @@ class GenerationsTest(unittest.TestCase):
             self.assertTrue(revisit.older(self.d, now=1.0))
             with mock.patch.object(revisit, "STALE_ON", False):
                 self.assertEqual(revisit.older(self.d, now=1.0), [])
-            with mock.patch.dict(os.environ, {"BNGE_WORLD_BUNDLE": "/x"}):
-                self.assertEqual(revisit.older(self.d, now=1.0), [])
         self.assertIn("BNE_STALE_REVISIT", revisit.NOT_SWITCHES)
         self.assertIn("BNE_STALE_DAYS", revisit.NOT_SWITCHES)
         k = revisit.switches_key()

@@ -347,11 +347,15 @@ local nPt = #received('prepare_terrain')
 T.check(pumpUntil(function() return #received('prepare_terrain') > nPt end, 40), 'terrain-follow asks')
 frames(20)
 T.check(st().guard.mode == 'off', 'just asked: the guard waits (the server may be slow)')
+T.check(core.autodriveReady(), 'pending optional terrain alone does not stop Autodrive well inside loaded ground')
+T.check(pumpUntil(function() return st().guard.mode == 'warn' end, 60 * 20), 'late terrain reaches the loaded-edge warning')
+T.check(not core.autodriveReady(), 'Autodrive brakes at the late-ground warning before the common guard pauses')
 for _ = 1, 60 * 20 do frame() end
 T.check(veh.pos.x <= ex1 - edgeguard.STOP_M + 0.5 and simTimeAuthority.paused,
   string.format('unanswered for STUCK_S: paused %.1f m inside the edge', ex1 - veh.pos.x))
 T.check(shown() == 'Paused at the edge of the loaded ground until the BeamNG.Earth server answers terrain requests again (resume to drive back)',
   'banner: the server does not answer terrain requests')
+T.check(not core.autodriveReady(), 'a guard-owned pause never permits Autodrive recovery toward the edge')
 pt = last('prepare_terrain')
 serverSend({ type = 'terrain_ready', requestId = pt.requestId, anchorId = 1, cx = pt.cx, cy = pt.cy,
   heightmap = '/temp/beamngEarth/s2/hm_1_f.png', size = 1024, squareSize = 2, zBase = 0, maxHeight = 1024, q = 1 / 64 })
@@ -359,6 +363,14 @@ T.check(pumpUntil(function() return st().block.cx == pt.cx end, 100), 'the answe
 setGround(pt.cx, pt.cy)
 frames(2)
 T.check(st().guard.mode ~= 'hold' and not st().guard.pausedByUs and not shown(), 'answered: the guard holds nothing, the banner hidden')
+T.check(core.autodriveReady(), 'committed terrain releases the Autodrive warning hold')
+do
+  local g = st().guard
+  local mode, healthy = g.mode, g.healthy
+  g.mode, g.healthy = 'warn', true
+  T.check(core.autodriveReady(), 'a healthy following block does not create unnecessary warning braking')
+  g.mode, g.healthy = mode, healthy
+end
 -- a terrain_error: held for ERROR_HOLD_S
 veh.vel = vec3(0, 0, 0)
 b = st().block

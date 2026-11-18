@@ -162,9 +162,13 @@ class _Blocks:
         return a if dtype is None else a.astype(dtype)
 
 
-def _write_raw(raw, r):
-    if not raw:
-        return
+_NAN_BITS = int(np.array(np.nan, np.float32).view(np.uint32))
+
+
+def _pack(r):
+    """(index, slots, raster px) of a raster (depth, level, outline) stored by RAW_BLOCK_PX blocks: the blocks holding
+    anything but land (depth +0.0, level NaN, outline False: slot 0) each in a slot of their own. Bit for bit: a block
+    with a -0.0 depth or another NaN is kept in a slot of its own, so the blocks read back exactly what r held."""
     n = r[0].shape[0]
     b = RAW_BLOCK_PX
     m = -(-n // b)
@@ -172,15 +176,36 @@ def _write_raw(raw, r):
     full["level"] = np.nan
     full["depth"][:n, :n], full["level"][:n, :n], full["outline"][:n, :n] = r[0], r[1], r[2]
     blocks = full.reshape(m, b, m, b).transpose(0, 2, 1, 3)        # (m, m, b, b)
-    used = ((blocks["depth"] != 0) | np.isfinite(blocks["level"]) | blocks["outline"]).any(axis=(2, 3))
+    used = ((blocks["depth"].view(np.uint32) != 0) | (blocks["level"].view(np.uint32) != _NAN_BITS)
+            | blocks["outline"]).any(axis=(2, 3))
     idx = np.zeros((m, m), "<i4")
     idx[used] = np.arange(1, int(used.sum()) + 1)
     land = np.zeros((1, b, b), RAW_DTYPE)                          # (slot 0: land)
     land["level"] = np.nan
-    data = np.concatenate([land, blocks[used]])
+    return idx, np.ascontiguousarray(np.concatenate([land, blocks[used]])), n
+
+
+def _in_blocks(r):
+    """A raster kept in a process's memory (SeaCarver._mem) as its blocks (_Blocks, as the memory-mapped copy reads):
+    a decoded cell was ~9.4 MB of full planes in every process that read it, ~3-10 % of its blocks holding any water
+    (a road process round the A7 kept ~108 MB of them after 25 tiles, 2026-11-16). r as it is when it is not a
+    square raster of plain arrays."""
+    if (r is None or not all(isinstance(a, np.ndarray) and a.shape == r[0].shape for a in r) or r[0].ndim != 2
+            or r[0].shape[0] != r[0].shape[1]):
+        return r
+    idx, data, n = _pack(r)
+    return tuple(_Blocks(idx, data[f], (n, n)) for f in ("depth", "level", "outline"))
+
+
+def _write_raw(raw, r):
+    if not raw:
+        return
+    idx, data, n = _pack(r)
+    b = RAW_BLOCK_PX
+    m = idx.shape[0]
     head = np.array([RAW_MAGIC, b, m, len(data), n], "<i4")
     buf = np.concatenate([head.view(np.uint8), idx.view(np.uint8).ravel(),
-                          np.ascontiguousarray(data).view(np.uint8).ravel()])
+                          data.view(np.uint8).ravel()])
     tmp = f"{raw}.{os.getpid()}.{threading.get_ident()}.tmp"
     try:
         os.makedirs(os.path.dirname(raw), exist_ok=True)
@@ -506,7 +531,7 @@ class SeaCarver:
                 r = got[0]
                 if r is not None:       # (outside the read: its raw copy failing to write is no damaged cell file)
                     self._second_use(x, y, raw, r)
-                return r, True
+                return _in_blocks(r), True
         r = self._build(x, y, with_bathy)
         complete = r is None or r[3]
         if r is not None:
@@ -523,7 +548,7 @@ class SeaCarver:
             staging.replace_cached(tmp, p)
             if r is not None:
                 self._second_use(x, y, raw, r)
-        return r, complete
+        return _in_blocks(r), complete
 
     def _second_use(self, x, y, raw, r):
         """The uncompressed raster (memory-mapped, shared) written only once this process needs the cell a second time

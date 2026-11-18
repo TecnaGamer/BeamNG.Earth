@@ -21,7 +21,6 @@ MODULES = (
     "test_revisit", "test_revisit_side", "test_revisitpack", "test_plancache", "test_bake_formats", "test_chunkcache", "test_pools",
     "test_prefetch_chain", "test_demand", "test_roadwidth", "test_roadcorners",
     "test_sketchfab_assets", "test_subsea_tunnels", "test_tunnels",
-    "test_worldbundle", "test_world_cache", "test_peerwork",
     "test_host_package", "test_carriageway_solver",
     "test_portugal_imagery",
     "test_rail_crossing_assets",
@@ -57,7 +56,7 @@ def main():
          "--timeout", str(args.timeout), "--logs", "build/quality-tests"],
         [sys.executable, "tools/run_lua_tests.py"],
         ["node", "--test", "mod/tests/test_mapmath.mjs", "server/tests/test_mapmath.mjs", "mod/tests/test_ui_lifecycle.mjs",
-         "mod/tests/test_restart_box.mjs"],
+         "mod/tests/test_restart_box.mjs", "mod/tests/test_mainmenu_tile.mjs"],
         ["cargo", "test", "--locked", "--manifest-path", "native/serverlist/Cargo.toml"],
         [sys.executable, "tools/package.py", "--beammp", "--out", "build/quality-packages"],
     ]

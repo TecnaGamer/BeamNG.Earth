@@ -30,6 +30,7 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(HERE))
 
 import experimental  # noqa: E402
+import protocol  # noqa: E402
 import srvrestart  # noqa: E402
 
 
@@ -275,7 +276,7 @@ class ServerSideTest(unittest.TestCase):
         restart = []
 
         async def run():
-            srv = await asyncio.start_server(lambda r, w: None, "127.0.0.1", 0)
+            srv = await protocol.start_server(lambda r, w: None, "127.0.0.1", 0)
             task = asyncio.ensure_future(earthd.serve(srv, s, restart))
             await asyncio.sleep(0.05)
             self.assertIsNotNone(s.stop_future, "serving: a stop to wait on")
@@ -298,7 +299,7 @@ class ServerSideTest(unittest.TestCase):
         restart = []
 
         async def run():
-            srv = await asyncio.start_server(lambda r, w: None, "127.0.0.1", 0)
+            srv = await protocol.start_server(lambda r, w: None, "127.0.0.1", 0)
             task = asyncio.ensure_future(earthd.serve(srv, s, restart))
             await asyncio.sleep(0.05)
             task.cancel()
@@ -338,7 +339,7 @@ class SessionTest(test_server.ServerHarness):
         asyncio.run_coroutine_threadsafe(serving(), self.loop).result(5)
         # (Codex 2026-11-15) a stray local client: without a hello, or with one but without the key, refused and the
         # server keeps serving
-        stray = Client(self.srv.sockets[0].getsockname()[1])
+        stray = Client(protocol.listen_port(self.srv))
         try:
             stray.send({"type": "server_restart", "key": key})
             m, _ = stray.until(lambda m: m["type"] == "server_restart", 10)

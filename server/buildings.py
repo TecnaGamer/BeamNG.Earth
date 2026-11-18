@@ -366,6 +366,33 @@ ROOF_TEX_MEAN = {"bne_bld_roof_flat": (0.432, 0.431, 0.430), "bne_bld_roof_slate
 # a flat roof brighter in the photo than the asphalt roof's texture can show (a white membrane: 0.9 in the photo, the
 # asphalt texture's 0.43 at most) takes the precast concrete's plain light texture instead
 ROOF_BRIGHT_MAT = "bne_bld_panel"
+# Flat roofs without the photo (the generated ground, BNE_GEN_GROUND: no roof photo is read): the flat roofs' membranes
+# by share, a building's own pick from its seed. ROOF_TINTS' asphalt greys (the texture's 0.43 mean x 0.45-0.95) drew
+# every flat roof dark, where most are white / light grey (TPO / PVC, silver coatings) with some gravel and black EPDM
+# or tar (Fells Point's rowhouses and blocks against the 3-inch photo, 2026-11-16). (material, tint, share): the US
+# styles' white-weighted mix, and elsewhere more gravel and bitumen.
+MEMBRANES_US = ((ROOF_BRIGHT_MAT, (1.0, 1.0, 0.98), 0.42), (ROOF_BRIGHT_MAT, (0.82, 0.82, 0.82), 0.25),
+                (ROOF_BRIGHT_MAT, (0.62, 0.60, 0.56), 0.13), (ROOF_FLAT, (0.45, 0.45, 0.46), 0.20))
+MEMBRANES = ((ROOF_BRIGHT_MAT, (1.0, 1.0, 0.98), 0.20), (ROOF_BRIGHT_MAT, (0.82, 0.82, 0.82), 0.25),
+             (ROOF_BRIGHT_MAT, (0.62, 0.60, 0.56), 0.30), (ROOF_FLAT, (0.45, 0.45, 0.46), 0.25))
+
+
+def _gen_ground_on():
+    import genground
+    return genground.ON
+
+
+def membrane_look(seed, style):
+    """A flat roof's membrane look (MEMBRANES), picked by the building's seed (the same in every tile and block)."""
+    table = MEMBRANES_US if style.name.startswith("us_") else MEMBRANES
+    x = _hash01(seed, "membrane")
+    acc = 0.0
+    for mat, tint, share in table:
+        acc += share
+        if x < acc:
+            return custom_look(mat, tint)
+    mat, tint, _ = table[-1]
+    return custom_look(mat, tint)
 
 
 class RoofPhoto:
@@ -468,8 +495,14 @@ PHOTO_EXTRA_SOURCES = ("md6in",)
 
 
 def _photo_sources(frame, x0, y0, x1, y1):
+    """The regional photos a roof, square or street front in the box is read from (none with the generated ground on:
+    the user, 2026-11-15, "The switch should effect roof colors too": no 1 m photo is fetched or read for anything;
+    the roofs take their mapped colour or material, else their style's hashed pick, plan)."""
+    import genground
     import imagery
     import imagery_regional
+    if genground.ON:
+        return ()
     lat, lon, _ = frame.enu_to_geodetic((x0 + x1) / 2, (y0 + y1) / 2, 0.0)
     lat, lon = float(np.asarray(lat).ravel()[0]), float(np.asarray(lon).ravel()[0])
     out = []
@@ -507,7 +540,8 @@ def roof_photo_final(frame, x0, y0, x1, y1, cache_dir, online=False, px=None, ur
     no build of the road tiles there was ever kept (797 not kept in a Fells Point session, the tiles round the car at
     every visit); and online the lazy sources (md6in, New York's, the German states') were read from disk only, so a
     tile built before the ground photo's warm had fetched its photo faulted too."""
-    if not ROOF_PHOTO_ON or cache_dir is None:
+    import genground
+    if not ROOF_PHOTO_ON or genground.ON or cache_dir is None:
         return None, True, None
     try:
         import imagery
@@ -1499,6 +1533,8 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
         roof_mat = custom_look(ROOF_SHINGLE, (0.52, 0.43, 0.28))
     elif rmat in ("solar_panels", "solar"):
         roof_mat = custom_look(ROOF_METAL, (0.10, 0.14, 0.28))
+    elif roof == "flat" and not (barn or shed) and _gen_ground_on() and parse_color(attrs.get("roof_color")) is None:
+        roof_mat = membrane_look(seed, style)       # (no photo to read the roof's colour from: genground)
     elif roof == "flat" or barn or shed:
         roof_mat = ROOF_FLAT if roof == "flat" else ROOF_METAL
         roof_mat = f"{roof_mat}|{int(_hash01(seed, 'roof') * len(ROOF_TINTS[roof_mat]))}"
@@ -2468,16 +2504,52 @@ def skeleton_rise(ring, holes=()):
     return float(tri[:, 2].max()) if len(tri) else 0.0
 
 
+SKEL_EAVE_FORMS = {"hipped", "pyramidal"}     # (a gabled skeleton's gables stand on its walls: no overhang there)
+SKEL_EAVE_MIN_COS = -0.5                      # a corner sharper than this (120 deg turn) keeps the roof on its walls
+
+
+def eave_ring(ring, d):
+    """ring (k, 2), counter-clockwise, pushed out by d (m) with mitred corners: the eave line a roof overhanging its
+    walls by d has; None where a corner is too sharp or an edge would turn over (a short edge between two reflex
+    corners), the walls' own ring then. Pure."""
+    r = np.asarray(ring, np.float64)[:, :2]
+    if len(r) < 3 or d <= 0:
+        return None
+    e = np.roll(r, -1, 0) - r                                   # edge i: r[i] -> r[i+1]
+    L = dnp.hypot(e[:, 0], e[:, 1])
+    if (L < 1e-6).any():
+        return None
+    n = np.stack([e[:, 1], -e[:, 0]], 1) / L[:, None]           # outward (right of a counter-clockwise ring)
+    n0 = np.roll(n, 1, 0)                                       # the edge before each vertex
+    c = (n0 * n).sum(1)
+    if (c < SKEL_EAVE_MIN_COS).any():
+        return None
+    out = r + d * (n0 + n) / (1.0 + c)[:, None]
+    e2 = np.roll(out, -1, 0) - out
+    if ((e2 * e).sum(1) <= 0.0).any() or _area2(out) <= _area2(r):
+        return None
+    return out
+
+
 def _skel_roof(m, spec, ring, z_eave, rm, fac):
     """A skeleton roof (Spec.skel) over ring and Spec.holes; False when the skeleton failed (the caller's other roof). A
     gabled one's hip ends are gables (the skeleton's gable: each end's top moved onto its wall, the wall in the
-    facade's plain colour, as a box house's gable)."""
+    facade's plain colour, as a box house's gable). A hipped one overhangs its walls by EAVE_M as the box roofs do
+    (eave_ring: the slopes carried on down and out to an eave line EAVE_M outside the walls, the same top)."""
     fast.require(180, "skeleton_roof")
     k = dmath.tan(math.radians(roof_pitch(spec)))
-    tri, grad, gab = fast._ef.skeleton_roof(
-        np.ascontiguousarray(np.asarray(ring, np.float64)[:, :2]),
-        [np.ascontiguousarray(np.asarray(h, np.float64)[:, :2]) for h in spec.holes or ()], float(k), float(z_eave),
-        float(spec.skel_cap or 0.0), spec.roof == "gabled")
+    holes = [np.ascontiguousarray(np.asarray(h, np.float64)[:, :2]) for h in spec.holes or ()]
+    eave = eave_ring(ring, EAVE_M) if spec.roof in SKEL_EAVE_FORMS else None
+    tri = grad = gab = ()
+    if eave is not None:
+        drop = EAVE_M * k
+        tri, grad, gab = fast._ef.skeleton_roof(
+            np.ascontiguousarray(eave), holes, float(k), float(z_eave - drop),
+            float(spec.skel_cap + drop) if spec.skel_cap else 0.0, False)
+    if not len(grad):       # (no eaves, or the skeleton failed on the eave line: the roof on the walls, as before)
+        tri, grad, gab = fast._ef.skeleton_roof(
+            np.ascontiguousarray(np.asarray(ring, np.float64)[:, :2]), holes, float(k), float(z_eave),
+            float(spec.skel_cap or 0.0), spec.roof == "gabled")
     if not len(grad):
         return False
     # (the gables, then the slopes, as blocks: the per-triangle loop with its texture coordinates in Python was ~3 % of
@@ -4365,7 +4437,11 @@ ROAD_CLEAR_LINTEL_M = 2.5       # m of building over it at least (a storey), els
 ROAD_CLEAR_PIECES_MIN = 0.15    # share of a low mapped footprint its pieces off the road keep at least, else left out
 ROAD_CLEAR_SKIP_SUB = ("driveway", "parking_aisle", "drive-through")    # (a garage's drive, a lot's aisles, a drive-thru:
                                                                         # roofs over them are real)
-ROAD_CLEAR_CLASSES = THROUGH_CLASSES | {"service"}
+# ... and the racetracks (OpenStreetMap highway=raceway, drawn 12 m wide unless mapped): a building on the racing
+# surface is cut back or left out as on a street (Spa-Francorchamps, Overture 2026-10-21.0: Microsoft's footprints
+# of 282 and 679 m2, 4.0 and 4.9 m from the track's centre line, stood on its asphalt). Only the clearance: a raceway
+# is still not a road that lifts a building over it (THROUGH_CLASSES).
+ROAD_CLEAR_CLASSES = THROUGH_CLASSES | {"service", "raceway"}
 ROAD_CLEAR_SKIP_CLS = CANOPY_CLASSES | BRIDGE_CLASSES | {"ship", "toll_booth", landmarks.LANDMARK}
 
 

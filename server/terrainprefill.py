@@ -54,6 +54,7 @@ import bc7
 import pacer
 import staging
 import terraincache
+import terraintex
 
 log = logging.getLogger("earthd.terrainprefill")
 
@@ -110,13 +111,35 @@ def base_map_for(path, n):
     return f"{m.group(1)}.png" if n == BASE_DEFAULT else f"{m.group(1)}_{n}.png"
 
 
+def colour_tex(stem):
+    """terrain.lua colourTex: a stock texture stem's colour map as a layer takes it (the zero-mean copy, terraintex)."""
+    rel = stem + "_b"
+    if rel in terraintex.RECENTRED_STEMS:
+        return terraintex.VFS_DIR + terraintex.rc_name(rel)
+    return STOCK_TERRAIN + rel + ".png"
+
+
 def look_fields(detail, macro):
     """terrain.lua look()'s texture fields of a stock detail and macro texture stem."""
     f = {"heightDetailTex": FLAT_H, "heightMacroTex": FLAT_H}
     for k, suf in (("baseColor", "_b"), ("normal", "_nm"), ("roughness", "_r"), ("ao", "_ao")):
         f[k + "DetailTex"] = STOCK_TERRAIN + detail + suf + ".png"
         f[k + "MacroTex"] = STOCK_TERRAIN + macro + suf + ".png"
+    f["baseColorDetailTex"], f["baseColorMacroTex"] = colour_tex(detail), colour_tex(macro)
     return f
+
+
+def with_stock_colour(fields):
+    """The fields with each zero-mean colour copy as its stock texture (terrain.lua's look when the copy is missing),
+    or None when there is none."""
+    out, any_rc = dict(fields), False
+    for k in ("baseColorDetailTex", "baseColorMacroTex"):
+        v = fields.get(k)
+        stock = terraintex.stock_of(v[len(terraintex.VFS_DIR):]) if isinstance(v, str) and \
+            v.startswith(terraintex.VFS_DIR) else None
+        if stock:
+            out[k], any_rc = stock, True
+    return out if any_rc else None
 
 
 _LOOK_LINE = re.compile(r"^\s*(\w+)\s*=\s*(?:look|golfLook)\(\s*'([^']+)'\s*,\s*[^,]+,\s*'([^']+)'", re.M)
@@ -156,6 +179,9 @@ def wanted(materials, lua_text=None, base_sizes=BASE_SIZES):
     for name, f in sorted(level.items()):
         for slot in ("Detail", "Macro"):
             add(slot_packs(f, slot, px[slot], name))
+            stock = with_stock_colour(f)
+            if stock is not None:
+                add(slot_packs(stock, slot, px[slot], name + " stock colour"))
         for n in base_sizes:
             add(slot_packs({k: base_map_for(v, n) if k.endswith("BaseTex") else v for k, v in f.items()}, "Base", n,
                            f"{name} {n}"))
