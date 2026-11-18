@@ -1241,9 +1241,11 @@ class UnderpassTest(unittest.TestCase):
         steep, z0 = grade()
         self.assertLess(z0, 10.0 - 1.5, "(the case: the junction dug)")
         self.assertLessEqual(steep, grading.UNDER_MAX_GRADE + 0.01)
-        # (and the one solve's own join of an end that short of another's, vsolve.JOIN_END_M, off: in solo mode
-        # it took the step away by itself)
-        with unittest.mock.patch.object(grading, "UNDER_NODE_M", 0.5),                 unittest.mock.patch.object(grading.vsolvemod, "JOIN_END_M", 0.0):
+        # (and the one solve's own joins of an end that short of another's, vsolve.JOIN_END_M and JOIN_REACH_M, off:
+        # in solo and on modes they took the step away by themselves)
+        with unittest.mock.patch.object(grading, "UNDER_NODE_M", 0.5), \
+                unittest.mock.patch.object(grading.vsolvemod, "JOIN_END_M", 0.0), \
+                unittest.mock.patch.object(grading.vsolvemod, "JOIN_REACH_M", -np.inf):
             self.assertGreater(grade()[0], 0.3, "(0.5 m: a step, the bug)")
 
     def test_merge_span_chains(self):

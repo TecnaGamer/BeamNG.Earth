@@ -3248,11 +3248,19 @@ class _Planner:
                 near = np.abs(sa[:, None] - sl[None, :]).min(axis=1) <= reach
                 c = np.where(near, z, np.nan)
                 caps[i] = c if caps[i] is None else np.fmin(caps[i], c)
+                # (and past the ramp's foot, where the rule left it, no lower than it left it: smoothed over its
+                # class's spread, the motorway under a held overpass came back up 120 m past the ramp's foot, still
+                # 0.11 m low 250 m from the deck, and a street dipped between its junctions 0.2 m past them,
+                # test_grading's underpass cases in on mode). No higher than the passes, as the caps: at the rule's
+                # height over a junction the dip under a deck took down, Vienna's Südtiroler Platz service road stood
+                # 5 m over it)
+                fl = np.where(near & ~low, np.minimum(r, np.asarray(ground[i].z, np.float64)), np.nan)
+                floors[i] = fl if floors[i] is None else np.fmax(floors[i], fl)
         corridors = None
         if vsolvemod.CORRIDOR_ROWS_ON:  # (roads side by side at one height: share_corridors' rule, as rows)
             corridors = corridor_pairs(plans[:n], pspecs, ramps=False)
         zs, info = vsolvemod.solve(ground, pspecs, z_before[:n], ceilings, ranks, pins, dips, caps=caps, floors=floors,
-                                   corridors=corridors)
+                                   corridors=corridors, joints=not (UNDER_RUN_ON and self._coarse(key)))
         if zs is None:          # (no feasible solve: the passes' heights, as the RFC's fallback; counted in info)
             zs = [np.array(p.z, np.float64) for p in ground]
         quad = self._clip_quad(key) if own is not None else None

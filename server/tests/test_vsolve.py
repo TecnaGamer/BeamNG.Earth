@@ -176,6 +176,32 @@ class JoinTest(unittest.TestCase):
         b = np.c_[np.full(len(S), 100.0), S + 2.0]          # (2 m off a's middle: no end there, no junction)
         self.assertEqual(vsolve.joins([a, b], [np.zeros(len(S)), np.zeros(len(S))]), [])
 
+    def test_an_end_within_the_road_s_reach_meets_it_there(self):
+        # (Silistra: a track ending 1.6 m off the next one's centre line, as the passes' snap joins it)
+        a = np.c_[S, np.zeros_like(S)]
+        b = np.c_[np.full(len(S), 100.0), S + 2.0]
+        z0 = [np.zeros(len(S)), np.zeros(len(S))]
+        got = vsolve.joins([a, b], z0, halves=[1.75, 1.75])
+        self.assertEqual([(g[0], g[1], g[2], g[3]) for g in got], [(1, 0, 0, 50)])
+        far = np.c_[np.full(len(S), 100.0), S + 5.0]        # (past its half width and JOIN_REACH_M: none)
+        self.assertEqual(vsolve.joins([a, far], z0, halves=[1.75, 1.75]), [])
+        node = vsolve.nodes([a, b], z0, halves=[1.75, 1.75])
+        self.assertEqual([sorted(m) for m in node], [[(0, 50), (1, 0)]])
+
+    def test_a_junction_by_a_dip_is_capped_at_it(self):
+        # (the underpass rule's flat junction: Vienna's Südtiroler Platz junction stood 0.27 m over the dip 4 m on)
+        a = plan(np.c_[S, np.zeros_like(S)], np.zeros(len(S)))
+        b = plan(np.c_[np.full(len(S), 100.0), S], np.zeros(len(S)))      # (from a's middle, sample 50)
+        dips = [np.full(len(S), np.nan), None]
+        dips[0][52:60] = -1.0                       # (from 4 m on along a)
+        caps = vsolve._joint_caps([a, b], [np.zeros(len(S))] * 2, dips, None)
+        self.assertEqual(float(caps[0][50]), -1.0)
+        self.assertEqual(float(caps[1][0]), -1.0)
+        self.assertEqual(int(np.isfinite(caps[0]).sum() + np.isfinite(caps[1]).sum()), 2)   # (the junction alone)
+        dips[0][:] = np.nan
+        dips[0][60:70] = -1.0                       # (20 m on: past JOINT_FLAT_M, none)
+        self.assertIsNone(vsolve._joint_caps([a, b], [np.zeros(len(S))] * 2, dips, None))
+
 
 if __name__ == "__main__":
     unittest.main()
