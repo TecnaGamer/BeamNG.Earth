@@ -2366,7 +2366,7 @@ def _road_specs_kept(feats, urban_fn=None, widths=None, left_hand=False):
             clean = revisit.thread_faults() == f0
             if urban_fn is None and clean and _facts_key(feats, "specs", extra) is not None:
                 # (their stored form only where it is kept)
-                _facts_store(feats, "specs", extra, [None if sp is None else _spec_json(sp) for sp in got])
+                _facts_store(feats, "specs", extra, _specs_json(got))
             keep = clean
             if clean:
                 if mk is not None:
@@ -3367,28 +3367,37 @@ def placement_context(cells, urban_fn=None, widths=None, left_hand=False):
     return pl
 
 
-_PLAIN = (float, int, bool, str, type(None))
-
-
 def _spec_json(sp):
-    """sp as the shared facts keep it: numpy scalars as numbers, tuples as lists, no street when it has none (its
-    fields' types looked at once each: ~45k specs a first visit's four cells)."""
-    out = {}
-    for f, v in zip(sp._fields, sp):
-        t = type(v)
-        if t in _PLAIN:
-            if f != "street" or v is not None:
-                out[f] = v
-        else:
-            out[f] = v.item() if hasattr(v, "item") else list(v) if isinstance(v, tuple) else v
-    return out
+    """sp as the shared facts keep it: numpy scalars as numbers, tuples as lists, no street when it has none
+    (_specs_json of the one)."""
+    return _specs_json([sp])[0]
+
+
+def _specs_json(specs):
+    """[_spec_json(sp), or None for None] of specs (earthfast roadnet::specjson::specs_json: ~45k specs a first visit's
+    four cells). Input contract (R2a): specs a list of None and roads.Spec tuples whose fields are None, exact bool /
+    int / float / str, numpy scalars, tuples or europewalks.Street; anything else raises TypeError."""
+    import europewalks
+    import fast
+    fast.require(450, "specs_json")
+    return fast._ef.specs_json(specs if type(specs) is list else list(specs), Spec, europewalks.Street)
 
 
 def spec_from_json(data):
-    from europewalks import Street
+    """The Spec of one stored spec (_spec_json's form); TypeError / ValueError / KeyError for a damaged one."""
+    if type(data) is not dict:
+        raise TypeError(f"spec_from_json: a {type(data).__name__}, not a stored spec (the road spec contract)")
+    return _specs_load([data])[0]
 
-    return Spec(**{**data, "sides": tuple(data["sides"]) if data.get("sides") is not None else None,
-                   "street": Street.from_json(data["street"]) if data.get("street") is not None else None})
+
+def _specs_load(data):
+    """[spec_from_json(d), or None for None] of a list of stored specs (earthfast roadnet::specjson::specs_from_json).
+    Input contract (R2a): what json.loads gives (a list of None and dicts of str keys, values None, bool, int, float,
+    str or lists / dicts of such); anything else raises TypeError."""
+    import europewalks
+    import fast
+    fast.require(450, "specs_from_json")
+    return fast._ef.specs_from_json(data, Spec, europewalks.Street, europewalks.Walk)
 
 
 def _specs_from(data, n):
@@ -3396,7 +3405,7 @@ def _specs_from(data, n):
     if not isinstance(data, list) or len(data) != n:
         return None
     try:
-        return [None if d is None else spec_from_json(d) for d in data]
+        return _specs_load(data)
     except (TypeError, KeyError, ValueError):
         return None
 

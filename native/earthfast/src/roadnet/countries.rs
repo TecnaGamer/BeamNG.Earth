@@ -116,3 +116,48 @@ pub fn europe_road_countries<'py>(index: Bound<'py, PyAny>, part_off: CArr1<'py,
     }
     Ok(out)
 }
+
+/// europewalks.country_for's lookup, made once (europewalks._lookup): the supported territories' set kept (the scalar
+/// path built it from a sorted list and two one-point arrays at every call: as much CPU as the spec JSON on a European
+/// layer, 2026-11-18). index: () -> the border file's path or None, asked at every point past the box test as before.
+#[pyclass(frozen, module = "earthfast")]
+pub struct CountryLookup {
+    index: Py<PyAny>,
+    countries: BTreeSet<String>,
+    numbers: Vec<Py<pyo3::types::PyType>>,
+}
+
+#[pymethods]
+impl CountryLookup {
+    #[new]
+    fn new(py: Python<'_>, index: Py<PyAny>, countries: Vec<String>) -> PyResult<Self> {
+        let np = py.import("numpy")?;
+        let mut numbers = Vec::new();
+        for t in ["bool_", "int8", "int16", "int32", "int64", "uint8", "uint16", "uint32", "uint64", "float16",
+                  "float32", "float64"] {
+            numbers.push(np.getattr(t)?.cast_into::<pyo3::types::PyType>()?.unbind());
+        }
+        Ok(CountryLookup { index, countries: countries.into_iter().collect(), numbers })
+    }
+
+    /// country_for(lon, lat). Input contract (R2a): lon / lat exact int / float / bool or numpy number scalars (read as
+    /// float64, lon first, as np.array([lon], np.float64) read them); text, arrays (a 0-d one too: Codex on 7d348090)
+    /// and other objects TypeError.
+    fn at(&self, py: Python<'_>, lon: Bound<'_, PyAny>, lat: Bound<'_, PyAny>) -> PyResult<Option<String>> {
+        let number = |v: &Bound<'_, PyAny>| -> PyResult<f64> {
+            let ok = v.is_exact_instance_of::<pyo3::types::PyFloat>() || v.is_exact_instance_of::<pyo3::types::PyInt>()
+                || v.is_exact_instance_of::<pyo3::types::PyBool>()
+                || self.numbers.iter().any(|t| v.get_type().is(t.bind(py)));
+            if !ok {
+                let name = v.get_type().name().map(|s| s.to_string()).unwrap_or_else(|_| "?".to_owned());
+                return Err(pyo3::exceptions::PyTypeError::new_err(format!(
+                    "country_for: a {name} is no number (the R2a input contract)")));
+            }
+            v.extract::<f64>()
+        };
+        let x = number(&lon)?;
+        let y = number(&lat)?;
+        let mut b = Borders { index: self.index.bind(py).clone(), last: None };
+        country_for(&mut b, x, y, &self.countries)
+    }
+}

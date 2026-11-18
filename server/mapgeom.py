@@ -376,10 +376,11 @@ def concat(a, b):
 
 
 def text_column(values):
-    """Python strings (None = missing) -> a fixed-width unicode array ("" = missing)."""
-    v = ["" if x is None else str(x) for x in values]
-    width = max([1] + [len(x) for x in v])
-    return np.array(v, dtype=f"<U{width}")
+    """Python strings (None = missing) -> a fixed-width unicode array ("" = missing): np.array of str() of each value,
+    "<U" as wide as the longest (1 at least) (earthfast textcol::text_column)."""
+    import fast
+    fast.require(454, "text_column")
+    return fast._ef.text_column(values)
 
 
 def float_column(values, dtype=np.float32):
