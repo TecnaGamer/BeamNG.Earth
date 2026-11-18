@@ -1566,8 +1566,9 @@ def crossing_records(frame, tx, ty, cells, ground, sign_style=None, far_ground=N
     # (the bed the mesh draws and the crossings test: railprofile's lattice, the same in every tile; a point it has none
     # for from the natural ground smoothed along the part (_beds_fit), not profiled in the tile's window)
     nat = far_ground if far_ground is not None else graded
-    prof = (_beds_fit(frame, rails, ground, nat, tunnels + coarse_underpasses(frame, cells, box, rails), load, bed_elev)
-            if rails else [])
+    trust = []
+    prof = (_beds_fit(frame, rails, ground, nat, tunnels + coarse_underpasses(frame, cells, box, rails), load, bed_elev,
+                      trust) if rails else [])
     ground_lines = [xy for _f, c, kind, xy in rails if kind == "ground" and c != "tram"]
     all_cr = crossings(frame, cells, box, reach=50.0) if rails else []
     cr = ((true_crossers(ground_lines, all_cr) if TRUE_CROSSERS_ON else all_cr) + tunnels) if rails else []
@@ -1612,9 +1613,11 @@ def crossing_records(frame, tx, ty, cells, ground, sign_style=None, far_ground=N
         for line, hw in dense:
             xcrossers.append((line, hw, zx[k:k + len(line)]))
             k += len(line)
-    # (the track's side: the bed the mesh draws, before any flush: prof)
-    runs = [_part_crossings(xy, zb, xcrossers) if kind == "ground" and c != "tram" else None
-            for (_f, c, kind, xy), (zb, _zg) in zip(rails, prof)]
+    # (the track's side: the bed the mesh draws, before any flush: prof, where it may decide a crossing (trust: the
+    # lattice's own beds and a short gap's between two of them); a long gap's natural ground is drawn but never at grade
+    # with a road (NaN: the at-grade test fails), the 3D track kept there)
+    runs = [_part_crossings(xy, np.where(ok, zb, np.nan), xcrossers) if kind == "ground" and c != "tram" else None
+            for (_f, c, kind, xy), (zb, _zg), ok in zip(rails, prof, trust)]
     half_g = [gauges.get(fid, gauge(c, sign_style)) / 2 + RAIL_HEAD / 2 for fid, c, _k, _xy in rails]
     return {"tunnels": tunnels, "ground": ground, "worn": worn, "gauges": gauges, "cut": cut, "rails": rails,
             "prof": prof, "all_cr": all_cr, "cr": cr, "crossers": crossers, "runs": runs, "half_g": half_g,
@@ -1648,45 +1651,59 @@ FIT_GAP_M = 40.0            # m: a lattice gap this short or shorter, between tw
                             # REACH_M window); a longer one, or one running to the part's end, on the natural ground
 
 
-def _beds_fit(frame, rails, ground, nat, underpasses, load=None, elev=None):
+def _beds_fit(frame, rails, ground, nat, underpasses, load=None, elev=None, trust=None):
     """BNE_RAIL_ROAD_FIT: _beds with a ground track's points railprofile's lattice has no bed for laid from what does not
     change with the asking tile: across a short gap (FIT_GAP_M) between points it has, linearly along the part from the
     two (_fill_gaps: an approach's lift kept), any other on the natural ground (nat) averaged FIT_SMOOTH_N points either
     side along the part (_smooth_ground); not railways.profile in the tile's window
     (graded within GRADED_NEAR_M of the asking tile, natural past it): the bed the mesh draws and the crossing records
     test, the same whichever tile asks. Bridges, tunnels and trams as _beds lays them (their clearances, portal grades
-    and decks), and without the lattice at all (BNE_RAIL_PROFILE off, no load or elevation) _beds for every part."""
+    and decks), and without the lattice at all (BNE_RAIL_PROFILE off, no load or elevation) _beds for every part.
+    trust: a list given here gets per part a mask (n,) of the points whose bed may decide a level crossing: the
+    lattice's own and a short gap's between two of them; a long gap's natural ground is drawn, never a crossing (the
+    lattice off altogether: every point, as before)."""
     import railprofile
+
+    def window():
+        got = _beds(frame, rails, ground, underpasses, load, elev)
+        if trust is not None:
+            trust.extend(np.ones(len(xy), bool) for _f, _c, _k, xy in rails)
+        return got
     if not (railprofile.ENABLED and load is not None and elev is not None and rails):
-        return _beds(frame, rails, ground, underpasses, load, elev)
+        return window()
     lat0, lon0 = round(float(getattr(frame, "lat0", 0.0)), 7), round(float(getattr(frame, "lon0", 0.0)), 7)
     new = railprofile.beds(frame, ("beds", lat0, lon0), load, point_ground(frame, elev, ("nodes", lat0, lon0)), rails)
     if new is None:
-        return _beds(frame, rails, ground, underpasses, load, elev)
+        return window()
     old = None
     out = []
     for n, (z, (_f, c, kind, xy)) in enumerate(zip(new, rails)):
         z = np.asarray(z, np.float64)
-        if not np.isfinite(z).all():
+        ok = np.isfinite(z)
+        if not ok.all():
             if kind != "ground" or c == "tram":
                 if old is None:         # (_beds' own: the lattice where it has the point, profile's past it)
                     old = _beds(frame, rails, ground, underpasses, load, elev)
                 z = np.asarray(old[n][0], np.float64)
             else:
-                z = _fill_gaps(xy, z, nat)
+                z, ok = _fill_gaps(xy, z, nat, with_trust=True)
         out.append((z, np.asarray(ground(xy), np.float64)))
+        if trust is not None:
+            trust.append(ok)
     return out
 
 
-def _fill_gaps(xy, z, nat):
+def _fill_gaps(xy, z, nat, with_trust=False):
     """z (n,) with its NaN runs filled along the part (xy (n, 2)): a run between two finite points whose arc between them
     is FIT_GAP_M or less linearly by the arc from the first (each section's length summed from it); any other run (longer,
     or reaching the part's clipped end, where a tile cannot see its far point) from the natural ground averaged along the
     part (_smooth_ground). The same at a point wherever the part was clipped, for every point within REACH_M -
-    FIT_GAP_M of the clip's ends. Pure given nat."""
+    FIT_GAP_M of the clip's ends. with_trust: (z, mask) the mask True at the finite points and a short gap's (the
+    points whose bed may decide a crossing). Pure given nat."""
     xy = np.asarray(xy, np.float64)[:, :2]
     z = np.array(z, np.float64)
-    idx = np.flatnonzero(~np.isfinite(z))
+    ok = np.isfinite(z)
+    idx = np.flatnonzero(~ok)
     seg = dnp.hypot(*np.diff(xy, axis=0).T)
     smooth = None
     for run in np.split(idx, np.flatnonzero(np.diff(idx) > 1) + 1) if len(idx) else []:
@@ -1694,11 +1711,12 @@ def _fill_gaps(xy, z, nat):
         s = np.cumsum(seg[a:b]) if a >= 0 and b < len(z) else None       # (from point a: sections a..b-1)
         if s is not None and s[-1] <= FIT_GAP_M:
             z[run] = z[a] + (z[b] - z[a]) * (s[:-1] / s[-1] if s[-1] > 0.0 else 0.0)
+            ok[run] = True
         else:
             if smooth is None:
                 smooth = _smooth_ground(xy, nat)
             z[run] = smooth[run]
-    return z
+    return (z, ok) if with_trust else z
 
 
 def _smooth_ground(xy, nat, n=FIT_SMOOTH_N):

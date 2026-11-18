@@ -1638,8 +1638,8 @@ class RoadFitTest(unittest.TestCase):
         """Codex on 4a6ac09d: where the lattice has no bed the mesh and the records took railways.profile's bed on the
         tile's window (graded within 40 m of the tile, natural past it): a shallow crossing anchored 60 m inside one tile,
         on a road graded 2 m over the ground, met a graded bed in one tile and a natural one in the next. Those points
-        are laid on the natural ground averaged along the part (_beds_fit), the same in both, for the mesh and the
-        records alike."""
+        are laid on the natural ground averaged along the part (_beds_fit), the same in both, and (a long gap) never
+        decide a crossing (Codex on 2db52853): the same records in both tiles, none in the gap."""
         ang = np.radians(5.0)
         ax, ay = 316.0, 100.0                               # (60 m inside tile 1, 60 m past tile 0's box)
         road = [(ax - 200.0 * np.cos(ang), ay - 200.0 * np.sin(ang)), (ax + 200.0 * np.cos(ang), ay + 200.0 * np.sin(ang))]
@@ -1661,7 +1661,8 @@ class RoadFitTest(unittest.TestCase):
             near = np.abs(xy[:, 0] - ax) < 60.0
             beds.append(dict(zip(np.round(xy[near, 0], 3).tolist(), zb[near].tolist())))
         self.assertEqual(got[0], got[1], "the same crossing in both tiles")
-        self.assertTrue(got[0])
+        self.assertFalse([a for a, b, _t0, _t1 in got[0] if a < ax + 70.0 and b > ax - 70.0],
+                         "none decided in the long gap (its fallback bed only drawn)")
         shared = sorted(set(beds[0]) & set(beds[1]))
         self.assertTrue(shared)
         self.assertEqual([beds[0][x] for x in shared], [beds[1][x] for x in shared], "the same bed in both tiles")
@@ -1856,3 +1857,30 @@ class RoadFitTest(unittest.TestCase):
         shared = sorted(set(beds[0]) & set(beds[1]))
         self.assertTrue(shared)
         self.assertEqual([beds[0][x] for x in shared], [beds[1][x] for x in shared])
+
+    def test_a_long_lattice_gap_never_makes_a_crossing(self):
+        """Codex on 2db52853: a gap over FIT_GAP_M goes on the natural ground, and under a raised approach (a 44 m gap)
+        that dropped the bed 3.6 m to the road below: a grade-separated road taken for a level crossing, the track cut
+        and a deck laid. The fallback's heights are drawn, never a crossing: only the lattice's own beds and a short
+        gap's decide one."""
+        kw = {"load": lambda k: None, "bed_elev": lambda la, lo: la * 0.0}
+        f = features([[(-100.0, 100.0), (400.0, 100.0)], [(120.0, 0.0), (120.0, 250.0)]], ["standard_gauge", "secondary"],
+                     subtypes=["rail", "road"])
+
+        def ramp(q):
+            return 10.0 + np.clip(4.0 - np.abs(q[:, 0] - 120.0) * 0.02, 0.0, None)
+        with self.lattice(lambda q: np.abs(q[:, 0] - 120.0) < 22.0, ramp), \
+                unittest.mock.patch.object(railways, "RAIL_ROAD_FIT", True):
+            rec = railways.crossing_records(FRAME, 0, 0, [f], flat, far_ground=flat, **kw)
+            mesh = railways.tile_mesh(FRAME, 0, 0, [f], flat, far_ground=flat, records=rec, **kw)
+        (xy, zb, r), = [(xy, zb, r) for (fid, _c, _k, xy), (zb, _zg), r in zip(rec["rails"], rec["prof"], rec["runs"])
+                        if fid == "id000"]
+        gap = np.abs(xy[:, 0] - 120.0) < 22.0
+        self.assertLess(float(zb[gap].max()), 11.0, "the long gap drawn on the natural ground")
+        self.assertIsNone(r, "but no crossing from it: the track kept, no deck")
+        self.assertIsNotNone(mesh)
+        # (the same road at the lattice's own level: a crossing)
+        with self.lattice(lambda q: np.zeros(len(q), bool)), \
+                unittest.mock.patch.object(railways, "RAIL_ROAD_FIT", True):
+            rec = railways.crossing_records(FRAME, 0, 0, [f], flat, far_ground=flat, **kw)
+        self.assertIsNotNone([r for (fid, *_x), r in zip(rec["rails"], rec["runs"]) if fid == "id000"][0])
