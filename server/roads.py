@@ -5889,29 +5889,54 @@ def bore_dips(arc, zr, s, floor, low_h, ends=None, grade=None):
     return sorted(best.items())
 
 
-def bore_round(s, floor, radius):
-    """floor (the lower hull of the ground at arcs s) with each corner of it rounded by a vertical curve of radius m, the
-    tightest its road's speed allows (roadlaws.laws): over a change of grade d at a sample the parabola of tangent
-    length radius d / 2, at most radius d^2 / 8 over it (1 cm for 1 %, 14 cm for 4 % on a 936 m curve). A hull is
-    straight between its points, so the dips under the roads over a tube (bore_dips) left it corners, 1 % of change of
-    grade in one sample the A23's 493 m tunnel under its ramp, a lift of 0.26 for a limit of 0.25. A corner nearer an
-    end than its curve is long keeps its corner (the portals' heights are fixed). Pure."""
-    s, floor = np.asarray(s, np.float64), np.asarray(floor, np.float64)
-    if len(s) < 3:
-        return floor
-    slope = np.diff(floor) / np.maximum(np.diff(s), 1e-9)
+def bore_smooth(s, floor, floor0, kinds, dips, grade, radius):
+    """floor (the lower hull of the ground at arcs s, with the dips of bore_dips in it) with each covered run that has a
+    dip in it held to the road's laws: its grade (gradelaw) and its vertical curve (radius m: roadlaws.laws, the
+    tightest its speed allows), as near the hull as they let it, no higher than a dip's height, the run's first and last
+    two samples where they were (floor0 at a tunnel's own ends: the hull without the dips, so the end keeps the grade it
+    met its road with, floor inside). A hull is straight between its points, so a dip left corners: the A23's 493 m
+    tunnel under its ramp had 1.3 % of change of grade at the dip and at its portal, a lift of 0.24 and 0.27 for 0.20
+    (a corner of 1 % in one sample is 14 times the curve the speed allows over 10 m). The carriageways' solve, as the
+    road laws ask it of a road. A run it finds no solution for keeps the hull as it was. Pure."""
+    import carriageways
+    s, floor, floor0 = (np.asarray(a, np.float64) for a in (s, floor, floor0))
+    kinds = np.asarray(kinds)
+    n = len(s)
     out = floor.copy()
-    for i in range(1, len(s) - 1):
-        d = float(slope[i] - slope[i - 1])
-        if d <= 1e-9:
+    held = {int(q): float(z) for q, z in dips}
+    i = 0
+    while i < n:
+        if kinds[i] <= 0:
+            i += 1
             continue
-        t = radius * d / 2.0
-        if t > min(s[i] - s[0], s[-1] - s[i]):      # (a curve is no longer than the line either side of its corner)
-            continue
-        x = np.abs(s - s[i])
-        m = x < t
-        out[m] += d / (4.0 * t) * (t - x[m]) ** 2
-    out[0], out[-1] = floor[0], floor[-1]
+        j = i
+        while j + 1 < n and kinds[j + 1] > 0:
+            j += 1
+        if i <= 2:                      # (the portal's own sample and the one after it are open: the run goes to the end)
+            i = 0
+        if j >= n - 3:
+            j = n - 1
+        m = j - i + 1
+        at = [q for q in held if i <= q <= j]
+        if m >= 6 and at:
+            ref = floor.copy()
+            if i == 0:
+                ref[:2] = floor0[:2]
+            if j == n - 1:
+                ref[-2:] = floor0[-2:]
+            lo, hi = np.full(m, -np.inf), np.full(m, np.inf)
+            for q in at:
+                hi[q - i] = held[q]
+            for a in ((0,) if i == 0 else (0, 1)) + ((m - 1,) if j == n - 1 else (m - 2, m - 1)):
+                lo[a] = hi[a] = ref[i + a]
+            ds = np.diff(s[i:j + 1])
+            chain = dict(t=floor[i:j + 1], w=np.ones(m), lo=lo, hi=hi, grade=float(grade), K=float(radius) / 100.0,
+                         lam=1e-3, step=float(np.median(ds)), length=0.0, ds=ds)
+            info = {}
+            z = carriageways.solve([chain], diagnostics=info)[0]
+            if info.get("feasible") and info.get("converged"):
+                out[i:j + 1] = z
+        i = j + 1
     return out
 
 
@@ -9197,14 +9222,20 @@ class TunnelProfiles(BridgeProfiles):
                 road_pts = self._road_points(xy, s, ground, pool[k][0]) if BORE_FIT or BORE_DIP else road_pts
                 sides = tunnel_side_ground(xy, s, g_raw, pool[k][0], gfn, ground)
                 low_h = low_tube_h(pool[k][0])
+                import roadlaws
+                # (its class's speed, not the limit mapped on it: the game's cars drive a floor at the class's, and the
+                # drivability gate asks its lift at that; the A23's tunnel, 50 km/h on the map, would have let a corner
+                # of 1.3 % stand)
+                grade, radius = roadlaws.laws(types.SimpleNamespace(cls=pool[k][0].cls, kmh=None))
                 for dipped in (False, True):
                     fl = {}
                     floor, kinds = tunnel_sections(s, g, cover_g=gc, sides=sides, flags=fl,
                                                    portals=(not pinned[0], not pinned[1]),
                                                    net_buried=self._part_id(k) in self.__dict__.get("_net_buried", ()))
                     if dipped:
-                        import roadlaws
-                        floor = bore_round(s, floor, roadlaws.laws(pool[k][0])[1])
+                        floor = bore_smooth(s, floor, floor0, kinds, dips, grade, radius)
+                    else:
+                        floor0 = floor
                     if not fl.get("buried"):
                         kinds = portal_cover(kinds, (g if gc is None else gc) - floor, pool[k][0], s)
                     kinds = self._cover_roads(xy, s, kinds, ground, (g if gc is None else gc) - floor)
@@ -9215,8 +9246,7 @@ class TunnelProfiles(BridgeProfiles):
                     # are no roads over a tube. Asked again, each round dipped the floor under the next road over
                     # what its own dip had covered, 8 m down in 500 m under the A23's ramp, a trench taken for a tunnel)
                     on = roads_over_tube(*road_pts, s, floor, (g if gc is None else gc) - floor, kinds)
-                    dips = bore_dips(road_pts[0][on], road_pts[1][on], s, floor, low_h, (g[0], g[-1]),
-                                     gradelaw.road_grade(pool[k][0].cls, pool[k][0].kmh))
+                    dips = bore_dips(road_pts[0][on], road_pts[1][on], s, floor, low_h, (g[0], g[-1]), grade)
                     if not dips:
                         break
                     # (the floor the hull of the ground with the dips in it, the cover read on the ground as it was)
