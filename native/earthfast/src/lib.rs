@@ -1,5 +1,10 @@
 //! Geometry kernels for the world server (server/fast.py wraps them, with the Python versions as the fallback).
 //! All coordinates are metres in the anchor's local frame, f64.
+// Determinism (the Rust port plan's section 2.6; native/earthfast/clippy.toml lists the methods and types): no platform
+// maths (dm::Dm instead), no powi / mul_add, no std HashMap / HashSet iteration order into an output, no std hasher
+// whose keys vary per process or per Rust release. A site that needs one anyway carries a narrow #[allow(...)] with its
+// reason; `cargo clippy` fails on a new one.
+#![deny(clippy::disallowed_methods, clippy::disallowed_types, clippy::iter_over_hash_type)]
 use crate::dm::Dm;
 mod dm;
 mod devctx;
@@ -68,10 +73,13 @@ mod roadz;
 mod fartex;
 mod farglobal;
 mod farpvs;
+mod farsel;
 mod dirtsteps;
+mod racedig;
 mod gridinterp;
 mod dejunction;
 mod streetlabels;
+mod host;
 mod perfclean;
 mod membudget;
 mod mdhtml;
@@ -107,6 +115,8 @@ mod vegclumps;
 mod roadwear;
 mod roadtone;
 mod railbeds;
+mod railxing;
+mod roadnet;
 mod osmtagshards;
 mod buildyears;
 mod buildcolours;
@@ -115,6 +125,9 @@ mod par;
 mod bc1fast;
 mod l0roads;
 mod groundphoto;
+mod genground;
+mod ggshapes;
+mod ggshade;
 mod layerfold;
 mod roadsurf;
 mod levelways;
@@ -125,7 +138,9 @@ mod bldclear;
 mod bnwt;
 mod aerialcov;
 mod decisions;
+mod lidarz;
 mod paintlist;
+mod nearcross;
 
 use std::cell::Cell;
 use numpy::{PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2, PyReadonlyArray3, IntoPyArray};
@@ -713,38 +728,38 @@ fn first_use<'py>(py: Python<'py>, tris: PyReadonlyArray2<'py, i64>, nverts: usi
 
 /// railways._blocked: which points (xy (k, 2), bed heights z (k,)) lie on a crossing road at grade: per road (its
 /// centre line pts (n, 3) [x, y, z] one road after another, starts (C + 1,)) the point's nearest segment (the first of
-/// equals) nearer than reach (C,) with the road's height at that segment's start within dz of z. numpy's float64
-/// arithmetic of the Python it replaces.
+/// equals) nearer than reach (C,) with the road's height at that segment's start within dz of z (nearcross.rs: the
+/// segments near each point from a grid). numpy's float64 arithmetic of the Python it replaced.
 #[pyfunction]
 fn near_crossers(py: Python<'_>, xy: PyReadonlyArray2<f64>, z: PyReadonlyArray1<f64>, pts: PyReadonlyArray2<f64>,
-                 starts: PyReadonlyArray1<i64>, reach: PyReadonlyArray1<f64>, dz: f64) -> Vec<bool> {
+                 starts: PyReadonlyArray1<i64>, reach: PyReadonlyArray1<f64>, dz: f64) -> PyResult<Vec<bool>> {
     let (p, z, d, st, r) = (xy.as_array(), z.as_array(), pts.as_array(), starts.as_array(), reach.as_array());
-    let k = p.nrows();
+    let (k, n) = (p.nrows(), d.nrows());
     let nc = st.len().saturating_sub(1);
-    py.detach(|| {
-        let mut out = vec![false; k];
-        for c in 0..nc {
-            let (j0, j1) = (st[c] as usize, st[c + 1] as usize);
-            if j1 < j0 + 2 { continue; }
-            let segs: Vec<[f64; 5]> = (j0..j1 - 1).map(|j| {
-                let (ax, ay) = (d[[j, 0]], d[[j, 1]]);
-                let (bx, by) = (d[[j + 1, 0]] - ax, d[[j + 1, 1]] - ay);
-                [ax, ay, bx, by, (bx * bx + by * by).max(1e-12)]
-            }).collect();
-            for i in 0..k {
-                if out[i] { continue; }
-                let (px, py_) = (p[[i, 0]], p[[i, 1]]);
-                let (mut best, mut bj) = (f64::INFINITY, usize::MAX);
-                for (n, g) in segs.iter().enumerate() {
-                    let t = (((px - g[0]) * g[2] + (py_ - g[1]) * g[3]) / g[4]).clamp(0.0, 1.0);
-                    let dd = (px - (g[0] + t * g[2])).dhypot(py_ - (g[1] + t * g[3]));
-                    if dd < best || bj == usize::MAX { best = dd; bj = n; }
-                }
-                if bj != usize::MAX && best < r[c] && (z[i] - d[[j0 + bj, 2]]).abs() < dz { out[i] = true; }
-            }
-        }
-        out
-    })
+    if p.ncols() < 2 || d.ncols() < 3 || z.len() != k || r.len() < nc
+        || st.iter().any(|&v| v < 0 || v as usize > n) || (1..st.len()).any(|i| st[i] < st[i - 1]) {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "near_crossers: xy (k, 2), z (k,), pts (n, 3), starts rising within pts, reach (C,)"));
+    }
+    let pv: Vec<[f64; 2]> = (0..k).map(|i| [p[[i, 0]], p[[i, 1]]]).collect();
+    let zv: Vec<f64> = z.iter().copied().collect();
+    let dv: Vec<[f64; 3]> = (0..n).map(|j| [d[[j, 0]], d[[j, 1]], d[[j, 2]]]).collect();
+    let sv: Vec<usize> = st.iter().map(|&v| v as usize).collect();
+    let rv: Vec<f64> = r.iter().copied().collect();
+    Ok(py.detach(|| nearcross::near_crossers(&pv, &zv, &dv, &sv, &rv, dz)))
+}
+
+/// grading.rail_yield_pieces: mask (k,) and the points whose arc (s (k,)) is within reach of a masked point's
+/// (nearcross::grow_along).
+#[pyfunction]
+fn grow_along(s: PyReadonlyArray1<f64>, mask: PyReadonlyArray1<bool>, reach: f64) -> PyResult<Vec<bool>> {
+    let (s, m) = (s.as_array(), mask.as_array());
+    if s.len() != m.len() {
+        return Err(pyo3::exceptions::PyValueError::new_err("grow_along: s (k,), mask (k,)"));
+    }
+    let sv: Vec<f64> = s.iter().copied().collect();
+    let mv: Vec<bool> = m.iter().copied().collect();
+    Ok(nearcross::grow_along(&sv, &mv, reach))
 }
 
 /// roads.clip_polyline: the pieces of a polyline (pts (k, D >= 2), xy first) inside the box, Liang-Barsky per segment,
@@ -1547,6 +1562,9 @@ fn wall_ray<T: Copy + Into<f64>>(keys: &[i64], first: &[i64], counts: &[i64], se
 /// numpy.interp at x of the increasing xp, fp.
 fn np_interp(x: f64, xp: &[f64], fp: &[f64]) -> f64 {
     let n = xp.len();
+    if x.is_nan() {
+        return x;                   // (numpy's arr_interp: a NaN x is NaN)
+    }
     if x <= xp[0] {
         return fp[0];
     }
@@ -1554,7 +1572,8 @@ fn np_interp(x: f64, xp: &[f64], fp: &[f64]) -> f64 {
         return fp[n - 1];
     }
     // the last j with xp[j] <= x
-    let j = match xp.binary_search_by(|v| v.partial_cmp(&x).unwrap()) {
+    // (a NaN in xp: ordered after x, never a panic; numpy's own search differs there, every caller's xp is finite)
+    let j = match xp.binary_search_by(|v| v.partial_cmp(&x).unwrap_or(std::cmp::Ordering::Greater)) {
         Ok(mut k) => {
             while k + 1 < n && xp[k + 1] <= x {
                 k += 1;
@@ -5657,7 +5676,7 @@ fn wet_run_inside(xy: PyReadonlyArray2<f64>, wet: PyReadonlyArray1<bool>) -> PyR
     }
     let mut s = vec![0.0f64; n];
     for i in 1..n {
-        s[i] = s[i - 1] + ((p[[i, 0]] - p[[i - 1, 0]]).powi(2) + (p[[i, 1]] - p[[i - 1, 1]]).powi(2)).sqrt();
+        s[i] = s[i - 1] + ((p[[i, 0]] - p[[i - 1, 0]]).sq() + (p[[i, 1]] - p[[i - 1, 1]]).sq()).sqrt();
     }
     let (mut best, mut i) = (0.0f64, 0usize);
     while i < n {
@@ -5896,6 +5915,8 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(roadgeom::dedupe_polyline, m)?)?;
     m.add_function(wrap_pyfunction!(roadsmooth::road_smooth_line, m)?)?;
     m.add_function(wrap_pyfunction!(roadgeom::curve_deck, m)?)?;
+    m.add_function(wrap_pyfunction!(roadgeom::curve_deck_radii, m)?)?;      // (390: BNE_DECK_K_SPEED)
+    m.add_function(wrap_pyfunction!(roadgeom::deck_crest_radii, m)?)?;
     m.add_function(wrap_pyfunction!(underpass::underpass_offsets, m)?)?;
     m.add_function(wrap_pyfunction!(coarseease::ease_coarse, m)?)?;
     m.add_function(wrap_pyfunction!(junctionsnap::snap_junctions, m)?)?;
@@ -5921,6 +5942,7 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(decks::deck_beside, m)?)?;
     m.add_function(wrap_pyfunction!(decks::deck_end_joins, m)?)?;
     m.add_function(wrap_pyfunction!(tapers::road_tapers, m)?)?;
+    m.add_function(wrap_pyfunction!(tapers::taper_widths_along, m)?)?;
     m.add_function(wrap_pyfunction!(tapers::lane_flow, m)?)?;
     m.add_function(wrap_pyfunction!(roadlanes::generated_lanes, m)?)?;
     m.add_function(wrap_pyfunction!(roadlanes::lane_flow_cells, m)?)?;
@@ -6268,6 +6290,7 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 217: planset::plan_merge trims the trimmed plans' banks / widens with their lines (tbank / twiden; a bank left
     // as long as the untrimmed line read the next plans' values in the pack); plan_trim_mouths gone (unused)
     m.add_function(wrap_pyfunction!(farpvs::far_pvs, m)?)?;
+    m.add_function(wrap_pyfunction!(farpvs::far_pvs_tex_px, m)?)?;
     // 218: farpvs::far_pvs (the far field's potentially visible set: far tiles hidden behind terrain keep a small
     // texture, earthd FAR_PVS; that branch's 212)
     // 219: l0roads / groundphoto (that branch's 171)
@@ -6453,7 +6476,145 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 301 (299 is the detail packs' branch, 300 a shelved branch's): buildcolours::obc_decode (a tile of the OSM
     // building and part colours, tools/build_osm_building_colours.py, server/osmcolours.py: the colours Overture drops)
     buildcolours::register(m)?;
-    // 302: opt-in longitudinal overlap for navigation's inferred carriageway directions.
-    m.add("VERSION", 302)?;
+    // 302: grow_along (grading.rail_yield_pieces' cut along the line, nearcross.rs; near_crossers' segments from a grid)
+    m.add_function(wrap_pyfunction!(grow_along, m)?)?;
+    // 303 (302 is the grow_along branch's): the lidar-derived road heights per map cell as a signed CDN product
+    // (lidarz: lz_encode_cell / lz_decode_cell, lz_inputs_digest, lz_probe_points, lz_dem_digest; server/lidarz.py,
+    // tools/build_lidarz.py) and the decision archives' file functions taking a signed product's domain (dec_*:
+    // domain = "dec" | "lidarz", its own magics inside the signature)
+    lidarz::register(m)?;
+    // 304: the far field's per-pose kernels (the event loop's 2-7 s stalls of a BeamMP drive, 2026-11-15):
+    // farsel::far_select_nodes (farfield.select, the anchor's quadtree, ported), farsel::far_horizon_radius
+    // (HorizonGrid.radius), farpvs::far_pvs_tex_px (farpvs.Set.tex_px / hidden for many tiles, without the GIL);
+    // far_global_select's view errors looked up in the caller's dict (not copied whole at every pose)
+    farsel::register(m)?;
+    // (304 also) far_select_nodes and far_global_select return the selection's slack (the move under which it stays the
+    // same: earthd's selection gate skips only selections that could not change)
+    // 305: pmt_find_many / pmt_ranges (Mapterhorn's regional elevation archives read by range reads instead of its
+    // tile endpoint: server/mtarchive.py)
+    m.add_function(wrap_pyfunction!(pmtiles::pmt_find_many, m)?)?;
+    m.add_function(wrap_pyfunction!(pmtiles::pmt_ranges, m)?)?;
+    // 306: genground::gg_fill_polys / gg_regions / gen_ground (the generated ground, BNE_GEN_GROUND: a block's 1 m base
+    // colour from Sentinel-2 and the map's regions instead of a 1 m aerial photo; server/genground.py)
+    genground::register(m)?;
+    host::register(m)?;
+    // 307: gen_ground(..., gr, gc): its sampling lattices on the global texel grid, the caller's square with a halo
+    // (Codex review of 306: overlapping blocks drew the same ground in other colours)
+    // 308: generated ground stage 2: gg_regions(..., line, line_kind, ...) and the surface / pattern kinds,
+    // gen_ground(..., poly, pdir, pphase, ...), ggshapes::gg_fill_lines / gg_poly_axes
+    ggshapes::register(m)?;
+    ggshade::register(m)?;
+    // 309: gg_poly_axes(..., skip): linear (a histogram of the edge directions), all of a polygon's rings, clip edges left
+    // out (Codex review of 308)
+    // 310: stage 3 perf: gg_grid (the texel grid and its Web-Mercator metres, rectangles), the edge-table polygon fill,
+    // the capsule-interval line fill, value_noises on the kernels' threads (all the same output)
+    // 311: stage 3 steps 2-3: gg_regions(..., t) with the bounded hedgerow skirt; gen_ground's field-edge barriers and
+    // forest floor
+    // 312: stage 3 steps 4-5: unmapped crop's furrows where the photo shows periodic strips (a structure tensor on the 8 m
+    // cells, 32 integer normals, a lag test), the surfaces' palette by the support of their photo colour
+    // 320: veg_clumps(..., segs, hws, grid, merc_per_m, rad, max_shift_m) -> (..., stats): the far clumps kept off the
+    // carriageways (split at a road, moved off it, else their trees single). (313-319 left for the parallel ground
+    // work's bumps)
+    // 321: veg_clumps(..., own, blocked): a clump moved off a road stays in its map cell and off buildings / water
+    // (Codex review of 320)
+    // 313: stage 4: gg_discs (where the game's trees stand), gg_regions(..., floor, skirt), gen_ground(..., floor,
+    // floor_mode): the forest floor follows the placed trees
+    // 314: stage 5: ggshade (gg_sun_fit, gg_relight: the capture sun's shadows out of the Sentinel-2 colour);
+    // gen_ground's LOST texels, its crowns' shading from no direction
+    // 322: both of the above merged (321 vegetation clumps + 313/314 generated ground stages 4-5)
+    // 370: genground::gen_ground_pair(..., floor_mode, gaps) (the ground and its canopy version in one pass: the far
+    // rings' and the block's forest floor fade through the mips, byte for byte two gen_ground calls; gaps: the block's
+    // unplaced gaps in the photo's colour in the canopy version too)
+    // the Rust port's phase 1 (the game connection in Rust), first numbered 360-362 on its branch:
+    // 360: the game connection in Rust (the Rust port's phase 1, plan section 4): Host / Wire / HostBatch, host_hold_gil
+    // (protocol.HostServer / HostStream)
+    // 361: the host wakes the loop through a local socket pair (Host.take_wake / take; no GIL in the hand-over, the
+    // HostBatch class gone), Host(..., merge, record, record_out): the pose merge (1b) and the recorder (1c),
+    // host_read_recording
+    // 362: Wire.consumed / unread: the read side's flow control (asyncio's StreamReader: reading stops past 128 KiB the
+    // handler has not consumed, goes on at 64 KiB; Codex review of 28c35fc0), poses merged as they come
+    // 371: phase 1 merged onto 370 (the host as 362 had it)
+    m.add_function(wrap_pyfunction!(railxing::corridor_ground, m)?)?;
+    // 372: railxing::corridor_ground (railxing.corridor_ground, BNE_RAIL_XING: a grid over the tracks' points, not
+    // numpy's distance matrix per pair of lines; the same bits)
+    // 373: deck_trim_overlaps(..., params[4] = TRIM_ALONG_COS): only another deck running along a deck trims it, not
+    // one crossing it (a hole across the B 254's deck over a track's at Trutzhain; PR #1397, first numbered 310)
+    // 374: membudget's map data clamp 160-384 MB (384 at the 24 GB cap; PR #1325)
+    // 376 (first numbered 374): RoadRules.width_rejects (roads.width_repair: a mapped width wider than its lanes'
+    // platform is a right-of-way, not the carriageway; the road revamp's WIDTH repair, MA Route 2 GitHub #901)
+    // 377 (first numbered 375): grade_points: a road holds its carriageway whole only over no approach of its rank
+    // leading onto a bridge (gradebins Pt.arank: the Stonehouse Bridge's deck end stepped 1.6 m into the gyratory it
+    // runs into, GitHub #1374)
+    m.add_function(wrap_pyfunction!(roadnet::copies::joint_desc, m)?)?;
+    // 378: the road revamp's R2a (roadnet: the spec inputs' Python glue ported byte for byte): roadnet::copies::joint_desc
+    // (roads.joint_desc: each joint from the copy in its own cell, keys by Python's round(x, 6))
+    m.add_function(wrap_pyfunction!(roadnet::columns::cycle_streets, m)?)?;
+    m.add_function(wrap_pyfunction!(roadnet::columns::rule_cols, m)?)?;
+    m.add_function(wrap_pyfunction!(roadnet::columns::osm_values, m)?)?;
+    m.add_function(wrap_pyfunction!(roadnet::columns::layer_lengths, m)?)?;
+    m.add_function(wrap_pyfunction!(roadnet::columns::spec_columns, m)?)?;
+    // 379: R2a's spec input columns (roadnet::columns: cycle_streets, rule_cols, osm_values, layer_lengths,
+    // spec_columns: roads._spec_inputs' class codes, eligibility, rings, smoothness, name codes, sidewalks, connectors)
+    m.add_class::<roadnet::surfaces::SurfaceRules>()?;
+    m.add_function(wrap_pyfunction!(roadnet::surfaces::map_surface_values, m)?)?;
+    m.add_function(wrap_pyfunction!(roadnet::surfaces::aisles, m)?)?;
+    // 380: R2a's surfaces (roadnet::surfaces: SurfaceRules.token / kind / spec_surfaces / sweden_surfaces,
+    // map_surface_values, aisles: roads.surface_token, surface_kind, _map_surface_values, _spec_inputs' surface columns)
+    m.add_function(wrap_pyfunction!(roadnet::assembly::specs_of, m)?)?;
+    m.add_function(wrap_pyfunction!(roadnet::assembly::dual_cols, m)?)?;
+    m.add_function(wrap_pyfunction!(roadnet::assembly::dual_apply, m)?)?;
+    m.add_function(wrap_pyfunction!(roadnet::assembly::ground_med_dir, m)?)?;
+    // 381: R2a's spec assembly (roadnet::assembly: specs_of, dual_cols, dual_apply, ground_med_dir: roads._specs_of,
+    // dual_carriageways' columns and result, _bridge_specs' ground columns)
+    m.add_function(wrap_pyfunction!(roadnet::laneflow::lane_flow_rows, m)?)?;
+    m.add_function(wrap_pyfunction!(roadnet::laneflow::lane_flow_lists, m)?)?;
+    // 382: R2a's lane flow rows (roadnet::laneflow: lane_flow_rows, lane_flow_lists: roads._lane_flow_rows with
+    // _ramp_candidates, _lane_flow_local's lists)
+    m.add_function(wrap_pyfunction!(roadnet::lanesplit::lane_joint_specs, m)?)?;
+    m.add_function(wrap_pyfunction!(roadnet::lanesplit::lane_split_jobs, m)?)?;
+    m.add_function(wrap_pyfunction!(roadnet::lanesplit::lane_ease, m)?)?;
+    m.add_function(wrap_pyfunction!(roadnet::lanesplit::lane_offset, m)?)?;
+    m.add_function(wrap_pyfunction!(roadnet::lanesplit::lane_tag_parts, m)?)?;
+    // 383: R2a's lane sections (roadnet::lanesplit: lane_joint_specs, lane_split_jobs, lane_ease, lane_offset:
+    // lanesections.split's plan, _joint_specs, _ease, _offset; lane_tag_parts: roads.lane_tag_parts)
+    m.add_function(wrap_pyfunction!(racedig::race_dig_floor, m)?)?;
+    // 384: racedig::race_dig_floor (racedig.py, BNE_RACEWAY_DIG: a tunnel part dug under a racetrack, the track's
+    // surface kept; road revamp R1k)
+    m.add_function(wrap_pyfunction!(roadnet::regions::outline_contains, m)?)?;
+    m.add_class::<roadnet::regions::PolygonIndex>()?;
+    // 385: R2a's region tests (roadnet::regions: outline_contains = sweden.contains, PolygonIndex.lookup =
+    // signstates.states' polygon test)
+    m.add_function(wrap_pyfunction!(roadnet::rings::ring_radius, m)?)?;
+    // 386: R2a's roundabout ring radius (roadnet::rings::ring_radius = roads.ring_radius: dnp.lstsq's QR and eigh
+    // answers, numpy's sums in their orders)
+    m.add_function(wrap_pyfunction!(roadnet::regions::width_regions, m)?)?;
+    // 387: R2a's width regions (roadnet::regions::width_regions = roads._width_regions: the US by the states' test, Japan
+    // by its box at each road's middle point)
+    // 390: roadgeom::curve_deck_radii, deck_crest_radii (roads.py BNE_DECK_K_SPEED: deck vertical curves by the
+    // road's design speed; road revamp R1e)
+    m.add_function(wrap_pyfunction!(roadnet::countries::europe_countries, m)?)?;
+    m.add_function(wrap_pyfunction!(roadnet::countries::europe_road_countries, m)?)?;
+    // 391: R2a's European street country (roadnet::countries = europewalks.country_for: the territories' box, the
+    // border bands, europeinfra.COUNTRIES; for points and for each road's middle point)
+    m.add_function(wrap_pyfunction!(roadnet::verdicts::roadsurf_candidates, m)?)?;
+    m.add_function(wrap_pyfunction!(roadnet::verdicts::roadsurf_lookup, m)?)?;
+    m.add_function(wrap_pyfunction!(roadnet::verdicts::photo_candidates, m)?)?;
+    m.add_function(wrap_pyfunction!(roadnet::verdicts::photo_values, m)?)?;
+    // 392: R2a's photo surface inputs (roadnet::verdicts: roadsurf.candidates and layer_verdicts' store lookup,
+    // photosurface.verdicts' selection, _spec_inputs' fill of the photo's values)
+    m.add_function(wrap_pyfunction!(roadnet::flowhome::lane_flow_home, m)?)?;
+    m.add_function(wrap_pyfunction!(roadnet::flowhome::lane_overrides, m)?)?;
+    // 400: R2a's lane flow from the home cells (roadnet::flowhome: roads._lane_flow_home's neighbour / home-cell
+    // remap, _lane_overrides' making)
+    m.add_function(wrap_pyfunction!(roadnet::eustreets::eu_street_pass, m)?)?;
+    // 401: R2a's European street pass (roadnet::eustreets = _road_specs' europewalks pass: the filter, middle point,
+    // mapped width and frontage; europewalks.plan and country_for as callbacks)
+    m.add_function(wrap_pyfunction!(roadnet::levelkinds::level_kind_mask, m)?)?;
+    // 402: R2a's level kinds (roadnet::levelkinds::level_kind_mask = _bridge_specs' "has a range of that kind" loop)
+    m.add_function(wrap_pyfunction!(roadnet::splitlayer::lane_split_layer, m)?)?;
+    // 403: R2a's lane section layer (roadnet::splitlayer::lane_split_layer = lanesections.split's new-layer assembly:
+    // the columns gathered, the sections' values, LANE_MAX, the geometry and rule rows, the cut points' connectors)
+    // 404: optional overlap-aware carriageway inference for AI directions; physical specs keep the existing rule.
+    m.add("VERSION", 404)?;
     Ok(())
 }

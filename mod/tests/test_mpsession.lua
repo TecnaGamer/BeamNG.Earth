@@ -78,6 +78,20 @@ T.check(other.active == 1 and stranger.active == 0, 'a known anchor: on (convert
 ms.update(ms.HIDE_S, anchor, { x = 100, y = 0, z = 0 })
 T.check(require('beamngEarth/mpanchor').knows(2) and not require('beamngEarth/mpanchor').knows(3),
   'mpanchor told the anchors')
+-- (mpdefer: the far test of a car with no packet yet, by its owner's place, from our anchor)
+do
+  local ma = require('beamngEarth/mpanchor')
+  local la, lo = ma.own()
+  local changed = ma.ownChanged
+  ma.announceOwn(36.5, -118.1)
+  local pla, plo = ms.ownerPlace(2)
+  T.check(pla == 36.6 and plo == -118.0 and ms.ownerPlace(3) == nil, 'ownerPlace: a known player\'s place, nil unknown')
+  T.near(ms.ownerDist(2), ms.dist(36.5, -118.1, 36.6, -118.0), 1e-6, 'ownerDist: from our anchor')
+  T.check(ms.ownerDist(3) == nil, 'ownerDist: unknown player')
+  T.check(ms.isOff(22) and not ms.isOff(21), 'isOff: a car switched off here')
+  if la then ma.announceOwn(la, lo) end
+  ma.ownChanged = changed
+end
 
 -- A complete anchors snapshot expires missing or malformed peers. This also keeps
 -- a disconnected player's origin from being reused for a new player with that id.

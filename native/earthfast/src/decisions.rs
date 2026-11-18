@@ -25,6 +25,11 @@
 //!
 //! Verification takes the keys compiled in here (TRUSTED: the project's builder key, added with the user's go; empty
 //! until then, so nothing verifies) unless the caller hands its own (tests, a local builder).
+//!
+//! Domains (2026-11-15): the same block and manifest layout and the same keys carry other signed products of the
+//! builder, each under magics of its own (Domain: the magic is inside the signed bytes, so a file of one product never
+//! verifies as another's): "dec" (BNGD / BNGM, these archives) and "lidarz" (BNLZ / BNLM: the lidar-derived road
+//! heights per map cell, lidarz.rs, server/lidarz.py).
 
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use pyo3::exceptions::PyValueError;
@@ -33,8 +38,25 @@ use pyo3::types::PyBytes;
 use sha2::{Digest, Sha256};
 
 pub const FORMAT: u8 = 1;
-const MAGIC: &[u8; 4] = b"BNGD";
-const MMAGIC: &[u8; 4] = b"BNGM";
+
+/// A signed product's file magics and format byte (the block's and the manifest's).
+pub struct Domain {
+    pub name: &'static str,
+    pub block: &'static [u8; 4],
+    pub manifest: &'static [u8; 4],
+    pub format: u8,
+}
+
+pub const DEC: Domain = Domain { name: "dec", block: b"BNGD", manifest: b"BNGM", format: FORMAT };
+pub const LIDARZ: Domain = Domain { name: "lidarz", block: b"BNLZ", manifest: b"BNLM", format: 1 };
+
+pub fn domain_of(name: &str) -> Result<&'static Domain, String> {
+    match name {
+        "dec" => Ok(&DEC),
+        "lidarz" => Ok(&LIDARZ),
+        _ => Err(format!("unknown signed product {name:?}")),
+    }
+}
 const SIGNED: usize = 92;
 const HEAD: usize = 156;
 const MHEAD: usize = 76;
@@ -115,6 +137,16 @@ fn npy_transform(d: &mut [u8], forward: bool) {
         return;
     }
     let cols = n / rows;
+    let out = delta_planes(data, rows, cols, forward);
+    data.copy_from_slice(&out);
+}
+
+/// rows x cols 8-byte little-endian values (row-major) as deltas down each column in byte planes (forward), or back:
+/// lossless and length-preserving; value i of column-major order (col c, row r: i = c * rows + r) has byte b at b * n + i.
+/// Shared by the npz transform and the lidar cell records (lidarz.rs).
+pub fn delta_planes(data: &[u8], rows: usize, cols: usize, forward: bool) -> Vec<u8> {
+    let n = rows * cols;
+    assert_eq!(data.len(), n * 8, "delta_planes: {} bytes for {rows} x {cols} values", data.len());
     let mut out = vec![0u8; data.len()];
     if forward {
         // value i of column-major order (col c, row r: i = c * rows + r), delta down its column, byte b at b * n + i
@@ -147,7 +179,7 @@ fn npy_transform(d: &mut [u8], forward: bool) {
             }
         }
     }
-    data.copy_from_slice(&out);
+    out
 }
 
 /// The 8-byte numeric arrays of an npz (numpy's savez: stored zip members) transformed in place; other members, and
@@ -212,12 +244,12 @@ pub struct Head {
     pub data: usize, // where the data starts
 }
 
-fn parse(buf: &[u8]) -> Result<Head, String> {
-    if buf.len() < HEAD || &buf[..4] != MAGIC {
-        return Err("not a decision block".into());
+fn parse(buf: &[u8], d: &Domain) -> Result<Head, String> {
+    if buf.len() < HEAD || &buf[..4] != d.block {
+        return Err(format!("not a {} block", d.name));
     }
-    if buf[4] != FORMAT {
-        return Err(format!("block format {}, {} wanted", buf[4], FORMAT));
+    if buf[4] != d.format {
+        return Err(format!("block format {}, {} wanted", buf[4], d.format));
     }
     let (z, x, y) = (u32_at(buf, 8).unwrap(), u32_at(buf, 12).unwrap(), u32_at(buf, 16).unwrap());
     let vkey: [u8; 32] = buf[20..52].try_into().unwrap();
@@ -288,8 +320,9 @@ fn seed_key(seed: &[u8]) -> Result<SigningKey, String> {
 
 /// A block file of items [(key, bytes, npz)] (npz: the bytes are numpy's npz, packed with the npz transform),
 /// signed with the builder's key (its 32-byte seed). Items in key order; a key twice is an error.
-pub fn pack_block(z: u32, x: u32, y: u32, vkey: &[u8], items: &[(String, Vec<u8>, bool)], level: i32, seed: &[u8])
-    -> Result<Vec<u8>, String> {
+#[allow(clippy::too_many_arguments)]
+pub fn pack_block(d: &Domain, z: u32, x: u32, y: u32, vkey: &[u8], items: &[(String, Vec<u8>, bool)], level: i32,
+                  seed: &[u8]) -> Result<Vec<u8>, String> {
     let sk = seed_key(seed)?;
     let vkey: [u8; 32] = vkey.try_into().map_err(|_| "vkey is not 32 bytes".to_string())?;
     let mut order: Vec<usize> = (0..items.len()).collect();
@@ -324,8 +357,8 @@ pub fn pack_block(z: u32, x: u32, y: u32, vkey: &[u8], items: &[(String, Vec<u8>
     h.update(&data);
     let body: [u8; 32] = h.finalize().into();
     let mut out = Vec::with_capacity(HEAD + index.len() + data.len());
-    out.extend_from_slice(MAGIC);
-    out.extend_from_slice(&[FORMAT, 0, 0, 0]);
+    out.extend_from_slice(d.block);
+    out.extend_from_slice(&[d.format, 0, 0, 0]);
     for v in [z, x, y] {
         out.extend_from_slice(&v.to_le_bytes());
     }
@@ -343,9 +376,10 @@ pub fn pack_block(z: u32, x: u32, y: u32, vkey: &[u8], items: &[(String, Vec<u8>
 
 /// Checks a downloaded block whole: its signature by a trusted key, its body's hash, that it is the block and version
 /// asked for, every item inside the file. Returns the item count.
-pub fn verify_block(buf: &[u8], z: u32, x: u32, y: u32, vkey: &[u8], keys: &[VerifyingKey]) -> Result<usize, String> {
-    if buf.len() < HEAD || &buf[..4] != MAGIC {
-        return Err("not a decision block".into());
+pub fn verify_block(d: &Domain, buf: &[u8], z: u32, x: u32, y: u32, vkey: &[u8], keys: &[VerifyingKey])
+    -> Result<usize, String> {
+    if buf.len() < HEAD || &buf[..4] != d.block {
+        return Err(format!("not a {} block", d.name));
     }
     verify_any(keys, &buf[..SIGNED], &buf[SIGNED..HEAD])?;
     let mut h = Sha256::new();
@@ -354,7 +388,7 @@ pub fn verify_block(buf: &[u8], z: u32, x: u32, y: u32, vkey: &[u8], keys: &[Ver
     if body[..] != buf[52..84] {
         return Err("body hash".into());
     }
-    let head = parse(buf)?;
+    let head = parse(buf, d)?;
     if (head.z, head.x, head.y) != (z, x, y) {
         return Err(format!("block {}/{}/{}, {z}/{x}/{y} asked", head.z, head.x, head.y));
     }
@@ -380,37 +414,37 @@ fn unpack(buf: &[u8], head: &Head, e: &Entry) -> Result<Vec<u8>, String> {
 }
 
 /// The raw bytes of one item of a block (a file already verified when it was downloaded), or None.
-pub fn block_item(buf: &[u8], key: &str) -> Result<Option<Vec<u8>>, String> {
-    let head = parse(buf)?;
+pub fn block_item(d: &Domain, buf: &[u8], key: &str) -> Result<Option<Vec<u8>>, String> {
+    let head = parse(buf, d)?;
     match head.entries.binary_search_by(|e| e.key.as_str().cmp(key)) {
         Ok(i) => unpack(buf, &head, &head.entries[i]).map(Some),
         Err(_) => Ok(None),
     }
 }
 
-pub fn make_manifest(json: &[u8], seed: &[u8], level: i32) -> Result<Vec<u8>, String> {
+pub fn make_manifest(d: &Domain, json: &[u8], seed: &[u8], level: i32) -> Result<Vec<u8>, String> {
     let sk = seed_key(seed)?;
     let mut msg = Vec::with_capacity(json.len() + 5);
-    msg.extend_from_slice(MMAGIC);
-    msg.push(FORMAT);
+    msg.extend_from_slice(d.manifest);
+    msg.push(d.format);
     msg.extend_from_slice(json);
     let sig = sk.sign(&msg);
     let packed = zstd::bulk::compress(json, level).map_err(|e| e.to_string())?;
     let mut out = Vec::with_capacity(MHEAD + packed.len());
-    out.extend_from_slice(MMAGIC);
-    out.extend_from_slice(&[FORMAT, 0, 0, 0]);
+    out.extend_from_slice(d.manifest);
+    out.extend_from_slice(&[d.format, 0, 0, 0]);
     out.extend_from_slice(&sig.to_bytes());
     out.extend_from_slice(&(json.len() as u32).to_le_bytes());
     out.extend_from_slice(&packed);
     Ok(out)
 }
 
-pub fn open_manifest(buf: &[u8], keys: &[VerifyingKey]) -> Result<Vec<u8>, String> {
-    if buf.len() < MHEAD || &buf[..4] != MMAGIC {
-        return Err("not a decision manifest".into());
+pub fn open_manifest(d: &Domain, buf: &[u8], keys: &[VerifyingKey]) -> Result<Vec<u8>, String> {
+    if buf.len() < MHEAD || &buf[..4] != d.manifest {
+        return Err(format!("not a {} manifest", d.name));
     }
-    if buf[4] != FORMAT {
-        return Err(format!("manifest format {}, {} wanted", buf[4], FORMAT));
+    if buf[4] != d.format {
+        return Err(format!("manifest format {}, {} wanted", buf[4], d.format));
     }
     let n = u32_at(buf, 72).unwrap() as usize;
     if n > MAX_RAW {
@@ -423,8 +457,8 @@ pub fn open_manifest(buf: &[u8], keys: &[VerifyingKey]) -> Result<Vec<u8>, Strin
         return Err("manifest length".into());
     }
     let mut msg = Vec::with_capacity(n + 5);
-    msg.extend_from_slice(MMAGIC);
-    msg.push(FORMAT);
+    msg.extend_from_slice(d.manifest);
+    msg.push(d.format);
     msg.extend_from_slice(&json);
     verify_any(keys, &msg, &buf[8..72])?;
     Ok(json)
@@ -432,56 +466,70 @@ pub fn open_manifest(buf: &[u8], keys: &[VerifyingKey]) -> Result<Vec<u8>, Strin
 
 // --- Python ------------------------------------------------------------------------------------------------------
 
-/// A signed block file (the builder: tools/build_decisions.py). items: [(key, bytes, npz)].
+/// A signed block file (the builder: tools/build_decisions.py, tools/build_lidarz.py). items: [(key, bytes, npz)];
+/// domain: the product ("dec", "lidarz": Domain), the last argument of every dec_* function that reads or writes a
+/// file (303).
 #[pyfunction]
-#[pyo3(signature = (z, x, y, vkey, items, seed, level = 19))]
+#[pyo3(signature = (z, x, y, vkey, items, seed, level = 19, domain = "dec"))]
+#[allow(clippy::too_many_arguments)]
 pub fn dec_pack_block<'py>(py: Python<'py>, z: u32, x: u32, y: u32, vkey: &[u8],
-                           items: Vec<(String, Bound<'py, PyBytes>, bool)>, seed: &[u8], level: i32)
+                           items: Vec<(String, Bound<'py, PyBytes>, bool)>, seed: &[u8], level: i32, domain: &str)
     -> PyResult<Bound<'py, PyBytes>> {
+    let d = domain_of(domain).map_err(err)?;
     let owned: Vec<(String, Vec<u8>, bool)> = items.iter().map(|(k, b, n)| (k.clone(), b.as_bytes().to_vec(), *n)).collect();
     let vkey = vkey.to_vec();
     let seed = seed.to_vec();
-    let out = py.detach(|| pack_block(z, x, y, &vkey, &owned, level, &seed)).map_err(err)?;
+    let out = py.detach(|| pack_block(d, z, x, y, &vkey, &owned, level, &seed)).map_err(err)?;
     Ok(PyBytes::new(py, &out))
 }
 
 /// The item count of a downloaded block, after its checks (verify_block); ValueError when any fails. pubkeys: the
 /// keys to accept (None: the ones compiled in).
 #[pyfunction]
-#[pyo3(signature = (buf, z, x, y, vkey, pubkeys = None))]
-pub fn dec_verify_block(py: Python<'_>, buf: &[u8], z: u32, x: u32, y: u32, vkey: &[u8], pubkeys: Option<Vec<Vec<u8>>>)
-    -> PyResult<usize> {
+#[pyo3(signature = (buf, z, x, y, vkey, pubkeys = None, domain = "dec"))]
+#[allow(clippy::too_many_arguments)]
+pub fn dec_verify_block(py: Python<'_>, buf: &[u8], z: u32, x: u32, y: u32, vkey: &[u8], pubkeys: Option<Vec<Vec<u8>>>,
+                        domain: &str) -> PyResult<usize> {
+    let d = domain_of(domain).map_err(err)?;
     let keys = keys_of(pubkeys).map_err(err)?;
-    py.detach(|| verify_block(buf, z, x, y, vkey, &keys)).map_err(err)
+    py.detach(|| verify_block(d, buf, z, x, y, vkey, &keys)).map_err(err)
 }
 
 /// One item's raw bytes from a block file, or None.
 #[pyfunction]
-pub fn dec_block_item<'py>(py: Python<'py>, buf: &[u8], key: &str) -> PyResult<Option<Bound<'py, PyBytes>>> {
-    let got = py.detach(|| block_item(buf, key)).map_err(err)?;
+#[pyo3(signature = (buf, key, domain = "dec"))]
+pub fn dec_block_item<'py>(py: Python<'py>, buf: &[u8], key: &str, domain: &str)
+    -> PyResult<Option<Bound<'py, PyBytes>>> {
+    let d = domain_of(domain).map_err(err)?;
+    let got = py.detach(|| block_item(d, buf, key)).map_err(err)?;
     Ok(got.map(|b| PyBytes::new(py, &b)))
 }
 
 /// (z, x, y, vkey, [keys]) of a block file (no signature check).
 #[pyfunction]
-pub fn dec_block_info<'py>(py: Python<'py>, buf: &[u8]) -> PyResult<(u32, u32, u32, Bound<'py, PyBytes>, Vec<String>)> {
-    let h = parse(buf).map_err(err)?;
+#[pyo3(signature = (buf, domain = "dec"))]
+pub fn dec_block_info<'py>(py: Python<'py>, buf: &[u8], domain: &str)
+    -> PyResult<(u32, u32, u32, Bound<'py, PyBytes>, Vec<String>)> {
+    let h = parse(buf, domain_of(domain).map_err(err)?).map_err(err)?;
     Ok((h.z, h.x, h.y, PyBytes::new(py, &h.vkey), h.entries.into_iter().map(|e| e.key).collect()))
 }
 
 #[pyfunction]
-#[pyo3(signature = (json, seed, level = 19))]
-pub fn dec_make_manifest<'py>(py: Python<'py>, json: &[u8], seed: &[u8], level: i32) -> PyResult<Bound<'py, PyBytes>> {
-    let out = make_manifest(json, seed, level).map_err(err)?;
+#[pyo3(signature = (json, seed, level = 19, domain = "dec"))]
+pub fn dec_make_manifest<'py>(py: Python<'py>, json: &[u8], seed: &[u8], level: i32, domain: &str)
+    -> PyResult<Bound<'py, PyBytes>> {
+    let out = make_manifest(domain_of(domain).map_err(err)?, json, seed, level).map_err(err)?;
     Ok(PyBytes::new(py, &out))
 }
 
 /// The JSON bytes of a manifest whose signature a trusted key made; ValueError otherwise.
 #[pyfunction]
-#[pyo3(signature = (buf, pubkeys = None))]
-pub fn dec_open_manifest<'py>(py: Python<'py>, buf: &[u8], pubkeys: Option<Vec<Vec<u8>>>) -> PyResult<Bound<'py, PyBytes>> {
+#[pyo3(signature = (buf, pubkeys = None, domain = "dec"))]
+pub fn dec_open_manifest<'py>(py: Python<'py>, buf: &[u8], pubkeys: Option<Vec<Vec<u8>>>, domain: &str)
+    -> PyResult<Bound<'py, PyBytes>> {
+    let d = domain_of(domain).map_err(err)?;
     let keys = keys_of(pubkeys).map_err(err)?;
-    let out = open_manifest(buf, &keys).map_err(err)?;
+    let out = open_manifest(d, buf, &keys).map_err(err)?;
     Ok(PyBytes::new(py, &out))
 }
 
@@ -576,23 +624,49 @@ mod tests {
         let seed = [7u8; 32];
         let vkey = [3u8; 32];
         let items = vec![("p/b".to_string(), b"hello".to_vec(), false), ("f/a".to_string(), vec![0u8; 1000], false)];
-        let b = pack_block(12, 1, 2, &vkey, &items, 3, &seed).unwrap();
+        let b = pack_block(&DEC, 12, 1, 2, &vkey, &items, 3, &seed).unwrap();
         let pk = VerifyingKey::from(&SigningKey::from_bytes(&seed));
-        assert_eq!(verify_block(&b, 12, 1, 2, &vkey, &[pk]).unwrap(), 2);
-        assert!(verify_block(&b, 12, 1, 3, &vkey, &[pk]).is_err());
-        assert!(verify_block(&b, 12, 1, 2, &[4u8; 32], &[pk]).is_err());
-        assert!(verify_block(&b, 12, 1, 2, &vkey, &[]).is_err());
+        assert_eq!(verify_block(&DEC, &b, 12, 1, 2, &vkey, &[pk]).unwrap(), 2);
+        assert!(verify_block(&DEC, &b, 12, 1, 3, &vkey, &[pk]).is_err());
+        assert!(verify_block(&DEC, &b, 12, 1, 2, &[4u8; 32], &[pk]).is_err());
+        assert!(verify_block(&DEC, &b, 12, 1, 2, &vkey, &[]).is_err());
         let other = VerifyingKey::from(&SigningKey::from_bytes(&[8u8; 32]));
-        assert!(verify_block(&b, 12, 1, 2, &vkey, &[other]).is_err());
+        assert!(verify_block(&DEC, &b, 12, 1, 2, &vkey, &[other]).is_err());
         let mut bad = b.clone();
         let last = bad.len() - 1;
         bad[last] ^= 1;
-        assert!(verify_block(&bad, 12, 1, 2, &vkey, &[pk]).is_err());
-        assert_eq!(block_item(&b, "p/b").unwrap().unwrap(), b"hello");
-        assert_eq!(block_item(&b, "f/a").unwrap().unwrap(), vec![0u8; 1000]);
-        assert!(block_item(&b, "nope").unwrap().is_none());
-        let m = make_manifest(b"{\"a\":1}", &seed, 3).unwrap();
-        assert_eq!(open_manifest(&m, &[pk]).unwrap(), b"{\"a\":1}");
-        assert!(open_manifest(&m, &[other]).is_err());
+        assert!(verify_block(&DEC, &bad, 12, 1, 2, &vkey, &[pk]).is_err());
+        assert_eq!(block_item(&DEC, &b, "p/b").unwrap().unwrap(), b"hello");
+        assert_eq!(block_item(&DEC, &b, "f/a").unwrap().unwrap(), vec![0u8; 1000]);
+        assert!(block_item(&DEC, &b, "nope").unwrap().is_none());
+        let m = make_manifest(&DEC, b"{\"a\":1}", &seed, 3).unwrap();
+        assert_eq!(open_manifest(&DEC, &m, &[pk]).unwrap(), b"{\"a\":1}");
+        assert!(open_manifest(&DEC, &m, &[other]).is_err());
+    }
+
+    #[test]
+    fn domains_never_verify_as_each_other() {
+        // the same key signs both products: a file of one is never taken as the other's (its magic is signed)
+        let seed = [7u8; 32];
+        let vkey = [3u8; 32];
+        let pk = VerifyingKey::from(&SigningKey::from_bytes(&seed));
+        let items = vec![("c/14_1_2@00".to_string(), b"cell".to_vec(), false)];
+        let lz = pack_block(&LIDARZ, 12, 1, 2, &vkey, &items, 3, &seed).unwrap();
+        let dec = pack_block(&DEC, 12, 1, 2, &vkey, &items, 3, &seed).unwrap();
+        assert_eq!(verify_block(&LIDARZ, &lz, 12, 1, 2, &vkey, &[pk]).unwrap(), 1);
+        assert!(verify_block(&DEC, &lz, 12, 1, 2, &vkey, &[pk]).is_err());
+        assert!(verify_block(&LIDARZ, &dec, 12, 1, 2, &vkey, &[pk]).is_err());
+        // a decision block's bytes with the magic swapped: the signature no longer holds
+        let mut forged = dec.clone();
+        forged[..4].copy_from_slice(b"BNLZ");
+        assert!(verify_block(&LIDARZ, &forged, 12, 1, 2, &vkey, &[pk]).is_err());
+        assert!(block_item(&DEC, &lz, "c/14_1_2@00").is_err());
+        let m = make_manifest(&LIDARZ, b"{}", &seed, 3).unwrap();
+        assert!(open_manifest(&DEC, &m, &[pk]).is_err());
+        assert_eq!(open_manifest(&LIDARZ, &m, &[pk]).unwrap(), b"{}");
+        let mut mforged = make_manifest(&DEC, b"{}", &seed, 3).unwrap();
+        mforged[..4].copy_from_slice(b"BNLM");
+        assert!(open_manifest(&LIDARZ, &mforged, &[pk]).is_err());
+        assert!(domain_of("nope").is_err());
     }
 }

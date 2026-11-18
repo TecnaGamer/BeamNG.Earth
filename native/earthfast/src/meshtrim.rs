@@ -33,8 +33,11 @@ type Trim<'py> = (Bound<'py, PyArray1<f64>>, Bound<'py, PyArray1<f64>>);
 /// roadmesh.trim_overlaps' cuts: the ribbons (left, right (N, 2) and z (N,) one after another, off (R + 1)), each
 /// with its owner (R,) (equal: one road), its shared group (R,) (roadmesh's `shared` dict's value, -1 for none) and
 /// whether its owner is in it (R,); targets (T,) the ribbons trimmed (indices). params: TRIM_DZ low, high, TRIM_GAP_M,
-/// and whether `shared` is given (non-empty). Returns (tl, tr): each target's left and right cut per point, one after
-/// another (before the 0.9 half-width cap).
+/// whether `shared` is given (non-empty) and optionally (310) TRIM_ALONG_COS: another deck's piece counts only where it
+/// runs within that cosine of the ribbon's own way (a ramp beside its mainline); one crossing it (a track's deck 4.1 m
+/// under the B 254 at Trutzhain) cut both edges to the centre round the crossing point, a hole across the carriageway
+/// that a car at 80 km/h fell into. Four values: every piece counts (the version before). Returns (tl, tr): each
+/// target's left and right cut per point, one after another (before the 0.9 half-width cap).
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
 pub fn deck_trim_overlaps<'py>(
@@ -54,10 +57,11 @@ pub fn deck_trim_overlaps<'py>(
     let (owner, group, in_shared, targets) = (owner.as_array(), group.as_array(), in_shared.as_array(),
                                               targets.as_array());
     let pr = params.as_slice().map_err(|_| bad("params must be contiguous"))?;
-    if pr.len() != 4 {
-        return Err(bad("params needs 4 values"));
+    if pr.len() != 4 && pr.len() != 5 {
+        return Err(bad("params needs 4 or 5 values"));
     }
     let (dz_lo, dz_hi, gap, shared) = (pr[0], pr[1], pr[2], pr[3] != 0.0);
+    let along_cos = if pr.len() == 5 { pr[4] } else { f64::NEG_INFINITY };
     let nr = off.len().saturating_sub(1);
     let np_ = l.nrows();
     if r.nrows() != np_ || z.len() != np_ || l.ncols() < 2 || r.ncols() < 2 || owner.len() != nr || group.len() != nr
@@ -147,6 +151,14 @@ pub fn deck_trim_overlaps<'py>(
                     let hit = best < h[i] + wo && dz >= dz_lo && dz < dz_hi && best > 1e-3;
                     if !hit {
                         continue;
+                    }
+                    // a deck crossing this one (its piece far off the ribbon's way) passes over or under it: no gore
+                    if along_cos > f64::NEG_INFINITY {
+                        let (_, d, l2) = segs[j];
+                        let cos = (d[0] * u[i][1] - d[1] * u[i][0]).abs() / l2.sqrt();
+                        if cos < along_cos {
+                            continue;
+                        }
                     }
                     let cut = nmax(h[i] - (best / 2.0 - gap), 0.0);
                     let on_left = (bq[0] - p[0]) * u[i][0] + (bq[1] - p[1]) * u[i][1] > 0.0;

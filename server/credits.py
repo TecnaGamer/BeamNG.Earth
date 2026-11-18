@@ -330,6 +330,36 @@ def feature_ids(conn):
     return ids
 
 
+FEATURE_STEP_M = 100.0          # feature_ids_kept: asked again once the player moved this much ...
+FEATURE_KEEP_S = 30.0           # ... or this long after (files on disk come in meanwhile)
+
+
+def feature_ids_kept(conn):
+    """feature_ids, kept per connection while the player stays within FEATURE_STEP_M of where it was asked and what it
+    goes by (the road tiles, trees, the surface, the sea, the gravity, the airports) is the same, at most
+    FEATURE_KEEP_S: every second it listed and read cache folders on the event loop (3dmr.eu's model infos one by one,
+    the roof and massing shards), a part of the 2-7 s stalls of a BeamMP drive at Baltimore, 2026-11-15)."""
+    s = conn.s
+    fx, fy = conn.focus
+    roads = getattr(conn, "roads", None)
+    veg = getattr(conn, "veg", None)
+    sea = getattr(conn, "sea_sent", None)
+    grav = getattr(getattr(conn, "gravity", None), "msg", None)
+    key = (conn.active, getattr(roads, "aid", None) == conn.active and bool(getattr(roads, "sent", None)),
+           getattr(veg, "aid", None) == conn.active and bool(getattr(veg, "sent", None)),
+           getattr(s, "veg", None) is not None, getattr(s, "surface", None) is not None,
+           bool(sea and sea[0] == conn.active and sea[1] and sea[1][0]),
+           isinstance(grav, dict) and grav.get("source"), getattr(s, "airports", None) is not None)
+    now = time.monotonic()
+    got = getattr(conn, "_feature_kept", None)
+    if got is not None and got[0] == key and now - got[2] < FEATURE_KEEP_S and \
+            math.hypot(fx - got[1][0], fy - got[1][1]) < FEATURE_STEP_M:
+        return set(got[3])
+    ids = feature_ids(conn)
+    conn._feature_kept = (key, (fx, fy), now, frozenset(ids))
+    return ids
+
+
 def dem_keys(frame, bbox, zoom):
     """The (z, x, y) DEM tiles (dem.TILE px Web-Mercator grid) under an ENU footprint of `frame`,
     from a 3 x 3 grid of points on it (the footprint's edges bow on large tiles); at most
@@ -437,7 +467,7 @@ class Credits:
         if conn.weather.msg is not None:
             near.add(WEATHER_ID)
         try:
-            near |= feature_ids(conn)
+            near |= feature_ids_kept(conn)
         except Exception:               # (a bug here must not lose the imagery credits)
             log.exception("credits: feature sources failed")
         far -= near

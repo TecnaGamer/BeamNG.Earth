@@ -285,11 +285,18 @@ def pin_tree(cpus, root=None):
     """Every thread of this process (or root) and of its descendants on cpus; the number of threads set (Windows: of
     processes)."""
     if cpus and WIN:
+        if root is None or root == os.getpid():
+            # (this process's tree: its worker processes as multiprocessing knows them, no snapshot of all running
+            # processes on the machine: CreateToolhelp32Snapshot across thousands of processes was a 6-9 s event
+            # loop stall while a teleport or catch-up boost came on under heavy CPU load, 2026-11-15)
+            import multiprocessing
+            pids = [os.getpid()] + [p.pid for p in multiprocessing.active_children() if p.pid]
+            return sum(_win_set(pid, cpus) for pid in pids)
         procs = _win_processes()
         kids = {}
         for pid, pp, _exe in procs:
             kids.setdefault(pp, []).append(pid)
-        todo, n, seen = [root or os.getpid()], 0, set()
+        todo, n, seen = [root], 0, set()
         while todo:
             pid = todo.pop()
             if pid in seen:

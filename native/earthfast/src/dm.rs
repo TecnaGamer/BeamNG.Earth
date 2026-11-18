@@ -6,8 +6,11 @@
 //! few percent of the inputs, and the planners' decisions (a crossing found or not, the nearer of two parts, a sort by
 //! a computed key) turn such a bit into another road: GitHub #1169, Windows built a 0.78 g crest and a 1.41 m step where
 //! Linux had 0.26 g and 0.96 m from the same map data. Every kernel calls these instead (`x.dsin()` for `x.sin()`);
-//! tests/test_determinism.py fails on a platform call in native/earthfast/src. sqrt, the arithmetic operators,
-//! floor / ceil / round / trunc, abs, copysign, `%` and powi are exact or the same code everywhere and stay.
+//! tests/test_determinism.py fails on a platform call in native/earthfast/src, and so does `cargo clippy`
+//! (native/earthfast/clippy.toml's disallowed methods, denied in lib.rs). sqrt, the arithmetic operators,
+//! floor / ceil / round / trunc, abs, copysign and `%` are exact and stay. powi is out too: `x.sq()` for powi(x, 2),
+//! the products written out for a higher constant power (LLVM's and compiler-rt's order: powi(x, 8) is
+//! x.sq().sq().sq()); a variable exponent calls the runtime's __powidf2.
 
 #[allow(dead_code)]
 pub trait Dm: Sized {
@@ -36,6 +39,9 @@ pub trait Dm: Sized {
     fn dacosh(self) -> Self;
     fn datanh(self) -> Self;
     fn dmul_add(self, a: Self, b: Self) -> Self;
+    /// self * self: the same bits as powi(self, 2) (LLVM folds a constant powi(x, 2) to that one multiply, and the
+    /// runtime's __powidf2 makes 1 * (x * x); checked bit for bit, NaNs, infinities and subnormals included).
+    fn sq(self) -> Self;
 }
 
 macro_rules! dm_impl {
@@ -69,6 +75,7 @@ macro_rules! dm_impl {
             #[inline] fn dacosh(self) -> Self { libm::$acosh(self) }
             #[inline] fn datanh(self) -> Self { libm::$atanh(self) }
             #[inline] fn dmul_add(self, a: Self, b: Self) -> Self { libm::$fma(self, a, b) }
+            #[inline] fn sq(self) -> Self { self * self }
         }
     };
 }

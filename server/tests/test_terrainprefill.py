@@ -42,8 +42,9 @@ def _png(a):
 class KeysTest(unittest.TestCase):
     def test_rock_keys(self):
         """The four keys the game missed for bngEarthGroundRock (its log, 2026-11-14), from the path rules."""
-        f = tp.look_fields("rock/t_dirt_rocky/t_dirt_rocky", "rock/macro_rocky/t_macro_rocky")
-        keys = {p.what.split()[-2] + " " + p.kind: p.key for s in ("Detail", "Macro") for p in tp.slot_packs(f, s, 1024)}
+        # (the stock colour maps: the layer's look when the server's zero-mean copies are missing, still prefilled)
+        f = tp.with_stock_colour(tp.look_fields("rock/t_dirt_rocky/t_dirt_rocky", "rock/macro_rocky/t_macro_rocky"))
+        keys ={p.what.split()[-2] + " " + p.kind: p.key for s in ("Detail", "Macro") for p in tp.slot_packs(f, s, 1024)}
         self.assertEqual(keys, {"detail color": "e6fcfabef688536b", "macro color": "fd2b60672cc54aae",
                                 "detail pack": "67b10910fce45348", "macro pack": "9a3c37a62b7067cb"})
         level = tp.wanted(json.loads(LEVEL_JSON.read_text()), base_sizes=())

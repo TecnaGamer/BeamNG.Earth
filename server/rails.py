@@ -213,7 +213,8 @@ def tile_chunks(frame, tx, ty, cells, country=None, urban_fn=None):
                     if sweden and specs[i].urban:
                         town_ways[(fid, k)] = carriageways[(fid, k)]
                 else:
-                    tracks.append((kind, xy, meshed, got[1] if meshed else 0))
+                    tracks.append((kind, xy, meshed, got[1] if meshed else 0,
+                                   meshed and got[1] and railways.RAIL_LIFECYCLE and railways.heritage(feats, i)))
     if not tracks:
         return []
 
@@ -228,10 +229,11 @@ def tile_chunks(frame, tx, ty, cells, country=None, urban_fn=None):
 
     ballast, sleepers, rails = [], [], []
     todo = []
-    for kind, xy, meshed, wear in tracks:
+    for kind, xy, meshed, wear, kept in tracks:
         # (a worn line's street track only across the roads its 3D track is not cut at: railways.WORN_CUT_CLASSES,
-        # #918; else its old bed came back as street rails across the motorway, wyo-backroads' PR #1117)
-        excluded = railways.WORN_CUT_CLASSES.get(wear, ())
+        # #918; else its old bed came back as street rails across the motorway, wyo-backroads' PR #1117; a heritage
+        # line's railways.HERITAGE_CUT_CLASSES)
+        excluded = (railways.HERITAGE_CUT_CLASSES if kept else railways.WORN_CUT_CLASSES).get(wear, ())
         eligible = {key: value for key, value in carriageways.items() if road_classes[key] not in excluded}
         cw_lines = [ln for ln, _hw in eligible.values()]
         if meshed and kind != "tram":

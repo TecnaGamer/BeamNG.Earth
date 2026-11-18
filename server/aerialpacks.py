@@ -238,7 +238,7 @@ class Coverage:
         req = urllib.request.Request(self.request_url, body, {"Content-Type": "application/json",
                                                               "User-Agent": "BeamNG.Earth"})
         try:
-            with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT_S) as r:
+            with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT_S, context=netfetch.windows_ssl_context()) as r:
                 ans = json.loads(r.read(4096) or b"{}")
             self._count("ask:" + str(ans.get("state", "sent"))[:16])
             log.info("aerial: build of cell %s asked: %s", cell, ans.get("state"))

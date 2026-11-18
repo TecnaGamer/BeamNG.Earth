@@ -69,7 +69,7 @@ mounted[cs.DIR .. 'release.lua'] = nil
 
 -- the same copy mounted again: nothing
 T.check(cs.check('same', true) == false and #unloadedLog == 0, 'the same copy: nothing unloaded')
--- no copy mounted: nothing (the running code still turns the player's copy back on, beammp.lua)
+-- no copy mounted: nothing (a stock-map server: the running code stays)
 mounted = {}
 T.check(cs.check('none', true) == false and #unloadedLog == 0, 'no copy mounted: nothing unloaded')
 

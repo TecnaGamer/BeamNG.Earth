@@ -25,7 +25,7 @@ impl Join {
                 if let Some(v) = self.grid.get(&(gx + dx, gy + dy)) {
                     for &i in v {
                         let (qx, qy) = self.pts[i];
-                        let d = (qx - x).powi(2) + (qy - y).powi(2);
+                        let d = (qx - x).sq() + (qy - y).sq();
                         if d < bd || (d == bd && best != usize::MAX && i < best) {
                             best = i;
                             bd = d;
@@ -228,6 +228,7 @@ pub fn underpass_offsets<'py>(
             continue;
         }
         let mut lines: Vec<usize> = vec![part];
+        #[allow(clippy::iter_over_hash_type)] // hash order: the lines are sorted and deduplicated after
         for (&n, &d) in &dist {
             if d < flat + run + 1.0 {
                 lines.extend(inc[n].iter().copied());
@@ -251,7 +252,7 @@ pub fn underpass_offsets<'py>(
                     let d = s - sc;
                     let rr = if d < 0.0 { *r0 } else { *r1 };
                     let u = clip01((d.abs() - flat) / rr.max(1e-9));
-                    power += (depth * 0.5 * (1.0 + (PI * u).dcos())).powi(8);
+                    power += (depth * 0.5 * (1.0 + (PI * u).dcos())).sq().sq().sq();
                 }
                 Req::Joined { part, sc, depth, run, dist } => {
                     let da = dist.get(&ea).copied().unwrap_or(f64::INFINITY);
@@ -265,7 +266,7 @@ pub fn underpass_offsets<'py>(
                     let room = (terminal[ea] + s).min(terminal[eb] + ll - s);
                     let v = clip01(room / run.max(1e-9));
                     drop = drop.min(depth * 0.5 * (1.0 - (PI * v).dcos()));
-                    power += drop.powi(8);
+                    power += drop.sq().sq().sq();
                 }
             }
         }
@@ -336,7 +337,7 @@ pub fn underpass_offsets<'py>(
                 let (ax, ay, bx, by) = (xy[[j, 0]], xy[[j, 1]], xy[[j + 1, 0]], xy[[j + 1, 1]]);
                 let (abx, aby) = (bx - ax, by - ay);
                 let t = clip01(((px - ax) * abx + (py_ - ay) * aby) / (abx * abx + aby * aby).max(1e-12));
-                let d = (ax + t * abx - px).powi(2) + (ay + t * aby - py_).powi(2);
+                let d = (ax + t * abx - px).sq() + (ay + t * aby - py_).sq();
                 if d < bd {
                     bd = d;
                     let i = j - r.start;

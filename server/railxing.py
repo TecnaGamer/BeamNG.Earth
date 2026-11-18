@@ -238,34 +238,22 @@ PARALLEL_COS = 0.9      # |cos| of the angle between their directions at least
 CORRIDOR_MIN_STEP = 1e-6
 
 
-def _tangents(xy):
-    d = np.gradient(xy, axis=0)
-    n = dnp.hypot(d[:, 0], d[:, 1])
-    return d / np.maximum(n, CORRIDOR_MIN_STEP)[:, None]
-
-
 def corridor_ground(lines, zs):
     """The ground heights zs (per line (k,)) of ground track lines (k, 2) with the parallel neighbours' mixed in: each
     point takes the mean of its own height and of the nearest point of every other line within PARALLEL_M that runs the
     same way, so the beds of a double track are smoothed from one profile, not each from its own bumps (the user,
     2026-11-05, Kalynivka: parallel tracks at different heights, one in a trench). Pure; the same lines in the same
-    order give every tile and the grader the same answer."""
-    out = [np.asarray(z, np.float64).copy() for z in zs]
+    order give every tile and the grader the same answer. earthfast.corridor_ground (a grid over the points: numpy's
+    distance matrix per pair of lines never finished a rail yard's cell, Fells Point 2026-11-17)."""
+    import fast
+    fast.require(372, "corridor_ground")
     pts = [np.asarray(l, np.float64)[:, :2] for l in lines]
-    tan = [_tangents(p) if len(p) >= 2 else np.zeros_like(p) for p in pts]
-    box = [(p[:, 0].min() - PARALLEL_M, p[:, 1].min() - PARALLEL_M, p[:, 0].max() + PARALLEL_M,
-            p[:, 1].max() + PARALLEL_M) for p in pts]
-    for i, pi in enumerate(pts):
-        acc, cnt = np.asarray(zs[i], np.float64).copy(), np.ones(len(pi))
-        for j, pj in enumerate(pts):
-            if i == j or box[i][0] > box[j][2] or box[j][0] > box[i][2] or box[i][1] > box[j][3] or                     box[j][1] > box[i][3]:
-                continue
-            d = dnp.hypot(pi[:, None, 0] - pj[None, :, 0], pi[:, None, 1] - pj[None, :, 1])
-            k = np.argmin(d, axis=1)
-            near = d[np.arange(len(pi)), k]
-            cos = np.abs((tan[i] * tan[j][k]).sum(1))
-            ok = (near <= PARALLEL_M) & (cos >= PARALLEL_COS)
-            acc[ok] += np.asarray(zs[j], np.float64)[k[ok]]
-            cnt[ok] += 1.0
-        out[i] = acc / cnt
-    return out
+    z = [np.asarray(v, np.float64).ravel() for v in zs]
+    if len(pts) != len(z) or any(len(p) != len(v) for p, v in zip(pts, z)):
+        raise ValueError("corridor_ground: one height per point of each line")
+    if not pts:
+        return []
+    off = np.r_[0, np.cumsum([len(p) for p in pts])].astype(np.int64)
+    got = fast._ef.corridor_ground(np.ascontiguousarray(np.concatenate(pts)), off,
+                                   np.ascontiguousarray(np.concatenate(z)), PARALLEL_M, PARALLEL_COS, CORRIDOR_MIN_STEP)
+    return [got[off[n]:off[n + 1]].copy() for n in range(len(pts))]

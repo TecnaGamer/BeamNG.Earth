@@ -97,5 +97,36 @@ class VegGeoJobTest(unittest.TestCase):
             self.assertEqual((f.result(timeout=10), i), ([("tile", 4, 5)], 0))
 
 
+class TrackerGateTest(unittest.TestCase):
+    """vegetation.Tracker's geotile pass is skipped while the car moved under TRACK_MOVE_M and nothing it goes by
+    changed (its builds still pending); a longer move, a build landing or TRACK_MAX_S passes again."""
+
+    def test_gate(self):
+        import geodesy
+        import vegetation
+        futs = []
+
+        class Loop:
+            def run_in_executor(self, pool, fn, *args):
+                f = concurrent.futures.Future()
+                futs.append(f)
+                return f
+        conn = SimpleNamespace(send=lambda m: None, s=None)
+        frame = geodesy.EnuFrame(39.2834, -76.5934)
+        tr = vegetation.Tracker(per_pose=2, geo=True)
+        build = lambda gx, gy: None     # noqa: E731
+        tr.on_pose(conn, 1, 0.0, 0.0, Loop(), build, frame=frame)
+        self.assertEqual(len(futs), 2)
+        at = tr._gate[2]
+        tr.on_pose(conn, 1, 3.0, 0.0, Loop(), build, frame=frame)
+        self.assertEqual(tr._gate[2], at, "3 m on, both builds pending: no pass")
+        tr.on_pose(conn, 1, vegetation.TRACK_MOVE_M + 4.0, 0.0, Loop(), build, frame=frame)
+        self.assertNotEqual(tr._gate[2], at, "farther: a pass")
+        futs[0].set_result(None)        # (a build landing: a slot free, the pass after it starts another)
+        tr.on_pose(conn, 1, vegetation.TRACK_MOVE_M + 4.0, 0.0, Loop(), build, frame=frame)
+        self.assertEqual(len(futs), 3)
+        tr.close()
+
+
 if __name__ == "__main__":
     unittest.main()
