@@ -1805,6 +1805,38 @@ class RetainingWallTest(unittest.TestCase):
         self.assertGreater(float(w["back_top"][mid]), float(w["top"][mid]) + 0.5)
         self.assertGreaterEqual(float(w["thick"][mid]), grading.WALL_FLAT_M + grading.WALL_T_M)
 
+    def test_a_wall_where_two_roads_at_other_levels_meet(self):
+        """A primary dug 6 m beside a residential street whose line runs 6.3 m from its own (Popoli's SR17 and Via
+        Edoardo Corti, their carriageways overlapping in plan): the wall's face on the line the grading puts between
+        them (grading.level_boundary), on the primary's painted carriageway, its top at the street's level (its edge on
+        it: no 4 m cap, concrete behind the coping) over the band and the climb behind. Before: none, its face past the
+        primary's own edge stood on the street's carriageway, "another road comes in"."""
+        import grading
+        prim = roads.road_specs(features([[(0.0, 0.0), (200.0, 0.0)]], ["primary"]), None)[0]
+        res = roads.road_specs(features([[(0.0, 6.3), (200.0, 6.3)]], ["residential"]), None)[0]
+        rh, h = grading.plan_halves(prim)
+        rh_o, h_o = grading.plan_halves(res)
+        line = float(grading.level_boundary(6.3, rh, h, rh_o, h_o, 6.0)[0])
+        self.assertLess(line, rh)           # (the carriageways overlap: the face on the primary's)
+        x = np.arange(0.0, 201.0, 5.0)
+        pts = np.c_[x, np.zeros(len(x)), np.zeros(len(x))]
+        pts_r = np.c_[x, np.full(len(x), 6.3), np.full(len(x), 6.0)]
+        climb = line + grading.WALL_FLAT_M
+
+        def elev(la, lo):           # (the grading's ground: the primary's, flat on behind the line, then the street's)
+            _e, n, _ = FRAME.geodetic_to_enu(np.asarray(la), np.asarray(lo), np.zeros(np.shape(la)))
+            return np.clip((np.asarray(n) - climb) / grading.WALL_T_M, 0.0, 1.0) * 6.0
+        ws = [w for w in roads.retaining_walls(FRAME, [("p", prim, pts, LON), ("r", res, pts_r, LON)], elev,
+                                               (0.0, -128.0, 256.0, 128.0)) if "base" in w]
+        mine = [w for w in ws if (np.asarray(w["base"])[:, 1] > 0).all() and (np.asarray(w["toward"])[:, 1] < 0).all()]
+        self.assertTrue(mine, "a wall on the primary's street side")
+        w = max(mine, key=lambda w: len(w["base"]))
+        mid = len(w["base"]) // 2
+        self.assertAlmostEqual(float(w["base"][mid, 1]), line, delta=0.05)
+        self.assertGreaterEqual(float(w["top"][mid]), 6.0)
+        self.assertGreaterEqual(float(w["thick"][mid]), grading.WALL_FLAT_M + grading.WALL_T_M)
+        self.assertTrue(w.get("carries"))
+
     def test_a_cutting_under_a_deck_is_walled_up_to_its_underside(self):
         """A road in a cutting 8 m deep with a deck across it 8 m over the road (Assaku: Tartu mnt over Jarve tee, whose
         cutting had bare earth slopes under the deck): the walls stand under the deck too, rising to its underside

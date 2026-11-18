@@ -359,9 +359,15 @@ fn pair0(st: &mut Pt, g: &Seg, q: &Pre, p: &Prm) {
     // (a pass road's whole core, its shoulder too: the leg above's fill reached onto the strip between its lanes and
     // its wall and stood there as a jagged fin, 2026-11-01)
     let cr = if g.steep { g.h } else { g.rh };
+    // (a road's lanes end at its wall's face, or at its fall: the ground there steps to the other level, a wall
+    // between two roads at heights no slope bridges in the room between them (Goeschenen's link road over the
+    // motorway's cutting, whose lanes overlapped in plan 1.9 m: the lower road's lanes reached on past the face and
+    // took the link's ground, 7.3 m of cut under a road on the ground). A face past the lanes' edge changes nothing)
+    let cr = if cwall.is_finite() && !g.steep { cr.min(cwall) } else { cr };
+    let past_wall0 = cwall.is_finite() && d > cwall;
     // (and none past its abutment end, over the deck, from yield_ramp on: the round end of an approach's carriageway
     // reached over the railway under a short bridge, and the track's bed gave way to it there; GitHub #909)
-    let car = past <= p.yield_ramp.max(1e-6);
+    let car = past <= p.yield_ramp.max(1e-6) && !(past_wall0 && !ctop.is_finite());
     if car && (d - cr < st.cdeep || (d <= cr && st.carz.is_nan())) {
         st.cdeep = d - cr;
         st.carz = target;
@@ -371,8 +377,9 @@ fn pair0(st: &mut Pt, g: &Seg, q: &Pre, p: &Prm) {
     // bridge (abut) is taken as beside it, not over the point's ground, and a cutting's core ends at its wall (as
     // pass 1's hs / drop: the same ground reaches there)
     let hs0 = if cwall.is_finite() { g.h.min(cwall) } else { g.h };
-    let drop0 = cwall.is_finite() && !ctop.is_finite() && d > cwall;
-    if g.rk >= 0 && !g.abut && !drop0 && d - hs0 < p.rank_fade
+    // (and a road's rank holds nothing past its wall: the other side of a wall is another level, not this road's
+    // ground to hold, whatever the height difference there)
+    if g.rk >= 0 && !g.abut && !past_wall0 && d - hs0 < p.rank_fade
         && (g.rk > st.hrank || (g.rk == st.hrank && d - hs0 < st.hdeep)) {
         st.hdeep = d - hs0;
         if g.rk > st.hrank || (st.hid != g.rid && g.rk == st.hrank) {
@@ -386,7 +393,7 @@ fn pair0(st: &mut Pt, g: &Seg, q: &Pre, p: &Prm) {
         let shoulder = (hs0 - g.rh).max(0.0);
         let reach = shoulder + p.rank_fade;
         st.hyield = 1.0 - smooth(((d - g.rh) / reach).clamp(0.0, 1.0));
-        st.hcar = d <= g.rh;
+        st.hcar = d <= g.rh.min(if cwall.is_finite() { cwall } else { f64::INFINITY });
         st.hopen = g.open;
         st.htun = g.tun;
         st.hdx = g.abx / g.len.max(1e-9);       // (its direction there: the side ease below)
@@ -485,7 +492,8 @@ fn pair1(st: &mut Pt, g: &Seg, q: &Pre, p: &Prm, far1: f64) {
     } else {
         0.0
     };
-    yf *= smooth((d - g.rh + over) / ramp);
+    let rhe = if cwall.is_finite() && !g.steep { g.rh.min(cwall) } else { g.rh };
+    yf *= smooth((d - rhe + over) / ramp);
     // (a lower-ranked road gives way over a higher-ranked one's ground (grading.grade_rank): a built (paved / cobble)
     // road keeps its own ground where an unpaved dirt road or track runs beside it, and a built side road eases onto
     // a higher built one the same way. On the higher road's carriageway the lower one gives way whole; past its

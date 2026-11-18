@@ -114,6 +114,24 @@ CORRIDOR_UNDER_RAISE_M = 1.0
 CORRIDOR_THROUGH = 1000     # added to a through road's key (not a slip road): two through roads side by side
                             # (a dual carriageway's halves on a hillside, BR-381's) each keep their own height
 DIP_HOLDS = os.environ.get("BNE_DIP_HOLDS", "off") == "on"   # (a dipped road held over every other: _corridor_key)
+# Two roads side by side at other levels (their heights more than WALL_CUT_M apart, within CORRIDOR_ANG_DEG of each
+# other's direction, the lower road's core and its wall's band behind it, WALL_FLAT_M + WALL_T_M, reaching the higher
+# road's core) meet at one line (level_boundary): where a point lies as deep in one carriageway as in the other, the
+# painter's own law for carriageways overlapping at other levels (grade_points, #1083), or the lower road's core edge
+# where that comes first. Its retaining wall's face stands there (roads.retaining_walls reads the same line); the lower
+# road's lanes and its rank's hold end at the face (Plan.cut: that road's cutting wall on that side, its top the higher
+# road's height; gradebins pair0 / pair1 end a road's carriageway at its wall, 308) and the higher road's ground ends
+# at the same line (Plan.cut without a top: a fall), so each road keeps the ground under its own lanes and neither
+# moves the other's: a road on the ground keeps its ground, a cut's slope or flat band may not undercut another road's
+# carriageway. Before, three rules put the line in three places: the grade rank's hold gave the residential street
+# beside Popoli's SR17 (dug 4-7 m under the railway, the centre lines 6.3 m apart, the carriageways overlapping
+# 0.75-1.45 m) its whole carriageway over the SR17's lanes, the overlap law the deeper one, and the wall rule a face
+# past the SR17's own painted edge, on the street's carriageway, so none stood: the trucks on the SR17 in the street's
+# ground. And Goeschenen's link road over the exit ramp in its cutting (centre lines 9.3 m apart, the carriageways
+# overlapping 1.85 m, 7.2 m in height): the ramp's lanes and its rank's hold reached on past the face over the link's,
+# which stood 7.3 m under its own survey height (the survey's truth replay).
+# BNE_LEVEL_WALLS=off: as before.
+LEVEL_WALLS_ON = os.environ.get("BNE_LEVEL_WALLS", "on") != "off"
 EXTRAP_M = float(os.environ.get("BNE_GRADE_EXTRAP", "4"))             # m a segment's line is carried on past an end where its plan goes on (grade_points: no
                             # washboard of the vertex step on a grade)
 STEEP_RUN = 0.5
@@ -1373,6 +1391,27 @@ def dirt_bumps(xy, spec, n, ext=(0, 0), step=PROFILE_STEP):
     return np.pad(out, ext)
 
 
+def plan_halves(spec):
+    """(carriageway, core) half widths (m) of road spec's grading plan (_plan: Plan.road_half, Plan.half); the walls
+    read the same where two roads at other levels meet (roads.retaining_walls, level_boundary). Pure."""
+    built = spec.kind in roadsmod.BUILT
+    # Where a street-edge profile is known, grade its actual carriageway.
+    # Legacy streets still allow enough flat ground for their urban width.
+    width = max(spec.width, roadsmod.carriageway(spec.cls, spec.kind, True, None, spec.oneway)) \
+        if built and not getattr(spec, "mountain", False) and getattr(spec, "street", None) is None else spec.width
+    # the painted carriageway (the road's own urban / rural width), not the wider city-street grading core: the rank
+    # hold and the ground blend start at the asphalt's edge, not a parking lane or an edge strip out (a rural tertiary
+    # held 2.3 m of shoulder as carriageway, so a side road blended that far from the asphalt)
+    paint = max(spec.width, roadsmod.carriageway(spec.cls, spec.kind, bool(getattr(spec, "urban", False)), None,
+                                                  spec.oneway)) \
+        if built and not getattr(spec, "mountain", False) and spec.cls not in ("motorway", "trunk") \
+        and getattr(spec, "street", None) is None else width
+    if spec.median:             # a divided road's carriageway: never over the other one
+        width = max(spec.width, roadsmod.dual_cap(spec.median, width))
+        paint = max(spec.width, roadsmod.dual_cap(spec.median, paint))
+    return paint / 2, width / 2 + shoulder(spec)
+
+
 def _plan(xy, z, spec, abut=(False, False), ext=(0, 0), step=PROFILE_STEP, bank_xy=None, bank_ext=None, banked=True,
           coarse=False):
     """ext: (before, after), samples of z past the part's ends (plan_roads): smoothed with it, then dropped. step: m
@@ -1403,21 +1442,8 @@ def _plan(xy, z, spec, abut=(False, False), ext=(0, 0), step=PROFILE_STEP, bank_
     vstep = DIRT_VERTEX_STEP if minor_dirt else VERTEX_STEP
     every = max(1, int(round(vstep / PROFILE_STEP)))
     keep = np.r_[np.arange(0, len(xy) - 1, every), len(xy) - 1]
-    # Where a street-edge profile is known, grade its actual carriageway.
-    # Legacy streets still allow enough flat ground for their urban width.
-    width = max(spec.width, roadsmod.carriageway(spec.cls, spec.kind, True, None, spec.oneway)) \
-        if built and not getattr(spec, "mountain", False) and getattr(spec, "street", None) is None else spec.width
-    # the painted carriageway (the road's own urban / rural width), not the wider city-street grading core: the rank
-    # hold and the ground blend start at the asphalt's edge, not a parking lane or an edge strip out (a rural tertiary
-    # held 2.3 m of shoulder as carriageway, so a side road blended that far from the asphalt)
-    paint = max(spec.width, roadsmod.carriageway(spec.cls, spec.kind, bool(getattr(spec, "urban", False)), None,
-                                                  spec.oneway)) \
-        if built and not getattr(spec, "mountain", False) and spec.cls not in ("motorway", "trunk") \
-        and getattr(spec, "street", None) is None else width
-    if spec.median:             # a divided road's carriageway: never over the other one
-        width = max(spec.width, roadsmod.dual_cap(spec.median, width))
-        paint = max(spec.width, roadsmod.dual_cap(spec.median, paint))
-    plan = Plan(xy[keep], zs[keep], width / 2 + shoulder(spec), abut, road_half=paint / 2)
+    road_half, half = plan_halves(spec)
+    plan = Plan(xy[keep], zs[keep], half, abut, road_half=road_half)
     plan.rank = grade_rank(spec)
     plan.max_wall = wall_max_h(spec)
     plan.steep = bool(getattr(spec, "mountain", False))
@@ -3088,6 +3114,12 @@ class _Planner:
                 except Exception as e:      # the road's own core rather than none
                     _caught(e)
                     log.debug("grading: hairpins of %s: %s: %s", key, type(e).__name__, e)
+            if LEVEL_WALLS_ON and plans:
+                try:            # roads side by side at other levels: one line between them, a wall's (level_walls)
+                    level_walls(plans, pspecs)
+                except Exception as e:      # each road's own core rather than no grading
+                    _caught(e)
+                    log.debug("grading: level walls of %s: %s: %s", key, type(e).__name__, e)
             if CORNERS_ON and plans:
                 # the rounded corners of curbless junctions (roadcorners.py): the ground under each graded to its roads'
                 # solved heights (trimmed to the cell's box with the roads' plans below)
@@ -8374,7 +8406,7 @@ def grade_points(px, py, base, plans, lift=0.0):
         keep = pack.seg_keep(px.min(), py.min(), px.max(), py.max())
         if keep is None:
             return out
-        fast.require(307, "grade_points_binned")    # (gradebins.rs; under_deck: 306, TUNNEL: 307)
+        fast.require(308, "grade_points_binned")    # (gradebins.rs; under_deck: 306, TUNNEL: 307)
         return fast._ef.grade_points_binned(
             np.ascontiguousarray(px, f64), np.ascontiguousarray(py, f64), np.ascontiguousarray(base, f64), pack.a,
             pack.b, pack.za, pack.zb, pack.h, pack.rh, pack.rid, pack.rk, pack.ab, pack.cut, pack.ba, pack.bb, pack.st,
@@ -8389,7 +8421,7 @@ def grade_points(px, py, base, plans, lift=0.0):
     if got is None:
         return out
     A, B, ZA, ZB, H, RH, RID, RK, AB, CUT, BA, BB, ST, LK, ABD = got
-    fast.require(307, "grade_points")        # (the Rust loop: native/earthfast; its segments' links: 125, yield_ramp: 126,
+    fast.require(308, "grade_points")        # (the Rust loop: native/earthfast; its segments' links: 125, yield_ramp: 126,
                                              # legs blend over each other's bands: 133, a pass road's core
                                              # given way to whole: 134, no carriageway past an abutment end: 169,
                                              # a lower road over a higher one's core, easing onto it: 181,
@@ -9106,6 +9138,159 @@ def share_corridors(plans, specs, decks=()):
     for i in idx:
         plans[i] = (plans[i][0], _replan(ps[i], ps[i].xy, zn[off[i]:off[i + 1]].copy(), cut=True))
     return len(idx)
+
+
+def level_boundary(o, rh, h, rh_o, h_o, dz):
+    """Where a road meets another running beside it at another level (LEVEL_WALLS_ON), per point (arrays broadcast): o
+    the other's centre line's offset from this road's (m), rh / h this road's carriageway and core half widths, rh_o /
+    h_o the other's, dz the other's height less this one's. Returns (face, fall): the lower road's wall's face, its
+    offset from this road's centre (where this road is the lower), and where this road's ground ends (the higher: at
+    that same face line, seen from its own centre); NaN where neither (one level, or the two grounds clear of
+    each other). The line: as deep in the one carriageway as in the other, or the lower road's core edge nearer. None
+    where the two lie on each other (no ground left to one of them: a bridge the map lacks, the painter's blend). Pure
+    (the grading's level_walls and roads.retaining_walls: the same line)."""
+    o, rh, h, rh_o, h_o, dz = np.broadcast_arrays(*(np.asarray(v, np.float64) for v in (o, rh, h, rh_o, h_o, dz)))
+    near = o < h + h_o + WALL_FLAT_M + WALL_T_M         # (the lower road's core and band reach the other's core)
+    mine = np.minimum((o + rh - rh_o) / 2.0, h)         # (the face, this road the lower: from its centre)
+    theirs = np.minimum((o + rh_o - rh) / 2.0, h_o)     # (the face, the other the lower: from its centre)
+    face = np.where(near & (dz > WALL_CUT_M) & (mine > 0.0) & (o - mine - WALL_FLAT_M > 0.0), mine, np.nan)
+    fall = o - theirs
+    fall = np.where(near & (dz < -WALL_CUT_M) & (theirs > 0.0) & (fall > 0.0), fall, np.nan)
+    return face, fall
+
+
+def nearest_on_line(pts, line):
+    """(nearest point (k, 2), its segment's unit direction (k, 2), its fraction along that segment (k,), the segment
+    (k,)) on the polyline line (m, 2) of each of pts (k, 2). Pure."""
+    pts = np.asarray(pts, np.float64)[:, :2]
+    line = np.asarray(line, np.float64)[:, :2]
+    a, b = line[:-1], line[1:]
+    ab = b - a
+    l2 = np.maximum((ab * ab).sum(1), 1e-12)
+    t = np.clip((((pts[:, None, :] - a[None]) * ab[None]).sum(2)) / l2[None], 0.0, 1.0)
+    q = a[None] + t[..., None] * ab[None]
+    d = dnp.hypot(q[..., 0] - pts[:, None, 0], q[..., 1] - pts[:, None, 1])
+    j = np.argmin(d, axis=1)
+    k = np.arange(len(pts))
+    u = ab[j] / np.sqrt(l2[j])[:, None]
+    return q[k, j], u, t[k, j], j
+
+
+class LevelLines:
+    """level_pairs' others [(key, line (m, 2), heights (m,) or None)] with their boxes, read once (a city cell's 500
+    plans each against all the others)."""
+
+    def __init__(self, rows):
+        self.rows = [(k, np.asarray(ln, np.float64)[:, :2], z) for k, ln, z in rows]
+        self.boxes = np.array([np.r_[ln.min(0), ln.max(0)] if len(ln) else np.r_[np.inf, np.inf, -np.inf, -np.inf]
+                               for _k, ln, _z in self.rows], np.float64).reshape(-1, 4)
+
+
+def level_pairs(pts, tu, own, others):
+    """The other roads beside a road's points: per point of pts (k, 2) going along tu (k, 2) (unit), for each of others
+    [(key, line (m, 2), heights (m,) or None)] (or a LevelLines of them) but own whose nearest point lies across from
+    it (not ahead of it) within 2 T_MAX and runs within CORRIDOR_ANG_DEG of its direction: (key, the nearest point's
+    signed offset (k,) (left +, NaN where not beside), its height (k,) (None without heights), the nearest points
+    (k, 2)). Pure (level_walls and roads.retaining_walls)."""
+    f64 = np.float64
+    cos_ang = dmath.cos(math.radians(CORRIDOR_ANG_DEG))
+    nl = np.stack([-tu[:, 1], tu[:, 0]], 1)
+    reach = 2 * T_MAX           # (beside: within two cores and a band at most)
+    lo, hi = pts.min(0) - reach, pts.max(0) + reach
+    if isinstance(others, LevelLines):
+        boxes = others.boxes
+        cand = np.flatnonzero((boxes[:, 0] <= hi[0]) & (boxes[:, 2] >= lo[0]) & (boxes[:, 1] <= hi[1])
+                              & (boxes[:, 3] >= lo[1])).tolist()
+        others = [others.rows[c] for c in cand]
+    out = []
+    for key, line, zl in others:
+        if key == own or len(line) < 2:
+            continue
+        line = np.asarray(line, f64)[:, :2]
+        llo, lhi = line.min(0) - reach, line.max(0) + reach
+        if (llo > hi - reach).any() or (lhi < lo + reach).any():
+            continue
+        # (only the points near the line's box, against its segments near theirs: a long road's samples against a
+        # long road's vertices)
+        at = np.flatnonzero((pts[:, 0] >= llo[0]) & (pts[:, 0] <= lhi[0]) & (pts[:, 1] >= llo[1])
+                            & (pts[:, 1] <= lhi[1]))
+        if not len(at):
+            continue
+        plo, phi = pts[at].min(0) - reach, pts[at].max(0) + reach
+        sl = np.flatnonzero((np.maximum(line[:-1, 0], line[1:, 0]) >= plo[0])
+                            & (np.minimum(line[:-1, 0], line[1:, 0]) <= phi[0])
+                            & (np.maximum(line[:-1, 1], line[1:, 1]) >= plo[1])
+                            & (np.minimum(line[:-1, 1], line[1:, 1]) <= phi[1]))
+        if not len(sl):
+            continue
+        runs = np.split(sl, np.flatnonzero(np.diff(sl) > 1) + 1)
+        best = np.full(len(at), np.inf)
+        q, qu, qt, qs = np.zeros((len(at), 2)), np.zeros((len(at), 2)), np.zeros(len(at)), np.zeros(len(at), np.int64)
+        for r in runs:             # (each run of near segments: its polyline)
+            q1, u1, t1, s1 = nearest_on_line(pts[at], line[r[0]:r[-1] + 2])
+            d1 = dnp.hypot(q1[:, 0] - pts[at, 0], q1[:, 1] - pts[at, 1])
+            b = d1 < best
+            best[b], q[b], qu[b], qt[b], qs[b] = d1[b], q1[b], u1[b], t1[b], s1[b] + r[0]
+        rel = q - pts[at]
+        off = (rel * nl[at]).sum(1)
+        o = np.abs(off)
+        beside = (np.abs((rel * tu[at]).sum(1)) <= o) & (np.abs((qu * tu[at]).sum(1)) >= cos_ang) & (o > 1e-6)
+        if not beside.any():
+            continue
+        offs = np.full(len(pts), np.nan)
+        offs[at] = np.where(beside, off, np.nan)
+        qq = np.array(pts, f64, copy=True)
+        qq[at] = q
+        zq = None
+        if zl is not None:
+            zl = np.asarray(zl, f64)
+            zq = np.full(len(pts), np.nan)
+            zq[at] = zl[qs] + (zl[qs + 1] - zl[qs]) * qt
+        out.append((key, offs, zq, qq))
+    return out
+
+
+def level_walls(plans, specs):
+    """Plan.cut on the plans of roads running beside another at another level (LEVEL_WALLS_ON, level_boundary): per
+    segment and side the lower road's wall (its top the other's height there, the top reaching over the band and the
+    climb behind the face, and across its own carriageway) and the higher road's fall; the nearer of these and of a
+    sharp cutting's (_add_cuts) kept. plans [(fid, Plan)] in place, the first len(specs) the roads' (no paths or tracks:
+    CORRIDOR_MIN_RH; the ground roads only, as roads.retaining_walls has them: not a tunnel's own plans). Returns how
+    many plans changed."""
+    f64 = np.float64
+    idx = [i for i in range(min(len(plans), len(specs))) if len(plans[i][1].xy) >= 2
+           and float(plans[i][1].road_half) >= CORRIDOR_MIN_RH and TUNNEL_TAG not in plans[i][0]]
+    others = LevelLines([(i, np.asarray(plans[i][1].xy, f64)[:, :2], np.asarray(plans[i][1].z, f64)) for i in idx])
+    n_changed = 0
+    for i, xy, z in others.rows:
+        p = plans[i][1]
+        k = len(xy) - 1
+        seg = xy[1:] - xy[:-1]
+        ln = dnp.hypot(seg[:, 0], seg[:, 1])
+        if not (ln > 1e-6).any():
+            continue
+        tu = seg / np.maximum(ln, 1e-12)[:, None]
+        mid = (xy[1:] + xy[:-1]) / 2.0
+        zm = (z[1:] + z[:-1]) / 2.0
+        new = np.full((k, 6), np.nan)
+        for j, off, zq, _q in level_pairs(mid, tu, i, others):
+            q_ = plans[j][1]
+            face, fall = level_boundary(np.abs(off), p.road_half, p.half, q_.road_half, q_.half, zq - zm)
+            top = np.maximum(face + WALL_FLAT_M + WALL_T_M, float(p.road_half))
+            for c0, sd in ((0, off > 0.0), (3, off < 0.0)):
+                for cw, row in ((face, (face, zq, top)), (fall, (fall, np.full(k, np.nan), np.full(k, np.nan)))):
+                    take = sd & np.isfinite(cw) & ~(new[:, c0] <= cw)      # (the nearest line)
+                    for c, v in enumerate(row):
+                        new[take, c0 + c] = v[take]
+        if not np.isfinite(new[:, [0, 3]]).any():
+            continue
+        cut = np.full((k, 6), np.nan) if p.cut is None else np.asarray(p.cut, f64).copy()
+        for c0 in (0, 3):
+            take = np.isfinite(new[:, c0]) & ~(cut[:, c0] <= new[:, c0])       # (a sharp cutting's nearer wall kept)
+            cut[take, c0:c0 + 3] = new[take, c0:c0 + 3]
+        p.cut = cut
+        n_changed += 1
+    return n_changed
 
 
 def _raised_under(xy, dz, decks):
