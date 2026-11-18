@@ -1,12 +1,10 @@
-//! Railway-at-road fixes (server BNE_RAIL_ROAD_FIT; the user's in-game reports r63 / r64 / r92, 2026-11-17): the
-//! decisions of railways._run_ends (a level crossing's exact edge on a track), railways.dead_ends' road test (no buffer
-//! stop where a track ends at a road), rails._deck_line (the crossing deck from edge to edge) and railstations._synth's
-//! trim (a worked-out platform off the roads). The numbers are the Python versions' to the bit, in their order:
-//! elementwise products and sums as numpy's, np.arange's fill (start + i * delta), np.interp's formula, libm hypot,
-//! the carriageway test of roads._Segs.near (earthfast.points_near_segments' expression) and the crossing of
-//! railstations._crossings (station_crossings' expression).
+//! Railway-at-road fixes (server BNE_RAIL_ROAD_FIT; the user's in-game reports r63 / r64 / r92, 2026-11-17): a track
+//! part's level crossings (railways.crossing_records: the 3D track's cut and the crossing deck from one record),
+//! railways.dead_ends' road test (no buffer stop where the same track goes on past a road) and railstations._synth's
+//! trim (a worked-out platform off the roads). Deterministic: elementwise products and sums, np.arange's fill
+//! (start + i * delta), libm hypot, the at-grade test of railways._blocked (nearcross.rs), the carriageway test of
+//! roads._Segs.near (points_near_segments' expression) and the crossing of railstations._crossings (station_crossings').
 use crate::dm::Dm;
-use crate::gradesep::np_interp;
 use numpy::ndarray::Array2;
 use numpy::{IntoPyArray, PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2};
 use pyo3::prelude::*;
@@ -55,165 +53,6 @@ impl Segs {
             (p0 - (g[0] + t * g[2])).dhypot(p1 - (g[1] + t * g[3])) < g[5] + gap
         })
     }
-}
-
-/// railways._run_ends: (xy', zb', blk', src) with a point added at each edge of a level crossing (where blk changes
-/// between two points k, k + 1): `samples` - 1 points along the section (t = i / samples) tried with railways._blocked
-/// (earthfast.near_crossers on the crossers' pack: pts (n, 3), starts, reach, dz), then `bisect` halvings between the
-/// last point off and the first on; the point off kept where it falls inside the section. src: each point's index in
-/// xy, -1 for an added one.
-#[pyfunction]
-#[allow(clippy::too_many_arguments, clippy::type_complexity)]
-pub fn rail_run_ends<'py>(py: Python<'py>, xy: PyReadonlyArray2<'py, f64>, zb: PyReadonlyArray1<'py, f64>,
-                          blk: PyReadonlyArray1<'py, bool>, pts: PyReadonlyArray2<'py, f64>,
-                          starts: PyReadonlyArray1<'py, i64>, reach: PyReadonlyArray1<'py, f64>, dz: f64,
-                          samples: usize, bisect: usize)
-                          -> PyResult<(Bound<'py, PyArray2<f64>>, Bound<'py, PyArray1<f64>>, Bound<'py, PyArray1<bool>>,
-                                       Bound<'py, PyArray1<i64>>)> {
-    let (x, z, b, d, st, r) = (xy.as_array(), zb.as_array(), blk.as_array(), pts.as_array(), starts.as_array(),
-                               reach.as_array());
-    let n = x.nrows();
-    let nd = d.nrows();
-    let nc = st.len().saturating_sub(1);
-    if x.ncols() < 2 || z.len() != n || b.len() != n || d.ncols() < 3 || r.len() < nc || samples < 2
-        || st.iter().any(|&v| v < 0 || v as usize > nd) || (1..st.len()).any(|i| st[i] < st[i - 1]) {
-        return Err(pyo3::exceptions::PyValueError::new_err(
-            "rail_run_ends: xy (n, 2), zb (n,), blk (n,), pts (m, 3), starts rising within pts, reach (C,), samples >= 2"));
-    }
-    let dv: Vec<[f64; 3]> = (0..nd).map(|j| [d[[j, 0]], d[[j, 1]], d[[j, 2]]]).collect();
-    let sv: Vec<usize> = st.iter().map(|&v| v as usize).collect();
-    let rv: Vec<f64> = r.iter().copied().collect();
-    let xv: Vec<[f64; 2]> = (0..n).map(|i| [x[[i, 0]], x[[i, 1]]]).collect();
-    let zv: Vec<f64> = z.iter().copied().collect();
-    let bv: Vec<bool> = b.iter().copied().collect();
-    let (rows, zs, bs, src) = py.detach(|| {
-        let blocked = |p: &[[f64; 2]], zz: &[f64]| crate::nearcross::near_crossers(p, zz, &dv, &sv, &rv, dz);
-        // t = np.arange(1, samples, dtype=float64) / samples (exact integers over samples)
-        let t: Vec<f64> = (1..samples).map(|i| i as f64 / samples as f64).collect();
-        let mut tt = Vec::with_capacity(t.len() + 2);
-        tt.push(0.0);
-        tt.extend_from_slice(&t);
-        tt.push(1.0);
-        let mut add: Vec<Option<f64>> = vec![None; n];
-        for k in 0..n.saturating_sub(1) {
-            if bv[k] == bv[k + 1] {
-                continue;
-            }
-            let (dx, dy, dzb) = (xv[k + 1][0] - xv[k][0], xv[k + 1][1] - xv[k][1], zv[k + 1] - zv[k]);
-            let p: Vec<[f64; 2]> = t.iter().map(|&ti| [xv[k][0] + dx * ti, xv[k][1] + dy * ti]).collect();
-            let zz: Vec<f64> = t.iter().map(|&ti| zv[k] + dzb * ti).collect();
-            let on = blocked(&p, &zz);
-            let any = on.iter().any(|&v| v);
-            let (mut t_off, mut t_on);
-            if !bv[k] {
-                let i = if any { on.iter().position(|&v| v).unwrap() + 1 } else { t.len() + 1 };
-                t_off = tt[i - 1];
-                t_on = tt[i];
-            } else {
-                let i = if any { t.len() - 1 - on.iter().rev().position(|&v| v).unwrap() + 1 } else { 0 };
-                t_on = tt[i];
-                t_off = tt[i + 1];
-            }
-            for _ in 0..bisect {
-                let tm = 0.5 * (t_off + t_on);
-                let pm = [xv[k][0] + dx * tm, xv[k][1] + dy * tm];
-                if blocked(&[pm], &[zv[k] + dzb * tm])[0] {
-                    t_on = tm;
-                } else {
-                    t_off = tm;
-                }
-            }
-            if 0.0 < t_off && t_off < 1.0 {
-                add[k] = Some(t_off);
-            }
-        }
-        let mut rows: Vec<f64> = Vec::with_capacity(2 * n + 8);
-        let (mut zs, mut bs, mut src) = (Vec::with_capacity(n + 4), Vec::with_capacity(n + 4), Vec::with_capacity(n + 4));
-        for k in 0..n {
-            rows.extend_from_slice(&xv[k]);
-            zs.push(zv[k]);
-            bs.push(bv[k]);
-            src.push(k as i64);
-            if let Some(tb) = add[k] {
-                rows.push(xv[k][0] + (xv[k + 1][0] - xv[k][0]) * tb);
-                rows.push(xv[k][1] + (xv[k + 1][1] - xv[k][1]) * tb);
-                zs.push(zv[k] + (zv[k + 1] - zv[k]) * tb);
-                bs.push(false);
-                src.push(-1);
-            }
-        }
-        (rows, zs, bs, src)
-    });
-    let m = zs.len();
-    Ok((Array2::from_shape_vec((m, 2), rows).unwrap().into_pyarray(py), zs.into_pyarray(py), bs.into_pyarray(py),
-        src.into_pyarray(py)))
-}
-
-/// railways._across_road for every candidate end at once: end e at p[e] running into it along the unit d[e] (part
-/// part[e] of the tracks: rails (m, 2) part after part, off (R + 1,)) ends at a road when the line ahead (points
-/// p + d * np.arange(step, ahead_m + 1e-9, step)) meets a carriageway (ca -> cb, half width ch: within it) within
-/// road_end_m, or anywhere with another part's point within join_m of the line from the first point on it to the last
-/// point ahead.
-#[pyfunction]
-#[allow(clippy::too_many_arguments)]
-pub fn rail_road_ends(p: PyReadonlyArray2<'_, f64>, d: PyReadonlyArray2<'_, f64>, part: PyReadonlyArray1<'_, i64>,
-                      rails: PyReadonlyArray2<'_, f64>, off: PyReadonlyArray1<'_, i64>, ca: PyReadonlyArray2<'_, f64>,
-                      cb: PyReadonlyArray2<'_, f64>, ch: PyReadonlyArray1<'_, f64>, step: f64, ahead_m: f64,
-                      road_end_m: f64, join_m: f64) -> PyResult<Vec<bool>> {
-    let (p, d, part, q, off) = (p.as_array(), d.as_array(), part.as_array(), rails.as_array(), off.as_array());
-    let ne = p.nrows();
-    let nq = q.nrows();
-    if p.ncols() < 2 || d.nrows() != ne || d.ncols() < 2 || part.len() != ne || q.ncols() < 2
-        || off.iter().any(|&v| v < 0 || v as usize > nq) || (1..off.len()).any(|i| off[i] < off[i - 1]) {
-        return Err(pyo3::exceptions::PyValueError::new_err(
-            "rail_road_ends: p (E, 2), d (E, 2), part (E,), rails (m, 2), off rising within rails"));
-    }
-    let segs = Segs::new(&ca.as_array(), &cb.as_array(), &ch.as_array());
-    let steps = np_arange(step, ahead_m + 1e-9, step);
-    let nr = off.len().saturating_sub(1);
-    let mut out = vec![false; ne];
-    for e in 0..ne {
-        let (px, py_, dx, dy) = (p[[e, 0]], p[[e, 1]], d[[e, 0]], d[[e, 1]]);
-        let ahead: Vec<[f64; 2]> = steps.iter().map(|&s| [px + dx * s, py_ + dy * s]).collect();
-        let first = match ahead.iter().position(|a| segs.near(a[0], a[1], 0.0)) {
-            Some(i) => i,
-            None => continue,
-        };
-        if ((first + 1) as f64) * step <= road_end_m {
-            out[e] = true;
-            continue;
-        }
-        let a = ahead[first];
-        let b = ahead[ahead.len() - 1];
-        let (ab0, ab1) = (b[0] - a[0], b[1] - a[1]);
-        let l2 = (ab0 * ab0 + ab1 * ab1).max(1e-9);
-        'parts: for o in 0..nr {
-            if o as i64 == part[e] {
-                continue;
-            }
-            let (j0, j1) = (off[o] as usize, off[o + 1] as usize);
-            if j1 <= j0 {
-                continue;
-            }
-            // (float(np.min(dnp.hypot(...))) < join_m: np.min of a NaN is NaN, and NaN < join_m is false)
-            let mut best = f64::INFINITY;
-            for j in j0..j1 {
-                let (q0, q1) = (q[[j, 0]], q[[j, 1]]);
-                let t = (((q0 - a[0]) * ab0 + (q1 - a[1]) * ab1) / l2).clamp(0.0, 1.0);
-                let dd = ((a[0] + t * ab0) - q0).dhypot((a[1] + t * ab1) - q1);
-                if dd.is_nan() || best.is_nan() {
-                    best = f64::NAN;
-                } else if dd < best {
-                    best = dd;
-                }
-            }
-            if best < join_m {
-                out[e] = true;
-                break 'parts;
-            }
-        }
-    }
-    Ok(out)
 }
 
 /// Does the polyline w (rows j0..j1 of wp) cross the line m (railstations._crossings / station_crossings' test: a pair
@@ -339,151 +178,204 @@ pub fn station_platform_trim(line: PyReadonlyArray2<'_, f64>, out: PyReadonlyArr
     Ok(Some((run.0 as i64..=run.1 as i64).collect()))
 }
 
-/// rails._deck_line: the deck line of the street run piece[a..b] (piece (n, 2)): the points every `fine` m from
-/// s[a] - search to s[b] + search (np.arange's), those within a carriageway (ca -> cb, half width ch) + pad, the run of
-/// them holding the one nearest the run's middle (the first nearest), each end bisected `bisect` times towards the
-/// point off it (unless at the window's end); the piece's points strictly between and the two ends. None without one.
-#[pyfunction]
-#[allow(clippy::too_many_arguments)]
-pub fn rail_deck_line<'py>(py: Python<'py>, piece: PyReadonlyArray2<'py, f64>, a: usize, b: usize,
-                           ca: PyReadonlyArray2<'py, f64>, cb: PyReadonlyArray2<'py, f64>, ch: PyReadonlyArray1<'py, f64>,
-                           pad: f64, fine: f64, search: f64, bisect: usize) -> PyResult<Option<Bound<'py, PyArray2<f64>>>> {
-    let pc = piece.as_array();
-    let n = pc.nrows();
-    if pc.ncols() < 2 || n < 2 || a >= n || b >= n {
-        return Err(pyo3::exceptions::PyValueError::new_err("rail_deck_line: piece (n >= 2, 2), a, b < n"));
-    }
-    let segs = Segs::new(&ca.as_array(), &cb.as_array(), &ch.as_array());
-    let xs: Vec<f64> = (0..n).map(|i| pc[[i, 0]]).collect();
-    let ys: Vec<f64> = (0..n).map(|i| pc[[i, 1]]).collect();
-    let mut s = vec![0.0f64; n];
-    for i in 1..n {
-        s[i] = s[i - 1] + (xs[i] - xs[i - 1]).dhypot(ys[i] - ys[i - 1]);
-    }
-    let lo = { let v = s[a] - search; if v > 0.0 { v } else { 0.0 } };         // (Python's max(0.0, v))
-    let hi = { let v = s[b] + search; if v < s[n - 1] { v } else { s[n - 1] } };   // (min(s[-1], v))
-    if hi - lo < fine {
-        return Ok(None);
-    }
-    let t = np_arange(lo, hi + 1e-9, fine);
-    let on: Vec<bool> = t.iter().map(|&v| segs.near(np_interp(v, &s, &xs), np_interp(v, &s, &ys), pad)).collect();
-    if !on.iter().any(|&v| v) {
-        return Ok(None);
-    }
-    let mid = 0.5 * (s[a] + s[b]);
-    let mut k = usize::MAX;
-    let mut best = f64::INFINITY;
-    for (i, &v) in on.iter().enumerate() {      // (np.argmin: the first minimum, the first NaN if any)
-        if !v {
-            continue;
-        }
-        let dd = (t[i] - mid).abs();
-        if dd.is_nan() {
-            k = i;
-            break;
-        }
-        if k == usize::MAX || dd < best {
-            best = dd;
-            k = i;
-        }
-    }
-    let (mut i, mut j) = (k, k);
-    while i > 0 && on[i - 1] {
-        i -= 1;
-    }
-    while j + 1 < on.len() && on[j + 1] {
-        j += 1;
-    }
-    if j <= i {
-        return Ok(None);
-    }
-    let edge = |k: usize, out: isize| -> f64 {
-        if out < 0 || out as usize >= t.len() {
-            return t[k];
-        }
-        let (mut t_on, mut t_off) = (t[k], t[out as usize]);
-        for _ in 0..bisect {
-            let tm = 0.5 * (t_on + t_off);
-            if segs.near(np_interp(tm, &s, &xs), np_interp(tm, &s, &ys), pad) {
-                t_on = tm;
-            } else {
-                t_off = tm;
-            }
-        }
-        t_on
-    };
-    let ta = edge(i, i as isize - 1);
-    let tb = edge(j, j as isize + 1);
-    let mut rows: Vec<f64> = vec![np_interp(ta, &s, &xs), np_interp(ta, &s, &ys)];
-    for q in 0..n {
-        if s[q] > ta && s[q] < tb {
-            rows.push(xs[q]);
-            rows.push(ys[q]);
-        }
-    }
-    rows.push(np_interp(tb, &s, &xs));
-    rows.push(np_interp(tb, &s, &ys));
-    let m = rows.len() / 2;
-    Ok(Some(Array2::from_shape_vec((m, 2), rows).unwrap().into_pyarray(py)))
+/// One road's per-point at-grade test on a track (railways._blocked for that road alone: earthfast.near_crossers on its
+/// own slice of the crossers' pack).
+fn road_on(c: usize, p: &[[f64; 2]], z: &[f64], d: &[[f64; 3]], st: &[usize], reach: &[f64], dz: f64) -> Vec<bool> {
+    let (j0, j1) = (st[c], st[c + 1]);
+    crate::nearcross::near_crossers(p, z, &d[j0..j1], &[0, j1 - j0], &[reach[c]], dz)
 }
 
-/// grading.seam_on_ground (BNE_RAIL_SEAM_DEM): the heights railroadseam.couple is to read for the roads' points (pts
-/// (m, 2), their plans' zs (m,), the grader's DEM there dem (m,), road after road: off (R + 1,), half widths hw (R,)),
-/// for the bed on xy (n, 2) whose own ground (the DEM) is ground (n,), its band's half width `half`: per road point
-/// within reach + its half width + half of a bed vertex, the room to the nearest bed vertex (the first of equals,
-/// libm hypot, less both half widths, at least 0) allows room / slope + tol of height between the two bands; the
-/// natural difference of the ground (dem - that bed vertex's ground) past that allowance is taken off the road's
-/// height (the ground's own slope beside the track: a road up the hillside asks nothing of the bed); within it nothing
-/// is. Points farther keep their zs.
+/// railways.crossing_records (BNE_RAIL_ROAD_FIT): the level crossings of one track part (xy (n, 2), its bed z (n,)
+/// before any flush), each road (the crossers' pack: pts (m, 3) [x, y, road z], starts (C + 1,), reach (C,), dz) only
+/// where it crosses this part: the anchors (a_road, a_lo, a_hi: index ranges of the part where the road's centre line
+/// crosses it or the part runs down the street) hold the road's at-grade points round them (the run of its own test
+/// holding an anchored point), nothing else of it (a road beside the track that crosses another one, or this one
+/// elsewhere, cuts nothing here). Returns (blk (n,), runs (r, 2) [a, b] of the joined points, start_t (r,), end_t (r,)):
+/// a run's edge on the section before it (a - 1 -> a) and after it (b -> b + 1) as the fraction of the section still
+/// off the crossing (`samples` - 1 points then `bisect` halvings, each with the run's own roads' test at the bed heights
+/// interpolated: the same test that made the run), NaN where the run reaches the part's end.
 #[pyfunction]
-#[allow(clippy::too_many_arguments)]
-pub fn rail_seam_natural<'py>(py: Python<'py>, xy: PyReadonlyArray2<'py, f64>, ground: PyReadonlyArray1<'py, f64>,
-                              half: f64, pts: PyReadonlyArray2<'py, f64>, zs: PyReadonlyArray1<'py, f64>,
-                              dem: PyReadonlyArray1<'py, f64>, off: PyReadonlyArray1<'py, i64>,
-                              hw: PyReadonlyArray1<'py, f64>, reach: f64, slope: f64, tol: f64)
-                              -> PyResult<Bound<'py, PyArray1<f64>>> {
-    let (b, g, p, zs, dem, off, hw) = (xy.as_array(), ground.as_array(), pts.as_array(), zs.as_array(), dem.as_array(),
-                                       off.as_array(), hw.as_array());
-    let (n, m) = (b.nrows(), p.nrows());
-    let nr = off.len().saturating_sub(1);
-    if b.ncols() < 2 || g.len() != n || p.ncols() < 2 || zs.len() != m || dem.len() != m || hw.len() < nr
-        || off.iter().any(|&v| v < 0 || v as usize > m) || (1..off.len()).any(|i| off[i] < off[i - 1]) {
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+pub fn rail_crossing_runs<'py>(py: Python<'py>, xy: PyReadonlyArray2<'py, f64>, z: PyReadonlyArray1<'py, f64>,
+                               pts: PyReadonlyArray2<'py, f64>, starts: PyReadonlyArray1<'py, i64>,
+                               reach: PyReadonlyArray1<'py, f64>, dz: f64, a_road: PyReadonlyArray1<'py, i64>,
+                               a_lo: PyReadonlyArray1<'py, i64>, a_hi: PyReadonlyArray1<'py, i64>, samples: usize,
+                               bisect: usize)
+                               -> PyResult<(Bound<'py, PyArray1<bool>>, Bound<'py, PyArray2<i64>>,
+                                            Bound<'py, PyArray1<f64>>, Bound<'py, PyArray1<f64>>)> {
+    let (x, zz, d, st, r) = (xy.as_array(), z.as_array(), pts.as_array(), starts.as_array(), reach.as_array());
+    let (ar, alo, ahi) = (a_road.as_array(), a_lo.as_array(), a_hi.as_array());
+    let n = x.nrows();
+    let nd = d.nrows();
+    let nc = st.len().saturating_sub(1);
+    let na = ar.len();
+    if x.ncols() < 2 || zz.len() != n || d.ncols() < 3 || r.len() < nc || samples < 2 || alo.len() != na
+        || ahi.len() != na || st.iter().any(|&v| v < 0 || v as usize > nd) || (1..st.len()).any(|i| st[i] < st[i - 1])
+        || ar.iter().any(|&v| v < 0 || v as usize >= nc)
+        || (0..na).any(|k| alo[k] < 0 || ahi[k] < alo[k] || ahi[k] as usize >= n.max(1)) {
         return Err(pyo3::exceptions::PyValueError::new_err(
-            "rail_seam_natural: xy (n, 2), ground (n,), pts (m, 2), zs (m,), dem (m,), off rising within pts, hw (R,)"));
+            "rail_crossing_runs: xy (n, 2), z (n,), pts (m, 3), starts rising within pts, reach (C,), anchors within \
+             the part and the roads, samples >= 2"));
     }
-    let mut out: Vec<f64> = zs.iter().copied().collect();
-    let (mut x0, mut y0, mut x1, mut y1) = (f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
-    for i in 0..n {
-        x0 = x0.min(b[[i, 0]]); x1 = x1.max(b[[i, 0]]);
-        y0 = y0.min(b[[i, 1]]); y1 = y1.max(b[[i, 1]]);
-    }
-    for r in 0..nr {
-        let h = hw[r];
-        let g_ = reach + h + half + 1.0;     // (a point past the bed's box by more than its reach: no vertex within it)
-        for j in off[r] as usize..off[r + 1] as usize {
-            let (px, py_) = (p[[j, 0]], p[[j, 1]]);
-            if px < x0 - g_ || px > x1 + g_ || py_ < y0 - g_ || py_ > y1 + g_ {
-                continue;
-            }
-            let (mut best, mut bi) = (f64::INFINITY, usize::MAX);
-            for i in 0..n {
-                let d = (b[[i, 0]] - px).dhypot(b[[i, 1]] - py_);
-                if d < best {
-                    best = d;
-                    bi = i;
+    let dv: Vec<[f64; 3]> = (0..nd).map(|j| [d[[j, 0]], d[[j, 1]], d[[j, 2]]]).collect();
+    let sv: Vec<usize> = st.iter().map(|&v| v as usize).collect();
+    let rv: Vec<f64> = r.iter().copied().collect();
+    let xv: Vec<[f64; 2]> = (0..n).map(|i| [x[[i, 0]], x[[i, 1]]]).collect();
+    let zv: Vec<f64> = zz.iter().copied().collect();
+    let anchors: Vec<(usize, usize, usize)> = (0..na).map(|k| (ar[k] as usize, alo[k] as usize, ahi[k] as usize)).collect();
+    let (blk, runs, ts, te) = py.detach(|| {
+        // per road with anchors (in road order): its own test, the runs of it holding an anchored point kept
+        let mut roads: Vec<usize> = anchors.iter().map(|a| a.0).collect();
+        roads.sort_unstable();
+        roads.dedup();
+        let mut owner: Vec<Vec<usize>> = vec![Vec::new(); n];
+        for &c in &roads {
+            let on = road_on(c, &xv, &zv, &dv, &sv, &rv, dz);
+            let mut keep = vec![false; n];
+            for &(_c, lo, hi) in anchors.iter().filter(|a| a.0 == c) {
+                for i in lo..=hi.min(n - 1) {
+                    if !on[i] || keep[i] {
+                        continue;
+                    }
+                    let (mut a, mut b) = (i, i);
+                    while a > 0 && on[a - 1] { a -= 1; }
+                    while b + 1 < n && on[b + 1] { b += 1; }
+                    for q in a..=b { keep[q] = true; }
                 }
             }
-            if bi == usize::MAX || !(best <= reach + h + half) {
+            for i in 0..n {
+                if keep[i] { owner[i].push(c); }
+            }
+        }
+        let blk: Vec<bool> = owner.iter().map(|o| !o.is_empty()).collect();
+        let t: Vec<f64> = (1..samples).map(|i| i as f64 / samples as f64).collect();
+        let mut runs: Vec<[i64; 2]> = Vec::new();
+        let (mut ts, mut te) = (Vec::new(), Vec::new());
+        let mut i = 0usize;
+        while i < n {
+            if !blk[i] { i += 1; continue; }
+            let a = i;
+            while i + 1 < n && blk[i + 1] { i += 1; }
+            let b = i;
+            i += 1;
+            let mut mine: Vec<usize> = (a..=b).flat_map(|q| owner[q].iter().copied()).collect();
+            mine.sort_unstable();
+            mine.dedup();
+            // the run's roads' test at points of a section (k -> k + 1), bed heights interpolated
+            let test = |k: usize, tt: &[f64]| -> Vec<bool> {
+                let (dx, dy, dzb) = (xv[k + 1][0] - xv[k][0], xv[k + 1][1] - xv[k][1], zv[k + 1] - zv[k]);
+                let p: Vec<[f64; 2]> = tt.iter().map(|&s| [xv[k][0] + dx * s, xv[k][1] + dy * s]).collect();
+                let zp: Vec<f64> = tt.iter().map(|&s| zv[k] + dzb * s).collect();
+                let mut on = vec![false; tt.len()];
+                for &c in &mine {
+                    let got = road_on(c, &p, &zp, &dv, &sv, &rv, dz);
+                    for (o, g) in on.iter_mut().zip(got) { *o = *o || g; }
+                }
+                on
+            };
+            let refine = |k: usize, entering: bool| -> f64 {
+                // entering: off at t = 0, on at t = 1 (the section before the run); else on at 0, off at 1
+                let on = test(k, &t);
+                let (mut t_off, mut t_on) = if entering {
+                    match on.iter().position(|&v| v) {
+                        Some(j) => (if j == 0 { 0.0 } else { t[j - 1] }, t[j]),
+                        None => (t[t.len() - 1], 1.0),
+                    }
+                } else {
+                    match on.iter().rposition(|&v| v) {
+                        Some(j) => (if j + 1 < t.len() { t[j + 1] } else { 1.0 }, t[j]),
+                        None => (t[0], 0.0),
+                    }
+                };
+                for _ in 0..bisect {
+                    let tm = 0.5 * (t_off + t_on);
+                    if test(k, &[tm])[0] { t_on = tm; } else { t_off = tm; }
+                }
+                t_off
+            };
+            ts.push(if a > 0 { refine(a - 1, true) } else { f64::NAN });
+            te.push(if b + 1 < n { refine(b, false) } else { f64::NAN });
+            runs.push([a as i64, b as i64]);
+        }
+        (blk, runs, ts, te)
+    });
+    let nr = runs.len();
+    let flat: Vec<i64> = runs.into_iter().flatten().collect();
+    Ok((blk.into_pyarray(py), Array2::from_shape_vec((nr, 2), flat).unwrap().into_pyarray(py), ts.into_pyarray(py),
+        te.into_pyarray(py)))
+}
+
+/// railways._road_ends (BNE_RAIL_ROAD_FIT) for every candidate end at once: the track ending at p[e] (running into it
+/// along the unit d[e], its bed z_end[e], part part[e] of rails (m, 2) with beds rz (m,), part after part: off (R + 1,))
+/// goes on past a road: the line ahead (p + d * np.arange(step, ahead_m + 1e-9, step)) meets a carriageway (ca -> cb,
+/// half width ch) and leaves it again (its far edge), and beyond that edge, within ahead_m, another part has a point
+/// within join_m of the line, running along it (|cos| >= cos_min with d) and with its bed within dz of z_end: the same
+/// track on the far side of a paved-over crossing. (A lifecycle cut's end is known by its provenance, not here.)
+#[pyfunction]
+#[allow(clippy::too_many_arguments)]
+pub fn rail_road_ends(p: PyReadonlyArray2<'_, f64>, d: PyReadonlyArray2<'_, f64>, z_end: PyReadonlyArray1<'_, f64>,
+                      part: PyReadonlyArray1<'_, i64>, rails: PyReadonlyArray2<'_, f64>, rz: PyReadonlyArray1<'_, f64>,
+                      off: PyReadonlyArray1<'_, i64>, ca: PyReadonlyArray2<'_, f64>, cb: PyReadonlyArray2<'_, f64>,
+                      ch: PyReadonlyArray1<'_, f64>, step: f64, ahead_m: f64, join_m: f64, cos_min: f64, dz: f64)
+                      -> PyResult<Vec<bool>> {
+    let (p, d, ze, part, q, qz, off) = (p.as_array(), d.as_array(), z_end.as_array(), part.as_array(), rails.as_array(),
+                                        rz.as_array(), off.as_array());
+    let ne = p.nrows();
+    let nq = q.nrows();
+    if p.ncols() < 2 || d.nrows() != ne || d.ncols() < 2 || ze.len() != ne || part.len() != ne || q.ncols() < 2
+        || qz.len() != nq || off.iter().any(|&v| v < 0 || v as usize > nq) || (1..off.len()).any(|i| off[i] < off[i - 1]) {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "rail_road_ends: p (E, 2), d (E, 2), z_end (E,), part (E,), rails (m, 2), rz (m,), off rising within rails"));
+    }
+    let segs = Segs::new(&ca.as_array(), &cb.as_array(), &ch.as_array());
+    let steps = np_arange(step, ahead_m + 1e-9, step);
+    let nr = off.len().saturating_sub(1);
+    let mut out = vec![false; ne];
+    for e in 0..ne {
+        let (px, py_, dx, dy) = (p[[e, 0]], p[[e, 1]], d[[e, 0]], d[[e, 1]]);
+        let on: Vec<bool> = steps.iter().map(|&s| segs.near(px + dx * s, py_ + dy * s, 0.0)).collect();
+        let first = match on.iter().position(|&v| v) {
+            Some(i) => i,
+            None => continue,
+        };
+        let mut far = first;
+        while far + 1 < on.len() && on[far + 1] {
+            far += 1;
+        }
+        if far + 1 >= on.len() {
+            continue;                   // (no far edge within the reach)
+        }
+        let beyond = steps[far];
+        'parts: for o in 0..nr {
+            if o as i64 == part[e] {
                 continue;
             }
-            let room = (best - h - half).max(0.0);
-            let allow = room / slope + tol;
-            let nat = dem[j] - g[bi];
-            let excess = nat.abs() - allow;
-            if excess > 0.0 {
-                out[j] = zs[j] - if nat < 0.0 { -excess } else { excess };
+            let (j0, j1) = (off[o] as usize, off[o + 1] as usize);
+            if j1 < j0 + 2 {
+                continue;
+            }
+            for j in j0..j1 {
+                let (vx, vy) = (q[[j, 0]] - px, q[[j, 1]] - py_);
+                let along = vx * dx + vy * dy;
+                if !(along > beyond && along <= ahead_m) {
+                    continue;
+                }
+                if (vx * dy - vy * dx).abs() > join_m {
+                    continue;
+                }
+                let (a, b) = (if j > j0 { j - 1 } else { j }, if j + 1 < j1 { j + 1 } else { j });
+                let (tx, ty) = (q[[b, 0]] - q[[a, 0]], q[[b, 1]] - q[[a, 1]]);
+                let tl = tx.dhypot(ty);
+                if !(tl > 1e-9) || ((tx * dx + ty * dy) / tl).abs() < cos_min {
+                    continue;
+                }
+                if !((qz[j] - ze[e]).abs() <= dz) {
+                    continue;
+                }
+                out[e] = true;
+                break 'parts;
             }
         }
     }
-    Ok(out.into_pyarray(py))
+    Ok(out)
 }

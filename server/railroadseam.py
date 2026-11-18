@@ -51,6 +51,38 @@ def couple(xy, z, half, roads, lowered=(), lower_m=0.0):
     return z if out is None else out
 
 
+def couple_ground(xy, z, ground, half, roads, rdem, lowered=(), lower_m=0.0):
+    """couple() with the ground's own slope between a road and the bed allowed (grading.seam_on_ground,
+    BNE_RAIL_SEAM_DEM): ground (n,) the DEM under the bed's vertices, rdem (m,) under the packed roads' points
+    (_packed(roads)[0]); per bed vertex and road foot the ground's own difference past what the room allows is taken off
+    the road's height for the band, while whether the road crosses on a bridge (a grade separation) is still read from
+    its own height (railseam.rs bounds' nat). z itself where nothing moves. Pure."""
+    import fast
+    xy = np.asarray(xy, np.float64)[:, :2]
+    z = np.asarray(z, np.float64)
+    if len(z) < 2 or not roads:
+        return z
+    got = _packed(roads)
+    if got is None:
+        return z
+    pts, zs, off, hw, at = got
+    if lowered:
+        zs = zs.copy()
+        for k in lowered:
+            j = at.get(k)
+            if j is not None:
+                _rxy, rz, _rh = roads[k]
+                zs[off[j]:off[j + 1]] = (np.asarray(rz, np.float64) - lower_m)[:off[j + 1] - off[j]]
+    fast.require(420, "rail_seam_couple_ground")
+    out = fast._ef.rail_seam_couple_ground(np.ascontiguousarray(xy), np.ascontiguousarray(z),
+                                           np.ascontiguousarray(np.asarray(ground, np.float64)), float(half),
+                                           np.ascontiguousarray(pts), np.ascontiguousarray(zs),
+                                           np.ascontiguousarray(np.asarray(rdem, np.float64)),
+                                           np.ascontiguousarray(off, np.int64), np.ascontiguousarray(hw), REACH_M,
+                                           SEAM_SLOPE, SEAM_TOL_M, MAX_MOVE_M, SPREAD_GRADE)
+    return z if out is None else out
+
+
 _PACKED = ()        # ((the roads list, its packing), ...): a cell's tracks ask with the same list
 
 

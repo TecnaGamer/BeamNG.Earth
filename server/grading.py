@@ -7073,49 +7073,25 @@ def _ground_at(frame, elev, xy):
 
 
 def seam_pack(frame, elev, beside):
-    """RAIL_SEAM_DEM: (points (m, 2), plan heights (m,), the grader's DEM there (m,), offsets (R + 1,), half widths (R,),
-    the roads' indices in beside (R,)) of beside ([(xy (k, 2), z (k,), half width)]: the roads' plans) with 2 points or
-    more, once a cell; None without any."""
-    pts, zs, off, hw, idx = [], [], [0], [], []
-    for k, (rxy, rz, h) in enumerate(beside):
-        rxy = np.asarray(rxy, np.float64)[:, :2]
-        rz = np.asarray(rz, np.float64)
-        n = min(len(rxy), len(rz))
-        if n < 2:
-            continue
-        pts.append(rxy[:n])
-        zs.append(rz[:n])
-        off.append(off[-1] + n)
-        hw.append(float(h))
-        idx.append(k)
-    if not idx:
-        return None
-    p = np.ascontiguousarray(np.concatenate(pts))
-    return (p, np.concatenate(zs), _ground_at(frame, elev, p), np.asarray(off, np.int64), np.asarray(hw, np.float64),
-            idx)
+    """RAIL_SEAM_DEM: the grader's DEM under the roads' points as railroadseam packs them (_packed(beside)[0]), once a
+    cell; None without a road of 2 points or more."""
+    import railroadseam
+    got = railroadseam._packed(beside)
+    return None if got is None else _ground_at(frame, elev, got[0])
 
 
-def seam_on_ground(frame, elev, xy, z, beside, pack):
-    """RAIL_SEAM_DEM: railroadseam.couple of the bed z (n,) on xy (n, 2) with the roads beside (pack: seam_pack(beside))
-    read at their heights less the ground's own slope past what the room between allows (earthfast.rail_seam_natural):
-    a road up the hillside beside the track asks nothing of the bed, a road graded off its ground still moves it as
-    before; the crossings at grade (railways.seam_lowered) as before. Pure given elev."""
-    import fast
+def seam_on_ground(frame, elev, xy, z, beside, rdem):
+    """RAIL_SEAM_DEM: railroadseam.couple of the bed z (n,) on xy (n, 2) beside the roads beside with the ground's own
+    slope between them allowed (railroadseam.couple_ground; rdem: seam_pack(beside)): a road up the hillside beside the
+    track asks nothing of the bed, a road graded off its ground still moves it as before; a road the track crosses on a
+    bridge is still told by its own height; the crossings at grade (railways.seam_lowered) as before. Pure given elev."""
     import railroadseam
     import railways
-    if pack is None:
-        return railroadseam.couple(xy, z, railways.GRADE_HALF_M, beside, railways.seam_lowered(xy, z, beside),
-                                   railways.SEAM_LOWER_M)
-    fast.require(railways.FIT_NATIVE, "rail beds beside roads")
-    pts, zs, dem, off, hw, idx = pack
-    bxy = np.ascontiguousarray(np.asarray(xy, np.float64)[:, :2])
-    eff = fast._ef.rail_seam_natural(bxy, _ground_at(frame, elev, bxy), float(railways.GRADE_HALF_M), pts, zs, dem,
-                                     off, hw, railroadseam.REACH_M, railroadseam.SEAM_SLOPE, railroadseam.SEAM_TOL_M)
-    roads_ = list(beside)
-    for r, k in enumerate(idx):
-        roads_[k] = (pts[off[r]:off[r + 1]], eff[off[r]:off[r + 1]], hw[r])
-    return railroadseam.couple(xy, z, railways.GRADE_HALF_M, roads_, railways.seam_lowered(xy, z, beside),
-                               railways.SEAM_LOWER_M)
+    lowered = railways.seam_lowered(xy, z, beside)
+    if rdem is None:
+        return railroadseam.couple(xy, z, railways.GRADE_HALF_M, beside, lowered, railways.SEAM_LOWER_M)
+    return railroadseam.couple_ground(xy, z, _ground_at(frame, elev, xy), railways.GRADE_HALF_M, beside, rdem,
+                                      lowered, railways.SEAM_LOWER_M)
 
 
 def rail_yield_pieces(xy, z, roads_, half):

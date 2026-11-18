@@ -1662,7 +1662,17 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
                                  cover_fn=getattr(getattr(_s, "surface", None), "classes", None))
     P.town_faces = town_faces
     mark("build_tile")
-    chunks += railsmod.tile_chunks(frame, tx, ty, cells, country, urban)     # railway and tram tracks on the ground
+    import railways
+    rail_rec = None                 # (BNE_RAIL_ROAD_FIT: one record of the level crossings, the decks here, the track below)
+    if railways.RAIL_ROAD_FIT:
+        rail_rec = railways.crossing_records(
+            frame, tx, ty, [cell_fn(k) for k in roadsmod.cells_of_tile(frame, tx, ty, railways.REACH_M)],
+            railways.point_ground(frame, elev, rkey),
+            far_ground=railways.point_ground(frame, lambda la, lo: ground(frame, la, lo, _s.dem.sample(la, lo, zoom)),
+                                             ("raw",) + tuple(rkey)),
+            load=cell_fn, bed_elev=getattr(getattr(_s, "plan_store", None), "elev", None))
+    chunks += railsmod.tile_chunks(frame, tx, ty, cells, country, urban,      # railway and tram tracks on the ground
+                                   records=rail_rec)
     mark("rails")
     if _s.airports is not None:         # runway markings, drawn by the road mesh like the lane lines
         chunks += _s.airports.tile_chunks(frame, tx, ty, elev, roadsmod.tile_bbox)
@@ -1820,7 +1830,7 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
                                  return_decks=True, load=cell_fn,
                                  bed_elev=getattr(getattr(_s, "plan_store", None), "elev", None), furniture=rail_props,
                                  under=((lambda xy: buildingsmod._under_bridges(_bridge_fps, xy))
-                                        if _bridge_fps else None))
+                                        if _bridge_fps else None), records=rail_rec)
     if rail_props:
         props = (props or []) + rail_props
     mark("railways")

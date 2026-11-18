@@ -147,6 +147,32 @@ class NaturalSlopeTest(unittest.TestCase):
         np.testing.assert_allclose(on, off2, atol=1e-9)
         self.assertLess(float(on.max()), float(off.max()))
 
+    def test_a_road_crossing_over_the_track_stays_a_grade_separation(self):
+        """Codex on ee2591a3: the natural difference taken off a road's height before couple's own test of a grade
+        separation (a road across the bed more than SEAM_CROSS_M from it is not beside it) pulled a road crossing over
+        the track on its embankment (the DEM holding the embankment) to the bed's level: the bed then went to it. The
+        separation is told by the road's own height: nothing moves."""
+        import grading
+        import railways
+        frame = self.frame
+
+        def elev(la, lo):           # (the road's embankment in the DEM: 7 m over the ground round it)
+            e, _n, _u = frame.geodetic_to_enu(np.asarray(la, np.float64), np.asarray(lo, np.float64), 0.0)
+            return np.where(np.abs(np.asarray(e, np.float64) - 100.0) < 6.0, 107.0, 100.0)
+        xy = straight(0.0, 101, 200.0)
+        zb = np.full(len(xy), 103.0)                    # (the bed on a fill of its own, 5 m under the road)
+        road = np.c_[np.full(21, 100.0), np.linspace(-30.0, 30.0, 21)]
+        beside = [(road, np.full(21, 108.0), 4.0)]
+        on = grading.seam_on_ground(frame, elev, xy, zb, beside, grading.seam_pack(frame, elev, beside))
+        np.testing.assert_allclose(on, zb)
+        off = rs.couple(xy, zb, railways.GRADE_HALF_M, beside, railways.seam_lowered(xy, zb, beside),
+                        railways.SEAM_LOWER_M)
+        np.testing.assert_allclose(off, zb)
+        # (the road's height with the natural difference taken off before the test: at grade, and the bed pulled down)
+        eff = [(road, np.full(21, 108.0 - (7.0 - rs.SEAM_TOL_M)), 4.0)]
+        moved = rs.couple(xy, zb, railways.GRADE_HALF_M, eff, (), 0.0)
+        self.assertLess(float(np.min(moved)), 102.0)
+
 
 if __name__ == "__main__":
     unittest.main()
