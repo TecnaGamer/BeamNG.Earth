@@ -377,3 +377,98 @@ def test_a_road_over_itself_within_the_run_its_clearance_takes_is_named_in_steps
     s3 = audits[0]["steps"][3]
     assert not s3["ok"] and s3["stats"]["short_m"] > 0.5
     assert {r["earth"] for leg in s3["stats"]["legs"] for r in leg["refs"]} == {"road"}
+
+
+# ---- a loose end is what the map has at its node ----
+
+def _facts(**kw):
+    out = dict(near=[], inside=[], others=[], connector=None, feature_end=None)
+    out.update(kw)
+    return out
+
+
+def _with_map(members, facts_of, meta=None):
+    """The audit with endinfo(member, end) -> facts_of(the member's Earth id)."""
+    box = {}
+
+    class Capture(ia.Namer):
+        def __init__(self, *a, **k):
+            super().__init__(*a, **k)
+            box["namer"] = self
+
+    def endinfo(i, e):
+        return facts_of(box["namer"].net.m[i].key[0])
+    with mock.patch.object(ia, "Namer", Capture):
+        return ia.audit_members(members, meta=meta, endinfo=endinfo)[2]
+
+
+def _dangling_ramp_with(facts):
+    return _with_map(_overpass(ramp_far_end=False), lambda key: facts if key == "ramp" else _facts())
+
+
+def test_a_deck_end_whose_road_goes_on_outside_the_region_is_no_loose_end():
+    row = ("north-road", "ground", "secondary", 0.0, 0.4, ("north-road", "ground", 7))
+    audits = _dangling_ramp_with(_facts(near=[row]))
+    f = _finds(audits, 1, "end_beyond_region")
+    assert len(f) == 1 and f[0].level == "note" and "outside" in f[0].text and "north-road" in f[0].text
+    assert audits[0]["steps"][1]["ok"] and not _finds(audits, 1, "dangling_end")
+
+
+def test_a_deck_end_at_a_road_the_shapes_do_not_take_is_a_note_naming_it():
+    other = ("path-1", "footway", "-1", "w123@4", False, 0, {})
+    audits = _dangling_ramp_with(_facts(feature_end=1, connector="c1", others=[other]))
+    f = _finds(audits, 1, "end_at_non_member")
+    assert len(f) == 1 and f[0].level == "note" and "w123@4" in f[0].text and "footway" in f[0].text
+    assert audits[0]["steps"][1]["ok"]
+
+
+def test_a_deck_end_the_map_leaves_alone_is_a_map_defect_not_a_pipeline_failure():
+    audits = _dangling_ramp_with(_facts(feature_end=1, connector="c9"))
+    f = _finds(audits, 1, "end_unconnected")
+    assert len(f) == 1 and f[0].level == "map" and "c9" in f[0].text
+    assert audits[0]["steps"][1]["ok"]
+    assert "Map defect, end_unconnected" in ia.render("x", audits)
+
+
+def test_a_road_of_the_net_at_the_end_with_no_joint_is_the_pipelines_failure():
+    row = ("far", "ground", "secondary", 0.0, 0.5, ("far", "ground", 0))
+    audits = _dangling_ramp_with(_facts(inside=[row]))
+    f = _finds(audits, 1, "end_not_joined")
+    assert len(f) == 1 and f[0].level == "fail" and not audits[0]["steps"][1]["ok"]
+
+
+def test_a_one_way_disagreement_the_maps_own_roads_explain_is_a_note_else_a_map_defect():
+    m = _overpass()
+    meta = {"deck": dict(oneway=True, dir=1), "ramp": dict(oneway=True, dir=-1)}
+    # (the deck and the ramp both flow into the joint: a road of the map that vehicles enter at that node takes them on)
+    taker = ("feeder", "secondary", None, "w1@1", True, 0, dict(oneway=True, dir=1))
+    for others, code, level in (([taker], "oneway_fed_outside", "note"), ([], "oneway_map", "map")):
+        audits = _with_map(m, lambda key, others=others: _facts(feature_end=1, connector="cx", others=others), meta)
+        f = _finds(audits, 1, code)
+        assert f and all(x.level == level for x in f), (code, [x.text for x in _finds(audits, 1)])
+        assert not _finds(audits, 1, "oneway_conflict")
+
+
+def test_a_gap_between_a_deck_end_and_its_own_roads_next_part_is_the_pipelines():
+    row = ("ramp", "ground", "secondary", 0.0, 4.0, ("ramp", "ground", 1))
+    audits = _dangling_ramp_with(_facts(own_gap=row))
+    f = _finds(audits, 1, "gap_to_own_part")
+    assert len(f) == 1 and f[0].level == "fail" and "4.0 m short" in f[0].text
+
+
+def test_a_separated_end_the_map_leaves_unconnected_is_a_map_defect():
+    m = [_ground("mway", _line(-800, 0, 800, 0, 200), "motorway"),
+         _deck("low", _line(-60, 30, 60, 30, 40), nodes=frozenset({"a", "b"})),
+         _deck("high", _line(0, -30, 0, 30, 13), level=2.0, nodes=frozenset({"c", "d"})),
+         _ground("s", _line(0, -600, 0, -30))]
+    audits = _with_map(m, lambda key: _facts(feature_end=1, connector="cz") if key == "high" else _facts())
+    f = _finds(audits, 1, "end_unconnected")
+    assert len(f) == 1 and f[0].level == "map" and "low" in f[0].text and not _finds(audits, 1, "end_separated")
+    assert not [x for x in _finds(audits, 1) if x.level == "fail" and x.refs[0]["earth"] == "high"]
+
+
+def test_a_deck_end_where_its_own_road_goes_on_as_a_tunnel_nobody_made_a_member_of_is_a_note():
+    audits = _dangling_ramp_with(_facts(own_next=("tunnel", 0.42, 1.0)))
+    f = _finds(audits, 1, "end_at_tunnel_network")
+    assert len(f) == 1 and f[0].level == "note" and "its own map road goes on as a tunnel part" in f[0].text
+    assert audits[0]["steps"][1]["ok"]

@@ -10,7 +10,7 @@ use pyo3::types::PyDict;
 /// z_a - (1 - alpha) z_b - alpha z_c (coupling_alpha, 0 without it): b's height moved alpha of the way to c.
 #[pyfunction]
 #[pyo3(signature = (target, weight, lower, upper, offsets, parameters, coupling_rows, coupling_values, rounds, budget_s,
-                    coupling_alpha = None))]
+                    coupling_alpha = None, spacing = None))]
 #[allow(clippy::too_many_arguments)]
 pub fn carriageway_profiles<'py>(
     py: Python<'py>,
@@ -25,6 +25,7 @@ pub fn carriageway_profiles<'py>(
     rounds: usize,
     budget_s: f64,
     coupling_alpha: Option<PyReadonlyArray1<'py, f64>>,
+    spacing: Option<PyReadonlyArray1<'py, f64>>,
 ) -> PyResult<(Bound<'py, PyArray1<f64>>, Bound<'py, PyDict>)> {
     let bad = |message: &str| PyValueError::new_err(message.to_owned());
     if rounds == 0 || budget_s.is_nan() || budget_s < 0. {
@@ -45,6 +46,14 @@ pub fn carriageway_profiles<'py>(
         None => vec![0.; values.len()],
     };
     let n = target.len();
+    // (the distance of each sample to the next, per sample: a chain's last one unused; none: each chain's own step)
+    let spacing = match &spacing {
+        Some(a) => a.as_slice()?.to_vec(),
+        None => Vec::new(),
+    };
+    if !spacing.is_empty() && (spacing.len() != n || spacing.iter().any(|v| !v.is_finite() || *v < 0.)) {
+        return Err(bad("carriageway spacing must be one finite nonnegative distance per sample"));
+    }
     if weight.len() != n
         || lower.len() != n
         || upper.len() != n
@@ -131,6 +140,7 @@ pub fn carriageway_profiles<'py>(
         upper,
         offsets: offsets.iter().map(|&v| v as usize).collect(),
         parameters,
+        spacing,
         couplings,
     };
     let (z, d) = py
