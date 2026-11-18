@@ -45,7 +45,31 @@ pub struct Problem {
     pub upper: Vec<f64>,
     pub offsets: Vec<usize>,
     pub parameters: Vec<Parameters>,
+    /// The distance from each sample to the next along its chain (the last of a chain unused): the grade and curve
+    /// bounds of a segment are its own, not one chain-wide step's. A value <= 0 (or an empty vector) means the chain's
+    /// `Parameters.step` for that segment.
+    pub spacing: Vec<f64>,
     pub couplings: Vec<Coupling>,
+}
+
+impl Problem {
+    /// The distance of chain `chain`'s segment i (sample i to i + 1).
+    fn gap(&self, chain: usize, i: usize) -> f64 {
+        let h = self.spacing.get(self.offsets[chain] + i).copied().unwrap_or(0.);
+        if h > 0. { h } else { self.parameters[chain].step }
+    }
+
+    /// A window's (i, i + 1, i + 2) curve row and the vertical curve's bound on it. The change of grade across the
+    /// window, (z2 - z1) / h1 - (z1 - z0) / h0, is at most hm / (100 K) with hm the mean of the two spacings; the row is
+    /// that times hm, [hm / h0, -(hm / h0 + hm / h1), hm / h1], bound hm^2 / (100 K): with equal spacings exactly the
+    /// second difference [1, -2, 1] of heights and step^2 / (100 K), as before (unequal ones carried a grade term
+    /// (h1 - h0) s the bound never had room for).
+    fn curve_row(&self, chain: usize, i: usize) -> ([f64; 3], f64, f64) {
+        let (h0, h1) = (self.gap(chain, i), self.gap(chain, i + 1));
+        let hm = 0.5 * (h0 + h1);
+        let (a, c) = (hm / h0, hm / h1);
+        ([a, -(a + c), c], hm * hm / (self.parameters[chain].k * 100.), hm)
+    }
 }
 
 #[derive(Default, Debug)]
@@ -161,16 +185,17 @@ pub fn measure(problem: &Problem, z: &[f64], d: &mut Diagnostics) {
     d.feasible = true;
     for (i, p) in problem.parameters.iter().enumerate() {
         let q = &z[problem.offsets[i]..problem.offsets[i + 1]];
-        let g = p.grade * p.step;
-        let curve = p.step * p.step / (p.k * 100.);
-        for w in q.windows(2) {
+        for (k, w) in q.windows(2).enumerate() {
+            let h = problem.gap(i, k);
+            let g = p.grade * h;
             let excess = ((w[1] - w[0]).abs() - g).max(0.);
-            d.grade_excess = d.grade_excess.max(excess / p.step);
+            d.grade_excess = d.grade_excess.max(excess / h);
             d.feasible &= excess <= g * 0.02 + 1e-3;
         }
-        for w in q.windows(3) {
-            let excess = ((w[0] - 2. * w[1] + w[2]).abs() - curve).max(0.);
-            d.curve_excess = d.curve_excess.max(excess / (p.step * p.step));
+        for (k, w) in q.windows(3).enumerate() {
+            let (row, curve, hm) = problem.curve_row(i, k);
+            let excess = ((row[0] * w[0] + row[1] * w[1] + row[2] * w[2]).abs() - curve).max(0.);
+            d.curve_excess = d.curve_excess.max(excess / (hm * hm));
             d.feasible &= excess <= curve * 0.05 + 1e-4;
         }
     }
@@ -233,14 +258,14 @@ pub fn solve(
                     len: 2,
                     rhs: 0.,
                 },
-                -p.grade * p.step,
-                p.grade * p.step,
+                -p.grade * problem.gap(chain, i),
+                p.grade * problem.gap(chain, i),
                 &mut eq,
                 &mut ineq,
             );
         }
-        let curve = p.step * p.step / (p.k * 100.);
         for i in 0..count.saturating_sub(2) {
+            let (row, curve, _) = problem.curve_row(chain, i);
             a0[i] += p.lam;
             a0[i + 1] += 4. * p.lam;
             a0[i + 2] += p.lam;
@@ -250,7 +275,7 @@ pub fn solve(
             bounds(
                 Row {
                     index: [a + i, a + i + 1, a + i + 2],
-                    coeff: [1., -2., 1.],
+                    coeff: row,
                     len: 3,
                     rhs: 0.,
                 },

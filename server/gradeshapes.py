@@ -42,6 +42,7 @@ plans (cut and fill).
 import hashlib
 import heapq
 import math
+import os
 import threading
 from collections import OrderedDict, namedtuple
 
@@ -53,6 +54,7 @@ import gradelaw
 import railways
 
 STEP_M = 4.0                # m between a deck's or a dip's samples
+SEGMENT_STEP_ON = os.environ.get("BNE_SEGMENT_STEP", "1").strip().lower() not in ("0", "off", "no", "false")
 JOIN_M = 2.5                # m: two parts' ends (or an end and another's line) this close meet there
 CROSS_END_M = 2.0           # m: a crossing this near either part's end is a joint, not a separation
 MERGE_DEG = 40.0            # deg: a deck's end on another deck's line at another level meets it only along it (a ramp's
@@ -1313,6 +1315,9 @@ def shape_problem(net, sysm, pcs, smp, ground, fixed_z, trace=None):
         # step, and held at the mean its grade ran 1.8 % over the law there)
         dd = np.diff(np.asarray(x["d"], np.float64))
         step = float(dd[dd > 1e-6].min()) if (dd > 1e-6).any() else float(STEP_M)
+        # (SEGMENT_STEP_ON: each segment held to the law by its own spacing, the kernel's `ds`: one closest pair of samples,
+        # 0.3 m apart where a joint falls beside a lattice sample, held a 232 m dip piece to 0.3 m of grade all along)
+        own = dict(ds=dd) if SEGMENT_STEP_ON else {}
         # (a deck keeps its line, a road going under only its depth: W_STIFF is the least that makes a deck rise as a whole
         # by what it lacks (with the deck's own grade law, deck_grade): on a bridge over a motorway with the embankments'
         # top 6 m up its ends stand 14.92 m with the line free (1e-3), 15.42 with the deck law alone, 15.76 at 1000, on
@@ -1321,7 +1326,7 @@ def shape_problem(net, sysm, pcs, smp, ground, fixed_z, trace=None):
         # to, and the ground roads filled or dug against the survey went from 39 / 0 / 0 to 44 / 3 / 2 per mille
         # (Brunau, Europabruecke, Duettweilerbruecke), at 3000 to 40 / 0 / 0)
         chains.append(dict(t=target, w=w, lo=lo, hi=hi, grade=g, K=rad / 100.0, lam=W_STIFF if pc["kind"] == "deck" else 1e-3,
-                           step=step, length=0.0))
+                           step=step, length=0.0, **own))
     cps, why = [], []
     for n_, (i, si, j, sj) in enumerate(sysm["joins"]):
         x, y = _var(pcs, smp, i, si), _var(pcs, smp, j, sj)

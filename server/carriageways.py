@@ -41,6 +41,8 @@ import dnp
 log = logging.getLogger("earthd.grading")
 
 STEP_M = 4.0            # m between profile samples
+MIN_SEGMENT_M = 0.5     # m: the least spacing a chain's own `ds` gives a segment (two samples closer than this, one point
+                        # the lattice and a joint both asked for, are held to the grade of 0.5 m, not of 0 m)
 TRUST_M = 40.0          # m from a bridge's end over which the ground's weight rises from 0 to 1
 LAMBDA = 2.0e4          # smoothness (a curve of ~40 m per metre of bend where nothing else decides)
 # The road's shape between the points whose heights matter (the user, 2026-11-02: "skip the earthworks calculation as
@@ -198,7 +200,9 @@ def weights(br, from_end, trust=TRUST_M):
 def solve(chains, couplings=(), rounds=ROUNDS, deadline=None, diagnostics=None):
     """Profiles of coupled chains; the Rust kernel owns the numerical solve and releases the GIL.
 
-    chains: dicts with t/w (n,), grade, K, optional lo/hi (n,), lam, step, length.
+    chains: dicts with t/w (n,), grade, K, optional lo/hi (n,), lam, step, length, and optionally ds (n - 1,): the distance
+    from each sample to the next (a segment's grade bound and a window's curve bound are then its own spacings'; without
+    it, the chain's one `step`, the closest two samples').
     couplings: (chain a, sample i, chain b, sample j, "eq", "ge" or "le", value): z_a - z_b = 0, >= value, <= value;
     or (a, i, b, j, kind, value, chain c, sample k, alpha): the same of z_a - (1 - alpha) z_b - alpha z_c (b's height
     moved alpha of the way to c's: a road's height where another leaves it; roadlaws' landings).
@@ -234,13 +238,28 @@ def solve(chains, couplings=(), rounds=ROUNDS, deadline=None, diagnostics=None):
         rows = np.asarray([tuple(c[:4]) + (kinds[c[4]],) for c in cp], np.int64).reshape(-1, 5)
         alpha = None
     values = np.asarray([c[5] for c in cp], np.float64)
+    own = [c.get("ds") for c in chains]
+    spacing = None
+    if any(d is not None for d in own):
+        fast.require(309, "carriageway_profiles spacing")
+        pieces = []
+        for c, t, d in zip(chains, target, own):
+            if d is None:
+                pieces.append(np.zeros(len(t)))             # (0: the chain's step)
+                continue
+            d = np.asarray(d, np.float64)
+            if d.shape != (max(len(t) - 1, 0),):
+                raise ValueError("each carriageway's ds must have one distance per segment")
+            pieces.append(np.r_[np.maximum(d, MIN_SEGMENT_M), 0.0][:len(t)])
+        spacing = pack(pieces)
     budget = float(deadline) - time.monotonic() if deadline is not None else BUDGET_S
     if np.isnan(budget):
         raise ValueError("carriageway deadline must not be NaN")
     budget = max(0.0, budget)
     z, info = fast._ef.carriageway_profiles(pack(target), pack(weights_), pack(lower), pack(upper), offsets,
                                            parameters, rows, values, rounds, budget,
-                                           *(() if alpha is None else (alpha,)))
+                                           *(() if alpha is None and spacing is None else (alpha,)),
+                                           **({} if spacing is None else {"spacing": spacing}))
     if diagnostics is not None:
         diagnostics.update(info)
     if not info["converged"] or not info["feasible"]:

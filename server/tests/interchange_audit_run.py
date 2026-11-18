@@ -25,6 +25,8 @@ import gradeshapes as gs  # noqa: E402
 import interchange_audit as ia  # noqa: E402
 
 
+SURVEY_NODE_M = 1.0     # m: a survey line this near a way's end meets it
+SURVEY_EDGE_M = 3.0     # m: an end this near the survey's own box leaves it
 EDGE_M = 150.0          # m: an end this near a map cell that was not read may meet a road there
 
 
@@ -32,8 +34,14 @@ class PlannerMeta:
     """What the map has of a road feature, by its Earth id, read from the planner's cells when asked: {osm: the way, name,
     layer, oneway, dir}. A dict by .get()."""
 
-    def __init__(self, planner, net):
+    END_TOL_M = 3.0         # m: a road's end this near a member's end meets it
+    OWN_GAP_M = 15.0        # m: a part of its own road ending this near (and not END_TOL_M) is a gap in the road's parts
+
+    def __init__(self, planner, net, loaded=()):
         self.p, self.net = planner, net
+        self.loaded = loaded            # the map cells the region read (the keys the planner's cells go by)
+        self._uni = None
+        self._conn = None
         self.ids = {}                   # Earth id -> a member index
         for i, m in enumerate(net.m):
             self.ids.setdefault(str(m.key[0] if isinstance(m.key, tuple) else m.key), i)
@@ -69,6 +77,133 @@ class PlannerMeta:
                     break
         self.memo[eid] = out
         return out or default
+
+    def _locate(self, eid):
+        """(cell feature set, its index of eid) of a road feature, from the cells round its member (as get)."""
+        import mapcells
+        i = self.ids.get(eid)
+        if i is None:
+            return None
+        mid = self.net.lines[i][len(self.net.lines[i]) // 2]
+        la, lo, _ = self.p.frame.enu_to_geodetic(np.array([mid[0]]), np.array([mid[1]]), 0.0)
+        lat0, lon0 = float(la[0]), float(lo[0])
+        home = mapcells.cell_of(lat0, lon0)
+        for k in [home] + sorted(mapcells.cells_for_bbox(lat0 - 0.02, lon0 - 0.03, lat0 + 0.02, lon0 + 0.03), key=str):
+            f, index, _specs, _bspecs = self._cell(k)
+            if eid in index:
+                return f, index[eid]
+        return None
+
+    def _cell_keys(self):
+        import mapcells
+        return [mapcells.parse(k) if isinstance(k, str) else k for k in sorted(self.loaded, key=str)]
+
+    def universe(self):
+        """Every member the cells read give (the region's net keeps those in its box only): {key: Member}, and per member
+        the ends (n, 2, 2) for a nearest look."""
+        if self._uni is None:
+            by = {}
+            for k in self._cell_keys():
+                for m in self.p._shape_members(k):
+                    old = by.get(m.key)
+                    if old is None or len(m.line) > len(old.line):
+                        by[m.key] = m
+            keys = sorted(by, key=str)
+            ends = np.array([[np.asarray(by[q].line)[0, :2], np.asarray(by[q].line)[-1, :2]] for q in keys]).reshape(-1, 2, 2)
+            self._uni = (by, keys, ends, {m.key for m in self.net.m})
+        return self._uni
+
+    def connectors(self):
+        """{connector id: [(feature id, 0 | 1 its end the connector is at, cell feature set, index)]} over the cells read."""
+        if self._conn is None:
+            out = {}
+            for k in self._cell_keys():
+                f = self._cell(k)[0]
+                con = None if f is None or not len(f) else f.rules.get("connectors")
+                if con is None:
+                    continue
+                for n in range(len(f)):
+                    for r in con.rows(n):
+                        at = float(con.start[r])
+                        if at < 1e-6 or at > 1.0 - 1e-6:
+                            out.setdefault(str(con.value[r]), []).append((str(f.ids[n]), int(at > 0.5), f, n, k))
+            self._conn = out
+        return self._conn
+
+    def endinfo(self, i, end):
+        """What the map has at member i's end (0 start, 1 end), for the audit's loose-end check: dict(near: [the members of
+        the cells read with an end within END_TOL_M, not in the net: (label parts)], inside: [the same in the net], others:
+        [(feature id, class, layer, OSM way) the map's roads sharing the end's connector, the shapes' members or not],
+        connector: its id or None)."""
+        by, keys, ends, netkeys = self.universe()
+        me = self.net.m[i]
+        P = np.asarray(self.net.lines[i][0 if end == 0 else -1], np.float64)[:2]
+        d = np.sqrt(np.sum((ends - P) ** 2, axis=2)).min(axis=1)
+        near, inside = [], []
+        for n in np.flatnonzero(d <= self.END_TOL_M).tolist():
+            q = keys[n]
+            if q == me.key:
+                continue
+            m = by[q]
+            row = (str(q[0]), m.kind, m.cls, float(m.level), float(d[n]), q)
+            (inside if q in netkeys else near).append(row)
+        out = dict(near=near, inside=inside, others=[], connector=None, feature_end=None, own_gap=None, own_next=None)
+        eid = self.earth_of(i)
+        # (its own road's other part whose end is nearer than OWN_GAP_M but not END_TOL_M: a gap in the road's own parts)
+        gaps = np.flatnonzero((d > self.END_TOL_M) & (d <= self.OWN_GAP_M)).tolist()
+        for n in sorted(gaps, key=lambda n: (float(d[n]), str(keys[n]))):
+            q = keys[n]
+            if q != me.key and str(q[0]) == eid:
+                out["own_gap"] = (str(q[0]), by[q].kind, by[q].cls, float(by[q].level), float(d[n]), q)
+                break
+        got = self._locate(eid)
+        if got is None:
+            return out
+        f, n = got
+        parts = f.parts(n)
+        ll = np.asarray(parts[0][0], np.float64)
+        e_, n_, _ = self.p.frame.geodetic_to_enu(ll[[0, -1], 1], ll[[0, -1], 0], 0.0)
+        fe = np.stack([np.asarray(e_, np.float64), np.asarray(n_, np.float64)], axis=1)
+        which = [int(k) for k in (0, 1) if float(np.sqrt(np.sum((fe[k] - P) ** 2))) <= self.END_TOL_M * 5]
+        if not which:
+            # (a part's end inside its map road: the road goes on as the range of another kind next to it, a tunnel the
+            # shapes do not take as a member (a tunnel network) or a part too short to be one)
+            import roads
+            xy = np.stack([np.asarray(self.p.frame.geodetic_to_enu(ll[:, 1], ll[:, 0], 0.0)[k], np.float64) for k in (0, 1)], axis=1)
+            sd = np.r_[0.0, np.cumsum(np.sqrt(np.sum(np.diff(xy, axis=0) ** 2, axis=1)))]
+            if sd[-1] > 0:
+                j = int(np.argmin(np.sqrt(np.sum((xy - P) ** 2, axis=1))))
+                t = float(sd[j] / sd[-1])
+                tol = 6.0 / float(sd[-1])
+                for a_, b_, kind in roads.level_ranges(f, n):
+                    if kind != {"deck": "bridge", "tunnel": "tunnel", "ground": "ground"}.get(me.kind, me.kind) and                             (abs(a_ - t) <= tol or abs(b_ - t) <= tol):
+                        out["own_next"] = (kind, float(a_), float(b_))
+                        break
+        if which:
+            out["feature_end"] = which[0]
+            con = f.rules.get("connectors")
+            cid = None
+            if con is not None:
+                for r in con.rows(n):
+                    at = float(con.start[r])
+                    if abs(at - which[0]) < 1e-6:
+                        cid = str(con.value[r])
+            out["connector"] = cid
+            seen = set()
+            for fid2, e2, f2, n2, k2 in self.connectors().get(cid, []):
+                if fid2 == eid or (fid2, e2) in seen:
+                    continue
+                seen.add((fid2, e2))
+                a = f2.attrs
+                col = lambda name: None if a.get(name) is None else str(a[name][n2]).strip() or None
+                _f, _ix, specs, bspecs = self._cell(k2)
+                md = self._feature(f2, n2, specs, bspecs)
+                out["others"].append((fid2, col("class"), col("osm_layer"), col("src_record"), fid2 in by, e2, md))
+        return out
+
+    def earth_of(self, i):
+        k = self.net.m[i].key
+        return str(k[0] if isinstance(k, tuple) else k)
 
     @staticmethod
     def _feature(f, n, specs, bspecs):
@@ -138,9 +273,9 @@ def capture(planner, home, solve=False, region_calc=None):
     def find(members, reader=None, trace=None):
         tr = {}
         net, systems = real_find(members, reader, tr)
-        held.update(net=net, systems=systems, trace=tr, meta=PlannerMeta(planner, net),
+        held.update(net=net, systems=systems, trace=tr, meta=PlannerMeta(planner, net, loaded),
                     namer=None, rels={})
-        held["namer"] = ia.Namer(net, frame_ll(planner.frame), held["meta"], at_edge)
+        held["namer"] = ia.Namer(net, frame_ll(planner.frame), held["meta"], at_edge, held["meta"].endinfo)
         per.clear()
         return net, systems
 
@@ -207,7 +342,32 @@ def truth_site(name):
             return np.asarray(z, np.float64) if np.ndim(s) else float(z[0])
         return fixed
     meta = {ln.id: dict(name=ln.objektart, layer=str(ln.level)) for ln in ws}
-    return ia.audit_members(mem, ground, make_fixed, frame_ll(rep.frame), meta) + (rep,)
+    mine = {id(ln) for ln in ws}
+    others = [ln for ln in site.lines if id(ln) not in mine]        # (the survey's paths and what is no way: not members)
+    by_id = {ln.id: ln for ln in ws}
+
+    def endinfo(i, e):
+        """What the survey has at a member's end: a path or a line that is no way ending (or running) there is a road the
+        shapes do not take; at the survey's own edge the road goes on outside it; else nothing."""
+        ln = by_id[net_of["net"].m[i].key]
+        p = ln.xyz[0 if e == 0 else -1]
+        near = []
+        for o in others:
+            d = np.sqrt(np.sum((o.xyz[:, :2] - p[:2]) ** 2, axis=1))
+            if float(d.min()) <= SURVEY_NODE_M:
+                near.append((str(o.id), o.objektart, str(o.level), None, False, 0, {}))
+        return dict(near=[], inside=[], others=near, connector=str(truth.node_of(p)), feature_end=e)
+    net_of = {}
+
+    class Capture(ia.Namer):
+        def __init__(self, *a, **k):
+            super().__init__(*a, **k)
+            net_of["net"] = self.net
+    half = float(site.half)
+    with mock.patch.object(ia, "Namer", Capture):
+        got = ia.audit_members(mem, ground, make_fixed, frame_ll(rep.frame), meta, endinfo,
+                               lambda xy: max(abs(float(xy[0])), abs(float(xy[1]))) >= half - SURVEY_EDGE_M)
+    return got + (rep,)
 
 
 def header(place, source, rep=None):

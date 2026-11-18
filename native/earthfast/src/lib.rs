@@ -6472,6 +6472,9 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 308: grade_points: a road's lanes and its rank's hold end at its wall's face (or fall), the ground steps there
     // between two roads at other levels (gradebins::pair0 / pair1: the lower road's lanes no longer reach past its
     // face over the other's carriageway)
-    m.add("VERSION", 308)?;
+    // 309: carriageway_profiles takes a spacing per sample (the distance to the next): a segment's grade bound and a
+    // window's curve bound are its own spacings', not the chain's one closest-two-samples step (a dip piece with two
+    // samples 0.3 m apart was held to 0.3 m of grade over its whole length)
+    m.add("VERSION", 309)?;
     Ok(())
 }

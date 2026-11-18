@@ -43,6 +43,7 @@ SPIKE_COS = -0.985          # a vertex turning back on itself (more than ~170 de
 DUP_NEAR_M = 0.5            # m: two lines this close along their length (and as long) are one line twice
 OVERSIZE_PIECES = 60        # a system's pieces (its decks and its dips): more is two interchanges or more (Zurich's largest has 17)
 FREE_GROUND_M = 10.0        # m of a road on the ground between two decks' ends with nothing over or under it: a ground node
+_MIN_SEGMENT_M = 0.5        # carriageways.MIN_SEGMENT_M (the audit does not import the kernel's wrapper)
 SHORT_STEP_RATIO = 0.5      # a piece's closest samples under this share of STEP_M make the kernel's grade law that much tighter
 EPS_M = 1e-7                # m: a relaxation must gain this much (float noise is no cycle)
 CONTRADICTION_M = 1e-6      # m: a cycle this short of closing is a contradiction
@@ -50,7 +51,8 @@ MAX_TESTS = 400             # most graphs searched in reducing one cycle (a coun
 TOP = 12                    # findings of one kind kept whole in a report
 
 Finding = namedtuple("Finding", "step code level text where refs")
-# level: "fail" (the step fails) or "note" (seen, not a failure); where: "lat,lon" or "x,y" in the frame; refs: [member info]
+# level: "fail" (the step fails: the pipeline's), "map" (the map's own defect, named and left as it is: no failure of the
+# step) or "note" (seen, not a failure); where: "lat,lon" or "x,y" in the frame; refs: [member info]
 
 
 def finding_dict(f):
@@ -62,10 +64,13 @@ class Namer:
     {Earth feature id: dict(osm=, name=, layer=, oneway=, dir=)} (what the map has of it; {} in a synthetic system),
     ll(x, y) -> (lat, lon) or None (the frame's x, y are named)."""
 
-    def __init__(self, net, ll=None, meta=None, edge=None):
+    def __init__(self, net, ll=None, meta=None, edge=None, endinfo=None):
         # edge(xy) -> whether the point is at the edge of the map data the net was made from (a road met there may go on
         # in a cell that was not read: an end there is no failure of the data)
+        # endinfo(member, end) -> what the map has at that end (tests/interchange_audit_run.PlannerMeta.endinfo), None: the
+        # map's own roads are not known (a synthetic system, a survey)
         self.net, self.ll, self.meta, self.edge = net, ll, meta or {}, edge
+        self.endinfo = endinfo
 
     def earth(self, i):
         k = self.net.m[i].key
@@ -155,6 +160,7 @@ def check_roles(net, sysm, namer, rels=None):
     roles = {}
     dangling = ramps = 0
     seeds = sysm["seeds"]
+    index = {m.key: n for n, m in enumerate(net.m)}
     for i in seeds:
         m = net.m[i]
         role = _role(m)
@@ -175,6 +181,16 @@ def check_roles(net, sysm, namer, rels=None):
                                                                                                          where), where,
                                      [namer.info(i)]))
                 continue
+            facts = namer.endinfo(i, e) if namer.endinfo is not None else None
+            if facts is not None and sep:      # (the member it was taken for a separation from is no road that joins it)
+                facts = dict(facts, inside=[r_ for r_ in facts["inside"] if r_[5] not in {net.m[j].key for j, _sj in sep}])
+            if facts is not None:
+                got = _end_by_map(net, namer, i, e, end_name, where, facts, index, sep)
+                if got is not None:
+                    finds.append(got)
+                    if got.level == "fail":
+                        dangling += 1
+                    continue
             dangling += 1
             if sep:
                 j, sj = sep[0]
@@ -237,7 +253,9 @@ def check_roles(net, sysm, namer, rels=None):
                     if text in seen_text:       # (one joint met from each of its roads' ends)
                         continue
                     seen_text.add(text)
-                    finds.append(Finding(1, "oneway_conflict", "fail", text, where, [namer.info(o) for o, _eo, _f in flows]))
+                    refs = [namer.info(o) for o, _eo, _f in flows]
+                    got = _oneway_by_map(namer, m_, en, leaves, text, where, refs) if namer.endinfo is not None else None
+                    finds.append(got or Finding(1, "oneway_conflict", "fail", text, where, refs))
     portals = []
     for i, si, j, sj in sysm["ends"]:
         portals.append(dict(seed=namer.info(i), road=namer.info(j), where=namer.at(i, si)))
@@ -246,6 +264,82 @@ def check_roles(net, sysm, namer, rels=None):
                              namer.at(seeds[0], 0.0), [namer.info(seeds[0])]))
     stats = dict(roles=roles, ramps=ramps, portals=len(portals), dangling_ends=dangling, oneway_joints=oneway_known)
     return _step(1, finds, stats, portals=portals)
+
+
+def _other_text(o):
+    fid, cls, layer, osm = o[:4]
+    return "%s%s %s%s" % (fid, " (OSM %s)" % osm if osm else "", cls or "road", " layer %s" % layer if layer else "")
+
+
+def _end_by_map(net, namer, i, e, end_name, where, facts, index, sep=()):
+    """A Finding for a loose end (a member's end with no joint) from what the map has there, or None: not decided, the
+    plain dangling_end stands. The map's own roads decide what the end really is:
+    end_beyond_region (note): the road goes on in the map cells read, outside the box the region was planned in: no loose end;
+    end_at_tunnel_network (note): it meets a long tunnel, a tunnel network of its own (tunnels.py), not a member;
+    end_at_non_member (note): the map has roads at that end the shapes do not take as roads (no member made of them);
+    end_unconnected (map: not the pipeline's): the map has no other road at that end node;
+    end_not_joined (fail, the pipeline's): a road of the net ends there and no joint was made."""
+    lab = namer.label(i)
+    ref = [namer.info(i)]
+    if facts["inside"]:
+        row = min(facts["inside"], key=lambda r: (r[4], str(r[5])))
+        j = index.get(row[5])
+        tunnel = j is not None and gs._tunnel_network(net, j)
+        text = "%s: its %s at %s meets %s, %.1f m from it" % (lab, end_name, where, namer.label(j) if j is not None else row[0], row[4])
+        if tunnel:
+            return Finding(1, "end_at_tunnel_network", "note", text + " (a tunnel longer than %.0f m: a tunnel network of its own, "
+                           "not a joint of this system)" % gs.TUNNEL_MAX_M, where, ref + [namer.info(j)])
+        return Finding(1, "end_not_joined", "fail", text + ": in the net, within the joint distance, and no joint was made "
+                       "(gradeshapes._relations / _end_meets)", where, ref + ([namer.info(j)] if j is not None else []))
+    if facts["near"]:
+        row = min(facts["near"], key=lambda r: (r[4], str(r[5])))
+        return Finding(1, "end_beyond_region", "note",
+                       "%s: its %s at %s meets %s %s %s level %g, %.1f m from it, a member of the map cells read that lies outside "
+                       "the box the region was planned in (the system is cut there)"
+                       % (lab, end_name, where, row[0], row[2], row[1], row[3], row[4]), where, ref)
+    if facts.get("own_next") and not facts.get("own_gap"):
+        kind = facts["own_next"][0]
+        return Finding(1, "end_at_tunnel_network" if kind == "tunnel" else "end_at_non_member", "note",
+                       "%s: its %s at %s is where its own map road goes on as a %s part (range %.3f-%.3f of the road), which is "
+                       "no member of the net (%s)" % (lab, end_name, where, kind, facts["own_next"][1], facts["own_next"][2],
+                                                      "a tunnel network of its own: tunnels.py" if kind == "tunnel" else
+                                                      "no member made of it"), where, ref)
+    if facts.get("own_gap"):
+        row = facts["own_gap"]
+        return Finding(1, "gap_to_own_part", "fail",
+                       "%s: its %s at %s is %.1f m short of the next part of its own road (%s %s level %g): the road's parts do "
+                       "not meet (the pieces join ends within %.1f m only)" % (lab, end_name, where, row[4], row[1], row[2], row[3],
+                                                                          gs.JOIN_M), where, ref)
+    if facts["feature_end"] is not None and facts["others"]:
+        return Finding(1, "end_at_non_member", "note",
+                       "%s: its %s at %s is the end of its map road, which goes on as %s, not a member of the shapes' net (a "
+                       "tunnel without a road spec, a path)" % (lab, end_name, where, "; ".join(_other_text(o) for o in facts["others"][:4])),
+                       where, ref)
+    if facts["feature_end"] is not None and facts["connector"] is not None:
+        over = (", over or under %s (at another level, no node of both)" % namer.label(sep[0][0])) if sep else ""
+        return Finding(1, "end_unconnected", "map",
+                       "%s: its %s at %s is the end of its map road and the map has no other road at that node (connector %s)%s"
+                       % (lab, end_name, where, facts["connector"], over), where, ref + [namer.info(j) for j, _s in sep[:1]])
+    return None
+
+
+def _oneway_by_map(namer, i, e, leaves, text, where, refs):
+    """A Finding for a one-way disagreement at a joint from the map's own roads at its node, or None (not decided):
+    oneway_fed_outside (note): a road of the map at that node does feed it (or take it on), one the joint's members left out
+    (not in the net, outside the region): the check's own gap; oneway_map (map): no road of the map at that node does, the
+    ways' directions disagree there (named, left as they are)."""
+    facts = namer.endinfo(i, e)
+    if facts["feature_end"] is None or facts["connector"] is None:
+        return None
+    feeders = [o for o in facts["others"] if (_flow(o[6], o[5])[0] if leaves else _flow(o[6], o[5])[1])]
+    if feeders:
+        return Finding(1, "oneway_fed_outside", "note",
+                       text + "; the map's road %s at that node does %s it (a road the joint's members leave out)"
+                       % (_other_text(feeders[0]), "take on" if leaves else "feed"), where, refs)
+    return Finding(1, "oneway_map", "map",
+                   text + "; no road of the map at that node (connector %s: %s) %s it: the ways' one-way directions disagree there"
+                   % (facts["connector"], "; ".join(_other_text(o) for o in facts["others"][:4]) or "no other road",
+                      "takes on" if leaves else "feeds"), where, refs)
 
 
 def _step(n, finds, stats, **more):
@@ -376,9 +470,21 @@ def check_pieces(net, sysm, pcs, smp, namer, rels=None):
             whole = min(ina, inb) >= 0.9 and abs(net.L[a] - net.L[b]) <= 0.1 * max(net.L[a], net.L[b])
             if whole or (same and over >= 2 * gs.STEP_M):
                 dups += 1
+                ea_, eb_ = namer.earth(a), namer.earth(b)
+                if ea_ != eb_ and same and ("~lanes" in ea_ or "~lanes" in eb_):
+                    cause = ("; cause: the road and its own lane section over the same line, the road made twice "
+                             "(lanesections' '~lanes' member beside the road it was cut from)")
+                elif ea_ == eb_:
+                    cause = ("; cause: two copies of one map road from different map cells, keys %s and %s (the copies' "
+                             "geometry differs, %d and %d points, so the keys do) both kept in the net"
+                             % (net.m[a].key[1:] if isinstance(net.m[a].key, tuple) else net.m[a].key,
+                                net.m[b].key[1:] if isinstance(net.m[b].key, tuple) else net.m[b].key,
+                                len(net.lines[a]), len(net.lines[b])))
+                else:
+                    cause = ""
                 finds.append(Finding(2, "duplicate" if whole else "overlap", "fail",
                                      ("the same line twice" if whole else "one road's parts over one another for %.0f m" % over)
-                                     + ": %s and %s" % (namer.label(a), namer.label(b)),
+                                     + ": %s and %s" % (namer.label(a), namer.label(b)) + cause,
                                      namer.at(a, net.L[a] / 2), [namer.info(a), namer.info(b)]))
     # one road over itself, within the run its clearance takes (a split road: its own parts, not a loop)
     along = None
@@ -426,12 +532,14 @@ def check_pieces(net, sysm, pcs, smp, namer, rels=None):
             short += 1
             k = int(np.flatnonzero(dd == lo)[0])
             mem = int(x["mem"][k + 1])
-            finds.append(Finding(2, "short_step", "fail",
+            held = ("the kernel holds each segment to its own spacing (SEGMENT_STEP_ON)" if gs.SEGMENT_STEP_ON else
+                    "the kernel holds the whole piece to grade x %.2f m, a grade of %.1f%% of the law (the curve limit "
+                    "%.0f%% of its)" % (lo, 100.0 * lo / med, 100.0 * (lo / med) * (lo / med)))
+            finds.append(Finding(2, "short_step", "note" if gs.SEGMENT_STEP_ON else "fail",
                                  "%s piece of %s (%d samples, %.0f m): its closest two samples are %.2f m apart (median step "
-                                 "%.2f m) at %s on %s; the kernel holds the whole piece to grade x %.2f m, a grade of %.1f%% "
-                                 "of the law (the curve limit %.0f%% of its)"
+                                 "%.2f m) at %s on %s; %s"
                                  % (pc["kind"], namer.label(pc["main"]), len(d), float(d[-1]), lo, med, namer.point(x["xy"][k]),
-                                    namer.label(mem), lo, 100.0 * lo / med, 100.0 * (lo / med) * (lo / med)),
+                                    namer.label(mem), held),
                                  namer.point(x["xy"][k]), [namer.info(pc["main"]), namer.info(mem)]))
         if float(pos.max()) > gs.STEP_M + gs.JOIN_M:
             jumps += 1
@@ -625,6 +733,9 @@ class Constraints:
         if self.spacing == "true":
             d = self.smp[c]["d"]
             return ch["grade"] * abs(float(d[k2]) - float(d[k1]))
+        if ch.get("ds") is not None:            # (the kernel's own: each segment's spacing, at least MIN_SEGMENT_M)
+            lo, hi = min(k1, k2), max(k1, k2)
+            return ch["grade"] * float(np.sum(np.maximum(np.asarray(ch["ds"], np.float64)[lo:hi], _MIN_SEGMENT_M)))
         return ch["grade"] * float(ch["step"]) * abs(k2 - k1)
 
     def node(self, c, k):
@@ -701,7 +812,8 @@ class Constraints:
         return ("along the %s piece of %s, %.0f m from %s to %s: at most %.2f m higher at the end (grade law %.1f%%, %s)"
                 % (self.pcs[c]["kind"], namer.label(self.pcs[c]["main"]), run, namer.at(m1, x["ms"][k1]),
                    namer.at(m2, x["ms"][k2]), w, 100.0 * g,
-                   "%.2f m a step" % self.chains[c]["step"] if self.spacing == "kernel" else "each step's own run"),
+                   "%.2f m a step" % self.chains[c]["step"] if self.spacing == "kernel" and self.chains[c].get("ds") is None
+                   else "each step's own run"),
                 [namer.info(m1)] + ([namer.info(m2)] if m2 != m1 else []))
 
     def _leg(self, kind, ref, w, u, v, namer):
@@ -1120,7 +1232,7 @@ def audit_region(net, systems, trace, namer, per_system):
     return out
 
 
-def audit_members(members, ground=None, make_fixed=None, ll=None, meta=None):
+def audit_members(members, ground=None, make_fixed=None, ll=None, meta=None, endinfo=None, edge=None):
     """The whole audit of a set of gradeshapes members on flat ground (or ground(xy) -> z): find_systems, its pieces and
     samples, the four steps. make_fixed(net) -> fixed(i, s) (the height of what the shapes do not move: a road at its ground,
     by default). Returns (net, systems, audits, namer)."""
@@ -1138,7 +1250,7 @@ def audit_members(members, ground=None, make_fixed=None, ll=None, meta=None):
         return f
     trace = {}
     net, systems = gs.find_systems(members, lambda n_: (ground, fixed_of(n_)), trace)
-    namer = Namer(net, ll, meta)
+    namer = Namer(net, ll, meta, edge, endinfo)
     rels = {}
     per = {}
     fixed = fixed_of(net)
@@ -1173,6 +1285,21 @@ def summary(audits):
 
 
 STEP_NAMES = {1: "in / out", 2: "pieces", 3: "levels", 4: "where the level resets"}
+# the triage of what a step finds: (a) the instrument was wrong (what the audit once failed and now sees for what it is:
+# a note), (b) the pipeline is wrong (a failure), (c) the map is wrong (a map defect: named, left as it is)
+INSTRUMENT_NOTES = ("end_beyond_region", "end_at_tunnel_network", "end_at_non_member", "oneway_fed_outside", "end_at_data_edge")
+
+
+def triage(audits):
+    """{(class "a" | "b" | "c", step, code): [(system, Finding)]}."""
+    out = {}
+    for a in audits:
+        for step, s in a["steps"].items():
+            for f in s["findings"]:
+                c = "b" if f.level == "fail" else "c" if f.level == "map" else "a" if f.code in INSTRUMENT_NOTES else None
+                if c:
+                    out.setdefault((c, step, f.code), []).append((a["index"], f))
+    return out
 
 
 def render(place, audits, header=()):
@@ -1184,6 +1311,14 @@ def render(place, audits, header=()):
     for step in (1, 2, 3, 4):
         lines.append("| %d %s | %d | %d | %d |" % ((step, STEP_NAMES[step]) + sm[step]))
     lines.append("")
+    tri = triage(audits)
+    if tri:
+        names = {"a": "(a) the instrument's (once a false failure, now seen for what it is)", "b": "(b) the pipeline's",
+                 "c": "(c) the map's"}
+        lines += ["| class | step | finding | count |", "|---|---|---|---|"]
+        for (c, step, code), items in sorted(tri.items(), key=lambda t: (t[0][0], t[0][1], -len(t[1]), t[0][2])):
+            lines.append("| %s | %d | %s | %d |" % (names[c], step, code, len(items)))
+        lines.append("")
     first = next((s for s in (1, 2, 3, 4) if sm[s][1]), None)
     lines.append("First step to fail: %s." % ("none" if first is None else "step %d (%s), in %d of %d systems"
                                                 % (first, STEP_NAMES[first], sm[first][1], len(audits))))
@@ -1200,11 +1335,19 @@ def render(place, audits, header=()):
             if len(items) > TOP:
                 lines.append("- ... and %d more" % (len(items) - TOP))
             lines.append("")
-        notes = {}
+        notes, maps = {}, {}
         for a in audits:
             for f in (a["steps"].get(step) or {}).get("findings", ()):
                 if f.level == "note":
                     notes.setdefault(f.code, []).append((a["index"], f))
+                elif f.level == "map":
+                    maps.setdefault(f.code, []).append((a["index"], f))
+        for code, items in sorted(maps.items(), key=lambda t: (-len(t[1]), t[0])):
+            lines += ["### Map defect, %s: %d (the map's own, not the pipeline's: named, left as it is)" % (code, len(items)), ""]
+            lines += ["- system %d: %s" % (idx, f.text) for idx, f in items[:TOP]]
+            if len(items) > TOP:
+                lines.append("- ... and %d more" % (len(items) - TOP))
+            lines.append("")
         for code, items in sorted(notes.items()):
             lines += ["Note, %s: %d (not a failure)." % (code, len(items))] +                      ["- system %d: %s" % (idx, f.text) for idx, f in items[:3]] + [""]
         if step == 3:
