@@ -13,6 +13,22 @@ REL_TOL = 0.05          # of a value already over its limit, when more than the 
                         # becoming 22.1 g is a road already broken shifting a little, not a new defect
 UPDATE = "python server/tests/drivability.py --update {}"
 
+# The baseline was 20 merged PRs behind the code at 2026-11-18 (402b4d85d, PR 19, was its last). Re-measured on the head and bisected
+# per site, the sites that were worse were not all new defects (a site's score, 402b4d85d's baseline -> the head's):
+#   a20_921 10.7 -> 18.3: the measurement. The native gradebins' under_deck rule (53edbea74) grades the ground past an abutment's
+#       end under the deck at the abutment's slope; the harness walks that ground as a road under its own deck, 13 m of it.
+#   perth_915 44.9 -> 63.0: PR 19 (find-ground: a rail bridge's clearance over a motorway's deck raises the deck by 1+ m,
+#       its approaches ramp 4 m: a 1.04 m step at the bridge's start). A defect, not fixed (the baseline holds it).
+#   casagranda_portal 35.0 -> 55.3, casagranda_bridge 37.4 -> 51.1: PR 34 (tunnel mouths: a tunnel's portal where a bridge
+#       goes on reads the ground line outward from the mouth, the gorge's floor 14 m under the deck: the tunnels and the
+#       bridge between them lowered 15 m, 31 % grade into the portal). A defect, not fixed (the baseline holds it).
+#   riva_pontera_tunnel 20.6 -> 24.2 (the centre line of d4d83607 rises 1.8 m), boston_storrow_massave 26.1 -> 31.3,
+#       boston_bowker 81.6 -> 84.3, paris_maillot_ax 120.0 -> 124.5, tamar_bridge 20.7 -> 21.4: PR 33 (retaining walls: the wall
+#       line between two roads at other levels, which the harness reads as a step across it). The Riva one is a probable
+#       defect; not fixed (the baseline holds them).
+#   vienna_mooslacken 8.0 -> 11.2 (steps 75 -> 34): PR 39 (rail grade 5 %, the rail beds' ramps), fewer longer steps.
+# Fix the defect, then lock the improvement in with UPDATE.
+
 
 def compare(result, base):
     """([worse], [better]) of a measurement against its baseline entry, each a line for whoever reads the failure."""
