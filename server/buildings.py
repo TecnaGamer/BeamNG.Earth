@@ -1973,57 +1973,15 @@ QLD_BRICK_WIN_M = 1.2           # m: a window of the sheet's bay (its 2.4 m)
 QLD_BRICK_SCALES = (1.0, 0.96, 1.04, 0.92, 1.08, 0.88, 1.12)    # wall metres per sheet metre tried, in order of preference
 
 
-def _qld_brick_fit(L, bay):
-    """(scale, o) for a wall of length L m: the sheet is laid at `scale` wall metres per sheet metre with a window's middle o m
-    along the wall (the next ones every bay * scale): the first scale (QLD_BRICK_SCALES) at which no window is cut by a
-    corner or stands closer than QLD_BRICK_MARGIN_M to one, the pattern placed as evenly as it can be."""
-    best = None
-    for sc in QLD_BRICK_SCALES:
-        step, hw = bay * sc, QLD_BRICK_WIN_M * sc / 2
-        o = np.arange(0.0, step, 0.05)
-        x = o[:, None] + step * np.arange(-1, int(L // step) + 3)[None, :]           # the window middles, one row per offset
-        gone = (x + hw <= 0.0) | (x - hw >= L)                                      # wholly off the wall
-        cut = ((x + hw > 0.0) & (x - hw < QLD_BRICK_MARGIN_M)) | ((x + hw > L - QLD_BRICK_MARGIN_M) & (x - hw < L))
-        bad = (cut & ~gone).sum(1) + 0.5 * ((~gone).sum(1) == 0) * (L >= 2.2)       # (a wall of 2.2 m and more has a window)
-        inside = ~gone
-        first = np.where(inside, x - hw, np.inf).min(1)
-        last = np.where(inside, L - (x + hw), np.inf).min(1)
-        lop = np.where(np.isfinite(first), np.abs(first - last), 0.0)                # how lopsided its margins are
-        k = int(np.lexsort((lop, bad))[0])
-        if best is None or bad[k] < best[0]:
-            best = (float(bad[k]), sc, float(o[k]))
-        if bad[k] == 0:
-            break
-    return best[1], best[2]
-
-
 def _qld_brick_scale(spec, ring, P, UV, mid):
-    """Rewrite the u of the window sheet's wall quads in place (P, UV: the kernel's flat lists, 12 and 8 numbers per quad)."""
-    bay = TILE_PX_M / spec.band[1]
-    pts = np.asarray(ring, np.float64)[:, :2]
-    E = np.roll(pts, -1, 0) - pts
-    EL = dnp.hypot(E[:, 0], E[:, 1])
+    """Rewrite the u of the window sheet's wall quads in place (P, UV, mid: building_walls_np's arrays, 12 and 8 numbers
+    and a material per quad): each wall's sheet laid at the first scale (QLD_BRICK_SCALES) at which no window is cut by
+    a corner or stands closer than QLD_BRICK_MARGIN_M to one, the pattern placed as evenly as it can be (Rust:
+    earthfast.qld_brick_uv)."""
+    fast.require(406, "qld_brick_uv")
     skip = spec.door[0] if spec.door and spec.roof == "flat" else -1       # (the kernel's door strip splits that wall)
-    fits = {}
-    for q, k in enumerate(mid):
-        if k != 0 or UV[8 * q + 2] - UV[8 * q] < 0.1:   # (not the facade sheet's; a plain strip is 0.06 wide, a sliver wall less)
-            continue
-        x, y, x1, y1 = P[12 * q], P[12 * q + 1], P[12 * q + 3], P[12 * q + 4]
-        off = 0.0
-        for px, py in ((x, y), (x1, y1)):           # the wall both ends of the quad lie on (a corner is on two)
-            w = pts + E * np.clip(((px - pts[:, 0]) * E[:, 0] + (py - pts[:, 1]) * E[:, 1]) / np.maximum(EL * EL, 1e-12), 0.0, 1.0)[:, None]
-            off = off + dnp.hypot(w[:, 0] - px, w[:, 1] - py)
-        i = int(np.argmin(off))
-        if i == skip or EL[i] < 0.05:
-            continue
-        L = float(EL[i])
-        if i not in fits:
-            fits[i] = _qld_brick_fit(L, bay)
-        sc, o = fits[i]
-        a = float((x - pts[i, 0]) * E[i, 0] + (y - pts[i, 1]) * E[i, 1]) / L            # along the wall: the quad's start, its end
-        b = float((x1 - pts[i, 0]) * E[i, 0] + (y1 - pts[i, 1]) * E[i, 1]) / L
-        ua, ub = (a - o) / (TILE_PX_M * sc) + 0.5 / spec.band[1], (b - o) / (TILE_PX_M * sc) + 0.5 / spec.band[1]
-        UV[8 * q], UV[8 * q + 2], UV[8 * q + 4], UV[8 * q + 6] = ua, ub, ub, ua
+    fast._ef.qld_brick_uv(np.ascontiguousarray(np.asarray(ring, np.float64)[:, :2]), P, UV, mid, float(spec.band[1]),
+                          TILE_PX_M, int(skip), list(QLD_BRICK_SCALES), QLD_BRICK_WIN_M, QLD_BRICK_MARGIN_M)
 
 
 def _cornice(m, spec, ring, z_eave, mat_idx):
@@ -3029,17 +2987,25 @@ def _eaves(spec):
     return q["eave"], (QLD_RAKE_M if spec.roof == "gabled" else q["eave"])
 
 
+def _facing(u, v, hint):
+    """cross(u, v) . hint for 3-vectors, as np.cross then dnp.dot compute it (the same products, summed in its order),
+    on Python floats: the eaves' and solar panels' thousands of quads paid two numpy calls each (20 us) for a sign."""
+    (u0, u1, u2), (v0, v1, v2) = u, v
+    h0, h1, h2 = (float(x) for x in hint)
+    return ((u1 * v2 - u2 * v1) * h0 + (u2 * v0 - u0 * v2) * h1) + (u0 * v1 - u1 * v0) * h2
+
+
 def _oquad(m, pts, hint, uvs, mat):
     """A quad facing the 3-vector hint (the corners reversed if they wind the other way)."""
-    p = [np.asarray(x, np.float64) for x in pts]
-    if float(dnp.dot(np.cross(p[2] - p[0], p[3] - p[1]), hint)) < 0:
+    p = [[float(c) for c in x] for x in pts]
+    if _facing([p[2][k] - p[0][k] for k in range(3)], [p[3][k] - p[1][k] for k in range(3)], hint) < 0:
         pts, uvs = pts[::-1], uvs[::-1]
     m.quad(*pts, *uvs, mat)
 
 
 def _otri(m, pts, hint, uvs, mat):
-    p = [np.asarray(x, np.float64) for x in pts]
-    if float(dnp.dot(np.cross(p[1] - p[0], p[2] - p[0]), hint)) < 0:
+    p = [[float(c) for c in x] for x in pts]
+    if _facing([p[1][k] - p[0][k] for k in range(3)], [p[2][k] - p[0][k] for k in range(3)], hint) < 0:
         pts, uvs = pts[::-1], uvs[::-1]
     m.tri(*pts, *uvs, mat)
 
@@ -3081,10 +3047,14 @@ class _Roofline:
         self.ze = z_eave - self.ex * self.tn
         self.zr = self.ze + self.hw2 * self.tn
         self.gabled = spec.roof == "gabled"
+        self._cuv = tuple(float(x) for x in (*self.c[:2], *self.u[:2], *self.v[:2]))
 
     def at(self, s, t, z):
-        p = self.c + self.u * s + self.v * t
-        return (float(p[0]), float(p[1]), float(z))
+        """c + u s + v t at height z, as numpy's (c + u * s) + v * t per axis, on Python floats (the eaves' and
+        panels' thousands of corners)."""
+        c0, c1, u0, u1, v0, v1 = self._cuv
+        s, t = float(s), float(t)
+        return (c0 + u0 * s + v0 * t, c1 + u1 * s + v1 * t, float(z))
 
 
 def _qld_trim(spec):
@@ -6905,29 +6875,11 @@ DRIVEWAY_W = 3.2            # m
 DRIVEWAY = {"m": "road_asphalt_2lane", "tl": 11.0, "p": 19}     # a road tile chunk's look (roads.LOOK)
 
 
-def _seg_cross(p, q, r, s):
-    """Do the segments pq and rs cross?"""
-    d1, d2 = q - p, s - r
-    den = d1[0] * d2[1] - d1[1] * d2[0]
-    if abs(den) < 1e-12:
-        return False
-    w = r - p
-    t = (w[0] * d2[1] - w[1] * d2[0]) / den
-    u = (w[0] * d1[1] - w[1] * d1[0]) / den
-    return 0.0 <= t <= 1.0 and 0.0 <= u <= 1.0
-
-
 def _rect_hits(R, ring):
-    """Does the convex counter-clockwise quad R touch the polygon ring (overlap, contain, or be inside)?"""
-    ring = np.asarray(ring, np.float64)
-    for p in ring:
-        if all((R[(i + 1) % 4][0] - R[i][0]) * (p[1] - R[i][1]) - (R[(i + 1) % 4][1] - R[i][1]) * (p[0] - R[i][0]) >= 0
-               for i in range(4)):
-            return True
-    if any(_inside(ring, p) for p in R):
-        return True
-    n = len(ring)
-    return any(_seg_cross(R[i], R[(i + 1) % 4], ring[j], ring[(j + 1) % n]) for i in range(4) for j in range(n))
+    """Does the convex counter-clockwise quad R touch the polygon ring (overlap, contain, or be inside)? (Rust:
+    earthfast.rect_hits.)"""
+    fast.require(404, "rect_hits")
+    return fast._ef.rect_hits(np.asarray(R, np.float64), np.asarray(ring, np.float64))
 
 
 def _qld_carport_site(spec, a, d, Le, out, f, edge, off, others, cents, segs):
@@ -7341,29 +7293,33 @@ def _au_side_fences(spec, ring, a, d, Le, out, z, others, cents, roads):
     back_dir = -out
     lines = [(a + d * s0, back_dir, depth), (a + d * s1, back_dir, depth),         # (the two sides, from the front back)
              (a + d * s0 + back_dir * depth, d, s1 - s0)]                           # (the rear)
-    rows = []
+    # the pieces of the three lines (their centres as the per-piece numpy did: start + dr * (step * (j + 0.5))), and which
+    # stand clear of the buildings and roads (Rust: earthfast.au_fence_keep); the rows of those kept
+    pieces = []
     for k, (start, dr, length) in enumerate(lines):
         n = max(1, int(round(length / FENCE_SEG_M)))
         step = length / n
-        yaw = round(math.degrees(dmath.atan2(dr[1], dr[0])) % 360.0, 1)
-        nr = np.array([-dr[1], dr[0]])
-        for j in range(n):
-            p = start + dr * (step * (j + 0.5))
-            half_l = max(step, FENCE_SEG_M) / 2
-            R = np.array([p - dr * half_l - nr * 0.15, p + dr * half_l - nr * 0.15,
-                          p + dr * half_l + nr * 0.15, p - dr * half_l + nr * 0.15])
-            near = np.flatnonzero(dnp.hypot(*(cents - p).T) < 40.0)
-            if any(_rect_hits(R, others[i][1]) for i in near):
-                continue
-            if len(roads[0]):
-                ends = np.array([p - dr * half_l, p, p + dr * half_l])
-                fast.require(0, "points_near_segments")
-                if np.asarray(fast._ef.points_near_segments(ends, np.ascontiguousarray(roads[0], np.float64),
-                                                            np.ascontiguousarray(roads[1], np.float64),
-                                                            np.asarray(roads[2], np.float64) + FENCE_CLEAR_M)).any():
-                    continue
-            rows.append([group, round(float(p[0]), 2), round(float(p[1]), 2), round(float(z), 2), yaw, 1.0, AU_FENCE_H,
-                         round(_hash01(spec.seed, "au fr", k, j), 3)])
+        P = start[None, :] + dr[None, :] * (step * (np.arange(n) + 0.5))[:, None]
+        pieces.append((k, P, dr, max(step, FENCE_SEG_M) / 2, round(math.degrees(dmath.atan2(dr[1], dr[0])) % 360.0, 1)))
+    reach = max(float(length) for _, _, length in lines) + 2 * FENCE_SEG_M + 40.0
+    near = np.flatnonzero(dnp.hypot(*(cents - (a + d * ((s0 + s1) / 2))).T) < reach + (s1 - s0) + depth)
+    fast.require(408, "au_fence_keep")
+    keep = fast._ef.au_fence_keep(np.ascontiguousarray(np.vstack([P for _, P, _, _, _ in pieces]), np.float64),
+                                  np.ascontiguousarray(np.vstack([np.repeat(dr[None, :], len(P), 0)
+                                                                  for _, P, dr, _, _ in pieces]), np.float64),
+                                  np.concatenate([np.full(len(P), h) for _, P, _, h, _ in pieces]),
+                                  [np.ascontiguousarray(others[i][1], np.float64)[:, :2] for i in near],
+                                  np.ascontiguousarray(np.asarray(cents, np.float64)[near][:, :2]),
+                                  np.ascontiguousarray(np.asarray(roads[0], np.float64).reshape(-1, 2)),
+                                  np.ascontiguousarray(np.asarray(roads[1], np.float64).reshape(-1, 2)),
+                                  np.ascontiguousarray(np.asarray(roads[2], np.float64).reshape(-1) + FENCE_CLEAR_M))
+    rows, q = [], 0
+    for k, P, _dr, _h, yaw in pieces:
+        for j in range(len(P)):
+            if keep[q + j]:
+                rows.append([group, round(float(P[j, 0]), 2), round(float(P[j, 1]), 2), round(float(z), 2), yaw, 1.0,
+                             AU_FENCE_H, round(_hash01(spec.seed, "au fr", k, j), 3)])
+        q += len(P)
     return rows
 
 

@@ -15,6 +15,7 @@ import numpy as np
 import dmath
 import dnp
 
+import fast
 import guardrails
 import medians
 import motesfri
@@ -121,14 +122,13 @@ def tile_rows(frame, near_roads, box, elev, country, mapped=()):
                   if f2 != fid and s2.cls != spec.cls and s2.cls in motesfri.OPEN_CLASSES and len(p2) >= 2]
         others += [(p2[:, :2], s2.width / 2 + PAVEMENT_M) for f2, s2, p2, *_ in near_roads      # the other carriageway
                    if f2 != fid and s2.cls == spec.cls and len(p2) >= 2]
+        fast.require(407, "lines_clear")
+        lines, reaches = [np.asarray(line, np.float64) for line, _ in others], [float(r) for _, r in others]
         p, t = (au_stations if au else stations)(np.asarray(pts, np.float64)[:, :2])
         for side in (1.0, -1.0):        # (+1 left of the geometry)
             q = p + np.c_[-t[:, 1], t[:, 0]] * side * (spec.width / 2 + (AU_OUT_M if au else OUT_M))
             ok = (q[:, 0] >= x0) & (q[:, 0] < x1) & (q[:, 1] >= y0) & (q[:, 1] < y1)
-            for line, reach in others:
-                ok &= motesfri._distance(q, line) > reach
-            for a, b in zip(rails[:, :2], rails[:, 2:]) if len(rails) else ():
-                ok &= motesfri._distance(q, np.stack([a, b])) > CLEAR_M
+            ok &= fast._ef.lines_clear(q, lines, reaches, rails, CLEAR_M)     # (motesfri._distance(q, line) > reach)
             # the traffic it faces: on its right (the other way on a road's left) or a one-way road's
             sign = (-1.0 if int(spec.dir) < 0 else 1.0) if spec.oneway else -side
             group = GROUP

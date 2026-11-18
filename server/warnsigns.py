@@ -20,6 +20,7 @@ import numpy as np
 import dmath
 import dnp
 
+import fast
 import guardrails
 import medians
 import motesfri
@@ -169,14 +170,13 @@ def tile_rows(frame, near_roads, box, elev, country, mapped=()):
             continue
         others = [(p2[:, :2], s2.width / 2 + JUNCTION_CLEAR_M) for f2, s2, p2, *_ in near_roads
                   if f2 != fid and len(p2) >= 2]
+        fast.require(407, "lines_clear")
+        lines, reaches = [np.asarray(line, np.float64) for line, _ in others], [float(r) for _, r in others]
         for group, p, t in signs(spec, np.asarray(pts, np.float64)):
             q = (p + np.array([-t[1], t[0]]) * (spec.width / 2 + OUT_M))[None, :]     # (the driver's left)
             if not (x0 <= q[0, 0] < x1 and y0 <= q[0, 1] < y1):
                 continue
-            if any(motesfri._distance(q, line)[0] <= reach for line, reach in others):
-                continue
-            if len(rails) and any(motesfri._distance(q, np.stack([a, b]))[0] <= RAIL_CLEAR_M
-                                  for a, b in zip(rails[:, :2], rails[:, 2:])):
+            if not fast._ef.lines_clear(q, lines, reaches, rails, RAIL_CLEAR_M)[0]:   # (each motesfri._distance > reach)
                 continue
             la, lo, _ = frame.enu_to_geodetic(q[:, 0], q[:, 1], np.zeros(1))
             z = float(np.asarray(frame.geodetic_to_enu(la, lo, np.asarray(elev(la, lo), np.float64))[2]).ravel()[0])

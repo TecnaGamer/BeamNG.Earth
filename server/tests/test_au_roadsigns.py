@@ -8,6 +8,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import auroadsigns  # noqa: E402
+import motesfri  # noqa: E402
 import guardrails  # noqa: E402
 import roads  # noqa: E402
 import tboards  # noqa: E402
@@ -105,7 +106,7 @@ class ChevronTest(unittest.TestCase):
         got = rows(near)
         self.assertLess(len(got), len(base))
         pos = np.c_[got[:, 1], got[:, 2]]
-        self.assertTrue((auroadsigns.motesfri._distance(pos, side[2][:, :2]) > auroadsigns.CAM_JUNCTION_M).all())
+        self.assertTrue((motesfri._distance(pos, side[2][:, :2]) > auroadsigns.CAM_JUNCTION_M).all())
 
     def test_the_tile_that_owns_the_point_keeps_it(self):
         whole = rows(self.curve())

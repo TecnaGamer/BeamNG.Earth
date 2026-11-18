@@ -20,7 +20,7 @@ leaves traffic only the other way, nor where another sealed road shares the junc
 import numpy as np
 import dnp
 
-import motesfri
+import fast
 import tboards
 import warnsigns
 
@@ -76,16 +76,24 @@ def _point_at(xy, cum, d):
     return xy[k] + t * (d - cum[k]), t
 
 
+_NO_SEGS = np.zeros((0, 4))
+
+
 def _near(points, lines, reach):
     """Whether any of points (n, 2) is within reach (m) of any line (xy, extra) of lines: reach + extra."""
     lo, hi = points.min(0), points.max(0)
+    near, reaches = [], []
     for xy, extra in lines:
         r = reach + extra
         if (xy.max(0) < lo - r).any() or (xy.min(0) > hi + r).any():
             continue
-        if (motesfri._distance(points, xy) <= r).any():
-            return True
-    return False
+        near.append(np.asarray(xy, np.float64)[:, :2])
+        reaches.append(float(r))
+    if not near:
+        return False
+    fast.require(407, "lines_clear")        # (motesfri._distance(points, xy) <= r for any: not all clear)
+    return not bool(np.asarray(fast._ef.lines_clear(np.ascontiguousarray(points, np.float64), near, reaches,
+                                                    _NO_SEGS, 0.0)).all())
 
 
 def _others(roads, skip):

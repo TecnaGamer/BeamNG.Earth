@@ -2,12 +2,12 @@
 High-resolution (1 km) Koppen-Geiger maps for 1901-2099, Scientific Data 10, 724 (CC BY 4.0), its 1991-2020 map at
 0.1 degrees (koppen_1991_2020_0p1.png beside the modules: 3600 x 1800 from 180 W, 90 N; 0 the sea, 1-30 as their
 legend: 1-3 A tropical, 4-7 B arid, 8-16 C temperate, 17-28 D cold, 29-30 E polar)."""
-import functools
 import os
 import threading
 
 import numpy as np
-import dnp
+
+import fast
 
 PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "koppen_1991_2020_0p1.png")
 RES = 0.1
@@ -60,7 +60,7 @@ AU_GREEN = (1, 2, 15, 16)
 AU_STATES_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "au_states.json.gz")
 AU_OFFSHORE_KM = 5.0        # a point this near a state's coast (the sea, a river mouth the outline lacks) is its
 AU_GRID = 1000              # points snap to 1/1000 degree (about 110 m) for the cache
-_au = None                  # ([state code], [(outline segments x1, y1, x2, y2 as a 4 x n array, bbox lon0 lat0 lon1 lat1)])
+_au = None                  # ([state code], earthfast.AuStates of their outlines)
 _au_lock = threading.Lock()
 
 
@@ -72,7 +72,7 @@ def _au_load():
             import json
             with gzip.open(AU_STATES_FILE, "rt", encoding="utf-8") as f:
                 states = json.load(f)["states"]
-            codes, parts = [], []
+            codes, segs, boxes = [], [], []
             for code, polys in states.items():
                 seg = []
                 for poly in polys:
@@ -81,77 +81,47 @@ def _au_load():
                         p = np.cumsum(np.vstack([d[:2], d[2:].reshape(-1, 2)]), axis=0) / AU_GRID    # lon, lat
                         seg.append(np.hstack([p, np.roll(p, -1, axis=0)]))      # a closed ring: x1, y1, x2, y2
                 e = np.vstack(seg)
-                bb = (min(e[:, 0].min(), e[:, 2].min()), min(e[:, 1].min(), e[:, 3].min()),
-                      max(e[:, 0].max(), e[:, 2].max()), max(e[:, 1].max(), e[:, 3].max()))
+                boxes.append((min(e[:, 0].min(), e[:, 2].min()), min(e[:, 1].min(), e[:, 3].min()),
+                              max(e[:, 0].max(), e[:, 2].max()), max(e[:, 1].max(), e[:, 3].max())))
                 codes.append(code)
-                parts.append((e.T.copy(), bb))
-            _au = (codes, parts)
+                segs.append(np.ascontiguousarray(e.T))
+            fast.require(405, "AuStates")
+            _au = (codes, fast._ef.AuStates(segs, np.array(boxes, np.float64)))
     return _au
 
 
 def _au_index(lat, lon):
-    """the index into _au_load()'s codes of the state at each point of two 1-D arrays (-1 none): the one whose
-    outline holds it (even-odd over every ring, so holes count), else the nearest within AU_OFFSHORE_KM."""
-    codes, parts = _au_load()
-    out = np.full(lat.shape, -1, np.int64)
-    pad = AU_OFFSHORE_KM / 111.0 * 1.3
-    for offshore in (False, True):
-        best = np.full(lat.shape, AU_OFFSHORE_KM)
-        for si, (e, bb) in enumerate(parts):
-            c = np.nonzero((lon >= bb[0] - pad) & (lon <= bb[2] + pad) & (lat >= bb[1] - pad) & (lat <= bb[3] + pad) &
-                           (out < 0))[0]
-            x1, y1, x2, y2 = e
-            for a in range(0, len(c), 256):
-                k = c[a:a + 256]
-                px, py = lon[k][:, None], lat[k][:, None]
-                if not offshore:
-                    cross = ((y1 > py) != (y2 > py)) & (px < (x2 - x1) * (py - y1) / np.where(y2 == y1, 1.0, y2 - y1) + x1)
-                    out[k[cross.sum(axis=1) % 2 == 1]] = si
-                else:       # the distance (km) to the nearest outline segment, longitude scaled by cos(latitude)
-                    cs = dnp.cos(np.radians(py))
-                    dx, dy = (x2 - x1) * cs, y2 - y1
-                    L = dx * dx + dy * dy
-                    t = np.clip(((px - x1) * cs * dx + (py - y1) * dy) / np.where(L == 0, 1.0, L), 0.0, 1.0)
-                    d = dnp.hypot((px - x1) * cs - t * dx, (py - y1) - t * dy).min(axis=1) * 111.195
-                    hit = d < best[k]
-                    best[k[hit]] = d[hit]
-                    out[k[hit]] = -2 - si       # (marked: a later, nearer state replaces it)
-        if offshore:
-            out = np.where(out <= -2, -2 - out, out)
-    return out, codes
-
-
-@functools.lru_cache(maxsize=65536)
-def _au_state_cell(i, j):
-    idx, codes = _au_index(np.array([i / AU_GRID]), np.array([j / AU_GRID]))
-    return codes[idx[0]] if idx[0] >= 0 else None
+    """the index into _au_load()'s codes of the state at each point of two arrays (-1 none, as their shape): outside
+    the AU_LAT x AU_LON box none; else the one whose outline holds the point's 1/AU_GRID degree cell (even-odd over
+    every ring, so holes count), else the nearest within AU_OFFSHORE_KM (Rust: earthfast.AuStates.index)."""
+    codes, states = _au_load()
+    la, lo = np.broadcast_arrays(np.asarray(lat, np.float64), np.asarray(lon, np.float64))
+    idx = states.index(np.ascontiguousarray(la.ravel()), np.ascontiguousarray(lo.ravel()), float(AU_GRID), AU_LAT,
+                       AU_LON, AU_OFFSHORE_KM / 111.0 * 1.3, AU_OFFSHORE_KM)
+    return idx.reshape(la.shape), codes
 
 
 def au_state(lat, lon):
     """the Australian state or territory of (lat, lon): "QLD", "NSW", "VIC", "SA", "WA", "TAS", "NT", "ACT",
     "JBT" (Jervis Bay) and so on; None outside Australia (scalars give a string or None, arrays an object array).
     Natural Earth's outlines (simplified to about 200 m), a point within AU_OFFSHORE_KM of a coast the nearest
-    state's; a lat / lon box first (non-Australian places cost one comparison), the result cached on points snapped
-    to 0.001 degree."""
+    state's; a lat / lon box first (non-Australian places cost one comparison), on points snapped to 0.001 degree."""
     if np.ndim(lat) == 0 and np.ndim(lon) == 0:
         if lat is None or lon is None or not (AU_LAT[0] <= lat <= AU_LAT[1] and AU_LON[0] <= lon <= AU_LON[1]):
             return None
-        return _au_state_cell(int(round(float(lat) * AU_GRID)), int(round(float(lon) * AU_GRID)))
-    la, lo = np.broadcast_arrays(np.asarray(lat, np.float64), np.asarray(lon, np.float64))
-    out = np.full(la.shape, None, object)
-    box = (la >= AU_LAT[0]) & (la <= AU_LAT[1]) & (lo >= AU_LON[0]) & (lo <= AU_LON[1])
-    if box.any():
-        cells = np.round(np.stack([la[box], lo[box]], axis=1) * AU_GRID).astype(np.int64)
-        uc, inv = np.unique(cells, axis=0, return_inverse=True)
-        idx, codes = _au_index(uc[:, 0] / AU_GRID, uc[:, 1] / AU_GRID)
-        out[box] = np.array([None] + codes, object)[idx + 1][np.asarray(inv).reshape(-1)]
-    return out
+        i, codes = _au_index(np.array([float(lat)]), np.array([float(lon)]))
+        return codes[i[0]] if i[0] >= 0 else None
+    idx, codes = _au_index(lat, lon)
+    if not (idx >= 0).any():
+        return np.full(idx.shape, None, object)     # (the whole block outside: no per-point object lookup)
+    return np.array([None] + codes, object)[idx + 1]
 
 
 def in_australia(lat, lon):
     """True where (lat, lon) (scalars or arrays) lies in an Australian state or territory (au_state is not None)."""
-    s = au_state(lat, lon)
-    return np.bool_(s is not None) if np.ndim(s) == 0 else np.array([v is not None for v in s.ravel()], bool).reshape(s.shape)
+    if np.ndim(lat) == 0 and np.ndim(lon) == 0:
+        return np.bool_(au_state(lat, lon) is not None)
+    return _au_index(lat, lon)[0] >= 0
 
 
 def koppen_grid(lat, lon):

@@ -13,7 +13,7 @@ blockworker._kantstolpe_rows for Australia). Buildings are not in that hook's da
 import numpy as np
 import dnp
 
-import motesfri
+import fast
 import warnsigns
 
 COUNTRIES = warnsigns.COUNTRIES
@@ -31,6 +31,8 @@ BESIDE_M = 8.0                  # ... within this of it: a road there is A carry
 HEIGHT_M = 1.7                  # the model's height (tools/build_au_tboard.py)
 COS_MIN = float(dnp.cos(np.radians(MIN_DEG)))      # (A meets B at 60-120 degrees: its |cos| against B's line is at most this)
 
+
+_NO_SEGS = np.zeros((0, 4))
 
 def wanted(spec):
     """Whether a road of this spec takes part in a T: sealed, rural, a numbered class or unclassified."""
@@ -131,7 +133,7 @@ def boards(road, roads):
         for p, _w in rel:
             for pt in np.vstack([p[:, :2], (p[:-1] + p[1:]) / 2]):
                 v = pt - e
-                along, beside = float(dnp.matmul(v, d)), abs(float(v[0] * d[1] - v[1] * d[0]))
+                along, beside = float(v[0] * d[0] + v[1] * d[1]), abs(float(v[0] * d[1] - v[1] * d[0]))   # (dnp.matmul's sum)
                 if BEYOND_M[0] < along < BEYOND_M[1] and beside < BESIDE_M:
                     skip = True
                     break
@@ -140,9 +142,10 @@ def boards(road, roads):
         if skip:
             continue
         spots = np.array([centre + side * HALF_M * k for k in (-1.0, -0.5, 0.0, 0.5, 1.0)])
-        if any(float(motesfri._distance(spots, p[:, :2]).min()) <= w / 2 + ROAD_CLEAR_M for p, w in rel
-               if p.shape[0] >= 2):
-            continue
+        far = [(np.asarray(p, np.float64)[:, :2], w / 2 + ROAD_CLEAR_M) for p, w in rel if p.shape[0] >= 2]
+        if far and not np.asarray(fast._ef.lines_clear(spots, [p for p, _ in far], [float(r) for _, r in far],
+                                                       _NO_SEGS, 0.0)).all():
+            continue                    # (a road within its half width + ROAD_CLEAR_M: motesfri._distance's test)
         out.append((centre, d))
     return out
 

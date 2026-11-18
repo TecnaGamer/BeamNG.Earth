@@ -27,6 +27,7 @@ import numpy as np
 import dmath
 import dnp
 
+import fast
 import guardrails
 
 COUNTRIES = {"AU"}
@@ -77,33 +78,18 @@ def _hash01(*vals):
 
 
 def _nearest(points, line):
-    """(distance (n,), nearest point (n, 2), unit direction of that segment (n, 2)) of points (n, 2) to polyline line."""
-    line = np.asarray(line, np.float64)[:, :2]
-    a, b = line[:-1], line[1:]
-    d = b - a
-    l2 = np.maximum((d * d).sum(1), 1e-12)
-    t = np.clip(((points[:, None, :] - a[None]) * d[None]).sum(2) / l2[None], 0.0, 1.0)
-    q = a[None] + t[..., None] * d[None]
-    dist = dnp.hypot(*(q - points[:, None, :]).transpose(2, 0, 1))
-    k = dist.argmin(1)
-    i = np.arange(len(points))
-    return dist[i, k], q[i, k], d[k] / np.sqrt(l2[k])[:, None]
+    """(distance (n,), nearest point (n, 2), unit direction of that segment (n, 2)) of points (n, 2) to polyline line
+    (Rust: earthfast.line_nearest)."""
+    fast.require(407, "line_nearest")
+    return fast._ef.line_nearest(np.ascontiguousarray(points, np.float64), np.asarray(line, np.float64)[:, :2])
 
 
 def _mapped_dist(points, rails):
-    """Distance (n,) of points (n, 2) to the segments rails (m, 4) (inf if none)."""
+    """Distance (n,) of points (n, 2) to the segments rails (m, 4) (inf if none; Rust: earthfast.segs_min_dist)."""
     if not len(rails):
         return np.full(len(points), np.inf)
-    out = np.full(len(points), np.inf)
-    for lo in range(0, len(rails), 200):
-        r = rails[lo:lo + 200]
-        a, b = r[:, :2], r[:, 2:]
-        d = b - a
-        l2 = np.maximum((d * d).sum(1), 1e-12)
-        t = np.clip(((points[:, None, :] - a[None]) * d[None]).sum(2) / l2[None], 0.0, 1.0)
-        q = a[None] + t[..., None] * d[None]
-        out = np.minimum(out, dnp.hypot(*(q - points[:, None, :]).transpose(2, 0, 1)).min(1))
-    return out
+    fast.require(407, "segs_min_dist")
+    return fast._ef.segs_min_dist(np.ascontiguousarray(points, np.float64), np.asarray(rails, np.float64))
 
 
 def _grid(xy):
