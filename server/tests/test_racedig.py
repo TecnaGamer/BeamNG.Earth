@@ -349,6 +349,31 @@ class PropsTest(unittest.TestCase):
         self.assertEqual(furniture.wire_ends(wires[0])[1][1], 40.0)
         self.assertGreater(revisit.faults(), before)
 
+    def test_a_support_by_the_antimeridian(self):
+        # Codex's review of 117bdde7: a support whose 60 m box crosses +-180 deg made min / max of its longitudes the
+        # whole world (over 4,096 cells: ValueError, the road tile lost); the span's own tile is west of the crossing
+        from unittest import mock
+        import furniture
+        frame = geodesy.EnuFrame(10.0, 179.99)
+        la, lo, _ = frame.enu_to_geodetic(np.array([1090.0]), np.array([0.0]), 0.0)
+        self.assertGreater(float(np.ravel(lo)[0]), 179.9995)                # (within 60 m of the antimeridian)
+        near = [furniture.G_POLE, 0.0, 0.0, 0.0, 0.0, 1.0, 9.2, 0.0]
+        far = ["pylon", 1090.0, 0.0, 0.0, 0.0, 1.0, 35.8, 0.0]
+        line = np.c_[np.linspace(0.0, 1090.0, 9), np.full(9, 4.5), np.full(9, 20.0)]
+        cells = racedig.support_cells(frame, furniture.with_ends([line], near, far))
+        far_cells = cells[(1090.0, 0.0)]
+        self.assertTrue(0 < len(far_cells) <= 4, far_cells)
+        self.assertEqual({k.x for k in far_cells}, {0, (1 << far_cells[0].z) - 1})    # (both sides of it)
+
+        class Md:
+            def cell(self, key, layers=(), kind="demand"):
+                return mock.Mock(layers={"roads": ("roads", key)})
+        wires = furniture.with_ends([line], near, far)
+        flat = lambda la_, lo_: np.zeros(np.shape(la_))
+        with mock.patch.object(racedig, "ON", True), mock.patch.object(racedig, "bands", lambda f, c: []):
+            racedig.tile_clear(frame, [], [list(near)], wires, flat, Md())
+        self.assertEqual(len(wires), 1)
+
     def test_no_raceway_nothing_dropped(self):
         props = [["pole", 0.0, 0.0, 0.0, 0.0]]
         self.assertEqual(racedig.clear_props(props, [], [], None), 0)

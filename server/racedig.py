@@ -300,13 +300,24 @@ def support_cells(frame, wires):
     if not pts:
         return {}
     xy = np.array(sorted(set(pts)), np.float64)
-    la0, lo0, _ = frame.enu_to_geodetic(xy[:, 0] - SUPPORT_CELL_M, xy[:, 1] - SUPPORT_CELL_M, 0.0)
-    la1, lo1, _ = frame.enu_to_geodetic(xy[:, 0] + SUPPORT_CELL_M, xy[:, 1] + SUPPORT_CELL_M, 0.0)
+    m = SUPPORT_CELL_M
+    corners = [frame.enu_to_geodetic(xy[:, 0] + dx, xy[:, 1] + dy, 0.0)[:2]
+               for dx, dy in ((-m, -m), (m, -m), (m, m), (-m, m))]
+    la = np.stack([np.atleast_1d(np.asarray(c[0], np.float64)) for c in corners], 1)
+    lo = np.stack([np.atleast_1d(np.asarray(c[1], np.float64)) for c in corners], 1)
+    _, lo_mid, _ = frame.enu_to_geodetic(xy[:, 0], xy[:, 1], 0.0)
     out = {}
-    for (x, y), a0, o0, a1, o1 in zip(xy.tolist(), np.atleast_1d(la0), np.atleast_1d(lo0), np.atleast_1d(la1),
-                                      np.atleast_1d(lo1)):
-        out[(x, y)] = mapcells.cells_for_bbox(float(min(a0, a1)), float(min(o0, o1)), float(max(a0, a1)),
-                                              float(max(o0, o1)))
+    for k, (x, y) in enumerate(xy.tolist()):
+        # (the box's longitudes round the support's own, wrapped: west of it to east of it, west > east across the
+        # antimeridian, as cells_for_bbox takes them; min / max of +179.99 and -179.99 was the whole world)
+        mid = float(np.atleast_1d(lo_mid)[k])
+        rel = (lo[k] - mid + 180.0) % 360.0 - 180.0
+        west = (mid + float(rel.min()) + 180.0) % 360.0 - 180.0
+        east = (mid + float(rel.max()) + 180.0) % 360.0 - 180.0
+        try:
+            out[(x, y)] = mapcells.cells_for_bbox(float(la[k].min()), west, float(la[k].max()), east)
+        except ValueError:          # (no sane box: its spans are judged unread, tile_clear)
+            out[(x, y)] = [None]
     return out
 
 
@@ -319,11 +330,14 @@ def tile_clear(frame, cells, props, wires, elev, md=None):
     unread = set()
     if md is not None and wires:
         near_cells = support_cells(frame, wires)
-        keys = sorted({k for ks in near_cells.values() for k in ks}, key=str)
+        keys = sorted({k for ks in near_cells.values() for k in ks}, key=lambda k: (k is not None, str(k)))
         if keys:
             import mapcells
             got, bad = [], set()
             for k in keys:              # (one by one: a cell that cannot be read costs only the spans that need it)
+                if k is None:
+                    bad.add(k)
+                    continue
                 try:
                     got += [cd.layers.get("roads") for cd in mapcells.load_cells(md, [k], ("roads",))]
                 except Exception as ex:     # (OSError, a decode error: the tile is still built, not kept)

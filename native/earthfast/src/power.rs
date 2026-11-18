@@ -150,19 +150,23 @@ fn part_fits(rings: &[Vec<(f64, f64)>], ex: f64, ey: f64, hd: f64, anchor_at: [f
     })
 }
 
-/// A line end at (x, y) heading w into its substation: Some((x, y)) itself when its gantries (gantries: their places in
-/// the kit's frame, the kit anchored at the end at anchor_at) stand with GANTRY_FOOT_M round them inside the yards'
-/// rings (as substation_yard tests its anchored parts), or when no yard is given or the end is in none; else the
-/// nearest end (moved across the line or into the yard along it, END_SHIFT_STEP_M steps, END_SHIFT_MAX_M at most;
-/// nearest first, then across before along, left before right) where they do; None where none does (the line ends at
-/// its last tower: no gantries, no span into the yard; Codex's reviews of report 95's fix).
-fn gantries_inside(yards: &[Vec<(f64, f64)>], x: f64, y: f64, w: f64, anchor_at: [f64; 2], gantries: &[[f64; 2]])
-                   -> Option<(f64, f64)> {
-    if yards.is_empty() || gantries.is_empty() || !in_rings(yards, x, y) {
-        return Some((x, y));
-    }
+/// A line end at (x, y) heading w into its substation (yard: that one yard's rings, even-odd; None: in no yard):
+/// Some((x, y)) itself when its gantries (gantries: their places in the kit's frame, the kit anchored at the end at
+/// anchor_at) stand with GANTRY_FOOT_M round them inside the yard (as substation_yard tests its anchored parts), or
+/// when it is in no yard; else the nearest end (moved across the line or into the yard along it, END_SHIFT_STEP_M
+/// steps, END_SHIFT_MAX_M at most; nearest first, then across before along, left before right) that is itself in the
+/// same yard (substation_yard anchors only those: not in a hole, not in the next yard) with both gantries in it; None
+/// where none is (the line ends at its last tower: no gantries, no span into the yard; Codex's reviews of report 95's
+/// fix).
+fn gantries_inside(yard: Option<&[Vec<(f64, f64)>]>, x: f64, y: f64, w: f64, anchor_at: [f64; 2],
+                   gantries: &[[f64; 2]]) -> Option<(f64, f64)> {
+    let yard = match yard {
+        Some(r) if !gantries.is_empty() => r,
+        _ => return Some((x, y)),
+    };
     let fits = |ex: f64, ey: f64| {
-        gantries.iter().all(|g| part_fits(yards, ex, ey, w, anchor_at, g[0], g[1], GANTRY_FOOT_M))
+        in_rings(yard, ex, ey)
+            && gantries.iter().all(|g| part_fits(yard, ex, ey, w, anchor_at, g[0], g[1], GANTRY_FOOT_M))
     };
     if fits(x, y) {
         return Some((x, y));
@@ -199,9 +203,9 @@ struct LineEnd {
     yard: i64,
 }
 
-/// The yard a point is in: the index of the first of the rings that holds it (its own test), -1 for none.
-fn yard_of(yards: &[Vec<(f64, f64)>], x: f64, y: f64) -> i64 {
-    yards.iter().position(|r| in_rings(std::slice::from_ref(r), x, y)).map(|k| k as i64).unwrap_or(-1)
+/// The yard a point is in: the first (by id) whose rings hold it (even-odd: not in its holes), -1 for none.
+fn yard_of(yards: &[(i64, Vec<Vec<(f64, f64)>>)], x: f64, y: f64) -> i64 {
+    yards.iter().find(|(_, r)| in_rings(r, x, y)).map(|(k, _)| *k).unwrap_or(-1)
 }
 
 /// The towers, line ends and conductors of lines given as their vertices (n, 3) (x, y in the anchor frame, z the
@@ -216,8 +220,9 @@ fn yard_of(yards: &[Vec<(f64, f64)>], x: f64, y: f64) -> i64 {
 /// the end's other side, gantry_front out of the gantries toward the line) to the same arm of the next tower or end, a
 /// parabola sagging sag x the span at its middle, seg_m apart. Only the towers in the box x0, y0, x1, y1 and the spans
 /// whose middle is in it; every end. An end whose gantries (gantries (2, 2): the line-end kit's two gantries in its
-/// frame, the kit anchored at anchor_at) would stand past the yards' rings (yard_pts (q, 2), yard_off: ring offsets;
-/// even-odd) moves with them to where they fit (gantries_inside), its conductors with it; one whose gantries fit
+/// frame, the kit anchored at anchor_at) would stand past its yard (yard_pts (q, 2), yard_off: ring offsets, yard_id:
+/// each ring's yard: a yard is its rings, even-odd) moves with them to where they fit in that yard (gantries_inside),
+/// its conductors with it; one whose gantries fit
 /// nowhere is no end: no span on to it (the line stops at its last tower). The conductors at the gantries hang at the
 /// ground under each gantry (ground(x (n,), y (n,)) -> z, None: the end's own ground) plus the arm's height.
 /// (towers (t, 4) [x, y, z, yaw degrees counter-clockwise from +x], ends (e, 6) [x, y, z, heading radians, ground
@@ -230,7 +235,8 @@ pub fn power_line_layout<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, 
                               stop: PyReadonlyArray1<'py, bool>, arms: PyReadonlyArray2<'py, f64>, sag: f64,
                               seg_m: f64, min_span: f64, max_span: f64, dedupe_m: f64, end_merge_m: f64,
                               gantry_front: f64, bx: [f64; 4], yard_pts: PyReadonlyArray2<'py, f64>,
-                              yard_off: PyReadonlyArray1<'py, i64>, anchor_at: [f64; 2], gantries: Vec<[f64; 2]>,
+                              yard_off: PyReadonlyArray1<'py, i64>, yard_id: PyReadonlyArray1<'py, i64>,
+                              anchor_at: [f64; 2], gantries: Vec<[f64; 2]>,
                               ground: Option<Bound<'py, PyAny>>)
                               -> PyResult<(Bound<'py, PyArray2<f64>>, Bound<'py, PyArray2<f64>>,
                                            Bound<'py, PyArray2<f64>>, Bound<'py, PyArray1<i64>>,
@@ -239,11 +245,17 @@ pub fn power_line_layout<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, 
     let mut gantries = gantries;
     gantries.sort_by(|a, b| a[0].partial_cmp(&b[0]).unwrap_or(std::cmp::Ordering::Equal));
     let (pts, off, stop, arms) = (pts.as_array(), off.as_array(), stop.as_array(), arms.as_array());
-    let (yp, yo) = (yard_pts.as_array(), yard_off.as_array());
-    let yards: Vec<Vec<(f64, f64)>> = (0..yo.len().saturating_sub(1))
-        .map(|k| (yo[k] as usize..yo[k + 1] as usize).map(|i| (yp[[i, 0]], yp[[i, 1]])).collect())
-        .filter(|r: &Vec<(f64, f64)>| r.len() >= 3)
-        .collect();
+    let (yp, yo, yi) = (yard_pts.as_array(), yard_off.as_array(), yard_id.as_array());
+    // (each yard its own rings: its outline and holes, even-odd)
+    let mut by_id: std::collections::BTreeMap<i64, Vec<Vec<(f64, f64)>>> = std::collections::BTreeMap::new();
+    for k in 0..yo.len().saturating_sub(1) {
+        let ring: Vec<(f64, f64)> = (yo[k] as usize..yo[k + 1] as usize).map(|i| (yp[[i, 0]], yp[[i, 1]])).collect();
+        if ring.len() >= 3 {
+            by_id.entry(yi.get(k).copied().unwrap_or(k as i64)).or_default().push(ring);
+        }
+    }
+    let yards: Vec<(i64, Vec<Vec<(f64, f64)>>)> = by_id.into_iter().collect();
+    let yard_rings = |id: i64| yards.iter().find(|(k, _)| *k == id).map(|(_, r)| r.as_slice());
     let inside = |x: f64, y: f64| x >= bx[0] && x < bx[2] && y >= bx[1] && y < bx[3];
     let mut towers: Vec<f64> = Vec::new();
     let mut ends: Vec<LineEnd> = Vec::new();
@@ -316,7 +328,8 @@ pub fn power_line_layout<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, 
                     Some(k) => k,
                     None => {
                         // (its gantries inside the yard: the end moved with them where one stood past the fence)
-                        let got = gantries_inside(&yards, p[0], p[1], w, anchor_at, &gantries);
+                        let yard = yard_of(&yards, p[0], p[1]);
+                        let got = gantries_inside(yard_rings(yard), p[0], p[1], w, anchor_at, &gantries);
                         let (x, y) = got.unwrap_or((p[0], p[1]));
                         let (mut zl, mut zr) = (p[2], p[2]);
                         if let (Some(g), Some(_), true) = (ground.as_ref(), got, gantries.len() >= 2) {
@@ -333,8 +346,7 @@ pub fn power_line_layout<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, 
                             zr = z[1];
                         }
                         mapped.push(p);
-                        ends.push(LineEnd { e: [x, y, p[2], w], fits: got.is_some(), zl, zr,
-                                            yard: yard_of(&yards, p[0], p[1]) });
+                        ends.push(LineEnd { e: [x, y, p[2], w], fits: got.is_some(), zl, zr, yard });
                         ends.len() - 1
                     }
                 }),

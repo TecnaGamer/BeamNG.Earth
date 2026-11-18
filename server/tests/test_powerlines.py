@@ -19,7 +19,7 @@ from power_reference import margin as road_margin  # noqa: E402
 BOX = [-1e4, -1e4, 1e4, 1e4]
 
 
-def layout(lines, stop=None, yards=(), ground=None, box=BOX, full=False):
+def layout(lines, stop=None, yards=(), ground=None, box=BOX, full=False, yard_id=None):
     """power_line_layout's (towers, ends [x, y, z, heading], wire points, offsets); full: its own five outputs."""
     pts = np.ascontiguousarray(np.concatenate(lines), np.float64)
     off = np.cumsum([0] + [len(r) for r in lines]).astype(np.int64)
@@ -29,6 +29,7 @@ def layout(lines, stop=None, yards=(), ground=None, box=BOX, full=False):
     got = fast._ef.power_line_layout(pts, off, stop, powerlines.ARMS, powerlines.SAG, powerlines.SEG_M,
                                      powerlines.MIN_SPAN_M, powerlines.MAX_SPAN_M, powerlines.DEDUPE_M,
                                      powerlines.END_MERGE_M, powerlines.GANTRY_FRONT, box, yp, yo,
+                                     np.asarray(range(len(yards)) if yard_id is None else yard_id, np.int64),
                                      list(powerlines.ANCHOR_AT), powerlines.GANTRIES, ground)
     return got if full else (got[0], got[1][:, :4], got[2], got[3])
 
@@ -168,6 +169,25 @@ class LineTest(unittest.TestCase):
                          len(powerlines.ARMS))                               # its conductors on its gantries
         # (the first line: no span into the yard, it ends at its last tower)
         self.assertFalse(any(0.0 < p[0] < 35.0 and abs(p[1]) < 6.5 for p in last))
+
+    def test_an_end_moves_only_within_its_own_yard(self):
+        # Codex's review of 117bdde7: the search tested the gantries against every ring together, so a moved end could
+        # sit in a hole of its yard (the yard's kit skips an anchor there) or straddle two adjacent yards
+        line = np.array([[-200, 3, 0], [-100, 3, 0], [30, 3, 0]], np.float64)
+        stop = [False, False, True]
+        # a yard 15.8 m across with a strip hole 2.4 m wide along its middle: the gantries fit only with the end in
+        # the hole
+        outer, hole = square(0, -7.9, 60, 15.8), square(5, -1.2, 50, 2.4)
+        _, ends, wp, wo = layout([line], stop, yards=[outer, hole], yard_id=[0, 0])
+        self.assertEqual(len(ends), 0, ends)
+        self.assertFalse(any(p[0] > 0.0 for p in (wp[b - 1] for b in wo[1:])))
+        # two adjacent yards, the end in a 10 m one: its gantries never fit in it (they did across both)
+        a, b = square(0, -5, 60, 10), square(0, 5, 60, 30)
+        line0 = np.array([[-200, 0, 0], [-100, 0, 0], [30, 0, 0]], np.float64)
+        _, ends, _, _ = layout([line0], stop, yards=[a, b], yard_id=[0, 1])
+        self.assertEqual(len(ends), 0, ends)
+        _, ends, _, _ = layout([line0], stop, yards=[a, b], yard_id=[0, 0])      # (one yard of both: it fits)
+        self.assertEqual(len(ends), 1)
 
     def test_moved_gantries_on_sloping_ground(self):
         # Codex's review of 7bafc807: a moved end's conductors hung at the old end's ground while the yard stood its

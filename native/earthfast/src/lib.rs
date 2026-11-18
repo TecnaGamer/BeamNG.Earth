@@ -6617,6 +6617,7 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // (ends (e, 6)), takes the kit's gantries / anchor and a ground callback, and drops an end whose gantries fit
     // nowhere; substation_yard returns a z column (an anchored gantry's ground)
     // 433: power_line_layout merges a line end only into an earlier end of the same yard whose gantries stand
-    m.add("VERSION", 433)?;
+    // 434: power_line_layout takes each yard ring's yard id: a line end moves and merges within its own yard only
+    m.add("VERSION", 434)?;
     Ok(())
 }
