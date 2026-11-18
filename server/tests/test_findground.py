@@ -155,6 +155,45 @@ class ViaductJointTest(unittest.TestCase):
                 self.assertLess(float(np.abs(b - Z0).max()), 0.5, "level from end to end")
 
 
+class ViaductSwitchTest(unittest.TestCase):
+    """A branch bridge leaving the middle of a viaduct the map has in one part (a crossover or a switch on it, the through
+    track not cut there): its end joins no node of the chain graph, so it read the ground under the viaduct and stood
+    6 m under the through track (Zurich's Duttweilerbruecke viaduct, both ends of a 118 m crossover: 6.0 and 6.2 m).
+    The switch is a node of the structure (railways._switch_split): one height at the joint."""
+
+    @staticmethod
+    def valley(xy):
+        return Z0 - 12.0 * ((xy[:, 0] > 105.0) & (xy[:, 0] < 295.0) & (np.abs(xy[:, 1] - 100.0) < 100.0))
+
+    @staticmethod
+    def rails(x0=160.0):
+        """The viaduct in one part, ground either side; a crossover leaving it at x0 and rejoining it 40 m on, its
+        middle 10 m off the line."""
+        def line(x0, y0, x1, y1):
+            n = int(round(float(np.hypot(x1 - x0, y1 - y0)) / railways.STEP_M)) + 1
+            return np.c_[np.linspace(x0, x1, n), np.linspace(y0, y1, n)]
+        cross = np.vstack([line(x0, 100.0, x0 + 20.0, 110.0), line(x0 + 20.0, 110.0, x0 + 40.0, 100.0)[1:]])
+        return [("a", "rail", "ground", line(0.0, 100.0, 100.0, 100.0)), ("v", "rail", "bridge", line(100.0, 100.0, 300.0, 100.0)),
+                ("d", "rail", "ground", line(300.0, 100.0, 400.0, 100.0)), ("x", "rail", "bridge", cross)]
+
+    def test_a_crossover_leaving_a_viaduct_stands_at_the_viaducts_height_at_both_joints(self):
+        for x0 in (160.0, 161.0):                       # (on a sample of the viaduct, and between two)
+            rails = self.rails(x0)
+            prof = railways.profile(rails, self.valley, [])
+            zv, zg = prof[1]
+            self.assertAlmostEqual(float(zg[int(x0 - 100.0) // 2]), Z0 - 12.0, places=6, msg="over the valley's floor")
+            self.assertLess(float(np.abs(zv - Z0).max()), 0.5, "the viaduct stands level between its ends")
+            zx = prof[3][0]
+            self.assertLess(float(np.abs(zx - Z0).max()), 0.5, "the crossover with it, not down on the floor")
+            self.assertEqual([len(z) for z, _g in prof], [len(r[3]) for r in rails], "a height per point of each part")
+            self.assertTrue(all(np.isfinite(z).all() for z, _g in prof))
+
+    def test_a_branch_end_beside_the_viaduct_is_not_a_switch(self):
+        rails = self.rails()
+        rails[3] = ("x", "rail", "bridge", rails[3][3] + np.array([0.0, 2.0]))      # (its ends 2 m off the viaduct)
+        self.assertIsNone(railways._switch_split(rails))
+
+
 class PopoliTest(unittest.TestCase):
     """Popoli (42.1712 N 13.8250 E, fixtures/interchange_popoli_ss17_underpass.npz): the SS17 in a walled trench under
     the two tracks of the Roma - Pescara line and a service road under them 45 m on, each a short tunnel in the map,
