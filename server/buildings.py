@@ -453,7 +453,8 @@ def urgent_photos(on=True):
 
 class RoofPhotoFuture:
     """roof_photo on a thread (started when the tile starts): colours() waits for it ROOF_PHOTO_WAIT_S at most, and
-    no longer than the tile may wait at all (townentry.patience: a fast car is about to reach it). On a 300 km/h
+    no longer than the tile may wait at all (townentry.patience: a fast car is about to reach it, or other tiles wait
+    for its process: townentry.give_way). On a 300 km/h
     motorway drive the road tiles round Marienborn each stood ~8.1 s in their buildings for a photo that did not
     come, with 0.3-1.4 s of CPU, and held the three road tile processes meanwhile: 99 s of the 165 s the drive's 48
     slow tiles took to build, the tiles behind them 1.4-4.3 s waiting for a process (2026-11-18)."""
@@ -477,10 +478,19 @@ class RoofPhotoFuture:
             if self.fut.done():
                 ph, final, until = self.fut.result()
             else:
+                import concurrent.futures
+                import time
                 import townentry
                 import waits
                 with waits.waiting("roof photo"):       # (the slow tile's log line names it)
-                    ph, final, until = self.fut.result(timeout=townentry.left(ROOF_PHOTO_WAIT_S))
+                    end = time.monotonic() + townentry.left(ROOF_PHOTO_WAIT_S)
+                    while True:
+                        try:
+                            ph, final, until = self.fut.result(timeout=max(0.0, min(0.2, end - time.monotonic())))
+                            break
+                        except concurrent.futures.TimeoutError:
+                            if time.monotonic() >= end or townentry.give_way():
+                                raise
         except Exception:
             ph, final, until = None, False, None
         if ph is None:

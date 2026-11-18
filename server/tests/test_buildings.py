@@ -3120,6 +3120,17 @@ class RoofPhotoTest(unittest.TestCase):
         self.assertLess(time.monotonic() - t0, 2.0, "not ROOF_PHOTO_WAIT_S")
         self.assertEqual(b.n, 1, "not kept: built again with its photo for the next visit")
         self.assertGreater(w.get("roof photo", 0.0), 0.05)
+        # a tile the car is still far from gives way as soon as other jobs wait for its process
+        import pools
+        with townentry.patience(30.0), mock.patch.object(pools, "backlog", lambda: 1), revisit.scope() as b:
+            t0 = time.monotonic()
+            self.assertIsNone(f.colours(ring))
+            self.assertLess(time.monotonic() - t0, 1.0)
+        self.assertEqual(b.n, 1)
+        with mock.patch.object(pools, "backlog", lambda: 1), mock.patch.object(bld, "ROOF_PHOTO_WAIT_S", 0.3):
+            t0 = time.monotonic()           # (nobody moving: no patience, the whole wait whatever the pool does)
+            self.assertIsNone(f.colours(ring))
+            self.assertGreater(time.monotonic() - t0, 0.25)
         with townentry.patience(0.0):               # (a photo that is here is read whatever the hurry)
             f.fut.set_result((None, True, None))
             with waits.collect() as w, revisit.scope() as b:

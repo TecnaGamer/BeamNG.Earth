@@ -3033,7 +3033,8 @@ _hurry = threading.local()
 
 class patience:
     """with patience(s): the tile built inside by this thread waits `s` seconds in all for its town signs' inputs
-    and its roofs' photo (None: POINTS_WAIT_S and buildings.ROOF_PHOTO_WAIT_S for each, as without it)."""
+    and its roofs' photo, and not while other jobs wait for its process (give_way) (None: POINTS_WAIT_S and
+    buildings.ROOF_PHOTO_WAIT_S for each, as without it)."""
 
     def __init__(self, s):
         self.s = s
@@ -3053,6 +3054,16 @@ def left(cap):
     patience() that ends sooner (the town signs' inputs, wait_s; the roofs' photo, buildings.RoofPhotoFuture)."""
     until = getattr(_hurry, "until", None)
     return cap if until is None else max(0.0, min(cap, until - time.monotonic()))
+
+
+def give_way():
+    """Should a wait of the tile this thread builds inside a patience() end now: other jobs wait for its process
+    (pools.backlog)? A tile the car is 30 s from waited out its roofs' photo in one of the three road processes while
+    the tiles nearer the car waited for one (2026-11-18). Outside a patience() (nobody moving): never."""
+    if getattr(_hurry, "until", None) is None:
+        return False
+    import pools
+    return pools.backlog() > 0
 
 
 def wait_s():
@@ -3092,7 +3103,8 @@ class Towns:
             wait = wait_s()             # (less for a tile a fast car is about to reach: patience)
             deadline = now + (wait if now - self._waited_in_vain > POINTS_WAIT_S else 0.0)
             with waits.waiting("town signs"):
-                while time.monotonic() < deadline and not all(self.md.has(k, "town_points") for k in missing):
+                while time.monotonic() < deadline and not all(self.md.has(k, "town_points") for k in missing) \
+                        and not give_way():
                     time.sleep(0.2)
             if not all(self.md.has(k, "town_points") for k in missing):
                 if deadline > now and wait >= POINTS_WAIT_S:    # (a whole wait in vain; a hurried tile's cut one says

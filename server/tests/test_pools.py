@@ -33,6 +33,27 @@ class NameTest(unittest.TestCase):
         self.assertEqual(seen, [7])
 
 
+class BacklogTest(unittest.TestCase):
+    """backlog: a worker sees how many of its pool's jobs wait for a process."""
+
+    def test_a_worker_sees_the_jobs_waiting_behind_it(self):
+        import time
+        p = pools.RespawningPool("test", 1, mp_context=SPAWN)
+        try:
+            p.submit(abs, -1).result(timeout=60)                # (the process up)
+            first = p.submit(time.sleep, 1.0)
+            seen = p.submit(pools.backlog)
+            behind = p.submit(time.sleep, 0.0)
+            self.assertGreaterEqual(seen.result(timeout=60), 1, "the job behind it waits")
+            behind.result(timeout=60)
+            first.result(timeout=60)
+            self.assertEqual(p.submit(pools.backlog).result(timeout=60), 0, "none waiting")
+            self.assertEqual(p.waiting.value, 0)
+        finally:
+            p.shutdown()
+        self.assertEqual(pools.backlog(), 0, "outside a worker: none")
+
+
 class RespawnTest(unittest.TestCase):
     def test_a_dead_worker_is_replaced(self):
         p = pools.RespawningPool("test", 1, mp_context=SPAWN)
