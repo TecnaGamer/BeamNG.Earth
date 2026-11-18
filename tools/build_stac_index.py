@@ -4,8 +4,12 @@
 index server was down for about an hour on 2026-10-26 and no fresh place got roads or buildings (GitHub #357). Read
 through the server's own StacIndex (netfetch's limits; the cache keeps what it fetched). Run again after a release bump.
 
-    python3 tools/build_stac_index.py
+    python3 tools/build_stac_index.py [--cache DIR]
+
+--cache: the cache whose mapdata/raw keeps the fetched collections (default: the app's, ~/.cache/beamng-earth; a
+scratch folder for a trial bump).
 """
+import argparse
 import gzip
 import json
 import os
@@ -22,7 +26,9 @@ import overture  # noqa: E402
 
 
 def main():
-    cache = os.path.expanduser("~/.cache/beamng-earth")
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--cache", default="~/.cache/beamng-earth", help="the cache the collections are kept in")
+    cache = os.path.abspath(os.path.expanduser(ap.parse_args().cache))
     raw = os.path.join(cache, "mapdata", "raw")
     index = overture.StacIndex(overture.RELEASE, raw, netfetch.default_fetcher())
     pairs = sorted({(v["theme"], v["type"]) for v in overture.LAYERS.values()})

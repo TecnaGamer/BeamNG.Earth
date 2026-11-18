@@ -35,8 +35,8 @@ log = logging.getLogger("earthd.dirsigns")
 ON = os.environ.get("BNE_DIRSIGNS", "off") == "on"
 KERNEL = 163                    # earthfast VERSION with dirsign_place / dirsign_face / dirsign_mesh
 DATA = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
-PLACES_FILE = os.path.join(DATA, "places_2026-10-21.0.json.gz")
-PLACES_SHA256 = "aea8360e2b1a5dc51c1b54700b355aa0dfb7e699fee5853f6a3ae0f0e223b989"
+PLACES_FILE = os.path.join(DATA, "places_2026-11-18.0.json.gz")
+PLACES_SHA256 = "40b3f23fd1f955e7249aad81b0f36cff3fd7551368af05c9fd9a8c9a2963be89"
 STYLES_FILE = os.path.join(DATA, "dirsigns_styles.json")
 FONTS = (os.path.join(DATA, "fonts", "Overpass-Bold.ttf"), os.path.join(DATA, "fonts", "FiraSansCondensed-Medium.ttf"))
 FACE_VERSION = 1                # (in every face's hash: a changed drawing is another file)
