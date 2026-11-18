@@ -67,11 +67,13 @@ BUDGET_S = float(os.environ.get("BNE_VSOLVE_BUDGET_S", "60"))
 # beside each other differ by at most what the gap between the carriageways holds at CORRIDOR_BANK (none where the
 # pavements overlap), as soft rows where a solve's heights broke it (an active set, as the grade's). Not between two
 # heights over CORRIDOR_MAX_DIFF_M apart (two levels: a road dipped under a deck beside the ramp up to it). Without
-# them the solve stood a Rio street 0.8 m through a deck the passes' corridors had lowered it under. Opt-in
-# (BNE_VSOLVE_CORRIDOR=on): in one solve a road follows its neighbour down and the next road it, where the pass moves
-# one road once, and the rows cost Athens' ground p95 1.58 -> 2.20 m, a 0.31 m seam at Fells Point and 5 low decks at
-# Tokyo (docs/research/2026-11-18-vsolve-corridors.md)
-CORRIDOR_ROWS_ON = os.environ.get("BNE_VSOLVE_CORRIDOR", "off").strip().lower() in ("1", "on", "true", "yes")
+# them the solve stood a Rio street 0.8 m through a deck the passes' corridors had lowered it under. One-sided, as
+# the pass: the road that gives way (share_corridors' keys: the slip road, the lower class; between equals the lower
+# one, up) is held within what the gap holds of its neighbour's rule height (its profile after the dips and the
+# floors), a fixed target, not of its neighbour's solved height. Tied two-sided to the solved heights, a road followed
+# its neighbour down and the next road it, Athens' ground p95 1.58 -> 2.20 m in solo mode; one-sided, 1.69 m, and
+# Rio's street under its deck (docs/research/2026-11-18-vsolve-corridors.md). BNE_VSOLVE_CORRIDOR=off: none
+CORRIDOR_ROWS_ON = os.environ.get("BNE_VSOLVE_CORRIDOR", "on").strip().lower() in ("1", "on", "true", "yes")
 CORRIDOR_BANK = 0.4          # m per m of gap (grading.CORRIDOR_BANK)
 CORRIDOR_MAX_DIFF_M = 3.0    # m (grading.CORRIDOR_MAX_DIFF_M)
 CORRIDOR_SLACK_M = 0.01      # m a pair's heights may break it by before it gets rows
@@ -174,8 +176,9 @@ def problem(plans, specs, z0, ceilings, ranks, pins=(), dips=None, grade_rows=Tr
     upper bounds (NaN: none) or None; grade_rows: the ceilings as soft rows; extra: {plan: segments} that get the
     ceiling's rows too (a solve's own excess: solve's rounds), and gets every segment given one here; drop: kinds of
     rows left out ("pins", "abut", "dips", "nodes", "caps": _culprit's tests); caps: per plan (n,) the most its heights
-    may be (NaN: no limit), soft rows, or None; floors: the same, the least they may be; corridors: grading's
-    corridor_pairs (j, i, k, si, t, gap arrays), rows: the indices of those that get rows."""
+    may be (NaN: no limit), soft rows, or None; floors: the same, the least they may be; corridors: solve's bands
+    (j, i, target, lim arrays: plan j's height at sample i within lim of target), rows: the indices of those that get
+    rows."""
     if "caps" in drop:
         caps = floors = None
     if "pins" in drop:
@@ -257,17 +260,17 @@ def problem(plans, specs, z0, ceilings, ranks, pins=(), dips=None, grade_rows=Tr
             couplings.append((root[0], root[1], k[0], k[1], "ge", -v))
             n_joins += 1
     if corridors is not None:
-        j_, i_, k_, si_, t_, gap_ = corridors
+        j_, i_, tg_, lim_ = corridors
         for r in sorted(rows):
-            j, i, k, si, t = int(j_[r]), int(i_[r]), int(k_[r]), int(si_[r]), float(t_[r])
-            q = si if t < 0.5 else si + 1   # (the nearer vertex of k's segment: its correction, a smooth one, there)
-            zk = float(z0[k][si]) + (float(z0[k][si + 1]) - float(z0[k][si])) * t
-            lim = max(float(gap_[r]), 0.0) * CORRIDOR_BANK
-            c = zk - float(z0[j][i])
-            pen = CORRIDOR_PENALTY * max(stiff[j], stiff[k])
-            # (z_k - z_j <= lim:  d_j - d_k >= c - lim;  >= -lim:  d_k - d_j >= -lim - c)
-            couplings.append((j, i, k, q, "ge", c - lim, pen))
-            couplings.append((k, q, j, i, "ge", -lim - c, pen))
+            j, i = int(j_[r]), int(i_[r])
+            if chains[j]["lo"][i] == chains[j]["hi"][i]:
+                continue                    # (a held sample: its height is given)
+            c = float(tg_[r]) - float(z0[j][i])
+            lim = float(lim_[r])
+            pen = CORRIDOR_PENALTY * stiff[j]
+            # (|z_j - target| <= lim, on j alone: d_j >= c - lim, d_j <= c + lim)
+            couplings.append((j, i, None, 0, "ge", c - lim, pen))
+            couplings.append((j, i, None, 0, "le", c + lim, pen))
     return chains, couplings, n_joins
 
 
@@ -287,23 +290,14 @@ def solve(plans, specs, z0, ceilings, ranks, pins=(), dips=None, budget=BUDGET_S
             "corridor_excess_m": 0.0, "corridor_worst": None}
     if not CORRIDOR_ROWS_ON or corridors is None or not len(corridors[0]):
         corridors = None
-    if corridors is not None:   # (two levels by the rules' own heights: no rows between them. Tied from the profiles
-        # alone, a road beside the avenues Athens' underpass rule dips 8 m under the A1 followed them down, and the
-        # next road it, Athens' ground p95 1.3 -> 2.9 m; the pass sees the dips, as share_corridors after them does)
-        rule = [np.asarray(z, np.float64).copy() for z in z0]
-        for n, r in enumerate(rule):
-            for bound, pick in ((dips, np.fmin), (floors, np.fmax)):
-                if bound is not None and bound[n] is not None:
-                    rule[n] = r = pick(r, np.asarray(bound[n], np.float64))
-        diff, _lim = _corridor_diff(corridors, rule)
-        keep = np.abs(diff) <= CORRIDOR_MAX_DIFF_M
-        corridors = tuple(np.asarray(a)[keep] for a in corridors) if keep.any() else None
+    if corridors is not None:
+        corridors = _corridor_bands(corridors, z0, dips, floors)
     if not plans:
         info.update(joins=0, elapsed_s=0.0)
         return [], info
     out = None
     extra = {}
-    rows = set() if corridors is None else set(_corridor_over(corridors, z0, z0))
+    rows = set() if corridors is None else set(_corridor_over(corridors, z0))
     for _round in range(GRADE_ROUNDS if GRADE_ROWS_ON or corridors is not None else 1):
         chains, couplings, n_joins = problem(plans, specs, z0, ceilings, ranks, pins, dips, grade_rows=GRADE_ROWS_ON,
                                              extra=extra, caps=caps, floors=floors, corridors=corridors, rows=rows)
@@ -318,7 +312,7 @@ def solve(plans, specs, z0, ceilings, ranks, pins=(), dips=None, budget=BUDGET_S
         out = [np.asarray(z, np.float64) + np.asarray(d, np.float64) for z, d in zip(z0, ds)]
         clear = _cap_excess(plans, out, caps, floors)
         info.update(clear_broken=clear[0], clear_excess_m=clear[1], clear_worst=clear[2])
-        corr = _corridor_excess(plans, corridors, rows, z0, out)
+        corr = _corridor_excess(plans, corridors, rows, out)
         info.update(corridor_rows=len(rows), corridor_broken=corr[0], corridor_excess_m=corr[1],
                     corridor_worst=corr[2])
         # (the kernel's soft rows are all kinds: the caps' and the corridors' counted here, the same 1 mm)
@@ -326,7 +320,7 @@ def solve(plans, specs, z0, ceilings, ranks, pins=(), dips=None, budget=BUDGET_S
         info["grade_excess_m"] = float(diag.get("soft_excess_m", 0.0)) if info["grade_broken"] else 0.0
         more = bool(GRADE_ROWS_ON and _over_ceiling(plans, out, z0, ceilings, extra))
         if corridors is not None:
-            new = set(_corridor_over(corridors, z0, out)) - rows
+            new = set(_corridor_over(corridors, out)) - rows
             rows |= new
             more = more or bool(new)
         if not more:
@@ -390,22 +384,51 @@ def _corridor_diff(corridors, zs):
     return diff, np.maximum(gap, 0.0) * CORRIDOR_BANK
 
 
-def _corridor_over(corridors, z0, zs, slack=CORRIDOR_SLACK_M):
-    """The pairs of corridors whose heights zs break what their gap holds by over slack m, and are within
-    CORRIDOR_MAX_DIFF_M (z0: the profiles, unused but for their lengths)."""
-    diff, lim = _corridor_diff(corridors, zs)
-    over = (np.abs(diff) > lim + slack) & (np.abs(diff) <= CORRIDOR_MAX_DIFF_M)
-    return np.flatnonzero(over).tolist()
+def _corridor_bands(corridors, z0, dips=None, floors=None):
+    """grading's corridor_pairs (j, i, k, si, t, gap[, key j, key k]) as the solve's bands (j, i, target, lim), or
+    None: per pair whose plan j gives way to k (share_corridors' keys: the lower; between equals the lower one, up;
+    without keys, the lower one), k's rule height beside it (its profile z0, under its dips and over its floors) and what
+    the gap holds. Pairs over CORRIDOR_MAX_DIFF_M apart by those heights are two levels and get none (a road beside the
+    avenues Athens' underpass rule dips 8 m under the A1 followed them down)."""
+    rule = [np.asarray(z, np.float64).copy() for z in z0]
+    for n, r in enumerate(rule):
+        for bound, pick in ((dips, np.fmin), (floors, np.fmax)):
+            if bound is not None and bound[n] is not None:
+                rule[n] = r = pick(r, np.asarray(bound[n], np.float64))
+    diff, lim = _corridor_diff(corridors[:6], rule)
+    if len(corridors) >= 8:
+        kj, kk = np.asarray(corridors[6]), np.asarray(corridors[7])
+        gives = (kj < kk) | ((kj == kk) & (diff > 0.0))
+    else:
+        gives = diff > 0.0
+    keep = gives & (np.abs(diff) <= CORRIDOR_MAX_DIFF_M)
+    if not keep.any():
+        return None
+    j, i = np.asarray(corridors[0])[keep], np.asarray(corridors[1])[keep]
+    return j, i, np.asarray([rule[a][b] for a, b in zip(j.tolist(), i.tolist())]) + diff[keep], lim[keep]
 
 
-def _corridor_excess(plans, corridors, rows, z0, zs, slack=1e-3):
-    """(how many of the pairs given rows heights zs break by over slack m, the most one is, where: {plan, x, y,
+def _band_excess(bands, zs):
+    """Per band (_corridor_bands') how far heights zs are outside it (m, 0 inside)."""
+    j, i, tg, lim = bands
+    if not len(j):
+        return np.zeros(0)
+    z = np.asarray([zs[a][b] for a, b in zip(np.asarray(j).tolist(), np.asarray(i).tolist())], np.float64)
+    return np.maximum(np.abs(z - np.asarray(tg, np.float64)) - np.asarray(lim, np.float64), 0.0)
+
+
+def _corridor_over(corridors, zs, slack=CORRIDOR_SLACK_M):
+    """The bands (_corridor_bands') heights zs are outside by over slack m."""
+    return np.flatnonzero(_band_excess(corridors, zs) > slack).tolist()
+
+
+def _corridor_excess(plans, corridors, rows, zs, slack=1e-3):
+    """(how many of the bands given rows heights zs break by over slack m, the most one is, where: {plan, x, y,
     excess_m} or None)."""
     if corridors is None or not rows:
         return 0, 0.0, None
     r = np.asarray(sorted(rows), np.int64)
-    diff, lim = _corridor_diff(tuple(np.asarray(c)[r] for c in corridors), zs)
-    excess = np.abs(diff) - lim
+    excess = _band_excess(tuple(np.asarray(c)[r] for c in corridors), zs)
     n_over = int((excess > slack).sum())
     if not n_over:
         return 0, 0.0, None

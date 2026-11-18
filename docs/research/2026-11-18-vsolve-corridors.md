@@ -1,8 +1,9 @@
 # Roads side by side in the one solve: corridor rows (2026-11-18)
 
 In solo mode (2026-11-17-vsolve-solo.md), Rio still had one road through a deck that the passes did not leave. This
-note finds the cause, adds the missing rule to the solve (opt-in), and fixes a seam that dev's `BNE_SEAM_FILLED`
-opened. It then remeasures the 8 baseline places on this branch after merging dev.
+note finds the cause and adds the missing rule to the solve. Tied both ways, the rule chained from road to road, so
+it is one-sided, as the pass is. The note also fixes a seam that dev's `BNE_SEAM_FILLED` opened, and remeasures the 8
+baseline places on this branch after merging dev.
 
 All numbers below come from today's runs. The earlier notes' numbers are not comparable: rerun today, the same old
 commit gives other numbers, because the downloaded data has changed since (Lauterbrunnen's seam: 0.033 m on 17/11,
@@ -29,57 +30,77 @@ it either.
 
   The search is the pass's own: `corridor_core` now calls the same helpers. Its output is bit-identical on 300 random
   cases, compared with dev's earthfast 470 build. A new Rust test covers the pairs.
-- **The rows (`vsolve.CORRIDOR_ROWS_ON`, `BNE_VSOLVE_CORRIDOR=on`, off by default).** Two heights side by side may
-  differ by what their gap allows at `CORRIDOR_BANK` (0.4 m per m of gap; no difference where the pavements overlap).
-  - They are soft rows, with the grade rows' penalty times the stiffer road's stiffness. A cap under a deck (10× that
-    penalty) wins over them.
+- **The rows (`vsolve.CORRIDOR_ROWS_ON`, on in the solve's modes; `BNE_VSOLVE_CORRIDOR=off` turns them off).**
+  - As in the pass, of two roads side by side, one gives way: by `share_corridors`' keys, the slip road or the lower
+    class; between equals, the lower one, which goes up.
+  - Its height is held within what the gap allows of the other road's **rule height**: that road's profile, after its
+    dips under decks and its floors onto them. The gap allows `CORRIDOR_BANK` (0.4 m per m of gap; nothing where the
+    pavements overlap). The target is fixed, so it does not move with the other road's solved height.
+  - They are soft rows, with the grade rows' penalty times the road's stiffness. A cap under a deck (10× that penalty)
+    wins over them.
   - Like the grade rows, they are added round by round, wherever a solve's heights break them by more than 1 cm.
   - As in the pass, two through roads keep their own heights (a dual carriageway's halves on a hillside).
-  - Two heights more than 3 m apart in the rule's heights (after the dips and the floors) are two levels, so no row
-    ties them (a road dipped under a deck beside the ramp up to it).
+  - Two roads more than 3 m apart in their rule heights are two levels, so no row ties them (a road dipped under a
+    deck beside the ramp up to it).
 - **The measure (`grademetrics.corridor_steps`).** For each vertex beside another road, it measures how much more
   the two heights differ than their gap allows, where they are within 3 m. `tools/grade_metrics.py` prints it as
   "corridor ≥ 30 cm".
 
-## Why the rows are off by default
+## Two-sided rows chained; one-sided rows do not
 
-The rows fix Rio, but they cost elsewhere. Solo mode, without the rows → with them:
+The first form of the rows tied the two solved heights to each other, both ways. In one solve, a road then followed
+its neighbour down, the next road followed that one, and so on across a block. The pass moves each road once, toward
+its neighbour as the neighbour was before the pass. The one-sided rows do the same: the target is the neighbour's rule
+height, which the solve does not move. `test_vsolve.CorridorTest.test_the_next_road_does_not_follow_in_turn` puts a
+third road beside the slip road: with the two-sided rows it went down 0.79 m, with the one-sided rows it stays.
+
+Solo mode (on mode in brackets where it differs), without the rows / two-sided / one-sided:
 
 | | Rio | Tokyo | Fells Point | Athens |
-|---|---:|---:|---:|---:|
-| corridor steps ≥ 30 cm | 523 → **36** | 2123 → **195** | 80 → **0** | 1859 → **171** |
-| roads through decks | **1 → 0** | 14 → 14 | 0 → 0 | 1 → 1 |
-| low decks | 3 → 3 | 50 → 55 | 0 → 0 | 3 → 3 |
-| ground p95 (m) | 1.12 → 1.22 | 0.29 → 0.32 | 0.22 → 0.23 | 1.58 → **2.20** |
-| worst seam (m) | 0.55 → 0.55 | 0.57 → 0.31 | 0.02 → **0.31** | 0.05 → 0.05 |
-| made steep | 220 → 220 | 77 → 89 | 5 → 6 | 22 → 26 |
+|---|---|---|---|---|
+| corridor steps ≥ 30 cm | 523 / 36 / **164** (158) | 2123 / 195 / **1056** (908) | 80 / 0 / **15** (17) | 1859 / 171 / **1093** (1007) |
+| passes' corridor steps | 171 | 507 | 13 | 998 |
+| roads through decks | 1 / 0 / **0** | 14 / 14 / 14 | 0 / 0 / 0 | 1 / 1 / 1 |
+| low decks | 3 / 3 / 3 | 50 / 55 / **50** | 0 / 0 / 0 | 3 / 3 / 3 |
+| ground p95 (m) | 1.12 / 1.22 / **1.16** (1.15) | 0.29 / 0.32 / **0.29** | 0.22 / 0.23 / 0.22 | 1.58 / 2.20 / **1.69** (1.51) |
+| worst seam (m) | 0.55 / 0.55 / 0.55 | 0.57 / 0.31 / **0.21** | 0.02 / 0.31 / **0.36** | 0.05 / 0.05 / 0.05 |
+| made steep | 220 / 220 / 225 (224) | 77 / 89 / 86 (85) | 5 / 6 / 6 | 22 / 26 / 29 (28) |
 
-The cause is chaining. In one solve, a road follows its neighbour down, the next road follows that one, and so on
-across a block. The pass moves each road once, toward its neighbour as the neighbour was before the pass. At Athens
-that takes the ground p95 from 1.58 to 2.20 m (2.88 m before pairs more than 3 m apart were left out).
+- **What the one-sided rows keep:**
+  - Rio's street passes under its deck;
+  - the steps between roads side by side are roughly the passes' again (2090 in on mode at the four places,
+    against the passes' 1689 and 4732 without rows);
+  - Tokyo's worst seam in solo mode drops from 0.57 to 0.21 m.
+- **What they cost:** Athens' ground p95 rises by 0.11 m in solo mode and 0.09 m in on mode (against 0.62 m with the
+  two-sided rows), and a few more roads are made steep (+1 to +9 per place).
+- **Still open:**
+  - The Fells Point seam (0.36 m at 39.26644, −76.59668, slip road `b5749112…`, between cells 14/4706/6245 and
+    14/4705/6245) was already there with the two-sided rows (0.31 m). Both cells give the slip road the same band, toward
+    `44168e28…`'s rule height 4.69 m. In 4706 it goes down from 5.40 to 5.30 m. In 4705, where its far end is not pinned,
+    something else lifts it to 5.66 m and the soft row loses. That is the cells' asymmetry again (Tokyo's seam, below),
+    not the rows' rule.
+  - The rows hold a road near its neighbour's rule height, so they leave a step wherever the solve moves the
+    neighbour itself (a junction, a grade row). That is the likely source of the steps they leave; not yet checked
+    one by one.
 
-Without the rows, the one solve has no corridor rule at all. Over the 8 places, it leaves about three times the
-passes' corridor steps (below). So before the solve is on by default (RFC step G), the rule needs a form that does
-not chain. Two options:
-- one-sided rows: only the minor road follows, toward the major road's rule height;
-- rows that tie a road to its neighbour's rule height, not to its solved height.
+So the rows are on wherever the solve runs. `BNE_VSOLVE` itself is still off by default.
 
 ## Rio
 
 `--at=-22.9450,-43.1790,rio --tiles 1`:
 
-| | passes | solo | solo + rows |
-|---|---:|---:|---:|
-| corridor steps ≥ 30 cm | 171 | 523 | **36** |
-| corridor step max (m) | 2.92 | 2.94 | 1.38 |
-| roads through decks | 0 | **1** | **0** |
-| made steep | 260 | 220 | 220 |
-| ground p95 (m) | 1.15 | 1.12 | 1.22 |
-| worst seam (m) | 1.42 | 0.55 | 0.55 |
+| | passes | solo | solo + two-sided rows | solo + one-sided rows |
+|---|---:|---:|---:|---:|
+| corridor steps ≥ 30 cm | 171 | 523 | 36 | **164** |
+| corridor step max (m) | 2.92 | 2.94 | 1.38 | 2.57 |
+| roads through decks | 0 | **1** | 0 | **0** |
+| made steep | 260 | 220 | 220 | 225 |
+| ground p95 (m) | 1.15 | 1.12 | 1.22 | 1.16 |
+| worst seam (m) | 1.42 | 0.55 | 0.55 | 0.55 |
 
-With the rows, solo mode passes the street under the deck again, and the steps between roads side by side drop from
-523 to 36. The passes leave 171 because `share_corridors` runs before the welds and the junction snaps, which move
-the roads again afterwards.
+With the rows, solo mode passes the street under the deck again. The one-sided rows leave about as many steps between
+roads side by side as the passes (164 against 171). The passes leave theirs because `share_corridors` runs before the
+welds and the junction snaps, which move the roads again afterwards.
 
 ## Lauterbrunnen's seam: the context roads' approach floors
 
@@ -112,7 +133,8 @@ In on mode, the worst Tokyo seam is 0.21 m; solo's 0.57 m is still under the pas
 
 ## The 8 places
 
-Today's code (`23e72395`), rows off, `--tiles 1`. Each cell is: passes / on / solo.
+Code `23e72395`, without the rows, `--tiles 1`. Each cell is: passes / on / solo. The one-sided rows at four of
+these places are in the table above.
 
 | place | junction ≥ 30 cm | worst seam (m) | made steep | ground p95 (m) | low decks (through) | corridor ≥ 30 cm |
 |---|---|---|---|---|---|---|
@@ -141,4 +163,5 @@ With the rows on (four places measured), the corridor steps there are 36 / 195 /
 171 / 507 / 13 / 998, at the costs in the first table.
 
 The data is in `2026-11-18-vsolve-corridors.json`: `shadow` (the passes, with the shadow solve under `vsolve`),
-`on`, `solo`, and `solo_corridor_rows` (Rio, Tokyo, Fells Point and Athens with `BNE_VSOLVE_CORRIDOR=on`).
+`on`, `solo` (these three without the rows), `solo_corridor_rows` (Rio, Tokyo, Fells Point and Athens with the
+two-sided rows), and `solo_one_sided` and `on_one_sided` (the same four places with the one-sided rows).

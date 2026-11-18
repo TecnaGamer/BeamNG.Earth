@@ -9156,7 +9156,7 @@ def corridor_pairs(plans, specs):
     """share_corridors' pairs (above), for the one vertical solve's corridor rows (vsolve.CORRIDOR_ROWS_ON): per
     vertex i of a plan j, each plan k running beside it there (k's nearest segment si at t, the gap between the
     carriageways) of those whose heights may differ (two through roads keep their own: share_corridors' keys), as
-    arrays (j, i, k, si, t, gap); None without the kernel's plan_corridor_pairs (earthfast 472) or with fewer than two
+    arrays (j, i, k, si, t, gap, key j, key k: who follows whom, as in the pass); None without the kernel's plan_corridor_pairs (earthfast 472) or with fewer than two
     plans in it. plans [(fid, Plan)], specs their Specs. Pure."""
     import fast
     if len(plans) < 2 or getattr(fast, "_ef", None) is None or not hasattr(fast._ef, "plan_corridor_pairs"):
@@ -9172,7 +9172,7 @@ def corridor_pairs(plans, specs):
     j, i, k, si, tt, gap = fast._ef.plan_corridor_pairs(xy, off, wall, rh, key, abut, float(CORRIDOR_ANG_DEG),
                                                         float(CORRIDOR_GAP_M), float(CORRIDOR_ABUT_HOLD_M))
     keep = ~((key[j] >= CORRIDOR_THROUGH) & (key[k] >= CORRIDOR_THROUGH))
-    return tuple(np.asarray(a)[keep] for a in (j, i, k, si, tt, gap))
+    return tuple(np.asarray(a)[keep] for a in (j, i, k, si, tt, gap, key[j], key[k]))
 
 
 def _raised_under(xy, dz, decks):

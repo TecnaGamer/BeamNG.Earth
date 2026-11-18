@@ -229,7 +229,7 @@ class CorridorTest(unittest.TestCase):
     def solve(self, plans, specs, dips, corridors):
         z0 = [p.z.copy() for p in plans]
         ranks = [grading.road_rank(sp) for sp in specs]
-        return vsolve.solve(plans, specs, z0, [0.09, 0.09], ranks, dips=dips, corridors=corridors)
+        return vsolve.solve(plans, specs, z0, [0.09] * len(plans), ranks, dips=dips, corridors=corridors)
 
     def test_the_slip_road_follows_the_dip(self):
         plans, specs, dips = self.roads()
@@ -249,6 +249,22 @@ class CorridorTest(unittest.TestCase):
         zs, info = self.solve(plans, specs, dips, None)
         self.assertEqual(info["corridor_rows"], 0)
         self.assertGreater(float(np.abs(zs[1] - zs[0])[50]), 1.4)
+
+    def test_the_next_road_does_not_follow_in_turn(self):
+        # (a third road beside the slip road, one class under it, follows the slip road's rule height, its profile,
+        # not its solved one: the rows tie a road to its neighbour once, as the pass, with no chain across a block)
+        plans, specs, dips = self.roads()
+        c = plan(np.c_[S, np.full(len(S), 16.0)], np.zeros(len(S)))
+        c.road_half = 3.5
+        plans.append(c)
+        specs.append(SimpleNamespace(cls="tertiary_link", kind="road"))
+        dips.append(None)
+        pairs = grading.corridor_pairs([("a", plans[0]), ("b", plans[1]), ("c", plans[2])], specs)
+        self.assertTrue(((pairs[0] == 2) & (pairs[2] == 1)).any())             # (c beside b)
+        zs, info = self.solve(plans, specs, dips, pairs)
+        self.assertTrue(info["feasible"] and not info["fallback"], info)
+        self.assertLess(float(zs[1][50]), -1.0)
+        self.assertGreater(float(zs[2][50]), -0.05, info)
 
     def test_two_through_roads_keep_their_own(self):
         plans, specs, dips = self.roads(link=False)

@@ -118,7 +118,7 @@ def corridor_steps(plans, specs):
     pr = grading.corridor_pairs(plans, specs) if plans else None
     if pr is None or not len(pr[0]):
         return []
-    j, i, k, si, t, gap = pr
+    j, i, k, si, t, gap = pr[:6]
     zs = [np.asarray(p.z, np.float64) for _f, p in plans]
     out = []
     for a, b, c, s, u, g in zip(j.tolist(), i.tolist(), k.tolist(), si.tolist(), t.tolist(), gap.tolist()):
