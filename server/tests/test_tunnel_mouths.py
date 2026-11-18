@@ -159,5 +159,79 @@ class ArchFootprintTest(unittest.TestCase):
         self.assertAlmostEqual(float(soil[3]), 100.0)
 
 
+LIP_Z = 100.0                   # m: the road's level where the tunnel meets the bridge and where the bridge meets the ground
+GORGE_M = 60.0                  # m the bridge spans (x = 0 .. 60)
+GORGE_DEPTH = 15.0
+
+
+def gorge(x):
+    """The ground of a road in a tunnel under a hill (x < 0: 100 m at both ends, 140 m over the middle) that comes out
+    on a bridge over a gorge (0 < x < 60: walls 6 m wide, the floor 15 m down) and goes on level on the other side."""
+    x = np.asarray(x, np.float64)
+    hill_ = np.where((x < 0.0) & (x > -300.0), 40.0 * (1.0 - ((x + 150.0) / 150.0) ** 2), 0.0)
+    depth = GORGE_DEPTH * np.clip(np.minimum(x, GORGE_M - x) / 6.0, 0.0, 1.0) * ((x > 0.0) & (x < GORGE_M))
+    return LIP_Z + hill_ - depth
+
+
+class MouthOverDeckTest(unittest.TestCase):
+    """The road's level at a mouth a bridge goes on from (roads.mouth_over_deck): the structure's own, not the ground
+    under the deck, which over a gorge is the gorge (Galleria Casagranda: the line the ground read outward gave was
+    the gorge's wall and floor, 58.0 where the elevation at the node was 72.2 and the deck's abutment stood)."""
+
+    def test_a_deck_over_a_gorge_is_on_the_line_to_the_far_lip(self):
+        s = np.arange(8.0, 52.1, STEP)
+        z = roads.mouth_over_deck(LIP_Z, 300.0, [(LIP_Z, GORGE_M)], s, gorge(s))
+        self.assertAlmostEqual(z, LIP_Z, delta=0.01, msg="the lip, level with the tunnel's other end and the far lip")
+        d = np.arange(0.0, 41.0, STEP)
+        self.assertLess(roads.fill_mouth(gorge(d), False, STEP)[0], LIP_Z - 10.0, "what the ground read outward gave")
+
+    def test_a_deck_over_a_bank_stands_on_it(self):
+        s = np.arange(8.0, 52.1, STEP)
+        bank = np.full(len(s), 108.0)                   # (ground over the line to the far lip: the road must clear it)
+        z = roads.mouth_over_deck(LIP_Z, 300.0, [(LIP_Z, GORGE_M)], s, bank)
+        self.assertGreater(z, LIP_Z + 7.0)
+        self.assertLess(z, 108.0 + roads.DECK_CLEAR + 1e-6, "no higher than clearing the ground asks")
+
+    def test_a_deck_with_no_far_end_has_no_level(self):
+        self.assertTrue(np.isnan(roads.mouth_over_deck(LIP_Z, 300.0, [])))
+
+
+class BridgeContinuedPortalTest(unittest.TestCase):
+    """A road in a tunnel that comes out on a bridge over a gorge, as TunnelProfiles reads it from the map: the portal
+    where the bridge goes on is at the road's level, the lip, whatever lies under the deck."""
+
+    def setUp(self):
+        import roadz
+        from unittest import mock
+        p = mock.patch.object(roadz, "PROVIDER", None)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def _tunnel(self, bridge):
+        f = features([[(-300, 0), (0, 0), (GORGE_M, 0), (160, 0)]], ["trunk"],
+                     flags=[(0, "is_tunnel", 0.0, 300.0 / 460.0)] + (
+                         [(0, "is_bridge", 300.0 / 460.0, 360.0 / 460.0)] if bridge else []))
+
+        def elev(la, lo):
+            e, _, _ = FRAME.geodetic_to_enu(la, lo, 0.0)
+            return gorge(e)
+        tp = roads.TunnelProfiles(FRAME, lambda key: f, elev)
+        tp.raw = elev
+        tp.ends = lambda la, lo, base=None: elev(la, lo) if base is None else base
+        parts = [p for p in tp.parts([f], (-400.0, -200.0, 400.0, 200.0)) if p[0].startswith(str(f.ids[0]))]
+        last = max(parts, key=lambda p: float(np.asarray(p[2])[-1, 0]))     # (the tunnel's end at the gorge)
+        return float(np.asarray(last[2])[-1, 0]), float(np.asarray(last[3])[-1])
+
+    def test_the_portal_a_bridge_goes_on_from_is_at_the_lip(self):
+        x, z = self._tunnel(bridge=True)
+        self.assertAlmostEqual(x, 0.0, delta=10.0)
+        self.assertAlmostEqual(z, LIP_Z, delta=0.5, msg="the road's level at the lip (not the gorge, 15 m down)")
+
+    def test_a_portal_no_bridge_goes_on_from_reads_the_ground_outward(self):
+        # (the same ground, the gorge with no deck over it: it is not a road's: the old law, the ground)
+        x, z = self._tunnel(bridge=False)
+        self.assertLess(z, LIP_Z - 10.0)
+
+
 if __name__ == "__main__":
     unittest.main()
