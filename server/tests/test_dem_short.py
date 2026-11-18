@@ -95,14 +95,19 @@ class KeptStandInTest(unittest.TestCase):
             self.assertFalse(waiter["b"][1].complete)
 
     def test_ancestor_stand_in_kept(self):
-        """A deeper tile upsampled from a kept stand-in ancestor (_from_ancestor) is short too."""
+        """A deeper tile upsampled from a stand-in ancestor (_from_ancestor) is short too: an inline stand-in (not
+        kept: made again by the next reader, short again) and one kept in the LRU by its owner's load."""
         with tempfile.TemporaryDirectory() as d:
-            dem = StandInDem(d, failing={(15, 2, 2)})
-            _r, first = in_thread(lambda: dem._from_ancestor(16, 4, 4, 15))
+            dem = StandInDem(d, failing={(12, 2, 2)})
+            _r, first = in_thread(lambda: dem._from_ancestor(13, 4, 4, 12))
             self.assertFalse(first.complete)
-            _r, later = in_thread(lambda: dem._from_ancestor(16, 5, 5, 15))
+            _r, later = in_thread(lambda: dem._from_ancestor(13, 5, 5, 12))
             self.assertFalse(later.complete)
-            self.assertEqual(dem.loaded, [(15, 2, 2)])
+            self.assertEqual(dem.loaded, [(12, 2, 2)] * 2)
+            in_thread(lambda: dem.tiles([(12, 2, 2)]))      # (the owner's load: kept, marked)
+            _r, kept = in_thread(lambda: dem._from_ancestor(13, 4, 5, 12))
+            self.assertFalse(kept.complete)
+            self.assertEqual(len(dem.loaded), 3)
 
     def test_stand_in_made_again_after_retry(self):
         """Kept past SHORT_RETRY_S, a stand-in is made again: once its download works, its readers are complete."""
@@ -125,13 +130,13 @@ class KeptStandInTest(unittest.TestCase):
         """A tile upsampled from a short ancestor read from memory is a stand-in itself: never mirrored (where a
         restart would read it back without its marks)."""
         with tempfile.TemporaryDirectory() as d:
-            dem = StandInDem(d, failing={(15, 2, 2)})
-            in_thread(lambda: dem._from_ancestor(16, 4, 4, 15))
+            dem = StandInDem(d, failing={(12, 2, 2)})
+            in_thread(lambda: dem.tiles([(12, 2, 2)]))      # (kept short by its owner's load)
             seen = {}
 
             def child():
                 dem._local.partial = False
-                dem._from_ancestor(16, 5, 5, 15)
+                dem._from_ancestor(13, 5, 5, 12)
                 seen["partial"] = dem._local.partial
             _r, b = in_thread(child)
             self.assertTrue(seen["partial"])
@@ -170,6 +175,38 @@ class KeptStandInTest(unittest.TestCase):
                 dem._lru_put(other, good, None)
             self.assertIs(dem._lru[other], good)
             self.assertNotIn(other, dem._lru_short)
+
+    def test_inline_ancestor_stand_in_stays_local(self):
+        """_from_ancestor's inline load of an ancestor owns no future: while the owner's load of it is pending, an
+        inline stand-in is not put in the LRU (tiles() would hand it out ahead of the owner's healthy load); its reader
+        is short and its descendant partial; the owner's complete tile is what later readers get."""
+        from concurrent.futures import Future
+        anc = (12, 2, 2)
+        with tempfile.TemporaryDirectory() as d:
+            dem = StandInDem(d, failing={anc})
+            owner = Future()                        # (the owner's load, still pending)
+            dem._inflight[anc] = owner
+            seen = {}
+
+            def child():
+                dem._local.partial = False
+                dem._from_ancestor(13, 4, 4, 12)
+                seen["partial"] = dem._local.partial
+            _r, b = in_thread(child)
+            self.assertFalse(b.complete)
+            self.assertTrue(seen["partial"])
+            self.assertNotIn(anc, dem._lru)
+            self.assertNotIn(anc, dem._lru_short)
+            owner.set_result((np.full((T, T), 6.0, np.float32), None))
+            dem._finish(anc, owner)
+            got, later = in_thread(lambda: dem.tiles([anc]))
+            self.assertTrue(later.complete)
+            self.assertEqual(float(got[anc][0, 0]), 6.0)
+            # (a complete inline load is published, as before)
+            dem.failing.clear()
+            in_thread(lambda: dem._from_ancestor(13, 8, 8, 12))
+            self.assertIn((12, 4, 4), dem._lru)
+            self.assertNotIn((12, 4, 4), dem._lru_short)
 
     def test_superseded_load_does_not_publish(self):
         """A load whose key another load took over (the urgent lane's reload) publishes nothing when it finishes."""

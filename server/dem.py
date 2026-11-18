@@ -1552,10 +1552,16 @@ class Dem:
             if marks:           # (an ancestor kept short: the tile made from it is a stand-in too, never mirrored)
                 self._partial()
         else:
-            # (in this thread: a pool worker waiting on the pool could deadlock)
+            # (in this thread: a pool worker waiting on the pool could deadlock). It owns no future of the key, so it
+            # publishes a complete tile only: a stand-in stays this descendant's (its faults are this reader's, and the
+            # descendant is partial: _load_tile), not put in the LRU, where tiles() would hand it out ahead of the
+            # owner's healthy load still pending
             anc, marks = self._load_marked(key)
-            with self._lock:
-                self._lru_put(key, anc, marks)
+            if marks is None:
+                with self._lock:
+                    self._lru_put(key, anc, marks)
+            else:
+                self._partial()     # (the descendant made from it is a stand-in too: never mirrored)
         k = 2 ** d
         i = (np.arange(TILE) + 0.5) / k - 0.5
         u = np.clip((x - ax * k) * TILE / k + i, 0, TILE - 1)
