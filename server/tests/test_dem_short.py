@@ -51,8 +51,9 @@ def in_thread(fn):
 
 
 class KeptStandInTest(unittest.TestCase):
+    # (zoom 12 keys: under the regional archives, so no archive or file list is asked, no module state set)
     def test_later_reader_of_a_kept_stand_in_is_short(self):
-        key = (14, 5, 7)
+        key = (12, 5, 7)
         with tempfile.TemporaryDirectory() as d:
             dem = StandInDem(d, failing={key})
             _r, first = in_thread(lambda: dem.tiles([key]))
@@ -61,11 +62,11 @@ class KeptStandInTest(unittest.TestCase):
             _r, later = in_thread(lambda: dem.tiles([key]))
             self.assertEqual(dem.loaded, [key])
             self.assertFalse(later.complete, "a build that read the kept stand-in counted as complete")
-            _r, clean = in_thread(lambda: dem.tiles([(14, 6, 7)]))
+            _r, clean = in_thread(lambda: dem.tiles([(12, 6, 7)]))
             self.assertTrue(clean.complete)
 
     def test_waiter_on_the_same_load_is_short(self):
-        key = (14, 5, 7)
+        key = (12, 5, 7)
         with tempfile.TemporaryDirectory() as d:
             hold = threading.Event()
             dem = StandInDem(d, failing={key}, hold=hold)
@@ -103,13 +104,30 @@ class KeptStandInTest(unittest.TestCase):
             self.assertFalse(later.complete)
             self.assertEqual(dem.loaded, [(15, 2, 2)])
 
+    def test_stand_in_made_again_after_retry(self):
+        """Kept past SHORT_RETRY_S, a stand-in is made again: once its download works, its readers are complete."""
+        from unittest import mock
+        key = (12, 5, 7)
+        with tempfile.TemporaryDirectory() as d:
+            dem = StandInDem(d, failing={key})
+            in_thread(lambda: dem.tiles([key]))
+            with mock.patch.object(demmod, "SHORT_RETRY_S", -1.0):
+                dem.failing.clear()                 # (the host is back)
+                _r, again = in_thread(lambda: dem.tiles([key]))
+            self.assertEqual(dem.loaded, [key, key])
+            self.assertTrue(again.complete)
+            self.assertNotIn(key, dem._lru_short)
+            _r, later = in_thread(lambda: dem.tiles([key]))
+            self.assertTrue(later.complete)
+            self.assertEqual(len(dem.loaded), 2)
+
     def test_evicted_marks_go(self):
         with tempfile.TemporaryDirectory() as d:
-            dem = StandInDem(d, failing={(14, 0, 0)})
+            dem = StandInDem(d, failing={(12, 0, 0)})
             dem.mem_tiles = 2
-            in_thread(lambda: dem.tiles([(14, 0, 0)]))
-            in_thread(lambda: dem.tiles([(14, 1, 0), (14, 2, 0)]))
-            self.assertNotIn((14, 0, 0), dem._lru)
+            in_thread(lambda: dem.tiles([(12, 0, 0)]))
+            in_thread(lambda: dem.tiles([(12, 1, 0), (12, 2, 0)]))
+            self.assertNotIn((12, 0, 0), dem._lru)
             self.assertEqual(dem._lru_short, {})
 
 

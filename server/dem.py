@@ -97,6 +97,7 @@ if MIRROR_ZSTD:
 CLAIM_WAIT_S, CLAIM_POLL_S, CLAIM_STALE_S = 0.5, 0.01, 30.0     # (Dem._load_tile: another process making a tile)
 MIRROR_PRUNE_S = 120.0  # the mirror pruned at most this often per process (each prune walks it all)
 MIRROR_MAX_AGE_S = 30 * 86400
+SHORT_RETRY_S = 30.0        # s a stand-in tile (made while a download failed) is kept in memory before it is made again
 DECODED_VERSION = 4          # 2: tiles past the lidar's depth upsampled from its deepest tile, not z12; its holes
                              # filled (fill_holes); 3: Canada's HRDEM lidar (hrdem.py) from z13 down; 4: LidarBC,
                              # and z12 / z13 shifted to its ground (BIAS_*)
@@ -324,6 +325,11 @@ def _tiles_read(fx, fy, nx, ny):
     return read.ravel()
 
 
+def _stale(marks):
+    """A kept stand-in tile's time to be made again (Dem._lru_short's marks, SHORT_RETRY_S)."""
+    return marks is not None and time.monotonic() - marks[2] > SHORT_RETRY_S
+
+
 def _replay(marks):
     """A kept tile's marks (Dem._load_marked) said again in the reading thread: its builds are short too."""
     if marks:
@@ -354,9 +360,10 @@ class Dem:
         self._local = threading.local()
         self.mem_tiles = MEM_TILES if mem_tiles is None else mem_tiles
         self._lru = OrderedDict()       # (z, x, y) -> float32 [TILE, TILE]
-        # (z, x, y) -> (faults, lidar rule faults) of a tile in _lru made while something it read failed (a stand-in
-        # for a download that failed): whoever reads the kept copy is short of it too (_lru_read). Only its first
-        # readers were told: a cell planned later from the kept stand-in counted as complete
+        # (z, x, y) -> (faults, lidar rule faults, when made) of a tile in _lru made while something it read failed (a
+        # stand-in for a download that failed): whoever reads the kept copy is short of it too (_replay; only its first
+        # readers were told: a cell planned later from the kept stand-in counted as complete), and it is made again
+        # after SHORT_RETRY_S (kept, it stood in for the session: no read of it was ever complete again)
         self._lru_short = {}
         self._inflight = {}             # (z, x, y) -> Future
         self._lock = threading.Lock()
@@ -1535,6 +1542,8 @@ class Dem:
         with self._lock:
             anc = self._lru.get(key)
             marks = self._lru_short.get(key)
+            if anc is not None and _stale(marks):
+                anc = None
         if anc is not None:
             _replay(marks)
         else:
@@ -1589,7 +1598,7 @@ class Dem:
             log.debug("dem urgent: %d tiles %s", len(keys), dict(zs))
         with self._lock:
             for k in keys:
-                if k in self._lru:
+                if k in self._lru and not _stale(self._lru_short.get(k)):
                     self._lru.move_to_end(k)
                     out[k] = self._lru[k]
                     short.append(self._lru_short.get(k))
@@ -1640,7 +1649,7 @@ class Dem:
         inside theirs)."""
         with revisit.scope() as made:
             a = self._load_tile(key)
-        return a, ((made.n, made.lidar) if made.n or made.lidar else None)
+        return a, ((made.n, made.lidar, time.monotonic()) if made.n or made.lidar else None)
 
     def block_max(self, z, x, y, block):
         """Highest elevation in every block x block pixel square of tile (z, x, y): a (TILE / block)²
