@@ -155,5 +155,7 @@ def region(name):
         met there may go on in a cell that was not read)."""
         p = np.asarray(xy, np.float64)
         return bool((p < lo_ + 150.0).any() or (p > hi_ - 150.0).any())
+    facts = d.get("endfacts")
     return SimpleNamespace(name=name, net=net, members=mem, meta=d["meta"], ll=ll, edge=edge, ground=ground, today=systems,
-                           trace=d["trace"], audits=d.get("audits"), home=d["home"])
+                           trace=d["trace"], audits=d.get("audits"), home=d["home"],
+                           endinfo=None if facts is None else (lambda i, e: facts.get((i, e))))

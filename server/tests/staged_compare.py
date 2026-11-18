@@ -78,7 +78,7 @@ def one(name, solve=False, out=None):
     if pl is None:
         return None
     t0 = time.perf_counter()
-    S = staged.run(pl.members, pl.meta, pl.ll, pl.edge, pl.ground, name=name)
+    S = staged.run(pl.members, pl.meta, pl.ll, pl.edge, pl.ground, name=name, endinfo=getattr(pl, "endinfo", None))
     took = time.perf_counter() - t0
     cmp_ = staged.compare(S, pl.today, pl.net)
     lines = [S.report(), "## Today's pipeline against the staged one", "",
