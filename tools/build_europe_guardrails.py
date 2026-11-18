@@ -9,6 +9,7 @@ import sys
 import uuid
 import math
 import xml.etree.ElementTree as ET
+import npyfirst  # noqa: E402,F401  (first: numpy's AVX-512 kernels held back before anything imports numpy)
 import numpy as np
 from build_rail_crossing_props import Mesh,write_dae
 ROOT=Path(__file__).resolve().parents[1]

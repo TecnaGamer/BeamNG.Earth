@@ -25,6 +25,7 @@ import io
 import os
 import zipfile
 
+import npyfirst  # noqa: E402,F401  (first: numpy's AVX-512 kernels held back before anything imports numpy)
 import numpy as np
 from PIL import Image
 

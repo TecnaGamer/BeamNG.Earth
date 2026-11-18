@@ -5,6 +5,7 @@ from pathlib import Path
 import sys
 import uuid
 
+import npyfirst  # noqa: E402,F401  (first: numpy's AVX-512 kernels held back before anything imports numpy)
 from PIL import Image, ImageDraw
 
 from build_rail_crossing_props import Mesh, write_dae

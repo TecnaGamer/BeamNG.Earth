@@ -9,6 +9,7 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "server"))
+import npyfirst  # noqa: E402,F401  (first: numpy's AVX-512 kernels held back before anything imports numpy)
 from radars import DATA, HARDWARE  # noqa: E402
 
 SOURCE = "https://www.data.gouv.fr/datasets/liste-des-radars-fixes-en-france"

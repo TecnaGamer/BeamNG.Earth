@@ -34,6 +34,7 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "server"))
+import npyfirst  # noqa: E402,F401  (first: numpy's AVX-512 kernels held back before anything imports numpy)
 import tilepack  # noqa: E402
 
 SOURCE = "https://data.source.coop/mapterhorn/mapterhorn/planet.pmtiles"

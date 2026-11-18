@@ -36,6 +36,7 @@ import urllib.parse as P
 import urllib.request as U
 import zipfile
 
+import npyfirst  # noqa: E402,F401  (first: numpy's AVX-512 kernels held back before anything imports numpy)
 import numpy as np
 from lxml import etree
 from pyproj import Transformer

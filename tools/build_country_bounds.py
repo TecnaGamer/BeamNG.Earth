@@ -10,6 +10,7 @@ import hashlib
 import json
 from pathlib import Path
 import zipfile
+import npyfirst  # noqa: E402,F401  (first: numpy's AVX-512 kernels held back before anything imports numpy)
 import numpy as np
 
 

@@ -65,6 +65,7 @@ import zlib
 from collections import OrderedDict
 from concurrent.futures import ProcessPoolExecutor
 
+import npyfirst  # noqa: E402,F401  (first: numpy's AVX-512 kernels held back before anything imports numpy)
 import numpy as np
 
 FORMAT = 1

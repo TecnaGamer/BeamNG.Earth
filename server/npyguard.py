@@ -73,15 +73,25 @@ FORCE_ENV = "BNGE_NPYGUARD_FORCE"       # "1": as on an AVX-512 CPU, whatever th
 FROZEN_FILE = "npyguard_frozen.json"    # the packaged app's names, made from its own numpy by tools/build_app.py
 
 
-def _frozen_names():
-    """The packaged app's names: those tools/build_app.py took from the numpy it bundled (FROZEN_FILE beside the
-    modules; the release's build checks that the executable imports numpy with them under -W error: launcher.py
-    --check-numpy); the PyPI wheels' names for the numpy version where the file is missing."""
+def frozen_manifest():
+    """The packaged app's manifest ({"numpy": version, "names": [...]}, FROZEN_FILE beside the modules, written by
+    tools/build_app.py from the numpy it bundled). Raises OSError / ValueError when it is missing or malformed."""
     import json
+    with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), FROZEN_FILE), encoding="utf-8") as fh:
+        doc = json.load(fh)
+    if not (isinstance(doc, dict) and isinstance(doc.get("numpy"), str) and isinstance(doc.get("names"), list)
+            and all(isinstance(n, str) for n in doc["names"])):
+        raise ValueError(f"{FROZEN_FILE}: not a manifest of numpy's version and names")
+    return doc
+
+
+def _frozen_names():
+    """The packaged app's names at run time: the manifest's (the release's build checked them: launcher.py
+    --check-numpy, self_check); the PyPI wheels' names for the numpy version where it is missing (the fallback; the
+    build's check never takes it)."""
     try:
-        with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), FROZEN_FILE), encoding="utf-8") as fh:
-            return tuple(str(n) for n in json.load(fh)["names"])
-    except (OSError, ValueError, KeyError, TypeError):
+        return tuple(frozen_manifest()["names"])
+    except (OSError, ValueError):
         return _wheel_names()
 
 
@@ -153,23 +163,37 @@ def apply(env=None):
 
 def self_check():
     """(ok, message) in a process that has not imported numpy yet: this build's names set (whatever the CPU), numpy
-    imported with warnings as errors; ok when it starts, every name is one of its dispatch targets outside its baseline
-    and no AVX-512 kernel dispatches. The packaged app's check at build time (launcher.py --check-numpy)."""
+    imported with warnings as errors; ok when it starts, the names are exactly numpy's AVX-512 dispatch targets outside
+    its baseline (the full set: none missing, none extra) and no AVX-512 kernel dispatches. The packaged app: its
+    manifest must be readable and of the numpy it bundles (version and names; no fallback). The release build's check
+    (launcher.py --check-numpy)."""
     if "numpy" in sys.modules:
         return False, "numpy was imported before the check"
-    names = _frozen_names() if getattr(sys, "frozen", False) else (_probe() or ())
+    want_version = None
+    if getattr(sys, "frozen", False):
+        try:
+            doc = frozen_manifest()
+        except (OSError, ValueError) as e:
+            return False, f"no readable {FROZEN_FILE}: {type(e).__name__}: {e}"
+        names, want_version = tuple(doc["names"]), doc["numpy"]
+    else:
+        names = _probe()
+        if names is None:
+            return False, "numpy could not be asked for its AVX-512 targets"
     os.environ[ENV] = " ".join(names)
     import warnings
     try:
         with warnings.catch_warnings():
             warnings.simplefilter("error")
-            import numpy  # noqa: F401
-            try:
-                import numpy._core._multiarray_umath as m
-            except ImportError:
-                import numpy.core._multiarray_umath as m
+            import numpy
+            m = _umath()
     except Exception as e:
         return False, f"numpy did not import with {ENV}={os.environ[ENV]!r}: {type(e).__name__}: {e}"
+    if want_version is not None and want_version != numpy.__version__:
+        return False, f"{FROZEN_FILE} is of numpy {want_version}, the app has {numpy.__version__}"
+    full = dispatch_names()
+    if sorted(names) != sorted(full):
+        return False, f"names {sorted(names)} are not numpy's AVX-512 targets outside its baseline {sorted(full)}"
     bad = [n for n in names if n not in m.__cpu_dispatch__ or n in m.__cpu_baseline__]
     if bad:
         return False, f"not numpy's dispatch targets outside its baseline: {bad}"

@@ -27,6 +27,7 @@ import sys
 import tempfile
 import urllib.request
 
+import npyfirst  # noqa: E402,F401  (first: numpy's AVX-512 kernels held back before anything imports numpy)
 import numpy as np
 
 ROOT = Path(__file__).resolve().parents[1]

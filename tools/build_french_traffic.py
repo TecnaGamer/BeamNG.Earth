@@ -11,6 +11,7 @@ import math
 from pathlib import Path
 import uuid
 
+import npyfirst  # noqa: E402,F401  (first: numpy's AVX-512 kernels held back before anything imports numpy)
 import numpy as np
 from PIL import Image, ImageDraw, ImageOps
 

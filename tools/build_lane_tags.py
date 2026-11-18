@@ -32,6 +32,7 @@ import re
 import sys
 import time
 
+import npyfirst  # noqa: E402,F401  (first: numpy's AVX-512 kernels held back before anything imports numpy)
 import numpy as np
 import osmium
 

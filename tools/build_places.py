@@ -20,6 +20,7 @@ import urllib.request
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
+import npyfirst  # noqa: E402,F401  (first: numpy's AVX-512 kernels held back before anything imports numpy)
 import overture  # noqa: E402
 RELEASE = overture.RELEASE    # (the pinned release: the snapshot is rebuilt with every bump)
 STAC_ITEM = f"https://stac.overturemaps.org/{RELEASE}/divisions/division/00000/00000.json"

@@ -114,18 +114,65 @@ class NpyGuardTest(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertTrue(r.stdout.startswith("ok: "), r.stdout)
 
+    def test_frozen_self_check_is_strict(self):
+        """The packaged app's check (launcher.py --check-numpy) needs a readable manifest of the bundled numpy: its
+        version and its full set of AVX-512 targets; a missing, empty, incomplete or other-version one fails (the run
+        time's fallback is not taken)."""
+        import numpy
+        full = list(npyguard._probe() or ())
+        cases = {"missing": None, "other version": {"numpy": "1.0.0", "names": full},
+                 "empty": {"numpy": numpy.__version__, "names": []},
+                 "incomplete": {"numpy": numpy.__version__, "names": full[:-1]},
+                 "malformed": "not json", "right": {"numpy": numpy.__version__, "names": full}}
+        with tempfile.TemporaryDirectory() as d:
+            for name, doc in cases.items():
+                f = os.path.join(d, name.replace(" ", "_") + ".json")
+                if doc is not None:
+                    with open(f, "w") as fh:
+                        fh.write(doc if isinstance(doc, str) else json.dumps(doc))
+                code = ("import sys; sys.frozen = True; sys.path.insert(0, %r); import npyguard; "
+                        "npyguard.FROZEN_FILE = %r; ok, msg = npyguard.self_check(); print(ok); print(msg)"
+                        % (SERVER, f))
+                r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True,
+                                   env={k: v for k, v in os.environ.items() if k != npyguard.ENV})
+                self.assertEqual(r.returncode, 0, r.stderr)
+                ok = r.stdout.split("\n")[0] == "True"
+                if name == "right" or (name == "empty" and not full) or (name == "incomplete" and not full):
+                    self.assertTrue(ok, (name, r.stdout))
+                else:
+                    self.assertFalse(ok, (name, r.stdout))
+
     def test_entry_points_import_it_first(self):
-        """Each entry point imports npyguard before any module outside the standard library (numpy directly or
-        through a server module); portcheck's build child before its numpy."""
+        """Each entry point imports npyguard (the build tools: tools/npyfirst.py, which imports it) before any module
+        outside the standard library (numpy directly or through a server module): the named ones, and every
+        executable build tool (tools/build_*.py, bake_*.py, rebase*.py, profile_build.py) that imports numpy or a
+        server module anywhere, in a function too (it runs after the module's top). portcheck's build child imports it
+        before its numpy."""
+        import fnmatch
         std = set(sys.stdlib_module_names)
-        for rel in ENTRY_POINTS:
+        server_mods = {f[:-3] for f in os.listdir(SERVER) if f.endswith(".py")}
+
+        def names_of(n):
+            return ([a.name for a in n.names] if isinstance(n, ast.Import) else
+                    [n.module or ""] if isinstance(n, ast.ImportFrom) else [])
+        tools = []
+        for f in sorted(os.listdir(os.path.join(ROOT, "tools"))):
+            if not any(fnmatch.fnmatch(f, p) for p in ("build_*.py", "bake_*.py", "rebase*.py", "profile_build.py")):
+                continue
+            with open(os.path.join(ROOT, "tools", f), encoding="utf-8") as fh:
+                src = fh.read()
+            if "__main__" in src and any(m.split(".")[0] == "numpy" or m.split(".")[0] in server_mods
+                                         for n in ast.walk(ast.parse(src)) for m in names_of(n)):
+                tools.append("tools/" + f)
+        self.assertIn("tools/profile_build.py", tools)
+        self.assertGreater(len(tools), 50)
+        for rel in tuple(ENTRY_POINTS) + tuple(tools):
             with open(os.path.join(ROOT, rel), encoding="utf-8") as fh:
                 tree = ast.parse(fh.read())
             guard = None
             for n in tree.body:
-                names = ([a.name for a in n.names] if isinstance(n, ast.Import) else
-                         [n.module or ""] if isinstance(n, ast.ImportFrom) else [])
-                if "npyguard" in names:
+                names = names_of(n)
+                if "npyguard" in names or "npyfirst" in names:
                     guard = n.lineno
                     break
                 bad = [m for m in names if m.split(".")[0] not in std]
@@ -135,6 +182,16 @@ class NpyGuardTest(unittest.TestCase):
             src = fh.read()
         child = src[src.index("def child("):]
         self.assertLess(child.index("import npyguard"), child.index("import numpy"))
+
+    def test_npyfirst_applies_it(self):
+        r = subprocess.run([sys.executable, "-c", "import sys; sys.path.insert(0, %r); import npyfirst, os, npyguard; "
+                            "print(repr(os.environ.get(npyguard.ENV)))" % os.path.join(ROOT, "tools")],
+                           capture_output=True, text=True,
+                           env=dict({k: v for k, v in os.environ.items() if k != npyguard.ENV},
+                                    **{npyguard.FORCE_ENV: "1"}))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        want = " ".join(npyguard._probe() or ()) if npyguard._x86() else ""
+        self.assertEqual(r.stdout.strip(), repr(want))
 
     def test_spawned_workers_inherit_it(self):
         """sharehelper's spawn pool (its children import blockworker before earthd): the parent's import sets the
