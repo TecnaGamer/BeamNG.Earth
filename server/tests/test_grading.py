@@ -1832,6 +1832,47 @@ class RailDeckHeightTest(unittest.TestCase):
         self.assertGreaterEqual(underside - 30.0, headroom - 0.01, "the street on its ground clears the deck as drawn")
         self.assertAlmostEqual(underside - 30.0, headroom, delta=0.05, msg="and the track rises no higher")
 
+    def test_the_railways_are_made_once_for_a_deck_not_once_for_each_point_read(self):
+        # the shapes read a rail deck's height at every point of every crossing: the railways near it made for each
+        # point on its own (track_beds: its parts, its underpasses, its beds) were 98 % of Duttweiler Bruecke's shapes'
+        # time; made once for the deck's own extent and read at each point, the very heights
+        import railprofile
+        import railways
+        railprofile._NODES.clear()
+        f = features([[(-600.0, 0.0), (-3.5, 0.0)], [(-3.5, 0.0), (3.5, 0.0)], [(3.5, 0.0), (600.0, 0.0)],
+                      [(0.0, -150.0), (0.0, 150.0)]],
+                     ["standard_gauge"] * 3 + ["secondary"], subtypes=["rail"] * 3 + ["road"],
+                     flags=[(1, "is_bridge")], ids=["r0", "r1", "r2", "street"])
+
+        def elev(la, lo):
+            return np.full(np.shape(la), 30.0) + 0.01 * (np.asarray(lo) - LON) * 1e3
+        g = grading._Planner(FRAME, FakeMD(f), elev)
+        line = np.array([[-600.0, 0.0], [-3.5, 0.0]])
+        net = grading._gsh.Net([grading._gsh.Member(("rail", "rail", "r0", -600, 0, -4, 0), line, "rail", "rail", None,
+                                                    0.0, 2.0, None)])
+        made = []
+        real = railways.track_beds
+
+        def counted(*a, **k):
+            made.append(1)
+            return real(*a, **k)
+        sv = [float(v) for v in np.arange(5.0, 590.0, 5.5)]
+        try:
+            with unittest.mock.patch.object(railways, "track_beds", counted):
+                memo = ({}, [])
+                got = []
+                for part in (sv[:40], sv[30:80], sv[80:], sv):       # (crossings reading the same deck again)
+                    got = g._rail_tops(net, 0, part, memo)
+                self.assertEqual(len(made), 1, "the railways near the deck made once for all %d points" % len(sv))
+                self.assertEqual(len(got), len(sv))
+                made.clear()
+                alone = [float(g._track_bed(np.array([[v - 600.0, 0.0]]), "r0")[0]) for v in sv[::13]]
+                self.assertEqual(len(made), len(alone), "(each of these on its own made them again)")
+        finally:
+            railprofile._NODES.clear()
+        self.assertTrue(all(z is not None and np.isfinite(z) for z in got), "the railways lay the deck's track")
+        for z, bed in zip(got[::13], alone):
+            self.assertEqual(z, bed + railways.RAIL_TOP_M, "a point's bed is the same read among the deck's or alone")
 
 if __name__ == "__main__":
     unittest.main()

@@ -4566,12 +4566,44 @@ class _Planner:
         on. NaN where the railways lay none of that line."""
         xy = np.asarray(xy, np.float64).reshape(-1, 2)
         box = (float(xy[:, 0].min()), float(xy[:, 1].min()), float(xy[:, 0].max()), float(xy[:, 1].max()))
+        rails, beds = self._track_beds_in(box)
+        return railwaysmod.bed_at(rails, beds, xy, fid)
 
+    def _rail_tops(self, net, i, sv, memo):
+        """The rails' top of net's member i (a track, on its deck or on the ground) at arc lengths sv (floats), None
+        where the railways lay none of it: the bed they lay and draw it on (_track_bed) and the rail head over it.
+        memo ({(i, s): top}, [the railways near the net's tracks]) is the caller's: the railways near all the net's
+        tracks are made once (railways.track_beds: its parts, its underpasses, its beds from the lattice's nodes) and
+        each point read from them. Made for each point on its own (1,581 times, each with its parts' whole
+        railways.profile) they were 98 % of Duttweiler Bruecke's region's shapes solve: 361 s of CPU, 39 s made once
+        (2026-11-18; made for each track on its own, 69 times, they were still 190 s of the 194 s profiled). A point's
+        bed is the same whichever box it is read in: 300 points read both ways agree to 6e-14 m."""
+        tops, made = memo
+        new = [v for v in dict.fromkeys(sv) if (i, v) not in tops]
+        if new:
+            if not made:
+                lns = [net.lines[j] for j, m in enumerate(net.m) if m.kind in ("rail", "rail_deck")]
+                made.append(self._track_beds_in((min(float(ln[:, 0].min()) for ln in lns),
+                                                 min(float(ln[:, 1].min()) for ln in lns),
+                                                 max(float(ln[:, 0].max()) for ln in lns),
+                                                 max(float(ln[:, 1].max()) for ln in lns))))
+            got = made[0]
+            nv = np.array(new, np.float64)
+            q = np.stack([np.interp(nv, net.s[i], net.lines[i][:, 0]), np.interp(nv, net.s[i], net.lines[i][:, 1])],
+                         axis=1)
+            zb = railwaysmod.bed_at(got[0], got[1], q, net.m[i].key[2])
+            for v, z in zip(new, zb.tolist()):
+                tops[(i, v)] = (z + railwaysmod.RAIL_TOP_M) if np.isfinite(z) else None
+        return [tops[(i, v)] for v in sv]
+
+    def _track_beds_in(self, box):
+        """(rails, beds) of the railways near box (x0, y0, x1, y1): railways.track_beds' parts and their beds, to read
+        with railways.bed_at."""
         def load(k):
             return self.md.cell(k, layers=("roads",), kind="demand").layers.get("roads")
         rails, beds, _worn = railwaysmod.track_beds(self.frame, [load(k) for k in railwaysmod.cells_near(self.frame, box)],
                                                     box, self.elev, load=load)
-        return railwaysmod.bed_at(rails, beds, xy, fid)
+        return rails, beds
 
     def _ground_lines(self, xys):
         """_ground_line of k lines of n points each (k, n, 2), the elevation read once for all (a crossing's footprint
@@ -4643,13 +4675,14 @@ class _Planner:
             box_lo, box_hi = n_lo, n_hi
         t1 = time.perf_counter()
 
-        rail_z = {}
+        rail_memo = ({}, [])
 
         def fixed_z(i, s_):
             if np.ndim(s_):                 # (many: the ground read once for all, _ground_lines)
                 sv_ = np.asarray(s_, np.float64)
                 if net.m[i].kind in ("rail", "rail_deck"):
-                    return np.array([fixed_z(i, float(v)) for v in sv_.tolist()])
+                    return np.array([np.nan if z is None else z
+                                     for z in self._rail_tops(net, i, sv_.tolist(), rail_memo)])
                 sv = np.clip(sv_[:, None] + np.linspace(-24.0, 24.0, 13)[None], 0.0, net.L[i])
                 xy = np.stack([np.interp(sv, net.s[i], net.lines[i][:, 0]),
                                np.interp(sv, net.s[i], net.lines[i][:, 1])], axis=2)
@@ -4659,12 +4692,8 @@ class _Planner:
                 # bed the railways lay and draw it on, never a height of the shapes' own: its deck's mapped ends' ground,
                 # down the slopes of the street's cutting under it, stood Compiegne's 7 m rail bridge 2.8 m under its
                 # track, the street was dug that much too deep and the track's fill beside it stood 10.5 m tall)
-                got = rail_z.get((i, s_))
-                if got is None:
-                    q = _gsh.at_s(net.lines[i], net.s[i], s_)
-                    z = float(self._track_bed(q[None], m.key[2])[0])
-                    got = rail_z[(i, s_)] = (z + railwaysmod.RAIL_TOP_M) if np.isfinite(z) else None
-                return got      # (None: the railways lay none of it, no track there to clear)
+                return self._rail_tops(net, i, [float(s_)], rail_memo)[0]   # (None: the railways lay none of it, no
+                #                                                               track there to clear)
             q = _gsh.at_s(net.lines[i], net.s[i], s_)
             sv = np.clip(np.linspace(s_ - 24.0, s_ + 24.0, 13), 0.0, net.L[i])
             xy = np.stack([np.interp(sv, net.s[i], net.lines[i][:, 0]),
