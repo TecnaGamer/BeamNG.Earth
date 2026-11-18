@@ -380,6 +380,17 @@ class GapLanding(unittest.TestCase):
                                  part_ids=[grading._piece_id("road", unsplit)])[0]
         self.assertTrue(np.allclose(got.z, ref.z))
 
+    def test_own_piece_behind_the_deck_end(self):
+        # (Codex review of round 5: the landing's own piece, placed so a sample lies 2 m behind the deck end, within 3 m
+        # of the approach: not raised (its distance, reach and bank tested together, never by the 3 m rule alone))
+        ap = self.approach(0.0)
+        line = (60.0, 0.0, 100.0)
+        pts = np.array([[2.0, 0.5], [-10.0, 0.5]])
+        z = grading.gap_apply(np.array([50.0, 50.0]), pts, ap, line, [ap], [], ["road#a", "road#a"],
+                              frozenset({"road#a"}), OUT)
+        self.assertEqual(float(z[0]), 50.0, "behind the deck end")
+        self.assertEqual(float(z[1]), 60.0)
+
     def test_diagonal_connector_placed_copy(self):
         # (Codex review of round 5: the first ground piece starts 3 m on and 2 m aside of the deck end, a diagonal
         # connector; the road placed 8 m to the other side: its first samples are ahead of the deck end along the deck,
@@ -630,6 +641,44 @@ class RawLinesShort(unittest.TestCase):
             f.__dict__["_ranges_owner"] = threading.get_ident()      # (this thread's build: its rows go in)
             roads._level_many(f, [0])
             self.assertEqual(f.__dict__["_level_ranges"], {0: got})
+
+    def test_fully_bridged_road_kept(self):
+        # (Codex review of round 5: a road with no ground spec, bridged its whole length by its tags, still gives its
+        # decks, its being one from its bridge spec; and no ground pieces)
+        import mapcells
+        site, key = self.layer()
+        f = site.cells[key]
+        f.__dict__.pop("_ranges_short_until", None)
+        k = mapcells.CellKey(*(int(v) for v in key.split("/")))
+        with mock.patch.object(roads, "LIDAR_GAPS_ON", False):
+            bs = roads.bridge_specs(f)
+            rs = roads.road_specs(f, None, None)
+            decks = [i for i in range(len(f)) if bs[i] is not None and rs[i] is not None and roads.bridge_parts(f, i)]
+            self.assertTrue(decks)
+            gone = list(rs)
+            for i in decks:
+                gone[i] = None
+            whole = self.planner(f)._raw_lines(k)
+            with mock.patch.object(roads, "road_specs", lambda feats, *a, **kw: list(gone)):
+                part = self.planner(f)._raw_lines(k)
+        self.assertEqual(len(part["bridges"]), len(whole["bridges"]))
+        self.assertLess(len(part["ground"]), len(whole["ground"]))
+
+    def test_row_published_meanwhile(self):
+        # (Codex review of round 5: a reader missing a row the build publishes before it looks again gets that row,
+        # never a KeyError)
+        site, key = self.layer()
+        f = site.cells[key].__class__.__new__(site.cells[key].__class__)
+        f.__dict__.update({kk: v for kk, v in site.cells[key].__dict__.items() if not kk.startswith("_")})
+        f.__dict__["_ranges_state"] = "busy"
+        f.__dict__["_ranges_owner"] = -1
+        row = [(0.25, 0.5, "bridge")]
+        f.__dict__["_level_ranges"] = {0: row}          # (published between the reader's miss and its look)
+        self.assertEqual(roads._level_many(f, [0]), {0: row})
+        with mock.patch.object(roads, "LIDAR_GAPS_ON", False):
+            got = roads._level_many(f, [0, 1])
+        self.assertIs(got[0], row)
+        self.assertIn(1, got)
 
     def test_cell_ranges_mark_a_short_entry(self):
         import time

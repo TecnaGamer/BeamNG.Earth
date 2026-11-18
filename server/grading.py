@@ -6114,11 +6114,13 @@ class _Planner:
                 short = True
         if f is not None and len(f) and not short:
             # (a road's class from its road spec, its bridge and ground pieces from the published rows read here:
-            # never the layer's kept bridge_specs, made from ranges that may have been short since replaced)
+            # never from the layer's kept bridge_specs' being a deck, made from ranges that may have been short since
+            # replaced, but for a road with no ground spec)
             rs = roadsmod.road_specs(f, None, self.widths)
-            rows = []
+            bs = roadsmod.bridge_specs(f)   # (only for a road with no ground spec, bridged its whole length by its tags:
+            rows = []                       # its being a deck stands on them, not on ranges that may have been short)
             for i in range(len(f)):
-                if rs[i] is None:
+                if rs[i] is None and bs[i] is None:
                     continue
                 h = homes[i]
                 src, j = (h[0], h[1]) if h is not None else (f, i)
@@ -6127,7 +6129,10 @@ class _Planner:
                     short = True        # (not published: never made here)
                     continue
                 rngs = roadsmod.home_ranges(f, i, h[0], h[1], list(row)) if h is not None else list(row)
-                for kind, sp, want in (("bridges", rs[i], "bridge"), ("ground", rs[i], "ground")):
+                for kind, sp, want in (("bridges", rs[i] if rs[i] is not None else bs[i], "bridge"),
+                                       ("ground", rs[i], "ground")):
+                    if sp is None:
+                        continue
                     ps = roadsmod._parts_by_level_new(f, i, want, rngs=list(rngs))
                     for ring in ps:                         # (ground_parts' pieces: the same ranges)
                         ring = np.asarray(ring, np.float64)
@@ -8036,16 +8041,16 @@ def gap_apply(z, pts, approach, line, own=None, other=None, sid=None, own_ids=No
         feats_ = {_piece_feature(q) for q in own_ids}
         known = np.array([q is not None and _piece_feature(q) not in feats_ for q in sid], bool)
         mine = np.array([q is not None and str(q) in own_ids for q in sid], bool)
-    on = ~known & (off <= FAST_GAP_ON_M) & (s_ <= reach)
+    # (every sample on the landing's own side: a feature spanning the bridge has a ground piece on each bank, and one
+    # beyond the deck end projects onto the approach's start, behind it)
+    d0 = (approach[1] - approach[0]) if out_dir is None else np.asarray(out_dir, np.float64)
+    d0 = d0 / max(float(dnp.hypot(*d0)), 1e-9)          # (the deck's own direction out: not a connector's)
+    ahead = (pts[:, 0] - approach[0, 0]) * d0[0] + (pts[:, 1] - approach[0, 1]) * d0[1] >= -FAST_GAP_BACK_M
+    on = ~known & ~mine & ahead & (off <= FAST_GAP_ON_M) & (s_ <= reach)
     if on.any() and other:
         idx = np.flatnonzero(on)
         near = _nearest_off(pts[idx], own if own else [approach])
         on[idx] = near <= _nearest_off(pts[idx], other)
-    # (a known road's sample on the landing's own side: a feature spanning the bridge has a ground piece on each bank,
-    # and one beyond the deck end projects onto the approach's start, behind it)
-    d0 = (approach[1] - approach[0]) if out_dir is None else np.asarray(out_dir, np.float64)
-    d0 = d0 / max(float(dnp.hypot(*d0)), 1e-9)          # (the deck's own direction out: not a connector's)
-    ahead = (pts[:, 0] - approach[0, 0]) * d0[0] + (pts[:, 1] - approach[0, 1]) * d0[1] >= -FAST_GAP_BACK_M
     on |= mine & ahead & (off <= FAST_GAP_ID_M) & (s_ <= reach)
     if not on.any():
         return z

@@ -585,21 +585,22 @@ def _level_many(feats, idx):
     """level_ranges of features idx into feats' memo where not there yet: their rule ranges with the lidar's elevated
     stretches (_lidar_answers) made bridge and gap-filled again (one ending 12 m short of the map's deck left a ground
     piece between them mid-ramp, by I-395 in Baltimore); earthfast.LevelLayer.rules, all at once. {i: its ranges} of
-    those made here. Kept in the memo only by the thread making the layer's ranges (_cell_ranges' owner), or with no
-    build under way: a reader's while another thread makes them is its own alone (made short of something, its fault
-    is that reader's, and the build's setdefault would keep it and publish it done)."""
+    every one of idx (the memo's where there by now: published by the build meanwhile too). Kept in the memo only by
+    the thread making the layer's ranges (_cell_ranges' owner), or with no build under way: a reader's while another
+    thread makes them is its own alone (made short of something, its fault is that reader's, and the build's setdefault
+    would keep it and publish it done)."""
     st = feats.__dict__
     memo = st.setdefault("_level_ranges", {})
-    idx = [i for i in idx if i not in memo]
+    out = {i: memo[i] for i in idx if i in memo}
+    idx = [i for i in idx if i not in out]
     if not idx:
-        return {}
+        return out
     rule = _rule_many(feats, idx)
     answers = _lidar_answers(feats) if LIDAR_GAPS_ON else {}
     lid = [answers.get(str(feats.ids[i])) or () for i in idx] if answers else None
     rows = _level_steps(feats, idx, rule, _STEP_LIDAR | _STEP_GAPS, lid)
     with _FACTS_LOCK:
         keep = st.get("_ranges_state") != "busy" or st.get("_ranges_owner") == threading.get_ident()
-    out = {}
     for i, r in zip(idx, rows):
         out[i] = memo.setdefault(i, r) if keep else r
     return out
