@@ -10,8 +10,11 @@
 -- beamngEarth_busline.open() in the console. Nothing runs per frame while no line is driven and the window is shut.
 local M = {}
 
-M.STOP_RADIUS_M = 18        -- m (level) from a stop on the road (its stop_position) the bus is at the stop
-M.PLATFORM_RADIUS_M = 25    -- ... from a stop mapped only by its platform, which is beside the road
+M.STOP_RADIUS_M = 30        -- m (level) from a stop on the road the bus is at the stop: Västtrafik's points are 1-24 m
+                            -- from OpenStreetMap's stop (where the sign stands; Göteborg, 2026-11-18), and the bus is 12 m
+M.PLATFORM_RADIUS_M = 35    -- ... from a stop mapped only by its platform, which is beside the road
+M.LEAVE_M = 20              -- m beyond that radius the bus has left the stop (served or missed); with 18 m and no margin
+                            -- a stop cleared on the way to its sign (the user, 2026-11-18)
 M.STANDING_MS = 0.5         -- m/s: standing still
 M.DWELL_S = 3               -- s standing (doors open, on a bus) for a stop to count
 M.TICK_S = 0.25             -- s between two checks while a line is driven
@@ -238,6 +241,7 @@ function M.step(dt)
     end
     return
   end
+  if run.inside and d <= radius(st) + M.LEAVE_M then return end      -- just outside: not left yet
   if run.inside then advance(veh, not run.here) return end
   for k = run.idx + 1, math.min(#run.line.stops, run.idx + M.SKIP_AHEAD) do
     local s2 = run.line.stops[k]

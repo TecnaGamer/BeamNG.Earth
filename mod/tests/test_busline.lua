@@ -53,12 +53,18 @@ T.check(B.running().served == 0, 'doors shut: not served')
 doors(true) wait(B.DWELL_S)
 T.check(B.running().served == 1 and heard('bus_onAtStop') == 1, 'doors open, standing: served')
 T.check(lastSaid():find('Vasaplatsen', 1, true), 'said the stop')
-at(60, true) wait(0.25)
+at(B.STOP_RADIUS_M + B.LEAVE_M + 1, true) wait(0.25)
 T.check(B.running().idx == 2 and heard('bus_onDepartedStop') == 1, 'left it: next stop')
 T.check(heard('bus_setLineInfo') == 2 and #B.lineInfo(B.running(), 5).tasklist == 4, 'the signs from the next stop on')
 
+-- on the way to the sign: the bus passes the stop's point and stops 24 m beyond it (Västtrafik's point for
+-- Grönsakstorget B is 24 m from OpenStreetMap's stop); just outside the radius it has not left yet
+at(200 - B.STOP_RADIUS_M + 1, true) wait(0.25)
+at(200 + B.STOP_RADIUS_M + B.LEAVE_M - 1, true) wait(0.25)
+T.check(B.running().idx == 2 and B.running().missed == 0, 'within the margin: the stop is still ahead')
+
 -- driving through a stop without stopping: missed
-at(200, true) wait(0.5) at(240, true) wait(0.25)
+at(200, true) wait(0.5) at(200 + B.STOP_RADIUS_M + B.LEAVE_M + 1, true) wait(0.25)
 T.check(B.running().missed == 1 and B.running().idx == 3 and lastSaid():find('Missed stop: Kapellplatsen', 1, true),
   'drove through: missed')
 
