@@ -1564,7 +1564,7 @@ def geo_tile_items(gx, gy, veg, cell_ready, elev, sea=None, as_json=False, raw=N
     items = veg.cell(key)
     if len(items) == 0:
         return _no_items(as_json, clat, clon), 0.0
-    tx, ty = geotiles.tile_of(items.lat, items.lon)
+    tx, ty = _geotiles_of(items)
     sel = (tx == gx) & (ty == gy)
     if not sel.any():
         return _no_items(as_json, clat, clon), 0.0
@@ -1598,6 +1598,17 @@ def geo_tile_items(gx, gy, veg, cell_ready, elev, sea=None, as_json=False, raw=N
              round(float(sc), 3), round(float(h), 1), round(float(r), 4)]
             for g, a, b, c, yw, sc, h, r in zip(it.group, e, n, np.asarray(z), it.yaw, it.scale, it.height,
                                                 it.rank)], pivot
+
+
+def _geotiles_of(items):
+    """geotiles.tile_of of every item of a map cell's Items, worked out once per Items (kept on it: veg.cell keeps the
+    cell's Items in memory, and each of the cell's geotiles asked for the whole cell's again, a mercator projection of
+    every item a geotile: 1.2 of the trees' 22 CPU-s of a motorway drive)."""
+    import geotiles
+    got = items.__dict__.get("_geotiles")
+    if got is None or got[0] != geotiles.Z:
+        got = items.__dict__["_geotiles"] = (geotiles.Z,) + tuple(geotiles.tile_of(items.lat, items.lon))
+    return got[1], got[2]
 
 
 ROCK_SINK = 0.35            # a rock sinks this share of its height per unit of ground slope (1 = 45 degrees) ...
