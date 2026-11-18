@@ -4831,8 +4831,8 @@ class _Planner:
                     old = byk.get(m.key)
                     if old is None or len(m.line) > len(old.line):
                         byk[m.key] = m
-            members = [byk[q] for q in sorted(byk, key=str)
-                       if ((byk[q].line >= box_lo) & (byk[q].line <= box_hi)).all(1).any()]
+            members = _gsh.one_road([byk[q] for q in sorted(byk, key=str)
+                                     if ((byk[q].line >= box_lo) & (byk[q].line <= box_hi)).all(1).any()])
             net, systems = _gsh.find_systems(members, lambda net_: (self._ground_line, make_fixed(net_)))
             mine = []
             n_lo, n_hi = box_lo.copy(), box_hi.copy()

@@ -638,6 +638,23 @@ def test_a_railway_viaduct_over_a_road_bridge_is_over_it_by_the_maps_levels():
         assert not (net.m[c["u"]].key == "bridge" and net.m[c["d"]].kind == "rail_deck")
 
 
+def test_a_road_cut_in_lane_sections_in_one_cell_and_whole_in_its_neighbour_is_one_road():
+    """Vienna's A23 viaduct: its sections ("<road>~lanes<a>-<b>") from the cell with lane tags and the unsplit copy from the
+    neighbour without them were both members, the deck and the tunnel it goes into twice, and the deck rose 2.3 m."""
+    sec = Member("r1~lanes000000000-811393678", _line(0, 0, 53, 0, 12), "deck", "motorway", 100, 1, 8.0, None)
+    whole = Member("r1", _line(3, 1, 49, 1, 10), "deck", "motorway", 100, 1, 8.0, None)
+    other = Member("r2", _line(3, 1, 49, 1, 10), "deck", "motorway", 100, 1, 8.0, None)
+    far = Member("r1", _line(0, 200, 40, 200, 10), "deck", "motorway", 100, 1, 8.0, None)
+    tun = Member("r1", _line(3, 1, 49, 1, 10), "tunnel", "motorway", 100, -1, 8.0, None)
+    got = {id(m) for m in ix.one_road([sec, whole, other, far, tun])}
+    assert id(whole) not in got and id(sec) in got, "(the copy along a section of its own road)"
+    assert id(other) in got, "(another road lying there is another road)"
+    assert id(far) in got, "(a copy of the road away from its sections is not theirs)"
+    assert id(tun) in got, "(a tunnel is not a deck's copy)"
+    both = [whole, other]
+    assert ix.one_road(both) is both
+
+
 def test_the_maps_levels_order_two_structures_of_one_kind_and_a_track_as_a_road():
     def mem(kind, level, cls="rail"):
         return Member(f"{kind}{level}", _line(0, 0, 10, 0, 3), kind, cls, None, level, 2.0, None)

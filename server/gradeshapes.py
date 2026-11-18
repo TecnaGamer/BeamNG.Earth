@@ -418,6 +418,32 @@ def _road_of(m):
     return str(m.key[0] if isinstance(m.key, tuple) else m.key).partition("~lanes")[0]
 
 
+def one_road(members):
+    """members without the unsplit copies of roads that are also there as lane sections. A road crossing cells is cut
+    into lane sections in the cells with lane tags ("<road>~lanes<a>-<b>", lanesections.py) and stays whole in a neighbour
+    without them (replaced_roads: "keep the original if only part of its replacement is available"): the region's members
+    from several cells then held the road twice, a 46 m deck and its 53 m sections a lane's width apart, and the tunnels it
+    goes into twice, 21 ends where the road has 6: Vienna's A23 deck rose 2.3 m over its own ground in the world's solve
+    (z 162.4) where the 300 m replay, with one copy, kept it at 160.2, its carriageway beside it at 160.2 (1.7 m step, the
+    trucks into it). A copy lying along a section of its own road, within the widths of the two, is that road's section's."""
+    lanes = {}
+    for m in members:
+        if "~lanes" in str(m.key[0] if isinstance(m.key, tuple) else m.key):
+            lanes.setdefault((_road_of(m), m.kind), []).append(m)
+    if not lanes:
+        return members
+    out = []
+    for m in members:
+        key = str(m.key[0] if isinstance(m.key, tuple) else m.key)
+        if "~lanes" not in key and (key, m.kind) in lanes and len(m.line) >= 2:
+            line = np.asarray(m.line, np.float64)
+            if any(_near_line(line, np.asarray(o.line, np.float64), float(m.half + o.half)).all()
+                   for o in lanes[(key, m.kind)]):
+                continue
+        out.append(m)
+    return out
+
+
 def _end_meets(net, e, se, o, so, crossed):
     """Whether member e's end (at arc length se) on member o's line (at so) is where they meet: between parts at one
     level (a T, a ramp onto its road, a road going on), or a road on the ground ending on a structure where the map
