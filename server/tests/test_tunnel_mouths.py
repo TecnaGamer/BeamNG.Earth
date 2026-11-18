@@ -187,10 +187,12 @@ class BoreDipTest(unittest.TestCase):
         self.assertEqual([q for q, _z in dips], [12])
         self.assertAlmostEqual(dips[0][1], 104.6 - roads.BORE_FIT_M - 5.0)
 
-    def test_a_road_with_room_leaves_the_floor_and_the_portals_are_not_dipped(self):
+    def test_a_road_with_room_leaves_the_floor_and_a_mouth_is_not_dipped(self):
         self.assertEqual(roads.bore_dips([48.0], [106.0], self.s, self.floor, 5.0), [])
-        got = roads.bore_dips([0.0, 100.0], [101.0, 101.0], self.s, self.floor, 5.0)
-        self.assertEqual([q for q, _z in got], [1, len(self.s) - 2])
+        self.assertEqual(roads.bore_dips([0.0, 100.0, 4.0, 96.0], [101.0] * 4, self.s, self.floor, 5.0), [],
+                         "over the first and last SECTION_MIN_M: the mouth, not a tube")
+        got = roads.bore_dips([8.0, 92.0], [101.0, 101.0], self.s, self.floor, 5.0)
+        self.assertEqual([q for q, _z in got], [2, len(self.s) - 3])
 
     def test_the_floor_goes_down_from_a_portal_no_steeper_than_the_roads_grade(self):
         # (a road 8 m from a portal wants the floor 1.1 m down there: 14 %, over what the road may hold)
@@ -200,6 +202,17 @@ class BoreDipTest(unittest.TestCase):
         self.assertAlmostEqual(dips[0][1], 100.0 - grade * 8.0)
         self.assertAlmostEqual(dips[1][1], 104.6 - roads.BORE_FIT_M - 5.0, msg="far from both portals: the whole dip")
         self.assertLessEqual(abs(dips[0][1] - 100.0) / 8.0, grade + 1e-9)
+
+    def test_a_dipped_floors_corners_are_rounded_by_the_roads_vertical_curve(self):
+        floor = np.where(self.s < 48.0, 100.0 - 0.02 * self.s, 100.0 - 0.96 + 0.02 * (self.s - 48.0))   # (a V at 48 m)
+        radius = 900.0
+        out = roads.bore_round(self.s, floor, radius)
+        d = 0.04
+        self.assertAlmostEqual(float(out[12] - floor[12]), radius * d * d / 8.0, places=6)
+        self.assertTrue((out >= floor - 1e-12).all(), "a corner is only ever rounded up, to the curve over it")
+        self.assertEqual((out[0], out[-1]), (floor[0], floor[-1]))
+        k = np.abs(np.diff(out, 2) / 16.0)
+        self.assertLessEqual(k.max(), 1.0 / radius + 1e-9, "no curve tighter than the road's")
 
     def test_only_a_road_over_a_covered_tube_counts(self):
         arc, zr = np.array([20.0, 40.0, 60.0]), np.array([104.0, 100.5, 104.0])

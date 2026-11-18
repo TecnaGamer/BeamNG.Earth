@@ -5770,7 +5770,6 @@ BORE_FIT = os.environ.get("BNE_TUNNEL_BORE_FIT", "on") != "off"   # a tube no ta
 BORE_FIT_M = 0.7        # m kept between a tube's vault and a road over it (arch_raise's soil + 0.1)
 BORE_DIP = os.environ.get("BNE_TUNNEL_BORE_DIP", "on") != "off"   # a tube goes down under the roads over it
 BORE_DIP_STEP_M = 2.0   # m: a road over a tube is read at this step along it
-BORE_DIP_ROUNDS = 3     # the floor's dips are found again (the sections they cover) at most this many times
 BORE_FIT_MAX_M = 250.0  # m: covered sections up to this long are fitted under the roads over them; in a longer one
                         # the piece under such a road is a section of its own (bore_pieces)
 TUNNEL_FULL_H = 6.8     # m: roadmesh.TUNNEL_H (a full tube's height: the shorter ones are kept in heights)
@@ -5864,16 +5863,17 @@ def roads_over_tube(arc, zr, s, floor, cover, kinds):
 def bore_dips(arc, zr, s, floor, low_h, ends=None, grade=None):
     """[(sample, z)] the floor is to go no higher than so that a tube of the lowest height low_h and BORE_FIT_M of arch
     and soil fit under the road points (arcs arc, heights zr) over it: where less room than that is left, the sample
-    nearest the point, the road's height less BORE_FIT_M and low_h; the lowest of a sample's. Not the first and last
-    samples (the portals'). A tunnel under anything goes down (findground's third rule): the floor is the hull of the
-    raw ground, the line between the portals, which knows nothing of the roads over it, so the tube stood through
-    them (Porte Maillot's Peripherique tunnels, 4.5-5 m under the slip roads over them for a 5 m tube) or, when
-    arch_raise asked the road up over it, a deck above it forbade that (the arch cover 0.6 m over what the road's
-    height may be: an infeasible network).
-    ends, grade: the floor's heights at its two ends and the steepest grade the tunnel's road may hold (gradelaw: by
-    its class and speed, the law the shapes and the road laws read): no dip lies lower than that reaches from a portal. A road 5 m from a portal over a
-    tube asked it 6 m down there, a 160 % ramp inside the tunnel (Porte Maillot's 219 m Peripherique tube: its floor
-    kinked 1.7 m and its grade went from 0.18 to 1.6); the road over it is then the one that gives. Pure."""
+    nearest the point, the road's height less BORE_FIT_M and low_h; the lowest of a sample's. A tunnel under anything
+    goes down (findground's third rule): the floor is the hull of the raw ground, the line between the portals, which
+    knows nothing of the roads over it, so the tube stood through them (Porte Maillot's Peripherique tunnels, 4.5-5 m
+    under the slip roads over them for a 5 m tube) or, when arch_raise asked the road up over it, a deck above it
+    forbade that (the arch cover 0.6 m over what the road's height may be: an infeasible network).
+    Not within SECTION_MIN_M of a portal (the shortest covered section: a road that near is over the mouth, not over a
+    tube; the A23's 503 m ramp tunnel dipped 0.6 m over its last 8 m under a ramp, a 9 % kink), and no lower than the
+    tunnel's road may go down from a portal (ends: the floor's heights at its two ends, grade: gradelaw.road_grade, the
+    law the shapes and the road laws read): a road 5 m from a portal over a tube asked it 6 m down there, a 160 %
+    ramp inside the tunnel (Porte Maillot's 219 m Peripherique tube: its floor grade went from 0.18 to 1.6); the
+    road over it is then the one that gives. Pure."""
     arc, zr = np.asarray(arc, np.float64), np.asarray(zr, np.float64)
     if not len(arc) or len(s) < 3:
         return []
@@ -5884,9 +5884,35 @@ def bore_dips(arc, zr, s, floor, low_h, ends=None, grade=None):
         need = np.maximum(need, np.maximum(ends[0] - grade * s[q], ends[1] - grade * (s[-1] - s[q])))
     best = {}
     for i, z, f in zip(q, need, np.asarray(floor, np.float64)[q]):
-        if z < f - 1e-3:
+        if z < f - 1e-3 and s[0] + SECTION_MIN_M <= s[i] <= s[-1] - SECTION_MIN_M:
             best[int(i)] = min(best.get(int(i), np.inf), float(z))
     return sorted(best.items())
+
+
+def bore_round(s, floor, radius):
+    """floor (the lower hull of the ground at arcs s) with each corner of it rounded by a vertical curve of radius m, the
+    tightest its road's speed allows (roadlaws.laws): over a change of grade d at a sample the parabola of tangent
+    length radius d / 2, at most radius d^2 / 8 over it (1 cm for 1 %, 14 cm for 4 % on a 936 m curve). A hull is
+    straight between its points, so the dips under the roads over a tube (bore_dips) left it corners, 1 % of change of
+    grade in one sample the A23's 493 m tunnel under its ramp, a lift of 0.26 for a limit of 0.25. A corner nearer an
+    end than its curve is long keeps its corner (the portals' heights are fixed). Pure."""
+    s, floor = np.asarray(s, np.float64), np.asarray(floor, np.float64)
+    if len(s) < 3:
+        return floor
+    slope = np.diff(floor) / np.maximum(np.diff(s), 1e-9)
+    out = floor.copy()
+    for i in range(1, len(s) - 1):
+        d = float(slope[i] - slope[i - 1])
+        if d <= 1e-9:
+            continue
+        t = radius * d / 2.0
+        if t > min(s[i] - s[0], s[-1] - s[i]):      # (a curve is no longer than the line either side of its corner)
+            continue
+        x = np.abs(s - s[i])
+        m = x < t
+        out[m] += d / (4.0 * t) * (t - x[m]) ** 2
+    out[0], out[-1] = floor[0], floor[-1]
+    return out
 
 
 def bore_pieces(s, kinds, floor, crossings, min_m=SECTION_MIN_M):
@@ -9171,17 +9197,23 @@ class TunnelProfiles(BridgeProfiles):
                 road_pts = self._road_points(xy, s, ground, pool[k][0]) if BORE_FIT or BORE_DIP else road_pts
                 sides = tunnel_side_ground(xy, s, g_raw, pool[k][0], gfn, ground)
                 low_h = low_tube_h(pool[k][0])
-                for rounds in range(BORE_DIP_ROUNDS + 1):
+                for dipped in (False, True):
                     fl = {}
                     floor, kinds = tunnel_sections(s, g, cover_g=gc, sides=sides, flags=fl,
                                                    portals=(not pinned[0], not pinned[1]),
                                                    net_buried=self._part_id(k) in self.__dict__.get("_net_buried", ()))
+                    if dipped:
+                        import roadlaws
+                        floor = bore_round(s, floor, roadlaws.laws(pool[k][0])[1])
                     if not fl.get("buried"):
                         kinds = portal_cover(kinds, (g if gc is None else gc) - floor, pool[k][0], s)
                     kinds = self._cover_roads(xy, s, kinds, ground, (g if gc is None else gc) - floor)
-                    if not BORE_DIP or not len(road_pts[0]) or rounds == BORE_DIP_ROUNDS:
+                    if dipped or not BORE_DIP or not len(road_pts[0]):
                         break
-                    # (a tube that goes down under a road may cover more of the ground: its sections again)
+                    # (the roads over the tube as the ground has it, once: a tube that goes down under a road covers
+                    # more of the ground, its sections are found again, but the roads over the ground it now covers
+                    # are no roads over a tube. Asked again, each round dipped the floor under the next road over
+                    # what its own dip had covered, 8 m down in 500 m under the A23's ramp, a trench taken for a tunnel)
                     on = roads_over_tube(*road_pts, s, floor, (g if gc is None else gc) - floor, kinds)
                     dips = bore_dips(road_pts[0][on], road_pts[1][on], s, floor, low_h, (g[0], g[-1]),
                                      gradelaw.road_grade(pool[k][0].cls, pool[k][0].kmh))
