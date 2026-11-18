@@ -8534,12 +8534,13 @@ def _shallow_full_low(s, g, floor, kinds):
 # (TunnelProfiles._ends_ground). Where a bridge goes on from the mouth that line is not the road: it is the ground under
 # the deck (Galleria Casagranda, the tunnels either side of a bridge over a gorge: the line read the gorge's wall and
 # floor, 58.0 m where the elevation at the node was 72.2 and the deck's own abutment stood, the tunnels and the bridge
-# between them dropped 15 m, a 31 % grade into the portal). The road there is the structure's own natural height: the line
-# between the ground at the two ends of the whole chain, the tunnel's other end and the bridge's far ends
-# (findground rule 1; Brunau's far portal, the tunnel going on as a viaduct, 436.2 m on the line between the tunnel's
-# other mouth and the viaduct's far abutment, the survey's road 436.0, the node 442.4: the face), and never above the
-# ground at the node, the face being the hill over the road (a tunnel's floor stands under the ground: the line between
-# Casagranda's ends is 23 m over its gorge's lip; TunnelProfiles._deck_mouth_ground).
+# between them dropped 15 m, a 31 % grade into the portal). The road there is the structure's own (mouth_over_deck): the
+# line (findground rule 1) between the ground at the tunnel's other end and at the deck's far end, at the lowest as high
+# as the straight road from the tunnel's other end clearing the ground under the deck, and never over the ground at the
+# node, the face being the hill over the road (Casagranda: the lip, 72.3 and 72.7 m, the bridge level between the tunnels
+# where it climbed 5 m before PR 34; Brunau's far portal, the tunnel going on as a viaduct over a bank: 435.9 m against the
+# survey's road 436.0, the node 441.1 the face; a ground read outward stays the law where no bridge goes on, and for a deck
+# shorter than the face's reach, TunnelProfiles._deck_mouth_ground).
 MOUTH_NEAR_M = 8.0          # m from the mouth the elevation is not the road's: the portal's face and its cutting ...
 MOUTH_FAR_M = 40.0          # ... the road's own grade read from there to this far
 MOUTH_STEP_M = 2.0          # m between the samples fill_mouth reads (grading.PROFILE_STEP)
