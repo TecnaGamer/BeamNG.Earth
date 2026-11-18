@@ -91,7 +91,7 @@ def main():
             print(f"{name}: no plans (grading off?)", file=sys.stderr)
             continue
         variants = ("passes", "vsolve") if a.vsolve else ("passes",)
-        acc = {v: {"j": [], "s": [], "p": [], "c": []} for v in variants}
+        acc = {v: {"j": [], "s": [], "p": [], "c": [], "r": []} for v in variants}
         cells_cpu, deck_ground, n_cells, infos = 0.0, [], 0, []
         # (the cells this place's road tiles planned, taken now: a cell planned later is no part of this place; one
         # measured with the next place planned its own ring round it, and so on: Tokyo's spread for an hour, 2026-11-16)
@@ -175,18 +175,20 @@ def main():
                     cells[k] = (road_plans, boxes[k])
                     acc[v]["j"] += gm.junction_steps(road_plans, boxes[k])
                     acc[v]["p"] += gm.profiles(road_plans, ceilings, ground)
+                    acc[v]["r"] += gm.corridor_steps(road_plans, [spec_of[k][f] for f, _p in road_plans])
                 acc[v]["s"] += gm.seam_steps(cells)
                 acc[v]["c"] += gm.clearance([fp for plans, _b in cells.values() for fp in plans], decks, names)
                 geo(acc[v]["j"])
                 geo(acc[v]["s"])
                 geo(acc[v]["c"])
+                geo(acc[v]["r"])
         for planner in list(store.planners.values()):     # (any cell planned while measuring: no place's)
             with planner.lock:
                 seen_cells.update(str(k) for k in planner.cells)
         for v in variants:
             q = acc[v]
             cpu_s = round(cells_cpu, 2) if v == "passes" else round(sum(i.get("elapsed_s", 0.0) for i in infos), 2)
-            s = gm.summary(q["j"], q["s"], q["p"], q["c"], cpu_s)
+            s = gm.summary(q["j"], q["s"], q["p"], q["c"], cpu_s, q["r"])
             s["cells"] = n_cells
             if v == "passes":
                 s["deck_end_over_ground_median"] = float(np.median(deck_ground)) if deck_ground else None
@@ -203,6 +205,8 @@ def main():
                                "floors": int(sum(i.get("floors", 0) for i in infos)),
                                "clear_broken": int(sum(i.get("clear_broken", 0) for i in infos)),
                                "clear_excess_m": round(max((i.get("clear_excess_m", 0.0) for i in infos), default=0.0), 3),
+                               "corridor_rows": int(sum(i.get("corridor_rows", 0) for i in infos)),
+                               "corridor_broken": int(sum(i.get("corridor_broken", 0) for i in infos)),
                                "statuses": sorted({str(i.get("status")) for i in infos}),
                                "worst_s": round(max((i.get("elapsed_s", 0.0) for i in infos), default=0.0), 2),
                                "by_cell": {i["key"]: {"fallback": i.get("fallback"), "culprit": i.get("culprit"),
@@ -219,7 +223,8 @@ def main():
             print(f"{label:22s} roads {s['roads']:5d}  junction steps >=30cm {j['bad']:4d}/{j['n']:5d} max {j['max']:5.2f}"
                   f"  seams >=30cm {sm['bad']:3d}/{sm['n']:4d}  made steep {g['made_steep']:3d}  bump p99 "
                   f"{s['bump']['p99_median']:.3f} (ground {s['bump']['ground_p99_median']:.3f})  low decks {c['n']:3d} "
-                  f"(through {c['through_deck']:2d}) worst {c['max']:4.1f}  cpu {cpu_s:6.1f} s", flush=True)
+                  f"(through {c['through_deck']:2d}) worst {c['max']:4.1f}  corridor >=30cm {s['corridor']['bad']:4d}"
+                  f"/{s['corridor']['n']:5d} max {s['corridor']['max']:4.2f}  cpu {cpu_s:6.1f} s", flush=True)
         if a.out:               # (after every place: a long run stopped keeps the places it measured)
             os.makedirs(os.path.dirname(os.path.abspath(a.out)), exist_ok=True)
             with open(a.out + ".tmp", "w", encoding="utf-8") as f:

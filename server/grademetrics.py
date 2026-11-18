@@ -10,7 +10,9 @@ Everything here reads finished plans ([(fid, grading.Plan)], one planning region
 - bumps: the second difference per 2 m (the car's pitch change), against the ground's own;
 - ground: how far the plans stand from the elevation they were made from (fills and cuts);
 - clearance: under a deck, the road's distance below the deck's surface against roads.DECK_ROAD_CLEAR (under
-  THROUGH_DECK_M, the road runs through the deck's body).
+  THROUGH_DECK_M, the road runs through the deck's body);
+- corridors: roads side by side (grading.share_corridors' pairs), how much more their heights differ than the gap
+  between their carriageways holds as a bank (a step across the lanes where the pavements overlap).
 """
 import math
 
@@ -104,6 +106,27 @@ def junction_steps(plans, box=None):
                 seen.add(key)
                 out.append({"x": float(q[0]), "y": float(q[1]), "dz": abs(float(z[e]) - _z_at(zs[j], sj, t)),
                             "a": fid, "b": plans[j][0]})
+    return out
+
+
+def corridor_steps(plans, specs):
+    """[{x, y, dz, a, b}] per vertex of a road beside another (grading.corridor_pairs: share_corridors' pairs, two
+    through roads not among them): dz how much more the two heights differ than their gap holds at
+    grading.CORRIDOR_BANK, where it does, and they are within grading.CORRIDOR_MAX_DIFF_M (more: two levels). plans:
+    [(fid, Plan)] of roads only, specs their Specs. [] without the kernel's pairs."""
+    import grading
+    pr = grading.corridor_pairs(plans, specs) if plans else None
+    if pr is None or not len(pr[0]):
+        return []
+    j, i, k, si, t, gap = pr
+    zs = [np.asarray(p.z, np.float64) for _f, p in plans]
+    out = []
+    for a, b, c, s, u, g in zip(j.tolist(), i.tolist(), k.tolist(), si.tolist(), t.tolist(), gap.tolist()):
+        diff = abs(_z_at(zs[c], s, u) - float(zs[a][b]))
+        excess = diff - max(g, 0.0) * grading.CORRIDOR_BANK
+        if excess > 0.0 and diff <= grading.CORRIDOR_MAX_DIFF_M:
+            q = np.asarray(plans[a][1].xy, np.float64)[b]
+            out.append({"x": float(q[0]), "y": float(q[1]), "dz": float(excess), "a": plans[a][0], "b": plans[c][0]})
     return out
 
 
@@ -235,7 +258,7 @@ def clearance(plans, decks, names):
     return out
 
 
-def summary(junctions, seams, profs, clear, cpu_s=None):
+def summary(junctions, seams, profs, clear, cpu_s=None, corridors=None):
     """One place's numbers (the JSON tools/grade_metrics.py writes)."""
     def steps(rows):
         dz = np.array([r["dz"] for r in rows]) if rows else np.zeros(0)
@@ -269,5 +292,6 @@ def summary(junctions, seams, profs, clear, cpu_s=None):
                    "worst": [{"fid": p["fid"], **p["dev_at"]}
                              for p in sorted(profs, key=lambda p: -abs(p["dev_at"]["dz"]))[:WORST_N] if "dev_at" in p]},
         "clearance": {**steps(clear), "through_deck": int(sum(1 for r in clear if r.get("gap", need) < THROUGH_DECK_M))},
+        "corridor": steps(corridors or []),
         "cpu_s": cpu_s,
     }

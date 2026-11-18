@@ -116,6 +116,33 @@ class ClearanceTest(unittest.TestCase):
         self.assertAlmostEqual(rows[0]["dz"], 0.4, places=6)
 
 
+def have_pairs():
+    try:
+        import fast
+        fast.require(472, "plan_corridor_pairs")
+        return True
+    except Exception:
+        return False
+
+
+@unittest.skipUnless(have_pairs(), "earthfast's plan_corridor_pairs")
+class CorridorTest(unittest.TestCase):
+
+    def test_a_slip_road_a_step_beside_its_main_road(self):
+        from types import SimpleNamespace
+        main = plan(np.c_[S, np.zeros_like(S)], np.zeros(len(S)), rid=1)
+        slip = plan(np.c_[S, np.full(len(S), 8.0)], np.where((S >= 40) & (S <= 60), 1.0, 0.0), rid=2)
+        for p in (main, slip):
+            p.road_half = 3.5           # (a 1 m gap: 0.4 m of bank)
+        specs = [SimpleNamespace(cls="primary", kind="road"), SimpleNamespace(cls="primary_link", kind="road")]
+        rows = gm.corridor_steps([("main", main), ("slip", slip)], specs)
+        self.assertTrue(rows)
+        self.assertAlmostEqual(max(r["dz"] for r in rows), 0.6, places=6)
+        self.assertTrue(all(abs(r["x"] - 50.0) <= 12.0 for r in rows))
+        two = [SimpleNamespace(cls="primary", kind="road")] * 2      # (two through roads: their own heights)
+        self.assertEqual(gm.corridor_steps([("main", main), ("slip", slip)], two), [])
+
+
 class SummaryTest(unittest.TestCase):
 
     def test_counts(self):

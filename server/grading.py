@@ -3228,7 +3228,11 @@ class _Planner:
                 near = np.abs(sa[:, None] - sl[None, :]).min(axis=1) <= reach
                 c = np.where(near, z, np.nan)
                 caps[i] = c if caps[i] is None else np.fmin(caps[i], c)
-        zs, info = vsolvemod.solve(ground, pspecs, z_before[:n], ceilings, ranks, pins, dips, caps=caps, floors=floors)
+        corridors = None
+        if vsolvemod.CORRIDOR_ROWS_ON:  # (roads side by side at one height: share_corridors' rule, as rows)
+            corridors = corridor_pairs(plans[:n], pspecs)
+        zs, info = vsolvemod.solve(ground, pspecs, z_before[:n], ceilings, ranks, pins, dips, caps=caps, floors=floors,
+                                   corridors=corridors)
         if zs is None:          # (no feasible solve: the passes' heights, as the RFC's fallback; counted in info)
             zs = [np.array(p.z, np.float64) for p in ground]
         quad = self._clip_quad(key) if own is not None else None
@@ -3253,8 +3257,10 @@ class _Planner:
         info["floors"] = int(sum(int(np.isfinite(c).sum()) for c in floors if c is not None))
         (log.warning if info["fallback"] else log.info)(
             "vsolve: %s: %d roads, %d unknowns, %d joins, %d pins, %d dip rows, %d caps and %d floors (%d broken, the "
-            "most by %.2f m): %s%s in %.2f s", key, n, info["n"], info["joins"], info["pins"], info["dips"], info["caps"],
-            info["floors"], info["clear_broken"], info["clear_excess_m"], info.get("status"),
+            "most by %.2f m), %d corridor rows (%d broken, the most by %.2f m): %s%s in %.2f s", key, n, info["n"],
+            info["joins"], info["pins"], info["dips"], info["caps"], info["floors"], info["clear_broken"],
+            info["clear_excess_m"], info["corridor_rows"], info["corridor_broken"], info["corridor_excess_m"],
+            info.get("status"),
             " (the passes' heights kept: %s)" % ", ".join(info.get("culprit") or ["?"]) if info["fallback"] else
             " (%d grade rows broken, the most by %.2f m%s)" % (
                 info["grade_broken"], info["grade_excess_m"],
@@ -9121,6 +9127,29 @@ def share_corridors(plans, specs, decks=()):
     for i in idx:
         plans[i] = (plans[i][0], _replan(ps[i], ps[i].xy, zn[off[i]:off[i + 1]].copy(), cut=True))
     return len(idx)
+
+
+def corridor_pairs(plans, specs):
+    """share_corridors' pairs (above), for the one vertical solve's corridor rows (vsolve.CORRIDOR_ROWS_ON): per
+    vertex i of a plan j, each plan k running beside it there (k's nearest segment si at t, the gap between the
+    carriageways) of those whose heights may differ (two through roads keep their own: share_corridors' keys), as
+    arrays (j, i, k, si, t, gap); None without the kernel's plan_corridor_pairs (earthfast 472) or with fewer than two
+    plans in it. plans [(fid, Plan)], specs their Specs. Pure."""
+    import fast
+    if len(plans) < 2 or getattr(fast, "_ef", None) is None or not hasattr(fast._ef, "plan_corridor_pairs"):
+        return None
+    ps = [p for _f, p in plans]
+    key = np.array([_corridor_key(p, sp, f) for (f, p), sp in zip(plans, specs)], np.int64)
+    if (key >= 0).sum() < 2:
+        return None
+    xy, off, _z = _plan_lines(ps)
+    rh = np.array([float(p.road_half) for p in ps], np.float64)
+    abut = np.array([p.abut for p in ps], bool).reshape(-1, 2)
+    wall = np.concatenate([_wall_vertices(p) for p in ps])
+    j, i, k, si, tt, gap = fast._ef.plan_corridor_pairs(xy, off, wall, rh, key, abut, float(CORRIDOR_ANG_DEG),
+                                                        float(CORRIDOR_GAP_M), float(CORRIDOR_ABUT_HOLD_M))
+    keep = ~((key[j] >= CORRIDOR_THROUGH) & (key[k] >= CORRIDOR_THROUGH))
+    return tuple(np.asarray(a)[keep] for a in (j, i, k, si, tt, gap))
 
 
 def _raised_under(xy, dz, decks):

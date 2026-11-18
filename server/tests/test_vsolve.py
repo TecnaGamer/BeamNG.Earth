@@ -197,6 +197,65 @@ class OnTest(unittest.TestCase):
         self.assertAlmostEqual(float(z[1]), 10.0, delta=0.1, msg="back up past the ramp")
 
 
+def have_pairs():
+    try:
+        fast.require(472, "plan_corridor_pairs")
+        return True
+    except Exception:
+        return False
+
+
+@unittest.skipUnless(have_kernel() and have_pairs(), "earthfast's plan_corridor_pairs")
+class CorridorTest(unittest.TestCase):
+    """Roads side by side at one height (share_corridors' rule as the solve's rows, BNE_VSOLVE_CORRIDOR=on): a slip
+    road 1 m beside a primary whose middle the underpass rule dipped 1.5 m follows it down, to what the gap holds as a
+    bank."""
+
+    def setUp(self):
+        patch = unittest.mock.patch.object(vsolve, "CORRIDOR_ROWS_ON", True)
+        patch.start()
+        self.addCleanup(patch.stop)
+
+    def roads(self, link=True):
+        a = plan(np.c_[S, np.zeros_like(S)], np.zeros(len(S)))
+        b = plan(np.c_[S, np.full(len(S), 8.0)], np.zeros(len(S)))
+        for p in (a, b):
+            p.road_half = 3.5                   # (8 m apart: a 1 m gap, 0.4 m of bank)
+        specs = [SimpleNamespace(cls="primary", kind="road"),
+                 SimpleNamespace(cls="primary_link" if link else "primary", kind="road")]
+        dips = [np.where((S >= 80) & (S <= 120), -1.5, np.nan), None]
+        return [a, b], specs, dips
+
+    def solve(self, plans, specs, dips, corridors):
+        z0 = [p.z.copy() for p in plans]
+        ranks = [grading.road_rank(sp) for sp in specs]
+        return vsolve.solve(plans, specs, z0, [0.09, 0.09], ranks, dips=dips, corridors=corridors)
+
+    def test_the_slip_road_follows_the_dip(self):
+        plans, specs, dips = self.roads()
+        pairs = grading.corridor_pairs([("a", plans[0]), ("b", plans[1])], specs)
+        self.assertIsNotNone(pairs)
+        self.assertGreater(len(pairs[0]), 0)
+        zs, info = self.solve(plans, specs, dips, pairs)
+        self.assertTrue(info["feasible"] and not info["fallback"], info)
+        self.assertLessEqual(float(zs[0][40:61].max()), -1.5 + 1e-4)          # (the dip: hard)
+        self.assertGreater(info["corridor_rows"], 0, info)
+        diff = np.abs(zs[1] - zs[0])
+        self.assertLess(float(diff[45:56].max()), 0.4 + 0.05, info)            # (the bank the gap holds)
+        self.assertLess(float(zs[1][50]), -1.0)
+
+    def test_without_rows_it_stays_on_its_profile(self):
+        plans, specs, dips = self.roads()
+        zs, info = self.solve(plans, specs, dips, None)
+        self.assertEqual(info["corridor_rows"], 0)
+        self.assertGreater(float(np.abs(zs[1] - zs[0])[50]), 1.4)
+
+    def test_two_through_roads_keep_their_own(self):
+        plans, specs, dips = self.roads(link=False)
+        pairs = grading.corridor_pairs([("a", plans[0]), ("b", plans[1])], specs)
+        self.assertTrue(pairs is None or len(pairs[0]) == 0)
+
+
 @unittest.skipUnless(have_kernel(), "earthfast's carriageway_profiles")
 class SoloTest(unittest.TestCase):
     """BNE_VSOLVE=solo: the solve without the passes it replaces, and the passes again where it finds no heights."""
