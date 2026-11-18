@@ -8322,53 +8322,7 @@ class BridgeProfiles:
             hal = {str(c): c for c in mapcells.cells_of(np.asarray(la), np.asarray(lo)) if str(c) not in own}
             memo[k] = (pool[k][1], own, hal)
             return own, hal
-        import revisit
-        reached = [{start}]
-        # (the answers are kept per part only from a closure read complete: one read short is answered alone)
-        with revisit.scope() as rd:
-            try:
-                got = self._fixpoint(start, pool, ground, loaded, reach, reached)
-            except _Capped:
-                if rd.complete and reached[-1] == "budget":
-                    self._note_capped(reached[0], True)
-                raise
-        if rd.complete:
-            self._note_capped(got, False)
-        return got
-
-    def _note_capped(self, keys, capped):
-        """_closure's answers per part: every SETTLED part a closure reached (only through pairs between settled parts:
-        each one of that chain) shares its answer: the complete chain's (not capped), or a budget cap of its settled
-        parts alone (a subset of the chain's: the chain's answer too). A read-ceiling cap is never kept."""
-        memo = self.__dict__.setdefault("_capped_memo", {})
-        with self.lock:
-            if len(memo) > 65536:
-                memo.clear()
-            for k in keys:
-                memo[k] = capped
-
-    def _capped(self, key, xy):
-        """Is part key's own chain closure capped (_closure from the cells of its line xy, memoised)? The window
-        solves' test of which pieces they publish (RS S2b)."""
-        memo = self.__dict__.setdefault("_capped_memo", {})
-        with self.lock:
-            hit = memo.get(key)
-        if hit is not None:
-            return hit
-        xy = np.asarray(xy, np.float64)[:, :2]
-        la, lo, _ = self.frame.enu_to_geodetic(xy[:, 0], xy[:, 1], 0.0)
-        loaded = {str(c) for c in mapcells.cells_of(np.asarray(la), np.asarray(lo))}
-        pool, ground = {}, {}
-        self._canon_load(pool, ground, loaded, keep=False)
-        if key not in pool:
-            return False
-        try:
-            self._closure(key, pool, ground, loaded)
-        except _Capped as e:
-            # (only a certified cap lets a window publish this piece: a traversal limit is this closure's answer
-            # alone, so the piece is published by its own ask, Codex review)
-            return bool(e.certified)
-        return False
+        return self._fixpoint(start, pool, ground, loaded, reach, [{start}])
 
     def _fixpoint(self, start, pool, ground, loaded, reach, reached):
         """_closure's passes (reached[0]: the parts the last pass reached)."""
@@ -8954,16 +8908,12 @@ class BridgeProfiles:
         # published before them was taken by a reader or an adopter in another thread as complete (review,
         # 2026-11-13). Nothing of the chain is in `done`, `piers` or `trusses` until then; then all of it with its
         # final notes, in one hold of the lock.
-        wcap = None
-        if block is not None and self.CANON_LOAD and self.STRUCTURES and structures.SHADOW:
-            # (RS S2b: a window solve publishes only the pieces whose own closure is capped too. A window holds
-            # whatever its cells hold, so a deck of a chain that closes within budget (one only the window's partial
-            # set pairs with this one) was published from here or from its own solve, whichever was asked first.
-            # Its structure (trusses, their piers) stays the legacy path's exactly: keyed by min(comp), made from the
-            # parts published (here or before). Keyed by min(wcap) from every capped part of the window, two
-            # overlapping windows sharing their lowest piece built different trusses under one key, the first to
-            # commit winning (Codex review of 1ced286a). The switch only writes diagnostics there)
-            wcap = [k for k in comp if k == key or self._capped(k, pool[k][1])]
+        # (BNE_DECK_STRUCT=shadow, RS S2b: a window solve's live output, its decks and its structure, is the legacy
+        # path's exactly. 1ced286a published only the pieces whose own closure was capped and built the structure from
+        # them under min(wcap): live geometry the switch changed (two overlapping windows sharing their lowest piece
+        # built different trusses under one key; an uncapped neighbour left out of the structure), and the cap probes
+        # read cells inside this solve's revisit scope. Codex reviews of 1ced286a and 6a7bcd2a. The switch only
+        # writes diagnostics in a window solve)
         with self.lock:
             before = {k: self._take_locked(k) for k in comp}    # (the structure is made from them: taken)
             ck = min(comp) if comp else None
@@ -8971,8 +8921,6 @@ class BridgeProfiles:
         # the first solve of a part is kept, and what goes with it, unless this one saw more of it (a window's solve:
         # only its block's pieces, each piece's from its own block's window)
         mine = {k for k in comp if block is None or self._block_of_xy(pool[k][1]) == block}
-        if wcap is not None:
-            mine = mine & set(wcap)
         keep = {k: (pool[k][0], pool[k][1], z, pool[k][2]) for k, z in zip(comp, zs)
                 if k in mine and (before[k] is None or len(pool[k][1]) > len(before[k][1]))}
         own = None if key in mine else (pool[key][0], pool[key][1], zs[comp.index(key)], pool[key][2])

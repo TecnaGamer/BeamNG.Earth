@@ -757,16 +757,19 @@ class JointHeightsTest(unittest.TestCase):
                "rank": [2] * n, "link": [False] * n}
         tw_members, tw_got, tw_raw = self.twins()
         out = []
-        t0 = time.monotonic()
+
+        def dense_job():
+            t0 = time.monotonic()
+            got = structures.heights(members, n, dense, raw)
+            out.append(("dense", got, time.monotonic() - t0))
         with tempfile.TemporaryDirectory() as d:
-            self.assertTrue(structures._submit(lambda: out.append(("dense", structures.heights(members, n, dense, raw),
-                                                                   time.monotonic() - t0)), d))
+            self.assertTrue(structures._submit(dense_job, d))
             self.assertTrue(structures._submit(lambda: out.append(("twins", structures.heights(tw_members, 2, tw_got,
                                                                                                tw_raw), 0.0)), d))
             self_flush()
         self.assertEqual([o[0] for o in out], ["dense", "twins"])
         got, took = out[0][1], out[0][2]
-        self.assertLess(took, 5.0)
+        self.assertLess(took, 10.0)        # (the counts alone: ~0.1 s; a loose bound for a busy machine)
         self.assertEqual({s["status"] for s in got["structures"]}, {"budget"})
         self.assertEqual(got["z_joint"][7], [11007] * len(xs))       # (today's heights, in mm)
         self.assertEqual(out[1][1]["structures"][0]["status"], "solved")

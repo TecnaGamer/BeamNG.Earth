@@ -28,9 +28,8 @@ Step S2a (earthfast 481), the groundwork of the joint height solve; BNE_DECK_STR
 Step S2b part 1 (earthfast 488, BNE_DECK_STRUCT 4), still shadow only:
 - Chain discovery is a FIXPOINT (roads.BridgeProfiles._closure): a part's pairs count only once every cell of its line
   and halo is read, nothing is capped or windowed before the closure is complete, and the answer is a function of
-  that complete local set (the chain with exactly its own cells + halo read). A window solve publishes only pieces
-  whose own closure is capped (roads.BridgeProfiles._capped); its structure (trusses, their piers) is the legacy
-  path's exactly (keyed by the window chain's lowest part, made from the parts published).
+  that complete local set (the chain with exactly its own cells + halo read). A window solve's live output (its
+  decks, its structure: trusses, their piers) is the legacy path's exactly; the switch only writes diagnostics there.
 - ONE joint height solve per structure (heights(): earthfast.structure_heights): the chain profile solved WITHOUT the
   pairwise mechanisms (roads._merge_overlaps / DeckMerge / DUAL_DECK_M, roads._tie_beside; BridgeProfiles._raw_solve,
   in the writer) coupled per group edge, windows and eases, abutments pinned, clearances as an active set, a fallback
