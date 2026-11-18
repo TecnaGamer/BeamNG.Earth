@@ -126,6 +126,7 @@ mod roadtone;
 mod railbeds;
 mod railxing;
 mod roadnet;
+mod structures;
 mod osmtagshards;
 mod buildyears;
 mod buildcolours;
@@ -6681,6 +6682,9 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(lanesjoin::lanes_join, m)?)?;
     // 456: the full port's roadlanes.count and roadlanes.join (lanesjoin: the OSM counts, the highway boxes asked of
     // the geometry, the geometry match through dm::interp)
-    m.add("VERSION", 471)?;
+    m.add_function(wrap_pyfunction!(structures::groups::structure_groups, m)?)?;
+    // 480: road revamp RS step S1 (structures::groups::structure_groups: which decks of one bridge chain form one
+    // structure; roads writes them as a shadow JSON per chain, BNE_DECK_STRUCT=shadow). 472-479 left to other branches
+    m.add("VERSION", 480)?;
     Ok(())
 }
