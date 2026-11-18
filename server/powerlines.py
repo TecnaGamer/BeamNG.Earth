@@ -146,14 +146,24 @@ def _near(frame, ring, box):
     tile's spans and their towers' neighbours. A line's every tower had its ground read for each tile it touched: a
     100 km line's 2,000 towers, ~6,000 DEM tiles downloaded for one road tile in rural Pennsylvania (5 min),
     2026-10-27."""
+    return [ring[i:j + 1] for i, j in _near_ranges(frame, ring, box)]
+
+
+def _near_ranges(frame, ring, box):
+    """_near's runs as index ranges (first, last) into ring."""
     e, n, _ = frame.geodetic_to_enu(ring[:, 1], ring[:, 0], np.zeros(len(ring)))
     e, n = np.asarray(e), np.asarray(n)
     near = (e >= box[0] - NEAR_M) & (e <= box[2] + NEAR_M) & (n >= box[1] - NEAR_M) & (n <= box[3] + NEAR_M)
     if near.all():
-        return [ring]
-    keep = near.copy()
-    keep[:-1] |= near[1:]
-    keep[1:] |= near[:-1]
+        return [(0, len(ring) - 1)]
+    return _ranges(near)
+
+
+def _ranges(hit):
+    """The (first, last) index ranges of the runs of hit (n,) with the point either side of each, two points at least."""
+    keep = np.asarray(hit, bool).copy()
+    keep[:-1] |= hit[1:]
+    keep[1:] |= hit[:-1]
     out, i = [], 0
     while i < len(keep):
         if not keep[i]:
@@ -163,7 +173,7 @@ def _near(frame, ring, box):
         while j + 1 < len(keep) and keep[j + 1]:
             j += 1
         if j > i:
-            out.append(ring[i:j + 1])
+            out.append((i, j))
         i = j + 1
     return out
 
@@ -293,12 +303,52 @@ FEED_REACH_M = 400.0        # m round a yard a mapped vertex may lie and still b
                             # out of a station's ground: its size)
 
 
-def _feeders(frame, md, subs, layers, cells, seen, lines, poles):
+def _line_class(md, f, i, t, memo):
+    """Does line i of layer f (tags t) run on poles (the pole lines' group), the same answer in every tile: its voltage
+    (low_voltage), else its mapped supports (on_poles) as the map cells at its two ends hold them, those cells read
+    whichever tile asks (memo: cell -> its support keys). The tile's own cells' supports made a feeder whose poles are
+    mapped only near its yard a pylon line in the span's tile and a pole line in the yard's: two layouts, two ends
+    (Codex's review of 732f777f)."""
+    import mapcells
+    if low_voltage(t):
+        return True
+    rings = [np.asarray(r, np.float64) for part in f.parts(i) for r in part if len(r)]
+    if not rings:
+        return False
+    pk, tk = [], []
+    for lon, lat in (rings[0][0][:2], rings[-1][-1][:2]):
+        key = mapcells.cell_of(float(lat), float(lon))
+        got = memo.get(key)
+        if got is None:
+            g = md.cell(key, layers=("infrastructure",), kind="demand").layers.get("infrastructure")
+            ok = g is not None and len(g.kind) and g.attrs.get("class") is not None
+            got = memo[key] = _support_keys(g) if ok else (np.zeros(0, np.int64), np.zeros(0, np.int64))
+        pk.append(got[0])
+        tk.append(got[1])
+    return bool(on_poles(rings, np.unique(np.concatenate(pk)), np.unique(np.concatenate(tk))))
+
+
+def _uncovered(a, b, ranges):
+    """The sub-runs (first, last) of the run a..b whose vertices no laid-out run covers (ranges), each with the vertex
+    either side of it (the span to a covered one is no covered run's: a covered run ends there)."""
+    covered = np.zeros(b - a + 1, bool)
+    for c0, c1 in ranges:
+        lo, hi = max(a, c0), min(b, c1)
+        if lo <= hi:
+            covered[lo - a:hi - a + 1] = True
+    if not (~covered).any():
+        return []
+    return [(a + i, a + j) for i, j in _ranges(~covered)]
+
+
+def _feeders(frame, md, subs, layers, cells, seen, lines, poles, cover=None, memo=None):
     """Every power line ending in one of subs (its vertices in a yard, with one neighbour each side), from the cells
     the yards reach, added to lines / poles where not laid out yet (seen: their ids): a line end merges into an earlier
     one of its yard, so the tile drawing a span into a yard and the yard's own tile must know the same lines ending
     there (Codex's review of 119bb4d7: a span tile that knew only one of two feeders hung its conductors where the
-    yard tile's merged gantries were not)."""
+    yard tile's merged gantries were not). A line laid out already (cover: its runs' vertices) adds its yard approach
+    where no run of it covers that (a run clipped round the tile must not hide it: Codex's review of 732f777f), in its
+    one class (_line_class)."""
     from polygon import Path
     if not subs:
         return
@@ -309,9 +359,9 @@ def _feeders(frame, md, subs, layers, cells, seen, lines, poles):
         if f is not None and len(f.kind) and f.attrs.get("class") is not None:
             extra.append(f)
     every = list(layers) + extra
-    sup = [_support_keys(f) for f in every]
-    pole_keys = np.unique(np.concatenate([q for q, _ in sup])) if sup else np.zeros(0, np.int64)
-    tower_keys = np.unique(np.concatenate([t for _, t in sup])) if sup else np.zeros(0, np.int64)
+    cover = {} if cover is None else cover
+    memo = {} if memo is None else memo
+    done = set()                    # (each line once: its first layer's copy)
     yards = [[Path(np.asarray(r, np.float64)[:, :2]) for r in rings] for _, rings in subs]
     envelopes = []
     for _, rings in subs:
@@ -323,13 +373,13 @@ def _feeders(frame, md, subs, layers, cells, seen, lines, poles):
         for i in np.flatnonzero((cls == "power_line") & (f.kind == 2)):
             fid = str(f.ids[i])
             t = str(tags[i]) if tags is not None else ""
-            if fid in seen or any(u in t for u in UNDERGROUND):
+            if fid in done or any(u in t for u in UNDERGROUND):
                 continue
-            rings = [r for part in f.parts(i) for r in part if len(r)]
-            pole = low_voltage(t) or bool(rings and on_poles(rings, pole_keys, tower_keys))
+            done.add(fid)
+            pole = None
             runs = []
-            for part in f.parts(i):
-                for ring in part:
+            for pk, part in enumerate(f.parts(i)):
+                for rk, ring in enumerate(part):
                     ring = np.asarray(ring, np.float64)
                     if len(ring) < 2:
                         continue
@@ -342,6 +392,8 @@ def _feeders(frame, md, subs, layers, cells, seen, lines, poles):
                         near |= (e0 >= bx0) & (e0 <= bx1) & (n0 >= by0) & (n0 <= by1)
                     if not near.any():
                         continue
+                    if pole is None:
+                        pole = _line_class(md, f, i, t, memo)
                     idx = np.flatnonzero(near)
                     # (its vertices where the layout stands them: the yards it ends in read alike in every tile;
                     # Codex's review of 0cf9fd9b: the raw mapped points disagreed with the moved ones)
@@ -358,20 +410,10 @@ def _feeders(frame, md, subs, layers, cells, seen, lines, poles):
                     here[idx] = inside
                     if not here.any():
                         continue
-                    keep = here.copy()
-                    keep[:-1] |= here[1:]
-                    keep[1:] |= here[:-1]
-                    j = 0
-                    while j < len(keep):
-                        if not keep[j]:
-                            j += 1
-                            continue
-                        k = j
-                        while k + 1 < len(keep) and keep[k + 1]:
-                            k += 1
-                        if k > j:
-                            runs.append(ring[j:k + 1])
-                        j = k + 1
+                    for j, k in _ranges(here):
+                        for a, b in _uncovered(j, k, cover.get((fid, pk, rk), ())):
+                            runs.append(ring[a:b + 1])
+                            cover.setdefault((fid, pk, rk), []).append((a, b))
             if not runs:
                 continue
             seen.add(fid)
@@ -384,6 +426,7 @@ def _tile_lines(frame, tx, ty, md, elev, props, wires, clearance):
     x0, y0, x1, y1 = roads.tile_bbox(tx, ty)
     cells = roads.cells_of_tile(frame, tx, ty, margin=MAX_SPAN_M / 4)
     lines, poles, seen = [], [], set()
+    cover, memo = {}, {}            # (the vertices of each line's runs laid out; the classes' support cells)
     layers = []
     for key in cells:
         f = md.cell(key, layers=("infrastructure",), kind="demand").layers.get("infrastructure")
@@ -403,11 +446,17 @@ def _tile_lines(frame, tx, ty, md, elev, props, wires, clearance):
                 continue
             seen.add(fid)
             rings = [r for part in f.parts(i) for r in part if len(r)]
-            into = poles if low_voltage(t) or (rings and on_poles(rings, pole_keys, tower_keys)) else lines
-            for part in f.parts(i):
-                for ring in part:
+            if YARDS_ON:                # (one class per line, whichever tile asks: _line_class)
+                into = poles if _line_class(md, f, i, t, memo) else lines
+            else:
+                into = poles if low_voltage(t) or (rings and on_poles(rings, pole_keys, tower_keys)) else lines
+            for pk, part in enumerate(f.parts(i)):
+                for rk, ring in enumerate(part):
                     if len(ring) >= 2:
-                        into += [(fid, r) for r in _near(frame, np.asarray(ring, np.float64), (x0, y0, x1, y1))]
+                        ring = np.asarray(ring, np.float64)
+                        ranges = _near_ranges(frame, ring, (x0, y0, x1, y1))
+                        into += [(fid, ring[a:b + 1]) for a, b in ranges]
+                        cover.setdefault((fid, pk, rk), []).extend(ranges)
     # (the substations of the cells round the tile and of every cell a laid-out line vertex is in: a span drawn here
     # may end at a yard 1 km off, beyond the cells round the tile; Codex's review of 9618c426)
     if YARDS_ON:
@@ -415,7 +464,7 @@ def _tile_lines(frame, tx, ty, md, elev, props, wires, clearance):
         reach = {mapcells.cell_of(float(q[1]), float(q[0])) for _, r in lines + poles
                  for q in np.asarray(r, np.float64)}
         subs = _substations(frame, list(cells) + sorted(reach - set(cells), key=str), md)
-        _feeders(frame, md, subs, layers, cells, seen, lines, poles)
+        _feeders(frame, md, subs, layers, cells, seen, lines, poles, cover, memo)
     else:
         subs = _substations(frame, cells, md)
     fast.require(439, "power_line_layout")

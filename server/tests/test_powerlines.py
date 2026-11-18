@@ -556,7 +556,7 @@ class TowerFootprintTest(unittest.TestCase):
         self.assertEqual(run([]), ({powerlines.G_PYLON}, 6))
         self.assertEqual(run(["power_pole", "power_tower"]), ({powerlines.G_PYLON}, 6), "no majority: the towers")
 
-    def far_yard_world(self, feeder=False, feeder_end=-5.0, feeder_from=(-300.0,)):
+    def far_yard_world(self, feeder=False, feeder_end=-5.0, feeder_from=(-300.0,), poles_at_yard=False):
         """A tile whose span runs 1.9 km to a 60 m yard in a map cell beyond its lookup: (tx, the yard tile's tx, far x,
         Md); feeder: a second line ("a", before the span's "b") ending in the yard 9 m from it, mapped only in the
         yard's cell (Codex's review of 119bb4d7)."""
@@ -579,7 +579,9 @@ class TowerFootprintTest(unittest.TestCase):
         ring = [[far - 30, 70], [far + 30, 70], [far + 30, 130], [far - 30, 130], [far - 30, 70]]
         hv = '{"power":"line","voltage":"220000"}'
         b = ("b", mapgeom.LINE, "power_line", hv, ll([[far, 100.0], [near, 100.0]]))
-        a = ("a", mapgeom.LINE, "power_line", hv, ll([[far + d, 108.0] for d in feeder_from] + [[far + feeder_end, 108.0]]))
+        a_xy = [[far + d, 108.0] for d in feeder_from] + [[far + feeder_end, 108.0]]
+        # (poles_at_yard: no voltage mapped, its power=pole points only in the yard's cell, and the line in every cell)
+        a = ("a", mapgeom.LINE, "power_line", "{}" if poles_at_yard else hv, ll(a_xy))
         yard = ("yard", mapgeom.POLYGON, "substation", "{}", ll(ring))
 
         def features(items):
@@ -590,7 +592,9 @@ class TowerFootprintTest(unittest.TestCase):
                 coord_off=np.r_[0, np.cumsum([len(q[4]) for q in items])].astype(np.int64),
                 lonlat=np.vstack([q[4] for q in items]), attrs={"class": np.array([q[2] for q in items]),
                                                               "tags": np.array([q[3] for q in items], object)}, rules={})
-        at_yard, elsewhere = features(([a] if feeder else []) + [b, yard]), features([b])
+        pts = [(f"p{k}", mapgeom.POINT, "power_pole", "{}", ll([q])) for k, q in enumerate(a_xy)] if poles_at_yard else []
+        at_yard = features(([a] if feeder else []) + [b, yard] + pts)
+        elsewhere = features(([a] if feeder and poles_at_yard else []) + [b])
 
         class Md:
             def cell(self, key, layers, kind):
@@ -651,6 +655,44 @@ class TowerFootprintTest(unittest.TestCase):
         remote = mapcells.cell_of(float(la[0]), float(lo[0]))
         self.assertTrue(asked)
         self.assertNotIn(remote, asked)
+
+    @yards_on
+    def test_a_feeder_is_one_class_in_every_tile(self):
+        """Codex's review of 732f777f: a feeder with no voltage mapped, its power=pole points only in the yard's cell:
+        the span tile (the line in its own cells, the poles not) laid it out as a pylon line, the yard tile as a pole
+        line, and the span merged onto different gantries in each. Its class is read from the cells at its two ends
+        now, whichever tile asks."""
+        import furniture
+        from test_roads import FRAME
+        tx, yard_tx, far, md = self.far_yard_world(feeder=True, poles_at_yard=True)
+        groups = {}
+        real = powerlines._lay
+
+        def spy(frame, md_, elev, subs, lines, group, *a, **k):
+            for fid, _ in lines:
+                groups.setdefault(fid, set()).add((spy.tile, group))
+            return real(frame, md_, elev, subs, lines, group, *a, **k)
+        flat = lambda la_, lo_: np.zeros(np.shape(la_))
+        with mock.patch.object(powerlines, "_lay", spy):
+            spy.tile = "span"
+            props, wires = [], []
+            powerlines.tile_lines(FRAME, tx, 0, md, flat, props, wires)
+            spy.tile = "yard"
+            yard_props = []
+            powerlines.tile_lines(FRAME, yard_tx, 0, md, flat, yard_props, [])
+        self.assertEqual(groups["a"], {("span", powerlines.G_POLE), ("yard", powerlines.G_POLE)})
+        hung = {tuple(r) for w in wires if furniture.wire_ends(w) for r in furniture.wire_ends(w)
+                if r is not None and r[0] == "gantry"}
+        built = {tuple(r) for r in yard_props if r[0] == "gantry"}
+        self.assertTrue(hung and hung <= built, (hung, built))
+
+    def test_a_clipped_run_does_not_hide_the_yard_approach(self):
+        # Codex's review of 732f777f: a line laid out round the tile (its run clipped there) was skipped by the feeder
+        # search, so its approach to a yard beyond the run was never laid out; only the vertices no run covers are added
+        self.assertEqual(powerlines._uncovered(10, 14, [(0, 11)]), [(11, 14)])     # (from the covered vertex on)
+        self.assertEqual(powerlines._uncovered(10, 14, [(0, 20)]), [])
+        self.assertEqual(powerlines._uncovered(10, 14, []), [(10, 14)])
+        self.assertEqual(powerlines._uncovered(10, 14, [(11, 13)]), [(10, 11), (13, 14)])
 
     @yards_on
     def test_feeders_read_where_the_layout_stands_them(self):
