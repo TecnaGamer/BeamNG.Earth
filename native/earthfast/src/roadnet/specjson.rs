@@ -58,24 +58,35 @@ fn refuse(what: &str, v: &Bound<'_, PyAny>) -> PyErr {
     pyo3::exceptions::PyTypeError::new_err(format!("{what}: a {name} is outside the road spec contract"))
 }
 
-/// Whether v is of what json.loads gives (None, exact bool / int / float / str, exact lists and dicts with str keys of
-/// such), to a depth.
-fn json_value(v: &Bound<'_, PyAny>, depth: usize) -> bool {
-    if v.is_none() || v.is_exact_instance_of::<pyo3::types::PyBool>() || v.is_exact_instance_of::<pyo3::types::PyInt>()
-        || v.is_exact_instance_of::<pyo3::types::PyFloat>() || v.is_exact_instance_of::<PyString>()
-    {
-        return true;
+/// Whether v is of what json.loads gives: None, exact bool / int / float / str, and exact lists and dicts with str keys
+/// of such, at any depth (an iterative walk: no depth cut-off, Codex on 7d348090; a container met twice, a cycle or a
+/// shared one json.loads never makes, is refused).
+fn json_value(v: &Bound<'_, PyAny>) -> bool {
+    let mut stack = vec![v.clone()];
+    let mut seen: std::collections::BTreeSet<usize> = std::collections::BTreeSet::new();
+    while let Some(x) = stack.pop() {
+        if x.is_none() || x.is_exact_instance_of::<pyo3::types::PyBool>() || x.is_exact_instance_of::<pyo3::types::PyInt>()
+            || x.is_exact_instance_of::<pyo3::types::PyFloat>() || x.is_exact_instance_of::<PyString>()
+        {
+            continue;
+        }
+        if !seen.insert(x.as_ptr() as usize) {
+            return false;
+        }
+        if let Ok(l) = x.cast_exact::<PyList>() {
+            stack.extend(l.iter());
+        } else if let Ok(d) = x.cast_exact::<PyDict>() {
+            for (k, y) in d.iter() {
+                if !k.is_exact_instance_of::<PyString>() {
+                    return false;
+                }
+                stack.push(y);
+            }
+        } else {
+            return false;
+        }
     }
-    if depth == 0 {
-        return false;
-    }
-    if let Ok(l) = v.cast_exact::<PyList>() {
-        return l.iter().all(|x| json_value(&x, depth - 1));
-    }
-    if let Ok(d) = v.cast_exact::<PyDict>() {
-        return d.iter().all(|(k, x)| k.is_exact_instance_of::<PyString>() && json_value(&x, depth - 1));
-    }
-    false
+    true
 }
 
 /// spec_from_json of each stored spec of data (None for None): Spec(**{**d, "sides": tuple(d["sides"]) or None,
@@ -95,7 +106,7 @@ pub fn specs_from_json<'py>(py: Python<'py>, data: Bound<'py, PyAny>, spec: Boun
             out.append(&d)?;
             continue;
         }
-        if !json_value(&d, 4) || !d.is_exact_instance_of::<PyDict>() {
+        if !d.is_exact_instance_of::<PyDict>() || !json_value(&d) {
             return Err(refuse("a stored spec", &d));
         }
         let d = d.cast_into::<PyDict>()?;

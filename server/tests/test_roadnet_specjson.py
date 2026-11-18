@@ -185,6 +185,30 @@ class ContractTest(unittest.TestCase):
             self.assertEqual(outcome(roads.spec_from_json, bad), ("raised", TypeError))
 
 
+class DeepJsonTest(unittest.TestCase):
+    """Stored values json.loads gives at any depth are read as the Python read them (Codex on 7d348090: a depth cut-off
+    refused them); a malformed street beside them raises the Python's class."""
+
+    def test_nested_values(self):
+        good = roads._spec_json(Spec(6.0, "paved", True, "residential", False))
+        for d in ({**good, "width": [[[[0]]]]}, {**good, "state": {"a": [{"b": [1, [2, [3]]]}]}},
+                  {**good, "width": [[[[0]]]], "street": []}, {**good, "sides": [[1, [2]]]}):
+            d = json.loads(json.dumps(d))
+            w, g = outcome(ref_spec_from_json, d), outcome(roads.spec_from_json, d)
+            self.assertEqual(g[0], w[0], d)
+            if w[0] == "ok":
+                self.assertTrue(same(g[1], w[1]), d)
+            else:
+                self.assertIs(g[1], w[1], d)
+            self.assertTrue(same(roads._specs_from([d], 1), ref_specs_from([d], 1)), d)
+
+    def test_cycles_refused(self):
+        good = roads._spec_json(Spec(6.0, "paved", True, "residential", False))
+        loop = []
+        loop.append(loop)
+        self.assertEqual(outcome(roads.spec_from_json, {**good, "state": loop}), ("raised", TypeError))
+
+
 class VersionSkewTest(unittest.TestCase):
     def test_a_449_extension_is_refused(self):
         self.assertGreaterEqual(fast.MIN_VERSION, 450)

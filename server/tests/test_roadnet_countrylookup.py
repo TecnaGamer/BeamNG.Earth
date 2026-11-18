@@ -70,7 +70,8 @@ class CountryLookupParityTest(unittest.TestCase):
         self.assertGreater(found, 600)
 
     def test_text_refused(self):
-        for lon, lat in (("10.0", 48.0), (10.0, "48"), (None, 48.0)):
+        for lon, lat in (("10.0", 48.0), (10.0, "48"), (None, 48.0), (np.array(10.0), 0), (10.0, np.array([48.0])),
+                         (np.ma.masked_array(10.0), 48.0)):
             with self.assertRaises(TypeError):
                 europewalks.country_for(lon, lat)
 
