@@ -960,7 +960,7 @@ def field_heights(frame, elev, xy, r, sigma):
 
 
 def plan_roads(frame, parts, elev, abut=None, ext=None, pins=None, cuts=True, coarse=False, obs=None, decks=None,
-               rings=None):
+               rings=None, mouth=None):
     """plan_road for many (lonlat, spec) parts with one elev call (its cost is per call); abut: per part (start, end)
     flags, the ends leading onto a bridge (fill_abutment); ext: per part (before, after), the lines (k, 2) in the frame
     from its start / end outward along the part the road goes on in (Grader._extensions), or None: their ground is in
@@ -969,7 +969,8 @@ def plan_roads(frame, parts, elev, abut=None, ext=None, pins=None, cuts=True, co
     part's samples (NaN where none) or None: they stand in for the DEM's (roadz.py, on coarse elevation: Grader._obs);
     decks: [(line (k, 2) in the frame, half width)] crossing over the roads, their ground read beside them
     (deck_capped; not on coarse elevation); rings: per part, True for a mapped roundabout's ring (roads.is_ring: not
-    banked, RING_LEVEL_ON). Pure given elev and obs."""
+    banked, RING_LEVEL_ON); mouth: per part (start, end) flags, the ends leading into a tunnel (fill_mouth). Pure given
+    elev and obs."""
     if not parts:
         return []
     ll = np.concatenate([lonlat for lonlat, _ in parts])
@@ -1061,6 +1062,10 @@ def plan_roads(frame, parts, elev, abut=None, ext=None, pins=None, cuts=True, co
             for at_end, n_ext in ((False, nb), (True, na)):
                 if ab[int(at_end)] or (n_ext and onto[int(at_end)]):
                     zx = fill_abutment(zx, at_end, step)
+        if mouth is not None:           # (a road going on past the end, ext, does not end at a mouth there)
+            for at_end, n_ext in ((False, nb), (True, na)):
+                if mouth[j][int(at_end)] and not n_ext and not ab[int(at_end)]:
+                    zx = roadsmod.fill_mouth(zx, at_end, step)
         pin = pins[j] if pins is not None else (None, None)
         if pin[0] is not None and not nb and not ab[0]:     # (the end sample held: the smoothing keeps an end's height)
             zx = zx.copy()
@@ -2923,6 +2928,12 @@ class _Planner:
                 except Exception as e:      # no fills rather than no grading
                     _caught(e)
                     log.debug("grading: abutments of %s: %s: %s", key, type(e).__name__, e)
+            mouth = None
+            try:
+                mouth = self._mouth_ends(parts) if parts else None
+            except Exception as e:      # the elevation's own ends rather than no grading
+                _caught(e)
+                log.debug("grading: tunnel mouths of %s: %s: %s", key, type(e).__name__, e)
             ext = pins = None
             if CHAIN_ON and parts:
                 try:
@@ -2937,7 +2948,8 @@ class _Planner:
             coarse = COARSE_EASE_ON and self._coarse(key)
             for fid, part, cl, p in zip(ids, parts, clipped, plan_roads(self.frame, parts, self.elev, abut, ext, pins,
                                                                          coarse=coarse, obs=self._obs(key),
-                                                                         decks=self._decks_near(key), rings=rings)):
+                                                                         decks=self._decks_near(key), rings=rings,
+                                                                         mouth=mouth)):
                 if p is not None:
                     p.rid = road_id(fid)
                     import lanesections
@@ -3349,7 +3361,7 @@ class _Planner:
             try:
                 parts = [(part, asks[n][0][4]) for n, (part, _last, _whole) in jobs]
                 ext = self._extensions(parts, [asks[n][0][5] for n, _p in jobs])
-                plans = plan_roads(self.frame, parts, self.elev, None, ext, cuts=False,
+                plans = plan_roads(self.frame, parts, self.elev, None, ext, cuts=False, mouth=self._mouth_ends(parts),
                                    **self._strong_args(cell, parts[0][0]))
                 for (n, (part, last, whole)), p in zip(jobs, plans):
                     self._strong_keep(asks[n][0], keys[n], p, last, whole)
@@ -3429,7 +3441,7 @@ class _Planner:
             # (the profile alone: its cutting's walls cost most of a plan and no height, 2026-10-25)
             p = plan_roads(self.frame, [(part, cand[4])], self.elev, None,
                            self._extensions([(part, cand[4])], [cand[5]]), cuts=False,
-                           **self._strong_args(cell, part))[0]
+                           mouth=self._mouth_ends([(part, cand[4])]), **self._strong_args(cell, part))[0]
             self._strong_keep(cand, k, p, last, whole)
         except Exception as e:      # not held rather than no grading
             _caught(e)
@@ -5691,6 +5703,28 @@ class _Planner:
             out[i] = prev
         return z
 
+    def _mouth_ends(self, parts):
+        """(n, 2) bool: which ends of the parts [(lon / lat (k, 2), spec)] are within PORTAL_JOIN_M of a tunnel's end in
+        their own cell: the road leads into the tunnel there (plan_roads mouth, fill_mouth)."""
+        out = np.zeros((len(parts), 2), bool)
+        if not parts:
+            return out
+        pe = np.array([[r[0], r[-1]] for r, _sp in parts], np.float64).reshape(-1, 2)
+        e, n, _ = self.frame.geodetic_to_enu(pe[:, 1], pe[:, 0], 0.0)
+        e, n = np.asarray(e, np.float64), np.asarray(n, np.float64)
+        homes = {}
+        for j, home in enumerate(mapcells.cells_of(pe[:, 1], pe[:, 0])):
+            homes.setdefault(home, []).append(j)
+        flat = out.reshape(-1)
+        for home, js in homes.items():
+            ends = self._cell_enu(home, ground=False)["mouths"]
+            if not len(ends):
+                continue
+            js = np.asarray(js)
+            d = dnp.hypot(e[js, None] - ends[None, :, 0], n[js, None] - ends[None, :, 1])
+            flat[js] = (d <= roadsmod.PORTAL_JOIN_M).any(axis=1)
+        return out
+
     def _abut_ends(self, key, pe, ok=None):
         """Which of the points pe (n, 2) (road ends; ok: those to look at) near cell key are within APPROACH_TOUCH_M
         of a bridge's end in their own cell."""
@@ -5859,6 +5893,7 @@ class _Planner:
         parts = {}
         f = self.md.cell(k, layers=("roads",), kind="demand").layers.get("roads")
         span_ll = []
+        mouth_ll = []                   # (the ends of the tunnels' pieces, lon / lat, placed as the roads' are)
         if f is not None and len(f):
             bs = roadsmod.bridge_specs(f)
             rs = roadsmod.road_specs(f, None, self.widths) if ground else [None] * len(f)
@@ -5887,6 +5922,14 @@ class _Planner:
                         lv = float(blv[n]) if kind == "bridge" and n < len(blv) else 0.0
                         if len(ring) >= 2 and (kk not in parts or len(ring) > len(parts[kk][0])):
                             parts[kk] = (ring, sp, lv)
+            ts = roadsmod.tunnel_specs(f)
+            for i in range(len(f)):
+                if ts[i] is None:
+                    continue
+                for ring in roadsmod.tunnel_parts(f, i):
+                    ring = placement.ring(self.frame, f, i, np.asarray(ring, np.float64), ts[i], str(f.ids[i]))
+                    if len(ring) >= 2:
+                        mouth_ll += [ring[0], ring[-1]]
         # the rail bridges (railways.DRAWN lines' bridge pieces): the roads under them dip as under a road overpass
         # (_lower_underpasses), nothing else (no ramps, no abutments: a line's deck is never raised for a road).
         # (GitHub #311 / #345 / #364: the track lay across the road under a rail bridge)
@@ -5968,7 +6011,12 @@ class _Planner:
             for ring in span_ll:
                 span_xy.append(sxy[k0:k0 + len(ring)])
                 k0 += len(ring)
-        return {"bridges": bridges, "bridge_cls": bcls, "bridge_ids": bids, "bridge_levels": blevels,
+        mouths = np.zeros((0, 2))
+        if mouth_ll:
+            ml = np.asarray(mouth_ll, np.float64)
+            me, mn, _ = self.frame.geodetic_to_enu(ml[:, 1], ml[:, 0], 0.0)
+            mouths = np.stack([np.asarray(me, np.float64), np.asarray(mn, np.float64)], axis=1)
+        return {"mouths": mouths, "bridges": bridges, "bridge_cls": bcls, "bridge_ids": bids, "bridge_levels": blevels,
                 "bridge_half": bhalf, "ground": ground_l, "ground_ids": ground_ids, "ground_link": ground_link,
                 "ground_kmh": gkmh, "bridge_kmh": bkmh,
                 "end_of": end_of, "span_bridges": span_xy,
@@ -7163,8 +7211,8 @@ class _Planner:
         raw = self.tunnel_raw or self.elev_raw
         md, wet, water = self.md, self.wet, self.water
 
-        def ends(la, lo):
-            return self._roads_ground(la, lo, raw(la, lo))
+        def ends(la, lo, base=None):
+            return self._roads_ground(la, lo, raw(la, lo) if base is None else base)
 
         def setup(t):
             t.wet, t.water, t.raw, t.ends = wet, water, self.tunnel_ground, ends

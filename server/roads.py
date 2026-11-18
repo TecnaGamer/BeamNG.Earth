@@ -8522,6 +8522,39 @@ def _shallow_full_low(s, g, floor, kinds):
     return floor, kinds
 
 
+# A ground road's end at a tunnel's mouth is not ground the elevation measures: the node stands on the portal's face, and the
+# elevation there is the hillside over the tube, not the road going into it (Goeschenen, the road into the Gotthard tunnel:
+# the node read 1070.4 m, the road 2 m before it 1065.6 and the survey's own 1065.2; the pins held it, the tunnel took its
+# portal from it, and the roads over the tunnel were raised to clear it: the road filled 8.3 m, the roads over 5-6 m). The
+# find-ground rule says it: a tunnel's natural height is the line between the ground at the ends of its whole chain, and
+# the ground at its end is the road's own level where it meets the mouth. So the road's last MOUTH_NEAR_M are its own
+# line from there to MOUTH_FAR_M back on, as a bridge's approach keeps its grade to the abutment (fill_abutment: which
+# only fills where the ground falls away, a mouth's ground is the hill over it, never the road: always). A tunnel's end
+# with no road joining it (Zurich Brunau: it goes on as a bridge, the node read 442.5 m off the face, the survey's road
+# 436) reads the same line outward from the mouth (TunnelProfiles._ends_ground).
+MOUTH_NEAR_M = 8.0          # m from the mouth the elevation is not the road's: the portal's face and its cutting ...
+MOUTH_FAR_M = 40.0          # ... the road's own grade read from there to this far
+MOUTH_STEP_M = 2.0          # m between the samples fill_mouth reads (grading.PROFILE_STEP)
+
+
+def fill_mouth(z, at_end, step=MOUTH_STEP_M):
+    """The raw profile z (a sample every step m) of a road leading into a tunnel at its first (at_end False) or last
+    sample, its last MOUTH_NEAR_M on the straight grade of the stretch from there to MOUTH_FAR_M (the road's own level
+    at the mouth, not the hill over it: MOUTH_NEAR_M). Returns z itself when the road has too little stretch to read a
+    grade from (fewer than four samples). Pure."""
+    z = np.asarray(z, np.float64)
+    p = z[::-1] if at_end else z
+    d = np.arange(len(p)) * step
+    far = (d >= MOUTH_NEAR_M) & (d <= MOUTH_FAR_M)
+    if far.sum() < 4:
+        return z
+    b, a = dnp.polyfit(d[far], p[far], 1)
+    n = int((d < MOUTH_NEAR_M).sum())
+    q = p.copy()
+    q[:n] = a + b * d[:n]
+    return q[::-1] if at_end else q
+
+
 class TunnelProfiles(BridgeProfiles):
     """Floor heights per tunnel part for one anchor frame, each chain (joined parts: a tunnel split over several
     segments) resolved once, as BridgeProfiles; each part cut into its sections (tunnel_sections): open roads
@@ -8853,11 +8886,23 @@ class TunnelProfiles(BridgeProfiles):
                 got = self._pins[pid] = (float("nan"), float("nan"))
             return got
 
-    def _ends_ground(self, xy):
+    def _ends_ground(self, xy, out=None):
+        """The ground at the portals xy (m, 2) (frame z): the roads' graded height where a road joins, and where none
+        does (a tunnel going on as a bridge, a road mapped short of its mouth) the ground read as the road's own level
+        at the mouth: out (m, 2), the unit direction away from the tunnel at each portal, the ground read that way
+        (fill_mouth), not the face the node stands on."""
         if self.ends is None:
             return self._ground(xy)
         la, lo, _ = self.frame.enu_to_geodetic(xy[:, 0], xy[:, 1], 0.0)
-        return self.frame.geodetic_to_enu(la, lo, np.asarray(self.ends(la, lo), np.float64))[2]
+        base = None
+        if out is not None and self.raw is not None:
+            d = np.arange(0.0, MOUTH_FAR_M + 1e-6, MOUTH_STEP_M)
+            pts = xy[:, None, :] + d[None, :, None] * np.asarray(out, np.float64)[:, None, :]
+            pla, plo, _ = self.frame.enu_to_geodetic(pts[..., 0].ravel(), pts[..., 1].ravel(), 0.0)
+            z = np.asarray(self.raw(pla, plo), np.float64).reshape(len(xy), len(d))
+            base = np.array([fill_mouth(zi, False, MOUTH_STEP_M)[0] for zi in z], np.float64)
+        got = self.ends(la, lo) if base is None else self.ends(la, lo, base)
+        return self.frame.geodetic_to_enu(la, lo, np.asarray(got, np.float64))[2]
 
     def _solve(self, comp, pool, ground):
         """Per part: the floor (the hull of the ungraded ground, its ends at the roads' graded height at its portals,
@@ -8905,7 +8950,9 @@ class TunnelProfiles(BridgeProfiles):
             at = [e for e in (0, 1) if underwater or not np.isfinite(pins.get(k, (np.nan, np.nan))[e])]
             ge = g[[0, -1]].copy()
             if at and not underwater:
-                ge[at] = np.asarray(self._ends_ground(xy[[0, -1]][at]), np.float64)
+                away = np.array([xy[0] - xy[1], xy[-1] - xy[-2]], np.float64)[at]
+                away /= np.maximum(dnp.hypot(away[:, 0], away[:, 1]), 1e-9)[:, None]
+                ge[at] = np.asarray(self._ends_ground(xy[[0, -1]][at], away), np.float64)
             g = g.copy()
             g[0], g[-1] = ge[0], ge[-1]
             pinned = [False, False]
