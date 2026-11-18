@@ -152,6 +152,32 @@ class LandingTest(unittest.TestCase):
         self.assertLessEqual(abs(g_main), roadlaws.laws(spec("primary"))[0] + 1e-3, "the step a curve under its law")
         self.assertLess(abs(g_side - u[0] * g_main), roadlaws.LANDING_TOL + 0.005, "leaves at the solved grade its way")
 
+    def test_a_side_road_stands_landed_only_where_it_meets_the_road(self):
+        # (the main road along y = 0 at 100 m and a side road leaving it at right angles at x = 0. "Landed" is the
+        # premise of grading's rank promotion (the side road's ground no longer eased onto the main's): that the side
+        # road leaves at the main's height and grade. Free, the laws put it there. Held whole (the low-arch pass's
+        # `keep`: every road but the arch's) it stays as the passes left it, and only where that already is the main's
+        # height at the mouth and the main's grade is it landed: one 0.3 m under the main's edge was listed all the same
+        # and the promotion left its ledge bare (Riva del Garda's service roads, two 0.33 / 0.39 m steps), one meeting
+        # the main stands as it did (Vienna's A23: the promotion of roads held where they meet it does work))
+        x = np.arange(-100.0, 101.0, 4.0)
+        t = np.arange(0.0, 41.0, 4.0)
+        cases = {                       # name: (side road's heights, held whole, landed)
+            "free, 0.3 m under": (99.7 + 0 * t, False, [(1, 0)]),
+            "held, 0.3 m under at the mouth": (99.7 + 0 * t, True, []),
+            "held, at the mouth and flat": (100.0 + 0 * t, True, [(1, 0)]),
+            "held, at the mouth, 25 % up": (100.0 + 0.25 * t, True, []),
+        }
+        for name, (z, whole, landed) in cases.items():
+            with self.subTest(name):
+                main = plan(np.c_[x, 0 * x], 100.0 + 0 * x, half=4.0)
+                side = plan(np.c_[0 * t, t], z)
+                info = {}
+                roadlaws.apply([main, side], [spec("primary"), spec("residential")],
+                               held=(lambda i: np.ones(len(x) if i == 0 else len(t), bool)) if whole else None,
+                               skip=[0, 1] if whole else (), diagnostics=info)
+                self.assertEqual(info["landed"], landed)
+
     def test_a_short_road_between_two_roads_lands_on_both(self):
         # (two parallel roads 12 m apart, each planned with a step where a short link joins them obliquely: both ends of
         # the link landed on grades that, held as planned, no 20 km/h curve joins in 14 m)

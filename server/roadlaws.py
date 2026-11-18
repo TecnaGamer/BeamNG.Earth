@@ -344,7 +344,11 @@ def apply(plans, specs, held=None, under=None, skip=(), diagnostics=None, natura
         q = 0 if sp < 0.0 else len(ar) - 2
         return float(z[q] + (z[q + 1] - z[q]) * (sp - ar[q]) / max(float(ar[q + 1] - ar[q]), 1e-9))
 
-    landed = []                     # (plan, the plan it lands on): its ground need not yield to that one's (grading)
+    def final_on(k2, sp):
+        """Plan k2's height at its arc sp as the laws leave it."""
+        return float(np.interp(sp, arcs[k2], np.asarray(plans[idx[k2]].z, np.float64)))
+
+    landed = []                     # (plan, the plan it lands on, its run, whether it stands as landed): grading
 
     def land(k, e, main, onto):
         """Plan k's end e meets main (run, arc along it: the mouth): one height there, and it leaves at main's grade its
@@ -401,17 +405,26 @@ def apply(plans, specs, held=None, under=None, skip=(), diagnostics=None, natura
         if i not in (0, m - 1) or m < 3 or r == ra:
             return
         R[r]["junction"][0 if i == 0 else 1] = True
-        landed.append((idx[k], idx[onto], r))
-        if md is None:
-            return
         j = 1 if i == 0 else m - 2
         st = abs(float(R[r]["sv"][j] - R[r]["sv"][i]))
         along = st * c                  # (m along main's samples the way out of it reaches)
+        way = -1 if c >= 0.0 else 1
+
+        def stands():
+            """The landing as the plans ended up, not as the laws were asked for it: k's height at the mouth is main's
+            (the part k0 it lands on) and at its next sample st on stands within LANDING_TOL x st of main's there."""
+            zk = [final_on(*part_at(r, float(R[r]["sv"][q]), 1)) for q in (i, j)]
+            if abs(zk[0] - final_on(k0, sp0)) > MIN_MOVE_M:
+                return False
+            return md is None or abs(zk[1] - final_on(*part_at(ra, sa + along, way))) <= LANDING_TOL * st + MIN_MOVE_M
+        landed.append((idx[k], idx[onto], r, stands))
+        if md is None:
+            return
         if held:
             zm = z_on(k0, sp0 - along if loc[k0][1] else sp0 + along)
             pin(j, zm - LANDING_TOL * st, zm + LANDING_TOL * st)
         else:
-            couple(j, sa + along, part_at(ra, sa + along, -1 if c >= 0.0 else 1)[0], LANDING_TOL * st)
+            couple(j, sa + along, part_at(ra, sa + along, way)[0], LANDING_TOL * st)
     paired = set()
     for run in rs:
         for (k, rev), (k2, rev2) in zip(run, run[1:]):
@@ -496,8 +509,7 @@ def apply(plans, specs, held=None, under=None, skip=(), diagnostics=None, natura
     out, stats = _solve_networks(chains, ccps)
     if diagnostics is not None:
         diagnostics.update(stats)
-        diagnostics.update(chains=len(chains), couplings=len(ccps), samples=int(sum(len(c["t"]) for c in chains)),
-                           landed=[(i, j) for i, j, r in landed if all(stats["ok_chain"][c] for c, _a, _b in where[r])])
+        diagnostics.update(chains=len(chains), couplings=len(ccps), samples=int(sum(len(c["t"]) for c in chains)))
     sol = []
     for r, x in enumerate(R):       # (each run's samples from its chains; a network left as it was: its targets)
         zr = np.array(x["t"], np.float64)
@@ -526,4 +538,7 @@ def apply(plans, specs, held=None, under=None, skip=(), diagnostics=None, natura
         if float(np.abs(z - zs[k]).max()) >= MIN_MOVE_M:
             plans[i].z = z
             changed += 1
+    if diagnostics is not None:
+        diagnostics["landed"] = [(i, j) for i, j, r, stands in landed
+                                 if all(stats["ok_chain"][c] for c, _a, _b in where[r]) and stands()]
     return changed
