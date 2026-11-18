@@ -1931,3 +1931,49 @@ class ShapeHoldTest(unittest.TestCase):
         h, put = grading.shape_heights(z, zs, modes)
         self.assertEqual(put.tolist(), [True, False, True, False, True, False, True])
         np.testing.assert_allclose(h, [11.0, 10.0, 9.0, 10.0, 12.0, 10.0, 10.0])
+
+
+class ShapeSolvedOnceTest(unittest.TestCase):
+    """The regions round a system are planned on as many threads, and each found the shapes' cache empty and solved the
+    same system at the same time (Zurich Brunau: its 4 regions solved one 17-piece system 4 times, 6 of the 8 s of its
+    solves). One thread solves it, the others wait for its answer."""
+
+    def test_threads_asking_for_one_system_at_once_solve_it_once(self):
+        import threading
+        import time
+        import mapcells
+        from test_approaches import overpass, flat_elev
+        home = mapcells.cell_of(LAT, LON)
+        real = grading._gsh.solve_shape
+        calls = []
+
+        def slow(*a, **k):
+            calls.append(threading.get_ident())
+            time.sleep(0.4)
+            return real(*a, **k)
+
+        def made():
+            return grading.PlanStore(FakeMD(overpass()), flat_elev).planner_of_cell(home)
+        with unittest.mock.patch.object(grading._gsh, "solve_shape", slow):
+            one = made()
+            one._shape_region_calc(home, "a")
+            systems = len(calls)
+            self.assertGreaterEqual(systems, 1, "the overpass is a system")
+            del calls[:]
+            two = made()
+            out = [None, None]
+
+            def ask(n):
+                out[n] = two._shape_region_calc(home, "r%d" % n)
+            threads = [threading.Thread(target=ask, args=(n,)) for n in (0, 1)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join(60.0)
+        self.assertEqual(len(calls), systems, "each system solved once, not once a thread")
+        self.assertEqual(sorted(out[0]), sorted(out[1]))
+        for fid in out[0]:
+            for (xa, za, ma), (xb, zb, mb) in zip(out[0][fid], out[1][fid]):
+                self.assertEqual(ma, mb)
+                self.assertEqual(np.asarray(za).tobytes(), np.asarray(zb).tobytes(), "the very heights")
+
