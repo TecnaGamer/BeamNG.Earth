@@ -617,6 +617,9 @@ class Vegetation:
         GI, GJ = np.meshgrid(np.arange(math.floor(ex0 / s), math.ceil(ex1 / s)),
                              np.arange(math.floor(ey0 / s), math.ceil(ey1 / s)))
         GI, GJ = GI.ravel(), GJ.ravel()
+        # (the grid's points the hash keeps first: EDGE_P of them, the only ones placed and looked up below)
+        lucky = _hash01(GI, GJ, 23) < EDGE_P
+        GI, GJ = GI[lucky], GJ[lucky]
         px = (GI + _hash01(GI, GJ, 21)) * s
         py = (GJ + _hash01(GI, GJ, 22)) * s
         c_ = np.floor((px - chm.x0) / chm.dx).astype(np.int64)
@@ -624,7 +627,6 @@ class Vegetation:
         ok = (px >= ex0) & (px < ex1) & (py >= ey0) & (py < ey1) & (c_ >= 0) & (c_ < hs.shape[1]) \
             & (r_ >= 0) & (r_ < hs.shape[0])
         ok[ok] &= band[r_[ok], c_[ok]] & (hs[r_[ok], c_[ok]] >= TREE_MIN_M)     # under the forest's canopy
-        ok &= _hash01(GI, GJ, 23) < EDGE_P
         if not ok.any():
             return _empty()
         GI, GJ, px, py = GI[ok], GJ[ok], px[ok], py[ok]
@@ -670,13 +672,17 @@ class Vegetation:
         gj = np.arange(math.floor(ey0 / s), math.ceil(ey1 / s))
         GI, GJ = np.meshgrid(gi, gj)
         GI, GJ = GI.ravel(), GJ.ravel()
+        # (a point gets a bush or a rock only below its class's odds, SCATTER_P: the ones above the highest are dropped
+        # before they are placed and looked up, ~3/4 of the grid)
+        u = _hash01(GI, GJ, 13)
+        lucky = u < max(b + r for b, r in SCATTER_P.values())
+        GI, GJ, u = GI[lucky], GJ[lucky], u[lucky]
         px = (GI + _hash01(GI, GJ, 11)) * s
         py = (GJ + _hash01(GI, GJ, 12)) * s
         keep = (px >= ex0) & (px < ex1) & (py >= ey0) & (py < ey1)
-        px, py, GI, GJ = px[keep], py[keep], GI[keep], GJ[keep]
+        px, py, GI, GJ, u = px[keep], py[keep], GI[keep], GJ[keep], u[keep]
         lon, lat = _to4326(px, py)
         cls = lc.sample(lon, lat)
-        u = _hash01(GI, GJ, 13)
         pb = np.zeros(len(px))
         pr = np.zeros(len(px))
         for c, (b, r) in SCATTER_P.items():
