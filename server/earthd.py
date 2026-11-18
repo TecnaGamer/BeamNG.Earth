@@ -490,8 +490,10 @@ WHERE_PLACE_RETRY_S, WHERE_PLACE_TRIES = 5.0, 60
 # each waits (tries x WHERE_PLACE_RETRY_S: 2 min, then its last answer says it is still incomplete)
 PLACES_FOLLOWUPS, PLACES_TRIES = 4, 24
 
-HM_CACHE = 16               # heightmaps kept beyond the protected ones (6 before 2026-10-30: a fast player's prefetched
-                            # chain (PREFETCH_CHAIN) was evicted before the mod asked for it and built again)
+HM_CACHE = 24               # heightmaps kept, the protected ones among them (6 before 2026-10-30: a fast player's
+                            # prefetched chain (PREFETCH_CHAIN) was evicted before the mod asked for it and built
+                            # again; 16 until 2026-11-18: the protected ones are up to 15 with ROAD_CHAIN's blocks, and
+                            # a block the prediction left out for a pose went at once, evict_heightmaps)
 TERRAIN_STUCK_S = 90.0      # s: a terrain request still building this long is logged once (prepare_terrain)
 HM_KEEP_COMMITTED = 3       # the current terrain and the last two
 HM_KEEP_SENT = 2            # terrains handed to the mod but maybe not committed yet
@@ -5830,8 +5832,9 @@ class Server:
 
     def evict_heightmaps(self, fresh=None):
         """Keep at most HM_CACHE entries, never deleting the current terrain, the
-        last two committed ones, the last two handed to the mod, or `fresh` (the terrain
-        just built: a request about to be answered, or the prefetch the mod asks for next)."""
+        last two committed ones, the last two handed to the mod, the blocks a player's prediction
+        lists, or `fresh` (the terrain just built: a request about to be answered, or the prefetch
+        the mod asks for next)."""
         keep = set(self.hm_committed) | set(self.hm_sent)
         if fresh is not None:
             keep.add(fresh)
@@ -5844,7 +5847,21 @@ class Server:
         newest = max((c.active for c in self.connections if c.active is not None), default=None)
         keep |= {(aid, *a.first_terrain) for aid, a in sorted(self.anchors.items())[-2:]
                  if a.first_terrain is not None and (newest is None or aid > newest)}
-        for key in [k for k in self.hm if k not in keep][:max(0, len(self.hm) - HM_CACHE)]:
+        # The blocks a player's prediction lists now stay (Connection.maybe_prefetch: the block the mod asks for next
+        # and the chain after it), and of the rest the one listed longest ago goes first, a block no prediction listed
+        # before those. In the order they were built the oldest block to go was the next one on the car's road: a
+        # chain of 8 blocks ahead and the 5 protected ones are more than HM_CACHE, so 17 of a 300 km/h drive's 83
+        # blocks were deleted ~38 s after they were built ahead and built again as the car asked for them (handed out
+        # before their photo, the drive's two longest frames at their commits; 2026-11-18)
+        wanted = {}
+        for c in list(getattr(self, "connections", ())):
+            aid = getattr(c, "active", None)
+            keep |= {(aid, b.cx, b.cy) for b in [getattr(c, "predicted_block", None),
+                                                 *(getattr(c, "predicted_chain", None) or ())] if b is not None}
+            for (cx, cy), t in list((getattr(c, "chain_wanted_at", None) or {}).items()):
+                wanted[(aid, cx, cy)] = max(t, wanted.get((aid, cx, cy), t))
+        rest = sorted((k for k in self.hm if k not in keep), key=lambda k: wanted.get(k, -math.inf))
+        for key in rest[:max(0, len(self.hm) - HM_CACHE)]:
             info = self.hm.pop(key)
             paths = [os.path.join(self.out_dir, self.hm_name(key))]
             self.base_stale.discard(key)

@@ -547,6 +547,50 @@ class ServerTest(ServerHarness):
             self.assertIn(key, s.hm)
         s.connections = set()
 
+    @mock.patch.object(earthd, "HM_CACHE", 6)
+    def test_blocks_built_ahead_survive_eviction(self):
+        """A fast player's chain of blocks built ahead is longer than the cache has room for beside the protected
+        ones: the blocks the prediction lists stay, the ones behind the car go, the one listed longest ago first
+        (in the order they were built the next block on the car's road went first and was built again as the car
+        asked for it, 17 of a 300 km/h drive's 83 blocks, 2026-11-18)."""
+        s = self.server
+        frame = s.new_anchor(LAT, LON).frame
+        s.anchors = {1: earthd.Anchor(1, LAT, LON, frame)}
+        block = s.layout.block_at
+        ahead = [(1, 384.0 * i, 0.0) for i in range(4, 13)]         # (the next block and 8 after it)
+        behind = [(1, 384.0 * i, 0.0) for i in range(-2, 1)]        # (passed: no prediction lists them any more)
+
+        class Conn:
+            active = 1
+            predicted_block = block(*ahead[0][1:])
+            predicted_chain = [block(*k[1:]) for k in ahead[1:]]
+            chain_wanted_at = {**{k[1:]: 100.0 for k in ahead}, behind[0][1:]: 50.0, behind[2][1:]: 70.0}
+        s.connections = {Conn()}
+        try:
+            s.hm_committed.extend([(1, 384.0 * i, 0.0) for i in (1, 2, 3)])
+            s.hm_sent.append((1, 384.0 * 3, 0.0))
+            for key in ahead[:5] + behind[::-1] + list(s.hm_committed) + ahead[5:]:      # (built in any order)
+                s.hm[key] = {}
+            s.evict_heightmaps(fresh=ahead[-1])
+            for key in ahead + list(s.hm_committed):
+                self.assertIn(key, s.hm)
+            self.assertEqual([k for k in behind if k in s.hm], [])
+            # with room for some of what is behind: the one no prediction listed goes first, then the oldest listing
+            s.hm.clear()
+            for key in behind + list(s.hm_committed) + ahead[:1]:
+                s.hm[key] = {}
+            Conn.predicted_chain = []
+            with mock.patch.object(earthd, "HM_CACHE", 6):
+                s.evict_heightmaps()
+            self.assertEqual([k for k in behind if k in s.hm], [behind[0], behind[2]])
+            with mock.patch.object(earthd, "HM_CACHE", 5):
+                s.evict_heightmaps()
+            self.assertEqual([k for k in behind if k in s.hm], [behind[2]])
+        finally:
+            s.connections = set()
+            s.hm.clear()
+            s.removes_flush()
+
     def test_a_slow_terrain_request_is_logged_and_still_answered(self):
         c = self.c
         self.hello()
