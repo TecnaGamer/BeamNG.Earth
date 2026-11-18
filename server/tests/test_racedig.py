@@ -93,7 +93,9 @@ class DigTest(unittest.TestCase):
         floor, kinds, cap = self.dig()
         mid = np.abs(self.xy[:, 1]) <= 7.0 + racedig.BAND_MARGIN_M
         want = 10.0 - roads.TUNNEL_LOW_H - racedig.DIG_SOIL_M - racedig.DIG_SLACK_M
-        self.assertTrue((floor[mid] <= self.up(want) + 1e-6).all())
+        # (its grade breaks rounded: at most DIG_ROUND_UP_M of the slack taken, the vault and its soil always under)
+        self.assertTrue((floor[mid] <= self.up(want) + racedig.DIG_ROUND_UP_M + 1e-6).all())
+        self.assertLess(racedig.DIG_ROUND_UP_M, racedig.DIG_SLACK_M)
         self.assertEqual(floor[0], self.floor[0])
         self.assertEqual(floor[-1], self.floor[-1])
         self.assertTrue((floor <= self.floor + 1e-12).all())
@@ -151,6 +153,76 @@ class WindowTest(unittest.TestCase):
         want = grading.raceway_ground(pts[:, 0], pts[:, 1], raw, [zone], margin=1e-6)
         self.assertLess(float(np.max(np.abs(got - want))), 0.02)
         self.assertLess(float(got[0]), float(raw[0]) - 0.5)
+
+
+def _banked(la, lo):
+    """An oval's straight along x: a flat apron (y -9..-3), its banking 0.25 m per m up to the outside wall's foot at
+    y = 9 (3 m up), the ground behind falling back 3 m over 6 m: a pit road from the infield (y < -9, flat) ending on
+    the oval's centre line, its surface smoothed along it over its straight run-on past its end, reads the drop."""
+    from test_roads import LAT, M_LAT
+    y = (np.asarray(la, np.float64) - LAT) * M_LAT
+    bank = np.clip(y + 3.0, 0.0, 12.0) * 0.25
+    return 10.0 + bank - np.clip((y - 9.0) * 0.5, 0.0, 3.0)
+
+
+class JoinTest(unittest.TestCase):
+    """The user's Atlanta reports 65 / 70 (2026-11-17): bumps across the racing surface where an infield road
+    (highway=raceway, the oval's default width) joins it. Each raceway's own smoothed surface, the nearest centre line's
+    taken: the pit road's surface cut into the oval's banking half way between the two lines."""
+
+    def zones(self):
+        import grading
+        from test_roads import FRAME
+        oval = np.array([[-200.0, 0.0], [200.0, 0.0]])
+        pit = np.array([[0.0, -80.0], [0.0, 0.0]])
+        hw = 7.0 + grading.UNGRADED_MARGIN_M
+        zs = [grading.raceway_surface(FRAME, _banked, oval, hw), grading.raceway_surface(FRAME, _banked, pit, hw)]
+        return grading, zs, [(oval, hw), (pit, hw)]
+
+    def test_the_pit_road_gives_way_to_the_oval(self):
+        grading, _zs, lines = self.zones()
+        self.assertEqual(grading.raceway_dominance(lines), [[], [0]])
+
+    def test_the_oval_kept_and_the_pit_road_meets_it(self):
+        grading, zs, lines = self.zones()
+        y = np.arange(-60.0, 7.01, 0.5)
+        e = np.zeros_like(y)
+        base = np.full_like(y, 5.0)
+        old = grading.raceway_ground(e, y, base, zs)
+        new, cov = grading.raceway_ground(e, y, base, zs, dom=grading.raceway_dominance(lines),
+                                          blend=racedig.JOIN_BLEND_M)
+        alone = grading.raceway_ground(e, y, base, zs[:1])
+        on = y >= -7.0                      # (the oval's carriageway)
+        self.assertTrue(cov.all())
+        # before: the pit road's surface on the oval's carriageway from half way (a step of the banking's)
+        self.assertGreater(float(np.max(np.abs(old[on] - alone[on]))), 0.3)
+        # now: the oval's own surface there, bit for bit
+        self.assertEqual(new[on].tobytes(), alone[on].tobytes())
+        # and the pit road meeting it without a kink: off the oval's own apron / banking crease (y = -3), no grade
+        # change over 0.01 m per 0.5 m sample
+        sel = y[1:-1] <= -6.0
+        self.assertLess(float(np.max(np.abs(np.diff(new, 2))[sel])), 0.01)
+
+    def test_no_dominance_is_the_nearest_rule(self):
+        grading, zs, _lines = self.zones()
+        rng = np.random.default_rng(3)
+        e, n = rng.uniform(-30, 30, 500), rng.uniform(-30, 20, 500)
+        base = rng.normal(8.0, 1.0, 500)
+        old = grading.raceway_ground(e, n, base, zs)
+        new, _cov = grading.raceway_ground(e, n, base, zs, dom=[[], []])
+        self.assertEqual(new.tobytes(), old.tobytes())
+
+    def test_the_band_has_no_holes_at_vertices(self):
+        # report 69: points on the outside of a vertex lie beyond both of its segments' ends: the open test left them
+        # out (single samples left to other roads' grading, 1.2 m spikes along Atlanta's turn)
+        import threading
+        import types
+        import grading
+        bend = np.array([[-50.0, 0.0], [0.0, 0.0], [50.0, -10.0]])      # (an 11 degree turn to the right at 0, 0)
+        pl = types.SimpleNamespace(lock=threading.Lock(), keeps={"k": [(bend, 9.0)]})
+        p = (np.array([0.5]), np.array([8.0]))          # (outside the turn, 8 m from the vertex)
+        self.assertIsNone(grading._Planner._on_kept(pl, *p))
+        self.assertTrue(grading._Planner._on_kept(pl, *p, closed=True)[0])
 
 
 class TunnelUnderTrackTest(unittest.TestCase):

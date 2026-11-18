@@ -76,6 +76,7 @@ mod farpvs;
 mod farsel;
 mod dirtsteps;
 mod racedig;
+mod racejoin;
 mod gridinterp;
 mod dejunction;
 mod streetlabels;
@@ -6605,6 +6606,10 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(roadnet::splitlayer::lane_split_layer, m)?)?;
     // 403: R2a's lane section layer (roadnet::splitlayer::lane_split_layer = lanesections.split's new-layer assembly:
     // the columns gathered, the sections' values, LANE_MAX, the geometry and rule rows, the cut points' connectors)
-    m.add("VERSION", 403)?;
+    m.add_function(wrap_pyfunction!(racejoin::raceway_ground, m)?)?;
+    m.add_function(wrap_pyfunction!(racejoin::raceway_dominance, m)?)?;
+    // 405 (404 taken by another branch the same day): racejoin (grading.raceway_ground in Rust, bit for bit, and its
+    // layered rule for BNE_RACEWAY_DIG: a raceway ending on another gives way to it, raceway_dominance)
+    m.add("VERSION", 405)?;
     Ok(())
 }

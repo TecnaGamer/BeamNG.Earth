@@ -7,11 +7,17 @@ GitHub #1220, #1352, #1350, #588). BNE_RACEWAY_DIG=on:
 - a road tunnel under a raceway is dug under the track's band: its floor lowered so the tube, its soil and a margin fit
   under the track's surface as drawn (grading.raceway_surface, smoothed along the track), the tube covered across the
   band and PORTAL_OUT_M past it, its ramps inside the tube at DIG_GRADE (DIG_MAX_GRADE at most from its portals, which
-  stay where the approaches are): roads.TunnelProfiles._solve, dig_part; its portals carried off the band
-  (roads._clear_portals); the ground over the tube on the band is the track's, never the bare ground kept over a
-  tunnel (grading.Grader.apply);
+  stay where the approaches are), its grade breaks rounded (DIG_ROUND_M): roads.TunnelProfiles._solve, dig_part; its
+  portals carried off the band (roads._clear_portals); the ground over the tube on the band is the track's, never the
+  bare ground kept over a tunnel (grading.Grader.apply);
 - no props (poles, lamps, signs on posts, delineators, fences, ...) and no wires ending inside a raceway's carriageway
-  + PROP_CLEAR_M (props on a deck over it kept), and trees kept PROP_CLEAR_M off it (vegetation).
+  + PROP_CLEAR_M (props on a deck over it kept), and trees kept PROP_CLEAR_M off it (vegetation);
+- where raceways meet, the one passing through keeps its surface (grading.raceway_dominance, raceway_ground's dom):
+  an infield road or pit lane ending on the oval (highway=raceway too, the same default width) is eased to the oval's
+  surface at its band's edge over JOIN_BLEND_M on its own side, never cutting the oval's banked surface half way
+  between the two centre lines (0.3-0.75 m steps across Atlanta's racing surface, the user's reports 65 / 70,
+  2026-11-17); the band's points by the line itself, its vertices too (Grader._on_kept closed: a wedge left out at
+  every vertex left single samples graded by other roads, up to 2.3 m spikes along Atlanta's turn 3-4, report 69).
 
 A raceway is OpenStreetMap's highway=raceway, appended to the roads layer with ids "osm-raceway-<way id>"
 (osmtags.raceway_features). Off by default while it is measured (tools/roadcorpus, category 19); every BNE_* switch is
@@ -35,11 +41,15 @@ DIG_GRADE = 0.12            # the dug floor's ramps in the tube (a car park ramp
 DIG_MAX_GRADE = 0.25        # ... at most, down from a portal that cannot move (a tube too short keeps what fits),
 DIG_EASE_M = 12.0           # its grade growing over this far from the portal (no kink where the road meets the ramp)
 DIG_MAX_DROP_M = 12.0       # m the floor is lowered at most (bad data: rather a shallow tube than a pit)
+DIG_ROUND_M = 8.0           # m: the dug floor's grade breaks rounded over this either side (earthfast round_floor: the
+                            # ramp out of Daytona's tri-oval tube went from level to 25 % at its mouth, report 57) ...
+DIG_ROUND_UP_M = 0.3        # ... rising at most this over the floor the track needs (of DIG_SLACK_M)
 MIN_TUBE_H = 2.5            # m: a tube under a track is no lower (a low arch's under the band when the dig falls short)
 DIG_GAP_M = 30.0            # m: an open gap this short between covered stretches of a dug tube is covered too (track and
                             # pit lane side by side: no light well between)
 MAX_PART_M = 400.0          # m: longer tunnel parts are tunnels of their own (a road through a hill under a circuit)
 WINDOW_M = 150.0            # m of track either side of a tube the surface is read from (3 sigmas are 30 m)
+JOIN_BLEND_M = 20.0         # m out from a dominant raceway's band a raceway joining it is eased to its surface
 
 
 def is_raceway(fid):
@@ -162,19 +172,26 @@ def track_surface(frame, elev, races, pts, base):
     if not len(pts):
         return base.copy()
     lo, hi = pts.min(axis=0), pts.max(axis=0)
-    zones = []
-    for line, hw in races:
+    zones, which = [], []
+    for r, (line, hw) in enumerate(races):
         win = _window(line, lo, hi, WINDOW_M)
         if win is None:
             continue
         got = grading.raceway_surface(frame, elev, win, float(hw) + BAND_MARGIN_M)
         if got:
             zones.append(got)
+            which.append(r)
     if not zones:
         return base.copy()
     # (no fade at the band's edge: the surface itself on the band; apply fades it to the ground over its last
-    # BAND_MARGIN_M, between the two, so the lower of the two is the least the track can be)
-    return np.asarray(grading.raceway_ground(pts[:, 0], pts[:, 1], base, zones, margin=1e-6), np.float64)
+    # BAND_MARGIN_M, between the two, so the lower of the two is the least the track can be. The raceways by their
+    # dominance, as apply lays them: of the whole lines, not the windows, whose cut ends are no junctions)
+    full = grading.raceway_dominance([(np.asarray(line, np.float64)[:, :2], float(hw) + BAND_MARGIN_M)
+                                      for line, hw in races])
+    pos = {r: z for z, r in enumerate(which)}
+    dom = [[pos[d] for d in full[r] if d in pos] for r in which]
+    return np.asarray(grading.raceway_ground(pts[:, 0], pts[:, 1], base, zones, margin=1e-6, dom=dom,
+                                             blend=JOIN_BLEND_M)[0], np.float64)
 
 
 def _track_low(frame, elev, races, pts):
@@ -222,11 +239,11 @@ def dig_part(frame, elev, xy, s, floor, kinds, races, tube_hw, tube_h, full_h):
     need = np.full(len(xy), np.inf)
     need[k] = np.maximum(zt - th - DIG_SOIL_M - DIG_SLACK_M, floor[k] - DIG_MAX_DROP_M)
     import fast
-    fast.require(384, "race_dig_floor")
+    fast.require(405, "race_dig_floor")
     f2, k2 = fast._ef.race_dig_floor(np.ascontiguousarray(s), np.ascontiguousarray(floor),
                                      np.ascontiguousarray(need), np.ascontiguousarray(out),
                                      np.ascontiguousarray(kinds), DIG_GRADE, DIG_MAX_GRADE, DIG_GAP_M,
-                                     DIG_EASE_M)
+                                     DIG_EASE_M, DIG_ROUND_M, DIG_ROUND_UP_M)
     f2, k2 = np.asarray(f2, np.float64), np.asarray(k2, np.int64)
     cap = np.full(len(xy), np.inf)
     cap[k] = zt - DIG_SOIL_M
