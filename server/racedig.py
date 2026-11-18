@@ -283,11 +283,41 @@ def tube_height(th, cap, floor, a, b):
     return float(min(th, float(room.min())))
 
 
-def tile_clear(frame, cells, props, wires, elev):
+SUPPORT_CELL_M = 60.0       # m round a span's support whose road cells are read for its bands (a raceway's half width,
+                            # the band's margin and PROP_CLEAR_M, with room)
+
+
+def support_cells(frame, wires):
+    """The map cells (keys, sorted) within SUPPORT_CELL_M of the supports at the ends of wires (furniture.wire_ends):
+    a span is drawn by one tile and its far support may stand 1 km off, near a raceway in no road cell of this tile
+    (Codex's review of 26580e0c)."""
+    import furniture
+    import mapcells
+    pts = [(float(r[1]), float(r[2])) for w in wires or () for e in (furniture.wire_ends(w),) if e
+           for r in e if r is not None]
+    if not pts:
+        return []
+    xy = np.array(sorted(set(pts)), np.float64)
+    keys = set()
+    la0, lo0, _ = frame.enu_to_geodetic(xy[:, 0] - SUPPORT_CELL_M, xy[:, 1] - SUPPORT_CELL_M, 0.0)
+    la1, lo1, _ = frame.enu_to_geodetic(xy[:, 0] + SUPPORT_CELL_M, xy[:, 1] + SUPPORT_CELL_M, 0.0)
+    for a0, o0, a1, o1 in zip(np.atleast_1d(la0), np.atleast_1d(lo0), np.atleast_1d(la1), np.atleast_1d(lo1)):
+        keys.update(mapcells.cells_for_bbox(float(min(a0, a1)), float(min(o0, o1)), float(max(a0, a1)),
+                                            float(max(o0, o1))))
+    return sorted(keys, key=str)
+
+
+def tile_clear(frame, cells, props, wires, elev, md=None):
     """clear_props for a road tile (frame; cells: its roads layers; elev(lat, lon) -> geodetic m, the graded ground):
-    in place, nothing when off or the tile has no raceway."""
+    in place, nothing when off or the tile has no raceway. md: the map data, for the road cells round the supports at
+    the far ends of the tile's spans (support_cells: the bands that cull them in their own tiles)."""
     if not ON or not (props or wires):
         return 0
+    if md is not None and wires:
+        keys = support_cells(frame, wires)
+        if keys:
+            import mapcells
+            cells = list(cells) + [cd.layers.get("roads") for cd in mapcells.load_cells(md, keys, ("roads",))]
     lines = bands(frame, cells)
     if not lines:
         return 0

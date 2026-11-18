@@ -291,6 +291,34 @@ class PropsTest(unittest.TestCase):
         racedig.clear_props([list(a)], wires, lines, lambda x, y: np.zeros(len(x)))
         self.assertEqual(len(wires), 1)
 
+    def test_the_far_supports_road_cells_are_read(self):
+        # Codex's review of 26580e0c: a power span's far tower may stand 1 km off, by a raceway in no road cell of the
+        # span's tile; its own tile culls it, so the span's tile must read the cells round it for the band
+        from unittest import mock
+        import furniture
+        import mapcells
+        frame = geodesy.EnuFrame(33.38, -84.32)
+        near, far = [furniture.G_POLE, 0.0, 0.0, 0.0, 0.0, 1.0, 9.2, 0.0], ["pylon", 800.0, 0.0, 0.0, 0.0, 1.0, 35.8, 0.0]
+        line = np.c_[np.linspace(0.0, 800.0, 9), np.full(9, 4.5), np.full(9, 20.0)]
+        la, lo, _ = frame.enu_to_geodetic(np.array([800.0]), np.array([0.0]), 0.0)
+        far_cell = mapcells.cell_of(float(np.ravel(la)[0]), float(np.ravel(lo)[0]))
+
+        class Md:
+            def cell(self, key, layers=(), kind="demand"):
+                return mock.Mock(layers={"roads": ("roads", key)})
+
+        def bands(frame_, cells):       # (the raceway by the far tower: only in the far tower's cell)
+            if any(c == ("roads", far_cell) for c in cells):
+                return [(np.array([[700.0, -8.0], [900.0, -8.0]]), 7.0)]
+            return []
+        flat = lambda la_, lo_: np.zeros(np.shape(la_))
+        with mock.patch.object(racedig, "ON", True), mock.patch.object(racedig, "bands", bands):
+            wires = furniture.with_ends([line], near, far)
+            racedig.tile_clear(frame, [], [list(near)], wires, flat)
+            self.assertEqual(len(wires), 1, "(the tile's own cells: no band, the span stayed)")
+            racedig.tile_clear(frame, [], [list(near)], wires, flat, Md())
+            self.assertEqual(wires, [])
+
     def test_no_raceway_nothing_dropped(self):
         props = [["pole", 0.0, 0.0, 0.0, 0.0]]
         self.assertEqual(racedig.clear_props(props, [], [], None), 0)
