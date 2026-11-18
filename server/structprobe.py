@@ -1124,6 +1124,11 @@ def main():
             json.dump({"wall_s": round(time.time() - t0, 1), "cpu_s": round(ru.ru_utime + ru.ru_stime, 1),
                        "max_rss_mb": round(ru.ru_maxrss / 1024.0)}, f, sort_keys=True)
             f.write("\n")
+    sys.stdout.flush()
+    sys.stderr.flush()
+    # (the server's fetch / warm threads can keep the interpreter alive after the work: Tsing Ma's run sat 7 min at
+    # its exit with 110 threads, 2026-11-18)
+    os._exit(0)
 
 
 if __name__ == "__main__":
