@@ -44,6 +44,33 @@ jsonDecode = function(s)
   return d
 end
 local trees = require('beamngEarth/trees')
+
+-- (35) the vegetation's height spread and shape variety: a tree's drawn height within HEIGHT_VARY of its measured
+-- one, fixed by its rank; at least MIN_VARIANTS shapes to choose from where the catalog has them; props unchanged
+do
+  T.check(trees.varies('birch') and trees.varies('conifer_clump') and not trees.varies('guardrail'),
+          'the trees, bushes and clumps vary; furniture does not')
+  local shapes, lo, hi = {}, 1e9, 0
+  for i = 0, 199 do
+    local rank = (i + 0.5) / 200
+    local s, sc = trees.pick('birch', 15.0, rank)
+    local s2, sc2 = trees.pick('birch', 15.0, rank)
+    T.check(s == s2 and sc == sc2, 'the same tree, the same look')
+    shapes[s] = true
+    for _, v in ipairs(trees.CATALOG.birch) do
+      if v[1] == s then lo, hi = math.min(lo, sc * v[2]), math.max(hi, sc * v[2]) end
+    end
+  end
+  local n = 0; for _ in pairs(shapes) do n = n + 1 end
+  T.check(n >= trees.MIN_VARIANTS, 'a 15 m birch: at least ' .. trees.MIN_VARIANTS .. ' shapes (was 2), ' .. n)
+  T.check(lo < 14.0 and hi > 16.0 and lo >= 15.0 * (1 - trees.HEIGHT_VARY) - 0.01
+          and hi <= 15.0 * (1 + trees.HEIGHT_VARY) + 0.01, 'heights spread within HEIGHT_VARY: ' .. lo .. '..' .. hi)
+  local s, sc = trees.pick('guardrail', 0.9, 0.37)
+  T.check(sc == 1, 'a guardrail at its authored size')
+end
+-- (the tests below count shapes and items at set heights: the spread off for them, as before 35)
+trees.HEIGHT_VARY, trees.MIN_VARIANTS = 0, 1
+trees.VARIANT_WINDOWS = { { 0.8, 1.25 }, { 0.6, 1.6 } }
 -- The detail keep-up defaults (2026-11-13: PROP_LEAD_S 4, NEAR_URGENT_MS 8, POOL_SPARE_DRIVE 2, NEW_SHAPES_PER_FRAME 2)
 -- checked once here; the tests below exercise the base behaviour with them off and turn each on where they test it.
 T.check(trees.PROP_LEAD_S == 4 and trees.NEAR_URGENT_MS == 8 and trees.POOL_SPARE_DRIVE == 2

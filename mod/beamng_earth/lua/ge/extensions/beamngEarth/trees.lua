@@ -1126,16 +1126,37 @@ local function itemType(shape, solid)
   return d
 end
 
--- The variant of a group for an item of height h: those within 0.8 .. 1.25 of it (else 0.6 .. 1.6), picked by the
--- item's rank; else the nearest. Returns shape, scale.
+-- Trees and bushes (35, the user's test at Syrynka 2026-11-18: a wall of the same two birch shapes at one height):
+-- the canopy height model's tops are good to a couple of metres at best (CHMv2's error), the trees grow, and no row
+-- of them is one height, planted the same year or not. So a tree's drawn height varies about its measured one by up
+-- to HEIGHT_VARY either way (a triangular spread, fixed by its rank: the same tree looks the same at every visit), and
+-- its shape is picked among at least MIN_VARIANTS near its height when the catalog has them (the windows widened in
+-- VARIANT_WINDOWS' steps; furniture and props keep the first window that has any: their sizes are authored).
+M.HEIGHT_VARY = 0.15
+M.MIN_VARIANTS = 3
+M.VARIANT_WINDOWS = { { 0.8, 1.25 }, { 0.7, 1.43 }, { 0.6, 1.6 } }
+function M.varies(group)
+  return townsigns.TREE_GROUPS[group] or M.FAR_ONLY[group] or false
+end
+local function frac(x) return x - math.floor(x) end
+local PROP_WINDOWS = { { 0.8, 1.25 }, { 0.6, 1.6 } }
+
+-- The variant of a group for an item of height h: those within 0.8 .. 1.25 of it (wider for the vegetation, above;
+-- else 0.6 .. 1.6), picked by the item's rank; else the nearest. Returns shape, scale.
 function M.pick(group, h, rank)
   local list = M.CATALOG[group] or M.CATALOG.deciduous
+  local vary = M.varies(group)
+  if vary then
+    local tri = frac(rank * 15485.863) + frac(rank * 32452.843) - 1.0      -- (-1, 1), most near 0
+    h = h * (1.0 + M.HEIGHT_VARY * tri)
+  end
   local cands = {}
-  for _, range in ipairs({ { 0.8, 1.25 }, { 0.6, 1.6 } }) do      -- near its size first, then wider
+  for _, range in ipairs(vary and M.VARIANT_WINDOWS or PROP_WINDOWS) do      -- near its size first, then wider
+    cands = {}
     for _, v in ipairs(list) do
       if v[2] >= h * range[1] and v[2] <= h * range[2] then cands[#cands + 1] = v end
     end
-    if #cands > 0 then break end
+    if #cands >= (vary and M.MIN_VARIANTS or 1) then break end
   end
   if #cands == 0 then
     local best, bd
