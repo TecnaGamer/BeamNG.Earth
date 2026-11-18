@@ -150,11 +150,22 @@ fn segments_cross(a: (f64, f64), b: (f64, f64), c: (f64, f64), d: (f64, f64)) ->
 
 /// Does a gantry of the kit anchored at a line end (its place lx, ly in the kit's frame) stand with its whole footprint
 /// (GANTRY_HALF_W across, GANTRY_HALF_D along) inside the rings: its corners inside, no ring edge across its outline
-/// (an outline wall, a hole: Codex's review of 0cf9fd9b, the centre and four points 1 m off missed both)?
+/// (an outline wall, a hole: Codex's review of 0cf9fd9b, the centre and four points 1 m off missed both), no ring
+/// vertex under it (a hole wholly inside it)?
 fn gantry_fits(rings: &[Vec<(f64, f64)>], ex: f64, ey: f64, hd: f64, anchor_at: [f64; 2], lx: f64, ly: f64) -> bool {
     let c: Vec<(f64, f64)> = [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)].iter()
         .map(|&(a, b)| kit_part(ex, ey, hd, anchor_at, lx + a * GANTRY_HALF_W, ly + b * GANTRY_HALF_D)).collect();
     if !c.iter().all(|&(x, y)| in_rings(rings, x, y)) {
+        return false;
+    }
+    // (no ring's vertex under it: a hole wholly inside the footprint crosses none of its edges; Codex's review of
+    // 1ac6e583)
+    let side = |p: (f64, f64), q: (f64, f64), r: (f64, f64)| (q.0 - p.0) * (r.1 - p.1) - (q.1 - p.1) * (r.0 - p.0);
+    let under = |r: (f64, f64)| {
+        let s: Vec<f64> = (0..4).map(|k| side(c[k], c[(k + 1) % 4], r)).collect();
+        s.iter().all(|&v| v >= 0.0) || s.iter().all(|&v| v <= 0.0)
+    };
+    if rings.iter().any(|r| r.iter().any(|&q| under(q))) {
         return false;
     }
     !rings.iter().any(|r| {

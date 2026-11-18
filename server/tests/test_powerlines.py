@@ -257,6 +257,29 @@ class LineTest(unittest.TestCase):
         _, ends, _, _ = layout([line], [False, False, True], yards=[square(0, -11, 60, 22)])
         self.assertEqual(len(ends), 1)                                         # (22 m: it fits)
 
+    def test_no_hole_under_a_gantry(self):
+        # Codex's review of 1ac6e583: a small hole wholly inside a gantry's footprint crossed none of its edges and left
+        # its corners inside: the end was taken with the gantry over the hole. No ring vertex may lie under it now
+        yard_ring = square(0, -30, 60, 60)
+        line = np.array([[-200, 0, 0], [-100, 0, 0], [30, 0, 0]], np.float64)
+        _, ends0, _, _ = layout([line], [False, False, True], yards=[yard_ring])
+        gl = powerlines.GANTRIES[0]
+        hx = 30.0 + (powerlines.ANCHOR_AT[1] - gl[1])                       # (the left gantry's place, heading +x:
+        hy = gl[0] - powerlines.ANCHOR_AT[0]                                 # its kit x across the line, to +y)
+        hole = square(hx - 0.5, hy - 0.5, 1.0, 1.0)
+        self.assertTrue(np.allclose(ends0[0][:2], [30.0, 0.0]))
+        _, ends, _, _ = layout([line], [False, False, True], yards=[yard_ring, hole], yard_id=[0, 0])
+        self.assertEqual(len(ends), 1)
+        ex, ey, _, w = ends[0]
+        got, _ = yard_full([yard_ring, hole], anchors=[[ex, ey, w, 0.0, 0.0]])
+        gantries = [(x, y, yaw) for g, x, y, yaw, z in got if g == "gantry"]
+        self.assertEqual(len(gantries), 2)
+        for x, y, yaw in gantries:                      # (the hole's middle off every gantry's footprint)
+            a = np.radians(yaw)
+            lx = (hx - x) * np.cos(a) + (hy - y) * np.sin(a)
+            ly = -(hx - x) * np.sin(a) + (hy - y) * np.cos(a)
+            self.assertTrue(abs(lx) > 4.0 or abs(ly) > 2.87, (x, y, lx, ly))
+
     def test_a_yard_across_the_antimeridian(self):
         # Codex's review of 0cf9fd9b: a yard straddling +-180 deg was unwrapped round its mean longitude (near 0): a
         # box round the world, cells_for_bbox's ValueError uncaught. Unwrapped round one of its vertices now; a box
@@ -533,7 +556,7 @@ class TowerFootprintTest(unittest.TestCase):
         self.assertEqual(run([]), ({powerlines.G_PYLON}, 6))
         self.assertEqual(run(["power_pole", "power_tower"]), ({powerlines.G_PYLON}, 6), "no majority: the towers")
 
-    def far_yard_world(self, feeder=False, feeder_end=-5.0):
+    def far_yard_world(self, feeder=False, feeder_end=-5.0, feeder_from=(-300.0,)):
         """A tile whose span runs 1.9 km to a 60 m yard in a map cell beyond its lookup: (tx, the yard tile's tx, far x,
         Md); feeder: a second line ("a", before the span's "b") ending in the yard 9 m from it, mapped only in the
         yard's cell (Codex's review of 119bb4d7)."""
@@ -556,7 +579,7 @@ class TowerFootprintTest(unittest.TestCase):
         ring = [[far - 30, 70], [far + 30, 70], [far + 30, 130], [far - 30, 130], [far - 30, 70]]
         hv = '{"power":"line","voltage":"220000"}'
         b = ("b", mapgeom.LINE, "power_line", hv, ll([[far, 100.0], [near, 100.0]]))
-        a = ("a", mapgeom.LINE, "power_line", hv, ll([[far - 300.0, 108.0], [far + feeder_end, 108.0]]))
+        a = ("a", mapgeom.LINE, "power_line", hv, ll([[far + d, 108.0] for d in feeder_from] + [[far + feeder_end, 108.0]]))
         yard = ("yard", mapgeom.POLYGON, "substation", "{}", ll(ring))
 
         def features(items):
@@ -574,6 +597,37 @@ class TowerFootprintTest(unittest.TestCase):
                 return SimpleNamespace(layers={"infrastructure": at_yard if key == far_cell else elsewhere}
                                        if "infrastructure" in layers else {"roads": None})
         return tx, int(np.floor(far / roads.TILE)), far, Md()
+
+    @yards_on
+    def test_a_long_feeders_vertices_stand_alike_in_every_tile(self):
+        """Codex's review of 1ac6e583: the stations' keepout was read for the box round all the vertices a call placed;
+        a long feeder's whole run (the feeder search) made a box the station lookup gave up on (none: its end stayed
+        outside the yard) while the yard tile's shorter run moved it in. Each vertex reads its own cell's now."""
+        import busstationkeep
+        import furniture
+        from test_roads import FRAME
+        tx, yard_tx, far, md = self.far_yard_world(feeder=True, feeder_end=-35.0,
+                                                   feeder_from=(-8000.0, -6000.0, -4000.0, -2000.0))
+
+        class Keep:
+            def push_out(self, xy):
+                xy = np.array(xy, np.float64)
+                hit = (xy[:, 0] > far - 40.0) & (xy[:, 0] < far - 31.0) & (np.abs(xy[:, 1] - 108.0) < 5.0)
+                xy[hit, 0] += 23.0
+                return xy
+        # (the lookup's cap: no stations for a box over 6 km)
+        capped = lambda md_, frame_, box: Keep() if max(box[2] - box[0], box[3] - box[1]) < 6000.0 else None
+        flat = lambda la_, lo_: np.zeros(np.shape(la_))
+        with mock.patch.object(busstationkeep, "keepout", capped):
+            props, wires = [], []
+            powerlines.tile_lines(FRAME, tx, 0, md, flat, props, wires)
+            yard_props = []
+            powerlines.tile_lines(FRAME, yard_tx, 0, md, flat, yard_props, [])
+        hung = {tuple(r) for w in wires if furniture.wire_ends(w) for r in furniture.wire_ends(w)
+                if r is not None and r[0] == "gantry"}
+        built = {tuple(r) for r in yard_props if r[0] == "gantry"}
+        self.assertEqual(len(built), 2)
+        self.assertEqual(hung, built)
 
     @yards_on
     def test_feeders_read_where_the_layout_stands_them(self):

@@ -396,7 +396,7 @@ def _tile_lines(frame, tx, ty, md, elev, props, wires, clearance):
         _feeders(frame, md, subs, layers, cells, seen, lines, poles)
     else:
         subs = _substations(frame, cells, md)
-    fast.require(438, "power_line_layout")
+    fast.require(439, "power_line_layout")
     ends = np.zeros((0, 7))
     for group, h, arms, clear_m, wire_r, these in ((G_PYLON, PYLON_H, ARMS, TOWER_ROAD_CLEAR_M, WIRE_R, lines),
                                                   (G_POLE, POLE_H, POLE_ARMS, POLE_ROAD_CLEAR_M, POLE_WIRE_R, poles)):
@@ -409,20 +409,44 @@ def _tile_lines(frame, tx, ty, md, elev, props, wires, clearance):
 
 def _placed(frame, md, ll, clear_m, box):
     """(e, n): the frame places of line vertices ll (lon/lat) as laid out: moved off the roads (_off_roads, each vertex
-    alike in every tile) and out of the bus stations' ground. BNE_POWER_YARDS: the stations round the vertices
-    themselves, so a vertex stands at one place whichever tile asks (the yards' membership read from it: _feeders);
-    else those round the tile's box (as before)."""
+    alike in every tile) and out of the bus stations' ground. BNE_POWER_YARDS: the stations round each vertex's own map
+    cell, so a vertex stands at one place whichever tile asks (the yards' membership read from it: _feeders); else
+    those round the tile's box (as before)."""
     e, n, _ = frame.geodetic_to_enu(ll[:, 1], ll[:, 0], np.zeros(len(ll)))
     e, n = _off_roads(frame, md, np.asarray(e, np.float64), np.asarray(n, np.float64), ll, clear_m)
     import busstationkeep
+    if YARDS_ON:
+        # (each vertex out of the stations round its own map cell: the same keepout whichever vertices a tile asks
+        # about together, never a box so large the station lookup gives up; Codex's review of 1ac6e583)
+        import mapcells
+        e, n = np.array(e, np.float64), np.array(n, np.float64)
+        keys = [mapcells.cell_of(float(la), float(lo)) for lo, la in ll[:, :2]]
+        for key in sorted(set(keys), key=str):
+            idx = np.array([i for i, k in enumerate(keys) if k == key], np.int64)
+            keep = busstationkeep.keepout(md, frame, _cell_box(frame, key, 200.0))
+            if keep:
+                xy = keep.push_out(np.column_stack((e[idx], n[idx])))
+                e[idx], n[idx] = xy[:, 0], xy[:, 1]
+        return e, n
     x0, y0, x1, y1 = box
-    if YARDS_ON and len(e):
-        x0, y0, x1, y1 = float(e.min()), float(n.min()), float(e.max()), float(n.max())
     keep = busstationkeep.keepout(md, frame, (x0 - 200.0, y0 - 200.0, x1 + 200.0, y1 + 200.0))
     if keep:                                # (a bus station's ground: no pole on its platforms or in its yard)
         xy = keep.push_out(np.column_stack((e, n)))
         e, n = xy[:, 0], xy[:, 1]
     return e, n
+
+
+def _cell_box(frame, key, margin):
+    """A map cell's box (x0, y0, x1, y1) in frame, margin m round it."""
+    import mapcells
+    k = 1 << key.z
+    la = [mapcells._lat_of(key.y, k), mapcells._lat_of(key.y + 1, k)]
+    lo = [mapcells._lon_of(key.x, k), mapcells._lon_of(key.x + 1, k)]
+    cla = np.array([la[0], la[0], la[1], la[1]], np.float64)
+    clo = np.array([lo[0], lo[1], lo[0], lo[1]], np.float64)
+    e, n, _ = frame.geodetic_to_enu(cla, clo, np.zeros(4))
+    e, n = np.asarray(e, np.float64), np.asarray(n, np.float64)
+    return (float(e.min()) - margin, float(n.min()) - margin, float(e.max()) + margin, float(n.max()) + margin)
 
 
 def _lay(frame, md, elev, subs, lines, group, h, arms, clear_m, wire_r, box, props, wires, clearance):
