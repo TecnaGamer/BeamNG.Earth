@@ -1523,7 +1523,8 @@ class RoadFitTest(unittest.TestCase):
             self.assertFalse(r is not None and r["blk"][seam].any(), f"tile {tx}: nothing cut at the seam")
             if r is not None:
                 for a, b in r["runs"].tolist():
-                    self.assertGreater(float(xy[a, 0]), 600.0, "only round the crossing at x ~ 680")
+                    self.assertGreater(float(xy[a, 0]), 660.0 - railways.XING_RUN_MAX_M - 10.0,
+                                       "only round the crossing at x ~ 662")
 
     def test_the_roads_graded_surface_tells_the_crossing(self):
         """Codex on 6e4f6408: on the natural ground alone a road in a 4 m cut the grading made met the bed at grade (its
@@ -1642,3 +1643,39 @@ class RoadFitTest(unittest.TestCase):
         self.assertEqual(panels[0][0], "id000", "the long track kept, the short one left out")
         decks = [np.asarray(k["n"])[:, 1] for k in ch if k["m"] == rails.DECK["m"]]
         self.assertTrue(decks and all(float(np.abs(y - 100.0).max()) < 1.0 for y in decks), "its deck alone")
+
+    def test_a_shallow_street_entry_leaves_no_raised_track_in_the_carriageway(self):
+        """Codex on 2e6a8130: the run's cap (60 m then) stopped a crossing 3 degrees shallow while the track still lay in
+        the carriageway: its raised ballast in the lane 3.3 m from the road's centre. XING_RUN_MAX_M covers a crossing
+        down to ~2 degrees: no 3D rail inside the carriageway."""
+        ang = np.radians(3.0)
+        road = [(128.0 - 400.0 * np.cos(ang), 100.0 - 400.0 * np.sin(ang)),
+                (128.0 + 400.0 * np.cos(ang), 100.0 + 400.0 * np.sin(ang))]
+        f = features([[(-200.0, 100.0), (500.0, 100.0)], road], ["standard_gauge", "secondary"],
+                     subtypes=["rail", "road"])
+        hw = roads.road_specs(f)[1].width / 2
+        (line, _hw), = railways.crossings(FRAME, [f], roads.tile_bbox(0, 0), reach=50.0)
+        rec, steel, decks = self.records_and_mesh(f)
+        a, b = line[0, :2], line[-1, :2]
+        t = np.clip(((steel[:, :2] - a) @ (b - a)) / float((b - a) @ (b - a)), 0.0, 1.0)
+        d = np.hypot(*(steel[:, :2] - (a + t[:, None] * (b - a))).T)
+        self.assertGreater(float(d.min()), hw - 0.05, "no rail on the carriageway")
+        self.assertTrue(decks)
+
+    def test_every_copy_of_a_road_is_a_crossing_candidate(self):
+        """Codex on 2e6a8130: crossings() keeps the first copy of a road met: a cell's copy ending short of the track hid
+        the next cell's copy holding the crossing in one tile, while the next tile, without the short copy, had it. The
+        records take every copy."""
+        track = [(-300.0, 100.0), (900.0, 100.0)]
+        short = features([track, [(250.0, 0.0), (250.0, 60.0)]], ["standard_gauge", "secondary"],
+                         subtypes=["rail", "road"])
+        full = features([track, [(250.0, 0.0), (250.0, 250.0)]], ["standard_gauge", "secondary"],
+                        subtypes=["rail", "road"])
+        got = []
+        for tx, cells in ((0, [short, full]), (1, [full])):
+            with unittest.mock.patch.object(railways, "RAIL_ROAD_FIT", True):
+                rec = railways.crossing_records(FRAME, tx, 0, cells, flat)
+            (xy, r), = [(xy, r) for (fid, _c, _k, xy), r in zip(rec["rails"], rec["runs"]) if fid == "id000"]
+            got.append(self.runs_xy(xy, r))
+        self.assertEqual(got[0], got[1])
+        self.assertTrue(got[0])

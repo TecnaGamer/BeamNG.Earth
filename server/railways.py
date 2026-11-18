@@ -1528,10 +1528,15 @@ RUN_END_BISECT = 6          # ... then halvings between the two round it (under 
 FIT_NATIVE = 421          # earthfast.VERSION of the railway-at-road kernels (railfit.rs)
 
 
-XING_RUN_MAX_M = 60.0       # m along a part a crossing's run reaches past where the road crosses it (or runs down it):
-                            # well inside the parts' REACH_M, so every tile drawing a run holds its anchor
-XING_GRADED_M = 80.0        # m round the tile within which the records read the roads' graded surface (a run there
-                            # can reach the tile: XING_RUN_MAX_M and a carriageway's reach); past it the natural ground
+XING_RUN_MAX_M = 150.0      # m along a part a crossing's run reaches past where the road crosses it (or runs down it):
+                            # inside the parts' REACH_M, so every tile drawing a run holds its anchor; a crossing as
+                            # shallow as 2 degrees of a 4 m carriageway (4.5 / sin) is cut all through its road
+XING_GRADED_M = 170.0       # m round the tile within which the records take the roads (every copy) and read their
+                            # graded surface near the track (XING_TRACK_M; a run there can reach the tile:
+                            # XING_RUN_MAX_M and a carriageway's reach); past it the natural ground
+XING_TRACK_M = 12.0         # m from a ground track: the road points whose graded surface the records read
+XING_RAIL_OUT_M = GAUGE_M / 2 + RAIL_HEAD   # m: the outer rail off the axis; a road's reach grows by it times |cos| of
+                                            # the crossing's angle (a shallow crossing's rail kept out of the lane)
 
 
 def crossing_records(frame, tx, ty, cells, ground, sign_style=None, far_ground=None, load=None, bed_elev=None):
@@ -1588,11 +1593,19 @@ def crossing_records(frame, tx, ty, cells, ground, sign_style=None, far_ground=N
         if (~near).any():
             z[~near] = np.asarray(nat(q[~near]), np.float64).ravel()
         return z
-    pool = (crossings(frame, cells, box, reach=XING_GRADED_M) + list(tunnels)) if rails else []
+    pool = (_crossing_pool(frame, cells, box, XING_GRADED_M) + list(tunnels)) if rails else []
     xcrossers = []
     if pool:
         dense = [(roads.densify(np.asarray(line, np.float64)[:, :2], STEP_M)[:, :2], hw) for line, hw in pool]
-        zx = level(np.concatenate([ln for ln, _hw in dense]))
+        allp = np.ascontiguousarray(np.concatenate([ln for ln, _hw in dense]))
+        tracks = {n: (np.asarray(xy, np.float64)[:, :2], XING_TRACK_M) for n, (_f, c, kind, xy) in enumerate(rails)
+                  if kind == "ground" and c != "tram" and len(xy) >= 2}
+        by = roads._on_carriageways(allp, tracks, 0.0) if tracks else np.zeros(len(allp), bool)
+        zx = np.empty(len(allp))
+        if by.any():
+            zx[by] = level(allp[by])
+        if (~by).any():
+            zx[~by] = np.asarray(nat(allp[~by]), np.float64).ravel()
         k = 0
         for line, hw in dense:
             xcrossers.append((line, hw, zx[k:k + len(line)]))
@@ -1606,6 +1619,27 @@ def crossing_records(frame, tx, ty, cells, ground, sign_style=None, far_ground=N
     return {"tunnels": tunnels, "ground": ground, "worn": worn, "gauges": gauges, "cut": cut, "rails": rails,
             "prof": prof, "all_cr": all_cr, "cr": cr, "crossers": crossers, "runs": runs, "half_g": half_g,
             "sign_style": sign_style}
+
+
+def _crossing_pool(frame, cells, box, reach):
+    """[(xy (k, 2), half width)]: crossing_records' roads: every ground part of every copy of each road (the cells' own
+    clips of it, not the first copy met as crossings() keeps: a copy ending short of the track, met first in one tile,
+    hid the copy holding the crossing there while the next tile had it) near box. Pure."""
+    near = (box[0] - reach, box[1] - reach, box[2] + reach, box[3] + reach)
+    out = []
+    for feats in cells:
+        if feats is None or len(feats) == 0:
+            continue
+        specs = roads.road_specs(feats)
+        for i in _box_hits(feats.boxes(frame), near):
+            sp = specs[i]
+            if sp is None:
+                continue
+            for ring in roads.ground_parts(feats, i):
+                e, n = mapgeom.enu_xy(feats, frame, ring)
+                if len(e) >= 2:
+                    out.append((np.column_stack((e, n)), sp.width / 2))
+    return out
 
 
 def _level_beds(frame, rails, nat, load=None, elev=None, drawn=None):
@@ -1671,7 +1705,7 @@ def _part_crossings(xy, zb, crossers):
     blk, runs, ts, te = fast._ef.rail_crossing_runs(xy, np.ascontiguousarray(np.asarray(zb, np.float64)), *pack,
                                                      float(CROSSING_DZ), np.asarray(ar, np.int64),
                                                      np.asarray(alo, np.int64), np.asarray(ahi, np.int64),
-                                                     RUN_END_SAMPLES, RUN_END_BISECT, XING_RUN_MAX_M)
+                                                     RUN_END_SAMPLES, RUN_END_BISECT, XING_RUN_MAX_M, XING_RAIL_OUT_M)
     if not len(runs):
         return None
     return {"blk": np.asarray(blk, bool), "runs": np.asarray(runs, np.int64), "start_t": np.asarray(ts, np.float64),

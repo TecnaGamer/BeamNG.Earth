@@ -178,11 +178,40 @@ pub fn station_platform_trim(line: PyReadonlyArray2<'_, f64>, out: PyReadonlyArr
     Ok(Some((run.0 as i64..=run.1 as i64).collect()))
 }
 
-/// One road's per-point at-grade test on a track (railways._blocked for that road alone: earthfast.near_crossers on its
-/// own slice of the crossers' pack).
-fn road_on(c: usize, p: &[[f64; 2]], z: &[f64], d: &[[f64; 3]], st: &[usize], reach: &[f64], dz: f64) -> Vec<bool> {
+/// One road's per-point at-grade test on a track (railways._blocked's for that road alone: its nearest segment, the
+/// first of equals, nearer than its reach with its start's height within dz of the bed), the reach grown by
+/// rail_out * |cos| of the angle between the track (dirs: per point) and that segment: a shallow crossing's outer
+/// rail, rail_out off the axis, stays out of the carriageway, not in its lane.
+#[allow(clippy::too_many_arguments)]
+fn road_on(c: usize, p: &[[f64; 2]], dirs: &[[f64; 2]], z: &[f64], d: &[[f64; 3]], st: &[usize], reach: &[f64],
+           dz: f64, rail_out: f64) -> Vec<bool> {
     let (j0, j1) = (st[c], st[c + 1]);
-    crate::nearcross::near_crossers(p, z, &d[j0..j1], &[0, j1 - j0], &[reach[c]], dz)
+    let mut out = vec![false; p.len()];
+    if j1 < j0 + 2 {
+        return out;
+    }
+    for (i, q) in p.iter().enumerate() {
+        let (mut best, mut bj) = (f64::INFINITY, usize::MAX);
+        for j in j0..j1 - 1 {
+            let (ax, ay) = (d[j][0], d[j][1]);
+            let (bx, by) = (d[j + 1][0] - ax, d[j + 1][1] - ay);
+            let l2 = (bx * bx + by * by).max(1e-12);
+            let t = (((q[0] - ax) * bx + (q[1] - ay) * by) / l2).clamp(0.0, 1.0);
+            let dd = (q[0] - (ax + t * bx)).dhypot(q[1] - (ay + t * by));
+            if dd < best || bj == usize::MAX {
+                best = dd;
+                bj = j;
+            }
+        }
+        if bj == usize::MAX {
+            continue;
+        }
+        let (sx, sy) = (d[bj + 1][0] - d[bj][0], d[bj + 1][1] - d[bj][1]);
+        let (sl, tl) = (sx.dhypot(sy), dirs[i][0].dhypot(dirs[i][1]));
+        let cos = if sl > 1e-9 && tl > 1e-9 { ((sx * dirs[i][0] + sy * dirs[i][1]) / (sl * tl)).abs() } else { 0.0 };
+        out[i] = best < reach[c] + rail_out * cos && (z[i] - d[bj][2]).abs() < dz;
+    }
+    out
 }
 
 /// railways.crossing_records (BNE_RAIL_ROAD_FIT): the level crossings of one track part (xy (n, 2), its bed z (n,)
@@ -194,14 +223,15 @@ fn road_on(c: usize, p: &[[f64; 2]], z: &[f64], d: &[[f64; 3]], st: &[usize], re
 /// another one, or this one elsewhere, cuts nothing here). Returns (blk (n,), runs (r, 2) [a, b] of the joined points, start_t (r,), end_t (r,)):
 /// a run's edge on the section before it (a - 1 -> a) and after it (b -> b + 1) as the fraction of the section still
 /// off the crossing (`samples` - 1 points then `bisect` halvings, each with the run's own roads' test at the bed heights
-/// interpolated: the same test that made the run), NaN where the run reaches the part's end.
+/// interpolated: the same test that made the run), NaN where the run reaches the part's end. Each road's reach grows
+/// by rail_out * |cos| of the crossing's angle (road_on: the outer rail out of the carriageway on a shallow crossing).
 #[pyfunction]
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub fn rail_crossing_runs<'py>(py: Python<'py>, xy: PyReadonlyArray2<'py, f64>, z: PyReadonlyArray1<'py, f64>,
                                pts: PyReadonlyArray2<'py, f64>, starts: PyReadonlyArray1<'py, i64>,
                                reach: PyReadonlyArray1<'py, f64>, dz: f64, a_road: PyReadonlyArray1<'py, i64>,
                                a_lo: PyReadonlyArray1<'py, i64>, a_hi: PyReadonlyArray1<'py, i64>, samples: usize,
-                               bisect: usize, max_run: f64)
+                               bisect: usize, max_run: f64, rail_out: f64)
                                -> PyResult<(Bound<'py, PyArray1<bool>>, Bound<'py, PyArray2<i64>>,
                                             Bound<'py, PyArray1<f64>>, Bound<'py, PyArray1<f64>>)> {
     let (x, zz, d, st, r) = (xy.as_array(), z.as_array(), pts.as_array(), starts.as_array(), reach.as_array());
@@ -230,12 +260,17 @@ pub fn rail_crossing_runs<'py>(py: Python<'py>, xy: PyReadonlyArray2<'py, f64>, 
         roads.sort_unstable();
         roads.dedup();
         let mut owner: Vec<Vec<usize>> = vec![Vec::new(); n];
+        // (the track's direction per point: a section's own for points along it, the neighbours' at a vertex)
+        let dirs: Vec<[f64; 2]> = (0..n).map(|i| {
+            let (a, b) = (i.saturating_sub(1), (i + 1).min(n - 1));
+            [xv[b][0] - xv[a][0], xv[b][1] - xv[a][1]]
+        }).collect();
         let mut s = vec![0.0f64; n];        // (arc lengths: a run reaches at most max_run past its anchor)
         for i in 1..n {
             s[i] = s[i - 1] + (xv[i][0] - xv[i - 1][0]).dhypot(xv[i][1] - xv[i - 1][1]);
         }
         for &c in &roads {
-            let on = road_on(c, &xv, &zv, &dv, &sv, &rv, dz);
+            let on = road_on(c, &xv, &dirs, &zv, &dv, &sv, &rv, dz, rail_out);
             let mut keep = vec![false; n];
             for &(_c, lo, hi) in anchors.iter().filter(|a| a.0 == c) {
                 let hi = hi.min(n - 1);
@@ -273,9 +308,10 @@ pub fn rail_crossing_runs<'py>(py: Python<'py>, xy: PyReadonlyArray2<'py, f64>, 
                 let (dx, dy, dzb) = (xv[k + 1][0] - xv[k][0], xv[k + 1][1] - xv[k][1], zv[k + 1] - zv[k]);
                 let p: Vec<[f64; 2]> = tt.iter().map(|&s| [xv[k][0] + dx * s, xv[k][1] + dy * s]).collect();
                 let zp: Vec<f64> = tt.iter().map(|&s| zv[k] + dzb * s).collect();
+                let dk = vec![[dx, dy]; tt.len()];
                 let mut on = vec![false; tt.len()];
                 for &c in &mine {
-                    let got = road_on(c, &p, &zp, &dv, &sv, &rv, dz);
+                    let got = road_on(c, &p, &dk, &zp, &dv, &sv, &rv, dz, rail_out);
                     for (o, g) in on.iter_mut().zip(got) { *o = *o || g; }
                 }
                 on
