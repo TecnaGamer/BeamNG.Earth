@@ -182,56 +182,101 @@ class GapFill(unittest.TestCase):
 
 
 class GapLanding(unittest.TestCase):
-    """Codex round 2: one line per landing. The A7 at Thulba ran into its hole through a 4 m lane-section stub between
-    the road and the deck: the stub and the road ending short of the deck, planned together or apart (two cells, either
-    order), with or without the stub as the road's extension, and a twin carriageway's deck end 12 m beside, meet at one
-    height, and every sample on the line takes the line's height."""
+    """Codex rounds 2 and 3: one line per landing, along the road a car drives off the deck on. The A7 at Thulba ran
+    into its hole through a 4 m lane-section stub between the road and the deck. The stub and the road ending short of
+    it (straight, or bent 35 degrees at their joint), planned together or apart, either way round, with or without the
+    other as an extension, meet at one height and grade; the other carriageway 3 m beside, its own line 2 m higher, is
+    never filled from this landing nor this road from its."""
 
     def setUp(self):
         import geodesy
         self.frame = geodesy.EnuFrame(50.198, 9.939)
         self.spec = roads.Spec(11.5, "paved", False, "motorway")
 
-        def raw(la, lo):
-            x = np.asarray(self.frame.geodetic_to_enu(la, lo, 0.0)[0], np.float64)
-            road = 50.0 - 0.037 * x             # a 3.7 % motorway towards the deck at x = 0 (x < 0)
-            return np.where(x > -14.0, road - 4.0 * np.clip((x + 14.0) / 14.0, 0.0, 1.0), road)    # its opening
-        self.raw = raw
-        # landings: this deck's end (the road comes from -x) and its twin's, 12 m to the side
-        self.landings = [(np.array([0.0, 0.0]), np.array([-1.0, 0.0]), "motorway"),
-                         (np.array([0.0, 12.0]), np.array([-1.0, 0.0]), "motorway")]
+    def approach(self, bend):
+        t = np.radians(bend)
+        far = np.array([-4.0, 0.0]) + 196.0 * np.array([-np.cos(t), np.sin(t)])
+        return np.array([[0.0, 0.0], [-4.0, 0.0], far])
 
-    def lonlat(self, a, b):
-        xs = np.arange(a, b + 1e-9, 2.0) if b > a else np.array([a, b])
-        if xs[-1] < b:
-            xs = np.r_[xs, b]
-        la, lo, _ = self.frame.enu_to_geodetic(xs, np.zeros(len(xs)), 0.0)
+    def raw_for(self, ap, twin):
+        def raw(la, lo):
+            e, n, _ = self.frame.geodetic_to_enu(la, lo, 0.0)
+            pts = np.stack([np.asarray(e, np.float64), np.asarray(n, np.float64)], axis=1)
+            s_, off = grading._on_line(pts, ap)
+            road = 50.0 + 0.037 * s_                       # 3.7 % down to the deck along the approach
+            road = road - 4.0 * np.clip(1.0 - s_ / 14.0, 0.0, 1.0) * (off < 1.5)      # its opening
+            st, ot = grading._on_line(pts, twin)
+            twin_z = 52.0 + 0.037 * st - 4.0 * np.clip(1.0 - st / 14.0, 0.0, 1.0)
+            return np.where(ot < off, twin_z, road)
+        return raw
+
+    def lonlat(self, xy):
+        la, lo, _ = self.frame.enu_to_geodetic(xy[:, 0], xy[:, 1], 0.0)
         return np.c_[lo, la]
 
-    def test_split_approach_one_height(self):
-        road, stub = (self.lonlat(-200.0, -4.0), self.spec), (self.lonlat(-4.0, 0.0), self.spec)
-        kw = dict(cuts=False, landings=self.landings)
-        both = grading.plan_roads(self.frame, [road, stub], self.raw, **kw)
-        alone_s = grading.plan_roads(self.frame, [stub], self.raw, **kw)[0]
-        alone_r = grading.plan_roads(self.frame, [road], self.raw, **kw)[0]
-        sxy = np.array([[-4.0, 0.0], [-2.0, 0.0], [0.0, 0.0]])
-        ext = grading.plan_roads(self.frame, [road], self.raw, ext=[(None, sxy[[0, 2]])], **kw)[0]
-        for r in (both[0], alone_r, ext):
-            self.assertAlmostEqual(float(r.z[-1]), 50.0 - 0.037 * -4.0, delta=0.02, msg="on the line")
-        for s_ in (both[1], alone_s):
-            self.assertAlmostEqual(float(s_.z[0]), float(both[0].z[-1]), delta=0.02)
-            self.assertAlmostEqual(float(s_.z[-1]), 50.0, delta=0.02)
-        # (and its grade into the stub: the line's)
-        g = (float(both[0].z[-1]) - float(both[0].z[-2])) / float(np.hypot(*np.diff(both[0].xy[-2:, :2], axis=0)[0]))
-        self.assertAlmostEqual(g, -0.037, delta=0.005)
+    def dense(self, a, b, step=2.0):
+        n = max(2, int(np.ceil(np.hypot(*(b - a)) / step)) + 1)
+        return np.c_[np.linspace(a[0], b[0], n), np.linspace(a[1], b[1], n)]
+
+    def check(self, bend):
+        ap = self.approach(bend)
+        twin = ap + np.array([0.0, 3.0])
+        raw = self.raw_for(ap, twin)
+        lands = [(ap, "motorway"), (twin, "motorway")]
+        road_xy = self.dense(ap[2], ap[1])                  # the road, ending 4 m short of the deck
+        stub_xy = self.dense(ap[1], ap[0])                  # the stub on to the deck
+        road, stub = (self.lonlat(road_xy), self.spec), (self.lonlat(stub_xy), self.spec)
+        kw = dict(cuts=False, landings=lands)
+        runs = {"together": grading.plan_roads(self.frame, [road, stub], raw, **kw),
+                "apart": [grading.plan_roads(self.frame, [road], raw, **kw)[0],
+                          grading.plan_roads(self.frame, [stub], raw, **kw)[0]],
+                "apart, reversed": grading.plan_roads(self.frame, [stub], raw, **kw)[::-1] or None}
+        runs["apart, reversed"] = [grading.plan_roads(self.frame, [road], raw, **kw)[0], runs["apart, reversed"][0]]
+        runs["extensions"] = [grading.plan_roads(self.frame, [road], raw, ext=[(None, stub_xy)], **kw)[0],
+                              grading.plan_roads(self.frame, [stub], raw, ext=[(road_xy[::-1][:60], None)], **kw)[0]]
+        joint = 50.0 + 0.037 * 4.0
+        for name, (r, s_) in runs.items():
+            self.assertAlmostEqual(float(r.z[-1]), joint, delta=0.02, msg=(bend, name, "road at the joint"))
+            self.assertAlmostEqual(float(s_.z[0]), joint, delta=0.02, msg=(bend, name, "stub at the joint"))
+            self.assertAlmostEqual(float(s_.z[-1]), 50.0, delta=0.02, msg=(bend, name, "at the deck"))
+            g_r = (float(r.z[-1]) - float(r.z[-2])) / float(np.hypot(*np.diff(r.xy[-2:, :2], axis=0)[0]))
+            g_s = (float(s_.z[1]) - float(s_.z[0])) / float(np.hypot(*np.diff(s_.xy[:2, :2], axis=0)[0]))
+            self.assertAlmostEqual(g_r, -0.037, delta=0.006, msg=(bend, name, "road's grade at the joint"))
+            self.assertAlmostEqual(g_s, -0.037, delta=0.006, msg=(bend, name, "stub's grade at the joint"))
+        # the twin's carriageway (3 m beside, 2 m higher) planned with both landings: its own line, not this one's
+        tw = grading.plan_roads(self.frame, [(self.lonlat(self.dense(twin[1], twin[0])), self.spec)], raw, **kw)[0]
+        self.assertAlmostEqual(float(tw.z[-1]), 52.0, delta=0.02)
+
+    def test_straight(self):
+        self.check(0.0)
+
+    def test_bent(self):
+        self.check(35.0)
 
     def test_off_the_line_untouched(self):
-        # (a road crossing the landing's ray, not heading along it, keeps its own ground)
+        # (a road crossing the approach, not on its line, keeps its own ground)
+        ap = self.approach(0.0)
+        raw = self.raw_for(ap, ap + np.array([0.0, 300.0]))
         la, lo, _ = self.frame.enu_to_geodetic(np.full(21, -6.0), np.linspace(-20.0, 20.0, 21), 0.0)
-        cross = grading.plan_roads(self.frame, [(np.c_[lo, la], self.spec)], self.raw, cuts=False,
-                                   landings=self.landings)[0]
-        ref = grading.plan_roads(self.frame, [(np.c_[lo, la], self.spec)], self.raw, cuts=False)[0]
+        cross = grading.plan_roads(self.frame, [(np.c_[lo, la], self.spec)], raw, cuts=False,
+                                   landings=[(ap, "motorway")])[0]
+        ref = grading.plan_roads(self.frame, [(np.c_[lo, la], self.spec)], raw, cuts=False)[0]
         self.assertTrue(np.allclose(cross.z, ref.z))
+
+
+class GapLandingCells(unittest.TestCase):
+    """The A20 near Rostock (drivability a20_921) with BNE_FAST_GAP through the real cell planning: the same roads and
+    decks whichever side the cells are planned from first (drivability.measure's approach), and the 5.35 g deck gone."""
+
+    def test_build_order(self):
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import drivability as dv
+        with mock.patch.object(grading, "FAST_GAP", True):
+            base = dv.measure("a20_921")
+            for at in ((0.0, 600.0), (600.0, 0.0), (0.0, -600.0)):
+                self.assertEqual(dv.measure("a20_921", approach=at), base, at)
+        lift = max((p.get("lift_g", 0.0) for k, p in base["parts"].items() if k.startswith("bridge:")), default=0.0)
+        self.assertLess(lift, 0.5)
 
 
 class UnderSpeed(unittest.TestCase):
@@ -283,6 +328,19 @@ class UnderSpeed(unittest.TestCase):
 
 class LevelSpacingTarget(unittest.TestCase):
     """R1f: an approach fill asks the clearance of the roads under the chain, as the deck solve does."""
+
+    def test_railway_under_the_next_span(self):
+        # (Codex round 3: a railway under the chain's next part counted as a road, its 6.0 m given as a road's)
+        span1, span2 = line(0.0, 40.0), line(40.0, 80.0)
+        rail = np.array([[60.0, -30.0], [60.0, 30.0]])
+        z_at = lambda xy: np.zeros(len(np.asarray(xy).reshape(-1, 2)))  # noqa: E731
+        with mock.patch.object(roads, "LEVEL_SPACING", True):
+            got = dict((tuple(e), lf) for e, lf in grading.bridge_lifts(span1, [span1, span2], [], z_at, chain=[span2],
+                                                                         rail_lines=[rail], classes=[]))
+            depth = roads.deck_depth(roads.geom_span([span1, span2]))
+            want = roads.deck_road_clear(depth, ["rail"]) + grading.APPROACH_MARGIN_M \
+                - roads.DECK_GRADE * (60.0 - grading.APPROACH_FLAT_M)
+        self.assertAlmostEqual(got[(0.0, 0.0)], want, places=6)
 
     def test_track_under_asks_less(self):
         deck = line(0.0, 80.0)
