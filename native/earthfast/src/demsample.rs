@@ -70,6 +70,26 @@ fn isqrt(v: i64) -> i64 {
     r
 }
 
+/// obj as a read-only array, copied first (by numpy) when its data are not aligned: a view into a packed buffer may
+/// be, and the views read here need aligned elements.
+fn aligned_f64<'py>(obj: &Bound<'py, PyAny>) -> PyResult<PyReadonlyArray1<'py, f64>> {
+    let a = obj.extract::<PyReadonlyArray1<'py, f64>>()?;
+    if a.is_aligned() {
+        return Ok(a);
+    }
+    drop(a);
+    obj.call_method0("copy")?.extract::<PyReadonlyArray1<'py, f64>>()
+}
+
+fn aligned_tile<'py>(obj: &Bound<'py, PyAny>) -> PyResult<PyReadonlyArray2<'py, f32>> {
+    let a = obj.extract::<PyReadonlyArray2<'py, f32>>()?;
+    if a.is_aligned() {
+        return Ok(a);
+    }
+    drop(a);
+    obj.call_method0("copy")?.extract::<PyReadonlyArray2<'py, f32>>()
+}
+
 #[inline]
 fn floor_i(v: f64) -> i64 {
     v.floor() as i64
@@ -117,7 +137,7 @@ fn sample_box(cfg: &Cfg, lat: &[f64], lon: &[f64], fetch: &Bound<'_, PyAny>, dep
             .collect();
         tid.sort_unstable();
         tid.dedup();
-        sparse = boxn > cfg.sparse_ratio * tid.len() as i64;
+        sparse = boxn > cfg.sparse_ratio.saturating_mul(tid.len() as i64);
     }
     if boxn > cfg.max_tiles || sparse {
         // spread-out points: groups of nearby tiles sampled separately (the same values), in the order of their
@@ -186,7 +206,7 @@ fn sample_box(cfg: &Cfg, lat: &[f64], lon: &[f64], fetch: &Bound<'_, PyAny>, dep
     let nkeys = keys.len();
     let got = fetch.call1((keys,))?;
     let arrs: Vec<PyReadonlyArray2<'_, f32>> = got.try_iter()?
-        .map(|a| a.and_then(|a| a.extract::<PyReadonlyArray2<'_, f32>>()))
+        .map(|a| a.and_then(|a| aligned_tile(&a)))
         .collect::<PyResult<_>>()?;
     if arrs.len() != nkeys {
         return Err(PyValueError::new_err("dem_sample: fetch returned another number of tiles than asked"));
@@ -209,12 +229,13 @@ fn sample_box(cfg: &Cfg, lat: &[f64], lon: &[f64], fetch: &Bound<'_, PyAny>, dep
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
 #[pyo3(signature = (lat, lon, zoom, tile, from_lat, max_tiles, sparse_min, sparse_ratio, sparse_group, fetch, polar))]
-pub fn dem_sample<'py>(py: Python<'py>, lat: PyReadonlyArray1<'py, f64>, lon: PyReadonlyArray1<'py, f64>, zoom: u32,
+pub fn dem_sample<'py>(py: Python<'py>, lat: Bound<'py, PyAny>, lon: Bound<'py, PyAny>, zoom: u32,
                        tile: i64, from_lat: f64, max_tiles: i64, sparse_min: i64, sparse_ratio: i64, sparse_group: i64,
                        fetch: Bound<'py, PyAny>, polar: Bound<'py, PyAny>) -> PyResult<Bound<'py, PyArray1<f64>>> {
-    if zoom > 40 || tile < 2 {
-        return Err(PyValueError::new_err("dem_sample: zoom up to 40, tiles of 2 pixels or more"));
+    if zoom > 30 || !(2..=1 << 20).contains(&tile) || !(1..=1 << 20).contains(&max_tiles) {
+        return Err(PyValueError::new_err("dem_sample: zoom up to 30, tiles of 2 to 2^20 pixels, up to 2^20 a box"));
     }
+    let (lat, lon) = (aligned_f64(&lat)?, aligned_f64(&lon)?);
     let (la, lo) = (lat.as_array(), lon.as_array());
     if la.len() != lo.len() {
         return Err(PyValueError::new_err("dem_sample: lat and lon differ in length"));
@@ -230,7 +251,7 @@ pub fn dem_sample<'py>(py: Python<'py>, lat: PyReadonlyArray1<'py, f64>, lon: Py
         let k = pla.len();
         let r = polar.call1((PyArray1::from_vec(py, pla), PyArray1::from_vec(py, plo)))?;
         if !r.is_none() {
-            let r = r.extract::<PyReadonlyArray1<'_, f64>>()?;
+            let r = aligned_f64(&r)?;
             let rv = r.as_array();
             if rv.len() != k {
                 return Err(PyValueError::new_err("dem_sample: polar returned another number of heights"));

@@ -1701,7 +1701,9 @@ class Dem:
         """(dem_sample's polar) heights at points past polardem.FROM_LAT, None when the polar DEM can't be had."""
         px = 40075016.686 * dmath.cos(math.radians(MAX_LAT)) / (TILE * 2 ** zoom)
         try:
-            return np.broadcast_to(np.asarray(self.polar().sample(lat, lon, px), np.float64), lat.shape)
+            out = np.zeros(lat.shape, np.float64)
+            out[np.ones(lat.shape, bool)] = self.polar().sample(lat, lon, px)     # (numpy's assignment rules, as before)
+            return out
         except (netfetch.FetchError, OSError, ValueError) as e:
             log.warning("polar DEM unavailable (%s): sea level there", e)
             return None

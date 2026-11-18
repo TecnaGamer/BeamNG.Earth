@@ -349,6 +349,11 @@ class SampleReadsOnlyItsTilesTest(unittest.TestCase):
             g = dem.sample(np.array([[40.0], [40.01]]), np.array([-73.9, -73.8, -73.7]), z)
             self.assertEqual((g.shape, g.dtype), ((2, 3), np.float64))
             self.assertEqual(dem.sample(np.zeros(0), np.zeros(0), z).shape, (0,))
+            # (coordinates in a packed buffer, not aligned: copied before the kernel reads them)
+            lat = np.frombuffer(b"\0" + np.array([40.0, 40.01]).tobytes(), np.float64, 2, 1)
+            lon = np.frombuffer(b"\0" + np.array([-73.9, -73.8]).tobytes(), np.float64, 2, 1)
+            self.assertFalse(lat.flags.aligned)
+            np.testing.assert_array_equal(dem.sample(lat, lon, z), dem.sample(lat.copy(), lon.copy(), z))
 
 if __name__ == "__main__":
     unittest.main()
