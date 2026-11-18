@@ -1202,6 +1202,15 @@ def predict_route_chain(xy, px, py, vx, vy, cx, cy, rule, n, at=None, ahead_s=RO
     return out
 
 
+def moved_xy(src, dst, xy):
+    """The line xy ((k, 2) in frame src's plane) in frame dst's, or None when there is none."""
+    if xy is None or len(xy) == 0:
+        return None
+    xy = np.asarray(xy, np.float64)
+    e, n, _ = dst.ecef_to_enu(*src.enu_to_ecef(xy[:, 0], xy[:, 1], 0.0))
+    return np.stack([np.asarray(e, np.float64), np.asarray(n, np.float64)], 1)
+
+
 def _num(msg, name, default=None):
     v = msg.get(name, default)
     if v is None:
@@ -5895,6 +5904,9 @@ class Server:
             aid = getattr(c, "active", None)
             keep |= {(aid, b.cx, b.cy) for b in [getattr(c, "predicted_block", None),
                                                  *(getattr(c, "predicted_chain", None) or ())] if b is not None}
+            to = getattr(c, "rebase_to", None)      # (and the blocks past the rebase it asked for: predict_rebase)
+            if to is not None:
+                keep |= {(to[0].id, b.cx, b.cy) for b in getattr(c, "rebase_chain", None) or ()}
             for (cx, cy), t in list((getattr(c, "chain_wanted_at", None) or {}).items()):
                 wanted[(aid, cx, cy)] = max(t, wanted.get((aid, cx, cy), t))
         rest = sorted((k for k in self.hm if k not in keep), key=lambda k: wanted.get(k, -math.inf))
@@ -8011,6 +8023,8 @@ class Connection:
         self.caught_up_at = None
         self.predicted_block = None     # the terrain the prefetch expects next
         self.predicted_chain = []       # ... and after it, a fast player's (PREFETCH_CHAIN; blocks)
+        self.rebase_to = None           # (anchor, cx, cy): the anchor a rebase asked for and its first block's centre
+        self.rebase_chain = []          # ... and the blocks the mod asks for after it there (predict_rebase)
         self.track = aheadpath.Track()  # the player's recent headings (its turn: map_ahead's path)
         self.load_map_until = 0.0       # the loading map's window asked until (monotonic)
         self.load_map_at = 0.0
@@ -9923,6 +9937,9 @@ class Connection:
             raise
         except Exception as e:
             log.exception("anchor request %s failed during %s", req, progress["stage"])
+            to = getattr(self, "rebase_to", None)
+            if to is not None and to[0] is progress.get("anchor"):
+                self.rebase_to, self.rebase_chain = None, []        # (no rebase to it: nothing built past it)
             if not progress["done"]:
                 self.teleport_pending = False
                 self.unabandon_old()
@@ -10009,6 +10026,9 @@ class Connection:
         anchor = self.s.new_anchor(lat, lon)
         anchor.ramp = teleport
         self.preparing_aid = anchor.id
+        # (a rebase while driving: the blocks the mod asks for after it are built from now on, predict_rebase)
+        self.rebase_to, self.rebase_chain = (None if teleport else (anchor, cx, cy)), []
+        progress["anchor"] = anchor
         if getattr(self, "road_geo", False) and getattr(self, "swap_gen", False) and Server.stale_allowed(self.s):
             # (its last version shown while this one is built, when this one has no first block yet: stale_run)
             self.veg.digests = True
@@ -10058,7 +10078,10 @@ class Connection:
                 info = await asyncio.get_running_loop().run_in_executor(
                     self.s.hm_pool, self.s.make_provisional, anchor, cx, cy, self._progress(), place or (0.0, 0.0))
             else:
-                info = await self.s.terrain(anchor, cx, cy, self._progress())
+                # (a rebase while driving: a block as any the mod asks for, in the block process, and a fast player's
+                # without waiting for its photo, PHOTO_SKIP_V. Built here it took 8.7 s at 345 km/h, 4.7 s of them the
+                # photo, and the mod asks 3 s before the rebase: committed 6 s late, the car 560 m past its centre)
+                info = await self.s.terrain(anchor, cx, cy, self._progress() if teleport else None)
         finally:
             pacer.foreground_end()
         progress["stage"] = "finalizing"
@@ -10352,6 +10375,12 @@ class Connection:
         self.node_changed = {n: t for n, t in self.node_changed.items() if len(n) == 4}
         self.failed.clear()
         self.block = self.pending_block = self.predicted_block = None
+        # (the blocks built past the rebase are this frame's chain until its first pose predicts it: evict_heightmaps
+        # keeps what a prediction lists)
+        to, self.rebase_to = getattr(self, "rebase_to", None), None
+        self.predicted_chain = list(self.rebase_chain) if to is not None and to[0].id == aid else []
+        self.rebase_chain = []
+        self.chain_wanted_at = {(b.cx, b.cy): time.monotonic() for b in self.predicted_chain}
         if anchor.first_terrain is not None:
             self._set_block(aid, *anchor.first_terrain)
         log.info("commit anchor %d", aid)
@@ -10669,6 +10698,9 @@ class Connection:
                     if ready is not None and cs and self.predicted_block is not None:
                         self.predicted_block, cs = self.s.layout.block_at(*cs[0]), cs[1:]
                 self.predicted_chain = [self.s.layout.block_at(*c) for c in cs]
+        self.rebase_chain = self.predict_rebase()
+        if self.rebase_chain:
+            self.predicted_chain = []       # (this frame's blocks past the rebase are never asked for)
         if (self.map_view or self.map_open) and self.eye:
             # the 3D map zoomed far in (the user, 2026-11-07: "no matter where i am it should only take a couple seconds
             # to see detailed terrain"): coarse first there too, as at a new anchor (commit_anchor), not the finest of
@@ -10871,9 +10903,49 @@ class Connection:
         done, wanted = self.roads.progress() if self.roads is not None else (0, 0)
         return (wanted > 0 and done * 2 >= wanted) or time.monotonic() - t0 >= NAV_WAIT_S
 
+    def predict_rebase(self):
+        """The blocks the mod asks for after the rebase it asked an anchor for (rebase_to: that anchor, its first
+        block's centre): a fast player's chain in that anchor's frame from its first block on, along the GPS route,
+        else the road the player drives on (this frame's road ahead moved into it), else straight; [] when no rebase
+        is asked for or the player is slower than FAST_BASE_V. maybe_prefetch builds them from the request on. The mod
+        asks for the anchor 300 m before the rebase (rebase.PREFETCH_MARGIN), 3 s at 345 km/h, and the prediction began
+        at the commit: of the new anchor only its first block was built, the next two were asked for 0.4 s after the
+        commit and took 6.8 and 7.8 s, the car held at the edge, while the old anchor's chain went on building the 8
+        blocks past the rebase that nobody asks for (the A2 at Herford, 2026-11-18)."""
+        to, old = self.rebase_to, self.s.anchors.get(self.active)
+        self.rebase_at, self.rebase_by, self.rebase_knows_ready = {}, "straight", False
+        # (driving on away from the origin: the rebase is at hand; turned back, this frame's blocks go on)
+        if to is None or old is None or to[0].id == self.active or not self.following \
+                or math.hypot(*self.vel) <= FAST_BASE_V or Server.is_abandoned(self.s, to[0].id) \
+                or self.focus[0] * self.vel[0] + self.focus[1] * self.vel[1] <= 0:
+            return []
+        anchor, cx, cy = to
+        px, py, qx, qy = (float(v) for v in moved_xy(old.frame, anchor.frame, [self.focus, (
+            self.focus[0] + self.vel[0], self.focus[1] + self.vel[1])]).ravel())
+        vx, vy = qx - px, qy - py
+        rule = self.s.follow
+        ready = self.blocks_known(anchor.id, px, py) if self.s.fast and getattr(self, "ready_set", False) else None
+        self.rebase_knows_ready = ready is not None
+        at = self.rebase_at
+        cs = predict_route_chain(self.route_xy(anchor.id, anchor), px, py, vx, vy, cx, cy, rule, PREFETCH_CHAIN + 1, at,
+                                 ready=ready)
+        if cs:
+            self.rebase_by = "route"
+        else:
+            road = moved_xy(old.frame, anchor.frame, self.road_xy(self.active, *self.focus))
+            self.rebase_road = (anchor.id, road)    # (road_xy: the new frame's road ahead until its own lines are read)
+            cs = predict_route_chain(road, px, py, vx, vy, cx, cy, rule, ROAD_CHAIN + 1, at, ROAD_AHEAD_S,
+                                     ROAD_AHEAD_MAX_M, ready=ready)
+            if cs:
+                self.rebase_by = "road"
+            else:
+                cs = predict_chain(px, py, vx, vy, cx, cy, rule, PREFETCH_CHAIN, at, ready=ready)
+        return [self.s.layout.block_at(*c) for c in cs]
+
     def road_xy(self, aid, x, y):
         """The road the player drives on ahead ((k, 2) in anchor aid's frame, roadahead.py), or None; followed again
-        once the player moved ROAD_MOVE_M."""
+        once the player moved ROAD_MOVE_M. Just after a rebase, the new anchor's road lines not read yet: the road
+        ahead as the old frame had it (predict_rebase), so the chain goes on along the road and not straight."""
         ra, anchor = getattr(self.s, "road_ahead", None), self.s.anchors.get(aid)
         if ra is None or anchor is None:
             return None
@@ -10885,22 +10957,32 @@ class Connection:
         except Exception:
             log.exception("road ahead failed")
             xy = None
+        kept, keys = getattr(self, "rebase_road", None), getattr(ra, "net_keys", None)
+        if kept is not None and kept[0] == aid:
+            if keys is not None and not any(k[0] == aid for k in keys):
+                xy = kept[1]            # (the lines it has are the last anchor's still)
+            else:
+                self.rebase_road = None
         self._road_xy = (aid, x, y, xy, ra.net)
         return xy
 
-    def route_xy(self, aid):
-        """The last planned GPS route's line in anchor aid's frame ((k, 2), kept per route and anchor), or None."""
+    def route_xy(self, aid, anchor=None):
+        """The last planned GPS route's line in anchor aid's frame ((k, 2), kept per route and anchor), or None.
+        anchor: aid's when it is not among the server's yet (a rebase's, its first block still building)."""
         pts = self.route_points
-        anchor = self.s.anchors.get(aid)
+        anchor = anchor or self.s.anchors.get(aid)
         if not pts or anchor is None or len(pts) < 2:
             return None
-        got = getattr(self, "_route_xy", None)
-        if got is not None and got[0] == aid and got[1] is pts:
-            return got[2]
+        kept = self.__dict__.setdefault("_route_xy", {})
+        got = kept.get(aid)
+        if got is not None and got[0] is pts:
+            return got[1]
         ll = np.asarray(pts, np.float64)
         e, n_, _ = anchor.frame.geodetic_to_enu(ll[:, 0], ll[:, 1], 0.0)
         xy = np.stack([np.asarray(e, np.float64), np.asarray(n_, np.float64)], 1)
-        self._route_xy = (aid, pts, xy)
+        for k in [k for k in kept if k not in (self.active, aid)]:
+            del kept[k]                 # (the frames left)
+        kept[aid] = (pts, xy)
         return xy
 
     def camera_away(self, cam):
@@ -11704,10 +11786,11 @@ class Connection:
             self.ready_sent = cs
             self.send({"type": "terrain_ready_set", "anchorId": aid, "centres": [[float(cx), float(cy)] for cx, cy in cs]})
 
-    def blocks_known(self, aid):
+    def blocks_known(self, aid, px=None, py=None):
         """The centres of anchor aid's blocks built or being built (the mod's ready set once they are: send_ready_set),
-        within READY_SET_M of the player."""
-        px, py = self.focus
+        within READY_SET_M of the player ((px, py) in aid's frame when it is not the active one: predict_rebase)."""
+        if px is None:
+            px, py = self.focus
         busy = getattr(self, "prefetch_busy", ())
         return {(float(cx), float(cy)) for (a, cx, cy) in list(self.s.hm) + list(self.s.hm_inflight) + list(busy)
                 if a == aid and max(abs(cx - px), abs(cy - py)) <= READY_SET_M}
@@ -11752,7 +11835,8 @@ class Connection:
 
     def maybe_prefetch(self):
         """Speculatively build the terrain the mod is about to ask for: the predicted block, and a fast player's chain
-        after it (PREFETCH_CHAIN), in order, PREFETCH_PARALLEL at once."""
+        after it (PREFETCH_CHAIN), in order, PREFETCH_PARALLEL at once. A rebase asked for (rebase_to): the next
+        block of this frame, then the chain of the new anchor's (predict_rebase)."""
         anchor = self.s.anchors.get(self.active)
         if anchor is None:
             return
@@ -11767,18 +11851,26 @@ class Connection:
             wat[(b.cx, b.cy)] = now
         if len(wat) > 256:
             self.chain_wanted_at = {k: t for k, t in wat.items() if now - t <= 60.0}
-        for b in want:
+        cur = (self.block.cx, self.block.cy) if self.block is not None else None
+        by, knows = getattr(self, "predicted_by", "straight"), getattr(self, "chain_knows_ready", False)
+        jobs = [(anchor, b, at.get((b.cx, b.cy)), by, knows, cur) for b in want]
+        to, ahead = getattr(self, "rebase_to", None), getattr(self, "rebase_chain", None)
+        if to is not None and ahead:
+            rat = getattr(self, "rebase_at", {})
+            jobs[1:1] = [(to[0], b, rat.get((b.cx, b.cy)), getattr(self, "rebase_by", "straight") + ", past the rebase",
+                          getattr(self, "rebase_knows_ready", False), (to[1], to[2])) for b in ahead]
+        for anchor, b, where, by, knows, cur in jobs:
             if len(busy) >= PREFETCH_PARALLEL:
                 return
             key = (anchor.id, b.cx, b.cy)
             if key in busy or self.s.terrain_cached(key):
                 continue
-            if not getattr(self, "chain_knows_ready", False) and self.ready_will_do(anchor, b, at.get((b.cx, b.cy)), busy):
+            if not knows and self.ready_will_do(anchor, b, where, busy, cur):
                 continue                # (a chain that knows them has left out what a built block stands in for)
             busy.add(key)
             self.prefetching = True
 
-            async def run(cx=b.cx, cy=b.cy, key=key, by=getattr(self, "predicted_by", "straight")):
+            async def run(anchor=anchor, cx=b.cx, cy=b.cy, key=key, by=by):
                 try:
                     await self.s.terrain(anchor, cx, cy, lane=LANE_PREFETCH)
                     log.info("prefetched terrain (%d, %.0f, %.0f) predicted %s", anchor.id, cx, cy, by)
@@ -11791,17 +11883,16 @@ class Connection:
                     self.prefetching = bool(busy)
             self.spawn(run())
 
-    def ready_will_do(self, anchor, b, where, busy):
+    def ready_will_do(self, anchor, b, where, busy, cur=None):
         """Would the mod take a block built (or being built) already instead of predicted block b (follow.lua
-        preferReady: within READY_STEPS grid steps of its target, the player within reach of it where it asks)? Then b
-        is not built: each pose's prediction a grid step off the last built another block, 55 built for 24 asked for
-        at 150 mph down Midtown (nyc_speed.py 2026-11-02)."""
+        preferReady: within READY_STEPS grid steps of its target, the player within reach of it where it asks, not
+        its own block's centre cur)? Then b is not built: each pose's prediction a grid step off the last built
+        another block, 55 built for 24 asked for at 150 mph down Midtown (nyc_speed.py 2026-11-02)."""
         if where is None:
             return False
         rule = self.s.follow
         _lead, reach, _ahead = rule.mode(*self.vel)
         lim = READY_STEPS * rule.grid
-        cur = (self.block.cx, self.block.cy) if self.block is not None else None
         keys = [k for k in list(self.s.hm) + list(self.s.hm_inflight) + list(busy) if k[0] == anchor.id]
         for _a, kx, ky in keys:
             if (kx, ky) == (b.cx, b.cy) or (kx, ky) == cur:

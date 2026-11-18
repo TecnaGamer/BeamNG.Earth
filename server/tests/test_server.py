@@ -591,6 +591,37 @@ class ServerTest(ServerHarness):
             s.hm.clear()
             s.removes_flush()
 
+    @mock.patch.object(earthd, "HM_CACHE", 6)
+    def test_blocks_built_past_a_rebase_survive_eviction(self):
+        """The blocks built for the anchor a rebase asked for (Connection.predict_rebase) stay as the ones this
+        frame's prediction lists do: no prediction of this frame lists them, and they were the first to go."""
+        s = self.server
+        frame = s.new_anchor(LAT, LON).frame
+        new = earthd.Anchor(2, LAT, LON, frame)
+        s.anchors = {1: earthd.Anchor(1, LAT, LON, frame)}
+        block = s.layout.block_at
+        past = [(2, 384.0 * i, 0.0) for i in range(1, 5)]
+        behind = [(1, 384.0 * i, 0.0) for i in range(-6, 0)]
+
+        class Conn:
+            active = 1
+            predicted_block = None
+            predicted_chain = []
+            chain_wanted_at = {k[1:]: 50.0 for k in behind}
+            rebase_to = (new, 0.0, 0.0)
+            rebase_chain = [block(*k[1:]) for k in past]
+        s.connections = {Conn()}
+        try:
+            for key in past + behind:
+                s.hm[key] = {}
+            s.evict_heightmaps()
+            self.assertEqual([k for k in past if k not in s.hm], [])
+            self.assertEqual(len(s.hm), 6)
+        finally:
+            s.connections = set()
+            s.hm.clear()
+            s.removes_flush()
+
     def test_a_slow_terrain_request_is_logged_and_still_answered(self):
         c = self.c
         self.hello()
@@ -1042,6 +1073,49 @@ class MeshServer64Test(MeshServerTest):
         while conn.predicted_block != want and time.monotonic() < end:
             time.sleep(0.01)
         self.assertEqual(conn.predicted_block, want)
+
+
+    def test_blocks_past_a_rebase_are_built_from_its_request(self):
+        """A fast player's rebase: from its request on the blocks the mod asks for after it are built in the new
+        anchor's frame (Connection.predict_rebase), this frame's chain past it is not; at the commit they are the new
+        frame's chain."""
+        far, aid, _, _, _ = self.start()
+        c, conn, s = self.c, self.conn(), self.server
+        v = 68.0                                            # 345 km/h, north-east, away from the origin
+        self.pose(aid, 600.0, 600.0, v, v)
+        lat2, lon2, _ = s.anchors[aid].frame.enu_to_geodetic(600.0, 600.0, 0.0)
+        aid2 = self.prepare_anchor(7, float(lat2), float(lon2), cx=256, cy=256, purpose="rebase")["anchorId"]
+        self.assertEqual((conn.rebase_to[0].id, conn.rebase_to[1:]), (aid2, (256.0, 256.0)))
+        self.pose(aid, 700.0, 700.0, v, v)                  # (still this frame's: the mod commits at its distance)
+        end = time.monotonic() + 10
+        while not conn.rebase_chain and time.monotonic() < end:
+            time.sleep(0.01)
+        chain = [(aid2, b.cx, b.cy) for b in conn.rebase_chain]
+        self.assertGreaterEqual(len(chain), 2, chain)
+        self.assertEqual(conn.predicted_chain, [])
+        self.assertTrue(all(k[1] > 256.0 or k[2] > 256.0 for k in chain), chain)
+        end = time.monotonic() + 60
+        while chain[0] not in s.hm and time.monotonic() < end:
+            self.pose(aid, 700.0, 700.0, v, v)
+            time.sleep(0.05)
+        self.assertIn(chain[0], s.hm, "built before the commit")
+        self.assertEqual(conn.active, aid)
+        c.send({"type": "commit_anchor", "anchorId": aid2})
+        end = time.monotonic() + 10
+        while conn.active != aid2 and time.monotonic() < end:
+            time.sleep(0.01)
+        self.assertEqual(conn.active, aid2)
+        self.assertIsNone(conn.rebase_to)
+        self.assertEqual(conn.rebase_chain, [])
+        self.assertIn(chain[0], s.hm)
+        self.assertEqual(conn.block, ff.Block(256.0, 256.0, 1024))
+        # the new frame's own prediction goes on with them: no other block instead of the first one built
+        self.pose(aid2, 100.0, 100.0, v, v, held=[aid])
+        end = time.monotonic() + 10
+        while conn.focus != (100.0, 100.0) and time.monotonic() < end:
+            time.sleep(0.01)
+        ahead = [b for b in [conn.predicted_block] + list(conn.predicted_chain) if b is not None]
+        self.assertEqual((aid2, ahead[0].cx, ahead[0].cy), chain[0])
 
 
 class MeshServer64HorizonTest(ServerHarness):
