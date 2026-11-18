@@ -573,6 +573,20 @@ class RailwayTest(unittest.TestCase):
         self.assertEqual(railways.drawn(f, 1), ("standard_gauge", 2))
         self.assertEqual(railways.drawn(f, 2), ("standard_gauge", 0), "a street running track in use is drawn")
 
+    def test_drawn_follows_columns_added_after_a_first_ask(self):
+        """drawn() keeps a layer's answers (earthfast.rail_drawn_cols) only while its columns are the same: the OSM
+        tags railtags.py attaches later, or a new flags table, decide the next ask."""
+        f = features([[(0.0, 100.0), (250.0, 100.0)], [(0.0, 120.0), (250.0, 120.0)]], ["standard_gauge", "tram"],
+                     subtypes=["rail"] * 2)
+        self.assertEqual(railways.drawn(f, 0), ("standard_gauge", 0))
+        self.assertIsNone(railways.drawn(f, 1))
+        self.assertEqual(railways.drawn(f, 1, bridges=True), ("tram", 0), "a tram's bridges")
+        f.attrs["osm_railway"] = np.array(["abandoned", "tram"], object)
+        self.assertEqual(railways.drawn(f, 0), ("standard_gauge", 2))
+        self.assertIsNone(railways.drawn(f, 1))
+        f.rules["flags"] = railways.mapgeom.rule_table([(0, "is_under_construction", (0.0, 0.75))], "text")
+        self.assertIsNone(railways.drawn(f, 0), "most of it under construction")
+
     def test_proposed_and_unbuilt_lines_are_not_drawn(self):
         """Overture's "unknown" rail with no abandoned or disused flag is OpenStreetMap's railway=proposed or
         construction (Link Union Station across US-101, 2026-10-27); a line under construction neither."""

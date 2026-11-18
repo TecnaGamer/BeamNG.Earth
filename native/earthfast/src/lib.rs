@@ -125,6 +125,7 @@ mod vegclumps;
 mod roadwear;
 mod roadtone;
 mod railbeds;
+mod raildrawn;
 mod railxing;
 mod roadnet;
 mod structures;
@@ -6697,6 +6698,9 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 483: the full port's railways._avg / bed_heights (railbeds::rail_bed_heights: every ground part of one
     // railways.profile in one call, numpy's cumsum order). (r2a7 was given 473-479, but dev's module is 480 already
     // (rs-s1): VERSION has to pass 480 so that a 480 module, which lacks it, fails the start check)
-    m.add("VERSION", 483)?;
+    m.add_function(wrap_pyfunction!(raildrawn::rail_drawn_cols, m)?)?;
+    // 486: the full port's railways.drawn / wear (raildrawn::rail_drawn_cols: a layer's drawn class and wear per
+    // feature in one pass, the glue reading the columns). 484 and 485 are other branches'
+    m.add("VERSION", 486)?;
     Ok(())
 }
