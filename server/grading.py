@@ -6077,14 +6077,15 @@ class _Planner:
         or plan asks): {"bridges": [(line (m, 2), class, link)], "ground": [(line, class, link, built, feature id)]}.
         Its pieces are made here from the level ranges of the very layers they come from (the layer's own, or its
         features' home copies' as they are now: never the pieces another reader left in the layer's memory, which may
-        stem from a home copy since replaced). Kept per cell when read complete (nothing read short, and none of those
-        layers' ranges made short: roads._cell_ranges' _ranges_short_until; such a read is said short every time)."""
+        stem from a home copy since replaced). Kept per cell when read complete (nothing read short, and every one of
+        those layers' ranges done (no other thread still making them) and not made short: roads._cell_ranges'
+        _ranges_short_until, marked before done; such a read is said short every time)."""
         got, res = self._memo_get("_raw_lines_memo", str(k))
         if got:
             return res
         f = self.md.cell(k, layers=("roads",), kind="demand").layers.get("roads")
         out = {"bridges": [], "ground": []}
-        short = False
+        used = {}                       # (the layers whose level ranges were read)
         if f is not None and len(f):
             bs = roadsmod.bridge_specs(f)
             rs = roadsmod.road_specs(f, None, self.widths)
@@ -6096,10 +6097,10 @@ class _Planner:
                 h = roadsmod.home_copy(f, i) if roadsmod.HOME_RANGES_ON else None
                 if h is not None:
                     rngs = roadsmod.home_ranges(f, i, h[0], h[1], roadsmod.level_ranges(h[0], h[1], _home=False))
-                    short = short or h[0].__dict__.get("_ranges_short_until") is not None
+                    used[id(h[0])] = h[0]
                 else:
                     rngs = roadsmod.level_ranges(f, i, _home=False)
-                    short = short or f.__dict__.get("_ranges_short_until") is not None
+                    used[id(f)] = f
                 for kind, sp, want in (("bridges", bs[i], "bridge"), ("ground", rs[i], "ground")):
                     ps = roadsmod._parts_by_level_new(f, i, want, rngs=list(rngs)) if sp is not None else ()
                     for ring in ps:
@@ -6119,6 +6120,10 @@ class _Planner:
                         out[kind].append((line, cls, _is_link(sp)))
                     else:
                         out[kind].append((line, cls, _is_link(sp), sp.kind in roadsmod.BUILT, fid))
+        # (read after the pieces: a layer whose ranges another thread is still making (not done: its entries visible as
+        # they come) or made short (marked before it is said done) makes this read short)
+        short = any(lay.__dict__.get("_ranges_state") != "done" or lay.__dict__.get("_ranges_short_until") is not None
+                    for _i, lay in sorted(used.items(), key=lambda kv: kv[0]))
         if short:
             # (ranges made short, or taken from a short shared entry: the layers keep them, and a read again says
             # nothing. Short here too, every time, and never kept: roads._cell_ranges' mark)

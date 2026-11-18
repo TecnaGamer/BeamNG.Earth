@@ -889,13 +889,13 @@ def _cell_ranges(feats, load_only=False):
             import xproc
             xproc.release(run_path + ".lock")
         raise
+    clean = revisit.thread_faults() == f0
+    if not clean:                       # (the layer's ranges made short: said on it, as for a short shared entry, before
+        st["_ranges_short_until"] = time.monotonic() + FACTS_SHORT_S    # they are said done: a reader seeing done sees it)
     st["_ranges_state"] = "done"
     if FACTS_LOG:                       # (BNGE_FACTS_LOG: which process made which cell's facts, how long)
         log.info("cell facts %s made in %.2f s (pid %d)%s", st.get("_bnge_cell"), time.perf_counter() - t0, os.getpid(),
                  "" if revisit.thread_faults() == f0 else " short")
-    clean = revisit.thread_faults() == f0
-    if not clean:                       # (the layer's ranges made short: said on it, as for a short shared entry)
-        st["_ranges_short_until"] = time.monotonic() + FACTS_SHORT_S
     mk = _ranges_mem_key(st)
     if mk is not None:                  # (the lidar rule's too: a cell's answer stays the same for the session)
         with _FACTS_LOCK:

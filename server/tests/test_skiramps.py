@@ -411,6 +411,37 @@ class RawLinesShort(unittest.TestCase):
         length = lambda r: round(sum(float(np.hypot(*np.diff(b[0], axis=0).T).sum()) for b in r["bridges"]), 3)  # noqa: E731
         self.assertNotEqual(length(first), length(second), "not the short copy's")
 
+    def test_ranges_still_being_made(self):
+        # (Codex review of round 5: another thread is still making the layer's ranges, its entries visible as they
+        # come; then it finishes short, marked before done; then a complete layer. Neither the cell's lines nor a
+        # landing built on them is kept until the complete one)
+        import mapcells
+        site, key = self.layer()
+        f = site.cells[key]
+        f.__dict__.pop("_ranges_short_until", None)
+        k = mapcells.CellKey(*(int(v) for v in key.split("/")))
+        g = self.planner(f)
+        with mock.patch.object(roads, "LIDAR_GAPS_ON", False):
+            roads.ground_parts(f, 0)                    # (the entries there, as a build half way leaves them)
+            la, lo, _ = g.frame.enu_to_geodetic(np.array([5.0]), np.array([-25.0]), 0.0)
+            for state, mark in (("busy", None), ("done", 1e18)):
+                f.__dict__["_ranges_state"] = state
+                if mark is not None:
+                    f.__dict__["_ranges_short_until"] = mark
+                with revisit.scope() as b:
+                    g._raw_lines(k)
+                    g._fast_landings(la, lo)
+                self.assertTrue(b.n, state)
+                self.assertNotIn(str(k), g.__dict__.get("_raw_lines_memo", {}), state)
+                self.assertFalse(g.__dict__.get("_landing_memo"), state)
+            f.__dict__.pop("_ranges_short_until", None)
+            with revisit.scope() as b:
+                g._raw_lines(k)
+                g._fast_landings(la, lo)
+            self.assertFalse(b.n)
+            self.assertIn(str(k), g._raw_lines_memo)
+            self.assertTrue(g._landing_memo, "the landings kept once complete")
+
     def test_cell_ranges_mark_a_short_entry(self):
         import time
         site, key = self.layer()
