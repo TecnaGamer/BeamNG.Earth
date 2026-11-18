@@ -249,12 +249,11 @@ struct Mm<T> {
 }
 
 impl<T: Fl> Mm<T> {
-    /// The products summed in the Python's order; TRACK: each ufunc call's flags (k <= 8: [mul0, -, mul1, add1, ..];
-    /// k > 8: [mul, reduce]).
-    fn run<const TRACK: bool>(&self, ops: &mut [u8]) -> Vec<T> {
+    /// The products summed in the Python's order into out (reserved whole by the caller); TRACK: only each ufunc
+    /// call's flags (k <= 8: [mul0, -, mul1, add1, ..]; k > 8: [mul, reduce]), out untouched. prods: the pairwise
+    /// sum's scratch (k reserved by the caller where pw).
+    fn run<const TRACK: bool>(&self, ops: &mut [u8], out: &mut Vec<T>, prods: &mut Vec<T>) {
         let (n, k, m) = (self.n, self.k, self.m);
-        let mut out = Vec::with_capacity(self.blocks.len() * n * m);
-        let mut prods: Vec<T> = if k > 8 && self.pw { Vec::with_capacity(k) } else { Vec::new() };
         for &(oa, ob) in &self.blocks {
             let (a, b) = (&self.a[oa..oa + n * k], &self.b[ob..ob + k * m]);
             for i in 0..n {
@@ -273,7 +272,7 @@ impl<T: Fl> Mm<T> {
                             }
                             s = t;
                         }
-                        out.push(s);
+                        if !TRACK { out.push(s); }
                     } else if self.pw {
                         prods.clear();
                         for q in 0..k {
@@ -283,10 +282,9 @@ impl<T: Fl> Mm<T> {
                             prods.push(p);
                         }
                         let mut fl = 0u8;
-                        let ps = pairwise::<T, TRACK>(&prods, 0, &mut fl);
+                        let ps = pairwise::<T, TRACK>(prods, 0, &mut fl);
                         let s = ad(T::ZERO, ps);
-                        if TRACK { ops[1] |= fl | flags(T::ZERO, ps, s); }
-                        out.push(s);
+                        if TRACK { ops[1] |= fl | flags(T::ZERO, ps, s); } else { out.push(s); }
                     } else {
                         let mut s = T::ZERO;
                         for q in 0..k {
@@ -299,12 +297,11 @@ impl<T: Fl> Mm<T> {
                             }
                             s = t;
                         }
-                        out.push(s);
+                        if !TRACK { out.push(s); }
                     }
                 }
             }
         }
-        out
     }
 }
 
@@ -525,15 +522,21 @@ fn compute<'py, T: Fl>(py: Python<'py>, ua: &Bound<'py, PyUntypedArray>, ub: &Bo
         k_inner(&dims, &iter_strides(&sha, &sta, nd), &iter_strides(&shb, &stb, nd))
     };
     let mm = Mm { a, b, blocks, n, k, m, pw };
+    let nomem = || PyMemoryError::new_err("dm_matmul: no memory for the result");
+    let (mut out, mut prods) = (Vec::new(), Vec::new());
+    out.try_reserve_exact(total).map_err(|_| nomem())?;
+    if pw {
+        prods.try_reserve_exact(k).map_err(|_| nomem())?;
+    }
     let mut none = [0u8; 0];
-    let out = if total.saturating_mul(k) > DETACH_WORK {
-        py.detach(|| mm.run::<false>(&mut none))
+    if total.saturating_mul(k) > DETACH_WORK {
+        py.detach(|| mm.run::<false>(&mut none, &mut out, &mut prods));
     } else {
-        mm.run::<false>(&mut none)
-    };
+        mm.run::<false>(&mut none, &mut out, &mut prods);
+    }
     if !out.iter().all(|v| v.finite()) {
         let mut ops = vec![0u8; if k <= 8 { 2 * k } else { 2 }];
-        let _ = mm.run::<true>(&mut ops);
+        mm.run::<true>(&mut ops, &mut Vec::new(), &mut prods);
         report::<T>(py, &ops, k)?;
     }
     if shape.is_empty() {

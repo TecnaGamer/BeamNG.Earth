@@ -500,6 +500,37 @@ class EmptyAndHugeTest(unittest.TestCase):
                     self.assertIs(got[1], want[1], (a.shape, b.shape))
 
 
+    def test_cast_broadcast_operand_is_not_materialised(self):
+        """A float32 operand broadcast to 2^30 stacks, an empty result: never cast whole (Codex review of 5ba7172b:
+        a 72 GiB cast)."""
+        a = np.zeros((1, 0, 9))
+        b = np.broadcast_to(np.ones((1, 9, 1), np.float32), (2 ** 30, 9, 1))
+        self.assertTrue(same(dnp.matmul(a, b), ref_matmul(a, b)))
+        b = np.broadcast_to(np.ones((1, 0, 1), np.float32), (2 ** 30, 0, 1))
+        self.assertTrue(same(dnp.matmul(np.zeros((1, 0, 0)), b), ref_matmul(np.zeros((1, 0, 0)), b)))
+
+    @unittest.skipUnless(sys.platform.startswith("linux"), "RLIMIT_AS")
+    def test_out_of_memory_raises(self):
+        """A result the address space cannot hold: MemoryError, the interpreter alive (Codex review of 5ba7172b: an
+        infallible Vec aborted)."""
+        import subprocess
+        code = (
+            "import os, resource, sys\n"
+            f"sys.path.insert(0, {os.path.join(os.path.dirname(os.path.abspath(__file__)), '..')!r})\n"
+            "import numpy as np, dnp\n"
+            "a, b = np.ones((4096, 1)), np.ones((1, 4096))\n"
+            "vm = int([l for l in open('/proc/self/status') if l.startswith('VmSize')][0].split()[1]) * 1024\n"
+            "resource.setrlimit(resource.RLIMIT_AS, (vm + (64 << 20), resource.RLIM_INFINITY))\n"
+            "try:\n"
+            "    dnp.matmul(a, b)\n"
+            "    print('NO ERROR')\n"
+            "except MemoryError:\n"
+            "    print('MEMORYERROR')\n")
+        r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=120)
+        self.assertEqual(r.returncode, 0, r.stderr[-2000:])
+        self.assertEqual(r.stdout.strip(), "MEMORYERROR", r.stderr[-2000:])
+
+
 class ContractTest(unittest.TestCase):
     def test_kernel_refuses_bad_strides(self):
         with self.assertRaises(TypeError):

@@ -138,9 +138,12 @@ def power(x, y):
 
 def _mm_cast(x, dt):
     """x as dt, and its strides where the cast copied it (the copy's layout can differ from x's; the kernel orders a
-    sum by the layout the Python's ufuncs saw)."""
-    y = x.astype(dt, copy=False)
-    return y, (None if y is x else x.strides)
+    sum by the layout the Python's ufuncs saw). Only the values x holds are cast: its broadcast (stride-0) axes stay
+    broadcast, so a huge broadcast view is never materialised (an empty result's operand included)."""
+    if x.dtype == dt:
+        return x, None
+    core = x[tuple(slice(0, 1) if s == 0 else slice(None) for s in x.strides)]
+    return np.broadcast_to(core.astype(dt), x.shape), x.strides
 
 
 def _mm(a, b):
