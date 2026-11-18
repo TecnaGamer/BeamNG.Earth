@@ -858,13 +858,16 @@ SHORT_TUNNEL_M = 60.0       # m: a "tunnel" this short is the line passing under
 
 
 def _str_rows(a):
-    """A column as UCS-4 rows of each value's str(v or "") (numpy's unicode arrays as they are), None for None."""
+    """A column as UCS-4 rows of each value's str(v or "") (numpy's unicode arrays as they are), None for None. An
+    object value's trailing NULs, which the rows' padding would drop, become one U+FFFF (the kernel only compares with
+    and searches for ASCII words and asks for emptiness: the same answers)."""
     if a is None:
         return None
     import fast
     a = np.asarray(a)
     if a.dtype.kind != "U":
-        a = np.array([str(v or "") for v in a.tolist()], dtype=str).reshape(-1)
+        s = [str(v or "") for v in a.tolist()]
+        a = np.array([x.rstrip("\0") + "￿" if x.endswith("\0") else x for x in s], dtype=str).reshape(-1)
     return fast.ucs4(a)
 
 
@@ -874,7 +877,10 @@ _DRAWN_CLASSES = ("standard_gauge", "narrow_gauge", "light_rail", "tram")   # (e
 def _drawn_cols(feats):
     """(plain, bridges, wear) lists over feats' features: drawn()'s class code (_DRAWN_CLASSES, -1 not drawn) with
     bridges False / True and its wear, made in one pass of the Rust a layer (earthfast.rail_drawn_cols; ~640k calls of
-    the Python a Manhattan visit) and kept on the layer while its columns are the same objects (railtags adds osm_*)."""
+    the Python a Manhattan visit) and kept on the layer while its columns are the same objects (railtags adds osm_*;
+    as RuleTable.rows and the layer's other memos, nothing edits a column in place). The flags' sums are Python 3.12+'s
+    compensated sum() (the release builds' 3.12): on a source install with 3.10 / 3.11, whose plain sum() could fall the
+    other side of half a line, the same answer as every other install."""
     a, t = feats.attrs, feats.rules.get("flags")
     src = (a.get("subtype"), a.get("class"), a.get("osm_railway"), a.get("osm_highway"), t,
            *((t.feature, t.start, t.end, t.value) if t is not None else ()), RAIL_LIFECYCLE)
