@@ -8529,7 +8529,9 @@ def _shallow_full_low(s, g, floor, kinds):
 # find-ground rule says it: a tunnel's natural height is the line between the ground at the ends of its whole chain, and
 # the ground at its end is the road's own level where it meets the mouth. So the road's last MOUTH_NEAR_M are its own
 # line from there to MOUTH_FAR_M back on, as a bridge's approach keeps its grade to the abutment (fill_abutment: which
-# only fills where the ground falls away, a mouth's ground is the hill over it, never the road: always).
+# only fills where the ground falls away, a mouth's ground is the hill over it, never the road: always). A tunnel's end
+# with no road joining it (Zurich Brunau: it goes on as a bridge, the node read 442.5 m off the face, the survey's road
+# 436) reads the same line outward from the mouth (TunnelProfiles._ends_ground).
 MOUTH_NEAR_M = 8.0          # m from the mouth the elevation is not the road's: the portal's face and its cutting ...
 MOUTH_FAR_M = 40.0          # ... the road's own grade read from there to this far
 MOUTH_STEP_M = 2.0          # m between the samples fill_mouth reads (grading.PROFILE_STEP)
