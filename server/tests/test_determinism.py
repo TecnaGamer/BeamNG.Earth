@@ -212,10 +212,24 @@ class DeterministicMathsTest(unittest.TestCase):
         self.assertEqual(dnp.interp(0.5, [0.0, 1.0], [1.0, 3.0]), 2.0)
         self.assertEqual(dnp.interp(np.arange(6).reshape(2, 3), [0, 5], [0, 10]).shape, (2, 3))
         self.assertEqual(dnp.interp([np.nan], [1.0], [4.0])[0], 4.0)   # (one sample point: numpy's own rule)
+        self.assertEqual(dnp.interp([], [], []).shape, (0,))        # (numpy: no points and no x is no error)
+        self.assertEqual(dnp.interp(np.zeros((0, 3)), [0.0, 1.0], [1.0, 2.0]).shape, (0, 3))
+        with self.assertRaises(ValueError):
+            dnp.interp([], [0.0, 1.0], [1.0])
         with self.assertRaises(ValueError):
             dnp.interp([1.0], [], [])
         with self.assertRaises(ValueError):
             dnp.interp([1.0], [0.0, 1.0], [0.0])
+        # (the contract: real-valued, non-periodic; anything else a TypeError, never numpy's other answer)
+        for args, kw in (((0.5, [0, 1], [0, 1j]), {}), ((0.5j, [0, 1], [0, 1]), {}), ((0.5, [0, 1j], [0, 1]), {}),
+                         ((0.5, [0, 1], [0, 1]), {"period": 2.0}), ((0.5, [0, 1], [0, 1]), {"left": 1j}),
+                         ((np.longdouble(0.5), [0, 1], [0, 1]), {}), (("a", [0, 1], [0, 1]), {}),
+                         ((0.5, np.array([0, 1], object), [0, 1]), {}), ((0.5, [0, 1], [0, 1]), {"right": [1, 2]})):
+            with self.assertRaises(TypeError, msg=(args, kw)):
+                dnp.interp(*args, **kw)
+        for x in (True, 1, np.float32(0.25), np.int64(1), np.array([0, 1], np.uint8), np.float16(0.5)):
+            self.assertEqual(np.asarray(dnp.interp(x, [0, 2], [1, 5])).tobytes(),
+                             np.asarray(np.interp(x, [0, 2], [1, 5])).tobytes())  # det-ok: the reference
 
     @staticmethod
     def _interp_ref(x, xp, fp, left=None, right=None):

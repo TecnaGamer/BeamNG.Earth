@@ -210,18 +210,38 @@ def convolve(a, v, mode="full"):
     return np.add.reduce(w * v[::-1], axis=-1) if len(w) else np.zeros(0)
 
 
-def interp(x, xp, fp, left=None, right=None):
-    """np.interp (float64; no period, no complex fp) by the native kernel: numpy's own algorithm line for line, its
-    slope * (x - xp[j]) + fp[j] rounded twice. numpy's C code is compiled per platform, and a compiler that contracts
-    (clang on the arm64 wheels) fuses that into one multiply-add: other last bits (the M1 Mac's railway beds, 36 of the
-    corpus's 116 plans, 2026-11-18). A scalar x gives a numpy float64, as numpy's."""
-    xa = np.asarray(x)
-    xpa, fpa = np.asarray(xp), np.asarray(fp)
+def _real(a, what):
+    """a as an array, TypeError unless its values are real numbers of at most float64's precision."""
+    a = np.asarray(a)
+    if a.dtype.kind not in "biuf" or (a.dtype.kind == "f" and a.dtype.itemsize > 8):
+        raise TypeError(f"dnp.interp: {what} must be real numbers (bool, int or float up to float64), not {a.dtype}")
+    return a
+
+
+def interp(x, xp, fp, left=None, right=None, period=None):
+    """np.interp by the native kernel: numpy's own algorithm line for line, its slope * (x - xp[j]) + fp[j] rounded
+    twice. numpy's C code is compiled per platform, and a compiler that contracts (clang on the arm64 wheels) fuses that
+    into one multiply-add: other last bits (the M1 Mac's railway beds, 36 of the corpus's 116 plans, 2026-11-18).
+
+    The contract: real-valued and non-periodic. x, xp, fp, left and right are real numbers (bool, int, float up to
+    float64); period, complex values and anything else are a TypeError. Within it the results are np.interp's bit for
+    bit (x86 wheels), its shapes and errors too: a scalar x gives a numpy float64, an empty x with empty xp and fp an
+    empty array, xp and fp of other lengths or empty a ValueError."""
+    if period is not None:
+        raise TypeError("dnp.interp: period is not supported (real-valued, non-periodic)")
+    xa, xpa, fpa = _real(x, "x"), _real(xp, "xp"), _real(fp, "fp")
+    for name, v in (("left", left), ("right", right)):
+        if v is not None:
+            _real(v, name)
+            if np.ndim(v):
+                raise TypeError(f"dnp.interp: {name} must be a scalar")
     if xpa.ndim != 1 or fpa.ndim != 1:
         raise ValueError("dnp.interp: xp and fp must be 1-D")
-    if fpa.dtype.kind == "c" or xa.dtype.kind == "c":
-        raise TypeError("dnp.interp: complex values are not supported")
     flat = xa.ravel() if xa.dtype == _F64D else np.asarray(xa, np.float64).ravel()
+    if xpa.size != fpa.size:            # (numpy's checks, in numpy's order: no sample points and no x is no error)
+        raise ValueError("fp and xp are not of the same length.")
+    if not xpa.size and not flat.size:
+        return np.zeros(xa.shape)
     r = _ef_interp.dm_interp(np.ascontiguousarray(flat), np.ascontiguousarray(xpa, np.float64),
                              np.ascontiguousarray(fpa, np.float64),
                              None if left is None else float(left), None if right is None else float(right))
