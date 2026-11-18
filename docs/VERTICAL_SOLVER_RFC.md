@@ -56,7 +56,7 @@ underwater tunnel floors (PR #822), which already do this for their own roads.
   becoming a weight);
 - smoothness: `w_curv(class) * (second difference)^2` per sample, the design speed's curvature (it replaces the Gaussian
   `profile_sigma`, so σ 12 m / 5 m become weights, tuned to give the same profiles on open roads);
-- coupling of roads alongside each other (`couple_neighbours`, `share_corridors`): `w_pair * (z_a - z_b - gap_fall)^2`. (Built for `share_corridors` as soft rows bounding `|z_a - z_b|` by what the gap holds, round by round:
+- coupling of roads alongside each other (`couple_neighbours`, `share_corridors`): `w_pair * (z_a - z_b - gap_fall)^2`. (Built for `share_corridors` as soft rows bounding `|z_a - z_b|` by what the gap holds, round by round, opt-in since they chain:
   `docs/research/2026-11-18-vsolve-corridors.md`.)
 
 **Hard constraints** (linear):
