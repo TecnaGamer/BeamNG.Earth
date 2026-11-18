@@ -93,7 +93,9 @@ class DigTest(unittest.TestCase):
         floor, kinds, cap = self.dig()
         mid = np.abs(self.xy[:, 1]) <= 7.0 + racedig.BAND_MARGIN_M
         want = 10.0 - roads.TUNNEL_LOW_H - racedig.DIG_SOIL_M - racedig.DIG_SLACK_M
-        self.assertTrue((floor[mid] <= self.up(want) + 1e-6).all())
+        # (its grade breaks rounded: at most DIG_ROUND_UP_M of the slack taken, the vault and its soil always under)
+        self.assertTrue((floor[mid] <= self.up(want) + racedig.DIG_ROUND_UP_M + 1e-6).all())
+        self.assertLess(racedig.DIG_ROUND_UP_M, racedig.DIG_SLACK_M)
         self.assertEqual(floor[0], self.floor[0])
         self.assertEqual(floor[-1], self.floor[-1])
         self.assertTrue((floor <= self.floor + 1e-12).all())
@@ -151,6 +153,231 @@ class WindowTest(unittest.TestCase):
         want = grading.raceway_ground(pts[:, 0], pts[:, 1], raw, [zone], margin=1e-6)
         self.assertLess(float(np.max(np.abs(got - want))), 0.02)
         self.assertLess(float(got[0]), float(raw[0]) - 0.5)
+
+
+def _banked(la, lo):
+    """An oval's straight along x: a flat apron (y -9..-3), its banking 0.25 m per m up to the outside wall's foot at
+    y = 9 (3 m up), the ground behind falling back 3 m over 6 m: a pit road from the infield (y < -9, flat) ending on
+    the oval's centre line, its surface smoothed along it over its straight run-on past its end, reads the drop."""
+    from test_roads import LAT, M_LAT
+    y = (np.asarray(la, np.float64) - LAT) * M_LAT
+    bank = np.clip(y + 3.0, 0.0, 12.0) * 0.25
+    return 10.0 + bank - np.clip((y - 9.0) * 0.5, 0.0, 3.0)
+
+
+class JoinTest(unittest.TestCase):
+    """The user's Atlanta reports 65 / 70 (2026-11-17): bumps across the racing surface where an infield road
+    (highway=raceway, the oval's default width) joins it. Each raceway's own smoothed surface, the nearest centre line's
+    taken: the pit road's surface cut into the oval's banking half way between the two lines."""
+
+    def zones(self):
+        import grading
+        from test_roads import FRAME
+        oval = np.array([[-200.0, 0.0], [200.0, 0.0]])
+        pit = np.array([[0.0, -80.0], [0.0, 0.0]])
+        hw = 7.0 + grading.UNGRADED_MARGIN_M
+        zs = [grading.raceway_surface(FRAME, _banked, oval, hw), grading.raceway_surface(FRAME, _banked, pit, hw)]
+        return grading, zs, [(oval, hw), (pit, hw)]
+
+    def test_the_pit_road_gives_way_to_the_oval(self):
+        grading, _zs, lines = self.zones()
+        self.assertEqual(grading.raceway_dominance(lines), [[], [(0, 0.0, 0.0)]])
+
+    def test_the_oval_kept_and_the_pit_road_meets_it(self):
+        grading, zs, lines = self.zones()
+        y = np.arange(-60.0, 7.01, 0.5)
+        e = np.zeros_like(y)
+        base = np.full_like(y, 5.0)
+        old = grading.raceway_ground(e, y, base, zs)
+        new, cov = grading.raceway_ground(e, y, base, zs, joins=grading.raceway_dominance(lines),
+                                          blend=racedig.JOIN_BLEND_M)
+        alone = grading.raceway_ground(e, y, base, zs[:1])
+        on = y >= -7.0                      # (the oval's carriageway)
+        self.assertTrue(cov.all())
+        # before: the pit road's surface on the oval's carriageway from half way (a step of the banking's)
+        self.assertGreater(float(np.max(np.abs(old[on] - alone[on]))), 0.3)
+        # now: the oval's own surface there, bit for bit
+        self.assertEqual(new[on].tobytes(), alone[on].tobytes())
+        # and the pit road meeting it without a kink: off the oval's own apron / banking crease (y = -3), no grade
+        # change over 0.01 m per 0.5 m sample
+        sel = y[1:-1] <= -6.0
+        self.assertLess(float(np.max(np.abs(np.diff(new, 2))[sel])), 0.01)
+
+    def test_no_dominance_is_the_nearest_rule(self):
+        grading, zs, _lines = self.zones()
+        rng = np.random.default_rng(3)
+        e, n = rng.uniform(-30, 30, 500), rng.uniform(-30, 20, 500)
+        base = rng.normal(8.0, 1.0, 500)
+        old = grading.raceway_ground(e, n, base, zs)
+        new, _cov = grading.raceway_ground(e, n, base, zs, joins=[[], []])
+        self.assertEqual(new.tobytes(), old.tobytes())
+
+    def test_joins_whatever_else_is_loaded(self):
+        # Codex reviews of 98a65723 / 80e9b3da: the ownership and the zone set came from the planner's loaded lines
+        # (every planned cell's keeps): cold and warmed planners, cells read in another order, graded a join
+        # differently. Now each join from its two lines, held along its own overlap, the zones from the map cells
+        # round the points and round their lines' ends, whatever was planned or read before
+        oval = np.array([[-200.0, 0.0], [200.0, 0.0]])
+        pit = np.array([[0.0, -80.0], [0.0, 0.0]])
+        far_end = np.array([[-60.0, -80.0], [0.0, -80.0]])          # (a third raceway ending on the pit road's far end)
+        g = np.arange(-30.0, 30.01, 0.5)
+        e, n = (v.ravel() for v in np.meshgrid(g, g - 45.0))      # (points 15-75 m from the oval: some only by the
+        base = np.full(len(e), 3.0)                                 # join's reach, beyond a portal's 30 m)
+        md = _FakeMD([oval, pit, far_end])
+        runs = []
+        for keeps, warm in (({}, False), ({"z": [(np.array([[500.0, 500.0], [700.0, 500.0]]), 9.0)]}, True),
+                            ({"a": [(oval, 9.0)]}, False)):
+            pl = _FakePlanner(keeps, md=md)
+            pl.elev = _banked
+            if warm:            # (another query first: other cells read, memos filled)
+                pl._raceway_band(e + 400.0, n, base)
+            idx, z = pl._raceway_band(e, n, base)
+            runs.append((idx.tobytes(), z.tobytes()))
+        self.assertEqual(runs[0], runs[1])
+        self.assertEqual(runs[0], runs[2])
+        self.assertGreater(len(np.frombuffer(runs[0][0], np.int64)), 0)
+
+    def test_two_lines_with_the_same_ends_are_two_lines(self):
+        # Codex review of b68ade87: lines were told apart by their rounded ends, vertex count and width: two branches
+        # that part and meet again with as many vertices shared one surface, whichever was read first
+        a = np.array([[-60.0, 0.0], [0.0, 20.0], [60.0, 0.0]])
+        b = np.array([[-60.0, 0.0], [0.0, -20.0], [60.0, 0.0]])
+        g = np.arange(-20.0, 20.01, 1.0)
+        e, n = (v.ravel() for v in np.meshgrid(g, g))
+        base = np.full(len(e), 3.0)
+        runs = []
+        for order in ((a, b), (b, a)):
+            pl = _FakePlanner({}, md=_FakeMD(list(order)))
+            pl.elev = _rolling
+            la, lo, _ = pl.frame.enu_to_geodetic(e, n, 0.0)
+            zones, kept = pl._raceway_zones(np.asarray(la), np.asarray(lo))
+            self.assertEqual(len(zones), 2)
+            idx, z = pl._raceway_band(e, n, base)
+            runs.append((idx.tobytes(), z.tobytes()))
+        self.assertEqual(runs[0], runs[1])
+
+    def test_the_band_has_no_holes_at_vertices(self):
+        # report 69: points on the outside of a vertex lie beyond both of its segments' ends: the segment test left
+        # them out (single samples left to other roads' grading, 2.3 m spikes along Atlanta's turn 3-4); and the band
+        # must be the line the surface is sampled on (Codex review of 98a65723: a 9 m band on a 90 degree corner, a
+        # point 8.91 m from the map's vertex is 9.62 m from the resampled line: in by one, out by the other)
+        import grading
+        for bend, corner in ((np.array([[-50.0, 0.0], [0.0, 0.0], [50.0, -10.0]]), (0.25, 6.5)),     # 11 degrees
+                             (np.array([[-30.0, 0.0], [0.0, 0.0], [0.0, -30.0]]), (4.5, 4.5))):     # 90 degrees
+            pl = _FakePlanner({"k": [(bend, 9.0)]})
+            g = np.arange(-12.0, 12.01, 0.25)
+            e, n = (v.ravel() for v in np.meshgrid(g, g))
+            base = np.full(len(e), 3.0)
+            idx, z = pl._raceway_band(e, n, base)
+            la, lo, _ = pl.frame.enu_to_geodetic(e, n, 0.0)
+            zones, _kept = pl._raceway_zones(np.asarray(la), np.asarray(lo))
+            line, _st, offs, _c = zones[0]
+            # every point within the band of the sampled line is taken, with the surface's height
+            a, b = line[:-1], line[1:]
+            d = b - a
+            pts = np.stack([e, n], 1)
+            t = np.clip(((pts[:, None] - a) * d).sum(2) / (d * d).sum(1), 0.0, 1.0)
+            dist = np.hypot(*(a + t[..., None] * d - pts[:, None]).transpose(2, 0, 1)).min(1)
+            want = np.flatnonzero(dist < float(offs[-1]) - 1e-6)
+            self.assertTrue(np.isin(want, idx).all(), np.setdiff1d(want, idx)[:5])
+            got, cov = grading.raceway_ground(e[idx], n[idx], base[idx], zones, joins=[[]],
+                                              blend=racedig.JOIN_BLEND_M)
+            self.assertTrue(cov.all())
+            self.assertEqual(z.tobytes(), got.tobytes())
+            # a point outside the corner, inside the carriageway (6.4-6.5 m out), at the track's height (10 m, not 3)
+            k = int(np.argmin(np.hypot(e - corner[0], n - corner[1])))
+            self.assertIn(k, set(idx.tolist()))
+            self.assertGreater(float(z[list(idx).index(k)]), 9.0)
+
+
+class _FakeMD:
+    """A map whose every cell holds the given raceway lines (test_roads.features) and counts its reads."""
+
+    def __init__(self, lines, widths=None):
+        import types
+        from test_roads import features
+        ids = [f"osm-raceway-{i:012d}" for i in range(len(lines))]
+        self.f = features([[tuple(p) for p in ln] for ln in lines], ["raceway"] * len(lines),
+                          widths=[(i, w) for i, w in enumerate(widths or [])], ids=ids)
+        self.reads = 0
+        self._cell = types.SimpleNamespace(layers={"roads": self.f})
+
+    def cell(self, key, layers=None, kind=None):
+        self.reads += 1
+        return self._cell
+
+
+class _FakePlanner:
+    """grading._Planner's raceway pieces on a namespace: a map (_FakeMD) or keeps, the frame, an elevation, no marks."""
+
+    def __init__(self, keeps, md=None):
+        import threading
+        import grading
+        from test_roads import FRAME
+        self.lock = threading.Lock()
+        self.keeps = keeps
+        self.frame = FRAME
+        self.md = md if md is not None else _FakeMD([np.asarray(xy) for v in keeps.values() for xy, _hw in v])
+        self.widths = None
+        self.elev = lambda la, lo: np.full(np.shape(la), 10.0)
+        self._P = grading._Planner
+
+    def _marks_at(self, *a):
+        pass
+
+    def _raceway_cell(self, key):
+        return self._P._raceway_cell(self, key)
+
+    def _raceway_cell_read(self, key):
+        return self._P._raceway_cell_read(self, key)
+
+    def _raceway_lines(self, lat, lon):
+        return self._P._raceway_lines(self, lat, lon)
+
+    def _raceway_zones(self, lat=None, lon=None):
+        return self._P._raceway_zones(self, lat, lon)
+
+    def _raceway_joins(self, kept):
+        return self._P._raceway_joins(self, kept)
+
+    def _raceway_band(self, e, n, base, lat=None, lon=None):
+        return self._P._raceway_band(self, e, n, base, lat, lon)
+
+
+def _rolling(la, lo):
+    """A slope across y with 2 m rolls along x near the oval: surfaces smoothed along other lines differ there."""
+    from test_roads import LAT, LON, M_LAT, M_LON
+    x = (np.asarray(lo, np.float64) - LON) * M_LON
+    y = (np.asarray(la, np.float64) - LAT) * M_LAT
+    return 10.0 + 0.15 * y + 2.0 * np.sin(x / 12.0) * np.exp(-((y - 6.0) / 20.0) ** 2)
+
+
+class WindowJoinTest(unittest.TestCase):
+    def test_a_second_overlap_past_a_gap_does_not_give_way_in_a_window(self):
+        # Codex review of 80e9b3da: the tunnel solve reads the track over windows of the lines; a join's reach taken
+        # from the window's end nearest the join made a second stretch along the oval, past a 60 m gap, give way
+        # there while the terrain (the whole line) did not. The reach measured on the whole line
+        import grading
+        from test_roads import FRAME
+        oval = np.array([[-500.0, 0.0], [300.0, 0.0]])
+        road = np.array([[-450.0, 25.0], [-150.0, 0.0], [-100.0, 60.0], [0.0, 60.0], [0.0, 0.0]])
+        races = [(oval, 7.0), (road, 7.0)]
+        xs = np.arange(-400.0, -200.0, 5.0)
+        yy = 25.0 - 25.0 * (xs + 450.0) / 300.0
+        pts = np.stack([np.repeat(xs, 3), np.concatenate([[v - 6.0, v - 7.5, v - 8.5] for v in yy])], 1)
+        la, lo, _ = FRAME.enu_to_geodetic(pts[:, 0], pts[:, 1], 0.0)
+        raw = _rolling(np.asarray(la), np.asarray(lo))
+        got = racedig.track_surface(FRAME, _rolling, races, pts, raw)
+        hw = 7.0 + racedig.BAND_MARGIN_M
+        zs = [grading.raceway_surface(FRAME, _rolling, oval, hw), grading.raceway_surface(FRAME, _rolling, road, hw)]
+        joins = grading.raceway_dominance([(oval, hw), (road, hw)])
+        self.assertEqual([j[0] for j in joins[1]], [0])
+        whole, _c = grading.raceway_ground(pts[:, 0], pts[:, 1], raw, zs, margin=1e-6, joins=joins,
+                                           blend=racedig.JOIN_BLEND_M)
+        given, _c = grading.raceway_ground(pts[:, 0], pts[:, 1], raw, zs, margin=1e-6,
+                                           joins=[[], [(0, 0.0, 0.0, 0.0, 1e9)]], blend=racedig.JOIN_BLEND_M)
+        self.assertLess(float(np.max(np.abs(got - whole))), 0.02)
+        self.assertGreater(float(np.max(np.abs(given - whole))), 0.5, "(the test tells the two apart)")
 
 
 class TunnelUnderTrackTest(unittest.TestCase):
@@ -220,6 +447,159 @@ class PropsTest(unittest.TestCase):
         self.assertEqual(props[1][3], 6.0)
         self.assertEqual(len(wires), 1)
         self.assertEqual(n, 3)
+
+    def test_an_assembly_goes_as_one(self):
+        # the user's reports 56/59/66/70 (Daytona, Atlanta 2026-11-17): a lit raceway's utility pole just inside the
+        # band went, its cobra-head arm 7 m up and the wire ending 0.8 m farther out stayed in the air
+        import furniture
+        lines = [(np.array([[-100.0, 0.0], [100.0, 0.0]]), 7.0)]
+        pole = lambda x, y, z=0.0: [furniture.G_POLE, x, y, z, 90.0, 1.0, 9.2, 0.0]
+        arm = lambda x, y, z=0.0: [furniture.G_POLELAMP, x, y, z + furniture.POLE_LAMP_Z, 90.0, 1.0, 1.1, 0.0]
+        rows = [pole(0.0, 8.7), arm(0.0, 8.7),              # inside the band (9 m): all of it goes
+                pole(40.0, 9.6), arm(40.0, 9.6),            # outside: stays
+                pole(-40.0, 8.0, 5.0), arm(-40.0, 8.0, 5.0)]  # on a deck 5 m over the track: stays, arm and all
+        props = rows + furniture.lamp_lenses(rows)
+        self.assertEqual(len(props), 12)
+        wires = [[[0.0, 8.7 + d, 7.8], [40.0, 9.6 + d, 7.8]] for d in (-0.8, 0.0, 0.8)]   # (the 0.8 one ends at 9.5)
+        wires += [[[40.0, 9.6 + d, 7.8], [80.0, 9.6 + d, 7.8]] for d in (0.0, 0.8)]      # (between kept poles)
+        racedig.clear_props(props, wires, lines, lambda x, y: np.zeros(len(x)))
+        self.assertEqual(sorted({(r[1], round(r[2], 1)) for r in props if r[0] in (furniture.G_POLE,
+                                                                                  furniture.G_POLELAMP)}),
+                         [(-40.0, 8.0), (40.0, 9.6)])
+        lenses = [r for r in props if r[0] in (furniture.G_LENS, furniture.G_GLOW)]
+        self.assertEqual(len(lenses), 4, "the kept arms' lenses and glows, none of the dropped one's")
+        self.assertTrue(all(abs(r[1]) > 1.0 for r in lenses))
+        self.assertEqual(len(wires), 2, "every wire of the dropped pole, the kept poles' span stays")
+        self.assertTrue(all(w[0][0] == 40.0 for w in wires))
+
+    def test_a_lamp_lens_follows_its_post(self):
+        # a post outside the band, its head over the track: the lens stays with the post (judged alone, a lens over
+        # the band with no ground given went)
+        import furniture
+        lines = [(np.array([[-100.0, 0.0], [100.0, 0.0]]), 7.0)]
+        post = [furniture.G_LAMP, 0.0, 10.0, 0.0, 270.0, 1.0, 9.0, 0.0]
+        props = [post] + furniture.lamp_lenses([post])
+        self.assertLess(abs(props[1][2]), 9.0, "(the head over the band)")
+        racedig.clear_props(props, [], lines, None)
+        self.assertEqual(len(props), 3)
+        post = [furniture.G_LAMP, 0.0, 8.0, 0.0, 270.0, 1.0, 9.0, 0.0]
+        props = [post] + furniture.lamp_lenses([post])
+        racedig.clear_props(props, [], lines, lambda x, y: np.zeros(len(x)))
+        self.assertEqual(props, [])
+
+    def test_a_pylon_takes_its_wires(self):
+        import powerlines
+        lines = [(np.array([[-100.0, 0.0], [100.0, 0.0]]), 7.0)]
+        props = [[powerlines.G_PYLON, 0.0, 8.5, 0.0, 0.0, 1.0, 35.8, 0.0]]
+        # (its far conductor ends 4.12 m out, off the band)
+        wires = [[[0.0, 12.62, 20.0], [300.0, 12.62, 20.0]], [[50.0, 300.0, 20.0], [60.0, 300.0, 20.0]]]
+        racedig.clear_props(props, wires, lines, lambda x, y: np.zeros(len(x)))
+        self.assertEqual(props, [])
+        self.assertEqual(len(wires), 1)
+
+    def test_a_span_goes_with_the_next_tiles_pole(self):
+        # Codex's review of 1bc9f8cb: the span is this tile's (its first pole's), the pole at its other end the next
+        # tile's, on the band (culled there); the wire's end 1 m off it and off the band went by no geometric test
+        import furniture
+        lines = [(np.array([[30.0, -100.0], [30.0, 100.0]]), 7.0)]          # the band to x = 30 + 7 + 2 = 39 ... 21
+        a = [furniture.G_POLE, -20.0, 0.0, 0.0, 0.0, 1.0, 9.2, 0.0]
+        b = [furniture.G_POLE, 38.5, 0.0, 0.0, 0.0, 1.0, 9.2, 0.0]           # (the next tile's row)
+        line = np.c_[np.linspace(-20.0, 39.6, 9), np.full(9, 0.0), np.full(9, 7.8)]
+        wires = furniture.with_ends([line], a, b) + [line.copy()]
+        props = [list(a)]
+        racedig.clear_props(props, wires, lines, lambda x, y: np.zeros(len(x)))
+        self.assertEqual(props, [a])
+        self.assertEqual(len(wires), 1)
+        self.assertIsNone(furniture.wire_ends(wires[0]))
+        # its pole on a deck over the track (5 m over the ground there): it stays, and the span with it
+        b2 = list(b)
+        b2[3] = 5.0
+        wires = furniture.with_ends([line], a, b2)
+        racedig.clear_props([list(a)], wires, lines, lambda x, y: np.zeros(len(x)))
+        self.assertEqual(len(wires), 1)
+
+    def test_the_far_supports_road_cells_are_read(self):
+        # Codex's review of 26580e0c: a power span's far tower may stand 1 km off, by a raceway in no road cell of the
+        # span's tile; its own tile culls it, so the span's tile must read the cells round it for the band
+        from unittest import mock
+        import furniture
+        import mapcells
+        frame = geodesy.EnuFrame(33.38, -84.32)
+        near, far = [furniture.G_POLE, 0.0, 0.0, 0.0, 0.0, 1.0, 9.2, 0.0], ["pylon", 800.0, 0.0, 0.0, 0.0, 1.0, 35.8, 0.0]
+        line = np.c_[np.linspace(0.0, 800.0, 9), np.full(9, 4.5), np.full(9, 20.0)]
+        la, lo, _ = frame.enu_to_geodetic(np.array([800.0]), np.array([0.0]), 0.0)
+        far_cell = mapcells.cell_of(float(np.ravel(la)[0]), float(np.ravel(lo)[0]))
+
+        class Md:
+            def cell(self, key, layers=(), kind="demand"):
+                return mock.Mock(layers={"roads": ("roads", key)})
+
+        def bands(frame_, cells):       # (the raceway by the far tower: only in the far tower's cell)
+            if any(c == ("roads", far_cell) for c in cells):
+                return [(np.array([[700.0, -8.0], [900.0, -8.0]]), 7.0)]
+            return []
+        flat = lambda la_, lo_: np.zeros(np.shape(la_))
+        with mock.patch.object(racedig, "ON", True), mock.patch.object(racedig, "bands", bands):
+            wires = furniture.with_ends([line], near, far)
+            racedig.tile_clear(frame, [], [list(near)], wires, flat)
+            self.assertEqual(len(wires), 1, "(the tile's own cells: no band, the span stayed)")
+            racedig.tile_clear(frame, [], [list(near)], wires, flat, Md())
+            self.assertEqual(wires, [])
+
+    def test_an_unreadable_support_cell_costs_only_its_spans(self):
+        # Codex's review of 12b731e1: a far support's road cell that cannot be read (OSError) aborted the whole road
+        # tile; now the tile completes, the spans needing that cell are left out and the tile is not kept (a fault)
+        from unittest import mock
+        import furniture
+        import mapcells
+        import revisit
+        frame = geodesy.EnuFrame(33.38, -84.32)
+        near = [furniture.G_POLE, 0.0, 0.0, 0.0, 0.0, 1.0, 9.2, 0.0]
+        far = ["pylon", 6000.0, 0.0, 0.0, 0.0, 1.0, 35.8, 0.0]     # (another map cell)
+        other = [furniture.G_POLE, 40.0, 0.0, 0.0, 0.0, 1.0, 9.2, 0.0]
+        la, lo, _ = frame.enu_to_geodetic(np.array([6000.0]), np.array([0.0]), 0.0)
+        far_cell = mapcells.cell_of(float(np.ravel(la)[0]), float(np.ravel(lo)[0]))
+
+        class Md:
+            def cell(self, key, layers=(), kind="demand"):
+                if key == far_cell:
+                    raise OSError("unreadable")
+                return mock.Mock(layers={"roads": ("roads", key)})
+        line = np.c_[np.linspace(0.0, 6000.0, 9), np.full(9, 4.5), np.full(9, 20.0)]
+        short = np.c_[np.linspace(0.0, 40.0, 5), np.full(5, 0.8), np.full(5, 7.8)]
+        wires = furniture.with_ends([line], near, far) + furniture.with_ends([short], near, other)
+        before = revisit.faults()
+        flat = lambda la_, lo_: np.zeros(np.shape(la_))
+        with mock.patch.object(racedig, "ON", True), mock.patch.object(racedig, "bands", lambda f, c: []):
+            racedig.tile_clear(frame, [], [list(near)], wires, flat, Md())
+        self.assertEqual(len(wires), 1)
+        self.assertEqual(furniture.wire_ends(wires[0])[1][1], 40.0)
+        self.assertGreater(revisit.faults(), before)
+
+    def test_a_support_by_the_antimeridian(self):
+        # Codex's review of 117bdde7: a support whose 60 m box crosses +-180 deg made min / max of its longitudes the
+        # whole world (over 4,096 cells: ValueError, the road tile lost); the span's own tile is west of the crossing
+        from unittest import mock
+        import furniture
+        frame = geodesy.EnuFrame(10.0, 179.99)
+        la, lo, _ = frame.enu_to_geodetic(np.array([1090.0]), np.array([0.0]), 0.0)
+        self.assertGreater(float(np.ravel(lo)[0]), 179.9995)                # (within 60 m of the antimeridian)
+        near = [furniture.G_POLE, 0.0, 0.0, 0.0, 0.0, 1.0, 9.2, 0.0]
+        far = ["pylon", 1090.0, 0.0, 0.0, 0.0, 1.0, 35.8, 0.0]
+        line = np.c_[np.linspace(0.0, 1090.0, 9), np.full(9, 4.5), np.full(9, 20.0)]
+        cells = racedig.support_cells(frame, furniture.with_ends([line], near, far))
+        far_cells = cells[(1090.0, 0.0)]
+        self.assertTrue(0 < len(far_cells) <= 4, far_cells)
+        self.assertEqual({k.x for k in far_cells}, {0, (1 << far_cells[0].z) - 1})    # (both sides of it)
+
+        class Md:
+            def cell(self, key, layers=(), kind="demand"):
+                return mock.Mock(layers={"roads": ("roads", key)})
+        wires = furniture.with_ends([line], near, far)
+        flat = lambda la_, lo_: np.zeros(np.shape(la_))
+        with mock.patch.object(racedig, "ON", True), mock.patch.object(racedig, "bands", lambda f, c: []):
+            racedig.tile_clear(frame, [], [list(near)], wires, flat, Md())
+        self.assertEqual(len(wires), 1)
 
     def test_no_raceway_nothing_dropped(self):
         props = [["pole", 0.0, 0.0, 0.0, 0.0]]

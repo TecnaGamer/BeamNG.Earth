@@ -98,7 +98,7 @@ def transitions(path,classify):
     found between 50 m samples (and the vertices), then located to ~3 mm in two rounds of 129 samples."""
     arc=at(path,0)[2];samples=np.unique(np.r_[arc,np.arange(0,arc[-1],50.),arc[-1]])
     # (whole source ways can be many kilometres long: their cumulative distances once, not per sample)
-    sample=lambda distances:np.column_stack([np.interp(distances,arc,path[:,j]) for j in (0,1)])
+    sample=lambda distances:np.column_stack([dnp.interp(distances,arc,path[:,j]) for j in (0,1)])
     labels=list(classify(sample(samples)))
     result=[]
     for i in range(len(samples)-1):

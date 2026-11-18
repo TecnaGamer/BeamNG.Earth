@@ -97,6 +97,7 @@ if MIRROR_ZSTD:
 CLAIM_WAIT_S, CLAIM_POLL_S, CLAIM_STALE_S = 0.5, 0.01, 30.0     # (Dem._load_tile: another process making a tile)
 MIRROR_PRUNE_S = 120.0  # the mirror pruned at most this often per process (each prune walks it all)
 MIRROR_MAX_AGE_S = 30 * 86400
+SHORT_RETRY_S = 30.0        # s a stand-in tile (made while a download failed) is kept in memory before it is made again
 DECODED_VERSION = 4          # 2: tiles past the lidar's depth upsampled from its deepest tile, not z12; its holes
                              # filled (fill_holes); 3: Canada's HRDEM lidar (hrdem.py) from z13 down; 4: LidarBC,
                              # and z12 / z13 shifted to its ground (BIAS_*)
@@ -303,6 +304,41 @@ def _gauss2(a, sigma):
     return sum(k[i] * p[:, i:i + a.shape[1]] for i in range(2 * r + 1))
 
 
+_UNREAD = np.zeros((TILE, TILE), np.float32)     # (a box's tile no point reads: never read, sample)
+_UNREAD.flags.writeable = False
+
+
+def _tiles_read(fx, fy, nx, ny):
+    """(nx * ny,) bools, row-major: the tiles of an nx x ny box (fx, fy: the points' pixel coordinates in it) whose
+    pixels earthfast.bilinear_tiles reads: each point's pixel (floor, clamped to the box as the kernel clamps it) and
+    the next one right and down, whatever their weights. Every tile where a coordinate is not finite (the kernel's
+    and numpy's conversions of those differ)."""
+    if not (np.isfinite(fx).all() and np.isfinite(fy).all()):
+        return np.ones(nx * ny, bool)
+    w, h = nx * TILE, ny * TILE
+    ix = np.clip(np.floor(fx), 0, w - 2).astype(np.int64)
+    iy = np.clip(np.floor(fy), 0, h - 2).astype(np.int64)
+    read = np.zeros((ny, nx), bool)
+    for dx in (0, 1):
+        for dy in (0, 1):
+            read[(iy + dy) // TILE, (ix + dx) // TILE] = True
+    return read.ravel()
+
+
+def _stale(marks):
+    """A kept stand-in tile's time to be made again (Dem._lru_short's marks, SHORT_RETRY_S)."""
+    return marks is not None and time.monotonic() - marks[2] > SHORT_RETRY_S
+
+
+def _replay(marks):
+    """A kept tile's marks (Dem._load_marked) said again in the reading thread: its builds are short too."""
+    if marks:
+        if marks[0]:
+            revisit.fault(here=True)
+        if marks[1]:
+            revisit.fault(lidar=True)
+
+
 class Dem:
     disk = cachemod.NONE    # the server's cache.Cache (last use per file, the size cap); set by earthd
     ground_filter = True    # surface-model areas: buildings out, deeper zooms from that ground (see above)
@@ -324,6 +360,11 @@ class Dem:
         self._local = threading.local()
         self.mem_tiles = MEM_TILES if mem_tiles is None else mem_tiles
         self._lru = OrderedDict()       # (z, x, y) -> float32 [TILE, TILE]
+        # (z, x, y) -> (faults, lidar rule faults, when made) of a tile in _lru made while something it read failed (a
+        # stand-in for a download that failed): whoever reads the kept copy is short of it too (_replay; only its first
+        # readers were told: a cell planned later from the kept stand-in counted as complete), and it is made again
+        # after SHORT_RETRY_S (kept, it stood in for the session: no read of it was ever complete again)
+        self._lru_short = {}
         self._inflight = {}             # (z, x, y) -> Future
         self._lock = threading.Lock()
         self.stats = Counter()          # updated from fetch threads; read via stats_snapshot()
@@ -379,6 +420,7 @@ class Dem:
         """Drop the decoded tiles kept in memory (budget.maybe_shed)."""
         with self._lock:
             self._lru.clear()
+            self._lru_short.clear()
     def _canada(self, key, a):
         """Tile key's heights a with Canada's lidar terrain (hrdem.py) put in where it has data (z13 and deeper)."""
         z, x, y = key
@@ -1259,8 +1301,11 @@ class Dem:
                 break
 
     def _partial(self):
-        """This load used a stand-in (a failed fetch): its tile is not mirrored."""
+        """This load used a stand-in (a failed fetch): its tile is not mirrored, and the builds reading it are short
+        (revisit.fault: a source whose failure is no failed download, a lidar sheet that raised OSError, said nothing
+        before, and the stand-in went into the LRU unmarked)."""
         self._local.partial = True
+        revisit.fault(here=True)
 
     def _load_tile(self, key):
         """A decoded tile: from the mirror, else made (_make_tile) and, when it is all Mapterhorn's data as it will
@@ -1499,12 +1544,24 @@ class Dem:
         key = (z0, ax, ay)
         with self._lock:
             anc = self._lru.get(key)
-        if anc is None:
-            anc = self._load_tile(key)      # (in this thread: a pool worker waiting on the pool could deadlock)
-            with self._lock:
-                self._lru[key] = anc
-                while len(self._lru) > self.mem_tiles:
-                    self._lru.popitem(last=False)
+            marks = self._lru_short.get(key)
+            if anc is not None and _stale(marks):
+                anc = None
+        if anc is not None:
+            _replay(marks)
+            if marks:           # (an ancestor kept short: the tile made from it is a stand-in too, never mirrored)
+                self._partial()
+        else:
+            # (in this thread: a pool worker waiting on the pool could deadlock). It owns no future of the key, so it
+            # publishes a complete tile only: a stand-in stays this descendant's (its faults are this reader's, and the
+            # descendant is partial: _load_tile), not put in the LRU, where tiles() would hand it out ahead of the
+            # owner's healthy load still pending
+            anc, marks = self._load_marked(key)
+            if marks is None:
+                with self._lock:
+                    self._lru_put(key, anc, marks)
+            else:
+                self._partial()     # (the descendant made from it is a stand-in too: never mirrored)
         k = 2 ** d
         i = (np.arange(TILE) + 0.5) / k - 0.5
         u = np.clip((x - ax * k) * TILE / k + i, 0, TILE - 1)
@@ -1543,7 +1600,7 @@ class Dem:
                 cold = [k for k in keys if k[0] >= mtarchive.MIN_ZOOM and k not in self._lru and k not in self._inflight]
             if cold:
                 self._archive_batch(cold, "demand")
-        out, futs, new = {}, {}, []
+        out, futs, new, short = {}, {}, [], []
         urgent = getattr(self._local, "urgent", False)
         pool = self.urgent_pool if urgent else self.pool
         caller = self._caller()
@@ -1552,15 +1609,18 @@ class Dem:
             log.debug("dem urgent: %d tiles %s", len(keys), dict(zs))
         with self._lock:
             for k in keys:
-                if k in self._lru:
+                if k in self._lru and not _stale(self._lru_short.get(k)):
                     self._lru.move_to_end(k)
                     out[k] = self._lru[k]
+                    short.append(self._lru_short.get(k))
                 elif k in self._inflight and not (urgent and not self._inflight[k].running()
                                                   and not self._inflight[k].done()):
                     futs[k] = self._inflight[k]
                 else:
-                    futs[k] = self._inflight[k] = pool.submit(self._as, caller, self._load_tile, k)
+                    futs[k] = self._inflight[k] = pool.submit(self._as, caller, self._load_marked, k)
                     new.append(k)
+        for marks in short:     # (kept copies made short of something: this reader is too)
+            _replay(marks)
         # Outside the lock: the callback runs at once if the future is already done.
         for k in new:
             futs[k].add_done_callback(lambda f, k=k: self._finish(k, f))
@@ -1568,7 +1628,7 @@ class Dem:
         if progress:
             progress(done, len(keys))
         for k, fut in futs.items():
-            out[k] = fut.result()
+            out[k] = fut.result()[0]        # (its faults are this reader's: revisit.bind)
             done += 1
             if progress:
                 progress(done, len(keys))
@@ -1578,12 +1638,40 @@ class Dem:
         """Move a finished load from _inflight into the LRU (failures are dropped,
         so the next request retries instead of reusing a stale exception)."""
         with self._lock:
-            if self._inflight.get(key) is fut:
+            # (the load that owns the key publishes whatever it made; one an urgent reload took the key over from
+            # (superseded) publishes only a complete tile: its stand-in, finishing later, went over the newer answer,
+            # while its complete tile still replaces a stand-in the urgent one put in, _lru_put never the reverse)
+            owner = self._inflight.get(key) is fut
+            if owner:
                 del self._inflight[key]
             if not fut.cancelled() and fut.exception() is None:
-                self._lru[key] = fut.result()
-                while len(self._lru) > self.mem_tiles:
-                    self._lru.popitem(last=False)
+                a, marks = fut.result()
+                if owner or marks is None:
+                    self._lru_put(key, a, marks)
+
+    def _lru_put(self, key, a, marks):
+        """With self._lock held: tile key's heights a into the LRU, with marks (_load_marked's) kept beside it. A
+        stand-in (marks) never replaces a complete entry already there (a retry that failed again while another
+        thread's load of the same tile succeeded, _from_ancestor's inline load): the complete one stays."""
+        if marks is not None and key in self._lru and key not in self._lru_short:
+            self._lru.move_to_end(key)
+            return
+        self._lru[key] = a
+        self._lru.move_to_end(key)
+        if marks is None:
+            self._lru_short.pop(key, None)
+        else:
+            self._lru_short[key] = marks
+        while len(self._lru) > self.mem_tiles:
+            self._lru_short.pop(self._lru.popitem(last=False)[0], None)
+
+    def _load_marked(self, key):
+        """(_load_tile(key), its marks): (faults, lidar rule faults) when making it read something short (a stand-in
+        for a failed download), else None. Its faults reach this thread's builds as they happen (its own scope is
+        inside theirs)."""
+        with revisit.scope() as made:
+            a = self._load_tile(key)
+        return a, ((made.n, made.lidar, time.monotonic()) if made.n or made.lidar else None)
 
     def block_max(self, z, x, y, block):
         """Highest elevation in every block x block pixel square of tile (z, x, y): a (TILE / block)²
@@ -1645,10 +1733,12 @@ class Dem:
             out[valid] = sub
             return out.reshape(shape)
         keys = [(zoom, tx % n, ty) for ty in range(ty0, ty1 + 1) for tx in range(tx0, tx1 + 1)]     # (row-major)
-        got = self.tiles(keys, progress)
         fx -= tx0 * TILE
         fy -= ty0 * TILE
+        read = _tiles_read(fx, fy, nx, ny)
+        got = self.tiles([k for k, r in zip(keys, read) if r], progress)
         # (sampled from the tiles in place: a mosaic of them copied on every call cost ~2 s per 16 city road tiles)
         fast.require(76, "bilinear_tiles")
-        out[valid] = fast._ef.bilinear_tiles([np.asarray(got[k], np.float32) for k in keys], nx, TILE, fx, fy)
+        out[valid] = fast._ef.bilinear_tiles([np.asarray(got[k], np.float32) if r else _UNREAD
+                                              for k, r in zip(keys, read)], nx, TILE, fx, fy)
         return out.reshape(shape)

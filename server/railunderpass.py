@@ -46,7 +46,7 @@ def levels(frame, elev, st, link):
     """(floor z, lid top z): the lid's top SINK_M under the lowest bed the link crosses, the floor CEIL_D + CLEAR_M under that."""
     path = np.asarray(link.xy, float)
     s = rb._arc(path)
-    pts = [[np.interp(a, s, path[:, 0]), np.interp(a, s, path[:, 1])] for _k, a in link.crosses] or [path[len(path) // 2]]
+    pts = [[dnp.interp(a, s, path[:, 0]), dnp.interp(a, s, path[:, 1])] for _k, a in link.crosses] or [path[len(path) // 2]]
     g = float(bm.ground(frame, elev, np.asarray(pts)).min())
     lid = g - SINK_M
     return lid - CEIL_D - CLEAR_M, lid
@@ -88,7 +88,7 @@ def _lights(mesh, path, zlid, w):
     zc = zlid - CEIL_D - 0.02
     t, n = rb._normals(path)
     for at in np.arange(LIGHT_STEP_M / 2.0, s[-1], LIGHT_STEP_M):
-        p = np.array([np.interp(at, s, path[:, 0]), np.interp(at, s, path[:, 1])])
+        p = np.array([dnp.interp(at, s, path[:, 0]), dnp.interp(at, s, path[:, 1])])
         i = min(int(np.searchsorted(s, at)), len(path) - 1)
         u, nn = t[i], n[i]
         rect = np.array([p - u * 0.15 - nn * 0.5, p + u * 0.15 - nn * 0.5, p + u * 0.15 + nn * 0.5, p - u * 0.15 + nn * 0.5])

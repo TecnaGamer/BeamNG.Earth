@@ -397,7 +397,9 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   restart (the app's launcher, or `start.py` for a source install, starts the world server with the `BNE_*`
   switch each stands for: server/experimental.py). With any of them on, the server builds every place itself (the
   shared prebuilt world data is made for the defaults) and rebuilds places you visited. **Road signs** and **Dutch road
-  signs**; **French and European road scenery** (each European country's guardrails, sign faces, bus stops and street
+  signs**; **Revamped roads** (the road revamp in progress, one switch for all its parts: lane and width changes as
+  long as the road's speed needs, deck curves by speed, footbridges that never
+  block the road, abandoned railways off the roads, racetracks that keep their surface and get no street poles along them); **French and European road scenery** (each European country's guardrails, sign faces, bus stops and street
   edges; in France also its markings, bend and traffic signs, speed cameras, utility poles and regional houses);
   **Guard rails at drops**; **Widened entrances**; **Right of way by road class** (stop signs and stopping AI at
   unsignalised junctions); **Bumpy road surfaces**; **Rough dirt roads**; **Tyre polish, crack networks and

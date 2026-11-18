@@ -156,6 +156,7 @@ M.SCHEMA = {
   expRailTunnels = { kind = 'bool', default = false, label = 'Railway tunnels' },
   expRailCurves = { kind = 'bool', default = false, label = 'Rounded railway curves' },
   expWatertight = { kind = 'bool', default = false, label = 'Closed 3D models' },
+  expRoadRevamp = { kind = 'bool', default = false, label = 'Revamped roads' },
   expCanadaLidar = { kind = 'bool', default = false, label = 'Detailed Canadian lidar' },
   expGenGround = { kind = 'bool', default = false, label = 'Generated ground' },
   expStaleRevisit = { kind = 'bool', default = false, label = 'Show the older world while rebuilding' },
@@ -227,7 +228,7 @@ M.ORDER = { 'quality', 'terrainDetail', 'lodPx', 'groundPhoto', 'groundGrid', 't
   'creditsCorner', 'creditsSize', 'mainMenuTile', 'cacheCapGb', 'routeDownload', 'routeAvoidHighways', 'serverCores', 'serverPriority', 'teleportPriority', 'maxRamGb', 'devOutlineKm',
   'devMapKm',
   -- (the Experimental page's: server/experimental.py FEATURES, in its order; roadSigns is above)
-  'expNlRoadSigns', 'expEuScenery', 'expDropRails', 'expEntranceFlares', 'expPriorityStops', 'expRoadBumps', 'expRoughDirt',
+  'expNlRoadSigns', 'expRoadRevamp', 'expEuScenery', 'expDropRails', 'expEntranceFlares', 'expPriorityStops', 'expRoadBumps', 'expRoughDirt',
   'expWearStrips', 'expGradeGuard', 'expPhotoSurface', 'expTerrainBumps', 'expCliffWalls', 'expTunnelLids', 'expSubseaTunnels',
   'expAiTunnels', 'expRailCollide', 'expCatenary', 'expRailCrossings', 'expRailTunnels', 'expRailCurves', 'expWatertight',
   'expCanadaLidar', 'expGenGround', 'expStaleRevisit' }

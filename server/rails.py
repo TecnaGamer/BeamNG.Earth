@@ -135,8 +135,8 @@ def _crossing_windows(xy, lines, extra=()):
     out = []
     for a, b in spans:
         inner = xy[(s > a) & (s < b)]
-        out.append(np.vstack([[np.interp(a, s, xy[:, 0]), np.interp(a, s, xy[:, 1])], inner,
-                              [np.interp(b, s, xy[:, 0]), np.interp(b, s, xy[:, 1])]]))
+        out.append(np.vstack([[dnp.interp(a, s, xy[:, 0]), dnp.interp(a, s, xy[:, 1])], inner,
+                              [dnp.interp(b, s, xy[:, 0]), dnp.interp(b, s, xy[:, 1])]]))
     return out
 
 
@@ -161,10 +161,13 @@ def tram_lines(frame, tx, ty, cells):
     return out
 
 
-def tile_chunks(frame, tx, ty, cells, country=None, urban_fn=None):
+def tile_chunks(frame, tx, ty, cells, country=None, urban_fn=None, records=None):
     """The track chunks of road tile (tx, ty) (anchor frame): ballast, sleepers, then the rails (material order: the
     road mesh draws them in that order). cells: the roads Features of the cells touching the tile. Sweden (country),
-    in town (urban_fn, as road_specs): a tram beside a carriageway is street track on paving (GATUSPAR_M)."""
+    in town (urban_fn, as road_specs): a tram beside a carriageway is street track on paving (GATUSPAR_M).
+    records: railways.crossing_records of the tile (BNE_RAIL_ROAD_FIT): the level crossings of the 3D tracks then come
+    from them alone (crossing_decks: the deck from the track's last point before the crossing to its first after it,
+    the cut railways.tile_mesh makes from the same records), none from the carriageways here."""
     import railways
     import roads
     box = roads.tile_bbox(tx, ty)
@@ -215,7 +218,8 @@ def tile_chunks(frame, tx, ty, cells, country=None, urban_fn=None):
                 else:
                     tracks.append((kind, xy, meshed, got[1] if meshed else 0,
                                    meshed and got[1] and railways.RAIL_LIFECYCLE and railways.heritage(feats, i)))
-    if not tracks:
+    fit = railways.RAIL_ROAD_FIT and records is not None
+    if not tracks and not fit:
         return []
 
     def on_road(pts, eligible):
@@ -230,6 +234,8 @@ def tile_chunks(frame, tx, ty, cells, country=None, urban_fn=None):
     ballast, sleepers, rails = [], [], []
     todo = []
     for kind, xy, meshed, wear, kept in tracks:
+        if fit and meshed and kind in ("rail", "narrow"):
+            continue                    # (their crossings: the records', below)
         # (a worn line's street track only across the roads its 3D track is not cut at: railways.WORN_CUT_CLASSES,
         # #918; else its old bed came back as street rails across the motorway, wyo-backroads' PR #1117; a heritage
         # line's railways.HERITAGE_CUT_CLASSES)
@@ -287,4 +293,32 @@ def tile_chunks(frame, tx, ty, cells, country=None, urban_fn=None):
                     ballast.append(_chunk(BALLAST, bw, part))
                     for side in (off, -off):
                         rails.append(_chunk(RAIL, HEAD_M, roads.offset_polyline(part, side)))
+    if fit:
+        crossing_decks(records, box, sleepers, rails)
     return ballast + sleepers + rails
+
+
+def crossing_decks(records, box, sleepers, rails):
+    """railways.RAIL_ROAD_FIT: the level crossings of railways.crossing_records (railways.crossing_panels: from the 3D
+    track's last point before each crossing to its first after it) as chunks of the tile (box): with BNE_RAIL_XING the
+    rubber deck (into sleepers) and its two rails at the 3D track's gauge (into rails), else the street track decal;
+    each cut MARGIN_M past the tile box (the road mesh cuts them at it, the next tile lays the rest from its own records:
+    the same crossing)."""
+    import roads
+    for _fid, _cls, line, half_g in sorted(_panels(records), key=lambda e: (e[0], float(e[2][0, 0]), float(e[2][0, 1]))):
+        for piece in roads.clip_polyline(line, box[0] - MARGIN_M, box[1] - MARGIN_M, box[2] + MARGIN_M,
+                                         box[3] + MARGIN_M):
+            piece = roads.densify(piece, SAMPLE_M)[:, :2]
+            if len(piece) < 2:
+                continue
+            if railxing.ENABLED:
+                sleepers.append(_chunk(DECK, DECK_W, piece))
+                for side in (half_g, -half_g):
+                    rails.append(_chunk(RAIL, DECK_RAIL_W, roads.offset_polyline(piece, side)))
+            else:
+                rails.append(_chunk(STREET_TRACK, STREET_TRACK["w"], piece))
+
+
+def _panels(records):
+    import railways
+    return railways.crossing_panels(records)

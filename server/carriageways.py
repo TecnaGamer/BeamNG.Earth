@@ -89,7 +89,7 @@ def sample(parts, chain, step=STEP_M):
         s = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(ln, axis=0).T))]
         m = max(2, int(math.ceil(s[-1] / step)) + 1)
         a = np.linspace(0.0, s[-1], m)
-        pts = np.stack([np.interp(a, s, ln[:, 0]), np.interp(a, s, ln[:, 1])], axis=1)
+        pts = np.stack([dnp.interp(a, s, ln[:, 0]), dnp.interp(a, s, ln[:, 1])], axis=1)
         if xs:
             pts = pts[1:]                               # (the joint once)
         xs.append(pts)
@@ -232,7 +232,7 @@ def solve(chains, couplings=(), rounds=ROUNDS, deadline=None, diagnostics=None):
     penalty = np.asarray([p for *_r, p in cp], np.float64)
     soft = {}
     if (penalty > 0).any() or (rows[:, 4] == 2).any() or (rows[:, 2] == -1).any():
-        fast.require(404, "carriageway_profiles' soft, upper and one-sample couplings")
+        fast.require(442, "carriageway_profiles' soft, upper and one-sample couplings")
         soft["coupling_penalty"] = penalty
     budget = float(deadline) - time.monotonic() if deadline is not None else BUDGET_S
     if np.isnan(budget):

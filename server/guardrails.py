@@ -1210,9 +1210,9 @@ def bridge_rows(parapets, frame=None):
             b, _ = _at(line, arc, sb)
             if float(dnp.hypot(*(b - a))) < 0.05:
                 continue
-            za, zb = float(np.interp(sa, arc, z)), float(np.interp(sb, arc, z))
+            za, zb = float(dnp.interp(sa, arc, z)), float(dnp.interp(sb, arc, z))
             p = 0.5 * (a + b)
-            zp = float(np.interp(0.5 * (sa + sb), arc, z))
+            zp = float(dnp.interp(0.5 * (sa + sb), arc, z))
             if frame is not None:
                 pla, plo, _ = frame.enu_to_geodetic(float(p[0]), float(p[1]), 0.0)
                 key = f"bridge:{float(pla):.6f}:{float(plo):.6f}"

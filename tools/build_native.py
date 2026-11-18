@@ -108,7 +108,11 @@ def main():
                 os.path.join(ROOT, "server", "earthfast.abi3.so"))
         print("built", os.path.join(ROOT, "server", "earthfast.abi3.so"), f"(glibc {LINUX_GLIBC})")
         return
-    subprocess.run(["cargo", "build", "--release"], cwd=CRATE, check=True)
+    env = None
+    if sys.platform == "darwin":    # (a Python extension on macOS leaves Python's symbols to the interpreter that loads
+        env = dict(os.environ)      # it; without this the link fails on every _Py* symbol: the M1 build, 2026-11-18)
+        env["RUSTFLAGS"] = (env.get("RUSTFLAGS", "") + " -C link-arg=-undefined -C link-arg=dynamic_lookup").strip()
+    subprocess.run(["cargo", "build", "--release"], cwd=CRATE, check=True, env=env)
     rel = os.path.join(CRATE, "target", "release")
     if sys.platform == "win32":
         src, dst = os.path.join(rel, "earthfast.dll"), os.path.join(ROOT, "server", "earthfast.pyd")

@@ -562,7 +562,7 @@ def _containers(frame, feats, rows, box, bld_rings, roads_xy, placed):
         pxy = pxy[keep]
         if len(pxy) == 0:
             continue
-        order = np.argsort(np.sum(dnp.sq(pxy - c), axis=1))
+        order = np.argsort(np.sum(dnp.sq(pxy - c), axis=1), kind="stable")
         pxy = pxy[order[:CONT_YARD_MAX[kind]]]
         for p in pxy:
             la, lo = _ll(frame, float(p[0]), float(p[1]))

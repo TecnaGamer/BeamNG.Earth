@@ -183,7 +183,7 @@ def growth(prof, lon, lat):
     # (the line's own metres to its source stations: geodesic, the same within millimetres)
     s = np.asarray(prof["stations"], np.float64)
     arc = np.r_[0., np.cumsum(dnp.hypot(*np.diff(line, axis=0).T))]
-    at = np.interp(at, arc, s)
+    at = dnp.interp(at, arc, s)
     return _ease(at, prof["length"], prof["reach"], prof["ends"]).reshape(np.shape(lon))
 
 

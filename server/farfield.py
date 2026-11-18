@@ -1074,7 +1074,7 @@ def palette_image():
     ]
     u = (np.arange(PALETTE_W) + 0.5) / PALETTE_W
     elev = elev_from_u(u)
-    base = np.stack([np.interp(elev, [e for e, _ in land], [c[k] for _, c in land]) for k in range(3)], -1)
+    base = np.stack([dnp.interp(elev, [e for e, _ in land], [c[k] for _, c in land]) for k in range(3)], -1)
     # Low land takes the terrain block's dirt colour (§2.3 colour continuity), blending into the
     # height palette between DIRT_UNTIL and DIRT_BLEND_TO; the slope tint fades in with it.
     w = np.clip((elev - DIRT_UNTIL) / (DIRT_BLEND_TO - DIRT_UNTIL), 0.0, 1.0)[:, None]

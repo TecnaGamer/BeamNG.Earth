@@ -76,6 +76,8 @@ mod farpvs;
 mod farsel;
 mod dirtsteps;
 mod racedig;
+mod racejoin;
+mod railfit;
 mod gridinterp;
 mod dejunction;
 mod streetlabels;
@@ -86,6 +88,7 @@ mod mdhtml;
 mod reportpack;
 mod farrestore;
 mod roadlanes;
+mod propassembly;
 mod waytags;
 mod pmtiles;
 mod underdeck;
@@ -2162,8 +2165,8 @@ impl EndsGrid {
 /// grading.chain_extensions: for each query (a road part's end: its node, the way the road goes on through it, its
 /// smoothing class, its road), the straightest candidate line with an end within join m of the node, of the same class
 /// and another road, turning at most turn_deg (directions over look m of each line); its line from the node outward,
-/// cut reach m along (each query its own), as points (n, 2) and per-query offsets (q + 1): an empty run for none.
-/// Ties: the lower candidate index (the caller's order).
+/// cut reach m along (each query its own), as points (n, 2) and per-query offsets (q + 1): an empty run for none;
+/// and per query the chosen candidate's index (-1 for none). Ties: the lower candidate index (the caller's order).
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
 fn chain_extensions<'py>(py: Python<'py>, cand_xy: PyReadonlyArray2<'py, f64>, cand_off: PyReadonlyArray1<'py, i64>,
@@ -2171,7 +2174,7 @@ fn chain_extensions<'py>(py: Python<'py>, cand_xy: PyReadonlyArray2<'py, f64>, c
                          q_node: PyReadonlyArray2<'py, f64>, q_dir: PyReadonlyArray2<'py, f64>,
                          q_class: PyReadonlyArray1<'py, i64>, q_road: PyReadonlyArray1<'py, i64>,
                          q_reach: PyReadonlyArray1<'py, f64>, join: f64, turn_deg: f64, look: f64)
-                         -> (Bound<'py, PyArray2<f64>>, Bound<'py, PyArray1<i64>>) {
+                         -> (Bound<'py, PyArray2<f64>>, Bound<'py, PyArray1<i64>>, Bound<'py, PyArray1<i64>>) {
     let (cxy, coff, ccl, crd) = (cand_xy.as_array(), cand_off.as_array(), cand_class.as_array(), cand_road.as_array());
     let (qn, qd, qcl, qrd, qr) = (q_node.as_array(), q_dir.as_array(), q_class.as_array(), q_road.as_array(),
                                   q_reach.as_array());
@@ -2179,11 +2182,12 @@ fn chain_extensions<'py>(py: Python<'py>, cand_xy: PyReadonlyArray2<'py, f64>, c
     let grid = EndsGrid::new(&cxy, &coff, join);
     let mut out: Vec<f64> = Vec::new();
     let mut off: Vec<i64> = vec![0];
+    let mut which: Vec<i64> = Vec::with_capacity(qn.nrows());
     for q in 0..qn.nrows() {
         let (nx, ny) = (qn[[q, 0]], qn[[q, 1]]);
         let (dx, dy) = (qd[[q, 0]], qd[[q, 1]]);
         let dl = dx.dhypot(dy);
-        let mut best: Option<(f64, Vec<f64>, Vec<f64>)> = None;
+        let mut best: Option<(f64, Vec<f64>, Vec<f64>, usize)> = None;
         if dl > 0.0 {
             for c in grid.near(nx, ny) {
                 if ccl[c] != qcl[q] || crd[c] == qrd[q] {
@@ -2212,11 +2216,12 @@ fn chain_extensions<'py>(py: Python<'py>, cand_xy: PyReadonlyArray2<'py, f64>, c
                 }
                 let cos = (dx * ex + dy * ey) / (dl * el);
                 if cos >= cos_max && best.as_ref().map_or(true, |b| cos > b.0) {
-                    best = Some((cos, xs, ys));
+                    best = Some((cos, xs, ys, c));
                 }
             }
         }
-        if let Some((_, xs, ys)) = best {
+        which.push(best.as_ref().map_or(-1, |b| b.3 as i64));
+        if let Some((_, xs, ys, _c)) = best {
             // from the node itself, cut reach m along
             out.push(nx);
             out.push(ny);
@@ -2237,7 +2242,7 @@ fn chain_extensions<'py>(py: Python<'py>, cand_xy: PyReadonlyArray2<'py, f64>, c
         off.push((out.len() / 2) as i64);
     }
     let a = numpy::ndarray::Array2::from_shape_vec((out.len() / 2, 2), out).unwrap();
-    (a.into_pyarray(py), off.into_pyarray(py))
+    (a.into_pyarray(py), off.into_pyarray(py), which.into_pyarray(py))
 }
 
 /// grading node parts: for each query node (n, 2), the candidate lines (cand_xy / cand_off as chain_extensions') with an
@@ -6605,9 +6610,49 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(roadnet::splitlayer::lane_split_layer, m)?)?;
     // 403: R2a's lane section layer (roadnet::splitlayer::lane_split_layer = lanesections.split's new-layer assembly:
     // the columns gathered, the sections' values, LANE_MAX, the geometry and rule rows, the cut points' connectors)
-    // 404 (first numbered 373 on the vsolve branch): carriageway_profiles(..., coupling_penalty): soft couplings, one
-    // slack each at an exact L1 penalty (the one vertical solve's grade rows, server/vsolve.py); "le" couplings and
-    // one-sample couplings (b None)
-    m.add("VERSION", 404)?;
+    m.add_function(wrap_pyfunction!(roadnet::widthlanes::lane_evidence, m)?)?;
+    m.add_function(wrap_pyfunction!(roadnet::widthlanes::width_rejected, m)?)?;
+    // 404: R2a's lane evidence and width repair (roadnet::widthlanes: roads._lane_evidence's loop, width_rejected's
+    // body: the class codes, the candidates, the home copies' lanes, the trunk / one-way tests)
+    m.add_function(wrap_pyfunction!(racejoin::raceway_ground, m)?)?;
+    m.add_function(wrap_pyfunction!(racejoin::raceway_dominance, m)?)?;
+    m.add_function(wrap_pyfunction!(racejoin::raceway_join_reach, m)?)?;
+    // 405 (404 taken by another branch the same day): racejoin (grading.raceway_ground in Rust, bit for bit, and its
+    // layered rule for BNE_RACEWAY_DIG: a raceway ending on another gives way to it, raceway_dominance)
+    // 440: racejoin's joins with their reach (5-tuples), raceway_join_reach, through lines at a node; race_dig_floor's
+    // round_up_at (the coordinator's range 440-449 for this branch)
+    m.add_function(wrap_pyfunction!(propassembly::assembly_cull, m)?)?;
+    m.add_function(wrap_pyfunction!(propassembly::wire_cull, m)?)?;
+    // 430: street furniture assemblies culled as one (propassembly; racedig.clear_props, under_decks)
+    // 431: Codex's review of 1bc9f8cb: assembly_cull (any structural member culls the assembly, lenses follow;
+    // replaces prop_assemblies / assembly_drop), wire_cull (a span goes with its end supports culled in this tile or
+    // the next; replaces wire_ends_at_supports); power_line_layout takes the yards' rings and the gantries' offset (a
+    // line end moved with its gantries inside the fence)
+    // 432: Codex round 2: power_line_layout returns each wire's supports and the ground under each end's gantries
+    // (ends (e, 6)), takes the kit's gantries / anchor and a ground callback, and drops an end whose gantries fit
+    // nowhere; substation_yard returns a z column (an anchored gantry's ground)
+    // 433: power_line_layout merges a line end only into an earlier end of the same yard whose gantries stand
+    // 434: power_line_layout takes each yard ring's yard id: a line end moves and merges within its own yard only
+    // 435: power_line_layout's ends carry their yard's id (e, 7): each anchored in its own yard only
+    // 436: power_line_layout's wire supports give a line end's gantry row (kind 2: its place, ground, yaw)
+    // 437: power_line_layout keeps the vertices either side of a yard's edge (start-independent line ends)
+    // 438: BNE_POWER_YARDS: power_line_layout keeps yard-edge vertices only with yards given; a gantry fits with
+    // its whole footprint; substation_yard clips an anchored kit only with anchors (a, 5)
+    // 439: a gantry's footprint has no yard ring vertex under it (a hole inside it)
+    m.add_function(wrap_pyfunction!(railfit::rail_crossing_runs, m)?)?;
+    m.add_function(wrap_pyfunction!(railfit::rail_road_ends, m)?)?;
+    m.add_function(wrap_pyfunction!(railfit::station_platform_trim, m)?)?;
+    m.add_function(wrap_pyfunction!(railseam::rail_seam_couple_ground, m)?)?;
+    // 420: railfit (BNE_RAIL_ROAD_FIT, the reports r63 / r64 / r92): rail_crossing_runs = railways.crossing_records (the
+    // 3D track's cut and the crossing deck from one record), rail_road_ends = dead_ends' road test, station_platform_trim =
+    // railstations._off_roads; railseam::rail_seam_couple_ground = grading.seam_on_ground (BNE_RAIL_SEAM_NATURAL, r61 / r62 / r80)
+    // 421: rail_crossing_runs, rail_road_ends (z_end, rail heads, cos, dz) and railseam::rail_seam_couple_ground (rown)
+    // as they are now; 420's rail_run_ends, rail_deck_line and rail_seam_natural gone (Python and module ship together)
+    // 422: rail_crossing_runs takes rail_out (the outer rail kept off a shallow crossing's lane); 423: rail_road_ends
+    // takes the parts' gauges and reads their ends only
+    // 442 (first numbered 373, then 404 on the vsolve branch): carriageway_profiles(..., coupling_penalty): soft
+    // couplings, one slack each at an exact L1 penalty (the one vertical solve's grade rows, server/vsolve.py); "le"
+    // couplings and one-sample couplings (b None)
+    m.add("VERSION", 442)?;
     Ok(())
 }
