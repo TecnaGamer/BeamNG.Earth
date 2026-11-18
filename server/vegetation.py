@@ -184,15 +184,28 @@ def _disc_offsets(r):
     return sorted(out, key=lambda o: (o[0] * o[0] + o[1] * o[1], o))
 
 
+def _max3(a):
+    """_shift_max(a, 1): the maximum over the 3 x 3 around each pixel (that disc is the whole 3 x 3), a row pass and a
+    column pass in place (a third of disc_max's time)."""
+    h = a.copy()
+    np.maximum(h[:, 1:], a[:, :-1], out=h[:, 1:])
+    np.maximum(h[:, :-1], a[:, 1:], out=h[:, :-1])
+    v = h.copy()
+    np.maximum(v[1:], h[:-1], out=v[1:])
+    np.maximum(v[:-1], h[1:], out=v[:-1])
+    return v
+
+
 def _band_tops(hs, bands):
     """The local maxima of the heights hs by band: the pixels of each band (lo, hi, r) as high as the highest of their
     disc of radius r (_shift_max: band & (hs >= _shift_max(hs, r))). Every disc holds the 3 x 3 around its pixel, so
     the tops are among the 3 x 3 maxima, ~2 % of the pixels: only those are compared with the rest of their disc, the
     nearest pixels first, the ones already beaten dropped as it goes. A whole-array disc maximum per band (earthfast
-    disc_max, 4 a cell) was a third of a trees cell's build."""
+    disc_max, 4 a cell) was a third of a trees cell's build. (Heights without NaN, as the canopy's: a NaN in a disc
+    compares unlike in disc_max.)"""
     n_r, n_c = hs.shape
     tops = np.zeros(hs.shape, bool)
-    jj, ii = np.nonzero((hs >= min(lo for lo, _, _ in bands)) & (hs >= _shift_max(hs, 1)))
+    jj, ii = np.nonzero((hs >= min(lo for lo, _, _ in bands)) & (hs >= _max3(hs)))
     v = hs[jj, ii]
     rmax = max([r for _, _, r in bands] + [1])
     pad = np.full((n_r + 2 * rmax, n_c + 2 * rmax), -np.inf, np.float32)    # (outside the array: -inf, as disc_max)
@@ -478,7 +491,10 @@ class Vegetation:
         _mask_corners(road_cells, (road, curb), chm, cd.bounds, getattr(self.surface, "urban", None), self.widths)
         # smoothed heights (3 x 3 mean), then the local maxima by height band
         p = np.pad(h, 1, mode="edge")
-        hs = sum(p[a:a + n_r, b:b + n_c] for a in range(3) for b in range(3)) / 9.0
+        hs = 0 + p[:n_r, :n_c]             # (summed in place, in the same order)
+        for a, b in ((a, b) for a in range(3) for b in range(3) if a or b):
+            np.add(hs, p[a:a + n_r, b:b + n_c], out=hs)
+        np.divide(hs, 9.0, out=hs)
         k = _merc_k((lat0 + lat1) / 2)     # (the radii below in pixels at MERC_REF_LAT: scaled to the ground's)
         tops = _band_tops(hs, [(lo_m, hi_m, max(1, int(round(r * k)))) for lo_m, hi_m, r in
                                ((BUSH_MIN_M, TREE_MIN_M, 1), (TREE_MIN_M, 8.0, 2), (8.0, 15.0, 3), (15.0, 1e9, 4))])
