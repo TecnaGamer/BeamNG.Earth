@@ -164,6 +164,8 @@ class UnderpassMaskTest(unittest.TestCase):
         self.assertEqual(g1[-1, 0], 302.0)                                  # (one point past the window)
         self.assertIs(deck, rails[1][3])                                    # (a deck stays whole)
         self.assertIs(railways._span_clip(rails, []), rails)
+        gen = railways._span_clip(rails, (t for t in [(line, 3.0)]), (0.0, -10.0, 300.0, 60.0))
+        self.assertEqual([(k, p.tolist()) for _f, _c, k, p in gen], [(k, p.tolist()) for _f, _c, k, p in got])
         whole = railways._span_clip(rails, [], (-1e9, -1e9, 1e9, 1e9))
         self.assertTrue(all(a[3] is b[3] for a, b in zip(whole, rails)))
         self.assertEqual(railways._span_clip([("s", "rail", "ground", np.array([[0.0, 0.0], [1e4, 0.0]]))], [],

@@ -703,6 +703,7 @@ def _underpass_hits(rails, tunnels, margin):
     0.5 m) to a run that actually crosses it: a crossing on one track must not qualify a neighbouring track, and only the
     runs inside the footprint are connected (the source feature's splits kept, a turnout or a returning track far
     outside it not followed). earthfast.rail_underpass_hits. Pure."""
+    tunnels = list(tunnels)
     out = [{} for _ in tunnels]
     if not tunnels:
         return out
@@ -733,6 +734,7 @@ def _span_clip(rails, tunnels, near=None):
     lattice and the shared end points kept (across source features and tiles too); then, near (x0, y0, x1, y1) given,
     each ground piece cut to its runs of points inside near, one STEP_M more each side (the same sample points as the
     whole part: they lie every STEP_M from its start), a run of one point left out. earthfast.rail_span_clip. Pure."""
+    tunnels = list(tunnels)     # (an iterable read once, as the Python's loop did)
     if not tunnels and near is None:
         return rails
     import fast
