@@ -189,8 +189,9 @@ fn road_on(c: usize, p: &[[f64; 2]], z: &[f64], d: &[[f64; 3]], st: &[usize], re
 /// before any flush), each road (the crossers' pack: pts (m, 3) [x, y, road z], starts (C + 1,), reach (C,), dz) only
 /// where it crosses this part: the anchors (a_road, a_lo, a_hi: index ranges of the part where the road's centre line
 /// crosses it or the part runs down the street) hold the road's at-grade points round them (the run of its own test
-/// holding an anchored point), nothing else of it (a road beside the track that crosses another one, or this one
-/// elsewhere, cuts nothing here). Returns (blk (n,), runs (r, 2) [a, b] of the joined points, start_t (r,), end_t (r,)):
+/// holding an anchored point, at most max_run along the part past the anchor: a run decided by points the tile's
+/// clipped part holds, the same in every tile drawing it), nothing else of it (a road beside the track that crosses
+/// another one, or this one elsewhere, cuts nothing here). Returns (blk (n,), runs (r, 2) [a, b] of the joined points, start_t (r,), end_t (r,)):
 /// a run's edge on the section before it (a - 1 -> a) and after it (b -> b + 1) as the fraction of the section still
 /// off the crossing (`samples` - 1 points then `bisect` halvings, each with the run's own roads' test at the bed heights
 /// interpolated: the same test that made the run), NaN where the run reaches the part's end.
@@ -200,7 +201,7 @@ pub fn rail_crossing_runs<'py>(py: Python<'py>, xy: PyReadonlyArray2<'py, f64>, 
                                pts: PyReadonlyArray2<'py, f64>, starts: PyReadonlyArray1<'py, i64>,
                                reach: PyReadonlyArray1<'py, f64>, dz: f64, a_road: PyReadonlyArray1<'py, i64>,
                                a_lo: PyReadonlyArray1<'py, i64>, a_hi: PyReadonlyArray1<'py, i64>, samples: usize,
-                               bisect: usize)
+                               bisect: usize, max_run: f64)
                                -> PyResult<(Bound<'py, PyArray1<bool>>, Bound<'py, PyArray2<i64>>,
                                             Bound<'py, PyArray1<f64>>, Bound<'py, PyArray1<f64>>)> {
     let (x, zz, d, st, r) = (xy.as_array(), z.as_array(), pts.as_array(), starts.as_array(), reach.as_array());
@@ -229,17 +230,23 @@ pub fn rail_crossing_runs<'py>(py: Python<'py>, xy: PyReadonlyArray2<'py, f64>, 
         roads.sort_unstable();
         roads.dedup();
         let mut owner: Vec<Vec<usize>> = vec![Vec::new(); n];
+        let mut s = vec![0.0f64; n];        // (arc lengths: a run reaches at most max_run past its anchor)
+        for i in 1..n {
+            s[i] = s[i - 1] + (xv[i][0] - xv[i - 1][0]).dhypot(xv[i][1] - xv[i - 1][1]);
+        }
         for &c in &roads {
             let on = road_on(c, &xv, &zv, &dv, &sv, &rv, dz);
             let mut keep = vec![false; n];
             for &(_c, lo, hi) in anchors.iter().filter(|a| a.0 == c) {
-                for i in lo..=hi.min(n - 1) {
-                    if !on[i] || keep[i] {
+                let hi = hi.min(n - 1);
+                let (smin, smax) = (s[lo] - max_run, s[hi] + max_run);
+                for i in lo..=hi {
+                    if !on[i] {
                         continue;
                     }
                     let (mut a, mut b) = (i, i);
-                    while a > 0 && on[a - 1] { a -= 1; }
-                    while b + 1 < n && on[b + 1] { b += 1; }
+                    while a > 0 && on[a - 1] && s[a - 1] >= smin { a -= 1; }
+                    while b + 1 < n && on[b + 1] && s[b + 1] <= smax { b += 1; }
                     for q in a..=b { keep[q] = true; }
                 }
             }

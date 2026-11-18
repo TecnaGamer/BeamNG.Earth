@@ -1476,7 +1476,8 @@ class RoadFitTest(unittest.TestCase):
         """Codex on b2a9b4b3: the at-grade test read a road's height at its segment's start through each tile's graded
         window (_mixed): a sparse road whose one segment starts 130 m from the crossing, inside tile 0's window on a
         3 m fill and outside tile 1's, was over the bed in tile 0 (no crossing, the track drawn) and at grade in tile 1
-        (cut, a deck). The records read the road every STEP_M on the natural ground (far_ground)."""
+        (cut, a deck). The records read the road every STEP_M (its graded surface near the tile, the same at a point in
+        every tile)."""
         f = features([[(-100.0, 100.0), (500.0, 100.0)], [(200.0, -30.0), (300.0, 230.0)]],
                      ["standard_gauge", "secondary"], subtypes=["rail", "road"])
         start = FRAME.geodetic_to_enu(*FRAME.enu_to_geodetic(200.0, -30.0, 0.0)[:2], 0.0)[:2]
@@ -1505,3 +1506,42 @@ class RoadFitTest(unittest.TestCase):
             blk = railways._blocked(xy, np.full(len(xy), 10.0),
                                     [(line, hw, np.asarray(ground(line), np.float64))])
             self.assertFalse(blk.any())
+
+    def test_a_long_run_beside_the_road_never_crosses_the_seam_from_the_far_anchor(self):
+        """Codex on 6e4f6408: a track inside a road's reach (not down the street) for 600 m, the road crossing it only
+        past one tile's rail window: the next tile's run grew from that crossing back through the seam while the first
+        tile, without the anchor, kept its track. A run reaches XING_RUN_MAX_M past its anchor at most: at the seam
+        neither tile cuts."""
+        f = features([[(-300.0, 100.0), (900.0, 100.0)],
+                      [(0.0, 103.8), (660.0, 103.8), (700.0, 40.0)]],      # (3.8 m off: within 4.5, not 1 m inside)
+                     ["standard_gauge", "secondary"], subtypes=["rail", "road"])
+        for tx in (0, 1):
+            with unittest.mock.patch.object(railways, "RAIL_ROAD_FIT", True):
+                rec = railways.crossing_records(FRAME, tx, 0, [f], flat)
+            (xy, r), = [(xy, r) for (fid, _c, _k, xy), r in zip(rec["rails"], rec["runs"]) if fid == "id000"]
+            seam = np.abs(xy[:, 0] - 256.0) < 30.0
+            self.assertFalse(r is not None and r["blk"][seam].any(), f"tile {tx}: nothing cut at the seam")
+            if r is not None:
+                for a, b in r["runs"].tolist():
+                    self.assertGreater(float(xy[a, 0]), 600.0, "only round the crossing at x ~ 680")
+
+    def test_the_roads_graded_surface_tells_the_crossing(self):
+        """Codex on 6e4f6408: on the natural ground alone a road in a 4 m cut the grading made met the bed at grade (its
+        track replaced by a deck on the road below), and a road filled up to the track's level across a dip did not.
+        The records read the roads' graded surface near the tile."""
+        f = features([[(-100.0, 100.0), (360.0, 100.0)], [(120.0, -100.0), (120.0, 300.0)]],
+                     ["standard_gauge", "secondary"], subtypes=["rail", "road"])
+        x0 = float(railways.crossings(FRAME, [f], roads.tile_bbox(0, 0), reach=50.0)[0][0][0, 0])
+
+        def runs_of(graded, natural):
+            with unittest.mock.patch.object(railways, "RAIL_ROAD_FIT", True):
+                rec = railways.crossing_records(FRAME, 0, 0, [f], graded, far_ground=natural)
+            return [r for (fid, _c, _k, _xy), r in zip(rec["rails"], rec["runs"]) if fid == "id000"][0]
+
+        def on_road(q, inside, outside):
+            q = np.asarray(q, np.float64).reshape(-1, 2)
+            return np.where(np.abs(q[:, 0] - x0) < 1.0, inside, outside)
+        # a cut: the graded road 4 m down where it crosses, the natural ground level with the bed
+        self.assertIsNone(runs_of(lambda q: on_road(q, 6.0, 10.0), flat))
+        # a fill across a dip: the natural ground 3 m down, the graded road at the track's level
+        self.assertIsNotNone(runs_of(flat, lambda q: on_road(q, 7.0, 10.0)))
