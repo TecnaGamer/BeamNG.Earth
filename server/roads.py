@@ -519,8 +519,11 @@ def level_ranges(feats, i, _home=True):
         _cell_ranges(feats)
         got = memo.get(i)
         if got is None:
-            _level_many(feats, [i])
-            got = memo[i]
+            if RANGE_OWNERS:
+                got = _level_many_owned(feats, [i])[i]
+            else:
+                _level_many(feats, [i])
+                got = memo[i]
     if feats.__dict__.get("_lidar_rule"):
         import revisit                      # (the rule for want of the lidar: nothing built on it is kept)
         revisit.fault(lidar=True)
@@ -570,14 +573,20 @@ def _level_memo(feats, idx):
     if not idx:
         return {}
     memo = feats.__dict__.setdefault("_level_ranges", {})
+    made = {}
     if any(i not in memo for i in idx):
         _cell_ranges(feats)
         miss = [i for i in idx if i not in memo]
         if miss:
-            _level_many(feats, miss)
+            if RANGE_OWNERS:
+                made = _level_many_owned(feats, miss)
+            else:
+                _level_many(feats, miss)
     if feats.__dict__.get("_lidar_rule"):
         import revisit                      # (the rule for want of the lidar: nothing built on it is kept)
         revisit.fault(lidar=True)
+    if RANGE_OWNERS:
+        return {i: made[i] if i in made else memo[i] for i in idx}
     return {i: memo[i] for i in idx}
 
 
@@ -594,6 +603,41 @@ def _level_many(feats, idx):
     lid = [answers.get(str(feats.ids[i])) or () for i in idx] if answers else None
     for i, r in zip(idx, _level_steps(feats, idx, rule, _STEP_LIDAR | _STEP_GAPS, lid)):
         memo.setdefault(i, r)
+
+
+# FAST_GAP's range bookkeeping (BNE_FAST_GAP=on; off, the code above as it always was): a layer's ranges are kept in its
+# memo only by the thread making them (_cell_ranges' owner, recorded when it claims the layer), and a layer made short
+# says so on itself (_ranges_short_until) before it is said done, so grading._raw_lines reads only clean, published rows
+RANGE_OWNERS = os.environ.get("BNE_FAST_GAP", "off") == "on"
+
+
+def _level_many_owned(feats, idx):
+    """_level_many with RANGE_OWNERS: {i: its ranges} of every one of idx. A row goes into the memo only from the thread
+    building the layer's ranges (busy, its owner); every other reader's row is its own alone (made short of something,
+    its fault is that reader's: the build would have kept it and said the layer done). A row published meanwhile is
+    the one handed back. The memo's look, the owner's test and the insertion are one step under the facts lock."""
+    st = feats.__dict__
+    memo = st.setdefault("_level_ranges", {})
+    with _FACTS_LOCK:
+        out = {i: memo[i] for i in idx if i in memo}
+    todo = [i for i in idx if i not in out]
+    if not todo:
+        return out
+    rule = _rule_many(feats, todo)
+    answers = _lidar_answers(feats) if LIDAR_GAPS_ON else {}
+    lid = [answers.get(str(feats.ids[i])) or () for i in todo] if answers else None
+    rows = _level_steps(feats, todo, rule, _STEP_LIDAR | _STEP_GAPS, lid)
+    with _FACTS_LOCK:
+        memo = st.setdefault("_level_ranges", {})
+        mine = st.get("_ranges_state") == "busy" and st.get("_ranges_owner") == threading.get_ident()
+        for i, r in zip(todo, rows):
+            if i in memo:
+                out[i] = memo[i]        # (published meanwhile)
+            elif mine:
+                memo[i] = out[i] = r
+            else:
+                out[i] = r
+    return out
 
 
 def rule_level_ranges(feats, i):
@@ -798,6 +842,8 @@ def _cell_ranges(feats, load_only=False):
                 return
         tried = st.get("_ranges_state")
         st["_ranges_state"] = "busy"
+        if RANGE_OWNERS:
+            st["_ranges_owner"] = threading.get_ident()     # (only its rows go into the memo while busy)
     if tried is None:
         mk = _ranges_mem_key(st)
         with _FACTS_LOCK:
@@ -810,6 +856,8 @@ def _cell_ranges(feats, load_only=False):
             if mem.get("until") is not None:
                 import revisit
                 revisit.fault()         # (made short of something: what is built on it now is not kept either)
+                if RANGE_OWNERS:        # (and said on the layer: grading._raw_lines keeps nothing built on them)
+                    st["_ranges_short_until"] = mem["until"]
             raw, lvl = st.setdefault("_raw_level_ranges", {}), st.setdefault("_level_ranges", {})
             mraw, mlvl = mem["raw"], mem["lvl"]     # (shared: level_ranges and the rest hand out copies)
             for i in range(len(feats)):
@@ -886,6 +934,8 @@ def _cell_ranges(feats, load_only=False):
             import xproc
             xproc.release(run_path + ".lock")
         raise
+    if RANGE_OWNERS and revisit.thread_faults() != f0:     # (the layer's ranges made short: said on it before they
+        st["_ranges_short_until"] = time.monotonic() + FACTS_SHORT_S    # are said done: a reader seeing done sees it)
     st["_ranges_state"] = "done"
     if FACTS_LOG:                       # (BNGE_FACTS_LOG: which process made which cell's facts, how long)
         log.info("cell facts %s made in %.2f s (pid %d)%s", st.get("_bnge_cell"), time.perf_counter() - t0, os.getpid(),
@@ -1605,7 +1655,7 @@ def _parts_by_level_new(feats, i, want, rngs=None):
     return out
 
 
-def _part_keys_new(feats, i, want):
+def _part_keys_new(feats, i, want, rngs=None):
     """A key per _parts_by_level_new(feats, i, want) piece, in its order, the same in every map cell's copy of the
     feature: its ring's number, the start of the range as the map has it (raw_level_ranges, its pieces of that kind)
     that it overlaps most, and its number among the pieces on that one. A long road's copies have different range
@@ -1613,8 +1663,9 @@ def _part_keys_new(feats, i, want):
     one copy's part 5 for another's (the A4's deck over a track at Glaireuse never built, one 4.4 km away twice,
     #1020); nor are its final ends (_skew_decks lengthens a deck over the roads each copy's cell has crossing under it:
     one A11 deck 15-44 m in eight copies, PR #1013), so a copy's longer deck and a shorter one share the key and the
-    stores keep one. A piece over no such range (the lidar's elevated stretch) keys by its own start."""
-    rngs = level_ranges(feats, i)
+    stores keep one. A piece over no such range (the lidar's elevated stretch) keys by its own start. rngs: the level
+    ranges to take (level_ranges' by default), as _parts_by_level_new's."""
+    rngs = level_ranges(feats, i) if rngs is None else rngs
     raw = raw_level_ranges(feats, i)
     if want == "ground":
         pieces, rawp = ground_ranges(rngs), ground_ranges(raw)
@@ -4770,7 +4821,7 @@ DUAL_DECK_M = 30.0      # m: parts of one level parallel within this are one dec
 
 
 def deck_profile(lines, ground_fn, crossings=(), clear=None, grade=None, lift=None, levels=None, widths=None, pins=None,
-                 crest=None):
+                 crest=None, fast=False):
     """deck_profile_once, then repeated with the deck-over-deck requirements: where two parts of
     different levels cross, the higher one clears the lower one's deck by `clear` (2026-10-11: crossing
     decks clipped into each other). pins: points where a ground road goes on from a joint of decks (abutments too: _pin).
@@ -4778,12 +4829,12 @@ def deck_profile(lines, ground_fn, crossings=(), clear=None, grade=None, lift=No
     the chain with them kept only where no part stands more than DECK_K_OVER_M higher at any of its points nor climbs
     more than DECK_K_GRADE more steeply on any of its segments than the chain without them (_no_worse; a branch leaving
     a trunk with a longer crest took a steeper start: an M5 deck at Almondsbury 4.2 -> 4.9 %), else the chain without.
-    Pure given ground_fn."""
+    fast: a motorway's or trunk's chain (deck_curve's FAST_DECK_ENDS rule). Pure given ground_fn."""
     if DECK_K_SPEED and crest is not None:
-        base = _deck_profile(lines, ground_fn, crossings, clear, grade, lift, levels, widths, pins, None)
-        new = _deck_profile(lines, ground_fn, crossings, clear, grade, lift, levels, widths, pins, crest)
+        base = _deck_profile(lines, ground_fn, crossings, clear, grade, lift, levels, widths, pins, None, fast)
+        new = _deck_profile(lines, ground_fn, crossings, clear, grade, lift, levels, widths, pins, crest, fast)
         return new if _no_worse(lines, base, new) else base
-    return _deck_profile(lines, ground_fn, crossings, clear, grade, lift, levels, widths, pins, None)
+    return _deck_profile(lines, ground_fn, crossings, clear, grade, lift, levels, widths, pins, None, fast)
 
 
 def _no_worse(lines, base, new):
@@ -4809,9 +4860,9 @@ def _no_worse(lines, base, new):
     return True
 
 
-def _deck_profile(lines, ground_fn, crossings, clear, grade, lift, levels, widths, pins, crest):
+def _deck_profile(lines, ground_fn, crossings, clear, grade, lift, levels, widths, pins, crest, fast=False):
     """deck_profile's solve (crest as there, used as given)."""
-    zs = deck_profile_once(lines, ground_fn, crossings, clear, grade, lift, pins=pins, crest=crest)
+    zs = deck_profile_once(lines, ground_fn, crossings, clear, grade, lift, pins=pins, crest=crest, fast=fast)
     n_road = len(crossings)
     if levels is None or len(lines) < 2:
         return zs
@@ -4836,7 +4887,7 @@ def _deck_profile(lines, ground_fn, crossings, clear, grade, lift, levels, width
         if not extra:
             break
         new = deck_profile_once(lines, ground_fn, list(crossings) + extra, clear, grade, lift, n_road=n_road,
-                                levels=levels, pins=pins, crest=crest)
+                                levels=levels, pins=pins, crest=crest, fast=fast)
         if all(np.allclose(a, b, atol=0.02, equal_nan=True) for a, b in zip(new, zs)):
             zs = new
             break
@@ -4987,7 +5038,7 @@ def _curve_crossings(crossings, n_road=None, levels=None):
 
 
 def deck_profile_once(lines, ground_fn, crossings=(), clear=None, grade=None, lift=None, n_road=None, levels=None,
-                      pins=None, curve=True, crest=None):
+                      pins=None, curve=True, crest=None, fast=False):
     """Deck heights (one array per part) of a bridge chain: deck_heights between the abutments, at
     least `lift` over the ground under it, and at least `clear` over each crossing road below
     ((part index, arc m, road height)), the requirement falling at `grade` along the chain; then
@@ -5001,14 +5052,15 @@ def deck_profile_once(lines, ground_fn, crossings=(), clear=None, grade=None, li
     # crest: Lombard Street, Baltimore's deck over its embankment, test_no_step_onto_a_steep_abutment)
     if curve and lines and bridge_profile_mode() == "curve" and len(crossings):
         got = deck_curve(lines, ground_fn, _curve_crossings(crossings, n_road, levels), (), clear, lift, pins=pins,
-                         crest=crest)
+                         crest=crest, fast=fast)
         if got is not None:
             g = _curve_grade(lines, got)
             if g <= DECK_STEEP_GRADE or _end_step(lines, got) <= DECK_STEEP_GRADE:
                 return got
             # (a curve steeper than that may not meet its ends: a "bridge" mapped along a hillside stepped 40 m at
             # its abutment, GitHub #382 near Tata. The ground envelope's profile when it is the gentler one)
-            old = deck_profile_once(lines, ground_fn, crossings, clear, grade, lift, n_road, levels, pins, False, crest)
+            old = deck_profile_once(lines, ground_fn, crossings, clear, grade, lift, n_road, levels, pins, False, crest,
+                                    fast)
             return got if not old or _end_step(lines, got) <= _end_step(lines, old) + 0.05 else old
     zs = deck_heights(lines, ground_fn, pins)
     if not zs:
@@ -5415,14 +5467,55 @@ def _path_crest(info, crest):
     return None if r is None else float(r)
 
 
-def deck_curve(lines, ground_fn, crossings=(), spans=(), clear=None, lift=None, max_grade=None, pins=None, crest=None):
+# Fast-road bridge ends (ski ramps, 2026-11-17): a motorway's or trunk's branched chain has as its trunk a line a car
+# drives through it, never a path that turns back at a joint (up one carriageway's deck, back down its twin's). The
+# trunk was the path carrying the highest requirement, then the longest: the A6 / A81 viaduct at Kreuz Weinsberg
+# (49.1549 N 9.2993 E, GitHub #1176) became a U through its two carriageways (the road continuing from an abutment at
+# grade counts as one), held at its south abutment's height, and its north spans fell 3.7 m in their 45 m (11 %, 1.4 g
+# at 130 km/h) as branches. BNE_FAST_DECK_ENDS=on.
+FAST_DECK_ENDS = os.environ.get("BNE_FAST_DECK_ENDS", "off") == "on"
+FAST_DECK_CLASSES = ("motorway", "trunk")
+TURN_BACK_COS = 0.0         # a path turning more than 90 degrees at a joint turns back (_turns_back)
+TURN_LOOK_M = 10.0          # m along each part its direction at the joint is read over
+
+
+def _dir_at(ln, start):
+    """Unit direction (2,) out of polyline ln (k, 2+) at its start (start True: into it) or into its end, read over
+    TURN_LOOK_M. Pure."""
+    p = np.asarray(ln, np.float64)[:, :2]
+    if not start:
+        p = p[::-1]
+    s = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(p, axis=0).T))]
+    t = min(TURN_LOOK_M, float(s[-1]))
+    q = np.array([np.interp(t, s, p[:, 0]), np.interp(t, s, p[:, 1])])
+    u = (q - p[0]) if start else (p[0] - q)
+    n = float(dnp.hypot(*u))
+    return u / n if n > 1e-9 else np.zeros(2)
+
+
+def _turns_back(lines, path):
+    """Does the path [(part, reversed)] turn back on itself (more than 90 degrees, TURN_BACK_COS) at any joint? Pure."""
+    for (k1, r1), (k2, r2) in zip(path[:-1], path[1:]):
+        u = _dir_at(lines[k1], r1)          # (arriving: its end, or its start when walked reversed)
+        u = -u if r1 else u
+        w = _dir_at(lines[k2], not r2)      # (leaving: its start, or its end when walked reversed)
+        w = -w if r2 else w
+        if float(dnp.dot(u, w)) < TURN_BACK_COS:
+            return True
+    return False
+
+
+def deck_curve(lines, ground_fn, crossings=(), spans=(), clear=None, lift=None, max_grade=None, pins=None, crest=None,
+               fast=False):
     """Deck heights (one array per part) of a bridge chain by curve_profile. A chain of parts in one line is
     solved as one profile; a branched chain (ramps leaving a viaduct) as its longest abutment-to-abutment
     line first, then each remaining branch from the solved deck it leaves (its height and grade there) to
     its own abutment or the deck it rejoins. None when the chain has no abutment (a closed loop). crossings:
     (part, arc m, height under it[, its own clearance]) roads and water under it (held `clear`, or their own
     clearance, over +-DECK_ROAD_HALF); spans: (part, arc from, arc to, min deck height). pins: joints at ground
-    roads, split into independent abutments in the graph without moving the mapped geometry. Pure given ground_fn."""
+    roads, split into independent abutments in the graph without moving the mapped geometry. fast: a motorway's or
+    trunk's chain (FAST_DECK_ENDS): a trunk turning back at a joint (_turns_back) comes after every other. Pure given
+    ground_fn."""
     clear = DECK_ROAD_CLEAR if clear is None else clear
     lift = DECK_CLEAR if lift is None else lift
     if not lines:
@@ -5457,11 +5550,11 @@ def deck_curve(lines, ground_fn, crossings=(), spans=(), clear=None, lift=None, 
             sub = deck_curve([lines[k] for k in ks], ground_fn,
                              [(idx[cr[0]],) + tuple(cr[1:]) for cr in crossings if cr[0] in idx],
                              [(idx[k], a0, a1, z) for k, a0, a1, z in spans if k in idx], clear, lift, max_grade, pins,
-                             sc)
+                             sc, fast)
             if sub is None:
                 sub = deck_profile_once([lines[k] for k in ks], ground_fn,
                                         [(idx[cr[0]],) + tuple(cr[1:]) for cr in crossings if cr[0] in idx], clear, None,
-                                        lift, pins=pins, crest=sc)
+                                        lift, pins=pins, crest=sc, fast=fast)
                 if bridge_profile_mode() == "curve" and sub is not None and any(
                         s is None for s in sub):
                     return None
@@ -5558,7 +5651,10 @@ def deck_curve(lines, ground_fn, crossings=(), spans=(), clear=None, lift=None, 
                 continue
             L = sum(edges[k][2][-1] for k, _ in p)
             top = max((need.get(k, -np.inf) for k, _ in p), default=-np.inf)
-            key = (top if np.isfinite(top) else -1e9, L)
+            # (FAST_DECK_ENDS: a path turning back on itself at a joint, up one carriageway and down the other, is no
+            # trunk: it comes after every path that goes on through)
+            key = ((0 if fast and _turns_back(lines, p) else 1),
+                   top if np.isfinite(top) else -1e9, L)
             if best is None or key > best[0]:
                 best = (key, p)
     if best is None:
@@ -7392,10 +7488,15 @@ DECK_SPAN_RATIO = 22.0  # a deck is its main span / this deep (girder bridges ru
 # lower each, its ramps gentler. A chain takes the clearance of the highest class it crosses (one chain, one clear;
 # the most demanding road under it, 5.0 m when unknown). Off by default until reviewed in game; BNE_LEVEL_SPACING=on.
 LEVEL_SPACING = os.environ.get("BNE_LEVEL_SPACING", "off") == "on"
-LOWER_CLEAR_M = {"motorway": 5.0, "trunk": 5.0, "service": 4.0, "track": 4.0, "footway": 2.7, "path": 2.7,
-                 "cycleway": 2.7, "pedestrian": 2.7, "bridleway": 2.7, "steps": 2.7, "rail": 6.5}
-LOWER_CLEAR_ROAD_M = 4.7        # m over any other road ...
-LOWER_CLEAR_UNKNOWN_M = 5.0     # ... and where the road under is not known (the most demanding road's)
+# (clearance study 2026-11-17: the unsigned clearances the main road standards keep: US interstates 16 ft (4.9 m),
+# UK 16 ft 6 in (5.03 m) on every unsigned road, Germany 4.50 m + 0.20 m, the Netherlands 4.50 m, France 4.75 m on main
+# roads and 4.30 m on others; farm and service underpasses 4.0 m; foot and cycle ways 2.5 m; an electrified railway
+# ~6.0 m from rail top to soffit. A lower real bridge carries a maxheight sign, which road_sign_at reads first)
+LOWER_CLEAR_M = {"motorway": 4.9, "trunk": 4.9, "primary": 4.9, "motorway_link": 4.9, "trunk_link": 4.9,
+                 "primary_link": 4.9, "service": 4.0, "track": 4.0, "footway": 2.5, "path": 2.5,
+                 "cycleway": 2.5, "pedestrian": 2.5, "bridleway": 2.5, "steps": 2.5, "rail": 6.0}
+LOWER_CLEAR_ROAD_M = 4.5        # m over any other road ...
+LOWER_CLEAR_UNKNOWN_M = 4.9     # ... and where the road under is not known (the most demanding road's)
 LEVEL_MARGIN_M = 0.1
 LEVEL_DEPTH_RATIO = 0.045       # m of deck depth per m of main span (precast girders, AASHTO's 0.045 L) ...
 LEVEL_DEPTH_RANGE = (0.7, 4.0)  # ... within these
@@ -7564,6 +7665,16 @@ def _crossings(lines, ground_lines):
     fast.require(240, "segment_crossings_lists")
     got = fast._ef.segment_crossings_lists(_lines64(lines), _lines64(ground_lines))
     return [(pi, arc, np.array([x, y])) for pi, _g, arc, x, y in got]
+
+
+def chain_under_classes(lines, ground_lines, ground_cls, lower_cls=()):
+    """LEVEL_SPACING: the road classes a bridge chain's one clearance target is for (lower_clear of them), the same for
+    its deck (BridgeProfiles._solve), its approach fills (grading.bridge_lifts) and the dips of the roads under it
+    (grading's underpasses): of every ground line crossing under any of the chain's parts lines (ground_cls: per ground
+    line its class, None unknown), and lower_cls, the classes of its own parts on a lower level (a stack). Pure."""
+    got = fast_crossing_ground(lines, ground_lines)
+    out = {str(ground_cls[g]) for g in got if g < len(ground_cls) and ground_cls[g] is not None}
+    return sorted(out | {str(c) for c in lower_cls if c is not None})
 
 
 def fast_crossing_ground(lines, ground_lines):
@@ -8153,20 +8264,25 @@ class BridgeProfiles:
         if LEVEL_SPACING:
             gcls = self.__dict__.get("_gcls", {})
             gk = [gcls.get(k) for k, v in ground.items() if k[1] == "g" for _g in v]
-            got = fast_crossing_ground(lines, gl)
-            under = sorted({str(gk[gi]) for gi in got if gi < len(gk) and gk[gi] is not None})
+            lower = ()
             if len(set(levels)) > 1:        # (a stack: its lower parts are roads under it too)
                 top = max(levels)
-                under += sorted({str(pool[k][0].cls) for k, lv in zip(comp, levels) if lv < top})
+                lower = [str(pool[k][0].cls) for k, lv in zip(comp, levels) if lv < top]
+            under = chain_under_classes(lines, gl, gk, lower)
         rails = [(c[0], c[1], z, deck_road_clear(depth, ["rail"] if LEVEL_SPACING else None))
                  for c, z in zip(rcr, rail_z)]
         pins = _ground_pins(lines, gl)          # (once: pure in lines and gl, which stay)
 
         crest = deck_crest_radii([pool[k][0] for k in comp]) if DECK_K_SPEED else None
 
+        # (FAST_DECK_ENDS: a chain carrying a motorway or a trunk, not only their links)
+        fast = FAST_DECK_ENDS and any(str(getattr(pool[k][0], "cls", "")) in FAST_DECK_CLASSES
+                                      and not getattr(pool[k][0], "link", False) for k in comp)
+
         def solve(ground_fn):
             return deck_profile(lines, ground_fn, required + rails + water, clear=deck_road_clear(depth, under),
-                                levels=levels, widths=[pool[k][0].width for k in comp], pins=pins, crest=crest)
+                                levels=levels, widths=[pool[k][0].width for k in comp], pins=pins, crest=crest,
+                                fast=fast)
         base = self._landing_ground(lines, gl)
         zs = solve(base)
         # a free end standing on another deck: solved again with it at that deck's height as drawn (measured too:
