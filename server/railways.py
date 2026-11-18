@@ -304,6 +304,7 @@ def parts(frame, cells, box, reach=REACH_M, clip=False, worn=None, gauges=None, 
     near = (box[0] - reach, box[1] - reach, box[2] + reach, box[3] + reach)
     seen, out = set(), []
     wear_of = worn if worn is not None else {}
+    kept = set()        # (worn heritage lines: cut only where 1.9.0 cut them, _cut_worn_at_motorways)
     # (each feature from the cell holding its longest copy: a long line's copies stitched from the map's tiles can be
     # cut short in some cells, and its level ranges (fractions of its length) then land 100+ m off in the short one:
     # a rail bridge over a road at 60.7771,11.21896 laid on the ground across it, a 2.3 m hump, GitHub #1137)
@@ -330,6 +331,8 @@ def parts(frame, cells, box, reach=REACH_M, clip=False, worn=None, gauges=None, 
             seen.add(fid)
             if got[1]:
                 wear_of[fid] = got[1]
+                if RAIL_LIFECYCLE and heritage(feats, i):
+                    kept.add(fid)
             if gauges is not None:
                 g = osm_gauge(feats, i)
                 if g:
@@ -351,7 +354,7 @@ def parts(frame, cells, box, reach=REACH_M, clip=False, worn=None, gauges=None, 
                         out.append((fid, c, kind, got[3].copy()))
     out.sort(key=lambda p: (p[0], p[2], float(p[3][0, 0]), float(p[3][0, 1])))
     if any(kind == "ground" and wear_of.get(fid) for fid, _c, kind, _xy in out):
-        out = _cut_worn_at_motorways(out, wear_of, motorway_crossings(frame, cells, box, reach))
+        out = _cut_worn_at_motorways(out, wear_of, motorway_crossings(frame, cells, box, reach), kept)
     out = _drop_stubs(out)
     out = level_bridges(frame, cells, out, near)
     out = _span_underpasses(out, road_underpasses(frame, cells, box, reach) if underpasses is None else underpasses)
@@ -885,6 +888,15 @@ def drawn(feats, i, bridges=False):
     return (c, w) if c in DRAWN or (bridges and c == "tram") else None
 
 
+def heritage(feats, i):
+    """A heritage line by OSM's tags (railtags.py): usage=tourism or railway:preserved=yes. A worn one of these (a
+    preserved line tagged disused out of season, a museum line) keeps its level crossings with BNE_RAIL_LIFECYCLE: cut
+    only at the roads 1.9.0 cut worn lines at (HERITAGE_CUT_CLASSES; the road revamp plan's R1h)."""
+    u = feats.attrs.get("osm_usage")
+    p = feats.attrs.get("osm_railway:preserved")
+    return bool((u is not None and str(u[i] or "") == "tourism") or (p is not None and str(p[i] or "") == "yes"))
+
+
 # OpenStreetMap's railway values (railtags.py), when the weekly file has the line: drawn with this wear, or not at all
 OSM_RAILWAY_WEAR = {"rail": 0, "light_rail": 0, "narrow_gauge": 0, "preserved": 0, "disused": 1, "abandoned": 2}
 OSM_RAILWAY_NOT = {"proposed", "construction", "razed", "dismantled", "planned", "subway", "tram", "monorail",
@@ -1032,6 +1044,7 @@ def crosses(a, b, min_sin=WALK_MIN_SIN):
 # still have its rails).
 WORN_CUT_M = 6.0
 WORN_CUT_CLASSES = {1: {"motorway"}, 2: {"motorway", "trunk"}}
+HERITAGE_CUT_CLASSES = WORN_CUT_CLASSES     # (a heritage line's: 1.9.0's, with the lifecycle switch too)
 if RAIL_LIFECYCLE:                  # (every road class: roads.STYLE's)
     WORN_CUT_CLASSES = {1: frozenset(roads.STYLE), 2: frozenset(roads.STYLE)}
 WORN_CUT_MIN_SIN = 0.2      # (a crossing flatter than this cuts as if at this angle: the cut stays bounded)
@@ -1077,10 +1090,11 @@ def _segment_at(line, p):
     return d[k]
 
 
-def _cut_worn_at_motorways(rails, wear_of, roads_xy):
+def _cut_worn_at_motorways(rails, wear_of, roads_xy, kept=frozenset()):
     """rails with each worn ground part (wear_of {fid: 1 | 2}) cut where it crosses one of roads_xy ((xy, half width,
-    class): motorway_crossings) of its wear's WORN_CUT_CLASSES: no point within the carriageway's half width (over
-    the crossing's angle) and WORN_CUT_M either side of the crossing. Pure."""
+    class): motorway_crossings) of its wear's WORN_CUT_CLASSES (HERITAGE_CUT_CLASSES for the fids in kept: heritage
+    lines): no point within the carriageway's half width (over the crossing's angle) and WORN_CUT_M either side of the
+    crossing. Pure."""
     if not roads_xy:
         return rails
     out = []
@@ -1089,7 +1103,8 @@ def _cut_worn_at_motorways(rails, wear_of, roads_xy):
         if kind != "ground" or not w:
             out.append((fid, cls, kind, xy))
             continue
-        lines = [(line, half) for line, half, c in roads_xy if c in WORN_CUT_CLASSES.get(w, ())]
+        table = HERITAGE_CUT_CLASSES if fid in kept else WORN_CUT_CLASSES
+        lines = [(line, half) for line, half, c in roads_xy if c in table.get(w, ())]
         if not lines:
             out.append((fid, cls, kind, xy))
             continue
@@ -1349,7 +1364,13 @@ def profile(rails, ground, underpasses=()):
                 zb[n] = _envelope(s, np.maximum(zb[n], reach))
             elif lifts:                         # a ground track follows its own bed: a distant deck carries the
                 lift = np.maximum(ltop - GRADE * (dl[a] + s), ltop - GRADE * (dl[b] + s[-1] - s))     # ramps to it
-                zb[n] = zb[n] + np.clip(lift, 0.0, SEED_LIFT_MAX_M)
+                # ... never over the decks' own heights run out at GRADE (or its own bed, where that is higher): a
+                # bridge's mapped end down a stream's bank read the bed there, in the channel, 11 m under the deck,
+                # and that 11 m rode on the bed's own level for 500 m either side (Findlay, OH: an embankment 8-11 m
+                # over a floodplain the line crosses at grade, GitHub #1384). Up a slope (#1051) the bed + lift stays
+                # under the deck's run-out, as before.
+                reach = np.maximum(top - GRADE * (d[a] + s), top - GRADE * (d[b] + s[-1] - s))
+                zb[n] = np.minimum(zb[n] + np.clip(lift, 0.0, SEED_LIFT_MAX_M), np.maximum(zb[n], reach))
     return list(zip(zb, zgs))
 
 

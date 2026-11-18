@@ -163,7 +163,8 @@ class RampMouths(unittest.TestCase):
         p = f.parts(i)[0][0]
         e, n, _ = FRAME.geodetic_to_enu(p[:, 1], p[:, 0], 0.)
         lane = roads.LANE_W["motorway"]
-        grid = lanesections._grid("motorway", 4, lane)
+        # (a motorway's travel lanes stand left of its pavement's centre by half its wider shoulder: 4 lanes)
+        grid = (roads.SHOULDER_WIDE_M if 4 >= roads.SHOULDER_WIDE_LANES else roads.SHOULDER_M) / 2.
         self.assertAlmostEqual(n[0], grid - 1.5 * lane - lane / 2, delta=.08)
         self.assertLess(abs(n[-1] + 60.), .3)
         self.assertGreater(np.diff(e).min(), 0.)
@@ -366,3 +367,81 @@ class ConsecutiveWidening(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def deck_fork(ramp_bridge=True):
+    """The A7's southbound junction with the B 286 at Schweinfurt (2026-11-16): a motorway whose last section carries
+    an exit lane (placed right of the through lanes) up to the joint at (0, 0), where the motorway goes on as a deck
+    (id001) and the one-lane exit ramp leaves as a deck of its own (id002); a primary road (id003) runs under both
+    80 m on."""
+    from test_roads import features
+    lines = [[(-400, 0), (0, 0)], [(0, 0), (400, 0)], [(0, 0), (60, -8), (180, -60)], [(80, -200), (80, 200)]]
+    flags = [(1, "is_bridge", 0., .5)] + ([(2, "is_bridge", 0., .6)] if ramp_bridge else [])
+    f = features(lines, ["motorway", "motorway", "motorway", "primary"], flags=flags)
+    f.attrs["src_record"] = np.array([f"w{i + 1}@1" for i in range(len(lines))])
+    f.rules["oneway"] = rules([(0, 1), (1, 1), (2, 1)], "float")
+    f.rules["subclass"] = rules([(2, "link")])
+    osmtags.join(f, {1: {"lanes": 3}, 2: {"lanes": 3}, 3: {"lanes": 1}})
+    a = np.empty(len(lines), object)
+    a[:] = None
+    a[0] = [(0., .5, "1", {"lanes": "3"}), (.5, 1., "2", {
+        "lanes": "4", "turn:lanes": "none|none|none|slight_right", "placement": "middle_of:2"})]
+    f.attrs[railtags.LANE_PARTS] = a
+    return f
+
+
+class DeckJoints(unittest.TestCase):
+    """The bridge chain solver joins decks and the ground roads going on from them by their ends (roads.PIN_M,
+    END_JOIN_*); a section's placement and a ramp's moved mouth must not take those ends off the joint."""
+
+    def test_unplaced_section_ends_on_the_maps_line(self):
+        f = lanesections.split(deck_fork(), FRAME)
+        i = f.index("id000~lanes500000000-1000000000")
+        placed = f.parts(i)[0][0]
+        self.assertGreater(abs(lanesections.end_shift(f, i, 1)), 1.0, "the section's end stands off the joint")
+        _e, n, _ = FRAME.geodetic_to_enu(placed[:, 1], placed[:, 0], 0.)
+        self.assertGreater(abs(n[-1]), 1.0)
+        raw = lanesections.unplaced(f, i, [placed])[0]
+        e, n, _ = FRAME.geodetic_to_enu(raw[:, 1], raw[:, 0], 0.)
+        self.assertLess(np.abs(n).max(), .05, "back on the map's line all along")
+        self.assertLess(abs(e[-1]), .05)
+        # any other road's (and a section left in place) as it is
+        j = f.index("id001")
+        rings = f.parts(j)[0]
+        self.assertIs(lanesections.unplaced(f, j, rings), rings)
+
+    def test_a_ramp_mouth_on_its_deck_stays_on_the_joint(self):
+        for bridge in (True, False):
+            with self.subTest(ramp_bridge=bridge):
+                f = deck_fork(bridge)
+                raw = f.parts(2)[0][0].copy()
+                out = lanesections.split(f, FRAME)
+                got = out.parts(out.index("id002"))[0][0]
+                moved = float(np.abs(got[0] - raw[0]).max()) * 111320.
+                if bridge:
+                    self.assertLess(moved, 1e-6, "the deck's mouth on the joint")
+                    np.testing.assert_array_equal(got, raw)
+                else:
+                    self.assertGreater(moved, 1.0, "a mouth on the ground goes out to its lane (RampMouths)")
+
+    def test_the_joint_is_an_abutment_at_the_ground(self):
+        """Solved, the decks start at the motorway's height where it goes on from the joint (flat ground: 10 m), over
+        the primary road under them: a carriageway split (two motorway decks) and an exit ramp's deck. The section's end
+        2 m off the joint left a split's joint free, and its decks stood 6.7 m over the road they go on from."""
+        from test_approaches import flat_elev, FLAT
+        for link in (False, True):
+            with self.subTest(link=link):
+                f = deck_fork()
+                if not link:
+                    f.rules["subclass"] = rules([])
+                f = lanesections.split(f, FRAME)
+                bp = roads.BridgeProfiles(FRAME, lambda key: f, flat_elev)
+                got = {fid: (np.asarray(xy)[:, :2], np.asarray(z)) for fid, _s, xy, z, _lon in
+                       bp.parts([f], (-500, -500, 500, 500))}
+                self.assertEqual(sorted(got), ["id001", "id002"])
+                for fid, (xy, z) in got.items():
+                    k = int(np.argmin(np.hypot(*xy.T)))
+                    self.assertLess(float(np.hypot(*xy[k])), .5, fid)
+                    self.assertAlmostEqual(float(z[k]), FLAT, delta=.1, msg=fid)
+                    self.assertLess(float(np.abs(np.diff(z[:6])).max()), .3, "no step off the abutment")
+                    self.assertGreater(float(z.max()), FLAT + 2.5, "over the primary road under it")

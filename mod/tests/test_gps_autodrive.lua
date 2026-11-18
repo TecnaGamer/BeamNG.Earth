@@ -27,9 +27,10 @@ local function fixture(path, y, radius, configure)
     setStopPoint = function(_, distance) f.stopDistance = distance end }
   env.mapmgr = { requestMap = function() f.requests = f.requests + 1 end }
   env.obj = { queueGameEngineLua = function() G.retryAutodrive() end }
-  env.extensions = { load = function()
-    local loader = assert(loadfile(dir .. '/../beamng_earth/lua/vehicle/extensions/beamngEarth/autodrive.lua'))
-    env.beamngEarth_autodrive = setfenv(loader, env)()
+  env.extensions = { load = function(name)
+    local files={beamngEarth_autodrive='autodrive',beamngEarth_staticObstacles='staticObstacles',beamngEarth_trafficSignals='trafficSignals'}
+    local loader = assert(loadfile(dir .. '/../beamng_earth/lua/vehicle/extensions/beamngEarth/' .. assert(files[name]) .. '.lua'))
+    env[name] = setfenv(loader, env)()
   end }
   function f:mapArrives()
     local graph = {}
@@ -53,6 +54,9 @@ local function fixture(path, y, radius, configure)
     getPosition = function() return { x = f.x, y = f.y, z = f.z } end,
     getDirectionVector = function() return { x = 1, y = 0, z = 0 } end,
     getVelocity = function() return { x = f.speed, y = 0, z = 0 } end,
+    getSpawnWorldOOBB = function() return {
+      getHalfExtents = function() return { x = 1, y = 2.5, z = 1 } end,
+    } end,
     queueLuaCommand = function(_, command)
       local fn = assert(loadstring(command))
       setfenv(fn, env)()
@@ -62,6 +66,10 @@ local function fixture(path, y, radius, configure)
     requestRoute = function() f.answer = f.route; return true end,
     takeRoute = function() local answer = f.answer; f.answer = nil; return answer end,
     serverHealthy = function() return f.healthy end,
+    autodriveReady = function()
+      if f.driveReady ~= nil then return f.driveReady end
+      return f.healthy
+    end,
   }
   core_groundMarkers = { routePlanner = {}, setPath = function(target)
     f.arrows = f.arrows + 1
@@ -301,7 +309,7 @@ do
   f = parallel(true, 20, true)
   for _ = 1, 100 do f:step(); if recoveries > 0 then break end end
   f:step()
-  T.check(recoveries == 1 and f.y == 0 and f.x > 40 and #f.drives > 0 and f.gps.status().off == 0,
+  T.check(recoveries == 1 and f.y == -3 and f.x > 40 and #f.drives > 0 and f.gps.status().off == 3,
     'after recovering to the intended road, normal GPS polling starts a connected forward path')
   recoveries, moveOnRecovery = 0, false
   f = parallel(false)
@@ -323,7 +331,7 @@ do
   f = parallel(true, 40, true, 10)
   for _ = 1, 100 do f:step(); if recoveries > 0 then break end end
   f:step()
-  T.check(recoveries == 1 and f.y == 10 and #f.drives > 0 and f.gps.status().off == 10,
+  T.check(recoveries == 1 and f.y == 7 and #f.drives > 0 and f.gps.status().off == 7,
     'polling resumes a connected route after recovering onto a road offset from the planned line')
   recoveries, moveOnRecovery = 0, false
   f = parallel(true, 60, true, 26)
@@ -517,6 +525,27 @@ do
   T.check(#f.drives == 3, 'server recovery restarts the route')
 end
 
+-- Late terrain prefetch leaves the current ground usable without restarting its AI route.
+do
+  local f = fixture()
+  local starts = #f.drives
+  f.healthy, f.driveReady = false, true
+  f:step()
+  T.check(f.modes[#f.modes] ~= 'stop', 'a late terrain prefetch does not brake on the loaded road')
+  T.check(#f.drives == starts, 'a late terrain prefetch preserves the active lane-aware route')
+  f.driveReady = false; f:step()
+  T.check(f.modes[#f.modes] == 'stop', 'connection, resync or terrain-error unavailability still holds')
+  f.driveReady = true; f:step()
+  T.check(#f.drives == starts + 1, 'a genuine readiness recovery restarts the route normally')
+end
+
+do
+  local f = fixture()
+  beamngEarth_core.autodriveReady = nil
+  f.healthy = false; f:step()
+  T.check(f.modes[#f.modes] == 'stop', 'older core modules retain the server-health hold')
+end
+
 -- The stock AI clears its route on completion but stays in manual mode. Its GE notification is asynchronous.
 do
   local f = fixture({ 'w', 'j' })
@@ -681,7 +710,7 @@ end
 do
   local oldSpawn, oldQuat, oldLog = spawn, quatFromDir, log
   local placed
-  spawn = { safeTeleport = function(_, p, q) placed = { pos = p, direction = q } end }
+  spawn = { safeTeleport = function(_, p, q, _, _, _, centred) placed = { pos = p, direction = q, centred = centred } end }
   quatFromDir = function(d) return d end
   log = function() end
   local f = fixture({ 'j', 's', 't' }, 0, 6, function(f)
@@ -697,11 +726,65 @@ do
   T.check(not placed, 'the first no-progress interval retries without teleporting')
   f:step(); f:step(31)
   T.check(placed and f.gps.autoRecoveries == 1, 'the second no-progress interval invokes recovery')
-  T.check(placed and math.abs(placed.pos.x - 190) < 1e-9 and placed.pos.y == 0,
-    'recovery places the vehicle 150 metres ahead on the route')
+  T.check(placed and math.abs(placed.pos.x - 190) < 1e-9 and placed.pos.y == -3,
+    'recovery places the vehicle 150 metres ahead in its legal lane')
   T.check(placed and placed.direction.x > 0.99 and placed.direction.y == 0,
     'recovery faces east even though the selected edge is stored westbound')
+  T.check(placed and placed.centred, 'the selected lane point centres the vehicle body, not its offset reference node')
   spawn, quatFromDir, log = oldSpawn, oldQuat, oldLog
+end
+
+-- Recovery on a viaduct over a road whose line lies nearer the route than the deck's (2D): the car is put on the
+-- deck it is on, at the deck's height, not on the road under it (A7 Zillbach, 2026-11-16).
+do
+  local oldSpawn, oldQuat, oldLog, oldRay = spawn, quatFromDir, log, castRayStatic
+  local placed, rays = nil, {}
+  spawn = { safeTeleport = function(_, p, q) placed = { pos = p, direction = q } end }
+  quatFromDir = function(d) return d end
+  log = function() end
+  castRayStatic = function(from, _, len) rays[#rays + 1] = { z = from.z, len = len } return 3.5 end
+  local f = fixture({ 'j', 's', 't' }, 0, 6, function(f)
+    f.speed, f.z = 0, 30.5
+    local ow = function(from) return { oneWay = true, inNode = from } end
+    f.nodes = { w = { pos = { x = 0, y = 4, z = 30 }, links = {}, radius = 6 },
+      j = { pos = { x = 100, y = 4, z = 30 }, links = { w = ow('w') }, radius = 6 },
+      s = { pos = { x = 300, y = 4, z = 30 }, links = { j = ow('j') }, radius = 6 },
+      t = { pos = { x = 500, y = 4, z = 30 }, links = { s = ow('s') }, radius = 6 },
+      lo1 = { pos = { x = 0, y = 0.5, z = 6 }, links = {}, radius = 2 },
+      lo2 = { pos = { x = 500, y = 0.5, z = 6 }, links = { lo1 = {} }, radius = 2 } }
+    f.map.nodes = f.nodes
+    f.route = { points = { { 0, 0 }, { 0, 0.05 } }, dist = 500, dur = 30 }
+  end)
+  f:step(31); f:step(); f:step(31)
+  T.check(placed and math.abs(placed.pos.y - 4) < 1e-9, 'recovery stays on the viaduct, not the road 24 m under it')
+  T.check(placed and math.abs(placed.pos.z - 31.3) < 1e-9 and rays[1] and math.abs(rays[1].z - 33.5) < 1e-9,
+    'its ground ray starts just over the deck (a bridge over the road is not where the car lands; #1282: the body centre half its height + 0.3 m over the ground)')
+  spawn, quatFromDir, log, castRayStatic = oldSpawn, oldQuat, oldLog, oldRay
+end
+-- A terrain hold at a completed endpoint is different from waiting for more graph.
+do
+  local oldSpawn,oldQuat,oldLog=spawn,quatFromDir,log
+  local recoveries=0
+  spawn={safeTeleport=function()recoveries=recoveries+1 end}
+  quatFromDir=function(d)return d end;log=function()end
+  local f=fixture({'w','j'},2,6)
+  f.x,f.speed=98,0;f.gps.onAiRouteDone(1);f.gps.onAiSurfaceGap(1,true)
+  for i=1,70 do f:step()end
+  T.check(recoveries==1,'a reported surface gap at a finished endpoint retains ordinary recovery')
+  recoveries=0;f=fixture({'w','j'},2,6)
+  f.x,f.speed=98,0;f.gps.onAiRouteDone(1);f.gps.onAiSurfaceGap(1,true)
+  f.gps.setAutodrive(true) -- an idempotent API request must not consume the latched report
+  for i=1,70 do f:step()end
+  T.check(recoveries==1,'re-enabling active Autodrive preserves terrain recovery at a finished endpoint')
+  recoveries=0;f=fixture({'w','j'},2,6)
+  f.x,f.speed=98,0;f.gps.onAiRouteDone(1)
+  f.gps.onAiSurfaceGap(2,true)
+  for i=1,70 do f:step()end
+  T.check(recoveries==0,'another vehicle cannot turn a streaming wait into terrain recovery')
+  f.gps.onAiSurfaceGap(1,true);f.gps.onAiSurfaceGap(1,false)
+  for i=1,70 do f:step()end
+  T.check(recoveries==0,'a fresh clear probe removes the terrain-recovery exception')
+  spawn,quatFromDir,log=oldSpawn,oldQuat,oldLog
 end
 
 -- A position-based marker leg can restart on a coincident, disconnected road. Exact node pins must keep
@@ -751,6 +834,38 @@ do
   package.loaded[module] = original
 end
 
+-- A red light that never turns green (or a stale signals table) excuses the standstill only SIGNAL_WAIT_MAX_S:
+-- then the ordinary stall handling comes back though the heartbeats go on (Codex review of PRs #1280 / #1282).
+do
+  local f=fixture(nil,0,6)
+  f.speed=0
+  local limit=f.gps.SIGNAL_WAIT_MAX_S
+  for _=1,limit-5 do f.gps.onAiSignalWait(1,true);f:step(1)end
+  T.check(not f.gps.noProgressReplans and not f.gps.autoRecoveries,'a long red wait inside the limit is not a stall')
+  for _=1,f.gps.AUTO_NOPROGRESS_S+20 do f.gps.onAiSignalWait(1,true);f:step(1)end
+  T.check((f.gps.noProgressReplans or 0)>0 or (f.gps.autoRecoveries or 0)>0,
+    'a red light that never changes stops excusing the standstill past SIGNAL_WAIT_MAX_S')
+end
+
+-- A red-light wait can outlast stall recovery. Only a current signal heartbeat
+-- from this player exempts it; losing the heartbeat restores normal recovery.
+do
+  local f=fixture(nil,0,6)
+  f.speed=0
+  local starts=#f.drives
+  for _=1,90 do f.gps.onAiSignalWait(1,true);f:step(1)end
+  T.check(not f.gps.noProgressReplans and not f.gps.autoRecoveries,
+    'waiting at red for90seconds never triggers a recovery or progress retry')
+  T.check(#f.drives==starts,'a deliberate signal wait does not repeatedly restart the lane-aware route')
+  f.gps.onAiSignalWait(2,false);f:step(.25)
+  T.check(#f.drives==starts,'another vehicle cannot clear the player signal wait')
+  f:step(f.gps.AUTO_NOPROGRESS_S+3)
+  T.check((f.gps.noProgressReplans or 0)>0,'an expired signal heartbeat cannot hide a genuine stall')
+  local stopped=fixture(nil,0,6)
+  stopped.speed=0;stopped.healthy=false;stopped.gps.onAiSignalWait(1,true);stopped:step()
+  T.check(stopped.modes[#stopped.modes]=='stop','signal waiting never bypasses a server-health stop')
+end
+
 for _, name in ipairs({ 'getPlayerVehicle', 'beamngEarth_core', 'map', 'core_groundMarkers', 'vec3' }) do
   _G[name] = saved[name]
 end
@@ -788,6 +903,30 @@ do
  end
 end
 
+
+-- A streaming hold is not another failed recovery attempt. In particular,
+-- a real retry before the hold must not become a teleport on the first resumed tick.
+do
+ local oldSpawn,oldQuat,oldLog=spawn,quatFromDir,log
+ local recoveries=0
+ spawn={safeTeleport=function()recoveries=recoveries+1 end}
+ quatFromDir=function(d)return d end;log=function()end
+ local f=fixture(nil,0,6);f.speed=0
+ f:step(f.gps.AUTO_NOPROGRESS_S+1)
+ local retries=f.gps.noProgressReplans
+ T.check(retries==1 and recoveries==0,'the first genuine stall retries before the streaming hold')
+ f:step() -- the retried route was active before terrain became late
+ f.driveReady=false
+ for _=1,70 do f:step()end
+ T.check(recoveries==0 and f.gps.noProgressReplans==retries,'a world-health hold never advances progress recovery')
+ f.driveReady=true;f:step()
+ T.check(recoveries==0 and f.gps.noProgressReplans==retries,'resuming does not turn the earlier retry into a teleport')
+ f:step(f.gps.AUTO_NOPROGRESS_S-1)
+ T.check(recoveries==0 and f.gps.noProgressReplans==retries,'resuming grants a fresh full progress interval')
+ f:step(2)
+ T.check(recoveries==0 and f.gps.noProgressReplans==retries+1,'a later genuine stall starts with a retry after the hold')
+ spawn,quatFromDir,log=oldSpawn,oldQuat,oldLog
+end
 
 os.clock, package.loaded['beamngEarth/navgraph'] = savedClock, savedNav
 T.done('test_gps_autodrive')

@@ -1,7 +1,7 @@
 """run.py: the road revamp corpus scorecard (plan .claude/work/road-revamp-plan-2026-11-16.md section 5, phase R0).
 
   run.py build --label L [--server DIR | --rev GITREV] [--set top10|top20|claimed|bisect|standard|all | --places a,b]
-               [--root ~/bnge-tests/roadcorpus] [--online] [--jobs 1]
+               [--root ~/bnge-tests/roadcorpus] [--online] [--jobs 1] [--env BNE_X=v ...]
       Score every place of the set with probe.py against one build of the server code and write
       ROOT/results/L/<place>.json (deterministic), <place>.timing.json, scorecard.json and summary.md.
       --rev exports that git revision's server/ (its own earthfast binaries are committed) into
@@ -36,7 +36,7 @@ DATA_DIRS = ("dem", "mapdata", "mapdata-mirror", "pagesdata", "roadz")
 # the categories shown in the summary: (scorecard key, label)
 CATS = (("clearance", "deck on road"), ("deck_deck", "stack"), ("end_step", "bridge end"), ("overlap", "deck overlap"),
         ("steep_deck", "steep deck"), ("unbridged", "unbridged"), ("rail_block", "rail block"), ("spikes", "spikes"), ("humps", "junction humps"),
-        ("widths", "width jumps"), ("tunnels", "tunnels"), ("missing_deck", "missing deck"))
+        ("widths", "width jumps"), ("tunnels", "tunnels"), ("missing_deck", "missing deck"), ("track", "racetrack"))
 # extra columns: (label, scorecard key, field)
 EXTRA = (("wavy decks", "deck_shape", "wavy"), ("decks on ground", "deck_shape", "on_ground"),
          ("rail beds > 3 m", "rail_bed", "tall3"), ("unpaved m", "unpaved_m", None))
@@ -57,9 +57,14 @@ def places(sel_set=None, ids=None):
     return ps
 
 
+SWITCHES = {}       # build --env K=V: the only BNE_* switches the probe sees (an experimental switch scored)
+
+
 def clean_env():
-    """The probe's environment: no BNE_* / BNGE_* switches from the caller (they change the output), no plan run."""
+    """The probe's environment: no BNE_* / BNGE_* switches from the caller (they change the output) but build --env's,
+    no plan run."""
     env = {k: v for k, v in os.environ.items() if not k.startswith(("BNE_", "BNGE_"))}
+    env.update(SWITCHES)
     env["PYTHONHASHSEED"] = "0"
     env["PYTHONDONTWRITEBYTECODE"] = "1"
     return env
@@ -226,6 +231,11 @@ def cmd_build(a):
         era = era_of(rev)
     else:
         server = os.path.realpath(a.server or os.path.join(REPO, "server"))
+    for kv in a.env:
+        k, _, v = kv.partition("=")
+        if not k.startswith("BNE_"):
+            sys.exit(f"--env {kv}: only BNE_* build switches")
+        SWITCHES[k] = v
     ps = places(a.set, a.places)
     fails = []
     for k, p in enumerate(ps):
@@ -234,7 +244,7 @@ def cmd_build(a):
         if rc != 0:
             fails.append(p["id"])
             print(f"  FAILED rc={rc} (see results/{a.label}/{p['id']}.log)", flush=True)
-    meta = {"label": a.label, "server": server, "rev": rev}
+    meta = {"label": a.label, "server": server, "rev": rev, "env": sorted(SWITCHES.items())}
     for ln in write_scorecard(os.path.join(root, "results", a.label), meta):
         print(ln)
     if fails:
@@ -288,6 +298,7 @@ def main():
     b.add_argument("--root", default="~/bnge-tests/roadcorpus")
     b.add_argument("--online", action="store_true", help="ignore the seeds (download again)")
     b.add_argument("--checks", help="probe.py --checks (a narrow probe for bisects), default all")
+    b.add_argument("--env", action="append", default=[], help="K=V: a BNE_* build switch the probe runs with")
     b.set_defaults(fn=cmd_build)
     c = sub.add_parser("compare")
     c.add_argument("a")

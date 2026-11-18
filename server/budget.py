@@ -444,7 +444,7 @@ def apply(is_small=None):
             import dem
             import mapdata
             dem.MEM_TILES = min(dem.MEM_TILES, sizes[0])
-            mapdata.MEM_MB = min(mapdata.MEM_MB, sizes[1])
+            mapdata.MEM_MB = sizes[1]       # (the limit's: 384 at the 24 GB cap, above the module's 256)
         import dem
         if dem.MIRROR_ZSTD:     # (a packed mirror's tiles are each process's own: dem.PACKED_MEM_TILES)
             dem.MEM_TILES = min(dem.MEM_TILES, dem.PACKED_MEM_TILES)

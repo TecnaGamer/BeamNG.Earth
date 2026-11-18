@@ -156,6 +156,7 @@ end
 -- the session
 
 local core = require('beamngEarth/core')
+T.check(not core.autodriveReady(), 'Autodrive waits for a connected session and committed block')
 local gps = require('beamngEarth/gps')
 local gpsUpdate, gpsFrames = gps.update, {}
 gps.update = function(anchor, player)
@@ -327,9 +328,21 @@ veh.pos = vec3(301, 0, 1200)
 T.check(pumpUntil(function() return #received('prepare_terrain') == 1 end, 5), 'prepare_terrain past 300 m')
 local pt = received('prepare_terrain')[1]
 T.check(pt.anchorId == 1 and pt.cx == 256 and pt.cy == 0, 'target = snap256(player + 4 s * v) = (256, 0)')
+frames(101) -- a real pending request passes the five-second health threshold
+T.check(not core.serverHealthy(), 'late terrain prefetch still marks normal server health unhealthy')
+T.check(core.autodriveReady(), 'late prefetch leaves the existing block usable by Autodrive')
+T.check(core._state().guard.mode ~= 'hold' and calls.importMaps == imports,
+  'the existing terrain stays loaded and the distant edge guard does not hold')
+serverSend({ type = 'terrain_error', requestId = pt.requestId, error = 'fixture terrain failure' })
+frames(1)
+T.check(not core.autodriveReady(), 'an actual terrain error still holds Autodrive')
+T.check(pumpUntil(function() return last('prepare_terrain').requestId ~= pt.requestId end, 120),
+  'terrain error is retried through the normal request lifecycle')
+pt = last('prepare_terrain')
 serverSend({ type = 'terrain_ready', requestId = pt.requestId, anchorId = 1, cx = 256, cy = 0,
   heightmap = '/temp/beamngEarth/s1/hm_1_256_0.png', size = 1024, squareSize = SQ, zBase = 1110, maxHeight = 1024, q = 1 / 64 })
 frames(40)
+T.check(core.autodriveReady(), 'a successful terrain reply clears the error hold')
 T.check(calls.importMaps == imports, 'ready but below 450 m: no commit yet')
 local farBefore = {}
 for _, o in ipairs(S.liveOf('TSStatic')) do farBefore[o.id] = o:getPosition() end
@@ -544,6 +557,7 @@ serverSend({ type = 'far_tile', anchorId = 4, key = '1_1_0', shape = '/temp/beam
 server.failErr = 'connection reset by peer'
 T.check(pumpUntil(function() return calls.createObject_TSStatic == before + 1 end, 50), 'final frame decoded before close')
 T.check(pumpUntil(function() return #received('hello') == connects + 1 end, 100), 'reconnected after reset')
+T.check(not core.autodriveReady(), 'a new transport awaiting its session still holds Autodrive')
 
 -- the (restarted) server says hello again: re-register the SAME origin under a new anchorId,
 -- terrain where terrain-follow would put it; nothing in the world moves
@@ -564,6 +578,7 @@ roadsMod.clear = function(...) roadClears = roadClears + 1; return realClear(...
 serverSend({ type = 'hello', protocol = 4, format = 3, serverVersion = '0.4.0', sessionId = 's2', farFormat = 'cdae',
   material = 'bngEarthFar_v9', nearVisual = 'mesh' })
 T.check(pumpUntil(function() return #received('prepare_anchor') == nAnchor + 1 end, 10), 'resync requested on hello')
+T.check(not core.autodriveReady(), 'an outstanding resync still holds Autodrive')
 T.check(roadClears == 1, 'a new server session: the old session\'s road tiles cleared')
 roadsMod.clear = realClear
 T.check(tb.renderEnabled == false and farfield.nearVisual() == 'mesh', 'hello nearVisual = mesh: block render disabled, far field in mesh mode')

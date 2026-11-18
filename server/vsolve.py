@@ -16,7 +16,7 @@ least-squares problem on the carriageway solver's kernel (carriageways.solve: ea
   lift over it, was made against those heights: the solve may lower it, not raise it into the deck; raised by a
   junction's tie it put Tokyo's roads through 8 decks where the passes had 6); onto a deck, a road no lower than the
   approach rule raised it (grading._lift_approaches: the deck's need, not the road's); a grade ceiling per road (its class's, or its ground's own where that is steeper: a steep street), met
-  wherever the hard rows leave room and broken by the least where they don't (earthfast 373's soft couplings: an
+  wherever the hard rows leave room and broken by the least where they don't (earthfast 404's soft couplings: an
   exact L1 penalty). Hard, one ceiling that could not hold made the whole cell's solve infeasible, and the cell
   was solved again with looser ceilings, then none: three stages, in place of a row that says where it breaks.
 

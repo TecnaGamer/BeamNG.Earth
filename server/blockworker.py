@@ -662,11 +662,13 @@ def sea_ahead(frame, cx, cy, half):
         log.debug("sea ahead of block (%s, %s): %s: %s", cx, cy, type(e).__name__, e)
 
 
-def ground(frame, la, lo, z):
+def ground(frame, la, lo, z, grader=None):
     """The DEM heights z at (la, lo) shaped before the road grading: runways graded in (--airports on),
-    the sea floor carved in (--sea on), and the land off the roads roughened (grading.terrain_bumps)."""
+    the sea floor carved in (--sea on), and the land off the roads roughened (grading.terrain_bumps; grader: the
+    Grader that grades it after this, which keeps the bumps off the built roads' sides)."""
     import grading
-    z = np.asarray(z, np.float64) + grading.terrain_bumps(np.asarray(la, np.float64), np.asarray(lo, np.float64))
+    z = np.asarray(z, np.float64) + grading.terrain_bumps(np.asarray(la, np.float64), np.asarray(lo, np.float64),
+                                                          grader)
     if _s.airports is not None:
         z = _s.airports.apply(la, lo, z)
     if getattr(_s, "lids", None) is not None:
@@ -730,7 +732,7 @@ def _veg_geo(aid, lat, lon, zoom, gx, gy, out_dir, vfs_dir, flat=False):
     g, _ = _s.anchor(aid, lat, lon)
 
     def raw(la, lo):
-        return ground(None, la, lo, _s.dem.sample(la, lo, zoom))
+        return ground(None, la, lo, _s.dem.sample(la, lo, zoom), g)
 
     def elev(la, lo):
         z = raw(la, lo)
@@ -853,7 +855,7 @@ def _build(aid, lat, lon, hm_zoom, q, cx, cy, size, out_dir, name, ter_name=None
         if provisional:
             part_s["dem"] += t2 - t1
             return _level_yards_of(_s, _s.airports.apply(la, lo, z) if _s.airports is not None else z, la, lo)
-        z = ground(frame, la, lo, z)
+        z = ground(frame, la, lo, z, g)
         part_s["dem"] += t2 - t1
         part_s["sea"] += time.perf_counter() - t2
         if g is None:
@@ -1000,6 +1002,28 @@ def _nav_bridges(aid, frame, elev):
                               prefer=_chain_store("bridges", roadsmod.BridgeProfiles, elev, _bridge_setup))
 
 
+class _NavBand:
+    """The AI graph's grader for grading.terrain_bumps: its road band past NAV_GRADED_M from the graph's centre (x, y)
+    only from the cells planned already, as the graph's road lift (Grader.apply planned_only): with BNE_TERRAIN_BUMPS
+    on, the band planned every cell of the graph's 2.2 km window (Codex review of PR #1407; that planning held a
+    Windows PC's road processes for minutes, 2026-10-25)."""
+
+    def __init__(self, g, frame, x, y):
+        self.g, self.frame, self.x, self.y = g, frame, x, y
+
+    def road_band(self, lat, lon, reach):
+        lat = np.asarray(lat, np.float64).ravel()
+        lon = np.asarray(lon, np.float64).ravel()
+        e, n, _ = self.frame.geodetic_to_enu(lat, lon, 0.0)
+        near = np.maximum(np.abs(np.asarray(e) - self.x), np.abs(np.asarray(n) - self.y)) <= NAV_GRADED_M
+        out = np.zeros(lat.shape, bool)
+        if near.any():
+            out[near] = self.g.road_band(lat[near], lon[near], reach)
+        if (~near).any():
+            out[~near] = self.g.road_band(lat[~near], lon[~near], reach, planned_only=True)
+        return out
+
+
 def navgraph(aid, lat, lon, zoom, x, y, out_dir, vfs_dir, serial, left_hand, mph, rules):
     """earthd.Server.build_navgraph here (a road-tile process): the AI road graph around (x, y) written to out_dir;
     returns (vfs path, nodes, edges), in a road process (in the server's interpreter it cost 13 s of its CPU in a
@@ -1014,7 +1038,8 @@ def navgraph(aid, lat, lon, zoom, x, y, out_dir, vfs_dir, serial, left_hand, mph
     feats = [cd.layers.get("roads") for cd in mapcells.load_cells(_s.md, keys, ("roads",))]
 
     def elev(la_, lo_):         # the physics ground, lifted under roads (as the road tiles'); past their reach
-        z = ground(frame, la_, lo_, _s.dem.sample(la_, lo_, zoom))     # (NAV_GRADED_M) only under cells planned already
+        # (NAV_GRADED_M) only under cells planned already, the terrain bumps' road band too (_NavBand)
+        z = ground(frame, la_, lo_, _s.dem.sample(la_, lo_, zoom), _NavBand(g, frame, x, y) if g is not None else None)
         if g is None:
             return z
         la_, lo_, z = np.asarray(la_, np.float64), np.asarray(lo_, np.float64), np.asarray(z, np.float64)
@@ -1069,7 +1094,7 @@ def terrain_patch(aid, lat, lon, zoom, box, path):
     frame = geodesy.EnuFrame(lat, lon)
 
     def elev(la, lo):
-        z = ground(frame, la, lo, _s.dem.sample(la, lo, zoom))
+        z = ground(frame, la, lo, _s.dem.sample(la, lo, zoom), g)
         return g.apply(la, lo, z, gradingmod.ROAD_LIFT) if g is not None else z
     return terrainpatch.build(frame, elev, box, path)
 
@@ -1139,7 +1164,7 @@ def _signs_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, left_hand=False, 
     frame = geodesy.EnuFrame(lat, lon)
 
     def elev(la, lo):           # the graded ground, as the road tile's
-        z = ground(frame, la, lo, _s.dem.sample(la, lo, zoom))
+        z = ground(frame, la, lo, _s.dem.sample(la, lo, zoom), g)
         return g.apply(la, lo, z, gradingmod.ROAD_LIFT) if g is not None else z
     towns = None
     if towns_on and _s.md is not None and _s.surface is not None:
@@ -1501,7 +1526,7 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
     mark("anchor")
 
     def elev(la, lo):           # the physics ground (lifted under roads: grading.ROAD_LIFT)
-        z = ground(frame, la, lo, _s.dem.sample(la, lo, zoom))
+        z = ground(frame, la, lo, _s.dem.sample(la, lo, zoom), g)
         return g.apply(la, lo, z, gradingmod.ROAD_LIFT) if g is not None else z
     P.elev = elev
     bridges = _bridges(None, frame, elev)
@@ -1902,6 +1927,8 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
     radar_props, P.speed_traps = radars.tile_rows(frame, box, _s.md, elev, _s.widths, urban)
     if radar_props:
         props = (props or []) + radar_props
+    import racedig                  # (BNE_RACEWAY_DIG: no prop, pole or wire end on a racetrack's band)
+    racedig.tile_clear(frame, cells, props, wires, elev)
     P.signs = signs
     P.chunks, P.ctx, P.walks, P.box, P.origin = chunks, ctx, walks, box, (x0, y0, 0.0)
     P.custom, P.custom_entries = _custom, _entries
@@ -2504,7 +2531,7 @@ def _geo_skin_build(aid, lat, lon, zoom, gx, gy, out_dir, vfs_dir, sidewalks, li
     origin = (qx0, qy0, 0.0)
 
     def elev(la, lo):
-        z = ground(frame, la, lo, _s.dem.sample(la, lo, zoom))
+        z = ground(frame, la, lo, _s.dem.sample(la, lo, zoom), g)
         return g.apply(la, lo, z, gradingmod.ROAD_LIFT) if g is not None else z
     tunnels = tunnel_profiles(aid, frame, elev, g)
     cell_fn = lambda key: _s.md.cell(key, layers=("roads",), kind="demand").layers.get("roads")   # noqa: E731
