@@ -6654,6 +6654,10 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // takes the parts' gauges and reads their ends only
     // 470: dirtnoise::DirtNoise (grading.dirt_bumps / dirt_bank's random numbers: integer splitmix64, Irwin-Hall
     // normals, multiplication-method Poisson; numpy's Generator called the platform libm)
+    m.add_function(wrap_pyfunction!(roadnet::specjson::specs_json, m)?)?;
+    m.add_function(wrap_pyfunction!(roadnet::specjson::specs_from_json, m)?)?;
+    // 450: R2a's spec storage (roadnet::specjson: roads._spec_json and spec_from_json / _specs_from, the cell facts'
+    // "specs" and the plans' openings; the coordinator's range 450-459 for road-r2a5)
     m.add("VERSION", 470)?;
     Ok(())
 }
