@@ -142,7 +142,7 @@ def clear_props(props, wires, lines, ground=None):
             if len(pts) >= 1:
                 own = furniture.wire_ends(w)
                 for k, p in enumerate((pts[0], pts[-1])):
-                    if own:
+                    if own and own[k] is not None:
                         sup.append((len(ends), own[k]))
                     ends.append([float(p[0]), float(p[1])])
                 which += [n_, n_]

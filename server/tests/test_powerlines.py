@@ -19,29 +19,37 @@ from power_reference import margin as road_margin  # noqa: E402
 BOX = [-1e4, -1e4, 1e4, 1e4]
 
 
-def layout(lines, stop=None, yards=()):
+def layout(lines, stop=None, yards=(), ground=None, box=BOX, full=False):
+    """power_line_layout's (towers, ends [x, y, z, heading], wire points, offsets); full: its own five outputs."""
     pts = np.ascontiguousarray(np.concatenate(lines), np.float64)
     off = np.cumsum([0] + [len(r) for r in lines]).astype(np.int64)
     stop = np.zeros(len(pts), bool) if stop is None else np.asarray(stop, bool)
     yp = np.ascontiguousarray(np.concatenate(yards) if len(yards) else np.zeros((0, 2)), np.float64)
     yo = np.cumsum([0] + [len(r) for r in yards]).astype(np.int64)
-    return fast._ef.power_line_layout(pts, off, stop, powerlines.ARMS, powerlines.SAG, powerlines.SEG_M,
-                                      powerlines.MIN_SPAN_M, powerlines.MAX_SPAN_M, powerlines.DEDUPE_M,
-                                      powerlines.END_MERGE_M, powerlines.GANTRY_FRONT, BOX, yp, yo,
-                                      powerlines.GANTRY_LAT)
+    got = fast._ef.power_line_layout(pts, off, stop, powerlines.ARMS, powerlines.SAG, powerlines.SEG_M,
+                                     powerlines.MIN_SPAN_M, powerlines.MAX_SPAN_M, powerlines.DEDUPE_M,
+                                     powerlines.END_MERGE_M, powerlines.GANTRY_FRONT, box, yp, yo,
+                                     list(powerlines.ANCHOR_AT), powerlines.GANTRIES, ground)
+    return got if full else (got[0], got[1][:, :4], got[2], got[3])
 
 
-def yard(rings, anchors=np.zeros((0, 3))):
+def yard_full(rings, anchors=np.zeros((0, 3))):
     pts = np.ascontiguousarray(np.concatenate(rings), np.float64)
     ro = np.cumsum([0] + [len(r) for r in rings]).astype(np.int64)
     groups = sorted(powerlines.PARTS)
     kits = np.array([k[0] for k in powerlines.KITS], np.float64)
     parts = np.array([[k, groups.index(g), x, y] for k, (_, ps) in enumerate(powerlines.KITS) for g, x, y in ps])
+    a = np.asarray(anchors, np.float64)
     got, fence = fast._ef.substation_yard(pts, ro, kits, parts, powerlines.YARD_GAP,
-                                          np.asarray(anchors, np.float64).reshape(-1, 3), 0,
+                                          np.ascontiguousarray(a.reshape(-1, a.shape[-1] if a.size else 3)), 0,
                                           list(powerlines.ANCHOR_AT), powerlines.YARD_MAX_KITS, powerlines.FENCE_LEN,
                                           BOX)
-    return [(groups[int(g)], x, y, yaw) for g, x, y, yaw in got], fence
+    return [(groups[int(g)], x, y, yaw, z) for g, x, y, yaw, z in got], fence
+
+
+def yard(rings, anchors=np.zeros((0, 3))):
+    got, fence = yard_full(rings, anchors)
+    return [q[:4] for q in got], fence
 
 
 def square(x0, y0, w, h):
@@ -107,6 +115,71 @@ class LineTest(unittest.TestCase):
         # a yard with room: the end stays where it is
         _, ends, _, _ = layout([line], stop, yards=[square(0, -30, 60, 60)])
         self.assertTrue(np.allclose(ends[0][:2], [20.0, 0.0]))
+
+    def test_a_span_goes_with_the_next_tiles_tower(self):
+        # Codex's review of 7bafc807: a span is drawn by its middle's tile, the tower at its far end by its own tile; a
+        # racetrack's band there culls that tower while missing its outer conductors' attachments (4.12 m out), so the
+        # span's tile kept them hanging. The span carries its towers' rows now and goes with the culled tower
+        import racedig
+        line = np.array([[0, 0, 0], [100, 0, 0], [200, 0, 0]], np.float64)
+        band = [(np.array([[95.0, -8.0], [200.0, -8.0]]), 7.0)]            # to y = 1: the tower at (100, 0) on it
+        flat = lambda x, y: np.zeros(len(x))
+        box1, box2 = [-50.0, -50.0, 90.0, 50.0], [90.0, -50.0, 250.0, 50.0]
+        towers, _, wp, wo, sup = layout([line], box=box1, full=True)
+        rows = [powerlines.tower_row(powerlines.G_PYLON, powerlines.PYLON_H, *t) for t in towers]
+        self.assertEqual([r[1] for r in rows], [0.0])
+        wires = powerlines.span_wires(wp, wo, sup, powerlines.G_PYLON, powerlines.PYLON_H, powerlines.WIRE_R)
+        self.assertEqual(len(wires), len(powerlines.ARMS))                # (the span 0 -> 100: its middle in box 1)
+        plain = [(np.asarray(w[0]).copy(), w[1]) for w in wires]
+        racedig.clear_props([list(r) for r in rows], plain, band, flat)
+        self.assertGreater(len(plain), 0, "(without its towers' rows the outer conductors stayed)")
+        racedig.clear_props(rows, wires, band, flat)
+        self.assertEqual(wires, [])
+        self.assertEqual([r[1] for r in rows], [0.0])
+        # the tower's own tile culls it
+        towers, _, _, _, _ = layout([line], box=box2, full=True)
+        rows2 = [powerlines.tower_row(powerlines.G_PYLON, powerlines.PYLON_H, *t) for t in towers]
+        racedig.clear_props(rows2, [], band, flat)
+        self.assertNotIn(100.0, [r[1] for r in rows2])
+
+    def test_no_gantries_where_none_fit(self):
+        # Codex's review of 7bafc807: a yard too small for the gantries anywhere: no line end, no span into it (the
+        # line ends at its last tower), and so no gantries in the yard
+        tiny = square(95, -3, 8, 6)
+        line = np.array([[-100, 0, 0], [0, 0, 0], [100, 0, 0]], np.float64)
+        towers, ends, wp, wo, sup = layout([line], [False, False, True], yards=[tiny], full=True)
+        self.assertEqual(len(ends), 0)
+        self.assertLess(max(wp[b - 1][0] for b in wo[1:]), 1.0)          # every conductor ends at the last tower
+        got, _ = yard([tiny], anchors=ends[:, [0, 1, 3, 4, 5]] if len(ends) else np.zeros((0, 3)))
+        self.assertNotIn("gantry", [g for g, *_ in got])
+
+    def test_moved_gantries_on_sloping_ground(self):
+        # Codex's review of 7bafc807: a moved end's conductors hung at the old end's ground while the yard stood its
+        # gantries on the ground under them: on a slope a gap. Now both read the ground under each gantry, once
+        yard_ring = square(0, -30, 60, 33)
+        line = np.array([[-200, 0, 0], [-100, 0, 0], [20, 0, 0], [40, 0, 0]], np.float64)
+        asked = []
+
+        def ground(x, y):
+            asked.extend(zip(np.asarray(x).tolist(), np.asarray(y).tolist()))
+            return 100.0 + 0.2 * np.asarray(x) + 0.1 * np.asarray(y)
+        _, ends, wp, wo, _ = layout([line], [False, False, True, True], yards=[yard_ring], ground=ground, full=True)
+        self.assertEqual(len(ends), 1)
+        ex, ey, ez, w, zl, zr = ends[0]
+        self.assertTrue(np.allclose([ex, ey], [20.0, -4.0]))               # (moved: the north gantry inside)
+        self.assertEqual(len(asked), 2)
+        got, _ = yard_full([yard_ring], anchors=ends[:, [0, 1, 3, 4, 5]])
+        gantries = sorted((x, y, z) for g, x, y, yaw, z in got if g == "gantry" and np.isfinite(z))
+        self.assertEqual(len(gantries), 2)
+        for x, y, z in gantries:                        # the yard's gantries where the ground was read, at that ground
+            self.assertIn((x, y), asked)
+            self.assertEqual(z, 100.0 + 0.2 * x + 0.1 * y)
+        self.assertEqual(sorted([zl, zr]), sorted(z for *_, z in gantries))
+        last = np.array([wp[b - 1] for b in wo[1:]])
+        last = last[last[:, 0] > 0.0]
+        side = (last[:, 0] - ex) * -np.sin(w) + (last[:, 1] - ey) * np.cos(w)
+        self.assertTrue(np.allclose(last[:, 2], np.where(side > 0, zr, zl) + powerlines.GANTRY_H))
+        self.assertNotAlmostEqual(zl, ez)                                  # (not the old end's ground)
 
     def test_ends_merge(self):
         # two lines ending 12 m apart: one end, both lines' conductors on it

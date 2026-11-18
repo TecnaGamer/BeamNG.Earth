@@ -1070,12 +1070,13 @@ class Span(np.ndarray):
 
 
 def with_ends(wires, a, b):
-    """wires (points, or (points, radius)) of one span tagged with its support rows a (at the first point) and b."""
+    """wires (points, or (points, radius)) of one span tagged with its support rows a (at the first point) and b (None:
+    no support row there, a substation's gantry)."""
     out = []
     for w in wires:
         pts, r = w if isinstance(w, tuple) else (w, None)
         span = np.asarray(pts).view(Span)
-        span.ends = (list(a), list(b))
+        span.ends = (None if a is None else list(a), None if b is None else list(b))
         out.append(span if r is None else (span, r))
     return out
 
@@ -1170,7 +1171,8 @@ def under_decks(rows, decks, wires=None):
         pts = [np.asarray(w[0] if isinstance(w, tuple) else w, np.float64) for w in wires]  # (PR #505: (points, style))
         at = np.zeros(2 * len(pts), bool)
         # (each span's own supports judged alike, the next tile's pole too: with_ends)
-        sup = [(2 * n_ + k, q) for n_, w in enumerate(wires) for e in (wire_ends(w),) if e for k, q in enumerate(e)]
+        sup = [(2 * n_ + k, q) for n_, w in enumerate(wires) for e in (wire_ends(w),) if e for k, q in enumerate(e)
+               if q is not None]
         cut = np.zeros(2 * len(pts), bool)
         if sup:
             q = np.asarray([[r[1], r[2], r[3], r[3] + r[6]] for _, r in sup], np.float64)

@@ -124,34 +124,51 @@ pub fn power_off_roads(py: Python<'_>, roads: PyReadonlyArray2<'_, f64>, ends: P
     Ok((best[0], best[1]))
 }
 
-/// m round a gantry's centre (along the line and across it) that must be inside the yard
-const GANTRY_FOOT_M: f64 = 1.0;
+/// m round a gantry's centre (along the line and across it) that must be inside the yard: an anchored kit part's
+/// (substation_yard's ANCHOR_PART_M)
+const GANTRY_FOOT_M: f64 = ANCHOR_PART_M;
 /// m: the farthest a line end moves (across the line, and into the yard along it) to get its gantries inside
 const END_SHIFT_MAX_M: f64 = 12.0;
 const END_SHIFT_STEP_M: f64 = 0.5;
 
-/// A line end at (x, y) heading w into its substation: (x, y) itself when both its gantries (gantry_lat either side of
-/// it, across the line) stand with GANTRY_FOOT_M round them inside the yards' rings, else the nearest end (moved across
-/// the line or into the yard along it, END_SHIFT_STEP_M steps, END_SHIFT_MAX_M at most; nearest first, then across
-/// before along, left before right) where they do; (x, y) when none does or no yard is given (the user's report 95's
-/// review: a line end 4 m inside a side fence stood a gantry 1.8 m past it).
-fn gantries_inside(yards: &[Vec<(f64, f64)>], x: f64, y: f64, w: f64, gantry_lat: f64) -> (f64, f64) {
-    if yards.is_empty() {
-        return (x, y);
+/// Where a part (lx, ly in the kit's frame) of the kit anchored at a line end (ex, ey heading hd into the yard: its
+/// point anchor_at on the end, its +y toward the line) stands: substation_yard's placement, the same sums.
+fn kit_part(ex: f64, ey: f64, hd: f64, anchor_at: [f64; 2], lx: f64, ly: f64) -> (f64, f64) {
+    let ky = (-hd.dcos(), -hd.dsin());
+    let kx = (ky.1, -ky.0);
+    let (cx, cy) = (ex - anchor_at[0] * kx.0 - anchor_at[1] * ky.0, ey - anchor_at[0] * kx.1 - anchor_at[1] * ky.1);
+    (cx + lx * kx.0 - ly * kx.1, cy + lx * kx.1 + ly * kx.0)
+}
+
+/// Do a kit part's place and the four points m along the kit's axes round it lie inside the rings?
+#[allow(clippy::too_many_arguments)]
+fn part_fits(rings: &[Vec<(f64, f64)>], ex: f64, ey: f64, hd: f64, anchor_at: [f64; 2], lx: f64, ly: f64, m: f64)
+             -> bool {
+    [(0.0, 0.0), (-m, 0.0), (m, 0.0), (0.0, -m), (0.0, m)].iter().all(|&(dx, dy)| {
+        let (x, y) = kit_part(ex, ey, hd, anchor_at, lx + dx, ly + dy);
+        in_rings(rings, x, y)
+    })
+}
+
+/// A line end at (x, y) heading w into its substation: Some((x, y)) itself when its gantries (gantries: their places in
+/// the kit's frame, the kit anchored at the end at anchor_at) stand with GANTRY_FOOT_M round them inside the yards'
+/// rings (as substation_yard tests its anchored parts), or when no yard is given or the end is in none; else the
+/// nearest end (moved across the line or into the yard along it, END_SHIFT_STEP_M steps, END_SHIFT_MAX_M at most;
+/// nearest first, then across before along, left before right) where they do; None where none does (the line ends at
+/// its last tower: no gantries, no span into the yard; Codex's reviews of report 95's fix).
+fn gantries_inside(yards: &[Vec<(f64, f64)>], x: f64, y: f64, w: f64, anchor_at: [f64; 2], gantries: &[[f64; 2]])
+                   -> Option<(f64, f64)> {
+    if yards.is_empty() || gantries.is_empty() || !in_rings(yards, x, y) {
+        return Some((x, y));
+    }
+    let fits = |ex: f64, ey: f64| {
+        gantries.iter().all(|g| part_fits(yards, ex, ey, w, anchor_at, g[0], g[1], GANTRY_FOOT_M))
+    };
+    if fits(x, y) {
+        return Some((x, y));
     }
     let (ax, ay) = (w.dcos(), w.dsin());           // along the line, into the yard
     let (cx, cy) = (-ay, ax);                       // across it
-    let m = GANTRY_FOOT_M;
-    let fits = |ex: f64, ey: f64| {
-        [-gantry_lat, gantry_lat].iter().all(|&l| {
-            let (gx, gy) = (ex + cx * l, ey + cy * l);
-            [(0.0, 0.0), (m, 0.0), (-m, 0.0), (0.0, m), (0.0, -m)].iter()
-                .all(|&(a, c)| in_rings(yards, gx + ax * a + cx * c, gy + ay * a + cy * c))
-        })
-    };
-    if !in_rings(yards, x, y) || fits(x, y) {
-        return (x, y);
-    }
     let steps = (END_SHIFT_MAX_M / END_SHIFT_STEP_M).round() as i64;
     let mut cand: Vec<(i64, i64, i64)> = Vec::new();    // (squared steps, along, across)
     for t in 0..=steps {
@@ -166,10 +183,19 @@ fn gantries_inside(yards: &[Vec<(f64, f64)>], x: f64, y: f64, w: f64, gantry_lat
         let (ex, ey) = (x + ax * t as f64 * END_SHIFT_STEP_M + cx * s as f64 * END_SHIFT_STEP_M,
                         y + ay * t as f64 * END_SHIFT_STEP_M + cy * s as f64 * END_SHIFT_STEP_M);
         if fits(ex, ey) {
-            return (ex, ey);
+            return Some((ex, ey));
         }
     }
-    (x, y)
+    None
+}
+
+/// A line end: its place and heading [x, y, z, w], whether its gantries stand (gantries_inside found them a place),
+/// the ground under its left and right gantries (the conductors' heights there and the yard's gantry rows').
+struct LineEnd {
+    e: [f64; 4],
+    fits: bool,
+    zl: f64,
+    zr: f64,
 }
 
 /// The towers, line ends and conductors of lines given as their vertices (n, 3) (x, y in the anchor frame, z the
@@ -183,19 +209,29 @@ fn gantries_inside(yards: &[Vec<(f64, f64)>], x: f64, y: f64, w: f64, gantry_lat
 /// height over the ground at a tower; lateral offset and height at a line end, mirrored when the span comes in from
 /// the end's other side, gantry_front out of the gantries toward the line) to the same arm of the next tower or end, a
 /// parabola sagging sag x the span at its middle, seg_m apart. Only the towers in the box x0, y0, x1, y1 and the spans
-/// whose middle is in it; every end. An end whose gantries (gantry_lat either side, across the line) would stand past
-/// the yards' rings (yard_pts (q, 2), yard_off: ring offsets; even-odd) moves with them to where they fit
-/// (gantries_inside), its conductors with it. (towers (t, 4) [x, y, z, yaw degrees counter-clockwise from +x], ends
-/// (e, 4) [x, y, z, heading radians], wire points (w, 3), wire offsets (k + 1)).
+/// whose middle is in it; every end. An end whose gantries (gantries (2, 2): the line-end kit's two gantries in its
+/// frame, the kit anchored at anchor_at) would stand past the yards' rings (yard_pts (q, 2), yard_off: ring offsets;
+/// even-odd) moves with them to where they fit (gantries_inside), its conductors with it; one whose gantries fit
+/// nowhere is no end: no span on to it (the line stops at its last tower). The conductors at the gantries hang at the
+/// ground under each gantry (ground(x (n,), y (n,)) -> z, None: the end's own ground) plus the arm's height.
+/// (towers (t, 4) [x, y, z, yaw degrees counter-clockwise from +x], ends (e, 6) [x, y, z, heading radians, ground
+/// under the left gantry, under the right one], wire points (w, 3), wire offsets (k + 1), each wire's supports
+/// (k, 10) [kind, x, y, z, yaw degrees] at its first point then at its last: kind 1 a tower (its row's values), 0 a
+/// line end's gantry: a span is drawn by one tile, its towers by theirs).
 #[pyfunction]
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub fn power_line_layout<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, off: PyReadonlyArray1<'py, i64>,
                               stop: PyReadonlyArray1<'py, bool>, arms: PyReadonlyArray2<'py, f64>, sag: f64,
                               seg_m: f64, min_span: f64, max_span: f64, dedupe_m: f64, end_merge_m: f64,
                               gantry_front: f64, bx: [f64; 4], yard_pts: PyReadonlyArray2<'py, f64>,
-                              yard_off: PyReadonlyArray1<'py, i64>, gantry_lat: f64)
-                              -> (Bound<'py, PyArray2<f64>>, Bound<'py, PyArray2<f64>>, Bound<'py, PyArray2<f64>>,
-                                  Bound<'py, PyArray1<i64>>) {
+                              yard_off: PyReadonlyArray1<'py, i64>, anchor_at: [f64; 2], gantries: Vec<[f64; 2]>,
+                              ground: Option<Bound<'py, PyAny>>)
+                              -> PyResult<(Bound<'py, PyArray2<f64>>, Bound<'py, PyArray2<f64>>,
+                                           Bound<'py, PyArray2<f64>>, Bound<'py, PyArray1<i64>>,
+                                           Bound<'py, PyArray2<f64>>)> {
+    // (left, right: the kit's gantries by their x)
+    let mut gantries = gantries;
+    gantries.sort_by(|a, b| a[0].partial_cmp(&b[0]).unwrap_or(std::cmp::Ordering::Equal));
     let (pts, off, stop, arms) = (pts.as_array(), off.as_array(), stop.as_array(), arms.as_array());
     let (yp, yo) = (yard_pts.as_array(), yard_off.as_array());
     let yards: Vec<Vec<(f64, f64)>> = (0..yo.len().saturating_sub(1))
@@ -204,8 +240,9 @@ pub fn power_line_layout<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, 
         .collect();
     let inside = |x: f64, y: f64| x >= bx[0] && x < bx[2] && y >= bx[1] && y < bx[3];
     let mut towers: Vec<f64> = Vec::new();
-    let mut ends: Vec<[f64; 4]> = Vec::new();
+    let mut ends: Vec<LineEnd> = Vec::new();
     let mut mapped: Vec<[f64; 3]> = Vec::new();     // (each end's own vertex: the merge reads the mapped places)
+    let mut sup: Vec<f64> = Vec::new();
     let mut taken: HashSet<(i64, i64)> = HashSet::new();
     let cell = |x: f64, y: f64| ((x / dedupe_m).round() as i64, (y / dedupe_m).round() as i64);
     // a new spot (none within dedupe_m made before)
@@ -263,18 +300,39 @@ pub fn power_line_layout<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, 
             let head = (b[1] - a[1]).datan2(b[0] - a[0]);
             // the span's line end (heading into the substation), a nearby earlier one if any
             let end = if st[i] { Some((a, head + std::f64::consts::PI)) } else if st[i + 1] { Some((b, head)) } else { None };
-            let end = end.map(|(p, w)| {
-                match mapped.iter().position(|e| (e[0] - p[0]).dhypot(e[1] - p[1]) < end_merge_m) {
-                    Some(k) => ends[k],
+            let end = match end {
+                None => None,
+                Some((p, w)) => Some(match mapped.iter().position(|e| (e[0] - p[0]).dhypot(e[1] - p[1]) < end_merge_m) {
+                    Some(k) => k,
                     None => {
                         // (its gantries inside the yard: the end moved with them where one stood past the fence)
-                        let (x, y) = gantries_inside(&yards, p[0], p[1], w, gantry_lat);
+                        let got = gantries_inside(&yards, p[0], p[1], w, anchor_at, &gantries);
+                        let (x, y) = got.unwrap_or((p[0], p[1]));
+                        let (mut zl, mut zr) = (p[2], p[2]);
+                        if let (Some(g), Some(_), true) = (ground.as_ref(), got, gantries.len() >= 2) {
+                            let at: Vec<(f64, f64)> = [gantries[0], gantries[gantries.len() - 1]].iter()
+                                .map(|q| kit_part(x, y, w, anchor_at, q[0], q[1])).collect();
+                            let xs: Vec<f64> = at.iter().map(|q| q.0).collect();
+                            let ys: Vec<f64> = at.iter().map(|q| q.1).collect();
+                            let z: Vec<f64> = g.call1((xs.into_pyarray(py), ys.into_pyarray(py)))?.extract()?;
+                            if z.len() != 2 {
+                                return Err(pyo3::exceptions::PyValueError::new_err(
+                                    "power_line_layout: a height per gantry"));
+                            }
+                            zl = z[0];
+                            zr = z[1];
+                        }
                         mapped.push(p);
-                        ends.push([x, y, p[2], w]);
-                        [x, y, p[2], w]
+                        ends.push(LineEnd { e: [x, y, p[2], w], fits: got.is_some(), zl, zr });
+                        ends.len() - 1
                     }
+                }),
+            };
+            if let Some(k) = end {
+                if !ends[k].fits {
+                    continue;           // (no gantries fit: no span into the yard)
                 }
-            });
+            }
             if !inside((a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0) {
                 continue;
             }
@@ -282,15 +340,24 @@ pub fn power_line_layout<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, 
             for r in 0..arms.nrows() {
                 let tower = |p: [f64; 3], w: f64| [p[0] - w.dsin() * arms[[r, 0]], p[1] + w.dcos() * arms[[r, 0]], p[2] + arms[[r, 1]]];
                 // at the end: its lateral axis, mirrored when it points against the span's (sides kept in the world)
-                let gantry = |e: [f64; 4]| {
-                    let w = e[3];
+                let gantry = |k: usize| {
+                    let (e, w) = (ends[k].e, ends[k].e[3]);
                     let sign = if (-w.dsin()) * (-head.dsin()) + w.dcos() * head.dcos() >= 0.0 { 1.0 } else { -1.0 };
                     let lat = arms[[r, 2]] * sign;
+                    // (on the gantry on its side: the ground under that one)
+                    let zg = if lat > 0.0 { ends[k].zr } else { ends[k].zl };
                     [e[0] - w.dsin() * lat - w.dcos() * gantry_front, e[1] + w.dcos() * lat - w.dsin() * gantry_front,
-                     e[2] + arms[[r, 3]]]
+                     zg + arms[[r, 3]]]
                 };
-                let p0 = match (st[i], end) { (true, Some(e)) => gantry(e), _ => tower(a, yaw[i]) };
-                let p1 = match (st[i + 1], end) { (true, Some(e)) => gantry(e), _ => tower(b, yaw[i + 1]) };
+                let p0 = match (st[i], end) { (true, Some(k)) => gantry(k), _ => tower(a, yaw[i]) };
+                let p1 = match (st[i + 1], end) { (true, Some(k)) => gantry(k), _ => tower(b, yaw[i + 1]) };
+                for (on_end, q, qy) in [(st[i], a, yaw[i]), (st[i + 1], b, yaw[i + 1])] {
+                    if on_end && end.is_some() {
+                        sup.extend_from_slice(&[0.0, 0.0, 0.0, 0.0, 0.0]);
+                    } else {
+                        sup.extend_from_slice(&[1.0, q[0], q[1], q[2], qy.to_degrees().rem_euclid(360.0)]);
+                    }
+                }
                 for s in 0..=k {
                     let t = s as f64 / k as f64;
                     wp.extend_from_slice(&[p0[0] + (p1[0] - p0[0]) * t, p0[1] + (p1[1] - p0[1]) * t,
@@ -300,11 +367,13 @@ pub fn power_line_layout<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, 
             }
         }
     }
-    let (t, e, w) = (towers.len() / 4, ends.len(), wp.len() / 3);
-    let ends: Vec<f64> = ends.into_iter().flatten().collect();
-    (numpy::ndarray::Array2::from_shape_vec((t, 4), towers).unwrap().into_pyarray(py),
-     numpy::ndarray::Array2::from_shape_vec((e, 4), ends).unwrap().into_pyarray(py),
-     numpy::ndarray::Array2::from_shape_vec((w, 3), wp).unwrap().into_pyarray(py), wo.into_pyarray(py))
+    let ends: Vec<f64> = ends.iter().filter(|e| e.fits)
+        .flat_map(|e| [e.e[0], e.e[1], e.e[2], e.e[3], e.zl, e.zr]).collect();
+    let (t, e, w, k) = (towers.len() / 4, ends.len() / 6, wp.len() / 3, sup.len() / 10);
+    Ok((numpy::ndarray::Array2::from_shape_vec((t, 4), towers).unwrap().into_pyarray(py),
+        numpy::ndarray::Array2::from_shape_vec((e, 6), ends).unwrap().into_pyarray(py),
+        numpy::ndarray::Array2::from_shape_vec((w, 3), wp).unwrap().into_pyarray(py), wo.into_pyarray(py),
+        numpy::ndarray::Array2::from_shape_vec((k, 10), sup).unwrap().into_pyarray(py)))
 }
 
 /// Even-odd: (x, y) inside the rings (all of an area's, outer and holes alike).
@@ -371,16 +440,18 @@ const ANCHOR_PART_M: f64 = 1.0;
 const ANCHOR_LINE_M: f64 = 0.5;
 
 /// A substation's yard: its rings (pts (n, 2) in the anchor frame, ring offsets (k + 1); even-odd). First a kit
-/// anchor_kit at every line end in anchors (a, 3) [x, y, heading into the substation, radians]: its point anchor_at
-/// (its frame) on the end, its +y toward the line; of it only the parts with ANCHOR_PART_M round them inside the
-/// rings, and those on the anchor's line (ANCHOR_LINE_M: the gantries the conductors end on). Then the rest filled with the first kit (kits (m, 2): footprint
-/// [w along its x, h along its y] around its frame's origin, in order of preference) of which at least one fits, on a
-/// grid along the sides of the smallest rectangle around its largest ring (the kit's x along the longer rectangle side
-/// or across it, whichever fits more), gap apart and gap / 2 inside the rings, gap clear of the anchored kits, at most
-/// max_kits (those nearest the rectangle's middle). Every kit's parts (parts (p, 4) [kit, part, x, y] in the kit's
-/// frame) at the kit's yaw. The fence: along every ring, panels fence_len long end to end (each placed at its end,
-/// its x along the ring), the last one of a side overlapping its corner. Only the parts and panels in the box x0, y0,
-/// x1, y1. (parts (q, 4) [part, x, y, yaw degrees counter-clockwise from +x], fence (f, 3) [x, y, yaw degrees]).
+/// anchor_kit at every line end in anchors (a, 3 or 5) [x, y, heading into the substation radians, (the ground under
+/// its left gantry, under its right one)]: its point anchor_at (its frame) on the end, its +y toward the line; of it
+/// only the parts with ANCHOR_PART_M round them inside the rings, and those on the anchor's line (ANCHOR_LINE_M: the
+/// gantries the conductors end on). Then the rest filled with the first kit (kits (m, 2): footprint [w along its x, h
+/// along its y] around its frame's origin, in order of preference) of which at least one fits, on a grid along the
+/// sides of the smallest rectangle around its largest ring (the kit's x along the longer rectangle side or across it,
+/// whichever fits more), gap apart and gap / 2 inside the rings, gap clear of the anchored kits, at most max_kits
+/// (those nearest the rectangle's middle). Every kit's parts (parts (p, 4) [kit, part, x, y] in the kit's frame) at
+/// the kit's yaw. The fence: along every ring, panels fence_len long end to end (each placed at its end, its x along
+/// the ring), the last one of a side overlapping its corner. Only the parts and panels in the box x0, y0, x1, y1.
+/// (parts (q, 5) [part, x, y, yaw degrees counter-clockwise from +x, z: an anchored gantry's ground from anchors
+/// (the conductors' own), NaN for the others], fence (f, 3) [x, y, yaw degrees]).
 #[pyfunction]
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub fn substation_yard<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, ring_off: PyReadonlyArray1<'py, i64>,
@@ -405,7 +476,7 @@ pub fn substation_yard<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, ri
             let (lx, ly) = (parts[[p, 2]], parts[[p, 3]]);
             let (x, y) = (cx + lx * kx.0 - ly * kx.1, cy + lx * kx.1 + ly * kx.0);
             if inside(x, y) {
-                out.extend_from_slice(&[parts[[p, 1]], x, y, yaw]);
+                out.extend_from_slice(&[parts[[p, 1]], x, y, yaw, f64::NAN]);
             }
         }
     };
@@ -423,19 +494,19 @@ pub fn substation_yard<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, ri
             let (cx, cy) = (an[[e, 0]] - anchor_at[0] * kx.0 - anchor_at[1] * ky.0,
                             an[[e, 1]] - anchor_at[0] * kx.1 - anchor_at[1] * ky.1);
             let yaw = kx.1.datan2(kx.0).to_degrees().rem_euclid(360.0);
-            let m = ANCHOR_PART_M;
+            // (the ground under its left and right gantries, as the conductors hang there: power_line_layout's ends)
+            let (zl, zr) = if an.ncols() >= 5 { (an[[e, 3]], an[[e, 4]]) } else { (f64::NAN, f64::NAN) };
             for p in 0..parts.nrows() {
                 if parts[[p, 0]] as usize != anchor_kit {
                     continue;
                 }
                 let (lx, ly) = (parts[[p, 2]], parts[[p, 3]]);
-                let at = |dx: f64, dy: f64| (cx + (lx + dx) * kx.0 - (ly + dy) * kx.1, cy + (lx + dx) * kx.1 + (ly + dy) * kx.0);
                 let on_line = (ly - anchor_at[1]).abs() <= ANCHOR_LINE_M;
-                let fits = [(0.0, 0.0), (-m, 0.0), (m, 0.0), (0.0, -m), (0.0, m)].iter()
-                    .all(|&(dx, dy)| { let (x, y) = at(dx, dy); in_rings(&rings, x, y) });
-                let (x, y) = at(0.0, 0.0);
+                let fits = part_fits(&rings, an[[e, 0]], an[[e, 1]], hd, anchor_at, lx, ly, ANCHOR_PART_M);
+                let (x, y) = kit_part(an[[e, 0]], an[[e, 1]], hd, anchor_at, lx, ly);
                 if (on_line || fits) && inside(x, y) {
-                    out.extend_from_slice(&[parts[[p, 1]], x, y, yaw]);
+                    let z = if !on_line { f64::NAN } else if lx < anchor_at[0] { zl } else { zr };
+                    out.extend_from_slice(&[parts[[p, 1]], x, y, yaw, z]);
                 }
             }
             held.push(((cx, cy), kx, (w + gap) / 2.0, (h + gap) / 2.0));
@@ -512,7 +583,7 @@ pub fn substation_yard<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, ri
             }
         }
     }
-    let (q, f) = (out.len() / 4, fence.len() / 3);
-    (numpy::ndarray::Array2::from_shape_vec((q, 4), out).unwrap().into_pyarray(py),
+    let (q, f) = (out.len() / 5, fence.len() / 3);
+    (numpy::ndarray::Array2::from_shape_vec((q, 5), out).unwrap().into_pyarray(py),
      numpy::ndarray::Array2::from_shape_vec((f, 3), fence).unwrap().into_pyarray(py))
 }

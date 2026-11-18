@@ -6613,6 +6613,9 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // replaces prop_assemblies / assembly_drop), wire_cull (a span goes with its end supports culled in this tile or
     // the next; replaces wire_ends_at_supports); power_line_layout takes the yards' rings and the gantries' offset (a
     // line end moved with its gantries inside the fence)
-    m.add("VERSION", 431)?;
+    // 432: Codex round 2: power_line_layout returns each wire's supports and the ground under each end's gantries
+    // (ends (e, 6)), takes the kit's gantries / anchor and a ground callback, and drops an end whose gantries fit
+    // nowhere; substation_yard returns a z column (an anchored gantry's ground)
+    m.add("VERSION", 432)?;
     Ok(())
 }
