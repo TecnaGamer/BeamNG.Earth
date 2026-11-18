@@ -127,6 +127,7 @@ mod roadtone;
 mod railbeds;
 mod railxing;
 mod roadnet;
+mod structures;
 mod osmtagshards;
 mod buildyears;
 mod buildcolours;
@@ -6685,6 +6686,9 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(dmmatmul::dm_matmul, m)?)?;
     // 472: the full port's dnp.matmul / dnp.dot (dmmatmul: numpy's matmul rules, the products summed in the Python's
     // order, numpy's floating-point errors reported as np.errstate says)
-    m.add("VERSION", 472)?;
+    m.add_function(wrap_pyfunction!(structures::groups::structure_groups, m)?)?;
+    // 480: road revamp RS step S1 (structures::groups::structure_groups: which decks of one bridge chain form one
+    // structure; roads writes them as a shadow JSON per chain, BNE_DECK_STRUCT=shadow). 472-479 left to other branches
+    m.add("VERSION", 480)?;
     Ok(())
 }

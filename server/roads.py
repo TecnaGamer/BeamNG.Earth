@@ -44,6 +44,7 @@ import roadmesh
 import roadsurf
 import roadsmooth
 import staging
+import structures
 
 log = logging.getLogger("earthd.roads")
 
@@ -8104,6 +8105,7 @@ class BridgeProfiles:
             return cache[str(key)]
 
     END_JOINS = True        # (TunnelProfiles: none)
+    STRUCTURES = True       # the chain's structure groups (structures.py; TunnelProfiles: none)
     READS_LIMITS = True     # the height limits of the roads under (road_sign_at; TunnelProfiles: none)
 
     def _end_joins_of(self, lines, halves, ground):
@@ -8726,9 +8728,18 @@ class BridgeProfiles:
         own = None if key in mine else (pool[key][0], pool[key][1], zs[comp.index(key)], pool[key][2])
         pre = {k: self._precommit(k, v, ground) for k, v in keep.items()}
         beams = tpiers = None
+        # (BNE_DECK_STRUCT=shadow, road revamp RS S1: the chain's structure groups as a JSON, from what this solve read
+        # alone: its pool, its heights, the bridge outlines its structure reads; nothing published changes. A window
+        # solve's chain (CHAIN_CELLS capped) is the legacy path in v1: a marker per window, whichever solves first)
+        shadow = self.STRUCTURES and structures.SHADOW
+        infra = [] if (shadow and fresh and block is None) else None
         if fresh:
             chain = [(v[1], v[2], v[0].width) for v in (keep.get(k) or before[k] for k in comp) if v is not None]
-            beams, tpiers = self._structure(chain)
+            beams, tpiers = self._structure(chain) if infra is None else self._structure(chain, infra)
+        if infra is not None:
+            structures.shadow(self, comp, pool, zs, infra)
+        elif shadow and block is not None:
+            structures.capped(self, comp, block)
         with self.lock:
             publish = []
             for k in comp:
@@ -8849,9 +8860,10 @@ class BridgeProfiles:
                         out.append(np.stack([e, n], axis=1))
         return out
 
-    def _structure(self, chain):
+    def _structure(self, chain, infra_out=None):
         """The truss beams of a solved chain [(xy, z, width)] and the piers under its ends (bridgetypes); ([], []) for a
-        plain deck."""
+        plain deck. infra_out (a list): the infrastructure Features read are added to it (structures.shadow's bridge
+        outlines: no read of its own)."""
         import bridgetypes
         try:
             infra = []
@@ -8859,6 +8871,8 @@ class BridgeProfiles:
                 pts = np.concatenate([np.asarray(xy, np.float64) for xy, _, _ in chain])
                 la, lo, _ = self.frame.enu_to_geodetic(pts[:, 0], pts[:, 1], 0.0)
                 infra = [self.infra_fn(k) for k in mapcells.cells_for_points(la, lo)]
+                if infra_out is not None:
+                    infra_out.extend(infra)
             wet = self._wet_at if self.wet is not None else None
             beams, piers = [], []
             pylons = None
@@ -9021,6 +9035,7 @@ class TunnelProfiles(BridgeProfiles):
     keys_of = staticmethod(lambda feats, i: part_keys(feats, i, "tunnel"))
     levels_of = staticmethod(lambda feats, i: [-1.0] * len(tunnel_parts(feats, i)))
     END_JOINS = False
+    STRUCTURES = False
     READS_LIMITS = False                        # (no clearance over a road to hold)
     CANON_LOAD = False                          # (its ground made canonical in _resolve; its parts' order as before)
 
