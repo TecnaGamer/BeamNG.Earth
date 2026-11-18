@@ -67,6 +67,26 @@ do
           and hi <= 15.0 * (1 + trees.HEIGHT_VARY) + 0.01, 'heights spread within HEIGHT_VARY: ' .. lo .. '..' .. hi)
   local s, sc = trees.pick('guardrail', 0.9, 0.37)
   T.check(sc == 1, 'a guardrail at its authored size')
+  -- the lean: a few degrees in a direction of its own, the same at every visit; conifers straighter
+  local maxB, maxC, dirs, upright = 0, 0, {}, 0
+  for i = 0, 199 do
+    local rank = (i + 0.5) / 200
+    local x, y = trees.lean('oak', rank)
+    local x2, y2 = trees.lean('oak', rank)
+    T.check(x == x2 and y == y2, 'the same tree leans the same way')
+    local a = math.deg(math.sqrt(x * x + y * y))
+    maxB = math.max(maxB, a)
+    if a < 1.0 then upright = upright + 1 end
+    if a > 0.3 then dirs[math.floor((math.atan2(y, x) + math.pi) / (math.pi / 2)) % 4] = true end
+    local cx, cy = trees.lean('spruce', rank)
+    maxC = math.max(maxC, math.deg(math.sqrt(cx * cx + cy * cy)))
+  end
+  T.check(maxB <= trees.LEAN_DEG + 1e-6 and maxB > 0.6 * trees.LEAN_DEG, 'broadleaves lean up to LEAN_DEG: ' .. maxB)
+  T.check(maxC <= trees.LEAN_DEG_CONIFER + 1e-6, 'conifers straighter: ' .. maxC)
+  T.check(upright > 80, 'most trees nearly upright: ' .. upright .. ' of 200 under 1 degree')
+  local nd = 0; for _ in pairs(dirs) do nd = nd + 1 end
+  T.check(nd == 4, 'leaning every way')
+  T.check(select(1, trees.lean('deadwood', 0.7)) == 0, 'dead wood lies as it is')
 end
 -- (the tests below count shapes and items at set heights: the spread off for them, as before 35)
 trees.HEIGHT_VARY, trees.MIN_VARIANTS = 0, 1

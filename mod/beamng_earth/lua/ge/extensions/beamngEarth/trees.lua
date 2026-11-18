@@ -1141,6 +1141,28 @@ end
 local function frac(x) return x - math.floor(x) end
 local PROP_WINDOWS = { { 0.8, 1.25 }, { 0.6, 1.6 } }
 
+-- A tree's lean (the user's test at Syrynka 2026-11-18: East Coast USA's forest birches are straight upright
+-- cylinders, a turn about the vertical does not change one, a stand of them read as one shape repeated): a few degrees
+-- off the vertical in a direction of its own, both from its rank (the same tree leans the same way at every visit),
+-- most trees nearly upright (the lean's size ~ u^2). The conifers stand straighter (their gravitropism; a leaning fir
+-- reads as storm damage), the bushes sprawl more. Returns the Euler x, y angles (radians) for setFromEuler.
+M.LEAN_DEG = 3.0
+M.LEAN_DEG_CONIFER = 1.2
+M.LEAN_DEG_BUSH = 5.0
+local CONIFERS = { conifer = true, conifer_open = true, spruce = true, spruce_open = true, pine_eu = true,
+  pine_eu_open = true, pine_west = true, pine_west_open = true, redwood = true, pine_maritime = true,
+  snag_conifer = true, conifer_clump = true }
+local BUSHES = { shrub = true, maquis = true, shrub_north = true, shrub_tropical = true, tro_understory = true,
+  fern = true, desert_shrub = true, desert_shrub_hot = true, creosote = true }
+function M.lean(group, rank)
+  local maxDeg = CONIFERS[group] and M.LEAN_DEG_CONIFER or BUSHES[group] and M.LEAN_DEG_BUSH or M.LEAN_DEG
+  if group == 'deadwood' then return 0, 0 end      -- (lying on the ground already)
+  local u = frac(rank * 48611.27)
+  local a = math.rad(maxDeg * u * u)
+  local dir = 2 * math.pi * frac(rank * 70001.913)
+  return a * math.cos(dir), a * math.sin(dir)
+end
+
 -- The variant of a group for an item of height h: those within 0.8 .. 1.25 of it (wider for the vegetation, above;
 -- else 0.6 .. 1.6), picked by the item's rank; else the nearest. Returns shape, scale.
 function M.pick(group, h, rank)
@@ -1321,8 +1343,10 @@ local function makeItem(fd, t, i, shape, sc, solid, group, variant)
     end
     m:setPosition(itemPos)
   else
-    -- Existing props use a flat yaw (counter-clockwise in server coordinates).
-    itemVec:set(0, 0, -math.rad(f[b + F_YAW] + yawAdd))
+    -- Existing props use a flat yaw (counter-clockwise in server coordinates). The vegetation leans a little (M.lean).
+    local lx, ly = 0, 0
+    if M.varies(group) then lx, ly = M.lean(group, f[b + F_RANK]) end
+    itemVec:set(lx, ly, -math.rad(f[b + F_YAW] + yawAdd))
     m:setFromEuler(itemVec)
     m:setPosition(itemPos)
   end
