@@ -812,3 +812,33 @@ class FarmFoliageTest(unittest.TestCase):
         self.assertLessEqual(nlines, 14)
         blocked = np.ones((rows, cols), bool)
         self.assertEqual(len(veg.farm_foliage(feats, chm, blocked, None)), 0)
+
+
+class TiedCapTest(unittest.TestCase):
+    """At a tile's cap (_capped) the lowest ranks are kept, ties broken by the items' order (a stable sort): the same
+    rows on every CPU. numpy's argpartition put equal ranks in its CPU's own order (x86-simd-sort's AVX2 or AVX-512
+    code, the scalar code elsewhere): which of the tied items a tile kept depended on the machine (2026-11-18). The
+    vegetation geotiles are kept by the code's hash (revisit kind "vegg": vegetation.py is in revisit.source_closure),
+    so the new rule makes them again."""
+
+    def test_ties_at_the_cut_keep_the_first(self):
+        from unittest import mock
+        rank = np.array([0.5, 0.2, 0.5, 0.1, 0.5, 0.5, 0.9, 0.5], np.float32)
+        it = SimpleNamespace(group=np.zeros(len(rank), np.int64), rank=rank)
+        with mock.patch.object(veg, "TILE_ROWS_MAX", 4):
+            got = veg._capped(it)
+        # 0.1 and 0.2, then the first two of the five tied at 0.5 (items 0 and 2), in index order
+        self.assertEqual(got.tolist(), [0, 1, 2, 3])
+
+    def test_clumps_capped_apart(self):
+        from unittest import mock
+        rank = np.full(6, 0.3, np.float32)
+        group = np.array([0, veg.CLUMP_GROUPS[0], 0, veg.CLUMP_GROUPS[0], 0, veg.CLUMP_GROUPS[0]])
+        it = SimpleNamespace(group=group, rank=rank)
+        with mock.patch.object(veg, "TILE_ROWS_MAX", 2), mock.patch.object(veg, "CLUMP_ROWS_MAX", 1):
+            self.assertEqual(veg._capped(it).tolist(), [0, 1, 2])
+
+    def test_vegetation_in_the_tiles_code_key(self):
+        import os
+        import revisit
+        self.assertIn("vegetation.py", revisit.source_closure(os.path.dirname(os.path.abspath(veg.__file__))))
