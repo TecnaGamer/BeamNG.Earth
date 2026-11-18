@@ -9,7 +9,7 @@ use numpy::{IntoPyArray, PyArray1};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList, PyTuple};
 
-use super::pyobj::{in_generator, py_float, py_float_strict, py_str};
+use super::pyobj::{in_generator, key_str, py_float, py_float_strict, Contract};
 
 const MAX_LANES: f64 = 12.0;
 
@@ -69,6 +69,20 @@ pub fn lane_evidence<'py>(py: Python<'py>, n: usize, counts: Vec<Option<Bound<'p
         return Err(pyo3::exceptions::PyValueError::new_err(format!(
             "lane_evidence: three direction columns (lanes:forward, lanes:backward, lanes:both_ways), not {}",
             dirs.len())));
+    }
+    // (the input contract, checked before any row is read: pyobj::Contract)
+    let k = Contract::new(py)?;
+    for (j, c) in counts.iter().enumerate() {
+        if let Some(c) = c {
+            k.column(c, ["osm_lanes", "osm_lane_total", "lane_count", "lane_evidence_max"].get(j).unwrap_or(&"a count"))?;
+        }
+    }
+    for d in dirs.iter().flatten() {
+        k.column(d, "a lane direction column")?;
+    }
+    k.column(&gen, "generated_counts")?;
+    if let Some(p) = &parts {
+        k.parts(p, "osm_lane_parts")?;
     }
     let cs = cols(counts)?;
     let ds = cols(dirs)?;
@@ -143,33 +157,49 @@ fn too_short() -> PyErr {
 /// lane_evidence(feats)[i] (asked once, before the first). Tested: candidates with lanes, or trunks (not links) without,
 /// not one-way; with none left, none rejected; else each source's rule rejects with those lanes, among them.
 #[pyfunction]
-#[pyo3(signature = (feats, n, names, has_class, cls_col, sub_col, oneway_fn, links_fn, rules_fn, wt, has_osm, osm_fn, factor,
+#[pyo3(signature = (feats, n, names, attrs, oneway_fn, links_fn, rules_fn, wt, nw, ow, osm_fn, factor,
                     lane_evidence, home_copy))]
 #[allow(clippy::too_many_arguments)]
 pub fn width_rejected<'py>(py: Python<'py>, feats: Bound<'py, PyAny>, n: usize, names: Vec<String>,
-                           has_class: bool, cls_col: Bound<'py, PyAny>, sub_col: Option<Bound<'py, PyAny>>,
-                           oneway_fn: Bound<'py, PyAny>, links_fn: Bound<'py, PyAny>, rules_fn: Bound<'py, PyAny>,
-                           wt: Option<Bound<'py, PyAny>>, has_osm: bool, osm_fn: Bound<'py, PyAny>, factor: f64,
+                           attrs: Bound<'py, PyAny>, oneway_fn: Bound<'py, PyAny>, links_fn: Bound<'py, PyAny>,
+                           rules_fn: Bound<'py, PyAny>, wt: Option<Bound<'py, PyAny>>, nw: usize,
+                           ow: Option<Bound<'py, PyAny>>, osm_fn: Bound<'py, PyAny>, factor: f64,
                            lane_evidence: Bound<'py, PyAny>, home_copy: Bound<'py, PyAny>)
                            -> PyResult<(Bound<'py, PyAny>, Bound<'py, PyAny>)> {
     let np = py.import("numpy")?;
-    let nw = match &wt { Some(t) => t.getattr("feature")?.len()?, None => 0 };
+    // (the input contract: attrs an exact dict, each column read checked where it is read; nw the facade's
+    // len(wt.feature), not read again)
+    let k = Contract::new(py)?;
+    let attrs = attrs.cast_exact::<PyDict>().map_err(|_| pyo3::exceptions::PyTypeError::new_err(
+        "width_rejected: the layer's attrs are no exact dict (the road layer contract)"))?.clone();
+    let ow = ow.filter(|c| !c.is_none());
+    if let Some(c) = &ow {
+        k.column(c, "osm_width")?;
+    }
+    let has_osm = ow.is_some();
     let zeros = |k: usize| vec![false; k].into_pyarray(py);
     let out = || (zeros(nw).into_any(), zeros(n).into_any());
     let mut pos: HashMap<&str, i32> = HashMap::new();
     for (k, c) in names.iter().enumerate() {
         pos.insert(c.as_str(), k as i32);
     }
-    // cls_s = [str(v) for v in a["class"].tolist()] if "class" in a else ["unknown"] * n
-    let cls_s: Vec<String> = if has_class {
-        cls_col.call_method0("tolist")?.try_iter()?.map(|v| py_str(&v?)).collect::<PyResult<_>>()?
-    } else {
-        vec!["unknown".to_owned(); n]
+    // cls_s = [str(v) for v in a["class"].tolist()] if "class" in a else ["unknown"] * n (the class converted before the
+    // subtype is looked up, as there: Codex round 3)
+    let cls_s: Vec<String> = match attrs.get_item("class")? {
+        Some(c) => {
+            k.column(&c, "class")?;
+            c.call_method0("tolist")?.try_iter()?.map(|v| key_str(&v?)).collect::<PyResult<_>>()?
+        }
+        None => vec!["unknown".to_owned(); n],
     };
     // np.fromiter((... for c, s in zip(cls_s, sub.tolist() if sub is not None else cls_s)), np.int32, n): sub.tolist()
     // and its iterator made first, then n pairs at most taken one at a time (zip asks the class row first, the
     // subtype's only where there is one), str(s) in the generator (a StopIteration its RuntimeError); fewer: ValueError
-    let mut sub_it = match sub_col.filter(|s| !s.is_none()) {
+    let sub_col = attrs.get_item("subtype")?.filter(|s| !s.is_none());
+    if let Some(s) = &sub_col {
+        k.column(s, "subtype")?;
+    }
+    let mut sub_it = match sub_col {
         Some(s) => Some(s.call_method0("tolist")?.try_iter()?),
         None => None,
     };
@@ -180,7 +210,7 @@ pub fn width_rejected<'py>(py: Python<'py>, feats: Bound<'py, PyAny>, n: usize, 
             Some(it) => match it.next() {
                 Some(v) => {
                     let v = v?;
-                    in_generator(py, py_str(&v))? == "road"
+                    in_generator(py, key_str(&v))? == "road"
                 }
                 None => return Err(too_short()),
             },
@@ -199,8 +229,11 @@ pub fn width_rejected<'py>(py: Python<'py>, feats: Bound<'py, PyAny>, n: usize, 
     let float64 = np.getattr("float64")?;
     let mut srcs: Vec<(Bound<'py, PyAny>, Bound<'py, PyAny>)> = Vec::new();
     if nw > 0 {
-        let t = wt.as_ref().expect("wt");
-        let wv = np.call_method1("asarray", (t.getattr("value")?,))?;
+        let t = wt.as_ref().ok_or_else(|| pyo3::exceptions::PyTypeError::new_err("width_rejected: no width table"))?;
+        let (tv, tf) = (t.getattr("value")?, t.getattr("feature")?);
+        k.column(&tv, "the width rule's values")?;
+        k.column(&tf, "the width rule's features")?;
+        let wv = np.call_method1("asarray", (tv,))?;
         let kind: String = wv.getattr("dtype")?.getattr("kind")?.extract()?;
         let wv = if "fiub".contains(kind.as_str()) && kind.len() == 1 {
             wv.call_method1("astype", (&float64,))?
@@ -209,7 +242,7 @@ pub fn width_rejected<'py>(py: Python<'py>, feats: Bound<'py, PyAny>, n: usize, 
                 .collect::<PyResult<_>>()?;
             np.call_method1("array", (v, &float64))?
         };
-        srcs.push((np.call_method1("ascontiguousarray", (t.getattr("feature")?, &int64))?,
+        srcs.push((np.call_method1("ascontiguousarray", (tf, &int64))?,
                    np.call_method1("ascontiguousarray", (wv,))?));
     }
     if has_osm {

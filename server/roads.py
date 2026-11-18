@@ -3600,7 +3600,12 @@ def _lane_evidence(feats):
     way, the lane tags' total and count (lane_count, generated_counts), lanes:forward + backward + both_ways, and each of
     its lane parts' (LANE_PARTS: a merged highway's sections, 2 here and 4 there, give 4); a lane section split off its
     road (lanesections.split) the road's own before the split (lanesections.LANE_MAX: the split sets each section's
-    count and clears its parts). Remembered on feats (earthfast roadnet::widthlanes::lane_evidence)."""
+    count and clears its parts). Remembered on feats (earthfast roadnet::widthlanes::lane_evidence).
+
+    Input contract (R2a): the columns are None, exact lists / tuples or 1-D numpy arrays of a number / text dtype or
+    of objects that are None, bool, int, float, str or numpy scalars; generated_counts a list of such; the lane parts
+    None, scalars, exact dicts or exact lists / tuples of parts, a part a list / tuple of scalars and exact dicts of
+    str keys and scalar values. Anything else (subclasses, proxies, other objects) raises TypeError."""
     got = feats.__dict__.get("_lane_evidence")
     if got is not None:
         return got
@@ -3613,6 +3618,9 @@ def _lane_evidence(feats):
     dirs = [a.get(railtags.lane_attr(k)) for k in ("lanes:forward", "lanes:backward", "lanes:both_ways")]
     gen = roadlanes.generated_counts(feats)
     fast.require(404, "lane_evidence")
+    # (the input contract, roadnet::pyobj::Contract: the columns None, exact lists / tuples or 1-D numpy arrays of
+    # numbers, text or objects of None / bool / int / float / str / numpy scalars; the lane parts lists / tuples of
+    # such and of exact dicts of str keys; anything else TypeError before a row is read)
     ev = fast._ef.lane_evidence(len(feats), cols, gen, dirs, a.get(railtags.LANE_PARTS))
     feats.__dict__["_lane_evidence"] = ev
     return ev
@@ -3630,7 +3638,12 @@ def width_rejected(feats):
     road's is mapped as wide as its roadway, and the pairing caps it, dual_cap). Only a width wider than the fewest
     lanes allow asks for the home copy. Never in place: the readers of a mapped width ask width_table / mapped_osm_width.
     Remembered on feats. MA Route 2's 30.5 m and 18.3 m (100 ft / 60 ft rights-of-way) on a two-lane trunk, GitHub
-    #901."""
+    #901 (earthfast roadnet::widthlanes::width_rejected).
+
+    Input contract (R2a): feats.attrs an exact dict; its class, subtype and osm_width columns and the width rule's
+    feature / value columns None, exact lists / tuples or 1-D numpy arrays of a number / text dtype or of objects
+    that are None, bool, int, float, str or numpy scalars; the width rule a mapgeom.RuleTable. Anything else raises
+    TypeError."""
     got = feats.__dict__.get("_width_rejected")
     if got is not None:
         return got
@@ -3643,14 +3656,18 @@ def width_rejected(feats):
         feats.__dict__["_width_rejected"] = out
         return out
     import fast
+    import mapgeom
     import roadlanes
     fast.require(404, "width_rejected")
-    a = feats.attrs
+    # (the input contract, roadnet::pyobj::Contract: the attrs an exact dict, class / subtype / osm_width and the width
+    # rule's columns None, exact lists / tuples or 1-D numpy arrays of numbers, text or objects of None / bool / int /
+    # float / str / numpy scalars, the width rule a mapgeom.RuleTable; anything else TypeError)
+    if nw and type(wt) is not mapgeom.RuleTable:
+        raise TypeError(f"width_rejected: a {type(wt).__name__} width rule (the road layer contract: RuleTable)")
     out = fast._ef.width_rejected(
-        feats, n, list(STYLE), "class" in a, a.get("class"), a.get("subtype"),
-        lambda: _rule_cols(feats.rules.get("oneway"), n)[0], lambda: roadlanes.links(feats), _road_rules,
-        wt if nw else None, ow is not None, lambda: _osm_values(feats, "width", None, None), float(WIDTH_PLATFORM_X),
-        _lane_evidence, home_copy)
+        feats, n, list(STYLE), feats.attrs, lambda: _rule_cols(feats.rules.get("oneway"), n)[0],
+        lambda: roadlanes.links(feats), _road_rules, wt if nw else None, nw, ow,
+        lambda: _osm_values(feats, "width", None, None), float(WIDTH_PLATFORM_X), _lane_evidence, home_copy)
     feats.__dict__["_width_rejected"] = out
     return out
 

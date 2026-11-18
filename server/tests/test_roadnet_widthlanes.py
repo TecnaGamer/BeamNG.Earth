@@ -170,7 +170,7 @@ class TagDict(dict):
 
 
 def part_tags(rng):
-    t = rng.choice([dict, TagDict])()
+    t = dict()
     for k in rng.sample(["lanes", "lanes:forward", "lanes:backward", "lanes:both_ways", "turn:lanes"], rng.randint(0, 4)):
         t[k] = rng.choice(COUNTS if k == "lanes" else DIRS)
     return t
@@ -388,6 +388,33 @@ class WidthRejectedParityTest(unittest.TestCase):
             self.assertEqual(got[0], want[0], k)
             if want[0] == "ok":
                 self.assertTrue(same(got[1], want[1]), k)
+
+
+class ContractTest(unittest.TestCase):
+    """Inputs outside the contract (roadnet::pyobj::Contract): TypeError before a row is read."""
+
+    def test_refused(self):
+        gen = lambda feats: [None] * len(feats)     # noqa: E731
+        bad_parts = [[(0.0, 1.0, "w", TagDict(lanes="3"))], [[0.0, 1.0, "w", {3: "3"}]], [(0.0, 1.0, "w", {"lanes": [3]})],
+                     (x for x in ()), [object()]]
+        with mock.patch.object(roadlanes, "generated_counts", gen):
+            for bad in bad_parts:
+                f = features([[(0, 0), (50, 0)]], ["motorway"])
+                pa = np.empty(1, object)
+                pa[0] = bad
+                f.attrs[railtags.LANE_PARTS] = pa
+                self.assertEqual(outcome(roads._lane_evidence, f), ("raised", TypeError), bad)
+            for col in (np.array([[2.0]]), np.array(["2"], dtype="datetime64[D]") if False else np.zeros(1, complex),
+                        np.ma.array([2.0]), {0: 2}, "2", 2.0):
+                f = features([[(0, 0), (50, 0)]], ["motorway"])
+                f.attrs["lane_count"] = col
+                self.assertEqual(outcome(roads._lane_evidence, f), ("raised", TypeError), type(col))
+            f = features([[(0, 0), (50, 0)]], ["motorway"])
+            f.attrs["lane_count"] = np.array([2], np.int64)
+            self.assertEqual(outcome(roads._lane_evidence, f)[0], "ok")
+        with mock.patch.object(roadlanes, "generated_counts", lambda feats: (2 for _ in range(1))):
+            f = features([[(0, 0), (50, 0)]], ["motorway"])
+            self.assertEqual(outcome(roads._lane_evidence, f), ("raised", TypeError))
 
 
 class VersionSkewTest(unittest.TestCase):

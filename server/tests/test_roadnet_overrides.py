@@ -1,11 +1,15 @@
-"""The roadnet kernels read Python values as the Python did when a value's type overrides its conversion (Codex on
-bc34313f): a float subclass whose __float__ gives another value or raises, a str subclass whose __str__ gives another
+"""Exotic Python values (Codex rounds 1-3 on piece 7): piece 7's kernels (roadnet::widthlanes) refuse what lies
+outside their input contract (roadnet::pyobj::Contract) with a TypeError and read the rest as the Python did; the
+other kernels touched (osm_values, lanesplit's highway test, surface_kind) read overriding values as the Python did.
+Originally: the roadnet kernels read Python values as the Python did when a value's type overrides its conversion
+(Codex on bc34313f): a float subclass whose __float__ gives another value or raises, a str subclass whose __str__ gives another
 text, a class value that only hashes and compares like "motorway"; and a column read where the Python read it, row by
 row (a list subclass's __getitem__ asked alike, an element's __float__ changing a later row seen alike). Against the
 references kept in the parity tests (the Python before each kernel)."""
 import os
 import random
 import sys
+import types
 import unittest
 from unittest import mock
 
@@ -121,32 +125,36 @@ class OverrideTest(unittest.TestCase):
         return f
 
     def test_lane_evidence_float_overrides(self):
+        """Float subclasses in a count column are outside piece 7's input contract (roadnet::pyobj::Contract): a
+        TypeError before any row is read (no __float__ asked). Exact floats and numpy scalars are read as the Python."""
         gen = lambda feats: [None] * len(feats)     # noqa: E731
         with mock.patch.object(roadlanes, "generated_counts", gen):
+            for bad in (OverFloat(3.0), RaisingFloat(3.0), ValueErrorFloat(3.0)):
+                f = self.evidence([2.0, bad, 4.0])
+                got = outcome(roads._lane_evidence, f)
+                self.assertEqual(got, (("raised", TypeError), []), bad)
             got = self.compare(tw.ref_lane_evidence, roads._lane_evidence,
-                               self.evidence([OverFloat(3.0), OverFloat(2.0), 4.0]), "override")
-            self.assertEqual(got[1].tolist(), [5, 4, 4])            # (float() of them, not the stored 3 and 2)
-            self.assertEqual(self.compare(tw.ref_lane_evidence, roads._lane_evidence,
-                                          self.evidence([2.0, RaisingFloat(3.0)]), "raising"),
-                             ("raised", ArithmeticError))
-            got = self.compare(tw.ref_lane_evidence, roads._lane_evidence,
-                               self.evidence([ValueErrorFloat(3.0), 2.0]), "not a number")
-            self.assertEqual(got[1].tolist(), [-1, 2])
+                               self.evidence([3.0, np.float32(2.0), np.int64(5), "4", None, True]), "exact")
+            self.assertEqual(got[1].tolist(), [3, 2, 5, 4, -1, 1])
 
     def test_lane_evidence_reads_rows_in_place(self):
+        """A list subclass column, or a float subclass whose float() rewrites a later row: outside the contract,
+        TypeError before a row is read (nothing asked of them); exact lists are read row by row as the Python."""
         gen = lambda feats: [None] * len(feats)     # noqa: E731
         with mock.patch.object(roadlanes, "generated_counts", gen):
             f = self.evidence(["2", "3", "4"], wrap=Recording)
-            self.compare(tw.ref_lane_evidence, roads._lane_evidence, f, "recording")
+            self.assertEqual(outcome(roads._lane_evidence, f), (("raised", TypeError), []))
+            vals = ["2", "3", "4", "5"]
             for kind in (list, np.array):
-                vals = ["2", "3", "4", "5"]
                 f = self.evidence(vals)
                 col = kind(vals, object) if kind is np.array else list(vals)
                 col[0] = Mutating(2.0, col, 2, "9")
                 f.attrs["lane_count"] = col
-                got = self.compare(tw.ref_lane_evidence, roads._lane_evidence, f, "mutating")
-                # (the row rewritten by the first row's float() is read as rewritten: 9)
-                self.assertEqual(got[1].tolist(), [2, 3, 9, 5])
+                self.assertEqual(outcome(roads._lane_evidence, f)[0], ("raised", TypeError))
+                self.assertEqual(col[2], "4")               # (its float() never asked)
+            f = self.evidence(vals, wrap=list)
+            got = self.compare(tw.ref_lane_evidence, roads._lane_evidence, f, "exact list")
+            self.assertEqual(got[1].tolist(), [2, 3, 4, 5])
 
     def test_direction_columns_are_three(self):
         for k in (0, 2, 4):
@@ -154,40 +162,41 @@ class OverrideTest(unittest.TestCase):
                 fast._ef.lane_evidence(1, [None] * 4, [None], [None] * k, None)
 
     def test_width_overrides(self):
+        """str / float subclasses in the class, subtype, width rule and OSM width columns: outside the contract,
+        TypeError (none of their __str__ / __float__ asked); a width rule that is no RuleTable: TypeError."""
         rng = random.Random(1)
-        rejected = 0
-        for k in range(300):
+        cases = 0
+        for k in range(200):
             f = tw.width_layer(rng)
             n = len(f)
-            c = np.empty(n, object)
-            c[:] = [rng.choice([OtherStr("trunk"), OtherStr("residential"), "trunk", OtherStr("x")]) for _ in range(n)]
-            f.attrs["class"] = c
-            if rng.random() < 0.5:
-                s = np.empty(n, object)
-                s[:] = [rng.choice(["road", OtherStr("road")]) for _ in range(n)]
-                f.attrs["subtype"] = s
-            entries = [(i, rng.choice([OverFloat(28.5), 30.5, OverFloat(10.0)])) for i in range(n)]
-            vals = np.empty(n, object)
-            vals[:] = [e[1] for e in entries]
-            f.rules["width"] = mapgeom.RuleTable(np.arange(n, dtype=np.int32), vals, np.zeros(n, np.float32),
-                                                 np.ones(n, np.float32))
-            ow = np.empty(n, object)
-            ow[:] = [rng.choice([None, OverFloat(28.0), "30.5", ValueErrorFloat(40.0)]) for _ in range(n)]
-            f.attrs["osm_width"] = ow
-            got = self.compare(tw.ref_width_rejected, roads.width_rejected, f, k)
-            if got[0] == "ok":
-                rejected += int(got[1][0].sum() + got[1][1].sum())
-        self.assertGreater(rejected, 50)
+            what = rng.choice(["class", "subtype", "rule", "osm"])
+            f.attrs["osm_width"] = np.array(["30.5"] * n, object)      # (past the early return: widths to judge)
+            col = np.empty(n, object)
+            if what == "class":
+                col[:] = [OtherStr("trunk")] * n
+                f.attrs["class"] = col
+            elif what == "subtype":
+                col[:] = [OtherStr("road")] * n
+                f.attrs["subtype"] = col
+                f.attrs["class"] = np.array(["trunk"] * n)
+            elif what == "rule":
+                col[:] = [OverFloat(28.5)] * n
+                f.rules["width"] = mapgeom.RuleTable(np.arange(n, dtype=np.int32), col, np.zeros(n, np.float32),
+                                                     np.ones(n, np.float32))
+                f.attrs["class"] = np.array(["trunk"] * n)
+                f.attrs.pop("subtype", None)
+            else:
+                col[:] = [OverFloat(28.0)] * n
+                f.attrs["osm_width"] = col
+            f.__dict__.pop("_width_rejected", None)
+            got = outcome(roads.width_rejected, f)
+            self.assertEqual(got, (("raised", TypeError), []), (k, what))
+            cases += 1
+        self.assertEqual(cases, 200)
         f = tw.width_layer(random.Random(2))
-        n = len(f)
-        vals = np.empty(n, object)
-        vals[:] = [RaisingFloat(30.0)] * n
-        f.attrs["class"] = np.array(["trunk"] * n)
-        f.attrs.pop("subtype", None)
-        f.rules["width"] = mapgeom.RuleTable(np.arange(n, dtype=np.int32), vals, np.zeros(n, np.float32),
-                                             np.ones(n, np.float32))
-        self.assertEqual(self.compare(tw.ref_width_rejected, roads.width_rejected, f, "raising"),
-                         ("raised", ArithmeticError))
+        f.rules["width"] = types.SimpleNamespace(feature=np.zeros(1, np.int32), value=np.ones(1))
+        f.__dict__.pop("_width_rejected", None)
+        self.assertEqual(outcome(roads.width_rejected, f)[0], ("raised", TypeError))
 
     def test_osm_values_overrides(self):
         f = features([[(0, 10 * i), (50, 10 * i)] for i in range(5)], ["primary"] * 5)
@@ -306,26 +315,19 @@ class RoundTwoTest(unittest.TestCase):
     """Codex round 2 on ec3397ee."""
 
     def test_generated_counts_read_twice(self):
-        for mode in ("value", "raise"):
-            vals = [None, 3, 2, None]
-            f = features([[(0, 10 * i), (50, 10 * i)] for i in range(4)], ["motorway"] * 4)
-            f.attrs.pop("osm_lanes", None)
-            for side, fn in (("ref", tw.ref_lane_evidence), ("new", roads._lane_evidence)):
-                gen = Flip(vals, mode)
-                with mock.patch.object(roadlanes, "generated_counts", lambda feats: gen):
-                    f.__dict__.pop("_lane_evidence", None)
-                    f.__dict__.pop("_ref_lane_evidence", None)
-                    if side == "ref":
-                        want = outcome(fn, f)
-                    else:
-                        got = outcome(fn, f)
-            self.assertEqual(got[0][0], want[0][0], mode)
-            self.assertEqual(got[1], want[1], mode)
-            if want[0][0] == "ok":
-                self.assertEqual(got[0][1].tolist(), want[0][1].tolist())
-                self.assertEqual(want[0][1].tolist(), [-1, 7, 7, -1])
-            else:
-                self.assertIs(got[0][1], want[0][1])
+        """A generated counts list subclass whose reads change: outside the contract (TypeError, no row read); an
+        exact list is read twice per row as the Python did (the same answers)."""
+        f = features([[(0, 10 * i), (50, 10 * i)] for i in range(4)], ["motorway"] * 4)
+        f.attrs.pop("osm_lanes", None)
+        gen = Flip([None, 3, 2, None], "value")
+        with mock.patch.object(roadlanes, "generated_counts", lambda feats: gen):
+            self.assertEqual(outcome(roads._lane_evidence, f), (("raised", TypeError), []))
+        with mock.patch.object(roadlanes, "generated_counts", lambda feats: [None, 3, 2, None]):
+            for k in ("_lane_evidence", "_ref_lane_evidence"):
+                f.__dict__.pop(k, None)
+            want = outcome(tw.ref_lane_evidence, f)
+            got = outcome(roads._lane_evidence, f)
+        self.assertEqual(got[0][1].tolist(), want[0][1].tolist())
 
     def width_case(self, n, sub):
         f = features([[(0, 10 * i), (50, 10 * i)] for i in range(n)], ["trunk"] * n)
@@ -357,17 +359,21 @@ class RoundTwoTest(unittest.TestCase):
         return want[0]
 
     def test_subtype_rows_taken_as_numpy_asks(self):
-        # (n good rows then an error past them: numpy's count stops before it; fewer good rows: the error)
-        self.assertEqual(self.compare(self.width_case(3, LazyRows(["road"] * 5, 3)))[0], "ok")
-        self.assertEqual(self.compare(self.width_case(3, LazyRows(["road"] * 5, 2))), ("raised", LookupError))
+        """A subtype column that is no list / tuple / array, or holds a str subclass: outside the contract
+        (TypeError, nothing of it asked)."""
+        self.assertEqual(self.compare_new(self.width_case(3, LazyRows(["road"] * 5, 3))), ("raised", TypeError))
         rows = ["road", "road", "road"]
         rows[0] = Rewriting("road", rows, 0)
+        self.assertEqual(self.compare_new(self.width_case(3, rows)), ("raised", TypeError))
+        self.assertEqual(rows[1], "road")
+        self.assertEqual(self.compare(self.width_case(3, np.array(["road", "rail", "road"], object)))[0], "ok")
 
-        class Column:
-            def tolist(self):
-                return rows
-        got = self.compare(self.width_case(3, Column()))
-        self.assertEqual(got[0], "ok")
+    def compare_new(self, f):
+        f.__dict__.pop("_width_rejected", None)
+        with mock.patch.object(roadlanes, "generated_counts", lambda feats: [2] * len(feats)):
+            got = outcome(roads.width_rejected, f)
+        self.assertEqual(got[1], [])
+        return got[0]
 
     def test_rule_masks_of_other_lengths(self):
         real = roads._road_rules()
