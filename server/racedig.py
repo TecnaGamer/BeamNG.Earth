@@ -24,6 +24,7 @@ A raceway is OpenStreetMap's highway=raceway, appended to the roads layer with i
 (osmtags.raceway_features). Off by default while it is measured (tools/roadcorpus, category 19); every BNE_* switch is
 in the plans' and cells' keys (revisit.switches_key). Not here (later road revamp phases): raceways on the AI graph
 (decision D20), generated kerbs and run-off (D17, only as mapped by default), raceway profiles in the road model."""
+import math
 import os
 
 import numpy as np
@@ -150,18 +151,20 @@ def clear_props(props, wires, lines, ground=None):
     return dropped
 
 
-def _window(line, lo, hi, reach):
-    """The run of line (k, 2) resampled every grading.RACEWAY_STEP_M from its start (the stations grading's own
-    smoothing reads) with its samples within reach m of the box lo..hi (one more each side), or None. By the resampled
-    line, not its vertices: a long straight with its vertices far off still passes the box (Codex review of 47edf660)."""
+def _window(line, lo, hi, reach, dense=None):
+    """(the run of line (k, 2) resampled every grading.RACEWAY_STEP_M from its start (the stations grading's own
+    smoothing reads) with its samples within reach m of the box lo..hi (one more each side), the station on the whole
+    line it starts at), or None. By the resampled line, not its vertices: a long straight with its vertices far off
+    still passes the box (Codex review of 47edf660). dense: (points, stations) of the line resampled, when at hand."""
     import grading
-    dense, _st = grading.resample(np.asarray(line, np.float64)[:, :2], grading.RACEWAY_STEP_M)
+    dense, st = dense if dense is not None else grading.resample(np.asarray(line, np.float64)[:, :2],
+                                                                 grading.RACEWAY_STEP_M)
     d = np.maximum(np.maximum(lo - dense, dense - hi), 0.0)
     ok = np.flatnonzero(dnp.hypot(d[:, 0], d[:, 1]) <= reach)
     if not len(ok):
         return None
     i0, i1 = max(0, int(ok[0]) - 1), min(len(dense), int(ok[-1]) + 2)
-    return dense[i0:i1] if i1 - i0 >= 2 else None
+    return (dense[i0:i1], float(st[i0]), i0) if i1 - i0 >= 2 else None
 
 
 def track_surface(frame, elev, races, pts, base):
@@ -175,26 +178,70 @@ def track_surface(frame, elev, races, pts, base):
     if not len(pts):
         return base.copy()
     lo, hi = pts.min(axis=0), pts.max(axis=0)
-    zones, which = [], []
+    dense = [grading.resample(np.asarray(line, np.float64)[:, :2], grading.RACEWAY_STEP_M) for line, _hw in races]
+    zones, which, starts = [], [], []
     for r, (line, hw) in enumerate(races):
-        win = _window(line, lo, hi, WINDOW_M)
-        if win is None:
+        got = _window(line, lo, hi, WINDOW_M, dense[r])
+        if got is None:
             continue
+        win, s0, i0 = got
         got = grading.raceway_surface(frame, elev, win, float(hw) + BAND_MARGIN_M)
         if got:
             zones.append(got)
             which.append(r)
+            starts.append((s0, i0, len(win), np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(win, axis=0).T))]))
     if not zones:
         return base.copy()
     # (no fade at the band's edge: the surface itself on the band; apply fades it to the ground over its last
     # BAND_MARGIN_M, between the two, so the lower of the two is the least the track can be. The raceways by their
-    # dominance, as apply lays them: of the whole lines, not the windows, whose cut ends are no junctions)
+    # joins, as apply lays them: of the whole lines, not the windows, whose cut ends are no junctions, and each join's
+    # reach measured along the whole line, then put on the window's stations: Codex review of 80e9b3da)
     full = grading.raceway_dominance([(np.asarray(line, np.float64)[:, :2], float(hw) + BAND_MARGIN_M)
                                       for line, hw in races])
     pos = {r: z for z, r in enumerate(which)}
-    joins = [[(pos[d], x, y) for d, x, y in full[r] if d in pos] for r in which]
+    joins = []
+    for zi, r in enumerate(which):
+        js = []
+        for d, x, y in full[r]:
+            if d not in pos:
+                continue
+            (zl, zst), (gl, _gst) = dense[r], dense[d]
+            if len(zl) < 2 or len(gl) < 2:
+                continue
+            a, b = _join_reach(zl, zst, float(races[r][1]) + BAND_MARGIN_M, gl, float(races[d][1]) + BAND_MARGIN_M,
+                               float(x), float(y))
+            # (onto the window's own stations by its samples: the window is the whole line's samples i0.. resampled
+            # again along their chords, so a whole-line station maps through the samples' index, monotonic, never
+            # onto another pass of the line; Codex reviews of b68ade87 / d40a5fcb)
+            _s0, i0, kw, cum = starts[zi]
+            idx = np.arange(i0, i0 + kw)
+            lo_w = float(np.interp(a, zst[idx], cum, left=-math.inf)) if a > float(zst[0]) else -math.inf
+            hi_w = float(np.interp(b, zst[idx], cum, right=math.inf)) if b < float(zst[-1]) else math.inf
+            js.append((pos[d], x, y, lo_w, hi_w))
+        joins.append(js)
     return np.asarray(grading.raceway_ground(pts[:, 0], pts[:, 1], base, zones, margin=1e-6, joins=joins,
                                              blend=JOIN_BLEND_M)[0], np.float64)
+
+
+_REACH = {}                 # (the lines' bytes, half widths, the join): racejoin's reach of a join on the whole lines
+
+
+def _join_reach(zl, zst, zhw, gl, ghw, x, y):
+    """(lo, hi): the stations of the whole resampled line zl (stations zst) a join at (x, y) on line gl holds over
+    (earthfast raceway_join_reach), remembered by the two lines' geometry: the tunnel parts round one track ask the
+    same joins again."""
+    key = (zl.tobytes(), gl.tobytes(), zhw, ghw, x, y)
+    got = _REACH.get(key)
+    if got is None:
+        import fast
+        fast.require(440, "raceway_join_reach")
+        got = fast._ef.raceway_join_reach(np.ascontiguousarray(zl, np.float64), float(zst[1] - zst[0]),
+                                          float(zst[-1]), zhw, np.ascontiguousarray(gl, np.float64), ghw, x, y,
+                                          JOIN_BLEND_M)
+        if len(_REACH) > 256:
+            _REACH.clear()
+        _REACH[key] = got
+    return got
 
 
 def _track_low(frame, elev, races, pts):
@@ -249,7 +296,7 @@ def dig_part(frame, elev, xy, s, floor, kinds, races, tube_hw, tube_h, full_h):
     off = ~band & np.isfinite(need)
     up[off] = np.clip(th[np.searchsorted(k, np.flatnonzero(off))] + DIG_SLACK_M - MIN_TUBE_H - 0.05, DIG_ROUND_UP_M,
                       DIG_ROUND_UP_OFF_M) if off.any() else DIG_ROUND_UP_M
-    fast.require(405, "race_dig_floor")
+    fast.require(440, "race_dig_floor")
     f2, k2 = fast._ef.race_dig_floor(np.ascontiguousarray(s), np.ascontiguousarray(floor),
                                      np.ascontiguousarray(need), np.ascontiguousarray(out),
                                      np.ascontiguousarray(kinds), DIG_GRADE, DIG_MAX_GRADE, DIG_GAP_M,

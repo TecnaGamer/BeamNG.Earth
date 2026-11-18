@@ -124,33 +124,47 @@ pub struct Join {
     pub by: usize,
     pub x: f64,
     pub y: f64,
+    /// the stations of the giving way zone it holds over when given (a window of a longer line: its reach measured
+    /// on the whole line, racedig.track_surface; Codex review of 80e9b3da), NaN: join_reach on the zone's own line
+    pub lo: f64,
+    pub hi: f64,
 }
 
 /// The stations of zone z a join (z giving way to g at one of z's ends) holds over: from that end along z for as long
 /// as z's line stays within the two half widths + blend of g's line (a connector merging alongside the oval for 100 m
 /// gives way all along its overlap, not only within a radius of its end: a seam where the radius ended, r70), the
 /// two lines alone deciding it.
-fn join_reach(z: &Zone, g: &Zone, j: &Join, blend: f64) -> (f64, f64) {
-    let k = z.k;
-    let d0 = (z.line[0] - j.x).powi(2) + (z.line[1] - j.y).powi(2);
-    let d1 = (z.line[2 * (k - 1)] - j.x).powi(2) + (z.line[2 * (k - 1) + 1] - j.y).powi(2);
-    let reach = z.hw + g.hw + blend;
-    let r = polyproject::project(&g.line, 2, g.k, &z.line, 2, k);
-    let near = |i: usize| r.dist[i] <= reach;
-    let at = |i: usize| if i + 1 == k { z.s_end } else { i as f64 * z.ds };
+#[allow(clippy::too_many_arguments)]
+pub fn reach_of(zl: &[f64], zk: usize, zds: f64, zs_end: f64, zhw: f64, gl: &[f64], gk: usize, ghw: f64, jx: f64,
+                jy: f64, blend: f64) -> (f64, f64) {
+    let k = zk;
+    let d0 = (zl[0] - jx).powi(2) + (zl[1] - jy).powi(2);
+    let d1 = (zl[2 * (k - 1)] - jx).powi(2) + (zl[2 * (k - 1) + 1] - jy).powi(2);
+    let reach = zhw + ghw + blend;
+    // (each sample projected as the walk reaches it, the walk stopping at the first out of reach: a short overlap
+    // costs a few projections, not the whole line's; Codex review of d40a5fcb)
+    let near = |i: usize| polyproject::project(gl, 2, gk, &zl[2 * i..2 * i + 2], 2, 1).dist[0] <= reach;
+    let at = |i: usize| if i + 1 == k { zs_end } else { i as f64 * zds };
     if d0 <= d1 {
         let mut i = 0;
         while i + 1 < k && near(i + 1) {
             i += 1;
         }
-        (0.0, at(i) + z.ds)
+        (0.0, at(i) + zds)
     } else {
         let mut i = k - 1;
         while i > 0 && near(i - 1) {
             i -= 1;
         }
-        (at(i) - z.ds, z.s_end)
+        (at(i) - zds, zs_end)
     }
+}
+
+fn join_reach(z: &Zone, g: &Zone, j: &Join, blend: f64) -> (f64, f64) {
+    if !j.lo.is_nan() && !j.hi.is_nan() {
+        return (j.lo, j.hi);
+    }
+    reach_of(&z.line, z.k, z.ds, z.s_end, z.hw, &g.line, g.k, g.hw, j.x, j.y, blend)
 }
 
 /// (surface (m,), covered (m,)): base at the points pts (m x 2) as the raceways' surfaces (module doc). joins: per
@@ -262,12 +276,17 @@ pub fn ground(pts: &[f64], base: &[f64], zones: &[Zone], joins: Option<&[Vec<Joi
     (out, covered)
 }
 
+/// m: raceway ends this near each other meet at one node (the map's shared node)
+const NODE_M: f64 = 0.5;
+
 /// Per raceway line (lines[i]: k x 2 flattened, its band's half width hw[i]), the joins where it gives way (module
-/// doc), each from the two lines alone: an end of it on another's band (station on it, |offset| within its half width)
-/// where the other passes through (a closed loop, or the end more than its half width from the other's ends); where
-/// the other ends there too, not when the two go on from each other (their ends' directions within ~37 degrees of
-/// opposite), else to the wider one, the longer at equal widths (a through raceway split at the junction: its pieces
-/// are the oval's).
+/// doc): an end of it on another's band (station on it, |offset| within its half width) where the other passes
+/// through (a closed loop, or the end more than its half width from the other's ends). Where the other ends there too,
+/// the node decides: two ends meeting there that go on from each other (directions within ~37 degrees of opposite) are
+/// one through line, never giving way to a third ending there, which gives way to both of them (an oval split at its
+/// pit entry: Codex review of 80e9b3da, its two short halves gave way to a longer pit lane by length); with no through
+/// line there, the wider, then the longer. Every line ending at that node must be among `lines` (the caller's
+/// neighbourhood of the junction is complete: grading.raceway_lines).
 pub fn dominance(lines: &[Vec<f64>], hw: &[f64]) -> Vec<Vec<Join>> {
     let nz = lines.len();
     let k: Vec<usize> = lines.iter().map(|l| l.len() / 2).collect();
@@ -297,6 +316,13 @@ pub fn dominance(lines: &[Vec<f64>], hw: &[f64]) -> Vec<Vec<Join>> {
         let len = (vx * vx + vy * vy).sqrt().max(1e-9);
         (vx / len, vy / len)
     };
+    // does line z end within NODE_M of p
+    let ends_at = |z: usize, px: f64, py: f64| -> bool {
+        let l = &lines[z];
+        let n = k[z];
+        !closed[z] && [0, n - 1].iter().any(|&e| ((l[2 * e] - px).powi(2) + (l[2 * e + 1] - py).powi(2)).sqrt() <= NODE_M)
+    };
+    let going_on = |a: (f64, f64), b: (f64, f64)| a.0 * b.0 + a.1 * b.1 < -0.8;
     let mut out: Vec<Vec<Join>> = vec![Vec::new(); nz];
     for b in 0..nz {
         if k[b] < 2 || closed[b] {
@@ -305,6 +331,36 @@ pub fn dominance(lines: &[Vec<f64>], hw: &[f64]) -> Vec<Vec<Join>> {
         let lb = &lines[b];
         for e in [0usize, k[b] - 1] {
             let (px, py) = (lb[2 * e], lb[2 * e + 1]);
+            // the lines ending at this node and their directions out of it (b among them)
+            let at_node: Vec<usize> = (0..nz).filter(|&z| k[z] >= 2 && ends_at(z, px, py)).collect();
+            let dir: Vec<(f64, f64)> = at_node.iter().map(|&z| outdir(z, px, py)).collect();
+            // the node's through lines: its pairs of ends going on from each other, the straightest first, each end in
+            // one pair at most (a pit lane leaving 15 degrees off the oval's forward half goes on from the backward
+            // half too, but that half already goes on straighter with the forward one: Codex review of b68ade87)
+            let mut cand: Vec<(f64, usize, usize)> = Vec::new();
+            for i in 0..at_node.len() {
+                for j in i + 1..at_node.len() {
+                    let c = dir[i].0 * dir[j].0 + dir[i].1 * dir[j].1;
+                    if c < -0.8 {
+                        cand.push((c, i, j));
+                    }
+                }
+            }
+            cand.sort_by(|p, q| p.0.total_cmp(&q.0).then(p.1.cmp(&q.1)).then(p.2.cmp(&q.2)));
+            let mut mate: Vec<Option<usize>> = vec![None; at_node.len()];
+            for &(_c, i, j) in &cand {
+                if mate[i].is_none() && mate[j].is_none() {
+                    mate[i] = Some(j);
+                    mate[j] = Some(i);
+                }
+            }
+            let pos = |z: usize| at_node.iter().position(|&q| q == z);
+            let through = |z: usize| pos(z).is_some_and(|i| mate[i].is_some());
+            let paired = |a: usize, b: usize| match (pos(a), pos(b)) {
+                (Some(i), Some(j)) => mate[i] == Some(j),
+                _ => false,
+            };
+            let db = outdir(b, px, py);
             for a in 0..nz {
                 if a == b || k[a] < 2 {
                     continue;
@@ -316,13 +372,17 @@ pub fn dominance(lines: &[Vec<f64>], hw: &[f64]) -> Vec<Vec<Join>> {
                 }
                 let gives = if closed[a] || (s0 > hw[a] && s0 < length[a] - hw[a]) {
                     true
+                } else if paired(a, b) || (!ends_at(a, px, py) && going_on(outdir(a, px, py), db)) {
+                    false
+                } else if through(b) {
+                    false
+                } else if through(a) {
+                    true
                 } else {
-                    let (da, db) = (outdir(a, px, py), outdir(b, px, py));
-                    let going_on = da.0 * db.0 + da.1 * db.1 < -0.8;
-                    !going_on && (hw[a] > hw[b] || (hw[a] == hw[b] && length[a] > length[b]))
+                    hw[a] > hw[b] || (hw[a] == hw[b] && length[a] > length[b])
                 };
                 if gives {
-                    out[b].push(Join { by: a, x: px, y: py });
+                    out[b].push(Join { by: a, x: px, y: py, lo: f64::NAN, hi: f64::NAN });
                 }
             }
         }
@@ -356,13 +416,14 @@ fn zones_of(zs: &[ZoneArgs<'_>]) -> PyResult<Vec<Zone>> {
 
 /// grading.raceway_ground: (surface (m,), covered (m,) bool) of points (e, n) with base (m,) and the zones [(line (k,
 /// 2), surface (k, nt), stations[1] - stations[0], stations[-1], offsets[0], offsets[1] - offsets[0], offsets[-1])];
-/// joins None: the nearest-line rule, else per zone [(the zone it gives way to, the join's x, y)] (blend m).
+/// joins None: the nearest-line rule, else per zone [(the zone it gives way to, the join's x, y, the stations it holds
+/// over or NaN, NaN: join_reach)] (blend m).
 #[pyfunction]
 #[pyo3(signature = (e, n, base, zones, margin, joins=None, blend=0.0))]
 #[allow(clippy::type_complexity)]
 pub fn raceway_ground<'py>(py: Python<'py>, e: PyReadonlyArray1<'py, f64>, n: PyReadonlyArray1<'py, f64>,
                            base: PyReadonlyArray1<'py, f64>, zones: Vec<ZoneArgs<'py>>, margin: f64,
-                           joins: Option<Vec<Vec<(usize, f64, f64)>>>, blend: f64)
+                           joins: Option<Vec<Vec<(usize, f64, f64, f64, f64)>>>, blend: f64)
                            -> PyResult<(Bound<'py, PyArray1<f64>>, Bound<'py, PyArray1<bool>>)> {
     let (ea, na, ba) = (e.as_array(), n.as_array(), base.as_array());
     let m = ba.len();
@@ -371,7 +432,7 @@ pub fn raceway_ground<'py>(py: Python<'py>, e: PyReadonlyArray1<'py, f64>, n: Py
     }
     let zs = zones_of(&zones)?;
     let js: Option<Vec<Vec<Join>>> = joins.map(|v| v.into_iter()
-        .map(|l| l.into_iter().map(|(by, x, y)| Join { by, x, y }).collect()).collect());
+        .map(|l| l.into_iter().map(|(by, x, y, lo, hi)| Join { by, x, y, lo, hi }).collect()).collect());
     if let Some(j) = &js {
         if j.len() != zs.len() || j.iter().flatten().any(|q| q.by >= zs.len()) {
             return Err(pyo3::exceptions::PyValueError::new_err("raceway_ground: joins per zone, zone indices"));
@@ -399,6 +460,21 @@ pub fn raceway_dominance(py: Python<'_>, lines: Vec<(PyReadonlyArray2<'_, f64>, 
     }
     Ok(py.detach(|| dominance(&ls, &hw)).into_iter()
         .map(|v| v.into_iter().map(|j| (j.by, j.x, j.y)).collect()).collect())
+}
+
+/// racedig.track_surface: the stations of line z (k x 2, resampled every ds, s_end its length, band half width zhw)
+/// a join at (jx, jy) on line g (band half width ghw) holds over (join_reach), on the whole lines.
+#[pyfunction]
+#[allow(clippy::too_many_arguments)]
+pub fn raceway_join_reach(z: PyReadonlyArray2<'_, f64>, zds: f64, zs_end: f64, zhw: f64, g: PyReadonlyArray2<'_, f64>,
+                          ghw: f64, jx: f64, jy: f64, blend: f64) -> PyResult<(f64, f64)> {
+    let (za, ga) = (z.as_array(), g.as_array());
+    if za.nrows() < 2 || ga.nrows() < 2 || za.ncols() < 2 || ga.ncols() < 2 {
+        return Err(pyo3::exceptions::PyValueError::new_err("raceway_join_reach: lines of 2 xy rows or more"));
+    }
+    let zl: Vec<f64> = (0..za.nrows()).flat_map(|r| [za[[r, 0]], za[[r, 1]]]).collect();
+    let gl: Vec<f64> = (0..ga.nrows()).flat_map(|r| [ga[[r, 0]], ga[[r, 1]]]).collect();
+    Ok(reach_of(&zl, za.nrows(), zds, zs_end, zhw, &gl, ga.nrows(), ghw, jx, jy, blend))
 }
 
 #[cfg(test)]
@@ -435,7 +511,8 @@ mod tests {
         let pit = zone_y(0.0, 60.0, 0.0, 9.0, -1.0);
         let zones = vec![oval, pit];
         let dom = dominance(&zones.iter().map(|z| z.line.clone()).collect::<Vec<_>>(), &[9.0, 9.0]);
-        assert_eq!(dom, vec![vec![], vec![Join { by: 0, x: 0.0, y: 0.0 }]]);
+        assert!(dom[0].is_empty());
+        assert_eq!(dom[1].iter().map(|j| (j.by, j.x, j.y)).collect::<Vec<_>>(), vec![(0, 0.0, 0.0)]);
         let pts: Vec<f64> = (0..=60).flat_map(|i| [0.0, i as f64]).collect();
         let base = vec![5.0; 61];
         let (old, _) = ground(&pts, &base, &zones, None, 2.0, 20.0);
@@ -464,7 +541,7 @@ mod tests {
         let road = zone_y(-150.0, 60.0, 0.0, 9.0, -1.0);       // (x = -150, joining the oval at (-150, 0))
         let lines: Vec<Vec<f64>> = vec![oval.line.clone(), road.line.clone()];
         let dom = dominance(&lines, &[9.0, 9.0]);
-        assert_eq!(dom[1], vec![Join { by: 0, x: -150.0, y: 0.0 }]);
+        assert_eq!(dom[1].iter().map(|j| (j.by, j.x, j.y)).collect::<Vec<_>>(), vec![(0, -150.0, 0.0)]);
         let (lo, hi) = join_reach(&road, &oval, &dom[1][0], 20.0);
         assert!(lo >= 60.0 - 38.0 - 2.0 - 1e-9 && hi >= 60.0, "{lo} {hi}");
         let zones = vec![oval, road];
@@ -491,6 +568,54 @@ mod tests {
         let d: Vec<f64> = (0..=40).flat_map(|i| [10.0, -40.0 + 2.0 * i as f64]).collect();
         let e: Vec<f64> = (0..=50).flat_map(|i| [-50.0 + 2.0 * i as f64, 0.0]).collect();
         assert!(dominance(&[e, d], &[9.0, 9.0]).iter().all(|v| v.is_empty()));
+    }
+
+    #[test]
+    fn a_split_oval_never_gives_way_to_a_longer_pit_lane() {
+        // Codex review of 80e9b3da: the oval split at the pit entry into two short halves (60 m each), the pit lane
+        // 100 m, all one width: by length both halves gave way to the pit lane. They go on from each other: one
+        // through line; the pit lane gives way to both
+        let a: Vec<f64> = (0..=30).flat_map(|i| [-60.0 + 2.0 * i as f64, 0.0]).collect();
+        let b: Vec<f64> = (0..=30).flat_map(|i| [2.0 * i as f64, 0.0]).collect();
+        let c: Vec<f64> = (0..=50).flat_map(|i| [0.0, -100.0 + 2.0 * i as f64]).collect();
+        let dom = dominance(&[a, b, c], &[9.0, 9.0, 9.0]);
+        assert!(dom[0].is_empty() && dom[1].is_empty(), "{dom:?}");
+        assert_eq!(dom[2].iter().map(|j| j.by).collect::<Vec<_>>(), vec![0, 1]);
+        // a fork of two branches at an angle, neither going on from the trunk: the trunk is the through line? no:
+        // nothing goes on straight there, so the widths and lengths decide
+        let t: Vec<f64> = (0..=50).flat_map(|i| [-100.0 + 2.0 * i as f64, 0.0]).collect();
+        let l: Vec<f64> = (0..=20).flat_map(|i| [1.4 * i as f64, 1.4 * i as f64]).collect();
+        let r: Vec<f64> = (0..=20).flat_map(|i| [1.4 * i as f64, -1.4 * i as f64]).collect();
+        let dom = dominance(&[t, l, r], &[9.0, 9.0, 9.0]);
+        assert!(dom[0].is_empty(), "{dom:?}");
+    }
+
+    #[test]
+    fn a_shallow_pit_fork_gives_way_to_the_oval() {
+        // Codex review of b68ade87: the pit lane leaves 15 degrees off the forward half: it goes on from the backward
+        // half nearly as straight as the forward half does; the straightest pair is the through line, the pit lane
+        // gives way to both halves
+        let a: Vec<f64> = (0..=30).flat_map(|i| [-60.0 + 2.0 * i as f64, 0.0]).collect();
+        let b: Vec<f64> = (0..=30).flat_map(|i| [2.0 * i as f64, 0.0]).collect();
+        let (c15, s15) = (15f64.to_radians().cos(), 15f64.to_radians().sin());
+        let c: Vec<f64> = (0..=50).flat_map(|i| [2.0 * i as f64 * c15, -2.0 * i as f64 * s15]).collect();
+        let dom = dominance(&[a, b, c], &[9.0, 9.0, 9.0]);
+        assert!(dom[0].is_empty() && dom[1].is_empty(), "{dom:?}");
+        assert_eq!(dom[2].iter().map(|j| j.by).collect::<Vec<_>>(), vec![0, 1]);
+    }
+
+    #[test]
+    fn a_window_keeps_its_whole_line_reach() {
+        // a join's reach measured on the whole line and given to a window of it holds there as given
+        let oval = zone_x(-200.0, 200.0, 0.0, 9.0, |_, o| 0.1 * o);
+        let road = zone_y(-150.0, 60.0, 0.0, 9.0, -1.0);
+        let js = vec![vec![], vec![Join { by: 0, x: -150.0, y: 0.0, lo: 1000.0, hi: 2000.0 }]];
+        // (an interval off this window: the join does not hold here, the old rule's answer)
+        let pts = [-150.0, 12.0];
+        let zones = vec![oval, road];
+        let (a, _) = ground(&pts, &[5.0], &zones, None, 2.0, 20.0);
+        let (b, _) = ground(&pts, &[5.0], &zones, Some(&js), 2.0, 20.0);
+        assert_eq!(a[0].to_bits(), b[0].to_bits());
     }
 
     #[test]

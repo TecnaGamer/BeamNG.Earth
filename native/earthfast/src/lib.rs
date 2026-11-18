@@ -6608,8 +6608,11 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // the columns gathered, the sections' values, LANE_MAX, the geometry and rule rows, the cut points' connectors)
     m.add_function(wrap_pyfunction!(racejoin::raceway_ground, m)?)?;
     m.add_function(wrap_pyfunction!(racejoin::raceway_dominance, m)?)?;
+    m.add_function(wrap_pyfunction!(racejoin::raceway_join_reach, m)?)?;
     // 405 (404 taken by another branch the same day): racejoin (grading.raceway_ground in Rust, bit for bit, and its
     // layered rule for BNE_RACEWAY_DIG: a raceway ending on another gives way to it, raceway_dominance)
-    m.add("VERSION", 405)?;
+    // 440: racejoin's joins with their reach (5-tuples), raceway_join_reach, through lines at a node; race_dig_floor's
+    // round_up_at (the coordinator's range 440-449 for this branch)
+    m.add("VERSION", 440)?;
     Ok(())
 }

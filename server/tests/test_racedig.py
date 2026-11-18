@@ -213,27 +213,48 @@ class JoinTest(unittest.TestCase):
         self.assertEqual(new.tobytes(), old.tobytes())
 
     def test_joins_whatever_else_is_loaded(self):
-        # Codex review of 98a65723: the ownership came from the planner's loaded lines (a way relegated along its
-        # whole length once any loaded way dominated either end): cold and warmed planners, cells read in another
-        # order, graded the same join differently. Each join from its two lines, held only near itself
+        # Codex reviews of 98a65723 / 80e9b3da: the ownership and the zone set came from the planner's loaded lines
+        # (every planned cell's keeps): cold and warmed planners, cells read in another order, graded a join
+        # differently. Now each join from its two lines, held along its own overlap, the zones from the map cells
+        # round the points and round their lines' ends, whatever was planned or read before
         oval = np.array([[-200.0, 0.0], [200.0, 0.0]])
         pit = np.array([[0.0, -80.0], [0.0, 0.0]])
         far_end = np.array([[-60.0, -80.0], [0.0, -80.0]])          # (a third raceway ending on the pit road's far end)
-        far = np.array([[500.0, 500.0], [700.0, 500.0]])
-        hw = 9.0
         g = np.arange(-30.0, 30.01, 0.5)
-        e, n = (v.ravel() for v in np.meshgrid(g, g - 15.0))
-        base = np.full(len(e), 3.0)
+        e, n = (v.ravel() for v in np.meshgrid(g, g - 45.0))      # (points 15-75 m from the oval: some only by the
+        base = np.full(len(e), 3.0)                                 # join's reach, beyond a portal's 30 m)
+        md = _FakeMD([oval, pit, far_end])
         runs = []
-        for keeps in ({"a": [(oval, hw)], "b": [(pit, hw)]},
-                      {"z": [(far, hw)], "b": [(pit, hw)], "y": [(far_end, hw)], "a": [(oval, hw)]},
-                      {"b": [(pit, hw)], "a": [(oval, hw)], "y": [(far_end, hw)]}):
-            pl = _FakePlanner(keeps)
+        for keeps, warm in (({}, False), ({"z": [(np.array([[500.0, 500.0], [700.0, 500.0]]), 9.0)]}, True),
+                            ({"a": [(oval, 9.0)]}, False)):
+            pl = _FakePlanner(keeps, md=md)
             pl.elev = _banked
+            if warm:            # (another query first: other cells read, memos filled)
+                pl._raceway_band(e + 400.0, n, base)
             idx, z = pl._raceway_band(e, n, base)
             runs.append((idx.tobytes(), z.tobytes()))
         self.assertEqual(runs[0], runs[1])
         self.assertEqual(runs[0], runs[2])
+        self.assertGreater(len(np.frombuffer(runs[0][0], np.int64)), 0)
+
+    def test_two_lines_with_the_same_ends_are_two_lines(self):
+        # Codex review of b68ade87: lines were told apart by their rounded ends, vertex count and width: two branches
+        # that part and meet again with as many vertices shared one surface, whichever was read first
+        a = np.array([[-60.0, 0.0], [0.0, 20.0], [60.0, 0.0]])
+        b = np.array([[-60.0, 0.0], [0.0, -20.0], [60.0, 0.0]])
+        g = np.arange(-20.0, 20.01, 1.0)
+        e, n = (v.ravel() for v in np.meshgrid(g, g))
+        base = np.full(len(e), 3.0)
+        runs = []
+        for order in ((a, b), (b, a)):
+            pl = _FakePlanner({}, md=_FakeMD(list(order)))
+            pl.elev = _rolling
+            la, lo, _ = pl.frame.enu_to_geodetic(e, n, 0.0)
+            zones, kept = pl._raceway_zones(np.asarray(la), np.asarray(lo))
+            self.assertEqual(len(zones), 2)
+            idx, z = pl._raceway_band(e, n, base)
+            runs.append((idx.tobytes(), z.tobytes()))
+        self.assertEqual(runs[0], runs[1])
 
     def test_the_band_has_no_holes_at_vertices(self):
         # report 69: points on the outside of a vertex lie beyond both of its segments' ends: the segment test left
@@ -248,7 +269,8 @@ class JoinTest(unittest.TestCase):
             e, n = (v.ravel() for v in np.meshgrid(g, g))
             base = np.full(len(e), 3.0)
             idx, z = pl._raceway_band(e, n, base)
-            zones, _kept = pl._raceway_zones()
+            la, lo, _ = pl.frame.enu_to_geodetic(e, n, 0.0)
+            zones, _kept = pl._raceway_zones(np.asarray(la), np.asarray(lo))
             line, _st, offs, _c = zones[0]
             # every point within the band of the sampled line is taken, with the surface's height
             a, b = line[:-1], line[1:]
@@ -268,30 +290,94 @@ class JoinTest(unittest.TestCase):
             self.assertGreater(float(z[list(idx).index(k)]), 9.0)
 
 
-class _FakePlanner:
-    """grading._Planner's raceway pieces on a namespace: keeps, the frame, flat elevation, no marks."""
+class _FakeMD:
+    """A map whose every cell holds the given raceway lines (test_roads.features) and counts its reads."""
 
-    def __init__(self, keeps):
+    def __init__(self, lines, widths=None):
+        import types
+        from test_roads import features
+        ids = [f"osm-raceway-{i:012d}" for i in range(len(lines))]
+        self.f = features([[tuple(p) for p in ln] for ln in lines], ["raceway"] * len(lines),
+                          widths=[(i, w) for i, w in enumerate(widths or [])], ids=ids)
+        self.reads = 0
+        self._cell = types.SimpleNamespace(layers={"roads": self.f})
+
+    def cell(self, key, layers=None, kind=None):
+        self.reads += 1
+        return self._cell
+
+
+class _FakePlanner:
+    """grading._Planner's raceway pieces on a namespace: a map (_FakeMD) or keeps, the frame, an elevation, no marks."""
+
+    def __init__(self, keeps, md=None):
         import threading
         import grading
         from test_roads import FRAME
         self.lock = threading.Lock()
         self.keeps = keeps
         self.frame = FRAME
+        self.md = md if md is not None else _FakeMD([np.asarray(xy) for v in keeps.values() for xy, _hw in v])
+        self.widths = None
         self.elev = lambda la, lo: np.full(np.shape(la), 10.0)
         self._P = grading._Planner
 
     def _marks_at(self, *a):
         pass
 
-    def _raceway_zones(self):
-        return self._P._raceway_zones(self)
+    def _raceway_cell(self, key):
+        return self._P._raceway_cell(self, key)
+
+    def _raceway_cell_read(self, key):
+        return self._P._raceway_cell_read(self, key)
+
+    def _raceway_lines(self, lat, lon):
+        return self._P._raceway_lines(self, lat, lon)
+
+    def _raceway_zones(self, lat=None, lon=None):
+        return self._P._raceway_zones(self, lat, lon)
 
     def _raceway_joins(self, kept):
         return self._P._raceway_joins(self, kept)
 
-    def _raceway_band(self, e, n, base):
-        return self._P._raceway_band(self, e, n, base)
+    def _raceway_band(self, e, n, base, lat=None, lon=None):
+        return self._P._raceway_band(self, e, n, base, lat, lon)
+
+
+def _rolling(la, lo):
+    """A slope across y with 2 m rolls along x near the oval: surfaces smoothed along other lines differ there."""
+    from test_roads import LAT, LON, M_LAT, M_LON
+    x = (np.asarray(lo, np.float64) - LON) * M_LON
+    y = (np.asarray(la, np.float64) - LAT) * M_LAT
+    return 10.0 + 0.15 * y + 2.0 * np.sin(x / 12.0) * np.exp(-((y - 6.0) / 20.0) ** 2)
+
+
+class WindowJoinTest(unittest.TestCase):
+    def test_a_second_overlap_past_a_gap_does_not_give_way_in_a_window(self):
+        # Codex review of 80e9b3da: the tunnel solve reads the track over windows of the lines; a join's reach taken
+        # from the window's end nearest the join made a second stretch along the oval, past a 60 m gap, give way
+        # there while the terrain (the whole line) did not. The reach measured on the whole line
+        import grading
+        from test_roads import FRAME
+        oval = np.array([[-500.0, 0.0], [300.0, 0.0]])
+        road = np.array([[-450.0, 25.0], [-150.0, 0.0], [-100.0, 60.0], [0.0, 60.0], [0.0, 0.0]])
+        races = [(oval, 7.0), (road, 7.0)]
+        xs = np.arange(-400.0, -200.0, 5.0)
+        yy = 25.0 - 25.0 * (xs + 450.0) / 300.0
+        pts = np.stack([np.repeat(xs, 3), np.concatenate([[v - 6.0, v - 7.5, v - 8.5] for v in yy])], 1)
+        la, lo, _ = FRAME.enu_to_geodetic(pts[:, 0], pts[:, 1], 0.0)
+        raw = _rolling(np.asarray(la), np.asarray(lo))
+        got = racedig.track_surface(FRAME, _rolling, races, pts, raw)
+        hw = 7.0 + racedig.BAND_MARGIN_M
+        zs = [grading.raceway_surface(FRAME, _rolling, oval, hw), grading.raceway_surface(FRAME, _rolling, road, hw)]
+        joins = grading.raceway_dominance([(oval, hw), (road, hw)])
+        self.assertEqual([j[0] for j in joins[1]], [0])
+        whole, _c = grading.raceway_ground(pts[:, 0], pts[:, 1], raw, zs, margin=1e-6, joins=joins,
+                                           blend=racedig.JOIN_BLEND_M)
+        given, _c = grading.raceway_ground(pts[:, 0], pts[:, 1], raw, zs, margin=1e-6,
+                                           joins=[[], [(0, 0.0, 0.0, 0.0, 1e9)]], blend=racedig.JOIN_BLEND_M)
+        self.assertLess(float(np.max(np.abs(got - whole))), 0.02)
+        self.assertGreater(float(np.max(np.abs(given - whole))), 0.5, "(the test tells the two apart)")
 
 
 class TunnelUnderTrackTest(unittest.TestCase):
