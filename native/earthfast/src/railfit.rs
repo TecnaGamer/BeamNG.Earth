@@ -351,24 +351,29 @@ pub fn rail_crossing_runs<'py>(py: Python<'py>, xy: PyReadonlyArray2<'py, f64>, 
 /// railways._road_ends (BNE_RAIL_ROAD_FIT) for every candidate end at once: the track ending at p[e] (running into it
 /// along the unit d[e], its bed z_end[e], part part[e] of rails (m, 2) with beds rz (m,), part after part: off (R + 1,))
 /// goes on past a road: the line ahead (p + d * np.arange(step, ahead_m + 1e-9, step)) meets a carriageway (ca -> cb,
-/// half width ch) and leaves it again (its far edge), and beyond that edge, within ahead_m, another part has a point
-/// within join_m of the line, running along it (|cos| >= cos_min with d) and with its bed within dz of z_end: the same
-/// track on the far side of a paved-over crossing. (A lifecycle cut's end is known by its provenance, not here.)
+/// half width ch) and leaves it again (its far edge), and beyond that edge, within ahead_m, another part has an END
+/// (its first or last point) within join_m of the line, the part running on from it away from the road along d
+/// (cos >= cos_min), its gauge (gauge per part) within 1 cm of this part's and its rail heads within dz of z_end: the
+/// same track's other end on the far side of a paved-over crossing. A track passing by (a through line beside a real
+/// siding) has no end there. (A lifecycle cut's end is known by its provenance, not here.)
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
 pub fn rail_road_ends(p: PyReadonlyArray2<'_, f64>, d: PyReadonlyArray2<'_, f64>, z_end: PyReadonlyArray1<'_, f64>,
                       part: PyReadonlyArray1<'_, i64>, rails: PyReadonlyArray2<'_, f64>, rz: PyReadonlyArray1<'_, f64>,
                       off: PyReadonlyArray1<'_, i64>, ca: PyReadonlyArray2<'_, f64>, cb: PyReadonlyArray2<'_, f64>,
-                      ch: PyReadonlyArray1<'_, f64>, step: f64, ahead_m: f64, join_m: f64, cos_min: f64, dz: f64)
-                      -> PyResult<Vec<bool>> {
+                      ch: PyReadonlyArray1<'_, f64>, gauge: PyReadonlyArray1<'_, f64>, step: f64, ahead_m: f64,
+                      join_m: f64, cos_min: f64, dz: f64) -> PyResult<Vec<bool>> {
     let (p, d, ze, part, q, qz, off) = (p.as_array(), d.as_array(), z_end.as_array(), part.as_array(), rails.as_array(),
                                         rz.as_array(), off.as_array());
+    let gauge = gauge.as_array();
     let ne = p.nrows();
     let nq = q.nrows();
     if p.ncols() < 2 || d.nrows() != ne || d.ncols() < 2 || ze.len() != ne || part.len() != ne || q.ncols() < 2
-        || qz.len() != nq || off.iter().any(|&v| v < 0 || v as usize > nq) || (1..off.len()).any(|i| off[i] < off[i - 1]) {
+        || qz.len() != nq || off.iter().any(|&v| v < 0 || v as usize > nq) || (1..off.len()).any(|i| off[i] < off[i - 1])
+        || gauge.len() + 1 != off.len().max(1) || part.iter().any(|&v| v < 0 || v as usize >= gauge.len()) {
         return Err(pyo3::exceptions::PyValueError::new_err(
-            "rail_road_ends: p (E, 2), d (E, 2), z_end (E,), part (E,), rails (m, 2), rz (m,), off rising within rails"));
+            "rail_road_ends: p (E, 2), d (E, 2), z_end (E,), part (E,), rails (m, 2), rz (m,), off rising within rails, \
+             gauge (R,)"));
     }
     let segs = Segs::new(&ca.as_array(), &cb.as_array(), &ch.as_array());
     let steps = np_arange(step, ahead_m + 1e-9, step);
@@ -397,7 +402,11 @@ pub fn rail_road_ends(p: PyReadonlyArray2<'_, f64>, d: PyReadonlyArray2<'_, f64>
             if j1 < j0 + 2 {
                 continue;
             }
-            for j in j0..j1 {
+            if (gauge[o] - gauge[part[e] as usize]).abs() > 0.01 {
+                continue;
+            }
+            // (its two ends, each with the direction the part runs on from it)
+            for (j, k) in [(j0, j0 + 1), (j1 - 1, j1 - 2)] {
                 let (vx, vy) = (q[[j, 0]] - px, q[[j, 1]] - py_);
                 let along = vx * dx + vy * dy;
                 if !(along > beyond && along <= ahead_m) {
@@ -406,10 +415,9 @@ pub fn rail_road_ends(p: PyReadonlyArray2<'_, f64>, d: PyReadonlyArray2<'_, f64>
                 if (vx * dy - vy * dx).abs() > join_m {
                     continue;
                 }
-                let (a, b) = (if j > j0 { j - 1 } else { j }, if j + 1 < j1 { j + 1 } else { j });
-                let (tx, ty) = (q[[b, 0]] - q[[a, 0]], q[[b, 1]] - q[[a, 1]]);
+                let (tx, ty) = (q[[k, 0]] - q[[j, 0]], q[[k, 1]] - q[[j, 1]]);
                 let tl = tx.dhypot(ty);
-                if !(tl > 1e-9) || ((tx * dx + ty * dy) / tl).abs() < cos_min {
+                if !(tl > 1e-9) || (tx * dx + ty * dy) / tl < cos_min {
                     continue;
                 }
                 if !((qz[j] - ze[e]).abs() <= dz) {
