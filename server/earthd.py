@@ -56,6 +56,9 @@ import os
 # thread per worker. Set before numpy is imported.
 os.environ.setdefault("OMP_NUM_THREADS", "1")
 os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
+# numpy's AVX-512 kernels held back (an AVX-512 CPU's sorts of equal keys and SIMD maths are other bits than every
+# other player's): read by numpy at its import, inherited by the processes started from here (npyguard.py)
+import npyguard  # noqa: E402,F401  (first: numpy's AVX-512 kernels held back before anything imports numpy)
 
 import argparse  # noqa: E402
 import asyncio  # noqa: E402
@@ -13259,6 +13262,15 @@ def main():
     except fast.NativeMissing as ex:
         log.error("%s", ex)
         raise SystemExit(str(ex))
+    try:                # (npyguard at this file's top: an AVX-512 CPU's numpy kernels held back)
+        on512 = npyguard.avx512_active()
+        if on512:
+            log.warning("numpy dispatches AVX-512 kernels (%s; %s=%r): this machine's plans may differ in the last "
+                        "bits from other players'", " ".join(on512), npyguard.ENV, os.environ.get(npyguard.ENV))
+        elif os.environ.get(npyguard.ENV):
+            log.info("numpy's AVX-512 kernels held back (%s=%s)", npyguard.ENV, os.environ[npyguard.ENV])
+    except Exception:
+        pass
     import sampler
     sampler.maybe_start()           # BNGE_SAMPLE=<path>: a sampling profile of this process's threads (debugging)
     import budget

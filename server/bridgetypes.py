@@ -832,7 +832,7 @@ def truss_members(parts, info, ground_fn, wet_fn=None, with_piers=False, road_li
             n_st = max(int(round((s[j] - s[i]) / PANEL_M)), 1)
             run = []
             for sc in np.linspace(s[i], s[j], n_st + 1):
-                p = np.array([np.interp(sc, s, xy[:, 0]), np.interp(sc, s, xy[:, 1])])
+                p = np.array([dnp.interp(sc, s, xy[:, 0]), dnp.interp(sc, s, xy[:, 1])])
                 ii = min(int(np.searchsorted(s, sc)), len(s) - 1)
                 t = tans[k][ii]
                 nrm = np.array([-t[1], t[0]])
@@ -843,7 +843,7 @@ def truss_members(parts, info, ground_fn, wet_fn=None, with_piers=False, road_li
                         run = []
                     continue
                 lo, hi = -w / 2, w / 2
-                zlo = zhi = float(np.interp(sc, s, z))
+                zlo = zhi = float(dnp.interp(sc, s, z))
                 for k2, (xy2, z2, w2) in enumerate(P):
                     if k2 == k:
                         continue
@@ -955,12 +955,12 @@ def _station(P, tans, k, sc, arcs):
     from roadmesh import PARAPET_W
     xy, z, w = P[k]
     s = arcs[k]
-    p = np.array([np.interp(sc, s, xy[:, 0]), np.interp(sc, s, xy[:, 1])])
+    p = np.array([dnp.interp(sc, s, xy[:, 0]), dnp.interp(sc, s, xy[:, 1])])
     ii = min(int(np.searchsorted(s, sc)), len(s) - 1)
     t = tans[k][ii]
     nrm = np.array([-t[1], t[0]])
     lo, hi = -w / 2, w / 2
-    zlo = zhi = float(np.interp(sc, s, z))
+    zlo = zhi = float(dnp.interp(sc, s, z))
     for k2, (xy2, z2, w2) in enumerate(P):
         if k2 == k:
             continue

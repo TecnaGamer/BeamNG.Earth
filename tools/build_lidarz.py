@@ -38,6 +38,7 @@ ROOT = os.path.dirname(HERE)
 SERVER = os.path.join(ROOT, "server")
 sys.path.insert(0, SERVER)
 sys.path.insert(0, HERE)
+import npyguard  # noqa: E402,F401  (first: numpy's AVX-512 kernels held back before anything imports numpy)
 
 import build_decisions as bd  # noqa: E402
 

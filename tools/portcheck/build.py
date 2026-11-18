@@ -34,6 +34,8 @@ def child(a):
     sys.path.insert(0, a.server_dir)
     name, place = pcommon.places(a.places)[0]
     os.environ.update(pcommon.PINNED_ENV)
+    import npyguard         # (as earthd: numpy's AVX-512 kernels held back, before numpy is imported)
+    npyguard.apply()
     os.environ["BNGE_PLAN_RUN"] = f"portcheck_{os.getpid()}_{int(time.time())}"
     import logging
     import numpy as np

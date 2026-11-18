@@ -147,7 +147,7 @@ def join(feats, tags, ids, geometry=None):
         if len(line) < 2:
             continue
         s = np.r_[0., np.cumsum(dnp.norm(np.diff(line, axis=0), axis=1))]
-        samples = np.column_stack([np.interp(np.linspace(0., s[-1], 9), s, line[:, d]) for d in (0, 1)])
+        samples = np.column_stack([dnp.interp(np.linspace(0., s[-1], 9), s, line[:, d]) for d in (0, 1)])
         _, tangent = _project(line, samples)
         direction = rule(feats, "oneway", i)
         direction = 0 if direction is None else int(np.sign(direction))

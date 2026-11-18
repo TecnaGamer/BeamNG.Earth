@@ -155,7 +155,7 @@ def _deck_heights(xy_runs, dsm):
             f = np.isfinite(zl)
             if f.any():
                 arc = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(x, axis=0).T))]
-                res = np.interp(arc, s[f], zl[f])
+                res = dnp.interp(arc, s[f], zl[f])
                 sf = s[f]
                 i = np.clip(np.searchsorted(sf, arc), 1, max(len(sf) - 1, 1))
                 near = np.minimum(np.abs(arc - sf[np.minimum(i, len(sf) - 1)]), np.abs(arc - sf[i - 1]))

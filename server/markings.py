@@ -236,7 +236,7 @@ def _resample(pts, step):
     if s[-1] < step:
         return pts.copy(), s
     t = np.arange(0.0, s[-1], step)
-    return np.stack([np.interp(t, s, pts[:, c]) for c in range(3)], 1), t
+    return np.stack([dnp.interp(t, s, pts[:, c]) for c in range(3)], 1), t
 
 
 def gores(roads_):
@@ -336,8 +336,8 @@ Z341_W, Z341_DASH, Z341_GAP = 0.50, 0.50, 0.25
 def _way_in(line, s, at, spec, left_hand):
     """(point on the centreline, unit vector of the way in, unit vector to its kerb, (lo, hi) m along that from the
     centreline of the half of the road coming in) at m along an arm's centreline line (s: its stations)."""
-    c = np.array([np.interp(at, s, line[:, k]) for k in range(3)])
-    q = np.array([np.interp(at + 1.0, s, line[:, k]) for k in range(2)])
+    c = np.array([dnp.interp(at, s, line[:, k]) for k in range(3)])
+    q = np.array([dnp.interp(at + 1.0, s, line[:, k]) for k in range(2)])
     t = (c[:2] - q) / max(float(dnp.hypot(*(c[:2] - q))), 1e-6)
     n = np.array([t[1], -t[0]]) * (-1.0 if left_hand else 1.0)
     half = spec.width / 2
@@ -371,7 +371,7 @@ def stop_lines(arms, crosswalks, mapped=None, left_hand=False, w=M13_W):
         if s[-1] < 1.0:
             continue
         st = np.arange(0.0, min(s[-1], M14_LOOK_M), 1.0)
-        along = np.stack([np.interp(st, s, line[:, k]) for k in range(3)], 1)
+        along = np.stack([dnp.interp(st, s, line[:, k]) for k in range(3)], 1)
         at = wide + M14_KERB_M
         if mapped is not None and len(mapped):      # (within half the arm: further up it is the next junction's)
             d = dnp.hypot(along[:, None, 0] - mapped[:, 0], along[:, None, 1] - mapped[:, 1])
@@ -429,7 +429,7 @@ def give_way_lines(arms, crosswalks, left_hand=False):
         if s[-1] < 1.0:
             continue
         st = np.arange(0.0, min(s[-1], M14_LOOK_M), 1.0)
-        along = np.stack([np.interp(st, s, line[:, k]) for k in range(3)], 1)
+        along = np.stack([dnp.interp(st, s, line[:, k]) for k in range(3)], 1)
         at = wide + M14_KERB_M
         for j, cw in enumerate(crosswalks):
             d = dnp.hypot(*(along[:, :2] - 0.5 * (cw["a"][:2] + cw["b"][:2])).T)

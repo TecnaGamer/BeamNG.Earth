@@ -6650,6 +6650,6 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // as they are now; 420's rail_run_ends, rail_deck_line and rail_seam_natural gone (Python and module ship together)
     // 422: rail_crossing_runs takes rail_out (the outer rail kept off a shallow crossing's lane); 423: rail_road_ends
     // takes the parts' gauges and reads their ends only
-    m.add("VERSION", 440)?;
+    m.add("VERSION", 441)?;
     Ok(())
 }

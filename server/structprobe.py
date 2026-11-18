@@ -243,8 +243,8 @@ def resample(xy, z, step, mid=True):
     n = max(1, int(np.ceil(L / step - 1e-9)))
     piece = L / n
     t = (np.arange(n) + 0.5) * piece if mid else np.linspace(0.0, L, n + 1)
-    pts = np.c_[np.interp(t, s, xy[:, 0]), np.interp(t, s, xy[:, 1])]
-    zz = np.interp(t, s, z)
+    pts = np.c_[_dnp().interp(t, s, xy[:, 0]), _dnp().interp(t, s, xy[:, 1])]
+    zz = _dnp().interp(t, s, z)
     seg = np.clip(np.searchsorted(s, t, side="right") - 1, 0, len(xy) - 2)
     d = xy[seg + 1] - xy[seg]
     ln = np.maximum(_dnp().hypot(d[:, 0], d[:, 1]), 1e-12)
@@ -378,8 +378,8 @@ def ideal_tris(ribbons, cut_ends=None):
             continue
         keep = (s > a) & (s < b)
         t = np.r_[a, s[keep], b]
-        Lr = np.c_[np.interp(t, s, left[:, 0]), np.interp(t, s, left[:, 1]), np.interp(t, s, z)]
-        Rr = np.c_[np.interp(t, s, right[:, 0]), np.interp(t, s, right[:, 1]), np.interp(t, s, z)]
+        Lr = np.c_[_dnp().interp(t, s, left[:, 0]), _dnp().interp(t, s, left[:, 1]), _dnp().interp(t, s, z)]
+        Rr = np.c_[_dnp().interp(t, s, right[:, 0]), _dnp().interp(t, s, right[:, 1]), _dnp().interp(t, s, z)]
         q0, q1 = slice(0, -1), slice(1, None)
         out.append(np.stack([Lr[q0], Rr[q0], Rr[q1]], 1))
         out.append(np.stack([Lr[q0], Rr[q1], Lr[q1]], 1))

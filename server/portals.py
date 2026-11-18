@@ -227,7 +227,7 @@ def fit(roads, tunnels, cells, chunks, parts):
             i += 3 * nw
             sd = g[i + 1:i + 5] - zf
             # (the approach's sides over the road out there: the lower side's, the deeper of its two stations)
-            rz_s = np.interp(SIDES_OUT, WING_S, rz)
+            rz_s = dnp.interp(SIDES_OUT, WING_S, rz)
             sides_h = min(float((sd[:2] - rz_s).max()), float((sd[2:] - rz_s).max()))
             # how far the hill over the tube climbs over the approach's sides (a bore into a slope: metres; a box under
             # a street level with its trough's walls: none). Over the mouth's own face ground it read nothing once
@@ -281,7 +281,7 @@ def crown_top(fitd, th, low=False):
     """The headwall's top over the floor at the opening's middle (earthfast.portal's headwall_top there)."""
     lk = LOOKS[_look(fitd, low)]
     fg, tmin, _short = capped(fitd, th, low)
-    g = float(np.interp(0.0, fitd["fx"], fg))
+    g = float(dnp.interp(0.0, fitd["fx"], fg))
     return min(max(g + lk[4], th + tmin), th + lk[6])
 
 

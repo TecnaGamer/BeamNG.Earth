@@ -79,7 +79,7 @@ def _half(z):
            (200.0, 12.5), (EIFFEL_P3_Z, EIFFEL_P3_M / 2), (EIFFEL_TOP_Z, 4.0))
     zs = np.array([p[0] for p in pts])
     ws = dnp.log([p[1] for p in pts])
-    return float(dnp.exp(np.interp(z, zs, ws)))
+    return float(dnp.exp(dnp.interp(z, zs, ws)))
 
 
 def _leg(z):

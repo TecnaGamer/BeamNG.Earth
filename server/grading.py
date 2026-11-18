@@ -1987,12 +1987,12 @@ def junction_pads(plans, specs, nodes=None):
             if avail < PAD_MIN_PART_M:
                 continue            # (a median's crossover, a short link: its two ends' landings, snap_junctions)
             look = min(CHAIN_LOOK_M, avail)
-            px_ = np.interp(arc + sgn * look, s, p.xy[:, 0]) - np.interp(arc, s, p.xy[:, 0])
-            py_ = np.interp(arc + sgn * look, s, p.xy[:, 1]) - np.interp(arc, s, p.xy[:, 1])
+            px_ = dnp.interp(arc + sgn * look, s, p.xy[:, 0]) - dnp.interp(arc, s, p.xy[:, 0])
+            py_ = dnp.interp(arc + sgn * look, s, p.xy[:, 1]) - dnp.interp(arc, s, p.xy[:, 1])
             gl = min(PAD_GRADE_M, avail)
-            z_n = float(np.interp(arc, s, p.z))
-            grade = (float(np.interp(arc + sgn * gl, s, p.z)) - z_n) / gl
-            b_n = 0.0 if p.bank is None else float(np.interp(arc, s, p.bank)) * sgn     # (toward the branch's left)
+            z_n = float(dnp.interp(arc, s, p.z))
+            grade = (float(dnp.interp(arc + sgn * gl, s, p.z)) - z_n) / gl
+            b_n = 0.0 if p.bank is None else float(dnp.interp(arc, s, p.bank)) * sgn     # (toward the branch's left)
             info.append((j, arc, sgn, avail, np.array([px_, py_]), z_n, grade, pad_class_w(specs[j]), b_n))
         if len(info) < 2 or len({plans[i[0]].rid for i in info}) < 2:
             continue
@@ -3492,7 +3492,7 @@ class _Planner:
         b = np.asarray(bridge, np.float64)[:, :2]
         sb = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(b, axis=0).T))]
         a = np.linspace(corridor[0], corridor[1], max(2, int(math.ceil((corridor[1] - corridor[0]) / roadsmod.DECK_STEP)) + 1))
-        line = np.stack([np.interp(a, sb, b[:, 0]), np.interp(a, sb, b[:, 1])], axis=1)
+        line = np.stack([dnp.interp(a, sb, b[:, 0]), dnp.interp(a, sb, b[:, 1])], axis=1)
         if roadz.PROVIDER is None:      # (no survey: nothing measured, as its handler answered before)
             return None
         try:
@@ -4098,7 +4098,7 @@ class _Planner:
                 cz, measured = None, False
                 if CW_ON and not rail_span[bi]:
                     sb = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(b, axis=0).T))]
-                    cpts = np.stack([np.interp(corridor, sb, b[:, 0]), np.interp(corridor, sb, b[:, 1])], axis=1)
+                    cpts = np.stack([dnp.interp(corridor, sb, b[:, 0]), dnp.interp(corridor, sb, b[:, 1])], axis=1)
                     cz = self._cw_z_at(b, np.r_[cpts, pt[None]])
                 if cz is not None:
                     deck = float(np.min(cz))
@@ -4299,7 +4299,7 @@ class _Planner:
             k = int(math.ceil(3.0 * sg / PROFILE_STEP))
             raw = sc + PROFILE_STEP * np.arange(-k, k + 1)
             a = np.clip(raw, 0.0, s[-1])
-            pts.append(np.stack([np.interp(a, s, xy[:, 0]), np.interp(a, s, xy[:, 1])], axis=1))
+            pts.append(np.stack([dnp.interp(a, s, xy[:, 0]), dnp.interp(a, s, xy[:, 1])], axis=1))
             ext = None
             if decks:
                 # (and on straight past the part's ends, for deck_capped's ground beside a deck near one: Järve tee's
@@ -4334,7 +4334,7 @@ class _Planner:
                 j0 += int(m.sum())
                 capped = deck_capped(q, zx, decks)
                 if capped is not zx:            # (the clipped samples at most the capped ground there)
-                    zz = np.minimum(zz, np.interp(a, raw, capped))
+                    zz = np.minimum(zz, dnp.interp(a, raw, capped))
             out.append(float(smooth_profile(median_profile(zz, PROFILE_STEP, med), PROFILE_STEP, sg)[k]))
         return out
 
@@ -4485,10 +4485,10 @@ class _Planner:
                 raw = np.zeros(len(raw))
                 ok[:] = True
             elif not ok.all():                          # (no elevation there: the nearest that is)
-                raw = np.interp(s, s[ok], raw[ok])
+                raw = dnp.interp(s, s[ok], raw[ok])
             g = ~br
             if g.sum() >= 2:
-                t = np.interp(s, s[g], raw[g])          # (the ground across the bridges, for the filters)
+                t = dnp.interp(s, s[g], raw[g])          # (the ground across the bridges, for the filters)
                 t = smooth_profile(median_profile(t, _cw.STEP_M, MEDIAN_M), _cw.STEP_M, SIGMA_MAJOR_M)
             else:
                 t = raw.copy()
@@ -6584,7 +6584,7 @@ class _Planner:
             for k, arc, base, c in req:
                 ln = lines[k]
                 s = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(ln, axis=0).T))]
-                pts.append([np.interp(arc, s, ln[:, 0]), np.interp(arc, s, ln[:, 1])])
+                pts.append([dnp.interp(arc, s, ln[:, 0]), dnp.interp(arc, s, ln[:, 1])])
                 need.append(base + c)
             d = dnp.hypot(*(np.asarray(pts) - np.asarray(xy)[:2]).T)
             reach = np.asarray(need) - roadsmod.DECK_DESIGN_GRADE * np.maximum(d - roadsmod.DECK_ROAD_HALF - WATER_CURVE_M, 0.0)
@@ -6737,10 +6737,10 @@ class _Planner:
                     continue                    # inside the hill: a full tunnel goes on
                 if at_start:
                     m = s <= MOUTH_PLAN_M
-                    t = np.interp(MOUTH_PLAN_M, s, np.arange(len(s)))
+                    t = dnp.interp(MOUTH_PLAN_M, s, np.arange(len(s)))
                 else:
                     m = s >= s[-1] - MOUTH_PLAN_M
-                    t = np.interp(s[-1] - MOUTH_PLAN_M, s, np.arange(len(s)))
+                    t = dnp.interp(s[-1] - MOUTH_PLAN_M, s, np.arange(len(s)))
                 i0 = int(np.floor(t))
                 p = xy[i0] + (t - i0) * (xy[min(i0 + 1, len(xy) - 1)] - xy[i0])
                 pz = z[i0] + (t - i0) * (z[min(i0 + 1, len(z) - 1)] - z[i0])
@@ -7689,7 +7689,7 @@ def rail_yield_pieces(xy, z, roads_, half):
         return [(xy, z)]
     pts, s = resample(xy, RAIL_YIELD_STEP_M)
     s0 = railways._arc(xy)
-    zz = np.interp(s, s0, z)
+    zz = dnp.interp(s, s0, z)
     blk = railways._blocked(pts, zz, crossers)
     if not blk.any():
         return [(xy, z)]
@@ -8275,7 +8275,7 @@ def _along(line, d):
     sl = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(line, axis=0).T))]
     d = np.asarray(d, np.float64)
     d = d[d <= sl[-1] + 1e-9]
-    return np.stack([np.interp(d, sl, line[:, 0]), np.interp(d, sl, line[:, 1])], axis=1)
+    return np.stack([dnp.interp(d, sl, line[:, 0]), dnp.interp(d, sl, line[:, 1])], axis=1)
 
 
 def _on_line(pts, line):

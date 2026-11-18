@@ -1039,7 +1039,7 @@ def _resample(line, step):
         return line[:1]
     n = max(int(math.ceil(arc[-1] / step)), 1)
     s = np.linspace(0.0, arc[-1], n + 1)
-    return np.column_stack((np.interp(s, arc, line[:, 0]), np.interp(s, arc, line[:, 1])))
+    return np.column_stack((dnp.interp(s, arc, line[:, 0]), dnp.interp(s, arc, line[:, 1])))
 
 
 def _near_road(xy, roads):

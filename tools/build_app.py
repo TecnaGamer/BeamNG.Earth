@@ -25,6 +25,10 @@ import re
 import shutil
 import subprocess
 import sys
+try:        # (first: numpy's AVX-512 kernels held back before anything imports numpy, tools/npyfirst.py)
+    import npyfirst  # noqa: E402,F401
+except ImportError:     # (loaded by its path into another process, a test: that process's entry point guards)
+    pass
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 NAME = "BeamNG.Earth"
@@ -196,6 +200,15 @@ def pyinstaller(work, ico, onefile, ver=None, boot=None):
     with open(os.path.join(work, "REVISIT_ID"), "w", encoding="ascii") as f:
         f.write(revisit.source_id(server))
     cmd += ["--add-data", f"{os.path.join(work, 'REVISIT_ID')}{SEP}."]
+    # the AVX-512 targets of the numpy this app bundles (npyguard: held back on an AVX-512 CPU), from that numpy
+    # itself; the release workflow then runs the built executable's --check-numpy (numpy imports with them, -W error)
+    import json
+    import npyguard
+    names = npyguard.dispatch_names()
+    import importlib.metadata
+    with open(os.path.join(work, npyguard.FROZEN_FILE), "w", encoding="utf-8") as f:
+        json.dump({"numpy": importlib.metadata.version("numpy"), "names": list(names)}, f)
+    cmd += ["--add-data", f"{os.path.join(work, npyguard.FROZEN_FILE)}{SEP}."]
     cmd += ["--onefile"] if onefile else ["--onedir"]
     if IS_WIN:
         vf, mf = version_files(work, ver)

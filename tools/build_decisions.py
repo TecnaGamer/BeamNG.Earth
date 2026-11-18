@@ -40,6 +40,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 SERVER = os.path.join(ROOT, "server")
 sys.path.insert(0, SERVER)
+import npyguard  # noqa: E402,F401  (first: numpy's AVX-512 kernels held back before anything imports numpy)
 
 PASSES = 3
 WEEKLY_KEYS = ("rails", "lanes", "stations")      # (decisions.WEEKLY: kept in each record's versions, not the vkey)
