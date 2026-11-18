@@ -37,6 +37,7 @@ ON = os.environ.get("BNE_LOD2_ROOFS", "on") != "off"
 ZOOM = 10
 RETRY_S = 3600                  # unreachable: asked again after this long
 CELL_M = 32.0                   # the grid a tile's records are looked up in
+GEO_PAD_DEG = 0.005             # degrees around a tile's corners within which its records are looked for (> 300 m)
 
 # A country's shards: its folder on the site (and in the cache), the box nothing outside of asks for one (south, west,
 # north, east), and its credit (credits.FEATURES). A folder per country: each is built and published on its own, and
@@ -191,7 +192,7 @@ class Source:
         shards = [sh for sh in shards if sh]
         if not shards:
             return None
-        return Records(frame, shards, x0 - m, y0 - m, x1 + m, y1 + m)
+        return Records(frame, shards, x0 - m, y0 - m, x1 + m, y1 + m, (s, w, n, e))
 
 
 def decode(body):
@@ -211,10 +212,18 @@ def decode(body):
 class Records:
     """A tile's records in its frame, found by the footprint they stand in."""
 
-    def __init__(self, frame, shards, x0, y0, x1, y1):
+    def __init__(self, frame, shards, x0, y0, x1, y1, geo_box=None):
         e, n, code, height, roof = [], [], [], [], []
         for s in shards:
             k = (s["lat"] > -90.0)
+            if geo_box is not None:     # (a z10 shard is ~25 km across, the tile a few hundred metres: only the
+                # records near the box's corners in degrees (geo_box: south, west, north, east; GEO_PAD_DEG wider than
+                # any bend of the frame's box there) go through geodetic_to_enu, the same ones kept below. Every
+                # record of the shard was turned to metres for each tile: a fifth of the far buildings' CPU)
+                bs, bw, bn, be = geo_box
+                la, lo = s["lat"], s["lon"]
+                k &= (la >= bs - GEO_PAD_DEG) & (la <= bn + GEO_PAD_DEG) & (lo >= bw - GEO_PAD_DEG) & \
+                    (lo <= be + GEO_PAD_DEG)
             ee, nn, _ = frame.geodetic_to_enu(s["lat"][k], s["lon"][k], 0.0)
             keep = (ee >= x0) & (ee < x1) & (nn >= y0) & (nn < y1)
             e.append(ee[keep])
