@@ -480,6 +480,11 @@ def write_bundle(path, release, collections):
         raise
 
 
+def bundle_complete(collections):
+    """Does a bundle's {"theme/type": ...} hold every collection this build reads (_stac_pairs)?"""
+    return bool(collections) and all(f"{t}/{y}" in collections for t, y in _stac_pairs())
+
+
 def keep_local_bundle(release, cache_dir, fetcher, kind="background"):
     """A release other than the shipped one: its whole STAC index kept in cache_dir's cdn folder (not under the
     cache's cap), so a later start can take it while Overture's STAC host does not answer (overturepick.fallback)
@@ -491,7 +496,7 @@ def keep_local_bundle(release, cache_dir, fetcher, kind="background"):
     if schema not in SUPPORTED_SCHEMAS:
         return None
     path = overturepick.local_bundle_path(cache_dir, release)
-    if not overturepick.read_bundle(path, release):
+    if not bundle_complete(overturepick.read_bundle(path, release)):
         index = StacIndex(release, os.path.join(cache_dir, "mapdata", "raw"), fetcher)
         index._bundled = {}         # (from Overture's own index, never a bundle)
         write_bundle(path, release, bundle_rows(index, kind))
@@ -507,6 +512,89 @@ def note_session(cache_dir, fetcher):
     if schema and overturepick.write_last(cache_dir, rel, schema):
         return schema
     return None
+
+
+# The session's bundle prep (prepare_session): Overture's STAC host is rate limited (netfetch: 5/s, a bucket of 10) and
+# a background request is deferred (netfetch.Deferred, not queued) while the bucket is low, as it is every few requests
+# of a crawl of every item (~800) on a healthy network: each deferral waits and asks again, each failed pass (a network
+# error, a timeout) is tried again after a backoff, within one bound on the whole job's effort. A pass resumes from
+# what the passes before saved (StacIndex keeps each collection and item file it read).
+PREP_DEFER_S = 0.5              # s a deferred request waits before it asks again (the bucket refills 5 tokens a s)
+PREP_RETRIES = 6                # failed passes tried again (the next one gives up for this process)
+PREP_BACKOFF_S = (5.0, 300.0)   # s after the first failed pass, doubled each time, at most the second
+PREP_MAX_S = 3600.0             # the whole job's effort (deferrals, passes, backoffs): past it the job gives up
+# answers asking again will not change in this process: the release gone, the day's budget used up, --offline, a
+# policy that forbids it, a STAC index that contradicts itself
+_PREP_FINAL = (netfetch.NotFound, netfetch.BudgetExceeded, netfetch.PolicyDenied, netfetch.Offline, OvertureError)
+
+
+class _Patient:
+    """A fetcher whose deferred requests wait PREP_DEFER_S (or the host's own retry_after) and ask again, until the
+    deadline (the job's bound): then the Deferred is raised."""
+
+    def __init__(self, fetcher, deadline, clock, sleep):
+        self.fetcher, self.deadline, self.clock, self.sleep = fetcher, deadline, clock, sleep
+        self.deferred = 0
+
+    def get(self, url, kind="background", **kw):
+        while True:
+            try:
+                return self.fetcher.get(url, kind=kind, **kw)
+            except netfetch.Deferred as e:
+                wait = max(PREP_DEFER_S, float(e.retry_after or 0.0))
+                if self.clock() + wait > self.deadline:
+                    raise
+                self.deferred += 1
+                self.sleep(wait)
+
+
+def prepare_session(cache_dir, fetcher, clock=time.monotonic, sleep=time.sleep, max_s=PREP_MAX_S,
+                    retries=PREP_RETRIES):
+    """note_session, patient: deferrals waited out, failed passes tried again after a backoff, each pass resuming from
+    what the earlier ones saved, all within max_s. The schema noted, or None (not noted: another schema, not kept);
+    raises the last error when it gives up (an answer that will not change, PREP_RETRIES failed passes, max_s)."""
+    deadline = clock() + max_s
+    patient = _Patient(fetcher, deadline, clock, sleep)
+    failures = 0
+    while True:
+        try:
+            return note_session(cache_dir, patient)
+        except _PREP_FINAL:
+            raise
+        except (netfetch.FetchError, OSError, ValueError) as e:     # (a network error, a timeout, a portal's page)
+            failures += 1
+            wait = max(min(PREP_BACKOFF_S[1], PREP_BACKOFF_S[0] * 2 ** (failures - 1)),
+                       float(getattr(e, "retry_after", 0.0) or 0.0))
+            if failures > retries or clock() + wait > deadline:
+                raise
+            log.info("overture: session's STAC index pass %d failed (%s: %s); again in %.0f s (%d deferrals so far)",
+                     failures, type(e).__name__, e, wait, patient.deferred)
+            sleep(wait)
+
+
+_PREP = {"thread": None}
+_PREP_LOCK = threading.Lock()
+
+
+def start_session_prep(cache_dir, fetcher, done=None):
+    """prepare_session in a background thread of its own, once a process: a later call (another game's hello) while
+    it runs or after it ended starts nothing. Never waits. done(schema or None, error or None) when it ends. The
+    thread started, or None."""
+    with _PREP_LOCK:
+        if _PREP["thread"] is not None:
+            return None
+
+        def run():
+            schema = err = None
+            try:
+                schema = prepare_session(cache_dir, fetcher)
+            except Exception as e:      # (a later start then decides without it)
+                err = e
+            if done is not None:
+                done(schema, err)
+        t = _PREP["thread"] = threading.Thread(target=run, name="overture-session", daemon=True)
+    t.start()
+    return t
 
 
 class StacIndex:

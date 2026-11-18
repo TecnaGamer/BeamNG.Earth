@@ -12781,28 +12781,24 @@ def _overture_release():
     return overture.effective()
 
 
-_OVERTURE_NOTED = []
-
-
 def _note_overture_session(cache_dir, net):
     """Once a process, at the first game's hello of a server its supervisor handed a release (overturepick
-    RELEASE_ENV): in the background, the release's whole STAC index kept here when it is not the shipped one, then the
-    release noted as this machine's last session's (overturepick.LAST_FILE: a later start whose pick gets no answer in
-    time takes it, overturepick.fallback)."""
+    RELEASE_ENV): in the background (overture.start_session_prep: one job a process, a later hello starts nothing;
+    deferrals and failures asked again within a bound), the release's whole STAC index kept here when it is not the
+    shipped one, then the release noted as this machine's last session's (overturepick.LAST_FILE: a later start whose
+    pick gets no answer in time takes it, overturepick.fallback). Never waits."""
     import overturepick
-    if _OVERTURE_NOTED or overturepick.from_env() is None or getattr(net, "offline_flag", False):
+    if overturepick.from_env() is None or getattr(net, "offline_flag", False):
         return
-    _OVERTURE_NOTED.append(True)
+    import overture
 
-    def run():
-        import overture
-        try:
-            schema = overture.note_session(cache_dir, net)
+    def done(schema, err):
+        if err is not None:
+            log.info("Overture release %s not noted: %s: %s", overture.effective(), type(err).__name__, err)
+        else:
             log.info("Overture release %s: %s", overture.effective(),
                      "noted for this machine's next starts" if schema else "not noted (its STAC index not kept)")
-        except Exception as e:      # (a later start then decides without it)
-            log.info("Overture release %s not noted: %s: %s", overture.effective(), type(e).__name__, e)
-    threading.Thread(target=run, name="overture-session", daemon=True).start()
+    overture.start_session_prep(cache_dir, net, done)
 
 
 def raise_open_files():

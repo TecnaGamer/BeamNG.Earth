@@ -39,6 +39,9 @@ STAC_ROOT = "https://stac.overturemaps.org"
 SWITCH_URL = os.environ.get("BNGE_CDN_SWITCH",
                             "https://raw.githubusercontent.com/TecnaGamer/BeamNG.Earth-data/main/cdn.json")
 SWITCH_TTL_S = 3600.0                       # (cdn.SWITCH_TTL_S: the copy on disk the server keeps, read when this fresh)
+# the switch file's largest size, on the wire, decoded and on disk (a few hundred bytes in 2026-11): past it the file
+# is not read, parsed or kept (no answer: the fallback), so a publisher's mistake or a compromise cannot fill memory
+SWITCH_MAX_BYTES = 256 * 1024
 PICK_S = 5.0                                # the whole decision's deadline (switch file + STAC), then the fallback
 LAST_FILE = "overture_last.json"            # <cache>/cdn/: the release of this machine's last game session
 
@@ -91,6 +94,34 @@ def read_bundle(path, release):
     return got if isinstance(got, dict) else {}
 
 
+def parse_switch(body):
+    """The switch file's dict from its bytes, or None (past SWITCH_MAX_BYTES, not JSON, not an object)."""
+    if not isinstance(body, (bytes, bytearray, str)) or len(body) > SWITCH_MAX_BYTES:
+        return None
+    try:
+        doc = json.loads(body)
+    except (ValueError, RecursionError):
+        return None
+    return doc if isinstance(doc, dict) else None
+
+
+def read_switch_file(path):
+    """The switch file's copy on disk as a dict, or None (missing, past SWITCH_MAX_BYTES, unreadable): no more than
+    one byte past the limit is read."""
+    try:
+        with open(path, "rb") as fh:
+            body = fh.read(SWITCH_MAX_BYTES + 1)
+    except OSError:
+        return None
+    return parse_switch(body)
+
+
+def get_switch(get):
+    """The switch file from the net as a dict through get(url), None when past SWITCH_MAX_BYTES or not an object
+    (get's own errors raised)."""
+    return parse_switch(get(SWITCH_URL))
+
+
 def keep_switch(path, doc):
     """The switch file's copy on disk (cdn.switch reads it while fresh), written whole under a writer-unique name."""
     tmp = f"{path}.{os.getpid()}.{threading.get_ident()}.tmp"
@@ -112,30 +143,21 @@ def _switch_doc(get, cache_dir):
     path = os.path.join(cache_dir, "cdn", "cdn.json") if cache_dir else None
     if path:
         try:
-            if time.time() - os.path.getmtime(path) < SWITCH_TTL_S:
-                with open(path, encoding="utf-8") as fh:
-                    doc = json.load(fh)
-                if isinstance(doc, dict):
-                    return doc
-        except (OSError, ValueError):
-            pass
+            fresh = time.time() - os.path.getmtime(path) < SWITCH_TTL_S
+        except OSError:
+            fresh = False
+        doc = read_switch_file(path) if fresh else None
+        if doc is not None:
+            return doc
     try:
-        doc = json.loads(get(SWITCH_URL))
-        if isinstance(doc, dict):
+        doc = get_switch(get)       # (past SWITCH_MAX_BYTES: None, neither parsed nor kept)
+        if doc is not None:
             if path:            # (kept for the server's own cdn.switch: no second fetch at its start)
                 keep_switch(path, doc)
             return doc
     except Exception:
         pass
-    if path:
-        try:
-            with open(path, encoding="utf-8") as fh:
-                doc = json.load(fh)
-            if isinstance(doc, dict):
-                return doc
-        except (OSError, ValueError):
-            pass
-    return None
+    return read_switch_file(path) if path else None
 
 
 class Unreachable(Exception):
@@ -235,7 +257,9 @@ def forget(cache_dir, release):
 def _net_get(offline):
     import netfetch
     fetcher = netfetch.Fetcher(offline=offline)
-    return lambda url: fetcher.get(url, kind="demand").body
+    # (the switch file read no further than its limit, on the wire and decoded: netfetch.TooLarge, no answer)
+    return lambda url: fetcher.get(url, kind="demand",
+                                   max_bytes=SWITCH_MAX_BYTES if url == SWITCH_URL else None).body
 
 
 class Pick:

@@ -411,5 +411,206 @@ class LocalBundleTest(unittest.TestCase):
             self.assertFalse(os.path.exists(os.path.join(cache, "cdn", op.LAST_FILE)))
 
 
+class FlakyStac(FakeStac):
+    """FakeStac that defers two requests of every three (netfetch's bucket low) and fails some requests once each."""
+
+    def __init__(self, fail_once=()):
+        super().__init__()
+        self.n = 0
+        self.fail_once = set(fail_once)
+
+    def get(self, url, kind="demand", **kw):
+        self.n += 1
+        if self.n % 3:
+            raise netfetch.Deferred("bucket low, background dropped", url=url)
+        if url in self.fail_once:
+            self.fail_once.discard(url)
+            raise netfetch.FetchFailed(f"{url}: timed out", url=url)
+        return super().get(url, kind, **kw)
+
+
+class FakeClock:
+    def __init__(self):
+        self.t = 0.0
+        self.slept = []
+
+    def __call__(self):
+        return self.t
+
+    def sleep(self, s):
+        self.slept.append(s)
+        self.t += s
+
+
+class SessionPrepTest(unittest.TestCase):
+    def setUp(self):
+        import overture
+        self.overture = overture
+        self.cache = tempfile.mkdtemp(prefix="ovprep_")
+        self.addCleanup(__import__("shutil").rmtree, self.cache, True)
+        for p in (mock.patch.object(overture, "_stac_pairs", return_value=[("buildings", "building")]),
+                  mock.patch.object(overture, "effective", return_value=NEW)):
+            p.start()
+            self.addCleanup(p.stop)
+        self.last = os.path.join(self.cache, "cdn", op.LAST_FILE)
+        self.bundle = op.local_bundle_path(self.cache, NEW)
+
+    def test_finishes_after_deferrals_and_transient_errors(self):
+        base = f"{op.STAC_ROOT}/{NEW}/buildings/building"
+        stac = FlakyStac(fail_once=[f"{base}/b.json", f"{base}/collection.json"])
+        clock = FakeClock()
+        seen = []
+
+        def sleep(s):           # (at every wait: no note before the whole bundle is on disk)
+            seen.append((os.path.exists(self.last), bool(op.read_bundle(self.bundle, NEW))))
+            clock.sleep(s)
+        got = self.overture.prepare_session(self.cache, stac, clock=clock, sleep=sleep)
+        self.assertEqual(got, op.SUPPORTED_SCHEMAS[0])
+        self.assertTrue(seen and not any(n for n, _ in seen), "no note while the bundle was being made")
+        self.assertFalse(any(b for _, b in seen), "no bundle before the crawl finished")
+        self.assertIn(self.overture.PREP_BACKOFF_S[0], clock.slept, "a failed pass backed off")
+        self.assertIn(self.overture.PREP_DEFER_S, clock.slept, "deferrals waited")
+        self.assertEqual(op.fallback(self.cache)[0], NEW)
+        self.assertTrue(self.overture.bundle_complete(op.read_bundle(self.bundle, NEW)))
+        # resumed: each item file came from the net once when it succeeded (the failed pass's saves kept)
+        ok = [u for u in stac.asked if u.endswith("/a.json")]
+        self.assertEqual(len(ok), 1, stac.asked)
+
+    def test_gives_up_within_its_bound_without_a_note(self):
+        stac = FakeStac()
+        stac.down = True
+        clock = FakeClock()
+        with self.assertRaises(OSError):
+            self.overture.prepare_session(self.cache, stac, clock=clock, sleep=clock.sleep)
+        self.assertLessEqual(clock.t, self.overture.PREP_MAX_S)
+        self.assertEqual(len([s for s in clock.slept]), self.overture.PREP_RETRIES)
+        self.assertFalse(os.path.exists(self.last))
+        self.assertFalse(os.path.exists(self.bundle))
+        # deferred for ever: gives up at the bound, no note
+        clock2 = FakeClock()
+
+        class Never(FakeStac):
+            def get(self, url, kind="demand", **kw):
+                raise netfetch.Deferred("bucket low", url=url)
+        with self.assertRaises(netfetch.Deferred):
+            self.overture.prepare_session(self.cache, Never(), clock=clock2, sleep=clock2.sleep, max_s=60.0)
+        self.assertLessEqual(clock2.t, 60.0)
+        self.assertFalse(os.path.exists(self.last))
+
+    def test_release_gone_is_final(self):
+        stac = FakeStac()
+        del stac.pages[f"{op.STAC_ROOT}/{NEW}/buildings/building/collection.json"]
+        clock = FakeClock()
+        with self.assertRaises(self.overture.ReleaseGone):
+            self.overture.prepare_session(self.cache, stac, clock=clock, sleep=clock.sleep)
+        self.assertEqual(clock.slept, [])
+        self.assertFalse(os.path.exists(self.last))
+
+    def test_one_job_a_process(self):
+        stac = FakeStac()
+        gate = threading.Event()
+        real = stac.get
+
+        def slow(url, kind="demand", **kw):
+            gate.wait(5)
+            return real(url, kind, **kw)
+        stac.get = slow
+        ended = []
+        with mock.patch.dict(self.overture._PREP, {"thread": None}):
+            t = self.overture.start_session_prep(self.cache, stac, lambda s, e: ended.append((s, e)))
+            self.assertIsNotNone(t)
+            self.assertIsNone(self.overture.start_session_prep(self.cache, stac), "a second hello: nothing started")
+            gate.set()
+            t.join(5)
+            self.assertEqual(ended, [(op.SUPPORTED_SCHEMAS[0], None)])
+            self.assertIsNone(self.overture.start_session_prep(self.cache, stac), "after it ended: nothing started")
+
+
+class SwitchCapTest(unittest.TestCase):
+    BIG = {"overture": {"release": NEW}, "pad": "x" * (op.SWITCH_MAX_BYTES + 10)}
+
+    def test_oversized_switch_from_the_net_is_no_answer(self):
+        with tempfile.TemporaryDirectory() as cache:
+            get = stac_get(switch=self.BIG)
+            self.assertIsNone(op._switch_doc(get, cache))
+            self.assertFalse(os.path.exists(os.path.join(cache, "cdn", "cdn.json")), "not kept")
+            with self.assertRaises(op.Unreachable):
+                op.decide_online(get, cache)
+            write_last(cache, NEW)
+            self.assertEqual(pick(cache, get).release(), NEW, "the fallback took over")
+
+    def test_oversized_switch_on_disk_is_not_read(self):
+        with tempfile.TemporaryDirectory() as cache:
+            path = os.path.join(cache, "cdn", "cdn.json")
+            os.makedirs(os.path.dirname(path))
+            with open(path, "w") as fh:
+                json.dump(self.BIG, fh)
+            self.assertIsNone(op.read_switch_file(path))
+            self.assertIsNone(op._switch_doc(stac_get(switch=None), cache))
+            import cdn
+            self.assertEqual(cdn.switch(netfetch.Fetcher(offline=True), cache), {})
+            with open(path, "w") as fh:
+                json.dump({"overture": {"release": NEW}}, fh)
+            self.assertEqual(op.read_switch_file(path), {"overture": {"release": NEW}})
+
+    def _fetcher(self, body, gz):
+        class Tr:
+            def __init__(self):
+                self.calls = 0
+
+            def request(self, url, headers, timeout):
+                self.calls += 1
+                rh = {"content-type": "application/json"}
+                if gz:
+                    rh["content-encoding"] = "gzip"
+                return 200, rh, gzip.compress(body) if gz else body
+        tr = Tr()
+        pol = {"h.test": netfetch.HostPolicy(rate=1000.0, burst=1000.0, max_conc=4, daily_budget=None, gzip=True)}
+        return netfetch.Fetcher(transport=tr, sleep=lambda s: None, policies=pol), tr
+
+    def test_netfetch_max_bytes(self):
+        big = b'{"pad": "' + b"x" * (op.SWITCH_MAX_BYTES + 10) + b'"}'
+        small = b'{"overture": {}}'
+        for gz in (False, True):
+            f, tr = self._fetcher(big, gz)
+            with self.assertRaises(netfetch.TooLarge):
+                f.get("https://h.test/cdn.json", max_bytes=op.SWITCH_MAX_BYTES)
+            self.assertEqual(tr.calls, 1, "not asked again")
+            if gz:
+                self.assertLess(len(gzip.compress(big)), op.SWITCH_MAX_BYTES, "(decoded past it, not on the wire)")
+            f, _ = self._fetcher(small, gz)
+            self.assertEqual(f.get("https://h.test/cdn.json", max_bytes=op.SWITCH_MAX_BYTES).body, small)
+            f, _ = self._fetcher(big, gz)
+            self.assertEqual(len(f.get("https://h.test/cdn.json").body), len(big), "no cap: as before")
+
+    def test_transport_reads_no_further_than_the_cap(self):
+        import http.server
+        n = op.SWITCH_MAX_BYTES * 8
+
+        class H(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(200)
+                self.send_header("Content-Length", str(n))
+                self.end_headers()
+                try:
+                    self.wfile.write(b"x" * n)
+                except OSError:
+                    pass
+
+            def log_message(self, *a):
+                pass
+        srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        self.addCleanup(srv.server_close)
+        self.addCleanup(srv.shutdown)
+        tr = netfetch.HttpsTransport()
+        netfetch._body_cap.n = 1000
+        try:
+            status, _, body = tr.request(f"http://127.0.0.1:{srv.server_address[1]}/cdn.json", {}, 5.0)
+        finally:
+            netfetch._body_cap.n = None
+        self.assertEqual((status, len(body)), (200, 1001))
+
+
 if __name__ == "__main__":
     unittest.main()

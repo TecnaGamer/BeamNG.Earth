@@ -36,7 +36,6 @@ is not signed: the most an edit of it can do is pick a release Overture lists, o
 "dem" / "bngmt": Mapterhorn's z0-12 elevation tiles repacked (dem.MT_CDN_*, the data repo's dem workflow), the release
 the packs were built from; the server's BNGE_DEM_CDN (a release, or "off") overrides it.
 """
-import json
 import logging
 import os
 import time
@@ -60,25 +59,23 @@ def switch(fetcher, cache_dir):
     """The switch file's dict (from the net at most every SWITCH_TTL_S, else the copy on disk), {} when unknown."""
     path = os.path.join(cache_dir, "cdn", "cdn.json")
     try:
-        if time.time() - os.path.getmtime(path) < SWITCH_TTL_S:
-            with open(path) as fh:
-                return json.load(fh)
-    except (OSError, ValueError):
-        pass
+        fresh = time.time() - os.path.getmtime(path) < SWITCH_TTL_S
+    except OSError:
+        fresh = False
+    doc = overturepick.read_switch_file(path) if fresh else None    # (past SWITCH_MAX_BYTES: not read)
+    if doc is not None:
+        return doc
     try:
-        body = fetcher.get(SWITCH_URL, kind="demand").body
-        doc = json.loads(body)
-        if not isinstance(doc, dict):
-            raise ValueError("not an object")
+        # (no more than SWITCH_MAX_BYTES read, on the wire and decoded: netfetch.TooLarge)
+        doc = overturepick.get_switch(
+            lambda url: fetcher.get(url, kind="demand", max_bytes=overturepick.SWITCH_MAX_BYTES).body)
+        if doc is None:
+            raise ValueError(f"not an object of at most {overturepick.SWITCH_MAX_BYTES} bytes")
         overturepick.keep_switch(path, doc)     # (whole, a writer-unique temporary name: the app's pick writes it too)
         return doc
     except Exception as e:          # (offline, not there yet: the original sources)
         log.info("cdn: no switch file (%s: %s): off", type(e).__name__, e)
-        try:
-            with open(path) as fh:
-                return json.load(fh)
-        except (OSError, ValueError):
-            return {}
+        return overturepick.read_switch_file(path) or {}
 
 
 AER = "bngaer"
