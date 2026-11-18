@@ -36,8 +36,11 @@
 //! summed them in numpy), accepted as the server's calls are float64 only. sa / sb: the strides of the operands as the
 //! Python saw them, where the glue cast one (the cast copy's layout can differ; only the order of the sum reads
 //! them). Empty outputs and k == 0 (zeros) come from numpy before any operand is copied; otherwise the operands'
-//! values are copied into Rust-owned storage (any strides) before anything else is called. Sizes are checked:
-//! a result too big is numpy's ValueError / MemoryError, never an abort.
+//! values are copied into Rust-owned storage (any strides) before anything else is called, each distinct element
+//! once (a stride-0, broadcast axis is kept as one element with a zero stride), and the sums are written straight
+//! into the new result array (no second copy of the result): the memory used is the result's plus the operands'
+//! distinct values (Codex review: a broadcast (10^6, 1, 1) operand). Sizes are checked: a result too big is numpy's
+//! ValueError / MemoryError, never an abort.
 
 use numpy::npyffi::{self, PY_ARRAY_API};
 use numpy::{Element, PyArray, PyArrayDescrMethods, PyArrayDyn, PyArrayMethods, PyUntypedArray, PyUntypedArrayMethods};
@@ -235,12 +238,19 @@ fn iter_strides(shape: &[usize], strides: &[isize], nd: usize) -> Vec<isize> {
     out
 }
 
-/// The problem: the operands' values (C order), the stack blocks' offsets, the sizes.
+/// The problem: the operands' distinct values, the element strides into them, the sizes.
 struct Mm<T> {
     a: Vec<T>,
     b: Vec<T>,
-    /// per output stack position: the offset of its A (n, k) block and B (k, m) block
-    blocks: Vec<(usize, usize)>,
+    /// the stacks' broadcast shape, and per stack axis a's and b's element strides (0 where broadcast)
+    st: Vec<usize>,
+    sta: Vec<usize>,
+    stb: Vec<usize>,
+    /// element strides of a's n and k axes and b's k and m axes (0 where broadcast)
+    an: usize,
+    ak: usize,
+    bk: usize,
+    bm: usize,
     n: usize,
     k: usize,
     m: usize,
@@ -249,21 +259,41 @@ struct Mm<T> {
 }
 
 impl<T: Fl> Mm<T> {
-    /// The products summed in the Python's order into out (reserved whole by the caller); TRACK: only each ufunc
-    /// call's flags (k <= 8: [mul0, -, mul1, add1, ..]; k > 8: [mul, reduce]), out untouched. prods: the pairwise
-    /// sum's scratch (k reserved by the caller where pw).
-    fn run<const TRACK: bool>(&self, ops: &mut [u8], out: &mut Vec<T>, prods: &mut Vec<T>) {
+    /// The products summed in the Python's order into out (the result in C order, written whole); TRACK: only each
+    /// ufunc call's flags (k <= 8: [mul0, -, mul1, add1, ..]; k > 8: [mul, reduce]), out untouched. prods: the
+    /// pairwise sum's scratch (k reserved by the caller where pw).
+    fn run<const TRACK: bool>(&self, ops: &mut [u8], out: &mut [T], prods: &mut Vec<T>) {
         let (n, k, m) = (self.n, self.k, self.m);
-        for &(oa, ob) in &self.blocks {
-            let (a, b) = (&self.a[oa..oa + n * k], &self.b[ob..ob + k * m]);
-            for i in 0..n {
-                let ar = &a[i * k..i * k + k];
+        let (a, b) = (&self.a[..], &self.b[..]);
+        let (an, ak, bk, bm) = (self.an, self.ak, self.bk, self.bm);
+        let ns = self.st.len();
+        let nblocks: usize = self.st.iter().product();
+        let mut idx = vec![0usize; ns];
+        let (mut oa, mut ob, mut pos) = (0usize, 0usize, 0usize);
+        for _ in 0..nblocks {
+            // every index read below is at most the block's last element (offsets and strides >= 0), checked here
+            // once: the reads unchecked (the hot loop of 229k small calls)
+            assert!(oa + (n - 1) * an + (k - 1) * ak < a.len() && ob + (k - 1) * bk + (m - 1) * bm < b.len());
+            assert!(TRACK || pos + n * m <= out.len());
+            // SAFETY: ix within the block's elements, in bounds by the asserts above
+            let ga = |ix: usize| unsafe { *a.get_unchecked(ix) };
+            let gb = |ix: usize| unsafe { *b.get_unchecked(ix) };
+            if k <= 8 {
+                // the Python's column loop, an output column at a time: b's column read once (each sum, its order
+                // and its flags are the same in any output order)
                 for j in 0..m {
-                    if k <= 8 {
-                        let mut s = mu(ar[0], b[j]);
-                        if TRACK { ops[0] |= flags(ar[0], b[j], s); }
-                        for q in 1..k {
-                            let (x, y) = (ar[q], b[q * m + j]);
+                    let bj = ob + j * bm;
+                    let mut bc = [T::ZERO; 8];
+                    for (q, v) in bc.iter_mut().enumerate().take(k) {
+                        *v = gb(bj + q * bk);
+                    }
+                    for i in 0..n {
+                        let ai = oa + i * an;
+                        let (x, y) = (ga(ai), bc[0]);
+                        let mut s = mu(x, y);
+                        if TRACK { ops[0] |= flags(x, y, s); }
+                        for (q, &y) in bc.iter().enumerate().take(k).skip(1) {
+                            let x = ga(ai + q * ak);
                             let p = mu(x, y);
                             let t = ad(s, p);
                             if TRACK {
@@ -272,59 +302,103 @@ impl<T: Fl> Mm<T> {
                             }
                             s = t;
                         }
-                        if !TRACK { out.push(s); }
-                    } else if self.pw {
-                        prods.clear();
-                        for q in 0..k {
-                            let (x, y) = (ar[q], b[q * m + j]);
-                            let p = mu(x, y);
-                            if TRACK { ops[0] |= flags(x, y, p); }
-                            prods.push(p);
+                        if !TRACK {
+                            // SAFETY: one of the block's n * m outputs from pos, within out by the assert above
+                            unsafe { *out.get_unchecked_mut(pos + i * m + j) = s; }
                         }
-                        let mut fl = 0u8;
-                        let ps = pairwise::<T, TRACK>(prods, 0, &mut fl);
-                        let s = ad(T::ZERO, ps);
-                        if TRACK { ops[1] |= fl | flags(T::ZERO, ps, s); } else { out.push(s); }
-                    } else {
-                        let mut s = T::ZERO;
-                        for q in 0..k {
-                            let (x, y) = (ar[q], b[q * m + j]);
-                            let p = mu(x, y);
-                            let t = ad(s, p);
-                            if TRACK {
-                                ops[0] |= flags(x, y, p);
-                                ops[1] |= flags(s, p, t);
-                            }
-                            s = t;
-                        }
-                        if !TRACK { out.push(s); }
                     }
                 }
+                pos += n * m;
+            } else {
+                for i in 0..n {
+                    let ai = oa + i * an;
+                    for j in 0..m {
+                        let bj = ob + j * bm;
+                        let s = if self.pw {
+                            prods.clear();
+                            for q in 0..k {
+                                let (x, y) = (ga(ai + q * ak), gb(bj + q * bk));
+                                let p = mu(x, y);
+                                if TRACK { ops[0] |= flags(x, y, p); }
+                                prods.push(p);
+                            }
+                            let mut fl = 0u8;
+                            let ps = pairwise::<T, TRACK>(prods, 0, &mut fl);
+                            let s = ad(T::ZERO, ps);
+                            if TRACK { ops[1] |= fl | flags(T::ZERO, ps, s); }
+                            s
+                        } else {
+                            let mut s = T::ZERO;
+                            for q in 0..k {
+                                let (x, y) = (ga(ai + q * ak), gb(bj + q * bk));
+                                let p = mu(x, y);
+                                let t = ad(s, p);
+                                if TRACK {
+                                    ops[0] |= flags(x, y, p);
+                                    ops[1] |= flags(s, p, t);
+                                }
+                                s = t;
+                            }
+                            s
+                        };
+                        if !TRACK {
+                            // SAFETY: pos < the block's end, within out by the assert above
+                            unsafe { *out.get_unchecked_mut(pos) = s; }
+                        }
+                        pos += 1;
+                    }
+                }
+            }
+            // the next stack position (C order): the blocks' offsets follow it, no table
+            for d in (0..ns).rev() {
+                idx[d] += 1;
+                oa += self.sta[d];
+                ob += self.stb[d];
+                if idx[d] < self.st[d] {
+                    break;
+                }
+                oa -= self.sta[d] * self.st[d];
+                ob -= self.stb[d] * self.st[d];
+                idx[d] = 0;
             }
         }
     }
 }
 
-/// u's values in C order, read at numpy's byte offsets (any strides, aligned or not).
-fn values<T: Element + Copy>(u: &Bound<'_, PyUntypedArray>) -> PyResult<Vec<T>> {
-    let shape = u.shape().to_vec();
-    let strides = u.strides().to_vec();
-    let total: usize = shape.iter().product();      // (a live array's size: numpy checked it)
+/// An operand's distinct values (C order over its axes, an axis of numpy stride 0 held as one element) and per axis
+/// the element stride into them (0 where the axis is broadcast or has one element).
+struct Op<T> {
+    v: Vec<T>,
+    st: Vec<usize>,
+}
+
+/// u's distinct values, read at numpy's byte offsets (any strides, aligned or not): a stride-0 axis read once.
+fn values<T: Element + Copy>(u: &Bound<'_, PyUntypedArray>) -> PyResult<Op<T>> {
+    let (shape, strides) = (u.shape(), u.strides());
+    let nd = shape.len();
+    // the distinct shape: a stride-0 axis of one element (an empty one stays empty)
+    let ds = |d: usize| if strides[d] == 0 { shape[d].min(1) } else { shape[d] };
+    let mut st = vec![0usize; nd];
+    let mut total = 1usize;                         // (at most the live array's size: numpy checked it)
+    for d in (0..nd).rev() {
+        st[d] = if ds(d) > 1 { total } else { 0 };
+        total *= ds(d);
+    }
     let mut out = Vec::new();
     out.try_reserve_exact(total).map_err(|_| PyMemoryError::new_err("dm_matmul: no memory for an operand's copy"))?;
     if total == 0 {
-        return Ok(out);
+        return Ok(Op { v: out, st });
     }
     // SAFETY: as_array_ptr is the live array u holds (the GIL held, nothing called meanwhile); every offset read is
-    // an element numpy's own indexing reads (its shape and byte strides), read unaligned.
+    // an element numpy's own indexing reads (its byte strides at an index within its shape), read unaligned.
     let base = unsafe { (*u.as_array_ptr()).fields.data } as *const u8;
     let isz = std::mem::size_of::<T>() as isize;
-    let nd = shape.len();
     if u.is_c_contiguous() {
+        // (no stride-0 axis of more than one element: the distinct values are all of them)
         for e in 0..total as isize {
             out.push(unsafe { std::ptr::read_unaligned(base.offset(e * isz) as *const T) });
         }
-        return Ok(out);
+        return Ok(Op { v: out, st });
     }
     let mut idx = vec![0usize; nd];
     let mut off: isize = 0;
@@ -333,15 +407,15 @@ fn values<T: Element + Copy>(u: &Bound<'_, PyUntypedArray>) -> PyResult<Vec<T>> 
         let mut d = nd;
         loop {
             if d == 0 {
-                return Ok(out);
+                return Ok(Op { v: out, st });
             }
             d -= 1;
             idx[d] += 1;
             off += strides[d];
-            if idx[d] < shape[d] {
+            if idx[d] < ds(d) {
                 break;
             }
-            off -= strides[d] * shape[d] as isize;
+            off -= strides[d] * ds(d) as isize;
             idx[d] = 0;
         }
     }
@@ -481,33 +555,14 @@ fn compute<'py, T: Fl>(py: Python<'py>, ua: &Bound<'py, PyUntypedArray>, ub: &Bo
         return Err(too_big());
     }
     let total: usize = shape.iter().product();      // (no zero axis: within isize, checked above)
-    let nblocks = total / (n * m);
-    let a: Vec<T> = values(ua)?;
-    let b: Vec<T> = values(ub)?;
-    let mut blocks = Vec::new();
-    blocks.try_reserve_exact(nblocks).map_err(|_| PyMemoryError::new_err("dm_matmul: no memory for the result"))?;
-    let mut idx = vec![0usize; ns];
-    for _ in 0..nblocks {
-        let (mut oa, mut ob) = (0usize, 0usize);
-        for d in 0..ns {
-            if d + ta.len() >= ns {
-                let dd = d + ta.len() - ns;
-                oa = oa * ta[dd] + if ta[dd] == 1 { 0 } else { idx[d] };
-            }
-            if d + tb.len() >= ns {
-                let dd = d + tb.len() - ns;
-                ob = ob * tb[dd] + if tb[dd] == 1 { 0 } else { idx[d] };
-            }
-        }
-        blocks.push((oa * n * k, ob * k * m));      // (offsets within the operands' copies: no overflow)
-        for d in (0..ns).rev() {
-            idx[d] += 1;
-            if idx[d] < st[d] {
-                break;
-            }
-            idx[d] = 0;
-        }
-    }
+    let (oa, ob) = (values::<T>(ua)?, values::<T>(ub)?);
+    // the element strides of the promoted operands' axes, a stack axis right-aligned to the broadcast stacks
+    let (an, ak) = if va { (0, oa.st[0]) } else { (oa.st[na - 2], oa.st[na - 1]) };
+    let (bk, bm) = if vb { (ob.st[0], 0) } else { (ob.st[nb - 2], ob.st[nb - 1]) };
+    let stack = |t: &[usize], s: &[usize]| -> Vec<usize> {
+        (0..ns).map(|d| if d + t.len() >= ns { s[d + t.len() - ns] } else { 0 }).collect()
+    };
+    let (sta, stb) = (stack(ta, &oa.st), stack(tb, &ob.st));
     let pw = k > 8 && {
         // A' = a[.., :, :, None] and B' = b[.., None, :, :] (a 1-D operand promoted first) over (S.., n, k, m)
         let nd = ns + 3;
@@ -521,30 +576,39 @@ fn compute<'py, T: Fl>(py: Python<'py>, ua: &Bound<'py, PyUntypedArray>, ub: &Bo
         dims.extend_from_slice(&[n, k, m]);
         k_inner(&dims, &iter_strides(&sha, &sta, nd), &iter_strides(&shb, &stb, nd))
     };
-    let mm = Mm { a, b, blocks, n, k, m, pw };
-    let nomem = || PyMemoryError::new_err("dm_matmul: no memory for the result");
-    let (mut out, mut prods) = (Vec::new(), Vec::new());
-    out.try_reserve_exact(total).map_err(|_| nomem())?;
+    let mm = Mm { a: oa.v, b: ob.v, st, sta, stb, an, ak, bk, bm, n, k, m, pw };
+    let mut prods = Vec::new();
     if pw {
-        prods.try_reserve_exact(k).map_err(|_| nomem())?;
+        prods.try_reserve_exact(k).map_err(|_| PyMemoryError::new_err("dm_matmul: no memory for the result"))?;
     }
-    let mut none = [0u8; 0];
-    if total.saturating_mul(k) > DETACH_WORK {
-        py.detach(|| mm.run::<false>(&mut none, &mut out, &mut prods));
-    } else {
-        mm.run::<false>(&mut none, &mut out, &mut prods);
-    }
-    if !out.iter().all(|v| v.finite()) {
-        let mut ops = vec![0u8; if k <= 8 { 2 * k } else { 2 }];
-        mm.run::<true>(&mut ops, &mut Vec::new(), &mut prods);
-        report::<T>(py, &ops, k)?;
-    }
+    // the sums into out (the GIL released for big work), then numpy reports the flags the Python's calls set
+    let fill = |out: &mut [T], prods: &mut Vec<T>| -> PyResult<()> {
+        let mut none = [0u8; 0];
+        if total.saturating_mul(k) > DETACH_WORK {
+            py.detach(|| mm.run::<false>(&mut none, out, prods));
+        } else {
+            mm.run::<false>(&mut none, out, prods);
+        }
+        if !out.iter().all(|v| v.finite()) {
+            let mut ops = vec![0u8; if k <= 8 { 2 * k } else { 2 }];
+            mm.run::<true>(&mut ops, &mut [], prods);
+            report::<T>(py, &ops, k)?;
+        }
+        Ok(())
+    };
     if shape.is_empty() {
+        let mut out = [T::ZERO];
+        fill(&mut out, &mut prods)?;
         return scalar::<T>(py, out[0]);
     }
     let arr = new_array::<T>(py, &shape, false)?;
-    // SAFETY: the new array is C-contiguous, held only here, and filled whole before it is returned
-    unsafe { arr.as_slice_mut()? }.copy_from_slice(&out);
+    {
+        // SAFETY: the new array is C-contiguous and aligned, of total elements, and held only here (no Python object
+        // refers to it, so nothing reads or writes it while the GIL is released); it is written whole before it is
+        // returned, and dropped unreturned where report raises
+        let out = unsafe { arr.as_slice_mut()? };
+        fill(out, &mut prods)?;
+    }
     Ok(arr.into_any())
 }
 
