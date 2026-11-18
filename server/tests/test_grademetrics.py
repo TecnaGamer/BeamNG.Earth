@@ -119,7 +119,7 @@ class ClearanceTest(unittest.TestCase):
 def have_pairs():
     try:
         import fast
-        fast.require(488, "plan_corridor_pairs")
+        fast.require(490, "plan_corridor_pairs")
         return True
     except Exception:
         return False

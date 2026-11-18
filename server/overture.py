@@ -50,7 +50,7 @@ log = logging.getLogger("earthd.mapdata")
 # The pinned Overture release (update path: docs/ARCHITECTURE.md "Map data"; `mapdata.py --latest`
 # prints the newest one). Overture removes old releases from the buckets after some months: a
 # pinned release that is gone raises ReleaseGone for cells not cached yet.
-RELEASE = "2026-10-21.0"
+RELEASE = "2026-11-18.0"
 STAC_ROOT = "https://stac.overturemaps.org"
 # DuckDB worker threads per query (the server is niced; the game comes first). One: the server runs many queries side
 # by side on its few cores, where a query's second thread only cost CPU (a fresh place's 60 road cells on one core:
@@ -72,9 +72,10 @@ FETCH_THREADS = 8               # parallel range requests per Reader (Overture's
 FOOTER_GUESS = 256 * 1024       # bytes read from a file's end first for its footer (one block)
 FOOTER_MAX = 4 * 1024 * 1024    # (a learned footer size is used up to this)
 FOOTER_HINTS = "footers.json"   # the largest footer seen per theme/type (Reader._footer_guess), under raw/overture
-# (the footers of release 2026-10-21.0's files, the first guess before one is seen: bytes)
+# (the footers of release 2026-10-21.0's files, the first guess before one is seen: bytes; release 2026-11-18.0's
+# largest footers per type are within 1 % of 2026-10-21.0's, except division_area's: 267,787 -> 549,486 bytes)
 FOOTER_KNOWN = {"base/infrastructure": 1_320_000, "base/water": 600_000, "base/land_use": 615_000,
-                "divisions/division_area": 267_000}
+                "divisions/division_area": 550_000}
 MERGE_GAP = 64 * 1024           # column chunks closer than this are fetched in one range
 BASE_COLUMNS = {"id", "geometry", "bbox", "sources", "version"}
 _PLAN = threading.local()           # (_plan's last: the top-level columns its matched row groups hold, for tolerant)
@@ -401,7 +402,7 @@ def _bundle(release):
     try:
         with gzip.open(BUNDLED.format(release=release), "rt", encoding="utf-8") as f:
             data = json.load(f)
-    except (OSError, ValueError):
+    except (OSError, ValueError, EOFError):     # (EOFError: a truncated gzip)
         return {}
     return data.get("collections", {}) if data.get("release") == release else {}
 
