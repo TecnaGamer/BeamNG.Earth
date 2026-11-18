@@ -721,10 +721,14 @@ class TowerFootprintTest(unittest.TestCase):
         return FRAME, features([a]), 0, Md()
 
     def test_a_line_class_reads_along_the_line(self):
-        # Codex's review of 8ac4b974: the class read only the cells at a line's two ends, so a pole corridor mapped
-        # between them (no voltage, no supports at its ends) became a pylon line; CLASS_SAMPLES cells along it now
+        # Codex's reviews of 8ac4b974 and 07eab0c0: the class read only the cells at a line's two ends, then five
+        # sampled vertices' cells, so poles mapped between them (no voltage, no supports at its ends) made a pylon line;
+        # every cell along it now
         xs = [0.0, 1000.0, 2000.0, 3000.0, 4000.0, 5000.0, 6000.0]
         frame, f, i, md = self.line_world(xs, pole_at=(2000.0, 3000.0, 4000.0))
+        self.assertTrue(powerlines._line_class(md, f, i, "{}", {}))
+        # (the only pole in a cell no five-vertex sample reads: index 3 of six, at 4000 m)
+        _, f, i, md = self.line_world([0.0, 500.0, 1000.0, 4000.0, 6000.0, 6500.0], pole_at=(4000.0,))
         self.assertTrue(powerlines._line_class(md, f, i, "{}", {}))
         _, f, i, md = self.line_world(xs)
         self.assertFalse(powerlines._line_class(md, f, i, "{}", {}))
@@ -751,12 +755,27 @@ class TowerFootprintTest(unittest.TestCase):
         self.assertEqual(asked, [])
 
     def test_a_clipped_run_does_not_hide_the_yard_approach(self):
-        # Codex's review of 732f777f: a line laid out round the tile (its run clipped there) was skipped by the feeder
-        # search, so its approach to a yard beyond the run was never laid out; only the vertices no run covers are added
-        self.assertEqual(powerlines._uncovered(10, 14, [(0, 11)]), [(11, 14)])     # (from the covered vertex on)
-        self.assertEqual(powerlines._uncovered(10, 14, [(0, 20)]), [])
-        self.assertEqual(powerlines._uncovered(10, 14, []), [(10, 14)])
-        self.assertEqual(powerlines._uncovered(10, 14, [(11, 13)]), [(10, 11), (13, 14)])
+        # Codex's reviews of 732f777f and 07eab0c0: a line laid out round the tile (its run clipped there) was skipped by
+        # the feeder search, then its yard approach added as a run of its own: the layout thinned the join differently
+        # from a tile that saw it whole. The runs and approaches of a ring are merged where they overlap, share a
+        # vertex or follow on
+        self.assertEqual(powerlines._merged([(10, 14), (0, 11)]), [(0, 14)])
+        self.assertEqual(powerlines._merged([(0, 5), (5, 9)]), [(0, 9)])            # (sharing a vertex)
+        self.assertEqual(powerlines._merged([(0, 5), (6, 9)]), [(0, 9)])            # (following on: the span 5 -> 6)
+        self.assertEqual(powerlines._merged([(0, 4), (7, 9)]), [(0, 4), (7, 9)])
+
+    def test_a_join_at_a_clipped_run_lays_out_as_one_run(self):
+        # (the reviewer's case: A - B 12 m at the clipped run's end, C in the yard: as one run the layout keeps B, the
+        # yard's edge vertex, and heads the end B -> C, as a tile that saw the line whole)
+        yard_ring = square(0, -30, 60, 60)
+        whole = np.array([[-300, 0, 0], [-24, 0, 0], [-12, 0, 0], [5, 0, 0]], np.float64)
+        st = [False, False, False, True]
+        _, ends_whole, wp_w, wo_w = layout([whole], st, yards=[yard_ring])
+        merged = powerlines._merged([(0, 2), (2, 3)])
+        self.assertEqual(merged, [(0, 3)])
+        _, ends_join, wp_j, wo_j = layout([whole[merged[0][0]:merged[0][1] + 1]], st, yards=[yard_ring])
+        np.testing.assert_array_equal(ends_whole, ends_join)
+        np.testing.assert_array_equal(wp_w, wp_j)
 
     @yards_on
     def test_feeders_read_where_the_layout_stands_them(self):
