@@ -349,22 +349,6 @@ def bed_at(rails, beds, xy, fid=None, distance=False, bridge=False):
         near[i0:i0 + len(q)] = d[np.arange(len(q)), j]
         on[i0:i0 + len(q)] = deck[j]
     return answer()
-    length2 = np.maximum((ab * ab).sum(1), 1e-12)[None]
-    block = max(1, 2_000_000 // len(a))
-    for i0 in range(0, len(xy), block):
-        q = xy[i0:i0 + block]
-        t = np.clip(((q[:, None, :] - a[None]) * ab[None]).sum(2) / length2, 0.0, 1.0)
-        d = dnp.hypot(*(a[None] + t[:, :, None] * ab[None] - q[:, None, :]).transpose(2, 0, 1))
-        j = np.argmin(d, axis=1)
-        tj = t[np.arange(len(q)), j]
-        out[i0:i0 + len(q)] = z0[j] + (z1[j] - z0[j]) * tj
-<<<<<<< HEAD
-        near[i0:i0 + len(q)] = d[np.arange(len(q)), j]
-    return (out, near) if distance else out
-=======
-        on[i0:i0 + len(q)] = deck[j]
-    return (out, on) if bridge else out
->>>>>>> 548dca72a (Vienna A23 and Suedtiroler: retaining walls stand under the rail decks, a station's platform stands by the track's own bed)
 
 
 def grade_plans(frame, cells, box, elev, load=None):
