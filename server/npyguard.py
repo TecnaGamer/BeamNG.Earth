@@ -191,6 +191,9 @@ def self_check():
         return False, f"numpy did not import with {ENV}={os.environ[ENV]!r}: {type(e).__name__}: {e}"
     if want_version is not None and want_version != numpy.__version__:
         return False, f"{FROZEN_FILE} is of numpy {want_version}, the app has {numpy.__version__}"
+    base512 = [f for f in m.__cpu_baseline__ if f.startswith(("X86_V4", "AVX512", "AVX10"))]
+    if base512:         # (a numpy built for x86-64-v4: it would not start on an AVX2 CPU at all)
+        return False, f"numpy's baseline needs AVX-512: {base512}"
     full = dispatch_names()
     if sorted(names) != sorted(full):
         return False, f"names {sorted(names)} are not numpy's AVX-512 targets outside its baseline {sorted(full)}"

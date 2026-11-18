@@ -1632,13 +1632,16 @@ class Dem:
         """Move a finished load from _inflight into the LRU (failures are dropped,
         so the next request retries instead of reusing a stale exception)."""
         with self._lock:
-            # (only the load that owns the key publishes: an urgent reload took the key over from a queued one, and
-            # the superseded one, finishing later, put an older answer, a stand-in maybe, over the newer)
-            if self._inflight.get(key) is not fut:
-                return
-            del self._inflight[key]
+            # (the load that owns the key publishes whatever it made; one an urgent reload took the key over from
+            # (superseded) publishes only a complete tile: its stand-in, finishing later, went over the newer answer,
+            # while its complete tile still replaces a stand-in the urgent one put in, _lru_put never the reverse)
+            owner = self._inflight.get(key) is fut
+            if owner:
+                del self._inflight[key]
             if not fut.cancelled() and fut.exception() is None:
-                self._lru_put(key, *fut.result())
+                a, marks = fut.result()
+                if owner or marks is None:
+                    self._lru_put(key, a, marks)
 
     def _lru_put(self, key, a, marks):
         """With self._lock held: tile key's heights a into the LRU, with marks (_load_marked's) kept beside it. A

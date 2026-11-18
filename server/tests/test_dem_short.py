@@ -187,6 +187,18 @@ class KeptStandInTest(unittest.TestCase):
             dem._finish(key, new)
             self.assertEqual(float(dem._lru[key][0, 0]), 3.0)
             self.assertNotIn(key, dem._inflight)
+            # (the reverse order: the urgent reload's stand-in first, then the superseded load's complete tile: the
+            # complete one is kept, not the stand-in for its retry window)
+            k2 = (12, 6, 7)
+            queued, urgent = Future(), Future()
+            urgent.set_result((np.zeros((T, T), np.float32), (1, 0, 0.0)))
+            queued.set_result((np.full((T, T), 4.0, np.float32), None))
+            dem._inflight[k2] = urgent
+            dem._finish(k2, urgent)
+            self.assertIn(k2, dem._lru_short)
+            dem._finish(k2, queued)
+            self.assertEqual(float(dem._lru[k2][0, 0]), 4.0)
+            self.assertNotIn(k2, dem._lru_short)
 
     def test_evicted_marks_go(self):
         with tempfile.TemporaryDirectory() as d:

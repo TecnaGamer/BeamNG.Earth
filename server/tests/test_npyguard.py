@@ -141,6 +141,21 @@ class NpyGuardTest(unittest.TestCase):
                     self.assertTrue(ok, (name, r.stdout))
                 else:
                     self.assertFalse(ok, (name, r.stdout))
+            # (a numpy built for x86-64-v4: a matching manifest of its optional targets alone still fails the check)
+            f = os.path.join(d, "right.json")
+            code = ("import sys, types; sys.frozen = True; sys.path.insert(0, %r); import npyguard; "
+                    "npyguard.FROZEN_FILE = %r; real = npyguard._umath\n"
+                    "def fake():\n"
+                    "    m = real()\n"
+                    "    return types.SimpleNamespace(__cpu_baseline__=list(m.__cpu_baseline__) + ['X86_V4'],\n"
+                    "                                 __cpu_dispatch__=m.__cpu_dispatch__, __cpu_features__=m.__cpu_features__)\n"
+                    "npyguard._umath = fake\n"
+                    "ok, msg = npyguard.self_check(); print(ok); print(msg)" % (SERVER, f))
+            r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True,
+                               env={k: v for k, v in os.environ.items() if k != npyguard.ENV})
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertEqual(r.stdout.split("\n")[0], "False", r.stdout)
+            self.assertIn("baseline needs AVX-512", r.stdout)
 
     def test_entry_points_import_it_first(self):
         """Each entry point imports npyguard (the build tools: tools/npyfirst.py, which imports it) before any module
