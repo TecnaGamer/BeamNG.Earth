@@ -125,7 +125,6 @@ pub fn osm_join<'py>(py: Python<'py>, attrs: Bound<'py, PyAny>, tags: Bound<'py,
                      oneway_yes: Vec<String>, py_way_id: Bound<'py, PyAny>, text_column: Bound<'py, PyAny>)
                      -> PyResult<Bound<'py, PyList>> {
     let refuse = |what: &str| pyo3::exceptions::PyTypeError::new_err(format!("osm_join: {what} (the R2a input contract)"));
-    let np_f64 = py.import("numpy")?.getattr("float64")?;
     let k = Contract::new(py)?;
     let attrs = attrs.cast_exact::<PyDict>().map_err(|_| refuse("attrs is no exact dict"))?.clone();
     let tags = tags.cast_exact::<PyDict>().map_err(|_| refuse("tags is no exact dict"))?.clone();
@@ -150,7 +149,7 @@ pub fn osm_join<'py>(py: Python<'py>, attrs: Bound<'py, PyAny>, tags: Bound<'py,
         Ok(match tags.get_item(w)? { Some(t) => Some(t.cast_into::<PyDict>()?), None => None })
     };
     // ids = [way_id(str(recs[i])) if recs is not None else None for i in range(n)]
-    let recs = attrs.get_item("src_record")?;
+    let recs = attrs.get_item("src_record")?.filter(|v| !v.is_none());
     let mut ids: Vec<Option<Bound<'py, PyAny>>> = Vec::with_capacity(n);
     for i in 0..n {
         ids.push(match &recs {
@@ -172,11 +171,9 @@ pub fn osm_join<'py>(py: Python<'py>, attrs: Bound<'py, PyAny>, tags: Bound<'py,
         let mut bx = [0.0; 4];
         for (j, k) in ["bx0", "by0", "bx1", "by1"].iter().enumerate() {
             let v = t.get_item(k)?.ok_or_else(|| pyo3::exceptions::PyKeyError::new_err(*k))?;
-            // an exact float or numpy.float64 (a float subclass with float's IEEE arithmetic); nothing else
-            if !(v.is_exact_instance_of::<PyFloat>() || v.get_type().is(&np_f64)) {
-                return Err(refuse("a box value is no float"));
-            }
-            bx[j] = v.cast::<PyFloat>()?.value();
+            // an exact float (osm_tags' values: Python's arithmetic of them is IEEE f64's; numpy scalars carry their
+            // own error policy, refused)
+            bx[j] = v.cast_exact::<PyFloat>().map_err(|_| refuse("a box value is no float"))?.value();
         }
         Ok(Some(bx))
     };

@@ -6,7 +6,7 @@
 //! the Python's own len() and np.array steps. Text with lone surrogates (no UTF-8) is read through Python's UTF-32
 //! encoding (surrogatepass), as numpy stores its code points.
 
-use numpy::IntoPyArray;
+use numpy::PyArrayMethods;
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyString};
 
@@ -68,17 +68,20 @@ pub fn text_column<'py>(py: Python<'py>, values: Bound<'py, PyAny>) -> PyResult<
         lens.push(match s { Some(s) => code_points(s, &mut cps)?, None => 0 });
     }
     let width = lens.iter().copied().max().unwrap_or(0).max(1);
-    let mut buf = vec![0u32; lens.len() * width];
-    let mut at = 0usize;
-    for (k, &n) in lens.iter().enumerate() {
-        buf[k * width..k * width + n].copy_from_slice(&cps[at..at + n]);
-        at += n;
-    }
-    let arr = numpy::ndarray::Array2::from_shape_vec((lens.len(), width), buf).expect("text column").into_pyarray(py);
-    let np = py.import("numpy")?;
-    let dt = np.call_method1("dtype", (format!("<U{width}"),))?;
-    // (a (n, width) uint32 buffer viewed as n "<U{width}" values, copied: an array of its own, as np.array made)
+    // np.zeros(n, "<U{width}"): numpy's own allocation (MemoryError, ValueError for a size past its limits), the array
+    // the Python's np.array made (its own data), its code points written through a uint32 view of it
     let n = lens.len();
-    let u = arr.as_any().call_method1("view", (dt,))?.call_method1("reshape", (n,))?;
-    u.call_method0("copy")
+    let np = py.import("numpy")?;
+    let out = np.call_method1("zeros", (n, format!("<U{width}")))?;
+    let view = out.call_method1("view", (np.getattr("uint32")?,))?;
+    let view = view.cast::<numpy::PyArray1<u32>>()?;
+    let mut rw = view.try_readwrite().map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+    let buf = rw.as_slice_mut()?;
+    let mut at = 0usize;
+    for (k, &m) in lens.iter().enumerate() {
+        buf[k * width..k * width + m].copy_from_slice(&cps[at..at + m]);
+        at += m;
+    }
+    drop(rw);
+    Ok(out)
 }

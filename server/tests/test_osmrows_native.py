@@ -143,6 +143,20 @@ class OsmRowsParityTest(unittest.TestCase):
         for idx in ([0.9], [0, 1.0], (np.int64(1),), "01", np.arange(4, dtype=np.int32)):
             self.assertEqual(outcome(osmtags._rows, t, idx), ("raised", TypeError), idx)
         self.assertTrue(same(osmtags._rows(t, [3, 0, -1]), ref_rows(t, [3, 0, -1])))
+
+        class Idx(np.ndarray):
+            pass
+        self.assertEqual(outcome(osmtags._rows, t, np.arange(4, dtype=np.int64).view(Idx)), ("raised", TypeError))
+        # a column of another dtype refused where it is looked up, whether or not a value of it is read
+        texts = [k[:-4] for k in t if k.endswith("_off")]
+        for c in texts:
+            u = dict(t)
+            u[c + "_ok"] = np.zeros(len(t["id"]), bool)
+            u[c + "_off"] = t[c + "_off"].astype(np.float32)
+            self.assertEqual(outcome(osmtags._rows, u, np.arange(4, dtype=np.int64)), ("raised", TypeError), c)
+            u = dict(t)
+            u[c + "_ok"] = np.zeros(len(t["id"]), np.uint8)
+            self.assertEqual(outcome(osmtags._rows, u, np.arange(4, dtype=np.int64)), ("raised", TypeError), c)
         self.assertTrue(same(osmtags._rows(t, []), ref_rows(t, [])))
 
     def test_noncanonical_bool_bytes(self):

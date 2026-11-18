@@ -138,7 +138,7 @@ def case(rng):
 def copy_layer(f):
     g = mapgeom.Features(f.layer, f.ids.copy(), f.kind.copy(), f.part_off.copy(), f.ring_off.copy(), f.coord_off.copy(),
                          f.lonlat.copy())
-    g.attrs = {k: v.copy() for k, v in f.attrs.items()}
+    g.attrs = {k: None if v is None else v.copy() for k, v in f.attrs.items()}
     return g
 
 
@@ -192,6 +192,9 @@ class OsmJoinParityTest(unittest.TestCase):
         self.assertEqual(list(g.attrs), list(f.attrs))
         for key in f.attrs:
             a, b = g.attrs[key], f.attrs[key]
+            if b is None:
+                self.assertIsNone(a, key)
+                continue
             self.assertEqual((a.dtype, a.shape, a.tobytes()), (b.dtype, b.shape, b.tobytes()), key)
 
     def test_lone_surrogates(self):
@@ -223,6 +226,16 @@ class OsmJoinParityTest(unittest.TestCase):
                     t["name"] = "Main St"
             self.check_same(f, tags)
 
+    def test_none_columns(self):
+        """A src_record / name column present as None reads as no column (the Python's attrs.get)."""
+        rng = random.Random(9)
+        for k in range(300):
+            f, tags = case(rng)
+            for c in ("src_record", "name"):
+                if rng.random() < 0.5:
+                    f.attrs[c] = None
+            self.check_same(f, tags)
+
     def test_contract(self):
         f, tags = case(random.Random(3))
 
@@ -230,7 +243,8 @@ class OsmJoinParityTest(unittest.TestCase):
             pass
         box = dict(name="Main St", bx0=0.0, by0=0.0, bx1=1.0, by1=1.0)
         for bad in ({1: D(lanes=2)}, {"1": {"lanes": 2}}, {1: {"lanes": [2]}}, {1: dict(box, bx0="0")},
-                    {1: dict(box, by1=1)}, {1: dict(box, bx1=np.float32(1.0))}):
+                    {1: dict(box, by1=1)}, {1: dict(box, bx1=np.float32(1.0))},
+                    {1: dict(box, bx0=np.float64(0.0))}):
             with mock.patch.object(roadlanes, "join", lambda *a: None):
                 self.assertEqual(outcome(osmtags.join, copy_layer(f), bad), ("raised", TypeError), bad)
 

@@ -112,11 +112,33 @@ fn slice_bounds(n: usize, a: i64, b: i64) -> (usize, usize) {
     (a as usize, if b > a { b as usize } else { a as usize })
 }
 
-/// t[key] looked up at its first use (KeyError where it is missing), kept.
-fn fetch<'py>(t: &Bound<'py, PyDict>, cols: &mut BTreeMap<String, Col<'py>>, key: &str) -> PyResult<()> {
+/// What a column holds (the contract's dtype of it).
+#[derive(Clone, Copy)]
+enum Role {
+    /// a text column's offsets: int32 / int64
+    Off,
+    /// race, bus, a text column's _ok: bool
+    Flag,
+    /// a text column's UTF-8: uint8
+    Bytes,
+    /// id, frn: int64
+    Int64,
+    /// a number column: float32 / float64
+    Num,
+}
+
+/// t[key] looked up at its first use (KeyError where it is missing), its dtype checked against its role there
+/// (TypeError, whether or not a value of it is read later), kept.
+fn fetch<'py>(t: &Bound<'py, PyDict>, cols: &mut BTreeMap<String, Col<'py>>, key: &str, role: Role) -> PyResult<()> {
     if !cols.contains_key(key) {
         let v = t.get_item(key)?.ok_or_else(|| pyo3::exceptions::PyKeyError::new_err(key.to_owned()))?;
         let c = Col::of(&v, key)?;
+        let fits = matches!((role, &c), (Role::Off, Col::I32(_) | Col::I64(_)) | (Role::Flag, Col::Bool(_))
+            | (Role::Bytes, Col::U8(_)) | (Role::Int64, Col::I64(_)) | (Role::Num, Col::F32(_) | Col::F64(_)));
+        if !fits {
+            return Err(pyo3::exceptions::PyTypeError::new_err(format!(
+                "osm_rows: the column {key:?} is of another dtype than the row group contract's")));
+        }
         cols.insert(key.to_owned(), c);
     }
     Ok(())
@@ -127,8 +149,12 @@ fn fetch<'py>(t: &Bound<'py, PyDict>, cols: &mut BTreeMap<String, Col<'py>>, key
 /// float, None for NaN, int() of it for an INT_COLUMNS one. The columns read as the Python read them (each key looked up
 /// at its first use: a missing one KeyError there).
 #[pyfunction]
-pub fn osm_rows<'py>(py: Python<'py>, t: Bound<'py, PyAny>, idx: CArr1<'py, i64>, names: Vec<String>,
+pub fn osm_rows<'py>(py: Python<'py>, t: Bound<'py, PyAny>, idx: Bound<'py, PyAny>, names: Vec<String>,
                      text: Vec<String>, ints: Vec<String>) -> PyResult<Bound<'py, PyList>> {
+    if !idx.get_type().is(&py.import("numpy")?.getattr("ndarray")?) {
+        return Err(pyo3::exceptions::PyTypeError::new_err("osm_rows: idx is no exact int64 ndarray (the contract)"));
+    }
+    let idx: CArr1<'py, i64> = idx.extract()?;
     let t = t.cast_exact::<PyDict>().map_err(|_| pyo3::exceptions::PyTypeError::new_err(
         "osm_rows: the row group is no exact dict (the contract)"))?.clone();
     let mut cols: BTreeMap<String, Col<'py>> = BTreeMap::new();
@@ -141,10 +167,10 @@ pub fn osm_rows<'py>(py: Python<'py>, t: Bound<'py, PyAny>, idx: CArr1<'py, i64>
             if is_text[j] {
                 let off = format!("{c}_off");
                 let ok = format!("{c}_ok");
-                fetch(&t, &mut cols, &off)?;
-                fetch(&t, &mut cols, &ok)?;
+                fetch(&t, &mut cols, &off, Role::Off)?;
+                fetch(&t, &mut cols, &ok, Role::Flag)?;
                 if cols[&ok].flag(i)? {
-                    fetch(&t, &mut cols, c)?;
+                    fetch(&t, &mut cols, c, Role::Bytes)?;
                     let o = &cols[&off];
                     let (a, b) = (o.int(i)?, o.int(i.wrapping_add(1))?);
                     let Col::U8(data) = &cols[c] else {
@@ -162,7 +188,7 @@ pub fn osm_rows<'py>(py: Python<'py>, t: Bound<'py, PyAny>, idx: CArr1<'py, i64>
                     vals.push(py.None().into_bound(py));
                 }
             } else {
-                fetch(&t, &mut cols, c)?;
+                fetch(&t, &mut cols, c, Role::Num)?;
                 let v = cols[c].float(i)?;
                 if v.is_nan() {
                     vals.push(py.None().into_bound(py));
@@ -181,13 +207,13 @@ pub fn osm_rows<'py>(py: Python<'py>, t: Bound<'py, PyAny>, idx: CArr1<'py, i64>
         // (int(t["id"][i]), bool(t["race"][i]), bool(t["bus"][i]), int(t["frn"][i]), *vals): each looked up and read
         // in turn
         let mut row: Vec<Bound<'py, PyAny>> = Vec::with_capacity(names.len() + 4);
-        fetch(&t, &mut cols, "id")?;
+        fetch(&t, &mut cols, "id", Role::Int64)?;
         row.push(cols["id"].int64(i)?.into_pyobject(py)?.into_any());
-        fetch(&t, &mut cols, "race")?;
+        fetch(&t, &mut cols, "race", Role::Flag)?;
         row.push(pyo3::types::PyBool::new(py, cols["race"].flag(i)?).to_owned().into_any());
-        fetch(&t, &mut cols, "bus")?;
+        fetch(&t, &mut cols, "bus", Role::Flag)?;
         row.push(pyo3::types::PyBool::new(py, cols["bus"].flag(i)?).to_owned().into_any());
-        fetch(&t, &mut cols, "frn")?;
+        fetch(&t, &mut cols, "frn", Role::Int64)?;
         row.push(cols["frn"].int64(i)?.into_pyobject(py)?.into_any());
         row.extend(vals);
         out.append(PyTuple::new(py, row)?)?;
