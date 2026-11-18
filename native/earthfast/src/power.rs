@@ -124,9 +124,10 @@ pub fn power_off_roads(py: Python<'_>, roads: PyReadonlyArray2<'_, f64>, ends: P
     Ok((best[0], best[1]))
 }
 
-/// m round a gantry's centre (along the line and across it) that must be inside the yard: an anchored kit part's
-/// (substation_yard's ANCHOR_PART_M)
-const GANTRY_FOOT_M: f64 = ANCHOR_PART_M;
+/// m: a gantry's footprint round its origin, across the line (its truss, 8 m) and along it (its legs): West Coast
+/// USA's substation_truss, read 2026-11-18 (x -4 .. 4, y -2.87 .. 2.87; its busbars run on along -y over the kit)
+const GANTRY_HALF_W: f64 = 4.0;
+const GANTRY_HALF_D: f64 = 2.87;
 /// m: the farthest a line end moves (across the line, and into the yard along it) to get its gantries inside
 const END_SHIFT_MAX_M: f64 = 12.0;
 const END_SHIFT_STEP_M: f64 = 0.5;
@@ -138,6 +139,30 @@ fn kit_part(ex: f64, ey: f64, hd: f64, anchor_at: [f64; 2], lx: f64, ly: f64) ->
     let kx = (ky.1, -ky.0);
     let (cx, cy) = (ex - anchor_at[0] * kx.0 - anchor_at[1] * ky.0, ey - anchor_at[0] * kx.1 - anchor_at[1] * ky.1);
     (cx + lx * kx.0 - ly * kx.1, cy + lx * kx.1 + ly * kx.0)
+}
+
+/// Do segments a-b and c-d cross (touching counts)?
+fn segments_cross(a: (f64, f64), b: (f64, f64), c: (f64, f64), d: (f64, f64)) -> bool {
+    let side = |p: (f64, f64), q: (f64, f64), r: (f64, f64)| (q.0 - p.0) * (r.1 - p.1) - (q.1 - p.1) * (r.0 - p.0);
+    // (a touch or a collinear edge counts: the footprint is then not clear of the ring)
+    side(c, d, a) * side(c, d, b) <= 0.0 && side(a, b, c) * side(a, b, d) <= 0.0
+}
+
+/// Does a gantry of the kit anchored at a line end (its place lx, ly in the kit's frame) stand with its whole footprint
+/// (GANTRY_HALF_W across, GANTRY_HALF_D along) inside the rings: its corners inside, no ring edge across its outline
+/// (an outline wall, a hole: Codex's review of 0cf9fd9b, the centre and four points 1 m off missed both)?
+fn gantry_fits(rings: &[Vec<(f64, f64)>], ex: f64, ey: f64, hd: f64, anchor_at: [f64; 2], lx: f64, ly: f64) -> bool {
+    let c: Vec<(f64, f64)> = [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)].iter()
+        .map(|&(a, b)| kit_part(ex, ey, hd, anchor_at, lx + a * GANTRY_HALF_W, ly + b * GANTRY_HALF_D)).collect();
+    if !c.iter().all(|&(x, y)| in_rings(rings, x, y)) {
+        return false;
+    }
+    !rings.iter().any(|r| {
+        (0..r.len()).any(|i| {
+            let (p, q) = (r[i], r[(i + 1) % r.len()]);
+            (0..4).any(|k| segments_cross(p, q, c[k], c[(k + 1) % 4]))
+        })
+    })
 }
 
 /// Do a kit part's place and the four points m along the kit's axes round it lie inside the rings?
@@ -152,7 +177,7 @@ fn part_fits(rings: &[Vec<(f64, f64)>], ex: f64, ey: f64, hd: f64, anchor_at: [f
 
 /// A line end at (x, y) heading w into its substation (yard: that one yard's rings, even-odd; None: in no yard):
 /// Some((x, y)) itself when its gantries (gantries: their places in the kit's frame, the kit anchored at the end at
-/// anchor_at) stand with GANTRY_FOOT_M round them inside the yard (as substation_yard tests its anchored parts), or
+/// anchor_at) stand with their whole footprints inside the yard (gantry_fits), or
 /// when it is in no yard; else the nearest end (moved across the line or into the yard along it, END_SHIFT_STEP_M
 /// steps, END_SHIFT_MAX_M at most; nearest first, then across before along, left before right) that is itself in the
 /// same yard (substation_yard anchors only those: not in a hole, not in the next yard) with both gantries in it; None
@@ -165,8 +190,7 @@ fn gantries_inside(yard: Option<&[Vec<(f64, f64)>]>, x: f64, y: f64, w: f64, anc
         _ => return Some((x, y)),
     };
     let fits = |ex: f64, ey: f64| {
-        in_rings(yard, ex, ey)
-            && gantries.iter().all(|g| part_fits(yard, ex, ey, w, anchor_at, g[0], g[1], GANTRY_FOOT_M))
+        in_rings(yard, ex, ey) && gantries.iter().all(|g| gantry_fits(yard, ex, ey, w, anchor_at, g[0], g[1]))
     };
     if fits(x, y) {
         return Some((x, y));
@@ -282,7 +306,9 @@ pub fn power_line_layout<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, 
         let (i0, i1) = (off[l] as usize, off[l + 1] as usize);
         for i in i0..i1 {
             let p = [pts[[i, 0]], pts[[i, 1]], pts[[i, 2]]];
-            let edge = (i > i0 && stop[i] != stop[i - 1]) || (i + 1 < i1 && stop[i] != stop[i + 1]);
+            // (only with the yards given: BNE_POWER_YARDS; without, every vertex as before)
+            let edge = !yards.is_empty()
+                && ((i > i0 && stop[i] != stop[i - 1]) || (i + 1 < i1 && stop[i] != stop[i + 1]));
             if let Some(q) = v.last() {
                 if !edge && (p[0] - q[0]).dhypot(p[1] - q[1]) < min_span {
                     continue;
@@ -536,8 +562,10 @@ pub fn substation_yard<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, ri
             let (cx, cy) = (an[[e, 0]] - anchor_at[0] * kx.0 - anchor_at[1] * ky.0,
                             an[[e, 1]] - anchor_at[0] * kx.1 - anchor_at[1] * ky.1);
             let yaw = kx.1.datan2(kx.0).to_degrees().rem_euclid(360.0);
-            // (the ground under its left and right gantries, as the conductors hang there: power_line_layout's ends)
-            let (zl, zr) = if an.ncols() >= 5 { (an[[e, 3]], an[[e, 4]]) } else { (f64::NAN, f64::NAN) };
+            // (the ground under its left and right gantries, as the conductors hang there: power_line_layout's ends;
+            // anchors (a, 3): every part of the kit, as before BNE_POWER_YARDS)
+            let clip = an.ncols() >= 5;
+            let (zl, zr) = if clip { (an[[e, 3]], an[[e, 4]]) } else { (f64::NAN, f64::NAN) };
             for p in 0..parts.nrows() {
                 if parts[[p, 0]] as usize != anchor_kit {
                     continue;
@@ -546,7 +574,7 @@ pub fn substation_yard<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, ri
                 let on_line = (ly - anchor_at[1]).abs() <= ANCHOR_LINE_M;
                 let fits = part_fits(&rings, an[[e, 0]], an[[e, 1]], hd, anchor_at, lx, ly, ANCHOR_PART_M);
                 let (x, y) = kit_part(an[[e, 0]], an[[e, 1]], hd, anchor_at, lx, ly);
-                if (on_line || fits) && inside(x, y) {
+                if (!clip || on_line || fits) && inside(x, y) {
                     let z = if !on_line { f64::NAN } else if lx < anchor_at[0] { zl } else { zr };
                     out.extend_from_slice(&[parts[[p, 1]], x, y, yaw, z]);
                 }

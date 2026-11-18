@@ -8,6 +8,7 @@ West Coast USA's switchgear (its yard's parts as a kit, a smaller one where it d
 The layouts in Rust (earthfast.power_line_layout, earthfast.substation_yard).
 """
 import logging
+import os
 
 import numpy as np
 
@@ -24,6 +25,12 @@ G_PYLON = "pylon"
 # nodes, OpenStreetMap power=pole / power=tower points: Overture power_pole / power_tower) are mostly poles: a 115 kV
 # line across the plains on wooden poles was drawn as steel lattice (PR #919 by wyo-backroads, Warren AFB).
 HV_MIN_V = 100000.0
+# The substations' yards kept to their fences (BNE_POWER_YARDS=on, the Revamped roads setting; the user's report 95,
+# 2026-11-17, and Codex's reviews of its fix): a line-end kit only where it stands inside its yard, its gantries moved
+# in with their whole footprints (the end and its conductors with them, none where they fit nowhere), each gantry's
+# ground read once for its conductors and its row, the lines ending in every yard read laid out in every tile drawing
+# a span into it, each span carrying the supports at its ends across tiles (racedig). Off: as before, byte for byte.
+YARDS_ON = os.environ.get("BNE_POWER_YARDS", "off") == "on"
 G_POLE = "hvpole"           # the game's own wooden power pole (art/shapes/common/power_lines_procedural, trees.lua)
 POLE_SHAPE_H = 9.96         # m: its height as modelled ...
 POLE_H = 16.0               # ... drawn this tall (a sub-transmission pole is 15-25 m; the stock one is a 10 m one)
@@ -265,15 +272,21 @@ def on_poles(rings, pole_keys, tower_keys):
 
 
 def _yard_cells(frame, rings):
-    """The map cells a yard's rings (frame xy) reach."""
+    """The map cells a yard's rings (frame xy) reach ([] when its box cannot be had: logged)."""
     import mapcells
     xy = np.concatenate([np.asarray(r, np.float64)[:, :2] for r in rings])
     la, lo, _ = frame.enu_to_geodetic(xy[:, 0], xy[:, 1], np.zeros(len(xy)))
     la, lo = np.asarray(la, np.float64), np.asarray(lo, np.float64)
-    mid = float(lo.mean())
-    rel = (lo - mid + 180.0) % 360.0 - 180.0         # (wrapped round its middle: a yard on the antimeridian)
-    west, east = ((mid + float(v) + 180.0) % 360.0 - 180.0 for v in (rel.min(), rel.max()))
-    return mapcells.cells_for_bbox(float(la.min()), west, float(la.max()), east)
+    # (its longitudes unwrapped round one of its own vertices, not their mean: a yard across +-180 deg had a mean near
+    # 0 and a box round the world; Codex's review of 0cf9fd9b)
+    ref = float(lo[0])
+    rel = (lo - ref + 180.0) % 360.0 - 180.0
+    west, east = ((ref + float(v) + 180.0) % 360.0 - 180.0 for v in (rel.min(), rel.max()))
+    try:
+        return mapcells.cells_for_bbox(float(la.min()), west, float(la.max()), east)
+    except ValueError as ex:
+        log.warning("power lines: a yard's cells left out: %s", ex)
+        return []
 
 
 def _feeders(frame, md, subs, layers, cells, seen, lines, poles):
@@ -303,13 +316,17 @@ def _feeders(frame, md, subs, layers, cells, seen, lines, poles):
             t = str(tags[i]) if tags is not None else ""
             if fid in seen or any(u in t for u in UNDERGROUND):
                 continue
+            rings = [r for part in f.parts(i) for r in part if len(r)]
+            pole = low_voltage(t) or bool(rings and on_poles(rings, pole_keys, tower_keys))
             runs = []
             for part in f.parts(i):
                 for ring in part:
                     ring = np.asarray(ring, np.float64)
                     if len(ring) < 2:
                         continue
-                    e, n, _ = frame.geodetic_to_enu(ring[:, 1], ring[:, 0], np.zeros(len(ring)))
+                    # (its vertices where the layout stands them: the yards it ends in read alike in every tile;
+                    # Codex's review of 0cf9fd9b: the raw mapped points disagreed with the moved ones)
+                    e, n = _placed(frame, md, ring, POLE_ROAD_CLEAR_M if pole else TOWER_ROAD_CLEAR_M, (0, 0, 0, 0))
                     xy = np.column_stack([np.asarray(e, np.float64), np.asarray(n, np.float64)])
                     here = np.zeros(len(ring), bool)
                     for paths in yards:
@@ -336,9 +353,7 @@ def _feeders(frame, md, subs, layers, cells, seen, lines, poles):
             if not runs:
                 continue
             seen.add(fid)
-            rings = [r for part in f.parts(i) for r in part if len(r)]
-            into = poles if low_voltage(t) or (rings and on_poles(rings, pole_keys, tower_keys)) else lines
-            into += [(fid, r) for r in runs]
+            (poles if pole else lines).extend((fid, r) for r in runs)
 
 
 def _tile_lines(frame, tx, ty, md, elev, props, wires, clearance):
@@ -373,11 +388,15 @@ def _tile_lines(frame, tx, ty, md, elev, props, wires, clearance):
                         into += [(fid, r) for r in _near(frame, np.asarray(ring, np.float64), (x0, y0, x1, y1))]
     # (the substations of the cells round the tile and of every cell a laid-out line vertex is in: a span drawn here
     # may end at a yard 1 km off, beyond the cells round the tile; Codex's review of 9618c426)
-    import mapcells
-    reach = {mapcells.cell_of(float(q[1]), float(q[0])) for _, r in lines + poles for q in np.asarray(r, np.float64)}
-    subs = _substations(frame, list(cells) + sorted(reach - set(cells), key=str), md)
-    _feeders(frame, md, subs, layers, cells, seen, lines, poles)
-    fast.require(437, "power_line_layout")
+    if YARDS_ON:
+        import mapcells
+        reach = {mapcells.cell_of(float(q[1]), float(q[0])) for _, r in lines + poles
+                 for q in np.asarray(r, np.float64)}
+        subs = _substations(frame, list(cells) + sorted(reach - set(cells), key=str), md)
+        _feeders(frame, md, subs, layers, cells, seen, lines, poles)
+    else:
+        subs = _substations(frame, cells, md)
+    fast.require(438, "power_line_layout")
     ends = np.zeros((0, 7))
     for group, h, arms, clear_m, wire_r, these in ((G_PYLON, PYLON_H, ARMS, TOWER_ROAD_CLEAR_M, WIRE_R, lines),
                                                   (G_POLE, POLE_H, POLE_ARMS, POLE_ROAD_CLEAR_M, POLE_WIRE_R, poles)):
@@ -386,6 +405,24 @@ def _tile_lines(frame, tx, ty, md, elev, props, wires, clearance):
         if len(got):
             ends = np.vstack([ends, got])
     _yards(frame, elev, subs, ends, (x0, y0, x1, y1), props)
+
+
+def _placed(frame, md, ll, clear_m, box):
+    """(e, n): the frame places of line vertices ll (lon/lat) as laid out: moved off the roads (_off_roads, each vertex
+    alike in every tile) and out of the bus stations' ground. BNE_POWER_YARDS: the stations round the vertices
+    themselves, so a vertex stands at one place whichever tile asks (the yards' membership read from it: _feeders);
+    else those round the tile's box (as before)."""
+    e, n, _ = frame.geodetic_to_enu(ll[:, 1], ll[:, 0], np.zeros(len(ll)))
+    e, n = _off_roads(frame, md, np.asarray(e, np.float64), np.asarray(n, np.float64), ll, clear_m)
+    import busstationkeep
+    x0, y0, x1, y1 = box
+    if YARDS_ON and len(e):
+        x0, y0, x1, y1 = float(e.min()), float(n.min()), float(e.max()), float(n.max())
+    keep = busstationkeep.keepout(md, frame, (x0 - 200.0, y0 - 200.0, x1 + 200.0, y1 + 200.0))
+    if keep:                                # (a bus station's ground: no pole on its platforms or in its yard)
+        xy = keep.push_out(np.column_stack((e, n)))
+        e, n = xy[:, 0], xy[:, 1]
+    return e, n
 
 
 def _lay(frame, md, elev, subs, lines, group, h, arms, clear_m, wire_r, box, props, wires, clearance):
@@ -397,13 +434,7 @@ def _lay(frame, md, elev, subs, lines, group, h, arms, clear_m, wire_r, box, pro
     if lines:
         lines.sort(key=lambda q: q[0])          # (the same order in every tile: shared towers decided alike)
         ll = np.concatenate([r for _, r in lines])
-        e, n, _ = frame.geodetic_to_enu(ll[:, 1], ll[:, 0], np.zeros(len(ll)))
-        e, n = _off_roads(frame, md, np.asarray(e, np.float64), np.asarray(n, np.float64), ll, clear_m)
-        import busstationkeep
-        keep = busstationkeep.keepout(md, frame, (x0 - 200.0, y0 - 200.0, x1 + 200.0, y1 + 200.0))
-        if keep:                                # (a bus station's ground: no pole on its platforms or in its yard)
-            xy = keep.push_out(np.column_stack((e, n)))
-            e, n = xy[:, 0], xy[:, 1]
+        e, n = _placed(frame, md, ll, clear_m, box)
         la2, lo2, _ = frame.enu_to_geodetic(e, n, np.zeros(len(e)))
         la2, lo2 = np.asarray(la2, np.float64), np.asarray(lo2, np.float64)
         _, _, z = frame.geodetic_to_enu(la2, lo2, np.asarray(elev(la2, lo2), np.float64))
@@ -415,18 +446,23 @@ def _lay(frame, md, elev, subs, lines, group, h, arms, clear_m, wire_r, box, pro
             for ring in rings:
                 here ^= Path(ring).contains_points(pts[:, :2])
             stop |= here
-        rings = [np.asarray(r, np.float64)[:, :2] for _, rs in subs for r in rs]
-        yard_id = np.array([k for k, (_, rs) in enumerate(subs) for _ in rs], np.int64)    # (each substation a yard)
+        # (the yards for the gantries' fit: BNE_POWER_YARDS; none: every end where it is mapped, as before)
+        rings = [np.asarray(r, np.float64)[:, :2] for _, rs in subs for r in rs] if YARDS_ON else []
+        yard_id = np.array([k for k, (_, rs) in enumerate(subs) for _ in rs] if YARDS_ON else [], np.int64)
         yard_pts = np.ascontiguousarray(np.concatenate(rings) if rings else np.zeros((0, 2)), np.float64)
         yard_off = np.cumsum([0] + [len(r) for r in rings]).astype(np.int64)
         towers, ends, wp, wo, sup = fast._ef.power_line_layout(
             pts, off, stop, arms, SAG, SEG_M, MIN_SPAN_M, MAX_SPAN_M, DEDUPE_M, END_MERGE_M, GANTRY_FRONT,
-            [x0, y0, x1, y1], yard_pts, yard_off, yard_id, list(ANCHOR_AT), GANTRIES, ground_at(frame, elev))
+            [x0, y0, x1, y1], yard_pts, yard_off, yard_id, list(ANCHOR_AT), GANTRIES,
+            ground_at(frame, elev) if YARDS_ON else None)
         for x, y, zz, yaw in towers:
             row = tower_row(group, h, x, y, zz, yaw)
             if clearance is None or clearance.clear(row):
                 props.append(row)
-        wires.extend(span_wires(wp, wo, sup, group, h, wire_r))
+        if YARDS_ON:
+            wires.extend(span_wires(wp, wo, sup, group, h, wire_r))
+        else:
+            wires.extend((np.asarray(wp[a:b]), wire_r) for a, b in zip(wo[:-1], wo[1:]))
     return np.asarray(ends, np.float64).reshape(-1, 7)
 
 
@@ -479,9 +515,17 @@ def _yards(frame, elev, subs, ends, box, props):
     for k, (_, rings) in enumerate(subs):
         rp = np.ascontiguousarray(np.concatenate(rings), np.float64)
         ro = np.cumsum([0] + [len(r) for r in rings]).astype(np.int64)
-        # (each end in the yard layout chose for it: overlapping yards anchored one end twice)
-        here = np.asarray(ends[:, 6], np.float64) == k if len(ends) else np.zeros(0, bool)
-        anchors = np.ascontiguousarray(ends[here][:, [0, 1, 3, 4, 5]], np.float64).reshape(-1, 5)
+        if YARDS_ON:
+            # (each end in the yard layout chose for it: overlapping yards anchored one end twice)
+            here = np.asarray(ends[:, 6], np.float64) == k if len(ends) else np.zeros(0, bool)
+            anchors = np.ascontiguousarray(ends[here][:, [0, 1, 3, 4, 5]], np.float64).reshape(-1, 5)
+        else:                           # (as before: every end in the yard, its whole kit)
+            from polygon import Path
+            here = np.zeros(len(ends), bool)
+            if len(ends):
+                for ring in rings:
+                    here ^= Path(ring).contains_points(ends[:, :2])
+            anchors = np.ascontiguousarray(ends[here][:, [0, 1, 3]], np.float64).reshape(-1, 3)
         got, fence = fast._ef.substation_yard(rp, ro, kits, parts, YARD_GAP, anchors, 0, list(ANCHOR_AT),
                                               YARD_MAX_KITS, FENCE_LEN, [x0, y0, x1, y1])
         rows += [(groups[int(g)], x, y, yaw, PARTS[groups[int(g)]], gz) for g, x, y, yaw, gz in got]

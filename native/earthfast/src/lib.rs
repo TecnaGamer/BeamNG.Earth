@@ -6621,6 +6621,8 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 435: power_line_layout's ends carry their yard's id (e, 7): each anchored in its own yard only
     // 436: power_line_layout's wire supports give a line end's gantry row (kind 2: its place, ground, yaw)
     // 437: power_line_layout keeps the vertices either side of a yard's edge (start-independent line ends)
-    m.add("VERSION", 437)?;
+    // 438: BNE_POWER_YARDS: power_line_layout keeps yard-edge vertices only with yards given; a gantry fits with
+    // its whole footprint; substation_yard clips an anchored kit only with anchors (a, 5)
+    m.add("VERSION", 438)?;
     Ok(())
 }

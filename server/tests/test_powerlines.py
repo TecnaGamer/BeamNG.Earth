@@ -6,6 +6,7 @@ yard filled with the largest kit that fits, inside it and clear of the anchored 
 the fence along the whole edge."""
 import sys
 import unittest
+from unittest import mock
 from pathlib import Path
 
 import numpy as np
@@ -17,6 +18,8 @@ import powerlines  # noqa: E402
 from power_reference import margin as road_margin  # noqa: E402
 
 BOX = [-1e4, -1e4, 1e4, 1e4]
+# (the yards kept to their fences: BNE_POWER_YARDS; its tests run with it on)
+yards_on = mock.patch.object(powerlines, "YARDS_ON", True)
 
 
 def layout(lines, stop=None, yards=(), ground=None, box=BOX, full=False, yard_id=None):
@@ -106,7 +109,8 @@ class LineTest(unittest.TestCase):
         for side in (-1.0, 1.0):                        # both gantries (across the line) 1 m inside every fence
             gx, gy = ex - np.sin(w) * g * side, ey + np.cos(w) * g * side
             self.assertTrue(1.0 <= gx <= 59.0 and -29.0 <= gy <= 2.0, (gx, gy))
-        self.assertTrue(np.allclose([ex, ey], [20.0, -4.0]), (ex, ey))     # (the nearest end that fits: 4 m in)
+        # (the nearest end that fits: the north gantry's 8 m truss 1 m inside the fence, 7 m in)
+        self.assertTrue(np.allclose([ex, ey], [20.0, -7.0]), (ex, ey))
         last = np.array([wp[b - 1] for b in wo[1:]])
         last = last[last[:, 0] > 0.0]                   # (the spans into the yard)
         self.assertEqual(len(last), len(powerlines.ARMS))
@@ -143,6 +147,7 @@ class LineTest(unittest.TestCase):
         racedig.clear_props(rows2, [], band, flat)
         self.assertNotIn(100.0, [r[1] for r in rows2])
 
+    @yards_on
     def test_a_span_goes_with_its_culled_gantry(self):
         # Codex's review of 119bb4d7: a conductor's end at a gantry carried no support row, so a raceway band that culls
         # the yard's gantry (in the yard's tile) but misses the conductor's end left it hanging in the span's tile
@@ -202,13 +207,15 @@ class LineTest(unittest.TestCase):
         across = np.array([[40, 200, 0], [40, 100, 0], [40, 5, 0]], np.float64)
         _, ends, wp, wo = layout([along, across], [False, False, True, False, False, True], yards=[narrow])
         self.assertEqual(len(ends), 1)
-        self.assertTrue(np.allclose(ends[0][:2], [40.0, 5.0]), ends)
+        self.assertEqual(ends[0][0], 40.0)
+        self.assertTrue(-6.5 < ends[0][1] <= 5.0, ends)                       # (in along its line: the legs inside)
         last = np.array([wp[b - 1] for b in wo[1:]])
-        self.assertEqual(int((np.abs(last[:, 1] - (5.0 + powerlines.GANTRY_FRONT)) < 1e-6).sum()),
+        self.assertEqual(int((np.abs(last[:, 1] - (ends[0][1] + powerlines.GANTRY_FRONT)) < 1e-6).sum()),
                          len(powerlines.ARMS))                               # its conductors on its gantries
         # (the first line: no span into the yard, it ends at its last tower)
-        self.assertFalse(any(0.0 < p[0] < 35.0 and abs(p[1]) < 6.5 for p in last))
+        self.assertFalse(any(abs(p[0] - (30.0 - powerlines.GANTRY_FRONT)) < 0.5 for p in last))
 
+    @yards_on
     def test_overlapping_yards_anchor_an_end_once(self):
         # Codex's review of 9618c426: two overlapping yard polygons both holding an end anchored its kit in each (two
         # coincident gantry pairs; the second's gantries past its own fence). The end carries its yard: anchored once
@@ -228,9 +235,9 @@ class LineTest(unittest.TestCase):
         # sit in a hole of its yard (the yard's kit skips an anchor there) or straddle two adjacent yards
         line = np.array([[-200, 3, 0], [-100, 3, 0], [30, 3, 0]], np.float64)
         stop = [False, False, True]
-        # a yard 15.8 m across with a strip hole 2.4 m wide along its middle: the gantries fit only with the end in
-        # the hole
-        outer, hole = square(0, -7.9, 60, 15.8), square(5, -1.2, 50, 2.4)
+        # a yard 24 m across with a strip hole 3 m wide along its middle: the gantries' trusses (8 m) fit only with the
+        # end in the hole
+        outer, hole = square(0, -12, 60, 24), square(5, -1.5, 50, 3)
         _, ends, wp, wo = layout([line], stop, yards=[outer, hole], yard_id=[0, 0])
         self.assertEqual(len(ends), 0, ends)
         self.assertFalse(any(p[0] > 0.0 for p in (wp[b - 1] for b in wo[1:])))
@@ -239,8 +246,30 @@ class LineTest(unittest.TestCase):
         line0 = np.array([[-200, 0, 0], [-100, 0, 0], [30, 0, 0]], np.float64)
         _, ends, _, _ = layout([line0], stop, yards=[a, b], yard_id=[0, 1])
         self.assertEqual(len(ends), 0, ends)
-        _, ends, _, _ = layout([line0], stop, yards=[a, b], yard_id=[0, 0])      # (one yard of both: it fits)
-        self.assertEqual(len(ends), 1)
+
+    def test_a_gantrys_whole_truss_inside_a_narrow_yard(self):
+        # Codex's review of 0cf9fd9b: the fit tested each gantry's centre and four points 1 m off, but its truss is 8 m
+        # across: in an 18 m wide yard both centres (5.8 m either side of the end) passed while the trusses stood out
+        narrow = square(0, -9, 60, 18)
+        line = np.array([[-200, 0, 0], [-100, 0, 0], [30, 0, 0]], np.float64)
+        _, ends, _, _ = layout([line], [False, False, True], yards=[narrow])
+        self.assertEqual(len(ends), 0, ends)                                   # (5.8 + 4 > 9: nowhere)
+        _, ends, _, _ = layout([line], [False, False, True], yards=[square(0, -11, 60, 22)])
+        self.assertEqual(len(ends), 1)                                         # (22 m: it fits)
+
+    def test_a_yard_across_the_antimeridian(self):
+        # Codex's review of 0cf9fd9b: a yard straddling +-180 deg was unwrapped round its mean longitude (near 0): a
+        # box round the world, cells_for_bbox's ValueError uncaught. Unwrapped round one of its vertices now; a box
+        # that is still refused is logged and its cells left out
+        import geodesy
+        frame = geodesy.EnuFrame(10.0, 179.9997)
+        ring = square(-20, -20, 80, 40)                 # (to about 40 m east of the antimeridian)
+        la, lo, _ = frame.enu_to_geodetic(ring[:, 0], ring[:, 1], np.zeros(len(ring)))
+        self.assertTrue(np.any(np.asarray(lo) < 0) and np.any(np.asarray(lo) > 0))
+        cells = powerlines._yard_cells(frame, [ring])
+        self.assertTrue(0 < len(cells) <= 4, cells)
+        self.assertEqual({k.x for k in cells}, {0, (1 << cells[0].z) - 1})
+        self.assertEqual(powerlines._yard_cells(frame, [square(-4e5, -4e5, 8e5, 8e5)]), [])   # (refused: logged)
 
     def test_moved_gantries_on_sloping_ground(self):
         # Codex's review of 7bafc807: a moved end's conductors hung at the old end's ground while the yard stood its
@@ -255,7 +284,7 @@ class LineTest(unittest.TestCase):
         _, ends, wp, wo, _ = layout([line], [False, False, True, True], yards=[yard_ring], ground=ground, full=True)
         self.assertEqual(len(ends), 1)
         ex, ey, ez, w, zl, zr = ends[0][:6]
-        self.assertTrue(np.allclose([ex, ey], [20.0, -4.0]))               # (moved: the north gantry inside)
+        self.assertTrue(np.allclose([ex, ey], [20.0, -7.0]))               # (moved: the north gantry inside)
         self.assertEqual(len(asked), 2)
         got, _ = yard_full([yard_ring], anchors=ends[:, [0, 1, 3, 4, 5]])
         gantries = sorted((x, y, z) for g, x, y, yaw, z in got if g == "gantry" and np.isfinite(z))
@@ -330,7 +359,7 @@ class YardTest(unittest.TestCase):
         # just inside it, heading -y: the 38 m kit ran out past the fence; only its parts inside stay, and the gantries
         # the conductors end on
         ring = square(0, 0, 52, 25)
-        got, _ = yard([ring], anchors=[[6.0, 21.0, -np.pi / 2]])
+        got, _ = yard([ring], anchors=[[6.0, 21.0, -np.pi / 2, np.nan, np.nan]])     # (BNE_POWER_YARDS' anchors)
         gantries = [(x, y) for g, x, y, _ in got if g == "gantry"]
         near = [q for q in gantries if abs(q[1] - 21.0) < 1.0]
         self.assertEqual(len(near), 2, gantries)
@@ -504,7 +533,7 @@ class TowerFootprintTest(unittest.TestCase):
         self.assertEqual(run([]), ({powerlines.G_PYLON}, 6))
         self.assertEqual(run(["power_pole", "power_tower"]), ({powerlines.G_PYLON}, 6), "no majority: the towers")
 
-    def far_yard_world(self, feeder=False):
+    def far_yard_world(self, feeder=False, feeder_end=-5.0):
         """A tile whose span runs 1.9 km to a 60 m yard in a map cell beyond its lookup: (tx, the yard tile's tx, far x,
         Md); feeder: a second line ("a", before the span's "b") ending in the yard 9 m from it, mapped only in the
         yard's cell (Codex's review of 119bb4d7)."""
@@ -527,7 +556,7 @@ class TowerFootprintTest(unittest.TestCase):
         ring = [[far - 30, 70], [far + 30, 70], [far + 30, 130], [far - 30, 130], [far - 30, 70]]
         hv = '{"power":"line","voltage":"220000"}'
         b = ("b", mapgeom.LINE, "power_line", hv, ll([[far, 100.0], [near, 100.0]]))
-        a = ("a", mapgeom.LINE, "power_line", hv, ll([[far - 300.0, 108.0], [far - 5.0, 108.0]]))
+        a = ("a", mapgeom.LINE, "power_line", hv, ll([[far - 300.0, 108.0], [far + feeder_end, 108.0]]))
         yard = ("yard", mapgeom.POLYGON, "substation", "{}", ll(ring))
 
         def features(items):
@@ -546,6 +575,35 @@ class TowerFootprintTest(unittest.TestCase):
                                        if "infrastructure" in layers else {"roads": None})
         return tx, int(np.floor(far / roads.TILE)), far, Md()
 
+    @yards_on
+    def test_feeders_read_where_the_layout_stands_them(self):
+        """Codex's review of 0cf9fd9b: the feeder search tested the mapped points, the layout the points moved off the
+        roads and out of the bus stations' ground: a feeder mapped 5 m outside the yard, moved 18 m into it, ended in
+        the yard for the yard tile only. Both read the moved places now: the span lands on the yard tile's gantries."""
+        import busstationkeep
+        import furniture
+        from test_roads import FRAME
+        tx, yard_tx, far, md = self.far_yard_world(feeder=True, feeder_end=-35.0)
+
+        class Keep:                     # (a bus station's ground just west of the yard pushes 10 m east)
+            def push_out(self, xy):
+                xy = np.array(xy, np.float64)
+                hit = (xy[:, 0] > far - 40.0) & (xy[:, 0] < far - 31.0) & (np.abs(xy[:, 1] - 108.0) < 5.0)
+                xy[hit, 0] += 23.0         # (to 12 m in: 14 m from the span's end, merged)
+                return xy
+        flat = lambda la_, lo_: np.zeros(np.shape(la_))
+        with mock.patch.object(busstationkeep, "keepout", lambda md_, frame_, box: Keep()):
+            props, wires = [], []
+            powerlines.tile_lines(FRAME, tx, 0, md, flat, props, wires)
+            yard_props = []
+            powerlines.tile_lines(FRAME, yard_tx, 0, md, flat, yard_props, [])
+        hung = {tuple(r) for w in wires if furniture.wire_ends(w) for r in furniture.wire_ends(w)
+                if r is not None and r[0] == "gantry"}
+        built = {tuple(r) for r in yard_props if r[0] == "gantry"}
+        self.assertEqual(len(built), 2)
+        self.assertEqual(hung, built)
+
+    @yards_on
     def test_a_span_into_a_yard_beyond_the_tiles_cells(self):
         """Codex's review of 9618c426: a span drawn here (its middle in the tile) ends 1 km off in a small yard whose map
         cell is beyond the tile's 500 m lookup: the yard was not loaded, its vertex taken for a tower, the conductors
@@ -560,6 +618,7 @@ class TowerFootprintTest(unittest.TestCase):
         # (on the gantries, GANTRY_H over the frame's ground there; a tower's arms hang 15.65 m and more up)
         self.assertTrue(all(abs(p[2] - powerlines.GANTRY_H) < 1.0 for p in ends), [p[2] for p in ends])
 
+    @yards_on
     def test_the_span_lands_on_the_gantries_its_yard_builds(self):
         """Codex's review of 119bb4d7: an earlier line ending in the same yard, mapped only in the yard's cell: the yard
         tile merged the span's end into that line's gantries while the span tile, which knew only its own line, hung

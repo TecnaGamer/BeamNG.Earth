@@ -81,6 +81,8 @@ NOT_LISTED = {
     "BNE_STALE_REVISIT": "no build switch at all (revisit.NOT_SWITCHES)",
     "BNE_FOOT_CLEAR": "railway tiles only (railways.FOOT_CLEAR: a footbridge that cannot clear drops its walls over the "
                       "road); not yet proven plan-neutral both ways, so it stays keyed with the Revamped roads setting",
+    "BNE_POWER_YARDS": "road tiles' power lines and substation yards only (powerlines.YARDS_ON); comes with the "
+                       "Revamped roads setting, whose other switches the plans read; it stays keyed",
     "BNE_RACEWAY_PROPS": "road tiles' props only (furniture.RACEWAY_PROPS: no street poles, wires or lamps along a "
                          "racetrack); comes with the Revamped roads setting, whose other switches the plans read, so "
                          "not proving it plan-neutral costs no shared plans; it stays keyed",
