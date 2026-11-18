@@ -32,11 +32,9 @@ TODAY = {
         shape_p95=4.9,          # m: the Sihl viaduct's decks, solved up to 6.3 m off the real ones (was 7.9)
         under_laws=2, steeper=2,
         dug=(7, 8),             # per mille of the ground roads' points, 3.3 m at the deepest
-        filled=(36, 38),        # (with the shapes 35 before the decks kept their line: deck ends 1-2 m over the roads they land on)
-                                # 5.8 m at most (was 6.5): the roads beside the tunnel's low arch near its mouth, raised to its
-                                # cover (arch_raise). Its mouths are right now (floor 449.4 / 436.3 against the survey's 450.6 /
-                                # 436); with the far one 5 m high the whole tube was one low arch and its road laws had no answer
-                                # (7.8 m short), so the roads were left as they were: 19 without the shapes hid it
+        filled=(14, 14),        # 2.3 m at most (was 6.5): the motorway at its tunnels' mouths. The mouths are right (floor
+                                # 449.4 / 436.3 against the survey's 450.6 / 436); the roads beside the tunnel's low arch were
+                                # lifted to its cover (5.8 m) until the cover was asked over the tube's own footprint
         rail_low=None, rail_high=None),     # (no railway bridge here)
     "zurich_europabruecke": dict(
         unmatched=5,            # (22 before: 9 were the tracks over a pedestrian underpass, a path now, as the map has it)
@@ -73,7 +71,7 @@ TODAY = {
         dug=(51, 49),           # a 6 m road 5 m, the exit ramp 2.3 m (its own plan under the DEM). Was 66 / 64 with a link road 7.3 m
                                 # under its survey height beside the ramp in its cutting: the ramp's lanes reached on past
                                 # its wall's face over the link's (a wall holds the link in the real place: grading.level_walls)
-        filled=(5, 2),          # 1.8 m at most (was 8.3, 76 per mille): the road into the Gotthard tunnel, its mouth read on the face
+        filled=(5, 0),          # 1.8 m at most (was 8.3, 76 per mille; 0.9 m with the shapes): the road into the Gotthard tunnel, its mouth read on the face
         rail_low=-9.7, rail_high=0.2),
     "kempttal_viaduct": dict(
         unmatched=0, not_built=0, right=6,

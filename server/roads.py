@@ -9679,12 +9679,13 @@ ARCH_SIDE_M = 1.0           # m beside a low arch's tube its soil is raised too
 ARCH_SOIL_MIN = 0.6         # m of ground kept over a low arch's vault (arch_raise)
 
 
-def arch_parts(parts, heights, mouths=None):
+def arch_parts(parts, heights, mouths=None, side=ARCH_SIDE_M):
     """The low arches among parts (arch_raise's arguments) as arch_raise_over takes them: [(xy, zf, hw, th, m0, m1,
     lo, hi)] per arch, its tube's line and floor as the kernel reads them (contiguous), the reach beside it, its height,
     whether each mouth is cut, and the box of its reach. Made once for a set of arches: _over_arches asked arch_raise
     for every plan of a cell and every offset across it, ~4 ms of a call's numbers for each, the same for the same
-    arches (61050 calls of a replay of 27 junctions: 35 of its 402 profiled CPU-s). Pure."""
+    arches (61050 calls of a replay of 27 junctions: 35 of its 402 profiled CPU-s). side: the soil raised beside the tube
+    (the terrain's; a road's cover is asked over the tube's own footprint, side 0). Pure."""
     import roadmesh
     out = []
     for fid, spec, xy, zf, _lon in parts:
@@ -9695,7 +9696,7 @@ def arch_parts(parts, heights, mouths=None):
         zf = np.asarray(zf, np.float64)
         if len(xy) < 2 or not np.isfinite(zf).all():
             continue
-        hw = spec.width / 2 + roadmesh.TUNNEL_SHOULDER + ARCH_SIDE_M
+        hw = spec.width / 2 + roadmesh.TUNNEL_SHOULDER + side
         m0, m1 = (mouths or {}).get(fid, (True, True))
         out.append((np.ascontiguousarray(xy), np.ascontiguousarray(zf), float(hw), float(th), bool(m0), bool(m1),
                     xy.min(0) - hw, xy.max(0) + hw))
