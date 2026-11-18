@@ -15,6 +15,7 @@ mod onewayjoin;
 mod osmrows;
 mod textcol;
 mod osmjoin;
+mod lanesjoin;
 mod domes;
 mod roofphoto;
 mod gravity;
@@ -6675,6 +6676,11 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(osmjoin::osm_join, m)?)?;
     // 455: the full port's osmtags.join columns (osmjoin: way ids, the same-named ways, the float and text columns,
     // the lanes of the same-named way going the same way; roadlanes.join stays Python)
+    m.add_function(wrap_pyfunction!(lanesjoin::lane_count, m)?)?;
+    m.add_function(wrap_pyfunction!(lanesjoin::lanes_need, m)?)?;
+    m.add_function(wrap_pyfunction!(lanesjoin::lanes_join, m)?)?;
+    // 456: the full port's roadlanes.count and roadlanes.join (lanesjoin: the OSM counts, the highway boxes asked of
+    // the geometry, the geometry match through dm::interp)
     m.add("VERSION", 470)?;
     Ok(())
 }
