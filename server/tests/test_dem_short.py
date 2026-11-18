@@ -301,24 +301,54 @@ class SampleReadsOnlyItsTilesTest(unittest.TestCase):
             self.assertFalse(b.complete)
             self.assertNotIn((z, x0 + 1, y0 + 1), dem.loaded)
 
-    def test_tiles_read_matches_kernel(self):
-        """_tiles_read's tiles are exactly those whose pixels the kernel reads: NaN tiles in all others leave every
-        sample finite, at random points of a 3 x 3 box, edges and corners included."""
-        import fast
+    def test_asks_exactly_the_tiles_read(self):
+        """earthfast.dem_sample asks for exactly the tiles holding each point's pixel and the next one right and down
+        (the bilinear's four), at random points of a 3 x 3 box, tile edges and corners included; its bilinear never
+        reads a tile it did not ask (it would raise), and the heights are the planes' own."""
+        z = 12
+        x0, y0 = 2000, 1500
         rng = np.random.default_rng(11)
-        for _ in range(200):
-            nx, ny = int(rng.integers(1, 4)), int(rng.integers(1, 4))
-            if nx * ny < 2:
-                nx = 2
+        offs = [0.4, 0.6, T - 1.4, T - 0.6, T - 0.4, 200.3]
+        for _ in range(100):
             m = int(rng.integers(1, 6))
-            fx = rng.choice([rng.uniform(-3, nx * T + 3), float(rng.integers(0, nx) * T - 1) + 0.5,
-                             float(nx * T - 1)], m) if rng.random() < 0.5 else rng.uniform(-3, nx * T + 3, m)
-            fy = rng.uniform(-3, ny * T + 3, m)
-            read = demmod._tiles_read(np.asarray(fx, np.float64), fy, nx, ny)
-            tiles = [np.ones((T, T), np.float32) if r else np.full((T, T), np.nan, np.float32) for r in read]
-            out = fast._ef.bilinear_tiles(tiles, nx, T, np.asarray(fx, np.float64), fy)
-            self.assertTrue(np.isfinite(out).all(), (nx, ny, fx, fy, read))
+            px = np.array([(x0 + int(rng.integers(0, 3))) * T + float(rng.choice(offs)) for _ in range(m)])
+            py = np.array([(y0 + int(rng.integers(0, 3))) * T + float(rng.choice(offs)) for _ in range(m)])
+            lat, lon = self._lat_lon(z, px, py)
+            with tempfile.TemporaryDirectory() as d:
+                dem = StandInDem(d)
+                got = dem.sample(lat, lon, z)
+            want = {(z, int(np.floor(x) + dx) // T, int(np.floor(y) + dy) // T)
+                    for x, y in zip(px, py) for dx in (0, 1) for dy in (0, 1)}
+            self.assertEqual(set(dem.loaded), want, (px, py))
+            self.assertEqual(len(dem.loaded), len(want))
+            self.assertTrue(np.isfinite(got).all())
 
+    def test_bad_points(self):
+        """A longitude that is not finite raises ValueError (math.floor's, as before the port); a latitude that is not
+        finite goes to the polar DEM with the caps (sea level when it can't be had), the other points still sampled."""
+        z = 12
+        with tempfile.TemporaryDirectory() as d:
+            dem = StandInDem(d)
+            for bad in (np.nan, np.inf, -np.inf):
+                with self.assertRaises(ValueError):
+                    dem.sample(np.array([40.0, 40.0]), np.array([-73.9, bad]), z)
+            def no_polar():
+                raise OSError("no polar DEM here")
+            dem.polar = no_polar
+            with self.assertLogs("earthd.dem", "WARNING"):
+                got = dem.sample(np.array([np.nan, 40.0, 89.0]), np.array([-73.9, -73.9, 0.0]), z)
+            x = int(np.floor((-73.9 / 360.0 + 0.5) * 2 ** z))
+            self.assertEqual(got.tolist(), [0.0, float(x), 0.0])
+
+    def test_shapes(self):
+        """Broadcast lat / lon in, their shape out (a scalar: a 0-d array), float64."""
+        z = 12
+        with tempfile.TemporaryDirectory() as d:
+            dem = StandInDem(d)
+            self.assertEqual(dem.sample(40.0, -73.9, z).shape, ())
+            g = dem.sample(np.array([[40.0], [40.01]]), np.array([-73.9, -73.8, -73.7]), z)
+            self.assertEqual((g.shape, g.dtype), ((2, 3), np.float64))
+            self.assertEqual(dem.sample(np.zeros(0), np.zeros(0), z).shape, (0,))
 
 if __name__ == "__main__":
     unittest.main()

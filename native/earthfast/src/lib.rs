@@ -7,6 +7,7 @@
 #![deny(clippy::disallowed_methods, clippy::disallowed_types, clippy::iter_over_hash_type)]
 use crate::dm::Dm;
 mod dm;
+mod demsample;
 mod dmmatmul;
 mod devctx;
 mod reach;
@@ -3973,19 +3974,9 @@ fn bilinear_tiles<'py>(
     if xs.len() != ys.len() {
         return Err(pyo3::exceptions::PyValueError::new_err("bilinear_tiles: fx and fy differ in length"));
     }
-    let px = |y: usize, x: usize| ts[(y / tile) * nx + x / tile][[y % tile, x % tile]] as f64;
-    let out = py.detach(|| {
-        numpy::ndarray::Array1::from_shape_fn(xs.len(), |i| {
-            let (x, y) = (xs[i], ys[i]);
-            let ix = (x.floor() as i64).clamp(0, w as i64 - 2) as usize;
-            let iy = (y.floor() as i64).clamp(0, h as i64 - 2) as usize;
-            let wx = (x - ix as f64).clamp(0.0, 1.0);
-            let wy = (y - iy as f64).clamp(0.0, 1.0);
-            let (v00, v10) = (px(iy, ix), px(iy, ix + 1));
-            let (v01, v11) = (px(iy + 1, ix), px(iy + 1, ix + 1));
-            (v00 * (1.0 - wx) + v10 * wx) * (1.0 - wy) + (v01 * (1.0 - wx) + v11 * wx) * wy
-        })
-    });
+    let ts: Vec<_> = ts.into_iter().map(Some).collect();
+    let out = py.detach(|| demsample::bilinear_mosaic(&ts, nx, tile, xs, ys))
+        .map_err(|_| pyo3::exceptions::PyValueError::new_err("bilinear_tiles: a pixel outside the tiles"))?;
     Ok(out.into_pyarray(py))
 }
 
@@ -6405,6 +6396,7 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
         // 262: deterministic maths (dm: the libm crate in every kernel instead of the platform's C library; dm_vec and
         // the dm_<fn> scalars for server/dnp.py / dmath.py: Windows and Linux plan the same roads, GitHub #1169)
     dm::register(m)?;
+    demsample::register(m)?;
         // 264: 262 (deterministic maths) and 263 (stationgeom) in one module
     // 266: bldclear::footprint_twins (the same building mapped twice: one of the two outlines left out, London's
     // reports 2026-11-12); junctions_find's one-way / single-lane arms' stop lines (London reports 3, 8, 9)
@@ -6693,6 +6685,6 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 481: RS step S2a: structure_groups takes an outside flag per member (its own kind kept: an outside conflict only
     // where the pair could be one structure) and returns each member's duplicate (one way under two part keys);
     // structure_touch, the pairs the chain closure must hold (BridgeProfiles._resolve on the switch path)
-    m.add("VERSION", 481)?;
+    m.add("VERSION", 484)?;
     Ok(())
 }
