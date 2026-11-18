@@ -270,6 +270,13 @@ T.check(math.abs(N.boxMoved({ -708, -452, 196, 452 }, { -1092, -452, -188, 452 }
   'the block moved 384 m: measured between the boxes\' centres')
 T.check(N.boxMoved(nil, { 0, 0, 1, 1 }) == 0 and N.boxMoved({}, { 0, 0, 1, 1 }) == 0, 'no box yet: not moved')
 T.check(384 >= N.RECLIP_M and 128 < N.RECLIP_M, 'a 384 m move re-clips the graph, one step of 128 m does not')
+do
+  local old, moved = {384,-768,1407,255}, {512,-768,1535,255}
+  T.check(N.shouldReclip(old, moved, true), 'Autodrive uses the newly loaded road after a single 128 m terrain move')
+  T.check(not N.shouldReclip(old, moved, false), 'manual driving retains the existing graph refresh budget')
+  T.check(not N.shouldReclip(old, old, true) and not N.shouldReclip(nil, moved, true),
+    'Autodrive does not rebuild an unchanged or not-yet-applied box')
+end
 -- GitHub #353: at motorway speed a respawned car goes ahead, short of the block's edge guard; slower: behind (nil)
 do
   local box = { -256, -256, 256, 256 }

@@ -1191,6 +1191,13 @@ function M.boxMoved(a, b)
   return math.sqrt(dx * dx + dy * dy)
 end
 
+function M.shouldReclip(a, b, autodrive)
+  local moved = M.boxMoved(a, b)
+  -- A 1 km terrain block can move by one 128 m cell. Ignoring that move until 150 m leaves Autodrive
+  -- braking for the old graph end, or stopped there with no further movement to trigger a refresh.
+  return moved >= M.RECLIP_M or (autodrive and moved >= 1) or false
+end
+
 local waited = 0
 
 -- The node tables an apply hands map.reset, built over several frames (toNodes in a coroutine, PREP_MS a frame; ~20 ms in
@@ -1397,8 +1404,9 @@ function M.update(aid, b, gov)
     if gov and gov.noteFrame then gov:noteFrame(sw()) end
     return
   end
-  -- a small block move alone does not re-apply (each apply is a ~40 ms frame); one of RECLIP_M does
-  if not (dirty or foreign) and applied and M.boxMoved(applied.box, b) >= M.RECLIP_M then dirty = true end
+  -- Budget small moves during manual driving; Autodrive needs the road from every new terrain cell.
+  local gps = package.loaded['beamngEarth/gps']
+  if not (dirty or foreign) and applied and M.shouldReclip(applied.box, b, gps and gps.autodrive and gps.autodrive()) then dirty = true end
   if not (dirty or foreign) then return end
   local t = os.clock()
   if t - lastApply < M.MIN_GAP_S and not foreign and not urgent then return end

@@ -2118,7 +2118,7 @@ local function updateWorld(dt)
   -- may straddle the new block (design 2.3, farfield.uncoverReady)
   local gate = b and function(ncx, ncy) return farfield.uncoverReady(b.cx, b.cy, ncx, ncy) end
   local fa, tx, ty, preferred = follow.decide(pl.x, pl.y, pl.vx, pl.vy, b and b.cx, b and b.cy, st.terrainPending,
-    st.clock, st.terrainRetryAt, gate, st.terrainLatency)
+    st.clock, st.terrainRetryAt, gate, st.terrainLatency, gps.autodrive())
   if fa == 'prepare' then
     if net.isConnected() and anchorKnown() then
       local id = nextId()

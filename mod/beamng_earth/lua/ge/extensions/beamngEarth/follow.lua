@@ -216,12 +216,41 @@ function M.hardCommitDist(vx, vy)
   return max(M.COMMIT_DIST, min(M.HARD_COMMIT_DIST, edge - edgeguard.warnDistance(sp, M.warnCap()) - M.COMMIT_MARGIN))
 end
 
-function M.decide(px, py, vx, vy, cx, cy, pending, now, retryAt, gate, latency)
+-- Autodrive must see a continuing road before the stock AI starts its endpoint braking profile. The graph
+-- ends inside the terrain (60 m inset plus up to an 80 m node interval). Include two seconds for graph delivery.
+M.AUTO_GRAPH_MARGIN = 140
+M.AUTO_HANDOFF_S = 2
+M.AUTO_BRAKE_ACCEL = 0.3 * 9.81 -- GPS's native AI aggression
+function M.autodriveLead(vx, vy)
+  local speed = math.sqrt((vx or 0)^2 + (vy or 0)^2)
+  if speed < 5 then return 0 end
+  return speed * speed / (2 * M.AUTO_BRAKE_ACCEL) + speed * M.AUTO_HANDOFF_S + M.AUTO_GRAPH_MARGIN
+end
+
+-- Distance along the current heading to the collidable box edge, including diagonal travel.
+function M.forwardClearance(px, py, vx, vy, cx, cy)
+  local speed = math.sqrt((vx or 0)^2 + (vy or 0)^2)
+  if speed < 0.01 then return math.huge end
+  local edge, distance = M.HALF - M.SQUARE_SIZE, math.huge
+  if abs(vx or 0) > 0.001 then distance = min(distance, (edge - (px - cx) * (vx > 0 and 1 or -1)) * speed / abs(vx)) end
+  if abs(vy or 0) > 0.001 then distance = min(distance, (edge - (py - cy) * (vy > 0 and 1 or -1)) * speed / abs(vy)) end
+  return distance
+end
+
+function M.decide(px, py, vx, vy, cx, cy, pending, now, retryAt, gate, latency, autodrive)
   if not cx then return nil end
   local _, reach, ahead = mode(vx, vy)
   local d = M.cheb(px, py, cx, cy)
+  local lead = autodrive and M.autodriveLead(vx, vy) or 0
+  local clearance = lead > 0 and M.forwardClearance(px, py, vx, vy, cx, cy) or math.huge
   if pending then
     local pd = M.cheb(px, py, pending.cx, pending.cy)
+    if pending.ready and lead > 0 and clearance < lead and pd <= reach
+      and M.forwardClearance(px, py, vx, vy, pending.cx, pending.cy) > clearance + M.GRID / 2 then
+      -- As with the existing hard commit, a ready collision block takes priority over the cosmetic far-tile
+      -- uncover gate. Keep the player inside the full terrain margin; never fabricate road beyond the block.
+      return 'commit'
+    end
     -- past the commit distance a ready block is taken whenever it is better than the current one,
     -- even if it no longer keeps the full 600 m margin (late answer): the next request follows at once
     if pending.ready and pd < d and d > M.COMMIT_DIST then
@@ -263,7 +292,9 @@ function M.decide(px, py, vx, vy, cx, cy, pending, now, retryAt, gate, latency)
     return nil
   end
   -- the prepare test point: the player (fast mode: PREP_AHEAD_FAST_S ahead)
-  if M.cheb(px + (vx or 0) * ahead, py + (vy or 0) * ahead, cx, cy) <= M.PREPARE_DIST or now < (retryAt or 0) then
+  local prepareForAi = lead > 0 and clearance < lead + math.sqrt((vx or 0)^2 + (vy or 0)^2) * max(latency or 1, 1)
+  if (not prepareForAi and M.cheb(px + (vx or 0) * ahead, py + (vy or 0) * ahead, cx, cy) <= M.PREPARE_DIST)
+    or now < (retryAt or 0) then
     return nil
   end
   -- (MIN_LEAD: the block just committed is centred ahead of the player; the box test, symmetric, asked for the next one
