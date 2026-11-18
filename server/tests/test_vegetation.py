@@ -700,7 +700,7 @@ class RegionalTest(unittest.TestCase):
         self.assertGreater(float(veg._conifer_share(44.2, -0.8)), 0.8, "the Landes' pines")
         self.assertGreater(float(veg._conifer_share(53.6, 17.9)), 0.8, "Bory Tucholskie")
         self.assertLess(float(veg._conifer_share(49.2, 22.5)), 0.3, "the Bieszczady's beeches")
-        self.assertGreater(float(veg._conifer_share(32.5, -83.5)), 0.8, "Georgia's loblolly pines")
+        self.assertGreater(float(veg._conifer_share(32.5, -83.5)), 0.6, "Georgia's loblolly pines (FIA: pine types 45 % statewide)")
         self.assertLess(float(veg._conifer_share(43.0, 12.0)), 0.2, "Umbria's oaks")
         self.assertGreaterEqual(float(veg._conifer_share(-38.4, 176.6)), float(veg._conifer_share_coarse(-38.4, 176.6)),
                                 "Kaingaroa's radiata pines: no less than the coarse rule south of the tropics")

@@ -40,3 +40,24 @@ class LeafTypeTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TwoMapsTest(unittest.TestCase):
+    """(39) LC100 averaged with ESA CCI Land Cover 2020 (leaftype.PATHS)."""
+
+    def test_mean_of_both(self):
+        la, lo = np.array([68.2, 40.0, 53.665]), np.array([14.0, 9.2, 17.895])
+        one = [lt._bilinear1(la, lo, 0, p) for p in lt.PATHS]
+        both = lt.conifer_share(la, lo)
+        np.testing.assert_allclose(both, (one[0] + one[1]) / 2, atol=1e-9)
+
+    def test_either_alone(self):
+        """Lapland's birch woods: LC100 has no say, CCI's few conifers stand."""
+        la, lo = np.array([68.5]), np.array([25.0])
+        self.assertTrue(np.isnan(lt._bilinear1(la, lo, 0, lt.PATHS[0])[0]))
+        self.assertLess(float(lt.conifer_share(la, lo)[0]), 0.3)
+
+    def test_lapland_and_sardinia(self):
+        s = lt.conifer_share(np.array([68.2, 40.0]), np.array([14.0, 9.2]))
+        self.assertLess(s[0], 0.6, "Lofoten's birch woods (LC100 alone: 0.86)")
+        self.assertLess(s[1], 0.2, "Sardinia's maquis and holm oaks")

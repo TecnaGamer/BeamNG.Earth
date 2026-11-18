@@ -9,27 +9,47 @@ import threading
 
 import numpy as np
 
-PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "leaftype_2019.png")
+_DIR = os.path.dirname(os.path.abspath(__file__))
+PATH = os.path.join(_DIR, "leaftype_2019.png")
+# (39) and the ESA CCI Land Cover / C3S map of 2020 (300 m; tools/build_leaftype_cci.py, the same layout; "(c) ESA
+# Climate Change Initiative - Land Cover led by UCLouvain (2017)"): the two averaged where both have a say, either
+# alone where one has. Against the national forest inventories' plots (EU-Forest, 675 one-degree cells in Europe) the
+# conifer share's error 0.185 for the mean, 0.192 for CCI, 0.201 for LC100 alone (LC100 reads Sardinia's maquis,
+# Lapland's birch woods and Spain's holm oaks as conifers; CCI misses some of Germany's spruces).
+PATHS = (PATH, os.path.join(_DIR, "leaftype_cci_2020.png"))
 NONE = 255
 
-_grid = None        # (h, w, 2) uint8
+_grids = {}         # path -> (h, w, 2) uint8
 _lock = threading.Lock()
 
 
-def _load():
-    global _grid
+def _load(path=PATH):
     with _lock:
-        if _grid is None:
+        if path not in _grids:
             from PIL import Image
-            with Image.open(PATH) as im:
-                _grid = np.ascontiguousarray(np.asarray(im.convert("LA"), np.uint8))
-        return _grid
+            with Image.open(path) as im:
+                _grids[path] = np.ascontiguousarray(np.asarray(im.convert("LA"), np.uint8))
+        return _grids[path]
 
 
 def _bilinear(lat, lon, band):
-    """Per point: band's share (0-1), bilinear between the pixels' centres over those with a say; NaN where none of
-    the four has one."""
-    g = _load()
+    """Per point: band's share (0-1), the mean of the maps (PATHS) that have a say there; NaN where none has."""
+    num, n = 0.0, 0
+    for path in PATHS:
+        if not os.path.exists(path):
+            continue
+        v = _bilinear1(lat, lon, band, path)
+        ok = ~np.isnan(v)
+        num = num + np.where(ok, v, 0.0)
+        n = n + ok
+    with np.errstate(invalid="ignore", divide="ignore"):
+        return np.where(np.asarray(n) > 0, num / np.maximum(n, 1), np.nan)
+
+
+def _bilinear1(lat, lon, band, path):
+    """Per point: one map's band share (0-1), bilinear between the pixels' centres over those with a say; NaN where
+    none of the four has one."""
+    g = _load(path)
     h, w = g.shape[:2]
     res = 180.0 / h
     lat, lon = np.asarray(lat, np.float64), np.asarray(lon, np.float64)

@@ -169,6 +169,7 @@ def pyinstaller(work, ico, onefile, ver=None, boot=None):
            "--add-data", f"{os.path.join(server, 'ecoregions_2017_0p05.png')}{SEP}.",  # (ecoregion.PATH)
            "--add-data", f"{os.path.join(server, 'ecoregions_2017.json')}{SEP}.",  # (ecoregion.META_PATH)
            "--add-data", f"{os.path.join(server, 'leaftype_2019.png')}{SEP}.",  # (leaftype.PATH)
+           "--add-data", f"{os.path.join(server, 'leaftype_cci_2020.png')}{SEP}.",  # (leaftype.PATHS)
            "--add-data", f"{os.path.join(server, 'oil_wells.npz')}{SEP}.",  # (oilwells.PATH)
            "--add-data", f"{os.path.join(server, 'wind_turbine_phase1.json')}{SEP}.",  # (windturbines.DATA_PATH)
            "--add-data", f"{os.path.join(server, 'wind_turbines.npz')}{SEP}.",  # (windturbines.INDEX_PATH)
