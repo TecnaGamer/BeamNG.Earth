@@ -597,7 +597,7 @@ mod tests {
         // gives way to both halves
         let a: Vec<f64> = (0..=30).flat_map(|i| [-60.0 + 2.0 * i as f64, 0.0]).collect();
         let b: Vec<f64> = (0..=30).flat_map(|i| [2.0 * i as f64, 0.0]).collect();
-        let (c15, s15) = (15f64.to_radians().cos(), 15f64.to_radians().sin());
+        let (c15, s15) = (0.965_925_826_289_068_3_f64, 0.258_819_045_102_520_7_f64); // cos, sin 15 degrees (no platform maths)
         let c: Vec<f64> = (0..=50).flat_map(|i| [2.0 * i as f64 * c15, -2.0 * i as f64 * s15]).collect();
         let dom = dominance(&[a, b, c], &[9.0, 9.0, 9.0]);
         assert!(dom[0].is_empty() && dom[1].is_empty(), "{dom:?}");
