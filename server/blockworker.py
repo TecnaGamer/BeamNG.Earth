@@ -1663,14 +1663,20 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
     P.town_faces = town_faces
     mark("build_tile")
     import railways
-    rail_rec = None                 # (BNE_RAIL_ROAD_FIT: one record of the level crossings, the decks here, the track below)
-    if railways.RAIL_ROAD_FIT:
-        rail_rec = railways.crossing_records(
-            frame, tx, ty, [cell_fn(k) for k in roadsmod.cells_of_tile(frame, tx, ty, railways.REACH_M)],
-            railways.point_ground(frame, elev, rkey),
-            far_ground=railways.point_ground(frame, lambda la, lo: ground(frame, la, lo, _s.dem.sample(la, lo, zoom)),
-                                             ("raw",) + tuple(rkey)),
-            load=cell_fn, bed_elev=getattr(getattr(_s, "plan_store", None), "elev", None))
+    rail_rec = rail_early = None    # (BNE_RAIL_ROAD_FIT: one record of the level crossings, the track made first from it,
+    if railways.RAIL_ROAD_FIT:      # the decks here for the parts it drew)
+        _rcells = [cell_fn(k) for k in roadsmod.cells_of_tile(frame, tx, ty, railways.REACH_M)]
+        _rground = railways.point_ground(frame, elev, rkey)
+        _rfar = railways.point_ground(frame, lambda la, lo: ground(frame, la, lo, _s.dem.sample(la, lo, zoom)),
+                                      ("raw",) + tuple(rkey))
+        _rbed = getattr(getattr(_s, "plan_store", None), "elev", None)
+        rail_rec = railways.crossing_records(frame, tx, ty, _rcells, _rground, far_ground=_rfar, load=cell_fn,
+                                             bed_elev=_rbed)
+        rail_early_props = []
+        rail_early = railways.tile_mesh(frame, tx, ty, _rcells, _rground, far_ground=_rfar, return_decks=True,
+                                        load=cell_fn, bed_elev=_rbed, furniture=rail_early_props,
+                                        under=((lambda xy: buildingsmod._under_bridges(_bridge_fps, xy))
+                                               if _bridge_fps else None), records=rail_rec)
     chunks += railsmod.tile_chunks(frame, tx, ty, cells, country, urban,      # railway and tram tracks on the ground
                                    records=rail_rec)
     mark("rails")
@@ -1823,14 +1829,17 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
         except Exception as e:
             log.debug("catenary: %s: %s", type(e).__name__, e)
     rail_props = []                 # (buffer stops and the walk signs at footway crossings: railways.tile_mesh's furniture)
-    P.rmesh, rail_decks = railways.tile_mesh(frame, tx, ty, rcells, rground,
-                                 far_ground=railways.point_ground(
-                                     frame, lambda la, lo: ground(frame, la, lo, _s.dem.sample(la, lo, zoom)),
-                                     ("raw",) + tuple(rkey)),
-                                 return_decks=True, load=cell_fn,
-                                 bed_elev=getattr(getattr(_s, "plan_store", None), "elev", None), furniture=rail_props,
-                                 under=((lambda xy: buildingsmod._under_bridges(_bridge_fps, xy))
-                                        if _bridge_fps else None), records=rail_rec)
+    if rail_early is not None:      # (made above, before the decks: BNE_RAIL_ROAD_FIT)
+        (P.rmesh, rail_decks), rail_props = rail_early, rail_early_props
+    else:
+        P.rmesh, rail_decks = railways.tile_mesh(frame, tx, ty, rcells, rground,
+                                   far_ground=railways.point_ground(
+                                       frame, lambda la, lo: ground(frame, la, lo, _s.dem.sample(la, lo, zoom)),
+                                       ("raw",) + tuple(rkey)),
+                                   return_decks=True, load=cell_fn,
+                                   bed_elev=getattr(getattr(_s, "plan_store", None), "elev", None), furniture=rail_props,
+                                   under=((lambda xy: buildingsmod._under_bridges(_bridge_fps, xy))
+                                          if _bridge_fps else None), records=rail_rec)
     if rail_props:
         props = (props or []) + rail_props
     mark("railways")

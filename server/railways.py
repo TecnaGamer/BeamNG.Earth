@@ -1597,17 +1597,36 @@ def crossing_records(frame, tx, ty, cells, ground, sign_style=None, far_ground=N
         for line, hw in dense:
             xcrossers.append((line, hw, zx[k:k + len(line)]))
             k += len(line)
-    # (the track's side: its bed before any flush on ground no tile's window changes: railprofile's lattice on the
-    # grader's DEM where it has the point (prof's own), else railways.profile on the natural ground, not on the window)
-    level_beds = (prof if far_ground is None else
-                  _beds(frame, rails, nat, tunnels + coarse_underpasses(frame, cells, box, rails), load, bed_elev)
-                  if rails else [])
+    # (the track's side: its bed before any flush from nothing a tile's window changes: railprofile's lattice on the
+    # grader's DEM where it has the point (the same bed in every tile), else the natural ground at the point itself:
+    # railways.profile's fallback carries a bridge's approach lift along the tile's clipped parts, which a bridge just
+    # past one tile's window did not reach in that tile)
+    level_beds = _level_beds(frame, rails, nat, load, bed_elev) if rails else []
     runs = [_part_crossings(xy, zb, xcrossers) if kind == "ground" and c != "tram" else None
-            for (_f, c, kind, xy), (zb, _zg) in zip(rails, level_beds)]
+            for (_f, c, kind, xy), zb in zip(rails, level_beds)]
     half_g = [gauges.get(fid, gauge(c, sign_style)) / 2 + RAIL_HEAD / 2 for fid, c, _k, _xy in rails]
     return {"tunnels": tunnels, "ground": ground, "worn": worn, "gauges": gauges, "cut": cut, "rails": rails,
             "prof": prof, "all_cr": all_cr, "cr": cr, "crossers": crossers, "runs": runs, "half_g": half_g,
             "sign_style": sign_style}
+
+
+def _level_beds(frame, rails, nat, load=None, elev=None):
+    """crossing_records' track heights per part: railprofile's lattice bed (as _beds reads it: the same in every tile)
+    where it has the point, else nat(xy) (the natural ground) there: nothing profiled along the tile's own parts."""
+    import railprofile
+    new = None
+    if railprofile.ENABLED and load is not None and elev is not None and rails:
+        lat0, lon0 = round(float(getattr(frame, "lat0", 0.0)), 7), round(float(getattr(frame, "lon0", 0.0)), 7)
+        new = railprofile.beds(frame, ("beds", lat0, lon0), load, point_ground(frame, elev, ("nodes", lat0, lon0)),
+                               rails)
+    out = []
+    for n, (_f, _c, _k, xy) in enumerate(rails):
+        z = None if new is None else np.asarray(new[n], np.float64)
+        if z is None or not np.isfinite(z).all():
+            g = np.asarray(nat(np.asarray(xy, np.float64)[:, :2]), np.float64).reshape(len(xy))
+            z = g if z is None else np.where(np.isfinite(z), z, g)
+        out.append(z)
+    return out
 
 
 def _part_crossings(xy, zb, crossers):
@@ -1691,8 +1710,9 @@ def crossing_panels(rec):
     track's last point before the crossing to its first after it (the records' edges; the part's own end where the run
     reaches it), standard and narrow gauge ground parts only (rails.tile_chunks lays them). Pure."""
     out = []
-    for (fid, cls, kind, xy), r, hg in zip(rec["rails"], rec["runs"], rec["half_g"]):
-        if r is None or kind != "ground" or cls == "tram":
+    kept = rec.get("kept")          # (tile_mesh's: the parts it drew, a vertex budget's retry leaving some out)
+    for n, ((fid, cls, kind, xy), r, hg) in enumerate(zip(rec["rails"], rec["runs"], rec["half_g"])):
+        if r is None or kind != "ground" or cls == "tram" or (kept is not None and n not in kept):
             continue
         xy = np.asarray(xy, np.float64)[:, :2]
         n = len(xy)
@@ -2945,8 +2965,13 @@ def tile_mesh(frame, tx, ty, cells, ground, sign_style=None, far_ground=None, re
             for n in rank[-min(len(rank) - 1, max(1, len(rank) // 4)):]:
                 _drop = _drop | {keep[n]}
             return tile_mesh(frame, tx, ty, cells, ground, sign_style, far_ground, return_decks=return_decks,
-                             load=load, bed_elev=bed_elev, _drop=_drop, furniture=furniture, under=under)
+                             load=load, bed_elev=bed_elev, _drop=_drop, furniture=furniture, under=under,
+                             records=rec)
+        if rec is not None:
+            rec["kept"] = frozenset()
         return (None, decks) if return_decks else None
+    if rec is not None:             # (the parts drawn: the crossing decks are laid for these alone, crossing_panels)
+        rec["kept"] = frozenset(keep)
     if furniture is not None:
         furniture += rows
     return (out, decks) if return_decks else out

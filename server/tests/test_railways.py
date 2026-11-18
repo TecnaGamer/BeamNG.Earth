@@ -1596,3 +1596,45 @@ class RoadFitTest(unittest.TestCase):
             self.assertFalse(r is not None and r["blk"][near].any(), f"tile {tx}: nothing cut by the brush")
         xy, r = self.record_of(f, 1, flat)
         self.assertTrue(r is not None and r["blk"][np.abs(xy[:, 0] - 615.0) < 10.0].any(), "the street running cut")
+
+    def test_the_records_bed_is_the_same_at_a_point_whatever_the_tile(self):
+        """Codex on fbd6197a: with no lattice bed (railprofile off or without the point) the records profiled the bed
+        along the tile's clipped parts (railways.profile: smoothing and a bridge's approach lift run along them), so the
+        same point could get another bed in the next tile. The fallback is the natural ground at the point itself
+        (_level_beds): the same whatever part, clipped wherever, holds the point."""
+        def hilly(q):
+            q = np.asarray(q, np.float64).reshape(-1, 2)
+            return 10.0 + 3.0 * np.sin(q[:, 0] / 17.0) + 0.01 * q[:, 1]
+        line = np.c_[np.arange(-200.0, 700.0, railways.STEP_M), np.full(450, 100.0)]
+        a = [("t", "standard_gauge", "ground", line[:300])]          # (one tile's clip)
+        b = [("t", "standard_gauge", "ground", line[150:])]          # (the next one's)
+        za, zb = railways._level_beds(FRAME, a, hilly)[0], railways._level_beds(FRAME, b, hilly)[0]
+        np.testing.assert_array_equal(za[150:300], zb[:150])
+        np.testing.assert_array_equal(za, hilly(line[:300]))
+
+    def test_a_vertex_budget_retry_lays_no_deck_for_a_track_it_left_out(self):
+        """Codex on fbd6197a: the decks came from the whole record while a vertex budget's retry left the lowest-ranked
+        tracks out of the 3D mesh: panels on the road with the track gone either side. The decks are laid for the parts
+        tile_mesh drew (records' kept)."""
+        import rails
+        import railxing
+        f = features([[(-50.0, 100.0), (300.0, 100.0)], [(90.0, 140.0), (150.0, 140.0)],
+                      [(120.0, 0.0), (120.0, 250.0)]],
+                     ["standard_gauge", "standard_gauge", "secondary"], subtypes=["rail", "rail", "road"])
+        with unittest.mock.patch.object(railways, "RAIL_ROAD_FIT", True), \
+                unittest.mock.patch.object(railxing, "ENABLED", True), \
+                unittest.mock.patch.object(railways, "_sleepers", lambda *a, **k: None):   # (ballast and rails only)
+            rec = railways.crossing_records(FRAME, 0, 0, [f], flat)
+            full = railways.tile_mesh(FRAME, 0, 0, [f], flat, records=rec)
+            self.assertEqual(len(railways.crossing_panels(rec)), 2)
+            rec = railways.crossing_records(FRAME, 0, 0, [f], flat)
+            with unittest.mock.patch.object(railways, "TILE_VERTS_MAX", len(full[0]) - 1):
+                cut = railways.tile_mesh(FRAME, 0, 0, [f], flat, records=rec)
+            ch = rails.tile_chunks(FRAME, 0, 0, [f], records=rec)
+        self.assertLess(len(cut[0]), len(full[0]))
+        self.assertEqual(len(rec["kept"]), 1)
+        panels = railways.crossing_panels(rec)
+        self.assertEqual(len(panels), 1)
+        self.assertEqual(panels[0][0], "id000", "the long track kept, the short one left out")
+        decks = [np.asarray(k["n"])[:, 1] for k in ch if k["m"] == rails.DECK["m"]]
+        self.assertTrue(decks and all(float(np.abs(y - 100.0).max()) < 1.0 for y in decks), "its deck alone")
