@@ -14,8 +14,15 @@ places.
 
 The order graph: a span is a path's stretch of one kind and level (a place: staged_paths.Run); an edge lower -> upper per
 crossing. Checks:
-  level_tie     two structures cross with the same kind and level: nothing says which is over (gradeshapes._over: None;
-                the system does not relate them and they would be built at one height); named, with both ways.
+  level_tie     two structures cross with the same kind and level: the map's levels say nothing of which is over (gradeshapes._over:
+                None; the system would not relate them and they would be built at one height). Two road or rail decks of two
+                paths are then ordered by findground rule 1 with the elevation: each one's natural height there is the line between
+                the ground at the ends of its structure (the paths' own ground points), and the higher is over where they differ by
+                TIE_M or more (the crossing is kept, `by` "elevation", and stage 3 gives it its system). It stays a tie, a failure
+                named with the crossing and the heights, where they do not differ (the elevation cannot say) or are two parts of
+                one path (a loop crossing itself: one line has no higher part), or are tunnels. A same-level crossing within
+                MERGE_NEAR_M of a joint of the two is the junction itself (a ramp leaving a viaduct's side runs across its line
+                by the gore), not a crossing: counted in Levels.merges.
   order_cycle   a cycle in "above" between spans (A over B over C over A), reported with its crossings. The levels are a
                 scalar per span, so a cycle cannot come from the map's kinds and layers alone: it means an order that came from
                 elsewhere contradicts them (a caller's, or a future rule), which is why the graph is checked and not assumed.
@@ -125,7 +132,8 @@ class Levels:
         self.at_grade = []          # (member, member, q): two ways on the ground crossing with nothing to order them (not computed
         #                             for plain ways: a crossing of two on the ground is a junction the map has no node for)
         self.ties = []
-        self.network = 0            # crossings with a tunnel longer than TUNNEL_MAX_M (tunnels.py's own): left out, as gradeshapes
+        self.merges = []            # (member, s, member, s, q): same-level crossings by a joint of the two, not crossings
+        self.network = 0           # crossings with a tunnel longer than TUNNEL_MAX_M (tunnels.py's own): left out, as gradeshapes
 
 
 def _span(P, i, s):
@@ -140,10 +148,42 @@ def _span(P, i, s):
     return (pid, runs[0])
 
 
-def build(P):
-    """The crossings of P's structures with what they cross, who is over, who moves, the order graph: Levels."""
+MERGE_NEAR_M = 80.0     # m: two structures of one level that meet (a joint) and cross within this of it along either are one junction: a ramp
+#                         leaving a viaduct's side runs across its line by the gore (Shanghai's Inner Ring and its trunk_link, 10 m from their joint)
+TIE_M = 1.0            # m: two structures with one kind and level cross where their natural heights differ by less than this: the
+#                         elevation cannot say which is over (findground rule 1 is the line between the ground at a structure's ends)
+
+
+def natural_height(P, zfn, i, s):
+    """Member i's natural height at arc length s (findground rule 1): the line between the ground at the two ends of the structure it
+    is in (its path's consecutive structure segments, whatever their levels: one structure), read where it crosses. zfn(points) ->
+    the elevation. (the height, the structure's length)."""
+    net = P.net
+    pid, pos = P.at(i, s)
+    p = P.paths[pid]
+    ks = [k for k, (j, _f) in enumerate(p.segs) if j == i]
+    k = ks[0]
+    lo = hi = k
+    while lo > 0 and net.m[p.segs[lo - 1][0]].kind in sp.STRUCT:
+        lo -= 1
+    while hi < len(p.segs) - 1 and net.m[p.segs[hi + 1][0]].kind in sp.STRUCT:
+        hi += 1
+    (j0, f0), (j1, f1) = p.segs[lo], p.segs[hi]
+    a, b = net.lines[j0][0 if f0 else -1], net.lines[j1][-1 if f1 else 0]
+    pos0, pos1 = p.offset[j0], p.offset[j1] + net.L[j1]
+    z = zfn([a, b])
+    t = 0.0 if pos1 - pos0 <= 1e-9 else min(max((pos - pos0) / (pos1 - pos0), 0.0), 1.0)
+    return float(z[0] + (z[1] - z[0]) * t), float(pos1 - pos0)
+
+
+def build(P, zfn=None):
+    """The crossings of P's structures with what they cross, who is over, who moves, the order graph: Levels. zfn(points) -> the
+    elevation: where two road or rail decks of one kind and level cross (a tie: the map's levels cannot order them), the one with the
+    higher natural height is over (findground rule 1/2: where their natural heights already differ, that is the order); they stay a
+    tie where the heights differ by less than TIE_M or the elevation is not given."""
     net = P.net
     L = Levels(P)
+    L.tie_info = {}
     for i in sorted(P.rel, key=lambda i: sp._key(net, i)):
         for j, kind, si, sj, q in sorted(P.rel[i], key=lambda r: (sp._key(net, r[0]), r[2], r[3])):
             if kind != "cross" or not sp.usable(net, j):
@@ -155,12 +195,31 @@ def build(P):
                 continue            # (a crossing of two structures is found from each: once)
             mi, mj = net.m[i], net.m[j]
             o = gs._over(mi, mj)
+            by = None
+            if o is None and any(jj == j and k_ == "join" and (abs(si - si_) <= MERGE_NEAR_M or abs(sj - sj_) <= MERGE_NEAR_M)
+                                 for jj, k_, si_, sj_, _q in P.rel[i]):
+                L.merges.append((i, si, j, sj, q))
+                continue            # (one meets the other on its own level and lies across its line by the junction: a merge, not a crossing)
             if o is None:
-                L.ties.append((i, si, j, sj, q))
-                continue
+                # (two parts of one path are one structure: the line between its ends is one line, whichever part is nearer its high
+                # end is no more over than the other: a service loop crossing itself at one level, 73 m round, 6.3 m asked; the map's levels
+                # alone could order them)
+                if zfn is not None and mi.kind in ("deck", "rail_deck") and mj.kind in ("deck", "rail_deck") \
+                        and P.path_of[i] != P.path_of[j]:
+                    hi_, li_ = natural_height(P, zfn, i, si)
+                    hj_, lj_ = natural_height(P, zfn, j, sj)
+                    if abs(hi_ - hj_) >= TIE_M:
+                        o = "i" if hi_ > hj_ else "j"
+                        by = "elevation"
+                    else:
+                        L.tie_info[(i, j)] = (hi_, hj_)
+                if o is None:
+                    L.ties.append((i, si, j, sj, q))
+                    continue
             u, su, d, sd = (i, si, j, sj) if o == "i" else (j, sj, i, si)
             mu, md = net.m[u], net.m[d]
-            by = "kind" if gs.LEVEL_BAND[mu.kind] != gs.LEVEL_BAND[md.kind] else "level"
+            if by is None:
+                by = "kind" if gs.LEVEL_BAND[mu.kind] != gs.LEVEL_BAND[md.kind] else "level"
             who = findground.leaves(gs.WAY[md.kind], gs.WAY[mu.kind])
             provisional = False
             if who == "lower":
@@ -192,7 +251,12 @@ def check(L, namer):
     finds = []
     for i, si, j, sj, q in L.ties:
         where = namer.point(q)
-        finds.append(Finding(2, "level_tie", "fail", _tie_text(namer, i, si, j, sj, q), where, [namer.info(i), namer.info(j)]))
+        text = _tie_text(namer, i, si, j, sj, q)
+        if (i, j) in L.tie_info:
+            hi_, hj_ = L.tie_info[(i, j)]
+            text += ("; the elevation does not say either: their natural heights (the line between the ground at their structure's ends) "
+                     "are %.1f and %.1f m there, %.1f m apart" % (hi_, hj_, abs(hi_ - hj_)))
+        finds.append(Finding(2, "level_tie", "fail", text, where, [namer.info(i), namer.info(j)]))
     for comp in L.graph.components():
         cyc = L.graph.cycle(comp)
         legs = []
@@ -245,7 +309,7 @@ def check(L, namer):
         moves[c.moves] = moves.get(c.moves, 0) + 1
         k = "%s over %s" % (net.m[c.upper].kind, net.m[c.lower].kind)
         bykind[k] = bykind.get(k, 0) + 1
-    stats = dict(crossings=len(L.crossings), ties=len(L.ties), spans=len(L.graph.nodes), edges=sum(len(v) for v in L.graph.adj.values()),
+    stats = dict(crossings=len(L.crossings), ties=len(L.ties), by_elevation=sum(1 for c in L.crossings if c.by == "elevation"), spans=len(L.graph.nodes), edges=sum(len(v) for v in L.graph.adj.values()),
                  cycles=len(L.graph.components()), self_over=len(self_over), weaves=len(weaves), level_splits=splits, tunnel_network=L.network,
                  moves={str(k): v for k, v in sorted(moves.items(), key=lambda kv: str(kv[0]))},
                  by_kind=dict(sorted(bykind.items())), fails=sum(1 for f in finds if f.level == "fail"))

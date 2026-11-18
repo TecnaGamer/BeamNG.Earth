@@ -73,9 +73,9 @@ def run(members, meta=None, ll=None, edge=None, ground=None, reader=True, feasib
     S.net = net = P.net
     S.namer = namer = ia.Namer(net, ll, meta, edge)
     S.finds[1], S.stats[1] = s1.check(P, namer)
-    S.L = L = s2.build(P)
-    S.finds[2], S.stats[2] = s2.check(L, namer)
     S.ground = g = ground.remap(net, P.cleaned.source, P.cleaned.offset) if ground is not None else None
+    S.L = L = s2.build(P, g.xy if g is not None else None)
+    S.finds[2], S.stats[2] = s2.check(L, namer)
     S.G = G = s3.build(P, L, (lambda n_: (g.xy, g.fixed)) if (g is not None and reader) else None)
     S.finds[3], S.stats[3], S.facts = s3.check(G, namer)
     st4 = dict(systems=len(G.systems), checked=0, feasible=0, infeasible=0, nodes=0, edges=0, owner={})

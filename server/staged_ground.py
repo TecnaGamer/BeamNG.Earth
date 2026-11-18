@@ -31,6 +31,8 @@ import heapq
 import math
 from collections import namedtuple
 
+import numpy as np
+
 import gradeshapes as gs
 import interchange_audit as ia
 import staged_paths as sp
@@ -177,6 +179,9 @@ def build(P, L, reader=None):
     rel = {i: [r for r in P.rel[i] if not gs._tunnel_network(net, r[0])] for i in cand}
     crosses = {i for i in cand if any(kind == "cross" and gs._over(members[i], members[j]) is not None
                                       for j, kind, _a, _b, _q in rel[i])}
+    # (two decks of one level the map cannot order that stage 2 ordered by their natural heights: crossings like the others)
+    ordered = [c for c in L.crossings if c.by == "elevation" and c.moves is not None]
+    crosses |= {i for c in ordered for i in (c.upper, c.lower) if i in set(cand)}
     dpar = {i: i for i in cand if members[i].kind == "deck"}
 
     def droot(i):
@@ -227,7 +232,13 @@ def build(P, L, reader=None):
     for i in seeds:
         groups.setdefault(root(i), []).append(i)
     for r in sorted(groups, key=lambda x: str(members[x].key)):
-        G.systems.append(gs._system(net, sorted(groups[r], key=lambda x: str(members[x].key)), rel, dig))
+        sysm = gs._system(net, sorted(groups[r], key=lambda x: str(members[x].key)), rel, dig)
+        have = set(sysm["seeds"])
+        for c in ordered:
+            if c.upper in have and c.lower in have:
+                sysm["crossings"].append(dict(u=c.upper, su=c.su, d=c.lower, sd=c.sd, q=np.asarray(c.q, np.float64), moves=c.moves,
+                                              under=gs.under_pairs(net, c.upper, c.su, c.lower, c.sd), by="elevation"))
+        G.systems.append(sysm)
     return G
 
 

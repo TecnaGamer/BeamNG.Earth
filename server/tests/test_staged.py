@@ -147,21 +147,115 @@ def test_no_segment_is_shorter_than_the_kernel_holds_it_to():
     assert len(S.P.paths) == 1 and not S.fails(1)
 
 
-def test_one_way_flags_that_cannot_go_on_are_a_conflict_and_do_not_pair():
+def test_traffic_arriving_where_nothing_takes_it_on_is_a_trap_and_the_roads_do_not_pair():
     a = road(("a", "ground", "a"), line(0, 0, 100, 0))
     b = road(("b", "ground", "b"), line(200, 0, 100, 0))           # both flow into the joint at x = 100
     meta = {"a": dict(oneway=True, dir=1), "b": dict(oneway=True, dir=1)}
     S, _ = stages([a, b], meta=meta, feasibility=False)
     assert len(S.P.paths) == 2
-    bad = [f for f in S.finds[1] if f.code == "oneway_conflict"]
-    assert len(bad) == 1 and "do not let the road go on" in bad[0].text
+    bad = [f for f in S.finds[1] if f.code == "oneway_trap"]
+    assert len(bad) == 1 and "no road there takes it on" in bad[0].text and bad[0].level == "fail"
     # one flowing on from the other is one path, oriented with the traffic
     b2 = road(("b", "ground", "b"), line(100, 0, 200, 0))
     S2, _ = stages([a, b2], meta=meta, feasibility=False)
     assert len(S2.P.paths) == 1 and S2.P.paths[0].flow == 1 and not S2.fails(1)
+    # two one-way roads leaving a joint where nothing arrives are a source: a note (their feeder is not in the map read)
+    c = road(("c", "ground", "c"), line(100, 0, 200, 0))
+    d = road(("d", "ground", "d"), line(100, 0, 100, 150))
+    meta2 = {"c": dict(oneway=True, dir=1), "d": dict(oneway=True, dir=1)}
+    S3, _ = stages([c, d], meta=meta2, feasibility=False)
+    assert not S3.fails(1) and [f.code for f in S3.finds[1] if f.code == "oneway_source"] == ["oneway_source"]
+
+
+def test_one_way_roads_at_a_crossing_that_do_not_go_on_into_each_other_are_no_failure():
+    # a four-way junction: east-west one way east, north-south one way north; each goes straight on, nothing is trapped
+    m = [road(("w", "ground", "w"), line(-100, 0, 0, 0)), road(("e", "ground", "e"), line(0, 0, 100, 0)),
+         road(("s", "ground", "s"), line(0, -100, 0, 0)), road(("n", "ground", "n"), line(0, 0, 0, 100))]
+    meta = {k: dict(oneway=True, dir=1) for k in "wesn"}
+    S, _ = stages(m, meta=meta, feasibility=False)
+    assert len(S.P.paths) == 2 and not S.fails(1) and not [f for f in S.finds[1] if f.code == "oneway_source"]
+
+
+def test_a_two_way_road_between_carriageways_that_both_feed_it_is_cut_so_no_path_runs_against_its_own_flows():
+    # a (one way east) and b (one way west) both end on the two-way road t: each pairs with it, the chain a-t-b has traffic both ways
+    a = road(("a", "ground", "a"), line(-200, 0, -100, 0))
+    t = road(("t", "ground", "t"), line(-100, 0, 100, 0))
+    b = road(("b", "ground", "b"), line(300, 0, 100, 0))
+    meta = {"a": dict(oneway=True, dir=1), "b": dict(oneway=True, dir=1)}
+    S, _ = stages([a, t, b], meta=meta, feasibility=False)
+    assert len(S.P.paths) == 2
+    assert not [f for f in S.finds[1] if f.code == "path_direction"]
+    assert [f.code for f in S.finds[1] if f.code == "path_cut"] == ["path_cut"]
+    assert all(p.flow is not None for p in S.P.paths)
+
+
+def test_two_structures_facing_across_a_short_gap_are_one_road_going_on_and_side_by_side_ones_are_not():
+    a = road(("a", "deck", 0, 0), line(-300, 0, -5, 0, 30), "deck", "trunk", 1.0, half=6.0)
+    b = road(("b", "deck", 0, 1), line(5, 0, 300, 0, 30), "deck", "trunk", 1.0, half=6.0)         # 10 m on, nothing joins either end
+    S, _ = stages([a, b], feasibility=False)
+    assert len(S.P.paths) == 1 and [f.code for f in S.finds[1] if f.code == "facing_join"] == ["facing_join"]
+    assert "10.0 m apart" in next(f.text for f in S.finds[1] if f.code == "facing_join")
+    # another level, or another class, or side by side: each end meets nothing
+    b2 = road(("b", "deck", 0, 1), line(5, 0, 300, 0, 30), "deck", "trunk", 2.0, half=6.0)
+    assert len(stages([a, b2], feasibility=False)[0].P.paths) == 2
+    b3 = road(("b", "deck", 0, 1), line(-5, 10, 300, 10, 30), "deck", "trunk", 1.0, half=6.0)     # beside it, not on from it
+    assert len(stages([a, b3], feasibility=False)[0].P.paths) == 2
+    # the ends that meet nothing are named with what is nearest them
+    d = [f for f in stages([a, b2], feasibility=False)[0].finds[1] if f.code == "dangling_end"]
+    assert d and any("the nearest road is" in f.text and "m off" in f.text for f in d)
+
+
+def test_one_road_twice_with_another_smoothing_is_one_segment():
+    ln1 = line(0, 0, 400, 0, 9)
+    ln2 = np.stack([np.linspace(0, 400, 25), 0.8 * np.sin(np.linspace(0, np.pi, 25))], axis=1)     # the same road, 0.8 m off along its middle
+    a = road(("w1", "deck", 0, 0), ln1, "deck", "trunk", 1.0)
+    b = road(("w1", "deck", 1, 1), ln2, "deck", "trunk", 1.0)
+    S, _ = stages([a, b], feasibility=False)
+    assert len(S.net.m) == 1 and S.P.cleaned.collapsed and not [f for f in S.finds[1] if f.code in ("overlap", "duplicate")]
+
+
+def test_two_ways_on_one_line_on_the_ground_are_a_note_and_on_a_structure_a_failure():
+    g1 = road(("w1", "ground", "a"), line(0, 0, 80, 0))
+    g2 = road(("w2", "ground", "b"), line(0, 0.1, 80, 0.1))
+    S, _ = stages([g1, g2], feasibility=False)
+    assert [(f.code, f.level) for f in S.finds[1] if f.code == "duplicate"] == [("duplicate", "note")]
+    d1 = road(("w3", "deck", 0, 0), line(0, 50, 80, 50), "deck", "primary", 1.0)
+    d2 = road(("w4", "deck", 1, 1), line(0, 50.1, 80, 50.1), "deck", "primary", 1.0)
+    S2, _ = stages([d1, d2], feasibility=False)
+    assert [(f.code, f.level) for f in S2.finds[1] if f.code == "duplicate"] == [("duplicate", "fail")]
 
 
 # ---- stage 2: level order ----
+
+def tie_members():
+    a = road(("a", "deck", 0, 0), line(-120, 0, 120, 0, 25), "deck", "primary", 1.0, half=5.0)
+    b = road(("b", "deck", 1, 1), line(0, -120, 0, 120, 25), "deck", "primary", 1.0, half=5.0)
+    return [a, b]
+
+
+def test_a_tie_of_two_decks_is_ordered_by_their_natural_heights_where_they_differ():
+    def hill(xy):
+        xy = np.atleast_2d(xy)
+        return np.where(np.abs(xy[:, 1]) > 60.0, 14.0, 0.0)          # b's ends stand on a hill, a's on the flat
+    pl = places.synthetic(tie_members(), ground=hill)
+    S = staged.run(pl.members, pl.meta, None, None, pl.ground, feasibility=False)
+    assert not S.fails(2) and len(S.L.crossings) == 1
+    c = S.L.crossings[0]
+    assert c.by == "elevation" and S.net.m[c.upper].key[2] == 1 and c.moves == "up"
+    assert len(S.G.systems) == 1 and [x["moves"] for x in S.G.systems[0]["crossings"]] == ["up"]
+    # on flat ground nothing orders them: a tie, named with the heights the elevation gave
+    flat, _ = stages(tie_members(), feasibility=False)
+    tie = [f for f in flat.finds[2] if f.code == "level_tie"]
+    assert len(tie) == 1 and tie[0].level == "fail" and "the elevation does not say either" in tie[0].text
+
+
+def test_the_level_tie_is_a_tie_where_the_decks_cross_with_no_elevation_given():
+    pl = places.synthetic(tie_members())
+    S = staged.run(pl.members, pl.meta, None, None, None, feasibility=False)
+    assert [f.code for f in S.finds[2]] == ["level_tie"]
+
+
+# ---- stage 2 (the order graph) ----
 
 def overpass_members(deck_level=1.0, mway_kind="ground"):
     return [road(("mway", mway_kind, "m"), line(-400, 0, 400, 0), cls="motorway", kmh=120, half=12.0),

@@ -90,13 +90,27 @@ def holds_of(net, sysm, pcs, smp, ground, cons_node):
         run = _available(segs)
         if run < gs.RAMP_MAX_M - 1e-6:
             continue                # (the road ends first, at a dead end or another structure: no ground to reach)
-        mj, s1 = segs[-1][0], segs[-1][2]
-        zg = float(ground.at(mj, s1))
         g = gs.max_grade(net.m[j])
+        # (the embankment reaches the ground somewhere along the road, at the first point where the road's ground is within its grade
+        # of the end's height: the end can stand where some point d m on has the ground within g d of it, the hull of those
+        # bands. A far end alone held it to the ground 600 m up the valley: a Zurich ramp's deck end 47 m up, the kernel's answer
+        # 40 m outside the band)
+        zg_lo, zg_hi, d0, at_d = math.inf, -math.inf, 0.0, None
+        for mj, s0, s1 in segs:
+            sv = np.linspace(s0, s1, max(2, int(math.ceil(abs(s1 - s0) / gs.STEP_M)) + 1))
+            zz = np.asarray(ground.at(mj, sv), np.float64)
+            dd = d0 + np.abs(sv - s0)
+            ok = np.isfinite(zz)
+            if ok.any():
+                zg_lo = min(zg_lo, float((zz[ok] - g * dd[ok]).min()))
+                zg_hi = max(zg_hi, float((zz[ok] + g * dd[ok]).max()))
+            d0 += abs(s1 - s0)
+        if not (math.isfinite(zg_lo) and math.isfinite(zg_hi)):
+            continue
         k = 0 if si < net.L[i] / 2 else -1
-        out.append(Hold(cons_node(piece[i], k), zg - g * run - gs.SOFT_M, zg + g * run + gs.SOFT_M, i, si,
-                        "its end's embankment on %s reaches the ground there, %.0f m on, ground %.2f m, at %.1f%%"
-                        % (str(net.m[j].cls), run, zg, 100.0 * g)))
+        out.append(Hold(cons_node(piece[i], k), zg_lo - gs.SOFT_M, zg_hi + gs.SOFT_M, i, si,
+                        "its end's embankment on %s reaches the ground within %.0f m, at %.1f%% (ground %.2f to %.2f m by then)"
+                        % (str(net.m[j].cls), run, 100.0 * g, zg_lo, zg_hi)))
     dips = iter(sysm["dips"])
     for p, pc in enumerate(pcs):
         if pc["kind"] != "dip":
