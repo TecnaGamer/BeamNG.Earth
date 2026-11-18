@@ -5033,7 +5033,7 @@ def _end_step(lines, zs):
         for a in (0, -1):
             if sum(dnp.hypot(*(e - ln[a, :2])) < 0.75 for e in ends) > 1:
                 continue
-            zr = float(np.interp(run, s, z)) if a == 0 else float(np.interp(s[-1] - run, s, z))
+            zr = float(dnp.interp(run, s, z)) if a == 0 else float(dnp.interp(s[-1] - run, s, z))
             g = max(g, abs(zr - float(z[a])) / run)
     return g
 
