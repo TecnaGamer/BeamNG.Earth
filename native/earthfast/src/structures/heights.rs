@@ -78,6 +78,34 @@ pub const S_INFEASIBLE: i64 = 2;    // couplings not met (contradicting pins): t
 pub const S_CLEARANCE: i64 = 3;     // a clearance not met after ROUNDS: today's heights
 pub const S_GRADE: i64 = 4;         // the grade check failed without clearance windows: today's heights
 pub const S_SOLVER: i64 = 5;        // the factorisation failed: today's heights
+pub const S_BUDGET: i64 = 6;        // over a memory or work budget (Budget): today's heights, nothing allocated for it
+
+/// The call's memory and work limits, checked BEFORE what they bound is allocated or run (checked integer counts of
+/// the input alone: the same answer on every machine, never a timing). Over one, the structure (a factorisation's) or
+/// the whole chain (the samples, couplings, clearances, index) keeps today's heights with S_BUDGET. The writer solves
+/// one chain at a time in the background, so what a budget buys is a bounded stall of the shadow queue, never a game
+/// or build hitch; real chains sit orders of magnitude below each:
+/// - factor_bytes 32 MiB: one envelope factor (4 M f64). A structure's free nodes are its coupling and clearance
+///   windows' vertices (roads.DECK_STEP, 4 m): a 10 km four-carriageway viaduct coupled end to end is 10 000 nodes,
+///   and RCM gives twins a profile of a few nodes (40 000 entries); 32 MiB is 10 000 nodes at a profile of 400.
+/// - flops 2e9: every factorisation of the call (each round, attempt and structure; ~3 per inner product term plus
+///   the solves), about 1-2 s of the writer's one thread (scalar, no FMA). The 10 km viaduct above: 8 rounds x 1e6.
+/// - samples 2e6: the coupling candidates (each edge's follower vertices / probes, its ends, a crossing edge's segment
+///   pairs) and the clearance samples (every STEP_M of every member, every floor), each a grid lookup (~1 s at most).
+/// - pairs 1e5: couplings (the solve's, and the probes' apart) and clearances each; every pair puts up to 16 entries
+///   in the system's maps (~40 MB at the cap). A 10 km twin is 2 500 pairs, a large interchange's chain ~20 000.
+/// - grid 2e6: the segment index's cell entries (16 m cells; a 4 m segment is in 1-4).
+#[derive(Clone, Copy)]
+pub struct Budget {
+    pub factor_bytes: u64,
+    pub flops: u64,
+    pub samples: u64,
+    pub pairs: usize,
+    pub grid: u64,
+}
+
+pub const BUDGET: Budget = Budget { factor_bytes: 32 << 20, flops: 2_000_000_000, samples: 2_000_000, pairs: 100_000,
+                                    grid: 2_000_000 };
 
 pub const CLASS_DECK: i64 = -1;     // the class code of a deck-over-deck clearance (the crossings' own codes are >= 0)
 
@@ -174,6 +202,20 @@ struct Hit {
 
 fn gcell(v: f64) -> i64 {
     (v / GRID_M).floor() as i64
+}
+
+/// Index::new's cell entries (saturating: over any budget when huge).
+fn grid_entries(ls: &[Line]) -> u64 {
+    let mut n = 0u64;
+    for l in ls {
+        for k in 0..l.xy.len().saturating_sub(1) {
+            let (a, b) = (l.xy[k], l.xy[k + 1]);
+            let gx = (gcell(a[0].max(b[0])) as i128 - gcell(a[0].min(b[0])) as i128 + 1).clamp(0, u64::MAX as i128);
+            let gy = (gcell(a[1].max(b[1])) as i128 - gcell(a[1].min(b[1])) as i128 + 1).clamp(0, u64::MAX as i128);
+            n = n.saturating_add((gx as u64).saturating_mul(gy as u64));
+        }
+    }
+    n
 }
 
 impl Index {
@@ -276,8 +318,8 @@ fn con_value(ls: &[Line], zv: &[Vec<f64>], c: &Con) -> f64 {
 /// vertices: the solve's pairs (ALONG / BESIDE / OUTLINE: each vertex of the follower, the edge's member that is not a
 /// through one or else its second, against the leader: the heights are per vertex, so an equality between a vertex
 /// and the leader's line holds as drawn); else the probes (every STEP_M along the edge's first member: the metrics).
-fn couplings(ls: &[Line], edges: &[(usize, usize, u8)], idx_of: &Index, through: &[bool], vertices: bool)
-             -> Vec<Pair> {
+fn couplings(ls: &[Line], edges: &[(usize, usize, u8)], idx_of: &Index, through: &[bool], vertices: bool,
+             cap: usize) -> Option<Vec<Pair>> {
     let mut out = Vec::new();
     for (e, &(a, b, kind)) in edges.iter().enumerate() {
         if a >= ls.len() || b >= ls.len() || a == b || ls[a].root != ls[b].root || ls[a].dup || ls[b].dup
@@ -294,6 +336,9 @@ fn couplings(ls: &[Line], edges: &[(usize, usize, u8)], idx_of: &Index, through:
                         let d = ((p[0] - q[0]) * (p[0] - q[0]) + (p[1] - q[1]) * (p[1] - q[1])).sqrt();
                         if d <= JOIN_END_M {
                             out.push(Pair { a, sa: ea, b, sb: eb, kind, edge: e });
+                            if out.len() > cap {
+                                return None;
+                            }
                         }
                     }
                 }
@@ -306,6 +351,9 @@ fn couplings(ls: &[Line], edges: &[(usize, usize, u8)], idx_of: &Index, through:
                         if let Some(h) = idx_of.near(ls, p, ly.half).get(&y) {
                             if !h.past && h.s > JOIN_END_M && h.s < ly.len() - JOIN_END_M {
                                 out.push(Pair { a: x, sa: ex, b: y, sb: h.s, kind, edge: e });
+                                if out.len() > cap {
+                                    return None;
+                                }
                             }
                         }
                     }
@@ -330,6 +378,9 @@ fn couplings(ls: &[Line], edges: &[(usize, usize, u8)], idx_of: &Index, through:
                             let sa = la.s[i] + t * (la.s[i + 1] - la.s[i]);
                             let sb = lb.s[j] + u * (lb.s[j + 1] - lb.s[j]);
                             out.push(Pair { a, sa, b, sb, kind, edge: e });
+                            if out.len() > cap {
+                                return None;
+                            }
                         }
                     }
                 }
@@ -364,11 +415,47 @@ fn couplings(ls: &[Line], edges: &[(usize, usize, u8)], idx_of: &Index, through:
             if let Some(h) = idx_of.near(ls, p, reach).get(&g) {
                 if !h.past && within(u, h.u, TAN_ALONG) {
                     out.push(Pair { a: f, sa: t, b: g, sb: h.s, kind: OVERLAP_ALONG, edge: e });
+                    if out.len() > cap {
+                        return None;
+                    }
                 }
             }
         }
     }
-    out
+    Some(out)
+}
+
+/// The samples couplings() looks at (an upper bound, saturating): per edge it would take, its ends' tests, a crossing
+/// edge's segment pairs, the side-by-side follower's vertices (both members': whichever follows) or probes.
+fn coupling_samples(ls: &[Line], edges: &[(usize, usize, u8)], vertices: bool) -> u64 {
+    let mut n = 0u64;
+    let probes = |l: &Line| ((l.len() / STEP_M).floor() as u64).saturating_add(1);
+    for &(a, b, kind) in edges {
+        if a >= ls.len() || b >= ls.len() || a == b || ls[a].root != ls[b].root || ls[a].dup || ls[b].dup
+            || ls[a].xy.len() < 2 || ls[b].xy.len() < 2 {
+            continue;
+        }
+        let (la, lb) = (&ls[a], &ls[b]);
+        n = n.saturating_add(4);
+        if kind == OVERLAP_CROSS {
+            n = n.saturating_add(((la.xy.len() - 1) as u64).saturating_mul((lb.xy.len() - 1) as u64));
+            continue;
+        }
+        let f = if vertices { la.s.len().max(lb.s.len()) as u64 } else { probes(la) };
+        n = n.saturating_add(f);
+    }
+    n
+}
+
+/// The samples clearances() looks at (saturating): every floor and every STEP_M of every member it samples.
+fn clearance_samples(ls: &[Line], floors: usize) -> u64 {
+    let mut n = floors as u64;
+    for l in ls {
+        if !l.dup && l.xy.len() >= 2 && l.level.is_finite() {
+            n = n.saturating_add(((l.len() / STEP_M).floor() as u64).saturating_add(1));
+        }
+    }
+    n
 }
 
 /// Windows [(s0, s1)] merged and sorted.
@@ -453,6 +540,30 @@ fn ldl_solve(n: usize, lower: &[BTreeMap<usize, f64>], rhs: &[f64]) -> Option<Ve
     } else {
         None
     }
+}
+
+/// (bytes, operations) of one envelope LDL^T (ldl_solve) of the pattern adj (symmetric) in the factor order pos: the
+/// envelope's f64 entries x 8, and per row of profile w (its distance to its first entry) 3 w (w + 1) / 2 + 8 w + 4
+/// (the inner products' terms, the divisions, the two triangular solves: an upper bound). None: overflow.
+fn factor_cost(adj: &[Vec<usize>], pos: &[usize]) -> Option<(u64, u64)> {
+    let n = adj.len();
+    let mut first: Vec<usize> = (0..n).collect();
+    for v in 0..n {
+        for &w in &adj[v] {
+            let (pv, pw) = (pos[v], pos[w]);
+            if pw < first[pv] {
+                first[pv] = pw;
+            }
+        }
+    }
+    let (mut entries, mut ops) = (0u64, 0u64);
+    for (p, &f) in first.iter().enumerate() {
+        let w = (p - f) as u64;
+        entries = entries.checked_add(w.checked_add(1)?)?;
+        let inner = w.checked_mul(w.checked_add(1)?)? / 2;
+        ops = ops.checked_add(inner.checked_mul(3)?)?.checked_add(w.checked_mul(8)?)?.checked_add(4)?;
+    }
+    Some((entries.checked_mul(8)?, ops))
 }
 
 /// A reverse Cuthill-McKee order of the graph adj (neighbours sorted), components by their lowest (degree, index).
@@ -584,9 +695,22 @@ fn dz_limit(_kind: u8) -> f64 {
 /// live JOIN / END_ON pair holds is pinned too (no end drifts off its joint), and so on until nothing changes.
 fn settle(ls: &[Line], pairs: &[Pair]) -> (Vec<[bool; 2]>, Vec<bool>) {
     let mut pinned = pins(ls, pairs);
+    // (per pair its |dz| in z_in, and per member end the pairs that can hold it: computed once, the same tests as
+    // before, so a chain of many members and pairs settles in O(rounds x pairs))
+    let dzs: Vec<f64> = pairs.iter().map(|p| pair_dz(ls, p)).collect();
+    let mut holds: Vec<[Vec<usize>; 2]> = (0..ls.len()).map(|_| [Vec::new(), Vec::new()]).collect();
+    for (k, p) in pairs.iter().enumerate() {
+        for e in 0..2 {
+            if (p.kind == JOIN || p.kind == END_ON) && p.sa == (if e == 0 { 0.0 } else { ls[p.a].len() }) {
+                holds[p.a][e].push(k);
+            }
+            if p.kind == JOIN && p.sb == (if e == 0 { 0.0 } else { ls[p.b].len() }) {
+                holds[p.b][e].push(k);
+            }
+        }
+    }
     loop {
-        let live: Vec<bool> = pairs.iter().map(|p| {
-            let dz = pair_dz(ls, p);
+        let live: Vec<bool> = pairs.iter().zip(&dzs).map(|(p, &dz)| {
             let need = dz / EASE_GRADE;
             dz <= dz_limit(p.kind) && pin_dist(ls, &pinned, p.a, p.sa) >= need
                 && pin_dist(ls, &pinned, p.b, p.sb) >= need
@@ -600,12 +724,7 @@ fn settle(ls: &[Line], pairs: &[Pair]) -> (Vec<[bool; 2]>, Vec<bool>) {
                 if pinned[m][e] {
                     continue;
                 }
-                let t = if e == 0 { 0.0 } else { ls[m].len() };
-                let held = pairs.iter().zip(&live).any(|(p, &l)| {
-                    let at_a = p.a == m && p.sa == t && (p.kind == JOIN || p.kind == END_ON);
-                    let at_b = p.b == m && p.sb == t && p.kind == JOIN;
-                    l && (at_a || at_b)
-                });
+                let held = holds[m][e].iter().any(|&k| live[k]);
                 if !held {
                     pinned[m][e] = true;
                     changed = true;
@@ -622,8 +741,8 @@ fn settle(ls: &[Line], pairs: &[Pair]) -> (Vec<[bool; 2]>, Vec<bool>) {
 /// fallback heights), its report and (a failure) the clearances short or the steep members.
 #[allow(clippy::too_many_arguments)]
 fn solve_one(ls: &[Line], mem: &[usize], pairs: &[Pair], live_in: &[bool], cons: &[Con], pinned: &[[bool; 2]],
-             cwin_extra: &BTreeMap<usize, Vec<(f64, f64, usize)>>, drop_cwin: &[bool], through: &[bool])
-             -> (Option<BTreeMap<usize, Vec<f64>>>, Report, Vec<usize>) {
+             cwin_extra: &BTreeMap<usize, Vec<(f64, f64, usize)>>, drop_cwin: &[bool], through: &[bool],
+             budget: &Budget, flops_left: &mut u64) -> (Option<BTreeMap<usize, Vec<f64>>>, Report, Vec<usize>) {
     // windows per member: couplings' (with their eases) and clearance windows (not dropped)
     let mut rep = Report { status: S_SOLVED, pairs: pairs.len(), pruned: 0, cwin: 0, unmet: 0, rounds: 0,
                            resid: 0.0 };
@@ -820,11 +939,29 @@ fn solve_one(ls: &[Line], mem: &[usize], pairs: &[Pair], live_in: &[bool], cons:
     for (p, &v) in order.iter().enumerate() {
         pos[v] = p;
     }
+    // the budgets, before the factor is allocated: its envelope over the full pattern (every clearance in it: each
+    // round's lies within) and one factorisation's arithmetic (factor_cost), checked; every round is charged to the
+    // call's budget before it runs
+    let Some((bytes, per_round)) = factor_cost(&adj, &pos) else {
+        rep.status = S_BUDGET;
+        return (None, rep, used_cwin);
+    };
+    if bytes > budget.factor_bytes {
+        rep.status = S_BUDGET;
+        return (None, rep, used_cwin);
+    }
     // (warm start: the clearances z_in already misses, the ones their windows are for, active from the first round)
     let mut active: Vec<bool> = cl.iter().map(|(_t, r, ci)| used_cwin.contains(ci) && *r > ACTIVE_TOL).collect();
     let mut d = vec![0.0f64; nvar];
     for round in 0..ROUNDS {
         rep.rounds = round + 1;
+        match flops_left.checked_sub(per_round) {
+            Some(r) => *flops_left = r,
+            None => {
+                rep.status = S_BUDGET;
+                return (None, rep, used_cwin);
+            }
+        }
         let mut mat = base.clone();
         let mut rhs = brhs.clone();
         for (k, (terms, r, _)) in cl.iter().enumerate() {
@@ -932,6 +1069,25 @@ fn solve_one(ls: &[Line], mem: &[usize], pairs: &[Pair], live_in: &[bool], cons:
 fn pins(ls: &[Line], pairs: &[Pair]) -> Vec<[bool; 2]> {
     let n = ls.len();
     let mut out = vec![[true, true]; n];
+    // (per member end: the members JOIN-coupled at it, and whether an END_ON pair leaves from it: indexed once)
+    let mut joins: Vec<[Vec<usize>; 2]> = (0..n).map(|_| [Vec::new(), Vec::new()]).collect();
+    let mut ons = vec![[false, false]; n];
+    for pr in pairs {
+        for e in 0..2 {
+            let ta = if e == 0 { 0.0 } else { ls[pr.a].len() };
+            let tb = if e == 0 { 0.0 } else { ls[pr.b].len() };
+            if pr.kind == JOIN {
+                if pr.sa == ta {
+                    joins[pr.a][e].push(pr.b);
+                }
+                if pr.sb == tb {
+                    joins[pr.b][e].push(pr.a);
+                }
+            } else if pr.kind == END_ON && pr.sa == ta {
+                ons[pr.a][e] = true;
+            }
+        }
+    }
     let ends: Vec<[[f64; 2]; 2]> = ls.iter().map(|l| {
         if l.xy.is_empty() { [[f64::NAN; 2]; 2] } else { [l.xy[0], l.xy[l.xy.len() - 1]] }
     }).collect();
@@ -940,7 +1096,6 @@ fn pins(ls: &[Line], pairs: &[Pair]) -> Vec<[bool; 2]> {
             continue;
         }
         for e in 0..2 {
-            let t = if e == 0 { 0.0 } else { ls[m].len() };
             let p = ends[m][e];
             // the members whose ends meet this one
             let mut at_node: Vec<usize> = Vec::new();
@@ -957,9 +1112,8 @@ fn pins(ls: &[Line], pairs: &[Pair]) -> Vec<[bool; 2]> {
             }
             at_node.sort_unstable();
             at_node.dedup();
-            let joined = |k: usize| pairs.iter().any(|pr| pr.kind == JOIN
-                && ((pr.a == m && pr.sa == t && pr.b == k) || (pr.b == m && pr.sb == t && pr.a == k)));
-            let on = pairs.iter().any(|pr| pr.kind == END_ON && pr.a == m && pr.sa == t);
+            let joined = |k: usize| joins[m][e].contains(&k);
+            let on = ons[m][e];
             let free = if at_node.is_empty() { on } else { at_node.iter().all(|&k| joined(k)) };
             out[m][e] = !free;
         }
@@ -969,7 +1123,7 @@ fn pins(ls: &[Line], pairs: &[Pair]) -> Vec<[bool; 2]> {
 
 /// The clearances of the chain: crossing floors [(member, x, y, floor, class)] and every deck over a deck of another
 /// level (sampled every STEP_M along the upper one).
-fn clearances(ls: &[Line], floors: &[(usize, [f64; 2], f64, i64)], idx: &Index) -> Vec<Con> {
+fn clearances(ls: &[Line], floors: &[(usize, [f64; 2], f64, i64)], idx: &Index, cap: usize) -> Option<Vec<Con>> {
     let mut out = Vec::new();
     for &(m, p, floor, class) in floors {
         if m >= ls.len() || ls[m].xy.len() < 2 || ls[m].dup {
@@ -981,6 +1135,9 @@ fn clearances(ls: &[Line], floors: &[(usize, [f64; 2], f64, i64)], idx: &Index) 
             continue;
         }
         out.push(Con { a: m, sa: h.s, b: None, bound: floor, class });
+        if out.len() > cap {
+            return None;
+        }
     }
     let maxh = ls.iter().fold(0.0f64, |a, l| a.max(l.half));
     for (i, li) in ls.iter().enumerate() {
@@ -1015,10 +1172,13 @@ fn clearances(ls: &[Line], floors: &[(usize, [f64; 2], f64, i64)], idx: &Index) 
                     continue;
                 }
                 out.push(Con { a: i, sa: t, b: Some((j, h.s)), bound: lj.under, class: CLASS_DECK });
+                if out.len() > cap {
+                    return None;
+                }
             }
         }
     }
-    out
+    Some(out)
 }
 
 /// The through members: per group, the members that are no link and of the group's best (lowest) class rank; a group
@@ -1053,11 +1213,36 @@ pub struct Solved {
 /// structure_heights' core: ls (z: z_in), today's heights per member (the fallback), the group edges, the floors.
 pub fn structure_heights_core(ls: &[Line], today: &[Vec<f64>], edges: &[(usize, usize, u8)],
                               floors: &[(usize, [f64; 2], f64, i64)]) -> Solved {
+    structure_heights_budget(ls, today, edges, floors, &BUDGET)
+}
+
+/// The whole chain over a budget (the samples, the couplings, the clearances, the index): today's heights, every
+/// structure S_BUDGET, no pairs or clearances (nothing generated past the budget is kept).
+fn over_budget(ls: &[Line], today: &[Vec<f64>]) -> Solved {
+    let mut roots: Vec<usize> = ls.iter().filter(|l| !l.dup).map(|l| l.root).collect();
+    roots.sort_unstable();
+    roots.dedup();
+    let reports = roots.into_iter().map(|r| (r, Report { status: S_BUDGET, pairs: 0, pruned: 0, cwin: 0, unmet: 0,
+                                                          rounds: 0, resid: 0.0 })).collect();
+    Solved { z: today.to_vec(), reports, pairs: Vec::new(), cons: Vec::new(), pruned: Vec::new() }
+}
+
+/// structure_heights_core under the given budgets.
+pub fn structure_heights_budget(ls: &[Line], today: &[Vec<f64>], edges: &[(usize, usize, u8)],
+                                floors: &[(usize, [f64; 2], f64, i64)], budget: &Budget) -> Solved {
+    // (the counts first: nothing of the index, the couplings or the clearances is made over them)
+    let samples = coupling_samples(ls, edges, true).saturating_add(coupling_samples(ls, edges, false))
+        .saturating_add(clearance_samples(ls, floors.len()));
+    if samples > budget.samples || grid_entries(ls) > budget.grid {
+        return over_budget(ls, today);
+    }
     let idx = Index::new(ls);
     let through = through_of(ls);
-    let pairs = couplings(ls, edges, &idx, &through, true);
-    let probes = couplings(ls, edges, &idx, &through, false);
-    let cons = clearances(ls, floors, &idx);
+    let (Some(pairs), Some(probes), Some(cons)) = (couplings(ls, edges, &idx, &through, true, budget.pairs),
+        couplings(ls, edges, &idx, &through, false, budget.pairs), clearances(ls, floors, &idx, budget.pairs)) else {
+        return over_budget(ls, today);
+    };
+    let mut flops_left = budget.flops;
     let (pinned, live) = settle(ls, &pairs);
     let zin: Vec<Vec<f64>> = ls.iter().map(|l| l.z.clone()).collect();
     // clearance windows: a deck over a deck of the chain that z_in misses by more than MARGIN (one chain, one
@@ -1118,7 +1303,7 @@ pub fn structure_heights_core(ls: &[Line], today: &[Vec<f64>], edges: &[(usize, 
         // the members' fixed neighbours (other structures) at their current heights
         for _attempt in 0..3 {
             let (g, rp, info) = solve_one(&cur, mem, &my_pairs, &my_live, &my_cons, &pinned, &my_cwin, &drop,
-                                          &through);
+                                          &through, budget, &mut flops_left);
             rep = rp;
             if g.is_some() || rep.status == S_PINNED {
                 got = g;
@@ -1466,6 +1651,51 @@ mod tests {
         let deck = |c: &Vec<(usize, i64, f64)>| c.iter().filter(|r| r.1 == CLASS_DECK).fold(f64::INFINITY, |m, r| m.min(r.2));
         assert!(deck(&ct) < -4.0);
         assert!(deck(&cj) >= -MARGIN, "{} {:?}", deck(&cj), a.reports.iter().map(|r| (r.1.status, r.1.cwin, r.1.unmet, r.1.resid)).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn over_a_budget_today_s_heights() {
+        // the twins of twins_meet_in_the_middle_ends_pinned under budgets too small for each step: today's heights,
+        // S_BUDGET; the default budget solves them
+        let pa = straight(0.0, 600.0, 0.0, 150);
+        let pb = straight(0.0, 600.0, 9.0, 150);
+        let za = vec![10.0; pa.len()];
+        let zb: Vec<f64> = pb.iter().map(|p| 10.0 + 0.8 * (4.0 * (p.0 / 600.0) * (1.0 - p.0 / 600.0))).collect();
+        let ls = vec![line(&pa, &za, 4.0, 0, 0, false), line(&pb, &zb, 4.0, 0, 0, false)];
+        let today = vec![vec![11.0; pa.len()], vec![12.0; pb.len()]];
+        let e = [(0, 1, BESIDE)];
+        assert_eq!(structure_heights_budget(&ls, &today, &e, &[], &BUDGET).reports[0].1.status, S_SOLVED);
+        for b in [Budget { flops: 1000, ..BUDGET }, Budget { factor_bytes: 64, ..BUDGET },
+                  Budget { pairs: 10, ..BUDGET }, Budget { samples: 10, ..BUDGET }, Budget { grid: 10, ..BUDGET }] {
+            let got = structure_heights_budget(&ls, &today, &e, &[], &b);
+            assert_eq!(got.reports.len(), 1);
+            assert_eq!(got.reports[0].1.status, S_BUDGET);
+            assert_eq!(got.z, today);
+        }
+    }
+
+    #[test]
+    fn a_dense_structure_stops_at_the_couplings() {
+        // 80 decks 0.2 m apart, 2 km at 4 m, every pair an edge of one group: 3 160 edges x 501 vertices of
+        // candidates, over the sample budget before anything is made
+        let n = 80;
+        let mut ls = Vec::new();
+        let mut today = Vec::new();
+        for k in 0..n {
+            let p = straight(0.0, 2000.0, 0.2 * k as f64, 500);
+            let z = vec![10.0 + 0.01 * k as f64; p.len()];
+            today.push(z.clone());
+            ls.push(line(&p, &z, 4.0, 0, 0, false));
+        }
+        let mut e = Vec::new();
+        for a in 0..n {
+            for b in a + 1..n {
+                e.push((a, b, BESIDE));
+            }
+        }
+        let got = structure_heights_core(&ls, &today, &e, &[]);
+        assert_eq!(got.reports[0].1.status, S_BUDGET);
+        assert_eq!(got.z, today);
     }
 
     #[test]

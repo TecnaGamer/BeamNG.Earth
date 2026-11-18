@@ -29,12 +29,15 @@ Step S2b part 1 (earthfast 488, BNE_DECK_STRUCT 4), still shadow only:
 - Chain discovery is a FIXPOINT (roads.BridgeProfiles._closure): a part's pairs count only once every cell of its line
   and halo is read, nothing is capped or windowed before the closure is complete, and the answer is a function of
   that complete local set (the chain with exactly its own cells + halo read). A window solve publishes only pieces
-  whose own closure is capped (roads.BridgeProfiles._capped).
+  whose own closure is capped (roads.BridgeProfiles._capped); its structure (trusses, their piers) is the legacy
+  path's exactly (keyed by the window chain's lowest part, made from the parts published).
 - ONE joint height solve per structure (heights(): earthfast.structure_heights): the chain profile solved WITHOUT the
   pairwise mechanisms (roads._merge_overlaps / DeckMerge / DUAL_DECK_M, roads._tie_beside; BridgeProfiles._raw_solve,
   in the writer) coupled per group edge, windows and eases, abutments pinned, clearances as an active set, a fallback
-  to today's heights recorded. The JSON gets each member's z_in_mm and z_joint_mm beside today's z_mm and a "joint"
-  section (per structure: status, couplings, metrics today vs joint). Nothing is published from it.
+  to today's heights recorded, also over the native solve's memory and work budgets (status "budget": checked counts
+  before anything is allocated, heights.rs Budget). The JSON gets each member's z_in_mm and z_joint_mm beside
+  today's z_mm and a "joint" section (per structure: status, couplings, metrics today vs joint). Nothing is published
+  from it.
 
 off (the default) builds the same plans, facts and tiles as before (no code of this module runs). shadow's closure
 can put more parts in one chain solve (its heights solved together): the switch is in every cache key (revisit:
@@ -286,7 +289,7 @@ def document(members, got, n_chain, ll=None):
             "digest": _digest({"groups": [g["digest"] for g in out_groups], "conflicts": own})}
 
 
-STATUS = ("solved", "pinned", "infeasible", "clearance", "grade", "solver")
+STATUS = ("solved", "pinned", "infeasible", "clearance", "grade", "solver", "budget")   # (budget: earthfast's limits)
 CLASS_DECK = -1         # earthfast.structure_heights' class code of a deck over a deck of the chain
 
 

@@ -8959,12 +8959,14 @@ class BridgeProfiles:
             # (RS S2b: a window solve publishes only the pieces whose own closure is capped too. A window holds
             # whatever its cells hold, so a deck of a chain that closes within budget (one only the window's partial
             # set pairs with this one) was published from here or from its own solve, whichever was asked first.
-            # Its structure (trusses, their piers) too: from the window's capped pieces and this solve's heights
-            # alone, never a neighbour another solve published before it, Codex review)
+            # Its structure (trusses, their piers) stays the legacy path's exactly: keyed by min(comp), made from the
+            # parts published (here or before). Keyed by min(wcap) from every capped part of the window, two
+            # overlapping windows sharing their lowest piece built different trusses under one key, the first to
+            # commit winning (Codex review of 1ced286a). The switch only writes diagnostics there)
             wcap = [k for k in comp if k == key or self._capped(k, pool[k][1])]
         with self.lock:
             before = {k: self._take_locked(k) for k in comp}    # (the structure is made from them: taken)
-            ck = (min(wcap) if wcap else None) if wcap is not None else (min(comp) if comp else None)
+            ck = min(comp) if comp else None
             fresh = ck is not None and ck not in self.trusses
         # the first solve of a part is kept, and what goes with it, unless this one saw more of it (a window's solve:
         # only its block's pieces, each piece's from its own block's window)
@@ -8985,11 +8987,7 @@ class BridgeProfiles:
         shadow = self.STRUCTURES and structures.SHADOW
         infra = [] if (shadow and fresh and block is None) else None
         if fresh:
-            if wcap is not None:
-                ix = {k: i for i, k in enumerate(comp)}
-                chain = [(pool[k][1], zs[ix[k]], pool[k][0].width) for k in wcap]
-            else:
-                chain = [(v[1], v[2], v[0].width) for v in (keep.get(k) or before[k] for k in comp) if v is not None]
+            chain = [(v[1], v[2], v[0].width) for v in (keep.get(k) or before[k] for k in comp) if v is not None]
             beams, tpiers = self._structure(chain) if infra is None else self._structure(chain, infra)
         won = False
         with self.lock:
