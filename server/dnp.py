@@ -139,7 +139,10 @@ def power(x, y):
 def _mm_cast(x, dt):
     """x as dt, and its strides where the cast copied it (the copy's layout can differ from x's; the kernel orders a
     sum by the layout the Python's ufuncs saw). Only the values x holds are cast: its broadcast (stride-0) axes stay
-    broadcast, so a huge broadcast view is never materialised (an empty result's operand included)."""
+    broadcast, so a huge broadcast view is never materialised (an empty result's operand included). Accepted
+    difference (Codex review of e16051bd): the cast happens before the kernel sees an empty result, so a narrower
+    operand whose logical shape is too big for numpy at the wider dtype (a float32 view of 2^59 x 2 elements as
+    float64) raises numpy's ValueError where the Python returned an empty array; the server's operands are float64."""
     if x.dtype == dt:
         return x, None
     core = x[tuple(slice(0, 1) if s == 0 else slice(None) for s in x.strides)]
