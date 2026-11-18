@@ -295,7 +295,7 @@ def _tile_lines(frame, tx, ty, md, elev, props, wires, clearance):
                     if len(ring) >= 2:
                         into += [(fid, r) for r in _near(frame, np.asarray(ring, np.float64), (x0, y0, x1, y1))]
     subs = _substations(frame, cells, md)
-    fast.require(432, "power_line_layout")
+    fast.require(433, "power_line_layout")
     ends = np.zeros((0, 6))
     for group, h, arms, clear_m, wire_r, these in ((G_PYLON, PYLON_H, ARMS, TOWER_ROAD_CLEAR_M, WIRE_R, lines),
                                                   (G_POLE, POLE_H, POLE_ARMS, POLE_ROAD_CLEAR_M, POLE_WIRE_R, poles)):

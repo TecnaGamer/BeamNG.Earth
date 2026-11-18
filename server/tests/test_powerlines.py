@@ -153,6 +153,22 @@ class LineTest(unittest.TestCase):
         got, _ = yard([tiny], anchors=ends[:, [0, 1, 3, 4, 5]] if len(ends) else np.zeros((0, 3)))
         self.assertNotIn("gantry", [g for g, *_ in got])
 
+    def test_a_rejected_end_is_no_end_to_share(self):
+        # Codex's review of 12b731e1: a line whose gantries fit nowhere in a 13 m wide yard (it comes in along it) and
+        # a second line ending 11 m from it, coming in across the yard, where they fit: the second shared the first's
+        # rejected end and lost its span; now it tries its own
+        narrow = square(0, -6.5, 60, 13)
+        along = np.array([[-200, 0, 0], [-100, 0, 0], [30, 0, 0]], np.float64)
+        across = np.array([[40, 200, 0], [40, 100, 0], [40, 5, 0]], np.float64)
+        _, ends, wp, wo = layout([along, across], [False, False, True, False, False, True], yards=[narrow])
+        self.assertEqual(len(ends), 1)
+        self.assertTrue(np.allclose(ends[0][:2], [40.0, 5.0]), ends)
+        last = np.array([wp[b - 1] for b in wo[1:]])
+        self.assertEqual(int((np.abs(last[:, 1] - (5.0 + powerlines.GANTRY_FRONT)) < 1e-6).sum()),
+                         len(powerlines.ARMS))                               # its conductors on its gantries
+        # (the first line: no span into the yard, it ends at its last tower)
+        self.assertFalse(any(0.0 < p[0] < 35.0 and abs(p[1]) < 6.5 for p in last))
+
     def test_moved_gantries_on_sloping_ground(self):
         # Codex's review of 7bafc807: a moved end's conductors hung at the old end's ground while the yard stood its
         # gantries on the ground under them: on a slope a gap. Now both read the ground under each gantry, once

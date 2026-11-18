@@ -17,12 +17,14 @@ A raceway is OpenStreetMap's highway=raceway, appended to the roads layer with i
 (osmtags.raceway_features). Off by default while it is measured (tools/roadcorpus, category 19); every BNE_* switch is
 in the plans' and cells' keys (revisit.switches_key). Not here (later road revamp phases): raceways on the AI graph
 (decision D20), generated kerbs and run-off (D17, only as mapped by default), raceway profiles in the road model."""
+import logging
 import os
 
 import numpy as np
 
 import dnp
 
+log = logging.getLogger("earthd.racedig")
 ON = os.environ.get("BNE_RACEWAY_DIG", "off") == "on"
 FID_PREFIX = "osm-raceway-"
 BAND_MARGIN_M = 2.0         # m past a raceway's carriageway that is its band (kerbs, apron: grading.UNGRADED_MARGIN_M)
@@ -288,23 +290,24 @@ SUPPORT_CELL_M = 60.0       # m round a span's support whose road cells are read
 
 
 def support_cells(frame, wires):
-    """The map cells (keys, sorted) within SUPPORT_CELL_M of the supports at the ends of wires (furniture.wire_ends):
-    a span is drawn by one tile and its far support may stand 1 km off, near a raceway in no road cell of this tile
-    (Codex's review of 26580e0c)."""
+    """{(x, y) of a support at the ends of wires (furniture.wire_ends): the map cells (keys) within SUPPORT_CELL_M of
+    it}: a span is drawn by one tile and its far support may stand 1 km off, near a raceway in no road cell of this
+    tile (Codex's review of 26580e0c)."""
     import furniture
     import mapcells
     pts = [(float(r[1]), float(r[2])) for w in wires or () for e in (furniture.wire_ends(w),) if e
            for r in e if r is not None]
     if not pts:
-        return []
+        return {}
     xy = np.array(sorted(set(pts)), np.float64)
-    keys = set()
     la0, lo0, _ = frame.enu_to_geodetic(xy[:, 0] - SUPPORT_CELL_M, xy[:, 1] - SUPPORT_CELL_M, 0.0)
     la1, lo1, _ = frame.enu_to_geodetic(xy[:, 0] + SUPPORT_CELL_M, xy[:, 1] + SUPPORT_CELL_M, 0.0)
-    for a0, o0, a1, o1 in zip(np.atleast_1d(la0), np.atleast_1d(lo0), np.atleast_1d(la1), np.atleast_1d(lo1)):
-        keys.update(mapcells.cells_for_bbox(float(min(a0, a1)), float(min(o0, o1)), float(max(a0, a1)),
-                                            float(max(o0, o1))))
-    return sorted(keys, key=str)
+    out = {}
+    for (x, y), a0, o0, a1, o1 in zip(xy.tolist(), np.atleast_1d(la0), np.atleast_1d(lo0), np.atleast_1d(la1),
+                                      np.atleast_1d(lo1)):
+        out[(x, y)] = mapcells.cells_for_bbox(float(min(a0, a1)), float(min(o0, o1)), float(max(a0, a1)),
+                                              float(max(o0, o1)))
+    return out
 
 
 def tile_clear(frame, cells, props, wires, elev, md=None):
@@ -313,18 +316,39 @@ def tile_clear(frame, cells, props, wires, elev, md=None):
     the far ends of the tile's spans (support_cells: the bands that cull them in their own tiles)."""
     if not ON or not (props or wires):
         return 0
+    unread = set()
     if md is not None and wires:
-        keys = support_cells(frame, wires)
+        near_cells = support_cells(frame, wires)
+        keys = sorted({k for ks in near_cells.values() for k in ks}, key=str)
         if keys:
             import mapcells
-            cells = list(cells) + [cd.layers.get("roads") for cd in mapcells.load_cells(md, keys, ("roads",))]
+            got, bad = [], set()
+            for k in keys:              # (one by one: a cell that cannot be read costs only the spans that need it)
+                try:
+                    got += [cd.layers.get("roads") for cd in mapcells.load_cells(md, [k], ("roads",))]
+                except Exception as ex:     # (OSError, a decode error: the tile is still built, not kept)
+                    bad.add(k)
+                    log.warning("racedig: road cell %s round a span's support unread: %s: %s", k, type(ex).__name__,
+                                ex)
+            cells = list(cells) + got
+            if bad:
+                import revisit
+                revisit.fault(here=True)
+                unread = {xy for xy, ks in near_cells.items() if any(k in bad for k in ks)}
     lines = bands(frame, cells)
+    dropped = 0
+    if unread:                          # (a span whose support's band could not be read: left out, as if culled)
+        import furniture
+        keep = [w for w in wires if not any(r is not None and (float(r[1]), float(r[2])) in unread
+                                            for r in (furniture.wire_ends(w) or ()))]
+        dropped = len(wires) - len(keep)
+        wires[:] = keep
     if not lines:
-        return 0
+        return dropped
 
     def ground(x, y):
         la, lo, _ = frame.enu_to_geodetic(np.asarray(x, np.float64), np.asarray(y, np.float64), 0.0)
         la, lo = np.asarray(la), np.asarray(lo)
         return np.asarray(frame.geodetic_to_enu(la, lo, np.asarray(elev(la, lo), np.float64))[2], np.float64)
-    return clear_props(props, wires, lines, ground)
+    return dropped + clear_props(props, wires, lines, ground)
 

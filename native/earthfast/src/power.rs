@@ -196,6 +196,12 @@ struct LineEnd {
     fits: bool,
     zl: f64,
     zr: f64,
+    yard: i64,
+}
+
+/// The yard a point is in: the index of the first of the rings that holds it (its own test), -1 for none.
+fn yard_of(yards: &[Vec<(f64, f64)>], x: f64, y: f64) -> i64 {
+    yards.iter().position(|r| in_rings(std::slice::from_ref(r), x, y)).map(|k| k as i64).unwrap_or(-1)
 }
 
 /// The towers, line ends and conductors of lines given as their vertices (n, 3) (x, y in the anchor frame, z the
@@ -302,7 +308,11 @@ pub fn power_line_layout<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, 
             let end = if st[i] { Some((a, head + std::f64::consts::PI)) } else if st[i + 1] { Some((b, head)) } else { None };
             let end = match end {
                 None => None,
-                Some((p, w)) => Some(match mapped.iter().position(|e| (e[0] - p[0]).dhypot(e[1] - p[1]) < end_merge_m) {
+                // (into an earlier end of the same yard whose gantries stand; one that found no place is no end to
+                // share: a nearby line tries its own; Codex's review of 26580e0c)
+                Some((p, w)) => Some(match mapped.iter().zip(ends.iter()).position(|(e, x)| {
+                    x.fits && x.yard == yard_of(&yards, p[0], p[1]) && (e[0] - p[0]).dhypot(e[1] - p[1]) < end_merge_m
+                }) {
                     Some(k) => k,
                     None => {
                         // (its gantries inside the yard: the end moved with them where one stood past the fence)
@@ -323,7 +333,8 @@ pub fn power_line_layout<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, 
                             zr = z[1];
                         }
                         mapped.push(p);
-                        ends.push(LineEnd { e: [x, y, p[2], w], fits: got.is_some(), zl, zr });
+                        ends.push(LineEnd { e: [x, y, p[2], w], fits: got.is_some(), zl, zr,
+                                            yard: yard_of(&yards, p[0], p[1]) });
                         ends.len() - 1
                     }
                 }),

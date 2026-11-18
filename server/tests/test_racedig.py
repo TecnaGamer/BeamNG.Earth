@@ -319,6 +319,36 @@ class PropsTest(unittest.TestCase):
             racedig.tile_clear(frame, [], [list(near)], wires, flat, Md())
             self.assertEqual(wires, [])
 
+    def test_an_unreadable_support_cell_costs_only_its_spans(self):
+        # Codex's review of 12b731e1: a far support's road cell that cannot be read (OSError) aborted the whole road
+        # tile; now the tile completes, the spans needing that cell are left out and the tile is not kept (a fault)
+        from unittest import mock
+        import furniture
+        import mapcells
+        import revisit
+        frame = geodesy.EnuFrame(33.38, -84.32)
+        near = [furniture.G_POLE, 0.0, 0.0, 0.0, 0.0, 1.0, 9.2, 0.0]
+        far = ["pylon", 6000.0, 0.0, 0.0, 0.0, 1.0, 35.8, 0.0]     # (another map cell)
+        other = [furniture.G_POLE, 40.0, 0.0, 0.0, 0.0, 1.0, 9.2, 0.0]
+        la, lo, _ = frame.enu_to_geodetic(np.array([6000.0]), np.array([0.0]), 0.0)
+        far_cell = mapcells.cell_of(float(np.ravel(la)[0]), float(np.ravel(lo)[0]))
+
+        class Md:
+            def cell(self, key, layers=(), kind="demand"):
+                if key == far_cell:
+                    raise OSError("unreadable")
+                return mock.Mock(layers={"roads": ("roads", key)})
+        line = np.c_[np.linspace(0.0, 6000.0, 9), np.full(9, 4.5), np.full(9, 20.0)]
+        short = np.c_[np.linspace(0.0, 40.0, 5), np.full(5, 0.8), np.full(5, 7.8)]
+        wires = furniture.with_ends([line], near, far) + furniture.with_ends([short], near, other)
+        before = revisit.faults()
+        flat = lambda la_, lo_: np.zeros(np.shape(la_))
+        with mock.patch.object(racedig, "ON", True), mock.patch.object(racedig, "bands", lambda f, c: []):
+            racedig.tile_clear(frame, [], [list(near)], wires, flat, Md())
+        self.assertEqual(len(wires), 1)
+        self.assertEqual(furniture.wire_ends(wires[0])[1][1], 40.0)
+        self.assertGreater(revisit.faults(), before)
+
     def test_no_raceway_nothing_dropped(self):
         props = [["pole", 0.0, 0.0, 0.0, 0.0]]
         self.assertEqual(racedig.clear_props(props, [], [], None), 0)
