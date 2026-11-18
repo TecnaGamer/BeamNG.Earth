@@ -6704,6 +6704,7 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<railindex::RailIndex>()?;
     m.add_function(wrap_pyfunction!(railindex::rail_parts_select, m)?)?;
     m.add_class::<railunder::UnderpassIndex>()?;
+    m.add_class::<railunder::UnderpassSeen>()?;
     m.add_function(wrap_pyfunction!(railunder::rail_underpass_select, m)?)?;
     // 491: the full port's railways.parts feature loop (railindex: a layer's rail features per frame in a RailIndex,
     // a window's selection, pieces, clip test, resampling and sort in one call) and railways.road_underpasses

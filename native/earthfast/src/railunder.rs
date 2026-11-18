@@ -9,7 +9,7 @@
 //! while a download failed are made again), its half width (the Python's own arithmetic on it), the arc test (numpy's
 //! cumsum of the segments' hypot), np.round's ends and the dedupe by (id, ends).
 use crate::dm::Dm;
-use crate::railindex::{box_hit, code_points, offsets, P};
+use crate::railindex::{box_hit, code_points, P};
 
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
@@ -32,35 +32,51 @@ struct Under {
     gone: Vec<URing>,
 }
 
-/// A layer's roads with a tunnel spec or a tunnel among the map's ranges (rows ascending, their boxes in the frame) and
-/// each one's tunnel geometry once asked.
+/// A layer's roads (their boxes in the frame, whether the map's ranges have a tunnel) and each one's tunnel geometry
+/// once asked. The roads taken each call are those with a tunnel spec in that call's specs or a map tunnel.
 #[pyclass(module = "earthfast", frozen)]
 pub struct UnderpassIndex {
-    rows: Vec<(usize, [f64; 4])>,
+    boxes: Vec<[f64; 4]>,
+    tagged: Vec<bool>,
     max_m: f64,
     got: Mutex<Vec<Option<Arc<Under>>>>,
 }
 
 #[pymethods]
 impl UnderpassIndex {
-    /// rows: the layer's roads with a tunnel (ascending), boxes (k, 4) theirs in the frame; max_m: roads.UNDERPASS_MAX_M.
+    /// boxes (n, 4): the layer's features' boxes in the frame; tagged (n,): a tunnel among the map's ranges
+    /// (railways._tunnel_tagged); max_m: roads.UNDERPASS_MAX_M.
     #[new]
-    fn new(rows: PyReadonlyArray1<'_, i64>, boxes: PyReadonlyArray2<'_, f64>, max_m: f64) -> PyResult<Self> {
-        let rows = offsets(&rows, "row")?;
-        let b = boxes.as_array();
-        if b.nrows() != rows.len() || (!rows.is_empty() && b.ncols() != 4) {
-            return Err(PyValueError::new_err("UnderpassIndex: boxes (k, 4) per row"));
+    fn new(boxes: PyReadonlyArray2<'_, f64>, tagged: PyReadonlyArray1<'_, bool>, max_m: f64) -> PyResult<Self> {
+        let (b, t) = (boxes.as_array(), tagged.as_array());
+        let n = b.nrows();
+        if t.len() != n || (n > 0 && b.ncols() != 4) {
+            return Err(PyValueError::new_err("UnderpassIndex: boxes (n, 4) and tagged (n,)"));
         }
-        let n = rows.len();
         Ok(UnderpassIndex {
-            rows: rows.into_iter().enumerate().map(|(k, i)| (i, [b[[k, 0]], b[[k, 1]], b[[k, 2]], b[[k, 3]]])).collect(),
+            boxes: (0..n).map(|k| [b[[k, 0]], b[[k, 1]], b[[k, 2]], b[[k, 3]]]).collect(),
+            tagged: t.iter().copied().collect(),
             max_m,
             got: Mutex::new(vec![None; n]),
         })
     }
 
     fn __len__(&self) -> usize {
-        self.rows.len()
+        self.boxes.len()
+    }
+}
+
+/// The (id, ends) keys of the tunnels taken so far in one road_underpasses call (its layers one after another).
+#[pyclass(module = "earthfast", frozen)]
+pub struct UnderpassSeen {
+    keys: Mutex<HashSet<(Vec<u32>, [u64; 4])>>,
+}
+
+#[pymethods]
+impl UnderpassSeen {
+    #[new]
+    fn new() -> Self {
+        UnderpassSeen { keys: Mutex::new(HashSet::new()) }
     }
 }
 
@@ -98,79 +114,78 @@ impl UnderpassIndex {
         Ok(out)
     }
 
-    /// Row k's tunnel geometry, made by entry(layer, i) when first asked or when the road's tunnel spec came or went
+    /// Road k's tunnel geometry, made by entry(k) when first asked or when the road's tunnel spec came or went
     /// (no lock held while the Python runs).
-    fn under(&self, k: usize, layer: usize, spec: bool, entry: &Bound<'_, PyAny>) -> PyResult<Arc<Under>> {
+    fn under(&self, k: usize, spec: bool, entry: &Bound<'_, PyAny>) -> PyResult<Arc<Under>> {
         if let Some(u) = &self.got.lock().unwrap_or_else(|e| e.into_inner())[k] {
             if u.spec == spec {
                 return Ok(u.clone());
             }
         }
-        let (spec, missing, fid, tunnels, gone): Entry<'_> = entry.call1((layer, self.rows[k].0))?.extract()?;
+        let (spec, missing, fid, tunnels, gone): Entry<'_> = entry.call1((k,))?.extract()?;
         let u = Arc::new(Under { spec, missing, key: code_points(&fid)?, tunnels: self.short(tunnels)?,
                                  gone: self.short(gone)? });
-        self.got.lock().unwrap_or_else(|e| e.into_inner())[k] = Some(u.clone());
+        let old = self.got.lock().unwrap_or_else(|e| e.into_inner())[k].replace(u.clone());
+        drop(old);
         Ok(u)
     }
 }
 
-/// railways.road_underpasses over the layers' UnderpassIndex within near: [(xy (k, 2), half width)] of every short
-/// tunnel of the roads whose box meets near, layer by layer, row by row, ring by ring, each once by (id, its ends to the
-/// cm; Python's tuple equality: -0.0 == 0.0, a NaN equal to nothing). specs: each layer's roads.tunnel_specs of this
-/// call; ground(layer) -> its roads.road_specs, asked at its first road taken with a map tunnel missing from its ranges;
-/// entry(layer, i) -> (spec, missing, id, tunnel parts, missing tunnels) makes a road's geometry; side:
-/// railways.UNDERPASS_SIDE_M (half width = spec.width / 2 + side).
+/// railways.road_underpasses for one layer (index) within near, its tunnels appended to out: (xy (k, 2), half width)
+/// of every short tunnel of the roads with a tunnel spec in specs (this call's roads.tunnel_specs) or a map tunnel whose
+/// box meets near, road by road, ring by ring, each once by (id, its ends to the cm) over the call's layers (seen;
+/// Python's tuple equality: -0.0 == 0.0, a NaN equal to nothing). ground() -> the layer's roads.road_specs, asked at
+/// its first road taken with a map tunnel missing from its ranges; entry(i) -> (spec, missing, id, tunnel parts,
+/// missing tunnels) makes a road's geometry; side: railways.UNDERPASS_SIDE_M (half width = spec.width / 2 + side).
 #[pyfunction]
-#[pyo3(signature = (indexes, specs, near, entry, ground, side))]
-pub fn rail_underpass_select<'py>(py: Python<'py>, indexes: Vec<Bound<'py, UnderpassIndex>>,
-                                  specs: Vec<Bound<'py, PyAny>>, near: (f64, f64, f64, f64),
-                                  entry: Bound<'py, PyAny>, ground: Bound<'py, PyAny>, side: Bound<'py, PyAny>)
-                                  -> PyResult<Bound<'py, PyList>> {
-    if specs.len() != indexes.len() {
-        return Err(PyValueError::new_err("rail_underpass_select: a specs list per index"));
+#[pyo3(signature = (index, specs, near, entry, ground, side, seen, out))]
+#[allow(clippy::too_many_arguments)]
+pub fn rail_underpass_select<'py>(py: Python<'py>, index: Bound<'py, UnderpassIndex>, specs: Bound<'py, PyList>,
+                                  near: (f64, f64, f64, f64), entry: Bound<'py, PyAny>, ground: Bound<'py, PyAny>,
+                                  side: Bound<'py, PyAny>, seen: Bound<'py, UnderpassSeen>, out: Bound<'py, PyList>)
+                                  -> PyResult<()> {
+    let ix = index.get();
+    let n = ix.boxes.len();
+    if specs.len() != n {
+        return Err(PyValueError::new_err("rail_underpass_select: a spec per feature"));
     }
     let near = [near.0, near.1, near.2, near.3];
-    let out = PyList::empty(py);
-    let mut seen: HashSet<(Vec<u32>, [u64; 4])> = HashSet::new();
-    for (li, ix) in indexes.iter().enumerate() {
-        let ix = ix.get();
-        let mut ground_specs: Option<Bound<'py, PyAny>> = None;
-        for k in 0..ix.rows.len() {
-            if !box_hit(&ix.rows[k].1, &near) {
-                continue;
+    let has: Vec<bool> = specs.iter().zip(&ix.tagged).map(|(sp, &t)| t || !sp.is_none()).collect();
+    let mut ground_specs: Option<Bound<'py, PyAny>> = None;
+    for (i, &h) in has.iter().enumerate() {
+        if !h || !box_hit(&ix.boxes[i], &near) {
+            continue;
+        }
+        let mut sp = specs.get_item(i)?;
+        let u = ix.under(i, !sp.is_none(), &entry)?;
+        let mut rings: Vec<&URing> = if sp.is_none() { Vec::new() } else { u.tunnels.iter().collect() };
+        if u.missing {
+            if ground_specs.is_none() {
+                ground_specs = Some(ground.call0()?);
             }
-            let i = ix.rows[k].0;
-            let mut sp = specs[li].get_item(i)?;
-            let u = ix.under(k, li, !sp.is_none(), &entry)?;
-            let mut rings: Vec<&URing> = if sp.is_none() { Vec::new() } else { u.tunnels.iter().collect() };
-            if u.missing {
-                if ground_specs.is_none() {
-                    ground_specs = Some(ground.call1((li,))?);
-                }
-                if !sp.is_truthy()? {
-                    sp = ground_specs.as_ref().expect("road specs").get_item(i)?;
-                }
-                if !sp.is_none() {
-                    rings.extend(u.gone.iter());
-                }
+            if !sp.is_truthy()? {
+                sp = ground_specs.as_ref().expect("road specs").get_item(i)?;
             }
-            if sp.is_none() {
-                continue;
-            }
-            let half = sp.getattr("width")?.div(2)?.add(&side)?;
-            for (p, key) in rings {
-                if !key.iter().any(|v| v.is_nan()) {
-                    let bits = key.map(|v| if v == 0.0 { 0u64 } else { v.to_bits() });
-                    if !seen.insert((u.key.clone(), bits)) {
-                        continue;
-                    }
-                }
-                let flat: Vec<f64> = p.iter().flat_map(|q| [q[0], q[1]]).collect();
-                let arr = numpy::ndarray::Array2::from_shape_vec((p.len(), 2), flat)
-                    .map_err(|e| PyValueError::new_err(e.to_string()))?.into_pyarray(py);
-                out.append((arr, &half))?;
+            if !sp.is_none() {
+                rings.extend(u.gone.iter());
             }
         }
+        if sp.is_none() {
+            continue;
+        }
+        let half = sp.getattr("width")?.div(2)?.add(&side)?;
+        for (p, key) in rings {
+            if !key.iter().any(|v| v.is_nan()) {
+                let bits = key.map(|v| if v == 0.0 { 0u64 } else { v.to_bits() });
+                if !seen.get().keys.lock().unwrap_or_else(|e| e.into_inner()).insert((u.key.clone(), bits)) {
+                    continue;
+                }
+            }
+            let flat: Vec<f64> = p.iter().flat_map(|q| [q[0], q[1]]).collect();
+            let arr = numpy::ndarray::Array2::from_shape_vec((p.len(), 2), flat)
+                .map_err(|e| PyValueError::new_err(e.to_string()))?.into_pyarray(py);
+            out.append((arr, &half))?;
+        }
     }
-    Ok(out)
+    Ok(())
 }

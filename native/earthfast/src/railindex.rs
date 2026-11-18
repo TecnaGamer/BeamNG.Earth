@@ -439,6 +439,8 @@ impl RailIndex {
     fn take_ground(&self, k: usize, rings: Vec<(Py<PyAny>, GRing)>, near: &[f64; 4], tram: bool)
                    -> PyResult<Vec<(u8, Arc<Vec<P>>)>> {
         let ids: Vec<usize> = rings.iter().map(|(o, _)| o.as_ptr() as usize).collect();
+        // (the entry replaced, and its rings, let go only after the lock: their last reference can run Python)
+        let mut old: Option<GroundCached> = None;
         let mut cache = self.ground.lock().unwrap_or_else(|e| e.into_inner());
         let slot = &mut cache[k];
         if slot.as_ref().is_none_or(|g| g.ids != ids) {
@@ -456,9 +458,12 @@ impl RailIndex {
                 pieces.push(Piece { kind: GROUND, bbox: bbox(&xy), xy, res: None });
                 keep.push(o);
             }
-            *slot = Some(GroundCached { ids, _keep: keep, pieces });
+            old = slot.replace(GroundCached { ids, _keep: keep, pieces });
         }
-        within(&mut slot.as_mut().expect("ground pieces").pieces, near, tram, self.step)
+        let got = within(&mut slot.as_mut().expect("ground pieces").pieces, near, tram, self.step);
+        drop(cache);
+        drop(old);
+        got
     }
 
     /// The frame's (e, n) of lon / lat points (geodetic_to_enu at h 0).

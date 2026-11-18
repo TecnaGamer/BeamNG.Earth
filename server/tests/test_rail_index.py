@@ -80,10 +80,10 @@ class RailIndexTest(unittest.TestCase):
         got = railways.road_underpasses(FRAME, [f, f], BOX)
         self.assertEqual(len(got), 1)               # (the same tunnel once, by id and ends)
         self.assertAlmostEqual(got[0][1], 5.3, places=5)
-        ix = railways._underpass_index(f, FRAME, roads.tunnel_specs(f))
-        self.assertIs(railways._underpass_index(f, FRAME, roads.tunnel_specs(f)), ix)
+        ix = railways._underpass_index(f, FRAME)
+        self.assertIs(railways._underpass_index(f, FRAME), ix)
         f._road_revision = getattr(f, "_road_revision", 0) + 1     # (roadlanes' reset: specs and ranges made again)
-        self.assertIsNot(railways._underpass_index(f, FRAME, roads.tunnel_specs(f)), ix)
+        self.assertIsNot(railways._underpass_index(f, FRAME), ix)
         self.assertEqual(len(railways.road_underpasses(FRAME, [f], (0.0, 0.0, 10.0, 10.0), reach=0.0)), 0)
 
     def test_a_missing_tunnels_width_is_each_calls_road_spec(self):
@@ -104,6 +104,42 @@ class RailIndexTest(unittest.TestCase):
                     got = railways.road_underpasses(FRAME, [f], BOX)
                 self.assertEqual(len(got), 1)
                 self.assertEqual(got[0][1], width / 2 + railways.UNDERPASS_SIDE_M)
+
+    def test_a_road_gaining_a_tunnel_spec_is_taken(self):
+        # (a road with no map tunnel whose tunnel spec comes later, same road revision: each call's specs decide)
+        f = features([line(100.0), [(120.0, 90.0), (120.0, 110.0)]], ["standard_gauge", "secondary"],
+                     subtypes=["rail", "road"], widths=[(1, 8.6)])
+        spec = roads.road_specs(f)[1]
+        with mock.patch.object(roads, "tunnel_specs", return_value=[None, None]):
+            self.assertEqual(railways.road_underpasses(FRAME, [f], BOX), [])
+        with mock.patch.object(roads, "tunnel_specs", return_value=[None, spec]), \
+                mock.patch.object(roads, "tunnel_parts", side_effect=lambda feats, i: [feats.lonlat[2:4]]):
+            self.assertEqual(len(railways.road_underpasses(FRAME, [f], BOX)), 1)
+
+    def test_layers_are_taken_one_after_another(self):
+        # (a layer's roads are done before the next layer's specs are asked: a failure there leaves the earlier
+        # layers' lookups made, as before)
+        road = [(120.0, 90.0), (120.0, 110.0)]
+        a = features([line(100.0), road], ["standard_gauge", "secondary"], subtypes=["rail", "road"],
+                     flags=[(1, "is_tunnel")], widths=[(1, 8.6)], ids=["a0", "a1"])
+        b = features([road], ["secondary"], flags=[(0, "is_tunnel")], ids=["b0"])
+        calls = []
+        specs = roads.tunnel_specs
+
+        def tunnel_specs(feats):
+            calls.append(("specs", feats is a))
+            if feats is b:
+                raise RuntimeError("b's specs")
+            return specs(feats)
+
+        def tunnel_parts(feats, i):
+            calls.append(("parts", feats is a))
+            return roads._parts_by_level(feats, i, "tunnel")
+        with mock.patch.object(roads, "tunnel_specs", side_effect=tunnel_specs), \
+                mock.patch.object(roads, "tunnel_parts", side_effect=tunnel_parts):
+            with self.assertRaises(RuntimeError):
+                railways.road_underpasses(FRAME, [a, b], BOX)
+        self.assertEqual(calls, [("specs", True), ("parts", True), ("specs", False)])
 
 
 if __name__ == "__main__":

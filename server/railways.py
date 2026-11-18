@@ -388,25 +388,24 @@ def _tunnel_tagged(feats):
 
 
 def road_underpasses(frame, cells, box, reach=REACH_M):
-    """Short road tunnels near box as (xy, half width), including source tunnels made ground by gradesep: each layer's
-    roads with a tunnel in its earthfast.UnderpassIndex (_underpass_index), a road's short tunnels made once
-    (_underpass_entry), the window's box test, arc test and dedupe by (id, ends) one call (rail_underpass_select)."""
+    """Short road tunnels near box as (xy, half width), including source tunnels made ground by gradesep: layer by
+    layer, its roads in its earthfast.UnderpassIndex (_underpass_index), a road's tunnel geometry made once
+    (_underpass_entry), the window's selection, specs, arc test and dedupe by (id, ends) one call a layer
+    (rail_underpass_select). A road's spec is each call's: its tunnel spec (roads.tunnel_specs, asked every call: a
+    layer's specs made on the lidar rule fault their readers), or the layer's road_specs asked at its first road taken
+    with a map tunnel missing from its ranges (specs made while a download failed are made again)."""
     import fast
     fast.require(491, "rail_underpass_select")
-    near = (box[0] - reach, box[1] - reach, box[2] + reach, box[3] + reach)
-    lays, specs, idx = [], [], []
+    near = tuple(float(v) for v in (box[0] - reach, box[1] - reach, box[2] + reach, box[3] + reach))
+    out, seen = [], fast._ef.UnderpassSeen()
     for feats in cells:
         if feats is None or not len(feats):
             continue
-        sp = roads.tunnel_specs(feats)      # (every call: a layer's specs made on the lidar rule fault their readers)
-        lays.append(feats)
-        specs.append(sp)
-        idx.append(_underpass_index(feats, frame, sp))
-    # (a road's spec every call: its tunnel spec, or the layer's road_specs at the first road taken with a map tunnel
-    # missing from its ranges: specs made while a download failed are made again)
-    return fast._ef.rail_underpass_select(idx, specs, tuple(float(v) for v in near),
-                                          lambda k, i: _underpass_entry(lays[k], frame, specs[k], i),
-                                          lambda k: roads.road_specs(lays[k]), UNDERPASS_SIDE_M)
+        specs = roads.tunnel_specs(feats)
+        fast._ef.rail_underpass_select(_underpass_index(feats, frame), specs, near,
+                                       lambda i: _underpass_entry(feats, frame, specs, i),
+                                       lambda: roads.road_specs(feats), UNDERPASS_SIDE_M, seen, out)
+    return out
 
 
 def _lonlat(feats):
@@ -417,9 +416,9 @@ def _lonlat(feats):
     return np.asarray(ll, np.float64).reshape(-1, 2)
 
 
-def _underpass_index(feats, frame, specs):
-    """earthfast.UnderpassIndex of feats' roads with a tunnel spec or a tunnel among the map's ranges in frame, kept on
-    the layer for the frame's coordinates and its road revision (roadlanes' reset makes the specs and ranges again)."""
+def _underpass_index(feats, frame):
+    """earthfast.UnderpassIndex of feats' roads in frame (their boxes, a map tunnel or not), kept on the layer for the
+    frame's coordinates and its road revision (roadlanes' reset makes the specs and ranges again)."""
     import fast
     xin = feats.xy_in(frame)
     tagged = _tunnel_tagged(feats)
@@ -428,10 +427,8 @@ def _underpass_index(feats, frame, specs):
     for got_src, got in memos:
         if len(got_src) == len(src) and all(x is y or (k == 1 and x == y) for k, (x, y) in enumerate(zip(got_src, src))):
             return got
-    has = np.fromiter((sp is not None for sp in specs), bool, len(specs)) | tagged
-    rows = np.flatnonzero(has)
-    ix = fast._ef.UnderpassIndex(rows.astype(np.int64), np.asarray(feats.boxes(frame), np.float64).reshape(-1, 4)[rows],
-                                 float(roads.UNDERPASS_MAX_M))
+    ix = fast._ef.UnderpassIndex(np.asarray(feats.boxes(frame), np.float64).reshape(-1, 4),
+                                 np.ascontiguousarray(tagged, bool), float(roads.UNDERPASS_MAX_M))
     memos.append((src, ix))
     del memos[:-2]
     return ix
