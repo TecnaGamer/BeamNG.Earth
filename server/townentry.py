@@ -3033,7 +3033,7 @@ _hurry = threading.local()
 
 class patience:
     """with patience(s): the tile built inside by this thread waits `s` seconds in all for its town signs' inputs
-    (None: POINTS_WAIT_S for each, as without it)."""
+    and its roofs' photo (None: POINTS_WAIT_S and buildings.ROOF_PHOTO_WAIT_S for each, as without it)."""
 
     def __init__(self, s):
         self.s = s
@@ -3048,10 +3048,16 @@ class patience:
         return False
 
 
+def left(cap):
+    """s a wait of the tile this thread builds may take now for what it can be built without: cap, less inside a
+    patience() that ends sooner (the town signs' inputs, wait_s; the roofs' photo, buildings.RoofPhotoFuture)."""
+    until = getattr(_hurry, "until", None)
+    return cap if until is None else max(0.0, min(cap, until - time.monotonic()))
+
+
 def wait_s():
     """s a wait for a town sign input may take now: POINTS_WAIT_S, less inside a patience() that ends sooner."""
-    until = getattr(_hurry, "until", None)
-    return POINTS_WAIT_S if until is None else max(0.0, min(POINTS_WAIT_S, until - time.monotonic()))
+    return left(POINTS_WAIT_S)
 
 
 class Towns:

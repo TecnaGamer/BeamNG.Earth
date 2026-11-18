@@ -2736,9 +2736,9 @@ def _geo_near(gx, gy, lat, lon):
 
 def roads_geo(aid, lat, lon, zoom, gx, gy, gzoom, out_dir, vfs_dir, sidewalks, lift, buildings, left_hand, mph, q,
               gas_stations, buried=0.0, lamp_region=None, country=None, content=True, skin=True, exact=None, pole_profile=None,
-              de_junctions=False, towns_on=False, wear=None, patience=None):
-    """earthd.Server.build_roads_geo here (road-tile pool; patience: s its content may wait for what it can be built
-    without, townentry.patience: the car is that close; None: as long as it takes): geotile (gx, gy)'s content (content: built in its own
+              de_junctions=False, towns_on=False, wear=None, patient_until=None):
+    """earthd.Server.build_roads_geo here (road-tile pool; patient_until: the time.time() until which its content may
+    wait for what it can be built without, townentry.patience: the car is that close; None: as long as it takes): geotile (gx, gy)'s content (content: built in its own
     frame, or from the revisit cache; gzoom its DEM zoom, the rules its own place's), anchor aid's skin (skin) and its
     parts' exact variants for that anchor (exact: {what: {pivot}}, or "auto": those of the content built here that its
     rigid placement would leave off, roads.geo_exact_auto). Returns {"content": (vfs path, chunks, info,
@@ -2762,6 +2762,7 @@ def roads_geo(aid, lat, lon, zoom, gx, gy, gzoom, out_dir, vfs_dir, sidewalks, l
             import buildings as buildingsmod
             import townentry
             # (the tiles round the car: their roof photos first; a tile the car is about to reach: no long waits)
+            patience = None if patient_until is None else max(0.0, patient_until - time.time())
             with buildingsmod.urgent_photos(near), townentry.patience(patience):
                 return _geo_content(gx, gy, gzoom, out_dir, vfs_dir, buildings, left_hand, mph, gas_stations, buried,
                                     lamp_region, country, pole_profile, de_junctions=de_junctions, towns_on=towns_on,

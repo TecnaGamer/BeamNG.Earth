@@ -3105,6 +3105,27 @@ class RoofPhotoTest(unittest.TestCase):
             self.assertIsNone(f.colours([np.array([[0, 0], [5, 0], [5, 5]], float)]))
         self.assertEqual(b.n, 1)
 
+    def test_a_tile_the_car_is_about_to_reach_does_not_wait_out_the_photo(self):
+        import concurrent.futures
+        import revisit
+        import time
+        import townentry
+        import waits
+        f = bld.RoofPhotoFuture.__new__(bld.RoofPhotoFuture)
+        f.fut = concurrent.futures.Future()         # (never done)
+        ring = [np.array([[0, 0], [5, 0], [5, 5]], float)]
+        t0 = time.monotonic()
+        with townentry.patience(0.1), waits.collect() as w, revisit.scope() as b:
+            self.assertIsNone(f.colours(ring))
+        self.assertLess(time.monotonic() - t0, 2.0, "not ROOF_PHOTO_WAIT_S")
+        self.assertEqual(b.n, 1, "not kept: built again with its photo for the next visit")
+        self.assertGreater(w.get("roof photo", 0.0), 0.05)
+        with townentry.patience(0.0):               # (a photo that is here is read whatever the hurry)
+            f.fut.set_result((None, True, None))
+            with waits.collect() as w, revisit.scope() as b:
+                self.assertIsNone(f.colours(ring))
+        self.assertEqual((b.n, w), (0, {}))
+
     def test_which_geotiles_are_near_the_car(self):
         import blockworker
         import geotiles

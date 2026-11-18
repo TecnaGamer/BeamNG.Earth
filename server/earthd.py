@@ -3063,12 +3063,14 @@ class Server:
         st = Server.stale_of(self, anchor)
         job = revisitmod.StaleJob(blockworker.roads_geo, st, only=True) if st else blockworker.roads_geo
         lh, mph, buried, lamps, country, gzoom = self.geo_rules(gx, gy)
+        # (as a moment, not a span: the tile waits for its process first, 1.4 s in the median at 300 km/h)
+        patience = Server.geo_patience(self, aid, gx, gy)
         fut = self.road_pool.submit(
             job, aid, anchor.lat, anchor.lon, anchor.zooms[0], gx, gy, gzoom, self.out_dir,
             self.vfs_dir, self.sidewalks, DETAIL_ROAD_LIFT if self.near_visual == "detail" else 0.0,
             self.buildings, lh, mph, self.anchor_q(anchor) if skin else None, self.gas_stations, buried, lamps,
             country, content, skin, exact, Server.pole_profile(self), designsmod.enabled(self.dej_on),
-            Server.towns_enabled(self), Server.wear_arg(self), Server.geo_patience(self, aid, gx, gy))
+            Server.towns_enabled(self), Server.wear_arg(self), None if patience is None else time.time() + patience)
         cell_was = Server.geo_cell_state(self, gx, gy)
         t0, waited, asked = time.perf_counter(), [], time.time()
         try:
@@ -4542,9 +4544,10 @@ class Server:
 
     def geo_patience(self, aid, gx, gy):
         """s road geotile (gx, gy)'s build may wait for the inputs it can be built without (blockworker.roads_geo's
-        patience: the town signs' village points and land cover): until the first moving player on anchor aid reaches
-        it (its quad's distance over the car's speed), less the build's own time (reach.BUILD_EST_S). None while
-        nobody on aid moves: as long as it takes, its signs with it. Called as Server.geo_patience(self, ...)."""
+        patience: the town signs' village points and land cover, the roofs' photo): until the first moving player on
+        anchor aid reaches it (its quad's distance over the car's speed), less the build's own time
+        (reach.BUILD_EST_S), and not at all while no road process is free. None while nobody on aid moves: as long as
+        it takes, its signs with it. Called as Server.geo_patience(self, ...)."""
         anchor = getattr(self, "anchors", {}).get(aid)
         frame = getattr(anchor, "frame", None)
         if frame is None:
@@ -4561,7 +4564,15 @@ class Server:
                 quad = geotilesmod.quad(frame, gx, gy)
             eta = geotilesmod.quad_dist(quad, *at) / v
             best = eta if best is None else min(best, eta)
-        return None if best is None else max(0.0, best - reachmod.BUILD_EST_S)
+        if best is None:
+            return None
+        # (none at all while every road process is busy: the tile waits in one of them, and the tiles asked for
+        # meanwhile wait for a process. Round Marienborn 16 tiles of a 300 km/h drive each waited ~8 s for their roofs'
+        # photo, the tiles behind them 1.4-4.3 s for a process, 2026-11-18)
+        pool = getattr(self, "road_pool", None)
+        if pool is not None and getattr(pool, "inflight", 0) >= (getattr(pool, "workers", None) or 1):
+            return 0.0
+        return max(0.0, best - reachmod.BUILD_EST_S)
 
     def geo_unwanted(self, aid, gx, gy):
         """Is road geotile (gx, gy), queued for anchor aid, wanted by no player on it any more (roads.GeoTracker.unwanted:

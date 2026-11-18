@@ -320,6 +320,15 @@ class GeoPatienceTest(unittest.TestCase):
         self.assertIsNone(earthd.Server.geo_patience(self.server(), 1, *self.far))
         self.assertIsNone(earthd.Server.geo_patience(self.server(), 9, *self.far))
 
+    def test_no_waiting_while_no_road_process_is_free(self):
+        s = self.server((1, (0.0, 0.0), (100.0, 0.0)))
+        s.road_pool = types.SimpleNamespace(inflight=2, workers=3)
+        self.assertGreater(earthd.Server.geo_patience(s, 1, *self.far), 20.0)
+        s.road_pool.inflight = 3            # (the tiles asked for meanwhile wait for a process)
+        self.assertEqual(earthd.Server.geo_patience(s, 1, *self.far), 0.0)
+        s.connections[0].vel = (0.0, 0.0)   # (nobody moving: as long as it takes, whatever the pool does)
+        self.assertIsNone(earthd.Server.geo_patience(s, 1, *self.far))
+
     def test_the_first_car_to_get_there_counts(self):
         s = self.server((1, (0.0, 0.0), (10.0, 0.0)), (1, (2000.0, 0.0), (50.0, 0.0)))
         self.assertLess(earthd.Server.geo_patience(s, 1, *self.far), 20.0)
