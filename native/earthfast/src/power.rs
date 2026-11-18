@@ -228,7 +228,8 @@ fn yard_of(yards: &[(i64, Vec<Vec<(f64, f64)>>)], x: f64, y: f64) -> i64 {
 /// (towers (t, 4) [x, y, z, yaw degrees counter-clockwise from +x], ends (e, 7) [x, y, z, heading radians, ground
 /// under the left gantry, under the right one, its yard's id (-1: none)], wire points (w, 3), wire offsets (k + 1),
 /// each wire's supports (k, 10) [kind, x, y, z, yaw degrees] at its first point then at its last: kind 1 a tower (its
-/// row's values), 0 a line end's gantry: a span is drawn by one tile, its towers by theirs).
+/// row's values), 2 the line end's gantry it hangs on (the yard's gantry row's), 0 none: a span is drawn by one tile,
+/// its supports by theirs).
 #[pyfunction]
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub fn power_line_layout<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, off: PyReadonlyArray1<'py, i64>,
@@ -375,8 +376,22 @@ pub fn power_line_layout<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, 
                 let p0 = match (st[i], end) { (true, Some(k)) => gantry(k), _ => tower(a, yaw[i]) };
                 let p1 = match (st[i + 1], end) { (true, Some(k)) => gantry(k), _ => tower(b, yaw[i + 1]) };
                 for (on_end, q, qy) in [(st[i], a, yaw[i]), (st[i + 1], b, yaw[i + 1])] {
-                    if on_end && end.is_some() {
-                        sup.extend_from_slice(&[0.0, 0.0, 0.0, 0.0, 0.0]);
+                    if let (true, Some(k)) = (on_end, end) {
+                        // (its gantry's own row: where the yard stands it, at the ground it is stood on; a raceway's
+                        // band culling it there takes the conductor here too: Codex's review of 119bb4d7)
+                        let (e, w) = (ends[k].e, ends[k].e[3]);
+                        let sign = if (-w.dsin()) * (-head.dsin()) + w.dcos() * head.dcos() >= 0.0 { 1.0 } else { -1.0 };
+                        let right = arms[[r, 2]] * sign > 0.0;
+                        match (gantries.first(), gantries.last()) {
+                            (Some(gl), Some(gr)) => {
+                                let g = if right { gr } else { gl };
+                                let (gx, gy) = kit_part(e[0], e[1], w, anchor_at, g[0], g[1]);
+                                let kx = (-w.dsin(), w.dcos());
+                                sup.extend_from_slice(&[2.0, gx, gy, if right { ends[k].zr } else { ends[k].zl },
+                                                        kx.1.datan2(kx.0).to_degrees().rem_euclid(360.0)]);
+                            }
+                            _ => sup.extend_from_slice(&[0.0, 0.0, 0.0, 0.0, 0.0]),
+                        }
                     } else {
                         sup.extend_from_slice(&[1.0, q[0], q[1], q[2], qy.to_degrees().rem_euclid(360.0)]);
                     }

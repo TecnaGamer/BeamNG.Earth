@@ -6619,6 +6619,7 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 433: power_line_layout merges a line end only into an earlier end of the same yard whose gantries stand
     // 434: power_line_layout takes each yard ring's yard id: a line end moves and merges within its own yard only
     // 435: power_line_layout's ends carry their yard's id (e, 7): each anchored in its own yard only
-    m.add("VERSION", 435)?;
+    // 436: power_line_layout's wire supports give a line end's gantry row (kind 2: its place, ground, yaw)
+    m.add("VERSION", 436)?;
     Ok(())
 }

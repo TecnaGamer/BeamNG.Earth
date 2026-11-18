@@ -264,6 +264,83 @@ def on_poles(rings, pole_keys, tower_keys):
     return n_pole > 0 and n_pole > int(np.isin(keys, tower_keys).sum())
 
 
+def _yard_cells(frame, rings):
+    """The map cells a yard's rings (frame xy) reach."""
+    import mapcells
+    xy = np.concatenate([np.asarray(r, np.float64)[:, :2] for r in rings])
+    la, lo, _ = frame.enu_to_geodetic(xy[:, 0], xy[:, 1], np.zeros(len(xy)))
+    la, lo = np.asarray(la, np.float64), np.asarray(lo, np.float64)
+    mid = float(lo.mean())
+    rel = (lo - mid + 180.0) % 360.0 - 180.0         # (wrapped round its middle: a yard on the antimeridian)
+    west, east = ((mid + float(v) + 180.0) % 360.0 - 180.0 for v in (rel.min(), rel.max()))
+    return mapcells.cells_for_bbox(float(la.min()), west, float(la.max()), east)
+
+
+def _feeders(frame, md, subs, layers, cells, seen, lines, poles):
+    """Every power line ending in one of subs (its vertices in a yard, with one neighbour each side), from the cells
+    the yards reach, added to lines / poles where not laid out yet (seen: their ids): a line end merges into an earlier
+    one of its yard, so the tile drawing a span into a yard and the yard's own tile must know the same lines ending
+    there (Codex's review of 119bb4d7: a span tile that knew only one of two feeders hung its conductors where the
+    yard tile's merged gantries were not)."""
+    from polygon import Path
+    if not subs:
+        return
+    keys = sorted({k for _, rings in subs for k in _yard_cells(frame, rings)} - set(cells), key=str)
+    extra = []
+    for key in keys:
+        f = md.cell(key, layers=("infrastructure",), kind="demand").layers.get("infrastructure")
+        if f is not None and len(f.kind) and f.attrs.get("class") is not None:
+            extra.append(f)
+    every = list(layers) + extra
+    sup = [_support_keys(f) for f in every]
+    pole_keys = np.unique(np.concatenate([q for q, _ in sup])) if sup else np.zeros(0, np.int64)
+    tower_keys = np.unique(np.concatenate([t for _, t in sup])) if sup else np.zeros(0, np.int64)
+    yards = [[Path(np.asarray(r, np.float64)[:, :2]) for r in rings] for _, rings in subs]
+    for f in every:
+        cls, tags = f.attrs["class"].astype(str), f.attrs.get("tags")
+        for i in np.flatnonzero((cls == "power_line") & (f.kind == 2)):
+            fid = str(f.ids[i])
+            t = str(tags[i]) if tags is not None else ""
+            if fid in seen or any(u in t for u in UNDERGROUND):
+                continue
+            runs = []
+            for part in f.parts(i):
+                for ring in part:
+                    ring = np.asarray(ring, np.float64)
+                    if len(ring) < 2:
+                        continue
+                    e, n, _ = frame.geodetic_to_enu(ring[:, 1], ring[:, 0], np.zeros(len(ring)))
+                    xy = np.column_stack([np.asarray(e, np.float64), np.asarray(n, np.float64)])
+                    here = np.zeros(len(ring), bool)
+                    for paths in yards:
+                        inn = np.zeros(len(ring), bool)
+                        for path in paths:
+                            inn ^= path.contains_points(xy)
+                        here |= inn
+                    if not here.any():
+                        continue
+                    keep = here.copy()
+                    keep[:-1] |= here[1:]
+                    keep[1:] |= here[:-1]
+                    j = 0
+                    while j < len(keep):
+                        if not keep[j]:
+                            j += 1
+                            continue
+                        k = j
+                        while k + 1 < len(keep) and keep[k + 1]:
+                            k += 1
+                        if k > j:
+                            runs.append(ring[j:k + 1])
+                        j = k + 1
+            if not runs:
+                continue
+            seen.add(fid)
+            rings = [r for part in f.parts(i) for r in part if len(r)]
+            into = poles if low_voltage(t) or (rings and on_poles(rings, pole_keys, tower_keys)) else lines
+            into += [(fid, r) for r in runs]
+
+
 def _tile_lines(frame, tx, ty, md, elev, props, wires, clearance):
     """tile_lines' layout, into props / wires (fresh lists: tile_lines adds them on success)."""
     import roads
@@ -299,7 +376,8 @@ def _tile_lines(frame, tx, ty, md, elev, props, wires, clearance):
     import mapcells
     reach = {mapcells.cell_of(float(q[1]), float(q[0])) for _, r in lines + poles for q in np.asarray(r, np.float64)}
     subs = _substations(frame, list(cells) + sorted(reach - set(cells), key=str), md)
-    fast.require(435, "power_line_layout")
+    _feeders(frame, md, subs, layers, cells, seen, lines, poles)
+    fast.require(436, "power_line_layout")
     ends = np.zeros((0, 7))
     for group, h, arms, clear_m, wire_r, these in ((G_PYLON, PYLON_H, ARMS, TOWER_ROAD_CLEAR_M, WIRE_R, lines),
                                                   (G_POLE, POLE_H, POLE_ARMS, POLE_ROAD_CLEAR_M, POLE_WIRE_R, poles)):
@@ -359,14 +437,20 @@ def tower_row(group, h, x, y, z, yaw):
 
 def span_wires(wp, wo, sup, group, h, wire_r):
     """power_line_layout's conductors (points wp, offsets wo), each with the rows of the towers at its ends (sup: its
-    supports; a gantry's end none): a span is drawn by one tile, the tower at its other end by the next, and the wire
-    goes with that tower wherever it is culled (furniture.with_ends; Codex's review of 7bafc807)."""
+    supports: a tower's row, or at a line end the yard's row of the gantry it hangs on): a span is drawn by one tile,
+    the support at its other end by the next, and the wire goes with that support wherever it is culled
+    (furniture.with_ends; Codex's reviews of 7bafc807 and 119bb4d7)."""
     import furniture
+
+    def row(q):
+        if q[0] == 1:
+            return tower_row(group, h, *q[1:5])
+        if q[0] == 2:                   # (the gantry it hangs on: the yard's row of it)
+            return tower_row("gantry", PARTS["gantry"], *q[1:5])
+        return None
     out = []
     for j, (a, b) in enumerate(zip(wo[:-1], wo[1:])):
-        ra = tower_row(group, h, *sup[j, 1:5]) if sup[j, 0] == 1 else None
-        rb = tower_row(group, h, *sup[j, 6:10]) if sup[j, 5] == 1 else None
-        out.extend(furniture.with_ends([(np.asarray(wp[a:b]), wire_r)], ra, rb))
+        out.extend(furniture.with_ends([(np.asarray(wp[a:b]), wire_r)], row(sup[j, 0:5]), row(sup[j, 5:10])))
     return out
 
 

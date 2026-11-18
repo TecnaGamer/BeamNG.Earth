@@ -143,6 +143,32 @@ class LineTest(unittest.TestCase):
         racedig.clear_props(rows2, [], band, flat)
         self.assertNotIn(100.0, [r[1] for r in rows2])
 
+    def test_a_span_goes_with_its_culled_gantry(self):
+        # Codex's review of 119bb4d7: a conductor's end at a gantry carried no support row, so a raceway band that culls
+        # the yard's gantry (in the yard's tile) but misses the conductor's end left it hanging in the span's tile
+        import furniture
+        import racedig
+        yard_ring = square(0, -30, 60, 60)
+        line = np.array([[-200, 0, 0], [-100, 0, 0], [30, 0, 0]], np.float64)
+        _, ends, wp, wo, sup = layout([line], [False, False, True], yards=[yard_ring], full=True)
+        wires = powerlines.span_wires(wp, wo, sup, powerlines.G_PYLON, powerlines.PYLON_H, powerlines.WIRE_R)
+        gantry = [r for w in wires for r in furniture.wire_ends(w) if r is not None and r[0] == "gantry"]
+        self.assertEqual(len(gantry), len(powerlines.ARMS))
+        # (the very rows the yard stands)
+        from test_roads import FRAME
+        yard_props = []
+        powerlines._yards(FRAME, lambda la, lo: np.zeros(np.shape(la)), [("y", [yard_ring])], ends,
+                          (-1e4, -1e4, 1e4, 1e4), yard_props)
+        self.assertEqual({tuple(r) for r in gantry}, {tuple(r) for r in yard_props if r[0] == "gantry"})
+        band = [(np.array([[38.5, -100.0], [38.5, 100.0]]), 7.0)]          # to x = 29.5: the gantries on it
+        flat = lambda x, y: np.zeros(len(x))
+        plain = [(np.asarray(w[0]).copy(), w[1]) for w in wires]
+        racedig.clear_props([], plain, band, flat)
+        self.assertEqual(len(plain), len(wires), "(the conductors' own ends are off the band)")
+        racedig.clear_props([], wires, band, flat)
+        self.assertEqual(len(wires), len(powerlines.ARMS), "the span into the yard goes, the one before stays")
+        self.assertTrue(all(np.asarray(w[0])[:, 0].max() < -99.0 for w in wires))
+
     def test_no_gantries_where_none_fit(self):
         # Codex's review of 7bafc807: a yard too small for the gantries anywhere: no line end, no span into it (the
         # line ends at its last tower), and so no gantries in the yard
@@ -465,16 +491,16 @@ class TowerFootprintTest(unittest.TestCase):
         self.assertEqual(run([]), ({powerlines.G_PYLON}, 6))
         self.assertEqual(run(["power_pole", "power_tower"]), ({powerlines.G_PYLON}, 6), "no majority: the towers")
 
-    def test_a_span_into_a_yard_beyond_the_tiles_cells(self):
-        """Codex's review of 9618c426: a span drawn here (its middle in the tile) ends 1 km off in a small yard whose map
-        cell is beyond the tile's 500 m lookup: the yard was not loaded, its vertex taken for a tower, the conductors
-        hung on a tower its own tile never draws. The yard of every laid-out vertex's cell is read now."""
+    def far_yard_world(self, feeder=False):
+        """A tile whose span runs 1.9 km to a 60 m yard in a map cell beyond its lookup: (tx, the yard tile's tx, far x,
+        Md); feeder: a second line ("a", before the span's "b") ending in the yard 9 m from it, mapped only in the
+        yard's cell (Codex's review of 119bb4d7)."""
         import mapcells
         import mapgeom
         import roads
         from test_roads import FRAME
         from types import SimpleNamespace
-        for tx in range(-12, 13):       # (a tile whose far vertex lies in a cell beyond its lookup)
+        for tx in range(-12, 13):
             x0, y0, x1, y1 = roads.tile_bbox(tx, 0)
             mid = (x0 + x1) / 2
             far, near = mid - 950.0, mid + 950.0
@@ -484,33 +510,63 @@ class TowerFootprintTest(unittest.TestCase):
                 break
         else:
             self.skipTest("no such tile near the test frame")
-        ring = np.array([[far - 30, 70], [far + 30, 70], [far + 30, 130], [far - 30, 130], [far - 30, 70]])
-        rla, rlo, _ = FRAME.enu_to_geodetic(ring[:, 0], ring[:, 1], 0.0)
+        ll = lambda xy: np.column_stack(FRAME.enu_to_geodetic(np.asarray(xy)[:, 0], np.asarray(xy)[:, 1], 0.0)[1::-1])
+        ring = [[far - 30, 70], [far + 30, 70], [far + 30, 130], [far - 30, 130], [far - 30, 70]]
+        hv = '{"power":"line","voltage":"220000"}'
+        b = ("b", mapgeom.LINE, "power_line", hv, ll([[far, 100.0], [near, 100.0]]))
+        a = ("a", mapgeom.LINE, "power_line", hv, ll([[far - 300.0, 108.0], [far - 5.0, 108.0]]))
+        yard = ("yard", mapgeom.POLYGON, "substation", "{}", ll(ring))
 
-        def features(with_yard):
-            n = 2 if with_yard else 1
-            coords = [np.column_stack([lo, la])] + ([np.column_stack([rlo, rla])] if with_yard else [])
+        def features(items):
+            n = len(items)
             return mapgeom.Features(
-                layer="infrastructure", ids=np.array(["line", "yard"][:n]),
-                kind=np.array([mapgeom.LINE, mapgeom.POLYGON][:n], np.uint8),
+                layer="infrastructure", ids=np.array([q[0] for q in items]), kind=np.array([q[1] for q in items], np.uint8),
                 part_off=np.arange(n + 1, dtype=np.int64), ring_off=np.arange(n + 1, dtype=np.int64),
-                coord_off=np.r_[0, np.cumsum([len(c) for c in coords])].astype(np.int64),
-                lonlat=np.vstack(coords),
-                attrs={"class": np.array(["power_line", "substation"][:n]),
-                       "tags": np.array(['{"power":"line","voltage":"220000"}', "{}"][:n], object)}, rules={})
-        plain, yard = features(False), features(True)
+                coord_off=np.r_[0, np.cumsum([len(q[4]) for q in items])].astype(np.int64),
+                lonlat=np.vstack([q[4] for q in items]), attrs={"class": np.array([q[2] for q in items]),
+                                                              "tags": np.array([q[3] for q in items], object)}, rules={})
+        at_yard, elsewhere = features(([a] if feeder else []) + [b, yard]), features([b])
 
         class Md:
             def cell(self, key, layers, kind):
-                return SimpleNamespace(layers={"infrastructure": yard if key == far_cell else plain}
+                return SimpleNamespace(layers={"infrastructure": at_yard if key == far_cell else elsewhere}
                                        if "infrastructure" in layers else {"roads": None})
+        return tx, int(np.floor(far / roads.TILE)), far, Md()
+
+    def test_a_span_into_a_yard_beyond_the_tiles_cells(self):
+        """Codex's review of 9618c426: a span drawn here (its middle in the tile) ends 1 km off in a small yard whose map
+        cell is beyond the tile's 500 m lookup: the yard was not loaded, its vertex taken for a tower, the conductors
+        hung on a tower its own tile never draws. The yard of every laid-out vertex's cell is read now."""
+        from test_roads import FRAME
+        tx, _, far, md = self.far_yard_world()
         props, wires = [], []
-        powerlines.tile_lines(FRAME, tx, 0, Md(), lambda la_, lo_: np.zeros(np.shape(la_)), props, wires)
+        powerlines.tile_lines(FRAME, tx, 0, md, lambda la_, lo_: np.zeros(np.shape(la_)), props, wires)
         self.assertEqual(len(wires), len(powerlines.ARMS))
         ends = [np.asarray(w[0])[0] if abs(np.asarray(w[0])[0][0] - far) < 10 else np.asarray(w[0])[-1] for w in wires]
         self.assertTrue(all(abs(p[0] - far) < 10 for p in ends))
         # (on the gantries, GANTRY_H over the frame's ground there; a tower's arms hang 15.65 m and more up)
         self.assertTrue(all(abs(p[2] - powerlines.GANTRY_H) < 1.0 for p in ends), [p[2] for p in ends])
+
+    def test_the_span_lands_on_the_gantries_its_yard_builds(self):
+        """Codex's review of 119bb4d7: an earlier line ending in the same yard, mapped only in the yard's cell: the yard
+        tile merged the span's end into that line's gantries while the span tile, which knew only its own line, hung
+        the conductors on gantries of its own. The lines ending in every yard read are laid out too now; each conductor
+        carries the gantry it hangs on, the very row the yard tile stands."""
+        import furniture
+        from test_roads import FRAME
+        tx, yard_tx, far, md = self.far_yard_world(feeder=True)
+        flat = lambda la_, lo_: np.zeros(np.shape(la_))
+        props, wires = [], []
+        powerlines.tile_lines(FRAME, tx, 0, md, flat, props, wires)
+        span = [w for w in wires if furniture.wire_ends(w) and any(
+            r is not None and r[0] == "gantry" for r in furniture.wire_ends(w))]
+        self.assertEqual(len(span), len(powerlines.ARMS))
+        hung = {tuple(r) for w in span for r in furniture.wire_ends(w) if r is not None and r[0] == "gantry"}
+        yard_props = []
+        powerlines.tile_lines(FRAME, yard_tx, 0, md, flat, yard_props, [])
+        built = {tuple(r) for r in yard_props if r[0] == "gantry"}
+        self.assertEqual(len(built), 2)
+        self.assertEqual(hung, built)
 
     def test_uses_actual_mapped_width(self):
         # The pivot is outside the class-default 8 m road, but not a source-mapped 24 m carriageway.
