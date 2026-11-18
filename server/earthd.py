@@ -345,6 +345,7 @@ MAP_AHEAD_MOVE_M = 200.0        # m the player moves before the list is made aga
 # worker's own priority class instead of the idle one): a cell takes ~7-12 s at that priority, its road tiles are asked
 # for ~10 s and its trees ~20 s before the car
 MAP_AHEAD_URGENT_S = 30.0
+FAR_URGENT_S = 10.0         # s before the car reaches a far geotile from which its build is no longer work for later
 MAP_AHEAD_SIDE_K = 2.0          # a cell beside the path comes as much later as driving this many times its distance
 MAP_AHEAD_LAYERS = AHEAD_LAYERS + ("canopy", "landcover", "places")     # (places: the road tiles' gas stations)
 # the loading map (Server.load_map; the mod's debug window loadmap.lua, opened by its setting): a map cell's state
@@ -2874,8 +2875,13 @@ class Server:
             return got
         _lh, _mph, _buried, lamps, _country, gzoom = self.geo_rules(gx, gy, z)
         t0 = time.perf_counter()
+        # (urgent from FAR_URGENT_S before a moving car reaches it, budget.due: as work for later only, the far
+        # buildings' one process ran 1/8 of the time beside 3 busy cores, and at 90 m/s 10 of 24 reports had every far
+        # tile sent behind the car, 2026-11-18)
+        eta = Server.geo_reach_s(self, gx, gy, z)
+        due = None if eta is None else time.time() + eta - FAR_URGENT_S
         got = self.far_bld_pool.submit(blockworker.far_geo, kind, gx, gy, gzoom, self.out_dir, self.vfs_dir,
-                                       lamps).result()
+                                       lamps, due).result()
         dt = time.perf_counter() - t0
         st = self.__dict__.setdefault("_far_geo_time", {})      # kind -> [n, s] (far_geo_summary)
         e = st.setdefault(kind, [0, 0.0])
@@ -4541,6 +4547,20 @@ class Server:
         if st is not None:
             return {LOAD_MAP_READY: "ready", LOAD_MAP_LOADING: "loading", LOAD_MAP_FAILED: "failed"}.get(st[0], "?")
         return "queued" if kk in getattr(self, "map_ahead_want", ()) else "not asked"
+
+    def geo_reach_s(self, gx, gy, z):
+        """s until the first moving player reaches zoom-z geotile (gx, gy) (its quad's distance in the player's anchor's
+        world over the car's speed), or None while nobody moves. Called as Server.geo_reach_s(self, ...)."""
+        best = None
+        for c in list(getattr(self, "connections", ())):
+            v = math.hypot(*getattr(c, "vel", (0.0, 0.0)))
+            at = getattr(c, "focus", None)
+            frame = getattr(getattr(self, "anchors", {}).get(getattr(c, "active", None)), "frame", None)
+            if v < aheadpath.MIN_V or at is None or frame is None:
+                continue
+            eta = geotilesmod.quad_dist(geotilesmod.quad(frame, gx, gy, z), *at) / v
+            best = eta if best is None else min(best, eta)
+        return best
 
     def geo_patience(self, aid, gx, gy):
         """s road geotile (gx, gy)'s build may wait for the inputs it can be built without (blockworker.roads_geo's

@@ -346,5 +346,45 @@ class GeoPatienceTest(unittest.TestCase):
         self.assertEqual(earthd.Server.geo_cell_state(s, *self.far), "ready")
 
 
+class FarUrgencyTest(unittest.TestCase):
+    """Server.build_far_geo: a far geotile a moving car is about to reach is no longer work for later (budget.due)."""
+
+    def setUp(self):
+        import geotiles
+        self.a = anchor()
+        la, lo, _ = self.a.frame.enu_to_geodetic(3000.0, 0.0, 0.0)
+        self.far = geotiles.tile_of(float(la), float(lo))
+
+    def server(self, vel):
+        got = []
+
+        class Pool:
+            def submit(self, fn, *args):
+                got.append(args)
+                return types.SimpleNamespace(result=lambda: None)
+        s = types.SimpleNamespace(anchors={1: self.a}, connections=[types.SimpleNamespace(active=1, focus=(0.0, 0.0),
+                                                                                           vel=vel)],
+                                  far_bld_pool=Pool(), mapdata=object(), out_dir="/nowhere", vfs_dir="/v",
+                                  geo_rules=lambda gx, gy, z: (False, False, 0.0, None, "DE", 17))
+        return s, got
+
+    def test_due_from_the_car_s_time_to_reach_it(self):
+        import time
+        s, got = self.server((100.0, 0.0))
+        t0 = time.time()
+        earthd.Server.build_far_geo(s, "bldfar", *self.far)
+        due = got[-1][-1]
+        # (30 s away less FAR_URGENT_S, a tile's width sooner: its near edge)
+        self.assertLess(due, t0 + 30.0 - earthd.FAR_URGENT_S + 0.5)
+        self.assertGreater(due, t0 + 30.0 - earthd.FAR_URGENT_S - 3.0)
+        self.assertAlmostEqual(earthd.Server.geo_reach_s(s, *self.far, 17), 30.0, delta=3.0)
+
+    def test_nobody_moving_work_for_later(self):
+        s, got = self.server((0.0, 0.5))
+        earthd.Server.build_far_geo(s, "bldfar", *self.far)
+        self.assertIsNone(got[-1][-1])
+        self.assertIsNone(earthd.Server.geo_reach_s(s, *self.far, 17))
+
+
 if __name__ == "__main__":
     unittest.main()

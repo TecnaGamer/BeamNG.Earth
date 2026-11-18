@@ -3472,13 +3472,20 @@ def traffic_geo(gx, gy, gzoom, out_dir, vfs_dir, left_hand=False, mph=True, far=
     return distanttraffic.write(out_dir, vfs_dir, data, "traffic_far" if far else "traffic") if data is not None else None
 
 
-def far_geo(kind, gx, gy, gzoom, out_dir, vfs_dir, lamp_region=None):
+def far_geo(kind, gx, gy, gzoom, out_dir, vfs_dir, lamp_region=None, due=None):
     """earthd.Server.build_far_geo here (the far buildings' pool): far geotile (gx, gy) of kind ("bldfar": its far
     buildings, the lite mesh of those road geotile (gx, gy) holds, and their streets' lamps; "bldsky": the skyline of a
     SKY_Z square; "brfar": the bridge decks of a BRIDGE_Z square as a piece per road geotile under it), built in its own
     frame (gzoom its DEM zoom, lamp_region its rules) or from the revisit cache (no anchor in the key). Written as
     <prefix>_<key>.json (+ its shapes); returns (vfs path of the JSON, count, frame (lat, lon), pivot, {what: shape
-    file name}) or None when its cells are not at hand yet."""
+    file name}) or None when its cells are not at hand yet. due: the time.time() from which a moving car is about to
+    need it (budget.due: this process, work for later otherwise, at the server's own priority from then)."""
+    import budget
+    with budget.due(due):
+        return _far_geo(kind, gx, gy, gzoom, out_dir, vfs_dir, lamp_region)
+
+
+def _far_geo(kind, gx, gy, gzoom, out_dir, vfs_dir, lamp_region):
     import json
     import buildings as buildingsmod
     import geotiles
