@@ -221,6 +221,55 @@ class PropsTest(unittest.TestCase):
         self.assertEqual(len(wires), 1)
         self.assertEqual(n, 3)
 
+    def test_an_assembly_goes_as_one(self):
+        # the user's reports 56/59/66/70 (Daytona, Atlanta 2026-11-17): a lit raceway's utility pole just inside the
+        # band went, its cobra-head arm 7 m up and the wire ending 0.8 m farther out stayed in the air
+        import furniture
+        lines = [(np.array([[-100.0, 0.0], [100.0, 0.0]]), 7.0)]
+        pole = lambda x, y, z=0.0: [furniture.G_POLE, x, y, z, 90.0, 1.0, 9.2, 0.0]
+        arm = lambda x, y, z=0.0: [furniture.G_POLELAMP, x, y, z + furniture.POLE_LAMP_Z, 90.0, 1.0, 1.1, 0.0]
+        rows = [pole(0.0, 8.7), arm(0.0, 8.7),              # inside the band (9 m): all of it goes
+                pole(40.0, 9.6), arm(40.0, 9.6),            # outside: stays
+                pole(-40.0, 8.0, 5.0), arm(-40.0, 8.0, 5.0)]  # on a deck 5 m over the track: stays, arm and all
+        props = rows + furniture.lamp_lenses(rows)
+        self.assertEqual(len(props), 12)
+        wires = [[[0.0, 8.7 + d, 7.8], [40.0, 9.6 + d, 7.8]] for d in (-0.8, 0.0, 0.8)]   # (the 0.8 one ends at 9.5)
+        wires += [[[40.0, 9.6 + d, 7.8], [80.0, 9.6 + d, 7.8]] for d in (0.0, 0.8)]      # (between kept poles)
+        racedig.clear_props(props, wires, lines, lambda x, y: np.zeros(len(x)))
+        self.assertEqual(sorted({(r[1], round(r[2], 1)) for r in props if r[0] in (furniture.G_POLE,
+                                                                                  furniture.G_POLELAMP)}),
+                         [(-40.0, 8.0), (40.0, 9.6)])
+        lenses = [r for r in props if r[0] in (furniture.G_LENS, furniture.G_GLOW)]
+        self.assertEqual(len(lenses), 4, "the kept arms' lenses and glows, none of the dropped one's")
+        self.assertTrue(all(abs(r[1]) > 1.0 for r in lenses))
+        self.assertEqual(len(wires), 2, "every wire of the dropped pole, the kept poles' span stays")
+        self.assertTrue(all(w[0][0] == 40.0 for w in wires))
+
+    def test_a_lamp_lens_follows_its_post(self):
+        # a post outside the band, its head over the track: the lens stays with the post (judged alone, a lens over
+        # the band with no ground given went)
+        import furniture
+        lines = [(np.array([[-100.0, 0.0], [100.0, 0.0]]), 7.0)]
+        post = [furniture.G_LAMP, 0.0, 10.0, 0.0, 270.0, 1.0, 9.0, 0.0]
+        props = [post] + furniture.lamp_lenses([post])
+        self.assertLess(abs(props[1][2]), 9.0, "(the head over the band)")
+        racedig.clear_props(props, [], lines, None)
+        self.assertEqual(len(props), 3)
+        post = [furniture.G_LAMP, 0.0, 8.0, 0.0, 270.0, 1.0, 9.0, 0.0]
+        props = [post] + furniture.lamp_lenses([post])
+        racedig.clear_props(props, [], lines, lambda x, y: np.zeros(len(x)))
+        self.assertEqual(props, [])
+
+    def test_a_pylon_takes_its_wires(self):
+        import powerlines
+        lines = [(np.array([[-100.0, 0.0], [100.0, 0.0]]), 7.0)]
+        props = [[powerlines.G_PYLON, 0.0, 8.5, 0.0, 0.0, 1.0, 35.8, 0.0]]
+        # (its far conductor ends 4.12 m out, off the band)
+        wires = [[[0.0, 12.62, 20.0], [300.0, 12.62, 20.0]], [[50.0, 300.0, 20.0], [60.0, 300.0, 20.0]]]
+        racedig.clear_props(props, wires, lines, lambda x, y: np.zeros(len(x)))
+        self.assertEqual(props, [])
+        self.assertEqual(len(wires), 1)
+
     def test_no_raceway_nothing_dropped(self):
         props = [["pole", 0.0, 0.0, 0.0, 0.0]]
         self.assertEqual(racedig.clear_props(props, [], [], None), 0)
