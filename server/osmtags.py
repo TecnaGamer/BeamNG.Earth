@@ -459,20 +459,21 @@ _ROW_VAL = 4
 
 
 def _rows(t, idx):
-    """Rows idx of a decoded row group (OsmTags._table) as (id, raceway, busway, file row, COLUMNS' values)."""
-    names = list(COLUMNS)
-    out = []
-    for i in idx:
-        vals = []
-        for c in names:
-            if c in TEXT_COLUMNS:
-                o = t[c + "_off"]
-                vals.append(t[c][o[i]:o[i + 1]].tobytes().decode("utf-8") if t[c + "_ok"][i] else None)
-            else:
-                v = float(t[c][i])
-                vals.append(None if v != v else (int(v) if c in INT_COLUMNS else v))
-        out.append((int(t["id"][i]), bool(t["race"][i]), bool(t["bus"][i]), int(t["frn"][i]), *vals))
-    return out
+    """Rows idx of a decoded row group (OsmTags._table) as (id, raceway, busway, file row, COLUMNS' values)
+    (earthfast osmrows::osm_rows). Input contract (R2a): t an exact dict of OsmTags._decode's arrays (int64 id / frn,
+    bool race / bus, a text column's uint8 bytes with int32 / int64 offsets and bool NULL flags, float32 / float64
+    numbers), idx an int64 array; anything else TypeError."""
+    import fast
+    fast.require(453, "osm_rows")
+    return fast._ef.osm_rows(t, idx if isinstance(idx, np.ndarray) else np.asarray(idx, np.int64), list(COLUMNS),
+                             sorted(TEXT_COLUMNS), sorted(INT_COLUMNS))
+
+
+def _tags_of(rows):
+    """{way id: {column: value}} of rows (_rows' tuples), the None values left out (earthfast osmrows::osm_tags)."""
+    import fast
+    fast.require(453, "osm_tags")
+    return fast._ef.osm_tags(rows if type(rows) is list else list(rows), list(COLUMNS))
 
 
 def cell_rows(t, bounds):
@@ -492,8 +493,7 @@ def tags_and_ways(rows, extra, inside, lines):
     """OsmTags.cell's answer from the cell's rows (cell_rows), the file rows of its raceways and busways (extra), of the
     raceways inside each raceway that may be a facility's outline (inside: {file row: [file rows]}) and the raceway /
     busway lines {file row: {RACEWAY_COLUMNS..., "coords"}}: ({way id: tags}, [the drawn raceways and busways])."""
-    names = list(COLUMNS)
-    tags = {int(r[0]): {k: v for k, v in zip(names, r[_ROW_VAL:]) if v is not None} for r in rows}
+    tags = _tags_of(rows)
     outlines = {f for f, ins in inside.items() if f in lines
                 and is_outline(lines[f]["coords"], [lines[g]["coords"] for g in ins if g in lines])}
     if outlines:

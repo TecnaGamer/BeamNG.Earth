@@ -12,6 +12,7 @@ mod reach;
 mod devraster;
 mod roofs;
 mod onewayjoin;
+mod osmrows;
 mod domes;
 mod roofphoto;
 mod gravity;
@@ -6664,6 +6665,9 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // territories' set kept)
     m.add_function(wrap_pyfunction!(onewayjoin::oneway_join_ends, m)?)?;
     // 452: the full port's oneway_joins.apply (onewayjoin::oneway_join_ends: one-way ends moved to the two-way's lane)
+    m.add_function(wrap_pyfunction!(osmrows::osm_rows, m)?)?;
+    m.add_function(wrap_pyfunction!(osmrows::osm_tags, m)?)?;
+    // 453: the full port's OpenStreetMap tag rows (osmrows: osmtags._rows, tags_and_ways' tag dicts)
     m.add("VERSION", 470)?;
     Ok(())
 }
