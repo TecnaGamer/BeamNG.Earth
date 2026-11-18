@@ -6593,6 +6593,6 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(roadnet::verdicts::photo_values, m)?)?;
     // 392: R2a's photo surface inputs (roadnet::verdicts: roadsurf.candidates and layer_verdicts' store lookup,
     // photosurface.verdicts' selection, _spec_inputs' fill of the photo's values)
-    m.add("VERSION", 410)?;
+    m.add("VERSION", 411)?;
     Ok(())
 }
