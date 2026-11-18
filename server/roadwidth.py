@@ -28,6 +28,7 @@ import dnp
 
 import geodesy
 import mapcells
+import revisit
 import staging
 
 log = logging.getLogger("earthd.roadwidth")
@@ -64,6 +65,11 @@ PREFETCH_THREADS = 8    # cells' walls built at once (prefetch)
 
 class Walls:
     """Building wall segments (metres, a local frame) with a bucket index for ray casts."""
+
+    # made from a parquet cell standing in for the tiles' (mapdata's _bnge_fallback), or with such a cell's: what is
+    # measured on them is neither stored, nor kept in memory (walls, sets, widths, clearances), nor kept by the build
+    # (revisit.fault), so once the tiles are back the tiles' buildings are measured
+    stand_in = False
 
     def __init__(self, segs, index=None):
         """index: (buckets (3, B) int64 rows key, first, count, seg_of (P,) int64) as index_arrays() gives (the
@@ -422,6 +428,7 @@ class RoadWidths:
         if walls is None:
             walls = Walls(segs)
         if stand_in:
+            walls.stand_in = True
             return frame, walls                 # (a stand-in cell's: not kept, built again from the tiles' next time)
         with self.lock:
             got = self.walls.setdefault(str(key), (frame, walls))
@@ -474,9 +481,10 @@ class RoadWidths:
             if got is not None:
                 self.combos.move_to_end(ck)
                 return got
-        frame, segs = None, []
+        frame, segs, stand_in = None, [], False
         for k in keys:
             f, w = self._walls(k)
+            stand_in |= w.stand_in
             sg = np.asarray(w.segs, np.float64)
             if frame is None:
                 frame = f
@@ -494,12 +502,16 @@ class RoadWidths:
                     fast.require(198, "reframe_segs")
                     sg = fast._ef.reframe_segs(np.ascontiguousarray(sg, np.float64), f.origin, f.rot, frame.origin,
                                                frame.rot)
-                    with self.lock:
-                        self.reframed[rk] = (w, sg)
-                        while len(self.reframed) > REFRAMED:
-                            self.reframed.popitem(last=False)
+                    if not w.stand_in:
+                        with self.lock:
+                            self.reframed[rk] = (w, sg)
+                            while len(self.reframed) > REFRAMED:
+                                self.reframed.popitem(last=False)
             segs.append(sg)
         got = (frame, Walls(np.concatenate(segs) if segs else np.zeros((0, 4))))
+        if stand_in:
+            got[1].stand_in = True
+            return got
         with self.lock:
             got = self.combos.setdefault(ck, got)
             while len(self.combos) > COMBOS:
@@ -539,8 +551,8 @@ class RoadWidths:
         for i, k in enumerate(keys):
             frame, walls = self._walls(k)
             rs = walls.__dict__.get("_rs")
-            if walls.segs.dtype != np.float32 or walls.segs.ndim != 2:
-                usable[i] = False       # (walls of another kind: get / cap's own way)
+            if walls.segs.dtype != np.float32 or walls.segs.ndim != 2 or walls.stand_in:
+                usable[i] = False       # (walls of another kind, or a stand-in cell's: get / cap's own way)
                 packed.append(None)
                 continue
             if rs is None:
@@ -592,6 +604,9 @@ class RoadWidths:
             e, n, _ = frame.geodetic_to_enu(ll[:, 1], ll[:, 0], 0.0)
             row = measure_row(np.c_[e, n], walls)
             res = split(row) if row is not None else None
+        if walls.stand_in:
+            revisit.fault(here=True)
+            return res
         with self.lock:
             if len(self.memo) >= MEMO_MAX:      # (unbounded, it grew for a whole session in every road worker)
                 self.memo.clear()
@@ -611,6 +626,9 @@ class RoadWidths:
         if len(walls.segs):
             e, n, _ = frame.geodetic_to_enu(ll[:, 1], ll[:, 0], 0.0)
             res = clearance_row(np.c_[e, n], walls)
+        if walls.stand_in:
+            revisit.fault(here=True)
+            return res
         with self.lock:
             if len(self.caps) >= MEMO_MAX:
                 self.caps.clear()
@@ -623,5 +641,7 @@ class RoadWidths:
         if dnp.norm(np.ptp(lonlat, axis=0) * scale) > 1300.:
             return None
         frame, walls = self._near_walls(lonlat)
+        if walls.stand_in:
+            revisit.fault(here=True)
         xy = frame.geodetic_to_enu(lonlat[:, 1], lonlat[:, 0], 0.)[:2]
         return verge_frontage(np.column_stack(xy), walls, width)

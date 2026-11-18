@@ -76,6 +76,20 @@ class OsmOverMlTest(unittest.TestCase):
         f = layer([(ring(300.0, 300.0, 20.0), OSM), (ring(305.0, 305.0, 10.0), MS), (ring(900.0, 900.0, 10.0), MS)])
         self.assertEqual(osmml.verdicts(f, KEY).tolist(), [0, osmml.DUPLICATE, 0])
 
+    def test_small_osm_does_not_erase_a_large_ml_building(self):
+        """A sparse cell: a small OSM entrance shed at a large ML warehouse's edge, and one inside it, cover little of
+        its footprint: the warehouse stays (Codex, 2026-11-18: either vertex mean in the other dropped it)."""
+        f = layer([(ring(300.0, 300.0, 100.0), MS), (ring(297.0, 340.0, 6.0), OSM), (ring(345.0, 345.0, 10.0), OSM)])
+        self.assertEqual(osmml.verdicts(f, KEY).tolist(), [0, 0, 0])
+
+    def test_duplicate_needs_half_the_ml_footprint(self):
+        """An ML outline 60 % on an OSM one is a duplicate, 40 % is not; a row of OSM rowhouses under one ML outline
+        covers it together."""
+        f = layer([(ring(300.0, 300.0, 20.0), OSM), (ring(308.0, 300.0, 20.0), MS)])
+        self.assertEqual(osmml.verdicts(f, KEY).tolist(), [0, osmml.DUPLICATE])
+        f = layer([(ring(300.0, 300.0, 20.0), OSM), (ring(312.0, 300.0, 20.0), MS)])
+        self.assertEqual(osmml.verdicts(f, KEY).tolist(), [0, 0])
+
     def test_courtyard_building_no_duplicate(self):
         """An ML building in a mapped block's courtyard (the block's hole) shares no footprint with it."""
         outer, hole = ring(300.0, 300.0, 60.0), ring(310.0, 310.0, 40.0)

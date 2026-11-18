@@ -12,9 +12,12 @@
 //! the buildings there. Integer sums: the same verdicts on every machine. Area, not counts: a block of small
 //! rowhouses would outvote an unmapped complex of large apartment blocks next to it.
 //!
-//! And an ML outline overlapping an OSM building (a point on both footprints, holes out: the ML ring's vertex mean,
-//! or the OSM one's, where it lies on its own footprint) is a duplicate Overture's conflation left (1 of ~500 per
-//! corpus place on 2026-11-18.0), dropped wherever it is. A building in the other's courtyard is no duplicate.
+//! And an ML outline mostly on OSM buildings (at least DUP_NUM / DUP_DEN of its own footprint, holes out, under OSM
+//! footprints, holes out) is a duplicate Overture's conflation left, dropped wherever it is. Its footprint's share is
+//! counted on a DUP_GRID x DUP_GRID lattice of points over its box (integer counts: the same verdicts on every
+//! machine), against the union of the OSM outlines its box meets: one OSM outline or a row of OSM rowhouses it spans.
+//! Of the ML outline's area, not the OSM one's: a small OSM shed or entrance at a large ML warehouse's edge does not
+//! drop the warehouse (Codex, 2026-11-18). A building in the other's courtyard is no duplicate.
 //!
 //! An outline is in every cell its box reaches (overture's unclipped buildings), and each cell sees only its own
 //! rows: two cells could judge one outline otherwise. Only its owner (the cell its box centre lies in: Features.own)
@@ -30,6 +33,9 @@ pub const HALF_BINS: i64 = 6; // (a 325 m square: Fells Point's cleared blocks a
 pub const MIN_OSM: i64 = 5;
 pub const SHARE_NUM: i64 = 7;
 pub const SHARE_DEN: i64 = 10;
+pub const DUP_GRID: usize = 32; // lattice points a side over an ML outline's box (its footprint's share on OSM's)
+pub const DUP_NUM: i64 = 1;
+pub const DUP_DEN: i64 = 2;
 const M_PER_DEG_LAT: f64 = 110540.0;
 const M_PER_DEG_LON: f64 = 111320.0;
 
@@ -76,23 +82,6 @@ fn ring_area(r: &[P]) -> f64 {
         s += a[0] * b[1] - b[0] * a[1];
     }
     (s / 2.0).abs()
-}
-
-/// The vertex mean of a ring without its closing point.
-fn ring_centre(r: &[P]) -> Option<P> {
-    let mut n = r.len();
-    if n >= 2 && r[0] == r[n - 1] {
-        n -= 1;
-    }
-    if n == 0 {
-        return None;
-    }
-    let (mut x, mut y) = (0.0, 0.0);
-    for p in &r[..n] {
-        x += p[0];
-        y += p[1];
-    }
-    Some([x / n as f64, y / n as f64])
 }
 
 /// The rows of one buildings layer in the cell's metres.
@@ -230,23 +219,17 @@ pub fn verdicts(l: &Layer, w: f64, h: f64) -> Vec<i8> {
             }
         }
     }
-    // (an OSM outline's vertex mean where it lies on the building itself: a courtyard block's falls in the yard)
-    let osm_centre: Vec<Option<P>> = (0..n)
-        .map(|i| if l.source[i] == OSM && l.part_off[i + 1] > l.part_off[i] {
-                 ring_centre(l.outer(l.part_off[i])).filter(|&c| l.parts(i).any(|p| l.in_part(c, p)))
-             } else { None })
-        .collect();
     let mut stamp = vec![usize::MAX; n];
+    let mut near: Vec<usize> = Vec::new();
     for i in 0..n {
         if l.source[i] != ML || out[i] != KEPT || l.part_off[i + 1] == l.part_off[i] {
             continue;
         }
         let Some(b) = boxes[i] else { continue };
-        let ring = l.outer(l.part_off[i]);
-        // (its vertex mean where it lies on its own footprint: a concave or courtyard outline's may not)
-        let c = ring_centre(ring).filter(|&c| l.parts(i).any(|p| l.in_part(c, p)));
+        // the OSM outlines whose boxes meet its box
+        near.clear();
         let (x0, y0, x1, y1) = (bin(b[0]), bin(b[1]), bin(b[2]), bin(b[3]));
-        'bins: for y in y0..=y1 {
+        for y in y0..=y1 {
             for x in x0..=x1 {
                 for &j in &grid[(y * nb + x) as usize] {
                     let j = j as usize;
@@ -258,16 +241,44 @@ pub fn verdicts(l: &Layer, w: f64, h: f64) -> Vec<i8> {
                     if bj[0] > b[2] || bj[2] < b[0] || bj[1] > b[3] || bj[3] < b[1] {
                         continue;
                     }
-                    let mine = c.is_some_and(|c| l.parts(j).any(|p| l.in_part(c, p)));
-                    if mine || osm_centre[j].is_some_and(|cj| l.parts(i).any(|p| l.in_part(cj, p))) {
-                        out[i] = DUPLICATE;
-                        break 'bins;
-                    }
+                    near.push(j);
                 }
             }
         }
+        if near.is_empty() {
+            continue;
+        }
+        if dup_share(l, i, b, &near, &boxes) {
+            out[i] = DUPLICATE;
+        }
     }
     out
+}
+
+/// Is at least DUP_NUM / DUP_DEN of ML outline i's footprint (box b) on the OSM outlines near? Counted on the
+/// DUP_GRID^2 lattice of cell centres over b: its points on i's footprint, and of those the ones on any of near's.
+fn dup_share(l: &Layer, i: usize, b: [f64; 4], near: &[usize], boxes: &[Option<[f64; 4]>]) -> bool {
+    let g = DUP_GRID as f64;
+    let (dx, dy) = ((b[2] - b[0]) / g, (b[3] - b[1]) / g);
+    let (mut on_ml, mut on_both) = (0i64, 0i64);
+    for ky in 0..DUP_GRID {
+        let y = b[1] + (ky as f64 + 0.5) * dy;
+        for kx in 0..DUP_GRID {
+            let p = [b[0] + (kx as f64 + 0.5) * dx, y];
+            if !l.parts(i).any(|q| l.in_part(p, q)) {
+                continue;
+            }
+            on_ml += 1;
+            let on_osm = near.iter().any(|&j| {
+                boxes[j].is_some_and(|bj| p[0] >= bj[0] && p[0] <= bj[2] && p[1] >= bj[1] && p[1] <= bj[3])
+                    && l.parts(j).any(|q| l.in_part(p, q))
+            });
+            if on_osm {
+                on_both += 1;
+            }
+        }
+    }
+    on_ml > 0 && on_both * DUP_DEN >= on_ml * DUP_NUM
 }
 
 fn offsets(a: &PyReadonlyArray1<'_, i64>, what: &str, len: usize) -> PyResult<Vec<usize>> {
@@ -375,6 +386,32 @@ mod tests {
                          (square(300.0, 300.0, 10.0), ML)];
         let v = verdicts(&layer(&rings), 1900.0, 1900.0);
         assert_eq!(v, vec![KEPT, DUPLICATE, KEPT]);
+    }
+
+    #[test]
+    fn small_osm_at_a_large_ml_building_no_duplicate() {
+        // a sparse cell: a 100 m ML warehouse with a 6 m OSM entrance shed at its edge (and one inside it), no other
+        // OSM: the warehouse stays (the shed is under DUP_NUM / DUP_DEN of its footprint)
+        let rings = vec![(square(200.0, 200.0, 100.0), ML), (square(197.0, 240.0, 6.0), OSM),
+                         (square(250.0, 250.0, 6.0), OSM)];
+        assert_eq!(verdicts(&layer(&rings), 1900.0, 1900.0), vec![KEPT, KEPT, KEPT]);
+        // its vertex mean on the shed: still no duplicate
+        let rings = vec![(square(200.0, 200.0, 100.0), ML), (square(245.0, 245.0, 10.0), OSM)];
+        assert_eq!(verdicts(&layer(&rings), 1900.0, 1900.0), vec![KEPT, KEPT]);
+    }
+
+    #[test]
+    fn duplicate_from_half_its_footprint() {
+        // an ML outline 60 % on an OSM one: a duplicate; 40 %: kept
+        let rings = vec![(square(100.0, 100.0, 20.0), OSM), (square(108.0, 100.0, 20.0), ML)];
+        assert_eq!(verdicts(&layer(&rings), 1900.0, 1900.0), vec![KEPT, DUPLICATE]);
+        let rings = vec![(square(100.0, 100.0, 20.0), OSM), (square(112.0, 100.0, 20.0), ML)];
+        assert_eq!(verdicts(&layer(&rings), 1900.0, 1900.0), vec![KEPT, KEPT]);
+        // one ML outline over a row of three OSM rowhouses (each a third of it): a duplicate of them together
+        let rings = vec![(square(100.0, 100.0, 10.0), OSM), (square(110.0, 100.0, 10.0), OSM),
+                         (square(120.0, 100.0, 10.0), OSM), (vec![[100.0, 100.0], [130.0, 100.0], [130.0, 110.0],
+                                                                  [100.0, 110.0], [100.0, 100.0]], ML)];
+        assert_eq!(verdicts(&layer(&rings), 1900.0, 1900.0), vec![KEPT, KEPT, KEPT, DUPLICATE]);
     }
 
     #[test]

@@ -9,11 +9,12 @@ years ago standing on vacant lots and building sites (0.08 m aerials, 2026-11-18
 judged on its own rows when it is decoded (mapdata, after drop_huge), so every reader (the building tiles, the far
 buildings, the street walls, the sidewalk furniture) sees the same buildings whatever is loaded and in whatever order:
 the rule is earthfast osm_over_ml (osmml.rs): an ML outline whose 325 m square holds at least 5 OSM outlines and OSM's
-share of the building area there is at least 70 % is left out, and an ML outline overlapping an OSM one (a duplicate
-Overture's conflation left) wherever it is. An outline reaching into two cells is in both layers: only its owner (the
-cell its box centre is in, Features.own) judges it, its other copies are left out, so no copy brings back an outline
-its owner dropped. Other non-OSM sources (Esri Community Maps, USGS Lidar: surveyed, not
-learned) are neither dropped nor counted.
+share of the building area there is at least 70 % is left out, and an ML outline at least half of whose footprint lies
+on OSM ones (a duplicate Overture's conflation left: of the ML outline's area, counted on a 32 x 32 lattice over its
+box, so a small OSM shed at a large ML warehouse's edge does not drop the warehouse) wherever it is. An outline
+reaching into two cells is in both layers: only its owner (the cell its box centre is in, Features.own) judges it, its
+other copies are left out, so no copy brings back an outline its owner dropped. Other non-OSM sources (Esri Community
+Maps, USGS Lidar: surveyed, not learned) are neither dropped nor counted.
 
 Measured on the corpus (2026-11-18.0, ML outlines the planned cells own, before -> after): Fells Point 497 -> 44 (the
 building-site ghosts gone; what stays is at the harbour's industrial edge and in windows a cell edge cuts), Phoenix

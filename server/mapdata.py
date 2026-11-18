@@ -359,6 +359,10 @@ def _savez_deflated(path, arrays, level):
             with zf.open(key + ".npy", "w", force_zip64=True) as fh:
                 np.lib.format.write_array(fh, np.asanyarray(val), allow_pickle=True)
 
+class StandIn(dict):
+    """A layer's arrays from the parquet cell standing in for the tiles' (MapData.layer_arrays): a dict, marked."""
+
+
 class MapData:
     """See the module docstring. fetcher: the server's netfetch.Fetcher (None: one of its own);
     release: the Overture release (overture.RELEASE)."""
@@ -1053,7 +1057,9 @@ class MapData:
         return feats
 
     def layer_arrays(self, key, layer, kind="demand"):
-        """(arrays, hit) of one cell's layer: from the cache, or built and cached."""
+        """(arrays, hit) of one cell's layer: from the cache, or built and cached. A StandIn (a dict) when the tiles
+        failed and these are the parquet cell's, stored or built now, with or without a provenance record
+        (_decoded_layer marks the layer)."""
         if layer not in ALL_LAYERS:
             raise ValueError(f"unknown map layer {layer!r}; choose from {', '.join(ALL_LAYERS)}")
         key = _key(key)
@@ -1077,7 +1083,7 @@ class MapData:
                     ppath = self.path(key, layer, parquet=True)
                     if not os.path.exists(ppath):
                         self._store(ppath, arrays)
-                    return self._mirrored(key, layer, ppath, arrays), False
+                    return StandIn(self._mirrored(key, layer, ppath, arrays)), False
                 self._store(path, arrays)
             finally:
                 if mine:
@@ -1211,6 +1217,7 @@ class MapData:
             t0 = time.perf_counter()
             arrays, hit = self.layer_arrays(key, layer, kind)
             t1 = time.perf_counter()
+            fallback = isinstance(arrays, StandIn)
             arrays = dict(arrays)
             prov = json.loads(str(arrays.pop("provenance")))
             en = arrays.pop("en.local", None)
@@ -1242,10 +1249,11 @@ class MapData:
                     f = mapgeom.drop_huge(f, BUILDING_MAX_M2)
                     # (OpenStreetMap over machine-learned outlines where OSM maps the cell's buildings: osmml.py)
                     f = osmml.apply(f, _key(key))
-                    if MapData._pmt(self, layer) and isinstance(prov, dict) and prov.get("format") == "parquet":
-                        # (the tiles failed and the parquet cell stood in: what is kept from it under the tiles'
-                        # keys, roadwidth's walls, is not made from it)
-                        f.__dict__["_bnge_fallback"] = True
+                if fallback:
+                    # (the tiles failed and the parquet cell stood in, a stored one or one built now, empty or not:
+                    # what is kept under the tiles' keys is not made from it, roadwidth's walls, widths and
+                    # clearances; and a build that takes the layer is not kept: _cell_collect)
+                    f.__dict__["_bnge_fallback"] = True
                 if layer == "roads":
                     f.__dict__["_bnge_gradesep"] = gradesep.hook(self, key)
                     f.__dict__["_bnge_neighbours"] = gradesep.neighbours_hook(self, key)
@@ -1279,11 +1287,12 @@ class MapData:
         key = _key(key)
         with self._mem_lock:
             got = self._mem.get((str(key), layer))
-        if got is not None:
-            return got[0]
-        lat_c, lon_c = key.center()
-        entry, _hit, _dt = self._decoded_layer(key, layer, kind, geodesy.EnuFrame(lat_c, lon_c, 0.0), remember=False)
-        return entry[0]
+        if got is None:
+            lat_c, lon_c = key.center()
+            got, _hit, _dt = self._decoded_layer(key, layer, kind, geodesy.EnuFrame(lat_c, lon_c, 0.0), remember=False)
+        if getattr(got[0], "__dict__", {}).get("_bnge_fallback"):
+            revisit.fault(here=True)            # (the parquet cell standing in for the tiles': as _cell_collect)
+        return got[0]
 
     def cells(self, keys, layers=LAYERS, kind="demand"):
         """[cell(key, layers, kind) for key in keys], their layers loaded side by side: the loops that asked for a
@@ -1367,6 +1376,10 @@ class MapData:
             else:
                 entry, hit, dt = results[layer]
                 cd.layers[layer], prov, _ = entry
+            if getattr(cd.layers[layer], "__dict__", {}).get("_bnge_fallback"):
+                # (the parquet cell standing in for the tiles': _build's fault was its loader's, in the pool; a build
+                # that takes it later, from memory too, is not kept either)
+                revisit.fault(here=True)
             if layer == "buildings":
                 self._bdtopo(key, layer, cd.layers[layer])
             elif layer == "roads" and getattr(cd.layers[layer], "__dict__", {}).get("_lidar_rule"):
