@@ -68,10 +68,13 @@ _WHITE = Style(centre="line_white", w=0.12, w_motorway=0.15, edge=0.15, edge_mot
                centre_rural=(6.0, 12.0), centre_urban=(3.0, 6.0), lane_rural=(3.0, 9.0), lane_urban=(3.0, 9.0),
                lane_motorway=(3.0, 9.0), left_edge=None, double_centre_urban=False, double_gap=0.12, min_centre_m=5.5)
 _YELLOW = _WHITE._replace(centre="line_yellow")
+# Norway: the line next to oncoming traffic is yellow on a divided road too (the left edge of each carriageway, both
+# sides of a median barrier: E6 at Vist, Mapillary 871850046696980; the user's report, 2026-11-17)
+_NO = _YELLOW._replace(left_edge="line_yellow")
 
 STYLES = {"US": _US, "CA": _CA, "GB": _GB, "IE": _GB, "IM": _GB, "JE": _GB, "GG": _GB, "DE": _DE, "AT": _DE,
           "CH": _DE, "LI": _DE, "LU": _DE, "FR": _FR, "MC": _FR, "BE": _FR, "NL": _NL, "JP": _JP, "AU": _AU, "NZ": _AU,
-          "SE": _SE}
+          "SE": _SE, "NO": _NO}
 # where centre lines are yellow (outside the US and Canada): the Americas, Norway, Finland, South Korea, China, Taiwan,
 # Thailand (research table 4.4)
 YELLOW_CENTRE = {"MX", "GT", "BZ", "HN", "SV", "NI", "CR", "PA", "CU", "DO", "HT", "PR", "JM", "BS", "TT", "CO", "VE",

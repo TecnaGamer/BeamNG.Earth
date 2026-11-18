@@ -45,7 +45,7 @@ SOURCES = {
             "format=jpg&f=image", (-29.2, 137.9, -9.0, 153.6), None),
     # The last resort anywhere (a developer's look at the real place only; never a game source): Esri World Imagery
     "esri": ("xyz", "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
-             (-85.0, -180.0, 85.0, 180.0), 19),
+             (-85.0, -180.0, 85.0, 180.0), 17),
 }
 # ... and the server's regional XYZ sources (imagery_regional.REGIONAL: Switzerland, France, the Netherlands, Japan,
 # New South Wales, US states...), read at z19
