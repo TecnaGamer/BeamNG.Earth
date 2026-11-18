@@ -136,21 +136,28 @@ def power(x, y):
     return _binary(_POW, a, b)
 
 
-def _mm_operands(a, b):
-    """matmul's operands as the kernel takes them: (a, b) exact float64 / float32 arrays of the result dtype (numpy's
-    promotion: an operand cast to it, as the Python's ufuncs cast it), or (None, a @ b) of two integer / bool
-    operands (numpy's integer matmul: exact). Other dtypes (float16, longdouble, complex, objects) are refused."""
-    a, b = np.asarray(a), np.asarray(b)
+def _mm_cast(x, dt):
+    """x as dt, and its strides where the cast copied it (the copy's layout can differ from x's; the kernel orders a
+    sum by the layout the Python's ufuncs saw)."""
+    y = x.astype(dt, copy=False)
+    return y, (None if y is x else x.strides)
+
+
+def _mm(a, b):
+    """dnp.matmul of arrays: the kernel, or numpy's integer matmul (exact). float64 / float32 only: float16,
+    longdouble and complex operands raise TypeError (a contract change from the numpy arithmetic before earthfast
+    472, whose sums of those were numpy's; the server's calls are float64)."""
     if a.ndim == 0 or b.ndim == 0:
         raise ValueError("matmul: scalar operands are not allowed, use '*' instead")
     if a.dtype.kind not in "fc" and b.dtype.kind not in "fc":
-        return None, np.matmul(a, b)        # integers: exact
+        return np.matmul(a, b)              # integers: exact
     dt = np.result_type(a, b)
     if dt.kind != "f" or dt.itemsize not in (4, 8):
         raise TypeError(f"dnp.matmul: {dt} operands (float64 and float32 only: numpy's float16, longdouble and "
                         "complex sums are not the kernel's)")
     dt = np.float64 if dt.itemsize == 8 else np.float32
-    return a.astype(dt, copy=False), b.astype(dt, copy=False)
+    (a, sa), (b, sb) = _mm_cast(a, dt), _mm_cast(b, dt)
+    return _ef_mm.dm_matmul(a, b, sa, sb)
 
 
 def matmul(a, b):
@@ -159,8 +166,7 @@ def matmul(a, b):
     arithmetic here had, BLAS's CPU-chosen kernels never asked)."""
     if type(a) is _ND and type(b) is _ND and a.dtype is _F64D and b.dtype is _F64D:
         return _ef_mm.dm_matmul(a, b)
-    a, b = _mm_operands(a, b)
-    return b if a is None else _ef_mm.dm_matmul(a, b)
+    return _mm(np.asarray(a), np.asarray(b))
 
 
 def dot(a, b):

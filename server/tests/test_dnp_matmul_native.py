@@ -1,7 +1,9 @@
 """dnp.matmul and dnp.dot in Rust (earthfast 472, dmmatmul: the full Rust port) against the numpy arithmetic they
 replaced: random operands (1-D, 2-D and stacked, k from 0 past numpy's 128-element pairwise blocks, broadcast stacks,
 strided / reversed / unaligned views, float64 and float32 and their mixes with integers, signed zeros, infinities,
-NaNs, values that overflow) give the same dtype, shape, type (a numpy scalar for two vectors) and bytes; numpy's
+NaNs, values that overflow; C, Fortran, transposed, sliced, reversed and broadcast layouts, which decide the order of
+the Python's k > 8 sum; empty results and results too big) give the same dtype, shape, type (a numpy scalar for two
+vectors) and bytes; numpy's
 floating-point errors are reported as before (np.errstate "raise" raises the same FloatingPointError, "ignore" stays
 quiet); misaligned shapes and scalar operands raise as before; the input contract refuses what the kernel does not
 take.
@@ -284,7 +286,227 @@ class FloatingPointErrorsTest(unittest.TestCase):
                     self.assertTrue(same(dnp.matmul(a, b), r))
 
 
+def layout(rng, v):
+    """v's values in another memory layout: C, Fortran, a transposed copy viewed back, sliced (steps on any axes of a
+    C or Fortran block), reversed axes, all of those mixed, or one row broadcast (stride 0: its values repeat)."""
+    nd = v.ndim
+    c = rng.integers(0, 7)
+    if c == 0:
+        return v.copy()
+    if c == 1:
+        return np.asfortranarray(v)
+    if c == 2:
+        p = rng.permutation(nd)
+        return np.ascontiguousarray(v.transpose(p)).transpose(np.argsort(p))
+    if c == 3:
+        steps = [int(rng.choice([1, 2, 3])) for _ in range(nd)]
+        big = np.zeros(tuple(s * t for s, t in zip(v.shape, steps)), v.dtype)
+        if rng.random() < 0.5:
+            big = np.asfortranarray(big)
+        sl = tuple(slice(None, None, t) for t in steps)
+        big[sl] = v
+        return big[sl]
+    if c == 4:
+        flips = tuple(slice(None, None, -1) if rng.random() < 0.5 else slice(None) for _ in range(nd))
+        base = np.asfortranarray(v[flips]) if rng.random() < 0.5 else v[flips].copy()
+        return base[flips]
+    if c == 5:
+        p = rng.permutation(nd)
+        w = np.ascontiguousarray(v.transpose(p)).transpose(np.argsort(p))
+        flips = tuple(slice(None, None, -1) if rng.random() < 0.5 else slice(None) for _ in range(nd))
+        w = w[flips].copy() if rng.random() < 0.5 else np.asfortranarray(w[flips])
+        return w[flips]
+    ax = int(rng.integers(0, nd))
+    return np.broadcast_to(np.take(v, [0], axis=ax), v.shape)
+
+
+def layout_case(rng):
+    k = int(rng.choice([2, 5, 8, 9, 10, 12, 16, 17, 33, 64, 129, 136, 200, 300]))
+
+    def d():
+        return int(rng.choice([1, 1, 2, 3, 4]))
+    n, m = d(), d()
+    sa = [(k,), (n, k), (d(), n, k), (d(), 1, n, k)][rng.integers(0, 4)]
+    c = rng.integers(0, 4)
+    if c == 0:
+        sb = (k,)
+    elif c == 1:
+        sb = (k, m)
+    elif c == 2:
+        sb = (sa[0] if len(sa) == 3 and rng.random() < 0.7 else d(), k, m)
+    else:
+        sb = (d(), k, m)
+    dts = rng.choice(["f8", "f8", "f8", "f4", "f8i8", "i4f4", "f4f8"])
+
+    def vals(shape, dt):
+        if dt[0] == "i":
+            return rng.integers(-1000, 1000, shape).astype(dt)
+        v = rng.standard_normal(shape) * 10.0 ** rng.integers(-10, 17, shape)     # sums that cancel: order shows
+        if rng.random() < 0.1 and v.size:
+            v.reshape(-1)[rng.integers(0, v.size)] = rng.choice([np.inf, -np.inf, np.nan, -np.nan, -0.0, 1e300])
+        with np.errstate(over="ignore"):
+            return v.astype(dt)
+    da, db = {"f8": ("f8", "f8"), "f4": ("f4", "f4"), "f8i8": ("f8", "i8"), "i4f4": ("i4", "f4"),
+              "f4f8": ("f4", "f8")}[dts]
+    return layout(rng, vals(sa, da)), layout(rng, vals(sb, db))
+
+
+class LayoutTest(unittest.TestCase):
+    """The Python's k > 8 sum (np.add.reduce over the products) ran its loops in the operands' memory order: k the
+    inner loop (a pairwise sum) or an outer one (left to right), whichever numpy's iterator chose (Codex review of
+    r2a6: the kernel had chosen by m alone)."""
+
+    def test_codex_cancellations(self):
+        p = np.array([1e16, 1, -1e16, 1, 0, 0, 0, 0, 0])
+        for a, b in ((np.asfortranarray(np.stack([p, p])), np.ones(9)),        # reference [1, 1] (left to right)
+                     (p, np.asfortranarray(np.ones((9, 2)))),                   # reference [0, 0] (pairwise)
+                     (np.stack([p, p]), np.ones(9)), (p, np.ones((9, 2))),
+                     (np.stack([p, p]).T.copy().T, np.ones((9, 1))), (p, np.ones((2, 9)).T)):
+            for fn, ref in ((dnp.matmul, ref_matmul), (dnp.dot, ref_dot)):
+                self.assertTrue(same(fn(a, b), ref(a, b)), (fn.__name__, a.strides, b.strides, fn(a, b), ref(a, b)))
+        self.assertEqual(list(ref_matmul(np.asfortranarray(np.stack([p, p])), np.ones(9))), [1.0, 1.0])
+        self.assertEqual(list(ref_matmul(p, np.asfortranarray(np.ones((9, 2))))), [0.0, 0.0])
+
+    def test_random_layouts(self):
+        rng = np.random.default_rng(4721)
+        n = differs = 0
+        for _ in range(6000):
+            a, b = layout_case(rng)
+            for fn, ref in ((dnp.matmul, ref_matmul), (dnp.dot, ref_dot)):
+                got, want = outcome(fn, a, b), outcome(ref, a, b)
+                self.assertEqual(got[0], want[0], (a.shape, b.shape, a.strides, b.strides, got, want))
+                if want[0] == "ok":
+                    self.assertTrue(same(got[1], want[1]), (fn.__name__, a.shape, b.shape, a.dtype, b.dtype,
+                                                            a.strides, b.strides, got[1], want[1]))
+                    n += 1
+                else:
+                    self.assertIs(got[1], want[1])
+            c = outcome(ref_matmul, np.ascontiguousarray(a), np.ascontiguousarray(b))
+            w = outcome(ref_matmul, a, b)
+            if w[0] == "ok" and c[0] == "ok" and not same(c[1], w[1]):
+                differs += 1            # the layout changed the Python's own result: the order is exercised
+        self.assertGreater(n, 8000)
+        self.assertGreater(differs, 800)
+
+    def test_cast_operand_keeps_its_layout(self):
+        """An integer / float32 operand the glue casts: the copy's layout differs (a stride-0 row becomes a full
+        one), the order follows the operand the Python's ufuncs saw."""
+        p = np.array([1e16, 1, -1e16, 1, 0, 0, 0, 0, 0])
+        cases = [(np.stack([p, p], axis=1).T, np.broadcast_to(np.ones((1, 2), np.int64), (9, 2))),
+                 (np.broadcast_to(np.arange(9)[None, :] % 2, (3, 9)), np.asfortranarray(np.stack([p] * 3, axis=1))),
+                 (np.asfortranarray(np.stack([p, p])).astype(np.float32), np.ones(9)),
+                 (p, np.asfortranarray(np.ones((9, 2), np.int16)))]
+        for a, b in cases:
+            for fn, ref in ((dnp.matmul, ref_matmul), (dnp.dot, ref_dot)):
+                self.assertTrue(same(fn(a, b), ref(a, b)), (a.strides, b.strides, fn(a, b), ref(a, b)))
+        # a float32 stack broadcast over an axis times a broadcast float64 vector: the cast copies are C-ordered and
+        # would sum the other way (pairwise); the Python's operands summed left to right
+        a = np.broadcast_to(np.stack([p, p]).astype(np.float32)[:, None, :], (2, 4, 9))
+        b = np.broadcast_to(np.float64(1.0), (9,))
+        self.assertTrue(same(dnp.matmul(a, b), ref_matmul(a, b)))
+        self.assertFalse(same(fast._ef.dm_matmul(a.astype(np.float64), b.copy()), ref_matmul(a, b)))
+
+    def test_nan_signs_on_layouts(self):
+        """A NaN of one kind in a sum (+NaN, -NaN, inf * 0's default NaN, inf + -inf's, the NaN in either operand
+        or both at one q) on Fortran / transposed / sliced / reversed / broadcast operands, both orders, both dtypes:
+        its sign and payload as the Python's. (Two different NaNs meeting in the elementwise loops of these layouts
+        are not compared: numpy's SIMD body and its tail / broadcast-scalar loops keep different operands' NaNs and
+        where the body ends depends on the CPU's vector width, so the Python's own result was the machine's; see
+        dmmatmul.rs.)"""
+        rnd = np.random.default_rng(47)
+        n_ok = 0
+        for dt in (np.float64, np.float32):
+            for k in (9, 12, 17, 64, 129, 300):
+                for _ in range(40):
+                    n, m = int(rnd.integers(1, 6)), int(rnd.integers(1, 12))
+                    a, b = np.ones((n, k), dt), np.ones((k, m), dt)
+                    p, q = rnd.choice(k, 2, replace=False)
+                    kind = rnd.integers(0, 5)
+                    if kind == 0:
+                        a[:, p] = np.nan
+                    elif kind == 1:
+                        a[:, p] = -dt(np.nan)
+                        b[p, :] = -dt(np.nan)
+                    elif kind == 2:
+                        a[:, p] = np.inf
+                        b[p, :] = 0.0
+                    elif kind == 3:
+                        a[:, p], a[:, q] = np.inf, -np.inf
+                    else:
+                        b[q, :] = np.nan
+                        b[p, :] = np.nan
+                    a, b = layout(rnd, a), layout(rnd, b)
+                    for x, y in ((a, b), (a[0], b), (a, b[:, 0])):
+                        got, want = outcome(dnp.matmul, x, y), outcome(ref_matmul, x, y)
+                        self.assertTrue(same(got[1], want[1]), (dt, k, kind, x.strides, y.strides, got, want))
+                        n_ok += 1
+        self.assertGreater(n_ok, 1400)
+
+    def test_errstate_on_layouts(self):
+        big = np.full((2, 12), 1.7e308)
+        cases = [(np.asfortranarray(big), np.ones(12)), (big[0], np.asfortranarray(np.ones((12, 2)))),
+                 (np.asfortranarray(np.full((2, 12), 1e300)), np.full(12, 1e300)),
+                 (np.asfortranarray(np.tile([np.inf, -np.inf], (3, 6))), np.ones(12)),
+                 (np.tile([np.inf, -np.inf], 6), np.asfortranarray(np.ones((12, 3))))]
+        for a, b in cases:
+            with np.errstate(all="raise"):
+                got, want = outcome(dnp.matmul, a, b), outcome(ref_matmul, a, b)
+            self.assertEqual(got[0], want[0], (a.strides, b.strides))
+            if got[0] == "raised":
+                self.assertIs(got[1], want[1])
+
+            def caught(fn):
+                with warnings.catch_warnings(record=True) as w:
+                    warnings.simplefilter("always")
+                    with np.errstate(all="warn", under="ignore"):
+                        r = fn(a, b)
+                return r, sorted({str(x.message) for x in w})
+            (g, gw), (r, rw) = caught(dnp.matmul), caught(ref_matmul)
+            self.assertTrue(same(g, r))
+            self.assertEqual(gw, rw, (a.strides, b.strides))
+
+
+class EmptyAndHugeTest(unittest.TestCase):
+    """Empty results and k == 0 come before any copy or table (Codex review of r2a6: a (2^25, 1, 0, 0) @
+    (1, 2^25, 0, 1) result reserved 2^50 blocks and aborted); a result too big is numpy's ValueError, as the
+    Python's."""
+
+    def test_cases(self):
+        bt = np.broadcast_to
+        cases = [
+            (np.zeros((33554432, 1, 0, 0)), np.zeros((1, 33554432, 0, 1))),
+            (np.zeros((33554432, 1, 0, 9)), np.zeros((1, 33554432, 9, 1))),
+            (np.zeros((2 ** 40, 1, 0, 9)), bt(np.zeros((1, 1, 9, 2)), (1, 2 ** 40, 9, 2))),
+            (np.zeros((2 ** 28, 1, 0, 20)), bt(np.zeros((1, 1, 20, 1)), (1, 2 ** 28, 20, 1))),   # products too big
+            (np.zeros((2 ** 28, 1, 0, 5)), bt(np.zeros((1, 1, 5, 1)), (1, 2 ** 28, 5, 1))),
+            (bt(np.ones((1, 1, 1, 9)), (2 ** 40, 1, 1, 9)), bt(np.zeros((1, 1, 9, 0)), (1, 2 ** 40, 9, 0))),
+            (bt(np.ones((1, 1, 1, 9)), (2 ** 32, 1, 1, 9)), bt(np.zeros((1, 1, 9, 0)), (1, 2 ** 32, 9, 0))),
+            (bt(np.ones((1, 1, 9)), (2 ** 40, 1, 9)), bt(np.ones((1, 9, 1)), (1, 9, 2 ** 40))),
+            (bt(np.ones((1, 1, 9)), (2 ** 31, 1, 9)), bt(np.ones((1, 9, 1)), (1, 9, 2 ** 31))),
+            (bt(np.ones((1, 1, 0)), (2 ** 31, 1, 0)), bt(np.ones((1, 0, 1)), (1, 0, 2 ** 31))),
+            (np.zeros(0), np.zeros(0)), (np.zeros((3, 0)), np.zeros(0)), (np.zeros(0), np.zeros((0, 4))),
+            (np.zeros((0, 3)), np.zeros(3)), (np.zeros((2, 0, 12)), np.zeros((12, 5))),
+            (np.zeros((0, 2, 12)), np.zeros((3, 12, 5))), (np.zeros((4, 0), np.float32), np.zeros((0, 2), np.float32)),
+        ]
+        for a, b in cases:
+            for fn, ref in ((dnp.matmul, ref_matmul), (dnp.dot, ref_dot)):
+                if fn is dnp.dot and b.ndim > 2:
+                    continue
+                got, want = outcome(fn, a, b), outcome(ref, a, b)
+                self.assertEqual(got[0], want[0], (a.shape, b.shape, got, want))
+                if want[0] == "ok":
+                    self.assertTrue(same(got[1], want[1]), (a.shape, b.shape))
+                else:
+                    self.assertIs(got[1], want[1], (a.shape, b.shape))
+
+
 class ContractTest(unittest.TestCase):
+    def test_kernel_refuses_bad_strides(self):
+        with self.assertRaises(TypeError):
+            fast._ef.dm_matmul(np.zeros(3), np.zeros(3), (8, 8), None)
+        with self.assertRaises(TypeError):
+            fast._ef.dm_matmul(np.zeros(3), np.zeros(3), None, ())
+
     def test_kernel_refuses(self):
         ef = fast._ef
         class Sub(np.ndarray):

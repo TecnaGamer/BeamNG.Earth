@@ -6,28 +6,42 @@
 //! The order (A (S.., n, k) and B (S.., k, m) after a 1-D operand's promotion; every product A[.., i, q] * B[.., q, j]
 //! rounded once, never fused):
 //! - k <= 8: p0 + p1 + ... + p(k-1), left to right (the Python's column loop: out = out + a[.., j] * b[j, ..]);
-//! - k > 8, m == 1: 0.0 + numpy's pairwise sum of p0 .. p(k-1) (np.add.reduce over the (.., n, k, 1) products: the
-//!   reduced axis is the inner one, numpy's DOUBLE_pairwise_sum: 8 accumulators to 128, halves above);
-//! - k > 8, m > 1: 0.0 + p0 + p1 + ... left to right (np.add.reduce over axis -2 with m inner: one add per q).
+//! - k > 8: np.add.reduce(a[.., :, :, None] * b[.., None, :, :], axis=-2), whose loop order follows the operands'
+//!   memory layout (see k_inner): where the k axis is the reduction's inner loop, each output element is 0.0 +
+//!   numpy's pairwise sum of p0 .. p(k-1) (DOUBLE_pairwise_sum: 8 accumulators to 128, halves above); where k is an
+//!   outer loop, 0.0 + p0 + p1 + ... left to right (one elementwise add per q). C-ordered operands: pairwise for
+//!   m == 1, left to right for m > 1; a Fortran-ordered (n, k) a with m == 1, or a vector times a Fortran-ordered
+//!   (k, m) b, the other way round.
 //!
 //! NaNs: where a NaN operand meets another number or NaN, the NaN kept is the one numpy's x86-64 loops kept (ad / mu:
 //! the ufunc's first operand's, quieted; the pairwise sum's tree as its compiled code ordered it, see pairwise), so a
-//! NaN's sign and payload are the Python's too.
+//! NaN's sign and payload are the Python's too. One exception, a documented difference: two different NaNs meeting
+//! in an elementwise loop (the k <= 8 columns, a left-to-right k > 8 sum, the multiply) where numpy ran its SIMD tail
+//! or a broadcast-scalar loop (inner loops longer than two vectors on non-C layouts or long m): those compiled loops
+//! keep the other operand's NaN, and where the SIMD body ends depends on the CPU's vector width (AVX2 / AVX-512), so
+//! the Python's own result was the machine's. The kernel keeps its one rule (deterministic); the server's calls make
+//! no non-finite results at all (the online cold caches, every call).
 //!
 //! numpy's floating-point errors: the Python's ufunc calls (each column's multiply and add; the k > 8 multiply and
 //! reduce) set the overflow / invalid flags, reported as np.errstate says (a warning by default; FloatingPointError
 //! under "raise"). The kernel tracks which of those calls would have set which flag and, where any did, has numpy
 //! report the same flags for the same calls in the same order (a tiny np.multiply / np.add / np.add.reduce that sets
-//! exactly them), so errstate acts as before. Underflow (ignored by numpy's default errstate, set nowhere in the
-//! server) and signalling NaNs are not tracked.
+//! exactly them), so errstate acts as before. Not tracked (accepted differences, Codex review of r2a6): underflow
+//! (np.errstate(under=...) is never set in the server and numpy's default ignores it) and signalling NaNs (the server
+//! makes none; the kernel quiets them as the hardware does, without numpy's invalid flag).
 //!
 //! Input contract: a and b exact numpy.ndarray (no subclass), both native float64 or both native float32, of 1+ axes;
-//! anything else TypeError (dnp.py's glue makes them: np.asarray, the result dtype, integers to np.matmul). Their
-//! values are copied into Rust-owned storage (any strides) before anything else is called.
+//! anything else TypeError (dnp.py's glue makes them: np.asarray, the result dtype, integers to np.matmul). float16,
+//! longdouble and complex operands are refused (TypeError) by the glue: a contract change from the Python (which
+//! summed them in numpy), accepted as the server's calls are float64 only. sa / sb: the strides of the operands as the
+//! Python saw them, where the glue cast one (the cast copy's layout can differ; only the order of the sum reads
+//! them). Empty outputs and k == 0 (zeros) come from numpy before any operand is copied; otherwise the operands'
+//! values are copied into Rust-owned storage (any strides) before anything else is called. Sizes are checked:
+//! a result too big is numpy's ValueError / MemoryError, never an abort.
 
 use numpy::npyffi::{self, PY_ARRAY_API};
 use numpy::{Element, PyArray, PyArrayDescrMethods, PyArrayDyn, PyArrayMethods, PyUntypedArray, PyUntypedArrayMethods};
-use pyo3::exceptions::{PyTypeError, PyValueError};
+use pyo3::exceptions::{PyMemoryError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
@@ -165,6 +179,62 @@ fn pairwise<T: Fl, const TRACK: bool>(v: &[T], depth: u32, fl: &mut u8) -> T {
     }
 }
 
+/// The Python's k > 8 order: is k the inner loop of np.add.reduce(A' * B', axis=-2)? dims: the products' shape (C
+/// order: S.., n, k, m); sa / sb: A' = a[.., :, :, None] and B' = b[.., None, :, :] as numpy's iterator holds them
+/// broadcast to dims (byte strides, 0 where the operand's axis is 1 or missing).
+///
+/// The multiply allocates the products in its iteration order (order K; nditer_constr.c,
+/// npyiter_find_best_axis_ordering): a stable insertion sort of the iterator's axes, the last C axis first, an axis
+/// moving inside another only where every operand with nonzero strides on both has a strictly smaller |stride| on it
+/// (an operand with a zero stride on either has no say; no say at all: keep looking further out); an allocated output
+/// never flips a negative stride. The reduce (DONT_NEGATE_STRIDES, its own output unallocated) orders the products'
+/// axes by their strides, so its inner loop is the multiply's innermost axis of more than one element: numpy's add
+/// loop sees the reduction there (pairwise sum, IS_BINARY_REDUCE) only where that axis is k. No buffering applies
+/// (one dtype, aligned), and the inner loop is the whole of k (checked past 8192, numpy's buffer size).
+fn k_inner(dims: &[usize], sa: &[isize], sb: &[isize]) -> bool {
+    let nd = dims.len();
+    let st = |ax: usize| -> [isize; 2] { [sa[nd - 1 - ax], sb[nd - 1 - ax]] };
+    let mut perm: Vec<usize> = (0..nd).collect();
+    for i0 in 1..nd {
+        let s0 = st(perm[i0]);
+        let mut ipos = i0;
+        for i1 in (0..i0).rev() {
+            let s1 = st(perm[i1]);
+            let (mut ambig, mut swap) = (true, false);
+            for o in 0..2 {
+                if s0[o] != 0 && s1[o] != 0 {
+                    if s1[o].unsigned_abs() <= s0[o].unsigned_abs() {
+                        swap = false;
+                    } else if ambig {
+                        swap = true;
+                    }
+                    ambig = false;
+                }
+            }
+            if !ambig {
+                if swap {
+                    ipos = i1;
+                } else {
+                    break;
+                }
+            }
+        }
+        perm[ipos..=i0].rotate_right(1);
+    }
+    perm.iter().map(|&ax| nd - 1 - ax).find(|&c| dims[c] > 1).is_none_or(|c| c == nd - 2)
+}
+
+/// An operand's iterator strides broadcast to nd axes (right-aligned): 0 where its axis is 1 or missing.
+fn iter_strides(shape: &[usize], strides: &[isize], nd: usize) -> Vec<isize> {
+    let mut out = vec![0isize; nd];
+    for (d, (&s, &x)) in shape.iter().zip(strides).enumerate() {
+        if s != 1 {
+            out[nd - shape.len() + d] = x;
+        }
+    }
+    out
+}
+
 /// The problem: the operands' values (C order), the stack blocks' offsets, the sizes.
 struct Mm<T> {
     a: Vec<T>,
@@ -174,6 +244,8 @@ struct Mm<T> {
     n: usize,
     k: usize,
     m: usize,
+    /// k > 8: the pairwise sum over k (k the reduce's inner loop), else left to right
+    pw: bool,
 }
 
 impl<T: Fl> Mm<T> {
@@ -182,7 +254,7 @@ impl<T: Fl> Mm<T> {
     fn run<const TRACK: bool>(&self, ops: &mut [u8]) -> Vec<T> {
         let (n, k, m) = (self.n, self.k, self.m);
         let mut out = Vec::with_capacity(self.blocks.len() * n * m);
-        let mut prods: Vec<T> = if k > 8 && m == 1 { Vec::with_capacity(k) } else { Vec::new() };
+        let mut prods: Vec<T> = if k > 8 && self.pw { Vec::with_capacity(k) } else { Vec::new() };
         for &(oa, ob) in &self.blocks {
             let (a, b) = (&self.a[oa..oa + n * k], &self.b[ob..ob + k * m]);
             for i in 0..n {
@@ -202,11 +274,12 @@ impl<T: Fl> Mm<T> {
                             s = t;
                         }
                         out.push(s);
-                    } else if m == 1 {
+                    } else if self.pw {
                         prods.clear();
                         for q in 0..k {
-                            let p = mu(ar[q], b[q]);
-                            if TRACK { ops[0] |= flags(ar[q], b[q], p); }
+                            let (x, y) = (ar[q], b[q * m + j]);
+                            let p = mu(x, y);
+                            if TRACK { ops[0] |= flags(x, y, p); }
                             prods.push(p);
                         }
                         let mut fl = 0u8;
@@ -236,13 +309,14 @@ impl<T: Fl> Mm<T> {
 }
 
 /// u's values in C order, read at numpy's byte offsets (any strides, aligned or not).
-fn values<T: Element + Copy>(u: &Bound<'_, PyUntypedArray>) -> Vec<T> {
+fn values<T: Element + Copy>(u: &Bound<'_, PyUntypedArray>) -> PyResult<Vec<T>> {
     let shape = u.shape().to_vec();
     let strides = u.strides().to_vec();
-    let total: usize = shape.iter().product();
-    let mut out = Vec::with_capacity(total);
+    let total: usize = shape.iter().product();      // (a live array's size: numpy checked it)
+    let mut out = Vec::new();
+    out.try_reserve_exact(total).map_err(|_| PyMemoryError::new_err("dm_matmul: no memory for an operand's copy"))?;
     if total == 0 {
-        return out;
+        return Ok(out);
     }
     // SAFETY: as_array_ptr is the live array u holds (the GIL held, nothing called meanwhile); every offset read is
     // an element numpy's own indexing reads (its shape and byte strides), read unaligned.
@@ -253,7 +327,7 @@ fn values<T: Element + Copy>(u: &Bound<'_, PyUntypedArray>) -> Vec<T> {
         for e in 0..total as isize {
             out.push(unsafe { std::ptr::read_unaligned(base.offset(e * isz) as *const T) });
         }
-        return out;
+        return Ok(out);
     }
     let mut idx = vec![0usize; nd];
     let mut off: isize = 0;
@@ -262,7 +336,7 @@ fn values<T: Element + Copy>(u: &Bound<'_, PyUntypedArray>) -> Vec<T> {
         let mut d = nd;
         loop {
             if d == 0 {
-                return out;
+                return Ok(out);
             }
             d -= 1;
             idx[d] += 1;
@@ -322,8 +396,46 @@ fn report<T: Fl>(py: Python<'_>, ops: &[u8], k: usize) -> PyResult<()> {
     Ok(())
 }
 
-fn compute<'py, T: Fl>(py: Python<'py>, ua: &Bound<'py, PyUntypedArray>, ub: &Bound<'py, PyUntypedArray>)
-                       -> PyResult<Bound<'py, PyAny>> {
+/// A new array of shape (C order) by numpy (PyArray_Zeros / PyArray_Empty: numpy checks the size and raises its own
+/// ValueError / MemoryError).
+fn new_array<'py, T: Fl>(py: Python<'py>, shape: &[usize], zero: bool) -> PyResult<Bound<'py, PyArrayDyn<T>>> {
+    let mut dims: Vec<npyffi::npy_intp> = shape.iter().map(|&s| s as npyffi::npy_intp).collect();
+    let d = numpy::dtype::<T>(py).into_dtype_ptr();
+    // SAFETY: PyArray_Zeros / PyArray_Empty steal the descriptor's reference (into_dtype_ptr gave one) and read
+    // shape.len() dims; a NULL result is numpy's error, raised; the result is an ndarray of T's dtype
+    unsafe {
+        let p = if zero {
+            PY_ARRAY_API.PyArray_Zeros(py, dims.len() as std::ffi::c_int, dims.as_mut_ptr(), d, 0)
+        } else {
+            PY_ARRAY_API.PyArray_Empty(py, dims.len() as std::ffi::c_int, dims.as_mut_ptr(), d, 0)
+        };
+        Ok(Bound::from_owned_ptr_or_err(py, p)?.cast_into_unchecked())
+    }
+}
+
+/// v as a numpy scalar of T's dtype.
+fn scalar<'py, T: Fl>(py: Python<'py>, v: T) -> PyResult<Bound<'py, PyAny>> {
+    let d = numpy::dtype::<T>(py);
+    // SAFETY: PyArray_Scalar copies the value at &v (an element of d's type) into a new numpy scalar; base is unused
+    // for a number type
+    unsafe {
+        let p = PY_ARRAY_API.PyArray_Scalar(py, &v as *const T as *mut std::ffi::c_void, d.as_dtype_ptr(),
+                                            std::ptr::null_mut());
+        Bound::from_owned_ptr_or_err(py, p)
+    }
+}
+
+/// The operand's strides as the Python saw them: the glue's (a cast operand's original ones) or the array's own.
+fn strides_of(u: &Bound<'_, PyUntypedArray>, given: Option<Vec<isize>>, what: &str) -> PyResult<Vec<isize>> {
+    match given {
+        None => Ok(u.strides().to_vec()),
+        Some(s) if s.len() == u.ndim() => Ok(s),
+        Some(_) => Err(contract(&format!("{what}: one stride per axis"))),
+    }
+}
+
+fn compute<'py, T: Fl>(py: Python<'py>, ua: &Bound<'py, PyUntypedArray>, ub: &Bound<'py, PyUntypedArray>,
+                       ra: Vec<isize>, rb: Vec<isize>) -> PyResult<Bound<'py, PyAny>> {
     let (sa0, sb0) = (ua.shape().to_vec(), ub.shape().to_vec());
     let (va, vb) = (sa0.len() == 1, sb0.len() == 1);
     let sa = if va { vec![1, sa0[0]] } else { sa0.clone() };
@@ -346,10 +458,37 @@ fn compute<'py, T: Fl>(py: Python<'py>, ua: &Bound<'py, PyUntypedArray>, ub: &Bo
                 "matmul: the stacks of {} and {} do not broadcast", tuple(&sa), tuple(&sb))));
         };
     }
-    let a: Vec<T> = values(ua);
-    let b: Vec<T> = values(ub);
-    let nblocks: usize = st.iter().product();
-    let mut blocks = Vec::with_capacity(nblocks);
+    let mut shape = st.clone();
+    if !va { shape.push(n); }
+    if !vb { shape.push(m); }
+    // numpy's size rule (PyArray_NewFromDescr): the product of the nonzero axes times the item size within npy_intp,
+    // an empty array's too, else ValueError. The Python's k > 8 path made the (S.., n, k, m) products first.
+    let too_big = || PyValueError::new_err(
+        "array is too big; `arr.size * arr.dtype.itemsize` is larger than the maximum possible size.");
+    let fits = |dims: &[usize]| {
+        dims.iter().filter(|&&s| s != 0).try_fold(std::mem::size_of::<T>(), |acc, &s| acc.checked_mul(s))
+            .is_some_and(|bytes| bytes <= isize::MAX as usize)
+    };
+    if k > 8 && !fits(&[st.as_slice(), &[n, k, m]].concat()) {
+        return Err(too_big());
+    }
+    // an empty result, or k == 0 (zeros): numpy's (its own size check), before any copy or block table (the stacks'
+    // product can be far beyond memory where another axis is 0)
+    if k == 0 || n == 0 || m == 0 || st.contains(&0) {
+        if shape.is_empty() {
+            return scalar::<T>(py, T::ZERO);
+        }
+        return Ok(new_array::<T>(py, &shape, true)?.into_any());
+    }
+    if !fits(&shape) {
+        return Err(too_big());
+    }
+    let total: usize = shape.iter().product();      // (no zero axis: within isize, checked above)
+    let nblocks = total / (n * m);
+    let a: Vec<T> = values(ua)?;
+    let b: Vec<T> = values(ub)?;
+    let mut blocks = Vec::new();
+    blocks.try_reserve_exact(nblocks).map_err(|_| PyMemoryError::new_err("dm_matmul: no memory for the result"))?;
     let mut idx = vec![0usize; ns];
     for _ in 0..nblocks {
         let (mut oa, mut ob) = (0usize, 0usize);
@@ -363,7 +502,7 @@ fn compute<'py, T: Fl>(py: Python<'py>, ua: &Bound<'py, PyUntypedArray>, ub: &Bo
                 ob = ob * tb[dd] + if tb[dd] == 1 { 0 } else { idx[d] };
             }
         }
-        blocks.push((oa * n * k, ob * k * m));
+        blocks.push((oa * n * k, ob * k * m));      // (offsets within the operands' copies: no overflow)
         for d in (0..ns).rev() {
             idx[d] += 1;
             if idx[d] < st[d] {
@@ -372,46 +511,47 @@ fn compute<'py, T: Fl>(py: Python<'py>, ua: &Bound<'py, PyUntypedArray>, ub: &Bo
             idx[d] = 0;
         }
     }
-    let mut shape = st.clone();
-    if !va { shape.push(n); }
-    if !vb { shape.push(m); }
-    let out: Vec<T> = if k == 0 {
-        vec![T::ZERO; nblocks * n * m]
-    } else {
-        let mm = Mm { a, b, blocks, n, k, m };
-        let mut none = [0u8; 0];
-        let out = if nblocks * n * m * k > DETACH_WORK {
-            py.detach(|| mm.run::<false>(&mut none))
-        } else {
-            mm.run::<false>(&mut none)
-        };
-        if !out.iter().all(|v| v.finite()) {
-            let mut ops = vec![0u8; if k <= 8 { 2 * k } else { 2 }];
-            let _ = mm.run::<true>(&mut ops);
-            report::<T>(py, &ops, k)?;
-        }
-        out
+    let pw = k > 8 && {
+        // A' = a[.., :, :, None] and B' = b[.., None, :, :] (a 1-D operand promoted first) over (S.., n, k, m)
+        let nd = ns + 3;
+        let (mut sha, mut sta) = if va { (vec![1, k], vec![0, ra[0]]) } else { (sa0.clone(), ra) };
+        sha.push(1);
+        sta.push(0);
+        let (mut shb, mut stb) = if vb { (vec![k, 1], vec![rb[0], 0]) } else { (sb0.clone(), rb) };
+        shb.insert(shb.len() - 2, 1);
+        stb.insert(stb.len() - 2, 0);
+        let mut dims = st.clone();
+        dims.extend_from_slice(&[n, k, m]);
+        k_inner(&dims, &iter_strides(&sha, &sta, nd), &iter_strides(&shb, &stb, nd))
     };
-    if shape.is_empty() {
-        let d = numpy::dtype::<T>(py);
-        let v = out[0];
-        // SAFETY: PyArray_Scalar copies the value at &v (an element of d's type) into a new numpy scalar; base is
-        // unused for a number type
-        return unsafe {
-            let p = PY_ARRAY_API.PyArray_Scalar(py, &v as *const T as *mut std::ffi::c_void, d.as_dtype_ptr(),
-                                                std::ptr::null_mut());
-            Bound::from_owned_ptr_or_err(py, p)
-        };
+    let mm = Mm { a, b, blocks, n, k, m, pw };
+    let mut none = [0u8; 0];
+    let out = if total.saturating_mul(k) > DETACH_WORK {
+        py.detach(|| mm.run::<false>(&mut none))
+    } else {
+        mm.run::<false>(&mut none)
+    };
+    if !out.iter().all(|v| v.finite()) {
+        let mut ops = vec![0u8; if k <= 8 { 2 * k } else { 2 }];
+        let _ = mm.run::<true>(&mut ops);
+        report::<T>(py, &ops, k)?;
     }
-    // SAFETY: the new array is filled whole before it is returned
-    let arr = unsafe { PyArrayDyn::<T>::new(py, numpy::IxDyn(&shape), false) };
+    if shape.is_empty() {
+        return scalar::<T>(py, out[0]);
+    }
+    let arr = new_array::<T>(py, &shape, false)?;
+    // SAFETY: the new array is C-contiguous, held only here, and filled whole before it is returned
     unsafe { arr.as_slice_mut()? }.copy_from_slice(&out);
     Ok(arr.into_any())
 }
 
 /// dnp.matmul(a, b) of the input contract's arrays: a numpy scalar for two 1-D operands, else a new C-ordered array.
+/// sa / sb: an operand's strides as the Python saw them, where the glue cast it (the order of a k > 8 sum follows
+/// them); by default the array's own.
 #[pyfunction]
-pub fn dm_matmul<'py>(py: Python<'py>, a: Bound<'py, PyAny>, b: Bound<'py, PyAny>) -> PyResult<Bound<'py, PyAny>> {
+#[pyo3(signature = (a, b, sa=None, sb=None))]
+pub fn dm_matmul<'py>(py: Python<'py>, a: Bound<'py, PyAny>, b: Bound<'py, PyAny>, sa: Option<Vec<isize>>,
+                      sb: Option<Vec<isize>>) -> PyResult<Bound<'py, PyAny>> {
     // SAFETY: the ndarray type object numpy exports, compared by address
     let nd = unsafe { npyffi::get_type_object(py, npyffi::NpyTypes::PyArray_Type) };
     if a.get_type().as_type_ptr() != nd || b.get_type().as_type_ptr() != nd {
@@ -421,14 +561,15 @@ pub fn dm_matmul<'py>(py: Python<'py>, a: Bound<'py, PyAny>, b: Bound<'py, PyAny
     if ua.ndim() == 0 || ub.ndim() == 0 {
         return Err(PyValueError::new_err("matmul: scalar operands are not allowed, use '*' instead"));
     }
+    let (ra, rb) = (strides_of(ua, sa, "sa")?, strides_of(ub, sb, "sb")?);
     let (da, db) = (ua.dtype(), ub.dtype());
     let f64d = numpy::dtype::<f64>(py);
     if da.is_equiv_to(&f64d) && db.is_equiv_to(&f64d) {
-        return compute::<f64>(py, ua, ub);
+        return compute::<f64>(py, ua, ub, ra, rb);
     }
     let f32d = numpy::dtype::<f32>(py);
     if da.is_equiv_to(&f32d) && db.is_equiv_to(&f32d) {
-        return compute::<f32>(py, ua, ub);
+        return compute::<f32>(py, ua, ub, ra, rb);
     }
     Err(contract("the operands' dtypes"))
 }
