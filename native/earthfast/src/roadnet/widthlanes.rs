@@ -9,8 +9,7 @@ use numpy::{IntoPyArray, PyArray1};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList, PyTuple};
 
-use super::countries::np_index;
-use super::pyobj::{in_generator, py_float, py_float_strict, py_str, CArr1};
+use super::pyobj::{in_generator, py_float, py_float_strict, py_str};
 
 const MAX_LANES: f64 = 12.0;
 
@@ -88,9 +87,9 @@ pub fn lane_evidence<'py>(py: Python<'py>, n: usize, counts: Vec<Option<Bound<'p
         for c in cs.iter().flatten() {
             take(count(&c.get(i)?, 1.0)?);
         }
-        let g = gen.get(i)?;
-        if !g.is_none() {
-            take(count(&g, 1.0)?);
+        // (`if gen[i] is not None: take(i, gen[i])`: read twice, as the Python did)
+        if !gen.get(i)?.is_none() {
+            take(count(&gen.get(i)?, 1.0)?);
         }
         let mut tot = [None; 3];
         for (k, d) in ds.iter().enumerate() {
@@ -152,11 +151,11 @@ pub fn width_rejected<'py>(py: Python<'py>, feats: Bound<'py, PyAny>, n: usize, 
                            oneway_fn: Bound<'py, PyAny>, links_fn: Bound<'py, PyAny>, rules_fn: Bound<'py, PyAny>,
                            wt: Option<Bound<'py, PyAny>>, has_osm: bool, osm_fn: Bound<'py, PyAny>, factor: f64,
                            lane_evidence: Bound<'py, PyAny>, home_copy: Bound<'py, PyAny>)
-                           -> PyResult<(Bound<'py, PyArray1<bool>>, Bound<'py, PyArray1<bool>>)> {
+                           -> PyResult<(Bound<'py, PyAny>, Bound<'py, PyAny>)> {
     let np = py.import("numpy")?;
     let nw = match &wt { Some(t) => t.getattr("feature")?.len()?, None => 0 };
     let zeros = |k: usize| vec![false; k].into_pyarray(py);
-    let out = || (zeros(nw), zeros(n));
+    let out = || (zeros(nw).into_any(), zeros(n).into_any());
     let mut pos: HashMap<&str, i32> = HashMap::new();
     for (k, c) in names.iter().enumerate() {
         pos.insert(c.as_str(), k as i32);
@@ -167,19 +166,27 @@ pub fn width_rejected<'py>(py: Python<'py>, feats: Bound<'py, PyAny>, n: usize, 
     } else {
         vec!["unknown".to_owned(); n]
     };
-    let sub: Option<Vec<Bound<'py, PyAny>>> = match sub_col.filter(|s| !s.is_none()) {
-        Some(s) => Some(s.call_method0("tolist")?.try_iter()?.collect::<PyResult<_>>()?),
+    // np.fromiter((... for c, s in zip(cls_s, sub.tolist() if sub is not None else cls_s)), np.int32, n): sub.tolist()
+    // and its iterator made first, then n pairs at most taken one at a time (zip asks the class row first, the
+    // subtype's only where there is one), str(s) in the generator (a StopIteration its RuntimeError); fewer: ValueError
+    let mut sub_it = match sub_col.filter(|s| !s.is_none()) {
+        Some(s) => Some(s.call_method0("tolist")?.try_iter()?),
         None => None,
     };
-    let pairs = match &sub { Some(s) => cls_s.len().min(s.len()), None => cls_s.len() };
     let mut cls = Vec::with_capacity(n);
     for k in 0..n {
-        if k >= pairs {
-            return Err(too_short());
-        }
-        // (str(s) in fromiter's generator: a StopIteration from it the generator's RuntimeError)
-        let road = match &sub { Some(s) => in_generator(py, py_str(&s[k]))? == "road", None => true };
-        cls.push(if road { pos.get(cls_s[k].as_str()).copied().unwrap_or(-1) } else { -1 });
+        let Some(c) = cls_s.get(k) else { return Err(too_short()) };
+        let road = match sub_it.as_mut() {
+            Some(it) => match it.next() {
+                Some(v) => {
+                    let v = v?;
+                    in_generator(py, py_str(&v))? == "road"
+                }
+                None => return Err(too_short()),
+            },
+            None => true,
+        };
+        cls.push(if road { pos.get(c.as_str()).copied().unwrap_or(-1) } else { -1 });
     }
     if !cls.iter().any(|&c| c >= 0) {
         return Ok(out());
@@ -209,74 +216,52 @@ pub fn width_rejected<'py>(py: Python<'py>, feats: Bound<'py, PyAny>, n: usize, 
         let f = (0..n as i64).collect::<Vec<i64>>().into_pyarray(py).into_any();
         srcs.push((f, np.call_method1("ascontiguousarray", (osm_fn.call0()?,))?));
     }
-    // (a width the fewest lanes allow is kept whatever the lanes: only the rest ask for lane evidence)
-    let reject = |lanes: &Bound<'py, PyAny>, f: &Bound<'py, PyAny>, v: &Bound<'py, PyAny>| -> PyResult<Vec<bool>> {
+    // (a width the fewest lanes allow is kept whatever the lanes: only the rest ask for lane evidence). The masks are
+    // numpy's (maybe[f_[hit]] = True, bad & maybe[f_], the &= of the trunk / one-way tests): its indexing,
+    // broadcasting and errors for whatever the rule kernel gives (Codex round 2 on ec3397ee)
+    let pybool = py.get_type::<pyo3::types::PyBool>();
+    let reject = |lanes: &Bound<'py, PyAny>, f: &Bound<'py, PyAny>, v: &Bound<'py, PyAny>| -> PyResult<Bound<'py, PyAny>> {
         let got = rr.call_method1("width_rejects", (&cls, &oneway, &link, lanes, f, v, factor))?;
-        let got: CArr1<'py, bool> = np.call_method1("asarray", (got, py.get_type::<pyo3::types::PyBool>()))?.extract()?;
-        Ok(got.as_slice()?.to_vec())
+        np.call_method1("asarray", (got, &pybool))
     };
-    let feat_of = |f: &Bound<'py, PyAny>| -> PyResult<Vec<i64>> {
-        let a: CArr1<'py, i64> = f.extract()?;
-        Ok(a.as_slice()?.to_vec())
-    };
-    let one = vec![1i64; n].into_pyarray(py).into_any();
-    let mut maybe = vec![false; n];
+    let one = np.call_method1("ones", (n, &int64))?;
+    let maybe = np.call_method1("zeros", (n, &pybool))?;
     for (f, v) in &srcs {
         let hit = reject(&one, f, v)?;
-        let fv = feat_of(f)?;
-        for (k, &h) in hit.iter().enumerate() {
-            if h {
-                maybe[np_index(n, *fv.get(k).ok_or_else(|| pyo3::exceptions::PyIndexError::new_err(
-                    "boolean index did not match indexed array"))?)?] = true;
-            }
-        }
+        maybe.set_item(f.get_item(hit)?, true)?;
     }
-    if !maybe.iter().any(|&m| m) {
+    if !maybe.call_method0("any")?.is_truthy()? {
         return Ok(out());
     }
-    let mut lanes = vec![-1i64; n];
+    let lanes = np.call_method1("full", (n, -1i64, &int64))?;
     let own = lane_evidence.call1((&feats,))?;
     let int = py.get_type::<pyo3::types::PyInt>();
-    for i in 0..n {
-        if !maybe[i] {
-            continue;
-        }
+    let idx: Vec<i64> = np.call_method1("flatnonzero", (&maybe,))?.call_method0("tolist")?.extract()?;
+    for i in idx {
         let h = home_copy.call1((&feats, i))?;
         let v = if h.is_none() {
             int.call1((own.get_item(i)?,))?
         } else {
             int.call1((lane_evidence.call1((h.get_item(0)?,))?.get_item(h.get_item(1)?)?,))?
         };
-        lanes[i] = v.extract()?;
+        lanes.set_item(i, v)?;
     }
     // (no lane data anywhere on the road: only a trunk is tested, as two lanes; a one-way carriageway keeps its width)
-    let link_v: CArr1<'py, bool> = link.extract()?;
-    let ow_v: CArr1<'py, bool> = np.call_method1("asarray", (&oneway, py.get_type::<pyo3::types::PyBool>()))?.extract()?;
-    let (lk, ow) = (link_v.as_slice()?, ow_v.as_slice()?);
-    if lk.len() != n || ow.len() != n {
-        return Err(pyo3::exceptions::PyValueError::new_err("operands could not be broadcast together"));
-    }
-    for i in 0..n {
-        let guess = cls_s[i] == "trunk" && !lk[i];
-        maybe[i] = maybe[i] && (lanes[i] > 0 || guess) && !ow[i];
-    }
-    if !maybe.iter().any(|&m| m) {
+    let guess: Vec<bool> = (0..n).map(|k| cls_s[k] == "trunk").collect();
+    let guess = guess.into_pyarray(py).into_any().bitand(link.call_method0("__invert__")?)?;
+    let lanes_pos = lanes.rich_compare(0i64, pyo3::basic::CompareOp::Gt)?;
+    let maybe = maybe.call_method1("__iand__", (lanes_pos.bitor(&guess)?,))?;
+    let maybe = maybe.call_method1("__iand__", (oneway.call_method1("astype", (&pybool,))?.call_method0("__invert__")?,))?;
+    if !maybe.call_method0("any")?.is_truthy()? {
         return Ok(out());
     }
-    let lanes = lanes.into_pyarray(py).into_any();
     let mut res = Vec::new();
     for (f, v) in &srcs {
         let bad = reject(&lanes, f, v)?;
-        let fv = feat_of(f)?;
-        let mut r = Vec::with_capacity(bad.len());
-        for (k, &b) in bad.iter().enumerate() {
-            let m = maybe[np_index(n, fv[k])?];
-            r.push(b && m);
-        }
-        res.push(r.into_pyarray(py));
+        res.push(bad.bitand(maybe.get_item(f)?)?);
     }
     let mut it = res.into_iter();
-    let rule_bad = if nw > 0 { it.next().expect("rule") } else { zeros(nw) };
-    let osm_bad = if has_osm { it.next().expect("osm") } else { zeros(n) };
+    let rule_bad = if nw > 0 { it.next().expect("rule") } else { zeros(nw).into_any() };
+    let osm_bad = if has_osm { it.next().expect("osm") } else { zeros(n).into_any() };
     Ok((rule_bad, osm_bad))
 }

@@ -234,5 +234,165 @@ class OverrideTest(unittest.TestCase):
             lanesections._structure_mouth = mouth
 
 
+class Flip(list):
+    """Generated counts whose row reads alternate: a second read of a row gives another count, or raises."""
+
+    def __init__(self, v, mode):
+        list.__init__(self, v)
+        self.mode, self.seen = mode, {}
+
+    def __getitem__(self, i):
+        k = self.seen[i] = self.seen.get(i, 0) + 1
+        LOG.append(("gen", i, k))
+        if k % 2 == 0:
+            if self.mode == "raise":
+                raise LookupError("second read")
+            return 7
+        return list.__getitem__(self, i)
+
+
+class LazyRows:
+    """A subtype column whose tolist() gives an iterable that yields `good` rows, then raises (or rewrites its rows
+    through a row's __str__)."""
+
+    def __init__(self, rows, good):
+        self.rows, self.good = rows, good
+
+    def tolist(self):
+        rows, good = self.rows, self.good
+
+        class It:
+            def __iter__(self):
+                for k, r in enumerate(rows):
+                    if k >= good:
+                        raise LookupError("past the rows numpy asked for")
+                    LOG.append(("sub", k))
+                    yield r
+        return It()
+
+
+class Rewriting(str):
+    """A subtype whose str() rewrites the next row of its list (the list's later rows read after it)."""
+
+    def __new__(cls, v, rows, k):
+        x = str.__new__(cls, v)
+        x.rows, x.k = rows, k
+        return x
+
+    def __str__(self):
+        if self.k + 1 < len(self.rows):
+            self.rows[self.k + 1] = "rail"
+        return str.__str__(self)
+
+
+class Kernel:
+    """A road rules stand-in whose width_rejects answers with masks of other lengths."""
+
+    def __init__(self, real, mode):
+        self.real, self.mode = real, mode
+
+    def width_rejects(self, cls, oneway, link, lanes, f, v, x):
+        got = np.asarray(self.real.width_rejects(cls, oneway, link, lanes, f, v, x), bool)
+        if np.all(np.asarray(lanes) == 1):      # (the first pass as it is: the second pass's masks altered)
+            return got
+        if self.mode == "long":
+            return np.r_[got, True]
+        if self.mode == "one":
+            return got[:1] if len(got) else np.ones(1, bool)
+        return got
+
+
+class RoundTwoTest(unittest.TestCase):
+    """Codex round 2 on ec3397ee."""
+
+    def test_generated_counts_read_twice(self):
+        for mode in ("value", "raise"):
+            vals = [None, 3, 2, None]
+            f = features([[(0, 10 * i), (50, 10 * i)] for i in range(4)], ["motorway"] * 4)
+            f.attrs.pop("osm_lanes", None)
+            for side, fn in (("ref", tw.ref_lane_evidence), ("new", roads._lane_evidence)):
+                gen = Flip(vals, mode)
+                with mock.patch.object(roadlanes, "generated_counts", lambda feats: gen):
+                    f.__dict__.pop("_lane_evidence", None)
+                    f.__dict__.pop("_ref_lane_evidence", None)
+                    if side == "ref":
+                        want = outcome(fn, f)
+                    else:
+                        got = outcome(fn, f)
+            self.assertEqual(got[0][0], want[0][0], mode)
+            self.assertEqual(got[1], want[1], mode)
+            if want[0][0] == "ok":
+                self.assertEqual(got[0][1].tolist(), want[0][1].tolist())
+                self.assertEqual(want[0][1].tolist(), [-1, 7, 7, -1])
+            else:
+                self.assertIs(got[0][1], want[0][1])
+
+    def width_case(self, n, sub):
+        f = features([[(0, 10 * i), (50, 10 * i)] for i in range(n)], ["trunk"] * n)
+        f.attrs["subtype"] = sub
+        f.rules["width"] = rules([(i, 30.5) for i in range(n)], "float")
+        return f
+
+    def compare(self, f, patches=()):
+        out = {}
+        for side, fn in (("ref", tw.ref_width_rejected), ("new", roads.width_rejected)):
+            f.__dict__.pop("_width_rejected", None)
+            f.__dict__.pop("_ref_width_rejected", None)
+            f.__dict__.pop("_lane_evidence", None)
+            with mock.patch.object(roadlanes, "generated_counts", lambda feats: [2] * len(feats)):
+                for p in patches:
+                    p.start()
+                try:
+                    out[side] = outcome(fn, f)
+                finally:
+                    for p in patches:
+                        p.stop()
+        want, got = out["ref"], out["new"]
+        self.assertEqual(got[0][0], want[0][0], (got, want))
+        self.assertEqual(got[1], want[1])
+        if want[0][0] == "ok":
+            self.assertTrue(same(got[0][1], want[0][1]), (got[0][1], want[0][1]))
+        else:
+            self.assertIs(got[0][1], want[0][1])
+        return want[0]
+
+    def test_subtype_rows_taken_as_numpy_asks(self):
+        # (n good rows then an error past them: numpy's count stops before it; fewer good rows: the error)
+        self.assertEqual(self.compare(self.width_case(3, LazyRows(["road"] * 5, 3)))[0], "ok")
+        self.assertEqual(self.compare(self.width_case(3, LazyRows(["road"] * 5, 2))), ("raised", LookupError))
+        rows = ["road", "road", "road"]
+        rows[0] = Rewriting("road", rows, 0)
+
+        class Column:
+            def tolist(self):
+                return rows
+        got = self.compare(self.width_case(3, Column()))
+        self.assertEqual(got[0], "ok")
+
+    def test_rule_masks_of_other_lengths(self):
+        real = roads._road_rules()
+        for mode in ("long", "one", "same"):
+            f = self.width_case(2, None)
+            f.attrs.pop("subtype")
+            f.rules["width"] = rules([(0, 30.5), (1, 31.0)], "float")
+            got = self.compare(f, [mock.patch.object(roads, "_road_rules", lambda m=mode: Kernel(real, m))])
+            self.assertEqual(got[0], "raised" if mode == "long" else "ok", mode)
+
+    def test_surface_kind_of_class_objects(self):
+        import test_roadnet_surfaces as ts
+
+        class Raising(str):
+            def __str__(self):
+                raise ArithmeticError("str")
+        rng = random.Random(6)
+        for k in range(400):
+            cls = rng.choice([OtherStr("track"), OtherStr("residential"), Raising("track"), LikeMotorway(), None, 3,
+                              "track", np.str_("track"), [1]])
+            surf = rng.choice([None, "unpaved", "asphalt", "gravel", "ground", "x"])
+            want = outcome(ts.ref_surface_kind, cls, surf)[0]
+            got = outcome(roads.surface_kind, cls, surf)[0]
+            self.assertEqual(got, want, (k, cls, surf))
+
+
 if __name__ == "__main__":
     unittest.main()
