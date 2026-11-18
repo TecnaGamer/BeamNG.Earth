@@ -298,6 +298,22 @@ class GapLanding(unittest.TestCase):
                                 part_ids=["tstub"], **kw)[0]
         self.assertLess(float(tw.z[-1]), 50.0 - 1.0, "the other carriageway: nothing from this landing")
 
+    def test_not_across_the_bridge(self):
+        # (Codex review of round 5: one feature with a ground piece on each bank of an 8 m bridge: the far bank's
+        # samples, of the same road, take nothing from this bank's landing, whose line stands 3 m higher)
+        ap = self.approach(0.0)
+
+        def raw(la, lo):
+            e, n, _ = self.frame.geodetic_to_enu(la, lo, 0.0)
+            x = np.asarray(e, np.float64)
+            return np.where(x < 0.0, 53.0 - 0.037 * x, 50.0 + 0.037 * (x - 8.0))   # (this bank higher)
+        lands = [(ap, "motorway", [ap[[2, 1]], ap[[1, 0]]], [], frozenset({"road"}))]
+        far_xy = self.dense(np.array([8.0, 0.0]), np.array([200.0, 0.0]))
+        far = grading.plan_roads(self.frame, [(self.lonlat(far_xy), self.spec)], raw, cuts=False, landings=lands,
+                                 part_ids=["road"])[0]
+        ref = grading.plan_roads(self.frame, [(self.lonlat(far_xy), self.spec)], raw, cuts=False)[0]
+        self.assertTrue(np.allclose(far.z, ref.z))
+
     def test_off_the_line_untouched(self):
         # (a road crossing the approach, not on its line, keeps its own ground)
         ap = self.approach(0.0)
@@ -441,6 +457,24 @@ class RawLinesShort(unittest.TestCase):
             self.assertFalse(b.n)
             self.assertIn(str(k), g._raw_lines_memo)
             self.assertTrue(g._landing_memo, "the landings kept once complete")
+
+    def test_no_row_written_into_a_busy_layer(self):
+        # (Codex review of round 5: another thread loading the layer's clean ranges, the requested rows not in yet: no
+        # row is made here into its memory (the load's setdefault would keep it), the read is short and unkept)
+        import mapcells
+        site, key = self.layer()
+        f = site.cells[key].__class__.__new__(site.cells[key].__class__)
+        f.__dict__.update({kk: v for kk, v in site.cells[key].__dict__.items() if not kk.startswith("_")})
+        k = mapcells.CellKey(*(int(v) for v in key.split("/")))
+        g = self.planner(f)
+        f.__dict__["_ranges_state"] = "busy"
+        f.__dict__["_level_ranges"] = {}
+        with mock.patch.object(roads, "LIDAR_GAPS_ON", False):
+            with revisit.scope() as b:
+                g._raw_lines(k)
+        self.assertTrue(b.n)
+        self.assertEqual(f.__dict__["_level_ranges"], {}, "nothing written into the layer being loaded")
+        self.assertNotIn(str(k), g.__dict__.get("_raw_lines_memo", {}))
 
     def test_cell_ranges_mark_a_short_entry(self):
         import time

@@ -683,7 +683,8 @@ ABUT_MAX_M = 8.0            # m filled at most
 FAST_GAP = os.environ.get("BNE_FAST_GAP", "off") == "on"
 FAST_GAP_CLASSES = ("motorway", "trunk")
 FAST_GAP_ON_M = 3.0         # m off a landing's approach line a sample of no known road is on it at most ...
-FAST_GAP_ID_M = 12.0        # ... and one of its own roads' (a lane placement's shift: left_of on a four-lane road)
+FAST_GAP_ID_M = 12.0        # ... and one of its own roads' (a lane placement's shift: left_of on a four-lane road),
+FAST_GAP_BACK_M = 1.0       # never more than this behind the deck's end (the bridge's other bank)
 FAST_GAP_START_M = 6.0      # m from a deck end the first part of its approach may start (heading on, FAST_GAP_COS)
 FAST_GAP_LINK_M = 3.0       # m from a part's far end the next may start (a lane section's joint offset 2 m sideways)
 FAST_GAP_COS = 0.707        # (within 45 degrees)
@@ -6086,6 +6087,12 @@ class _Planner:
         f = self.md.cell(k, layers=("roads",), kind="demand").layers.get("roads")
         out = {"bridges": [], "ground": []}
         used = {}                       # (the layers whose level ranges were read)
+        busy = False
+        if f is not None and len(f) and (f.__dict__.get("_ranges_state") == "busy" or roadsmod.HOME_RANGES_ON and any(
+                (h := roadsmod.home_copy(f, i)) is not None and h[0].__dict__.get("_ranges_state") == "busy"
+                for i in range(len(f)))):
+            busy = True                 # (a layer another thread is making ranges for: nothing read from it, not even
+            f = None                    # the specs, which read them too)
         if f is not None and len(f):
             bs = roadsmod.bridge_specs(f)
             rs = roadsmod.road_specs(f, None, self.widths)
@@ -6093,14 +6100,19 @@ class _Planner:
             for i in range(len(f)):
                 if bs[i] is None and rs[i] is None:
                     continue
-                # (the ranges from the layer they come from now, its mark read off that very layer)
+                # (the ranges from the layer they come from now, its mark read off that very layer; never from one
+                # another thread is making: a row read there is made here and written into its memory, where the
+                # clean load keeps it (setdefault). Such a feature is left out and the read is short)
                 h = roadsmod.home_copy(f, i) if roadsmod.HOME_RANGES_ON else None
+                src = h[0] if h is not None else f
+                used[id(src)] = src
+                if src.__dict__.get("_ranges_state") == "busy":
+                    busy = True
+                    continue
                 if h is not None:
                     rngs = roadsmod.home_ranges(f, i, h[0], h[1], roadsmod.level_ranges(h[0], h[1], _home=False))
-                    used[id(h[0])] = h[0]
                 else:
                     rngs = roadsmod.level_ranges(f, i, _home=False)
-                    used[id(f)] = f
                 for kind, sp, want in (("bridges", bs[i], "bridge"), ("ground", rs[i], "ground")):
                     ps = roadsmod._parts_by_level_new(f, i, want, rngs=list(rngs)) if sp is not None else ()
                     for ring in ps:
@@ -6122,8 +6134,9 @@ class _Planner:
                         out[kind].append((line, cls, _is_link(sp), sp.kind in roadsmod.BUILT, fid))
         # (read after the pieces: a layer whose ranges another thread is still making (not done: its entries visible as
         # they come) or made short (marked before it is said done) makes this read short)
-        short = any(lay.__dict__.get("_ranges_state") != "done" or lay.__dict__.get("_ranges_short_until") is not None
-                    for _i, lay in sorted(used.items(), key=lambda kv: kv[0]))
+        short = busy or any(lay.__dict__.get("_ranges_state") != "done"
+                            or lay.__dict__.get("_ranges_short_until") is not None
+                            for _i, lay in sorted(used.items(), key=lambda kv: kv[0]))
         if short:
             # (ranges made short, or taken from a short shared entry: the layers keep them, and a read again says
             # nothing. Short here too, every time, and never kept: roads._cell_ranges' mark)
@@ -7974,7 +7987,8 @@ def gap_apply(z, pts, approach, line, own=None, other=None, sid=None, own_ids=No
     """FAST_GAP: z (n,) at a fast road's samples pts (n, 2) raised to a landing's line (gap_line's (a, b, reach), its
     arc measured along its approach line (k, 2) from the deck's end), by FAST_GAP_MAX_M at most, never lowered, within
     the reach: a sample of a known road (sid: per sample the feature id, or None) takes it when that road is one of the
-    approach's parts (own_ids), however its lanes are placed (FAST_GAP_ID_M off at most), and never otherwise; a sample
+    approach's parts (own_ids), however its lanes are placed (FAST_GAP_ID_M off at most) and not behind the deck's end
+    (FAST_GAP_BACK_M: the same feature's piece on the bridge's other bank), and never otherwise; a sample
     of no known road where it lies on the approach (FAST_GAP_ON_M) and, with own and other (the approach's parts' lines,
     the other ground roads' lines round it), no nearer another road than one of its parts. Which samples, and their
     heights, are the approach's and the map's alone, whichever plan or placed copy has them. z itself when nothing is
@@ -7994,7 +8008,12 @@ def gap_apply(z, pts, approach, line, own=None, other=None, sid=None, own_ids=No
         idx = np.flatnonzero(on)
         near = _nearest_off(pts[idx], own if own else [approach])
         on[idx] = near <= _nearest_off(pts[idx], other)
-    on |= mine & (off <= FAST_GAP_ID_M) & (s_ <= reach)
+    # (a known road's sample on the landing's own side: a feature spanning the bridge has a ground piece on each bank,
+    # and one beyond the deck end projects onto the approach's start, behind it)
+    d0 = approach[1] - approach[0]
+    d0 = d0 / max(float(dnp.hypot(*d0)), 1e-9)
+    ahead = (pts[:, 0] - approach[0, 0]) * d0[0] + (pts[:, 1] - approach[0, 1]) * d0[1] >= -FAST_GAP_BACK_M
+    on |= mine & ahead & (off <= FAST_GAP_ID_M) & (s_ <= reach)
     if not on.any():
         return z
     z = np.asarray(z, np.float64)
