@@ -134,6 +134,19 @@ class YardTest(unittest.TestCase):
         self.assertGreater(len(breakers), 1)
         self.assertEqual(sum(1 for x, y in breakers if abs(x - 20.0) < 25 and abs(y - 50.0) < 13), 1)
 
+    def test_line_end_kit_stays_in_a_narrow_yard(self):
+        # the user's report 95 (a Tennessee substation, 2026-11-17): a 52 x 25 m yard, the line in along its short side
+        # just inside it, heading -y: the 38 m kit ran out past the fence; only its parts inside stay, and the gantries
+        # the conductors end on
+        ring = square(0, 0, 52, 25)
+        got, _ = yard([ring], anchors=[[6.0, 21.0, -np.pi / 2]])
+        gantries = [(x, y) for g, x, y, _ in got if g == "gantry"]
+        near = [q for q in gantries if abs(q[1] - 21.0) < 1.0]
+        self.assertEqual(len(near), 2, gantries)
+        others = [(g, round(x, 1), round(y, 1)) for g, x, y, _ in got if g != "gantry"]
+        self.assertTrue(others)
+        self.assertEqual([q for q in others if not (0 < q[1] < 52 and 0 < q[2] < 25)], [])
+
     def test_turned_yard(self):
         # a yard along a diagonal: the kits turned with it
         c, s = np.cos(np.radians(30)), np.sin(np.radians(30))

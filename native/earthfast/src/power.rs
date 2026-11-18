@@ -305,9 +305,15 @@ fn rects_overlap(a: ((f64, f64), (f64, f64), f64, f64), b: ((f64, f64), (f64, f6
     axes(&a).iter().chain(axes(&b).iter()).all(|&ax| (d.0 * ax.0 + d.1 * ax.1).abs() < reach(&a, ax) + reach(&b, ax))
 }
 
+/// m round an anchored kit's part (along the kit's axes) that must be inside the rings for it to stand
+const ANCHOR_PART_M: f64 = 1.0;
+/// m off the anchor's line (the kit's y of anchor_at) a part of an anchored kit stands whatever the rings: the gantries
+const ANCHOR_LINE_M: f64 = 0.5;
+
 /// A substation's yard: its rings (pts (n, 2) in the anchor frame, ring offsets (k + 1); even-odd). First a kit
 /// anchor_kit at every line end in anchors (a, 3) [x, y, heading into the substation, radians]: its point anchor_at
-/// (its frame) on the end, its +y toward the line. Then the rest filled with the first kit (kits (m, 2): footprint
+/// (its frame) on the end, its +y toward the line; of it only the parts with ANCHOR_PART_M round them inside the
+/// rings, and those on the anchor's line (ANCHOR_LINE_M: the gantries the conductors end on). Then the rest filled with the first kit (kits (m, 2): footprint
 /// [w along its x, h along its y] around its frame's origin, in order of preference) of which at least one fits, on a
 /// grid along the sides of the smallest rectangle around its largest ring (the kit's x along the longer rectangle side
 /// or across it, whichever fits more), gap apart and gap / 2 inside the rings, gap clear of the anchored kits, at most
@@ -343,7 +349,10 @@ pub fn substation_yard<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, ri
             }
         }
     };
-    // the kits at the line ends
+    // the kits at the line ends: of each only the parts standing inside the rings (ANCHOR_PART_M of each inside; the
+    // user's report 95, a 25 m wide Tennessee substation 2026-11-17: a line entering along its short side laid the
+    // 38 m kit's masts, transformers and supports out past the fence), but always those on the anchor's line (the
+    // gantries the conductors end on)
     let mut held: Vec<((f64, f64), (f64, f64), f64, f64)> = Vec::new();
     if anchor_kit < kits.nrows() {
         let (w, h) = (kits[[anchor_kit, 0]], kits[[anchor_kit, 1]]);
@@ -353,7 +362,22 @@ pub fn substation_yard<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, ri
             let kx = (ky.1, -ky.0);
             let (cx, cy) = (an[[e, 0]] - anchor_at[0] * kx.0 - anchor_at[1] * ky.0,
                             an[[e, 1]] - anchor_at[0] * kx.1 - anchor_at[1] * ky.1);
-            place(anchor_kit, cx, cy, kx, &mut out);
+            let yaw = kx.1.datan2(kx.0).to_degrees().rem_euclid(360.0);
+            let m = ANCHOR_PART_M;
+            for p in 0..parts.nrows() {
+                if parts[[p, 0]] as usize != anchor_kit {
+                    continue;
+                }
+                let (lx, ly) = (parts[[p, 2]], parts[[p, 3]]);
+                let at = |dx: f64, dy: f64| (cx + (lx + dx) * kx.0 - (ly + dy) * kx.1, cy + (lx + dx) * kx.1 + (ly + dy) * kx.0);
+                let on_line = (ly - anchor_at[1]).abs() <= ANCHOR_LINE_M;
+                let fits = [(0.0, 0.0), (-m, 0.0), (m, 0.0), (0.0, -m), (0.0, m)].iter()
+                    .all(|&(dx, dy)| { let (x, y) = at(dx, dy); in_rings(&rings, x, y) });
+                let (x, y) = at(0.0, 0.0);
+                if (on_line || fits) && inside(x, y) {
+                    out.extend_from_slice(&[parts[[p, 1]], x, y, yaw]);
+                }
+            }
             held.push(((cx, cy), kx, (w + gap) / 2.0, (h + gap) / 2.0));
         }
     }
