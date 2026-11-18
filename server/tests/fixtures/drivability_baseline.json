@@ -800,7 +800,7 @@
   }
  },
  "paris_maillot_1083": {
-  "steps": 663,
+  "steps": 659,
   "parts": {
    "bridge:03416596-4287-47ca-a11f-def3e0e3acfc": {
     "step_m": 0.062,
@@ -828,9 +828,9 @@
     "lift_g": 0.0
    },
    "bridge:bb5e4cb6-9083-4129-82cb-1062c99438e2": {
-    "step_m": 0.1455,
-    "grade": 0.2413,
-    "lift_g": 2.1687
+    "step_m": 0.084,
+    "grade": 0.1085,
+    "lift_g": 1.0885
    },
    "bridge:cd8b30a4-3e7f-4956-b265-ba19c0ae81b7": {
     "step_m": 0.0863,
@@ -838,9 +838,9 @@
     "lift_g": 1.3867
    },
    "bridge:ea7bf85b-5eee-46fc-9922-321e0b735929": {
-    "step_m": 1.7561,
-    "grade": 1.0238,
-    "lift_g": 11.4134
+    "step_m": 0.761,
+    "grade": 0.8415,
+    "lift_g": 9.5994
    },
    "bridge:f222a26e-6b74-4b4e-9143-6899669082af": {
     "step_m": 0.0304,
@@ -850,7 +850,7 @@
    "bridge:f5366a2d-7e9c-4a28-9ce4-c3976db44833": {
     "step_m": 1.0057,
     "grade": 0.9842,
-    "lift_g": 11.929
+    "lift_g": 11.9529
    },
    "ground:0073f56a-93d4-422d-a0ba-0681ae109e49": {
     "step_m": 0.0298,
