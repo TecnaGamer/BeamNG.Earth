@@ -298,22 +298,31 @@ def track_beds(frame, cells, box, elev, load=None):
 def bed_at(rails, beds, xy, fid=None):
     """The bed (n,) at points xy (n, 2) on a track's own line (track_beds' rails and beds): each point's on the part
     nearest it (of line fid only, when given), between the two samples of its segment there. NaN where there is no
-    part (the railways lay none of that line: a stub they leave out). Pure."""
+    part (the railways lay none of that line: a stub they leave out). Pure.
+
+    Every segment of every part at once (the nearest of all, the first on a tie: the earliest part, as parts taken one
+    after another with a nearer one replacing it only when strictly nearer), the points in blocks that keep the
+    points x segments arrays small: a part at a time was 500 parts' arrays of a yard for each of the 3 points a
+    crossing asked (379 calls, 11 of 200 CPU-s of a Zurich + Gotthard replay)."""
     xy = np.asarray(xy, np.float64).reshape(-1, 2)
     out = np.full(len(xy), np.nan)
-    best = np.full(len(xy), np.inf)
-    for (f, _c, _kind, pxy), zb in zip(rails, beds):
-        if (fid is not None and f != fid) or len(pxy) < 2:
-            continue
-        a, ab = pxy[:-1], np.diff(pxy, axis=0)
-        t = np.clip(((xy[:, None, :] - a[None]) * ab[None]).sum(2) / np.maximum((ab * ab).sum(1), 1e-12)[None], 0.0, 1.0)
-        d = dnp.hypot(*(a[None] + t[:, :, None] * ab[None] - xy[:, None, :]).transpose(2, 0, 1))
+    use = [(np.asarray(pxy, np.float64), np.asarray(zb, np.float64)) for (f, _c, _kind, pxy), zb in zip(rails, beds)
+           if not ((fid is not None and f != fid) or len(pxy) < 2)]
+    if not use or not len(xy):
+        return out
+    a = np.concatenate([p[:-1] for p, _z in use])
+    ab = np.concatenate([np.diff(p, axis=0) for p, _z in use])
+    z0 = np.concatenate([z[:-1] for _p, z in use])
+    z1 = np.concatenate([z[1:] for _p, z in use])
+    length2 = np.maximum((ab * ab).sum(1), 1e-12)[None]
+    block = max(1, 2_000_000 // len(a))
+    for i0 in range(0, len(xy), block):
+        q = xy[i0:i0 + block]
+        t = np.clip(((q[:, None, :] - a[None]) * ab[None]).sum(2) / length2, 0.0, 1.0)
+        d = dnp.hypot(*(a[None] + t[:, :, None] * ab[None] - q[:, None, :]).transpose(2, 0, 1))
         j = np.argmin(d, axis=1)
-        dj = d[np.arange(len(xy)), j]
-        tj = t[np.arange(len(xy)), j]
-        nearer = dj < best
-        best = np.where(nearer, dj, best)
-        out = np.where(nearer, zb[j] + (zb[j + 1] - zb[j]) * tj, out)
+        tj = t[np.arange(len(q)), j]
+        out[i0:i0 + len(q)] = z0[j] + (z1[j] - z0[j]) * tj
     return out
 
 
