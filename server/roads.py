@@ -13741,7 +13741,7 @@ def collider_boxes(walks, chunks):
     for wk in walks or ():
         if "disc" in wk:
             ring = np.asarray(wk["disc"]["ring"], np.float64)
-            add("walk", ring[np.argsort(dnp.arctan2(ring[:, 1] - ring[:, 1].mean(), ring[:, 0] - ring[:, 0].mean()))],
+            add("walk", ring[np.argsort(dnp.arctan2(ring[:, 1] - ring[:, 1].mean(), ring[:, 0] - ring[:, 0].mean()), kind="stable")],
                 0.5, -1.0, 1.0)
             continue
         if "corner" in wk:
@@ -13750,7 +13750,7 @@ def collider_boxes(walks, chunks):
             if wk.get("europe"):
                 precise(pts[:, :2], pts[:, 2], wk.get("height", sidewalks.CURB_H) + .05)
             else:
-                add("walk", pts[np.argsort(dnp.arctan2(pts[:, 1] - pts[:, 1].mean(), pts[:, 0] - pts[:, 0].mean()))],
+                add("walk", pts[np.argsort(dnp.arctan2(pts[:, 1] - pts[:, 1].mean(), pts[:, 0] - pts[:, 0].mean()), kind="stable")],
                     0.5, -1.0, 1.0)
             continue
         ww = wk.get("w", SIDEWALK["w"])

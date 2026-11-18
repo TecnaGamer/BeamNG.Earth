@@ -3393,7 +3393,7 @@ def _shared_walls(rings, tol=0.6):
         return cnt
     cents = np.array([r.mean(0) for r in rings])
     rads = np.array([dnp.hypot(*(r - r.mean(0)).T).max() for r in rings])
-    order = np.argsort(cents[:, 0])
+    order = np.argsort(cents[:, 0], kind="stable")
     fast.require(1, "shared_walls")
     offs = np.zeros(n + 1, np.int64)
     offs[1:] = np.cumsum([len(r) for r in rings])

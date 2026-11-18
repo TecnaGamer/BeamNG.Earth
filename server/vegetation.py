@@ -975,7 +975,7 @@ def orchard_items(feats, chm, blocked, bounds=None):
     rank = np.concatenate(ranks).astype(np.float32)
     u = np.concatenate(us)
     if len(lon) > ORCHARD_CELL_MAX:
-        keep = np.sort(np.argpartition(rank, ORCHARD_CELL_MAX - 1)[:ORCHARD_CELL_MAX])
+        keep = np.sort(np.argsort(rank, kind="stable")[:ORCHARD_CELL_MAX])
         lon, lat, height, yaw, rank, u = lon[keep], lat[keep], height[keep], yaw[keep], rank[keep], u[keep]
     group = np.full(len(lon), G_DECIDUOUS, np.uint8)
     group = regional(group, height, lat, lon, np.full(len(lon), WC["crop"], np.uint8), u)
@@ -1082,7 +1082,7 @@ def vineyard_items(feats, chm, blocked, bounds=None):
     x, y, yaw, u = np.concatenate(xs), np.concatenate(ys), np.concatenate(yaws), np.concatenate(us)
     rank = (u * 0.15).astype(np.float32)
     if len(x) > VINE_CELL_MAX:
-        keep = np.sort(np.argpartition(rank, VINE_CELL_MAX - 1)[:VINE_CELL_MAX])
+        keep = np.sort(np.argsort(rank, kind="stable")[:VINE_CELL_MAX])
         x, y, yaw, u, rank = x[keep], y[keep], yaw[keep], u[keep], rank[keep]
     lon, lat = _to4326(x, y)
     n = len(lon)
@@ -1164,7 +1164,7 @@ def bale_items(feats, chm, blocked, bounds=None):
     x, y, yaw, g, u = (np.concatenate(a) for a in (xs, ys, yaws, gs, us))
     rank = (u * 0.3).astype(np.float32)
     if len(x) > BALE_CELL_MAX:
-        keep = np.sort(np.argpartition(rank, BALE_CELL_MAX - 1)[:BALE_CELL_MAX])
+        keep = np.sort(np.argsort(rank, kind="stable")[:BALE_CELL_MAX])
         x, y, yaw, g, u, rank = x[keep], y[keep], yaw[keep], g[keep], u[keep], rank[keep]
     lon, lat = _to4326(x, y)
     n = len(lon)
@@ -1267,7 +1267,7 @@ def farm_foliage(feats, chm, blocked, bounds=None):
     rank = np.concatenate(ranks).astype(np.float32)
     u = np.concatenate(us)
     if len(lon) > FARM_BUSH_CELL:
-        keep = np.sort(np.argpartition(rank, FARM_BUSH_CELL - 1)[:FARM_BUSH_CELL])
+        keep = np.sort(np.argsort(rank, kind="stable")[:FARM_BUSH_CELL])
         lon, lat, height, yaw, rank, u = lon[keep], lat[keep], height[keep], yaw[keep], rank[keep], u[keep]
     group = np.full(len(lon), G_SHRUB, np.uint8)
     group = regional(group, height, lat, lon, np.full(len(lon), WC["crop"], np.uint8), u)
@@ -1539,7 +1539,7 @@ def _capped(it):
     out = []
     for sel, cap in ((np.flatnonzero(~clump), TILE_ROWS_MAX), (np.flatnonzero(clump), CLUMP_ROWS_MAX)):
         if len(sel) > cap:
-            sel = sel[np.argpartition(it.rank[sel], cap - 1)[:cap]]
+            sel = sel[np.sort(np.argsort(it.rank[sel], kind="stable")[:cap])]
         out.append(sel)
     return np.sort(np.concatenate(out))
 

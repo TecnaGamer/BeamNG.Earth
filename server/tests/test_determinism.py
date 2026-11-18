@@ -78,7 +78,22 @@ def platform_maths(path):
             out.append((n.lineno, "@= / **="))
         elif isinstance(n, ast.BinOp) and isinstance(n.op, ast.Pow) and not _pow_exempt(n):
             out.append((n.lineno, "** (the C library's pow: dnp.sq / dnp.power)"))
+        elif isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and _unstable_order(n):
+            out.append((n.lineno, f"{n.func.attr} of equal keys (CPU-dispatched sort: kind=\"stable\")"))
     return [(ln, what) for ln, what in out if ln not in ok]
+
+
+def _unstable_order(call):
+    """An argsort without kind="stable", an argpartition, or np.partition: the order of equal keys is the sort
+    kernel's, and numpy picks that by the CPU (x86-simd-sort's AVX2 or AVX-512 code, the scalar introsort elsewhere:
+    the PC's AVX2 argsort and the Mac's disagree on ties, 2026-11-18)."""
+    name = call.func.attr
+    if name == "argsort":
+        kind = next((k.value for k in call.keywords if k.arg == "kind"), None)
+        return not (isinstance(kind, ast.Constant) and kind.value in ("stable", "mergesort"))
+    if name == "argpartition":
+        return True
+    return name == "partition" and isinstance(call.func.value, ast.Name) and call.func.value.id == "np"
 
 
 class NoPlatformMathsTest(unittest.TestCase):
@@ -86,6 +101,18 @@ class NoPlatformMathsTest(unittest.TestCase):
         bad = [f"{os.path.relpath(p, ROOT)}:{ln}: {what}" for p in _server_files() for ln, what in platform_maths(p)]
         self.assertFalse(bad, "platform maths in the server (use dnp / dmath, GitHub #1169; '# det-ok: why' on a "
                          "line where the bits cannot reach any output):\n  " + "\n  ".join(bad[:60]))
+
+    def test_scan_sorts(self):
+        import tempfile
+        src = ("a = np.argsort(x)\nb = x.argsort()\nc = np.argsort(x, kind='stable')\nd = np.argpartition(x, 3)\n"
+               "e = np.partition(x, 3)\nf = s.partition(':')\ng = np.interp(1, [0, 1], [0, 1])\n"
+               "h = np.argsort(x)  # det-ok: a test\n")
+        with tempfile.NamedTemporaryFile("w", suffix=".py", delete=False) as fh:
+            fh.write(src)
+        try:
+            self.assertEqual(sorted(ln for ln, _w in platform_maths(fh.name)), [1, 2, 4, 5, 7])
+        finally:
+            os.unlink(fh.name)
 
     def test_rust_kernels(self):
         src_dir = os.path.join(ROOT, "native", "earthfast", "src")

@@ -293,7 +293,7 @@ def _loops(roads_list, ring):
     for g in groups.values():
         xy = np.concatenate(g)
         c = xy.mean(0)
-        out.append(xy[np.argsort(dnp.arctan2(xy[:, 1] - c[1], xy[:, 0] - c[0]))])
+        out.append(xy[np.argsort(dnp.arctan2(xy[:, 1] - c[1], xy[:, 0] - c[0]), kind="stable")])
     return out
 
 
