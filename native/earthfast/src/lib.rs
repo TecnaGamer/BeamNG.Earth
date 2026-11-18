@@ -2162,8 +2162,8 @@ impl EndsGrid {
 /// grading.chain_extensions: for each query (a road part's end: its node, the way the road goes on through it, its
 /// smoothing class, its road), the straightest candidate line with an end within join m of the node, of the same class
 /// and another road, turning at most turn_deg (directions over look m of each line); its line from the node outward,
-/// cut reach m along (each query its own), as points (n, 2) and per-query offsets (q + 1): an empty run for none.
-/// Ties: the lower candidate index (the caller's order).
+/// cut reach m along (each query its own), as points (n, 2) and per-query offsets (q + 1): an empty run for none;
+/// and per query the chosen candidate's index (-1 for none). Ties: the lower candidate index (the caller's order).
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
 fn chain_extensions<'py>(py: Python<'py>, cand_xy: PyReadonlyArray2<'py, f64>, cand_off: PyReadonlyArray1<'py, i64>,
@@ -2171,7 +2171,7 @@ fn chain_extensions<'py>(py: Python<'py>, cand_xy: PyReadonlyArray2<'py, f64>, c
                          q_node: PyReadonlyArray2<'py, f64>, q_dir: PyReadonlyArray2<'py, f64>,
                          q_class: PyReadonlyArray1<'py, i64>, q_road: PyReadonlyArray1<'py, i64>,
                          q_reach: PyReadonlyArray1<'py, f64>, join: f64, turn_deg: f64, look: f64)
-                         -> (Bound<'py, PyArray2<f64>>, Bound<'py, PyArray1<i64>>) {
+                         -> (Bound<'py, PyArray2<f64>>, Bound<'py, PyArray1<i64>>, Bound<'py, PyArray1<i64>>) {
     let (cxy, coff, ccl, crd) = (cand_xy.as_array(), cand_off.as_array(), cand_class.as_array(), cand_road.as_array());
     let (qn, qd, qcl, qrd, qr) = (q_node.as_array(), q_dir.as_array(), q_class.as_array(), q_road.as_array(),
                                   q_reach.as_array());
@@ -2179,11 +2179,12 @@ fn chain_extensions<'py>(py: Python<'py>, cand_xy: PyReadonlyArray2<'py, f64>, c
     let grid = EndsGrid::new(&cxy, &coff, join);
     let mut out: Vec<f64> = Vec::new();
     let mut off: Vec<i64> = vec![0];
+    let mut which: Vec<i64> = Vec::with_capacity(qn.nrows());
     for q in 0..qn.nrows() {
         let (nx, ny) = (qn[[q, 0]], qn[[q, 1]]);
         let (dx, dy) = (qd[[q, 0]], qd[[q, 1]]);
         let dl = dx.dhypot(dy);
-        let mut best: Option<(f64, Vec<f64>, Vec<f64>)> = None;
+        let mut best: Option<(f64, Vec<f64>, Vec<f64>, usize)> = None;
         if dl > 0.0 {
             for c in grid.near(nx, ny) {
                 if ccl[c] != qcl[q] || crd[c] == qrd[q] {
@@ -2212,11 +2213,12 @@ fn chain_extensions<'py>(py: Python<'py>, cand_xy: PyReadonlyArray2<'py, f64>, c
                 }
                 let cos = (dx * ex + dy * ey) / (dl * el);
                 if cos >= cos_max && best.as_ref().map_or(true, |b| cos > b.0) {
-                    best = Some((cos, xs, ys));
+                    best = Some((cos, xs, ys, c));
                 }
             }
         }
-        if let Some((_, xs, ys)) = best {
+        which.push(best.as_ref().map_or(-1, |b| b.3 as i64));
+        if let Some((_, xs, ys, _c)) = best {
             // from the node itself, cut reach m along
             out.push(nx);
             out.push(ny);
@@ -2237,7 +2239,7 @@ fn chain_extensions<'py>(py: Python<'py>, cand_xy: PyReadonlyArray2<'py, f64>, c
         off.push((out.len() / 2) as i64);
     }
     let a = numpy::ndarray::Array2::from_shape_vec((out.len() / 2, 2), out).unwrap();
-    (a.into_pyarray(py), off.into_pyarray(py))
+    (a.into_pyarray(py), off.into_pyarray(py), which.into_pyarray(py))
 }
 
 /// grading node parts: for each query node (n, 2), the candidate lines (cand_xy / cand_off as chain_extensions') with an
@@ -6593,6 +6595,6 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(roadnet::verdicts::photo_values, m)?)?;
     // 392: R2a's photo surface inputs (roadnet::verdicts: roadsurf.candidates and layer_verdicts' store lookup,
     // photosurface.verdicts' selection, _spec_inputs' fill of the photo's values)
-    m.add("VERSION", 411)?;
+    m.add("VERSION", 412)?;
     Ok(())
 }

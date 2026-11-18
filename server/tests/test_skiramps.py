@@ -355,6 +355,26 @@ class RawLinesShort(unittest.TestCase):
                 self.assertIs(g._raw_lines(k), got)
             self.assertFalse(b.n, "kept clean, read clean")
 
+    def test_short_home_copy(self):
+        # (Codex review of round 5: the requested layer unmarked, the home copy its features take their ranges from
+        # marked short: still short, never kept)
+        import mapcells
+        site, key = self.layer()
+        f = site.cells[key]
+        f.__dict__.pop("_ranges_short_until", None)
+        k = mapcells.CellKey(*(int(v) for v in key.split("/")))
+        g = self.planner(f)
+        home = f.__class__.__new__(f.__class__)
+        home.__dict__.update({kk: v for kk, v in f.__dict__.items() if not kk.startswith("_")})
+        home.__dict__["_ranges_short_until"] = 1e18
+        with mock.patch.object(roads, "LIDAR_GAPS_ON", False), \
+                mock.patch.object(roads, "home_copy", lambda feats, i: (home, i) if feats is f else None):
+            for attempt in range(2):
+                with revisit.scope() as b:
+                    g._raw_lines(k)
+                self.assertTrue(b.n, f"attempt {attempt}: said short")
+                self.assertNotIn(str(k), g.__dict__.get("_raw_lines_memo", {}))
+
     def test_cell_ranges_mark_a_short_entry(self):
         import time
         site, key = self.layer()
@@ -374,6 +394,32 @@ class RawLinesShort(unittest.TestCase):
         finally:
             with roads._FACTS_LOCK:
                 roads._FACTS_MEM.pop(mk, None)
+
+
+class ExtensionOwner(unittest.TestCase):
+    """Codex review of round 5: an extension's road is the one the native selector chose. Two candidates share their
+    first 2 m past the node, then one turns 30 degrees: the straight one goes on (over CHAIN_LOOK_M), and it, not the
+    first listed, owns the extension's samples."""
+
+    def test_selector_choice(self):
+        import geodesy
+        g = object.__new__(grading._Planner)
+        g.lock = threading.Lock()
+        g.frame = geodesy.EnuFrame(50.0, 10.0)
+        spec = roads.Spec(11.5, "paved", False, "motorway")
+        sg = grading.profile_sigma(spec)
+        t = np.radians(30.0)
+        turn = np.array([[0.0, 0.0], [2.0, 0.0], [2.0 + 60.0 * np.cos(t), 60.0 * np.sin(t)]])
+        straight = np.array([[0.0, 0.0], [2.0, 0.0], [62.0, 0.0]])
+        cands = [(turn, sg, grading.road_id("turn"), None, spec, "turn"),
+                 (straight, sg, grading.road_id("straight"), None, spec, "straight")]
+        g._chain_cands = lambda key, feats=None, specs=None: cands
+        xs = np.linspace(-100.0, 0.0, 26)
+        la, lo, _ = g.frame.enu_to_geodetic(xs, np.zeros(len(xs)), 0.0)
+        ext, ids = g._extensions([(np.c_[lo, la], spec)], ["road"], with_ids=True)
+        self.assertIsNotNone(ext[0][1])
+        self.assertEqual(ids[0][1], "straight")
+        self.assertGreater(float(ext[0][1][-1][0]), 30.0, "along the straight one")
 
 
 class GapLandingCells(unittest.TestCase):

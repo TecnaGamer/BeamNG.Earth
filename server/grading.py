@@ -3028,7 +3028,7 @@ class _Planner:
         smoothing long, or None. with_ids: (ext, the features those lines are of: per part (before, after), the feature
         id or None) (FAST_GAP: a sample's own road)."""
         import fast
-        fast.require(69, "road chains")
+        fast.require(412, "road chains")    # (412: the chosen candidates too)
         f64 = np.float64
         q_node, q_dir, q_class, q_road, q_reach, q_cell = [], [], [], [], [], []
         if not parts:
@@ -3067,7 +3067,7 @@ class _Planner:
             if not cands or not qs:
                 continue
             cxy, coff, ccls, croad = self._cand_arrays(key, cands)
-            pts, off = fast._ef.chain_extensions(
+            pts, off, which = fast._ef.chain_extensions(
                 cxy, coff, ccls, croad,
                 np.ascontiguousarray([q_node[i] for i in qs], f64), np.ascontiguousarray([q_dir[i] for i in qs], f64),
                 np.array([q_class[i] for i in qs], np.int64), np.array([q_road[i] for i in qs], np.int64),
@@ -3075,8 +3075,8 @@ class _Planner:
             for j, i in enumerate(qs):
                 if off[j + 1] - off[j] >= 2:
                     out[i // 2][i % 2] = np.asarray(pts[off[j]:off[j + 1]])
-                    if with_ids:
-                        oid[i // 2][i % 2] = _extension_source(cands, out[i // 2][i % 2])
+                    if with_ids and int(which[j]) >= 0:
+                        oid[i // 2][i % 2] = cands[int(which[j])][5]       # (the selector's own choice)
         if with_ids:
             return [tuple(o) for o in out], [tuple(o) for o in oid]
         return [tuple(o) for o in out]
@@ -6075,8 +6075,8 @@ class _Planner:
     def _raw_lines(self, k):
         """FAST_GAP: cell k's roads as mapped, in the frame, before any lane placement (the same copy whichever cell
         or plan asks): {"bridges": [(line (m, 2), class, link)], "ground": [(line, class, link, built, feature id)]}.
-        Kept per cell when read complete (nothing read short, and the layer's level ranges not made short:
-        roads._cell_ranges' _ranges_short_until; such a layer is said short to every reader)."""
+        Kept per cell when read complete (nothing read short, and neither the layer's level ranges nor its features'
+        home copies' made short: _ranges_short; such a layer is said short to every reader)."""
         got, res = self._memo_get("_raw_lines_memo", str(k))
         if got:
             return res
@@ -6106,9 +6106,10 @@ class _Planner:
                         out[kind].append((line, cls, _is_link(sp)))
                     else:
                         out[kind].append((line, cls, _is_link(sp), sp.kind in roadsmod.BUILT, fid))
-        if f is not None and f.__dict__.get("_ranges_short_until") is not None:
-            # (its level ranges were made short, or taken from a short shared entry: the layer keeps them, and a read
-            # of it again says nothing. Short here too, every time, and never kept: roads._cell_ranges' mark)
+        if f is not None and _ranges_short(f):
+            # (its level ranges, or a home copy's its features took theirs from, were made short, or taken from a short
+            # shared entry: the layers keep them, and a read again says nothing. Short here too, every time, and never
+            # kept: roads._cell_ranges' mark)
             import revisit
             revisit.fault()
             return out
@@ -7916,19 +7917,21 @@ def gap_line(zb):
     return float(a), float(b), reach
 
 
-def _extension_source(cands, ext):
-    """The feature id of the candidate line (_chain_cands') an extension ext (k, 2) runs along: the first whose end is
-    within CHAIN_JOIN_M of ext's node and whose line ext's next point lies on (1 mm), or None. Pure."""
-    ext = np.asarray(ext, np.float64)[:, :2]
-    if len(ext) < 2:
-        return None
-    for c in cands:
-        g = np.asarray(c[0], np.float64)[:, :2]
-        if len(g) < 2 or min(float(dnp.hypot(*(g[0] - ext[0]))), float(dnp.hypot(*(g[-1] - ext[0])))) > CHAIN_JOIN_M:
-            continue
-        if float(_on_line(ext[1:2], g)[1][0]) <= 1e-3:
-            return c[5]
-    return None
+def _ranges_short(f):
+    """FAST_GAP: were cell layer f's level ranges, or those of any home copy (roads.home_copy) its features take theirs
+    from, made short (roads._cell_ranges' _ranges_short_until on the layer)? Pure given the layers."""
+    if f.__dict__.get("_ranges_short_until") is not None:
+        return True
+    if not roadsmod.HOME_RANGES_ON:
+        return False
+    seen = set()
+    for i in range(len(f)):
+        h = roadsmod.home_copy(f, i)
+        if h is not None and id(h[0]) not in seen:
+            seen.add(id(h[0]))
+            if h[0].__dict__.get("_ranges_short_until") is not None:
+                return True
+    return False
 
 
 def _along(line, d):

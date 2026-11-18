@@ -1014,7 +1014,7 @@ class ChainTest(unittest.TestCase):
         coff = np.array([0, 2, 4, 6, 8], np.int64)
 
         def ext(roads, cls=(1, 1, 1, 1), reach=50.0):
-            pts, off = fast._ef.chain_extensions(
+            pts, off, _which = fast._ef.chain_extensions(
                 cxy, coff, np.array(cls, np.int64), np.array(roads, np.int64), np.array([[0.0, 0.0]]),
                 np.array([[1.0, 0.0]]), np.array([1], np.int64), np.array([7], np.int64), np.array([reach]),
                 1.0, 35.0, 10.0)
