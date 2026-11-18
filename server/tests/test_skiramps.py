@@ -23,6 +23,9 @@ import revisit  # noqa: E402
 import roads  # noqa: E402
 
 
+OUT = np.array([-1.0, 0.0])         # (the test decks' direction out into the road)
+
+
 def line(x0, x1, y0=0.0, y1=None, step=4.0):
     y1 = y0 if y1 is None else y1
     n = max(2, int(round(abs(x1 - x0) / step)) + 1)
@@ -229,8 +232,8 @@ class GapLanding(unittest.TestCase):
         twin = ap + np.array([0.0, 3.0])
         raw = self.raw_for(ap, twin)
         road_map, stub_map = ap[[2, 1]], ap[[1, 0]]                       # (the map's own lines)
-        lands = [(ap, "motorway", [road_map, stub_map], [twin[[2, 1]], twin[[1, 0]]], frozenset({"road", "stub"})),
-                 (twin, "motorway", [twin[[2, 1]], twin[[1, 0]]], [road_map, stub_map], frozenset({"troad", "tstub"}))]
+        lands = [(ap, "motorway", [road_map, stub_map], [twin[[2, 1]], twin[[1, 0]]], frozenset({"road", "stub"}), OUT),
+                 (twin, "motorway", [twin[[2, 1]], twin[[1, 0]]], [road_map, stub_map], frozenset({"troad", "tstub"}), OUT)]
         # the road, ending 4 m short of the deck, as one cell's lane placement puts it: shift m sideways (a lane
         # section's placed copy); the stub on to the deck as mapped
         road_xy = self.dense(ap[2], ap[1]) + np.array([0.0, -shift])
@@ -282,7 +285,7 @@ class GapLanding(unittest.TestCase):
             s_, _off = grading._on_line(pts, ap)
             return 50.0 + 0.037 * s_ - 4.0 * np.clip(1.0 - s_ / 14.0, 0.0, 1.0)
         road_map, stub_map = ap[[2, 1]], ap[[1, 0]]
-        lands = [(ap, "motorway", [road_map, stub_map], [twin[[2, 1]], twin[[1, 0]]], frozenset({"road", "stub"}))]
+        lands = [(ap, "motorway", [road_map, stub_map], [twin[[2, 1]], twin[[1, 0]]], frozenset({"road", "stub"}), OUT)]
         road_xy = self.dense(ap[2], ap[1]) + np.array([0.0, -4.0])
         stub_xy = self.dense(ap[1], ap[0])
         kw = dict(cuts=False, landings=lands)
@@ -307,12 +310,28 @@ class GapLanding(unittest.TestCase):
             e, n, _ = self.frame.geodetic_to_enu(la, lo, 0.0)
             x = np.asarray(e, np.float64)
             return np.where(x < 0.0, 53.0 - 0.037 * x, 50.0 + 0.037 * (x - 8.0))   # (this bank higher)
-        lands = [(ap, "motorway", [ap[[2, 1]], ap[[1, 0]]], [], frozenset({"road"}))]
+        lands = [(ap, "motorway", [ap[[2, 1]], ap[[1, 0]]], [], frozenset({"road"}), OUT)]
         far_xy = self.dense(np.array([8.0, 0.0]), np.array([200.0, 0.0]))
         far = grading.plan_roads(self.frame, [(self.lonlat(far_xy), self.spec)], raw, cuts=False, landings=lands,
                                  part_ids=["road"])[0]
         ref = grading.plan_roads(self.frame, [(self.lonlat(far_xy), self.spec)], raw, cuts=False)[0]
         self.assertTrue(np.allclose(far.z, ref.z))
+
+    def test_diagonal_connector_placed_copy(self):
+        # (Codex review of round 5: the first ground piece starts 3 m on and 2 m aside of the deck end, a diagonal
+        # connector; the road placed 8 m to the other side: its first samples are ahead of the deck end along the deck,
+        # though behind the connector's own direction, and take the line)
+        ap = np.array([[0.0, 0.0], [-3.0, 2.0], [-200.0, 2.0]])
+
+        def raw(la, lo):
+            e, n, _ = self.frame.geodetic_to_enu(la, lo, 0.0)
+            x = -np.asarray(e, np.float64)
+            return 50.0 + 0.037 * x - 4.0 * np.clip(1.0 - x / 14.0, 0.0, 1.0)
+        lands = [(ap, "motorway", [ap[[2, 1]]], [], frozenset({"road"}), OUT)]
+        road_xy = self.dense(np.array([-200.0, -6.0]), np.array([-3.0, -6.0]))
+        r = grading.plan_roads(self.frame, [(self.lonlat(road_xy), self.spec)], raw, cuts=False, landings=lands,
+                               part_ids=["road"])[0]
+        self.assertGreater(float(r.z[-1]), 49.8, "filled (unfilled it stands ~47 m, down the opening)")
 
     def test_off_the_line_untouched(self):
         # (a road crossing the approach, not on its line, keeps its own ground)
@@ -320,7 +339,7 @@ class GapLanding(unittest.TestCase):
         raw = self.raw_for(ap, ap + np.array([0.0, 300.0]))
         la, lo, _ = self.frame.enu_to_geodetic(np.full(21, -6.0), np.linspace(-20.0, 20.0, 21), 0.0)
         cross = grading.plan_roads(self.frame, [(np.c_[lo, la], self.spec)], raw, cuts=False,
-                                   landings=[(ap, "motorway", [ap], [], frozenset())])[0]
+                                   landings=[(ap, "motorway", [ap], [], frozenset(), OUT)])[0]
         ref = grading.plan_roads(self.frame, [(np.c_[lo, la], self.spec)], raw, cuts=False)[0]
         self.assertTrue(np.allclose(cross.z, ref.z))
 
@@ -508,6 +527,26 @@ class RawLinesShort(unittest.TestCase):
         self.assertEqual(len(first["bridges"]), 0)
         self.assertGreater(len(second["bridges"]), 0, "the restored deck")
         self.assertIs(g._raw_lines_memo[str(k)], second)
+
+    def test_competing_build_claims_first(self):
+        # (Codex review of round 5: the layer unstarted when looked at, another thread claiming its build just before
+        # ours (its _cell_ranges returns at once, the build theirs, busy): nothing read, no row written, short, unkept)
+        import mapcells
+        site, key = self.layer()
+        f = site.cells[key].__class__.__new__(site.cells[key].__class__)
+        f.__dict__.update({kk: v for kk, v in site.cells[key].__dict__.items() if not kk.startswith("_")})
+        k = mapcells.CellKey(*(int(v) for v in key.split("/")))
+        g = self.planner(f)
+
+        def claimed(lay, load_only=False):
+            lay.__dict__["_ranges_state"] = "busy"      # (the other thread's claim, its rows not in yet)
+            lay.__dict__.setdefault("_level_ranges", {})
+        with mock.patch.object(roads, "LIDAR_GAPS_ON", False), mock.patch.object(roads, "_cell_ranges", claimed):
+            with revisit.scope() as b:
+                g._raw_lines(k)
+        self.assertTrue(b.n)
+        self.assertEqual(f.__dict__["_level_ranges"], {})
+        self.assertNotIn(str(k), g.__dict__.get("_raw_lines_memo", {}))
 
     def test_cell_ranges_mark_a_short_entry(self):
         import time

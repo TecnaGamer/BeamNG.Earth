@@ -945,7 +945,8 @@ def plan_roads(frame, parts, elev, abut=None, ext=None, pins=None, cuts=True, co
     decks: [(line (k, 2) in the frame, half width)] crossing over the roads, their ground read beside them
     (deck_capped; not on coarse elevation); rings: per part, True for a mapped roundabout's ring (roads.is_ring: not
     banked, RING_LEVEL_ON); landings: the fast roads' deck ends round the parts [(approach line (k, 2) from the deck
-    end on, class, its parts' lines, the other ground roads' lines round it, its parts' feature ids)] in the frame
+    end on, class, its parts' lines, the other ground roads' lines round it, its parts' feature ids, the deck's
+    direction out (2,))] in the frame
     (FAST_GAP: gap_line, gap_apply), or None; part_ids, ext_ids: the features of the parts and of their extensions (per
     part (before, after), None unknown), whose samples a landing then takes by their road (gap_apply). Pure given elev
     and obs."""
@@ -1021,8 +1022,8 @@ def plan_roads(frame, parts, elev, abut=None, ext=None, pins=None, cuts=True, co
     if len(rays):
         rla, rlo, _ = frame.enu_to_geodetic(rays[:, 0], rays[:, 1], 0.0)
         zr = np.split(np.asarray(elev(rla, rlo), np.float64), np.cumsum(nray)[:-1])
-        lines_ = [(np.asarray(ap, np.float64), c_, own_, other_, ids_, gap_line(zr[n]))
-                  for n, (ap, c_, own_, other_, ids_) in enumerate(landings)]
+        lines_ = [(np.asarray(ap, np.float64), c_, own_, other_, ids_, v_, gap_line(zr[n]))
+                  for n, (ap, c_, own_, other_, ids_, v_) in enumerate(landings)]
     out, k = [], 0
     if obs is not None and hasattr(obs, "prepare"):     # (its parts' questions at once: _Planner._obs)
         obs.prepare([pr[0] for pr in prof if pr is not None])
@@ -1068,9 +1069,9 @@ def plan_roads(frame, parts, elev, abut=None, ext=None, pins=None, cuts=True, co
             q_ = np.concatenate([before[:nb], xy, after[:na]])
             eid = ext_ids[j] if ext_ids is not None else (None, None)
             sid = [eid[0]] * nb + [None if part_ids is None else str(part_ids[j])] * len(xy) + [eid[1]] * na
-            for ap_, c_, own_, other_, ids_, ln_ in lines_:
+            for ap_, c_, own_, other_, ids_, v_, ln_ in lines_:
                 if c_ == spec.cls and ln_ is not None:
-                    zx = gap_apply(zx, q_, ap_, ln_, own_, other_, sid, ids_)
+                    zx = gap_apply(zx, q_, ap_, ln_, own_, other_, sid, ids_, v_)
         # Curvature and its runoff need the joined-road context too. Computing
         # banking on xy alone puts a partial curvature window at every map
         # segment end, even where the longitudinal profile is continuous.
@@ -6076,46 +6077,54 @@ class _Planner:
     def _raw_lines(self, k):
         """FAST_GAP: cell k's roads as mapped, in the frame, before any lane placement (the same copy whichever cell
         or plan asks): {"bridges": [(line (m, 2), class, link)], "ground": [(line, class, link, built, feature id)]}.
-        Its pieces are made here from the level ranges of the very layers they come from (the layer's own, or its
-        features' home copies' as they are now: never the pieces another reader left in the layer's memory, which may
-        stem from a home copy since replaced). Kept per cell when read complete (nothing read short, and every one of
-        those layers' ranges done (no other thread still making them) and not made short: roads._cell_ranges'
-        _ranges_short_until, marked before done; such a read is said short every time)."""
+        Its pieces are made here from the published level ranges of the very layers they come from (the layer's own,
+        or its features' home copies' as they are now), read only once every one of them is done and not short (never
+        a row made here, never the pieces or specs another reader left in the layer's memory). Kept per cell when read
+        complete; a read with any of those layers busy (another thread making its ranges), short (roads._cell_ranges'
+        _ranges_short_until, marked before done) or on the lidar rule is said short every time and not kept."""
         got, res = self._memo_get("_raw_lines_memo", str(k))
         if got:
             return res
         f = self.md.cell(k, layers=("roads",), kind="demand").layers.get("roads")
         out = {"bridges": [], "ground": []}
-        used = {}                       # (the layers whose level ranges were read)
-        busy = False
-        if f is not None and len(f) and (f.__dict__.get("_ranges_state") == "busy" or roadsmod.HOME_RANGES_ON and any(
-                (h := roadsmod.home_copy(f, i)) is not None and h[0].__dict__.get("_ranges_state") == "busy"
-                for i in range(len(f)))):
-            busy = True                 # (a layer another thread is making ranges for: nothing read from it, not even
-            f = None                    # the specs, which read them too)
+        short = False
         if f is not None and len(f):
-            # (a road's class from its road spec, its bridge and ground pieces from the ranges read below: never the
-            # layer's kept bridge_specs, made from ranges that may have been short since replaced)
+            # every layer the features take their ranges from (their own, their home copies): each build claimed here
+            # when unstarted (roads._cell_ranges claims it under the facts lock) and all of them published done and not
+            # short before a row or a spec is read; a layer another thread is making (busy) makes the read short with
+            # nothing read from it (a row read there would be made here into its memory, where the build's setdefault
+            # keeps it). Done never goes back: from here on no read makes a row
+            homes = [roadsmod.home_copy(f, i) if roadsmod.HOME_RANGES_ON else None for i in range(len(f))]
+            layers = {id(f): f}
+            for h in homes:
+                if h is not None:
+                    layers.setdefault(id(h[0]), h[0])
+            for _i, lay in sorted(layers.items(), key=lambda kv: kv[0]):
+                roadsmod._cell_ranges(lay)
+            with roadsmod._FACTS_LOCK:
+                short = any(lay.__dict__.get("_ranges_state") != "done"
+                            or lay.__dict__.get("_ranges_short_until") is not None for lay in layers.values())
+            if any(lay.__dict__.get("_lidar_rule") for lay in layers.values()):
+                import revisit          # (the rule for want of the lidar, as level_ranges says: nothing on it kept)
+                revisit.fault(lidar=True)
+                short = True
+        if f is not None and len(f) and not short:
+            # (a road's class from its road spec, its bridge and ground pieces from the published rows read here:
+            # never the layer's kept bridge_specs, made from ranges that may have been short since replaced)
             rs = roadsmod.road_specs(f, None, self.widths)
             rows = []
             for i in range(len(f)):
                 if rs[i] is None:
                     continue
-                # (the ranges from the layer they come from now, its mark read off that very layer; never from one
-                # another thread is making: a row read there is made here and written into its memory, where the
-                # clean load keeps it (setdefault). Such a feature is left out and the read is short)
-                h = roadsmod.home_copy(f, i) if roadsmod.HOME_RANGES_ON else None
-                src = h[0] if h is not None else f
-                used[id(src)] = src
-                if src.__dict__.get("_ranges_state") == "busy":
-                    busy = True
+                h = homes[i]
+                src, j = (h[0], h[1]) if h is not None else (f, i)
+                row = src.__dict__.get("_level_ranges", {}).get(j)
+                if row is None:
+                    short = True        # (not published: never made here)
                     continue
-                if h is not None:
-                    rngs = roadsmod.home_ranges(f, i, h[0], h[1], roadsmod.level_ranges(h[0], h[1], _home=False))
-                else:
-                    rngs = roadsmod.level_ranges(f, i, _home=False)
+                rngs = roadsmod.home_ranges(f, i, h[0], h[1], list(row)) if h is not None else list(row)
                 for kind, sp, want in (("bridges", rs[i], "bridge"), ("ground", rs[i], "ground")):
-                    ps = roadsmod._parts_by_level_new(f, i, want, rngs=list(rngs)) if sp is not None else ()
+                    ps = roadsmod._parts_by_level_new(f, i, want, rngs=list(rngs))
                     for ring in ps:
                         ring = np.asarray(ring, np.float64)
                         if len(ring) >= 2:
@@ -6133,11 +6142,6 @@ class _Planner:
                         out[kind].append((line, cls, _is_link(sp)))
                     else:
                         out[kind].append((line, cls, _is_link(sp), sp.kind in roadsmod.BUILT, fid))
-        # (read after the pieces: a layer whose ranges another thread is still making (not done: its entries visible as
-        # they come) or made short (marked before it is said done) makes this read short)
-        short = busy or any(lay.__dict__.get("_ranges_state") != "done"
-                            or lay.__dict__.get("_ranges_short_until") is not None
-                            for _i, lay in sorted(used.items(), key=lambda kv: kv[0]))
         if short:
             # (ranges made short, or taken from a short shared entry: the layers keep them, and a read again says
             # nothing. Short here too, every time, and never kept: roads._cell_ranges' mark)
@@ -6155,7 +6159,7 @@ class _Planner:
 
     def _fast_landings(self, la, lo):
         """FAST_GAP: [(approach line (k, 2), class, its parts' lines, the other ground roads' lines round it, its
-        parts' feature ids)] of the
+        parts' feature ids, the deck's direction out into the road (2,))] of the
         free ends of the motorways' and trunks' decks (FAST_GAP_CLASSES, not links') within FAST_GAP_CHAIN_M +
         FAST_GAP_FAR_M of the points (lat, lon), on the map's own lines (_raw_lines), in the frame, each once (by its end
         rounded to 0.1 m: the least of its copies), those with an approach (_landing_chain). A deck end another deck
@@ -6183,7 +6187,7 @@ class _Planner:
         for _k, r in sorted(best.items()):
             got = self._landing_chain(r[0], r[1], r[2], r[3], r[4])
             if got is not None:
-                out.append((got[0], r[4], got[1], got[2], got[3]))
+                out.append((got[0], r[4], got[1], got[2], got[3], np.array([r[2], r[3]], np.float64)))
         return out
 
     @_marked("_landing_memo", lambda self, ex, ey, vx, vy, cls: (ex, ey, vx, vy, cls))
@@ -7984,12 +7988,13 @@ def _nearest_off(pts, lines):
     return best
 
 
-def gap_apply(z, pts, approach, line, own=None, other=None, sid=None, own_ids=None):
+def gap_apply(z, pts, approach, line, own=None, other=None, sid=None, own_ids=None, out_dir=None):
     """FAST_GAP: z (n,) at a fast road's samples pts (n, 2) raised to a landing's line (gap_line's (a, b, reach), its
     arc measured along its approach line (k, 2) from the deck's end), by FAST_GAP_MAX_M at most, never lowered, within
     the reach: a sample of a known road (sid: per sample the feature id, or None) takes it when that road is one of the
     approach's parts (own_ids), however its lanes are placed (FAST_GAP_ID_M off at most) and not behind the deck's end
-    (FAST_GAP_BACK_M: the same feature's piece on the bridge's other bank), and never otherwise; a sample
+    (FAST_GAP_BACK_M along out_dir, the deck's direction out into the road: the same feature's piece on the bridge's
+    other bank), and never otherwise; a sample
     of no known road where it lies on the approach (FAST_GAP_ON_M) and, with own and other (the approach's parts' lines,
     the other ground roads' lines round it), no nearer another road than one of its parts. Which samples, and their
     heights, are the approach's and the map's alone, whichever plan or placed copy has them. z itself when nothing is
@@ -8011,8 +8016,8 @@ def gap_apply(z, pts, approach, line, own=None, other=None, sid=None, own_ids=No
         on[idx] = near <= _nearest_off(pts[idx], other)
     # (a known road's sample on the landing's own side: a feature spanning the bridge has a ground piece on each bank,
     # and one beyond the deck end projects onto the approach's start, behind it)
-    d0 = approach[1] - approach[0]
-    d0 = d0 / max(float(dnp.hypot(*d0)), 1e-9)
+    d0 = (approach[1] - approach[0]) if out_dir is None else np.asarray(out_dir, np.float64)
+    d0 = d0 / max(float(dnp.hypot(*d0)), 1e-9)          # (the deck's own direction out: not a connector's)
     ahead = (pts[:, 0] - approach[0, 0]) * d0[0] + (pts[:, 1] - approach[0, 1]) * d0[1] >= -FAST_GAP_BACK_M
     on |= mine & ahead & (off <= FAST_GAP_ID_M) & (s_ <= reach)
     if not on.any():
