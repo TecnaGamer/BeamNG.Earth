@@ -171,7 +171,7 @@ class NpyGuardTest(unittest.TestCase):
                 tree = ast.parse(fh.read())
             guard = None
             for n in tree.body:
-                names = names_of(n)
+                names = [m for b in n.body for m in names_of(b)] if isinstance(n, ast.Try) else names_of(n)
                 if "npyguard" in names or "npyfirst" in names:
                     guard = n.lineno
                     break
