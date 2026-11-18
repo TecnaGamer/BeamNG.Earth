@@ -39,7 +39,14 @@ NARROW_GAUGE_M = 1.0
 STEP_M = 2.0                # m between cross-sections, from each part's start (the same at every tile)
 SMOOTH_M = 10.0             # m either side the bed's height is averaged over: the real elevation, its DEM bumps out
                             # (50 lifted the bed off the ground, the user, 2026-10-25: "follow the real elevation")
-GRADE = 0.02                # the steepest a deck or an approach ramp climbs (2 %: a main line's)
+GRADE = 0.05                # THE grade law of a track, read by everything that climbs one (the decks' and the approaches' ramps,
+                            # the lifts run along the line, the shapes' laws gradeshapes.max_grade, the seam's spread
+                            # railroadseam): 5 %, a car game's (the user, 2026-11-18: "rail grade to 5% is a car game after
+                            # all"). It was 2 % here (a main line's), 2.5 % in gradeshapes and 2 % in railroadseam: three
+                            # laws for one track. The survey's tracks climb 2.5 % over 100 m at the 99th percentile, 2.8 % the
+                            # steepest on the ground (the Gotthard line), 4.1 % on a bridge (Zurich's Letzigraben flyover ramps:
+                            # Earth's, at 2 %, stood 3 m over the real one's climb). Light rail's own 5 % (LINE_GRADE, light
+                            # rail climbs to 5-6 %) is this now: one value for every class.
 REACH_M = 200.0             # m around a tile the lines are taken: the smoothing's reach and a raised deck's ramps
 BALLAST_H = 0.3             # m of ballast over the bed line
 BALLAST_TOP_M = 1.8         # m: half the ballast's top width
@@ -1375,7 +1382,6 @@ APPROACH_FLAT_M = 16.0      # m of track over which the ground has to be level (
 APPROACH_TOL_M = 0.4        # m: the DEM's own bumps on a level stretch
 APPROACH_MIN_M = 0.5        # m: a smaller rise is left as it is
 APPROACH_RAISE_MAX_M = 8.0  # m an end is raised at most (more: bad data, left as it is)
-LINE_GRADE = {"light_rail": 0.05}   # a class's steepest grade where it is not GRADE's (light rail climbs to 5-6 %)
 
 
 def approach_levels(xy, ground, grade=GRADE):
@@ -1386,7 +1392,8 @@ def approach_levels(xy, ground, grade=GRADE):
 
 
 def approach_levels_many(xys, ground, grades=None):
-    """approach_levels of many bridge parts with one ground call (its cost is per call). grades: per part (GRADE)."""
+    """approach_levels of many bridge parts with one ground call (its cost is per call). grades: per part (GRADE: a track's
+    one law, light rail's included)."""
     d = np.arange(0.0, APPROACH_REACH_M + APPROACH_FLAT_M + 1e-9, STEP_M)
     rays = []
     for xy in xys:
@@ -1537,8 +1544,7 @@ def _profile(rails, ground, underpasses=()):
     nodes, edges, adj = roads._chain_graph(lines)
     level = {}                                  # node -> (level, reach): the track's level beyond a bridge's end there
     decks = [n for n, (_, _, kind, _) in enumerate(rails) if kind == "bridge"]
-    got_all = approach_levels_many([rails[n][3] for n in decks], ground,
-                                   [LINE_GRADE.get(rails[n][1], GRADE) for n in decks]) if decks else []
+    got_all = approach_levels_many([rails[n][3] for n in decks], ground) if decks else []
     for n, ends_got in zip(decks, got_all):
         for node, got in zip(edges[n][:2], ends_got):
             if got is not None and got[0] > level.get(node, (-np.inf, 0.0))[0]:

@@ -239,41 +239,41 @@ class PopoliTest(unittest.TestCase):
     def test_the_roads_go_down_under_the_tracks_and_a_track_stays_on_its_ground(self):
         self.assertLess(abs(min(self.beds())), 0.3, "a track over them stays on its ground")
 
-    @unittest.expectedFailure
     def test_both_tracks_stay_on_their_ground(self):
-        """The goal (in the real place both tracks are on one level): the second track's bed stands 4.3 m (at the service
-        road) to 5.9 m (the SR17) over the ground, the first on it. Measured step by step, 2026-11-18: no road or track
-        rise applies here (plain_underpasses gives none); the lift is the railway's grade law meeting the elevation along
-        the line. The line's highest bridge end, at (542, 550) in the replay's frame (270.7 m), run out at GRADE (2 %) over
-        the 850 m of track to the tunnels stands at 254.2 m; the elevation there is 248.3 m: it falls 22.4 m, 2.6 % on
-        average (10 % over one 160 m stretch of hillside), so the bridge at (313, 397), 280 m on, is held 8 m over its
-        ground, and the lift (railways._stepless) runs on along the ground track for 480 m to the tunnels. Run out along
-        the decks alone (not through the ground track between two) both tracks stay on their ground here, and the Gotthard
-        site's bridges at (-229, -526) stand 4-5 m lower, further from the survey's (5th percentile -9.7 -> -13.4): the
-        same run-out is right there, so it is the law's value that is in question, not the run-out. What the survey has
-        for it (tests/truth.py, 100 m stretches of the tracks at its five places): a track on the ground 2.5 % at the 99th
-        percentile, 2.8 % at the steepest (the Gotthard line); a track on a bridge 4.1 % (the Letzigraben flyover's
-        ramps). railways.GRADE is 2 %. At 2.8 % both tracks stay on
-        their ground (+0.0 to +0.5 m), at 2.5 % they stand 2.4-2.9 m over it; the rail bridges' bed against the survey
-        then (5th percentile of bed - real): Europabruecke +2.6 -> +0.7 (2.5 %) / -0.4 (2.8 %), Duttweilerbruecke -8.8 ->
-        -9.2 / -9.6, Gotthard -9.7 -> -10.3 / -10.6, Kempttal -1.0 -> -1.1 / -1.2: the flyover's ramp better, the places
-        where the real bridge stands higher than the law carries it, lower. Left at 2 % (a law is not tuned to one
-        place); see test_one_grade_law_for_a_track."""
+        """In the real place both tracks are on one level. The second track's bed stood 5.9 m (at the service road, 4.3 m at
+        the SR17) over the ground at railways.GRADE 2 %: no road or track rise applies here (plain_underpasses gives none);
+        the lift was the railway's grade law meeting the elevation along the line (measured step by step, 2026-11-18). The
+        line's highest bridge end, at (542, 550) in the replay's frame (270.7 m), run out at 2 % over the 850 m of track to
+        the tunnels stands at 254.2 m; the elevation there is 248.3 m: it falls 22.4 m, 2.6 % on average (10 % over one 160 m
+        stretch of hillside), so the bridge at (313, 397), 280 m on, was held 8 m over its ground, and the lift
+        (railways._stepless) ran on along the ground track for 480 m to the tunnels. At 2.8 % both tracks stay on their
+        ground (+0.0 to +0.5 m); at the one grade law of a track, railways.GRADE (5 %, the user, 2026-11-18: "rail grade to
+        5% is a car game after all"): +0.04 and +0.01 m, both modes. What it costs elsewhere (the rail bridges' bed against
+        the survey, 5th percentile of bed - real): the Letzigraben flyover's ramp better (Europabruecke +2.6, 3 m over the
+        real, to -2.8 .. -0.3), the viaducts that stand higher than their crossings ask, lower (tests/test_truth.py)."""
         self.assertLess(max(abs(b) for b in self.beds()), 0.3)
 
 
 class RailGradeLawTest(unittest.TestCase):
-    @unittest.expectedFailure
+    """The steepest a track climbs was decided in three places (railways.GRADE 2 % for the decks' ramps, the approaches and
+    the lifts carried along the line; gradeshapes.max_grade 2.5 % for the shapes' laws; railroadseam.SPREAD_GRADE 2 %, a
+    literal with 'railways.GRADE' in its comment): one value now, read by all."""
+
     def test_one_grade_law_for_a_track(self):
-        """The steepest a track climbs is decided in three places: railways.GRADE (2 %, the decks' ramps, the approaches,
-        the lifts carried along the line), gradeshapes.max_grade (2.5 %, the shapes' laws for a track) and
-        railroadseam.SPREAD_GRADE (2 %, a literal, 'railways.GRADE' in its comment). The survey's tracks climb 2.5 % over
-        100 m at the 99th percentile (2.8 % the steepest, 4.1 % on a bridge: see PopoliTest), so the law is a measured
-        value, once."""
         import railroadseam
         track = SimpleNamespace(kind="rail", cls="rail", kmh=None)
         self.assertEqual(gradeshapes.max_grade(track), railways.GRADE)
-        self.assertEqual(railroadseam.SPREAD_GRADE, railways.GRADE)
+        self.assertEqual(gradeshapes.max_grade(SimpleNamespace(kind="rail_deck", cls="rail", kmh=120)), railways.GRADE)
+        self.assertFalse(hasattr(railroadseam, "SPREAD_GRADE"), "a copy of the track's grade")
+        got = []
+        with mock.patch("fast.rail_seam_couple", lambda *a: got.append(a[-1]) or None):
+            railroadseam.couple(np.array([[0.0, 0.0], [10.0, 0.0], [20.0, 0.0]]), np.zeros(3), 2.0,
+                                [(np.array([[0.0, 5.0], [20.0, 5.0]]), np.ones(2), 3.0)])
+        self.assertEqual(got, [railways.GRADE], "the seam's move runs out along the track at the track's grade")
+
+    def test_light_rail_climbs_the_same_law(self):
+        # (railways.LINE_GRADE held light rail's 5 % apart from GRADE's 2 %: the law is one now, for every class)
+        self.assertFalse(hasattr(railways, "LINE_GRADE"))
 
 
 if __name__ == "__main__":
