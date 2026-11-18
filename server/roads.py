@@ -519,7 +519,11 @@ def level_ranges(feats, i, _home=True):
         _cell_ranges(feats)
         got = memo.get(i)
         if got is None:
-            got = _level_many(feats, [i])[i]
+            if RANGE_OWNERS:
+                got = _level_many_owned(feats, [i])[i]
+            else:
+                _level_many(feats, [i])
+                got = memo[i]
     if feats.__dict__.get("_lidar_rule"):
         import revisit                      # (the rule for want of the lidar: nothing built on it is kept)
         revisit.fault(lidar=True)
@@ -574,35 +578,65 @@ def _level_memo(feats, idx):
         _cell_ranges(feats)
         miss = [i for i in idx if i not in memo]
         if miss:
-            made = _level_many(feats, miss)
+            if RANGE_OWNERS:
+                made = _level_many_owned(feats, miss)
+            else:
+                _level_many(feats, miss)
     if feats.__dict__.get("_lidar_rule"):
         import revisit                      # (the rule for want of the lidar: nothing built on it is kept)
         revisit.fault(lidar=True)
-    return {i: memo[i] if i in memo else made[i] for i in idx}
+    if RANGE_OWNERS:
+        return {i: made[i] if i in made else memo[i] for i in idx}
+    return {i: memo[i] for i in idx}
 
 
 def _level_many(feats, idx):
     """level_ranges of features idx into feats' memo where not there yet: their rule ranges with the lidar's elevated
     stretches (_lidar_answers) made bridge and gap-filled again (one ending 12 m short of the map's deck left a ground
-    piece between them mid-ramp, by I-395 in Baltimore); earthfast.LevelLayer.rules, all at once. {i: its ranges} of
-    every one of idx (the memo's where there by now: published by the build meanwhile too). Kept in the memo only by
-    the thread making the layer's ranges (_cell_ranges' owner), or with no build under way: a reader's while another
-    thread makes them is its own alone (made short of something, its fault is that reader's, and the build's setdefault
-    would keep it and publish it done)."""
-    st = feats.__dict__
-    memo = st.setdefault("_level_ranges", {})
-    out = {i: memo[i] for i in idx if i in memo}
-    idx = [i for i in idx if i not in out]
+    piece between them mid-ramp, by I-395 in Baltimore); earthfast.LevelLayer.rules, all at once."""
+    memo = feats.__dict__.setdefault("_level_ranges", {})
+    idx = [i for i in idx if i not in memo]
     if not idx:
-        return out
+        return
     rule = _rule_many(feats, idx)
     answers = _lidar_answers(feats) if LIDAR_GAPS_ON else {}
     lid = [answers.get(str(feats.ids[i])) or () for i in idx] if answers else None
-    rows = _level_steps(feats, idx, rule, _STEP_LIDAR | _STEP_GAPS, lid)
+    for i, r in zip(idx, _level_steps(feats, idx, rule, _STEP_LIDAR | _STEP_GAPS, lid)):
+        memo.setdefault(i, r)
+
+
+# FAST_GAP's range bookkeeping (BNE_FAST_GAP=on; off, the code above as it always was): a layer's ranges are kept in its
+# memo only by the thread making them (_cell_ranges' owner, recorded when it claims the layer), and a layer made short
+# says so on itself (_ranges_short_until) before it is said done, so grading._raw_lines reads only clean, published rows
+RANGE_OWNERS = os.environ.get("BNE_FAST_GAP", "off") == "on"
+
+
+def _level_many_owned(feats, idx):
+    """_level_many with RANGE_OWNERS: {i: its ranges} of every one of idx. A row goes into the memo only from the thread
+    building the layer's ranges (busy, its owner); every other reader's row is its own alone (made short of something,
+    its fault is that reader's: the build would have kept it and said the layer done). A row published meanwhile is
+    the one handed back. The memo's look, the owner's test and the insertion are one step under the facts lock."""
+    st = feats.__dict__
+    memo = st.setdefault("_level_ranges", {})
     with _FACTS_LOCK:
-        keep = st.get("_ranges_state") != "busy" or st.get("_ranges_owner") == threading.get_ident()
-    for i, r in zip(idx, rows):
-        out[i] = memo.setdefault(i, r) if keep else r
+        out = {i: memo[i] for i in idx if i in memo}
+    todo = [i for i in idx if i not in out]
+    if not todo:
+        return out
+    rule = _rule_many(feats, todo)
+    answers = _lidar_answers(feats) if LIDAR_GAPS_ON else {}
+    lid = [answers.get(str(feats.ids[i])) or () for i in todo] if answers else None
+    rows = _level_steps(feats, todo, rule, _STEP_LIDAR | _STEP_GAPS, lid)
+    with _FACTS_LOCK:
+        memo = st.setdefault("_level_ranges", {})
+        mine = st.get("_ranges_state") == "busy" and st.get("_ranges_owner") == threading.get_ident()
+        for i, r in zip(todo, rows):
+            if i in memo:
+                out[i] = memo[i]        # (published meanwhile)
+            elif mine:
+                memo[i] = out[i] = r
+            else:
+                out[i] = r
     return out
 
 
@@ -808,7 +842,8 @@ def _cell_ranges(feats, load_only=False):
                 return
         tried = st.get("_ranges_state")
         st["_ranges_state"] = "busy"
-        st["_ranges_owner"] = threading.get_ident()     # (only its rows go into the memo while busy: _level_many)
+        if RANGE_OWNERS:
+            st["_ranges_owner"] = threading.get_ident()     # (only its rows go into the memo while busy)
     if tried is None:
         mk = _ranges_mem_key(st)
         with _FACTS_LOCK:
@@ -821,9 +856,8 @@ def _cell_ranges(feats, load_only=False):
             if mem.get("until") is not None:
                 import revisit
                 revisit.fault()         # (made short of something: what is built on it now is not kept either)
-                # (and said on the layer: whoever reads its ranges later, the layer's own memos, knows them short;
-                # grading._raw_lines keeps nothing built on them)
-                st["_ranges_short_until"] = mem["until"]
+                if RANGE_OWNERS:        # (and said on the layer: grading._raw_lines keeps nothing built on them)
+                    st["_ranges_short_until"] = mem["until"]
             raw, lvl = st.setdefault("_raw_level_ranges", {}), st.setdefault("_level_ranges", {})
             mraw, mlvl = mem["raw"], mem["lvl"]     # (shared: level_ranges and the rest hand out copies)
             for i in range(len(feats)):
@@ -900,13 +934,13 @@ def _cell_ranges(feats, load_only=False):
             import xproc
             xproc.release(run_path + ".lock")
         raise
-    clean = revisit.thread_faults() == f0
-    if not clean:                       # (the layer's ranges made short: said on it, as for a short shared entry, before
-        st["_ranges_short_until"] = time.monotonic() + FACTS_SHORT_S    # they are said done: a reader seeing done sees it)
+    if RANGE_OWNERS and revisit.thread_faults() != f0:     # (the layer's ranges made short: said on it before they
+        st["_ranges_short_until"] = time.monotonic() + FACTS_SHORT_S    # are said done: a reader seeing done sees it)
     st["_ranges_state"] = "done"
     if FACTS_LOG:                       # (BNGE_FACTS_LOG: which process made which cell's facts, how long)
         log.info("cell facts %s made in %.2f s (pid %d)%s", st.get("_bnge_cell"), time.perf_counter() - t0, os.getpid(),
                  "" if revisit.thread_faults() == f0 else " short")
+    clean = revisit.thread_faults() == f0
     mk = _ranges_mem_key(st)
     if mk is not None:                  # (the lidar rule's too: a cell's answer stays the same for the session)
         with _FACTS_LOCK:
@@ -7697,6 +7731,16 @@ def _crossings(lines, ground_lines):
     return [(pi, arc, np.array([x, y])) for pi, _g, arc, x, y in got]
 
 
+def chain_under_classes(lines, ground_lines, ground_cls, lower_cls=()):
+    """LEVEL_SPACING: the road classes a bridge chain's one clearance target is for (lower_clear of them), the same for
+    its deck (BridgeProfiles._solve), its approach fills (grading.bridge_lifts) and the dips of the roads under it
+    (grading's underpasses): of every ground line crossing under any of the chain's parts lines (ground_cls: per ground
+    line its class, None unknown), and lower_cls, the classes of its own parts on a lower level (a stack). Pure."""
+    got = fast_crossing_ground(lines, ground_lines)
+    out = {str(ground_cls[g]) for g in got if g < len(ground_cls) and ground_cls[g] is not None}
+    return sorted(out | {str(c) for c in lower_cls if c is not None})
+
+
 def fast_crossing_ground(lines, ground_lines):
     """[ground line index] of each crossing of ground_lines under lines (as _crossings, in its order). Pure."""
     import fast
@@ -8284,11 +8328,11 @@ class BridgeProfiles:
         if LEVEL_SPACING:
             gcls = self.__dict__.get("_gcls", {})
             gk = [gcls.get(k) for k, v in ground.items() if k[1] == "g" for _g in v]
-            got = fast_crossing_ground(lines, gl)
-            under = sorted({str(gk[gi]) for gi in got if gi < len(gk) and gk[gi] is not None})
+            lower = ()
             if len(set(levels)) > 1:        # (a stack: its lower parts are roads under it too)
                 top = max(levels)
-                under += sorted({str(pool[k][0].cls) for k, lv in zip(comp, levels) if lv < top})
+                lower = [str(pool[k][0].cls) for k, lv in zip(comp, levels) if lv < top]
+            under = chain_under_classes(lines, gl, gk, lower)
         rails = [(c[0], c[1], z, deck_road_clear(depth, ["rail"] if LEVEL_SPACING else None))
                  for c, z in zip(rcr, rail_z)]
         pins = _ground_pins(lines, gl)          # (once: pure in lines and gl, which stay)

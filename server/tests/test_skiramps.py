@@ -118,8 +118,9 @@ class SwitchVersions(unittest.TestCase):
         for k in ("BNE_FAST_DECK_GROUND", "BNE_UNDER_SPEED", "BNE_FAST_GAP"):
             new, old = self.keys({k: "on"})
             self.assertNotEqual(new, old, k + ": its reviewed meaning")
-        # (and the earlier versions' keys miss too: FAST_GAP and LEVEL_SPACING at 3, Codex round 4)
-        for k, was in (("BNE_FAST_GAP", 2), ("BNE_FAST_GAP", 3), ("BNE_LEVEL_SPACING", 2)):
+        # (and the earlier versions' keys miss too: FAST_GAP and LEVEL_SPACING at 3, Codex round 4; FAST_GAP at 4)
+        for k, was in (("BNE_FAST_GAP", 2), ("BNE_FAST_GAP", 3), ("BNE_FAST_GAP", 4), ("BNE_LEVEL_SPACING", 2),
+                        ("BNE_LEVEL_SPACING", 3)):
             with mock.patch.dict(revisit.SWITCH_VERSIONS, {k: was}):
                 prev, _old = self.keys({k: "on"})
             new, _old = self.keys({k: "on"})
@@ -443,7 +444,12 @@ class GapLanding(unittest.TestCase):
 class RawLinesShort(unittest.TestCase):
     """Codex round 5: a cell layer whose level ranges were made short (or taken from a short shared entry) keeps them,
     and a read of it again says nothing; _raw_lines says it short every time and keeps nothing built on it, and keeps
-    the cell once a layer read complete comes."""
+    the cell once a layer read complete comes. With FAST_GAP's range bookkeeping (roads.RANGE_OWNERS), as it runs."""
+
+    def setUp(self):
+        p = mock.patch.object(roads, "RANGE_OWNERS", True)
+        p.start()
+        self.addCleanup(p.stop)
 
     def planner(self, layer):
         import geodesy
@@ -644,13 +650,16 @@ class RawLinesShort(unittest.TestCase):
         self.assertEqual(f.__dict__["_level_ranges"], {})
         self.assertNotIn(str(k), g.__dict__.get("_raw_lines_memo", {}))
 
-    def test_busy_reader_fallback_stays_its_own(self):
-        # (Codex review of round 5: an ordinary reader while another thread makes the layer's ranges makes its missing
-        # row itself (its faults its own): kept out of the memo, so the build's setdefault cannot publish it done; the
-        # owner's rows go in)
+    def fresh(self):
         site, key = self.layer()
         f = site.cells[key].__class__.__new__(site.cells[key].__class__)
         f.__dict__.update({kk: v for kk, v in site.cells[key].__dict__.items() if not kk.startswith("_")})
+        return f
+
+    def test_busy_reader_fallback_stays_its_own(self):
+        # (Codex review of round 5: an ordinary reader while another thread makes the layer's ranges makes its missing
+        # row itself (its faults its own): kept out of the memo, so the build cannot publish it done; the owner's go in)
+        f = self.fresh()
         f.__dict__["_ranges_state"] = "busy"
         f.__dict__["_ranges_owner"] = -1                    # (another thread's build)
         f.__dict__["_level_ranges"] = {}
@@ -661,8 +670,66 @@ class RawLinesShort(unittest.TestCase):
             self.assertEqual(roads._level_memo(f, [0, 1]), {0: got, 1: roads.level_ranges(f, 1, _home=False)})
             self.assertEqual(f.__dict__["_level_ranges"], {})
             f.__dict__["_ranges_owner"] = threading.get_ident()      # (this thread's build: its rows go in)
-            roads._level_many(f, [0])
+            roads._level_many_owned(f, [0])
             self.assertEqual(f.__dict__["_level_ranges"], {0: got})
+
+    def test_load_only_then_full_build(self):
+        # (Codex review of 48db74bc: a reader computing a row while a load-only call holds the layer (then loadable),
+        # a full build claiming it meanwhile: the reader's row never goes in; the build makes and publishes its own)
+        f = self.fresh()
+        f.__dict__["_ranges_state"] = "loadable"
+        f.__dict__["_ranges_owner"] = -1                    # (the load-only call's thread)
+        f.__dict__["_level_ranges"] = {}
+        real = roads._level_steps
+        claimed = []
+
+        def steps(feats, idx, *a):
+            rows = real(feats, idx, *a)
+            if feats is f and not claimed:          # (the full build claims the layer during the reader's making)
+                claimed.append(True)
+                with roads._FACTS_LOCK:
+                    f.__dict__["_ranges_state"] = "busy"
+                    f.__dict__["_ranges_owner"] = -2
+            return [[(0.0, 0.1, "bridge")] + list(r) for r in rows]     # (the reader's row, told apart)
+        with mock.patch.object(roads, "LIDAR_GAPS_ON", False), mock.patch.object(roads, "_level_steps", steps):
+            mine = roads._level_many_owned(f, [0])
+        self.assertTrue(claimed)
+        self.assertEqual(f.__dict__["_level_ranges"], {}, "the reader's row never published")
+        self.assertEqual(mine[0][0], (0.0, 0.1, "bridge"))
+
+    def test_row_published_during_the_reading(self):
+        # (Codex review of 48db74bc: the build publishes the row while a reader makes its own: the reader hands back
+        # the published one, and keeps nothing)
+        f = self.fresh()
+        f.__dict__["_ranges_state"] = "busy"
+        f.__dict__["_ranges_owner"] = -1
+        f.__dict__["_level_ranges"] = {}
+        row = [(0.25, 0.5, "bridge")]
+        real = roads._level_steps
+
+        def steps(feats, idx, *a):
+            out = real(feats, idx, *a)
+            f.__dict__["_level_ranges"][0] = row     # (published by the build meanwhile)
+            return out
+        with mock.patch.object(roads, "LIDAR_GAPS_ON", False), mock.patch.object(roads, "_level_steps", steps):
+            got = roads._level_many_owned(f, [0, 1])
+        self.assertIs(got[0], row)
+        self.assertIn(1, got)
+        self.assertEqual(f.__dict__["_level_ranges"], {0: row})
+
+    def test_switch_off_is_the_old_path(self):
+        # (Codex review of 48db74bc: with FAST_GAP off, the old code: a reader's row goes into the memo whoever builds,
+        # no owner and no short mark is written)
+        f = self.fresh()
+        with mock.patch.object(roads, "RANGE_OWNERS", False), mock.patch.object(roads, "LIDAR_GAPS_ON", False):
+            f.__dict__["_ranges_state"] = "busy"
+            f.__dict__["_level_ranges"] = {}
+            got = roads.level_ranges(f, 0, _home=False)
+            self.assertEqual(f.__dict__["_level_ranges"], {0: got})
+            g = self.fresh()
+            roads._cell_ranges(g)
+            self.assertNotIn("_ranges_owner", g.__dict__)
+            self.assertNotIn("_ranges_short_until", g.__dict__)
 
     def test_fully_bridged_road_kept(self):
         # (Codex review of round 5: a road with no ground spec, bridged its whole length by its tags, still gives its
@@ -689,67 +756,42 @@ class RawLinesShort(unittest.TestCase):
     def test_row_published_meanwhile(self):
         # (Codex review of round 5: a reader missing a row the build publishes before it looks again gets that row,
         # never a KeyError)
-        site, key = self.layer()
-        f = site.cells[key].__class__.__new__(site.cells[key].__class__)
-        f.__dict__.update({kk: v for kk, v in site.cells[key].__dict__.items() if not kk.startswith("_")})
+        f = self.fresh()
         f.__dict__["_ranges_state"] = "busy"
         f.__dict__["_ranges_owner"] = -1
         row = [(0.25, 0.5, "bridge")]
         f.__dict__["_level_ranges"] = {0: row}          # (published between the reader's miss and its look)
-        self.assertEqual(roads._level_many(f, [0]), {0: row})
+        self.assertEqual(roads._level_many_owned(f, [0]), {0: row})
         with mock.patch.object(roads, "LIDAR_GAPS_ON", False):
-            got = roads._level_many(f, [0, 1])
+            got = roads._level_many_owned(f, [0, 1])
         self.assertIs(got[0], row)
         self.assertIn(1, got)
 
-    def test_recovers_past_its_time(self):
-        # (Codex review of round 5: a decoded layer kept in use whose ranges were made short, its time to try again
-        # past: made again on the next read, which reads it complete and keeps it)
+    def test_short_until_decoded_again(self):
+        # (Codex review of 48db74bc: a short layer's ranges are never made again in place, its short inputs (grade
+        # separation hooks, raw and rule ranges, lidar answers) kept on it: past its time it stays short and unkept;
+        # the map data's next decode (a new layer) reads complete and is kept)
         import mapcells
         site, key = self.layer()
-        f = site.cells[key].__class__.__new__(site.cells[key].__class__)
-        f.__dict__.update({kk: v for kk, v in site.cells[key].__dict__.items() if not kk.startswith("_")})
         k = mapcells.CellKey(*(int(v) for v in key.split("/")))
+        f = self.fresh()
         g = self.planner(f)
         f.__dict__["_level_ranges"] = {i: [] for i in range(len(f))}      # (short: no decks)
         f.__dict__["_ranges_state"] = "done"
-        f.__dict__["_ranges_short_until"] = time.monotonic() + 1000.0
+        f.__dict__["_ranges_short_until"] = time.monotonic() - 1.0     # (its time past)
         with mock.patch.object(roads, "LIDAR_GAPS_ON", False):
             with revisit.scope() as b:
                 first = g._raw_lines(k)
             self.assertTrue(b.n)
-            f.__dict__["_ranges_short_until"] = time.monotonic() - 1.0     # (its time past)
+            self.assertEqual(f.__dict__["_level_ranges"], {i: [] for i in range(len(f))}, "not made again in place")
+            new = self.fresh()
+            g.md.cell = lambda k_, **kw: mock.Mock(layers={"roads": new})
             with revisit.scope() as b:
                 got = g._raw_lines(k)
         self.assertFalse(b.n)
         self.assertEqual(len(first["bridges"]), 0)
         self.assertGreater(len(got["bridges"]), 0)
         self.assertIs(g._raw_lines_memo[str(k)], got)
-
-    def test_recovery_asks_the_lidar_again(self):
-        # (Codex review of round 5: a layer made again past its short time drops the lidar's answers with the rule for
-        # want of them: never answers kept (partial) without their rule)
-        import mapcells
-        site, key = self.layer()
-        f = site.cells[key].__class__.__new__(site.cells[key].__class__)
-        f.__dict__.update({kk: v for kk, v in site.cells[key].__dict__.items() if not kk.startswith("_")})
-        k = mapcells.CellKey(*(int(v) for v in key.split("/")))
-        g = self.planner(f)
-        f.__dict__["_level_ranges"] = {i: [] for i in range(len(f))}
-        f.__dict__["_ranges_state"] = "done"
-        f.__dict__["_ranges_short_until"] = time.monotonic() - 1.0
-        f.__dict__["_lidar_answers"] = {"partial": []}
-        f.__dict__["_lidar_rule"] = True
-        asked = []
-        real = roads._lidar_answers
-
-        def answers(feats):
-            asked.append(feats is f and "_lidar_answers" not in feats.__dict__)
-            return real(feats)
-        with mock.patch.object(roads, "LIDAR_GAPS_ON", False), mock.patch.object(roads, "_lidar_answers", answers):
-            g._raw_lines(k)
-        self.assertNotEqual(f.__dict__.get("_lidar_answers"), {"partial": []})
-        self.assertNotIn("_lidar_rule", f.__dict__)
 
     def test_cell_ranges_mark_a_short_entry(self):
         import time
@@ -860,7 +902,7 @@ class GapLandingCells(unittest.TestCase):
     def test_build_order(self):
         sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
         import drivability as dv
-        with mock.patch.object(grading, "FAST_GAP", True):
+        with mock.patch.object(grading, "FAST_GAP", True), mock.patch.object(roads, "RANGE_OWNERS", True):
             base = dv.measure("a20_921")
             for at in ((0.0, 600.0), (600.0, 0.0), (0.0, -600.0)):
                 self.assertEqual(dv.measure("a20_921", approach=at), base, at)
@@ -917,6 +959,35 @@ class UnderSpeed(unittest.TestCase):
 
 class LevelSpacingTarget(unittest.TestCase):
     """R1f: an approach fill asks the clearance of the roads under the chain, as the deck solve does."""
+
+    def test_branched_chain_one_target(self):
+        # (Codex review of 48db74bc: a branched chain, a footway under one span, a motorway under another, a branch
+        # leaving at the joint over a track: every span's dip, the approach fill and the deck ask one target, the
+        # chain's (roads.chain_under_classes over all its parts), never a span's own crossings' 0.9 m short of it)
+        span1, span2 = line(0.0, 40.0), line(40.0, 80.0)
+        branch = np.array([[40.0, 0.0], [70.0, 30.0]])
+        allb = [span1, span2, branch]
+        foot = np.array([[20.0, -20.0], [20.0, 20.0]])
+        mway = np.array([[60.0, -20.0], [60.0, 20.0]])
+        track = np.array([[45.0, 20.0], [65.0, 10.0]])
+        ground, gcl = [foot, mway, track], ["footway", "motorway", "track"]
+        whole = roads.chain_under_classes(allb, ground, gcl)
+        self.assertEqual(whole, ["footway", "motorway", "track"])
+        with mock.patch.object(roads, "LEVEL_SPACING", True):
+            for b in allb:
+                chain_l, lower = grading.chain_target_parts(b, allb, ["primary"] * 3, [1, 1, 1])
+                self.assertEqual(lower, [])
+                self.assertEqual(roads.chain_under_classes([b] + chain_l, ground, gcl, lower), whole)
+            self.assertEqual(roads.lower_clear(whole), roads.LOWER_CLEAR_M["motorway"])
+            self.assertLess(roads.lower_clear(["footway"]), roads.lower_clear(whole), "(a span's own: short of it)")
+
+    def test_stack_lower_part_counts(self):
+        # (a stack: the chain's part on the lower level is a road under its upper parts, for every stage alike)
+        upper, lower_p = line(0.0, 40.0), line(40.0, 80.0)
+        with mock.patch.object(roads, "LEVEL_SPACING", True):
+            _c, lower = grading.chain_target_parts(upper, [upper, lower_p], ["primary", "track_link"], [2, 1])
+        self.assertEqual(lower, ["track"])
+        self.assertEqual(roads.chain_under_classes([upper], [], [], lower), ["track"])
 
     def test_railway_under_the_next_span(self):
         # (Codex round 3: a railway under the chain's next part counted as a road, its 6.0 m given as a road's)
