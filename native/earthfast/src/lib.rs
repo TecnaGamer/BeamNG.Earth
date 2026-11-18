@@ -76,6 +76,7 @@ mod farpvs;
 mod farsel;
 mod dirtsteps;
 mod racedig;
+mod railfit;
 mod gridinterp;
 mod dejunction;
 mod streetlabels;
@@ -6605,6 +6606,14 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(roadnet::splitlayer::lane_split_layer, m)?)?;
     // 403: R2a's lane section layer (roadnet::splitlayer::lane_split_layer = lanesections.split's new-layer assembly:
     // the columns gathered, the sections' values, LANE_MAX, the geometry and rule rows, the cut points' connectors)
-    m.add("VERSION", 403)?;
+    m.add_function(wrap_pyfunction!(railfit::rail_run_ends, m)?)?;
+    m.add_function(wrap_pyfunction!(railfit::rail_road_ends, m)?)?;
+    m.add_function(wrap_pyfunction!(railfit::station_platform_trim, m)?)?;
+    m.add_function(wrap_pyfunction!(railfit::rail_deck_line, m)?)?;
+    m.add_function(wrap_pyfunction!(railfit::rail_seam_natural, m)?)?;
+    // 420: railfit (BNE_RAIL_ROAD_FIT, the reports r63 / r64 / r92): rail_run_ends = railways._run_ends, rail_road_ends =
+    // dead_ends' road test, station_platform_trim = railstations._off_roads, rail_deck_line = rails._deck_line;
+    // rail_seam_natural = grading.seam_on_ground's roads' heights (BNE_RAIL_SEAM_DEM, the reports r61 / r62 / r80)
+    m.add("VERSION", 420)?;
     Ok(())
 }

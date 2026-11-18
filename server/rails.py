@@ -120,48 +120,18 @@ DECK_BISECT = 6                 # halvings between the two points round each end
 
 def _deck_line(piece, a, b, eligible):
     """railways.RAIL_ROAD_FIT: the line (k, 2) of a level crossing's deck for the street run piece[a..b] of a 3D track
-    (piece every SAMPLE_M): along the track from the first to the last point within a carriageway's half width +
-    railways.CROSSING_PAD_M (the edge railways._run_ends ends the 3D track at), found every DECK_FINE_M round the run;
-    None when no point of it is in that reach. Pure."""
+    (piece every SAMPLE_M): along the track from the first to the last point within a carriageway of eligible
+    ({key: (centreline, half width)}) + railways.CROSSING_PAD_M (the edge railways._run_ends ends the 3D track at),
+    found every DECK_FINE_M round the run and bisected DECK_BISECT times; None when no point of it is in that reach.
+    earthfast.rail_deck_line. Pure."""
+    import fast
     import railways
     import roads
-    s = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(piece, axis=0).T))]
-    lo, hi = max(0.0, float(s[a]) - DECK_SEARCH_M), min(float(s[-1]), float(s[b]) + DECK_SEARCH_M)
-    if hi - lo < DECK_FINE_M:
-        return None
-    t = np.arange(lo, hi + 1e-9, DECK_FINE_M)
-    fine = np.c_[np.interp(t, s, piece[:, 0]), np.interp(t, s, piece[:, 1])]
-    on = roads._on_carriageways(fine, eligible, railways.CROSSING_PAD_M)
-    if not on.any():
-        return None
-    mid = 0.5 * (float(s[a]) + float(s[b]))
-    cand = np.flatnonzero(on)
-    k = int(cand[np.argmin(np.abs(t[cand] - mid))])
-    i = k
-    while i > 0 and on[i - 1]:
-        i -= 1
-    j = k
-    while j + 1 < len(on) and on[j + 1]:
-        j += 1
-    if j <= i:
-        return None
-
-    def edge(k, out):               # (between fine[k] on it and fine[out] off it, to a millimetre: railways._run_ends)
-        if out < 0 or out >= len(t):
-            return float(t[k])
-        t_on, t_off = float(t[k]), float(t[out])
-        for _ in range(DECK_BISECT):
-            tm = 0.5 * (t_on + t_off)
-            pm = np.array([[np.interp(tm, s, piece[:, 0]), np.interp(tm, s, piece[:, 1])]])
-            if roads._on_carriageways(pm, eligible, railways.CROSSING_PAD_M)[0]:
-                t_on = tm
-            else:
-                t_off = tm
-        return t_on
-    ta, tb = edge(i, i - 1), edge(j, j + 1)
-    inner = piece[(s > ta) & (s < tb)]
-    ends = np.array([[np.interp(v, s, piece[:, 0]), np.interp(v, s, piece[:, 1])] for v in (ta, tb)])
-    return np.vstack([ends[:1], inner, ends[1:]])
+    fast.require(railways.FIT_NATIVE, "level crossing decks")
+    segs = roads._Segs(eligible)
+    return fast._ef.rail_deck_line(np.ascontiguousarray(np.asarray(piece, np.float64)[:, :2]), int(a), int(b),
+                                   segs.a, segs.b, segs.h, float(railways.CROSSING_PAD_M), DECK_FINE_M, DECK_SEARCH_M,
+                                   DECK_BISECT)
 
 
 CROSS_WINDOW_M = 30.0           # m of track either side of where it crosses a carriageway's centre line (_crossing_windows)
@@ -280,6 +250,13 @@ def tile_chunks(frame, tx, ty, cells, country=None, urban_fn=None):
         return on_road(pts, eligible) | in_street(pts)
 
     ballast, sleepers, rails = [], [], []
+    crossing_keys = None            # (railways.RAIL_ROAD_FIT: the roads a deck is laid for, those that cut the 3D track)
+    if railways.RAIL_ROAD_FIT and railways.TRUE_CROSSERS_ON:
+        # (railways.tile_mesh cuts its track at the roads truly crossing a track, true_crossers: a road beside the track
+        # within its reach must not stretch the deck where the 3D track runs on)
+        lines = [xy for kind, xy, meshed, *_r in tracks if meshed and kind != "tram"]
+        true = {id(ln) for ln, _hw in railways.true_crossers(lines, list(carriageways.values()))} if lines else set()
+        crossing_keys = {key for key, (ln, _hw) in carriageways.items() if id(ln) in true}
     todo = []
     for kind, xy, meshed, wear, kept, g in tracks:
         # (a worn line's street track only across the roads its 3D track is not cut at: railways.WORN_CUT_CLASSES,
@@ -317,7 +294,8 @@ def tile_chunks(frame, tx, ty, cells, country=None, urban_fn=None):
                 if street and meshed and kind in ("rail", "narrow") and railways.RAIL_ROAD_FIT:
                     # (the crossing from exactly where railways.py's 3D track stops to where it starts again: the
                     # carriageway's half width + its CROSSING_PAD_M, railways._run_ends; its rails at the 3D track's gauge)
-                    deck = _deck_line(piece, a, b, eligible)
+                    deck = _deck_line(piece, a, b, eligible if crossing_keys is None else
+                                      {key: v for key, v in eligible.items() if key in crossing_keys})
                     if deck is None:
                         continue
                     off2 = (g or GAUGE_M[kind]) / 2 + railways.RAIL_HEAD / 2

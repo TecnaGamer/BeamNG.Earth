@@ -663,6 +663,17 @@ RAIL_YIELD_ON = os.environ.get("BNE_RAIL_YIELD", "on") != "off"
 RAIL_YIELD_PAD_M = 0.5      # m past the road's carriageway + the bed plan's half width (its core's round end) the bed stops
 RAIL_YIELD_SKIP = {"motorway", "trunk"}     # classes a bed never yields to
 RAIL_YIELD_STEP_M = 2.0    # m between the cut bed line's points (the cut lands within this of where it should)
+# A rail bed coupled to the roads beside it (railroadseam.couple) allowing the ground's own slope between them (the road
+# revamp; the user's reports r61 / r62 / r80, 2026-11-17): couple asks the room between a road's band and the bed's for
+# SEAM_SLOPE : 1 of height difference, and a road up the hillside beside the track, 10 m higher 35 m away on the
+# natural slope, stood the bed 3.2 m over its ground for 140 m along Schleiden's Oleftalbahn (Poensgenstrasse: the
+# street, the parking and the track at grade there, the DEM and Street View agree); the E6 / Fv761 ramps at Vist
+# (Trondelag) stood the Nordlandsbanen's bed 3.3-4.9 m up for 130 m by its bridge (real: at the fields' level). The
+# drawn track (railprofile's bed on the DEM) lay buried in the mound. The ground's own difference past what the room
+# allows is taken off a road's height (seam_on_ground, earthfast.rail_seam_natural); within it, and what grading made of
+# a road (a cut, a fill), moves the bed as before. BNE_RAIL_SEAM_DEM=on; off by default until reviewed in game (the
+# Revamped roads switch set).
+RAIL_SEAM_DEM = os.environ.get("BNE_RAIL_SEAM_DEM", "off") == "on"
 SEAMS_ON = os.environ.get("BNE_SEAMS", "on") != "off"
 SEAM_MIN_M = 0.05          # m: a carriageway road's abutment end this far off its deck's end is pulled back to it
 SEAM_GRADE = 0.03           # ... eased out along the road at this grade (XS_FIXED_GRADE's: a freeway's ramp) ...
@@ -2865,13 +2876,19 @@ class _Planner:
                              for (_f, q), sp in zip(plans[:len(pspecs)], pspecs)
                              if TUNNEL_TAG not in _f and (getattr(sp, "cls", None) or "").removesuffix("_link")
                              not in RAIL_YIELD_SKIP] if RAIL_YIELD_ON else []
+                    seam = None
                     for fid, xy, z in railways.grade_plans(
                             self.frame, rcells, own, self.elev,
                             load=lambda k: self.md.cell(k, layers=("roads",), kind="demand").layers.get("roads")):
                         if beside:      # (the bed beside a road: where the ground between has room for its slope)
                             import railroadseam
-                            z = railroadseam.couple(xy, z, railways.GRADE_HALF_M, beside,
-                                                    railways.seam_lowered(xy, z, beside), railways.SEAM_LOWER_M)
+                            if RAIL_SEAM_DEM:
+                                if seam is None:            # (the roads' points and their ground, once a cell)
+                                    seam = (seam_pack(self.frame, self.elev, beside),)
+                                z = seam_on_ground(self.frame, self.elev, xy, z, beside, seam[0])
+                            else:
+                                z = railroadseam.couple(xy, z, railways.GRADE_HALF_M, beside,
+                                                        railways.seam_lowered(xy, z, beside), railways.SEAM_LOWER_M)
                             if railways.railxing.ENABLED:   # (flush with the roads' plans, as tile_mesh with the graded road)
                                 z = railways.flush_to_plans(xy, z, beside)
                         # (the carriageway of the bed's plan is the ballast's top, not the whole flat band: past it the band
@@ -7047,6 +7064,58 @@ def deck_ground_abut_taper(line, s, others, fade=None, joint=None):
             x = np.clip(d / fade, 0.0, 1.0)
             out *= x * x * (3.0 - 2.0 * x)
     return out
+
+
+def _ground_at(frame, elev, xy):
+    xy = np.asarray(xy, np.float64)[:, :2]
+    la, lo, _ = frame.enu_to_geodetic(xy[:, 0], xy[:, 1], np.zeros(len(xy)))
+    return np.asarray(elev(np.asarray(la, np.float64), np.asarray(lo, np.float64)), np.float64).reshape(len(xy))
+
+
+def seam_pack(frame, elev, beside):
+    """RAIL_SEAM_DEM: (points (m, 2), plan heights (m,), the grader's DEM there (m,), offsets (R + 1,), half widths (R,),
+    the roads' indices in beside (R,)) of beside ([(xy (k, 2), z (k,), half width)]: the roads' plans) with 2 points or
+    more, once a cell; None without any."""
+    pts, zs, off, hw, idx = [], [], [0], [], []
+    for k, (rxy, rz, h) in enumerate(beside):
+        rxy = np.asarray(rxy, np.float64)[:, :2]
+        rz = np.asarray(rz, np.float64)
+        n = min(len(rxy), len(rz))
+        if n < 2:
+            continue
+        pts.append(rxy[:n])
+        zs.append(rz[:n])
+        off.append(off[-1] + n)
+        hw.append(float(h))
+        idx.append(k)
+    if not idx:
+        return None
+    p = np.ascontiguousarray(np.concatenate(pts))
+    return (p, np.concatenate(zs), _ground_at(frame, elev, p), np.asarray(off, np.int64), np.asarray(hw, np.float64),
+            idx)
+
+
+def seam_on_ground(frame, elev, xy, z, beside, pack):
+    """RAIL_SEAM_DEM: railroadseam.couple of the bed z (n,) on xy (n, 2) with the roads beside (pack: seam_pack(beside))
+    read at their heights less the ground's own slope past what the room between allows (earthfast.rail_seam_natural):
+    a road up the hillside beside the track asks nothing of the bed, a road graded off its ground still moves it as
+    before; the crossings at grade (railways.seam_lowered) as before. Pure given elev."""
+    import fast
+    import railroadseam
+    import railways
+    if pack is None:
+        return railroadseam.couple(xy, z, railways.GRADE_HALF_M, beside, railways.seam_lowered(xy, z, beside),
+                                   railways.SEAM_LOWER_M)
+    fast.require(railways.FIT_NATIVE, "rail beds beside roads")
+    pts, zs, dem, off, hw, idx = pack
+    bxy = np.ascontiguousarray(np.asarray(xy, np.float64)[:, :2])
+    eff = fast._ef.rail_seam_natural(bxy, _ground_at(frame, elev, bxy), float(railways.GRADE_HALF_M), pts, zs, dem,
+                                     off, hw, railroadseam.REACH_M, railroadseam.SEAM_SLOPE, railroadseam.SEAM_TOL_M)
+    roads_ = list(beside)
+    for r, k in enumerate(idx):
+        roads_[k] = (pts[off[r]:off[r + 1]], eff[off[r]:off[r + 1]], hw[r])
+    return railroadseam.couple(xy, z, railways.GRADE_HALF_M, roads_, railways.seam_lowered(xy, z, beside),
+                               railways.SEAM_LOWER_M)
 
 
 def rail_yield_pieces(xy, z, roads_, half):

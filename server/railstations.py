@@ -51,6 +51,7 @@ WALK_CLEAR_M = 1.0          # m past a walkway's half width (one crossing the pl
 WALK_CLEAR_CLASSES = {"footway": 2.0, "path": 1.5, "cycleway": 2.5, "pedestrian": 3.0, "steps": 2.0,
                       "bridleway": 2.0}         # class -> width (m) when the map has none
 SYNTH_MIN_M = 30.0          # m: a worked-out platform shorter than this is none (_synth's own minimum)
+FIT_NATIVE = 420            # earthfast.VERSION of station_platform_trim (railfit.rs)
 BUILDING_NEAR_M = 160.0
 ROOF_NEAR_M = 6.0           # a roof this near a platform (or overlapping it) covers it
 LINK_JOIN_M = 2.5           # ways whose ends are this near are one link
@@ -737,7 +738,7 @@ def _off_roads(line, out, edge_m, near, ss, arc):
     its kerbs and footways) and off the walkways crossing it (their width + WALK_CLEAR_M). Of the runs left, the one at
     the station's point (arc, along ss) else the longest, at least SYNTH_MIN_M long. A platform worked out from a bare
     station point ran 250 m along the track, straight across a level crossing (Hahnstaetten, the user's report r92,
-    2026-11-17). Pure."""
+    2026-11-17). earthfast.station_platform_trim. Pure."""
     import roads
     cars, walks = {}, {}
     for it in near:
@@ -749,29 +750,20 @@ def _off_roads(line, out, edge_m, near, ss, arc):
             walks[str(it["id"])] = (np.asarray(it["xy"], np.float64), max(w or 0.0, WALK_CLEAR_CLASSES[cls]) / 2.0)
         elif cls in roads.STYLE:
             cars[str(it["id"])] = (np.asarray(it["xy"], np.float64), max(w or 0.0, roads.STYLE[cls][0]) / 2.0)
-    offs = (edge_m, edge_m + SYNTH_WIDTH_M / 2.0, edge_m + SYNTH_WIDTH_M)
-    pts = np.concatenate([line + out * o for o in offs])
-    blocked = np.zeros(len(pts), bool)
-    if cars:
-        blocked |= roads._on_carriageways(pts, cars, ROAD_CLEAR_M)
-    mid = line + out * offs[1]
-    crossing = {k: v for k, v in walks.items() if len(_crossings(v[0], [("platform", mid)]))}
-    if crossing:
-        blocked |= roads._on_carriageways(pts, crossing, WALK_CLEAR_M)
-    blocked = blocked.reshape(len(offs), len(line)).any(axis=0)
-    if not blocked.any():
-        return np.arange(len(line))
-    free = np.flatnonzero(~blocked)
-    if not len(free):
-        return None
-    runs = np.split(free, np.flatnonzero(np.diff(free) > 1) + 1)
-    at = int(np.argmin(np.abs(ss - arc)))
-    run = next((r for r in runs if r[0] <= at <= r[-1]), None)
-    if run is None:
-        run = max(runs, key=lambda r: (float(ss[r[-1]] - ss[r[0]]), -int(r[0])))
-    if len(run) < 2 or float(ss[run[-1]] - ss[run[0]]) < SYNTH_MIN_M:
-        return None
-    return run
+    import fast
+    fast.require(FIT_NATIVE, "worked-out platforms off the roads")
+    offs = np.array([edge_m, edge_m + SYNTH_WIDTH_M / 2.0, edge_m + SYNTH_WIDTH_M], np.float64)
+    segs = roads._Segs(cars)
+    rows = [v[0].reshape(len(v[0]), -1)[:, :2] for v in walks.values()]
+    woff = np.zeros(len(rows) + 1, np.int64)
+    woff[1:] = np.cumsum([len(r) for r in rows])
+    wp = np.ascontiguousarray(np.concatenate(rows)) if rows else np.zeros((0, 2))
+    whw = np.asarray([v[1] for v in walks.values()], np.float64)
+    got = fast._ef.station_platform_trim(np.ascontiguousarray(np.asarray(line, np.float64)[:, :2]),
+                                         np.ascontiguousarray(np.asarray(out, np.float64)[:, :2]), offs, segs.a, segs.b,
+                                         segs.h, ROAD_CLEAR_M, wp, woff, whw, WALK_CLEAR_M,
+                                         np.ascontiguousarray(np.asarray(ss, np.float64)), float(arc), SYNTH_MIN_M)
+    return None if got is None else np.asarray(got, np.int64)
 
 
 def _arc_of(xy, s, p):

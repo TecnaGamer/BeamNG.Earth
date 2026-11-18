@@ -94,5 +94,59 @@ class CoupleTest(unittest.TestCase):
         self.assertIs(rs.couple(straight(5.0, 5), zb, self.HALF, []), zb)
 
 
+class NaturalSlopeTest(unittest.TestCase):
+    """grading.seam_on_ground (BNE_RAIL_SEAM_DEM): the ground's own slope between a road and the track asks nothing of
+    the bed (Schleiden's Oleftalbahn below a road up the hillside, the user's reports r61 / r62; Vist's E6 ramps, r80);
+    what grading made of a road still moves it, and the Nemiia case (a road on level ground over a bed below it) too."""
+
+    def setUp(self):
+        sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__))))
+        from test_roads import FRAME
+        self.frame = FRAME
+
+    def elev(self, slope):
+        """The DEM: a hillside rising slope (m per m) north of y = 10 (flat south of it), in lat / lon."""
+        frame = self.frame
+
+        def f(la, lo):
+            _e, n, _u = frame.geodetic_to_enu(np.asarray(la, np.float64), np.asarray(lo, np.float64), 0.0)
+            return 100.0 + slope * np.maximum(np.asarray(n, np.float64) - 10.0, 0.0)
+        return f
+
+    def run_seam(self, elev, road_y, road_z, bed_z=100.0, half=3.0):
+        import grading
+        import railways
+        xy = straight(0.0, 101, 200.0)
+        zb = np.full(len(xy), bed_z)
+        road = straight(road_y, 21, 200.0)
+        beside = [(road, np.full(len(road), road_z), half)]
+        on = grading.seam_on_ground(self.frame, elev, xy, zb, beside, grading.seam_pack(self.frame, elev, beside))
+        off = rs.couple(xy, zb, railways.GRADE_HALF_M, beside, railways.seam_lowered(xy, zb, beside),
+                        railways.SEAM_LOWER_M)
+        return np.asarray(on), np.asarray(off)
+
+    def test_a_road_up_the_hillside_moves_nothing(self):
+        elev = self.elev(1.0)                   # (a 1:1 hillside: the road 20 m north, 10 m up on it)
+        on, off = self.run_seam(elev, 20.0, 110.0)
+        self.assertGreater(float(off.max()), 105.0, "couple alone stands the bed up toward the road")
+        np.testing.assert_allclose(on, 100.0, atol=1e-9)
+
+    def test_a_road_filled_over_its_ground_still_moves_the_bed(self):
+        elev = self.elev(0.0)                   # (level ground: the road's 2.1 m is grading's own)
+        on, off = self.run_seam(elev, 11.2, 102.1)
+        np.testing.assert_allclose(on, off)
+        self.assertGreater(float(on.min()), 100.2)
+
+    def test_part_of_the_difference_natural(self):
+        import railways
+        elev = self.elev(1.0)                   # (the road 4 m over its own ground on the hillside, 20 m north)
+        on, off = self.run_seam(elev, 20.0, 114.0)
+        room = 20.0 - 3.0 - railways.GRADE_HALF_M
+        # its ground's own 10 m less the room's allowance comes off: the bed moved as for a road that much lower
+        _on2, off2 = self.run_seam(self.elev(0.0), 20.0, 114.0 - (10.0 - (room / rs.SEAM_SLOPE + rs.SEAM_TOL_M)))
+        np.testing.assert_allclose(on, off2, atol=1e-9)
+        self.assertLess(float(on.max()), float(off.max()))
+
+
 if __name__ == "__main__":
     unittest.main()

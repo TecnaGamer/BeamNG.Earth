@@ -1292,6 +1292,7 @@ class RoadFitTest(unittest.TestCase):
     def mesh_x(self, fit):
         _f, cx, edge, x0 = self.crossing(120.0)
         c = 120.0 + 1.9 - ((cx - edge - x0) % railways.STEP_M)     # (the crossing's edge 1.9 m past a 2 m point)
+        self.c_in = c                                               # (the road's x as given: the frame shifts it)
         f, cx, edge, x0 = self.crossing(c)
         self.assertAlmostEqual((cx - edge - x0) % railways.STEP_M, 1.9, delta=0.02)
         with unittest.mock.patch.object(railways, "RAIL_ROAD_FIT", fit):
@@ -1331,3 +1332,22 @@ class RoadFitTest(unittest.TestCase):
                     self.assertAlmostEqual(float(r[:, 0].min()), float(x.min()), delta=0.01, msg="no rail past it")
                 ys = sorted(float(r[0, 1]) for r in on)
                 self.assertAlmostEqual(ys[1] - ys[0], railways.GAUGE_M + railways.RAIL_HEAD, delta=0.002)
+
+    def test_a_road_beside_the_track_does_not_stretch_the_deck(self):
+        """The deck's roads are the ones that cut the 3D track (railways.true_crossers): a service road running beside the
+        track from the crossing, its carriageway within CROSSING_PAD_M of the track's axis, left the 3D track drawn there
+        while the deck ran on along it."""
+        import rails
+        import railxing
+        _f, c, edge, west, east = self.mesh_x(True)
+        ci = self.c_in
+        f = features([[(0.0, 100.0), (250.0, 100.0)], [(ci, 0.0), (ci, 250.0)], [(ci, 102.2), (ci + 25.0, 102.2)]],
+                     ["standard_gauge", "secondary", "service"], subtypes=["rail", "road", "road"])
+        with unittest.mock.patch.object(railways, "RAIL_ROAD_FIT", True):
+            P, T, UV, mats, M = railways.tile_mesh(FRAME, 0, 0, [f], flat)
+            steel = P[np.unique(T[np.asarray(M) == mats.index(railways.STEEL)])][:, 0]
+            with unittest.mock.patch.object(railxing, "ENABLED", True):
+                ch = rails.tile_chunks(FRAME, 0, 0, [f])
+        x = np.concatenate([np.asarray(k["n"])[:, 0] for k in ch if k["m"] == rails.DECK["m"]])
+        self.assertAlmostEqual(float(steel[steel > c].min()), east, delta=0.01, msg="the 3D track as without it")
+        self.assertAlmostEqual(float(x.max()), east, delta=0.01, msg="the deck stops where the track starts")
