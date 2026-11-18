@@ -3078,10 +3078,11 @@ class _Planner:
         return feats, plans, keeps
 
     def _vsolve_context(self, key, own_ids):
-        """[(fid, Plan, spec)] of the next cells' graded ground roads within VSOLVE_CONTEXT_M of cell key's box that are
-        none of its own (own_ids), each planned as its own cell plans it (_make_cell_roads: its pieces, abutments,
-        chains, observations and decks, that cell's: the same profile): the shadow solve's context, in its problem and
-        none of its output."""
+        """[(fid, Plan, spec, lifted)] of the next cells' graded ground roads within VSOLVE_CONTEXT_M of cell key's box
+        that are none of its own (own_ids), each planned as its own cell plans it (_make_cell_roads: its pieces,
+        abutments, chains, observations and decks, that cell's: the same profile), lifted: its heights after that
+        cell's approach rule (_lift_approaches, APPROACH_ON; None: not run): the shadow solve's context, in its problem
+        and none of its output."""
         box = self._clip_box(key, VSOLVE_CONTEXT_M)
         if box is None:
             return []
@@ -3132,12 +3133,27 @@ class _Planner:
                     self._chain_cands(k, feats, specs)
                     ext = self._extensions(parts, ids)
                     pins = self._pins(parts, ids, ext, k)
+                got = []
                 for fid, part, p in zip(ids, parts, plan_roads(self.frame, parts, self.elev, abut, ext, pins,
                                                                coarse=COARSE_EASE_ON and self._coarse(k),
                                                                obs=self._obs(k), decks=self._decks_near(k), rings=rings)):
                     if p is not None:
                         p.rid = road_id(fid)
-                        out.append((fid, p, part[1]))
+                        got.append((fid, p, part[1]))
+                lifted = [None] * len(got)
+                if APPROACH_ON and got:
+                    # (the approach rule as that cell runs it: its floors in this cell's solve too. Without them a
+                    # junction a floor raised 0.9 m in the cell that owns the approach stood on its profile in the
+                    # next cell's, and a road from it stepped 0.43 m at the seam between them, Lauterbrunnen)
+                    try:
+                        cps = [(f, _plan_copy(p)) for f, p, _s in got]
+                        self._lift_approaches(k, cps, [s for _f, _p, s in got], keep=False)
+                        lifted = [np.array(q.z, np.float64) if len(q.z) == len(p.z) else None
+                                  for (_f, q), (_g, p, _s) in zip(cps, got)]
+                    except Exception as e:      # (their profiles alone rather than no context)
+                        _caught(e)
+                        log.debug("vsolve: context lifts of %s: %s: %s", k, type(e).__name__, e)
+                out.extend((f, p, s, z) for (f, p, s), z in zip(got, lifted))
             except Exception as e:      # (that cell's roads out of the context rather than no shadow solve)
                 _caught(e)
                 log.debug("vsolve: context roads of %s: %s: %s", k, type(e).__name__, e)
@@ -3149,18 +3165,21 @@ class _Planner:
         underpass rule's on z_under, the heights it sees in the passes, z_before's without; the approaches' lifts,
         lifts: the heights before and after _lift_approaches); kept, trimmed to the cell as its plans are, in
         self._vsolve[str(key)] = ([(fid, Plan)], info). The plans themselves untouched. context: _vsolve_context's, in
-        the problem at their profiles (no pass ran on them) and none of the output."""
+        the problem at their profiles (no pass ran on them), with their own cells' approach lifts as floors, and none
+        of the output."""
         import copy
         own_n = len(pspecs)
         given = plans                   # (the caller's: its own roads' heights replaced there under vsolve.ON)
         if context:
-            zc = [np.array(p.z, np.float64) for _f, p, _s in context]
-            plans = list(plans[:own_n]) + [(f, p) for f, p, _s in context]
-            pspecs = list(pspecs) + [sp for _f, _p, sp in context]
+            zc = [np.array(c[1].z, np.float64) for c in context]
+            zl = [zc[i] if len(c) < 4 or c[3] is None else c[3] for i, c in enumerate(context)]
+            plans = list(plans[:own_n]) + [(c[0], c[1]) for c in context]
+            pspecs = list(pspecs) + [c[2] for c in context]
             z_before = list(z_before[:own_n]) + zc
-            z_under = None if z_under is None else list(z_under[:own_n]) + zc
+            z_under = None if z_under is None else list(z_under[:own_n]) + zl    # (the rule after the lifts, as in
+            # the passes: under them a context road's floor was capped at its profile)
             if lifts is not None and lifts[0] is not None:
-                lifts = (list(lifts[0][:own_n]) + zc, list(lifts[1][:own_n]) + zc)
+                lifts = (list(lifts[0][:own_n]) + zc, list(lifts[1][:own_n]) + zl)
         n = len(pspecs)
         ground = [p for _f, p in plans[:n]]
         own = self._clip_box(key, 0.0)
@@ -3190,8 +3209,9 @@ class _Planner:
             # in Rio, Athens and Tokyo, by up to 8 m)
             for i, (a, b, r, p) in enumerate(zip(lifts[0][:n], lifts[1][:n], rule_z, ground)):
                 up = b - a >= vsolvemod.DIP_M
-                if up.any():
-                    floors[i] = np.where(up, np.minimum(np.minimum(b, r), np.asarray(p.z, np.float64)), np.nan)
+                if up.any():    # (a context road's plan is its profile, no pass's heights: its lift alone)
+                    top = np.asarray(p.z, np.float64) if i < own_n else b
+                    floors[i] = np.where(up, np.minimum(np.minimum(b, r), top), np.nan)
         pins = []
         if own is not None:     # (a piece's end past the cell's box: cut there, held at its profile, as the next cell holds it)
             x0, y0, x1, y1 = own
@@ -3895,13 +3915,15 @@ class _Planner:
         for j, p in enumerate(ps):
             p.z = np.asarray(out[off[j]:off[j + 1]], np.float64)
 
-    def _lift_approaches(self, key, plans, specs):
+    def _lift_approaches(self, key, plans, specs, keep=True):
         """Raise, in place, the plans of the roads leading onto overpasses (APPROACH_ON). A road is raised where one of
         its ends is a bridge's abutment that must go up for the deck to clear the road under it (_end_lift); the raise
         falls off along the road (approach_add) and never comes nearer another road than its fill slope allows. Only
         what the plan's own line and the map around its ends say counts, the same in every cell that plans it (a long
         road is planned in each cell it passes; two cells raising the same road differently drew the road under a
-        raised ground, 2026-10-20 I-20 in Greene County, AL). Major roads (APPROACH_SKIP) are never raised."""
+        raised ground, 2026-10-20 I-20 in Greene County, AL). Major roads (APPROACH_SKIP) are never raised. keep: the
+        ramps' context kept for the cell's last ramp_envelope (_plan_cell); not for the shadow solve's context, whose
+        plans are copies of another cell's."""
         # every plan end at once: near the cell, and on a bridge end of its own cell (most touch none)
         pe = np.array([[p.xy[0][:2], p.xy[-1][:2]] for _f, p in plans], np.float64).reshape(-1, 2)
         ok = np.repeat([s is not None for s in specs], 2)       # (a motorway's or trunk's: over water only, below)
@@ -3994,8 +4016,9 @@ class _Planner:
                             or (i in freeway_approach and np.abs(before[i] - floor[i]).max() > 0.05))]
             if changed:             # (now, and once more after the junctions' last snap and the decks' pins: _plan_cell)
                 ramp_envelope(plans, specs, changed, held, floor)
-                with self.lock:
-                    self.__dict__.setdefault("_ramp_ctx", {})[str(key)] = (changed, held, floor)
+                if keep:
+                    with self.lock:
+                        self.__dict__.setdefault("_ramp_ctx", {})[str(key)] = (changed, held, floor)
 
     def _raise_junctions(self, plans, specs, touch):
         """The roads leaving a junction that a short approach (JUNCTION_STUB_M) runs into from a raised abutment, raised
