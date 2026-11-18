@@ -237,16 +237,49 @@ function M.forwardClearance(px, py, vx, vy, cx, cy)
   return distance
 end
 
-function M.decide(px, py, vx, vy, cx, cy, pending, now, retryAt, gate, latency, autodrive)
+-- Nearby traffic travelling ahead needs its own braking horizon, even while the player drives manually.
+-- Opposing/cross traffic and cars leaving the player's area keep the existing traffic edge/respawn policy.
+M.TRAFFIC_AHEAD_M = 300
+M.TRAFFIC_SIDE_M = 80
+M.TRAFFIC_DOT = 0.7
+function M.trafficLead(px, py, vx, vy, car)
+  local sp = math.sqrt((vx or 0)^2 + (vy or 0)^2)
+  local cs = math.sqrt(car.vx^2 + car.vy^2)
+  if sp < 5 or cs < 5 or vx * car.vx + vy * car.vy < sp * cs * M.TRAFFIC_DOT then return 0 end
+  local dx, dy = car.x - px, car.y - py
+  local along, side = (dx * vx + dy * vy) / sp, abs(dx * vy - dy * vx) / sp
+  if along < 0 or along > M.TRAFFIC_AHEAD_M or side > M.TRAFFIC_SIDE_M then return 0 end
+  return M.autodriveLead(car.vx, car.vy) + cs * (car.sampleS or 0)
+end
+
+function M.decide(px, py, vx, vy, cx, cy, pending, now, retryAt, gate, latency, autodrive, traffic)
   if not cx then return nil end
   local _, reach, ahead = mode(vx, vy)
   local d = M.cheb(px, py, cx, cy)
   local lead = autodrive and M.autodriveLead(vx, vy) or 0
   local clearance = lead > 0 and M.forwardClearance(px, py, vx, vy, cx, cy) or math.huge
+  local hx, hy, hvx, hvy = px, py, vx, vy
+  local watchingTraffic = false
+  -- An unusually slow terrain response must not make a traffic request skip the next usable cell.
+  local requestS = min(max(latency or 1, 1), M.GRID / max(math.sqrt((vx or 0)^2 + (vy or 0)^2), 1))
+  local futureX, futureY
+  if traffic and #traffic > 0 then futureX, futureY = M.target(px + (vx or 0) * requestS, py + (vy or 0) * requestS, vx, vy) end
+  for _, car in ipairs(traffic or {}) do
+    local need = M.trafficLead(px, py, vx, vy, car)
+    if need > 0 then
+      local distance = M.forwardClearance(car.x, car.y, car.vx, car.vy, cx, cy)
+      -- A car taking a different bend must not delay the player's terrain/Autodrive if our next cell cannot help it.
+      if distance - need < clearance - lead
+        and M.forwardClearance(car.x, car.y, car.vx, car.vy, futureX, futureY) > distance + M.GRID / 2 then
+        lead, clearance = need, distance
+        hx, hy, hvx, hvy, watchingTraffic = car.x, car.y, car.vx, car.vy, true
+      end
+    end
+  end
   if pending then
     local pd = M.cheb(px, py, pending.cx, pending.cy)
     if pending.ready and lead > 0 and clearance < lead and pd <= reach
-      and M.forwardClearance(px, py, vx, vy, pending.cx, pending.cy) > clearance + M.GRID / 2 then
+      and M.forwardClearance(hx, hy, hvx, hvy, pending.cx, pending.cy) > clearance + M.GRID / 2 then
       -- As with the existing hard commit, a ready collision block takes priority over the cosmetic far-tile
       -- uncover gate. Keep the player inside the full terrain margin; never fabricate road beyond the block.
       return 'commit'
@@ -288,21 +321,34 @@ function M.decide(px, py, vx, vy, cx, cy, pending, now, retryAt, gate, latency, 
       end
     end
     -- a prepared centre that would no longer keep the player 600 m inside its edges is useless
-    if pd > reach then return 'discard' end
+    if pd > reach then
+      -- A traffic-led request may load the next cell just before the player enters its safe commit range.
+      -- Keep it only while the current motion reaches that range within the measured loading time.
+      if watchingTraffic and M.cheb(px + (vx or 0) * requestS, py + (vy or 0) * requestS, pending.cx, pending.cy) <= reach
+        and M.forwardClearance(hx, hy, hvx, hvy, pending.cx, pending.cy) > clearance + M.GRID / 2 then return nil end
+      return 'discard'
+    end
     return nil
   end
   -- the prepare test point: the player (fast mode: PREP_AHEAD_FAST_S ahead)
-  local prepareForAi = lead > 0 and clearance < lead + math.sqrt((vx or 0)^2 + (vy or 0)^2) * max(latency or 1, 1)
+  local prepareForAi = lead > 0 and clearance < lead + math.sqrt((hvx or 0)^2 + (hvy or 0)^2) * max(latency or 1, 1)
   if (not prepareForAi and M.cheb(px + (vx or 0) * ahead, py + (vy or 0) * ahead, cx, cy) <= M.PREPARE_DIST)
     or now < (retryAt or 0) then
     return nil
   end
   -- (MIN_LEAD: the block just committed is centred ahead of the player; the box test, symmetric, asked for the next one
   -- at once, and a prediction made then was overtaken by the bend: the next one once the player is past this centre)
-  if M.centreAhead(px, py, vx, vy, cx, cy) then return nil end
+  if M.centreAhead(px, py, vx, vy, cx, cy) and not (watchingTraffic and prepareForAi) then return nil end
   local tx, ty = M.target(px, py, vx, vy)
+  if watchingTraffic and prepareForAi then
+    tx, ty = futureX, futureY
+  end
   if tx == cx and ty == cy then return nil end -- heading back towards the centre: nothing to gain
+  if watchingTraffic and prepareForAi
+    and M.forwardClearance(hx, hy, hvx, hvy, tx, ty) <= clearance + M.GRID / 2 then return nil end
   local r = M.preferReady(px, py, vx, vy, tx, ty, cx, cy, reach)
+  if r and watchingTraffic and prepareForAi
+    and M.forwardClearance(hx, hy, hvx, hvy, r[1], r[2]) <= clearance + M.GRID / 2 then r = nil end
   if r then return 'prepare', r[1], r[2], true end      -- (preferred: see retargets)
   return 'prepare', tx, ty
 end

@@ -11,6 +11,7 @@
 local M = {}
 local localplayers = require('beamngEarth/localplayers')
 local overtake = require('beamngEarth/overtake')
+local traffichorizon = require('beamngEarth/traffichorizon')
 local controlled = {}
 
 M.EDGE_M = 60           -- graph nodes this far inside the block's ground box only
@@ -1144,6 +1145,7 @@ end
 -- the AI planned toward roads hundreds of metres off and swerved, into a street tree on North Front Street, Baltimore
 -- (Steam Deck, 3 of 3 rebase drives, 2026-10-29). The server's own graph replaces this one when it comes.
 function M.transform(xf, anchorId)
+  traffichorizon.reset()
   if not graph or not xf then return false end
   local nodes = {}
   for name, n in pairs(graph.nodes) do
@@ -1173,6 +1175,7 @@ function M._startTraffic() return startTraffic() end    -- (tests: the level sta
 function M._cuts() return cuts end      -- (probes: the clip's cut nodes)
 
 function M.onTeleport()
+  traffichorizon.reset()
   respawnAll = true
   local gt = gameplay_traffic
   if gt and gt.getState() == 'on' and not heldActive and syncTrafficPool(gt) then
@@ -1191,11 +1194,13 @@ function M.boxMoved(a, b)
   return math.sqrt(dx * dx + dy * dy)
 end
 
-function M.shouldReclip(a, b, autodrive)
+function M.trafficVehicles() return traffichorizon.sample() end
+
+function M.shouldReclip(a, b, autodrive, traffic)
   local moved = M.boxMoved(a, b)
-  -- A 1 km terrain block can move by one 128 m cell. Ignoring that move until 150 m leaves Autodrive
+  -- A 1 km terrain block can move by one 128 m cell. Ignoring that move until 150 m leaves driving AI
   -- braking for the old graph end, or stopped there with no further movement to trigger a refresh.
-  return moved >= M.RECLIP_M or (autodrive and moved >= 1) or false
+  return moved >= M.RECLIP_M or ((autodrive or traffic) and moved >= 1) or false
 end
 
 local waited = 0
@@ -1404,9 +1409,10 @@ function M.update(aid, b, gov)
     if gov and gov.noteFrame then gov:noteFrame(sw()) end
     return
   end
-  -- Budget small moves during manual driving; Autodrive needs the road from every new terrain cell.
+  -- Any active AI needs the road from every new terrain cell, including traffic while driving manually.
   local gps = package.loaded['beamngEarth/gps']
-  if not (dirty or foreign) and applied and M.shouldReclip(applied.box, b, gps and gps.autodrive and gps.autodrive()) then dirty = true end
+  if not (dirty or foreign) and applied
+    and M.shouldReclip(applied.box, b, gps and gps.autodrive and gps.autodrive(), #M.trafficVehicles() > 0) then dirty = true end
   if not (dirty or foreign) then return end
   local t = os.clock()
   if t - lastApply < M.MIN_GAP_S and not foreign and not urgent then return end
@@ -1477,6 +1483,7 @@ function M.status()
 end
 
 function M.reset()
+  traffichorizon.reset()
   local gt = gameplay_traffic
   if gt and gt.getState and gt.getState() == 'on' and (heldActive or next(protectedTraffic)) then
     syncTrafficPool(gt)
