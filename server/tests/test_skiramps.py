@@ -12,6 +12,7 @@ by default, and what it changes.
 import os
 import sys
 import threading
+import time
 import unittest
 from unittest import mock
 
@@ -399,6 +400,19 @@ class GapLanding(unittest.TestCase):
         self.assertTrue(np.allclose(none.z, bare.z))
         self.assertGreater(float(none.z[-1]) - float(ref.z[-1]), 1.0, "filled")
 
+    def test_stale_pieces_keep_their_feature(self):
+        # (Codex review of round 5: kept pieces whose key is not known keep their feature: a foreign road's, lane-placed
+        # onto the approach, takes nothing; the landing's own feature's goes by where it lies)
+        ap = self.approach(0.0)
+        raw = self.raw_for(ap, ap + np.array([0.0, 50.0]))
+        lands = [(ap, "motorway", [ap[[2, 1]], ap[[1, 0]]], [], frozenset({"road#1/2"}), OUT)]
+        road = [(self.lonlat(self.dense(np.array([-200.0, 0.0]), np.array([-1.0, 0.0]))), self.spec)]
+        ref = grading.plan_roads(self.frame, road, raw, cuts=False)[0]
+        foreign = grading.plan_roads(self.frame, road, raw, cuts=False, landings=lands, part_ids=["trunk#?"])[0]
+        own = grading.plan_roads(self.frame, road, raw, cuts=False, landings=lands, part_ids=["road#?"])[0]
+        self.assertTrue(np.allclose(foreign.z, ref.z))
+        self.assertGreater(float(own.z[-1]) - float(ref.z[-1]), 1.0)
+
     def test_diagonal_connector_placed_copy(self):
         # (Codex review of round 5: the first ground piece starts 3 m on and 2 m aside of the deck end, a diagonal
         # connector; the road placed 8 m to the other side: its first samples are ahead of the deck end along the deck,
@@ -688,6 +702,30 @@ class RawLinesShort(unittest.TestCase):
         self.assertIs(got[0], row)
         self.assertIn(1, got)
 
+    def test_recovers_past_its_time(self):
+        # (Codex review of round 5: a decoded layer kept in use whose ranges were made short, its time to try again
+        # past: made again on the next read, which reads it complete and keeps it)
+        import mapcells
+        site, key = self.layer()
+        f = site.cells[key].__class__.__new__(site.cells[key].__class__)
+        f.__dict__.update({kk: v for kk, v in site.cells[key].__dict__.items() if not kk.startswith("_")})
+        k = mapcells.CellKey(*(int(v) for v in key.split("/")))
+        g = self.planner(f)
+        f.__dict__["_level_ranges"] = {i: [] for i in range(len(f))}      # (short: no decks)
+        f.__dict__["_ranges_state"] = "done"
+        f.__dict__["_ranges_short_until"] = time.monotonic() + 1000.0
+        with mock.patch.object(roads, "LIDAR_GAPS_ON", False):
+            with revisit.scope() as b:
+                first = g._raw_lines(k)
+            self.assertTrue(b.n)
+            f.__dict__["_ranges_short_until"] = time.monotonic() - 1.0     # (its time past)
+            with revisit.scope() as b:
+                got = g._raw_lines(k)
+        self.assertFalse(b.n)
+        self.assertEqual(len(first["bridges"]), 0)
+        self.assertGreater(len(got["bridges"]), 0)
+        self.assertIs(g._raw_lines_memo[str(k)], got)
+
     def test_cell_ranges_mark_a_short_entry(self):
         import time
         site, key = self.layer()
@@ -739,7 +777,8 @@ class PieceIds(unittest.TestCase):
                 bare = [r for r in rngs if r[2] != "bridge"]
                 ps0 = roads._parts_by_level_new(f, i, "ground", rngs=bare)
                 self.assertFalse(set(grading._piece_ids(f, i, ps0, bare)) & set(clean), "the unsplit piece")
-                self.assertEqual(grading._piece_ids(f, i, ps0, rngs), [None] * len(ps0), "kept pieces from other ranges")
+                self.assertEqual(grading._piece_ids(f, i, ps0, rngs), [f"{f.ids[i]}#?"] * len(ps0),
+                                 "kept pieces from other ranges: their feature only")
             self.assertGreater(found, 0)
 
 

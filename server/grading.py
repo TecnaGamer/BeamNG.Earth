@@ -6106,7 +6106,16 @@ class _Planner:
             for h in homes:
                 if h is not None:
                     layers.setdefault(id(h[0]), h[0])
+            now = time.monotonic()
             for _i, lay in sorted(layers.items(), key=lambda kv: kv[0]):
+                st = lay.__dict__
+                with roadsmod._FACTS_LOCK:      # (made short, its time to try again past: its ranges made again here,
+                    u = st.get("_ranges_short_until")       # a decoded layer kept in use else never recovers)
+                    if u is not None and now > u and st.get("_ranges_state") == "done":
+                        st["_level_ranges"] = {}
+                        st.pop("_ranges_short_until", None)
+                        st.pop("_lidar_rule", None)
+                        st["_ranges_state"] = None
                 roadsmod._cell_ranges(lay)
             with roadsmod._FACTS_LOCK:
                 short = any(lay.__dict__.get("_ranges_state") != "done"
@@ -7971,8 +7980,8 @@ def _piece_ids(feats, i, pieces, rngs=None):
     map cell's copy of the feature, however far its decks reach in each) and how many ground pieces the feature has, so
     one feature's pieces on a bridge's two banks are told apart and pieces made from other ranges (one unsplit piece
     over both banks) never match the landing's. The keys are made from the very ranges that give these pieces: pieces
-    that rngs do not give (a layer's kept ground_parts from a short home copy since replaced) have none ([None] * n:
-    no known piece, which goes by where it lies)."""
+    that rngs do not give (a layer's kept ground_parts from a short home copy since replaced) have none, only their
+    feature ("fid#?": one of the landing's features' goes by where it lies, another feature's never takes its line)."""
     n = len(pieces)
     if rngs is not None:
         return _piece_ids_new(feats, i, pieces, list(rngs))
@@ -7989,13 +7998,13 @@ def _piece_ids(feats, i, pieces, rngs=None):
 def _piece_ids_new(feats, i, pieces, rngs):
     n = len(pieces)
     made = roadsmod._parts_by_level_new(feats, i, "ground", rngs=list(rngs))
+    fid = str(feats.ids[i])
     if len(made) != n or any(np.shape(p) != np.shape(q) or not np.array_equal(np.asarray(p), np.asarray(q))
                              for p, q in zip(made, pieces)):
-        return [None] * n
+        return [f"{fid}#?"] * n
     keys = roadsmod._part_keys_new(feats, i, "ground", list(rngs))
     if len(keys) != n:
-        return [None] * n
-    fid = str(feats.ids[i])
+        return [f"{fid}#?"] * n
     return [f"{fid}#{int(k)}/{n}" for k in keys]
 
 
