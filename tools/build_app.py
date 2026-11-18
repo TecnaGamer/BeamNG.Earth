@@ -200,9 +200,7 @@ def pyinstaller(work, ico, onefile, ver=None, boot=None):
     # itself; the release workflow then runs the built executable's --check-numpy (numpy imports with them, -W error)
     import json
     import npyguard
-    names = npyguard._probe()
-    if names is None:
-        raise SystemExit("npyguard: could not ask this Python's numpy for its AVX-512 targets")
+    names = npyguard.dispatch_names()
     import importlib.metadata
     with open(os.path.join(work, npyguard.FROZEN_FILE), "w", encoding="utf-8") as f:
         json.dump({"numpy": importlib.metadata.version("numpy"), "names": list(names)}, f)

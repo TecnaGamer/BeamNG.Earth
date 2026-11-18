@@ -179,12 +179,25 @@ def self_check():
     return True, f"numpy {numpy.__version__}: {ENV}={os.environ[ENV]!r}"
 
 
-def avx512_active():
-    """The AVX-512 targets numpy dispatches in this process ([] when held back or absent). After numpy's import."""
+def dispatch_names():
+    """This process's numpy's AVX-512 targets outside its baseline (numpy imported here: tools/build_app.py's, the
+    numpy it bundles; the names don't depend on the CPU or on what the variable holds back)."""
+    m = _umath()
+    base = set(m.__cpu_baseline__)
+    return tuple(f for f in m.__cpu_dispatch__ if f.startswith(("X86_V4", "AVX512", "AVX10")) and f not in base)
+
+
+def _umath():
     try:
         import numpy._core._multiarray_umath as m
     except ImportError:         # (numpy 1.x)
         import numpy.core._multiarray_umath as m
+    return m
+
+
+def avx512_active():
+    """The AVX-512 targets numpy dispatches in this process ([] when held back or absent). After numpy's import."""
+    m = _umath()
     return [f for f in m.__cpu_dispatch__ if f.startswith(("X86_V4", "AVX512", "AVX10")) and m.__cpu_features__.get(f)]
 
 
