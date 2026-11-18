@@ -516,7 +516,7 @@ def eucalypt_share(lat, lon, elev=None):
     lat, lon = np.asarray(lat, np.float64), np.asarray(lon, np.float64)
     z = np.zeros(len(lat)) if elev is None else np.asarray(elev, np.float64)
     inland = np.clip((EUC_INLAND[1] - lon) / (EUC_INLAND[1] - EUC_INLAND[0]), 0.0, 1.0)
-    south = np.interp(lat, [a for a, _ in EUC_SOUTH], [b for _, b in EUC_SOUTH])
+    south = dnp.interp(lat, [a for a, _ in EUC_SOUTH], [b for _, b in EUC_SOUTH])
     up = np.clip((EUC_ELEV[1] - z) / (EUC_ELEV[1] - EUC_ELEV[0]), 0.0, 1.0)
     return np.where(_in_box(lat, lon, EUC_BOX), EUC_SHARE * inland * south * up, 0.0)
 
@@ -539,8 +539,8 @@ def _mixed(stand, single, u_mix, mix=None):
 def continental_shares(lat, lon):
     """Per tree: the continental climates' (birch, oak, beech) shares of the broadleaves (CONT_*), an (n, 3) array."""
     lat, lon = np.asarray(lat, np.float64), np.asarray(lon, np.float64)
-    birch = np.interp(lon, [a for a, _ in CONT_BIRCH_LON], [b for _, b in CONT_BIRCH_LON]) * \
-        np.interp(lat, [a for a, _ in CONT_BIRCH_SOUTH], [b for _, b in CONT_BIRCH_SOUTH])
+    birch = dnp.interp(lon, [a for a, _ in CONT_BIRCH_LON], [b for _, b in CONT_BIRCH_LON]) * \
+        dnp.interp(lat, [a for a, _ in CONT_BIRCH_SOUTH], [b for _, b in CONT_BIRCH_SOUTH])
     beech = CONT_BEECH * np.clip((CONT_BEECH_LON[1] - lon) / (CONT_BEECH_LON[1] - CONT_BEECH_LON[0]), 0.0, 1.0)
     rest = 1.0 - birch
     return np.stack([birch, rest * (1.0 - beech), rest * beech], axis=1)
@@ -562,17 +562,17 @@ def broad_shares(lat, lon, koppen, eco, montane=None):
     for name, m in (("oceanic", oceanic), ("med", _in(k, K_MED)), ("subtropical", _in(k, K_SUBTROPICAL)),
                     ("cold_arid", _in(k, K_COLD_ARID))):
         sh[ea & m] = BROAD_SHARES[name]
-    ob = np.interp(lat, [a for a, _ in OCEANIC_BIRCH_LAT], [b for _, b in OCEANIC_BIRCH_LAT])
+    ob = dnp.interp(lat, [a for a, _ in OCEANIC_BIRCH_LAT], [b for _, b in OCEANIC_BIRCH_LAT])
     m = ea & oceanic
     sh[m] = np.stack([ob, (1.0 - ob) * 0.5, (1.0 - ob) * 0.5], axis=1)[m]
-    cb = np.interp(lat, [a for a, _ in COLD_ARID_BIRCH_LAT], [b for _, b in COLD_ARID_BIRCH_LAT])
+    cb = dnp.interp(lat, [a for a, _ in COLD_ARID_BIRCH_LAT], [b for _, b in COLD_ARID_BIRCH_LAT])
     m = ea & _in(k, K_COLD_ARID)
     sh[m] = np.stack([cb, 1.0 - cb, np.zeros(n)], axis=1)[m]
-    eb = np.interp(lat, [a for a, _ in EAST_ASIA_BIRCH_LAT], [b for _, b in EAST_ASIA_BIRCH_LAT])
+    eb = dnp.interp(lat, [a for a, _ in EAST_ASIA_BIRCH_LAT], [b for _, b in EAST_ASIA_BIRCH_LAT])
     m = ea & (lon >= EAST_ASIA_LON) & ~_in(k, K_MED + K_COLD_ARID)
     sh[m] = np.stack([eb, (1.0 - eb) * (1.0 - EAST_ASIA_BEECH), (1.0 - eb) * EAST_ASIA_BEECH], axis=1)[m]
     sh[ea & _in_box(lat, lon, JAPAN_BOX)] = JAPAN_SHARES
-    nb = np.interp(lat, [a for a, _ in NA_BIRCH_LAT], [b for _, b in NA_BIRCH_LAT])
+    nb = dnp.interp(lat, [a for a, _ in NA_BIRCH_LAT], [b for _, b in NA_BIRCH_LAT])
     sh[na] = np.stack([nb, (1.0 - nb) * (1.0 - NA_BEECH), (1.0 - nb) * NA_BEECH], axis=1)[na]
     sh[boreal] = BROAD_SHARES["boreal"]
     for e_, share in ECO_BROAD_SHARES.items():
@@ -623,8 +623,8 @@ def species_groups(group, height, lat, lon, lcls, koppen, elev, u_broad, u_conif
     # conifers: pines, spruces from the latitude's share up to SPRUCE_MOUNTAIN at the spruce line
     con = ea & (g == G_CONIFER)
     if con.any():
-        east = np.interp(lat, [a for a, _ in SPRUCE_LAT], [b for _, b in SPRUCE_LAT])
-        west = np.interp(lat, [a for a, _ in SPRUCE_CENTRAL], [b for _, b in SPRUCE_CENTRAL])
+        east = dnp.interp(lat, [a for a, _ in SPRUCE_LAT], [b for _, b in SPRUCE_LAT])
+        west = dnp.interp(lat, [a for a, _ in SPRUCE_CENTRAL], [b for _, b in SPRUCE_CENTRAL])
         t = np.clip((lon - SPRUCE_LON[0]) / (SPRUCE_LON[1] - SPRUCE_LON[0]), 0.0, 1.0)
         base = west + (east - west) * t
         p = base + (SPRUCE_MOUNTAIN - base) * np.clip(2.0 * montane, 0.0, 1.0)      # (no pines from mid-belt up)
