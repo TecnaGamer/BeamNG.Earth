@@ -130,6 +130,7 @@ mod raildrawn;
 mod railindex;
 mod railnode;
 mod stationzone;
+mod seawater;
 mod railunder;
 mod railspans;
 mod osmml;
@@ -6726,6 +6727,9 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(stationzone::station_zone, m)?)?;
     // 494: the full port's busstationmesh.zone loops and _clip_cell (stationzone::station_zone: a station's walkable
     // ground, kerb walls and tactile strips from walk_field's lattice in one call). 493 is another branch's
-    m.add("VERSION", 494)?;
+    m.add_function(wrap_pyfunction!(seawater::sea_cell_lookup, m)?)?;
+    // 495: the full port's seacarve.SeaCarver.water cell lookup (seawater::sea_cell_lookup: the bilinear floor depth,
+    // the nearest pixel's level and the near-sea test straight from a cell's block-stored raster)
+    m.add("VERSION", 495)?;
     Ok(())
 }
