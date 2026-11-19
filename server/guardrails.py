@@ -43,28 +43,41 @@ KINDS = {"guard_rail": 0, "jersey_barrier": G_JERSEY, "cable_barrier": G_CABLE} 
 HEIGHTS = {G_JERSEY: 0.88, G_JERSEY_END: 0.88, G_CABLE: 1.0}                       # (the rest: MODULE_HEIGHT_M)
 
 
+# A guard rail mapped in concrete is a concrete wall (OSM barrier=guard_rail + material=concrete: I-81 at Bristol VA's
+# median, a Jersey wall in the street photos, drawn as Italy's steel rail inside the lane; the player's report
+# JRHVD9QF, 2026-11-19): the stock jersey barrier, as barrier=jersey_barrier is.
+CONCRETE_MATERIALS = {"concrete", "reinforced_concrete", "precast_concrete"}
+
+
+def _osm_tags(feats, i):
+    """The preserved OSM tags of feature i as a dict ({} none or unreadable)."""
+    tags = feats.attrs.get("tags")
+    if tags is None:
+        return {}
+    try:
+        values = json.loads(str(tags[i]))
+    except (TypeError, ValueError):
+        return {}
+    # source_tags is optional in Overture and may be absent, JSON null, or another
+    # JSON value. Only an object can contain OSM tag keys.
+    return values if isinstance(values, dict) else {}
+
+
 def _barrier_kind(feats, i):
     """A mapped barrier line's kind among KINDS, or None: Overture's normalized class, falling back to the preserved
-    OSM tags."""
+    OSM tags; a guard rail mapped in concrete (CONCRETE_MATERIALS) is a jersey barrier."""
     classes = feats.attrs.get("class")
     subtypes = feats.attrs.get("subtype")
     cls = str(classes[i]).strip().lower() if classes is not None else ""
     subtype = str(subtypes[i]).strip().lower() if subtypes is not None else ""
-    if subtype == "barrier" and cls in KINDS:
-        return cls
-    tags = feats.attrs.get("tags")
-    if tags is None:
-        return None
-    try:
-        values = json.loads(str(tags[i]))
-    except (TypeError, ValueError):
-        return None
-    # source_tags is optional in Overture and may be absent, JSON null, or another
-    # JSON value. Only an object can contain OSM tag keys.
-    if not isinstance(values, dict):
-        return None
-    v = str(values.get("barrier", "")).strip().lower()
-    return v if v in KINDS else None
+    values = _osm_tags(feats, i)
+    kind = cls if subtype == "barrier" and cls in KINDS else None
+    if kind is None:
+        v = str(values.get("barrier", "")).strip().lower()
+        kind = v if v in KINDS else None
+    if kind == "guard_rail" and str(values.get("material", "")).strip().lower() in CONCRETE_MATERIALS:
+        return "jersey_barrier"
+    return kind
 
 
 def _is_guardrail(feats, i):
