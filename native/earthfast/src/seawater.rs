@@ -7,7 +7,7 @@
 //! the f32 rounding of the result, NaNs as its vector loops propagate them (x86),NumPy's float64 -> int64 cast on
 //! x86-64 (NaN and out of range: i64::MIN) and np.clip (NaN through, -0.0 kept); the near-sea test in f32 as NumPy's
 //! weak Python-float scalars give it.
-use numpy::{PyReadonlyArray1, PyReadonlyArray2, PyReadwriteArray1};
+use numpy::{PyReadonlyArray1, PyReadonlyArray2, PyReadwriteArray1, PyUntypedArrayMethods};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
@@ -135,9 +135,14 @@ pub fn sea_cell_lookup(mx: PyReadonlyArray1<'_, f64>, my: PyReadonlyArray1<'_, f
                        idx: PyReadonlyArray2<'_, i32>, raw: PyReadonlyArray1<'_, u8>, bh: usize, bw: usize, h: usize,
                        w: usize, near: bool, sea_e: f64, thr: f64, mut d: PyReadwriteArray1<'_, f32>,
                        mut lv: PyReadwriteArray1<'_, f32>) -> PyResult<bool> {
+    // (rust-numpy's views assume aligned data: an unaligned NumPy array, a view at a byte offset, is refused first)
+    if !(mx.is_aligned() && my.is_aligned() && cx.is_aligned() && cy.is_aligned() && idx.is_aligned()
+         && d.is_aligned() && lv.is_aligned()) {
+        return Err(PyValueError::new_err("sea_cell_lookup: unaligned arrays"));
+    }
     let (mx, my, cx, cy) = (mx.as_array(), my.as_array(), cx.as_array(), cy.as_array());
     let n = mx.len();
-    if my.len() != n || cx.len() != n || cy.len() != n || d.as_array().len() != n || lv.as_array().len() != n {
+    if my.len() != n || cx.len() != n || cy.len() != n || d.len() != n || lv.len() != n {
         return Err(PyValueError::new_err("sea_cell_lookup: mx, my, cx, cy, d and lv alike"));
     }
     let raw = raw.as_slice().map_err(|_| PyValueError::new_err("sea_cell_lookup: raw not contiguous"))?;
