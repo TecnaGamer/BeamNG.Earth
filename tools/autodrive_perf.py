@@ -163,6 +163,8 @@ class ProcSampler:
     def sample(self):
         now = time.time()
         out = {}
+        if not os.path.isdir("/proc"):          # (Windows: no /proc; the frame times are the point, the CPU columns empty)
+            return out
         for name, pids in self.groups().items():
             cpu, rss = _cpu_rss(pids)
             prev = self.last.get(name)
