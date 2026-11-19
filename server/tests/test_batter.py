@@ -229,6 +229,62 @@ class Batter(unittest.TestCase):
             g = grading.grade_points(px, py, ground(px, py), pack)
             self.assertLess(float(np.abs(np.diff(g)).max()), 0.05, rad)
 
+    def test_no_wall_behind_an_open_end(self):
+        # behind a plan's end (and behind the end of a run whose next segments keep today's grading: a bridge's
+        # abutment metres) the corridors swept round the segments' end caps read ground their probes never saw: a 14 m
+        # trench behind the Stelvio's deck end at Premadio, a 24 m fill past a plan's end, each closing at its reach as
+        # a wall (revampfix). Loosened behind such an end, the ground there rises at about the batter + CAP_K
+        def rise(x0):
+            def f(x, y):        # (level beside the road, rising at 0.9 past x0)
+                return 0.9 * np.maximum(np.asarray(x, float) - x0, 0.0) + 0.0 * np.asarray(y)
+            return f
+
+        def fall(x0):
+            return lambda x, y: -rise(x0)(x, y)
+        plain = road(z=0.0, x=(-200.0, 0.0))
+        abut = road(z=0.0, x=(-200.0, 0.0))
+        abut.abut = (False, True)       # (its last ABUT_NEAR_M: PlanPack's ab, today's on both sides)
+        xs, ys = np.meshgrid(np.arange(-40.0, 60.0, 0.5), np.arange(-55.0, 55.0, 0.5))
+        x, y = xs.ravel(), ys.ravel()
+        for p, nat in ((plain, rise(0.0)), (plain, fall(0.0)), (abut, rise(-grading.ABUT_NEAR_M)),
+                       (abut, fall(-grading.ABUT_NEAR_M))):
+            pack = packed([p], nat)
+            fl = pack.bt[2]
+            if p is abut:
+                self.assertTrue((fl[-1] != 0).all() and (fl[0] == 0).all())
+            g = grading.grade_points(x, y, nat(x, y), pack).reshape(xs.shape)
+            gy, gx = np.gradient(g, 0.5)
+            s = np.hypot(gx, gy)
+            # (the core and its blend left out, and today's grading round the segments that keep it: the batter alone)
+            dx = np.maximum(xs - 0.0, 0.0)
+            far = np.hypot(dx, ys) > p.half + grading.BATTER_CORE_BLEND_M + 1.0
+            if p is abut:
+                x_old = float(p.xy[np.flatnonzero(fl[:, 0] == 0)[-1] + 1, 0])
+                dxo = np.maximum(x_old - xs, 0.0) + dx
+                far &= np.hypot(dxo, ys) > p.half + grading.T_MAX + grading.BATTER_OLD_FADE_M
+            # (the natural 0.9, the batter's 1:2 and CAP_K, the reach's close near the end: under 2.5; before, a wall of
+            # 8.7 behind the plain end)
+            self.assertLess(float(s[far].max()), 2.5, (p is abut, float(nat(10.0, 0.0))))
+        # a bend on a side slope: the caps between its segments loosen nothing on their own end lines, so the ground
+        # round the joint has no step (the corridors beside the two legs meet as before)
+        xs_ = np.arange(-200.0, 0.01, grading.VERTEX_STEP)
+        leg = np.column_stack((xs_, np.zeros_like(xs_)))
+        ang = np.radians(20.0)
+        leg2 = np.column_stack((np.arange(1, 50) * grading.VERTEX_STEP * np.cos(ang),
+                                np.arange(1, 50) * grading.VERTEX_STEP * np.sin(ang)))
+        line = np.concatenate([leg, leg2])
+        bend = grading.Plan(line, np.zeros(len(line)), 4.5, road_half=3.5)
+        bend.rank, bend.rid = 110, 1
+
+        def side(x, y):
+            return 0.35 * np.asarray(y, float) + 0.0 * np.asarray(x)
+        pack = packed([bend], side)
+        for rad in (12.0, 25.0, 38.0):
+            a = np.linspace(-np.pi, np.pi, 8001)
+            px, py = rad * np.cos(a), rad * np.sin(a)
+            g = grading.grade_points(px, py, side(px, py), pack)
+            self.assertLess(float(np.abs(np.diff(g)).max()), 0.05, rad)
+
     def test_close_open(self):
         # a sharp cutting in short runs along a plan (3 segments on, 5 off): no run, the corridor all along; a long run
         # (its gaps of one segment closed): today's
@@ -254,8 +310,8 @@ class Batter(unittest.TestCase):
         off = plancache.plans_format()
         grading.BATTER_ON = True
         on = plancache.plans_format()
-        self.assertFalse(off.endswith(".bv1"))
-        self.assertEqual(on, off + ".bv1")
+        self.assertFalse(off.endswith(".bv2"))
+        self.assertEqual(on, off + ".bv2")
 
     def test_bins_and_today_where_it_weighs(self):
         # batter.rs meets each bin's segments nearest first (stopping at today's weight 1) and grade_points makes

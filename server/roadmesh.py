@@ -1469,6 +1469,8 @@ def build(frame, chunks, elev, origin, lift=0.0, clip=None, follow=False, q=None
             else:
                 new_rbc.append((r, c))
         rbc = new_rbc
+    if any(c.get("noslab") for _r, c in rbc):
+        rbc = _noslab_off_through(rbc)
     rb = [r for r, _c in rbc]
     polys = [c for c in chunks if c.get("poly")]
     if not rb and not polys:
@@ -1522,11 +1524,12 @@ def build(frame, chunks, elev, origin, lift=0.0, clip=None, follow=False, q=None
             k0 += 2 * k
         else:                                   # on a deck: over its opaque concrete top
             bk = _bank_rows(c, k)
+            skin = DECK_SKIN + (NOSLAB_LIFT if c.get("noslab") else 0.0)
             if bk is not None:                  # (roadshape: a banked shaped deck, tilted across)
                 z = np.concatenate((tilted(left, right, fz, bk, left), tilted(left, right, fz, bk, right))) \
-                    + LIFT[layer] + DECK_SKIN
+                    + LIFT[layer] + skin
             else:
-                z = np.concatenate((fz, fz)) + LIFT[layer] + DECK_SKIN
+                z = np.concatenate((fz, fz)) + LIFT[layer] + skin
             # (a cluster's decks overlap all over its junction at one height: their skins, and the wear (patches, cracks:
             # roadwear) of one over another's skin, flickered as noise, Rautenweg in game 2026-11-12. Its plain asphalt
             # skins take the world's texture coordinates (below: where two lie on each other, one texture), its wear is
@@ -1563,7 +1566,8 @@ def build(frame, chunks, elev, origin, lift=0.0, clip=None, follow=False, q=None
         tri = _keep_up(tri, xy, nverts)
         field = junctions.get(c.get('fid')) if fz is not None else None
         if field is not None:
-            pp, uu, tt, _src = field.top(P[-1], UV[-1], tri - nverts, LIFT[layer] + DECK_SKIN)
+            pp, uu, tt, _src = field.top(P[-1], UV[-1], tri - nverts, LIFT[layer] + DECK_SKIN +
+                                         (NOSLAB_LIFT if c.get("noslab") else 0.0))
             if getattr(field, 'cluster', False) and c.get('deck'):
                 uu = pp[:, :2] / CLUSTER_SKIN_TILE_M
             P[-1], UV[-1], tri = pp, uu, tt + nverts
@@ -1778,6 +1782,11 @@ def _fade_uv(UV, vr, par):
 
 
 DECK_DEPTH = 1.2        # m of deck slab under the surface
+# m more a branch's road surface on a union's slab (road revamp v2 P2b, roads._sheet_tag's "noslab") lies over the
+# through road's: pinned to the through road's heights, the two skins lay within 1 mm of each other where the branch's
+# ribbon overlaps the through carriageway (concrete under asphalt, 378 m2 at the I-95's Middle Branch exits,
+# revampfix): the branch's on top, under the through road's overlays (the v2 lifts start at 2.5 mm)
+NOSLAB_LIFT = 0.0015
 DECK_SKIN = 0.01        # m the road mesh lies over a deck's top (the decal materials are translucent:
                         # 2026-10-11 a deck topped with road_asphalt_2lane was see-through)
 DECK_TOP = "bne_bridge_asphalt"     # the slab's top: plain opaque asphalt (the stock terrain's), under the road's own
@@ -2369,6 +2378,68 @@ def _noses(g):
 
 SHEET_REACH_MAX_M = 40.0    # m past its road's edge a through deck's slab reaches over an exit's union at most
 SHEET_TOL_M = 0.01          # m past an outline piece's ends a row still meets it
+
+
+def _inside_ribbons(pts, rings):
+    """(n,) bool: each point (n, 2) inside any of the closed rings [(k, 2)] (even-odd). Basic arithmetic only."""
+    out = np.zeros(len(pts), bool)
+    for ring in rings:
+        x, y = ring[:, 0], ring[:, 1]
+        xn, yn = np.roll(x, -1), np.roll(y, -1)
+        inside = np.zeros(len(pts), bool)
+        for j in range(len(ring)):
+            cond = (y[j] > pts[:, 1]) != (yn[j] > pts[:, 1])
+            if not cond.any():
+                continue
+            with np.errstate(divide="ignore", invalid="ignore"):
+                xc = x[j] + (pts[:, 1] - y[j]) * (xn[j] - x[j]) / (yn[j] - y[j])
+            inside ^= cond & (pts[:, 0] < xc)
+        out |= inside
+    return out
+
+
+def _noslab_off_through(rbc):
+    """rbc with each "noslab" road surface (a branch's, on an exit union's slab: road revamp v2 P2b) kept off the
+    through road's surface beside it (the union's base ribbons with "sx"): a row's edge inside that surface is pulled
+    along the row to its edge, a row wholly inside drawn as none. The branch's heights are pinned to the through road's
+    along its own line, flat across, so where its ribbon lay over the through carriageway the two skins crossed within
+    1 mm in bands (concrete and asphalt, 378 m2 at the I-95's Middle Branch exits, revampfix); the through road's
+    surface is drawn there. Basic arithmetic only."""
+    rings = [np.concatenate([np.asarray(r[0], np.float64)[:, :2], np.asarray(r[1], np.float64)[::-1, :2]])
+             for r, c in rbc if c.get("sx") and r[5] is not None and r[4] == "base" and len(r[0]) >= 2]
+    if not rings:
+        return rbc
+    out = []
+    for r, c in rbc:
+        left, right, v, m, layer, fz = r
+        if not c.get("noslab") or fz is None or layer != "base" or not len(left):
+            out.append((r, c))
+            continue
+        L = np.asarray(left, np.float64)[:, :2].copy()
+        Rr = np.asarray(right, np.float64)[:, :2].copy()
+        il, ir = _inside_ribbons(L, rings), _inside_ribbons(Rr, rings)
+        both = il & ir
+        for near, far, sel in ((L, Rr, il & ~ir), (Rr, L, ir & ~il)):
+            if not sel.any():
+                continue
+            lo = np.zeros(int(sel.sum()))          # (share from the far edge: outside at lo, inside at hi)
+            hi = np.ones(int(sel.sum()))
+            a, b = far[sel], near[sel]
+            for _ in range(24):
+                mid = 0.5 * (lo + hi)
+                ins = _inside_ribbons(a + (b - a) * mid[:, None], rings)
+                hi = np.where(ins, mid, hi)
+                lo = np.where(ins, lo, mid)
+            near[sel] = a + (b - a) * lo[:, None]
+        if both.any():                              # (wholly inside: a row of no width, its quads dropped below)
+            mid = 0.5 * (L + Rr)
+            L[both] = mid[both]
+            Rr[both] = mid[both]
+        left2 = np.array(left, np.float64, copy=True)
+        right2 = np.array(right, np.float64, copy=True)
+        left2[:, :2], right2[:, :2] = L, Rr
+        out.append(((left2, right2, v, m, layer, fz), c))
+    return out
 
 
 def _slab_chunks(chunks):

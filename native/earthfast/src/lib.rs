@@ -7368,6 +7368,8 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 526: try598 with 524 and 518 (deckreach) merged; 525 is another branch's
     // 523: v2 P3c (profile_pin_field: each approach's pin weight local to its own line and abutment)
     // 529: try598 with 526 and 523 (P3c) merged; 525, 527, 528 are other branches'
-    m.add("VERSION", 529)?;
+    // 522: revampfix (batter::apply_vw: a corridor loosened behind an end its plan does not carry it on past, cap_loosen)
+    // 531: revampfix2 (522 on try598; batter_apply_vw's continuation links from plan_pack's nb); 530 is another branch's
+    m.add("VERSION", 531)?;
     Ok(())
 }

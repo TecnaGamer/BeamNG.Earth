@@ -162,7 +162,7 @@ GRADE_BIN_M = float(os.environ.get("BNE_GRADE_BIN_M", "8"))    # m, the fine bin
 # the ground is the natural one clamped to each road side's corridor (a near-level strip, a rounded crest, then a
 # constant batter out to the daylight line), a pure function of position. Off by default (BNE_BATTER=vanilla, a switch
 # of its own: not in Revamped roads before the user has looked at it in game); on, it is a plans format tag
-# (plancache.plans_format: ".bv1"), so no cache mixes the two.
+# (plancache.plans_format: ".bv2"), so no cache mixes the two.
 BATTER_ON = os.environ.get("BNE_BATTER", "off") == "vanilla"
 BATTER_L0_M = 1.0           # m of near-level strip past a core's edge (the core: carriageway + shoulder, 1 m+) ...
 BATTER_STRIP_LO = 0.04      # ... the ground there at most this much per m under the road's height ...
@@ -8514,7 +8514,8 @@ def grade_points(px, py, base, plans, lift=0.0):
     # (batter.rs: the vanilla slopes, every segment within its reach; 503: the corridors' heights v and today's weight w
     # apart, so today's grading is made only at the points whose weight is not 0, the cores and the sides that keep
     # it: each point's today's height is its own whatever other points a call holds, gradebins)
-    fast.require(503, "batter_apply_vw")
+    # (522: a corridor loosened behind an end its plan does not carry it on past, batter.rs cap_loosen)
+    fast.require(522, "batter_apply_vw")
     f64 = np.float64
     v, w = fast._ef.batter_apply_vw(
         np.ascontiguousarray(px, f64), np.ascontiguousarray(py, f64), np.ascontiguousarray(base, f64),

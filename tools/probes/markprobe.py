@@ -171,6 +171,17 @@ def tile_metrics(P, T, mats, M, layer_of_mat, box, ground, roads, decks=()):
         st = np.ones(len(xy), bool)
         st[inside] = step[cj[inside], ci[inside]]
         return deck[j, i] | st
+
+    def tri_step(tri_xy):
+        """The cell holding a triangle's centroid holds a step: a node or an edge crossing of that triangle on its
+        corner or edge is the held-down surface's (a node is the corner of four cells: by its own cell alone, the
+        pieces held down in a step cell beside it counted as under the ground, all 159 of the Stelvio's, revampfix)."""
+        cx = np.floor(tri_xy[:, 0] / c).astype(np.int64) - i0
+        cy = np.floor(tri_xy[:, 1] / c).astype(np.int64) - j0
+        inside = (cx >= 0) & (cy >= 0) & (cx < step.shape[1]) & (cy < step.shape[0])
+        st = np.zeros(len(tri_xy), bool)
+        st[inside] = step[cy[inside], cx[inside]]
+        return st
     otri_idx = np.flatnonzero(over)
     if not len(otri_idx):
         return out
@@ -210,7 +221,7 @@ def tile_metrics(P, T, mats, M, layer_of_mat, box, ground, roads, decks=()):
     api, ati, az = lookup(otri, nodes)
     if len(api):
         nd = az - nz.ravel()[api]
-        ndeck = on_deck(nodes[api])
+        ndeck = on_deck(nodes[api]) | tri_step(otri[ati, :, :2].mean(1))
         for L in sorted(set(olay[ati].tolist())):
             m = (olay[ati] == L) & np.isfinite(nd) & (np.abs(nd) <= LEVEL_DZ) & ~ndeck
             samples.setdefault(L, []).append(nd[m])
@@ -218,6 +229,7 @@ def tile_metrics(P, T, mats, M, layer_of_mat, box, ground, roads, decks=()):
     # y - x = k c): with the vertices and the nodes, every place the gap between two triangulated surfaces can be least
     E = np.concatenate([otri[:, [0, 1]], otri[:, [1, 2]], otri[:, [2, 0]]])
     el = np.concatenate([olay, olay, olay])
+    est = np.tile(tri_step(otri[:, :, :2].mean(1)), 3)
     for nx_, ny_ in ((1.0, 0.0), (0.0, 1.0), (-1.0, 1.0)):
         da = E[:, 0, 0] * nx_ + E[:, 0, 1] * ny_
         db = E[:, 1, 0] * nx_ + E[:, 1, 1] * ny_
@@ -235,7 +247,7 @@ def tile_metrics(P, T, mats, M, layer_of_mat, box, ground, roads, decks=()):
         p = E[idx, 0] + f[:, None] * (E[idx, 1] - E[idx, 0])
         inb = (p[:, 0] >= box[0]) & (p[:, 0] <= box[2]) & (p[:, 1] >= box[1]) & (p[:, 1] <= box[3])
         xd = p[:, 2] - ground(p[:, :2])
-        good = inb & np.isfinite(xd) & (np.abs(xd) <= LEVEL_DZ) & ~on_deck(p[:, :2])
+        good = inb & np.isfinite(xd) & (np.abs(xd) <= LEVEL_DZ) & ~on_deck(p[:, :2]) & ~est[idx]
         for L in sorted(set(el[idx].tolist())):
             samples.setdefault(L, []).append(xd[good & (el[idx] == L)])
     out["dz"] = {L: np.concatenate(v) for L, v in samples.items()}
