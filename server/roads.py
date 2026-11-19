@@ -8196,12 +8196,78 @@ OBS_BLEND_DG = 0.04     # a measured deck eased onto its joints' heights changes
 OBS_BLEND_MIN_M = 10.0  # m, the shortest easing
 OBS_NO_DECK_M = 2.0     # m: a measured deck at most this far over the ground under it ...
 OBS_STALE_M = 3.5       # ... where the solve stands this much higher is a measurement from before the bridge (kept out)
-# ... both read at this percentile of the stations the source measured, not their highest: a GA-400 / I-285 flyover
+# ... or both read at this percentile of the stations the source measured (either reading telling it: the highest alone
+# kept a ramp in Atlanta's Gulch whose stale measured ends then moved its neighbours' joints 1-2 m), not only their
+# highest: a GA-400 / I-285 flyover
 # (Atlanta, 33.9117 N 84.3563 W) built after Georgia's 2018 lidar was flown "measured" on the ground under it, 0.3-1.3 m
 # over it but 2.2 m over one dip, so taken: the deck lay 17 m under its solve and the ground rose 5 m through its end,
 # 24 g (2026-11-19). BNE_OBS_STALE_Q=off: the highest, as before.
 _osq = os.environ.get("BNE_OBS_STALE_Q", "75")
 OBS_STALE_Q = None if _osq == "off" else float(_osq)
+# A US lidar survey flown before the bridge was built or rebuilt measured the ground or the old structure there, not its
+# deck: the National Bridge Inventory's year (bridges_built_us.npz, tools/build_bridge_built_db.py: the later of items
+# 27 and 106) of the record matching a deck part (its point within OBS_BUILT_NEAR_M of the part's line, the best by
+# distance and length as bridgetypes.matches) OBS_BUILT_AFTER_Y or more years after the newest survey covering it: the
+# part keeps the solve. Atlanta's GA-400 / I-285 interchange, rebuilt 2020-2023 under Georgia's 2018 survey: its flyovers "measured"
+# on the construction site's ground, 9-24 g where the ground rose through them (2026-11-19). BNE_OBS_BUILT=off: none.
+OBS_BUILT_ON = os.environ.get("BNE_OBS_BUILT", "on") != "off"
+OBS_BUILT_NEAR_M = 25.0
+OBS_BUILT_AFTER_Y = 2       # years after the survey at least: the inventory's year is a project's end, its deck often
+                            # standing before (Mount Vernon Highway over GA-400, 2019, lay on Georgia's 2018 lidar to 0.04 m)
+OBS_BUILT_LEN_M = 150.0     # m of score per factor e of length mismatch (bridgetypes.MATCH_LEN_M)
+_BUILT_DB = None
+
+
+def _built_db():
+    global _BUILT_DB
+    if _BUILT_DB is None:
+        try:
+            d = np.load(os.path.join(os.path.dirname(os.path.abspath(__file__)), "bridges_built_us.npz"))
+            _BUILT_DB = {k: d[k] for k in d.files}
+        except OSError:
+            _BUILT_DB = {"lat": np.zeros(0, np.float32)}
+    return _BUILT_DB
+
+
+def built_after_survey(frame, xy):
+    """Whether the NBI record matching deck line xy (k, 2+) was built or rebuilt in or after the newest US lidar
+    survey's year there (OBS_BUILT_*). Pure given the inventory and the survey index."""
+    import roadz
+    db = _built_db()
+    if not len(db["lat"]) or len(xy) < 2:
+        return False
+    xy = np.asarray(xy, np.float64)[:, :2]
+    c = xy.mean(0)
+    la, lo, _ = frame.enu_to_geodetic(np.array([c[0]]), np.array([c[1]]), 0.0)
+    la, lo = float(la[0]), float(lo[0])
+    reach = float(dnp.hypot(*(xy.max(0) - xy.min(0)))) / 2 + OBS_BUILT_NEAR_M
+    dlat = reach / 110540.0
+    lat = db["lat"]
+    i0, i1 = np.searchsorted(lat, la - dlat), np.searchsorted(lat, la + dlat)
+    if i0 >= i1:
+        return False
+    idx = np.arange(i0, i1)
+    e, n, _ = frame.geodetic_to_enu(lat[idx].astype(np.float64), db["lon"][idx].astype(np.float64), 0.0)
+    q = np.c_[np.ravel(e), np.ravel(n)]
+    a, b = xy[:-1], xy[1:]
+    ab = b - a
+    L = float(dnp.hypot(*ab.T).sum())
+    best = None
+    for k, p in zip(idx, q):
+        t = np.clip(((p - a) * ab).sum(1) / np.maximum((ab * ab).sum(1), 1e-9), 0, 1)
+        d = float(np.min(dnp.hypot(*(a + t[:, None] * ab - p).T)))
+        if d > OBS_BUILT_NEAR_M:
+            continue
+        rl = float(db["length"][k])
+        sc = d + OBS_BUILT_LEN_M * (abs(dmath.log(max(rl, 5.0) / max(L, 5.0))) if rl > 0 else 1.0)
+        if best is None or sc < best[0]:
+            best = (sc, int(db["built"][k]))
+    if best is None:
+        return False
+    yr = roadz.lidar_year(la, lo)
+    return yr is not None and best[1] >= yr + OBS_BUILT_AFTER_Y
+
+
 OBS_MAX_GRADE = 0.14    # a measured deck steeper than this after the easing (2 m steps) keeps the inference
 OBS_END_MAX_M = float(os.environ.get("BNE_OBS_END_MAX", "inf"))  # m a measured deck's end may lie off the graded road at
                         # its abutment, else the inference (inf: always eased onto it; 4 m made Springfield worse)
@@ -8952,6 +9018,11 @@ class BridgeProfiles:
                 got = None
             obs.append(got)
             obs_ok.append(ok if got is not None else None)
+        if OBS_BUILT_ON and level > 0:
+            for i, (o, ln) in enumerate(zip(obs, lines)):
+                if o is not None and built_after_survey(self.frame, ln):    # (the US lidar only: the inventory)
+                    log.debug("observed deck %s: built after the lidar survey, the solve kept", comp[i])
+                    obs[i] = None
         if all(o is None for o in obs):
             return zs
         nk = _EndJoin()
@@ -8996,12 +9067,14 @@ class BridgeProfiles:
                 if not np.isfinite(g).any():
                     continue
                 over_o, over_z = float(np.nanmax(o - g)), float(np.nanmax(z - g))
-                if OBS_STALE_Q is not None and obs_ok[i] is not None and len(obs_ok[i]) == len(o):
+                stale = over_o < OBS_NO_DECK_M and over_z - over_o > OBS_STALE_M
+                if not stale and OBS_STALE_Q is not None and obs_ok[i] is not None and len(obs_ok[i]) == len(o):
                     m = np.asarray(obs_ok[i], bool) & np.isfinite(g)
                     if m.sum() >= 3:            # (over the stations it measured: one dip under it is not its height)
                         over_o = float(np.percentile((o - g)[m], OBS_STALE_Q))
                         over_z = float(np.percentile((z - g)[m], OBS_STALE_Q))
-                if over_o < OBS_NO_DECK_M and over_z - over_o > OBS_STALE_M:
+                        stale = over_o < OBS_NO_DECK_M and over_z - over_o > OBS_STALE_M
+                if stale:
                     log.debug("observed deck %s: %.1f m over the ground, the solve %.1f m: from before the bridge, "
                               "the solve kept", comp[i], over_o, over_z)
                     obs[i] = None

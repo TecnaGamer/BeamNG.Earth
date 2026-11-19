@@ -616,6 +616,20 @@ def lidar_datasets(lat, lon):
     return [d["n"] for d in hits]
 
 
+def lidar_year(lat, lon):
+    """The year of the newest 3DEP dataset covering (lat, lon) (lidar_datasets' first), or None."""
+    names = lidar_datasets(lat, lon)
+    if not names:
+        return None
+    for d in _index or ():
+        if d["n"] == names[0]:
+            try:
+                return int(d["y"])
+            except (TypeError, ValueError):
+                return None
+    return None
+
+
 def resample_line(xy, step):
     """(points (m, 2), arc (m,)) every ~step m along polyline xy, ending on both ends."""
     xy = np.asarray(xy, np.float64)[:, :2]
