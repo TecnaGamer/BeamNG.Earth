@@ -13037,6 +13037,42 @@ def _sheet_tag(ch, line, info):
             ch[f"sk{e}"] = [round(float(nrm[0]), 6), round(float(nrm[1]), 6)]
 
 
+def _cut_ends(ch, line, box):
+    """A drawn deck chunk ch of the line `line` (k, 2+: the line it was clipped from) whose first / last node is a cut
+    on the tile box's edge (not the line's own end, nor a skewed end already) gets that end's line ("ct0" / "ct1",
+    unit, toward its left): square to `line` there (its segment's normal; at one of its vertices the two segments'
+    mean), so the two tiles' pieces end on one line. Square to each piece's own end segment, the pieces simplified
+    apart, they ended up to 2.7 degrees apart, 2 mm to 14 cm gaps or overlaps at the slab's corners (seamprobe).
+    roadmesh.ribbons (skew_ends). In place."""
+    c = np.asarray(ch["n"], np.float64)
+    ln = np.asarray(line, np.float64)[:, :2]
+    if len(c) < 2 or len(ln) < 2:
+        return
+    a, b = ln[:-1], ln[1:]
+    for e, at in ((0, 0), (1, -1)):
+        p = c[at, :2]
+        if ch.get(f"sk{e}") is not None or not _on_box(p, box):
+            continue
+        if min(float(dnp.hypot(*(p - ln[0]))), float(dnp.hypot(*(p - ln[-1])))) <= 1e-3:
+            continue                        # (the part's own end on the edge: no cut)
+        on = np.flatnonzero(_seg_dist(p[None, :], a, b) <= 1e-3)     # (the chunk's nodes rounded to the mm: _chunk)
+        nrm = np.zeros(2)
+        for k in on.tolist():
+            t = b[k] - a[k]
+            L = float(dnp.hypot(*t))
+            if L > 1e-9:
+                nrm += np.array([-t[1], t[0]]) / L
+        L = float(dnp.hypot(*nrm))
+        if L <= 1e-9:
+            continue
+        nrm = nrm / L
+        j = 1 if e == 0 else len(c) - 1
+        t = c[j, :2] - c[j - 1, :2]
+        if float(nrm[1] * t[0] - nrm[0] * t[1]) < 0:
+            nrm = -nrm
+        ch[f"ct{e}"] = [round(float(nrm[0]), 6), round(float(nrm[1]), 6)]
+
+
 def _deck_chunks(decks, exact, ground_fn=None, depths=None, walks=None, shift_of=None, width_of=None, context_m=None,
                  marks_of=None, shapes=None, sheet_wide=None, sheet_marks=None):
     """Deck + line chunks of bridge parts [(fid, spec, pts (k, 3), lon)] clipped to the box `exact`, and their decks
@@ -13201,6 +13237,7 @@ def _deck_chunks(decks, exact, ground_fn=None, depths=None, walks=None, shift_of
                                 ch["ws"] = [round(float(x + w - spec.width), 3) for x in ws]
                             ch["tdir"] = _travel(spec)  # (roadmesh: opposite traffic beside it, a median)
                             _sheet_tag(ch, line, sheet.get(i))
+                            _cut_ends(ch, line, exact)
                             if depths and fid in depths:
                                 ch["dd"] = round(float(depths[fid]), 3)     # (roadmesh.deck: its slab and girders)
                             if abut.get(fid):

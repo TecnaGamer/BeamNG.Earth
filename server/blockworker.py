@@ -2415,19 +2415,20 @@ def _map_chunks(src, dst, chunks):
         at += ln
         out[k][field] = v if field == "n" else v.tolist()
     # (roadshape, BNE_ROADSHAPE=decks: a shaped deck's skewed end lines turned with the frames through their end node,
-    # its buried ends' overlap lines mapped as its nodes are; Codex review)
+    # its buried ends' overlap lines mapped as its nodes are; Codex review; a deck's cut end lines too: roads._cut_ends)
     for k, c in enumerate(chunks):
         for e, at in ((0, 0), (1, -1)):
-            d, ov = c.get(f"sk{e}"), c.get(f"ov{e}")
-            if d is None and ov is None:
+            ov = c.get(f"ov{e}")
+            lines = [(f"{t}{e}", c.get(f"{t}{e}")) for t in ("sk", "ct") if c.get(f"{t}{e}") is not None]
+            if not lines and ov is None:
                 continue
             p = np.asarray(c["n"], np.float64)[at]
-            if d is not None:
+            for key, d in lines:
                 q = geotiles.world_map(src, dst, np.array([[p[0], p[1], 0.0],
                                                            [p[0] + 10.0 * d[0], p[1] + 10.0 * d[1], 0.0]]))
                 v = q[1, :2] - q[0, :2]
                 ln = float(np.sqrt(v[0] * v[0] + v[1] * v[1]))
-                out[k][f"sk{e}"] = [round(float(v[0] / ln), 6), round(float(v[1] / ln), 6)] if ln > 1e-12 else d
+                out[k][key] = [round(float(v[0] / ln), 6), round(float(v[1] / ln), 6)] if ln > 1e-12 else d
             if ov is not None:
                 o = np.asarray(ov, np.float64)
                 out[k][f"ov{e}"] = geotiles.world_map(src, dst, np.c_[o[:, :2], np.zeros(len(o))])[:, :2].tolist()

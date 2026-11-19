@@ -16,9 +16,9 @@ fork. For each pair of those tiles sharing an edge:
 And each tile is byte-identical however it is built: after its neighbours, from only the parts its own windows would
 read, with a wider fork window (roadshape.SHEET_WINDOW_M); with the parts in another order, the same geometry.
 
-Known, not the sheet's (KNOWN_SQUARE_WEDGE): a square end's line is square to the piece's own end segment, and the deck
-pieces are simplified apart, so the two sides of a cut can end on lines a degree or two apart (the same with
-BNE_ROADSHAPE off): their vertices on it are held to TOL_M plus that wedge, the angle to it. Ground roads, lane shifts
+A cut's end line is its part's line's normal there in both tiles (roads._cut_ends, "ct0" / "ct1": square to each
+piece's own end segment, the pieces simplified apart, the two sides ended up to 2.7 degrees apart, the same with
+BNE_ROADSHAPE off), so the two must be the same line (SQUARE_WEDGE: an end without one). Ground roads, lane shifts
 and widths are not in the fixture (None, as in test_roadshape_sheet, whose two-window tests cover them)."""
 import ast
 import hashlib
@@ -44,14 +44,23 @@ FOCUS_M = 400.0         # m (Chebyshev) round the place: the forks whose tiles a
 TOL_M = 1e-3            # m: positions and heights at a seam agree this closely
 CUT_REACH_M = 3.0       # m past a cut piece's half width its cut line is looked at
 PAD_M = 40.0            # m round a tile its pads are made (earthd's road tile)
-KNOWN_SQUARE_WEDGE = 4.0    # degrees two square ends of one cut may differ (seen up to 2.7: the module's docstring)
+SQUARE_WEDGE = 1e-4     # degrees two square ends of one cut may differ (2.7 before roads._cut_ends: the docstring)
 WEDGE_GRADE = 0.15      # the steepest deck grade (seamcheck): a wedge's xy offset times this is its height offset
-# Mismatches seen and reported, not fixed here (the probe changes no algorithm): (place, seam, text in it) -> why.
-PRE = "the same with BNE_ROADSHAPE off: not the sheet's"
+# Mismatches seen and reported, not fixed here: (place, seam, text in it) -> why.
+# (the same with BNE_ROADSHAPE off, not the sheet's: roadmesh.deck works out a slab's reach past its road along each
+# drawn chunk, which ends at the tile's edge: the median gaps' runs (_noses: a run's end at the cut taken for a gore
+# nose, _fill_short), and _smooth_reach spreading a fill along the chunk, see only the rows on their own tile's side of
+# the cut. The cut row's reach differs, 2 mm to 1.1 m; a nose bent one tile's parapet off the cut. The 2 mm to 2 cm ones
+# were inside the square ends' wedge tolerance until roads._cut_ends made both tiles' end lines one line.)
+PRE = "the same with BNE_ROADSHAPE off: the slab's reach worked out along each tile's own chunk (roadmesh.deck)"
 KNOWN = {
     ("fort_pitt", "seam y = 0", "does not go on: 790a71cc-18a8-4218-b310-0e92e1345be7 cut at (53.779, 0.000)"): PRE,
+    ("fort_pitt", "seam y = 0", "overlap): d5c10b2f-5465-482b-9805-50af4e5f0828~lanes000000000-763386846 cut at "
+                                "(37.539, 0.000)"): PRE,
     ("fort_pitt", "seam y = 256", "overlap): a23ee4b5-1abd-4132-a654-ca60cad5bd03 cut at (393.418, 256.000)"): PRE,
     ("i95_middle_branch", "seam x = -256", "overlap): 94c9f3ad-20ef-4680-b23c-190f7d0a7b0e cut at (-256.000, 34.903)"):
+        PRE,
+    ("i95_middle_branch", "seam x = 256", "overlap): 764d38a2-1cad-4b91-bfbe-a556fcd74ad1 cut at (256.000, -79.653)"):
         PRE,
 }
 
@@ -194,16 +203,17 @@ def cut_ends(tile, axis, at, lo, hi):
         n = np.asarray(c.get("n", ()), np.float64)
         if not c.get("deck") or len(n) < 2:
             continue
-        for e, k in ((0, "sk0"), (-1, "sk1")):
+        for e, ks in ((0, ("sk0", "ct0")), (-1, ("sk1", "ct1"))):
             p = n[e]
             if abs(p[axis] - at) > 1e-9 or not lo - 1e-9 <= p[1 - axis] <= hi + 1e-9:
                 continue
-            if c.get(k) is not None:
+            k = next((k for k in ks if c.get(k) is not None), None)     # (a skewed end's line, a cut's: _cut_ends)
+            if k is not None:
                 d = np.asarray(c[k], np.float64)[:2]
             else:
                 t = n[1, :2] - n[0, :2] if e == 0 else n[-1, :2] - n[-2, :2]
                 d = np.array([-t[1], t[0]])
-            out.append((c, p, d / math.hypot(*d), c.get(k) is not None))
+            out.append((c, p, d / math.hypot(*d), k is not None))
     return out
 
 
@@ -242,7 +252,7 @@ def seam_problems(name, ta, tb, axis, at, lo, hi):
                     bad.append((where, f"skewed end lines differ ({ang:.4f} degrees): {tag}"))
                     continue
                 wedge = 0.0
-            elif ang > KNOWN_SQUARE_WEDGE:
+            elif ang > SQUARE_WEDGE:
                 bad.append((where, f"square end lines {ang:.2f} degrees apart: {tag}"))
                 continue
             reach = float(c.get("w", 0.0)) / 2.0 + CUT_REACH_M

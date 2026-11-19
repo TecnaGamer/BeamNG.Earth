@@ -279,8 +279,9 @@ def ribbons(chunks, keep_none=False):
                 s0 = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(p[:, :2], axis=0).T))]
                 hw = (dnp.interp(s - s[0], s0, np.asarray(c["ws"], np.float64)) / 2)[:, None]
             n = _normals(xy) * hw
-            if c.get("sk0") is not None or c.get("sk1") is not None:     # (roadshape: a shaped deck's skewed ends)
-                left, right = skew_ends(xy, n, c.get("sk0"), c.get("sk1"))
+            if any(c.get(k) is not None for k in ("sk0", "sk1", "ct0", "ct1")):
+                # (roadshape: a shaped deck's skewed ends; a cut on the tile's edge: roads._cut_ends)
+                left, right = skew_ends(xy, n, c.get("sk0"), c.get("sk1"), c.get("ct0"), c.get("ct1"))
                 out[k] = (left, right, s / float(c.get("tl") or 10.0), c["m"], layer_of(c), z)
                 LAYERS_OF_MAT.setdefault(c["m"], set()).add(out[k][4])
                 continue
@@ -362,19 +363,21 @@ def clamp_to_end(mid, left, right, e, p, d):
             return
 
 
-def skew_ends(xy, nrm, sk0, sk1):
+def skew_ends(xy, nrm, sk0, sk1, ct0=None, ct1=None):
     """A fixed deck ribbon's edges (centres xy, miter normals nrm scaled to the half width) with each skewed end row
     along its end line (sk0 / sk1: unit, toward the deck's left; None: square), the rows it passes clamped to it
-    (clamp_to_end). (left, right)."""
+    (clamp_to_end). ct0 / ct1 (a cut on the tile's edge, roads._cut_ends): the end row along that line, the half width
+    either side of the centre (the deck's own cross-section there, the same in both tiles: not widened by the angle to
+    the piece's end segment as a skewed end is). (left, right)."""
     left, right = xy + nrm, xy - nrm
-    for e, d in ((0, sk0), (-1, sk1)):
+    for e, d, cut in ((0, sk0, None), (-1, sk1, None), (0, ct0, True), (-1, ct1, True)):
         if d is None:
             continue
         d = np.asarray(d, np.float64)
         hw = float(dnp.hypot(nrm[e, 0], nrm[e, 1]))
         if hw <= 1e-9:
             continue
-        c = float(d[0] * nrm[e, 0] + d[1] * nrm[e, 1]) / hw
+        c = 1.0 if cut else float(d[0] * nrm[e, 0] + d[1] * nrm[e, 1]) / hw
         if c < SKEW_MIN_COS:
             continue
         left[e] = xy[e] + d * (hw / c)
