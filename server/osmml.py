@@ -35,7 +35,7 @@ import numpy as np
 import fast
 import mapgeom
 
-NATIVE = 489                    # earthfast.VERSION with osm_over_ml
+NATIVE = 501                    # earthfast.VERSION with osm_over_ml and its small-outline rescue
 ON = os.environ.get("BNE_OSM_OVER_ML", "1").strip() not in ("0", "false", "off", "no")
 VERSION = 1                     # (in MapData.versions() while off; roads.FACTS_FORMAT / roadwidth.WALLS_VERSION bumped)
 OSM_DATASET = "OpenStreetMap"

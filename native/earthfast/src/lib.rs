@@ -6734,6 +6734,6 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // their scale, supports (k, 12)); skeleton_roof fails a skeleton with a node over its distance to the outline (an
     // 18 km gabled roof, report W545TFKJ); street_points finds a spot clear of every carriageway (report 5T7V9FNQ).
     // 495 is another branch's
-    m.add("VERSION", 496)?;
+    m.add("VERSION", 501)?;
     Ok(())
 }
