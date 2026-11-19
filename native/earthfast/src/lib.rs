@@ -40,6 +40,7 @@ mod dsm;
 mod vegmask;
 mod roadgeom;
 mod roadsmooth;
+mod roadshape;
 mod shore;
 mod photofill;
 mod ambience;
@@ -131,6 +132,7 @@ mod railindex;
 mod railnode;
 mod stationzone;
 mod seawater;
+mod subpoly;
 mod railunder;
 mod railspans;
 mod osmml;
@@ -5283,6 +5285,146 @@ fn mesh_warp<'py>(py: Python<'py>, img: PyReadonlyArray3<'py, u8>, qx: PyReadonl
     out.into_pyarray(py)
 }
 
+/// Whether the triangle tri (x, y corners) lies within tol of the terrain (grid: terrain_at's) on the plane through
+/// the terrain's heights at its corners: checked at the lattice nodes inside and where its sides cross the terrain's
+/// edges (follow_tris's test). False where a corner has no terrain.
+fn tri_fits(grid: &numpy::ndarray::ArrayView2<f64>, i0: i64, j0: i64, cell: f64, tri: &[[f64; 4]; 3], tol: f64) -> bool {
+    let ter = |x: f64, y: f64| terrain_at(grid, i0, j0, cell, x, y);
+    let z = [ter(tri[0][0], tri[0][1]), ter(tri[1][0], tri[1][1]), ter(tri[2][0], tri[2][1])];
+    let (x0, y0, x1, y1, x2, y2) = (tri[0][0], tri[0][1], tri[1][0], tri[1][1], tri[2][0], tri[2][1]);
+    let det = (x1 - x0) * (y2 - y0) - (x2 - x0) * (y1 - y0);
+    if !z.iter().all(|v| v.is_finite()) || det.abs() < 1e-12 { return false; }
+    let plane = |x: f64, y: f64| {
+        let s = ((x - x0) * (y2 - y0) - (x2 - x0) * (y - y0)) / det;
+        let t = ((x1 - x0) * (y - y0) - (x - x0) * (y1 - y0)) / det;
+        (z[0] + s * (z[1] - z[0]) + t * (z[2] - z[0]), s, t)
+    };
+    let off = |x: f64, y: f64| { let tz = ter(x, y); !tz.is_finite() || (tz - plane(x, y).0).abs() > tol };
+    let (lx, hx) = (x0.min(x1).min(x2), x0.max(x1).max(x2));
+    let (ly, hy) = (y0.min(y1).min(y2), y0.max(y1).max(y2));
+    for gi in ((lx / cell).ceil() as i64)..=((hx / cell).floor() as i64) {
+        for gj in ((ly / cell).ceil() as i64)..=((hy / cell).floor() as i64) {
+            let (x, y) = (gi as f64 * cell, gj as f64 * cell);
+            let (_, s, t) = plane(x, y);
+            if s >= -1e-9 && t >= -1e-9 && s + t <= 1.0 + 1e-9 && off(x, y) { return false; }
+        }
+    }
+    for e in 0..3 {
+        let (a, b) = (&tri[e], &tri[(e + 1) % 3]);
+        for &(nx, ny) in [(1.0, 0.0), (0.0, 1.0), (-1.0, 1.0)].iter() {
+            let (da, db) = (nx * a[0] + ny * a[1], nx * b[0] + ny * b[1]);
+            let (lo, hi) = (da.min(db), da.max(db));
+            for k in ((lo / cell).floor() as i64 + 1)..=((hi / cell).ceil() as i64 - 1) {
+                let line = k as f64 * cell;
+                if line <= lo || line >= hi { continue; }
+                let f = (line - da) / (db - da);
+                if off(a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f) { return false; }
+            }
+        }
+    }
+    true
+}
+
+/// follow_tris's input (points x y u v, triangles, source triangle), each triangle that is not within tol of the
+/// terrain (tri_fits) halved across its longest side (the first of equals), its halves in turn, at most `depth` levels
+/// and while that side is longer than REFINE_MIN_SIDE cells: the new corner is the side's middle ((a + b) / 2: the
+/// same bits from either triangle sharing the side). A triangle touching a terrain cell whose corners are more than
+/// step_m apart (or one off the grid) is left whole (follow_tris cuts it). Then every triangle with a side another
+/// one halved (sides known by their ends' positions to 0.1 mm, as follow_tris's raises) is split at that middle too,
+/// and its parts in turn, so no corner hangs on a neighbour's side: both meet in the same corners, and follow_tris
+/// gives a corner one height (the ground's there plus its raise) whichever triangle holds it (Codex review: halved
+/// next to whole, the edges parted vertically by up to the tolerance). depth 0: the input as it is. Deterministic
+/// (one thread, in order: a triangle's parts follow each other in the output; the side map is only looked up).
+/// Measured on the v2 overlays (Fells Point, 4 tiles, before the closing splits): a 2-cell floor left 19.7k edge
+/// triangles, 1 cell 14.9k, half a cell 14.1k; depth 8-16 the same.
+const REFINE_MIN_SIDE: f64 = 0.5;
+
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+fn follow_refine(pv: &numpy::ndarray::ArrayView2<f64>, uvv: &numpy::ndarray::ArrayView2<f64>,
+                 tv: &numpy::ndarray::ArrayView2<i64>, grid: &numpy::ndarray::ArrayView2<f64>, i0: i64, j0: i64,
+                 cell: f64, tol: f64, step_m: f64, depth: i64) -> (Vec<[f64; 4]>, Vec<[usize; 3]>, Vec<i64>) {
+    let mut p: Vec<[f64; 4]> = (0..pv.shape()[0]).map(|i| [pv[[i, 0]], pv[[i, 1]], uvv[[i, 0]], uvv[[i, 1]]]).collect();
+    let nt = tv.shape()[0];
+    let mut t: Vec<[usize; 3]> = Vec::with_capacity(nt);
+    let mut s: Vec<i64> = Vec::with_capacity(nt);
+    let cell = if cell > 0.0 { cell } else { 2.0 };
+    let stepped = |tri: &[[f64; 4]; 3]| -> bool {
+        if !step_m.is_finite() { return false; }
+        let (ny, nx) = (grid.shape()[0] as i64, grid.shape()[1] as i64);
+        let (lx, hx) = (tri[0][0].min(tri[1][0]).min(tri[2][0]), tri[0][0].max(tri[1][0]).max(tri[2][0]));
+        let (ly, hy) = (tri[0][1].min(tri[1][1]).min(tri[2][1]), tri[0][1].max(tri[1][1]).max(tri[2][1]));
+        for gi in ((lx / cell).floor() as i64)..=((hx / cell).floor() as i64) {
+            for gj in ((ly / cell).floor() as i64)..=((hy / cell).floor() as i64) {
+                let (li, lj) = (gi - i0, gj - j0);
+                if li < 0 || lj < 0 || li + 1 >= nx || lj + 1 >= ny { return true; }
+                let (li, lj) = (li as usize, lj as usize);
+                let c = [grid[[lj, li]], grid[[lj, li + 1]], grid[[lj + 1, li]], grid[[lj + 1, li + 1]]];
+                let (lo, hi) = c.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |a, &v| (a.0.min(v), a.1.max(v)));
+                if !(hi - lo <= step_m) { return true; }
+            }
+        }
+        false
+    };
+    let len2 = |a: &[f64; 4], b: &[f64; 4]| (a[0] - b[0]) * (a[0] - b[0]) + (a[1] - b[1]) * (a[1] - b[1]);
+    let key = |q: &[f64; 4]| ((q[0] * 1e4).round() as i64, (q[1] * 1e4).round() as i64);
+    let side = |a: &[f64; 4], b: &[f64; 4]| { let (ka, kb) = (key(a), key(b)); if ka <= kb { (ka, kb) } else { (kb, ka) } };
+    let mut halved: std::collections::HashSet<((i64, i64), (i64, i64))> = std::collections::HashSet::new();
+    let mut stack: Vec<([usize; 3], i64)> = Vec::new();
+    for ti in 0..nt {
+        let ix = [tv[[ti, 0]] as usize, tv[[ti, 1]] as usize, tv[[ti, 2]] as usize];
+        let corners = [p[ix[0]], p[ix[1]], p[ix[2]]];
+        if depth <= 0 || tri_fits(grid, i0, j0, cell, &corners, tol) || stepped(&corners) {
+            t.push(ix);
+            s.push(ti as i64);
+            continue;
+        }
+        stack.push((ix, 0));
+        while let Some((ix, d)) = stack.pop() {
+            let c = [p[ix[0]], p[ix[1]], p[ix[2]]];
+            let l = [len2(&c[0], &c[1]), len2(&c[1], &c[2]), len2(&c[2], &c[0])];
+            let e = if l[0] >= l[1] && l[0] >= l[2] { 0 } else if l[1] >= l[2] { 1 } else { 2 };
+            if d >= depth || l[e] <= REFINE_MIN_SIDE * REFINE_MIN_SIDE * cell * cell
+                || (d > 0 && tri_fits(grid, i0, j0, cell, &c, tol)) {
+                t.push(ix);
+                s.push(ti as i64);
+                continue;
+            }
+            let (a, b, o) = (ix[e], ix[(e + 1) % 3], ix[(e + 2) % 3]);
+            let (pa, pb) = (p[a], p[b]);
+            halved.insert(side(&pa, &pb));
+            p.push([(pa[0] + pb[0]) * 0.5, (pa[1] + pb[1]) * 0.5, (pa[2] + pb[2]) * 0.5, (pa[3] + pb[3]) * 0.5]);
+            let m = p.len() - 1;
+            // (counter-clockwise kept; the first half popped first)
+            stack.push(([m, b, o], d + 1));
+            stack.push(([a, m, o], d + 1));
+        }
+    }
+    if halved.is_empty() { return (p, t, s); }
+    // closing: a side halved anywhere is split in every triangle holding it, at its middle from this triangle's own
+    // ends (the same position bits, this triangle's uv); the parts checked again (a middle's own halves)
+    let (mut t2, mut s2) = (Vec::with_capacity(t.len()), Vec::with_capacity(t.len()));
+    let mut work: Vec<[usize; 3]> = Vec::new();
+    for (ix0, &si) in t.iter().zip(s.iter()) {
+        work.push(*ix0);
+        while let Some(ix) = work.pop() {
+            let hit = (0..3).find(|&e| halved.contains(&side(&p[ix[e]], &p[ix[(e + 1) % 3]])));
+            match hit {
+                None => { t2.push(ix); s2.push(si); }
+                Some(e) => {
+                    let (a, b, o) = (ix[e], ix[(e + 1) % 3], ix[(e + 2) % 3]);
+                    let (pa, pb) = (p[a], p[b]);
+                    p.push([(pa[0] + pb[0]) * 0.5, (pa[1] + pb[1]) * 0.5, (pa[2] + pb[2]) * 0.5,
+                            (pa[3] + pb[3]) * 0.5]);
+                    let m = p.len() - 1;
+                    work.push([m, b, o]);
+                    work.push([a, m, o]);
+                }
+            }
+        }
+    }
+    (p, t2, s2)
+}
+
 /// The terrain block's height at (x, y) from its samples grid[j, i] (lattice index i0 + i, j0 + j, every cell m): each
 /// square cut from its south-west corner to its north-east one, as the engine draws it. NaN outside the grid.
 #[inline]
@@ -5317,13 +5459,22 @@ fn terrain_at(grid: &numpy::ndarray::ArrayView2<f64>, i0: i64, j0: i64, cell: f6
 /// The step cap still wins, taken from the terrain cell holding each piece (a whole triangle over a step cell and
 /// another cell is cut along the terrain first, its pieces on its own plane): a flat neighbour neither holds a corner on its edge down nor lifts a
 /// step cell's piece up the wall. NaN (the default): as before.
+/// refine (511, with clear: the road revamp v2's overlays' cost): a triangle the tolerance would cut along the terrain
+/// (every lattice line and diagonal through it: ~20 pieces for a 2 x 5 m overlay triangle) is first halved across its
+/// longest side, at most `refine` times, until each half is within tol of the ground (follow_refine); the halves'
+/// new corners lie on the ground and go through the rest as input points (their raises keyed by position like the
+/// others'), and a half still over tol at the last level (or with its longest side under REFINE_MIN_SIDE cells) is
+/// cut along the terrain as before. A triangle touching a step cell is left to the cut. A neighbour that did not halve
+/// the side they share meets a half's corner within tol (as a whole triangle meets a cut one's pieces); every piece
+/// keeps its clearance. 0 (the default): as before.
 /// Returns (points (m, 3), uvs (m, 2), triangles (r, 3), source triangle (r,)); points not shared.
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
-#[pyo3(signature = (pts, uv, tris, cell, grid, i0, j0, tol, step_m=f64::INFINITY, max_up=f64::INFINITY, clear=f64::NAN))]
+#[pyo3(signature = (pts, uv, tris, cell, grid, i0, j0, tol, step_m=f64::INFINITY, max_up=f64::INFINITY, clear=f64::NAN,
+                    refine=0))]
 fn follow_tris<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, uv: PyReadonlyArray2<'py, f64>,
                     tris: PyReadonlyArray2<'py, i64>, cell: f64, grid: PyReadonlyArray2<'py, f64>, i0: i64, j0: i64,
-                    tol: f64, step_m: f64, max_up: f64, clear: f64)
+                    tol: f64, step_m: f64, max_up: f64, clear: f64, refine: i64)
                     -> (Bound<'py, PyArray2<f64>>, Bound<'py, PyArray2<f64>>, Bound<'py, PyArray2<i64>>,
                         Bound<'py, PyArray1<i64>>) {
     let (pv, uvv, tv, gv) = (pts.as_array(), uv.as_array(), tris.as_array(), grid.as_array());
@@ -5345,18 +5496,18 @@ fn follow_tris<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, uv: PyRead
         let mut cut: Vec<(usize, [usize; 3], [f64; 3], f64, f64)> = Vec::new();
         let mut keys: std::collections::HashMap<(i64, i64), usize> = std::collections::HashMap::new();
         let mut raise: Vec<f64> = Vec::new();
+        // the input (refine: with the halves of the triangles the tolerance would cut)
+        let (rp, rt, rs) = follow_refine(&pv, &uvv, &tv, &gv, i0, j0, cell, tol, step_m,
+                                         if clear.is_finite() { refine.max(0) } else { 0 });
         let mut key_of = |i: usize, raise: &mut Vec<f64>| -> usize {
-            let k = ((pv[[i, 0]] * 1e4).round() as i64, (pv[[i, 1]] * 1e4).round() as i64);
+            let k = ((rp[i][0] * 1e4).round() as i64, (rp[i][1] * 1e4).round() as i64);
             let n = keys.len();
             let id = *keys.entry(k).or_insert(n);
             if id == raise.len() { raise.push(0.0); }
             id
         };
-        for ti in 0..tv.shape()[0] {
-            let tri: Vec<V> = (0..3).map(|k| {
-                let i = tv[[ti, k]] as usize;
-                [pv[[i, 0]], pv[[i, 1]], uvv[[i, 0]], uvv[[i, 1]]]
-            }).collect();
+        for ti in 0..rt.len() {
+            let tri: Vec<V> = (0..3).map(|k| rp[rt[ti][k]]).collect();
             let z: Vec<f64> = tri.iter().map(|q| ter(q[0], q[1])).collect();
             // the plane through the corners: z = z0 + s (p1 - p0) + t (p2 - p0) in barycentric terms
             let (x0, y0, x1, y1, x2, y2) = (tri[0][0], tri[0][1], tri[1][0], tri[1][1], tri[2][0], tri[2][1]);
@@ -5449,8 +5600,8 @@ fn follow_tris<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, uv: PyRead
                 let base = p_out.len() as i64;
                 if clear.is_finite() {
                     let need = (up - clear).max(0.0);
-                    let vi = [key_of(tv[[ti, 0]] as usize, &mut raise), key_of(tv[[ti, 1]] as usize, &mut raise),
-                              key_of(tv[[ti, 2]] as usize, &mut raise)];
+                    let vi = [key_of(rt[ti][0], &mut raise), key_of(rt[ti][1], &mut raise),
+                              key_of(rt[ti][2], &mut raise)];
                     for &v in &vi { if need > raise[v] { raise[v] = need; } }
                     whole.push((base as usize, vi, [z[0], z[1], z[2]], [whole_cap; 3]));
                 }
@@ -5460,12 +5611,12 @@ fn follow_tris<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, uv: PyRead
                     uv_out.push([q[2], q[3]]);
                 }
                 t_out.push([base, base + 1, base + 2]);
-                src.push(ti as i64);
+                src.push(rs[ti]);
                 continue;
             }
             let corners = if clear.is_finite() {
-                let vi = [key_of(tv[[ti, 0]] as usize, &mut raise), key_of(tv[[ti, 1]] as usize, &mut raise),
-                          key_of(tv[[ti, 2]] as usize, &mut raise)];
+                let vi = [key_of(rt[ti][0], &mut raise), key_of(rt[ti][1], &mut raise),
+                          key_of(rt[ti][2], &mut raise)];
                 for &v in &vi { if need_cut > raise[v] { raise[v] = need_cut; } }
                 vi
             } else { [0usize; 3] };
@@ -5531,7 +5682,7 @@ fn follow_tris<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, uv: PyRead
                 }
                 for a in 1..(poly.len() as i64 - 1) {
                     t_out.push([base, base + a, base + a + 1]);
-                    src.push(ti as i64);
+                    src.push(rs[ti]);
                 }
             }
         }
@@ -6396,6 +6547,9 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(enu_rings, m)?)?;
     m.add_function(wrap_pyfunction!(enu_bounds, m)?)?;
     // (500: enu_rings / enu_bounds, mapgeom's many-ring conversions)
+    m.add_function(wrap_pyfunction!(subpoly::sub_polyline, m)?)?;
+    m.add_function(wrap_pyfunction!(subpoly::sub_polylines, m)?)?;
+    // (504: roads.sub_polyline and its many-ring batch)
     m.add_function(wrap_pyfunction!(reframe_segs, m)?)?;
     m.add_function(wrap_pyfunction!(bc7_encode, m)?)?;
     m.add_function(wrap_pyfunction!(inside_blockers, m)?)?;
@@ -6537,6 +6691,7 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(geocontent::cdae_shear, m)?)?;
     m.add_function(wrap_pyfunction!(geocontent::clip_segments_convex, m)?)?;
     m.add_function(wrap_pyfunction!(sidewalks::sidewalk_mesh, m)?)?;
+    m.add_function(wrap_pyfunction!(sidewalks::sidewalk_normals, m)?)?;
     m.add_function(wrap_pyfunction!(farcontent::bridge_slabs, m)?)?;
     m.add_function(wrap_pyfunction!(fartex::tile_warp, m)?)?;
     m.add_function(wrap_pyfunction!(fartex::core_tiles, m)?)?;
@@ -7136,16 +7291,15 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // centimetre key in a RailNode, the last of equal keys; RailNode.find, railprofile._find's lookup)
     m.add_function(wrap_pyfunction!(stationzone::station_zone, m)?)?;
     // 494: the full port's busstationmesh.zone loops and _clip_cell (stationzone::station_zone: a station's walkable
-    // ground, kerb walls and tactile strips from walk_field's lattice in one call). 493 is another branch's
+    // ground, kerb walls and tactile strips from walk_field's lattice in one call)
     m.add_function(wrap_pyfunction!(seawater::sea_cell_lookup, m)?)?;
     // 495: the full port's seacarve.SeaCarver.water cell lookup (seawater::sea_cell_lookup: the bilinear floor depth,
     // the nearest pixel's level and the near-sea test straight from a cell's block-stored raster)
     // 496: power_line_layout takes span_ground and span_clear (the spans' clearance over the ground: towers (t, 5) with
     // their scale, supports (k, 12)); skeleton_roof fails a skeleton with a node over its distance to the outline (an
     // 18 km gabled roof, report W545TFKJ); street_points finds a spot clear of every carriageway (report 5T7V9FNQ).
-    // 495 is another branch's
     // 500: enu_rings and enu_bounds (mapgeom.enu_rings / enu_bounds: many rings' frame conversion in one call, the
-    // per-ring enu_xy calls of railways.crossings, ChainView._todo and the like). 497-499 are other branches'
+    // per-ring enu_xy calls of railways.crossings, ChainView._todo and the like)
     m.add_function(wrap_pyfunction!(roadwear::surface_plan, m)?)?;
     // 499: road revamp v2 P1c (BNE_SURFACE_V2): roadwear::surface_plan (surface variation, tyre wear on the lane
     // centres, repair patch strips along a tile's roads) and follow_tris's `clear` (a whole overlay triangle raised
@@ -7172,13 +7326,27 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // only where its weight is not 0; each bin's segments met nearest first, so a point in a core stops within its
     // first pairs).
     // 498-502 are other branches'
-        // 504 (first numbered 373, then 404, 442, 471, 481, 487 and 489 on the vsolve branch): carriageway_profiles(...,
-    // coupling_penalty): soft couplings, one slack each at an exact L1 penalty (the one vertical solve's grade rows,
-    // server/vsolve.py); "le" couplings and one-sample couplings (b None)
-    // 505 (first 472, then 482, 488 and 490): corridor::plan_corridor_pairs (the one vertical solve's corridor rows:
-    // share_corridors' pairs, their geometry alone)
-    // 506: carriageway_profiles takes a chain grade of +inf and a K of 0: no grade or curvature rows (the one vertical
-    // solve's chains, vsolve.LOOSE_KERNEL)
-    m.add("VERSION", 506)?;
+    // 504: sub_polyline / sub_polylines (subpoly.rs: roads.sub_polyline, a feature's rings x level ranges in one call
+    // for _parts_by_level_new, _part_keys_new, railways._pieces_of, height_limit_lines). 502-503 are other branches'
+    // where the ground bulges inside it: no dip under its lift)
+    m.add_function(wrap_pyfunction!(structures::abutments::structure_abutments, m)?)?;
+    // 493: road revamp RS step S2b part 2a (structures::abutments::structure_abutments: one abutment height per
+    // structure end, grading's plans on BNE_DECK_STRUCT=abut)
+    m.add_function(wrap_pyfunction!(roadshape::decks::deck_shape, m)?)?;
+    m.add_function(wrap_pyfunction!(roadshape::decks::deck_simple, m)?)?;
+    // 498: road revamp v2 phase P1b (roadshape::decks: deck_shape, a simple structure's deck line from the road's
+    // smooth line with its skewed end lines and buried ends; deck_simple, which structure groups are simple;
+    // BNE_ROADSHAPE=decks)
+    // 505: try598's 501 (P1c, the Rust ports 494-500) with RS S2b part 2a (493) and v2 P1b (498) merged; 502-504 are
+    // other branches'
+    // 508: the full Rust port's r2a18 (sidewalks::sidewalk_normals, sidewalks._normals_2d); 506-507 are other branches'
+    // 512 (first numbered 373, then 404, 442, 471, 481, 487, 489 and 504 on the vsolve branch): carriageway_profiles(
+    // ..., coupling_penalty): soft couplings, one slack each at an exact L1 penalty (the one vertical solve's grade
+    // rows, server/vsolve.py); "le" couplings and one-sample couplings (b None)
+    // 513 (first 472, then 482, 488, 490 and 505): corridor::plan_corridor_pairs (the one vertical solve's corridor
+    // rows: share_corridors' pairs, their geometry alone)
+    // 514 (first 506): carriageway_profiles takes a chain grade of +inf and a K of 0: no grade or curvature rows (the
+    // one vertical solve's chains, vsolve._LOOSE)
+    m.add("VERSION", 514)?;
     Ok(())
 }

@@ -433,9 +433,16 @@ def keyed_env(k):
 # from either side (structures.HALF_MAX_M, half widths capped there), its cells budgeted apart from the chain's own
 # (roads.CHAIN_HALO_CELLS): other chains and window caps. 4 (S2b part 1): chain discovery as a fixpoint of the complete
 # local set (roads.BridgeProfiles._closure: other chains and window decisions), window solves publish only pieces of
-# capped chains, the JSON carries the joint heights (earthfast.structure_heights). BNE_LEVEL_SPACING 5: one clearance per crossing from its own road's class.
+# capped chains, the JSON carries the joint heights (earthfast.structure_heights). 5 (S2b part 2a): BNE_DECK_STRUCT=abut,
+# the plans give the decks of one structure side by side one abutment height per common end (grading._pin_struct_ends,
+# earthfast.structure_abutments; plancache.plans_format ".ds5"); shadow unchanged. BNE_LEVEL_SPACING 5: one clearance per crossing from its own road's class.
+# BNE_ROADSHAPE 1 (road revamp v2 P1b, decks): a simple structure's decks on the road's smooth line, skewed and buried
+# ends, banked with a banked road (roadshape.py; the plans keep a banked road's bank onto such a deck); BNE_DECK_SKEW
+# 1: its skew part (on with decks unless off). BNE_ROADSHAPE 2: which decks are simple is one rule for the deck and
+# the plans (roadshape.part_simple: bounded, from the map round the structure), never the chain's group.
 SWITCH_VERSIONS = {"BNE_LEVEL_SPACING": 5, "BNE_FAST_DECK_GROUND": 2, "BNE_UNDER_SPEED": 2, "BNE_FAST_GAP": 5,
-                   "BNE_RACEWAY_DIG": 2, "BNE_DIRT_BUMP": 2, "BNE_DIRT_BANK": 2, "BNE_DECK_STRUCT": 4}
+                   "BNE_RACEWAY_DIG": 2, "BNE_DIRT_BUMP": 2, "BNE_DIRT_BANK": 2, "BNE_DECK_STRUCT": 5,
+                   "BNE_ROADSHAPE": 2, "BNE_DECK_SKEW": 1}
 
 
 def keyed_value(k, v):

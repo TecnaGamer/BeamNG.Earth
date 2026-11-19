@@ -25,6 +25,9 @@ import numpy as np
 import dnp
 
 import cdae
+import fast
+
+_ef = fast.native(508, "sidewalks._normals_2d")
 
 # Sidewalks v2 (BNE_SIDEWALK_V2=on; the road revamp's P1d, the user 2026-11-19: "sidewalks have a much more dynamic and
 # flexible mesh than ours"; the second vanilla study: WCUSA, Italy, ECA, Utah, JRI). Off: every tile as before, byte
@@ -81,30 +84,18 @@ V_SLAB_IN, V_SLAB_OUT = 1.0 - 0.195, 1.0 - 0.005
 
 
 def _normals_2d(xy):
-    """Unit left normals at each point of a polyline (mitred like roads.offset_polyline, clamped)."""
-    d = np.diff(xy, axis=0)
-    L = dnp.hypot(d[:, 0], d[:, 1])
-    L[L == 0] = 1.0
-    t = d / L[:, None]
-    nseg = np.stack([-t[:, 1], t[:, 0]], axis=1)
-    n = np.empty((len(xy), 2))
-    n[0], n[-1] = nseg[0], nseg[-1]
-    if len(xy) > 2:
-        m = nseg[:-1] + nseg[1:]
-        ml = dnp.hypot(m[:, 0], m[:, 1])
-        ml[ml < 1e-9] = 1.0
-        m = m / ml[:, None]
-        cos = np.clip((m * nseg[1:]).sum(1), 0.5, 1.0)          # miter at most 2x
-        n[1:-1] = m / cos[:, None]
-    if len(xy) > 3 and float(dnp.hypot(*(xy[0] - xy[-1]))) < 1e-6:
-        # a closed loop (an island's curb band): its ends are one vertex, mitred across the seam like any other, else the two
-        # one-sided ends leave a wedge between them (a segment's turn wide at a wide band: the roundabout's apron, 2026-11-10)
-        m = nseg[-1] + nseg[0]
-        ml = float(dnp.hypot(*m))
-        if ml > 1e-9:
-            m = m / ml
-            n[0] = n[-1] = m / max(float(dnp.dot(m, nseg[0])), 0.5)
-    return n
+    """Unit left normals (n, 2) at each point of a polyline xy (n, 2) float64 (mitred like roads.offset_polyline,
+    clamped at 2x; a closed loop mitred across its seam: an island's curb band, else its two one-sided ends left a
+    wedge at a wide band, the roundabout's apron, 2026-11-10). earthfast.sidewalk_normals (508: the Python's numpy
+    steps one by one, 10k calls a cold Manhattan visit). Fewer than 2 points: IndexError, as the Python raised.
+    float64 only: another dtype is a TypeError (a contract change from the Python, which also took float32 / integer
+    points in their own arithmetic; every server caller passes float64, the r2a18 call check)."""
+    xy = np.asarray(xy)
+    if len(xy) < 2:
+        raise IndexError("index 0 is out of bounds for axis 0 with size 0")
+    if xy.dtype != np.float64:
+        raise TypeError(f"sidewalks._normals_2d: float64 points, not {xy.dtype}")
+    return _ef.sidewalk_normals(xy)
 
 
 normals_2d = _normals_2d

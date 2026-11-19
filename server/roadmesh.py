@@ -27,6 +27,7 @@ import cdae
 import heightmap
 import portals
 import shells
+import roadshape as _roadshape
 
 DRAPE_STEP = 2.0        # m between ribbon cross-sections (the physics block's lattice)
 # Metres above the physics ground, which grading.ROAD_LIFT raises under roads.
@@ -268,7 +269,9 @@ def ribbons(chunks, keep_none=False):
             continue
         if c.get("deck") and c.get("fixed"):
             corner_half = float(np.max(c.get("ws", c["w"]))) / 2 + PARAPET_W
-            xy, s, z = _resample(p, DRAPE_STEP, keep_vertices=True, corner_half=corner_half)
+            # (a shaped deck's rows are its own knots, already by the chord rule: roadshape, "kr")
+            xy, s, z = _resample(p, math.inf if c.get("kr") else DRAPE_STEP, keep_vertices=True,
+                                 corner_half=corner_half)
             if len(xy) < 2:
                 continue
             hw = float(c["w"]) / 2
@@ -276,6 +279,11 @@ def ribbons(chunks, keep_none=False):
                 s0 = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(p[:, :2], axis=0).T))]
                 hw = (dnp.interp(s - s[0], s0, np.asarray(c["ws"], np.float64)) / 2)[:, None]
             n = _normals(xy) * hw
+            if c.get("sk0") is not None or c.get("sk1") is not None:     # (roadshape: a shaped deck's skewed ends)
+                left, right = skew_ends(xy, n, c.get("sk0"), c.get("sk1"))
+                out[k] = (left, right, s / float(c.get("tl") or 10.0), c["m"], layer_of(c), z)
+                LAYERS_OF_MAT.setdefault(c["m"], set()).add(out[k][4])
+                continue
             out[k] = (xy + n, xy - n, s / float(c.get("tl") or 10.0), c["m"], layer_of(c), z)
             LAYERS_OF_MAT.setdefault(c["m"], set()).add(out[k][4])
             continue
@@ -296,6 +304,83 @@ def ribbons(chunks, keep_none=False):
                       Z[a:b] if c.get("fixed") else None)
             LAYERS_OF_MAT.setdefault(c["m"], set()).add(out[k][4])
     return out if keep_none else [r for r in out if r is not None]
+
+
+def _bank_rows(c, k):
+    """A shaped deck chunk's cross slope per ribbon row (roadshape "bk": one per node, its rows its nodes, "kr"), or
+    None."""
+    bk = c.get("bk")
+    if bk is None or len(bk) != k:
+        return None
+    return np.asarray(bk, np.float64)
+
+
+def tilted(left, right, z, bk, pts):
+    """Heights at points pts (k, 2) beside a fixed deck ribbon's rows (edges left / right (k, 2), centre heights z):
+    z + bk x each point's offset to the left of the row's centre line (bk: the cross slope, m per m toward the left;
+    grading.bank's sign: + raises the left). Pure."""
+    mid = (left + right) * 0.5
+    d = np.empty_like(mid)
+    if len(mid) > 2:
+        d[1:-1] = mid[2:] - mid[:-2]
+    d[0] = mid[1] - mid[0]
+    d[-1] = mid[-1] - mid[-2]
+    d = d / np.maximum(dnp.hypot(d[:, 0], d[:, 1]), 1e-9)[:, None]
+    off = d[:, 0] * (pts[:, 1] - mid[:, 1]) - d[:, 1] * (pts[:, 0] - mid[:, 0])
+    return z + bk * off
+
+
+SKEW_MIN_COS = 0.2      # an end line nearer than this (cos) to the ribbon's own direction is left square
+
+
+def clamp_to_end(mid, left, right, e, p, d):
+    """A ribbon's rows (centres mid, edges left / right (k, 2)) whose edge points lie past the end line through p
+    along d (unit), beyond the row at end e (0 or -1), moved along the ribbon onto it: a skewed end row pulled in past
+    them folded the ribbon there (roadshape, BNE_ROADSHAPE=decks). In place; stops at the first row inside."""
+    k = len(mid)
+    if k < 2:
+        return
+    inner = mid[1] if e == 0 else mid[-2]
+    side = d[0] * (inner[1] - p[1]) - d[1] * (inner[0] - p[0])
+    if abs(side) < 1e-9:
+        return
+    rows = range(1, k) if e == 0 else range(k - 2, -1, -1)
+    for i in rows:
+        moved = False
+        for edge in (left, right):
+            q = edge[i]
+            sq = d[0] * (q[1] - p[1]) - d[1] * (q[0] - p[0])
+            if sq * side >= 0:
+                continue
+            j0, j1 = max(0, i - 1), min(k - 1, i + 1)
+            t = mid[j1] - mid[j0]                       # (along the ribbon there)
+            den = d[0] * t[1] - d[1] * t[0]
+            if abs(den) > 1e-12:
+                edge[i] = q - t * (sq / den)
+            moved = True
+        if not moved:
+            return
+
+
+def skew_ends(xy, nrm, sk0, sk1):
+    """A fixed deck ribbon's edges (centres xy, miter normals nrm scaled to the half width) with each skewed end row
+    along its end line (sk0 / sk1: unit, toward the deck's left; None: square), the rows it passes clamped to it
+    (clamp_to_end). (left, right)."""
+    left, right = xy + nrm, xy - nrm
+    for e, d in ((0, sk0), (-1, sk1)):
+        if d is None:
+            continue
+        d = np.asarray(d, np.float64)
+        hw = float(dnp.hypot(nrm[e, 0], nrm[e, 1]))
+        if hw <= 1e-9:
+            continue
+        c = float(d[0] * nrm[e, 0] + d[1] * nrm[e, 1]) / hw
+        if c < SKEW_MIN_COS:
+            continue
+        left[e] = xy[e] + d * (hw / c)
+        right[e] = xy[e] - d * (hw / c)
+        clamp_to_end(xy, left, right, e, xy[e], d)
+    return left, right
 
 
 def _ribbon_v(s, c):
@@ -814,6 +899,13 @@ def _reach_past(c, box):
     if ends[1] is not None:
         n.append(ends[1][None])
     out = {**c, "n": np.concatenate(n).tolist()}
+    if c.get("bk") is not None:     # (roadshape: a banked deck's slope per node, the new nodes the ends')
+        bk = list(c["bk"])
+        out["bk"] = ([bk[0]] if ends[0] is not None else []) + bk + ([bk[-1]] if ends[1] is not None else [])
+    for e, got in ((0, ends[0]), (1, ends[1])):
+        if got is not None:         # (an end carried past the tile's edge is a cut, never the deck's skewed / buried end)
+            out.pop(f"sk{e}", None)
+            out.pop(f"ov{e}", None)
     if c.get("s0") is not None and c.get("s1") is not None:    # (a strip's distance along its road: the same reach)
         out["s0"] = float(c["s0"]) - (reach if ends[0] is not None else 0.0)
         out["s1"] = float(c["s1"]) + (reach if ends[1] is not None else 0.0)
@@ -930,10 +1022,19 @@ def road_tol(q):
     return min(FOLLOW_TOL, max(FOLLOW_TOL_MIN, 2.5 * float(q)))
 
 
-def follow_ground(P, UV, T, grid, i0, j0, tol=None, cell=GRID_M, step_m=None, clear=None):
+# The v2 overlays but the markings (SURFACE_V2: follow_ground's clear) halve a triangle the tolerance would cut, up to
+# FOLLOW_REFINE times, before cutting what is left along the terrain (earthfast.follow_tris refine): the cut made ~20
+# pieces of a 2 x 5 m overlay triangle on a crowned road or a bumpy verge (the edge blends 2.8-5.2x their triangles,
+# the surface variation 2.3x), where a few halves keep the same tolerance and clearance. The markings (crisp, opaque:
+# where a neighbour did not halve their shared side the two meet up to the tolerance apart) keep the cut.
+FOLLOW_REFINE = 10
+
+
+def follow_ground(P, UV, T, grid, i0, j0, tol=None, cell=GRID_M, step_m=None, clear=None, refine=0):
     """(points (m, 3), uvs, triangles, source triangle) of the triangles T over P (n, 2) on the drawn ground (grid:
     _height_grid), held down in the cells holding a step (FOLLOW_STEP_M, or step_m): earthfast.follow_tris. clear: a
-    triangle left whole is raised (per input point) so that the ground stands at most this over it (None: not)."""
+    triangle left whole is raised (per input point) so that the ground stands at most this over it (None: not);
+    refine (with clear): halve a triangle the tolerance would cut up to this many times first (FOLLOW_REFINE)."""
     import fast
     tol = FOLLOW_TOL if tol is None else tol
     P = np.ascontiguousarray(np.asarray(P, np.float64)[:, :2])
@@ -944,10 +1045,14 @@ def follow_ground(P, UV, T, grid, i0, j0, tol=None, cell=GRID_M, step_m=None, cl
         fast.require(52, "follow_tris")
         a, b, c, d = fast._ef.follow_tris(P, UV, T, float(cell), np.ascontiguousarray(grid, np.float64), int(i0),
                                           int(j0), float(tol), step, FOLLOW_MAX_UP)
-    else:
+    elif not refine:
         fast.require(499, "follow_tris clear")
         a, b, c, d = fast._ef.follow_tris(P, UV, T, float(cell), np.ascontiguousarray(grid, np.float64), int(i0),
                                           int(j0), float(tol), step, FOLLOW_MAX_UP, float(clear))
+    else:
+        fast.require(511, "follow_tris refine")
+        a, b, c, d = fast._ef.follow_tris(P, UV, T, float(cell), np.ascontiguousarray(grid, np.float64), int(i0),
+                                          int(j0), float(tol), step, FOLLOW_MAX_UP, float(clear), int(refine))
     return np.asarray(a), np.asarray(b), np.asarray(c), np.asarray(d)
 
 
@@ -1137,7 +1242,11 @@ def _overlays_on_decks(rbc):
         if r[5] is not None and r[4] == "base" and c.get("deck"):
             mid = (np.asarray(r[0]) + np.asarray(r[1])) * 0.5
             hw = dnp.hypot(*(np.asarray(r[0]) - np.asarray(r[1])).T) * 0.5
-            base.setdefault(c.get("fid"), []).append((np.c_[mid, np.asarray(r[5], np.float64)], hw))
+            entry = (np.c_[mid, np.asarray(r[5], np.float64)], hw)
+            bk = _bank_rows(c, len(mid))
+            if bk is not None:              # (roadshape: a banked deck's tilt, for the markings on it)
+                entry = entry + (bk,)
+            base.setdefault(c.get("fid"), []).append(entry)
     if not base:
         return rbc
     out = []
@@ -1152,7 +1261,7 @@ def _overlays_on_decks(rbc):
         bz = np.full(len(mid), np.nan)
         bd = np.full(len(mid), np.inf)
         own = c.get("fid") in base
-        for ln, hw in lines:
+        for ln, hw, *bkl in lines:
             if len(ln) < 2:
                 continue
             a, b = ln[:-1, :2], ln[1:, :2]
@@ -1168,6 +1277,10 @@ def _overlays_on_decks(rbc):
             seg_len = np.sqrt(L2[j])
             past = ((j == 0) & (t[k, j] * seg_len < -OVERLAY_DECK_END_M)) |                    ((j == len(ab) - 1) & ((t[k, j] - 1.0) * seg_len > OVERLAY_DECK_END_M))
             zz = ln[j, 2] + tc[k, j] * (ln[j + 1, 2] - ln[j, 2])
+            if bkl:                             # (on a banked deck: its tilt at the section's offset)
+                bk = bkl[0]
+                off = (ab[j, 0] * (mid[:, 1] - a[j, 1]) - ab[j, 1] * (mid[:, 0] - a[j, 0])) / seg_len
+                zz = zz + (bk[j] + tc[k, j] * (bk[j + 1] - bk[j])) * off
             wide = np.maximum(hw[j], hw[np.minimum(j + 1, len(hw) - 1)]) + OVERLAY_DECK_END_M
             better = (d[k, j] < bd) & ~past & (d[k, j] <= wide)      # (on the deck surface as drawn: within its half width)
             bz[better], bd[better] = zz[better], d[k, j][better]
@@ -1190,6 +1303,76 @@ def _overlays_on_decks(rbc):
         if b_ - a_ >= 2:
             out.append(((left[a_:b_], right[a_:b_], v[a_:b_], m, layer, bz[a_:b_]), c))
     return out
+
+
+def _weld_clamp(left, right, e):
+    """A ground ribbon's end row welded to a deck end (build): its other rows clamped to that end line
+    (clamp_to_end). In place."""
+    d = left[e] - right[e]
+    ln = float(dnp.hypot(d[0], d[1]))
+    if ln <= 1e-9:
+        return
+    clamp_to_end((left + right) * 0.5, left, right, e, (left[e] + right[e]) * 0.5, d / ln)
+
+
+def _f64_pairs(rs):
+    """Every ribbon of rs (left, right, ...) a float64 (k, 2) pair (its rows batched as one array: the same numbers)."""
+    return all(type(a) is np.ndarray and a.dtype == np.float64 and a.ndim == 2 and a.shape[1] == 2
+               for r in rs for a in (r[0], r[1]))
+
+
+def _to_points(ab, m):
+    """The distances (len(m), len(ab)) from each point of m to each of ab, a row each, in one call."""
+    return dnp.hypot(ab[None, :, 0] - m[:, None, 0], ab[None, :, 1] - m[:, None, 1])
+
+
+_TO_POINTS_MAX = 1 << 16                        # (distances a _to_points call takes at most: a bounded buffer)
+
+
+def _chunks(n, ab):
+    step = max(1, _TO_POINTS_MAX // max(len(ab), 1))
+    return ((a, min(a + step, n)) for a in range(0, n, step))
+
+
+def _end_rows(rs, ab):
+    """build's ground ribbons rs, one (first point's mid distances to the deck ends ab, last point's, first point's
+    width, last's) after another, in rs's order (a call per quantity for a chunk of ribbons); None without them or
+    with a pair not float64 (k, 2) (a call each)."""
+    if not rs or not _f64_pairs(rs):
+        return None
+
+    def rows():
+        for a, b in _chunks(len(rs), ab):
+            l0, r0 = np.array([r[0][0] for r in rs[a:b]]), np.array([r[1][0] for r in rs[a:b]])
+            l1, r1 = np.array([r[0][-1] for r in rs[a:b]]), np.array([r[1][-1] for r in rs[a:b]])
+            yield from zip(_to_points(ab, (l0 + r0) * 0.5), _to_points(ab, (l1 + r1) * 0.5),
+                           dnp.hypot(*(l0 - r0).T).tolist(), dnp.hypot(*(l1 - r1).T).tolist())
+    return rows()
+
+
+def _ground_runs(rs, ab):
+    """build's ground ribbons rs, one (lengths along the mid line from its start, its start's distance to the nearest
+    deck end of ab, its end's) after another in rs's order (a call per quantity for a chunk of ribbons); None as
+    _end_rows."""
+    if not rs or not _f64_pairs(rs):
+        return None
+
+    def runs():
+        for a, b in _chunks(len(rs), ab):
+            part = rs[a:b]
+            lens = [len(r[0]) for r in part]
+            mid = (np.concatenate([r[0] for r in part]) + np.concatenate([r[1] for r in part])) * 0.5
+            ends = np.cumsum(lens)
+            starts = ends - lens
+            inner = np.ones(len(mid), bool)     # (each ribbon's own legs only: none from one ribbon to the next)
+            inner[starts] = False
+            legs = np.flatnonzero(inner)
+            d = mid[legs] - mid[legs - 1]
+            seg = dnp.hypot(d[:, 0], d[:, 1])
+            d0, d1 = _to_points(ab, mid[starts]).min(1), _to_points(ab, mid[ends - 1]).min(1)
+            for i, (s0, s1, x0, x1) in enumerate(zip(starts.tolist(), ends.tolist(), d0, d1)):
+                yield np.r_[0.0, np.cumsum(seg[s0 - i:s1 - i - 1])], x0, x1
+    return runs()
 
 
 @profile_step('Road mesh generation')
@@ -1245,29 +1428,40 @@ def build(frame, chunks, elev, origin, lift=0.0, clip=None, follow=False, q=None
             return None
         return int(np.where(ok, d, np.inf).argmin())
     if len(deck_abuts):
+        # (every ground ribbon's end distances and widths in one call each where all are float64 pairs, the rows the
+        # ribbons' own numbers: a few calls per ribbon were 26k hypot calls in a cold Manhattan visit, 2026-11-19)
+        ends_of = _end_rows([r for r, _c in rbc if r[5] is None and len(r[0]) >= 2], ab_pts)
         new_rbc = []
         for r, c in rbc:
             if r[5] is None and len(r[0]) >= 2:
                 left, right, v, m, layer, fz = r
                 left, right = left.copy(), right.copy()
-                mid0 = (left[0] + right[0]) * 0.5
-                mid1 = (left[-1] + right[-1]) * 0.5
-                d0 = dnp.hypot(ab_pts[:, 0] - mid0[0], ab_pts[:, 1] - mid0[1])
-                d1 = dnp.hypot(ab_pts[:, 0] - mid1[0], ab_pts[:, 1] - mid1[1])
-                hit0 = _abut(d0, layer, float(dnp.hypot(*(left[0] - right[0]))))
-                hit1 = _abut(d1, layer, float(dnp.hypot(*(left[-1] - right[-1]))))
+                if ends_of is not None:
+                    d0, d1, w0, w1 = next(ends_of)
+                else:
+                    mid0 = (left[0] + right[0]) * 0.5
+                    mid1 = (left[-1] + right[-1]) * 0.5
+                    d0 = dnp.hypot(ab_pts[:, 0] - mid0[0], ab_pts[:, 1] - mid0[1])
+                    d1 = dnp.hypot(ab_pts[:, 0] - mid1[0], ab_pts[:, 1] - mid1[1])
+                    w0, w1 = float(dnp.hypot(*(left[0] - right[0]))), float(dnp.hypot(*(left[-1] - right[-1])))
+                hit0 = _abut(d0, layer, w0)
+                hit1 = _abut(d1, layer, w1)
                 if hit0 is not None:
                     _, l_ab, r_ab = deck_abuts[hit0][:3]
                     if (dnp.hypot(*(left[0] - l_ab)) + dnp.hypot(*(right[0] - r_ab))) <= (dnp.hypot(*(left[0] - r_ab)) + dnp.hypot(*(right[0] - l_ab))):
                         left[0], right[0] = l_ab, r_ab
                     else:
                         left[0], right[0] = r_ab, l_ab
+                    if _roadshape.DECKS:            # (a skewed deck end: the ground's rows it passes clamped to it)
+                        _weld_clamp(left, right, 0)
                 if hit1 is not None:
                     _, l_ab, r_ab = deck_abuts[hit1][:3]
                     if (dnp.hypot(*(left[-1] - l_ab)) + dnp.hypot(*(right[-1] - r_ab))) <= (dnp.hypot(*(left[-1] - r_ab)) + dnp.hypot(*(right[-1] - l_ab))):
                         left[-1], right[-1] = l_ab, r_ab
                     else:
                         left[-1], right[-1] = r_ab, l_ab
+                    if _roadshape.DECKS:
+                        _weld_clamp(left, right, -1)
                 new_rbc.append(((left, right, v, m, layer, fz), c))
             else:
                 new_rbc.append((r, c))
@@ -1299,15 +1493,20 @@ def build(frame, chunks, elev, origin, lift=0.0, clip=None, follow=False, q=None
     RW = []                                     # per triangle: a raceway's (no step cap: follow_ground, below)
     rpar = []                                   # per ribbon: _fade_uv's (feather share, tl, tu, slen, open ends, end fade)
     k0 = nverts = 0
+    # (the ground ribbons' lengths along and end distances to the deck ends, one call each as above)
+    runs = _ground_runs([r for r, _c in rbc if r[5] is None and len(r[0]) >= 2], ab_pts) if len(deck_abuts) else None
     for ri, ((left, right, v, m, layer, fz), c) in enumerate(rbc):
         k = len(left)
         if fz is None:
             cur_lift = np.full(k, lift)
             if len(deck_abuts) and k >= 2:
-                mid = (left + right) * 0.5
-                s_from_start = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(mid, axis=0).T))]
-                d0 = dnp.hypot(ab_pts[:, 0] - mid[0, 0], ab_pts[:, 1] - mid[0, 1]).min()
-                d1 = dnp.hypot(ab_pts[:, 0] - mid[-1, 0], ab_pts[:, 1] - mid[-1, 1]).min()
+                if runs is not None:
+                    s_from_start, d0, d1 = next(runs)
+                else:
+                    mid = (left + right) * 0.5
+                    s_from_start = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(mid, axis=0).T))]
+                    d0 = dnp.hypot(ab_pts[:, 0] - mid[0, 0], ab_pts[:, 1] - mid[0, 1]).min()
+                    d1 = dnp.hypot(ab_pts[:, 0] - mid[-1, 0], ab_pts[:, 1] - mid[-1, 1]).min()
                 if d0 <= 0.75:
                     w0 = np.clip(s_from_start / 4.0, 0.0, 1.0)
                     cur_lift = np.minimum(cur_lift, DECK_SKIN + (lift - DECK_SKIN) * w0)
@@ -1319,7 +1518,12 @@ def build(frame, chunks, elev, origin, lift=0.0, clip=None, follow=False, q=None
             z = u[k0:k0 + 2 * k] + LIFT[layer] + lift_2k
             k0 += 2 * k
         else:                                   # on a deck: over its opaque concrete top
-            z = np.concatenate((fz, fz)) + LIFT[layer] + DECK_SKIN
+            bk = _bank_rows(c, k)
+            if bk is not None:                  # (roadshape: a banked shaped deck, tilted across)
+                z = np.concatenate((tilted(left, right, fz, bk, left), tilted(left, right, fz, bk, right))) \
+                    + LIFT[layer] + DECK_SKIN
+            else:
+                z = np.concatenate((fz, fz)) + LIFT[layer] + DECK_SKIN
             # (a cluster's decks overlap all over its junction at one height: their skins, and the wear (patches, cracks:
             # roadwear) of one over another's skin, flickered as noise, Rautenweg in game 2026-11-12. Its plain asphalt
             # skins take the world's texture coordinates (below: where two lie on each other, one texture), its wear is
@@ -1449,14 +1653,17 @@ def build(frame, chunks, elev, origin, lift=0.0, clip=None, follow=False, q=None
                             continue
                         sel = m & (TL == L)
                         rest &= ~sel
-                        v2.append((sel, t, st, max(0.0, up - MARK_MIN_M)))
-                    v2.append((rest, t, st, None))
+                        v2.append((sel, t, st, max(0.0, up - MARK_MIN_M),
+                                   0 if float(L) == LIFT["mark"] + lift else FOLLOW_REFINE))
+                    v2.append((rest, t, st, None, 0))
                 batches = v2
-            for mask, tol, step, clear in batches:
+            else:
+                batches = [(m, t, st, None, 0) for m, t, st, _c in batches]
+            for mask, tol, step, clear, refine in batches:
                 if not mask.any():
                     continue
                 fP, fUV, fT, src = follow_ground(P[:, :2], UV, T[mask], grid, i0, j0, tol=tol, step_m=step,
-                                                 clear=clear)
+                                                 clear=clear, refine=refine)
                 lifts = TL[mask][src]
                 vl = np.zeros(len(fP))              # (a cut piece's points are its fan's: one lift each, set once)
                 for kk in range(3):
@@ -1818,6 +2025,9 @@ def deck(chunks, origin, piers=(), context=(), beams=(), ground=(), parapets=Non
         er = right - u * _smooth_reach(_reach(wide, xr), right)[:, None]
         zl = active_field.at(el) if active_field is not None else z
         zr = active_field.at(er) if active_field is not None else z
+        bk = _bank_rows(c, k) if active_field is None else None
+        if bk is not None:                      # (roadshape: a banked shaped deck, tilted across)
+            zl, zr = tilted(left, right, z, bk, el), tilted(left, right, z, bk, er)
         L = np.c_[el, zl] - origin
         R = np.c_[er, zr] - origin
         # (a chunk's "dd": its bridge's slab and girders, roads.deck_depth of its span, split 1.2 : 1.0 as the full deck)
@@ -1851,11 +2061,20 @@ def deck(chunks, origin, piers=(), context=(), beams=(), ground=(), parapets=Non
             gl, gr = mid + u * GIRDER_W / 2, mid - u * GIRDER_W / 2
             glz = active_field.at(gl) if active_field is not None else z
             grz = active_field.at(gr) if active_field is not None else z
+            if bk is not None:
+                glz, grz = tilted(left, right, z, bk, gl), tilted(left, right, z, bk, gr)
             GL, GR = np.c_[gl, glz - slab] - origin, np.c_[gr, grz - slab] - origin
             GLb, GRb = GL - [0, 0, gird], GR - [0, 0, gird]
             quads(GL, GLb, 0.0, 0.1, v, v, side, out_l)
             quads(GR, GRb, 0.0, 0.1, v, v, side, -out_l)
             quads(GLb, GRb, 0.0, 0.05, v, v, side, np.array([0.0, 0.0, -1.0]))
+        # (roadshape, BNE_ROADSHAPE=decks: a shaped deck's buried ends, a skirt over its approach)
+        for e in (0, -1):
+            ov = c.get("ov0" if e == 0 else "ov1")
+            if ov is not None and k >= 2:
+                for a, b, ua, ub, va, vb, up in skirt(el, er, z, dd, e, np.asarray(ov, np.float64),
+                                                       0.0 if bk is None else float(bk[e])):
+                    quads(a - origin, b - origin, ua, ub, va, vb, side, up)
         # a parapet on each free edge (parapet_runs: not where another deck goes on beside it, a ramp leaving, a
         # carriageway); a low curb under the rail where mapped guard rails put stock rail modules on it (guardrails)
         for parapet in parapets_by_deck.get(n, ()):
@@ -1918,6 +2137,53 @@ def deck(chunks, origin, piers=(), context=(), beams=(), ground=(), parapets=Non
     if junctions:
         pp, uu, tt = _shared(pp, uu, tt)
     return pp, tt, uu, mats, np.concatenate(M)
+
+
+def skirt(el, er, z, dd, e, ov, bank=0.0):
+    """A shaped deck's buried end (roadshape, BNE_ROADSHAPE=decks; the vanilla Italy bridge's deck overlapping its
+    approach, Hero Road's deckSweep end skirt): a solid over its approach's line ov (j, 2, from the deck's end) under the
+    slab's edges el / er (k, 2) at end e (0 or -1), its first row the slab's end row (skewed as it is), its top
+    roadshape.SKIRT_TOP_M under the deck's top z there and SKIRT_DIP_M at the far end along the deck's end grade,
+    its depth from the slab and girders' dd to a SKIRT_LIP_M lip, tilted across by the deck's end bank (m per m, left
+    up). [(row a, row b, ua, ub, va, vb, up)]: deck()'s
+    quads (absolute positions): top, sides, soffit and the far end. Pure."""
+    k = len(z)
+    o = np.asarray(ov, np.float64)[:, :2]
+    if len(o) < 2:
+        return []
+    s_ = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(o, axis=0).T))]
+    S = float(s_[-1])
+    if S <= 0.5:
+        return []
+    i1 = 1 if e == 0 else k - 2
+    run = float(dnp.hypot(*(((el[e] + er[e]) - (el[i1] + er[i1])) * 0.5)))
+    g = (float(z[e]) - float(z[i1])) / run if run > 1e-6 else 0.0      # (rising outward: +)
+    g = max(-_roadshape.SKIRT_GRADE_MAX, min(_roadshape.SKIRT_GRADE_MAX, g))
+    half = float(np.median(dnp.hypot(*(el - er).T))) / 2      # (the perpendicular half width: the bank's lever)
+    lat = el[e] - er[e]
+    lat = lat / max(float(dnp.hypot(lat[0], lat[1])), 1e-9)
+    # (its rows parallel to the slab's end row, skewed or square: square rows behind a skewed end ran back through
+    # the skirt's first strip, Codex review)
+    hl = float(dnp.hypot(*(el[e] - er[e]))) / 2
+    L, R = [el[e].copy()], [er[e].copy()]
+    for j in range(1, len(o)):
+        L.append(o[j] + lat * hl)
+        R.append(o[j] - lat * hl)
+    L, R = np.asarray(L), np.asarray(R)
+    f = s_ / S
+    top = float(z[e]) + g * s_ - (_roadshape.SKIRT_TOP_M + (_roadshape.SKIRT_DIP_M - _roadshape.SKIRT_TOP_M) * f)
+    depth = float(dd) + (_roadshape.SKIRT_LIP_M - float(dd)) * f
+    Lt, Rt = np.c_[L, top + bank * half], np.c_[R, top - bank * half]
+    Lb, Rb = np.c_[L, top + bank * half - depth], np.c_[R, top - bank * half - depth]
+    v = s_ / 4.0
+    out_l = np.c_[np.broadcast_to(lat, (len(o), 2)), np.zeros(len(o))]
+    up, down = np.array([0.0, 0.0, 1.0]), np.array([0.0, 0.0, -1.0])
+    tdir = o[-1] - o[-2]
+    tdir = np.r_[tdir / max(float(dnp.hypot(tdir[0], tdir[1])), 1e-9), 0.0]
+    cap_a = np.stack([Lt[-1], Rt[-1]])
+    cap_b = np.stack([Lb[-1], Rb[-1]])
+    return [(Lt, Rt, 0.0, 1.0, v, v, up), (Lt, Lb, 0.0, 0.1, v, v, out_l), (Rt, Rb, 0.0, 0.1, v, v, -out_l),
+            (Lb, Rb, 0.0, 1.0, v, v, down), (cap_a, cap_b, 0.0, 0.1, np.zeros(2), np.full(2, 0.1), tdir)]
 
 
 TRUSS_STEEL = "bne_truss_steel"     # painted steel (the stock metal_paint, grey: tunnel.materials.json) ...
@@ -2378,7 +2644,9 @@ def parapet_runs(chunks, context=(), _rb=None, ground=(), pads=()):
                         "line": (edge_run + inner_run) * 0.5,
                         "edge": edge_run,
                         "inner": inner_run,
-                        "z": junctions[c['fid']].at(edge_run) if c.get('fid') in junctions else z[sl],
+                        "z": junctions[c['fid']].at(edge_run) if c.get('fid') in junctions else
+                        (tilted(left, right, z, _bank_rows(c, k), edge)[sl] if _bank_rows(c, k) is not None
+                         else z[sl]),
                         "v": v[sl],
                         "out": u[sl] * sgn,
                         "nose": bool(nz[sl].any()),     # (a gore nose's: a full barrier, never the low curb)
@@ -2579,6 +2847,28 @@ def _retaining_walls(walls, origin, P, T, UV, M, nv):
             T.append(tri + nv)
             M.append(face_m)
             nv += 5
+        for run in w.get("skirt", ()):          # (the vanilla slopes: soil along its foot, roads.wall_skirts)
+            run = np.asarray(run, np.float64)   # (k, rows, 3): up the face, then out over the ground
+            m, nr = run.shape[0], run.shape[1]
+            if m < 2:
+                continue
+            mat = 6 if w.get("mountain") else 4
+            sc = SCREE_UV_M if mat == 6 else SOIL_UV_M
+            pts = run.transpose(1, 0, 2).reshape(-1, 3)      # (row-major: row r's k points at r * k)
+            P.append(pts - origin)
+            UV.append(pts[:, :2] / sc)                       # (world-planar, as the terrain's detail lies)
+            i = np.arange(m - 1)
+            tris = []
+            for r in range(nr - 1):
+                A, A1, B, B1 = nv + r * m + i, nv + r * m + i + 1, nv + (r + 1) * m + i, nv + (r + 1) * m + i + 1
+                tris += [np.stack([A, B, B1], 1), np.stack([A, B1, A1], 1)]
+            tri = np.concatenate(tris)
+            q = pts[tri - nv]
+            up = np.cross(q[:, 1] - q[:, 0], q[:, 2] - q[:, 0])[:, 2] < 0     # (facing up)
+            tri[up] = tri[up][:, ::-1]
+            T.append(tri)
+            M.append(mat)
+            nv += len(pts)
     return nv
 
 

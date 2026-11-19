@@ -52,8 +52,8 @@ are named from the other cell first (which cell's road is `a`), from the order t
 - `grademetrics._Segments.near` computes a query's candidates at once, with the same operations as one by one
   (`near_scalar` stays as the tests' reference). 3 times faster, the same answers to the bit, in the same order.
 - `_vsolve_context` keeps each cell's placed road rings (`_vsolve_cell_rings`, 64 cells).
-- **earthfast 506**: `carriageway_profiles` takes a chain grade of +inf and a K of 0, which mean no bound and no
-  rows. vsolve passes them on a 506 kernel (`vsolve._LOOSE`) and keeps the old bounds on an older one. These bounds
+- **earthfast 514**: `carriageway_profiles` takes a chain grade of +inf and a K of 0, which mean no bound and no
+  rows. vsolve passes them on a 514 kernel (`vsolve._LOOSE`) and keeps the old bounds on an older one. These bounds
   were never reached, so the optimum is the same: the 8 places' metrics identical, test_drivability 1281.4 (it was
   1281.5). The kernel's calls at Fells Point: 1.5 s -> 0.2-0.6 s each.
 - `_vsolve_caps` measures only the samples in a deck's box widened by the road's half width. A sample outside it is
@@ -77,7 +77,7 @@ Two runs each, alternated (off, on, off, on), nothing else on the machine:
 
 The solve on: 466 s against the passes' 247 s, 1.89 times (it was 2.55 times, about 2.9 against the passes'
 undisturbed 280 s). Along the way (one run each): 800 s, 584 s after the problem built once and the vectorized
-`near`, 530 s with the 506 kernel, 491 s with the caps' prefilter. The metrics (junctions, seams, grades, ground,
+`near`, 530 s with the 514 kernel, 491 s with the caps' prefilter. The metrics (junctions, seams, grades, ground,
 corridors) are the same in every one of them, place by place (`2026-11-19-vsolve-cpu.fin_on.json`: the second on run).
 
 ## What is left
