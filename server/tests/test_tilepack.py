@@ -10,6 +10,7 @@ import tempfile
 import threading
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import numpy as np
 from PIL import Image
@@ -116,6 +117,12 @@ class SwitchTest(unittest.TestCase):
             with open(os.path.join(d, "cdn", "cdn.json"), "w") as fh:
                 json.dump(doc, fh)
             self.assertEqual(list(cdn.chain(names, None, d)), want)
+
+    def test_s2_can_be_a_fallback_without_losing_other_sources(self):
+        names = ["naip", "usgs", "eox2023"]
+        doc = {"imagery": {"bngs2": {"enabled": True}}}
+        with patch.dict(os.environ, {"BNGE_S2_CDN": "fallback"}), patch.object(cdn, "switch", return_value=doc):
+            self.assertEqual(cdn.chain(names, None, None), ("naip", "usgs", "bngs2", "eox2023"))
 
     def test_max_zoom_by_switch(self):
         d = tempfile.mkdtemp(prefix="cdnsw_")
