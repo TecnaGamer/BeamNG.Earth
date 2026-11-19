@@ -112,6 +112,7 @@ mod railpiers;
 mod bdtopo;
 mod nycmassing;
 mod rooftop;
+mod bldmesh;
 mod specs;
 mod gsrows;
 mod places;
@@ -7349,6 +7350,9 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(roadshape::sheet::deck_sheets, m)?)?;
     // 514: v2 P2b (roadshape::sheet::deck_sheets: exits off bridges as one deck, BNE_ROADSHAPE=sheet)
     // 515: v2 P2c (deck_sheets: the union ends where the heights part when the edges' split fails the height tests)
-    m.add("VERSION", 515)?;
+    bldmesh::register(m)?;
+    // 519: the full Rust port's r2a19 (bldmesh: buildings.Mesh as BldMesh, the box-frame roofs, lids, cornices, boxes,
+    // stoops, signs and roof-clutter boxes of buildings.build); 516-518 are other branches'
+    m.add("VERSION", 519)?;
     Ok(())
 }
