@@ -111,6 +111,11 @@ class SheetDecks(unittest.TestCase):
             ch, tops, runs = drawn(parts, True, chain=pieces)
             # the ramp's road inside the union draws no slab of its own; its slab starts skewed on the split line
             ramp = [c for c in ch if str(c.get("fid")).startswith("c-ramp") and c.get("deck")]
+            if pieces:
+                # (a node's record reads the parts within SHEET_NODE_R_M of it alone: a ramp in pieces whose first
+                # piece never parts from the deck is no fork; chains stay off until they can be window-independent)
+                self.assertFalse(any(c.get("noslab") or c.get("sx") for c in ch))
+                continue
             self.assertTrue(any(c.get("noslab") for c in ramp))
             self.assertTrue(any(c.get("sk0") or c.get("sk1") for c in ramp if not c.get("noslab")))
             self.assertTrue(any(c.get("sx") for c in ch if str(c.get("fid")).startswith("b-through")))
@@ -136,6 +141,29 @@ class SheetDecks(unittest.TestCase):
                    ("deck", p[0])) for p in parts]
             got = structprobe.parapet_in_carriageway([(r["edge"], r["z"]) for r in runs], cw, 1e4)
             self.assertLess(got["m"], 0.5, (merge, got))
+
+    def test_two_windows(self):
+        """One fork seen by two tiles with different part lists (the forks' own window round each, the parts each
+        draws, a duplicate copy, an unrelated far deck): the same record, the same pinned ramp, the same union."""
+        p = scene()
+        far = ("z-far", MAIN, line((0, 500), (300, 500), 31, 30.0, 30.0), -76.6)
+        dup = (p[1][0], p[1][1], p[1][2].copy(), p[1][3])
+        old = roadshape.SHEET
+        roadshape.SHEET = True
+        try:
+            got = []
+            for drawn_, wide, box in (([p[1], p[2]], p + [far, dup], (0.0, -60.0, 120.0, 90.0)),
+                                      ([p[0], p[1], p[2]], [p[2], p[0], p[1]], (60.0, -60.0, 360.0, 90.0))):
+                recs, decks = roads._sheet_plan(drawn_, None, None, wide)
+                ramp = next(d for d in decks if d[0] == "c-ramp")[2]
+                thr = next(d for d in decks if d[0] == "b-through")[2]
+                allc = roads._deck_chunks(drawn_, box, sheet_wide=wide)
+                sx = sorted(str(c.get("sx")) for c in allc if c.get("fid") == "b-through" and c.get("sx"))
+                got.append((len(recs), ramp.tolist(), thr.tolist(), sx[:1]))
+        finally:
+            roadshape.SHEET = old
+        self.assertEqual(got[0][0], 1)
+        self.assertEqual(got[0], got[1])
 
     def test_before(self):
         """The same scene without the switch: the two slabs overlap at the fork (what P2b removes)."""

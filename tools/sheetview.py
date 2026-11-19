@@ -50,8 +50,8 @@ def main():
     seen = {}
     orig = roadshape.deck_sheets
 
-    def sheets(parts):                      # (the P2b records the tiles made, printed once each)
-        recs, dz = orig(parts)
+    def sheets(parts, **kw):                # (the P2b records the tiles made, printed once each)
+        recs, dz = orig(parts, **kw)
         for r in recs:
             k = (str(parts[r["t"]][0])[:10], str(parts[r["b"]][0])[:10], len(r["cover"]))
             seen.setdefault(k, (r["side"], round(r["s_b"], 1), round(r["gap"], 2), round(r["dz"], 2), r["parted"],

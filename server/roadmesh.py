@@ -2023,8 +2023,8 @@ def deck(chunks, origin, piers=(), context=(), beams=(), ground=(), parapets=Non
         covered[n] = (covered[n][0] | cl, covered[n][1] | cr_)
         # the slab's edges, past the road's (to the middle of a median beside another deck; to a point at a gore nose),
         # changing no faster than REACH_SLOPE along it; over an exit's union (P2b) to its outer edge
-        el = left + u * np.maximum(_smooth_reach(_reach(wide, xl), left), sl)[:, None]
-        er = right - u * np.maximum(_smooth_reach(_reach(wide, xr), right), sr)[:, None]
+        el = left + u * _sheet_max(_smooth_reach(_reach(wide, xl), left), sl)[:, None]
+        er = right - u * _sheet_max(_smooth_reach(_reach(wide, xr), right), sr)[:, None]
         zl = active_field.at(el) if active_field is not None else z
         zr = active_field.at(er) if active_field is not None else z
         bk = _bank_rows(c, k) if active_field is None else None
@@ -2411,6 +2411,13 @@ def _sheet_reach(c, left, right):
     return sl, sr
 
 
+def _sheet_max(reach, s):
+    """reach where s (an exit union's reach, _sheet_reach) is 0, else the larger: a negative reach (a median barrier
+    inside two overlapping decks, _opposite) is kept as it is off the unions (np.maximum with 0 lifted it to 0: every
+    such slab changed with the switch off, SD Fwy's overlap 2,553 -> 3,307 m2)."""
+    return np.where(s > 0.0, np.maximum(reach, s), reach)
+
+
 def _sheet_medians(med, sl, sr):
     """_median_gaps' row of a ribbon with no median where its slab reaches over an exit's union (P2b: the union's
     outer edge is the slab's, its parapet on it)."""
@@ -2675,8 +2682,8 @@ def parapet_runs(chunks, context=(), _rb=None, ground=(), pads=()):
             import roads as _roads
             covered[n] = (covered[n][0] | _roads.pad_inside(pads, left, z=z),
                           covered[n][1] | _roads.pad_inside(pads, right, z=z))
-        el = left + u * np.maximum(_smooth_reach(_reach(wide, xl), left), sl)[:, None]
-        er = right - u * np.maximum(_smooth_reach(_reach(wide, xr), right), sr)[:, None]
+        el = left + u * _sheet_max(_smooth_reach(_reach(wide, xl), left), sl)[:, None]
+        er = right - u * _sheet_max(_smooth_reach(_reach(wide, xr), right), sr)[:, None]
         k = len(z)
         for sgn, edge, inner, cov, nz in ((1, el, left, covered[n][0], nose[0]),
                                           (-1, er, right, covered[n][1], nose[1])):

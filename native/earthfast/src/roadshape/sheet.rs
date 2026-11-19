@@ -28,7 +28,9 @@
 //!   server for now (roadshape.SHEET_CHAIN): a tile's deck parts are those round it, so a chain's far pieces can be
 //!   missing in one tile and present in the next (window dependence: two tiles drawing one fork two ways). With
 //!   CHAIN 0 a record is a function of its two parts alone, whole in every tile that holds either.
-//! - NO RECORD where the two disagree in height by more than DZ_MAX anywhere in the union (a flyover over the deck, a
+//! - NODE (optional): only the branch ends at that point (roads._sheet_records: one call per fork node on the parts
+//!   within SHEET_NODE_R_M of it, the record a function of those alone, whichever tile asks).
+//! - NO RECORD where the branch never parts from the through deck (it lies inside it to its end); nor where the two disagree in height by more than DZ_MAX anywhere in the union (a flyover over the deck, a
 //!   profile fault: one slab would put the ramp on the wrong level; P3's joint profile), nor where the blend back would
 //!   be steeper than PIN_GRADE on average (|dz at the split| > PIN_GRADE x the blend's length: a branch ending inside
 //!   the union at another height keeps its own heights and deck).
@@ -378,7 +380,9 @@ fn fork_of(parts: &[Part], b: usize, e: usize, prm: &[f64]) -> Option<Rec> {
         Some((s2, g2)) if s2 > s_le && g2 > g_le => (s_le + (s2 - s_le) * (prm[P_SPLIT_GAP] - g_le) / (g2 - g_le), true),
         _ => (s_le, false),
     };
-    if s_split < prm[P_MIN_UNION] || side == 0.0 { return None; }
+    // (a branch that never parts from the through deck lies inside it to its end: an overlay or a mapping fault, not
+    // an exit; its own deck and heights stay. SD Fwy's I-605 connector: 2,553 -> 3,307 m2 overlap with it)
+    if !parted || s_split < prm[P_MIN_UNION] || side == 0.0 { return None; }
     // Lambda: the through chain's normal at the foot of the branch's centre there, crossed with the branch's line
     let (_d, s_t, _off, nrm) = lt.project(lb.at(s_split));
     let pt_ = lt.at(s_t);
@@ -437,14 +441,14 @@ fn fork_of(parts: &[Part], b: usize, e: usize, prm: &[f64]) -> Option<Rec> {
 #[allow(clippy::too_many_arguments)]
 pub fn deck_sheets<'py>(py: Python<'py>, xy: PyReadonlyArray2<'py, f64>, z: PyReadonlyArray1<'py, f64>,
                         hw: PyReadonlyArray1<'py, f64>, off: Vec<i64>, tdir: Vec<i64>, rank: Vec<i64>,
-                        params: PyReadonlyArray1<'py, f64>)
+                        params: PyReadonlyArray1<'py, f64>, node: Vec<f64>)
                         -> PyResult<(Vec<i64>, Vec<f64>, Vec<i64>, Vec<f64>, Vec<f64>)> {
     let (xy, z, hw, prm) = (xy.as_array(), z.as_array(), hw.as_array(), params.as_array().to_vec());
     let np = off.len().saturating_sub(1);
     let n = xy.nrows();
     if xy.ncols() != 2 || z.len() != n || hw.len() != n || prm.len() != NPARAMS || tdir.len() != np
         || rank.len() != np || off.first().copied().unwrap_or(0) != 0 || off.windows(2).any(|w| w[1] < w[0])
-        || off.last().map(|&v| v as usize != n).unwrap_or(n != 0) {
+        || off.last().map(|&v| v as usize != n).unwrap_or(n != 0) || !(node.is_empty() || node.len() == 2) {
         return Err(PyValueError::new_err("deck_sheets: bad shapes"));
     }
     let mut parts = Vec::with_capacity(np);
@@ -460,6 +464,10 @@ pub fn deck_sheets<'py>(py: Python<'py>, xy: PyReadonlyArray2<'py, f64>, z: PyRe
         let mut out: Vec<Rec> = Vec::new();
         for b in 0..np {
             for e in 0..2 {
+                if node.len() == 2 && !parts[b].line.p.is_empty() {
+                    let q = if e == 0 { parts[b].line.p[0] } else { parts[b].line.p[parts[b].line.p.len() - 1] };
+                    if norm(sub(q, [node[0], node[1]])) > 1e-6 { continue; }     // (only the branch ends at node)
+                }
                 if let Some(r) = fork_of(&parts, b, e, &prm) { out.push(r); }
             }
         }
@@ -561,11 +569,11 @@ mod tests {
     #[test]
     fn merge_into_the_middle_of_a_through_part() {
         // T west to east through the node at x 100; B comes in from the south-west and ends at the node
-        let t = part(vec![[0.0, 0.0], [400.0, 0.0]], 10.0, 7.0, 1, 0);
+        let t = part(vec![[-300.0, 0.0], [400.0, 0.0]], 10.0, 7.0, 1, 0);
         let b = part(vec![[-150.0, -15.0], [100.0, 0.0]], 10.0, 3.5, 1, 1);
         let parts = vec![t, b];
         let r = fork_of(&parts, 1, 1, &prm()).expect("a merge");
         assert_eq!((r.0).2, -1);            // B on T's right
-        assert!(r.1[2] < 100.0 && r.1[2] > 0.0, "sT {}", r.1[2]);
+        assert!(r.1[2] < 400.0 && r.1[2] > 150.0, "sT {}", r.1[2]);
     }
 }

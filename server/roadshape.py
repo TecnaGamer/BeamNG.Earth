@@ -696,9 +696,11 @@ PIN_BLEND_M = 120.0         # m after the split the branch's heights come back t
 PIN_SHARE = 0.5             # ... or this share of the rest of the branch (its far end keeps its height)
 SHEET_DZ_MAX = 3.0          # m: the two apart in height by more anywhere in the union: no union (a flyover over it)
 PIN_GRADE = 0.03            # the blend back at most this steep on average (else no union: no room to blend)
-SHEET_WINDOW_M = SHEET_REACH_M + PIN_BLEND_M + 40.0    # m round a tile its deck parts are read from (roads.
-                            # _bridge_chunks): a tile drawing any row of a union or of its branch's blend (at most
-                            # REACH + BLEND from the node, 40 m beside it) holds the node's every part, the candidates
+SHEET_NODE_R_M = 20.0       # m: a fork node's records come from the deck parts passing this near it alone
+SHEET_WINDOW_M = SHEET_REACH_M + PIN_BLEND_M + 40.0 + SHEET_NODE_R_M     # m round a tile the forks' parts are read
+                            # from (roads._sheet_window_parts, apart from the parts drawn): a tile drawing any row of
+                            # a union or of its branch's blend (at most REACH + BLEND from the node, 40 m beside it)
+                            # holds every part within SHEET_NODE_R_M of that node: one record, whichever tile
 SHEET_CHAIN = 0             # 1: each arm through its plain continuations (pieces end to end). Off: a tile's parts are
                             # those round it, a chain's far pieces missing in one tile and present in the next (one
                             # fork drawn two ways); the two parts alone are whole in every tile that holds either
@@ -707,7 +709,7 @@ SHEET_PARAMS = np.array([SHEET_JOIN_M, dmath.cos(math.radians(SHEET_FORK_DEG)), 
                          PIN_BLEND_M, PIN_SHARE, SHEET_DZ_MAX, PIN_GRADE, SHEET_CHAIN], np.float64)
 
 
-def deck_sheets(parts):
+def deck_sheets(parts, node=None):
     """The P2b records of deck parts [(fid, spec, pts (k, 3+) as drawn, half width per point (k,) or one)] (any order:
     sorted here by id and first point, so the answer never depends on the caller's order): ([record], dz) with dz per
     part (its points' height changes: the pins) and per record a dict: t, b (indices into parts: the through and the
@@ -736,7 +738,8 @@ def deck_sheets(parts):
         rank.append(1 if getattr(spec, "link", False) else 0)
     ri, rf, ci, cf, dz = fast._ef.deck_sheets(np.ascontiguousarray(np.concatenate(xy)),
                                               np.ascontiguousarray(np.concatenate(z)),
-                                              np.ascontiguousarray(np.concatenate(hw)), off, tdir, rank, SHEET_PARAMS)
+                                              np.ascontiguousarray(np.concatenate(hw)), off, tdir, rank, SHEET_PARAMS,
+                                              [] if node is None else [float(node[0]), float(node[1])])
     ri = np.asarray(ri, np.int64).reshape(-1, 4)
     rf = np.asarray(rf, np.float64).reshape(len(ri), 13)
     ci = np.asarray(ci, np.int64).reshape(-1, 4)
