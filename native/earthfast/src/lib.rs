@@ -40,6 +40,7 @@ mod dsm;
 mod vegmask;
 mod roadgeom;
 mod roadsmooth;
+mod roadshape;
 mod shore;
 mod photofill;
 mod ambience;
@@ -6729,7 +6730,11 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(structures::abutments::structure_abutments, m)?)?;
     // 493: road revamp RS step S2b part 2a (structures::abutments::structure_abutments: one abutment height per
     // structure end, grading's plans on BNE_DECK_STRUCT=abut)
-    // 494 covers 493 (both merged)
-    m.add("VERSION", 494)?;
+    m.add_function(wrap_pyfunction!(roadshape::decks::deck_shape, m)?)?;
+    m.add_function(wrap_pyfunction!(roadshape::decks::deck_simple, m)?)?;
+    // 498: road revamp v2 phase P1b (roadshape::decks: deck_shape, a simple structure's deck line from the road's
+    // smooth line with its skewed end lines and buried ends; deck_simple, which structure groups are simple;
+    // BNE_ROADSHAPE=decks). 493 and 494 merged here; 495-497 are other branches'
+    m.add("VERSION", 498)?;
     Ok(())
 }
