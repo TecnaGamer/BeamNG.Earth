@@ -12939,9 +12939,11 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
         import euguardrails
         import poleprofiles
         detailed_signs = euguardrails.enabled() and poleprofiles.kit_enabled(pole_profile)
+    rail_beds = ()                  # (the tracks' beds round the tile: nothing guessed stands on them, furniture.place)
     if props is not None and walks is not None:     # street lights and utility poles (furniture.py)
         # (the speed-limit signs are the sign tiles' since 2026-10-28: speedsigns.py)
         import railxing
+        rail_beds = railxing.rail_obstacles(frame, cells, own_box)
         if sign_obstacles is not None:
             sign_obstacles.ground = ground
         props.extend(furniture.place(roads, walks, own_box, wires=wires, town=bool(town), left_hand=left_hand,
@@ -12950,7 +12952,7 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
                                      priority=priority, ground=ground, development=development,
                                      pole_profile=pole_profile, pole_frame=frame, sign_obstacles=sign_obstacles,
                                      defer_gore=detailed_signs, mapped_poles=mapped_poles, mapped_lamps=mapped_lamps,
-                                     obstacles=railxing.rail_obstacles(frame, cells, own_box) if railxing.ENABLED else (),
+                                     obstacles=rail_beds,
                                      de_on=de_on, de_ctx=de_ctx, de_ctl=de_ctl,
                                      lighting={fid: str(f.attrs["osm_lit"][i]).strip().lower()
                                                for fid, (f, i, _sp) in seen.items() if "osm_lit" in f.attrs}))
@@ -13058,6 +13060,7 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
     if detailed_signs:
         def finish_roadside(guardrail_rows, extra_pavement=()):
             import frgore
+            import furniture
             import frlocaldirections
             import signmesh
 
@@ -13065,10 +13068,12 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
             if walks is not None:
                 import delineators
 
-                props.extend(frgore.place(frame, roads, own_box, country_at, ground, sign_decks,
-                                         guardrails=guardrail_rows, obstacles=sign_obstacles))
-                props.extend(delineators.motorway_verges(roads, own_box, country_at,
-                                                         guardrail_rows, [*sign_decks, *extra_pavement]))
+                # (deferred: off the tracks' beds as furniture.place's own rows; Codex's review)
+                props.extend(furniture.off_rail_beds(frgore.place(frame, roads, own_box, country_at, ground, sign_decks,
+                                                                  guardrails=guardrail_rows, obstacles=sign_obstacles),
+                                                     rail_beds))
+                props.extend(furniture.off_rail_beds(delineators.motorway_verges(
+                    roads, own_box, country_at, guardrail_rows, [*sign_decks, *extra_pavement]), rail_beds))
             if signs is not None:
                 mesh = sign_mesh if sign_mesh is not None else signmesh.Mesh((x0, y0, 0.))
                 added = frlocaldirections.add(

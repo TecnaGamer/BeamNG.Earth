@@ -6730,6 +6730,10 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(seawater::sea_cell_lookup, m)?)?;
     // 495: the full port's seacarve.SeaCarver.water cell lookup (seawater::sea_cell_lookup: the bilinear floor depth,
     // the nearest pixel's level and the near-sea test straight from a cell's block-stored raster)
-    m.add("VERSION", 495)?;
+    // 496: power_line_layout takes span_ground and span_clear (the spans' clearance over the ground: towers (t, 5) with
+    // their scale, supports (k, 12)); skeleton_roof fails a skeleton with a node over its distance to the outline (an
+    // 18 km gabled roof, report W545TFKJ); street_points finds a spot clear of every carriageway (report 5T7V9FNQ).
+    // 495 is another branch's
+    m.add("VERSION", 496)?;
     Ok(())
 }

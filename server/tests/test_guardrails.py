@@ -42,6 +42,21 @@ class GuardrailTagTest(unittest.TestCase):
             self.assertEqual(guardrails._barrier_kind(f, 0), tag or cls)
             self.assertFalse(guardrails._is_guardrail(f, 0))
 
+    def test_a_concrete_guard_rail_is_a_jersey_barrier(self):
+        # I-81 at Bristol VA (report JRHVD9QF): barrier=guard_rail + material=concrete + two_sided=yes down the median,
+        # a concrete wall in the street photos
+        for cls in ("guard_rail", "barrier"):
+            for mat in ("concrete", "Concrete", "reinforced_concrete"):
+                f = FakeFeatures({"class": np.array([cls]), "subtype": np.array(["barrier"]),
+                                  "tags": np.array([json.dumps({"barrier": "guard_rail", "material": mat,
+                                                                "two_sided": "yes"})])})
+                self.assertEqual(guardrails._barrier_kind(f, 0), "jersey_barrier", (cls, mat))
+                self.assertFalse(guardrails._is_guardrail(f, 0))
+        for mat in ("steel", "metal", "wood", ""):
+            f = FakeFeatures({"class": np.array(["guard_rail"]), "subtype": np.array(["barrier"]),
+                              "tags": np.array([json.dumps({"barrier": "guard_rail", "material": mat})])})
+            self.assertEqual(guardrails._barrier_kind(f, 0), "guard_rail", mat)
+
     def test_invalid_tags_are_ignored(self):
         f = FakeFeatures({"class": np.array(["barrier"]), "subtype": np.array(["barrier"]),
                           "tags": np.array(["not json"])})
@@ -118,6 +133,14 @@ class GuardrailForestTest(unittest.TestCase):
             along = c1 if group == guardrails.G_JERSEY else c0         # (the jersey model runs along its y)
             self.assertAlmostEqual(abs(float(along[0])), 1.0, places=6)
             self.assertAlmostEqual(r[6], guardrails.HEIGHTS[group])
+
+    def test_a_concrete_guard_rail_draws_jersey_rows(self):
+        # (report JRHVD9QF: the median's concrete wall, not Italy's steel rail)
+        feats = self.features("guard_rail", tags={"barrier": "guard_rail", "material": "concrete", "two_sided": "yes"})
+        flat = lambda la, lo: np.zeros_like(np.asarray(la, np.float64))
+        rows = guardrails.forest_rows(self.frame, lambda key: feats, (0.0, 0.0, 256.0, 256.0), flat)
+        self.assertGreater(len(rows), 20)
+        self.assertEqual({int(r[0]) for r in rows}, {guardrails.G_JERSEY})
 
     def test_two_sided_osm_tag(self):
         feats = self.features("guard_rail", tags={"two_sided": "yes"})
