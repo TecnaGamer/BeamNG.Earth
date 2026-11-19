@@ -21,7 +21,8 @@ M.TICK_S = 0.25             -- s between two checks while a line is driven
 M.SKIP_AHEAD = 3            -- at one of this many later stops: the ones before it were missed
 M.ROUTE_AHEAD = 8           -- stops after the next the GPS routes through: 9 and the bus's place, Valhalla's
                             -- most (routing.VALHALLA_MAX_LOCATIONS: "Exceeded max locations: 10", 2026-11-17)
-M.REQUEST_TIMEOUT_S = 90    -- s: a lookup with no answer by then is given up (the server's first Västtrafik wait is 45 s)
+M.REQUEST_TIMEOUT_S = 200   -- s: allow the first GTFS wait (45 s) and both Overpass endpoints (4 s connect + 65 s
+                            -- read each, plus throttling); a valid fallback answer must not arrive after we give up
 M.BUSES = { citybus = true,  -- vehicles with a bus controller (signs, doors): the stock Wentward DT40L
   capsule = true }           -- the Cycjos Capsule (repo mod), its own controller with the stock events
                             -- (any other vehicle that answers bus_onTriggerTick with its doors counts too)
@@ -306,7 +307,7 @@ local function draw()
     if im.Button('Find lines here') then M.request() end
     im.SameLine()
     if im.Button('Get a city bus') then M.getBus() end
-    if pending then im.TextUnformatted('Finding bus lines (may take up to a minute) ...') end
+    if pending then im.TextUnformatted('Finding bus lines (may take up to three minutes) ...') end
     if linesError then im.TextUnformatted(linesError) end
     if lines and #lines == 0 and not pending and not linesError then im.TextUnformatted('No bus lines mapped here') end
     if lines and lines[1] and lines[1].saved then        -- (buslines._nearby: Overpass down, an earlier lookup's)
@@ -316,7 +317,8 @@ local function draw()
       local st = l.stops[(l.near_i or 0) + 1]
       if im.Button('Drive##busline' .. i) then M.start(l) end
       im.SameLine()
-      im.TextUnformatted(string.format('%s  %s -> %s   %d stops, nearest %s %d m', l.ref, l.from, l.to, #l.stops,
+      local label = l.mode == 'trolleybus' and ('Trolleybus ' .. l.ref) or l.ref
+      im.TextUnformatted(string.format('%s  %s -> %s   %d stops, nearest %s %d m', label, l.from, l.to, #l.stops,
         st and stopName(st) or '-', math.floor(l.near_m or 0)))
     end
     if attribution then im.Separator() im.TextUnformatted(attribution) end

@@ -1011,6 +1011,30 @@ Cross-component (server ↔ mod):
 Bus-line lookups select nearby stops first and then their parent routes. Completed replies are stored in the
 download cache under `buslines/` for 30 days and can be reused offline or after a world-server restart.
 
+Open **Bus lines** from the radial menu's Other ring, choose **Find lines here**, then **Drive**. Lookups show up to
+40 bus or trolleybus route variants with a stop within 700 m of the player. The snapped query includes a margin
+so the edge of a search cell does not hide nearby stops. Radius queries and wrapped longitude distances support
+the date line and high latitudes. Nodes, platform ways (including `highway=platform`), and platform relations with
+centres are supported. The importer reads ordered stop and platform members, blank roles on tagged stops,
+and legacy directional and numbered stop roles. Route masters supply missing labels, operators and colours.
+Trolleybus routes use the same driving controls as regular bus routes.
+
+The importer preserves Unicode stop names and distinguishes routes by their stop coordinates, network and
+operator. Stop positions keep their own names even when short; a platform listed just before or after a stop position is paired with it only within 60 m.
+Västtrafik's GTFS feed is an optional regional source; other regions use OSM without a Trafiklab key. An unavailable
+primary Overpass endpoint, an incomplete query reply or a reply from data more than 14 days old gets one fallback,
+respecting offline, rate and budget limits. Allow about three minutes for a first regional lookup and slow endpoints.
+
+Coverage depends on OSM containing ordered route members. Older relations with ambiguous shared stops may still
+require mapper corrections. Some names are only available in stop-area relations, which this lookup skips.
+Long routes return up to 120 stops and keep the nearest stop in that window. The GPS connects stops using
+Valhalla's bus profile with ordinary car routing as a fallback, so it may use different roads than the service.
+The stock destination sign has an ASCII atlas. Non-Latin destinations remain visible in the window and stop screen
+and may appear blank on that sign.
+These limits require regional in-game checks before claiming worldwide route fidelity.
+
+Tagging reference: [OSM bus routes](https://wiki.openstreetmap.org/wiki/Tag:route%3Dbus).
+
 ## Attribution
 
 Show this in the mod UI (the server sends the line for the sources in use as `hello.attribution`):

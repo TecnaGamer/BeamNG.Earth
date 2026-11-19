@@ -111,6 +111,7 @@ B.core = function() return { requestBusLines = function(id) asked[#asked + 1] = 
 T.check(B.request(), 'asked the first server')
 B.onUpdate(B.REQUEST_TIMEOUT_S - 1)
 T.check(select(3, B.lines()) and not B.request() and #asked == 1, 'still waiting: no second lookup')
+T.check(B.REQUEST_TIMEOUT_S > 45 + 2 * (4 + 65 + 1), 'lookup covers the GTFS wait and both endpoint timeouts')
 B.onUpdate(1)
 local _, err, busy = B.lines()
 T.check(not busy and err and err:find('No answer', 1, true), 'no answer in time: given up, said')

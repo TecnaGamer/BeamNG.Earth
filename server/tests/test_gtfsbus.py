@@ -185,6 +185,13 @@ class BusLinesTest(unittest.TestCase):
         idx.assert_not_called()
         self.assertEqual(buslines.attribution([]), buslines.ATTRIBUTION)
 
+    def test_inside_rectangle_without_nearby_regional_service_uses_osm(self):
+        with mock.patch.object(gtfsbus, "covers", return_value=True), \
+                mock.patch.object(gtfsbus, "index", return_value={"lines": []}), \
+                mock.patch.object(buslines, "_overpass", return_value=[{"ref": "Local"}]) as overpass:
+            self.assertEqual(buslines.near(57.7, 11.97, mock.Mock(), cache_dir="x"), [{"ref": "Local"}])
+        overpass.assert_called_once()
+
 
 if __name__ == "__main__":
     unittest.main()
