@@ -5001,13 +5001,20 @@ fn terrain_at(grid: &numpy::ndarray::ArrayView2<f64>, i0: i64, j0: i64, cell: f6
 /// everywhere. In a terrain cell whose corners are more than step_m apart (a cutting's wall: the lattice draws it as teeth)
 /// no point goes over the cell's lowest corner + max_up (an edge line climbed those teeth in front of the wall as tents
 /// of white up to 1.3 m tall, the McGraw-Graben 2026-10-22: it stays at the road's level, the teeth over it).
+/// clear (499, the road revamp v2's overlays: roadmesh.SURFACE_V2): when finite, a triangle left whole is raised so
+/// that the ground stands at most `clear` over it anywhere inside (an overlay lifted L over the ground dipped under it
+/// where the ground bulged more than L between its corners): each input point (known by its position to 0.1 mm: the
+/// tile clip copies points per triangle) by the most any of its whole triangles needs (a plane through raised corners
+/// is raised everywhere by at least their least), and a cut triangle's pieces by its corners' raises spread
+/// barycentrically (on the ground plus that: a whole neighbour's shared edge and theirs meet as they did without clear).
+/// The step cap still wins. NaN (the default): as before.
 /// Returns (points (m, 3), uvs (m, 2), triangles (r, 3), source triangle (r,)); points not shared.
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
-#[pyo3(signature = (pts, uv, tris, cell, grid, i0, j0, tol, step_m=f64::INFINITY, max_up=f64::INFINITY))]
+#[pyo3(signature = (pts, uv, tris, cell, grid, i0, j0, tol, step_m=f64::INFINITY, max_up=f64::INFINITY, clear=f64::NAN))]
 fn follow_tris<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, uv: PyReadonlyArray2<'py, f64>,
                     tris: PyReadonlyArray2<'py, i64>, cell: f64, grid: PyReadonlyArray2<'py, f64>, i0: i64, j0: i64,
-                    tol: f64, step_m: f64, max_up: f64)
+                    tol: f64, step_m: f64, max_up: f64, clear: f64)
                     -> (Bound<'py, PyArray2<f64>>, Bound<'py, PyArray2<f64>>, Bound<'py, PyArray2<i64>>,
                         Bound<'py, PyArray1<i64>>) {
     let (pv, uvv, tv, gv) = (pts.as_array(), uv.as_array(), tris.as_array(), grid.as_array());
@@ -5023,6 +5030,19 @@ fn follow_tris<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, uv: PyRead
         let lerp = |a: &V, b: &V, f: f64| -> V {
             [a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f, a[2] + (b[2] - a[2]) * f, a[3] + (b[3] - a[3]) * f]
         };
+        // (clear: the whole triangles' output points, input points, need, own heights and caps; the raise per input point)
+        // (a point is known by its position to 0.1 mm: the tile clip copies a ribbon's points per triangle)
+        let mut whole: Vec<(usize, [usize; 3], [f64; 3], [f64; 3])> = Vec::new();
+        let mut cut: Vec<(usize, [usize; 3], [f64; 3], f64, f64)> = Vec::new();
+        let mut keys: std::collections::HashMap<(i64, i64), usize> = std::collections::HashMap::new();
+        let mut raise: Vec<f64> = Vec::new();
+        let mut key_of = |i: usize, raise: &mut Vec<f64>| -> usize {
+            let k = ((pv[[i, 0]] * 1e4).round() as i64, (pv[[i, 1]] * 1e4).round() as i64);
+            let n = keys.len();
+            let id = *keys.entry(k).or_insert(n);
+            if id == raise.len() { raise.push(0.0); }
+            id
+        };
         for ti in 0..tv.shape()[0] {
             let tri: Vec<V> = (0..3).map(|k| {
                 let i = tv[[ti, k]] as usize;
@@ -5033,13 +5053,20 @@ fn follow_tris<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, uv: PyRead
             let (x0, y0, x1, y1, x2, y2) = (tri[0][0], tri[0][1], tri[1][0], tri[1][1], tri[2][0], tri[2][1]);
             let det = (x1 - x0) * (y2 - y0) - (x2 - x0) * (y1 - y0);
             let mut split = !z.iter().all(|v| v.is_finite()) || det.abs() < 1e-12;
+            let mut up = 0.0f64;                // (clear: the most the ground stands over the plane inside)
             if !split {
                 let plane = |x: f64, y: f64| {
                     let s = ((x - x0) * (y2 - y0) - (x2 - x0) * (y - y0)) / det;
                     let t = ((x1 - x0) * (y - y0) - (x - x0) * (y1 - y0)) / det;
                     (z[0] + s * (z[1] - z[0]) + t * (z[2] - z[0]), s, t)
                 };
-                let dev = |x: f64, y: f64| { let tz = ter(x, y); if tz.is_finite() { (tz - plane(x, y).0).abs() } else { f64::INFINITY } };
+                let mut dev = |x: f64, y: f64| {
+                    let tz = ter(x, y);
+                    if !tz.is_finite() { return f64::INFINITY; }
+                    let d = tz - plane(x, y).0;
+                    if d > up { up = d; }
+                    d.abs()
+                };
                 // the grid points inside
                 let (lx, hx) = (x0.min(x1).min(x2), x0.max(x1).max(x2));
                 let (ly, hy) = (y0.min(y1).min(y2), y0.max(y1).max(y2));
@@ -5081,8 +5108,31 @@ fn follow_tris<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, uv: PyRead
                 let (lo, hi) = c.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |a, &v| (a.0.min(v), a.1.max(v)));
                 if hi - lo > step_m { lo + max_up } else { f64::INFINITY }
             };
+            // (clear: a point on a cell's edge or corner takes the loosest cap of the cells it touches: a corner on a
+            // flat cell's edge beside a step cell was held down to the step's lowest corner, under the flat ground)
+            let cap_clear = |x: f64, y: f64| -> f64 {
+                let (gx, gy) = (x / cell, y / cell);
+                let on_x = (gx - gx.round()).abs() < 1e-9;
+                let on_y = (gy - gy.round()).abs() < 1e-9;
+                let mut best = cap(x, y);
+                for &(ox, oy) in &[(-0.5, 0.0), (0.0, -0.5), (-0.5, -0.5), (0.5, 0.0), (0.0, 0.5), (0.5, 0.5),
+                                   (-0.5, 0.5), (0.5, -0.5)] {
+                    if (ox != 0.0 && !on_x) || (oy != 0.0 && !on_y) { continue; }
+                    best = best.max(cap(x + ox * cell, y + oy * cell));
+                }
+                best
+            };
+            let cap = |x: f64, y: f64| -> f64 { if clear.is_finite() { cap_clear(x, y) } else { cap(x, y) } };
             if !split {
                 let base = p_out.len() as i64;
+                if clear.is_finite() {
+                    let need = (up - clear).max(0.0);
+                    let vi = [key_of(tv[[ti, 0]] as usize, &mut raise), key_of(tv[[ti, 1]] as usize, &mut raise),
+                              key_of(tv[[ti, 2]] as usize, &mut raise)];
+                    for &v in &vi { if need > raise[v] { raise[v] = need; } }
+                    whole.push((base as usize, vi, [z[0], z[1], z[2]],
+                                [cap(tri[0][0], tri[0][1]), cap(tri[1][0], tri[1][1]), cap(tri[2][0], tri[2][1])]));
+                }
                 for (k, q) in tri.iter().enumerate() {
                     p_out.push([q[0], q[1], z[k].min(cap(q[0], q[1]))]);
                     uv_out.push([q[2], q[3]]);
@@ -5091,6 +5141,10 @@ fn follow_tris<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, uv: PyRead
                 src.push(ti as i64);
                 continue;
             }
+            let corners = if clear.is_finite() {
+                [key_of(tv[[ti, 0]] as usize, &mut raise), key_of(tv[[ti, 1]] as usize, &mut raise),
+                 key_of(tv[[ti, 2]] as usize, &mut raise)]
+            } else { [0usize; 3] };
             let mut polys: Vec<Vec<V>> = vec![tri];
             for &(nx, ny) in fams.iter() {
                 let mut next: Vec<Vec<V>> = Vec::new();
@@ -5131,7 +5185,15 @@ fn follow_tris<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, uv: PyRead
                 if area.abs() < 1e-8 { continue; }
                 let base = p_out.len() as i64;
                 for q in poly.iter() {
-                    p_out.push([q[0], q[1], ter(q[0], q[1]).min(cap(q[0], q[1]))]);
+                    let (tz, cz) = (ter(q[0], q[1]), cap(q[0], q[1]));
+                    if clear.is_finite() && det.abs() >= 1e-12 {
+                        // (a cut piece takes its whole neighbours' raises too, spread over its triangle
+                        // barycentrically: the shared edges stay where they were without clear)
+                        let s = ((q[0] - x0) * (y2 - y0) - (x2 - x0) * (q[1] - y0)) / det;
+                        let t = ((x1 - x0) * (q[1] - y0) - (q[0] - x0) * (y1 - y0)) / det;
+                        cut.push((p_out.len(), corners, [1.0 - s - t, s, t], tz, cz));
+                    }
+                    p_out.push([q[0], q[1], tz.min(cz)]);
                     uv_out.push([q[2], q[3]]);
                 }
                 for a in 1..(poly.len() as i64 - 1) {
@@ -5139,6 +5201,17 @@ fn follow_tris<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, uv: PyRead
                     src.push(ti as i64);
                 }
             }
+        }
+        // (clear: every whole triangle's corners raised by their point's most needed, a cut piece's points by its
+        // corners' raises interpolated; the step cap wins)
+        for (base, vi, zr, cp) in whole.iter() {
+            for k in 0..3 {
+                p_out[base + k][2] = (zr[k] + raise[vi[k]]).min(cp[k]);
+            }
+        }
+        for (i, vi, w, tz, cz) in cut.iter() {
+            let r = (w[0] * raise[vi[0]] + w[1] * raise[vi[1]] + w[2] * raise[vi[2]]).max(0.0);
+            p_out[*i][2] = (tz + r).min(*cz);
         }
         (p_out, uv_out, t_out, src)
     });
@@ -6734,6 +6807,10 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // their scale, supports (k, 12)); skeleton_roof fails a skeleton with a node over its distance to the outline (an
     // 18 km gabled roof, report W545TFKJ); street_points finds a spot clear of every carriageway (report 5T7V9FNQ).
     // 495 is another branch's
-    m.add("VERSION", 496)?;
+    m.add_function(wrap_pyfunction!(roadwear::surface_plan, m)?)?;
+    // 499: road revamp v2 P1c (BNE_SURFACE_V2): roadwear::surface_plan (surface variation, tyre wear on the lane
+    // centres, repair patch strips along a tile's roads) and follow_tris's `clear` (a whole overlay triangle raised
+    // where the ground bulges inside it: no dip under its lift). 495-498 are other branches'
+    m.add("VERSION", 499)?;
     Ok(())
 }
