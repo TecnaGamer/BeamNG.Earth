@@ -41,7 +41,7 @@ import staging
 
 log = logging.getLogger("earthd.vegetation")
 
-VERSION = 44          # (the cached cells hold their groups: 14 for the regional rules of GitHub #110; 16: the roads'
+VERSION = 45          # (the cached cells hold their groups: 14 for the regional rules of GitHub #110; 16: the roads'
                       # drawn widths and sidewalks kept clear; 17: BC's lidar canopy heights, mapdata's canopy layer 2;
                       # 18: the rounded junction corners kept clear, roadcorners.py; 19: one tree per flat crown,
                       # thin_tops; 20: none on or beside a bridge deck, _mask_decks; 21: orchard rows, canopy trees
@@ -85,6 +85,7 @@ VERSION = 44          # (the cached cells hold their groups: 14 for the regional
                       # 42: Europe's conifer share half ForestPaths' genus map's, its genera from it (treegenus.py)
                       # 43: the species' stands one ragged grid (stand_cells); the maps read on a grid (_on_grid)
                       # 44: North America's generic conifers spruces and pines (NA_SPRUCE_LAT)
+                      # 45: the tropics' shores' coconut palms (coast_palms); the thickets no-collide
 TREE_MIN_M = 3.0
 # The canopy raster, the scatter grids and the crown radii are in Web Mercator units (EPSG:3857: a metre there is
 # cos(lat) metres on the ground) and were tuned by eye at mid latitudes. Past them the same pixel counts covered less
@@ -139,7 +140,15 @@ CLUMP_OF = {G_CONIFER: G_CONIFER_CLUMP, G_PINE_WEST: G_CONIFER_CLUMP, G_REDWOOD:
             G_BIRCH: G_BIRCH_CLUMP, G_OAK: G_OAK_CLUMP, G_BEECH: G_BEECH_CLUMP, G_PINE_EU: G_CONIFER_CLUMP,
             G_SPRUCE: G_CONIFER_CLUMP,
             # (35) the maritime pines as the other pines; the laurel forests as the cork oaks' filler (their shapes)
-            G_PINE_MARITIME: G_CONIFER_CLUMP, G_LAUREL: G_MEDITERRANEAN_CLUMP}
+            G_PINE_MARITIME: G_CONIFER_CLUMP, G_LAUREL: G_MEDITERRANEAN_CLUMP,
+            # (45) as dev's far forests: the trees by a country road (the open groups, OPEN_ROAD_M) and the tropics'
+            # rainforest trees (dev's generic broadleaves there, clumped) far off as their clumps again (before: a
+            # tile's clumps a half to none, Rio's 1106 -> 0; the town's trees stay single, clumps())
+            G_DECIDUOUS_OPEN: G_DECIDUOUS_CLUMP, G_OAK_OPEN: G_OAK_CLUMP, G_BIRCH_OPEN: G_BIRCH_CLUMP,
+            G_BEECH_OPEN: G_BEECH_CLUMP, G_PINE_WEST_OPEN: G_CONIFER_CLUMP,
+            G_MEDITERRANEAN_OPEN: G_MEDITERRANEAN_CLUMP, G_CONIFER_OPEN: G_CONIFER_CLUMP,
+            G_SPRUCE_OPEN: G_CONIFER_CLUMP, G_PINE_EU_OPEN: G_CONIFER_CLUMP,
+            G_TROPICAL: G_DECIDUOUS_CLUMP, G_TROPICAL_OPEN: G_DECIDUOUS_CLUMP}
 CLUMP_GROUPS = tuple(sorted(set(CLUMP_OF.values())))
 CLUMP_CELL_M = 18.0
 CLUMP_MIN = 3
@@ -620,6 +629,32 @@ def redwood_belt(lat, lon):
     lat, lon = np.asarray(lat, np.float64), np.asarray(lon, np.float64)
     return (lat > 35.8) & (lat < 42.3) & (lon < -122.0 - 0.45 * (lat - 37.0)) & (lon > -125.0)
 RAINFOREST_PALM_KEEP = 0.4
+# (45) the tropics' shores: the coconut palms' belt behind the beach (Bali's, Goa's, Kerala's, Zanzibar's, the
+# Caribbean's, Sri Lanka's). Before, a shore's trees were palms at the climate's share as anywhere (the regional
+# kernel's 20 % off town, the rainforests' RAINFOREST_PALM_KEEP of them: Porto Seguro's beach 3 %, Phuket's 12 %, Bali's
+# 24 %; dev 21-31 %). Within COAST_PALM_M of the sea's or a lake's shore (the water layer's polygons, not the rivers)
+# in the tropics' climates (Af Am Aw), COAST_PALM_SHARE of the broadleaves palms (the rainforests' thinning not there);
+# the casuarinas (pine_west), the mangroves' trees and the towns' (the kernel's 60 % already) kept.
+COAST_PALM_M = 120.0
+COAST_PALM_SHARE = 0.6
+COAST_PALM_LAT = 28.0
+COAST_PALM_FROM = None          # (set below)
+
+
+def coast_palms(group, lat, lon, lcls, coast, u):
+    """Per tree: the shore's broadleaves (coast: within COAST_PALM_M) in the tropics' climates palms at
+    COAST_PALM_SHARE (u: a hashed [0, 1)). Pure."""
+    import climate
+    g = np.array(group, np.uint8, copy=True)
+    lc = np.asarray(lcls)
+    lat, lon = np.asarray(lat, np.float64), np.asarray(lon, np.float64)
+    cand = np.asarray(coast, bool) & _in(g, COAST_PALM_FROM) & (lc != WC["mangrove"]) & (lc != WC["built"]) \
+        & (np.abs(lat) < COAST_PALM_LAT)
+    if cand.any():
+        k = climate.koppen_many(lat[cand], lon[cand])
+        idx = np.flatnonzero(cand)[_in(k, K_TROPICS)]
+        g[idx[np.asarray(u)[idx] < COAST_PALM_SHARE]] = G_PALM
+    return g
 
 
 def eucalypt_share(lat, lon, elev=None):
@@ -929,6 +964,7 @@ def _world_groups(g, lat, lon, lcls, eco, elev, u_stand):
     return g
 
 
+COAST_PALM_FROM = (G_DECIDUOUS, G_TROPICAL, G_SAVANNA, G_LAUREL, G_MEDITERRANEAN, G_OAK, G_BEECH, G_BIRCH)
 EUC_FROM = (G_DECIDUOUS, G_CONIFER, G_MEDITERRANEAN, G_BIRCH, G_OAK, G_BEECH, G_PINE_EU, G_SPRUCE, G_PINE_MARITIME)
 SNAG_FROM = ((G_DECIDUOUS, G_BIRCH, G_OAK, G_BEECH, G_OAK_WEST), (G_CONIFER, G_PINE_EU, G_SPRUCE, G_PINE_WEST))
 OPEN_FROM = {G_DECIDUOUS: G_DECIDUOUS_OPEN, G_OAK: G_DECIDUOUS_OPEN, G_BIRCH: G_BIRCH_OPEN, G_BEECH: G_BEECH_OPEN,
@@ -1245,6 +1281,7 @@ class Vegetation:
         lon0_, lat0_, lon1_, lat1_ = cd.bounds
         near_water = np.zeros(h.shape, bool) if _in_box((lat0_ + lat1_) / 2, (lon0_ + lon1_) / 2, RIPARIAN_BOX) \
             else None                       # (within RIPARIAN_M of a river, lake or shore: riverside poplars)
+        near_coast = np.zeros(h.shape, bool) if abs((lat0_ + lat1_) / 2) < COAST_PALM_LAT else None    # (45)
         road_cells = []
         clump_roads = []                    # (the carriageways the far clumps keep off: clumps)
         for dy in (-1, 0, 1):
@@ -1266,6 +1303,8 @@ class Vegetation:
                     clump_roads.append(got)
                 if near_water is not None:
                     _mask_near(c2.layers.get("water"), near_water, chm, RIPARIAN_M)
+                if near_coast is not None:
+                    _mask_near(c2.layers.get("water"), near_coast, chm, COAST_PALM_M, kinds=(3,))
                 road_cells.append(c2.layers.get("roads"))
         # the rounded corners of curbless junctions (roadcorners.py): no tree, bush or rock on their asphalt
         _mask_corners(road_cells, (road, curb), chm, cd.bounds, getattr(self.surface, "urban", None), self.widths)
@@ -1347,6 +1386,8 @@ class Vegetation:
         group = regional(group, th, tlat, tlon, lcls, _hash01(gx, gy, 7),
                          riparian=None if near_water is None else near_water[jj, ii])
         group = self._species(group, th, tlat, tlon, lcls, tmx, tmy, gx, gy, clat, u_mix)
+        if near_coast is not None and near_coast.any():
+            group = coast_palms(group, tlat, tlon, lcls, near_coast[jj, ii], _hash01(gx, gy, 36))
         # (31) the trees in the open: by a road (OPEN_ROAD_M from its edge) or on built-up land
         open_ = lcls == WC["built"]
         if curb.any():
@@ -2301,13 +2342,14 @@ def _mask_decks(f, mask, chm, specs):
                                 np.ascontiguousarray(np.concatenate(hws), np.float64))
 
 
-def _mask_near(f, mask, chm, dist_m):
+def _mask_near(f, mask, chm, dist_m, kinds=(2, 3)):
     """Mark the CHM-grid pixels within dist_m (ground m) of Features f's lines and polygon outlines (water: its rivers'
-    lines and its lakes' and the sea's shores; inside a polygon is water, masked as such)."""
+    lines and its lakes' and the sea's shores; inside a polygon is water, masked as such). kinds: the feature kinds
+    (2 lines, 3 polygons; (3,): the sea's and the lakes' shores, not the rivers)."""
     if f is None or not len(f.kind):
         return
     fast.require(63, "road_segments")
-    sel = np.flatnonzero((f.kind == 2) | (f.kind == 3)).astype(np.int64)
+    sel = np.flatnonzero(np.isin(f.kind, kinds)).astype(np.int64)
     if not len(sel):
         return
     n_r, n_c = mask.shape

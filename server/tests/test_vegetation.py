@@ -792,6 +792,23 @@ class ShareRulesTest(unittest.TestCase):
             spruce = float(np.mean(g == veg.G_SPRUCE))
             self.assertTrue(lo <= spruce <= hi, f"{where}: {spruce:.2f}")
 
+    def test_coast_palms(self):
+        """(45) the tropics' shore: COAST_PALM_SHARE of its broadleaves palms; not inland, not a mangrove's, not a
+        casuarina (pine_west), not outside the tropics' climates."""
+        n = 4000
+        u = (np.arange(n) + 0.5) / n
+        tree, mang = veg.WC["tree"], veg.WC["mangrove"]
+
+        def share(lat, lon, grp, lc, coast):
+            g = veg.coast_palms(np.full(n, grp, np.uint8), np.full(n, lat), np.full(n, lon), np.full(n, lc, np.uint8),
+                                np.full(n, coast), u)
+            return float(np.mean(g == veg.G_PALM))
+        self.assertAlmostEqual(share(-8.68, 115.26, veg.G_TROPICAL, tree, True), veg.COAST_PALM_SHARE, delta=0.01)
+        self.assertEqual(share(-8.68, 115.26, veg.G_TROPICAL, tree, False), 0.0, "inland")
+        self.assertEqual(share(-8.68, 115.26, veg.G_TROPICAL, mang, True), 0.0, "a mangrove")
+        self.assertEqual(share(-8.68, 115.26, veg.G_PINE_WEST, tree, True), 0.0, "the casuarinas")
+        self.assertEqual(share(-33.9, 18.4, veg.G_OAK, tree, True), 0.0, "Cape Town's shore")
+
     def test_pine_woods_broadleaves(self):
         mixed = self._shares(53.6, 17.9, 26, 0.0, 0.3)
         pine = self._shares(53.6, 17.9, 26, 0.0, 0.95)

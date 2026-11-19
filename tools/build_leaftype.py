@@ -11,6 +11,10 @@ coarse rule stands). Needs tifffile and imagecodecs (the source is a tiled, comp
 import os
 import sys
 
+try:        # (first: numpy's AVX-512 kernels held back before anything imports numpy, tools/npyfirst.py)
+    import npyfirst  # noqa: E402,F401
+except ImportError:     # (loaded by its path into another process, a test: that process's entry point guards)
+    pass
 import numpy as np
 from PIL import Image
 

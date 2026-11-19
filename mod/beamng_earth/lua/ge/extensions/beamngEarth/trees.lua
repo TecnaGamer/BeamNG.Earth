@@ -745,6 +745,7 @@ for _, g in ipairs({ 'maquis', 'shrub_north', 'shrub_tropical', 'tro_understory'
   M.GROUP_MAX_M[g] = 250; M.NO_COLLIDE[g] = true
 end
 M.GROUP_MAX_M.deadwood = 200; M.NO_COLLIDE.deadwood = true     -- (on the forest floor, as the ferns)
+M.GROUP_MAX_M.tro_thicket = 250; M.NO_COLLIDE.tro_thicket = true     -- (44: the tropics' tangled thickets, as the shrubs)
 -- (34) the hot deserts' bushes: desert_shrub without Utah's junipers (cold deserts' and mountains': the Great Basin,
 -- Central Asia, Iran), server vegetation.shrub_groups for BWh / BSh; the gallery 2026-11-17
 do
