@@ -2,6 +2,11 @@
 
 What changed in each release of BeamNG.Earth, newest first.
 
+## Unreleased
+
+### Fixed
+- Distant terrain tiles no longer stay hidden when an origin rebase interrupts a queued global tile swap.
+
 ## 1.10.1 beta (2026-11-15)
 
 > **Join the TGForever Discord, [discord.gg/tgf](https://discord.gg/tgf), to chat, get help, report bugs or help
