@@ -2213,16 +2213,17 @@ fn batter_apply<'py>(py: Python<'py>, px: PyReadonlyArray1<'py, f64>, pyy: PyRea
                      b: PyReadonlyArray2<'py, f64>, za: PyReadonlyArray1<'py, f64>, zb: PyReadonlyArray1<'py, f64>,
                      h: PyReadonlyArray1<'py, f64>, rh: PyReadonlyArray1<'py, f64>, ba: PyReadonlyArray1<'py, f64>,
                      bb: PyReadonlyArray1<'py, f64>, m: PyReadonlyArray2<'py, f64>, r: PyReadonlyArray2<'py, f64>,
-                     fl: PyReadonlyArray2<'py, u8>,
+                     fl: PyReadonlyArray2<'py, u8>, nb: PyReadonlyArray2<'py, i64>,
                      prm: (f64, f64, f64, f64, f64, f64, f64, f64, f64, f64, f64, f64))
                      -> PyResult<Bound<'py, PyArray1<f64>>> {
     let s = batter::Segs { a: a.as_array(), b: b.as_array(), za: za.as_array(), zb: zb.as_array(), h: h.as_array(),
                            rh: rh.as_array(), ba: ba.as_array(), bb: bb.as_array(), m: m.as_array(),
-                           r: r.as_array(), fl: fl.as_array() };
+                           r: r.as_array(), fl: fl.as_array(), nb: nb.as_array() };
     let n = s.h.len();
     if s.a.nrows() != n || s.b.nrows() != n || s.a.ncols() < 2 || s.b.ncols() < 2 || s.za.len() != n
         || s.zb.len() != n || s.rh.len() != n || s.ba.len() != n || s.bb.len() != n || s.m.dim() != (n, 4)
-        || s.r.dim() != (n, 4) || s.fl.dim() != (n, 2) {
+        || s.r.dim() != (n, 4) || s.fl.dim() != (n, 2) || s.nb.dim() != (n, 2)
+        || s.nb.iter().any(|&v| v < -1 || v >= 2 * n as i64) {
         return Err(pyo3::exceptions::PyValueError::new_err("batter_apply: the segment arrays disagree"));
     }
     let (px, pyy, base, g0) = (px.as_array(), pyy.as_array(), base.as_array(), g0.as_array());
@@ -2246,16 +2247,17 @@ fn batter_apply_vw<'py>(py: Python<'py>, px: PyReadonlyArray1<'py, f64>, pyy: Py
                         b: PyReadonlyArray2<'py, f64>, za: PyReadonlyArray1<'py, f64>, zb: PyReadonlyArray1<'py, f64>,
                         h: PyReadonlyArray1<'py, f64>, rh: PyReadonlyArray1<'py, f64>, ba: PyReadonlyArray1<'py, f64>,
                         bb: PyReadonlyArray1<'py, f64>, m: PyReadonlyArray2<'py, f64>, r: PyReadonlyArray2<'py, f64>,
-                        fl: PyReadonlyArray2<'py, u8>,
+                        fl: PyReadonlyArray2<'py, u8>, nb: PyReadonlyArray2<'py, i64>,
                         prm: (f64, f64, f64, f64, f64, f64, f64, f64, f64, f64, f64, f64))
                         -> PyResult<(Bound<'py, PyArray1<f64>>, Bound<'py, PyArray1<f64>>)> {
     let s = batter::Segs { a: a.as_array(), b: b.as_array(), za: za.as_array(), zb: zb.as_array(), h: h.as_array(),
                            rh: rh.as_array(), ba: ba.as_array(), bb: bb.as_array(), m: m.as_array(),
-                           r: r.as_array(), fl: fl.as_array() };
+                           r: r.as_array(), fl: fl.as_array(), nb: nb.as_array() };
     let n = s.h.len();
     if s.a.nrows() != n || s.b.nrows() != n || s.a.ncols() < 2 || s.b.ncols() < 2 || s.za.len() != n
         || s.zb.len() != n || s.rh.len() != n || s.ba.len() != n || s.bb.len() != n || s.m.dim() != (n, 4)
-        || s.r.dim() != (n, 4) || s.fl.dim() != (n, 2) {
+        || s.r.dim() != (n, 4) || s.fl.dim() != (n, 2) || s.nb.dim() != (n, 2)
+        || s.nb.iter().any(|&v| v < -1 || v >= 2 * n as i64) {
         return Err(pyo3::exceptions::PyValueError::new_err("batter_apply_vw: the segment arrays disagree"));
     }
     let (px, pyy, base) = (px.as_array(), pyy.as_array(), base.as_array());

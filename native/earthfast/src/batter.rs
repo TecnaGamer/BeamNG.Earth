@@ -339,6 +339,9 @@ pub struct Segs<'a> {
     pub h: ArrayView1<'a, f64>, pub rh: ArrayView1<'a, f64>, pub ba: ArrayView1<'a, f64>,
     pub bb: ArrayView1<'a, f64>, pub m: ArrayView2<'a, f64>, pub r: ArrayView2<'a, f64>,
     pub fl: ArrayView2<'a, u8>,
+    // (each segment end's continuation (segments, 2: its a's, its b's): -1 none, else 2 k + j, segment k's end j (0 its
+    // a, 1 its b) lying there; PlanPack's nb, from its plans and its validated links between them, never inferred here)
+    pub nb: ArrayView2<'a, i64>,
 }
 
 fn prep(s: &Segs, i: usize, p: &ApplyPrm) -> Seg {
@@ -352,28 +355,29 @@ fn prep(s: &Segs, i: usize, p: &ApplyPrm) -> Seg {
     let reach = s.h[i] + r[0][0].max(r[0][1]).max(r[1][0]).max(r[1][1]).max(old_r).max(p.core_blend);
     let len = l2.sqrt();
     let (ux, uy) = if len > 1e-9 { (abx / len, aby / len) } else { (0.0, 0.0) };
-    // (each end's neighbour along the plan: the segment before (after) it in the pack whose end is this one's to the
-    // bit, PlanPack's consecutive segments of one plan; a side it carries on with is not today's there)
+    // (each end's neighbour along the plan: the segment PlanPack says it goes on into there (nb: the next segment of
+    // its own plan, or the one plan its end carries straight on into); a side it carries on with is not today's there.
+    // Not from the pack's order or coincident points: an unrelated plan's end there is no continuation, Codex)
     let n = s.h.len();
     let mut cap = [[[-ux, -uy]; 2], [[ux, uy]; 2]];
-    for (e, nb) in [(0usize, i.checked_sub(1)), (1usize, if i + 1 < n { Some(i + 1) } else { None })] {
-        let Some(k) = nb else { continue };
-        let joined = if e == 0 {
-            s.b[[k, 0]] == ax && s.b[[k, 1]] == ay
-        } else {
-            s.a[[k, 0]] == bx && s.a[[k, 1]] == by
-        };
-        if !joined {
+    #[allow(clippy::needless_range_loop)]
+    for e in 0..2usize {
+        let v = s.nb[[i, e]];
+        if v < 0 || (v >> 1) as usize >= n {
             continue;
         }
+        let (k, j) = ((v >> 1) as usize, (v & 1) as usize);
+        // (away from the joint along k: from its end j to its other end; its sides as ours where it runs our way)
         let (nx, ny) = (s.b[[k, 0]] - s.a[[k, 0]], s.b[[k, 1]] - s.a[[k, 1]]);
         let nl = (nx * nx + ny * ny).sqrt();
         if nl <= 1e-9 {
             continue;
         }
-        let sg = if e == 0 { -1.0 } else { 1.0 };
+        let sg = if j == 0 { 1.0 } else { -1.0 };
+        let swap = j == e;
         for (side, c) in cap[e].iter_mut().enumerate() {
-            if s.fl[[k, side]] & OLD == 0 {
+            let ks = if swap { 1 - side } else { side };
+            if s.fl[[k, ks]] & OLD == 0 {
                 *c = [sg * nx / nl, sg * ny / nl];
             }
         }

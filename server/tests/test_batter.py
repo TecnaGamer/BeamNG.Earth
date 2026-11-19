@@ -285,6 +285,58 @@ class Batter(unittest.TestCase):
             g = grading.grade_points(px, py, side(px, py), pack)
             self.assertLess(float(np.abs(np.diff(g)).max()), 0.05, rad)
 
+    def test_open_end_not_closed_by_an_unrelated_plan(self):
+        # an end cap's continuation is PlanPack's (nb: its own plan's next segment, the one plan it goes on into), not
+        # the pack's next segment because its start is this end to the bit: an unrelated road starting at the end of
+        # another and doubling back took away the relief behind that end in one plan order and not in the other
+        # (Codex review of revampfix). Both orders: the same heights, and the relief behind the end
+        def rise(x, y):
+            return 0.9 * np.maximum(np.asarray(x, float), 0.0) + 0.0 * np.asarray(y)
+        a = road(z=0.0, x=(-200.0, 0.0))
+        k = np.arange(0, 40) * grading.VERTEX_STEP
+        ang = np.radians(160.0)
+        bline = np.column_stack((k * np.cos(ang), k * np.sin(ang)))
+        bline[0] = a.xy[-1]
+        b = grading.Plan(bline, np.zeros(len(bline)), 3.5, road_half=2.5)
+        b.rank, b.rid = 60, 2
+        xs, ys = np.meshgrid(np.arange(-20.0, 50.0, 0.5), np.arange(-45.0, 45.0, 0.5))
+        x, y = xs.ravel(), ys.ravel()
+        got = []
+        for plans in ([a, b], [b, a]):
+            pack = packed(plans, rise)
+            self.assertTrue((pack.nb[:, 0][pack.s0[:-1]] == -1).all() and (pack.nb[:, 1][pack.s0[1:] - 1] == -1).all())
+            got.append(grading.grade_points(x, y, rise(x, y), pack))
+        np.testing.assert_array_equal(got[0], got[1])
+        alone = grading.grade_points(x, y, rise(x, y), packed([a], rise))
+        # (behind the end, on the far side from the other road: as with the end alone)
+        far = (xs.ravel() > 8.0) & (ys.ravel() < -12.0)
+        np.testing.assert_allclose(got[0][far], alone[far], atol=1e-9)
+        # the next segment of its own plan, and a plan carrying straight on into another: theirs
+        c = road(z=0.0, x=(0.0, 100.0), rid=1)
+        pack = packed([a, c], rise)
+        la, fc = int(pack.s0[1]) - 1, int(pack.s0[1])
+        self.assertEqual(int(pack.nb[la, 1]), 2 * fc)
+        self.assertEqual(int(pack.nb[fc, 0]), 2 * la + 1)
+        self.assertEqual(int(pack.nb[la - 1, 1]), 2 * la)
+        self.assertEqual(int(pack.nb[la, 0]), 2 * (la - 1) + 1)
+        # ... but not another road's end there (another class: not one road planned in pieces, CONT_*), nor its own at
+        # another level: both ends stay open (their relief kept; Codex review of revampfix2)
+        for other in (road(z=0.0, x=(0.0, 100.0), rid=7, rank=60), road(z=3.0, x=(0.0, 100.0), rid=1)):
+            pack = packed([a, other], rise)
+            la, fc = int(pack.s0[1]) - 1, int(pack.s0[1])
+            self.assertEqual((int(pack.nb[la, 1]), int(pack.nb[fc, 0])), (-1, -1))
+        # ... and an ineligible end there hides no valid continuation: a's end goes on into c whatever the order
+        c = road(z=0.0, x=(0.0, 100.0), rid=1)
+        up = road(z=3.0, x=(0.0, 60.0), rid=1)
+        other = road(z=0.0, x=(0.0, 80.0), rid=7, rank=60)
+        for plans in ([a, c, up, other], [other, up, c, a], [up, a, other, c]):
+            pack = packed(plans, rise)
+            ia, ic = plans.index(a), plans.index(c)
+            la, fc = int(pack.s0[ia + 1]) - 1, int(pack.s0[ic])
+            self.assertEqual((int(pack.nb[la, 1]), int(pack.nb[fc, 0])), (2 * fc, 2 * la + 1), [p.rid for p in plans])
+        # (the heights there are not compared: roads stacked on one footprint at two levels are graded in plan order
+        # by today's grading, whatever the end caps)
+
     def test_close_open(self):
         # a sharp cutting in short runs along a plan (3 segments on, 5 off): no run, the corridor all along; a long run
         # (its gaps of one segment closed): today's
@@ -310,8 +362,8 @@ class Batter(unittest.TestCase):
         off = plancache.plans_format()
         grading.BATTER_ON = True
         on = plancache.plans_format()
-        self.assertFalse(off.endswith(".bv2"))
-        self.assertEqual(on, off + ".bv2")
+        self.assertFalse(off.endswith(".bv3"))
+        self.assertEqual(on, off + ".bv3")
 
     def test_bins_and_today_where_it_weighs(self):
         # batter.rs meets each bin's segments nearest first (stopping at today's weight 1) and grade_points makes
@@ -353,7 +405,7 @@ class Batter(unittest.TestCase):
         def ref(qx, qy, qb):
             g0 = grading._grade_points_today(qx, qy, qb, pack, 0.0, qb.copy())
             return np.asarray(EF.batter_apply(qx, qy, qb, np.ascontiguousarray(g0, f64), pack.a, pack.b, pack.za,
-                                              pack.zb, pack.h, pack.rh, pack.ba, pack.bb, *pack.bt, prm))
+                                              pack.zb, pack.h, pack.rh, pack.ba, pack.bb, *pack.bt, pack.nb, prm))
         np.testing.assert_array_equal(ref(px, py, base).view(np.uint64), got[0])
         # small calls (a few points round a road, a ground not read at some, the plans chosen by the call's box: the
         # points where today's weighs span less of it)

@@ -162,7 +162,7 @@ GRADE_BIN_M = float(os.environ.get("BNE_GRADE_BIN_M", "8"))    # m, the fine bin
 # the ground is the natural one clamped to each road side's corridor (a near-level strip, a rounded crest, then a
 # constant batter out to the daylight line), a pure function of position. Off by default (BNE_BATTER=vanilla, a switch
 # of its own: not in Revamped roads before the user has looked at it in game); on, it is a plans format tag
-# (plancache.plans_format: ".bv2"), so no cache mixes the two.
+# (plancache.plans_format: ".bv3"), so no cache mixes the two.
 BATTER_ON = os.environ.get("BNE_BATTER", "off") == "vanilla"
 BATTER_L0_M = 1.0           # m of near-level strip past a core's edge (the core: carriageway + shoulder, 1 m+) ...
 BATTER_STRIP_LO = 0.04      # ... the ground there at most this much per m under the road's height ...
@@ -8449,7 +8449,9 @@ class PlanPack:
       falls away at ABUT_UNDER_GRADE (grade_points);
     - a plan widened in places (Plan.widen): each segment by the more of its ends'.
     Its arrays: a, b (segments, 2), za, zb, ba, bb, h, rh, rid, rk, ab, abd (segments, 2), cut (segments, 6), st, lk;
-    box (plans, 4); of: each segment's plan; s0 (plans + 1,): each plan's first segment."""
+    box (plans, 4); of: each segment's plan; s0 (plans + 1,): each plan's first segment; nb (segments, 2): each
+    segment end's continuation (-1 none, else 2 k + j: segment k's end j lies there; its own plan's next segment, or at
+    a plan's end the only plan it goes on into, as lk), batter.rs's end caps'."""
 
     def __init__(self, plans):
         import fast
@@ -8514,12 +8516,14 @@ def grade_points(px, py, base, plans, lift=0.0):
     # (batter.rs: the vanilla slopes, every segment within its reach; 503: the corridors' heights v and today's weight w
     # apart, so today's grading is made only at the points whose weight is not 0, the cores and the sides that keep
     # it: each point's today's height is its own whatever other points a call holds, gradebins)
-    # (522: a corridor loosened behind an end its plan does not carry it on past, batter.rs cap_loosen)
-    fast.require(522, "batter_apply_vw")
+    # (522: a corridor loosened behind an end its plan does not carry it on past, batter.rs cap_loosen; 531: each end's
+    # continuation from the pack (nb: its own plan's next segment, the one plan it goes on into), not inferred from the
+    # pack's order and coincident points)
+    fast.require(531, "batter_apply_vw")
     f64 = np.float64
     v, w = fast._ef.batter_apply_vw(
         np.ascontiguousarray(px, f64), np.ascontiguousarray(py, f64), np.ascontiguousarray(base, f64),
-        pack.a, pack.b, pack.za, pack.zb, pack.h, pack.rh, pack.ba, pack.bb, bt[0], bt[1], bt[2],
+        pack.a, pack.b, pack.za, pack.zb, pack.h, pack.rh, pack.ba, pack.bb, bt[0], bt[1], bt[2], pack.nb,
         (float(BATTER_L0_M), float(BATTER_CREST_M), float(BATTER_STRIP_LO), float(BATTER_STRIP_UP),
          float(BATTER_CLOSE_T), float(BATTER_CLOSE_K), float(BATTER_SMOOTH_K), float(BATTER_CORE_BLEND_M),
          float(T_MAX), float(BATTER_OLD_FADE_M), float(lift), float(BATTER_BIN_M)))

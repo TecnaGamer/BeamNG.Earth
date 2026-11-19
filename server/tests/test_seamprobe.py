@@ -345,6 +345,75 @@ class SeamProbe(unittest.TestCase):
                 self.assertEqual(build(br, roads.tile_bbox(*t)).shape(), ref[t].shape(), f"{name} {t}: parts order")
 
 
+def surface_at(chunks, origin, pts, mat):
+    """At the points pts (n, 2): (covered (n,) bool, height (n,), points held twice) of material mat's triangles in
+    the road surface roadmesh.build draws of chunks."""
+    sys.path.insert(0, os.path.join(HERE, "..", "..", "tools", "probes"))
+    import markprobe
+    cov, z = np.zeros(len(pts), bool), np.full(len(pts), np.nan)
+    mesh = roadmesh.build(None, chunks, None, origin)
+    if mesh is None or mat not in mesh[3]:
+        return cov, z, 0
+    P = np.asarray(mesh[0], np.float64) + np.asarray(origin, np.float64)
+    T = np.asarray(mesh[1], np.int64).reshape(-1, 3)[np.asarray(mesh[4]) == mesh[3].index(mat)]
+    pi, _ti, zz = markprobe.lookup(P[T], pts)
+    cov[pi] = True
+    z[pi] = zz
+    return cov, z, int(len(pi) - len(np.unique(pi)))
+
+
+class NoslabLift(unittest.TestCase):
+    """A branch's road surface on an exit union's slab (P2b "noslab": the chunks in the union's branch intervals, from
+    the fork's record) lies roadmesh.NOSLAB_LIFT over its through road's, pinned to the same heights: no point of the two
+    opaque skins within 1 mm (they crossed in bands, 378 m2 at the I-95's Middle Branch: revampfix), and the same from
+    the two tiles either side of a seam as from one build spanning it, from a row wholly inside the through road to a
+    straddling one too (Codex reviews of revampfix / revampfix2)."""
+
+    def test_lifted_over_the_through_road_at_any_seam(self):
+        # (level: on a grade, the branch's rows (flat across, square to its own line) and the through road's meet at
+        # heights a grade x offset x sin(angle) apart, the lift's margin to spend; I-95 measured in the commit)
+        line = np.array([[-30.0, 4.5, 10.5], [-6.0, 0.0, 10.5], [6.0, 0.0, 10.5], [30.0, 4.5, 10.5]])
+        xs = np.array([-40.0, -30.0, -6.0, 6.0, 30.0, 40.0])
+        through = np.c_[xs, np.zeros(len(xs)), np.full(len(xs), 10.5)]
+        tm, bm = roads.DECK_CONCRETE["m"], roads.DECK["m"]
+
+        def chunks(box):
+            out = []
+            for pts, look, w, fid, ns in ((through, roads.DECK_CONCRETE, 7.0, "t", False),
+                                          (line, roads.DECK, 4.0, "b", True)):
+                for piece in roads.clip_polyline(pts, *box):
+                    if len(piece) >= 2:
+                        ch = roads._chunk({**look, "deck": True}, w, np.asarray(piece, np.float64))
+                        ch.update(fixed=True, deck=True, fid=fid)
+                        if ns:
+                            ch["noslab"] = True
+                        out.append(ch)
+            return out
+        g = np.mgrid[-32.0:32.0:0.137, -4.0:8.0:0.137].reshape(2, -1).T + (0.0123457, 0.0098765)
+        everything = (-100.0, -100.0, 100.0, 100.0)
+        cb, zb, twice = surface_at(chunks(everything), (0.0, 0.0, 0.0), g, bm)
+        ct, zt, _t = surface_at(chunks(everything), (0.0, 0.0, 0.0), g, tm)
+        both = cb & ct
+        self.assertGreater(int(both.sum()), 1000)
+        self.assertEqual(twice, 0)
+        dz = zb[both] - zt[both]
+        self.assertGreater(float(dz.min()), 0.001)
+        np.testing.assert_allclose(dz, roadmesh.NOSLAB_LIFT, atol=5e-4)
+        for seam in (-12.3, 3.1):
+            got, zs = np.zeros(len(g), bool), np.full(len(g), np.nan)
+            for box in ((-100.0, -100.0, seam, 100.0), (seam, -100.0, 100.0, 100.0)):
+                c, z, t = surface_at(chunks(box), (box[0] + 7.0, 0.0, 0.0), g, bm)
+                self.assertEqual(t + int((c & got).sum()), 0, f"seam {seam}")
+                got |= c
+                zs[c] = z[c]
+            near = np.abs(g[:, 0] - seam) < 1e-6
+            np.testing.assert_array_equal(got & ~near, cb & ~near, f"seam {seam}")
+            # (on each triangle's own plane: the rows either side of a seam lie elsewhere along a ribbon whose heights
+            # bend at its vertices, the quads' diagonals a fraction of a mm apart, as on any deck ribbon cut there)
+            np.testing.assert_allclose(zs[got], zb[got], atol=1e-3)
+            self.assertGreater(float((zs[both & got] - zt[both & got]).min()), 0.001, f"seam {seam}")
+
+
 class ReachStation(unittest.TestCase):
     """roads._reach_tag's node stations on a loop ramp passing over itself (a grade-separated self-crossing, 10 m
     apart): each node takes its own pass's station, never the other's (Codex review of deckreach)."""
