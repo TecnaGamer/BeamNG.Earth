@@ -1292,7 +1292,6 @@ def _overlays_on_decks(rbc):
     return out
 
 
-@profile_step('Road mesh generation')
 def _weld_clamp(left, right, e):
     """A ground ribbon's end row welded to a deck end (build): its other rows clamped to that end line
     (clamp_to_end). In place."""
@@ -1363,6 +1362,7 @@ def _ground_runs(rs, ab):
     return runs()
 
 
+@profile_step('Road mesh generation')
 def build(frame, chunks, elev, origin, lift=0.0, clip=None, follow=False, q=None, drawn=None, context=(),
           clip_poly=None):
     """The road mesh of a tile (render only; on bridges it lies DECK_SKIN over deck()'s slab): (positions
