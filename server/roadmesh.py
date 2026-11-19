@@ -1947,6 +1947,7 @@ def deck(chunks, origin, piers=(), context=(), beams=(), ground=(), parapets=Non
     bridgetypes.truss_members) in painted steel (TRUSS_STEEL). (positions, tris, uvs, materials, tri
     material index) or None. ground: the tile's ground carriageways (roads.build_tile cover_out) for the parapet
     test, drawn or not (with the roads painted into the ground the chunks have none). Pure."""
+    chunks, context = _slab_chunks(chunks), _slab_chunks(context)
     dch = [c for c in chunks if c.get("deck")]
     junctions = _junction_surfaces(chunks, context)
     cr_all = [(r, c) for r, c in ribbon_pairs(list(context)) if r[5] is not None]
@@ -2016,13 +2017,14 @@ def deck(chunks, origin, piers=(), context=(), beams=(), ground=(), parapets=Non
         lat = left - right
         u = lat / np.maximum(dnp.hypot(lat[:, 0], lat[:, 1]), 1e-9)[:, None]     # unit left
         wide = 0.0 if c.get("tunnel") else PARAPET_W
-        gl_, gr_, ol_, or_, vl_, vr_ = medians[n]
+        sl, sr = _sheet_reach(c, left, right)
+        gl_, gr_, ol_, or_, vl_, vr_ = _sheet_medians(medians[n], sl, sr)
         (xl, cl), (xr, cr_) = _opposite(gl_, ol_, *_noses(gl_), vl_), _opposite(gr_, or_, *_noses(gr_), vr_)
         covered[n] = (covered[n][0] | cl, covered[n][1] | cr_)
         # the slab's edges, past the road's (to the middle of a median beside another deck; to a point at a gore nose),
-        # changing no faster than REACH_SLOPE along it
-        el = left + u * _smooth_reach(_reach(wide, xl), left)[:, None]
-        er = right - u * _smooth_reach(_reach(wide, xr), right)[:, None]
+        # changing no faster than REACH_SLOPE along it; over an exit's union (P2b) to its outer edge
+        el = left + u * np.maximum(_smooth_reach(_reach(wide, xl), left), sl)[:, None]
+        er = right - u * np.maximum(_smooth_reach(_reach(wide, xr), right), sr)[:, None]
         zl = active_field.at(el) if active_field is not None else z
         zr = active_field.at(er) if active_field is not None else z
         bk = _bank_rows(c, k) if active_field is None else None
@@ -2362,6 +2364,59 @@ def _noses(g):
     return ext, cov
 
 
+SHEET_REACH_MAX_M = 40.0    # m past its road's edge a through deck's slab reaches over an exit's union at most
+
+
+def _slab_chunks(chunks):
+    """chunks without the decks that draw no slab of their own (road revamp v2 P2b, "noslab": a branch's road surface
+    inside an exit's union, on the through deck's slab): for the slabs, their parapets and the tests beside them."""
+    return [c for c in chunks if not c.get("noslab")]
+
+
+def _sheet_reach(c, left, right):
+    """(left, right) per row of a deck ribbon: how far its slab reaches past the road's edge over an exit's union
+    (road revamp v2 P2b, roads._sheet_tag's "sx": the union's outer edge, the branch's far slab edge, on that side):
+    along the row's line out from the edge to where it meets that edge (0: it does not, within SHEET_REACH_MAX_M).
+    Basic arithmetic only."""
+    k = len(left)
+    sl, sr = np.zeros(k), np.zeros(k)
+    sx = c.get("sx")
+    if not sx or k == 0:
+        return sl, sr
+    lat = left - right
+    u = lat / np.maximum(dnp.hypot(lat[:, 0], lat[:, 1]), 1e-9)[:, None]
+    for side, far in sx:
+        F = np.asarray(far, np.float64)[:, :2]
+        if len(F) < 2:
+            continue
+        E, d = (left, u) if side > 0 else (right, -u)
+        P, D = F[:-1], F[1:] - F[:-1]
+        den = d[:, None, 0] * D[None, :, 1] - d[:, None, 1] * D[None, :, 0]
+        wx, wy = P[None, :, 0] - E[:, None, 0], P[None, :, 1] - E[:, None, 1]
+        ok = np.abs(den) > 1e-12
+        den = np.where(ok, den, 1.0)
+        t = (wx * D[None, :, 1] - wy * D[None, :, 0]) / den
+        s = (wx * d[:, None, 1] - wy * d[:, None, 0]) / den
+        ok &= (s >= 0.0) & (s <= 1.0) & (t >= 0.0) & (t <= SHEET_REACH_MAX_M)
+        tt = np.where(ok, t, np.inf).min(1)
+        tt = np.where(np.isfinite(tt), tt, 0.0)
+        if side > 0:
+            sl = np.maximum(sl, tt)
+        else:
+            sr = np.maximum(sr, tt)
+    return sl, sr
+
+
+def _sheet_medians(med, sl, sr):
+    """_median_gaps' row of a ribbon with no median where its slab reaches over an exit's union (P2b: the union's
+    outer edge is the slab's, its parapet on it)."""
+    gl, gr, ol, or_, vl, vr = med
+    if not (sl > 0).any() and not (sr > 0).any():
+        return med
+    ml, mr = sl > 0, sr > 0
+    return (np.where(ml, 0.0, gl), np.where(mr, 0.0, gr), ol & ~ml, or_ & ~mr, vl & ~ml, vr & ~mr)
+
+
 def _travel_vec(left, right, tdir):
     """Per ribbon point its traffic's direction (k, 2): the line's tangent times tdir (+1 / -1; 0 two-way: zeros)."""
     lat = left - right
@@ -2581,6 +2636,7 @@ def parapet_runs(chunks, context=(), _rb=None, ground=(), pads=()):
     _rb lets deck() share its already-computed ribbons. Returned dictionaries are ordered by deck
     chunk and edge, and include the points deck() uses verbatim.
     """
+    chunks, context = _slab_chunks(chunks), _slab_chunks(context)
     junctions = _junction_surfaces(chunks, context)
     if _rb is None:
         dch = [c for c in chunks if c.get("deck")]
@@ -2604,7 +2660,8 @@ def parapet_runs(chunks, context=(), _rb=None, ground=(), pads=()):
         lat = left - right
         u = lat / np.maximum(dnp.hypot(lat[:, 0], lat[:, 1]), 1e-9)[:, None]
         wide = 0.0 if c.get("tunnel") else PARAPET_W
-        gl_, gr_, ol_, or_, vl_, vr_ = medians[n]
+        sl, sr = _sheet_reach(c, left, right)
+        gl_, gr_, ol_, or_, vl_, vr_ = _sheet_medians(medians[n], sl, sr)
         (xl, cl), (xr, cr_) = _opposite(gl_, ol_, *_noses(gl_), vl_), _opposite(gr_, or_, *_noses(gr_), vr_)
         covered[n] = (covered[n][0] | cl, covered[n][1] | cr_)
         # (full barriers, never the low curb: a gore nose's points, _noses; a median barrier's, _opposite)
@@ -2614,8 +2671,8 @@ def parapet_runs(chunks, context=(), _rb=None, ground=(), pads=()):
             import roads as _roads
             covered[n] = (covered[n][0] | _roads.pad_inside(pads, left, z=z),
                           covered[n][1] | _roads.pad_inside(pads, right, z=z))
-        el = left + u * _smooth_reach(_reach(wide, xl), left)[:, None]
-        er = right - u * _smooth_reach(_reach(wide, xr), right)[:, None]
+        el = left + u * np.maximum(_smooth_reach(_reach(wide, xl), left), sl)[:, None]
+        er = right - u * np.maximum(_smooth_reach(_reach(wide, xr), right), sr)[:, None]
         k = len(z)
         for sgn, edge, inner, cov, nz in ((1, el, left, covered[n][0], nose[0]),
                                           (-1, er, right, covered[n][1], nose[1])):

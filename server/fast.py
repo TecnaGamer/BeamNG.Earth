@@ -16,7 +16,7 @@ except ImportError:         # no binary for this platform / Python: require() sa
     _ef = None
 
 AVAILABLE = _ef is not None
-MIN_VERSION = 513 # the newest kernel signature the server calls (earthd checks it at start) ...
+MIN_VERSION = 514 # the newest kernel signature the server calls (earthd checks it at start) ...
 if os.environ.get("BNE_BATTER", "off") == "vanilla":
     # ... with the vanilla slopes on (grading.BATTER_ON: batter_apply_vw, 503) too: never below the default (it was
     # set to 503 outright, which let a 505 binary start in that mode and fail at the first sidewalk, Codex r2a18)

@@ -2430,6 +2430,12 @@ def _map_chunks(src, dst, chunks):
             if ov is not None:
                 o = np.asarray(ov, np.float64)
                 out[k][f"ov{e}"] = geotiles.world_map(src, dst, np.c_[o[:, :2], np.zeros(len(o))])[:, :2].tolist()
+    # (road revamp v2 P2b, BNE_ROADSHAPE=sheet: an exit's union's outer edge mapped as the nodes are)
+    for k, c in enumerate(chunks):
+        if c.get("sx"):
+            out[k]["sx"] = [[side, geotiles.world_map(src, dst, np.c_[np.asarray(f, np.float64)[:, :2],
+                                                                         np.zeros(len(f))])[:, :2].tolist()]
+                            for side, f in c["sx"]]
     return out
 
 
