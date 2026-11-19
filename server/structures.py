@@ -38,6 +38,15 @@ Step S2b part 1 (earthfast 488, BNE_DECK_STRUCT 4), still shadow only:
   today's z_mm and a "joint" section (per structure: status, couplings, metrics today vs joint). Nothing is published
   from it.
 
+Step S2b part 2a (earthfast 493, BNE_DECK_STRUCT 5): BNE_DECK_STRUCT=abut is shadow plus ONE abutment height per
+structure end in the PLANS: the joint solve pins each deck's abutments where the plans put them (each deck's own
+approach road), so twins stayed apart at their ends (Ottawa 0.6-0.7 m, E6 Vist 0.43 m). earthfast.structure_abutments
+groups the abutments of decks that are one structure side by side (BESIDE / OVERLAP_ALONG, height-free) facing one way
+and gives each end group max(mean ground estimate, highest clearance need); grading._pin_struct_ends brings every
+approach road's abutment end to it (eased out along the road), so the decks' pins agree. The end group is a closure over
+its ends' cells (halo), the same from whichever end and cell order. Its plans have their own format
+(plancache.plans_format: ".ds5").
+
 off (the default) builds the same plans, facts and tiles as before (no code of this module runs). shadow's closure
 can put more parts in one chain solve (its heights solved together): the switch is in every cache key (revisit:
 SWITCH_VERSIONS, not PLAN_NEUTRAL).
@@ -62,8 +71,11 @@ import numpy as np
 
 log = logging.getLogger("earthd.structures")
 
-MODE = os.environ.get("BNE_DECK_STRUCT", "off")         # off / shadow (S1, S2a, S2b part 1); on: S2b part 2
-SHADOW = MODE == "shadow"
+MODE = os.environ.get("BNE_DECK_STRUCT", "off")         # off / shadow (S1, S2a, S2b part 1) / abut (S2b part 2a)
+# abut: shadow, and the plans give the decks of one structure side by side one abutment height per common end
+# (grading._struct_end / _pin_struct_ends, earthfast.structure_abutments): it changes plans (plancache.plans_format)
+ABUT = MODE == "abut"
+SHADOW = MODE == "shadow" or ABUT
 FORMAT = 3                  # (3: the joint heights, S2b part 1)
 EDGE_KINDS = ("JOIN", "END_ON", "OVERLAP_ALONG", "OVERLAP_CROSS", "BESIDE", "BESIDE_OUTLINE")
 REASONS = ("level", "dz", "walk", "rail", "tunnel", "outside")

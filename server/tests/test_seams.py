@@ -209,5 +209,194 @@ class GradeMatchBankEndTest(unittest.TestCase):
         self.assertGreater(a, 0.5)                                          # (the lower end's approach raised, as before)
 
 
+class StructEndsTest(unittest.TestCase):
+    """BNE_DECK_STRUCT=abut (road revamp RS S2b part 2a): twin decks side by side share one abutment height at each
+    common end (_struct_end: earthfast.structure_abutments), and every approach road ending there is brought to it
+    (_pin_struct_ends)."""
+
+    def planner(self, zs, lift=None, cls="primary", roads_=()):
+        import threading
+        import geodesy
+        g = object.__new__(grading._Planner)
+        g.lock = threading.Lock()
+        g.frame = geodesy.EnuFrame(50.5, 16.2)
+        # twins 60 m long, 9 m apart centre to centre (1 m edge to edge at 4 m half widths), b drawn the other way
+        a = np.array([[0.0, 0.0], [30.0, 0.0], [60.0, 0.0]])
+        b = np.array([[62.0, 9.0], [32.0, 9.0], [2.0, 9.0]])
+        far = np.array([[500.0, 500.0], [560.0, 500.0]])      # (a deck of its own far off)
+        lines = [a, b, far]
+        g._cell_enu = lambda k, ground=True: {
+            "ends": np.array([ln[i] for ln in lines for i in (0, -1)]), "end_of": [0, 0, 1, 1, 2, 2],
+            "bridges": lines, "bridge_ids": ["a", "b", "far"], "bridge_parts": [0, 0, 0],
+            "bridge_cls": [cls] * 3, "bridge_levels": [1.0] * 3, "bridge_half": [4.0] * 3,
+            "ground": [(np.asarray(ln, np.float64), float(h), "primary") for ln, h in roads_]}
+        ends = {(0.0, 0.0): zs[0], (60.0, 0.0): zs[1], (62.0, 9.0): zs[2], (2.0, 9.0): zs[3]}
+
+        def elev(la, lo):
+            e, n, _ = g.frame.geodetic_to_enu(np.asarray(la, np.float64), np.asarray(lo, np.float64), 0.0)
+            out = [min(ends.items(), key=lambda kv: (kv[0][0] - x) ** 2 + (kv[0][1] - y) ** 2)[1]
+                   for x, y in zip(np.atleast_1d(e), np.atleast_1d(n))]
+            return np.asarray(out, np.float64)
+        g.elev = elev
+        g._end_filled = lambda line, at_end, past=False: -np.inf
+        g._end_lift_calc = lambda xy: lift(xy) if lift is not None else None
+        return g
+
+    @staticmethod
+    def z(g, xy):
+        got = g._struct_end(np.asarray(xy, np.float64))
+        return None if got is None else got[0]
+
+    def test_twins_share_each_end(self):
+        g = self.planner((10.0, 11.0, 11.6, 10.3))
+        self.assertAlmostEqual(self.z(g, [0.0, 0.0]), 10.15, places=6)
+        self.assertAlmostEqual(self.z(g, [2.0, 9.0]), 10.15, places=6)
+        self.assertAlmostEqual(self.z(g, [61.0, 0.5]), 11.3, places=6)    # (a road end near it)
+        self.assertAlmostEqual(self.z(g, [62.0, 9.0]), 11.3, places=6)
+        self.assertIsNone(self.z(g, [500.0, 500.0]))     # (no twin)
+        self.assertIsNone(self.z(g, [30.0, -20.0]))      # (no bridge end)
+
+    def test_each_point_answers_for_itself_whatever_asked_first(self):
+        """Two road ends in one half metre either side of the APPROACH_TOUCH_M cutoff: each its own answer, in
+        either order (Codex review: a half-metre memory answered for whoever asked first)."""
+        inside, outside = [-(grading.APPROACH_TOUCH_M - 0.01), 0.0], [-(grading.APPROACH_TOUCH_M + 0.01), 0.0]
+        for order in ((inside, outside), (outside, inside)):
+            g = self.planner((10.0, 11.0, 11.6, 10.3))
+            got = {tuple(p): self.z(g, p) for p in order}
+            self.assertAlmostEqual(got[tuple(inside)], 10.15, places=6)
+            self.assertIsNone(got[tuple(outside)])
+
+    def test_a_clearance_need_lifts_the_whole_end(self):
+        def lift(xy):
+            return (1.5, [], [], False) if abs(float(xy[0])) < 1 and abs(float(xy[1])) < 1 else None
+        g = self.planner((10.0, 11.0, 10.2, 10.1), lift=lift)
+        self.assertAlmostEqual(self.z(g, [0.0, 0.0]), 11.5, places=6)
+        self.assertAlmostEqual(self.z(g, [2.0, 9.0]), 11.5, places=6)
+
+    def test_a_small_need_over_the_mean_is_kept(self):
+        """A clearance target under APPROACH_MIN_LIFT over its own end but over the group's mean still bounds the
+        shared height from below (Codex review: it was dropped and the end lowered under it)."""
+        def lift(xy):
+            return (0.4, [], [], False) if abs(float(xy[0]) - 2.0) < 1 and abs(float(xy[1]) - 9.0) < 1 else None
+        g = self.planner((10.0, 11.0, 11.6, 10.6), lift=lift)
+        self.assertAlmostEqual(self.z(g, [0.0, 0.0]), 11.0, places=6)     # (10.6 + 0.4, over the mean 10.3)
+
+    def test_spread_ends_are_left(self):
+        g = self.planner((10.0, 11.0, 11.6, 11.5))
+        self.assertIsNone(self.z(g, [0.0, 0.0]))
+        self.assertIsNotNone(self.z(g, [60.0, 0.0]))
+
+    def test_a_raised_end_is_never_lowered(self):
+        """A plan end standing over its own ground (a solved or measured deck end, a small lift) keeps its height
+        where sharing would lower it (Codex review)."""
+        g = self.planner((10.0, 11.0, 11.6, 9.4))      # (shared at the first ends: 9.7, under a's ground)
+        s = np.arange(0.0, 101.0, 4.0)
+        ra = grading.Plan(np.c_[-100.0 + s, np.zeros(len(s))], np.full(len(s), 10.4), 5.0, abut=(False, True))
+        ra.rid, ra.max_wall = 1, None
+        self.assertFalse(g._pin_struct_ends([("ra", ra)], [spec("primary")]))
+
+    def test_fill_onto_a_road_beside_is_left(self):
+        g = self.planner((10.0, 11.0, 11.6, 10.6))      # (shared 10.3: a's approach up 0.3 m)
+        beside = (np.array([[-100.0, -6.5], [0.0, -6.5]]), 3.0)       # (a road 6.5 m off, edge to edge 0.5 m)
+        orig = g._struct_end
+        g._struct_end = lambda xy: None if orig(xy) is None else (orig(xy)[0], [beside], orig(xy)[2])
+        s = np.arange(0.0, 101.0, 4.0)
+        ra = grading.Plan(np.c_[-100.0 + s, np.zeros(len(s))], np.full(len(s), 10.0), 3.0, abut=(False, True))
+        ra.rid, ra.max_wall = 1, None
+        self.assertFalse(g._pin_struct_ends([("ra", ra)], [spec("primary")]))
+
+    # (the ground roads round the first ends: both approaches, which rise with them, and a street the decks span 5 m in)
+    APPROACHES = [([[-100.0, 0.0], [0.0, 0.0]], 3.0), ([[-98.0, 9.0], [2.0, 9.0]], 3.0),
+                  ([[5.0, -40.0], [5.0, 40.0]], 4.0)]
+
+    def unlifted_raise(self, ground):
+        """a's approach raised 0.3 m to its twin's height at the first ends (shared 10.3), with no lift of its own:
+        _end_lift_calc None, so no caps from it."""
+        g = self.planner((10.0, 11.0, 11.6, 10.6), roads_=ground)
+        s = np.arange(0.0, 101.0, 4.0)
+        ra = grading.Plan(np.c_[-100.0 + s, np.zeros(len(s))], np.full(len(s), 10.0), 3.0, abut=(False, True))
+        ra.rid, ra.max_wall = 1, None
+        plans = [("ra", ra)]
+        return g._pin_struct_ends(plans, [spec("primary")]), np.asarray(plans[0][1].z)
+
+    def test_an_unlifted_end_keeps_clear_of_a_road_beside(self):
+        """An end with no lift of its own raised to its group's height beside a through road inside the raise's fill
+        keeps its height (Codex review: no lift gave no caps, and its fill was laid onto the road)."""
+        beside = ([[-100.0, -6.5], [-10.0, -6.5]], 3.0)      # (6.5 m off, its edge 0.5 m from the approach's)
+        done, z = self.unlifted_raise(self.APPROACHES + [beside])
+        self.assertFalse(done)
+        self.assertAlmostEqual(float(z[-1]), 10.0, places=6)
+
+    def test_an_unlifted_end_with_no_road_beside_is_raised(self):
+        done, z = self.unlifted_raise(self.APPROACHES + [([[-100.0, -30.0], [-10.0, -30.0]], 3.0)])   # (30 m off)
+        self.assertTrue(done)
+        self.assertAlmostEqual(float(z[-1]), 10.3, places=6)
+        self.assertAlmostEqual(float(z[0]), 10.0, places=6)
+
+    def test_an_unlifted_end_keeps_clear_of_a_spanned_road_turning_alongside(self):
+        """A street that passes under the decks and then runs along the approach is kept where it is out from under
+        them (Codex review: any crossing exempted the whole road)."""
+        bend = ([[5.0, 30.0], [5.0, -6.5], [-100.0, -6.5]], 3.0)
+        done, z = self.unlifted_raise(self.APPROACHES[:2] + [bend])
+        self.assertFalse(done)
+        self.assertAlmostEqual(float(z[-1]), 10.0, places=6)
+
+    def test_beside_keeps_a_twin_approach_unless_it_rises(self):
+        """A twin's approach is let in the fill only where it stands at the shared height (rise); one raised only by
+        its own pin may be left low (Codex review)."""
+        g = self.planner((10.0, 11.0, 11.6, 10.6), roads_=self.APPROACHES[:2])
+        spans = [(np.array([[0.0, 0.0], [60.0, 0.0]]), 4.0), (np.array([[62.0, 9.0], [2.0, 9.0]]), 4.0)]
+        ends = [[0.0, 0.0], [2.0, 9.0]]
+
+        def firsts(rise):
+            return sorted(tuple(np.round(np.asarray(ln)[0], 1)) for ln, _h in g._struct_beside([0.0, 0.0], ends, rise,
+                                                                                                spans))
+        self.assertEqual(firsts([[0.0, 0.0]]), [(-98.0, 9.0)])
+        self.assertEqual(firsts(ends), [])
+
+    def test_beside_finds_a_fast_deck_past_the_group_reach(self):
+        """FAST_DECK_GROUND: a motorway deck beside the far end of a long seam, past the end group's STRUCT_NEAR_M, is
+        an obstacle (Codex review: only the group's own deck search found them); the structure's own decks are not."""
+        g = self.planner((10.0, 11.0, 11.6, 10.6))
+        cell = g._cell_enu
+        mw = np.array([[-140.0, -6.0], [-115.0, -6.0]])
+
+        def with_mw(k, ground=True):
+            c = dict(cell(k, ground))
+            c["bridges"] = list(c["bridges"]) + [mw]
+            c["bridge_cls"] = list(c["bridge_cls"]) + ["motorway"]
+            c["bridge_half"] = list(c["bridge_half"]) + [5.0]
+            return c
+        g._cell_enu = with_mw
+        spans = [(np.array([[0.0, 0.0], [60.0, 0.0]]), 4.0), (np.array([[62.0, 9.0], [2.0, 9.0]]), 4.0)]
+        got = g._struct_beside([0.0, 0.0], [[0.0, 0.0], [2.0, 9.0]], [[0.0, 0.0]], spans, True)
+        self.assertEqual([tuple(np.asarray(ln)[0]) for ln, _h in got], [(-140.0, -6.0)])
+        self.assertEqual(g._struct_beside([0.0, 0.0], [[0.0, 0.0], [2.0, 9.0]], [[0.0, 0.0]], spans, False), [])
+
+    def test_a_short_approach_is_left(self):
+        g = self.planner((10.0, 11.0, 11.6, 10.3))
+        s = np.arange(0.0, 16.1, 4.0)
+        ra = grading.Plan(np.c_[-16.0 + s, np.zeros(len(s))], np.full(len(s), 11.0), 5.0, abut=(False, True))
+        ra.rid, ra.max_wall = 1, None
+        self.assertFalse(g._pin_struct_ends([("ra", ra)], [spec("primary")]))
+
+    def test_approaches_meet_at_the_shared_height(self):
+        g = self.planner((10.0, 11.0, 11.6, 10.3))
+        s = np.arange(0.0, 101.0, 4.0)
+        ra = grading.Plan(np.c_[-100.0 + s, np.zeros(len(s))], np.full(len(s), 10.0), 5.0, abut=(False, True))
+        rb = grading.Plan(np.c_[-98.0 + s, np.full(len(s), 9.0)], np.full(len(s), 10.3), 5.0,
+                          abut=(False, True))
+        for p, rid in ((ra, 1), (rb, 2)):
+            p.rid, p.max_wall = rid, None
+        plans = [("ra", ra), ("rb", rb)]
+        self.assertTrue(g._pin_struct_ends(plans, [spec("primary"), spec("primary")]))
+        za, zb = np.asarray(plans[0][1].z), np.asarray(plans[1][1].z)
+        self.assertAlmostEqual(float(za[-1]), 10.15, places=6)
+        self.assertAlmostEqual(float(zb[-1]), 10.15, places=6)
+        self.assertLessEqual(float(np.abs(np.diff(za)).max()) / 4.0, grading.STRUCT_SEAM_GRADE * 1.5 + 1e-9)
+        self.assertAlmostEqual(float(za[0]), 10.0, places=6)            # (far from the end as it was)
+        self.assertFalse(g._pin_struct_ends(plans, [spec("primary"), spec("primary")]))   # (already there)
+
+
 if __name__ == "__main__":
     unittest.main()

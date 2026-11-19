@@ -40,6 +40,7 @@ mod dsm;
 mod vegmask;
 mod roadgeom;
 mod roadsmooth;
+mod roadshape;
 mod shore;
 mod photofill;
 mod ambience;
@@ -7139,16 +7140,15 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // centimetre key in a RailNode, the last of equal keys; RailNode.find, railprofile._find's lookup)
     m.add_function(wrap_pyfunction!(stationzone::station_zone, m)?)?;
     // 494: the full port's busstationmesh.zone loops and _clip_cell (stationzone::station_zone: a station's walkable
-    // ground, kerb walls and tactile strips from walk_field's lattice in one call). 493 is another branch's
+    // ground, kerb walls and tactile strips from walk_field's lattice in one call)
     m.add_function(wrap_pyfunction!(seawater::sea_cell_lookup, m)?)?;
     // 495: the full port's seacarve.SeaCarver.water cell lookup (seawater::sea_cell_lookup: the bilinear floor depth,
     // the nearest pixel's level and the near-sea test straight from a cell's block-stored raster)
     // 496: power_line_layout takes span_ground and span_clear (the spans' clearance over the ground: towers (t, 5) with
     // their scale, supports (k, 12)); skeleton_roof fails a skeleton with a node over its distance to the outline (an
     // 18 km gabled roof, report W545TFKJ); street_points finds a spot clear of every carriageway (report 5T7V9FNQ).
-    // 495 is another branch's
     // 500: enu_rings and enu_bounds (mapgeom.enu_rings / enu_bounds: many rings' frame conversion in one call, the
-    // per-ring enu_xy calls of railways.crossings, ChainView._todo and the like). 497-499 are other branches'
+    // per-ring enu_xy calls of railways.crossings, ChainView._todo and the like)
     m.add_function(wrap_pyfunction!(roadwear::surface_plan, m)?)?;
     // 499: road revamp v2 P1c (BNE_SURFACE_V2): roadwear::surface_plan (surface variation, tyre wear on the lane
     // centres, repair patch strips along a tile's roads) and follow_tris's `clear` (a whole overlay triangle raised
@@ -7177,6 +7177,17 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 498-502 are other branches'
     // 504: sub_polyline / sub_polylines (subpoly.rs: roads.sub_polyline, a feature's rings x level ranges in one call
     // for _parts_by_level_new, _part_keys_new, railways._pieces_of, height_limit_lines). 502-503 are other branches'
-    m.add("VERSION", 504)?;
+    // where the ground bulges inside it: no dip under its lift)
+    m.add_function(wrap_pyfunction!(structures::abutments::structure_abutments, m)?)?;
+    // 493: road revamp RS step S2b part 2a (structures::abutments::structure_abutments: one abutment height per
+    // structure end, grading's plans on BNE_DECK_STRUCT=abut)
+    m.add_function(wrap_pyfunction!(roadshape::decks::deck_shape, m)?)?;
+    m.add_function(wrap_pyfunction!(roadshape::decks::deck_simple, m)?)?;
+    // 498: road revamp v2 phase P1b (roadshape::decks: deck_shape, a simple structure's deck line from the road's
+    // smooth line with its skewed end lines and buried ends; deck_simple, which structure groups are simple;
+    // BNE_ROADSHAPE=decks)
+    // 505: try598's 501 (P1c, the Rust ports 494-500) with RS S2b part 2a (493) and v2 P1b (498) merged; 502-504 are
+    // other branches'
+    m.add("VERSION", 505)?;
     Ok(())
 }

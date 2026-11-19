@@ -102,8 +102,13 @@ def plans_format():
     import grading
     # (the grade guard, off by default, makes other plans: its own key, so that the two never mix and nobody else's
     # plans are thrown away)
-    # (the vanilla slopes, off by default, grade other ground from the same plans: their own key too, BATTER_ON)
-    return f"{PLANS_FORMAT}.{roads.FACTS_FORMAT}" + (".gg1" if grading.GUARD_ON else "") \
+    import revisit
+    import structures
+    # (the vanilla slopes, off by default, grade other ground from the same plans: their own key too, BATTER_ON;
+    # BNE_DECK_STRUCT=abut, RS S2b part 2a: the plans give a structure's twins one abutment height per end, keyed by
+    # the switch's version, so its plans never mix with anyone else's)
+    ds = f".ds{revisit.SWITCH_VERSIONS['BNE_DECK_STRUCT']}" if structures.ABUT else ""
+    return f"{PLANS_FORMAT}.{roads.FACTS_FORMAT}" + (".gg1" if grading.GUARD_ON else "") + ds \
         + (".bv1" if grading.BATTER_ON else "")
 
 
