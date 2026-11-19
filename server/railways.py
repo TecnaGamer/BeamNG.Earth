@@ -1235,7 +1235,10 @@ def profile(rails, ground, underpasses=()):
     """Per part: bed and ground heights. Underpasses reserve clearance above their lower road mouths.
     ground(xy (n, 2)) -> z. The resulting deck heights propagate along connected approach ramps.
     earthfast.rail_profile (the Python's numpy, its order and its ties); ground is asked here as the Python asked it: the
-    parts' points, the decks' approach rays (approach_levels_many's), the underpasses' mouths.
+    parts' points, the decks' approach rays (approach_levels_many's), the underpasses' mouths. The contract (every real
+    caller's, railways.parts' lines and point_ground / grade_plans' ground): float64 (k, 2) lines, ground a new (n,)
+    array each call (not a reused buffer: the beds are laid after its last call). Outside it the Python's results are not
+    kept (accepted, Codex r2a20: float32 lines' arcs, an (n, 1) ground, a NaN's payload bytes).
     """
     if not rails:
         return []
