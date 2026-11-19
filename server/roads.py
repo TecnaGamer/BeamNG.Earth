@@ -8016,6 +8016,7 @@ CORNER_CONCRETE_M = 4.0  # m: a concrete street this close to a curb return fill
 AT_GRADE_M = 3.0        # m: a road crossing a deck within AT_GRADE_REACH_M of an abutment that cannot get this
 AT_GRADE_REACH_M = 12.0     # high over it is a junction at grade (the intersection a ramp starts from)
 CHAIN_CELLS = 12        # map cells read at most to close one bridge chain
+PROFILE_RETRY_S = 10.0  # s after a chain published while its joint profile read short it is solved again (P3c, _retry_due)
 # BNE_DECK_STRUCT=shadow (RS S2a fix): the cells the closure reads only for its halo (structures.halo: within reach of
 # the chain, holding none of its parts) have this budget of their own, apart from CHAIN_CELLS (the cells that hold the
 # chain's parts): a chain of 7 cells beside a cell row touched 7 empty ones and went to window solves (Codex review).
@@ -9210,6 +9211,8 @@ class BridgeProfiles:
         """Solve the chain of part key (its ring's ends (lat, lon) say where to start loading): its parts into done.
         Returns done[key] or None. A chain another store owns (owner_of) is solved there and its result taken in, its
         geometry mapped into this frame (one deck profile per chain, whichever store a tile asks)."""
+        if self.__dict__.get("profile_retry"):
+            self._retry_due(key)
         got = self._take(key)
         if got is not None:
             return got
@@ -9224,6 +9227,27 @@ class BridgeProfiles:
         comp = []
         with revisit.scope() as short:
             return self._chain_solve(key, ends, adopt, comp, short)
+
+    def _retry_due(self, key):
+        """BNE_ROADSHAPE=profile (P3c, Codex review of P3b): a chain published while its joint profile read short (a
+        cell, a ground line not at hand: today's heights, noted short) is solved again once PROFILE_RETRY_S has passed
+        since: its parts leave `done` together (their notes, piers and profile marks with them) and the next ask
+        solves the chain again, as a fresh store would (an adopted copy carries the owner's due time: its re-solve
+        adopts the owner's). The builds that took the short parts were short (not kept)."""
+        with self.lock:
+            pr = self.__dict__.get("profile_retry", {})
+            got = pr.get(key)
+            if got is None or time.monotonic() < got[1]:
+                return False
+            ck = got[0]
+            for k in [k for k, v in pr.items() if v[0] == ck]:
+                pr.pop(k, None)
+                self.done.pop(k, None)
+                self.__dict__.get("short", {}).pop(k, None)
+                self.piers.pop(k, None)
+                self.__dict__.get("profiled", set()).discard(k)
+                self.__dict__.get("profile_of", {}).pop(k, None)
+            return True
 
     def _note_short(self, k, n, lidar):
         """Under self.lock: part k's solve read n things short (lidar: built on the lidar rule)."""
@@ -9383,12 +9407,16 @@ class BridgeProfiles:
         # deck_profile + _tie_beside; its approach pins go to the plans' second stage (grading.PROFILE_PINS). Every
         # part of the chain this solve's (a whole chain: one answer whoever solves it); anything but "solved": today's)
         prof = None
+        prof_short = False      # (P3c: the profile read short or raised: the chain solved again later, _retry_due)
         if (reqs is not None and roadshape.PROFILE_BUILT and block is None and comp and len(keep) == len(comp)
                 and not getattr(self, "PROFILE_OFF", False)):
+            n0 = short.n
             try:
                 _rec, prof = roadshape.profile_built(self, list(comp), {k: shaped[k] + (pool[k][3],) for k in comp},
                                                      dict(ground), reqs)
+                prof_short = short.n > n0
             except Exception as ex:
+                prof_short = True
                 # (today's heights; the chain marked short, never kept: a cell the profile reads not at hand made
                 # today's here and the profile's elsewhere)
                 log.debug("chain %s: profile: %s: %s", key, type(ex).__name__, ex)
@@ -9441,6 +9469,8 @@ class BridgeProfiles:
                 if prof is not None:                    # (P3b: its heights are the profile's; the sheet's pins held)
                     self.__dict__.setdefault("profiled", set()).add(k)
                     self.__dict__.setdefault("profile_of", {})[k] = ck
+                if prof_short:                          # (P3c: solved again after PROFILE_RETRY_S, _retry_due)
+                    self.__dict__.setdefault("profile_retry", {})[k] = (ck, time.monotonic() + PROFILE_RETRY_S)
             if prof is not None and publish:
                 self.__dict__.setdefault("profiles", {}).setdefault(ck, prof)
             if fresh and ck not in self.trusses:
@@ -9524,6 +9554,7 @@ class BridgeProfiles:
             tpiers = owner.piers.get(("truss", ck))
             depth = {k: owner.__dict__.get("depth", {}).get(k) for k in mine}
             theirs = {k: owner.__dict__.get("short", {}).get(k) for k in mine}
+            retry = {k: owner.__dict__.get("profile_retry", {}).get(k) for k in mine}
             extra = owner._adopt_extra(comp)
         mp = ChainView.mapper(owner.frame, self.frame)
         with self.lock:
@@ -9540,6 +9571,8 @@ class BridgeProfiles:
                 n_s, n_l = max(mine_n, (theirs[k] or (0, 0))[0]), max(mine_l, (theirs[k] or (0, 0))[1])
                 if n_s or n_l:                          # (before the part itself: never a part without its note)
                     self._note_short(k, n_s, n_l)
+                if retry[k] is not None:                # (P3c: the owner's short profile: asked again when due)
+                    self.__dict__.setdefault("profile_retry", {})[k] = retry[k]
                 xy2 = xyz[:, :2].copy()
                 rec = getattr(xy, "shape_rec", None)
                 if rec is not None:                     # (roadshape: its shape mapped with it, on the line itself)

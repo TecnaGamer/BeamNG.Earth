@@ -7355,6 +7355,6 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 516: v2 P3a (roadshape::profile: the stretches from anchor to anchor through a chain's decks and their joint
     // height solve, shadow only, BNE_ROADSHAPE=profile)
     // 521: v2 P3b (roadshape::pins::profile_pin_field: the joint profile's approach ground into the graded ground)
-    m.add("VERSION", 521)?;
+    m.add("VERSION", 523)?;
     Ok(())
 }

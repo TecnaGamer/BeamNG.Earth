@@ -16,7 +16,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import fast  # noqa: E402
 import roadshape  # noqa: E402
 
-EF = fast._ef if getattr(fast._ef, "VERSION", 0) >= 521 else None
+EF = fast._ef if getattr(fast._ef, "VERSION", 0) >= 523 else None
 
 
 def sprm():
@@ -77,12 +77,12 @@ def sheet_case():
     return xy, off, z, g, [1, 1, 0], [5.0, 4.0, 0.0], [1.0, 1.0, 0.0], [5.0, 5.0, 0.0], [3, 3, 1], joins, pins, []
 
 
-@unittest.skipIf(EF is None, "earthfast 521 needed")
+@unittest.skipIf(EF is None, "earthfast 523 needed")
 class Bytes(unittest.TestCase):
     GOLDEN = {
         "ramp": "b30e05b8e080457f7d9389b6",
         "sheet": "a0998d9624505490057d0d5b",
-        "pins": "3215a4d4117db3258d0616bb",
+        "pins": "657e51a47f1fc45fa4fe592c",
     }
 
     def check(self, name, got):
@@ -113,7 +113,8 @@ class Bytes(unittest.TestCase):
         qxy, qoff = flat([q, q2])
         prm = [grading.PIN_TAPER_M, grading.PIN_GATE_M[0], grading.PIN_GATE_M[1]]
         w = np.clip((200.0 - np.r_[q[:, 0], q2[:, 0]]) / 50.0, 0.0, 1.0)
-        got = np.asarray(EF.profile_pin_field(pts, z, qxy, qoff, np.r_[dz, 0.5 * dz], np.r_[h, h], w, [5.0, 5.0], prm),
+        got = np.asarray(EF.profile_pin_field(pts, z, qxy, qoff, np.r_[dz, 0.5 * dz], np.r_[h, h], w,
+                                              1.0 - 0.9 * np.r_[q[:, 0], q2[:, 0]] / 200.0, [5.0, 5.0], prm),
                          np.float64)
         on = np.flatnonzero((np.abs(pts[:, 1]) < 1e-9) & (pts[:, 0] >= 0.0) & (pts[:, 0] <= 200.0))
         self.assertTrue(np.any(got[on] != 0.0))
