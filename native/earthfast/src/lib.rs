@@ -6717,6 +6717,9 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // a window's selection, pieces, clip test, resampling and sort in one call) and railways.road_underpasses
     // (railunder: a layer's roads with a tunnel in an UnderpassIndex, a window's short tunnels in one call). 488-490
     // are other branches'
-    m.add("VERSION", 491)?;
+    m.add_function(wrap_pyfunction!(structures::abutments::structure_abutments, m)?)?;
+    // 493: road revamp RS step S2b part 2a (structures::abutments::structure_abutments: one abutment height per
+    // structure end, grading's plans on BNE_DECK_STRUCT=abut). 492 is another branch's
+    m.add("VERSION", 493)?;
     Ok(())
 }

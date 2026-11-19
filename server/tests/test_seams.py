@@ -209,5 +209,76 @@ class GradeMatchBankEndTest(unittest.TestCase):
         self.assertGreater(a, 0.5)                                          # (the lower end's approach raised, as before)
 
 
+class StructEndsTest(unittest.TestCase):
+    """BNE_DECK_STRUCT=abut (road revamp RS S2b part 2a): twin decks side by side share one abutment height at each
+    common end (_struct_end: earthfast.structure_abutments), and every approach road ending there is brought to it
+    (_pin_struct_ends)."""
+
+    def planner(self, zs, lift=None, cls="primary"):
+        import threading
+        import geodesy
+        g = object.__new__(grading._Planner)
+        g.lock = threading.Lock()
+        g.frame = geodesy.EnuFrame(50.5, 16.2)
+        # twins 60 m long, 9 m apart centre to centre (1 m edge to edge at 4 m half widths), b drawn the other way
+        a = np.array([[0.0, 0.0], [30.0, 0.0], [60.0, 0.0]])
+        b = np.array([[62.0, 9.0], [32.0, 9.0], [2.0, 9.0]])
+        far = np.array([[500.0, 500.0], [560.0, 500.0]])      # (a deck of its own far off)
+        lines = [a, b, far]
+        g._cell_enu = lambda k, ground=True: {
+            "ends": np.array([ln[i] for ln in lines for i in (0, -1)]), "end_of": [0, 0, 1, 1, 2, 2],
+            "bridges": lines, "bridge_ids": ["a", "b", "far"], "bridge_parts": [0, 0, 0],
+            "bridge_cls": [cls] * 3, "bridge_levels": [1.0] * 3, "bridge_half": [4.0] * 3}
+        ends = {(0.0, 0.0): zs[0], (60.0, 0.0): zs[1], (62.0, 9.0): zs[2], (2.0, 9.0): zs[3]}
+
+        def elev(la, lo):
+            e, n, _ = g.frame.geodetic_to_enu(np.asarray(la, np.float64), np.asarray(lo, np.float64), 0.0)
+            out = [min(ends.items(), key=lambda kv: (kv[0][0] - x) ** 2 + (kv[0][1] - y) ** 2)[1]
+                   for x, y in zip(np.atleast_1d(e), np.atleast_1d(n))]
+            return np.asarray(out, np.float64)
+        g.elev = elev
+        g._end_filled = lambda line, at_end, past=False: -np.inf
+        g._end_lift = lambda xy: lift(xy) if lift is not None else None
+        return g
+
+    def test_twins_share_each_end(self):
+        g = self.planner((10.0, 11.0, 11.6, 10.3))
+        self.assertAlmostEqual(g._struct_end(np.array([0.0, 0.0])), 10.15, places=6)
+        self.assertAlmostEqual(g._struct_end(np.array([2.0, 9.0])), 10.15, places=6)
+        self.assertAlmostEqual(g._struct_end(np.array([61.0, 0.5])), 11.3, places=6)    # (a road end near it)
+        self.assertAlmostEqual(g._struct_end(np.array([62.0, 9.0])), 11.3, places=6)
+        self.assertIsNone(g._struct_end(np.array([500.0, 500.0])))     # (no twin)
+        self.assertIsNone(g._struct_end(np.array([30.0, -20.0])))      # (no bridge end)
+
+    def test_a_clearance_need_lifts_the_whole_end(self):
+        def lift(xy):
+            return (1.5, [], [], False) if abs(float(xy[0])) < 1 and abs(float(xy[1])) < 1 else None
+        g = self.planner((10.0, 11.0, 10.2, 10.1), lift=lift)
+        self.assertAlmostEqual(g._struct_end(np.array([0.0, 0.0])), 11.5, places=6)
+        self.assertAlmostEqual(g._struct_end(np.array([2.0, 9.0])), 11.5, places=6)
+
+    def test_spread_ends_are_left(self):
+        g = self.planner((10.0, 11.0, 11.6, 11.5))
+        self.assertIsNone(g._struct_end(np.array([0.0, 0.0])))
+        self.assertIsNotNone(g._struct_end(np.array([60.0, 0.0])))
+
+    def test_approaches_meet_at_the_shared_height(self):
+        g = self.planner((10.0, 11.0, 11.6, 10.3))
+        s = np.arange(0.0, 101.0, 4.0)
+        ra = grading.Plan(np.c_[-100.0 + s, np.zeros(len(s))], np.full(len(s), 10.0), 5.0, abut=(False, True))
+        rb = grading.Plan(np.c_[-98.0 + s, np.full(len(s), 9.0)], np.full(len(s), 10.3), 5.0,
+                          abut=(False, True))
+        for p, rid in ((ra, 1), (rb, 2)):
+            p.rid, p.max_wall = rid, None
+        plans = [("ra", ra), ("rb", rb)]
+        self.assertTrue(g._pin_struct_ends(plans, [spec("primary"), spec("primary")]))
+        za, zb = np.asarray(plans[0][1].z), np.asarray(plans[1][1].z)
+        self.assertAlmostEqual(float(za[-1]), 10.15, places=6)
+        self.assertAlmostEqual(float(zb[-1]), 10.15, places=6)
+        self.assertLessEqual(float(np.abs(np.diff(za)).max()) / 4.0, grading.STRUCT_SEAM_GRADE * 1.5 + 1e-9)
+        self.assertAlmostEqual(float(za[0]), 10.0, places=6)            # (far from the end as it was)
+        self.assertFalse(g._pin_struct_ends(plans, [spec("primary"), spec("primary")]))   # (already there)
+
+
 if __name__ == "__main__":
     unittest.main()
