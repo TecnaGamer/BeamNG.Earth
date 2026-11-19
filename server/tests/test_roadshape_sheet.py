@@ -64,13 +64,13 @@ def drawn(parts, sheet, chain=False):
     return chunks, tops, runs
 
 
-def sheet_marks(parts, box=(-60.0, -60.0, 360.0, 90.0)):
+def sheet_marks(parts, box=(-60.0, -60.0, 360.0, 90.0), walks=None):
     """deck_pads' skip list of the tile box over parts (BNE_ROADSHAPE=sheet: roads._sheet_marks)."""
     old = roadshape.SHEET
     roadshape.SHEET = True
     marks = []
     try:
-        roads._deck_chunks(parts, box, sheet_marks=marks)
+        roads._deck_chunks(parts, box, walks=walks, sheet_marks=marks)
     finally:
         roadshape.SHEET = old
     return marks
@@ -156,8 +156,10 @@ class SheetDecks(unittest.TestCase):
             self.assertTrue(any(c.get("noslab") for c in ramp))
             self.assertTrue(any(c.get("sk0") or c.get("sk1") for c in ramp if not c.get("noslab")))
             self.assertTrue(any(c.get("sx") for c in ch if str(c.get("fid")).startswith("b-through")))
-            # (the fork's node and its branch: roads.deck_pads leaves its pad out)
+            # (the fork's node and its branch: roads.deck_pads leaves its pad out; none where its ramp has sidewalks
+            # and no union is drawn: its pad stays, Codex)
             self.assertEqual([m[:2] + m[3:] for m in sheet_marks(parts)], [[0.0, 0.0, "c-ramp"]])
+            self.assertEqual(sheet_marks(parts, walks={"c-ramp": (2.0, (1,))}), [])
             # pinned: the ramp's road in the union at the through deck's heights (10 + 2 x / 300)
             for c in ramp:
                 if c.get("noslab"):

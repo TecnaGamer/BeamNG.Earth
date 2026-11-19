@@ -12862,10 +12862,13 @@ def _sheet_plan(decks, walks, shapes, wide=None, marks=None):
     if not drawn or not src:
         return [], decks
     recs, dzs = _sheet_records(src)
-    if marks is not None:
-        marks.extend(_sheet_marks(src, recs))
     bad = {_sheet_key(d[0], d[2]) for i, d in enumerate(decks) if len(d[2]) >= 2 and (
         (walks or {}).get(d[0]) or (shapes is not None and shapes[i] is not None))}
+    if marks is not None:
+        # (not a fork with a part known to draw no union, sidewalks or a shape: its pad stays, Codex; a tile near the
+        # pad holds its through deck and branch among decks, so knows them as the tiles drawing them do)
+        marks.extend(_sheet_marks(src, [r for r in recs if not any(
+            _sheet_key(src[j][0], src[j][2]) in bad for j in [r["t"], r["b"]] + [c[0] for c in r["cover"]])]))
 
     def own(j):
         k = _sheet_key(src[j][0], src[j][2])
@@ -13051,7 +13054,7 @@ def _cut_ends(ch, line, box):
     a, b = ln[:-1], ln[1:]
     for e, at in ((0, 0), (1, -1)):
         p = c[at, :2]
-        if ch.get(f"sk{e}") is not None or not _on_box(p, box):
+        if ch.get(f"sk{e}") is not None or not _on_box(p, box, 1e-3):  # (rounded: a geotile's box is fractional)
             continue
         if min(float(dnp.hypot(*(p - ln[0]))), float(dnp.hypot(*(p - ln[-1])))) <= 1e-3:
             continue                        # (the part's own end on the edge: no cut)
