@@ -106,7 +106,7 @@ def plans_format():
     # (the vanilla slopes, off by default, grade other ground from the same plans: their own key too, BATTER_ON;
     # and the one vertical solve's: BNE_VSOLVE)
     return f"{PLANS_FORMAT}.{roads.FACTS_FORMAT}" + (".gg1" if grading.GUARD_ON else "") \
-        + (".bv1" if grading.BATTER_ON else "") + (".vs2" if vsolve.SOLO else ".vs1" if vsolve.ON else "")
+        + (".vs2" if vsolve.SOLO else ".vs1" if vsolve.ON else "") + (".bv1" if grading.BATTER_ON else "")
 
 
 FRAMES = "r10"          # the plans' frames: their planning regions' (geotiles.PLAN_Z), not an anchor's
