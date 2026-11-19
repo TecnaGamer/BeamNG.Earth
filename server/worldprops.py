@@ -723,7 +723,7 @@ def _polylines(frame, layers):
 
 
 def _layer_lines(frame, feats):
-    lines, at = [], []
+    rings, at = [], []
     for i in range(len(feats.kind)):
         if int(feats.kind[i]) != mapgeom.LINE:
             continue
@@ -732,10 +732,9 @@ def _layer_lines(frame, feats):
                 ring = np.asarray(ring, np.float64)
                 if len(ring) < 2:
                     continue
-                e, n = mapgeom.enu_xy(feats, frame, ring)
-                lines.append(np.column_stack([np.asarray(e, np.float64), np.asarray(n, np.float64)]))
+                rings.append(ring)
                 at.append(i)
-    return lines, at
+    return (mapgeom.enu_rings(feats, frame, rings) if rings else []), at     # (one call for the layer)
 
 
 def _near_roads(pts, lines, dist):

@@ -208,6 +208,9 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   once per area; `BNE_LOD2_ROOFS=off` turns it off.
   `BNE_GRADE_GUARD=on` (off by default; Settings > Experimental > Road steepness limit) adds a last pass over a cell's road plans: roads that meet at a node get one height
   and ease to it smoothly at a grade fit for their class, and the grades the earlier passes made stay under a ceiling per class.
+  `BNE_BATTER=vanilla` (off by default and not on the settings page yet: still to be checked in game) rolls the ground
+  beside roads and railways off in wide cut and fill slopes like the stock maps' (gentler in towns, stopping short of
+  buildings) instead of a narrow carved ribbon.
 - Smooth bends (on by default; `BNE_ROAD_SMOOTH=off` draws the roads as mapped): the map draws a bend as a few
   straight pieces, so roads had a visible corner at every vertex, and a banked racetrack's chords made a series of
   bumps. Each bend of a drivable road and racetrack is an arc tangent to both pieces (a motorway's gentle, a lane's

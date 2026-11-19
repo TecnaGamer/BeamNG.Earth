@@ -1388,7 +1388,7 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
             tph = _h01(fid, side, "tph") * STREET_TREE_SPACING
             for p, out, s_line in _stations(run, line, STREET_TREE_SPACING, tph, END_CLEAR_M + 4.0, side):
                 q = p[:2] - out * (w / 2 - STREET_TREE_CURB_M)
-                if _owns(box, q[0], q[1]):
+                if _owns(box, q[0], q[1]) and not on_bed(q):
                     # (each tree's size, turn and rank keyed on its station along the road, not on where the anchor's
                     # frame puts it: the same tree from every anchor, geotiles 2026-10-29)
                     k = int(round((s_line - tph) / STREET_TREE_SPACING))
@@ -1500,10 +1500,24 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
             import frgore
             rows.extend(frgore.place(pole_frame,roads,box,country_at,
                                     ground=sign_obstacles.ground if sign_obstacles is not None else None,decks=decks))
+    if bed is not None:     # (nothing guessed on a track's bed: the junctions' signs, the regional kit's markers and
+        # signs too; the poles were kept off it above, before their wires; Codex's review)
+        rows = [r for r in rows if not on_bed((float(r[1]), float(r[2])))]
     # (the tile's own, at their mapped points: not moved off the clearance like a guessed one)
     rows += [list(r) for r in mapped_lamps if _owns(box, r[1], r[2])]
     rows = citylamps.localize(rows, poleprofiles.lamp_country_selector(pole_profile, pole_frame))
     return under_decks(rows + lamp_lenses(rows), list(decks), wires)
+
+
+def off_rail_beds(rows, obstacles):
+    """rows (props rows) but those on or by a track's bed (obstacles: railxing.rail_obstacles', CLEAR_OTHER_M more): the
+    roadside rows placed after furniture.place (roads.build_tile's deferred gore markers and verge posts)."""
+    rows = list(rows)
+    if not obstacles or not rows:
+        return rows
+    import fast
+    bed = fast.Others(list(obstacles))
+    return [r for r in rows if bed.clear(np.array([float(r[1]), float(r[2])]), None, CLEAR_OTHER_M)]
 
 
 def _support_row(p):

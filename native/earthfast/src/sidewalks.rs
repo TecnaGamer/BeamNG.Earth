@@ -517,4 +517,25 @@ mod tests {
         assert_eq!(m.p.len(), 7 * 2 * 5 + 2 * 8);
         assert_eq!(m.t.len(), 7 * 2 * 4 + 2 * 6);
     }
+
+    #[test]
+    fn v2_with_v1_inputs_is_v1() {
+        // uniform reveal, no drop, vertical, crossing ramps only: v2's run is v1's, bit for bit
+        let curb: Vec<[f64; 3]> = (0..6).map(|i| [i as f64 * 2.3, 0.1 * i as f64, 1.0 + 0.03 * (i * i) as f64]).collect();
+        let out = vec![[0.0, 1.0]; 6];
+        for lean in [false, true] {
+            let mut a = Mesh::default();
+            a.run(&curb, &out, 2.5, CURB_H, (true, false), &[(2.0, 4.5)], 1, lean, [1.0, 2.0, 0.5]);
+            let mut b = Mesh::default();
+            b.run_v2(&curb, &out, 2.5, &[CURB_H; 6], &[f64::NAN; 6], &[0.0; 6], (true, false), &[(2.0, 4.5, 0)], 1,
+                     lean, [1.0, 2.0, 0.5]);
+            assert_eq!(a.p, b.p);
+            assert_eq!(a.t, b.t);
+            assert_eq!(a.uv, b.uv);
+            assert_eq!(a.m, b.m);
+        }
+    }
 }
+
+#[path = "sidewalks_v2.rs"]
+pub(crate) mod v2;

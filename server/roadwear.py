@@ -62,7 +62,25 @@ LOOKS = {
     K_OIL: {"m": "bne_spot_oil", "p": 8, "layer": "spot"},
     K_LEAVES: {"m": "bne_spot_leaves", "p": 8, "layer": "spot"},
 }
-MATERIALS = tuple(sorted({v["m"] for v in LOOKS.values()}))     # (prewarm.py)
+# The road revamp v2's surface overlays (P1c, BNE_SURFACE_V2: roadmesh.SURFACE_V2; the user, studying the stock maps:
+# "they use that 2nd layer alot to both add more texture to the roads and to hide seems between the road and diffrent
+# terrain"): earthfast.surface_plan's pieces (roadwear.rs) over 70-90 % of the asphalt as in the stock maps. The surface
+# variation (the stock AsphaltRoad_variation textures: faint mottling and streaks, 5-24 % opaque) in 5-9 m strips about
+# 50 m long, 10 m end fades, texture length about 100 m, running on through the junction mouths; tyre wear (the stock
+# tread_marks_worn at its stock tint and opacity: ours at full brightness and opacity were the "very bright" bands of
+# 2026-11-11) 4-5 m wide on the lane centres in 40-60 m runs with 5-20 m fades, in place of K_TREAD; repair patch strips
+# (the stock road_patches1 strip) about 8 a km, 15-40 m long, half of them with a joint line across each end. Their
+# materials (roadwear.materials.json) write no depth: roadmesh.v2_rank orders them.
+SURFACE_V2 = os.environ.get("BNE_SURFACE_V2", "off").strip().lower() in ("on", "1", "yes", "true")
+K_VAR1, K_VAR2, K_TREAD2, K_PATCH2 = 10, 11, 12, 13
+LOOKS_V2 = {
+    K_VAR1: {"m": "bne_wear_var_01", "p": 5, "layer": "var", "fade": True, "feather": 0},
+    K_VAR2: {"m": "bne_wear_var_02", "p": 5, "layer": "var", "fade": True, "feather": 0},
+    K_TREAD2: {"m": "bne_wear_tread2", "p": 9, "layer": "wear", "fade": True, "feather": 0},
+    K_PATCH2: {"m": "bne_wear_patchstrip", "p": 7, "layer": "patch", "fade": True, "feather": 0},
+}
+MATERIALS = tuple(sorted({v["m"] for v in LOOKS.values()}
+                         | ({v["m"] for v in LOOKS_V2.values()} if SURFACE_V2 else set())))     # (prewarm.py)
 # The full-lane strips (tyre polish, sealed and alligator crack networks) are left out for now (the user, in game at
 # Fells Point 2026-11-11: "the extra road decals look out of place and very bright"): in the road mesh their stock
 # opacity maps did not shape them (whole bright bands across each lane; darkened, uniform brown bands like rails).
@@ -252,7 +270,7 @@ def tile_chunks(roads, seen, box, tier, exclude=None, aisles=(), skip=(), leaves
     for k in range(len(A)):
         kind, width, tl, slen, cell = A[k]
         kind = int(kind)
-        if kind in STRIP_KINDS and not STRIPS_ON:
+        if kind in STRIP_KINDS and not STRIPS_ON or SURFACE_V2 and kind == K_TREAD:
             continue
         look = LOOKS[kind]
         q = P[O[k]:O[k + 1]]
@@ -270,8 +288,36 @@ def tile_chunks(roads, seen, box, tier, exclude=None, aisles=(), skip=(), leaves
             if "feather" in look:
                 ch["feather"] = look["feather"]
         out.append(ch)
+    if SURFACE_V2:
+        out.extend(surface_chunks(pts, off, rows, excl, box, tier))
     for kind in sorted(spots):
         look = LOOKS[kind]
         out.append({"m": look["m"], "p": look["p"], "layer": look["layer"], "wear": 1, "w": 0.0, "tl": 1.0, "n": [],
                     "poly": spots[kind][0], "uvq": spots[kind][1], "quads": 1})
+    return out
+
+
+def surface_chunks(pts, off, rows, excl, box, tier):
+    """The v2 surface pieces (SURFACE_V2: earthfast.surface_plan) as road mesh chunks; tile_chunks's arrays (the roads'
+    centre lines, offsets, attrs rows, excluded pairs), box and tier. Each strip carries its end fade ("fend_m")."""
+    import fast
+    fast.require(499, "surface_plan")
+    P, O, A = fast._ef.surface_plan(np.ascontiguousarray(np.concatenate(pts)), np.asarray(off, np.int64),
+                                    np.ascontiguousarray(np.asarray(rows, np.float64).reshape(-1, NA)),
+                                    np.asarray(excl, np.int64).reshape(-1, 2),
+                                    np.asarray(box, np.float64)[:4], int(tier))
+    out = []
+    for k in range(len(A)):
+        kind, width, tl, slen, _cell, fend = A[k]
+        kind = int(kind)
+        look = LOOKS_V2.get(kind) or LOOKS[kind]
+        q = P[O[k]:O[k + 1]]
+        ch = {"m": look["m"], "p": look["p"], "layer": look["layer"], "wear": 1,
+              "w": round(float(width), 2), "tl": round(float(tl), 2), "n": np.round(q[:, :3], 3).tolist()}
+        if look.get("fade") and slen > 0:
+            ch.update(s0=round(float(q[0, 3]), 3), s1=round(float(q[-1, 3]), 3), slen=round(float(slen), 3),
+                      fends=[1, 1], fend_m=round(float(fend), 2))
+            if "feather" in look:
+                ch["feather"] = look["feather"]
+        out.append(ch)
     return out

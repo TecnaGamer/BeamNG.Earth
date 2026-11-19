@@ -4,9 +4,9 @@
 -- metres from an origin (the "anchor") that each player's game picks for itself and moves as they drive (a rebase
 -- every 15 km). Each client converts the other players' positions from their owner's anchor into its own
 -- (mpanchor.lua, from Thai-v4's PR #88); this plugin tells every client where everyone's anchor is:
---   - bngeAnchors { pid -> { aLat, aLon, lat, lon, name, h } }: every player's anchor and place (from the client's
+--   - bngeAnchors { pid -> { aLat, aLon, lat, lon, name, h, rel } }: every player's anchor and place (from the client's
 --     bngePose, every 2 s and at once when its anchor changes), its name and heading (degrees from north; none
---     without a car: the world map's arrows), to everyone each TICK_MS and at once when an anchor changes;
+--     without a car: the world map's arrows) and its world server's map data release (rel: players are told of others), to everyone each TICK_MS and at once when an anchor changes;
 --   - bngeGoTo { lat, lon }: a player who joins is sent to the others (the longest-joined player's place);
 --   - bngeConfig { time, weather }: the server's settings (below), to a player at their first pose.
 --   - bngeShare: shared world generation v2 (below): this server keeps and serves its players' world building.
@@ -100,7 +100,7 @@ end
 function G.anchors(players)
   local out = {}
   for pid, p in pairs(players) do
-    out[tostring(pid)] = { aLat = p.aLat, aLon = p.aLon, lat = p.lat, lon = p.lon, name = p.name, h = p.h }
+    out[tostring(pid)] = { aLat = p.aLat, aLon = p.aLon, lat = p.lat, lon = p.lon, name = p.name, h = p.h, rel = p.rel }
   end
   return out
 end
@@ -117,7 +117,7 @@ function G.meetingPlace(players, newPid)
   return best and { lat = players[best].lat, lon = players[best].lon } or nil
 end
 
--- A client's pose { v, aLat, aLon, lat, lon, joined, h }. Returns place (the meeting place for its first pose after
+-- A client's pose { v, aLat, aLon, lat, lon, joined, h, rel }. Returns place (the meeting place for its first pose after
 -- joining, or nil) and moved (its anchor is new or changed: the anchors go out at once).
 function G.onPose(pid, d, name)
   if type(d) ~= 'table' or tonumber(d.v) ~= G.PROTO then return nil, false end
@@ -137,6 +137,9 @@ function G.onPose(pid, d, name)
   p.name, p.aLat, p.aLon, p.lat, p.lon, p.t = name, aLat, aLon, lat, lon, G.clock
   local h = tonumber(d.h)
   p.h = (h and h >= 0 and h <= 360) and h or nil
+  -- its world server's map data release (an Overture release id; passed on in bngeAnchors: players of another one are
+  -- told, mpsession.noteReleases; their world building is never mixed, the plans' codes differ)
+  p.rel = (type(d.rel) == 'string' and d.rel:match('^%d%d%d%d%-%d%d%-%d%d%.%d%d?$')) and d.rel or nil
   -- (shared world building, commented out 2026-10-27 (off since 2026-10-23; the user: not coming back for a while))
   -- local sp = tonumber(d.sp)
   -- p.sp = (sp and sp >= 1 and sp <= 65535 and sp % 1 == 0) and sp or nil

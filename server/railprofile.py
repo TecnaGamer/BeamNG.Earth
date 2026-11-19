@@ -40,20 +40,16 @@ NODE_MEMO_POINTS = 3_000_000        # points kept in the nodes (~16 bytes a poin
                                     # bed. 48 nodes were fewer than one tile asks (a whole viaduct's nodes): Berlin-Mitte,
                                     # 25 tiles: 290 nodes made 3579 times, ~3 of a tile's ~5 s. Only a node made on a
                                     # complete read is kept (_node: a short DEM's node would outlive its build's rebuild)
-_NODES = OrderedDict()              # (anchor key, ix, iy) -> {(fid, kind): (packed keys, heights)}
+_NODES = OrderedDict()              # (anchor key, ix, iy) -> ({(fid, kind): group}, earthfast.RailNode | None)
 _NODES_LOCK = threading.Lock()      # (road tiles are built on several threads)
 _NODES_PTS = [0]
-_PACK = np.int64(1) << 31           # (a centimetre key (a, b) as one int64: (a + 2^31) << 32 | (b + 2^31))
+_EMPTY = ({}, None)                 # (a node with no lines)
 
 
 def _cm(xy):
     """(n, 2) int64: each point of xy in whole centimetres. The points lie every STEP_M from their part's start whatever
     the window (railways.parts), so the same point has the same key (fid, kind, x cm, y cm) in every node's window."""
     return np.round(np.asarray(xy, np.float64).reshape(-1, 2) * 100.0).astype(np.int64)
-
-
-def _pack(a, b):
-    return ((np.asarray(a, np.int64) + _PACK) << 32) | (np.asarray(b, np.int64) + _PACK)
 
 
 def smooth(xy, zb):
@@ -111,34 +107,25 @@ def join_beds(rails, zbs, inside=None):
     return np.split(_join_flat(rails, xy, off, np.concatenate(zs), inside), off[1:-1])
 
 
-_NEIGHBOURS = ((0, 0), (1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (-1, -1), (1, -1), (-1, 1))
-
-
 def _find(node, fid, kind, cm):
     """(k,): node's height at each centimetre key cm (k, 2) of (fid, kind), or at the first of the keys a centimetre off
-    that it has (_NEIGHBOURS' order: two windows' float noise round a point lying on a centimetre's edge to neighbouring
-    keys), or NaN."""
-    out = np.full(len(cm), np.nan)
-    got = node.get((fid, kind))
-    if got is None or not len(cm):
-        return out
-    keys, zs = got
-    todo = np.ones(len(cm), bool)
-    for da, db in _NEIGHBOURS:
-        q = _pack(cm[:, 0] + da, cm[:, 1] + db)
-        at = np.minimum(np.searchsorted(keys, q), len(keys) - 1)
-        hit = todo & (keys[at] == q)
-        out[hit] = zs[at[hit]]
-        todo &= ~hit
-        if not todo.any():
-            break
-    return out
+    that it has (the key, then +-1 cm in x, in y, then the diagonals: two windows' float noise round a point lying on a
+    centimetre's edge to neighbouring keys), or NaN (earthfast.RailNode.find)."""
+    groups, packed = node
+    g = groups.get((fid, kind))
+    if g is None or not len(cm):
+        return np.full(len(cm), np.nan)
+    return packed.find(g, np.ascontiguousarray(cm, np.int64))
+
+
+def _points(node):
+    return 0 if node[1] is None else len(node[1])
 
 
 def _node(frame, akey, load, ground, ix, iy):
-    """{(fid, kind): (centimetre keys packed (_pack), sorted; bed heights)} of node (ix, iy): the lines of a window NODE_M +
-    MARGIN_M round it, laid by railways.profile on ground's heights (the underpasses read in the same window). A point
-    two parts of a feature share has the later part's height."""
+    """({(fid, kind): group}, earthfast.RailNode of the groups' beds by centimetre key, or None) of node (ix, iy): the
+    lines of a window NODE_M + MARGIN_M round it, laid by railways.profile on ground's heights (the underpasses read in
+    the same window). A point two parts of a feature share has the later part's height."""
     ck = (akey, ix, iy)
     with _NODES_LOCK:
         got = _NODES.get(ck)
@@ -155,9 +142,9 @@ def _node(frame, akey, load, ground, ix, iy):
         if not _NODES:              # (cleared from outside: the tests)
             _NODES_PTS[0] = 0
         _NODES[ck] = out
-        _NODES_PTS[0] += sum(len(k) for k, _z in out.values())
+        _NODES_PTS[0] += _points(out)
         while _NODES_PTS[0] > NODE_MEMO_POINTS and len(_NODES) > 1:
-            _NODES_PTS[0] -= sum(len(k) for k, _z in _NODES.popitem(last=False)[1].values())
+            _NODES_PTS[0] -= _points(_NODES.popitem(last=False)[1])
     return out
 
 
@@ -169,7 +156,6 @@ def _make_node(frame, load, ground, ix, iy):
     cells = [load(k) for k in railways.cells_near(frame, box, reach)]
     tunnels = railways.road_underpasses(frame, cells, box, reach)     # (parts' own: asked once)
     rails = [r for r in railways.parts(frame, cells, box, reach=reach, clip=True, underpasses=tunnels) if r[1] != "tram"]
-    out = {}
     if rails:
         tunnels = tunnels + railways.coarse_underpasses(frame, cells, box, rails, reach)
         xy, off = _flat(rails)
@@ -180,17 +166,11 @@ def _make_node(frame, load, ground, ix, iy):
                  box[2] + reach - 3 * railways.STEP_M, box[3] + reach - 3 * railways.STEP_M)
         if JOIN_ON:
             z = _join_flat(rails, xy, off, z, inner)
-        cm = _cm(xy)
-        packed = _pack(cm[:, 0], cm[:, 1])
-        by = {}
-        for n, (fid, _c, kind, _pxy) in enumerate(rails):
-            by.setdefault((fid, kind), []).append(n)
-        for fk, ns in by.items():
-            k = np.concatenate([packed[off[n]:off[n + 1]] for n in ns])
-            v = np.concatenate([z[off[n]:off[n + 1]] for n in ns])
-            uk, first = np.unique(k[::-1], return_index=True)     # (the last of equal keys, as a dict's update)
-            out[fk] = (uk, v[::-1][first])
-    return out
+        fast.require(492, "rail_node_pack")
+        groups = {}
+        group = np.array([groups.setdefault((fid, kind), len(groups)) for fid, _c, kind, _pxy in rails], np.int64)
+        return groups, fast._ef.rail_node_pack(_cm(xy), np.ascontiguousarray(z, np.float64), off, group, len(groups))
+    return _EMPTY
 
 
 def beds(frame, akey, load, ground, rails):

@@ -431,9 +431,11 @@ def keyed_env(k):
 # (structures.touch, 6 m: more parts can share a chain solve), unique members, OSM layer levels, the JSON only from the
 # published solve, written in the background. 3 (S2a fix): the closure's halo reaches the widest deck the kernels take
 # from either side (structures.HALF_MAX_M, half widths capped there), its cells budgeted apart from the chain's own
-# (roads.CHAIN_HALO_CELLS): other chains and window caps. BNE_LEVEL_SPACING 5: one clearance per crossing from its own road's class.
+# (roads.CHAIN_HALO_CELLS): other chains and window caps. 4 (S2b part 1): chain discovery as a fixpoint of the complete
+# local set (roads.BridgeProfiles._closure: other chains and window decisions), window solves publish only pieces of
+# capped chains, the JSON carries the joint heights (earthfast.structure_heights). BNE_LEVEL_SPACING 5: one clearance per crossing from its own road's class.
 SWITCH_VERSIONS = {"BNE_LEVEL_SPACING": 5, "BNE_FAST_DECK_GROUND": 2, "BNE_UNDER_SPEED": 2, "BNE_FAST_GAP": 5,
-                   "BNE_RACEWAY_DIG": 2, "BNE_DIRT_BUMP": 2, "BNE_DIRT_BANK": 2, "BNE_DECK_STRUCT": 3}
+                   "BNE_RACEWAY_DIG": 2, "BNE_DIRT_BUMP": 2, "BNE_DIRT_BANK": 2, "BNE_DECK_STRUCT": 4}
 
 
 def keyed_value(k, v):

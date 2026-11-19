@@ -64,6 +64,10 @@ PYLON_H = 35.8              # m (the shape's height: trees.lua scales to it)
 # sits on the ground with the legs 5.9 m below it; read from pylon.dae 2026-10-26: 3.27 m out at 12.43 / 16.20 / 20.01,
 # its base node scaled by 1.259; ARMS below)
 SAG = 0.03                  # the sag at mid-span per metre of span
+# m the lowest conductor keeps over the ground (the elevation's, every SEG_M) all along a span: its sag cut where the
+# ground leaves less, its towers scaled up (to 1.75 x) where the chord itself is under it (power_line_layout's
+# span_clearance: a 418 m span over a ridge at Breno buried its conductors in the hill, the player's report 0XESWVG2)
+SPAN_CLEAR_M = 3.0
 SEG_M = 10.0
 MIN_SPAN_M, MAX_SPAN_M = 15.0, 2000.0
 DEDUPE_M = 6.0
@@ -486,7 +490,7 @@ def _tile_lines(frame, tx, ty, md, elev, props, wires, clearance):
             (poles if pole else lines).extend((fid, ring[a:b + 1]) for a, b in _merged(ranges))
     else:
         subs = _substations(frame, cells, md)
-    fast.require(439, "power_line_layout")
+    fast.require(496, "power_line_layout")
     ends = np.zeros((0, 7))
     for group, h, arms, clear_m, wire_r, these in ((G_PYLON, PYLON_H, ARMS, TOWER_ROAD_CLEAR_M, WIRE_R, lines),
                                                   (G_POLE, POLE_H, POLE_ARMS, POLE_ROAD_CLEAR_M, POLE_WIRE_R, poles)):
@@ -568,9 +572,9 @@ def _lay(frame, md, elev, subs, lines, group, h, arms, clear_m, wire_r, box, pro
         towers, ends, wp, wo, sup = fast._ef.power_line_layout(
             pts, off, stop, arms, SAG, SEG_M, MIN_SPAN_M, MAX_SPAN_M, DEDUPE_M, END_MERGE_M, GANTRY_FRONT,
             [x0, y0, x1, y1], yard_pts, yard_off, yard_id, list(ANCHOR_AT), GANTRIES,
-            ground_at(frame, elev) if YARDS_ON else None)
-        for x, y, zz, yaw in towers:
-            row = tower_row(group, h, x, y, zz, yaw)
+            ground_at(frame, elev) if YARDS_ON else None, ground_at(frame, elev), SPAN_CLEAR_M)
+        for x, y, zz, yaw, s in towers:
+            row = tower_row(group, round(h * s, 2), x, y, zz, yaw)
             if clearance is None or clearance.clear(row):
                 props.append(row)
         if YARDS_ON:
@@ -580,9 +584,18 @@ def _lay(frame, md, elev, subs, lines, group, h, arms, clear_m, wire_r, box, pro
     return np.asarray(ends, np.float64).reshape(-1, 7)
 
 
+# degrees added to a support's yaw (power_line_layout's: the line's direction, a corner's the bisector of its spans;
+# its conductors' lateral offsets across it) for the model to face that way: the lattice tower's cross-arms run along
+# its own y, the wooden pole's along its own x (electric_pole_wood_old_01's anchorPoint_6 / _10 / _11 at x -0.63 ..
+# 0.67), so the pole stood turned a quarter, its cross-arm along the line and its insulators off the conductors, plain
+# at a corner (the player's report BTZMCHC4, Drumheller, 2026-11-18)
+YAW_ADD = {G_POLE: 90.0}
+
+
 def tower_row(group, h, x, y, z, yaw):
-    """A tower's props row."""
-    return [group, round(float(x), 2), round(float(y), 2), round(float(z), 2), round(float(yaw), 1), 1.0, h, 0.0]
+    """A tower's props row (its model turned by YAW_ADD to the layout's yaw)."""
+    yaw = (float(yaw) + YAW_ADD.get(group, 0.0)) % 360.0
+    return [group, round(float(x), 2), round(float(y), 2), round(float(z), 2), round(yaw, 1), 1.0, h, 0.0]
 
 
 def span_wires(wp, wo, sup, group, h, wire_r):
@@ -593,14 +606,14 @@ def span_wires(wp, wo, sup, group, h, wire_r):
     import furniture
 
     def row(q):
-        if q[0] == 1:
-            return tower_row(group, h, *q[1:5])
+        if q[0] == 1:                   # (a tower: scaled as its own row, q[5])
+            return tower_row(group, round(h * float(q[5]), 2), *q[1:5])
         if q[0] == 2:                   # (the gantry it hangs on: the yard's row of it)
             return tower_row("gantry", PARTS["gantry"], *q[1:5])
         return None
     out = []
     for j, (a, b) in enumerate(zip(wo[:-1], wo[1:])):
-        out.extend(furniture.with_ends([(np.asarray(wp[a:b]), wire_r)], row(sup[j, 0:5]), row(sup[j, 5:10])))
+        out.extend(furniture.with_ends([(np.asarray(wp[a:b]), wire_r)], row(sup[j, 0:6]), row(sup[j, 6:12])))
     return out
 
 

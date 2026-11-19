@@ -232,7 +232,7 @@ def solve(chains, couplings=(), rounds=ROUNDS, deadline=None, diagnostics=None):
     penalty = np.asarray([p for *_r, p in cp], np.float64)
     soft = {}
     if (penalty > 0).any() or (rows[:, 4] == 2).any() or (rows[:, 2] == -1).any():
-        fast.require(489, "carriageway_profiles' soft, upper and one-sample couplings")
+        fast.require(504, "carriageway_profiles' soft, upper and one-sample couplings")
         soft["coupling_penalty"] = penalty
     budget = float(deadline) - time.monotonic() if deadline is not None else BUDGET_S
     if np.isnan(budget):

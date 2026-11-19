@@ -257,6 +257,25 @@ class PlacesTest(unittest.TestCase):
         self.assertIn("hydrant_eu", [r[0] for r in eu])
         self.assertIn("postbox_eu", [r[0] for r in eu])
 
+    def test_a_hydrant_at_a_junction_corner_lands_off_every_road(self):
+        # (the player's report 5T7V9FNQ: a hydrant mapped 2-3 m from the lines of the roads meeting at a corner was
+        # pushed off one onto the next) and one on a junction no spot within reach clears is left out
+        pt = mapgeom.POINT
+        infra = feats("infrastructure", [
+            ("h1", pt, [[[2.0, 2.5]]], "fire_hydrant", {"emergency": "fire_hydrant", "fire_hydrant:type": "pillar"})])
+        md = FakeMD(infrastructure=infra)
+        spec = type("S", (), {"width": 8.0})()
+        cross = [("a", spec, np.array([[-100.0, 0.0, 0.0], [200.0, 0.0, 0.0]]), 0.0),
+                 ("b", spec, np.array([[0.0, -100.0, 0.0], [0.0, 100.0, 0.0]]), 0.0)]
+        got = places.street_rows(FRAME, BOX, md, flat, cross, "DE", keys=KEYS)
+        self.assertEqual(len(got), 1)
+        x, y = got[0][1], got[0][2]
+        self.assertGreaterEqual(min(abs(x), abs(y)), 4.0 + 0.4 - 0.02, (x, y))     # off both carriageways
+        wide = type("S", (), {"width": 60.0})()
+        paved = [("a", wide, np.array([[-100.0, 0.0, 0.0], [200.0, 0.0, 0.0]]), 0.0),
+                 ("b", wide, np.array([[0.0, -100.0, 0.0], [0.0, 100.0, 0.0]]), 0.0)]
+        self.assertEqual(places.street_rows(FRAME, BOX, md, flat, paved, "DE", keys=KEYS), [])
+
     def test_guessed_furniture_gives_way(self):
         guessed = [["hydrant", 0.0, 0.0, 0.0, 0.0, 1.0, 1.5, 0.0], ["hydrant", 200.0, 0.0, 0.0, 0.0, 1.0, 1.5, 0.0],
                    ["bench", 0.0, 0.0, 0.0, 0.0, 1.0, 0.9, 0.0], ["streetlight", 1.0, 0.0, 0.0, 0.0, 1.0, 9.0, 0.0]]

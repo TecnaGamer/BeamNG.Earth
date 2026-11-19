@@ -197,6 +197,36 @@ def cache_dir_arg(given, dd=None):
     return path if isinstance(path, str) and path else None
 
 
+def pick_cache_dir(given, extra, dd=None):
+    """The download cache the server will use, without saving anything (cache_dir_arg saves), by the server's own
+    rules (overturepick.cache_dir_of: the last --cache-dir in its options, relative to its folder ROOT), else
+    --cache-dir (given), else the saved folder, else the server's default."""
+    import overturepick
+    default = apppaths.default_cache_dir()
+    if given is not None and given.strip().lower() not in ("", "default"):
+        default = os.path.abspath(os.path.expanduser(given.strip().strip('"')))
+    elif given is None:
+        saved = app_settings(dd).get("cacheDir")
+        if isinstance(saved, str) and saved:
+            default = saved
+    return overturepick.cache_dir_of(extra, default, ROOT)
+
+
+def overture_pick(args):
+    """The map data's Overture release for this app session (server/overturepick.py), decided once: started now, in a
+    thread of its own, while the start goes on; the first server start takes it (waiting overturepick.PICK_S from now
+    at most) and every restart gets the same. None when it cannot be made (the server's own default then)."""
+    try:
+        sys.path.insert(0, os.path.join(ROOT, "server"))
+        import overturepick
+        extra = args.extra[1:] if args.extra[:1] == ["--"] else args.extra
+        return overturepick.Pick(pick_cache_dir(getattr(args, "cache_dir", None), extra),
+                                 offline="--offline" in extra)
+    except Exception as e:              # (never in the way of a start)
+        say(f"(map data release: the build's own: {type(e).__name__}: {e})")
+        return None
+
+
 def clear_cache(extra):
     """--clear-cache (GitHub #1081: deleting the cache's many small files took a player very long): the download cache
     the server is about to use (its --cache-dir in extra, else the default) moved aside at once (cache.clear_all); the
@@ -454,7 +484,7 @@ def restart_extra(own, first):
     return (["--cache-dir", cache] if cache else []) + list(own)
 
 
-def start_server(user_dir, extra, log_path, game_running=None, restart_times=()):
+def start_server(user_dir, extra, log_path, game_running=None, restart_times=(), overture_release=None):
     cmd = [sys.executable] + ([] if FROZEN else [os.path.abspath(__file__)])
     cmd += ["--server", "--user-dir", user_dir] + RECOMMENDED + extra
     if telemetry_on() and "--offline" not in extra:
@@ -484,6 +514,8 @@ def start_server(user_dir, extra, log_path, game_running=None, restart_times=())
             env[k] = v
     # ... and its "Restart world server" (server/srvrestart.py; RestartingServer), from what is applied now
     restart_env(user_dir, env, restart_times)
+    if overture_release:        # the session's map data release (overture_pick: the same for every start of it)
+        env["BNGE_OVERTURE_RELEASE"] = overture_release
     kw = {"cwd": ROOT, "env": env}
     if IS_WIN:
         kw["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
@@ -2548,6 +2580,7 @@ def run(args):
     import install
     title(f"BeamNG.Earth {install.version()}")
     support_notice()
+    pick = overture_pick(args)          # (decided while the start goes on; every server of this session gets it)
     if update_at_start(args):           # the new copy runs now (in its own window)
         return
     memory_notice()                     # (8 GB or less: what to expect; never stops the start)
@@ -2641,10 +2674,14 @@ def run(args):
 
     def start():                # (again for the settings page's "Restart world server": the game runs then)
         starts.append(True)
+        rel = pick.release() if pick is not None else None      # (decided at the first start; the same after it)
         if len(starts) == 1:
-            return start_server(user_dir, extra, log_path, game_running=bool(running), restart_times=limiter.times)
+            if rel:
+                row("Map data", f"Overture {rel} ({pick.why})")
+            return start_server(user_dir, extra, log_path, game_running=bool(running), restart_times=limiter.times,
+                                overture_release=rel)
         return start_server(user_dir, restart_extra(own_extra, extra), log_path, game_running=True,
-                            restart_times=limiter.times)
+                            restart_times=limiter.times, overture_release=rel)
     server = RestartingServer(start, port, log_path, limiter=limiter)
     beammp = None
     try:

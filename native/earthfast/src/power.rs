@@ -6,7 +6,7 @@ use crate::dm::Dm;
 
 use numpy::{IntoPyArray, PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2};
 use pyo3::prelude::*;
-use std::collections::HashSet;
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 #[derive(Clone, Copy)]
 struct RoadSegment {
@@ -264,8 +264,12 @@ fn yard_of(yards: &[(i64, Vec<Vec<(f64, f64)>>)], x: f64, y: f64) -> i64 {
 /// under the left gantry, under the right one, its yard's id (-1: none)], wire points (w, 3), wire offsets (k + 1),
 /// each wire's supports (k, 10) [kind, x, y, z, yaw degrees] at its first point then at its last: kind 1 a tower (its
 /// row's values), 2 the line end's gantry it hangs on (the yard's gantry row's), 0 none: a span is drawn by one tile,
-/// its supports by theirs).
+/// its supports by theirs). span_ground (x (n,), y (n,)) -> z, None: none) with span_clear > 0: the spans' clearance
+/// (span_clearance: each tower's scale its towers' 5th column and its supports' 6th, each span's sag cut). 496: towers
+/// (t, 5) [x, y, z, yaw, scale], supports (k, 12) [kind, x, y, z, yaw, scale] at each end.
 #[pyfunction]
+#[pyo3(signature = (pts, off, stop, arms, sag, seg_m, min_span, max_span, dedupe_m, end_merge_m, gantry_front, bx,
+                    yard_pts, yard_off, yard_id, anchor_at, gantries, ground=None, span_ground=None, span_clear=0.0))]
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub fn power_line_layout<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, off: PyReadonlyArray1<'py, i64>,
                               stop: PyReadonlyArray1<'py, bool>, arms: PyReadonlyArray2<'py, f64>, sag: f64,
@@ -273,7 +277,8 @@ pub fn power_line_layout<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, 
                               gantry_front: f64, bx: [f64; 4], yard_pts: PyReadonlyArray2<'py, f64>,
                               yard_off: PyReadonlyArray1<'py, i64>, yard_id: PyReadonlyArray1<'py, i64>,
                               anchor_at: [f64; 2], gantries: Vec<[f64; 2]>,
-                              ground: Option<Bound<'py, PyAny>>)
+                              ground: Option<Bound<'py, PyAny>>, span_ground: Option<Bound<'py, PyAny>>,
+                              span_clear: f64)
                               -> PyResult<(Bound<'py, PyArray2<f64>>, Bound<'py, PyArray2<f64>>,
                                            Bound<'py, PyArray2<f64>>, Bound<'py, PyArray1<i64>>,
                                            Bound<'py, PyArray2<f64>>)> {
@@ -309,10 +314,10 @@ pub fn power_line_layout<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, 
         !near
     };
     let (mut wp, mut wo): (Vec<f64>, Vec<i64>) = (Vec::new(), vec![0]);
-    for l in 0..off.len().saturating_sub(1) {
-        // the line's vertices, those closer than min_span to the last kept one left out, but never one either side of
-        // a yard's edge (its mapped approach: a line end, its heading and the gantries it merges onto read the same in
-        // every tile, however far back the tile's run of the line starts; Codex's review of 58788443)
+    // every line's vertices, those closer than min_span to the last kept one left out, but never one either side of a
+    // yard's edge (its mapped approach: a line end, its heading and the gantries it merges onto read the same in every
+    // tile, however far back the tile's run of the line starts; Codex's review of 58788443)
+    let lines: Vec<(Vec<[f64; 3]>, Vec<bool>)> = (0..off.len().saturating_sub(1)).map(|l| {
         let (mut v, mut st): (Vec<[f64; 3]>, Vec<bool>) = (Vec::new(), Vec::new());
         let (i0, i1) = (off[l] as usize, off[l + 1] as usize);
         for i in i0..i1 {
@@ -328,6 +333,58 @@ pub fn power_line_layout<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, 
             v.push(p);
             st.push(stop[i]);
         }
+        (v, st)
+    }).collect();
+    // the spans' clearance over the ground between their towers: a support's lift the most any span of any line at it
+    // asks (a tower shared by two ways, or the same tower of the next tile's run: one scale for its model and every
+    // conductor on it; Codex's review), each span's share of its sag from its supports' lifts
+    let key = |p: [f64; 3]| (p[0].to_bits(), p[1].to_bits());
+    let hmin = (0..arms.nrows()).map(|r| arms[[r, 1]]).fold(f64::INFINITY, f64::min);
+    let mut lift_at: BTreeMap<(u64, u64), f64> = BTreeMap::new();
+    let mut samples_of: BTreeMap<(usize, usize), Vec<(f64, f64)>> = BTreeMap::new();
+    if let (Some(g), true) = (span_ground.as_ref(), span_clear > 0.0 && hmin > 0.0 && hmin.is_finite()) {
+        let span_len = |v: &[[f64; 3]], i: usize| (v[i + 1][0] - v[i][0]).dhypot(v[i + 1][1] - v[i][1]);
+        // (the supports that matter here: the towers the tile stands, the ends of the spans it draws)
+        let mut keys: BTreeSet<(u64, u64)> = BTreeSet::new();
+        for (v, st) in &lines {
+            for i in 0..v.len() {
+                if !st[i] && inside(v[i][0], v[i][1]) {
+                    keys.insert(key(v[i]));
+                }
+            }
+            for i in 0..v.len().saturating_sub(1) {
+                if !(st[i] && st[i + 1]) && span_len(v, i) <= max_span
+                    && inside((v[i][0] + v[i + 1][0]) / 2.0, (v[i][1] + v[i + 1][1]) / 2.0) {
+                    keys.insert(key(v[i]));
+                    keys.insert(key(v[i + 1]));
+                }
+            }
+        }
+        // (every tower-to-tower span of every line at those supports)
+        let mut want: Vec<(usize, usize)> = Vec::new();
+        for (l, (v, st)) in lines.iter().enumerate() {
+            for i in 0..v.len().saturating_sub(1) {
+                let len = span_len(v, i);
+                if !st[i] && !st[i + 1] && len <= max_span && len > 1e-6
+                    && (keys.contains(&key(v[i])) || keys.contains(&key(v[i + 1]))) {
+                    want.push((l, i));
+                }
+            }
+        }
+        let got = span_samples(g, &lines, &want, &arms, seg_m)?;
+        let most = hmin * (SPAN_MAX_SCALE - 1.0);
+        for (&(l, i), sm) in want.iter().zip(got) {
+            let v = &lines[l].0;
+            let need = span_need(v[i], v[i + 1], &sm, hmin, span_clear).clamp(0.0, most);
+            for k in [key(v[i]), key(v[i + 1])] {
+                let e = lift_at.entry(k).or_insert(0.0);
+                *e = e.max(need);
+            }
+            samples_of.insert((l, i), sm);
+        }
+    }
+    for (l, (v, st)) in lines.iter().enumerate() {
+        let (v, st) = (v.clone(), st.clone());
         if v.len() < 2 {
             continue;
         }
@@ -343,9 +400,15 @@ pub fn power_line_layout<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, 
             if i + 1 < n { let (a, b) = unit(v[i], v[i + 1]); dx += a; dy += b; }
             dy.datan2(dx)
         }).collect();
+        let lift: Vec<f64> = v.iter().map(|p| lift_at.get(&key(*p)).copied().unwrap_or(0.0)).collect();
+        let scale: Vec<f64> = lift.iter().map(|q| if *q > 0.0 { 1.0 + q / hmin } else { 1.0 }).collect();
+        let sag_f: Vec<f64> = (0..n - 1).map(|i| match samples_of.get(&(l, i)) {
+            Some(sm) => span_share(v[i], v[i + 1], sm, lift[i], lift[i + 1], hmin, sag, span_clear),
+            None => 1.0,
+        }).collect();
         for i in 0..n {
             if !st[i] && claim(&mut taken, v[i][0], v[i][1]) && inside(v[i][0], v[i][1]) {
-                towers.extend_from_slice(&[v[i][0], v[i][1], v[i][2], yaw[i].to_degrees().rem_euclid(360.0)]);
+                towers.extend_from_slice(&[v[i][0], v[i][1], v[i][2], yaw[i].to_degrees().rem_euclid(360.0), scale[i]]);
             }
         }
         for i in 0..n - 1 {
@@ -403,7 +466,9 @@ pub fn power_line_layout<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, 
             }
             let k = ((span / seg_m).ceil() as usize).max(2);
             for r in 0..arms.nrows() {
-                let tower = |p: [f64; 3], w: f64| [p[0] - w.dsin() * arms[[r, 0]], p[1] + w.dcos() * arms[[r, 0]], p[2] + arms[[r, 1]]];
+                // (a tower scaled up for its spans' clearance: its arms out and up with it)
+                let tower = |p: [f64; 3], w: f64, s: f64| [p[0] - w.dsin() * arms[[r, 0]] * s,
+                                                           p[1] + w.dcos() * arms[[r, 0]] * s, p[2] + arms[[r, 1]] * s];
                 // at the end: its lateral axis, mirrored when it points against the span's (sides kept in the world)
                 let gantry = |k: usize| {
                     let (e, w) = (ends[k].e, ends[k].e[3]);
@@ -414,9 +479,9 @@ pub fn power_line_layout<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, 
                     [e[0] - w.dsin() * lat - w.dcos() * gantry_front, e[1] + w.dcos() * lat - w.dsin() * gantry_front,
                      zg + arms[[r, 3]]]
                 };
-                let p0 = match (st[i], end) { (true, Some(k)) => gantry(k), _ => tower(a, yaw[i]) };
-                let p1 = match (st[i + 1], end) { (true, Some(k)) => gantry(k), _ => tower(b, yaw[i + 1]) };
-                for (on_end, q, qy) in [(st[i], a, yaw[i]), (st[i + 1], b, yaw[i + 1])] {
+                let p0 = match (st[i], end) { (true, Some(k)) => gantry(k), _ => tower(a, yaw[i], scale[i]) };
+                let p1 = match (st[i + 1], end) { (true, Some(k)) => gantry(k), _ => tower(b, yaw[i + 1], scale[i + 1]) };
+                for (on_end, q, qy, qs) in [(st[i], a, yaw[i], scale[i]), (st[i + 1], b, yaw[i + 1], scale[i + 1])] {
                     if let (true, Some(k)) = (on_end, end) {
                         // (its gantry's own row: where the yard stands it, at the ground it is stood on; a raceway's
                         // band culling it there takes the conductor here too: Codex's review of 119bb4d7)
@@ -429,18 +494,19 @@ pub fn power_line_layout<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, 
                                 let (gx, gy) = kit_part(e[0], e[1], w, anchor_at, g[0], g[1]);
                                 let kx = (-w.dsin(), w.dcos());
                                 sup.extend_from_slice(&[2.0, gx, gy, if right { ends[k].zr } else { ends[k].zl },
-                                                        kx.1.datan2(kx.0).to_degrees().rem_euclid(360.0)]);
+                                                        kx.1.datan2(kx.0).to_degrees().rem_euclid(360.0), 1.0]);
                             }
-                            _ => sup.extend_from_slice(&[0.0, 0.0, 0.0, 0.0, 0.0]),
+                            _ => sup.extend_from_slice(&[0.0, 0.0, 0.0, 0.0, 0.0, 1.0]),
                         }
                     } else {
-                        sup.extend_from_slice(&[1.0, q[0], q[1], q[2], qy.to_degrees().rem_euclid(360.0)]);
+                        sup.extend_from_slice(&[1.0, q[0], q[1], q[2], qy.to_degrees().rem_euclid(360.0), qs]);
                     }
                 }
+                let sag_i = sag * sag_f[i];
                 for s in 0..=k {
                     let t = s as f64 / k as f64;
                     wp.extend_from_slice(&[p0[0] + (p1[0] - p0[0]) * t, p0[1] + (p1[1] - p0[1]) * t,
-                                           p0[2] + (p1[2] - p0[2]) * t - 4.0 * sag * span * t * (1.0 - t)]);
+                                           p0[2] + (p1[2] - p0[2]) * t - 4.0 * sag_i * span * t * (1.0 - t)]);
                 }
                 wo.push((wp.len() / 3) as i64);
             }
@@ -448,11 +514,131 @@ pub fn power_line_layout<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, 
     }
     let ends: Vec<f64> = ends.iter().filter(|e| e.fits)
         .flat_map(|e| [e.e[0], e.e[1], e.e[2], e.e[3], e.zl, e.zr, e.yard as f64]).collect();
-    let (t, e, w, k) = (towers.len() / 4, ends.len() / 7, wp.len() / 3, sup.len() / 10);
-    Ok((numpy::ndarray::Array2::from_shape_vec((t, 4), towers).unwrap().into_pyarray(py),
+    let (t, e, w, k) = (towers.len() / 5, ends.len() / 7, wp.len() / 3, sup.len() / 12);
+    Ok((numpy::ndarray::Array2::from_shape_vec((t, 5), towers).unwrap().into_pyarray(py),
         numpy::ndarray::Array2::from_shape_vec((e, 7), ends).unwrap().into_pyarray(py),
         numpy::ndarray::Array2::from_shape_vec((w, 3), wp).unwrap().into_pyarray(py), wo.into_pyarray(py),
-        numpy::ndarray::Array2::from_shape_vec((k, 10), sup).unwrap().into_pyarray(py)))
+        numpy::ndarray::Array2::from_shape_vec((k, 12), sup).unwrap().into_pyarray(py)))
+}
+
+/// A tower's scale for its spans' clearance at most this (its lowest conductor raised by up to SPAN_MAX_SCALE - 1 of
+/// its height, the model with it).
+const SPAN_MAX_SCALE: f64 = 1.75;
+
+/// The ground samples [(t along the span, ground z)] of spans want [(line, span)] of lines [(vertices, at a yard)]: every
+/// seg_m along each, under the line and under its outermost conductors either side (arms' widest lateral offset at the
+/// most a tower is scaled), the highest of the three (a conductor out over a side slope clears it too); one call of
+/// span_ground (x (n,), y (n,)) -> z for them all.
+fn span_samples<'py>(g: &Bound<'py, PyAny>, lines: &[(Vec<[f64; 3]>, Vec<bool>)], want: &[(usize, usize)],
+                     arms: &numpy::ndarray::ArrayView2<'_, f64>, seg_m: f64) -> PyResult<Vec<Vec<(f64, f64)>>> {
+    let side = (0..arms.nrows()).map(|r| arms[[r, 0]].abs()).fold(0.0, f64::max) * SPAN_MAX_SCALE;
+    let (mut xs, mut ys, mut ts, mut of) = (Vec::new(), Vec::new(), Vec::new(), vec![0usize]);
+    for &(l, i) in want {
+        let v = &lines[l].0;
+        let len = (v[i + 1][0] - v[i][0]).dhypot(v[i + 1][1] - v[i][1]);
+        let k = ((len / seg_m).ceil() as usize).max(2);
+        let (ux, uy) = ((v[i + 1][0] - v[i][0]) / len, (v[i + 1][1] - v[i][1]) / len);
+        for s in 1..k {
+            let t = s as f64 / k as f64;
+            let (cx, cy) = (v[i][0] + (v[i + 1][0] - v[i][0]) * t, v[i][1] + (v[i + 1][1] - v[i][1]) * t);
+            for off in [0.0, side, -side] {
+                xs.push(cx - uy * off);
+                ys.push(cy + ux * off);
+            }
+            ts.push(t);
+        }
+        of.push(ts.len());
+    }
+    if ts.is_empty() {
+        return Ok(vec![Vec::new(); want.len()]);
+    }
+    let m = xs.len();
+    let z: Vec<f64> = g.call1((xs.into_pyarray(g.py()), ys.into_pyarray(g.py())))?.extract()?;
+    if z.len() != m {
+        return Err(pyo3::exceptions::PyValueError::new_err("power_line_layout: a ground height per span sample"));
+    }
+    let high = |q: usize| {
+        [z[3 * q], z[3 * q + 1], z[3 * q + 2]].into_iter().filter(|h| h.is_finite())
+            .fold(f64::NAN, |acc: f64, h| if acc.is_nan() { h } else { acc.max(h) })
+    };
+    Ok((0..want.len()).map(|w| (of[w]..of[w + 1]).map(|q| (ts[q], high(q))).collect()).collect())
+}
+
+/// m the chord of span a -> b's lowest conductor (hmin over its towers' feet) must rise to be clear over its ground
+/// samples (<= 0: clear already). Pure.
+fn span_need(a: [f64; 3], b: [f64; 3], sm: &[(f64, f64)], hmin: f64, clear: f64) -> f64 {
+    sm.iter().filter(|q| q.1.is_finite())
+        .fold(f64::NEG_INFINITY, |acc, &(t, gz)| acc.max(gz + clear - (a[2] + hmin + (b[2] - a[2]) * t)))
+}
+
+/// The share (0..1) of sag span a -> b keeps with its towers' lowest conductors lifted la, lb so that it stays clear
+/// over its ground samples. Pure.
+#[allow(clippy::too_many_arguments)]
+fn span_share(a: [f64; 3], b: [f64; 3], sm: &[(f64, f64)], la: f64, lb: f64, hmin: f64, sag: f64, clear: f64) -> f64 {
+    let l = (b[0] - a[0]).dhypot(b[1] - a[1]);
+    let (za, zb) = (a[2] + la + hmin, b[2] + lb + hmin);
+    let mut f = 1.0f64;
+    for &(t, gz) in sm {
+        let w = 4.0 * sag * l * t * (1.0 - t);
+        if gz.is_finite() && w > 1e-9 {
+            f = f.min((za + (zb - za) * t - gz - clear) / w);
+        }
+    }
+    f.clamp(0.0, 1.0)
+}
+
+/// Each span's lowest conductor (hmin over its towers' feet v, the chord between them less sag x span at its middle)
+/// at least clear over the ground samples [(t along the span, ground z)]: where the chord itself is under that, both its
+/// towers scaled up by the deficit (a tower the most either of its spans asks, SPAN_MAX_SCALE at most); then the
+/// span's sag cut to what the ground under it leaves (a share 0..1 of sag). Spans over a crest between their towers
+/// buried their conductors in the hill (Breno, 45.7981,10.4253: a 418 m span climbing 142 m over a ridge, its lowest
+/// conductor 3.6 m under the ground: the player's report 0XESWVG2, 2026-11-17). Returns (scale per vertex, sag share
+/// per span). Pure.
+#[cfg(test)]
+fn span_clearance_core(v: &[[f64; 3]], samples: &[Vec<(f64, f64)>], hmin: f64, sag: f64, clear: f64)
+                       -> (Vec<f64>, Vec<f64>) {
+    let n = v.len();
+    let need: Vec<f64> = (0..n.saturating_sub(1)).map(|i| span_need(v[i], v[i + 1], &samples[i], hmin, clear)).collect();
+    let most = hmin * (SPAN_MAX_SCALE - 1.0);
+    let lift: Vec<f64> = (0..n).map(|i| {
+        let a = if i > 0 { need[i - 1] } else { 0.0 };
+        let b = if i + 1 < n { need[i] } else { 0.0 };
+        a.max(b).clamp(0.0, most)
+    }).collect();
+    let scale: Vec<f64> = lift.iter().map(|l| 1.0 + l / hmin).collect();
+    let share: Vec<f64> = (0..n.saturating_sub(1))
+        .map(|i| span_share(v[i], v[i + 1], &samples[i], lift[i], lift[i + 1], hmin, sag, clear)).collect();
+    (scale, share)
+}
+
+#[cfg(test)]
+mod span_tests {
+    use super::*;
+
+    #[test]
+    fn a_span_over_a_crest_keeps_its_clearance() {
+        // report 0XESWVG2's span: 418 m, its towers' feet 1356 and 1498 m, the ground over the chord near the top
+        let v = [[0.0, 0.0, 1356.0], [418.0, 0.0, 1498.0], [618.0, 0.0, 1396.0]];
+        let crest = |t: f64| 1356.0 + 142.0 * t + 20.0 * (std::f64::consts::PI * t).dsin();
+        let s0: Vec<(f64, f64)> = (1..42).map(|k| { let t = k as f64 / 42.0; (t, crest(t)) }).collect();
+        let s1: Vec<(f64, f64)> = (1..20).map(|k| { let t = k as f64 / 20.0; (t, 1498.0 - 102.0 * t - 20.0) }).collect();
+        let (hmin, sag, clear) = (15.65, 0.03, 3.0);
+        let (scale, share) = span_clearance_core(&v, &[s0.clone(), s1.clone()], hmin, sag, clear);
+        assert!(scale[0] > 1.0 && scale[1] > 1.0, "{scale:?}");
+        assert!(scale[2] == 1.0);
+        // every sample of the first span at least clear under its lowest conductor
+        for (t, gz) in &s0 {
+            let (za, zb) = (v[0][2] + hmin * scale[0], v[1][2] + hmin * scale[1]);
+            let z = za + (zb - za) * t - 4.0 * sag * share[0] * 418.0 * t * (1.0 - t);
+            assert!(z - gz >= clear - 1e-9, "{t}: {}", z - gz);
+        }
+        // the open span down the other side keeps its towers' scale and its whole sag where the ground leaves room
+        assert_eq!(share[1], 1.0);
+        // flat open ground: nothing changes
+        let flat: Vec<(f64, f64)> = (1..20).map(|k| (k as f64 / 20.0, 1356.0)).collect();
+        let (s2, f2) = span_clearance_core(&v[..2], &[flat], hmin, sag, clear);
+        assert_eq!((s2, f2), (vec![1.0, 1.0], vec![1.0]));
+    }
 }
 
 /// Even-odd: (x, y) inside the rings (all of an area's, outer and holes alike).

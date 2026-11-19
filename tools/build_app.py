@@ -38,9 +38,9 @@ SEP = ";" if IS_WIN else ":"
 
 
 def _overture_release():
-    """overture.RELEASE, read from the source (the build script does not import the server)."""
+    """overturepick.RELEASE (overture.RELEASE), read from the source (the build script does not import the server)."""
     import re
-    with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "server", "overture.py"), encoding="utf-8") as f:
+    with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "server", "overturepick.py"), encoding="utf-8") as f:
         return re.search(r'^RELEASE = "([^"]+)"', f.read(), re.M).group(1)
 
 
