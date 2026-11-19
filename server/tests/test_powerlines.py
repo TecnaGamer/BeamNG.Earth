@@ -473,15 +473,16 @@ class OffRoadsTest(unittest.TestCase):
 class TowerFootprintTest(unittest.TestCase):
     """The native layout decides yaw; check its emitted rows against the tile's authoritative solved roads."""
 
-    def place(self, lines=(), decks=(), clearance=None, tags=None):
+    def place(self, lines=(), decks=(), clearance=None, tags=None, pts=((100., 100.), (200., 100.))):
         import furniture
         import mapgeom
         from test_roads import FRAME
-        la, lo, _ = FRAME.enu_to_geodetic(np.array([100., 200.]), np.array([100., 100.]), 0.)
+        pts = np.asarray(pts, np.float64)
+        la, lo, _ = FRAME.enu_to_geodetic(pts[:, 0], pts[:, 1], np.zeros(len(pts)))
         infra = mapgeom.Features(
             layer="infrastructure", ids=np.array(["line"]), kind=np.array([mapgeom.LINE], np.uint8),
             part_off=np.array([0, 1], np.int64), ring_off=np.array([0, 1], np.int64),
-            coord_off=np.array([0, 2], np.int64), lonlat=np.column_stack([lo, la]),
+            coord_off=np.array([0, len(pts)], np.int64), lonlat=np.column_stack([lo, la]),
             attrs={"class": np.array(["power_line"]), **({"tags": np.array([tags], object)} if tags else {})},
             rules={})
 
@@ -523,6 +524,36 @@ class TowerFootprintTest(unittest.TestCase):
         hv, hw = self.place(tags='{"power":"line","voltage":"220000"}')
         self.assertEqual({r[0] for r in hv}, {powerlines.G_PYLON})
         self.assertEqual(len(hw), 6)
+
+    def test_a_pole_faces_its_conductors_at_a_corner_and_on_a_straight(self):
+        """The wooden pole's cross-arm and insulators lie along its model's x (electric_pole_wood_old_01's anchor
+        points): each conductor's end at a pole is that far along the pole's x, turned by its row's yaw, at a corner
+        (the bisector: the player's report BTZMCHC4, Drumheller) and on a straight run alike."""
+        props, wires = self.place(tags='{"power":"line","voltage":"72000"}',
+                                  pts=((40., 60.), (120., 60.), (120., 200.), (180., 200.)))
+        poles = [r for r in props if r[0] == powerlines.G_POLE]
+        self.assertEqual(len(poles), 4)
+        lateral = sorted(powerlines.POLE_ARMS[:, 0].tolist())
+        for r in poles:
+            a = np.radians(r[4])
+            x_axis = np.array([np.cos(a), np.sin(a)])        # (trees.lua: a row's yaw turns the model's +x there)
+            ends = []
+            for w, _ in wires:
+                w = np.asarray(w)
+                for q in (w[0], w[-1]):
+                    if np.hypot(q[0] - r[1], q[1] - r[2]) < 3.0:
+                        ends.append(q[:2] - np.array([r[1], r[2]]))
+            self.assertGreaterEqual(len(ends), 3, r)
+            for d in ends:
+                along = float(d @ x_axis)
+                across = float(d @ np.array([-x_axis[1], x_axis[0]]))
+                self.assertLess(abs(across), 0.02, (r, d))
+                self.assertTrue(any(abs(along - v) < 0.02 for v in lateral), (r, d))
+        corner = min(poles, key=lambda r: np.hypot(r[1] - 120., r[2] - 60.))
+        # the corner's cross-arm bisects the turn: across the mean of its spans' directions (east, then north)
+        a = np.radians(corner[4])
+        self.assertAlmostEqual(abs(float(np.array([np.cos(a), np.sin(a)]) @ (np.array([1., 1.]) / np.sqrt(2.)))), 0.0,
+                               places=2)
 
     def test_mapped_pole_supports_put_a_high_voltage_line_on_poles(self):
         """(PR #919 by wyo-backroads) A 115 kV line whose mapped supports (its way's nodes) are power=pole points: the

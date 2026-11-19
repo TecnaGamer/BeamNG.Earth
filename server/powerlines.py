@@ -580,9 +580,18 @@ def _lay(frame, md, elev, subs, lines, group, h, arms, clear_m, wire_r, box, pro
     return np.asarray(ends, np.float64).reshape(-1, 7)
 
 
+# degrees added to a support's yaw (power_line_layout's: the line's direction, a corner's the bisector of its spans;
+# its conductors' lateral offsets across it) for the model to face that way: the lattice tower's cross-arms run along
+# its own y, the wooden pole's along its own x (electric_pole_wood_old_01's anchorPoint_6 / _10 / _11 at x -0.63 ..
+# 0.67), so the pole stood turned a quarter, its cross-arm along the line and its insulators off the conductors, plain
+# at a corner (the player's report BTZMCHC4, Drumheller, 2026-11-18)
+YAW_ADD = {G_POLE: 90.0}
+
+
 def tower_row(group, h, x, y, z, yaw):
-    """A tower's props row."""
-    return [group, round(float(x), 2), round(float(y), 2), round(float(z), 2), round(float(yaw), 1), 1.0, h, 0.0]
+    """A tower's props row (its model turned by YAW_ADD to the layout's yaw)."""
+    yaw = (float(yaw) + YAW_ADD.get(group, 0.0)) % 360.0
+    return [group, round(float(x), 2), round(float(y), 2), round(float(z), 2), round(yaw, 1), 1.0, h, 0.0]
 
 
 def span_wires(wp, wo, sup, group, h, wire_r):
