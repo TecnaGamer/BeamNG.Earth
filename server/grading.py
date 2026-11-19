@@ -3412,14 +3412,23 @@ class _Planner:
             for j in np.flatnonzero((dbox[:, 0] <= ph[0]) & (dbox[:, 2] >= pl[0]) & (dbox[:, 1] <= ph[1])
                                     & (dbox[:, 3] >= pl[1])).tolist():
                 ln, h = decks[j]
+                # (only the samples in the deck's box widened by the road's half width: one farther is farther from
+                # its line than h + half. Each sample's row is its own, so the same bits as over all of them, which
+                # took 137 of Tokyo's 386 s: every plan against every deck its box met, all its samples)
+                w = float(p.half)
+                r = np.flatnonzero((xy[:, 0] >= dbox[j, 0] - w) & (xy[:, 0] <= dbox[j, 2] + w)
+                                   & (xy[:, 1] >= dbox[j, 1] - w) & (xy[:, 1] <= dbox[j, 3] + w))
+                if not len(r):
+                    continue
+                q = xy[r]
                 a, ab = ln[:-1], np.diff(ln, axis=0)
                 lab = np.maximum(dnp.hypot(*ab.T), 1e-9)
-                t = np.clip(((xy[:, None, :] - a[None]) * ab[None]).sum(2) / (lab * lab)[None], 0.0, 1.0)
-                dist = dnp.hypot(*(a[None] + t[..., None] * ab[None] - xy[:, None, :]).transpose(2, 0, 1))
+                t = np.clip(((q[:, None, :] - a[None]) * ab[None]).sum(2) / (lab * lab)[None], 0.0, 1.0)
+                dist = dnp.hypot(*(a[None] + t[..., None] * ab[None] - q[:, None, :]).transpose(2, 0, 1))
                 k = np.argmin(dist, axis=1)
-                r = np.arange(len(xy))
-                at = np.r_[0.0, np.cumsum(lab)][:-1][k] + t[r, k] * lab[k]
-                under |= (dist[r, k] <= h + float(p.half)) & ((at > APPROACH_MIN_CROSS_M) | joined[2 * j]) & (
+                ri = np.arange(len(q))
+                at = np.r_[0.0, np.cumsum(lab)][:-1][k] + t[ri, k] * lab[k]
+                under[r] |= (dist[ri, k] <= h + w) & ((at > APPROACH_MIN_CROSS_M) | joined[2 * j]) & (
                     (at < lab.sum() - APPROACH_MIN_CROSS_M) | joined[2 * j + 1])
             out.append(np.where(under, np.asarray(hz, f64), np.nan) if under.any() else None)
         return out
