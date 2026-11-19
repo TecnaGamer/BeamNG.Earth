@@ -25,6 +25,9 @@ struct Ring {
     s1: isize,
 }
 
+/// The elements NumPy's buffered reductions take at a time (np.getbufsize(), 8192: never changed by the server).
+const NP_BUFSIZE: usize = 8192;
+
 impl Ring {
     fn of(a: &PyReadonlyArray2<'_, f64>) -> PyResult<Ring> {
         let (sh, st) = (a.shape(), a.strides());
@@ -42,6 +45,13 @@ impl Ring {
         unsafe { std::ptr::read_unaligned(self.data.offset(i as isize * self.s0 + j as isize * self.s1) as *const f64) }
     }
 
+    /// Whether NumPy reduces the latitude column ring[:, 1] through its buffer: the column not aligned, its start or
+    /// (over more than one row) its row stride not a multiple of 8 bytes (numpy's raw_array_is_aligned).
+    fn lat_buffered(&self) -> bool {
+        let start = (self.data as usize as isize).wrapping_add(self.s1);
+        self.k > 1 && (start % 8 != 0 || self.s0 % 8 != 0)
+    }
+
     fn col(&self, j: usize, out: &mut Vec<f64>) {
         out.clear();
         out.extend((0..self.k).map(|i| self.at(i, j)));
@@ -49,10 +59,20 @@ impl Ring {
 }
 
 /// The cumulative length s (k,) of a ring with k >= 2 in sub_polyline's metric: np.r_[0.0, np.cumsum(dnp.hypot(
-/// np.diff(lon) * c, np.diff(lat)))], c = dmath.cos(math.radians(np.mean(lat))). lon, lat: its first two columns.
-fn arc(lon: &[f64], lat: &[f64]) -> Vec<f64> {
+/// np.diff(lon) * c, np.diff(lat)))], c = dmath.cos(math.radians(np.mean(lat))). lon, lat: its first two columns;
+/// buffered: NumPy's mean of an unaligned column, a pairwise sum per NP_BUFSIZE values added up in order.
+fn arc(lon: &[f64], lat: &[f64], buffered: bool) -> Vec<f64> {
     let k = lon.len();
-    let mean = np_sum(lat) / k as f64;
+    let sum = if buffered {
+        let mut acc = 0.0f64;
+        for ch in lat.chunks(NP_BUFSIZE) {
+            acc += np_sum(ch);
+        }
+        acc
+    } else {
+        np_sum(lat)
+    };
+    let mean = sum / k as f64;
     let c = (mean * (std::f64::consts::PI / 180.0)).dcos();
     let mut s = Vec::with_capacity(k);
     s.push(0.0);
@@ -117,7 +137,7 @@ fn arc_of(r: &Ring, col: &mut Vec<f64>) -> Vec<f64> {
     r.col(0, col);
     let lon = col.clone();
     r.col(1, col);
-    arc(&lon, col)
+    arc(&lon, col, r.lat_buffered())
 }
 
 /// roads.sub_polyline: the part of a lon/lat polyline (k, >= 2 columns: lon, lat, ...) between fractions a and b of
