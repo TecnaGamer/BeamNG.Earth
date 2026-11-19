@@ -1694,6 +1694,10 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
         props.extend(buildingsmod.toll_booth_rows(items, x0, y0))
         drives.extend(buildingsmod.garage_drives(items, lines, x0, y0))
         chunks += drives
+        if drives and roadsmod._sw_v2():    # (sidewalks v2: a lowered kerb and apron where a house's drive crosses)
+            roadsmod.walk_drive_ranges(walks, drives)
+            if walks_raw is not None:
+                roadsmod.walk_drive_ranges(walks_raw, drives)
         park = parkingmod.clear_of(park, props, drives)
         park = parkingmod.tile_lot_spots(frame, tx, ty, _s.md, elev, items, park, separate_bays=bool(frontage_country))
         front_grass = [] if _s.surface is not None else None

@@ -6734,6 +6734,14 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // their scale, supports (k, 12)); skeleton_roof fails a skeleton with a node over its distance to the outline (an
     // 18 km gabled roof, report W545TFKJ); street_points finds a spot clear of every carriageway (report 5T7V9FNQ).
     // 495 is another branch's
-    m.add("VERSION", 496)?;
+    m.add_function(wrap_pyfunction!(sidewalks::v2::sidewalk_mesh2, m)?)?;
+    m.add_function(wrap_pyfunction!(sidewalks::v2::sidewalk_probes, m)?)?;
+    m.add_function(wrap_pyfunction!(sidewalks::v2::sidewalk_reveal, m)?)?;
+    m.add_function(wrap_pyfunction!(sidewalks::v2::walk_crossings, m)?)?;
+    // 502: sidewalks v2 (server sidewalks.V2, the road revamp's P1d): sidewalk_mesh2 (per-vertex reveal, rolled kerbs,
+    // driveway ramps, corner slabs at their absolute top, backs on the ground), sidewalk_probes / sidewalk_reveal (the
+    // walk's own smoothed profile), walk_crossings (where driveways cross a walk); junctions_find takes a 24th constant,
+    // the curb returns' arc step. 497-501 are other branches'
+    m.add("VERSION", 502)?;
     Ok(())
 }

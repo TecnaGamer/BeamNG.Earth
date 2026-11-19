@@ -203,6 +203,7 @@ struct K {
     bulb_m: f64, taper_m: f64, nose_deg: f64, nose_gap_m: f64, nose_max_m: f64, cw_cell_m: f64, cw_gap: f64,
     cw_w: f64, stop_gap: f64, stop_w: f64, node_tol: f64, merge_m: f64, connector_m: f64, connector_widths: f64,
     pave_radius: f64, pave_radius_major: f64, service_r: f64, curb_w: f64, radius_tries: Vec<f64>,
+    arc_step: f64,              // m per curb-return arc segment (0.75; sidewalks v2's curb returns 0.5: earthfast 502)
     left_hand: bool,            // traffic drives on the left: the stop line across the branch's other half
 }
 
@@ -359,7 +360,7 @@ fn piece(k: &K, p: P2, u1: P2, w1: f64, u2: P2, w2: f64, r: f64) -> Option<Piece
     let a0 = (t1[1] - z[1]).datan2(t1[0] - z[0]);
     let a1 = (t2[1] - z[1]).datan2(t2[0] - z[0]);
     let da = pmod(a1 - a0 + std::f64::consts::PI, TWO_PI) - std::f64::consts::PI;
-    let kk = 3usize.max((da.abs() * r / 0.75) as usize + 1);
+    let kk = 3usize.max((da.abs() * r / k.arc_step) as usize + 1);
     let arc: Vec<P2> = linspace(0.0, 1.0, kk).iter().map(|&s| {
         let ang = a0 + da * s;
         [z[0] + r * ang.dcos(), z[1] + r * ang.dsin()]
@@ -806,7 +807,7 @@ fn find_core(k: &K, net: &Net, walk_w: Option<f64>, parking_m: f64, pavement: bo
                 let a0 = (tti[1] - z[1]).datan2(tti[0] - z[0]);
                 let a1 = (ttj[1] - z[1]).datan2(ttj[0] - z[0]);
                 let da = pmod(a1 - a0 + std::f64::consts::PI, TWO_PI) - std::f64::consts::PI;
-                let kk = 3usize.max((da.abs() * radius / 0.75) as usize + 1);
+                let kk = 3usize.max((da.abs() * radius / k.arc_step) as usize + 1);
                 let arc2: Vec<P2> = linspace(0.0, 1.0, kk).iter().map(|&s| {
                     let ang = a0 + da * s;
                     [z[0] + radius * ang.dcos(), z[1] + radius * ang.dsin()]
@@ -1051,7 +1052,7 @@ pub fn junctions_find<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, off
     let n = offa.len().saturating_sub(1);
     if pa.ncols() < 3 || fids.len() != n || fid_rank.as_array().len() != n || width.as_array().len() != n || rad.as_array().len() != n
         || walk.as_array().len() != n || flags.as_array().len() != n || fw_state.as_array().nrows() != n || walks.len() != 2 * n
-        || consts.len() != 23 || (n > 0 && offa[n] as usize != pa.nrows()) {
+        || !(consts.len() == 23 || consts.len() == 24) || (n > 0 && offa[n] as usize != pa.nrows()) {
         return Err(PyValueError::new_err("junctions_find: mismatched road arrays"));
     }
     let p: Vec<P3> = (0..pa.nrows()).map(|i| [pa[[i, 0]], pa[[i, 1]], pa[[i, 2]]]).collect();
@@ -1084,12 +1085,15 @@ pub fn junctions_find<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, off
         return Err(PyValueError::new_err("junctions_find: fid ranks out of range"));
     }
     let c = &consts;
+    if c.len() > 23 && !(c[23].is_finite() && c[23] >= 0.05) {
+        return Err(PyValueError::new_err("junctions_find: arc step must be >= 0.05 m"));
+    }
     let k = K {
         radius: c[0], corner_lo: c[1], corner_hi: c[2], acute_deg: c[3], acute_t_m: c[4], acute_r_min: c[5],
         branch_m: c[6], bulb_m: c[7], taper_m: c[8], nose_deg: c[9], nose_gap_m: c[10], nose_max_m: c[11],
         cw_cell_m: c[12], cw_gap: c[13], cw_w, stop_gap: c[14], stop_w, node_tol: c[15], merge_m: c[16],
         connector_m: c[17], connector_widths: c[18], pave_radius: c[19], pave_radius_major: c[20], service_r: c[21],
-        curb_w: c[22], radius_tries, left_hand,
+        curb_w: c[22], radius_tries, arc_step: if c.len() > 23 { c[23] } else { 0.75 }, left_hand,
     };
     let bounds = bounds.map(|b| [b.0, b.1, b.2, b.3]);
     let o = py.detach(|| find_core(&k, &net, walk_w, parking_m, pavement, bounds));
