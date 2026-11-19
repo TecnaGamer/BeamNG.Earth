@@ -90,6 +90,13 @@ def rect(m2, lon=LON, lat=LAT):
     return square(lon, lat, side / (111320.0 * math.cos(math.radians(lat))), side / 111320.0)
 
 
+def rect_at(m2, at):
+    """A rectangle ring of about m2 square metres centred on at (lon, lat)."""
+    side = m2 ** 0.5
+    w, d = side / (111320.0 * math.cos(math.radians(at[1]))), side / 111320.0
+    return square(at[0] - w / 2, at[1] - d / 2, w, d)
+
+
 def rec(at, h, area=100.0, floors=0, tower=False):
     """One record: at is a ring (its middle) or a (lon, lat); area in m2."""
     lon, lat = centre(at) if isinstance(at[0], list) else at
@@ -215,14 +222,14 @@ class JoinTest(unittest.TestCase):
         self.assertTrue(np.isnan(a["num_floors"][2]))       # (the record has none)
 
     def test_the_maps_own_height_stays_ml_heights_give_way(self):
-        f = layer([self.feet[0]] * 3, height=[88.0, 30.0, np.nan],
-                  height_src=["OpenStreetMap", "Microsoft ML Buildings", ""])
-        a = hkbuildings.join(f, self.recs)
-        self.assertEqual(float(a["height"][0]), 88.0)
-        self.assertEqual(str(a["height_src"][0]), "OpenStreetMap")
-        self.assertEqual(float(a["height"][1]), 200.0)
-        self.assertEqual(str(a["height_src"][1]), "hk_landsd")
-        self.assertEqual([str(s) for s in a["roof_shape"]], ["", "flat", "flat"])    # (only where it filled the height)
+        def one(height, src):       # (a layer each: three copies of one footprint would contest its record)
+            return hkbuildings.join(layer([self.feet[0]], height=[height], height_src=[src]), self.recs)
+        self.assertIsNone(one(88.0, "OpenStreetMap"))       # (the map's own: nothing written, roof shape neither)
+        for height, src in ((30.0, "Microsoft ML Buildings"), (np.nan, "")):
+            a = one(height, src)
+            self.assertEqual(float(a["height"][0]), 200.0)
+            self.assertEqual(str(a["height_src"][0]), "hk_landsd")
+            self.assertEqual(str(a["roof_shape"][0]), "flat")       # (only where it filled the height)
 
     def test_a_filled_in_tower_gets_a_flat_roof_unless_the_map_names_one(self):
         f = layer(self.feet[:4], roof_shape=["gabled", "", "", ""])
@@ -348,6 +355,111 @@ class JoinPickTest(unittest.TestCase):
         h = self.heights([self.BIGF, small], rec(centre(self.BIGF), 150.0, area=0.1 * a, tower=True),
                          rec(centre(small), 20.0))
         np.testing.assert_array_equal(h, [np.nan, 20.0])
+
+
+class JoinClaimTest(unittest.TestCase):
+    """A record goes to one footprint: of those that pick it, the one closest in area to it (the map has a podium and
+    the tower on it as two footprints, and the tower's record stands in both)."""
+    P = rect(1500)                      # (a podium)
+    T = rect_at(300, centre(P))         # (the tower on it)
+    TOWER = rec(T, 150.0, area=300.0, tower=True)
+    PODIUM = rec(centre(P, 0.1, 0.1), 20.0, area=1500.0)
+
+    def heights(self, rings, *rs, **cols):
+        return hkbuildings.join(layer(rings, **cols), records(*rs))["height"]
+
+    def chain(self, n):
+        """n concentric footprints (the biggest first) and a record in each, taller towards the middle, of the area of
+        its own footprint: footprint k stands over the records k to n - 1 and its own is the closest in area."""
+        mid = centre(self.P)
+        rings = [rect_at(1800 * 0.7 ** k, mid) for k in range(n)]
+        rs = [rec(centre(r, 0.5, 0.04) if k < n - 1 else mid, 20.0 + 10 * k, area=area_of(r), tower=True)
+              for k, r in enumerate(rings)]
+        return self.heights(rings, *rs)
+
+    def test_the_tower_footprint_takes_the_tower_and_the_podium_its_own(self):
+        self.assertLess(area_of(self.P), hkbuildings.BIG_M2)
+        np.testing.assert_array_equal(self.heights([self.P, self.T], self.TOWER, self.PODIUM), [20.0, 150.0])
+        np.testing.assert_array_equal(self.heights([self.T, self.P], self.TOWER, self.PODIUM), [150.0, 20.0])
+
+    def test_a_podium_alone_keeps_the_tower_as_it_did(self):
+        np.testing.assert_array_equal(self.heights([self.P], self.TOWER, self.PODIUM), [150.0])
+
+    def test_the_closest_in_area_wins_not_the_smallest(self):
+        shed = rect_at(50, centre(self.T))
+        for rings, want in (([shed, self.T], [np.nan, 150.0]), ([self.T, shed], [150.0, np.nan])):
+            np.testing.assert_array_equal(self.heights(rings, self.TOWER), want)
+
+    def test_the_closest_in_area_is_the_closest_in_ratio(self):
+        mid = centre(self.P)
+        low, high = rect_at(320, mid), rect_at(1520, mid)      # (the record's 800: 2.5 times under, 1.9 times over)
+        r = rec(mid, 100.0, area=800.0, tower=True)
+        np.testing.assert_array_equal(self.heights([low, high], r), [np.nan, 100.0])
+        np.testing.assert_array_equal(self.heights([high, low], r), [100.0, np.nan])
+
+    def test_a_record_without_area_goes_to_the_smallest_footprint(self):
+        r = rec(centre(self.T), 150.0, area=0.0, tower=True)
+        np.testing.assert_array_equal(self.heights([self.P, self.T], r), [np.nan, 150.0])
+
+    def test_a_loser_takes_the_other_record_in_it(self):
+        shed = rect_at(50, centre(self.T))
+        h = self.heights([self.T, shed], self.TOWER, rec(centre(shed, 0.2, 0.2), 8.0, area=50.0))
+        np.testing.assert_array_equal(h, [150.0, 8.0])
+
+    def test_a_loser_with_no_other_record_is_left_as_it_was(self):
+        shed = rect_at(50, centre(self.T))
+        a = hkbuildings.join(layer([self.T, shed], height=[np.nan, 30.0],
+                                   height_src=["", "Microsoft ML Buildings"]), records(self.TOWER))
+        self.assertEqual(a["height"].tolist(), [150.0, 30.0])
+        self.assertEqual([str(s) for s in a["height_src"]], ["hk_landsd", "Microsoft ML Buildings"])
+        self.assertEqual(str(a["roof_shape"][1]), "")
+
+    def test_a_footprint_with_parts_claims_its_record_though_nothing_is_written_on_it(self):
+        a = hkbuildings.join(layer([self.P, self.T], has_parts=[False, True]), records(self.TOWER, self.PODIUM))
+        np.testing.assert_array_equal(a["height"], [20.0, np.nan])
+        self.assertEqual([str(s) for s in a["height_src"]], ["hk_landsd", ""])
+
+    def test_a_footprint_with_a_height_of_the_maps_own_claims_its_record_too(self):
+        a = hkbuildings.join(layer([self.P, self.T], height=[np.nan, 88.0], height_src=["", "OpenStreetMap"]),
+                             records(self.TOWER, self.PODIUM))
+        np.testing.assert_array_equal(a["height"], [20.0, 88.0])
+        self.assertEqual([str(s) for s in a["height_src"]], ["hk_landsd", "OpenStreetMap"])
+
+    def test_equal_areas_go_to_the_lower_index_whatever_the_record_order(self):
+        f = rect(400)
+        tall, low = rec(centre(f), 100.0, area=400.0, tower=True), rec(centre(f), 50.0, area=400.0)
+        np.testing.assert_array_equal(self.heights([f, f], tall, low), [100.0, 50.0])
+        np.testing.assert_array_equal(self.heights([f, f], low, tall), [100.0, 50.0])
+
+    def test_several_contested_records_in_one_layer_resolve_each(self):
+        p2 = rect(1500, LON + 0.01)
+        t2 = rect_at(300, centre(p2))
+        rs = (self.TOWER, self.PODIUM, rec(t2, 150.0, area=300.0, tower=True),
+              rec(centre(p2, 0.1, 0.1), 20.0, area=1500.0))
+        np.testing.assert_array_equal(self.heights([self.P, p2, self.T, t2], *rs), [20.0, 20.0, 150.0, 150.0])
+
+    def test_three_nested_footprints_resolve_over_rounds(self):
+        np.testing.assert_array_equal(self.chain(3), [20.0, 30.0, 40.0])
+
+    def test_up_to_claim_rounds_picks_resolve_and_past_them_the_picks_stand(self):
+        self.assertEqual(hkbuildings.CLAIM_ROUNDS, 8)
+        np.testing.assert_array_equal(self.chain(8), [20.0 + 10 * k for k in range(8)])
+        np.testing.assert_array_equal(self.chain(9), [30.0, 30.0] + [20.0 + 10 * k for k in range(2, 9)])
+
+    def test_with_one_pick_the_contested_picks_stand(self):
+        with mock.patch.object(hkbuildings, "CLAIM_ROUNDS", 1):
+            np.testing.assert_array_equal(self.heights([self.P, self.T], self.TOWER, self.PODIUM), [150.0, 150.0])
+        with mock.patch.object(hkbuildings, "CLAIM_ROUNDS", 2):
+            np.testing.assert_array_equal(self.chain(3), [30.0, 30.0, 40.0])
+
+    def test_a_footprint_over_big_m2_takes_the_cover_test_again_when_it_picks_again(self):
+        big = rect(3000)
+        inner = rect_at(2700, centre(big))
+        self.assertGreater(area_of(inner), hkbuildings.BIG_M2)
+        whole = rec(centre(big), 200.0, area=2700.0, tower=True)    # (stands in both, covers both)
+        tower = rec(centre(big, 0.5, 0.01), 150.0, area=100.0, tower=True)     # (covers little of the big one)
+        podium = rec(centre(big, 0.5, 0.99), 40.0, area=2500.0)
+        np.testing.assert_array_equal(self.heights([big, inner], whole, tower, podium), [40.0, 200.0])
 
 
 class JoinPartsTest(unittest.TestCase):
