@@ -243,13 +243,14 @@ LAYERS = {
     # own facade / roof material, drawn with the building's; no layer version bump: cells fetched from now on have
     # them, the cached ones with the next release bump, buildings.PART_OWN reading what a cell has)
     "building_parts": dict(theme="buildings", type="building_part", clip=False,
-                           cols=f"building_id, {_SRC}, height, min_height, num_floors, min_floor, roof_shape, "
-                                "roof_height, facade_color, roof_color, facade_material, roof_material, "
+                           cols=f"building_id, {_SRC}, height, min_height, num_floors, min_floor, level, is_underground, "
+                                "roof_shape, roof_height, facade_color, roof_color, facade_material, roof_material, "
                                 "roof_direction, roof_orientation",
                            text=("building_id", "src_dataset", "src_record", "roof_shape", "facade_color",
                                  "roof_color", "facade_material", "roof_material", "roof_orientation"),
                            float=("height", "min_height", "num_floors", "min_floor", "roof_height",
-                                  "roof_direction")),
+                                  "roof_direction", "level"),
+                           bool=("is_underground",)),
     "water": dict(theme="base", type="water", clip=True,
                   cols=f"subtype, class, {_NAME}, {_SRC}, level, is_salt, is_intermittent, {_TAGS}",
                   text=("subtype", "class", "name", "src_dataset", "src_record", "tags"),
