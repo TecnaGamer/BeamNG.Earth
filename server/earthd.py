@@ -179,6 +179,7 @@ import cpupin  # noqa: E402
 import netstate as netstatemod  # noqa: E402
 import netfetch  # noqa: E402
 import protocol  # noqa: E402
+msgs = protocol.ef  # noqa: E402  (made in Rust: far_tile, far_swap, far_remove, far_done, status, load_progress)
 import weather as weathermod  # noqa: E402
 
 PROTOCOL = 4
@@ -1415,7 +1416,7 @@ class Server:
         self.warm_cv = threading.Condition()
         self.warm_thread = None
         self.tile_workers = tile_workers
-        self.delta_pool = ThreadPoolExecutor(1, thread_name_prefix="deltas")   # swap group deltas (emit_groups)
+        self.delta_pool = msgs.PyJobs(1, "deltas")      # swap group deltas (emit_groups): a PyJob (Rust's threads)
         self.kfun, self.hysteresis, self.radius = kfun or self.layout.k, hysteresis, radius
         self.status_interval = status_interval
         # M1h: the line-of-sight far field. One worker builds the anchors' zmax grids (coarse DEM
@@ -8652,14 +8653,10 @@ class Connection:
     def status(self, text):
         n = self.backlog()
         self.last_status, self.status_sent = text, (time.monotonic(), n)
-        note = self.note_sent = self.s.net_note()
-        if note:                        # offline / degraded: the mod shows the status text as it is
-            text = f"{text} | {note}" if text else note
-        m = {"type": "status", "text": text, "backlog": n}
-        if self.s.horizon:              # M1h: the far-field radius (the mod's visibleDistance follows it)
-            m["radius"] = round(self.radius)
+        self.note_sent = self.s.net_note()  # (offline / degraded: after the text; --horizon: the far field's radius)
+        if self.s.horizon:
             self.radius_sent = self.radius
-        self.send(m)
+        self.send(msgs.msg_status(text, self.note_sent, n, self.radius if self.s.horizon else None))
 
     def send_progress(self, aid):
         """The loading line's counts (the mod's loadprogress.lua): (done, wanted) of the road tiles, the tree tiles and
@@ -8682,8 +8679,7 @@ class Connection:
         if counts == getattr(self, "progress_sent", None) or now - getattr(self, "progress_at", 0.0) < PROGRESS_S:
             return
         self.progress_sent, self.progress_at = counts, now
-        self.send({"type": "load_progress", "anchorId": aid, "ground": list(counts[0]), "roads": list(roads),
-                   "trees": list(trees), "far": list(far), "net": net})
+        self.send(msgs.msg_load_progress(aid, *counts))
 
     def ground_progress(self, aid):
         """(1, 1) once the ground under the player is final, else (0, 1): a teleport's graded first block still on its
@@ -11849,7 +11845,7 @@ class Connection:
         for k in [k for k in self.sent if k not in needed]:
             del self.sent[k]
             self._retire([self.ck(k)])
-            self.send({"type": "far_remove", "anchorId": aid, "key": k})
+            self.send(msgs.msg_far_remove(aid, k))
         # Build order: L0 under the committed / pending block (the mod's cover and commit
         # gating need them), then groups that are partly sent, then the rest; nearest first.
         gate = [b.bbox for b in (self.block, self.pending_block) if b is not None and self.s.near_visual in BLOCK_DRAWN]
@@ -11970,8 +11966,7 @@ class Connection:
             d_in, d_out = d_in + DELTA_MARGIN, d_out + DELTA_MARGIN
             gid = self.next_group
             self.next_group += 1
-            self.send({"type": "far_swap", "anchorId": aid, "id": gid, "add": adds, "remove": removes,
-                       "dIn": round(d_in, 2), "dOut": round(d_out, 2)})
+            self.send(msgs.msg_far_swap(aid, gid, adds, removes, d_in, d_out))
             if log.isEnabledFor(logging.DEBUG) and adds and removes and \
                     not any(farfield.is_special_key(k) for k in adds + removes):    # the pop's size: amplitude / distance
                 dist = min(farfield.tile_of(k).distance(*self.focus) for k in adds + removes)
@@ -12008,7 +12003,7 @@ class Connection:
             if not b:
                 del self.shown[ck]
                 self._retire([ck])
-                self.send({"type": "far_remove", "anchorId": ck[0], "key": ck[1]})
+                self.send(msgs.msg_far_remove(*ck))
                 self.credits.poke(self)
 
     def _blocked(self):
@@ -12119,7 +12114,7 @@ class Connection:
                     and len(self.groups) == len(self._blocked())):
                 self.dirty = False
                 n = sum(1 for k in self.desired if self.ck(k) in self.shown)
-                self.send({"type": "far_done", "anchorId": anchor.id, "count": n})
+                self.send(msgs.msg_far_done(anchor.id, n))
                 self.far_done_at = time.monotonic()
                 if self.map_view or self.map_open:
                     self.zoom_ref = self.eye    # (all shown at this eye's detail: the zoom rule's reference)
@@ -12202,29 +12197,23 @@ class Connection:
                     if ck not in self.s.degraded or not self.s.imagery_down():
                         self.s.retex_request(ck)
                 self.batch[1] += 1
-                m = {"type": "far_tile", "anchorId": self.active, "key": t.key, "level": t.level,
-                     "shape": f"{self.s.vfs_dir}/{info.shape or self.s.tile_name(*ck)}",
-                     "pos": [round(v, 3) for v in info.pos], "err": round(info.err, 3),
-                     "skirt": round(info.skirt, 2), "state": "group"}
-                if info.sink is not None:
-                    m["sink"] = round(info.sink, 2)
-                if isinstance(t, farfield.GTile):   # geotiles phase 3b: placed by the mod from its own frame
-                    m["frame"] = [info.frame[0], info.frame[1]]
-                    m["pos"] = [0, 0, round(info.pos[2], 3)]
-                    m["poly"] = [round(v, 2) for v in t.quad]
-                elif isinstance(t, farfield.Piece):
-                    m["poly"] = [round(v, 2) for v in t.poly]
+                # (geotiles phase 3b: a global tile placed by the mod from its own frame and quad; a piece by its
+                # polygon; a pooled shape (matslots.py) with its send serial; protocol 4: the tile's own imagery
+                # material, its shape with UV1, and M1's texture px)
+                gt = isinstance(t, farfield.GTile)
+                poly = t.quad if gt else t.poly if isinstance(t, farfield.Piece) else None
+                if poly is not None and not gt:
                     self.ppolys[t.key] = t.poly
-                if info.shape is not None and info.shape.startswith("slot_"):  # pooled (matslots.py)
-                    m["slotSerial"] = serial = next(self.s.slot_serial)
-                    self.slot_holds[matslotsmod.MatSlots.number(info.material)] = serial
-                if info.material is not None:   # protocol 4: the tile's own imagery material
-                    m["material"] = info.material
-                    m["texture"] = f"{self.s.vfs_dir}/{info.texture}"
-                    m["detail"] = True          # the shape has UV1 (world-locked detail map)
-                    if self.s.layout.format >= 4:   # M1: texture px, the mod's governor unit kind
-                        m["tex"] = info.tex_px or self.s.tex_size(t.level)
-                self.send(m)
+                serial = None
+                if info.shape is not None and info.shape.startswith("slot_"):
+                    serial = self.slot_holds[matslotsmod.MatSlots.number(info.material)] = next(self.s.slot_serial)
+                tex = None
+                if info.material is not None and self.s.layout.format >= 4:
+                    tex = info.tex_px or self.s.tex_size(t.level)
+                self.send(msgs.msg_far_tile(
+                    self.active, t.key, t.level, f"{self.s.vfs_dir}/{info.shape or self.s.tile_name(*ck)}", info.pos,
+                    info.err, info.skirt, info.sink, info.frame if gt else None, poly, serial, info.material,
+                    f"{self.s.vfs_dir}/{info.texture}", tex))
                 if FAR_TRACE:
                     log.info("fartrace %.2f s L%d %s build %.0f ms tex %.0f ms quick %s", time.perf_counter() -
                              self.batch[0], t.level, t.key, 1000 * info.seconds, 1000 * info.tex_seconds,
@@ -12722,6 +12711,8 @@ async def main_async(args, restart=None):
     finally:
         if server.host is not None:     # (the host's threads ended before anything they could reach closes)
             server.host.shutdown()
+        # (the swap deltas' Rust threads joined while the interpreter is whole, as concurrent.futures joined its own)
+        server.delta_pool.shutdown(wait=True, cancel_futures=True)
         pl = server.__dict__.get("_preloader")
         if pl is not None:          # (before the network and the disk cache close: its running part ends first)
             await pl.shutdown()

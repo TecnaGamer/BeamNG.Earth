@@ -7379,6 +7379,9 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 522: revampfix (batter::apply_vw: a corridor loosened behind an end its plan does not carry it on past, cap_loosen)
     // 531: revampfix2 (522 on try598; batter_apply_vw's continuation links from plan_pack's nb); 530 is another branch's
     // 532: try598 with 530 and 531 (revampfix2) merged
-    m.add("VERSION", 532)?;
+    // 528: the full Rust port's phase 2a (host/pyjson.rs: protocol.encode's bytes; host/pyjob.rs: PyJobs; host/msgs.rs:
+    // far_tile, far_swap, far_remove, far_done, status and load_progress made in Rust); 527 is another branch's
+    // 533: try598 (532) with 528 (port2a) merged: the version the protocol layer asks for (532 lacks it)
+    m.add("VERSION", 533)?;
     Ok(())
 }
