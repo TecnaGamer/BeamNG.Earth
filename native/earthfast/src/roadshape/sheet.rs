@@ -30,6 +30,9 @@
 //!   CHAIN 0 a record is a function of its two parts alone, whole in every tile that holds either.
 //! - NODE (optional): only the branch ends at that point (roads._sheet_records: one call per fork node on the parts
 //!   within SHEET_NODE_R_M of it, the record a function of those alone, whichever tile asks).
+//! - HEIGHTS PARTING FIRST (P2c, earthfast 515): where that split fails the height tests below (the branch climbing
+//!   or dropping away while its edge is still inside the through deck), the union ends instead where |T - B| first
+//!   passes NODE_DZ along the walk (interpolated), if that comes before the edges' split and after MIN_UNION.
 //! - NO RECORD where the branch never parts from the through deck (it lies inside it to its end); nor where the two disagree in height by more than DZ_MAX anywhere in the union (a flyover over the deck, a
 //!   profile fault: one slab would put the ramp on the wrong level; P3's joint profile), nor where the blend back would
 //!   be steeper than PIN_GRADE on average (|dz at the split| > PIN_GRADE x the blend's length: a branch ending inside
@@ -383,6 +386,35 @@ fn fork_of(parts: &[Part], b: usize, e: usize, prm: &[f64]) -> Option<Rec> {
     // (a branch that never parts from the through deck lies inside it to its end: an overlay or a mapping fault, not
     // an exit; its own deck and heights stay. SD Fwy's I-605 connector: 2,553 -> 3,307 m2 overlap with it)
     if !parted || s_split < prm[P_MIN_UNION] || side == 0.0 { return None; }
+    if let Some(r) = split_at(parts, &ob, &tc, s_split, s_t0, side, &dzs, prm) { return Some(r); }
+    // P2c: where the two disagree too much in height at the edges' split (the branch climbing or dropping away while
+    // its edge is still inside the through deck: I-95 by the Middle Branch, 160 m of ramp in the deck at its height,
+    // then rising 3 m before the map's lines part), the union ends where the heights part instead: the last point
+    // before |T - B| passes NODE_DZ (interpolated between the walk's samples). Only then: elsewhere P2b's split stands.
+    let mut s_h: Option<f64> = None;
+    for w in dzs.windows(2) {
+        let ((s0, d0), (s1, d1)) = (w[0], w[1]);
+        if d1 > prm[P_NODE_DZ] {
+            if d0 <= prm[P_NODE_DZ] && s1 > s0 && d1 > d0 {
+                s_h = Some(s0 + (s1 - s0) * (prm[P_NODE_DZ] - d0) / (d1 - d0));
+            }
+            break;
+        }
+    }
+    match s_h {
+        Some(sh) if sh >= prm[P_MIN_UNION] && sh < s_split => split_at(parts, &ob, &tc, sh, s_t0, side, &dzs, prm),
+        _ => None,
+    }
+}
+
+/// The record of the fork whose branch chain ob leaves (or joins) the through chain tc, its union ending at the
+/// branch chain's arc s_split (side: the branch on the through chain's left, +1, or right; s_t0: the node's arc on the
+/// first through part; dzs: the walk's (s, |T - B|)). None where the two disagree in height by more than DZ_MAX in the
+/// union, or where the blend back would be steeper than PIN_GRADE.
+#[allow(clippy::too_many_arguments)]
+fn split_at(parts: &[Part], ob: &Chain, tc: &Chain, s_split: f64, s_t0: f64, side: f64, dzs: &[(f64, f64)],
+            prm: &[f64]) -> Option<Rec> {
+    let (lb, lt) = (&ob.line, &tc.line);
     // Lambda: the through chain's normal at the foot of the branch's centre there, crossed with the branch's line
     let (_d, s_t, _off, nrm) = lt.project(lb.at(s_split));
     let pt_ = lt.at(s_t);
@@ -427,8 +459,7 @@ fn fork_of(parts: &[Part], b: usize, e: usize, prm: &[f64]) -> Option<Rec> {
     let trev = tc.pieces[kt].rev;
     let n_own = if trev { [-nrm[0], -nrm[1]] } else { nrm };
     let side_own = if trev { -side } else { side };
-    let rec = [sb_own, s_t0, st_own, pt_[0], pt_[1], n_own[0], n_own[1], pb_[0], pb_[1], z_t, gap, dz_split,
-               if parted { 1.0 } else { 0.0 }];
+    let rec = [sb_own, s_t0, st_own, pt_[0], pt_[1], n_own[0], n_own[1], pb_[0], pb_[1], z_t, gap, dz_split, 1.0];
     Some(((tp, bp, side_own as i64), rec, cov, dz))
 }
 
@@ -533,6 +564,27 @@ mod tests {
         let mut b = part(vec![[0.0, 0.0], [40.0, 2.0]], 10.0, 3.5, 1, 1);
         b.line.z = vec![10.0, 11.0];
         assert!(fork_of(&[t, b], 1, 0, &prm()).is_none());
+    }
+
+    #[test]
+    fn heights_parting_first_end_the_union_there() {
+        // T straight east (hw 9); B (hw 4.15) inside its edge at 7 m off for 160 m at T's height, then turning away
+        // and climbing 3 m by x 220, its edges parting 1.2 m only there (dz ~2.7 m): P2b's split fails the blend
+        // test; the union ends where |T - B| passes NODE_DZ (x ~ 170), the branch pinned up to it
+        let t = part(vec![[0.0, 0.0], [400.0, 0.0]], 10.0, 9.0, 1, 0);
+        let mut b = part(vec![[0.0, 0.0], [20.0, 7.0], [160.0, 7.0], [220.0, 15.0], [300.0, 35.0]], 10.0, 4.15, 1, 1);
+        b.line.z = vec![10.0, 10.0, 10.0, 13.0, 14.0];
+        let parts = vec![t, b];
+        let r = fork_of(&parts, 1, 0, &prm()).expect("a fork");
+        let f = r.1;
+        assert!(f[2] > 165.0 && f[2] < 185.0, "sT {}", f[2]);
+        assert!(f[11].abs() <= 0.5 + 1e-9, "dz {}", f[11]);
+        assert_eq!(f[12], 1.0);
+        // with the heights together all along the split stays the edges' (x ~ 215 here: P2b unchanged)
+        let t = part(vec![[0.0, 0.0], [400.0, 0.0]], 10.0, 9.0, 1, 0);
+        let b = part(vec![[0.0, 0.0], [20.0, 7.0], [160.0, 7.0], [220.0, 15.0], [300.0, 35.0]], 10.0, 4.15, 1, 1);
+        let r = fork_of(&[t, b], 1, 0, &prm()).expect("a fork");
+        assert!(r.1[2] > 195.0, "sT {}", r.1[2]);
     }
 
     #[test]
