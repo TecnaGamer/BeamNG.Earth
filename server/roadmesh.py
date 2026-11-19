@@ -1522,11 +1522,12 @@ def build(frame, chunks, elev, origin, lift=0.0, clip=None, follow=False, q=None
             k0 += 2 * k
         else:                                   # on a deck: over its opaque concrete top
             bk = _bank_rows(c, k)
+            skin = DECK_SKIN + (NOSLAB_LIFT if c.get("noslab") else 0.0)
             if bk is not None:                  # (roadshape: a banked shaped deck, tilted across)
                 z = np.concatenate((tilted(left, right, fz, bk, left), tilted(left, right, fz, bk, right))) \
-                    + LIFT[layer] + DECK_SKIN
+                    + LIFT[layer] + skin
             else:
-                z = np.concatenate((fz, fz)) + LIFT[layer] + DECK_SKIN
+                z = np.concatenate((fz, fz)) + LIFT[layer] + skin
             # (a cluster's decks overlap all over its junction at one height: their skins, and the wear (patches, cracks:
             # roadwear) of one over another's skin, flickered as noise, Rautenweg in game 2026-11-12. Its plain asphalt
             # skins take the world's texture coordinates (below: where two lie on each other, one texture), its wear is
@@ -1563,7 +1564,8 @@ def build(frame, chunks, elev, origin, lift=0.0, clip=None, follow=False, q=None
         tri = _keep_up(tri, xy, nverts)
         field = junctions.get(c.get('fid')) if fz is not None else None
         if field is not None:
-            pp, uu, tt, _src = field.top(P[-1], UV[-1], tri - nverts, LIFT[layer] + DECK_SKIN)
+            pp, uu, tt, _src = field.top(P[-1], UV[-1], tri - nverts, LIFT[layer] + DECK_SKIN +
+                                         (NOSLAB_LIFT if c.get("noslab") else 0.0))
             if getattr(field, 'cluster', False) and c.get('deck'):
                 uu = pp[:, :2] / CLUSTER_SKIN_TILE_M
             P[-1], UV[-1], tri = pp, uu, tt + nverts
@@ -1778,6 +1780,15 @@ def _fade_uv(UV, vr, par):
 
 
 DECK_DEPTH = 1.2        # m of deck slab under the surface
+# m more a branch's road surface on an exit union's slab (road revamp v2 P2b: roads._sheet_tag's "noslab", the chunks
+# inside the union's branch intervals, from the fork's record alone: the same in every tile) lies over the through
+# road's. Pinned to the through road's heights along its own line, flat across, the two opaque skins crossed within
+# 1 mm in bands where the branch's ribbon overlaps the through carriageway (concrete and asphalt, 378 m2 at the I-95's
+# Middle Branch exits, revampfix): the branch's skin on top by this much, everywhere in the union (cutting it out of
+# the through road's footprint instead could not be made to agree with the through skin as drawn in every tile, Codex
+# review of revampfix2). Under the branch's own markings (v2: 5 mm; they write no depth: a skin over them hid them);
+# the through road's overlays under it (2.5-5 mm) are hidden where the branch's skin covers them.
+NOSLAB_LIFT = 0.003 if SURFACE_V2 else 0.0015
 DECK_SKIN = 0.01        # m the road mesh lies over a deck's top (the decal materials are translucent:
                         # 2026-10-11 a deck topped with road_asphalt_2lane was see-through)
 DECK_TOP = "bne_bridge_asphalt"     # the slab's top: plain opaque asphalt (the stock terrain's), under the road's own

@@ -399,7 +399,8 @@
           1,
           1
         ],
-        "opacityFactor": 0.9,
+        "opacityFactor": 0.6,
+        "roughnessFactor": 0.428,
         "opacityDetailMap": "/levels/beamng_earth/art/shapes/beamngEarth/dirt_fade_o.data.dds",
         "opacityDetailMapUseUV": 1,
         "detailOpacityMapStrength": 1,

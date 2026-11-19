@@ -449,9 +449,11 @@ def keyed_env(k):
 # plans' second stage pinned from its approaches, grading._Planner._pinned); sheet and decks unchanged.
 # BNE_ROADSHAPE 6 (P3c, profile): the pins read every 0.25 m off the abutments, shared by distance and along the road;
 # an approach reaching another deck end within 2 anchors one member; the steep-road C1 tolerance (earthfast 523).
+# BNE_ROADSHAPE 7 (sheet): a branch's road surface on an exit union's slab drawn roadmesh.NOSLAB_LIFT over its through
+# road's (the union's chunks from the fork's record, "noslab"; revampfix).
 SWITCH_VERSIONS = {"BNE_LEVEL_SPACING": 5, "BNE_FAST_DECK_GROUND": 2, "BNE_UNDER_SPEED": 2, "BNE_FAST_GAP": 5,
                    "BNE_RACEWAY_DIG": 2, "BNE_DIRT_BUMP": 2, "BNE_DIRT_BANK": 2, "BNE_DECK_STRUCT": 5,
-                   "BNE_ROADSHAPE": 6, "BNE_DECK_SKEW": 1}
+                   "BNE_ROADSHAPE": 7, "BNE_DECK_SKEW": 1}
 
 
 def keyed_value(k, v):
