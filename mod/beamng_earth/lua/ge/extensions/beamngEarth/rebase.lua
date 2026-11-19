@@ -30,7 +30,8 @@ M.KEEP_EDGE_1024 = 0
 M.KEEP_EDGE_512 = 150
 M.LATENCY_S = 1          -- anchor latency assumed until one is measured (s)
 M.LEAD_EXTRA_S = 1       -- a re-requested terrain leads the player by the latency plus this
-M.RETRY_S = 5            -- wait after an anchor_error before asking again
+M.RETRY_S = 5            -- wait after a failed or expired request
+M.PREPARE_TIMEOUT_S = 60 -- a moving player cannot use first ground built minutes later
 
 -- The session's block by its width (m: 1 km, the *_512 values (named for 512² at 2 m), or 2 km): the staleness
 -- distance and the stale-anchor rule.
@@ -49,12 +50,12 @@ function M.setDistance(m)
 end
 
 -- dist: player's horizontal distance from the anchor origin.
--- pending: nil or { purpose = 'rebase'|'resync'|'teleport', ready = bool } (the request in flight).
+-- pending: nil or { purpose = 'rebase'|'resync'|'teleport', ready = bool, sentAt = time }.
 -- staleDist: only when pending.ready: Chebyshev distance player -> the prepared terrain centre,
 --   both in the new anchor's frame.
 -- edgeDist: only when pending.ready: the player's distance to the nearest edge of that terrain's
 --   valid (collidable) area, new frame (negative outside); used by the stale-anchor rule (KEEP_EDGE).
--- Returns 'prefetch', 'commit', 'discard' or nil. Teleport/resync requests commit as soon as they
+-- Returns 'prefetch', 'commit', 'discard', 'expire' or nil. Teleport/resync requests commit as soon as they
 -- are ready, which the caller handles; this rule only covers the distance-driven rebase.
 -- Staleness is judged only at the commit: the terrain was centred for where the player will be
 -- at the rebase distance (core.lua rebaseHint), up to PREFETCH_MARGIN + 424 m ahead of the player
@@ -64,8 +65,13 @@ function M.decide(dist, pending, staleDist, now, retryAt, edgeDist)
     if dist >= M.distance - M.PREFETCH_MARGIN and now >= (retryAt or 0) then return 'prefetch' end
     return nil
   end
-  if pending.purpose ~= 'rebase' or not pending.ready then return nil end
+  if pending.purpose ~= 'rebase' then return nil end
   if dist < M.distance then return nil end
+  if not pending.ready then
+    -- Progress heartbeats do not imply that the terrain worker has advanced.
+    if pending.sentAt and now - pending.sentAt >= M.PREPARE_TIMEOUT_S then return 'expire' end
+    return nil
+  end
   if staleDist and staleDist > M.STALE_DIST then
     if M.KEEP_EDGE > 0 and edgeDist and edgeDist >= M.KEEP_EDGE then return 'commit' end
     return 'discard'

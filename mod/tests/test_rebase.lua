@@ -13,6 +13,12 @@ T.check(d(9800, nil, nil, 3, 5) == nil, 'no prefetch before retryAt')
 T.check(d(9800, nil, nil, 5, 5) == 'prefetch', 'prefetch after retryAt')
 T.check(d(9900, { purpose = 'rebase' }, nil, 0, 0) == nil, 'request in flight: wait')
 T.check(d(10300, { purpose = 'rebase' }, nil, 0, 0) == nil, 'not ready past the distance: wait')
+local stuck = { purpose = 'rebase', sentAt = 10, progressAt = 69 }
+T.check(d(10300, stuck, nil, 69.99, 0) == nil, 'a slow preparation still gets time to complete')
+T.check(d(10300, stuck, nil, 70, 0) == 'expire', 'a stuck rebase expires even while heartbeats arrive')
+T.check(d(9900, stuck, nil, 70, 0) == nil, 'do not expire before the player needs the new origin')
+T.check(d(10300, { purpose = 'rebase', sentAt = 10, ready = true }, 300, 70, 0) == 'commit',
+  'a ready, usable rebase still commits after the deadline')
 T.check(d(9900, { purpose = 'rebase', ready = true }, 200, 0, 0) == nil, 'ready below the distance: hold')
 T.check(d(10000, { purpose = 'rebase', ready = true }, 300, 0, 0) == 'commit', 'ready at the distance: commit')
 T.check(d(11000, { purpose = 'rebase', ready = true }, 400, 0, 0) == 'commit', 'ready late: commit at once')
