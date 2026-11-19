@@ -1925,6 +1925,24 @@ class RoadLinesTest(unittest.TestCase):
         self.assertTrue(bld._ml_false(ring, [], [], lines), "a lorry-sized outline on its lanes: not a building")
         self.assertEqual(len(lines.half), len(lines), "a half-width per line")
 
+    def test_a_machine_learned_outline_on_a_racetrack_is_not_a_building(self):
+        """Laguna Seca under the Perimeter Road's bridge (the player's report R04KNWVC): Microsoft's 49 x 12 m outline
+        along the track (its lanes and the pit wall's shadow) stood as a 5.5 m building across it. The ML test's lines
+        (ML_ROAD_CLASSES) hold the raceway; the public roads' (roads_xy: lifts, sites, passages) do not."""
+        from test_roads import FRAME, features
+        f = features([[(-100, 128), (356, 128)]], ["raceway"])
+        self.assertEqual(bld.road_lines(FRAME, [f], 0.0, 0.0), [], "a racetrack is no public road")
+        lines = bld.road_lines(FRAME, [f], 0.0, 0.0, classes=bld.ML_ROAD_CLASSES)
+        self.assertEqual(len(lines), 1)
+        strip = np.array([[48.7, 125.2], [48.7, 137.5], [24.3, 137.0], [-0.2, 136.5], [-0.2, 125.0], [19.0, 125.5],
+                          [18.5, 133.2], [47.7, 133.6]], np.float64)
+        self.assertTrue(bld._ml_false(strip, [], [], lines))
+        house = np.array([[20, 150], [32, 150], [32, 160], [20, 160]], np.float64)
+        self.assertFalse(bld._ml_false(house, [], [], lines), "a hut beside the track stays")
+        # the road tiles' and the far tiles' buildings ask with them
+        src = Path(bld.__file__).read_text(encoding="utf-8")
+        self.assertEqual(src.count("classes=ML_ROAD_CLASSES"), 2)
+
     def test_lines_carry_the_drawn_half_width(self):
         """road_lines' half-widths are road_specs' width / 2 (a 26 m carriageway: 13 m), and the I-280 lorry's outline
         7 m off its centre line is left out with them (ML_ROAD_EDGE_M)."""

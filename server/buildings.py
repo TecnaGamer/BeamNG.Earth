@@ -3434,6 +3434,10 @@ ACROSS_W = 8.0              # m: a footprint at most this wide that a public roa
                             # the Dan Ryan as brick walls; a road crossing one runs only its width inside it)
 THROUGH_CLASSES = {"motorway", "trunk", "primary", "secondary", "tertiary", "residential", "unclassified",
                    "living_street"}
+# the roads a machine-learned footprint on whose lanes is a vehicle or the road's own surface, not a building (_ml_false):
+# the public roads and a racetrack (a 49 m outline along Laguna Seca's track by the pit wall under the Perimeter Road's
+# bridge stood as a 5.5 m building across the track: the player's report R04KNWVC, 2026-11-17)
+ML_ROAD_CLASSES = THROUGH_CLASSES | {"raceway"}
 
 
 def tunnel_lines(frame, road_layers, x0, y0, margin=50.0, size=256.0):
@@ -6646,6 +6650,7 @@ def road_tile_items(
         colours=colours,
         west_town=district_town(frame, tx, ty, md),
         roads_xy=road_lines(frame, [c.layers.get("roads") for c in cds], x0, y0),
+        ml_roads_xy=road_lines(frame, [c.layers.get("roads") for c in cds], x0, y0, classes=ML_ROAD_CLASSES),
         passage_xy=road_lines(frame, [c.layers.get("roads") for c in cds], x0, y0,
                               classes=ROAD_PASSAGE_CLASSES, skip_sub=ROAD_PASSAGE_SKIP),
         rails_xy=rail_lines(frame, [c.layers.get("roads") for c in cds], x0, y0),
@@ -7168,7 +7173,8 @@ def far_items(frame, tile, ty, md, ground, lamp_region=None, urban_fn=None, widt
                            supports=support_rings(frame, [c.layers.get("infrastructure") for c in cds], x0, y0),
                            bridges_xy=bridge_lines(frame, [c.layers.get("roads") for c in cds], x0, y0),
                            water_xy=water_rings(frame, [c.layers.get("water") for c in cds], x0, y0),
-                           ml_roads_xy=road_lines(frame, [c.layers.get("roads") for c in cds], x0, y0),
+                           ml_roads_xy=road_lines(frame, [c.layers.get("roads") for c in cds], x0, y0,
+                                                  classes=ML_ROAD_CLASSES),
                            rails_xy=rail_lines(frame, [c.layers.get("roads") for c in cds], x0, y0, size=x1 - x0),
                            ways_xy=way_lines(frame, [c.layers.get("roads") for c in cds], x0, y0, size=x1 - x0),
                            carriageways=carriageway_segments(frame, [c.layers.get("roads") for c in cds], x0, y0,
