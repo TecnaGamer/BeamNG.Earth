@@ -1171,6 +1171,14 @@ function M.switchAnchor(newAnchorId, keepOld, blk, newSession, newAnchor)
   if not ok then error(err, 0) end
 end
 
+local function keptGlobalKeys(keys, globals, loading, discarded)
+  for _, key in ipairs(keys) do
+    local inst = loading[key] or globals[key]
+    if not inst or inst.failed or discarded[key] then return false end
+  end
+  return true
+end
+
 switchAnchor = function(newAnchorId, keepOld, blk, newSession, newAnchor)
   finishAll()
   dropAllSpares()
@@ -1179,7 +1187,7 @@ switchAnchor = function(newAnchorId, keepOld, blk, newSession, newAnchor)
   -- session's are a previous anchor's tiles (that server does not know them)
   local sameSession = newSession == nil or newSession == session
   local due = minPendingSeq() -- (with the global tiles still loading: a removal after one waits for it)
-  local globals, loading = {}, {}
+  local globals, loading, globalGroups = {}, {}, {}
   if sameSession then
     for key, inst in pairs(live) do
       if inst.global and not inst.doomed then globals[key] = inst end
@@ -1191,6 +1199,19 @@ switchAnchor = function(newAnchorId, keepOld, blk, newSession, newAnchor)
       if inst.global and not inst.doomed then loading[key] = inst end
     end
     for key in pairs(loading) do pending[key] = nil end
+    -- The server counts an emitted swap as shown even if our governor has not run it yet. Keep
+    -- waiting swaps whose tiles all survive this switch, unless they depend on a discarded swap.
+    local discarded = {}
+    for _, g in ipairs(groups) do
+      if g.state == 'wait' then
+        if keptGlobalKeys(g.add, globals, loading, discarded) and keptGlobalKeys(g.remove, globals, loading, discarded) then
+          globalGroups[#globalGroups + 1] = g
+        else
+          for _, key in ipairs(g.add) do discarded[key] = true end
+          for _, key in ipairs(g.remove) do discarded[key] = true end
+        end
+      end
+    end
   end
   local keep = {}
   if keepOld then
@@ -1235,7 +1256,7 @@ switchAnchor = function(newAnchorId, keepOld, blk, newSession, newAnchor)
     end
   end
   for _, inst in pairs(globals) do applyCover(inst, false) end
-  groups, activeGroups, moving = {}, 0, {}
+  groups, activeGroups, moving = globalGroups, 0, {}
   removals, rH, rT = keep, 1, #keep
   anchorId = newAnchorId
   if newSession ~= nil and newSession ~= session then

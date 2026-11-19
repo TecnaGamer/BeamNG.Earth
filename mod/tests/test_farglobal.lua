@@ -107,6 +107,18 @@ T.check(farfield.counters().imports == imp, 'imported once')
 farfield.onRemove({ type = 'far_remove', anchorId = 7, key = gkey })
 step(5)
 
+-- If the server already sent the swap, it assumes this global tile is shown and will not resend
+-- it after the rebase. The client must still apply the queued swap once the tile loads.
+farfield.switchAnchor(8, false, { cx = 0, cy = 0 }, 'sB', a1)
+farfield.onTile(gmsg(a1, 8))
+farfield.onSwap({ type = 'far_swap', anchorId = 8, id = 10, add = { gkey }, remove = {} })
+farfield.transform(a1:transformTo(a2), a2)
+farfield.switchAnchor(9, true, { cx = 0, cy = 0 }, 'sB', a2)
+step()
+local carried = farfield._tile(gkey)
+T.check(carried and placed(carried, a2) and S.objects[carried.id] and not S.objects[carried.id].hidden,
+  'an already-received global swap still reveals its tile after the rebase')
+
 -- a piece: its footprint is its polygon's AABB
 farfield.switchAnchor(5, false, { cx = 0, cy = 0 }, 'sB', a2)
 farfield.onTile({ type = 'far_tile', anchorId = 5, key = '2_3_4_c14_100_200', level = 2,
