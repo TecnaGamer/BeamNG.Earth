@@ -96,13 +96,13 @@ impl Fl for f32 {
 /// operation's operands): a NaN operand's NaN is the result, the first operand's where both are, quieted; an invalid
 /// operation of two numbers gives the hardware's own default NaN.
 #[inline]
-fn ad<T: Fl>(x: T, y: T) -> T {
+pub(crate) fn ad<T: Fl>(x: T, y: T) -> T {
     let s = x + y;
     if s.nan() { nan_of(x, y, s) } else { s }
 }
 
 #[inline]
-fn mu<T: Fl>(x: T, y: T) -> T {
+pub(crate) fn mu<T: Fl>(x: T, y: T) -> T {
     let s = x * y;
     if s.nan() { nan_of(x, y, s) } else { s }
 }

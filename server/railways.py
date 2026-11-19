@@ -894,17 +894,18 @@ def _pieces_of(feats, i, rngs):
     if 1.0 - at > min_part:
         ground.append((at, 1.0))
     out = {"ground": [], "bridge": [], "tunnel": []}
-    for part in feats.parts(i):
-        for ring in part:
-            if len(ring) < 2:
-                continue
-            for kind, spans in (("ground", ground), ("bridge", [(a, b) for a, b, k in off if k == "bridge"]),
-                                ("tunnel", [(a, b) for a, b, k in off if k == "tunnel"] if TUNNELS_ON else [])):
-                for a, b in spans:
-                    if b - a > min_part:
-                        r = ring if (a, b) == (0.0, 1.0) else roads.sub_polyline(ring, a, b)
-                        if len(r) >= 2:
-                            out[kind].append(r)
+    pieces, kinds = [], []
+    for kind, spans in (("ground", ground), ("bridge", [(a, b) for a, b, k in off if k == "bridge"]),
+                        ("tunnel", [(a, b) for a, b, k in off if k == "tunnel"] if TUNNELS_ON else [])):
+        for a, b in spans:
+            if b - a > min_part:
+                pieces.append((a, b))
+                kinds.append(kind)
+    rings = [ring for part in feats.parts(i) for ring in part if len(ring) >= 2]
+    # (every ring's pieces in one native call, ring by ring as before)
+    for r, kind in zip(roads.sub_polylines(rings, pieces), kinds * len(rings)):
+        if len(r) >= 2:
+            out[kind].append(r)
     return list(out.items())
 
 

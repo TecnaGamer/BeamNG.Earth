@@ -40,7 +40,7 @@ M.FAR_ONLY = { conifer_clump = true, deciduous_clump = true, oak_west_clump = tr
 -- with a door on every house out to 300 m): the tile distance (m) beyond which a group is not shown
 -- rocks only over the fine ground (farfield.NEAR_RADII: L0 within 400 m): beyond it the coarser tiles round off the
 -- ridges and a rock placed on the real ground floated over the drawn one (Stelvio pass, the user's report 2026-10-17)
-M.GROUP_MAX_M = { tuft = 200, fern = 200, shrub = 250, desert_shrub = 250, rock = 400, desert_rock = 400, cliff = 1500, pylon = 1500, hvpole = 1000, gantry = 800, sub_breaker = 400, sub_mast = 1000, sub_support = 300,
+M.GROUP_MAX_M = { tuft = 200, fern = 200, shrub = 250, desert_shrub = 250, rock = 400, desert_rock = 400, slope_rock = 400, cliff = 1500, pylon = 1500, hvpole = 1000, gantry = 800, sub_breaker = 400, sub_mast = 1000, sub_support = 300,
   sub_transformer = 500, sub_fence = 200, lamplens = 800, high_mast_light = 800, fr_lantern_light = 800, fr_wood_pole = 800, eu_wood_pole = 800, fr_lantern = 500, fr_j1 = 300, fr_j3 = 300, fr_j6 = 300, fr_j4_l = 400, fr_j4_r = 400, fr_signpost = 500, lampglow = 6000, rrcross = 300, rrcross_eu = 300, rrflash = 400,
   rrflash_eu = 400, rrgate = 400, rrgate_l = 400, rrgate_eu = 400, rrgate_eu_l = 400, rrbuffer = 400, rrwalk = 250, catmast = 700, catmast_eu = 700, catpost = 700, catpost_eu = 700, door = 120, hydrant = 200, bin = 200, bench = 200, bench_metal = 200, polelamp = 400,
   stop = 300, giveway = 300, signal = 500, signal_left = 500, fence = 150, wallsign_logistics = 800, wallsign_rentabox = 800, wallsign_lemon = 800, wallsign_turboburger = 500,
@@ -150,6 +150,12 @@ M.CATALOG = {
   -- rock faces along rural road cuts (server roads.cliff_rows: Italy's rock-face kit, as its own cut slopes are made)
   cliff = {
     { IT .. 'rocks/italy_rockface_short_wide', 2.9 }, { IT .. 'rocks/italy_rockface_tall_wide', 13.2 },
+  },
+  -- boulders sunk into steep graded slopes beside rural roads (server roads.slope_rocks, with the vanilla slopes:
+  -- BNE_BATTER=vanilla): Italy's rock-face boulders, as its own steep cuts carry them (heights from the DAEs)
+  slope_rock = {
+    { IT .. 'rocks/italy_rockface_boulder_4', 1.05 }, { IT .. 'rocks/italy_rockface_boulder_3', 1.77 },
+    { IT .. 'rocks/italy_rockface_boulder_2', 2.12 }, { IT .. 'rocks/italy_rockface_boulder_1', 3.12 },
   },
   deciduous = {
     { ECA .. 'trees/trees_oak/tree_oak_sml_a', 8.6 }, { ECA .. 'trees/trees_oak/tree_oak_sml_b', 9.5 },

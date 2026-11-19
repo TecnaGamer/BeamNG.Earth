@@ -346,5 +346,103 @@ class Batter(unittest.TestCase):
         self.assertEqual(vals.shape, (len(first.h), k2 + 2))
 
 
+class SlopeDressing(unittest.TestCase):
+    """roads.slope_rocks / wall_skirts (the vanilla slopes' rocks and wall skirts, road revamp v2 P1a): the rocks a pure
+    function of the road and the ground (the same whatever tile asks), only on the steep side, off the strip, within
+    the cap; the skirts between the face and the carriageway, facing up."""
+
+    def setUp(self):
+        import types
+        import geodesy
+        import roads
+        self.roads = roads
+        self.frame = geodesy.EnuFrame(46.5, 10.45)
+        self.spec = types.SimpleNamespace(kind="paved", width=7.0, mountain=False, cls="secondary", oneway=False,
+                                          urban=False, walk=0.0, street=None, median=False)
+        xs = np.arange(-400.0, 400.01, 25.0)
+        # (a gentle bend: stations along the part, not along x)
+        self.pts = np.column_stack((xs, 0.002 * xs ** 2 / 10.0, np.zeros(len(xs))))
+        self.strip = 3.5 + grading.shoulder(self.spec) + grading.BATTER_L0_M
+
+        def elev(la, lo):           # a 1:1 cut on the left (y over the strip + 3 m), flat on the right
+            e, n, _ = self.frame.geodetic_to_enu(la, lo, 0.0)
+            yc = np.asarray(n) - 0.002 * np.asarray(e) ** 2 / 10.0
+            return np.maximum(yc - (self.strip + 3.0), 0.0) * 1.0
+        self.elev = elev
+
+    def rocks(self, box, rds=None):
+        return self.roads.slope_rocks(self.frame, rds or [("r1", self.spec, self.pts, 0.0)], self.elev, box)
+
+    def test_tile_independent_and_placed(self):
+        whole = self.rocks((-512.0, -512.0, 512.0, 512.0))
+        self.assertGreater(len(whole), 20)
+        tiles = []
+        for tx in range(-2, 2):
+            for ty in range(-2, 2):
+                tiles += self.rocks((tx * 256.0, ty * 256.0, (tx + 1) * 256.0, (ty + 1) * 256.0))
+        self.assertEqual(sorted(map(tuple, tiles)), sorted(map(tuple, whole)))
+        km = 0.8
+        self.assertLessEqual(len(whole), 2 * km * 1000.0 / (self.roads.ROCK_STEP_M * self.roads.ROCK_BLOCK_N)
+                             * self.roads.ROCK_PER_BLOCK + 2)
+        for g, x, y, z, yaw, sc, h, rank in whole:
+            self.assertEqual(g, "slope_rock")
+            off = y - 0.002 * x ** 2 / 10.0
+            self.assertGreater(off, self.strip - grading.BATTER_L0_M + 0.5 + self.roads.WALL_THICK_MAX_M
+                               + self.roads.ROCK_WALL_GAP_M + self.roads.ROCK_R * h - 0.3)   # (left: the cut)
+            gz = max(off - (self.strip + 3.0), 0.0)
+            bottom = z - self.roads.ROCK_PIVOT * h
+            self.assertLessEqual(bottom, gz - self.roads.ROCK_SINK[0] * h + 0.05)          # sunk 30 % or more
+            self.assertGreaterEqual(bottom, gz - self.roads.ROCK_SINK_MAX * h - 0.05)
+            self.assertTrue(self.roads.ROCK_H_M[0] - 1e-9 <= h <= self.roads.ROCK_H_M[1] + 1e-9)
+        # (the same rows whatever other roads the tile holds, and in any order: a far road added first)
+        far = ("r0", self.spec, self.pts + np.array([0.0, 900.0, 0.0]), 0.0)
+        again = self.rocks((-512.0, -512.0, 512.0, 512.0), [far, ("r1", self.spec, self.pts, 0.0)])
+        self.assertEqual(sorted(map(tuple, again)), sorted(map(tuple, whole)))
+
+    def test_urban_and_flat_get_none(self):
+        import types
+        urb = types.SimpleNamespace(**{**vars(self.spec), "urban": True})
+        self.assertEqual(self.rocks((-512.0, -512.0, 512.0, 512.0), [("u", urb, self.pts, 0.0)]), [])
+        flat = self.roads.slope_rocks(self.frame, [("r1", self.spec, self.pts, 0.0)],
+                                      lambda la, lo: np.zeros(len(np.atleast_1d(la))), (-512.0, -512.0, 512.0, 512.0))
+        self.assertEqual(flat, [])
+
+    def test_wall_skirt(self):
+        import roadmesh
+        k = 20
+        xs = np.linspace(0.0, 38.0, k)
+        face = 6.0
+        w = {"base": np.column_stack((xs, np.full(k, face))), "toward": np.tile([0.0, -1.0], (k, 1)),
+             "edge": np.column_stack((xs, np.full(k, 3.5 + self.roads.CLIFF_EDGE_M))), "top": np.full(k, 4.0),
+             "foot": np.full(k, -1.0), "thick": np.full(k, 2.0), "verge": True}
+        par = dict(w, parapet=True)
+        self.roads.wall_skirts([w, par], lambda x, y: np.full(len(x), 0.5))
+        self.assertNotIn("skirt", par)
+        (run,) = w["skirt"]
+        self.assertEqual(run.shape, (k, len(self.roads.SKIRT_ROWS), 3))
+        width = face - 3.5 - self.roads.SKIRT_ROAD_GAP_M
+        np.testing.assert_allclose(run[:, -1, 1], face - width)          # (out to the carriageway less its gap)
+        np.testing.assert_allclose(run[:, 0, 2], 0.5 + self.roads.SKIRT_ROWS[0][2])
+        P, T, UV, M = [], [], [], []
+        roadmesh._retaining_walls([w], np.zeros(3), P, T, UV, M, 0)
+        pts, tri = np.concatenate(P), T[-1]
+        self.assertEqual(M[-1], 4)
+        nz = np.cross(pts[tri[:, 1]] - pts[tri[:, 0]], pts[tri[:, 2]] - pts[tri[:, 0]])[:, 2]
+        self.assertTrue((nz > 0).all())
+        # (no skirt where the face stands just past the carriageway's edge: 0.1 m, its signed distance)
+        near = dict(w, base=np.column_stack((xs, np.full(k, 3.6))))
+        near.pop("skirt")
+        self.roads.wall_skirts([near], lambda x, y: np.zeros(len(x)))
+        self.assertNotIn("skirt", near)
+        # (nor where its outer edge would lie on another road's core; its own road's is skipped)
+        other = ("r2", self.spec, np.array([[0.0, 2.0, 0.0], [40.0, 2.0, 0.0]]), 0.0)
+        own = ("r1", self.spec, np.array([[0.0, 0.0, 0.0], [40.0, 0.0, 0.0]]), 0.0)
+        for rds, want in (([own], True), ([own, other], False)):
+            ww = dict(w, fid="r1")
+            ww.pop("skirt")
+            self.roads.wall_skirts([ww], lambda x, y: np.zeros(len(x)), rds)
+            self.assertEqual("skirt" in ww, want)
+
+
 if __name__ == "__main__":
     unittest.main()
