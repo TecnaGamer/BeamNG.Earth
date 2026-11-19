@@ -893,6 +893,7 @@
   "settings.recommendedForThisComputer": "Recommended for this computer: {presetName}.",
   "settings.restartWorldServer": "Restart world server",
   "settings.serverTimeout": "No answer from the server",
+  "settings.status.offline": "Offline - using cached data",
   "settings.updateYouHave": "Update: {latest} (you have {current})",
   "settings.use": "Use",
   "settings.welcomePage": "Welcome page",

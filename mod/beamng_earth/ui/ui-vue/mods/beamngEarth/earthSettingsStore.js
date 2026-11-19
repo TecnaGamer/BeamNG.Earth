@@ -315,7 +315,11 @@ export const connectionText = computed(() => {
   return label
 })
 
-export const statusText = computed(() => status.value.status || "-")
+const OFFLINE_STATUS = "Offline - using cached data"
+export const statusText = computed(() => {
+  const line = status.value.status || "-"
+  return typeof line === "string" ? line.replaceAll(OFFLINE_STATUS, () => t("settings.status.offline")) : line
+})
 // Off the BeamNG.Earth level (a stock level, the main menu) the settings are saved but nothing applies them until the
 // level loads (issue #1284: the pause menu's tab on West Coast USA looked as if it did nothing). Strictly false: the
 // first poll's answer, not the empty status before it.

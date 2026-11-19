@@ -897,6 +897,7 @@
   "settings.recommendedForThisComputer": "Ustawienie zalecane dla tego komputera: {presetName}.",
   "settings.restartWorldServer": "Uruchom ponownie serwer świata",
   "settings.serverTimeout": "Brak odpowiedzi serwera",
+  "settings.status.offline": "Tryb offline – używane są dane z pamięci podręcznej",
   "settings.updateYouHave": "Aktualizacja: {latest} (Twoja wersja: {current})",
   "settings.use": "Zastosuj",
   "settings.welcomePage": "Ekran powitalny",
