@@ -267,6 +267,27 @@ class SheetDecks(unittest.TestCase):
                               skip=[[1.2, 0.0, 10.0, "y-elsewhere"]])
         self.assertEqual(len([g for g in got if float(np.hypot(*np.asarray(g[1], np.float64)[:2])) < 5.0]), 1)
 
+    def test_interior_join_pad_with_approach(self):
+        """Codex P2c r2: a ramp joining the through deck inside it (its end the node's only deck end) with a ground
+        road ending there: its group left empty by the marker is no group (deck_pads raised on it, losing every pad of
+        the tile)."""
+        thr = ("b-through", MAIN, line((-300, 0), (400, 0), 71, 10.0, 10.0), -76.6)
+        ramp = ("c-ramp", RAMP, line((-150, -15), (100, 0), 26, 10.0, 10.0), -76.6)
+        old = roadshape.SHEET
+        roadshape.SHEET = True
+        try:
+            allc = roads._deck_chunks([thr, ramp], (-200.0, -60.0, 300.0, 60.0))
+            skip = [c["sxn"] for c in allc if c.get("sxn") is not None]
+            self.assertTrue(skip)
+            decks = [(f, s, np.asarray(q, np.float64)[:, :2], np.asarray(q, np.float64)[:, 2]) for f, s, q, _ in
+                     (thr, ramp)]
+            ground = [("g", roads.Spec(7.0, "paved", False, "residential", False),
+                       np.array([[100.0, 0.0, 0.0], [100.0, 60.0, 0.0]]), None)]
+            roads.deck_pads(decks, ground, (-200.0, -60.0, 300.0, 60.0), lambda xy: np.full(len(xy), 10.0),
+                            own=False, skip=skip)
+        finally:
+            roadshape.SHEET = old
+
     def test_before(self):
         """The same scene without the switch: the two slabs overlap at the fork (what P2b removes)."""
         _ch, tops, _runs = drawn(scene(), False)

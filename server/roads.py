@@ -12428,8 +12428,9 @@ def deck_pads(decks, ground_roads, box, ground_fn, own=True, skip=()):
                     continue
                 rest = [x for x in g if not any(x is y for y in drop)]
                 omitted.extend(drop)
-                rests.add(id(rest))
-                kept.append(rest)
+                if rest:                    # (none left: no pad, nothing for the ground approaches to join: r2)
+                    rests.add(id(rest))
+                    kept.append(rest)
             groups = kept
             if not groups:
                 continue
@@ -12471,8 +12472,9 @@ def deck_pads(decks, ground_roads, box, ground_fn, own=True, skip=()):
             continue
         zc = float(np.mean([p[1][0] for p in parts]))
         r_pts, r_off, r_halves = pts, off, halves
-        extra = [o for o in omitted if any(float(dnp.hypot(*(o[0][0] - p[0][0]))) <= PAD_JOIN_M + roadshape.SHEET_JOIN_M
-                                           for p in parts)]
+        # (its own level's only: a ramp left out of a pad below or above opens nothing here, Codex P2c r2)
+        extra = [o for o in omitted if abs(float(o[1][0]) - zc) <= PAD_JOIN_Z_M
+                 and any(float(dnp.hypot(*(o[0][0] - p[0][0]))) <= PAD_JOIN_M + roadshape.SHEET_JOIN_M for p in parts)]
         if extra:                   # (P2c: no railing across a union branch leaving the pad, Codex r1)
             r_pts = np.ascontiguousarray(np.concatenate([pts] + [np.asarray(o[0], np.float64) for o in extra]))
             r_off = np.r_[off, off[-1] + np.cumsum([len(o[0]) for o in extra])].astype(np.int64)
