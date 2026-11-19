@@ -414,6 +414,39 @@ class TasksPerChildTest(unittest.TestCase):
         finally:
             p.shutdown(wait=True)
 
+    def test_a_death_on_the_generations_last_job(self):
+        """The process dies on its generation's last job: the pool is made again and the next job answers (1.10.0-beta:
+        rotate() refused the broken pool for good and every later road, tree and far building job waited in the queue
+        for ever, the loading line stuck at a few %)."""
+        p = pools.RespawningPool("test", 1, mp_context=SPAWN, **pools.tasks_per_child_kw(2))
+        try:
+            self.assertEqual(p.submit(abs, -1).result(timeout=120), 1)
+            with self.assertLogs("earthd.pools", "WARNING"):
+                with self.assertRaises(BrokenProcessPool):
+                    p.submit(os._exit, 1).result(timeout=120)
+                self.assertEqual(p.submit(abs, -5).result(timeout=60), 5)
+        finally:
+            p.shutdown(wait=False, cancel_futures=True)     # (a queue that never moves: a failure, not a hang)
+
+    def test_quick_deaths_never_stop_the_queue(self):
+        """Two deaths within RESPAWN_S with a loading queue behind them: the queued jobs wait for the pool to be made
+        again (not failed one after the other until the generation is full, then never handed over)."""
+        import concurrent.futures
+        with unittest.mock.patch.object(pools, "RESPAWN_S", 2.0):
+            p = pools.RespawningPool("test", 1, mp_context=SPAWN, **pools.tasks_per_child_kw(40))
+            try:
+                self.assertEqual(p.submit(abs, -1).result(timeout=120), 1)
+                dying = [p.submit(os._exit, 1) for _ in range(2)]
+                rest = [p.submit(abs, -i) for i in range(60)]
+                done, waiting = concurrent.futures.wait(dying + rest, timeout=120)
+                self.assertFalse(waiting, f"{len(waiting)} jobs never answered")
+                for f in dying:
+                    self.assertIsInstance(f.exception(), BrokenProcessPool)
+                self.assertEqual([f.result() for f in rest], list(range(60)), "none of the queue failed")
+                self.assertEqual(p.submit(abs, -7).result(timeout=60), 7)
+            finally:
+                p.shutdown(wait=False, cancel_futures=True)
+
     def test_shutdown_waits_for_the_queue(self):
         import time
         p = pools.RespawningPool("test", 1, mp_context=SPAWN, **pools.tasks_per_child_kw(1))

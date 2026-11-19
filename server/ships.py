@@ -351,7 +351,7 @@ def hull_sections(spec, zw, n):
     tw = _widths(r, c, ub, hl, xs)
     rake, wl = prof.get("rake", 0.03), prof.get("waterline", 0.93)
     xq = xs - rake * np.clip(1 - xs / 0.15, 0, 1) + 0.012 * np.clip(1 - (1 - xs) / 0.1, 0, 1)
-    w = wl * np.interp(xq, xs, tw[:, 1], left=0.0, right=0.0)
+    w = wl * dnp.interp(xq, xs, tw[:, 1], left=0.0, right=0.0)
     fb = _freeboard(spec, hl)
     zd = np.array([_deck_z(x, fb, zw) for x in xs])
     return xs, tw[:, 0], tw[:, 1], w, zd
@@ -429,10 +429,10 @@ def draw(m, spec, gmin, gmax, mat_idx, lite=False):
                           P(X1[i], tc[i] + w1[i], zb_), P(X1[i], tc[i] - w1[i], zb_), hint, hull)
 
     def half_b(x):
-        return float(np.interp(x, xs, b))
+        return float(dnp.interp(x, xs, b))
 
     def at(x, t=0.0):
-        return c + ub * (hl * (1 - 2 * x)) + v * (float(np.interp(x, xs, tc)) + t)
+        return c + ub * (hl * (1 - 2 * x)) + v * (float(dnp.interp(x, xs, tc)) + t)
     beam = 2 * hw
     top = zw + spec.height
     blocks = [B.oriented_box(np.asarray(pr, np.float64)) for pr, ph in parts if ph is None]

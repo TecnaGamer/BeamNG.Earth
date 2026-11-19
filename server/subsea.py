@@ -120,7 +120,7 @@ def _profiles(owner, comp, pool):
             log.warning("subsea chain has no identifiable portals")
             return None
         s = np.linspace(0., arc[-1], max(2, math.ceil(arc[-1] / STEP) + 1))
-        q = np.column_stack([np.interp(s, arc, xy[:, i]) for i in range(2)])
+        q = np.column_stack([dnp.interp(s, arc, xy[:, i]) for i in range(2)])
         for at in (0, -1):
             ends.setdefault(node(q[at]), []).append((len(chains), at))
         ground = np.asarray((owner._raw_ground if owner.raw is not None else owner._ground)(q), np.float64)
@@ -177,7 +177,7 @@ def _profiles(owner, comp, pool):
     targets, weights, lowers, uppers, reaches, svals, params = [], [], [], [], [], [], []
     for i in active:
         c = chains[i]; s = c["s"]; wet = c["wet"]
-        t = np.interp(s, [0., s[-1]], c["portal"])
+        t = dnp.interp(s, [0., s[-1]], c["portal"])
         t = np.where(wet, c["ground"] - COVER, t)
         w = np.where(wet, 1., .2)
         upper = np.where(wet, c["ground"] - COVER, c["ground"])
@@ -194,7 +194,7 @@ def _profiles(owner, comp, pool):
                 observed = np.asarray(observed, np.float64)
                 ok = np.isfinite(observed)
                 if ok.mean() >= .9:
-                    observed = np.interp(s, s[ok], observed[ok])
+                    observed = dnp.interp(s, s[ok], observed[ok])
                     la, lo, _ = owner.frame.enu_to_geodetic(c["xy"][:, 0], c["xy"][:, 1], 0.)
                     observed = np.asarray(owner.frame.geodetic_to_enu(la, lo, observed)[2])
                     t, w = observed, np.full(len(s), 100.)
@@ -262,5 +262,5 @@ def _profiles(owner, comp, pool):
     for k, (i, s) in locations.items():
         if i in local:
             j = local[i]
-            result[k] = np.interp(s, chains[i]["s"], z[offsets[j]:offsets[j + 1]])
+            result[k] = dnp.interp(s, chains[i]["s"], z[offsets[j]:offsets[j + 1]])
     return result, membership

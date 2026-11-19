@@ -79,6 +79,14 @@ class BoostTest(unittest.TestCase):
         self.assertGreaterEqual(cpupin.pin_tree(cpus), 1)
         self.assertEqual(os.sched_getaffinity(0), cpus)
 
+    def test_pin_tree_windows_active_children(self):
+        with mock.patch.object(cpupin, "WIN", True), \
+                mock.patch.object(cpupin, "_win_set", return_value=1), \
+                mock.patch.object(cpupin, "_win_processes") as mock_snap:
+            n = cpupin.pin_tree({0, 1})
+            self.assertGreaterEqual(n, 1)
+            mock_snap.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

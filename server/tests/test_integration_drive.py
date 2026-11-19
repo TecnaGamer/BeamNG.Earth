@@ -110,6 +110,7 @@ sys.path.insert(0, str(SERVER_DIR))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import cdae  # noqa: E402
 import earthd  # noqa: E402
+import protocol  # noqa: E402
 import farfield as ff  # noqa: E402
 import geodesy  # noqa: E402
 import heightmap  # noqa: E402
@@ -548,8 +549,8 @@ class DriveBase(unittest.TestCase):
                         w, h, mips, fourcc, sizes = imagery.read_dds_info(f.read(imagery.DDS_HEADER))
                     stats["dds_checked"] += 1
                     full = w.bit_length()                   # mips down to 1 x 1
-                    if not (w == h == lay.tex_size(t.level) and fourcc == b"DXT1" and mips == full
-                            and os.path.getsize(tex) == imagery.DDS_HEADER + sum(sizes)):
+                    if not (w == h == lay.tex_size(t.level) and fourcc == (b"DX10" if imagery.FAR_SRGB else b"DXT1") and mips == full
+                            and os.path.getsize(tex) == imagery.DDS_HEADER + (20 if fourcc == b"DX10" else 0) + sum(sizes)):
                         stats["tex_bad"].append((m["texture"], w, h, mips, fourcc))
             if not ok:
                 stats["tile_bad"].append(m)
@@ -1423,8 +1424,8 @@ class FollowDrive512Test(unittest.TestCase):
             c.anchor_delay = anchor_delay
             return c.run()
 
-        srv = asyncio.run_coroutine_threadsafe(asyncio.start_server(conn, "127.0.0.1", 0), loop).result(10)
-        client = Client(srv.sockets[0].getsockname()[1])
+        srv = asyncio.run_coroutine_threadsafe(protocol.start_server(conn, "127.0.0.1", 0), loop).result(10)
+        client = Client(protocol.listen_port(srv))
 
         def stop():
             client.close()

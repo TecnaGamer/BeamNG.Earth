@@ -12,19 +12,20 @@ tools/bake_area.py does).
 
   python3 server/sharehelper.py --share-dir ~/BeamMP-Earth-Server/Resources/Server/BeamNGEarth --cache ~/.cache/bnge-helper --procs 4
 """
-import argparse
-import json
-import logging
-import math
-import dmath
-import multiprocessing
 import os
 import sys
-import time
-import zlib
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
+import npyguard  # noqa: E402,F401  (first: numpy's AVX-512 kernels held back before anything imports numpy)
+import argparse  # noqa: E402
+import json  # noqa: E402
+import logging  # noqa: E402
+import math  # noqa: E402
+import dmath  # noqa: E402
+import multiprocessing  # noqa: E402
+import time  # noqa: E402
+import zlib  # noqa: E402
 # (what it plans goes to other players: never with Hong Kong's measured heights or terrain, roadz.hk_cell)
 os.environ["BNE_ROADZ_HK"] = "off"
 os.environ["BNE_HKDTM"] = "off"
@@ -175,6 +176,11 @@ def main():
     import mpshare
     import plancache
     os.makedirs(a.cache, exist_ok=True)
+    # (the map data's Overture release, decided once as a player's app decides it, before the pool starts and before
+    # anything reads map data: its plans' expect is of it, and players of another release have another code: never
+    # mixed, overturepick.choose_for_process)
+    import overturepick
+    log.info("helper: Overture release %s", overturepick.choose_for_process(a.cache))
     plancache.start_run(a.cache)
     # (a cell whose lidar answer is late keeps the rule and its plans are not kept: wait for it, as bake_area does; the
     # items' codes are the bake expect's, without the build switches, so the players still match)

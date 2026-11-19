@@ -464,6 +464,7 @@ class StartOrderTest(unittest.TestCase):
             p("gpu_plan", return_value=({}, None))
             p("game_still_running", return_value=running)
             p("linux_game_exe", return_value="/g/BinLinux/BeamNG.drive.x64")
+            p("resolve_launch", return_value=None)      # (gameinstall: tests/test_gameinstall.py)
             p("cache_dir_arg", return_value=None)
             p("server_port_busy", return_value=False)
             p("data_dir", return_value="/d")

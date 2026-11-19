@@ -20,15 +20,19 @@ import urllib.request
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
+try:        # (first: numpy's AVX-512 kernels held back before anything imports numpy, tools/npyfirst.py)
+    import npyfirst  # noqa: E402,F401
+except ImportError:     # (loaded by its path into another process, a test: that process's entry point guards)
+    pass
 import overture  # noqa: E402
-RELEASE = overture.RELEASE    # (the pinned release: the snapshot is rebuilt with every bump)
-STAC_ITEM = f"https://stac.overturemaps.org/{RELEASE}/divisions/division/00000/00000.json"
+RELEASE = overture.effective()    # (the pinned release unless --release / BNGE_OVERTURE_RELEASE: rebuilt with each)
+STAC_ITEM = "https://stac.overturemaps.org/{release}/divisions/division/00000/00000.json"
 COUNTRIES = ("UA", "CZ", "PL", "DE")
 MIN_VILLAGE_POPULATION = 3000
 
 
 def parquet_url():
-    with urllib.request.urlopen(STAC_ITEM, timeout=60) as r:
+    with urllib.request.urlopen(STAC_ITEM.format(release=RELEASE), timeout=60) as r:
         item = json.load(r)
     return item["assets"]["aws"]["href"]
 
@@ -83,5 +87,9 @@ if __name__ == "__main__":
     ap.add_argument("--output", type=Path, required=True)
     ap.add_argument("--countries", default=",".join(COUNTRIES))
     ap.add_argument("--parquet", type=Path, help="a downloaded copy of the divisions file (skips the range reads)")
+    ap.add_argument("--release", default=RELEASE, help="the Overture release (default: overture.effective())")
     a = ap.parse_args()
+    if not overture.RELEASE_RE.fullmatch(a.release):
+        ap.error(f"--release: not a release id: {a.release}")
+    RELEASE = a.release
     build(a.output, tuple(c.strip().upper() for c in a.countries.split(",") if c.strip()), a.parquet)

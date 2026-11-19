@@ -146,7 +146,7 @@ def tile_rows(frame, near_roads, box, elev, mapped=(), decks=()):
         s = np.arange(0.5 * MODULE_STEP_M, arc[-1], MODULE_STEP_M)
         if len(s) < MIN_STATIONS:
             continue
-        p = np.c_[np.interp(s, arc, line[:, 0]), np.interp(s, arc, line[:, 1]), np.interp(s, arc, line[:, 2])]
+        p = np.c_[dnp.interp(s, arc, line[:, 0]), dnp.interp(s, arc, line[:, 1]), dnp.interp(s, arc, line[:, 2])]
         near = ((p[:, 0] > x0 - WINDOW_M) & (p[:, 0] < x1 + WINDOW_M)
                 & (p[:, 1] > y0 - WINDOW_M) & (p[:, 1] < y1 + WINDOW_M))
         if not near.any():
@@ -154,8 +154,8 @@ def tile_rows(frame, near_roads, box, elev, mapped=(), decks=()):
         k0, k1 = int(np.flatnonzero(near)[0]), int(np.flatnonzero(near)[-1]) + 1
         s, p = s[k0:k1], p[k0:k1]
         sa, sb = s - 0.5 * MODULE_LENGTH_M, s + 0.5 * MODULE_LENGTH_M
-        ca = np.c_[np.interp(sa, arc, line[:, 0]), np.interp(sa, arc, line[:, 1])]
-        cb = np.c_[np.interp(sb, arc, line[:, 0]), np.interp(sb, arc, line[:, 1])]
+        ca = np.c_[dnp.interp(sa, arc, line[:, 0]), dnp.interp(sa, arc, line[:, 1])]
+        cb = np.c_[dnp.interp(sb, arc, line[:, 0]), dnp.interp(sb, arc, line[:, 1])]
         t = cb - ca
         t /= np.maximum(dnp.hypot(*t.T), 1e-9)[:, None]
         left = np.c_[-t[:, 1], t[:, 0]]

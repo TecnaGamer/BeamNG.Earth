@@ -57,6 +57,10 @@ import time
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "server"))
 
+try:        # (first: numpy's AVX-512 kernels held back before anything imports numpy, tools/npyfirst.py)
+    import npyfirst  # noqa: E402,F401
+except ImportError:     # (loaded by its path into another process, a test: that process's entry point guards)
+    pass
 import numpy as np  # noqa: E402
 
 import bnwt  # noqa: E402
@@ -351,7 +355,7 @@ def main(argv=None):
     ap.add_argument("--out", required=True)
     ap.add_argument("--work", help="parts folder (default OUT/.work)")
     ap.add_argument("--archive", default="base", choices=sorted(bnwt.ARCHIVES))
-    ap.add_argument("--release", default=overture.RELEASE)
+    ap.add_argument("--release", default=overture.effective())
     ap.add_argument("--cache-dir", default=os.path.expanduser("~/.cache/beamng-earth"),
                     help="where the source files' blocks are kept (its mapdata/raw)")
     ap.add_argument("--jobs", type=int, default=max(1, min(8, (os.cpu_count() or 2) // 2)))

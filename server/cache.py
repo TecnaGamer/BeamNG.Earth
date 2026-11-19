@@ -15,7 +15,8 @@ Layout of the cache root (~/.cache/beamng-earth by default):
   airports/           the same (airports.py: OurAirports' CSV files, ~17 MB, the last good copy kept for
                       offline use; airports.py replaces it weekly and deletes the old generation itself)
   revisit/ seacarve/ peercache/ roadwidth/   MANAGED as well (since 2026-11-03), besides their own limits
-                      (revisit's, seacarve.RAW_MB, peerwork.CACHE_BYTES, roadwidth.STORE_MB, cut back at server start)
+                      (revisit's, seacarve.RAW_MB, roadwidth.STORE_MB, cut back at server start; peercache/: compute
+                      sharing v1's, gone since 2026-11-16, emptied at start)
   blocks/             MANAGED too (blockcache.py: the graded terrain blocks' chunks and entries), besides its own
                       limit (blockcache.budget_mb: a share of this cap, cut back at start and by the writers)
   mapdata-mirror/     counted and cleared (MIRRORED), not evicted file by file: pruned whole by mapdata (MIRROR_MB)

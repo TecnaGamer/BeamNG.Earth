@@ -88,7 +88,8 @@ TODAY = {
         unmatched=0, not_built=0, right=6,
         shape_p95=0.9,          # m: the viaduct's deck (was 4.6 at its ends)
         under_laws=0, steeper=0, graded=60,
-        dug=(1, 0), filled=(0, 0), rail_low=-1.5, rail_high=0.1),     # (-1.0 at 2 %)
+        dug=(0, 0), filled=(0, 0), rail_low=-1.5, rail_high=0.1),     # (-1.0 at 2 %; dug 1 before the 1.1 m dig
+        #                                                                 at the viaduct went with the upstream merge)
 }
 RAIL_M = 2.0            # m: a railway bridge's bed nearer the real track than this is right (what a road under it needs)
 MODE = int(grading.SHAPES_ON)       # (dug, filled: without the shapes, with them (BNE_SHAPES=1): what Earth builds differs)

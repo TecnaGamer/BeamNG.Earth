@@ -99,6 +99,7 @@ fn near_cells(lon: &[f64], lat: &[f64], near_step: f64, dlat: f64, z: u32) -> Op
     let c = mean.to_radians().dcos();
     let dlon = dlat / if c > 0.05 { c } else { 0.05 };
     let n = 1i64 << z;
+    #[allow(clippy::disallowed_methods)] // powi: 2^z is exact (a power of two) whatever computes it
     let nf = (2.0f64).powi(z as i32);
     let mut keys: Vec<(i64, i64)> = Vec::new();
     for (&la, &lo) in la.iter().zip(lo.iter()) {

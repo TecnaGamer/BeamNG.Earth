@@ -715,7 +715,7 @@ def _dominant_angle(centers, weights, near=None):
     point closer than the cutoff)."""
     if not weights.any():
         return None
-    order = np.argsort(weights)[::-1]
+    order = np.argsort(weights, kind="stable")[::-1]
     top = float(centers[order[0]])
     if near is None or len(order) < 2 or weights[order[1]] < 0.5 * weights[order[0]]:
         return top
@@ -1371,7 +1371,7 @@ def deck_level_z(
     sel = flat & (area > 1e-6) & (tz <= zmin + height_share * (zmax - zmin))
     if not sel.any():
         return None
-    order = np.argsort(tz[sel])
+    order = np.argsort(tz[sel], kind="stable")
     zs = tz[sel][order]
     cum = np.cumsum(area[sel][order])
     return float(zs[int(np.searchsorted(cum / cum[-1], 0.5))])
@@ -1410,7 +1410,7 @@ def deck_ends_z(positions, tris, band=0.05, flat_ratio=0.85, min_area=5.0):
     def _median_z(sel):
         if not sel.any():
             return None
-        order = np.argsort(tz[sel])
+        order = np.argsort(tz[sel], kind="stable")
         zs = tz[sel][order]
         cum = np.cumsum(area[sel][order])
         return float(zs[int(np.searchsorted(cum / cum[-1], 0.5))])

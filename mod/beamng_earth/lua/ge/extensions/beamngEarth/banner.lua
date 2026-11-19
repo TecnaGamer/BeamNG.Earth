@@ -80,11 +80,14 @@ local EDGE_TEXT = {
 --   info.edge        nil | 'warn' | 'hold' (edgeguard), info.stuck: the server does not answer
 --                    terrain requests (rather than: no server)
 --   info.deck        nil | 'slow' | 'wait' | 'hold' (deckguard: a bridge ahead whose road tile has not come)
+--   info.restart     nil | the line of a world server restart under way (srvrestart.text), info.restartLevel its level
 --   t               s since the mod loaded
 -- Returns id, level, text ('' for ok).
 function M.compute(info, t)
   local id, level, text
-  if info.net ~= 'connected' then
+  if info.restart then          -- the settings page's "Restart world server" (srvrestart.lua): said, not "lost"
+    id, level, text = 'restart', info.restartLevel or 'info', info.restart
+  elseif info.net ~= 'connected' then
     if not info.everConnected then
       if (t or 0) < M.STARTING_S then
         id, level, text = 'starting', 'info', 'BeamNG.Earth: looking for the BeamNG.Earth server on this PC (127.0.0.1:' .. tostring(info.port or 47613) .. ') ...'
@@ -136,7 +139,8 @@ function M.compute(info, t)
   return id, level, text
 end
 
-local KEYS = { 'net', 'session', 'everConnected', 'attempts', 'note', 'noteDetail', 'edge', 'stuck', 'dropHold', 'deck' }
+local KEYS = { 'net', 'session', 'everConnected', 'attempts', 'note', 'noteDetail', 'edge', 'stuck', 'dropHold', 'deck',
+  'restart', 'restartLevel' }
 
 -- Did any input change since the text was built? (Compared field by field: nothing allocated.)
 local function changed(info)
@@ -163,7 +167,7 @@ function M.update(dt, info)
     else
       recoveredUntil = nil
     end
-  elseif id ~= 'edge' and id ~= 'starting' and id ~= 'drophold' then
+  elseif id ~= 'edge' and id ~= 'starting' and id ~= 'drophold' and id ~= 'restart' then
     lastProblem = id
     recoveredUntil = nil
   end

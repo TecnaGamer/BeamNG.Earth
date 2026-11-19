@@ -351,7 +351,7 @@ pub fn geo_tiles_near(py: Python<'_>, lat0: f64, lon0: f64, z: u32, x: f64, y: f
     let f = Frame::new(lat0, lon0);
     // (a few tiles round a point: released only for a big radius; the call itself cost 5-28 ms waiting for the GIL
     // back behind the server's busy threads, .claude/work/rust_port_plan.md 1b)
-    let n_est = ((r / (40_075_016.0 / (1u64 << z) as f64)).powi(2) * 4.0 + 1.0) as usize;
+    let n_est = ((r / (40_075_016.0 / (1u64 << z) as f64)).sq() * 4.0 + 1.0) as usize;
     crate::release(py, n_est * 400, || near(&f, z, x, y, r))
 }
 

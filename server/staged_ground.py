@@ -38,6 +38,8 @@ from collections import namedtuple
 
 import numpy as np
 
+import dnp
+
 import gradeshapes as gs
 import interchange_audit as ia
 import staged_paths as sp
@@ -81,7 +83,7 @@ def footprints(net):
             continue
         k = max(2, int(math.ceil(net.L[i] / FOOTPRINT_STEP_M)) + 1)
         sv = np.linspace(0.0, net.L[i], k)
-        xy = np.stack([np.interp(sv, net.s[i], net.lines[i][:, 0]), np.interp(sv, net.s[i], net.lines[i][:, 1])], axis=1)
+        xy = np.stack([dnp.interp(sv, net.s[i], net.lines[i][:, 0]), dnp.interp(sv, net.s[i], net.lines[i][:, 1])], axis=1)
         over = np.zeros(k, bool)
         for j in tunnels:
             if gs._road_of(net.m[i]) == gs._road_of(net.m[j]) or j == i:
@@ -133,7 +135,7 @@ def anchored(net, fixed_z):
                 free &= ~((grid > a) & (grid < b))
             if free.any():
                 zg = np.asarray(fixed_z(i, grid[free]), np.float64)
-                z[inside] = np.interp(sv[inside], grid[free], zg)
+                z[inside] = dnp.interp(sv[inside], grid[free], zg)
         return z if np.ndim(s) else float(z[0])
     return fixed
 

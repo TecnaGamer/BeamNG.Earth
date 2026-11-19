@@ -850,7 +850,7 @@ class SessionTest(MeshHarness):
         px = s.tex_size(t.level)
         rgb, _ = s.imagery.render(s.anchors[aid].frame, *imagery.gutter_square(*t.bbox[:2], t.size, px), px)
         with open(self.fs(msgs[0]["texture"]), "rb") as f:
-            self.assertEqual(f.read(), imagery.encode_dds(rgb))
+            self.assertEqual(f.read(), imagery.encode_dds(rgb, imagery.FAR_SRGB))
         # back to the start: a tile swapped out earlier is sent again with its re-rendered texture
         self.pose(aid, 0.0, 0.0)
         _, seen3 = self.stream_until_done(far, aid)
