@@ -14,6 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import geodesy  # noqa: E402
 import mapcells  # noqa: E402
 import seacarve  # noqa: E402
+import staging  # noqa: E402
 
 LAT0, LON0 = 39.28, -76.59
 SEA_LAT = 39.27         # the "sea": every point south of this latitude in the test's area
@@ -185,6 +186,16 @@ class SeaCarveTest(unittest.TestCase):
                 fh.truncate()
             with self.assertRaises((ValueError, OSError)):   # Windows mmap rejects a truncated mapping with OSError
                 seacarve._open_raw(p)
+            # a raster under 2 x 2 px (water()'s lookup reads 2 x 2 pixels): damaged, the raw copy and the npz alike
+            one = (np.ones((1, 1), np.float32),) * 2 + (np.zeros((1, 1), bool),)
+            q = os.path.join(d, "one.rawb.npy")
+            seacarve._write_raw(q, one)
+            with self.assertRaises(ValueError):
+                seacarve._open_raw(q)
+            z = os.path.join(d, "one.npz")
+            np.savez_compressed(z, any=True, depth=np.ones((1, 1), np.int16), level=one[1], outline=one[2])
+            self.assertIsNone(staging.read_npz(z, lambda f: (seacarve._npz_raster(f),)))
+            self.assertFalse(os.path.exists(z))
 
     def test_rasters_in_memory_as_blocks_bit_for_bit(self):
         """A cell decoded in a process is kept as its blocks (_in_blocks), not three full planes: the land blocks share

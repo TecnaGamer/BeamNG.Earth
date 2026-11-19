@@ -227,13 +227,24 @@ def _write_raw(raw, r):
             pass
 
 
+def _npz_raster(f):
+    """The raster of a cell file (None: no water); ValueError (damaged: built again) for planes under 2 x 2 px or unlike
+    one another (water()'s lookup reads 2 x 2 pixels: _lookup)."""
+    if not f["any"]:
+        return None
+    r = (f["depth"].astype(np.float32) / 100.0, f["level"].astype(np.float32), f["outline"].astype(bool))
+    if r[0].ndim != 2 or min(r[0].shape) < 2 or any(a.shape != r[0].shape for a in r):
+        raise ValueError(f"not a raster: {[a.shape for a in r]}")
+    return r
+
+
 def _open_raw(raw):
     buf = np.asarray(np.load(raw, mmap_mode="r", allow_pickle=False))   # (a plain view: np.memmap's per-slice hooks)
     if buf.dtype != np.uint8 or buf.ndim != 1 or len(buf) < 4 * RAW_HEAD:
         raise ValueError(f"not a raster: {buf.dtype} {buf.shape}")
     magic, b, m, k, n = (int(v) for v in buf[:4 * RAW_HEAD].view("<i4"))
     off = 4 * (RAW_HEAD + m * m)
-    if magic != RAW_MAGIC or b != RAW_BLOCK_PX or len(buf) != off + k * b * b * RAW_DTYPE.itemsize or not 0 < n <= m * b:
+    if magic != RAW_MAGIC or b != RAW_BLOCK_PX or len(buf) != off + k * b * b * RAW_DTYPE.itemsize or not 2 <= n <= m * b:
         raise ValueError(f"not a raster: {magic:#x} {b} {m} {k} {n}")
     idx = np.array(buf[4 * RAW_HEAD:off].view("<i4").reshape(m, m))     # (small: read in, not mapped)
     if idx.min() < 0 or idx.max() >= k:
@@ -544,8 +555,7 @@ class SeaCarver:
                 log.debug("sea: %s: %s", raw, e)
         if p and os.path.exists(p):
             # (a damaged file, empty or cut short after a crash: removed and built again, staging.read_npz)
-            got = staging.read_npz(p, lambda f: ((f["depth"].astype(np.float32) / 100.0, f["level"].astype(np.float32),
-                                                  f["outline"].astype(bool)) if f["any"] else None,), "sea cell")
+            got = staging.read_npz(p, lambda f: (_npz_raster(f),), "sea cell")
             if got is not None:
                 r = got[0]
                 if r is not None:       # (outside the read: its raw copy failing to write is no damaged cell file)
