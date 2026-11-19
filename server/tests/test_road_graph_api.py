@@ -143,7 +143,7 @@ def fake_server(md, out_dir, aid=AID, traffic=True, anchors=None, dem_=None):
         grader_lock=threading.Lock(), out_dir=out_dir, vfs_dir="/temp/beamngEarth/test", traffic=traffic,
         road_pool=None, dem=FakeDem() if dem_ is None else dem_)
     s.grader_for = lambda anchor: None
-    s.ground = lambda frame, la, lo, z: z
+    s.ground = lambda frame, la, lo, z, grader=None: z
     s.chain_view = lambda *a, **k: NoChain()
     s.country = lambda anchor: "US"
     s.left_hand = lambda anchor: False

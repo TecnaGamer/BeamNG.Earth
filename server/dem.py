@@ -1642,8 +1642,10 @@ class Dem:
         mine = getattr(self._local, "cached_tiles", None)
         if mine is None:                        # (not in a lane after all: as the pool path would)
             return self._load_tile(key)
-        a = mine.get(key)
-        if a is not None:
+        got = mine.get(key)
+        if got is not None:
+            a, marks = got
+            _replay(marks)      # (a stand-in: every reader of it is short, not only the first)
             return a
         with self._lock:
             a = self._lru.get(key)
@@ -1660,7 +1662,7 @@ class Dem:
             with self._lock:
                 self._lru_put(key, a, None)
         else:
-            mine[key] = a
+            mine[key] = (a, marks)
         return a
 
     def tiles(self, keys, progress=None):
