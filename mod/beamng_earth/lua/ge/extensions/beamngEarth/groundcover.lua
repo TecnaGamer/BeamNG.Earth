@@ -209,6 +209,10 @@ local function fields(w)
   out[#out + 1] = E('lavenderCut', 'italy', 'shrubs', LAVENDER, 0.02, { months = span(8, 5) })
   return out
 end
+-- the 3D ground plants (Utah's and Johnson Valley's: real shapes, many times a billboard's cost each, the stock maps
+-- draw them to 100-150 m) only this near; flat billboards of the same kinds (the mod's grey and bare bushes, Utah's
+-- dry tussocks) carry the scrub beyond (2026-11-19, the user: "as many flat versions as possible")
+local NEAR_3D = { radius = 45, dissolveRadius = 30, shapeCullRadius = 45 }
 local function join(...)
   local out = {}
   for _, t in ipairs({ ... }) do for _, x in ipairs(t) do out[#out + 1] = x end end
@@ -306,7 +310,7 @@ M.PROFILES = {
     E('flowers', 'italy', 'flowers', DRY, 0.15, { months = span(4, 5) }),
     E('shrubs', 'wcusa', 'shrubs_near', DUSTY, 0.1),
     -- Utah's dry plants, grey bushes and white flowers (3D)
-    E('plants', 'utah', 'plants', DUSTY, 0.02),
+    E('plants', 'utah', 'plants', DUSTY, 0.02, { fields = NEAR_3D }),
     -- sagebrush (the grey bushes) on the scrub and the arid grassland, a few bare dry bushes
     E('sagebrush', 'own', 'bngEarth_greybush', DUSTY, 0.4, { types = { [0] = { layer = DRY, p = 1 }, [3] = { layer = DRY, p = 1 },
       [6] = { layer = DRY, p = 0.7 } } }),
@@ -317,21 +321,21 @@ M.PROFILES = {
   desert_hot = join({
     E('tussocks', 'utah', 'Dry_grass_clump', DRY, 0.05),
     dryGrass(0.08, { types = DESERT_DRY }),
-    E('bushes', 'jv', 'dirt_grass_dry', DUSTY, 0.02, { types = { [0] = { layer = DRY, p = 0.3 } },
-      fields = { radius = 100, dissolveRadius = 70 } }),
-    E('branches', 'jv', 'dirt_plant_dry', DUSTY, 0.03, { fields = { radius = 100, dissolveRadius = 70 } }),
-    E('plants', 'utah', 'plants', DUSTY, 0.02),
+    -- (the 3D plants, Johnson Valley's and Utah's, only near: NEAR_3D; their flat stand-ins, the bare dry bushes and
+    -- Utah's dry tussocks, to the far edge)
+    E('bushes', 'jv', 'dirt_grass_dry', DUSTY, 0.02, { types = { [0] = { layer = DRY, p = 0.3 } }, fields = NEAR_3D }),
+    E('branches', 'jv', 'dirt_plant_dry', DUSTY, 0.03, { fields = NEAR_3D }),
+    E('plants', 'utah', 'plants', DUSTY, 0.02, { fields = NEAR_3D }),
     E('yucca', 'island', 'spanish_bayonet', DUSTY, 0.05),
-    E('drybush', 'own', 'bngEarth_drybranch', DUSTY, 0.4, { types = { [1] = { layer = DRY, p = 1 }, [2] = { layer = DRY, p = 1 } } }),
+    E('drybush', 'own', 'bngEarth_drybranch', DUSTY, 0.6, { types = { [1] = { layer = DRY, p = 1 }, [2] = { layer = DRY, p = 1 } } }),
     E('lawn', 'wcusa', 'mown_grass_dry', LAWN, 0.04),
   }, wetland(0.03, 0.1, 0)),
   -- BWk: the cold deserts (the Great Basin, Central Asia): Utah's and Johnson Valley's
   desert_cold = join({
     E('tussocks', 'utah', 'Dry_grass_clump', DRY, 0.07),
     dryGrass(0.1, { types = DESERT_DRY }),
-    E('bushes', 'jv', 'dirt_grass_dry', DUSTY, 0.02, { types = { [0] = { layer = DRY, p = 0.3 } },
-      fields = { radius = 100, dissolveRadius = 70 } }),
-    E('plants', 'utah', 'plants', DUSTY, 0.03),
+    E('bushes', 'jv', 'dirt_grass_dry', DUSTY, 0.02, { types = { [0] = { layer = DRY, p = 0.3 } }, fields = NEAR_3D }),
+    E('plants', 'utah', 'plants', DUSTY, 0.03, { fields = NEAR_3D }),
     E('sagebrush', 'own', 'bngEarth_greybush', DUSTY, 0.6, { types = { [0] = { layer = DRY, p = 1 }, [3] = { layer = DRY, p = 1 },
       [6] = { layer = DRY, p = 0.7 } } }),
     E('drybush', 'own', 'bngEarth_drybranch', DUSTY, 0.3),
@@ -387,6 +391,35 @@ M.PROFILES = {
     E('lawn', 'wcusa', 'mown_grass_close', LAWN, 0.4),
   }, wetland(0.02, 0.1, 0)),
 }
+
+-- Near dense, far sparse (2026-11-19, the user: "the vegetation should be prettier, which means more of it; optimise
+-- some other way"): the elements of a GroundCover go up with the square of its radius, and near the car is where its
+-- blades are seen. The main carpets (SPLIT) are two objects each: a near one over NEAR_RADIUS of the stock radius at
+-- NEAR_SHARE of the share (its density 1 / NEAR_RADIUS^2 times that: ~1.7x) and the far one over the whole radius at
+-- FAR_SHARE. Near the car ~2.4x the blades, at the far edge 0.7x, ~1.3x the elements in all.
+M.SPLIT = { small_grass_close = true, long_grass_distant = true, grass_dry_1 = true, mown_grass_close = true,
+  mown_grass_dry = true, bngEarth_ripe_grain = true, bngEarth_stubble = true, Dry_grass_clump = true }
+M.NEAR_RADIUS, M.NEAR_SHARE, M.FAR_SHARE = 0.6, 0.6, 0.7
+for name, p in pairs(M.PROFILES) do
+  if name ~= 'generic' then
+    local out = {}
+    for _, e in ipairs(p) do
+      if M.SPLIT[e.src] then
+        local n = {}
+        for k, v in pairs(e) do n[k] = v end
+        n.id, n.share, n.radiusScale = (e.id or e.src) .. 'Near', e.share * M.NEAR_SHARE, M.NEAR_RADIUS
+        local f = {}
+        for k, v in pairs(e) do f[k] = v end
+        f.share = e.share * M.FAR_SHARE
+        out[#out + 1] = n
+        out[#out + 1] = f
+      else
+        out[#out + 1] = e
+      end
+    end
+    M.PROFILES[name] = out
+  end
+end
 
 -- Pure: the profile of a Koppen-Geiger class (Beck et al. 2023, server climate.py: 1 Af .. 30 EF), or, without one
 -- (a tile from before the climate), of the ambience set and variant ({set, variant}: native ambience.rs); generic
@@ -623,6 +656,12 @@ local function makeOne(e, def)
   end
   for k, v in pairs(e.fields or {}) do
     gc:setField(k, 0, tostring(M.RADIUS_FIELDS[k] and tonumber(v) and tonumber(v) * dist or v))
+  end
+  if e.radiusScale then       -- (a near object: its radii a share of the definition's, or of its own fields')
+    for k in pairs(M.RADIUS_FIELDS) do
+      local v = tonumber((e.fields or {})[k] or def[k])
+      if v then gc:setField(k, 0, tostring(v * e.radiusScale * dist)) end
+    end
   end
   for _, f in ipairs(M.PLACEMENT) do gc:setField(f[1], 0, f[2]) end
   gc.canSave = false

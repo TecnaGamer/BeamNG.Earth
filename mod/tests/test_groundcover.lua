@@ -164,9 +164,11 @@ for name, p in pairs(gc.PROFILES) do
     end
     local b, br = gc.budget(common, STOCK), gc.budget(few, STOCK)
     worst, most = math.max(worst, b), math.max(most, #common)
-    if b > generic then T.check(false, string.format('%s day %d: %d elements over the generic %d', name, d, b, generic)) end
-    if br > generic * 0.25 then T.check(false, string.format('%s day %d: rare layers %d elements', name, d, br)) end
-    if #common > 15 then T.check(false, name .. ' day ' .. d .. ': ' .. #common .. ' objects (at most 15)') end
+    -- (2026-11-19, the user: "skip the budget for now, the vegetation should be prettier": a guard against a runaway
+    -- profile only, 1.6x the generic one's elements, 22 objects)
+    if b > generic * 1.6 then T.check(false, string.format('%s day %d: %d elements over 1.6x the generic %d', name, d, b, generic)) end
+    if br > generic * 0.4 then T.check(false, string.format('%s day %d: rare layers %d elements', name, d, br)) end
+    if #common > 22 then T.check(false, name .. ' day ' .. d .. ': ' .. #common .. ' objects (at most 22)') end
   end
   report[#report + 1] = string.format('  %-13s at most %6d elements (%3.0f%% of generic), %2d objects (common layers)', name, worst,
     100 * worst / generic, most)
@@ -180,6 +182,11 @@ local function has(name, m, id)
 end
 T.check(has('temperate', 5, 'buttercups') and not has('temperate', 9, 'buttercups') and has('temperate', 7, 'flowers')
   and not has('temperate', 1, 'flowers'), 'temperate flowers in season')
+-- the near / far split: a near object of each main carpet, its share NEAR_SHARE, radius NEAR_RADIUS
+local nearSmall
+for _, e in ipairs(gc.plan('temperate', gc.dayOfMonth(7))) do if e.id == 'smallNear' then nearSmall = e end end
+T.check(nearSmall ~= nil and nearSmall.radiusScale == gc.NEAR_RADIUS and math.abs(nearSmall.share - 0.32 * gc.NEAR_SHARE) < 1e-9
+  and has('temperate', 7, 'small'), 'the short grass near and far')
 T.check(has('temperate', 4, 'cropYoung') and has('temperate', 7, 'cropRipe') and has('temperate', 9, 'stubble')
   and not has('temperate', 1, 'cropYoung') and not has('temperate', 1, 'stubble'), 'fields: green, ripe, stubble, bare')
 T.check(has('mediterranean', 7, 'lavender') and not has('mediterranean', 10, 'lavender') and has('temperate', 7, 'lavenderField')
