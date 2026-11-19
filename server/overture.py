@@ -50,7 +50,7 @@ log = logging.getLogger("earthd.mapdata")
 # The pinned Overture release (update path: docs/ARCHITECTURE.md "Map data"; `mapdata.py --latest`
 # prints the newest one). Overture removes old releases from the buckets after some months: a
 # pinned release that is gone raises ReleaseGone for cells not cached yet.
-RELEASE = "2026-10-21.0"
+RELEASE = "2026-11-18.0"
 STAC_ROOT = "https://stac.overturemaps.org"
 # DuckDB worker threads per query (the server is niced; the game comes first). One: the server runs many queries side
 # by side on its few cores, where a query's second thread only cost CPU (a fresh place's 60 road cells on one core:
