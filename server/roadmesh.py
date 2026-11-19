@@ -2759,6 +2759,28 @@ def _retaining_walls(walls, origin, P, T, UV, M, nv):
             T.append(tri + nv)
             M.append(face_m)
             nv += 5
+        for run in w.get("skirt", ()):          # (the vanilla slopes: soil along its foot, roads.wall_skirts)
+            run = np.asarray(run, np.float64)   # (k, rows, 3): up the face, then out over the ground
+            m, nr = run.shape[0], run.shape[1]
+            if m < 2:
+                continue
+            mat = 6 if w.get("mountain") else 4
+            sc = SCREE_UV_M if mat == 6 else SOIL_UV_M
+            pts = run.transpose(1, 0, 2).reshape(-1, 3)      # (row-major: row r's k points at r * k)
+            P.append(pts - origin)
+            UV.append(pts[:, :2] / sc)                       # (world-planar, as the terrain's detail lies)
+            i = np.arange(m - 1)
+            tris = []
+            for r in range(nr - 1):
+                A, A1, B, B1 = nv + r * m + i, nv + r * m + i + 1, nv + (r + 1) * m + i, nv + (r + 1) * m + i + 1
+                tris += [np.stack([A, B, B1], 1), np.stack([A, B1, A1], 1)]
+            tri = np.concatenate(tris)
+            q = pts[tri - nv]
+            up = np.cross(q[:, 1] - q[:, 0], q[:, 2] - q[:, 0])[:, 2] < 0     # (facing up)
+            tri[up] = tri[up][:, ::-1]
+            T.append(tri)
+            M.append(mat)
+            nv += len(pts)
     return nv
 
 

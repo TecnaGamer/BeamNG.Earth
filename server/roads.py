@@ -11397,6 +11397,202 @@ def _hash01(*key):
     return int.from_bytes(h, "little") / 2.0 ** 64
 
 
+# Rocks on steep graded slopes and soil skirts at retaining-wall feet (road revamp v2 P1a, with the vanilla slopes only:
+# BNE_BATTER=vanilla, off by default; vanilla-terrain-fusion-study-2026-11-19 gaps 2 and 4). Italy has a rock or cliff
+# item within 12 m of 93 % of its road sides steeper than 2:1, and its walls' feet and portal rims are covered by
+# ground meshes in the terrain's textures. Here a rural road's side whose graded ground is steeper than ROCK_SLOPE gets
+# Italy's rock-face boulders (trees.lua group "slope_rock") sunk into it, and a retaining wall gets a strip of the wall
+# tops' soil along its foot. The rocks come from stations every ROCK_STEP_M along each road part, picked by a hash of
+# the road's id, its side and the station alone (at most ROCK_PER_BLOCK of every ROCK_BLOCK_N stations a side: the
+# cap), so every tile and request order makes the same ones; a rock belongs to the tile its centre is in.
+SLOPE_ROCKS_ON = os.environ.get("BNE_BATTER", "off") == "vanilla"
+ROCK_SLOPE = 1.0 / 1.2      # graded ground steeper than this (over 1 m across the road) gets rocks
+ROCK_STEP_M = 2.5           # m between a side's stations
+ROCK_BLOCK_N = 40           # stations a block (100 m) ...
+ROCK_PER_BLOCK = 6          # ... of which this many may hold a rock, a side (the cap: 120 a km of road, both sides)
+ROCK_GAP_M = 1.0            # m a rock's footprint keeps from every road's near-level strip (core + BATTER_L0_M) ...
+ROCK_WALL_GAP_M = 0.5       # ... and this from where a retaining wall can stand (its face at most 0.5 m past the core,
+                            # WALL_THICK_MAX_M deep): a wall's whole body lies within that of its road (no walls asked)
+ROCK_REACH_M = 24.0         # m past that a rock's centre may stand at most
+ROCK_MIN_RISE_M = 1.2       # m the steep part rises at least (no rocks on a lattice step)
+ROCK_H_M = (0.9, 3.0)       # m: a rock's height, hashed between these (no taller than its steep part rises) ...
+ROCK_R = 0.55               # ... its footprint's radius this share of it (the boulders: 2.0-3.3 m across, 1.0-3.1 m tall)
+ROCK_SINK = (0.3, 0.6)      # the share of its height under the ground at its centre, hashed ...
+ROCK_SINK_MAX = 0.85        # ... more where its downhill edge would float (as much as that needs, up to this)
+ROCK_PIVOT = 0.42           # its pivot over its bottom, a share of its height (the boulders' 0.34-0.47)
+SKIRT_W_M = 2.5             # m a wall's skirt reaches from its face toward the road ...
+SKIRT_ROAD_GAP_M = 0.3      # ... stopping this short of the carriageway ...
+SKIRT_MIN_W_M = 0.6         # ... none narrower than this
+SKIRT_ROWS = ((0.02, 0.0, 0.30), (0.0, 0.4, 0.12), (0.0, 1.0, 0.05))   # (m off the face + share of its width, m over
+                                                                        # the drawn ground): up the face, out flat
+
+
+def wall_skirts(walls, ground, roads=()):
+    """With the vanilla slopes (SLOPE_ROCKS_ON): a skirt of soil along each retaining wall's foot, from its face toward
+    the road (stopping SKIRT_ROAD_GAP_M short of the carriageway; none where its outer edge would lie within
+    SKIRT_ROAD_GAP_M of another road's core: roads, build_tile's), draped SKIRT_ROWS over ground(x, y) -> z (the drawn
+    ground), hiding the seam where the terrain's lattice meets the face. Sets w["skirt"]: [(k, rows, 3) runs] (roadmesh
+    draws them in the wall tops' soil). Only on a rural road's wall whose shoulder is no sidewalk (retaining_walls'
+    "verge"); none on a parapet or a rock wall (cliff_rows). Pure given ground."""
+    import grading
+    todo = []                   # (wall, its runs' rows): the ground read once for them all
+    cores = None
+    for w in walls:
+        if w.get("parapet") or w.get("rock") or not w.get("verge") or "edge" not in w:
+            continue
+        b = np.asarray(w["base"], np.float64)
+        tw = np.asarray(w["toward"], np.float64)
+        # (its face and the carriageway's edge + CLIFF_EDGE_M lie on one normal, away from the road = -toward: the face's
+        # signed distance past the carriageway's edge)
+        e = b - np.asarray(w["edge"], np.float64)
+        room = -(e[:, 0] * tw[:, 0] + e[:, 1] * tw[:, 1]) + CLIFF_EDGE_M
+        W = np.clip(room - SKIRT_ROAD_GAP_M, 0.0, SKIRT_W_M)
+        ok = W >= SKIRT_MIN_W_M
+        if ok.any() and roads:          # (its outer edge off every other road's core: carriageway, shoulder, sidewalk)
+            if cores is None:
+                cores = _Segs({fid: (np.asarray(pts, np.float64)[:, :2], spec.width / 2 + grading.shoulder(spec))
+                               for fid, spec, pts, _ in roads if len(pts) >= 2})
+            ok &= ~cores.near(b + tw * W[:, None], SKIRT_ROAD_GAP_M, skip=w.get("fid"))
+        runs, i = [], 0
+        while i < len(ok):
+            if not ok[i]:
+                i += 1
+                continue
+            j = i
+            while j + 1 < len(ok) and ok[j + 1]:
+                j += 1
+            if j > i:
+                sl = slice(i, j + 1)
+                runs.append(np.stack([b[sl] + tw[sl] * (a + f * W[sl])[:, None] for a, f, _ in SKIRT_ROWS], axis=1))
+            i = j + 1
+        if runs:
+            todo.append((w, runs))
+    if not todo:
+        return walls
+    P = np.concatenate([r.reshape(-1, 2) for _w, runs in todo for r in runs])
+    gz = np.asarray(ground(P[:, 0], P[:, 1]), np.float64)
+    lift = np.array([r[2] for r in SKIRT_ROWS], np.float64)
+    k = 0
+    for w, runs in todo:
+        out = []
+        for r in runs:
+            n = r.shape[0] * r.shape[1]
+            out.append(np.concatenate([r, (gz[k:k + n].reshape(r.shape[:2]) + lift[None, :])[:, :, None]], axis=2))
+            k += n
+        w["skirt"] = out
+    return walls
+
+
+def _verge(spec):
+    """Is a road's shoulder a verge (a rural road with no sidewalk along its edge: grading.shoulder's attached walks),
+    where a wall's skirt may lie? Pure."""
+    if spec.urban:
+        return False
+    street = getattr(spec, "street", None)
+    return street is None or not any(w.setback == 0. for _, w in street.walks())
+
+
+def _rock_slots(fid, n, side, m):
+    """The stations (of m) of road part (fid, n points) on side that may hold a rock: in every block of ROCK_BLOCK_N the
+    ROCK_PER_BLOCK of the lowest hashes. Pure."""
+    keep = np.zeros(m, bool)
+    for b0 in range(0, m, ROCK_BLOCK_N):
+        js = range(b0, min(b0 + ROCK_BLOCK_N, m))
+        h = [(_hash01("rock", fid, n, side, j), j) for j in js]
+        h.sort()
+        for _, j in h[:ROCK_PER_BLOCK]:
+            keep[j] = True
+    return keep
+
+
+def slope_rocks(frame, roads, elev, exact, decks=(), owner=None):
+    """With the vanilla slopes (SLOPE_ROCKS_ON): trees.lua rows [group, x, y, z, yaw, scale, height, rank] of the
+    boulders on the steep graded ground (elev(lat, lon) -> m: the graded) beside the rural roads, whose centres lie in
+    the tile box exact (owner: the tile's own box for box_owns, a geotile's; None: exact) (see ROCK_*). None on any
+    road's near-level strip or within ROCK_GAP_M of it, where a retaining wall can stand (ROCK_WALL_GAP_M), nor under a
+    deck (decks: the deck chunks near the tile). Pure given elev."""
+    import grading
+    x0, y0, x1, y1 = exact
+
+    def ground(P):
+        la, lo, _ = frame.enu_to_geodetic(P[:, 0], P[:, 1], np.zeros(len(P)))
+        return np.asarray(frame.geodetic_to_enu(la, lo, np.asarray(elev(la, lo), np.float64))[2], np.float64)
+    strips, slots = {}, []
+    for fid, spec, pts, _ in roads:
+        if spec.kind not in BUILT or len(pts) < 2:
+            continue
+        width = spec.width if spec.mountain else max(spec.width, carriageway(spec.cls, spec.kind, True, None, spec.oneway))
+        core = width / 2 + grading.shoulder(spec)
+        keep = max(core + grading.BATTER_L0_M + ROCK_GAP_M, core + 0.5 + WALL_THICK_MAX_M + ROCK_WALL_GAP_M)
+        line = np.asarray(pts[:, :2], np.float64)
+        strips[(fid, len(strips))] = (line, keep)        # (a road's parts each)
+        if spec.urban:                  # (the suburban maps dress their slopes with walls and barriers, not rock)
+            continue
+        xy, s = grading.resample(line, ROCK_STEP_M)
+        if len(xy) < 2:
+            continue
+        m_ = keep + ROCK_REACH_M + 1.0
+        near = (xy[:, 0] >= x0 - m_) & (xy[:, 0] < x1 + m_) & (xy[:, 1] >= y0 - m_) & (xy[:, 1] < y1 + m_)
+        if not near.any():
+            continue
+        z = dnp.interp(s, np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(line, axis=0).T))], np.asarray(pts[:, 2], np.float64))
+        d = np.gradient(xy, axis=0)
+        d /= np.maximum(dnp.hypot(*d.T), 1e-9)[:, None]
+        nl = np.stack([-d[:, 1], d[:, 0]], axis=1)
+        o = keep
+        for side in (1.0, -1.0):
+            # (only the stations whose rock's centre, from o to o + ROCK_REACH_M out, can lie in the box)
+            A, B = xy + nl * (side * o), xy + nl * (side * (o + ROCK_REACH_M))
+            reach = near & (np.minimum(A[:, 0], B[:, 0]) < x1) & (np.maximum(A[:, 0], B[:, 0]) >= x0) & \
+                (np.minimum(A[:, 1], B[:, 1]) < y1) & (np.maximum(A[:, 1], B[:, 1]) >= y0)
+            if not reach.any():
+                continue
+            for j in np.flatnonzero(reach & _rock_slots(fid, len(pts), side, len(xy))):
+                slots.append((fid, len(pts), side, int(j), xy[j], nl[j] * side, d[j], float(z[j]), o))
+    if not slots:
+        return []
+    # (the ground across every slot in one read: the grader's cost is mostly per call)
+    fo = np.arange(0.0, ROCK_REACH_M + 0.01, 1.0)
+    P = np.concatenate([c + nrm * (o + fo)[:, None] for _f, _n, _s, _j, c, nrm, _d, _z, o in slots])
+    gf = ground(P).reshape(len(slots), len(fo))
+    cand = []
+    for row, (fid, n, side, j, c, nrm, d, zr, o) in enumerate(slots):
+        g = gf[row]
+        st = np.flatnonzero(np.abs(np.diff(g)) > ROCK_SLOPE)
+        if not len(st):
+            continue
+        rise = float(np.max(g[st[0]:st[-1] + 2]) - np.min(g[st[0]:st[-1] + 2]))
+        if rise < ROCK_MIN_RISE_M:
+            continue
+        hs = [_hash01("rock", fid, n, side, j, t) for t in range(6)]
+        h = min(ROCK_H_M[0] + hs[0] * (ROCK_H_M[1] - ROCK_H_M[0]), max(rise, ROCK_H_M[0]))
+        r = ROCK_R * h
+        at = float(st[min(int(hs[1] * len(st)), len(st) - 1)]) + 0.5 + (hs[2] - 0.5) * 0.8
+        at = min(max(at, r), ROCK_REACH_M)          # (its footprint off the strip and its gap)
+        gc_ = float(dnp.interp(at, fo, g))
+        g_lo = min(float(dnp.interp(at - r, fo, g)), float(dnp.interp(at + r, fo, g)))
+        sink = min(max(ROCK_SINK[0] + hs[3] * (ROCK_SINK[1] - ROCK_SINK[0]), (gc_ - g_lo + 0.1) / h), ROCK_SINK_MAX)
+        p = c + nrm * (o + at)
+        if not box_owns(exact if owner is None else owner, float(p[0]), float(p[1])):
+            continue
+        cand.append((p, nrm, d, zr, h, r, gc_ - sink * h + ROCK_PIVOT * h, hs[4] * 360.0, hs[5]))
+    if not cand:
+        return []
+    # the footprints (centre and 8 points round it at its radius) off every road's strip and walls, and decks
+    ring = [(1.0, 0.0), (0.7071067811865476, 0.7071067811865476), (0.0, 1.0), (-0.7071067811865476, 0.7071067811865476),
+            (-1.0, 0.0), (-0.7071067811865476, -0.7071067811865476), (0.0, -1.0), (0.7071067811865476, -0.7071067811865476)]
+    F = np.concatenate([np.array([p] + [p + (nrm * a + d * b) * r for a, b in ring]) for p, nrm, d, _z, _h, r, *_ in cand])
+    nf = len(ring) + 1
+    off = ~_Segs(strips).near(F, 0.0).reshape(len(cand), nf).any(axis=1)
+    off &= ~_under_decks(F, np.repeat(np.array([c[3] for c in cand]), nf), decks).reshape(len(cand), nf).any(axis=1)
+    rows = []
+    for (p, _n, _d, _z, h, _r, pz, yaw, rank), ok in zip(cand, off):
+        if ok:
+            rows.append(["slope_rock", round(float(p[0]), 2), round(float(p[1]), 2), round(pz, 2), round(yaw, 1), 1.0,
+                         round(h, 2), round(rank, 3)])
+    return rows
+
+
 def _cut_behind(base, out_n, z, ground):
     """Whether the graded ground behind a wall's face line base (k, 2) (out_n: unit vectors away from the road; z: the
     road's heights) climbs as steeply as a cutting does (WALL_STEEP over 1 m, its median along the wall)."""
@@ -11460,7 +11656,8 @@ def retaining_walls(frame, roads, elev, exact, decks=()):
                          ((PARAPET_DROP_MOUNTAIN_M, PARAPET_PROBE_MOUNTAIN_M) if spec.mountain
                           else (PARAPET_DROP_M, PARAPET_PROBE_M))
                          if not spec.urban and spec.cls not in NO_PARAPET_CLASSES and not spec.median else None,
-                         grading.wall_max_h(spec), spec.mountain, hairpin_extra(frame, spec, xy)))
+                         grading.wall_max_h(spec), spec.mountain, hairpin_extra(frame, spec, xy),
+                         _verge(spec)))
     if not pts_all:
         return []
 
@@ -11484,7 +11681,7 @@ def retaining_walls(frame, roads, elev, exact, decks=()):
     # finds no cutting (_wall_runs) and that gets no parapets has no use for them (most of a town's streets: 8 of 9 of
     # the ground lookups, 2026-10-25)
     probes, k = [], 0
-    for xy, z, out_n, core, inside, rh, steps, concrete, fid, rural, parapets, max_h, _mtn, _hx in info:
+    for xy, z, out_n, core, inside, rh, steps, concrete, fid, rural, parapets, max_h, _mtn, _hx, _vg in info:
         gg = g[k:k + len(xy)]
         k += len(xy)
         need = len(steps) and (parapets is not None or _wall_runs(gg - z).any())
@@ -11498,7 +11695,7 @@ def retaining_walls(frame, roads, elev, exact, decks=()):
     others = {fid: (np.asarray(pts, np.float64)[:, :2], spec.width / 2) for fid, spec, pts, _ in roads if len(pts) >= 2}
     others = _Segs(others)          # (one table for all the carriageway tests below)
     bend_of = {}
-    for (xy, z, out_n, core, inside, rh, steps, concrete, fid, rural, parapets, max_h, mountain, hx), (gg, need) in \
+    for (xy, z, out_n, core, inside, rh, steps, concrete, fid, rural, parapets, max_h, mountain, hx, verge), (gg, need) in \
             zip(info, probes):
         key = (id(xy), len(xy))
         if key not in bend_of:          # (a tight bend: no wall into it, grading.bend_zone)
@@ -11605,6 +11802,8 @@ def retaining_walls(frame, roads, elev, exact, decks=()):
                             "road_z": z[sl], "clear": _clear_depth(base, out_n[sl], np.full(len(base), CLIFF_REACH_M),
                                                                    others, fid),
                             "edge": xy[sl] + out_n[sl] * (rh + CLIFF_EDGE_M)})
+                if SLOPE_ROCKS_ON:          # (a skirt only over a verge, never over a sidewalk: wall_skirts)
+                    out[-1]["verge"], out[-1]["fid"] = verge, fid
             i = j + 1
     return out
 
@@ -13058,6 +13257,13 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
         if props is not None:                   # a rural cut: rock-face pieces instead (cliff_rows)
             props.extend(cliff_rows([w for w in tile_walls if w["rock"]], roads))
         chunks = _off_wall_tops(chunks, [w for w in tile_walls if not w["rock"]])
+        if SLOPE_ROCKS_ON:                      # (the vanilla slopes: soil along the walls' feet, wall_skirts)
+            def _elev_xy(x, y):
+                la, lo, _ = frame.enu_to_geodetic(x, y, np.zeros(len(x)))
+                return frame.geodetic_to_enu(la, lo, np.asarray(elev(la, lo), np.float64))[2]
+            wall_skirts(tile_walls, ground if ground is not None else _elev_xy, roads)
+    if SLOPE_ROCKS_ON and props is not None:    # (the vanilla slopes: rocks on the steep graded ground, slope_rocks)
+        props.extend(slope_rocks(frame, roads, elev, exact, decks_near, own_box))
     de_ctx = de_ctl = None                      # Germany's junctions (de_on): the tile's roads read once
     line_country = country                      # (designs.context), the line style by its border (markings.style)
     priority = None if nodes is None else nodes["priority"]     # (the map's stop and give-way points)
