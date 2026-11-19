@@ -259,3 +259,16 @@ class CoplanarTrim(unittest.TestCase):
         self.assertEqual(real[25], 0.0)
         self.assertGreater(chunk[25], 0.0)
         self.assertGreater(real[20], 0.9)       # (a row exactly at the end's station: beside it, cut)
+
+    def test_angled_decks_on_one_grade(self):
+        # two decks 25 degrees apart lying on one 5 % plane: one surface at the seam, both cut (the other's height read
+        # at the seam point's own foot, not the row centre's: a false 6 cm step, Codex P3e)
+        ang = math.radians(25.0)
+        a = _ribbon(-30.0, 0.0, 0.0, 61, 5.0)
+        b0 = np.array([-30.0, 8.0 - 30.0 * math.tan(ang)])
+        b = _ribbon(b0[0], b0[1], ang, 61, 5.0)
+        a = (a[0], a[1], 0.05 * ((a[0] + a[1]) / 2)[:, 0])
+        b = (b[0], b[1], 0.05 * ((b[0] + b[1]) / 2)[:, 0])
+        (_la, _ra, tla, _), (_lb, _rb, _, trb) = _cop([a, b])
+        self.assertGreater(int((tla > 0).sum()), 3)
+        self.assertGreater(int((trb > 0).sum()), 3)

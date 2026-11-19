@@ -241,9 +241,27 @@ fn cop_cut(p: [f64; 2], h: f64, u: [f64; 2], za: f64, ba: f64, om: &[[f64; 2]], 
     // both surfaces at the seam (each one's centre height, its cross slope x the seam's offset to its left): one
     // surface there within tol, or no cut (two decks apart in height, or banked apart, are not butted into a step)
     let zq_a = za + ba * sg * keep;
-    let zo = oz[j] + bt * (oz[j + 1] - oz[j]);
-    let bo = ob[j] + bt * (ob[j + 1] - ob[j]);
-    let off_o = (d[0] * (q[1] - bq[1]) - d[1] * (q[0] - bq[0])) / ld;
+    // (the other surface at the seam point's own foot on its line: on angled decks the row centre's foot is another
+    // station, its grade a false step; Codex P3e)
+    let (mut jq, mut dq, mut tq) = (j, f64::INFINITY, bt);
+    for s in 0..om.len() - 1 {
+        let (a, b) = (om[s], om[s + 1]);
+        let e = [b[0] - a[0], b[1] - a[1]];
+        let l2 = nmax(e[0] * e[0] + e[1] * e[1], 1e-12);
+        let tt = (((q[0] - a[0]) * e[0] + (q[1] - a[1]) * e[1]) / l2).clamp(0.0, 1.0);
+        let dist = (a[0] + tt * e[0] - q[0]).dhypot(a[1] + tt * e[1] - q[1]);
+        if dist < dq {
+            jq = s;
+            dq = dist;
+            tq = tt;
+        }
+    }
+    let fq = [om[jq][0] + tq * (om[jq + 1][0] - om[jq][0]), om[jq][1] + tq * (om[jq + 1][1] - om[jq][1])];
+    let eq = [om[jq + 1][0] - om[jq][0], om[jq + 1][1] - om[jq][1]];
+    let lq = nmax(eq[0].dhypot(eq[1]), 1e-9);
+    let zo = oz[jq] + tq * (oz[jq + 1] - oz[jq]);
+    let bo = ob[jq] + tq * (ob[jq + 1] - ob[jq]);
+    let off_o = (eq[0] * (q[1] - fq[1]) - eq[1] * (q[0] - fq[0])) / lq;
     let zq_o = zo + bo * off_o;
     let dzs = zq_a - zq_o;
     if (dzs).abs() <= tol {

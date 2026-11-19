@@ -1601,7 +1601,18 @@ pub fn profile_solve<'py>(py: Python<'py>, kxy: PyReadonlyArray2<'py, f64>, koff
     let pn: Vec<[i64; 3]> = pins.chunks(3).map(|c| [c[0], c[1], c[2]]).collect();
     let fl: Vec<(usize, [f64; 2], f64)> = floors.chunks(4).filter(|c| c[0] >= 0.0)
         .map(|c| (c[0] as usize, [c[1], c[2]], c[3])).collect();
-    let out = py.detach(|| solve_core(&ms, &jn, &pn, &fl, &params));
+    let out = py.detach(|| {
+        let out = solve_core(&ms, &jn, &pn, &fl, &params);
+        // (P3e: the additions ([18], [19]) over the budget: solved again without them, P3d's couplings alone, never a
+        // fallback the baseline would not take; Codex P3e)
+        if out.status == S_BUDGET && params.len() > SOLVE_PARAMS && (params[18] != 0.0 || params[19] != 0.0) {
+            let mut p2 = params.clone();
+            p2[18] = 0.0;
+            p2[19] = 0.0;
+            return solve_core(&ms, &jn, &pn, &fl, &p2);
+        }
+        out
+    });
     Ok((out.z, out.report, out.tried))
 }
 
