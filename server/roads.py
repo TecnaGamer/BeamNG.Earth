@@ -13015,6 +13015,42 @@ def line_through(roads):
     return pairs, stems, {f for f, n in count.items() if n >= 2}
 
 
+_BOX_ABS = 1e15                 # (_cornered: coordinates whose differences are exact enough and never overflow)
+
+
+def _cornered(jcuts, roads):
+    """The road pairs (fid, f2) whose sidewalks meet at a curb return: a junction cut of fid's (jcuts {(fid, side):
+    [(node xy, u, t)]}) within 1 m of a point of another road f2's centre line (roads [(fid, spec, pts, lon)]), added
+    cut by cut and road by road in that order. Every road's points in one array: only the points in a 2 m box round
+    the node can be under 1 m (a hypot is never below its larger leg by more than an ulp), their distances in one call
+    (a call per cut and road was 73k hypot calls in a cold Manhattan visit, 2026-11-19). A line or cut node that is
+    empty, not float64 or not finite within _BOX_ABS (where a difference could overflow): a call per road, as before."""
+    out = set()
+    if not jcuts or not roads:
+        return out
+    pts = [p2[:, :2] for _f2, _s2, p2, _ in roads]
+    fids = [r[0] for r in roads]
+    lens = [len(p) for p in pts]
+    P = np.concatenate(pts)
+    owner = np.repeat(np.arange(len(pts)), lens)
+    boxed = all(lens) and all(p.dtype == np.float64 for p in pts) and bool((np.abs(P) <= _BOX_ABS).all())
+    for (fid, _side), cl in jcuts.items():
+        for X, _u, _t in cl:
+            Xa = np.asarray(X) if boxed else None
+            if Xa is not None and Xa.dtype == np.float64 and Xa.shape == (2,) and bool((np.abs(Xa) <= _BOX_ABS).all()):
+                D = P - Xa
+                near = np.flatnonzero((np.abs(D[:, 0]) < 2.0) & (np.abs(D[:, 1]) < 2.0))
+                hits = np.unique(owner[near[dnp.hypot(D[near, 0], D[near, 1]) < 1.0]]).tolist() if len(near) else ()
+                for i in hits:
+                    if fids[i] != fid:
+                        out.add((fid, fids[i]))
+                continue
+            for f2, p2 in zip(fids, pts):
+                if f2 != fid and dnp.hypot(*(p2 - X).T).min() < 1.0:
+                    out.add((fid, f2))
+    return out
+
+
 def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=None, widths=None, props=None,
                lines=None, wires=None, town=None, park=None, left_hand=False, structures=(), mph=True, tunnels=None,
                buried=0.0, lamp_region=None, country=None,
@@ -13387,11 +13423,7 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
                               "fid": "splitter"})
     cornered = set()                            # road pairs whose sidewalks meet at a curb return
     if walks is not None:
-        for (fid, side), cl in jcuts.items():
-            for X, u, t in cl:
-                for f2, s2, p2, _ in roads:
-                    if f2 != fid and dnp.hypot(*(p2[:, :2] - X).T).min() < 1.0:
-                        cornered.add((fid, f2))
+        cornered = _cornered(jcuts, roads)
         corner_ctx = None
         for c in corners:                       # each corner / crosswalk made by the tile it is in
             p = c["arc"][len(c["arc"]) // 2]
