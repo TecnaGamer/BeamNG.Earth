@@ -5906,11 +5906,13 @@ class _Planner:
             la_, lo_, _ = self.frame.enu_to_geodetic(np.array([p[0]]), np.array([p[1]]), 0.0)
             return float(np.asarray(self.elev(la_, lo_), np.float64).reshape(-1)[0])
         top = ground_z(xy) + float(got[0])      # (this abutment's raised top)
-        for line, half in got[1]:
-            line_ = np.asarray(line, np.float64)
+        # each line's first and last point against every candidate, all in one dnp.hypot (elementwise: the same bits
+        # as one call per end; rows 2 i and 2 i + 1 are line i's ends)
+        pe = np.array([np.asarray(line, np.float64)[j, :2] for line, _half in got[1] for j in (0, -1)], np.float64)
+        dd_all = dnp.hypot(cand[None, :, 0] - pe[:, None, 0], cand[None, :, 1] - pe[:, None, 1])
+        for i, (line, half) in enumerate(got[1]):
             twin = False
-            for p in (line_[0], line_[-1]):
-                dd = dnp.hypot(cand[:, 0] - p[0], cand[:, 1] - p[1])
+            for dd in (dd_all[2 * i], dd_all[2 * i + 1]):
                 k = int(np.argmin(dd))
                 if dd[k] <= APPROACH_TOUCH_M:
                     kk = (round(float(cand[k, 0]), 2), round(float(cand[k, 1]), 2))
