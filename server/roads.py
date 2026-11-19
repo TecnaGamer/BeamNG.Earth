@@ -12950,7 +12950,7 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
                                      priority=priority, ground=ground, development=development,
                                      pole_profile=pole_profile, pole_frame=frame, sign_obstacles=sign_obstacles,
                                      defer_gore=detailed_signs, mapped_poles=mapped_poles, mapped_lamps=mapped_lamps,
-                                     obstacles=railxing.rail_obstacles(frame, cells, own_box) if railxing.ENABLED else (),
+                                     obstacles=railxing.rail_obstacles(frame, cells, own_box),
                                      de_on=de_on, de_ctx=de_ctx, de_ctl=de_ctl,
                                      lighting={fid: str(f.attrs["osm_lit"][i]).strip().lower()
                                                for fid, (f, i, _sp) in seen.items() if "osm_lit" in f.attrs}))

@@ -1388,7 +1388,7 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
             tph = _h01(fid, side, "tph") * STREET_TREE_SPACING
             for p, out, s_line in _stations(run, line, STREET_TREE_SPACING, tph, END_CLEAR_M + 4.0, side):
                 q = p[:2] - out * (w / 2 - STREET_TREE_CURB_M)
-                if _owns(box, q[0], q[1]):
+                if _owns(box, q[0], q[1]) and not on_bed(q):
                     # (each tree's size, turn and rank keyed on its station along the road, not on where the anchor's
                     # frame puts it: the same tree from every anchor, geotiles 2026-10-29)
                     k = int(round((s_line - tph) / STREET_TREE_SPACING))
@@ -1486,6 +1486,8 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
             wires.extend(_own_spans(run, box))
     # Poles were checked before joining their wire runs; signs before selecting their relocated spot.
     rows = [r for r in rows if r[0] in (G_POLE, G_SIGNAL, G_SIGNAL_LEFT, G_STOP, G_YIELD) or clearance.clear(r)]
+    if bed is not None:     # (nothing on a track's bed: the junctions' signs too; the poles were kept off it above)
+        rows = [r for r in rows if not on_bed((float(r[1]), float(r[2])))]
     if poleprofiles.kit_enabled(pole_profile):
         import regionalmarkers
         country_at=poleprofiles.country_selector(pole_profile,pole_frame)
