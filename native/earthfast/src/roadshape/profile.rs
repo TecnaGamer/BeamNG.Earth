@@ -892,6 +892,11 @@ pub fn solve_core(ms: &[Member], joins: &[[i64; 5]], pins: &[[i64; 3]], floors: 
             let mut seed = vec![false; nb];
             let mut tk = vec![0.0f64; nb];
             for k in 0..nb {
+                // (a knot a sheet union holds: P3d's rules skip it before any work; P3e's read it as a run's seed)
+                let is_held = held.contains(&(base[b] + k));
+                if is_held && !twin_flood && !twin_overlap {
+                    continue;
+                }
                 work += ms[a].xy.len() as u64;
                 if work > BUDGET.work {
                     rep[0] = S_BUDGET as f64;
@@ -929,7 +934,7 @@ pub fn solve_core(ms: &[Member], joins: &[[i64; 5]], pins: &[[i64; 3]], floors: 
                 if gap <= TWIN_GAP_M && (twin_flood || seed[k]) {
                     side_run += piece;
                 }
-                if gap <= TWIN_GAP_M && seed[k] && !ovl[k] {
+                if gap <= TWIN_GAP_M && seed[k] && !ovl[k] && !is_held {
                     side_base += piece;      // (P3d's rule alone)
                 }
             }

@@ -243,18 +243,24 @@ fn cop_cut(p: [f64; 2], h: f64, u: [f64; 2], za: f64, ba: f64, om: &[[f64; 2]], 
     let zq_a = za + ba * sg * keep;
     // (the other surface at the seam point's own foot on its line: on angled decks the row centre's foot is another
     // station, its grade a false step; Codex P3e)
-    let (mut jq, mut dq, mut tq) = (j, f64::INFINITY, bt);
+    let (mut jq, mut dq, mut tq, mut rq) = (j, f64::INFINITY, bt, bt);
     for s in 0..om.len() - 1 {
         let (a, b) = (om[s], om[s + 1]);
         let e = [b[0] - a[0], b[1] - a[1]];
         let l2 = nmax(e[0] * e[0] + e[1] * e[1], 1e-12);
-        let tt = (((q[0] - a[0]) * e[0] + (q[1] - a[1]) * e[1]) / l2).clamp(0.0, 1.0);
+        let tr = ((q[0] - a[0]) * e[0] + (q[1] - a[1]) * e[1]) / l2;
+        let tt = tr.clamp(0.0, 1.0);
         let dist = (a[0] + tt * e[0] - q[0]).dhypot(a[1] + tt * e[1] - q[1]);
         if dist < dq {
             jq = s;
             dq = dist;
             tq = tt;
+            rq = tr;
         }
+    }
+    // (the seam point itself strictly past the other deck's own end: the other cannot cover the cut there; Codex P3e)
+    if (jq == 0 && rq < 0.0 && ends.0) || (jq == last && rq > 1.0 && ends.1) {
+        return None;
     }
     let fq = [om[jq][0] + tq * (om[jq + 1][0] - om[jq][0]), om[jq][1] + tq * (om[jq + 1][1] - om[jq][1])];
     let eq = [om[jq + 1][0] - om[jq][0], om[jq + 1][1] - om[jq][1]];
