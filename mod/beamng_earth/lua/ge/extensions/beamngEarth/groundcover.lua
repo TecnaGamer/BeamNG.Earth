@@ -91,10 +91,12 @@ M.SOURCES = {
   jri = { materials = { JRI .. 'art/shapes/groundcover/main.materials.json',
                         JRI .. 'art/shapes/groundcover/grass/main.materials.json' },
           items = JRI .. 'main/MissionGroup/Level_objects/vegetation/items.level.json' },
-  -- the fields' ripe grain and stubble (2026-11-19): the mod's own definitions and materials on stock textures (East
-  -- Coast USA's seeded grass tinted ripe gold, the game's unused t_cut_wheat straw); no new shapes
-  crops = { materials = '/art/beamngEarth/groundcover/crops.materials.json',
-            items = '/art/beamngEarth/groundcover/crops.items.json' },
+  -- the mod's own definitions and materials on stock textures no level uses (2026-11-19; no new shapes): the fields'
+  -- ripe grain (East Coast USA's seeded grass tinted ripe gold) and stubble (t_cut_wheat), lavender (t_lavender), the
+  -- grey sagebrush-like bushes (Utah's old Greybush atlas), bare dry bushes (dry_bush_branch), the lush undergrowth
+  -- atlas (lush_vegetation: ivy, ferns, a twig, a big leaf) and the climbing vine patch (lush_vegetation_bb)
+  own = { materials = '/art/beamngEarth/groundcover/plants.materials.json',
+          items = '/art/beamngEarth/groundcover/plants.items.json' },
   island = { materials = SI .. 'art/shapes/groundcover/main.materials.json',
              items = SI .. 'main/MissionGroup/Level_objects/vegetation/items.level.json' },
 }
@@ -196,14 +198,14 @@ local DESERT_DRY = { [0] = { layer = DRY, p = 0.2 }, [1] = { layer = DRY, p = 1 
 local function fields(w)
   local out = {
     E('cropYoung', 'wcusa', 'mown_grass_close', CROP, 0.9, { months = w.young }),
-    E('cropRipe', 'crops', 'bngEarth_ripe_grain', CROP, w.ripeShare or 1.0, { months = w.ripe }),
-    E('stubble', 'crops', 'bngEarth_stubble', CROP, 0.7, { months = w.stubble }),
+    E('cropRipe', 'own', 'bngEarth_ripe_grain', CROP, w.ripeShare or 1.0, { months = w.ripe }),
+    E('stubble', 'own', 'bngEarth_stubble', CROP, 0.7, { months = w.stubble }),
   }
   if w.winter then out[#out + 1] = E('cropWinter', 'wcusa', 'mown_grass_close', CROP, 0.4, { months = w.winter }) end
   -- the lavender fields (server/surface.py LAVENDER: mapped crop=lavender): the game's unused t_lavender bushes (the
   -- mod's bngEarth_lavender) dense while in flower (June, July: the north's), Italy's low grey-green garrigue bushes
   -- the rest of the year, as cut lavender looks (objects only where a block has such a field)
-  out[#out + 1] = E('lavenderField', 'crops', 'bngEarth_lavender', LAVENDER, 1.5, { months = span(6, 7) })
+  out[#out + 1] = E('lavenderField', 'own', 'bngEarth_lavender', LAVENDER, 1.5, { months = span(6, 7) })
   out[#out + 1] = E('lavenderCut', 'italy', 'shrubs', LAVENDER, 0.02, { months = span(8, 5) })
   return out
 end
@@ -235,6 +237,9 @@ local function meadow(w)
       types = { [3] = { layer = DUSTY, p = 0.1 } } }),
     -- the spring flowers of the forest floor (East Coast USA's violet flowers)
     E('woodflowers', 'eca', 'Purple_flowers', FOREST, 0.03, { months = w.woodflowers }),
+    -- the lush undergrowth (ivy, fern fronds, ferns, twigs: not its big tropical leaf) and climbing vines in summer
+    E('undergrowth', 'own', 'bngEarth_lush', FOREST, 0.4, { types = { [5] = { p = 0 } } }),
+    E('vines', 'own', 'bngEarth_vines', FOREST, 0.3, { months = w.nettles }),
     E('shrubs', 'wcusa', 'shrubs_near', DUSTY, 0.15),
     E('weeds', 'att', 'weed1', DUSTY, 0.03, { months = w.nettles }),
   }, wetland(0.05, 0.15, 0.01), fields(w.fields))
@@ -262,6 +267,8 @@ M.PROFILES = {
     E('lawn', 'wcusa', 'mown_grass_close', LAWN, 0.7),
     E('woodflowers', 'eca', 'Purple_flowers', FOREST, 0.03, { months = span(3, 5) }),
     E('nettles', 'industrial', 'Nettles_01', FOREST, 0.05, { months = span(4, 10) }),
+    E('undergrowth', 'own', 'bngEarth_lush', FOREST, 0.5, { types = { [4] = { p = 0 } } }),
+    E('vines', 'own', 'bngEarth_vines', FOREST, 0.5, { months = span(4, 11) }),
     E('shrubs', 'wcusa', 'shrubs_near', DUSTY, 0.15),
   }, wetland(0.06, 0.15, 0.01), fields({ young = span(3, 4), ripe = span(5, 6), stubble = span(7, 8) })),
   -- Csa, Csb, Csc: green from the autumn rains to May, flowered in spring, dry from June to September; the scrub
@@ -282,7 +289,7 @@ M.PROFILES = {
       types = { [0] = { layer = FOREST, p = 0.5 }, [2] = { layer = DUSTY, p = 0.5 } } }),
     E('garrigue', 'italy', 'shrubs', DUSTY, 0.04),
     -- wild lavender in the garrigue in flower (the game's unused t_lavender: the mod's bngEarth_lavender)
-    E('lavender', 'crops', 'bngEarth_lavender', DUSTY, 0.4, { months = span(6, 7) }),
+    E('lavender', 'own', 'bngEarth_lavender', DUSTY, 0.4, { months = span(6, 7) }),
     -- irrigated town lawns
     E('lawn', 'wcusa', 'mown_grass_close', LAWN, 0.6),
   }, wetland(0.05, 0.15, 0.01), fields({ young = span(12, 3), ripe = span(4, 5), stubble = span(6, 8), ripeShare = 0.6 })),
@@ -300,6 +307,10 @@ M.PROFILES = {
     E('shrubs', 'wcusa', 'shrubs_near', DUSTY, 0.1),
     -- Utah's dry plants, grey bushes and white flowers (3D)
     E('plants', 'utah', 'plants', DUSTY, 0.02),
+    -- sagebrush (the grey bushes) on the scrub and the arid grassland, a few bare dry bushes
+    E('sagebrush', 'own', 'bngEarth_greybush', DUSTY, 0.4, { types = { [0] = { layer = DRY, p = 1 }, [3] = { layer = DRY, p = 1 },
+      [6] = { layer = DRY, p = 0.7 } } }),
+    E('drybush', 'own', 'bngEarth_drybranch', DUSTY, 0.2),
     E('lawn', 'wcusa', 'mown_grass_dry', LAWN, 0.05),
   }, wetland(0.04, 0.12, 0.005), fields({ young = span(4, 5), ripe = span(6, 6), stubble = span(7, 9) })),
   -- BWh: sparse dry tussocks and Johnson Valley's dry bushes and branches, Small Island's yuccas
@@ -311,6 +322,7 @@ M.PROFILES = {
     E('branches', 'jv', 'dirt_plant_dry', DUSTY, 0.03, { fields = { radius = 100, dissolveRadius = 70 } }),
     E('plants', 'utah', 'plants', DUSTY, 0.02),
     E('yucca', 'island', 'spanish_bayonet', DUSTY, 0.05),
+    E('drybush', 'own', 'bngEarth_drybranch', DUSTY, 0.4, { types = { [1] = { layer = DRY, p = 1 }, [2] = { layer = DRY, p = 1 } } }),
     E('lawn', 'wcusa', 'mown_grass_dry', LAWN, 0.04),
   }, wetland(0.03, 0.1, 0)),
   -- BWk: the cold deserts (the Great Basin, Central Asia): Utah's and Johnson Valley's
@@ -320,6 +332,9 @@ M.PROFILES = {
     E('bushes', 'jv', 'dirt_grass_dry', DUSTY, 0.02, { types = { [0] = { layer = DRY, p = 0.3 } },
       fields = { radius = 100, dissolveRadius = 70 } }),
     E('plants', 'utah', 'plants', DUSTY, 0.03),
+    E('sagebrush', 'own', 'bngEarth_greybush', DUSTY, 0.6, { types = { [0] = { layer = DRY, p = 1 }, [3] = { layer = DRY, p = 1 },
+      [6] = { layer = DRY, p = 0.7 } } }),
+    E('drybush', 'own', 'bngEarth_drybranch', DUSTY, 0.3),
     E('lawn', 'wcusa', 'mown_grass_dry', LAWN, 0.04),
   }, wetland(0.03, 0.1, 0)),
   -- Af, Am: Jungle Rock Island's undergrowth on the forest floor, its tall grass on grassland and scrub
@@ -330,6 +345,8 @@ M.PROFILES = {
     -- (Tall_grasses2: its types 1-3 active; 3 to the scrub)
     E('tall', 'jri', 'Tall_grasses2', G, 0.05, { types = { [3] = { layer = DUSTY, p = 0.6 } } }),
     E('undergrowth', 'jri', 'forest_plants', FOREST, 0.05),
+    E('lush', 'own', 'bngEarth_lush', FOREST, 0.5, { types = { [4] = { p = 0 } } }),
+    E('vines', 'own', 'bngEarth_vines', FOREST, 0.6),
     E('shrubs', 'wcusa', 'shrubs_near', DUSTY, 0.1),
     E('lawn', 'wcusa', 'mown_grass_close', LAWN, 0.7),
   }, wetland(0.05, 0.15, 0.03)),
@@ -344,6 +361,7 @@ M.PROFILES = {
     E('undergrowth', 'jri', 'forest_plants', FOREST, 0.02),
     E('shrubs', 'wcusa', 'shrubs_near', DUSTY, 0.12),
     E('bush', 'att', 'Bush', DUSTY, 0.015),
+    E('drybush', 'own', 'bngEarth_drybranch', DUSTY, 0.3, { months = span(12, 4) }),
     E('lawn', 'wcusa', 'mown_grass_close', LAWN, 0.5),
   }, wetland(0.05, 0.15, 0.01)),
   -- Dfc, Dfd, Dsc, Dsd, Dwc, Dwd: the taiga's short summer

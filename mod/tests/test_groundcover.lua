@@ -55,10 +55,14 @@ local STOCK = {
     Dry_grass_clump = { maxElements = 300000, types = { 0, 1, 2, 3, 4, 5, 6, 7 } },
     plants = { maxElements = 100000, types = { 0, 1, 2, 3, 4, 5, 6 } },
   },
-  crops = {     -- (the mod's own: art/beamngEarth/groundcover/crops.items.json)
+  own = {     -- (the mod's own: art/beamngEarth/groundcover/plants.items.json)
     bngEarth_ripe_grain = { maxElements = 48000, types = { 0 } },
     bngEarth_stubble = { maxElements = 60000, types = { 0, 1, 2, 3 } },
     bngEarth_lavender = { maxElements = 20000, types = { 0, 1 } },
+    bngEarth_greybush = { maxElements = 20000, types = { 0, 1, 2, 3, 4, 5, 6, 7 } },
+    bngEarth_drybranch = { maxElements = 12000, types = { 0, 1, 2, 3, 4 } },
+    bngEarth_lush = { maxElements = 30000, types = { 0, 1, 2, 3, 4, 5 } },
+    bngEarth_vines = { maxElements = 15000, types = { 0 } },
   },
   wcusa = {
     grass_dry_1 = { maxElements = 256000, types = { 0, 1, 2, 3, 4, 5, 6, 7 } },

@@ -82,5 +82,110 @@
     "subSurface": true,
     "subSurfaceIntensity": 1,
     "version": 1.5
+  },
+  "bngEarth_greybush": {
+    "name": "bngEarth_greybush",
+    "mapTo": "bngEarth_greybush",
+    "class": "Material",
+    "Stages": [
+      {
+        "colorMap": "/assets/materials/foliage/bush/utah_bush_vegetation/Greybush_d.dds",
+        "diffuseColor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "roughnessFactor": 0.85,
+        "normalMap": "/assets/materials/foliage/bush/utah_bush_vegetation/Greybush_n.dds"
+      },
+      {},
+      {},
+      {}
+    ],
+    "alphaRef": 80,
+    "alphaTest": true,
+    "annotation": "NATURE",
+    "doubleSided": true,
+    "translucentBlendOp": "None"
+  },
+  "bngEarth_drybranch": {
+    "name": "bngEarth_drybranch",
+    "mapTo": "bngEarth_drybranch",
+    "class": "Material",
+    "Stages": [
+      {
+        "colorMap": "/assets/materials/foliage/bush/desert_bush_branch/dry_bush_branch_d.color.dds",
+        "diffuseColor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "roughnessFactor": 0.85,
+        "normalMap": "/assets/materials/foliage/bush/desert_bush_branch/dry_bush_branch_n.normal.dds",
+        "specularMap": "/assets/materials/foliage/bush/desert_bush_branch/dry_bush_branch_s.color.dds"
+      },
+      {},
+      {},
+      {}
+    ],
+    "alphaRef": 80,
+    "alphaTest": true,
+    "annotation": "NATURE",
+    "doubleSided": true,
+    "translucentBlendOp": "None"
+  },
+  "bngEarth_lush": {
+    "name": "bngEarth_lush",
+    "mapTo": "bngEarth_lush",
+    "class": "Material",
+    "Stages": [
+      {
+        "colorMap": "/assets/materials/foliage/groundcover/lush_vegetation/lush_vegetation_d.dds",
+        "diffuseColor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "roughnessFactor": 0.85,
+        "normalMap": "/assets/materials/foliage/groundcover/lush_vegetation/lush_vegetation_n.dds",
+        "specularMap": "/assets/materials/foliage/groundcover/lush_vegetation/lush_vegetation_s.dds"
+      },
+      {},
+      {},
+      {}
+    ],
+    "alphaRef": 80,
+    "alphaTest": true,
+    "annotation": "NATURE",
+    "doubleSided": true,
+    "translucentBlendOp": "None"
+  },
+  "bngEarth_vines": {
+    "name": "bngEarth_vines",
+    "mapTo": "bngEarth_vines",
+    "class": "Material",
+    "Stages": [
+      {
+        "colorMap": "/assets/materials/foliage/groundcover/lush_vegetation_bb/lush_vegetation_bb_d.dds",
+        "diffuseColor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "roughnessFactor": 0.85
+      },
+      {},
+      {},
+      {}
+    ],
+    "alphaRef": 80,
+    "alphaTest": true,
+    "annotation": "NATURE",
+    "doubleSided": true,
+    "translucentBlendOp": "None"
   }
 }
