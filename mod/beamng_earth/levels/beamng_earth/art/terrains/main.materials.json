@@ -1133,6 +1133,87 @@
     "heightMacroTex": "/levels/beamng_earth/art/terrains/bngEarth_flat_h_1024.png",
     "heightMacroTexSize": 16
   },
+  "bngEarthGroundLavender": {
+    "name": "bngEarthGroundLavender",
+    "internalName": "bngEarthGroundLavender",
+    "class": "TerrainMaterial",
+    "persistentId": "3b0f6f0e-8f5e-4a51-9a59-0b8e2f6a1c75",
+    "groundmodelName": "DIRT",
+    "detailDistances": [
+      0,
+      0,
+      50,
+      80
+    ],
+    "macroDistances": [
+      0,
+      0,
+      100,
+      200
+    ],
+    "macroDistAtten": [
+      0,
+      1
+    ],
+    "baseColorDetailStrength": [
+      0.25,
+      0.08
+    ],
+    "normalDetailStrength": [
+      1,
+      0.3
+    ],
+    "roughnessDetailStrength": [
+      1,
+      0.4
+    ],
+    "aoDetailStrength": [
+      0.8,
+      0.2
+    ],
+    "baseColorMacroStrength": [
+      0.12,
+      0.08
+    ],
+    "normalMacroStrength": [
+      0.5,
+      0.3
+    ],
+    "roughnessMacroStrength": [
+      0,
+      0.8
+    ],
+    "baseColorBaseTex": "/levels/beamng_earth/art/terrains/bngEarth_base_b.png",
+    "baseColorBaseTexSize": 256,
+    "baseColorDetailTex": "/temp/beamngEarth/terraintex/bne_rc_soil__dirt_crumbly__t_dirt_crumbly_b.png",
+    "baseColorDetailTexSize": 2,
+    "baseColorMacroTex": "/temp/beamngEarth/terraintex/bne_rc_soil__macro_holes__t_macro_holes_b.png",
+    "baseColorMacroTexSize": 16,
+    "normalBaseTex": "/levels/beamng_earth/art/terrains/bngEarth_base_nm.png",
+    "normalBaseTexSize": 256,
+    "normalDetailTex": "/assets/materials/terrain/soil/dirt_crumbly/t_dirt_crumbly_nm.png",
+    "normalDetailTexSize": 2,
+    "normalMacroTex": "/assets/materials/terrain/soil/macro_holes/t_macro_holes_nm.png",
+    "normalMacroTexSize": 16,
+    "roughnessBaseTex": "/levels/beamng_earth/art/terrains/bngEarth_base_r.png",
+    "roughnessBaseTexSize": 256,
+    "roughnessDetailTex": "/assets/materials/terrain/soil/dirt_crumbly/t_dirt_crumbly_r.png",
+    "roughnessDetailTexSize": 2,
+    "roughnessMacroTex": "/assets/materials/terrain/soil/macro_holes/t_macro_holes_r.png",
+    "roughnessMacroTexSize": 16,
+    "aoBaseTex": "/levels/beamng_earth/art/terrains/bngEarth_base_ao.png",
+    "aoBaseTexSize": 256,
+    "aoDetailTex": "/assets/materials/terrain/soil/dirt_crumbly/t_dirt_crumbly_ao.png",
+    "aoDetailTexSize": 2,
+    "aoMacroTex": "/assets/materials/terrain/soil/macro_holes/t_macro_holes_ao.png",
+    "aoMacroTexSize": 16,
+    "heightBaseTex": "/levels/beamng_earth/art/terrains/bngEarth_base_h.png",
+    "heightBaseTexSize": 256,
+    "heightDetailTex": "/levels/beamng_earth/art/terrains/bngEarth_flat_h_1024.png",
+    "heightDetailTexSize": 2,
+    "heightMacroTex": "/levels/beamng_earth/art/terrains/bngEarth_flat_h_1024.png",
+    "heightMacroTexSize": 16
+  },
   "bngEarthGroundGolfRough": {
     "name": "bngEarthGroundGolfRough",
     "internalName": "bngEarthGroundGolfRough",

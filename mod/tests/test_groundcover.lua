@@ -58,6 +58,7 @@ local STOCK = {
   crops = {     -- (the mod's own: art/beamngEarth/groundcover/crops.items.json)
     bngEarth_ripe_grain = { maxElements = 48000, types = { 0 } },
     bngEarth_stubble = { maxElements = 60000, types = { 0, 1, 2, 3 } },
+    bngEarth_lavender = { maxElements = 20000, types = { 0, 1 } },
   },
   wcusa = {
     grass_dry_1 = { maxElements = 256000, types = { 0, 1, 2, 3, 4, 5, 6, 7 } },
@@ -147,14 +148,23 @@ for name, p in pairs(gc.PROFILES) do
     end
   end
   local worst, most = 0, 0
-  for d = 1, 365, 2 do
-    local pl = gc.plan(name, d)
-    local b = gc.budget(pl, STOCK)
-    worst, most = math.max(worst, b), math.max(most, #pl)
-    if b > generic then T.check(false, string.format('%s day %d: %d elements over the generic %d', name, d, b, generic)) end
-    if #pl > 16 then T.check(false, name .. ' day ' .. d .. ': ' .. #pl .. ' objects (at most 16; the wetland and beach ones only where a block has those layers)') end
+  -- (the rare layers' objects are made only in the blocks that list those layers: counted apart, within a fifth)
+  local function rare(e)
+    for l in pairs(gc.layersOf(e)) do if not gc.RARE[l] then return false end end
+    return true
   end
-  report[#report + 1] = string.format('  %-13s at most %6d elements (%3.0f%% of generic), %2d objects', name, worst,
+  for d = 1, 365, 2 do
+    local common, few = {}, {}
+    for _, e in ipairs(gc.plan(name, d)) do
+      if rare(e) then few[#few + 1] = e else common[#common + 1] = e end
+    end
+    local b, br = gc.budget(common, STOCK), gc.budget(few, STOCK)
+    worst, most = math.max(worst, b), math.max(most, #common)
+    if b > generic then T.check(false, string.format('%s day %d: %d elements over the generic %d', name, d, b, generic)) end
+    if br > generic * 0.25 then T.check(false, string.format('%s day %d: rare layers %d elements', name, d, br)) end
+    if #common > 15 then T.check(false, name .. ' day ' .. d .. ': ' .. #common .. ' objects (at most 15)') end
+  end
+  report[#report + 1] = string.format('  %-13s at most %6d elements (%3.0f%% of generic), %2d objects (common layers)', name, worst,
     100 * worst / generic, most)
 end
 table.sort(report)
@@ -168,6 +178,8 @@ T.check(has('temperate', 5, 'buttercups') and not has('temperate', 9, 'buttercup
   and not has('temperate', 1, 'flowers'), 'temperate flowers in season')
 T.check(has('temperate', 4, 'cropYoung') and has('temperate', 7, 'cropRipe') and has('temperate', 9, 'stubble')
   and not has('temperate', 1, 'cropYoung') and not has('temperate', 1, 'stubble'), 'fields: green, ripe, stubble, bare')
+T.check(has('mediterranean', 7, 'lavender') and not has('mediterranean', 10, 'lavender') and has('temperate', 7, 'lavenderField')
+  and has('temperate', 10, 'lavenderCut') and not has('temperate', 10, 'lavenderField'), 'lavender in flower in summer')
 T.check(has('mediterranean', 5, 'cropRipe') and has('mediterranean', 7, 'stubble') and not has('tropical', 7, 'stubble'),
   "the Mediterranean's earlier harvest; no fields in the tropics' profile")
 T.check(has('mediterranean', 4, 'flowers') and not has('mediterranean', 7, 'flowers') and has('mediterranean', 7, 'dry')

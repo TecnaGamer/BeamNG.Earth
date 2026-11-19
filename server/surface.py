@@ -17,6 +17,7 @@ the same every time.
 """
 import hashlib
 from runtimeprofiler import step as profile_step
+import json
 import logging
 import math
 from collections import OrderedDict
@@ -84,10 +85,14 @@ MATERIALS = (
     # mud layer and no 3D plants. Its own layer carries the stock cattails and reeds (groundcover.lua); the tyres' MUD
     # as before. Mangroves (95) and the water beds (80) keep the mud layer.
     ("bngEarthGroundWet", "MUD"),
+    # Lavender fields (2026-11-19, the user: "add the lavender"): farmland whose OSM tags say crop=lavender (Provence's
+    # Valensole, Norfolk's, Tasmania's) its own layer, the crop soil's look, for the mod's lavender ground cover; the
+    # tyres' DIRT as crop soil's. Painted only there: no block elsewhere lists it.
+    ("bngEarthGroundLavender", "DIRT"),
 )
 ASPHALT, GRASS, DUSTY, LOOSE, ROCK, SNOW, MUD, COBBLE, LAWN, \
     GOLF_ROUGH, GOLF_FAIRWAY, GOLF_GREEN, GOLF_BUNKER, PAVERS, BRICK, DIRT, \
-    FOREST, DRYGRASS, CROP, SAND, WET = range(len(MATERIALS))
+    FOREST, DRYGRASS, CROP, SAND, WET, LAVENDER = range(len(MATERIALS))
 # WorldCover class -> material (§5.4 of the world-data research). Built-up land is the plain dirt layer
 # (2026-10-14): its yards, lawns and lots took the asphalt layer's grey detail and macro textures, which
 # washed whole towns pale grey in the street photos (Moab, Frederick); the roads are painted asphalt anyway
@@ -1055,8 +1060,9 @@ FARM_ROAD_CLEAR_M = 4.0     # furrows stop this far short of a dirt road's edge
 
 
 def paint_fields(idx, lat, lon, feats_list):
-    """idx with farmland polygons drawn as crop soil (the whole field: the furrows are only in the photo). Pure."""
-    return _paint(idx, lat, lon, feats_list, _farmland, CROP)
+    """idx with farmland polygons drawn as crop soil (the whole field: the furrows are only in the photo), the lavender
+    fields (_lavender) as the lavender layer. Pure."""
+    return _paint(_paint(idx, lat, lon, feats_list, _farmland, CROP), lat, lon, feats_list, _lavender, LAVENDER)
 
 
 def paint_grass(idx, lat, lon, feats_list):
@@ -1368,6 +1374,29 @@ def _farmland(feats):
     return None if cls is None else np.isin(np.asarray(cls).astype(str), list(FARM_CLASSES))
 
 
+LAVENDER_CLASSES = {"farmland", "orchard", "plant_nursery", "meadow", "farmyard"}
+
+
+def _lavender(feats):
+    """The land use polygons whose OSM tags name a lavender (or lavandin) crop: crop=lavender, produce=lavender."""
+    cls, tags = feats.attrs.get("class"), feats.attrs.get("tags")
+    if cls is None or tags is None:
+        return None
+    out = np.zeros(len(cls), bool)
+    for i, t in enumerate(tags):
+        if not t or "lavand" not in str(t).lower() and "lavend" not in str(t).lower():
+            continue
+        if str(cls[i]) not in LAVENDER_CLASSES:
+            continue
+        try:
+            d = json.loads(t) if isinstance(t, str) else dict(t)
+        except (ValueError, TypeError):
+            continue
+        val = " ".join(str(d.get(k, "")) for k in ("crop", "produce", "trees")).lower()
+        out[i] = "lavend" in val or "lavand" in val
+    return out
+
+
 def lots_mask(frame, x0, y0, size, px, feats_list):
     """The parking lots' coverage (px x px uint8, 255 inside) of a tile photo's square, or None."""
     return pads_mask(frame, x0, y0, size, px, lot_pads(feats_list))
@@ -1550,7 +1579,7 @@ LAYER_CAP = 9
 # (dropped, kept): golf greens and fairways are the same grass at another grain, fairways mown lawns, a rough long
 # grass; brick and setts both stone paving; pavers the asphalt's ground model
 LOOKALIKE = ((GOLF_GREEN, GOLF_FAIRWAY), (BRICK, COBBLE), (GOLF_FAIRWAY, LAWN), (GOLF_ROUGH, GRASS), (PAVERS, ASPHALT),
-             (DRYGRASS, GRASS), (CROP, DIRT), (FOREST, GRASS), (WET, MUD))
+             (DRYGRASS, GRASS), (CROP, DIRT), (FOREST, GRASS), (WET, MUD), (LAVENDER, CROP))
 
 
 def core_radius(square):

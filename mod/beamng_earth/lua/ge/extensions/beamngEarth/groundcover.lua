@@ -103,8 +103,12 @@ local function list(v) return type(v) == 'table' and v or { v } end
 -- our layers (server/surface.py MATERIALS)
 local G, LAWN, DUSTY, FOREST = 'bngEarthGroundGrass', 'bngEarthGroundLawn', 'bngEarthGroundDusty', 'bngEarthGroundForest'
 local DRY, WET, SAND = 'bngEarthGroundDryGrass', 'bngEarthGroundWet', 'bngEarthGroundSand'
-local CROP = 'bngEarthGroundCrop'
-M.LAYERS = { grass = G, lawn = LAWN, dusty = DUSTY, forest = FOREST, dry = DRY, wet = WET, sand = SAND, crop = CROP }
+local CROP, LAVENDER = 'bngEarthGroundCrop', 'bngEarthGroundLavender'
+-- the layers only a few blocks list (wetland, vegetated beach sand, lavender fields): their objects are made only there
+-- (M.ensure), so the budget of the common layers is the one every block pays (test_groundcover)
+M.RARE = { [WET] = true, [SAND] = true, [LAVENDER] = true }
+M.LAYERS = { grass = G, lawn = LAWN, dusty = DUSTY, forest = FOREST, dry = DRY, wet = WET, sand = SAND, crop = CROP,
+  lavender = LAVENDER }
 
 -- stock GroundCover (source, src name) -> our layer, element share; `name` (default src) names our
 -- object, for a stock definition used on two layers; `fields` override stock fields. The shares keep
@@ -196,6 +200,11 @@ local function fields(w)
     E('stubble', 'crops', 'bngEarth_stubble', CROP, 0.7, { months = w.stubble }),
   }
   if w.winter then out[#out + 1] = E('cropWinter', 'wcusa', 'mown_grass_close', CROP, 0.4, { months = w.winter }) end
+  -- the lavender fields (server/surface.py LAVENDER: mapped crop=lavender): the game's unused t_lavender bushes (the
+  -- mod's bngEarth_lavender) dense while in flower (June, July: the north's), Italy's low grey-green garrigue bushes
+  -- the rest of the year, as cut lavender looks (objects only where a block has such a field)
+  out[#out + 1] = E('lavenderField', 'crops', 'bngEarth_lavender', LAVENDER, 1.5, { months = span(6, 7) })
+  out[#out + 1] = E('lavenderCut', 'italy', 'shrubs', LAVENDER, 0.02, { months = span(8, 5) })
   return out
 end
 local function join(...)
@@ -272,6 +281,8 @@ M.PROFILES = {
     E('herb', 'italy', 'shrub_grass_02', G, 1.0, { months = span(5, 11),
       types = { [0] = { layer = FOREST, p = 0.5 }, [2] = { layer = DUSTY, p = 0.5 } } }),
     E('garrigue', 'italy', 'shrubs', DUSTY, 0.04),
+    -- wild lavender in the garrigue in flower (the game's unused t_lavender: the mod's bngEarth_lavender)
+    E('lavender', 'crops', 'bngEarth_lavender', DUSTY, 0.4, { months = span(6, 7) }),
     -- irrigated town lawns
     E('lawn', 'wcusa', 'mown_grass_close', LAWN, 0.6),
   }, wetland(0.05, 0.15, 0.01), fields({ young = span(12, 3), ripe = span(4, 5), stubble = span(6, 8), ripeShare = 0.6 })),

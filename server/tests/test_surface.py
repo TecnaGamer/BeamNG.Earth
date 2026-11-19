@@ -37,6 +37,19 @@ class ClassifyTest(unittest.TestCase):
         self.assertEqual(idx.tolist(), [[sf.DRYGRASS, sf.DRYGRASS], [sf.GRASS, sf.GRASS]])
         self.assertEqual(sf.classify(classes, np.zeros(classes.shape), 2.0).tolist(), [[sf.GRASS] * 2] * 2)
 
+    def test_lavender_fields_by_their_tags(self):
+        """Farmland tagged crop=lavender (or lavandin) is the lavender layer; other farmland, a lavender-named shop's
+        meadow without a crop tag, a park: not (2026-11-19)."""
+        import json as js
+        feats = type("F", (), {"attrs": {
+            "class": np.array(["farmland", "farmland", "meadow", "park", "orchard"]),
+            "tags": np.array([js.dumps({"crop": "lavender"}), js.dumps({"crop": "wheat"}),
+                              js.dumps({"name": "Lavender meadow"}), js.dumps({"crop": "lavender"}),
+                              js.dumps({"crop": "lavandin;olives"})])}})()
+        self.assertEqual(sf._lavender(feats).tolist(), [True, False, False, False, True])
+        self.assertEqual(sf.MATERIALS[sf.LAVENDER], ("bngEarthGroundLavender", "DIRT"))
+        self.assertIn((sf.LAVENDER, sf.CROP), sf.LOOKALIKE)
+
     def test_new_layers_fold_like_their_kin(self):
         """Forest floor, dry grass, crop soil and sand fold like the land cover they replaced; the look-alike merges
         keep one ground model per pair."""
