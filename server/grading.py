@@ -6262,7 +6262,7 @@ class _Planner:
         # uncached at the deck end itself: _end_lift's memory is per half metre of whoever asked first)
         h = np.full(2 * len(keys), np.nan)
         need = np.full(2 * len(keys), np.nan)
-        others = {}
+        beside = None
         for k_ in group:
             kk, e = keys[k_ // 2], k_ % 2
             ln, cls = parts[kk][0], parts[kk][2]
@@ -6272,7 +6272,8 @@ class _Planner:
             z = max(zg, self._end_filled(ln, bool(e), past=True)) if SEAM_FILLED_ON else zg
             h[k_] = z
             got = self._end_lift_calc(np.asarray(p, np.float64))
-            others[k_] = list(got[1]) if got is not None else []
+            if k_ == me and got is not None:
+                beside = list(got[1])       # (the caps its own lift is laid under)
             never = cls in APPROACH_SKIP
             if got is None or (never and not got[3] and not (len(got) > 5 and got[5])):
                 continue
@@ -6289,7 +6290,44 @@ class _Planner:
             log.debug("grading: structure end %s: status %s, h %s", np.round(e0, 1), None if me is None else
                       int(st[me]), np.round(h[group], 3).tolist())
             return None
-        return float(hgt[me]), others.get(me, []), float(h[me])
+        if beside is None:
+            # (no lift of its own, so none of its caps: a twin's need or the group's mean can still raise it, and its fill
+            # must keep clear of the roads beside it all the same (Codex review): found from the map round it)
+            own, decks = keys[me // 2], {keys[k_ // 2] for k_ in group}
+            fast_ = [(parts[kk][0], parts[kk][1]) for kk in keys
+                     if FAST_DECK_GROUND and kk not in decks and parts[kk][2] in APPROACH_SKIP
+                     and parts[own][2] not in APPROACH_SKIP]
+            beside = self._struct_beside(end_pt(own, me % 2), [end_pt(keys[k_ // 2], k_ % 2) for k_ in group],
+                                         [parts[kk][0] for kk in sorted(decks)], fast_)
+        return float(hgt[me]), beside, float(h[me])
+
+    def _struct_beside(self, p, ends, spans, decks=()):
+        """[(line, half width)] the fill of a shared raise at the structure end p keeps clear of, for an end whose own
+        lift gave no caps (_struct_end_calc): the ground roads within a seam's reach of p (STRUCT_SEAM_RUN_M along the
+        road and the fill slope of APPROACH_MAX_LIFT out from it, which bound any move _pin_struct_ends makes), but those
+        leading onto one of the end group's ends (ends: the approaches that rise with it, the plan's own among them) and
+        those the structure's decks (spans) cross (its abutment stands between), as _end_lift_raw's; then decks, the
+        fast decks beside it (FAST_DECK_GROUND). A pure function of the map round p."""
+        reach = STRUCT_SEAM_RUN_M[1] + SLOPE_RUN * APPROACH_MAX_LIFT + 40.0
+        p = np.asarray(p, np.float64)[:2]
+        la, lo, _ = self.frame.enu_to_geodetic(np.array([p[0]]), np.array([p[1]]), 0.0)
+        la, lo = np.asarray(la, np.float64), np.asarray(lo, np.float64)
+        pad = reach / 111320.0
+        keys = sorted(set(mapcells.cells_for_points(la, lo, pad, pad / max(0.05, dmath.cos(math.radians(float(la[0])))))),
+                      key=str)
+        cs = [self._cell_enu(k) for k in keys]
+        lines, halves, lo_l, hi_l, first, last = self._ground_table(keys, cs)
+        out = []
+        if lines:
+            E = np.asarray(ends, np.float64).reshape(-1, 2)
+
+            def touches(q):
+                return float(dnp.hypot(E[:, 0] - q[0], E[:, 1] - q[1]).min()) <= APPROACH_TOUCH_M
+            near = np.flatnonzero(~((hi_l < p - reach).any(1) | (lo_l > p + reach).any(1)))
+            cand = [int(i) for i in near if not touches(first[i]) and not touches(last[i])]
+            crossed = roadsmod._crossings_by(list(spans), [lines[i] for i in cand]) if cand else []
+            out = [(lines[i], halves[i]) for i, cr in zip(cand, crossed) if not cr]
+        return out + list(decks)
 
     @staticmethod
     def _fill_clear(xy, add, half, others):

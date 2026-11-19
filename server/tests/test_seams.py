@@ -214,7 +214,7 @@ class StructEndsTest(unittest.TestCase):
     common end (_struct_end: earthfast.structure_abutments), and every approach road ending there is brought to it
     (_pin_struct_ends)."""
 
-    def planner(self, zs, lift=None, cls="primary"):
+    def planner(self, zs, lift=None, cls="primary", roads_=()):
         import threading
         import geodesy
         g = object.__new__(grading._Planner)
@@ -228,7 +228,8 @@ class StructEndsTest(unittest.TestCase):
         g._cell_enu = lambda k, ground=True: {
             "ends": np.array([ln[i] for ln in lines for i in (0, -1)]), "end_of": [0, 0, 1, 1, 2, 2],
             "bridges": lines, "bridge_ids": ["a", "b", "far"], "bridge_parts": [0, 0, 0],
-            "bridge_cls": [cls] * 3, "bridge_levels": [1.0] * 3, "bridge_half": [4.0] * 3}
+            "bridge_cls": [cls] * 3, "bridge_levels": [1.0] * 3, "bridge_half": [4.0] * 3,
+            "ground": [(np.asarray(ln, np.float64), float(h), "primary") for ln, h in roads_]}
         ends = {(0.0, 0.0): zs[0], (60.0, 0.0): zs[1], (62.0, 9.0): zs[2], (2.0, 9.0): zs[3]}
 
         def elev(la, lo):
@@ -303,6 +304,34 @@ class StructEndsTest(unittest.TestCase):
         ra = grading.Plan(np.c_[-100.0 + s, np.zeros(len(s))], np.full(len(s), 10.0), 3.0, abut=(False, True))
         ra.rid, ra.max_wall = 1, None
         self.assertFalse(g._pin_struct_ends([("ra", ra)], [spec("primary")]))
+
+    # (the ground roads round the first ends: both approaches, which rise with them, and a street the decks span 5 m in)
+    APPROACHES = [([[-100.0, 0.0], [0.0, 0.0]], 3.0), ([[-98.0, 9.0], [2.0, 9.0]], 3.0),
+                  ([[5.0, -40.0], [5.0, 40.0]], 4.0)]
+
+    def unlifted_raise(self, ground):
+        """a's approach raised 0.3 m to its twin's height at the first ends (shared 10.3), with no lift of its own:
+        _end_lift_calc None, so no caps from it."""
+        g = self.planner((10.0, 11.0, 11.6, 10.6), roads_=ground)
+        s = np.arange(0.0, 101.0, 4.0)
+        ra = grading.Plan(np.c_[-100.0 + s, np.zeros(len(s))], np.full(len(s), 10.0), 3.0, abut=(False, True))
+        ra.rid, ra.max_wall = 1, None
+        plans = [("ra", ra)]
+        return g._pin_struct_ends(plans, [spec("primary")]), np.asarray(plans[0][1].z)
+
+    def test_an_unlifted_end_keeps_clear_of_a_road_beside(self):
+        """An end with no lift of its own raised to its group's height beside a through road inside the raise's fill
+        keeps its height (Codex review: no lift gave no caps, and its fill was laid onto the road)."""
+        beside = ([[-100.0, -6.5], [-10.0, -6.5]], 3.0)      # (6.5 m off, its edge 0.5 m from the approach's)
+        done, z = self.unlifted_raise(self.APPROACHES + [beside])
+        self.assertFalse(done)
+        self.assertAlmostEqual(float(z[-1]), 10.0, places=6)
+
+    def test_an_unlifted_end_with_no_road_beside_is_raised(self):
+        done, z = self.unlifted_raise(self.APPROACHES + [([[-100.0, -30.0], [-10.0, -30.0]], 3.0)])   # (30 m off)
+        self.assertTrue(done)
+        self.assertAlmostEqual(float(z[-1]), 10.3, places=6)
+        self.assertAlmostEqual(float(z[0]), 10.0, places=6)
 
     def test_a_short_approach_is_left(self):
         g = self.planner((10.0, 11.0, 11.6, 10.3))
