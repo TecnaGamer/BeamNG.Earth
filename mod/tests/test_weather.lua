@@ -347,6 +347,7 @@ check(W.getMode() == 'real' and #toasts == 0 and env.hooks > 100, 'our own write
 -- the sun follows the deck (the rain message: low 100 %, still approaching): the level's 1.2 times
 -- the factor
 run(40)
+check(env.cirrusCov == 0 and env.cirrusDen == 0, 'clearing high cloud disables the cirrus pass exactly')
 check(sunB() >= 1.2 * W.sunDimFor(1) - 1e-6 and sunB() < 1.2 * (W.sunDimFor(1) + 0.1),
   'sun dimmed under the overcast deck: ' .. tostring(sunB()))
 local sunWrites = sun.applied

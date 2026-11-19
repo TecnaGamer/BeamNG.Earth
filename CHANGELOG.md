@@ -2,6 +2,11 @@
 
 What changed in each release of BeamNG.Earth, newest first.
 
+## Unreleased
+
+- Finish fading cirrus to zero when real weather reports no high cloud, so the renderer does not keep an invisible
+  cirrus layer active.
+
 ## 1.10.1 beta (2026-11-15)
 
 > **Join the TGForever Discord, [discord.gg/tgf](https://discord.gg/tgf), to chat, get help, report bugs or help
