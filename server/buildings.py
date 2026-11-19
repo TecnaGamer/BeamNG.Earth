@@ -4338,14 +4338,15 @@ def way_lines(frame, road_layers, x0, y0, margin=ML_FAR_FROM_WAY_M + 20.0, size=
         bb = f.boxes(frame)
         near = np.flatnonzero((bb[:, 2] - x0 >= -margin) & (bb[:, 0] - x0 <= size + margin)
                               & (bb[:, 3] - y0 >= -margin) & (bb[:, 1] - y0 <= size + margin))
+        lls = []            # (the layer's lines converted in one call)
         for i in near.tolist():
             a = f.coord_off[f.ring_off[f.part_off[i]]]
             b = f.coord_off[f.ring_off[f.part_off[i + 1]]]
             ll = f.lonlat[a:b]
-            if len(ll) < 2:
-                continue
-            e, n = mapgeom.enu_xy(f, frame, ll)
-            out.append(np.stack([e - x0, n - y0], 1))
+            if len(ll) >= 2:
+                lls.append(ll)
+        for xy in (mapgeom.enu_rings(f, frame, lls) if lls else []):
+            out.append(np.stack([xy[:, 0] - x0, xy[:, 1] - y0], 1))
     return out
 
 
@@ -6771,6 +6772,7 @@ def near_rings(frame, tx, ty, md, margin=2.0, skip=frozenset()):
         if f is None or not len(f):
             continue
         bx = f.boxes(frame)
+        rings = []          # (the cell's outer rings converted in one call)
         for i in range(len(f)):
             fid = str(f.ids[i])
             if fid in seen or fid in skip:
@@ -6781,8 +6783,9 @@ def near_rings(frame, tx, ty, md, margin=2.0, skip=frozenset()):
             seen.add(fid)
             for part in f.parts(i):
                 if len(part) and len(part[0]) >= 3:
-                    e, n = mapgeom.enu_xy(f, frame, part[0])
-                    out.append(np.c_[e, n])
+                    rings.append(part[0])
+        if rings:
+            out += mapgeom.enu_rings(f, frame, rings)
     return out
 
 

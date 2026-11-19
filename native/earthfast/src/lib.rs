@@ -1229,6 +1229,97 @@ fn ecef_to_frame<'py>(py: Python<'py>, xyz: PyReadonlyArray2<'py, f64>, origin: 
     Ok(arr.into_pyarray(py))
 }
 
+/// The lon/lat points (columns 0 and 1) of rings [(k, >= 2)] copied out of NumPy into one list, with each ring's
+/// start (len + 1 offsets). The copy is bounded by the arrays given.
+fn gather_rings(rings: &[PyReadonlyArray2<'_, f64>], what: &str) -> PyResult<(Vec<f64>, Vec<usize>)> {
+    let views: Vec<_> = rings.iter().map(|r| r.as_array()).collect();
+    if views.iter().any(|v| v.ncols() < 2) {
+        return Err(pyo3::exceptions::PyValueError::new_err(format!("{what}: rings (k, >= 2) of lon, lat")));
+    }
+    let total: usize = views.iter().map(|v| v.nrows()).sum();
+    let mut ll = Vec::with_capacity(total * 2);
+    let mut off = Vec::with_capacity(views.len() + 1);
+    off.push(0usize);
+    for v in &views {
+        for i in 0..v.nrows() {
+            ll.push(v[[i, 0]]);
+            ll.push(v[[i, 1]]);
+        }
+        off.push(ll.len() / 2);
+    }
+    Ok((ll, off))
+}
+
+/// mapgeom.enu_rings: each lon/lat ring [(k, >= 2)] as (k, 2) east / north in the frame (origin, rot), height 0: per
+/// point geodetic_to_enu's numbers (g2e_one, as mapgeom.enu_xy gives them, column-stacked), for many rings in one call
+/// (railways.crossings and the like converted ring by ring: ~434k enu_xy calls a three-place cold road tile set).
+#[pyfunction]
+fn enu_rings<'py>(py: Python<'py>, rings: Vec<PyReadonlyArray2<'py, f64>>, origin: PyReadonlyArray1<'py, f64>,
+                  rot: PyReadonlyArray2<'py, f64>) -> PyResult<Vec<Bound<'py, PyArray2<f64>>>> {
+    let (o, r) = frame_of(&origin, &rot)?;
+    let (ll, off) = gather_rings(&rings, "enu_rings")?;
+    drop(rings);
+    let n = ll.len() / 2;
+    let en = release(py, n * 40, || {
+        let mut en = Vec::with_capacity(n * 2);
+        for i in 0..n {
+            let (e, nn, _) = g2e_one(ll[2 * i + 1], ll[2 * i], 0.0, &o, &r);
+            en.push(e);
+            en.push(nn);
+        }
+        en
+    });
+    let mut out = Vec::with_capacity(off.len().saturating_sub(1));
+    for w in off.windows(2) {
+        let arr = numpy::ndarray::Array2::from_shape_vec((w[1] - w[0], 2), en[2 * w[0]..2 * w[1]].to_vec())
+            .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+        out.push(arr.into_pyarray(py));
+    }
+    Ok(out)
+}
+
+/// mapgeom.enu_bounds: (len(rings), 4) east min, east max, north min, north max of each lon/lat ring in the frame
+/// (origin, rot), height 0, from enu_rings' points: NumPy's min / max of them (a NaN point makes that axis' pair NaN;
+/// an empty ring is a ValueError, as min / max of no values). roads.ChainView._todo's near test, many parts a call.
+#[pyfunction]
+fn enu_bounds<'py>(py: Python<'py>, rings: Vec<PyReadonlyArray2<'py, f64>>, origin: PyReadonlyArray1<'py, f64>,
+                   rot: PyReadonlyArray2<'py, f64>) -> PyResult<Bound<'py, PyArray2<f64>>> {
+    let (o, r) = frame_of(&origin, &rot)?;
+    let (ll, off) = gather_rings(&rings, "enu_bounds")?;
+    drop(rings);
+    if off.windows(2).any(|w| w[1] == w[0]) {
+        return Err(pyo3::exceptions::PyValueError::new_err("enu_bounds: an empty ring (no min / max)"));
+    }
+    let n = ll.len() / 2;
+    let out = release(py, n * 40, || {
+        let mut out = Vec::with_capacity((off.len() - 1) * 4);
+        for w in off.windows(2) {
+            let (mut e0, mut e1, mut n0, mut n1) = (0.0f64, 0.0f64, 0.0f64, 0.0f64);
+            let (mut nan_e, mut nan_n) = (false, false);
+            for i in w[0]..w[1] {
+                let (e, nn, _) = g2e_one(ll[2 * i + 1], ll[2 * i], 0.0, &o, &r);
+                if i == w[0] {
+                    (e0, e1, n0, n1) = (e, e, nn, nn);
+                } else {
+                    if e < e0 { e0 = e; }
+                    if e > e1 { e1 = e; }
+                    if nn < n0 { n0 = nn; }
+                    if nn > n1 { n1 = nn; }
+                }
+                nan_e |= e.is_nan();
+                nan_n |= nn.is_nan();
+            }
+            if nan_e { (e0, e1) = (f64::NAN, f64::NAN); }
+            if nan_n { (n0, n1) = (f64::NAN, f64::NAN); }
+            out.extend_from_slice(&[e0, e1, n0, n1]);
+        }
+        out
+    });
+    let arr = numpy::ndarray::Array2::from_shape_vec((off.len() - 1, 4), out)
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+    Ok(arr.into_pyarray(py))
+}
+
 /// (n, 4) segments x0 y0 x1 y1 (segs, in the frame (o1, r1)) in the frame (o2, r2) at the ground: each point through
 /// enu_to_geodetic (up 0) and back by geodetic_to_enu (height 0) with those kernels' very operations, one pass, no
 /// GIL (roadwidth.RoadWidths._near_walls: a cell's walls in a neighbour's frame, two conversion calls and their
@@ -5987,6 +6078,9 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(enu_to_geodetic_c, m)?)?;
     m.add_function(wrap_pyfunction!(lonlat_to_ecef, m)?)?;
     m.add_function(wrap_pyfunction!(ecef_to_frame, m)?)?;
+    m.add_function(wrap_pyfunction!(enu_rings, m)?)?;
+    m.add_function(wrap_pyfunction!(enu_bounds, m)?)?;
+    // (500: enu_rings / enu_bounds, mapgeom's many-ring conversions)
     m.add_function(wrap_pyfunction!(reframe_segs, m)?)?;
     m.add_function(wrap_pyfunction!(bc7_encode, m)?)?;
     m.add_function(wrap_pyfunction!(inside_blockers, m)?)?;
@@ -6734,6 +6828,8 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // their scale, supports (k, 12)); skeleton_roof fails a skeleton with a node over its distance to the outline (an
     // 18 km gabled roof, report W545TFKJ); street_points finds a spot clear of every carriageway (report 5T7V9FNQ).
     // 495 is another branch's
-    m.add("VERSION", 496)?;
+    // 500: enu_rings and enu_bounds (mapgeom.enu_rings / enu_bounds: many rings' frame conversion in one call, the
+    // per-ring enu_xy calls of railways.crossings, ChainView._todo and the like). 497-499 are other branches'
+    m.add("VERSION", 500)?;
     Ok(())
 }
