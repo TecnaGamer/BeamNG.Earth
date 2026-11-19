@@ -1255,6 +1255,7 @@ local function onMessage(msg)
       farPack = roads.FAR_PACK,        -- (and the far buildings past the road geotiles' as a pack a square: roads.lua)
       farHz = roads.FAR_HZ,            -- (and the horizon ring's tall buildings past the skyline: roads.lua 'H')
       turbineGeo = require('beamngEarth/turbinestream').PROTOCOL,
+      vegFar = trees.VEG_FAR,          -- (the far forest ring's clumps as vegetation geotiles: trees.lua)
       globalFar = farfield.GLOBAL_FAR,    -- (and the far field from level 3 up as global tiles: farfield.lua)
       trafficVisuals = M._trafficvisuals.PROTO,
       -- (the game's own user folder: the server checks it writes its files there, GitHub #770)
@@ -1643,6 +1644,11 @@ local function onMessage(msg)
   elseif t == 'veg_drop' then
     trees.onDrop(msg)
     ambience.onDrop(msg.anchorId, msg.key)
+  elseif t == 'vegfar_tile' then
+    -- the far forest ring (server vegfar.py): the stock far clumps past the tree tiles, as vegetation geotiles
+    trees.onTile(msg, st.anchorId, st.anchor, true)
+  elseif t == 'vegfar_drop' then
+    trees.onDrop(msg)
   elseif t == 'turbines_tile' then
     require('beamngEarth/turbinestream').onTile(msg, st.anchor, st.sessionId)
   elseif t == 'turbines_drop' then

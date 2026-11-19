@@ -21,7 +21,10 @@ M.PER_FRAME = 250       -- items made or removed per frame at most
 M.ROWS_PER_FRAME = 12000 -- rows of changing tiles looked at per frame at most (Lua time: 30000 averaged 2.5 ms)
 -- 2026-10-14: was { 300, 1 }, { 550, 0.5 }, { 900, 0.25 }, { 1e9, 0.12 }; the engine already draws far trees as
 -- billboards (their LODs), so our extra thinning made far forest sparse. Columbia: 48k -> 78k items, no frame cost seen.
-M.RINGS = { { 300, 1.0 }, { 700, 0.6 }, { 1500, 0.35 }, { 1e9, 0.2 } }   -- tile distance (m): the rank shown below
+M.RINGS = { { 300, 1.0 }, { 700, 0.6 }, { 1500, 0.35 }, { 2500, 0.2 }, { 4000, 0.12 }, { 1e9, 0.07 } }
+-- (2026-11-19) the far forest ring (server vegfar.py: the stock far clumps from the tree tiles' reach to past the
+-- skyline, ranks under 0.2, drawn as their imposters there): fewer of them beyond 2.5 km and 4 km (the rings above)
+M.VEG_FAR = 1   -- tile distance (m): the rank shown below
 -- ... and at most this many items a tile (the lowest ranks: the hashed ranks thin it evenly). Dense forest has 10-20k
 -- a tile: Bodø's 145 tiles made 1.66 M items (GitHub #66: 28 fps standing on a Steam Deck, 23 ms of each frame waiting
 -- on the GPU, and the engine's tick hitched at every tile change while driving: 19.8 fps over a drive, 38.4 with trees
@@ -1500,7 +1503,7 @@ end
 M.geoPlacement = geoPlacement
 
 -- A 'veg_tile' message: { anchorId, key, path, n }. Returns the tile's data (its ambience: ambience.lua).
-function M.onTile(msg, currentAnchor, anchorObj)
+function M.onTile(msg, currentAnchor, anchorObj, far)
   local isGeo = geotile.isKey(msg.key)
   if isGeo then
     if not anchorObj or type(msg.path) ~= 'string' then return end
@@ -1531,6 +1534,7 @@ function M.onTile(msg, currentAnchor, anchorObj)
   if geo then
     local t = tiles['g:' .. tostring(msg.key)]
     t.key, t.anchorObj = msg.key, anchorObj
+    t.vegFar = far or nil
     M.placeGeo(t)
     -- the ambience's nodes (x, y, z, depth, size, count rows) placed into this anchor's world (ambience.lua)
     if type(data.audio) == 'table' then
@@ -1593,6 +1597,8 @@ end
 -- The ranks are those of the rows shown at that side of CLUMP_M: within it every row but the far clumps (FAR_ONLY),
 -- beyond it every row but the trees they stand for (a negative scale).
 local function tileThreshold(d, t)
+  -- (a far forest ring tile nearer than the tree tiles' reach: hidden, the trees there are the vegetation tiles')
+  if t.vegFar and d < M.TILE_SEND_M * M.distanceScale() then return 0 end
   local want = threshold(d)
   local n = t.n or 0
   for _, r in ipairs(M.TILE_CAP) do
