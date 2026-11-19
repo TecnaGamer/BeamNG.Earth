@@ -111,6 +111,34 @@ class ForkTest(unittest.TestCase):
         self.assertAlmostEqual(w[0], 19.0, delta=0.01)
         self.assertLess(np.abs(np.diff(w)).max(), 0.6)
 
+    def test_short_trunk_rows_are_the_pieces(self):
+        # the trunk is 50 m from a dead end: the seam runs after the taper start, the lane's own taper after it, and the
+        # rows' widths are the serialized pieces' (Codex review of P2a)
+        segs, cons = scene()
+        segs = [s for s in segs if s["fid"] != "a0"]
+        segs[0]["pts"] = np.array([(-50.0, 0.0), (0.0, 0.0)])
+        segs[0]["pave"] = 12.0
+        cons = [c for c in cons if c[1] != "a0"]
+        _, recs = run(segs, cons)
+        r = recs[0]
+        self.assertIn("short_trunk", r["flags"])
+
+        def q(u):
+            u = min(max(u, 0.0), 1.0)
+            return u ** 3 * (10 - 15 * u + 6 * u * u)
+
+        def pc(p, s):
+            _n, s0, s1, v0, v1 = p
+            return v0 if s < s0 else v1 if s >= s1 or s1 <= s0 else v0 + (v1 - v0) * q((s - s0) / (s1 - s0))
+        ws, wb, gp = r["pieces"]
+        dM, hM, dB, hB, _ = r["w"]
+        for row in r["rows"]:
+            s = row[0]
+            w = pc(ws, s) if s < ws[2] else hM + dM + pc(wb, s) + pc(gp, s) + hB
+            self.assertLess(abs(w - (row[9] - row[5])), 2)        # mm
+            if s >= ws[2]:      # (in the seam a mapped trunk narrower than the through is the map's own)
+                self.assertGreaterEqual(row[9], row[8])           # the near pavement edge never inside the lane
+
     def test_turn_lanes(self):
         _, recs = run(*scene(turn="none|none|slight_right"))
         r = recs[0]

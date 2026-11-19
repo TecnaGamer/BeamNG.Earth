@@ -25,9 +25,10 @@
 //! - WIDTHS, quintic pieces (q(u) = u^3 (10 - 15 u + 6 u^2), C2 at both ends): the branch lane wb 0 -> dB over the
 //!   taper (TAP_FAST_M at TAP_KMH and over, else TAP_SLOW_M) from s_t, then dB to the painted nose; the painted gap gp
 //!   0 -> G = hM + hB + PHYS_M from the painted to the physical nose; the carriageway width from the trunk's mapped
-//!   pavement to the model's over one taper before s_t (the seam piece; after s_t, onto the model's width as it goes,
-//!   where the lane is there from the record's start or the trunk ends at s_t). Gores at least GORE_MIN_M long and
-//!   opening no faster than 1 m per GORE_RATE m.
+//!   pavement to the model's over one taper before s_t (the seam piece; just after s_t where the lane is there from
+//!   the record's start, or where the trunk ends at s_t: then the lane's own taper starts after the seam). Gores at
+//!   least GORE_MIN_M long and opening no faster than 1 m per GORE_RATE m (GORE_RATE 0: off); a gore the through arm
+//!   cannot hold is no complete record ("gore_beyond_arm").
 //! - ROWS every OUT_M from the seam to the blend's end: the main line's point and normal (toward the branch), the
 //!   lateral offsets of the far pavement edge, the main's near driving edge, the branch's inner and outer driving
 //!   edges and the near pavement edge. BRANCH LINE from the physical nose: the offset of the main line (its centre at
@@ -326,6 +327,10 @@ fn one_fork(segs: &[Seg], node_rows: &[Vec<(usize, usize)>], n: usize, prm: &[f6
     // from the node would otherwise open the whole gore in a few metres)
     let gore_min = { let v = prm[P_GORE_RATE] * g_n; if v > prm[P_GORE_MIN] { v } else { prm[P_GORE_MIN] } };
     if sn < sp + gore_min { sn = sp + gore_min; flags.push("gore_min"); }
+    if sn > ma.len() {      // (the through arm ends at a junction before that: no complete record)
+        flags.push("gore_beyond_arm");
+        return Some(format!("{},\"flags\":[\"{}\"]}}", head, flags.join("\",\"")));
+    }
     let tap = if kmh >= prm[P_TAP_KMH] { prm[P_TAP_FAST] } else { prm[P_TAP_SLOW] };
     // the shared length's start
     let (lt, lm, lb) = (st.lanes, sm.lanes, sb.lanes);
@@ -357,19 +362,22 @@ fn one_fork(segs: &[Seg], node_rows: &[Vec<(usize, usize)>], n: usize, prm: &[f6
     }
     if s_t < -ta.len() { s_t = -ta.len(); flags.push("short_trunk"); }
     if s_t > sp { s_t = sp; }
-    let tap_eff = if full_at_start { 0.0 } else if sp - s_t < tap { sp - s_t } else { tap };
-    let s_full = s_t + tap_eff;
     // the seam piece: the carriageway's width from the trunk's mapped pavement to the model's over one taper, before
-    // the taper start; where the branch lane is there from the record's start (full_at_start) just after it
-    // (also after it when the trunk's walk ends at the taper start: no room before)
+    // the taper start; just after it where the branch lane is there from the record's start (full_at_start) or the
+    // trunk's walk ends at the taper start (no room before: then the branch lane's own taper starts after the seam, so
+    // the seam always blends onto one width and the rows are the pieces)
     let after = full_at_start || s_t <= -ta.len();
-    let (seam0, seam1) = if after { (s_t, if s_t + tap < sp { s_t + tap } else { sp }) }
-                         else { (if s_t - tap < -ta.len() { -ta.len() } else { s_t - tap }, s_t) };
+    let (seam0, seam1) = if !after { (if s_t - tap < -ta.len() { -ta.len() } else { s_t - tap }, s_t) }
+                         else if full_at_start { (s_t, if s_t + tap < sp { s_t + tap } else { sp }) }
+                         else { let h = (sp - s_t) / 2.0; (s_t, if tap < h { s_t + tap } else { s_t + h }) };
+    let s_lane = if after && !full_at_start { seam1 } else { s_t };     // the branch lane's taper start
+    let tap_eff = if full_at_start { 0.0 } else if sp - s_lane < tap { sp - s_lane } else { tap };
+    let s_full = s_lane + tap_eff;
     let blend = { let v = prm[P_BLEND_K] * kmh; if v > prm[P_BLEND_MIN] { v } else { prm[P_BLEND_MIN] } };
     let s_end = { let v = sn + blend; if v > ma.len() { ma.len() } else { v } };
     let w_model_t = hm + dm + (if full_at_start { db } else { 0.0 }) + hb;
     let pave_seam = segs[ta.seg_at(-seam0)].pave;
-    let wb = |s: f64| if s < s_t { if full_at_start { db } else { 0.0 } } else { piece(s, s_t, s_full, 0.0, db) };
+    let wb = |s: f64| if s < s_lane { if full_at_start { db } else { 0.0 } } else { piece(s, s_lane, s_full, 0.0, db) };
     let gp = |s: f64| piece(s, sp, sn, 0.0, g_n);
     let main = Main { t: ta, m: ma };
     let pt = |s: f64, off: f64| { let (p, tg) = main.at(s); [p[0] - side * tg[1] * off, p[1] + side * tg[0] * off] };
@@ -385,10 +393,7 @@ fn one_fork(segs: &[Seg], node_rows: &[Vec<(usize, usize)>], n: usize, prm: &[f6
         // the far pavement edge (-), the main's near driving edge, the branch's driving edges, the near pavement edge;
         // before the taper start the carriageway's width blends from the trunk's mapped pavement (the seam piece)
         let far = -(dm / 2.0 + hm);
-        let model = if s < s_t { w_model_t } else { hm + dm + g_p + w_b + hb };
-        let near = if s < seam1 && seam1 > seam0 {
-            far + pave_seam + (model - pave_seam) * quintic((s - seam0) / (seam1 - seam0))
-        } else { far + model };
+        let near = if s < seam1 { far + piece(s, seam0, seam1, pave_seam, w_model_t) } else { dm / 2.0 + g_p + w_b + hb };
         if !first { rows.push(','); }
         first = false;
         rows.push_str(&format!("[{},{},{},{},{},{},{},{},{},{}]", mm(s), mm(p[0]), mm(p[1]), (nrm[0] * 1e6).round() as i64,
@@ -414,14 +419,14 @@ fn one_fork(segs: &[Seg], node_rows: &[Vec<(usize, usize)>], n: usize, prm: &[f6
         first = false;
         bl.push_str(&format!("[{},{}]", mm(p[0]), mm(p[1])));
     }
-    let (p_t, p_p, p_n) = (pt(s_t, dm / 2.0), pt(sp, dm / 2.0), pt(sn, dm / 2.0 + hm + phys / 2.0));
+    let (p_t, p_p, p_n) = (pt(s_lane, dm / 2.0), pt(sp, dm / 2.0), pt(sn, dm / 2.0 + hm + phys / 2.0));
     Some(format!("{},\"evidence\":\"{}\",\"s\":{{\"seam\":{},\"taper\":{},\"full\":{},\"painted\":{},\"physical\":{},\"end\":{}}},\
                   \"pt\":{{\"taper\":[{},{}],\"painted\":[{},{}],\"physical\":[{},{}]}},\
                   \"pieces\":[[\"w_seam\",{},{},{},{}],[\"wb\",{},{},0,{}],[\"gp\",{},{},0,{}]],\"rows\":[{}],\"branch_line\":[{}],\
                   \"flags\":[{}]}}",
-                 head, evidence, mm(seam0), mm(s_t), mm(s_full), mm(sp), mm(sn), mm(s_end),
+                 head, evidence, mm(seam0), mm(s_lane), mm(s_full), mm(sp), mm(sn), mm(s_end),
                  mm(p_t[0]), mm(p_t[1]), mm(p_p[0]), mm(p_p[1]), mm(p_n[0]), mm(p_n[1]),
-                 mm(seam0), mm(seam1), mm(pave_seam), mm(w_model_t), mm(s_t), mm(s_full), mm(db), mm(sp), mm(sn), mm(g_n),
+                 mm(seam0), mm(seam1), mm(pave_seam), mm(w_model_t), mm(s_lane), mm(s_full), mm(db), mm(sp), mm(sn), mm(g_n),
                  rows, bl, flags.iter().map(|f| format!("\"{}\"", f)).collect::<Vec<_>>().join(",")))
 }
 

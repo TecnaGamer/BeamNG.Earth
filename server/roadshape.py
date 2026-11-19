@@ -506,9 +506,11 @@ def _vertex_shares(ll):
 
 
 def _segment_rows(feats, i, specs, roadsmod):
-    """Feature i of a roads layer as fork_records reads it, or None (not a paved road of FORK_CLASSES, no line)."""
+    """Feature i of a roads layer as fork_records reads it, or None (no road spec, no line). Every road counts for the
+    connectors' degrees (a service road at a split makes it a junction, and a walk stops there); only a paved road of
+    FORK_CLASSES can be a fork's arm (cls 0 otherwise)."""
     sp = specs[i]
-    if sp is None or sp.cls not in FORK_CLASSES or sp.kind != "paved":
+    if sp is None:
         return None
     parts = feats.parts(i)
     if not parts or not parts[0] or len(parts[0][0]) < 2:
@@ -524,16 +526,18 @@ def _segment_rows(feats, i, specs, roadsmod):
         shares = _vertex_shares(ll)
         for r in con.rows(i).tolist():
             cons.append((str(con.value[r]), int(np.argmin(np.abs(shares - float(con.start[r]))))))
-    return {"ll": ll, "cls": FORK_CLASSES[sp.cls], "link": bool(sp.link), "dir": int(sp.dir or 0) if sp.oneway else 0,
-            "pave": float(sp.width), "drive": float(roadsmod.lane_layout(sp)[0]),
-            "lanes": int(sp.lanes) if sp.lanes else -1, "kmh": float(sp.kmh or CLASS_KMH[sp.cls]),
+    arm = sp.cls in FORK_CLASSES and sp.kind == "paved"
+    return {"ll": ll, "cls": FORK_CLASSES[sp.cls] if arm else 0, "link": bool(sp.link),
+            "dir": int(sp.dir or 0) if sp.oneway else 0, "pave": float(sp.width),
+            "drive": float(roadsmod.lane_layout(sp)[0]) if arm else float(sp.width),
+            "lanes": int(sp.lanes) if sp.lanes else -1, "kmh": float(sp.kmh or CLASS_KMH.get(sp.cls, 50.0)),
             "level": int(lvl) if lvl is not None and lvl == lvl else 0,
             "turn": t if isinstance(t, str) else "", "cons": cons}
 
 
 def _cell_segments(key, cell_fn, memo):
     """{part id: _segment_rows} of cell key's roads (memo: per cell). A part id is the segment's id and its first point
-    (a segment split at its lane tags' ways is several features of one id: lanesections; the same in every copy)."""
+    (a segment split at its lane tags' ways is several features of one id: lanesections)."""
     k = str(key)
     got = memo.get(k)
     if got is None:
@@ -552,6 +556,16 @@ def _cell_segments(key, cell_fn, memo):
     return got
 
 
+COPY_CELLS_MAX = 16         # cells a segment's copies are looked for in at most
+
+
+def _key_of(text):
+    """A CellKey from its str ("z/x/y")."""
+    import mapcells
+    z, x, y = (int(v) for v in str(text).split("/"))
+    return mapcells.CellKey(z, x, y)
+
+
 def cell_forks(key, cell_fn, memo=None):
     """The fork records of the nodes homed in map cell key (earthfast.fork_records' JSON, parsed): a list sorted by
     connector id, points in mm in the cell's frame ("frame": its centre lat / lon). cell_fn(key) -> the cell's roads
@@ -565,15 +579,32 @@ def cell_forks(key, cell_fn, memo=None):
     rings = fork_rings(key)
     keys = [mapcells.CellKey(key.z, (key.x + dx) % key.n, key.y + dy)
             for dy in range(-rings, rings + 1) for dx in range(-rings, rings + 1) if 0 <= key.y + dy < key.n]
-    segs = {}
+    # every segment id's parts all from ONE copy, never parts of two copies mixed (copies of one segment may be cut
+    # differently): every cell its copies' points lie in is read (more than COPY_CELLS_MAX: the rings' only), and the
+    # copy with the most points (then the least cell) is taken: the same whichever cells were read first, in any order
+    found = {}
     for k in keys:
-        for fid, r in _cell_segments(k, cell_fn, memo).items():
-            segs.setdefault(fid, r)
-    for fid in sorted(segs):        # each segment from its own home cell's copy (the cell of its first point)
-        ll = segs[fid]["ll"]
-        own = _cell_segments(mapcells.cell_of(float(ll[0, 1]), float(ll[0, 0]), key.z), cell_fn, memo).get(fid)
-        if own is not None:
-            segs[fid] = own
+        for pid in _cell_segments(k, cell_fn, memo):
+            found.setdefault(pid.split("|", 1)[0], set()).add(str(k))
+    by_str = {}
+    segs = {}
+    for sid in sorted(found):
+        cells = set(found[sid])
+        for c in sorted(found[sid]):
+            for pid, r in _cell_segments(by_str.get(c) or _key_of(c), cell_fn, memo).items():
+                if pid.split("|", 1)[0] == sid:
+                    for cc in mapcells.cells_for_points(r["ll"][:, 1], r["ll"][:, 0], z=key.z):
+                        cells.add(str(cc))
+                        by_str[str(cc)] = cc
+        best = None
+        for c in (sorted(cells) if len(cells) <= COPY_CELLS_MAX else sorted(found[sid])):   # (a long one: the ring's)
+            parts = sorted((pid, r) for pid, r in _cell_segments(by_str.get(c) or _key_of(c), cell_fn, memo).items()
+                           if pid.split("|", 1)[0] == sid)
+            n = sum(len(r["ll"]) for _pid, r in parts)
+            if parts and (best is None or n > best[0]):
+                best = (n, parts)
+        for pid, r in best[1]:
+            segs[pid] = r
     fids = sorted(segs)
     if not fids:
         return []
@@ -618,15 +649,17 @@ def shadow_forks(cell_keys, cell_fn, cache_dir):
         k = str(key)
         if k in _SHADOW_DONE:
             continue
-        _SHADOW_DONE.add(k)
         d = os.path.join(cache_dir, "roadshape", f"forks-{FORKS_FORMAT}")
         path = os.path.join(d, f"{key.z}_{key.x}_{key.y}.json")
         try:
+            import overture
             recs = cell_forks(key, cell_fn)
             os.makedirs(d, exist_ok=True)
             tmp = f"{path}.{os.getpid()}.part"
-            with open(tmp, "w") as fh:
-                json.dump(recs, fh, sort_keys=True, separators=(",", ":"))
+            with open(tmp, "w") as fh:      # (who made it from what: a reader can tell an older file)
+                json.dump({"format": FORKS_FORMAT, "kernel": FORK_VERSION, "release": overture.effective(),
+                           "cell": k, "records": recs}, fh, sort_keys=True, separators=(",", ":"))
             os.replace(tmp, path)
+            _SHADOW_DONE.add(k)     # (only once written: a failed cell is tried again by the next tile)
         except Exception as ex:      # noqa: BLE001 (shadow output: a fault never reaches the build)
             logging.getLogger("earthd.roadshape").warning("fork records of %s: %s: %s", k, type(ex).__name__, ex)
