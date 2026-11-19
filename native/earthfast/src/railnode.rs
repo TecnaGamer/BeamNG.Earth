@@ -22,9 +22,9 @@ const NEIGHBOURS: [(i64, i64); 9] = [(0, 0), (1, 0), (-1, 0), (0, 1), (0, -1), (
 /// the height of each key's last point.
 #[pyclass(module = "earthfast", frozen)]
 pub struct RailNode {
-    start: Vec<usize>,
-    keys: Vec<i64>,
-    zs: Vec<f64>,
+    start: Box<[usize]>,
+    keys: Box<[i64]>,
+    zs: Box<[f64]>,
 }
 
 #[pymethods]
@@ -37,7 +37,7 @@ impl RailNode {
     /// (k,): group g's height at each centimetre key cm (k, 2), or at the first of the keys a centimetre off that it
     /// has, or NaN.
     fn find<'py>(&self, py: Python<'py>, g: usize, cm: PyReadonlyArray2<'py, i64>) -> PyResult<Bound<'py, PyArray1<f64>>> {
-        if g + 1 >= self.start.len() {
+        if g >= self.start.len() - 1 {
             return Err(PyValueError::new_err("RailNode.find: no such group"));
         }
         let c = cm.as_array();
@@ -56,7 +56,7 @@ impl RailNode {
 
 /// Group g's (key, height) pairs: the keys sorted, each key's height that of its last point in the group's order
 /// (its parts in turn, each part's points in turn).
-fn pack_group(pts: &mut Vec<(i64, usize)>, z: &[f64], keys: &mut Vec<i64>, zs: &mut Vec<f64>) {
+fn pack_group(pts: &mut [(i64, usize)], z: &[f64], keys: &mut Vec<i64>, zs: &mut Vec<f64>) {
     // (key, then the later point first: the first of each key is its last point)
     pts.sort_unstable_by(|p, q| p.0.cmp(&q.0).then(q.1.cmp(&p.1)));
     let mut prev: Option<i64> = None;
@@ -78,8 +78,8 @@ pub fn rail_node_pack(py: Python<'_>, cm: PyReadonlyArray2<'_, i64>, z: PyReadon
                       -> PyResult<RailNode> {
     let (c, zv, ov, gv) = (cm.as_array(), z.as_array(), off.as_array(), group.as_array());
     let n = zv.len();
-    if c.nrows() != n || (n > 0 && c.ncols() != 2) || ov.len() != gv.len() + 1 {
-        return Err(PyValueError::new_err("rail_node_pack: cm (n, 2), z (n,), off (parts + 1,), group (parts,)"));
+    if c.nrows() != n || (n > 0 && c.ncols() != 2) || ov.len() != gv.len() + 1 || groups > gv.len() {
+        return Err(PyValueError::new_err("rail_node_pack: cm (n, 2), z (n,), off (parts + 1,), group (parts,), groups <= parts"));
     }
     let off: Vec<usize> = ov.iter().map(|&o| usize::try_from(o).ok().filter(|&o| o <= n))
         .collect::<Option<_>>().ok_or_else(|| PyValueError::new_err("rail_node_pack: off out of range"))?;
@@ -106,6 +106,7 @@ pub fn rail_node_pack(py: Python<'_>, cm: PyReadonlyArray2<'_, i64>, z: PyReadon
             pack_group(&mut pts, &zv, &mut keys, &mut zs);
             start.push(keys.len());
         }
-        RailNode { start, keys, zs }
+        // (boxed: the memo counts the unique keys, so nothing more is held)
+        RailNode { start: start.into_boxed_slice(), keys: keys.into_boxed_slice(), zs: zs.into_boxed_slice() }
     }))
 }
