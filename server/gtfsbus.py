@@ -32,6 +32,8 @@ import time
 import zipfile
 from pathlib import Path
 
+import dmath
+
 log = logging.getLogger(__name__)
 
 TRAFIKLAB_URL = "https://opendata.samtrafiken.se/gtfs/vt/vt.zip?key={key}"
@@ -80,7 +82,7 @@ def index_path(cache_dir):
 
 def _metres(lat0, lon0, lat1, lon1):
     k = 111_320.0
-    return math.hypot((lat1 - lat0) * k, (lon1 - lon0) * k * math.cos(math.radians(lat0)))
+    return math.hypot((lat1 - lat0) * k, (lon1 - lon0) * k * dmath.cos(math.radians(lat0)))
 
 
 def _rows(z, name):
@@ -303,7 +305,7 @@ def near(lat, lon, data, radius_m, max_lines, ref_key, colour="#ff6600"):
     """The lines of index data with a stop within radius_m of lat, lon, in buslines.parse's form, nearest stop first
     per line, at most max_lines (ordered by ref_key, then distance). colour: every line's (the feed has none)."""
     out, seen = [], set()
-    cos = math.cos(math.radians(lat))
+    cos = dmath.cos(math.radians(lat))
     for ln in data["lines"]:
         st = ln["stops"]
         best, bi = None, 0
