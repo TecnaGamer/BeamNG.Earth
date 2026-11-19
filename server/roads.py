@@ -8890,6 +8890,31 @@ class BridgeProfiles:
             v = self.done.get(k)
         return getattr(v[1], "shape_rec", None) if v is not None else None
 
+    def _deck_simple(self, k, pool):
+        """BNE_ROADSHAPE=decks: is deck part k simple (roadshape.part_simple: the map's answer at both its ends, the
+        one grading's Grader._deck_end_simple gives its approaches)? Kept per part when read complete (a short read
+        answers this call alone and is noted in the solve's scope)."""
+        import revisit
+        memo = self.__dict__.setdefault("_simple_memo", {})
+        with self.lock:
+            got = memo.get(k)
+        if got is not None:
+            return got
+        xy = np.asarray(pool[k][1], np.float64)[:, :2]
+        la, lo, _ = self.frame.enu_to_geodetic(xy[[0, -1], 0], xy[[0, -1], 1], 0.0)
+        la, lo = np.asarray(la, np.float64), np.asarray(lo, np.float64)
+        with revisit.scope() as b:
+            try:
+                got = bool(roadshape.part_simple(self.cell_fn, k, (float(lo[0]), float(la[0])),
+                                                 (float(lo[1]), float(la[1]))))
+            except Exception as e:      # (drawn as before rather than no solve; grading's answer on a failure too)
+                log.debug("roadshape: %s simple: %s: %s", k, type(e).__name__, e)
+                return False
+        if b.complete:
+            with self.lock:
+                got = memo.setdefault(k, got)
+        return got
+
     def _has(self, key):
         """Is part key published (nothing taken: no use of it)?"""
         with self.lock:
@@ -8965,9 +8990,11 @@ class BridgeProfiles:
         own = None if key in mine else (pool[key][0], pool[key][1], zs[comp.index(key)], pool[key][2])
         # (BNE_ROADSHAPE=decks, road revamp v2 P1b: a whole chain's simple decks take their shape, roadshape.shape_chain:
         # the line from the road's smooth line, skewed and buried ends; published as the part, its piers along it)
+        # (every solve, a window's too: which decks are simple is the map's answer, roadshape.part_simple, the one
+        # grading's bank_through reads, so no approach banks onto a level deck; v2 P1b fix)
         shapes = {}
-        if roadshape.DECKS and self.STRUCTURES and block is None:
-            shapes = roadshape.shape_chain(comp, pool, zs, ground)
+        if roadshape.DECKS and self.STRUCTURES:
+            shapes = roadshape.shape_chain(comp, pool, zs, ground, lambda k: self._deck_simple(k, pool))
         shaped = {k: ((v[0], _shaped_line(shapes[k]["xy"], shapes[k], len(v[1])), shapes[k]["z"], v[3]) if k in shapes
                       else v) for k, v in keep.items()}
         pre = {k: self._precommit(k, shaped[k], ground) for k in keep}

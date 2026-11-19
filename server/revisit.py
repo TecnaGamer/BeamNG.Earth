@@ -438,10 +438,11 @@ def keyed_env(k):
 # earthfast.structure_abutments; plancache.plans_format ".ds5"); shadow unchanged. BNE_LEVEL_SPACING 5: one clearance per crossing from its own road's class.
 # BNE_ROADSHAPE 1 (road revamp v2 P1b, decks): a simple structure's decks on the road's smooth line, skewed and buried
 # ends, banked with a banked road (roadshape.py; the plans keep a banked road's bank onto such a deck); BNE_DECK_SKEW
-# 1: its skew part (on with decks unless off).
+# 1: its skew part (on with decks unless off). BNE_ROADSHAPE 2: which decks are simple is one rule for the deck and
+# the plans (roadshape.part_simple: bounded, from the map round the structure), never the chain's group.
 SWITCH_VERSIONS = {"BNE_LEVEL_SPACING": 5, "BNE_FAST_DECK_GROUND": 2, "BNE_UNDER_SPEED": 2, "BNE_FAST_GAP": 5,
                    "BNE_RACEWAY_DIG": 2, "BNE_DIRT_BUMP": 2, "BNE_DIRT_BANK": 2, "BNE_DECK_STRUCT": 5,
-                   "BNE_ROADSHAPE": 1, "BNE_DECK_SKEW": 1}
+                   "BNE_ROADSHAPE": 2, "BNE_DECK_SKEW": 1}
 
 
 def keyed_value(k, v):

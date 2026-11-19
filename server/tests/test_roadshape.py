@@ -196,6 +196,61 @@ class GradingTest(unittest.TestCase):
         self.assertEqual(float(faded.bank[-1]), 0.0)
         self.assertGreater(abs(float(kept.bank[-1])), 0.01)
 
+    @staticmethod
+    def long_structure(ramp):
+        """A motorway curving (r 400 m) onto a 30 m deck A, a 200 m deck B on from it, the road on east; ramp: a ramp
+        ending on B's side 200 m from A's west end (END_ON: the structure is not simple). Grading's old read (the
+        decks within 110 m of the end) saw A and B alone, simple, while the chain's group held the ramp."""
+        t = np.linspace(math.pi / 6, 0.0, 30)
+        west = [(-400.0 * math.sin(a), 400.0 * (1 - math.cos(a))) for a in t]
+        lines = [west, [(0.0, 0.0), (30.0, 0.0)], [(30.0, 0.0), (230.0, 0.0)], [(230.0, 0.0), (330.0, 0.0)]]
+        classes = ["motorway"] * 4
+        levels = [(1, 1.0, 0.0, 1.0), (2, 1.0, 0.0, 1.0)]
+        ids = ["west", "A", "B", "east"]
+        if ramp:
+            lines.append([(200.0, 60.0), (200.0, 0.5)])
+            classes.append("secondary")
+            levels.append((4, 1.0, 0.3, 1.0))
+            ids.append("ramp")
+        return features(lines, classes, levels=levels, ids=ids)
+
+    def test_grading_and_deck_agree_at_the_abutment(self):
+        # Codex high on P1b: grading decided "simple" from the decks within 110 m of the end, the deck from its whole
+        # chain: a banked approach met a level deck at the abutment. Both now read roadshape.part_simple.
+        if not fast.AVAILABLE or getattr(fast._ef, "VERSION", 0) < roadshape.VERSION:
+            self.skipTest("earthfast 498")
+        import threading
+        for ramp in (True, False):
+            f = self.long_structure(ramp)
+            got = solve(f)
+            g = object.__new__(grading._Planner)
+            g.lock = threading.Lock()
+            g.frame = FRAME
+            g._roads_cell = lambda k, f=f: f
+            with mock.patch.object(roadshape, "DECKS", True):
+                keeps = g._deck_end_simple(np.array([0.3, 0.2]))     # (the west approach's end at A)
+            rec = got["A"][2]
+            self.assertEqual(keeps, rec is not None, f"ramp={ramp}: the road keeps its bank iff the deck banks")
+            self.assertEqual(keeps, not ramp)
+            if not ramp:
+                self.assertIsNotNone(rec["bank"], "the deck banks with the curve")
+                self.assertGreater(abs(float(rec["bank"][0])), 0.005)
+                self.assertIsNotNone(got["B"][2], "one structure, one answer")
+            else:
+                self.assertIsNone(got["B"][2])
+
+    def test_end_simple_is_the_same_from_any_start(self):
+        # (the reading starts at the caller's copy of the end; the answer is the map's)
+        if not fast.AVAILABLE or getattr(fast._ef, "VERSION", 0) < roadshape.VERSION:
+            self.skipTest("earthfast 498")
+        f = self.long_structure(True)
+        la, lo, _ = FRAME.enu_to_geodetic(np.array([0.0, 0.004, 250.0]), np.array([0.0, -0.003, 40.0]), 0.0)
+        for e in (0, 1):
+            outs = {roadshape.end_simple(lambda k: f, ("A", 0), e, (float(lo[i]), float(la[i]))) for i in range(3)}
+            self.assertEqual(outs, {False})
+        f = self.long_structure(False)
+        self.assertTrue(roadshape.end_simple(lambda k: f, ("B", 0), 1, (float(lo[2]), float(la[2]))))
+
     def test_shape_maps_into_another_frame_twice(self):
         # (an adopted chain's shape, mapped again by a view: its line, skew, overlaps and bank go along)
         class Shift:

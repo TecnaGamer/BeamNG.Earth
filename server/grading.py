@@ -6139,67 +6139,49 @@ class _Planner:
             return None
         return got
 
+    def _roads_cell(self, k):
+        """Map cell k's roads features (the chain stores' cell_fn)."""
+        return self.md.cell(k, layers=("roads",), kind="demand").layers.get("roads")
+
     def _deck_end_simple(self, xy):
-        """BNE_ROADSHAPE=decks: does the deck whose end is nearest the road end xy (within APPROACH_TOUCH_M, among the
-        decks read complete round it: _struct_decks) belong to a simple structure, height-free (_deck_end_simple_at)?
-        Its deck then banks with the road (roadshape), so the road keeps its bank there (plan_roads bank_through).
-        False on any failure."""
+        """BNE_ROADSHAPE=decks: does the road end xy lead onto a deck that banks with it? The deck end nearest xy within
+        APPROACH_TOUCH_M (roadshape.deck_end_at: the decks near it read whole), its deck simple at both its ends
+        (_deck_end_simple_at: roadshape.end_simple, the very rule and inputs the chain solve shapes and banks the deck
+        by, roadshape.part_simple) and of a banked class (roadshape.deck_bank's). Its deck then banks with the road, so
+        the road keeps its bank there (plan_roads bank_through). False on any failure (the deck's own solve: drawn
+        level on a failure too)."""
         try:
-            xy = np.asarray(xy, np.float64)[:2]
-            parts, read = {}, set()
-            keys = self._struct_decks(parts, read, [xy])
-            best, bd = None, APPROACH_TOUCH_M
-            for kk in keys:
-                ln = parts[kk][0]
-                for p in (ln[0], ln[-1]):
-                    d_ = float(dnp.hypot(p[0] - xy[0], p[1] - xy[1]))
-                    if d_ <= bd and (best is None or d_ < bd):
-                        best, bd = p, d_
-            if best is None:
+            got = roadshape.deck_end_at(self._roads_cell, self.frame, np.asarray(xy, np.float64)[:2], APPROACH_TOUCH_M)
+            if got is None:
                 return False
-            return self._deck_end_simple_at((round(float(best[0]), 3), round(float(best[1]), 3)))
+            key, _end, ends, spec = got
+            if getattr(spec, "cls", None) not in BANK_DESIGN:
+                return False
+            return bool(self._deck_end_simple_at(key, 0, ends[0]) and self._deck_end_simple_at(key, 1, ends[1]))
         except Exception as e:      # the road faded level at the deck rather than no grading
             _caught(e)
             log.debug("grading: deck end at %s: %s: %s", np.round(xy, 1), type(e).__name__, e)
             return False
 
-    @_marked("_des_cache", lambda self, e0: (round(float(e0[0]), 3), round(float(e0[1]), 3)))
-    def _deck_end_simple_at(self, e0):
-        """_deck_end_simple's answer for the deck end e0 (x, y to the mm), kept per deck end: the decks read complete
-        round e0 (_struct_decks), grouped at one height (structures.groups), the group of the deck ending at e0
-        simple (roadshape.simple_members). A pure function of the map round e0. Kept with what its making read short
-        (_marked: said again to every reader), and an answer made short is made again (Codex review: a deck missing
-        from a short read made a group look simple, kept for the session)."""
-        e0 = (round(float(e0[0]), 3), round(float(e0[1]), 3))
+    @_marked("_des_cache", lambda self, key, end, ll: (str(key[0]), str(key[1]), int(end)))
+    def _deck_end_simple_at(self, key, end, ll):
+        """roadshape.end_simple(key, end) (ll: (lon, lat) of that end), kept per deck end with what its making read
+        short (_marked: said again to every reader); an answer made short is made again."""
+        k = (str(key[0]), str(key[1]), int(end))
         with self.lock:
             cache = self.__dict__.setdefault("_des_cache", {})
-            if e0 in cache and ("_des_cache", e0) not in self.__dict__.get("_marks", {}):
-                self._marks_seen("_des_cache", e0)
-                return cache[e0]
-        import structures
-        parts, read = {}, set()
-        keys = self._struct_decks(parts, read, [np.asarray(e0, np.float64)])
-        mine = None
-        for n, kk in enumerate(keys):
-            ln = parts[kk][0]
-            if any(abs(float(p[0]) - e0[0]) < 5e-4 and abs(float(p[1]) - e0[1]) < 5e-4 for p in (ln[0], ln[-1])):
-                mine = n
-                break
-        got = False
-        if mine is not None:
-            members = [{"key": f"{kk[0]}:{kk[1]}", "fid": kk[0], "xy": parts[kk][0],
-                        "z": np.zeros(len(parts[kk][0])), "half": parts[kk][1],
-                        "kind": structures.WALK if str(parts[kk][2] or "").replace("_link", "")
-                        in structures.WALK_CLASSES else structures.ROAD, "level": parts[kk][3]} for kk in keys]
-            got = bool(roadshape.simple_members(members, structures.groups(members))[mine])
+            if k in cache and ("_des_cache", k) not in self.__dict__.get("_marks", {}):
+                self._marks_seen("_des_cache", k)
+                return cache[k]
+        got = bool(roadshape.end_simple(self._roads_cell, key, int(end), ll))
         with self.lock:
             cache = self.__dict__.setdefault("_des_cache", {})
-            if e0 not in cache or ("_des_cache", e0) in self.__dict__.get("_marks", {}):
-                cache[e0] = got             # (first, or over one made short: _marks_at notes this making's marks)
-                self._marks_at("_des_cache", e0)
+            if k not in cache or ("_des_cache", k) in self.__dict__.get("_marks", {}):
+                cache[k] = got              # (first, or over one made short: _marks_at notes this making's marks)
+                self._marks_at("_des_cache", k)
             else:
-                self._marks_seen("_des_cache", e0)
-            return cache[e0]
+                self._marks_seen("_des_cache", k)
+            return cache[k]
 
     def _struct_decks(self, parts, read, anchors):
         """The road decks round anchors (points): every cell within an end's reach of each (structures.halo) read
