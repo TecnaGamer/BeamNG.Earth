@@ -778,7 +778,7 @@ def trim_overlaps(rb, context=(), shared=None, coplanar=False):
     if not rb:
         return rb
     import fast
-    fast.require(533 if coplanar else 373, "deck_trim_overlaps")
+    fast.require(534 if coplanar else 373, "deck_trim_overlaps")
     # (the cuts are native: earthfast deck_trim_overlaps, meshtrim.rs; each deck against every other deck near it was
     # a numpy round of a few rows, hundreds a tile)
     owners, groups, lefts, rights, zs, lens, own_in, targets = {}, {}, [], [], [], [], [], []

@@ -784,7 +784,7 @@ def deck_sheets(parts, node=None):
 #   it to the split); anchors pinned in z and z'. Infeasible or over budget: today's heights, the status recorded.
 # Nothing built reads the result. PROFILE_STATS counts statuses and seconds; with BNE_ROADSHAPE_DEBUG=1 each record is
 # written as JSON under <cache>/debug/roadshape_profile/; PROFILE_SINKS (callables) get each record (rideprobe.py).
-PROFILE_KERNEL = 533        # earthfast.profile_members / profile_solve (533: P3d's twins, nodes, approach clearance)
+PROFILE_KERNEL = 534        # earthfast.profile_members / profile_solve (534: P3d's twins, nodes, approach clearance)
 PROFILE_FORMAT = 1          # the record's JSON
 PROF_STEP_M = 2.0           # m between knots
 PROF_JOIN_M = 1.0           # m: ends this near meet (a deck's and a ground line's, two decks')

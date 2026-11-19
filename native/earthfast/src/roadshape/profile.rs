@@ -32,7 +32,7 @@
 //!   one it runs straight on into) is held to it knot by knot while the knot projects inside that deck, the edges stay
 //!   within SPLIT_GAP_M and the two run within SHEET_DEG (P2b's union up to its split); today's two heights further
 //!   apart than SHEET_DZ_MAX anywhere in it: a flyover, no union (an end held by nothing else keeps its height).
-//! - P3d (533): twins (two decks side by side, structprobe's BESIDE rule) held at one height knot by knot, each one's
+//! - P3d (534): twins (two decks side by side, structprobe's BESIDE rule) held at one height knot by knot, each one's
 //!   knots on the other's line; two deck ends at one junction (within the wider one's half width, NODE_DZ_M today)
 //!   held at one height; a deck end on a deck of another OSM level a sheet end when within NODE_DZ_M today; an
 //!   approach under a deck held its clearance under it (the pins' ground). A grade failure lets go of a coupling
@@ -80,7 +80,7 @@ const KINK_STEEP: f64 = 0.1;
 const GAP_LOOK: f64 = 2.0;      // an approach's walk looks this many anchors on for another deck end (P3c)    // ... plus this share of the steeper member's steepest grade today (P3c)
 const NODE_DZ_M: f64 = 0.5;     // m: a deck end on a deck of another OSM level this near in height today is held to
                                 // it (roadshape.SHEET_NODE_DZ, P2b's fork test at the node; P3d)
-// (P3d, 533) twins: two decks side by side (structprobe's BESIDE: the edges at most TWIN_GAP_M apart, or overlapping,
+// (P3d, 534) twins: two decks side by side (structprobe's BESIDE: the edges at most TWIN_GAP_M apart, or overlapping,
 // running within TWIN_DEG of each other, at most TWIN_DZ_M apart in height today) for at least min(TWIN_MIN_M,
 // TWIN_SHORT x the shorter deck) are held at one height knot by knot (the design's equal z across shared pavement);
 // a pair in conflict with a clearance or another coupling is let go as a sheet union is
@@ -726,7 +726,7 @@ pub fn solve_core(ms: &[Member], joins: &[[i64; 5]], pins: &[[i64; 3]], floors: 
             let p = if eb == 0 { ms[b].xy[0] } else { ms[b].xy[ms[b].xy.len() - 1] };
             // (the host: a deck of the same level whose edge zone holds the end, not one running straight on from
             // it (a C1 joint); nearest, then the lowest index)
-            // (P3d, 533: or of another OSM level whose surface is within NODE_DZ_M of the end today, as P2b's
+            // (P3d, 534: or of another OSM level whose surface is within NODE_DZ_M of the end today, as P2b's
             // deck_sheets takes a fork by its heights at the node: Fort Pitt's level 2 decks ending on a level 3
             // deck 0.36 m apart were pinned to it at tile time in sheet mode and solved apart here, a 0.4 m step
             // and 270 m2 of holes in the slab)
@@ -998,7 +998,7 @@ pub fn solve_core(ms: &[Member], joins: &[[i64; 5]], pins: &[[i64; 3]], floors: 
     // deck over deck of another level where the lines cross (a grid of segments)
     let mut grid: BTreeMap<(i64, i64), Vec<(usize, usize)>> = BTreeMap::new();
     let mut entries: u64 = 0;
-    // (P3d, 533: and an approach under a deck: the ground road the pins raise under one of the chain's decks, held
+    // (P3d, 534: and an approach under a deck: the ground road the pins raise under one of the chain's decks, held
     // its clearance under it (a Fort Pitt road pinned 0.1-0.35 m up under a deck, one 0.02 m short of C))
     for (mi, m) in ms.iter().enumerate() {
         for k in 0..m.xy.len().saturating_sub(1) {

@@ -452,7 +452,7 @@ def keyed_env(k):
 # BNE_ROADSHAPE 7 (sheet): a branch's road surface on an exit union's slab drawn roadmesh.NOSLAB_LIFT over its through
 # road's (the union's chunks from the fork's record, "noslab"; revampfix).
 # BNE_ROADSHAPE 8 (P3d, profile): the solve holds twin decks, deck ends at one junction across OSM levels and the ground
-# under the chain's decks (earthfast 533); coplanar decks running along each other drawn as one surface
+# under the chain's decks (earthfast 534); coplanar decks running along each other drawn as one surface
 # (roadmesh.trim_overlaps coplanar). Sheet and decks unchanged.
 SWITCH_VERSIONS = {"BNE_LEVEL_SPACING": 5, "BNE_FAST_DECK_GROUND": 2, "BNE_UNDER_SPEED": 2, "BNE_FAST_GAP": 5,
                    "BNE_RACEWAY_DIG": 2, "BNE_DIRT_BUMP": 2, "BNE_DIRT_BANK": 2, "BNE_DECK_STRUCT": 5,
