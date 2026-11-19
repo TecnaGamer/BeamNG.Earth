@@ -197,10 +197,11 @@ class GradingTest(unittest.TestCase):
         self.assertGreater(abs(float(kept.bank[-1])), 0.01)
 
     @staticmethod
-    def long_structure(ramp):
+    def long_structure(ramp, upper=False):
         """A motorway curving (r 400 m) onto a 30 m deck A, a 200 m deck B on from it, the road on east; ramp: a ramp
         ending on B's side 200 m from A's west end (END_ON: the structure is not simple). Grading's old read (the
-        decks within 110 m of the end) saw A and B alone, simple, while the chain's group held the ramp."""
+        decks within 110 m of the end) saw A and B alone, simple, while the chain's group held the ramp. upper: a
+        deck of level 2 ending 1.8 m from A's west end."""
         t = np.linspace(math.pi / 6, 0.0, 30)
         west = [(-400.0 * math.sin(a), 400.0 * (1 - math.cos(a))) for a in t]
         lines = [west, [(0.0, 0.0), (30.0, 0.0)], [(30.0, 0.0), (230.0, 0.0)], [(230.0, 0.0), (330.0, 0.0)]]
@@ -212,6 +213,11 @@ class GradingTest(unittest.TestCase):
             classes.append("secondary")
             levels.append((4, 1.0, 0.3, 1.0))
             ids.append("ramp")
+        if upper:
+            lines.append([(1.5, 1.0), (1.5, 120.0)])
+            classes.append("primary")
+            levels.append((len(lines) - 1, 2.0, 0.0, 1.0))
+            ids.append("upper")
         return features(lines, classes, levels=levels, ids=ids)
 
     def test_grading_and_deck_agree_at_the_abutment(self):
@@ -238,6 +244,23 @@ class GradingTest(unittest.TestCase):
                 self.assertIsNotNone(got["B"][2], "one structure, one answer")
             else:
                 self.assertIsNone(got["B"][2])
+
+    def test_another_level_ending_at_the_abutment(self):
+        # (Codex review of the fix: a road end near two deck ends, a stacked level's and its own deck's, took the
+        # nearest one's answer; neither is simple now, so the plans and both decks agree whichever it takes)
+        if not fast.AVAILABLE or getattr(fast._ef, "VERSION", 0) < roadshape.VERSION:
+            self.skipTest("earthfast 505")
+        import threading
+        f = self.long_structure(False, upper=True)
+        got = solve(f)
+        g = object.__new__(grading._Planner)
+        g.lock = threading.Lock()
+        g.frame = FRAME
+        g._roads_cell = lambda k: f
+        with mock.patch.object(roadshape, "DECKS", True):
+            keeps = g._deck_end_simple(np.array([0.3, 0.2]))
+        self.assertFalse(keeps)
+        self.assertIsNone(got["A"][2], "a deck of another level ends at its abutment: not simple")
 
     def test_end_simple_is_the_same_from_any_start(self):
         # (the reading starts at the caller's copy of the end; the answer is the map's)

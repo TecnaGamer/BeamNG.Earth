@@ -8997,11 +8997,17 @@ class BridgeProfiles:
         # the line from the road's smooth line, skewed and buried ends; published as the part, its piers along it)
         # (every solve, a window's too: which decks are simple is the map's answer, roadshape.part_simple, the one
         # grading's bank_through reads, so no approach banks onto a level deck; v2 P1b fix)
+        # (only the parts this solve publishes or returns: the rest's shapes would go unused; Codex review of the fix:
+        # a window solve's asked part out of its block, returned as `own`, takes its shape too)
         shapes = {}
         if roadshape.DECKS and self.STRUCTURES:
-            shapes = roadshape.shape_chain(comp, pool, zs, ground, lambda k: self._deck_simple(k, pool))
+            shapes = roadshape.shape_chain(comp, pool, zs, ground,
+                                           lambda k: (k in keep or (own is not None and k == key))
+                                           and self._deck_simple(k, pool))
         shaped = {k: ((v[0], _shaped_line(shapes[k]["xy"], shapes[k], len(v[1])), shapes[k]["z"], v[3]) if k in shapes
                       else v) for k, v in keep.items()}
+        if own is not None and key in shapes:
+            own = (own[0], _shaped_line(shapes[key]["xy"], shapes[key], len(own[1])), shapes[key]["z"], own[3])
         pre = {k: self._precommit(k, shaped[k], ground) for k in keep}
         beams = tpiers = None
         # (BNE_DECK_STRUCT=shadow, road revamp RS: the chain's structure groups as a JSON, from what this solve read

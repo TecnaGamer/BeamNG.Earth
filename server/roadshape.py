@@ -92,6 +92,8 @@ GROUP_MAX_M = 1000.0        # m: a simple structure's points' box diagonal at mo
 GROUP_MAX_N = 48            # members at most
 END_CELLS_MAX = 32          # map cells end_simple may need (more: not simple)
 COPY_PAD_M = 60.0           # m round a deck's ring its copies' cells are read in (grading.STRUCT_COPY_PAD_M)
+END_CLEAR_M = 5.0           # m: no other structure's deck end this near a simple deck's end (2 x grading's
+                            # APPROACH_TOUCH_M: a road end within its touch of both could lead onto either)
 _M_PER_DEG_LAT = 110574.0   # m per degree of latitude at least (pads in degrees: always at least the metres asked)
 _M_PER_DEG_LON = 111320.0   # m per degree of longitude at the equator
 
@@ -244,6 +246,16 @@ def end_simple(cell_fn, key, end, ll):
             if len(now) > GROUP_MAX_N or float(dnp.hypot(span[0], span[1])) > GROUP_MAX_M:
                 return False
             if now == group:
+                # (another structure's deck ending within END_CLEAR_M of this end, a stacked level's or a ramp's: a
+                # road end there could be taken onto either, grading by the nearest, deck_end_at; neither is simple,
+                # so the plans and both decks agree whichever it takes. Codex review of the fix)
+                for i, k in enumerate(near):
+                    if k in now:
+                        continue
+                    r = decks[k][0][[0, -1]]
+                    e, n, _ = fr.geodetic_to_enu(r[:, 1], r[:, 0], 0.0)
+                    if float(np.min(dnp.hypot(np.asarray(e, np.float64), np.asarray(n, np.float64)))) <= END_CLEAR_M:
+                        return False
                 return bool(simple_members(members, got)[t])
             group = now
     except ValueError:          # (cells_for_bbox: a deck over its cell limit; it only grows: the final answer too)
