@@ -1303,6 +1303,63 @@ def _weld_clamp(left, right, e):
     clamp_to_end((left + right) * 0.5, left, right, e, (left[e] + right[e]) * 0.5, d / ln)
 
 
+def _f64_pairs(rs):
+    """Every ribbon of rs (left, right, ...) a float64 (k, 2) pair (its rows batched as one array: the same numbers)."""
+    return all(type(a) is np.ndarray and a.dtype == np.float64 and a.ndim == 2 and a.shape[1] == 2
+               for r in rs for a in (r[0], r[1]))
+
+
+def _to_points(ab, m):
+    """The distances (len(m), len(ab)) from each point of m to each of ab, a row each, in one call."""
+    return dnp.hypot(ab[None, :, 0] - m[:, None, 0], ab[None, :, 1] - m[:, None, 1])
+
+
+_TO_POINTS_MAX = 1 << 16                        # (distances a _to_points call takes at most: a bounded buffer)
+
+
+def _chunks(n, ab):
+    step = max(1, _TO_POINTS_MAX // max(len(ab), 1))
+    return ((a, min(a + step, n)) for a in range(0, n, step))
+
+
+def _end_rows(rs, ab):
+    """build's ground ribbons rs, one (first point's mid distances to the deck ends ab, last point's, first point's
+    width, last's) after another, in rs's order (a call per quantity for a chunk of ribbons); None without them or
+    with a pair not float64 (k, 2) (a call each)."""
+    if not rs or not _f64_pairs(rs):
+        return None
+
+    def rows():
+        for a, b in _chunks(len(rs), ab):
+            l0, r0 = np.array([r[0][0] for r in rs[a:b]]), np.array([r[1][0] for r in rs[a:b]])
+            l1, r1 = np.array([r[0][-1] for r in rs[a:b]]), np.array([r[1][-1] for r in rs[a:b]])
+            yield from zip(_to_points(ab, (l0 + r0) * 0.5), _to_points(ab, (l1 + r1) * 0.5),
+                           dnp.hypot(*(l0 - r0).T).tolist(), dnp.hypot(*(l1 - r1).T).tolist())
+    return rows()
+
+
+def _ground_runs(rs, ab):
+    """build's ground ribbons rs: [(lengths along the mid line from its start, its start's distance to the nearest
+    deck end of ab, its end's)] in rs's order; None as _end_rows."""
+    if not rs or not _f64_pairs(rs):
+        return None
+    lens = [len(r[0]) for r in rs]
+    mid = (np.concatenate([r[0] for r in rs]) + np.concatenate([r[1] for r in rs])) * 0.5
+    ends = np.cumsum(lens)
+    starts = ends - lens
+    inner = np.ones(len(mid), bool)             # (each ribbon's own legs only: none from one ribbon to the next)
+    inner[starts] = False
+    legs = np.flatnonzero(inner)
+    d = mid[legs] - mid[legs - 1]
+    seg = dnp.hypot(d[:, 0], d[:, 1])
+    d0, d1 = np.empty(len(rs)), np.empty(len(rs))
+    for a, b in _chunks(len(rs), ab):
+        d0[a:b] = _to_points(ab, mid[starts[a:b]]).min(1)
+        d1[a:b] = _to_points(ab, mid[ends[a:b] - 1]).min(1)
+    return [(np.r_[0.0, np.cumsum(seg[a - i:b - i - 1])], x0, x1)
+            for i, (a, b, x0, x1) in enumerate(zip(starts.tolist(), ends.tolist(), d0, d1))]
+
+
 def build(frame, chunks, elev, origin, lift=0.0, clip=None, follow=False, q=None, drawn=None, context=(),
           clip_poly=None):
     """The road mesh of a tile (render only; on bridges it lies DECK_SKIN over deck()'s slab): (positions
@@ -1355,17 +1412,24 @@ def build(frame, chunks, elev, origin, lift=0.0, clip=None, follow=False, q=None
             return None
         return int(np.where(ok, d, np.inf).argmin())
     if len(deck_abuts):
+        # (every ground ribbon's end distances and widths in one call each where all are float64 pairs, the rows the
+        # ribbons' own numbers: a few calls per ribbon were 26k hypot calls in a cold Manhattan visit, 2026-11-19)
+        ends_of = _end_rows([r for r, _c in rbc if r[5] is None and len(r[0]) >= 2], ab_pts)
         new_rbc = []
         for r, c in rbc:
             if r[5] is None and len(r[0]) >= 2:
                 left, right, v, m, layer, fz = r
                 left, right = left.copy(), right.copy()
-                mid0 = (left[0] + right[0]) * 0.5
-                mid1 = (left[-1] + right[-1]) * 0.5
-                d0 = dnp.hypot(ab_pts[:, 0] - mid0[0], ab_pts[:, 1] - mid0[1])
-                d1 = dnp.hypot(ab_pts[:, 0] - mid1[0], ab_pts[:, 1] - mid1[1])
-                hit0 = _abut(d0, layer, float(dnp.hypot(*(left[0] - right[0]))))
-                hit1 = _abut(d1, layer, float(dnp.hypot(*(left[-1] - right[-1]))))
+                if ends_of is not None:
+                    d0, d1, w0, w1 = next(ends_of)
+                else:
+                    mid0 = (left[0] + right[0]) * 0.5
+                    mid1 = (left[-1] + right[-1]) * 0.5
+                    d0 = dnp.hypot(ab_pts[:, 0] - mid0[0], ab_pts[:, 1] - mid0[1])
+                    d1 = dnp.hypot(ab_pts[:, 0] - mid1[0], ab_pts[:, 1] - mid1[1])
+                    w0, w1 = float(dnp.hypot(*(left[0] - right[0]))), float(dnp.hypot(*(left[-1] - right[-1])))
+                hit0 = _abut(d0, layer, w0)
+                hit1 = _abut(d1, layer, w1)
                 if hit0 is not None:
                     _, l_ab, r_ab = deck_abuts[hit0][:3]
                     if (dnp.hypot(*(left[0] - l_ab)) + dnp.hypot(*(right[0] - r_ab))) <= (dnp.hypot(*(left[0] - r_ab)) + dnp.hypot(*(right[0] - l_ab))):
@@ -1413,15 +1477,22 @@ def build(frame, chunks, elev, origin, lift=0.0, clip=None, follow=False, q=None
     RW = []                                     # per triangle: a raceway's (no step cap: follow_ground, below)
     rpar = []                                   # per ribbon: _fade_uv's (feather share, tl, tu, slen, open ends, end fade)
     k0 = nverts = 0
+    # (the ground ribbons' lengths along and end distances to the deck ends, one call each as above)
+    runs = _ground_runs([r for r, _c in rbc if r[5] is None and len(r[0]) >= 2], ab_pts) if len(deck_abuts) else None
+    gi = 0
     for ri, ((left, right, v, m, layer, fz), c) in enumerate(rbc):
         k = len(left)
         if fz is None:
             cur_lift = np.full(k, lift)
             if len(deck_abuts) and k >= 2:
-                mid = (left + right) * 0.5
-                s_from_start = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(mid, axis=0).T))]
-                d0 = dnp.hypot(ab_pts[:, 0] - mid[0, 0], ab_pts[:, 1] - mid[0, 1]).min()
-                d1 = dnp.hypot(ab_pts[:, 0] - mid[-1, 0], ab_pts[:, 1] - mid[-1, 1]).min()
+                if runs is not None:
+                    s_from_start, d0, d1 = runs[gi]
+                    gi += 1
+                else:
+                    mid = (left + right) * 0.5
+                    s_from_start = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(mid, axis=0).T))]
+                    d0 = dnp.hypot(ab_pts[:, 0] - mid[0, 0], ab_pts[:, 1] - mid[0, 1]).min()
+                    d1 = dnp.hypot(ab_pts[:, 0] - mid[-1, 0], ab_pts[:, 1] - mid[-1, 1]).min()
                 if d0 <= 0.75:
                     w0 = np.clip(s_from_start / 4.0, 0.0, 1.0)
                     cur_lift = np.minimum(cur_lift, DECK_SKIN + (lift - DECK_SKIN) * w0)
