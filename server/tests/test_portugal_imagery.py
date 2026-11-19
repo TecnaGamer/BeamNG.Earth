@@ -78,7 +78,7 @@ class PortugalImageryTest(unittest.TestCase):
     def test_newer_photos_are_used_by_ground_and_map(self):
         im, transport = self.make()
         frame = self.warm(im, 41.1413, -8.611)
-        _, used = im._render(imagery.EnuSquare(frame, -64, -64, 128), 128)
+        _, used, _ = im._render(imagery.EnuSquare(frame, -64, -64, 128), 128)
         self.assertIn("pt_dgt2021", used)
         self.assertEqual(self.map_source(im, 41.1413, -8.611), "pt_dgt2021")
         self.assertIn("Ortos2021-RGB", transport.requests)

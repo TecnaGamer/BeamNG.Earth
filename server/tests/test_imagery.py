@@ -653,14 +653,14 @@ class ExportImageryTest(unittest.TestCase):
         im.fetch_lazy(self.frame, 0.0, 0.0, 256.0, 256)
         rgb, used = im.render(self.frame, 0.0, 0.0, 256.0, 256)
         self.assertEqual(set(used), {"naip"})
-        raw, _ = im._render(imagery.EnuSquare(self.frame, 0.0, 0.0, 256.0), 256)
+        raw, _, _ = im._render(imagery.EnuSquare(self.frame, 0.0, 0.0, 256.0), 256)
         self.assertTrue((rgb == raw).all())
         self.tmp.cleanup()              # (a cache of its own: the first one remembers the reference's misses)
         self.tmp = tempfile.TemporaryDirectory()
         im2 = self.make()               # (a reference with data: matched, as before)
         im2.fetch_lazy(self.frame, 0.0, 0.0, 256.0, 256)
         rgb2, _ = im2.render(self.frame, 0.0, 0.0, 256.0, 256)
-        raw2, _ = im2._render(imagery.EnuSquare(self.frame, 0.0, 0.0, 256.0), 256)
+        raw2, _, _ = im2._render(imagery.EnuSquare(self.frame, 0.0, 0.0, 256.0), 256)
         self.assertFalse((rgb2 == raw2).all())
 
     def wait(self, im):
@@ -819,7 +819,7 @@ class ExportImageryTest(unittest.TestCase):
         self.assertTrue(all(x % 2 for x, y in usgs_naip), "USGS NAIP only where USDA was black")
         self.assertLessEqual(usgs_naip, usda)
         self.assertTrue(im.lazy_ready(self.frame, -512.0, -512.0, 1024.0, 1024))
-        _, used = im._render(imagery.EnuSquare(self.frame, -512.0, -512.0, 1024.0), 1024)
+        _, used, _ = im._render(imagery.EnuSquare(self.frame, -512.0, -512.0, 1024.0), 1024)
         self.assertIn("naipusda", used)
         # where a USDA tile meets a USGS-NAIP one, neither has all four bilinear taps: a texel line of USGS
         self.assertLess(used.get("usgs", 0), 0.001 * 1024 * 1024)
@@ -852,7 +852,7 @@ class ExportImageryTest(unittest.TestCase):
         usda = {r[2:] for r in self.requests if r[0] == "naipusda"}
         self.assertTrue(md and usda)
         self.assertTrue(all(x % 2 for x, y in usda), "USDA only where Maryland's image was white")
-        _, used = im._render(imagery.EnuSquare(self.frame, -512.0, -512.0, 1024.0), 1024)
+        _, used, _ = im._render(imagery.EnuSquare(self.frame, -512.0, -512.0, 1024.0), 1024)
         self.assertIn("md6in", used)
         self.assertIn("naipusda", used)
         # far from Maryland: never asked
@@ -888,8 +888,8 @@ class ExportImageryTest(unittest.TestCase):
         im = self.make()
         self.assertEqual(self.warm(im, [(128.0, 128.0)]), [])
         rgb, used = im.render(self.frame, 0.0, 0.0, 256.0, 256)
-        raw, _ = im._render(imagery.EnuSquare(self.frame, 0.0, 0.0, 256.0), 256)
-        ref, _ = im._render(imagery.EnuSquare(self.frame, 0.0, 0.0, 256.0), 256, None, skip_lazy=True)
+        raw, _, _ = im._render(imagery.EnuSquare(self.frame, 0.0, 0.0, 256.0), 256)
+        ref, _, _ = im._render(imagery.EnuSquare(self.frame, 0.0, 0.0, 256.0), 256, None, skip_lazy=True)
         self.assertEqual(set(used), {"naip"})
         far, near = np.abs(raw.mean((0, 1)) - ref.mean((0, 1))), np.abs(rgb.mean((0, 1)) - ref.mean((0, 1)))
         self.assertGreater(far.max(), 50)
@@ -899,6 +899,57 @@ class ExportImageryTest(unittest.TestCase):
         self.assertGreater(hi(rgb), 0.5 * hi(raw))                                  # ... NAIP's detail
         same = imagery.match_colours(raw, raw, 10)
         self.assertTrue((same == raw).all(), "matching an image to itself changes nothing")
+
+    def test_mixed_naip_sources_match_the_far_photo_without_recolouring_fallback(self):
+        """A partially available aerial photo has USGS on the left and two distinct flights on the right."""
+        base = (130, 160, 115)
+
+        def serve_export(z, x, y, size, name):
+            a = np.zeros((size, size, 3), np.uint8)
+            q = size // 4
+            if name == "naipusda":
+                part, colour = a[:, q:3 * q], (65, 138, 153)
+            else:
+                part, colour = a[:, 3 * q:], (190, 112, 77)
+            part[:] = colour
+            part[::2, ::2] += 8
+            return 200, png(a)
+
+        def serve_xyz(name, z, x, y):
+            a = np.empty((256, 256, 3), np.uint8)
+            a[:] = base
+            a[::2, ::2] += 8
+            return 200, png(a)
+
+        net = netfetch.Fetcher(transport=ExportTransport(serve_export, serve_xyz, [], by_name=True),
+                               sleep=lambda s: None, policies=FAST)
+        im = imagery.Imagery(self.tmp.name, ("naipusda", "naip", "usgs"), fetcher=net, tone=0.0)
+        self.addCleanup(im.close)
+        z, px = 15, 1024
+        x, y = (int(p // imagery.TILE) for p in imagery.mercator_px(self.LAT, self.LON, z))
+        where = imagery.MercSquare(z, x, y, px)
+        frame = g.EnuFrame(*where._ll(0.5, 0.5))
+        im.fetch_lazy(frame, -500.0, -500.0, 1000.0, px)
+        raw, _, _ = im._render(where, px)
+        rgb, used = im.render_merc(z, x, y, px)
+        far, far_used = im.render_merc(z, x, y, 512)
+        self.assertEqual(set(used), {"naipusda", "naip", "usgs"})
+        self.assertEqual(set(far_used), {"usgs"})
+
+        rows = slice(64, -64)
+        quarter = (px - 2 * where.g) // 4
+        join = where.g + quarter
+        np.testing.assert_array_equal(rgb[rows, 64:join - 4], raw[rows, 64:join - 4])
+        def step(image, seam):
+            a = image[rows, seam - 12:seam - 4].mean((0, 1))
+            b = image[rows, seam + 4:seam + 12].mean((0, 1))
+            return np.abs(a - b).mean()
+
+        for seam in (join, join + 2 * quarter):
+            self.assertGreater(step(raw, seam), 25)
+            self.assertLess(step(rgb, seam), 6)
+        np.testing.assert_allclose(rgb[rows, join + 32:-64].mean((0, 1)), far[32:-32, 32:-32].mean((0, 1)),
+                                   atol=4)
 
     def test_fetch_lazy_fetches_what_a_render_would_skip(self):
         # the roofs' photo (buildings.roof_photo online): a render reads a lazy tile from disk only, so its lazy tiles

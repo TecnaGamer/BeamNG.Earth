@@ -18,7 +18,8 @@
 --     replacement is loaded", so never a hole), and groups that share a key run in arrival order.
 --     It runs as a C2 vertical crossover (crossover.lua) whenever any of it is in view, at any
 --     distance (v1.3 D: no "beyond 30 km instant" rule), else as an instant swap (C1). At the
---     transition cap a group in view within NEAR_POP_M waits for a free slot instead of popping.
+--     transition cap in-view groups within NEAR_POP_M wait for a free slot (except pure removals),
+--     as do up to one wave of two-sided replacements with a large visible footprint farther away.
 --     dIn >= max(new - old), dOut >= max(old - new) are the server's measured amplitudes; without
 --     them (or for a one-sided group) the bound 1.2 * (err_new + err_old) + 0.2 m is used.
 --   far_remove {anchorId, key}  a prefetch eviction, or a previous anchor's tile after a rebase:
@@ -124,6 +125,7 @@ M.COVERED_PENALTY = 4   -- ... a tile under the shown block counts this many tim
 M.SPARE_MAX = 400
 M.SPARE_S = 120
 M.MAX_DT = 0.1          -- s; longest step of the transition clock per frame
+local CAP_SCREEN_SHARE = 0.05 -- projected tile edge / viewport height; ~54 px at 1080p
 M.EXACT_LEVEL = -2      -- the exact (physics lattice) level of the 32-cell mesh layout (server MESH_MIN_LEVEL)
 M.MAX_LEVEL = 9         -- coarsest level (server farfield.MAX_LEVEL); the horizon mode's L10 tiles (M1h)
                         -- are never under the player (they split within 328 km), so shownAt stops here
@@ -731,17 +733,25 @@ local function groupReady(g)
   return true
 end
 
--- In view (camera cone + margin, at any distance) and the nearest distance, over instances.
-local function inView(list, cam, delta)
-  if not cam then return true, 0 end
-  local any, nearest = false, huge
+-- Group visibility and nearest sphere distance for the existing foreground safeguard. At the cap,
+-- estimate each visible tile's screen size from its footprint edge and camera-to-centre distance.
+-- Don't use the sphere's radius for size: it includes relief and the vertical crossover's travel.
+local function inView(list, cam, delta, screenScale)
+  if not cam then return #list > 0, #list > 0 and 0 or huge, false end
+  local any, nearest, large = false, huge, false
   for _, inst in ipairs(list) do
     local cx, cy, cz, r = crossover.tileSphere(inst.x0, inst.y0, inst.x1, inst.y1, inst.z, delta)
     local vis, d = crossover.sphereInView(cam, cx, cy, cz, r)
     if d < nearest then nearest = d end
-    if vis then any = true end
+    if vis then
+      any = true
+      if screenScale and not large then
+        local edge = max(inst.x1 - inst.x0, inst.y1 - inst.y0)
+        large = edge >= (d + r) * screenScale
+      end
+    end
   end
-  return any, nearest
+  return any, nearest, large
 end
 
 -- Mesh mode, after a rebase: the previous anchor's tiles stay until the server far_removes them,
@@ -795,10 +805,9 @@ local function finishGroup(g)
   dropCoveredOld(g.adds)
 end
 
--- Start a ready group. Returns false (nothing changed) when it must wait: it would cross over in
--- view within NEAR_POP_M while MAX_GROUPS crossovers already run (v1.3 D: the cap stays, but a near
--- in-view swap waits a few frames for a free slot instead of popping).
-local function startGroup(g, cam)
+-- Start a ready group. False leaves the current surface intact until a free slot; the second
+-- result distinguishes the extra screen-size waits from the existing foreground safeguard.
+local function startGroup(g, cam, screenScale)
   -- 1. plan, without changing any state
   -- what goes: the live instances of the removed keys, and any live instance an add replaces
   local rems, seen = {}, {}
@@ -832,30 +841,32 @@ local function startGroup(g, cam)
     end
   end
   local mode, dIn, dOut = 'instant', 0, 0
-  if #visAdds > 0 or #visRems > 0 then
+  if #visRems > 0 or (#visAdds > 0 and oldCount > 0) then
     local bound = crossover.delta(errN, errO)
     if #visAdds > 0 and #visRems > 0 and g.msgIn and g.msgOut then
       dIn, dOut = g.msgIn, g.msgOut
     else
       dIn, dOut = bound, bound
     end
-    local all = {}
-    for _, a in ipairs(visAdds) do all[#all + 1] = a end
-    for _, r in ipairs(visRems) do all[#all + 1] = r end
-    local vis, nearest = inView(all, cam, max(dIn, dOut))
-    if #visRems == 0 and oldCount == 0 then
-      mode = 'instant' -- nothing visible to cross over with (first fill)
-    elseif not vis then
-      mode = 'instant' -- C1: off-screen
-    elseif activeGroups >= crossover.MAX_GROUPS then
-      if nearest <= crossover.NEAR_POP_M then
-        counters.capWaits = counters.capWaits + 1
-        return false -- wait for a free slot (a crossover ends within 0.5 s)
+    local capped = activeGroups >= crossover.MAX_GROUPS
+    local delta = max(dIn, dOut)
+    if #visAdds == 0 or #visRems == 0 then screenScale = nil end -- no drawable replacement pair
+    local vis, nearest, large = inView(visAdds, cam, delta, screenScale)
+    if capped or not vis then
+      local remVis, remNearest, remLarge = inView(visRems, cam, delta, screenScale)
+      vis, nearest, large = vis or remVis, min(nearest, remNearest), large or remLarge
+    end
+    if vis then
+      if not capped then
+        mode = (#visRems == 0) and 'rise' or 'cross' -- rise: over a previous anchor's tiles
+      else
+        local near = nearest <= crossover.NEAR_POP_M
+        if #g.add > 0 and (near or large) then
+          counters.capWaits = counters.capWaits + 1
+          return false, not near
+        end
+        counters.pops = counters.pops + 1 -- visible, but at the cap and not waiting
       end
-      mode = 'instant' -- over the cap and far: C1, a visible pop (stats; v1.3 D: every in-view swap should cross over)
-      counters.pops = counters.pops + 1
-    else
-      mode = (#visRems == 0) and 'rise' or 'cross' -- rise: over a previous anchor's tiles
     end
   end
 
@@ -1423,6 +1434,7 @@ function M.update(gov, dt, cam, player)
     end
   end
   local stop = false
+  local screenScale, screenWaits = nil, 0
   if preview.on then previewPending() end
   for _, g in ipairs(groups) do
     if g.state == 'wait' and preview.on then previewGroup(g) end
@@ -1437,12 +1449,22 @@ function M.update(gov, dt, cam, player)
       if not blocked and groupReady(g) then
         if gov:try('reveal') then
           local t1 = now()
-          if startGroup(g, cam) then
+          -- Allow just one more wave of screen-size waits, in the existing group order. A farther
+          -- group beyond this still takes the instant path; don't add work to the motion budget.
+          -- Map preview already shows pending tiles lifted above the coarse ones; keep its policy.
+          if not screenScale and cam and not preview.on and activeGroups >= crossover.MAX_GROUPS then
+            local halfFov = rad(min(max(cam.fovDeg or 60, 1), 179)) * 0.5
+            screenScale = 2 * tan(halfFov) * CAP_SCREEN_SHARE
+          end
+          local started, screenWait = startGroup(g, cam, screenWaits < crossover.MAX_GROUPS and screenScale)
+          if started then
             local ms = now() - t1
             gov:charge('reveal', ms)
             slowUnit('swap group start', ms, string.format('group %s: %d adds, %d removes', tostring(g.id), #g.add, #g.remove))
             units = units + 1
-          end -- else: waits for a crossover slot; its keys stay busy, other groups go on
+          elseif screenWait then
+            screenWaits = screenWaits + 1
+          end -- if waiting, its keys stay busy, other groups go on
         else
           stop = true -- out of budget: keep the order, try again next frame
         end

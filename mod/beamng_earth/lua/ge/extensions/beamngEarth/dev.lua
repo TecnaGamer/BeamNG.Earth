@@ -716,8 +716,8 @@ local function pollEvents(st)
   if cur.rebase > p.rebase then
     logEvent(string.format('rebase -> anchor #%s, %s ms', tostring(st.anchorId), fmt(st.lastRebaseMs, '%.0f')))
   end
-  if cur.pops > p.pops then logEvent(string.format('%d swap(s) popped (crossover cap, far)', cur.pops - p.pops)) end
-  if cur.capWaits > p.capWaits then logEvent('near swap waited for a crossover slot') end
+  if cur.pops > p.pops then logEvent(string.format('%d swap(s) popped (crossover cap)', cur.pops - p.pops)) end
+  if cur.capWaits > p.capWaits then logEvent('visible swap waited for a crossover slot') end
   if cur.failed > p.failed then logEvent(string.format('%d tile import(s) failed', cur.failed - p.failed)) end
   if cur.status ~= p.status and cur.status ~= '' then logEvent(cur.status) end
 end
