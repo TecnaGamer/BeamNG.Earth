@@ -7120,11 +7120,14 @@ FAR_LAYERS = ("buildings", "building_parts", "infrastructure", "roads", "water")
 
 
 def measured_wait(md, keys, wait=True):
-    """A building tile's wait for its cells' measured buildings that come per map cell (France's BD TOPO: MapData.cell
-    joins them once they are here), all together and bounded (bdtopo.WAIT_S): their downloads run beside the cells'
-    own from the tile's start (MapData.warm). wait=False: started, not waited for (the skyline's: render-only, built
-    again on a later visit). A map without them: nothing."""
+    """A building tile's wait for its cells' measured buildings that come per map cell (France's BD TOPO, Hong Kong's
+    Lands Department layer: MapData.cell joins them once they are here), all together and bounded (bdtopo.WAIT_S):
+    their downloads run beside the cells' own from the tile's start (MapData.warm). wait=False: started, not waited
+    for (the skyline's: render-only, built again on a later visit). A map without them: nothing."""
     w = getattr(md, "bdtopo_wait", None)
+    if w is not None:
+        w(keys, wait)
+    w = getattr(md, "hkbuildings_wait", None)       # (Hong Kong's, hkbuildings.py)
     if w is not None:
         w(keys, wait)
 

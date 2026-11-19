@@ -124,6 +124,7 @@ FEATURES = {
     "roof:lod2-wien": "Stadt Wien (data.wien.gv.at)",
     "roof:3dbag": "3DBAG (tudelft3d, 3DGI)",
     "bld:bdtopo-fr": "IGN BD TOPO",
+    "bld:landsd-hk": "HK Gov LandsD (CSDI)",
     "bld:nyc-3d": "NYC 3-D Building Model (OTI)",
     "roadz:hk": "HK Gov TD and CEDD (DATA.GOV.HK, CSDI)",
     "air:ourairports": "OurAirports", "grav:egm2008": "NGA EGM2008", "climate:beck-kg": "Beck et al. (Koppen-Geiger)",
@@ -137,6 +138,8 @@ LONG = {
                   "data changed",
     "bld:bdtopo-fr": "Building heights, storeys, materials and use: IGN, BD TOPO (Licence Ouverte / Etalab 2.0), "
                      "data changed",
+    "bld:landsd-hk": "Building heights and storeys in Hong Kong: Building layer of the Lands Department, (c) "
+                     "Government of the Hong Kong SAR, from the CSDI Portal, data changed",
     "bld:nyc-3d": "NYC Office of Technology and Innovation, 3-D Building Model (2014); NYC Building Footprints",
     "roof:lod2-de": "Roof shapes and heights: changed data from the German states' LoD2 building models: "
                     "Datenquelle: LGL, www.lgl-bw.de, dl-de/by-2-0; Bayerische Vermessungsverwaltung - "
@@ -300,6 +303,13 @@ def feature_ids(conn):
             if getattr(md, "bdtopo", None) is not None and bdtopo.credited_near(getattr(md, "cache_dir", None),
                                                                                 lat, lon, FEATURE_NEAR_M):
                 ids.add("bld:bdtopo-fr")
+        except Exception:
+            pass
+        try:                        # (Hong Kong's measured buildings on disk near: hkbuildings)
+            import hkbuildings
+            if getattr(md, "hkbuildings", None) is not None and hkbuildings.credited_near(
+                    getattr(md, "cache_dir", None), lat, lon, FEATURE_NEAR_M):
+                ids.add("bld:landsd-hk")
         except Exception:
             pass
         try:                        # (a Hong Kong road heights cell on disk near: roadz)
