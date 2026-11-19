@@ -1,5 +1,5 @@
 """Road revamp v2, "road shape first" (.claude/work/road-revamp-v2-road-shape-first-2026-11-19.md): the glue of the
-Rust kernels in native/earthfast/src/roadshape. Switch BNE_ROADSHAPE (off / decks; later sheet, profile, full).
+Rust kernels in native/earthfast/src/roadshape. Switch BNE_ROADSHAPE (off / decks / sheet; later profile, full).
 
 Phase P1b (earthfast 498, BNE_ROADSHAPE=decks; the user's go 2026-11-19 on banked decks and buried deck ends):
 curved, skewed decks with buried ends for the SIMPLE structures. In a bridge chain's solve (roads.BridgeProfiles.
@@ -34,7 +34,8 @@ import dmath
 import dnp
 
 MODE = os.environ.get("BNE_ROADSHAPE", "off")
-DECKS = MODE in ("decks",)
+DECKS = MODE in ("decks", "sheet")     # (P2's sheet builds on P1b's decks)
+SHEET = MODE == "sheet"                 # P2a: the fork records, written beside the build (shadow only, cell_forks)
 SKEW = DECKS and os.environ.get("BNE_DECK_SKEW", "on") not in ("off", "0", "false")
 
 CHORD_TOL_M = 0.01          # m: a row piece's largest departure from the curve (the design's 2 cm chord rule, less the
@@ -454,3 +455,178 @@ def mapped(rec, mp):
         if o is not None:
             out["ov"][e] = mp.pts(np.c_[np.asarray(o, np.float64), np.zeros(len(o))])[:, :2].copy()
     return out
+
+
+# ---- the fork records: road revamp v2 phase P2a (earthfast 510, BNE_ROADSHAPE=sheet, SHADOW ONLY) -------------------
+# Where one one-way carriageway divides (an exit, a ramp splitting) or two join (an entrance): the road surface model's
+# Fork node (design §1.1, §1.2, §1.5): trunk / through / branch arms, the shared length where the branch is an extra
+# lane of the main carriageway (taper start .. painted nose), the painted gore (painted .. physical nose), the branch's
+# own line from the physical nose, and the widths along it as quintic pieces (earthfast.fork_records: the rules).
+# A z14 cell's records are its own nodes' (a node's home: the cell of its exact map point), each a function of the map
+# within FORK_REACH_M of the node: the cell and the rings of cells round it that reach needs (fork_rings), every segment
+# taken from the copy of the cell of its first point (the same copy whichever cells were read first), in a frame at the
+# cell's centre. Nothing built reads them: shadow_forks writes them as JSON beside the build; forkprobe.py checks them.
+FORK_VERSION = 510          # earthfast.fork_records
+FORKS_FORMAT = 1            # the records' JSON (shadow_forks' folder name)
+FORK_REACH_M = 400.0        # m along every arm from the node (the design's window: inputs within 400 m)
+FORK_DIR_M = 20.0           # m of an arm its direction is read over
+FORK_DEG = 40.0             # a fork's two arms turn at most this from the trunk (more: a junction)
+PHYS_GAP_M = 1.2            # m between the two pavements at the physical nose (the design's 1.2 m)
+FORK_STEP_M = 1.0           # m between the branch's samples
+FORK_OUT_M = 2.0            # m between the record's rows
+TAPER_FAST_M = 90.0         # m of taper at TAPER_KMH and over (AASHTO 2018 10.9.6: 250-300 ft) ...
+TAPER_SLOW_M = 60.0         # ... below
+TAPER_KMH = 80.0
+DECEL = (1.5, -40.0, 40.0, 150.0)       # a parallel deceleration lane's full length k V + c, clamped (m; AASHTO Exh.
+ACCEL = (5.0, -250.0, 60.0, 300.0)      # 10-73 / 10-70 at a 50 km/h ramp, roughly): only without lane evidence
+BLEND_MIN_M, BLEND_K = 30.0, 0.6        # the branch's offset line blended onto the mapped ramp over max(30 m, 0.6 V)
+GORE_MIN_M = 10.0           # m of painted gore at least ...
+GORE_RATE = 0.0             # ... and m of it per m it opens at least (G = hM + hB + PHYS_GAP_M). Off: a 1:8 floor moved
+                            # the physical noses 5-10 m further from the aerial's (forkprobe, 3 of 4 places, 2026-11-19)
+FORK_CLASSES = {"motorway": 1, "trunk": 2, "primary": 3, "secondary": 4, "tertiary": 5}
+CLASS_KMH = {"motorway": 100.0, "trunk": 90.0, "primary": 70.0, "secondary": 60.0, "tertiary": 50.0}
+FORK_PARAMS = np.array([FORK_REACH_M, FORK_DIR_M, dmath.cos(math.radians(FORK_DEG)), PHYS_GAP_M, FORK_STEP_M,
+                        FORK_OUT_M, TAPER_FAST_M, TAPER_SLOW_M, TAPER_KMH, *DECEL, *ACCEL, BLEND_MIN_M, BLEND_K,
+                        GORE_MIN_M, GORE_RATE], np.float64)
+
+
+def fork_rings(key):
+    """Rings of cells round key that FORK_REACH_M can reach from a node inside it (at least 1)."""
+    w = key.size_m()[0]
+    return max(1, int(math.ceil(1.25 * FORK_REACH_M / max(w, 1.0))))
+
+
+def _vertex_shares(ll):
+    """Each vertex's share of a line's length (lon / lat (k, 2)), in the line's own local metric (its first point's
+    latitude): the same whatever frame or cell it is read in."""
+    c = dmath.cos(math.radians(float(ll[0, 1])))
+    d = np.diff(ll, axis=0) * np.array([111320.0 * c, 110574.0])
+    s = np.r_[0.0, np.cumsum(dnp.hypot(d[:, 0], d[:, 1]))]
+    return s / s[-1] if s[-1] > 0 else s
+
+
+def _segment_rows(feats, i, specs, roadsmod):
+    """Feature i of a roads layer as fork_records reads it, or None (not a paved road of FORK_CLASSES, no line)."""
+    sp = specs[i]
+    if sp is None or sp.cls not in FORK_CLASSES or sp.kind != "paved":
+        return None
+    parts = feats.parts(i)
+    if not parts or not parts[0] or len(parts[0][0]) < 2:
+        return None
+    ll = np.ascontiguousarray(parts[0][0], np.float64)
+    import roadlanes
+    lvl = roadlanes.rule(feats, "level", i)
+    turn = feats.attrs.get("osm_turn_lanes")
+    t = turn[i] if turn is not None else None
+    con = feats.rules.get("connectors")
+    cons = []
+    if con is not None:
+        shares = _vertex_shares(ll)
+        for r in con.rows(i).tolist():
+            cons.append((str(con.value[r]), int(np.argmin(np.abs(shares - float(con.start[r]))))))
+    return {"ll": ll, "cls": FORK_CLASSES[sp.cls], "link": bool(sp.link), "dir": int(sp.dir or 0) if sp.oneway else 0,
+            "pave": float(sp.width), "drive": float(roadsmod.lane_layout(sp)[0]),
+            "lanes": int(sp.lanes) if sp.lanes else -1, "kmh": float(sp.kmh or CLASS_KMH[sp.cls]),
+            "level": int(lvl) if lvl is not None and lvl == lvl else 0,
+            "turn": t if isinstance(t, str) else "", "cons": cons}
+
+
+def _cell_segments(key, cell_fn, memo):
+    """{part id: _segment_rows} of cell key's roads (memo: per cell). A part id is the segment's id and its first point
+    (a segment split at its lane tags' ways is several features of one id: lanesections; the same in every copy)."""
+    k = str(key)
+    got = memo.get(k)
+    if got is None:
+        import roads as roadsmod
+        feats = cell_fn(key)
+        got = {}
+        if feats is not None and len(feats):
+            # (a bridge has no road spec, road_specs leaves it out: its deck's, as the bridge chains read it)
+            specs = [a if a is not None else b for a, b in zip(roadsmod.road_specs(feats),
+                                                               roadsmod.BridgeProfiles.specs_of(feats))]
+            for i in range(len(feats)):
+                r = _segment_rows(feats, i, specs, roadsmod)
+                if r is not None:
+                    got[f"{feats.ids[i]}|{r['ll'][0, 0]:.7f},{r['ll'][0, 1]:.7f}"] = r
+        memo[k] = got
+    return got
+
+
+def cell_forks(key, cell_fn, memo=None):
+    """The fork records of the nodes homed in map cell key (earthfast.fork_records' JSON, parsed): a list sorted by
+    connector id, points in mm in the cell's frame ("frame": its centre lat / lon). cell_fn(key) -> the cell's roads
+    features. memo: {cell: segments} shared across calls (optional)."""
+    import json
+    import fast
+    import geodesy
+    import mapcells
+    fast.require(FORK_VERSION, "fork_records")
+    memo = {} if memo is None else memo
+    rings = fork_rings(key)
+    keys = [mapcells.CellKey(key.z, (key.x + dx) % key.n, key.y + dy)
+            for dy in range(-rings, rings + 1) for dx in range(-rings, rings + 1) if 0 <= key.y + dy < key.n]
+    segs = {}
+    for k in keys:
+        for fid, r in _cell_segments(k, cell_fn, memo).items():
+            segs.setdefault(fid, r)
+    for fid in sorted(segs):        # each segment from its own home cell's copy (the cell of its first point)
+        ll = segs[fid]["ll"]
+        own = _cell_segments(mapcells.cell_of(float(ll[0, 1]), float(ll[0, 0]), key.z), cell_fn, memo).get(fid)
+        if own is not None:
+            segs[fid] = own
+    fids = sorted(segs)
+    if not fids:
+        return []
+    lat0, lon0 = key.center()
+    frame = geodesy.EnuFrame(lat0, lon0)
+    lon_a, lat_a, lon_b, lat_b = key.bounds()
+    xy, off = [], [0]
+    con_id, con_seg, con_vtx, con_home = [], [], [], []
+    for g, fid in enumerate(fids):
+        ll = segs[fid]["ll"]
+        e, n, _u = frame.geodetic_to_enu(ll[:, 1], ll[:, 0], 0.0)
+        xy.append(np.c_[e, n])
+        off.append(off[-1] + len(ll))
+        for cid, v in segs[fid]["cons"]:
+            lo, la = float(ll[v, 0]), float(ll[v, 1])
+            con_id.append(cid)
+            con_seg.append(g)
+            con_vtx.append(v)
+            con_home.append(bool(lon_a <= lo < lon_b and lat_b > la >= lat_a))
+    col = lambda name: [segs[f][name] for f in fids]   # noqa: E731
+    got = fast._ef.fork_records(
+        np.ascontiguousarray(np.concatenate(xy), np.float64), off, fids, col("cls"), col("link"), col("dir"),
+        col("pave"), col("drive"), col("lanes"), col("kmh"), col("level"), col("turn"), con_id, con_seg, con_vtx,
+        con_home, FORK_PARAMS)
+    out = json.loads(got)
+    for rec in out:
+        rec["frame"] = [lat0, lon0]
+        rec["cell"] = str(key)
+    return out
+
+
+_SHADOW_DONE = set()
+
+
+def shadow_forks(cell_keys, cell_fn, cache_dir):
+    """BNE_ROADSHAPE=sheet: each map cell's fork records (cell_forks) as JSON in cache_dir/roadshape/forks-<format>/,
+    written once per cell and process (again by the next process: never a file of older map data or code kept). Never
+    raises: nothing built reads them."""
+    import json
+    import logging
+    for key in cell_keys:
+        k = str(key)
+        if k in _SHADOW_DONE:
+            continue
+        _SHADOW_DONE.add(k)
+        d = os.path.join(cache_dir, "roadshape", f"forks-{FORKS_FORMAT}")
+        path = os.path.join(d, f"{key.z}_{key.x}_{key.y}.json")
+        try:
+            recs = cell_forks(key, cell_fn)
+            os.makedirs(d, exist_ok=True)
+            tmp = f"{path}.{os.getpid()}.part"
+            with open(tmp, "w") as fh:
+                json.dump(recs, fh, sort_keys=True, separators=(",", ":"))
+            os.replace(tmp, path)
+        except Exception as ex:      # noqa: BLE001 (shadow output: a fault never reaches the build)
+            logging.getLogger("earthd.roadshape").warning("fork records of %s: %s: %s", k, type(ex).__name__, ex)

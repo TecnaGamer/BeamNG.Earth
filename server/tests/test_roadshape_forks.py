@@ -1,0 +1,155 @@
+"""Road revamp v2 phase P2a (roadshape.cell_forks, earthfast.fork_records; BNE_ROADSHAPE=sheet, shadow only): the fork
+records of a diverge / merge from the map alone: which arm is the branch, its side, the painted and physical noses
+from the mapped ramp, the shared length's start from the lanes (a lane drop), the turn lanes or the design length, the
+widths without steps, and the same record whatever order the inputs come in. A one-way street's right-angle T is not
+a fork."""
+import json
+import math
+import os
+import sys
+import unittest
+
+import numpy as np
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+
+import fast  # noqa: E402
+import roadshape  # noqa: E402
+
+ANG = math.radians(3.0)
+
+
+def seg(fid, pts, cls=1, link=False, d=1, pave=14.1, drive=11.1, lanes=3, kmh=100.0, turn=""):
+    return dict(fid=fid, pts=np.asarray(pts, np.float64), cls=cls, link=link, dir=d, pave=pave, drive=drive,
+                lanes=lanes, kmh=kmh, level=0, turn=turn)
+
+
+def ramp_pts(reverse=False, n=31):
+    t = np.linspace(0.0, 300.0, n)
+    p = np.c_[t, -t * math.tan(ANG)]
+    return p[::-1] if reverse else p
+
+
+def scene(trunk_lanes=3, turn="", merge=False, tee=False):
+    """A motorway along +x through the node (0, 0): the trunk from x = -200 (another piece before it from -600, with
+    3 lanes), the through on to x = 500, a one-lane ramp leaving to the right at 3 degrees (tee: a one-way street at
+    90 degrees instead). merge: every direction reversed (the ramp joins)."""
+    d = -1 if merge else 1
+    segs = [seg("a0", [(-600.0, 0.0), (-200.0, 0.0)], d=d), seg("a1", [(-200.0, 0.0), (0.0, 0.0)], lanes=trunk_lanes,
+                                                               pave=17.8 if trunk_lanes == 4 else 14.1,
+                                                               drive=14.8 if trunk_lanes == 4 else 11.1, d=d, turn=turn),
+            seg("b", [(0.0, 0.0), (250.0, 0.0), (500.0, 0.0)], d=d)]
+    if tee:
+        segs.append(seg("c", [(0.0, 0.0), (0.0, -300.0)], cls=4, d=d, lanes=1, pave=6.7, drive=3.7))
+    else:
+        segs.append(seg("c", ramp_pts(), link=True, d=d, lanes=1, pave=6.7, drive=3.7, kmh=60.0))
+    cons = [("n_a0", "a0", 0), ("n_mid", "a0", 1), ("n_mid", "a1", 0), ("n0", "a1", 1), ("n0", "b", 0),
+            ("n_b", "b", 2), ("n0", "c", 0), ("n_c", "c", len(segs[-1]["pts"]) - 1)]
+    return segs, cons
+
+
+def run(segs, cons, home=("n0",), order=None):
+    segs = sorted(segs, key=lambda s: s["fid"])
+    idx = {s["fid"]: k for k, s in enumerate(segs)}
+    off = [0]
+    for s in segs:
+        off.append(off[-1] + len(s["pts"]))
+    cons = list(cons) if order is None else [cons[i] for i in order]
+    col = lambda k: [s[k] for s in segs]   # noqa: E731
+    fast.require(roadshape.FORK_VERSION, "fork_records")
+    got = fast._ef.fork_records(np.ascontiguousarray(np.concatenate([s["pts"] for s in segs])), off, col("fid"),
+                                col("cls"), col("link"), col("dir"), col("pave"), col("drive"), col("lanes"), col("kmh"),
+                                col("level"), col("turn"), [c[0] for c in cons], [idx[c[1]] for c in cons],
+                                [c[2] for c in cons], [c[0] in home for c in cons], roadshape.FORK_PARAMS)
+    return got, json.loads(got)
+
+
+def widths(rec):
+    r = np.asarray(rec["rows"], np.float64) / 1000.0
+    return r[:, 0], r[:, 9] - r[:, 5]
+
+
+class ForkTest(unittest.TestCase):
+    def test_diverge_design(self):
+        _, recs = run(*scene())
+        self.assertEqual(len(recs), 1)
+        r = recs[0]
+        self.assertEqual((r["kind"], r["side"], r["trunk"], r["through"], r["branch"]), ("diverge", "right", "a1", "b", "c"))
+        self.assertEqual(r["evidence"], "design")
+        # painted nose: the ramp's centre (dM + dB) / 2 = 7.4 m off; physical: dM / 2 + hM + 1.2 + hB + dB / 2 = 11.6 m
+        tan = math.tan(ANG)
+        self.assertAlmostEqual(r["s"]["painted"] / 1000.0, 7.4 / tan * math.cos(ANG), delta=1.5)
+        self.assertAlmostEqual(r["s"]["physical"] / 1000.0, 11.6 / tan * math.cos(ANG), delta=1.5)
+        # design: deceleration 1.5 V - 40 = 110 m and a 90 m taper before the painted nose
+        self.assertAlmostEqual((r["s"]["painted"] - r["s"]["taper"]) / 1000.0, 200.0, delta=0.01)
+        s, w = widths(r)
+        self.assertLess(np.abs(np.diff(w)).max(), 0.6)          # no steps (2 m rows)
+        self.assertAlmostEqual(w[0], 14.1, delta=0.01)          # the trunk's mapped pavement at the record's start
+        k = int(np.argmin(np.abs(s - r["s"]["physical"] / 1000.0)))
+        self.assertAlmostEqual(w[k], 14.1 + 1.2 + 6.7, delta=0.01)   # through + gap + branch at the physical nose
+        self.assertTrue(r["branch_line"])
+
+    def test_lane_drop(self):
+        _, recs = run(*scene(trunk_lanes=4))
+        r = recs[0]
+        self.assertEqual(r["evidence"], "lanes")
+        self.assertEqual(r["s"]["taper"], -200000)              # the connector where the trunk got its fourth lane
+        s, w = widths(r)
+        self.assertLess(np.abs(np.diff(w)).max(), 0.6)
+        self.assertAlmostEqual(w[0], 14.1, delta=0.01)          # a0's 3-lane pavement before the seam
+
+    def test_lane_from_the_start(self):
+        # the trunk has the exit lane all along its 400 m reach (a0 four lanes too): the width blends from the trunk's
+        # mapped pavement to the model's after the record's start, never a step there
+        segs, cons = scene(trunk_lanes=4)
+        segs[0].update(lanes=4, pave=19.0)
+        _, recs = run(segs, cons)
+        r = recs[0]
+        self.assertEqual(r["evidence"], "lanes")
+        self.assertIn("lane_beyond_reach", r["flags"])
+        s, w = widths(r)
+        self.assertAlmostEqual(w[0], 19.0, delta=0.01)
+        self.assertLess(np.abs(np.diff(w)).max(), 0.6)
+
+    def test_turn_lanes(self):
+        _, recs = run(*scene(turn="none|none|slight_right"))
+        r = recs[0]
+        self.assertEqual(r["evidence"], "turn_lanes")
+        self.assertEqual(r["s"]["taper"], -200000)              # the way with the exit lane starts there
+
+    def test_merge(self):
+        _, recs = run(*scene(merge=True))
+        r = recs[0]
+        # (traffic now runs west: the ramp south of the road joins from the driver's left)
+        self.assertEqual((r["kind"], r["side"], r["branch"]), ("merge", "left", "c"))
+        self.assertEqual(r["evidence"], "design")
+        # acceleration 5 V - 250 = 250 m and the taper: clamped at the trunk's 400 m reach
+        self.assertGreater(r["s"]["painted"] - r["s"]["taper"], 300000)
+
+    def test_tee_is_not_a_fork(self):
+        _, recs = run(*scene(tee=True))
+        self.assertEqual(recs, [])
+
+    def test_not_home(self):
+        _, recs = run(*scene(), home=())
+        self.assertEqual(recs, [])
+
+    def test_order_free(self):
+        segs, cons = scene(trunk_lanes=4)
+        a, _ = run(segs, cons)
+        rng = np.random.default_rng(7)
+        for _ in range(5):
+            b, _ = run(list(reversed(segs)), cons, order=list(rng.permutation(len(cons))))
+            self.assertEqual(a, b)
+
+    def test_quintic_pieces(self):
+        _, recs = run(*scene())
+        r = recs[0]
+        names = [p[0] for p in r["pieces"]]
+        self.assertEqual(names, ["w_seam", "wb", "gp"])
+        gp = r["pieces"][2]
+        self.assertEqual((gp[1], gp[2]), (r["s"]["painted"], r["s"]["physical"]))
+
+
+if __name__ == "__main__":
+    unittest.main()

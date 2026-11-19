@@ -7190,6 +7190,9 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 505: try598's 501 (P1c, the Rust ports 494-500) with RS S2b part 2a (493) and v2 P1b (498) merged; 502-504 are
     // other branches'
     // 508: the full Rust port's r2a18 (sidewalks::sidewalk_normals, sidewalks._normals_2d); 506-507 are other branches'
-    m.add("VERSION", 508)?;
+    m.add_function(wrap_pyfunction!(roadshape::forks::fork_records, m)?)?;
+    // 510: road revamp v2 phase P2a (roadshape::forks::fork_records: the fork / gore records from the map, shadow only,
+    // BNE_ROADSHAPE=sheet); 509 is another branch's
+    m.add("VERSION", 510)?;
     Ok(())
 }
