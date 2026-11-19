@@ -454,9 +454,12 @@ def keyed_env(k):
 # BNE_ROADSHAPE 8 (P3d, profile): the solve holds twin decks, deck ends at one junction across OSM levels and the ground
 # under the chain's decks (earthfast 534); coplanar decks running along each other drawn as one surface
 # (roadmesh.trim_overlaps coplanar). Sheet and decks unchanged.
+# BNE_ROADSHAPE 9 (P3e, profile): a deck over another along it held as twins are, a twin run held whole once seeded
+# (earthfast 536); the coplanar trim on one seam, where both surfaces meet, past chunk ends inside a part
+# (deck_trim_coplanar); a branch's surface in its union laid on the through deck's; union decks' rows unsimplified.
 SWITCH_VERSIONS = {"BNE_LEVEL_SPACING": 5, "BNE_FAST_DECK_GROUND": 2, "BNE_UNDER_SPEED": 2, "BNE_FAST_GAP": 5,
                    "BNE_RACEWAY_DIG": 2, "BNE_DIRT_BUMP": 2, "BNE_DIRT_BANK": 2, "BNE_DECK_STRUCT": 5,
-                   "BNE_ROADSHAPE": 8, "BNE_DECK_SKEW": 1}
+                   "BNE_ROADSHAPE": 9, "BNE_DECK_SKEW": 1}
 
 
 def keyed_value(k, v):

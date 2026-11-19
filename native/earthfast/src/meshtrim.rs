@@ -186,6 +186,183 @@ pub fn deck_trim_overlaps<'py>(
     Ok((Array1::from_vec(tl_out).into_pyarray(py), Array1::from_vec(tr_out).into_pyarray(py)))
 }
 
+/// One coplanar cut (deck_trim_coplanar): a target row's cut (m in from its edge, >= 0) and its side (true: left)
+/// against the ribbon `o`, or None (not a coplanar neighbour there).
+#[allow(clippy::too_many_arguments)]
+fn cop_cut(p: [f64; 2], h: f64, u: [f64; 2], za: f64, ba: f64, om: &[[f64; 2]], oz: &[f64], ob: &[f64],
+           ohw: &[f64], ends: (bool, bool), tol: f64, along_cos: f64, hide_dz: f64) -> Option<(f64, bool)> {
+    // the nearest piece (the first of the smallest; its unclamped projection kept)
+    let (mut j, mut best, mut bt, mut raw, mut bq) = (usize::MAX, f64::INFINITY, 0.0, 0.0, [0.0, 0.0]);
+    for s in 0..om.len().saturating_sub(1) {
+        let (a, b) = (om[s], om[s + 1]);
+        let d = [b[0] - a[0], b[1] - a[1]];
+        let l2 = nmax(d[0] * d[0] + d[1] * d[1], 1e-12);
+        let tr = ((p[0] - a[0]) * d[0] + (p[1] - a[1]) * d[1]) / l2;
+        let tt = tr.clamp(0.0, 1.0);
+        let q = [a[0] + tt * d[0], a[1] + tt * d[1]];
+        let dist = (q[0] - p[0]).dhypot(q[1] - p[1]);
+        if !dist.is_finite() {
+            return None;
+        }
+        if dist < best {
+            j = s;
+            best = dist;
+            bt = tt;
+            raw = tr;
+            bq = q;
+        }
+    }
+    if j == usize::MAX {
+        return None;
+    }
+    let last = om.len() - 2;
+    // (a point strictly past the other deck's own end (its part's, never a tile's or a split's chunk end) lies past it,
+    // not beside it; at a chunk end inside its part the next chunk goes on: the cut as the whole line gives it)
+    if (j == 0 && raw < 0.0 && ends.0) || (j == last && raw > 1.0 && ends.1) {
+        return None;
+    }
+    let wo = ohw[j] + bt * (ohw[j + 1] - ohw[j]);
+    if !(best < h + wo && best > 1e-3) {
+        return None;
+    }
+    let d = [om[j + 1][0] - om[j][0], om[j + 1][1] - om[j][1]];
+    let ld = nmax(d[0].dhypot(d[1]), 1e-9);
+    let cos = (d[0] * u[1] - d[1] * u[0]).abs() / ld;
+    if cos < along_cos || cos <= 0.0 {
+        return None;
+    }
+    // the shared seam: the line both centre lines are equally far from (the bisector), reached along this row (best /
+    // (1 + cos): each deck's cut on it whatever their angle; halfway, best / 2, for parallel decks); not short of the
+    // other's near edge ((best - wo) / cos): a narrow deck short of the bisector is met at its own edge
+    let keep = nmax(best / (1.0 + cos), (best - wo) / cos);
+    let on_left = (bq[0] - p[0]) * u[0] + (bq[1] - p[1]) * u[1] > 0.0;
+    let sg = if on_left { 1.0 } else { -1.0 };
+    let q = [p[0] + sg * keep * u[0], p[1] + sg * keep * u[1]];
+    // both surfaces at the seam (each one's centre height, its cross slope x the seam's offset to its left): one
+    // surface there within tol, or no cut (two decks apart in height, or banked apart, are not butted into a step)
+    let zq_a = za + ba * sg * keep;
+    let zo = oz[j] + bt * (oz[j + 1] - oz[j]);
+    let bo = ob[j] + bt * (ob[j + 1] - ob[j]);
+    let off_o = (d[0] * (q[1] - bq[1]) - d[1] * (q[0] - bq[0])) / ld;
+    let zq_o = zo + bo * off_o;
+    let dzs = zq_a - zq_o;
+    if (dzs).abs() <= tol {
+        return Some((nmax(h - keep, 0.0), on_left));
+    }
+    // (the lower of two decks apart by less than hide_dz at the seam: cut back to the upper one's near edge only, the
+    // part the upper slab hides (it stands over it, its side face deeper than the step): no surface drawn twice, no
+    // step made, the upper deck left whole)
+    if dzs < 0.0 && -dzs < hide_dz {
+        let hide = (best - wo) / cos;
+        return Some((nmax(h - hide.max(0.0), 0.0), on_left));
+    }
+    None
+}
+
+type CopTrim<'py> = (Bound<'py, PyArray1<f64>>, Bound<'py, PyArray1<f64>>);
+
+/// roadmesh.trim_overlaps' coplanar cuts (BNE_ROADSHAPE=profile; 536, road revamp v2 P3e): two decks running along
+/// each other (within along_cos) whose footprints overlap end on ONE seam, the line both centre lines are equally far
+/// from (not each at half the distance along its own normal: angled decks left a ~0.23 m gap, Codex P3d), at least at
+/// the other's near edge; only where both surfaces meet at that seam within tol (centre heights and cross slopes:
+/// bank); never past the other deck's own end (ends (2R,): its part's start / end is that ribbon's first / last point)
+/// but on through a chunk end inside its part. Ribbons as deck_trim_overlaps' (left, right, z, off, owner, group,
+/// in_shared, targets) and bank (N,) each point's cross slope (m per m toward its left). params: tol, along_cos,
+/// shared (non-zero: a target in a shared group not cut by that group), optionally hide_dz (the lower of two decks
+/// apart by less than it at the seam cut back under the upper's near edge only). Returns (tl, tr) per target point.
+#[pyfunction]
+#[allow(clippy::too_many_arguments)]
+pub fn deck_trim_coplanar<'py>(
+    py: Python<'py>,
+    left: PyReadonlyArray2<'py, f64>,
+    right: PyReadonlyArray2<'py, f64>,
+    z: PyReadonlyArray1<'py, f64>,
+    bank: PyReadonlyArray1<'py, f64>,
+    off: PyReadonlyArray1<'py, i64>,
+    owner: PyReadonlyArray1<'py, i64>,
+    group: PyReadonlyArray1<'py, i64>,
+    in_shared: PyReadonlyArray1<'py, bool>,
+    ends: PyReadonlyArray1<'py, bool>,
+    targets: PyReadonlyArray1<'py, i64>,
+    params: PyReadonlyArray1<'py, f64>,
+) -> PyResult<CopTrim<'py>> {
+    let bad = |m: &str| pyo3::exceptions::PyValueError::new_err(format!("deck_trim_coplanar: {m}"));
+    let (l, r, off) = (left.as_array(), right.as_array(), off.as_array());
+    let z = z.as_slice().map_err(|_| bad("z must be contiguous"))?;
+    let bk = bank.as_slice().map_err(|_| bad("bank must be contiguous"))?;
+    let (owner, group, in_shared, ends, targets) = (owner.as_array(), group.as_array(), in_shared.as_array(),
+                                                    ends.as_array(), targets.as_array());
+    let pr = params.as_slice().map_err(|_| bad("params must be contiguous"))?;
+    if pr.len() != 3 && pr.len() != 4 {
+        return Err(bad("params needs 3 or 4 values"));
+    }
+    let (tol, along_cos, shared) = (pr[0], pr[1], pr[2] != 0.0);
+    let hide_dz = if pr.len() > 3 { pr[3] } else { 0.0 };
+    let nr = off.len().saturating_sub(1);
+    let np_ = l.nrows();
+    if r.nrows() != np_ || z.len() != np_ || bk.len() != np_ || l.ncols() < 2 || r.ncols() < 2 || owner.len() != nr
+        || group.len() != nr || in_shared.len() != nr || ends.len() != 2 * nr {
+        return Err(bad("array sizes"));
+    }
+    for k in 0..nr {
+        if off[k] < 0 || off[k + 1] < off[k] || off[k + 1] as usize > np_ {
+            return Err(bad("bad off"));
+        }
+    }
+    let mid: Vec<[f64; 2]> = (0..np_).map(|k| [(l[[k, 0]] + r[[k, 0]]) / 2.0, (l[[k, 1]] + r[[k, 1]]) / 2.0]).collect();
+    let hw: Vec<f64> = (0..np_).map(|k| (l[[k, 0]] - r[[k, 0]]).dhypot(l[[k, 1]] - r[[k, 1]]) / 2.0).collect();
+    let span = |k: usize| (off[k] as usize, off[k + 1] as usize);
+    let boxes: Vec<[f64; 4]> = (0..nr)
+        .map(|k| {
+            let (a, b) = span(k);
+            [amin(mid[a..b].iter().map(|p| p[0])), amin(mid[a..b].iter().map(|p| p[1])),
+             amax(mid[a..b].iter().map(|p| p[0])), amax(mid[a..b].iter().map(|p| p[1]))]
+        })
+        .collect();
+    let (mut tl_out, mut tr_out) = (Vec::new(), Vec::new());
+    for &t in targets.iter() {
+        if t < 0 || t as usize >= nr {
+            return Err(bad("bad target"));
+        }
+        let own = t as usize;
+        let (a0, b0) = span(own);
+        let n = b0 - a0;
+        let (mut tl, mut tr) = (vec![0.0f64; n], vec![0.0f64; n]);
+        if n > 0 {
+            let hmax = amax(hw[a0..b0].iter().copied());
+            let lo = [boxes[own][0] - hmax - 30.0, boxes[own][1] - hmax - 30.0];
+            let hi = [boxes[own][2] + hmax + 30.0, boxes[own][3] + hmax + 30.0];
+            for o in 0..nr {
+                let (oa, ob) = span(o);
+                if owner[o] == owner[own] || ob - oa < 2 || (shared && in_shared[own] && group[o] == group[own]) {
+                    continue;
+                }
+                let bx = boxes[o];
+                if !(bx[2] >= lo[0] && bx[3] >= lo[1] && bx[0] <= hi[0] && bx[1] <= hi[1]) {
+                    continue;
+                }
+                for i in 0..n {
+                    let k = a0 + i;
+                    let den = nmax(2.0 * hw[k], 1e-9);
+                    let u = [(l[[k, 0]] - r[[k, 0]]) / den, (l[[k, 1]] - r[[k, 1]]) / den];
+                    if let Some((cut, on_left)) = cop_cut(mid[k], hw[k], u, z[k], bk[k], &mid[oa..ob], &z[oa..ob],
+                                                          &bk[oa..ob], &hw[oa..ob], (ends[2 * o], ends[2 * o + 1]),
+                                                          tol, along_cos, hide_dz) {
+                        if on_left {
+                            tl[i] = nmax(tl[i], cut);
+                        } else {
+                            tr[i] = nmax(tr[i], cut);
+                        }
+                    }
+                }
+            }
+        }
+        tl_out.extend(tl);
+        tr_out.extend(tr);
+    }
+    Ok((Array1::from_vec(tl_out).into_pyarray(py), Array1::from_vec(tr_out).into_pyarray(py)))
+}
+
 /// roadmesh._keep_up's mask: the triangles tri (m, 3) (points xy (n, 2), indices less base) whose turn z (e1 x e2)
 /// times the sign of their median (1 where the median is 0) is over 1e-6.
 #[pyfunction]

@@ -13075,7 +13075,7 @@ def _sheet_finish(recs, decks, shifted, width_of):
     info = {}
 
     def put(i):
-        return info.setdefault(i, {"cuts": {}, "t": [], "b": []})
+        return info.setdefault(i, {"cuts": {}, "t": [], "b": [], "bt": []})
     for t, b, side, at, at_b, nrm_r, cover in recs:
         kt, kb = _vertex_of(decks[t][2], at), _vertex_of(decks[b][2], at_b)
         if kt is None or kb is None:
@@ -13128,6 +13128,8 @@ def _sheet_finish(recs, decks, shifted, width_of):
                     ab_ = float(_arc(shifted[p])[kb])
                     a0, a1 = (a0, ab_) if abs(a1 - ab_) <= abs(a0 - ab_) else (ab_, a1)
                 put(p)["b"].append((min(a0, a1), max(a0, a1)))
+                # (P3e: the union's through parts, whose surface the branch's lies on: _noslab_on_through)
+                put(p)["bt"].append(sorted({q for q, _rv, rl, _sd, _u0, _u1 in cover if rl == 0}))
         put(t)["cuts"][kt] = nrm
         put(b)["cuts"][kb] = nrm
     return info
@@ -13177,6 +13179,91 @@ def _sheet_tag(ch, line, info):
             if float(nrm[1] * t[0] - nrm[0] * t[1]) < 0:
                 nrm = -nrm
             ch[f"sk{e}"] = [round(float(nrm[0]), 6), round(float(nrm[1]), 6)]
+
+
+def _part_ends(ch, line):
+    """BNE_ROADSHAPE=profile (road revamp v2 P3e): a deck chunk's "pe": [its first node is its part's own end, its last
+    node is], from the part's line alone (a chunk end on a tile's box or a split inside the part goes on in the next
+    chunk: roadmesh.trim_overlaps' coplanar cut reads past it as the whole line gives it, the same in every tile; Codex
+    P3d). In place."""
+    c = np.asarray(ch["n"], np.float64)[:, :2]
+    ln = np.asarray(line, np.float64)[:, :2]
+    if len(c) < 2 or len(ln) < 2:
+        return
+
+    def end(p):
+        return bool(min(float(dnp.hypot(*(p - ln[0]))), float(dnp.hypot(*(p - ln[-1])))) <= 2e-3)
+    ch["pe"] = [end(c[0]), end(c[-1])]
+
+
+def _noslab_on_through(ch, info, line, throughs):
+    """BNE_ROADSHAPE=profile (road revamp v2 P3e): a branch's chunk inside its exit union ("noslab") laid on the union's
+    through surface: rows every roadmesh.DRAPE_STEP (its own: "kr"), each row's centre at the through deck's height
+    under it and its cross slope ("bk") the through surface's slope across the branch there (the through line's grade
+    along its way x the share of it across the branch's row), so its two edges meet the through surface too (flat
+    across and square to its own line it crossed that surface by -38..+49 mm on the grade: concrete and asphalt within
+    1 mm, I-95 Middle Branch). The through surface is its parts' drawn lines (throughs: (k, 3) each, whole, canonical:
+    the same in every tile), linear between their vertices, as the tiles draw them (unsimplified: _deck_chunks). In
+    place."""
+    import roadmesh
+    c = np.asarray(ch["n"], np.float64)
+    if len(c) < 2 or not throughs:
+        return
+    lo, hi = sorted((_station(line, c[0, :2]), _station(line, c[-1, :2])))
+    tl = []
+    for (s0, s1), ts in zip(info["b"], info.get("bt", ())):
+        if min(hi, s1) - max(lo, s0) > 1e-3:
+            tl.extend(t for t in ts if t in throughs)
+    lines = [np.asarray(throughs[t], np.float64) for t in sorted(set(tl))]
+    lines = [ln for ln in lines if len(ln) >= 2 and ln.shape[1] >= 3]
+    if not lines:
+        return
+    corner = float(np.max(ch.get("ws", ch["w"]))) / 2 + roadmesh.PARAPET_W
+    xy, _s, _z = roadmesh._resample(c, roadmesh.DRAPE_STEP, keep_vertices=True, corner_half=corner)
+    if len(xy) < 2:
+        return
+    best = np.full(len(xy), np.inf)
+    zc, slope, tan = np.zeros(len(xy)), np.zeros(len(xy)), np.zeros((len(xy), 2))
+    for ln in lines:
+        a, d = ln[:-1, :2], np.diff(ln[:, :2], axis=0)
+        L = np.maximum(dnp.hypot(d[:, 0], d[:, 1]), 1e-9)
+        rel = xy[:, None, :] - a[None]
+        t = np.clip((rel * d[None]).sum(2) / (L * L)[None], 0.0, 1.0)
+        f = a[None] + t[..., None] * d[None]
+        dist = dnp.hypot((xy[:, None, 0] - f[..., 0]).ravel(), (xy[:, None, 1] - f[..., 1]).ravel()).reshape(t.shape)
+        j = np.argmin(dist, axis=1)
+        r = np.arange(len(xy))
+        dj = dist[r, j]
+        win = dj < best         # (the first line of equals: lines in their part order)
+        best = np.where(win, dj, best)
+        za, zb = ln[j, 2], ln[j + 1, 2]
+        zc = np.where(win, za + t[r, j] * (zb - za), zc)
+        slope = np.where(win, (zb - za) / L[j], slope)
+        tan = np.where(win[:, None], d[j] / L[j][:, None], tan)
+    # the branch's left normal per row (roadmesh._normals' way: the mean of the segments either side)
+    seg = np.diff(xy, axis=0)
+    seg = seg / np.maximum(dnp.hypot(seg[:, 0], seg[:, 1]), 1e-9)[:, None]
+    dirs = np.empty_like(xy)
+    dirs[0], dirs[-1] = seg[0], seg[-1]
+    if len(xy) > 2:
+        m = seg[:-1] + seg[1:]
+        dirs[1:-1] = m / np.maximum(dnp.hypot(m[:, 0], m[:, 1]), 1e-9)[:, None]
+    nrm = np.stack([-dirs[:, 1], dirs[:, 0]], axis=1)
+    # (each row's own line: square, or its end's skew / tile cut line (roadmesh.skew_ends); roadmesh.tilted reads a
+    # point's offset square to the branch: the slope that puts the row's edges on the through surface along its line)
+    rowl = nrm.copy()
+    for e, k in ((0, 0), (1, len(xy) - 1)):
+        v = ch.get(f"sk{e}") if ch.get(f"sk{e}") is not None else ch.get(f"ct{e}")
+        if v is not None:
+            rowl[k] = np.asarray(v, np.float64)[:2]
+    cr = dirs[:, 0] * rowl[:, 1] - dirs[:, 1] * rowl[:, 0]
+    bk = np.where(np.abs(cr) > 0.2, slope * (tan * rowl).sum(1) / np.where(np.abs(cr) > 0.2, cr, 1.0),
+                  slope * (tan * nrm).sum(1))
+    if ch.get("ws") is not None and len(ch["ws"]) == len(c):     # (a taper: its widths on the new rows)
+        ch["ws"] = [round(float(v), 3) for v in dnp.interp(_s, _arc(c[:, :2]), np.asarray(ch["ws"], np.float64))]
+    ch["n"] = np.round(np.c_[xy, zc], 3).tolist()
+    ch["kr"] = True
+    ch["bk"] = [round(float(v), 5) for v in bk]
 
 
 def _cut_ends(ch, line, box):
@@ -13259,6 +13346,11 @@ def _deck_chunks(decks, exact, ground_fn=None, depths=None, walks=None, shift_of
         sh = shift_of(fid, pts) if shift_of else None
         shifted[i] = offset_polyline(pts, sh) if sh is not None else pts
     sheet = _sheet_finish(sheet_recs, decks, shifted, width_of) if sheet_recs else {}
+    # (BNE_ROADSHAPE=profile, P3e: the parts of an exit union, through or branch, drawn on their lines' own vertices,
+    # never simplified: SIMPLIFY_Z_M let a through deck's rows leave its line by up to 5 cm, which the branch's surface
+    # laid on that line (_noslab_on_through) could not follow; from the fork records alone, the same in every tile)
+    unioned = (set(sheet) | {t for inf in sheet.values() for ts in inf.get("bt", ()) for t in ts}
+               if roadshape.PROFILE_BUILT else set())
     # Complete profiles survive tile clipping. The bounded common field currently covers constant-width,
     # unshifted carriageways; keep existing sidewalk/taper/lane-shift geometry on its current surface.
     counts = {}
@@ -13303,7 +13395,7 @@ def _deck_chunks(decks, exact, ground_fn=None, depths=None, walks=None, shift_of
         frame_line = offset_polyline(pts, dc) if dc else pts
         for piece0 in clip_polyline(frame_line, *(junction_box if fid in joint_profiles else wide)):
           for piece in _sheet_pieces(piece0, frame_line, sheet.get(i)):
-            for c in split(_deck_rows(piece, shp)):
+            for c in split(densify(piece) if i in unioned else _deck_rows(piece, shp)):
                 if len(c) >= 2:
                     ch = _chunk({**_deck_look(spec), "deck": True}, dw, c)
                     ch.update(fixed=True, deck=True, fid=fid, ctx=True, tdir=_travel(spec))
@@ -13311,6 +13403,8 @@ def _deck_chunks(decks, exact, ground_fn=None, depths=None, walks=None, shift_of
                     if shp is not None:
                         ch["kr"] = True
                         _deck_shape_ends(ch, frame_line, shp, False)
+                    if roadshape.PROFILE_BUILT:
+                        _part_ends(ch, frame_line)
                     if fid in joint_profiles:
                         ch['jn'] = joint_profiles[fid]
                         ch['jskip'] = fid in joint_excluded
@@ -13358,8 +13452,8 @@ def _deck_chunks(decks, exact, ground_fn=None, depths=None, walks=None, shift_of
         for look, w, line in lines:
             for piece in [q for p0 in clip_polyline(line, *exact)
                           for q in (_sheet_pieces(p0, line, sheet.get(i)) if look.get("deck") else (p0,))]:
-                for c in split(_deck_rows(piece, shp) if look.get("deck") else
-                               densify(simplify(piece, ztol=SIMPLIFY_Z_M))):
+                for c in split((densify(piece) if i in unioned else _deck_rows(piece, shp))
+                               if look.get("deck") else densify(simplify(piece, ztol=SIMPLIFY_Z_M))):
                     if len(c) >= 2:
                         ch = _chunk(look, w, c)
                         ch["fixed"] = True
@@ -13383,6 +13477,11 @@ def _deck_chunks(decks, exact, ground_fn=None, depths=None, walks=None, shift_of
                             ch["tdir"] = _travel(spec)  # (roadmesh: opposite traffic beside it, a median)
                             _sheet_tag(ch, line, sheet.get(i))
                             _cut_ends(ch, line, exact)
+                            if roadshape.PROFILE_BUILT:
+                                _part_ends(ch, line)
+                                if ch.get("noslab") and fid in (profiled or ()):
+                                    _noslab_on_through(ch, sheet.get(i), line, {
+                                        t: shifted[t] for t in range(len(decks)) if decks[t][0] in profiled})
                             _reach_tag(ch, line, reach.get(i))
                             if depths and fid in depths:
                                 ch["dd"] = round(float(depths[fid]), 3)     # (roadmesh.deck: its slab and girders)

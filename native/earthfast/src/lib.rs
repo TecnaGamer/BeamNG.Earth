@@ -6900,6 +6900,7 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(levelways::level_ways_promote, m)?)?;
     // (and roadmesh's per-ribbon rounds: deck_trim_overlaps, keep_up_mask, shared_points)
     m.add_function(wrap_pyfunction!(meshtrim::deck_trim_overlaps, m)?)?;
+    m.add_function(wrap_pyfunction!(meshtrim::deck_trim_coplanar, m)?)?;
     m.add_function(wrap_pyfunction!(meshtrim::keep_up_mask, m)?)?;
     m.add_function(wrap_pyfunction!(meshtrim::shared_points, m)?)?;
     // (and shelters' carriageway tests: shelter_intrusion, shelter_worst_post)
@@ -7384,6 +7385,6 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 533: try598 (532) with 528 (port2a) merged: the version the protocol layer asks for (532 lacks it)
     // 534: v2 P3d on try598 (533): profile_solve's twins, junction nodes, cross-level sheet ends, approaches under
     // decks; deck_trim_overlaps' coplanar mode
-    m.add("VERSION", 534)?;
+    m.add("VERSION", 536)?;
     Ok(())
 }
