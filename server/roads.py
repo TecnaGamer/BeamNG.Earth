@@ -6446,6 +6446,82 @@ def has_sidewalks(spec):
         spec.cls in SIDEWALK_CLASSES or (spec.cls == "trunk" and (not spec.oneway or _arterial(spec))))
 
 
+# Sidewalks v2 (sidewalks.V2): rolled kerbs on suburban streets (vanilla's WCUSA suburbs: 8-10 cm at 45-63 deg, the
+# driveways crossing anywhere), vertical ones downtown and on every bigger road. A North American (KERB_ROLL_COUNTRIES)
+# two-way residential street of at most two lanes and ROLL_MAX_KMH that its buildings do not wall (roadwidth's
+# measurement: walled within DOWNTOWN_ROW_M face to face is a town street, rowhouses at the back of the walk). One
+# answer per road (its own facts and its home copy's measurement: every tile the same).
+KERB_ROLL_COUNTRIES = {"US", "CA"}
+KERB_ROLL_CLASSES = {"residential", "living_street"}
+ROLL_MAX_KMH = 56.5             # 35 mph
+ROLL_SURFACES = {"", "asphalt", "concrete", "paved"}   # (spec.surf; a sett / cobbled / brick street: granite kerbs)
+DOWNTOWN_ROW_M = 22.5          # m between the building faces a walled street has at most to count as downtown
+
+
+# ... nor a street with building fronts within TOWN_FACADE_M of its carriageway's edge along TOWN_FRONT_SHARE of either
+# side (rowhouses at the back of the walk, open on the other side: Fells Point's harbour blocks, which roadwidth does
+# not call walled; a suburb's houses stand 6-10 m back behind their front yards and driveways)
+TOWN_FACADE_M = 4.5
+TOWN_FRONT_SHARE = 0.4
+
+
+def kerb_roll(spec, country, walled_row=None, town_front=0.0):
+    """1.0 for a rolled kerb along road spec (sidewalks v2), 0.0 a vertical one. country: the tile's ISO code;
+    walled_row: the street's measured face-to-face width between its buildings (roadwidth), None where not walled;
+    town_front: town_frontage's share. Pure."""
+    if str(country or "").upper() not in KERB_ROLL_COUNTRIES or spec.cls not in KERB_ROLL_CLASSES:
+        return 0.0
+    if spec.oneway or spec.median or spec.link or (spec.lanes or 2) > 2 or (spec.kmh or 0) > ROLL_MAX_KMH:
+        return 0.0
+    if (spec.surf or "") not in ROLL_SURFACES:      # (sett, cobbles, bricks: an old street's granite kerbs)
+        return 0.0
+    if walled_row is not None and walled_row <= DOWNTOWN_ROW_M:
+        return 0.0
+    if town_front >= TOWN_FRONT_SHARE:
+        return 0.0
+    return 1.0
+
+
+def town_frontage(widths, lonlat, width):
+    """The larger share of a road's two sides (lon/lat (k, 2), carriageway width m) with a building front within
+    TOWN_FACADE_M of its carriageway's edge: roadwidth's walls near it, a ray each way every ~5 m (as
+    roadwidth.verge_frontage's). 0.0 without walls (widths not a RoadWidths method)."""
+    rw = getattr(widths, "__self__", None)
+    if rw is None or not hasattr(rw, "_near_walls") or len(lonlat) < 2:
+        return 0.0
+    import furniture
+    import revisit
+    lonlat = np.asarray(lonlat, np.float64)
+    frame, walls = rw._near_walls(lonlat)
+    if walls.stand_in:
+        revisit.fault(here=True)
+    if not len(walls.keys):
+        return 0.0
+    xy = np.column_stack(frame.geodetic_to_enu(lonlat[:, 1], lonlat[:, 0], 0.0)[:2])
+    length = furniture._arclen(xy)[-1]
+    if length <= 1.0:
+        return 0.0
+    n = min(31, max(3, int(length / 5.0) + 1))
+    edge = min(4.0, 0.12 * length)
+    points, tangent = furniture._at(xy, np.linspace(edge, length - edge, n))
+    normal = np.column_stack((-tangent[:, 1], tangent[:, 0]))
+    half = width / 2.0
+    gaps = walls.rays(np.tile(points, (2, 1)), np.concatenate([normal, -normal]), half + TOWN_FACADE_M) - half
+    return float(np.max(np.mean(((gaps >= 0.2) & (gaps <= TOWN_FACADE_M)).reshape(2, n), axis=1)))
+
+
+def is_driveway(feats, i, spec):
+    """Whether feature i (road spec) is a driveway: highway=service + service=driveway (Overture's subclass, OSM's
+    service tag or the subclass rule), paved, without sidewalks of its own. Pure."""
+    if spec is None or spec.cls != "service" or spec.kind not in BUILT or has_sidewalks(spec):
+        return False
+    subclass = feats.attrs.get("subclass")
+    service = feats.attrs.get("osm_service")
+    return bool(subclass is not None and subclass[i] == "driveway" or
+                service is not None and service[i] == "driveway" or
+                _rule_value(feats.rules.get("subclass"), i) == "driveway")
+
+
 def limited_access(spec):
     """A road no pedestrian walks beside whatever the land cover says: a motorway's or trunk's ramp (a ramp has few
     junctions, so _arterial's spacing rule read it as a town street: a cloverleaf's ramps had a sidewalk each), or a
@@ -7068,6 +7144,283 @@ WALK_DRAPE_M = 2.0      # m between the ground samples under a sidewalk (roadmes
 WALK_GROUND_M = 0.5     # ... on the drawn ground (ground): its squares' kinks then cost the run under 0.5 cm over
                         # WALK_DRAPE_TOL_M (a 3 m dip on a hill, 1/32 m quantum: 1.9-2.0 cm; every 1 m: 2.7-2.8)
 WALK_DRAPE_TOL_M = 0.02     # m a sidewalk point dropped again may lie off the line through its kept neighbours
+# sidewalks v2: a walk's point kept where its (x, y, z, reveal, a quarter of its back's drop) leave the line through its kept
+# neighbours by more than this (the guide's granularity: the mesh and the draped road agree along the curb)
+WALK_V2_TOL_M = 0.025
+WALK_V2_TOE_M = 0.4         # m past the slab's outer edge where its back's toe meets the ground (BACK_RUN x ~0.2 m)
+DRIVE_KEEP_M = 1.5          # m past a run's ends a driveway's lowered kerb still counts (its flare reaches in)
+# the streets whose walks take the tile's inferred house drives (buildings.doors: a door's drive straight to the nearest
+# road, which along a collector is mostly the back fence of a subdivision's houses, no driveway in the aerials)
+DRIVE_CLASSES = {"residential", "living_street", "unclassified", "service"}
+
+
+def _sw_v2():
+    import sidewalks
+    return sidewalks.V2
+
+
+def road_rolls(seen, country, widths):
+    """fid -> kerb_roll of a tile's road (sidewalks v2), memoised: its spec's rule, then (a rolled candidate only)
+    whether its buildings wall it (widths(id, lonlat) -> (carriageway, sidewalk) or None: roadwidth's measurement,
+    memoised per road)."""
+    rolls = {}
+
+    def roll_of(fid):
+        if fid not in rolls:
+            r = 0.0
+            if fid in seen:
+                f, i, spec = seen[fid]
+                r = kerb_roll(spec, country)
+                if r and widths is not None:
+                    a = f.coord_off[f.ring_off[f.part_off[i]]]
+                    b = f.coord_off[f.ring_off[f.part_off[i + 1]]]
+                    m = widths(str(f.ids[i]), f.lonlat[a:b]) if b > a else None
+                    r = kerb_roll(spec, country, None if m is None else float(m[0]) + 2.0 * float(m[1]))
+                    if r:
+                        r = kerb_roll(spec, country, None, town_frontage(widths, f.lonlat[a:b], spec.width))
+            rolls[fid] = r
+        return rolls[fid]
+    return roll_of
+
+
+def curb_rows(roads):
+    """[(fid, half width, centreline xy, (x0, y0, x1, y1))] of the roads with sidewalks (corner_rolls)."""
+    out = []
+    for fid, spec, pts, _ in roads:
+        if has_sidewalks(spec) and len(pts) >= 2:
+            xy = np.asarray(pts, np.float64)[:, :2]
+            out.append((fid, spec.width / 2, xy, (*xy.min(0).tolist(), *xy.max(0).tolist())))
+    return out
+
+
+def corner_rolls(arc, rows, roll_of):
+    """(rolled share at the curb return's start, at its end) (sidewalks v2): the kerb of the road whose curb line each
+    end of arc lies on (|distance to its centreline - its half width| least, under 1 m; else vertical). rows:
+    curb_rows'; roll_of: road_rolls'."""
+    arc = np.asarray(arc, np.float64)
+    out = []
+    for q in (arc[0], arc[-1]):
+        best = None
+        for fid, half, xy, (x0, y0, x1, y1) in rows:
+            if q[0] < x0 - half - 2 or q[0] > x1 + half + 2 or q[1] < y0 - half - 2 or q[1] > y1 + half + 2:
+                continue
+            d = abs(float(_seg_dist_min(xy, q[:2])) - half)
+            if best is None or (d, str(fid)) < best:
+                best = (d, str(fid), fid)
+        out.append(float(roll_of(best[2])) if best is not None and best[0] < 1.0 else 0.0)
+    return tuple(out)
+
+
+def walk_drives(run0, lines, curb0=None):
+    """[(s0, s1)] where driveways cross a walk's centreline run0 (k, >= 2): stations along its curb line curb0 (k, >= 2,
+    row for row: the stations the mesh's ramps take; None: along run0) (sidewalks v2: its lowered kerb and apron
+    there; earthfast walk_crossings). lines: [(centreline (m, 2), half width)]."""
+    run0 = np.asarray(run0, np.float64)
+    if not lines or len(run0) < 2:
+        return []
+    xy = np.ascontiguousarray(run0[:, :2])
+    lo, hi = xy.min(0) - 10.0, xy.max(0) + 10.0
+    near = [(np.asarray(ln, np.float64)[:, :2], h) for ln, h in lines
+            if len(ln) >= 2 and bool((np.max(ln, 0)[:2] >= lo).all()) and bool((np.min(ln, 0)[:2] <= hi).all())]
+    if not near:
+        return []
+    import fast
+    import sidewalks
+    fast.require(sidewalks.V2_NATIVE, "walk crossings")
+    pts = np.ascontiguousarray(np.concatenate([ln for ln, _ in near]), np.float64)
+    off = np.r_[0, np.cumsum([len(ln) for ln, _ in near])].astype(np.int64)
+    got = list(fast._ef.walk_crossings(xy, pts, off, np.array([h for _, h in near], np.float64)))
+    if curb0 is None or not got:
+        return _merge_drives(got)
+    sc = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(xy, axis=0).T))]
+    sk = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(np.asarray(curb0, np.float64)[:, :2], axis=0).T))]
+    # (beyond the ends: the end's own scale; a range's middle mapped, its half width kept)
+    out = []
+    for a, b in got:
+        m, h = 0.5 * (a + b), 0.5 * (b - a)
+        mk = float(dnp.interp(m, sc, sk)) + (m - sc[-1] if m > sc[-1] else min(m, 0.0))
+        out.append((mk - h, mk + h))
+    return _merge_drives(out)
+
+
+def _merge_drives(ranges):
+    """Sorted ranges, those closer than sidewalks.DRIVE_MERGE_M merged (two drives' flares meeting: one lowering), on
+    a whole run before any tile takes its piece of them (one answer either side of a seam)."""
+    import sidewalks
+    out = []
+    for a, b in sorted(ranges):
+        if out and a - out[-1][1] < sidewalks.DRIVE_MERGE_M:
+            out[-1] = (out[-1][0], max(out[-1][1], b))
+        else:
+            out.append((a, b))
+    return out
+
+
+def walk_drive_ranges(walks, drives):
+    """Sidewalks v2: the drives of build_tile's walks (in place) gain where the road tile's house and garage driveways
+    (buildings.doors / garage_drives chunks: centreline n, width w) cross them, merged with the mapped ones."""
+    lines = [(np.asarray(ch["n"], np.float64)[:, :2], float(ch["w"]) / 2) for ch in drives
+             if ch.get("n") is not None and len(ch["n"]) >= 2 and ch.get("w")]
+    if not lines:
+        return
+    for wk in walks:
+        if "corner" in wk or "disc" in wk or "roll" not in wk or wk.get("median") or not wk.get("minor"):
+            continue
+        import sidewalks
+        curb, _ = sidewalks.run_geometry(wk["pts"], wk["side"], wk.get("w", SIDEWALK["w"]), wk.get("end_n"))
+        got = walk_drives(wk["pts"], lines, curb)
+        if got:
+            wk["drives"] = _merge_drives(list(wk.get("drives", ())) + got)
+
+
+def drives_on(run, run0, drives0):
+    """drives0 (along the curb line run0) along run, a piece's curb line (its start on run0), those within
+    DRIVE_KEEP_M of it."""
+    if not drives0:
+        return []
+    run, run0 = np.asarray(run, np.float64), np.asarray(run0, np.float64)
+    a, b = run0[:-1, :2], run0[1:, :2]
+    d = b - a
+    L = dnp.hypot(d[:, 0], d[:, 1])
+    t = np.clip(((run[0, :2] - a) * d).sum(1) / np.where(L > 0, L * L, 1.0), 0.0, 1.0)
+    p = a + d * t[:, None]
+    j = int(np.argmin(dnp.hypot(*(p - run[0, :2]).T)))
+    s0 = float(np.r_[0.0, np.cumsum(L)][j] + t[j] * L[j])
+    length = float(np.sum(dnp.hypot(*np.diff(run[:, :2], axis=0).T)))
+    return [(float(x) - s0, float(y) - s0) for x, y in drives0
+            if float(y) - s0 > -DRIVE_KEEP_M and float(x) - s0 < length + DRIVE_KEEP_M]
+
+
+def _drape_walks_v2(frame, elev, walks, ground):
+    """drape_walks under sidewalks v2: every run sampled every WALK_GROUND_M m (WALK_DRAPE_M on elev), its curb line on
+    the ground, its reveal (the walk's own smoothed profile: earthfast sidewalk_probes / sidewalk_reveal) and its back's
+    drop to the ground WALK_V2_TOE_M past its outer edge at every sample, kept where their shape needs (WALK_V2_TOL_M);
+    a corner's arc on the ground with its reveal and rolled share (from the runs ending at its ends, else roll_ends:
+    one kerb where they meet), its outer points at the slab's top the runs reach there and the ground under them. The
+    walks' records get pts (centreline, z the curb line's ground), hv, drop (runs), roll; corners hv, roll, otoe, abs.
+    One ground call."""
+    import fast
+    import sidewalks
+    fast.require(sidewalks.V2_NATIVE, "sidewalks v2 profile")
+    step = WALK_DRAPE_M if ground is None else WALK_GROUND_M
+
+    def nominal(wk, roll):
+        roll = np.clip(np.asarray(roll, np.float64), 0.0, 1.0)
+        h = float(wk.get("height", wk.get("h", sidewalks.CURB_H)))
+        if h < sidewalks.REVEAL_MIN:        # (a low edge keeps its own height)
+            f = np.full(len(roll), h)
+            return f, f, f
+        return (h + roll * (sidewalks.ROLLED_H - h), np.full(len(roll), sidewalks.REVEAL_MIN),
+                sidewalks.REVEAL_MAX + roll * (sidewalks.ROLLED_MAX - sidewalks.REVEAL_MAX))
+
+    items, ends = [], []
+    for wk in walks:
+        if "disc" in wk:
+            d = np.asarray(wk["disc"]["ring"], np.float64)
+            items.append(("disc", wk, np.vstack([d, np.asarray(wk["disc"]["apex"], np.float64).reshape(1, 3)])))
+        elif "corner" in wk:
+            c = wk["corner"]
+            items.append(("corner", wk, np.asarray(c["arc"], np.float64)))
+        else:
+            w = float(wk.get("w", SIDEWALK["w"]))
+            pts = densify(np.asarray(wk["pts"], np.float64)[:, :3], step)
+            curb, out = sidewalks.run_geometry(pts, wk["side"], w, wk.get("end_n"))
+            roll = float(wk.get("roll", 0.0))
+            items.append(("run", wk, (pts, curb, out, w, roll)))
+            ends.extend(((curb[0, :2], roll), (curb[-1, :2], roll)))
+    if not items:
+        return
+    probe_xy, probe_n, probe_toe, h0s, los, his, wv, extra = [], [], [], [], [], [], [], []
+    for kind, wk, data in items:
+        if kind == "disc":
+            extra.append(data[:, :2])
+            continue
+        if kind == "corner":
+            c = wk["corner"]
+            arc = data
+            s = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(arc[:, :2], axis=0).T))]
+            fallback = c.get("roll_ends", (0.0, 0.0))
+            r_ends = []
+            for q, fb in ((arc[0, :2], fallback[0]), (arc[-1, :2], fallback[1])):
+                got = [r for p, r in ends if float(dnp.hypot(*(p - q))) < 0.05]
+                r_ends.append(got[0] if got else float(fb))
+            t = s / s[-1] if s[-1] > 0 else np.zeros(len(s))
+            roll = r_ends[0] + (r_ends[1] - r_ends[0]) * (t * t * (3.0 - 2.0 * t))
+            wk["_v2"] = roll
+            probe_xy.append(arc[:, :2])
+            probe_n.append(np.asarray(c["inward"], np.float64)[:, :2])
+            probe_toe.append(np.full(len(arc), 2.5 + WALK_V2_TOE_M))
+            h0, lo, hi = nominal(wk, roll)
+            wv.append(np.full(len(arc), np.nan))
+            extra.append(arc[:, :2])
+            extra.append(np.asarray([q[:2] for q in c["outer"]], np.float64).reshape(-1, 2))
+        else:
+            pts, curb, out, w, roll = data
+            probe_xy.append(curb[:, :2])
+            probe_n.append(out)
+            probe_toe.append(np.full(len(curb), w + WALK_V2_TOE_M))
+            h0, lo, hi = nominal(wk, np.full(len(curb), roll))
+            wv.append(np.full(len(curb), w))
+            extra.append(curb[:, :2])
+        h0s.append(h0)
+        los.append(lo)
+        his.append(hi)
+    cat = (lambda a, shape: np.ascontiguousarray(np.concatenate(a), np.float64) if a else np.zeros(shape))  # noqa: E731
+    probes = fast._ef.sidewalk_probes(cat(probe_xy, (0, 2)), cat(probe_n, (0, 2)), cat(probe_toe, (0,))) \
+        if probe_xy else np.zeros((0, 2))
+    xy = np.concatenate([probes] + extra)
+    if ground is not None:
+        u = np.asarray(ground(xy[:, 0], xy[:, 1]), np.float64)
+    else:
+        la, lo_, _ = frame.enu_to_geodetic(xy[:, 0], xy[:, 1], 0.0)
+        _, _, u = frame.geodetic_to_enu(la, lo_, np.asarray(elev(la, lo_), np.float64))
+        u = np.asarray(u, np.float64)
+    hv_all, drop_all = fast._ef.sidewalk_reveal(np.ascontiguousarray(u[:len(probes)]), cat(h0s, (0,)), cat(los, (0,)),
+                                                cat(his, (0,)), cat(wv, (0,))) if probe_xy else (np.zeros(0),) * 2
+    k, e = 0, len(probes)
+    for kind, wk, data in items:
+        if kind == "disc":
+            z = u[e:e + len(data)]
+            e += len(data)
+            ring, apex = data[:-1].copy(), data[-1].copy()
+            ring[:, 2], apex[2] = z[:-1], z[-1]
+            wk["disc"] = {**wk["disc"], "ring": ring, "apex": apex}
+            continue
+        if kind == "corner":
+            c = wk["corner"]
+            arc = data.copy()
+            n = len(arc)
+            hv = np.asarray(hv_all[k:k + n], np.float64)
+            k += n
+            arc[:, 2] = u[e:e + n]
+            e += n
+            outer = np.asarray([q[:3] if len(q) >= 3 else (*q[:2], 0.0) for q in c["outer"]], np.float64).reshape(-1, 3)
+            otoe = u[e:e + len(outer)]
+            e += len(outer)
+            cs = sidewalks.CROSS_SLOPE
+            top_end = arc[-1, 2] + hv[-1] + float(dnp.hypot(*(outer[0, :2] - arc[-1, :2]))) * cs
+            top_start = arc[0, 2] + hv[0] + float(dnp.hypot(*(outer[-1, :2] - arc[0, :2]))) * cs
+            tops = np.full(len(outer), 0.5 * (top_end + top_start))
+            tops[0], tops[-1] = top_end, top_start
+            roll = wk.pop("_v2")
+            wk["corner"] = {**c, "arc": arc, "outer": [(float(q[0]), float(q[1]), float(t)) for q, t in zip(outer, tops)],
+                            "hv": hv, "roll": roll, "otoe": np.asarray(otoe, np.float64), "abs": True}
+            continue
+        pts, curb, out, w, roll = data
+        n = len(pts)
+        hv = np.asarray(hv_all[k:k + n], np.float64)
+        drop = np.asarray(drop_all[k:k + n], np.float64)
+        k += n
+        z = u[e:e + n]
+        e += n
+        drop = np.where(np.isfinite(drop), drop, hv + w * sidewalks.CROSS_SLOPE + sidewalks.SINK)
+        cols = np.column_stack([pts[:, 0], pts[:, 1], z, hv, drop])
+        weighted = cols.copy()
+        weighted[:, 4] *= 0.25
+        cols = densify(cols[sidewalks.simplify(weighted, WALK_V2_TOL_M)])
+        wk["pts"] = np.ascontiguousarray(cols[:, :3])
+        wk["hv"] = np.ascontiguousarray(cols[:, 3])
+        wk["drop"] = np.ascontiguousarray(cols[:, 4])
 
 
 def drape_walks(frame, elev, walks, ground=None):
@@ -7079,8 +7432,11 @@ def drape_walks(frame, elev, walks, ground=None):
     One elev call (its cost is per call). ground(x (n,), y (n,)) -> z (n,): the terrain block's drawn ground in the
     frame (roadmesh.drawn_ground), which the road surfaces lie on (roadmesh.build follow) and elev is off by its
     height quantum and more between its samples; the curbs take it instead, sampled every WALK_GROUND_M m (the user,
-    2026-10-21: sidewalks on the drawn ground with upstream's road surfaces). One ground call."""
+    2026-10-21: sidewalks on the drawn ground with upstream's road surfaces). One ground call. (Sidewalks v2:
+    _drape_walks_v2.)"""
     import sidewalks
+    if sidewalks.V2:
+        return _drape_walks_v2(frame, elev, walks, ground)
     items, xy = [], []
     for wk in walks:
         if "disc" in wk:                    # (an island's planting: its ring and its middle on the ground)
@@ -12608,6 +12964,7 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
                 for f2, s2, p2, _ in roads:
                     if f2 != fid and dnp.hypot(*(p2[:, :2] - X).T).min() < 1.0:
                         cornered.add((fid, f2))
+        corner_ctx = None
         for c in corners:                       # each corner / crosswalk made by the tile it is in
             p = c["arc"][len(c["arc"]) // 2]
             if isl and islands.in_island(isl, p[:2]):
@@ -12620,6 +12977,10 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
                 continue
             if skin_own(p[0], p[1]):
                 style = c.pop("footway", None)
+                if style is None and _sw_v2():         # (sidewalks v2: the kerbs of the roads it joins)
+                    if corner_ctx is None:
+                        corner_ctx = (curb_rows(roads), road_rolls(seen, country, widths))
+                    c["roll_ends"] = corner_rolls(c["arc"], *corner_ctx)
                 walks.append({"corner": c, **({"surface": style.surface, "height": style.height, "europe": True}
                                                if style is not None else {})})
                 fill_look = _corner_look(p, roads)
@@ -12707,6 +13068,10 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
         built_m = np.array([s2.kind in BUILT for _f2, s2, _p2, _l2 in roads], bool)
         ring_m = np.array([f2 in ring_dir for f2 in fids_l], bool)
         width_a = np.array([s2.width for _f2, s2, _p2, _l2 in roads], np.float64)
+        # (sidewalks v2: the driveways cut no walk, it runs on across them with a lowered kerb: drives below)
+        v2_on = walks is not None and _sw_v2()
+        drive_m = np.array([v2_on and f2 in seen and is_driveway(seen[f2][0], seen[f2][1], s2)
+                            for f2, s2, _p2, _l2 in roads], bool)
         sw_m = np.array([bool(has_sidewalks(s2)) for _f2, s2, _p2, _l2 in roads], bool)
         walk_a = np.array([s2.walk if sw else 0.0 for (_f2, s2, _p2, _l2), sw in zip(roads, sw_m.tolist())],
                           np.float64)
@@ -12765,7 +13130,7 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
         for j in np.flatnonzero(nw == -spec.width).tolist():
             runs_on[j] = fids_l[j] < fid
         stop = np.where(sw_m & runs_on, tr.half + walk_a, tr.half)
-        walk_blockers = _RoadCuts(tr, ne, np.where(~tr.mask(cornered_of, fid, all_m) | ring_m, ring_hw, stop),
+        walk_blockers = _RoadCuts(tr, ne & ~drive_m, np.where(~tr.mask(cornered_of, fid, all_m) | ring_m, ring_hw, stop),
                                   list(walk_cuts) + trams)
         crossing_rails = [c for c in rail_cuts if railways.crosses(pts[:, :2], c[0])]
         walk_blockers += crossing_rails
@@ -12818,7 +13183,7 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
                 path_cuts = ([(mapped[:, :2], max(2.9, .5 * (w + style.width)))
                               for _, mapped, style in mapped_walks] if footway is not None else [])
                 if detached:
-                    wb = _RoadCuts(tr, ne, tr.half + .45 * w, list(walk_cuts))
+                    wb = _RoadCuts(tr, ne & ~drive_m, tr.half + .45 * w, list(walk_cuts))
                 wb = wb + path_cuts
                 # whole runs near the tile first (joined across tile borders below), clipped to the tile after
                 for piece in clip_polyline(line, *near):
@@ -12883,10 +13248,23 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
             runs_near.append({"fid": fid, "pts": run, "w": style.width, "side": 1,
                               "j": (False, False), "footway": style, "mapped": True})
         legacy_surfaces = {}
+        import sidewalks as _sw
+        v2_walks = _sw_v2() and bool(roads)
+        if v2_walks:                            # (sidewalks v2: the driveways a walk crosses, each road's kerb)
+            drive_lines = [(p2[:, :2], s2.width / 2) for (_f2, s2, p2, _l2), d in zip(roads, drive_m.tolist()) if d]
+            kerb_of = road_rolls(seen, country, widths)
         for rn in runs_near:
             fid, side, w, run0 = rn["fid"], rn["side"], rn["w"], rn["pts"]
             footway = rn.get("footway")
             detached = footway is not None and footway.setback > 0.
+            v2_extra = {}
+            if v2_walks and not detached and not rn.get("mapped"):
+                v2_extra["roll"] = 0.0 if rn.get("median") else kerb_of(fid)
+                v2_extra["minor"] = fid in seen and seen[fid][2] is not None and seen[fid][2].cls in DRIVE_CLASSES
+                # (the curb line of the whole run: the drives' stations along it, a piece's bent ends' mitres)
+                n0 = _sw.normals_2d(np.asarray(run0, np.float64)[:, :2])
+                curb0, _ = _sw.run_geometry(run0, side, w)
+                drives0 = [] if rn.get("median") else walk_drives(run0, drive_lines, curb0)
             if footway is not None:
                 style = {"surface": footway.surface, "height": footway.height, "europe": True, "detached": detached}
                 if rn.get("mapped"):
@@ -12917,7 +13295,15 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
                 rl = [r for key in rn.get("ramp_keys", [(fid, side)]) for r in jramps.get(key, [])]
                 ramps = [] if detached else junctions.ramp_ranges(run, rl)
                 walks.append({"pts": run, "side": side, "caps": caps, "ramps": ramps, "w": w, "fid": fid,
-                              "median": rn.get("median", False), **style})
+                              "median": rn.get("median", False), **style, **v2_extra})
+                if v2_extra:
+                    ends = []
+                    for q in (run[0, :2], run[-1, :2]):
+                        k = np.flatnonzero(dnp.hypot(*(run0[1:-1, :2] - q).T) < 1e-9)
+                        ends.append((q.copy(), n0[1 + int(k[0])].copy()) if len(k) else None)
+                    walks[-1]["end_n"] = tuple(ends)
+                    curb, _ = _sw.run_geometry(run, side, w, walks[-1]["end_n"])
+                    walks[-1]["drives"] = drives_on(curb, curb0, drives0)
                 if not rn.get("median") and not detached:
                     walks[-1]["drain_ends"] = (caps[0] or at_j0, caps[1] or at_j1)
         if walks is not None and pole_profile is not None:

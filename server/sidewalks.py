@@ -19,10 +19,33 @@ line (offset 0) outwards, heights above the road:
 with capped ends, or a short descent to the ground at the free ends of European sidewalks.
 The mod shows it as a TSStatic that collides with its visible mesh. Pure functions; deterministic.
 """
+import os
+
 import numpy as np
 import dnp
 
 import cdae
+
+# Sidewalks v2 (BNE_SIDEWALK_V2=on; the road revamp's P1d, the user 2026-11-19: "sidewalks have a much more dynamic and
+# flexible mesh than ours"; the second vanilla study: WCUSA, Italy, ECA, Utah, JRI). Off: every tile as before, byte
+# for byte. On (a build switch in every key, the road plans' and cell facts' too: junctions.find, which it reaches,
+# lies in the planning's static reach, so it is not on revisit.PLAN_NEUTRAL):
+# - the walk's own smoothed height profile (earthfast sidewalk_probes / sidewalk_reveal, roads.drape_walks): its top
+#   follows the curb line's ground averaged along the walk, the kerb's reveal over the road kept to REVEAL_MIN-MAX
+#   (vanilla 0.08-0.20 m along one street), a function of the place (two tiles, a run and its corner agree);
+# - rolled, mountable kerbs on suburban North American residential streets (roads.kerb_roll: ROLLED_H at 45-63 deg,
+#   a 0.28 m top), vertical kerbs downtown (a street walled by its buildings) and elsewhere;
+# - walks run on across driveways (service=driveway) with a lowered kerb (DRIVE_H) and an apron instead of a gap;
+# - curb returns of 5.5-8 m by class (junctions.RADII_V2, vanilla p50 5.5 m downtown, 7.8 m suburb) at ARC_STEP_M;
+# - corner slabs meet the runs' back edges at one height and every back ends on the ground it meets (the verge or a
+#   plaza: no skirt diving under the road, no gap over lower ground); the walks sampled every WALK_GROUND_M and kept
+#   where the ground's or the reveal's shape needs (roads.WALK_V2_TOL_M).
+V2 = os.environ.get("BNE_SIDEWALK_V2", "off").strip().lower() in ("on", "1", "yes", "true")
+V2_NATIVE = 502
+REVEAL_MIN, REVEAL_MAX = 0.08, 0.20     # m: a vertical kerb's reveal over the road
+ROLLED_H, ROLLED_MAX = 0.09, 0.10       # m: a rolled kerb's nominal and largest reveal (lowest: REVEAL_MIN)
+ARC_STEP_M = 0.6                        # m per segment of a v2 curb return (vanilla 0.55-0.65 m)
+DRIVE_MERGE_M = 2.0                     # m: driveways closer than this share one lowered kerb (their flares meet)
 
 CURB_H = 0.15           # m above the road (US curbs: 0.15)
 SINK = 0.10             # m the faces reach below the road / ground
@@ -82,6 +105,9 @@ def _normals_2d(xy):
             m = m / ml
             n[0] = n[-1] = m / max(float(dnp.dot(m, nseg[0])), 0.5)
     return n
+
+
+normals_2d = _normals_2d
 
 
 RAMP_RUN = 1.8          # m over which a curb ramp's slab climbs back to the sidewalk (1:12)
@@ -169,14 +195,16 @@ def simplify(pts, tol=LEAN_TOL_M):
 
 def _soft_parts(p):
     """Keep the native sweep in the middle and sample its free ends more closely."""
-    kind, curb, out, _, ramps, w, h, caps, slab, europe, mat, surface, taper = p
+    kind, curb, out, _, ramps, w, h, caps, slab, europe, mat, surface, taper = p[:13]
+    v2 = p[13] if len(p) > 13 else None
     if not taper or not any(caps):
         return p, []
     stations = np.r_[0., np.cumsum(dnp.hypot(*np.diff(curb[:, :2], axis=0).T))]
     length = stations[-1]
     reach = min(END_TAPER_M, length * .4)
-    lo = min(reach, min((a - RAMP_FLARE for a, _ in ramps), default=reach)) if caps[0] else 0.
-    hi = min(reach, min((length - b - RAMP_FLARE for _, b in ramps), default=reach)) if caps[1] else 0.
+    near = list(ramps) + (list(v2.get("drives") or ()) if v2 is not None else [])
+    lo = min(reach, min((a - RAMP_FLARE for a, _ in near), default=reach)) if caps[0] else 0.
+    hi = min(reach, min((length - b - RAMP_FLARE for _, b in near), default=reach)) if caps[1] else 0.
     lo = lo if lo >= .25 else 0.
     hi = hi if hi >= .25 else 0.
     if not (lo or hi):
@@ -194,13 +222,29 @@ def _soft_parts(p):
     mid_curb, mid_out = sample(mid)
     centre = (kind, mid_curb, mid_out, None, [(a - lo, b - lo) for a, b in ramps], w, h,
               (caps[0] and not lo, caps[1] and not hi), slab, europe, mat, surface, False)
+    hv = None
+    if v2 is not None:                  # (sidewalks v2: its per-vertex data along the middle, its drives moved too)
+        def along(key):
+            v = v2.get(key)
+            return None if v is None or len(v) != len(stations) else \
+                dnp.interp(mid, stations, np.asarray(v, np.float64))
+        hv = v2.get("hv")
+        hv = np.asarray(hv, np.float64) if hv is not None and len(hv) == len(stations) else None
+        centre = centre + ({**v2, "hv": along("hv"), "drop": along("drop"), "roll": along("roll"),
+                            "drives": [(a - lo, b - lo) for a, b in v2.get("drives") or ()]},)
     tips = []
     for width, a, b, start in ((lo, 0., lo, True), (hi, length - hi, length, False)):
         if not width:
             continue
         s = section(a, b, 6)
         tip, direction = sample(s)
-        pr = profile(h, w)
+        # (v2: the tip at the reveal and back drop where it meets the middle: one cross-section there)
+        pr = profile(h if hv is None else float(dnp.interp(b if start else a, stations, hv)), w)
+        drop = v2.get("drop") if v2 is not None else None
+        if hv is not None and drop is not None and len(drop) == len(stations):
+            d = float(dnp.interp(b if start else a, stations, np.asarray(drop, np.float64)))
+            if np.isfinite(d):
+                pr[7] = (w + BACK_RUN * d, pr[6][1] - d)
         points = tip[:, None, :] + np.concatenate(
             [direction[:, None, :] * pr[None, :, :1], np.broadcast_to(pr[None, :, 1:], (len(s), len(pr), 1))],
             axis=2)
@@ -264,13 +308,33 @@ class Builder:
             c = walk["corner"]
             ramps = c.get("ramps", ()) if h > LOW_EDGE_HEIGHT else ()
             self.add_corner(c["arc"], c["inward"], c["outer"], ramps=ramps, **style)
+            if V2:
+                otoe = c.get("otoe")
+                if otoe is not None and style["europe"] and len(otoe) == 3 and len(c["outer"]) == 3:
+                    otoe = np.r_[otoe[0], 0.5 * (otoe[0] + otoe[1]), otoe[1:]]   # (add_corner's midpoint, its ground)
+                self._v2_last({"hv": c.get("hv"), "roll": c.get("roll"), "otoe": otoe, "abs": bool(c.get("abs"))})
             return
         width = walk.get("w", default_width)
-        curb, out = run_geometry(walk["pts"], walk["side"], width)
+        curb, out = run_geometry(walk["pts"], walk["side"], width, walk.get("end_n") if V2 else None)
         slab = BRICK if walk.get("brick") and style["surface"] is None else 1
         ramps = walk.get("ramps", ()) if h > LOW_EDGE_HEIGHT else ()
         self.add_run(curb, out, width, caps=walk["caps"], ramps=ramps, slab=slab, taper=style["europe"],
                      mat=int(walk.get("mat", 0)), **style)
+        if V2 and len(curb) >= 2:
+            k = len(curb)
+            roll = walk.get("roll", 0.0)
+            # (a rolled kerb is mountable: driveways cross it as it is, vanilla's suburbs; a vertical one is lowered)
+            lowered = h > LOW_EDGE_HEIGHT and float(np.max(roll)) < 0.5
+            drives = sorted(walk.get("drives", ())) if lowered else []
+            self._v2_last({"hv": walk.get("hv"), "drop": walk.get("drop"),
+                           "roll": np.broadcast_to(np.asarray(roll, np.float64), (k,)) if np.ndim(roll) == 0 else roll,
+                           "drives": drives})
+
+    def _v2_last(self, v2):
+        """Attach sidewalks v2's per-vertex data to the piece just added (its 14th field)."""
+        if self.pieces and len(self.pieces[-1]) == 13:
+            self.pieces[-1] = self.pieces[-1] + (v2,)
+            self._built = None
 
     def add_run(self, curb, toward_out, w, h=CURB_H, caps=(True, True), ramps=(), slab=1, europe=False, mat=0,
                 surface=None, taper=False):
@@ -351,6 +415,61 @@ class Builder:
             np.array([p[6] for p in ps], np.float64), np.array([p[7] for p in ps], bool).reshape(-1, 2),
             np.array([p[8] for p in ps], np.int64), tuple(float(v) for v in self.origin), self.col is not None)
 
+    def _native2(self, ps):
+        """Sidewalks v2's geometry (earthfast sidewalk_mesh2) for a batch of pieces with one palette: each piece's
+        per-vertex reveal, back drop and rolled share (its 14th field; a piece without one, or whose arrays no longer
+        fit its points, at its own h, v1's drop, vertical), crossings and driveways as ramps of kinds 0 / 1, a corner's
+        outer points at their absolute top (v1's lift added where the walk record gave them on the ground)."""
+        import fast
+        fast.require(V2_NATIVE, "sidewalks v2")
+        kinds, pts, dirs, off, outs, ooff, rows, roff, ws, caps, slabs = [], [], [], [0], [], [0], [], [0], [], [], []
+        hvs, drops, rolls, otoes = [], [], [], []
+        for p in ps:
+            kind, P, D, outer, ramps, w, h = p[:7]
+            v2 = (p[13] if len(p) > 13 else None) or {}
+            k = len(P)
+
+            def per(key, default, n=k):
+                v = v2.get(key)
+                if v is None:
+                    return np.full(n, default, np.float64)
+                v = np.asarray(v, np.float64).reshape(-1)
+                return v if len(v) == n else np.full(n, default, np.float64)
+            kinds.append(kind)
+            pts.append(np.asarray(P, np.float64)[:, :3])
+            dirs.append(np.asarray(D, np.float64)[:, :2])
+            off.append(off[-1] + k)
+            hvs.append(per("hv", h))
+            drops.append(per("drop", np.nan))
+            rolls.append(per("roll", 0.0))
+            r = [(float(a), float(b), 0.0) for a, b in ramps] + \
+                [(float(a), float(b), 1.0) for a, b in (v2.get("drives") or ())]
+            rows.extend(r)
+            roff.append(roff[-1] + len(r))
+            ws.append(w)
+            caps.append(p[7])
+            slabs.append(p[8])
+            if kind == 1:
+                o = np.asarray(outer, np.float64).reshape(-1, 3).copy()
+                if not v2.get("abs"):
+                    o[:, 2] += h + 2.5 * CROSS_SLOPE
+                outs.append(o)
+                otoes.append(per("otoe", np.nan, len(o)))
+            else:
+                outs.append(np.zeros((0, 3)))
+                otoes.append(np.zeros(0))
+            ooff.append(ooff[-1] + len(outs[-1]))
+
+        def cat(a, shape):
+            return np.ascontiguousarray(np.concatenate(a) if a else np.zeros(shape), np.float64)
+        return fast._ef.sidewalk_mesh2(
+            np.array(kinds, np.int64), cat(pts, (0, 3)), cat(dirs, (0, 2)), np.array(off, np.int64),
+            cat(outs, (0, 3)), np.array(ooff, np.int64),
+            np.ascontiguousarray(np.array(rows, np.float64).reshape(-1, 3)), np.array(roff, np.int64),
+            np.array(ws, np.float64), np.array(caps, bool).reshape(-1, 2), np.array(slabs, np.int64),
+            cat(hvs, (0,)), cat(drops, (0,)), cat(rolls, (0,)), cat(otoes, (0,)),
+            tuple(float(v) for v in self.origin), self.col is not None)
+
     @staticmethod
     def _join(meshes):
         if len(meshes) == 1:
@@ -374,7 +493,7 @@ class Builder:
                     middle, ends = _soft_parts(p)
                     pieces.append(middle)
                     tips.extend(ends)
-                drawn, collision = self._native(pieces)
+                drawn, collision = self._native2(pieces) if V2 else self._native(pieces)
                 if tips:
                     drawn, collision = self._with_tips(drawn, collision, tips)
                 if european:
@@ -450,11 +569,16 @@ class _Lean:
         return self.b.empty()
 
 
-def run_geometry(walk_line, side, w):
+def run_geometry(walk_line, side, w, ends=None):
     """The curb line and outward vectors of a sidewalk run given its centreline (k, 3) and the side of
-    the road it is on (+1: the road's left, as roads.offset_polyline). Pure."""
+    the road it is on (+1: the road's left, as roads.offset_polyline); ends: (start, end), each None or (point,
+    normal): that normal where the line's end is still that point (a tile's piece of a run bending there). Pure."""
     xy = np.asarray(walk_line, np.float64)[:, :2]
     n = _normals_2d(xy)
+    if ends is not None:                # (sidewalks v2: a piece's end on a bend of its whole run: the whole run's mitre)
+        for i, e in ((0, ends[0]), (-1, ends[1])):
+            if e is not None and float(dnp.hypot(*(xy[i] - np.asarray(e[0], np.float64)[:2]))) < 1e-6:
+                n[i] = np.asarray(e[1], np.float64)[:2]
     out = n * side                      # left of the road's direction is +n for side +1
     curb = np.array(walk_line, np.float64)
     curb[:, :2] = xy - out * (w / 2)
@@ -510,6 +634,15 @@ def _cut_slab(walk, edges, coverage):
         w = dict(walk, pts=np.column_stack([dnp.interp(s, arc, v) for v in pts.T]),
                  caps=(caps[0] or not first, caps[1] or not last),
                  ramps=[(max(a, lo) - lo, min(b, hi) - lo) for a, b in walk.get("ramps", ()) if b > lo and a < hi])
+        if "drives" in w:                   # (sidewalks v2: curb stations: the trim's ends on the curb)
+            curb, _ = run_geometry(pts, walk.get("side", 1), walk["w"], walk.get("end_n"))
+            sk = np.r_[0., np.cumsum(dnp.hypot(*np.diff(curb[:, :2], axis=0).T))]
+            klo, khi = float(dnp.interp(lo, arc, sk)), float(dnp.interp(hi, arc, sk))
+            w["drives"] = [(a - klo, b - klo) for a, b in walk["drives"]
+                           if b > klo - DRIVE_MERGE_M and a < khi + DRIVE_MERGE_M]
+        for key in ("hv", "drop"):          # (sidewalks v2's per-vertex data, where already draped: along the piece)
+            if w.get(key) is not None and len(w[key]) == len(pts):
+                w[key] = dnp.interp(s, arc, np.asarray(w[key], np.float64))
         if "drain_ends" in w:
             a, b = w["drain_ends"]
             w["drain_ends"] = a and first, b and last
