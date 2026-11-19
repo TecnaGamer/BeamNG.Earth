@@ -7223,7 +7223,7 @@ def walk_drives(run0, lines, curb0=None):
     off = np.r_[0, np.cumsum([len(ln) for ln, _ in near])].astype(np.int64)
     got = list(fast._ef.walk_crossings(xy, pts, off, np.array([h for _, h in near], np.float64)))
     if curb0 is None or not got:
-        return got
+        return _merge_drives(got)
     sc = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(xy, axis=0).T))]
     sk = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(np.asarray(curb0, np.float64)[:, :2], axis=0).T))]
     # (beyond the ends: the end's own scale; a range's middle mapped, its half width kept)
@@ -7232,6 +7232,19 @@ def walk_drives(run0, lines, curb0=None):
         m, h = 0.5 * (a + b), 0.5 * (b - a)
         mk = float(dnp.interp(m, sc, sk)) + (m - sc[-1] if m > sc[-1] else min(m, 0.0))
         out.append((mk - h, mk + h))
+    return _merge_drives(out)
+
+
+def _merge_drives(ranges):
+    """Sorted ranges, those closer than sidewalks.DRIVE_MERGE_M merged (two drives' flares meeting: one lowering), on
+    a whole run before any tile takes its piece of them (one answer either side of a seam)."""
+    import sidewalks
+    out = []
+    for a, b in sorted(ranges):
+        if out and a - out[-1][1] < sidewalks.DRIVE_MERGE_M:
+            out[-1] = (out[-1][0], max(out[-1][1], b))
+        else:
+            out.append((a, b))
     return out
 
 
@@ -7249,13 +7262,7 @@ def walk_drive_ranges(walks, drives):
         curb, _ = sidewalks.run_geometry(wk["pts"], wk["side"], wk.get("w", SIDEWALK["w"]), wk.get("end_n"))
         got = walk_drives(wk["pts"], lines, curb)
         if got:
-            merged = []
-            for a, b in sorted(list(wk.get("drives", ())) + got):
-                if merged and a <= merged[-1][1]:
-                    merged[-1] = (merged[-1][0], max(merged[-1][1], b))
-                else:
-                    merged.append((a, b))
-            wk["drives"] = merged
+            wk["drives"] = _merge_drives(list(wk.get("drives", ())) + got)
 
 
 def drives_on(run, run0, drives0):
