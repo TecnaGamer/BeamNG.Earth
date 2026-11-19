@@ -301,6 +301,23 @@ class PlaceTest(unittest.TestCase):
         self.assertTrue(all(r[1] >= 0.0 for r in got))
         self.assertLess(min(r[1] for r in got), 5.0)
 
+    def test_a_mediterranean_hedge_is_cypress(self):
+        """A mapped hedge in a summer-dry climate (Split, Csa) is Italy's cypress hedge, piece by piece along it; in
+        Baltimore (Cfa) none (2026-11-19)."""
+        split = geodesy.EnuFrame(43.51, 16.44, 0.0)
+        old = self.frame
+        try:
+            self.frame = split
+            got = self.rows(self.line("hedge", {"barrier": "hedge"}, [[10.0, 50.0], [90.0, 50.0]]))
+        finally:
+            self.frame = old
+        self.assertGreaterEqual(len(got), 35)
+        self.assertTrue(all(r[0] == fences.G_MED_HEDGE and r[6] == fences.MED_HEDGE_H for r in got))
+        xs = np.sort([r[1] for r in got])
+        self.assertAlmostEqual(float(np.median(np.diff(xs))), fences.MED_HEDGE_STEP_M, delta=0.05)
+        self.assertTrue(all(abs(r[2] - 50.0) < 0.05 and (abs(r[4]) < 0.5 or abs(r[4] - 360.0) < 0.5) for r in got))
+        self.assertEqual(self.rows(self.line("hedge", {"barrier": "hedge"}, [[10.0, 50.0], [90.0, 50.0]])), [])
+
     def test_catalog_names_the_stock_shapes(self):
         root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
         path = os.path.join(root, "mod", "beamng_earth", "lua", "ge", "extensions", "beamngEarth", "trees.lua")
@@ -312,3 +329,5 @@ class PlaceTest(unittest.TestCase):
         self.assertIn("s_concrete_noiseblocker", source)
         self.assertNotIn("M.NO_COLLIDE.chainlink", source)
         self.assertNotIn("M.NO_COLLIDE.noisewall", source)
+        self.assertIn("M.CATALOG.med_hedge", source)
+        self.assertIn("cypress_hedge_3m", source)

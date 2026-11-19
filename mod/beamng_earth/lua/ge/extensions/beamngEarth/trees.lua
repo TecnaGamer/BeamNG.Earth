@@ -666,6 +666,10 @@ M.GROUP_MAX_M.fr_hedge = 350
 M.GROUP_MAX_M.fr_fence_hedge = 350
 M.NO_COLLIDE.fr_hedge = true
 M.NO_COLLIDE.fr_fence_hedge = true
+-- the summer-dry climates' mapped hedges (server fences.med_hedge_rows): Italy's clipped cypress hedge, 2 m pieces
+M.CATALOG.med_hedge = { { IT .. 'trees/trees_italy/cypress_hedge_3m', 1.64 } }
+M.GROUP_MAX_M.med_hedge = 350
+M.NO_COLLIDE.med_hedge = true
 for group, asset in pairs(require('beamngEarth/frRadarAssets')) do
   M.CATALOG[group] = { { asset[1], asset[2] } }
   M.GROUP_MAX_M[group] = asset[3]

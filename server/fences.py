@@ -58,6 +58,14 @@ HEDGE_STEP_M = 1.15
 # The Forest instance scales the stock shrub uniformly, including its crown.
 HEDGE_CROWN_PER_M = 1.0
 HEDGE_ROAD_MARGIN_M = .15
+# Mapped hedges (barrier=hedge) in the summer-dry climates outside France (the user, 2026-11-19: "cypress hedges"):
+# Italy's clipped cypress hedge (cypress_hedge_3m: 2.0 m of hedge along its local x, 0.85 m deep, 1.64 m high), its
+# pieces end to end along the line. Koppen Cs (climate.py: 8 Csa, 9 Csb, 10 Csc) at the hedge's centre.
+G_MED_HEDGE = "med_hedge"
+MED_HEDGE_KOPPEN = (8, 9, 10)
+MED_HEDGE_H = 1.8           # m drawn (the mod scales the 1.64 m shape: 2.2 m of hedge a piece)
+MED_HEDGE_STEP_M = 2.1      # m between pieces' centres (a little overlap)
+MED_HEDGE_ROAD_M = 0.6      # m a piece keeps off a carriageway's edge (else left out: a drive or a gate)
 HEDGE_SHIFT_M = 2.5
 FR_HEIGHTS = {"limestone": .95, "dark_stone": .94, "brick": 1.05, "iron": 1.23, "mesh": 1.14,
               "wood": 1.16, "slats": 1.12, "rails": 1.19}
@@ -624,6 +632,76 @@ def french_rows(frame, infra_fn, box, elev, carriageways=()):
     return _forest_rows(pending, z), taken
 
 
+def med_hedge_rows(frame, infra_fn, box, elev, carriageways=(), taken=()):
+    """Forest rows of the mapped hedges in box in a summer-dry climate (MED_HEDGE_*): Italy's cypress hedge along each,
+    piece by piece, none on a carriageway; the features in taken (French ones already drawn) left out. Returns
+    (rows, fids drawn)."""
+    if infra_fn is None:
+        return [], set()
+    import climate
+    import geotiles
+    x0, y0, x1, y1 = map(float, box)
+    la, lo, _ = frame.enu_to_geodetic(np.array([x0, x0, x1, x1]), np.array([y0, y1, y0, y1]), np.zeros(4))
+    try:
+        keys = mapcells.cells_for_points(la, lo, pad_lat=0.00005, pad_lon=0.00005, max_cells=64)
+    except (ValueError, OverflowError):
+        return [], set()
+    pending, drawn, seen = [], set(), set(taken)
+    for key in keys:
+        try:
+            feats = infra_fn(key)
+        except Exception as ex:
+            log.debug("fences: infrastructure cell %s unavailable: %s", key, ex)
+            continue
+        if feats is None or not len(feats) or feats.attrs.get("class") is None and feats.attrs.get("tags") is None:
+            continue
+        boxes = feats.boxes(frame)
+        classes = feats.attrs.get("class")
+        for i in range(len(feats)):
+            fid = str(feats.ids[i])
+            if fid in seen or int(feats.kind[i]) not in (mapgeom.LINE, mapgeom.POLYGON):
+                continue
+            b = boxes[i]
+            if b[2] < x0 - BBOX_PAD_M or b[0] > x1 + BBOX_PAD_M or b[3] < y0 - BBOX_PAD_M or b[1] > y1 + BBOX_PAD_M:
+                continue
+            cls = str(classes[i]).strip().lower() if classes is not None else ""
+            if cls != "hedge" and _tags(feats, i).get("barrier") != "hedge":
+                continue
+            seen.add(fid)
+            cla, clo, _ = frame.enu_to_geodetic(np.array([(b[0] + b[2]) / 2]), np.array([(b[1] + b[3]) / 2]), np.zeros(1))
+            if int(climate.koppen_many(cla, clo)[0]) not in MED_HEDGE_KOPPEN:
+                continue
+            drawn.add(fid)
+            for part in feats.parts(i):
+                if not part or len(part[0]) < 2:
+                    continue
+                e, n = mapgeom.enu_xy(feats, frame, np.asarray(part[0], np.float64))
+                for centre, tangent in _centres(np.column_stack((e, n)), MED_HEDGE_STEP_M):
+                    if geotiles.box_owns(box, *centre):
+                        pending.append((np.asarray(centre, np.float64), np.asarray(tangent, np.float64)))
+    if not pending:
+        return [], drawn
+    centres = np.array([c for c, _ in pending])
+    tangents = np.array([t for _, t in pending])
+    keep = np.ones(len(pending), bool)
+    if carriageways:
+        import roads as roadsmod
+        import streetfront
+        bounds = roadsmod._blocker_segments([(np.asarray(line)[:, :2], max(.3, spec.width / 2 + MED_HEDGE_ROAD_M))
+                                             for _, spec, line, *_ in carriageways])
+        half = tangents * (MED_HEDGE_STEP_M / 2)
+        keep = ~np.asarray(streetfront._road_overlap(np.stack((centres - half, centres + half), axis=1), bounds), bool)
+    rows_ = [(G_MED_HEDGE, float(c[0]), float(c[1]), _yaw(float(t[0]), float(t[1])), MED_HEDGE_H, 0.)
+             for (c, t), k in zip(pending, keep) if k]
+    if not rows_:
+        return [], drawn
+    xy = np.array([[r[1], r[2]] for r in rows_], np.float64)
+    lat, lon, _ = frame.enu_to_geodetic(xy[:, 0], xy[:, 1], np.zeros(len(xy)))
+    _, _, z = frame.geodetic_to_enu(lat, lon, np.asarray(elev(lat, lon), np.float64))
+    return [[g, round(x, 2), round(y, 2), round(float(zz) + lift, 2), round(yaw, 1) % 360., 1., h, 0.]
+            for (g, x, y, yaw, h, lift), zz in zip(rows_, z)], drawn
+
+
 def rows(frame, infra_fn, box, elev, decks=(), roads=(), french=False, carriageways=None):
     """Forest rows [group, x, y, z, yaw, scale, height, rank] of the chain-link fences and noise walls whose
     centre is inside box (x0, y0, x1, y1). decks ([{"n": (k, 3) XYZ, "w": road width}], as guardrails.forest_rows
@@ -646,6 +724,12 @@ def rows(frame, infra_fn, box, elev, decks=(), roads=(), french=False, carriagew
     if carriageways is not None and not roads:      # (PR #505's name for the same roads_out rows)
         roads = carriageways
     fr_rows, fr_taken = french_rows(frame, infra_fn, box, elev, roads) if french else ([], set())
+    try:
+        med_rows, _ = med_hedge_rows(frame, infra_fn, box, elev, roads, fr_taken)
+    except Exception as ex:          # (a hedge never costs the tile its fences)
+        log.debug("fences: Mediterranean hedges: %s: %s", type(ex).__name__, ex)
+        med_rows = []
+    fr_rows = fr_rows + med_rows
     x0, y0, x1, y1 = map(float, box)
     la, lo, _ = frame.enu_to_geodetic(np.array([x0, x0, x1, x1]), np.array([y0, y1, y0, y1]), np.zeros(4))
     try:
