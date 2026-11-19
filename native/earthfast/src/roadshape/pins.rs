@@ -10,7 +10,7 @@
 //!   graded height is within gate0 of the member's height today at the foot, a smoothstep to 0 at gate1 (a road at
 //!   another level beside or over the approach, a ramp's embankment, keeps its own ground), times its fade at the foot
 //!   (another chain's approach faded out at this abutment gives way to this one's);
-//! - the change at a point: (sum w^2 dz / sum w^2) x max w over the members (one member: w dz; twins side by side: their
+//! - the change at a point: (sum w^8 dz / sum w^8) x max w over the members (one member: w dz; twins side by side: their
 //!   mean where both weigh in full), dz linear between the member's knots at the foot; nearest segment per member
 //!   (ties: the lower segment). On the member's line, away from other members, the graded height today plus dz: the
 //!   solve's height exactly.
@@ -87,8 +87,12 @@ pub fn field_core(pts: &[[f64; 2]], z: &[f64], pins: &[Pin], prm: &[f64]) -> Vec
             let wg = if dh <= gate0 { 1.0 } else { smooth(1.0 - (dh - gate0) / (gate1 - gate0)) };
             let w = wl * wg * bw.max(0.0).min(1.0);
             if w > 0.0 {
-                sw2 += w * w;
-                swdz += w * w * bdz;
+                // (w^8: the nearer road all but alone, a ramp 10 m off with its own change no longer pulls this
+                // one's (Ottawa t4: 0.4 m); twins side by side, equal, still their mean)
+                let w2 = w * w;
+                let w8 = (w2 * w2) * (w2 * w2);
+                sw2 += w8;
+                swdz += w8 * bdz;
                 if w > wmax {
                     wmax = w;
                 }

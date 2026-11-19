@@ -82,7 +82,7 @@ class Bytes(unittest.TestCase):
     GOLDEN = {
         "ramp": "b30e05b8e080457f7d9389b6",
         "sheet": "a0998d9624505490057d0d5b",
-        "pins": "7e330c013b9d255512030283",
+        "pins": "3215a4d4117db3258d0616bb",
     }
 
     def check(self, name, got):

@@ -992,15 +992,38 @@ def _chain_store(name, cls, elev, setup=None):
 
 
 def _pin_zoom(zoom):
-    """The DEM zoom of the physics ground the bridge chains' first-stage ground reads (_elev_stage1): the first asked in
-    this process (an anchor's terrain zoom: every build of a place asks the same)."""
-    _s.__dict__.setdefault("pin_zoom", int(zoom))
+    """(Kept for callers: the first stage's DEM zoom is the point's own, stage_zoom; Codex review of P3b: a process's
+    first job choosing it made a chain's heights the worker's history's)"""
+
+
+def stage_zoom(la):
+    """The DEM zoom of the physics ground at latitudes la (an array: one zoom per point), as an anchor there takes its
+    terrain's (earthd: dem.zoom_for(lat, 1.25, FINE_ZOOM)): a function of the place alone, whoever asks."""
+    la = np.atleast_1d(np.asarray(la, np.float64))
+    lo_z = demmod.zoom_for(float(np.abs(la).min()), 1.25, demmod.FINE_ZOOM) if la.size else demmod.FINE_ZOOM
+    hi_z = demmod.zoom_for(float(np.abs(la).max()), 1.25, demmod.FINE_ZOOM) if la.size else demmod.FINE_ZOOM
+    if lo_z == hi_z:
+        return np.full(la.shape, lo_z, np.int64)
+    return np.array([demmod.zoom_for(float(v), 1.25, demmod.FINE_ZOOM) for v in la], np.int64)
+
+
+def sample_at_zoom(la, lo):
+    """The DEM at each point's own stage_zoom (BNE_ROADSHAPE=profile's first stage and the probes reading it)."""
+    la = np.asarray(la, np.float64)
+    lo = np.asarray(lo, np.float64)
+    zs = stage_zoom(la.ravel()).reshape(la.shape)
+    out = np.zeros(la.shape, np.float64)
+    for zm in sorted(set(zs.ravel().tolist())):
+        m = zs == zm
+        out[m] = np.asarray(_s.dem.sample(la[m], lo[m], int(zm)), np.float64)
+    return out
 
 
 def _elev_stage1(la, lo):
     """BNE_ROADSHAPE=profile (P3b): the physics ground as the road tiles' elev, lifted under roads, graded by the plans'
-    first stage alone (no approach pins): the bridge chains' solves read it, the pins are made from them."""
-    z = _s.dem.sample(la, lo, _s.__dict__.get("pin_zoom", gradingmod.PROFILE_ZOOM))
+    first stage alone (no approach pins): the bridge chains' solves read it, the pins are made from them. The DEM at
+    each point's own zoom (stage_zoom)."""
+    z = sample_at_zoom(la, lo)
     g = _frame_grader(_PIN_FRAME) if _s.grading else None
     z = ground(None, la, lo, z, g)
     return g.apply(la, lo, z, gradingmod.ROAD_LIFT, pinned=False) if g is not None else z
@@ -1014,21 +1037,40 @@ def _cell_bridge_parts(key):
     """[(part key, feats, i, first point (lat, lon), box (lat0, lon0, lat1, lon1))] of map cell key's bridge parts,
     kept."""
     import roads as roadsmod
+    import revisit
     memo = _s.__dict__.setdefault("pin_parts", {})
     with _s.lock:
         got = memo.get(str(key))
     if got is not None:
         return got
-    try:
-        feats = _s.md.cell(key, layers=("roads",), kind="demand").layers.get("roads")
-    except netfetch.FetchError:
-        # (a cell not at hand, offline or a slow first visit: graded without its chains' pins and not kept as
-        # complete, as a road tile without a neighbour cell; never kept here, asked again next time)
-        import revisit
-        revisit.fault()
-        return []
     out = []
-    if feats is not None and len(feats):
+    # (the read and what is made from it in a scope of its own, kept only when complete: a stand-in or fallback layer's
+    # parts answer this call alone, its fault the caller's too, BridgeProfiles._cell_entries' rule; Codex review of P3b)
+    with revisit.scope() as read:
+        try:
+            feats = _s.md.cell(key, layers=("roads",), kind="demand").layers.get("roads")
+        except netfetch.FetchError:
+            # (a cell not at hand, offline or a slow first visit: graded without its chains' pins and not kept as
+            # complete, as a road tile without a neighbour cell)
+            revisit.fault()
+            feats = None
+        if feats is None:
+            revisit.fault()
+        else:
+            out = _bridge_parts_of(feats)
+    if not read.complete:
+        return out
+    with _s.lock:
+        if len(memo) >= PIN_PARTS_KEPT:
+            memo.clear()
+        memo[str(key)] = out
+    return out
+
+
+def _bridge_parts_of(feats):
+    import roads as roadsmod
+    out = []
+    if len(feats):
         bp = roadsmod.BridgeProfiles
         bs = bp.specs_of(feats)
         for i in range(len(feats)):
@@ -1039,10 +1081,6 @@ def _cell_bridge_parts(key):
                 out.append(((str(feats.ids[i]), j), feats, i, (float(ring[0, 1]), float(ring[0, 0])),
                             (float(ring[:, 1].min()), float(ring[:, 0].min()), float(ring[:, 1].max()),
                              float(ring[:, 0].max()))))
-    with _s.lock:
-        if len(memo) >= PIN_PARTS_KEPT:
-            memo.clear()
-        memo[str(key)] = out
     return out
 
 

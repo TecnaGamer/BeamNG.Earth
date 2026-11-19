@@ -144,13 +144,24 @@ def built_heights(rec, elev):
         if m["kind"] == "deck":
             m["z_built"] = [round(float(v), 3) for v in b["knots"][n]]
             continue
-        xy = np.asarray(m["xy"], np.float64)
+        xy = np.array(m["xy"], np.float64)
+        # (an abutment knot read 5 cm inside the approach: the deck end itself is where the plans end, and the graded
+        # ground falls away past a plan's abutment end (grading ABUT_UNDER_GRADE): the record's 1 mm rounding put
+        # Nordschleife A's knot past it, 3.4 m down, a ride of 8 g that no car drives: the deck is there)
+        ends = [0] + ([len(xy) - 1] if m.get("reach") == 2 else [])
+        for k in ends:
+            j = 1 if k == 0 else k - 1
+            d = xy[j] - xy[k]
+            n = float(dnp.hypot(d[0], d[1]))
+            if n > 0.1:
+                xy[k] = xy[k] + d * (BUILT_IN_M / n)
         la, lo, _ = fr.enu_to_geodetic(xy[:, 0], xy[:, 1], 0.0)
         la, lo = np.asarray(la, np.float64), np.asarray(lo, np.float64)
         z = np.asarray(elev(la, lo), np.float64)
         m["z_built"] = [round(float(v), 3) for v in fr.geodetic_to_enu(la, lo, z)[2]]
 
 
+BUILT_IN_M = 0.05           # m inside an approach its abutment knot's built ground is read (built_heights)
 ORDERS = 1      # (--orders: the chains solved again this many times in all, each time a fresh store from another start)
 
 
@@ -239,7 +250,8 @@ def collect(lat, lon, R, cache, offline=True):
     g, _ = s.anchor(1, lat, lon)
 
     def elev(la, lo):           # (blockworker.roads_tile's: the physics ground, lifted under roads)
-        z = bw.ground(frame, la, lo, s.dem.sample(la, lo, 15), g)
+        dz = bw.sample_at_zoom(la, lo) if roadshape.PROFILE_BUILT else s.dem.sample(la, lo, 15)   # (P3b: the first
+        z = bw.ground(frame, la, lo, dz, g)                 # stage's own zoom, blockworker.stage_zoom)
         return g.apply(la, lo, z, gradingmod.ROAD_LIFT) if g is not None else z
     cell_fn = lambda key: s.md.cell(key, layers=("roads",), kind="demand").layers.get("roads")     # noqa: E731
     dlat, dlon = R / 111320.0, R / (111320.0 * dmath.cos(math.radians(lat)))
@@ -263,7 +275,7 @@ def collect(lat, lon, R, cache, offline=True):
     if roadshape.PROFILE_BUILT:
         # (P3b built: the process's own bridge store on the plans' first stage, the one the second stage's pins come
         # from, as the road tiles'; the built ground read through the pinned plans below)
-        bw._pin_zoom(15)
+
         cs = bw._chain_store("bridges", roadsmod.BridgeProfiles, elev, bw._bridge_setup)
     else:
         cs = roadsmod.ChainStore(roadsmod.BridgeProfiles, cell_fn, elev, bw._bridge_setup)

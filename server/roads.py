@@ -9528,11 +9528,13 @@ class BridgeProfiles:
         mp = ChainView.mapper(owner.frame, self.frame)
         with self.lock:
             mine_n, mine_l = (short.n, short.lidar) if short is not None else (0, 0)
+            local = []
             for k, (spec, xy, z, lon) in done.items():
                 # (a part another thread published here meanwhile is kept, and TAKEN: its note, perhaps a short local
                 # solve's, is the adopting build's: a clean adoption that lost to a short local publisher returned
                 # the local fallback and stayed complete, review 2026-11-13)
                 if self._take_locked(k) is not None:
+                    local.append(k)
                     continue
                 xyz = mp.pts(np.c_[np.asarray(xy, np.float64)[:, :2], np.asarray(z, np.float64)])
                 n_s, n_l = max(mine_n, (theirs[k] or (0, 0))[0]), max(mine_l, (theirs[k] or (0, 0))[1])
@@ -9549,6 +9551,11 @@ class BridgeProfiles:
             if beams is not None and ck not in self.trusses:
                 self.trusses[ck] = [mp.beam(b) for b in beams]
                 self.piers[("truss", ck)] = [mp.pier(q) for q in (tpiers or [])]
+            if (isinstance(extra, tuple) and extra[:1] == ("profile",)
+                    and any(k not in self.__dict__.get("profiled", ()) for k in local)):
+                # (P3b: a part kept from a local publish that is not at the profile (a fallback): the owner's profile
+                # is not taken, its pins nor its marks: one chain, one answer; Codex review of P3b)
+                extra = None
             self._adopt_take(extra)
         return True
 
@@ -9565,7 +9572,7 @@ class BridgeProfiles:
 
     def _adopt_take(self, extra):
         """Under self.lock: _adopt_extra's from another store."""
-        if extra and extra[0] == "profile":
+        if isinstance(extra, tuple) and extra[:1] == ("profile",):
             _tag, ck, prof, mine = extra
             self.__dict__.setdefault("profiles", {}).setdefault(ck, prof)
             self.__dict__.setdefault("profiled", set()).update(mine)
