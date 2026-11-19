@@ -42,7 +42,7 @@ LIFT = {"base": 0.0, "edge": 0.001, "gutter": 0.0015, "mark": 0.002, "frontage":
         # 6-7 mm, the spots 4 mm (each wear layer's lift its own: the strips are told apart by it)
         # then (the user: "they still float. i want to make them virtualy the same height of the road"): paint 2 mm, the
         # wear 2.2-2.6 mm, spots 1.8 mm (FOLLOW_TOL stays 2 cm: the ground steps by 1/32 m)
-        "wear": 0.0022, "wear2": 0.0024, "spot": 0.0018, "wline": 0.0026}
+        "wear": 0.0022, "wear2": 0.0024, "spot": 0.0018, "oil": 0.0018, "wline": 0.0026}
 # The wear strips may depart further from the drawn ground than the paint before follow_ground cuts them, lifted about
 # as far (a soft decal shows no parallax): a motorway tile's lanes of tyre polish (I-95, Baltimore) were +21k triangles
 # at FOLLOW_TOL, +9k at 4 cm. The spots (small quads) keep FOLLOW_TOL.
@@ -50,24 +50,31 @@ WEAR_STRIPS = ("wear", "wear2")
 WEAR_TOL = float(os.environ.get("BNE_WEAR_TOL", "0.02"))
 # The road revamp v2's surface overlays (P1c, BNE_SURFACE_V2; .claude/work/road-revamp-v2-road-shape-first-2026-11-19.md
 # section 2.7 and its addendum): the stock maps' markings float ~5 mm over their road (Italy's mesh lines 4.9 mm p50),
-# so the overlays here sit a few mm up, markings 5 mm, tyre wear 4 mm, edge blends 2.5 mm, the surface variation
-# (roadwear.surface_chunks) 3 mm; the mesh's draw order does the layering (v2_rank: the strips' materials write depth
-# since 2026-11-19, as the stock road decals do, else they take no sun shadow; the spots and crack lines too).
+# so the overlays here sit a few mm up, markings 5 mm, tyre wear 5.4 mm (over the paint), edge blends 2.5 mm, the
+# surface variation (roadwear.surface_chunks) 3 mm; the mesh's draw order follows the heights (v2_rank: the strips'
+# materials write depth since 2026-11-19, as the stock road decals do, else they take no sun shadow; the spots and
+# crack lines too).
 # An overlay triangle the ground follow leaves whole is raised where the drawn ground bulges inside it, so the ground
 # stays MARK_MIN_M under every overlay (follow_ground's clear: with fewer rows than the terrain the paint sagged into it,
 # 6.9 mm deep at Fells Point with the 2 mm lift, markprobe.py); cutting those triangles along the terrain's instead was
 # 7x the triangles (the 1/512 m height steps bulge nearly every square). Off: today's lifts and tolerances.
 SURFACE_V2 = os.environ.get("BNE_SURFACE_V2", "off").strip().lower() in ("on", "1", "yes", "true")
 MARK_MIN_M = 0.0021     # m an overlay keeps over the drawn ground (markprobe's 2 mm and a margin)
-LIFT_V2 = {"var": 0.0030, "patch": 0.0034, "spot": 0.0036, "edge": 0.0025, "gutter": 0.0028, "wear": 0.0040,
-           "wear2": 0.0042, "wline": 0.0044, "mark": 0.0050}
+# The vehicles' marks (tyre wear, oil spots) and the crack lines lie over the markings (the user, 2026-11-19: "putting
+# tire markings and other vehicle markings over road markings": real wheel paths wear the paint and darken it), so
+# above them as well as after them in the draw order (v2_rank): their materials write depth, so a layer under the
+# paint but drawn after it fails the depth test where the camera can tell 1 mm apart (near) and passes where it cannot.
+LIFT_V2 = {"var": 0.0030, "patch": 0.0034, "spot": 0.0036, "edge": 0.0025, "gutter": 0.0028, "mark": 0.0050,
+           "wear": 0.0054, "wear2": 0.0056, "oil": 0.0058, "wline": 0.0060}
 if SURFACE_V2:
     LIFT.update(LIFT_V2)
 # the v2 draw order (build: one primitive per material, the list's order), by material: the dirt strips and the
-# frontage first, then the variation, the patches and spots, the wear, crack lines and edge blends, the markings last
+# frontage first, then the variation, the patches and spots, the edge blends, the markings, then the vehicles' marks
+# (tyre wear, oil) and the crack lines over the paint (LIFT_V2)
 V2_ORDER_VAR = ("bne_wear_var_",)
 V2_ORDER_PATCH = ("bne_wear_patch", "bne_spot_")
-V2_ORDER_WEAR = ("bne_wear_", "bne_crack_line", "bne_edge_", "ECA_road_edge_", "m_road_edge_")
+V2_ORDER_EDGE = ("bne_edge_", "ECA_road_edge_", "m_road_edge_")
+V2_ORDER_OVER_PAINT = ("bne_wear_", "bne_spot_oil", "bne_crack_line")    # (after V2_ORDER_PATCH's bne_wear_patch)
 FRONTAGE_ASPHALT = "bne_eu_frontage_asphalt"
 FRONTAGE_REPEAT_M = 5.
 FRONTAGE_TERRAIN_REPEAT_M = 4.
@@ -195,10 +202,12 @@ def v2_rank(m):
         return 0
     if m.startswith(V2_ORDER_VAR):
         return 1
-    if m.startswith(V2_ORDER_PATCH):
+    if m.startswith(V2_ORDER_PATCH) and m != "bne_spot_oil":   # (the patch strip before the wear's bne_wear_ prefix)
         return 2
-    if m.startswith(V2_ORDER_WEAR):
+    if m.startswith(V2_ORDER_EDGE):
         return 3
+    if m.startswith(V2_ORDER_OVER_PAINT):
+        return 5
     return 4
 
 

@@ -235,6 +235,22 @@ class SurfaceV2Test(unittest.TestCase):
         for p in self._p:
             p.stop()
 
+    def test_vehicle_marks_over_the_paint(self):
+        """The tyre wear, oil spots and crack lines draw after the markings and lie above them (their materials write
+        depth: a layer under the paint drawn after it would lose the depth test near the camera); the surface
+        variation, patches, other spots and edge blends stay under the paint, before it."""
+        lift, mark = roadmesh.LIFT_V2, roadmesh.LIFT_V2["mark"]
+        over = {"bne_wear_tread2": "wear", "bne_wear_sealed": "wear2", "bne_spot_oil": "oil", "bne_crack_line": "wline"}
+        under = {"bne_wear_var_01": "var", "bne_wear_patchstrip": "patch", "bne_spot_manhole": "spot",
+                 "bne_edge_gravel": "edge"}
+        for m, layer in over.items():
+            self.assertGreater(roadmesh.v2_rank(m), roadmesh.v2_rank("line_white"), m)
+            self.assertGreater(lift[layer], mark, m)
+        for m, layer in under.items():
+            self.assertLess(roadmesh.v2_rank(m), roadmesh.v2_rank("line_white"), m)
+            self.assertLess(lift[layer], mark, m)
+        self.assertEqual(roadwear.LOOKS[roadwear.K_OIL]["layer"], "oil")
+
     def test_off_draws_none(self):
         rd = [("a", spec(lanes=2), line(-500, 128, 800, 128), 0.0)]
         with __import__("unittest").mock.patch.object(roadwear, "SURFACE_V2", False):
@@ -437,7 +453,8 @@ class SurfaceV2Test(unittest.TestCase):
         P, T, UV, mats, M, _fade = roadmesh.build(FRAME, ch, elev, (0.0, 0.0, 0.0), 0.0, clip=(0, 0, 100, 100),
                                                   follow=True, q=q)
         self.assertEqual([roadmesh.v2_rank(m) for m in mats], sorted(roadmesh.v2_rank(m) for m in mats))
-        self.assertEqual(mats[-1], "line_white")
+        self.assertLess(mats.index("line_white"), mats.index("bne_wear_tread2"))   # (the tyre wear over the paint)
+        self.assertLess(mats.index(roads.EDGE_DECAL["m"]), mats.index("line_white"))
         tri = P[T]
         w = np.array([[1, 0, 0], [0, 1, 0], [0, 0, 1], [1 / 3] * 3, [.6, .2, .2], [.2, .6, .2], [.2, .2, .6]])
         pts = np.einsum("kj,tjc->tkc", w, tri).reshape(-1, 3)

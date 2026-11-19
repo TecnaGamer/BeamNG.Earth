@@ -59,7 +59,7 @@ LOOKS = {
     K_PATCH: {"m": "bne_spot_patch", "p": 8, "layer": "spot"},
     K_POTHOLE: {"m": "bne_spot_pothole", "p": 8, "layer": "spot"},
     K_MANHOLE: {"m": "bne_spot_manhole", "p": 8, "layer": "spot"},
-    K_OIL: {"m": "bne_spot_oil", "p": 8, "layer": "spot"},
+    K_OIL: {"m": "bne_spot_oil", "p": 8, "layer": "oil"},       # (a vehicle's mark: over the paint, roadmesh.LIFT_V2)
     K_LEAVES: {"m": "bne_spot_leaves", "p": 8, "layer": "spot"},
 }
 # The road revamp v2's surface overlays (P1c, BNE_SURFACE_V2: roadmesh.SURFACE_V2; the user, studying the stock maps:
@@ -70,7 +70,7 @@ LOOKS = {
 # tread_marks_worn at its stock tint and opacity: ours at full brightness and opacity were the "very bright" bands of
 # 2026-11-11) 4-5 m wide on the lane centres in 40-60 m runs with 5-20 m fades, in place of K_TREAD; repair patch strips
 # (the stock road_patches1 strip) about 8 a km, 15-40 m long, half of them with a joint line across each end. Their
-# materials (roadwear.materials.json) write no depth: roadmesh.v2_rank orders them.
+# materials (roadwear.materials.json) write depth; roadmesh.v2_rank and LIFT_V2 order them (the tyre wear over the paint).
 SURFACE_V2 = os.environ.get("BNE_SURFACE_V2", "off").strip().lower() in ("on", "1", "yes", "true")
 K_VAR1, K_VAR2, K_TREAD2, K_PATCH2 = 10, 11, 12, 13
 LOOKS_V2 = {
