@@ -70,7 +70,9 @@ PLANS_READ = ("BNE_BUMPS", "BNE_DIRT_BANK", "BNE_DIRT_BUMP", "BNE_ENTRANCE_FLARE
               # (the Revamped roads setting: tapers, deck K, level spacing, footbridges, rail lifecycle, raceways)
               "BNE_DECK_K_SPEED", "BNE_RACEWAY_DIG", "BNE_FAST_DECK_ENDS", "BNE_FAST_GAP", "BNE_FAST_DECK_GROUND", "BNE_RAIL_LIFECYCLE",
               "BNE_RAIL_SEAM_NATURAL",
-              "BNE_SPEED_TAPERS")
+              "BNE_SPEED_TAPERS",
+              # (the vanilla slopes: the plan sets' params and the cells round the points, plancache's ".bv1" tag)
+              "BNE_BATTER")
 # Experimental switches the planning does not read that are still NOT on the list, and why (each keeps its keys)
 NOT_LISTED = {
     "BNE_GEN_GROUND": "its gated code (the base photo with other arguments: genground.render, blockworker.base_photo, "

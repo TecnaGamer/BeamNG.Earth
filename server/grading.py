@@ -146,6 +146,38 @@ BUCKET = 32.0               # m, query-point buckets (grade_points' pairs: a poi
 # 2.2-2.8x less CPU (a 2048² block at Roswell NM 2.6 -> 1.1 s, 2026-11-11). BNE_GRADE_BINNED=off: the bucket walk
 GRADE_BINNED_ON = os.environ.get("BNE_GRADE_BINNED", "on") != "off"
 GRADE_BIN_M = float(os.environ.get("BNE_GRADE_BIN_M", "8"))    # m, the fine bins (grown where the points are sparse)
+# Vanilla-style cut and fill slopes (road revamp v2 P1a, the user 2026-11-19: "wide vanilla slopes, 1:2 rural and 1:3.5
+# urban, up to 40 m out, with walls where a slope would hit buildings"; native/earthfast batter.rs): outside the cores
+# the ground is the natural one clamped to each road side's corridor (a near-level strip, a rounded crest, then a
+# constant batter out to the daylight line), a pure function of position. Off by default (BNE_BATTER=vanilla, the
+# Revamped roads switch); on, it is a plans format tag (plancache.plans_format: ".bv1"), so no cache mixes the two.
+BATTER_ON = os.environ.get("BNE_BATTER", "off") == "vanilla"
+BATTER_L0_M = 1.0           # m of near-level strip past a core's edge (the core: carriageway + shoulder, 1 m+) ...
+BATTER_STRIP_LO = 0.04      # ... the ground there at most this much per m under the road's height ...
+BATTER_STRIP_UP = 0.02      # ... and this much over it
+BATTER_CREST_M = 6.0        # m over which the slope rounds from 0 to the batter's (the stock maps' 4-6 m crest)
+BATTER_RURAL = 2.0          # the batter, 1 : this: rural (the stock rural maps: 1:1.9-1:2.2) ...
+BATTER_URBAN = 3.5          # ... a building within BATTER_URBAN_M of the core (west_coast_usa / east_coast_usa: 1:3.3-1:4)
+BATTER_STEEP = 1.5          # ... a mountain pass road (Plan.steep)
+BATTER_M_MAX = 1.0          # the steepest a batter is made to reach the natural ground; steeper: today's grading there
+BATTER_FIT_K = 1.15         # where the class batter cannot reach the natural ground: this times the slope that just does,
+BATTER_FIT_ADD = 0.02       # plus this (a clean crossing, not a batter along a slope as steep as itself: its daylight wanders)
+BATTER_R_MAX = 40.0         # m past the core a corridor reaches at most (terraform.lua's DOI)
+BATTER_R_PAD = 4.0          # m past the sample its batter daylights by that it still reaches
+BATTER_URBAN_M = 30.0       # m from the core's edge: a building this near (either side) makes the urban batter
+BATTER_BLD_GAP_M = 1.0      # m a corridor stops short of a building's wall (beyond: the building's ground is natural)
+BATTER_DM = 0.01            # a side's slope along its plan: the most of its neighbours' less this per segment ...
+BATTER_DR = 3.0             # ... its reach: less this (m) per segment (no step between neighbours: no teeth)
+BATTER_GAP_N = 2            # a sharp cutting's or too steep side keeps today's grading in runs along its plan only: gaps
+BATTER_RUN_N = 5            # of this many segments closed, then runs shorter than this many left out (no flicker)
+BATTER_OFFS = (3.0, 6.0, 11.0, 20.0, 40.0)   # m past the core the natural ground is sampled at
+BATTER_CLOSE_T = 3.0        # m before its reach a corridor closes (steepening to the natural ground) ...
+BATTER_CLOSE_K = 1.0        # ... at k u^2 / (1 - u)
+BATTER_SMOOTH_K = 1.0       # m: the smooth max / min at the daylight line (a rounded toe and top)
+BATTER_CORE_BLEND_M = 1.0   # m past a core today's heights fade into the corridor's
+BATTER_OLD_FADE_M = 10.0    # m past today's reach (T_MAX) a side that keeps today's grading fades into the corridor
+BATTER_BIN_M = 8.0          # m, the apply's bins
+BATTER_CHUNK = 256          # natural ground samples read at a time where a read of them all failed (_batter_of)
 ROAD_LIFT = 0.04            # m the physics ground is raised under roads (see Grader.apply)
 BLEND_R = 4.0               # m: roads near each other blend their targets by 1 / (1 + (d / BLEND_R)^2)
 PROFILE_ZOOM = int(os.environ.get("BNE_DEM_ZOOM", "16"))   # DEM zoom of the profiles (one zoom for every caller)
@@ -6809,7 +6841,8 @@ class _Planner:
         """The map cells whose plans can reach the points (reach_m: those within that distance)."""
         lat = np.asarray(lat, np.float64)
         lon = np.asarray(lon, np.float64)
-        pad = (T_MAX + 40.0 if reach_m is None else reach_m) / 111320.0
+        # (the vanilla slopes reach BATTER_R_MAX past a core, not T_MAX: their roads' cells too, BATTER_ON)
+        pad = ((BATTER_R_MAX if BATTER_ON else T_MAX) + 40.0 if reach_m is None else reach_m) / 111320.0
         padlon = pad / max(0.05, dmath.cos(math.radians(float(np.mean(lat)))))
         keys = mapcells.cells_for_points(lat, lon, pad, padlon)
         if len(keys) > SPREAD_CELLS:        # points far apart: only the cells around them
@@ -6855,6 +6888,8 @@ class _Planner:
         # (the pieces of one road a cell edge cut apart meet at one height too, WELD_ON; a side road starts at the
         # main's painted edge, not in its middle, TRIM_SIDE_MOUTHS_ON)
         out = (plans, merge_plan_set(plans))
+        if BATTER_ON and out[1].n and not self._batter_of(out[1]):
+            return out          # (made from a stand-in's buildings or short of its ground: not kept)
         with self.lock:
             stages = self.__dict__.get("_road_stages", {})
             # (not while a cell's fetch failed: it is asked again; the roads' plans alone: a cell's road stage is its
@@ -6864,6 +6899,87 @@ class _Planner:
                 if len(memo) >= PLAN_SETS_MAX:
                     memo.pop(next(iter(memo)))
                 memo[mk] = out
+        return out
+
+    def _batter_of(self, pack):
+        """pack.bt: the vanilla slopes' params of a plan set's segments (batter_params) from the plans' ground (elev)
+        and the buildings (widths: RoadWidths' walls, the cells within BATTER_R_MAX of each segment's core). Each
+        segment's from its own samples only: a sample whose ground could not be read (BATTER_CHUNK points at a time)
+        makes its segment's side today's, a stand-in cell's buildings are taken as they are, and either marks the
+        request short (revisit.fault: not kept, made again). True when the set may be kept."""
+        import revisit
+        short = [False]
+
+        def elev_xy(x, y):
+            la, lo = enu_to_ll_dense(self.frame, x, y)
+            la, lo = np.asarray(la), np.asarray(lo)
+            try:
+                return np.asarray(self.elev(la, lo), np.float64)
+            except Exception as e:      # (the ground not at hand somewhere: read in chunks, the rest NaN)
+                _caught(e)
+                short[0] = True
+            out = np.full(len(la), np.nan)
+            for i in range(0, len(la), BATTER_CHUNK):
+                try:
+                    out[i:i + BATTER_CHUNK] = np.asarray(self.elev(la[i:i + BATTER_CHUNK], lo[i:i + BATTER_CHUNK]),
+                                                         np.float64)
+                except Exception as e:
+                    _caught(e)
+            return out
+        # (the planner holds RoadWidths.get, a bound method: its RoadWidths' walls)
+        widths = getattr(getattr(self, "widths", None), "__self__", getattr(self, "widths", None))
+        rays = None
+        if widths is not None and hasattr(widths, "_walls"):
+            def rays(org, dirs, reach):
+                return self._batter_rays(widths, org, dirs, reach, short)
+        try:
+            pack.bt = batter_params(pack, elev_xy, rays)
+        except Exception as e:         # (a kernel's error: today's grading everywhere in the set, asked again)
+            _caught(e)
+            pack.bt = None
+            short[0] = True
+        if short[0]:
+            revisit.fault(here=True)
+            return False
+        return True
+
+    def _batter_rays(self, widths, org, dirs, reach, short):
+        """(k,) distance from each origin (this frame) along its unit direction to the first building wall within
+        reach (inf: none), over the walls of every cell the rays reach (each cell's own frame). short[0] set when a
+        cell's buildings are a stand-in's."""
+        out = np.full(len(org), np.inf)
+        if not len(org):
+            return out
+        end = org + dirs * reach
+        both = np.concatenate([org, end])
+        la, lo = enu_to_ll_dense(self.frame, both[:, 0], both[:, 1])
+        la, lo = np.asarray(la, np.float64), np.asarray(lo, np.float64)
+        pad = 2.0 / 111320.0
+        keys = sorted(mapcells.cells_near_points(la, lo, pad, pad / max(0.05, dmath.cos(math.radians(float(
+            np.mean(la)))))), key=str)
+        if hasattr(widths, "prefetch"):
+            widths.prefetch(keys)
+        k = len(org)
+        for key in keys:
+            frame_c, walls = widths._walls(key)
+            if getattr(walls, "stand_in", False):
+                short[0] = True
+            if not len(walls.segs):
+                continue
+            lon0, lat0, lon1, lat1 = key.bounds()
+            near = ~((np.maximum(la[:k], la[k:]) < lat0 - pad) | (np.minimum(la[:k], la[k:]) > lat1 + pad)
+                     | (np.maximum(lo[:k], lo[k:]) < lon0 - pad) | (np.minimum(lo[:k], lo[k:]) > lon1 + pad))
+            if not near.any():
+                continue
+            idx = np.nonzero(near)[0]
+            e, n_, _ = frame_c.geodetic_to_enu(np.r_[la[:k][idx], la[k:][idx]], np.r_[lo[:k][idx], lo[k:][idx]], 0.0)
+            e, n_ = np.asarray(e, np.float64), np.asarray(n_, np.float64)
+            p0 = np.column_stack((e[:len(idx)], n_[:len(idx)]))
+            d = np.column_stack((e[len(idx):], n_[len(idx):])) - p0
+            ln = np.maximum(dnp.hypot(d[:, 0], d[:, 1]), 1e-9)
+            got = _walls_rays(walls, p0, d / ln[:, None], reach)
+            hit = np.isfinite(got)
+            out[idx[hit]] = np.minimum(out[idx[hit]], got[hit])
         return out
 
     @profile_step('Road grading')
@@ -7850,6 +7966,68 @@ def grade_points(px, py, base, plans, lift=0.0):
     if not len(px):
         return out
     pack = plans if isinstance(plans, PlanPack) else PlanPack(plans)
+    out = _grade_points_today(px, py, base, pack, lift, out)
+    bt = getattr(pack, "bt", None) if BATTER_ON else None
+    if bt is not None and len(pack.h):
+        import fast
+        fast.require(497, "batter_apply")       # (batter.rs: the vanilla slopes, every segment within its reach)
+        f64 = np.float64
+        out = fast._ef.batter_apply(
+            np.ascontiguousarray(px, f64), np.ascontiguousarray(py, f64), np.ascontiguousarray(base, f64),
+            np.ascontiguousarray(out, f64), pack.a, pack.b, pack.za, pack.zb, pack.h, pack.rh, pack.ba, pack.bb,
+            bt[0], bt[1], bt[2],
+            (float(BATTER_L0_M), float(BATTER_CREST_M), float(BATTER_STRIP_LO), float(BATTER_STRIP_UP),
+             float(BATTER_CLOSE_T), float(BATTER_CLOSE_K), float(BATTER_SMOOTH_K), float(BATTER_CORE_BLEND_M),
+             float(T_MAX), float(BATTER_OLD_FADE_M), float(lift), float(BATTER_BIN_M)))
+    return out
+
+
+def batter_params(pack, elev_xy, walls_rays=None):
+    """(m, r, fl) of the vanilla slopes (BATTER_ON) for a PlanPack's segments (batter.rs: each side's batter slope and
+    reach past its core at the segment's ends, (segments, 4): left, right at a, then at b; its flags, (segments, 2)):
+    the natural ground elev_xy(x, y) at BATTER_OFFS past each side's
+    core edge, and the distance from that edge to the first building along it (walls_rays(origins (k, 2), dirs (k, 2),
+    reach) -> (k,) distances, NaN or inf: none; None: no buildings known). A pure function of the segments, the ground
+    and the buildings: the same for a segment in every plan set."""
+    import fast
+    fast.require(497, "batter_params")
+    f64 = np.float64
+    offs = np.asarray(BATTER_OFFS, f64)
+    ns = len(pack.h)
+    pts, org, dirs = fast._ef.batter_probes(pack.a, pack.b, pack.h, offs)
+    nat = np.asarray(elev_xy(pts[:, 0], pts[:, 1]), f64)
+    bld = np.full(2 * ns, np.inf)
+    if walls_rays is not None and ns:
+        got = np.asarray(walls_rays(org, dirs, float(BATTER_R_MAX + BATTER_BLD_GAP_M + 1.0)), f64)
+        bld = np.where(np.isfinite(got), got, np.inf)
+    prm = np.array([BATTER_L0_M, BATTER_CREST_M, BATTER_STRIP_LO, BATTER_STRIP_UP, BATTER_RURAL, BATTER_URBAN,
+                    BATTER_STEEP, BATTER_M_MAX, BATTER_R_MAX, BATTER_R_PAD, BATTER_URBAN_M, BATTER_BLD_GAP_M,
+                    BATTER_DM, BATTER_DR, BATTER_GAP_N, BATTER_RUN_N, BATTER_FIT_K, BATTER_FIT_ADD], f64)
+    return fast._ef.batter_params(pack.za, pack.zb, pack.rk, pack.rid, pack.ab, pack.st, pack.cut,
+                                  np.ascontiguousarray(pack.of, np.int64), np.ascontiguousarray(nat, f64),
+                                  np.ascontiguousarray(bld, f64), offs, list(prm))
+
+
+def _walls_rays(walls, p, d, reach):
+    """roadwidth.Walls.rays by the Rust loop (earthfast walls_rays: the same intersections ray by ray; the numpy one
+    was 1.1 s of a Fells Point plan set's 1.5): (k,) distance along each unit d from p to the first wall, NaN: none."""
+    import fast
+    import roadwidth
+    fast.require(497, "walls_rays")
+    f64 = np.float64
+    if not len(p) or not len(walls.keys):
+        return np.full(len(p), np.nan)
+    f32 = walls.segs.dtype == np.float32
+    fn = fast._ef.walls_rays32 if f32 else fast._ef.walls_rays
+    return np.asarray(fn(np.ascontiguousarray(p, f64), np.ascontiguousarray(d, f64),
+                         np.ascontiguousarray(walls.keys, np.int64), np.ascontiguousarray(walls.first, np.int64),
+                         np.ascontiguousarray(walls.counts, np.int64), np.ascontiguousarray(walls.seg_of, np.int64),
+                         np.ascontiguousarray(walls.segs, np.float32 if f32 else f64), float(roadwidth.BUCKET),
+                         float(reach)), f64)
+
+
+def _grade_points_today(px, py, base, pack, lift, out):
+    """grade_points without the vanilla slopes (gradebins.rs)."""
     import fast
     f64 = np.float64
     if GRADE_BINNED_ON:

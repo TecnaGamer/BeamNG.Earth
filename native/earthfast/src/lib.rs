@@ -140,6 +140,7 @@ mod osmtagshards;
 mod buildyears;
 mod buildcolours;
 mod gradebins;
+mod batter;
 mod par;
 mod bc1fast;
 mod l0roads;
@@ -1569,6 +1570,49 @@ fn wall_ray<T: Copy + Into<f64>>(keys: &[i64], first: &[i64], counts: &[i64], se
     if best.is_finite() { best } else { f64::NAN }
 }
 
+/// roadwidth.Walls.rays for many rays (wall_ray each: the first wall's distance within reach, NaN where none): p, d
+/// (n, 2) the rays' starts and unit directions; keys / first / counts / seg_of / segs the Walls' bucket index.
+#[allow(clippy::too_many_arguments)]
+fn walls_rays_any<'py, T: Copy + Into<f64> + numpy::Element>(
+        py: Python<'py>, p: PyReadonlyArray2<'py, f64>, d: PyReadonlyArray2<'py, f64>, keys: PyReadonlyArray1<'py, i64>,
+        first: PyReadonlyArray1<'py, i64>, counts: PyReadonlyArray1<'py, i64>, seg_of: PyReadonlyArray1<'py, i64>,
+        segs: PyReadonlyArray2<'py, T>, bucket: f64, reach: f64) -> PyResult<Bound<'py, PyArray1<f64>>> {
+    let (p, d) = (p.as_array(), d.as_array());
+    let (Ok(keys), Ok(first), Ok(counts), Ok(seg_of)) = (keys.as_slice(), first.as_slice(), counts.as_slice(),
+                                                         seg_of.as_slice()) else {
+        return Err(pyo3::exceptions::PyValueError::new_err("walls_rays: the index arrays are not contiguous"));
+    };
+    if p.ncols() < 2 || d.ncols() < 2 || d.nrows() != p.nrows() || segs.as_array().ncols() < 4 {
+        return Err(pyo3::exceptions::PyValueError::new_err("walls_rays: p, d (n, 2), segs (m, 4)"));
+    }
+    let sg = segs.as_array();
+    let out: Vec<f64> = (0..p.nrows())
+        .map(|i| wall_ray(keys, first, counts, seg_of, &sg, bucket, p[[i, 0]], p[[i, 1]], d[[i, 0]], d[[i, 1]], reach))
+        .collect();
+    Ok(out.into_pyarray(py))
+}
+
+/// walls_rays with float32 walls (the store's).
+#[pyfunction]
+#[allow(clippy::too_many_arguments)]
+fn walls_rays32<'py>(py: Python<'py>, p: PyReadonlyArray2<'py, f64>, d: PyReadonlyArray2<'py, f64>,
+                     keys: PyReadonlyArray1<'py, i64>, first: PyReadonlyArray1<'py, i64>,
+                     counts: PyReadonlyArray1<'py, i64>, seg_of: PyReadonlyArray1<'py, i64>,
+                     segs: PyReadonlyArray2<'py, f32>, bucket: f64, reach: f64)
+                     -> PyResult<Bound<'py, PyArray1<f64>>> {
+    walls_rays_any(py, p, d, keys, first, counts, seg_of, segs, bucket, reach)
+}
+
+/// walls_rays with float64 walls.
+#[pyfunction]
+#[allow(clippy::too_many_arguments)]
+fn walls_rays<'py>(py: Python<'py>, p: PyReadonlyArray2<'py, f64>, d: PyReadonlyArray2<'py, f64>,
+                   keys: PyReadonlyArray1<'py, i64>, first: PyReadonlyArray1<'py, i64>,
+                   counts: PyReadonlyArray1<'py, i64>, seg_of: PyReadonlyArray1<'py, i64>,
+                   segs: PyReadonlyArray2<'py, f64>, bucket: f64, reach: f64) -> PyResult<Bound<'py, PyArray1<f64>>> {
+    walls_rays_any(py, p, d, keys, first, counts, seg_of, segs, bucket, reach)
+}
+
 /// numpy.interp at x of the increasing xp, fp.
 fn np_interp(x: f64, xp: &[f64], fp: &[f64]) -> f64 {
     let n = xp.len();
@@ -1967,6 +2011,98 @@ fn grade_points_binned<'py>(py: Python<'py>, px: PyReadonlyArray1<'py, f64>, pyy
         let kv: Vec<bool> = keep.iter().map(|&k| k != 0).collect();
         gradebins::binned(px, pyy, base, &segs, &prm, Some(&kv), bin_m)
     });
+    Ok(out.into_pyarray(py))
+}
+
+/// grading.batter_params' probes (batter::probes): each segment's left then right side, its middle + normal * (h +
+/// offs[k]); each side's ray start (its core's edge at its middle) and unit direction. (pts (n * 2 * K, 2), origins
+/// (n * 2, 2), dirs (n * 2, 2))
+#[pyfunction]
+fn batter_probes<'py>(py: Python<'py>, a: PyReadonlyArray2<'py, f64>, b: PyReadonlyArray2<'py, f64>,
+                      h: PyReadonlyArray1<'py, f64>, offs: PyReadonlyArray1<'py, f64>)
+                      -> PyResult<(Bound<'py, PyArray2<f64>>, Bound<'py, PyArray2<f64>>, Bound<'py, PyArray2<f64>>)> {
+    let (a, b, h) = (a.as_array(), b.as_array(), h.as_array());
+    if a.nrows() != h.len() || b.nrows() != h.len() || a.ncols() < 2 || b.ncols() < 2 {
+        return Err(pyo3::exceptions::PyValueError::new_err("batter_probes: a, b, h disagree"));
+    }
+    let offs: Vec<f64> = offs.as_array().iter().copied().collect();
+    let (pts, org, dir) = batter::probes(a, b, h, &offs);
+    let n = h.len();
+    Ok((numpy::ndarray::Array2::from_shape_vec((n * 2 * offs.len(), 2), pts).unwrap().into_pyarray(py),
+        numpy::ndarray::Array2::from_shape_vec((n * 2, 2), org).unwrap().into_pyarray(py),
+        numpy::ndarray::Array2::from_shape_vec((n * 2, 2), dir).unwrap().into_pyarray(py)))
+}
+
+/// grading.batter_params (batter::params): each segment side's batter slope m and reach r past its core at its ends
+/// ((n, 4): left, right at a, then at b) and flags (batter::OLD: today's grading there, (n, 2)), from the natural ground at batter_probes' points (nat) and the
+/// distance from each side's core edge to the first building (bld (n * 2,), inf: none). prm: [l0, crest, s_lo, s_up,
+/// b_rural, b_urban, b_steep, m_max, r_max, r_pad, urban_m, bld_gap, dm, dr, gap_n, run_n, fit_k, fit_add].
+#[pyfunction]
+#[allow(clippy::too_many_arguments)]
+fn batter_params<'py>(py: Python<'py>, za: PyReadonlyArray1<'py, f64>, zb: PyReadonlyArray1<'py, f64>,
+                      rk: PyReadonlyArray1<'py, i64>, rid: PyReadonlyArray1<'py, i64>,
+                      abut: PyReadonlyArray1<'py, u8>,
+                      st: PyReadonlyArray1<'py, u8>, cut: PyReadonlyArray2<'py, f64>, of: PyReadonlyArray1<'py, i64>,
+                      nat: PyReadonlyArray1<'py, f64>, bld: PyReadonlyArray1<'py, f64>,
+                      offs: PyReadonlyArray1<'py, f64>,
+                      prm: Vec<f64>)
+                      -> PyResult<(Bound<'py, PyArray2<f64>>, Bound<'py, PyArray2<f64>>, Bound<'py, PyArray2<u8>>)> {
+    let (za, zb, rk, rid, abut, st, cut, of) = (za.as_array(), zb.as_array(), rk.as_array(), rid.as_array(),
+                                                abut.as_array(), st.as_array(), cut.as_array(), of.as_array());
+    let n = za.len();
+    let offs: Vec<f64> = offs.as_array().iter().copied().collect();
+    let (nat, bld) = (nat.as_array(), bld.as_array());
+    if zb.len() != n || rk.len() != n || rid.len() != n || abut.len() != n || st.len() != n || of.len() != n
+        || cut.nrows() != n
+        || cut.ncols() < 6 || nat.len() != n * 2 * offs.len() || bld.len() != n * 2 {
+        return Err(pyo3::exceptions::PyValueError::new_err("batter_params: the arrays disagree"));
+    }
+    if prm.len() != 18 {
+        return Err(pyo3::exceptions::PyValueError::new_err("batter_params: prm is not 18 values"));
+    }
+    let p = batter::ParamPrm { l0: prm[0], crest: prm[1], s_lo: prm[2], s_up: prm[3], b_rural: prm[4],
+                               b_urban: prm[5], b_steep: prm[6], m_max: prm[7], r_max: prm[8], r_pad: prm[9],
+                               urban_m: prm[10], bld_gap: prm[11], dm: prm[12], dr: prm[13],
+                               gap_n: prm[14].max(0.0) as usize, run_n: prm[15].max(0.0) as usize,
+                               fit_k: prm[16], fit_add: prm[17] };
+    let natv: Vec<f64> = nat.iter().copied().collect();
+    let bldv: Vec<f64> = bld.iter().copied().collect();
+    let (m, r, fl) = py.detach(|| batter::params(za, zb, rk, rid, abut, st, cut, of, &natv, &bldv, &offs, &p));
+    Ok((numpy::ndarray::Array2::from_shape_vec((n, 4), m).unwrap().into_pyarray(py),
+        numpy::ndarray::Array2::from_shape_vec((n, 4), r).unwrap().into_pyarray(py),
+        numpy::ndarray::Array2::from_shape_vec((n, 2), fl).unwrap().into_pyarray(py)))
+}
+
+/// grading.grade_points' vanilla slopes (batter::apply, BNE_BATTER=vanilla): the heights at the points from their
+/// natural base and today's graded g0, the corridor of each segment side (batter_params' m, r, fl) outside the cores.
+/// prm: (l0, crest, s_lo, s_up, close_t, close_k, smooth_k, core_blend, old_reach, old_fade, lift, bin_m).
+#[pyfunction]
+#[allow(clippy::too_many_arguments)]
+fn batter_apply<'py>(py: Python<'py>, px: PyReadonlyArray1<'py, f64>, pyy: PyReadonlyArray1<'py, f64>,
+                     base: PyReadonlyArray1<'py, f64>, g0: PyReadonlyArray1<'py, f64>, a: PyReadonlyArray2<'py, f64>,
+                     b: PyReadonlyArray2<'py, f64>, za: PyReadonlyArray1<'py, f64>, zb: PyReadonlyArray1<'py, f64>,
+                     h: PyReadonlyArray1<'py, f64>, rh: PyReadonlyArray1<'py, f64>, ba: PyReadonlyArray1<'py, f64>,
+                     bb: PyReadonlyArray1<'py, f64>, m: PyReadonlyArray2<'py, f64>, r: PyReadonlyArray2<'py, f64>,
+                     fl: PyReadonlyArray2<'py, u8>,
+                     prm: (f64, f64, f64, f64, f64, f64, f64, f64, f64, f64, f64, f64))
+                     -> PyResult<Bound<'py, PyArray1<f64>>> {
+    let s = batter::Segs { a: a.as_array(), b: b.as_array(), za: za.as_array(), zb: zb.as_array(), h: h.as_array(),
+                           rh: rh.as_array(), ba: ba.as_array(), bb: bb.as_array(), m: m.as_array(),
+                           r: r.as_array(), fl: fl.as_array() };
+    let n = s.h.len();
+    if s.a.nrows() != n || s.b.nrows() != n || s.a.ncols() < 2 || s.b.ncols() < 2 || s.za.len() != n
+        || s.zb.len() != n || s.rh.len() != n || s.ba.len() != n || s.bb.len() != n || s.m.dim() != (n, 4)
+        || s.r.dim() != (n, 4) || s.fl.dim() != (n, 2) {
+        return Err(pyo3::exceptions::PyValueError::new_err("batter_apply: the segment arrays disagree"));
+    }
+    let (px, pyy, base, g0) = (px.as_array(), pyy.as_array(), base.as_array(), g0.as_array());
+    if pyy.len() != px.len() || base.len() != px.len() || g0.len() != px.len() {
+        return Err(pyo3::exceptions::PyValueError::new_err("batter_apply: the point arrays disagree"));
+    }
+    let p = batter::ApplyPrm { l0: prm.0, crest: prm.1, s_lo: prm.2, s_up: prm.3, close_t: prm.4, close_k: prm.5,
+                               smooth_k: prm.6, core_blend: prm.7, old_reach: prm.8, old_fade: prm.9, lift: prm.10,
+                               bin_m: prm.11 };
+    let out = py.detach(|| batter::apply(px, pyy, base, g0, &s, &p));
     Ok(out.into_pyarray(py))
 }
 
@@ -6726,6 +6862,14 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(stationzone::station_zone, m)?)?;
     // 494: the full port's busstationmesh.zone loops and _clip_cell (stationzone::station_zone: a station's walkable
     // ground, kerb walls and tactile strips from walk_field's lattice in one call). 493 is another branch's
-    m.add("VERSION", 494)?;
+    m.add_function(wrap_pyfunction!(batter_probes, m)?)?;
+    m.add_function(wrap_pyfunction!(batter_params, m)?)?;
+    m.add_function(wrap_pyfunction!(batter_apply, m)?)?;
+    m.add_function(wrap_pyfunction!(walls_rays, m)?)?;
+    m.add_function(wrap_pyfunction!(walls_rays32, m)?)?;
+    // 497: vanilla-style cut and fill slopes (batter: batter_probes, batter_params, batter_apply, and walls_rays /
+    // walls_rays32 for the buildings beside them; grading BNE_BATTER, road revamp v2 P1a). 495 and 496 are other
+    // branches'
+    m.add("VERSION", 497)?;
     Ok(())
 }
