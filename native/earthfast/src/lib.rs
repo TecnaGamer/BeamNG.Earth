@@ -112,6 +112,7 @@ mod railpiers;
 mod bdtopo;
 mod nycmassing;
 mod rooftop;
+mod bldmesh;
 mod specs;
 mod gsrows;
 mod places;
@@ -7355,6 +7356,10 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 516: v2 P3a (roadshape::profile: the stretches from anchor to anchor through a chain's decks and their joint
     // height solve, shadow only, BNE_ROADSHAPE=profile)
     // 521: v2 P3b (roadshape::pins::profile_pin_field: the joint profile's approach ground into the graded ground)
-    m.add("VERSION", 521)?;
+    bldmesh::register(m)?;
+    // 519: the full Rust port's r2a19 (bldmesh: buildings.Mesh as BldMesh, the box-frame roofs, lids, cornices, boxes,
+    // stoops, signs and roof-clutter boxes of buildings.build); 516-518 are other branches'
+    // 524: try598 with 521 (P3b) and 519 (r2a19) merged; 522-523 are other branches'
+    m.add("VERSION", 524)?;
     Ok(())
 }

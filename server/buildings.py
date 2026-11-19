@@ -1606,118 +1606,38 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
     return francehouses.adapt(spec, attrs, lat, lon)
 
 
-class Mesh:
-    """Positions, uvs, colours, triangles and their material index, appended to. A material is a token
-    (index, RGBA) as _Looks gives. Kept as flat lists of numbers (x y z x y z ..., one material per triangle):
-    a road tile adds ~25k quads, and lists of tuples flattened at the end took ~2.5 s of a Steam Deck's 87 s. The
-    walls kernel's quads come as numpy blocks (quads): the lists so far closed into a block before each (_flush),
-    arrays() joins the blocks in order."""
+_BLDMESH_V = 519             # earthfast's bldmesh (BldMesh and the bld_* pieces: the full Rust port's r2a19)
+_bld = fast.native(_BLDMESH_V, "buildings' mesh (bldmesh)")
+_BldMesh = getattr(fast._ef, "BldMesh", None) if getattr(fast._ef, "VERSION", 0) >= _BLDMESH_V else None
+if _BldMesh is None:
+    class _BldMesh:             # (no native module, or an older one: making a Mesh raises NativeMissing)
+        def __init__(self, *_a, **_k):
+            fast.require(_BLDMESH_V, "buildings.Mesh (earthfast.BldMesh)")
 
-    def __init__(self):
-        self._P, self._UV, self._C, self._T, self._M = [], [], [], [], []
-        self.n = 0
-        self._blocks = []       # [(P (k, 3), UV (k, 2), C (k, 4) uint8, T (t, 3), M (t,))]: before the lists, in order
+
+class Mesh(_BldMesh):
+    """Positions, uvs, colours, triangles and their material index, appended to. A material is a token
+    (index, RGBA) as _Looks gives. The native BldMesh (native/earthfast/src/bldmesh.rs, the full Rust port's r2a19:
+    the lists of numbers it was, a road tile's ~25k quads, appended in Rust): quad / tri (corners counter-clockwise seen
+    from outside), poly (a flat polygon, facing up when counter-clockwise from above, down when clockwise: its
+    underside), quads (a walls kernel's block: P 12 numbers per quad, UV 8, mid the index into mats per quad), tris,
+    n (the vertices so far); arrays() as (P, UV, T, M, C) with the own-repeat textures' uvs scaled (OWN_UV_M)."""
 
     # (the whole content as the flat lists it was: x y z x y z ..., for tests and callers that read it)
-    P = property(lambda self: self._flat(0))
-    UV = property(lambda self: self._flat(1))
-    C = property(lambda self: self._flat(2))
-    T = property(lambda self: self._flat(3))
-    M = property(lambda self: self._flat(4))
-
-    def _flat(self, k):
-        self._flush()
-        return np.concatenate([b[k].reshape(-1) for b in self._blocks]).tolist() if self._blocks else []
-
-    def _lists(self):
-        return (np.array(self._P, np.float64).reshape(-1, 3), np.array(self._UV, np.float64).reshape(-1, 2),
-                np.array(self._C, np.uint8).reshape(-1, 4), np.array(self._T, np.int64).reshape(-1, 3),
-                np.array(self._M, np.int64))
-
-    def _flush(self):
-        if self._P or self._UV or self._C or self._T or self._M:
-            self._blocks.append(self._lists())
-            self._P, self._UV, self._C, self._T, self._M = [], [], [], [], []
-
-    def quad(self, a, b, c, d, uva, uvb, uvc, uvd, mat):
-        """Corners counter-clockwise seen from outside."""
-        i = self.n
-        self._P += (*a, *b, *c, *d)
-        self._UV += (*uva, *uvb, *uvc, *uvd)
-        self._C += mat[1] * 4
-        self._T += (i, i + 1, i + 2, i, i + 2, i + 3)
-        self._M += (mat[0], mat[0])
-        self.n += 4
-
-    def quads(self, P, UV, mid, mats):
-        """Quads from a kernel (earthfast.building_walls_np): P 12 numbers per quad, UV 8, mid the index into mats
-        (material tokens) per quad; a block of the same numbers quad() would add."""
-        q = len(mid)
-        if not q:
-            return
-        self._flush()
-        i = self.n
-        mid = np.asarray(mid, np.intp)
-        if any(mats[k] is None for k in np.unique(mid).tolist()):
-            raise TypeError("a wall quad of no material")
-        cols = np.array([tuple(mt[1]) * 4 if mt is not None else (0,) * 16 for mt in mats], np.uint8).reshape(-1, 16)
-        idx = np.array([mt[0] if mt is not None else -1 for mt in mats], np.int64)
-        T = (np.arange(q, dtype=np.int64)[:, None] * 4 + np.array([0, 1, 2, 0, 2, 3], np.int64) + i).reshape(-1, 3)
-        self._blocks.append((np.asarray(P, np.float64).reshape(-1, 3), np.asarray(UV, np.float64).reshape(-1, 2),
-                             cols[mid].reshape(-1, 4), T, np.repeat(idx[mid], 2)))
-        self.n += 4 * q
-
-    def tris(self, P, UV, mat):
-        """Triangles P (3k, 3) with texture coordinates UV (3k, 2), all of material mat: a block of the same numbers
-        tri() would add for each."""
-        P = np.asarray(P, np.float64).reshape(-1, 3)
-        k = len(P) // 3
-        if not k:
-            return
-        self._flush()
-        i = self.n
-        self._blocks.append((P[:3 * k].copy(), np.asarray(UV, np.float64).reshape(-1, 2)[:3 * k].copy(),
-                             np.tile(np.asarray(tuple(mat[1]), np.uint8), (3 * k, 1)),
-                             np.arange(i, i + 3 * k, dtype=np.int64).reshape(-1, 3), np.full(k, mat[0], np.int64)))
-        self.n += 3 * k
-
-    def tri(self, a, b, c, uva, uvb, uvc, mat):
-        i = self.n
-        self._P += (*a, *b, *c)
-        self._UV += (*uva, *uvb, *uvc)
-        self._C += mat[1] * 3
-        self._T += (i, i + 1, i + 2)
-        self._M.append(mat[0])
-        self.n += 3
-
-    def poly(self, pts3, uv, mat):
-        """A flat polygon facing up when counter-clockwise seen from above, down when clockwise (its underside:
-        the ear clipping wants counter-clockwise rings and gave a clockwise one no triangles at all, so the
-        parking decks' and floating parts' undersides were missing, the user's report 2026-10-14)."""
-        xy = np.asarray(pts3)[:, :2]
-        if _area2(xy) < 0:
-            k = len(xy)
-            tris = np.array([(k - 1 - c, k - 1 - b, k - 1 - a) for a, b, c in triangulate(xy[::-1])],
-                            np.int64).reshape(-1, 3)
-        else:
-            tris = triangulate(xy)
-        i = self.n
-        self._P += np.asarray(pts3, np.float64)[:, :3].ravel().tolist()
-        self._UV += np.asarray(uv, np.float64)[:, :2].ravel().tolist()
-        self._C += tuple(mat[1]) * len(pts3)
-        self._T += (np.asarray(tris, np.int64).reshape(-1, 3) + i).ravel().tolist()
-        self._M += [mat[0]] * len(tris)
-        self.n += len(pts3)
+    P = property(lambda self: self.flat(0))
+    UV = property(lambda self: self.flat(1))
+    C = property(lambda self: self.flat(2))
+    T = property(lambda self: self.flat(3))
+    M = property(lambda self: self.flat(4))
 
     def arrays(self):
-        self._flush()
-        blocks = self._blocks or [self._lists()]
-        P, UV, C, T, M = (b[0].copy() if len(blocks) == 1 else np.concatenate(b) for b in zip(*blocks))
-        for mi, f in _OWN_UV_SCALE:     # (textures with their own repeat: OWN_UV_M)
-            sel = M == mi
-            if sel.any():
-                UV[np.unique(T[sel])] *= f
-        return P, UV, T, M, C
+        return self.arrays_scaled(_OWN_UV_SCALE)
+
+    def poly(self, pts3, uv, mat):
+        xy = np.asarray(pts3)
+        if xy.dtype != np.float64:      # (the winding from the area in the points' own dtype, as numpy summed it: a
+            return super().poly(np.asarray(xy, np.float64), uv, mat, bool(_area2(xy[:, :2]) < 0))  # float32 ring's
+        return super().poly(xy, uv, mat)                                # area can be 0 where float64's is not)
 
 
 # A sash window cut from the plaster sheet (band 2, bay 0, its sill included): u, v ranges (Collada v up)
@@ -1796,25 +1716,11 @@ PLAIN_STRIP = 0.3           # of a bay: the plain wall between two windows of a 
 
 
 def _cornice(m, spec, ring, z_eave, mat_idx):
-    """A box moulding round a flat roof's edge (row houses' cornices, parapets), the plain white plaster."""
-    mat = mat_idx["bne_bld_fac_white"]
-    o, z0, z1 = CORNICE_OUT_M, z_eave - CORNICE_DOWN_M, z_eave + CORNICE_UP_M
-    uv = ((0.002, 0.995), (0.012, 0.995), (0.012, 0.999), (0.002, 0.999))
-    n = len(ring)
-    for i in range(n):
-        a, b = ring[i], ring[(i + 1) % n]
-        e = b - a
-        L = float(math.hypot(*e))
-        if L < 0.3:
-            continue
-        d = e / L
-        nn = np.array([d[1], -d[0]])                  # outward (counter-clockwise ring)
-        a2, b2 = a + nn * o - d * o, b + nn * o + d * o
-        m.quad((a2[0], a2[1], z0), (b2[0], b2[1], z0), (b2[0], b2[1], z1), (a2[0], a2[1], z1), *uv, mat)
-        m.quad((a[0], a[1], z1), (a2[0], a2[1], z1), (b2[0], b2[1], z1), (b[0], b[1], z1), *uv, mat)      # top
-        m.quad((a[0], a[1], z0), (b[0], b[1], z0), (b2[0], b2[1], z0), (a2[0], a2[1], z0), *uv, mat)      # under
-        # the lip's inner face, above the roof (seen from on the roof it was missing: the user's report, 2026-10-14)
-        m.quad((b[0], b[1], z_eave), (a[0], a[1], z_eave), (a[0], a[1], z1), (b[0], b[1], z1), *uv, mat)
+    """A box moulding round a flat roof's edge (row houses' cornices, parapets), the plain white plaster; with the lip's
+    inner face above the roof (seen from on the roof it was missing: the user's report, 2026-10-14). In Rust
+    (earthfast.bld_cornice)."""
+    _bld.bld_cornice(m, np.asarray(ring, np.float64), float(z_eave), mat_idx["bne_bld_fac_white"],
+                     float(CORNICE_OUT_M), float(CORNICE_DOWN_M), float(CORNICE_UP_M))
 
 
 def _inside(ring, p):
@@ -1824,36 +1730,16 @@ def _inside(ring, p):
 
 
 def _box(m, c, u, hx, hy, z0, z1, mat):
-    """An axis-u box (half sizes hx along u, hy across) from z0 to z1: four sides and a top."""
-    v = np.array([-u[1], u[0]])
-    k = [c + u * sx * hx + v * sy * hy for sx, sy in ((-1, -1), (1, -1), (1, 1), (-1, 1))]
-    uv = ((0.002, 0.995), (0.012, 0.995), (0.012, 0.999), (0.002, 0.999))
-    for i in range(4):
-        a, b = k[i], k[(i + 1) % 4]
-        m.quad((a[0], a[1], z0), (b[0], b[1], z0), (b[0], b[1], z1), (a[0], a[1], z1), *uv, mat)
-    m.quad(*[(p[0], p[1], z1) for p in k], *uv, mat)
+    """An axis-u box (half sizes hx along u, hy across) from z0 to z1: four sides and a top (earthfast.bld_box)."""
+    _bld.bld_box(m, float(c[0]), float(c[1]), float(u[0]), float(u[1]), float(hx), float(hy), float(z0), float(z1), mat)
 
 
 def _signs(m, spec, ring, z_top, mat_idx):
-    """The sign band over a shop's street wall (spec.sign: its edge), shop by shop, a few without one."""
-    edge = spec.sign
-    a, b = ring[edge], ring[(edge + 1) % len(ring)]
-    L = float(math.hypot(*(b - a)))
-    if L < 3.0:
-        return
-    d = (b - a) / L
-    out = np.array([d[1], -d[0]])
-    t, k = 0.3, 0
-    while t < L - 1.5:
-        w = SIGN_SHOP_M[0] + (SIGN_SHOP_M[1] - SIGN_SHOP_M[0]) * _hash01(spec.seed, "signw", k)
-        t1 = min(L - 0.3, t + w)
-        if L - 0.3 - t1 < 2.5:                         # no sliver of a shop at the end
-            t1 = L - 0.3
-        if _hash01(spec.seed, "signon", k) < 0.85:
-            c = a + d * ((t + t1) / 2) + out * (SIGN_OUT / 2)
-            look = f"sign|{int(_hash01(spec.seed, 'signc', k) * len(SIGN_TINTS))}"
-            _box(m, c, d, (t1 - t) / 2 - 0.15, SIGN_OUT / 2, z_top - 0.15 - SIGN_H, z_top - 0.15, mat_idx[look])
-        t, k = t1, k + 1
+    """The sign band over a shop's street wall (spec.sign: its edge), shop by shop, a few without one: widths, gaps
+    and tints hashed from the seed (earthfast.bld_signs: _hash01's numbers from repr(seed))."""
+    _bld.bld_signs(m, np.asarray(ring, np.float64), int(spec.sign), float(z_top), repr(spec.seed),
+                   [mat_idx[f"sign|{i}"] for i in range(len(SIGN_TINTS))],
+                   [float(SIGN_SHOP_M[0]), float(SIGN_SHOP_M[1]), float(SIGN_OUT), float(SIGN_H)])
 
 
 PORCH_DEPTH_M = 2.2
@@ -2088,44 +1974,25 @@ def door_ground(spec, edge, along, gmax):
 
 def _stoop(m, spec, ring, gmin, base, mat_idx):
     """Marble steps up to the front door (spec.stoop: (edge, distance along it); base: the ground there, the door
-    STOOP_H over it): STOOP_STEPS treads to a landing, each block down under the footprint's lowest ground (they floated where the street falls away, Fells Point, 2026-10-17)."""
+    STOOP_H over it): STOOP_STEPS treads to a landing, each block down under the footprint's lowest ground (they floated
+    where the street falls away, Fells Point, 2026-10-17); as many steps as it takes down to the street (from the
+    highest one only the bottom step stood a metre over the sidewalk on a white block, Bradford Street, Mapillary
+    2026-10-17), higher ones the bottom step on a plinth. In Rust (earthfast.bld_stoop)."""
     edge, sd = spec.stoop
-    a, b = ring[edge], ring[(edge + 1) % len(ring)]
-    L = float(math.hypot(*(b - a)))
-    if L < 1e-6:
-        return
-    d = (b - a) / L
-    out = np.array([d[1], -d[0]])
-    c = a + d * sd
-    mat = mat_idx[MARBLE_LOOK]
-    base = door_ground(spec, edge, sd, base)     # (the ground at the door)
-    top = base + STOOP_H
-    z0 = min(gmin, base) - 0.3
-    # as many steps as it takes down to the street (the footprint's lowest ground): from the highest one only the
-    # bottom step stood a metre over the sidewalk on a white block (Bradford Street, Mapillary 2026-10-17)
-    n = int(np.clip(round((top - min(gmin, base)) / STOOP_RISE), STOOP_STEPS - 1, STOOP_MAX_STEPS))
-    rise = min((top - min(gmin, base)) / n, STOOP_RISE_MAX)    # (n risers: the landing's and n - 1 steps' fronts;
-                                                                # higher, the bottom step on a plinth)
-    for k in range(n):
-        depth = STOOP_LANDING + k * STOOP_TREAD
-        zt = top - k * rise
-        _box_tiled(m, c + out * depth / 2, d, STOOP_W / 2, depth / 2, z0, zt, mat)
+    _bld.bld_stoop(m, np.asarray(ring, np.float64), int(edge), float(sd), float(gmin),
+                   lambda: float(door_ground(spec, edge, sd, base)), mat_idx[MARBLE_LOOK],
+                   [float(v) for v in (STOOP_H, STOOP_RISE, STOOP_STEPS, STOOP_MAX_STEPS, STOOP_RISE_MAX, STOOP_LANDING,
+                                       STOOP_TREAD, STOOP_W)])
 
 
 MARBLE_LOOK = "bne_marble"
 
 
 def _box_tiled(m, c, u, hx, hy, z0, z1, mat, tile=1.0):
-    """_box with the material tiled at `tile` m per repeat (a stone texture, not the facade sheets' colour patches)."""
-    v = np.array([-u[1], u[0]])
-    k = [c + u * sx * hx + v * sy * hy for sx, sy in ((-1, -1), (1, -1), (1, 1), (-1, 1))]
-    for i in range(4):
-        p, q = k[i], k[(i + 1) % 4]
-        w = float(math.hypot(*(q - p))) / tile
-        hz0, hz1 = z0 / tile, z1 / tile
-        m.quad((p[0], p[1], z0), (q[0], q[1], z0), (q[0], q[1], z1), (p[0], p[1], z1),
-               (0.0, hz0), (w, hz0), (w, hz1), (0.0, hz1), mat)
-    m.quad(*[(p[0], p[1], z1) for p in k], *[(p[0] / tile, p[1] / tile) for p in k], mat)
+    """_box with the material tiled at `tile` m per repeat (a stone texture, not the facade sheets' colour patches;
+    earthfast.bld_box_tiled)."""
+    _bld.bld_box_tiled(m, float(c[0]), float(c[1]), float(u[0]), float(u[1]), float(hx), float(hy), float(z0),
+                       float(z1), mat, float(tile))
 
 
 # A church's tower by region (Rome's Trastevere, 2026-11-10: dozens of slate spires where the churches have Romanesque
@@ -2280,12 +2147,9 @@ def _clutter(m, spec, ring, z_eave, mat_idx):
     unit = mat_idx["bne_bld_fac_grey"]
     louvre = mat_idx[f"{METALWALL}|{int(_hash01(spec.seed, 'louvre') * len(WALL_TINTS[METALWALL]))}"]
     own = mat_idx[spec.facade]
-    for s, t, hs, ht, h, mat in boxes:
-        p = c + u * s + v * t
-        if mat == 1:
-            _box_tiled(m, p, u, hs, ht, z_eave - 0.3, z_eave + h, louvre, ROOF_KIT_LOUVRE_TILE_M)
-        else:
-            _box(m, p, u, hs, ht, z_eave - 0.1, z_eave + h, own if mat == 0 else unit)
+    # (each box at c + u * s + v * t: louvres tiled, the rest plain; earthfast.bld_kit_boxes)
+    _bld.bld_kit_boxes(m, np.ascontiguousarray(boxes, np.float64), float(c[0]), float(c[1]), float(u[0]), float(u[1]),
+                       float(z_eave), own, louvre, unit, float(ROOF_KIT_LOUVRE_TILE_M))
 
 
 # Rooftop water tanks: New York's buildings of six storeys or more keep their water in a cedar tank on steel legs on
@@ -2740,21 +2604,6 @@ CHIMNEY_OVER_M = 0.9                # m over the ridge
 CHIMNEY_MAX_M2 = 400.0              # footprints larger than this (blocks, halls): none
 
 
-def _chimney(m, spec, c, u, ridge_half, hw, zr, mat):
-    """A chimney stack on the ridge line of a gabled / hipped box roof (centre c, ridge along u, ridge_half m each side
-    of c along it, the house half hw m wide, the ridge at zr), for a house that has one by its seed."""
-    if spec.cls in SHED_CLASSES or spec.cls in BARN_CLASSES or (spec.floors or 1) > 3 or ridge_half < 1.2 \
-            or hw < 2.0 or 4.0 * (ridge_half + hw) * hw > CHIMNEY_MAX_M2 \
-            or _hash01(spec.seed, "chimney") >= CHIMNEY_SHARE:
-        return
-    half = CHIMNEY_HALF_M[0] + (CHIMNEY_HALF_M[1] - CHIMNEY_HALF_M[0]) * _hash01(spec.seed, "chimney size")
-    along = (2.0 * _hash01(spec.seed, "chimney at") - 1.0) * 0.7 * (ridge_half - half)
-    side = (0.6 if _hash01(spec.seed, "chimney side") < 0.5 else -0.6) * min(1.0, 0.25 * hw)
-    v = np.array([-u[1], u[0]])
-    centre = np.asarray(c, np.float64) + u * along + v * side
-    _box(m, centre, u, half, half, zr - 1.2, zr + CHIMNEY_OVER_M, mat)
-
-
 def _roof(m, spec, ring, z_eave, mat_idx, lite=False):
     rm = mat_idx[spec.roof_mat]
     if spec.roof in DOME_ROOFS:
@@ -2765,9 +2614,7 @@ def _roof(m, spec, ring, z_eave, mat_idx, lite=False):
         if getattr(spec, "holes", None):
             _holed_lid(m, ring, spec.holes, z_eave, rm)
             return
-        pts = [(p[0], p[1], z_eave) for p in ring]
-        uv = [(p[0] / ROOF_UV_M, p[1] / ROOF_UV_M) for p in ring]
-        m.poly(pts, uv, rm)
+        _bld.bld_lid(m, np.asarray(ring, np.float64), float(z_eave), float(ROOF_UV_M), False, rm)
         return
     if getattr(spec, "skel", False) and _skel_roof(m, spec, ring, z_eave, rm, mat_idx[spec.facade]):
         return
@@ -2777,145 +2624,21 @@ def _roof(m, spec, ring, z_eave, mat_idx, lite=False):
     if getattr(spec, "hf", False) and spec.roof in HF_FORMS:
         _hf_roof(m, spec, ring, z_eave, rm, mat_idx[spec.facade])
         return
+    # the box-frame forms on the drawn ring's oriented box (the ridge along its long axis, or across it): skillion,
+    # round (barrel), gambrel, mansard, pyramidal, half-hipped, gabled (its gable walls), anything else hipped; a
+    # chimney on gabled / hipped houses by the seed (not lite: CHIMNEY_*). In Rust (earthfast.bld_roof).
     c, u, hl, hw = oriented_box(ring)
-    if getattr(spec, "across", False):              # (the ridge across the long axis: the box's frame turned)
-        u, hl, hw = np.array([-u[1], u[0]]), hw, hl
-    v = np.array([-u[1], u[0]])
-    hl2, hw2 = hl + EAVE_M, hw + EAVE_M
-    rise = hw2 * dmath.tan(math.radians(roof_pitch(spec)))
-    ze = z_eave - EAVE_M * dmath.tan(math.radians(roof_pitch(spec)))
-    zr = ze + rise
-
-    def at(s, t, z):
-        p = c + u * s + v * t
-        return (float(p[0]), float(p[1]), float(z))
-    slope = math.hypot(hw2, rise)
-
-    def uv(s, t):            # along the ridge, up the slope (m / ROOF_UV_M)
-        return (s / ROOF_UV_M, (hw2 - abs(t)) / hw2 * slope / ROOF_UV_M)
-
-    def end_wall(sgn, outline):
-        """The wall up to the roof at an end of the house: outline (t, z) left to right seen from outside, fanned; the
-        facade's plain colour, as a gable's."""
-        s = sgn * hl
-        pts = [at(s, sgn * t, z) for t, z in outline]
-        for b, c in zip(pts[1:], pts[2:]):
-            m.tri(pts[0], b, c, (0, 0.995), (0.02, 0.995), (0.01, 0.999), mat_idx[spec.facade])
-
-    if spec.roof == "skillion":
-        rh = getattr(spec, "roof_h", None)
-        tan = rh / (2.0 * max(hw, 0.5)) if rh else dmath.tan(math.radians(SKILLION_PITCH))
-        hi = getattr(spec, "hi", None) or (1.0 if spec.seed < 0.5 else -1.0)   # (the map's slope direction, or a coin)
-
-        def z(t):
-            return z_eave + (hi * t + hw) * tan
-        m.quad(at(-hl2, -hw2, z(-hw2)), at(hl2, -hw2, z(-hw2)), at(hl2, hw2, z(hw2)), at(-hl2, hw2, z(hw2)),
-               uv(-hl2, -hw2), uv(hl2, -hw2), (hl2 / ROOF_UV_M, 2 * hw2 / ROOF_UV_M), (-hl2 / ROOF_UV_M, 2 * hw2 / ROOF_UV_M),
-               rm)
-        top = z(hi * hw)
-        fac = mat_idx[spec.facade]
-        a, b = (hl, -hl) if hi > 0 else (-hl, hl)       # the high wall above the eave line
-        m.quad(at(a, hi * hw, z_eave), at(b, hi * hw, z_eave), at(b, hi * hw, top), at(a, hi * hw, top),
-               (0, 0.995), (0.02, 0.995), (0.02, 0.999), (0, 0.999), fac)
-        for sgn in (-1, 1):
-            end_wall(sgn, [(-hw, z_eave), (hw, z_eave), (sgn * hi * hw, top)])
-        return
-    if spec.roof == "round":
-        rise = getattr(spec, "roof_h", None) or hw * ROUND_RISE
-        ts = [-hw + 2.0 * hw * k / ROUND_SEGS for k in range(ROUND_SEGS + 1)]
-        zs = [z_eave + rise * math.sqrt(max(0.0, 1.0 - dnp.sq(t / hw))) for t in ts]
-        arc = 0.0
-        for k in range(ROUND_SEGS):                      # (strips along the length, counter-clockwise from above)
-            t0, t1, z0_, z1_ = ts[k], ts[k + 1], zs[k], zs[k + 1]
-            seg = math.hypot(t1 - t0, z1_ - z0_)
-            m.quad(at(hl, t0, z0_), at(hl, t1, z1_), at(-hl, t1, z1_), at(-hl, t0, z0_),
-                   (hl / ROOF_UV_M, arc / ROOF_UV_M), (hl / ROOF_UV_M, (arc + seg) / ROOF_UV_M),
-                   (-hl / ROOF_UV_M, (arc + seg) / ROOF_UV_M), (-hl / ROOF_UV_M, arc / ROOF_UV_M), rm)
-            arc += seg
-        for sgn in (-1, 1):
-            end_wall(sgn, [(-hw, z_eave), (hw, z_eave)] + [(t, z) for t, z in zip(ts[::-1], zs[::-1])][1:-1])
-        return
-    if spec.roof == "gambrel":
-        lo, up = (dmath.tan(math.radians(p)) for p in GAMBREL_PITCHES)
-        tb = hw * GAMBREL_BREAK                          # the break line, out from the ridge
-        ze = z_eave - EAVE_M * lo
-        zb = z_eave + (hw - tb) * lo
-        zr = zb + tb * up
-        for sgn in (-1, 1):                              # (the slopes of one side, counter-clockwise from above)
-            for t0, z0, t1, z1 in ((hw2, ze, tb, zb), (tb, zb, 0.0, zr)):
-                a, b = (-hl2, hl2) if sgn < 0 else (hl2, -hl2)
-                m.quad(at(a, sgn * t0, z0), at(b, sgn * t0, z0), at(b, sgn * t1, z1), at(a, sgn * t1, z1),
-                       uv(a, t0), uv(b, t0), uv(b, t1), uv(a, t1), rm)
-        for sgn in (-1, 1):
-            end_wall(sgn, [(-hw, z_eave), (hw, z_eave), (tb, zb), (0.0, zr - EAVE_M * 0.2), (-tb, zb)])
-        return
-    if spec.roof == "mansard":
-        lo, up = (dmath.tan(math.radians(p)) for p in MANSARD_PITCHES)
-        inset = min(0.3 * hw, MANSARD_INSET_M)           # (from the walls: the overhang carries the slope on down)
-        ze = z_eave - EAVE_M * lo
-        zb = z_eave + inset * lo
-        il, iw = hl - inset, hw - inset
-        zr = zb + iw * up
-        r = max(il - iw, 0.0)
-        for (a, ta), (b, tb) in (((-1, -1), (1, -1)), ((1, -1), (1, 1)), ((1, 1), (-1, 1)), ((-1, 1), (-1, -1))):
-            m.quad(at(a * hl2, ta * hw2, ze), at(b * hl2, tb * hw2, ze), at(b * il, tb * iw, zb), at(a * il, ta * iw, zb),
-                   (0, 0), (2 * hl2 / ROOF_UV_M, 0), (2 * hl2 / ROOF_UV_M, (inset + EAVE_M) / ROOF_UV_M), (0, (inset + EAVE_M) / ROOF_UV_M), rm)
-        m.quad(at(-il, -iw, zb), at(il, -iw, zb), at(r, 0, zr), at(-r, 0, zr), uv(-il, -iw), uv(il, -iw), uv(r, 0), uv(-r, 0), rm)
-        m.quad(at(il, iw, zb), at(-il, iw, zb), at(-r, 0, zr), at(r, 0, zr), uv(il, iw), uv(-il, iw), uv(-r, 0), uv(r, 0), rm)
-        m.tri(at(il, -iw, zb), at(il, iw, zb), at(r, 0, zr), (-iw / ROOF_UV_M, 0), (iw / ROOF_UV_M, 0), (0, slope / ROOF_UV_M), rm)
-        m.tri(at(-il, iw, zb), at(-il, -iw, zb), at(-r, 0, zr), (-iw / ROOF_UV_M, 0), (iw / ROOF_UV_M, 0), (0, slope / ROOF_UV_M), rm)
-        return
-    if spec.roof == "pyramidal":
-        apex = at(0, 0, zr)
-        for (a, ta), (b, tb) in (((-1, -1), (1, -1)), ((1, -1), (1, 1)), ((1, 1), (-1, 1)), ((-1, 1), (-1, -1))):
-            m.tri(at(a * hl2, ta * hw2, ze), at(b * hl2, tb * hw2, ze), apex,
-                  (-hl2 / ROOF_UV_M, 0), (hl2 / ROOF_UV_M, 0), (0, slope / ROOF_UV_M), rm)
-        return
-    if spec.roof == "half-hipped":
-        tw = hw2 * HALF_HIP                              # where the small hip's foot meets the slopes
-        zc = zr - rise * HALF_HIP
-        r = max(hl2 - tw, 0.0)
-        m.quad(at(-hl2, -hw2, ze), at(hl2, -hw2, ze), at(hl2, -tw, zc), at(-hl2, -tw, zc),
-               uv(-hl2, -hw2), uv(hl2, -hw2), uv(hl2, -tw), uv(-hl2, -tw), rm)
-        m.quad(at(-hl2, -tw, zc), at(hl2, -tw, zc), at(r, 0, zr), at(-r, 0, zr),
-               uv(-hl2, -tw), uv(hl2, -tw), uv(r, 0), uv(-r, 0), rm)
-        m.quad(at(hl2, hw2, ze), at(-hl2, hw2, ze), at(-hl2, tw, zc), at(hl2, tw, zc),
-               uv(hl2, hw2), uv(-hl2, hw2), uv(-hl2, tw), uv(hl2, tw), rm)
-        m.quad(at(hl2, tw, zc), at(-hl2, tw, zc), at(-r, 0, zr), at(r, 0, zr),
-               uv(hl2, tw), uv(-hl2, tw), uv(-r, 0), uv(r, 0), rm)
-        m.tri(at(hl2, -tw, zc), at(hl2, tw, zc), at(r, 0, zr), (-tw / ROOF_UV_M, 0), (tw / ROOF_UV_M, 0), (0, slope / ROOF_UV_M), rm)
-        m.tri(at(-hl2, tw, zc), at(-hl2, -tw, zc), at(-r, 0, zr), (-tw / ROOF_UV_M, 0), (tw / ROOF_UV_M, 0), (0, slope / ROOF_UV_M), rm)
-        top = zc + EAVE_M * rise / hw2                   # (the wall reaches the hip above it, under the overhang)
-        for sgn in (-1, 1):
-            end_wall(sgn, [(-hw, z_eave), (hw, z_eave), (tw, top), (-tw, top)])
-        return
-    if spec.roof in ("gabled", "hipped") and not lite:
-        _chimney(m, spec, c, u, hl2 if spec.roof == "gabled" else max(hl2 - hw2, 0.0), hw, zr, mat_idx[spec.facade])
-    if spec.roof == "gabled":
-        r = hl2
-        m.quad(at(-hl2, -hw2, ze), at(hl2, -hw2, ze), at(r, 0, zr), at(-r, 0, zr),
-               uv(-hl2, -hw2), uv(hl2, -hw2), uv(r, 0), uv(-r, 0), rm)
-        m.quad(at(hl2, hw2, ze), at(-hl2, hw2, ze), at(-r, 0, zr), at(r, 0, zr),
-               uv(hl2, hw2), uv(-hl2, hw2), uv(-r, 0), uv(r, 0), rm)
-        # the gable ends: wall triangles from the eave line up to the ridge, the facade's plain colour
-        fac = mat_idx[spec.facade]
-        for sgn in (-1, 1):
-            s = sgn * hl
-            a, b, top = at(s, -sgn * hw, z_eave), at(s, sgn * hw, z_eave), at(s, 0, zr - EAVE_M * 0.2)
-            if sgn > 0:
-                m.tri(a, b, top, (0, 0.995), (0.02, 0.995), (0.01, 0.999), fac)
-            else:
-                m.tri(a, b, top, (0, 0.995), (0.02, 0.995), (0.01, 0.999), fac)
-    else:                    # hipped
-        r = max(hl2 - hw2, 0.0)
-        m.quad(at(-hl2, -hw2, ze), at(hl2, -hw2, ze), at(r, 0, zr), at(-r, 0, zr),
-               uv(-hl2, -hw2), uv(hl2, -hw2), uv(r, 0), uv(-r, 0), rm)
-        m.quad(at(hl2, hw2, ze), at(-hl2, hw2, ze), at(-r, 0, zr), at(r, 0, zr),
-               uv(hl2, hw2), uv(-hl2, hw2), uv(-r, 0), uv(r, 0), rm)
-        m.tri(at(hl2, -hw2, ze), at(hl2, hw2, ze), at(r, 0, zr),
-              (-hw2 / ROOF_UV_M, 0), (hw2 / ROOF_UV_M, 0), (0, slope / ROOF_UV_M), rm)
-        m.tri(at(-hl2, hw2, ze), at(-hl2, -hw2, ze), at(-r, 0, zr),
-              (-hw2 / ROOF_UV_M, 0), (hw2 / ROOF_UV_M, 0), (0, slope / ROOF_UV_M), rm)
+    hi = 0.0
+    if spec.roof == "skillion":         # (the map's slope direction, or a coin)
+        hi = getattr(spec, "hi", None) or (1.0 if spec.seed < 0.5 else -1.0)
+    rh = getattr(spec, "roof_h", None)
+    _bld.bld_roof(m, str(spec.roof), float(c[0]), float(c[1]), float(u[0]), float(u[1]), float(hl), float(hw),
+                  bool(getattr(spec, "across", False)), float(z_eave), float(roof_pitch(spec)),
+                  float(rh) if rh else None, float(hi), bool(lite), rm, mat_idx[spec.facade], repr(spec.seed),
+                  spec.cls not in SHED_CLASSES and spec.cls not in BARN_CLASSES, float(spec.floors or 1),
+                  [float(v) for v in (EAVE_M, ROOF_UV_M, SKILLION_PITCH, ROUND_RISE, ROUND_SEGS, *GAMBREL_PITCHES,
+                                      GAMBREL_BREAK, *MANSARD_PITCHES, MANSARD_INSET_M, HALF_HIP, CHIMNEY_SHARE,
+                                      *CHIMNEY_HALF_M, CHIMNEY_OVER_M, CHIMNEY_MAX_M2, 0.0)])
 
 
 # The engine draws a shape's mesh with 16-bit indices: past 65,535 vertices they wrap and triangles join far-apart
@@ -3263,7 +2986,7 @@ def build(specs_and_ground, lite=False):
         for hole in (spec.holes or ()):               # (a courtyard's walls, facing the yard: the hole clockwise)
             _walls(m, spec, hole, z0, z_eave, mat_idx, lite, hole=True)
         if mh > 0.5:                                  # a part standing on another / over a street: its underside
-            m.poly([(p[0], p[1], z0) for p in ring[::-1]], [(0.002, 0.995)] * len(ring), mat_idx[spec.facade])
+            _bld.bld_lid(m, np.asarray(ring, np.float64), float(z0), None, True, mat_idx[spec.facade])
         _roof(m, spec, ring, z_eave, mat_idx, lite)
         if spec.roof == "flat" and not spec.plain and spec.floors <= 6 and not lite:
             _cornice(m, spec, ring, z_eave, mat_idx)
