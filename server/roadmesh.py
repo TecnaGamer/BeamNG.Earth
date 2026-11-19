@@ -766,7 +766,7 @@ def _pad_without_ground(p, t, uv, material, origin, ground, centre):
     return p[used], inverse.reshape(-1, 3), uv[used], material
 
 
-def trim_overlaps(rb, context=(), shared=None):
+def trim_overlaps(rb, context=(), shared=None, coplanar=False):
     """The deck ribbons rb ([(ribbon, chunk)]: ribbons()' (left, right, v, m, layer, z) of "fixed" decks) with each
     edge pulled in where another deck (rb's or the context's, the decks around the tile: the same trim in every tile)
     overlaps it in plan at a height TRIM_DZ apart: both end halfway between their centre lines (a gore; a parapet on the
@@ -778,7 +778,7 @@ def trim_overlaps(rb, context=(), shared=None):
     if not rb:
         return rb
     import fast
-    fast.require(373, "deck_trim_overlaps")
+    fast.require(534 if coplanar else 373, "deck_trim_overlaps")
     # (the cuts are native: earthfast deck_trim_overlaps, meshtrim.rs; each deck against every other deck near it was
     # a numpy round of a few rows, hundreds a tile)
     owners, groups, lefts, rights, zs, lens, own_in, targets = {}, {}, [], [], [], [], [], []
@@ -803,11 +803,51 @@ def trim_overlaps(rb, context=(), shared=None):
         lens.append(len(lefts[-1]))
     if not targets:
         return list(rb)
-    tl_all, tr_all = fast._ef.deck_trim_overlaps(
-        np.ascontiguousarray(np.concatenate(lefts)), np.ascontiguousarray(np.concatenate(rights)),
-        np.ascontiguousarray(np.concatenate(zs)), np.r_[0, np.cumsum(lens)].astype(np.int64),
-        np.array(oid, np.int64), np.array(gid, np.int64), np.array(sh, bool), np.array(targets, np.int64),
-        np.array([TRIM_DZ[0], TRIM_DZ[1], TRIM_GAP_M, 1.0 if shared else 0.0, TRIM_ALONG_COS], np.float64))
+    args = (np.ascontiguousarray(np.concatenate(lefts)), np.ascontiguousarray(np.concatenate(rights)),
+            np.ascontiguousarray(np.concatenate(zs)), np.r_[0, np.cumsum(lens)].astype(np.int64),
+            np.array(oid, np.int64), np.array(gid, np.int64), np.array(sh, bool), np.array(targets, np.int64))
+    tl_all, tr_all = fast._ef.deck_trim_overlaps(*args, np.array(
+        [TRIM_DZ[0], TRIM_DZ[1], TRIM_GAP_M, 1.0 if shared else 0.0, TRIM_ALONG_COS], np.float64))
+    cop = None
+    if coplanar:
+        # (BNE_ROADSHAPE=profile, road revamp v2 P3d: two decks running along each other in plan within TRIM_DZ[0] in
+        # height, which the joint profile holds at one height (its sheet and twin couplings), each end on the line
+        # halfway between their centre lines with no gap: one surface, where both slabs' full tops overlapped (two
+        # faces at one height, z-fighting: Ottawa t4's merge, the Nordschleife's overlapping raceway decks), a
+        # junction's (shared) too: its field lays each half on its one surface. Not an exit's union (P2b: "sx" /
+        # "noslab", drawn as one already) against anything)
+        # (deck ribbons alone: never a marking's or a sidewalk's ribbon, which a tile draws in its window only;
+        # Codex review of P3d)
+        ok = np.array([bool(c.get("deck")) and not (c.get("noslab") or c.get("sx") or c.get("tunnel"))
+                       for (r, c) in list(rb) + list(context) if r[5] is not None], bool)
+        if ok.any():
+            pick = np.flatnonzero(ok)
+            remap = np.full(len(ok), -1, np.int64)
+            remap[pick] = np.arange(len(pick))
+            sub_t = [int(remap[t]) for t in targets if ok[t]]
+            if sub_t:
+                lens_a = np.asarray(lens, np.int64)
+                off_a = np.r_[0, np.cumsum(lens_a)]
+                rows = np.concatenate([np.arange(off_a[i], off_a[i + 1]) for i in pick])
+                cl, cr = fast._ef.deck_trim_overlaps(
+                    np.ascontiguousarray(args[0][rows]), np.ascontiguousarray(args[1][rows]),
+                    np.ascontiguousarray(args[2][rows]), np.r_[0, np.cumsum(lens_a[pick])].astype(np.int64),
+                    args[4][pick], args[5][pick], args[6][pick], np.array(sub_t, np.int64),
+                    np.array([0.0, TRIM_DZ[0], 0.0, 0.0, TRIM_ALONG_COS, 1.0], np.float64))
+                # (back onto the targets' rows, in targets' order: each target's run of points)
+                tpos = np.r_[0, np.cumsum(lens_a[np.asarray(targets, np.int64)])]
+                spos = np.r_[0, np.cumsum(lens_a[pick[sub_t]])]
+                cop = np.zeros((len(tl_all), 2), bool)      # (the rows whose edge a coplanar deck cut: _cop_reach)
+                j = 0
+                for n, t in enumerate(targets):
+                    if not ok[t]:
+                        continue
+                    a, b = tpos[n], tpos[n + 1]
+                    xl, xr = cl[spos[j]:spos[j + 1]], cr[spos[j]:spos[j + 1]]
+                    cop[a:b, 0], cop[a:b, 1] = xl > 0.0, xr > 0.0
+                    tl_all[a:b] = np.maximum(tl_all[a:b], xl)
+                    tr_all[a:b] = np.maximum(tr_all[a:b], xr)
+                    j += 1
     out = []
     at = 0
     for n, ((left, right, v, m, layer, z), c) in enumerate(rb):
@@ -822,10 +862,26 @@ def trim_overlaps(rb, context=(), shared=None):
             continue
         hw = dnp.hypot(*(left - right).T) / 2
         u = (left - right) / np.maximum(2 * hw, 1e-9)[:, None]       # unit left
-        tl = np.minimum(tl, 0.9 * hw)           # (never past the centre line: at least a tenth of the deck stays)
-        tr = np.minimum(tr, 0.9 * hw)
+        cp = cop[at - k:at] if cop is not None else None
+        # (never past the centre line: at least a tenth of the deck stays; P3d: a coplanar cut to the centre line at
+        # most, the other deck's slab going on from it (two merging decks' ends one surface, not a 10 % strip twice))
+        tl = np.minimum(tl, np.where(cp[:, 0], hw, 0.9 * hw) if cp is not None else 0.9 * hw)
+        tr = np.minimum(tr, np.where(cp[:, 1], hw, 0.9 * hw) if cp is not None else 0.9 * hw)
+        if cp is not None and cp.any():
+            c = dict(c, cop=cp.copy())
         out.append(((left - u * tl[:, None], right + u * tr[:, None], v, m, layer, z), c))
     return out
+
+
+def _cop_reach(c, rl, rr, cl, cr):
+    """The slab's reach and cover flags of a deck ribbon with the rows whose edge a coplanar deck cut (trim_overlaps'
+    "cop", BNE_ROADSHAPE=profile P3d) at no reach and covered there: the other deck's slab goes on from that edge (the
+    reach past it, a parapet's footing or a median's fill, was the other slab's top twice over)."""
+    cop = c.get("cop")
+    if cop is None:
+        return rl, rr, cl, cr
+    return (np.where(cop[:, 0], 0.0, rl), np.where(cop[:, 1], 0.0, rr), np.asarray(cl) | cop[:, 0],
+            np.asarray(cr) | cop[:, 1])
 
 
 def _clip_tris(P, T, UV, M, box):
@@ -1404,7 +1460,7 @@ def build(frame, chunks, elev, origin, lift=0.0, clip=None, follow=False, q=None
     rbc = ribbon_pairs(chunks)                  # deck surfaces too: their asphalt over deck()'s concrete
     if any(r[5] is not None for r, _c in rbc):  # (trimmed as deck() trims their slabs: context, the decks around)
         ctx = [(r, c) for r, c in ribbon_pairs(list(context)) if r[5] is not None]
-        rbc = list(trim_overlaps(rbc, ctx, junctions))
+        rbc = list(trim_overlaps(rbc, ctx, junctions, coplanar=_roadshape.PROFILE_BUILT))
     if shells.ON:           # (the overlays on decks follow the deck surface and stop at its end: PR #987)
         rbc = _overlays_on_decks(rbc)
     # (each deck end with its layer and width: a ground ribbon's end takes the edges of a deck end of its own layer and
@@ -1965,7 +2021,8 @@ def deck(chunks, origin, piers=(), context=(), beams=(), ground=(), parapets=Non
     dch = [c for c in chunks if c.get("deck")]
     junctions = _junction_surfaces(chunks, context)
     cr_all = [(r, c) for r, c in ribbon_pairs(list(context)) if r[5] is not None]
-    rb = trim_overlaps([(r, c) for r, c in ribbon_pairs(dch) if r[5] is not None], cr_all, junctions)
+    rb = trim_overlaps([(r, c) for r, c in ribbon_pairs(dch) if r[5] is not None], cr_all, junctions,
+                       coplanar=_roadshape.PROFILE_BUILT)
     if not rb and not piers and not beams and not pads:
         return None
     low_parapet_decks = set(low_parapet_decks or ())
@@ -2034,6 +2091,7 @@ def deck(chunks, origin, piers=(), context=(), beams=(), ground=(), parapets=Non
         wide = 0.0 if c.get("tunnel") else PARAPET_W
         sl, sr = _sheet_reach(c, left, right)
         rl, rr, cl, cr_, _nl, _nr = _slab_reach(c, v, medians[n], sl, sr, wide, left, right)
+        rl, rr, cl, cr_ = _cop_reach(c, rl, rr, cl, cr_)
         covered[n] = (covered[n][0] | cl, covered[n][1] | cr_)
         # the slab's edges, past the road's (to the middle of a median beside another deck; to a point at a gore nose),
         # changing no faster than REACH_SLOPE along it; over an exit's union (P2b) to its outer edge
@@ -2701,7 +2759,7 @@ def parapet_runs(chunks, context=(), _rb=None, ground=(), pads=()):
         dch = [c for c in chunks if c.get("deck")]
         cr_all = [(r, c) for r, c in ribbon_pairs(list(context)) if r[5] is not None]
         rb = trim_overlaps([(r, c) for r, c in ribbon_pairs(dch) if r[5] is not None], cr_all,
-                           junctions)
+                           junctions, coplanar=_roadshape.PROFILE_BUILT)
     else:
         rb = _rb
     if not rb:
@@ -2723,6 +2781,7 @@ def parapet_runs(chunks, context=(), _rb=None, ground=(), pads=()):
         sl, sr = _sheet_reach(c, left, right)
         # (nose: full barriers, never the low curb: a gore nose's points, _noses; a median barrier's, _opposite)
         rl, rr, cl, cr_, nl, nr = _slab_reach(c, v, medians[n], sl, sr, wide, left, right)
+        rl, rr, cl, cr_ = _cop_reach(c, rl, rr, cl, cr_)
         covered[n] = (covered[n][0] | cl, covered[n][1] | cr_)
         nose = (nl, nr)
         if len(pads):               # (none inside a junction pad: roads.deck_pads)
