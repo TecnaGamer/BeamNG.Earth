@@ -4278,9 +4278,10 @@ ON_BRIDGE_WATER_SHARE = 0.5     # of its outline's points (every ON_BRIDGE_STEP_
 ON_BRIDGE_STEP_M = 5.0
 
 
-def on_bridge_over_water(ring, level, water_xy, min_h=0.0):
+def on_bridge_over_water(ring, level, water_xy, min_h=0.0, box=None):
     """Is a footprint ring (local, not closed) of a building mapped at level (OSM layer, None: unknown), its bottom min_h
-    m up, a structure on a bridge over water (ON_BRIDGE_*)? Pure."""
+    m up, a structure on a bridge over water (ON_BRIDGE_*)? box (x0, y0, x1, y1, local): only its points in it count
+    (the tile's: its map cells' water covers it, not what lies beyond them; Codex's review), all where none is. Pure."""
     if not water_xy or level is None or not np.isfinite(level) or level < 1:
         return False
     if min_h is not None and np.isfinite(min_h) and min_h >= ON_BRIDGE_FLOAT_M:
@@ -4291,6 +4292,9 @@ def on_bridge_over_water(ring, level, water_xy, min_h=0.0):
         k = max(1, int(np.ceil(float(dnp.hypot(*(b - a))) / ON_BRIDGE_STEP_M)))
         pts.append(a + (b - a) * (np.arange(k) / k)[:, None])
     allp = np.vstack(pts)
+    if box is not None:
+        mine = allp[(allp[:, 0] >= box[0]) & (allp[:, 0] <= box[2]) & (allp[:, 1] >= box[1]) & (allp[:, 1] <= box[3])]
+        allp = mine if len(mine) else allp
     wet = sum(1 for p in allp if ships.on_water(p, water_xy))
     return wet >= ON_BRIDGE_WATER_SHARE * len(allp)
 
@@ -5390,7 +5394,8 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
                     # Chrysler Building's top 47 m on 0.8 m²)
                     if r is None or _area2(r) / 2 < (PART_TINY_M2 if ph >= PART_TINY_TALL_M else PART_MIN_M2):
                         continue
-                    if on_bridge_over_water(r, lv, water_xy, pmh) and _on_support(r, supports) is None:
+                    if on_bridge_over_water(r, lv, water_xy, pmh, (0.0, 0.0, x1 - x0, y1 - y0)) \
+                            and _on_support(r, supports) is None:
                         continue        # (a part of a building on a bridge, over the water: on_bridge_over_water)
                     rings.append(r)
                     p_rshape = str(pat.get("roof_shape") or "").lower() or "flat"
@@ -5443,8 +5448,6 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
                 continue
             if rails_xy and on_rail_bed(ring, rails_xy):        # (a building on a railway's bed: BNE_RAIL_XING)
                 continue
-            if on_bridge_over_water(ring, lv, water_xy, at.get("min_height")) and _on_support(ring, supports) is None:
-                continue                # (a building on a bridge, over the water: on_bridge_over_water)
             is_ml = "src_dataset" in a and str(a["src_dataset"][i]) != "OpenStreetMap"
             if is_ml and _ml_false(ring, bridges_xy, water_xy, ml_roads_xy if ml_roads_xy is not None else roads_xy):
                 continue
@@ -5488,6 +5491,10 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
             at0, mh0 = at, mh
             for ring in kept:           # (a long one on varied ground: its pieces, each on its own ground)
                 at, mh = at0, mh0
+                # (a building on a bridge, over the water: on_bridge_over_water, each piece by its own tile's water)
+                if on_bridge_over_water(ring, lv, water_xy, mh, (0.0, 0.0, x1 - x0, y1 - y0)) \
+                        and _on_support(ring, supports) is None:
+                    continue
                 rings.append(ring)
                 if mh <= 0.5 and roads_xy and (road_through(ring, roads_xy) >= through_m or road_across(ring, roads_xy)):
                     mh = OVER_ROAD_CLEAR_M

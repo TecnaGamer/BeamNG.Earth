@@ -1509,6 +1509,17 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
     return under_decks(rows + lamp_lenses(rows), list(decks), wires)
 
 
+def off_rail_beds(rows, obstacles):
+    """rows (props rows) but those on or by a track's bed (obstacles: railxing.rail_obstacles', CLEAR_OTHER_M more): the
+    roadside rows placed after furniture.place (roads.build_tile's deferred gore markers and verge posts)."""
+    rows = list(rows)
+    if not obstacles or not rows:
+        return rows
+    import fast
+    bed = fast.Others(list(obstacles))
+    return [r for r in rows if bed.clear(np.array([float(r[1]), float(r[2])]), None, CLEAR_OTHER_M)]
+
+
 def _support_row(p):
     """The props row of a run's pole (x, y, z, yaw, style): its pole's row as placed."""
     return [p[4].group, p[0], p[1], p[2], p[3], 1.0, p[4].height, 0.0]

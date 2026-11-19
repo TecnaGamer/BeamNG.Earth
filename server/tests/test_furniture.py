@@ -292,6 +292,12 @@ class PoleTest(unittest.TestCase):
         got = [x for x in rows if x[0] == "fr_marker"]
         self.assertEqual([x[1] for x in got], [200.0])
 
+    def test_deferred_roadside_rows_keep_off_the_bed(self):
+        track = ("rail:a", 2.6, np.array([[-300.0, 60.0, 0.0], [900.0, 60.0, 0.0]]))
+        rows = [["fr_gore", 10.0, 61.0, 0.0, 0.0, 1.0, 1.0, 0.0], ["fr_gore", 10.0, 70.0, 0.0, 0.0, 1.0, 1.0, 0.0]]
+        self.assertEqual([r[2] for r in furniture.off_rail_beds(rows, [track])], [70.0])
+        self.assertEqual(furniture.off_rail_beds(rows, ()), rows)
+
     def test_rail_obstacles_are_every_ground_track_but_a_tram(self):
         import railxing
         parts = [("r1", "rail", "ground", np.array([[0.0, 0.0], [50.0, 0.0]])),
@@ -303,7 +309,9 @@ class PoleTest(unittest.TestCase):
             self.assertEqual([g[0] for g in got], ["rail:r1"])
         # the road tiles ask for them whatever the level-crossing kit's switch (roads.build_tile's furniture.place)
         src = Path(roads.__file__).read_text(encoding="utf-8")
-        self.assertIn("obstacles=railxing.rail_obstacles(frame, cells, own_box),", src)
+        self.assertIn("rail_beds = railxing.rail_obstacles(frame, cells, own_box)", src)
+        self.assertIn("obstacles=rail_beds,", src)
+        self.assertEqual(src.count("furniture.off_rail_beds("), 2, "the deferred gore markers and verge posts too")
 
     def test_town_street_without_sidewalk_is_lit(self):
         """A town street with no sidewalk run: lamps from its edge (the user, 2026-10-27: lamps only near the
