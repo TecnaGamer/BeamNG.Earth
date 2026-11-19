@@ -1,5 +1,5 @@
 """Road revamp v2, "road shape first" (.claude/work/road-revamp-v2-road-shape-first-2026-11-19.md): the glue of the
-Rust kernels in native/earthfast/src/roadshape. Switch BNE_ROADSHAPE (off / decks / sheet; later profile, full).
+Rust kernels in native/earthfast/src/roadshape. Switch BNE_ROADSHAPE (off / decks / sheet / profile; later full).
 
 Phase P1b (earthfast 498, BNE_ROADSHAPE=decks; the user's go 2026-11-19 on banked decks and buried deck ends):
 curved, skewed decks with buried ends for the SIMPLE structures. In a bridge chain's solve (roads.BridgeProfiles.
@@ -32,10 +32,13 @@ import os
 import numpy as np
 import dmath
 import dnp
+import mapgeom
 
 MODE = os.environ.get("BNE_ROADSHAPE", "off")
-DECKS = MODE in ("decks", "sheet")     # (P2's sheet builds on P1b's decks)
-SHEET = MODE == "sheet"                 # P2b: exits off bridges as one deck (deck_sheets)
+DECKS = MODE in ("decks", "sheet", "profile")     # (P2's sheet builds on P1b's decks)
+SHEET = MODE in ("sheet", "profile")    # P2b: exits off bridges as one deck (deck_sheets)
+PROFILE = MODE == "profile"             # P3a: sheet, and the joint profile through the abutments solved in SHADOW
+                                        # (profile_published: nothing built reads it)
 DEBUG = os.environ.get("BNE_ROADSHAPE_DEBUG", "") in ("1", "on", "true")   # P2a's fork records written beside the
                                         # build (shadow_forks, forkprobe's input): a developer's switch, never a player's
 SKEW = DECKS and os.environ.get("BNE_DECK_SKEW", "on") not in ("off", "0", "false")
@@ -761,3 +764,359 @@ def deck_sheets(parts, node=None):
     for n, i in enumerate(order):
         dzs[i] = dz[off[n]:off[n + 1]]
     return out, dzs
+
+
+# ---- P3a: one profile through the abutments, SHADOW ONLY (earthfast 516, BNE_ROADSHAPE=profile) --------------------
+# The design's section 1.4, Tier B, first step. A bridge chain's published solve (roads.BridgeProfiles._chain_solve: the
+# whole chain's own owner, read complete) hands its decks AS BUILT (the published heights, a shaped deck's line) and
+# the clearance requirements its solve asked (roads._solve's req_out) to profile_published. Off the build (one
+# background thread per process; PROFILE_SYNC: inline, for the tools), profile_chain:
+# - members from ground anchor to ground anchor (earthfast.profile_members): the decks, and per free deck end the
+#   ground road going on from it walked out to the deck's anchor length (anchor_m: 2 x L_vc(V), at least ANCHOR_MIN_M,
+#   at most ANCHOR_MAX_M). The ground lines are read from the map cells within ANCHOR_MAX_M + ANCHOR_PAD_M of the
+#   decks (the store's own cell entries), never the tile window; each feature's longest copy, sorted by content;
+# - the ground knots' local (Tier A) profile: today's plan heights, the graded physics ground along the road (the
+#   store's elev); the ground under each deck knot the same;
+# - the joint solve (earthfast.profile_solve): every knot weighted toward today's (a ground knot its local profile, a
+#   deck knot its height as built) by none within PROF_D0_M of an abutment, full from PROF_D1_M: within that reach the
+#   deck knots carry only curvature, clearance and grade terms, so the joint is solved, not the viaduct; C0 at joins,
+#   C1 at through joints and at every abutment; the sheet (a deck end inside another deck's edge of its level held to
+#   it to the split); anchors pinned in z and z'. Infeasible or over budget: today's heights, the status recorded.
+# Nothing built reads the result. PROFILE_STATS counts statuses and seconds; with BNE_ROADSHAPE_DEBUG=1 each record is
+# written as JSON under <cache>/debug/roadshape_profile/; PROFILE_SINKS (callables) get each record (rideprobe.py).
+PROFILE_KERNEL = 516        # earthfast.profile_members / profile_solve
+PROFILE_FORMAT = 1          # the record's JSON
+PROF_STEP_M = 2.0           # m between knots
+PROF_JOIN_M = 1.0           # m: ends this near meet (a deck's and a ground line's, two decks')
+PROF_DIR_M = 10.0           # m a direction is read over
+PROF_ON_DEG = 40.0          # a road going on within this of the deck's (or the walk's) direction
+PROF_MAX_PTS = 20000        # vertices an approach's walk takes at most
+ANCHOR_MIN_M = 120.0        # m: an anchor's distance from the abutment at least (the design's) ...
+ANCHOR_MAX_M = 400.0        # ... at most
+ANCHOR_PAD_M = 60.0         # m round that reach the cells are read in
+ANCHOR_GRADE_PCT = 4.0      # %: the grade change L_vc(V) is sized for (AASHTO's comfort curve, L = A V^2 / 395)
+CLASS_KMH_P3 = {"motorway": 110.0, "trunk": 100.0, "primary": 80.0, "secondary": 70.0, "tertiary": 60.0}
+OTHER_KMH = 50.0
+LINK_KMH = 60.0
+PROF_LAMBDA = 160000.0      # m^4 per unit weight: the ground bends over (LAMBDA / W_G)^(1/4) = 20 m
+PROF_W_G = 1.0              # a knot's weight toward today's (full) ...
+PROF_D0_M = 10.0            # ... none within this of the abutment ...
+PROF_D1_M = 80.0            # ... full from this (quadratic between)
+PROF_EPS_W = 1e-6           # the deck knots' weight toward today's (keeps the system definite)
+PROF_MU = 1e8               # couplings, pins and held clearances
+PROF_SPLIT_GAP_M = 1.2      # m between the facing edges where a sheet union ends (SPLIT_GAP_M)
+PROF_SHEET_DZ_M = 3.0       # m: today's two heights further apart: a flyover, no union (SHEET_DZ_MAX)
+PROF_SHEET_DEG = 40.0       # the two run within this of each other in a union
+PROF_SHEET_REACH_M = 300.0  # m along the branch at most (SHEET_REACH_M)
+PROF_AT_GRADE_M = 12.0      # m from an abutment no clearance holds (roads.AT_GRADE_REACH_M)
+PROF_DECK_GROUND_M = 0.5    # m a deck keeps over the ground under it (or today's, if less)
+PROF_MAX_GRADE = 0.06       # the grade check: max(this, the member's steepest today) + PROF_GRADE_ADD
+PROF_GRADE_ADD = 0.0375
+PROF_MARGIN = 0.02          # m: couplings and clearances re-checked to this
+PROF_ROUNDS = 40            # active-set rounds per attempt
+PROF_ACTIVE_TOL = 0.001     # m: a clearance short by more joins the active set ...
+PROF_RELEASE_TOL = 0.001    # ... and one its penalty holds down by more is let go (hysteresis: no cycling)
+PROFILE_SYNC = False        # (tools: solve inline, in the chain solve's thread)
+PROFILE_SINKS = []          # (tools: callables given each record)
+PROFILE_ACCEPT_SHORT = False    # (tools offline: a chain read short is solved too, its record marked "short")
+PROFILE_STATS = {"solved": 0, "pinned": 0, "infeasible": 0, "clearance": 0, "grade": 0, "solver": 0, "budget": 0,
+                 "error": 0, "empty": 0, "dropped": 0, "skipped": {}, "solve_s": 0.0, "members_s": 0.0,
+                 "sample_s": 0.0, "total_s": 0.0}
+_STATUS = ("solved", "pinned", "infeasible", "clearance", "grade", "solver", "budget")
+_PQ = None
+_PLOCK = __import__("threading").Lock()
+
+
+def anchor_m(spec):
+    """m from a deck's abutment to its ground anchor: 2 x L_vc(V) (L = A V^2 / 395, A = ANCHOR_GRADE_PCT), V the
+    deck's class's design speed, clamped to [ANCHOR_MIN_M, ANCHOR_MAX_M]."""
+    cls = str(getattr(spec, "cls", ""))
+    v = LINK_KMH if getattr(spec, "link", False) else CLASS_KMH_P3.get(cls, OTHER_KMH)
+    return min(ANCHOR_MAX_M, max(ANCHOR_MIN_M, 2.0 * ANCHOR_GRADE_PCT * v * v / 395.0))
+
+
+def profile_skipped(why):
+    with _PLOCK:
+        sk = PROFILE_STATS["skipped"]
+        sk[why] = sk.get(why, 0) + 1
+
+
+def profile_published(store, comp, parts, ground, reqs, short=False):
+    """A published chain's shadow profile (see above): queued for the background thread (a full queue drops it,
+    counted), or solved here with PROFILE_SYNC. Never raises into the build."""
+    job = (store, comp, parts, ground, reqs, short)
+    if PROFILE_SYNC:
+        _profile_job(job)       # (tools only: a fault here also marks the enclosing scope, the tool's)
+        return
+    global _PQ
+    import queue
+    import threading
+    with _PLOCK:
+        if _PQ is None:
+            _PQ = queue.Queue(maxsize=256)
+            threading.Thread(target=_profile_loop, name="roadshape-profile", daemon=True).start()
+    try:
+        _PQ.put_nowait(job)
+    except queue.Full:
+        with _PLOCK:
+            PROFILE_STATS["dropped"] += 1
+
+
+def _profile_loop():
+    while True:
+        job = _PQ.get()
+        try:
+            _profile_job(job)
+        except Exception:               # (a shadow: never in the build's way)
+            pass
+
+
+def _profile_job(job):
+    import logging
+    import time
+    import revisit
+    t0 = time.perf_counter()
+    try:
+        # (its own scope: what the shadow read short marks its record incomplete; rideprobe leaves those out)
+        with revisit.scope() as read:
+            rec = profile_chain(*job)
+        if rec is not None:
+            rec["complete"] = bool(read.complete)      # (the chain's own build read short: rec["short"])
+    except Exception as ex:
+        logging.getLogger("earthd.roadshape").debug("profile: %s: %s", type(ex).__name__, ex)
+        with _PLOCK:
+            PROFILE_STATS["error"] += 1
+        return
+    with _PLOCK:
+        PROFILE_STATS["total_s"] += time.perf_counter() - t0
+        if rec is None:
+            PROFILE_STATS["empty"] += 1
+            return
+        PROFILE_STATS[rec["status"]] += 1
+        for k in ("solve_s", "members_s", "sample_s"):
+            PROFILE_STATS[k] += rec["timing"][k]
+    for f in list(PROFILE_SINKS):
+        f(rec)
+    if DEBUG:
+        _profile_write(rec)
+
+
+def _profile_write(rec):
+    """BNE_ROADSHAPE_DEBUG=1: the record as JSON beside the build (named by its content's digest, the timing left out)."""
+    import hashlib
+    import json
+    import revisit
+    if not revisit.CACHE_DIR:
+        return
+    d = os.path.join(revisit.CACHE_DIR, "debug", "roadshape_profile", f"f{PROFILE_FORMAT}")
+    os.makedirs(d, exist_ok=True)
+    body = json.dumps({k: v for k, v in rec.items() if k != "timing"}, sort_keys=True, separators=(",", ":"))
+    name = hashlib.sha256(body.encode()).hexdigest()[:20] + ".json"
+    tmp = os.path.join(d, name + f".{os.getpid()}.tmp")
+    with open(tmp, "w") as f:
+        f.write(body)
+    os.replace(tmp, os.path.join(d, name))
+
+
+def _knots(xy, step):
+    """(knots (n + 1, 2), their arcs, the line's arcs): xy cut in n equal pieces of at most step m (profile.rs's
+    resample)."""
+    xy = np.asarray(xy, np.float64)[:, :2]
+    s = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(xy, axis=0).T))]
+    n = max(1, int(math.ceil(s[-1] / step)))
+    t = s[-1] * np.arange(n + 1, dtype=np.float64) / n
+    t[-1] = s[-1]
+    return np.stack([dnp.interp(t, s, xy[:, 0]), dnp.interp(t, s, xy[:, 1])], axis=1), t, s
+
+
+def _ground_lines(store, decks):
+    """The ground road lines within reach of the decks' ends (each feature's longest copy over the cells read; sorted
+    by content: (first point, last point, vertices) to 1 mm)."""
+    import mapcells
+    reach = ANCHOR_MAX_M + ANCHOR_PAD_M
+    ends = np.array([p for xy in decks for p in (xy[0], xy[-1])], np.float64)
+    x0, y0 = ends.min(axis=0) - reach
+    x1, y1 = ends.max(axis=0) + reach
+    la, lo, _ = store.frame.enu_to_geodetic(np.array([x0, x1]), np.array([y0, y1]), 0.0)
+    keys = mapcells.cells_for_bbox(float(min(la)), float(min(lo)), float(max(la)), float(max(lo)))
+    best = {}
+    for key in sorted(keys, key=str):
+        for k, lines in _cell_ground(store, key):
+            for j, ln in enumerate(lines):
+                ln = np.asarray(ln, np.float64)[:, :2]
+                if len(ln) < 2:
+                    continue
+                d = dnp.hypot(*(ln[:, None, :] - ends[None, :, :]).transpose(2, 0, 1)).min()
+                if d > reach:
+                    continue
+                L = float(np.sum(dnp.hypot(*np.diff(ln, axis=0).T)))
+                kk = (k, j)
+                old = best.get(kk)
+                if old is None or (L, ln.tobytes()) > (old[0], old[1].tobytes()):
+                    best[kk] = (L, ln)
+    out = [v[1] for v in best.values()]
+    out.sort(key=lambda ln: (round(float(ln[0, 0]), 3), round(float(ln[0, 1]), 3), round(float(ln[-1, 0]), 3),
+                             round(float(ln[-1, 1]), 3), len(ln)))
+    return out
+
+
+def _cell_ground(store, key):
+    """[(fid, [ground lines ENU])] of map cell key's drivable ground roads, read for the shadow ALONE: never through
+    the store's cell entries (their cache serves the builds; a shadow filling it evicted live entries, Codex review of
+    P3a) nor anything kept on the store. The map's cell itself is the process's shared read (the same data whoever
+    reads it). A lane section's line is the map's (lanesections.unplaced, memoised on the features as the store does)."""
+    import lanesections
+    import roads as roadsmod
+    feats = store.cell_fn(key)
+    if feats is None or not len(feats):
+        return []
+    rs = roadsmod.road_specs(feats)
+    placed = feats.attrs.get(lanesections.PROFILE)
+    out = []
+    for i in range(len(feats)):
+        if rs[i] is None:
+            continue
+        rings = roadsmod.ground_parts(feats, i)
+        if placed is not None and placed[i]:
+            # (on the map's line, as the decks are: roads.BridgeProfiles._cell_entries' rule and its memo on the
+            # features, a pure function of them)
+            memo = feats.__dict__.setdefault("_unplaced_ground", {})
+            got = memo.get(i)
+            if got is None:
+                got = memo[i] = lanesections.unplaced(feats, i, rings)
+            rings = got
+        if rings:
+            out.append((str(feats.ids[i]), mapgeom.enu_rings(feats, store.frame, rings)))
+    return out
+
+
+def _flat(lines):
+    lines = [np.asarray(ln, np.float64)[:, :2] for ln in lines]
+    off = np.r_[0, np.cumsum([len(ln) for ln in lines])].astype(np.int64)
+    xy = np.concatenate(lines) if lines else np.zeros((0, 2))
+    return np.ascontiguousarray(xy, np.float64), [int(v) for v in off]
+
+
+def profile_chain(store, comp, parts, ground, reqs, short=False):
+    """One chain's shadow profile record (a dict), or None (no deck). parts: {key: (spec, xy, z, lon, level)} as
+    published (the level: the chain pool's)."""
+    import time
+    import fast
+    import roads as roadsmod
+    fast.require(PROFILE_KERNEL, "profile_solve")
+    ef = fast._ef
+    keys, seen = [], set()
+    for k in comp:          # (one deck kept twice under two part keys, a copy per cell: once, the first key's)
+        v = parts.get(k)
+        if v is None or len(v[1]) < 2:
+            continue
+        sig = tuple(np.round(np.asarray(v[1], np.float64)[:, :2], 2).ravel().tolist())
+        rsig = tuple(np.round(np.asarray(v[1], np.float64)[::-1, :2], 2).ravel().tolist())
+        if sig in seen or rsig in seen:
+            continue
+        seen.add(sig)
+        keys.append(k)
+    if not keys:
+        return None
+    t0 = time.perf_counter()
+    specs = [parts[k][0] for k in keys]
+    decks = [np.asarray(parts[k][1], np.float64)[:, :2] for k in keys]
+    dz = [np.asarray(parts[k][2], np.float64) for k in keys]
+    gl = _ground_lines(store, decks)
+    dxy, doff = _flat(decks)
+    gxy, goff = _flat(gl) if gl else (np.zeros((0, 2)), [0])
+    half = [float(sp.width) / 2 for sp in specs]
+    anc = [anchor_m(sp) for sp in specs]
+    prm = [PROF_JOIN_M, PROF_DIR_M, dmath.cos(math.radians(PROF_ON_DEG)), PROF_STEP_M, float(PROF_MAX_PTS)]
+    axy, aoff, ameta, joins, ends = ef.profile_members(dxy, doff, half, anc, gxy, goff, prm)
+    t1 = time.perf_counter()
+    nd = len(keys)
+    axy = np.asarray(axy, np.float64).reshape(-1, 2)
+    ameta = np.asarray(ameta, np.int64).reshape(-1, 4)
+    ends = np.asarray(ends, np.int64).reshape(-1, 3)
+    # members: the decks (knots, today's heights as built), then the approaches (the local profile)
+    kxy, kz, koff = [], [], [0]
+    for xy, z in zip(decks, dz):
+        kn, t, s = _knots(xy, PROF_STEP_M)
+        kxy.append(kn)
+        kz.append(dnp.interp(t, s, z))
+        koff.append(koff[-1] + len(kn))
+    for i in range(len(ameta)):
+        kn = axy[aoff[i]:aoff[i + 1]]
+        kxy.append(kn)
+        koff.append(koff[-1] + len(kn))
+    allxy = np.ascontiguousarray(np.concatenate(kxy), np.float64)
+    gz = np.asarray(store._ground(allxy), np.float64)      # (the graded physics ground: the plans' heights)
+    nk_deck = koff[nd]
+    kg_all = np.full(len(allxy), np.nan)
+    kg_all[:nk_deck] = gz[:nk_deck]
+    for i in range(len(ameta)):
+        kz.append(gz[koff[nd + i]:koff[nd + i + 1]])
+    kz_all = np.ascontiguousarray(np.concatenate(kz), np.float64)
+    t2 = time.perf_counter()
+    nm = nd + len(ameta)
+    deck = [1] * nd + [0] * len(ameta)
+    depth = reqs.get("depth") if reqs else None
+    under = [float(roadsmod.crossing_clear(depth, getattr(sp, "cls", None))) for sp in specs] + [0.0] * len(ameta)
+    level = [float(parts[k][4]) if len(parts[k]) > 4 and parts[k][4] is not None else 1.0 for k in keys]
+    level += [0.0] * len(ameta)
+    # (abutment bits: a deck's ends with an approach or nothing on; an approach's start, and its end at a deck)
+    abut = [0] * nm
+    pins, jn = [], [int(v) for v in joins]
+    for d, e, kind in ends:
+        if kind in (0, 1):
+            abut[d] |= 1 << int(e)
+        if kind in (0, 4):          # (nothing on, or a joint with nothing going on from it: its height kept)
+            pins += [int(d), int(e), 1]
+    for i, (d, e, to, reach) in enumerate(ameta):
+        m = nd + i
+        abut[m] |= 1
+        jn += [m, 0, int(d), int(e), 1]
+        if reach == 2 and to >= 0:
+            abut[m] |= 2
+            jn += [m, 1, int(to) // 2, int(to) % 2, 1]
+        else:
+            pins += [m, 1, 2 if reach == 0 else 1]     # (an anchor: z and z'; a stop short (a junction): z)
+    floors = []
+    if reqs and reqs.get("req"):
+        lines = reqs["lines"]
+        clear = float(reqs["clear"])
+        idx = {k: i for i, k in enumerate(keys)}
+        for r in reqs["req"]:
+            k = comp[int(r[0])] if int(r[0]) < len(comp) else None
+            if k not in idx:
+                continue
+            ln = np.asarray(lines[int(r[0])], np.float64)[:, :2]
+            s = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(ln, axis=0).T))]
+            p = (float(dnp.interp(float(r[1]), s, ln[:, 0])), float(dnp.interp(float(r[1]), s, ln[:, 1])))
+            c = float(r[3]) if len(r) > 3 and r[3] is not None else clear
+            floors += [float(idx[k]), p[0], p[1], float(r[2]) + c]
+    sprm = [PROF_LAMBDA, PROF_W_G, PROF_D0_M, PROF_D1_M, PROF_EPS_W, PROF_MU, PROF_SPLIT_GAP_M, PROF_SHEET_DZ_M,
+            dmath.cos(math.radians(PROF_SHEET_DEG)), PROF_SHEET_REACH_M, PROF_AT_GRADE_M, PROF_DECK_GROUND_M,
+            PROF_MAX_GRADE, PROF_GRADE_ADD, PROF_MARGIN, float(PROF_ROUNDS), PROF_ACTIVE_TOL, PROF_RELEASE_TOL]
+    zsol, report, tried = ef.profile_solve(allxy, koff, kz_all, np.ascontiguousarray(kg_all), deck, half + [0.0] * len(ameta),
+                                    level, under, abut, jn, pins, floors, sprm)
+    t3 = time.perf_counter()
+    la, lo, _ = store.frame.enu_to_geodetic(allxy[:, 0], allxy[:, 1], 0.0)
+    status = _STATUS[int(report[0])] if 0 <= int(report[0]) < len(_STATUS) else "solver"
+    members = []
+    for m in range(nm):
+        a, b = koff[m], koff[m + 1]
+        ap = m >= nd
+        members.append({"kind": "approach" if ap else "deck",
+                        "key": None if ap else str(keys[m]),
+                        "cls": None if ap else str(getattr(specs[m], "cls", "")),
+                        "link": None if ap else bool(getattr(specs[m], "link", False)),
+                        "deck": int(ameta[m - nd][0]) if ap else None,
+                        "end": int(ameta[m - nd][1]) if ap else None,
+                        "reach": int(ameta[m - nd][3]) if ap else None,
+                        "level": level[m], "half": round(float((half + [0.0] * len(ameta))[m]), 3),
+                        "xy": [[round(float(x), 3), round(float(y), 3)] for x, y in allxy[a:b]],
+                        "ll": [[round(float(la[i]), 7), round(float(lo[i]), 7)] for i in (a, b - 1)],
+                        "z_today": [round(float(v), 3) for v in kz_all[a:b]],
+                        "z_solved": [round(float(v), 3) for v in zsol[a:b]],
+                        "z_try": [round(float(v), 3) for v in tried[a:b]] if len(tried) else None})
+    return {"format": PROFILE_FORMAT, "chain": str(min(comp)), "status": status, "short": bool(short),
+            "report": [round(float(v), 4) for v in report], "joins": [jn[i:i + 5] for i in range(0, len(jn), 5)],
+            "pins": [pins[i:i + 3] for i in range(0, len(pins), 3)], "floors": len(floors) // 4,
+            "members": members, "timing": {"members_s": t1 - t0, "sample_s": t2 - t1, "solve_s": t3 - t2}}

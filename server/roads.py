@@ -8763,10 +8763,12 @@ class BridgeProfiles:
             return sorted(comp)
         raise _Capped()
 
-    def _solve(self, comp, pool, ground, cons_out=None, depth_out=None):
+    def _solve(self, comp, pool, ground, cons_out=None, depth_out=None, req_out=None):
         """Deck heights of the chain comp (keys of pool). cons_out (a list; BNE_DECK_STRUCT=shadow's _raw_solve): the
         crossings under the chain are added to it as (part index, x, y, floor m, class name); depth_out (a dict, the
-        same): the parts' deck depths go there instead of the store's (the writer never changes the live store)."""
+        same): the parts' deck depths go there instead of the store's (the writer never changes the live store).
+        req_out (a dict; BNE_ROADSHAPE=profile, v2 P3a's shadow): the solve's clearance requirements as asked (lines,
+        req, clear, depth), read only."""
         lines = [pool[k][1] for k in comp]
         # (solved with its free ends that join another part's moved onto those joints: _end_joins; the heights are
         # per point, so the parts keep their own lines)
@@ -8829,6 +8831,8 @@ class BridgeProfiles:
             for c, r in zip(rcr, rails):
                 cons_out.append((int(c[0]), float(c[2][0]), float(c[2][1]), float(r[2]) + float(r[3]), "rail"))
 
+        if req_out is not None:
+            req_out.update(lines=lines, req=list(required + rails + water), clear=deck_road_clear(depth), depth=depth)
         crest = deck_crest_radii([pool[k][0] for k in comp]) if DECK_K_SPEED else None
 
         # (FAST_DECK_ENDS: a chain carrying a motorway or a trunk, not only their links)
@@ -9333,7 +9337,8 @@ class BridgeProfiles:
                 log.debug("chain %s from its owner: %s: %s", key, type(ex).__name__, ex)
         tl = self.__dict__.setdefault("_obs_tl", threading.local())
         tl.measured = set()
-        zs = self._solve(comp, pool, ground)
+        reqs = {} if (roadshape.PROFILE and self.STRUCTURES) else None     # (v2 P3a's shadow: what the solve asked)
+        zs = self._solve(comp, pool, ground) if reqs is None else self._solve(comp, pool, ground, req_out=reqs)
         zs = _tie_beside([pool[k][1] for k in comp], zs, [pool[k][0] for k in comp],     # (ramps beside their road)
                          [k in tl.measured for k in comp])
         # STAGED until every read the chain depends on is done: the parts' piers (_precommit: the ground under them)
@@ -9440,6 +9445,25 @@ class BridgeProfiles:
                 structures.published(self, comp, pool, zs, infra, block, revisit.CACHE_DIR, short_, raw=raw)
             else:
                 structures.skipped("owner" if not mine else "short" if not canon else "lost")
+        if reqs is not None:
+            # (BNE_ROADSHAPE=profile, road revamp v2 P3a, SHADOW ONLY: the joint profile from ground anchor to ground
+            # anchor through this chain's decks, solved off the build (roadshape.profile_published) from the solve
+            # that is published: a whole chain's own owner, read complete, every part published by it; nothing built
+            # changes)
+            mine = owner is None or owner is self
+            try:
+                if mine and self.region_of is not None:
+                    mine = self.region_of(self, comp, pool) == getattr(self, "region", None)
+            except Exception as ex:
+                log.debug("chain %s: owner: %s: %s", key, type(ex).__name__, ex)
+                mine = False
+            if mine and block is None and won and len(publish) == len(comp) and (
+                    not (n_short or n_lidar) or roadshape.PROFILE_ACCEPT_SHORT):
+                roadshape.profile_published(self, list(comp), {k: shaped[k] + (pool[k][3],) for k in comp},
+                                            dict(ground), reqs, bool(n_short or n_lidar))
+            else:
+                roadshape.profile_skipped("window" if block is not None else "owner" if not mine else
+                                          "short" if (n_short or n_lidar) else "lost")
         return got
 
     def _ends_ll(self, xy):

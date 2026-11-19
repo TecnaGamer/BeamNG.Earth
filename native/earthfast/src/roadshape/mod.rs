@@ -10,6 +10,10 @@
 //!
 //! Phase P2b (earthfast 514, BNE_ROADSHAPE=sheet): an exit or entrance on a bridge built as one deck (the union of the
 //! two carriageways up to where their edges part, the branch's heights pinned to the through's there), sheet.rs.
+//!
+//! Phase P3a (earthfast 516, BNE_ROADSHAPE=profile, shadow only): one height profile through the abutments, members
+//! from ground anchor to ground anchor and their joint solve, profile.rs.
 pub mod decks;
 pub mod forks;
+pub mod profile;
 pub mod sheet;
