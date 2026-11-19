@@ -33,6 +33,7 @@ import numpy as np
 
 import gradeshapes as gs
 import interchange_audit as ia
+import staged_ground as s3
 
 Finding = ia.Finding
 MAX_CONTRADICTIONS = 12      # most contradictions of one system named (each is taken out before the search goes on)
@@ -136,14 +137,16 @@ def build(net, sysm, ground, spacing="true", holds=True):
     pcs = gs.pieces(net, sysm)
     smp = gs.sample(net, pcs)
     gl = ground_lists(ground, net, smp)
+    fixed = s3.anchored(net, ground.fixed)      # (a street over a tunnel's footprint is not at the terrain there: staged_ground)
+    anchor = type("Anchored", (), {"at": staticmethod(s3.anchored(net, ground.at)), "fixed": staticmethod(fixed)})
     trace = {}
-    problem = gs.shape_problem(net, sysm, pcs, smp, gl, ground.fixed, trace) + (trace,)
+    problem = gs.shape_problem(net, sysm, pcs, smp, gl, fixed, trace) + (trace,)
     if holds:
-        base = ia.Constraints(net, sysm, pcs, smp, gl, ground.fixed, spacing, problem)
-        hs = holds_of(net, sysm, pcs, smp, ground, base.node)
+        base = ia.Constraints(net, sysm, pcs, smp, gl, fixed, spacing, problem)
+        hs = holds_of(net, sysm, pcs, smp, anchor, base.node)
     else:
         hs = []
-    return Constraints(net, sysm, pcs, smp, gl, ground.fixed, spacing, problem, hs), pcs, smp
+    return Constraints(net, sysm, pcs, smp, gl, fixed, spacing, problem, hs), pcs, smp
 
 
 def owner_of(cont, namer):

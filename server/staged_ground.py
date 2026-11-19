@@ -9,6 +9,11 @@ Ground points. A path has a point found on the ground where
   at grade   an end of its structure meets a road on the ground (a ramp's foot, a bridge's abutment road, a tunnel's mouth),
   held       a deck the map has a road under in a short tunnel (gradeshapes Member.held: findground's tunnel rule: it stays at
              its ground, the road under it is dug).
+A ground road point that the map puts over a tunnel's footprint (a street on a slab over a trench) is no point on the ground
+  there: the terrain under a cut-and-cover tunnel's slab is the trench floor, 7 m under the street at Porte Maillot's LiDAR, and a
+  street read at it would sink the tunnel (its ceiling is the street's height less the clearance). Such a point takes its height from
+  the anchors round it along its own road (footprints, anchored): the nearest points of the road that are not over a tunnel,
+  joined by the straight line. The road's own tunnel (the portal approach) is not a footprint it is over.
 Those are the direct ones. A path with none is anchored through a joint: Dijkstra over the places paths meet (joints), the
 distance along the paths to the nearest ground point; the joint chain is kept. A path no ground point reaches (an elevated
 loop; a viaduct the map data was cut across) is reported with every path it is joined to: its heights have no datum.
@@ -58,6 +63,81 @@ class Grounds:
         self.rel = {}
 
 
+FOOTPRINT_STEP_M = 4.0      # m: a ground road is read along every this far for what lies under it
+PORTAL_M = 30.0             # m: from a tunnel's end, a road is on its approach, not over it
+MARGIN_M = 8.0              # m: the stretch each side of a footprint that is still the trench wall, no anchor (the trench is wider than the tunnel)
+
+
+def footprints(net):
+    """{ground member: [(s0, s1)]}: the stretches of a road on the ground that lie over a tunnel of the map (within its half width of
+    the tunnel's line, further than PORTAL_M from its ends, the tunnel not of the road's own: gradeshapes._road_of). Cached on the net."""
+    got = getattr(net, "_footprints", None)
+    if got is not None:
+        return got
+    out = {}
+    tunnels = [j for j in range(len(net.m)) if net.m[j].kind == "tunnel" and net.L[j] <= gs.TUNNEL_MAX_M]
+    for i in range(len(net.m)):
+        if net.m[i].kind != "ground" or not len(net.lines[i]) or not tunnels:
+            continue
+        k = max(2, int(math.ceil(net.L[i] / FOOTPRINT_STEP_M)) + 1)
+        sv = np.linspace(0.0, net.L[i], k)
+        xy = np.stack([np.interp(sv, net.s[i], net.lines[i][:, 0]), np.interp(sv, net.s[i], net.lines[i][:, 1])], axis=1)
+        over = np.zeros(k, bool)
+        for j in tunnels:
+            if gs._road_of(net.m[i]) == gs._road_of(net.m[j]) or j == i:
+                continue
+            reach = float(net.m[j].half)
+            near = gs._near_line(xy, np.asarray(net.lines[j], np.float64)[:, :2], reach)
+            if not near.any():
+                continue
+            for q in np.flatnonzero(near).tolist():
+                sj, _d = gs.proj(net.lines[j], net.s[j], xy[q])
+                if PORTAL_M <= sj <= net.L[j] - PORTAL_M:
+                    over[q] = True
+        if over.any():
+            spans, a = [], None
+            for q in range(k):
+                if over[q] and a is None:
+                    a = q
+                if a is not None and (not over[q] or q == k - 1):
+                    b = q if over[q] else q - 1
+                    spans.append((float(sv[a]) - MARGIN_M, float(sv[b]) + MARGIN_M))
+                    a = None
+            out[i] = spans
+    net._footprints = out
+    return out
+
+
+def anchored(net, fixed_z):
+    """fixed_z(i, s) with the ground roads' points over a tunnel's footprint taken from their anchors: where member i has stretches over
+    a footprint, its height at s there is the straight line between the nearest points of the road outside any (the elevation's, as
+    fixed_z gives it); a road with none outside keeps the elevation. Other members, and points outside, are fixed_z's own."""
+    fp = footprints(net)
+    if not fp:
+        return fixed_z
+
+    def fixed(i, s):
+        spans = fp.get(int(i)) if np.ndim(i) == 0 else None
+        if not spans:
+            return fixed_z(i, s)
+        sv = np.atleast_1d(np.asarray(s, np.float64))
+        z = np.asarray(fixed_z(i, sv), np.float64).copy()
+        inside = np.zeros(len(sv), bool)
+        for a, b in spans:
+            inside |= (sv > a) & (sv < b)
+        if inside.any():
+            k = max(2, int(math.ceil(net.L[i] / FOOTPRINT_STEP_M)) + 1)
+            grid = np.linspace(0.0, net.L[i], k)
+            free = np.ones(k, bool)
+            for a, b in spans:
+                free &= ~((grid > a) & (grid < b))
+            if free.any():
+                zg = np.asarray(fixed_z(i, grid[free]), np.float64)
+                z[inside] = np.interp(sv[inside], grid[free], zg)
+        return z if np.ndim(s) else float(z[0])
+    return fixed
+
+
 def _direct_points(P):
     """{path id: [GroundPoint]}: the points on the ground each path has of its own."""
     net = P.net
@@ -66,6 +146,9 @@ def _direct_points(P):
         for r in p.runs:
             if r.kind in ("ground", "rail"):
                 i, _f = p.segs[r.first]
+                spans = footprints(net).get(i, ())
+                if r.kind == "ground" and any(a <= 0.0 and b >= net.L[i] for a, b in spans):
+                    continue                    # (a street wholly over a tunnel: the trench floor is not its ground)
                 out[p.id].append(GroundPoint(p.id, r.s0, i, 0.0, "segment"))
             else:
                 for k in range(r.first, r.last + 1):

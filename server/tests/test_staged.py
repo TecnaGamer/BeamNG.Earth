@@ -246,6 +246,40 @@ def test_a_road_bridges_end_on_a_track_is_no_failure_and_a_member_is_not_its_own
     assert "another network" in next(f.text for f in S.finds[1] if f.code == "end_at_separation")
 
 
+def test_a_street_over_a_tunnels_footprint_takes_its_height_from_its_anchors_not_the_trench_floor():
+    """Porte Maillot's LiDAR: the terrain under a street on a slab over a cut-and-cover trench is the trench floor, 7 m under the
+    street. Such a point is no point on the ground: it takes the straight line between the street's nearest points outside any
+    footprint. A street wholly over the tunnel has no ground point at all; the tunnel's own road, and a road on its approach, are not
+    over it."""
+    tun = road(("t", "tunnel", 0), line(0, 0, 200, 0, 40), "tunnel", "trunk", -1.0, half=7.0)
+    street = road(("s", "ground", 0), line(100, -120, 100, 120, 60), cls="secondary", half=5.0)
+    portal = road(("p", "ground", 0), line(-120, 0, 0, 0, 30), cls="trunk", half=7.0)
+    short = road(("c", "ground", 0), line(150, -6, 150, 6, 6), cls="service", half=3.0)
+
+    def terrain(xy):
+        xy = np.atleast_2d(xy)
+        trench = (np.abs(xy[:, 1]) < 9.0) & (xy[:, 0] > 0.0) & (xy[:, 0] < 200.0)
+        return np.where(trench, -7.0, 0.0)
+    pl = places.synthetic([tun, street, portal, short], ground=terrain)
+    net = pl.net
+    fp = s3.footprints(net)
+    si = next(i for i, m in enumerate(net.m) if m.key[0] == "s")
+    pi = next(i for i, m in enumerate(net.m) if m.key[0] == "p")
+    ci = next(i for i, m in enumerate(net.m) if m.key[0] == "c")
+    assert si in fp and pi not in fp and 1 == len(fp[si])
+    a, b = fp[si][0]
+    assert 100.0 <= a <= 120.0 and 120.0 <= b <= 145.0                      # (the street's s: 120 m to the tunnel's line, +- the half width)
+    fixed = s3.anchored(net, pl.ground.fixed)
+    mid = net.L[si] / 2.0
+    assert abs(float(pl.ground.fixed(si, mid))) == 7.0                      # (the elevation: the trench floor)
+    assert abs(float(fixed(si, mid))) < 1e-9                                # (the anchors: the street's own level either side)
+    assert float(fixed(si, 10.0)) == float(pl.ground.fixed(si, 10.0))        # (outside the footprint: the elevation's)
+    assert ci in fp and fp[ci][0][0] <= 0.0 and fp[ci][0][1] >= net.L[ci]
+    S = staged.run(pl.members, pl.meta, None, None, pl.ground, feasibility=False)
+    pts = [p for ps in S.G.points.values() for p in ps if p.member == ci]
+    assert not pts
+
+
 def test_one_road_twice_with_another_smoothing_is_one_segment():
     ln1 = line(0, 0, 400, 0, 9)
     ln2 = np.stack([np.linspace(0, 400, 25), 0.8 * np.sin(np.linspace(0, np.pi, 25))], axis=1)     # the same road, 0.8 m off along its middle

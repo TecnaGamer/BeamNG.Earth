@@ -54,6 +54,7 @@ import dnp
 import gradeshapes as gs
 import interchange_audit as ia
 import staged_feasible as s4
+import staged_ground as s3
 
 TOL_M = 5e-4            # m: the iteration stops when no row is further than this from its bounds (and the dual residual is small)
 VIOLATION_M = 2e-3      # m: an answer whose worst constraint is violated by more than this is not given as converged
@@ -61,7 +62,7 @@ MAX_ITER = 6000         # sweeps at most (the work is bounded by this, never by 
 MAX_RHO = 12            # rescalings of rho at most
 BATCH_MIN = 24         # chains of one length class laid side by side from this many (below, one at a time is cheaper)
 RHO0 = 10.0
-RHO_EQ = 1e3          # the equality rows' penalty over the others' (OSQP's)
+RHO_EQ = 1.0
 SIGMA = 1e-6
 PCG_MAX = 60
 PCG_TOL = 1e-9
@@ -412,8 +413,7 @@ def admm(P, z0, max_iter=MAX_ITER):
         ATy = Aty(y)
         r_pri = float(np.abs(Ax - z).max(initial=0.0))
         r_dual = float(np.abs(Px - P.h + ATy).max(initial=0.0))
-        eps_dual = DUAL_ABS + DUAL_REL * max(float(np.abs(Px).max(initial=0.0)), float(np.abs(ATy).max(initial=0.0)),
-                                             float(np.abs(P.h).max(initial=0.0)))
+        eps_dual = DUAL_ABS
         if r_pri <= TOL_M and r_dual <= eps_dual:
             converged = True
             break
@@ -435,6 +435,9 @@ def admm(P, z0, max_iter=MAX_ITER):
 def constraints_of(net, sysm, pcs, smp, gl, fixed_z, at=None, spacing="true"):
     """The system's constraint graph and the shapes' chains: interchange_audit.Constraints with the points held on the ground
     (staged_feasible.holds_of). at(member, s) -> the elevation (None: the held points are left out)."""
+    fixed_z = s3.anchored(net, fixed_z)         # (a street over a tunnel's footprint is not at the terrain there: staged_ground)
+    if at is not None:
+        at = s3.anchored(net, at)
     trace = {}
     problem = gs.shape_problem(net, sysm, pcs, smp, gl, fixed_z, trace) + (trace,)
     hs = []
