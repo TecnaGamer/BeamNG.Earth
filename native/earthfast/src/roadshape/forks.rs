@@ -13,9 +13,13 @@
 //!   (a one-way street grid's T is a junction, not a fork).
 //! - Stations s along the main path: + along the through arm from the node, - along the trunk; integer mm out.
 //! - The branch's mapped line, sampled every STEP_M and projected on the through arm, gives the PAINTED NOSE (the two
-//!   driving edges part: offset >= (dM + dB) / 2) and the PHYSICAL NOSE (the pavements are PHYS_M apart: offset >=
-//!   dM / 2 + hM + PHYS_M + hB + dB / 2). d: driving width, h: one side's shoulder ((pavement - d) / 2), M through, B
-//!   branch. At least GORE_MIN_M of painted gore.
+//!   lanes' edges part: offset >= (wM + wB) / 2, w = mapped lanes x LANE_W, else the driving width) and the PHYSICAL
+//!   NOSE (offset >= (wM + wB) / 2 + NOSE_GAP: a real gore's width at the island's end, fitted on the aerial; P2a2), each
+//!   the first sample after which the offset stays at or above it (read until the lines are clearly apart). d: driving
+//!   width, h: one side's shoulder ((pavement - d) / 2), M through, B branch. At least GORE_MIN_M of painted gore.
+//! - AT GRADE: any arm stops within AT_GRADE_M at a junction with crossing traffic (four or more arms, or a two-way
+//!   road of the fork classes) and the main line is no motorway: a slip lane of a junction zone (P5), flagged
+//!   "at_grade", no record.
 //! - TAPER START s_t, the start of the shared length where the branch is an extra lane of the main carriageway, from
 //!   the lanes: the trunk has the through's and branch's lanes (lT >= lM + lB, a lane drop / lane add): back along the
 //!   trunk to the first piece with fewer (its connector), "lanes"; else (a diverge) the trunk's turn:lanes give the
@@ -62,7 +66,10 @@ const P_BLEND_MIN: usize = 17;
 const P_BLEND_K: usize = 18;
 const P_GORE_MIN: usize = 19;
 const P_GORE_RATE: usize = 20;
-const NPARAMS: usize = 21;
+const P_LANE_W: usize = 21;
+const P_NOSE_GAP: usize = 22;
+const P_AT_GRADE: usize = 23;
+const NPARAMS: usize = 24;
 
 const MAX_PIECES: usize = 64;       // pieces of one arm's walk at most (a loop of continuations)
 const CLS_TRUNK: i64 = 2;           // class codes (roadshape.FORK_CLASSES): 1 motorway, 2 trunk, 3.. lower; 0 none
@@ -115,6 +122,7 @@ struct Arm {
     s: Vec<f64>,
     pieces: Vec<(usize, f64, f64)>,
     junction: bool,                 // stopped at a connector of three or more arms (else at REACH_M or a dead end)
+    end_node: Option<usize>,        // that connector
 }
 
 impl Arm {
@@ -171,7 +179,8 @@ fn flow_of(seg: &Seg, fwd: bool) -> i64 {
 fn walk(segs: &[Seg], node_rows: &[Vec<(usize, usize)>], start: usize, g0: usize, v0: usize, fwd0: bool,
         reach: f64) -> Arm {
     let flow = flow_of(&segs[g0], fwd0);
-    let mut arm = Arm { seg: g0, flow, p: vec![segs[g0].pts[v0]], s: vec![0.0], pieces: Vec::new(), junction: false };
+    let mut arm = Arm { seg: g0, flow, p: vec![segs[g0].pts[v0]], s: vec![0.0], pieces: Vec::new(), junction: false,
+                       end_node: None };
     let (mut g, mut v, mut fwd) = (g0, v0, fwd0);
     'outer: loop {
         let seg = &segs[g];
@@ -201,6 +210,7 @@ fn walk(segs: &[Seg], node_rows: &[Vec<(usize, usize)>], start: usize, g0: usize
                     .filter(|&(h, w, f)| !(h == g && w == i && f != fwd)).collect();
                 if others.len() != 1 {
                     arm.junction = others.len() > 1;
+                    if arm.junction { arm.end_node = Some(n); }
                     break 'outer;
                 }
                 let (h, w, f) = others[0];
@@ -281,8 +291,13 @@ fn one_fork(segs: &[Seg], node_rows: &[Vec<(usize, usize)>], n: usize, prm: &[f6
     let hb = { let v = (sb.pave - sb.drive) / 2.0; if v > 0.0 { v } else { 0.0 } };
     let phys = prm[P_PHYS];
     let g_n = hm + hb + phys;
-    let painted_off = (dm + db) / 2.0;
-    let phys_off = dm / 2.0 + hm + phys + hb + db / 2.0;
+    // the noses from the lanes the map gives (lanes x LANE_W; no count: the driving width): the painted nose where the
+    // two centrelines are half the two widths apart, the physical nose NOSE_GAP further (a real gore's width there,
+    // shoulders and the island's end; fitted on the aerial, forkprobe)
+    let wm = if sm.lanes >= 1 { sm.lanes as f64 * prm[P_LANE_W] } else { dm };
+    let wb_n = if sb.lanes >= 1 { sb.lanes as f64 * prm[P_LANE_W] } else { db };
+    let painted_off = (wm + wb_n) / 2.0;
+    let phys_off = painted_off + prm[P_NOSE_GAP];
     // the branch's mapped line on the through arm: (s on the branch, s on the main, offset toward the branch)
     let mut samples: Vec<(f64, f64, f64)> = Vec::new();
     let mut side = 0.0;
@@ -300,13 +315,18 @@ fn one_fork(segs: &[Seg], node_rows: &[Vec<(usize, usize)>], n: usize, prm: &[f6
         let c = cross(dir(ma)?, dir(ba)?);
         side = if c < 0.0 { -1.0 } else { 1.0 };
     }
+    // each nose: the first sample after which the separation stays at or above its offset (an early bump of the mapped
+    // line toward or away from the main does not place it), read along the branch until the lines are clearly apart
+    // (phys_off + NOSE_GAP) or the through arm ends
     let mut sp: Option<f64> = None;
     let mut sn: Option<f64> = None;
     for &(_tb, s, d) in &samples {
         let dd = d * side;
-        if sp.is_none() && dd >= painted_off { sp = Some(s); }
-        if dd >= phys_off { sn = Some(s); break; }
+        if dd < painted_off { sp = None; } else if sp.is_none() { sp = Some(s); }
+        if dd < phys_off { sn = None; } else if sn.is_none() { sn = Some(s); }
+        if dd >= phys_off + prm[P_NOSE_GAP] { break; }
     }
+    if let (Some(a), Some(b)) = (sp, sn) { if a > b { sp = Some(b); } }
     let kmh = sm.kmh;
     let left_driver = (side > 0.0) == diverge;      // the side as the driver sees it (merge: the walk runs upstream)
     let kind = if diverge { "diverge" } else { "merge" };
@@ -316,6 +336,16 @@ fn one_fork(segs: &[Seg], node_rows: &[Vec<(usize, usize)>], n: usize, prm: &[f6
                        json_str(&sm.fid), json_str(&sb.fid), st.lanes, sm.lanes, sb.lanes, st.level, sm.level, sb.level,
                        kmh.round() as i64,
                        mm(dm), mm(hm), mm(db), mm(hb), mm(st.pave));
+    // an at-grade slip lane (any arm stops within AT_GRADE_M at a junction with crossing traffic: four or more arms,
+    // or a two-way road of the fork classes; a service road's access to a motorway is none): a junction zone's (P5),
+    // no fork record. A motorway's own exit / entrance never (a short ramp ending at a street is still a freeway gore)
+    let crossing = |n: usize| arms_of(segs, &node_rows[n]).len() >= 4
+        || node_rows[n].iter().any(|&(g, _)| segs[g].dir == 0 && segs[g].cls > 0);
+    let motorway = |s: &Seg| s.cls == 1 && !s.link;
+    if !(motorway(st) && motorway(sm))
+       && [ta, ma, ba].iter().any(|a| a.len() <= prm[P_AT_GRADE] && a.end_node.map(crossing).unwrap_or(false)) {
+        return Some(format!("{},\"flags\":[\"at_grade\"]}}", head));
+    }
     let (sp, mut sn) = match (sp, sn) {
         (Some(a), Some(b)) => (a, b),
         _ => {

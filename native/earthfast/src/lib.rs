@@ -7344,6 +7344,8 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // BNE_ROADSHAPE=sheet); 509 is another branch's
     // 511: v2 P1c trim (follow_tris refine)
     // 512: try598 with both 510 (P2a) and 511 (P1c trim) merged
-    m.add("VERSION", 512)?;
+    // 513: v2 P2a2 (fork_records: noses from the lanes + a fitted gore width, the separation held; at-grade slip lanes
+    // flagged, no record; three more params)
+    m.add("VERSION", 513)?;
     Ok(())
 }

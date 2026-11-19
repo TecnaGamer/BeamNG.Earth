@@ -466,12 +466,17 @@ def mapped(rec, mp):
 # within FORK_REACH_M of the node: the cell and the rings of cells round it that reach needs (fork_rings), every segment
 # taken from the copy of the cell of its first point (the same copy whichever cells were read first), in a frame at the
 # cell's centre. Nothing built reads them: shadow_forks writes them as JSON beside the build; forkprobe.py checks them.
-FORK_VERSION = 510          # earthfast.fork_records
-FORKS_FORMAT = 1            # the records' JSON (shadow_forks' folder name)
+FORK_VERSION = 513          # earthfast.fork_records
+FORKS_FORMAT = 2            # the records' JSON (shadow_forks' folder name)
 FORK_REACH_M = 400.0        # m along every arm from the node (the design's window: inputs within 400 m)
 FORK_DIR_M = 20.0           # m of an arm its direction is read over
 FORK_DEG = 40.0             # a fork's two arms turn at most this from the trunk (more: a junction)
 PHYS_GAP_M = 1.2            # m between the two pavements at the physical nose (the design's 1.2 m)
+NOSE_LANE_M = 3.65          # m per mapped lane, the noses' widths (P2a2)
+NOSE_GAP_M = 7.0            # m between the painted nose's centreline offset and the physical nose's (a real gore's
+                            # width there: shoulders and the island's end; fitted on 9 forks, 4 held out, forkprobe
+                            # P2a2, 2026-11-19)
+AT_GRADE_M = 60.0           # an arm stopping this near at a junction with crossing traffic: an at-grade slip lane
 FORK_STEP_M = 1.0           # m between the branch's samples
 FORK_OUT_M = 2.0            # m between the record's rows
 TAPER_FAST_M = 90.0         # m of taper at TAPER_KMH and over (AASHTO 2018 10.9.6: 250-300 ft) ...
@@ -487,7 +492,7 @@ FORK_CLASSES = {"motorway": 1, "trunk": 2, "primary": 3, "secondary": 4, "tertia
 CLASS_KMH = {"motorway": 100.0, "trunk": 90.0, "primary": 70.0, "secondary": 60.0, "tertiary": 50.0}
 FORK_PARAMS = np.array([FORK_REACH_M, FORK_DIR_M, dmath.cos(math.radians(FORK_DEG)), PHYS_GAP_M, FORK_STEP_M,
                         FORK_OUT_M, TAPER_FAST_M, TAPER_SLOW_M, TAPER_KMH, *DECEL, *ACCEL, BLEND_MIN_M, BLEND_K,
-                        GORE_MIN_M, GORE_RATE], np.float64)
+                        GORE_MIN_M, GORE_RATE, NOSE_LANE_M, NOSE_GAP_M, AT_GRADE_M], np.float64)
 
 
 def fork_rings(key):
