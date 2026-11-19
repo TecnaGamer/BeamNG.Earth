@@ -149,8 +149,9 @@ GRADE_BIN_M = float(os.environ.get("BNE_GRADE_BIN_M", "8"))    # m, the fine bin
 # Vanilla-style cut and fill slopes (road revamp v2 P1a, the user 2026-11-19: "wide vanilla slopes, 1:2 rural and 1:3.5
 # urban, up to 40 m out, with walls where a slope would hit buildings"; native/earthfast batter.rs): outside the cores
 # the ground is the natural one clamped to each road side's corridor (a near-level strip, a rounded crest, then a
-# constant batter out to the daylight line), a pure function of position. Off by default (BNE_BATTER=vanilla, the
-# Revamped roads switch); on, it is a plans format tag (plancache.plans_format: ".bv1"), so no cache mixes the two.
+# constant batter out to the daylight line), a pure function of position. Off by default (BNE_BATTER=vanilla, a switch
+# of its own: not in Revamped roads before the user has looked at it in game); on, it is a plans format tag
+# (plancache.plans_format: ".bv1"), so no cache mixes the two.
 BATTER_ON = os.environ.get("BNE_BATTER", "off") == "vanilla"
 BATTER_L0_M = 1.0           # m of near-level strip past a core's edge (the core: carriageway + shoulder, 1 m+) ...
 BATTER_STRIP_LO = 0.04      # ... the ground there at most this much per m under the road's height ...
