@@ -6946,13 +6946,17 @@ class _Planner:
                 return self._batter_rays(widths, org, dirs, reach, short)
         # (each segment's ground and buildings beside it read once per planner, not once per plan set: the sets of
         # neighbouring tiles share most of their segments, ~0.4 s each at Fells Point; kept only from a read with no
-        # fault, BatterMemo)
-        with self.lock:
-            token = self.__dict__.setdefault("_batter_token", next(_BATTER_TOKENS))
-        memo = BatterMemo.of(token)
-        staged = []
+        # fault, BatterMemo. Not with the tunnel lids: their cells are kept from a build that read short without a
+        # fault on the later reads, Codex review of 44ab3958)
+        import tunnellids
+        memo = None
+        if not tunnellids.ON:
+            with self.lock:
+                token = self.__dict__.setdefault("_batter_token", next(_BATTER_TOKENS))
+            memo = BatterMemo.of(token)
+        info = {}
         try:
-            pack.bt = batter_params(pack, elev_xy, rays, memo, staged)
+            pack.bt = batter_params(pack, elev_xy, rays, memo, info)
         except Exception as e:         # (a kernel's error: today's grading everywhere in the set, asked again)
             _caught(e)
             pack.bt = None
@@ -6960,10 +6964,18 @@ class _Planner:
         if revisit.thread_faults() != f0 or revisit.thread_lidar_faults() != l0:
             short[0] = True
         if short[0]:
+            if info.get("hits"):
+                # (a short read: all of it again without the memo, as before it, so the ground not read is that of the
+                # same chunks; the set is not kept either way)
+                try:
+                    pack.bt = batter_params(pack, elev_xy, rays)
+                except Exception as e:
+                    _caught(e)
+                    pack.bt = None
             revisit.fault(here=True)
             return False
-        if staged:
-            memo.add(*staged)
+        if info.get("rows"):
+            memo.add(*info["rows"])
         return True
 
     def _batter_rays(self, widths, org, dirs, reach, short):
@@ -8012,18 +8024,22 @@ def grade_points(px, py, base, plans, lift=0.0):
         (float(BATTER_L0_M), float(BATTER_CREST_M), float(BATTER_STRIP_LO), float(BATTER_STRIP_UP),
          float(BATTER_CLOSE_T), float(BATTER_CLOSE_K), float(BATTER_SMOOTH_K), float(BATTER_CORE_BLEND_M),
          float(T_MAX), float(BATTER_OLD_FADE_M), float(lift), float(BATTER_BIN_M)))
-    out = np.array(v, f64)
-    sub = np.flatnonzero(w > 0.0)
+    out = v
+    need = w > 0.0
+    sub = np.flatnonzero(need)
     if len(sub):
         # (today's over these points as over the whole call: the plans chosen by the whole call's box, and the points
         # that make the call's bounds along (gradebins pairs segments and points by bucket squares from the bounds'
         # corner and leaves out the segments past them; it reads the plans it is given beyond each point's reach too, a
         # far cutting's NaN base rule): Codex review of a5814cb3)
         box = (px.min(), py.min(), px.max(), py.max())
-        ext = [f(c) for c in (px, py) if not np.isnan(c).all() for f in (np.nanargmin, np.nanargmax)]
-        idx = np.union1d(sub, np.asarray(ext, np.int64))
+        take = need.copy()
+        for c in (px, py):
+            if not np.isnan(c).all():
+                take[np.nanargmin(c)] = take[np.nanargmax(c)] = True
+        idx = np.flatnonzero(take)
         got = _grade_points_today(px[idx], py[idx], base[idx], pack, lift, base[idx].copy(), box)
-        g0 = np.ascontiguousarray(np.asarray(got, f64)[np.searchsorted(idx, sub)])
+        g0 = np.ascontiguousarray(np.asarray(got, f64)[need[idx]])
         # (batter::combine: v + w (g0 - v), today's alone at 1: batter_apply's own arithmetic, a NaN's bits too)
         out[sub] = fast._ef.batter_combine(np.ascontiguousarray(v[sub]), np.ascontiguousarray(w[sub]), g0)
     return out
@@ -8128,15 +8144,15 @@ class BatterMemo:
             self.hs, self.pos = self.hs[:0].copy(), self.pos[:0].copy()
 
 
-def batter_params(pack, elev_xy, walls_rays=None, memo=None, staged=None):
+def batter_params(pack, elev_xy, walls_rays=None, memo=None, info=None):
     """(m, r, fl) of the vanilla slopes (BATTER_ON) for a PlanPack's segments (batter.rs: each side's batter slope and
     reach past its core at the segment's ends, (segments, 4): left, right at a, then at b; its flags, (segments, 2)):
     the natural ground elev_xy(x, y) at BATTER_OFFS past each side's
     core edge, and the distance from that edge to the first building along it (walls_rays(origins (k, 2), dirs (k, 2),
     reach) -> (k,) distances, NaN or inf: none; None: no buildings known). A pure function of the segments, the ground
     and the buildings: the same for a segment in every plan set. memo: a BatterMemo of segments read before (their
-    natural ground and buildings taken from it); staged (a list): set to the segments read here and their values, for
-    the caller to add to the memo once it knows the reads were sound."""
+    natural ground and buildings taken from it); info (a dict): "hits", the segments taken from the memo, and "rows",
+    the segments read here and their values, for the caller to add to the memo once it knows the reads were sound."""
     import fast
     fast.require(497, "batter_params")
     f64 = np.float64
@@ -8152,6 +8168,8 @@ def batter_params(pack, elev_xy, walls_rays=None, memo=None, staged=None):
         # and ray's own, the same in any batch)
         keys = BatterMemo.keys_of(pack.a, pack.b, pack.h)
         hit, vals = memo.find(keys)
+        if info is not None:
+            info["hits"] = int(hit.sum())
         if hit.any():
             nat[hit] = vals[:, :k2]
             bld[hit] = vals[:, k2:]
@@ -8164,8 +8182,8 @@ def batter_params(pack, elev_xy, walls_rays=None, memo=None, staged=None):
         if walls_rays is not None:
             got = np.asarray(walls_rays(org, dirs, float(BATTER_R_MAX + BATTER_BLD_GAP_M + 1.0)), f64)
             bld[todo] = np.where(np.isfinite(got), got, np.inf).reshape(len(todo), 2)
-        if staged is not None and keys is not None and walls_rays is not None:
-            staged[:] = [keys[todo], np.concatenate([nat[todo], bld[todo]], axis=1)]
+        if info is not None and keys is not None and walls_rays is not None:
+            info["rows"] = (keys[todo], np.concatenate([nat[todo], bld[todo]], axis=1))
     nat = nat.ravel()
     bld = bld.ravel()
     prm = np.array([BATTER_L0_M, BATTER_CREST_M, BATTER_STRIP_LO, BATTER_STRIP_UP, BATTER_RURAL, BATTER_URBAN,

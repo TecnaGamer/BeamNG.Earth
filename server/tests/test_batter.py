@@ -331,12 +331,12 @@ class Batter(unittest.TestCase):
             pack = grading.PlanPack(sub)
             want = grading.batter_params(pack, ground, rays)
             asked.clear()
-            staged = []
-            got = grading.batter_params(pack, ground, rays, memo, staged)
+            info = {}
+            got = grading.batter_params(pack, ground, rays, memo, info)
             for a, b in zip(got, want):
                 np.testing.assert_array_equal(a, b)
-            if staged:
-                memo.add(*staged)
+            if info.get("rows"):
+                memo.add(*info["rows"])
         # (the second set: only the segments of plans[25:] read)
         first = grading.PlanPack(plans[10:25])
         k2 = 2 * len(grading.BATTER_OFFS)
