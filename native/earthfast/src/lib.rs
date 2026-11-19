@@ -129,6 +129,7 @@ mod vegclumps;
 mod roadwear;
 mod roadtone;
 mod railbeds;
+mod railprof;
 mod raildrawn;
 mod railindex;
 mod railnode;
@@ -7368,6 +7369,11 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 526: try598 with 524 and 518 (deckreach) merged; 525 is another branch's
     // 523: v2 P3c (profile_pin_field: each approach's pin weight local to its own line and abutment)
     // 529: try598 with 526 and 523 (P3c) merged; 525, 527, 528 are other branches'
-    m.add("VERSION", 529)?;
+    m.add_function(wrap_pyfunction!(railprof::rail_profile, m)?)?;
+    m.add_function(wrap_pyfunction!(railprof::rail_approach_rays, m)?)?;
+    // 525: the full port's railways.profile (railprof: the beds, the decks' approach levels, the underpasses'
+    // clearance and the decks run out along the track in one call; the ground stays the caller's)
+    // 530: try598 with 529 and 525 (r2a20) merged; 527-528 are other branches'
+    m.add("VERSION", 530)?;
     Ok(())
 }

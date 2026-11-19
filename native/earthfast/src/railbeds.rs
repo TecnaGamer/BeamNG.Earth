@@ -316,7 +316,7 @@ fn avg_np(v: &[f64], r: usize) -> Vec<f64> {
 }
 
 /// railways.bed_heights of one line of ground heights: _avg over r, then over r // 2; fewer than 3 heights as they are.
-fn bed_heights(z: &[f64], r: usize) -> Vec<f64> {
+pub(crate) fn bed_heights(z: &[f64], r: usize) -> Vec<f64> {
     if z.len() < 3 {
         return z.to_vec();
     }

@@ -1234,110 +1234,59 @@ def approach_levels_many(xys, ground, grades=None):
 def profile(rails, ground, underpasses=()):
     """Per part: bed and ground heights. Underpasses reserve clearance above their lower road mouths.
     ground(xy (n, 2)) -> z. The resulting deck heights propagate along connected approach ramps.
+    earthfast.rail_profile (the Python's numpy, its order and its ties); ground is asked here as the Python asked it: the
+    parts' points, the decks' approach rays (approach_levels_many's), the underpasses' mouths. The contract (every real
+    caller's, railways.parts' lines and point_ground / grade_plans' ground): float64 (k, 2) lines, ground a new (n,)
+    array each call (not a reused buffer: the beds are laid after its last call). Outside it the Python's results are not
+    kept (accepted, Codex r2a20: float32 lines' arcs, an (n, 1) ground, a NaN's payload bytes).
     """
     if not rails:
         return []
+    import fast
+    fast.require(525, "rail_profile")
     allxy = np.concatenate([xy for *_, xy in rails])
     zg_all = np.asarray(ground(allxy), np.float64)
     zgs, k = [], 0
     for *_, xy in rails:
         zgs.append(zg_all[k:k + len(xy)])
         k += len(xy)
-    lines = [xy for *_, xy in rails]
-    nodes, edges, adj = roads._chain_graph(lines)
-    level = {}                                  # node -> (level, reach): the track's level beyond a bridge's end there
-    decks = [n for n, (_, _, kind, _) in enumerate(rails) if kind == "bridge"]
-    got_all = approach_levels_many([rails[n][3] for n in decks], ground,
-                                   [LINE_GRADE.get(rails[n][1], GRADE) for n in decks]) if decks else []
-    for n, ends_got in zip(decks, got_all):
-        for node, got in zip(edges[n][:2], ends_got):
-            if got is not None and got[0] > level.get(node, (-np.inf, 0.0))[0]:
-                level[node] = got
-    zb = []
+    xy64 = np.ascontiguousarray(allxy, np.float64)
+    off = np.cumsum([0] + [len(z) for z in zgs], dtype=np.int64)
+    kinds = [r[2] for r in rails]
+    d = np.arange(0.0, APPROACH_REACH_M + APPROACH_FLAT_M + 1e-9, STEP_M)
+    ray_z = np.zeros(0)
+    if "bridge" in kinds:
+        pts = fast._ef.rail_approach_rays(xy64, off, kinds, d)
+        if len(pts):
+            ray_z = np.asarray(ground(pts), np.float64).ravel()
     shared = {}                                 # (a double track's beds are smoothed from one profile: railxing.py)
+    base = zg_all
     if railxing.ENABLED:
         gi = [n for n, (_, _, kind, _) in enumerate(rails) if kind == "ground"]
         if len(gi) > 1:
             shared = dict(zip(gi, railxing.corridor_ground([rails[n][3] for n in gi], [zgs[n] for n in gi])))
-    on_ground, lifts = [], []                   # (the ground parts' beds: smoothed in one call, bed_heights_many)
-    for n, ((_, _, kind, _), zg, (a, b, s)) in enumerate(zip(rails, zgs, edges)):
-        if kind != "ground":
-            zb.append(zg.copy())
-            continue
-        lifted = shared.get(n, zg)
-        for node, dist in ((a, s), (b, s[-1] - s)):     # (the track on at that level up to the bridge, not down the
-            if node in level:                           # slope under it: lifted before the bed's smoothing)
-                lv, reach = level[node]
-                lifted = np.where(dist <= reach + STEP_M, np.maximum(lifted, lv), lifted)
-        zb.append(None)
-        on_ground.append(n)
-        lifts.append(lifted)
-    for n, bed in zip(on_ground, bed_heights_many(lifts)):
-        zb[n] = bed
+            base = np.concatenate([np.asarray(shared[n], np.float64).ravel() if n in shared else zgs[n]
+                                   for n in range(len(rails))])
     # Read the lower road at its mouths, not on the filled railway bed above it.
     underpasses = list(underpasses)
-    crossings = [(line, half, hits) for (line, half), hits in
-                 zip(underpasses, _underpass_hits(rails, underpasses, DECK_HALF_M + STEP_M)) if hits]
-    mouths = np.concatenate([ln[[0, -1]] for ln, _hw, _hits in crossings]) if crossings else np.empty((0, 2))
-    mouth_z = np.asarray(ground(mouths), np.float64).reshape(-1, 2) if len(mouths) else []
-    ends = {}                                   # node -> the ground parts' bed there (a bridge's ends)
-    for n, ((_, _, kind, _), (a, b, _)) in enumerate(zip(rails, edges)):
-        if kind == "ground":
-            ends.setdefault(a, []).append(zb[n][0])
-            ends.setdefault(b, []).append(zb[n][-1])
-    seeds = {}                                  # node -> the deck's height at it
-    for n, ((_, cls, kind, xy), (a, b, _)) in enumerate(zip(rails, edges)):
-        if kind == "tunnel":                    # (straight between its portals' beds, whatever the hill above it)
-            g = zgs[n]
-            sx = _arc(xy)
-            za = float(np.mean(ends[a])) if a in ends else float(g[0])
-            zb_ = float(np.mean(ends[b])) if b in ends else float(g[-1])
-            zb[n] = za + (zb_ - za) * sx / max(float(sx[-1]), 1e-9)
-            continue
-        if kind != "bridge":
-            continue
-        g = zgs[n]
-        za = float(np.mean(ends[a])) if a in ends else float(g[0])
-        zb_ = float(np.mean(ends[b])) if b in ends else float(g[-1])
-        za = max(za, level[a][0]) if a in level else za         # (the track's level beyond its ends)
-        zb_ = max(zb_, level[b][0]) if b in level else zb_
-        zb[n] = deck_heights(_arc(xy), g, za, zb_)
-        for (_line, _half, hits), (z0, z1) in zip(crossings, mouth_z):
-            got = hits.get(n)
-            if got is not None:
-                over, t = got
-                req = zb[n].copy()
-                req[over] = np.maximum(req[over], z0 + (z1 - z0) * t
-                                       + UNDERPASS_CLEAR_M + DECK_D - BALLAST_H)
-                zb[n] = _envelope(_arc(xy), req)
-        for node, h in ((a, zb[n][0]), (b, zb[n][-1])):
-            seeds[node] = max(seeds.get(node, -np.inf), float(h))
-    if seeds:                                   # the decks' heights out along the track, GRADE per metre down
-        top = max(seeds.values())
-        d = roads._dijkstra(adj, {n: (top - h) / GRADE for n, h in seeds.items()})
-        # (a ground track: how far a deck stands over the track's own bed where they meet, run out at GRADE per metre
-        # on top of the bed, not the deck's height itself: on a mountain line climbing 10 % (a rack railway) a deck up
-        # the slope carried down at 2 % stood Andermatt's station 14 m over its own ground, GitHub #1051. On level ground
-        # the two are the same ramp.)
-        lifts = {node: h - float(np.mean(ends[node])) for node, h in seeds.items() if node in ends}
-        lifts = {node: v for node, v in lifts.items() if v > 0.0}
-        if lifts:
-            ltop = max(lifts.values())
-            dl = roads._dijkstra(adj, {node: (ltop - v) / GRADE for node, v in lifts.items()})
-        for n, (a, b, s) in enumerate(edges):
-            if rails[n][2] == "bridge":         # (two decks end to end: still a straight run between their ends)
-                reach = np.maximum(top - GRADE * (d[a] + s), top - GRADE * (d[b] + s[-1] - s))
-                zb[n] = _envelope(s, np.maximum(zb[n], reach))
-            elif lifts:                         # a ground track follows its own bed: a distant deck carries the
-                lift = np.maximum(ltop - GRADE * (dl[a] + s), ltop - GRADE * (dl[b] + s[-1] - s))     # ramps to it
-                # ... never over the decks' own heights run out at GRADE (or its own bed, where that is higher): a
-                # bridge's mapped end down a stream's bank read the bed there, in the channel, 11 m under the deck,
-                # and that 11 m rode on the bed's own level for 500 m either side (Findlay, OH: an embankment 8-11 m
-                # over a floodplain the line crosses at grade, GitHub #1384). Up a slope (#1051) the bed + lift stays
-                # under the deck's run-out, as before.
-                reach = np.maximum(top - GRADE * (d[a] + s), top - GRADE * (d[b] + s[-1] - s))
-                zb[n] = np.minimum(zb[n] + np.clip(lift, 0.0, SEED_LIFT_MAX_M), np.maximum(zb[n], reach))
-    return list(zip(zb, zgs))
+    ti = pi = ki = np.zeros(0, np.int64)
+    fr = mouth_z = np.zeros(0)
+    if underpasses:
+        fast.require(487, "rail_underpass_hits")
+        ti, pi, ki, fr = fast._ef.rail_underpass_hits(roads._lines64([xy for *_, xy in rails]),
+                                                      roads._lines64([ln for ln, _h in underpasses]),
+                                                      [float(h) for _ln, h in underpasses], DECK_HALF_M + STEP_M)
+        if len(ti):
+            mouths = np.concatenate([underpasses[t][0][[0, -1]] for t in np.unique(ti).tolist()])
+            mouth_z = np.asarray(ground(mouths), np.float64).ravel()
+    zb, same = fast._ef.rail_profile(
+        xy64, off, kinds, [r[1] for r in rails], LINE_GRADE, zg_all, np.ascontiguousarray(base, np.float64), ray_z, d,
+        ti, pi, ki, fr, mouth_z,
+        (max(1, int(round(SMOOTH_M / STEP_M))), int(round(APPROACH_FROM_M / STEP_M)), int(round(APPROACH_FLAT_M / STEP_M))),
+        [STEP_M, GRADE, APPROACH_FLAT_M, APPROACH_TOL_M, APPROACH_MIN_M, APPROACH_RAISE_MAX_M, UNDERPASS_CLEAR_M, DECK_D,
+         BALLAST_H, DECK_RAISE_MAX_M, SEED_LIFT_MAX_M])
+    # (a ground part of fewer than 3 points that nothing lifted: the Python's bed was the ground array itself)
+    return [((shared.get(n, zgs[n]) if s else z), zgs[n]) for n, (z, s) in enumerate(zip(zb, same))]
 
 
 RAIL_TOP_M = BALLAST_H - SLEEPER_SINK + SLEEPER_H + RAIL_H    # the rails' top over the bed
