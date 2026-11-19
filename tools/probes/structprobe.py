@@ -37,7 +37,8 @@ byte for byte. Wall clock and memory go to --timing only. Items count only insid
 
 A measurement tool (Python is fine here); nothing in the game reads it. The scratch cache must not be the player's
 ~/.cache/beamng-earth (refused) nor link into it. tools/roadcorpus/run.py build --probe struct runs it per corpus place.
-The metric functions are pure (plain arrays in, numbers out): tests/test_structprobe.py checks them on small cases."""
+The metric functions are pure (plain arrays in, numbers out): server/tests/test_structprobe.py checks them on small
+cases."""
 import argparse
 import json
 import logging
@@ -46,7 +47,11 @@ import resource
 import sys
 import time
 
-import numpy as np
+SERVER = os.path.realpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "server"))
+if SERVER not in sys.path:
+    sys.path.insert(0, SERVER)      # (the server's modules: this probe lives in tools/probes/)
+
+import numpy as np  # noqa: E402
 
 RASTER_M = 0.25         # m: the raster of the overlap and hole tests
 FACE_DZ = 0.3           # m: two faces this near in height are one level
@@ -1602,7 +1607,7 @@ def main():
                     help="RS S2b: check chain discovery's fixpoint property here (BNE_DECK_STRUCT=shadow) with SEEDS "
                          "random orders per part and two full solves; JSON to --json; exit 1 when it fails")
     a = ap.parse_args()
-    here = os.path.dirname(os.path.abspath(__file__))
+    here = SERVER
     if a.server:
         srv = os.path.realpath(a.server)
         sys.path[:] = [srv] + [p for p in sys.path if os.path.realpath(p or ".") != here]

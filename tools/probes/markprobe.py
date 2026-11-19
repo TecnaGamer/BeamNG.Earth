@@ -25,9 +25,13 @@ import logging
 import os
 import sys
 
-import numpy as np
+SERVER = os.path.realpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "server"))
+if SERVER not in sys.path:
+    sys.path.insert(0, SERVER)      # (the server's modules: this probe lives in tools/probes/)
 
-import dnp
+import numpy as np  # noqa: E402
+
+import dnp  # noqa: E402
 
 RASTER_M = 0.25         # m between the raster's samples (dz and coverage)
 CELL_M = 2.0            # m: the triangle lookup's buckets
@@ -383,7 +387,7 @@ def main():
     ap.add_argument("--json", help="write the result here (deterministic)")
     ap.add_argument("--server", help="probe this server/ checkout instead of the one beside this file")
     a = ap.parse_args()
-    here = os.path.dirname(os.path.abspath(__file__))
+    here = SERVER
     if a.server:
         srv = os.path.realpath(a.server)
         sys.path[:] = [srv] + [p for p in sys.path if os.path.realpath(p or ".") != here]

@@ -101,7 +101,7 @@ def copy_tree(src, dst):
     subprocess.check_call(["cp", "-a", "--reflink=auto", src, dst])
 
 
-PROBE = ["road"]     # build --probe: "road" (probe.py) or "struct" (server/structprobe.py, the structures track)
+PROBE = ["road"]     # build --probe: "road" (probe.py) or "struct" (tools/probes/structprobe.py, the structures track)
 SEED_FROM = [None]  # build --seed-from ROOT2: a place without a seed here starts from ROOT2's (online: grown, kept)
 
 
@@ -147,7 +147,7 @@ def run_place(p, server, root, label, online, checks=None, era=None):
             os.remove(f_)
     shutil.rmtree(os.path.join(out, p["id"] + ".structures"), ignore_errors=True)
     if PROBE[0] == "struct":        # (today's checkout's probe, scoring the server given: --server)
-        base = ["nice", "-n", "15", sys.executable, os.path.join(REPO, "server", "structprobe.py"),
+        base = ["nice", "-n", "15", sys.executable, os.path.join(REPO, "tools", "probes", "structprobe.py"),
                 repr(p["lat"]), repr(p["lon"]), repr(float(p.get("struct_r", p["r"]))), "--server", server,
                 "--cache", work, "--json", js, "--timing", tj]
     else:
@@ -307,9 +307,9 @@ def cmd_build(a):
 
 
 def write_struct_card(dirn, meta, ran=None, failed=()):
-    """The structures scorecard (server/structprobe.py's summaries per place): scorecard.json and summary.md. ran: the
-    places this build ran (only their results are scored, never an older run's file left in the folder); failed: those
-    that failed (listed apart, their partial results not scored)."""
+    """The structures scorecard (tools/probes/structprobe.py's summaries per place): scorecard.json and summary.md.
+    ran: the places this build ran (only their results are scored, never an older run's file left in the folder);
+    failed: those that failed (listed apart, their partial results not scored)."""
     res = {k: v for k, v in load(dirn).items()
            if (ran is None or k in ran) and k not in set(failed)}
     by = {p["id"]: p for p in places()}
@@ -318,8 +318,8 @@ def write_struct_card(dirn, meta, ran=None, failed=()):
     card = {"meta": meta, "places": {}}
     lines = [f"# Structures scorecard: {meta.get('label')}", "",
              f"Server: `{meta.get('server')}`" + (f", revision {meta['rev']}" if meta.get("rev") else ""), "",
-             "Definitions: server/structprobe.py. Targets (design): overlap 0, hole 0, parapet in carriageway 0, seam "
-             "steps > 5 cm 0, twin dz <= 2 cm, skew error <= 3 degrees.", "",
+             "Definitions: tools/probes/structprobe.py. Targets (design): overlap 0, hole 0, parapet in carriageway 0, "
+             "seam steps > 5 cm 0, twin dz <= 2 cm, skew error <= 3 degrees.", "",
              "| place | " + " | ".join(keys) + " | errors |", "|---|" + "---|" * (len(keys) + 1)]
     tot = {k: 0.0 for k in ("overlap_m2", "hole_m2", "parapet_in_cw_m", "seam_step_n")}
     for pid, r in sorted(res.items()):
@@ -414,7 +414,7 @@ def main():
     b.add_argument("--checks", help="probe.py --checks (a narrow probe for bisects), default all")
     b.add_argument("--env", action="append", default=[], help="K=V: a BNE_* build switch the probe runs with")
     b.add_argument("--probe", choices=("road", "struct"), default="road",
-                   help="struct: server/structprobe.py (the structures track; --set structures, --root "
+                   help="struct: tools/probes/structprobe.py (the structures track; --set structures, --root "
                         "~/bnge-tests/structures)")
     b.add_argument("--seed-from", help="ROOT2: a place with no seed here starts from ROOT2/seed/<seed_from or id>")
     b.set_defaults(fn=cmd_build)

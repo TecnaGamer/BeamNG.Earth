@@ -39,6 +39,7 @@ def main():
     a = ap.parse_args()
     here = os.path.dirname(os.path.abspath(__file__))
     srv = os.path.realpath(a.server or os.path.join(here, "..", "server"))
+    sys.path.insert(0, os.path.join(srv, "..", "tools", "probes"))   # (the probe: that checkout's tools/probes/)
     sys.path.insert(0, srv)
     import structprobe as sp
     from PIL import Image, ImageDraw
