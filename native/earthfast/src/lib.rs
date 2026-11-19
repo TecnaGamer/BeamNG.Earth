@@ -129,6 +129,7 @@ mod railbeds;
 mod raildrawn;
 mod railindex;
 mod railnode;
+mod stationzone;
 mod railunder;
 mod railspans;
 mod osmml;
@@ -6722,6 +6723,9 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(railnode::rail_node_pack, m)?)?;
     // 492: the full port's railprofile._make_node packing (railnode: a lattice node's beds by (fid, kind) and
     // centimetre key in a RailNode, the last of equal keys; RailNode.find, railprofile._find's lookup)
-    m.add("VERSION", 492)?;
+    m.add_function(wrap_pyfunction!(stationzone::station_zone, m)?)?;
+    // 494: the full port's busstationmesh.zone loops and _clip_cell (stationzone::station_zone: a station's walkable
+    // ground, kerb walls and tactile strips from walk_field's lattice in one call). 493 is another branch's
+    m.add("VERSION", 494)?;
     Ok(())
 }
