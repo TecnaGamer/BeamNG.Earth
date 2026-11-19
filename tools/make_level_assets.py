@@ -205,9 +205,11 @@ LOOKS = {
                                "grass/macro_dry_grass_02/t_macro_dry_grass_02", 8, 0.25, (0.12, 0.08)),
     "bngEarthGroundCrop": ("soil/dirt_crumbly/t_dirt_crumbly", 1, "soil/macro_holes/t_macro_holes", 8, 0.25, (0.12, 0.08)),
     "bngEarthGroundSand": ("sand/t_sand/t_sand", 1, "sand/t_macro_sand/t_macro_sand", 16, 0.25, (0.12, 0.08)),
+    # (server/surface.py WET, 2026-11-19) herbaceous wetland: the grass's grain with the mud's holes macro (wet hollows)
+    "bngEarthGroundWet": ("grass/t_grass_01/t_grass_01", 1, "soil/macro_holes/t_macro_holes", 8, 0.25, (0.12, 0.08)),
 }
 NEW_GROUND = (("bngEarthGroundForest", "GRASS", 70), ("bngEarthGroundDryGrass", "GRASS", 71),
-              ("bngEarthGroundCrop", "DIRT", 72), ("bngEarthGroundSand", "SAND", 73))
+              ("bngEarthGroundCrop", "DIRT", 72), ("bngEarthGroundSand", "SAND", 73), ("bngEarthGroundWet", "MUD", 74))
 SURFACES = {}
 for i, name in enumerate(("bngEarthGroundAsphalt", "bngEarthGroundGrass", "bngEarthGroundDusty", "bngEarthGroundLoose",
                           "bngEarthGroundRock", "bngEarthGroundSnow", "bngEarthGroundMud", "bngEarthGroundLawn")):

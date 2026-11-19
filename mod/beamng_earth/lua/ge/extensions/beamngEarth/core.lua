@@ -396,7 +396,7 @@ local function loadBlock(tr, aid)
   if warn then warnOnce('height', 'terrain height scale: ' .. warn) end
   local layers = (type(tr.layers) == 'table' and type(tr.materials) == 'table')
     and { masks = tr.layers, materials = tr.materials } or nil -- server --surface on (surface.py)
-  if layers then groundcover.ensure() end
+  if layers then groundcover.ensure(tr.materials) end   -- (its layers: objects only for those listed, groundcover.lua)
   -- Detail mode: the block's photo (server write_base; or its stand-in, write_quick_base: the far tiles' textures of
   -- its ground), else the level's flat base (false). nil (left as it was) kept the block before's photo on the
   -- materials, drawn on this block where it had moved: the ground of 128 m or more away, its painted roads beside the
@@ -3009,6 +3009,7 @@ local function onUpdate(dtReal, dtSim)
   local stg = rawget(_G, 'beamngEarth_settings')
   if stg and stg.redirectBigMap then stg.redirectBigMap(st.inOurLevel) end
   seasonlook.update(st.inOurLevel, st.anchor and st.anchor.lat)
+  groundcover.setLatitude(st.anchor and st.anchor.lat)   -- (the grass's season: its hemisphere)
   t = mark('ui', t)
   local frameMs = frameMs0
   statusbar.frame(frameMs0)

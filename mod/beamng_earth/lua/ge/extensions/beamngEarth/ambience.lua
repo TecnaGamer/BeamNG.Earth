@@ -151,6 +151,33 @@ local function setRoomtone(ev)
   roomtone = e
 end
 
+-- Pure: the climate the tiles near (x, y) choose (the ground cover's: groundcover.lua), every tile one vote (its
+-- area, trees or not): { k = Koppen class (biome[3]; nil on a tile from before it), biome = { set, variant } }, kept
+-- unless another has M.SWITCH times its votes.
+function M.voteClimate(list, x, y, keep)
+  local by = {}
+  local function key(b) return b[3] and ('k' .. tostring(b[3])) or (tostring(b[1]) .. ':' .. tostring(b[2] or 0)) end
+  for _, t in ipairs(list) do
+    if (t.cx - x) ^ 2 + (t.cy - y) ^ 2 <= M.VOTE_M ^ 2 then
+      local k = key(t.biome)
+      local e = by[k] or { biome = t.biome, w = 0 }
+      e.w = e.w + 1
+      by[k] = e
+    end
+  end
+  local best = nil
+  for _, e in pairs(by) do
+    if not best or e.w > best.w or (e.w == best.w and key(e.biome) < key(best.biome)) then best = e end
+  end
+  if not best then return keep end
+  if keep then
+    local k = by[key(keep)]
+    if k and best.w < k.w * M.SWITCH then return keep end
+  end
+  return best.biome
+end
+M.climate = nil
+
 local biome = nil
 local function build(x, y)
   local t0 = os.clockhp()
@@ -176,6 +203,12 @@ local function build(x, y)
     end
   end
   biome = M.vote(list, x, y, biome)
+  local cl = M.voteClimate(list, x, y, M.climate)
+  if cl and cl ~= M.climate then
+    M.climate = cl
+    local okG, gc = pcall(require, 'beamngEarth/groundcover')
+    if okG and type(gc) == 'table' and gc.setClimate then pcall(gc.setClimate, cl[3], cl) end
+  end
   local ev = M.events(biome)
   local af = forest()
   if af then
@@ -556,6 +589,7 @@ function M.clear()
   if rainEm and simObjectExists(rainEm) then rainEm:delete() end
   rainEm, rainVol, rainAt = nil, 0, nil
   tiles, dirty, builtAt, biome, current = {}, false, nil, nil, nil
+  M.climate = nil
   setRoomtone(nil)
   local af = forest()
   if af then af.setEnabled(false) end

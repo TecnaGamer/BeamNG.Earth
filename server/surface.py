@@ -80,17 +80,21 @@ MATERIALS = (
     ("bngEarthGroundDryGrass", "GRASS"),
     ("bngEarthGroundCrop", "DIRT"),
     ("bngEarthGroundSand", "SAND"),
+    # Herbaceous wetland (WorldCover 90: marsh, fen, reed beds; 2026-11-19, the grass overhaul): it had the water beds'
+    # mud layer and no 3D plants. Its own layer carries the stock cattails and reeds (groundcover.lua); the tyres' MUD
+    # as before. Mangroves (95) and the water beds (80) keep the mud layer.
+    ("bngEarthGroundWet", "MUD"),
 )
 ASPHALT, GRASS, DUSTY, LOOSE, ROCK, SNOW, MUD, COBBLE, LAWN, \
     GOLF_ROUGH, GOLF_FAIRWAY, GOLF_GREEN, GOLF_BUNKER, PAVERS, BRICK, DIRT, \
-    FOREST, DRYGRASS, CROP, SAND = range(len(MATERIALS))
+    FOREST, DRYGRASS, CROP, SAND, WET = range(len(MATERIALS))
 # WorldCover class -> material (§5.4 of the world-data research). Built-up land is the plain dirt layer
 # (2026-10-14): its yards, lawns and lots took the asphalt layer's grey detail and macro textures, which
 # washed whole towns pale grey in the street photos (Moab, Frederick); the roads are painted asphalt anyway
 # (paint_roads), and the photo's own colours now show through. Tree cover is the forest floor, cropland crop soil
 # (2026-11-16: both had the grass and the dirt layers); grassland in an arid climate dry grass (classify).
 CLASS_MATERIAL = {0: DIRT, 10: FOREST, 20: DUSTY, 30: GRASS, 40: CROP, 50: DIRT, 60: LOOSE, 70: SNOW,
-                  80: MUD, 90: MUD, 95: MUD, 100: GRASS}
+                  80: MUD, 90: WET, 95: MUD, 100: GRASS}
 DRY_KOPPEN = (4, 5, 6, 7)   # Koppen B (arid: BWh BWk BSh BSk; climate.py): grassland there is dry grass
 # Lawns (2026-10-14, street photos of Ocean City, Lancaster, Frederick, Moab): built-up land between the
 # buildings is mostly mown grass, which the dirt layer drew pale and bare. A share of it is LAWN, in patches
@@ -419,7 +423,7 @@ def paint_roads(idx, lat, lon, feats_list, square, urban_fn=None, widths=None, e
         # Material layers drive BeamNG's stock GroundCover. Keep the strip green
         # even on WorldCover's built-up village pixels, while roads and footways
         # still win below.
-        out[mask(grass_verge) & np.isin(out, (GRASS, LAWN, DIRT, FOREST, DRYGRASS, CROP))] = GRASS
+        out[mask(grass_verge) & np.isin(out, (GRASS, LAWN, DIRT, FOREST, DRYGRASS, CROP, WET))] = GRASS
     if footpaths[0]:
         out[mask(footpaths)] = ROAD_MATERIAL["paved"]
     for k in ROAD_ORDER:
@@ -1030,7 +1034,7 @@ def road_mask(frame, x0, y0, size, px, surface, widths=None, corners=True):
 # the ground cover goes by the layer samples (2 m then, 1 m since 2026-11-01), and tufts stood on the asphalt along its
 # edges in many places (the user, 2026-10-20: "grass on the road")
 VERGE_M = 1.0 + 0.5 * heightmap.SQUARE     # (1.5 m at 1 m squares, 2 m at 2 m)
-VERGE_FROM = (GRASS, LAWN, DUSTY, FOREST, DRYGRASS)
+VERGE_FROM = (GRASS, LAWN, DUSTY, FOREST, DRYGRASS, WET)
 VERGE = DIRT
 AISLE_STALLS_M = 5.5        # a parking aisle's stall rows (parking.LOT_SPOT_D_M), painted with it
 PARKING_CLASSES = {"parking"}     # Overture infrastructure (transit) polygons drawn as asphalt: no grass on a lot
@@ -1199,7 +1203,7 @@ def paint_frontage_pads(idx, lat, lon, pads, material=ASPHALT):
         hit = polygon.contains_points(xy, np.c_[x.ravel(), y.ravel()])
         y, x = y.ravel()[hit], x.ravel()[hit]
         if material == GRASS:
-            keep = np.isin(out[y, x], (DIRT, LAWN, DUSTY, FOREST, DRYGRASS, CROP))
+            keep = np.isin(out[y, x], (DIRT, LAWN, DUSTY, FOREST, DRYGRASS, CROP, WET))
             y, x = y[keep], x[keep]
         out[y, x] = material
     return out
@@ -1538,7 +1542,7 @@ def used_materials(idx):
 # pair one ground model), then folds its least used land-cover layers whatever their size: a visible but rare loss,
 # against a 250-560 ms swap with ten materials (in-game probes 2026-10-18). BNE_LAYER_FOLD=off: every layer kept.
 FOLD_ON = os.environ.get("BNE_LAYER_FOLD", "on").lower() not in ("off", "0", "false", "no")
-FOLD_FROM = (GRASS, LAWN, DUSTY, ROCK, SNOW, FOREST, DRYGRASS, CROP, SAND)
+FOLD_FROM = (GRASS, LAWN, DUSTY, ROCK, SNOW, FOREST, DRYGRASS, CROP, SAND, WET)
 FOLD_SHARE = 0.01
 FOLD_CORE_R_M = 2.0
 FOLD_CORE_M2 = 256.0
@@ -1546,7 +1550,7 @@ LAYER_CAP = 9
 # (dropped, kept): golf greens and fairways are the same grass at another grain, fairways mown lawns, a rough long
 # grass; brick and setts both stone paving; pavers the asphalt's ground model
 LOOKALIKE = ((GOLF_GREEN, GOLF_FAIRWAY), (BRICK, COBBLE), (GOLF_FAIRWAY, LAWN), (GOLF_ROUGH, GRASS), (PAVERS, ASPHALT),
-             (DRYGRASS, GRASS), (CROP, DIRT), (FOREST, GRASS))
+             (DRYGRASS, GRASS), (CROP, DIRT), (FOREST, GRASS), (WET, MUD))
 
 
 def core_radius(square):

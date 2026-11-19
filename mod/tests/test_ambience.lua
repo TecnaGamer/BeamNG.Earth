@@ -60,6 +60,15 @@ v = amb.vote({ tile(0, 0, { 0, 0 }, 25), tile(256, 0, { 2, 0 }, 30) }, 0, 0, { 0
 T.check(v[1] == 0, 'the current set stays while the other has less than SWITCH times its items')
 v = amb.vote({ tile(0, 0, { 1, 0 }, 0), tile(5000, 0, { 2, 0 }, 99) }, 0, 0, nil)
 T.check(v[1] == 1, 'a tile without trees still gives its set; far tiles do not vote')
+-- the ground cover's climate (groundcover.lua): every tile one vote, by its Koppen class (biome[3])
+local cl = amb.voteClimate({ tile(0, 0, { 0, 0, 15 }, 90), tile(256, 0, { 1, 0, 8 }, 0), tile(0, 256, { 1, 0, 8 }, 0) },
+  0, 0, nil)
+T.check(cl[3] == 8, 'climate: the most tiles win, trees or not')
+cl = amb.voteClimate({ tile(0, 0, { 0, 0, 15 }, 0), tile(-256, 0, { 0, 0, 15 }, 0), tile(256, 0, { 1, 0, 8 }, 0),
+  tile(0, 256, { 1, 0, 8 }, 0) }, 0, 0, { 0, 0, 15 })
+T.check(cl[3] == 15, 'climate: the current one stays below SWITCH times its tiles')
+cl = amb.voteClimate({ tile(0, 0, { 2, 1 }, 0) }, 0, 0, nil)
+T.check(cl[1] == 2 and cl[3] == nil, 'climate: a tile from before the class by its set')
 
 -- a tile's nodes as the cloud round the listener
 amb.onTile(1, '0_0', { biome = { 0, 1 }, audio = { 10, 20, 5, 6, 0.5, 30, 200, 200, 5, 3, 0, 4, 2000, 0, 0, 1, 1, 1 } })

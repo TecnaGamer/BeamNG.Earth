@@ -77,6 +77,7 @@ local applied = {}      -- material name -> the amount applied
 local lastCheck = -math.huge
 
 function M.setMode(m) mode = m end
+function M.getMode() return mode end     -- (groundcover.lua: the grass's season)
 
 -- Pure: the tint of a species {tint, days, winter} on day doy at lat for mode: the strongest of its fall (its own
 -- timing, eased), winter and spring tints, as {r, g, b} multipliers and that amount.

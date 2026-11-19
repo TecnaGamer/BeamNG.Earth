@@ -41,7 +41,7 @@ import staging
 
 log = logging.getLogger("earthd.vegetation")
 
-VERSION = 46          # (the cached cells hold their groups: 14 for the regional rules of GitHub #110; 16: the roads'
+VERSION = 48          # (the cached cells hold their groups: 14 for the regional rules of GitHub #110; 16: the roads'
                       # drawn widths and sidewalks kept clear; 17: BC's lidar canopy heights, mapdata's canopy layer 2;
                       # 18: the rounded junction corners kept clear, roadcorners.py; 19: one tree per flat crown,
                       # thin_tops; 20: none on or beside a bridge deck, _mask_decks; 21: orchard rows, canopy trees
@@ -87,6 +87,8 @@ VERSION = 46          # (the cached cells hold their groups: 14 for the regional
                       # 44: North America's generic conifers spruces and pines (NA_SPRUCE_LAT)
                       # 45: the tropics' shores' coconut palms (coast_palms); the thickets no-collide
                       # 46: the Mediterranean coasts under a mountain ecoregion (eco_med, MED_FRINGE_*)
+                      # 47: a tile's biome carries its Koppen class (the ground cover's grasses by climate)
+                      # 48: the tropics' remote floor half dead wood (G_DEADWOOD_TROPICAL, THICKET_SHARE)
 TREE_MIN_M = 3.0
 # The canopy raster, the scatter grids and the crown radii are in Web Mercator units (EPSG:3857: a metre there is
 # cos(lat) metres on the ground) and were tuned by eye at mid latitudes. Past them the same pixel counts covered less
@@ -117,7 +119,9 @@ GROUPS = ("deciduous", "conifer", "shrub", "rock", "pine_west", "palm", "juniper
           "tropical_open", "conifer_open", "spruce_open", "pine_eu_open", "redwood", "tro_understory",
           "desert_shrub_hot",
           # (35: the world's own, species_groups' biome rules)
-          "savanna", "laurel", "pine_maritime")
+          "savanna", "laurel", "pine_maritime",
+          # (48: the tropics' dead wood: Jungle Rock Island's fallen fronds and branches, its fallen giant)
+          "deadwood_tropical")
 (G_DECIDUOUS, G_CONIFER, G_SHRUB, G_ROCK, G_PINE_WEST, G_PALM, G_JUNIPER, G_DESERT_SHRUB, G_DESERT_ROCK,
  G_OAK_WEST, G_TROPICAL, G_MEDITERRANEAN, G_CONIFER_CLUMP, G_DECIDUOUS_CLUMP, G_OAK_WEST_CLUMP,
  G_MEDITERRANEAN_CLUMP, G_VINE, G_STRAW_N, G_STRAW_S, G_SILAGE_N, G_SILAGE_S, G_EUCALYPTUS, G_EUCALYPTUS_CLUMP,
@@ -125,7 +129,7 @@ GROUPS = ("deciduous", "conifer", "shrub", "rock", "pine_west", "palm", "juniper
  G_BIRCH_CLUMP, G_OAK_CLUMP, G_BEECH_CLUMP, G_MAQUIS, G_SHRUB_NORTH, G_SHRUB_TROPICAL, G_FERN, G_DEADWOOD,
  G_TRO_THICKET, G_DECIDUOUS_OPEN, G_OAK_OPEN, G_BIRCH_OPEN, G_BEECH_OPEN, G_PINE_WEST_OPEN, G_MEDITERRANEAN_OPEN,
  G_TROPICAL_OPEN, G_CONIFER_OPEN, G_SPRUCE_OPEN, G_PINE_EU_OPEN, G_REDWOOD, G_TRO_UNDERSTORY,
- G_DESERT_SHRUB_HOT, G_SAVANNA, G_LAUREL, G_PINE_MARITIME) = range(58)
+ G_DESERT_SHRUB_HOT, G_SAVANNA, G_LAUREL, G_PINE_MARITIME, G_DEADWOOD_TROPICAL) = range(59)
 # Far clumps (GitHub #1074, "trees cost too much"; the asset survey 2026-11-10): a forest's canopy trees gathered on a
 # world-fixed grid of about CLUMP_CELL_M squares (a whole number of them a geotile: none straddles two); a square with
 # CLUMP_MIN of them gets one item of a stock clump shape (trees.lua's *_clump groups: East Coast USA's
@@ -1091,6 +1095,10 @@ DEADWOOD_BUILT_M = 150.0
 DEADWOOD_H = (1.0, 3.0)     # m: a dead-wood item's height drawn in this range (the shapes' 1.0-3.0 m, M.pick's)
 DEADWOOD_MAX_SLOPE = 0.12   # rise over run (7 degrees)
 THICKET_H = (5.5, 7.5)
+# (48) the tropics' remote floor: this share of its items the vine thicket, the rest dead wood (fallen palm fronds and
+# branches, now and then a fallen giant: Jungle Rock Island's, unused before; the user, 2026-11-19: "use as many of the
+# available assets as possible"), DEADWOOD_H tall as the temperate dead wood
+THICKET_SHARE = 0.5
 # Trees in the open (OPEN_ROAD_M from a road's edge, or on built-up land): no forest-interior shapes there (the
 # forest trees and fillers by their names, *_forest*, *filler*: tall, thin, sparse; East Coast USA's mossy oaks,
 # tree_oak_large_*: moss on a trunk by an asphalt road, the user's test 2026-11-16, and a veteran's huge gnarled
@@ -1604,11 +1612,13 @@ class Vegetation:
         GI, GJ, lon, lat, k = GI[keep], GJ[keep], lon[keep], lat[keep], k[keep]
         n = len(lon)
         tro = np.isin(k, K_RAINFOREST + K_SAVANNA) & (np.abs(lat) < 23.5)
-        lo_h = np.where(tro, THICKET_H[0], DEADWOOD_H[0])
-        hi_h = np.where(tro, THICKET_H[1], DEADWOOD_H[1])
+        thicket = tro & (_hash01(GI, GJ, 88) < THICKET_SHARE)
+        lo_h = np.where(thicket, THICKET_H[0], DEADWOOD_H[0])
+        hi_h = np.where(thicket, THICKET_H[1], DEADWOOD_H[1])
         h = (lo_h + (hi_h - lo_h) * _hash01(GI, GJ, 84)).astype(np.float32)
-        return Items(lon, lat, h, np.where(tro, 0.6 * h, 1.5 * h).astype(np.float32), np.full(n, KIND_BUSH, np.uint8),
-                     np.where(tro, G_TRO_THICKET, G_DEADWOOD).astype(np.uint8), _hash01(GI, GJ, 85).astype(np.float32),
+        group = np.where(thicket, G_TRO_THICKET, np.where(tro, G_DEADWOOD_TROPICAL, G_DEADWOOD))
+        return Items(lon, lat, h, np.where(thicket, 0.6 * h, 1.5 * h).astype(np.float32), np.full(n, KIND_BUSH, np.uint8),
+                     group.astype(np.uint8), _hash01(GI, GJ, 85).astype(np.float32),
                      (_hash01(GI, GJ, 86) * 360.0).astype(np.float32),
                      (0.85 + 0.3 * _hash01(GI, GJ, 87)).astype(np.float32))
 
@@ -2512,13 +2522,14 @@ class JsonRows(str):
 AUDIO_CELL_M = 256.0 / 12
 AUDIO_H_MID = 15.0
 AUDIO_H_LARGE = 19.0
-AUDIO_SOUND = [g for g in range(len(GROUPS)) if g not in (G_ROCK, G_DESERT_ROCK, G_VINE, G_DEADWOOD)
+AUDIO_SOUND = [g for g in range(len(GROUPS)) if g not in (G_ROCK, G_DESERT_ROCK, G_VINE, G_DEADWOOD, G_DEADWOOD_TROPICAL)
                + CLUMP_GROUPS + BALE_GROUPS]
 
 
 def _ambience(group, e, n, z, height, lat, lon):
     """(audio, biome) of a tile's items: audio its sound nodes as one flat list of [x, y, z, depth, size, count] rows
-    (earthfast.audio_nodes), biome its ambience set and variant (earthfast.audio_biome)."""
+    (earthfast.audio_nodes), biome its ambience set and variant (earthfast.audio_biome) and the Koppen class at the
+    tile (climate.koppen_at: the ground cover's climate)."""
     fast.require(80, "audio_nodes")
     f64 = lambda a: np.ascontiguousarray(a, np.float64)     # noqa: E731
     g = np.ascontiguousarray(group, np.uint8)
@@ -2527,9 +2538,10 @@ def _ambience(group, e, n, z, height, lat, lon):
     nodes[:, :4] = np.round(nodes[:, :4], 1)
     nodes[:, 4] = np.round(nodes[:, 4], 2)
     import climate
-    biome = fast._ef.audio_biome(g, float(lat), float(lon), [G_DESERT_SHRUB, G_DESERT_ROCK, G_JUNIPER],
-                                 climate.koppen_at(float(lat), float(lon)))
-    return nodes.ravel().tolist(), list(biome)
+    k = int(climate.koppen_at(float(lat), float(lon)))
+    biome = fast._ef.audio_biome(g, float(lat), float(lon), [G_DESERT_SHRUB, G_DESERT_ROCK, G_JUNIPER], k)
+    # (47) the tile's Koppen class third: the mod's ground cover picks its grasses and flowers by it (groundcover.lua)
+    return nodes.ravel().tolist(), list(biome) + [k]
 
 
 def _no_items(as_json, lat, lon):

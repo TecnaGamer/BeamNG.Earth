@@ -181,6 +181,7 @@ local JRI = '/levels/jungle_rock_island/art/shapes/'
 local HIR = '/levels/hirochi_raceway/art/shapes/'
 local IT = '/levels/italy/art/shapes/'
 local ATT = '/levels/automation_test_track/art/shapes/'
+local SIR = '/levels/small_island/art/shapes/rocks/groundcover_rocks/'
 -- the stock shapes per group with their measured heights (m; TSStatic world boxes, 2026-10-13/14)
 M.CATALOG = {
   -- rock faces along rural road cuts (server roads.cliff_rows: Italy's rock-face kit, as its own cut slopes are made)
@@ -238,6 +239,8 @@ M.CATALOG = {
     { ECA .. 'rocks/eca_rock_small', 0.6 }, { ECA .. 'rocks/rock_01_a_large_a', 0.7 }, { ECA .. 'rocks/eca_rock_small_2', 0.9 },
     { ECA .. 'rocks/eca_rock_medium_1', 1.5 }, { ECA .. 'rocks/eca_rock_medium_2', 1.6 }, { ECA .. 'rocks/eca_rock_big_narrow', 1.9 },
     { ECA .. 'rocks/eca_rock_big_wide', 1.9 },
+    -- (the asset survey 2026-11-19, heights from the shapes' bounds) Small Island's small stones
+    { SIR .. 'GC_rock_01_a_small_a', 0.18 }, { SIR .. 'GC_rock_boulder_01', 0.25 }, { SIR .. 'GC_rock_boulder_02', 0.27 },
   },
   pine_west = {
     { WCA .. 'trees/trees_conifer/pine_radiata_small', 8.6 }, { WCA .. 'trees/trees_conifer/pine_radiata_forest', 13.3 },
@@ -284,11 +287,19 @@ M.CATALOG = {
     -- Juniper_bush_small_dry_03: its Juniper_bark material is in no level)
     { UT .. 'groundcover/s_gc_dead_bush_02', 0.71 }, { JV .. 'groundcover/s_gc_jv_dry_bush_04', 1.06 },
     { UT .. 'trees/Juniper/Juniper_bush_small_dry_02', 2.15 },
+    -- (the asset survey 2026-11-19: the rest of Utah's and Johnson Valley's low dry bushes; not Juniper_dead_branch_01:
+    -- its Juniper_bark material is in no level)
+    { UT .. 'groundcover/s_gc_dead_bush_01', 0.37 }, { UT .. 'groundcover/s_gc_utah_grey_bush_02', 0.71 },
+    { JV .. 'groundcover/s_gc_jv_dry_bush_02', 0.71 }, { UT .. 'groundcover/s_gc_dry_plant_03', 0.99 },
+    { UT .. 'groundcover/s_gc_utah_grey_bush_04', 1.06 },
   },
   desert_rock = {
     { UT .. 'rocks/rock_01_a_small_a', 0.3 }, { UT .. 'rocks/utah_rock_flat_a', 0.5 }, { UT .. 'rocks/utah_boulder_5', 0.6 },
     { JV .. 'rocks/s_rocks_desert_small_01', 0.9 }, { JV .. 'rocks/s_rocks_desert_medium_03', 1.4 },
     { UT .. 'rocks/utah_boulder_3', 1.7 }, { UT .. 'rocks/utah_boulder_1', 1.9 }, { JV .. 'rocks/s_rocks_desert_medium_01', 2.1 },
+    -- (the asset survey 2026-11-19) Utah's pebble scatters and Small Island's stones
+    { UT .. 'groundcover/pebbles/s_cg_pebble_01', 0.13 }, { SIR .. 'GC_rock_boulder_01', 0.25 },
+    { UT .. 'groundcover/pebbles/s_cg_pebble_05', 0.45 }, { UT .. 'groundcover/pebbles/s_cg_pebble_03', 0.7 },
   },
   door = {     -- the stock Building Architect kit (art_shapes.zip; global materials)
     { '/art/shapes/common/building_architect_modules/doors/R_HS_A_DR_01_100x210', 2.2 },
@@ -379,6 +390,7 @@ M.CATALOG = {
     { IT .. 'trees/trees_italy/maritime_pine_bush', 5.05 },
     { IT .. 'trees/trees_italy/scraggly_2', 8.52 }, { IT .. 'trees/trees_italy/scraggly', 9.55 },
     { IT .. 'trees/trees_italy/cork_oak_filler_small', 10.1 }, { IT .. 'trees/trees_italy/scraggly_tree_filler_1', 10.7 },
+    { IT .. 'trees/trees_italy/cork_oak_filler_large', 13.42 },     -- (the asset survey 2026-11-19; a filler: forest only)
   },
   -- (35) the world's own groups (server vegetation._world_groups), from shapes already in MATERIALS' folders:
   -- the savannas' and the dry country's acacias: Johnson Valley's mesquite / acacia bush, Italy's feathery scraggly
@@ -502,6 +514,8 @@ M.CATALOG = {
     { UT .. 'trees/Juniper/Juniper_bush_small_01', 1.2 }, { IT .. 'trees/trees_italy/generibush', 1.83 },
     { UT .. 'trees/Juniper/Juniper_bush_medium_01', 2.4 }, { IT .. 'trees/trees_italy/fluffy_bush', 2.47 },
     { IT .. 'trees/trees_italy/cork_oak_bush_medium', 3.04 }, { IT .. 'trees/trees_italy/scraggly_bush', 3.8 },
+    -- (the asset survey 2026-11-19) the tall maquis: Italy's large cork oak bush and its tall-plant bush
+    { IT .. 'trees/trees_italy/cork_oak_bush_large', 5.7 }, { IT .. 'trees/trees_italy/tall_plant_bush', 5.93 },
   },
   -- the north's and the mountains' tops: birch / willow scrub (the birch-barked aspen bushes), spruce saplings, junipers
   shrub_north = {
@@ -521,10 +535,25 @@ M.CATALOG = {
     { JRI .. 'trees/tropical_wide_leaves/tropical_plant_02_a', 2.77 }, { JRI .. 'trees/trees_palm/palm_tiny', 3.0 },
     { JRI .. 'trees/tropical_wide_leaves/tropical_plant_03_e', 3.19 }, { JRI .. 'trees/tropical_wide_leaves/tropical_plant_03_a', 3.33 },
     { JRI .. 'trees/tropical_wide_leaves/tropical_plant_01_b', 3.64 },
+    -- (the asset survey 2026-11-19) the other wide-leaved plants, and the low vine bushes for the smallest
+    { JRI .. 'trees/vines/vine_bush_small', 0.55 }, { JRI .. 'trees/vines/vine_bush_wide', 0.92 },
+    { JRI .. 'trees/vines/vine_bush_large', 1.25 }, { JRI .. 'trees/tropical_wide_leaves/tropical_plant_03_b', 2.5 },
+    { JRI .. 'trees/tropical_wide_leaves/tropical_plant_02_b', 3.2 }, { JRI .. 'trees/tropical_wide_leaves/tropical_plant_03_d', 4.48 },
+    { JRI .. 'trees/tropical_wide_leaves/tropical_plant_01_a', 5.99 }, { JRI .. 'trees/tropical_wide_leaves/tropical_plant_03_c', 6.21 },
+    { JRI .. 'trees/tropical_wide_leaves/tropical_plant_01_c', 6.41 },
   },
   -- the tropics' vine-draped thicket (a 9 m dome of aerial roots, 6.6 m high), only in remote forest on level ground
   -- (server vegetation._remote_floor: it stood by a road like a hut, the user's test 2026-11-16)
   tro_thicket = { { JRI .. 'trees/bush_tropical_2/tro_bush_2_small', 6.6 } },
+  -- (48) the tropics' dead wood (server vegetation.THICKET_SHARE): Jungle Rock Island's fallen palm fronds and branches,
+  -- its fallen giant (34 m long); heights given in dead wood's 1-3 m so each draws at about its own size (as deadwood's)
+  deadwood_tropical = {
+    { JRI .. 'trees/trees_palm/deadpalm_03', 1.0 }, { JRI .. 'trees/trees_palm/deadpalm_02', 1.25 },
+    { JRI .. 'trees/trees_palm/deadpalm_01', 1.5 }, { JRI .. 'trees/vines/vine_ground_large', 1.75 },
+    { JRI .. 'trees/trees_tropical_2/deadbranch_02', 2.0 }, { JRI .. 'trees/trees_tropical_2/deadbranch_04', 2.25 },
+    { JRI .. 'trees/trees_tropical_2/deadbranch_03', 2.5 }, { JRI .. 'trees/trees_tropical_2/deadbranch_01', 2.75 },
+    { JRI .. 'trees/trees_tropical_1/tro_tree_1_fallen', 2.95 },
+  },
   -- dead wood on the forest floor: a stump, fallen branches, fallen beeches (East Coast USA's)
   deadwood = {
     { ECA .. 'trees/trees_douglasfir/tree_douglasfir_chopped', 1.0 }, { ECA .. 'trees/trees_douglasfir/fir_dead_branches', 1.51 },
@@ -542,6 +571,7 @@ M.CATALOG = {
     { JRI .. 'trees/trees_tropical_1/tro_tree_1_filler', 33.0 },
     -- (the stock survey 2026-11-15; not tro_tree_2_large: it ships no imposter) the gaps between 6 and 20 m
     { JRI .. 'trees/bush_tropical_2/tro_bush_2_tiny', 5.19 }, { JRI .. 'trees/trees_tropical_2/tro_tree_2_tiny', 6.13 },
+    { JRI .. 'trees/bush_tropical_2/tro_bush_2_tiny_b', 6.45 },     -- (the asset survey 2026-11-19)
     { JRI .. 'trees/trees_tropical_2/tro_tree_2_medium', 18.53 }, { JRI .. 'trees/trees_tropical_1/tro_tree_1_filler_02', 29.62 },
     { JRI .. 'trees/trees_tropical_2/tro_tree_2_tall', 32.28 },
     -- (the stock survey 2026-11-16) the island's wide-crowned fillers and its second tall tree (not tro_tree_2_filler_04:
@@ -745,6 +775,7 @@ for _, g in ipairs({ 'maquis', 'shrub_north', 'shrub_tropical', 'tro_understory'
   M.GROUP_MAX_M[g] = 250; M.NO_COLLIDE[g] = true
 end
 M.GROUP_MAX_M.deadwood = 200; M.NO_COLLIDE.deadwood = true     -- (on the forest floor, as the ferns)
+M.GROUP_MAX_M.deadwood_tropical = 200; M.NO_COLLIDE.deadwood_tropical = true
 M.GROUP_MAX_M.tro_thicket = 250; M.NO_COLLIDE.tro_thicket = true     -- (44: the tropics' tangled thickets, as the shrubs)
 -- (34) the hot deserts' bushes: desert_shrub without Utah's junipers (cold deserts' and mountains': the Great Basin,
 -- Central Asia, Iran), server vegetation.shrub_groups for BWh / BSh; the gallery 2026-11-17
@@ -837,6 +868,9 @@ local MATERIALS = {
   JRI .. 'trees/trees_tropical_2', JRI .. 'trees/bush_tropical_1', JRI .. 'trees/bush_tropical_2', JRI .. 'trees',
   JRI .. 'trees/vines_tropical',     -- tro_tree_1's vines and aerial roots (tro_vines_2d; orange without it)
   JRI .. 'trees/tropical_wide_leaves',     -- shrub_tropical's wide-leaved plants (tropical_wide_leaves, tropical_stem)
+  JRI .. 'trees/vines',     -- the understory's vine bushes, the dead wood's ground vines (vine_leaves)
+  UT .. 'groundcover/pebbles',     -- the desert rocks' pebble scatters (m_gc_pebbles)
+  SIR,     -- Small Island's ground-cover stones (GC_utah_rocks_b)
   IT .. 'trees/trees_italy', IT .. 'trees', IT .. 'rocks', '/levels/automation_test_track/art/shapes/objects',
   ATT .. 'trees', ATT .. 'trees/trees_poplar', ATT .. 'trees/trees_shrub',     -- riverside poplars, creosote bushes
   '/levels/automation_test_track/art/shapes/buildings',     -- the utility pole's wood_trim / painted metal
@@ -1157,7 +1191,7 @@ local BUSHES = { shrub = true, maquis = true, shrub_north = true, shrub_tropical
   fern = true, desert_shrub = true, desert_shrub_hot = true, creosote = true }
 function M.lean(group, rank)
   local maxDeg = CONIFERS[group] and M.LEAN_DEG_CONIFER or BUSHES[group] and M.LEAN_DEG_BUSH or M.LEAN_DEG
-  if group == 'deadwood' then return 0, 0 end      -- (lying on the ground already)
+  if group == 'deadwood' or group == 'deadwood_tropical' then return 0, 0 end      -- (lying on the ground already)
   local u = frac(rank * 48611.27)
   local a = math.rad(maxDeg * u * u)
   local dir = 2 * math.pi * frac(rank * 70001.913)
