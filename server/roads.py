@@ -9255,9 +9255,9 @@ class BridgeProfiles:
         return len(v[1]) if n is None else n
 
     def shape_of(self, k):
-        """Part k's shape (roadshape.shape_chain's record, riding on its published line) or None."""
-        with self.lock:
-            v = self.done.get(k)
+        """Part k's shape (roadshape.shape_chain's record, riding on its published line) or None. Read through _take,
+        so a part published from a short solve makes the caller's build short too (test_chain_short)."""
+        v = self._take(k)
         return getattr(v[1], "shape_rec", None) if v is not None else None
 
     def _deck_simple(self, k, pool):
