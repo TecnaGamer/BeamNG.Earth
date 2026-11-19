@@ -1633,6 +1633,12 @@ class Mesh(_BldMesh):
     def arrays(self):
         return self.arrays_scaled(_OWN_UV_SCALE)
 
+    def poly(self, pts3, uv, mat):
+        xy = np.asarray(pts3)
+        if xy.dtype != np.float64:      # (the winding from the area in the points' own dtype, as numpy summed it: a
+            return super().poly(np.asarray(xy, np.float64), uv, mat, bool(_area2(xy[:, :2]) < 0))  # float32 ring's
+        return super().poly(xy, uv, mat)                                # area can be 0 where float64's is not)
+
 
 # A sash window cut from the plaster sheet (band 2, bay 0, its sill included): u, v ranges (Collada v up)
 WIN_UV = (53 / 1024, 154 / 1024, 1.0 - (512 + 238) / 1024, 1.0 - (512 + 45) / 1024)

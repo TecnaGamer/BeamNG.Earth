@@ -73,6 +73,9 @@ fn rows<const N: usize>(o: &Bound<'_, PyAny>) -> PyResult<Vec<[f64; N]>> {
         return Ok(a.rows().into_iter().map(|r| std::array::from_fn(|k| r[k])).collect());
     }
     let v: Vec<Vec<f64>> = o.extract()?;
+    if v.iter().any(|r| r.len() != v[0].len()) {
+        return Err(PyValueError::new_err("rows of different lengths (numpy refused a ragged table)"));
+    }
     v.iter().map(|r| {
         if r.len() < N {
             Err(PyValueError::new_err(format!("a row of {} values, not {N} or more", r.len())))
@@ -91,6 +94,9 @@ fn flat_f64(o: &Bound<'_, PyAny>) -> PyResult<Vec<f64>> {
         return Ok(v);
     }
     let v: Vec<Vec<f64>> = o.extract()?;
+    if v.iter().any(|r| r.len() != v[0].len()) {
+        return Err(PyValueError::new_err("rows of different lengths (numpy refused a ragged table)"));
+    }
     Ok(v.into_iter().flatten().collect())
 }
 
@@ -175,11 +181,12 @@ impl BldMesh {
         self.n += 3;
     }
 
-    /// Mesh.poly: a flat polygon, ear clipped (a clockwise one reversed, its triangles turned back: its underside).
-    fn put_poly(&mut self, pts: &[[f64; 3]], uv: &[[f64; 2]], mat: Mat) {
+    /// Mesh.poly: a flat polygon, ear clipped (a clockwise one reversed, its triangles turned back: its underside);
+    /// cw: the winding when the caller measured it (points of another dtype: their area in it), else from the area.
+    fn put_poly(&mut self, pts: &[[f64; 3]], uv: &[[f64; 2]], mat: Mat, cw: Option<bool>) {
         let xy: Vec<[f64; 2]> = pts.iter().map(|p| [p[0], p[1]]).collect();
         let k = xy.len() as i64;
-        let tris: Vec<[i64; 3]> = if area2(&xy) < 0.0 {
+        let tris: Vec<[i64; 3]> = if cw.unwrap_or_else(|| area2(&xy) < 0.0) {
             let rev: Vec<(f64, f64)> = xy.iter().rev().map(|p| (p[0], p[1])).collect();
             ear_clip(&rev).into_iter().map(|[a, b, c]| [k - 1 - c, k - 1 - b, k - 1 - a]).collect()
         } else {
@@ -281,12 +288,15 @@ impl BldMesh {
         Ok(())
     }
 
-    /// A flat polygon facing up when counter-clockwise seen from above, down when clockwise (its underside).
-    fn poly(&mut self, pts3: &Bound<'_, PyAny>, uv: &Bound<'_, PyAny>, mat: &Bound<'_, PyAny>) -> PyResult<()> {
+    /// A flat polygon facing up when counter-clockwise seen from above, down when clockwise (its underside); cw: the
+    /// winding as measured by the caller (buildings.Mesh.poly: points numpy makes another dtype than float64).
+    #[pyo3(signature = (pts3, uv, mat, cw=None))]
+    fn poly(&mut self, pts3: &Bound<'_, PyAny>, uv: &Bound<'_, PyAny>, mat: &Bound<'_, PyAny>, cw: Option<bool>)
+            -> PyResult<()> {
         let pts = rows::<3>(pts3)?;
         let uvs = rows::<2>(uv)?;
         let mat = mat_of(mat)?;
-        self.put_poly(&pts, &uvs, mat);
+        self.put_poly(&pts, &uvs, mat, cw);
         Ok(())
     }
 
@@ -458,7 +468,7 @@ pub fn bld_lid(m: &Bound<'_, BldMesh>, ring: PyReadonlyArray2<'_, f64>, z: f64, 
         Some(s) => r.iter().map(|p| [p[0] / s, p[1] / s]).collect(),
         None => vec![[0.002, 0.995]; r.len()],
     };
-    m.borrow_mut().put_poly(&pts, &uv, mat);
+    m.borrow_mut().put_poly(&pts, &uv, mat, None);
     Ok(())
 }
 

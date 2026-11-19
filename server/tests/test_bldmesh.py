@@ -14,6 +14,7 @@ import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 import buildings as bld  # noqa: E402
+import dmath  # noqa: E402  (the fixture's trigonometry: the same bytes on every platform)
 
 ROOFS = ["flat", "gabled", "hipped", "half-hipped", "pyramidal", "mansard", "gambrel", "round", "skillion", "saltbox"]
 
@@ -22,7 +23,7 @@ def _ring(r):
     kind = r.random()
     if kind < 0.5:
         w, h, a = r.uniform(3, 40), r.uniform(3, 30), r.uniform(0, math.pi)
-        c, s = math.cos(a), math.sin(a)
+        c, s = dmath.cos(a), dmath.sin(a)
         pts = [(x * c - y * s, x * s + y * c) for x, y in ((-w / 2, -h / 2), (w / 2, -h / 2), (w / 2, h / 2),
                                                              (-w / 2, h / 2))]
     elif kind < 0.8:
@@ -30,7 +31,7 @@ def _ring(r):
         pts = []
         for k in range(n):
             t, q = 2 * math.pi * k / n, base * r.uniform(0.6, 1.0)
-            pts.append((q * math.cos(t), q * math.sin(t)))
+            pts.append((q * dmath.cos(t), q * dmath.sin(t)))
     else:
         a, b = r.uniform(6, 30), r.uniform(6, 30)
         pts = [(0, 0), (a, 0), (a, b / 2), (a / 2, b / 2), (a / 2, b), (0, b)]
@@ -81,7 +82,7 @@ def digest(b):
 
 
 # try598 (627722d5)'s Python buildings.py on this digest()
-DIGEST = "ab66cef4f0327b133d652cfe79afad6c20576c15c8839681dde6150152c9a6d0"
+DIGEST = "09454b3b7c9438ea061efd7037226bc2ff3d3b51ef3cfda795afaefa22ccf82d"
 
 
 class BldMeshTest(unittest.TestCase):
@@ -103,6 +104,15 @@ class BldMeshTest(unittest.TestCase):
                          ((11, 3), (11, 2), (5, 3), (5,), (11, 4), np.uint8))
         with self.assertRaises(TypeError):
             m.quads(np.zeros(12), np.zeros(8), np.array([1]), [tok, None])
+        # a clockwise float32 square far out: its area in float32 (numpy's sums, as the Python took it) is 0, so it is
+        # not turned and the ear clipping finds no triangle (Codex r2a19 round 2); ragged rows are refused as numpy did
+        m2 = bld.Mesh()
+        sq = np.array([(4096, 4096, 0), (4096, 4097, 0), (4097, 4097, 0), (4097, 4096, 0)], np.float32)
+        m2.poly(sq, [(0, 0)] * 4, tok)
+        self.assertEqual((m2.n, m2.T, m2.P[:3]), (4, [], [4096.0, 4096.0, 0.0]))
+        with self.assertRaises(ValueError):
+            m2.tris([[0, 0, 0], [1, 1, 1, 2, 2, 2]], np.zeros((3, 2)), tok)
+        self.assertEqual(m2.n, 4)
 
 
 if __name__ == "__main__":
