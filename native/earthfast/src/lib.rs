@@ -2140,6 +2140,19 @@ fn batter_apply_vw<'py>(py: Python<'py>, px: PyReadonlyArray1<'py, f64>, pyy: Py
     Ok((v.into_pyarray(py), w.into_pyarray(py)))
 }
 
+/// batter_apply_vw's heights with today's g0 (batter::combine: v + w (g0 - v), g0 alone at w 1; the same compiled
+/// arithmetic as batter_apply's, NaN bits too).
+#[pyfunction]
+fn batter_combine<'py>(py: Python<'py>, v: PyReadonlyArray1<'py, f64>, w: PyReadonlyArray1<'py, f64>,
+                       g0: PyReadonlyArray1<'py, f64>) -> PyResult<Bound<'py, PyArray1<f64>>> {
+    let (v, w, g0) = (v.as_array(), w.as_array(), g0.as_array());
+    if w.len() != v.len() || g0.len() != v.len() {
+        return Err(pyo3::exceptions::PyValueError::new_err("batter_combine: the arrays disagree"));
+    }
+    let out: Vec<f64> = (0..v.len()).map(|i| batter::combine(v[i], w[i], g0[i])).collect();
+    Ok(out.into_pyarray(py))
+}
+
 /// roads.tunnel_sections: a tunnel's road level and its sections from the ground over it, sampled at arc lengths s.
 /// The floor: the lower convex hull of (s, g) (the road's level under the covered parts, the ground where it lies
 /// open). Each run of samples with cover (g - floor) of at least open_cover is one section: kind 2 (a full tunnel)
@@ -6905,8 +6918,10 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // walls_rays32 for the buildings beside them; grading BNE_BATTER, road revamp v2 P1a). 495 and 496 are other
     // branches'
     m.add_function(wrap_pyfunction!(batter_apply_vw, m)?)?;
-    // 503: batter_apply_vw (the vanilla slopes' heights and today's weight apart: today's grading made only where its
-    // weight is not 0; each bin's segments met nearest first, so a point in a core stops within its first pairs).
+    m.add_function(wrap_pyfunction!(batter_combine, m)?)?;
+    // 503: batter_apply_vw, batter_combine (the vanilla slopes' heights and today's weight apart: today's grading made
+    // only where its weight is not 0; each bin's segments met nearest first, so a point in a core stops within its
+    // first pairs).
     // 498-502 are other branches'
     m.add("VERSION", 503)?;
     Ok(())

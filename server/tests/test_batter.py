@@ -289,13 +289,29 @@ class Batter(unittest.TestCase):
             np.testing.assert_array_equal(g, got[0])
         # and the same as batter_apply (today's everywhere, then the corridors): today's is made only where it weighs
         f64 = np.float64
-        g0 = grading._grade_points_today(px, py, base, pack, 0.0, base.copy())
         prm = (grading.BATTER_L0_M, grading.BATTER_CREST_M, grading.BATTER_STRIP_LO, grading.BATTER_STRIP_UP,
                grading.BATTER_CLOSE_T, grading.BATTER_CLOSE_K, grading.BATTER_SMOOTH_K, grading.BATTER_CORE_BLEND_M,
                grading.T_MAX, grading.BATTER_OLD_FADE_M, 0.0, grading.BATTER_BIN_M)
-        ref = EF.batter_apply(px, py, base, np.ascontiguousarray(g0, f64), pack.a, pack.b, pack.za, pack.zb, pack.h,
-                              pack.rh, pack.ba, pack.bb, *pack.bt, tuple(float(v) for v in prm))
-        np.testing.assert_array_equal(np.asarray(ref).view(np.uint64), got[0])
+        prm = tuple(float(v) for v in prm)
+
+        def ref(qx, qy, qb):
+            g0 = grading._grade_points_today(qx, qy, qb, pack, 0.0, qb.copy())
+            return np.asarray(EF.batter_apply(qx, qy, qb, np.ascontiguousarray(g0, f64), pack.a, pack.b, pack.za,
+                                              pack.zb, pack.h, pack.rh, pack.ba, pack.bb, *pack.bt, prm))
+        np.testing.assert_array_equal(ref(px, py, base).view(np.uint64), got[0])
+        # small calls (a few points round a road, a ground not read at some, the plans chosen by the call's box: the
+        # points where today's weighs span less of it)
+        for _ in range(300):
+            c = rng.uniform(0, 400, 2)
+            q = rng.integers(0, 2, 1)[0]
+            k = int(rng.integers(2, 40))
+            qx, qy = c[0] + rng.uniform(-30, 30, k), c[1] + rng.uniform(-30, 30, k)
+            if q:
+                qx[0], qy[0] = c[0] + 60.0, c[1] - 45.0        # (one far point widening the call's box)
+            qb = ground(qx, qy) + rng.normal(0, 0.5, k)
+            qb[rng.random(k) < 0.3] = np.nan
+            np.testing.assert_array_equal(grading.grade_points(qx, qy, qb, pack).view(np.uint64),
+                                          ref(qx, qy, qb).view(np.uint64))
 
     def test_memo_reads_each_segment_once(self):
         # the planner's memo of each segment's reads: the same params as reading them all, and a second plan set
@@ -310,7 +326,7 @@ class Batter(unittest.TestCase):
 
         def rays(org, dirs, reach):
             return np.where(np.asarray(org)[:, 0] > 150.0, 25.0, np.inf)
-        memo = grading.BatterMemo()
+        memo = grading.BatterMemo._View(grading.BatterMemo(), 7)      # (a store of its own, one planner's view)
         for sub in (plans[:25], plans[10:]):
             pack = grading.PlanPack(sub)
             want = grading.batter_params(pack, ground, rays)

@@ -26,6 +26,7 @@ GradedDem(dem, grader) is a drop-in for dem.Dem where only sample() is graded; u
 and the levels <= 0 tiles only (coarser tiles sink under the block and cover far more ground).
 """
 from runtimeprofiler import step as profile_step
+import itertools
 import logging
 import math
 import os
@@ -6947,7 +6948,8 @@ class _Planner:
         # neighbouring tiles share most of their segments, ~0.4 s each at Fells Point; kept only from a read with no
         # fault, BatterMemo)
         with self.lock:
-            memo = self.__dict__.setdefault("_batter_memo", BatterMemo())
+            token = self.__dict__.setdefault("_batter_token", next(_BATTER_TOKENS))
+        memo = BatterMemo.of(token)
         staged = []
         try:
             pack.bt = batter_params(pack, elev_xy, rays, memo, staged)
@@ -8013,26 +8015,66 @@ def grade_points(px, py, base, plans, lift=0.0):
     out = np.array(v, f64)
     sub = np.flatnonzero(w > 0.0)
     if len(sub):
-        g0 = _grade_points_today(px[sub], py[sub], base[sub], pack, lift, base[sub].copy())
-        ws, vs = w[sub], v[sub]
-        # (batter::combine: v + w (g0 - v), today's alone at 1)
-        out[sub] = np.where(ws >= 1.0, g0, vs + ws * (g0 - vs))
+        # (today's over these points as over the whole call: the plans chosen by the whole call's box, and the points
+        # that make the call's bounds along (gradebins pairs segments and points by bucket squares from the bounds'
+        # corner and leaves out the segments past them; it reads the plans it is given beyond each point's reach too, a
+        # far cutting's NaN base rule): Codex review of a5814cb3)
+        box = (px.min(), py.min(), px.max(), py.max())
+        ext = [f(c) for c in (px, py) if not np.isnan(c).all() for f in (np.nanargmin, np.nanargmax)]
+        idx = np.union1d(sub, np.asarray(ext, np.int64))
+        got = _grade_points_today(px[idx], py[idx], base[idx], pack, lift, base[idx].copy(), box)
+        g0 = np.ascontiguousarray(np.asarray(got, f64)[np.searchsorted(idx, sub)])
+        # (batter::combine: v + w (g0 - v), today's alone at 1: batter_apply's own arithmetic, a NaN's bits too)
+        out[sub] = fast._ef.batter_combine(np.ascontiguousarray(v[sub]), np.ascontiguousarray(w[sub]), g0)
     return out
+
+
+_BATTER_TOKENS = itertools.count(1)       # (each planner's own: BatterMemo's rows of it)
 
 
 class BatterMemo:
     """The vanilla slopes' reads beside each segment (batter_params: the natural ground at its probes, the distance to
-    the first building each side), by the segment's a, b and h to the bit, for one planner (its frame, its ground, its
-    buildings). Kept in numpy arrays (~140 bytes a segment), the oldest let go past CAP segments; a lookup takes the
-    exact rows only (a hash's match checked against the whole key: anything else is read again)."""
-    CAP = 196608            # segments (~27 MB): a dense town's plan set holds 50-110 thousand
+    the first building each side), by the planner (its token: its frame, its ground, its buildings) and the segment's
+    a, b and h to the bit; one store for the process. Kept in numpy arrays (~150 bytes a segment), the oldest let go
+    past CAP segments, dropped whole by the worker's memory shed (budget.register_shed); a lookup takes the exact rows
+    only (a hash's match checked against the whole key: anything else is read again). BatterMemo.of(token): the view
+    a planner looks up and adds through."""
+    CAP = 196608            # segments (~30 MB): a dense town's plan set holds 50-110 thousand
+    _all = None
+    _all_lock = threading.Lock()
 
     def __init__(self):
         self.lock = threading.Lock()
-        self.keys = np.zeros((0, 5), np.uint64)
+        self.keys = np.zeros((0, 6), np.uint64)
         self.vals = np.zeros((0, 0))
         self.hs = np.zeros(0, np.uint64)        # (the keys' hashes, sorted) ...
         self.pos = np.zeros(0, np.int64)        # (... and their rows)
+
+    class _View:
+        def __init__(self, memo, token):
+            self.memo, self.token = memo, np.uint64(token)
+
+        def _k(self, keys):
+            return np.column_stack((np.full(len(keys), self.token, np.uint64), keys))
+
+        def find(self, keys):
+            return self.memo.find(self._k(keys))
+
+        def add(self, keys, vals):
+            self.memo.add(self._k(keys), vals)
+
+    @classmethod
+    def of(cls, token):
+        """The process's store as the planner of this token sees it (find / add by keys_of's rows)."""
+        with cls._all_lock:
+            if cls._all is None:
+                cls._all = cls()
+                try:
+                    import budget
+                    budget.register_shed(cls._all.clear)
+                except Exception as e:      # (no budget module: the cap alone)
+                    _caught(e)
+            return cls._View(cls._all, token)
 
     @staticmethod
     def keys_of(a, b, h):
@@ -8052,7 +8094,7 @@ class BatterMemo:
         return hv
 
     def find(self, keys):
-        """(hit (n,) bool, the hits' values (hits, w))."""
+        """(hit (n,) bool, the hits' values (hits, w)) of rows keys (n, 6: token, then keys_of's)."""
         with self.lock:
             ks, vs, hs, pos = self.keys, self.vals, self.hs, self.pos
         n = len(keys)
@@ -8065,17 +8107,25 @@ class BatterMemo:
         return hit, vs[row[hit]]
 
     def add(self, keys, vals):
-        """Remember the rows keys (n, 5) -> vals (n, w)."""
+        """Remember the rows keys (n, 6) -> vals (n, w): new arrays of the rows kept alone (no slice of a larger
+        buffer held)."""
         if not len(keys):
             return
         with self.lock:
             if self.vals.ndim != 2 or self.vals.shape[1] != vals.shape[1]:
                 self.keys, self.vals = self.keys[:0], np.zeros((0, vals.shape[1]))
-            ks = np.concatenate([self.keys, keys])[-self.CAP:]
-            vs = np.concatenate([self.vals, vals])[-self.CAP:]
+            new = min(len(keys), self.CAP)
+            old = min(len(self.keys), self.CAP - new)
+            ks = np.concatenate([self.keys[len(self.keys) - old:], keys[len(keys) - new:]])
+            vs = np.concatenate([self.vals[len(self.vals) - old:], vals[len(vals) - new:]])
             hv = self._hash(ks)
             order = np.argsort(hv, kind="stable")
             self.keys, self.vals, self.hs, self.pos = ks, vs, hv[order], order
+
+    def clear(self):
+        with self.lock:
+            self.keys, self.vals = self.keys[:0].copy(), np.zeros((0, 0))
+            self.hs, self.pos = self.hs[:0].copy(), self.pos[:0].copy()
 
 
 def batter_params(pack, elev_xy, walls_rays=None, memo=None, staged=None):
@@ -8144,12 +8194,14 @@ def _walls_rays(walls, p, d, reach):
                          float(reach)), f64)
 
 
-def _grade_points_today(px, py, base, pack, lift, out):
-    """grade_points without the vanilla slopes (gradebins.rs)."""
+def _grade_points_today(px, py, base, pack, lift, out, box=None):
+    """grade_points without the vanilla slopes (gradebins.rs). box: the (x0, y0, x1, y1) the plans are chosen by (their
+    boxes meeting it; default the points'): a call's subset graded as the whole call grades it."""
     import fast
     f64 = np.float64
+    x0, y0, x1, y1 = (px.min(), py.min(), px.max(), py.max()) if box is None else box
     if GRADE_BINNED_ON:
-        keep = pack.seg_keep(px.min(), py.min(), px.max(), py.max())
+        keep = pack.seg_keep(x0, y0, x1, y1)
         if keep is None:
             return out
         fast.require(216, "grade_points_binned")    # (gradebins.rs)
@@ -8163,7 +8215,7 @@ def _grade_points_today(px, py, base, pack, lift, out):
             float(RANK_HEIGHT_FADE_M), float(ABUT_UNDER_GRADE), np.ascontiguousarray(pack.abd, f64), keep,
             float(GRADE_BIN_M))
     # every segment of the plans near the points: ends, end heights, reach (core half width + T_MAX)
-    got = pack.near(px.min(), py.min(), px.max(), py.max())
+    got = pack.near(x0, y0, x1, y1)
     if got is None:
         return out
     A, B, ZA, ZB, H, RH, RID, RK, AB, CUT, BA, BB, ST, LK, ABD = got

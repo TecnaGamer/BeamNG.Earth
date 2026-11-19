@@ -240,7 +240,11 @@ class Lids:
             got = self._build(key)
         except Exception as e:          # (no lids this time; asked again next time, not remembered)
             import logging
+            import revisit
             logging.getLogger("earthd.tunnellids").debug("tunnel lids of %s: %s: %s", key, type(e).__name__, e)
+            # (a read short of its lids: what is made from it not kept either, as the lids: the vanilla slopes' memo
+            # of the ground beside each segment kept bare DEM heights, Codex review of a5814cb3)
+            revisit.fault(here=True)
             return 0.0, 0.0, []
         with self.lock:
             self.cells[key] = got
