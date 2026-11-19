@@ -176,7 +176,7 @@ TACTILE = ("line_white", 1.0)    # the strip for the blind along a platform's ke
 TACTILE_IN_M, TACTILE_W_M = 0.25, 0.40
 TACTILE_UP_M = 0.006            # over the slab's top (no z-fighting)
 CELL_M = 1.0                # the walkable field's lattice (a block of 2 x 2 full cells is one quad)
-MAX_VERTS = 600000
+MAX_VERTS = 600000          # (earthfast.station_zone's MAX_POINTS too)
 SDF_CHUNK = 20000
 
 

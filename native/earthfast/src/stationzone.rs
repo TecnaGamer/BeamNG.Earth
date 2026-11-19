@@ -73,6 +73,9 @@ fn blend(v: &[f64; 4], src: Src) -> f64 {
     }
 }
 
+/// The largest lattice the kernel takes (busstationmesh.MAX_VERTS, walk_field's own limit): the copies are sized by it.
+const MAX_POINTS: usize = 600_000;
+
 fn arr2<'py>(py: Python<'py>, v: Vec<f64>, cols: usize) -> PyResult<Bound<'py, PyArray2<f64>>> {
     let n = v.len() / cols;
     Ok(numpy::ndarray::Array2::from_shape_vec((n, cols), v).map_err(|e| PyValueError::new_err(e.to_string()))?
@@ -83,6 +86,11 @@ fn arr2i<'py>(py: Python<'py>, v: Vec<i64>) -> PyResult<Bound<'py, PyArray2<i64>
     let n = v.len() / 3;
     Ok(numpy::ndarray::Array2::from_shape_vec((n, 3), v).map_err(|e| PyValueError::new_err(e.to_string()))?
         .into_pyarray(py))
+}
+
+fn arrays(py: Python<'_>, o: Out) -> PyResult<ZoneArrays<'_>> {
+    Ok((arr2(py, o.p, 3)?, arr2i(py, o.t)?, arr2(py, o.wp, 3)?, arr2(py, o.wuv, 2)?, arr2i(py, o.wt)?,
+        arr2(py, o.tp, 3)?, arr2(py, o.tuv, 2)?, arr2i(py, o.tt)?))
 }
 
 #[derive(Default)]
@@ -105,7 +113,9 @@ type ZoneArrays<'py> = (Bound<'py, PyArray2<f64>>, Bound<'py, PyArray2<i64>>, Bo
 /// height at the lattice points (x0 + i, y0 + j); foot the walls' reach below the ground (SLAB_FOOT_M), kerb_rep the
 /// kerb's metres per texture repeat (KERB[1]), tac (up, in, width, metres per repeat) the tactile strip's (TACTILE_UP_M,
 /// TACTILE_IN_M, TACTILE_W_M, TACTILE[1]). Returns (P (k, 3), T (t, 3)) of the top, (P, UV, T) of the kerb walls and
-/// (P, UV, T) of the tactile strips, in the Python's order.
+/// (P, UV, T) of the tactile strips, in the Python's order. At most MAX_POINTS lattice points; a field with a non-finite
+/// distance gives no zone (walk_field's distances to finite rings are finite: a NaN is a broken station's geometry, which
+/// the Python drew as NaN vertices into the tile's mesh, their signs as the compiler's operand order left them).
 #[pyfunction]
 #[pyo3(signature = (x0, y0, f, zg, h, foot, kerb_rep, tac))]
 #[allow(clippy::too_many_arguments)]
@@ -117,13 +127,18 @@ pub fn station_zone<'py>(py: Python<'py>, x0: f64, y0: f64, f: PyReadonlyArray2<
     if za.dim() != (rows, cols) || ha.dim() != (rows, cols) {
         return Err(PyValueError::new_err("station_zone: f, zg and h (ny + 1, nx + 1) alike"));
     }
+    if rows.checked_mul(cols).is_none_or(|n| n > MAX_POINTS) {
+        return Err(PyValueError::new_err("station_zone: more lattice points than busstationmesh.MAX_VERTS"));
+    }
     // (copied out of numpy before the GIL is released)
     let fv: Vec<f64> = fa.iter().copied().collect();
     let zv: Vec<f64> = za.iter().copied().collect();
     let hv: Vec<f64> = ha.iter().copied().collect();
+    if fv.iter().any(|v| !v.is_finite()) {
+        return arrays(py, Out::default());
+    }
     let o = py.detach(move || zone(x0, y0, rows, cols, &fv, &zv, &hv, foot, kerb_rep, tac));
-    Ok((arr2(py, o.p, 3)?, arr2i(py, o.t)?, arr2(py, o.wp, 3)?, arr2(py, o.wuv, 2)?, arr2i(py, o.wt)?,
-        arr2(py, o.tp, 3)?, arr2(py, o.tuv, 2)?, arr2i(py, o.tt)?))
+    arrays(py, o)
 }
 
 #[allow(clippy::too_many_arguments)]
