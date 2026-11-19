@@ -2107,3 +2107,10 @@ class UnderDeckTest(unittest.TestCase):
                                       grading.ROAD_LAWS_DECK_M)
         pts = np.array([[50.0, 14.0], [95.0, 18.0], [50.0, 17.0], [115.0, 6.5], [-15.0, 0.0], [-0.5, 10.0], [0.5, 10.0]])
         self.assertEqual(grading._under_decks(pts, segs).tolist(), [True, True, False, False, False, False, True])
+
+    def test_a_deck_s_end_is_not_over_the_road_it_meets(self):
+        # (Paris 48.9052 N 2.2876 E: a street through the node a bridge ends on, the bridge's end at its ground; only down
+        # from its own plan there, 9 mm under the road the deck's end puts at its ground: no answer for 66 chains)
+        segs = grading._deck_segments([(np.array([[0.0, 0.0], [50.0, 0.0]]), 4.2)], grading.ROAD_LAWS_DECK_M)
+        pts = np.array([[1.0, 0.5], [49.5, -2.0], [3.5, 0.0], [25.0, 0.0], [48.0, 3.0]])
+        self.assertEqual(grading._under_decks(pts, segs).tolist(), [False, False, True, True, True])

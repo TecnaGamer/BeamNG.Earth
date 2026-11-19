@@ -2472,25 +2472,32 @@ def _held_by_decks(xy, move, ends, hold=SEAM_DECK_HOLD_M):
 
 def _deck_segments(decks, pad):
     """Every deck's segments as arrays once, for _under_decks: (a, b, reach: its half width + pad, the first of its
-    deck's, the last of its deck's); decks [(line (k, 2), half width)]."""
+    deck's, the last of its deck's, its deck's first and last points); decks [(line (k, 2), half width)]."""
     decks = [(np.asarray(ln, np.float64)[:, :2], float(h)) for ln, h in decks if len(ln) >= 2]
     if not decks:
-        return np.zeros((0, 2)), np.zeros((0, 2)), np.zeros(0), np.zeros(0, bool), np.zeros(0, bool)
+        return (np.zeros((0, 2)), np.zeros((0, 2)), np.zeros(0), np.zeros(0, bool), np.zeros(0, bool),
+                np.zeros((0, 2)), np.zeros((0, 2)))
     return (np.concatenate([ln[:-1] for ln, _h in decks]), np.concatenate([ln[1:] for ln, _h in decks]),
             np.concatenate([np.full(len(ln) - 1, h + pad) for ln, h in decks]),
             np.concatenate([np.arange(len(ln) - 1) == 0 for ln, _h in decks]),
-            np.concatenate([np.arange(len(ln) - 1) == len(ln) - 2 for ln, _h in decks]))
+            np.concatenate([np.arange(len(ln) - 1) == len(ln) - 2 for ln, _h in decks]),
+            np.concatenate([np.repeat(ln[:1], len(ln) - 1, axis=0) for ln, _h in decks]),
+            np.concatenate([np.repeat(ln[-1:], len(ln) - 1, axis=0) for ln, _h in decks]))
 
 
 def _under_decks(xy, segs):
     """bool (n,): the points of xy (n, 2+) under a deck (segs: _deck_segments): within its reach of its line, beside
-    it, not past its ends. Past a deck's end is the ground it ends on, not under it: counted under (the disc of its
-    reach round its end), a motorway branch leaving its node 15 m past the High Five's 15 m wide deck could only go
-    down, 2.8 m under the main road on the abutment's fill it landed on there, and Pregerson's motorway 8 m past a
-    deck's start 2.4 m under its own: neither network had an answer, each left as it was. Pure."""
+    it, not past its ends, and not at them. Past a deck's end is the ground it ends on, not under it: counted under (the
+    disc of its reach round its end), a motorway branch leaving its node 15 m past the High Five's 15 m wide deck could
+    only go down, 2.8 m under the main road on the abutment's fill it landed on there, and Pregerson's motorway 8 m past
+    a deck's start 2.4 m under its own: neither network had an answer, each left as it was. At its end (within
+    gradeshapes.JOIN_M of it, where the shapes' systems have it meet a road: the deck's end is at that road's height)
+    there is no headroom to keep: a street through the node of a Paris bridge's end (48.9052 N 2.2876 E) could only go
+    down from its own plan, 9 mm under the secondary road the deck's end puts at its ground, the road laws' network
+    of 66 chains without an answer. Pure."""
     xy = np.asarray(xy, np.float64)[:, :2]
     out = np.zeros(len(xy), bool)
-    SA, SB, SH, SF, SL = segs
+    SA, SB, SH, SF, SL, EA, EB = segs
     if not len(SA) or not len(xy):
         return out
     lo, hi = xy.min(0), xy.max(0)
@@ -2502,9 +2509,12 @@ def _under_decks(xy, segs):
     ab = b - a
     t = ((xy[:, None] - a[None]) * ab[None]).sum(2) / np.maximum((ab * ab).sum(1), 1e-12)[None]
     past = (SF[sel][None] & (t < 0.0)) | (SL[sel][None] & (t > 1.0))
+    meet = _gsh.JOIN_M
+    at_end = (dnp.hypot(*(xy[:, None] - EA[sel][None]).transpose(2, 0, 1)) <= meet) \
+        | (dnp.hypot(*(xy[:, None] - EB[sel][None]).transpose(2, 0, 1)) <= meet)
     t = np.clip(t, 0.0, 1.0)
     d = dnp.hypot(*(a[None] + ab[None] * t[..., None] - xy[:, None]).transpose(2, 0, 1))
-    out[((d <= h[None]) & ~past).any(1)] = True
+    out[((d <= h[None]) & ~past & ~at_end).any(1)] = True
     return out
 
 
