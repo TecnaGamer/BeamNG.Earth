@@ -955,6 +955,12 @@ def street_rows(frame, box, md, elev, roads=(), country=None, keys=None, mapped_
             continue
         xy = np.array([[p[3], p[4]] for p in mine], np.float64)
         got = fast._ef.street_points(xy, seg, float(pad), STREET_REACH_M)
+        ok = np.isfinite(got[:, 0]) & np.isfinite(got[:, 1])    # (no spot clear of the carriageways: left out)
+        if not ok.all():
+            mine = [p for p, k in zip(mine, ok.tolist()) if k]
+            got = got[ok]
+            if not mine:
+                continue
         group = g_na if na else g_eu
         height = h if h is not None else STREET_H[group]
         z = _z(frame, elev, got[:, 0], got[:, 1])

@@ -57,7 +57,7 @@ WALL_CELLS = 48          # cells of building walls kept per process (budget.py: 
 # A cell's walls also on disk (store_dir), float32 in the cell's frame (within a few km of its centre: sub-mm): every
 # server process built them from the buildings of the 9 cells around, ~0.6 s a cell on a Steam Deck, and the block
 # process, the road processes and the server each did it again (7.4 s of a 15 s Baltimore block, 2026-10-20)
-WALLS_VERSION = 3         # (2: a cell's own buildings only, 2026-10-27; 3: without the machine-learned outlines OSM's
+WALLS_VERSION = 4         # (4: small ML outlines kept behind OSM houses, 2026-11-19; 2: a cell's own buildings only, 2026-10-27; 3: without the machine-learned outlines OSM's
                           # buildings make stale, osmml.py, 2026-11-18)
 
 PREFETCH_THREADS = 8    # cells' walls built at once (prefetch)

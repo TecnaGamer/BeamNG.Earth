@@ -3434,6 +3434,10 @@ ACROSS_W = 8.0              # m: a footprint at most this wide that a public roa
                             # the Dan Ryan as brick walls; a road crossing one runs only its width inside it)
 THROUGH_CLASSES = {"motorway", "trunk", "primary", "secondary", "tertiary", "residential", "unclassified",
                    "living_street"}
+# the roads a machine-learned footprint on whose lanes is a vehicle or the road's own surface, not a building (_ml_false):
+# the public roads and a racetrack (a 49 m outline along Laguna Seca's track by the pit wall under the Perimeter Road's
+# bridge stood as a 5.5 m building across the track: the player's report R04KNWVC, 2026-11-17)
+ML_ROAD_CLASSES = THROUGH_CLASSES | {"raceway"}
 
 
 def tunnel_lines(frame, road_layers, x0, y0, margin=50.0, size=256.0):
@@ -3744,6 +3748,7 @@ def road_lines(frame, road_layers, x0, y0, margin=50.0, size=256.0, classes=THRO
         near = np.flatnonzero((bb[:, 2] - x0 >= -margin) & (bb[:, 0] - x0 <= size + margin)
                               & (bb[:, 3] - y0 >= -margin) & (bb[:, 1] - y0 <= size + margin))
         specs = None
+        rings, halves = [], []      # (the layer's lines converted in one call)
         for i in near.tolist():
             if str(cls[i]) not in classes or (sub is not None and str(sub[i]) in skip_sub):
                 continue
@@ -3760,15 +3765,16 @@ def road_lines(frame, road_layers, x0, y0, margin=50.0, size=256.0, classes=THRO
                 b = f.coord_off[f.ring_off[f.part_off[i + 1]]]
                 lls = [f.lonlat[a:b]]
             for ll in lls:
-                if len(ll) < 2:
-                    continue
-                e, n = mapgeom.enu_xy(f, frame, ll)
-                xy = np.stack([e - x0, n - y0], 1)
-                if xy[:, 0].max() < -margin or xy[:, 0].min() > size + margin or xy[:, 1].max() < -margin \
-                        or xy[:, 1].min() > size + margin:
-                    continue
-                out.append(xy)
-                out.half.append(half)
+                if len(ll) >= 2:
+                    rings.append(ll)
+                    halves.append(half)
+        for en, half in zip(mapgeom.enu_rings(f, frame, rings) if rings else [], halves):
+            xy = np.stack([en[:, 0] - x0, en[:, 1] - y0], 1)
+            if xy[:, 0].max() < -margin or xy[:, 0].min() > size + margin or xy[:, 1].max() < -margin \
+                    or xy[:, 1].min() > size + margin:
+                continue
+            out.append(xy)
+            out.half.append(half)
     return out
 
 
@@ -4263,6 +4269,38 @@ def _ml_false(ring, bridges_xy, water_xy, roads_xy=None):
     return False
 
 
+# A building mapped above the ground (OSM layer / level 1 or more: Overture's level) whose footprint, or a part of it, lies
+# mostly over mapped water stands on a bridge's deck (a station on a railway bridge, shops on one), whose height the map
+# does not give: drawn from the water up it was a 300 m block across the Thames under Blackfriars station's roof, walling
+# off the river and the roads by it (the player's report BEF94SAA, 2026-11-18). Left out (the deck and the rails are the
+# bridge's own); the same footprint on land, anything at ground level and a part mapped with its own bottom up over the
+# water (ON_BRIDGE_FLOAT_M: the platforms' canopy at 9-11 m) as before.
+ON_BRIDGE_FLOAT_M = 5.0
+ON_BRIDGE_WATER_SHARE = 0.5     # of its outline's points (every ON_BRIDGE_STEP_M) and its centre on water
+ON_BRIDGE_STEP_M = 5.0
+
+
+def on_bridge_over_water(ring, level, water_xy, min_h=0.0, box=None):
+    """Is a footprint ring (local, not closed) of a building mapped at level (OSM layer, None: unknown), its bottom min_h
+    m up, a structure on a bridge over water (ON_BRIDGE_*)? box (x0, y0, x1, y1, local): only its points in it count
+    (the tile's: its map cells' water covers it, not what lies beyond them; Codex's review), all where none is. Pure."""
+    if not water_xy or level is None or not np.isfinite(level) or level < 1:
+        return False
+    if min_h is not None and np.isfinite(min_h) and min_h >= ON_BRIDGE_FLOAT_M:
+        return False
+    r = np.asarray(ring, np.float64)[:, :2]
+    pts = [r.mean(0)[None]]
+    for a, b in zip(r, np.roll(r, -1, axis=0)):
+        k = max(1, int(np.ceil(float(dnp.hypot(*(b - a))) / ON_BRIDGE_STEP_M)))
+        pts.append(a + (b - a) * (np.arange(k) / k)[:, None])
+    allp = np.vstack(pts)
+    if box is not None:
+        mine = allp[(allp[:, 0] >= box[0]) & (allp[:, 0] <= box[2]) & (allp[:, 1] >= box[1]) & (allp[:, 1] <= box[3])]
+        allp = mine if len(mine) else allp
+    wet = sum(1 for p in allp if ships.on_water(p, water_xy))
+    return wet >= ON_BRIDGE_WATER_SHARE * len(allp)
+
+
 ML_STEEP_DEG = 25.0         # a machine-learned footprint on ground this steep ...
 ML_FAR_FROM_WAY_M = 60.0    # ... this far from any mapped way (a road, track or path) is a rock or a shadow, not a hut
 ML_CLIFF_DEG = 36.0         # ... and on ground this steep, wherever it is
@@ -4302,14 +4340,15 @@ def way_lines(frame, road_layers, x0, y0, margin=ML_FAR_FROM_WAY_M + 20.0, size=
         bb = f.boxes(frame)
         near = np.flatnonzero((bb[:, 2] - x0 >= -margin) & (bb[:, 0] - x0 <= size + margin)
                               & (bb[:, 3] - y0 >= -margin) & (bb[:, 1] - y0 <= size + margin))
+        lls = []            # (the layer's lines converted in one call)
         for i in near.tolist():
             a = f.coord_off[f.ring_off[f.part_off[i]]]
             b = f.coord_off[f.ring_off[f.part_off[i + 1]]]
             ll = f.lonlat[a:b]
-            if len(ll) < 2:
-                continue
-            e, n = mapgeom.enu_xy(f, frame, ll)
-            out.append(np.stack([e - x0, n - y0], 1))
+            if len(ll) >= 2:
+                lls.append(ll)
+        for xy in (mapgeom.enu_rings(f, frame, lls) if lls else []):
+            out.append(np.stack([xy[:, 0] - x0, xy[:, 1] - y0], 1))
     return out
 
 
@@ -5358,6 +5397,9 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
                     # Chrysler Building's top 47 m on 0.8 m²)
                     if r is None or _area2(r) / 2 < (PART_TINY_M2 if ph >= PART_TINY_TALL_M else PART_MIN_M2):
                         continue
+                    if on_bridge_over_water(r, lv, water_xy, pmh, (0.0, 0.0, x1 - x0, y1 - y0)) \
+                            and _on_support(r, supports) is None:
+                        continue        # (a part of a building on a bridge, over the water: on_bridge_over_water)
                     rings.append(r)
                     p_rshape = str(pat.get("roof_shape") or "").lower() or "flat"
                     # (its own colour or the building's; else a stone colour its parts carry by area, plan's
@@ -5452,6 +5494,10 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
             at0, mh0 = at, mh
             for ring in kept:           # (a long one on varied ground: its pieces, each on its own ground)
                 at, mh = at0, mh0
+                # (a building on a bridge, over the water: on_bridge_over_water, each piece by its own tile's water)
+                if on_bridge_over_water(ring, lv, water_xy, mh, (0.0, 0.0, x1 - x0, y1 - y0)) \
+                        and _on_support(ring, supports) is None:
+                    continue
                 rings.append(ring)
                 if mh <= 0.5 and roads_xy and (road_through(ring, roads_xy) >= through_m or road_across(ring, roads_xy)):
                     mh = OVER_ROAD_CLEAR_M
@@ -6646,6 +6692,7 @@ def road_tile_items(
         colours=colours,
         west_town=district_town(frame, tx, ty, md),
         roads_xy=road_lines(frame, [c.layers.get("roads") for c in cds], x0, y0),
+        ml_roads_xy=road_lines(frame, [c.layers.get("roads") for c in cds], x0, y0, classes=ML_ROAD_CLASSES),
         passage_xy=road_lines(frame, [c.layers.get("roads") for c in cds], x0, y0,
                               classes=ROAD_PASSAGE_CLASSES, skip_sub=ROAD_PASSAGE_SKIP),
         rails_xy=rail_lines(frame, [c.layers.get("roads") for c in cds], x0, y0),
@@ -6727,6 +6774,7 @@ def near_rings(frame, tx, ty, md, margin=2.0, skip=frozenset()):
         if f is None or not len(f):
             continue
         bx = f.boxes(frame)
+        rings = []          # (the cell's outer rings converted in one call)
         for i in range(len(f)):
             fid = str(f.ids[i])
             if fid in seen or fid in skip:
@@ -6737,8 +6785,9 @@ def near_rings(frame, tx, ty, md, margin=2.0, skip=frozenset()):
             seen.add(fid)
             for part in f.parts(i):
                 if len(part) and len(part[0]) >= 3:
-                    e, n = mapgeom.enu_xy(f, frame, part[0])
-                    out.append(np.c_[e, n])
+                    rings.append(part[0])
+        if rings:
+            out += mapgeom.enu_rings(f, frame, rings)
     return out
 
 
@@ -7168,7 +7217,8 @@ def far_items(frame, tile, ty, md, ground, lamp_region=None, urban_fn=None, widt
                            supports=support_rings(frame, [c.layers.get("infrastructure") for c in cds], x0, y0),
                            bridges_xy=bridge_lines(frame, [c.layers.get("roads") for c in cds], x0, y0),
                            water_xy=water_rings(frame, [c.layers.get("water") for c in cds], x0, y0),
-                           ml_roads_xy=road_lines(frame, [c.layers.get("roads") for c in cds], x0, y0),
+                           ml_roads_xy=road_lines(frame, [c.layers.get("roads") for c in cds], x0, y0,
+                                                  classes=ML_ROAD_CLASSES),
                            rails_xy=rail_lines(frame, [c.layers.get("roads") for c in cds], x0, y0, size=x1 - x0),
                            ways_xy=way_lines(frame, [c.layers.get("roads") for c in cds], x0, y0, size=x1 - x0),
                            carriageways=carriageway_segments(frame, [c.layers.get("roads") for c in cds], x0, y0,

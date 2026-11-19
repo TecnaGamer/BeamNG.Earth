@@ -46,6 +46,25 @@ LIFT = {"base": 0.0, "edge": 0.001, "gutter": 0.0015, "mark": 0.002, "frontage":
 # at FOLLOW_TOL, +9k at 4 cm. The spots (small quads) keep FOLLOW_TOL.
 WEAR_STRIPS = ("wear", "wear2")
 WEAR_TOL = float(os.environ.get("BNE_WEAR_TOL", "0.02"))
+# The road revamp v2's surface overlays (P1c, BNE_SURFACE_V2; .claude/work/road-revamp-v2-road-shape-first-2026-11-19.md
+# section 2.7 and its addendum): the stock maps' markings float ~5 mm over their road (Italy's mesh lines 4.9 mm p50),
+# so the overlays here sit a few mm up, markings 5 mm, tyre wear 4 mm, edge blends 2.5 mm, the surface variation
+# (roadwear.surface_chunks) 3 mm; the mesh's draw order does the layering (their materials write no depth: v2_rank).
+# An overlay triangle the ground follow leaves whole is raised where the drawn ground bulges inside it, so the ground
+# stays MARK_MIN_M under every overlay (follow_ground's clear: with fewer rows than the terrain the paint sagged into it,
+# 6.9 mm deep at Fells Point with the 2 mm lift, markprobe.py); cutting those triangles along the terrain's instead was
+# 7x the triangles (the 1/512 m height steps bulge nearly every square). Off: today's lifts and tolerances.
+SURFACE_V2 = os.environ.get("BNE_SURFACE_V2", "off").strip().lower() in ("on", "1", "yes", "true")
+MARK_MIN_M = 0.0021     # m an overlay keeps over the drawn ground (markprobe's 2 mm and a margin)
+LIFT_V2 = {"var": 0.0030, "patch": 0.0034, "spot": 0.0036, "edge": 0.0025, "gutter": 0.0028, "wear": 0.0040,
+           "wear2": 0.0042, "wline": 0.0044, "mark": 0.0050}
+if SURFACE_V2:
+    LIFT.update(LIFT_V2)
+# the v2 draw order (build: one primitive per material, the list's order), by material: the dirt strips and the
+# frontage first, then the variation, the patches and spots, the wear, crack lines and edge blends, the markings last
+V2_ORDER_VAR = ("bne_wear_var_",)
+V2_ORDER_PATCH = ("bne_wear_patch", "bne_spot_")
+V2_ORDER_WEAR = ("bne_wear_", "bne_crack_line", "bne_edge_", "ECA_road_edge_", "m_road_edge_")
 FRONTAGE_ASPHALT = "bne_eu_frontage_asphalt"
 FRONTAGE_REPEAT_M = 5.
 FRONTAGE_TERRAIN_REPEAT_M = 4.
@@ -165,6 +184,19 @@ def layer_of(chunk):
     if m == "gutter1":
         return "gutter"
     return "base"
+
+
+def v2_rank(m):
+    """The v2 draw rank of material m (0 first: SURFACE_V2's order)."""
+    if m.startswith("bne_dirt_") or m == FRONTAGE_ASPHALT:
+        return 0
+    if m.startswith(V2_ORDER_VAR):
+        return 1
+    if m.startswith(V2_ORDER_PATCH):
+        return 2
+    if m.startswith(V2_ORDER_WEAR):
+        return 3
+    return 4
 
 
 def _resample(pts, step, keep_vertices=False, corner_half=0.0):
@@ -990,17 +1022,24 @@ def road_tol(q):
     return min(FOLLOW_TOL, max(FOLLOW_TOL_MIN, 2.5 * float(q)))
 
 
-def follow_ground(P, UV, T, grid, i0, j0, tol=None, cell=GRID_M, step_m=None):
+def follow_ground(P, UV, T, grid, i0, j0, tol=None, cell=GRID_M, step_m=None, clear=None):
     """(points (m, 3), uvs, triangles, source triangle) of the triangles T over P (n, 2) on the drawn ground (grid:
-    _height_grid), held down in the cells holding a step (FOLLOW_STEP_M, or step_m): earthfast.follow_tris."""
+    _height_grid), held down in the cells holding a step (FOLLOW_STEP_M, or step_m): earthfast.follow_tris. clear: a
+    triangle left whole is raised (per input point) so that the ground stands at most this over it (None: not)."""
     import fast
     tol = FOLLOW_TOL if tol is None else tol
     P = np.ascontiguousarray(np.asarray(P, np.float64)[:, :2])
     UV = np.ascontiguousarray(UV, np.float64)
     T = np.ascontiguousarray(T, np.int64)
-    fast.require(52, "follow_tris")
-    a, b, c, d = fast._ef.follow_tris(P, UV, T, float(cell), np.ascontiguousarray(grid, np.float64), int(i0), int(j0),
-                                      float(tol), FOLLOW_STEP_M if step_m is None else float(step_m), FOLLOW_MAX_UP)
+    step = FOLLOW_STEP_M if step_m is None else float(step_m)
+    if clear is None:
+        fast.require(52, "follow_tris")
+        a, b, c, d = fast._ef.follow_tris(P, UV, T, float(cell), np.ascontiguousarray(grid, np.float64), int(i0),
+                                          int(j0), float(tol), step, FOLLOW_MAX_UP)
+    else:
+        fast.require(499, "follow_tris clear")
+        a, b, c, d = fast._ef.follow_tris(P, UV, T, float(cell), np.ascontiguousarray(grid, np.float64), int(i0),
+                                          int(j0), float(tol), step, FOLLOW_MAX_UP, float(clear))
     return np.asarray(a), np.asarray(b), np.asarray(c), np.asarray(d)
 
 
@@ -1372,7 +1411,7 @@ def build(frame, chunks, elev, origin, lift=0.0, clip=None, follow=False, q=None
     TL = []                                     # per triangle: its layer's lift over the ground (None: on a deck)
     RI = []                                     # per triangle: its ribbon (-1: a filled polygon), for the fade uv
     RW = []                                     # per triangle: a raceway's (no step cap: follow_ground, below)
-    rpar = []                                   # per ribbon: _fade_uv's (feather share, tl, tu, slen, open ends)
+    rpar = []                                   # per ribbon: _fade_uv's (feather share, tl, tu, slen, open ends, end fade)
     k0 = nverts = 0
     for ri, ((left, right, v, m, layer, fz), c) in enumerate(rbc):
         k = len(left)
@@ -1447,7 +1486,7 @@ def build(frame, chunks, elev, origin, lift=0.0, clip=None, follow=False, q=None
         RW.append(np.full(len(tri), str(c.get("fid", "")).startswith("osm-raceway-")))
         ends = c.get("fends") or (1, 1)
         rpar.append((fu, float(c.get("tl") or 10.0), tu, float(slen) if slen else np.nan,
-                     float(bool(ends[0])), float(bool(ends[1]))))
+                     float(bool(ends[0])), float(bool(ends[1])), float(c.get("fend_m") or END_FADE_M)))
         nverts += len(P[-1])
     # Match the asphalt tile scale of the visible terrain or of satmat's mesh layer.
     asphalt_repeat = FRONTAGE_TERRAIN_REPEAT_M if lift > 0 else FRONTAGE_REPEAT_M
@@ -1518,10 +1557,25 @@ def build(frame, chunks, elev, origin, lift=0.0, clip=None, follow=False, q=None
                 batches = [(m & ~RW, t, None) for m, t in batches] + [(m & RW, t, float("inf")) for m, t in batches]
             else:
                 batches = [(m, t, None) for m, t in batches]
-            for mask, tol, step in batches:
+            batches = [(m, t, st, None) for m, t, st in batches]
+            if SURFACE_V2:          # (each overlay lift its own batch, raised where the ground bulges past MARK_MIN_M)
+                v2 = []
+                for m, t, st, _b in batches:
+                    rest = m.copy()
+                    for L in np.unique(TL[m]):
+                        up = float(L) - lift
+                        if not up > 0.0 or float(L) == LIFT["frontage"] + lift:
+                            continue
+                        sel = m & (TL == L)
+                        rest &= ~sel
+                        v2.append((sel, t, st, max(0.0, up - MARK_MIN_M)))
+                    v2.append((rest, t, st, None))
+                batches = v2
+            for mask, tol, step, clear in batches:
                 if not mask.any():
                     continue
-                fP, fUV, fT, src = follow_ground(P[:, :2], UV, T[mask], grid, i0, j0, tol=tol, step_m=step)
+                fP, fUV, fT, src = follow_ground(P[:, :2], UV, T[mask], grid, i0, j0, tol=tol, step_m=step,
+                                                 clear=clear)
                 lifts = TL[mask][src]
                 vl = np.zeros(len(fP))              # (a cut piece's points are its fan's: one lift each, set once)
                 for kk in range(3):
@@ -1556,6 +1610,11 @@ def build(frame, chunks, elev, origin, lift=0.0, clip=None, follow=False, q=None
         P, UV, T = _shared(P, UV, T)
     out =(P - np.asarray(origin, np.float64), T, UV, mats, M)
     if not asphalt and not dirt:
+        if SURFACE_V2:      # (the v2 draw order: v2_rank)
+            order = sorted(range(len(mats)), key=lambda j: (v2_rank(mats[j]), j))
+            remap = np.empty(len(mats), np.int64)
+            remap[order] = np.arange(len(mats))
+            return out[0], T, UV, [mats[j] for j in order], remap[np.asarray(M, np.int64)]
         return out
     # a strip in the mesh: the fade uv for every point (a sixth element: write, plazas.merge), and the strips' materials
     # first, so the markings and anything else translucent in the mesh draw over them (one primitive per material, in
@@ -1569,8 +1628,8 @@ def build(frame, chunks, elev, origin, lift=0.0, clip=None, follow=False, q=None
         blend = (weight * weight) * (3 - 2 * weight)
         out[0][used, 2] -= (LIFT["frontage"] + lift - .001) * (1 - blend)
         fade[used] = np.c_[.001 + .499 * weight, np.full(len(used), .5)]
-    order = sorted(range(len(mats)), key=lambda j: (not (mats[j].startswith(FADE_PREFIX)
-                                                        or mats[j] == FRONTAGE_ASPHALT), j))
+    order = sorted(range(len(mats)), key=lambda j: (v2_rank(mats[j]), j) if SURFACE_V2 else
+                   (not (mats[j].startswith(FADE_PREFIX) or mats[j] == FRONTAGE_ASPHALT), j))
     remap = np.empty(len(mats), np.int64)
     remap[order] = np.arange(len(mats))
     return out[0], T, UV, [mats[j] for j in order], remap[np.asarray(M, np.int64)], fade
@@ -1605,7 +1664,9 @@ def _fade_uv(UV, vr, par):
     has = vr >= 0
     if not has.any() or not len(par):
         return C
-    fu, tl, tu, slen, o0, o1 = np.asarray(par, np.float64)[vr[has]].T
+    cols = np.asarray(par, np.float64)[vr[has]].T
+    fu, tl, tu, slen, o0, o1 = cols[:6]
+    fend = cols[6] if len(cols) > 6 else np.full(len(fu), END_FADE_M)     # (a strip's own end fade: "fend_m")
     u = UV[has, 0] / tu
     f = np.maximum(fu, 1e-9)
     cu = np.where(u < fu, 0.5 * u / f, np.where(u > 1.0 - fu, 1.0 - 0.5 * (1.0 - u) / f, 0.5))
@@ -1613,7 +1674,7 @@ def _fade_uv(UV, vr, par):
     s = UV[has, 1] * tl
     strip = np.isfinite(slen)
     sl = np.where(strip, slen, 0.0)
-    fade = np.minimum(END_FADE_M, END_FADE_SHARE * sl)
+    fade = np.minimum(fend, END_FADE_SHARE * sl)
     strip &= fade > 1e-3
     fd = np.maximum(fade, 1e-9)
     cv = np.full(len(s), 0.5)

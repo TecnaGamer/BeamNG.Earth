@@ -20,7 +20,11 @@ Measured on the corpus (2026-11-18.0, ML outlines the planned cells own, before 
 building-site ghosts gone; what stays is at the harbour's industrial edge and in windows a cell edge cuts), Phoenix
 1464 -> 409 (an unmapped apartment complex and a school kept, with partly mapped streets of houses), Laramie 208 -> 31
 (mostly RVs parked in an RV park), Vienna 800 -> 42 and Tromso 559 -> 11 (garden sheds and outbuildings OSM leaves
-out). A window is cut at its cell's edge (a cell reads no neighbour): near an edge fewer outlines decide, and an outline
+out). Small outlines stay (the user, 2026-11-19: keep small outbuildings): an ML outline of at most 40 m^2 (shed, garage,
+garden house) with an OSM outline's box within 20 m of its own is kept (it stands behind a house); the demolished
+rowhouses and building-site ghosts are all over 90 m^2, and a small one on a cleared lot or a duplicate of any size is
+still dropped. Corpus ML outlines kept (before -> after): Vienna 42 -> 458, Tromso 11 -> 421, Phoenix 409 -> 718, Fells Point 44 -> 160, Manhattan 9 -> 55, Laramie 31 -> 42, Zermatt 26 -> 54.
+A window is cut at its cell's edge (a cell reads no neighbour): near an edge fewer outlines decide, and an outline
 the cut window cannot judge stays.
 
 BNE_OSM_OVER_ML=0 keeps every outline (MapData.versions() keys it then: the caches made from either never mix)."""
@@ -31,7 +35,7 @@ import numpy as np
 import fast
 import mapgeom
 
-NATIVE = 489                    # earthfast.VERSION with osm_over_ml
+NATIVE = 501                    # earthfast.VERSION with osm_over_ml and its small-outline rescue
 ON = os.environ.get("BNE_OSM_OVER_ML", "1").strip() not in ("0", "false", "off", "no")
 VERSION = 1                     # (in MapData.versions() while off; roads.FACTS_FORMAT / roadwidth.WALLS_VERSION bumped)
 OSM_DATASET = "OpenStreetMap"

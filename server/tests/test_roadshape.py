@@ -55,7 +55,7 @@ def angle(u, v):
 class ShapeTest(unittest.TestCase):
     def setUp(self):
         if not fast.AVAILABLE or getattr(fast._ef, "VERSION", 0) < roadshape.VERSION:
-            self.skipTest("earthfast 498")
+            self.skipTest("earthfast 505")
 
     def test_off_keeps_the_mapped_line(self):
         xy, _z, rec = solve(scene(), on=False)["deck"]
@@ -218,7 +218,7 @@ class GradingTest(unittest.TestCase):
         # Codex high on P1b: grading decided "simple" from the decks within 110 m of the end, the deck from its whole
         # chain: a banked approach met a level deck at the abutment. Both now read roadshape.part_simple.
         if not fast.AVAILABLE or getattr(fast._ef, "VERSION", 0) < roadshape.VERSION:
-            self.skipTest("earthfast 498")
+            self.skipTest("earthfast 505")
         import threading
         for ramp in (True, False):
             f = self.long_structure(ramp)
@@ -242,7 +242,7 @@ class GradingTest(unittest.TestCase):
     def test_end_simple_is_the_same_from_any_start(self):
         # (the reading starts at the caller's copy of the end; the answer is the map's)
         if not fast.AVAILABLE or getattr(fast._ef, "VERSION", 0) < roadshape.VERSION:
-            self.skipTest("earthfast 498")
+            self.skipTest("earthfast 505")
         f = self.long_structure(True)
         la, lo, _ = FRAME.enu_to_geodetic(np.array([0.0, 0.004, 250.0]), np.array([0.0, -0.003, 40.0]), 0.0)
         for e in (0, 1):

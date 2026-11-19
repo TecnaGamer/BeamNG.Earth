@@ -65,7 +65,7 @@ PARAMS = np.array([CHORD_TOL_M, MAX_STEP_M, BLEND_MAX_M, dmath.cos(math.radians(
                    SKEW_REACH_M, dmath.sin(math.radians(SKEW_MIN_CROSS_DEG)), dmath.cos(math.radians(SKEW_MAX_DEG)),
                    dmath.cos(math.radians(SKEW_BEND_DEG)), DEV_MIN_M, DEV_SHARE, dmath.cos(math.radians(AMBIG_DEG)),
                    DIR_M, SKEW_NEAR_M], np.float64)
-VERSION = 498               # the earthfast kernels
+VERSION = 505               # the earthfast kernels (498 on its branch; merged into try598 as 505)
 
 
 def simple_members(members, got):

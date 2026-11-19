@@ -6260,7 +6260,7 @@ class _Planner:
     def _struct_end_calc(self, e0):
         import fast
         import structures
-        fast.require(493, "structure_abutments")
+        fast.require(505, "structure_abutments")     # (493 on its branch: merged as 505)
         parts, read = {}, set()
 
         def run(keys, h=None, need=None):

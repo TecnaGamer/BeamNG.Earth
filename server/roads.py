@@ -221,6 +221,14 @@ EDGE_LINE = {"m": "line_white", "tl": 6.4, "p": 2, "w": 0.15, "inset": 0.3}
 # (the user, 2026-10-28: "the edge of the road is blurry and slightly jagged").
 EDGE_DECAL = {"m": "ECA_road_edge_dirt", "tl": 6.4, "p": 1, "w": 1.6, "layer": "edge"}
 EDGE_DECAL_AT = 0.95
+# The road revamp v2 (BNE_SURFACE_V2, roadmesh.SURFACE_V2): the stock maps' edge blends, 2 m wide over the asphalt's
+# edge and centred (EDGE_DECAL_AT - 0.5) x 2 = 0.9 m outside it (vanilla 0.8-1.0 m), texture length 8 m; beside a rural
+# highway's asphalt (GRAVEL_EDGE_ROADS: their gravel shoulders) a gravel one (bne_edge_gravel, Utah's stock texture)
+SURFACE_V2 = os.environ.get("BNE_SURFACE_V2", "off").strip().lower() in ("on", "1", "yes", "true")
+if SURFACE_V2:
+    EDGE_DECAL = {**EDGE_DECAL, "tl": 8.0, "w": 2.0}
+GRAVEL_EDGE_DECAL = {**EDGE_DECAL, "m": "bne_edge_gravel"} if SURFACE_V2 else None     # (prewarm: v2's only)
+GRAVEL_EDGE_ROADS = {"motorway", "motorway_link", "trunk", "trunk_link", "primary", "primary_link"}
 # ... and where grass grows to the asphalt (roadwear.verges: a curbless rural road through grass, crops or woods),
 # the stock grassy edge (art/shapes/common/decalroads: global; East Coast USA's look, its u = 1 side on the asphalt too)
 GRASS_EDGE_DECAL = {**EDGE_DECAL, "m": "m_road_edge_dirt_grass"}
@@ -745,7 +753,7 @@ def _facts_load(feats, kind, extra):
 # (bakepack.py), in place of the code hash; the plans' key holds it too (plancache.plans_format). Bump it whenever a
 # change makes other facts (level ranges, specs, lane flow, grade separations or their inputs' rules), or players keep
 # the old ones; tests/test_bake_formats.py fails until it is bumped.
-FACTS_FORMAT = 30     # 30: the street walls without the machine-learned building outlines OSM's buildings make stale (osmml.py: an ML outline where OSM maps a cell's buildings, or overlapping an OSM one, left out of the buildings layer; Fells Point's demolished rowhouses on vacant lots, the user 2026-11-18): the widths of town streets between buildings (_wall_capped, _laned_walled), 2026-11-18; 29: a mapped width (Overture's width rule, OpenStreetMap's width) wider than WIDTH_PLATFORM_X x the road's lanes and a shoulder each side is a right-of-way, not the carriageway: left out by every reader of a mapped width (width_rejected, its lanes the most any lane data gives the road, read from its home copy; MA Route 2's 100 ft on a two-lane trunk, GitHub #901), 2026-11-17; 28: a long feature's level ranges from its home copy laid on this copy's own extent (home_ranges: the copies of a segment are cut to other lengths per cell; the Main-Weser-Bahn's bridge in Treysa lay 100 m off in one; PR #1399), 2026-11-16; 27: a motorway link mapped with 3 or more lanes, with no width or turn:lanes, that its diverge gives 2 or more fewer lanes takes what it gives (_lane_overrides, tapers::ramp_lane_rule; rampoverrides' I-65 Exit 76 correction by way id deleted: the road revamp's R1, 2026-11-16); 26: a cycleway with sidewalk=both / left / right is a street closed to cars, a road with its sidewalks (STYLE "cycleway", the user's London report 2026-11-12), 2026-11-12; 25: a town street of a mapped lane count between buildings takes its sidewalks out to them and, a two-lane primary, its parking lanes (roads._laned_walled; Eastern Avenue at Fells Point, the user's reports 18 and 19), 2026-11-12; 23: deterministic maths (GitHub #1169: the same facts on Windows, Linux and every glibc / CPU), 2026-11-12; 22: the roads layer's max_height_m rule (vehicle height limits) and the rail parts of a long segment where the map puts them (pmtiles anchors, railways MIN_PART_M: short rail bridges kept), Robitnik's PR #1193; 21: a motorway's or trunk road's built-up land read 90 m out (URBAN_HIGHWAY_BESIDE_M, PR #1117: its urban flag, widths); 20: a road's measured width and wall clearance from its own copy of the road in each cell, not whichever cell's copy the process measured first (roadwidth._memo_key), 2026-11-12; 19: a road joined at a bridge's end node is not a crossing under it on any system (earthfast levelrules END_EPS_M: the bridge's reach hung on the last bit of the C library's hypot, other level ranges on Ubuntu 22.04 / Windows than on a newer glibc at Vienna's S1 Rautenweg), 2026-11-12; 18: a town street's carriageway kept clear of the walls along it where the map gives no width (roads._wall_capped, roadwidth.clearance_row: Campulung, Setagaya, Trastevere; GitHub #1184, #543), 2026-11-12; 17: a junction standing over a tunnel the DEM shows open is an underpass: its arms' crossings by the node count (gradesep.JOINED_ENDS, Vienna's S1 under Rautenweg, GitHub #1083), 2026-11-12; 16: a merged highway's ways of other lane counts as lane sections of their own (lanesections.py, PR #880 by DerEifrige-f), the default widths of roads without a mapped width measured on aerials (WIDTH_TABLE: regions, town one-way streets, no parking on top of a mapped lane count), narrow winding rural roads (WINDING_*), 2026-11-12; 15: the road centrelines rounded and curvature continuous by default (roadsmooth.py), 2026-11-12; 14: the regional gravel rule needs REGIONAL_MIN_ROADS mapped roads, not one road's segments (GitHub #834), and a residential / unclassified street with built-up land beside it stays paved (REGIONAL_BESIDE_SHARE, GitHub #824); flagstone / tiles paving cobble (PR #971); 13: a grade separation's bridge spans a skew crossing (the bridged road's half width over the tangent added: a track at 45 deg under the A4 at Glaireuse cut a trench through its carriageway past a square deck, GitHub #1020), its fractions and every bridge/tunnel reach's in sub_polyline's metric (gradesep._metric, _ring_kx: on a 15 km road the deck stood 8.7 m off its crossing); 12: a long road's copy far from its home takes the grade separations its neighbour cells found too (_home_far: the A4 at Glaireuse, GitHub #1020); 11: an underpass in a cutting the DEM shows (gradesep._underpasses: a longer road tunnel with the ground over it under TUNNEL_OPEN_COVER, SEP_M under the line over it either side: Highway 3 at Hameenlinna, GitHub #1009) bridged by the roads over it; 10: a short ground gap between a tunnel's portal and a bridge of the same road made bridge (_portal_decks: CA-1's northbound Tom Lantos bore, a 22 % drop onto its bridge); 9: underpasses: a tunnel's portal kept where its own approach road joins it (_tunnel_reach, the I-280 underpass at Millbrae), a road's home cell takes the grade separations every cell it crosses found for it (_gradesep_elsewhere: CA-1's bridge over Wilder Tunnel); 8: bridge parts retain mapped local level transitions (PR #873), a segment's tunnel ranges joined only over a gap inside one source way (PR #927, was: any gap under 30 m); 7: PR #843 (restored highway shoulders, regional merge marking profiles: Spec.state); 6: busways (PR #836) and walkway spans (PR #842) in the cells; 5: PR #505's Spec.france (French road scenery flag); 4: pass roads with a mapped or default two-lane count stay mountain roads (the Stelvio); 3: PR #471 lane counts (validated highway counts, two-lane highway default) and #686 (Swedish dual carriageways, 2.75 m lanes); 2: OSM's own surface first, "unpaved" on car roads gravel, regional gravel for untagged minor roads
+FACTS_FORMAT = 31     # 31: small machine-learned outlines (sheds, garages) kept where OSM maps a house within 20 m (osmml.py, 2026-11-19); 30: the street walls without the machine-learned building outlines OSM's buildings make stale (osmml.py: an ML outline where OSM maps a cell's buildings, or overlapping an OSM one, left out of the buildings layer; Fells Point's demolished rowhouses on vacant lots, the user 2026-11-18): the widths of town streets between buildings (_wall_capped, _laned_walled), 2026-11-18; 29: a mapped width (Overture's width rule, OpenStreetMap's width) wider than WIDTH_PLATFORM_X x the road's lanes and a shoulder each side is a right-of-way, not the carriageway: left out by every reader of a mapped width (width_rejected, its lanes the most any lane data gives the road, read from its home copy; MA Route 2's 100 ft on a two-lane trunk, GitHub #901), 2026-11-17; 28: a long feature's level ranges from its home copy laid on this copy's own extent (home_ranges: the copies of a segment are cut to other lengths per cell; the Main-Weser-Bahn's bridge in Treysa lay 100 m off in one; PR #1399), 2026-11-16; 27: a motorway link mapped with 3 or more lanes, with no width or turn:lanes, that its diverge gives 2 or more fewer lanes takes what it gives (_lane_overrides, tapers::ramp_lane_rule; rampoverrides' I-65 Exit 76 correction by way id deleted: the road revamp's R1, 2026-11-16); 26: a cycleway with sidewalk=both / left / right is a street closed to cars, a road with its sidewalks (STYLE "cycleway", the user's London report 2026-11-12), 2026-11-12; 25: a town street of a mapped lane count between buildings takes its sidewalks out to them and, a two-lane primary, its parking lanes (roads._laned_walled; Eastern Avenue at Fells Point, the user's reports 18 and 19), 2026-11-12; 23: deterministic maths (GitHub #1169: the same facts on Windows, Linux and every glibc / CPU), 2026-11-12; 22: the roads layer's max_height_m rule (vehicle height limits) and the rail parts of a long segment where the map puts them (pmtiles anchors, railways MIN_PART_M: short rail bridges kept), Robitnik's PR #1193; 21: a motorway's or trunk road's built-up land read 90 m out (URBAN_HIGHWAY_BESIDE_M, PR #1117: its urban flag, widths); 20: a road's measured width and wall clearance from its own copy of the road in each cell, not whichever cell's copy the process measured first (roadwidth._memo_key), 2026-11-12; 19: a road joined at a bridge's end node is not a crossing under it on any system (earthfast levelrules END_EPS_M: the bridge's reach hung on the last bit of the C library's hypot, other level ranges on Ubuntu 22.04 / Windows than on a newer glibc at Vienna's S1 Rautenweg), 2026-11-12; 18: a town street's carriageway kept clear of the walls along it where the map gives no width (roads._wall_capped, roadwidth.clearance_row: Campulung, Setagaya, Trastevere; GitHub #1184, #543), 2026-11-12; 17: a junction standing over a tunnel the DEM shows open is an underpass: its arms' crossings by the node count (gradesep.JOINED_ENDS, Vienna's S1 under Rautenweg, GitHub #1083), 2026-11-12; 16: a merged highway's ways of other lane counts as lane sections of their own (lanesections.py, PR #880 by DerEifrige-f), the default widths of roads without a mapped width measured on aerials (WIDTH_TABLE: regions, town one-way streets, no parking on top of a mapped lane count), narrow winding rural roads (WINDING_*), 2026-11-12; 15: the road centrelines rounded and curvature continuous by default (roadsmooth.py), 2026-11-12; 14: the regional gravel rule needs REGIONAL_MIN_ROADS mapped roads, not one road's segments (GitHub #834), and a residential / unclassified street with built-up land beside it stays paved (REGIONAL_BESIDE_SHARE, GitHub #824); flagstone / tiles paving cobble (PR #971); 13: a grade separation's bridge spans a skew crossing (the bridged road's half width over the tangent added: a track at 45 deg under the A4 at Glaireuse cut a trench through its carriageway past a square deck, GitHub #1020), its fractions and every bridge/tunnel reach's in sub_polyline's metric (gradesep._metric, _ring_kx: on a 15 km road the deck stood 8.7 m off its crossing); 12: a long road's copy far from its home takes the grade separations its neighbour cells found too (_home_far: the A4 at Glaireuse, GitHub #1020); 11: an underpass in a cutting the DEM shows (gradesep._underpasses: a longer road tunnel with the ground over it under TUNNEL_OPEN_COVER, SEP_M under the line over it either side: Highway 3 at Hameenlinna, GitHub #1009) bridged by the roads over it; 10: a short ground gap between a tunnel's portal and a bridge of the same road made bridge (_portal_decks: CA-1's northbound Tom Lantos bore, a 22 % drop onto its bridge); 9: underpasses: a tunnel's portal kept where its own approach road joins it (_tunnel_reach, the I-280 underpass at Millbrae), a road's home cell takes the grade separations every cell it crosses found for it (_gradesep_elsewhere: CA-1's bridge over Wilder Tunnel); 8: bridge parts retain mapped local level transitions (PR #873), a segment's tunnel ranges joined only over a gap inside one source way (PR #927, was: any gap under 30 m); 7: PR #843 (restored highway shoulders, regional merge marking profiles: Spec.state); 6: busways (PR #836) and walkway spans (PR #842) in the cells; 5: PR #505's Spec.france (French road scenery flag); 4: pass roads with a mapped or default two-lane count stay mountain roads (the Stelvio); 3: PR #471 lane counts (validated highway counts, two-lane highway default) and #686 (Swedish dual carriageways, 2.75 m lanes); 2: OSM's own surface first, "unpaved" on car roads gravel, regional gravel for untagged minor roads
 
 
 def _facts_baked(feats, kind, extra):
@@ -8092,11 +8100,12 @@ class BridgeProfiles:
                             spans = _bridge_level_spans(feats, i)
                             glv = structures.part_levels(feats, i, spans, len(lvls) // max(1, len(spans)))
                         best = {}
-                        for j, (pk, ring) in enumerate(_keyed(self.keys_of, self.parts_of, feats, i)):
+                        kd = _keyed(self.keys_of, self.parts_of, feats, i)
+                        xys = mapgeom.enu_rings(feats, self.frame, [ring for _pk, ring in kd])    # (one call)
+                        for j, (pk, ring) in enumerate(kd):
                             if (fid, pk) in best and len(ring) <= best[(fid, pk)][4]:
                                 continue
-                            e, n = mapgeom.enu_xy(feats, self.frame, ring)
-                            best[(fid, pk)] = (bs[i], densify(_dedupe(np.stack([e, n], axis=1)), DECK_STEP),
+                            best[(fid, pk)] = (bs[i], densify(_dedupe(xys[j]), DECK_STEP),
                                               float(np.mean(ring[:, 0])), lvls[j] if j < len(lvls) else 1.0, len(ring),
                                               str(names[i]) if names is not None else "")     # (roadz: name matching)
                             if glv is not None:
@@ -8113,9 +8122,7 @@ class BridgeProfiles:
                             if got is None:
                                 got = memo[i] = lanesections.unplaced(feats, i, rings)
                             rings = got
-                        for ring in rings:
-                            e, n = mapgeom.enu_xy(feats, self.frame, ring)
-                            lines.append(np.stack([e, n], axis=1))
+                        lines += mapgeom.enu_rings(feats, self.frame, rings)
                         roads_.append(((fid, "g"), lines))
                         self.__dict__.setdefault("_gcls", {})[(fid, "g")] = rs[i].cls     # (LEVEL_SPACING)
                     elif _rail_drawn(feats, i):
@@ -8125,9 +8132,7 @@ class BridgeProfiles:
                         lines = []
                         for kind, rings in railways._pieces(feats, i):
                             if kind == "ground":
-                                for ring in rings:
-                                    e, n = mapgeom.enu_xy(feats, self.frame, ring)
-                                    lines.append(np.stack([e, n], axis=1))
+                                lines += mapgeom.enu_rings(feats, self.frame, rings)
                         if lines:
                             roads_.append(((fid, "r"), lines))
             got = (parts, roads_)
@@ -10210,19 +10215,24 @@ class ChainView:
             if feats is None or len(feats) == 0:
                 continue
             bs = self.specs_of(feats)
+            cand = []           # (fid, j, ring, i) in order; their bounds in this frame in one native call
             for i in range(len(feats)):
                 if bs[i] is None:
                     continue
                 fid = str(feats.ids[i])
                 for j, ring in _keyed(self.keys_of, self.parts_of, feats, i):
-                    if (fid, j) in queued:
-                        continue
-                    e, n = mapgeom.enu_xy(feats, self.frame, ring)
-                    if e.max() < x0 - NEAR_M or e.min() > x1 + NEAR_M or n.max() < y0 - NEAR_M or n.min() > y1 + NEAR_M:
-                        continue
-                    queued.add((fid, j))
-                    st = self.cs.store_at(float(ring[0][1]), float(ring[0][0]))
-                    by.setdefault(st.region, (st, []))[1].append(((fid, j), feats, i))
+                    cand.append((fid, j, ring, i))
+            if not cand:
+                continue
+            bb = mapgeom.enu_bounds(feats, self.frame, [c[2] for c in cand]).tolist()
+            for (fid, j, ring, i), (emin, emax, nmin, nmax) in zip(cand, bb):
+                if (fid, j) in queued:
+                    continue
+                if emax < x0 - NEAR_M or emin > x1 + NEAR_M or nmax < y0 - NEAR_M or nmin > y1 + NEAR_M:
+                    continue
+                queued.add((fid, j))
+                st = self.cs.store_at(float(ring[0][1]), float(ring[0][0]))
+                by.setdefault(st.region, (st, []))[1].append(((fid, j), feats, i))
         return by
 
     def _map(self, st, got):
@@ -13047,6 +13057,8 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
                 pieces = [r for pc in pieces for r in cut_outside(pc, decal_blockers, 0.5)]
             if look["m"] == EDGE_DECAL["m"] and (fid, side) in grassy:
                 look = {**look, "m": GRASS_EDGE_DECAL["m"]}
+            elif SURFACE_V2 and look["m"] == EDGE_DECAL["m"] and spec.cls in GRAVEL_EDGE_ROADS and not spec.urban:
+                look = {**look, "m": GRAVEL_EDGE_DECAL["m"]}
             lines_by = centre_blockers if look.get("kind") in ("centre", "lane") else \
                 edge_blockers if look.get("kind") == "edge" else blockers
             if look.get("kind") in ("centre", "lane", "edge"):
@@ -13146,9 +13158,11 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
         import euguardrails
         import poleprofiles
         detailed_signs = euguardrails.enabled() and poleprofiles.kit_enabled(pole_profile)
+    rail_beds = ()                  # (the tracks' beds round the tile: nothing guessed stands on them, furniture.place)
     if props is not None and walks is not None:     # street lights and utility poles (furniture.py)
         # (the speed-limit signs are the sign tiles' since 2026-10-28: speedsigns.py)
         import railxing
+        rail_beds = railxing.rail_obstacles(frame, cells, own_box)
         if sign_obstacles is not None:
             sign_obstacles.ground = ground
         props.extend(furniture.place(roads, walks, own_box, wires=wires, town=bool(town), left_hand=left_hand,
@@ -13157,7 +13171,7 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
                                      priority=priority, ground=ground, development=development,
                                      pole_profile=pole_profile, pole_frame=frame, sign_obstacles=sign_obstacles,
                                      defer_gore=detailed_signs, mapped_poles=mapped_poles, mapped_lamps=mapped_lamps,
-                                     obstacles=railxing.rail_obstacles(frame, cells, own_box) if railxing.ENABLED else (),
+                                     obstacles=rail_beds,
                                      de_on=de_on, de_ctx=de_ctx, de_ctl=de_ctl,
                                      lighting={fid: str(f.attrs["osm_lit"][i]).strip().lower()
                                                for fid, (f, i, _sp) in seen.items() if "osm_lit" in f.attrs}))
@@ -13265,6 +13279,7 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
     if detailed_signs:
         def finish_roadside(guardrail_rows, extra_pavement=()):
             import frgore
+            import furniture
             import frlocaldirections
             import signmesh
 
@@ -13272,10 +13287,12 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
             if walks is not None:
                 import delineators
 
-                props.extend(frgore.place(frame, roads, own_box, country_at, ground, sign_decks,
-                                         guardrails=guardrail_rows, obstacles=sign_obstacles))
-                props.extend(delineators.motorway_verges(roads, own_box, country_at,
-                                                         guardrail_rows, [*sign_decks, *extra_pavement]))
+                # (deferred: off the tracks' beds as furniture.place's own rows; Codex's review)
+                props.extend(furniture.off_rail_beds(frgore.place(frame, roads, own_box, country_at, ground, sign_decks,
+                                                                  guardrails=guardrail_rows, obstacles=sign_obstacles),
+                                                     rail_beds))
+                props.extend(furniture.off_rail_beds(delineators.motorway_verges(
+                    roads, own_box, country_at, guardrail_rows, [*sign_decks, *extra_pavement]), rail_beds))
             if signs is not None:
                 mesh = sign_mesh if sign_mesh is not None else signmesh.Mesh((x0, y0, 0.))
                 added = frlocaldirections.add(

@@ -55,6 +55,14 @@ class OsmOverMlTest(unittest.TestCase):
         self.assertEqual(g.ids.tolist(), f.ids[:10].tolist())
         self.assertTrue(np.array_equal(g.lonlat, f.lonlat[:50]))
 
+    def test_small_outline_behind_a_house_kept(self):
+        """A garden shed (at most 40 m^2) within 20 m of a mapped house stays (OSM seldom maps them); one on a cleared
+        lot, a 49 m^2 ghost, and a small duplicate of a mapped house are dropped."""
+        f = layer(street() + [(ring(504.0, 518.0, 5.0), MS), (ring(560.0, 580.0, 5.0), MS),
+                              (ring(520.0, 520.0, 7.0), MS), (ring(503.0, 503.0, 5.0), MS)])
+        self.assertEqual(osmml.verdicts(f, KEY).tolist(),
+                         [0] * 10 + [osmml.KEPT, osmml.COVERED, osmml.COVERED, osmml.DUPLICATE])
+
     def test_sparse_osm_keeps_ml(self):
         # a town nobody traced: 3 mapped houses, 20 learned ones
         items = street(3) + [(ring(500.0 + 20.0 * (k % 5), 530.0 + 20.0 * (k // 5), 12.0), MS) for k in range(20)]

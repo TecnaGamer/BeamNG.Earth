@@ -954,9 +954,30 @@ class RulesTest(unittest.TestCase):
         self.assertAlmostEqual(navgraph.road_mph(F, 0, mw), 65.0)
         self.assertAlmostEqual(navgraph.road_mph(F, 0, mw, mph=False) * 1.609344, 120.0)
         town = roads.Spec(9.0, "paved", True, "primary", False)
-        self.assertAlmostEqual(navgraph.road_mph(F, 0, town, mph=False), 35.0, msg="in town: the urban cap")
+        self.assertAlmostEqual(navgraph.road_mph(F, 0, town, mph=False) * 1.609344, 50.0, msg="in town: the urban cap")
+        self.assertAlmostEqual(navgraph.road_mph(F, 0, town), 35.0, msg="in town, mph: the urban cap")
         res = roads.Spec(6.0, "paved", True, "residential", False)
-        self.assertAlmostEqual(navgraph.road_mph(F, 0, res, mph=False), 25.0)
+        self.assertAlmostEqual(navgraph.road_mph(F, 0, res, mph=False) * 1.609344, 40.0)
+        self.assertAlmostEqual(navgraph.road_mph(F, 0, res), 25.0)
+
+    def test_kmh_defaults_are_limits_a_km_h_country_posts(self):
+        # (the player's report KK25CFD8: an unmapped tertiary through Nuerburg drove and posted 35 mph, a 55 km/h sign)
+        import speedsigns
+
+        class F:
+            rules = {}
+        for cls in navgraph.DRIVE:
+            for urban in (False, True):
+                sp = roads.Spec(7.0, "paved", urban, cls, False)
+                kmh = navgraph.road_mph(F, 0, sp, mph=False) * 1.609344
+                self.assertAlmostEqual(kmh, round(kmh / 10.0) * 10.0, places=6, msg=(cls, urban, kmh))
+                self.assertEqual(speedsigns.posted(navgraph.road_mph(F, 0, sp, mph=False), mph=False) % 10, 0,
+                                 (cls, urban))
+        tertiary = roads.Spec(7.0, "paved", False, "tertiary", False)
+        self.assertEqual(speedsigns.posted(navgraph.road_mph(F, 0, tertiary, mph=False), mph=False), 60.0)
+        for cls in ("primary", "secondary", "tertiary"):
+            town = roads.Spec(7.0, "paved", True, cls, False)
+            self.assertEqual(speedsigns.posted(navgraph.road_mph(F, 0, town, mph=False), mph=False), 50.0, cls)
 
     def test_us_motorways_default_to_their_states_limit(self):
         # Tann2019 2026-11-05: Montana's I-94 near Huntley (no mapped limit) is 80, the traffic drove the flat 65
@@ -1023,9 +1044,9 @@ class RulesTest(unittest.TestCase):
         kmh = lambda i, on: navgraph.road_mph(F, i, res, mph=False, country="DE", de_on=on) * 1.609344   # noqa: E731
         self.assertAlmostEqual(kmh(0, True), 20.0)
         self.assertAlmostEqual(kmh(1, True), 30.0)
-        self.assertAlmostEqual(kmh(0, False), 25.0 * 1.609344, msg="off: the class default")
-        self.assertAlmostEqual(kmh(2, True), 25.0 * 1.609344, msg="no zone")
-        self.assertAlmostEqual(kmh(3, True), 25.0 * 1.609344, msg="not a zone of the family")
+        self.assertAlmostEqual(kmh(0, False), 40.0, msg="off: the class default (km/h)")
+        self.assertAlmostEqual(kmh(2, True), 40.0, msg="no zone")
+        self.assertAlmostEqual(kmh(3, True), 40.0, msg="not a zone of the family")
         class Mapped(F):
             rules = {"max_speed_kmh": rules([(0, 10.0)], "float")}
         self.assertAlmostEqual(navgraph.road_mph(Mapped, 0, res, mph=False, de_on=True) * 1.609344, 10.0,

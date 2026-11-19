@@ -19,6 +19,11 @@
 //! Of the ML outline's area, not the OSM one's: a small OSM shed or entrance at a large ML warehouse's edge does not
 //! drop the warehouse (Codex, 2026-11-18). A building in the other's courtyard is no duplicate.
 //!
+//! An ML outline of at most SMALL_M2 (whole m^2, outer rings; a shed, a garage, a garden house, which OSM mostly
+//! does not map: Vienna's 758 dropped ones, 424 of them under 40 m^2) is not dropped as COVERED when an OSM outline's
+//! box lies within NEAR_M of its box (it stands behind a house, not on a cleared lot): the demolished rowhouses and
+//! building-site ghosts are all over 90 m^2. The duplicate rule still drops one of any size.
+//!
 //! An outline is in every cell its box reaches (overture's unclipped buildings), and each cell sees only its own
 //! rows: two cells could judge one outline otherwise. Only its owner (the cell its box centre lies in: Features.own)
 //! judges an ML outline; its copies in the other cells are left out (ELSEWHERE), so every reader that has the owner
@@ -36,6 +41,8 @@ pub const SHARE_DEN: i64 = 10;
 pub const DUP_GRID: usize = 32; // lattice points a side over an ML outline's box (its footprint's share on OSM's)
 pub const DUP_NUM: i64 = 1;
 pub const DUP_DEN: i64 = 2;
+pub const SMALL_M2: i64 = 40; // a shed, garage or garden house: kept where OSM maps a house within NEAR_M (the user, 2026-11-19)
+pub const NEAR_M: f64 = 20.0;
 const M_PER_DEG_LAT: f64 = 110540.0;
 const M_PER_DEG_LON: f64 = 111320.0;
 
@@ -156,6 +163,12 @@ pub fn verdicts(l: &Layer, w: f64, h: f64) -> Vec<i8> {
     let nb = (if span.is_finite() { span.clamp(1.0, 4096.0) as i64 } else { 1 }) + 2 * pad;
     let bin = |v: f64| -> i64 { ((v / BIN_M).floor() as i64).saturating_add(pad).clamp(0, nb - 1) };
     let boxes: Vec<Option<[f64; 4]>> = (0..n).map(|i| bbox(l.coords(i))).collect();
+    let areas: Vec<i64> = (0..n)
+        .map(|i| {
+            let a: f64 = l.parts(i).map(|p| ring_area(l.outer(p))).sum();
+            if a.is_finite() { a.round().min(1e12) as i64 } else { 0 }
+        })
+        .collect();
     let cell = |i: usize| boxes[i].map(|b| (bin((b[0] + b[2]) / 2.0), bin((b[1] + b[3]) / 2.0)));
     // integral images of the OSM count, the OSM area and the ML area (whole m^2 per outline)
     let s = (nb + 1) as usize;
@@ -165,8 +178,7 @@ pub fn verdicts(l: &Layer, w: f64, h: f64) -> Vec<i8> {
             continue;
         }
         let Some((gx, gy)) = cell(i) else { continue };
-        let a: f64 = l.parts(i).map(|p| ring_area(l.outer(p))).sum();
-        let a = if a.is_finite() { a.round().min(1e12) as i64 } else { 0 };
+        let a = areas[i];
         let k = (gy as usize + 1) * s + gx as usize + 1;
         if l.source[i] == OSM {
             sums[k][0] += 1;
@@ -222,13 +234,20 @@ pub fn verdicts(l: &Layer, w: f64, h: f64) -> Vec<i8> {
     let mut stamp = vec![usize::MAX; n];
     let mut near: Vec<usize> = Vec::new();
     for i in 0..n {
-        if l.source[i] != ML || out[i] != KEPT || l.part_off[i + 1] == l.part_off[i] {
+        if l.source[i] != ML || l.part_off[i + 1] == l.part_off[i] {
+            continue;
+        }
+        // a small covered outline is looked for OSM outlines NEAR_M round its box (kept when one is there)
+        let small = out[i] == COVERED && areas[i] <= SMALL_M2;
+        if out[i] != KEPT && !small {
             continue;
         }
         let Some(b) = boxes[i] else { continue };
-        // the OSM outlines whose boxes meet its box
+        let pad = if small { NEAR_M } else { 0.0 };
+        // the OSM outlines whose boxes meet its box (near), or lie within pad of it (close)
         near.clear();
-        let (x0, y0, x1, y1) = (bin(b[0]), bin(b[1]), bin(b[2]), bin(b[3]));
+        let mut close = false;
+        let (x0, y0, x1, y1) = (bin(b[0] - pad), bin(b[1] - pad), bin(b[2] + pad), bin(b[3] + pad));
         for y in y0..=y1 {
             for x in x0..=x1 {
                 for &j in &grid[(y * nb + x) as usize] {
@@ -238,12 +257,22 @@ pub fn verdicts(l: &Layer, w: f64, h: f64) -> Vec<i8> {
                     }
                     stamp[j] = i;
                     let Some(bj) = boxes[j] else { continue };
+                    if bj[0] > b[2] + pad || bj[2] < b[0] - pad || bj[1] > b[3] + pad || bj[3] < b[1] - pad {
+                        continue;
+                    }
+                    close = true;
                     if bj[0] > b[2] || bj[2] < b[0] || bj[1] > b[3] || bj[3] < b[1] {
                         continue;
                     }
                     near.push(j);
                 }
             }
+        }
+        if small {
+            if !close {
+                continue; // (stays COVERED: no house near)
+            }
+            out[i] = KEPT;
         }
         if near.is_empty() {
             continue;
@@ -378,6 +407,23 @@ mod tests {
         let mut rings: Vec<(Vec<P>, i8)> = (0..10).map(|k| (square(500.0 + 20.0 * k as f64, 500.0, 12.0), OSM)).collect();
         rings.extend((0..4).map(|k| (square(500.0 + 50.0 * k as f64, 560.0, 40.0), ML)));
         assert!(verdicts(&layer(&rings), 1900.0, 1900.0).iter().all(|&x| x == KEPT));
+    }
+
+    #[test]
+    fn small_outlines_kept_behind_a_house() {
+        // a street of 10 mapped houses; an ML shed 6 m behind one, one far off on a cleared lot, a big ghost beside
+        let mut rings: Vec<(Vec<P>, i8)> = (0..10).map(|k| (square(500.0 + 20.0 * k as f64, 500.0, 12.0), OSM)).collect();
+        rings.push((square(504.0, 518.0, 5.0), ML)); // 25 m^2, 6 m from a house
+        rings.push((square(560.0, 580.0, 5.0), ML)); // 25 m^2, 60 m from any house
+        rings.push((square(520.0, 520.0, 7.0), ML)); // 49 m^2 next to a house: a ghost
+        let v = verdicts(&layer(&rings), 1900.0, 1900.0);
+        assert_eq!(v[10], KEPT);
+        assert_eq!(v[11], COVERED);
+        assert_eq!(v[12], COVERED);
+        // a small duplicate of an OSM house is still dropped
+        let mut rings: Vec<(Vec<P>, i8)> = (0..10).map(|k| (square(500.0 + 20.0 * k as f64, 500.0, 12.0), OSM)).collect();
+        rings.push((square(503.0, 503.0, 5.0), ML));
+        assert_eq!(verdicts(&layer(&rings), 1900.0, 1900.0)[10], DUPLICATE);
     }
 
     #[test]

@@ -257,6 +257,62 @@ class PoleTest(unittest.TestCase):
         self.assertFalse(any(abs(x[1] - x0 - 1.0) < reach for x in kept))
         self.assertEqual(len(kept), len(free) - sum(abs(x[1] - x0 - 1.0) < reach for x in free), "only those by the track")
 
+    def test_nothing_on_a_track_along_a_street(self):
+        """A track running along a town street at its curb (Albany OR's Water Avenue, the player's reports 6ECWWD96 and
+        RHSE7A23: street trees, poles and signs in the tracks): no street tree, hydrant, bench, lamp or pole within the
+        bed's reach; the other side keeps its."""
+        fid = next(f"dev{k}" for k in range(100) if furniture._h01(f"dev{k}", "trees") < furniture.STREET_TREE_SHARE)
+        r = road(fid, "tertiary", True, x1=900.)
+        walks = [wk for side in (1, -1) for wk in LampTest.walks(None, r, side)]
+        free = furniture.place([r], walks, (0, 0, 512, 256), development=ConstantDevelopment())
+        ys = sorted({round(x[2]) for x in free})
+        side_y = max(x[2] for x in free)                          # (the far side's curb line of props)
+        track = ("rail:a", 2.6, np.array([[-300.0, side_y, 0.0], [900.0, side_y, 0.0]]))
+        kept = furniture.place([r], walks, (0, 0, 512, 256), development=ConstantDevelopment(), obstacles=[track])
+        reach = 2.6 + furniture.CLEAR_OTHER_M
+        self.assertTrue(any(abs(x[2] - side_y) < reach and x[0] == furniture.G_STREET_TREE for x in free), ys)
+        self.assertFalse([x[0] for x in kept if abs(x[2] - side_y) < reach])
+        self.assertEqual(sorted(map(tuple, (x for x in kept if x[2] < 50.0))),
+                         sorted(map(tuple, (x for x in free if x[2] < 50.0))), "the other side's stay")
+
+    def test_the_regional_kits_late_rows_keep_off_the_bed_too(self):
+        # (Codex's review: the regional kit's markers and traffic signs join the rows after the clearance filter)
+        r = road("k", "tertiary", False, x1=900.)
+        track = ("rail:a", 2.6, np.array([[-300.0, 60.0, 0.0], [900.0, 60.0, 0.0]]))
+        marker = ["fr_marker", 100.0, 59.0, 0.0, 0.0, 1.0, 1.2, 0.0]
+        clear = ["fr_marker", 200.0, 80.0, 0.0, 0.0, 1.0, 1.2, 0.0]
+        with mock.patch.object(poleprofiles, "kit_enabled", lambda *_: True), \
+                mock.patch("regionalmarkers.place", lambda *a, **k: [list(marker), list(clear)]), \
+                mock.patch("regionalstops.localize", lambda rows, *a: rows), \
+                mock.patch("regionaltraffic.localize", lambda rows, *a: rows), \
+                mock.patch("regionaltraffic.place", lambda *a: []), \
+                mock.patch("euguardrails.enabled", lambda: False), \
+                mock.patch.object(poleprofiles, "country_selector", lambda *a: (lambda *b: "FR")):
+            rows = furniture.place([r], [], (0, 0, 512, 256), obstacles=[track])
+        got = [x for x in rows if x[0] == "fr_marker"]
+        self.assertEqual([x[1] for x in got], [200.0])
+
+    def test_deferred_roadside_rows_keep_off_the_bed(self):
+        track = ("rail:a", 2.6, np.array([[-300.0, 60.0, 0.0], [900.0, 60.0, 0.0]]))
+        rows = [["fr_gore", 10.0, 61.0, 0.0, 0.0, 1.0, 1.0, 0.0], ["fr_gore", 10.0, 70.0, 0.0, 0.0, 1.0, 1.0, 0.0]]
+        self.assertEqual([r[2] for r in furniture.off_rail_beds(rows, [track])], [70.0])
+        self.assertEqual(furniture.off_rail_beds(rows, ()), rows)
+
+    def test_rail_obstacles_are_every_ground_track_but_a_tram(self):
+        import railxing
+        parts = [("r1", "rail", "ground", np.array([[0.0, 0.0], [50.0, 0.0]])),
+                 ("t1", "tram", "ground", np.array([[0.0, 10.0], [50.0, 10.0]])),
+                 ("b1", "rail", "bridge", np.array([[0.0, 20.0], [50.0, 20.0]]))]
+        for on in (False, True):
+            with mock.patch("railways.parts", lambda *a, **k: parts), mock.patch.object(railxing, "ENABLED", on):
+                got = railxing.rail_obstacles(None, [], (0, 0, 256, 256))
+            self.assertEqual([g[0] for g in got], ["rail:r1"])
+        # the road tiles ask for them whatever the level-crossing kit's switch (roads.build_tile's furniture.place)
+        src = Path(roads.__file__).read_text(encoding="utf-8")
+        self.assertIn("rail_beds = railxing.rail_obstacles(frame, cells, own_box)", src)
+        self.assertIn("obstacles=rail_beds,", src)
+        self.assertEqual(src.count("furniture.off_rail_beds("), 2, "the deferred gore markers and verge posts too")
+
     def test_town_street_without_sidewalk_is_lit(self):
         """A town street with no sidewalk run: lamps from its edge (the user, 2026-10-27: lamps only near the
         camera; most streets had none), on its poles where the lines run overhead, on posts where buried; a main

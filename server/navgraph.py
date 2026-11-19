@@ -41,6 +41,12 @@ URBAN_MPH_CAP = {"primary": 35, "secondary": 35, "tertiary": 30}   # in town (sp
 # the km/h countries' rural defaults for the fast classes (Europe's 120-130 motorways: Bavaria's A9, unmapped, was
 # driven at the US 65 mph, 2026-10-15)
 KMH_DEFAULT = {"motorway": 120, "trunk": 100, "primary": 80, "secondary": 70}
+# The other classes' defaults where km/h are posted: the mph default in km/h to the nearest 10 (kmh_default), and in town
+# URBAN_KMH_CAP (the 50 km/h most km/h countries' towns have by law). The mph defaults themselves read in km/h were limits
+# no country posts: a tertiary's 35 mph a 55 km/h sign by Nuerburg's Hauptstrasse where its mapped 50 ended, an urban
+# primary's 35 mph cap 55 too (the player's report KK25CFD8, 2026-11-18: "there is no 55 in Germany")
+URBAN_KMH_CAP = {"primary": 50, "secondary": 50, "tertiary": 50}
+KMH_STEP = 10
 # Sweden's limits by law where no sign says otherwise, whatever the class: 50 km/h in a built-up area, 70 outside it
 # (bashastighet, Trafikförordningen 1998:1276 3 kap. 17 §), 110 on a motorway (9 kap. 1 §). Slower classes as above.
 SE_ROADS = {"trunk", "primary", "secondary", "tertiary", "unclassified", "residential"}
@@ -244,12 +250,23 @@ def road_mph(feats, i, spec, mph=True, at=0.5, country=None, de_on=False):
         return 110.0 / 1.609344
     if country == "SE" and spec.cls in SE_ROADS:
         return (50.0 if spec.urban else 70.0) / 1.609344
+    if not mph:
+        return kmh_default(spec.cls, spec.urban) / 1.609344
     v = DRIVE[spec.cls][1]
-    if not mph and spec.cls in KMH_DEFAULT:
-        v = KMH_DEFAULT[spec.cls] / 1.609344
     if spec.urban and spec.cls in URBAN_MPH_CAP:
         v = min(v, URBAN_MPH_CAP[spec.cls])
     return float(v)
+
+
+def kmh_default(cls, urban):
+    """The default limit (km/h) of a road class where km/h are posted and nothing is mapped: KMH_DEFAULT's, else the
+    class's mph default in km/h to the nearest KMH_STEP; in town at most URBAN_KMH_CAP. Pure."""
+    kmh = KMH_DEFAULT.get(cls)
+    if kmh is None:
+        kmh = max(KMH_STEP, int(DRIVE[cls][1] * 1.609344 / KMH_STEP + 0.5) * KMH_STEP)
+    if urban and cls in URBAN_KMH_CAP:
+        kmh = min(kmh, URBAN_KMH_CAP[cls])
+    return float(kmh)
 
 
 def _rdp(p, tol):

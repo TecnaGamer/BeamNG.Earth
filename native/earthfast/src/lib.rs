@@ -131,6 +131,7 @@ mod raildrawn;
 mod railindex;
 mod railnode;
 mod stationzone;
+mod seawater;
 mod railunder;
 mod railspans;
 mod osmml;
@@ -1225,6 +1226,130 @@ fn ecef_to_frame<'py>(py: Python<'py>, xyz: PyReadonlyArray2<'py, f64>, origin: 
         out
     });
     let arr = numpy::ndarray::Array2::from_shape_vec((n, 2), out)
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+    Ok(arr.into_pyarray(py))
+}
+
+const RINGS_CHUNK_PTS: usize = 1 << 16;    // points enu_rings / enu_bounds copy out of NumPy at a time (1 MB)
+
+/// The rings' views (k, >= 2) of lon, lat, ...
+fn ring_views<'a>(rings: &'a [PyReadonlyArray2<'_, f64>], what: &str)
+                  -> PyResult<Vec<numpy::ndarray::ArrayView2<'a, f64>>> {
+    let views: Vec<_> = rings.iter().map(|r| r.as_array()).collect();
+    if views.iter().any(|v| v.ncols() < 2) {
+        return Err(pyo3::exceptions::PyValueError::new_err(format!("{what}: rings (k, >= 2) of lon, lat")));
+    }
+    Ok(views)
+}
+
+/// The end of the chunk of rings from a: as many whole rings as stay within RINGS_CHUNK_PTS points together, at least
+/// one (a longer ring alone: its copy as large as its own array).
+fn ring_chunk(views: &[numpy::ndarray::ArrayView2<'_, f64>], a: usize) -> usize {
+    let (mut b, mut pts) = (a, 0usize);
+    while b < views.len() && (b == a || pts.saturating_add(views[b].nrows()) <= RINGS_CHUNK_PTS) {
+        pts = pts.saturating_add(views[b].nrows());
+        b += 1;
+    }
+    b
+}
+
+/// The lon/lat points (columns 0 and 1) of a chunk of rings copied out of NumPy into one list (the GIL may then be let
+/// go), with each ring's start (len + 1 offsets).
+fn gather_rings(views: &[numpy::ndarray::ArrayView2<'_, f64>]) -> (Vec<f64>, Vec<usize>) {
+    let total: usize = views.iter().map(|v| v.nrows()).sum();
+    let mut ll = Vec::with_capacity(total * 2);
+    let mut off = Vec::with_capacity(views.len() + 1);
+    off.push(0usize);
+    for v in views {
+        for i in 0..v.nrows() {
+            ll.push(v[[i, 0]]);
+            ll.push(v[[i, 1]]);
+        }
+        off.push(ll.len() / 2);
+    }
+    (ll, off)
+}
+
+/// mapgeom.enu_rings: each lon/lat ring [(k, >= 2)] as (k, 2) east / north in the frame (origin, rot), height 0: per
+/// point geodetic_to_enu's numbers (g2e_one, as mapgeom.enu_xy gives them, column-stacked), for many rings in one call
+/// (railways.crossings and the like converted ring by ring: ~434k enu_xy calls a three-place cold road tile set). The
+/// points are copied out RINGS_CHUNK_PTS at a time, each chunk converted without the GIL when long.
+#[pyfunction]
+fn enu_rings<'py>(py: Python<'py>, rings: Vec<PyReadonlyArray2<'py, f64>>, origin: PyReadonlyArray1<'py, f64>,
+                  rot: PyReadonlyArray2<'py, f64>) -> PyResult<Vec<Bound<'py, PyArray2<f64>>>> {
+    let (o, r) = frame_of(&origin, &rot)?;
+    let views = ring_views(&rings, "enu_rings")?;
+    let mut out = Vec::with_capacity(views.len());
+    let mut a = 0;
+    while a < views.len() {
+        let b = ring_chunk(&views, a);
+        let (ll, off) = gather_rings(&views[a..b]);
+        let n = ll.len() / 2;
+        let en = release(py, n * 40, || {
+            let mut en = Vec::with_capacity(n * 2);
+            for i in 0..n {
+                let (e, nn, _) = g2e_one(ll[2 * i + 1], ll[2 * i], 0.0, &o, &r);
+                en.push(e);
+                en.push(nn);
+            }
+            en
+        });
+        for w in off.windows(2) {
+            let arr = numpy::ndarray::Array2::from_shape_vec((w[1] - w[0], 2), en[2 * w[0]..2 * w[1]].to_vec())
+                .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+            out.push(arr.into_pyarray(py));
+        }
+        a = b;
+    }
+    Ok(out)
+}
+
+/// mapgeom.enu_bounds: (len(rings), 4) east min, east max, north min, north max of each lon/lat ring in the frame
+/// (origin, rot), height 0, from enu_rings' points: NumPy's min / max of them as numbers, for comparing (a NaN point
+/// makes that axis' pair NaN, the canonical one; of equal +0.0 / -0.0 extremes the first; an empty ring is a
+/// ValueError, as min / max of no values). roads.ChainView._todo's near test, many parts a call; chunks as enu_rings.
+#[pyfunction]
+fn enu_bounds<'py>(py: Python<'py>, rings: Vec<PyReadonlyArray2<'py, f64>>, origin: PyReadonlyArray1<'py, f64>,
+                   rot: PyReadonlyArray2<'py, f64>) -> PyResult<Bound<'py, PyArray2<f64>>> {
+    let (o, r) = frame_of(&origin, &rot)?;
+    let views = ring_views(&rings, "enu_bounds")?;
+    if views.iter().any(|v| v.nrows() == 0) {
+        return Err(pyo3::exceptions::PyValueError::new_err("enu_bounds: an empty ring (no min / max)"));
+    }
+    let mut out = Vec::with_capacity(views.len() * 4);
+    let mut a = 0;
+    while a < views.len() {
+        let b = ring_chunk(&views, a);
+        let (ll, off) = gather_rings(&views[a..b]);
+        let n = ll.len() / 2;
+        let got = release(py, n * 40, || {
+            let mut got = Vec::with_capacity((off.len() - 1) * 4);
+            for w in off.windows(2) {
+                let (mut e0, mut e1, mut n0, mut n1) = (0.0f64, 0.0f64, 0.0f64, 0.0f64);
+                let (mut nan_e, mut nan_n) = (false, false);
+                for i in w[0]..w[1] {
+                    let (e, nn, _) = g2e_one(ll[2 * i + 1], ll[2 * i], 0.0, &o, &r);
+                    if i == w[0] {
+                        (e0, e1, n0, n1) = (e, e, nn, nn);
+                    } else {
+                        if e < e0 { e0 = e; }
+                        if e > e1 { e1 = e; }
+                        if nn < n0 { n0 = nn; }
+                        if nn > n1 { n1 = nn; }
+                    }
+                    nan_e |= e.is_nan();
+                    nan_n |= nn.is_nan();
+                }
+                if nan_e { (e0, e1) = (f64::NAN, f64::NAN); }
+                if nan_n { (n0, n1) = (f64::NAN, f64::NAN); }
+                got.extend_from_slice(&[e0, e1, n0, n1]);
+            }
+            got
+        });
+        out.extend_from_slice(&got);
+        a = b;
+    }
+    let arr = numpy::ndarray::Array2::from_shape_vec((views.len(), 4), out)
         .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
     Ok(arr.into_pyarray(py))
 }
@@ -5001,13 +5126,22 @@ fn terrain_at(grid: &numpy::ndarray::ArrayView2<f64>, i0: i64, j0: i64, cell: f6
 /// everywhere. In a terrain cell whose corners are more than step_m apart (a cutting's wall: the lattice draws it as teeth)
 /// no point goes over the cell's lowest corner + max_up (an edge line climbed those teeth in front of the wall as tents
 /// of white up to 1.3 m tall, the McGraw-Graben 2026-10-22: it stays at the road's level, the teeth over it).
+/// clear (499, the road revamp v2's overlays: roadmesh.SURFACE_V2): when finite, a triangle left whole is raised so
+/// that the ground stands at most `clear` over it anywhere inside (an overlay lifted L over the ground dipped under it
+/// where the ground bulged more than L between its corners): each input point (known by its position to 0.1 mm: the
+/// tile clip copies points per triangle) by the most any of its whole triangles needs (a plane through raised corners
+/// is raised everywhere by at least their least), and a cut triangle's pieces by its corners' raises spread
+/// barycentrically (on the ground plus that: a whole neighbour's shared edge and theirs meet as they did without clear).
+/// The step cap still wins, taken from the terrain cell holding each piece (a whole triangle over a step cell and
+/// another cell is cut along the terrain first, its pieces on its own plane): a flat neighbour neither holds a corner on its edge down nor lifts a
+/// step cell's piece up the wall. NaN (the default): as before.
 /// Returns (points (m, 3), uvs (m, 2), triangles (r, 3), source triangle (r,)); points not shared.
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
-#[pyo3(signature = (pts, uv, tris, cell, grid, i0, j0, tol, step_m=f64::INFINITY, max_up=f64::INFINITY))]
+#[pyo3(signature = (pts, uv, tris, cell, grid, i0, j0, tol, step_m=f64::INFINITY, max_up=f64::INFINITY, clear=f64::NAN))]
 fn follow_tris<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, uv: PyReadonlyArray2<'py, f64>,
                     tris: PyReadonlyArray2<'py, i64>, cell: f64, grid: PyReadonlyArray2<'py, f64>, i0: i64, j0: i64,
-                    tol: f64, step_m: f64, max_up: f64)
+                    tol: f64, step_m: f64, max_up: f64, clear: f64)
                     -> (Bound<'py, PyArray2<f64>>, Bound<'py, PyArray2<f64>>, Bound<'py, PyArray2<i64>>,
                         Bound<'py, PyArray1<i64>>) {
     let (pv, uvv, tv, gv) = (pts.as_array(), uv.as_array(), tris.as_array(), grid.as_array());
@@ -5023,6 +5157,19 @@ fn follow_tris<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, uv: PyRead
         let lerp = |a: &V, b: &V, f: f64| -> V {
             [a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f, a[2] + (b[2] - a[2]) * f, a[3] + (b[3] - a[3]) * f]
         };
+        // (clear: the whole triangles' output points, input points, need, own heights and caps; the raise per input point)
+        // (a point is known by its position to 0.1 mm: the tile clip copies a ribbon's points per triangle)
+        let mut whole: Vec<(usize, [usize; 3], [f64; 3], [f64; 3])> = Vec::new();
+        let mut cut: Vec<(usize, [usize; 3], [f64; 3], f64, f64)> = Vec::new();
+        let mut keys: std::collections::HashMap<(i64, i64), usize> = std::collections::HashMap::new();
+        let mut raise: Vec<f64> = Vec::new();
+        let mut key_of = |i: usize, raise: &mut Vec<f64>| -> usize {
+            let k = ((pv[[i, 0]] * 1e4).round() as i64, (pv[[i, 1]] * 1e4).round() as i64);
+            let n = keys.len();
+            let id = *keys.entry(k).or_insert(n);
+            if id == raise.len() { raise.push(0.0); }
+            id
+        };
         for ti in 0..tv.shape()[0] {
             let tri: Vec<V> = (0..3).map(|k| {
                 let i = tv[[ti, k]] as usize;
@@ -5033,13 +5180,20 @@ fn follow_tris<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, uv: PyRead
             let (x0, y0, x1, y1, x2, y2) = (tri[0][0], tri[0][1], tri[1][0], tri[1][1], tri[2][0], tri[2][1]);
             let det = (x1 - x0) * (y2 - y0) - (x2 - x0) * (y1 - y0);
             let mut split = !z.iter().all(|v| v.is_finite()) || det.abs() < 1e-12;
+            let mut up = 0.0f64;                // (clear: the most the ground stands over the plane inside)
             if !split {
                 let plane = |x: f64, y: f64| {
                     let s = ((x - x0) * (y2 - y0) - (x2 - x0) * (y - y0)) / det;
                     let t = ((x1 - x0) * (y - y0) - (x - x0) * (y1 - y0)) / det;
                     (z[0] + s * (z[1] - z[0]) + t * (z[2] - z[0]), s, t)
                 };
-                let dev = |x: f64, y: f64| { let tz = ter(x, y); if tz.is_finite() { (tz - plane(x, y).0).abs() } else { f64::INFINITY } };
+                let mut dev = |x: f64, y: f64| {
+                    let tz = ter(x, y);
+                    if !tz.is_finite() { return f64::INFINITY; }
+                    let d = tz - plane(x, y).0;
+                    if d > up { up = d; }
+                    d.abs()
+                };
                 // the grid points inside
                 let (lx, hx) = (x0.min(x1).min(x2), x0.max(x1).max(x2));
                 let (ly, hy) = (y0.min(y1).min(y2), y0.max(y1).max(y2));
@@ -5081,16 +5235,58 @@ fn follow_tris<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, uv: PyRead
                 let (lo, hi) = c.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |a, &v| (a.0.min(v), a.1.max(v)));
                 if hi - lo > step_m { lo + max_up } else { f64::INFINITY }
             };
+            // (clear: a piece takes the cap of the terrain cell holding it, at every corner: a corner on a flat cell's
+            // edge beside a step cell is not held down to the step's lowest corner (under the flat ground), and a flat
+            // neighbour does not lift a step cell's piece up the wall. A whole triangle over more than one cell with a
+            // step among them is cut along the terrain (each piece then in one cell, on the triangle's own plane); its
+            // need still raises its points)
+            let mut whole_cap = f64::INFINITY;
+            let mut forced = false;
+            let mut need_cut = 0.0f64;
+            if clear.is_finite() && !split && step_m.is_finite() {
+                let (lx, hx) = (x0.min(x1).min(x2), x0.max(x1).max(x2));
+                let (ly, hy) = (y0.min(y1).min(y2), y0.max(y1).max(y2));
+                let ia = (lx / cell + 1e-9).floor() as i64;
+                let ib = ((hx / cell - 1e-9).ceil() as i64 - 1).max(ia);
+                let ja = (ly / cell + 1e-9).floor() as i64;
+                let jb = ((hy / cell - 1e-9).ceil() as i64 - 1).max(ja);
+                let mut stepped = false;
+                for gi in ia..=ib {
+                    for gj in ja..=jb {
+                        let c = cap((gi as f64 + 0.5) * cell, (gj as f64 + 0.5) * cell);
+                        if c.is_finite() { stepped = true; whole_cap = c; }
+                    }
+                }
+                if stepped && (ia != ib || ja != jb) {
+                    split = true;
+                    forced = true;
+                    need_cut = (up - clear).max(0.0);
+                }
+            }
             if !split {
                 let base = p_out.len() as i64;
+                if clear.is_finite() {
+                    let need = (up - clear).max(0.0);
+                    let vi = [key_of(tv[[ti, 0]] as usize, &mut raise), key_of(tv[[ti, 1]] as usize, &mut raise),
+                              key_of(tv[[ti, 2]] as usize, &mut raise)];
+                    for &v in &vi { if need > raise[v] { raise[v] = need; } }
+                    whole.push((base as usize, vi, [z[0], z[1], z[2]], [whole_cap; 3]));
+                }
                 for (k, q) in tri.iter().enumerate() {
-                    p_out.push([q[0], q[1], z[k].min(cap(q[0], q[1]))]);
+                    let cz = if clear.is_finite() { whole_cap } else { cap(q[0], q[1]) };
+                    p_out.push([q[0], q[1], z[k].min(cz)]);
                     uv_out.push([q[2], q[3]]);
                 }
                 t_out.push([base, base + 1, base + 2]);
                 src.push(ti as i64);
                 continue;
             }
+            let corners = if clear.is_finite() {
+                let vi = [key_of(tv[[ti, 0]] as usize, &mut raise), key_of(tv[[ti, 1]] as usize, &mut raise),
+                          key_of(tv[[ti, 2]] as usize, &mut raise)];
+                for &v in &vi { if need_cut > raise[v] { raise[v] = need_cut; } }
+                vi
+            } else { [0usize; 3] };
             let mut polys: Vec<Vec<V>> = vec![tri];
             for &(nx, ny) in fams.iter() {
                 let mut next: Vec<Vec<V>> = Vec::new();
@@ -5130,8 +5326,25 @@ fn follow_tris<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, uv: PyRead
                 }).sum::<f64>() / 2.0;
                 if area.abs() < 1e-8 { continue; }
                 let base = p_out.len() as i64;
+                // (clear: the cap of the cell holding the piece, its corners' mean inside it)
+                let piece_cap = if clear.is_finite() {
+                    let k = poly.len() as f64;
+                    let (mx, my) = poly.iter().fold((0.0, 0.0), |a, q| (a.0 + q[0], a.1 + q[1]));
+                    cap(mx / k, my / k)
+                } else { f64::INFINITY };
                 for q in poly.iter() {
-                    p_out.push([q[0], q[1], ter(q[0], q[1]).min(cap(q[0], q[1]))]);
+                    let (mut tz, cz) = (ter(q[0], q[1]), if clear.is_finite() { piece_cap } else { cap(q[0], q[1]) });
+                    if clear.is_finite() && det.abs() >= 1e-12 {
+                        // (a cut piece takes its whole neighbours' raises too, spread over its triangle
+                        // barycentrically: the shared edges stay where they were without clear)
+                        let s = ((q[0] - x0) * (y2 - y0) - (x2 - x0) * (q[1] - y0)) / det;
+                        let t = ((x1 - x0) * (q[1] - y0) - (q[0] - x0) * (y1 - y0)) / det;
+                        // (a triangle cut only for the step cap keeps its own plane, as it would whole: its edges
+                        // meet a whole neighbour's exactly; only the cap differs, per piece)
+                        if forced { tz = z[0] + s * (z[1] - z[0]) + t * (z[2] - z[0]); }
+                        cut.push((p_out.len(), corners, [1.0 - s - t, s, t], tz, cz));
+                    }
+                    p_out.push([q[0], q[1], tz.min(cz)]);
                     uv_out.push([q[2], q[3]]);
                 }
                 for a in 1..(poly.len() as i64 - 1) {
@@ -5139,6 +5352,17 @@ fn follow_tris<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, uv: PyRead
                     src.push(ti as i64);
                 }
             }
+        }
+        // (clear: every whole triangle's corners raised by their point's most needed, a cut piece's points by its
+        // corners' raises interpolated; the step cap wins)
+        for (base, vi, zr, cp) in whole.iter() {
+            for k in 0..3 {
+                p_out[base + k][2] = (zr[k] + raise[vi[k]]).min(cp[k]);
+            }
+        }
+        for (i, vi, w, tz, cz) in cut.iter() {
+            let r = (w[0] * raise[vi[0]] + w[1] * raise[vi[1]] + w[2] * raise[vi[2]]).max(0.0);
+            p_out[*i][2] = (tz + r).min(*cz);
         }
         (p_out, uv_out, t_out, src)
     });
@@ -5987,6 +6211,9 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(enu_to_geodetic_c, m)?)?;
     m.add_function(wrap_pyfunction!(lonlat_to_ecef, m)?)?;
     m.add_function(wrap_pyfunction!(ecef_to_frame, m)?)?;
+    m.add_function(wrap_pyfunction!(enu_rings, m)?)?;
+    m.add_function(wrap_pyfunction!(enu_bounds, m)?)?;
+    // (500: enu_rings / enu_bounds, mapgeom's many-ring conversions)
     m.add_function(wrap_pyfunction!(reframe_segs, m)?)?;
     m.add_function(wrap_pyfunction!(bc7_encode, m)?)?;
     m.add_function(wrap_pyfunction!(inside_blockers, m)?)?;
@@ -6727,6 +6954,18 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(stationzone::station_zone, m)?)?;
     // 494: the full port's busstationmesh.zone loops and _clip_cell (stationzone::station_zone: a station's walkable
     // ground, kerb walls and tactile strips from walk_field's lattice in one call)
+    m.add_function(wrap_pyfunction!(seawater::sea_cell_lookup, m)?)?;
+    // 495: the full port's seacarve.SeaCarver.water cell lookup (seawater::sea_cell_lookup: the bilinear floor depth,
+    // the nearest pixel's level and the near-sea test straight from a cell's block-stored raster)
+    // 496: power_line_layout takes span_ground and span_clear (the spans' clearance over the ground: towers (t, 5) with
+    // their scale, supports (k, 12)); skeleton_roof fails a skeleton with a node over its distance to the outline (an
+    // 18 km gabled roof, report W545TFKJ); street_points finds a spot clear of every carriageway (report 5T7V9FNQ).
+    // 500: enu_rings and enu_bounds (mapgeom.enu_rings / enu_bounds: many rings' frame conversion in one call, the
+    // per-ring enu_xy calls of railways.crossings, ChainView._todo and the like)
+    m.add_function(wrap_pyfunction!(roadwear::surface_plan, m)?)?;
+    // 499: road revamp v2 P1c (BNE_SURFACE_V2): roadwear::surface_plan (surface variation, tyre wear on the lane
+    // centres, repair patch strips along a tile's roads) and follow_tris's `clear` (a whole overlay triangle raised
+    // where the ground bulges inside it: no dip under its lift)
     m.add_function(wrap_pyfunction!(structures::abutments::structure_abutments, m)?)?;
     // 493: road revamp RS step S2b part 2a (structures::abutments::structure_abutments: one abutment height per
     // structure end, grading's plans on BNE_DECK_STRUCT=abut)
@@ -6734,7 +6973,9 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(roadshape::decks::deck_simple, m)?)?;
     // 498: road revamp v2 phase P1b (roadshape::decks: deck_shape, a simple structure's deck line from the road's
     // smooth line with its skewed end lines and buried ends; deck_simple, which structure groups are simple;
-    // BNE_ROADSHAPE=decks). 493 and 494 merged here; 495-497 are other branches'
-    m.add("VERSION", 498)?;
+    // BNE_ROADSHAPE=decks)
+    // 505: try598's 501 (P1c, the Rust ports 494-500) with RS S2b part 2a (493) and v2 P1b (498) merged; 502-504 are
+    // other branches'
+    m.add("VERSION", 505)?;
     Ok(())
 }
