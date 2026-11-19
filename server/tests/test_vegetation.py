@@ -738,6 +738,21 @@ class CrownSpacingTest(unittest.TestCase):
                             (lat, lon, s))
 
 
+class NorthBirchTest(unittest.TestCase):
+    """(49) Europe's north: fewer conifers than the leaf maps (EU-Forest's plots), its broadleaves birches."""
+
+    def test_factor(self):
+        f = veg.north_conifer_factor(np.array([50.0, 62.0, 69.5, 62.0, 62.0]), np.array([20.0, 26.0, 27.0, 100.0, -100.0]))
+        self.assertEqual(f[0], 1.0)                         # (central Europe as it was)
+        self.assertAlmostEqual(f[1], 0.86, places=6)
+        self.assertLess(f[2], f[1])
+        self.assertEqual((f[3], f[4]), (1.0, 1.0))          # (Siberia, Canada as they were)
+
+    def test_finland_more_birches(self):
+        lat, lon = np.array([62.0]), np.array([26.0])
+        self.assertLess(veg._conifer_share(lat, lon)[0], veg._conifer_share(lat, lon, north=False)[0])
+
+
 class MedFringeTest(unittest.TestCase):
     """(46) a Mediterranean coast under a mountain ecoregion takes the Mediterranean one's rules (eco_med)."""
 

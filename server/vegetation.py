@@ -41,7 +41,7 @@ import staging
 
 log = logging.getLogger("earthd.vegetation")
 
-VERSION = 48          # (the cached cells hold their groups: 14 for the regional rules of GitHub #110; 16: the roads'
+VERSION = 49          # (the cached cells hold their groups: 14 for the regional rules of GitHub #110; 16: the roads'
                       # drawn widths and sidewalks kept clear; 17: BC's lidar canopy heights, mapdata's canopy layer 2;
                       # 18: the rounded junction corners kept clear, roadcorners.py; 19: one tree per flat crown,
                       # thin_tops; 20: none on or beside a bridge deck, _mask_decks; 21: orchard rows, canopy trees
@@ -89,6 +89,7 @@ VERSION = 48          # (the cached cells hold their groups: 14 for the regional
                       # 46: the Mediterranean coasts under a mountain ecoregion (eco_med, MED_FRINGE_*)
                       # 47: a tile's biome carries its Koppen class (the ground cover's grasses by climate)
                       # 48: the tropics' remote floor half dead wood (G_DEADWOOD_TROPICAL, THICKET_SHARE)
+                      # 49: more birches: Europe's north fewer conifers (NORTH_CONIFER_FACTOR), central Europe CONT_BIRCH_SOUTH
 TREE_MIN_M = 3.0
 # The canopy raster, the scatter grids and the crown radii are in Web Mercator units (EPSG:3857: a metre there is
 # cos(lat) metres on the ground) and were tuned by eye at mid latitudes. Past them the same pixel counts covered less
@@ -490,17 +491,34 @@ def _on_grid(fn, lat, lon):
     return np.asarray(v)[inv.reshape(-1)]
 
 
-def _conifer_share(lat, lon):
+def _conifer_share(lat, lon, north=True):
     """The share of conifers among the trees: (35) the forests' leaf type around the point (leaftype.py: Copernicus
     Land Cover 100 m's Forest Type, 2019), else the coarse rule below. South of the tropics no less than the coarse
     rule: the map takes the radiata pine plantations of Chile, New Zealand and South Africa for evergreen
-    broadleaves (Kaingaroa's 0.27, Biobio's 0.0)."""
+    broadleaves (Kaingaroa's 0.27, Biobio's 0.0). north: Europe's north's birches (NORTH_CONIFER_FACTOR); without it
+    the maps' own share (crown_spacing: the forest's density as before)."""
     import leaftype
     lat, lon = np.asarray(lat, np.float64), np.asarray(lon, np.float64)
     m = np.reshape(_on_grid(leaftype.conifer_share, lat, lon), lat.shape)
     coarse = _conifer_share_coarse(lat, lon)
     m = np.where(lat < -23.5, np.fmax(m, coarse), m)
-    return np.where(np.isnan(m), coarse, m)
+    m = np.where(np.isnan(m), coarse, m)
+    return m * north_conifer_factor(lat, lon) if north else m
+
+
+# (49) Fennoscandia's and the Baltic's forests have more broadleaves (their birches) than the leaf type maps give: EU-Forest's
+# plots 60-68 N 69-72 % conifers where the maps made 81-84 %, 68-70 N 39 % against 55 % (the user, 2026-11-19: "the
+# birch 10 % in the game, 15 % in the data"). The conifer share there times this factor by latitude, Europe only
+# (NORTH_CONIFER_LON: west of the Urals, where the inventories are; Siberia's taiga as it was).
+NORTH_CONIFER_FACTOR = ((57.0, 1.0), (60.0, 0.86), (66.0, 0.86), (69.0, 0.72))
+NORTH_CONIFER_LON = (-12.0, 40.0)
+
+
+def north_conifer_factor(lat, lon):
+    """Per point: the factor on the conifer share in Europe's north (NORTH_CONIFER_*), 1 elsewhere."""
+    lat, lon = np.asarray(lat, np.float64), np.asarray(lon, np.float64)
+    f = dnp.interp(lat, [a for a, _ in NORTH_CONIFER_FACTOR], [b for _, b in NORTH_CONIFER_FACTOR])
+    return np.where((lon >= NORTH_CONIFER_LON[0]) & (lon <= NORTH_CONIFER_LON[1]), f, 1.0)
 
 
 CONIFER_TILT_H = 12.0           # (37) the taller trees more likely the conifers: a tree's weight its height over this,
@@ -565,7 +583,8 @@ BOREAL_LAT = 55.0           # (a Dfc / ET class south of this is a mountain's: c
 # range's eastern edge (Fagus sylvatica: eastern Poland, the Carpathians), the oaks take the rest. Was a flat 0.40
 # birches: walls of them in Silesia's oak-hornbeam woods (the user's test at Syrynka, 2026-11-18).
 CONT_BIRCH_LON = ((10.0, 0.10), (20.0, 0.20), (28.0, 0.45), (40.0, 0.60), (60.0, 0.60), (90.0, 0.45))
-CONT_BIRCH_SOUTH = ((40.0, 0.1), (46.0, 0.3), (50.0, 0.5), (54.0, 1.0))  # (latitude, factor): fewer to the south
+# (49) more of them in central Europe: EU-Forest's 48-52 N, birch 16 % of the broadleaves, the rule's 9 %
+CONT_BIRCH_SOUTH = ((40.0, 0.1), (46.0, 0.45), (50.0, 0.85), (54.0, 1.0))  # (latitude, factor): fewer to the south
                                             # (Anatolia's, the Balkans', Ukraine's forest steppe: oaks; Ukraine's
                                             # birch ~8 % of a forest of ~57 % broadleaves)
 NORTH_BIRCH_LAT = ((55.0, 0.30), (58.0, 0.65), (60.0, 0.85), (62.0, 0.95))
@@ -1753,7 +1772,7 @@ def crown_spacing(lat, lon):
     rule where the map has none) and biome, between CROWN_SPACING (the conifers' narrow forest-grown crowns: a radius
     of ~0.07 h) and CROWN_SPACING_BROAD (the broadleaves': ~0.14 h; the tropics' CROWN_SPACING_TROPICAL)."""
     import ecoregion as er
-    c = float(_conifer_share(np.array([lat]), np.array([lon]))[0])
+    c = float(_conifer_share(np.array([lat]), np.array([lon]), north=False)[0])
     bio = int(er.biome_of(er.eco_many(np.array([lat]), np.array([lon])))[0])
     broad = CROWN_SPACING_TROPICAL if bio in (er.B_TROP_MOIST, er.B_TROP_DRY, er.B_TROP_GRASS, er.B_MANGROVE) \
         else CROWN_SPACING_BROAD
