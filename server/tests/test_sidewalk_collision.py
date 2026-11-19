@@ -116,6 +116,14 @@ class NormalsTest(unittest.TestCase):
         open_ = sidewalks._normals_2d(sq + np.array([[0.0, 0.0]] * 4 + [[0.0, 1e-3]]))
         np.testing.assert_allclose(open_[0], [0.0, 1.0], atol=1e-12)  # (not closed: the one-sided end)
 
+    def test_nan_sign_as_numpy(self):
+        # a NaN point's NaN carried through as numpy carried it: the normal's x is -ty, the sign flipped after the
+        # division (the compiler may otherwise negate first and keep the NaN's sign; try598's Python gave these bits)
+        n = sidewalks._normals_2d(np.array([[np.nan, 0.0], [1.0, 0.0], [2.0, 1.0]]))
+        self.assertEqual([hex(int(v)) for v in n.view(np.uint64)[0]], ["0xfff8000000000000", "0x7ff8000000000000"])
+        with self.assertRaises(TypeError):
+            sidewalks._normals_2d(np.zeros((3, 2), np.float32))
+
     def test_strided_and_short(self):
         xyz = np.array([[0.0, 0.0, 5.0], [3.0, 4.0, 6.0]])
         np.testing.assert_array_equal(sidewalks._normals_2d(xyz[:, :2]), [[-0.8, 0.6], [-0.8, 0.6]])

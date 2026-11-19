@@ -87,10 +87,14 @@ def _normals_2d(xy):
     """Unit left normals (n, 2) at each point of a polyline xy (n, 2) float64 (mitred like roads.offset_polyline,
     clamped at 2x; a closed loop mitred across its seam: an island's curb band, else its two one-sided ends left a
     wedge at a wide band, the roundabout's apron, 2026-11-10). earthfast.sidewalk_normals (508: the Python's numpy
-    steps one by one, 10k calls a cold Manhattan visit). Fewer than 2 points: IndexError, as the Python raised."""
+    steps one by one, 10k calls a cold Manhattan visit). Fewer than 2 points: IndexError, as the Python raised.
+    float64 only: another dtype is a TypeError (a contract change from the Python, which also took float32 / integer
+    points in their own arithmetic; every server caller passes float64, the r2a18 call check)."""
     xy = np.asarray(xy)
     if len(xy) < 2:
         raise IndexError("index 0 is out of bounds for axis 0 with size 0")
+    if xy.dtype != np.float64:
+        raise TypeError(f"sidewalks._normals_2d: float64 points, not {xy.dtype}")
     return _ef.sidewalk_normals(xy)
 
 

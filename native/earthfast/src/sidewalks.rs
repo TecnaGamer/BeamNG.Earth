@@ -3,6 +3,7 @@
 //! numpy operations one by one), so a tile's shapes stay as they were; the Python Builder gathers the pieces and
 //! calls this once (it was the larger half of a road geotile's skin: ~70 ms of ~165 in Fells Point, 2026-10-29).
 use crate::dm::Dm;
+use crate::dmmatmul::{ad, mu};
 
 use numpy::{IntoPyArray, PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2};
 use pyo3::exceptions::PyValueError;
@@ -499,7 +500,12 @@ pub fn sidewalk_mesh<'py>(py: Python<'py>, kind: PyReadonlyArray1<'py, i64>, pts
 /// segments' mean direction over the cosine to the next segment's, the cosine clamped to [0.5, 1] (a mitre at most
 /// 2x); a closed loop (n > 3, its ends under 1e-6 m apart) mitred across its seam (the cosine to the first segment's,
 /// at least 0.5). The Python's numpy operations one by one (earthfast 508): no fused products, the sums left to
-/// right, hypot the libm crate's (dnp.hypot's).
+/// right, hypot the libm crate's (dnp.hypot's), and numpy's x86 NaN rule (dmmatmul's ad / mu: a sum's or product's
+/// NaN is its first operand's where both are, which the compiler could otherwise swap), so a NaN's sign and payload
+/// are the Python's too. One documented difference (as dmmatmul's): two different NaNs meeting in a sum or product
+/// where numpy ran its SIMD tail kept the other operand's NaN there, which depended on the CPU's vector width, so the
+/// Python's own bits were the machine's; the kernel keeps its one rule. The server's calls make no NaN at all (the
+/// r2a18 call check: every call of three cold visits); one NaN, inf and -0.0 agree bit for bit (parity, 47k lines).
 pub fn normals_2d(xy: &[[f64; 2]]) -> Vec<[f64; 2]> {
     let n = xy.len();
     let mut out = vec![[0.0f64; 2]; n];
@@ -521,21 +527,21 @@ pub fn normals_2d(xy: &[[f64; 2]]) -> Vec<[f64; 2]> {
     out[0] = ns[0];
     out[n - 1] = ns[n - 2];
     for k in 1..n - 1 {
-        let m = [ns[k - 1][0] + ns[k][0], ns[k - 1][1] + ns[k][1]];
+        let m = [ad(ns[k - 1][0], ns[k][0]), ad(ns[k - 1][1], ns[k][1])];
         let mut ml = m[0].dhypot(m[1]);
         if ml < 1e-9 {
             ml = 1.0;
         }
         let m = [m[0] / ml, m[1] / ml];
-        let c = (m[0] * ns[k][0] + m[1] * ns[k][1]).clamp(0.5, 1.0); // (np.clip: a NaN stays NaN)
+        let c = ad(mu(m[0], ns[k][0]), mu(m[1], ns[k][1])).clamp(0.5, 1.0); // (np.clip: a NaN stays as it is)
         out[k] = [m[0] / c, m[1] / c];
     }
     if n > 3 && (xy[0][0] - xy[n - 1][0]).dhypot(xy[0][1] - xy[n - 1][1]) < 1e-6 {
-        let m = [ns[n - 2][0] + ns[0][0], ns[n - 2][1] + ns[0][1]];
+        let m = [ad(ns[n - 2][0], ns[0][0]), ad(ns[n - 2][1], ns[0][1])];
         let ml = m[0].dhypot(m[1]);
         if ml > 1e-9 {
             let m = [m[0] / ml, m[1] / ml];
-            let d = m[0] * ns[0][0] + m[1] * ns[0][1];
+            let d = ad(mu(m[0], ns[0][0]), mu(m[1], ns[0][1])); // (dnp.dot: dm_matmul's k = 2 sum)
             let den = if 0.5 > d { 0.5 } else { d }; // (Python's max(d, 0.5): a NaN d kept)
             out[0] = [m[0] / den, m[1] / den];
             out[n - 1] = out[0];
