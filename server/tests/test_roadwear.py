@@ -334,6 +334,76 @@ class SurfaceV2Test(unittest.TestCase):
             f = (v[0] - a[0]) / (b[0] - a[0])
             self.assertAlmostEqual(float(v[2]), float(a[2] + f * (b[2] - a[2])), delta=1e-9)
 
+    def test_refine_halves_instead_of_cutting(self):
+        """follow_ground's refine (the v2 overlays): a triangle the tolerance would cut along the terrain is halved
+        first; far fewer pieces, the same area, the ground still at most clear over it everywhere and its float no
+        more than the tolerance past the cut's; the same output twice; refine 0 as without it."""
+        n = 12
+        gx, gy = np.meshgrid(np.arange(n + 1.0), np.arange(n + 1.0))
+        grid = np.round((0.04 * np.sin(gx / 1.7) * np.cos(gy / 2.3) + 0.02 * gx) * 512) / 512   # (rolling, 1/512 m)
+        P = np.array([[1.0, 1.0], [11.0, 1.4], [10.6, 6.0], [1.3, 5.2]])
+        T = np.array([[0, 1, 2], [0, 2, 3]])
+        UV = P / 10.0
+        kw = dict(tol=0.008, cell=1.0, clear=0.003)
+        cut = roadmesh.follow_ground(P, UV, T, grid, 0, 0, **kw)
+        ref = roadmesh.follow_ground(P, UV, T, grid, 0, 0, refine=10, **kw)
+        for a, b in zip(cut, roadmesh.follow_ground(P, UV, T, grid, 0, 0, refine=0, **kw)):
+            np.testing.assert_array_equal(a, b)
+        for a, b in zip(ref, roadmesh.follow_ground(P, UV, T, grid, 0, 0, refine=10, **kw)):
+            np.testing.assert_array_equal(a, b)
+        self.assertLess(len(ref[2]), len(cut[2]) / 2, (len(ref[2]), len(cut[2])))
+
+        def area(V, Tr):
+            t = V[Tr][:, :, :2]
+            a, b = t[:, 1] - t[:, 0], t[:, 2] - t[:, 0]
+            return float(np.abs(a[:, 0] * b[:, 1] - a[:, 1] * b[:, 0]).sum() / 2)
+
+        self.assertAlmostEqual(area(ref[0], ref[2]), area(cut[0], cut[2]), places=6)
+
+        def ground(xy):
+            i, j = np.floor(xy[:, 0]).astype(int), np.floor(xy[:, 1]).astype(int)
+            fx, fy = xy[:, 0] - i, xy[:, 1] - j
+            a, b, c, d = grid[j, i], grid[j, i + 1], grid[j + 1, i], grid[j + 1, i + 1]
+            return np.where(fy > fx, a + fy * (c - a) + fx * (d - c), a + fx * (b - a) + fy * (d - b))
+
+        w = np.random.default_rng(3).dirichlet((1, 1, 1), 400)
+
+        def dz(V, Tr):
+            p = np.einsum("kj,tjc->tkc", w, V[Tr]).reshape(-1, 3)
+            return p[:, 2] - ground(p[:, :2])
+        dc, dr = dz(cut[0], cut[2]), dz(ref[0], ref[2])
+        self.assertGreaterEqual(float(dr.min()), -kw["clear"] - 1e-9)
+        # (a whole triangle's float: the tolerance below its plane, and a raise of at most tol - clear: as before)
+        self.assertLessEqual(float(dr.max()), float(dc.max()) + 2 * kw["tol"] - kw["clear"] + 1e-9)
+        self.assertEqual(set(ref[3].tolist()), {0, 1})
+
+    def test_refine_leaves_no_corner_on_a_neighbours_side(self):
+        """follow_ground's refine: a side one triangle halved is split in its neighbour too (the input's two
+        triangles share a side as copies of its points, as the tile clip leaves them), so every corner lying on
+        another triangle's side is that side's own height there after the raises (halved next to whole, the two
+        parted vertically by up to the tolerance: Codex review)."""
+        n = 14
+        gx, gy = np.meshgrid(np.arange(n + 1.0), np.arange(n + 1.0))
+        grid = 0.05 * np.sin(gx / 2.1) * np.cos(gy / 1.9) + 0.01 * gy           # (smooth: no cut left)
+        P = np.array([[1.0, 1.0], [12.0, 2.0], [6.0, 7.0], [6.0, 7.0], [12.0, 2.0], [13.0, 12.0]])
+        T = np.array([[0, 1, 2], [3, 4, 5]])
+        V, _uv, Tr, src = roadmesh.follow_ground(P, P / 10.0, T, grid, 0, 0, tol=0.004, cell=1.0, clear=0.002,
+                                                 refine=10)
+        self.assertGreater(len(Tr), 8)
+        bad = 0
+        for t in Tr:
+            for e in range(3):
+                a, b = V[t[e]], V[t[(e + 1) % 3]]
+                ab = b[:2] - a[:2]
+                L2 = float(ab @ ab)
+                f = ((V[:, :2] - a[:2]) @ ab) / L2
+                off = np.abs((V[:, 0] - a[0]) * ab[1] - (V[:, 1] - a[1]) * ab[0]) / np.sqrt(L2)
+                on = (f > 1e-6) & (f < 1 - 1e-6) & (off < 1e-7)
+                if on.any():
+                    zl = a[2] + f[on] * (b[2] - a[2])
+                    bad += int((np.abs(V[on, 2] - zl) > 1e-9).sum())
+        self.assertEqual(bad, 0)
+
     def test_overlays_clear_the_bumpy_ground(self):
         """Every overlay keeps MARK_MIN_M over the drawn ground (the terrain's own triangles, where the asphalt is
         painted) at its points and inside its triangles; the asphalt mesh's draw order is v2_rank's."""

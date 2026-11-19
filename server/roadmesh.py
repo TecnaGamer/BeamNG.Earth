@@ -1022,10 +1022,19 @@ def road_tol(q):
     return min(FOLLOW_TOL, max(FOLLOW_TOL_MIN, 2.5 * float(q)))
 
 
-def follow_ground(P, UV, T, grid, i0, j0, tol=None, cell=GRID_M, step_m=None, clear=None):
+# The v2 overlays but the markings (SURFACE_V2: follow_ground's clear) halve a triangle the tolerance would cut, up to
+# FOLLOW_REFINE times, before cutting what is left along the terrain (earthfast.follow_tris refine): the cut made ~20
+# pieces of a 2 x 5 m overlay triangle on a crowned road or a bumpy verge (the edge blends 2.8-5.2x their triangles,
+# the surface variation 2.3x), where a few halves keep the same tolerance and clearance. The markings (crisp, opaque:
+# where a neighbour did not halve their shared side the two meet up to the tolerance apart) keep the cut.
+FOLLOW_REFINE = 10
+
+
+def follow_ground(P, UV, T, grid, i0, j0, tol=None, cell=GRID_M, step_m=None, clear=None, refine=0):
     """(points (m, 3), uvs, triangles, source triangle) of the triangles T over P (n, 2) on the drawn ground (grid:
     _height_grid), held down in the cells holding a step (FOLLOW_STEP_M, or step_m): earthfast.follow_tris. clear: a
-    triangle left whole is raised (per input point) so that the ground stands at most this over it (None: not)."""
+    triangle left whole is raised (per input point) so that the ground stands at most this over it (None: not);
+    refine (with clear): halve a triangle the tolerance would cut up to this many times first (FOLLOW_REFINE)."""
     import fast
     tol = FOLLOW_TOL if tol is None else tol
     P = np.ascontiguousarray(np.asarray(P, np.float64)[:, :2])
@@ -1036,10 +1045,14 @@ def follow_ground(P, UV, T, grid, i0, j0, tol=None, cell=GRID_M, step_m=None, cl
         fast.require(52, "follow_tris")
         a, b, c, d = fast._ef.follow_tris(P, UV, T, float(cell), np.ascontiguousarray(grid, np.float64), int(i0),
                                           int(j0), float(tol), step, FOLLOW_MAX_UP)
-    else:
+    elif not refine:
         fast.require(499, "follow_tris clear")
         a, b, c, d = fast._ef.follow_tris(P, UV, T, float(cell), np.ascontiguousarray(grid, np.float64), int(i0),
                                           int(j0), float(tol), step, FOLLOW_MAX_UP, float(clear))
+    else:
+        fast.require(511, "follow_tris refine")
+        a, b, c, d = fast._ef.follow_tris(P, UV, T, float(cell), np.ascontiguousarray(grid, np.float64), int(i0),
+                                          int(j0), float(tol), step, FOLLOW_MAX_UP, float(clear), int(refine))
     return np.asarray(a), np.asarray(b), np.asarray(c), np.asarray(d)
 
 
@@ -1640,14 +1653,17 @@ def build(frame, chunks, elev, origin, lift=0.0, clip=None, follow=False, q=None
                             continue
                         sel = m & (TL == L)
                         rest &= ~sel
-                        v2.append((sel, t, st, max(0.0, up - MARK_MIN_M)))
-                    v2.append((rest, t, st, None))
+                        v2.append((sel, t, st, max(0.0, up - MARK_MIN_M),
+                                   0 if float(L) == LIFT["mark"] + lift else FOLLOW_REFINE))
+                    v2.append((rest, t, st, None, 0))
                 batches = v2
-            for mask, tol, step, clear in batches:
+            else:
+                batches = [(m, t, st, None, 0) for m, t, st, _c in batches]
+            for mask, tol, step, clear, refine in batches:
                 if not mask.any():
                     continue
                 fP, fUV, fT, src = follow_ground(P[:, :2], UV, T[mask], grid, i0, j0, tol=tol, step_m=step,
-                                                 clear=clear)
+                                                 clear=clear, refine=refine)
                 lifts = TL[mask][src]
                 vl = np.zeros(len(fP))              # (a cut piece's points are its fan's: one lift each, set once)
                 for kk in range(3):
