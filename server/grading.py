@@ -5372,6 +5372,16 @@ class _Planner:
         # (in the plans' datum, the sections' z: the floor less ROAD_LIFT, which apply adds)
         parts = [(fid, spec, xy, z, None) for fid, spec, xy, z, k in secs
                  if k and arches.get(fid, (None, None))[0] is not None]
+        if SHAPES_ON:
+            # (a tunnel the shapes solved, its floor theirs (_tunnel_z_hook: all of its line): every road over it is in
+            # its system and was cleared over it there (gradeshapes.clearance_need), the points it set held at the
+            # shape's heights, so its cover is the shapes' and not asked again. Asked again, off the built floor and the
+            # plan's segments, it stood 0.68 m over a road the shape put over its tube and a deck held down: Porte
+            # Maillot's primary, its network of 96 roads with no answer, all of them left as the passes made them)
+            def solved(fid, xy):
+                z, _m = self._shape_at(xy, xy, str(fid).rsplit("#", 1)[0].rsplit(".", 1)[0], ("cut",))
+                return bool(np.isfinite(z).all())
+            parts = [pt for pt in parts if not solved(pt[0], np.asarray(pt[2], np.float64)[:, :2])]
         if not parts:
             return plans
         heights = {fid: arches[fid][0] for fid, *_r in parts}
