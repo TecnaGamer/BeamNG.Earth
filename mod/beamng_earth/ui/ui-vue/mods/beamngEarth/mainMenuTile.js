@@ -37,6 +37,8 @@ let generation = 0       // bumped by stopTile and each menu read: a late reply 
 let observer = null
 let tile = null
 let serverUp = null
+const english = (_key, fallback) => fallback
+let translate = english
 
 function api() { return window.bngApi || window.beamng }
 
@@ -68,9 +70,10 @@ function paintServer() {
     note.className = "bne-server-note"
     note.style.cssText = "margin-left:auto;align-self:center;padding:.2em .6em;border-radius:.25em;" +
       "background:rgba(0,0,0,.65);color:#ffb08a;font-size:.55em;font-style:italic;white-space:nowrap"
-    note.textContent = "Server not running"
     ;(tile.querySelector(".label-container") || tile).append(note)
   }
+  const label = translate("menu.serverDown", "Server not running")
+  if (note.textContent !== label) note.textContent = label
 }
 
 // Started from the menu, the level loads behind it and the UI stays on the menu route (the level list leaves the
@@ -111,7 +114,7 @@ export function makeTile(stock) {
   if (icon) icon.textContent = GLOBE_GLYPH
   const text = t.querySelector(".label-container .text")
   if (text) text.textContent = TITLE
-  t.setAttribute("title", "Start BeamNG.Earth in freeroam, where you left off")
+  t.setAttribute("title", translate("menu.startFreeroam", "Start BeamNG.Earth in freeroam, where you left off"))
   t.addEventListener("click", start)
   t.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); start() } })
   return t
@@ -170,7 +173,14 @@ function onRoute(route) {
   } catch (e) { console.error(TAG, e); off() }
 }
 
-export async function startTile(waitMs = 60000) {
+export function refreshTileLanguage() {
+  if (!tile) return
+  tile.title = translate("menu.startFreeroam", "Start BeamNG.Earth in freeroam, where you left off")
+  paintServer()
+}
+
+export async function startTile(waitMs = 60000, translator = english) {
+  translate = translator
   const t0 = Date.now()
   const g = ++generation
   while (!(window.Vue && window.vueRouter)) {

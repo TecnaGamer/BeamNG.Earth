@@ -1,10 +1,10 @@
 {
   "domElement": "<beamng-earth-status></beamng-earth-status>",
-  "name": "BeamNG.Earth: Status bar",
+  "name": "beamngEarth.hud.status.name",
   "types": [
     "ui.apps.categories.utility"
   ],
-  "description": "Street, town and country, and the world loading (BeamNG.Earth).",
+  "description": "beamngEarth.hud.status.description",
   "css": {
     "top": "0px",
     "height": "64px",

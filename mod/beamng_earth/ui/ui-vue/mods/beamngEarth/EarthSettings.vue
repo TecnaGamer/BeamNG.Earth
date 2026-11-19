@@ -20,6 +20,7 @@
 </template>
 
 <script setup>
+import { t } from "./i18n.js"
 import { ref, computed, onMounted, onUnmounted } from "vue"
 import { LayoutMenu } from "@/common/layouts"
 import { icons } from "@/common/components/base"
@@ -29,7 +30,7 @@ import { settingsSchema, PAGE_ICONS, startPolling, stopPolling } from "./earthSe
 
 const section = ref(0)        // the tab shown
 // LayoutMenu's tabs (its own tab bar: Q / E on a controller), one per page
-const tabs = settingsSchema.map(c => ({ id: c.name, label: c.name, icon: icons[PAGE_ICONS[c.name]] }))
+const tabs = computed(() => settingsSchema.map(c => ({ id: c.name, label: t(c.label), icon: icons[PAGE_ICONS[c.name]] })))
 const pageName = computed(() => (settingsSchema[section.value] || settingsSchema[0]).name)
 
 onMounted(startPolling)

@@ -2,31 +2,31 @@
   <!-- Beside BeamNG.Earth's settings: the connection, an update, what the setting pointed at does. The pause menu's
        BeamNG.Earth tab shows it as the tab's second card; the full settings page (EarthSettings.vue) beside its rows,
        with Back (prop back). -->
-  <div class="earth-side">
+  <div class="earth-side" :dir="direction">
     <BngCardHeading>BeamNG.Earth</BngCardHeading>
     <div class="earth-status" :class="'is-' + bannerLevel">{{ bannerText || connectionText }}</div>
     <div v-if="update" class="earth-update">
-      <span>Update: {{ update.latest }} (you have {{ update.current }})</span>
-      <BngButton :accent="ACCENTS.outlined" @click="openUpdate">Download page</BngButton>
+      <span>{{ t('settings.updateYouHave', { latest: update.latest, current: update.current }) }}</span>
+      <BngButton :accent="ACCENTS.outlined" @click="openUpdate">{{ t('settings.downloadPage') }}</BngButton>
     </div>
     <div class="earth-loading">{{ statusText }}</div>
-    <div v-if="offLevel" class="earth-offlevel">Not on the BeamNG.Earth level: graphics and world settings are saved
-      and take effect when you load it.</div>
+    <div v-if="offLevel" class="earth-offlevel">{{ t('settings.notOnTheBeamNGEarth') }}</div>
 
     <div class="earth-help">
-      <div class="earth-help-title">{{ help ? help.name : "" }}</div>
-      <div class="earth-help-text">{{ help ? help.desc : "Point at a setting to see what it does." }}</div>
-      <div v-if="help && help.note" class="earth-note">{{ help.note }}</div>
+      <div class="earth-help-title">{{ help ? t(help.name) : "" }}</div>
+      <div class="earth-help-text">{{ help ? t(help.desc) : t("settings.help.hover") }}</div>
+      <div v-if="help && help.note" class="earth-note">{{ t(help.note) }}</div>
     </div>
 
     <div class="earth-side-buttons">
-      <BngButton :accent="ACCENTS.outlined" @click="showWelcome">Welcome page</BngButton>
-      <BngButton v-if="back" :accent="ACCENTS.main" @click="close">Back</BngButton>
+      <BngButton :accent="ACCENTS.outlined" @click="showWelcome">{{ t('settings.welcomePage') }}</BngButton>
+      <BngButton v-if="back" :accent="ACCENTS.main" @click="close">{{ t('settings.back') }}</BngButton>
     </div>
   </div>
 </template>
 
 <script setup>
+import { t, direction } from "./i18n.js"
 import { onMounted, onUnmounted } from "vue"
 import { BngButton, BngCardHeading, ACCENTS } from "@/common/components/base"
 import {

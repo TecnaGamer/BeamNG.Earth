@@ -39,7 +39,8 @@ function world({ replies = {}, files = {} } = {}) {
   const paste = { installed: 0, removed: 0 }
   const modules = {
     "./earthSettingsStore.js": () => ok({ settingsSchema: [{ name: "General" }], pageId: (n, i) => `beamngEarth-${i}`,
-                                          PAGE_ICONS: {} }),
+                                          PAGE_ICONS: {}, pageLabel: page => page.name,
+                                          startLocalization: () => () => {}, readyLocalization: () => ok(), watchLocale: () => () => {} }),
     "./paste.js": () => ok({ installPaste() { paste.installed += 1 }, removePaste() { paste.removed += 1 } }),
     "./EarthMap.vue": () => ok({ default: {} }),
     "./EarthWelcome.vue": () => ok({ default: {} }),

@@ -1,0 +1,4 @@
+{
+  "en": { "name": "English", "direction": "ltr" },
+  "pl-PL": { "name": "Polski", "direction": "ltr", "aliases": ["pl"] }
+}

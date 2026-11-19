@@ -551,6 +551,8 @@ docstring; for the .exe run `tools/build_bootloader.py` first: a bootloader buil
 false positives); GitHub Actions (`.github/workflows/release.yml`) builds both and publishes the release `v<VERSION>`
 whenever `main` gets a `VERSION` without one. Release zip of the source: `python3 tools/package.py`.
 
+For language catalogs, fallback and translator tooling, see [Localization](docs/LOCALIZATION.md).
+
 Tests: `cd server && python3 -m unittest discover -s tests -t tests` and
 `cd mod/tests && for f in test_*.lua; do luajit $f; done` (no luajit: `pip install lupa`, then
 `python3 tools/run_lua_tests.py`).

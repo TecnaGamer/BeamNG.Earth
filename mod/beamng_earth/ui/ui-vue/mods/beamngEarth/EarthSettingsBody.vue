@@ -2,9 +2,9 @@
   <!-- One page of BeamNG.Earth's settings (earthSettingsStore.js: the schema and the shared state): its presets and
        rows, the game's own BngRow / BngSelect / BngSwitch ... Shown in the pause menu's BeamNG.Earth tab
        (EarthSettingsPage.vue) and in the full settings page (EarthSettings.vue). -->
-  <div class="earth-main">
-    <BngCardHeading>{{ category.name }}</BngCardHeading>
-    <div v-if="category.intro" class="earth-intro">{{ category.intro }}</div>
+  <div class="earth-main" :dir="direction">
+    <BngCardHeading>{{ t(category.label) }}</BngCardHeading>
+    <div v-if="category.intro" class="earth-intro">{{ t(category.intro) }}</div>
 
     <!-- Restart world server: a setting read only at the server's start differs from its start-time value, or a restart
          is under way (earthRestart.js; settings.uiRestartServer) -->
@@ -13,7 +13,7 @@
         <div>{{ restart.text }}</div>
         <div v-if="restart.note" class="earth-note">{{ restart.note }}</div>
       </div>
-      <BngButton v-if="restart.button" :accent="ACCENTS.main" @click="restartServer">Restart world server</BngButton>
+      <BngButton v-if="restart.button" :accent="ACCENTS.main" @click="restartServer">{{ t('settings.restartWorldServer') }}</BngButton>
     </div>
 
     <!-- Quality presets: one press sets every setting below; changing one makes it Custom -->
@@ -27,11 +27,11 @@
           @click="setQuality(p.id)"
           @mouseenter="setHelp(p)"
           @focusin="setHelp(p)"
-        >{{ p.name }}</BngButton>
+        >{{ t(p.name) }}</BngButton>
       </div>
       <div class="earth-intro">
-        {{ config.quality === "custom" ? "Custom: your own mix of the settings below." : presetLine }}
-        <template v-if="detectedPick"> Recommended for this computer: {{ presetName(detectedPick) }}.</template>
+        {{ config.quality === "custom" ? t('settings.customPreset') : presetLine }}
+        <template v-if="detectedPick"> {{ t('settings.recommendedForThisComputer', { presetName: presetName(detectedPick) }) }}</template>
       </div>
     </template>
 
@@ -46,7 +46,7 @@
       @mouseenter="setHelp(item)"
       @focusin="setHelp(item)"
     >
-      <template #label>{{ item.name }}</template>
+      <template #label>{{ t(item.name) }}</template>
 
       <BngSelect
         v-if="item.type === 'select'"
@@ -88,7 +88,7 @@
       <span v-else-if="item.type === 'info'" class="earth-value">{{ infoValue(item) }}</span>
       <div v-else-if="item.type === 'text'" class="earth-text">{{ infoValue(item) }}</div>
       <div v-else-if="item.type === 'links'" class="earth-links">
-        <BngButton v-for="l in item.links" :key="l.url" :accent="ACCENTS.outlined" @click="openLink(l.url)">{{ l.label }}</BngButton>
+        <BngButton v-for="l in item.links" :key="l.url" :accent="ACCENTS.outlined" @click="openLink(l.url)">{{ t(l.label) }}</BngButton>
       </div>
       <div v-else-if="item.type === 'contributors'" class="earth-people">
         <span
@@ -96,20 +96,20 @@
           :key="c.login"
           class="earth-person"
           tabindex="0"
-          :title="'github.com/' + c.login + (c.prs.length ? ' (' + c.prs.length + (c.prs.length === 1 ? ' pull request)' : ' pull requests)') : ' (commits merged)')"
+          :title="'github.com/' + c.login + ' (' + (c.prs.length ? t('settings.contributorPullRequests', { count: c.prs.length }) : t('settings.contributorCommits')) + ')' "
           @click="openLink('https://github.com/' + c.login)"
           @keydown.enter="openLink('https://github.com/' + c.login)"
         >{{ c.login }}</span>
       </div>
-      <BngButton v-else-if="item.type === 'feedback'" :accent="ACCENTS.outlined" @click="openFeedback(item.what)">{{ item.label }}</BngButton>
+      <BngButton v-else-if="item.type === 'feedback'" :accent="ACCENTS.outlined" @click="openFeedback(item.what)">{{ t(item.label) }}</BngButton>
 
       <!-- Clear cache: asks in the row first -->
       <div v-else-if="item.type === 'action'" class="earth-inline">
-        <span v-if="cacheConfirm" class="earth-value">Delete the downloaded elevation and imagery?</span>
+        <span v-if="cacheConfirm" class="earth-value">{{ t('settings.deleteTheDownloadedElevationAnd') }}</span>
         <span v-else-if="cacheResult" class="earth-value">{{ cacheResult }}</span>
-        <BngButton v-if="cacheConfirm" :accent="ACCENTS.main" @click="confirmClearCache">Clear</BngButton>
-        <BngButton v-if="cacheConfirm" :accent="ACCENTS.outlined" @click="cancelClearCache">Cancel</BngButton>
-        <BngButton v-else :accent="ACCENTS.outlined" :disabled="cacheBusy" @click="askClearCache">{{ cacheBusy ? "Clearing..." : "Clear cache" }}</BngButton>
+        <BngButton v-if="cacheConfirm" :accent="ACCENTS.main" @click="confirmClearCache">{{ t('settings.clear') }}</BngButton>
+        <BngButton v-if="cacheConfirm" :accent="ACCENTS.outlined" @click="cancelClearCache">{{ t('settings.cancel') }}</BngButton>
+        <BngButton v-else :accent="ACCENTS.outlined" :disabled="cacheBusy" @click="askClearCache">{{ cacheBusy ? t('settings.cacheClearing') : t('settings.item.cacheClear.name') }}</BngButton>
       </div>
 
       <!-- A path: the system's window, or typed -->
@@ -118,16 +118,26 @@
           <BngInput
             class="earth-path-input"
             v-model="pathText[item.what]"
-            :placeholder="item.placeholder"
+            :placeholder="t(item.placeholder)"
             @focus="typing(true)"
             @blur="typing(false)"
             @keydown.enter.stop.prevent="usePath(item)"
           />
-          <BngButton :accent="ACCENTS.outlined" :disabled="!!pathBusy || !(pathText[item.what] || '').trim()" @click="usePath(item)">Use</BngButton>
-          <BngButton :accent="ACCENTS.outlined" :disabled="!!pathBusy" @click="sendPath(item, true)">{{ pathBusy === item.what && pathPick ? "Window open..." : "Change..." }}</BngButton>
+          <BngButton :accent="ACCENTS.outlined" :disabled="!!pathBusy || !(pathText[item.what] || '').trim()" @click="usePath(item)">{{ t('settings.use') }}</BngButton>
+          <BngButton :accent="ACCENTS.outlined" :disabled="!!pathBusy" @click="sendPath(item, true)">{{ pathBusy === item.what && pathPick ? t('settings.pathWindowOpen') : t('settings.pathChange') }}</BngButton>
         </div>
         <div class="earth-note" :class="{ 'is-error': pathMsg[item.what] && !pathMsg[item.what].ok }">{{ pathNote(item) }}</div>
       </div>
+    </BngRow>
+
+    <BngRow v-if="category.name === 'Interface'" class="earth-row">
+      <template #label>{{ t('settings.language.label') }}</template>
+      <BngSelect
+        :value="preference"
+        :options="localeChoices"
+        :config="languageOptionConfig"
+        @valueChanged="chooseLanguage"
+      />
     </BngRow>
 
     <!-- Developer: the overlay presets (session only) -->
@@ -137,12 +147,13 @@
         :key="p.id"
         :accent="dev.lastPreset === p.id && dev.active ? ACCENTS.main : ACCENTS.outlined"
         @click="applyDevPreset(p.id)"
-      >{{ p.label }}</BngButton>
+      >{{ t(p.label) }}</BngButton>
     </div>
   </div>
 </template>
 
 <script setup>
+import { t, direction, preference, languageOptions, chooseLanguage } from "./i18n.js"
 import { computed, reactive } from "vue"
 import { BngButton, BngSwitch, BngSlider, BngInput, BngSelect, BngRow, BngCardHeading, ACCENTS } from "@/common/components/base"
 import {
@@ -161,6 +172,8 @@ const props = defineProps({
 
 const category = computed(() => categoryNamed(props.page))
 const rows = computed(() => visibleItems(category.value))
+const localeChoices = computed(() => [{ value: "auto", label: t("settings.language.automatic") }, ...languageOptions])
+const languageOptionConfig = { value: option => option.value, label: option => option.label }
 
 function setHelp(item) { help.value = item }
 function cancelClearCache() { cacheConfirm.value = false }

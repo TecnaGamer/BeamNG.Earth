@@ -1,7 +1,7 @@
 <template>
   <!-- the 3D map screen (map3d.lua): transparent over the game; the mouse moves the orbit camera (the UI takes it from
        the camera, as the vanilla big map's screen), the controls as the 2D map's -->
-  <div class="earth-map3d" tabindex="-1" ref="rootEl" @keydown.esc.stop="back"
+  <div class="earth-map3d" :dir="direction" tabindex="-1" ref="rootEl" @keydown.esc.stop="back"
        @keydown="onKey($event, true)" @keyup="onKey($event, false)"
        @mousedown="onDown" @wheel.prevent="onWheel" @contextmenu.prevent @click="ctx = null">
     <!-- the labels (map3dLabels.js: projected each frame from map3d.lua's camera, no overlaps, fading) -->
@@ -10,9 +10,9 @@
          make the ui almost the same on both maps"; "set waypoints by clicking on the map and have a right click menu
          like the 2d map") -->
     <div class="map-top" @mousedown.stop @wheel.stop>
-      <div class="map-title">BeamNG.Earth map <span class="m3-mode" title="The 3D map is new: expect rough edges">3D (experimental)</span></div>
+      <div class="map-title">{{ t('map3d.beamNGEarthMap') }} <span class="m3-mode" :title="t('map3d.the3DMapIsNew')">{{ t('map3d.3DExperimental') }}</span></div>
       <div class="search">
-        <input v-model="query" class="search-input" placeholder="Search addresses, places, or lat, lon" maxlength="120"
+        <input v-model="query" class="search-input" :placeholder="t('map3d.searchAddressesPlacesOrLat')" maxlength="120"
                @focus="typing(true)" @blur="typing(false)" @keydown.stop="onSearchKey" />
         <div v-if="results.length" class="search-results">
           <div v-for="(r, i) in results" :key="'r' + i" class="search-result" :class="{ active: i === resultIndex }"
@@ -20,32 +20,32 @@
             <span class="result-name">{{ r.saved ? "★ " : "" }}{{ r.name }}</span>
             <span class="result-coords">{{ r.detail || fmt(r.lat, r.lon) }}</span>
           </div>
-          <div class="search-credit">Search: © OpenStreetMap contributors (Nominatim, Photon), Wikipedia, Wikidata</div>
+          <div class="search-credit">{{ t('map3d.searchOpenStreetMapContributorsNominatimPhoton') }}</div>
         </div>
-        <div v-if="searchMsg && !results.length" class="search-msg">{{ searchMsg }}</div>
-        <div v-else-if="searching && !results.length" class="search-msg">Searching…</div>
+        <div v-if="searchMsg && !results.length" class="search-msg">{{ messageText(searchMsg) }}</div>
+        <div v-else-if="searching && !results.length" class="search-msg">{{ t('map3d.searching') }}</div>
       </div>
-      <button class="map-btn" @click="zoom(-3)" title="Zoom in">+</button>
-      <button class="map-btn" @click="zoom(3)" title="Zoom out">-</button>
-      <button class="map-btn" @click="toCar" title="Fly to the car">Me</button>
+      <button class="map-btn" @click="zoom(-3)" :title="t('map3d.zoomIn')">+</button>
+      <button class="map-btn" @click="zoom(3)" :title="t('map3d.zoomOut')">-</button>
+      <button class="map-btn" @click="toCar" :title="t('map3d.flyToTheCar')">{{ t('map3d.me') }}</button>
       <div class="layers-wrap">
-        <button class="map-btn" :class="{ on: panel === 'places' }" @click="togglePlaces" title="Saved and recent places">Places</button>
+        <button class="map-btn" :class="{ on: panel === 'places' }" @click="togglePlaces" :title="t('map3d.savedAndRecentPlaces')">{{ t('map3d.places') }}</button>
         <div v-if="panel === 'places'" class="layers-panel m3-places" @mousedown.stop @wheel.stop>
-          <div class="panel-sub">Save this view</div>
+          <div class="panel-sub">{{ t('map3d.saveThisView') }}</div>
           <div class="m3-row">
-            <input v-model="saveName" class="search-input" placeholder="Name" maxlength="60"
+            <input v-model="saveName" class="search-input" :placeholder="t('map3d.name')" maxlength="60"
                    @focus="typing(true)" @blur="typing(false)" @keydown.stop @keydown.enter="saveView" />
-            <button class="map-btn small" @click="saveView">Save</button>
+            <button class="map-btn small" @click="saveView">{{ t('map3d.save') }}</button>
           </div>
           <div v-if="placesMsg" class="panel-empty">{{ placesMsg }}</div>
-          <div class="panel-sub">Saved</div>
+          <div class="panel-sub">{{ t('map3d.saved') }}</div>
           <div v-for="p in savedPlaces" :key="'p' + p.id" class="panel-item">
             <div class="item-text" @click="goPlace(p)"><div class="item-name">&#9733; {{ p.name }}</div>
               <div class="item-sub">{{ p.text || fmt(p.lat, p.lon) }}</div></div>
           </div>
-          <div v-if="!savedPlaces.length" class="panel-empty">No saved places yet.</div>
+          <div v-if="!savedPlaces.length" class="panel-empty">{{ t('map3d.noSavedPlacesYet') }}</div>
           <template v-if="recentPlaces.length">
-            <div class="panel-sub">Recent</div>
+            <div class="panel-sub">{{ t('map3d.recent') }}</div>
             <div v-for="(p, i) in recentPlaces" :key="'c' + i" class="panel-item">
               <div class="item-text" @click="goPlace(p)"><div class="item-name">{{ p.name || p.text }}</div>
                 <div class="item-sub">{{ p.name ? p.text : "" }}</div></div>
@@ -53,8 +53,8 @@
           </template>
         </div>
       </div>
-      <button class="map-btn" @click="to2d" title="The flat world map">2D map</button>
-      <button class="map-btn close" @click="back" title="Fly back down to the car (Esc / M)">Close</button>
+      <button class="map-btn" @click="to2d" :title="t('map3d.theFlatWorldMap')">{{ t('map3d.2DMap') }}</button>
+      <button class="map-btn close" @click="back" :title="t('map3d.flyBackDownToThe')">{{ t('map3d.close') }}</button>
     </div>
 
     <!-- where the view is (the 3D map's own: place, coordinates, height) -->
@@ -63,51 +63,51 @@
       <div class="m3-sub">{{ latlon }} &middot; {{ height }}</div>
     </div>
 
-    <div v-if="toast" class="map-toast">{{ toast }}</div>
+    <div v-if="toast" class="map-toast">{{ messageText(toast) }}</div>
 
     <!-- right-click menu (the 2D map's) -->
     <div v-if="ctx" class="ctx-menu" :style="{ left: ctx.x + 'px', top: ctx.y + 'px' }" @mousedown.stop @contextmenu.prevent>
       <div class="ctx-where">{{ fmt(ctx.lat, ctx.lon) }}</div>
-      <div class="ctx-item" :class="{ disabled: !!ms.cannotGo }" @click="ctxTeleport">Teleport here</div>
-      <div class="ctx-item" @click="ctxGps">Set GPS destination</div>
-      <div class="ctx-item" @click="ctxSave">Save this place</div>
-      <div class="ctx-item" @click="ctxCopy">Copy coordinates</div>
-      <div v-if="ms.gps" class="ctx-item" @click="clearGps">Clear GPS</div>
+      <div class="ctx-item" :class="{ disabled: !!ms.cannotGo }" @click="ctxTeleport">{{ t('map3d.teleportHere') }}</div>
+      <div class="ctx-item" @click="ctxGps">{{ t('map3d.setGPSDestination') }}</div>
+      <div class="ctx-item" @click="ctxSave">{{ t('map3d.saveThisPlace') }}</div>
+      <div class="ctx-item" @click="ctxCopy">{{ t('map3d.copyCoordinates') }}</div>
+      <div v-if="ms.gps" class="ctx-item" @click="clearGps">{{ t('map3d.clearGPS') }}</div>
     </div>
 
     <!-- the GPS destination (the 2D map's box) -->
     <div v-if="ms.gps" class="gps-stack" @mousedown.stop>
       <div class="gps-chip">
         <div class="gps-chip-row">
-          <span>GPS: {{ ms.gps.name || fmt(ms.gps.lat, ms.gps.lon) }}</span>
-          <span v-if="ms.gps.planning" class="gps-dist">planning route…</span>
+          <span>{{ t('map3d.gPS', { ms: ms.gps.name || fmt(ms.gps.lat, ms.gps.lon) }) }}</span>
+          <span v-if="ms.gps.planning" class="gps-dist">{{ t('map3d.planningRoute') }}</span>
           <span v-else-if="ms.gps.remaining != null" class="gps-dist">{{ fmtMiles(ms.gps.remaining) }}<template
             v-if="ms.gps.eta != null">, {{ fmtDur(ms.gps.eta) }}</template></span>
-          <span v-if="ms.gps.routeError" class="gps-warn" :title="ms.gps.routeError">no road route: heading straight there</span>
-          <button class="map-btn small" @click="flyTo(ms.gps.lat, ms.gps.lon)">Show</button>
-          <button class="map-btn small" :disabled="!!ms.cannotGo || busy" @click="teleportTo(ms.gps.lat, ms.gps.lon, ms.gps.name)">Teleport</button>
+          <span v-if="ms.gps.routeError" class="gps-warn" :title="ms.gps.routeError">{{ t('map3d.noRoadRouteHeadingStraight') }}</span>
+          <button class="map-btn small" @click="flyTo(ms.gps.lat, ms.gps.lon)">{{ t('map3d.show') }}</button>
+          <button class="map-btn small" :disabled="!!ms.cannotGo || busy" @click="teleportTo(ms.gps.lat, ms.gps.lon, ms.gps.name)">{{ t('map3d.teleport') }}</button>
           <button class="map-btn small" :class="{ primary: ms.gps.autodrive }" @click="setAutodrive(!ms.gps.autodrive)"
-                  :title="ms.gps.autodrive ? 'Stop driving by itself' : 'The car drives itself along the route (in its lane, at the speed limit)'">
-            {{ ms.gps.autodrive ? "Autodrive on" : "Autodrive" }}</button>
-          <button class="map-btn small" @click="clearGps">Clear</button>
+                  :title="ms.gps.autodrive ? t('map.autodriveStop') : t('map.autodriveHelp')">
+            {{ ms.gps.autodrive ? t('map.autodriveOn') : t('welcome.autodrive') }}</button>
+          <button class="map-btn small" @click="clearGps">{{ t('map3d.clear') }}</button>
         </div>
       </div>
     </div>
 
     <!-- a clicked spot: the 2D map's confirmation (its pin stands on the ground: map3d.setMarker) -->
     <div v-if="target" class="confirm" @mousedown.stop>
-      <div class="confirm-title">Teleport here?</div>
+      <div class="confirm-title">{{ t('map3d.teleportHere2') }}</div>
       <div class="confirm-where">{{ fmt(target.lat, target.lon) }}</div>
       <div v-if="ms.cannotGo" class="confirm-warn">{{ ms.cannotGo }}</div>
-      <div v-if="msg" class="confirm-warn">{{ msg }}</div>
+      <div v-if="msg" class="confirm-warn">{{ mapMessage(msg) }}</div>
       <div class="confirm-btns">
-        <button class="map-btn primary" :disabled="!!ms.cannotGo || busy" @click="teleportTo(target.lat, target.lon, '')">Teleport</button>
-        <button class="map-btn" @click="setGps(target.lat, target.lon, ''); setTarget(null)">Set GPS</button>
-        <button class="map-btn" @click="setTarget(null)">Cancel</button>
+        <button class="map-btn primary" :disabled="!!ms.cannotGo || busy" @click="teleportTo(target.lat, target.lon, '')">{{ t('map3d.teleport') }}</button>
+        <button class="map-btn" @click="setGps(target.lat, target.lon, ''); setTarget(null)">{{ t('map3d.setGPS') }}</button>
+        <button class="map-btn" @click="setTarget(null)">{{ t('map3d.cancel') }}</button>
       </div>
     </div>
-    <div class="m3-msg" v-else-if="msg" @mousedown.stop>{{ msg }}</div>
-    <div class="m3-compass" @mousedown.stop @click="north" title="Face north">
+    <div class="m3-msg" v-else-if="msg" @mousedown.stop>{{ mapMessage(msg) }}</div>
+    <div class="m3-compass" @mousedown.stop @click="north" :title="t('map3d.faceNorth')">
       <!-- a compass needle: its red half points north, the "N" at its tip (the user, 2026-11-08: "add an arrow to the compass") -->
       <svg class="m3-needle" viewBox="-26 -26 52 52" :style="{ transform: `rotate(${-headingDeg}deg)` }">
         <polygon points="0,-15 5,0 -5,0" fill="#ff5a4a" />
@@ -116,12 +116,14 @@
         <text x="0" y="-17" text-anchor="middle" font-size="8.5" font-weight="700" fill="#ff7a6b">N</text>
       </svg>
     </div>
-    <div class="m3-help" @mousedown.stop>Click: pick a spot &middot; Right click: menu &middot; Drag: move &middot; Right drag: turn and tilt &middot; Wheel: zoom &middot; WASD: move &middot; Q E: turn &middot; R F: tilt</div>
+    <div class="m3-help" @mousedown.stop>{{ t('map3d.clickPickASpotRight') }}</div>
     <div class="m3-cross"></div>
   </div>
 </template>
 
 <script setup>
+import { mapMessage } from "./mapMessages.js"
+import { t, direction, notice, messageText, number } from "./i18n.js"
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from "vue"
 import { useEvents } from "@/services/events"
 import { LabelLayer } from "./map3dLabels.js"
@@ -172,10 +174,10 @@ function runSearch(full) {
       if (seq !== searchSeq) return
       engineLua(`beamngEarth_settings and beamngEarth_settings.uiGeocodeResult(${r.id}) or nil`, res => {
         if (seq !== searchSeq) return
-        if (!res) { if (++tries < 60) setTimeout(poll, 150); else { searching.value = false; searchMsg.value = "No answer from the address search" }; return }
+        if (!res) { if (++tries < 60) setTimeout(poll, 150); else { searching.value = false; searchMsg.value = notice('map3d.searchNoReply') }; return }
         searching.value = false
         results.value = toArray(res.results)
-        if (!results.value.length) searchMsg.value = res.error ? "Address search unavailable" : full ? "Nothing found" : "Press Enter to search streets and addresses too"
+        if (!results.value.length) searchMsg.value = res.error ? notice('map3d.searchUnavailable') : full ? notice('map3d.searchNothingFound') : notice('map3d.searchEnter')
       })
     }
     setTimeout(poll, 150)
@@ -220,7 +222,7 @@ function saveView() {
 }
 function routeHere() {
   engineLua(`beamngEarth_map3d.gpsHere(${luaStr((place.value || "").split(",")[0])})`, r => {
-    msg.value = r && r.ok === false ? "No route: the GPS could not plan one" : ""
+    msg.value = r && r.ok === false ? notice('map3d.gpsNoRoute') : ""
   })
 }
 function clearRoute() { engineLua("if beamngEarth_settings and beamngEarth_settings.uiMapGps then beamngEarth_settings.uiMapGps(nil) end") }
@@ -243,19 +245,19 @@ function copyText(text) {
       const ta = document.createElement("textarea")
       ta.value = text; ta.style.position = "fixed"; ta.style.opacity = "0"
       document.body.appendChild(ta); ta.select(); document.execCommand("copy"); document.body.removeChild(ta)
-      showToast("Copied")
-    } catch (e) { showToast("Copy failed") }
+      showToast(notice("map.clipboardCopied"))
+    } catch (e) { showToast(notice("map.clipboardFailed")) }
   }
-  if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(() => showToast("Copied"), fallback)
+  if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(() => showToast(notice("map.clipboardCopied")), fallback)
   else fallback()
 }
 function fmtMiles(m) {
   if (ms.value.metric || (ms.value.gps && ms.value.gps.metric)) {
     const km = m / 1000
-    return km < 1 ? `${Math.round(m / 10) * 10} m` : `${km < 10 ? km.toFixed(1) : Math.round(km)} km`
+    return km < 1 ? `${Math.round(m / 10) * 10} m` : `${km < 10 ? number(km, 1) : number(Math.round(km))} km`
   }
   const mi = m / 1609.344
-  return mi < 0.1 ? `${Math.round(m * 3.28084)} ft` : `${mi < 10 ? mi.toFixed(1) : Math.round(mi)} mi`
+  return mi < 0.1 ? `${Math.round(m * 3.28084)} ft` : `${mi < 10 ? number(mi, 1) : number(Math.round(mi))} mi`
 }
 function fmtDur(sec) { const m = Math.round(sec / 60); return m < 60 ? `${Math.max(1, m)} min` : `${Math.floor(m / 60)} h ${m % 60} min` }
 function setTarget(t) {
@@ -267,7 +269,7 @@ function setTarget(t) {
 }
 function setGps(lat, lon, name) {
   engineLua(`beamngEarth_settings and beamngEarth_settings.uiMapGps(${num(lat)}, ${num(lon)}, ${luaStr(name || "")}) or nil`, r => {
-    if (r && r.ok) { ms.value = { ...ms.value, gps: { lat, lon, name, planning: true } }; showToast("GPS destination set") }
+    if (r && r.ok) { ms.value = { ...ms.value, gps: { lat, lon, name, planning: true } }; showToast(t('map.gpsSet')) }
   })
 }
 function setAutodrive(on) {
@@ -286,8 +288,8 @@ function teleportTo(lat, lon, name) {
   busy.value = true
   msg.value = ""
   engineLua(`beamngEarth_map3d.driveHere(${num(lat)}, ${num(lon)}, ${luaStr(name || "")})`, r => {
-    if (!r || !r.ok) { busy.value = false; msg.value = (r && r.error) || "Teleport failed" }
-    else if (r.pending) { target.value = null; msg.value = "Loading the place, then down to the car..." }
+    if (!r || !r.ok) { busy.value = false; msg.value = (r && r.error) || notice('map3d.teleportFailed') }
+    else if (r.pending) { target.value = null; msg.value = notice('map3d.teleportLoading') }
     else busy.value = false
   })
 }
@@ -305,7 +307,7 @@ function ctxSave() {
   closeCtx()
   engineLua(`beamngEarth_settings and beamngEarth_settings.uiPlaceAdd and beamngEarth_settings.uiPlaceAdd("", ${luaStr(`${c.lat.toFixed(6)}, ${c.lon.toFixed(6)}`)}) or nil`, res => {
     loadPlaces(res)
-    showToast(res && res.ok !== false ? "Saved" : "Not saved")
+    showToast(res && res.ok !== false ? t('map3d.saveSuccess') : t('map3d.saveFailed'))
   })
 }
 // the ground under a screen point (map3d.pick: the camera's ray on the earth)
@@ -335,7 +337,8 @@ const height = computed(() => {
   const d = st.value.dist || 0
   const up = d * Math.sin(st.value.pitch || 0.9)
   const mi = up / 1609.344
-  return mi >= 0.5 ? `${mi.toFixed(mi < 10 ? 1 : 0)} mi up` : `${Math.round(up * 3.28084)} ft up`
+  const distance = mi >= 0.5 ? `${number(mi, mi < 10 ? 1 : 0)} mi` : `${number(Math.round(up * 3.28084))} ft`
+  return t("map3d.heightAbove", { distance })
 })
 
 function poll() {

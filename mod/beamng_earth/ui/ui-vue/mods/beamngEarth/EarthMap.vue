@@ -1,5 +1,5 @@
 <template>
-  <div class="earth-map" :class="{ embedded }" @keydown.esc.stop="onEscape" tabindex="-1" ref="rootEl"
+  <div class="earth-map" :dir="direction" :class="{ embedded }" @keydown.esc.stop="onEscape" tabindex="-1" ref="rootEl"
        v-bng-on-ui-nav:action_2,context="onNavDeclared">
     <!-- the map itself: tiles, the lat/lon grid, markers -->
     <div
@@ -45,9 +45,8 @@
       <div v-if="selecting" class="pad-hint" :class="{ 'below-gps': !!state.gps }">{{ selectHint }}</div>
       <!-- a controller: the point A picks (the centre; padTick) -->
       <div v-if="padMode" class="pad-cross" />
-      <div v-if="padMode && !selecting" class="pad-hint" :class="{ 'below-gps': !!state.gps }">Right stick: move &middot; LT / RT: zoom
-        &middot; A: {{ state.gps ? "clear GPS" : "set GPS here" }} &middot; X: teleport &middot; Y: {{ state.gps &&
-        state.gps.autodrive ? "stop autodrive" : "autodrive" }} &middot; B: back</div>
+      <div v-if="padMode && !selecting" class="pad-hint" :class="{ 'below-gps': !!state.gps }">{{ t('map.rightStickMoveLTRT', { state: state.gps ? "clear GPS" : "set GPS here", state2: state.gps &&
+        state.gps.autodrive ? t('map.hintStopAutodrive') : t('map.hintAutodrive') }) }}</div>
       <svg class="map-grid" :width="w" :height="h">
         <g v-if="layersOn" :transform="lineTransform">
           <polyline v-for="(p, i) in stateLines" :key="'s' + i" class="layer-state" :points="p" />
@@ -101,12 +100,12 @@
         class="marker station"
         :class="m.kind"
         :style="{ left: m.sx + 'px', top: m.sy + 'px' }"
-        :title="(m.name || ms.NAMES[m.kind]) + ' (' + m.km + ' km)'"
+        :title="(stationName(m)) + ' (' + m.km + ' km)'"
         @mousedown.stop
-        @click.stop="setGps(m.lat, m.lon, m.name || ms.NAMES[m.kind])"
+        @click.stop="setGps(m.lat, m.lon, stationName(m))"
       >
         <div class="station-icon">{{ ms.ICON[m.kind] }}</div>
-        <div v-if="m.showLabel" class="marker-label">{{ m.name || ms.NAMES[m.kind] }}</div>
+        <div v-if="m.showLabel" class="marker-label">{{ stationName(m) }}</div>
       </div>
       <!-- the GPS destination -->
       <div v-if="gpsScreen" class="marker gps" :style="{ left: gpsScreen.x + 'px', top: gpsScreen.y + 'px' }">
@@ -116,7 +115,7 @@
       <div v-if="searchPreview" class="marker search-preview" :class="{ outside: searchPreview.offscreen }"
            :style="{ left: searchPreview.x + 'px', top: searchPreview.y + 'px' }">
         <div class="preview-pin"><svg viewBox="0 0 24 24" aria-hidden="true"><path :d="sm.icon(searchPreview.result.kind)" /></svg></div>
-        <div class="preview-name">{{ searchPreview.offscreen ? 'Outside view · ' : '' }}{{ searchPreview.result.name }}</div>
+        <div class="preview-name">{{ searchPreview.offscreen ? t('map.outsideView') : '' }}{{ searchPreview.result.name }}</div>
       </div>
       <!-- the pending target -->
       <div v-if="target" class="marker target" :style="{ left: targetScreen.x + 'px', top: targetScreen.y + 'px' }">
@@ -126,7 +125,7 @@
       <div v-for="o in otherMarkers" :key="'o' + o.pid" class="marker other" :class="{ followed: follow === o.pid }"
            :style="{ left: o.sx + 'px', top: o.sy + 'px' }">
         <div class="arrow" :style="{ transform: 'rotate(' + (o.h || 0) + 'deg)' }" :class="{ noheading: o.h == null }"></div>
-        <span class="marker-label" :title="follow === o.pid ? 'Stop following' : 'Follow on the map'" @mousedown.stop @click.stop="followPlayer(o)" @dblclick.stop>{{ o.name }}</span>
+        <span class="marker-label" :title="follow === o.pid ? t('map.stopFollowing') : t('map.followOnTheMap')" @mousedown.stop @click.stop="followPlayer(o)" @dblclick.stop>{{ o.name }}</span>
       </div>
       <!-- the player -->
       <div v-if="playerScreen" class="marker player" :style="{ left: playerScreen.x + 'px', top: playerScreen.y + 'px' }">
@@ -136,7 +135,7 @@
 
     <!-- top bar: title, search, buttons -->
     <div class="map-top">
-      <div class="map-title">BeamNG.Earth map</div>
+      <div class="map-title">{{ t('map.beamNGEarthMap') }}</div>
       <!-- the player's local time + weather (settings.uiMapState's weather: sky.lua's real clock for the lat/lon,
            weather.lua's last message), 2026-10-27 -->
       <div v-if="weatherBadge" class="weather-badge">
@@ -146,35 +145,35 @@
       </div>
       <div class="search" @mousedown.stop @focusin="searchFocused = true" @focusout="searchFocusOut">
         <div class="search-field">
-          <input ref="searchEl" v-model="query" class="search-input" role="combobox" aria-autocomplete="list" aria-label="Search places, categories or addresses"
+          <input ref="searchEl" v-model="query" class="search-input" role="combobox" aria-autocomplete="list" :aria-label="t('map.searchPlacesCategoriesOrAddresses')"
                  aria-controls="earth-search-results" :aria-expanded="!!(searching || results.length || searchMsg)"
                  :aria-activedescendant="resultIndex >= 0 ? 'earth-result-' + resultIndex : undefined"
-                 placeholder="Search a place, category or address"
+                 :placeholder="t('map.searchAPlaceCategoryOr')"
                  @focus="typing(true)" @blur="typing(false)"
                  @keydown.enter.stop.prevent="onSearch" @keydown.down.stop.prevent="moveResult(1)"
                  @keydown.up.stop.prevent="moveResult(-1)" @keydown.esc.stop.prevent="clearSearch" />
-          <button v-if="query" class="search-clear" aria-label="Clear search" title="Clear search" @click="clearSearch">×</button>
+          <button v-if="query" class="search-clear" :aria-label="t('map.clearSearch')" :title="t('map.clearSearch')" @click="clearSearch">×</button>
         </div>
         <div v-if="searchPanelVisible" class="search-panel">
-          <div v-if="searchToolsVisible" class="search-tools" aria-label="Find a driving destination">
+          <div v-if="searchToolsVisible" class="search-tools" :aria-label="t('map.findADrivingDestination')">
             <button v-for="c in sm.QUICK" :key="c.kind" class="category-chip" :class="{ on: query === c.query }"
-                    :title="'Find ' + c.label.toLowerCase() + ' near you and notable places worldwide'"
+                    :title="t('map.categoryHelp')"
                     @click="searchCategory(c)">
-              <svg viewBox="0 0 24 24" aria-hidden="true"><path :d="c.path" /></svg>{{ c.label }}
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path :d="c.path" /></svg>{{ sm.categoryLabel(c, t) }}
             </button>
             <button class="category-chip" :aria-expanded="categoriesOpen" aria-controls="earth-categories"
-                    @click="categoriesOpen = !categoriesOpen">{{ categoriesOpen ? 'Less' : 'More…' }}</button>
+                    @click="categoriesOpen = !categoriesOpen">{{ categoriesOpen ? t('map.fewerCategories') : t('map.more') }}</button>
           </div>
-          <div v-if="searchToolsVisible && categoriesOpen" id="earth-categories" class="category-picker" aria-label="More categories">
+          <div v-if="searchToolsVisible && categoriesOpen" id="earth-categories" class="category-picker" :aria-label="t('map.moreCategories')">
             <button v-for="c in sm.CATEGORIES.filter(c => !sm.QUICK.includes(c))" :key="c.kind" class="category-chip"
-                    @click="searchCategory(c)"><svg viewBox="0 0 24 24" aria-hidden="true"><path :d="c.path" /></svg>{{ c.label }}</button>
+                    @click="searchCategory(c)"><svg viewBox="0 0 24 24" aria-hidden="true"><path :d="c.path" /></svg>{{ sm.categoryLabel(c, t) }}</button>
           </div>
-          <div v-if="searchToolsVisible && !query && !searching" class="search-hint">Near you + notable places worldwide</div>
+          <div v-if="searchToolsVisible && !query && !searching" class="search-hint">{{ t('map.nearYouNotablePlacesWorldwide') }}</div>
           <div v-if="searching || searchMsg" class="search-status" role="status" aria-live="polite">
             <span v-if="searching" class="search-spinner" aria-hidden="true"></span>
-            <span>{{ searching ? (searchWide ? 'Searching wider… Finding category places and addresses.' : 'Searching places…') : searchMsg }}</span>
+            <span>{{ searching ? (searchWide ? t('map.searchingWider') : t('map.searchingPlaces')) : messageText(searchMsg) }}</span>
           </div>
-          <div v-if="results.length" id="earth-search-results" ref="resultsEl" class="search-results" role="listbox" aria-label="Search results" :aria-busy="searching">
+          <div v-if="results.length" id="earth-search-results" ref="resultsEl" class="search-results" role="listbox" :aria-label="t('map.searchResults')" :aria-busy="searching">
             <button v-for="(r, i) in displayResults" :id="'earth-result-' + i" :key="i" type="button"
                     class="search-result" role="option" :aria-selected="i === resultIndex" :class="{ active: i === resultIndex }" :data-result-index="i"
                     @click="pickResult(r)" @mouseenter="previewResult(i)" @mouseleave="leaveResult"
@@ -189,137 +188,137 @@
               </span>
             </button>
           </div>
-          <button v-if="moreFor && !searching" class="search-more" @click="liveSearch(true)">Search wider: categories &amp; addresses ↵</button>
-          <div v-if="searchToolsVisible && results.length" class="search-hint">↑ ↓ choose · Enter / A sets GPS, then X teleports</div>
-          <div class="search-credit">Search: © OpenStreetMap contributors (Nominatim, Overpass, Photon), Wikipedia, Wikidata</div>
+          <button v-if="moreFor && !searching" class="search-more" @click="liveSearch(true)">{{ t('map.searchWiderCategoriesAddresses') }}</button>
+          <div v-if="searchToolsVisible && results.length" class="search-hint">{{ t('map.chooseEnterASetsGPS') }}</div>
+          <div class="search-credit">{{ t('map.searchOpenStreetMapContributorsNominatimOverpass') }}</div>
         </div>
       </div>
-      <button class="map-btn" @click="nearestStation" title="Route the GPS to the nearest gas station (an EV charger for an electric car)">&#x26FD; Nearest</button>
-      <button class="map-btn" @click="zoomBy(1)" title="Zoom in">+</button>
-      <button class="map-btn" @click="zoomBy(-1)" title="Zoom out">-</button>
-      <button class="map-btn" :class="{ on: follow === true }" @click="centreOnMe" title="Centre on the car and follow it">Me</button>
+      <button class="map-btn" @click="nearestStation" :title="t('map.routeTheGPSToThe')">{{ t('map.nearest') }}</button>
+      <button class="map-btn" @click="zoomBy(1)" :title="t('map.zoomIn')">+</button>
+      <button class="map-btn" @click="zoomBy(-1)" :title="t('map.zoomOut')">-</button>
+      <button class="map-btn" :class="{ on: follow === true }" @click="centreOnMe" :title="t('map.centreOnTheCarAnd')">{{ t('map.me') }}</button>
       <button class="map-btn" :class="{ on: selecting }" @click="toggleSelect"
-              title="Pick an area to pre-cache: its map data, elevation and imagery downloaded ahead of time, and the world built too if you like (or Shift + drag on the map)">Pre-cache area</button>
+              :title="t('map.pickAnAreaToPre')">{{ t('map.preCacheArea') }}</button>
       <!-- the other players of a BeamMP session, nearest first: follow one on the map, or a GPS route to them -->
       <div v-if="state.others" class="layers-wrap">
         <button class="map-btn" :class="{ on: playersPanel || typeof follow === 'string' }"
                 @click="playersPanel = !playersPanel; layersPanel = false"
-                :title="followedPlayer ? 'Following ' + followedPlayer.name + ' (drag the map to stop)' : 'The other players'">
-          <span v-if="followedPlayer" class="following">Following {{ followedPlayer.name }}</span>
-          <template v-else>Players ({{ otherList.length }})</template>
+                :title="followedPlayer ? t('map.followPlayer', { name: followedPlayer.name }) : t('map.playersHelp')">
+          <span v-if="followedPlayer" class="following">{{ t('map.following', { name: followedPlayer.name }) }}</span>
+          <template v-else>{{ t('map.players', { length: otherList.length }) }}</template>
         </button>
         <div v-if="playersPanel" class="layers-panel players-panel" :style="{ maxHeight: `calc(${h}px - 74px - 6.5vh)` }"
              @mousedown.stop @wheel.stop @dblclick.stop>
           <div class="players-head">
-            <span class="panel-sub">Other players</span>
+            <span class="panel-sub">{{ t('map.otherPlayers') }}</span>
             <button class="map-btn small" :disabled="!otherList.length" @click="showAllPlayers"
-                    title="Zoom out to show everyone">Show all</button>
+                    :title="t('map.zoomOutToShowEveryone')">{{ t('map.showAll') }}</button>
           </div>
           <div v-for="p in playerRows" :key="p.pid" class="panel-item">
-            <div class="item-text" @click="followPlayer(p)" title="Follow on the map">
+            <div class="item-text" @click="followPlayer(p)" :title="t('map.followOnTheMap')">
               <div class="item-name">{{ p.name }}</div>
-              <div class="item-sub">{{ p.dist == null ? "" : fmtMiles(p.dist) + " away" }}</div>
+              <div class="item-sub">{{ p.dist == null ? "" : t('map.playerDistance', { distance: fmtMiles(p.dist) }) }}</div>
             </div>
             <div class="item-btns">
               <button class="map-btn small" :class="{ on: follow === p.pid }" @click="followPlayer(p)"
-                      :title="follow === p.pid ? 'Stop following' : 'Keep the map on them as they move, until you drag the map (the map only: your car stays where it is)'">{{ follow === p.pid ? "Following" : "Follow" }}</button>
-              <button class="map-btn small" @click="gpsToPlayer(p)" title="A GPS route to where they are now">GPS</button>
+                      :title="follow === p.pid ? t('map.stopFollowing') : t('map.followHelp')">{{ follow === p.pid ? t('map.followActive') : t('map.followAction') }}</button>
+              <button class="map-btn small" @click="gpsToPlayer(p)" :title="t('map.aGPSRouteToWhere')">{{ t('map.gPS') }}</button>
             </div>
           </div>
-          <div v-if="!otherList.length" class="panel-empty">No other players on the map yet.</div>
+          <div v-if="!otherList.length" class="panel-empty">{{ t('map.noOtherPlayersOnThe') }}</div>
         </div>
       </div>
       <div class="layers-wrap">
-        <button class="map-btn" :class="{ on: layersPanel }" @click="layersPanel = !layersPanel; playersPanel = false" title="Base map and overlays">Layers</button>
+        <button class="map-btn" :class="{ on: layersPanel }" @click="layersPanel = !layersPanel; playersPanel = false" :title="t('map.baseMapAndOverlays')">{{ t('map.layers') }}</button>
         <div v-if="layersPanel" class="layers-panel" @mousedown.stop @wheel.stop @dblclick.stop>
-          <div class="panel-sub">Base map</div>
-          <label class="layer-opt"><input type="radio" value="sat" v-model="baseLayer" /> Satellite</label>
-          <label class="layer-opt"><input type="radio" value="map" v-model="baseLayer" /> Map</label>
-          <label class="layer-opt"><input type="radio" value="dark" v-model="baseLayer" /> Dark</label>
-          <div class="panel-sub">Overlays</div>
-          <label class="layer-opt"><input type="checkbox" v-model="labelsOn" /> Roads &amp; labels</label>
-          <label class="layer-opt"><input type="checkbox" v-model="layersOn" /> Borders &amp; places
-            <span class="layer-hint">(world to city zoom)</span></label>
-          <label class="layer-opt" title="The US Interstates and US routes with their shields, while zoomed out (Natural Earth; closer in, Roads &amp; labels shows every road)">
-            <input type="checkbox" v-model="highwaysOn" /> Highways <span class="layer-hint">(US, zoomed out)</span></label>
-          <label class="layer-opt" title="Gas stations where the map data is downloaded (around the car, where you have driven, pre-cached areas); click one to set the GPS">
-            <input type="checkbox" v-model="fuelOn" /> Gas stations <span class="layer-hint">(zoom in)</span></label>
-          <label class="layer-opt" title="EV chargers where the map data is downloaded (around the car, where you have driven, pre-cached areas); click one to set the GPS">
-            <input type="checkbox" v-model="evOn" /> EV chargers <span class="layer-hint">(zoom in)</span></label>
-          <label class="layer-opt" title="What is downloaded on this computer, and at what detail (LB / RB: the next view)">
-            <input type="checkbox" v-model="cacheOn" /> Cache <span class="layer-hint">(downloaded data)</span></label>
+          <div class="panel-sub">{{ t('map.baseMap') }}</div>
+          <label class="layer-opt"><input type="radio" value="sat" v-model="baseLayer" /> {{ t('map.satellite') }}</label>
+          <label class="layer-opt"><input type="radio" value="map" v-model="baseLayer" /> {{ t('map.map') }}</label>
+          <label class="layer-opt"><input type="radio" value="dark" v-model="baseLayer" /> {{ t('map.dark') }}</label>
+          <div class="panel-sub">{{ t('map.overlays') }}</div>
+          <label class="layer-opt"><input type="checkbox" v-model="labelsOn" /> {{ t('map.roadsLabels') }}</label>
+          <label class="layer-opt"><input type="checkbox" v-model="layersOn" /> {{ t('map.bordersPlaces') }}
+            <span class="layer-hint">{{ t('map.worldToCityZoom') }}</span></label>
+          <label class="layer-opt" :title="t('map.theUSInterstatesAndUS')">
+            <input type="checkbox" v-model="highwaysOn" /> {{ t('map.highways') }} <span class="layer-hint">{{ t('map.uSZoomedOut') }}</span></label>
+          <label class="layer-opt" :title="t('map.gasStationsWhereTheMap')">
+            <input type="checkbox" v-model="fuelOn" /> {{ t('map.gasStations') }} <span class="layer-hint">{{ t('map.zoomIn2') }}</span></label>
+          <label class="layer-opt" :title="t('map.eVChargersWhereTheMap')">
+            <input type="checkbox" v-model="evOn" /> {{ t('map.eVChargers') }} <span class="layer-hint">{{ t('map.zoomIn2') }}</span></label>
+          <label class="layer-opt" :title="t('map.whatIsDownloadedOnThis')">
+            <input type="checkbox" v-model="cacheOn" /> {{ t('map.cache') }} <span class="layer-hint">{{ t('map.downloadedData') }}</span></label>
           <BngSelect v-if="cacheOn" class="cache-select" :value="cacheMode" :options="cacheModeOptions"
                      :config="cacheSelectConfig" @valueChanged="v => (cacheMode = v)" />
         </div>
       </div>
-      <button v-if="!embedded" class="map-btn" @click="open3d" title="The 3D map (experimental): fly over the real world like a map app">3D map</button>
-      <button v-if="!embedded" class="map-btn close" @click="close" title="Close (Esc / M)">Close</button>
+      <button v-if="!embedded" class="map-btn" @click="open3d" :title="t('map.the3DMapExperimentalFly')">{{ t('map.3DMap') }}</button>
+      <button v-if="!embedded" class="map-btn close" @click="close" :title="t('map.closeEscM')">{{ t('map.close') }}</button>
     </div>
 
     <!-- fast pre-cache running (server areas.py fast mode): the game paused meanwhile -->
     <div v-if="fastArea" class="fast-banner" @mousedown.stop @wheel.stop>
-      <span>Fast pre-cache: <b>{{ fastArea.name }}</b> &middot; {{ areaStateText(fastArea) }} &middot; the game is paused</span>
+      <span>{{ t('map.fastPreCache') }} <b>{{ fastArea.name }}</b> {{ t('map.theGameIsPaused', { areaStateText: areaStateText(fastArea) }) }}</span>
       <div class="area-bar"><span class="area-bar-fill running" :style="{ width: areaPct(fastArea) + '%' }"></span></div>
-      <button class="map-btn small" @click="areaCmd(fastArea, 'slow')" title="Go on in the background as before, and unpause the game">Stop fast</button>
+      <button class="map-btn small" @click="areaCmd(fastArea, 'slow')" :title="t('map.goOnInTheBackground')">{{ t('map.stopFast') }}</button>
     </div>
     <!-- the cache view's legend (bumpers: the next view) -->
     <div v-if="cacheOn" class="cache-legend" @mousedown.stop @wheel.stop>
-      <div class="cache-legend-title">Cache: {{ mm.CACHE_MODE_NAMES[cacheMode] }}</div>
+      <div class="cache-legend-title">{{ t('map.cache2', { mm: cacheModeName(cacheMode) }) }}</div>
       <div v-for="c in cacheLegendRows" :key="c.id" class="cache-legend-row">
         <span class="cache-swatch" :style="{ background: c.css }"></span>{{ c.name }}<span v-if="c.note" class="layer-hint">&nbsp;{{ c.note }}</span>
       </div>
-      <div v-if="cacheMode === 'elevation' || cacheMode === 'imagery'" class="cache-legend-hint">Faint: only part of the square</div>
-      <div v-if="cacheMsg" class="cache-legend-hint">{{ cacheMsg }}</div>
+      <div v-if="cacheMode === 'elevation' || cacheMode === 'imagery'" class="cache-legend-hint">{{ t('map.faintOnlyPartOfThe') }}</div>
+      <div v-if="cacheMsg" class="cache-legend-hint">{{ messageText(cacheMsg) }}</div>
     </div>
 
     <!-- status: tiles unavailable / not connected -->
     <div v-if="notice" class="map-notice">{{ notice }}</div>
-    <div v-if="toast" class="map-toast">{{ toast }}</div>
+    <div v-if="toast" class="map-toast">{{ mapMessage(toast) }}</div>
 
     <!-- right-click menu -->
     <div v-if="ctx" class="ctx-menu" :style="{ left: ctx.x + 'px', top: ctx.y + 'px' }" @mousedown.stop @contextmenu.prevent>
       <div class="ctx-where">{{ fmtLatLon(ctx.lat, ctx.lon) }}</div>
-      <div class="ctx-item" :class="{ disabled: !!state.cannotGo }" @click="ctxTeleport">Teleport here</div>
-      <div class="ctx-item" @click="ctxGps">Set GPS destination</div>
-      <div class="ctx-item" @click="ctxNearest">Nearest station from here</div>
-      <div class="ctx-item" @click="ctxSave">Save this place</div>
-      <div class="ctx-item" @click="ctxCopy">Copy coordinates</div>
-      <div v-if="state.gps" class="ctx-item" @click="clearGps">Clear GPS</div>
+      <div class="ctx-item" :class="{ disabled: !!state.cannotGo }" @click="ctxTeleport">{{ t('map.teleportHere') }}</div>
+      <div class="ctx-item" @click="ctxGps">{{ t('map.setGPSDestination') }}</div>
+      <div class="ctx-item" @click="ctxNearest">{{ t('map.nearestStationFromHere') }}</div>
+      <div class="ctx-item" @click="ctxSave">{{ t('map.saveThisPlace') }}</div>
+      <div class="ctx-item" @click="ctxCopy">{{ t('map.copyCoordinates') }}</div>
+      <div v-if="state.gps" class="ctx-item" @click="clearGps">{{ t('map.clearGPS') }}</div>
     </div>
 
     <!-- the GPS destination -->
     <div v-if="state.gps" class="gps-stack" @mousedown.stop>
     <div class="gps-chip">
       <div class="gps-chip-row">
-        <span>GPS: {{ state.gps.name || fmtLatLon(state.gps.lat, state.gps.lon) }}</span>
-        <span v-if="state.gps.planning && !routePts.length" class="gps-dist">planning route…</span>
+        <span>{{ t('map.gPS2', { state: state.gps.name || fmtLatLon(state.gps.lat, state.gps.lon) }) }}</span>
+        <span v-if="state.gps.planning && !routePts.length" class="gps-dist">{{ t('map.planningRoute') }}</span>
         <span v-else-if="state.gps.remaining != null" class="gps-dist">{{ fmtMiles(state.gps.remaining) }}<template
           v-if="state.gps.eta != null">, {{ fmtDur(state.gps.eta) }}</template></span>
-        <span v-if="state.gps.routeError && !routePts.length" class="gps-warn" :title="state.gps.routeError">no road route: heading straight there</span>
+        <span v-if="state.gps.routeError && !routePts.length" class="gps-warn" :title="state.gps.routeError">{{ t('map.noRoadRouteHeadingStraight') }}</span>
         <span v-else-if="state.gps.avoidHighways && state.gps.avoided === false && routePts.length" class="gps-warn"
-              title="Only a motorway reaches this destination">no route without highways</span>
+              :title="t('map.onlyAMotorwayReachesThis')">{{ t('map.noRouteWithoutHighways') }}</span>
         <span v-if="state.gps.routeDownload && state.gps.routeDownload.active" class="gps-download"
-              title="Downloading the route's road and elevation data ahead of time so driving it is smoother">
+              :title="t('map.downloadingTheRouteSRoad')">
           <span class="gps-download-bar"><span class="gps-download-fill" :style="{ width: (state.gps.routeDownload.total
             ? (100 * state.gps.routeDownload.done / state.gps.routeDownload.total) : 0) + '%' }"></span></span>
           {{ state.gps.routeDownload.done }} / {{ state.gps.routeDownload.total }}
         </span>
-        <button class="map-btn small" :class="{ primary: state.gps.avoidHighways }" @click="toggleAvoidHighways()">Avoid highways</button>
-        <button class="map-btn small" @click="showOnMap(state.gps)">Show</button>
+        <button class="map-btn small" :class="{ primary: state.gps.avoidHighways }" @click="toggleAvoidHighways()">{{ t('map.avoidHighways') }}</button>
+        <button class="map-btn small" @click="showOnMap(state.gps)">{{ t('map.show') }}</button>
         <button v-if="routePts.length >= 2" class="map-btn small" @click="askRoute(routeHalf)"
-                title="Pre-cache this route: its data (elevation, roads, buildings, aerial photos) downloaded and kept, and the world built too if you like">Pre-cache route</button>
-        <button class="map-btn small" :disabled="!!state.cannotGo" @click="teleportNow(state.gps.lat, state.gps.lon, state.gps.name)">Teleport</button>
+                :title="t('map.preCacheThisRouteIts')">{{ t('map.preCacheRoute') }}</button>
+        <button class="map-btn small" :disabled="!!state.cannotGo" @click="teleportNow(state.gps.lat, state.gps.lon, state.gps.name)">{{ t('map.teleport') }}</button>
         <button class="map-btn small" :class="{ primary: state.gps.autodrive }" @click="setAutodrive(!state.gps.autodrive)"
-                :title="state.gps.autodrive ? 'Stop driving by itself' : 'The car drives itself along the route (in its lane, at the speed limit)'">
-          {{ state.gps.autodrive ? "Autodrive on" : "Autodrive" }}
+                :title="state.gps.autodrive ? t('map.autodriveStop') : t('map.autodriveHelp')">
+          {{ state.gps.autodrive ? t('map.autodriveOn') : t('welcome.autodrive') }}
         </button>
-        <button class="map-btn small" @click="clearGps">Clear</button>
+        <button class="map-btn small" @click="clearGps">{{ t('map.clear') }}</button>
       </div>
     </div>
     <!-- the route's elevation profile (server routing.resample + dem.sample, smoothed), with where the car is on it: a
          box of its own under the GPS box (the user, 2026-10-27) -->
-    <div v-if="elevStats" class="elev-box" title="Elevation along the route">
-      <div class="elev-title">Elevation <span class="elev-climb">&#8599; {{ fmtHeight(elevStats.up) }}
+    <div v-if="elevStats" class="elev-box" :title="t('map.elevationAlongTheRoute')">
+      <div class="elev-title">{{ t('map.elevation') }} <span class="elev-climb">&#8599; {{ fmtHeight(elevStats.up) }}
         &nbsp;&#8600; {{ fmtHeight(elevStats.down) }}</span></div>
       <div class="elev-profile">
         <svg :width="ELEV_W" :height="ELEV_H" class="elev-svg">
@@ -334,140 +333,136 @@
 
     <!-- the confirmation -->
     <div v-if="target && (!target.quick || teleportMsg)" class="confirm" @mousedown.stop>
-      <div class="confirm-title">Teleport here?</div>
+      <div class="confirm-title">{{ t('map.teleportHere2') }}</div>
       <div class="confirm-where">{{ target.name ? target.name + " - " : "" }}{{ fmtLatLon(target.lat, target.lon) }}</div>
-      <div v-if="state.cannotGo" class="confirm-warn">{{ state.cannotGo }}</div>
-      <div v-if="teleportMsg" class="confirm-warn">{{ teleportMsg }}</div>
+      <div v-if="state.cannotGo" class="confirm-warn">{{ mapMessage(state.cannotGo) }}</div>
+      <div v-if="teleportMsg" class="confirm-warn">{{ mapMessage(teleportMsg) }}</div>
       <div class="confirm-btns">
-        <button class="map-btn primary" :disabled="!!state.cannotGo || busy" @click="teleport">Teleport</button>
-        <button class="map-btn" @click="setGps(target.lat, target.lon, target.name); target = null">Set GPS</button>
-        <button class="map-btn" @click="target = null; teleportMsg = ''">Cancel</button>
+        <button class="map-btn primary" :disabled="!!state.cannotGo || busy" @click="teleport">{{ t('map.teleport') }}</button>
+        <button class="map-btn" @click="setGps(target.lat, target.lon, target.name); target = null">{{ t('map.setGPS') }}</button>
+        <button class="map-btn" @click="target = null; teleportMsg = ''">{{ t('map.cancel') }}</button>
       </div>
     </div>
 
     <!-- a picked area: its estimate and Download (server areas.py plan) -->
     <div v-if="areaAsk" class="confirm area-confirm" @mousedown.stop @wheel.stop>
-      <div class="confirm-title">{{ areaAsk.route ? "Pre-cache along this route?" : "Pre-cache this area?" }}</div>
+      <div class="confirm-title">{{ areaAsk.route ? t('map.confirmPrecacheRoute') : t('map.confirmPrecacheArea') }}</div>
       <div v-if="areaAsk.route" class="panel-row route-width">
-        <span class="layer-hint">Width each side:</span>
+        <span class="layer-hint">{{ t('map.widthEachSide') }}</span>
         <button v-for="o in ROUTE_WIDTHS" :key="o.m" class="map-btn small" :class="{ primary: areaAsk.half === o.m }"
                 :disabled="areaAsk.busy" @click="askRoute(o.m)">{{ metricUnits ? o.km : o.mi }}</button>
       </div>
-      <div v-if="!areaAsk.plan" class="confirm-where">Working out what it needs...</div>
+      <div v-if="!areaAsk.plan" class="confirm-where">{{ t('map.workingOutWhatItNeeds') }}</div>
       <template v-else-if="areaAsk.plan.ok">
-        <div class="confirm-where"><template v-if="areaAsk.plan.km != null">{{ fmtMiles(areaAsk.plan.km * 1000) }} of route,
-          </template>{{ fmtArea(areaAsk.plan.km2) }} &middot; about {{ fmtBytes(areaAsk.plan.downloadBytes) }} to download,
-          {{ fmtBytes(areaAsk.plan.diskBytes) }} on disk &middot; {{ fmtEta(areaAsk.plan) }}</div>
-        <div v-for="hst in areaHosts" :key="hst[0]" class="area-host">{{ hst[0] }}: {{ hst[1].toLocaleString() }} requests<template
-          v-if="hst[2] > 1"> (about {{ Math.ceil(hst[2]) }} days: its daily limit)</template></div>
-        <div v-if="areaAsk.plan.excluded && areaAsk.plan.excluded.length" class="confirm-warn">Not included (these sources
-          are fetched while you drive): {{ areaAsk.plan.excluded.join(", ") }}</div>
-        <div v-if="areaAsk.plan.worldTiles" class="confirm-where">Builds {{ areaAsk.plan.worldTiles.toLocaleString() }} road
-          tiles ahead ({{ areaAsk.plan.worldMissing.toLocaleString() }} not built yet)</div>
-        <div class="area-note">It downloads in the background, slower while you drive, and the data is kept when the
-          cache is cleared or full.<template v-if="!areaWorld"> The world itself is still built when you get there.</template></div>
+        <div class="confirm-where"><template v-if="areaAsk.plan.km != null">{{ t('map.ofRoute', { fmtMiles: fmtMiles(areaAsk.plan.km * 1000) }) }}
+          </template>{{ t('map.aboutToDownloadOnDisk', { fmtArea: fmtArea(areaAsk.plan.km2), fmtBytes: fmtBytes(areaAsk.plan.downloadBytes), fmtBytes3: fmtBytes(areaAsk.plan.diskBytes), fmtEta: fmtEta(areaAsk.plan) }) }}</div>
+        <div v-for="hst in areaHosts" :key="hst[0]" class="area-host">{{ t('map.requests', { hst: hst[0], hst2: hst[1].toLocaleString() }) }}<template
+          v-if="hst[2] > 1"> {{ t('map.aboutDaysItsDailyLimit', { Math: Math.ceil(hst[2]) }) }}</template></div>
+        <div v-if="areaAsk.plan.excluded && areaAsk.plan.excluded.length" class="confirm-warn">{{ t('map.notIncludedTheseSourcesAre', { areaAsk: areaAsk.plan.excluded.join(", ") }) }}</div>
+        <div v-if="areaAsk.plan.worldTiles" class="confirm-where">{{ t('map.buildsRoadTilesAheadNot', { areaAsk: areaAsk.plan.worldTiles.toLocaleString(), areaAsk2: areaAsk.plan.worldMissing.toLocaleString() }) }}</div>
+        <div class="area-note">{{ t('map.itDownloadsInTheBackground') }}<template v-if="!areaWorld"> {{ t('map.theWorldItselfIsStill') }}</template></div>
         <div class="panel-row area-name-row">
-          <input v-model="areaName" class="panel-input" @focus="typing(true)" @blur="typing(false)" placeholder="Name (optional)"
+          <input v-model="areaName" class="panel-input" @focus="typing(true)" @blur="typing(false)" :placeholder="t('map.nameOptional')"
                  maxlength="60" @keydown.enter.stop.prevent="confirmArea" @keydown.esc.stop.prevent="cancelSelect" @mousedown.stop />
         </div>
       </template>
-      <label class="layer-opt area-world" title="Also build the roads, sidewalks, bridges, buildings and street furniture ahead of time, so arriving there loads them instead of building them (more disk space and time; rebuilt after a BeamNG.Earth update)">
+      <label class="layer-opt area-world" :title="t('map.alsoBuildTheRoadsSidewalks')">
         <input type="checkbox" :checked="areaWorld" :disabled="areaAsk.busy" @change="setAreaWorld($event.target.checked)" />
-        Build the world too <span class="layer-hint">(roads and buildings ready when you arrive)</span></label>
-      <label class="layer-opt area-world" title="Pauses the game and gives the download and the building every CPU core until it is done (minutes instead of an hour; each map host's own limits still apply). The game goes on by itself when it ends, or press Stop fast.">
+        {{ t('map.buildTheWorldToo') }} <span class="layer-hint">{{ t('map.roadsAndBuildingsReadyWhen') }}</span></label>
+      <label class="layer-opt area-world" :title="t('map.pausesTheGameAndGives')">
         <input type="checkbox" v-model="areaFast" :disabled="areaAsk.busy" />
-        Fast <span class="layer-hint">(pause the game, use every CPU core)</span></label>
-      <div v-if="areaAsk.error" class="confirm-warn">{{ areaAsk.error }}</div>
+        {{ t('map.fast') }} <span class="layer-hint">{{ t('map.pauseTheGameUseEvery') }}</span></label>
+      <div v-if="areaAsk.error" class="confirm-warn">{{ mapMessage(areaAsk.error) }}</div>
       <div class="confirm-btns">
-        <button class="map-btn primary" :disabled="!areaAsk.plan || !areaAsk.plan.ok || areaAsk.busy" @click="confirmArea">Pre-cache{{ padMode ? " (X)" : "" }}</button>
-        <button class="map-btn" @click="cancelSelect">Cancel{{ padMode ? " (B)" : "" }}</button>
+        <button class="map-btn primary" :disabled="!areaAsk.plan || !areaAsk.plan.ok || areaAsk.busy" @click="confirmArea">{{ t('map.preCache', { padMode: padMode ? " (X)" : "" }) }}</button>
+        <button class="map-btn" @click="cancelSelect">{{ t('map.cancel2', { padMode: padMode ? " (B)" : "" }) }}</button>
       </div>
     </div>
 
     <!-- Places (moved here from the settings page, 2026-10-14): save, go, rename, delete; recent places -->
     <div class="places-panel" :class="{ open: panelOpen }" @mousedown.stop @wheel.stop @dblclick.stop>
       <button class="map-btn panel-toggle" @click="panelOpen = !panelOpen"
-              :title="panelOpen ? 'Hide the places (the list and their pins on the map)' : 'Show the places'">
-        {{ panelOpen ? "Places ›" : "‹ Places" }}
+              :title="panelOpen ? t('map.hidePlaces') : t('map.showPlaces')">
+        {{ panelOpen ? t('map.placesOpen') : t('map.placesClosed') }}
       </button>
       <div v-if="panelOpen" class="panel-body">
-        <div v-if="state.cannotGo" class="panel-msg warn">Go is off: {{ state.cannotGo }}</div>
-        <div v-if="placesMsg" class="panel-msg" :class="{ warn: placesMsgError }">{{ placesMsg }}</div>
+        <div v-if="state.cannotGo" class="panel-msg warn">{{ t('map.goIsOff', { cannotGo: mapMessage(state.cannotGo) }) }}</div>
+        <div v-if="placesMsg" class="panel-msg" :class="{ warn: placesMsgError }">{{ mapMessage(placesMsg) }}</div>
 
-        <div class="panel-sub">Save where you are</div>
+        <div class="panel-sub">{{ t('map.saveWhereYouAre') }}</div>
         <div class="panel-row">
-          <input v-model="newName" class="panel-input" @focus="typing(true)" @blur="typing(false)" placeholder="Name (optional)" maxlength="60"
+          <input v-model="newName" class="panel-input" @focus="typing(true)" @blur="typing(false)" :placeholder="t('map.nameOptional')" maxlength="60"
                  @keydown.enter.stop.prevent="saveHere" @keydown.esc.stop.prevent="newName = ''" />
-          <button class="map-btn primary" :disabled="!state.player" @click="saveHere">Save</button>
+          <button class="map-btn primary" :disabled="!state.player" @click="saveHere">{{ t('map.save') }}</button>
         </div>
 
-        <div class="panel-sub">Latitude, longitude</div>
+        <div class="panel-sub">{{ t('map.latitudeLongitude') }}</div>
         <div class="panel-row">
-          <input v-model="coordText" class="panel-input" @focus="typing(true)" @blur="typing(false)" placeholder="36.5785, -118.2923 or a map link" maxlength="400"
+          <input v-model="coordText" class="panel-input" @focus="typing(true)" @blur="typing(false)" :placeholder="t('map.3657851182923Or')" maxlength="400"
                  @keydown.enter.stop.prevent="goText" @keydown.esc.stop.prevent="coordText = ''" />
-          <button class="map-btn primary" :disabled="!!state.cannotGo || !coordText.trim()" @click="goText">Go</button>
-          <button class="map-btn" :disabled="!coordText.trim()" @click="saveText">Save</button>
+          <button class="map-btn primary" :disabled="!!state.cannotGo || !coordText.trim()" @click="goText">{{ t('map.go') }}</button>
+          <button class="map-btn" :disabled="!coordText.trim()" @click="saveText">{{ t('map.save') }}</button>
         </div>
 
-        <div class="panel-sub">Saved places</div>
+        <div class="panel-sub">{{ t('map.savedPlaces') }}</div>
         <div v-for="p in placeList" :key="'s' + p.id" class="panel-item">
           <div v-if="renamingId === p.id" class="panel-row">
             <input v-model="renameText" class="panel-input" @focus="typing(true)" @blur="typing(false)" maxlength="60"
                    @keydown.enter.stop.prevent="commitRename(p)" @keydown.esc.stop.prevent="renamingId = null" />
-            <button class="map-btn primary" @click="commitRename(p)">OK</button>
-            <button class="map-btn" @click="renamingId = null">Cancel</button>
+            <button class="map-btn primary" @click="commitRename(p)">{{ t('map.oK') }}</button>
+            <button class="map-btn" @click="renamingId = null">{{ t('map.cancel') }}</button>
           </div>
           <template v-else>
-            <div class="item-text" @click="showOnMap(p)" title="Show on the map" @mouseenter="hoverPreload(p)"
+            <div class="item-text" @click="showOnMap(p)" :title="t('map.showOnTheMap')" @mouseenter="hoverPreload(p)"
                  @mouseleave="hoverEnd">
               <div class="item-name">{{ p.name }}</div>
               <div class="item-sub">{{ p.text }}</div>
             </div>
             <div class="item-btns">
-              <button class="map-btn primary small" :disabled="!!state.cannotGo" @click="goPlace(p)">Go</button>
-              <button class="map-btn small" @click="startRename(p)">Rename</button>
+              <button class="map-btn primary small" :disabled="!!state.cannotGo" @click="goPlace(p)">{{ t('map.go') }}</button>
+              <button class="map-btn small" @click="startRename(p)">{{ t('map.rename') }}</button>
               <button class="map-btn small" :class="{ danger: confirmDeleteId === p.id }" @click="deletePlace(p)">
-                {{ confirmDeleteId === p.id ? "Confirm" : "Delete" }}
+                {{ confirmDeleteId === p.id ? t('common.confirm') : t('common.delete') }}
               </button>
             </div>
           </template>
         </div>
-        <div v-if="!placeList.length" class="panel-empty">No saved places yet.</div>
+        <div v-if="!placeList.length" class="panel-empty">{{ t('map.noSavedPlacesYet') }}</div>
 
-        <div class="panel-sub">Pre-cached areas <span class="layer-hint">(Pre-cache area / Pre-cache route)</span></div>
+        <div class="panel-sub">{{ t('map.preCachedAreas') }} <span class="layer-hint">{{ t('map.preCacheAreaPreCache') }}</span></div>
         <div v-for="a in areaList" :key="'a' + a.id" class="panel-item area-item">
-          <div class="item-text" @click="showArea(a)" title="Show on the map">
-            <div class="item-name">{{ a.name }}<span v-if="a.route" class="layer-hint"> (route)</span><span
-              v-if="a.mode === 'world'" class="layer-hint"> (world built)</span></div>
+          <div class="item-text" @click="showArea(a)" :title="t('map.showOnTheMap')">
+            <div class="item-name">{{ a.name }}<span v-if="a.route" class="layer-hint"> {{ t('map.route') }}</span><span
+              v-if="a.mode === 'world'" class="layer-hint"> {{ t('map.worldBuilt') }}</span></div>
             <div class="item-sub">{{ areaStateText(a) }}</div>
             <div class="area-bar"><span class="area-bar-fill" :class="a.state" :style="{ width: areaPct(a) + '%' }"></span></div>
           </div>
           <div class="item-btns">
             <button v-if="a.state !== 'done' && areas.fast !== a.id" class="map-btn small" @click="areaCmd(a, 'fast')"
-                    title="Pause the game and finish this one on every CPU core">Fast</button>
+                    :title="t('map.pauseTheGameAndFinish')">{{ t('map.fast') }}</button>
             <button v-if="a.state !== 'done'" class="map-btn small" @click="areaCmd(a, a.state === 'paused' ? 'resume' : 'pause')">
-              {{ a.state === "paused" ? "Resume" : "Pause" }}</button>
+              {{ a.state === "paused" ? t('common.resume') : t('common.pause') }}</button>
             <button class="map-btn small" :class="{ danger: confirmAreaId === a.id }" @click="deleteArea(a)"
-                    title="Stop and forget this area (its data stays in the cache, no longer kept)">
-              {{ confirmAreaId === a.id ? "Confirm" : "Delete" }}</button>
+                    :title="t('map.stopAndForgetThisArea')">
+              {{ confirmAreaId === a.id ? t('common.confirm') : t('common.delete') }}</button>
           </div>
         </div>
-        <div v-if="!areaList.length" class="panel-empty">Nothing pre-cached yet.</div>
-        <div v-if="areaMsg" class="panel-msg" :class="{ warn: areaMsgError }">{{ areaMsg }}</div>
+        <div v-if="!areaList.length" class="panel-empty">{{ t('map.nothingPreCachedYet') }}</div>
+        <div v-if="areaMsg" class="panel-msg" :class="{ warn: areaMsgError }">{{ messageText(areaMsg) }}</div>
 
-        <div class="panel-sub">Recent places</div>
+        <div class="panel-sub">{{ t('map.recentPlaces') }}</div>
         <div v-for="r in recentList" :key="'r' + r.index + '_' + r.lat" class="panel-item">
-          <div class="item-text" @click="showOnMap(r)" title="Show on the map" @mouseenter="hoverPreload(r)"
+          <div class="item-text" @click="showOnMap(r)" :title="t('map.showOnTheMap')" @mouseenter="hoverPreload(r)"
                @mouseleave="hoverEnd">
             <div class="item-name">{{ r.name || r.text }}</div>
             <div class="item-sub">{{ recentDetail(r) }}</div>
           </div>
           <div class="item-btns">
-            <button class="map-btn primary small" :disabled="!!state.cannotGo" @click="goRecent(r)">Go</button>
-            <button class="map-btn small" @click="saveRecent(r)">Save</button>
+            <button class="map-btn primary small" :disabled="!!state.cannotGo" @click="goRecent(r)">{{ t('map.go') }}</button>
+            <button class="map-btn small" @click="saveRecent(r)">{{ t('map.save') }}</button>
           </div>
         </div>
-        <div v-if="!recentList.length" class="panel-empty">No recent places yet.</div>
+        <div v-if="!recentList.length" class="panel-empty">{{ t('map.noRecentPlacesYet') }}</div>
       </div>
     </div>
 
@@ -482,12 +477,14 @@
 </template>
 
 <script setup>
+import { t, direction, notice as translatedNotice, messageText, number } from "./i18n.js"
 import { ref, shallowRef, computed, watch, onMounted, onUnmounted, nextTick } from "vue"
 import { useEvents } from "@/services/events"
 import { vBngOnUiNav } from "@/common/directives"
 import * as mm from "./mapmath.js"
 import * as ms from "./mapstations.js"
 import * as sm from "./mapsearch.js"
+import { mapMessage } from "./mapMessages.js"
 import layerData from "./maplayers.js"
 import { BngSelect } from "@/common/components/base"
 
@@ -527,7 +524,7 @@ function poll() {
     if (followingPlayer()) {
       const o = followedPlayer.value
       if (o) glideTo(o.lat, o.lon)
-      else { follow.value = false; showToast("That player is no longer on the map") }
+      else { follow.value = false; showToast(t('map.playerLeft')) }
     } else if (s.player && follow.value) {
       centreOn(s.player.lat, s.player.lon, seenPlayer.value ? view.value.z : 12)
       seenPlayer.value = true
@@ -644,10 +641,10 @@ function onTileError(ev, t) {
 const notice = computed(() => {
   const s = state.value
   if (s.loading) return ""
-  if (s.missing) return "BeamNG.Earth is not loaded"
-  if (!s.connected) return "Companion server not connected: map tiles unavailable (places and the grid still work)"
-  if (!s.mapPort) return "Map tiles unavailable (the companion server is older or has --map-tiles off)"
-  if (tileErrors.value > 8 && tileLoads.value === 0) return "Map tiles unavailable (no imagery from the server: offline?)"
+  if (s.missing) return t('common.modUnavailable')
+  if (!s.connected) return t('map.tilesDisconnected')
+  if (!s.mapPort) return t('map.tilesDisabled')
+  if (tileErrors.value > 8 && tileLoads.value === 0) return t('map.tilesOffline')
   return ""
 })
 
@@ -1182,7 +1179,29 @@ const cacheMode = ref(mm.CACHE_MODES.includes(storedCacheMode) ? storedCacheMode
 // Persist before a same-tick map close disposes the component's queued watchers.
 watch(cacheOn, on => store("beamngEarth.map.cache", on ? "1" : "0"), { flush: "sync" })
 watch(cacheMode, v => store("beamngEarth.map.cacheMode", v), { flush: "sync" })
-const cacheModeOptions = mm.CACHE_MODES.map(v => ({ label: mm.CACHE_MODE_NAMES[v], value: v }))
+const cacheModeKeys = {
+  "summary": "map.cacheMode.summary",
+  "elevation": "map.cacheMode.elevation",
+  "imagery": "map.cacheMode.imagery",
+  "mapdata": "map.cacheMode.mapdata",
+  "world": "map.cacheMode.world",
+}
+const cacheLegendKeys = {
+  "Some data": "map.cacheLegend.some",
+  "Far view": "map.cacheLegend.far",
+  "Ready to drive": "map.cacheLegend.ready",
+  "Coarse": "map.cacheLegend.coarse",
+  "Near": "map.cacheLegend.near",
+  "Sharp": "map.cacheLegend.sharp",
+  "Some layers": "map.cacheLegend.someLayers",
+  "Every layer": "map.cacheLegend.allLayers",
+  "Terrain and far view, older": "map.cacheLegend.terrainOlder",
+  "Terrain and far view": "map.cacheLegend.terrain",
+  "Roads and buildings, older": "map.cacheLegend.roadsOlder",
+  "Roads and buildings": "map.cacheLegend.roads",
+}
+const cacheModeName = mode => t(cacheModeKeys[mode])
+const cacheModeOptions = computed(() => mm.CACHE_MODES.map(value => ({ label: cacheModeName(value), value })))
 const cacheSelectConfig = { value: o => o.value, label: o => o.label }
 const cacheGrid = ref(null)               // { z, x0, y0, w, h, cells: Uint8Array, mode }
 const cacheMsg = ref("")
@@ -1203,7 +1222,7 @@ function askCache() {
   engineLua(`beamngEarth_settings and beamngEarth_settings.uiCacheMap and beamngEarth_settings.uiCacheMap(${b.z}, ${b.x0}, ${b.y0}, ${b.x1}, ${b.y1}, ${luaStr(mode)}) or nil`, r => {
     if (seq !== cacheSeq) return
     if (!r || r.error || !r.id) {
-      cacheMsg.value = (r && r.error) || "Cache view unavailable (BeamNG.Earth not loaded?)"
+      cacheMsg.value = (r && r.error) || translatedNotice('map.cacheUnavailable')
       scheduleCache(CACHE_REFRESH_MS)
       return
     }
@@ -1214,11 +1233,11 @@ function askCache() {
         if (seq !== cacheSeq) return
         if (!res) {
           if (++tries < CACHE_POLL_TRIES) cachePollTimer = setTimeout(poll, CACHE_POLL_MS)
-          else { cacheMsg.value = "No answer from the companion server"; scheduleCache(CACHE_REFRESH_MS) }
+          else { cacheMsg.value = translatedNotice('common.companionTimeout'); scheduleCache(CACHE_REFRESH_MS) }
           return
         }
         const waiting = res.ready === false
-        cacheMsg.value = res.error ? String(res.error) : waiting ? "Indexing the cache..." : ""
+        cacheMsg.value = res.error ? String(res.error) : waiting ? translatedNotice('map.cacheIndexing') : ""
         if (!res.error && !waiting) {
           cacheGrid.value = { z: res.z, x0: res.x0, y0: res.y0, w: res.w, h: res.h, cells: mm.b64Bytes(res.cells), mode }
         }
@@ -1243,6 +1262,7 @@ const fuelOn = ref(stored("beamngEarth.map.fuel", "1") === "1")
 const evOn = ref(stored("beamngEarth.map.ev", "1") === "1")
 watch(fuelOn, on => store("beamngEarth.map.fuel", on ? "1" : "0"), { flush: "sync" })
 watch(evOn, on => store("beamngEarth.map.ev", on ? "1" : "0"), { flush: "sync" })
+const stationName = station => station.name || t(station.kind === "ev" ? "navigation.evCharger" : "navigation.fuelStation")
 const stationItems = shallowRef([])
 const STATION_ASK_MS = 400, STATION_PARTIAL_MS = 2000, STATION_POLL_MS = 150, STATION_POLL_TRIES = 140
 const NEAR_FROM_HERE_MS = 20000     // the right-click search's limit (finder.lua NEAR_TIMEOUT_S)
@@ -1303,7 +1323,7 @@ const stationMarkers = computed(() => {
 // Nearest for the car (finder.lua: its kind, the GPS, the message saying where)
 function nearestStation() {
   engineLua(`beamngEarth_settings and beamngEarth_settings.uiNearest and beamngEarth_settings.uiNearest() or nil`, r => {
-    showToast(r && r.error ? r.error : "Finding the nearest station...")
+    showToast(r && r.error ? r.error : t('map.findingStation'))
   })
 }
 // The right-click "Nearest station from here": the kinds whose layer is on (both when none is), rings outward
@@ -1313,11 +1333,11 @@ function ctxNearest() {
   const c = ctx.value
   closeCtx()
   const kinds = stationKinds().length ? stationKinds() : ["fuel", "ev"]
-  showToast("Finding the nearest station...")
+  showToast(t('map.findingStation'))
   ms.nearSearch(nearSearchState, cb => askStations(nearSlot, c.lat, c.lon, ms.R_KM_MAX, kinds, "near", cb), res => {
     const best = res && toArray(res.items)[0]
-    if (!best) { showToast(res && res.error ? res.error : "No station within " + ms.R_KM_MAX + " km"); return }
-    setGps(best.lat, best.lon, best.name || ms.NAMES[best.kind])
+    if (!best) { showToast(res && res.error ? res.error : t('navigation.stationMissing', { radius: ms.R_KM_MAX })); return }
+    setGps(best.lat, best.lon, stationName(best))
     scheduleStations(0)
   }, { limitMs: NEAR_FROM_HERE_MS })
 }
@@ -1326,10 +1346,10 @@ function ctxNearest() {
 function cycleCache(dir) {
   const list = mm.CACHE_MODES
   let i = cacheOn.value ? list.indexOf(cacheMode.value) + dir : (dir > 0 ? 0 : list.length - 1)
-  if (i < 0 || i >= list.length) { cacheOn.value = false; showToast("Cache view off"); return }
+  if (i < 0 || i >= list.length) { cacheOn.value = false; showToast(t('map.cacheOff')); return }
   cacheMode.value = list[i]
   cacheOn.value = true
-  showToast(`Cache: ${mm.CACHE_MODE_NAMES[list[i]]}`)
+  showToast(translatedNotice('map.cache2', { mm: cacheModeName(list[i]) }))
 }
 
 const CACHE_ALPHA = 0.45, CACHE_ALPHA_PARTIAL = 0.2
@@ -1338,7 +1358,7 @@ const cacheMetric = computed(() => !!((state.value.weather && state.value.weathe
 const cacheLegendRows = computed(() => {
   const mode = cacheMode.value
   const detail = mode === "elevation" || mode === "imagery"
-  const rows = mm.cacheLegend(mode).map(c => ({ ...c, css: cacheCss(c.rgb, CACHE_ALPHA + 0.2), note: "" }))
+  const rows = mm.cacheLegend(mode).map(c => ({ ...c, name: t(cacheLegendKeys[c.name]), css: cacheCss(c.rgb, CACHE_ALPHA + 0.2), note: "" }))
   if (detail) {
     const f = m => mm.fmtRes(m, cacheMetric.value)
     for (let i = 0; i < rows.length; i++) {
@@ -1398,9 +1418,9 @@ const areaMsg = ref(""), areaMsgError = ref(false)
 const confirmAreaId = ref(null)
 let areaSeq = 0, areaTimer = null, confirmAreaTimer = null
 const areaList = computed(() => toArray(areas.value && areas.value.areas))
-const selectHint = computed(() => (areaAsk.value ? "X: pre-cache this area · B: cancel"
-  : padMode.value ? (boxStart.value ? "A: the other corner · B: cancel" : "A: one corner of the area · B: cancel")
-    : "Drag a box over the area to download · Esc: cancel"))
+const selectHint = computed(() => (areaAsk.value ? t('map.preCachePadConfirm')
+  : padMode.value ? (boxStart.value ? t('map.preCachePadSecond') : t('map.preCachePadFirst'))
+    : t('map.preCacheDrag')))
 
 function toggleSelect() {
   if (selecting.value) { cancelSelect(); return }
@@ -1498,7 +1518,7 @@ function askRoute(half) {
   areaName.value = state.value.gps && state.value.gps.name ? String(state.value.gps.name).slice(0, 60) : ""
   engineLua(`beamngEarth_settings and beamngEarth_settings.uiRoutePlan and beamngEarth_settings.uiRoutePlan(${half}, ${luaStr(areaMode())}) or nil`, r => {
     if (seq !== areaSeq || !areaAsk.value) return
-    if (!r || r.error || !r.id) { areaAsk.value = { ...areaAsk.value, error: (r && r.error) || "BeamNG.Earth is not loaded" }; return }
+    if (!r || r.error || !r.id) { areaAsk.value = { ...areaAsk.value, error: (r && r.error) || translatedNotice('common.modUnavailable') }; return }
     let tries = 0
     const poll = () => {
       if (seq !== areaSeq || !areaAsk.value) return
@@ -1506,7 +1526,7 @@ function askRoute(half) {
         if (seq !== areaSeq || !areaAsk.value) return
         if (!res) {
           if (++tries < 200) setTimeout(poll, 150)
-          else areaAsk.value = { ...areaAsk.value, error: "No answer from the companion server" }
+          else areaAsk.value = { ...areaAsk.value, error: t('common.companionTimeout') }
           return
         }
         areaAsk.value = { ...areaAsk.value, plan: res, error: res.ok ? "" : String(res.error || "Not possible") }
@@ -1525,7 +1545,7 @@ function askArea(again) {
   if (!again) areaName.value = ""
   engineLua(`beamngEarth_settings and beamngEarth_settings.uiAreaPlan and beamngEarth_settings.uiAreaPlan(${b.s}, ${b.w}, ${b.n}, ${b.e}, ${luaStr(areaMode())}) or nil`, r => {
     if (seq !== areaSeq || !areaAsk.value) return
-    if (!r || r.error || !r.id) { areaAsk.value = { ...areaAsk.value, error: (r && r.error) || "BeamNG.Earth is not loaded" }; return }
+    if (!r || r.error || !r.id) { areaAsk.value = { ...areaAsk.value, error: (r && r.error) || translatedNotice('common.modUnavailable') }; return }
     let tries = 0
     const poll = () => {
       if (seq !== areaSeq || !areaAsk.value) return
@@ -1533,7 +1553,7 @@ function askArea(again) {
         if (seq !== areaSeq || !areaAsk.value) return
         if (!res) {
           if (++tries < 100) setTimeout(poll, 150)
-          else areaAsk.value = { ...areaAsk.value, error: "No answer from the companion server" }
+          else areaAsk.value = { ...areaAsk.value, error: t('common.companionTimeout') }
           return
         }
         areaAsk.value = { ...areaAsk.value, plan: res, error: res.ok ? "" : String(res.error || "Not possible") }
@@ -1555,16 +1575,16 @@ function confirmArea() {
     ? `beamngEarth_settings.uiRouteAdd and beamngEarth_settings.uiRouteAdd(${a.half}, ${luaStr(areaName.value)}, ${luaStr(areaMode())}, ${areaFast.value ? "true" : "false"})`
     : `beamngEarth_settings.uiAreaAdd and beamngEarth_settings.uiAreaAdd(${b.s}, ${b.w}, ${b.n}, ${b.e}, ${luaStr(areaName.value)}, ${luaStr(areaMode())}, ${areaFast.value ? "true" : "false"})`
   engineLua(`beamngEarth_settings and ${call} or nil`, r => {
-    if (!r || r.error) { areaAsk.value = { ...a, busy: false, error: (r && r.error) || "BeamNG.Earth is not loaded" }; return }
+    if (!r || r.error) { areaAsk.value = { ...a, busy: false, error: (r && r.error) || translatedNotice('common.modUnavailable') }; return }
     let tries = 0
     const poll = () => {
       engineLua(`beamngEarth_settings and beamngEarth_settings.uiAreaResult(${r.id}) or nil`, res => {
-        if (!res) { if (++tries < 60) setTimeout(poll, 150); else areaAsk.value = { ...a, busy: false, error: "No answer from the companion server" }; return }
+        if (!res) { if (++tries < 60) setTimeout(poll, 150); else areaAsk.value = { ...a, busy: false, error: t('common.companionTimeout') }; return }
         if (!res.ok) { areaAsk.value = { ...a, busy: false, error: String(res.error || "Not saved") }; return }
         cancelSelect()
         panelOpen.value = true
-        areaMsg.value = areaFast.value ? "Fast pre-cache: the game is paused until it is done"
-          : a.route ? "Downloading along the route in the background" : "Downloading the area in the background"
+        areaMsg.value = areaFast.value ? translatedNotice('map.preCacheFastRunning')
+          : a.route ? t('map.preCacheRouteRunning') : t('map.preCacheAreaRunning')
         areaMsgError.value = false
         pollAreas()
       })
@@ -1574,7 +1594,7 @@ function confirmArea() {
 }
 function areaCmd(a, op) {
   engineLua(`beamngEarth_settings and beamngEarth_settings.uiAreaCmd and beamngEarth_settings.uiAreaCmd(${luaStr(a.id)}, ${luaStr(op)}) or nil`, r => {
-    if (!r || r.error) { areaMsg.value = (r && r.error) || "BeamNG.Earth is not loaded"; areaMsgError.value = true; return }
+    if (!r || r.error) { areaMsg.value = (r && r.error) || translatedNotice('common.modUnavailable'); areaMsgError.value = true; return }
     setTimeout(pollAreas, 200)
   })
 }
@@ -1602,10 +1622,14 @@ function pollAreas() {
   })
 }
 function areaPct(a) { return a.total ? Math.min(100, Math.round(100 * a.done / a.total)) : (a.state === "done" ? 100 : 0) }
+const areaStates = {
+  queued: "map.area.queued", checking: "map.area.checking", running: "map.area.running",
+  paused: "map.area.paused", waiting: "map.area.waiting", done: "map.area.done",
+}
 function areaStateText(a) {
   const pct = `${areaPct(a)} %`
-  const what = { queued: "queued", checking: "checking what is there", running: "downloading", paused: "paused",
-    waiting: "waiting", done: "downloaded" }[a.state] || a.state
+  const key = areaStates[a.state]
+  const what = key ? t(key) : a.state
   return a.msg ? `${pct} · ${what}: ${a.msg}` : `${pct} · ${what}`
 }
 areaTimer = setInterval(() => { if (panelOpen.value || cacheOn.value || selecting.value || fastArea.value) pollAreas() }, 2000)
@@ -1617,17 +1641,17 @@ function fmtArea(km2) {
   const mi2 = km2 / 2.58999
   const m = metricUnits.value
   const v = m ? km2 : mi2
-  return `${v < 10 ? v.toFixed(1) : Math.round(v).toLocaleString()} ${m ? "km²" : "sq mi"}`
+  return `${v < 10 ? number(v, 1) : number(Math.round(v))} ${m ? "km²" : "sq mi"}`
 }
 function fmtBytes(b) {
-  if (b >= 1e9) return `${(b / 1e9).toFixed(1)} GB`
+  if (b >= 1e9) return `${number(b / 1e9, 1)} GB`
   return `${Math.max(1, Math.round(b / 1e6))} MB`
 }
 function fmtEta(p) {
-  if (p.days > 1) return `about ${Math.ceil(p.days)} days (the hosts' daily limits)`
+  if (p.days > 1) return t('map.etaDays', { count: Math.ceil(p.days) })
   const s = p.seconds || 0
-  if (s < 3600) return `about ${Math.max(1, Math.round(s / 60))} min`
-  return `about ${Math.round(s / 3600)} h`
+  if (s < 3600) return t('map.etaMinutes', { count: Math.max(1, Math.round(s / 60)) })
+  return t('map.etaHours', { count: Math.round(s / 3600) })
 }
 
 // ---- Places panel (settings.lua uiPlace* -> places.lua; every call answers with both lists) ---------
@@ -1657,13 +1681,13 @@ function luaNum(v) {
 function recentDetail(r) {
   const parts = []
   if (r.name) parts.push(r.text)
-  if (r.kind === "start") parts.push("level start")
+  if (r.kind === "start") parts.push(t('map.recentLevelStart'))
   return parts.join("  |  ")
 }
 
 function placesCall(script, okText, onOk) {
   engineLua(`beamngEarth_settings and beamngEarth_settings.uiPlaces and beamngEarth_settings.${script} or nil`, res => {
-    if (!res) { placesMsg.value = "BeamNG.Earth is not loaded"; placesMsgError.value = true; return }
+    if (!res) { placesMsg.value = translatedNotice('common.modUnavailable'); placesMsgError.value = true; return }
     state.value = { ...state.value, places: toArray(res.places), recent: toArray(res.recent), cannotGo: res.cannotGo }
     if (res.ok === false && res.error) { placesMsg.value = res.error; placesMsgError.value = true }
     else if (okText !== undefined) { placesMsg.value = okText; placesMsgError.value = false }
@@ -1678,19 +1702,19 @@ function showOnMap(p) {
 }
 // after a Go: back to driving, as the map's own Teleport does
 function wentThere() { follow.value = true; if (!embedded) close() }
-function saveHere() { placesCall(`uiPlaceAddHere(${luaStr(newName.value)})`, "Saved", () => { newName.value = "" }) }
+function saveHere() { placesCall(`uiPlaceAddHere(${luaStr(newName.value)})`, translatedNotice("map.saveSuccess"), () => { newName.value = "" }) }
 function goText() {
   if (!coordText.value.trim()) return
-  placesCall(`uiPlaceGoText(${luaStr(coordText.value)})`, `Going to ${coordText.value.trim()}`, wentThere)
+  placesCall(`uiPlaceGoText(${luaStr(coordText.value)})`, translatedNotice("map.goingTo", { destination: coordText.value.trim() }), wentThere)
 }
 function saveText() {
   if (!coordText.value.trim()) return
-  placesCall(`uiPlaceAdd(${luaStr(newName.value)}, ${luaStr(coordText.value)})`, "Saved", () => { newName.value = ""; coordText.value = "" })
+  placesCall(`uiPlaceAdd(${luaStr(newName.value)}, ${luaStr(coordText.value)})`, translatedNotice("map.saveSuccess"), () => { newName.value = ""; coordText.value = "" })
 }
-function goPlace(p) { placesCall(`uiPlaceGo(${luaNum(p.id)})`, `Going to ${p.name}`, wentThere) }
+function goPlace(p) { placesCall(`uiPlaceGo(${luaNum(p.id)})`, translatedNotice("map.goingTo", { destination: p.name }), wentThere) }
 function startRename(p) { renamingId.value = p.id; renameText.value = p.name; confirmDeleteId.value = null }
 function commitRename(p) {
-  placesCall(`uiPlaceRename(${luaNum(p.id)}, ${luaStr(renameText.value)})`, "Renamed", () => { renamingId.value = null })
+  placesCall(`uiPlaceRename(${luaNum(p.id)}, ${luaStr(renameText.value)})`, translatedNotice("map.renameSuccess"), () => { renamingId.value = null })
 }
 // Delete asks once more: the button reads "Confirm" for 4 s
 function deletePlace(p) {
@@ -1702,15 +1726,15 @@ function deletePlace(p) {
     return
   }
   confirmDeleteId.value = null
-  placesCall(`uiPlaceDelete(${luaNum(p.id)})`, `Deleted ${p.name}`)
+  placesCall(`uiPlaceDelete(${luaNum(p.id)})`, translatedNotice("map.deleteSuccess", { name: p.name }))
 }
 // the row's lat/lon go along: a Go moves its place to the front, so the index alone can be stale
 function goRecent(r) {
-  placesCall(`uiPlaceGoRecent(${luaNum(r.index)}, ${luaNum(r.lat)}, ${luaNum(r.lon)})`, `Going to ${r.name || r.text}`, wentThere)
+  placesCall(`uiPlaceGoRecent(${luaNum(r.index)}, ${luaNum(r.lat)}, ${luaNum(r.lon)})`, translatedNotice("map.goingTo", { destination: r.name || r.text }), wentThere)
 }
 function saveRecent(r) {
   const ll = `${Number(r.lat).toFixed(6)}, ${Number(r.lon).toFixed(6)}`
-  placesCall(`uiPlaceAdd(${luaStr(r.name || "")}, ${luaStr(ll)})`, "Saved")
+  placesCall(`uiPlaceAdd(${luaStr(r.name || "")}, ${luaStr(ll)})`, translatedNotice("map.saveSuccess"))
 }
 
 // ---- right-click menu: teleport / GPS / save at a point ---------------------------------------
@@ -1739,7 +1763,7 @@ function ctxSave() {
   const c = ctx.value
   closeCtx()
   panelOpen.value = true
-  placesCall(`uiPlaceAdd("", ${luaStr(`${c.lat.toFixed(6)}, ${c.lon.toFixed(6)}`)})`, "Saved")
+  placesCall(`uiPlaceAdd("", ${luaStr(`${c.lat.toFixed(6)}, ${c.lon.toFixed(6)}`)})`, translatedNotice("map.saveSuccess"))
 }
 // decimal "lat, lon" (pasteable into Google Maps etc.), not the N/S/E/W display format
 const toast = ref("")
@@ -1751,7 +1775,7 @@ function showToast(msg) {
 }
 function copyText(text) {
   if (navigator.clipboard && navigator.clipboard.writeText) {
-    navigator.clipboard.writeText(text).then(() => showToast("Copied"), () => copyFallback(text))
+    navigator.clipboard.writeText(text).then(() => showToast(translatedNotice("map.clipboardCopied")), () => copyFallback(text))
   } else {
     copyFallback(text)
   }
@@ -1767,9 +1791,9 @@ function copyFallback(text) {
     ta.select()
     document.execCommand("copy")
     document.body.removeChild(ta)
-    showToast("Copied")
+    showToast(translatedNotice("map.clipboardCopied"))
   } catch (e) {
-    showToast("Copy failed")
+    showToast(translatedNotice("map.clipboardFailed"))
   }
 }
 function ctxCopy() {
@@ -1885,10 +1909,10 @@ function fmtMiles(m) {
   // GPS route: the Players list)
   if ((state.value.gps || state.value).metric) {
     const km = m / 1000
-    return km < 1 ? `${Math.round(m / 10) * 10} m` : `${km < 10 ? km.toFixed(1) : Math.round(km)} km`
+    return km < 1 ? `${Math.round(m / 10) * 10} m` : `${km < 10 ? number(km, 1) : number(Math.round(km))} km`
   }
   const mi = m / 1609.344
-  return mi < 0.1 ? `${Math.round(m * 3.28084)} ft` : `${mi < 10 ? mi.toFixed(1) : Math.round(mi)} mi`
+  return mi < 0.1 ? `${Math.round(m * 3.28084)} ft` : `${mi < 10 ? number(mi, 1) : number(Math.round(mi))} mi`
 }
 
 // ---- search --------------------------------------------------------------------------------
@@ -1919,7 +1943,7 @@ function searchFocusOut(event) {
   }
 }
 const resultsEl = ref(null), hoverIndex = ref(-1)
-const displayResults = computed(() => results.value.map(r => sm.present(r, state.value.player)))
+const displayResults = computed(() => results.value.map(r => sm.present(r, state.value.player, t, fmtMiles)))
 const searchPreview = computed(() => {
   const r = results.value[hoverIndex.value >= 0 ? hoverIndex.value : resultIndex.value]
   if (!sm.validPoint(r)) return null
@@ -1959,7 +1983,7 @@ function liveSearch(full = false) {
     if (seq !== searchSeq) return
     if (!r || r.error || !r.id) {
       searching.value = false
-      searchMsg.value = (r && r.error) || 'Search unavailable. Check the companion server and try again.'
+      searchMsg.value = (r && r.error) || translatedNotice('map.searchUnavailable')
       return
     }
     let tries = 0
@@ -1969,7 +1993,7 @@ function liveSearch(full = false) {
         if (seq !== searchSeq) return
         if (!res) {
           if (++tries < MAP_WAIT_TRIES) searchPollTimer = setTimeout(poll, 150)
-          else { searching.value = false; searchMsg.value = "Search timed out. Try again or search another place." }
+          else { searching.value = false; searchMsg.value = translatedNotice('map.searchTimedOut') }
           return
         }
         searching.value = false
@@ -1979,10 +2003,10 @@ function liveSearch(full = false) {
         const online = toArray(res.results)
         results.value = [...local, ...online]
         if (full) fullText = text
-        if (res.error) searchMsg.value = res.text || 'Search unavailable. Try again in a moment.'
+        if (res.error) searchMsg.value = res.text || translatedNotice('map.searchRetry')
         else if (!results.value.length) {
-          searchMsg.value = full ? 'No places found. Try another category or add “near <place>”.'
-            : 'No matches yet. Press Enter to search categories and addresses.'
+          searchMsg.value = full ? translatedNotice('map.searchNoCategory')
+            : t('map.searchNoMatchesYet')
         } else if (!full && !results.value[0].sure) {
           moreFor.value = text      // (a line in the list: a message under it would lie behind it)
         }
@@ -2101,7 +2125,7 @@ function onSearch() {
   engineLua(`beamngEarth_settings and beamngEarth_settings.uiMapParse(${luaStr(text)}) or nil`, r => {
       if (seq !== searchSeq || searchDisposed) return
     if (r && typeof r.lat === "number") goTo(r.lat, r.lon, "")
-    else if (!searching.value) searchMsg.value = "Nothing found (try more of the address, or a latitude, longitude)"
+    else if (!searching.value) searchMsg.value = translatedNotice('map.searchNothingFound')
   })
 }
 
@@ -2152,7 +2176,7 @@ function teleport() {
       view.value = { ...view.value, lat: t.lat, lon: t.lon }
       if (!embedded) close()
     } else {
-      teleportMsg.value = (r && r.error) || "Teleport failed (BeamNG.Earth not loaded?)"
+      teleportMsg.value = (r && r.error) || translatedNotice('map.teleportUnavailable')
     }
   })
 }

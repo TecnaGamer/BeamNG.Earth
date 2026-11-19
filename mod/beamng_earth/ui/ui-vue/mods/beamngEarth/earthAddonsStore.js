@@ -2,6 +2,7 @@
 // addons.py lists the curated add-ons, sends an add-on's README and changelog as safe HTML (our own tags only, links
 // as indexes into a list of https URLs) and downloads a release; addons.lua hands the file to the game's mod manager.
 // The game's UI browser cannot fetch anything itself: everything comes through Lua.
+import { t, date, number } from "./i18n.js"
 import { ref, computed } from "vue"
 import { engineLua, openLink } from "./earthSettingsStore.js"
 
@@ -137,17 +138,17 @@ export function openDownload(url) { openLink(url) }
 // The card's state line: "Installed build-141 (update: build-142)", "Not installed", ...
 export function stateLine(c) {
   if (c.kind === "companion") {
-    if (!c.installed) return c.latest ? `Runs beside the game (latest: ${c.latest})` : "Runs beside the game"
-    let t = `Installed ${c.version || ""}`.trim() + (c.running ? ", running" : ", not running")
-    if (c.update && c.latest) t += ` (update: ${c.latest})`
-    return t
+    if (!c.installed) return c.latest ? t('addons.companionLatest', { version: c.latest }) : t('addons.runsBesideGame')
+    let label = t('addons.installed', { version: c.version || "" }).trim() + (c.running ? t("addons.running") : t("addons.notRunning"))
+    if (c.update && c.latest) label += t('addons.availableUpdate', { version: c.latest })
+    return label
   }
-  if (c.kind !== "beamng-mod") return "Download"
-  if (!c.installed) return c.latest ? `Not installed (latest: ${c.latest})` : "Not installed"
-  let t = `Installed ${c.version || ""}`.trim()
-  if (c.active === false) t += ", turned off"
-  if (c.update && c.latest) t += ` (update: ${c.latest})`
-  return t
+  if (c.kind !== "beamng-mod") return t('addons.download')
+  if (!c.installed) return c.latest ? t('addons.notInstalledLatest', { version: c.latest }) : t('addons.notInstalled')
+  let label = t('addons.installed', { version: c.version || "" }).trim()
+  if (c.active === false) label += t("addons.inactive")
+  if (c.update && c.latest) label += t('addons.availableUpdate', { version: c.latest })
+  return label
 }
 
 // A list from Lua: an array, or (Lua's tables reach the page as objects when empty or sparse) the object's values
@@ -159,13 +160,12 @@ export function lines(v) {
 
 export function size(n) {
   if (!n) return ""
-  if (n >= 1 << 20) return `${(n / (1 << 20)).toFixed(1)} MB`
+  if (n >= 1 << 20) return `${number(n / (1 << 20), 1)} MB`
   return `${Math.max(1, Math.round(n / 1024))} KB`
 }
 
 export function day(iso) {
-  const d = typeof iso === "string" ? iso.slice(0, 10) : ""
-  return d
+  return typeof iso === "string" && iso ? date(iso.slice(0, 10)) : ""
 }
 
 export function progressText(st) {

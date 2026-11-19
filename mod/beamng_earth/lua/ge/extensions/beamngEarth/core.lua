@@ -2439,25 +2439,28 @@ local function drawUpdateNotice()
   local flags = im.WindowFlags_AlwaysAutoResize + im.WindowFlags_NoCollapse + im.WindowFlags_NoSavedSettings
     + im.WindowFlags_NoTitleBar
   if im.Begin('BeamNG.Earth update##beamngEarthUpdate', nil, flags) then
-    im.Text(string.format('BeamNG.Earth %s%s is available (you have %s).', updateInfo.dev and 'development build ' or '',
-      tostring(updateInfo.latest), tostring(updateInfo.current)))
+    local i18n = require('beamngEarth/i18n')
+    local versions = { latest = tostring(updateInfo.latest), current = tostring(updateInfo.current) }
+    local release = updateInfo.dev and i18n.t('update.devAvailable', versions, string.format('BeamNG.Earth development build %s is available (you have %s).', versions.latest, versions.current)) or
+      i18n.t('update.available', versions, string.format('BeamNG.Earth %s is available (you have %s).', versions.latest, versions.current))
+    im.TextUnformatted(release)
     local us = updateInfo.status
     if us and us.text ~= '' then
       if us.state == 'progress' and us.total > 0 then
         im.Text(string.format('%s %d of %d MB', us.text, math.floor(us.done / 1048576), math.floor(us.total / 1048576)))
       else
-        im.TextWrapped(us.text)
+        im.TextWrapped('%s', us.text)
       end
     end
     -- the packaged app downloads and checks the new version itself (GitHub #140); a git copy pulls
     if not (us and (us.state == 'progress' or us.state == 'ready')) and net.isConnected() then
-      if im.Button('Update now') then
-        updateInfo.status = { state = 'progress', text = 'Asking GitHub...', done = 0, total = 0 }
+      if im.Button(i18n.t('update.now', nil, 'Update now') .. '###bngeUpdateNow') then
+        updateInfo.status = { state = 'progress', text = i18n.t('update.checking', nil, 'Asking GitHub...'), done = 0, total = 0 }
         net.send({ type = 'update_now' })
       end
       im.SameLine()
     end
-    if im.Button('Open releases page') then
+    if im.Button(i18n.t('update.openReleases', nil, 'Open releases page') .. '###bngeReleasePage') then
       local url = (updateInfo.url ~= '' and updateInfo.url) or M.RELEASES_URL
       -- the server opens it (the game's openWebBrowser does nothing in the native Linux build); the game's own
       -- call only without a server
@@ -2465,7 +2468,7 @@ local function drawUpdateNotice()
       updateHidden = true
     end
     im.SameLine()
-    if im.Button('Dismiss') then settings.set('updateDismissed', tostring(updateInfo.latest)) end
+    if im.Button(i18n.t('update.dismiss', nil, 'Dismiss') .. '###bngeUpdateDismiss') then settings.set('updateDismissed', tostring(updateInfo.latest)) end
   end
   im.End()
 end

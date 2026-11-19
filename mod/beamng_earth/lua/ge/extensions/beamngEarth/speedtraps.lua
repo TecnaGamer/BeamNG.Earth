@@ -1,5 +1,6 @@
 -- Directional speed gates in streamed road tiles. The sampled segment is swept
 -- through the gate, so a fast vehicle need not land on it on a particular frame.
+local i18n = require('beamngEarth/i18n')
 local M = {}
 local tiles = {}
 local previous, lightId, lightKey
@@ -100,9 +101,14 @@ local function notify(measured, corrected, limit, fine, criminal)
   if not ui_message then return end
   local retained = string.format('%.2f', corrected):gsub('0+$', ''):gsub('%.$', '')
   local amount = '€' .. fine
-  if criminal then amount = amount .. ' fixed-rate (up to €3,750 in court)' end
-  ui_message(string.format('Speed camera. %d km/h measured, %s km/h after tolerance, limit %d km/h. Simulated fine %s.',
-    measured, retained, limit, amount), 7, 'beamngEarthSpeedTrap')
+  if criminal then
+    amount = i18n.t('navigation.speedFineCap', { amount = amount }, amount .. ' fixed-rate (up to €3,750 in court)')
+  end
+  local text = i18n.t('navigation.speedFine',
+    { measured = measured, corrected = retained, limit = limit, amount = amount },
+    string.format('Speed camera. %d km/h measured, %s km/h after tolerance, limit %d km/h. Simulated fine %s.',
+      measured, retained, limit, amount))
+  ui_message(text, 7, 'beamngEarthSpeedTrap')
 end
 
 function M.update(player, dtSim, dtReal)

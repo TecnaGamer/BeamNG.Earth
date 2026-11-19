@@ -3,16 +3,15 @@
        third-party add-ons as cards, one add-on's README and changelog (safe HTML from the server: our own tags only,
        links open in the browser through the server), Install / Update / Turn off / Remove for game mods, and the notice
        naming the author before the first install. -->
-  <div class="addons">
+  <div class="addons" :dir="direction">
     <!-- the list -->
     <template v-if="!openCard">
       <div class="addons-intro">
-        Add-ons are made by other people, not by BeamNG.Earth. Each one is downloaded from its author's own GitHub
-        releases.
+        {{ t('addons.addOnsAreMadeBy') }}
       </div>
-      <div v-if="inMp" class="addons-note is-warn">A BeamMP server is joined: add-ons can be installed or changed after you leave it.</div>
-      <div v-if="!connected" class="addons-note is-warn">The BeamNG.Earth app is not connected: the list needs it.</div>
-      <div v-else-if="!loaded" class="addons-note">Loading the list...</div>
+      <div v-if="inMp" class="addons-note is-warn">{{ t('addons.aBeamMPServerIsJoined') }}</div>
+      <div v-if="!connected" class="addons-note is-warn">{{ t('addons.theBeamNGEarthAppIs') }}</div>
+      <div v-else-if="!loaded" class="addons-note">{{ t('addons.loadingTheList') }}</div>
       <div v-if="listError" class="addons-note is-error">{{ listError }}</div>
 
       <div
@@ -25,14 +24,14 @@
       >
         <div class="addon-head">
           <span class="addon-name">{{ c.name }}</span>
-          <span class="addon-author">by {{ c.author }}</span>
+          <span class="addon-author">{{ t('addons.by', { author: c.author }) }}</span>
         </div>
         <div class="addon-summary">{{ c.summary }}</div>
         <div class="addon-meta">
           <span class="addon-badge" :class="{ 'is-on': c.installed && c.active !== false, 'is-update': c.update }">{{ stateLine(c) }}</span>
-          <span v-if="c.reviewed" class="addon-badge is-reviewed">Reviewed by BeamNG.Earth</span>
-          <span v-if="c.local" class="addon-badge is-local">Local</span>
-          <span v-if="c.added" class="addon-badge is-added">Added by you</span>
+          <span v-if="c.reviewed" class="addon-badge is-reviewed">{{ t('addons.reviewedByBeamNGEarth') }}</span>
+          <span v-if="c.local" class="addon-badge is-local">{{ t('addons.local') }}</span>
+          <span v-if="c.added" class="addon-badge is-added">{{ t('addons.addedByYou') }}</span>
           <span v-if="c.latestDate" class="addon-date">{{ day(c.latestDate) }}</span>
         </div>
         <div v-if="c.status && c.status.text" class="addons-note" :class="{ 'is-error': c.status.state === 'error' }">{{ progressText(c.status) }}</div>
@@ -40,16 +39,16 @@
       </div>
 
       <div class="addons-actions">
-        <BngButton :accent="ACCENTS.outlined" :disabled="!connected" @click="refresh">Check for updates</BngButton>
+        <BngButton :accent="ACCENTS.outlined" :disabled="!connected" @click="refresh">{{ t('addons.checkForUpdates') }}</BngButton>
       </div>
 
       <!-- Add from GitHub: any repository with releases, put on the player's own list -->
       <div class="addon-add">
-        <div class="addon-add-title">Add from GitHub</div>
-        <div class="addons-note">Paste a GitHub repository (owner/name or its link). Its latest release is used: a .zip installs as a game mod, a .py runs beside the game. Only add things from people you trust: nobody has checked them.</div>
+        <div class="addon-add-title">{{ t('addons.addFromGitHub') }}</div>
+        <div class="addons-note">{{ t('addons.pasteAGitHubRepositoryOwner') }}</div>
         <div class="addons-actions">
           <input @focus="typing(true)" @blur="typing(false)" v-model="repoText" class="addon-add-input" type="text" placeholder="github.com/owner/name" @keydown.enter="addRepo(repoText)" @keydown.stop @keyup.stop />
-          <BngButton :accent="ACCENTS.main" :disabled="!connected || inMp || !repoText.trim() || (adding && adding.state === 'progress')" @click="addRepo(repoText)">Add</BngButton>
+          <BngButton :accent="ACCENTS.main" :disabled="!connected || inMp || !repoText.trim() || (adding && adding.state === 'progress')" @click="addRepo(repoText)">{{ t('addons.add') }}</BngButton>
         </div>
         <div v-if="adding && adding.text" class="addons-note" :class="{ 'is-error': adding.state === 'error' }">{{ adding.text }}</div>
       </div>
@@ -58,40 +57,40 @@
     <!-- one add-on -->
     <template v-else>
       <div class="addons-actions is-top">
-        <BngButton :accent="ACCENTS.outlined" @click="back">Back</BngButton>
-        <BngButton :accent="ACCENTS.outlined" @click="openRepo(openCard)">GitHub page</BngButton>
+        <BngButton :accent="ACCENTS.outlined" @click="back">{{ t('addons.back') }}</BngButton>
+        <BngButton :accent="ACCENTS.outlined" @click="openRepo(openCard)">{{ t('addons.gitHubPage') }}</BngButton>
       </div>
       <div class="addon-head">
         <span class="addon-name">{{ openCard.name }}</span>
-        <span class="addon-author">by {{ openCard.author }}</span>
+        <span class="addon-author">{{ t('addons.by', { author: openCard.author }) }}</span>
       </div>
-      <div class="addon-third">Third-party add-on, not made by BeamNG.Earth. {{ openCard.licence }}</div>
+      <div class="addon-third">{{ t('addons.thirdPartyAddOnNot', { licence: openCard.licence }) }}</div>
       <div class="addon-meta">
         <span class="addon-badge" :class="{ 'is-on': openCard.installed && openCard.active !== false, 'is-update': openCard.update }">{{ stateLine(openCard) }}</span>
-        <span v-if="openCard.reviewed" class="addon-badge is-reviewed">Reviewed by BeamNG.Earth</span>
-        <span v-if="openCard.local" class="addon-badge is-local">Local</span>
-        <span v-if="openCard.added" class="addon-badge is-added">Added by you</span>
+        <span v-if="openCard.reviewed" class="addon-badge is-reviewed">{{ t('addons.reviewedByBeamNGEarth') }}</span>
+        <span v-if="openCard.local" class="addon-badge is-local">{{ t('addons.local') }}</span>
+        <span v-if="openCard.added" class="addon-badge is-added">{{ t('addons.addedByYou') }}</span>
         <span v-if="openCard.size" class="addon-date">{{ size(openCard.size) }}</span>
       </div>
       <div v-if="openCard.note && !(openCard.kind === 'companion' && openCard.canInstall)" class="addons-note">{{ openCard.note }}</div>
-      <div v-if="openCard.tooNew" class="addons-note is-warn">This add-on needs a newer BeamNG.Earth: update BeamNG.Earth first.</div>
+      <div v-if="openCard.tooNew" class="addons-note is-warn">{{ t('addons.thisAddOnNeedsA') }}</div>
 
       <!-- the notice before the first install -->
       <div v-if="consentFor === openCard.id" class="addon-consent">
-        <div class="addon-consent-title">Install {{ openCard.name }}?</div>
+        <div class="addon-consent-title">{{ t('addons.install', { name: openCard.name }) }}</div>
         <div>
-          This add-on is made by <b>{{ openCard.author }}</b>, not by BeamNG.Earth.
-          <template v-if="openCard.added"><b>You added it yourself: it is not on BeamNG.Earth's list and nobody has checked it.</b> Install it only if you trust its author.</template>
-          <template v-if="openCard.reviewed">BeamNG.Earth has looked through this version's files.</template>
-          <template v-else>BeamNG.Earth has not reviewed this version.</template>
-          <template v-if="openCard.kind === 'companion'">It is a program that runs on this computer beside the game (with BeamNG.Earth's own Python), with the same access as any program you run.</template>
-          <template v-else>It runs inside your game like any other mod you install, with the same access.</template>
-          <template v-if="openCard.local">It is a file on this computer (the local list).</template>
-          <template v-else>It is downloaded from github.com/{{ openCard.repo }}</template><template v-if="lines(openCard.oldFiles).length">; the older copies {{ lines(openCard.oldFiles).join(", ") }} in your mods folder are removed</template>.
+          {{ t('addons.thisAddOnIsMade') }} <b>{{ openCard.author }}</b>{{ t('addons.notByBeamNGEarth') }}
+          <template v-if="openCard.added"><b>{{ t('addons.youAddedItYourselfIt') }}</b> {{ t('addons.installItOnlyIfYou') }}</template>
+          <template v-if="openCard.reviewed">{{ t('addons.beamNGEarthHasLookedThrough') }}</template>
+          <template v-else>{{ t('addons.beamNGEarthHasNotReviewed') }}</template>
+          <template v-if="openCard.kind === 'companion'">{{ t('addons.itIsAProgramThat') }}</template>
+          <template v-else>{{ t('addons.itRunsInsideYourGame') }}</template>
+          <template v-if="openCard.local">{{ t('addons.itIsAFileOn') }}</template>
+          <template v-else>{{ t('addons.itIsDownloadedFromGithub', { repo: openCard.repo }) }}</template><template v-if="lines(openCard.oldFiles).length">{{ t('addons.theOlderCopiesInYour', { lines: lines(openCard.oldFiles).join(", ") }) }}</template>.
         </div>
         <div class="addons-actions">
-          <BngButton :accent="ACCENTS.main" @click="install(openCard)">I agree, install</BngButton>
-          <BngButton :accent="ACCENTS.outlined" @click="cancelConsent">Cancel</BngButton>
+          <BngButton :accent="ACCENTS.main" @click="install(openCard)">{{ t('addons.iAgreeInstall') }}</BngButton>
+          <BngButton :accent="ACCENTS.outlined" @click="cancelConsent">{{ t('addons.cancel') }}</BngButton>
         </div>
       </div>
 
@@ -101,25 +100,25 @@
           :accent="ACCENTS.main"
           :disabled="!openCard.canInstall || inMp || busy(openCard)"
           @click="install(openCard)"
-        >{{ openCard.installed ? "Update to " + openCard.latest : "Install" }}</BngButton>
+        >{{ openCard.installed ? t('addons.updateTo', { version: openCard.latest }) : t('addons.installAction') }}</BngButton>
         <BngButton
           v-if="openCard.installed && openCard.active !== false"
           :accent="ACCENTS.outlined"
           :disabled="inMp || busy(openCard)"
           @click="manage(openCard, 'disable')"
-        >Turn off</BngButton>
+        >{{ t('addons.turnOff') }}</BngButton>
         <BngButton
           v-if="openCard.installed && openCard.active === false"
           :accent="ACCENTS.outlined"
           :disabled="inMp || busy(openCard)"
           @click="manage(openCard, 'enable')"
-        >Turn on</BngButton>
+        >{{ t('addons.turnOn') }}</BngButton>
         <BngButton
           v-if="openCard.installed"
           :accent="ACCENTS.outlined"
           :disabled="inMp || busy(openCard)"
           @click="removeAsk = openCard.id"
-        >Remove</BngButton>
+        >{{ t('addons.remove') }}</BngButton>
       </div>
       <!-- a program beside the game: installed and run by BeamNG.Earth (addonrun.py) -->
       <div v-else-if="openCard.kind === 'companion' && openCard.canInstall" class="addons-actions">
@@ -128,32 +127,32 @@
           :accent="ACCENTS.main"
           :disabled="busy(openCard)"
           @click="install(openCard)"
-        >{{ openCard.installed ? "Update to " + openCard.latest : "Install" }}</BngButton>
-        <BngButton v-if="openCard.installed && !openCard.running" :accent="ACCENTS.main" :disabled="busy(openCard)" @click="manage(openCard, 'start')">Start</BngButton>
-        <BngButton v-if="openCard.running" :accent="ACCENTS.outlined" :disabled="busy(openCard)" @click="manage(openCard, 'stop')">Stop</BngButton>
-        <BngButton v-if="openCard.running && openCard.page" :accent="ACCENTS.outlined" @click="openDownload(openCard.page)">Open its page</BngButton>
+        >{{ openCard.installed ? t('addons.updateTo', { version: openCard.latest }) : t('addons.installAction') }}</BngButton>
+        <BngButton v-if="openCard.installed && !openCard.running" :accent="ACCENTS.main" :disabled="busy(openCard)" @click="manage(openCard, 'start')">{{ t('addons.start') }}</BngButton>
+        <BngButton v-if="openCard.running" :accent="ACCENTS.outlined" :disabled="busy(openCard)" @click="manage(openCard, 'stop')">{{ t('addons.stop') }}</BngButton>
+        <BngButton v-if="openCard.running && openCard.page" :accent="ACCENTS.outlined" @click="openDownload(openCard.page)">{{ t('addons.openItsPage') }}</BngButton>
         <BngButton
           v-if="openCard.installed"
           :accent="ACCENTS.outlined"
           :disabled="busy(openCard)"
           @click="manage(openCard, openCard.autostart ? 'autostart_off' : 'autostart_on')"
-        >{{ openCard.autostart ? "Starts with BeamNG.Earth: on" : "Starts with BeamNG.Earth: off" }}</BngButton>
-        <BngButton v-if="openCard.installed" :accent="ACCENTS.outlined" :disabled="busy(openCard)" @click="removeAsk = openCard.id">Remove</BngButton>
+        >{{ openCard.autostart ? t('addons.autoStartOn') : t('addons.autoStartOff') }}</BngButton>
+        <BngButton v-if="openCard.installed" :accent="ACCENTS.outlined" :disabled="busy(openCard)" @click="removeAsk = openCard.id">{{ t('addons.remove') }}</BngButton>
       </div>
       <div v-if="openCard.kind === 'companion' && openCard.running && openCard.lanPage" class="addons-note">
-        On a phone or tablet on the same Wi-Fi: {{ openCard.lanPage }}
+        {{ t('addons.onAPhoneOrTablet', { lanPage: openCard.lanPage }) }}
       </div>
       <div v-if="openCard.kind === 'companion' && openCard.exitCode" class="addons-note is-error">
-        It stopped with an error ({{ openCard.exitCode }}). Its last lines: {{ lines(openCard.logTail).join(" · ") }}
+        {{ t('addons.itStoppedWithAnError', { exitCode: openCard.exitCode, lines: lines(openCard.logTail).join(" · ") }) }}
       </div>
       <div v-if="openCard.added && !openCard.installed" class="addons-actions">
-        <BngButton :accent="ACCENTS.outlined" @click="forget(openCard)">Remove from my list</BngButton>
+        <BngButton :accent="ACCENTS.outlined" @click="forget(openCard)">{{ t('addons.removeFromMyList') }}</BngButton>
       </div>
       <div v-if="removeAsk === openCard.id" class="addons-actions">
-        <span v-if="openCard.kind === 'companion'" class="addons-note">Remove {{ openCard.name }} and its own data (its recorded drives) from this computer?</span>
-        <span v-else class="addons-note">Remove {{ openCard.name }} from your mods folder? Its own saves stay.</span>
-        <BngButton :accent="ACCENTS.main" @click="removeAsk = ''; manage(openCard, 'uninstall')">Remove</BngButton>
-        <BngButton :accent="ACCENTS.outlined" @click="removeAsk = ''">Cancel</BngButton>
+        <span v-if="openCard.kind === 'companion'" class="addons-note">{{ t('addons.removeAndItsOwnData', { name: openCard.name }) }}</span>
+        <span v-else class="addons-note">{{ t('addons.removeFromYourModsFolder', { name: openCard.name }) }}</span>
+        <BngButton :accent="ACCENTS.main" @click="removeAsk = ''; manage(openCard, 'uninstall')">{{ t('addons.remove') }}</BngButton>
+        <BngButton :accent="ACCENTS.outlined" @click="removeAsk = ''">{{ t('addons.cancel') }}</BngButton>
       </div>
       <div v-if="openCard.status && openCard.status.text" class="addons-note" :class="{ 'is-error': openCard.status.state === 'error' }">{{ progressText(openCard.status) }}</div>
       <div v-if="actionMsg[openCard.id]" class="addons-note is-error">{{ actionMsg[openCard.id] }}</div>
@@ -161,14 +160,14 @@
 
       <!-- downloads of a companion / link add-on (the latest release's files) -->
       <div v-if="openCard.kind !== 'beamng-mod' && latestDownloads.length" class="addons-actions">
-        <span v-if="openCard.kind === 'companion'" class="addons-note">Its other downloads:</span>
+        <span v-if="openCard.kind === 'companion'" class="addons-note">{{ t('addons.itsOtherDownloads') }}</span>
         <BngButton v-for="d in latestDownloads" :key="d.url" :accent="ACCENTS.outlined" @click="openDownload(d.url)">{{ d.label }}</BngButton>
       </div>
 
       <div class="addon-tabs">
-        <BngButton :accent="tab === 'readme' ? ACCENTS.main : ACCENTS.outlined" @click="tab = 'readme'">Description</BngButton>
-        <BngButton :accent="tab === 'changes' ? ACCENTS.main : ACCENTS.outlined" @click="tab = 'changes'">Changelog</BngButton>
-        <BngButton v-if="lines(openCard.options).length" :accent="tab === 'options' ? ACCENTS.main : ACCENTS.outlined" @click="openOptions">Options</BngButton>
+        <BngButton :accent="tab === 'readme' ? ACCENTS.main : ACCENTS.outlined" @click="tab = 'readme'">{{ t('addons.description') }}</BngButton>
+        <BngButton :accent="tab === 'changes' ? ACCENTS.main : ACCENTS.outlined" @click="tab = 'changes'">{{ t('addons.changelog') }}</BngButton>
+        <BngButton v-if="lines(openCard.options).length" :accent="tab === 'options' ? ACCENTS.main : ACCENTS.outlined" @click="openOptions">{{ t('addons.options') }}</BngButton>
       </div>
       <!-- the add-on's own options (its declaration: docs/ADDONS.md "Options"); saved by the server, a running program restarted -->
       <div v-if="tab === 'options' && lines(openCard.options).length" class="addon-options">
@@ -179,17 +178,17 @@
           <select v-else-if="o.type === 'choice'" v-model="edits[o.key]" class="addon-add-input">
             <option v-for="ch in lines(o.choices)" :key="ch" :value="ch">{{ ch }}</option>
           </select>
-          <BngButton v-else-if="o.type === 'bool'" :accent="edits[o.key] ? ACCENTS.main : ACCENTS.outlined" @click="edits[o.key] = !edits[o.key]">{{ edits[o.key] ? "On" : "Off" }}</BngButton>
-          <span v-if="o.type === 'int'" class="addon-date">{{ o.min }} to {{ o.max }} (default {{ o.default }})</span>
+          <BngButton v-else-if="o.type === 'bool'" :accent="edits[o.key] ? ACCENTS.main : ACCENTS.outlined" @click="edits[o.key] = !edits[o.key]">{{ edits[o.key] ? t('common.on') : t('common.off') }}</BngButton>
+          <span v-if="o.type === 'int'" class="addon-date">{{ t('addons.toDefault', { min: o.min, max: o.max, default: o.default }) }}</span>
           <div v-if="o.help" class="addons-note">{{ o.help }}</div>
         </div>
         <div class="addons-actions">
-          <BngButton :accent="ACCENTS.main" :disabled="!connected || busy(openCard)" @click="saveOptions(openCard, edits)">Save</BngButton>
-          <BngButton :accent="ACCENTS.outlined" @click="resetEdits(true)">Defaults</BngButton>
-          <span v-if="openCard.running" class="addons-note">Saving restarts it with the new options.</span>
+          <BngButton :accent="ACCENTS.main" :disabled="!connected || busy(openCard)" @click="saveOptions(openCard, edits)">{{ t('addons.save') }}</BngButton>
+          <BngButton :accent="ACCENTS.outlined" @click="resetEdits(true)">{{ t('addons.defaults') }}</BngButton>
+          <span v-if="openCard.running" class="addons-note">{{ t('addons.savingRestartsItWithThe') }}</span>
         </div>
       </div>
-      <div v-if="!detail" class="addons-note">Loading...</div>
+      <div v-if="!detail" class="addons-note">{{ t('addons.loading') }}</div>
       <template v-else>
         <div v-if="detail.error" class="addons-note is-error">{{ detail.error }}</div>
         <!-- (the server's HTML: only its own tags, text escaped, no scripts, styles or addresses: mdhtml.rs) -->
@@ -199,11 +198,11 @@
           <div v-for="r in detail.releases || []" :key="r.tag" class="addon-release">
             <div class="addon-release-head">
               <span class="addon-name">{{ r.name || r.tag }}</span>
-              <span class="addon-date">{{ r.tag }} · {{ day(r.date) }}<template v-if="r.prerelease"> · pre-release</template><template v-if="r.reviewed"> · reviewed</template></span>
+              <span class="addon-date">{{ r.tag }} · {{ day(r.date) }}<template v-if="r.prerelease"> {{ t('addons.preRelease') }}</template><template v-if="r.reviewed"> {{ t('addons.reviewed') }}</template></span>
             </div>
             <div class="addon-md" @click="onTextClick($event, r.links)" v-html="r.html"></div>
           </div>
-          <div v-if="!(detail.releases || []).length" class="addons-note">No releases yet.</div>
+          <div v-if="!(detail.releases || []).length" class="addons-note">{{ t('addons.noReleasesYet') }}</div>
         </template>
       </template>
     </template>
@@ -211,6 +210,7 @@
 </template>
 
 <script setup>
+import { t, direction } from "./i18n.js"
 import { ref, computed, onMounted, onUnmounted } from "vue"
 import { BngButton, ACCENTS } from "@/common/components/base"
 import {

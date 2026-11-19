@@ -1383,6 +1383,12 @@ function M.redirectBigMap(inOurLevel)
   end
 end
 
+local i18n = require('beamngEarth/i18n')
+M.uiLanguagePreference = i18n.preference
+M.uiSetLanguage = i18n.setPreference
+M.onSettingsChanged = i18n.gameLanguageChanged
+M.onLanguageChanged = i18n.gameLanguageChanged
+
 function M.onExtensionLoaded()
   M.load()
   M.applyAll()

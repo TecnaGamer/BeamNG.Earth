@@ -41,6 +41,7 @@ import time
 
 import apppaths
 import gameinstall
+from localization import configure as configure_locale, t
 
 FROZEN = getattr(sys, "frozen", False)
 ROOT = getattr(sys, "_MEIPASS", None) or os.path.dirname(os.path.abspath(__file__))
@@ -124,8 +125,8 @@ def support_notice(multiplayer=False):
     """Where to get help (the BeamMP team, 2026-10-27: players kept asking them about BeamNG.Earth): the Discord once at
     every start; once BeamMP is up, what it means for multiplayer (said once each: the user, 2026-10-27)."""
     if not multiplayer:
-        say("Join the TGForever Discord to chat, get help, report bugs or help develop")
-        say(f"the mod: {DISCORD}")
+        say(t("launcher.support.line1"))
+        say(t("launcher.support.line2", url=DISCORD))
         return
     _out("")
     _out("  " + "=" * 78)
@@ -165,7 +166,7 @@ def problem(msg, hint=None):
     """Something that stops the start: set apart, with what to do about it."""
     import textwrap
     _out("")
-    _out("  Problem: " + "\n           ".join(textwrap.wrap(msg, 78)))
+    _out("  " + t("launcher.problem.prefix", message="\n           ".join(textwrap.wrap(msg, 78))))
     if hint:
         for line in textwrap.wrap(hint, 78):
             _out(f"           {line}")
@@ -242,9 +243,9 @@ def clear_cache(extra):
         import cache as cachemod
         moved = cachemod.clear_all(path)
     except Exception as e:              # (never in the way of a start)
-        row("Download cache", f"not cleared ({type(e).__name__}: {e})")
+        row(t("launcher.label.downloadCache"), f"not cleared ({type(e).__name__}: {e})")
         return
-    row("Download cache", f"cleared ({len(moved)} folders in {path}; their files are deleted in the background)"
+    row(t("launcher.label.downloadCache"), f"cleared ({len(moved)} folders in {path}; their files are deleted in the background)"
         if moved else f"nothing to clear in {path}")
 
 
@@ -439,7 +440,7 @@ class RestartingServer:
                     f"{sr.WINDOW_S / 60:g} minutes; it stays stopped.", "Close the game, then start BeamNG.Earth again.")
             return False
         self.restarts += 1
-        row("World server", "restarting (asked from the game's settings page): the settings are read again")
+        row(t("launcher.label.worldServer"), "restarting (asked from the game's settings page): the settings are read again")
         self._clear_leftovers()
         deadline = time.monotonic() + PORT_FREE_S
         while server_port_busy(self.port) and time.monotonic() < deadline:
@@ -462,7 +463,7 @@ class RestartingServer:
 
     def _follow(self, proc):
         if wait_server_ready(proc, self.log_path, self.port):
-            row("World server", "running again")
+            row(t("launcher.label.worldServer"), t("launcher.server.runningAgain"))
         elif proc.poll() is None or not _srvrestart().wants_restart(proc.poll()):
             problem("the restarted world server did not start listening.",
                     server_start_diagnostic(proc, self.log_path) + f"\nFull startup log: {self.log_path}")
@@ -657,7 +658,7 @@ def wait_server_ready(proc, log_path, port=SERVER_PORT, timeout=SERVER_START_S):
             tail = _startup_tail(log_path)
             phase = _startup_phase(tail)
             if phase and phase != last_phase:
-                row("World server", phase)
+                row(t("launcher.label.worldServer"), phase)
                 last_phase = phase
             for line in tail.splitlines():
                 if not line.startswith(marker):
@@ -681,7 +682,7 @@ def server_up(server, log_path, port, game_started):
     """The world server's start followed (wait_server_ready's steps); one that does not come up stops this start with
     what went wrong (SystemExit)."""
     if wait_server_ready(server, log_path, port):
-        row("World server", "running")
+        row(t("launcher.label.worldServer"), t("launcher.server.running"))
         return
     problem("the world server did not start listening; " + (
         "close the game, then start BeamNG.Earth again." if game_started else "the game was not started."),
@@ -695,7 +696,7 @@ def stop_server(proc):
         proc = proc.proc
     if proc is None or proc.poll() is not None:
         return
-    row("World server", "stopping")
+    row(t("launcher.label.worldServer"), t("launcher.server.stopping"))
     try:
         if IS_WIN:
             subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)], capture_output=True, timeout=10)
@@ -1225,7 +1226,7 @@ def steam_echo(steam_log, alive, until_s=STEAM_WATCH_S, clock=time.monotonic, sl
 def windows_steam_start(win_args=(), meanwhile=None):
     """Windows: the game through Steam (steam://rungameid), watched (steam_handoff). Returns a Popen when it had to be
     started directly after all, else None."""
-    row("Game", "starting through Steam")
+    row(t("launcher.label.game"), t("launcher.game.steam"))
     steam_exe, log_path = windows_steam()
     steam_log = SteamLog(log_path)
 
@@ -1249,7 +1250,7 @@ def windows_steam_start(win_args=(), meanwhile=None):
     if how == "steam":
         steam_echo(steam_log, alive)
     elif how == "direct":
-        row("Game", "started directly")
+        row(t("launcher.label.game"), t("launcher.game.direct"))
     elif how == "none":
         problem("the game did not start: Steam did not start it, and BeamNG.drive's folder was not found to start it "
                 "directly.", "Press Play on BeamNG.drive in Steam: the world server keeps running for it. Next time, "
@@ -1535,20 +1536,20 @@ def start_game(use_gcpatch, build="native", gfx="", user_dir=None, steam_args=({
         # Wine / Proton too (the .exe started with protontricks), where Steam's links do not reach Steam
         d = own or (launch.install.root if launch is not None and launch.install else None) or windows_game_dir()
         if d:
-            row("Game", f"starting ({d})")
+            row(t("launcher.label.game"), f"starting ({d})")
             try:
                 return subprocess.Popen([os.path.join(d, "BeamNG.drive.exe")] + win_args, cwd=d)
             except OSError as e:
                 say(f"could not start it ({e}); asking Steam")
     elif build == "proton":
-        row("Game", "starting through Steam (the Windows build, Proton)")
+        row(t("launcher.label.game"), "starting through Steam (the Windows build, Proton)")
         steam_launch(win_args)
         return None
     if not IS_WIN:
         exe = os.path.join(launch.install.root, GAME_EXE_LINUX) if launch is not None and launch.install else \
             linux_game_exe()
         if exe and sandboxed_game(exe):
-            row("Game", "starting through Steam (a Flatpak / snap Steam: without the grass patch)")
+            row(t("launcher.label.game"), "starting through Steam (a Flatpak / snap Steam: without the grass patch)")
             exe = None
         if exe and (steam_running() or own):
             env = clean_env()
@@ -1566,9 +1567,9 @@ def start_game(use_gcpatch, build="native", gfx="", user_dir=None, steam_args=({
                     env["BNGEARTH_USER_DIR"] = user_dir
             runtime = steam_runtime(exe)
             env.update(steam_env)       # the launch options' variables (after the patch's: the player's win)
-            row("Game", "starting" + ("  (with the grass patch)" if lib else ""))
+            row(t("launcher.label.game"), t("launcher.server.starting") + ("  (with the grass patch)" if lib else ""))
             if wrapper or steam_opts:
-                row("Steam options", " ".join(wrapper + ["%command%"] + steam_opts))
+                row(t("launcher.label.steamOptions"), " ".join(wrapper + ["%command%"] + steam_opts))
             # -userpath is the folder the game puts its version folder in ("current"): the launcher's user folder is
             # that version folder, so the game gets its parent (a Flatpak Steam's folder, the user's report
             # 2026-10-26 — without it the game made a second "current" in it, without the mod). A player's own
@@ -1591,9 +1592,9 @@ def start_game(use_gcpatch, build="native", gfx="", user_dir=None, steam_args=({
                 return proc
             say(f"the direct start ended (code {proc.returncode}); starting the game through Steam instead")
         elif exe:
-            row("Game", "Steam is not running: starting through Steam (without the grass patch; --launch direct "
+            row(t("launcher.label.game"), "Steam is not running: starting through Steam (without the grass patch; --launch direct "
                         "starts the game without Steam)")
-    row("Game", "starting through Steam")
+    row(t("launcher.label.game"), t("launcher.game.steam"))
     steam_launch(win_args if IS_WIN else ())
     return None
 
@@ -1617,7 +1618,7 @@ def direct_start(launch, use_gcpatch=False, game_args=(), user_dir=None, steam_a
         problem("this copy of BeamNG.drive belongs to a Flatpak / snap Steam: it runs only inside that sandbox, "
                 "through Steam.", "Start with --launch steam (or --launch auto).")
         raise SystemExit(1)
-    row("Game", f"starting without Steam ({exe})")
+    row(t("launcher.label.game"), f"starting without Steam ({exe})")
     say("  (Steam's overlay, Steam Input and play time are not there in this mode; --launch steam goes back)")
     if store == "epic":
         say("  (an Epic Games copy: if the game asks you to sign in or closes at once, open the Epic Games Launcher, "
@@ -1643,7 +1644,7 @@ def direct_start(launch, use_gcpatch=False, game_args=(), user_dir=None, steam_a
         kw = {"cwd": os.path.dirname(os.path.dirname(exe)), "env": env, "stdout": subprocess.DEVNULL,
               "stderr": subprocess.DEVNULL, "start_new_session": True}
         if lib:
-            row("Game", "with the grass patch")
+            row(t("launcher.label.game"), "with the grass patch")
     try:
         proc = subprocess.Popen(cmd, **kw)
     except OSError as e:
@@ -1738,7 +1739,7 @@ def wait_for_game(proc, server=None):
     gone_since = dialog_closed_since = first_seen = None
     while True:
         if server is not None and server.poll() is not None:
-            say("The world server stopped. See its log for details; restart BeamNG.Earth to reconnect.")
+            say(t("launcher.server.stopped"))
             return False
         now = time.monotonic()
         direct_alive = proc is not None and proc.poll() is None
@@ -2110,7 +2111,6 @@ def prune_old_copies(environ=None):
 
 
 HANDOVER_CHECK_S = 5.0          # hand_over: the new copy must still run this long after its start (else: this one)
-UPDATE_TITLE = "BeamNG.Earth update"
 
 
 def update_popup(text, run=None, which=None, windows=None):
@@ -2122,12 +2122,12 @@ def update_popup(text, run=None, which=None, windows=None):
         try:
             import ctypes
             # MB_YESNO | MB_ICONQUESTION | MB_SETFOREGROUND | MB_TOPMOST; IDYES = 6
-            return ctypes.windll.user32.MessageBoxW(None, text, UPDATE_TITLE, 0x4 | 0x20 | 0x10000 | 0x40000) == 6
+            return ctypes.windll.user32.MessageBoxW(None, text, t("launcher.title.update"), 0x4 | 0x20 | 0x10000 | 0x40000) == 6
         except Exception:
             return None
     which, run = which or shutil.which, run or subprocess.run
-    for cmd in (["zenity", "--question", "--title", UPDATE_TITLE, "--text", text, "--no-wrap"],
-                ["kdialog", "--title", UPDATE_TITLE, "--yesno", text]):
+    for cmd in (["zenity", "--question", "--title", t("launcher.title.update"), "--text", text, "--no-wrap"],
+                ["kdialog", "--title", t("launcher.title.update"), "--yesno", text]):
         if not which(cmd[0]):
             continue
         try:
@@ -2183,33 +2183,31 @@ def update_at_start(args, ask=input, popup=update_popup, packaged=None, check=No
         return False
     if not got:
         return False
-    row("Update", f"BeamNG.Earth {got['latest']} is out (you have {got['current']})")
-    yes = popup(f"BeamNG.Earth {got['latest']} is out (you have {got['current']}).\n\n"
-                "Install it now, before the game starts?\n\n"
-                "Yes downloads it and starts the new version.\nNo starts this version.")
+    row(t("launcher.label.update"), t("launcher.update.available", latest=got["latest"], current=got["current"]))
+    yes = popup(t("launcher.update.question", latest=got["latest"], current=got["current"]))
     if yes is None:
         if not (sys.stdin and sys.stdin.isatty()):
             return False
         try:
-            yes = ask("Install it now, before the game starts? [Y/n] ").strip().lower() in ("", "y", "yes")
+            yes = ask(t("launcher.update.prompt")).strip().lower() in ("", "y", "yes", "t", "tak")
         except (EOFError, OSError, KeyboardInterrupt):
             return False
     if not yes:
-        say("Starting this version. (The game offers the update too: Settings, About.)")
+        say(t("launcher.update.keep"))
         return False
 
     def progress(done, total):
         if total:
-            _out(f"\r  Downloading... {done * 100 // total}% ({done >> 20} of {total >> 20} MB)")
+            _out("\r  " + t("launcher.update.progress", percent=done * 100 // total, done=done >> 20, total=total >> 20))
 
     try:
         version, _ = (download or selfupdate.download)(net, current, None, progress)
     except Exception as e:              # selfupdate.UpdateError or anything else: this version starts
         say()
-        problem(f"The update could not be downloaded: {e}", "Starting this version instead.")
+        problem(t("launcher.update.failure", error=str(e)), t("launcher.update.current"))
         return False
     say()
-    row("Update", f"BeamNG.Earth {version} downloaded")
+    row(t("launcher.label.update"), t("launcher.update.downloaded", version=version))
     return (start or hand_over)()
 
 
@@ -2294,7 +2292,9 @@ def main():
     ap.add_argument("--no-update-check", action="store_true",
                     help="do not ask GitHub for a newer BeamNG.Earth before the game starts")
     ap.add_argument("extra", nargs=argparse.REMAINDER, help="after --: more options for the server")
+    ap.add_argument("--language", metavar="LOCALE", help="launcher language (default: system language)")
     args = ap.parse_args()
+    configure_locale(args.language)
     if IS_WIN:
         windows_console()
     elif not (sys.stdout and sys.stdout.isatty()):
@@ -2315,14 +2315,14 @@ def main():
         pass
     except SystemExit as e:
         if e.code not in (None, 0) and own_window():
-            pause("Press Enter to close this window.")
+            pause(t("launcher.close"))
         raise
     except Exception:
         import traceback
         traceback.print_exc()
         if own_window():
-            problem("BeamNG.Earth stopped with an error (above).")
-            pause("Press Enter to close this window.")
+            problem(t("launcher.fatal"))
+            pause(t("launcher.close"))
         sys.exit(1)
 
 
@@ -2341,10 +2341,10 @@ def choose_game(installs, ask=None):
     """Several copies (or --choose-game): the player picks one, or another folder (M); kept (app.json gameDir). Returns
     the folder chosen, or None (no console to ask in, or nothing chosen)."""
     ask = ask or input
-    say("Which copy of BeamNG.drive should BeamNG.Earth start?")
+    say(t("launcher.game.pick"))
     for i, inst in enumerate(installs, 1):
         say(f"  {i}. {inst.label()}")
-    say("  M. another folder")
+    say(t("launcher.game.otherFolder"))
     span = f"1-{len(installs)}, M" if installs else "M"
     for _ in range(3):
         try:
@@ -2358,7 +2358,7 @@ def choose_game(installs, ask=None):
             if apppaths.set_game_dir(root):
                 say(f"  Using {root} (from now on; --choose-game asks again).")
                 return root
-        say("  (a number from the list, or M)")
+        say(t("launcher.game.chooseNumber"))
     return None
 
 
@@ -2382,7 +2382,7 @@ def resolve_launch(args, user_dir, build, can_ask=True, ask=None):
     given = getattr(args, "launch", None)
     if given:
         apppaths.set_launch_mode(given)
-        row("Launch", f"{given} (kept for the next starts; --launch auto goes back to the default)")
+        row(t("launcher.label.launch"), f"{given} (kept for the next starts; --launch auto goes back to the default)")
     gamescope = not IS_WIN and under_gamescope()
     can_ask = can_ask and not gamescope         # (Game Mode: no console; the start as before)
     build_name = "proton" if build == "proton" else "windows" if IS_WIN else "native"
@@ -2399,10 +2399,10 @@ def resolve_launch(args, user_dir, build, can_ask=True, ask=None):
                 ask_launch_mode(pick, ask)
         elif installs:
             pick = installs[0]
-            row("Game", f"nothing chosen: using {pick.root} this time (--choose-game asks again)")
+            row(t("launcher.label.game"), f"nothing chosen: using {pick.root} this time (--choose-game asks again)")
     elif len(installs) > 1:
         pick = installs[0]
-        row("Game", f"{len(installs)} copies of BeamNG.drive found, none chosen: using {pick.root} (start the app "
+        row(t("launcher.label.game"), f"{len(installs)} copies of BeamNG.drive found, none chosen: using {pick.root} (start the app "
                     "with --choose-game in a console to pick)")
     elif installs:
         pick = installs[0]
@@ -2415,7 +2415,7 @@ def resolve_launch(args, user_dir, build, can_ask=True, ask=None):
     launch = gameinstall.Launch(pick, build_name, gameinstall.user_base(user_dir), chosen, mode,
                                 gameinstall.launch_exe(pick, mode, IS_WIN), note)
     if pick:
-        row("Game copy", f"{pick.label()}, {LAUNCH_TEXT[mode]}")
+        row(t("launcher.label.gameCopy"), f"{pick.label()}, {LAUNCH_TEXT[mode]}")
     if note:
         say(f"  ({note})")
     return launch
@@ -2490,10 +2490,10 @@ def beammp_up(user_dir, build, args, launch=None):
     if getattr(args, "no_beammp", False):
         return None
     if under_wine() or (not IS_WIN and build == "proton"):
-        row("Multiplayer", "BeamMP not started with the Windows build under Proton / Wine (start it yourself)")
+        row(t("launcher.label.multiplayer"), "BeamMP not started with the Windows build under Proton / Wine (start it yourself)")
         return None
     if bmplaunch.running():
-        row("Multiplayer", "BeamMP is already running")
+        row(t("launcher.label.multiplayer"), t("launcher.multiplayer.running"))
         return None
     dd = data_dir()
     own = apppaths.saved_game_dir()
@@ -2502,11 +2502,11 @@ def beammp_up(user_dir, build, args, launch=None):
     if not IS_WIN and outside:
         # (BeamMP's launcher looks for the game in Steam's libraries only on Linux, and has no option for a folder; it
         # does not need Steam running: a Steam library's copy started without Steam still has multiplayer)
-        row("Multiplayer", "BeamMP not started: on Linux BeamMP needs BeamNG.drive in a Steam library for now (its "
+        row(t("launcher.label.multiplayer"), "BeamMP not started: on Linux BeamMP needs BeamNG.drive in a Steam library for now (its "
                            "launcher finds the game only there). Single player works as usual.")
         return None
     if not bmplaunch.on_launch(user_dir, dd):
-        row("Multiplayer", "BeamMP not started (turned off: BeamNG.Earth settings, \"Start BeamMP with BeamNG.Earth\")")
+        row(t("launcher.label.multiplayer"), "BeamMP not started (turned off: BeamNG.Earth settings, \"Start BeamMP with BeamNG.Earth\")")
         return None
     if getattr(args, "beammp_launcher", None):
         if bmplaunch.remember(dd, args.beammp_launcher):
@@ -2522,30 +2522,30 @@ def beammp_up(user_dir, build, args, launch=None):
     if exe and not IS_WIN:
         too_old = bmplaunch.system_too_old(exe)
         if too_old:
-            row("Multiplayer", f"BeamMP cannot start: {too_old}")
+            row(t("launcher.label.multiplayer"), f"BeamMP cannot start: {too_old}")
             return None
     if not exe:
-        row("Multiplayer", "BeamMP not installed")
+        row(t("launcher.label.multiplayer"), t("launcher.multiplayer.notInstalled"))
         return None
     log_path = os.path.join(dd, "logs", "beammp-launcher.log")
     proc = bmplaunch.start(exe, user_dir, log_path,
                            user_path=bool(IS_WIN and launch is not None and launch.mode == "direct"))
     timeout = getattr(args, "beammp_wait", 30.0)
     try:
-        row("Multiplayer", f"starting BeamMP (up to {timeout:g}s; --no-beammp skips this) ...")
+        row(t("launcher.label.multiplayer"), f"starting BeamMP (up to {timeout:g}s; --no-beammp skips this) ...")
         ready = bmplaunch.wait_ready(proc, timeout=timeout)
     except BaseException:
         bmplaunch.stop(proc)
         raise
     if not ready:
         bmplaunch.stop(proc)
-        row("Multiplayer", f"BeamMP did not become ready; continuing in single player. "
+        row(t("launcher.label.multiplayer"), f"BeamMP did not become ready; continuing in single player. "
                            f"Use --beammp-wait for a longer wait, or --no-beammp to skip it. "
                            f"Logs: {log_path}; {os.path.join(os.path.dirname(exe), 'Launcher.log')}")
         return None
     try:
         version = bmplaunch.log_version(bmplaunch.read_log(log_path, exe))
-        row("Multiplayer", f"BeamMP{' v' + version if version else ''} ready: in the game, Multiplayer, then a server "
+        row(t("launcher.label.multiplayer"), f"BeamMP{' v' + version if version else ''} ready: in the game, Multiplayer, then a server "
             "running BeamNG.Earth")
         support_notice(multiplayer=True)
     except BaseException:
@@ -2600,7 +2600,7 @@ def run(args):
         # launch option from steam")
         own = steam_user_path(steam_launch_options())
         if own and not apppaths.same_dir(own, user_dir):
-            row("Game folder", f"{own}  (your Steam launch options' -userpath)")
+            row(t("launcher.label.gameFolder"), f"{own}  (your Steam launch options' -userpath)")
             user_dir = own
     steam_args = ({}, [], [])
     if not IS_WIN:
@@ -2608,21 +2608,21 @@ def run(args):
         if line:
             steam_args = split_launch_options(line)
             if any(steam_args):
-                row("Steam options", line)
+                row(t("launcher.label.steamOptions"), line)
         gpu_env, gpu_note = gpu_plan(args.gpu, environ=dict(os.environ, **steam_args[0]))
         if gpu_env:
             os.environ.update(gpu_env)      # the server inherits them too (its own GPU work: earthfast's compute)
         if gpu_note:
             row("GPU", gpu_note)
-    row("Game folder", user_dir + ("  (the Windows build, Proton)" if build == "proton" else "")
+    row(t("launcher.label.gameFolder"), user_dir + ("  (the Windows build, Proton)" if build == "proton" else "")
         + (f"  (Steam compatibility tool: {tool})" if tool else ""))       # (which was read: GitHub #56)
     running = game_still_running()
     if getattr(args, "game_dir", None):
         if args.game_dir.strip().strip('"').lower() == "default":
             apppaths.set_game_dir("default")
-            row("Game", "found as before (the chosen folder forgotten)")
+            row(t("launcher.label.game"), "found as before (the chosen folder forgotten)")
         elif apppaths.set_game_dir(args.game_dir):
-            row("Game", f"{apppaths.saved_game_dir()} (kept for the next starts)")
+            row(t("launcher.label.game"), f"{apppaths.saved_game_dir()} (kept for the next starts)")
         else:
             say(f"  --game-dir: BeamNG.drive is not in {args.game_dir}")
     # the copy and the launch mode, before anything starts (gameinstall.py; asks when several copies are found)
@@ -2634,18 +2634,18 @@ def run(args):
         status = install.install_mod(user_dir, True, dry_run=False, quiet=True, game_running=running)
         # the game read its mod list without this copy: its Lua is reloaded once the server runs (install.py)
         reload_game = running and status in ("updated", "installed", "enabled")
-        row("Mod", {"current": "up to date", "enabled": "turned back on", "updated": "updated",
-                    "installed": "installed", "kept": "kept the installed copy"}.get(status, status or ""))
+        row(t("launcher.label.mod"), {"current": t("launcher.mod.current"), "enabled": t("launcher.mod.enabled"), "updated": t("launcher.mod.updated"),
+                    "installed": t("launcher.mod.installed"), "kept": t("launcher.mod.kept")}.get(status, status or ""))
         # the sky's haze from above the atmosphere (the 3D map from orbit; skypatch.py): from the game's own shader
         try:
             import skypatch
             sky = skypatch.apply(game_install_dir(), os.path.join(user_dir, "mods", "unpacked", install.MOD_NAME),
                                  os.path.join(apppaths.data_dir(), "skypatch"), user_dir)
             if sky == "patched":
-                row("Sky", "the view from orbit fixed (two lines of the game's sky shader; original kept; the game "
+                row(t("launcher.label.sky"), "the view from orbit fixed (two lines of the game's sky shader; original kept; the game "
                            "builds its shaders again once)")
         except Exception as e:      # (never in the way of a start)
-            row("Sky", f"not patched ({type(e).__name__}: {e})")
+            row(t("launcher.label.sky"), f"not patched ({type(e).__name__}: {e})")
     extra =args.extra[1:] if args.extra[:1] == ["--"] else args.extra
     port_parser = argparse.ArgumentParser(add_help=False, allow_abbrev=False)
     port_parser.add_argument("--port", type=int, default=SERVER_PORT)
@@ -2660,7 +2660,7 @@ def run(args):
             sys.exit(1)
         if cache:
             extra = ["--cache-dir", cache] + extra
-            row("Download cache", cache)
+            row(t("launcher.label.downloadCache"), cache)
     if server_port_busy(port):
         problem(f"another BeamNG.Earth world server is already running (port {port} is in use), maybe "
                 "left over from an earlier start.",
@@ -2677,7 +2677,7 @@ def run(args):
         rel = pick.release() if pick is not None else None      # (decided at the first start; the same after it)
         if len(starts) == 1:
             if rel:
-                row("Map data", f"Overture {rel} ({pick.why})")
+                row(t("launcher.label.mapData"), f"Overture {rel} ({pick.why})")
             return start_server(user_dir, extra, log_path, game_running=bool(running), restart_times=limiter.times,
                                 overture_release=rel)
         return start_server(user_dir, restart_extra(own_extra, extra), log_path, game_running=True,
@@ -2685,9 +2685,9 @@ def run(args):
     server = RestartingServer(start, port, log_path, limiter=limiter)
     beammp = None
     try:
-        row("World server", "starting")
-        row("Server log", log_path)
-        row("Telemetry", "anonymous, no location: as chosen on the game's welcome page, nothing before that "
+        row(t("launcher.label.worldServer"), t("launcher.server.starting"))
+        row(t("launcher.label.serverLog"), log_path)
+        row(t("launcher.label.telemetry"), "anonymous, no location: as chosen on the game's welcome page, nothing before that "
             "(BNE_TELEMETRY=off turns it off)" if telemetry_on() else "off")
         # The game starts as early as it can (GAME_FIRST): the world server starts beside it, while BeamMP and the game
         # start (the mod connects to it when it listens, and retries until then; the game takes far longer to reach its
@@ -2709,12 +2709,12 @@ def run(args):
         except OSError as e:
             # (multiplayer is optional: a damaged BeamMP launcher folder, WinError 1392 "the file or directory is
             # corrupted and unreadable", stopped the app before the game started, GitHub #282)
-            row("Multiplayer", f"BeamMP not started ({e}); if this repeats, delete the BeamMP-Launcher folder in "
+            row(t("launcher.label.multiplayer"), f"BeamMP not started ({e}); if this repeats, delete the BeamMP-Launcher folder in "
                                "%LOCALAPPDATA% (BeamNG.Earth downloads it again)")
             beammp = None
         if args.no_game:
             say()
-            say("Start BeamNG.drive and pick 'BeamNG.Earth' in Freeroam. Ctrl+C stops the server.")
+            say(t("launcher.game.manualStart"))
             server.wait()
             return
         watch_game_log(user_dir, time.time() - 5)
@@ -2725,11 +2725,11 @@ def run(args):
                         "Open Task Manager (Ctrl+Shift+Esc) > Details, end every BeamNG.drive.x64.exe, then start "
                         "BeamNG.Earth again.")
             if not reload_game:
-                row("Game", "already running")
+                row(t("launcher.label.game"), t("launcher.game.alreadyRunning"))
             elif install.reload_running_game(user_dir):
-                row("Game", "already running: reloaded its Lua so it loads the mod")
+                row(t("launcher.label.game"), "already running: reloaded its Lua so it loads the mod")
             else:
-                row("Game", "already running: it loads the mod on its next start")
+                row(t("launcher.label.game"), "already running: it loads the mod on its next start")
             proc = None
         else:
             if wine:
@@ -2757,10 +2757,10 @@ def run(args):
         if early:
             follow_server()
         say()
-        say("In the game: Freeroam > BeamNG.Earth.  Closing the game stops the server.")
+        say(t("launcher.game.freeroam"))
         say()
         if wait_for_game(proc, server):
-            row("Game", "closed")
+            row(t("launcher.label.game"), t("launcher.game.closed"))
     finally:
         if beammp is not None:
             import bmplaunch

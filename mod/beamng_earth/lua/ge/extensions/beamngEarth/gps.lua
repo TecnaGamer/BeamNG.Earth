@@ -13,6 +13,7 @@
 -- coordinates; at most MAX_VIA). Each is reached within ARRIVE_M of it, in order: a message, the API's
 -- waypointReached event, and the re-routes from then on leave it out. The destination is not arrived at while a
 -- waypoint is still ahead (a round trip ends where it starts).
+local i18n = require('beamngEarth/i18n')
 local M = {}
 
 M.MAX_VIA = 10          -- (server routing.MAX_VIA)
@@ -1167,7 +1168,7 @@ local function autoKeep(nodes, now)
   if not veh then return end
   if damage(veh) > M.AUTO_DAMAGE then
     M.setAutodrive(false)
-    if ui_message then pcall(ui_message, 'Autodrive off: the car is damaged', 6, 'beamngEarthGps') end
+    if ui_message then pcall(ui_message, i18n.t('navigation.damage', nil, 'Autodrive off: the car is damaged'), 6, 'beamngEarthGps') end
     return
   end
   local c = core()
@@ -1354,7 +1355,7 @@ function M.update(anchor, player)
     local wx, wy = anchor:geodeticToEnu(vias[1].lat, vias[1].lon, 0)
     if math.sqrt((wx - player.x) ^ 2 + (wy - player.y) ^ 2) >= M.ARRIVE_M then break end
     local w = table.remove(vias, 1)
-    if ui_message then pcall(ui_message, 'Waypoint: ' .. (w.name or 'reached'), 5, 'beamngEarthGps') end
+    if ui_message then pcall(ui_message, i18n.t('navigation.waypoint', { name = w.name or i18n.t('navigation.waypointReached', nil, 'reached') }, 'Waypoint: ' .. (w.name or 'reached')), 5, 'beamngEarthGps') end
     local api = rawget(_G, 'beamngEarth_api')
     if api and api._event then
       pcall(api._event, 'waypointReached', { lat = w.lat, lon = w.lon, name = w.name, left = #vias })
@@ -1367,7 +1368,7 @@ function M.update(anchor, player)
   local ahead = #vias > 0             -- (a waypoint still ahead: not arrived, steered toward it without a route)
   if ahead then tx, ty = anchor:geodeticToEnu(vias[1].lat, vias[1].lon, 0) end
   local function arrive()
-    if ui_message then pcall(ui_message, 'Arrived: ' .. (dest.name or 'destination'), 5, 'beamngEarthGps') end
+    if ui_message then pcall(ui_message, i18n.t('navigation.arrived', { name = dest.name or i18n.t('navigation.destination', nil, 'destination') }, 'Arrived: ' .. (dest.name or 'destination')), 5, 'beamngEarthGps') end
     local api = rawget(_G, 'beamngEarth_api')      -- (the modding API's event: other mods' jobs end here)
     if api and api._event then pcall(api._event, 'routeArrived', { lat = dest.lat, lon = dest.lon, name = dest.name }) end
     -- Finish with the stock brakes and parking brake rather than releasing the controls and coasting.

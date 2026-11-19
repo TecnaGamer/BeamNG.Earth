@@ -21,6 +21,8 @@ const owner = {}
 let serversTab = null
 let pasteSupport = null
 let menuTile = null
+let stopLocalization = null
+let stopLocaleLabels = null
 // A newer request makes the running operation's wait pointless (#1302): the game's UI mod loader runs again on every
 // UiModsChanged (BeamMP mounting/unmounting mods during a join) and awaits each mod's onUnload/onLoad in turn, so a load
 // stuck on a Lua reply or import that never comes held the next unload/load, and the whole UI, until the timeout.
@@ -115,7 +117,7 @@ async function step(run, action) {
   check(run)
   return result
 }
-function mapRoutes(EarthMap, EarthWelcome, EarthSettings, EarthMap3d) {
+function mapRoutes(EarthMap, EarthWelcome, EarthSettings, EarthMap3d, translate) {
   return [
   {
     // the full settings page (the user, 2026-10-28: "a whole separate page like how BeamMP's settings page is"):
@@ -125,7 +127,7 @@ function mapRoutes(EarthMap, EarthWelcome, EarthSettings, EarthMap3d) {
     component: EarthSettings,
     meta: {
       luaRoute: {
-        title: "BeamNG.Earth settings",
+        title: translate("menu.settingsRoute", "BeamNG.Earth settings"),
         backTarget: "menu",
       },
     },
@@ -137,7 +139,7 @@ function mapRoutes(EarthMap, EarthWelcome, EarthSettings, EarthMap3d) {
     component: EarthWelcome,
     meta: {
       luaRoute: {
-        title: "Welcome to BeamNG.Earth",
+        title: translate("welcome.welcomeToBeamNGEarth", "Welcome to BeamNG.Earth"),
         backTarget: "play",
       },
     },
@@ -148,7 +150,7 @@ function mapRoutes(EarthMap, EarthWelcome, EarthSettings, EarthMap3d) {
     component: EarthMap,
     meta: {
       luaRoute: {
-        title: "BeamNG.Earth map",
+        title: translate("map.beamNGEarthMap", "BeamNG.Earth map"),
         backTarget: "play",
       },
     },
@@ -160,7 +162,7 @@ function mapRoutes(EarthMap, EarthWelcome, EarthSettings, EarthMap3d) {
     component: EarthMap3d,
     meta: {
       luaRoute: {
-        title: "BeamNG.Earth 3D map",
+        title: translate("menu.map3dRoute", "BeamNG.Earth 3D map"),
         backTarget: "play",
       },
     },
@@ -176,29 +178,54 @@ function toLuaRoutes(records) {
 async function registerPauseTab(run) {
   try {
     const store = await step(run, () => import("./earthSettingsStore.js"))
+    stopLocalization?.()
+    stopLocalization = store.startLocalization()
+    await step(run, store.readyLocalization)
     await step(run, () => lua.extensions.ui_pause_actions.registerModTab({
       id: TAB_ID,
       label: "BeamNG.Earth",
       icon: "globe",
       card2ComponentName: `${MOD_ROOT}/EarthSettingsSide.vue`,
     }))
-    for (const [i, page] of store.settingsSchema.entries()) {
-      await step(run, () => lua.extensions.ui_pause_actions.registerModButton({
+    function pageButton(page, i) {
+      return {
         id: store.pageId(page.name, i),
         tabId: TAB_ID,
-        label: page.name,
+        label: store.pageLabel(page),
         icon: store.PAGE_ICONS[page.name] || "cogOutline",
         componentName: `${MOD_ROOT}/EarthSettingsPage.vue`,
         props: { page: page.name },
-      }))
+      }
     }
+    const labels = new Map()
+    for (const [i, page] of store.settingsSchema.entries()) {
+      const button = pageButton(page, i)
+      labels.set(button.id, button.label)
+      await step(run, () => lua.extensions.ui_pause_actions.registerModButton(button))
+    }
+    function refreshLabels() {
+      for (const [i, page] of store.settingsSchema.entries()) {
+        const button = pageButton(page, i)
+        if (labels.get(button.id) === button.label) continue
+        labels.set(button.id, button.label)
+        lua.extensions.ui_pause_actions.registerModButton(button).catch(error =>
+          console.warn("BeamNG.Earth: could not update pause button label", error))
+      }
+      menuTile?.refreshTileLanguage?.()
+      serversTab?.refreshLanguage?.()
+    }
+    // A catalog can load while the native buttons are being registered.
+    refreshLabels()
+    stopLocaleLabels?.()
+    stopLocaleLabels = store.watchLocale(refreshLabels)
+    return store.translateUI
   } catch (e) {
     if (!run.active) throw e
     console.error("BeamNG.Earth: pause menu tab failed", e)
   }
 }
 
-async function registerMapRoute(run) {
+async function registerMapRoute(run, translate = (_key, fallback) => fallback) {
   try {
     check(run)
     if (!window.bngRoutes || !lua.extensions.ui_router_routeManager) return
@@ -206,7 +233,7 @@ async function registerMapRoute(run) {
     const routes = mapRoutes((await step(run, () => import("./EarthMap.vue"))).default,
                              (await step(run, () => import("./EarthWelcome.vue"))).default,
                              (await step(run, () => import("./EarthSettings.vue"))).default,
-                             (await step(run, () => import("./EarthMap3d.vue"))).default)
+                             (await step(run, () => import("./EarthMap3d.vue"))).default, translate)
     window.bngRoutes.add([{ path: MAP_SOURCE, routes }])
     const result = await step(run, () => lua.extensions.ui_router_routeManager.registerModRoutes(MAP_SOURCE, toLuaRoutes(routes)))
     if (!result?.success) {
@@ -223,7 +250,7 @@ async function loadUi(run) {
   // the old shared-Mods-tab button, if this UI session still has one (before the tab: its id is the first page's)
   try { await step(run, () => lua.extensions.ui_pause_actions.unregisterModButton("beamngEarth-settings")) }
   catch (e) { if (!run.active) throw e /* otherwise no legacy button */ }
-  await registerPauseTab(run)
+  const translate = await registerPauseTab(run)
   check(run)
   // Ctrl+V in the mod's text boxes, through the engine's clipboard (paste.js: the game's browser has none of its own)
   try {
@@ -238,7 +265,7 @@ async function loadUi(run) {
   // an older version's map button, if this UI session still has one
   try { await step(run, () => lua.extensions.ui_pause_actions.unregisterModButton("beamngEarth-map")) }
   catch (e) { if (!run.active) throw e /* otherwise no legacy button */ }
-  await registerMapRoute(run)
+  await registerMapRoute(run, translate)
   // the BeamNG.Earth servers tab in BeamMP's server browser (earthServers.js); its failure costs nothing else
   try {
     serversTab = await step(run, () => import("./earthServers.js"))
@@ -250,7 +277,7 @@ async function loadUi(run) {
   // BeamNG.Earth's tile in Quick-Start's place on the main menu (mainMenuTile.js); its failure costs nothing else
   try {
     menuTile = await step(run, () => import("./mainMenuTile.js"))
-    menuTile.startTile()
+    menuTile.startTile(undefined, translate)
   } catch (e) {
     if (!run.active) throw e
     console.error("BeamNG.Earth: main menu tile failed", e)
@@ -259,6 +286,9 @@ async function loadUi(run) {
 
 async function unloadUi(run) {
   check(run)
+  stopLocaleLabels?.()
+  stopLocalization?.()
+  stopLocaleLabels = stopLocalization = null
   try { serversTab?.stop() } catch (e) { /* never started */ }
   serversTab = null
   try { menuTile?.stopTile() } catch (e) { /* never started */ }
