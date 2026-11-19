@@ -131,6 +131,7 @@ mod railindex;
 mod railnode;
 mod stationzone;
 mod seawater;
+mod subpoly;
 mod railunder;
 mod railspans;
 mod osmml;
@@ -6213,6 +6214,9 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(enu_rings, m)?)?;
     m.add_function(wrap_pyfunction!(enu_bounds, m)?)?;
     // (500: enu_rings / enu_bounds, mapgeom's many-ring conversions)
+    m.add_function(wrap_pyfunction!(subpoly::sub_polyline, m)?)?;
+    m.add_function(wrap_pyfunction!(subpoly::sub_polylines, m)?)?;
+    // (504: roads.sub_polyline and its many-ring batch)
     m.add_function(wrap_pyfunction!(reframe_segs, m)?)?;
     m.add_function(wrap_pyfunction!(bc7_encode, m)?)?;
     m.add_function(wrap_pyfunction!(inside_blockers, m)?)?;
@@ -6966,6 +6970,8 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 499: road revamp v2 P1c (BNE_SURFACE_V2): roadwear::surface_plan (surface variation, tyre wear on the lane
     // centres, repair patch strips along a tile's roads) and follow_tris's `clear` (a whole overlay triangle raised
     // where the ground bulges inside it: no dip under its lift). 495-498 are other branches'
-    m.add("VERSION", 501)?;
+    // 504: sub_polyline / sub_polylines (subpoly.rs: roads.sub_polyline, a feature's rings x level ranges in one call
+    // for _parts_by_level_new, _part_keys_new, railways._pieces_of, height_limit_lines). 502-503 are other branches'
+    m.add("VERSION", 504)?;
     Ok(())
 }

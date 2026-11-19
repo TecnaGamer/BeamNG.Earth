@@ -34,6 +34,7 @@ from collections import OrderedDict, namedtuple
 import numpy as np
 import dmath
 import dnp
+import fast
 
 import junctions
 import mapcells
@@ -1575,20 +1576,46 @@ def _feature_length_new(feats, i):
     return total
 
 
+_F64D = np.dtype(np.float64)
+_EF_SUB = fast.native(504, "roads.sub_polyline / sub_polylines")
+_WHOLE = [(0.0, 1.0)]
+
+
+def _f64_rings(rings):
+    """rings as float64 2-D arrays (the kernels' input; np.asarray only where one is not)."""
+    return [r if type(r) is np.ndarray and r.dtype == _F64D and r.ndim == 2 else np.asarray(r, np.float64)
+            for r in rings]
+
+
 def sub_polyline(ring, a, b):
-    """The part of a lon/lat polyline (k, >=2) between fractions a < b of its length (metres along it,
-    lon scaled by cos lat). Pure."""
-    ring = np.asarray(ring, np.float64)
-    c = dmath.cos(math.radians(float(np.mean(ring[:, 1]))))
-    seg = dnp.hypot(np.diff(ring[:, 0]) * c, np.diff(ring[:, 1]))
-    s = np.r_[0.0, np.cumsum(seg)]
-    if s[-1] <= 0:
-        return ring[:1]
-    sa, sb = a * s[-1], b * s[-1]
-    inner = ring[(s > sa) & (s < sb)]
-    pa = np.array([dnp.interp(sa, s, ring[:, d]) for d in range(ring.shape[1])])
-    pb = np.array([dnp.interp(sb, s, ring[:, d]) for d in range(ring.shape[1])])
-    return np.vstack([pa, inner, pb])
+    """The part of a lon/lat polyline (k, >=2) between fractions a < b of its length (metres along it, lon scaled by
+    the cos of its mean lat): (rows, d) float64, the point at a, the vertices strictly between, the point at b; a ring
+    of no length (or under two points) ring[:1], a view. Pure (earthfast.sub_polyline: the old NumPy code's bits;
+    only a NaN made from two NaNs, an infinity's difference meeting a NaN coordinate, may carry another payload)."""
+    return _EF_SUB.sub_polyline(_f64_rings((ring,))[0], a, b)
+
+
+def sub_polylines(rings, pieces, whole=True, rows_only=False):
+    """[sub_polyline(ring, a, b) for ring in rings for a, b in pieces] in one native call (earthfast.sub_polylines: a
+    feature's level parts, ~13k calls a three-place cold road tile set, each a dozen NumPy calls). whole: a range
+    (0.0, 1.0) gives the ring itself, uncut (the callers' shortcut). rows_only: each entry its number of rows instead."""
+    rings = rings if type(rings) is list else list(rings)
+    pieces = pieces if type(pieces) is list else list(pieces)
+    if not rings or not pieces:
+        return []
+    if whole and pieces == _WHOLE:
+        # (the most common case, a feature with no level ranges: its rings uncut, no call made)
+        return [len(r) for r in rings] if rows_only else list(rings)
+    conv = _f64_rings(rings)
+    out = _EF_SUB.sub_polylines(conv, pieces, whole, rows_only)
+    if whole and not rows_only and any(c is not r for c, r in zip(conv, rings)):
+        # (the shortcut gives the ring as the caller had it, not its float64 copy)
+        n = len(pieces)
+        for k, (a, b) in enumerate(pieces):
+            if (a, b) == (0.0, 1.0):
+                for j, r in enumerate(rings):
+                    out[j * n + k] = r
+    return out
 
 
 MIN_PART = 1e-3     # parts shorter than this share of a segment are dropped
@@ -1613,13 +1640,10 @@ def height_limit_lines(feats, on_bridges=True):
                 decks = [(ra, rb) for ra, rb, kind in tag_level_ranges(feats, i) if kind == "bridge"]
                 rows = [(h, a, b) for h, a, b in rows
                         if sum(max(0.0, min(b, rb) - max(a, ra)) for ra, rb in decks) <= 0.5 * (b - a)]
-            for part in feats.parts(i):
-                for ring in part:
-                    if len(ring) < 2:
-                        continue
-                    for h, a, b in rows:
-                        if b - a > 1e-4 and np.isfinite(h):
-                            out.append((np.asarray(sub_polyline(ring, a, b), np.float64), float(h)))
+            rows = [(h, a, b) for h, a, b in rows if b - a > 1e-4 and np.isfinite(h)]
+            rings = [ring for part in feats.parts(i) for ring in part if len(ring) >= 2]
+            hs = [float(h) for h, _a, _b in rows] * len(rings)
+            out.extend(zip(sub_polylines(rings, [(a, b) for _h, a, b in rows], whole=False), hs))
     feats.__dict__[memo] = out
     return out
 
@@ -1652,16 +1676,8 @@ def _parts_by_level_new(feats, i, want, rngs=None):
         pieces = [(a, b) for a, b, _ in _bridge_level_spans(feats, i, rngs)]
     else:
         pieces = [(a, b) for a, b, k in rngs if k == want and b - a > MIN_PART]
-    out = []
-    for part in feats.parts(i):
-        for ring in part:
-            if len(ring) < 2:
-                continue
-            for a, b in pieces:
-                r = ring if (a, b) == (0.0, 1.0) else sub_polyline(ring, a, b)
-                if len(r) >= 2:
-                    out.append(r)
-    return out
+    rings = [ring for part in feats.parts(i) for ring in part if len(ring) >= 2]
+    return [r for r in sub_polylines(rings, pieces) if len(r) >= 2]
 
 
 def _part_keys_new(feats, i, want, rngs=None):
@@ -1697,17 +1713,10 @@ def _part_keys_new(feats, i, want, rngs=None):
         n = seen.get(base, 0)
         seen[base] = n + 1
         keys.append(base * PART_KEY_SUB + min(n, PART_KEY_SUB - 1))
-    out, r = [], 0
-    for part in feats.parts(i):
-        for ring in part:
-            if len(ring) < 2:
-                continue
-            for (a, b), k in zip(pieces, keys):
-                rr = ring if (a, b) == (0.0, 1.0) else sub_polyline(ring, a, b)
-                if len(rr) >= 2:
-                    out.append(r * PART_KEY_RING + k)
-            r += 1
-    return out
+    rings = [ring for part in feats.parts(i) for ring in part if len(ring) >= 2]
+    rows = sub_polylines(rings, pieces, rows_only=True)
+    n = len(pieces)
+    return [r * PART_KEY_RING + k for r in range(len(rings)) for j, k in enumerate(keys) if rows[r * n + j] >= 2]
 
 
 PART_KEY_OWN = 2_000_000        # (a part key: base over this, the piece's own start; under it, its raw range's start ...
