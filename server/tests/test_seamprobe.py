@@ -46,23 +46,10 @@ CUT_REACH_M = 3.0       # m past a cut piece's half width its cut line is looked
 PAD_M = 40.0            # m round a tile its pads are made (earthd's road tile)
 SQUARE_WEDGE = 1e-4     # degrees two square ends of one cut may differ (2.7 before roads._cut_ends: the docstring)
 WEDGE_GRADE = 0.15      # the steepest deck grade (seamcheck): a wedge's xy offset times this is its height offset
-# Mismatches seen and reported, not fixed here: (place, seam, text in it) -> why.
-# (the same with BNE_ROADSHAPE off, not the sheet's: roadmesh.deck works out a slab's reach past its road along each
-# drawn chunk, which ends at the tile's edge: the median gaps' runs (_noses: a run's end at the cut taken for a gore
-# nose, _fill_short), and _smooth_reach spreading a fill along the chunk, see only the rows on their own tile's side of
-# the cut. The cut row's reach differs, 2 mm to 1.1 m; a nose bent one tile's parapet off the cut. The 2 mm to 2 cm ones
-# were inside the square ends' wedge tolerance until roads._cut_ends made both tiles' end lines one line.)
-PRE = "the same with BNE_ROADSHAPE off: the slab's reach worked out along each tile's own chunk (roadmesh.deck)"
-KNOWN = {
-    ("fort_pitt", "seam y = 0", "does not go on: 790a71cc-18a8-4218-b310-0e92e1345be7 cut at (53.779, 0.000)"): PRE,
-    ("fort_pitt", "seam y = 0", "overlap): d5c10b2f-5465-482b-9805-50af4e5f0828~lanes000000000-763386846 cut at "
-                                "(37.539, 0.000)"): PRE,
-    ("fort_pitt", "seam y = 256", "overlap): a23ee4b5-1abd-4132-a654-ca60cad5bd03 cut at (393.418, 256.000)"): PRE,
-    ("i95_middle_branch", "seam x = -256", "overlap): 94c9f3ad-20ef-4680-b23c-190f7d0a7b0e cut at (-256.000, 34.903)"):
-        PRE,
-    ("i95_middle_branch", "seam x = 256", "overlap): 764d38a2-1cad-4b91-bfbe-a556fcd74ad1 cut at (256.000, -79.653)"):
-        PRE,
-}
+# Mismatches seen and reported, not fixed here: (place, seam, text in it) -> why. (None left: the slab's reach past its
+# road, worked out per drawn chunk, saw only its own tile's side of a cut, 2 mm to 1.1 m steps and a nose bending a
+# parapet off the cut; now along each deck part's whole line, roads._deck_reach / earthfast deck_reach.)
+KNOWN = {}
 
 
 def load(name):
@@ -356,6 +343,27 @@ class SeamProbe(unittest.TestCase):
             br = Bridges(parts, ground, mid)
             for t in tiles:
                 self.assertEqual(build(br, roads.tile_bbox(*t)).shape(), ref[t].shape(), f"{name} {t}: parts order")
+
+
+class ReachStation(unittest.TestCase):
+    """roads._reach_tag's node stations on a loop ramp passing over itself (a grade-separated self-crossing, 10 m
+    apart): each node takes its own pass's station, never the other's (Codex review of deckreach)."""
+
+    LINE = np.array([[-50.0, 0.0, 0.0], [50.0, 0.0, 4.0], [50.0, 40.0, 8.0], [0.0, 40.0, 10.0], [0.0, -40.0, 14.0]])
+
+    def test_crossing_takes_its_own_pass(self):
+        self.assertAlmostEqual(roads._station_at_height(self.LINE, np.array([0.0, 0.0, 2.0])), 50.0, places=6)
+        self.assertAlmostEqual(roads._station_at_height(self.LINE, np.array([0.0, 0.0, 12.0])), 230.0, places=6)
+
+    def test_upper_pass_chunk_keeps_its_reach(self):
+        ln = self.LINE
+        s = np.r_[0.0, np.cumsum(np.hypot(*np.diff(ln[:, :2], axis=0).T))]
+        st = np.c_[np.arange(0.0, s[-1] + 1e-9, 2.0), np.full(int(s[-1] // 2) + 1, 0.45),
+                   np.full(int(s[-1] // 2) + 1, 0.45), np.full(int(s[-1] // 2) + 1, 16.0)]
+        ch = {"n": [[0.0, 10.0, 11.0], [0.0, 0.0, 12.0], [0.0, -10.0, 13.0]]}
+        roads._reach_tag(ch, ln, st)
+        self.assertIn("rch", ch)
+        np.testing.assert_allclose(ch["rch"]["st"], [220.0, 230.0, 240.0], atol=1e-9)
 
 
 if __name__ == "__main__":

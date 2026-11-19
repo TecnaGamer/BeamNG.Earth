@@ -7,6 +7,7 @@
 #![deny(clippy::disallowed_methods, clippy::disallowed_types, clippy::iter_over_hash_type)]
 use crate::dm::Dm;
 mod dm;
+mod deckreach;
 mod demsample;
 mod dmmatmul;
 mod devctx;
@@ -7353,6 +7354,10 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(roadshape::profile::profile_solve, m)?)?;
     // 516: v2 P3a (roadshape::profile: the stretches from anchor to anchor through a chain's decks and their joint
     // height solve, shadow only, BNE_ROADSHAPE=profile)
-    m.add("VERSION", 516)?;
+    m.add_function(wrap_pyfunction!(deckreach::deck_stations, m)?)?;
+    m.add_function(wrap_pyfunction!(deckreach::deck_reach, m)?)?;
+    // 518: deckreach::deck_reach (a slab's reach along each deck part's whole line, at fixed stations: the tiles either
+    // side of a seam agree on it), on 516 (P3a); 517 is another branch's
+    m.add("VERSION", 518)?;
     Ok(())
 }
