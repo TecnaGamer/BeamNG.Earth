@@ -128,6 +128,7 @@ mod roadtone;
 mod railbeds;
 mod raildrawn;
 mod railindex;
+mod railnode;
 mod railunder;
 mod railspans;
 mod osmml;
@@ -6717,6 +6718,10 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // a window's selection, pieces, clip test, resampling and sort in one call) and railways.road_underpasses
     // (railunder: a layer's roads with a tunnel in an UnderpassIndex, a window's short tunnels in one call). 488-490
     // are other branches'
-    m.add("VERSION", 491)?;
+    m.add_class::<railnode::RailNode>()?;
+    m.add_function(wrap_pyfunction!(railnode::rail_node_pack, m)?)?;
+    // 492: the full port's railprofile._make_node packing (railnode: a lattice node's beds by (fid, kind) and
+    // centimetre key in a RailNode, the last of equal keys; RailNode.find, railprofile._find's lookup)
+    m.add("VERSION", 492)?;
     Ok(())
 }
