@@ -12387,31 +12387,34 @@ def deck_pads(decks, ground_roads, box, ground_fn, own=True):
     out = []
     gl = [(np.asarray(pts, np.float64)[:, :2], spec.width / 2) for _fid, spec, pts, _ in ground_roads
           if spec is not None and len(pts) >= 2]
+    # the ground roads' ends, each road's first then last ((2 len(gl), 2)): a joint's distances to all of them in one
+    # dnp.hypot (the same bits as one call per end: elementwise; 21k scalar calls a cold Manhattan visit)
+    ends = np.array([line[at] for line, _half in gl for at in (0, -1)], np.float64).reshape(-1, 2)
     joints = []
     for nd, incident in sorted(inc.items()):
         q = nodes[nd]
         if own and not box_owns(box, float(q[0]), float(q[1])):
             continue
         groups = _pad_height_groups(incident)
-        for line, half in gl:
-            for at in (0, -1):
-                if dnp.hypot(*(line[at] - q)) < PAD_GROUND_M:
-                    ln = line if at == 0 else line[::-1]
-                    s = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(ln, axis=0).T))]
-                    keep = s <= PAD_REACH_M + 2 * PAD_STEP_M
-                    ln = ln[keep] if keep.sum() >= 2 else ln[:2]
-                    zz = np.asarray(ground_fn(ln), np.float64)
-                    if not np.isfinite(zz).all():
-                        continue
-                    # A street underneath an elevated endpoint is not its approach. If a street could match
-                    # two nearby groups, attach it only to the nearest one; it must not join them transitively.
-                    matches = []
-                    for k, group in enumerate(groups):
-                        heights = [float(p[1][0]) for p in group]
-                        if max(max(heights), zz[0]) - min(min(heights), zz[0]) <= PAD_JOIN_Z_M:
-                            matches.append((abs(float(zz[0]) - float(np.mean(heights))), k))
-                    if matches:
-                        groups[min(matches)[1]].append((ln, zz, half))
+        near = np.flatnonzero(dnp.hypot(ends[:, 0] - q[0], ends[:, 1] - q[1]) < PAD_GROUND_M).tolist()
+        for e in near:
+            line, half = gl[e >> 1]
+            ln = line if e & 1 == 0 else line[::-1]
+            s = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(ln, axis=0).T))]
+            keep = s <= PAD_REACH_M + 2 * PAD_STEP_M
+            ln = ln[keep] if keep.sum() >= 2 else ln[:2]
+            zz = np.asarray(ground_fn(ln), np.float64)
+            if not np.isfinite(zz).all():
+                continue
+            # A street underneath an elevated endpoint is not its approach. If a street could match
+            # two nearby groups, attach it only to the nearest one; it must not join them transitively.
+            matches = []
+            for k, group in enumerate(groups):
+                heights = [float(p[1][0]) for p in group]
+                if max(max(heights), zz[0]) - min(min(heights), zz[0]) <= PAD_JOIN_Z_M:
+                    matches.append((abs(float(zz[0]) - float(np.mean(heights))), k))
+            if matches:
+                groups[min(matches)[1]].append((ln, zz, half))
         joints.extend((q, parts) for parts in groups)
     joints = _merge_pad_joints(joints, owner)
     for q, parts in joints:

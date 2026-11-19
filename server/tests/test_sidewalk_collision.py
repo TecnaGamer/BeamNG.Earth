@@ -93,5 +93,36 @@ class LeanMeshTest(unittest.TestCase):
         self.assertIsNone(sidewalks.Builder((0.0, 0.0, 0.0)).col)
 
 
+class NormalsTest(unittest.TestCase):
+    """sidewalks._normals_2d (earthfast.sidewalk_normals, 508): the curb lines' mitred left normals."""
+
+    def test_straight_bend_and_ends(self):
+        n = sidewalks._normals_2d(np.array([[0.0, 0.0], [10.0, 0.0], [10.0, 10.0]]))
+        self.assertEqual(n.shape, (3, 2))
+        self.assertTrue(n.flags.writeable and n.dtype == np.float64)
+        np.testing.assert_array_equal(n[0], [0.0, 1.0])            # (the end segments' own normals)
+        np.testing.assert_array_equal(n[2], [-1.0, 0.0])
+        np.testing.assert_allclose(n[1], [-1.0, 1.0], atol=1e-12)  # (the 90 degree joint: mitred, sqrt 2 long)
+        # a hairpin: the mitre is clamped at 2x, and a repeated point gives no NaN
+        hp = sidewalks._normals_2d(np.array([[0.0, 0.0], [10.0, 0.0], [0.0, 0.1], [0.0, 0.1], [5.0, 5.0]]))
+        self.assertTrue(np.isfinite(hp).all())
+        self.assertLessEqual(float(np.hypot(*hp[1])), 2.0 + 1e-12)
+
+    def test_closed_loop_mitred_across_seam(self):
+        sq = np.array([[0.0, 0.0], [4.0, 0.0], [4.0, 4.0], [0.0, 4.0], [0.0, 0.0]])
+        n = sidewalks._normals_2d(sq)
+        np.testing.assert_array_equal(n[0], n[-1])
+        np.testing.assert_allclose(n[0], [1.0, 1.0], atol=1e-12)
+        open_ = sidewalks._normals_2d(sq + np.array([[0.0, 0.0]] * 4 + [[0.0, 1e-3]]))
+        np.testing.assert_allclose(open_[0], [0.0, 1.0], atol=1e-12)  # (not closed: the one-sided end)
+
+    def test_strided_and_short(self):
+        xyz = np.array([[0.0, 0.0, 5.0], [3.0, 4.0, 6.0]])
+        np.testing.assert_array_equal(sidewalks._normals_2d(xyz[:, :2]), [[-0.8, 0.6], [-0.8, 0.6]])
+        for k in (0, 1):
+            with self.assertRaises(IndexError):
+                sidewalks._normals_2d(np.zeros((k, 2)))
+
+
 if __name__ == "__main__":
     unittest.main()

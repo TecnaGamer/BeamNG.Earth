@@ -6542,6 +6542,7 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(geocontent::cdae_shear, m)?)?;
     m.add_function(wrap_pyfunction!(geocontent::clip_segments_convex, m)?)?;
     m.add_function(wrap_pyfunction!(sidewalks::sidewalk_mesh, m)?)?;
+    m.add_function(wrap_pyfunction!(sidewalks::sidewalk_normals, m)?)?;
     m.add_function(wrap_pyfunction!(farcontent::bridge_slabs, m)?)?;
     m.add_function(wrap_pyfunction!(fartex::tile_warp, m)?)?;
     m.add_function(wrap_pyfunction!(fartex::core_tiles, m)?)?;
@@ -7188,6 +7189,7 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // BNE_ROADSHAPE=decks)
     // 505: try598's 501 (P1c, the Rust ports 494-500) with RS S2b part 2a (493) and v2 P1b (498) merged; 502-504 are
     // other branches'
-    m.add("VERSION", 505)?;
+    // 508: the full Rust port's r2a18 (sidewalks::sidewalk_normals, sidewalks._normals_2d); 506-507 are other branches'
+    m.add("VERSION", 508)?;
     Ok(())
 }
