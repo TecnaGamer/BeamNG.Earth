@@ -64,7 +64,7 @@ class EnuRingsTest(unittest.TestCase):
             self.assertEqual(bb.shape, (len(self.rings), 4))
             for r, b in zip(self.rings, bb):
                 e, n = mapgeom.enu_xy(self.f, fr, r)
-                self.assertTrue(_same(b, np.array([e.min(), e.max(), n.min(), n.max()])))
+                self.assertTrue(np.array_equal(b, [e.min(), e.max(), n.min(), n.max()]))   # (as numbers)
 
     def test_nan_and_empty(self):
         fr = self.frames[0]
@@ -97,7 +97,14 @@ class EnuRingsTest(unittest.TestCase):
         bb = mapgeom.enu_bounds(self.f, fr, f32)
         for r, b in zip(f32, bb):
             e, n = mapgeom.enu_xy(self.f, fr, r)
-            self.assertTrue(_same(b, np.array([e.min(), e.max(), n.min(), n.max()])))
+            self.assertTrue(np.array_equal(b, [e.min(), e.max(), n.min(), n.max()]))
+        # (a one-shot iterable with a ring taken ring by ring: every ring still converted)
+        mixed = [self.rings[0], f32[1], self.rings[2]]
+        got = mapgeom.enu_rings(self.f, fr, iter(mixed))
+        self.assertEqual(len(got), 3)
+        for r, xy in zip(mixed, got):
+            self.assertTrue(_same(xy, np.column_stack(mapgeom.enu_xy(self.f, fr, r))))
+        self.assertEqual(mapgeom.enu_bounds(self.f, fr, iter(mixed)).shape, (3, 4))
 
 
 if __name__ == "__main__":

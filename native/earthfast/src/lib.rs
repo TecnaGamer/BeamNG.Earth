@@ -1279,8 +1279,9 @@ fn enu_rings<'py>(py: Python<'py>, rings: Vec<PyReadonlyArray2<'py, f64>>, origi
 }
 
 /// mapgeom.enu_bounds: (len(rings), 4) east min, east max, north min, north max of each lon/lat ring in the frame
-/// (origin, rot), height 0, from enu_rings' points: NumPy's min / max of them (a NaN point makes that axis' pair NaN;
-/// an empty ring is a ValueError, as min / max of no values). roads.ChainView._todo's near test, many parts a call.
+/// (origin, rot), height 0, from enu_rings' points: NumPy's min / max of them as numbers, for comparing (a NaN point
+/// makes that axis' pair NaN, the canonical one; of equal +0.0 / -0.0 extremes the first; an empty ring is a
+/// ValueError, as min / max of no values). roads.ChainView._todo's near test, many parts a call.
 #[pyfunction]
 fn enu_bounds<'py>(py: Python<'py>, rings: Vec<PyReadonlyArray2<'py, f64>>, origin: PyReadonlyArray1<'py, f64>,
                    rot: PyReadonlyArray2<'py, f64>) -> PyResult<Bound<'py, PyArray2<f64>>> {

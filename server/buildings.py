@@ -3748,6 +3748,7 @@ def road_lines(frame, road_layers, x0, y0, margin=50.0, size=256.0, classes=THRO
         near = np.flatnonzero((bb[:, 2] - x0 >= -margin) & (bb[:, 0] - x0 <= size + margin)
                               & (bb[:, 3] - y0 >= -margin) & (bb[:, 1] - y0 <= size + margin))
         specs = None
+        rings, halves = [], []      # (the layer's lines converted in one call)
         for i in near.tolist():
             if str(cls[i]) not in classes or (sub is not None and str(sub[i]) in skip_sub):
                 continue
@@ -3764,15 +3765,16 @@ def road_lines(frame, road_layers, x0, y0, margin=50.0, size=256.0, classes=THRO
                 b = f.coord_off[f.ring_off[f.part_off[i + 1]]]
                 lls = [f.lonlat[a:b]]
             for ll in lls:
-                if len(ll) < 2:
-                    continue
-                e, n = mapgeom.enu_xy(f, frame, ll)
-                xy = np.stack([e - x0, n - y0], 1)
-                if xy[:, 0].max() < -margin or xy[:, 0].min() > size + margin or xy[:, 1].max() < -margin \
-                        or xy[:, 1].min() > size + margin:
-                    continue
-                out.append(xy)
-                out.half.append(half)
+                if len(ll) >= 2:
+                    rings.append(ll)
+                    halves.append(half)
+        for en, half in zip(mapgeom.enu_rings(f, frame, rings) if rings else [], halves):
+            xy = np.stack([en[:, 0] - x0, en[:, 1] - y0], 1)
+            if xy[:, 0].max() < -margin or xy[:, 0].min() > size + margin or xy[:, 1].max() < -margin \
+                    or xy[:, 1].min() > size + margin:
+                continue
+            out.append(xy)
+            out.half.append(half)
     return out
 
 

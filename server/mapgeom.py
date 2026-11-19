@@ -678,7 +678,6 @@ def _native_rings(frame, rings):
     converting as EnuFrame does (the tests' stand-ins) or a ring of another type, which enu_xy takes one at a time."""
     if type(frame).geodetic_to_enu is not _ENU_G2E:
         return None
-    rings = rings if type(rings) is list else list(rings)
     for r in rings:
         if type(r) is not np.ndarray or r.dtype != np.float64 or r.ndim != 2:
             return None
@@ -689,6 +688,7 @@ def enu_rings(feats, frame, rings):
     """[np.column_stack(enu_xy(feats, frame, ring)) for ring in rings]: (k, 2) east / north of each lon/lat ring, the
     same numbers, in one native call (earthfast.enu_rings) instead of a call per ring (~434k enu_xy calls a three-place
     cold road tile set, their own cost the wrapping: railways.crossings, 2026-11-19)."""
+    rings = rings if type(rings) is list else list(rings)
     got = _native_rings(frame, rings)
     if got is None:
         return [np.column_stack(enu_xy(feats, frame, r)) for r in rings]
@@ -699,7 +699,10 @@ def enu_rings(feats, frame, rings):
 
 def enu_bounds(feats, frame, rings):
     """(len(rings), 4) float64: (e.min(), e.max(), n.min(), n.max()) of enu_xy(feats, frame, ring) per ring, in one
-    native call (earthfast.enu_bounds: no (k, 2) array made per ring; roads.ChainView._todo's near test)."""
+    native call (earthfast.enu_bounds: no (k, 2) array made per ring; roads.ChainView._todo's near test). Equal to
+    NumPy's as numbers, for comparing: a NaN point makes that axis' pair NaN (any NaN: its payload not kept), and of
+    equal +0.0 / -0.0 extremes either may come back, as NumPy's own SIMD reductions differ there."""
+    rings = rings if type(rings) is list else list(rings)
     got = _native_rings(frame, rings)
     if got is None:
         out = np.empty((len(rings), 4), np.float64)
