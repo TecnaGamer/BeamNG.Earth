@@ -333,6 +333,46 @@ class StructEndsTest(unittest.TestCase):
         self.assertAlmostEqual(float(z[-1]), 10.3, places=6)
         self.assertAlmostEqual(float(z[0]), 10.0, places=6)
 
+    def test_an_unlifted_end_keeps_clear_of_a_spanned_road_turning_alongside(self):
+        """A street that passes under the decks and then runs along the approach is kept where it is out from under
+        them (Codex review: any crossing exempted the whole road)."""
+        bend = ([[5.0, 30.0], [5.0, -6.5], [-100.0, -6.5]], 3.0)
+        done, z = self.unlifted_raise(self.APPROACHES[:2] + [bend])
+        self.assertFalse(done)
+        self.assertAlmostEqual(float(z[-1]), 10.0, places=6)
+
+    def test_beside_keeps_a_twin_approach_unless_it_rises(self):
+        """A twin's approach is let in the fill only where it stands at the shared height (rise); one raised only by
+        its own pin may be left low (Codex review)."""
+        g = self.planner((10.0, 11.0, 11.6, 10.6), roads_=self.APPROACHES[:2])
+        spans = [(np.array([[0.0, 0.0], [60.0, 0.0]]), 4.0), (np.array([[62.0, 9.0], [2.0, 9.0]]), 4.0)]
+        ends = [[0.0, 0.0], [2.0, 9.0]]
+
+        def firsts(rise):
+            return sorted(tuple(np.round(np.asarray(ln)[0], 1)) for ln, _h in g._struct_beside([0.0, 0.0], ends, rise,
+                                                                                                spans))
+        self.assertEqual(firsts([[0.0, 0.0]]), [(-98.0, 9.0)])
+        self.assertEqual(firsts(ends), [])
+
+    def test_beside_finds_a_fast_deck_past_the_group_reach(self):
+        """FAST_DECK_GROUND: a motorway deck beside the far end of a long seam, past the end group's STRUCT_NEAR_M, is
+        an obstacle (Codex review: only the group's own deck search found them); the structure's own decks are not."""
+        g = self.planner((10.0, 11.0, 11.6, 10.6))
+        cell = g._cell_enu
+        mw = np.array([[-140.0, -6.0], [-115.0, -6.0]])
+
+        def with_mw(k, ground=True):
+            c = dict(cell(k, ground))
+            c["bridges"] = list(c["bridges"]) + [mw]
+            c["bridge_cls"] = list(c["bridge_cls"]) + ["motorway"]
+            c["bridge_half"] = list(c["bridge_half"]) + [5.0]
+            return c
+        g._cell_enu = with_mw
+        spans = [(np.array([[0.0, 0.0], [60.0, 0.0]]), 4.0), (np.array([[62.0, 9.0], [2.0, 9.0]]), 4.0)]
+        got = g._struct_beside([0.0, 0.0], [[0.0, 0.0], [2.0, 9.0]], [[0.0, 0.0]], spans, True)
+        self.assertEqual([tuple(np.asarray(ln)[0]) for ln, _h in got], [(-140.0, -6.0)])
+        self.assertEqual(g._struct_beside([0.0, 0.0], [[0.0, 0.0], [2.0, 9.0]], [[0.0, 0.0]], spans, False), [])
+
     def test_a_short_approach_is_left(self):
         g = self.planner((10.0, 11.0, 11.6, 10.3))
         s = np.arange(0.0, 16.1, 4.0)

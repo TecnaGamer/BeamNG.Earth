@@ -6292,24 +6292,30 @@ class _Planner:
             return None
         if beside is None:
             # (no lift of its own, so none of its caps: a twin's need or the group's mean can still raise it, and its fill
-            # must keep clear of the roads beside it all the same (Codex review): found from the map round it)
-            own, decks = keys[me // 2], {keys[k_ // 2] for k_ in group}
-            fast_ = [(parts[kk][0], parts[kk][1]) for kk in keys
-                     if FAST_DECK_GROUND and kk not in decks and parts[kk][2] in APPROACH_SKIP
-                     and parts[own][2] not in APPROACH_SKIP]
-            beside = self._struct_beside(end_pt(own, me % 2), [end_pt(keys[k_ // 2], k_ % 2) for k_ in group],
-                                         [parts[kk][0] for kk in sorted(decks)], fast_)
+            # must keep clear of the roads beside it all the same (Codex review): found from the map round it. A twin's
+            # approach is let in the fill only where it stands at the shared height anyway, its end's own ground or
+            # clearance need there: one raised only by its own pin may be left low, a short plan (Codex review))
+            own, decks = keys[me // 2], sorted({keys[k_ // 2] for k_ in group})
+            top = float(hgt[me]) - 1e-3
+            rise = [end_pt(keys[k_ // 2], k_ % 2) for k_ in group
+                    if k_ == me or h[k_] >= top or (np.isfinite(need[k_]) and need[k_] >= top)]
+            beside = self._struct_beside(end_pt(own, me % 2), [end_pt(keys[k_ // 2], k_ % 2) for k_ in group], rise,
+                                         [(parts[kk][0], parts[kk][1]) for kk in decks],
+                                         FAST_DECK_GROUND and parts[own][2] not in APPROACH_SKIP)
         return float(hgt[me]), beside, float(h[me])
 
-    def _struct_beside(self, p, ends, spans, decks=()):
+    def _struct_beside(self, p, ends, rise, spans, fast_decks=False):
         """[(line, half width)] the fill of a shared raise at the structure end p keeps clear of, for an end whose own
         lift gave no caps (_struct_end_calc): the ground roads within a seam's reach of p (STRUCT_SEAM_RUN_M along the
         road and the fill slope of APPROACH_MAX_LIFT out from it, which bound any move _pin_struct_ends makes), but those
-        leading onto one of the end group's ends (ends: the approaches that rise with it, the plan's own among them) and
-        those the structure's decks (spans) cross (its abutment stands between), as _end_lift_raw's; then decks, the
-        fast decks beside it (FAST_DECK_GROUND). A pure function of the map round p."""
+        leading onto one of rise (end points of the group whose approaches stand at its height: the plan's own among
+        them); of those the structure's decks spans [(line, half)] cross, only the pieces out from under them (its
+        abutment stands between: a road passing under and then along the approach is kept there, Codex review). Then,
+        with fast_decks (FAST_DECK_GROUND, the end's own deck not fast), the motorway and trunk decks in that reach
+        but the group's (an end at one of ends). A pure function of the map round p."""
         reach = STRUCT_SEAM_RUN_M[1] + SLOPE_RUN * APPROACH_MAX_LIFT + 40.0
         p = np.asarray(p, np.float64)[:2]
+        lo_b, hi_b = p - reach, p + reach
         la, lo, _ = self.frame.enu_to_geodetic(np.array([p[0]]), np.array([p[1]]), 0.0)
         la, lo = np.asarray(la, np.float64), np.asarray(lo, np.float64)
         pad = reach / 111320.0
@@ -6317,17 +6323,61 @@ class _Planner:
                       key=str)
         cs = [self._cell_enu(k) for k in keys]
         lines, halves, lo_l, hi_l, first, last = self._ground_table(keys, cs)
+        E = np.asarray(ends, np.float64).reshape(-1, 2)
+        R = np.asarray(rise, np.float64).reshape(-1, 2)
+
+        def touches(q, at):
+            return len(at) > 0 and float(dnp.hypot(at[:, 0] - q[0], at[:, 1] - q[1]).min()) <= APPROACH_TOUCH_M
         out = []
         if lines:
-            E = np.asarray(ends, np.float64).reshape(-1, 2)
-
-            def touches(q):
-                return float(dnp.hypot(E[:, 0] - q[0], E[:, 1] - q[1]).min()) <= APPROACH_TOUCH_M
-            near = np.flatnonzero(~((hi_l < p - reach).any(1) | (lo_l > p + reach).any(1)))
-            cand = [int(i) for i in near if not touches(first[i]) and not touches(last[i])]
-            crossed = roadsmod._crossings_by(list(spans), [lines[i] for i in cand]) if cand else []
-            out = [(lines[i], halves[i]) for i, cr in zip(cand, crossed) if not cr]
-        return out + list(decks)
+            near = np.flatnonzero(~((hi_l < lo_b).any(1) | (lo_l > hi_b).any(1)))
+            cand = [int(i) for i in near if not touches(first[i], R) and not touches(last[i], R)]
+            crossed = roadsmod._crossings_by([ln for ln, _h in spans], [lines[i] for i in cand]) if cand else []
+            for i, cr in zip(cand, crossed):
+                if not cr:
+                    out.append((lines[i], halves[i]))
+                    continue
+                # (a road the decks span: its points within its own and a deck's half width (and APPROACH_GAP_M) of a
+                # deck's line are under it; the pieces between, resampled at 1 m, are kept)
+                ln = np.asarray(lines[i], np.float64)[:, :2]
+                seg = dnp.hypot(*np.diff(ln, axis=0).T)
+                q = [ln[:1]]
+                for j in range(len(seg)):
+                    m = max(1, int(math.ceil(float(seg[j]))))
+                    t = np.arange(1, m + 1, dtype=np.float64)[:, None] / m
+                    q.append(ln[j] + t * (ln[j + 1] - ln[j]))
+                q = np.concatenate(q)
+                under = np.zeros(len(q), bool)
+                for dl, dh in spans:
+                    d_ = np.asarray(dl, np.float64)[:, :2]
+                    if len(d_) >= 2:
+                        under |= roadsmod._seg_dist(q, d_[:-1], d_[1:]).min(axis=1) <= float(dh) + float(halves[i]) + \
+                            APPROACH_GAP_M
+                run = []
+                for k in range(len(q) + 1):
+                    if k < len(q) and not under[k]:
+                        run.append(k)
+                        continue
+                    if len(run) >= 2:
+                        out.append((q[run], halves[i]))
+                    run = []
+        if fast_decks:
+            seen = set()
+            for c in cs:
+                nb = len(c["bridges"])
+                for bl, bc, bh in zip(c["bridges"], c.get("bridge_cls") or [None] * nb,
+                                      c.get("bridge_half") or [4.0] * nb):
+                    bl = np.asarray(bl, np.float64)
+                    kb = (round(float(bl[0, 0]), 1), round(float(bl[0, 1]), 1), len(bl)) if len(bl) else None
+                    if bc not in APPROACH_SKIP or len(bl) < 2 or kb in seen:
+                        continue
+                    if (bl[:, :2].max(0) < lo_b).any() or (bl[:, :2].min(0) > hi_b).any():
+                        continue
+                    if touches(bl[0], E) or touches(bl[-1], E):
+                        continue        # (one of the structure's own decks)
+                    seen.add(kb)
+                    out.append((bl[:, :2], float(bh)))
+        return out
 
     @staticmethod
     def _fill_clear(xy, add, half, others):
