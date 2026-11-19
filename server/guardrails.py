@@ -610,17 +610,27 @@ def _shift_to_edge(a, b, road):
     return _moved(a, b, target, road["origin"], road["unit"])
 
 
+def _segments_near(rsegs, xy, reach):
+    """The road segments (rsegs' layout) within reach of xy plus their own half width (a probe's candidates)."""
+    v = xy - rsegs["a"]
+    t = np.clip(np.sum(v * rsegs["unit"], axis=1), 0.0, rsegs["len"])
+    d = dnp.hypot(*(v - t[:, None] * rsegs["unit"]).T) - rsegs["half"]
+    keep = d <= reach
+    return {key: val[keep] for key, val in rsegs.items()}
+
+
 def _shift_ends(a, b, road, rsegs):
-    """_shift_to_edge with each end moved as far as a module centred on it would be: where the move changes along the
-    run (a median leaving a lane as two ramps part, a side rail on a bend) the modules follow it as one line instead
-    of stepping from one to the next. A module that is not moved stays as it is."""
+    """_shift_to_edge with each end of a median moved as far as a module centred on it would be: where the move changes
+    along the run (a median leaving a lane as two ramps part) the modules follow it as one line instead of stepping
+    from one to the next. A module that is not moved, and a side rail, move as before."""
     na, nb = _shift_to_edge(a, b, road)
-    if road is None or (np.array_equal(na, a) and np.array_equal(nb, b)):
-        return na, nb
+    if road is None or not road["median"] or (np.array_equal(na, a) and np.array_equal(nb, b)):
+        return na, nb               # (a side rail goes to a fixed offset from its road's edge: the modules meet as they are)
     half = 0.5 * (b - a)
+    near = _segments_near(rsegs, 0.5 * (a + b), float(dnp.hypot(half[0], half[1])) * 2.0 + MEDIAN_REACH_M)
     out = []
     for p, moved in ((a, na), (b, nb)):
-        probe = _along_road(p - half, p + half, rsegs)
+        probe = _along_road(p - half, p + half, near)
         if probe is None:
             out.append(moved)
             continue
