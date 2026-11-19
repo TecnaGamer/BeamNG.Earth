@@ -12030,15 +12030,14 @@ def _bridge_chunks(frame, bseen, elev, exact, bridges=None, cells=None, walks=No
         else:
             got = [(fid, spec, np.c_[xy, z], lon) for fid, spec, xy, z, lon in bridges.parts(cells, near)
                    if np.isfinite(z).all()]
-        if roadshape.SHEET or any(dnp.norm(np.diff(p[:, :2], axis=0), axis=1).sum() <= roadmesh.JUNCTION_MAX_PART_M
-                                  for _fid, _sp, p, _lon in got):
+        if any(dnp.norm(np.diff(p[:, :2], axis=0), axis=1).sum() <= roadmesh.JUNCTION_MAX_PART_M
+               for _fid, _sp, p, _lon in got):
             # A short branch can meet its fork outside the usual parapet context. Both tiles need all incident
             # complete profiles, even the tile holding only that branch's far abutment. parts() adds NEAR_M.
-            # (BNE_ROADSHAPE=sheet: every tile holding a piece of an exit's union or of its branch's height blend
-            # holds both its parts: the blend reaches PIN_BLEND_M past the split, the through deck alongside)
+            # (BNE_ROADSHAPE=sheet: NOT widened for the forks: a drawn set SHEET_WINDOW_M wide changed other decks, SD
+            # Fwy's I-605 connector drawn twice, overlap 1,239 -> 2,109 m2; OPEN: the forks' own wider input, read
+            # apart from the drawn parts, so the branch's blend and the through pick are the same in every tile)
             reach = 3 * roadmesh.JUNCTION_MAX_PART_M + DECK_CONTEXT_M
-            if roadshape.SHEET:
-                reach = max(reach, roadshape.SHEET_WINDOW_M)
             margin = max(0.0, reach - NEAR_M)
             x0, y0, x1, y1 = exact
             cell_fn = getattr(bridges, 'cell_fn', None)
