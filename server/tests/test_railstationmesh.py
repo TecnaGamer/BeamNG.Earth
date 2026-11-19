@@ -312,6 +312,34 @@ class UnderpassTest(unittest.TestCase):
         self.assertIn(round(zf, 2), zs)
         self.assertIn(round(lid, 2), zs)
 
+    def test_floor_ramps_down_to_an_end_whose_ground_lies_under_it(self):
+        """Vienna's Erzherzog-Karl-Strasse: the ground 159.4 over the platform's end and 153.6 at the road's in its cutting, the
+        floor 156.4 from the rails' bed: the floor ramps down to the road's ground and ends there, no flight into it."""
+        import railbridges as rb
+        import railunderpass as ru
+        st, links = self.under("vinnytsia")
+        ln = links[0]
+        path = rb.resample(ln.xy)
+        far = path[-1]
+        tip = ru.flights(ln, path)[-1][-1]
+        sunk = bm.DrawnGround(lambda xy: np.where(np.hypot(xy[:, 0] - tip[0], xy[:, 1] - tip[1]) < 2.0, 90.0, 100.0))
+        zf0, _lid = ru.levels(None, FLAT, st, ln)
+        zf, lid = ru.profile(None, FLAT, st, ln, path)
+        self.assertTrue(np.allclose(zf, zf0))                                        # (the ground over it at both ends: as before)
+        zf, lid = ru.profile(None, sunk, st, ln, path)
+        s = rb._arc(path)
+        self.assertAlmostEqual(zf[0], zf0, delta=1e-6)
+        self.assertLess(zf[-1], 91.0)                                                # (at the road's ground)
+        self.assertTrue(np.all(np.diff(zf) / np.maximum(np.diff(s), 1e-9) >= -ru.FLOOR_GRADE - 1e-6))
+        self.assertTrue(np.allclose(lid - zf, ru.CEIL_D + ru.CLEAR_M))
+        m = bm._Mesh()
+        ru.add(m, None, sunk, st, ln)
+        V = m.result(BIG, (0.0, 0.0, 0.0))[0]
+        near = np.hypot(V[:, 0] - far[0], V[:, 1] - far[1]) < 3.0
+        self.assertGreater(V[near, 2].min(), 89.0)                                   # (no flight down: nothing under the ground)
+        parts = ru.hole_parts(None, sunk, st, ln)
+        self.assertAlmostEqual(float(parts[0][1][-1]), float(zf[-1]), delta=1e-6)
+
     def test_stairs_rise_from_the_floor_to_the_ground(self):
         import railbridges as rb
         import railunderpass as ru
