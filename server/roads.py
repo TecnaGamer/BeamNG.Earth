@@ -220,6 +220,14 @@ EDGE_LINE = {"m": "line_white", "tl": 6.4, "p": 2, "w": 0.15, "inset": 0.3}
 # (the user, 2026-10-28: "the edge of the road is blurry and slightly jagged").
 EDGE_DECAL = {"m": "ECA_road_edge_dirt", "tl": 6.4, "p": 1, "w": 1.6, "layer": "edge"}
 EDGE_DECAL_AT = 0.95
+# The road revamp v2 (BNE_SURFACE_V2, roadmesh.SURFACE_V2): the stock maps' edge blends, 2 m wide over the asphalt's
+# edge and centred (EDGE_DECAL_AT - 0.5) x 2 = 0.9 m outside it (vanilla 0.8-1.0 m), texture length 8 m; beside a rural
+# highway's asphalt (GRAVEL_EDGE_ROADS: their gravel shoulders) a gravel one (bne_edge_gravel, Utah's stock texture)
+SURFACE_V2 = os.environ.get("BNE_SURFACE_V2", "off").strip().lower() in ("on", "1", "yes", "true")
+if SURFACE_V2:
+    EDGE_DECAL = {**EDGE_DECAL, "tl": 8.0, "w": 2.0}
+GRAVEL_EDGE_DECAL = {**EDGE_DECAL, "m": "bne_edge_gravel"} if SURFACE_V2 else None     # (prewarm: v2's only)
+GRAVEL_EDGE_ROADS = {"motorway", "motorway_link", "trunk", "trunk_link", "primary", "primary_link"}
 # ... and where grass grows to the asphalt (roadwear.verges: a curbless rural road through grass, crops or woods),
 # the stock grassy edge (art/shapes/common/decalroads: global; East Coast USA's look, its u = 1 side on the asphalt too)
 GRASS_EDGE_DECAL = {**EDGE_DECAL, "m": "m_road_edge_dirt_grass"}
@@ -12842,6 +12850,8 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
                 pieces = [r for pc in pieces for r in cut_outside(pc, decal_blockers, 0.5)]
             if look["m"] == EDGE_DECAL["m"] and (fid, side) in grassy:
                 look = {**look, "m": GRASS_EDGE_DECAL["m"]}
+            elif SURFACE_V2 and look["m"] == EDGE_DECAL["m"] and spec.cls in GRAVEL_EDGE_ROADS and not spec.urban:
+                look = {**look, "m": GRAVEL_EDGE_DECAL["m"]}
             lines_by = centre_blockers if look.get("kind") in ("centre", "lane") else \
                 edge_blockers if look.get("kind") == "edge" else blockers
             if look.get("kind") in ("centre", "lane", "edge"):
