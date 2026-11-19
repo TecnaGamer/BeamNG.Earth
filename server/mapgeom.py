@@ -672,3 +672,48 @@ def enu_xy(feats, frame, ring):
     e, n, _ = frame.geodetic_to_enu(ring[:, 1], ring[:, 0], 0.0)
     return e, n
 
+
+def _native_rings(frame, rings):
+    """rings as earthfast's many-ring kernels take them (a list of float64 (k, >= 2) arrays), or None: a frame not
+    converting as EnuFrame does (the tests' stand-ins) or a ring of another type, which enu_xy takes one at a time."""
+    if type(frame).geodetic_to_enu is not _ENU_G2E:
+        return None
+    for r in rings:
+        if type(r) is not np.ndarray or r.dtype != np.float64 or r.ndim != 2:
+            return None
+    return rings
+
+
+def enu_rings(feats, frame, rings):
+    """[np.column_stack(enu_xy(feats, frame, ring)) for ring in rings]: (k, 2) east / north of each lon/lat ring, the
+    same numbers, in one native call (earthfast.enu_rings) instead of a call per ring (~434k enu_xy calls a three-place
+    cold road tile set, their own cost the wrapping: railways.crossings, 2026-11-19). Each point by geodetic_to_enu's
+    operations, as enu_xy's own conversion and xy_in's first frame have them (xy_in's later frames: the same operations
+    through the kept ECEF, the same numbers; only a NaN's payload, from a NaN coordinate, may differ there, as it already
+    did between xy_in's two ways by the order frames were asked in)."""
+    rings = rings if type(rings) is list else list(rings)
+    got = _native_rings(frame, rings)
+    if got is None:
+        return [np.column_stack(enu_xy(feats, frame, r)) for r in rings]
+    import fast
+    fast.require(500, "enu_rings")
+    return fast._ef.enu_rings(got, frame.origin, frame.rot)
+
+
+def enu_bounds(feats, frame, rings):
+    """(len(rings), 4) float64: (e.min(), e.max(), n.min(), n.max()) of enu_xy(feats, frame, ring) per ring, in one
+    native call (earthfast.enu_bounds: no (k, 2) array made per ring; roads.ChainView._todo's near test). Equal to
+    NumPy's as numbers, for comparing: a NaN point makes that axis' pair NaN (any NaN: its payload not kept), and of
+    equal +0.0 / -0.0 extremes either may come back, as NumPy's own SIMD reductions differ there."""
+    rings = rings if type(rings) is list else list(rings)
+    got = _native_rings(frame, rings)
+    if got is None:
+        out = np.empty((len(rings), 4), np.float64)
+        for k, r in enumerate(rings):
+            e, n = enu_xy(feats, frame, r)
+            out[k] = (e.min(), e.max(), n.min(), n.max())
+        return out
+    import fast
+    fast.require(500, "enu_bounds")
+    return fast._ef.enu_bounds(got, frame.origin, frame.rot)
+

@@ -8091,11 +8091,12 @@ class BridgeProfiles:
                             spans = _bridge_level_spans(feats, i)
                             glv = structures.part_levels(feats, i, spans, len(lvls) // max(1, len(spans)))
                         best = {}
-                        for j, (pk, ring) in enumerate(_keyed(self.keys_of, self.parts_of, feats, i)):
+                        kd = _keyed(self.keys_of, self.parts_of, feats, i)
+                        xys = mapgeom.enu_rings(feats, self.frame, [ring for _pk, ring in kd])    # (one call)
+                        for j, (pk, ring) in enumerate(kd):
                             if (fid, pk) in best and len(ring) <= best[(fid, pk)][4]:
                                 continue
-                            e, n = mapgeom.enu_xy(feats, self.frame, ring)
-                            best[(fid, pk)] = (bs[i], densify(_dedupe(np.stack([e, n], axis=1)), DECK_STEP),
+                            best[(fid, pk)] = (bs[i], densify(_dedupe(xys[j]), DECK_STEP),
                                               float(np.mean(ring[:, 0])), lvls[j] if j < len(lvls) else 1.0, len(ring),
                                               str(names[i]) if names is not None else "")     # (roadz: name matching)
                             if glv is not None:
@@ -8112,9 +8113,7 @@ class BridgeProfiles:
                             if got is None:
                                 got = memo[i] = lanesections.unplaced(feats, i, rings)
                             rings = got
-                        for ring in rings:
-                            e, n = mapgeom.enu_xy(feats, self.frame, ring)
-                            lines.append(np.stack([e, n], axis=1))
+                        lines += mapgeom.enu_rings(feats, self.frame, rings)
                         roads_.append(((fid, "g"), lines))
                         self.__dict__.setdefault("_gcls", {})[(fid, "g")] = rs[i].cls     # (LEVEL_SPACING)
                     elif _rail_drawn(feats, i):
@@ -8124,9 +8123,7 @@ class BridgeProfiles:
                         lines = []
                         for kind, rings in railways._pieces(feats, i):
                             if kind == "ground":
-                                for ring in rings:
-                                    e, n = mapgeom.enu_xy(feats, self.frame, ring)
-                                    lines.append(np.stack([e, n], axis=1))
+                                lines += mapgeom.enu_rings(feats, self.frame, rings)
                         if lines:
                             roads_.append(((fid, "r"), lines))
             got = (parts, roads_)
@@ -10133,19 +10130,24 @@ class ChainView:
             if feats is None or len(feats) == 0:
                 continue
             bs = self.specs_of(feats)
+            cand = []           # (fid, j, ring, i) in order; their bounds in this frame in one native call
             for i in range(len(feats)):
                 if bs[i] is None:
                     continue
                 fid = str(feats.ids[i])
                 for j, ring in _keyed(self.keys_of, self.parts_of, feats, i):
-                    if (fid, j) in queued:
-                        continue
-                    e, n = mapgeom.enu_xy(feats, self.frame, ring)
-                    if e.max() < x0 - NEAR_M or e.min() > x1 + NEAR_M or n.max() < y0 - NEAR_M or n.min() > y1 + NEAR_M:
-                        continue
-                    queued.add((fid, j))
-                    st = self.cs.store_at(float(ring[0][1]), float(ring[0][0]))
-                    by.setdefault(st.region, (st, []))[1].append(((fid, j), feats, i))
+                    cand.append((fid, j, ring, i))
+            if not cand:
+                continue
+            bb = mapgeom.enu_bounds(feats, self.frame, [c[2] for c in cand]).tolist()
+            for (fid, j, ring, i), (emin, emax, nmin, nmax) in zip(cand, bb):
+                if (fid, j) in queued:
+                    continue
+                if emax < x0 - NEAR_M or emin > x1 + NEAR_M or nmax < y0 - NEAR_M or nmin > y1 + NEAR_M:
+                    continue
+                queued.add((fid, j))
+                st = self.cs.store_at(float(ring[0][1]), float(ring[0][0]))
+                by.setdefault(st.region, (st, []))[1].append(((fid, j), feats, i))
         return by
 
     def _map(self, st, got):
