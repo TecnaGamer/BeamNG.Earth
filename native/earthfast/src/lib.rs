@@ -2036,7 +2036,8 @@ fn batter_probes<'py>(py: Python<'py>, a: PyReadonlyArray2<'py, f64>, b: PyReado
 /// grading.batter_params (batter::params): each segment side's batter slope m and reach r past its core at its ends
 /// ((n, 4): left, right at a, then at b) and flags (batter::OLD: today's grading there, (n, 2)), from the natural ground at batter_probes' points (nat) and the
 /// distance from each side's core edge to the first building (bld (n * 2,), inf: none). prm: [l0, crest, s_lo, s_up,
-/// b_rural, b_urban, b_steep, m_max, r_max, r_pad, urban_m, bld_gap, dm, dr, gap_n, run_n, fit_k, fit_add].
+/// b_rural, b_urban, b_steep, m_max, r_max, r_pad, urban_m, bld_gap, dm, dr, gap_n, run_n, fit_k, fit_add,
+/// dil_n].
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
 fn batter_params<'py>(py: Python<'py>, za: PyReadonlyArray1<'py, f64>, zb: PyReadonlyArray1<'py, f64>,
@@ -2057,14 +2058,14 @@ fn batter_params<'py>(py: Python<'py>, za: PyReadonlyArray1<'py, f64>, zb: PyRea
         || cut.ncols() < 6 || nat.len() != n * 2 * offs.len() || bld.len() != n * 2 {
         return Err(pyo3::exceptions::PyValueError::new_err("batter_params: the arrays disagree"));
     }
-    if prm.len() != 18 {
-        return Err(pyo3::exceptions::PyValueError::new_err("batter_params: prm is not 18 values"));
+    if prm.len() != 19 {
+        return Err(pyo3::exceptions::PyValueError::new_err("batter_params: prm is not 19 values"));
     }
     let p = batter::ParamPrm { l0: prm[0], crest: prm[1], s_lo: prm[2], s_up: prm[3], b_rural: prm[4],
                                b_urban: prm[5], b_steep: prm[6], m_max: prm[7], r_max: prm[8], r_pad: prm[9],
                                urban_m: prm[10], bld_gap: prm[11], dm: prm[12], dr: prm[13],
                                gap_n: prm[14].max(0.0) as usize, run_n: prm[15].max(0.0) as usize,
-                               fit_k: prm[16], fit_add: prm[17] };
+                               fit_k: prm[16], fit_add: prm[17], dil_n: prm[18].max(0.0) as usize };
     let natv: Vec<f64> = nat.iter().copied().collect();
     let bldv: Vec<f64> = bld.iter().copied().collect();
     let (m, r, fl) = py.detach(|| batter::params(za, zb, rk, rid, abut, st, cut, of, &natv, &bldv, &offs, &p));

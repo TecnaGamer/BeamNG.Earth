@@ -167,7 +167,9 @@ BATTER_R_PAD = 4.0          # m past the sample its batter daylights by that it 
 BATTER_URBAN_M = 30.0       # m from the core's edge: a building this near (either side) makes the urban batter
 BATTER_BLD_GAP_M = 1.0      # m a corridor stops short of a building's wall (beyond: the building's ground is natural)
 BATTER_DM = 0.01            # a side's slope along its plan: the most of its neighbours' less this per segment ...
-BATTER_DR = 3.0             # ... its reach: less this (m) per segment (no step between neighbours: no teeth)
+BATTER_DR = 3.0             # ... its reach: less this (m) per segment (no step between neighbours: no teeth) ...
+BATTER_DIL_N = 3            # ... over this many segments either side at most (a plan's end welded or trimmed in one plan
+                            # set and not another moves no params farther than this: _keys' margin holds it)
 BATTER_GAP_N = 2            # a sharp cutting's or too steep side keeps today's grading in runs along its plan only: gaps
 BATTER_RUN_N = 5            # of this many segments closed, then runs shorter than this many left out (no flicker)
 BATTER_OFFS = (3.0, 6.0, 11.0, 20.0, 40.0)   # m past the core the natural ground is sampled at
@@ -6918,15 +6920,18 @@ class _Planner:
             # and count, so a segment's samples moved by bits with the plan set: Codex review of ff9d2c55)
             la, lo, _ = self.frame.enu_to_geodetic(x, y, 0.0)
             la, lo = np.asarray(la, np.float64), np.asarray(lo, np.float64)
+            # (the elevation as read, elev_raw: the deck patches of self.elev come from the cells planned so far, so a
+            # probe beside a deck read another ground once a neighbour was warm: Codex review of 861e550f)
+            elev = getattr(self, "elev_raw", None) or self.elev
             try:
-                return np.asarray(self.elev(la, lo), np.float64)
+                return np.asarray(elev(la, lo), np.float64)
             except Exception as e:      # (the ground not at hand somewhere: read in chunks, the rest NaN)
                 _caught(e)
                 short[0] = True
             out = np.full(len(la), np.nan)
             for i in range(0, len(la), BATTER_CHUNK):
                 try:
-                    out[i:i + BATTER_CHUNK] = np.asarray(self.elev(la[i:i + BATTER_CHUNK], lo[i:i + BATTER_CHUNK]),
+                    out[i:i + BATTER_CHUNK] = np.asarray(elev(la[i:i + BATTER_CHUNK], lo[i:i + BATTER_CHUNK]),
                                                          np.float64)
                 except Exception as e:
                     _caught(e)
@@ -8017,7 +8022,7 @@ def batter_params(pack, elev_xy, walls_rays=None):
         bld = np.where(np.isfinite(got), got, np.inf)
     prm = np.array([BATTER_L0_M, BATTER_CREST_M, BATTER_STRIP_LO, BATTER_STRIP_UP, BATTER_RURAL, BATTER_URBAN,
                     BATTER_STEEP, BATTER_M_MAX, BATTER_R_MAX, BATTER_R_PAD, BATTER_URBAN_M, BATTER_BLD_GAP_M,
-                    BATTER_DM, BATTER_DR, BATTER_GAP_N, BATTER_RUN_N, BATTER_FIT_K, BATTER_FIT_ADD], f64)
+                    BATTER_DM, BATTER_DR, BATTER_GAP_N, BATTER_RUN_N, BATTER_FIT_K, BATTER_FIT_ADD, BATTER_DIL_N], f64)
     return fast._ef.batter_params(pack.za, pack.zb, pack.rk, pack.rid, pack.ab, pack.st, pack.cut,
                                   np.ascontiguousarray(pack.of, np.int64), np.ascontiguousarray(nat, f64),
                                   np.ascontiguousarray(bld, f64), offs, list(prm))

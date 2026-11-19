@@ -1517,6 +1517,10 @@ def summarise(res):
                        "dig1_m": r["dig1_m"], "ground_m": r["ground_m"], "dev_mean": r["dev_mean"]}
     if "bank" in res:
         out["bank"] = bank_summary(res["bank"]["sides"], res["bank"]["runs"])
+        # (with its coverage: profiles graded visibly, censored, scored; a wider grading must not score better by
+        # dropping its worst profiles unseen, Codex review of 861e550f)
+        out["bank"]["coverage"] = {k: res["bank"]["n"].get(k) for k in ("profiles", "visible", "censored", "scored",
+                                                                         "short_runs")}
     out["deck_nan"] = len(res.get("deck_nan", []))
     out["errors"] = len(res.get("errors", []))
     return out

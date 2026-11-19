@@ -46,7 +46,7 @@ pub const OLD: u8 = 1;
 pub struct ParamPrm {
     pub l0: f64, pub crest: f64, pub s_lo: f64, pub s_up: f64, pub b_rural: f64, pub b_urban: f64, pub b_steep: f64,
     pub m_max: f64, pub r_max: f64, pub r_pad: f64, pub urban_m: f64, pub bld_gap: f64, pub dm: f64, pub dr: f64,
-    pub gap_n: usize, pub run_n: usize, pub fit_k: f64, pub fit_add: f64,
+    pub gap_n: usize, pub run_n: usize, pub fit_k: f64, pub fit_add: f64, pub dil_n: usize,
 }
 
 /// A run of flags along a plan: gaps of up to gap_n false closed, then runs of fewer than run_n true cleared.
@@ -269,23 +269,21 @@ pub fn params(za: ArrayView1<f64>, zb: ArrayView1<f64>, rk: ArrayView1<i64>, rid
         }
         for s in 0..2 {
             for (vals, d) in [(&mut m, p.dm), (&mut r, p.dr)] {
-                let mut run = f64::NEG_INFINITY;
-                for q in i..e {                 // (forward, then back)
+                // (within dil_n segments only: the plan's end welded or trimmed in one plan set and not in another
+                // moves no segment's params farther along it: Codex review of 861e550f)
+                let v0: Vec<f64> = (i..e).map(|q| vals[2 * q + s]).collect();
+                for q in i..e {
                     let j = 2 * q + s;
-                    run -= d;
-                    if fl[j] & OLD == 0 {
-                        run = run.max(vals[j]);
-                        vals[j] = run;
+                    if fl[j] & OLD != 0 {
+                        continue;
                     }
-                }
-                run = f64::NEG_INFINITY;
-                for q in (i..e).rev() {
-                    let j = 2 * q + s;
-                    run -= d;
-                    if fl[j] & OLD == 0 {
-                        run = run.max(vals[j]);
-                        vals[j] = run;
+                    let mut best = v0[q - i];
+                    for o in q.saturating_sub(p.dil_n).max(i)..(q + p.dil_n + 1).min(e) {
+                        if fl[2 * o + s] & OLD == 0 {
+                            best = best.max(v0[o - i] - d * (o as f64 - q as f64).abs());
+                        }
                     }
+                    vals[j] = best;
                 }
             }
         }
@@ -353,9 +351,11 @@ fn prep(s: &Segs, i: usize, p: &ApplyPrm) -> Seg {
 }
 
 /// A point's state over its segments.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct St {
     lo: f64, lo_off: f64, up: f64, up_off: f64, w: f64,
+    // every pair's bounds and offsets (the conflict blend's weights: finish)
+    los: Vec<(f64, f64)>, ups: Vec<(f64, f64)>,
 }
 
 #[inline(always)]
@@ -434,8 +434,12 @@ fn pair(st: &mut St, g: &Seg, x: f64, y: f64, p: &ApplyPrm) {
         st.up = up;
         st.up_off = up_off;
     }
+    st.los.push((lo, lo_off));
+    st.ups.push((up, up_off));
 }
 
+/// m: the bounds within this of a conflict's limit weigh in its offset (finish)
+const CONFLICT_K: f64 = 1.0;
 /// m a corridor is loosened by at a side mix half today's (old / (1 - old) times this)
 const OLD_LOOSEN_M: f64 = 4.0;
 /// m a segment's line is carried on past its ends (the corridor's height there) ...
@@ -490,9 +494,26 @@ fn finish(st: &St, base: f64, g0: f64, p: &ApplyPrm) -> f64 {
         }
         v.clamp(st.lo, st.up)
     } else {
-        // two corridors disagree: between the binding limits by their offsets
-        let s = st.lo_off + st.up_off;
-        if s > 1e-12 { (st.up_off * st.lo + st.lo_off * st.up) / s } else { 0.5 * (st.lo + st.up) }
+        // two corridors disagree: between the binding limits by their offsets, each side's offset the mean of the
+        // bounds within CONFLICT_K of its limit, weighted by how near (a bound taking over from another changes it
+        // smoothly; the binding one's alone jumped there: Codex review of 861e550f). Summed in the pairs' order (the
+        // plan set's segment order: the same for the same segments in every set)
+        let wavg = |v: &[(f64, f64)], lim: f64, sign: f64| {
+            let (mut sw, mut so) = (0.0f64, 0.0f64);
+            for &(b, off) in v {
+                let u = 1.0 - sign * (lim - b) / CONFLICT_K;
+                if u > 0.0 {
+                    let w = u * u;
+                    sw += w;
+                    so += w * off;
+                }
+            }
+            if sw > 0.0 { so / sw } else { 0.0 }
+        };
+        let lo_off = wavg(&st.los, st.lo, 1.0);
+        let up_off = wavg(&st.ups, st.up, -1.0);
+        let s = lo_off + up_off;
+        if s > 1e-12 { (up_off * st.lo + lo_off * st.up) / s } else { 0.5 * (st.lo + st.up) }
     };
     if st.w >= 1.0 { g0 } else if st.w <= 0.0 { v } else { v + st.w * (g0 - v) }
 }
@@ -603,12 +624,20 @@ pub fn apply(px: ArrayView1<f64>, py: ArrayView1<f64>, base: ArrayView1<f64>, g0
     let mut res = vec![0f64; np_];
     let work = |b0: usize, b1: usize, r: &mut [f64]| {
         let off = pstart[b0] as usize;
+        let mut st = St { lo: f64::NEG_INFINITY, lo_off: 0.0, up: f64::INFINITY, up_off: 0.0, w: 0.0,
+                          los: Vec::new(), ups: Vec::new() };
         for b in b0..b1 {
             let list = &items[start[b] as usize..start[b + 1] as usize];
             for k in pstart[b] as usize..pstart[b + 1] as usize {
                 let i = porder[k] as usize;
                 let (x, y) = (px[i], py[i]);
-                let mut st = St { lo: f64::NEG_INFINITY, lo_off: 0.0, up: f64::INFINITY, up_off: 0.0, w: 0.0 };
+                st.lo = f64::NEG_INFINITY;
+                st.lo_off = 0.0;
+                st.up = f64::INFINITY;
+                st.up_off = 0.0;
+                st.w = 0.0;
+                st.los.clear();
+                st.ups.clear();
                 for &si in list {
                     pair(&mut st, &segs[si as usize], x, y, p);
                     if st.w >= 1.0 {

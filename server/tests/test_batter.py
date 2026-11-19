@@ -129,6 +129,26 @@ class Batter(unittest.TestCase):
         self.assertAlmostEqual(float(g[np.argmin(np.abs(ys - 0.0))]), 6.0, places=6)
         self.assertAlmostEqual(float(g[np.argmin(np.abs(ys - 30.0))]), 0.0, places=6)
 
+    def test_conflict_continuous(self):
+        # two high roads whose lower bounds cross (a road at 10 m and a crossing one at 11 m) while a low road's upper
+        # bound stays under both: the conflict between them changes binding road smoothly (Codex review of 861e550f)
+        def ground(x, y):
+            return np.zeros(np.broadcast(np.asarray(x), np.asarray(y)).shape)
+        a = road(0.0, 10.0, rid=1)
+        b = grading.Plan(np.column_stack((np.zeros(60), np.arange(0.0, 240.0, 4.0))), np.full(60, 11.0), 4.5,
+                         road_half=3.5)
+        b.rank, b.rid = 110, 2
+        c = road(26.0, 0.0, rid=3)
+        pack = packed([a, b, c], ground)
+        # (no step: the largest change between samples shrinks with their spacing, a jump would not)
+        def worst(x0, y0, x1, y1, step):
+            n = int(np.hypot(x1 - x0, y1 - y0) / step)
+            px, py = np.linspace(x0, x1, n), np.linspace(y0, y1, n)
+            return float(np.abs(np.diff(grading.grade_points(px, py, ground(px, py), pack))).max())
+        for line in ((6.0, 5.0, 6.0, 22.0), (12.0, 5.0, 12.0, 22.0), (5.0, 8.0, 30.0, 8.0), (5.0, 16.0, 30.0, 16.0)):
+            coarse, fine = worst(*line, 0.01), worst(*line, 0.001)
+            self.assertLess(fine, 0.2 * coarse + 1e-4, line)
+
     def test_old_sides_keep_today(self):
         # a plan of no feature (a tunnel's mouth: rank and rid < 0) and a sharp cutting's side: today's heights within
         # today's reach; a railway's bed (rank < 0, its feature's rid): the corridor
