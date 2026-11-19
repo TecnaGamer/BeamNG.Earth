@@ -2095,6 +2095,11 @@ local function updateWorld(dt)
     return
   elseif action == 'discard' then
     st.pending = nil -- the next frame prefetches at the player's position
+  elseif action == 'expire' then
+    log('W', 'beamngEarth', string.format('Rebase request %s expired after %.0f s; retrying near the player',
+      tostring(p.requestId), st.clock - p.sentAt))
+    st.pending = nil -- anchor_ready and anchor_error ignore a superseded request ID
+    st.retryAt = st.clock + rebase.RETRY_S
   end
 
   -- an unstable car (NaN position or speed, the frames before the game resets it): no block asked for from it (the

@@ -951,6 +951,9 @@ near-car rules apply only to prio-0 tiles, so a server that sends no prio disabl
     below-horizon view directions to the tangent), so its horizon already dips with height. In our
     frame z is the height above the anchor's tangent plane, i.e. ~ altitude (off by d²/2R: 17.7 m at the
     15 km rebase limit, a 0.002° dip error at 4 km altitude), and our tiles are curved with R = 6371 km.
+    A distance-driven rebase that is still preparing after 60 s expires once the player is past the
+    rebase distance. The client retries near the current player position after 5 s and ignores replies
+    for the expired request. The terrain build's heartbeat does not extend this deadline (see #1467).
     The running level has atmoPlanetRadius = 6360 km [V, in-game]: set it to 6371 (celestial.lua:392
     applyAtmosphere `planetRadiusKm`, or the field directly at level start) so both horizons use the same
     sphere. The visible mismatch today is the gap between the far field's 80 km edge and the sky's
