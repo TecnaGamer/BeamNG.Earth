@@ -14,6 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import geodesy  # noqa: E402
 import mapcells  # noqa: E402
 import seacarve  # noqa: E402
+import staging  # noqa: E402
 
 LAT0, LON0 = 39.28, -76.59
 SEA_LAT = 39.27         # the "sea": every point south of this latitude in the test's area
@@ -185,6 +186,16 @@ class SeaCarveTest(unittest.TestCase):
                 fh.truncate()
             with self.assertRaises((ValueError, OSError)):   # Windows mmap rejects a truncated mapping with OSError
                 seacarve._open_raw(p)
+            # a raster under 2 x 2 px (water()'s lookup reads 2 x 2 pixels): damaged, the raw copy and the npz alike
+            one = (np.ones((1, 1), np.float32),) * 2 + (np.zeros((1, 1), bool),)
+            q = os.path.join(d, "one.rawb.npy")
+            seacarve._write_raw(q, one)
+            with self.assertRaises(ValueError):
+                seacarve._open_raw(q)
+            z = os.path.join(d, "one.npz")
+            np.savez_compressed(z, any=True, depth=np.ones((1, 1), np.int16), level=one[1], outline=one[2])
+            self.assertIsNone(staging.read_npz(z, lambda f: (seacarve._npz_raster(f),)))
+            self.assertFalse(os.path.exists(z))
 
     def test_rasters_in_memory_as_blocks_bit_for_bit(self):
         """A cell decoded in a process is kept as its blocks (_in_blocks), not three full planes: the land blocks share
@@ -211,6 +222,34 @@ class SeaCarveTest(unittest.TestCase):
         self.assertIsNone(seacarve._in_blocks(None))
         odd = (np.zeros((3, 4), np.float32),) * 3                          # (not a square raster: as it is)
         self.assertIs(seacarve._in_blocks(odd), odd)
+
+    def test_lookup_from_the_blocks(self):
+        """water()'s cell lookup (earthfast.sea_cell_lookup) reads the block-stored raster: the depth bilinear across a
+        block edge and the raster's last pixels (clamped past it), the nearest pixel's level, only the cell's points
+        written; plain planes give the same; by the sea a raster without its bathymetry writes nothing (False)."""
+        n, b, c = 1026, seacarve.RAW_BLOCK_PX, seacarve.CELL_PX
+        jj, ii = np.mgrid[0:n, 0:n].astype(np.float32)
+        depth = (ii * 0.25 + jj * 0.5).astype(np.float32)
+        level = np.full((n, n), 30.0, np.float32)
+        level[:, 2 * b:] = 40.0
+        r = seacarve._in_blocks((depth, level, np.zeros((n, n), bool)))
+        kx, ky = 70, 90
+        fx = np.array([b - 0.25, 2 * b + 0.5, n + 3.0, 10.0])          # raster coords: pixel i's centre at i + 0.5
+        fy = np.array([b + 0.75, 5.5, n + 3.0, 10.0])
+        mx, my = fx + kx * c - 0.5, fy + ky * c - 0.5
+        cx = np.array([kx, kx, kx, kx + 1], np.int64)
+        cy = np.full(4, ky, np.int64)
+        for planes in (r, (depth, level)):
+            d, lv = np.full(4, -1, np.float32), np.full(4, -1, np.float32)
+            self.assertTrue(seacarve._lookup(planes, (mx, my, cx, cy), kx, ky, (d, lv), False))
+            want = [fx[0] * 0.25 + fy[0] * 0.5, fx[1] * 0.25 + fy[1] * 0.5, (n - 1) * 0.75, -1]   # (exact in f32)
+            self.assertEqual(d.tolist(), np.float32(want).tolist())
+            self.assertEqual(lv.tolist(), [30.0, 40.0, 40.0, -1])
+        sea = (depth, np.where(ii > 50, np.float32(seacarve.SEA_E), np.float32(30.0)).astype(np.float32))
+        d = np.full(4, -1, np.float32)
+        self.assertFalse(seacarve._lookup(seacarve._in_blocks(sea + (np.zeros((n, n), bool),)), (mx, my, cx, cy),
+                                          kx, ky, (d, d.copy()), True))
+        self.assertEqual(d.tolist(), [-1] * 4)
 
     def test_raw_copy_and_older_cells(self):
         """Read back memory-mapped (the raw copy) and from a cell cached before the raw copies (converted): the
