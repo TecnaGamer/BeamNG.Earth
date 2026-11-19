@@ -57,11 +57,15 @@ pub fn deck_trim_overlaps<'py>(
     let (owner, group, in_shared, targets) = (owner.as_array(), group.as_array(), in_shared.as_array(),
                                               targets.as_array());
     let pr = params.as_slice().map_err(|_| bad("params must be contiguous"))?;
-    if pr.len() != 4 && pr.len() != 5 {
-        return Err(bad("params needs 4 or 5 values"));
+    if pr.len() != 4 && pr.len() != 5 && pr.len() != 6 {
+        return Err(bad("params needs 4, 5 or 6 values"));
     }
     let (dz_lo, dz_hi, gap, shared) = (pr[0], pr[1], pr[2], pr[3] != 0.0);
-    let along_cos = if pr.len() == 5 { pr[4] } else { f64::NEG_INFINITY };
+    let along_cos = if pr.len() >= 5 { pr[4] } else { f64::NEG_INFINITY };
+    // (533, road revamp v2 P3d: a sixth value non-zero: a point whose nearest point on the other deck is that deck's
+    // very end lies past it, not over it: no cut (roadmesh's coplanar trim: a deck cut halfway toward the end of a
+    // deck merging into it left a hole past that end))
+    let past_end = pr.len() >= 6 && pr[5] != 0.0;
     let nr = off.len().saturating_sub(1);
     let np_ = l.nrows();
     if r.nrows() != np_ || z.len() != np_ || l.ncols() < 2 || r.ncols() < 2 || owner.len() != nr || group.len() != nr
@@ -143,6 +147,9 @@ pub fn deck_trim_overlaps<'py>(
                                 break;
                             }
                         }
+                    }
+                    if past_end && ((j == 0 && bt <= 0.0) || (j + 1 == segs.len() && bt >= 1.0)) {
+                        continue;
                     }
                     let j1 = (j + 1).min(oz.len() - 1);
                     let zo = oz[j] + bt * (oz[j1] - oz[j]);

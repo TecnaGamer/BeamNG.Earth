@@ -7382,6 +7382,8 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 528: the full Rust port's phase 2a (host/pyjson.rs: protocol.encode's bytes; host/pyjob.rs: PyJobs; host/msgs.rs:
     // far_tile, far_swap, far_remove, far_done, status and load_progress made in Rust); 527 is another branch's
     // 533: try598 (532) with 528 (port2a) merged: the version the protocol layer asks for (532 lacks it)
-    m.add("VERSION", 533)?;
+    // 534: v2 P3d on try598 (533): profile_solve's twins, junction nodes, cross-level sheet ends, approaches under
+    // decks; deck_trim_overlaps' coplanar mode
+    m.add("VERSION", 534)?;
     Ok(())
 }

@@ -784,7 +784,7 @@ def deck_sheets(parts, node=None):
 #   it to the split); anchors pinned in z and z'. Infeasible or over budget: today's heights, the status recorded.
 # Nothing built reads the result. PROFILE_STATS counts statuses and seconds; with BNE_ROADSHAPE_DEBUG=1 each record is
 # written as JSON under <cache>/debug/roadshape_profile/; PROFILE_SINKS (callables) get each record (rideprobe.py).
-PROFILE_KERNEL = 516        # earthfast.profile_members / profile_solve
+PROFILE_KERNEL = 533        # earthfast.profile_members / profile_solve (533: P3d's twins, nodes, approach clearance)
 PROFILE_FORMAT = 1          # the record's JSON
 PROF_STEP_M = 2.0           # m between knots
 PROF_JOIN_M = 1.0           # m: ends this near meet (a deck's and a ground line's, two decks')
@@ -1225,7 +1225,10 @@ def profile_chain(store, comp, parts, ground, reqs, short=False):
     nm = nd + len(ameta)
     deck = [1] * nd + [0] * len(ameta)
     depth = reqs.get("depth") if reqs else None
-    under = [float(roadsmod.crossing_clear(depth, getattr(sp, "cls", None))) for sp in specs] + [0.0] * len(ameta)
+    under = [float(roadsmod.crossing_clear(depth, getattr(sp, "cls", None))) for sp in specs]
+    # (P3d: an approach under a deck needs its own deck's clearance: the road going on from it, the solve's crossing
+    # test holds the pinned ground under the chain's decks)
+    under += [under[int(ameta[i][0])] for i in range(len(ameta))]
     level = [float(parts[k][4]) if len(parts[k]) > 4 and parts[k][4] is not None else 1.0 for k in keys]
     level += [0.0] * len(ameta)
     # (abutment bits: a deck's ends with an approach or nothing on; an approach's start, and its end at a deck)
