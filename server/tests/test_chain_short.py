@@ -16,6 +16,7 @@ import numpy as np
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 import revisit  # noqa: E402
 import roads  # noqa: E402
+import roadshape  # noqa: E402
 
 
 class _Store(roads.BridgeProfiles):
@@ -73,6 +74,15 @@ class _Same:
 
 
 class ChainShortTest(unittest.TestCase):
+    # (the chains' bookkeeping, whatever BNE_ROADSHAPE says: the stores here are stubs without a real frame, and the
+    # shaped decks (decks / sheet, in the Revamped roads setting) read heights through it; their shapes have tests of
+    # their own: test_roadshape*)
+    def setUp(self):
+        for name in ("DECKS", "SHEET", "SKEW"):
+            p = mock.patch.object(roadshape, name, False)
+            p.start()
+            self.addCleanup(p.stop)
+
     def test_a_short_solve_is_short_again_for_a_later_scope(self):
         for kind, field in (("plain", "n"), ("lidar", "lidar")):
             st = _Store(kind)
