@@ -35,7 +35,9 @@ import dnp
 
 MODE = os.environ.get("BNE_ROADSHAPE", "off")
 DECKS = MODE in ("decks", "sheet")     # (P2's sheet builds on P1b's decks)
-SHEET = MODE == "sheet"                 # P2a: the fork records, written beside the build (shadow only, cell_forks)
+SHEET = MODE == "sheet"                 # P2b: exits off bridges as one deck (deck_sheets)
+DEBUG = os.environ.get("BNE_ROADSHAPE_DEBUG", "") in ("1", "on", "true")   # P2a's fork records written beside the
+                                        # build (shadow_forks, forkprobe's input): a developer's switch, never a player's
 SKEW = DECKS and os.environ.get("BNE_DECK_SKEW", "on") not in ("off", "0", "false")
 
 CHORD_TOL_M = 0.01          # m: a row piece's largest departure from the curve (the design's 2 cm chord rule, less the

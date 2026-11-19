@@ -1638,7 +1638,7 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
     towns = (town_signs(frame, tx, ty, out_dir, vfs_dir, town_faces)
              if towns_on and props is not None and out_dir is not None else None)
     import roadshape
-    if roadshape.SHEET:     # (road revamp v2 P2a: the tile's cells' fork records beside the build, shadow only)
+    if roadshape.SHEET and roadshape.DEBUG:     # (v2 P2a: the cells' fork records beside the build, a debug aid only)
         roadshape.shadow_forks(cell_keys, cell_fn, _s.cache_dir)
     chunks = roadsmod.build_tile(frame, tx, ty, cells, elev, urban, walks=walks, deck_context=ctx, bridges=bridges, widths=_s.widths,
                                  sign_obstacles=sign_obstacles,

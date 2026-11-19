@@ -12069,7 +12069,9 @@ def _bridge_chunks(frame, bseen, elev, exact, bridges=None, cells=None, walks=No
                        if np.isfinite(z).all()]
         dd = getattr(bridges, "depth_of", None)
         # (BNE_ROADSHAPE=sheet: the forks from their own wider input, never drawn: _sheet_window_parts)
-        wide = _sheet_window_parts(bridges, frame, cells, exact) if roadshape.SHEET else None
+        # (no cost where no fork can touch the tile: every tile a fork reaches draws its one-way branch)
+        wide = (_sheet_window_parts(bridges, frame, cells, exact)
+                if roadshape.SHEET and any(_travel(sp) != 0 for _f, sp, _p, _l in got) else None)
         if shaped:
             return _deck_chunks(got, exact, bridges._ground, {d[0]: dd(d[0]) for d in got} if dd else None, walks,
                                 shift_of, width_of, context_m, marks_of=marks_of, shapes=shapes, sheet_wide=wide)
@@ -12776,8 +12778,8 @@ def _sheet_records(src):
             p = xy[n]
             if float(_seg_dist(qa[None, :], p[:-1], p[1:]).min()) <= r_:
                 local.append(uniq[n])
-        if len(local) < 2:
-            continue
+        if sum(1 for i in local if _travel(src[i][1]) != 0) < 2:
+            continue                # (a fork needs a one-way branch and a one-way through deck)
         got, dz = roadshape.deck_sheets([(src[i][0], src[i][1], src[i][2], float(src[i][1].width) / 2) for i in local],
                                         node=q)
         for r in got:
@@ -12799,6 +12801,8 @@ def _sheet_plan(decks, walks, shapes, wide=None):
     cover)], decks), indices into decks. Records with a part with sidewalks or a shape (P1b's simple decks), and the
     tags of records whose through deck or a covered part is not drawn here, are left out (its pins and cut kept: its
     union's rows lie beside the through deck, so a tile drawing them draws it). Pure given its inputs."""
+    if not any(_travel(d[1]) != 0 for d in decks):
+        return [], decks        # (no one-way deck drawn here: no fork reaches this tile, nothing to do)
     drawn = {}
     for i, (fid, spec, pts, _lon) in enumerate(decks):
         if len(pts) >= 2:
