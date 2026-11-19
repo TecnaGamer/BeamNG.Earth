@@ -687,7 +687,10 @@ def _native_rings(frame, rings):
 def enu_rings(feats, frame, rings):
     """[np.column_stack(enu_xy(feats, frame, ring)) for ring in rings]: (k, 2) east / north of each lon/lat ring, the
     same numbers, in one native call (earthfast.enu_rings) instead of a call per ring (~434k enu_xy calls a three-place
-    cold road tile set, their own cost the wrapping: railways.crossings, 2026-11-19)."""
+    cold road tile set, their own cost the wrapping: railways.crossings, 2026-11-19). Each point by geodetic_to_enu's
+    operations, as enu_xy's own conversion and xy_in's first frame have them (xy_in's later frames: the same operations
+    through the kept ECEF, the same numbers; only a NaN's payload, from a NaN coordinate, may differ there, as it already
+    did between xy_in's two ways by the order frames were asked in)."""
     rings = rings if type(rings) is list else list(rings)
     got = _native_rings(frame, rings)
     if got is None:

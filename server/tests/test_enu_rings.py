@@ -81,6 +81,20 @@ class EnuRingsTest(unittest.TestCase):
         self.assertEqual(mapgeom.enu_rings(self.f, fr, []), [])
         self.assertEqual(mapgeom.enu_bounds(self.f, fr, []).shape, (0, 4))
 
+    def test_long_batches_in_chunks(self):
+        # (more points than one chunk of the kernels' copy (65536), and one ring longer than a chunk on its own)
+        rng = np.random.default_rng(5)
+        rings = [np.array([16.37, 48.21]) + rng.normal(0, 0.01, (int(k), 2)) for k in rng.integers(2, 4000, 60)]
+        rings.insert(17, np.array([16.37, 48.21]) + rng.normal(0, 0.01, (70000, 2)))
+        fr = self.frames[0]
+        got = mapgeom.enu_rings(self.f, fr, rings)
+        bb = mapgeom.enu_bounds(self.f, fr, rings)
+        self.assertEqual(len(got), len(rings))
+        for r, xy, b in zip(rings, got, bb):
+            e, n = mapgeom.enu_xy(self.f, fr, r)
+            self.assertTrue(_same(xy, np.column_stack((e, n))))
+            self.assertTrue(np.array_equal(b, [e.min(), e.max(), n.min(), n.max()]))
+
     def test_other_frames_and_types_ring_by_ring(self):
         class Half(geodesy.EnuFrame):           # (a frame converting its own way: enu_xy's, ring by ring)
             def geodetic_to_enu(self, lat, lon, h=0.0):
