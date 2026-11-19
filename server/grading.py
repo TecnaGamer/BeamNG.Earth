@@ -178,6 +178,7 @@ BATTER_CORE_BLEND_M = 1.0   # m past a core today's heights fade into the corrid
 BATTER_OLD_FADE_M = 10.0    # m past today's reach (T_MAX) a side that keeps today's grading fades into the corridor
 BATTER_BIN_M = 8.0          # m, the apply's bins
 BATTER_CHUNK = 256          # natural ground samples read at a time where a read of them all failed (_batter_of)
+BATTER_WALL_PAD_M = 2.0     # m round a ray's box a cell's walls are tested against it (_batter_rays)
 ROAD_LIFT = 0.04            # m the physics ground is raised under roads (see Grader.apply)
 BLEND_R = 4.0               # m: roads near each other blend their targets by 1 / (1 + (d / BLEND_R)^2)
 PROFILE_ZOOM = int(os.environ.get("BNE_DEM_ZOOM", "16"))   # DEM zoom of the profiles (one zoom for every caller)
@@ -6909,10 +6910,14 @@ class _Planner:
         request short (revisit.fault: not kept, made again). True when the set may be kept."""
         import revisit
         short = [False]
+        # (a read that falls back to finite heights while it says so, a fault: Hong Kong's DEM, the lidar rule)
+        f0, l0 = revisit.thread_faults(), revisit.thread_lidar_faults()
 
         def elev_xy(x, y):
-            la, lo = enu_to_ll_dense(self.frame, x, y)
-            la, lo = np.asarray(la), np.asarray(lo)
+            # (each point's own conversion: enu_to_ll_dense's grid and its exact branch follow the whole batch's extent
+            # and count, so a segment's samples moved by bits with the plan set: Codex review of ff9d2c55)
+            la, lo, _ = self.frame.enu_to_geodetic(x, y, 0.0)
+            la, lo = np.asarray(la, np.float64), np.asarray(lo, np.float64)
             try:
                 return np.asarray(self.elev(la, lo), np.float64)
             except Exception as e:      # (the ground not at hand somewhere: read in chunks, the rest NaN)
@@ -6938,6 +6943,8 @@ class _Planner:
             _caught(e)
             pack.bt = None
             short[0] = True
+        if revisit.thread_faults() != f0 or revisit.thread_lidar_faults() != l0:
+            short[0] = True
         if short[0]:
             revisit.fault(here=True)
             return False
@@ -6952,14 +6959,23 @@ class _Planner:
             return out
         end = org + dirs * reach
         both = np.concatenate([org, end])
-        la, lo = enu_to_ll_dense(self.frame, both[:, 0], both[:, 1])
+        la, lo, _ = self.frame.enu_to_geodetic(both[:, 0], both[:, 1], 0.0)     # (each point's own: elev_xy)
         la, lo = np.asarray(la, np.float64), np.asarray(lo, np.float64)
-        pad = 2.0 / 111320.0
-        keys = sorted(mapcells.cells_near_points(la, lo, pad, pad / max(0.05, dmath.cos(math.radians(float(
-            np.mean(la)))))), key=str)
+        # (each ray against the walls of every cell its own box meets within BATTER_WALL_PAD_M, decided by that ray
+        # alone: a diagonal ray crossing a cell near its corner, whatever other rays share the call. The cells
+        # gathered from the boxes' four corners with a wider margin than any ray's own test, so none a ray's test
+        # takes is ever missing)
+        k = len(org)
+        la0, la1 = np.minimum(la[:k], la[k:]), np.maximum(la[:k], la[k:])
+        lo0, lo1 = np.minimum(lo[:k], lo[k:]), np.maximum(lo[:k], lo[k:])
+        pad = BATTER_WALL_PAD_M / 111320.0
+        padlo = pad / np.maximum(0.05, dnp.cos(np.radians(np.maximum(np.abs(la0), np.abs(la1)))))
+        wide = 5.0 * pad
+        cla, clo = np.r_[la0, la0, la1, la1], np.r_[lo0, lo1, lo0, lo1]
+        keys = sorted(mapcells.cells_near_points(cla, clo, wide, wide / max(0.05, dmath.cos(math.radians(float(
+            np.max(np.abs(la))))))), key=str)
         if hasattr(widths, "prefetch"):
             widths.prefetch(keys)
-        k = len(org)
         for key in keys:
             frame_c, walls = widths._walls(key)
             if getattr(walls, "stand_in", False):
@@ -6967,8 +6983,7 @@ class _Planner:
             if not len(walls.segs):
                 continue
             lon0, lat0, lon1, lat1 = key.bounds()
-            near = ~((np.maximum(la[:k], la[k:]) < lat0 - pad) | (np.minimum(la[:k], la[k:]) > lat1 + pad)
-                     | (np.maximum(lo[:k], lo[k:]) < lon0 - pad) | (np.minimum(lo[:k], lo[k:]) > lon1 + pad))
+            near = ~((la1 < lat0 - pad) | (la0 > lat1 + pad) | (lo1 < lon0 - padlo) | (lo0 > lon1 + padlo))
             if not near.any():
                 continue
             idx = np.nonzero(near)[0]

@@ -162,6 +162,8 @@ pub fn params(za: ArrayView1<f64>, zb: ArrayView1<f64>, rk: ArrayView1<i64>, rid
     let mut r = vec![0.0f64; n * 2];
     let mut fl = vec![0u8; n * 2];
     let mut soft = vec![false; n * 2];
+    // (each side's hard limit: the reach cap, and a metre short of the first building on that side)
+    let lim: Vec<f64> = (0..n * 2).map(|j| p.r_max.min(bld[j] - p.bld_gap)).collect();
     for i in 0..n {
         let z = 0.5 * (za[i] + zb[i]);
         let urban = bld[2 * i] <= p.urban_m || bld[2 * i + 1] <= p.urban_m;
@@ -289,6 +291,10 @@ pub fn params(za: ArrayView1<f64>, zb: ArrayView1<f64>, rk: ArrayView1<i64>, rid
         }
         i = e;
     }
+    // (the dilation never carries a reach past a side's own building: Codex review of ff9d2c55)
+    for j in 0..n * 2 {
+        r[j] = r[j].min(lim[j]);
+    }
     // at each segment's ends: the mean of its and its neighbour's along the plan (both corridor sides), so the slope and
     // reach run on continuously through a vertex (a step there creased the ground along the joint's bisector)
     let mut me = vec![0.0f64; n * 4];
@@ -309,8 +315,8 @@ pub fn params(za: ArrayView1<f64>, zb: ArrayView1<f64>, rk: ArrayView1<i64>, rid
             }
             me[4 * i + s] = ma;
             me[4 * i + 2 + s] = mb;
-            re[4 * i + s] = ra;
-            re[4 * i + 2 + s] = rb;
+            re[4 * i + s] = ra.min(lim[j]);       // (nor the end averaging)
+            re[4 * i + 2 + s] = rb.min(lim[j]);
         }
     }
     (me, re, fl)
@@ -411,6 +417,11 @@ fn pair(st: &mut St, g: &Seg, x: f64, y: f64, p: &ApplyPrm) {
     if u > 0.0 {
         f += p.close_k * u * u / (1.0 - u).max(1e-9);
     }
+    // (across an end cap whose other side keeps today's grading: loosened to nothing as the mix turns to that side, so
+    // the corridor never stops at once where the cap meets that side, past today's fade: Codex review of ff9d2c55)
+    if old > 0.0 {
+        f += OLD_LOOSEN_M * old / (1.0 - old);
+    }
     let lo_off = p.s_lo * xs + f;
     let up_off = p.s_up * xs + f;
     let lo = z - lo_off;
@@ -425,6 +436,8 @@ fn pair(st: &mut St, g: &Seg, x: f64, y: f64, p: &ApplyPrm) {
     }
 }
 
+/// m a corridor is loosened by at a side mix half today's (old / (1 - old) times this)
+const OLD_LOOSEN_M: f64 = 4.0;
 /// m a segment's line is carried on past its ends (the corridor's height there) ...
 const EXT_M: f64 = 4.0;
 /// ... at this grade at most (gradebins' EXTRAP_MAX_GRADE: a few cm long segment holding a step)

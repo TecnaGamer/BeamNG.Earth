@@ -174,6 +174,41 @@ class Batter(unittest.TestCase):
         self.assertTrue((m[:, [bs, 2 + bs]] >= 1 / grading.BATTER_URBAN).all())
         self.assertTrue((r[:, [bs, 2 + bs]] <= 12.0 - grading.BATTER_BLD_GAP_M).all())
 
+    def test_building_caps_the_dilated_reach(self):
+        # one segment sees a building 10 m out; its neighbours, none, and a deep fill that needs a long reach: the
+        # dilation and the end averaging never carry that segment's reach past its building (Codex review of ff9d2c55)
+        def ground(x, y):
+            return -0.6 * np.abs(np.asarray(y))
+        p = road(z=0.0)
+        mid = (len(p.xy) - 1) // 2
+
+        def rays(org, dirs, reach):
+            out = np.full(len(org), np.inf)
+            out[2 * mid] = 10.0             # (that segment's left side)
+            return out
+        m, r, fl = packed([p], ground, rays).bt
+        self.assertLessEqual(float(r[mid, 0]), 10.0 - grading.BATTER_BLD_GAP_M)
+        self.assertLessEqual(float(r[mid, 2]), 10.0 - grading.BATTER_BLD_GAP_M)
+        self.assertGreater(float(r[mid - 3, 0]), 15.0)
+
+    def test_mixed_cap_continuous(self):
+        # a raised road over flat ground ending in the open, its left side today's (a long sharp cutting), its right
+        # the corridor: round its end cap the ground has no step, past today's fade too
+        def ground(x, y):
+            return np.zeros(np.broadcast(np.asarray(x), np.asarray(y)).shape)
+        p = road(z=8.0, x=(-200.0, 0.0))
+        n = len(p.xy) - 1
+        cut = np.full((n, 6), np.nan)
+        cut[:, 0], cut[:, 1], cut[:, 2] = 4.0, 12.0, 9.0
+        p.cut = cut
+        pack = packed([p], ground)
+        self.assertTrue((pack.bt[2][:, 0] != 0).all() and (pack.bt[2][:, 1] == 0).all())
+        for rad in (20.0, 26.0, 30.0):          # (past T_MAX + the old fade: 22 m + the core)
+            a = np.linspace(-np.pi / 2, np.pi / 2, 4001)
+            px, py = rad * np.cos(a), rad * np.sin(a)
+            g = grading.grade_points(px, py, ground(px, py), pack)
+            self.assertLess(float(np.abs(np.diff(g)).max()), 0.05, rad)
+
     def test_close_open(self):
         # a sharp cutting in short runs along a plan (3 segments on, 5 off): no run, the corridor all along; a long run
         # (its gaps of one segment closed): today's

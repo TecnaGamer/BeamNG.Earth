@@ -888,6 +888,7 @@ def bank_check(np, roads, gradingmod, blockworker, s, g, frame, ground, deck_lis
         return GS[int(si[np.argmin(d)])] if d.min() < 4.0 else None
 
     sides, runs = [], []
+    cov = {"profiles": 0, "visible": 0, "censored": 0, "scored": 0, "short_runs": 0}
     lim = Rb - 47.0
     i40 = int(np.searchsorted(offs, 40.0))
     o1 = np.arange(0.0, 41.0, 1.0)
@@ -945,6 +946,12 @@ def bank_check(np, roads, gradingmod, blockworker, s, g, frame, ground, deck_lis
             day = offs[lc] + frac * (offs[lc + 1] - offs[lc])
             vis = np.where(own, dn, 0.0).max(1) >= BANK_DAY_MIN
             okd = (lastg >= 0) & (lastg + hold < np.minimum(first, kk)) & vis & inn
+            # (coverage: profiles in the place, those graded visibly, those whose daylight line runs out of the profile's
+            # own reach (censored: not scored), those scored in runs and those in runs too short: Codex review of
+            # ff9d2c55, a wider grading must not score better by dropping its worst profiles unseen)
+            cov["profiles"] += int(inn.sum())
+            cov["visible"] += int((vis & inn).sum())
+            cov["censored"] += int((vis & inn & ~okd).sum())
             i = 0
             while i < m_:           # runs of profiles with a daylight line
                 if not okd[i]:
@@ -953,6 +960,10 @@ def bank_check(np, roads, gradingmod, blockworker, s, g, frame, ground, deck_lis
                 j = i
                 while j + 1 < m_ and okd[j + 1]:
                     j += 1
+                if t[j] - t[i] < BANK_RUN_MIN_M:
+                    cov["short_runs"] += j - i + 1
+                else:
+                    cov["scored"] += j - i + 1
                 if t[j] - t[i] >= BANK_RUN_MIN_M:
                     tt, dd = t[i:j + 1], day[i:j + 1]
                     cs = np.r_[0.0, np.cumsum(dd)]
@@ -1000,7 +1011,7 @@ def bank_check(np, roads, gradingmod, blockworker, s, g, frame, ground, deck_lis
                                  int(side)]])
     sides.sort()
     runs.sort(key=lambda r: (-r[0], r[5]))
-    return {"sides": sides, "runs": runs, "n": {"plans": len(plans), "sides": len(sides), "runs": len(runs)}}
+    return {"sides": sides, "runs": runs, "n": dict({"plans": len(plans), "sides": len(sides), "runs": len(runs)}, **cov)}
 
 
 def bank_summary(sides, runs):
