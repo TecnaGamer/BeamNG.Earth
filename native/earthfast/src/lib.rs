@@ -6725,7 +6725,11 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // centimetre key in a RailNode, the last of equal keys; RailNode.find, railprofile._find's lookup)
     m.add_function(wrap_pyfunction!(stationzone::station_zone, m)?)?;
     // 494: the full port's busstationmesh.zone loops and _clip_cell (stationzone::station_zone: a station's walkable
-    // ground, kerb walls and tactile strips from walk_field's lattice in one call). 493 is another branch's
+    // ground, kerb walls and tactile strips from walk_field's lattice in one call)
+    m.add_function(wrap_pyfunction!(structures::abutments::structure_abutments, m)?)?;
+    // 493: road revamp RS step S2b part 2a (structures::abutments::structure_abutments: one abutment height per
+    // structure end, grading's plans on BNE_DECK_STRUCT=abut)
+    // 494 covers 493 (both merged)
     m.add("VERSION", 494)?;
     Ok(())
 }
