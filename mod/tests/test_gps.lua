@@ -443,7 +443,9 @@ end
 -- Maneuvers follow the accepted plan, survive a failed replan and disappear with a new destination.
 do
   local savedCore, savedGet = rawget(_G, 'beamngEarth_core'), rawget(_G, 'getPlayerVehicle')
-  local check, reroute = G.CHECK_S, G.REROUTE_S
+  local check, savedClock = G.CHECK_S, os.clock
+  local clock = 0
+  os.clock = function() return clock end
   G.CHECK_S = 0
   local answer, requests = nil, 0
   beamngEarth_core = {
@@ -461,17 +463,15 @@ do
   local first = G.route()
   T.check(first and first.steps[1].modifier == 'right', 'accepted route keeps its maneuvers')
   player.y, player.lat = 300, 0.3
-  G.REROUTE_S = -1
+  clock = clock + G.REROUTE_S + 1
   G.update(anchor, player)
-  G.REROUTE_S = reroute
   T.check(requests == 2, 'off-route replan requested')
   answer = { error = 'HTTP 429', points = {} }
   G.update(anchor, player)
   T.check(G.route().version == first.version and G.route().steps[1].modifier == 'right',
     'failed replan retains the current plan and its maneuvers')
-  G.REROUTE_S = -1
+  clock = clock + G.REROUTE_S + 1
   G.update(anchor, player)
-  G.REROUTE_S = reroute
   answer = { points = { { 0.3, 0 }, { 0, 1 } }, dist = 1100, dur = 70,
     steps = { { type = 'merge', modifier = 'left' } } }
   G.update(anchor, player)
@@ -481,7 +481,7 @@ do
   T.check(G.route() == nil, 'new destination drops the old maneuvers')
   G.clear()
   T.check(G.route() == nil, 'clear has no maneuver data')
-  G.CHECK_S, G.REROUTE_S = check, reroute
+  G.CHECK_S, os.clock = check, savedClock
   beamngEarth_core, getPlayerVehicle = savedCore, savedGet
 end
 -- Marker simplification must not remove topology: nearby nodes may still be required edges.

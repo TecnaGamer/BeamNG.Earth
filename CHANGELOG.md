@@ -2,6 +2,11 @@
 
 What changed in each release of BeamNG.Earth, newest first.
 
+## Unreleased
+
+- Road GPS keeps a planned route in flight without repeatedly asking for a new one. If the provider's daily quota is
+  exhausted, the map gives the reset time and waits until then to request another road route.
+
 ## 1.10.1 beta (2026-11-15)
 
 > **Join the TGForever Discord, [discord.gg/tgf](https://discord.gg/tgf), to chat, get help, report bugs or help

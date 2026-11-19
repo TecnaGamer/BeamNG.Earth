@@ -287,6 +287,7 @@ SERVER_TO_MOD = {
     "areas": {"areas": F(list), "pinnedBytes": F(int, OPT), "result": F(dict, OPT),
               "fast": F(str, OPT)},        # (the area running fast, "" none: the mod pauses the game meanwhile)
     "route_result": {"id": F(int), "points": F(list), "dist": F(NUM), "dur": F(NUM), "error": F(str, OPT),
+                      "retryAt": F(int, OPT),        # daily routing quota resets at this Unix time
                       "elev": F((list, dict), OPT),   # OSRM; elev: the map's profile (routing.resample, dem.sample)
                       "legs": F(list, OPT),           # with via: [[dist_m, dur_s], ...] per leg
                       "steps": F(list, OPT)},         # OSRM maneuvers (routing.parse; the API's gpsRoute().steps)

@@ -59,7 +59,11 @@ local function fixture(path, y, radius, configure)
     end,
   } end
   beamngEarth_core = {
-    requestRoute = function() f.answer = f.route; return true end,
+    requestRoute = function()
+      f.routeRequests = (f.routeRequests or 0) + 1
+      f.answer = f.route
+      return true
+    end,
     takeRoute = function() local answer = f.answer; f.answer = nil; return answer end,
     serverHealthy = function() return f.healthy end,
   }
@@ -788,6 +792,46 @@ do
  end
 end
 
+
+-- A road route is useful for planning even in flight, but falling away from
+-- that route in the air must not keep consuming the shared provider quota.
+do
+  local oldRay = castRayStatic
+  castRayStatic = function(p, _, length) return math.min(p.z, length) end
+  local f = fixture()
+  f.gps.setAutodrive(false)
+  local calls = f.routeRequests
+  f.y, f.z = 300, 3400
+  f:step(f.gps.REROUTE_S + 1)
+  T.check(f.routeRequests == calls and f.gps.route() ~= nil, 'preserve the route without replanning from the air')
+  f.z = 2
+  f:step()
+  T.check(f.routeRequests == calls + 1, 'the same off-route position replans close to the surface')
+  castRayStatic = oldRay
+end
+
+-- Changing a destination must not restart requests against a daily limit;
+-- the first eligible check after the reset should plan the new destination.
+do
+  local oldTime = os.time
+  local wall = 80000
+  os.time = function() return wall end
+  local f = fixture()
+  f.gps.setAutodrive(false)
+  local good = f.route
+  f.route = { points = {}, error = 'daily limit reached', retryAt = 86400 }
+  f.gps.setDestination(0, 0.08, 'first destination')
+  f:step(); f:step()
+  local calls = f.routeRequests
+  f.gps.setDestination(0, 0.09, 'new destination')
+  f:step(f.gps.ROUTE_RETRY_MAX_S + 1)
+  T.check(f.routeRequests == calls and not f.gps.status().planning, 'quota defers new destinations as well as retries')
+  f.route, wall = good, 86400
+  f:step(); f:step()
+  T.check(f.routeRequests == calls + 1 and f.gps.route() ~= nil and f.gps.status().routeRetryAt == nil,
+    'road guidance and normal status resume at the UTC quota reset')
+  os.time = oldTime
+end
 
 os.clock, package.loaded['beamngEarth/navgraph'] = savedClock, savedNav
 T.done('test_gps_autodrive')
