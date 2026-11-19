@@ -100,6 +100,13 @@ end
 T.check(roads.onTile({ anchorId = 1, key = key, path = '/s/rg.json', n = 0, frame = { clat, clon }, h = 'abc' }, 1, A),
   'a geotile accepted')
 run(1, A)
+do  -- the deck guard's grid (deckguard.lua scanSpan): this tile in, its neighbour missing, in the geotiles' own cells
+  local fx, fy = roads.deckGrid.xy(car.x, car.y)
+  T.check(math.floor(fx) == gx and math.floor(fy) == gy, 'deckGrid.xy: the geotile under the point')
+  T.check(roads.deckGrid.at(gx, gy) == 'ready' and roads.deckAt(car.x, car.y) == 'ready', 'deckGrid.at: the tile in')
+  local st, k = roads.deckGrid.at(gx + 1, gy)
+  T.check(st == 'missing' and k == geotile.key(gx + 1, gy), 'deckGrid.at: its neighbour missing, by its key')
+end
 local bc = objsWith('rg_bldcol')
 T.check(#bc == 1 and #objsWith('rg_bld.') == 1 and #objsWith('rg_deck') == 1, 'its parts made once')
 local sign = objsWith('rg_signs')[1]
@@ -272,7 +279,10 @@ roads.reset()
 -- collider defers on the tile, a near one marks at once, deferred dirt is promoted when the player arrives, a
 -- rebuild in between makes it solid (be:reloadCollision is global), and a rebase still rebuilds at once
 do
-  roads.RELOAD_EVERY_S, roads.COLLIDE_CHECK_S = 0, 0
+  -- (-1, not 0: the rebuild rule is sinceReload() > RELOAD_EVERY_S, and a CI runner without socket times with
+  -- os.clock, 1 ms steps on Windows: two rebuilds in one ms read 0 apart and 0 > 0 kept the second one back,
+  -- windows-latest 2026-11-17 "reloads 1, want 2")
+  roads.RELOAD_EVERY_S, roads.COLLIDE_CHECK_S = -1, 0
   -- (a rebuild waits after RELOAD_ROOM_MS of imports in a frame, measured on the wall clock: a slow CI runner's frames
   -- spent that and the promoted rebuild came after run()'s updates, windows-latest 2026-11-10)
   local room = roads.RELOAD_ROOM_MS
@@ -340,6 +350,27 @@ do
   run(3, A)
   rc(r0 + 5, 'a rebase forces the rebuild')
   roads.RELOAD_ROOM_MS = room
+  roads.reset()
+end
+
+-- a geotile's pending colliders due for another player's car (roads.focusDue): its focus carries no z (far cars'), the
+-- pieces' boxes are in the tile's frame (a 3D inverse transform): measured, not an error (Codex review, 2026-11-14)
+do
+  local cx, cy = A:geodeticToWorld(clat, clon, 0)
+  local every = roads.RELOAD_EVERY_S
+  roads.RELOAD_EVERY_S = 1e9                 -- (no timed rebuild: what is made stays pending)
+  car.x, car.y = cx + 300, cy                -- (near enough to make them, beyond needReach)
+  T.check(roads.onTile({ anchorId = 1, key = key, path = '/s/rg.json', n = 0, frame = { clat, clon }, h = 'abc' }, 1, A),
+    'the geotile again')
+  for _ = 1, 40 do roads.update(gov, 1, car, nil, A) end
+  roads.setFoci({ { x = cx, y = cy, r = 320, trees = true, kind = 'player' } })
+  local ok, due = pcall(roads.focusDue, roads.needDistance)
+  T.check(ok, 'focusDue with a focus without z: ' .. tostring(due))
+  local n = roads.needDistance(1e9, { x = cx, y = cy, z = 0 })
+  T.check(n < 200, 'its colliders pending, measured from the focus (' .. tostring(n) .. ' m)')
+  T.check(due == true, 'due for the other player\'s car at the tile')
+  roads.setFoci({})
+  roads.RELOAD_EVERY_S = every
   roads.reset()
 end
 

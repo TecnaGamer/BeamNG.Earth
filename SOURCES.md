@@ -43,12 +43,14 @@ For the OpenStreetMap keys read by the server and weekly data builders, see the
 
 | Source | Address | What it builds | If it does not answer | Status line |
 |---|---|---|---|---|
-| Mapterhorn terrain tiles ([attribution](https://mapterhorn.com/attribution)) | `tiles.mapterhorn.com` | The shape of the ground everywhere: hills, valleys, road cuttings. Mapterhorn combines the best national elevation data (as fine as 1 m in parts of Europe and the US) with global data elsewhere. | New places use the coarser backup below. | named |
-| Mapterhorn terrain tiles, zooms 0-12, on BeamNG.Earth's own tile host | `tiles.tgforever.net` | The same tiles as above for the coarser zooms (the distant terrain, and the ground every deeper zoom starts from), repacked from Mapterhorn's planet archive into packs of 64 tiles a request (Cloudflare R2). Only while the project's switch file (cdn.json in BeamNG.Earth-data) turns it on; the deeper zooms always come from Mapterhorn. | Mapterhorn's own tile server, as before. | named |
-| Mapterhorn coverage list | `download.mapterhorn.com` | Which areas have detailed heights, so the server does not ask for tiles that do not exist. Fetched about once a week. | New places may load a little slower. | named |
+| Mapterhorn's regional elevation archives ([attribution](https://mapterhorn.com/attribution)), on Source Cooperative's mirror | `data.source.coop` | The detailed heights (zooms 13 and deeper: national lidar, as fine as 1 m in parts of Europe and the US): the same tiles as Mapterhorn's tile server, read straight out of its regional PMTiles archives in a few range reads per place, as Mapterhorn's maintainer asked apps to do. A copy is used only once it is proven to be the release Mapterhorn's file list names (its fingerprint is the list's checksum, or the project's checked list of copies says so); otherwise the tile server below is used. | Mapterhorn's own download host below. | named |
+| Mapterhorn's regional elevation archives, and its coverage list | `download.mapterhorn.com` | The same archives (the second source), and the list of which areas have detailed heights (so the server does not ask for tiles that do not exist; fetched about once a week). | Mapterhorn's tile server (detailed heights); without the list, new places may load a little slower. | named |
+| Mapterhorn terrain tiles | `tiles.mapterhorn.com` | The shape of the ground everywhere: hills, valleys, road cuttings. Mapterhorn combines the best national elevation data with global data elsewhere. Now only the last resort for the detailed zooms (when neither archive host can be read; never for downloads ahead of need), and for the coarse zooms while the project's tile host below is off. | New places use the coarser backup below. | named |
+| Mapterhorn terrain tiles, zooms 0-12, on BeamNG.Earth's own tile host | `tiles.tgforever.net` | The same tiles as above for the coarser zooms (the distant terrain, and the ground every deeper zoom starts from), repacked from Mapterhorn's planet archive into packs of 64 tiles a request (Cloudflare R2). Only while the project's switch file (cdn.json in BeamNG.Earth-data) turns it on; the deeper zooms come from Mapterhorn's archives above. | Mapterhorn's own tile server, as before. | named |
 | AWS Terrain Tiles (backup) | `s3.amazonaws.com` | Coarser heights (SRTM and similar) where Mapterhorn has none or does not answer. | Only matters while Mapterhorn is down too; with both down, new places have no terrain. | named |
 | Copernicus DEM GLO-30 | `copernicus-dem-30m.s3.amazonaws.com` | Heights near the North and South Poles, where the other sources stop. | No terrain past about 85° north or south. | named |
 | NRCan HRDEM mosaic (CanElevation) | `canelevation-dem.s3.ca-central-1.amazonaws.com` | Canada's lidar ground heights: the distant terrain is lined up with them (and, opt-in, the near terrain read from them). | Canada's distant terrain may stand on the forest tops. | optional |
+| BeamNG.Earth's own lidar road heights (from the USGS 3DEP point clouds, public domain) | `tiles.tgforever.net` | In the US, the bridge deck and approach heights from the 3DEP lidar (the next row), measured once by the project's builder for popular places: a few small files per place instead of the point clouds. Only while the project's switch file (cdn.json in BeamNG.Earth-data) turns it on, and only where they were measured along the same map lines and on the same ground heights as yours. | The point clouds below, as before. | named |
 | USGS 3DEP lidar point clouds | `s3-us-west-2.amazonaws.com` | In the US, the real height of bridge decks, measured along each bridge from the lidar points (about 13 MB per map cell full of bridges, once). Off with `BNE_LIDAR_DECKS=off`. | Bridge decks get the estimated heights. | optional |
 | NVDB (Statens vegvesen) | `nvdbapiles.atlas.vegvesen.no` | In Norway, the measured heights of bridges and tunnels (and roads where the terrain is coarse). Off with `BNE_ROADZ=off`. | Estimated heights. | optional |
 | Hong Kong road network and LiDAR index (CSDI Portal) | `portal.csdi.gov.hk` | In Hong Kong, the Transport Department's road centrelines (which are bridges, at which level, and tunnels) and the index of the CEDD 2020 LiDAR sheets, a few requests per map cell, kept on disk. Off with `BNE_ROADZ_HK=off`. | Estimated heights. | optional |
@@ -120,6 +122,7 @@ Baden-Wurttemberg (`owsproxy.lgl-bw.de`), Lower Saxony (`opendata.lgln.niedersac
 | Nominatim (OpenStreetMap) | `nominatim.openstreetmap.org` | The map's street and address search, only when you press Enter (its usage policy forbids autocomplete). What you typed is sent to it, with an area around your position as a bias. |
 | Wikipedia, Wikidata | `en.wikipedia.org`, `de.wikipedia.org`, `fr.wikipedia.org`, `it.wikipedia.org`, `es.wikipedia.org`, `pt.wikipedia.org`, `nl.wikipedia.org`, `pl.wikipedia.org`, `cs.wikipedia.org`, `sk.wikipedia.org`, `sv.wikipedia.org`, `no.wikipedia.org`, `da.wikipedia.org`, `fi.wikipedia.org`, `hu.wikipedia.org`, `ro.wikipedia.org`, `el.wikipedia.org`, `tr.wikipedia.org`, `ru.wikipedia.org`, `uk.wikipedia.org`, `ja.wikipedia.org`, `ko.wikipedia.org`, `zh.wikipedia.org`, `hr.wikipedia.org`, `sl.wikipedia.org`, `bg.wikipedia.org`, `sr.wikipedia.org`, `www.wikidata.org` | Landmarks in the map's search as you type (what you typed is sent; not your position). The answers to "highest bridge in Switzerland" ship with the app (`server/superlatives_data.py`, from Wikidata, CC0). |
 | OSRM routing (FOSSGIS) | `routing.openstreetmap.de` | GPS routes over long distances on the map. | The start and the destination of the route. | No new route until it answers. | optional |
+| Valhalla routing (FOSSGIS) | `valhalla1.openstreetmap.de` | GPS routes without highways, when "Avoid highways" is on. | The start and the destination of the route, and the heading. | The normal route instead. | optional |
 | EGM2008 gravity model (SourceForge) | `downloads.sourceforge.net` | Real gravity, which differs slightly from place to place (74 MB, downloaded once). | Nothing but the download. | Standard gravity is used. | optional |
 
 ## The app itself
@@ -149,5 +152,27 @@ Baden-Wurttemberg (`owsproxy.lgl-bw.de`), Lower Saxony (`opendata.lgln.niedersac
 
 ## Never contacted
 
-The server never asks OpenStreetMap's own servers (the Overpass API, OSM's vector tiles) or Protomaps at runtime: they
-are run by volunteers for other uses, and the data above already covers what they would give.
+The server never asks OSM's vector tiles or Protomaps at runtime. Overpass is used only for category searches,
+never for terrain streaming or bulk downloads.
+
+## Category search on Enter
+
+`overpass-api.de` supplies named OSM category matches within 15 km for line/area categories and 50 km for peaks, race tracks, airports and dams.
+Small named regions are restricted by both the category radius and their bounds. Each query has a
+5-second query timeout (4-second HTTP timeout), an 8 MiB memory budget, and returns at most 200 centers and tags. This is a bounded sample,
+not an exhaustive nearest-neighbor database. `query.wikidata.org` supplies up to 24 notable instances of
+reviewed class families (P31/P279*), ordered by Wikipedia sitelinks (at least 20). Both use the project's descriptive User-Agent,
+one concurrent request, at most one request per 10 seconds and 100/day/host, no automatic retries or prefetch.
+Answers, including empty answers, are cached in memory for an hour. Re-asks share in-flight work; admission failures (rate limit, budget, open breaker) cool down
+for at most 10 seconds; other failures for a minute. Named anchors are resolved by Nominatim on Enter, cached and shared across both category sources.
+Nominatim remains limited to one request per second with no autocomplete; see its
+[usage policy](https://operations.osmfoundation.org/policies/nominatim/).
+
+Nearby named places come first, then up to two notable distant suggestions; duplicates are removed. Strong ordinary
+name matches still appear. Distances are great-circle miles from the unrounded player position (or the named origin if no player is known),
+recomputed after the candidate cache on every search, not road distances. Country is shown when supplied by
+the source; no extra reverse-geocoding requests are made. Broad `in <country/state>` searches use Wikidata within
+approximate bounding-box limits only, so border matches may be imperfect. Small `in` regions also query Overpass;
+`near` searches use the named location as their origin. Large regions may have few results for sparsely mapped classes.
+Rally/gravel, off-road and rock crawling use terrain/sport tag proxies, not verified routes or access guarantees.
+OSM object centers and Wikidata coordinates identify the destination, not a verified drivable entrance.

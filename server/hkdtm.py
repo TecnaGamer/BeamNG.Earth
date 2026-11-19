@@ -44,6 +44,7 @@ MIN_ZOOM = 15               # the near terrain (dem.FINE_MIN_ZOOM); the far ring
 INDEX_ZOOM = 14             # the sheet index asked per tile of this zoom (~2.3 km, ~15 sheets)
 TO_EGM2008_M = -0.42        # HKPD height to EGM2008 height (above)
 TILE = 512
+LATTICE = 16                # pixels between the points that tell whether a sheet has pixels in a tile (tile)
 
 # HK1980 Grid (EPSG:2326) on the International 1924 ellipsoid
 _A, _F = 6378388.0, 1 / 297.0
@@ -231,6 +232,30 @@ class HkDtm:
             self._fetch_later(name, url)
         return got
 
+    def _asked(self, meeting, lat, lon):
+        """The sheets [(name, url)] the tile asks for and this run does not read, when it reads none of meeting (the
+        index's sheets meeting the tile's box, in order) and each of them with no lattice pixel is gone (.404); else
+        None: the tile is read in full. A sheet holding a lattice pixel (a coarse part of the tile's, the only part
+        projected here) certainly has pixels in the full loop too."""
+        if not meeting:
+            return []
+        at = np.append(np.arange(0, lat.shape[0] - 1, LATTICE), lat.shape[0] - 1)
+        ex, ny = grid(lat[np.ix_(at, at)], lon[np.ix_(at, at)])
+        taken = np.zeros(ex.shape, bool)
+        asked = []
+        for name, url, (x0, y0, x1, y1) in meeting:
+            m = (ex >= x0) & (ex < x1) & (ny >= y0) & (ny < y1) & ~taken
+            taken |= m
+            if os.path.exists(self.sheets.path("dtm", name) + ".404"):
+                continue
+            if not m.any():
+                return None
+            asked.append((name, url))
+        for name, _url in asked:
+            if self._decide("dtm_" + name, os.path.exists(self.sheets.path("dtm", name))):
+                return None
+        return asked
+
     def tile(self, z, x, y, size=TILE):
         """(heights float32 [size, size] above EGM2008, valid bool, short) on dem.py's tile (z, x, y): short when this
         run goes without a sheet (or the index) it has, read from the next run on. No network: the downloads it asks
@@ -240,18 +265,25 @@ class HkDtm:
         if not covers(z, x, y) or not self.sheets.root:
             return h, ok, False
         lat, lon = hrdem.tile_lat_lon(z, x, y, size)
-        ex, ny = grid(lat, lon)
-        box = (float(ex.min()), float(ny.min()), float(ex.max()), float(ny.max()))
+        box = _box(np.r_[lat[0], lat[-1], lat[:, 0], lat[:, -1]], np.r_[lon[0], lon[-1], lon[:, 0], lon[:, -1]])
         d = z - INDEX_ZOOM
         chunk = (INDEX_ZOOM, x >> d, y >> d)
         idx = self._index(chunk)
         short = idx is None
         if short:
             self._want(chunk, box)
+        meeting = [(n, u, b) for n, u, b in idx or ()
+                   if b[0] < box[2] and box[0] < b[2] and b[1] < box[3] and box[1] < b[3]]
+        asked = self._asked(meeting, lat, lon)
+        if asked is None:
+            ex, ny = grid(lat, lon)
+        else:
+            for name, url in asked:
+                self._fetch_later(name, url)
+            short = short or bool(asked)
+            meeting = []                    # (the tile reads no sheet)
         taken = np.zeros((size, size), bool)
-        for name, url, (x0, y0, x1, y1) in idx or ():
-            if not (x0 < box[2] and box[0] < x1 and y0 < box[3] and box[1] < y1):
-                continue
+        for name, url, (x0, y0, x1, y1) in meeting:
             m = (ex >= x0) & (ex < x1) & (ny >= y0) & (ny < y1) & ~taken
             if not m.any():
                 continue

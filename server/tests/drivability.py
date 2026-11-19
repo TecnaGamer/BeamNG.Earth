@@ -69,6 +69,8 @@ SITES = {       # name: (fixture prefix, what was reported)
     "paris_maillot_1083": ("drive", "GitHub #1083, Paris: Avenue de Neuilly over the Périphérique at Porte Maillot"),
     "paris_maillot_ax_1083": ("drive", "GitHub #1083, Paris: Rue du Général Anselin over Voie AX at Porte Maillot"),
     "dc_capitol_crossing_1083": ("drive", "GitHub #1083, Washington DC: F Street over I-395 at Capitol Crossing"),
+    "boston_bowker": ("drive", "Boston: the Bowker Overpass over Storrow Drive under its 3.2-3.35 m height limits"),
+    "boston_storrow_massave": ("drive", "Boston: Storrow and Memorial Drives under Mass Ave, 2.74-3.66 m height limits"),
     **{name: ("interchange", what) for name, (_issue, what) in interchanges.SITES.items()},
 }
 RADIUS_M = 200.0
@@ -240,7 +242,7 @@ def _resample(xy):
     if s[-1] < 3.0:
         return None
     ss = np.arange(0.0, s[-1], 1.0)
-    return np.c_[np.interp(ss, s, xy[:, 0]), np.interp(ss, s, xy[:, 1])]
+    return np.c_[dnp.interp(ss, s, xy[:, 0]), dnp.interp(ss, s, xy[:, 1])]
 
 
 def _inside(xy):
@@ -281,7 +283,7 @@ def _structure(surface, fid, spec, xy, z, ground):
         return None
     s = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(xy, axis=0).T))]
     arc = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(centre, axis=0).T))]
-    zz = np.interp(arc, s, z)
+    zz = dnp.interp(arc, s, z)
     if surface == "bridge":
         zz = np.maximum(zz, ground(centre))
     return SimpleNamespace(surface=surface, fid=fid, spec=spec, xy=centre, z=zz)
@@ -322,7 +324,7 @@ def _every_metre(xy, z):
     between them is a slope over its length, not a ledge over one metre)."""
     s = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(xy, axis=0).T))]
     ss = np.arange(0.0, s[-1] + 1e-9, 1.0)
-    return np.c_[np.interp(ss, s, xy[:, 0]), np.interp(ss, s, xy[:, 1])], np.interp(ss, s, z)
+    return np.c_[dnp.interp(ss, s, xy[:, 0]), dnp.interp(ss, s, xy[:, 1])], dnp.interp(ss, s, z)
 
 
 def _measure_structure(report, st, structures, ground):

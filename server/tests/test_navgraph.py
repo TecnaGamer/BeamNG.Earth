@@ -55,6 +55,35 @@ class ShortIdsTest(unittest.TestCase):
 
 
 class GraphTest(unittest.TestCase):
+    def test_submetre_source_road_keeps_its_connection_and_direction(self):
+        lines = [[(0, 0), (100, 0)], [(100, 0), (100.74, 0)], [(100.74, 0), (200, 0)]]
+        con = [(0, "A", 0, 0), (0, "B", 1, 1), (1, "B", 0, 0), (1, "C", 1, 1),
+               (2, "C", 0, 0), (2, "D", 1, 1)]
+        for direction in (0, 1, -1):
+            with self.subTest(direction=direction):
+                g = graph(lines, ["primary"] * 3, connectors=con, oneway=[(1, direction)] if direction else [])
+                edge = next((e for e in g["edges"] if {e[0], e[1]} == {"cB", "cC"}), None)
+                self.assertIsNotNone(edge, "a mapped short link must not split an otherwise connected road")
+                if edge is not None:
+                    self.assertEqual(edge[:3], ["cC", "cB", 1] if direction < 0 else ["cB", "cC", int(bool(direction))])
+
+    def test_degenerate_short_roads_do_not_create_invalid_edges(self):
+        for length in (0., .001, .03):
+            with self.subTest(length=length):
+                g = graph([[(0, 0), (length, 0)]], ["primary"])
+                self.assertEqual(g["edges"], [])
+
+    def test_distant_copy_does_not_hide_road_inside_window(self):
+        distant = features([[(10000, 0), (10200, 0)]], ["secondary"], ids=["shared"])
+        local = features([[(-100, 0), (100, 0)]], ["secondary"], ids=["shared"])
+        expected = navgraph.build(FRAME, [local], flat, (0., 0.), window=500.)
+        self.assertTrue(expected["edges"])
+        for cells in ([distant, local], [local, distant], [distant, local, local]):
+            with self.subTest(distant_first=cells[0] is distant, copies=len(cells)):
+                actual = navgraph.build(FRAME, cells, flat, (0., 0.), window=500.)
+                self.assertEqual(actual["nodes"], expected["nodes"])
+                self.assertEqual(actual["edges"], expected["edges"])
+
     def test_rumble_heuristic_is_country_and_road_type_scoped(self):
         motorway = SimpleNamespace(kind="paved", cls="motorway", urban=True, link=False)
         rural_primary = SimpleNamespace(kind="paved", cls="primary", urban=False, link=False)
@@ -410,6 +439,81 @@ class GraphTest(unittest.TestCase):
         for n in on:
             self.assertAlmostEqual(n[2], 10.0 + 4.0 * (n[0] - 50.0) / 100.0, delta=0.05)
         self.assertTrue(all(n[2] == 10.0 for n in off), "the ground (flat 10 m) off the bridge")
+
+    def test_a_lane_section_takes_its_roads_deck(self):
+        """A road's lane section ("<road>~lanes<a>-<b>", lanesections.split) stands on the deck planned under the
+        road's own id, and the road on its sections' decks: the A7's southbound Zillbach viaduct (2026-11-16) was a
+        section in the graphs centred south of its middle and its nodes stood on the valley floor 22-28 m under it."""
+        deck = (np.array([(50.0, 0.0), (150.0, 0.0)]), np.array([10.0, 14.0]))
+        for fid, key in (("id000~lanes000000000-1000000000", "id000"), ("id000", "id000~lanes200000000-800000000")):
+            f = features([[(0, 0), (200, 0)]], ["primary"])
+            f.ids = np.array([fid], dtype=object)
+            f.rules["connectors"] = rules([(0, "A", 0.0, 0.0), (0, "B", 1.0, 1.0)])
+            g = navgraph.build(FRAME, [f], flat, (0.0, 0.0), decks={key: [deck]})
+            on = [n for n in g["nodes"].values() if 55 < n[0] < 145]
+            self.assertTrue(on, fid)
+            for n in on:
+                self.assertAlmostEqual(n[2], 10.0 + 4.0 * (n[0] - 50.0) / 100.0, delta=0.05, msg=(fid, key))
+            self.assertTrue(all(n[2] == 10.0 for n in g["nodes"].values() if n[0] < 40 or n[0] > 160))
+        f = features([[(0, 0), (200, 0)]], ["primary"])
+        f.rules["connectors"] = rules([(0, "A", 0.0, 0.0), (0, "B", 1.0, 1.0)])
+        g = navgraph.build(FRAME, [f], flat, (0.0, 0.0), decks={"id001~lanes000000000-1000000000": [deck]})
+        self.assertTrue(all(n[2] == 10.0 for n in g["nodes"].values()), "another road's deck is never read")
+
+    def test_family_reach_follows_section_placement(self):
+        """A section placed further off its road's line than SECTION_DECK_M (a five-lane motorway's right_of:1: 6 m)
+        still reads its road's deck, as far as its own placement and no further (Codex review of PR #1395)."""
+        deck = (np.array([(0.0, 0.0), (100.0, 0.0)]), np.array([20.0, 20.0]))
+        sec = "r~lanes000000000-500000000"
+        fam = navgraph._Roads({"r": [deck]}, {"r": 6.0})
+        self.assertEqual(navgraph._deck_z(fam, sec, 50.0, 6.5), 20.0)
+        self.assertIsNone(navgraph._deck_z(fam, sec, 50.0, 10.5), "past its placement + SECTION_DECK_M")
+        self.assertIsNone(navgraph._deck_z(navgraph._Roads({"r": [deck]}), sec, 50.0, 6.5), "no placement known: 4 m")
+        self.assertIsNone(navgraph._deck_z(fam, sec, 103.2, 0.0), "the wider reach is sideways: not 3 m past an end")
+        self.assertIsNone(navgraph._deck_z(fam, sec, -3.2, 2.0), "nor before its start")
+        self.assertEqual(navgraph._deck_z(fam, sec, 101.0, 5.0), 20.0, "1.5 m past an end, placed beside it")
+        f = features([[(0, 0), (200, 0)]], ["motorway"])
+        f.ids = np.array([sec], dtype=object)
+        col = np.empty(1, object)
+        col[0] = {"offset": -6.0, "shift": -2.0, "extra": 3.5, "end_off": (-4.0, -6.0)}
+        f.attrs[navgraph.lanesections.PROFILE] = col
+        self.assertEqual(navgraph._section_shifts([f, None]), {"r": 6.0})
+
+    def test_open_floor_family_reach(self):
+        """A lane section placed 6 m beside its road's line still finds the open floor planned under the road's id
+        (all the edge's points within the family's sideways reach), not past the floor's ends."""
+        floor = (np.array([(0.0, 0.0), (100.0, 0.0)]), np.array([5.0, 5.0]))
+        sec = "r~lanes000000000-500000000"
+        fam = navgraph._Roads({"r": [floor]}, {"r": 6.0})
+        self.assertTrue(navgraph._open_floor_of(fam, sec, [(20.0, 6.0), (80.0, 6.0)]))
+        self.assertFalse(navgraph._open_floor_of(fam, sec, [(20.0, 6.0), (104.0, 6.0)]))
+        self.assertFalse(navgraph._open_floor_of(navgraph._Roads({"r": [floor]}), sec, [(20.0, 6.0)]))
+        self.assertTrue(navgraph._open_floor_of(fam, "r", [(20.0, 1.0)]))
+        self.assertFalse(navgraph._open_floor_of(fam, "r", [(20.0, 6.0)]), "the road's own floor: 1.5 m as before")
+
+    def test_deck_keys(self):
+        deck = (np.array([(0.0, 0.0), (100.0, 0.0)]), np.array([20.0, 20.0]))
+        fam = navgraph._Roads({"r": [deck], "q": [deck]})
+        self.assertEqual(navgraph._deck_keys(fam, "r~lanes1-2"), ["r"])
+        self.assertEqual(navgraph._deck_keys(fam, "r"), ["r"])
+        self.assertEqual(navgraph._deck_keys(fam, "x"), [])
+        self.assertEqual(navgraph._deck_keys({"r": [deck]}, "r~lanes1-2"), [])
+
+    def test_deck_z_family_lookup(self):
+        deck = (np.array([(0.0, 0.0), (100.0, 0.0)]), np.array([20.0, 20.0]))
+        plain = {"r": [deck]}
+        self.assertIsNone(navgraph._deck_z(plain, "r~lanes000000000-500000000", 50.0, 0.0), "a plain dict: as before")
+        fam = navgraph._Roads(plain)
+        self.assertEqual(navgraph._deck_z(fam, "r~lanes000000000-500000000", 50.0, 3.0), 20.0,
+                         "a section placed a lane off its road's line still finds the deck")
+        self.assertIsNone(navgraph._deck_z(fam, "r~lanes000000000-500000000", 50.0, 5.0), "SECTION_DECK_M")
+        self.assertIsNone(navgraph._deck_z(fam, "r", 50.0, 3.0), "its own parts keep the 1.5 m reach")
+        self.assertIsNone(navgraph._deck_z(fam, "r~lanes000000000-500000000", 110.0, 0.0), "past the deck's end")
+        self.assertIsNone(navgraph._deck_z(fam, "q", 50.0, 0.0), "no other road's")
+        self.assertTrue(navgraph._has_parts(fam, "r~lanes1-2") and not navgraph._has_parts(fam, "q"))
+        self.assertEqual(navgraph._road_parts(fam, "r~lanes1-2"), [deck])
+        self.assertEqual(navgraph._road_parts(fam, "r"), [deck])
+        self.assertEqual(navgraph._road_parts({"x": [deck]}, "x~lanes1-2"), ())
 
 
 
@@ -850,9 +954,30 @@ class RulesTest(unittest.TestCase):
         self.assertAlmostEqual(navgraph.road_mph(F, 0, mw), 65.0)
         self.assertAlmostEqual(navgraph.road_mph(F, 0, mw, mph=False) * 1.609344, 120.0)
         town = roads.Spec(9.0, "paved", True, "primary", False)
-        self.assertAlmostEqual(navgraph.road_mph(F, 0, town, mph=False), 35.0, msg="in town: the urban cap")
+        self.assertAlmostEqual(navgraph.road_mph(F, 0, town, mph=False) * 1.609344, 50.0, msg="in town: the urban cap")
+        self.assertAlmostEqual(navgraph.road_mph(F, 0, town), 35.0, msg="in town, mph: the urban cap")
         res = roads.Spec(6.0, "paved", True, "residential", False)
-        self.assertAlmostEqual(navgraph.road_mph(F, 0, res, mph=False), 25.0)
+        self.assertAlmostEqual(navgraph.road_mph(F, 0, res, mph=False) * 1.609344, 40.0)
+        self.assertAlmostEqual(navgraph.road_mph(F, 0, res), 25.0)
+
+    def test_kmh_defaults_are_limits_a_km_h_country_posts(self):
+        # (the player's report KK25CFD8: an unmapped tertiary through Nuerburg drove and posted 35 mph, a 55 km/h sign)
+        import speedsigns
+
+        class F:
+            rules = {}
+        for cls in navgraph.DRIVE:
+            for urban in (False, True):
+                sp = roads.Spec(7.0, "paved", urban, cls, False)
+                kmh = navgraph.road_mph(F, 0, sp, mph=False) * 1.609344
+                self.assertAlmostEqual(kmh, round(kmh / 10.0) * 10.0, places=6, msg=(cls, urban, kmh))
+                self.assertEqual(speedsigns.posted(navgraph.road_mph(F, 0, sp, mph=False), mph=False) % 10, 0,
+                                 (cls, urban))
+        tertiary = roads.Spec(7.0, "paved", False, "tertiary", False)
+        self.assertEqual(speedsigns.posted(navgraph.road_mph(F, 0, tertiary, mph=False), mph=False), 60.0)
+        for cls in ("primary", "secondary", "tertiary"):
+            town = roads.Spec(7.0, "paved", True, cls, False)
+            self.assertEqual(speedsigns.posted(navgraph.road_mph(F, 0, town, mph=False), mph=False), 50.0, cls)
 
     def test_us_motorways_default_to_their_states_limit(self):
         # Tann2019 2026-11-05: Montana's I-94 near Huntley (no mapped limit) is 80, the traffic drove the flat 65
@@ -919,9 +1044,9 @@ class RulesTest(unittest.TestCase):
         kmh = lambda i, on: navgraph.road_mph(F, i, res, mph=False, country="DE", de_on=on) * 1.609344   # noqa: E731
         self.assertAlmostEqual(kmh(0, True), 20.0)
         self.assertAlmostEqual(kmh(1, True), 30.0)
-        self.assertAlmostEqual(kmh(0, False), 25.0 * 1.609344, msg="off: the class default")
-        self.assertAlmostEqual(kmh(2, True), 25.0 * 1.609344, msg="no zone")
-        self.assertAlmostEqual(kmh(3, True), 25.0 * 1.609344, msg="not a zone of the family")
+        self.assertAlmostEqual(kmh(0, False), 40.0, msg="off: the class default (km/h)")
+        self.assertAlmostEqual(kmh(2, True), 40.0, msg="no zone")
+        self.assertAlmostEqual(kmh(3, True), 40.0, msg="not a zone of the family")
         class Mapped(F):
             rules = {"max_speed_kmh": rules([(0, 10.0)], "float")}
         self.assertAlmostEqual(navgraph.road_mph(Mapped, 0, res, mph=False, de_on=True) * 1.609344, 10.0,

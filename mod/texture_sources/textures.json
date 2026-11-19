@@ -264,6 +264,11 @@
    "format": "BC7_SRGB",
    "role": "color"
   },
+  "levels/beamng_earth/art/shapes/beamngEarth/bne_sky_day_b.dds": {
+   "source": "levels/beamng_earth/art/shapes/beamngEarth/bne_sky_day_b.webp",
+   "format": "BC7",
+   "role": "color"
+  },
   "levels/beamng_earth/art/shapes/beamngEarth/bne_sky_night_e.dds": {
    "source": "levels/beamng_earth/art/shapes/beamngEarth/bne_sky_night_e.webp",
    "format": "BC7",

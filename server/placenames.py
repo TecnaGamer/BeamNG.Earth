@@ -228,7 +228,8 @@ def _concat(tables):
 class PlaceNames:
     """The lookup with its cell files (one per server; lookup() from any thread, blocking: fetches what is missing)."""
 
-    def __init__(self, cache_dir, fetcher, reader=None, release=overture.RELEASE):
+    def __init__(self, cache_dir, fetcher, reader=None, release=None):
+        release = release or overture.effective()
         self.cache_dir, self.fetcher, self.release = cache_dir, fetcher, release
         self._reader = reader
         self._lock = threading.Lock()

@@ -1606,6 +1606,29 @@ class Imagery:
         """Nothing (more) to fetch for a route_keys key (_warm_done, under the lock it needs)."""
         return self._warm_done(key)
 
+    def lazy_tile_state(self, key):
+        """A lazy source's tile (src, z, x, y) as a render would read it (_child_state): ("data", None) on disk,
+        ("none", until) known to hold nothing there (until: unix s when that answer ends, None never), ("todo", None)
+        not decided (never fetched, evicted, an expired miss)."""
+        return self._child_state(*key)
+
+    def fetch_lazy_tile(self, key):
+        """A lazy source's undecided tile (lazy_tile_state "todo") fetched now in the calling thread, as a demand
+        request (its export parent in one request: the parent's every tile written, data or a miss): the world map's
+        and the car screens' tiles (maptiles.MapTiles.tile), which tiles() alone passes on to the next source while
+        warm() has not fetched them yet. False: decided already, nothing fetched; raises ImageryError."""
+        src, z, x, y = key
+        if not src.lazy or self.lazy_tile_state(key)[0] != "todo":
+            return False
+        old = getattr(self._local, "kind", None)
+        self._local.kind = "urgent" if getattr(self._caller, "urgent", False) else "demand"
+        try:
+            self._download(src, z, x, y)
+            self._count(src.name + ":map")
+        finally:
+            self._local.kind = old if old is not None else "demand"
+        return True
+
     def fetch_key(self, key):
         """Fetch one route_keys key now in the calling thread at "prefetch" priority (the route download's thread).
         False: nothing was fetched (done already); raises ImageryError (deferred: the limiter has no room for a
@@ -1639,11 +1662,6 @@ class Imagery:
                 self._warm_thread = threading.Thread(target=self._warm_loop, name="img-warm", daemon=True)
                 self._warm_thread.start()
             self._warm_cv.notify()
-
-    def far_unwarm(self, tag):
-        """A far tile no longer wanted sharper (gone, hidden): out of far_warm's queue."""
-        with self._warm_cv:
-            self._far_warm.pop(tag, None)
 
     def lazy_keys(self, frame, x0, y0, size, px):
         """The lazy sources' keys (src, z, x, y: one per exported parent, route_keys') a render of the square x0, y0,
@@ -2469,29 +2487,56 @@ def mip_chain(img):
     return [Image.fromarray(a, "RGB") for a in mip_arrays(np.asarray(img.convert("RGB")))]
 
 
-def encode_dds(rgb):
+def encode_dds(rgb, srgb=False, fade=None):
     """DDS bytes of an RGB image (uint8 [h, w, 3], power-of-two sides): DXT1 (BC1, no alpha)
     with the full mip chain (mip_arrays' chain, in integers: within one sRGB step of it), in one Rust call
     (earthfast.dds_levels, bc1fast.rs: ISPC's BC1 kernels on the CPU, ~10x our own encoder at its quality and
-    faster than the GPU's round trip, which the game's frames paid for on a Steam Deck: no GPU here since 287)."""
+    faster than the GPU's round trip, which the game's frames paid for on a Steam Deck: no GPU here since 287).
+    srgb: the same blocks under a DX10 header as DXGI_FORMAT_BC1_UNORM_SRGB (FAR_SRGB).
+    fade (canopy rgb, texel m): the generated ground's mip fade (genground.write_far_dds): each mip of rgb and of the
+    canopy version (the same chain) blended by genground.fade_weights, then encoded as dds_levels does (byte for byte
+    the same with every weight 1)."""
     rgb = np.ascontiguousarray(np.asarray(rgb, np.uint8))
     h, w = rgb.shape[:2]
     fast.require(287, "imagery dds_levels")
-    data, n, _err = fast._ef.dds_levels(rgb, _TO_LIN, float(MIP_SHARPEN), False)
+    if fade is not None:
+        import genground
+        canopy = np.ascontiguousarray(np.asarray(fade[0], np.uint8))
+        lf = [rgb] + list(fast._ef.mip_levels_fast(rgb, _TO_LIN, float(MIP_SHARPEN)))
+        lc = [canopy] + list(fast._ef.mip_levels_fast(canopy, _TO_LIN, float(MIP_SHARPEN)))
+        parts = []
+        for a, c, s in zip(lf, lc, genground.fade_weights(float(fade[1]), len(lf))):
+            parts.append(bytes(fast._ef.bc1_encode_fast(np.ascontiguousarray(genground.fade_mix(a, c, s)))))
+        data, n = b"".join(parts), len(lf)
+    else:
+        data, n, _err = fast._ef.dds_levels(rgb, _TO_LIN, float(MIP_SHARPEN), False)
     assert len(data) == sum(dxt1_size(max(1, w >> k), max(1, h >> k)) for k in range(n)), (rgb.shape, len(data))
     flags = DDSD_CAPS | DDSD_HEIGHT | DDSD_WIDTH | DDSD_PIXELFORMAT | DDSD_MIPMAPCOUNT | DDSD_LINEARSIZE
     head = (DDS_MAGIC
             + struct.pack("<7I", 124, flags, h, w, dxt1_size(w, h), 0, n)
             + struct.pack("<11I", *((0,) * 11))
-            + struct.pack("<2I4s5I", 32, DDPF_FOURCC, b"DXT1", 0, 0, 0, 0, 0)
+            + struct.pack("<2I4s5I", 32, DDPF_FOURCC, b"DX10" if srgb else b"DXT1", 0, 0, 0, 0, 0)
             + struct.pack("<5I", DDSCAPS_TEXTURE | DDSCAPS_MIPMAP | DDSCAPS_COMPLEX, 0, 0, 0, 0))
     assert len(head) == DDS_HEADER
+    if srgb:        # DXGI format, D3D10_RESOURCE_DIMENSION_TEXTURE2D, misc flags, array size, misc flags 2
+        head += struct.pack("<5I", DXGI_BC1_UNORM_SRGB, 3, 0, 1, 0)
     return head + data
 
 
-def write_dds(path, rgb):
+# The far tiles' photos (2026-11-16, the near/far ground border the user saw in the mountains): the game drew them with
+# a version 1.0 Material, whose legacy lighting left their shaded and mid-dark ground ~10-12 % darker than the same photo
+# on the terrain block's v1.5 material (Stelvio: the block 105 luma, the far tiles 94; the far tiles as v1.5 materials
+# reading the same blocks as sRGB, 106: ~/bnge-tests/texlayer). A v1.5 Material reads a plain DXT1 as linear (washed out),
+# so the far tiles' textures are tagged sRGB (the GPU decodes them like the block's BC7_UNORM_SRGB photo) and the mod
+# draws a tile whose texture is tagged so with a v1.5 Material (satmat.lua). BNE_FAR_SRGB=off: the plain DXT1 and the
+# 1.0 Material, as before.
+DXGI_BC1_UNORM_SRGB = 72
+FAR_SRGB = os.environ.get("BNE_FAR_SRGB", "on").strip().lower() not in ("off", "0", "false", "no")
+
+
+def write_dds(path, rgb, srgb=False, fade=None):
     """encode_dds() to path atomically; returns the file size."""
-    data = encode_dds(rgb)
+    data = encode_dds(rgb, srgb, fade)
     tmp = staging.tmp_for(path)
     with open(tmp, "wb") as f:
         f.write(data)

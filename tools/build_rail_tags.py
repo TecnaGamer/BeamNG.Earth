@@ -19,6 +19,10 @@ import os
 import sys
 import time
 
+try:        # (first: numpy's AVX-512 kernels held back before anything imports numpy, tools/npyfirst.py)
+    import npyfirst  # noqa: E402,F401
+except ImportError:     # (loaded by its path into another process, a test: that process's entry point guards)
+    pass
 import numpy as np
 import osmium
 
@@ -28,7 +32,7 @@ TAGS = ("railway", "usage", "service", "gauge", "tracks", "electrified", "voltag
         "bridge", "tunnel", "embankment", "cutting", "layer", "name", "operator", "ref", "highspeed",
         "crossing", "crossing:barrier", "crossing:light", "crossing:bell", "crossing:saltire", "crossing:supervision",
         "power", "structure", "disused:railway", "abandoned:railway", "razed:railway", "construction:railway",
-        "proposed:railway",
+        "proposed:railway", "railway:preserved",
         "highway")          # (a rail trail: an abandoned line that is now a road or path, railways.drawn)
 NODE_RAILWAY = {"level_crossing", "crossing"}
 NODE_POWER = {"catenary_mast", "catenary_portal"}

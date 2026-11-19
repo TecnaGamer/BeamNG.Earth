@@ -12,8 +12,11 @@ thread), and the buildings wait for them WAIT_S at most. A map building with no 
 building parts always win) whose outline holds a record's interior point and is within AREA_RATIO of its area takes
 the record's parts (the join in Rust: earthfast.nyc_massing_match), through the same path the map's parts take
 (buildings.tile_buildings). A mapped pitched roof, or a building off the ground (min_height), keeps the map's shape.
-A shard that could not be had faults the tile (revisit.fault: built again later) and is asked again after
-SHARD_RETRY_S; one the site does not have (404) is kept as an empty file for MISS_TTL_S. Outside the box, or with
+The manifest and shards are nycshards.Shards': the build pinned on disk when the process first asks is used for the
+whole process and named in the keys of the tiles near BOX (blockworker._nyc_key: a tile built before the dataset was
+published, before a cell was added or on an older build keeps no key of the build in use); only the cells it lists,
+each checked against it. A shard that could not be had (or did not match, or a listed cell gone) faults the tile
+(revisit.fault: built again later) and is asked again after nycshards.SHARD_RETRY_S. Outside the box, or with
 BNE_NYC_MASSING=off: nothing is asked, the map's buildings as before.
 
     BNE_NYC_MASSING_URL   the shards' base URL (default: the data repo's Pages, nycmassing/v1)
@@ -26,13 +29,13 @@ import io
 import logging
 import os
 import threading
-import time
 import zipfile
 
 import numpy as np
 
 import fast
 import dnp
+import nycshards
 
 log = logging.getLogger("earthd.nycmassing")
 
@@ -43,14 +46,6 @@ ZOOM = 14
 PAD_M = 200.0                   # records whose point is this far past a tile are its too (a long building's own)
 AREA_RATIO = (0.8, 1.25)        # map footprint area / the record's
 WAIT_S = 10.0                   # s the buildings wait for a tile's shards at most
-SHARD_RETRY_S = 600             # a shard that could not be had: asked again after this long
-MISS_TTL_S = 7 * 86400          # a shard the site did not have (404): asked again after this long
-# The manifest (the builder's manifest.json: its cells) decides which shards exist: none is asked for a cell it does
-# not list, and while the site has no manifest (not published yet, or the site failing) nothing is asked at all and
-# nothing is kept: a 404 kept for a week per cell would have hidden the data for a week from anyone who drove there
-# before it was published. Kept on disk MANIFEST_TTL_S; a missing one asked again after MANIFEST_RETRY_S.
-MANIFEST_TTL_S = 86400
-MANIFEST_RETRY_S = 3600
 NATIVE = 186                    # earthfast.VERSION of nyc_massing_match
 GROUND_M = 0.5                  # a map building whose bottom (min_height) is higher than this keeps its own shape
 FLAT_ROOFS = ("", "flat")
@@ -120,151 +115,30 @@ def decode(body):
             "vfirst": vfirst, "xy": xy}
 
 
-class Source:
-    """The shards: from the local folder (BNE_NYC_MASSING_DIR), else fetched once and kept on disk under
-    <cache>/pagesdata/nycmassing/<VERSION>/, and held in memory (LRU) for the tiles around them."""
+class Source(nycshards.Shards):
+    """The shards (nycshards.Shards: the build frozen per process, checked, kept on disk under its identity), decoded
+    and held in memory (LRU) for the tiles around them."""
 
+    NAME, VERSION = "nycmassing", VERSION
     MEM = 32
 
     def __init__(self, cache_dir, fetcher=None, local=None, base=None):
-        self.dir = os.path.join(cache_dir, "pagesdata", "nycmassing", VERSION) if cache_dir else None
-        self.local = local
-        self.base = base or base_url()
-        self.fetcher = fetcher
-        self.lock = threading.Lock()
-        self.mem = {}
-        self.failed = {}                # key -> when a fetch failed (asked again after SHARD_RETRY_S)
-        self._cells = None              # the manifest's cells ("z/x/y" set), None: not had
-        self._cells_at = -1e18          # when the manifest was last asked for (MANIFEST_RETRY_S)
-        self._absent = None             # cells()'s answer meanwhile: False (not published) or None (not had)
-        self.data = None                # the manifest's "data" host of the shards (railtags.data_url), None: beside it
+        super().__init__(cache_dir, fetcher, local, base or base_url())
+
+    @staticmethod
+    def _decode(body):
+        return decode(body)
+
+    def on(self):
+        return ON
 
     def _path(self, key):
-        return os.path.join(self.dir, f"{key.z}_{key.x}_{key.y}.npz") if self.dir else None
+        return self.path(key)
 
     def shard(self, key):
-        """The arrays of cell key ({} none there), or None: not had (offline, the site failing: asked again later)."""
-        with self.lock:
-            got = self.mem.get(key)
-        if got is not None:
-            return got
-        body = None
-        if self.local:
-            try:
-                with open(os.path.join(self.local, str(key.z), str(key.x), f"{key.y}.npz"), "rb") as fh:
-                    body = fh.read()
-            except OSError:
-                body = b""
-        else:
-            cells = self.cells()
-            if cells is None:
-                return None             # (the manifest could not be had: offline, the site failing; asked again)
-            if cells is False:
-                return {}               # (no manifest published: nothing asked or kept)
-            if f"{key.z}/{key.x}/{key.y}" not in cells:
-                return {}               # (a cell the manifest does not list: none there)
-            path = self._path(key)
-            if path and os.path.exists(path):
-                try:
-                    stale_miss = os.path.getsize(path) == 0 and time.time() - os.path.getmtime(path) > MISS_TTL_S
-                    if not stale_miss:
-                        with open(path, "rb") as fh:
-                            body = fh.read()
-                except OSError:
-                    body = None
-            if body is None:
-                body = self._fetch(key)
-                if body is None:
-                    return None
-                if path:
-                    try:
-                        os.makedirs(self.dir, exist_ok=True)
-                        tmp = f"{path}.{os.getpid()}.{threading.get_ident()}.part"
-                        with open(tmp, "wb") as fh:
-                            fh.write(body)
-                        os.replace(tmp, path)
-                    except OSError as e:
-                        log.debug("nyc massing: keep %s: %s", key, e)
-        got = decode(body)
-        with self.lock:
-            self.mem[key] = got
-            while len(self.mem) > self.MEM:
-                self.mem.pop(next(iter(self.mem)))
-        return got
-
-    def cells(self):
-        """The manifest's cells ("z/x/y" strings; kept MANIFEST_TTL_S on disk); False: the site has no manifest (404: not
-        published); None: it could not be had (offline, the site failing). Both asked again after MANIFEST_RETRY_S."""
-        import json
-        import netfetch
-        with self.lock:
-            if self._cells is not None:
-                return self._cells
-            if time.time() - self._cells_at < MANIFEST_RETRY_S:
-                return self._absent
-            self._cells_at = time.time()
-            fetcher = self.fetcher
-            if fetcher is None:
-                fetcher = self.fetcher = netfetch.Fetcher()
-        path = os.path.join(self.dir, "manifest.json") if self.dir else None
-        body = None
-        if path and os.path.exists(path) and time.time() - os.path.getmtime(path) < MANIFEST_TTL_S:
-            try:
-                with open(path, "rb") as fh:
-                    body = fh.read()
-            except OSError:
-                body = None
-        if body is None:
-            try:
-                body = fetcher.get(f"{self.base}/manifest.json", kind="demand").body
-            except netfetch.NotFound:   # (not published yet)
-                with self.lock:
-                    self._absent = False
-                return False
-            except Exception as e:      # (offline, the site failing)
-                log.debug("nyc massing manifest: %s: %s", type(e).__name__, e)
-                with self.lock:
-                    self._absent = None
-                return None
-            if path:
-                try:
-                    os.makedirs(self.dir, exist_ok=True)
-                    tmp = f"{path}.{os.getpid()}.{threading.get_ident()}.part"
-                    with open(tmp, "wb") as fh:
-                        fh.write(body)
-                    os.replace(tmp, path)
-                except OSError as e:
-                    log.debug("nyc massing: keep manifest: %s", e)
-        try:
-            j = json.loads(body.decode("utf-8"))
-            cells = set(j.get("cells", {}).keys())
-        except (ValueError, AttributeError, UnicodeDecodeError):
-            return None
-        import railtags
-        with self.lock:
-            self._cells = cells
-            self.data = railtags.data_url(j)    # (the shards' host the manifest names, None: beside it)
-        return cells
-
-    def _fetch(self, key):
-        """The shard's bytes (b"" the site has none), or None (failed: asked again after SHARD_RETRY_S)."""
-        import netfetch
-        with self.lock:
-            if time.time() - self.failed.get(key, -1e18) < SHARD_RETRY_S:
-                return None
-            fetcher = self.fetcher
-            if fetcher is None:
-                fetcher = self.fetcher = netfetch.Fetcher()
-        import railtags
-        try:
-            return railtags.fetch_data(fetcher, self.data, self.base, f"{key.z}/{key.x}/{key.y}.npz")
-        except netfetch.NotFound:
-            return b""
-        except Exception as e:          # (offline, limits, the site failing: the map's buildings, asked again later)
-            log.debug("nyc massing shard %s: %s: %s", key, type(e).__name__, e)
-            with self.lock:
-                self.failed[key] = time.time()
-            return None
+        """The arrays of cell key ({} none there, or no build decided), or None: not had (offline, the site failing,
+        not the manifest's: asked again later). Held in memory under the build's identity (nycshards.decoded)."""
+        return self.decoded(key)
 
 
 _SOURCES = {}
@@ -279,6 +153,13 @@ def source(cache_dir):
         if got is None:
             got = _SOURCES[k] = Source(cache_dir, local=k[1], base=k[2])
         return got
+
+
+def identity(cache_dir, peek=False):
+    """This dataset's identity for the tiles' keys (nycshards.Shards.identity; "off" when off; peek: not deciding)."""
+    if not ON or not (cache_dir or local_dir()):
+        return "off"
+    return source(cache_dir).identity(peek)
 
 
 class Fetch:
@@ -414,10 +295,10 @@ def credited_near(cache_dir, lat, lon, near_m):
     dlat = near_m / 110540.0
     dlon = near_m / (111320.0 * max(0.05, float(dnp.cos(np.radians(lat)))))
     local = local_dir()
+    src = source(cache_dir) if cache_dir and not local else None
     for key in cells_over(lat - dlat, lon - dlon, lat + dlat, lon + dlon):
         p = os.path.join(local, str(key.z), str(key.x), f"{key.y}.npz") if local else \
-            os.path.join(cache_dir, "pagesdata", "nycmassing", VERSION, f"{key.z}_{key.x}_{key.y}.npz") \
-            if cache_dir else None
+            src.path(key) if src is not None else None
         try:
             if p and os.path.getsize(p) > 0:
                 return True

@@ -112,6 +112,12 @@
       <div v-if="gpsScreen" class="marker gps" :style="{ left: gpsScreen.x + 'px', top: gpsScreen.y + 'px' }">
         <div class="flag"></div>
       </div>
+      <!-- Search preview is an event-driven marker; distant results are pinned to the view edge. -->
+      <div v-if="searchPreview" class="marker search-preview" :class="{ outside: searchPreview.offscreen }"
+           :style="{ left: searchPreview.x + 'px', top: searchPreview.y + 'px' }">
+        <div class="preview-pin"><svg viewBox="0 0 24 24" aria-hidden="true"><path :d="sm.icon(searchPreview.result.kind)" /></svg></div>
+        <div class="preview-name">{{ searchPreview.offscreen ? 'Outside view · ' : '' }}{{ searchPreview.result.name }}</div>
+      </div>
       <!-- the pending target -->
       <div v-if="target" class="marker target" :style="{ left: targetScreen.x + 'px', top: targetScreen.y + 'px' }">
         <div class="cross"></div>
@@ -138,33 +144,55 @@
         <span v-if="weatherBadge.temp != null">{{ weatherBadge.temp }}</span>
         <span v-if="weatherBadge.localTime">{{ weatherBadge.localTime }}</span>
       </div>
-      <div class="search">
-        <input
-          ref="searchEl"
-          @focus="typing(true)"
-          @blur="typing(false)"
-          v-model="query"
-          class="search-input"
-          placeholder="Search addresses, places, or lat, lon"
-          @keydown.enter.stop.prevent="onSearch"
-          @keydown.down.stop.prevent="moveResult(1)"
-          @keydown.up.stop.prevent="moveResult(-1)"
-          @keydown.esc.stop.prevent="query = ''"
-          @mousedown.stop
-        />
-        <div v-if="results.length" class="search-results">
-          <div v-for="(r, i) in results" :key="i" class="search-result" :class="{ active: i === resultIndex }"
-               @mousedown.stop @click="pickResult(r)" @mouseenter="hoverPreload(r)" @mouseleave="hoverEnd">
-            <span class="result-name">{{ r.saved ? "★ " : "" }}{{ r.name }}</span>
-            <span class="result-coords">{{ r.detail || fmtLatLon(r.lat, r.lon) }}</span>
-          </div>
-          <div v-if="moreFor" class="search-result search-more" @mousedown.stop @click="liveSearch(true)">
-            <span class="result-name">Search streets and addresses too (Enter)</span>
-          </div>
-          <div class="search-credit">Search: © OpenStreetMap contributors (Nominatim, Photon), Wikipedia, Wikidata</div>
+      <div class="search" @mousedown.stop @focusin="searchFocused = true" @focusout="searchFocusOut">
+        <div class="search-field">
+          <input ref="searchEl" v-model="query" class="search-input" role="combobox" aria-autocomplete="list" aria-label="Search places, categories or addresses"
+                 aria-controls="earth-search-results" :aria-expanded="!!(searching || results.length || searchMsg)"
+                 :aria-activedescendant="resultIndex >= 0 ? 'earth-result-' + resultIndex : undefined"
+                 placeholder="Search a place, category or address"
+                 @focus="typing(true)" @blur="typing(false)"
+                 @keydown.enter.stop.prevent="onSearch" @keydown.down.stop.prevent="moveResult(1)"
+                 @keydown.up.stop.prevent="moveResult(-1)" @keydown.esc.stop.prevent="clearSearch" />
+          <button v-if="query" class="search-clear" aria-label="Clear search" title="Clear search" @click="clearSearch">×</button>
         </div>
-        <div v-if="searchMsg" class="search-msg">{{ searchMsg }}</div>
-        <div v-else-if="searching && !results.length" class="search-msg">Searching…</div>
+        <div v-if="searchPanelVisible" class="search-panel">
+          <div v-if="searchToolsVisible" class="search-tools" aria-label="Find a driving destination">
+            <button v-for="c in sm.QUICK" :key="c.kind" class="category-chip" :class="{ on: query === c.query }"
+                    :title="'Find ' + c.label.toLowerCase() + ' near you and notable places worldwide'"
+                    @click="searchCategory(c)">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path :d="c.path" /></svg>{{ c.label }}
+            </button>
+            <button class="category-chip" :aria-expanded="categoriesOpen" aria-controls="earth-categories"
+                    @click="categoriesOpen = !categoriesOpen">{{ categoriesOpen ? 'Less' : 'More…' }}</button>
+          </div>
+          <div v-if="searchToolsVisible && categoriesOpen" id="earth-categories" class="category-picker" aria-label="More categories">
+            <button v-for="c in sm.CATEGORIES.filter(c => !sm.QUICK.includes(c))" :key="c.kind" class="category-chip"
+                    @click="searchCategory(c)"><svg viewBox="0 0 24 24" aria-hidden="true"><path :d="c.path" /></svg>{{ c.label }}</button>
+          </div>
+          <div v-if="searchToolsVisible && !query && !searching" class="search-hint">Near you + notable places worldwide</div>
+          <div v-if="searching || searchMsg" class="search-status" role="status" aria-live="polite">
+            <span v-if="searching" class="search-spinner" aria-hidden="true"></span>
+            <span>{{ searching ? (searchWide ? 'Searching wider… Finding category places and addresses.' : 'Searching places…') : searchMsg }}</span>
+          </div>
+          <div v-if="results.length" id="earth-search-results" ref="resultsEl" class="search-results" role="listbox" aria-label="Search results" :aria-busy="searching">
+            <button v-for="(r, i) in displayResults" :id="'earth-result-' + i" :key="i" type="button"
+                    class="search-result" role="option" :aria-selected="i === resultIndex" :class="{ active: i === resultIndex }" :data-result-index="i"
+                    @click="pickResult(r)" @mouseenter="previewResult(i)" @mouseleave="leaveResult"
+                    @focus="selectResult(i)" @blur="leaveResult"
+                    @keydown.enter.stop.prevent="pickResult(r)" @keydown.down.stop.prevent="moveResult(1)" @keydown.up.stop.prevent="moveResult(-1)">
+              <svg class="result-icon" viewBox="0 0 24 24" aria-hidden="true"><path :d="r.icon" /></svg>
+              <span class="result-copy">
+                <span class="result-heading"><span class="result-name">{{ r.saved ? '★ ' : '' }}{{ r.name }}</span>
+                  <span class="result-kind">{{ r.groupLabel }}</span></span>
+                <span class="result-meta">{{ r.meta }}</span>
+                <span v-if="r.description" class="result-description">{{ r.description }}</span>
+              </span>
+            </button>
+          </div>
+          <button v-if="moreFor && !searching" class="search-more" @click="liveSearch(true)">Search wider: categories &amp; addresses ↵</button>
+          <div v-if="searchToolsVisible && results.length" class="search-hint">↑ ↓ choose · Enter / A sets GPS, then X teleports</div>
+          <div class="search-credit">Search: © OpenStreetMap contributors (Nominatim, Overpass, Photon), Wikipedia, Wikidata</div>
+        </div>
       </div>
       <button class="map-btn" @click="nearestStation" title="Route the GPS to the nearest gas station (an EV charger for an electric car)">&#x26FD; Nearest</button>
       <button class="map-btn" @click="zoomBy(1)" title="Zoom in">+</button>
@@ -268,12 +296,15 @@
         <span v-else-if="state.gps.remaining != null" class="gps-dist">{{ fmtMiles(state.gps.remaining) }}<template
           v-if="state.gps.eta != null">, {{ fmtDur(state.gps.eta) }}</template></span>
         <span v-if="state.gps.routeError && !routePts.length" class="gps-warn" :title="state.gps.routeError">no road route: heading straight there</span>
+        <span v-else-if="state.gps.avoidHighways && state.gps.avoided === false && routePts.length" class="gps-warn"
+              title="Only a motorway reaches this destination">no route without highways</span>
         <span v-if="state.gps.routeDownload && state.gps.routeDownload.active" class="gps-download"
               title="Downloading the route's road and elevation data ahead of time so driving it is smoother">
           <span class="gps-download-bar"><span class="gps-download-fill" :style="{ width: (state.gps.routeDownload.total
             ? (100 * state.gps.routeDownload.done / state.gps.routeDownload.total) : 0) + '%' }"></span></span>
           {{ state.gps.routeDownload.done }} / {{ state.gps.routeDownload.total }}
         </span>
+        <button class="map-btn small" :class="{ primary: state.gps.avoidHighways }" @click="toggleAvoidHighways()">Avoid highways</button>
         <button class="map-btn small" @click="showOnMap(state.gps)">Show</button>
         <button v-if="routePts.length >= 2" class="map-btn small" @click="askRoute(routeHalf)"
                 title="Pre-cache this route: its data (elevation, roads, buildings, aerial photos) downloaded and kept, and the world built too if you like">Pre-cache route</button>
@@ -456,6 +487,7 @@ import { useEvents } from "@/services/events"
 import { vBngOnUiNav } from "@/common/directives"
 import * as mm from "./mapmath.js"
 import * as ms from "./mapstations.js"
+import * as sm from "./mapsearch.js"
 import layerData from "./maplayers.js"
 import { BngSelect } from "@/common/components/base"
 
@@ -587,9 +619,17 @@ onUnmounted(() => { clearTimeout(askTimer); askTimer = null; clearTimeout(search
 
 const tileLayers = computed(() => activeLayers.value.map(L => {
   const ready = readySet(L)
+  // (a "sat" tile with only its stand-in there, "satp": shown from its own file until the real one comes, which is
+  // still asked for: missingTiles looks at "sat" alone)
+  const stand = L === "sat" ? readySet("satp") : NONE
+  const src = t => {
+    const k = `${t.z}/${t.x}/${t.y}`
+    return mm.tilePath(TILE_DIR, ready.has(k) || !stand.has(k) ? L : "satp", t.z, t.x, t.y)
+  }
   return {
     id: L, overlay: L === "labels",
-    tiles: wanted.value.filter(t => ready.has(`${t.z}/${t.x}/${t.y}`)).map(t => ({ ...t, src: mm.tilePath(TILE_DIR, L, t.z, t.x, t.y) })),
+    tiles: wanted.value.filter(t => ready.has(`${t.z}/${t.x}/${t.y}`) || stand.has(`${t.z}/${t.x}/${t.y}`))
+      .map(t => ({ ...t, src: src(t) })),
     // loaded coarser tiles stretched over the ones still coming (mapmath.fallbackTiles)
     fallback: mm.fallbackTiles(wanted.value, ready).map(t => ({ ...t, src: mm.tilePath(TILE_DIR, L, t.z, t.x, t.y) })),
   }
@@ -817,7 +857,7 @@ function onDown(ev) {
   // (a click beside the Players list only closes it, as a menu: not a GPS route there or a drag)
   if (playersPanel.value) { closePlayers(); return }
   if (ctx.value) { closeCtx(); return }
-  results.value = []
+  dismissSearch()
   if (selecting.value || ev.shiftKey) { startBox(ev); return }
   const p = localXY(ev)
   drag = { x: p.x, y: p.y, sx: p.x, sy: p.y, moved: false }
@@ -1027,6 +1067,8 @@ function padTick(ts) {
 function releaseButtons() {
   const root = rootEl.value
   if (!root) return
+  resultIndex.value = hoverIndex.value = -1
+  hoverEnd()
   root.querySelectorAll(".focus-visible").forEach(el => { el.classList.remove("focus-visible"); if (el.blur) el.blur() })
   if (document.activeElement && root.contains(document.activeElement) && document.activeElement !== root) document.activeElement.blur()
   root.focus({ preventScroll: true })
@@ -1044,6 +1086,8 @@ function showSelected() {
   nextTick(() => {
     const el = rootEl.value && rootEl.value.querySelector(".focus-visible")
     if (el && el.scrollIntoView) el.scrollIntoView({ block: "nearest", inline: "nearest" })
+    const result = el && el.dataset && el.dataset.resultIndex
+    if (result != null) selectResult(Number(result))
   })
 }
 const FOCUS_MOVES = new Set(["focus_u", "focus_d", "focus_l", "focus_r", "focus_ud", "focus_lr"])
@@ -1758,6 +1802,11 @@ function setAutodrive(on) {
     if (r.autodrive && !embedded) close()
   })
 }
+function toggleAvoidHighways() {          // (the GPS plans the route again by itself: gps.lua)
+  const on = !state.value.gps.avoidHighways
+  engineLua(`beamngEarth_settings.uiSet('routeAvoidHighways', ${on})`)
+  state.value.gps.avoidHighways = on
+}
 function clearGps() {
   closeCtx()
   engineLua("beamngEarth_settings and beamngEarth_settings.uiMapGps(nil) or nil", () => {
@@ -1857,9 +1906,28 @@ function goTo(lat, lon, name) {
 // 3+ characters. Enter: the full search too (streets and house numbers: Nominatim, which may not be asked while typing),
 // unless the server is sure of the list's first line (not a street, no house number); Enter on that answer takes its first line. A "lat, lon" on Enter.
 const MAP_WAIT_TRIES = 100      // x 150 ms: longer than the server's own limit (geocode.py ENTER_DEADLINE_S)
-const searching = ref(false)
+const searching = ref(false), searchWide = ref(false), categoriesOpen = ref(false)
+const searchFocused = ref(false)
+const searchToolsVisible = computed(() => searchFocused.value || !!query.value.trim())
+// Before category chips, search attribution was shown whenever results were visible. Preserve that case.
+const searchPanelVisible = computed(() => searchToolsVisible.value || !!results.value.length || searching.value || !!searchMsg.value)
+function searchFocusOut(event) {
+  // Keep the palette open while focus moves from the empty field to a chip (keyboard/controller included).
+  if (!event.currentTarget.contains(event.relatedTarget)) {
+    searchFocused.value = false
+    categoriesOpen.value = false
+  }
+}
+const resultsEl = ref(null), hoverIndex = ref(-1)
+const displayResults = computed(() => results.value.map(r => sm.present(r, state.value.player)))
+const searchPreview = computed(() => {
+  const r = results.value[hoverIndex.value >= 0 ? hoverIndex.value : resultIndex.value]
+  if (!sm.validPoint(r)) return null
+  return { ...sm.previewPosition(screen(r.lat, r.lon), w.value, h.value), result: r }
+})
 const resultIndex = ref(-1)
-let searchTimer = null, searchSeq = 0
+let searchTimer = null, searchPollTimer = null, searchSeq = 0, searchDisposed = false
+let skipSearchWatch = false
 let fullText = ""               // the text the full search (Enter) last answered
 const moreFor = ref("")         // the text the list offers the full search for
 const LATLON_RE = /^[-+]?\d+(\.\d+)?[°\s]*[NSns]?\s*[,;\s]\s*[-+]?\d+(\.\d+)?/
@@ -1871,6 +1939,12 @@ function localHits(text) {
 }
 
 function liveSearch(full = false) {
+  if (searchDisposed) return
+  clearTimeout(searchTimer)
+  clearTimeout(searchPollTimer)
+  hoverEnd()
+  hoverIndex.value = -1
+  searchWide.value = full
   const text = query.value.trim()
   searchMsg.value = ""
   resultIndex.value = -1
@@ -1883,39 +1957,110 @@ function liveSearch(full = false) {
   searching.value = true
   engineLua(`beamngEarth_settings and beamngEarth_settings.uiGeocode(${luaStr(text)}, ${full ? "true" : "false"}) or nil`, r => {
     if (seq !== searchSeq) return
-    if (!r || r.error || !r.id) { searching.value = false; if (r && r.error && !local.length) searchMsg.value = r.error; return }
+    if (!r || r.error || !r.id) {
+      searching.value = false
+      searchMsg.value = (r && r.error) || 'Search unavailable. Check the companion server and try again.'
+      return
+    }
     let tries = 0
     const poll = () => {
       if (seq !== searchSeq) return
       engineLua(`beamngEarth_settings and beamngEarth_settings.uiGeocodeResult(${r.id}) or nil`, res => {
         if (seq !== searchSeq) return
         if (!res) {
-          if (++tries < MAP_WAIT_TRIES) setTimeout(poll, 150)
-          else { searching.value = false; if (!local.length) searchMsg.value = "No answer from the address search" }
+          if (++tries < MAP_WAIT_TRIES) searchPollTimer = setTimeout(poll, 150)
+          else { searching.value = false; searchMsg.value = "Search timed out. Try again or search another place." }
           return
         }
         searching.value = false
+        resultIndex.value = -1
+        hoverIndex.value = -1
+        hoverEnd()
         const online = toArray(res.results)
         results.value = [...local, ...online]
         if (full) fullText = text
-        if (!results.value.length) {
-          searchMsg.value = res.error ? (res.text || "Address search unavailable (offline?)")
-            : full ? "Nothing found" : "Nothing yet: press Enter to search streets and addresses too"
+        if (res.error) searchMsg.value = res.text || 'Search unavailable. Try again in a moment.'
+        else if (!results.value.length) {
+          searchMsg.value = full ? 'No places found. Try another category or add “near <place>”.'
+            : 'No matches yet. Press Enter to search categories and addresses.'
         } else if (!full && !results.value[0].sure) {
           moreFor.value = text      // (a line in the list: a message under it would lie behind it)
         }
       })
     }
-    setTimeout(poll, 150)
+    searchPollTimer = setTimeout(poll, 150)
   })
 }
-watch(query, () => { clearTimeout(searchTimer); searchTimer = setTimeout(liveSearch, 300) })
+watch(query, () => {
+  if (skipSearchWatch) { skipSearchWatch = false; return }
+  // Invalidate as soon as text changes, not 300 ms later: a stale answer must never replace this query.
+  searchSeq++
+  clearTimeout(searchTimer)
+  clearTimeout(searchPollTimer)
+  hoverEnd()
+  hoverIndex.value = resultIndex.value = -1
+  results.value = []
+  searching.value = false
+  searchMsg.value = moreFor.value = ''
+  fullText = ''
+  if (query.value.trim()) searchTimer = setTimeout(() => liveSearch(false), 300)
+})
+
+function dismissSearch() {
+  categoriesOpen.value = false
+  searchSeq++
+  clearTimeout(searchTimer)
+  clearTimeout(searchPollTimer)
+  hoverEnd()
+  results.value = []
+  resultIndex.value = hoverIndex.value = -1
+  searching.value = false
+  searchMsg.value = moreFor.value = ''
+  fullText = ''
+}
+function clearSearch() { dismissSearch(); query.value = '' }
+
+async function searchCategory(category) {
+  if (query.value !== category.query) {
+    skipSearchWatch = true
+    query.value = category.query
+    await nextTick()
+  }
+  categoriesOpen.value = false
+  if (searchDisposed) return
+  liveSearch(true)  // One click is an explicit full search, never an autocomplete plus a full request.
+}
+
+function selectResult(i) {
+  resultIndex.value = i
+  previewResult(i)
+}
+function previewResult(i) {
+  hoverIndex.value = i
+  hoverPreload(results.value[i])
+}
+function leaveResult() { hoverIndex.value = -1; hoverEnd() }
+
+onUnmounted(() => {
+  searchDisposed = true
+  searchSeq++
+  clearTimeout(searchTimer)
+  clearTimeout(searchPollTimer)
+  hoverEnd()
+})
 
 function moveResult(d) {
   const n = results.value.length
   if (!n) return
-  resultIndex.value = (resultIndex.value + d + n) % n
+  resultIndex.value = sm.moveIndex(resultIndex.value, d, n)
+  hoverIndex.value = -1
   hoverPreload(results.value[resultIndex.value])
+  nextTick(() => {
+    const el = resultsEl.value && resultsEl.value.querySelector(`[data-result-index="${resultIndex.value}"]`)
+    if (el && el.scrollIntoView) el.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+    // Tab/controller focus stays in the list; arrow keys in the text field keep the caret there.
+    if (el && document.activeElement !== searchEl.value && el.focus) el.focus({ preventScroll: true })
+  })
 }
 
 // A search result, saved or recent place the pointer rests on (or the arrow keys pick) for PRELOAD_HOVER_MS: the server
@@ -1936,7 +2081,9 @@ function hoverEnd() { clearTimeout(hoverTimer); hoverTimer = null }
 
 function onSearch() {
   const text = query.value.trim()
+  if (searching.value && searchWide.value) return
   if (!text) { results.value = []; return }
+  const seq = searchSeq
   if (results.value.length && (resultIndex.value >= 0 || fullText === text || results.value[0].sure)) {
     pickResult(results.value[Math.max(0, resultIndex.value)])
     return
@@ -1944,6 +2091,7 @@ function onSearch() {
   if (text.length >= 3 && !LATLON_RE.test(text) && fullText !== text) {
     clearTimeout(searchTimer)
     engineLua(`beamngEarth_settings and beamngEarth_settings.uiMapParse(${luaStr(text)}) or nil`, r => {
+      if (seq !== searchSeq || searchDisposed) return
       if (r && typeof r.lat === "number") goTo(r.lat, r.lon, "")      // a map link
       else liveSearch(true)
     })
@@ -1951,6 +2099,7 @@ function onSearch() {
   }
   // a typed latitude, longitude (places.lua parses every format the page accepts)
   engineLua(`beamngEarth_settings and beamngEarth_settings.uiMapParse(${luaStr(text)}) or nil`, r => {
+      if (seq !== searchSeq || searchDisposed) return
     if (r && typeof r.lat === "number") goTo(r.lat, r.lon, "")
     else if (!searching.value) searchMsg.value = "Nothing found (try more of the address, or a latitude, longitude)"
   })
@@ -1959,12 +2108,15 @@ function onSearch() {
 function pickResult(r) {
   searchSeq++
   clearTimeout(searchTimer)
+  clearTimeout(searchPollTimer)
+  hoverEnd()
+  hoverIndex.value = resultIndex.value = -1
   results.value = []
   searching.value = false
-  searchMsg.value = ""
+  searchMsg.value = moreFor.value = ""
+  fullText = ''
   const name = r.name || ""
-  query.value = name
-  setTimeout(() => { searchSeq++; clearTimeout(searchTimer) }, 0)   // the watch on query must not search again
+  if (query.value !== name) { skipSearchWatch = true; query.value = name }
   const label = r.detail ? `${name}, ${r.detail}` : name
   follow.value = false
   view.value = { lat: r.lat, lon: r.lon, z: Math.max(view.value.z, 13) }
@@ -2015,7 +2167,8 @@ function onEscape() {
   if (selecting.value) { cancelSelect(); return }
   if (layersPanel.value) { layersPanel.value = false; return }
   if (target.value) { target.value = null; return }
-  if (results.value.length) { results.value = []; return }
+  if (results.value.length || searching.value || query.value) { clearSearch(); return }
+  if (categoriesOpen.value) { categoriesOpen.value = false; return }
   if (!embedded) close()
 }
 
@@ -2240,19 +2393,61 @@ const fmtLatLon = mm.fmtLatLon
   display: flex; gap: 7px; align-items: center; padding: 7px 12px; background: rgba(0, 0, 0, 0.7);
   border-radius: 4px; white-space: nowrap; font-size: 13px;
 }
-.search { position: relative; flex: 1; max-width: 460px; }
+.search { position: relative; flex: 1; min-width: 240px; max-width: 460px; }
+.search-field { position: relative; }
 .search-input {
-  width: 100%; box-sizing: border-box; padding: 7px 10px; font-size: 14px; color: #fff;
-  background: rgba(0, 0, 0, 0.75); border: 1px solid rgba(255, 255, 255, 0.3); border-radius: 4px; outline: none;
+  width: 100%; box-sizing: border-box; padding: 9px 32px 9px 10px; font-size: 14px; color: #fff;
+  background: rgba(15, 18, 22, 0.96); border: 1px solid rgba(255, 255, 255, 0.3); border-radius: 5px; outline: none;
 }
 .search-input:focus { border-color: #ff9a3c; }
-.search-results {
-  position: absolute; left: 0; right: 0; top: 36px; background: rgba(20, 22, 26, 0.95); border-radius: 4px; overflow: hidden;
-}
-.search-result { padding: 6px 10px; display: flex; justify-content: space-between; gap: 10px; cursor: pointer; }
-.search-result:hover { background: rgba(255, 154, 60, 0.35); }
-.result-coords { opacity: 0.6; font-size: 12px; }
-.search-msg { margin-top: 4px; padding: 5px 10px; font-size: 12px; background: rgba(0, 0, 0, 0.75); border-radius: 4px; }
+.search-clear { position: absolute; right: 3px; top: 3px; padding: 2px 7px; border: 0; border-radius: 3px;
+  background: transparent; color: #b8c2cb; font-size: 22px; cursor: pointer; }
+.search-panel { position: absolute; top: 42px; left: 0; width: min(460px, calc(100vw - 32px)); min-width: 100%;
+  display: flex; flex-direction: column; max-height: calc(100vh - 150px - 6.5vh);
+  background: rgba(20, 24, 29, 0.97); border: 1px solid #46515c; border-radius: 6px;
+  box-shadow: 0 6px 20px #0007; overflow: hidden; box-sizing: border-box; }
+.embedded .search-panel { max-height: calc(70vh - 150px); }
+.search-tools, .category-picker { display: flex; flex-wrap: wrap; gap: 5px; padding: 8px; flex-shrink: 0; }
+.category-picker { border-top: 1px solid #ffffff18; max-height: 156px; overflow-y: auto; flex-shrink: 1; }
+.category-chip { display: inline-flex; align-items: center; gap: 4px; padding: 5px 7px; border-radius: 4px;
+  border: 1px solid #52606c; background: #ffffff08; color: #dce4ea; font: inherit; font-size: 11px; cursor: pointer; }
+.category-chip:hover, .category-chip.on { color: #ffbb80; border-color: #ff9a3c; background: #ff9a3c18; }
+.category-chip svg, .result-icon, .preview-pin svg { width: 18px; height: 18px; flex-shrink: 0; fill: none;
+  stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+.search-hint { padding: 2px 9px 7px; font-size: 11px; color: #aab8c4; flex-shrink: 0; }
+.search-status { display: flex; align-items: center; gap: 8px; padding: 10px; color: #e4d4c4;
+  border-top: 1px solid #ffffff18; font-size: 12px; flex-shrink: 0; }
+.search-spinner { width: 12px; height: 12px; border-radius: 50%; border: 2px solid #ff9a3c40;
+  border-top-color: #ff9a3c; flex-shrink: 0; animation: search-spin 1s linear infinite; }
+@keyframes search-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .search-spinner { animation: none; } }
+.search-results { overflow-y: auto; min-height: 0; overscroll-behavior: contain; border-top: 1px solid #ffffff18; }
+.search-result { padding: 9px 10px; display: flex; align-items: flex-start; gap: 9px; width: 100%;
+  border: 0; border-bottom: 1px solid #ffffff10; background: transparent; color: #eee; font: inherit;
+  text-align: left; cursor: pointer; }
+.search-result:hover { background: rgba(255, 154, 60, 0.16); }
+.result-icon { color: #ffb77a; margin-top: 3px; width: 22px; height: 22px; }
+.result-copy { display: flex; flex-direction: column; gap: 3px; min-width: 0; flex: 1; }
+.result-heading { display: flex; align-items: baseline; gap: 6px; justify-content: space-between; }
+.result-name { font-size: 13px; overflow-wrap: anywhere; }
+.result-kind { flex-shrink: 0; color: #b7c8d6; font-size: 10px; }
+.result-meta { color: #ffd0aa; font-size: 11px; }
+.result-description { color: #aab8c4; font-size: 11px; overflow-wrap: anywhere; }
+.search-more { padding: 9px 10px; border: 0; border-top: 1px solid #ffffff18; background: #ffffff06;
+  color: #ffbb80; text-align: left; font: inherit; font-size: 12px; cursor: pointer; flex-shrink: 0; }
+.search-more:hover { background: #ff9a3c20; }
+.search-preview { pointer-events: none; z-index: 8; color: #ffb54a; }
+.preview-pin { display: grid; place-items: center; width: 32px; height: 32px; margin: -32px 0 0 -16px;
+  background: #1a2029; border: 2px solid #ffb54a; border-radius: 50% 50% 50% 0; transform: rotate(-45deg);
+  box-shadow: 0 0 0 5px #ffb54a30, 0 2px 8px #000a; }
+.preview-pin svg { transform: rotate(45deg); }
+.preview-name { margin-top: 7px; transform: translateX(-50%); padding: 4px 7px; border-radius: 4px;
+  background: #14181df2; border: 1px solid #ffb54a; color: #ffe1bc; max-width: 180px; width: max-content;
+  font-size: 12px; overflow-wrap: anywhere; }
+.search-preview.outside .preview-name { max-width: 140px; }
+@media (max-width: 1100px) { .map-title { display: none; } .search { min-width: 210px; } }
+@media (max-width: 850px) { .map-top { flex-wrap: wrap; } .search { order: -1; flex-basis: 100%; max-width: none; }
+  .search-panel { width: 100%; } }
 .map-btn {
   padding: 7px 12px; min-width: 34px; font-size: 14px; color: #fff; cursor: pointer;
   background: rgba(0, 0, 0, 0.7); border: 1px solid rgba(255, 255, 255, 0.3); border-radius: 4px;
@@ -2308,8 +2503,7 @@ const fmtLatLon = mm.fmtLatLon
 .item-btns { display: flex; gap: 4px; flex-shrink: 0; }
 .panel-empty { padding: 6px 4px; font-size: 12px; color: #9aa4ae; }
 .search-result.active { background: rgba(224, 118, 28, 0.6); }
-.search-more .result-name { color: #ff9a3c; }
-.search-credit { padding: 4px 10px; font-size: 10px; color: #8a949e; border-top: 1px solid rgba(255, 255, 255, 0.08); }
+.search-credit { flex-shrink: 0; padding: 7px 10px; font-size: 10px; color: #b0bec9; border-top: 1px solid rgba(255, 255, 255, 0.08); }
 
 .ctx-menu {
   position: absolute; z-index: 10; min-width: 190px; padding: 4px 0; background: rgba(15, 18, 22, 0.95);

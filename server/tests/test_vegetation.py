@@ -253,6 +253,58 @@ class VegetationTest(unittest.TestCase):
         self.assertGreater(int((veg.Vegetation(md, None).cell(KEY).kind == veg.KIND_TREE).sum()), 0, "on grass: kept")
 
 
+class LatitudeTest(unittest.TestCase):
+    """The canopy raster and the scatter grids are in Web Mercator units: the same pixels cover cos(lat) as much ground.
+    A flat forest at 69 N had ~4.5x the trees per km2 of the same forest at 39 N, and its flat crowns' tops stood on a
+    lattice (a player's Lapland report, 2026-11-14). Now about the same density, and no lattice."""
+
+    @staticmethod
+    def density(lat, lon, dx):
+        key = mapcells.cell_of(lat, lon)
+        lon0, lat0, lon1, lat1 = key.bounds()
+        cx, cy = veg._to3857((lon0 + lon1) / 2, (lat0 + lat1) / 2)
+        n = 360                                                   # (a window of the cell: the real raster's pixels)
+        x0, y1 = cx - n * dx / 2, cy + n * dx / 2
+        h = np.full((n, n), 12, np.uint8)                         # one flat 12 m forest (an upsampled canopy's plateau)
+
+        class Trees(Raster):
+            def sample(self, lon, lat):
+                return np.full(np.shape(lon), 10, np.uint8)      # WorldCover tree cover
+
+        layers = {"canopy": Raster(h, x0, y1, dx, nodata=255), "landcover": Trees(None, 0, 0, 1),
+                  "buildings": Feats(3, []), "roads": Feats(2, []), "water": Feats(3, [])}
+        cd = SimpleNamespace(bounds=key.bounds(), layers=layers)
+
+        class MD:
+            release = "t"
+
+            def cell(self, k, layers=None, kind="demand"):
+                if tuple(k)[1:] == (key.x, key.y):
+                    return cd
+                return SimpleNamespace(bounds=None, layers={"buildings": None, "roads": None, "water": None})
+        it = veg.Vegetation(MD(), None).cell(key)
+        trees = it.take(it.kind == veg.KIND_TREE)
+        km2 = (n * dx * np.cos(np.radians((lat0 + lat1) / 2)) / 1000.0) ** 2   # the window's ground area
+        return len(trees) / km2, trees
+
+    def test_same_density_at_69_n_as_at_39_n(self):
+        dx = 1.194                                                # (the z17 canopy raster's pixel: the same at both)
+        d39, _ = self.density(39.29, -76.58, dx)
+        d69, trees = self.density(69.0127, 28.6714, dx)
+        self.assertGreater(d39, 0)
+        self.assertLess(d69 / d39, 1.6, (d39, d69))
+        self.assertGreater(d69 / d39, 0.6, (d39, d69))
+        # no lattice: the tops of a flat crown were kept in the raster's order, rows and columns at one spacing
+        lat = np.asarray(trees.lat)
+        rows = np.unique(np.round((lat - lat.min()) * 1e5).astype(np.int64))
+        self.assertGreater(len(rows), len(lat) ** 0.5 * 1.5, "tops on few rows: a lattice")
+
+    def test_merc_k(self):
+        self.assertAlmostEqual(veg._merc_k(veg.MERC_REF_LAT), 1.0, places=9)
+        self.assertAlmostEqual(veg._merc_k(69.0), 2.137, places=2)
+        self.assertAlmostEqual(veg._merc_k(-69.0), veg._merc_k(69.0), places=12)
+
+
 class RegionalTest(unittest.TestCase):
     def g(self, group, h, lat, lon, lcls, u=0.9):
         return int(veg.regional(np.array([group]), np.array([h]), np.array([lat]), np.array([lon]),
@@ -471,6 +523,60 @@ class ClumpTest(unittest.TestCase):
         self.assertAlmostEqual(float(cy[0]), float(ys[:3].mean()), places=3)
         again = veg.clumps(it, lc, LAT)
         self.assertTrue(np.array_equal(again.lon, out.lon) and np.array_equal(again.yaw, out.yaw), "deterministic")
+
+    def test_a_forest_road_through_a_square_keeps_its_clumps_off_it(self):
+        # the user, 2026-11-16 ("take into consideration if the road is blocked by other buildings or trees"): a track
+        # through a square of 20 m firs (a clump's radius 8 m), three each side 7-8.5 m off its line; the square's one
+        # clump stood on its lanes
+        cell = veg.clump_cell(LAT)
+        k = 1.0 / np.cos(np.radians(LAT))               # Web Mercator m per ground m
+        sx = np.floor((-8524000.0 + 20037508.342789244) / cell) * cell - 20037508.342789244
+        sy = np.floor((4764000.0 + 20037508.342789244) / cell) * cell - 20037508.342789244
+        mid = sy + cell / 2
+
+        def firs(off):
+            xs = sx + cell * np.array([0.1, 0.5, 0.9, 0.15, 0.55, 0.85])
+            lon, lat = veg._to4326(xs, mid + k * np.asarray(off, float))
+            return self._items(lat, lon, [veg.G_CONIFER] * 6)
+        it, lc = firs([7.0, 8.5, 8.0, -8.0, -8.5, -7.0])
+        before = veg.clumps(it, lc, LAT)
+        self.assertEqual(len(before), 7, "no roads: one clump")
+        _, cy0 = veg._to3857(before.lon[6:], before.lat[6:])
+        self.assertLess(abs(float(cy0[0]) - mid) / k, 1.0, "on the track's line")
+        # the track on a CHM-like grid round the square (1 Web Mercator m pixels)
+        chm = SimpleNamespace(x0=sx - 100.0, y0=sy + cell + 100.0, dx=1.0, dy=1.0)
+        a, b = veg._to4326(np.array([sx - 80.0, sx + cell + 80.0]), np.array([mid, mid]))
+        road = Feats(2, [[(float(a[0]), float(b[0])), (float(a[1]), float(b[1]))]], ["track"])
+        segs = veg._road_segs(road, (int(cell) + 200, int(cell) + 200), chm, veg.CLUMP_ROAD_MARGIN_DEFAULT_M,
+                              margins=veg.CLUMP_ROAD_MARGIN_M)
+        self.assertIsNotNone(segs)
+        out = veg.clumps(it, lc, LAT, roads=veg.ClumpRoads([segs], chm))
+        self.assertEqual(len(out), 8, "one clump each side of the track")
+        self.assertTrue(np.all(out.scale[:6] < 0), "every fir a clump's")
+        _, cy = veg._to3857(out.lon[6:], out.lat[6:])
+        reach = veg.ROAD_HALF_DEFAULT_M + veg.CLUMP_ROAD_MARGIN_DEFAULT_M
+        for c, rad in zip(cy, out.radius[6:]):
+            self.assertGreaterEqual(abs(float(c) - mid) / k, reach + float(rad) - 0.05, "clear of the track")
+        again = veg.clumps(it, lc, LAT, roads=veg.ClumpRoads([segs], chm))
+        self.assertTrue(np.array_equal(again.lon, out.lon) and np.array_equal(again.lat, out.lat), "deterministic")
+        # firs 3-5 m off the line: no clump fits beside the track (it would move 6 m): they stay single
+        it, lc = firs([3.0, 5.0, 4.0, -4.0, -5.0, -3.0])
+        out = veg.clumps(it, lc, LAT, roads=veg.ClumpRoads([segs], chm))
+        self.assertEqual(len(out), 6)
+        self.assertTrue(np.all(out.scale > 0), "shown far as single trees")
+        # (Codex review of cff64d91) a clump moved off the track must stay in its own cell (the next cell's tiles never
+        # show it) and off water and buildings (the tiles drop a clump in water): else its firs stay single
+        it, lc = firs([7.0, 8.5, 8.0, -8.0, -8.5, -7.0])
+        n = int(cell) + 200
+        wet = np.zeros((n, n), bool)
+        wet[: int(round(chm.y0 - mid)), :] = True          # water from the track's line up (north)
+        out = veg.clumps(it, lc, LAT, roads=veg.ClumpRoads([segs], chm, blocked=wet))
+        self.assertEqual(len(out), 7, "the north side's clump would stand in the water: left out")
+        self.assertEqual(list(out.scale[:6] < 0), [False, False, False, True, True, True])
+        own = (sx - 100.0, sy - 100.0, sx + 100.0, mid + k * 9.0)     # the cell ends 9 m north of the track
+        out = veg.clumps(it, lc, LAT, roads=veg.ClumpRoads([segs], chm, own=own))
+        self.assertEqual(len(out), 7, "the north side's clump would leave the cell: left out")
+        self.assertEqual(list(out.scale[:6] < 0), [False, False, False, True, True, True])
 
     def test_street_trees_and_palms_stay_single(self):
         x0, y0 = -8524000.0, 4764000.0
@@ -706,3 +812,33 @@ class FarmFoliageTest(unittest.TestCase):
         self.assertLessEqual(nlines, 14)
         blocked = np.ones((rows, cols), bool)
         self.assertEqual(len(veg.farm_foliage(feats, chm, blocked, None)), 0)
+
+
+class TiedCapTest(unittest.TestCase):
+    """At a tile's cap (_capped) the lowest ranks are kept, ties broken by the items' order (a stable sort): the same
+    rows on every CPU. numpy's argpartition put equal ranks in its CPU's own order (x86-simd-sort's AVX2 or AVX-512
+    code, the scalar code elsewhere): which of the tied items a tile kept depended on the machine (2026-11-18). The
+    vegetation geotiles are kept by the code's hash (revisit kind "vegg": vegetation.py is in revisit.source_closure),
+    so the new rule makes them again."""
+
+    def test_ties_at_the_cut_keep_the_first(self):
+        from unittest import mock
+        rank = np.array([0.5, 0.2, 0.5, 0.1, 0.5, 0.5, 0.9, 0.5], np.float32)
+        it = SimpleNamespace(group=np.zeros(len(rank), np.int64), rank=rank)
+        with mock.patch.object(veg, "TILE_ROWS_MAX", 4):
+            got = veg._capped(it)
+        # 0.1 and 0.2, then the first two of the five tied at 0.5 (items 0 and 2), in index order
+        self.assertEqual(got.tolist(), [0, 1, 2, 3])
+
+    def test_clumps_capped_apart(self):
+        from unittest import mock
+        rank = np.full(6, 0.3, np.float32)
+        group = np.array([0, veg.CLUMP_GROUPS[0], 0, veg.CLUMP_GROUPS[0], 0, veg.CLUMP_GROUPS[0]])
+        it = SimpleNamespace(group=group, rank=rank)
+        with mock.patch.object(veg, "TILE_ROWS_MAX", 2), mock.patch.object(veg, "CLUMP_ROWS_MAX", 1):
+            self.assertEqual(veg._capped(it).tolist(), [0, 1, 2])
+
+    def test_vegetation_in_the_tiles_code_key(self):
+        import os
+        import revisit
+        self.assertIn("vegetation.py", revisit.source_closure(os.path.dirname(os.path.abspath(veg.__file__))))

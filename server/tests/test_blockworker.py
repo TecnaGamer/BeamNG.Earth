@@ -37,7 +37,11 @@ class FakeMapData:
     def warm(self, needs, kind="demand"):
         return 0
 
-    def versions(self):             # (part of the revisit cache's key)
+    def versions(self, buildings=False):    # (part of the revisit cache's key; buildings: as MapData.versions's)
+        if buildings:
+            import osmcolours
+            import osmyears
+            return dict(self.versions(), osmyears=osmyears.identity(self), osmcolours=osmcolours.identity(self))
         return {"pipeline": 0}
 
     def side_prefetch(self, keys):  # (mapdata.MapData's: the props' per-cell sources started early)
@@ -415,7 +419,7 @@ class FarTileTest(unittest.TestCase):
             rgb, used = im.render(FRAME, *sq, px)
             g = np.asarray(built.grid)
             rgb = rockface.rock(rgb, FRAME, *sq, g, x0, y0, tile.size / (g.shape[1] - 1))
-            n = imagery.write_dds(os.path.join(out, "server.dds"), rgb)
+            n = imagery.write_dds(os.path.join(out, "server.dds"), rgb, imagery.FAR_SRGB)
             built2, got = blockworker.far_tile(1, LAT, LON, tile, 12, None, 11, True, layout, tex)
             self.assertIsNotNone(got, "the tiles on disk now")
             self.assertEqual(got[0], n)

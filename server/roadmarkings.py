@@ -70,7 +70,7 @@ def paint(chunks):
             a, b = max(0., start), min(s[-1], start + length)
             if b - a > 1e-5:
                 at = np.r_[a, s[(s > a) & (s < b)], b]
-                nodes = np.column_stack([np.interp(at, s, p[:, d]) for d in range(p.shape[1])])
+                nodes = np.column_stack([dnp.interp(at, s, p[:, d]) for d in range(p.shape[1])])
                 out.append(dict(base, n=nodes.tolist()))
             start += period
     return out

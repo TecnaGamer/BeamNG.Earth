@@ -17,8 +17,8 @@ M.TRAFFIC_R = 80        -- m: an AI traffic car
 M.MIN_SEPARATION_M = 30 -- a vehicle this close to the active car adds no focus (its island is the active car's)
 M.UPDATE_S = 0.5
 
--- Pure: the foci of vehicles { id, x, y, kind = 'player' | 'traffic' | 'parked' } other than the active one at
--- (ax, ay) (nil: none active). [{ x, y, r, trees, id, kind }]
+-- Pure: the foci of vehicles { id, x, y, z, kind = 'player' | 'traffic' | 'parked' } other than the active one at
+-- (ax, ay) (nil: none active). [{ x, y, z, r, trees, id, kind }]
 function M.compute(vehicles, activeId, ax, ay)
   local out = {}
   for _, v in ipairs(vehicles) do
@@ -26,7 +26,7 @@ function M.compute(vehicles, activeId, ax, ay)
       local far = not ax or ((v.x - ax) ^ 2 + (v.y - ay) ^ 2) > M.MIN_SEPARATION_M ^ 2
       if far then
         local player = v.kind == 'player'
-        out[#out + 1] = { x = v.x, y = v.y, r = player and M.PLAYER_R or M.TRAFFIC_R, trees = player, id = v.id,
+        out[#out + 1] = { x = v.x, y = v.y, z = v.z, r = player and M.PLAYER_R or M.TRAFFIC_R, trees = player, id = v.id,
           kind = v.kind }
       end
     end
@@ -140,7 +140,7 @@ function M.vehicles()
       local id = o:getId()
       local p = o:getPosition()
       local occupied = localplayers.controlled(id, o, controlled)
-      out[#out + 1] = { id = id, x = p.x, y = p.y, controlled = occupied,
+      out[#out + 1] = { id = id, x = p.x, y = p.y, z = p.z, controlled = occupied,
         kind = occupied and 'player' or traffic[id] and 'traffic' or parked[id] and 'parked' or 'player' }
     end
   end

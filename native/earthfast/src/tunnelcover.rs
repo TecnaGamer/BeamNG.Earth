@@ -5,6 +5,7 @@
 
 use numpy::{IntoPyArray, PyArray1, PyReadonlyArray1, PyReadonlyArray2};
 use pyo3::prelude::*;
+use crate::dm::Dm;
 
 /// Arc positions along polyline a (with arc lengths sa) where it crosses polyline b, and the sine of the angle there.
 fn hits(a: &[[f64; 2]], sa: &[f64], b: &[[f64; 2]]) -> Vec<(f64, f64)> {
@@ -205,7 +206,7 @@ pub(crate) fn tunnel_reach_core(a: &[[f64; 2]], s: &[f64], ranges: &[[f64; 2]], 
         for (sc, sin) in hits(&a, &s, &p[b0..b1]) {
             // (the crossing point, to tell a junction: the other line ends there)
             let at = point_at(&a, &s, sc);
-            let d = |e: [f64; 2]| ((e[0] - at[0]).powi(2) + (e[1] - at[1]).powi(2)).sqrt();
+            let d = |e: [f64; 2]| ((e[0] - at[0]).sq() + (e[1] - at[1]).sq()).sqrt();
             if d(e0) < end_m || d(e1) < end_m {
                 continue;
             }
@@ -268,7 +269,7 @@ fn alongside(a: &[[f64; 2]], s: &[f64], t: f64, p: &[[f64; 2]], st: &[usize], hw
                 continue;
             }
             let u = (((at[0] - q[0]) * ex + (at[1] - q[1]) * ey) / el2).clamp(0.0, 1.0);
-            let d = ((q[0] + u * ex - at[0]).powi(2) + (q[1] + u * ey - at[1]).powi(2)).sqrt();
+            let d = ((q[0] + u * ex - at[0]).sq() + (q[1] + u * ey - at[1]).sq()).sqrt();
             if d < hw[r] + clear && (ux * ey - uy * ex).abs() / el2.sqrt() < min_sin {
                 return true;
             }

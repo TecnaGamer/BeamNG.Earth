@@ -665,3 +665,171 @@ class SlowGapsTest(unittest.TestCase):
         self.assertEqual(list(second.values()), [None])
         self.assertGreaterEqual(t1 - t0, 0.55)
         self.assertLess(t2 - t1, 0.4, "the second cell waited the full time again")
+
+
+class PrefetchWantsTest(unittest.TestCase):
+    """The server's lidar prefetch (RoadZ.prefetch) and the cells planning asked for: read, and kept used, so a place
+    visited again plans on its lidar and is kept (the terrain blocks, the plans, the road tiles: revisit.py)."""
+
+    def setUp(self):
+        import shutil
+        import tempfile
+        from unittest import mock
+        self.mock = mock
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        p = mock.patch.dict(os.environ, {roadz.SESSION_ENV: f"w{time.monotonic_ns()}"})
+        p.start()
+        self.addCleanup(p.stop)
+        p = mock.patch.object(roadz, "sources_at", lambda la, lo, lidar=None: ["lidar"])
+        p.start()
+        self.addCleanup(p.stop)
+
+    def provider(self):
+        rz = roadz.RoadZ(self.tmp, object())
+        rz.enabled = rz.lidar = True
+        return rz
+
+    def wait_idle(self, rz, n, timeout=5.0):
+        end = time.monotonic() + timeout
+        while time.monotonic() < end:
+            st = rz._pf()
+            with st["cv"]:
+                if len(st["done"]) + len(st["failed"]) >= n and not st["busy"]:
+                    return
+            time.sleep(0.02)
+        self.fail("the prefetch did not finish")
+
+    def test_cells_planning_asked_for_read_past_the_far_limit(self):
+        """A cell a planning process asked for (a want file) is read up to PREFETCH_WANT_FAR_M from the player, not
+        dropped at PREFETCH_FAR_M with the cells queued round the player: planning near the player asks for the deck
+        ends' cells 8-16 km out, and those were never read, so the place was never kept (Fells Point, a 16 GB Windows
+        PC with no late pool, 2026-11-14). A want past PREFETCH_WANT_FAR_M still goes (a teleport far away)."""
+        rz = self.provider()
+        read = []
+        rz.lines = lambda src, key: read.append((key.x, key.y)) or roadz.Lines.build([])
+        mid = (roadz.PREFETCH_FAR_M + roadz.PREFETCH_WANT_FAR_M) / 2
+        dist = {1: 10.0, 2: mid, 3: mid, 4: roadz.PREFETCH_WANT_FAR_M * 2}
+        with self.mock.patch.object(roadz, "PREFETCH_CELLS", 1), self.mock.patch.object(roadz, "PREFETCH_POLL_S", 0.05):
+            rz._want("lidar", mapcells.CellKey(14, 2, 0))     # (asked by planning, past PREFETCH_FAR_M)
+            rz._want("lidar", mapcells.CellKey(14, 4, 0))     # (asked by planning, past PREFETCH_WANT_FAR_M)
+            rz.prefetch([mapcells.CellKey(14, 1, 0), mapcells.CellKey(14, 3, 0)], where=lambda k: dist[k.x])
+            self.wait_idle(rz, 2)
+            time.sleep(0.2)
+        self.assertEqual(sorted(read), [(1, 0), (2, 0)])
+        self.assertEqual(rz.prefetch_state(mapcells.CellKey(14, 2, 0)), "done", "the cell planning asked for")
+        self.assertIsNone(rz.prefetch_state(mapcells.CellKey(14, 3, 0)), "past PREFETCH_FAR_M, not asked: dropped")
+        self.assertIsNone(rz.prefetch_state(mapcells.CellKey(14, 4, 0)), "past PREFETCH_WANT_FAR_M: dropped")
+
+    def test_a_wanted_cell_whose_read_failed_is_tried_again(self):
+        """A wanted cell keeps its far limit when queued again after a failed read (no planning process asks twice:
+        its decision for the run is made)."""
+        rz = self.provider()
+        tries = []
+
+        def lines(src, key):
+            tries.append(key.x)
+            return None if tries.count(2) == 1 and key.x == 2 else roadz.Lines.build([])
+        rz.lines = lines
+        mid = (roadz.PREFETCH_FAR_M + roadz.PREFETCH_WANT_FAR_M) / 2
+        with self.mock.patch.object(roadz, "PREFETCH_CELLS", 1), self.mock.patch.object(roadz, "PREFETCH_POLL_S", 0.05), \
+                self.mock.patch.object(roadz, "PREFETCH_RETRY_S", 0.0):
+            rz._want("lidar", mapcells.CellKey(14, 2, 0))
+            rz.prefetch([mapcells.CellKey(14, 1, 0)], where=lambda k: 10.0 if k.x == 1 else mid)
+            end = time.monotonic() + 5.0
+            while time.monotonic() < end and rz.prefetch_state(mapcells.CellKey(14, 2, 0)) != "done":
+                time.sleep(0.02)
+        self.assertEqual(rz.prefetch_state(mapcells.CellKey(14, 2, 0)), "done")
+        self.assertEqual(tries.count(2), 2, "read again after the failed read")
+
+    def _failing_want(self, fail):
+        """A wanted cell 8-24 km out whose every read fails (fail(): what the stub does); -> (provider, reads)."""
+        rz = self.provider()
+        reads = []
+
+        def lines(src, key):
+            reads.append(key.x)
+            if key.x != 2:          # (the cells round the player: read)
+                return roadz.Lines.build([])
+            fail()
+            return None
+        rz.lines = lines
+        return rz, reads
+
+    def _run_want(self, rz, reads, cell, until, timeout=5.0):
+        mid = (roadz.PREFETCH_FAR_M + roadz.PREFETCH_WANT_FAR_M) / 2
+        rz._want("lidar", cell)
+        rz.prefetch([mapcells.CellKey(14, 1, 0)], where=lambda k: 10.0 if k.x == 1 else mid)
+        end = time.monotonic() + timeout
+        while time.monotonic() < end and not until():
+            time.sleep(0.02)
+        time.sleep(0.3)         # (no more reads after it)
+
+    def test_a_wanted_cell_that_keeps_failing_is_left_until_asked_again(self):
+        """A wanted cell whose read keeps failing is read PREFETCH_WANT_TRIES times, then left (dropped past
+        PREFETCH_FAR_M as any cell): with no limit it was read again every minute while the player stayed within
+        24 km (Codex review of 99cf7113). A planning process asking again renews the want."""
+        rz, reads = self._failing_want(lambda: None)
+        cell = mapcells.CellKey(14, 2, 0)
+        with self.mock.patch.object(roadz, "PREFETCH_CELLS", 1), \
+                self.mock.patch.object(roadz, "PREFETCH_POLL_S", 0.05), \
+                self.mock.patch.object(roadz, "PREFETCH_RETRY_S", 0.0), \
+                self.mock.patch.object(roadz, "PREFETCH_WANT_TRIES", 3):
+            self._run_want(rz, reads, cell, lambda: rz.prefetch_state(cell) is None and reads.count(2) >= 3)
+            self.assertEqual(reads.count(2), 3, "read PREFETCH_WANT_TRIES times, then left")
+            self.assertIsNone(rz.prefetch_state(cell), "dropped past PREFETCH_FAR_M once the want ended")
+            rz._want("lidar", cell)         # (asked again: renewed)
+            rz.prefetch([mapcells.CellKey(14, 3, 0)], where=lambda k: 10.0 if k.x == 3 else
+                        (roadz.PREFETCH_FAR_M + roadz.PREFETCH_WANT_FAR_M) / 2)
+            end = time.monotonic() + 5.0
+            while time.monotonic() < end and reads.count(2) < 6:
+                time.sleep(0.02)
+            time.sleep(0.3)
+        self.assertEqual(reads.count(2), 6, "a renewed want is read again, as many times")
+
+    def test_a_404_ends_the_want_at_once(self):
+        """A read that found no data there (netfetch.NotFound) ends the want: not read again."""
+        import netfetch
+
+        def fail():
+            roadz._tl.failed = netfetch.NotFound("no such node")
+        rz, reads = self._failing_want(fail)
+        cell = mapcells.CellKey(14, 2, 0)
+        with self.mock.patch.object(roadz, "PREFETCH_CELLS", 1), \
+                self.mock.patch.object(roadz, "PREFETCH_POLL_S", 0.05), \
+                self.mock.patch.object(roadz, "PREFETCH_RETRY_S", 0.0):
+            self._run_want(rz, reads, cell, lambda: reads.count(2) >= 1 and rz.prefetch_state(cell) is None)
+        self.assertEqual(reads.count(2), 1)
+        self.assertIsNone(rz.prefetch_state(cell))
+
+    def test_a_want_not_asked_again_expires(self):
+        """A want older than PREFETCH_WANT_KEEP_S is a cell like the rest: dropped past PREFETCH_FAR_M unread."""
+        rz = self.provider()
+        reads = []
+        rz.lines = lambda src, key: reads.append(key.x) or roadz.Lines.build([])
+        cell = mapcells.CellKey(14, 2, 0)
+        with self.mock.patch.object(roadz, "PREFETCH_CELLS", 1), \
+                self.mock.patch.object(roadz, "PREFETCH_POLL_S", 0.05), \
+                self.mock.patch.object(roadz, "PREFETCH_WANT_KEEP_S", -1.0):
+            self._run_want(rz, reads, cell, lambda: 1 in reads and rz.prefetch_state(cell) is None)
+        self.assertEqual(reads, [1])
+        self.assertIsNone(rz.prefetch_state(cell))
+
+    def test_a_cell_read_from_disk_is_marked_used(self):
+        """A lidar cell read from disk (in a worker: the download cache's index never hears of it) gets its mtime
+        now, the cache's last use for files this server's own process did not read (cache.Cache.scan): one read on
+        every visit was as old as its download and among the first evicted when the disk ran short."""
+        rz = self.provider()
+        ln = roadz.Lines.build([], corrected=True)
+        p = rz._path("lidar", mapcells.CellKey(14, 1, 2))
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        ln.save(p)
+        with open(p + ".gaps.json", "w", encoding="utf-8") as fh:
+            fh.write("[]")
+        old = time.time() - 30 * 86400
+        for f in (p, p + ".gaps.json"):
+            os.utime(f, (old, old))
+        got = rz.lines("lidar", mapcells.CellKey(14, 1, 2))
+        self.assertIsNotNone(got)
+        for f in (p, p + ".gaps.json"):
+            self.assertGreater(os.path.getmtime(f), time.time() - 600, f"{os.path.basename(f)} not marked used")

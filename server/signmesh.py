@@ -244,13 +244,6 @@ class Mesh:
             self.text(route,rz,-.034,.145,rw-.10,uppercase=False,font_key='l1',centre_ink=True)
         return w,h
 
-    def town_face(self,name,exit=False,route=''):
-        import europeinfra
-        return self._town_face(name,europeinfra.town_style('FR'),exit,route)[0]
-
-    def country_town_face(self,name,style,exit=False,details=()):
-        return self._town_face(name,style,exit,details=details)
-
     def town(self,position,into,name,route='',kind='both',style=None,details=()):
         import europeinfra
         style=style or europeinfra.town_style('FR');plan=town_layout(name,style,details)

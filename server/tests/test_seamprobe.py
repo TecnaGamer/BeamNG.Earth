@@ -1,0 +1,370 @@
+"""seamprobe (road revamp v2, risk 4: window independence): BNE_ROADSHAPE=sheet's forks are worked out from the parts
+within a fixed radius of their node, never from the tile window, so two road tiles that share a seam must agree on it.
+
+Real places with bridge forks near tile edges (fixtures/seamprobe_*.npz, tools/capture_seamprobe_fixture.py: the
+server's solved bridge parts and the graded ground under them, from the road corpus's seeded caches) are built tile by
+tile as the road tile build does (roads._bridge_chunks with a BridgeProfiles stand-in handing out the frozen whole parts
+as BridgeProfiles.parts does, roads.deck_pads, roadmesh.parapet_runs, roadmesh.deck), every tile within FORK_TILE_M of a
+fork. For each pair of those tiles sharing an edge:
+  * the forks both tiles' windows hold (roads._sheet_window_parts, _sheet_records) are the same records, bit for bit;
+  * every deck piece cut at the edge goes on in the other tile from the same point (x, y, z within TOL_M), with the
+    same end line where the piece's end is skewed;
+  * the deck tops' vertices on each cut line agree with the other tile's: the same extent along it (no gap or
+    overlap) and the same heights, within TOL_M;
+  * the parapet runs ending on a cut go on in the other tile from the same point (xy and z within TOL_M);
+  * the junction pads near the seam (each tile's own=False list: the parapets' rims) are the same in both.
+And each tile is byte-identical however it is built: after its neighbours, from only the parts its own windows would
+read, with a wider fork window (roadshape.SHEET_WINDOW_M); with the parts in another order, the same geometry.
+
+A cut's end line is its part's line's normal there in both tiles (roads._cut_ends, "ct0" / "ct1": square to each
+piece's own end segment, the pieces simplified apart, the two sides ended up to 2.7 degrees apart, the same with
+BNE_ROADSHAPE off), so the two must be the same line (SQUARE_WEDGE: an end without one). Ground roads, lane shifts
+and widths are not in the fixture (None, as in test_roadshape_sheet, whose two-window tests cover them)."""
+import ast
+import hashlib
+import math
+import os
+import sys
+import unittest
+
+import numpy as np
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.join(HERE, ".."))
+
+import fast  # noqa: E402
+import roadmesh  # noqa: E402
+import roads  # noqa: E402
+import roadshape  # noqa: E402
+
+HAVE = fast.AVAILABLE and getattr(fast._ef, "VERSION", 0) >= roadshape.SHEET_VERSION
+PLACES = ("fort_pitt", "i95_middle_branch")
+FORK_TILE_M = 60.0      # m: the tiles whose box comes this near a fork's split point are built
+FOCUS_M = 400.0         # m (Chebyshev) round the place: the forks whose tiles are built (the fixture's parts reach 900)
+TOL_M = 1e-3            # m: positions and heights at a seam agree this closely
+CUT_REACH_M = 3.0       # m past a cut piece's half width its cut line is looked at
+PAD_M = 40.0            # m round a tile its pads are made (earthd's road tile)
+SQUARE_WEDGE = 1e-4     # degrees two square ends of one cut may differ (2.7 before roads._cut_ends: the docstring)
+WEDGE_GRADE = 0.15      # the steepest deck grade (seamcheck): a wedge's xy offset times this is its height offset
+# Mismatches seen and reported, not fixed here: (place, seam, text in it) -> why. (None left: the slab's reach past its
+# road, worked out per drawn chunk, saw only its own tile's side of a cut, 2 mm to 1.1 m steps and a nose bending a
+# parapet off the cut; now along each deck part's whole line, roads._deck_reach / earthfast deck_reach.)
+KNOWN = {}
+
+
+def load(name):
+    f = np.load(os.path.join(HERE, "fixtures", f"seamprobe_{name}.npz"))
+    ofs = np.r_[0, np.cumsum(f["n"])]
+    parts = [(str(f["fid"][i]), roads.Spec(**ast.literal_eval(str(f["spec"][i]))), f["xyz"][ofs[i]:ofs[i + 1]].copy(),
+              float(f["lon"][i])) for i in range(len(f["n"]))]
+    gx0, gy0, st = (float(v) for v in f["ground_origin"])
+    grid = np.cumsum(np.c_[f["ground_first"].astype(np.int64), f["ground_steps"].astype(np.int64)], axis=1) / 100.0
+
+    def ground(xy):
+        xy = np.asarray(xy, np.float64).reshape(-1, 2)
+        u = np.clip((xy[:, 0] - gx0) / st, 0.0, grid.shape[1] - 1.000001)
+        v = np.clip((xy[:, 1] - gy0) / st, 0.0, grid.shape[0] - 1.000001)
+        i, j = np.floor(u).astype(np.int64), np.floor(v).astype(np.int64)
+        a, b = u - i, v - j
+        return (grid[j, i] * (1 - a) * (1 - b) + grid[j, i + 1] * a * (1 - b) + grid[j + 1, i] * (1 - a) * b
+                + grid[j + 1, i + 1] * a * b)
+    return parts, ground
+
+
+class Bridges:
+    """BridgeProfiles' face the deck build reads: parts(cells, box) the whole parts coming within roads.NEAR_M of box
+    (in the given order; only those within keep of it, when given: a tile's own windows), _ground the graded ground."""
+    cell_fn = None
+
+    def __init__(self, parts, ground, order=None, keep=None):
+        self.p = [parts[i] for i in order] if order is not None else list(parts)
+        self.bb = [(p[2][:, :2].min(0), p[2][:, :2].max(0)) for p in self.p]
+        self._ground = ground
+        if keep is not None:
+            x0, y0, x1, y1 = keep
+            k = [i for i, (lo, hi) in enumerate(self.bb) if not (hi[0] < x0 or lo[0] > x1 or hi[1] < y0 or lo[1] > y1)]
+            self.p, self.bb = [self.p[i] for i in k], [self.bb[i] for i in k]
+
+    def parts(self, cells, box):
+        x0, y0, x1, y1 = box
+        m = roads.NEAR_M
+        return [(fid, sp, p[:, :2].copy(), p[:, 2].copy(), lon) for (fid, sp, p, lon), (lo, hi) in zip(self.p, self.bb)
+                if not (hi[0] < x0 - m or lo[0] > x1 + m or hi[1] < y0 - m or lo[1] > y1 + m)]
+
+
+class Tile:
+    def __init__(self, box, chunks, ctx, runs, pads_near, mesh, recs):
+        self.box, self.chunks, self.ctx, self.runs, self.pads_near, self.mesh = box, chunks, ctx, runs, pads_near, mesh
+        self.recs = recs
+        self.tops = np.zeros((0, 3))
+        if mesh is not None:
+            pp, tt, _uu, mats, mi = mesh
+            pp = np.asarray(pp, np.float64) + (box[0], box[1], 0.0)
+            if roadmesh.DECK_TOP in mats:
+                self.tops = pp[np.unique(np.asarray(tt)[np.asarray(mi) == mats.index(roadmesh.DECK_TOP)])]
+
+    def blob(self):
+        """The hash of the tile's whole output as bytes (byte identity)."""
+        out = []
+        for c in self.chunks + self.ctx:
+            out.append(repr(sorted((k, v) for k, v in c.items() if k != "n")).encode())
+            out.append(np.ascontiguousarray(np.asarray(c.get("n", ()), np.float64)).tobytes())
+        for r in self.runs:
+            out += [np.ascontiguousarray(np.asarray(r[k], np.float64)).tobytes() for k in ("line", "z")]
+        for ring, centre, walls, *_js in self.pads_near:
+            out += [np.asarray(ring, np.float64).tobytes(), np.asarray(centre, np.float64).tobytes()]
+            out += [np.asarray(w[0], np.float64).tobytes() + np.asarray(w[1], np.float64).tobytes() for w in walls]
+        if self.mesh is not None:
+            pp, tt, uu, mats, mi = self.mesh
+            out += [np.ascontiguousarray(np.asarray(a)).tobytes() for a in (pp, tt, uu, mi)] + [repr(mats).encode()]
+        return hashlib.sha256(b"".join(out)).hexdigest()
+
+    def shape(self):
+        """The tile's geometry as a set (order free): chunks, parapet runs, pads, deck triangles, rounded to 1e-9."""
+        r = lambda a: tuple(np.round(np.asarray(a, np.float64), 9).ravel().tolist())     # noqa: E731
+        canon = lambda k, v: r(v) if k == "n" else sorted(map(repr, v)) if k == "abut" else v     # noqa: E731
+        out = sorted(repr(sorted((k, canon(k, v)) for k, v in c.items())) for c in self.chunks + self.ctx)
+        out += sorted(repr((r(q["line"]), r(q["z"]))) for q in self.runs)
+        out += sorted(repr((r(p[0]), r(p[1]))) for p in self.pads_near)
+        if self.mesh is not None:
+            pp, tt, _uu, mats, mi = self.mesh
+            pp = np.asarray(pp, np.float64)
+            out += sorted(repr((mats[m], sorted(r(pp[i]) for i in t))) for t, m in zip(np.asarray(tt), np.asarray(mi)))
+        return out
+
+
+def records(br, box):
+    """The forks this tile's window holds, by their arms' ids (records' indices are the window list's)."""
+    wide = roads._sheet_window_parts(br, None, [], box)
+    recs, _dz = roads._sheet_records(wide)
+    out = {}
+    for r in recs:
+        key = (wide[r["t"]][0], wide[r["b"]][0], tuple(np.round(np.asarray(r["at"], np.float64), 6).tolist()))
+        out[key] = repr(sorted((k, v) for k, v in r.items() if k not in ("t", "b", "cover"))) + repr(
+            [(wide[p][0],) + tuple(q) for p, *q in r["cover"]])
+    return out
+
+
+def build(br, box):
+    """One road tile's bridge decks as the tile build makes them (earthd's road tile, without ground roads)."""
+    marks = []
+    allc = roads._bridge_chunks(None, {}, None, box, bridges=br, cells=[], sheet_marks=marks)
+    chunks = [c for c in allc if not c.get("ctx")]
+    ctx = [c for c in allc if c.get("ctx")]
+    near = br.parts([], (box[0] - PAD_M, box[1] - PAD_M, box[2] + PAD_M, box[3] + PAD_M))
+    pads_near = roads.deck_pads([(f, sp, xy, z) for f, sp, xy, z, _lon in near], [], box, br._ground, own=False,
+                                skip=marks)
+    pads = [p for p in pads_near if roads.box_owns(box, float(p[1][0]), float(p[1][1]))]
+    runs = roadmesh.parapet_runs(chunks, ctx, pads=pads_near)
+    mesh = roadmesh.deck(chunks, (box[0], box[1], 0.0), (), ctx, (), parapets=runs, pads=pads)
+    return Tile(box, chunks, ctx, runs, pads_near, mesh, records(br, box))
+
+
+def fork_tiles(parts):
+    recs, _dz = roads._sheet_records(parts)
+    tiles = set()
+    for r in recs:
+        at = np.asarray(r["at"], np.float64)
+        if np.abs(at).max() > FOCUS_M:
+            continue            # (the parts reach farther: the tiles' windows differ, as neighbours' do in the game)
+        tiles.update(roads.tiles_near(float(at[0]), float(at[1]), FORK_TILE_M))
+    return sorted(tiles), len(recs)
+
+
+def seams(tiles):
+    """(a, b, axis, at, lo, hi) per pair of tiles sharing an edge: axis 0 an edge x = at, 1 y = at, over [lo, hi]."""
+    have, T = set(tiles), roads.TILE
+    out = []
+    for tx, ty in tiles:
+        if (tx + 1, ty) in have:
+            out.append(((tx, ty), (tx + 1, ty), 0, (tx + 1) * T, ty * T, (ty + 1) * T))
+        if (tx, ty + 1) in have:
+            out.append(((tx, ty), (tx, ty + 1), 1, (ty + 1) * T, tx * T, (tx + 1) * T))
+    return out
+
+
+def cut_ends(tile, axis, at, lo, hi):
+    """(chunk, point (3,), end line direction (2,), skewed) of the tile's deck pieces cut at the edge."""
+    out = []
+    for c in tile.chunks:
+        n = np.asarray(c.get("n", ()), np.float64)
+        if not c.get("deck") or len(n) < 2:
+            continue
+        for e, ks in ((0, ("sk0", "ct0")), (-1, ("sk1", "ct1"))):
+            p = n[e]
+            if abs(p[axis] - at) > 1e-9 or not lo - 1e-9 <= p[1 - axis] <= hi + 1e-9:
+                continue
+            k = next((k for k in ks if c.get(k) is not None), None)     # (a skewed end's line, a cut's: _cut_ends)
+            if k is not None:
+                d = np.asarray(c[k], np.float64)[:2]
+            else:
+                t = n[1, :2] - n[0, :2] if e == 0 else n[-1, :2] - n[-2, :2]
+                d = np.array([-t[1], t[0]])
+            out.append((c, p, d / math.hypot(*d), k is not None))
+    return out
+
+
+def on_line(pts, p, d, reach, tol):
+    """pts (k, 3) within tol of the line through p along d and within reach of p: (along, z) sorted by along."""
+    w = pts[:, :2] - p[:2]
+    k = (np.abs(w[:, 0] * d[1] - w[:, 1] * d[0]) < tol) & (np.abs(w @ d) <= reach)
+    got = np.c_[w[k] @ d, pts[k, 2]]
+    return got[np.argsort(got[:, 0], kind="stable")]
+
+
+def run_ends(tile):
+    return [(np.asarray(r["line"], np.float64)[e, :2], float(np.asarray(r["z"], np.float64)[e]))
+            for r in tile.runs if len(r["line"]) for e in (0, -1)]
+
+
+def seam_problems(name, ta, tb, axis, at, lo, hi):
+    """The seam's mismatches between tiles ta and tb: [(where, text)] (none when they agree)."""
+    bad = []
+    where = f"seam {'x' if axis == 0 else 'y'} = {at:g}"
+    for k in set(ta.recs) & set(tb.recs):
+        if ta.recs[k] != tb.recs[k]:
+            bad.append((where, f"fork records differ: through {k[0]} branch {k[1]} at {k[2]}"))
+    for one, other in ((ta, tb), (tb, ta)):
+        oends = cut_ends(other, axis, at, lo, hi)
+        for c, p, d, skew in cut_ends(one, axis, at, lo, hi):
+            tag = f"{c.get('fid')} cut at ({p[0]:.3f}, {p[1]:.3f})"
+            mate = [o for o in oends if o[0].get("fid") == c.get("fid") and np.all(np.abs(o[1][:3] - p[:3]) < TOL_M)]
+            if not mate:
+                bad.append((where, f"no piece goes on in the next tile: {tag}"))
+                continue
+            od, oskew = mate[0][2], mate[0][3]
+            ang = math.degrees(math.asin(min(1.0, abs(float(d[0] * od[1] - d[1] * od[0])))))
+            if skew or oskew:
+                if skew != oskew or ang > 1e-4:
+                    bad.append((where, f"skewed end lines differ ({ang:.4f} degrees): {tag}"))
+                    continue
+                wedge = 0.0
+            elif ang > SQUARE_WEDGE:
+                bad.append((where, f"square end lines {ang:.2f} degrees apart: {tag}"))
+                continue
+            reach = float(c.get("w", 0.0)) / 2.0 + CUT_REACH_M
+            wedge = reach * math.sin(math.radians(ang))
+            tol, ztol = TOL_M + wedge, TOL_M + wedge * WEDGE_GRADE
+            va = on_line(one.tops, p, d, reach, TOL_M)
+            vb = on_line(other.tops, p, od, reach, TOL_M)
+            if not len(va) and not len(vb):
+                continue            # (no slab of its own on either side here: a union's, drawn by its through deck)
+            if not len(va) or not len(vb):
+                bad.append((where, f"deck top on the cut in {len(va)} / {len(vb)} vertices: {tag}"))
+                continue
+            if abs(va[0, 0] - vb[0, 0]) > tol or abs(va[-1, 0] - vb[-1, 0]) > tol:
+                bad.append((where, f"deck top cut spans [{va[0, 0]:.4f}, {va[-1, 0]:.4f}] / [{vb[0, 0]:.4f}, "
+                                   f"{vb[-1, 0]:.4f}] m along it (a gap or an overlap): {tag}"))
+                continue
+            dz = np.abs(np.interp(va[:, 0], vb[:, 0], vb[:, 1]) - va[:, 1])
+            if dz.max() > ztol:
+                bad.append((where, f"deck top steps {dz.max():.4f} m at the cut: {tag}"))
+            theirs = run_ends(other)
+            for q, z in run_ends(one):
+                w = q - p[:2]
+                if abs(float(w @ d)) > reach or abs(float(w[0] * d[1] - w[1] * d[0])) > TOL_M:
+                    continue
+                if not any(math.hypot(*(q - r)) < tol and abs(z - rz) < ztol for r, rz in theirs):
+                    bad.append((where, f"parapet end ({q[0]:.3f}, {q[1]:.3f}, {z:.3f}) does not go on: {tag}"))
+
+    def near_pads(t):
+        out = {}
+        for ring, centre, *_rest in t.pads_near:
+            if abs(float(centre[axis]) - at) <= PAD_M and lo - PAD_M <= float(centre[1 - axis]) <= hi + PAD_M:
+                out[(round(float(centre[0]), 2), round(float(centre[1]), 2))] = np.asarray(ring, np.float64)
+        return out
+    pa, pb = near_pads(ta), near_pads(tb)
+    if set(pa) != set(pb):
+        bad.append((where, f"pads near it differ: {sorted(set(pa) ^ set(pb))}"))
+    for k in sorted(set(pa) & set(pb)):
+        if pa[k].shape != pb[k].shape or np.abs(pa[k] - pb[k]).max() > TOL_M:
+            bad.append((where, f"pad rims differ at {k}"))
+    return [(name, w, t) for w, t in bad]
+
+
+def check(test, found):
+    """found [(place, seam, text)] against KNOWN: no new mismatch, no known one gone (fixed: drop it from KNOWN)."""
+    new = [f"{p} {w}: {t}" for p, w, t in found if not any(p == kp and w == kw and kt in t for kp, kw, kt in KNOWN)]
+    gone = [k for k in KNOWN if not any(p == k[0] and w == k[1] and k[2] in t for p, w, t in found)]
+    test.assertEqual(new, [], "seam mismatches")
+    test.assertEqual(gone, [], "KNOWN mismatches no longer seen: drop them from KNOWN")
+
+
+@unittest.skipUnless(HAVE, "earthfast.deck_sheets missing")
+class SeamProbe(unittest.TestCase):
+    maxDiff = None
+    built = {}
+
+    def setUp(self):
+        old = roadshape.SHEET, roadshape.SHEET_WINDOW_M
+
+        def restore():
+            roadshape.SHEET, roadshape.SHEET_WINDOW_M = old
+        self.addCleanup(restore)
+        roadshape.SHEET = True
+
+    def places(self):
+        for name in PLACES:
+            parts, ground = load(name)
+            tiles, nrec = fork_tiles(parts)
+            self.assertGreater(nrec, 0, f"{name}: no fork in the fixture (the probe would check nothing)")
+            yield name, parts, ground, tiles
+
+    def test_neighbours_agree_at_seams(self):
+        found, cuts, shared = [], 0, 0
+        for name, parts, ground, tiles in self.places():
+            br = Bridges(parts, ground)
+            built = {t: build(br, roads.tile_bbox(*t)) for t in tiles}
+            for a, b, axis, at, lo, hi in seams(tiles):
+                cuts += len(cut_ends(built[a], axis, at, lo, hi))
+                shared += len(set(built[a].recs) & set(built[b].recs))
+                found += seam_problems(name, built[a], built[b], axis, at, lo, hi)
+        self.assertGreater(cuts, 10, "too few decks cross the checked seams")
+        self.assertGreater(shared, 10, "too few forks seen from both sides of a seam")
+        check(self, found)
+
+    def test_tile_same_from_any_window_and_order(self):
+        for name, parts, ground, tiles in self.places():
+            ref = {}
+            br = Bridges(parts, ground)
+            for t in tiles:
+                ref[t] = build(br, roads.tile_bbox(*t))
+            for t in reversed(tiles):           # (after its neighbours, from only the parts its windows read)
+                x0, y0, x1, y1 = roads.tile_bbox(*t)
+                m = max(roadshape.SHEET_WINDOW_M, 3 * roadmesh.JUNCTION_MAX_PART_M + roads.DECK_CONTEXT_M,
+                        PAD_M) + roads.NEAR_M
+                own = Bridges(parts, ground, keep=(x0 - m, y0 - m, x1 + m, y1 + m))
+                self.assertEqual(build(own, roads.tile_bbox(*t)).blob(), ref[t].blob(), f"{name} {t}: own windows")
+            roadshape.SHEET_WINDOW_M += 2 * roads.TILE
+            for t in tiles:
+                self.assertEqual(build(br, roads.tile_bbox(*t)).blob(), ref[t].blob(), f"{name} {t}: wider window")
+            roadshape.SHEET_WINDOW_M -= 2 * roads.TILE
+            mid = sorted(range(len(parts)), key=lambda i: (i * 7919) % len(parts))
+            br = Bridges(parts, ground, mid)
+            for t in tiles:
+                self.assertEqual(build(br, roads.tile_bbox(*t)).shape(), ref[t].shape(), f"{name} {t}: parts order")
+
+
+class ReachStation(unittest.TestCase):
+    """roads._reach_tag's node stations on a loop ramp passing over itself (a grade-separated self-crossing, 10 m
+    apart): each node takes its own pass's station, never the other's (Codex review of deckreach)."""
+
+    LINE = np.array([[-50.0, 0.0, 0.0], [50.0, 0.0, 4.0], [50.0, 40.0, 8.0], [0.0, 40.0, 10.0], [0.0, -40.0, 14.0]])
+
+    def test_crossing_takes_its_own_pass(self):
+        self.assertAlmostEqual(roads._station_at_height(self.LINE, np.array([0.0, 0.0, 2.0])), 50.0, places=6)
+        self.assertAlmostEqual(roads._station_at_height(self.LINE, np.array([0.0, 0.0, 12.0])), 230.0, places=6)
+
+    def test_upper_pass_chunk_keeps_its_reach(self):
+        ln = self.LINE
+        s = np.r_[0.0, np.cumsum(np.hypot(*np.diff(ln[:, :2], axis=0).T))]
+        st = np.c_[np.arange(0.0, s[-1] + 1e-9, 2.0), np.full(int(s[-1] // 2) + 1, 0.45),
+                   np.full(int(s[-1] // 2) + 1, 0.45), np.full(int(s[-1] // 2) + 1, 16.0)]
+        ch = {"n": [[0.0, 10.0, 11.0], [0.0, 0.0, 12.0], [0.0, -10.0, 13.0]]}
+        roads._reach_tag(ch, ln, st)
+        self.assertIn("rch", ch)
+        np.testing.assert_allclose(ch["rch"]["st"], [220.0, 230.0, 240.0], atol=1e-9)
+
+
+if __name__ == "__main__":
+    unittest.main()

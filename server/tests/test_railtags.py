@@ -63,6 +63,40 @@ class RailTagsTest(unittest.TestCase):
             self.assertEqual(len(f._rail_nodes), 1)
             self.assertEqual(len(fetch.asked), n)
 
+    def test_preserved_joined_only_with_the_lifecycle_switch(self):
+        """railway:preserved (a heritage line, railways.heritage) is an attr only with BNE_RAIL_LIFECYCLE: off, the
+        road layer (and its cache) is the same whichever shard build it was joined from; an old shard (no such tag)
+        joins with the switch on as None, usage still there."""
+        from unittest import mock
+        f0 = features([[(0.0, 100.0), (250.0, 100.0)]], ["standard_gauge"], subtypes=["rail"])
+        lo, la = f0.lonlat[0]
+        key = mapcells.cell_of(float(la), float(lo))
+        sx, sy = key.x >> (key.z - 7), key.y >> (key.z - 7)
+
+        def joined(preserved, on):
+            f = features([[(0.0, 100.0), (250.0, 100.0)]], ["standard_gauge"], subtypes=["rail"])
+            f.attrs["src_record"] = np.array(["w11@3"])
+            t = {"railway": "disused", "usage": "tourism"}
+            if preserved:
+                t["railway:preserved"] = "yes"
+            shard = {"ways": {"11": t}, "nodes": []}
+            fetch = _Fetcher({"manifest.json": json.dumps({"built": "2026-10-30T03:00:00Z"}).encode(),
+                              f"/{sx}/{sy}.json.gz": gzip.compress(json.dumps(shard).encode())})
+            with tempfile.TemporaryDirectory() as d, mock.patch.object(railtags, "LIFECYCLE_ON", on):
+                railtags.RailTags(d, fetch).join(f, key)
+            return f
+        for preserved in (False, True):
+            off = joined(preserved, False)
+            self.assertNotIn("osm_railway:preserved", off.attrs)
+            self.assertEqual(off.attrs["osm_usage"][0], "tourism")
+        self.assertEqual(sorted(joined(False, False).attrs), sorted(joined(True, False).attrs))
+        self.assertEqual(joined(True, True).attrs["osm_railway:preserved"][0], "yes")
+        old = joined(False, True)
+        self.assertIsNone(old.attrs["osm_railway:preserved"][0], "an old shard: none")
+        self.assertEqual(old.attrs["osm_usage"][0], "tourism")
+        import railways
+        self.assertTrue(railways.heritage(old, 0), "usage=tourism alone is a heritage line")
+
     def test_no_shard_no_tags(self):
         f = features([[(0.0, 100.0), (250.0, 100.0)]], ["standard_gauge"], subtypes=["rail"])
         f.attrs["src_record"] = np.array(["w11@3"])
@@ -79,6 +113,36 @@ class RailTagsTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             railtags.RailTags(d, _Fetcher({})).join(f, mapcells.cell_of(float(la), float(lo)))
         self.assertNotIn("osm_railway", f.attrs)
+
+    def test_an_unreachable_shard_of_a_known_build_is_a_fault_and_joined_again(self):
+        """A known build whose shard cannot be had (a failed download): no tags, a revisit fault (what is built on
+        the untagged layer is not kept) and MapData joins again next time; before, the layer was marked joined for
+        that build and plans made without the lane / rail tags were kept as complete (Codex, 2026-11-14). A dataset
+        not published (no manifest) is no fault."""
+        import revisit
+        from mapdata import MapData
+        for cls, sub, cls_name in ((railtags.RailTags, "rail", "standard_gauge"), (railtags.LaneTags, "road", "primary")):
+            f = features([[(0.0, 100.0), (250.0, 100.0)]], [cls_name], subtypes=[sub])
+            f.attrs["src_record"] = np.array(["w21@3"])
+            lo, la = f.lonlat[0]
+            key = mapcells.cell_of(float(la), float(lo))
+            name = "rail" if cls is railtags.RailTags else "lanes"
+            fetch = _Fetcher({f"{name}/manifest.json": json.dumps({"built": "2026-11-14T03:00:00Z"}).encode()})
+            fetch.get = (lambda real: lambda url, *a, **k: (_ for _ in ()).throw(OSError("offline"))
+                         if url.endswith(".json.gz") else real(url, *a, **k))(fetch.get)
+            with tempfile.TemporaryDirectory() as d:
+                tags = cls(d, fetch)
+                with revisit.scope() as b:
+                    self.assertIs(tags.join(f, key), False, cls.__name__)
+                self.assertTrue(b.n, cls.__name__ + ": a fault")
+                md = SimpleNamespace(rail_tags=tags, lane_tags=tags)
+                flag = "_rails_built" if cls is railtags.RailTags else "_lanes_built"
+                with revisit.scope():
+                    (MapData._rails if cls is railtags.RailTags else MapData._lanes)(md, key, "roads", f)
+                self.assertNotIn(flag, f.__dict__, cls.__name__ + ": not marked joined")
+                with revisit.scope() as b2:     # (not published: no manifest, no fault)
+                    self.assertIsNone(cls(d + "/x", _Fetcher({})).join(f, key))
+                self.assertEqual(b2.n, 0, cls.__name__)
 
 
 

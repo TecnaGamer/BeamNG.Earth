@@ -248,6 +248,29 @@ settings.set('viewDistanceKm', 200)
 T.check(scenetree.theLevelInfo.visibleDistance == 100000 and post == 2, 'horizon after fixed: the level\'s 100 km back once')
 settings.set('viewDistanceMode', 'fixed')
 T.check(scenetree.theLevelInfo.visibleDistance == 200000 and post == 3, 'fixed again: 200 km')
+do  -- the 3D map open: no fixed distance (its view reaches as far as its eye), the fixed one back when it closes
+  local post0, active = post, true
+  beamngEarth_map3d = { isActive = function() return active end }
+  settings.set('viewDistanceKm', 1)
+  T.check(settings.fixedViewM() == nil, 'map open: no fixed view distance')
+  settings.reapplyView()
+  T.check(scenetree.theLevelInfo.visibleDistance == 100000, 'map open: the level\'s distance, not 1 km')
+  active = false
+  T.check(settings.fixedViewM() == 1000, 'map closed: 1 km')
+  scenetree.theLevelInfo.visibleDistance = 900000     -- (a globe view raised it meanwhile)
+  settings.reapplyView()
+  T.check(scenetree.theLevelInfo.visibleDistance == 1000, 'map closed: the fixed 1 km back, whatever was set meanwhile')
+  settings.set('viewDistanceKm', 100)                 -- (the default value, fixed)
+  active = true
+  settings.reapplyView()
+  scenetree.theLevelInfo.visibleDistance = 900000     -- (a globe view raised it)
+  active = false
+  settings.reapplyView()
+  T.check(scenetree.theLevelInfo.visibleDistance == 100000, 'map closed: a fixed 100 km (the default value) back too')
+  beamngEarth_map3d = nil
+  settings.set('viewDistanceKm', 200)
+  post = post0                                        -- (the checks below count postApply calls from here)
+end
 settings.uiReset()
 T.check(scenetree.theLevelInfo.visibleDistance == 100000 and post == 4, 'reset (horizon): back to 100 km (applied, it had changed)')
 settings.onClientPostStartMission()
@@ -425,6 +448,15 @@ do
   T.check(#sent == 3 and #sent[3] == 0, 'nothing missing any more: an empty list cancels the last one')
   settings.mapTiles(list)
   T.check(#sent == 3, 'and only once')
+  -- a sat tile with only its stand-in there (server maptiles.PROV_DIR): shown from its own path, still asked for
+  T.check(settings.mapTilePath('satp', 3, 2, 1) == '/temp/beamngEarth/maptiles/prov/3/2/1.jpg', 'stand-in path')
+  have[settings.mapTilePath('satp', 6, 1, 1)] = true
+  ready = settings.mapTiles({ { 6, 1, 1 }, { 6, 2, 1 } })
+  T.check(#ready == 1 and ready[1] == 'satp/6/1/1', 'a stand-in comes back as satp')
+  T.check(#sent == 4 and #sent[4] == 2 and sent[4][1][2] == 1, 'the tile with a stand-in is still asked for')
+  have[settings.mapTilePath('sat', 6, 1, 1)] = true
+  ready = settings.mapTiles({ { 6, 1, 1 } })
+  T.check(#ready == 1 and ready[1] == 'sat/6/1/1', 'the real tile once it is there')
   beamngEarth_core, FS = core0, fs0
 end
 
@@ -567,6 +599,40 @@ do
   for k, v in pairs(saved) do rawset(_G, k, v) end
 end
 
+-- mapControls(false) and onExtensionUnloaded release BigMap and beamngEarthMapBlocked even when mapCtl is nil
+do
+  local popArgs, filterArgs = {}, {}
+  local origEnter, origToggle = function() end, function() end
+  local bm = { enterBigMap = origEnter, toggleBigMap = origToggle }
+  local saved = {
+    core_input_actionFilter = rawget(_G, 'core_input_actionFilter'),
+    freeroam_bigMapMode = rawget(_G, 'freeroam_bigMapMode'),
+    popActionMap = rawget(_G, 'popActionMap'),
+  }
+  core_input_actionFilter = {
+    addAction = function(dev, name, on) filterArgs[#filterArgs + 1] = { dev, name, on } end,
+  }
+  freeroam_bigMapMode = bm
+  popActionMap = function(name) popArgs[#popArgs + 1] = name end
+
+  settings.mapControls(false)
+  T.check(#popArgs == 1 and popArgs[1] == 'BigMap', 'mapControls(false) with nil mapCtl pops BigMap')
+  T.check(#filterArgs == 1 and filterArgs[1][1] == 0 and filterArgs[1][2] == 'beamngEarthMapBlocked' and filterArgs[1][3] == false,
+    'mapControls(false) with nil mapCtl clears beamngEarthMapBlocked filter')
+
+  settings.redirectBigMap(true)
+  T.check(bm.enterBigMap ~= origEnter and bm.toggleBigMap ~= origToggle, 'redirectBigMap(true) wraps BigMap handlers')
+  settings.onExtensionUnloaded()
+  T.check(#popArgs == 2 and popArgs[2] == 'BigMap', 'onExtensionUnloaded pops BigMap')
+  T.check(#filterArgs == 2 and filterArgs[2][2] == 'beamngEarthMapBlocked' and filterArgs[2][3] == false,
+    'onExtensionUnloaded clears beamngEarthMapBlocked filter')
+  T.check(not settings.isMapOpen(), 'onExtensionUnloaded clears mapOpen')
+  T.check(bm.enterBigMap == origEnter and bm.toggleBigMap == origToggle,
+    'onExtensionUnloaded restores BigMap handlers')
+
+  for k, v in pairs(saved) do rawset(_G, k, v) end
+end
+
 -- The map's other players in a BeamMP session: none is nil, not an empty table (it reaches EarthMap.vue as {}, not
 -- [], and the map's .map() threw every second: the map stopped drawing in multiplayer; PR #509 by Astel123457).
 do
@@ -660,6 +726,34 @@ T.check(settings.load().townSigns == true, 'a version-1 file: on (false was the 
 files[settings.FILE] = { version = 2, townSigns = false }
 T.check(settings.load().townSigns == false, 'a version-2 file: the player turned them off')
 files[settings.FILE] = nil
+
+-- the Experimental page (2026-11-15: the server's BNE_* build switches, server/experimental.py FEATURES): every switch
+-- a bool, off by default, on the settings page; road signs off by default since version 3 (a version-2 file's true was
+-- the hidden switch's default), a version-3 file's choice kept
+do
+  local exp = { 'roadSigns', 'expNlRoadSigns', 'expRoadRevamp', 'expEuScenery', 'expDropRails', 'expEntranceFlares', 'expPriorityStops',
+    'expRoadBumps', 'expRoughDirt', 'expWearStrips', 'expGradeGuard', 'expPhotoSurface', 'expTerrainBumps', 'expCliffWalls',
+    'expTunnelLids', 'expSubseaTunnels', 'expAiTunnels', 'expRailCollide', 'expCatenary', 'expRailCrossings', 'expRailTunnels',
+    'expRailCurves', 'expWatertight', 'expCanadaLidar', 'expGenGround', 'expStaleRevisit' }
+  local inOrder = {}
+  for _, k in ipairs(settings.ORDER) do inOrder[k] = true end
+  for _, k in ipairs(exp) do
+    local s = settings.SCHEMA[k]
+    T.check(s and s.kind == 'bool' and s.default == false, 'experimental ' .. k .. ': a bool, off by default')
+    T.check(inOrder[k] and not settings.HIDDEN[k], 'experimental ' .. k .. ': on the settings page')
+  end
+  T.check(settings.VERSION >= 3, 'settings version 3: road signs a real switch')
+  files[settings.FILE] = nil
+  T.check(settings.load().roadSigns == false and settings.load().expRoadBumps == false, 'no file: all off')
+  files[settings.FILE] = { version = 2, roadSigns = true, expRoadBumps = true }
+  local v = settings.load()
+  T.check(v.roadSigns == false, 'a version-2 file: road signs off (true was the hidden default)')
+  T.check(v.expRoadBumps == true, 'a version-2 file: another experimental switch is the player\'s')
+  files[settings.FILE] = { version = 3, roadSigns = true }
+  T.check(settings.load().roadSigns == true, 'a version-3 file: the player turned road signs on')
+  files[settings.FILE] = nil
+  settings.load()
+end
 
 -- the map's preload of a place: picked (the box) or pointed at (hover: the light part), to core.preloadPlace
 do

@@ -59,6 +59,7 @@ Same pattern as MSFS "anchor space", Cesium origin-shifting, and KSP floating or
 | reloadCollision | 2 048 tris: 0.5 ms; 8 192 tris: 2.3 ms (in an otherwise empty smallgrid). |
 | Ray tools | `castRayStatic(pos, dir, len)` returns the physics-collision distance (use it to verify drivability). The MCP `raycast` tool only sees render geometry. |
 | **Collision rebuild scales linearly with ALL collidable tris, and it blocks the frame** | ProceduralMesh: 131k tris 41 ms, 524k 162 ms (**~0.31 ms per 1k tris**). TSStatic 'Visible Mesh' costs about half (~0.15 ms per 1k). `reloadStaticCollision()` and `reloadCollision(false,true)` cost the same. There is **no cheaper path**. Budget: keep collidable geometry around ~100k tris (≈20–30 ms per rebuild). |
+| **What a rebuild costs on a Steam Deck (2026-11-14)** | Two parts, both by geometry, not by object count: the frame's Lua (the engine gathering every collider's mesh) ~3 ms + ~4-5 ms per MB of unique collision mesh, and the physics thread's tree build (`Loaded Static Collision`) ~2 ms + ~0.2 ms per 1k triangles; the terrain is re-added every time. Forest items share their meshes: 866 solid trees and props off cost 3 ms of 27 (their 0.7 MB), the 48 road-tile colliders 16 ms (3 MB). `reloadCollision(a, b)` in all four forms and `reloadStaticCollision` cost the same (9 variants, 10 calls each, parked in Fells Point), and fresh colliders with `prebuildCollisionData` 1 rebuilt no faster than with 0 (26 ms median both, 3 rounds) while each cost ~1.7 ms more to make. So merging props into one mesh a tile would make rebuilds dearer (unique MB); fewer road-tile colliders round the car is what helps (roads.lua BEHIND). |
 | ProceduralMesh render-only? | **No.** `disableCollision()` does NOT remove it from physics (ray still hits, rebuild cost unchanged). It has no collisionType field. **Far/render-only tiles must be TSStatic with `collisionType='None'`.** |
 | TSStatic from runtime-written .dae | Works. A `.dae` written by an external process into `<user>/temp/beamngEarth/` loads immediately via `shapeName='/temp/beamngEarth/x.dae'`, with its PNG texture (relative `init_from`). 8 192 tris: 51 ms spawn; **131k tris: 415 ms** (XML parse, main thread). Large single meshes do NOT hang (unlike ProceduralMesh). **Its collision appears only on a reload in a later frame**, not in the same frame as the spawn. Writer: `server/dae.py`. |
 | Drivability | A car drives on ProceduralMesh tiles normally (follows the surface; ground clearance stays constant). |
@@ -106,6 +107,18 @@ Same pattern as MSFS "anchor space", Cesium origin-shifting, and KSP floating or
   and navgraph node tables.
 - Output: atomic files in `<user>/temp/beamngEarth/<session>/` (versioned names,
   because the engine caches by path), plus small JSON control messages.
+- The game connection (protocol 4: a u32 LE length + UTF-8 JSON, at most 16 MiB a frame) is served by asyncio, or
+  with `BNGE_HOST=on` by earthfast's host (`native/earthfast/src/host`, the Rust port's phase 1; plan
+  `.claude/work/rust-port-plan-2026-11-15.md` section 4): Rust owns the listening socket, the reads, the framing, the
+  outgoing queue and the writes on threads of its own (`bnge-io` accepts, `bnge-rd-N` / `bnge-wr-N` per connection),
+  without the GIL. The hand-over needs no GIL either: the first frame into an empty inbox writes one byte to a local
+  socket pair the event loop reads like any socket, and the loop then takes everything that came as one batch
+  (`protocol.HostServer`; what comes while it is busy waits in that batch, consecutive poses of one anchor merged:
+  `BNGE_HOST_MERGE`). The handlers run unchanged on the loop, the "Python lane", through `protocol.HostStream`
+  (asyncio's reader / writer surface: drain's 64 / 16 KiB water marks, close flushes, abort drops). So frames keep
+  moving both ways while the loop or the GIL is held; each frame's wait for the lane is measured in Rust (the
+  once-a-minute `host:` line; `bnge-watch` logs `python lane: N frames waiting X s` past 2 s). `BNGE_HOST_RECORD=DIR`
+  (developers) records what the game sends for `tools/hostreplay.py` (private: the player's positions).
 
 ### Mod `beamng_earth`
 - Level `levels/beamng_earth/`: smallgrid skeleton **without GroundPlane**,
@@ -140,7 +153,11 @@ Physics geometry always comes from open data:
   national orthophotos near the player. Esri World Imagery is optional, using
   the user's own key.
 - **Buildings and roads:** Overture and OpenStreetMap, from extracts the server
-  holds itself. Never query the public Overpass API at runtime.
+  holds itself. Never query the public Overpass API for world data at runtime. The one
+  exception (the owner's OK, 2026-11-14): the map's category search ("race tracks",
+  "forests" ...) sends one small, cached Overpass query per Enter, never while typing
+  (`server/geocode.py`, netfetch policy `overpass-api.de`: interactive only, rate 0.1/s,
+  50 a day, named places only, the player's position rounded to 0.01°).
 - **Land cover and vegetation:** ESA WorldCover and Meta canopy height.
 - Both are read per global cell by the map-data pipeline (`server/mapdata.py`, "Map data" below).
 - **Gravity:** WGS84 normal gravity (Somigliana + free air) plus the EGM2008 anomalies (NGA,
@@ -864,6 +881,20 @@ three days of testing: dem 741 MB / 7.5k files, imagery 1.4 GB / 35k, deshadow 7
   anchor commit (a new frame) forgets the remembered ground height (`edgeguard.newFrame`).
   Offline: 30 m/s rests 15 m inside, braking <= 6.6 m/s^2; 134 m/s on a 512 block stays on it (cut to
   the profile when it engages); an aircraft at 500 m flies off untouched.
+- **Deck guard** (`deckguard.lua`, server `deckspans.py`; 2026-11-15, a BeamMP player fell through small bridges in
+  Baltimore whose road tiles came late): a deck is part of its road tile, and the block, which comes first, already
+  has the gap under it. For a mod that says `hello.deckGuard`, the server lists the map's tagged bridges of drivable
+  roads within 1.2 km of the car (`deck_spans`: chains of pieces joined at shared ends, which ends stand on the
+  ground), from the cells already on disk, in its own thread, again every 150 m / 4 s and sent only when changed.
+  Every 0.25 s (nothing at all while no span is within reach) the mod follows the car's path ahead (an arc at its turn
+  rate) for its braking distance + 2 s and finds the first place on a span the car drives onto (along it, entered at an
+  end at the deck's level, or already on it) whose road tile has not arrived (`roads.deckGrid`: every tile the span crosses, walked over the tile grid; no tile there; a tile in
+  makes its deck solid in time itself) where the block's ground lies 2 m or more under the deck's level (the
+  abutments' heights, `getTerrainHeight`): then a light drag, the speed capped to stop 12 m short (4 m/s^2, at most
+  7 m/s^2 taken off), a hold (simhold: our car only in BeamMP) if it cannot stop, a set-back if it went over anyway;
+  `pose.deckWait` names the tile (built first, `GeoTracker.deck_first`) and `guardHold` gives the server every core
+  while the car waits. No collider, no ray; plans, blocks and tiles unchanged. Tests: `test_deckguard.lua`,
+  `test_deckspans.py`.
 - **Session adoption** (server `Server._scan_sessions / claim_sessions / release_session /
   sweep_sessions`, mod `farfield.heldSessions`): see server/README.md "Run" and the protocol table
   (`hello.sessions`, `pose.sessions`; the server's own messages are unchanged, so a default session is
@@ -977,8 +1008,8 @@ three days of testing: dem 741 MB / 7.5k files, imagery 1.4 GB / 35k, deshadow 7
   counts differences). Steam Deck: setFile's CPU 22.9 -> 1.9 ms a swap; Windows test PC: the swap call 53 -> 31 ms,
   driving frames over 50 ms 10.9 -> 6.2 a minute. What remains of a swap is the frame after it (the material
   texture rebuild: texkeep) and waits for the GPU device.
-- The same library (tools/gcpatch/README.md) also carries texkeep (2026-11-03; opt-in, BNGEARTH_TEXKEEP=1, until a
-  teleport soak: the review's deadlock paths went 2026-11-13): it hooks the texture manager's
+- The same library (tools/gcpatch/README.md) also carries texkeep (2026-11-03; on by default on Linux since the
+  2026-11-14 teleport soaks, off with BNGEARTH_TEXKEEP_OFF=1): it hooks the texture manager's
   createTexture (vtable slot 5) for the terrain pack loader and hands back the packed terrain textures it kept from
   the last material rebuild, so a block swap or setBase no longer re-creates the unchanged packs (swap frame Render
   21.6 -> 13.0 ms median, setBase 83 -> 58 ms on the PC); and dtsmooth, a 95-byte rewrite of FrameTime::update so
@@ -1330,10 +1361,17 @@ CLI). The only change to an existing module: host policies in `netfetch.POLICIES
   file, up to ~0.75 GiB after a long drive). One dense city cell is
   3.3 MB of layer files and ~66 MB of raw blocks (they serve the neighbours too: the next cells
   cost 0-9 MB); a desert cell 60-90 KB and 35 MB.
-- **Release pinning**: `overture.RELEASE = "2026-09-23.1"`; `mapdata.py --latest` prints the newest;
-  bump the constant (cells are cached per release; a data update may change a place, a restart
-  never does). A pinned release Overture has deleted raises `ReleaseGone` for uncached cells (also
-  when its STAC index is cached and the files answer 404).
+- **Release pinning**: the build's own release is `overturepick.RELEASE = "2026-11-18.0"`
+  (`overture.RELEASE`); `mapdata.py --latest` prints the newest. A newer one reaches players without
+  an app update through the data repo's `cdn.json` `{"overture": {"release": ...}}` (once its products
+  are built): the server's supervisor (the launcher, `start.py`; the share helper and the decisions
+  builder for themselves) decides once per app session (`overturepick.Pick`: listed in Overture's STAC
+  catalogue, a supported schema, one 5 s deadline; no answer in time: the last session's release when
+  newer than the build's and its STAC index is kept in `<cache>/cdn`, else the build's) and hands it to
+  every server it starts (`BNGE_OVERTURE_RELEASE`; `overture.effective()`, frozen per process, keys the
+  cells, plans and facts). The hello carries it; the mod pins a level to its live connection's release
+  and holds (no anchor, no resync) on another (`releasepin.lua`). A release Overture has deleted raises
+  `ReleaseGone` for uncached cells (also when its STAC index is cached and the files answer 404).
 - **Provenance**: per cell a list of records (Overture per theme with the source datasets and
   licences of its features and the release, WorldCover with its files, CHM with its file), each
   with the exact attribution and licence (CREDITS.md; Overture's per-theme texts whole, read

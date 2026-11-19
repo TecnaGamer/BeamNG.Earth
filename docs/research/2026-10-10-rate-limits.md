@@ -332,8 +332,9 @@ Risk scale:
     identify the app.
 - **Our worst case:** streaming would be thousands per day.
 - **Risk:** **block** for streaming.
-- **Action:** keep the project rule: **never at runtime**. Use Overture and Geofabrik extracts.
-  If ever used: 1 concurrent, ≤100/day, pause 30 s on 429.
+- **Action (category search exception, 2026-11-14):** bounded interactive queries on Enter only, never streaming.
+  0.1/s, burst 1, 1 concurrent, 50/day soft and 100/day hard; no retries, 60-second breaker on failure,
+  one-hour application cache, 5-second query timeout, 8 MiB memory budget and at most 200 centers.
 
 **Geofabrik extracts** (`download.geofabrik.de`)
 - **Official limit and rules:** Not researched in detail. One-off state or region files.
@@ -649,7 +650,7 @@ Rates are per player. "Prefetch" means the host may be asked ahead of need.
 | nominatim.openstreetmap.org | 0.2/s, 1 | 1 | (500) | never | 30 d | — |
 | photon.komoot.io | 1/s, 2 | 1 | 2k | never | 1 d | — |
 | router.project-osrm.org, routing.openstreetmap.de | 1/s, 1 | 1 | (500) | never | 1 d | — |
-| overpass-api.de | not allowed at runtime | — | (0) | never | — | — |
+| overpass-api.de | 0.1/s, 1 | 1 | 50 / 100 | never | 1 h memory | Enter-only category search |
 | vector.openstreetmap.org, build.protomaps.com | not allowed | — | (0) | never | — | — |
 | Overture / WorldCover / CHM S3, Azure | 20/s, 40 | 4 | — | yes | forever | — |
 | tiles.openaerialmap.org | 5/s, 10 | 2 | 5k | ≥50 % | forever (CC BY) | 30 d |
@@ -787,3 +788,9 @@ flight, which removes most of the 21 req/s at 10 km.
 - IGN Géoplateforme (data.gouv.fr dataservices API, `?q=geoplateforme`)
 - GSI https://maps.gsi.go.jp/development/ichiran.html
 - ArcGIS Online 429 reports https://community.esri.com/ (community, not official)
+
+Category search also uses `query.wikidata.org`: 0.1/s, burst/concurrency 1, 50/day soft, 100/day hard,
+no retries or prefetch, 60-second breaker on failure, one-hour application cache. Queries return at most 24
+notable class-family instances (P31/P279*); motorsport searches exclude airports explicitly. Overpass has a
+4-second HTTP timeout, named selectors, and a 15 km radius for line/area categories (50 km for peaks, race tracks,
+airports and dams). Candidate distances are recomputed after the cache; admission failures are cached for at most 10 seconds. Both hosts use netfetch's project User-Agent.

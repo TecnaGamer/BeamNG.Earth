@@ -93,7 +93,7 @@ class PolygonTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             Path(d, cb.FILE).write_bytes(b"bad")
             Path(d, "manifest.json").write_text(json.dumps({"built": "corrupt", "files": {cb.FILE: "0" * 64}}))
-            with mock.patch.object(regionaldata, "LOCAL", d), mock.patch.dict(regionaldata._state, manifest=None):
+            with mock.patch.object(regionaldata, "LOCAL", d), mock.patch.dict(regionaldata._state, pages=None):
                 self.assertIsInstance(cb.bundled(), cb.Absent)
                 self.assertIsNone(cb.bundled().at(48.8, 7.8))
 

@@ -165,7 +165,9 @@ class GameClosed(unittest.TestCase):
 @unittest.skipIf(os.name == "nt", "Linux: ensure_ca_certs leaves Windows alone")
 class CaCerts(unittest.TestCase):
     """The packaged app's OpenSSL looks in /usr/lib/ssl (Ubuntu's): elsewhere SSL_CERT_FILE points at a bundle."""
-    NONE = mock.Mock(cafile="/usr/lib/ssl/cert.pem", capath="/nonexistent/certs")
+    # OpenSSL's defaults that find nothing: not /usr/lib/ssl/cert.pem, which exists on Ubuntu (the mini PC test lane
+    # and GitHub's runner) and so made ensure_ca_certs keep the defaults there
+    NONE = mock.Mock(cafile="/nonexistent/ssl/cert.pem", capath="/nonexistent/certs")
 
     def run_it(self, bundles, env=None):
         with mock.patch.dict(os.environ, env or {}, clear=False), \
@@ -406,6 +408,7 @@ class DirectStartAdoptsOptionsTest(unittest.TestCase):
         argv, env = self.run_start(({}, ["gamemoderun"], []))
         self.assertEqual(argv, ["gamemoderun", "/g/BeamNG/BinLinux/BeamNG.drive.x64"])
 
+    @unittest.skipIf(os.name == "nt", "the Linux start: POSIX paths (Windows CI turns /u into \\u)")
     def test_userpath_reaches_the_game(self):
         # the mod and the settings live in the user folder the launcher chose: the game is told the folder its
         # version folder sits in (a Flatpak Steam's folder, the user's report 2026-10-26)

@@ -49,9 +49,9 @@ class ServerListTest(unittest.TestCase):
                 self.assertEqual(netfetch.Fetcher(transport=mock.Mock()).policy(host), netfetch.POLICIES["earth.tgforever.net"])
 
     def test_override_keeps_known_host_policy(self):
-        with mock.patch.dict(os.environ, {"BNGE_SERVER_LIST_URL": "https://overpass-api.de/servers"}):
+        with mock.patch.dict(os.environ, {"BNGE_SERVER_LIST_URL": "https://vector.openstreetmap.org/servers"}):
             importlib.reload(netfetch)
-            self.assertTrue(netfetch.POLICIES["overpass-api.de"].denied)
+            self.assertTrue(netfetch.POLICIES["vector.openstreetmap.org"].denied)   # (a known host the override must not open; Overpass is no longer denied: map category search)
 
 
 if __name__ == "__main__":

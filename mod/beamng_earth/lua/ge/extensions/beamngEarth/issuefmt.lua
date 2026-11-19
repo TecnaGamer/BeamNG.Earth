@@ -74,6 +74,20 @@ function M.heldLine(s)
   return line
 end
 
+-- The frame pacer's waits over a profile (report.lua track rows' pacerWait, ms a frame) as one line, or nil: its sleep
+-- is counted in the engine's "LuaPre", which three players' reports read as a Lua cost of the moving car (#1170).
+function M.pacerLine(track)
+  if type(track) ~= 'table' then return nil end
+  local top, sum, k = 0, 0, 0
+  for _, row in ipairs(track) do
+    local w = type(row) == 'table' and num(row.pacerWait)
+    if w then top, sum, k = math.max(top, w), sum + w, k + 1 end
+  end
+  if k == 0 or top < 0.2 then return nil end
+  return string.format('frame pacing waited up to %.1f ms a frame (%.1f ms on average): a sleep for even game speed, '
+    .. 'counted in the engine\'s LuaPre, not Lua work', top, sum / k)
+end
+
 local function gb(bytes)
   bytes = num(bytes)
   return bytes and string.format('%.0f GB', bytes / 1073741824) or nil
@@ -282,6 +296,8 @@ function M.buildIssue(data, hw)
         whileHeld > 0 and string.format(' (%d of them while the car was held)', whileHeld) or ''))
       local bh = M.heldLine(b)
       if bh then p('- ' .. bh) end
+      local pl = M.pacerLine(data.track)
+      if pl then p('- ' .. pl) end
     end
   end
   local mod = type(data.mod) == 'table' and data.mod or {}

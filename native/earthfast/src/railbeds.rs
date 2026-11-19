@@ -284,3 +284,61 @@ pub fn rail_join_beds<'py>(py: Python<'py>, xy: PyReadonlyArray2<'py, f64>, off:
     });
     Ok(out.into_pyarray(py))
 }
+
+/// railways._avg exactly as numpy ran it: the running mean over 2r + 1 values, the ends extended by odd reflection,
+/// the window sums from np.cumsum (add.accumulate: its first value is pad[0] itself, not 0.0 + pad[0], so a -0.0 there
+/// stays -0.0) after a 0.0. (avg above starts its sum from 0.0: the same but for a run of -0.0 at the start, where
+/// its first mean is 0.0 and numpy's -0.0.)
+fn avg_np(v: &[f64], r: usize) -> Vec<f64> {
+    let n = v.len();
+    let r = r.min(n.saturating_sub(1));
+    if r < 1 {
+        return v.to_vec();
+    }
+    let mut pad = Vec::with_capacity(n + 2 * r);
+    for k in (1..=r).rev() {
+        pad.push(2.0 * v[0] - v[k]); // 2 * v[0] - v[r:0:-1]
+    }
+    pad.extend_from_slice(v);
+    for k in 0..r {
+        pad.push(2.0 * v[n - 1] - v[n - 2 - k]); // 2 * v[-1] - v[-2:-r-2:-1]
+    }
+    let mut c = Vec::with_capacity(pad.len() + 1);
+    c.push(0.0f64);
+    let mut acc = pad[0];
+    c.push(acc);
+    for &p in &pad[1..] {
+        acc += p;
+        c.push(acc);
+    }
+    let w = (2 * r + 1) as f64;
+    (0..n).map(|i| (c[i + 2 * r + 1] - c[i]) / w).collect()
+}
+
+/// railways.bed_heights of one line of ground heights: _avg over r, then over r // 2; fewer than 3 heights as they are.
+fn bed_heights(z: &[f64], r: usize) -> Vec<f64> {
+    if z.len() < 3 {
+        return z.to_vec();
+    }
+    avg_np(&avg_np(z, r), r / 2)
+}
+
+/// railways.bed_heights_many (the full port's railways._avg / bed_heights): the bed line of each line of ground
+/// heights zs (float64, one axis); r the first running mean's half width (railways: round(SMOOTH_M / STEP_M), at
+/// least 1), the second r // 2. One call for all the ground parts of a railways.profile (a numpy round per part
+/// before: ~100k a Manhattan visit). Each z contiguous (a view whose stride is not a whole number of float64s would be
+/// misread through as_array: refused).
+#[pyfunction]
+#[pyo3(signature = (zs, r))]
+pub fn rail_bed_heights<'py>(py: Python<'py>, zs: Vec<PyReadonlyArray1<'py, f64>>, r: usize)
+                             -> PyResult<Vec<Bound<'py, PyArray1<f64>>>> {
+    let mut lines: Vec<Vec<f64>> = Vec::with_capacity(zs.len());
+    for z in &zs {
+        let s = z.as_slice().map_err(|_| {
+            pyo3::exceptions::PyValueError::new_err("rail_bed_heights: each line's heights must be contiguous")
+        })?;
+        lines.push(s.to_vec());
+    }
+    let beds: Vec<Vec<f64>> = py.detach(|| lines.iter().map(|z| bed_heights(z, r)).collect());
+    Ok(beds.into_iter().map(|b| b.into_pyarray(py)).collect())
+}

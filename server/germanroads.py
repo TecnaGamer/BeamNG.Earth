@@ -179,6 +179,20 @@ def _fetched(x, y):
     return body
 
 
+def _segments(d):
+    """A shard's segments as (a, b) lon/lat points, their line index and the lines' attribute rows, made once and kept
+    on the shard (it is cached per process): every cell of a z10 tile asked for all of it again, 92 ms a call in Berlin."""
+    got = d.get("_seg")
+    if got is None:
+        off = d["off"]
+        lid = np.repeat(np.arange(len(off) - 1), np.diff(off))
+        same = lid[1:] == lid[:-1]
+        ll = np.column_stack([d["lon"], d["lat"]])
+        at = np.column_stack([d["width"], d["lanes"], d["surf"], d["cls"], d["flags"]]).astype(np.int32)
+        got = d["_seg"] = (ll[:-1][same], ll[1:][same], lid[:-1][same], at)
+    return got
+
+
 class Axes:
     """The axes of some shards in local metres round (lat0, lon0), their segments in a grid."""
 
@@ -188,17 +202,21 @@ class Axes:
         seg_a, seg_b, line, attrs = [], [], [], []
         base = 0
         for d in shards:
-            off = d["off"]
-            n = len(off) - 1
+            n = len(d["off"]) - 1
             if n <= 0:
                 continue
-            xy = np.column_stack([(d["lon"] - lon0) * self.kx, (d["lat"] - lat0) * self.ky])
-            lid = np.repeat(np.arange(n), np.diff(off))
-            same = lid[1:] == lid[:-1]
-            seg_a.append(xy[:-1][same])
-            seg_b.append(xy[1:][same])
-            line.append(lid[:-1][same] + base)
-            attrs.append(np.column_stack([d["width"], d["lanes"], d["surf"], d["cls"], d["flags"]]).astype(np.int32))
+            la, lb, lid, at = _segments(d)
+            if half is not None and len(lid):     # (a shard is ~25 km across: only the segments near the roads, cut in
+                hx, hy = half                     # degrees first so the metres are made for those alone; the exact
+                m = REACH_MAX_M + 50.0            # test below is the old one on the same floats)
+                dx, dy = (hx + m) / self.kx, (hy + m) / self.ky
+                near = ((np.maximum(la[:, 0], lb[:, 0]) >= lon0 - dx) & (np.minimum(la[:, 0], lb[:, 0]) <= lon0 + dx)
+                        & (np.maximum(la[:, 1], lb[:, 1]) >= lat0 - dy) & (np.minimum(la[:, 1], lb[:, 1]) <= lat0 + dy))
+                la, lb, lid = la[near], lb[near], lid[near]
+            seg_a.append(np.column_stack([(la[:, 0] - lon0) * self.kx, (la[:, 1] - lat0) * self.ky]))
+            seg_b.append(np.column_stack([(lb[:, 0] - lon0) * self.kx, (lb[:, 1] - lat0) * self.ky]))
+            line.append(lid + base)
+            attrs.append(at)
             base += n
         if not seg_a:
             self.a = np.zeros((0, 2))
@@ -213,6 +231,11 @@ class Axes:
             self.a, self.b, self.line = self.a[near], self.b[near], self.line[near]
             if not len(self.a):
                 return
+        # (the attribute rows of the lines left alone, the lines numbered among them: a line's number only picks its row
+        # (match, surveyed). Every Axes kept a copy of its shards' whole attribute table, ~25 km of roads, on the
+        # Features it is memoised on (axes_for): ~75 MB of a road process after 25 tiles round the A7, 2026-11-16)
+        used, inv = np.unique(self.line, return_inverse=True)
+        self.attrs, self.line = self.attrs[used], inv.astype(np.int32 if len(used) < 2 ** 31 else np.int64)
         d = self.b - self.a
         self.len = dnp.hypot(d[:, 0], d[:, 1])
         self.dir = d / np.maximum(self.len, 1e-9)[:, None]
@@ -220,16 +243,36 @@ class Axes:
         hi = np.floor(np.maximum(self.a, self.b) / CELL_M + REACH_MAX_M / CELL_M).astype(np.int64)
         nx, ny = hi[:, 0] - lo[:, 0] + 1, hi[:, 1] - lo[:, 1] + 1
         cnt = nx * ny
-        sid = np.repeat(np.arange(len(self.a)), cnt)
+        # (segment numbers and the cells' bounds as int32: the grid is ~10 entries a segment, kept with the Axes)
+        idx = np.int32 if len(self.a) < 2 ** 31 and int(cnt.sum()) < 2 ** 31 else np.int64
+        sid = np.repeat(np.arange(len(self.a), dtype=idx), cnt)
         k = np.arange(int(cnt.sum())) - np.repeat(np.cumsum(cnt) - cnt, cnt)
         gx = lo[sid, 0] + k // ny[sid]
         gy = lo[sid, 1] + k % ny[sid]
-        order = np.lexsort((gy, gx))
-        gx, gy, sid = gx[order], gy[order], sid[order]
-        cut = np.flatnonzero((np.diff(gx) != 0) | (np.diff(gy) != 0)) + 1
-        starts = np.concatenate([[0], cut])
-        ends = np.concatenate([cut, [len(sid)]])
-        self.grid = {(int(gx[a]), int(gy[a])): sid[a:b] for a, b in zip(starts, ends)} if len(sid) else {}
+        # the grid as sorted packed cell keys (a dict of ~400k cells took 100-150 ms a call: a cell is a whole block's roads)
+        self.g0 = (int(gx.min()), int(gy.min())) if len(sid) else (0, 0)
+        self.gny = int(gy.max()) - self.g0[1] + 1 if len(sid) else 1
+        key = (gx - self.g0[0]) * self.gny + (gy - self.g0[1])
+        order = np.argsort(key, kind="stable")
+        self.gsid, key = sid[order], key[order]
+        cut = np.flatnonzero(key[1:] != key[:-1]) + 1
+        self.gkey = key[np.concatenate([[0], cut])] if len(key) else key
+        if len(self.gkey) and int(self.gkey[-1]) < 2 ** 31:     # (int32 too: _candidates asks with keys cut to it)
+            self.gkey = self.gkey.astype(np.int32)
+        self.gcut = np.concatenate([[0], cut, [len(key)]]).astype(idx)
+
+    def _candidates(self, cells):
+        """The segments in any of the grid cells (an (n, 2) array of cell coordinates), sorted, once each."""
+        cx, cy = cells[:, 0] - self.g0[0], cells[:, 1] - self.g0[1]
+        ok = (cx >= 0) & (cy >= 0) & (cy < self.gny)
+        key = np.unique(cx[ok] * self.gny + cy[ok])
+        if self.gkey.dtype != key.dtype and len(self.gkey):      # (keys past the grid's last match nothing)
+            key = key[key <= self.gkey[-1]].astype(self.gkey.dtype)
+        at = np.searchsorted(self.gkey, key)
+        inside = at < len(self.gkey)
+        at = at[inside][self.gkey[at[inside]] == key[inside]]
+        parts = [self.gsid[self.gcut[i]:self.gcut[i + 1]] for i in at]
+        return np.unique(np.concatenate(parts)) if parts else None
 
     def __bool__(self):
         return len(self.a) > 0
@@ -256,11 +299,9 @@ class Axes:
         dirs = seg[k] / L[k][:, None]
         got = np.full(len(pts), -1, np.int64)
         cells = np.floor(pts / CELL_M).astype(np.int64)
-        parts = [self.grid.get(key) for key in set(map(tuple, cells.tolist()))]
-        parts = [q for q in parts if q is not None]
-        if not parts:
+        c = self._candidates(cells)
+        if c is None:
             return got, len(pts)
-        c = np.unique(np.concatenate(parts))
         if carriageway is not None:
             is_cw = (self.attrs[self.line[c], 4] & CARRIAGEWAY) > 0
             c = c[is_cw] if carriageway else c[~is_cw]
@@ -383,9 +424,9 @@ def adjust_specs(feats, specs):
         if got is None:
             continue
         width, lanes, surf, halved = got
-        mapped_w = roads._rule_value(rules.get("width"), i)
+        mapped_w = roads.mapped_rule_width(feats, i)
         if mapped_w is None:
-            mapped_w = roads._osm(feats, "width", i, *roads.OSM_WIDTH_M)
+            mapped_w = roads.mapped_osm_width(feats, i, *roads.OSM_WIDTH_M)
         new = sp
         if (lanes and sp.cls in LANE_CLASSES and not sp.link
                 and roads._osm(feats, "lanes", i, *roads.OSM_LANES) is None):
@@ -439,7 +480,7 @@ def gave_lanes(feats, i, sp):
 
 
 def _map_lanes(feats, i, cls):
-    """Road i's lane count from the map alone, as roads gives it without the survey: a correction (rampoverrides),
+    """Road i's lane count from the map alone, as roads gives it without the survey: the ramp lane rule's (roads._lane_overrides),
     OpenStreetMap's own count, PR #471's validated ones, the one-way roads joined to it (lane_flow), else two lanes per
     motorway / trunk way, one on a one-way ramp; None otherwise. (roads' own lane count is in the spec kernels now.)"""
     import roadlanes

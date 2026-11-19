@@ -136,6 +136,64 @@ class StoreTest(unittest.TestCase):
                             files)
             gc.collect()  # (the walls' mappings sit in a reference cycle until collected: Windows deletes no mapped file)
 
+    def test_stand_in_cell_not_kept(self):
+        """A buildings layer the parquet cells stood in for (the tiles failed: mapdata's _bnge_fallback) gives this
+        call its walls, but they are neither stored under the tiles' folder nor kept in memory."""
+        import tempfile
+        feats, home = self.houses()
+
+        class F:
+            def __len__(self):
+                return len(feats.coord_off) - 1
+        F.lonlat, F.coord_off = feats.lonlat, feats.coord_off
+        calls = []
+
+        def cell_fn(key):
+            calls.append(key)
+            f = F()
+            f._bnge_fallback = True
+            return f
+        with tempfile.TemporaryDirectory() as d:
+            rw = roadwidth.RoadWidths(cell_fn, d)
+            _, walls = rw._walls(home)
+            self.assertGreater(len(walls.segs), 0)
+            _, again = rw._walls(home)
+            self.assertEqual(len(calls), 2, "not kept in memory: asked again")
+            self.assertEqual([f for _, _, fs in os.walk(d) for f in fs], [], "not stored")
+            del rw, walls, again
+            gc.collect()
+
+
+    def test_failed_cell_not_kept(self):
+        """A cell whose buildings could not be read (cell_fn raised) gives no walls that are kept, so no width is
+        memoised on them; once it reads, the same RoadWidths measures its buildings."""
+        import tempfile
+        feats, home = self.houses()
+        state = {"up": False}
+
+        class F:
+            def __len__(self):
+                return len(feats.coord_off) - 1
+        F.lonlat, F.coord_off = feats.lonlat, feats.coord_off
+
+        def cell_fn(key):
+            if not state["up"]:
+                raise OSError("down")
+            return F()
+        with tempfile.TemporaryDirectory() as d:
+            rw = roadwidth.RoadWidths(cell_fn, d)
+            _, walls = rw._walls(home)
+            self.assertEqual(len(walls.segs), 0)
+            self.assertTrue(walls.stand_in)
+            self.assertEqual(len(rw.walls), 0)
+            state["up"] = True
+            _, walls = rw._walls(home)
+            self.assertGreater(len(walls.segs), 0)
+            self.assertFalse(walls.stand_in)
+            del rw, walls
+            gc.collect()
+
+
 class ManyTest(unittest.TestCase):
     """RoadWidths.measure_many: a cell's roads measured in one pass, the very numbers of one get / cap a road, a road
     across a cell's edge (the walls of both cells) included."""
@@ -234,6 +292,44 @@ class CopiesTest(unittest.TestCase):
         self.assertEqual(then_b, fresh.get("r1", b))
         self.assertNotEqual(first_a, then_b)
         self.assertEqual(rw.cap("r1", b), fresh.cap("r1", b))
+
+
+
+class ShedTest(unittest.TestCase):
+    """clear_memory (budget.maybe_shed: a process over its memory ceiling) drops everything the walls keep in memory.
+    The segments of a cell in its neighbour's frame (reframed) stayed: 64 float64 arrays a process, none of them
+    usable once the walls they were made from were gone, each holding its Walls and so the walls' mapped files."""
+
+    def test_a_shed_drops_the_reframed_segments_and_the_walls_they_hold(self):
+        import weakref
+        import mapcells
+        feats, home = StoreTest.houses(self)
+
+        class F:
+            def __len__(self):
+                return len(feats.coord_off) - 1
+        F.lonlat, F.coord_off = feats.lonlat, feats.coord_off
+        # a road across the home cell's east edge: the walls of the cells on both sides, the second's in the first's frame
+        lon0, lat0, lon1, lat1 = home.bounds()
+        la = 0.5 * (lat0 + lat1)
+        road = np.array([[lon1 - 0.0004, la], [lon1 + 0.0004, la]])
+        rw = roadwidth.RoadWidths(lambda key: F())
+        first = rw.get("r1", road)
+        rw.cap("r1", road)
+        self.assertGreaterEqual(len(rw.walls), 2, "the cells on both sides of the edge")
+        self.assertEqual(len(rw.combos), 1)
+        self.assertGreaterEqual(len(rw.reframed), 1)
+        held = [weakref.ref(w) for w, _ in rw.reframed.values()]
+        held_bytes = sum(sg.nbytes for _, sg in rw.reframed.values())
+        self.assertGreater(held_bytes, 0)
+        self.assertTrue(rw.memo and rw.near)
+        rw.clear_memory()
+        self.assertEqual([len(d) for d in (rw.walls, rw.combos, rw.reframed, rw.memo, rw.caps, rw.near)], [0] * 6)
+        gc.collect()
+        self.assertTrue(all(r() is None for r in held), "the walls are free to go (and their files' mappings)")
+        self.assertEqual(rw.get("r1", road), first, "made again when asked: the same width")
+        self.assertGreaterEqual(len(rw.reframed), 1)
+        self.assertEqual(len(mapcells.cells_near_points(np.array([la, la]), road[:, 0], 0.0, 0.0)), 2)
 
 
 if __name__ == "__main__":

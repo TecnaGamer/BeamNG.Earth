@@ -1239,6 +1239,31 @@ class LazyStateTest(unittest.TestCase):
         self.assertIsNotNone(until, "kept only until the preferred source is asked again")
         self.assertLessEqual(until, time.time() + imagery.UNAVAILABLE_RETRY_S + 60)
 
+    def test_map_tile_under_a_down_host_s_expired_miss_is_a_stand_in_until_it_recovers(self):
+        # (review of a9a978a9: the map tile from a later source under an expiring "nothing there" was written as the
+        # tile for good, and the mod never asked for it again)
+        import maptiles
+        im = self.make()
+        src, z, kids = im._lazy_children(*self.square())[0]
+        self.assertEqual(src.name, "naipusda")
+        ttl = FAST["apps.geo.fpac.usda.gov"].miss_ttl
+        missindex.record([im._paths(src, z, tx, ty)[1] for tx, ty in kids], t=time.time() - ttl - 3600)
+        missindex.reset_memo()
+        br = im.fetcher.host("apps.geo.fpac.usda.gov").breaker
+        br.state, br.open_until = "open", im.fetcher.clock() + 600       # (USDA's host down: its breaker open)
+        t0 = time.time()
+        tx, ty = kids[0]
+        mt = maptiles.MapTiles(im)
+        _, name, final, until = mt.tile(z, tx, ty)
+        self.assertEqual(name, "naip", "the later source fills in")
+        self.assertFalse(final, "a stand-in: the preferred source may come back")
+        self.assertAlmostEqual(until, t0 + imagery.UNAVAILABLE_RETRY_S, delta=60)
+        self.assertFalse(self.exports("naipusda"), "not asked while down")
+        br.state, br.open_until = "closed", 0.0                        # (the host is back)
+        _, name, final, until = mt.tile(z, tx, ty)
+        self.assertEqual((name, final, until), ("naipusda", True, None), "asked again: its photo is the tile")
+        self.assertTrue(self.exports("naipusda"))
+
     def test_an_expired_outside_probe_is_asked_again_and_recovered_coverage_used(self):
         # (review of 6cbcfd2b: a probe's 404 kept in memory as None for the process's life, and "outside" renewed with
         # a fresh deadline at every look; now its own deadline, and once past it the probe is fetched again)
@@ -1376,6 +1401,17 @@ class DdsTest(unittest.TestCase):
                          (256, 128 + sum(max(1, (256 >> k) // 4) ** 2 * 8 for k in range(9)))):
             self.assertEqual(len(imagery.encode_dds(np.zeros((px, px, 3), np.uint8))), want)
 
+    def test_srgb_tag(self):
+        """The far tiles' sRGB tag (FAR_SRGB): the same BC1 blocks under a DX10 header, BC1_UNORM_SRGB (72)."""
+        import struct
+        rgb = (np.arange(64 * 64 * 3).reshape(64, 64, 3) % 251).astype(np.uint8)
+        plain, tagged = imagery.encode_dds(rgb), imagery.encode_dds(rgb, srgb=True)
+        self.assertEqual(plain[84:88], b"DXT1")
+        self.assertEqual(tagged[84:88], b"DX10")
+        self.assertEqual(struct.unpack_from("<5I", tagged, 128), (72, 3, 0, 1, 0))
+        self.assertEqual(tagged[148:], plain[128:], "the blocks themselves unchanged")
+        self.assertEqual(tagged[:84], plain[:84])
+
 
 class PictureDdsTest(unittest.TestCase):
     """A drawn sign face goes out as a DDS (never a PNG the engine's texture cooker takes at run time: it deadlocked the
@@ -1422,7 +1458,9 @@ class NetworkImageryTest(unittest.TestCase):
 
     def test_open_ocean(self):
         rgb, used = self.render(30.0, -140.0, size=4096.0)
-        self.assertEqual(set(used), {"eox2016"})       # uniform deep blue from both EOX layers
+        # EOX's open-sea blue: EOX 2023 serves it on a fresh cache (its sea is the picture, not a blank: e2ff61f5); a
+        # cache holding an older run's blank verdict for its tiles takes EOX 2016's, the same blue
+        self.assertTrue(used and set(used) <= {"eox2023", "eox2016"}, used)
         self.assertLess(rgb.reshape(-1, 3).std(0).max(), 2)
         self.assertGreater(int(rgb[..., 2].mean()), int(rgb[..., 0].mean()))
 

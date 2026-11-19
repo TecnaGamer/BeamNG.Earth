@@ -270,5 +270,176 @@
       {},
       {}
     ]
+  },
+  "bne_wear_var_01": {
+    "name": "bne_wear_var_01",
+    "mapTo": "bne_wear_var_01",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "b1e0d002-0010-4a11-9c01-000000000010",
+    "annotation": "ASPHALT",
+    "translucent": true,
+    "translucentZWrite": false,
+    "castShadows": false,
+    "Stages": [
+      {
+        "baseColorMap": "/assets/materials/decalroad/asphalt/m_asphalt_variation_03/t_asphalt_variation_03_b.color.png",
+        "opacityMap": "/assets/materials/decalroad/asphalt/m_asphalt_variation_03/t_asphalt_variation_03_o.data.png",
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "opacityDetailMap": "/levels/beamng_earth/art/shapes/beamngEarth/dirt_fade_o.data.dds",
+        "opacityDetailMapUseUV": 1,
+        "detailOpacityMapStrength": 1,
+        "detailScale": [
+          1,
+          1
+        ]
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "bne_wear_var_02": {
+    "name": "bne_wear_var_02",
+    "mapTo": "bne_wear_var_02",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "b1e0d002-0011-4a11-9c01-000000000011",
+    "annotation": "ASPHALT",
+    "translucent": true,
+    "translucentZWrite": false,
+    "castShadows": false,
+    "Stages": [
+      {
+        "ambientOcclusionMap": "/assets/materials/decalroad/asphalt/m_asphalt_variation_02/t_asphalt_variation_02_ao.data.png",
+        "baseColorMap": "/assets/materials/decalroad/asphalt/m_asphalt_variation_02/t_asphalt_variation_02_b.color.png",
+        "normalMap": "/assets/materials/decalroad/asphalt/m_asphalt_variation_02/t_asphalt_variation_02_nm.normal.png",
+        "opacityMap": "/assets/materials/decalroad/asphalt/m_asphalt_variation_02/t_asphalt_variation_02_o.data.png",
+        "roughnessMap": "/assets/materials/decalroad/asphalt/m_asphalt_variation_02/t_asphalt_variation_02_r.data.png",
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "opacityFactor": 0.8,
+        "opacityDetailMap": "/levels/beamng_earth/art/shapes/beamngEarth/dirt_fade_o.data.dds",
+        "opacityDetailMapUseUV": 1,
+        "detailOpacityMapStrength": 1,
+        "detailScale": [
+          1,
+          1
+        ]
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "bne_wear_tread2": {
+    "name": "bne_wear_tread2",
+    "mapTo": "bne_wear_tread2",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "b1e0d002-0012-4a11-9c01-000000000012",
+    "annotation": "ASPHALT",
+    "translucent": true,
+    "translucentZWrite": false,
+    "castShadows": false,
+    "Stages": [
+      {
+        "ambientOcclusionMap": "/assets/materials/decalroad/treadmark/tread_marks_worn/t_tread_marks_worn_ao.data.png",
+        "baseColorMap": "/assets/materials/decalroad/treadmark/tread_marks_worn/t_tread_marks_worn_b.color.png",
+        "normalMap": "/assets/materials/decalroad/treadmark/tread_marks_worn/t_tread_marks_worn_nm.normal.png",
+        "opacityMap": "/assets/materials/decalroad/treadmark/tread_marks_worn/t_tread_marks_worn_o.data.png",
+        "roughnessMap": "/assets/materials/decalroad/treadmark/tread_marks_worn/t_tread_marks_worn_r.data.png",
+        "baseColorFactor": [
+          0.699,
+          0.699,
+          0.699,
+          1
+        ],
+        "opacityFactor": 0.505,
+        "roughnessFactor": 0.765,
+        "opacityDetailMap": "/levels/beamng_earth/art/shapes/beamngEarth/dirt_fade_o.data.dds",
+        "opacityDetailMapUseUV": 1,
+        "detailOpacityMapStrength": 1,
+        "detailScale": [
+          1,
+          1
+        ]
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "bne_wear_patchstrip": {
+    "name": "bne_wear_patchstrip",
+    "mapTo": "bne_wear_patchstrip",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "b1e0d002-0013-4a11-9c01-000000000013",
+    "annotation": "ASPHALT",
+    "translucent": true,
+    "translucentZWrite": false,
+    "castShadows": false,
+    "Stages": [
+      {
+        "baseColorMap": "/assets/materials/decalroad/asphalt/road_patches1/t_asphalt_patchstrip_b.color.png",
+        "opacityMap": "/assets/materials/decalroad/asphalt/road_patches1/t_asphalt_patchstrip_o.data.png",
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "opacityFactor": 0.9,
+        "opacityDetailMap": "/levels/beamng_earth/art/shapes/beamngEarth/dirt_fade_o.data.dds",
+        "opacityDetailMapUseUV": 1,
+        "detailOpacityMapStrength": 1,
+        "detailScale": [
+          1,
+          1
+        ]
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "bne_edge_gravel": {
+    "name": "bne_edge_gravel",
+    "mapTo": "bne_edge_gravel",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "b1e0d002-0014-4a11-9c01-000000000014",
+    "annotation": "GRAVEL",
+    "translucent": true,
+    "translucentZWrite": false,
+    "castShadows": false,
+    "Stages": [
+      {
+        "baseColorMap": "/assets/materials/decalroad/asphalt/utah_asphalt_road_gravel_edge/t_asphalt_gravel_edge_b.color.png",
+        "normalMap": "/assets/materials/decalroad/asphalt/utah_asphalt_road_gravel_edge/t_asphalt_gravel_edge_nm.normal.png",
+        "opacityMap": "/assets/materials/decalroad/asphalt/utah_asphalt_road_gravel_edge/t_asphalt_gravel_edge_o.data.png",
+        "roughnessMap": "/assets/materials/decalroad/asphalt/utah_asphalt_road_gravel_edge/t_asphalt_gravel_edge_r.data.png",
+        "ambientOcclusionMap": "/assets/materials/decalroad/asphalt/utah_asphalt_road_gravel_edge/t_asphalt_gravel_edge_ao.data.png",
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ]
+      },
+      {},
+      {},
+      {}
+    ]
   }
 }

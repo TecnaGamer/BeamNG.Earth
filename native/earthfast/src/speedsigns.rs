@@ -283,7 +283,7 @@ pub fn speed_sign_place<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, l
         let (a, b) = (off[r] as usize, off[r + 1] as usize);
         let mut s = vec![0.0f64; b.saturating_sub(a)];
         for k in a + 1..b {
-            s[k - a] = s[k - a - 1] + ((pts[[k, 0]] - pts[[k - 1, 0]]).powi(2) + (pts[[k, 1]] - pts[[k - 1, 1]]).powi(2)).sqrt();
+            s[k - a] = s[k - a - 1] + ((pts[[k, 0]] - pts[[k - 1, 0]]).sq() + (pts[[k, 1]] - pts[[k - 1, 1]]).sq()).sqrt();
         }
         let road = Road { a, b, s, hw: meta[[r, 0]], dir: meta[[r, 1]] as i64, rank: meta[[r, 2]] as i64,
                           urban: meta[[r, 3]] != 0.0, link: meta[[r, 4]] != 0.0 };
@@ -556,7 +556,7 @@ pub fn speed_sign_place<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, l
         let Some((q, t, road_xy)) = found else { continue };
         // one panel a spot: overlapping map lines (two pieces of one road) put a second one there
         if placed.iter().any(|(p, d)| dot(*d, t) > SAME_WAY_COS
-                             && (p[0] - q[0]).powi(2) + (p[1] - q[1]).powi(2) < PANEL_GAP_M * PANEL_GAP_M) {
+                             && (p[0] - q[0]).sq() + (p[1] - q[1]).sq() < PANEL_GAP_M * PANEL_GAP_M) {
             continue;
         }
         placed.push((q, t));

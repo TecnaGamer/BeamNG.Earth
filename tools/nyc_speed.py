@@ -328,14 +328,17 @@ def keepup_save(d):
     n = lua("local k = require('beamngEarth/keepup') local n = k.save('/temp/bne_keepup.csv') k.stop() "
             "return n", timeout=120)
     dst = os.path.join(d, "keepup.csv")
-    if LOG_SSH and not LOG_WIN:     # (another machine's game, BNGE_LOG_SSH: the file is in ITS user folder)
-        rdir = os.environ.get("BNGE_REMOTE_USER_DIR", ".local/share/BeamNG/BeamNG.drive/current")
+    if LOG_SSH:     # (another machine's game, BNGE_LOG_SSH: the file is in ITS user folder; Windows too, BNGE_LOG_WIN)
+        rdir = os.environ.get("BNGE_REMOTE_USER_DIR", "AppData/Local/BeamNG/BeamNG.drive/current" if LOG_WIN
+                              else ".local/share/BeamNG/BeamNG.drive/current")
         rsrc = f"{rdir}/temp/bne_keepup.csv"
         for _ in range(20):
             if subprocess.run(["scp", "-q", "-o", "BatchMode=yes", f"{LOG_SSH}:{rsrc}", dst]).returncode == 0:
                 break
             time.sleep(0.5)
-        subprocess.run(["ssh", "-o", "BatchMode=yes", LOG_SSH, f"rm -f {rsrc}"], timeout=30)
+        rm = (f'powershell -NoProfile -Command "Remove-Item -ErrorAction SilentlyContinue \'{rsrc}\'"' if LOG_WIN
+              else f"rm -f {rsrc}")
+        subprocess.run(["ssh", "-o", "BatchMode=yes", LOG_SSH, rm], timeout=30)
     else:
         src = os.path.join(USER_DIR, "temp", "bne_keepup.csv")
         for _ in range(20):

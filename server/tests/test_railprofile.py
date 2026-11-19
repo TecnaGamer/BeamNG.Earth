@@ -120,5 +120,68 @@ class JoinBedsTest(unittest.TestCase):
         self.assertEqual(float(out[1][0]), 103.0)
 
 
+class NodeMemoFaultTest(RailProfileTest):
+    """A node made on a short read of the ground is not kept (TecnaGamer's review of #1248): the build that read short is
+    built again on the full DEM, and that rebuild must make the node again, reading (and faulting) anew."""
+
+    def test_a_node_made_on_a_short_read_is_made_again(self):
+        import revisit
+        short = [True]
+
+        def ground(xy):
+            if short[0]:
+                revisit.fault()             # (as dem.py where a lidar sheet is not there yet)
+                return hill_xy(xy) - 5.0
+            return hill_xy(xy)
+        rails = railways.parts(FRAME, [self.f], roads.tile_bbox(0, 0), clip=True)
+        with revisit.scope() as b:
+            first = railprofile.beds(FRAME, "f", self.load, ground, rails)
+        self.assertFalse(b.complete, "the build itself saw the fault")
+        self.assertEqual(len(railprofile._NODES), 0, "no node kept")
+        short[0] = False
+        with revisit.scope() as b:
+            again = railprofile.beds(FRAME, "f", self.load, ground, rails)
+        self.assertTrue(b.complete)
+        self.assertGreater(len(railprofile._NODES), 0, "made on the full ground: kept")
+        gap = max(float(np.nanmax(z1 - z0)) for z0, z1 in zip(first, again))
+        self.assertAlmostEqual(gap, 5.0, places=3, msg="the rebuild has the full ground's beds")
+
+    def test_a_pool_tasks_fault_counts_too(self):
+        import revisit
+        from runtimeprofiler import ThreadPoolExecutor
+        pool = ThreadPoolExecutor(1)
+
+        def far(xy):
+            revisit.fault()
+            return hill_xy(xy)
+
+        def ground(xy):                     # (dem.py reads its tiles in its fetch pool)
+            return pool.submit(far, xy).result()
+        rails = railways.parts(FRAME, [self.f], roads.tile_bbox(0, 0), clip=True)
+        railprofile.beds(FRAME, "p", self.load, ground, rails)
+        pool.shutdown()
+        self.assertEqual(len(railprofile._NODES), 0)
+
+    def test_a_nodes_beds_by_line_and_centimetre(self):
+        """earthfast.rail_node_pack / RailNode.find: a point two parts of a line share has the later part's height, a
+        key a centimetre off is found, another kind or line is not, a miss is NaN."""
+        rails = [("a", "rail", "ground", np.array([[0.0, 0.0], [1.0, 0.0], [2.0, 0.0]])),
+                 ("a", "rail", "bridge", np.array([[2.0, 0.0], [3.0, 0.0]])),
+                 ("a", "rail", "ground", np.array([[2.0, 0.0], [2.5, 0.0]])),
+                 ("b", "rail", "ground", np.array([[1.0, 0.0]]))]
+        xy, off = railprofile._flat(rails)
+        z = np.array([1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0])
+        groups = {}
+        group = np.array([groups.setdefault((f, k), len(groups)) for f, _c, k, _xy in rails], np.int64)
+        node = (groups, railprofile.fast._ef.rail_node_pack(railprofile._cm(xy), z, off, group, len(groups)))
+        self.assertEqual(railprofile._points(node), 7)
+        q = railprofile._cm(np.array([[2.0, 0.0], [1.0, 0.01], [9.0, 9.0], [0.0, 0.0]]))
+        np.testing.assert_array_equal(railprofile._find(node, "a", "ground", q), [6.0, 2.0, np.nan, 1.0])
+        np.testing.assert_array_equal(railprofile._find(node, "a", "bridge", q), [4.0, np.nan, np.nan, np.nan])
+        np.testing.assert_array_equal(railprofile._find(node, "b", "ground", q), [np.nan, 8.0, np.nan, np.nan])
+        self.assertTrue(np.isnan(railprofile._find(node, "c", "ground", q)).all())
+        self.assertTrue(np.isnan(railprofile._find(railprofile._EMPTY, "a", "ground", q)).all())
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -62,7 +62,7 @@ class GridTest(unittest.TestCase):
         idx = surface.classify(g, np.zeros(g.shape), self.SQUARE)
         x = np.arange(-100, 200) * self.SQUARE
         berm = (x >= 8) & (x < 23)
-        self.assertTrue((idx[10][berm] == surface.LOOSE).all())
+        self.assertTrue((idx[10][berm] == surface.SAND).all(), "the sand layer (2026-11-16; the gravel layer before)")
         inland = self.grid(lambda x: np.full(np.shape(x), 30, np.uint8))
         self.assertTrue((surface.classify(inland, np.zeros(inland.shape), self.SQUARE) == surface.GRASS).all())
 

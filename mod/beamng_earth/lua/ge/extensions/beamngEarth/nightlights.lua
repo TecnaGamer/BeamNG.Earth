@@ -17,6 +17,7 @@ M.MATERIALS = {
   bne_bld_shop = { '1 0.80 0.58', 30 },
   -- the skyline's walls (buildings.py _sky_mesh, tools/build_sky_windows.py: 1-3 miles off)
   bne_bld_sky = { '1 1 1', 200 },
+  bne_bld_skywin = { '1 1 1', 200 },     -- (the same walls with day windows: the far packs' sky style)
   -- the street lamps' lenses (furniture.py G_LENS; tools/build_lamp_lens.py): sodium-warm, bright
   bne_lamp_lens = { '1 0.66 0.33', 4000 },
   bne_fr_glass = { '1 0.68 0.12', 900 },
@@ -55,6 +56,7 @@ M.MAPS = {
   bne_bld_office = steps('bne_office_night_e', '.dds'),
   bne_bld_shop = steps('bne_office_night_e', '.dds'),
   bne_bld_sky = steps('bne_sky_night_e', '.dds'),
+  bne_bld_skywin = steps('bne_sky_night_e', '.dds'),
   bne_fr_house_glass_lit = steps('fr_houses/glass', '.emissive.dds'),
 }
 M.LATE = { { 23.25, 2 }, { 3, 3 }, { 6.5, 1 } }

@@ -30,6 +30,14 @@
   let lastFrame = 0;
   let animating = false;
   let pixelRatio = 1;
+  // The keys of the roads and the tiles drawn (dashboard.lua's handshake, from PR #472): each update comes with the Lua
+  // the page runs back once it drew it (navDrawn, built by the mod: only echoed), and the mod's probe asks keys().
+  let roadsKey = null;
+  let tilesKey = null;
+
+  function drawn(ack) {
+    if (typeof ack === 'string' && ack && typeof beamng !== 'undefined' && beamng.sendEngineLua) beamng.sendEngineLua(ack);
+  }
 
   function resize() {
     pixelRatio = Math.max(1, window.devicePixelRatio || 1);
@@ -39,20 +47,14 @@
     render();
   }
 
-  function setTiles(data) {
+  function setTiles(data, ack) {
     const zoom = data && Number.isFinite(data.zoom) ? data.zoom : (view.zoom !== null ? view.zoom : 0);
     const old = new Map();
     for (const list of layers.values()) for (const tile of list) old.set(tile.src, tile.image);
     const list = [];
     for (const item of (data && Array.isArray(data.tiles) ? data.tiles : [])) {
       if (!item || typeof item.src !== 'string') continue;
-      const image = old.get(item.src) || new Image();
-      if (!image.src) {
-        image.onload = render;
-        image.onerror = render;
-        image.src = item.src;
-      }
-      list.push({ x: item.x, y: item.y, src: item.src, image: image });
+      list.push({ x: item.x, y: item.y, src: item.src, image: old.get(item.src) || loadImage(item.src, 0) });
     }
     // (an empty list keeps the level's tiles: tiles not ready yet are not tiles gone)
     if (list.length || !layers.has(zoom)) layers.set(zoom, list);
@@ -60,6 +62,32 @@
       if (Math.abs(z - zoom) > KEEP_LEVELS) layers.delete(z);
     }
     render();
+    tilesKey = data && typeof data.key === 'string' ? data.key : null;
+    drawn(ack);
+  }
+
+  // A tile's image; one that fails to load (a file being replaced, the game's file cache not seeing it yet) is loaded
+  // again after LOAD_RETRY_MS * 2^tries, LOAD_TRIES times (before, a failed image stayed in the layer for good, and
+  // the mod sends a tile list only when it changes).
+  const LOAD_RETRY_MS = 1000;
+  const LOAD_TRIES = 5;
+  function loadImage(src, tries) {
+    const image = new Image();
+    image.onload = render;
+    image.onerror = function () {
+      render();
+      if (tries + 1 >= LOAD_TRIES) return;
+      setTimeout(function () {
+        let fresh = null;
+        for (const list of layers.values()) {
+          for (const tile of list) {
+            if (tile.image === image) tile.image = fresh || (fresh = loadImage(src, tries + 1));
+          }
+        }
+      }, LOAD_RETRY_MS * Math.pow(2, tries));
+    };
+    image.src = src;
+    return image;
   }
 
   function frame(t) {
@@ -152,14 +180,20 @@
     return drawn;
   }
 
-  function setRoads(data) {
+  function setRoads(data, ack) {
     if (!data || typeof data !== 'object' || !Array.isArray(data.n) || !Array.isArray(data.e)) {
       roads = null;
     } else {
       roads = { key: data.key, anchor: data.anchor, ox: +data.ox || 0, oy: +data.oy || 0,
         n: Float64Array.from(data.n), e: Int32Array.from(data.e) };
     }
+    roadsKey = data && typeof data === 'object' && typeof data.key === 'string' ? data.key : null;
     render();
+    drawn(ack);
+  }
+
+  function keys() {
+    return { roads: roadsKey, tiles: tilesKey };
   }
 
   // The roads round the car, in the photo's pixels at the zoom shown: world metres from the car turned to true
@@ -330,7 +364,7 @@
     updateData: function () {},
     setBootscreenImage: function () {}
   };
-  window.beamngEarthDashboard = { setTiles: setTiles, setView: setView, setRoads: setRoads, restore: restore };
+  window.beamngEarthDashboard = { setTiles: setTiles, setView: setView, setRoads: setRoads, restore: restore, keys: keys };
   window.addEventListener('resize', resize);
   resize();
   const params = new URLSearchParams(window.location.search);

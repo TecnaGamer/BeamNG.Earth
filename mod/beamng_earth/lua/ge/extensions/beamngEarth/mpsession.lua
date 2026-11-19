@@ -428,16 +428,76 @@ local function onAnchors(data)
       if lat and mpanchor.setRemote(pid, a.aLat, a.aLon) then
         local id = tostring(tonumber(pid))
         anchors[id] = { aLat = tonumber(a.aLat), aLon = tonumber(a.aLon), lat = lat, lon = lon,
-          name = a.name, h = a.h }
+          name = a.name, h = a.h, rel = M.releaseId(a.rel) }
         n = n + 1
       end
     end
   end
   mpanchor.retainRemote(anchors)
+  M.noteReleases(myPid())
   if n ~= lastPlayers then
     lastPlayers = n
     log('I', 'beamngEarth', string.format('BeamMP: %d player(s) with BeamNG.Earth', n))
   end
+end
+
+-- The map data's release of a world server (an Overture release id), else nil.
+function M.releaseId(rel)
+  return (type(rel) == 'string' and rel:match('^%d%d%d%d%-%d%d%-%d%d%.%d%d?$')) and rel or nil
+end
+
+-- The level's map data release (core: releasepin's pin, from the live server's hello; nil: not known yet): our poses
+-- carry it whether or not shared generation's share_hello was answered.
+function M.setRelease(rel) M._ownRelease = M.releaseId(rel) end
+function M.ownRelease() return M._ownRelease or (shareInfo and shareInfo.release) or nil end
+
+-- Pure: the players (anchors: the plugin's, each with its world server's release when its poses carry one) whose
+-- release is known and not ours, as { { pid, name, rel } } in pid order; {} when ours is not known.
+function M.otherReleases(own, list, me)
+  local out = {}
+  if not own then return out end
+  for pid, a in pairs(list or {}) do
+    if pid ~= me and type(a) == 'table' and a.rel and a.rel ~= own then
+      out[#out + 1] = { pid = pid, name = tostring(a.name or ('player ' .. pid)), rel = a.rel }
+    end
+  end
+  table.sort(out, function(x, y) return x.pid < y.pid end)
+  return out
+end
+
+-- Players whose world servers read other map data than ours (BeamMP shared generation v2): their plans' codes differ
+-- (the map data's versions are in them: mpshare.expect_code), so nothing is shared with them, by construction; the
+-- player is told once for each new set (a toast and the log), never per frame (at each bngeAnchors).
+function M.noteReleases(me)
+  local own = M.ownRelease()
+  local others = M.otherReleases(own, anchors, me)
+  if #others == 0 then return end
+  local parts = {}
+  for _, o in ipairs(others) do parts[#parts + 1] = o.name .. ' (' .. o.rel .. ')' end
+  local text = table.concat(parts, ', ')
+  if M._releasesNoted == text then return end
+  M._releasesNoted = text
+  log('W', 'beamngEarth', 'BeamMP: other map data than ours (' .. own .. '): ' .. text .. '; world building not shared')
+  local gh = rawget(_G, 'guihooks')
+  if gh and gh.trigger then
+    pcall(gh.trigger, 'toastrMsg', { type = 'warning', title = 'BeamNG.Earth: other map data',
+      msg = text .. ' build the world from other map data than yours (' .. own .. '). World building is not shared '
+        .. 'with them and roads may not line up where you meet. BeamNG.Earth picks its map data when it starts: '
+        .. 'restart it (the app) on the older side to match.', config = { timeOut = 30000 } })
+  end
+end
+
+-- (mpdefer.lua) Player pid's place (lat, lon: their car, or camera without one) from the latest bngeAnchors; nil: not
+-- known (no BeamNG.Earth, not heard yet).
+function M.ownerPlace(pid)
+  local a = anchors[tostring(tonumber(pid))]
+  if type(a) == 'table' and tonumber(a.lat) and tonumber(a.lon) then return tonumber(a.lat), tonumber(a.lon) end
+end
+-- (mpdefer.lua) Player pid's distance (m) from our origin (our anchor: mpanchor's far test is from there); nil unknown.
+function M.ownerDist(pid)
+  local lat, lon = M.ownerPlace(pid)
+  local mLat, mLon = require('beamngEarth/mpanchor').own()
+  if lat and mLat then return M.dist(mLat, mLon, lat, lon) end
 end
 
 -- core.teleportTo: the anchor of other players near (lat, lon) to teleport onto (aLat, aLon), nil if none: none while
@@ -805,6 +865,14 @@ end
 
 -- Is this other player's car floating here (collisionfoci leaves it out)?
 function M.isFloating(gid) return floating[tonumber(gid)] == true end
+-- Is this other player's car switched off here (far, or its owner's anchor not known)? (mpdefer: its kept edit waits)
+function M.isOff(gid) return deactivated[tonumber(gid)] == true end
+-- (mpdefer: a kept car come near spawns once) a car at (x, y) of our frame has ground under it, or floats there (off
+-- our block: no ground needed), as a car switched off here comes back on.
+function M.groundOkAt(x, y)
+  if onBlock(x, y, M.FLOAT_OUT_M) == false then return true end
+  return require('beamngEarth/terrainpatch').groundReady(x, y) == true
+end
 
 local function gravityNow()
   local ce = rawget(_G, 'core_environment')
@@ -840,7 +908,8 @@ local function updateFloating(owners)
 end
 
 function M.onShareInfo(msg)
-  shareInfo = { code = tostring(msg.code or ''), weight = tonumber(msg.weight) or 1 }
+  shareInfo = { code = tostring(msg.code or ''), weight = tonumber(msg.weight) or 1,
+    release = M.releaseId(msg.overtureRelease) }
   log('I', 'beamngEarth', 'BeamMP: sharing world building with the players near us (code ' .. shareInfo.code .. ')')
 end
 
@@ -901,9 +970,16 @@ function M.update(dt, anchor, player)
     statusIn = M.STATUS_S
     local n = 0
     for _ in pairs(anchors) do n = n + 1 end
+    -- (far players' cars kept, not spawned here: mpdefer.lua)
+    local md = require('beamngEarth/mpdefer')
+    local okK, kept, keptEdits = pcall(md.counts)
+    local farcars = okK and { kept = kept, keptEdits = keptEdits, held = md.stats.held, released = md.stats.released,
+      merged = md.stats.merged, edits = md.stats.edits, editsReleased = md.stats.editsReleased, taken = md.stats.taken,
+      handedBack = md.stats.handedBack } or nil
     log('I', 'beamngEarth', string.format('BeamMP status: anchor %s, %d player(s) known, events anchors/goto %d/%d, '
-      .. 'poses %d, %s', anchor and M.key(anchor.lat, anchor.lon) or 'none', n, stats.anchors, stats.go, stats.poses,
-      mpanchor.status()))
+      .. 'poses %d, far cars kept %d (edits %d, spawned on coming near %d), %s', anchor and M.key(anchor.lat, anchor.lon)
+      or 'none', n, stats.anchors, stats.go, stats.poses, farcars and farcars.kept or -1, farcars and farcars.keptEdits
+      or -1, farcars and farcars.released or -1, mpanchor.status()))
     -- the same as a file (the game's log reaches the disk late; BeamMP turns the game's MCP off in a session)
     local hidden = 0
     for _ in pairs(deactivated) do hidden = hidden + 1 end
@@ -975,7 +1051,7 @@ function M.update(dt, anchor, player)
     end
     pcall(jsonWriteFile, M.STATUS_FILE, { t = os.time(), block = blk, sky = skyNow, weather = wxNow, anchor = anchor and M.key(anchor.lat, anchor.lon) or nil,
       perf = perf, switch = next(switchLog) and switchLog or nil, away = next(awayLog) and awayLog or nil,
-      anchors = anchors, stats = stats, hidden = hidden, remote = remote, own = own, player = player and { x = player.x,
+      anchors = anchors, stats = stats, hidden = hidden, farcars = farcars, remote = remote, own = own, player = player and { x = player.x,
       y = player.y, z = player.z, camera = player.camera } or nil }, true)
   end
   t = mk('mp:status', t)
@@ -1007,7 +1083,8 @@ function M.update(dt, anchor, player)
     end
     TriggerServerEvent('bngePose', jsonEncode({ v = M.PROTO, aLat = anchor.lat, aLon = anchor.lon, lat = lat,
       lon = lon, joined = joined, h = h and math.floor(h * 10 + 0.5) / 10 or nil,
-      sc = shareInfo and shareInfo.code or nil, sw = shareInfo and shareInfo.weight or nil }))
+      sc = shareInfo and shareInfo.code or nil, sw = shareInfo and shareInfo.weight or nil,
+      rel = M.ownRelease() }))     -- (our map data's release: the others are told on another)
     stats.poses = stats.poses + 1
     if joined then log('I', 'beamngEarth', string.format('BeamMP: first pose sent (%.5f, %.5f)', lat, lon)) end
     joined = false
@@ -1110,6 +1187,7 @@ function M.groundFoci()
   for gid, w in pairs(waitGround) do
     out[#out + 1] = { x = w.x, y = w.y, r = cf.PLAYER_R, trees = true, id = gid, kind = 'player' }
   end
+  for _, f in ipairs(require('beamngEarth/mpdefer').foci()) do out[#out + 1] = f end    -- (kept cars come near)
   return out
 end
 
@@ -1167,6 +1245,7 @@ end
 -- The session's end (BeamMP left, the level's end): the deactivated cars back on, everything forgotten.
 function M.reset()
   shareInfo = nil             -- (asked again in the next session)
+  M._releasesNoted = nil
   for gid in pairs(deactivated) do
     local veh = vehicle(gid)
     if veh then veh:setActive(1) end
@@ -1186,6 +1265,7 @@ function M.reset()
   -- share, config, configWait, convergeIn, anchorSince, lastAnchorKey = nil, nil, 0, 0, 0, nil   -- (shared world building)
   stats, statusIn = { anchors = 0, go = 0, poses = 0, converged = 0, peers = 0 }, M.STATUS_S
   require('beamngEarth/mpanchor').reset()
+  require('beamngEarth/mpdefer').reset()
 end
 
 -- The other players for the world map: { { pid, name, lat, lon, h } } (pid: the server's player id as a string, what

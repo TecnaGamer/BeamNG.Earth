@@ -85,8 +85,10 @@ class GraphicsMessageTest(unittest.TestCase):
     def test_fixed_view_distance_caps_the_far_field(self):
         c = self.conn([{"type": "graphics", "viewM": 40000}])
         self.assertEqual(c.view_cap, 40000.0)
+        c = self.conn([{"type": "graphics", "viewM": 1000}])
+        self.assertEqual(c.view_cap, 1000.0, "1 km, the settings' least (players asked for under 20 km)")
         c = self.conn([{"type": "graphics", "viewM": 500}, {"type": "graphics", "lodScale": 1.3}])
-        self.assertEqual(c.view_cap, earthd.VIEW_CAP_MIN_M, "at least 10 km; a message without it keeps it")
+        self.assertEqual(c.view_cap, earthd.VIEW_CAP_MIN_M, "at least 1 km; a message without it keeps it")
         c = self.conn([{"type": "graphics", "viewM": 40000}, {"type": "graphics", "viewM": 0}])
         self.assertIsNone(c.view_cap, "0: the real horizon again")
 

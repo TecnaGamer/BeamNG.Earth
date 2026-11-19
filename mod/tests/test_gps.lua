@@ -214,7 +214,19 @@ do
   T.check(G.edgeUnder(wide, 25, 10, 1, 0) == 'a', 'node radii supply the width when edge radii are absent')
   wide.c = { pos = { x = 0, y = 14 }, radius = 3, links = { d = {} } }
   wide.d = { pos = { x = 100, y = 14 }, radius = 3, links = {} }
-  T.check(G.edgeUnder(wide, 25, 10, 1, 0) == 'c', 'the nearest matching edge still wins among eligible roads')
+  T.check(G.edgeUnder(wide, 25, 10, 1, 0) == 'a', 'a road containing the car wins over another road found only through the fallback tolerance')
+  T.check(G.edgeUnder(wide, 25, 10, 1, 0, nil, 25) == 'c', 'approximate route projections retain their explicit search tolerance')
+end
+
+-- Balzac: a narrow service road is slightly closer than the occupied highway lane.
+do
+  local function n(x, y, radius, links) return { pos = { x = x, y = y, z = 0 }, radius = radius, links = links } end
+  local roads = { a = n(0, 0, 6, { b = {} }), b = n(100, 0, 6, {}),
+    c = n(0, 9, 1.5, { d = {} }), d = n(100, 9, 1.5, {}) }
+  T.check(G.edgeUnder(roads, 50, 4.6, 1, 0, 0) == 'a', 'a service road outside its own width cannot steal the highway anchor')
+  T.check(G.edgeUnder(roads, 50, 8, 1, 0, 0) == 'c', 'driving on the service road still selects it')
+  roads.c, roads.d = nil, nil
+  T.check(G.edgeUnder(roads, 50, 7, 1, 0, 0) == 'a', 'the eight-metre fallback still supports a car just beyond the mapped road width')
 end
 
 -- Overlapping fork lanes retain an active path only while it is physically underfoot.
@@ -517,5 +529,32 @@ do
   T.check(ids() == 'a,b,c', 'the stock inclusive one-metre merge boundary is restored')
   nodes.b.pos.x = -1.001
   T.check(ids() == 'a,c', 'nodes beyond the stock merge radius remain invalid')
+end
+-- A viaduct (one-way, eastbound, 400 m up its approach) over a two-way track whose line runs 3 m beside it, 24 m
+-- below (the A7's Zillbach viaduct, 2026-11-16): height-aware choices take the deck, the 2D one the track.
+do
+  local function n(x, y, z, links) return { pos = { x = x, y = y, z = z }, links = links or {} } end
+  local ow = function(from) return { oneWay = true, inNode = from } end
+  local vnodes = { d0 = n(-200, 0, 30), d1 = n(0, 0, 30), d2 = n(200, 0, 30), d3 = n(400, 0, 30),
+    t1 = n(0, -3, 6), t2 = n(400, -3, 6) }
+  vnodes.d0.links.d1 = ow('d0'); vnodes.d1.links.d2 = ow('d1'); vnodes.d2.links.d3 = ow('d2')
+  vnodes.t1.links.t2 = {}
+  local segs = G.edgeSegments(vnodes)
+  local _, _, flat = G.nearestEdge(segs, 150, -2.5, 1, 0)
+  T.check(flat and flat.segment.a:sub(1, 1) == 't', 'in 2D the track under the viaduct is the nearer edge (the old pick)')
+  local d3, z3, deck = G.nearestEdge3(segs, 150, -2.5, 30.5, 1, 0)
+  T.check(deck and deck.segment.a:sub(1, 1) == 'd' and math.abs(z3 - 30) < 1e-9 and math.abs(d3 - 2.5) < 1e-9,
+    'nearestEdge3 from the car\'s height takes the deck, with its height and 2D distance')
+  local _, _, low = G.nearestEdge3(segs, 150, -2.5, 6, 1, 0)
+  T.check(low and low.segment.a:sub(1, 1) == 't', 'from the track\'s height the track')
+  local _, z, pick = G.recoverPick(segs, -100, -2.5, 1, 0, 50, -2.9, 1, 0, 30.5, 150)
+  T.check(pick and pick.segment.a:sub(1, 1) == 'd' and math.abs(z - 30) < 1e-9,
+    'recovery ahead picks the viaduct the car is on, joined to its road')
+  _, _, pick = G.recoverPick(segs, -100, -2.5, 1, 0, 50, -2.9, -1, 0, 30.5, 150)
+  T.check(pick and pick.segment.a:sub(1, 1) == 't', 'never against a one-way carriageway: the only edge drivable west')
+  local carNodes = { d0 = vnodes.d0, d1 = vnodes.d1, d2 = vnodes.d2, d3 = vnodes.d3, t1 = vnodes.t1, t2 = vnodes.t2,
+    u = n(-200, -40, 6, { t1 = {} }) }
+  _, _, pick = G.recoverPick(G.edgeSegments(carNodes), -150, -38, 1, 0.19, 50, -2.9, 1, 0, 6.5, 150)
+  T.check(pick and pick.segment.a:sub(1, 1) == 't', 'a car down on the track road stays on its own road')
 end
 T.done('test_gps')

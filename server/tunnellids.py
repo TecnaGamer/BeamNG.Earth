@@ -54,7 +54,7 @@ def _resample(xy, step):
         return xy[:1], np.zeros(1)
     n = max(1, int(math.ceil(s0[-1] / step)))
     s = np.linspace(0.0, s0[-1], n + 1)
-    return np.c_[np.interp(s, s0, xy[:, 0]), np.interp(s, s0, xy[:, 1])], s
+    return np.c_[dnp.interp(s, s0, xy[:, 0]), dnp.interp(s, s0, xy[:, 1])], s
 
 
 def _cross(a, b, p, q):
@@ -104,7 +104,7 @@ def _along(R, s0, ds, reach):
     sR = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(R, axis=0).T))]
     d = np.arange(0.0, reach + 1e-9, LID_STEP_M)
     s = s0 + ds * d
-    pts = np.c_[np.interp(s, sR, R[:, 0]), np.interp(s, sR, R[:, 1])]
+    pts = np.c_[dnp.interp(s, sR, R[:, 0]), dnp.interp(s, sR, R[:, 1])]
     past = (s < 0.0) | (s > sR[-1])
     if past.any():
         end = 0 if ds < 0 else len(R) - 1
@@ -142,7 +142,7 @@ def lids_of(tunnels, roads, z_at):
             for s_t, s_r, sin in _crossings(T, R):
                 if sin < TUNNEL_ROAD_MIN_SIN:
                     continue
-                f = float(np.interp(s_t, sT, floor))
+                f = float(dnp.interp(s_t, sT, floor))
                 ends = []
                 for ds in (-1.0, 1.0):
                     pts, d = _along(R, s_r, ds, LID_REACH_M)
@@ -180,7 +180,7 @@ def lids_of(tunnels, roads, z_at):
             for side in (-1.0, 1.0):
                 pts = seg[mid] + side * (thw + np.asarray(LID_BANK_M))[:, None] * nrm
                 banks.append(float(np.median(np.asarray(z_at(pts), np.float64))))
-            fm = float(np.interp(0.5 * (s1 + s2), sT, floor))
+            fm = float(dnp.interp(0.5 * (s1 + s2), sT, floor))
             if min(banks) < fm + TUNNEL_OPEN_COVER:
                 continue
             zj = min(min(banks), z1, z2)

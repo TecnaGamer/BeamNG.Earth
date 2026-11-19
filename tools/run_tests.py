@@ -48,7 +48,11 @@ class Runner:
 
     def say(self, msg):
         with self.lock:
-            print(f"[{time.time() - self.t0:6.0f}s] {msg}", flush=True)
+            line = f"[{time.time() - self.t0:6.0f}s] {msg}"
+            enc = getattr(sys.stdout, "encoding", None) or "utf-8"
+            # (a test's output in a character the console's code page lacks, e.g. U+FFFD on Windows cp1252, stopped
+            # the whole run with UnicodeEncodeError, CI 2026-11-15)
+            print(line.encode(enc, "replace").decode(enc, "replace"), flush=True)
 
     def expected(self, m):
         return self.hist.get(m, {}).get("secs", DEFAULT_S)

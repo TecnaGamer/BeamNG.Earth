@@ -40,7 +40,7 @@ M.FAR_ONLY = { conifer_clump = true, deciduous_clump = true, oak_west_clump = tr
 -- with a door on every house out to 300 m): the tile distance (m) beyond which a group is not shown
 -- rocks only over the fine ground (farfield.NEAR_RADII: L0 within 400 m): beyond it the coarser tiles round off the
 -- ridges and a rock placed on the real ground floated over the drawn one (Stelvio pass, the user's report 2026-10-17)
-M.GROUP_MAX_M = { tuft = 200, fern = 200, shrub = 250, desert_shrub = 250, rock = 400, desert_rock = 400, cliff = 1500, pylon = 1500, hvpole = 1000, gantry = 800, sub_breaker = 400, sub_mast = 1000, sub_support = 300,
+M.GROUP_MAX_M = { tuft = 200, fern = 200, shrub = 250, desert_shrub = 250, rock = 400, desert_rock = 400, slope_rock = 400, cliff = 1500, pylon = 1500, hvpole = 1000, gantry = 800, sub_breaker = 400, sub_mast = 1000, sub_support = 300,
   sub_transformer = 500, sub_fence = 200, lamplens = 800, high_mast_light = 800, fr_lantern_light = 800, fr_wood_pole = 800, eu_wood_pole = 800, fr_lantern = 500, fr_j1 = 300, fr_j3 = 300, fr_j6 = 300, fr_j4_l = 400, fr_j4_r = 400, fr_signpost = 500, lampglow = 6000, rrcross = 300, rrcross_eu = 300, rrflash = 400,
   rrflash_eu = 400, rrgate = 400, rrgate_l = 400, rrgate_eu = 400, rrgate_eu_l = 400, rrbuffer = 400, rrwalk = 250, catmast = 700, catmast_eu = 700, catpost = 700, catpost_eu = 700, door = 120, hydrant = 200, bin = 200, bench = 200, bench_metal = 200, polelamp = 400,
   stop = 300, giveway = 300, signal = 500, signal_left = 500, fence = 150, wallsign_logistics = 800, wallsign_rentabox = 800, wallsign_lemon = 800, wallsign_turboburger = 500,
@@ -66,6 +66,20 @@ M.FOREST_NAME = 'bngEarthForest'      -- a prefix: small Forests from a pool ('b
 M.SOLID_M = 200       -- (was 300 + 100: up to ~20k solid trees in a forest, and every terrain block move rebuilt all their
                       -- collision, a ~30 ms physics frame; 200 + 50 is still 5 s ahead at 100 mph, 2026-10-15)
 M.SOLID_HYST_M = 50
+-- ... but not behind a moving car (roads.lua BEHIND, its kept heading): a tile whose near edge is BEHIND_M or more behind
+-- it along the heading gets no solid items, and one solid already loses them BEHIND_HYST_M farther (2026-11-14, a Steam
+-- Deck 45 mph Fells Point drive: ~800 of ~1,250 solid trees and props were behind the car, a quarter of every
+-- collision rebuild's triangles). Solid items made again within roads.needReach of the car (it turned back) rebuild
+-- the collision at once (roads.requestCollision with their distance).
+M.BEHIND_M = 20
+M.BEHIND_HYST_M = 30
+-- An item made solid within CLOSE_M of the car (a pass behind on a slow machine), anywhere in a tile BEHIND had kept
+-- from solid while within SOLID_M (the car turned back to it), or in a tile solid only for another player's car (its
+-- focus; roads.focusDue measures from that car), is sent to roads.requestCollision in a box: due by the
+-- car's distance to it as it drives (the roads' NEED rule). Those made solid farther out (a tile coming within SOLID_M
+-- ahead) ride the next rebuild, as before: a deadline for each of them doubled a Steam Deck drive's rebuilds (52 against
+-- 23-27 in Fells Point at 45 mph).
+M.CLOSE_M = 120
 M.NO_COLLIDE = { tuft = true, fern = true, fr_j1 = true, fr_j3 = true, fr_j6 = true, shrub = true, desert_shrub = true, door = true, lamplens = true, high_mast_light = true, fr_lantern_light = true, lampglow = true, wallsign_logistics = true, wallsign_rentabox = true,
   wallsign_lemon = true, wallsign_turboburger = true, rooftank = true }
 -- The 100 mph stutter (2026-10-15 probes): a frame that adds or removes Forest items costs the engine's tick ~0.5 us
@@ -136,6 +150,12 @@ M.CATALOG = {
   -- rock faces along rural road cuts (server roads.cliff_rows: Italy's rock-face kit, as its own cut slopes are made)
   cliff = {
     { IT .. 'rocks/italy_rockface_short_wide', 2.9 }, { IT .. 'rocks/italy_rockface_tall_wide', 13.2 },
+  },
+  -- boulders sunk into steep graded slopes beside rural roads (server roads.slope_rocks, with the vanilla slopes:
+  -- BNE_BATTER=vanilla): Italy's rock-face boulders, as its own steep cuts carry them (heights from the DAEs)
+  slope_rock = {
+    { IT .. 'rocks/italy_rockface_boulder_4', 1.05 }, { IT .. 'rocks/italy_rockface_boulder_3', 1.77 },
+    { IT .. 'rocks/italy_rockface_boulder_2', 2.12 }, { IT .. 'rocks/italy_rockface_boulder_1', 3.12 },
   },
   deciduous = {
     { ECA .. 'trees/trees_oak/tree_oak_sml_a', 8.6 }, { ECA .. 'trees/trees_oak/tree_oak_sml_b', 9.5 },
@@ -1480,6 +1500,12 @@ M.WARM_PER_PASS = 3       -- (less the pass's own new shapes)
 M.WARM_DEPTH_M = 1500
 M.warmed = 0
 local warmForestId = nil
+-- Each warm item at a spot of its own, WARM_GRID_M apart on a WARM_GRID_N square grid round the point: every item at one
+-- point made the engine's forest cell split without end (211 saved shapes warmed at (0, 0, -1500) at a level's start:
+-- the main thread spun in the forest insert and grew to 28-39 GB, the game killed by the OOM killer; 105 loaded fine,
+-- the texkeep soak 2026-11-14).
+M.WARM_GRID_M, M.WARM_GRID_N = 3.0, 24
+local warmK = 0
 local function warmItem(sh, player)
   local f = warmForestId and scenetree.findObjectById(warmForestId)
   if not f then
@@ -1495,7 +1521,10 @@ local function warmItem(sh, player)
   if not itemMat then itemMat, itemVec, itemPos = MatrixF(true), vec3(0, 0, 0), vec3(0, 0, 0) end
   itemVec:set(0, 0, 0)
   itemMat:setFromEuler(itemVec)
-  itemPos:set(player.x or 0, player.y or 0, (player.z or 0) - M.WARM_DEPTH_M)
+  local k = warmK % (M.WARM_GRID_N * M.WARM_GRID_N)
+  warmK = warmK + 1
+  itemPos:set((player.x or 0) + (k % M.WARM_GRID_N) * M.WARM_GRID_M,
+    (player.y or 0) + math.floor(k / M.WARM_GRID_N) * M.WARM_GRID_M, (player.z or 0) - M.WARM_DEPTH_M)
   itemMat:setPosition(itemPos)
   local fd = f:getData()
   if fd and pcall(function() return fd:createNewItem(d, itemMat, 1) end) then M.warmed = M.warmed + 1 end
@@ -1657,6 +1686,13 @@ function M.update(anchorId, player, view, frameMs, fill)
     local dy = math.max(math.abs(p.y - t.cy) - h, 0)
     return math.sqrt(dx * dx + dy * dy)
   end
+  -- behind the moving car (BEHIND_M above; the heading roads.lua keeps): no solid items
+  local okR, roadsM = pcall(require, 'beamngEarth/roads')
+  local bdir = okR and type(roadsM) == 'table' and roadsM.behindDir and roadsM.behindDir() or nil
+  local function behind(t)
+    if not bdir then return false end
+    return roadsM.behindBy(player, bdir, t.cx, t.cy, t.half or 128) >= M.BEHIND_M + (t.near and M.BEHIND_HYST_M or 0)
+  end
   -- solid round other players' cars too (collisionfoci.lua: the foci with trees; traffic has none)
   local function nearFocus(t)
     for _, f in ipairs(foci) do
@@ -1688,7 +1724,14 @@ function M.update(anchorId, player, view, frameMs, fill)
         capD = math.max(0, dist - leadM)
       end
       local band = groupBand(t, capD)
-      local near = dCar <= M.SOLID_M or (t.near and dCar <= M.SOLID_M + M.SOLID_HYST_M) or nearFocus(t) or false
+      local nearD = dCar <= M.SOLID_M or (t.near and dCar <= M.SOLID_M + M.SOLID_HYST_M)
+      local isBehind = nearD and behind(t)
+      -- (a tile within SOLID_M kept from solid only by BEHIND: its items made solid again are all sent with a box,
+      -- however far, until it leaves SOLID_M: the car turned back to it)
+      if isBehind then t.restore = true elseif not nearD then t.restore = nil end
+      local mine = nearD and not isBehind
+      local near = mine or nearFocus(t) or false
+      t.byFocus = (near and not mine) or nil      -- (solid for another player's car only: every item sent with a box)
       if t.moved or want ~= t.shown or band ~= t.band or near ~= t.near or t.pending then
         nOrder = nOrder + 1
         oKeys[nOrder], oD[nOrder] = key, dist
@@ -1708,12 +1751,17 @@ function M.update(anchorId, player, view, frameMs, fill)
     limit = math.max(limit, M.NEAR_URGENT_MS)
   end
   local nearMade = false
+  local madeBoxes, cb = nil, nil            -- (boxes { x0, y0, x1, y1 } round the solid items made, one a tile)
   local rowsScanned = 0
   local function finish()
     M.lastRows = rowsScanned                -- (diagnostics)
     if nearMade then
       local ok, roads = pcall(require, 'beamngEarth/roads')
-      if ok and roads.requestCollision then roads.requestCollision() end
+      if ok and roads.requestCollision then
+        roads.requestCollision()
+        for _, b in ipairs(madeBoxes or {}) do roads.requestCollision({ b[1], b[2], 0, b[3], b[4], 0 }) end
+      end
+      nearMade, madeBoxes, cb = false, nil, nil
     end
   end
   -- a pass over a tile's rows stopped (its frame's time or items, or no Forest yet): the next pass for the same targets
@@ -1738,7 +1786,7 @@ function M.update(anchorId, player, view, frameMs, fill)
     local dist = oD[at]
     local want, band, near = oWant[at], oBand[at], oNear[at]
     local capDist = oCapD[at] or dist
-    t, fd = tiles[oKeys[at]], nil
+    t, fd, cb = tiles[oKeys[at]], nil, nil
     if t.moved then
       -- a moved geotile: its items made again at its placement (the first loop, next pass). Near, it must collide;
       -- far, the engine draws its items' distant impostors without the Forest's transform: a rebase's 767 m shift
@@ -1806,7 +1854,23 @@ function M.update(anchorId, player, view, frameMs, fill)
             if t.made[i] then liveItems = liveItems + 1 end
             t.solid[i] = (t.made[i] and solid) or nil      -- true or nil
             t.madeShape[i] = t.made[i] and sh or nil
-            if solid then nearMade = true end
+            if solid then
+              nearMade = true
+              local x, y = itemPos and itemPos.x, itemPos and itemPos.y   -- (where makeItem put it)
+              if t.made[i] and x and (t.restore or t.byFocus
+                  or (x - player.x) ^ 2 + (y - player.y) ^ 2 <= M.CLOSE_M * M.CLOSE_M) then
+                if not cb then
+                  cb = { x, y, x, y }
+                  madeBoxes = madeBoxes or {}
+                  madeBoxes[#madeBoxes + 1] = cb
+                else
+                  if x < cb[1] then cb[1] = x end
+                  if y < cb[2] then cb[2] = y end
+                  if x > cb[3] then cb[3] = x end
+                  if y > cb[4] then cb[4] = y end
+                end
+              end
+            end
             budget = budget - 1
             if elapsed() > limit then stop(t, i + 1, skipped, want, band, near); return end
           else skipped = skipped or i end          -- another frame (this one's shapes are full)
