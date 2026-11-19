@@ -128,6 +128,7 @@ mod vegclumps;
 mod roadwear;
 mod roadtone;
 mod railbeds;
+mod railprof;
 mod raildrawn;
 mod railindex;
 mod railnode;
@@ -7360,6 +7361,10 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 519: the full Rust port's r2a19 (bldmesh: buildings.Mesh as BldMesh, the box-frame roofs, lids, cornices, boxes,
     // stoops, signs and roof-clutter boxes of buildings.build); 516-518 are other branches'
     // 524: try598 with 521 (P3b) and 519 (r2a19) merged; 522-523 are other branches'
-    m.add("VERSION", 524)?;
+    m.add_function(wrap_pyfunction!(railprof::rail_profile, m)?)?;
+    m.add_function(wrap_pyfunction!(railprof::rail_approach_rays, m)?)?;
+    // 525: the full port's railways.profile (railprof: the beds, the decks' approach levels, the underpasses'
+    // clearance and the decks run out along the track in one call; the ground stays the caller's)
+    m.add("VERSION", 525)?;
     Ok(())
 }
