@@ -12034,6 +12034,7 @@ def _bridge_chunks(frame, bseen, elev, exact, bridges=None, cells=None, walks=No
                for _fid, _sp, p, _lon in got):
             # A short branch can meet its fork outside the usual parapet context. Both tiles need all incident
             # complete profiles, even the tile holding only that branch's far abutment. parts() adds NEAR_M.
+            # (BNE_ROADSHAPE=sheet: not widened for the forks, whose input is read apart: _sheet_window_parts)
             reach = 3 * roadmesh.JUNCTION_MAX_PART_M + DECK_CONTEXT_M
             margin = max(0.0, reach - NEAR_M)
             x0, y0, x1, y1 = exact
@@ -12067,11 +12068,15 @@ def _bridge_chunks(frame, bseen, elev, exact, bridges=None, cells=None, walks=No
                        bridges.parts(cells, (x0 - margin, y0 - margin, x1 + margin, y1 + margin))
                        if np.isfinite(z).all()]
         dd = getattr(bridges, "depth_of", None)
+        # (BNE_ROADSHAPE=sheet: the forks from their own wider input, never drawn: _sheet_window_parts)
+        # (no cost where no fork can touch the tile: every tile a fork reaches draws its one-way branch)
+        wide = (_sheet_window_parts(bridges, frame, cells, exact)
+                if roadshape.SHEET and any(_travel(sp) != 0 for _f, sp, _p, _l in got) else None)
         if shaped:
             return _deck_chunks(got, exact, bridges._ground, {d[0]: dd(d[0]) for d in got} if dd else None, walks,
-                                shift_of, width_of, context_m, marks_of=marks_of, shapes=shapes)
+                                shift_of, width_of, context_m, marks_of=marks_of, shapes=shapes, sheet_wide=wide)
         return _deck_chunks(got, exact, bridges._ground, {d[0]: dd(d[0]) for d in got} if dd else None, walks,
-                            shift_of, width_of, context_m, marks_of=marks_of)
+                            shift_of, width_of, context_m, marks_of=marks_of, sheet_wide=wide)
     if not bseen:
         return []
     parts = []                                  # (fid, spec, xy (k, 2), lon)
@@ -12352,7 +12357,7 @@ class _Merged(np.ndarray):
     """A merged pad's centre (the joints' mean) carrying its joints."""
 
 
-def deck_pads(decks, ground_roads, box, ground_fn, own=True):
+def deck_pads(decks, ground_roads, box, ground_fn, own=True, skip=()):
     """[(ring (k, 3), centre (3,), walls [(pts (m, 3), out (m, 2))])] of the junction pads of the joints of decks
     [(fid, spec, xy (k, 2), z (k,))] (the bridge parts round tile box, as bridges.parts gives them) whose joint the box
     owns (own False: every joint, the parapets' test round the tile); ground_roads [(fid, spec, pts (k, 2+), _)] the
@@ -12391,11 +12396,21 @@ def deck_pads(decks, ground_roads, box, ground_fn, own=True):
     # dnp.hypot (the same bits as one call per end: elementwise; 21k scalar calls a cold Manhattan visit)
     ends = np.array([line[at] for line, _half in gl for at in (0, -1)], np.float64).reshape(-1, 2)
     joints = []
+    # (road revamp v2 P2b: a fork whose decks are one slab has no pad; skip: the forks' nodes the tile's deck chunks
+    # drew so, their "sxn": the very records the mesh used)
+    sheet_nodes = [np.asarray(q, np.float64) for q in skip if len(q) >= 3]
     for nd, incident in sorted(inc.items()):
         q = nodes[nd]
         if own and not box_owns(box, float(q[0]), float(q[1])):
             continue
         groups = _pad_height_groups(incident)
+        # (only the height group of the fork's own decks: a junction on another level at the same point keeps its pad)
+        at = [p for p in sheet_nodes if float(dnp.hypot(*(q - p[:2]))) <= PAD_JOIN_M + roadshape.SHEET_JOIN_M]
+        if at:
+            groups = [g for g in groups if not any(abs(float(np.mean([float(p[1][0]) for p in g])) - float(n[2]))
+                                                   <= PAD_JOIN_Z_M for n in at)]
+            if not groups:
+                continue
         near = np.flatnonzero(dnp.hypot(ends[:, 0] - q[0], ends[:, 1] - q[1]) < PAD_GROUND_M).tolist()
         for e in near:
             line, half = gl[e >> 1]
@@ -12652,8 +12667,338 @@ def _deck_shape_ends(ch, line, rec, drawn):
             ch[f"ov{e}"] = np.round(np.asarray(o, np.float64)[:, :2], 3).tolist()
 
 
+def _arc(p):
+    p = np.asarray(p, np.float64)
+    return np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(p[:, :2], axis=0).T))]
+
+
+def _insert_at(pts, s, xy, z=None):
+    """pts (k, 3+) with a vertex at arc s put at xy (z: its height, else interpolated); an existing vertex within 1 mm
+    of s is moved there instead. Pure."""
+    pts = np.asarray(pts, np.float64)
+    a = _arc(pts)
+    near = np.flatnonzero(np.abs(a - s) <= 1e-3)
+    if len(near):
+        out = pts.copy()
+        k = int(near[0])
+        out[k, :2] = xy
+        if z is not None:
+            out[k, 2] = z
+        return out
+    k = min(max(int(np.searchsorted(a, s)), 1), len(pts) - 1)
+    f = (s - a[k - 1]) / max(a[k] - a[k - 1], 1e-12)
+    row = pts[k - 1] + (pts[k] - pts[k - 1]) * f
+    row[:2] = xy
+    if z is not None:
+        row[2] = z
+    return np.insert(pts, k, row, axis=0)
+
+
+def _vertex_of(pts, xy):
+    """The index of the vertex of pts lying exactly at xy (the one _insert_at put there)."""
+    pts = np.asarray(pts, np.float64)
+    hit = np.flatnonzero((pts[:, 0] == xy[0]) & (pts[:, 1] == xy[1]))
+    return int(hit[0]) if len(hit) else None
+
+
+def _station(line, q):
+    """The arc length of the nearest point of polyline line (k, 2+) to q. Pure."""
+    p = np.asarray(line, np.float64)[:, :2]
+    a = _arc(p)
+    ab = np.diff(p, axis=0)
+    l2 = np.maximum((ab * ab).sum(1), 1e-18)
+    u = np.clip(((q - p[:-1]) * ab).sum(1) / l2, 0.0, 1.0)
+    m = p[:-1] + ab * u[:, None]
+    dd = dnp.hypot(m[:, 0] - q[0], m[:, 1] - q[1])
+    j = int(np.argmin(dd))
+    return float(a[j] + (a[j + 1] - a[j]) * u[j])
+
+
+def _sheet_key(fid, pts):
+    """A deck part's identity across tiles' part lists: (id, first point, its points)."""
+    p = np.asarray(pts, np.float64)
+    return (str(fid), round(float(p[0, 0]), 2), round(float(p[0, 1]), 2), len(p))
+
+
+def _sheet_window_parts(bridges, frame, cells, exact):
+    """BNE_ROADSHAPE=sheet: the deck parts within roadshape.SHEET_WINDOW_M of the tile box exact (the cells round it
+    read through bridges.cell_fn as the short-branch forks' are), one per _sheet_key: the forks' input only, never
+    drawn (a wider drawn set changed other decks: SD Fwy's I-605 connector drawn twice)."""
+    reach = roadshape.SHEET_WINDOW_M
+    x0, y0, x1, y1 = exact
+    cells = list(cells or ())
+    cell_fn = getattr(bridges, 'cell_fn', None)
+    if cell_fn is not None:
+        la, lo, _ = frame.enu_to_geodetic(np.array([x0 - reach, x1 + reach, x0 - reach, x1 + reach]),
+                                          np.array([y0 - reach, y0 - reach, y1 + reach, y1 + reach]), 0.0)
+        keys = mapcells.cells_for_bbox(float(la.min()), float(lo.min()), float(la.max()), float(lo.max()))
+        known = {str(meta[0]) for f in cells if f is not None for meta in [getattr(f, '_bnge_cell', None)] if meta}
+        for key in keys:
+            if str(key) not in known:
+                features = cell_fn(key)
+                if features is None:
+                    import revisit
+                    revisit.fault()         # (built without it and not kept as complete, as the forks above)
+                    continue
+                cells.append(features)
+    m = max(0.0, reach - NEAR_M)            # (parts() adds NEAR_M)
+    return [(fid, spec, np.c_[xy, z], lon) for fid, spec, xy, z, lon in
+            bridges.parts(cells, (x0 - m, y0 - m, x1 + m, y1 + m)) if np.isfinite(z).all()]
+
+
+def _sheet_records(src):
+    """roadshape.deck_sheets' (records, dz per part) of the deck parts src [(fid, spec, pts (k, 3+), ...)], made per
+    fork node apart: for each end point of a one-way part, the kernel on the parts passing within
+    roadshape.SHEET_NODE_R_M of it alone (whole), its branch ending there. A record is so a function of those parts,
+    the same in every tile whose list holds them (roadshape.SHEET_WINDOW_M); duplicates (one part from two cells'
+    copies) count once. Records' part indices are src's."""
+    import roadshape
+    uniq, first = [], {}
+    for i, d in enumerate(src):
+        if len(d[2]) >= 2:
+            k = _sheet_key(d[0], d[2])
+            if k not in first:
+                first[k] = i
+                uniq.append(i)
+    xy = [np.asarray(src[i][2], np.float64)[:, :2] for i in uniq]
+    lo = np.array([p.min(0) for p in xy]).reshape(-1, 2)
+    hi = np.array([p.max(0) for p in xy]).reshape(-1, 2)
+    # (each one-way part's end exactly as it is: the kernel takes the branches ending exactly there, so every branch
+    # end is one call's alone, its pins added once; Codex: rounded buckets could take one end twice)
+    nodes = sorted({(float(p[e, 0]), float(p[e, 1])) for n, p in enumerate(xy)
+                    if _travel(src[uniq[n]][1]) != 0 for e in (0, -1)})
+    r_ = roadshape.SHEET_NODE_R_M
+    recs, dzs = [], [None] * len(src)
+    for q in nodes:
+        qa = np.array(q)
+        near = np.flatnonzero((lo[:, 0] <= qa[0] + r_) & (lo[:, 1] <= qa[1] + r_) & (hi[:, 0] >= qa[0] - r_)
+                              & (hi[:, 1] >= qa[1] - r_))
+        local = []
+        for n in near.tolist():
+            p = xy[n]
+            if float(_seg_dist(qa[None, :], p[:-1], p[1:]).min()) <= r_:
+                local.append(uniq[n])
+        if sum(1 for i in local if _travel(src[i][1]) != 0) < 2:
+            continue                # (a fork needs a one-way branch and a one-way through deck)
+        got, dz = roadshape.deck_sheets([(src[i][0], src[i][1], src[i][2], float(src[i][1].width) / 2) for i in local],
+                                        node=q)
+        for r in got:
+            r = dict(r)
+            r["t"], r["b"] = local[r["t"]], local[r["b"]]
+            r["cover"] = [(local[p], rv, role, sd, u0, u1) for p, rv, role, sd, u0, u1 in r["cover"]]
+            recs.append(r)
+        for n, i in enumerate(local):
+            if dz[n] is not None and np.any(dz[n] != 0.0):
+                dzs[i] = dz[n] if dzs[i] is None else dzs[i] + dz[n]
+    return recs, dzs
+
+
+def _sheet_plan(decks, walks, shapes, wide=None):
+    """BNE_ROADSHAPE=sheet (road revamp v2 P2b) on the deck parts before anything is drawn from them: the forks
+    (_sheet_records) found among wide (the parts round the tile, roads._sheet_window_parts; None: decks), each mapped
+    onto the tile's own copies of its parts; the branch pinned to its through deck's heights in their union (and
+    blended back after it), a vertex on the split line in both. ([(t, b, side, through's split xy, branch's split xy,
+    cover)], decks), indices into decks. Records with a part with sidewalks or a shape (P1b's simple decks), and the
+    tags of records whose through deck or a covered part is not drawn here, are left out (its pins and cut kept: its
+    union's rows lie beside the through deck, so a tile drawing them draws it). Pure given its inputs."""
+    if not any(_travel(d[1]) != 0 for d in decks):
+        return [], decks        # (no one-way deck drawn here: no fork reaches this tile, nothing to do)
+    drawn = {}
+    for i, (fid, spec, pts, _lon) in enumerate(decks):
+        if len(pts) >= 2:
+            drawn.setdefault(_sheet_key(fid, pts), i)
+    src = list(wide) if wide is not None else list(decks)
+    if not drawn or not src:
+        return [], decks
+    recs, dzs = _sheet_records(src)
+    bad = {_sheet_key(d[0], d[2]) for i, d in enumerate(decks) if len(d[2]) >= 2 and (
+        (walks or {}).get(d[0]) or (shapes is not None and shapes[i] is not None))}
+
+    def own(j):
+        k = _sheet_key(src[j][0], src[j][2])
+        return None if k in bad else drawn.get(k)
+    recs = [r for r in recs if own(r["b"]) is not None]
+    if not recs:
+        return [], decks
+    decks = list(decks)
+    for j, dz in enumerate(dzs):
+        i = own(j)
+        if i is not None and dz is not None:
+            fid, spec, pts, lon = decks[i]
+            pts = np.array(pts, np.float64, copy=True)
+            pts[:, 2] += dz
+            decks[i] = (fid, spec, pts, lon)
+    cuts = []
+    for r in recs:
+        if own(r["t"]) is not None:
+            cuts.append((own(r["t"]), r["s_t"], tuple(r["at"]), None))
+        cuts.append((own(r["b"]), r["s_b"], tuple(r["at_b"]), r["z"]))
+    cuts.sort(key=lambda c: (c[0], -c[1]))      # (the points lie on the lines: no arc moves with an insertion)
+    for i, s, xy, z in cuts:
+        fid, spec, pts, lon = decks[i]
+        decks[i] = (fid, spec, _insert_at(pts, s, xy, z), lon)
+    return [(own(r["t"]), own(r["b"]), r["side"], tuple(r["at"]), tuple(r["at_b"]),
+             [(own(p), rv, role, sd, u0, u1) for p, rv, role, sd, u0, u1 in r["cover"]]) for r in recs
+            if own(r["t"]) is not None and all(own(c[0]) is not None for c in r["cover"])], decks
+
+
+def _arc_map(orig, drawn, u):
+    """The drawn line's arc of the original line's arc u (the two lines' vertices one to one: linear between)."""
+    return float(dnp.interp(u, _arc(orig), _arc(drawn)))
+
+
+def _sub_line(orig, drawn, u0, u1, rev):
+    """The drawn line (k, 3+) between the original line's arcs u0 and u1 (vertices one to one), reversed if rev."""
+    a = _arc(orig)
+    keep = np.flatnonzero((a > u0 + 1e-9) & (a < u1 - 1e-9))
+    rows = []
+    for u in (u0,):
+        k = min(max(int(np.searchsorted(a, u)), 1), len(a) - 1)
+        f = (u - a[k - 1]) / max(a[k] - a[k - 1], 1e-12)
+        rows.append(drawn[k - 1] + (drawn[k] - drawn[k - 1]) * f)
+    rows.extend(drawn[keep])
+    k = min(max(int(np.searchsorted(a, u1)), 1), len(a) - 1)
+    f = (u1 - a[k - 1]) / max(a[k] - a[k - 1], 1e-12)
+    rows.append(drawn[k - 1] + (drawn[k] - drawn[k - 1]) * f)
+    out = np.asarray(rows, np.float64)
+    return out[::-1] if rev else out
+
+
+SHEET_ALIGN_M = 2.0     # m the branch's split vertex may move along its drawn line onto the through deck's split line
+
+
+def _sheet_finish(recs, decks, shifted, width_of):
+    """The P2b records on the drawn lines (shifted: each part's line as drawn, the decks' lines moved at merges and
+    splits, its vertices the parts'): per part {"cuts": {vertex: the split line's unit direction}, "t": [(s0, s1,
+    side, the union's outer edge (m, 2))], "b": [(s0, s1)]} (arcs along the drawn line), the branch's split vertex
+    moved onto the through line's normal there (the two decks' end rows on one line). In place on shifted."""
+    import roadmesh
+    info = {}
+
+    def put(i):
+        return info.setdefault(i, {"cuts": {}, "t": [], "b": []})
+    for t, b, side, at, at_b, cover in recs:
+        kt, kb = _vertex_of(decks[t][2], at), _vertex_of(decks[b][2], at_b)
+        if kt is None or kb is None:
+            continue
+        T, B = shifted[t], shifted[b]
+        k1 = kt + 1 if kt + 1 < len(T) else kt
+        tv = T[k1, :2] - T[k1 - 1, :2]
+        tv = tv / max(float(dnp.hypot(tv[0], tv[1])), 1e-12)
+        nrm = np.array([-tv[1], tv[0]])
+        o = T[kt, :2].copy()
+        best = None                 # (the branch's vertex moved along its line onto the normal: o + nrm x)
+        for j in range(max(kb - 2, 0), min(kb + 2, len(B) - 1)):
+            p, q = B[j, :2], B[j + 1, :2]
+            d = q - p
+            den = nrm[0] * d[1] - nrm[1] * d[0]
+            if abs(den) < 1e-12:
+                continue
+            w = p - o
+            u = -(nrm[0] * w[1] - nrm[1] * w[0]) / den
+            if -1e-6 <= u <= 1.0 + 1e-6:
+                x = p + d * min(max(u, 0.0), 1.0)
+                if best is None or float(dnp.hypot(*(x - B[kb, :2]))) < float(dnp.hypot(*(best - B[kb, :2]))):
+                    best = x
+        if best is None or float(dnp.hypot(*(best - B[kb, :2]))) > SHEET_ALIGN_M:
+            continue                # (the two split rows cannot share a line on the drawn decks: two decks, as before)
+        B[kb, :2] = best
+        # the union's outer edge: the branch chain's far slab edge from the node to the split line
+        pieces, hws = [], []
+        for p, rv, role, _sd, u0, u1 in cover:
+            if role != 1:
+                continue
+            sub = _sub_line(decks[p][2], shifted[p], u0, u1, rv)
+            if p == b:              # (its split end exactly the moved vertex)
+                sub[-1, :2] = B[kb, :2]
+            ws = width_of(decks[p][0], sub) if width_of else None
+            hw = (np.asarray(ws, np.float64) if ws is not None else np.full(len(sub), float(decks[p][1].width))) / 2
+            if pieces and len(sub) and float(dnp.hypot(*(sub[0, :2] - pieces[-1][-1, :2]))) < 1e-6:
+                sub, hw = sub[1:], hw[1:]
+            pieces.append(sub)
+            hws.append(hw)
+        if not pieces:
+            continue
+        line = np.concatenate(pieces)
+        hw = np.concatenate(hws)
+        node = [round(float(line[0, 0]), 3), round(float(line[0, 1]), 3),      # (the fork's node: its pad left out)
+                round(float(line[0, 2]), 3)]
+        if len(line) < 2:
+            continue
+        edges = [offset_polyline(line, hw + roadmesh.PARAPET_W), offset_polyline(line, -(hw + roadmesh.PARAPET_W))]
+        far = np.array(max(edges, key=lambda e: float(dnp.hypot(*(e[-1, :2] - o))))[:, :2], np.float64)
+        d = far[-1] - far[-2]               # (its last point on the split line: the through deck's last row ends there)
+        den = nrm[0] * d[1] - nrm[1] * d[0]
+        if abs(den) > 1e-12:
+            w = far[-2] - o
+            far[-1] = far[-2] - d * ((nrm[0] * w[1] - nrm[1] * w[0]) / den)
+        far = np.round(far, 3)
+        for p, rv, role, sd, u0, u1 in cover:
+            a0, a1 = _arc_map(decks[p][2], shifted[p], u0), _arc_map(decks[p][2], shifted[p], u1)
+            if role == 0:
+                if p == t:          # (its split end exactly at the split vertex)
+                    at_ = float(_arc(shifted[p])[kt])
+                    a0, a1 = (a0, at_) if abs(a1 - at_) <= abs(a0 - at_) else (at_, a1)
+                put(p)["t"].append((min(a0, a1), max(a0, a1), int(sd), far))
+            else:
+                if p == b:
+                    ab_ = float(_arc(shifted[p])[kb])
+                    a0, a1 = (a0, ab_) if abs(a1 - ab_) <= abs(a0 - ab_) else (ab_, a1)
+                put(p)["b"].append((min(a0, a1), max(a0, a1), node))
+        put(t)["cuts"][kt] = nrm
+        put(b)["cuts"][kb] = nrm
+    return info
+
+
+def _sheet_pieces(piece, line, info):
+    """A deck line piece (k, 3+) of a part (its drawn line `line`, P2b info or None) split at each interior vertex on
+    one of its split vertices: [pieces] sharing those vertices."""
+    if not info or not info["cuts"]:
+        return [piece]
+    qs = [line[k, :2] for k in info["cuts"]]
+    piece = np.asarray(piece, np.float64)
+    at = [k for k in range(1, len(piece) - 1)
+          if any(abs(piece[k, 0] - q[0]) <= 1e-6 and abs(piece[k, 1] - q[1]) <= 1e-6 for q in qs)]
+    out, a = [], 0
+    for k in at:
+        out.append(piece[a:k + 1])
+        a = k
+    out.append(piece[a:])
+    return [p for p in out if len(p) >= 2]
+
+
+def _sheet_tag(ch, line, info):
+    """A deck chunk ch of a part (its drawn line `line`, P2b info): on a through part, a chunk inside a union gets
+    "sx": [[side (+1 its left), the union's outer edge (m, 2)]] (roadmesh.deck: its slab reaches out to it, its
+    parapet on it); on a branch, a chunk inside the union "noslab" (its road surface drawn on the union, no slab or
+    parapet of its own); every chunk end on a split vertex that line as its skewed end ("sk0" / "sk1", unit, toward
+    its left). In place."""
+    if not info:
+        return
+    c = np.asarray(ch["n"], np.float64)
+    lo, hi = sorted((_station(line, c[0, :2]), _station(line, c[-1, :2])))
+    # (a chunk sharing more than a point with the union: its ends are split vertices or lie past the union's ends, the
+    # through deck's rows past the node never meeting the outer edge, those from the split line on cut off it)
+    sx = [[side, far.tolist()] for s0, s1, side, far in info["t"] if min(hi, s1) - max(lo, s0) > 1e-3]
+    if sx:
+        ch["sx"] = sx
+    for s0, s1, node in info["b"]:
+        if min(hi, s1) - max(lo, s0) > 1e-3:
+            ch["noslab"] = True
+            ch["sxn"] = node
+    for e, at in ((0, 0), (1, -1)):
+        for k, nrm in info["cuts"].items():
+            if float(dnp.hypot(*(c[at, :2] - line[k, :2]))) > 1e-3:
+                continue
+            j = 1 if e == 0 else len(c) - 1
+            t = c[j, :2] - c[j - 1, :2]
+            if float(nrm[1] * t[0] - nrm[0] * t[1]) < 0:
+                nrm = -nrm
+            ch[f"sk{e}"] = [round(float(nrm[0]), 6), round(float(nrm[1]), 6)]
+
+
 def _deck_chunks(decks, exact, ground_fn=None, depths=None, walks=None, shift_of=None, width_of=None, context_m=None,
-                 marks_of=None, shapes=None):
+                 marks_of=None, shapes=None, sheet_wide=None):
     """Deck + line chunks of bridge parts [(fid, spec, pts (k, 3), lon)] clipped to the box `exact`, and their decks
     within context_m (default DECK_CONTEXT_M) as "ctx" chunks (not drawn: build_tile's caller hands them to roadmesh.deck).
     ground_fn(xy) -> heights: a part's ends on the ground are its abutments (each deck chunk's "abut" points: the
@@ -12668,6 +13013,9 @@ def _deck_chunks(decks, exact, ground_fn=None, depths=None, walks=None, shift_of
         pts = offset_polyline(pts, sh) if sh is not None else pts
         ws = width_of(fid, pts) if width_of else None
         return pts, spec.width if ws is None else ws
+    sheet_recs = []
+    if roadshape.SHEET:     # (road revamp v2 P2b: an exit off a bridge one deck with its road; its heights pinned first)
+        sheet_recs, decks = _sheet_plan(decks, walks, shapes, sheet_wide)
     layouts = rampmerges.plans(decks, geometry=geometry, pavement=geometry)
     walks = walks or {}
     out = []
@@ -12690,6 +13038,7 @@ def _deck_chunks(decks, exact, ground_fn=None, depths=None, walks=None, shift_of
     for i, (fid, spec, pts, lon) in enumerate(decks):
         sh = shift_of(fid, pts) if shift_of else None
         shifted[i] = offset_polyline(pts, sh) if sh is not None else pts
+    sheet = _sheet_finish(sheet_recs, decks, shifted, width_of) if sheet_recs else {}
     # Complete profiles survive tile clipping. The bounded common field currently covers constant-width,
     # unshifted carriageways; keep existing sidewalk/taper/lane-shift geometry on its current surface.
     counts = {}
@@ -12710,6 +13059,8 @@ def _deck_chunks(decks, exact, ground_fn=None, depths=None, walks=None, shift_of
             # Retain the original endpoints for exclusion too: one unsupported arm must exclude the whole fork,
             # not leave three eligible arms sharing a surface beside the fourth arm's independent surface.
             joint_excluded.add(fid)
+    for i in sheet:                             # (P2b: a union's decks keep no junction surface)
+        joint_excluded.add(decks[i][0])
     # Keep only unsupported endpoints, not entire long profiles. A shared field must not
     # omit an incident long or ambiguous multipart arm, even when three short arms qualify.
     blocked_ends = []
@@ -12730,11 +13081,13 @@ def _deck_chunks(decks, exact, ground_fn=None, depths=None, walks=None, shift_of
         dw, dc = _deck_frame(spec, walks.get(fid))
         shp = shapes[i] if shapes is not None else None
         frame_line = offset_polyline(pts, dc) if dc else pts
-        for piece in clip_polyline(frame_line, *(junction_box if fid in joint_profiles else wide)):
+        for piece0 in clip_polyline(frame_line, *(junction_box if fid in joint_profiles else wide)):
+          for piece in _sheet_pieces(piece0, frame_line, sheet.get(i)):
             for c in split(_deck_rows(piece, shp)):
                 if len(c) >= 2:
                     ch = _chunk({**_deck_look(spec), "deck": True}, dw, c)
                     ch.update(fixed=True, deck=True, fid=fid, ctx=True, tdir=_travel(spec))
+                    _sheet_tag(ch, frame_line, sheet.get(i))
                     if shp is not None:
                         ch["kr"] = True
                         _deck_shape_ends(ch, frame_line, shp, False)
@@ -12781,7 +13134,8 @@ def _deck_chunks(decks, exact, ground_fn=None, depths=None, walks=None, shift_of
                 tilted.append((look, w, line))
             lines = tilted
         for look, w, line in lines:
-            for piece in clip_polyline(line, *exact):
+            for piece in [q for p0 in clip_polyline(line, *exact)
+                          for q in (_sheet_pieces(p0, line, sheet.get(i)) if look.get("deck") else (p0,))]:
                 for c in split(_deck_rows(piece, shp) if look.get("deck") else
                                densify(simplify(piece, ztol=SIMPLIFY_Z_M))):
                     if len(c) >= 2:
@@ -12805,6 +13159,7 @@ def _deck_chunks(decks, exact, ground_fn=None, depths=None, walks=None, shift_of
                             if ws is not None:          # (tapering into another deck: roadmesh.ribbons' "ws")
                                 ch["ws"] = [round(float(x + w - spec.width), 3) for x in ws]
                             ch["tdir"] = _travel(spec)  # (roadmesh: opposite traffic beside it, a median)
+                            _sheet_tag(ch, line, sheet.get(i))
                             if depths and fid in depths:
                                 ch["dd"] = round(float(depths[fid]), 3)     # (roadmesh.deck: its slab and girders)
                             if abut.get(fid):

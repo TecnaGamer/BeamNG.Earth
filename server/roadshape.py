@@ -35,7 +35,9 @@ import dnp
 
 MODE = os.environ.get("BNE_ROADSHAPE", "off")
 DECKS = MODE in ("decks", "sheet")     # (P2's sheet builds on P1b's decks)
-SHEET = MODE == "sheet"                 # P2a: the fork records, written beside the build (shadow only, cell_forks)
+SHEET = MODE == "sheet"                 # P2b: exits off bridges as one deck (deck_sheets)
+DEBUG = os.environ.get("BNE_ROADSHAPE_DEBUG", "") in ("1", "on", "true")   # P2a's fork records written beside the
+                                        # build (shadow_forks, forkprobe's input): a developer's switch, never a player's
 SKEW = DECKS and os.environ.get("BNE_DECK_SKEW", "on") not in ("off", "0", "false")
 
 CHORD_TOL_M = 0.01          # m: a row piece's largest departure from the curve (the design's 2 cm chord rule, less the
@@ -668,3 +670,94 @@ def shadow_forks(cell_keys, cell_fn, cache_dir):
             _SHADOW_DONE.add(k)     # (only once written: a failed cell is tried again by the next tile)
         except Exception as ex:      # noqa: BLE001 (shadow output: a fault never reaches the build)
             logging.getLogger("earthd.roadshape").warning("fork records of %s: %s: %s", k, type(ex).__name__, ex)
+
+
+# ---- exits off bridges as one deck: road revamp v2 phase P2b (earthfast 514, BNE_ROADSHAPE=sheet) -------------------
+# Where a ramp leaves (or joins) a carriageway on a bridge, each mapped way had its own deck: the two slabs overlapped
+# in the gore (z-fighting), their parapets crossed the lanes and their heights disagreed (a lip across them); the
+# user's top complaint (t4 Ottawa, r87 Springfield, Fort Pitt). Now (earthfast.deck_sheets, its rules) the pair is
+# ONE slab up to where the two carriageways' facing edges part by more than SPLIT_GAP_M, found from the deck
+# geometry itself (the map's nose is up to 23 m off, P2a2): the through deck's slab reaches over the branch to its far
+# edge (roadmesh's "sx": the union's outline, one parapet on it), the branch's own slab starts on the split line
+# (its skewed end row, "sk0" / "sk1"), its road surface there lies on the union ("noslab": drawn, no slab of its own)
+# at the through road's heights (its profile pinned to them in the union, back to its own over the blend after it).
+# From the split the two decks go on as before: the median fill to the gore nose (roadmesh._noses).
+# A record is a function of the two parts alone (their whole lines): every tile that holds them builds the same one.
+SHEET_VERSION = 514         # earthfast.deck_sheets
+SHEET_JOIN_M = 1.0          # m: a branch's end this near the through part's line meets it
+SHEET_FORK_DEG = 40.0       # the branch leaves within this of the through road's going on (forks.rs's FORK_DEG)
+SHEET_NODE_DZ = 0.5         # m: the two at the node within this in height (one level)
+SPLIT_GAP_M = 1.2           # m between the facing edges where the union ends (the design's physical nose gap)
+SHEET_STOP_GAP_M = 6.0      # m: the edges this far apart (roadmesh.MEDIAN_JOIN_M) ...
+SHEET_HOLD_M = 20.0         # ... over this: clearly parted, the walk stops
+SHEET_REACH_M = 300.0       # m along the branch the walk goes at most
+SHEET_STEP_M = 0.5          # m between its samples
+SHEET_DIR_M = 10.0          # m a direction is read over
+SHEET_MIN_M = 2.0           # m of union at least (shorter: nothing to join)
+PIN_BLEND_M = 120.0         # m after the split the branch's heights come back to its own profile over, at most ...
+PIN_SHARE = 0.5             # ... or this share of the rest of the branch (its far end keeps its height)
+SHEET_DZ_MAX = 3.0          # m: the two apart in height by more anywhere in the union: no union (a flyover over it)
+PIN_GRADE = 0.03            # the blend back at most this steep on average (else no union: no room to blend)
+SHEET_NODE_R_M = 20.0       # m: a fork node's records come from the deck parts passing this near it alone
+SHEET_WINDOW_M = SHEET_REACH_M + PIN_BLEND_M + 40.0 + SHEET_NODE_R_M     # m round a tile the forks' parts are read
+                            # from (roads._sheet_window_parts, apart from the parts drawn): a tile drawing any row of
+                            # a union or of its branch's blend (at most REACH + BLEND from the node, 40 m beside it)
+                            # holds every part within SHEET_NODE_R_M of that node: one record, whichever tile
+SHEET_CHAIN = 0             # 1: each arm through its plain continuations (pieces end to end). Off: a tile's parts are
+                            # those round it, a chain's far pieces missing in one tile and present in the next (one
+                            # fork drawn two ways); the two parts alone are whole in every tile that holds either
+SHEET_PARAMS = np.array([SHEET_JOIN_M, dmath.cos(math.radians(SHEET_FORK_DEG)), SHEET_NODE_DZ, SPLIT_GAP_M,
+                         SHEET_STOP_GAP_M, SHEET_HOLD_M, SHEET_REACH_M, SHEET_STEP_M, SHEET_DIR_M, SHEET_MIN_M,
+                         PIN_BLEND_M, PIN_SHARE, SHEET_DZ_MAX, PIN_GRADE, SHEET_CHAIN], np.float64)
+
+
+def deck_sheets(parts, node=None):
+    """The P2b records of deck parts [(fid, spec, pts (k, 3+) as drawn, half width per point (k,) or one)] (any order:
+    sorted here by id and first point, so the answer never depends on the caller's order): ([record], dz) with dz per
+    part (its points' height changes: the pins) and per record a dict: t, b (indices into parts: the through and the
+    branch part holding the split line; each arm followed from the node through its plain continuations), side (+1:
+    the branch on t's left, of its point order), s_b / s_t (the split line's own arcs on b / t), s_t0 (the node's arc on
+    the first through part), at (the split line's point on the through line), nrm (t's left unit normal there), at_b
+    (its point on the branch line), z (the union's height there), gap, dz (through - branch there before the pin),
+    parted (bool), cover: [(part, reversed, role 0 through / 1 branch, side on that part, own arc lo, hi)] from the
+    node to the split line, in chain order."""
+    import fast
+    import roads
+    fast.require(SHEET_VERSION, "deck_sheets")
+    order = sorted(range(len(parts)), key=lambda i: (str(parts[i][0]), round(float(parts[i][2][0][0]), 3),
+                                                     round(float(parts[i][2][0][1]), 3), len(parts[i][2])))
+    if not order:
+        return [], []
+    xy, z, hw, off, tdir, rank = [], [], [], [0], [], []
+    for i in order:
+        fid, spec, pts, h = parts[i]
+        pts = np.asarray(pts, np.float64)
+        xy.append(pts[:, :2])
+        z.append(pts[:, 2])
+        hw.append(np.broadcast_to(np.asarray(h, np.float64), (len(pts),)))
+        off.append(off[-1] + len(pts))
+        tdir.append(int(roads._travel(spec)))
+        rank.append(1 if getattr(spec, "link", False) else 0)
+    ri, rf, ci, cf, dz = fast._ef.deck_sheets(np.ascontiguousarray(np.concatenate(xy)),
+                                              np.ascontiguousarray(np.concatenate(z)),
+                                              np.ascontiguousarray(np.concatenate(hw)), off, tdir, rank, SHEET_PARAMS,
+                                              [] if node is None else [float(node[0]), float(node[1])])
+    ri = np.asarray(ri, np.int64).reshape(-1, 4)
+    rf = np.asarray(rf, np.float64).reshape(len(ri), 13)
+    ci = np.asarray(ci, np.int64).reshape(-1, 4)
+    cf = np.asarray(cf, np.float64).reshape(-1, 2)
+    dz = np.asarray(dz, np.float64)
+    out = []
+    at = 0
+    for (t, b, side, nc), f in zip(ri.tolist(), rf):
+        cover = [(order[int(p)], bool(rv), int(role), int(sd), float(u0), float(u1))
+                 for (p, rv, role, sd), (u0, u1) in zip(ci[at:at + nc].tolist(), cf[at:at + nc].tolist())]
+        at += nc
+        out.append({"t": order[t], "b": order[b], "side": int(side), "s_b": float(f[0]), "s_t0": float(f[1]),
+                    "s_t": float(f[2]), "at": f[3:5].copy(), "nrm": f[5:7].copy(), "at_b": f[7:9].copy(),
+                    "z": float(f[9]), "gap": float(f[10]), "dz": float(f[11]), "parted": bool(f[12] > 0.5),
+                    "cover": cover})
+    dzs = [None] * len(parts)
+    for n, i in enumerate(order):
+        dzs[i] = dz[off[n]:off[n + 1]]
+    return out, dzs

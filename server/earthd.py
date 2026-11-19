@@ -3353,7 +3353,9 @@ class Server:
                     anchor.frame, cells, urban, self.road_widths, self.left_hand(anchor)))
                 pad_parts = buildingsmod.bridge_stub_parts(_bridge_fps, pad_parts)
                 pads_near = roadsmod.deck_pads([(f, sp, xy, z) for f, sp, xy, z, _lon in pad_parts], near_roads, box,
-                                               anchor.bridges._ground, own=False)
+                                               anchor.bridges._ground, own=False,
+                                               skip=[c["sxn"] for c in list(chunks) + list(ctx)
+                                                     if c.get("sxn") is not None])     # (P2b: roads.deck_pads)
             except Exception as ex:
                 log.warning("deck pads: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
         pads = [p for p in pads_near if roadsmod.box_owns(box, float(p[1][0]), float(p[1][1]))]

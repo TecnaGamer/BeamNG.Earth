@@ -430,6 +430,44 @@ def overlap_hole(tops, ideal, R, frame_ll=None, pads=()):
             "overlap_worst": worst_bins(ov, ll), "hole_worst": worst_bins(hk, ll)}
 
 
+def top_steps(tops, R, frame_ll=None, cell=RASTER_M):
+    """Height steps in the drawn deck tops (road revamp v2 P2b: the step at the shared edge where an exit's deck meets
+    its road's): raster points holding exactly one top (overlaps are overlap_m2's) whose 4-neighbour also holds
+    exactly one, the two more than STEP_DZ and at most FACE_DZ apart in height (a slab's own grade and bank move
+    under 3 cm between raster points; farther apart is another level). n points, m = n x the raster (an edge's
+    length), max dz, the worst places, and the keys (sheetview draws them; not in the JSON)."""
+    tk, tz, _ = raster_tris(tops, cell)
+    tk = np.asarray(tk, np.int64)
+    out = {"n": 0, "m": 0.0, "max": 0.0, "worst": [], "keys": np.zeros(0, np.int64)}
+    if not len(tk):
+        return out
+    u, inv, cnt = np.unique(tk, return_inverse=True, return_counts=True)
+    zu = np.zeros(len(u))
+    zu[inv] = np.asarray(tz, np.float64)
+    one = cnt == 1
+    u1, z1 = u[one], zu[one]
+    hit_k, hit_dz = [], []
+    for step in (_MUL, 1):          # (the neighbour at +1 in i, then in j)
+        j = np.searchsorted(u1, u1 + step)
+        ok = j < len(u1)
+        j = np.minimum(j, len(u1) - 1)
+        ok &= u1[j] == u1 + step
+        dz = np.abs(z1[j] - z1)
+        ok &= (dz > STEP_DZ) & (dz <= FACE_DZ)
+        hit_k.append(u1[ok])
+        hit_dz.append(dz[ok])
+    k = np.concatenate(hit_k)
+    d = np.concatenate(hit_dz)
+    inr = in_disc(k, R, cell) if len(k) else np.zeros(0, bool)
+    k, d = k[inr], d[inr]
+    ll = frame_ll or (lambda p: [round(float(p[0]), 1), round(float(p[1]), 1)])
+    return {"n": int(len(k)), "m": round(len(k) * cell, 2), "max": round(float(d.max()), 3) if len(d) else 0.0,
+            "worst": worst_bins(np.unique(k), ll), "keys": np.unique(k)}
+
+
+STEP_DZ = 0.05          # m: a drawn top's step over this between raster points (top_steps)
+
+
 def parapet_in_carriageway(runs, carriageways, R, frame_ll=None):
     """Parapet length (m) inside a carriageway within PARAPET_DZ of its height. runs [(edge (k, 2), z (k,))];
     carriageways [(xy (k, 2), z (k,), half width m, (kind, id))]. Per sample of PARAPET_STEP: inside when the nearest
@@ -889,6 +927,7 @@ def score(inp, R, frame_ll=None):
         "overlap_worst": oh["overlap_worst"], "hole_worst": oh["hole_worst"],
         "parapet_in_cw": parapet_in_carriageway(inp["parapets"], inp["carriageways"], R, frame_ll),
         "seam_step": seam_steps(inp["ribbons"], R, frame_ll),
+        "top_step": {k: v for k, v in top_steps(inp["tops"], R, frame_ll).items() if k != "keys"},
         "twin_dz": twin_dz(inp["members"], R, frame_ll),
         "skew_err_deg": skew_errors(inp["ends"], inp["members"], inp["crossed"], R, frame_ll),
         "groups": predict_groups([dict(m) for m in inp["members"]], inp.get("outlines", ()), R, frame_ll),
@@ -906,7 +945,9 @@ def score(inp, R, frame_ll=None):
     g = res["groups"]
     res["summary"] = {"overlap_m2": res["overlap_m2"], "hole_m2": res["hole_m2"],
                       "parapet_in_cw_m": res["parapet_in_cw"]["m"], "seam_step_n": res["seam_step"]["n_over"],
-                      "seam_step_max": res["seam_step"]["max"], "twin_dz_max": res["twin_dz"]["max"],
+                      "seam_step_max": res["seam_step"]["max"],
+                      "top_step_m": res["top_step"]["m"], "top_step_max": res["top_step"]["max"],
+                      "twin_dz_max": res["twin_dz"]["max"],
                       "twin_pairs": res["twin_dz"]["pairs"], "skew_err_max": res["skew_err_deg"]["max"],
                       "skew_ends": res["skew_err_deg"]["ends"], "decks": inr, "groups": g["n"],
                       "grouped": g["grouped"], "all_groups": g["all_groups"], "simple_groups": g["simple_groups"],
@@ -1148,10 +1189,10 @@ def collect(lat, lon, R, cache, offline=False):
         cur["ground"] = kw.get("ground")
         return orig[0](frame_, tx, ty, cells, elev, *a, **kw)
 
-    def g_pads(decks, ground_roads, box, ground_fn, own=True):
+    def g_pads(decks, ground_roads, box, ground_fn, own=True, **kw):
         cur["parts"] = list(decks)
         cur["roads"] = list(ground_roads)
-        return orig[1](decks, ground_roads, box, ground_fn, own)
+        return orig[1](decks, ground_roads, box, ground_fn, own, **kw)     # (skip: v2 P2b's fork nodes)
 
     def g_deck(chunks, origin, *a, **kw):
         r = orig[2](chunks, origin, *a, **kw)

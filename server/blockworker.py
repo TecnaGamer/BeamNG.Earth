@@ -1638,7 +1638,7 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
     towns = (town_signs(frame, tx, ty, out_dir, vfs_dir, town_faces)
              if towns_on and props is not None and out_dir is not None else None)
     import roadshape
-    if roadshape.SHEET:     # (road revamp v2 P2a: the tile's cells' fork records beside the build, shadow only)
+    if roadshape.SHEET and roadshape.DEBUG:     # (v2 P2a: the cells' fork records beside the build, a debug aid only)
         roadshape.shadow_forks(cell_keys, cell_fn, _s.cache_dir)
     chunks = roadsmod.build_tile(frame, tx, ty, cells, elev, urban, walks=walks, deck_context=ctx, bridges=bridges, widths=_s.widths,
                                  sign_obstacles=sign_obstacles,
@@ -1751,7 +1751,8 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
         if _bridge_fps:
             pad_parts = buildingsmod.bridge_stub_parts(_bridge_fps, pad_parts)
         pads_near = roadsmod.deck_pads([(f, sp, xy, z) for f, sp, xy, z, _lon in pad_parts], near_roads, box,
-                                       bridges._ground, own=False)
+                                       bridges._ground, own=False,
+                                       skip=[c["sxn"] for c in list(chunks) + list(ctx) if c.get("sxn") is not None])
     except Exception as ex:
         log.warning("deck pads: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
         pads_near = []
@@ -2430,6 +2431,15 @@ def _map_chunks(src, dst, chunks):
             if ov is not None:
                 o = np.asarray(ov, np.float64)
                 out[k][f"ov{e}"] = geotiles.world_map(src, dst, np.c_[o[:, :2], np.zeros(len(o))])[:, :2].tolist()
+    # (road revamp v2 P2b, BNE_ROADSHAPE=sheet: an exit's union's outer edge and its node mapped as the nodes are)
+    for k, c in enumerate(chunks):
+        if c.get("sxn") is not None:
+            q = c["sxn"]
+            out[k]["sxn"] = geotiles.world_map(src, dst, np.array([[q[0], q[1], q[2] if len(q) > 2 else 0.0]]))[0].tolist()
+        if c.get("sx"):
+            out[k]["sx"] = [[side, geotiles.world_map(src, dst, np.c_[np.asarray(f, np.float64)[:, :2],
+                                                                         np.zeros(len(f))])[:, :2].tolist()]
+                            for side, f in c["sx"]]
     return out
 
 

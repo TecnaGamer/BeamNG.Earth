@@ -41,9 +41,9 @@ FEATURES = (
                        # road revamp v2, "road shape first" (the user, 2026-11-19: "put them under revamped roads. Have
                        # that toggle include the latest and what would be the final roads"): vanilla-style cut and fill
                        # slopes with rocks and wall-foot skirts (P1a), decks that follow the road's curve and bank
-                       # (P1b; becomes "sheet" once the one-slab forks of P2b are in), the surface overlay layer with
-                       # lifted markings (P1c) and the new sidewalks (P1d)
-                       "BNE_BATTER": "vanilla", "BNE_ROADSHAPE": "decks", "BNE_SURFACE_V2": "on",
+                       # (P1b) and exits off bridges as one deck with their road (P2b, "sheet": builds on P1b's decks),
+                       # the surface overlay layer with lifted markings (P1c) and the new sidewalks (P1d)
+                       "BNE_BATTER": "vanilla", "BNE_ROADSHAPE": "sheet", "BNE_SURFACE_V2": "on",
                        "BNE_SIDEWALK_V2": "on"}, None),
     ("expEuScenery", {"BNE_EU_ROAD_DETAILS": "on", "BNE_FR_ROADS": "on", "BNE_FR_HOUSES": "on"}, None),
     ("expDropRails", {"BNE_DROP_RAILS": "on"}, None),                     # droprails.enabled
