@@ -1561,6 +1561,10 @@ class LockTest(unittest.TestCase):
         # than its batch (25 busy guards cost 5 s each before, the held locks went stale past STALE_S)
         locks = [os.path.join(self.dir, f"p{n}.lock") for n in range(25)]
         active = os.path.join(self.dir, "active.lock")
+        # The active lock may share a guard shard with a pending release.
+        # Acquire it before holding the guards; the heartbeat needs neither guard.
+        self.assertTrue(xproc.take(active))
+        self.addCleanup(xproc.release, active)
         held = {}
         try:
             for lk in locks:
@@ -1579,9 +1583,6 @@ class LockTest(unittest.TestCase):
                     xproc.release(lk)
             with xproc._HELD_LOCK:
                 self.assertTrue(all(lk in xproc._PENDING for lk in locks), "all put off")
-            if xproc._guard_path(active) in held:
-                active = os.path.join(self.dir, "active2.lock")      # (its own guard free: not needed by a touch)
-            self.assertTrue(xproc.take(active))
             for _ in range(3):
                 old = time.time() - 30
                 os.utime(active, (old, old))
@@ -1600,7 +1601,6 @@ class LockTest(unittest.TestCase):
             xproc._beat()
             time.sleep(0.05)
         self.assertFalse([lk for lk in locks if os.path.exists(lk)], "released once their guards came free")
-        xproc.release(active)
 
     def test_waiter_reads_the_holders_urgency_once(self):
         self.assertTrue(xproc.take(self.lock, "demand"))
