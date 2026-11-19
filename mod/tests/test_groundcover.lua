@@ -103,10 +103,24 @@ T.check(gc.profileOf(nil, { 1, 1 }) == 'mediterranean' and gc.profileOf(nil, { 2
   and gc.profileOf(0) == 'generic' and gc.profileOf(nil) == 'generic', 'old tiles by their ambience set; none generic')
 for k = 1, 30 do T.check(gc.PROFILES[gc.profileOf(k)] ~= nil, 'class ' .. k .. ' has a profile') end
 
--- months
-T.check(gc.monthFor(7, 50) == 7 and gc.monthFor(1, -35) == 7 and gc.monthFor(12, -35) == 6, 'the south half a year on')
-T.check(gc.monthFor(7, 50, 'fall') == 10 and gc.monthFor(7, -35, 'spring') == 4 and gc.monthFor(3, 50, 'auto') == 3,
+-- days: the south half a year on, the server's fixed season, weekly steps
+local function near(a, b, tol) return math.abs(a - b) <= (tol or 4) end
+T.check(near(gc.dayFor(196, 50), 196) and near(gc.dayFor(15, -35), 197) and near(gc.dayFor(350, -35), 167),
+  'the south half a year on')
+T.check(gc.dayFor(196, 50, 'fall') == gc.dayFor(288, 50) and gc.dayFor(100, -35, 'spring') == gc.dayFor(105, 50),
   "the server's fixed season")
+T.check(gc.dayFor(190, 50) == gc.dayFor(191, 50), 'one profile day a week')
+-- the fade: 1 inside, 0 outside, 0.5 on the edges, two windows that meet sum to 1
+local jun_aug = { from = 152, to = 243 }
+T.check(gc.weight(jun_aug, 196) == 1 and gc.weight(jun_aug, 20) == 0 and gc.weight(jun_aug, 152) == 0.5
+  and gc.weight(jun_aug, 244) == 0.5, 'weights inside, outside, on the edges')
+local oct_may, jun_sep = { from = 274, to = 151 }, { from = 152, to = 273 }
+local sums = true
+for d = 1, 365 do
+  if math.abs(gc.weight(oct_may, d) + gc.weight(jun_sep, d) - 1) > 1e-9 then sums = false end
+end
+T.check(sums, 'a cross-fade sums to 1 every day')
+T.check(gc.weight(oct_may, 10) == 1 and gc.weight(jun_sep, 10) == 0, 'a window over the new year')
 
 -- every profile within the generic budget, every month; every entry's definition and pointed types exist
 local generic = gc.budget(gc.plan('generic', 1), STOCK)
@@ -129,11 +143,12 @@ for name, p in pairs(gc.PROFILES) do
     end
   end
   local worst, most = 0, 0
-  for m = 1, 12 do
-    local b = gc.budget(gc.plan(name, m), STOCK)
-    worst, most = math.max(worst, b), math.max(most, #gc.plan(name, m))
-    T.check(b <= generic, string.format('%s month %d: %d elements within the generic %d', name, m, b, generic))
-    T.check(#gc.plan(name, m) <= 14, name .. ' month ' .. m .. ': at most 14 objects')
+  for d = 1, 365, 2 do
+    local pl = gc.plan(name, d)
+    local b = gc.budget(pl, STOCK)
+    worst, most = math.max(worst, b), math.max(most, #pl)
+    if b > generic then T.check(false, string.format('%s day %d: %d elements over the generic %d', name, d, b, generic)) end
+    if #pl > 15 then T.check(false, name .. ' day ' .. d .. ': ' .. #pl .. ' objects (at most 15)') end
   end
   report[#report + 1] = string.format('  %-13s at most %6d elements (%3.0f%% of generic), %2d objects', name, worst,
     100 * worst / generic, most)
@@ -142,7 +157,7 @@ table.sort(report)
 print('budgets:\n' .. table.concat(report, '\n'))
 -- the meadows flower in their months only
 local function has(name, m, id)
-  for _, e in ipairs(gc.plan(name, m)) do if (e.id or e.src) == id then return true end end
+  for _, e in ipairs(gc.plan(name, gc.dayOfMonth(m))) do if (e.id or e.src) == id then return true end end
   return false
 end
 T.check(has('temperate', 5, 'buttercups') and not has('temperate', 9, 'buttercups') and has('temperate', 7, 'flowers')
@@ -160,7 +175,7 @@ gc.setMonth(7)
 T.check(gc.setClimate(15), 'a climate')
 gc.ensure({ { 'bngEarthGroundGrass', 'GRASS' }, { 'beamngEarthDirt', 'DIRT' } })
 st = gc.status()
-T.check(st.profile == 'temperate' and st.month == 7, 'temperate in July')
+T.check(st.profile == 'temperate' and near(st.day, gc.dayOfMonth(7)), 'temperate in July')
 T.check(named('small') and named('flowers') and not named('cattails') and not named('lawn') and not named('shrubs'),
   'grassland only: no wetland, lawn or scrub objects')
 local n0 = st.objects
@@ -185,7 +200,7 @@ T.check(flushes == fl + 1 and named('cattails') and named('dry') and not named('
 T.check(not gc.setClimate(9), 'Csb: the same profile, nothing made again')
 gc.setMonth(4)
 st = gc.status()
-T.check(st.month == 4 and named('small') and not named('dry2'), 'April: green')
+T.check(near(st.day, gc.dayOfMonth(4)) and named('small') and not named('dry2'), 'April: green')
 gc.setMonth(nil)
 gc.reset()
 T.check(gc.status().profile == 'generic', 'a new level: generic until the tiles vote')

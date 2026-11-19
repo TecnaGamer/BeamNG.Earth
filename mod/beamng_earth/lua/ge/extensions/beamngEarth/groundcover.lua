@@ -37,7 +37,7 @@
 -- GroundCover's work at a block move is its element count whether or not its layer is there (each element a try at
 -- a random point), so every profile spends at most the generic one's elements (M.budget; test_groundcover), and an
 -- object is only made once a block lists one of its layers (M.ensure: no cattails' tries where no block has
--- wetland). Console: beamngEarth_groundcover.setEnabled(bool), .status(), .setClimate(k), .setMonth(m)
+-- wetland). Console: beamngEarth_groundcover.setEnabled(bool), .status(), .setClimate(k), .setMonth(m), .setDay(d)
 
 local M = {}
 
@@ -125,17 +125,17 @@ M.DEFS = {
   { source = 'hirochi', src = 'small_grass_close', name = 'small_grass_close_dry', layer = DRY, share = 0.06 },
 }
 
--- Month windows (the northern hemisphere's months, 1-12; M.month moves the south's half a year)
+-- Month windows (the northern hemisphere's months, 1-12, from the first day of month a to the last of month b; the
+-- south's half a year later). An entry fades in and out over M.FADE_DAYS either side of its window's edges (the user,
+-- 2026-11-19: "smoother seasons"): its share times its weight on the day (M.weight), two windows that meet cross-fade
+-- (the Mediterranean's green grass into its dry grass over four weeks of late May and June).
+local MONTH_START = { 1, 32, 60, 91, 121, 152, 182, 213, 244, 274, 305, 335 }
 local function span(a, b)
-  local s = {}
-  local m = a
-  while true do
-    s[m] = true
-    if m == b then break end
-    m = m % 12 + 1
-  end
-  return s
+  return { from = MONTH_START[a], to = (MONTH_START[b % 12 + 1] - 2) % 365 + 1 }
 end
+M.FADE_DAYS = 14
+M.MIN_WEIGHT = 0.08     -- an entry fainter than this is left out (no object for a handful of tufts)
+M.DAY_STEP = 7          -- the day the objects are made for moves in weeks (each move makes them again)
 
 -- One profile entry: `id` names our object (unique in its profile), the stock definition (source, src), the layer its
 -- active plant types go to, its element share; opt.types: plant types (0-based, the stock definition's order)
@@ -358,21 +358,51 @@ function M.profileOf(k, biome)
   return 'generic'
 end
 
--- Pure: the profile month (northern-hemisphere 1-12) of calendar month m at latitude lat (the south half a year
--- later), or the server's fixed season (seasonlook mode 'spring' / 'summer' / 'fall' / 'winter': its middle month).
-local SEASON_MONTH = { spring = 4, summer = 7, fall = 10, autumn = 10, winter = 1 }
-function M.monthFor(m, lat, mode)
-  if SEASON_MONTH[mode] then return SEASON_MONTH[mode] end
-  m = tonumber(m) or 6
-  if tonumber(lat) and tonumber(lat) < 0 then m = (m + 5) % 12 + 1 end
-  return m
+-- Pure: the profile day (the northern hemisphere's day of the year, 1-365) of calendar day doy at latitude lat (the
+-- south half a year later), or the server's fixed season (seasonlook mode 'spring' / 'summer' / 'fall' / 'winter':
+-- its middle), in steps of DAY_STEP days.
+local SEASON_DAY = { spring = 105, summer = 196, fall = 288, autumn = 288, winter = 15 }
+function M.dayFor(doy, lat, mode)
+  local d = SEASON_DAY[mode]
+  if not d then
+    d = tonumber(doy) or 172
+    if tonumber(lat) and tonumber(lat) < 0 then d = d + 182 end
+  end
+  d = (math.floor(d) - 1) % 365
+  return math.floor(d / M.DAY_STEP) * M.DAY_STEP + math.floor(M.DAY_STEP / 2) + 1
+end
+-- (the day of a month's middle: the console's setMonth, the tests)
+function M.dayOfMonth(m) return MONTH_START[((tonumber(m) or 6) - 1) % 12 + 1] + 14 end
+
+-- Pure: the weight 0..1 of a window {from, to} (nil: every day) on day d: 1 inside, 0 outside, a linear fade over
+-- FADE_DAYS either side of each edge (0.5 on the edge: two windows that meet sum to 1 every day).
+function M.weight(win, d)
+  if not win then return 1 end
+  local f = M.FADE_DAYS
+  local len = (win.to - win.from) % 365 + 1
+  local x = (d - win.from) % 365           -- days since the window opened (len and over: outside)
+  if x < len then
+    return math.min(1, (x + f) / (2 * f), (len - x + f) / (2 * f))
+  end
+  local after, before = x - len, 365 - x
+  return math.max(0, (f - after) / (2 * f), (f - before) / (2 * f))
 end
 
--- Pure: the entries of profile `name` in month m (those without months: every month)
-function M.plan(name, m)
+-- Pure: the entries of profile `name` on day d, each with its share times its weight that day (copies; those under
+-- MIN_WEIGHT left out)
+function M.plan(name, d)
   local out = {}
   for _, e in ipairs(M.PROFILES[name] or M.DEFS) do
-    if not e.months or e.months[m] then out[#out + 1] = e end
+    local w = M.weight(e.months, d)
+    if w >= M.MIN_WEIGHT then
+      if w < 1 then
+        local c = {}
+        for k, v in pairs(e) do c[k] = v end
+        c.share, c.weight = e.share * w, w
+        e = c
+      end
+      out[#out + 1] = e
+    end
   end
   return out
 end
@@ -421,10 +451,10 @@ local seen = nil          -- layer names listed by the blocks since the last reb
 local lastBlock = nil     -- the latest block's layer names
 local climate = { k = nil, biome = nil }
 local profile = 'generic'
-local month = nil         -- the profile month the objects were made for
+local month = nil         -- the profile day (DAY_STEP steps) the objects were made for
 local lat = nil
 local keepSeen = false    -- (remake: the same place, the layers seen kept)
-M.monthOverride = nil     -- (console: a calendar month 1-12 instead of today's)
+M.dayOverride = nil       -- (console: a calendar day of the year instead of today's)
 
 local SKIP = { name = true, class = true, persistentId = true, __parent = true, position = true, Types = true,
   internalName = true, canSave = true }
@@ -503,10 +533,10 @@ local function removeAll()
 end
 
 local function currentMonth()
-  local m = M.monthOverride or (os.date('*t') or {}).month
+  local m = M.dayOverride or (os.date('*t') or {}).yday
   local okS, sl = pcall(require, 'beamngEarth/seasonlook')
   local mode = okS and type(sl) == 'table' and sl.getMode and sl.getMode() or nil
-  return M.monthFor(m, lat, mode)
+  return M.dayFor(m, lat, mode)
 end
 
 local function source(name)
@@ -645,7 +675,7 @@ function M.setClimate(k, biome)
   return true
 end
 
--- The anchor's latitude (core, every frame: the season's hemisphere); a new month makes the objects again.
+-- The anchor's latitude (core, every frame: the season's hemisphere); a new profile day makes the objects again.
 local monthCheck = -math.huge
 function M.setLatitude(v)
   local was = lat
@@ -658,9 +688,14 @@ function M.setLatitude(v)
   if currentMonth() ~= month then remake() end
 end
 
--- (console) the grass of calendar month m (nil: today's)
+-- (console) the grass of calendar month m's middle (nil: today), or of day of the year d
 function M.setMonth(m)
-  M.monthOverride = tonumber(m)
+  M.dayOverride = m and M.dayOfMonth(m) or nil
+  remake()
+  return currentMonth()
+end
+function M.setDay(d)
+  M.dayOverride = tonumber(d)
   remake()
   return currentMonth()
 end
@@ -702,7 +737,7 @@ function M.status()
   local names = {}
   for i, n in ipairs(created) do names[i] = n:sub(#M.PREFIX + 1) end
   return { enabled = M.enabled, density = M.density, distance = M.distance, objects = #created, names = names,
-    profile = profile, koppen = climate.k, month = month, materialsLoaded = next(loadedMaterials) ~= nil,
+    profile = profile, koppen = climate.k, day = month, materialsLoaded = next(loadedMaterials) ~= nil,
     error = lastError }
 end
 
