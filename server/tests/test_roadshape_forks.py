@@ -167,6 +167,18 @@ class ForkTest(unittest.TestCase):
         self.assertAlmostEqual(r["s"]["physical"] / 1000.0, 120.0 + 6.3 / 32.0 * 180.0, delta=1.5)
         self.assertLess(r["s"]["painted"] / 1000.0, 40.0)
 
+    def test_nose_held_past_a_wide_bulge(self):
+        # (Codex P2a2) a bulge past the scan's stop offset (25 m off at 40 m), back in to 6 m at 80 m, then away: both
+        # noses after the dip (painted ~85 m, physical ~114 m)
+        segs, cons = scene()
+        segs[-1] = seg("c", [(0.0, 0.0), (40.0, -25.0), (80.0, -6.0), (300.0, -60.0)], link=True, lanes=1, pave=6.7,
+                       drive=3.7, kmh=60.0)
+        cons[-1] = ("n_c", "c", 3)
+        r = run(segs, cons)[1][0]
+        k = 54.0 / 220.0
+        self.assertAlmostEqual(r["s"]["physical"] / 1000.0, 80.0 + 8.3 / k, delta=2.0)
+        self.assertAlmostEqual(r["s"]["painted"] / 1000.0, 80.0 + 1.3 / k, delta=2.0)
+
     def _crossing_scene(self, cls):
         # the through arm ends 40 m on at a two-way road of the fork classes (a signal's crossing)
         segs, cons = scene()
@@ -196,6 +208,27 @@ class ForkTest(unittest.TestCase):
         segs[2] = seg("b", [(0.0, 0.0), (30.0, 0.0), (500.0, 0.0)], cls=3)
         cons = cons + [("n_x", "b", 1), ("n_x", "x", 0)]
         self.assertNotIn("at_grade", run(segs, cons)[1][0]["flags"])
+
+    def test_four_arms(self):
+        # (Codex P2a2) four one-way arms 40 m on: a same-direction lane merge and split is no crossing, a one-way cross
+        # street is
+        def four(across):
+            segs, cons = scene()
+            for s in segs:
+                if not s["link"]:
+                    s["cls"] = 3
+            segs[2] = seg("b", [(0.0, 0.0), (40.0, 0.0)], cls=3)
+            if across:
+                e, f = [(40.0, -100.0), (40.0, 0.0)], [(40.0, 0.0), (40.0, 100.0)]
+            else:
+                e, f = [(-60.0, 8.0), (40.0, 0.0)], [(40.0, 0.0), (500.0, 8.0)]
+            segs += [seg("d", [(40.0, 0.0), (500.0, 0.0)], cls=3), seg("e", e, cls=0, lanes=1),
+                     seg("f", f, cls=0, lanes=1)]
+            cons = [c for c in cons if c[1] != "b"] + [("n0", "b", 0), ("n_x", "b", 1), ("n_x", "d", 0),
+                                                       ("n_x", "e", 1), ("n_x", "f", 0)]
+            return run(segs, cons)[1][0]["flags"]
+        self.assertNotIn("at_grade", four(False))
+        self.assertEqual(four(True), ["at_grade"])
 
     def test_tee_is_not_a_fork(self):
         _, recs = run(*scene(tee=True))
