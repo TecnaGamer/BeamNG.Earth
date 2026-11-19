@@ -155,5 +155,35 @@ class SummaryTest(unittest.TestCase):
         self.assertEqual(s["roads"], 0)
 
 
+class SegmentsTest(unittest.TestCase):
+
+    def test_near_is_the_scalar_search_at_once(self):
+        # (each query's candidates computed at once give the one-by-one search's answers to the bit: the nearest
+        # segment of each line, the first met between equals, the lines in the order first met within r)
+        rng = np.random.default_rng(3)
+        for _trial in range(12):
+            lines = []
+            for _ in range(int(rng.integers(1, 30))):
+                k = int(rng.integers(1, 20))
+                start = rng.uniform(-100, 100, 2)
+                xy = np.vstack([start, start + np.cumsum(rng.normal(0, 6, (k, 2)), axis=0)])
+                if rng.random() < 0.3:
+                    xy = np.round(xy / 4) * 4           # (on a grid: equal distances)
+                if rng.random() < 0.2:
+                    xy[1] = xy[0]                       # (a zero-length segment)
+                lines.append(xy)
+            lines.append(np.zeros((1, 2)))              # (a line of one point: no segments)
+            seg = gm._Segments(lines)
+            for p in [l[e] for l in lines for e in (0, -1)] + list(rng.uniform(-110, 110, (20, 2))):
+                for r in (1.0, 2.5, 9.0):
+                    p = np.asarray(p, np.float64)
+                    self.assertEqual(list(seg.near(p, r).items()), list(seg.near_scalar(p, r).items()))
+
+    def test_no_line_near(self):
+        seg = gm._Segments([np.array([[0.0, 0.0], [10.0, 0.0]])])
+        self.assertEqual(seg.near(np.array([0.0, 50.0]), 2.0), {})
+        self.assertEqual(gm._Segments([]).near(np.array([0.0, 0.0]), 5.0), {})
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -31,6 +31,30 @@ def have_kernel():
         return False
 
 
+class ProblemTest(unittest.TestCase):
+
+    def test_the_rounds_problem_with_its_nodes_given_is_the_same(self):
+        # (solve finds the junctions and each plan's steps and ceiling once, for every round: the same rows)
+        main = plan(np.c_[S, np.zeros_like(S)], 0.1 * S)
+        side = plan(np.c_[np.full(len(S), 101.0), S + 0.5], np.full(len(S), 12.0))
+        plans, specs = [main, side], [spec("primary"), spec("residential")]
+        z0 = [main.z.copy(), side.z.copy()]
+        pins = [(1, len(S) - 1, 12.0)]
+        a = vsolve.problem(plans, specs, z0, [0.08, 0.12], [8, 2], pins, extra={})
+        nl = vsolve._nodes_of(plans, [p.xy for p in plans], z0, pins)
+        pre = {}
+        b = vsolve.problem(plans, specs, z0, [0.08, 0.12], [8, 2], pins, extra={}, node_list=nl, pre=pre)
+        c = vsolve.problem(plans, specs, z0, [0.08, 0.12], [8, 2], pins, extra={}, node_list=nl, pre=pre)
+        self.assertEqual(len(nl), 1)
+        for x in (b, c):
+            self.assertEqual(a[1], x[1])
+            self.assertEqual(a[2], x[2])
+            for ca, cb in zip(a[0], x[0]):
+                self.assertEqual(ca.keys(), cb.keys())
+                for k in ca:
+                    np.testing.assert_array_equal(ca[k], cb[k])
+
+
 @unittest.skipUnless(have_kernel(), "earthfast's carriageway_profiles")
 class SolveTest(unittest.TestCase):
 

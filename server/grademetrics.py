@@ -41,25 +41,76 @@ class _Segments:
 
     def __init__(self, lines):
         self.lines = [np.asarray(xy, np.float64)[:, :2] for xy in lines]
-        self.grid = {}
+        grid = {}
+        segs = []                       # (line, segment) per global segment number
         for i, xy in enumerate(self.lines):
             if len(xy) < 2:
                 continue
             lo = np.floor(np.minimum(xy[:-1], xy[1:]) / NEAR_M).astype(np.int64)
             hi = np.floor(np.maximum(xy[:-1], xy[1:]) / NEAR_M).astype(np.int64)
             for j in range(len(xy) - 1):
+                g = len(segs)
+                segs.append((i, j))
                 for gx in range(lo[j, 0], hi[j, 0] + 1):
                     for gy in range(lo[j, 1], hi[j, 1] + 1):
-                        self.grid.setdefault((gx, gy), []).append((i, j))
+                        grid.setdefault((gx, gy), []).append(g)
+        # (each cell's segments as an array of global numbers, every segment's ends and its line once: near computes a
+        # query's candidates at once, the same operations as one by one: 9.9 of a Fells Point solve's 44 s were here)
+        self.grid = {c: np.array(v, np.int64) for c, v in grid.items()}
+        sg = np.array(segs, np.int64).reshape(-1, 2)
+        self._line, self._seg = sg[:, 0], sg[:, 1]
+        if len(sg):
+            a = np.concatenate([xy[:-1] for xy in self.lines if len(xy) >= 2])
+            b = np.concatenate([xy[1:] for xy in self.lines if len(xy) >= 2])
+        else:
+            a = b = np.zeros((0, 2))
+        self._ax, self._ay = a[:, 0].copy(), a[:, 1].copy()
+        self._dx, self._dy = b[:, 0] - a[:, 0], b[:, 1] - a[:, 1]
+        self._L2 = self._dx * self._dx + self._dy * self._dy   # (dnp.dot of a 2-vector: d0 * d0 + d1 * d1)
 
     def near(self, p, r):
-        """{line index: (distance, segment index, fraction along it)} of the lines within r of point p, each's nearest."""
+        """{line index: (distance, segment index, fraction along it)} of the lines within r of point p, each's nearest
+        (between equals the first met, the grid's cells in order; in the order the lines are first met within r)."""
+        gx, gy = int(math.floor(p[0] / NEAR_M)), int(math.floor(p[1] / NEAR_M))
+        k = int(math.ceil(r / NEAR_M))
+        cells = [c for dx in range(-k, k + 1) for dy in range(-k, k + 1)
+                 for c in (self.grid.get((gx + dx, gy + dy)),) if c is not None]
+        if not cells:
+            return {}
+        g = cells[0] if len(cells) == 1 else np.concatenate(cells)
+        px, py = float(p[0]), float(p[1])
+        ax, ay, dx, dy, L2 = self._ax[g], self._ay[g], self._dx[g], self._dy[g], self._L2[g]
+        num = (px - ax) * dx + (py - ay) * dy
+        pos = L2 > 0
+        t = np.zeros(len(g))
+        t[pos] = np.minimum(1.0, np.maximum(0.0, num[pos] / L2[pos]))
+        dist = dnp.hypot(ax + t * dx - px, ay + t * dy - py)
+        ok = np.flatnonzero(dist <= r)
+        if not len(ok):
+            return {}
+        line = self._line[g[ok]]
+        # (per line its smallest distance, the first met between equals: sorted by line, distance, then place met)
+        o = np.lexsort((ok, dist[ok], line))
+        first = np.r_[True, line[o][1:] != line[o][:-1]]
+        best = ok[o[first]]
+        # (the lines in the order they were first met within r, as the dict filled one by one had them)
+        lines_sorted = line[o]
+        met = np.minimum.reduceat(ok[o], np.flatnonzero(first)) if len(o) else ok[o]
+        out = {}
+        for q in np.argsort(met, kind="stable").tolist():
+            c = int(best[q])
+            out[int(lines_sorted[np.flatnonzero(first)[q]])] = (float(dist[c]), int(self._seg[g[c]]), float(t[c]))
+        return out
+
+    def near_scalar(self, p, r):
+        """near, one segment at a time (the reference tests/test_grademetrics compares near with)."""
         gx, gy = int(math.floor(p[0] / NEAR_M)), int(math.floor(p[1] / NEAR_M))
         k = int(math.ceil(r / NEAR_M))
         out = {}
         for dx in range(-k, k + 1):
             for dy in range(-k, k + 1):
-                for i, j in self.grid.get((gx + dx, gy + dy), ()):
+                for g in self.grid.get((gx + dx, gy + dy), ()).tolist() if (gx + dx, gy + dy) in self.grid else ():
+                    i, j = int(self._line[g]), int(self._seg[g])
                     a, b = self.lines[i][j], self.lines[i][j + 1]
                     d = b - a
                     L2 = float(dnp.dot(d, d))

@@ -537,7 +537,8 @@ UNDER_LIDAR_DECK_M = roadsmod.AT_GRADE_M
 # coarse models (their smeared embankments are wider than that: UNDER_RUN_*).
 UNDER_DECK_ON = os.environ.get("BNE_UNDER_DECK_GROUND", "on") != "off"
 VSOLVE_DECK_PAD_M = 50.0     # m past the shadow solve's reach its caps' decks are read from (vsolve: a deck over its margin)
-VSOLVE_CONTEXT_M = 150.0     # m past a cell's box the next cells' roads are in its shadow solve too, unkept: its own roads
+VSOLVE_RINGS_KEEP = 64      # cells whose placed road rings the shadow solve's context keeps (_vsolve_cell_rings)
+VSOLVE_CONTEXT_M = 150.0    # m past a cell's box the next cells' roads are in its shadow solve too, unkept: its own roads
                             # reach CLIP_MARGIN_M past it, but a road of the next cell's alone was in none of its
                             # problem, and an end its junction there lifts 1.2 m was held at its profile: Rio's 0.79 m
                             # seam. Over the widest spread (vsolve.SPREAD_M) a change there has died out at the box
@@ -3131,29 +3132,22 @@ class _Planner:
         out, seen = [], set(own_ids)
         for k in keys:
             try:
-                feats = self.md.cell(k, layers=("roads",), kind="demand").layers.get("roads")
-                if feats is None or not len(feats):
+                got = self._vsolve_cell_rings(k)
+                if got is None:
                     continue
-                specs = roadsmod.road_specs(feats, None, self.widths)
-                placement = roadsmod.placement_context([feats], None, self.widths)
+                feats, specs, roads = got
                 clip = self._clip_box(k)
                 parts, ids, rings = [], [], []
-                for i in range(len(feats)):
-                    fid = str(feats.ids[i])
-                    if specs[i] is None or specs[i].cls in UNGRADED or fid in seen:
+                for i, fid, pieces in roads:
+                    if fid in seen:
                         continue
-                    pieces = []
-                    for ring in roadsmod.ground_parts(feats, i):
-                        ring = np.asarray(placement.ring(self.frame, feats, i, ring, specs[i]), f64)
-                        e, n, _ = self.frame.geodetic_to_enu(ring[:, 1], ring[:, 0], 0.0)
-                        e, n = np.asarray(e, f64), np.asarray(n, f64)
-                        near = ((e >= box[0]) & (e <= box[2]) & (n >= box[1]) & (n <= box[3])).any()
-                        pieces.append((ring, near))
-                    if not any(near for _r, near in pieces):
+                    near = [((e >= box[0]) & (e <= box[2]) & (n >= box[1]) & (n <= box[3])).any()
+                            for _ring, e, n in pieces]
+                    if not any(near):
                         continue
                     seen.add(fid)
-                    for ring, near in pieces:
-                        if near:
+                    for (ring, _e, _n), nr in zip(pieces, near):
+                        if nr:
                             for r in self._near_cell(ring, clip):
                                 parts.append((r, specs[i]))
                                 ids.append(fid)
@@ -3194,6 +3188,38 @@ class _Planner:
             except Exception as e:      # (that cell's roads out of the context rather than no shadow solve)
                 _caught(e)
                 log.debug("vsolve: context roads of %s: %s: %s", k, type(e).__name__, e)
+        return out
+
+    def _vsolve_cell_rings(self, k):
+        """(feats, specs, [(i, fid, [(lon/lat ring as placed, east, north)])]) of cell k's graded ground roads, or None
+        (no roads): _vsolve_context's, kept per cell (VSOLVE_RINGS_KEEP of them). Every next cell's context placed all
+        of k's roads again to find those near its box: 36,510 rings in a Fells Point run, 3 of its context's 20 s."""
+        memo = self.__dict__.setdefault("_vsolve_rings", {})
+        with self.lock:
+            got = memo.get(str(k))
+        if got is not None:
+            return got[0]
+        f64 = np.float64
+        feats = self.md.cell(k, layers=("roads",), kind="demand").layers.get("roads")
+        out = None
+        if feats is not None and len(feats):
+            specs = roadsmod.road_specs(feats, None, self.widths)
+            placement = roadsmod.placement_context([feats], None, self.widths)
+            roads = []
+            for i in range(len(feats)):
+                if specs[i] is None or specs[i].cls in UNGRADED:
+                    continue
+                pieces = []
+                for ring in roadsmod.ground_parts(feats, i):
+                    ring = np.asarray(placement.ring(self.frame, feats, i, ring, specs[i]), f64)
+                    e, n, _ = self.frame.geodetic_to_enu(ring[:, 1], ring[:, 0], 0.0)
+                    pieces.append((ring, np.asarray(e, f64), np.asarray(n, f64)))
+                roads.append((i, str(feats.ids[i]), pieces))
+            out = (feats, specs, roads)
+        with self.lock:
+            memo[str(k)] = (out,)
+            while len(memo) > VSOLVE_RINGS_KEEP:
+                memo.pop(next(iter(memo)))
         return out
 
     def _vsolve_shadow(self, key, plans, pspecs, z_before, z_under=None, lifts=None, context=()):
