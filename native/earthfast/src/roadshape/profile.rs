@@ -448,6 +448,17 @@ pub fn members_core(decks: &[Vec<[f64; 2]>], half: &[f64], anchor: &[f64], groun
             }
         }
     }
+    // (P3c: an anchor walked from a deck end another walk reached as its gap's far end, found from that side alone
+    // (the other's anchor shorter): the gap member covers its road; Codex review of P3c)
+    for i in 0..walks.len() {
+        if !keep[i] || walks[i].3.reach == 2 {
+            continue;
+        }
+        let me = (walks[i].0 * 2 + walks[i].1) as i64;
+        if (0..walks.len()).any(|j| j != i && keep[j] && walks[j].3.reach == 2 && walks[j].3.to == me) {
+            keep[i] = false;
+        }
+    }
     for (i, w) in walks.into_iter().enumerate() {
         if keep[i] {
             approaches.push(w.3);

@@ -9151,6 +9151,8 @@ class BridgeProfiles:
                 ring = dict(_keyed(self.keys_of, self.parts_of, feats, i))[key[1]]
                 if not self._held_in(key, ring):
                     continue
+            if not solved_only and self.__dict__.get("profile_retry"):
+                self._retry_due(key)    # (P3c: a short profile's chain asked again when due; Codex review of P3c)
             got = self._take(key)       # (with its note: whoever builds on a solve made short is short too)
             if got is None and not solved_only:
                 if ring is None:
@@ -9231,15 +9233,19 @@ class BridgeProfiles:
     def _retry_due(self, key):
         """BNE_ROADSHAPE=profile (P3c, Codex review of P3b): a chain published while its joint profile read short (a
         cell, a ground line not at hand: today's heights, noted short) is solved again once PROFILE_RETRY_S has passed
-        since: its parts leave `done` together (their notes, piers and profile marks with them) and the next ask
-        solves the chain again, as a fresh store would (an adopted copy carries the owner's due time: its re-solve
-        adopts the owner's). The builds that took the short parts were short (not kept)."""
+        since: its parts leave `done` together (their notes, piers and profile marks with them, and the chain's pins,
+        truss and truss piers: kept first-come, they would outlive the retry; Codex review of P3c) and the next ask
+        (_chain_of, parts_todo) solves the chain again, as a fresh store would (an adopted copy carries the owner's due
+        time: its re-solve adopts the owner's). The builds that took the short parts were short (not kept)."""
         with self.lock:
             pr = self.__dict__.get("profile_retry", {})
             got = pr.get(key)
             if got is None or time.monotonic() < got[1]:
                 return False
             ck = got[0]
+            self.__dict__.get("profiles", {}).pop(ck, None)
+            self.trusses.pop(ck, None)
+            self.piers.pop(("truss", ck), None)
             for k in [k for k, v in pr.items() if v[0] == ck]:
                 pr.pop(k, None)
                 self.done.pop(k, None)
