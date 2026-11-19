@@ -49,10 +49,6 @@ WEDGE_GRADE = 0.15      # the steepest deck grade (seamcheck): a wedge's xy offs
 # Mismatches seen and reported, not fixed here (the probe changes no algorithm): (place, seam, text in it) -> why.
 PRE = "the same with BNE_ROADSHAPE off: not the sheet's"
 KNOWN = {
-    ("fort_pitt", "seam x = 256", "pads near it differ"):
-        "the sheet's only: deck_pads' skip list is the tile's own chunks' sxn, so tiles (0, 0) and (1, 1), not drawing "
-        "the union, keep its junction pads (285.69, 166.17) and (328.02, 199.27) in pads_near where tile (1, 0) skips "
-        "them (no parapet differs at this seam)",
     ("fort_pitt", "seam y = 0", "does not go on: 790a71cc-18a8-4218-b310-0e92e1345be7 cut at (53.779, 0.000)"): PRE,
     ("fort_pitt", "seam y = 256", "overlap): a23ee4b5-1abd-4132-a654-ca60cad5bd03 cut at (393.418, 256.000)"): PRE,
     ("i95_middle_branch", "seam x = -256", "overlap): 94c9f3ad-20ef-4680-b23c-190f7d0a7b0e cut at (-256.000, 34.903)"):
@@ -155,12 +151,13 @@ def records(br, box):
 
 def build(br, box):
     """One road tile's bridge decks as the tile build makes them (earthd's road tile, without ground roads)."""
-    allc = roads._bridge_chunks(None, {}, None, box, bridges=br, cells=[])
+    marks = []
+    allc = roads._bridge_chunks(None, {}, None, box, bridges=br, cells=[], sheet_marks=marks)
     chunks = [c for c in allc if not c.get("ctx")]
     ctx = [c for c in allc if c.get("ctx")]
     near = br.parts([], (box[0] - PAD_M, box[1] - PAD_M, box[2] + PAD_M, box[3] + PAD_M))
     pads_near = roads.deck_pads([(f, sp, xy, z) for f, sp, xy, z, _lon in near], [], box, br._ground, own=False,
-                                skip=[c["sxn"] for c in allc if c.get("sxn") is not None])
+                                skip=marks)
     pads = [p for p in pads_near if roads.box_owns(box, float(p[1][0]), float(p[1][1]))]
     runs = roadmesh.parapet_runs(chunks, ctx, pads=pads_near)
     mesh = roadmesh.deck(chunks, (box[0], box[1], 0.0), (), ctx, (), parapets=runs, pads=pads)
