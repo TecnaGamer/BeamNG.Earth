@@ -7744,6 +7744,9 @@ class Connection:
                 break
             except Exception as e:      # offline, no route, rate limited: the mod falls back to steering
                 out["error"] = f"{type(e).__name__}: {e}"[:200]
+                if isinstance(e, netfetch.BudgetExceeded):
+                    out["retryAt"] = (int(time.time()) // 86400 + 1) * 86400  # netfetch resets at midnight UTC
+                    break
                 if not isinstance(e, netfetch.RateLimited) or attempt + 1 >= ROUTE_429_TRIES:
                     break
                 # (rate limited: the latest destination asked again after the host's wait; a destination changed

@@ -83,7 +83,8 @@
           <span v-if="ms.gps.planning" class="gps-dist">planning route…</span>
           <span v-else-if="ms.gps.remaining != null" class="gps-dist">{{ fmtMiles(ms.gps.remaining) }}<template
             v-if="ms.gps.eta != null">, {{ fmtDur(ms.gps.eta) }}</template></span>
-          <span v-if="ms.gps.routeError" class="gps-warn" :title="ms.gps.routeError">no road route: heading straight there</span>
+          <span v-if="ms.gps.routeRetryAt" class="gps-warn" :title="ms.gps.routeError">daily road-routing limit reached (resets at 00:00 UTC)</span>
+          <span v-else-if="ms.gps.routeError" class="gps-warn" :title="ms.gps.routeError">no road route: heading straight there</span>
           <button class="map-btn small" @click="flyTo(ms.gps.lat, ms.gps.lon)">Show</button>
           <button class="map-btn small" :disabled="!!ms.cannotGo || busy" @click="teleportTo(ms.gps.lat, ms.gps.lon, ms.gps.name)">Teleport</button>
           <button class="map-btn small" :class="{ primary: ms.gps.autodrive }" @click="setAutodrive(!ms.gps.autodrive)"

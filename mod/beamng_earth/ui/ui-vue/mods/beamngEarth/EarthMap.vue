@@ -295,7 +295,8 @@
         <span v-if="state.gps.planning && !routePts.length" class="gps-dist">planning route…</span>
         <span v-else-if="state.gps.remaining != null" class="gps-dist">{{ fmtMiles(state.gps.remaining) }}<template
           v-if="state.gps.eta != null">, {{ fmtDur(state.gps.eta) }}</template></span>
-        <span v-if="state.gps.routeError && !routePts.length" class="gps-warn" :title="state.gps.routeError">no road route: heading straight there</span>
+        <span v-if="state.gps.routeRetryAt" class="gps-warn" :title="state.gps.routeError">daily road-routing limit reached (resets at 00:00 UTC)</span>
+        <span v-else-if="state.gps.routeError && !routePts.length" class="gps-warn" :title="state.gps.routeError">no road route: heading straight there</span>
         <span v-if="state.gps.routeDownload && state.gps.routeDownload.active" class="gps-download"
               title="Downloading the route's road and elevation data ahead of time so driving it is smoother">
           <span class="gps-download-bar"><span class="gps-download-fill" :style="{ width: (state.gps.routeDownload.total

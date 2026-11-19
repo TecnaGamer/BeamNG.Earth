@@ -29,6 +29,7 @@ M.VIA_M = 250           -- the arrows' path is pinned to the route by a waypoint
 M.VIA_TURN_COS = math.cos(math.rad(30)) -- also pin both sides of sharper planned bends between distance-based pins
 M.OFF_ROUTE_M = 120     -- farther from the route: planned again ...
 M.REROUTE_S = 20        -- ... at most this often
+local REROUTE_MAX_AGL_M = 100 -- don't keep asking for road plans while flying above them
 -- Driving back along the route (turned round on the same road: never OFF_ROUTE_M off it, GitHub #623): the route's
 -- remaining distance grown by BACKTRACK_M over the least it was since the plan, moving faster than BACKTRACK_MPS:
 -- planned again from where the car is, the way it now drives.
@@ -70,6 +71,7 @@ local vias = {}         -- { { lat, lon, name }... } the waypoints still ahead, 
 local route = nil       -- { points = {{lat, lon}...}, dist, dur, version } | false (no route: steering) | nil (none yet)
 local routeVersion = 0
 local routeError = nil
+local routeRetryAt = nil -- shared by destinations; the road provider's daily quota has not reset
 local pendingId, nextId = nil, 0
 local lastRequest = -math.huge
 local enu = nil         -- { anchor, x = {}, y = {}, cum = {} } of the route in the current anchor's frame
@@ -233,6 +235,7 @@ end
 local function requestRoute(player)
   local c = core()
   if not c or not c.requestRoute or not dest or not player or not player.lat then return end
+  if routeRetryAt then return end
   nextId = nextId + 1
   -- the car's heading: the route starts on the carriageway it drives on, the way it drives (without it OSRM began
   -- divided boulevards on the other carriageway, the car turned round to follow, left the route and was routed
@@ -322,7 +325,8 @@ function M.status()
   return { lat = dest.lat, lon = dest.lon, name = dest.name, dist = info and info.dist, bearing = info and info.bearing,
            metric = metric(),
            remaining = info and info.remaining, eta = info and info.eta, routeVersion = route and route.version or 0,
-           progress = progress, planning = pendingId ~= nil, routeError = routeError, pendingId = pendingId,
+           progress = progress, planning = pendingId ~= nil, routeError = routeError, routeRetryAt = routeRetryAt,
+           pendingId = pendingId,
            autodrive = auto, autoNodes = autoPath and #autoPath or nil, off = info and info.off, arrows = routedTo,
            routeDownload = downloadProgress, replans = M.noProgressReplans, recoveries = M.autoRecoveries,
            waypoints = #vias > 0 and M.waypoints() or nil, legs = route and route.legs or nil }
@@ -1168,6 +1172,13 @@ function M.retryRoute(route, since, fails)
   return since >= math.min(M.ROUTE_RETRY_MAX_S, M.ROUTE_RETRY_S * 2 ^ math.max(0, (fails or 1) - 1))
 end
 
+local function canReplanFrom(player)
+  local ray = rawget(_G, 'castRayStatic')
+  if not ray or not player.z then return true end
+  local hit = ray(vec3(player.x, player.y, player.z + 1), vec3(0, 0, -1), REROUTE_MAX_AGL_M + 1)
+  return hit ~= nil and hit < REROUTE_MAX_AGL_M + 1
+end
+
 -- Arrived? dist: straight to the destination; left: the planned route still ahead along it (nil: no route); off: the
 -- car's distance from the route. On a route: its end reached (within ROUTE_ARRIVE_M along it, on it), or the
 -- destination reached away from the route (driven to across a car park). Pure.
@@ -1190,6 +1201,9 @@ function M.update(anchor, player)
   local now = os.clock()
   if now - lastCheck < M.CHECK_S then return end
   lastCheck = now
+  if routeRetryAt and os.time() >= routeRetryAt then
+    routeRetryAt, routeError, routeFails, lastRequest = nil, nil, 0, -math.huge
+  end
   local physicsRunning = not be or ((not be.getPhysicsRunning or be:getPhysicsRunning())
     and (not be.getEnabled or be:getEnabled()))
   if not physicsRunning then
@@ -1210,13 +1224,15 @@ function M.update(anchor, player)
         autoForce = true
       else
         routeError = r.error or 'no route'
+        routeRetryAt = tonumber(r.retryAt)
         routeFails = routeFails + 1
         if not route then route = false end
       end
     elseif now - lastRequest > 30 then
       pendingId = nil                      -- no answer: try again below
     end
-  elseif M.retryRoute(route, now - lastRequest, routeFails) then
+  elseif not routeRetryAt and M.retryRoute(route, now - lastRequest, routeFails)
+    and (route == nil or canReplanFrom(player)) then
     requestRoute(player)
   end
 
@@ -1269,12 +1285,13 @@ function M.update(anchor, player)
     local speed = math.sqrt(vx * vx + vy * vy)
     local back
     back, leastRemaining = M.backtracking(leastRemaining, info.remaining, speed)
-    if back and not pendingId and now - lastRequest > M.REROUTE_S then
-      leastRemaining = nil
+    if (back or off > M.OFF_ROUTE_M) and not pendingId and now - lastRequest > M.REROUTE_S
+      and (routeFails == 0 or M.retryRoute(false, now - lastRequest, routeFails))
+      and not routeRetryAt and canReplanFrom(player) then
+      if back then leastRemaining = nil end
       requestRoute(player)
     end
     if route.dist and route.dist > 0 and route.dur then info.eta = route.dur * remaining / route.dist end
-    if off > M.OFF_ROUTE_M and not pendingId and now - lastRequest > M.REROUTE_S then requestRoute(player) end
     local tg
     if auto then
       local differentRoadLoaded
