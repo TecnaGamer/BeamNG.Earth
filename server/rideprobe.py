@@ -116,7 +116,7 @@ def abutment_rides(rec):
             # (the drive: the approach towards the abutment, then the deck(s) on from it)
             appr = [(i, not at_end)]
             res = []
-            for key in ("z_today", "z_solved"):
+            for key in ("z_today", "z_built" if "z_built" in ms[i] else "z_solved"):
                 s, z = _path(rec, appr + run, key)
                 s0 = float(_path(rec, appr, key)[0][-1])        # (the abutment's station: the approach's end)
                 t = np.arange(0.0, s[-1] + 1e-9, 1.0)
@@ -129,6 +129,72 @@ def abutment_rides(rec):
             out.append((ll[0], ll[1], ms[d]["cls"] + ("_link" if ms[d]["link"] else ""), round(res[0][0], 3),
                         round(res[1][0], 3), int(res[0][1]), rec["status"]))
     return out
+
+
+def built_heights(rec, elev):
+    """P3b (BNE_ROADSHAPE=profile built): each member's "z_built", the heights as BUILT: a deck's its published
+    heights (roadshape._built's per vertex, back on its knots: rec["_built"]["knots"]), an approach's the physics
+    ground the road tiles read there (elev: the plans' second stage, pinned). A record not solved: today's for both."""
+    b = rec.get("_built")
+    fr = rec.get("_frame")
+    for n, m in enumerate(rec["members"]):
+        if b is None or fr is None:
+            m["z_built"] = list(m["z_today"])
+            continue
+        if m["kind"] == "deck":
+            m["z_built"] = [round(float(v), 3) for v in b["knots"][n]]
+            continue
+        xy = np.array(m["xy"], np.float64)
+        # (an abutment knot read 5 cm inside the approach: the deck end itself is where the plans end, and the graded
+        # ground falls away past a plan's abutment end (grading ABUT_UNDER_GRADE): the record's 1 mm rounding put
+        # Nordschleife A's knot past it, 3.4 m down, a ride of 8 g that no car drives: the deck is there)
+        ends = [0] + ([len(xy) - 1] if m.get("reach") == 2 else [])
+        for k in ends:
+            j = 1 if k == 0 else k - 1
+            d = xy[j] - xy[k]
+            n = float(dnp.hypot(d[0], d[1]))
+            if n > 0.1:
+                xy[k] = xy[k] + d * (BUILT_IN_M / n)
+        la, lo, _ = fr.enu_to_geodetic(xy[:, 0], xy[:, 1], 0.0)
+        la, lo = np.asarray(la, np.float64), np.asarray(lo, np.float64)
+        z = np.asarray(elev(la, lo), np.float64)
+        m["z_built"] = [round(float(v), 3) for v in fr.geodetic_to_enu(la, lo, z)[2]]
+
+
+BUILT_IN_M = 0.05           # m inside an approach its abutment knot's built ground is read (built_heights)
+ORDERS = 1      # (--orders: the chains solved again this many times in all, each time a fresh store from another start)
+
+
+def _rec_key(rec):
+    b = rec.get("_built")
+    return (rec["status"], tuple(tuple(m["z_solved"]) for m in rec["members"]), b["digest"] if b else None,
+            tuple(tuple(np.round(b["deck_z"][k], 4).tolist()) for k in sorted(b["deck_z"], key=str)) if b else None)
+
+
+def order_check(todo, cell_fn, first, bw, roadsmod, roadshape):
+    """P3b's seamprobe-style check: the chains solved again from ORDERS - 1 other starts (a fresh bridge store each,
+    its parts asked in another order: reversed, then rotated by a third, ...); every chain asked in both must give the
+    same record (status, solved heights, the built decks' heights, the pins' digest). {"starts", "chains", "differ"}."""
+    base = {r["chain"]: _rec_key(r) for r in first}
+    keys = sorted(todo)
+    differ, seen = [], 0
+    for n in range(1, ORDERS):
+        order = keys[::-1] if n == 1 else keys[(n * len(keys)) // ORDERS:] + keys[:(n * len(keys)) // ORDERS]
+        got = []
+        roadshape.PROFILE_SINKS[:] = [got.append]
+        cs = roadsmod.ChainStore(roadsmod.BridgeProfiles, cell_fn, bw._elev_stage1, bw._bridge_setup)
+        for k in order:
+            feats, i, ring = todo[k]
+            try:
+                cs.store_at(float(ring[0, 1]), float(ring[0, 0])).parts_todo([(k, feats, i)])
+            except Exception as ex:
+                logging.getLogger("rideprobe").warning("part %s: %s: %s", k, type(ex).__name__, ex)
+        for r in got:
+            if r["chain"] in base:
+                seen += 1
+                if _rec_key(r) != base[r["chain"]]:
+                    differ.append([n, r["chain"]])
+    return {"starts": ORDERS, "chains": seen, "differ": differ}
 
 
 def summary(vals):
@@ -184,7 +250,8 @@ def collect(lat, lon, R, cache, offline=True):
     g, _ = s.anchor(1, lat, lon)
 
     def elev(la, lo):           # (blockworker.roads_tile's: the physics ground, lifted under roads)
-        z = bw.ground(frame, la, lo, s.dem.sample(la, lo, 15), g)
+        dz = bw.sample_at_zoom(la, lo) if roadshape.PROFILE_BUILT else s.dem.sample(la, lo, 15)   # (P3b: the first
+        z = bw.ground(frame, la, lo, dz, g)                 # stage's own zoom, blockworker.stage_zoom)
         return g.apply(la, lo, z, gradingmod.ROAD_LIFT) if g is not None else z
     cell_fn = lambda key: s.md.cell(key, layers=("roads",), kind="demand").layers.get("roads")     # noqa: E731
     dlat, dlon = R / 111320.0, R / (111320.0 * dmath.cos(math.radians(lat)))
@@ -205,7 +272,13 @@ def collect(lat, lon, R, cache, offline=True):
                 near = (np.abs(ring[:, 1] - lat) <= dlat) & (np.abs(ring[:, 0] - lon) <= dlon)
                 if k not in todo and near.any():
                     todo[k] = (feats, i, ring)
-    cs = roadsmod.ChainStore(roadsmod.BridgeProfiles, cell_fn, elev, bw._bridge_setup)
+    if roadshape.PROFILE_BUILT:
+        # (P3b built: the process's own bridge store on the plans' first stage, the one the second stage's pins come
+        # from, as the road tiles'; the built ground read through the pinned plans below)
+
+        cs = bw._chain_store("bridges", roadsmod.BridgeProfiles, elev, bw._bridge_setup)
+    else:
+        cs = roadsmod.ChainStore(roadsmod.BridgeProfiles, cell_fn, elev, bw._bridge_setup)
     t0 = time.perf_counter()
     for k in sorted(todo):
         feats, i, ring = todo[k]
@@ -215,7 +288,21 @@ def collect(lat, lon, R, cache, offline=True):
         except Exception as ex:
             logging.getLogger("rideprobe").warning("part %s: %s: %s", k, type(ex).__name__, ex)
     wall = time.perf_counter() - t0
-    return frame, recs, {"parts": len(todo), "wall_s": round(wall, 2),
+    wall_built = 0.0
+    orders = {}
+    if roadshape.PROFILE_BUILT:
+        asked = list(recs)      # (the chains of the parts asked; the pins' own solves round them come after, unscored)
+        t1 = time.perf_counter()
+        for rec in asked:
+            built_heights(rec, elev)
+        wall_built = time.perf_counter() - t1
+        if ORDERS > 1:
+            orders = order_check(todo, cell_fn, asked, bw, roadsmod, roadshape)
+        recs = asked
+    return frame, recs, {"built_s": round(wall_built, 2), "orders": orders, "parts": len(todo),
+                         "wall_s": round(wall, 2),
+                         "pin_field": {k: (round(v, 3) if isinstance(v, float) else v)
+                                       for k, v in gradingmod.PIN_STATS.items()},
                          "profile": {k: (round(v, 3) if isinstance(v, float) else v)
                                      for k, v in roadshape.PROFILE_STATS.items()}}
 
@@ -231,7 +318,11 @@ def main():
     ap.add_argument("--records", help="also write the profile records (JSON lines) here")
     ap.add_argument("--score-r", type=float, help="m: abutments scored within this of the point (default r; a chain "
                     "asked from a part within r can reach further)")
+    ap.add_argument("--orders", type=int, default=1, help="P3b built: solve the chains again from this many starts in "
+                    "all (fresh stores, other orders) and compare the records")
     a = ap.parse_args()
+    global ORDERS
+    ORDERS = max(1, a.orders)
     cache = os.path.abspath(os.path.expanduser(a.cache))
     player = os.path.realpath(os.path.expanduser("~/.cache/beamng-earth"))
     if os.path.realpath(cache).startswith(player):
@@ -245,7 +336,8 @@ def main():
     if a.records:
         with open(a.records, "w") as f:
             for r in recs:
-                f.write(json.dumps({k: v for k, v in r.items() if k != "timing"}, sort_keys=True) + "\n")
+                f.write(json.dumps({k: v for k, v in r.items() if k != "timing" and not k.startswith("_")},
+                                   sort_keys=True) + "\n")
     body = json.dumps(res, sort_keys=True, indent=1)
     if a.json:
         with open(a.json, "w") as f:

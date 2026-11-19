@@ -7351,8 +7351,10 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 515: v2 P2c (deck_sheets: the union ends where the heights part when the edges' split fails the height tests)
     m.add_function(wrap_pyfunction!(roadshape::profile::profile_members, m)?)?;
     m.add_function(wrap_pyfunction!(roadshape::profile::profile_solve, m)?)?;
+    m.add_function(wrap_pyfunction!(roadshape::pins::profile_pin_field, m)?)?;
     // 516: v2 P3a (roadshape::profile: the stretches from anchor to anchor through a chain's decks and their joint
     // height solve, shadow only, BNE_ROADSHAPE=profile)
-    m.add("VERSION", 516)?;
+    // 521: v2 P3b (roadshape::pins::profile_pin_field: the joint profile's approach ground into the graded ground)
+    m.add("VERSION", 521)?;
     Ok(())
 }

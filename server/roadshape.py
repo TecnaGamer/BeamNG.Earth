@@ -835,6 +835,125 @@ def anchor_m(spec):
     return min(ANCHOR_MAX_M, max(ANCHOR_MIN_M, 2.0 * ANCHOR_GRADE_PCT * v * v / 395.0))
 
 
+# ---- P3b: the solved profile BUILT (BNE_ROADSHAPE=profile; earthfast 521: profile_pin_field) ----------------------
+# A whole chain's solve (roads.BridgeProfiles._chain_solve, in its own scope: what the profile reads short marks the
+# chain short) runs profile_chain inline. Solved: the decks are published at the solve's heights (each vertex of a
+# deck's line as built from its 2 m knots, linear between them) in place of deck_profile + _tie_beside, and the solve's
+# sheet couplings stand in for the tile-time pins (roads._sheet_plan leaves a profiled deck's heights as published).
+# The approach ground the solve moved goes to the graded ground as PINS (its pinned second stage, grading.PROFILE_PINS,
+# _Planner._pin_field): per approach member its knots (lat, lon), dz = solved - today's faded out from PIN_FULL_M to
+# PIN_REACH_M from its abutment(s), its height today and its road's half width. Any other status: today's heights,
+# nothing pinned. Window chains (CHAIN_CELLS capped: Manhattan, Tokyo)
+# are not solved (P3's lattice cuts, later): today's. BNE_ROADSHAPE_SHADOW=1 keeps P3a's shadow (nothing built).
+PROFILE_BUILT = PROFILE and os.environ.get("BNE_ROADSHAPE_SHADOW", "") not in ("1", "on", "true")
+PIN_FULL_M = 150.0          # m from an abutment along its approach the solve's change is pinned in full ...
+PIN_REACH_M = 200.0         # ... faded out to nothing here (the solve's weight toward today's is full from PROF_D1_M)
+PIN_MIN_DZ_M = 0.001        # m: an approach moved less than this nowhere is not pinned
+PIN_HALF_MAX_M = 15.0       # m: an approach's road half width (its deck's) at most
+PIN_KERNEL = 521            # earthfast.profile_pin_field
+
+
+def _built(comp, parts, keys, decks, koff, nd, ameta, allxy, la, lo, zsol, ztoday, htoday, halves):
+    """profile_chain's built outputs of a solved chain: {"deck_z": {part key: heights per vertex of its line as
+    published}, "pins": [(lat (n,), lon (n,), dz (n,), height today (n,), half width, fade (n,))], "digest": the
+    pins' sha256 (hex, 16), "knots": each deck's built heights back on its knots}. htoday: the knots' heights today
+    (geodetic, as the graded ground reads them); halves: the decks' half widths (an approach's road's: its deck's).
+    Pure."""
+    import hashlib
+    out = {}
+    kept = {}
+    back = []           # (each deck's built heights back on its knots: rideprobe's built ride)
+    for n, k in enumerate(keys):
+        a, b = koff[n], koff[n + 1]
+        xy = decks[n]
+        s = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(xy, axis=0).T))]
+        _kn, tk, _s = _knots(xy, PROF_STEP_M)
+        out[k] = np.asarray(dnp.interp(s, tk, zsol[a:b]), np.float64)
+        back.append(np.asarray(dnp.interp(tk, s, out[k]), np.float64))
+        kept.setdefault(tuple(np.round(xy, 2).ravel().tolist()), (k, False))
+        kept.setdefault(tuple(np.round(xy[::-1], 2).ravel().tolist()), (k, True))
+    for k in comp:          # (a deck kept twice under two part keys: the first key's heights, its way round)
+        v = parts.get(k)
+        if k in out or v is None or len(v[1]) < 2:
+            continue
+        got = kept.get(tuple(np.round(np.asarray(v[1], np.float64)[:, :2], 2).ravel().tolist()))
+        if got is not None:
+            z = out[got[0]]
+            out[k] = z[::-1].copy() if got[1] else z.copy()
+    pins = []
+    h = hashlib.sha256()
+    for i in range(len(ameta)):
+        a, b = koff[nd + i], koff[nd + i + 1]
+        if b - a < 2:
+            continue
+        s = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(allxy[a:b], axis=0).T))]
+        d = np.minimum(s, s[-1] - s) if int(ameta[i][3]) == 2 and int(ameta[i][2]) >= 0 else s
+        f = np.clip((PIN_REACH_M - d) / (PIN_REACH_M - PIN_FULL_M), 0.0, 1.0)
+        w = f * f * (3.0 - 2.0 * f)
+        dz = zsol[a:b] - ztoday[a:b]
+        if not np.isfinite(dz).all() or float(np.abs(dz * w).max()) < PIN_MIN_DZ_M:
+            continue
+        nz = np.flatnonzero(w > 0.0)
+        last = min(b - a, int(nz.max()) + 2) if len(nz) else 0
+        if last < 2:
+            continue
+        pla = np.round(np.asarray(la[a:a + last], np.float64), 9)
+        plo = np.round(np.asarray(lo[a:a + last], np.float64), 9)
+        pdz = np.round(dz[:last], 4)
+        ph = np.round(np.asarray(htoday[a:a + last], np.float64), 4)
+        pw = np.round(w[:last], 4)
+        hw = round(min(PIN_HALF_MAX_M, float(halves[int(ameta[i][0])])), 3)
+        pins.append((pla, plo, pdz, ph, hw, pw))
+        for arr in (pla, plo, pdz, ph, pw, np.array([hw])):
+            h.update(np.ascontiguousarray(arr, np.float64).tobytes())
+    return {"deck_z": out, "pins": pins, "digest": h.hexdigest()[:16], "knots": back}
+
+
+def profile_built(store, comp, parts, ground, reqs):
+    """A whole chain's profile, BUILT (see above), solved here in the chain solve's own thread and scope: (record,
+    built), built None unless solved (profile_chain's "_built"). Counted in PROFILE_STATS; the record goes to
+    PROFILE_SINKS and (BNE_ROADSHAPE_DEBUG=1) beside the build as the shadow's does."""
+    import time
+    t0 = time.perf_counter()
+    rec = profile_chain(store, comp, parts, ground, reqs, False)
+    with _PLOCK:
+        PROFILE_STATS["total_s"] += time.perf_counter() - t0
+        if rec is None:
+            PROFILE_STATS["empty"] += 1
+        else:
+            PROFILE_STATS[rec["status"]] += 1
+            for k in ("solve_s", "members_s", "sample_s"):
+                PROFILE_STATS[k] += rec["timing"][k]
+    if rec is None:
+        return None, None
+    rec["complete"] = True          # (the chain's own scope decides: a chain read short is never kept)
+    rec["_frame"] = store.frame
+    for f in list(PROFILE_SINKS):
+        f(rec)
+    if DEBUG:
+        try:
+            _profile_write(rec)
+        except OSError:
+            pass
+    return rec, rec.get("_built")
+
+
+def pins_near(recs, la0, lo0, la1, lo1, pad_m):
+    """The pins [(lat, lon, dz)] of profile records' built outputs (an iterable of _built dicts) coming within pad_m of
+    the box (degrees), each once, sorted by content (the order every caller sees)."""
+    dla = pad_m / _M_PER_DEG_LAT
+    dlo = pad_m / (_M_PER_DEG_LON * max(0.05, dmath.cos(math.radians(max(abs(la0), abs(la1))))))
+    out = {}
+    for b in recs:
+        for p in (b or {}).get("pins", ()):
+            pla, plo = p[0], p[1]
+            if (pla.max() < la0 - dla or pla.min() > la1 + dla or plo.max() < lo0 - dlo or plo.min() > lo1 + dlo):
+                continue
+            k = (pla.tobytes(), plo.tobytes(), p[2].tobytes(), p[3].tobytes(), p[4], p[5].tobytes())
+            out.setdefault(k, p)
+    return [out[k] for k in sorted(out)]
+
+
 def profile_skipped(why):
     with _PLOCK:
         sk = PROFILE_STATS["skipped"]
@@ -910,7 +1029,8 @@ def _profile_write(rec):
         return
     d = os.path.join(revisit.CACHE_DIR, "debug", "roadshape_profile", f"f{PROFILE_FORMAT}")
     os.makedirs(d, exist_ok=True)
-    body = json.dumps({k: v for k, v in rec.items() if k != "timing"}, sort_keys=True, separators=(",", ":"))
+    body = json.dumps({k: v for k, v in rec.items() if k != "timing" and not k.startswith("_")}, sort_keys=True,
+                      separators=(",", ":"))
     name = hashlib.sha256(body.encode()).hexdigest()[:20] + ".json"
     tmp = os.path.join(d, name + f".{os.getpid()}.tmp")
     with open(tmp, "w") as f:
@@ -968,6 +1088,9 @@ def _cell_ground(store, key):
     import lanesections
     import roads as roadsmod
     feats = store.cell_fn(key)
+    if feats is None and PROFILE_BUILT:
+        import revisit
+        revisit.fault(here=True)        # (P3b: a profile without that cell's roads, built: not kept)
     if feats is None or not len(feats):
         return []
     rs = roadsmod.road_specs(feats)
@@ -1099,6 +1222,11 @@ def profile_chain(store, comp, parts, ground, reqs, short=False):
     t3 = time.perf_counter()
     la, lo, _ = store.frame.enu_to_geodetic(allxy[:, 0], allxy[:, 1], 0.0)
     status = _STATUS[int(report[0])] if 0 <= int(report[0]) < len(_STATUS) else "solver"
+    built = None
+    if status == "solved":
+        _a, _b, htoday = store.frame.enu_to_geodetic(allxy[:, 0], allxy[:, 1], kz_all)
+        built = _built(comp, parts, keys, decks, koff, nd, ameta, allxy, la, lo, np.asarray(zsol, np.float64), kz_all,
+                       np.asarray(htoday, np.float64), half)
     members = []
     for m in range(nm):
         a, b = koff[m], koff[m + 1]
@@ -1119,4 +1247,5 @@ def profile_chain(store, comp, parts, ground, reqs, short=False):
     return {"format": PROFILE_FORMAT, "chain": str(min(comp)), "status": status, "short": bool(short),
             "report": [round(float(v), 4) for v in report], "joins": [jn[i:i + 5] for i in range(0, len(jn), 5)],
             "pins": [pins[i:i + 3] for i in range(0, len(pins), 3)], "floors": len(floors) // 4,
-            "members": members, "timing": {"members_s": t1 - t0, "sample_s": t2 - t1, "solve_s": t3 - t2}}
+            "members": members, "timing": {"members_s": t1 - t0, "sample_s": t2 - t1, "solve_s": t3 - t2},
+            "_built": built}
