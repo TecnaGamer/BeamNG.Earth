@@ -756,6 +756,12 @@ FAST_GAP_MAX_M = 15.0       # m filled at most
 FAST_GAP_FAR_M = 60.0       # m of ground read back from the deck's end for the road's grade ...
 FAST_GAP_LOW_M = 0.5        # ... without what lies this far under it (the elevation's opening)
 FAST_GAP_FITS = 4
+# ... and only from a road's grade: a stretch climbing toward the bridge more steeply than ABUT_FILL_MAX_GRADE is a
+# slope the map line runs up, not a grade to keep (a ramp up a cut's side onto a junction on Cumberland Boulevard's
+# bridge at the Cobb Cloverleaf, Atlanta: its 27 % run extended over the junction's level last 14 m stood its end 4.6 m
+# over the ground, the junction's decks humped 2-4 m on it, 2026-11-19). BNE_ABUT_FILL_MAX_GRADE=off: any grade.
+_afg = os.environ.get("BNE_ABUT_FILL_MAX_GRADE", "0.12")
+ABUT_FILL_MAX_GRADE = None if _afg == "off" else float(_afg)
 # A track crossing a road at grade (or running along the street, Fells Point's Thames Street) has its bed flushed RAIL_TOP_M
 # (~0.55 m) under the road's surface (railways._flush), and the bed's plan, whose ballast top never gives way, pulled the
 # road's own ground down toward it: a 0.3-0.7 m pothole across the road at every level crossing, a 30 cm step along
@@ -801,6 +807,19 @@ SEAM_MATCH_MAX_M = 4.0      # ... at most this each (bad data: rather a steep de
 # own ground) to what the deck reaches, eased out along it at SEAM_GRADE like _pin_cw_ends.
 SPAN_ENDS_ON = os.environ.get("BNE_SPAN_ENDS", "on") != "off"
 SPAN_ENDS_TOL_M = 0.3       # m more than the deck's climb left as it is
+# An abutment's lift counts the roads under every part of its bridge chain (bridge_chain), but not past a joint on the
+# ground: a junction on a bridge's end fill whose turning paths the map tags bridge (Cumberland Boulevard over I-75 at
+# the Cobb Cloverleaf, Atlanta, 33.8815 N 84.4528 W: the ramp's 4 m piece into it was raised 4.6 m to clear I-75 30 m
+# on under Cumberland's own deck, the junction's pieces then humped 2-4 m and stepped 1.5-2 m, 20-30 g with the lidar
+# decks, the user's report 2026-11-19). A joint is on the ground where the elevation there (its mapped decks' bridges
+# taken out, _elev_decked) stands within CHAIN_GROUND_TOL_M of the abutment's own and falls no more than
+# CHAIN_GROUND_DROP_M along each part within CHAIN_GROUND_REACH_M of it: a pier joint over a valley or a road stands
+# lower. BNE_CHAIN_GROUND=off: the whole chain as before.
+CHAIN_GROUND_ON = os.environ.get("BNE_CHAIN_GROUND", "on") != "off"
+CHAIN_GROUND_TOL_M = 1.0
+CHAIN_GROUND_DROP_M = 0.6
+CHAIN_GROUND_REACH_M = 4.0
+CHAIN_JOIN_M = 0.75         # m: part ends this close are one joint (bridge_chain's)
 SPAN_ENDS_MAX_M = 120.0     # m: single spans this long at most (UNDER_MAX_BRIDGE_M's)
 SPAN_ENDS_MIN_M = 1.0       # m past the deck's reach before an approach is lowered (a wall, not a seam)
 SPAN_ENDS_LIFTED_M = 1.0    # m an approach end stands over its raw ground before it counts as raised (APPROACH_*)
@@ -6989,6 +7008,9 @@ class _Planner:
         lo_b, hi_b = bridge.min(0) - APPROACH_MAX_RUN - 50.0, bridge.max(0) + APPROACH_MAX_RUN + 50.0
         ground, others, approaches = [], [], []
         chain = bridge_chain(bridge, bridges)
+        if CHAIN_GROUND_ON and chain:
+            chain = chain_off_ground(bridge, chain, xy, lambda p: np.asarray(
+                self.elev(*self.frame.enu_to_geodetic(p[:, 0], p[:, 1], 0.0)[:2]), np.float64))
         spans = [bridge] + chain        # (a road under any part of the chain is spanned, not beside the ramp: #138)
         if sol is not None:
             # (and under the decks beside it: a dual carriageway's other deck over the same road. The street passing
@@ -8955,6 +8977,47 @@ def _f64_lines(lines):
             np.asarray(b, np.float64).reshape(len(b), -1) for b in lines]
 
 
+def chain_off_ground(line, chain, end, z_at):
+    """The parts of chain (bridge_chain(line, ...)) reached from line through joints not on the ground (CHAIN_GROUND_*),
+    for the abutment of line at end (xy). z_at(xy (n, 2)) -> the elevation. Pure given z_at."""
+    parts = [np.asarray(line, np.float64)[:, :2]] + [np.asarray(c, np.float64)[:, :2] for c in chain]
+    ends = np.array([[p[0], p[-1]] for p in parts], np.float64)          # (n, 2 ends, 2)
+    z_end = float(np.asarray(z_at(np.asarray(end, np.float64)[None, :2]), np.float64)[0])
+    memo = {}
+
+    def grounded(pt):
+        k = (round(float(pt[0]), 1), round(float(pt[1]), 1))
+        if k in memo:
+            return memo[k]
+        at = []
+        for p in parts:
+            for q in (p, p[::-1]):
+                if dnp.hypot(*(q[0] - pt)) <= CHAIN_JOIN_M:
+                    s = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(q, axis=0).T))]
+                    t = np.arange(0.0, min(CHAIN_GROUND_REACH_M, float(s[-1])) + 1e-9, 1.0)
+                    at.append(np.c_[np.interp(t, s, q[:, 0]), np.interp(t, s, q[:, 1])])
+        z = np.asarray(z_at(np.concatenate([np.asarray(pt, np.float64)[None]] + at)), np.float64)
+        ok = bool(np.isfinite(z).all() and z[0] >= z_end - CHAIN_GROUND_TOL_M
+                  and float(z[1:].min() if len(z) > 1 else z[0]) >= z[0] - CHAIN_GROUND_DROP_M)
+        memo[k] = ok
+        return ok
+
+    seen, todo = {0}, [0]
+    while todo:
+        i = todo.pop()
+        for e in (0, 1):
+            pt = ends[i, e]
+            if i == 0 and dnp.hypot(*(pt - np.asarray(end, np.float64)[:2])) <= CHAIN_JOIN_M:
+                continue                    # (the abutment itself)
+            near = [j for j in range(len(parts)) if j not in seen
+                    and min(dnp.hypot(*(ends[j, 0] - pt)), dnp.hypot(*(ends[j, 1] - pt))) <= CHAIN_JOIN_M]
+            if near and not grounded(pt):
+                for j in near:
+                    seen.add(j)
+                    todo.append(j)
+    return [chain[j - 1] for j in sorted(seen) if j > 0]
+
+
 def bridge_chain_ends_free(line, all_bridges, xy):
     """Whether the end of bridge line nearest xy is an abutment: no other bridge part ends within 0.75 m. Pure."""
     import fast
@@ -9458,6 +9521,8 @@ def fill_abutment(z, at_end, step=PROFILE_STEP):
     if far.sum() < 4:
         return z
     b, a = dnp.polyfit(d[far], p[far], 1)
+    if ABUT_FILL_MAX_GRADE is not None and -b > ABUT_FILL_MAX_GRADE:
+        return z                        # (climbing toward the bridge that steeply: a slope, not a road's grade)
     n = int((d < ABUT_NEAR_M).sum())
     e = a + b * d[:n]
     if e[0] - p[0] < ABUT_MIN_M or (np.diff(p[:n + 1]) / step - b).max() < ABUT_STEEP:
