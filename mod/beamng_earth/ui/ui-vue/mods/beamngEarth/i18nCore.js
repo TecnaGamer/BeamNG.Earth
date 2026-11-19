@@ -7,11 +7,29 @@ export function normalizeLocale(tag) {
   return tag.trim().replace(/_/g, "-").toLowerCase()
 }
 
+export function localeRegistry(input) {
+  const manifest = { en: { name: "English", direction: "ltr" } }
+  const seen = new Set()
+  for (const [tag, meta] of Object.entries(input ?? {})) {
+    const normalized = normalizeLocale(tag)
+    if (!normalized || normalized !== tag.toLowerCase() || seen.has(normalized)
+      || (normalized === "en" && tag !== "en")
+      || typeof meta?.name !== "string" || !meta.name.trim()) continue
+    seen.add(normalized)
+    manifest[tag] = {
+      name: meta.name,
+      direction: meta.direction === "rtl" ? "rtl" : "ltr",
+      aliases: Array.isArray(meta.aliases) ? meta.aliases.filter(normalizeLocale) : [],
+    }
+  }
+  return manifest
+}
+
 export function localeChain(tag, manifest) {
   const index = new Map()
   for (const [locale, meta] of Object.entries(manifest)) index.set(normalizeLocale(locale), locale)
   for (const [locale, meta] of Object.entries(manifest)) {
-    for (const alias of meta.aliases || []) {
+    for (const alias of meta.aliases ?? []) {
       const normalized = normalizeLocale(alias)
       if (normalized && !index.has(normalized)) index.set(normalized, locale)
     }
@@ -78,6 +96,8 @@ export function createTranslator(manifest, english) {
     }
     if (locale === "en") base = valid
     messages.set(locale, valid)
+    return entries !== null && typeof entries === "object" && !Array.isArray(entries)
+      && (locale !== "en" || Object.keys(valid).length > 0)
   }
 
   function select(tag) {
@@ -88,10 +108,11 @@ export function createTranslator(manifest, english) {
 
   function number(value, digits, locale = chain[0]) {
     if (typeof value !== "number" || !Number.isFinite(value)) return ""
-    const key = locale + "/" + (digits ?? "")
+    const precision = Number.isInteger(digits) && digits >= 0 && digits <= 20 ? digits : undefined
+    const key = locale + "/" + (precision ?? "")
     if (!numbers.has(key)) {
-      const options = Number.isInteger(digits) && digits >= 0 && digits <= 20
-        ? { minimumFractionDigits: digits, maximumFractionDigits: digits }
+      const options = precision !== undefined
+        ? { minimumFractionDigits: precision, maximumFractionDigits: precision }
         : undefined
       try { numbers.set(key, new Intl.NumberFormat(locale, options)) }
       catch { numbers.set(key, null) }
@@ -100,6 +121,7 @@ export function createTranslator(manifest, english) {
   }
 
   function date(value) {
+    if ((typeof value !== "string" && typeof value !== "number" && !(value instanceof Date)) || value === "") return ""
     const timestamp = new Date(value)
     if (!Number.isFinite(timestamp.getTime())) return ""
     const locale = chain[0]
@@ -119,6 +141,10 @@ export function createTranslator(manifest, english) {
   }
 
   function t(key, params) {
+    if (typeof key !== "string") {
+      issue("Invalid translation key")
+      return "—"
+    }
     for (const locale of chain) {
       const message = messages.get(locale)?.[key]
       if (message === undefined) continue
@@ -151,6 +177,6 @@ export function createTranslator(manifest, english) {
       missing, fallbacks: [...fallbackKeys].sort(), issues: [...issues].sort() }
   }
 
-  load("en", english)
+  if (english !== undefined) load("en", english)
   return { t, load, select, number, date, report, issue, active: () => chain[0], enableDiagnostics() { debug = true } }
 }

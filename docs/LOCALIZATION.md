@@ -26,6 +26,8 @@ Labels in the host game's HUD app library and input binding screen have their ow
 
 The sequence is regional locale, progressively less specific locales, and English. Locale matching accepts the hyphens and underscores used by the UI, with case-insensitive matching. Invalid text or incompatible placeholders fall through to the next catalog. Vue uses the selected language for display numbers and dates, with the source message's language for numbers embedded in a fallback message. Place names, coordinates, configuration keys, action IDs and values on the wire are separate from the messages. Game display settings still select the available metric or imperial units. Catalog metadata sets text direction at feature roots. A future RTL translation needs layout and input testing.
 
+The UI shares in-flight catalog reads and caches successful results for the mounted mod. A timed-out or invalid response can be retried on the next locale selection after a short cooldown. If English is temporarily unavailable, localizable labels show a placeholder until English is readable again. Remounting reads the catalog from the current copy of the mod.
+
 ## Add a message
 
 Add an English sentence or label with a stable key that describes its purpose. In Vue import `t` from `./i18n.js`. Bind the output as text or an ordinary text attribute. Leave input values and preference IDs as their existing values. In Lua use `require('beamngEarth/i18n').t(key, params)`. The launcher uses `localization.t(key, **params)` for its `launcher.*` messages.

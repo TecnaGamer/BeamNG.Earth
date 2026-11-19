@@ -94,8 +94,12 @@ def report(directory=CATALOGS, required=()):
     manifest = read_object(directory / "catalogs.json", issues)
     if "en" not in manifest:
         issues.append("catalogs.json: English (en) must be registered")
-    seen = {tag.lower() for tag in manifest}
+    names = {tag.lower() for tag in manifest}
+    seen = set()
     for tag, meta in manifest.items():
+        if tag.lower() in seen:
+            issues.append(f"duplicate locale registration: {tag}")
+        seen.add(tag.lower())
         if not TAG.fullmatch(tag) or not isinstance(meta, dict):
             issues.append(f"invalid locale registration: {tag}")
             continue
@@ -106,10 +110,10 @@ def report(directory=CATALOGS, required=()):
             issues.append(f"{tag}: aliases must be a list")
             continue
         for alias in aliases:
-            if not isinstance(alias, str) or not TAG.fullmatch(alias) or alias.lower() in seen:
+            if not isinstance(alias, str) or not TAG.fullmatch(alias) or alias.lower() in names:
                 issues.append(f"{tag}: invalid or duplicate alias: {alias!r}")
             else:
-                seen.add(alias.lower())
+                names.add(alias.lower())
     registered = {tag for tag in manifest if TAG.fullmatch(tag)} | {"en"}
     files = {path.stem for path in directory.glob("*.json")} - {"catalogs"}
     for tag in sorted(files - registered):

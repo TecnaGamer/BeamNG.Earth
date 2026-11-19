@@ -172,7 +172,7 @@ const props = defineProps({
 
 const category = computed(() => categoryNamed(props.page))
 const rows = computed(() => visibleItems(category.value))
-const localeChoices = computed(() => [{ value: "auto", label: t("settings.language.automatic") }, ...languageOptions])
+const localeChoices = computed(() => [{ value: "auto", label: t("settings.language.automatic") }, ...languageOptions.value])
 const languageOptionConfig = { value: option => option.value, label: option => option.label }
 
 function setHelp(item) { help.value = item }

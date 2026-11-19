@@ -2,6 +2,7 @@
 
 import json
 import locale
+import math
 import os
 from pathlib import Path
 import re
@@ -23,7 +24,7 @@ def _read(path):
 def _tag(value):
     if not isinstance(value, str):
         return ""
-    value = value.split(".", 1)[0].split("@", 1)[0].replace("_", "-").lower()
+    value = value.strip().split(".", 1)[0].split("@", 1)[0].replace("_", "-").lower()
     return value if re.fullmatch(r"[a-z]{2,3}(?:-[a-z0-9]{2,8})*", value) else ""
 
 
@@ -33,10 +34,19 @@ def _system_locale():
             return os.environ[name]
     if os.name == "nt":
         import ctypes
-        buffer = ctypes.create_unicode_buffer(85)
-        if ctypes.windll.kernel32.GetUserDefaultLocaleName(buffer, len(buffer)):
-            return buffer.value
-    return locale.getlocale()[0]
+        try:
+            kernel = ctypes.windll.kernel32
+            if language := locale.windows_locale.get(kernel.GetUserDefaultUILanguage()):
+                return language
+            buffer = ctypes.create_unicode_buffer(85)
+            if kernel.GetUserDefaultLocaleName(buffer, len(buffer)):
+                return buffer.value
+        except (AttributeError, OSError, ValueError):
+            pass
+    try:
+        return locale.getlocale()[0]
+    except ValueError:
+        return None
 
 
 def _parameters(value):
@@ -74,11 +84,13 @@ class Translator:
                                        _parameters(catalog.get(key)) == signature), text)
 
     def t(self, key, **params):
-        value = self.messages.get(key, "—")
+        value = self.messages.get(key, "—") if isinstance(key, str) else "—"
 
         def substitute(match):
             value = params.get(match[1])
-            return str(value) if isinstance(value, (str, int, float)) else "—"
+            if type(value) in (str, int) or (type(value) is float and math.isfinite(value)):
+                return str(value)
+            return "—"
 
         return _PLACEHOLDER.sub(substitute, value)
 

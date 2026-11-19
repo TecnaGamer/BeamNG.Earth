@@ -284,11 +284,15 @@ async function loadUi(run) {
   }
 }
 
-async function unloadUi(run) {
-  check(run)
+function stopLocalizationWatchers() {
   stopLocaleLabels?.()
   stopLocalization?.()
   stopLocaleLabels = stopLocalization = null
+}
+
+async function unloadUi(run) {
+  check(run)
+  stopLocalizationWatchers()
   try { serversTab?.stop() } catch (e) { /* never started */ }
   serversTab = null
   try { menuTile?.stopTile() } catch (e) { /* never started */ }
@@ -321,6 +325,8 @@ export function onLoad() {
     // Retire the old browser before any awaited setup: a replacement that times out must not leave it alive.
     const previousBrowser = window[Symbol.for("beamngEarth.servers")]
     if (typeof previousBrowser === "function") previousBrowser()
+    lifecycle.stopLocalizationWatchers?.()
+    lifecycle.stopLocalizationWatchers = stopLocalizationWatchers
     lifecycle.owner = owner
     await loadUi(run)
   })
@@ -330,6 +336,7 @@ export function onUnload() {
   return enqueue("unload", async (lifecycle, run) => {
     if (lifecycle.owner !== owner) return
     lifecycle.owner = null
+    lifecycle.stopLocalizationWatchers = null
     await unloadUi(run)
   })
 }

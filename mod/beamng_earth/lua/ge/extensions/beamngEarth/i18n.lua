@@ -3,6 +3,7 @@ local M = { revision = 0 }
 local root = '/ui/ui-vue/mods/beamngEarth/locales/'
 local settingsPath = '/settings/beamngEarth-language.json'
 local catalogs, chain, manifest, choice, game = {}, {'en'}, nil, 'auto', ''
+local retryAt, validated = {}, {}
 local diagnostics, issues = false, {}
 local initialized = false
 
@@ -19,11 +20,33 @@ local function read(path)
 end
 
 local function normalize(tag)
-  return type(tag) == 'string' and tag:match('^%s*([a-zA-Z][a-zA-Z][a-zA-Z0-9_%-]*)%s*$')
-    and tag:match('^%s*(.-)%s*$'):lower():gsub('_', '-') or ''
+  if type(tag) ~= 'string' then return '' end
+  local value = tag:match('^%s*(.-)%s*$'):lower():gsub('_', '-')
+  local language, rest = value:match('^([a-z][a-z][a-z]?)(.*)$')
+  if not language then return '' end
+  while rest ~= '' do
+    local part, remaining = rest:match('^%-([a-z0-9]+)(.*)$')
+    if not part or #part < 2 or #part > 8 then return '' end
+    rest = remaining
+  end
+  return value
+end
+
+local function registry()
+  local manifest = {en = {}}
+  local seen = {en = true}
+  for tag, meta in pairs(read(root .. 'catalogs.json') or {}) do
+    local key = normalize(tag)
+    if key ~= '' and key == tag:lower() and (not seen[key] or tag == 'en')
+      and type(meta) == 'table' and type(meta.name) == 'string' and meta.name:find('%S') then
+      manifest[tag], seen[key] = meta, true
+    end
+  end
+  return manifest
 end
 
 local function refresh()
+  local now = os.time()
   local tags, seen = {}, {}
   for tag in pairs(manifest) do tags[normalize(tag)] = tag end
   for tag, meta in pairs(manifest) do
@@ -38,10 +61,15 @@ local function refresh()
     if not tag or seen[tag] then return end
     seen[tag] = true
     chain[#chain + 1] = tag
-    if not catalogs[tag] then
+    if not catalogs[tag] and now >= (retryAt[tag] or 0) then
       local catalog = read(root .. tag .. '.json')
-      if not catalog then issue('Could not read catalog: ' .. tag) end
-      catalogs[tag] = catalog or {}
+      if catalog and (tag ~= 'en' or next(catalog)) then
+        catalogs[tag], retryAt[tag] = catalog, nil
+        if tag == 'en' then validated = {} end
+      else
+        retryAt[tag] = now + 3
+        issue('Could not read catalog: ' .. tag)
+      end
     end
   end
   local tag = normalize(choice == 'auto' and game or choice)
@@ -64,7 +92,7 @@ end
 local function init()
   if initialized then return end
   initialized = true
-  manifest = read(root .. 'catalogs.json') or {en = {}}
+  manifest = registry()
   local data = read(settingsPath)
   choice = data and manifest[data.language] and data.language or 'auto'
   game = gameLanguage()
@@ -84,7 +112,10 @@ end
 function M.setPreference(tag)
   init()
   if type(tag) ~= 'string' or (tag ~= 'auto' and not manifest[tag]) or not jsonWriteFile then return false end
-  if tag == choice then return true end
+  if tag == choice then
+    refresh()
+    return true
+  end
   local ok, saved = pcall(jsonWriteFile, settingsPath, {language = tag}, true, nil, true)
   if not ok or not saved then return false end
   choice = tag
@@ -95,9 +126,9 @@ end
 function M.gameLanguageChanged()
   if not initialized then return end
   local nextGame = gameLanguage()
-  if nextGame == game then return end
+  local changed = nextGame ~= game
   game = nextGame
-  if choice == 'auto' then refresh() end
+  if (changed and choice == 'auto') or next(retryAt) then refresh() end
 end
 
 local function signature(value)
@@ -112,7 +143,6 @@ local function signature(value)
   return table.concat(names, ',')
 end
 
-local validated = {}
 -- Cardinal rules for the languages with plural messages on the Lua side.
 local function plural(tag, count)
   if type(count) ~= 'number' or count ~= count or math.abs(count) == math.huge then return 'other' end
@@ -142,9 +172,10 @@ function M.t(key, params, emergency)
     return emergency or '—'
   end
   init()
-  local english = catalogs.en[key]
+  local english = catalogs.en and catalogs.en[key]
   for _, tag in ipairs(chain) do
-    local template = catalogs[tag][key]
+    local catalog = catalogs[tag]
+    local template = catalog and catalog[key]
     if template ~= nil then
       local checkKey = tag .. '/' .. key
       local valid = validated[checkKey]

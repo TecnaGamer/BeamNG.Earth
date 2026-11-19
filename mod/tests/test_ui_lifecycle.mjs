@@ -37,16 +37,20 @@ function world({ replies = {}, files = {} } = {}) {
   const imports = []
   const servers = { started: 0, stopped: 0 }
   const paste = { installed: 0, removed: 0 }
+  const localization = { started: 0, stopped: 0, watched: 0, unwatched: 0 }
   const modules = {
     "./earthSettingsStore.js": () => ok({ settingsSchema: [{ name: "General" }], pageId: (n, i) => `beamngEarth-${i}`,
                                           PAGE_ICONS: {}, pageLabel: page => page.name,
-                                          startLocalization: () => () => {}, readyLocalization: () => ok(), watchLocale: () => () => {} }),
+                                          startLocalization() { localization.started++; return () => localization.stopped++ },
+                                          readyLocalization: () => ok(),
+                                          watchLocale() { localization.watched++; return () => localization.unwatched++ } }),
     "./paste.js": () => ok({ installPaste() { paste.installed += 1 }, removePaste() { paste.removed += 1 } }),
     "./EarthMap.vue": () => ok({ default: {} }),
     "./EarthWelcome.vue": () => ok({ default: {} }),
     "./EarthSettings.vue": () => ok({ default: {} }),
     "./EarthMap3d.vue": () => ok({ default: {} }),
     "./earthServers.js": () => ok({ start() { servers.started += 1 }, stop() { servers.stopped += 1 } }),
+    "./mainMenuTile.js": () => ok({ startTile() {}, stopTile() {} }),
     ...files,
   }
   const ext = name => new Proxy({}, { get: (_, fn) => (...args) => {
@@ -62,7 +66,7 @@ function world({ replies = {}, files = {} } = {}) {
     lua: { extensions: new Proxy({}, { get: (_, name) => ext(String(name)) }) },
     imp: path => { imports.push(path); return (modules[path] || (() => missing(path)))() },
   }
-  return { calls, imports, servers, paste }
+  return { calls, imports, servers, paste, localization }
 }
 
 async function timed(promise) {
@@ -89,7 +93,21 @@ if (run(1)) {
   assert.ok(w.calls.includes("ui_router_routeManager.unregisterModRoutes"), "map routes removed")
   assert.equal(w.servers.stopped, 1, "servers tab stopped")
   assert.equal(w.paste.removed, 1, "paste removed")
+  assert.deepEqual(w.localization, { started: 1, stopped: 1, watched: 1, unwatched: 1 })
   assert.equal(w.imports.length, before, "unloading imports nothing (its files may be unmounted)")
+}
+
+// A newly evaluated copy can load before the game calls the previous copy's onUnload.
+if (run(12)) {
+  const w = world()
+  const a = await evaluatedCopy()
+  const b = await evaluatedCopy()
+  await a.onLoad()
+  await b.onLoad()
+  await a.onUnload()
+  assert.deepEqual(w.localization, { started: 2, stopped: 1, watched: 2, unwatched: 1 })
+  await b.onUnload()
+  assert.deepEqual(w.localization, { started: 2, stopped: 2, watched: 2, unwatched: 2 })
 }
 
 // 2. the loader's reload (UiModsChanged) while our load waits on a Lua reply that never comes: the unload of the same

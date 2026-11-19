@@ -4,11 +4,11 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
-from localization import Translator, configure
+from localization import Translator, configure, _system_locale
 from apppaths import ask_path
 
 spec = importlib.util.spec_from_file_location("check_locales", ROOT / "tools/check_locales.py")
@@ -32,6 +32,30 @@ class LocalizationTests(unittest.TestCase):
         self.assertEqual(ask_path("Wybierz folder", "folder", accept, ask=ask), user_path)
         self.assertIn("Możesz też wpisać lub wkleić ścieżkę", ask.call_args.args[0])
         accept.assert_called_once_with(user_path)
+
+    def test_launcher_rejects_non_finite_and_non_string_arguments(self):
+        translator = Translator(" pl-PL ")
+        self.assertEqual(translator.t("launcher.update.downloaded", version=float("nan")), "Pobrano BeamNG.Earth —")
+        self.assertEqual(translator.t("launcher.update.downloaded", version=True), "Pobrano BeamNG.Earth —")
+        self.assertEqual(translator.t([]), "—")
+
+    def test_windows_prefers_the_display_language(self):
+        kernel = Mock()
+        kernel.GetUserDefaultUILanguage.return_value = 0x0415
+        with patch.dict("os.environ", clear=True), patch("localization.os.name", "nt"), \
+                patch("ctypes.windll", Mock(kernel32=kernel), create=True):
+            self.assertEqual(Translator(_system_locale()).language, "pl-PL")
+        kernel.GetUserDefaultLocaleName.assert_not_called()
+
+    def test_duplicate_locale_registrations_are_reported(self):
+        with tempfile.TemporaryDirectory() as target:
+            root = Path(target)
+            (root / "catalogs.json").write_text(json.dumps({
+                "en": {"name": "English", "direction": "ltr"},
+                "EN": {"name": "Duplicate", "direction": "ltr"},
+            }), encoding="utf8")
+            (root / "en.json").write_text('{"launcher.test": "Hello"}', encoding="utf8")
+            self.assertTrue(any("duplicate locale registration" in issue for issue in check_locales.report(root)["issues"]))
 
     def test_damaged_catalog_falls_back_and_validator_reports_it(self):
         with tempfile.TemporaryDirectory() as target:

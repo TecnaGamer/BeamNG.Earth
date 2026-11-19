@@ -65,47 +65,178 @@ test("all bundled Polish messages load without fallback", () => {
   assert.equal(ui.report().coverage, 1)
 })
 
-test("separately evaluated UI modules share a preference and a bounded catalog load", async () => {
+let runtimeId = 0
+
+function deferred() {
+  let resolve
+  const promise = new Promise(done => { resolve = done })
+  return { promise, resolve }
+}
+
+function runtime(t, { fetchCatalog, bridge, catalogsManifest = manifest } = {}) {
   const descriptor = new URL("../beamng_earth/ui/ui-vue/mods/beamngEarth/i18n.js", import.meta.url)
+  const vue = "data:text/javascript,export const ref=x=>({value:x});export const computed=f=>({get value(){return f()}});export const watch=()=>()=>{}"
   const raw = readFileSync(descriptor, "utf-8")
-  const source = raw.replace('from "vue"', 'from "data:text/javascript,export const ref=x=>({value:x});export const computed=f=>({get value(){return f()}});export const watch=()=>()=>{}"')
+  const source = raw.replace('from "vue"', 'from "' + vue + '"')
     .replace(/import \{ useSettings \}[^\n]+/, 'const useSettings = () => ({values:{}})')
     .replace('"./i18nCore.js"', JSON.stringify(new URL("./i18nCore.js", descriptor).href))
-    .replace(/import manifest[^\n]+/, 'const manifest = ' + JSON.stringify(manifest))
+    .replace(/import catalogManifest[^\n]+/, 'const catalogManifest = ' + JSON.stringify(catalogsManifest))
     .replace('fetch(ROOT', 'globalThis.__earthFetch(ROOT')
+    .replaceAll("performance.now()", "globalThis.__earthNow()")
+    .replace("LOAD_TIMEOUT_MS = 1800", "LOAD_TIMEOUT_MS = 40")
   const symbol = Symbol.for("beamngEarth.localization")
   const originalWindow = globalThis.window
   const requested = []
   const writes = []
-  globalThis.__earthFetch = async url => {
-    requested.push(url.split("/").at(-1))
-    return { ok: true, json: async () => url.endsWith("/en.json") ? en : pl }
+  let now = 0
+  globalThis.__earthNow = () => now
+  globalThis.__earthFetch = (url, options) => {
+    const locale = url.split("/").at(-1).slice(0, -5)
+    requested.push(locale)
+    return fetchCatalog ? fetchCatalog(locale, options) : response(locale === "en" ? en : pl)
   }
   globalThis.window = { bngApi: { engineLua(command, callback) {
     writes.push(command)
-    callback(true)
+    if (bridge) bridge(command, callback)
+    else callback(true)
   } } }
-  try {
-    const first = await import("data:text/javascript," + encodeURIComponent(source))
-    const second = await import("data:text/javascript," + encodeURIComponent(source + "\n// separately evaluated"))
-    assert.equal(first.preference, second.preference)
-    await first.readyLocalization()
-    assert.equal(second.t("settings.language.label"), "Interface language")
-    await first.setGameLocale("pl_PL")
-    assert.equal(second.t("settings.language.label"), "Język interfejsu")
-    await second.chooseLanguage("en")
-    assert.equal(first.preference.value, "en")
-    assert.equal(first.t("settings.language.label"), "Interface language")
-    await Promise.all([first.chooseLanguage("pl-PL"), second.chooseLanguage("auto")])
-    assert.match(writes[0], /"en"/)
-    assert.match(writes[1], /"pl-PL"/)
-    assert.match(writes[2], /"auto"/)
-    assert.deepEqual(requested, ["en.json", "pl-PL.json"])
-    assert.equal(second.preference.value, "auto")
-    assert.equal(first.t("settings.language.label"), "Język interfejsu")
-  } finally {
+  t.after(() => {
     delete globalThis[symbol]
     delete globalThis.__earthFetch
+    delete globalThis.__earthNow
     globalThis.window = originalWindow
+  })
+  return {
+    copy: () => import("data:text/javascript," + encodeURIComponent(source + "\n// runtime " + ++runtimeId)),
+    advance: () => { now += 2501 }, requested, writes,
   }
+}
+
+const response = entries => ({ ok: true, json: async () => entries })
+
+test("separately evaluated UI modules share the preference and one request per catalog", async t => {
+  const host = runtime(t)
+  const first = await host.copy()
+  const second = await host.copy()
+  assert.equal(first.preference, second.preference)
+  await Promise.all([first.readyLocalization(), second.readyLocalization()])
+  assert.equal(second.t("settings.language.label"), "Interface language")
+  await Promise.all([first.setGameLocale("pl_PL"), second.setGameLocale("pl_PL")])
+  assert.equal(second.t("settings.language.label"), "Język interfejsu")
+  await second.chooseLanguage("en")
+  assert.equal(first.preference.value, "en")
+  assert.equal(first.t("settings.language.label"), "Interface language")
+  await Promise.all([first.chooseLanguage("pl-PL"), second.chooseLanguage("auto")])
+  assert.match(host.writes[0], /"en"/)
+  assert.match(host.writes[1], /"pl-PL"/)
+  assert.match(host.writes[2], /"auto"/)
+  assert.deepEqual(host.requested, ["en", "pl-PL"])
+  assert.equal(second.preference.value, "auto")
+  assert.equal(first.t("settings.language.label"), "Język interfejsu")
+})
+
+for (const [label, failure, diagnostic] of [
+  ["HTTP error", () => ({ ok: false, status: 503 }), /HTTP 503/],
+  ["malformed JSON", () => ({ ok: true, json: async () => { throw new SyntaxError("invalid JSON") } }), /invalid JSON/],
+  ["invalid root", () => response([]), /invalid catalog/],
+]) {
+  test(`${label} falls back, deduplicates retries and recovers`, async t => {
+    let recover = false
+    const host = runtime(t, { fetchCatalog: locale => locale === "en" ? response(en) : recover ? response(pl) : failure() })
+    const ui = await host.copy()
+    await Promise.all([ui.setGameLocale("pl_PL"), ui.setGameLocale("pl_PL")])
+    assert.equal(ui.t("settings.language.label"), "Interface language")
+    assert.match(ui.localizationReport().issues.join("\n"), diagnostic)
+    recover = true
+    await ui.setGameLocale("pl_PL")
+    assert.deepEqual(host.requested, ["en", "pl-PL"])
+    host.advance()
+    await Promise.all([ui.setGameLocale("pl_PL"), ui.setGameLocale("pl_PL")])
+    assert.deepEqual(host.requested, ["en", "pl-PL", "pl-PL"])
+    assert.equal(ui.t("settings.language.label"), "Język interfejsu")
+  })
+}
+
+test("a hung request aborts at the deadline and a late body cannot replace a healthy retry", async t => {
+  const body = deferred()
+  let signal
+  let recover = false
+  const host = runtime(t, { fetchCatalog: (locale, options) => {
+    if (locale === "en") return response(en)
+    if (recover) return response(pl)
+    signal = options.signal
+    return { ok: true, json: () => body.promise }
+  } })
+  const ui = await host.copy()
+  await ui.setGameLocale("pl_PL")
+  assert.equal(signal.aborted, true)
+  assert.equal(ui.t("settings.language.label"), "Interface language")
+  assert.match(ui.localizationReport().issues.join("\n"), /timed out/)
+  recover = true
+  host.advance()
+  await ui.setGameLocale("pl_PL")
+  body.resolve({ "settings.language.label": "Stara etykieta" })
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(ui.t("settings.language.label"), "Język interfejsu")
+})
+
+test("English failure leaves a safe placeholder and recovers both English and the requested language", async t => {
+  let recover = false
+  const host = runtime(t, { fetchCatalog: locale => locale === "en" ? response(recover ? en : {}) : response(pl) })
+  const ui = await host.copy()
+  await ui.setGameLocale("pl_PL")
+  assert.equal(ui.t("settings.language.label"), "—")
+  assert.deepEqual(host.requested, ["en"])
+  assert.match(ui.localizationReport().issues.join("\n"), /invalid catalog/)
+  recover = true
+  await ui.setGameLocale("pl_PL")
+  assert.deepEqual(host.requested, ["en"])
+  host.advance()
+  await ui.setGameLocale("pl_PL")
+  assert.deepEqual(host.requested, ["en", "en", "pl-PL"])
+  assert.equal(ui.t("settings.language.label"), "Język interfejsu")
+  await ui.chooseLanguage("en")
+  assert.equal(ui.t("settings.language.label"), "Interface language")
+})
+
+test("an English selection overtakes a pending Polish fetch without reordering persistence", async t => {
+  const polishRequested = deferred()
+  const polishResponse = deferred()
+  const host = runtime(t, { fetchCatalog: locale => {
+    if (locale === "en") return response(en)
+    polishRequested.resolve()
+    return polishResponse.promise
+  } })
+  const ui = await host.copy()
+  const polish = ui.chooseLanguage("pl-PL")
+  await polishRequested.promise
+  await ui.chooseLanguage("en")
+  assert.equal(host.writes.length, 2)
+  assert.equal(ui.preference.value, "en")
+  polishResponse.resolve(response(pl))
+  await polish
+  assert.equal(ui.t("settings.language.label"), "Interface language")
+  assert.equal(ui.localizationReport().active, "en")
+})
+
+test("remount refreshes catalog contents shared by existing components and ignores a stale preference reply", async t => {
+  const replies = []
+  let current = en
+  const host = runtime(t, {
+    fetchCatalog: locale => response(locale === "en" ? current : pl),
+    bridge: (command, callback) => command.includes("uiLanguagePreference") ? replies.push(callback) : callback(true),
+  })
+  const first = await host.copy()
+  const second = await host.copy()
+  const stop = first.startLocalization()
+  await first.chooseLanguage("pl-PL")
+  replies[0]("en")
+  assert.equal(first.preference.value, "pl-PL")
+  stop()
+  current = { ...en, "settings.language.label": "Updated catalog" }
+  const stopAgain = second.startLocalization()
+  await second.chooseLanguage("en")
+  assert.equal(first.t("settings.language.label"), "Updated catalog")
+  assert.equal(host.requested.filter(locale => locale === "en").length, 2)
+  stopAgain()
 })

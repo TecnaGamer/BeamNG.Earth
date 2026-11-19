@@ -1,94 +1,129 @@
 import { computed, ref, watch } from "vue"
 import { useSettings } from "@/services/settings"
-import { createTranslator, localeChain } from "./i18nCore.js"
-import manifest from "./locales/catalogs.json"
+import { createTranslator, localeChain, localeRegistry } from "./i18nCore.js"
+import catalogManifest from "./locales/catalogs.json"
+
+const manifest = localeRegistry(catalogManifest)
 
 // BeamNG can evaluate a dependency separately for its mod entry point and for a
 // mounted SFC. Both need the same refs and catalogs for live language changes.
 const SHARED = Symbol.for("beamngEarth.localization")
 const shared = globalThis[SHARED] ||= {
-  translator: createTranslator(manifest, {}),
-  pending: new Map(), revision: ref(0), gameLocale: ref(""), preference: ref("auto"),
-  sequence: 0, persistence: Promise.resolve(), baseReady: false,
+  translator: createTranslator(manifest),
+  registry: ref(manifest), catalogs: new Map(), revision: ref(0),
+  gameLocale: ref(""), preference: ref("auto"),
+  sequence: 0, writes: 0, persistence: Promise.resolve(), baseReady: false, mountedBefore: false,
 }
-const { translator: i18n, pending, revision, gameLocale } = shared
+const { registry, catalogs, revision, gameLocale } = shared
 export const preference = shared.preference
-export const languageOptions = Object.entries(manifest).map(([value, meta]) => ({ value, label: meta.name }))
+export const languageOptions = computed(() => Object.entries(registry.value).map(([value, meta]) => ({ value, label: meta.name })))
 export const direction = computed(() => {
   revision.value
-  return manifest[i18n.active()]?.direction || "ltr"
+  return registry.value[shared.translator.active()]?.direction || "ltr"
 })
 
 const ROOT = "/ui/ui-vue/mods/beamngEarth/locales/"
+const LOAD_TIMEOUT_MS = 1800
+const RETRY_DELAY_MS = 2500
 
-async function load(locale) {
-  if (!pending.has(locale)) {
-    const controller = new AbortController()
-    const timeout = setTimeout(() => controller.abort(), 1800)
-    pending.set(locale, fetch(ROOT + locale + ".json", { signal: controller.signal }).then(response => {
-      if (!response.ok) throw new Error(String(response.status))
-      return response.json()
-    }).then(entries => i18n.load(locale, entries))
-      .catch(() => i18n.issue("Could not read catalog: " + locale))
-      .finally(() => clearTimeout(timeout)))
+function load(locale) {
+  const previous = catalogs.get(locale)
+  if (previous?.promise) return previous.promise
+  if (previous?.loaded) return true
+  if (previous && performance.now() < previous.retryAt) return false
+
+  const controller = new AbortController()
+  const entry = { controller, promise: null, loaded: false, retryAt: 0 }
+  catalogs.set(locale, entry)
+  const aborted = new Promise((_, reject) => {
+    controller.signal.addEventListener("abort", () => reject(new Error("request timed out or was cancelled")), { once: true })
+  })
+  const timeout = setTimeout(() => controller.abort(), LOAD_TIMEOUT_MS)
+  const read = async () => {
+    const response = await fetch(ROOT + locale + ".json", { signal: controller.signal, cache: "no-store" })
+    if (!response.ok) throw new Error("HTTP " + response.status)
+    try { return await response.json() }
+    catch { throw new Error("invalid JSON") }
   }
-  await pending.get(locale)
+  entry.promise = Promise.race([aborted, read()]).then(entries => {
+    if (catalogs.get(locale) !== entry) return false
+    if (!shared.translator.load(locale, entries)) throw new Error("invalid catalog")
+    entry.loaded = true
+    return true
+  }).catch(error => {
+    if (catalogs.get(locale) === entry) {
+      entry.retryAt = performance.now() + RETRY_DELAY_MS
+      shared.translator.issue(`Could not read catalog: ${locale} (${error?.message || "request failed"})`)
+    }
+    return false
+  }).finally(() => {
+    clearTimeout(timeout)
+    entry.promise = entry.controller = null
+  })
+  return entry.promise
 }
 
 async function applyLocale() {
   const request = ++shared.sequence
   const tag = preference.value === "auto" ? gameLocale.value : preference.value
-  await readyLocalization()
-  const chain = localeChain(tag, manifest)
+  if (!await readyLocalization() || request !== shared.sequence) return
+  const chain = localeChain(tag, registry.value)
   await Promise.all(chain.map(load))
   if (request !== shared.sequence) return
-  i18n.select(tag)
+  shared.translator.select(tag)
   revision.value++
 }
 
 export function setGameLocale(tag) {
-  if (tag === gameLocale.value || typeof tag !== "string") return
+  if (typeof tag !== "string") return
   gameLocale.value = tag
   if (preference.value === "auto") return applyLocale()
 }
 
 function receivePreference(value) {
-  const next = typeof value === "string" && Object.hasOwn(manifest, value) ? value : "auto"
-  if (next === preference.value) return
-  preference.value = next
+  preference.value = typeof value === "string" && Object.hasOwn(registry.value, value) ? value : "auto"
   return applyLocale()
 }
 
 export function chooseLanguage(value) {
-  if (value !== "auto" && !Object.hasOwn(manifest, value)) return
+  if (typeof value !== "string") return
+  if (value !== "auto" && !Object.hasOwn(registry.value, value)) return
   // Route only registered locale identifiers to Lua and serialize successive writes.
   const save = () => new Promise(resolve => {
     const api = window.bngApi
     if (!api?.engineLua) return resolve(false)
     const timeout = setTimeout(() => resolve(false), 3000)
-    api.engineLua(`beamngEarth_settings and beamngEarth_settings.uiSetLanguage("${value}")`, result => {
+    const finish = result => {
       clearTimeout(timeout)
       resolve(result === true)
-    })
+    }
+    try { api.engineLua(`beamngEarth_settings and beamngEarth_settings.uiSetLanguage("${value}")`, finish) }
+    catch { finish(false) }
   })
-  shared.persistence = shared.persistence.then(save).then(async ok => {
-    if (ok) await receivePreference(value)
-    else i18n.issue("Could not save the language preference")
+  shared.writes++
+  let applied
+  shared.persistence = shared.persistence.then(save).then(ok => {
+    if (ok) applied = receivePreference(value)
+    else shared.translator.issue("Could not save the language preference")
   })
-  return shared.persistence
+  // A slow catalog read must not block the next player's choice from reaching Lua.
+  return shared.persistence.then(() => applied)
 }
 
 export async function readyLocalization() {
-  await load("en")
+  if (shared.baseReady) return true
+  const translator = shared.translator
+  if (!await load("en") || translator !== shared.translator) return false
   if (!shared.baseReady) {
     shared.baseReady = true
     revision.value++
   }
+  return true
 }
 
 export function t(key, params) {
   revision.value
-  return shared.baseReady ? i18n.t(key, params) : "—"
+  return shared.baseReady ? shared.translator.t(key, params) : "—"
 }
 
 // Defer translation of notices kept in reactive state across a language change.
@@ -102,16 +137,17 @@ export function messageText(value) {
 
 export function number(value, digits) {
   revision.value
-  return i18n.number(value, digits)
+  return shared.translator.number(value, digits)
 }
 
 export function date(value) {
   revision.value
-  return i18n.date(value)
+  return shared.translator.date(value)
 }
 
 // Opt-in in the game's CEF console. No diagnostics polling or developer UI in normal use.
 export function localizationReport() {
+  const i18n = shared.translator
   i18n.enableDiagnostics()
   return { preference: preference.value, detected: gameLocale.value, ...i18n.report() }
 }
@@ -121,17 +157,33 @@ export function watchLocale(callback) {
 }
 
 export function startLocalization() {
+  if (shared.mountedBefore) {
+    // The mod on disk may now be a different release or the server's mounted copy.
+    const oldCatalogs = [...catalogs.values()]
+    catalogs.clear()
+    for (const entry of oldCatalogs) entry.controller?.abort()
+    shared.translator = createTranslator(manifest)
+    registry.value = manifest
+    shared.baseReady = false
+    shared.sequence++
+    revision.value++
+  }
+  shared.mountedBefore = true
   let active = true
-  void readyLocalization()
+  void receivePreference(preference.value)
   const settings = useSettings()
   const stopWatch = watch(() => settings.values.uiLanguage, setGameLocale, { immediate: true })
-  const prefAtRequest = preference.value
-  window.bngApi?.engineLua("beamngEarth_settings and beamngEarth_settings.uiLanguagePreference()", saved => {
-    if (active && preference.value === prefAtRequest) receivePreference(saved)
-  })
+  const writesAtRequest = shared.writes
+  try {
+    window.bngApi?.engineLua?.("beamngEarth_settings and beamngEarth_settings.uiLanguagePreference()", saved => {
+      if (active && typeof saved === "string" && shared.writes === writesAtRequest) receivePreference(saved)
+    })
+  } catch { shared.translator.issue("Could not read the language preference") }
   window.beamngEarthLocalization = localizationReport
   return () => {
+    if (!active) return
     active = false
+    shared.sequence++
     stopWatch()
     if (window.beamngEarthLocalization === localizationReport) delete window.beamngEarthLocalization
   }
