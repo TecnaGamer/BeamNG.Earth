@@ -77,6 +77,10 @@ class PoolTest(unittest.TestCase):
 class Conn:
     def __init__(self):
         self.slot_holds, self.sent, self.desired, self.inflight, self.active = {}, {}, {}, {}, 1
+        self.far = self                 # (Connection.far's query over these dicts: Server.names_in_use)
+
+    def names_in_use(self, aid):
+        return {(aid, k) for k in list(self.sent) + list(self.desired)} | set(self.inflight)
 
 
 class ServerTest(unittest.TestCase):
