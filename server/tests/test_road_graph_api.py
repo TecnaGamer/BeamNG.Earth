@@ -437,6 +437,98 @@ class CachedOnlyElevationTest(unittest.TestCase):
         self.assertTrue(loud.tried, "the world's own read asked the network for the tile")
 
 
+class CachedOnlyOtherSourcesTest(unittest.TestCase):
+    """What the lane holds beyond Dem._download: the regional lidar overlays (HRDEM, BC's lidar, Hong Kong's DTM) and
+    the polar caps fetch through readers of their own, and the bridge / tunnel chain stores read map cells at
+    "demand". Each is a download a cached-only build must not make."""
+
+    class Refuses:
+        """A lidar reader that fails the test if it is asked for anything."""
+
+        def __init__(self):
+            self.asked = []
+
+        def covers(self, *key):
+            return True
+
+        def tile(self, *a, **k):
+            self.asked.append(a)
+            raise AssertionError("read a lidar source inside cached_only")
+
+        def sparse(self, *a, **k):
+            self.asked.append(a)
+            raise AssertionError("read a lidar source inside cached_only")
+
+    def dem_(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        return dem.Dem(os.path.join(tmp.name, "dem"), fetcher=CachedOnlyElevationTest.Loud())
+
+    def in_lane(self, d, fn):
+        """fn() inside d's lane: (its result, whether the tile it made was marked a stand-in)."""
+        with d.cached_only():
+            d._local.partial = False
+            got = fn()
+            return got, d._local.partial
+
+    def test_the_lidar_overlays_are_left_out_and_the_tile_is_a_stand_in(self):
+        d = self.dem_()
+        a = np.full((dem.TILE, dem.TILE), 7.0, np.float32)
+        hk, bc, hr = self.Refuses(), self.Refuses(), self.Refuses()
+        d.hkdtm, d.lidarbc, d.hrdem, d.hrdem_near = hk, bc, hr, True
+        with mock.patch.object(dem.hkdtmmod, "covers", lambda *k: True),                 mock.patch.object(dem.hrdemmod, "covers", lambda *k: True):
+            for name, fn in (("hkdtm", lambda: d._hongkong((16, 1, 1), a)),
+                             ("canada fine", lambda: d._canada_fine((16, 1, 1), a)),
+                             ("hrdem bias", lambda: d._hrdem_bias((13, 1, 1), a))):
+                got, stand_in = self.in_lane(d, fn)
+                self.assertIs(got, a, name + ": Mapterhorn's cached heights as they were")
+                self.assertTrue(stand_in, name + ": marked a stand-in, so neither the LRU nor the mirror keeps it")
+        self.assertEqual((hk.asked, bc.asked, hr.asked), ([], [], []), "no lidar source was read")
+
+    def test_the_polar_caps_raise_rather_than_download_or_answer_sea_level(self):
+        d = self.dem_()
+        with d.cached_only():
+            with self.assertRaises(dem.NotOnDisk):
+                d._polar_heights(np.array([88.0]), np.array([0.0]), 12)
+        self.assertIsNone(getattr(d, "_polar", None), "the polar DEM was not even made")
+
+    def test_a_stand_in_tells_every_reader_it_is_short(self):
+        """The lane keeps a stand-in for itself; the second reader of it is as short as the first."""
+        d = self.dem_()
+        key = (16, 3, 3)
+        def made_short(k):          # (as the real one: its faults reach the reader as it makes the tile)
+            revisit.fault(here=True)
+            return np.zeros((dem.TILE, dem.TILE), np.float32), (1, 0, 0.0)
+        d._load_marked = made_short
+        with d.cached_only():
+            for i in range(2):
+                with revisit.scope() as read:
+                    d._cached_tile(key)
+                self.assertFalse(read.complete, "read %d of the stand-in counted short" % (i + 1))
+        self.assertNotIn(key, d._lru)
+
+    def test_the_chain_stores_read_cells_off_disk_inside_the_lane(self):
+        import earthd
+        here, gone = mapcells.cell_of(LAT, LON), mapcells.cell_of(LAT + 1.0, LON)
+        md = FakeMapData({"roads": {str(here): "R"}, "infrastructure": {str(here): "I"}},
+                         on_disk={(str(here), "roads"), (str(here), "infrastructure")})
+        s = types.SimpleNamespace(mapdata=md, sea=None)
+        earthd.Server.chain_view(s, fake_anchor(), "bridges", lambda la, lo: la * 0)
+        cs = s.chain_stores["bridges"]
+        p = types.SimpleNamespace()
+        cs.setup(p)
+        with gradesep.cached_only():
+            with revisit.scope() as read:
+                self.assertEqual((cs.cell_fn(here), p.infra_fn(here)), ("R", "I"), "the cells on disk are read")
+            self.assertTrue(read.complete)
+            with revisit.scope() as read:
+                self.assertIsNone(cs.cell_fn(gone), "a cell not on disk is no cell")
+            self.assertFalse(read.complete, "... and short, so the shared store does not keep it")
+        self.assertEqual(md.fetched, [], "nothing read at a kind that downloads")
+        cs.cell_fn(gone)
+        self.assertEqual(md.fetched, [(str(gone), ("roads",), "demand")], "outside the lane: as before")
+
+
 class EarthdRoadGraphTest(unittest.TestCase):
     """Connection.road_graph: the request's checks, the answer, the file it writes and the files it sweeps."""
 

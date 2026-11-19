@@ -419,6 +419,17 @@ class Dem:
         with self._lock:
             self._lru.clear()
             self._lru_short.clear()
+    def _lane_skips(self, what):
+        """Inside cached_only(): True, and the tile marked a stand-in, where a source would be read that fetches over
+        the network (HRDEM, BC's lidar, Hong Kong's DTM: their own range reads and sheet downloads, which _download's
+        guard does not see). The tile is then Mapterhorn's cached heights alone -- measured, not invented -- kept for
+        the lane only and never mirrored, so the player's world still makes the full one."""
+        if not getattr(self._local, "cached", False):
+            return False
+        self._count(what + ":cached_only")
+        self._partial()
+        return True
+
     def _canada(self, key, a):
         """Tile key's heights a with Canada's lidar terrain (hrdem.py) put in where it has data (z13 and deeper)."""
         z, x, y = key
@@ -433,6 +444,8 @@ class Dem:
         off it: its forests and drawn-out coarse model, at the lidar's level, for a few hundred kB a region."""
         z, x, y = key
         if self.hrdem is None or z not in BIAS_ZOOMS or not hrdemmod.covers(z, x, y):
+            return a
+        if self._lane_skips("hrdem-bias"):
             return a
         try:
             got = self.hrdem.tile(z, x, y, size=HRDEM_BIAS_PX, min_px=HRDEM_BIAS_M)
@@ -463,6 +476,8 @@ class Dem:
         box = (lat_of(y + 1), x / n * 360.0 - 180.0, lat_of(y), (x + 1) / n * 360.0 - 180.0)
         s_, w_, n_, e_ = lb._index()[4]
         if box[0] > n_ or box[2] < s_ or box[1] > e_ or box[3] < w_:
+            return a
+        if self._lane_skips("lidarbc-bias"):
             return a
         try:
             plat, plon, ph = lb.sparse(box, BIAS_STEP_M, coarse_m=BIAS_COARSE_M)
@@ -532,6 +547,8 @@ class Dem:
                 continue
             if name == "hrdem" and not hrdemmod.covers(z, x, y):
                 continue
+            if self._lane_skips(name):
+                continue
             try:
                 got = src.tile(z, x, y)
             except (netfetch.FetchError, OSError, ValueError) as e:
@@ -563,6 +580,8 @@ class Dem:
         """Tile key's heights a with Hong Kong's lidar terrain (hkdtm.py) put in where this run reads its sheets (the
         near terrain). Where it goes without one it has, the tile is not mirrored and nothing built on it kept."""
         if a is None or self.hkdtm is None or not hkdtmmod.covers(*key):
+            return a
+        if self._lane_skips("hkdtm"):
             return a
         h, ok, short = self.hkdtm.tile(*key)
         if short:
@@ -1793,6 +1812,10 @@ class Dem:
     def _polar_heights(self, lat, lon, zoom):
         """(dem_sample's polar) heights at points past polardem.FROM_LAT, None when the polar DEM can't be had."""
         px = 40075016.686 * dmath.cos(math.radians(MAX_LAT)) / (TILE * 2 ** zoom)
+        if getattr(self._local, "cached", False):
+            # (cached_only: the polar DEM downloads its own files, and its failure answer is sea level, which a reader
+            #  that cannot download must not be handed)
+            raise NotOnDisk("the polar DEM is not read inside cached_only")
         try:
             out = np.zeros(lat.shape, np.float64)
             out[np.ones(lat.shape, bool)] = self.polar().sample(lat, lon, px)     # (numpy's assignment rules, as before)

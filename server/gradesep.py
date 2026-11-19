@@ -140,6 +140,11 @@ def cached_only():
         _local.cached = prev
 
 
+def in_cached_only():
+    """Whether this thread is inside cached_only() (earthd.Server.chain_view's cell reads follow it too)."""
+    return getattr(_local, "cached", False)
+
+
 def neighbours_hook(md, key):
     """The callable a cell's roads layer carries (roads.lane_flow): the roads layers of the eight cells round it
     (_neighbours), held weakly: handed back while the map data (or a caller) still has them, asked again once gone; a

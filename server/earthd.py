@@ -4790,12 +4790,27 @@ class Server:
         stores = self.__dict__.setdefault("chain_stores", {})
         cs = stores.get(kind)
         if cs is None:
-            cell_fn = lambda key: self.mapdata.cell(key, layers=("roads",), kind="demand").layers.get("roads")  # noqa: E731
+            def read(key, layer):
+                # (the stores are shared, and the modding API's cached-only road graph (road_graph_data) solves its
+                #  window's chains through them: inside its lane (gradesep.cached_only) a cell is read only from disk,
+                #  at a kind that neither fetches nor queues, and one that is not there is no cell and a fault -- the
+                #  stores keep only what was read complete, and the lane's revisit scope keeps the fault in its build)
+                if gradesepmod.in_cached_only():
+                    if not self.mapdata.has(key, layer):
+                        revisitmod.fault()
+                        return None
+                    try:
+                        return self.mapdata.cell(key, layers=(layer,), kind="background").layers.get(layer)
+                    except Exception as e:
+                        log.debug("chain cell %s %s (cached only): %s: %s", layer, key, type(e).__name__, e)
+                        revisitmod.fault()
+                        return None
+                return self.mapdata.cell(key, layers=(layer,), kind="demand").layers.get(layer)
+            cell_fn = lambda key: read(key, "roads")    # noqa: E731
             if kind == "bridges":
                 def setup(p):
                     p.wet = self.sea.depth if self.sea is not None else None    # (decks clear the water)
-                    p.infra_fn = lambda key: self.mapdata.cell(
-                        key, layers=("infrastructure",), kind="demand").layers.get("infrastructure")
+                    p.infra_fn = lambda key: read(key, "infrastructure")
                 cls = roadsmod.BridgeProfiles
             else:
                 def setup(t):
