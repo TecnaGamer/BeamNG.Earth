@@ -83,8 +83,14 @@ def tile_props(frame, tx, ty, md, elev, lamps=None):
     bld_rings = _Once(lambda: _building_rings(frame, blds))
     placed, skip, boxes = [], set(), []
     mapped = [] if lamps is not None else None
+    import pedestrianlighting
+    enhanced = pedestrianlighting.enabled()
+    if mapped is not None and enhanced:
+        nearby = roads.cells_of_tile(frame, tx, ty, margin=LAMP_NEAR_M)
+        for feats, rows in _layer(md, nearby, "infrastructure"):
+            _street_lamps(frame, feats, rows, (x0-LAMP_NEAR_M, y0-LAMP_NEAR_M, x1+LAMP_NEAR_M, y1+LAMP_NEAR_M), mapped)
     for feats, rows in infra:
-        if mapped is not None:
+        if mapped is not None and not enhanced:
             _street_lamps(frame, feats, rows, (x0 - LAMP_NEAR_M, y0 - LAMP_NEAR_M, x1 + LAMP_NEAR_M, y1 + LAMP_NEAR_M),
                           mapped)
         _towers(frame, feats, rows, (x0, y0, x1, y1), placed)
@@ -230,6 +236,10 @@ def _aim_lamps(lamps, lines_fn):
 def _lamp_roads(frame, layers, near=None):
     """(points (m, 2), offsets (k + 1), layer (k,) NaN: none) of the drivable centrelines (no footways, no tunnels)
     whose boxes meet near (x0, y0, x1, y1; None: all), in a stable order (their ids, then their ends)."""
+    import pedestrianlighting
+    classes = LAMP_ROAD_CLASSES
+    if pedestrianlighting.enabled():
+        classes = classes | {"footway", "cycleway", "path", "pedestrian"}
     result = []
     for feats, rows in layers:
         def make():
@@ -240,7 +250,7 @@ def _lamp_roads(frame, layers, near=None):
             for line, i in zip(lines, at):
                 tags = _tags_of(feats, i)
                 kind = tags.get("highway") or (str(cls[i]) if cls is not None else "")
-                if kind not in LAMP_ROAD_CLASSES or tags.get("tunnel") in ("yes", "building_passage"):
+                if kind not in classes or tags.get("tunnel") in ("yes", "building_passage"):
                     continue
                 level = tags.get("layer")
                 if level is None and table is not None:
@@ -255,7 +265,7 @@ def _lamp_roads(frame, layers, near=None):
                 indices.append(i)
                 boxes.append((*line.min(0), *line.max(0)))
             return found, np.asarray(indices, np.int64), np.asarray(boxes, np.float64).reshape(-1, 4)
-        found, indices, boxes = _memo(feats, "lamp_roads", frame, make)
+        found, indices, boxes = _memo(feats, "lamp_surfaces" if pedestrianlighting.enabled() else "lamp_roads", frame, make)
         pick = _picked(feats, rows, indices)
         keep = np.ones(len(found), bool) if pick is None else np.asarray(pick, bool)
         if near is not None and len(found):

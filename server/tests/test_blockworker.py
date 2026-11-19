@@ -107,7 +107,7 @@ class GermanRoutesTest(unittest.TestCase):
         anchor = SimpleNamespace(id=1, lat=at[0], lon=at[1], frame=frame, zooms=[15], bridges=None, tunnels=None)
         ns = SimpleNamespace(
             mapdata=FakeMapData(None, None), anchors={1: anchor}, road_pool=None, far_bld_pool=None, sign_pool=None,
-            gas_stations=False, surface=None, grader_for=lambda a: None, ground=lambda f, la, lo, z: z, dem=FakeDem(),
+            gas_stations=False, surface=None, grader_for=lambda a: None, ground=lambda f, la, lo, z, g=None: z, dem=FakeDem(),
             grader_lock=threading.Lock(), sea=None, buildings=False, road_widths=None, left_hand=lambda a: False,
             mph=lambda a: False, anchor_q=lambda a: None, buried=lambda a: 0.0, country=lambda a: "DE",
             lamp_region=lambda a: None, keep_fuel_pads=lambda pads: None, airports=None, airports_db=None,

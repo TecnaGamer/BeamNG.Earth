@@ -7059,6 +7059,8 @@ def far_lamps(frame, road_layers, x0, y0, size, built, ground, region=None, sq=2
             sp = specs[i]
             if sp is None:
                 continue
+            if furniture.strict_lighting() and furniture.way_lighting(f, i) != "yes":
+                continue
             highway = sp.cls in furniture.HIGHWAY_CLASSES
             if highway and not furniture.highway_lit(region, sp.link, True):
                 continue

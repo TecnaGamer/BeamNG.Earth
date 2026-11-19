@@ -13771,7 +13771,7 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
                signals=None, marks=None, roads_out=None, skin_margin=0.0, walks_raw=None, nodes=None,
                clearance_out=None, development=None, pole_profile=None, signs=None,
                sign_obstacles=None, roadside_jobs=None, towns=None, mapped_poles=None, de_on=False, de_routes=(),
-               driveways_out=None, mapped_lamps=None, wear=None, cover_fn=None, sheet_marks=None):
+               driveways_out=None, mapped_lamps=None, wear=None, cover_fn=None, sheet_marks=None, lamp_coverage=None):
     """The chunks of one tile. cells: the mapgeom.Features of the "roads" layer of every cell touching
     the tile; elev(lat, lon) -> metres (the DEM); urban_fn: as road_specs. Features in several cells are
     taken once (by id). The carriageways, then each road's sidewalks / gutters / markings (extras), cut
@@ -14523,10 +14523,10 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
                                      signals=signals, buried=buried, region=lamp_region, country=country,
                                      priority=priority, ground=ground, development=development,
                                      pole_profile=pole_profile, pole_frame=frame, sign_obstacles=sign_obstacles,
-                                     defer_gore=detailed_signs, mapped_poles=mapped_poles, mapped_lamps=mapped_lamps,
+                                     defer_gore=detailed_signs, lamp_coverage=lamp_coverage, mapped_poles=mapped_poles, mapped_lamps=mapped_lamps,
                                      obstacles=rail_beds,
                                      de_on=de_on, de_ctx=de_ctx, de_ctl=de_ctl,
-                                     lighting={fid: str(f.attrs["osm_lit"][i]).strip().lower()
+                                     lighting={fid: furniture.way_lighting(f, i, direct=lamp_coverage is not None)
                                                for fid, (f, i, _sp) in seen.items() if "osm_lit" in f.attrs}))
     if props is not None and walks is not None and isl and roundabouts.enabled():     # what grows on an island's planting
         def _island_ground(xy):

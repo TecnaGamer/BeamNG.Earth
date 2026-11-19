@@ -151,9 +151,9 @@ def finish_props(rows, frame, box, cells, urban=None, widths=None):
     return clear_props(rows, blockers)
 
 
-def parts(frame, box, cells, urban=None, widths=None, quick=False):
+def parts(frame, box, cells, urban=None, widths=None, quick=False, lighting=False):
     """(feature id, ENU polyline, width, material) near a square. All callers share the same exclusions."""
-    if not enabled():
+    if not lighting and not enabled():
         return []
     parts_of = roads.quick_ground_parts if quick else roads.ground_parts
     candidates, segments, half = [], [], []

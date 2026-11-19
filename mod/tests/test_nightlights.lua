@@ -73,6 +73,11 @@ clock = clock + 1; nl.update()
 T.check(nl.nearest(0,0,30,1)[1][6] == true, 'high-mast lighting profile retained')
 T.check(light and light.id == id and light.fields.range == '70' and light.fields.color == nl.HIGH_MAST.color,
         'same bounded light pool serves high-mast floodlighting')
+for _, percent in ipairs({0, 25, 40, 50, 75, 100}) do
+  nl.setBrightness(percent)
+  T.near(tonumber(light.fields.brightness), nl.HIGH_MAST.brightness * percent / 100, 1e-9, 'live intensity')
+  T.check(light.fields.range == '70' and light.id == id, 'range and pool slot retained')
+end
 nl.dropKey('high-mast')
 nl.onRows('double-arm', { {0, 4.9, 0, 12.62, 0}, {0, -4.9, 0, 12.62, 180} }, {'lamplens'})
 T.check(nl.status().lenses == 2, 'double-arm pole supplies two separately aimed lamps')
@@ -158,4 +163,8 @@ clock = clock + 2; nl.update()
 T.check(mats.bne_bld_facade.fields.emissiveMap == nl.MAPS.bne_bld_facade[1] and nl.status().errors == 0,
   'the evening: its map back')
 nl.reset()
+nl.setGlow(25)
+clock = clock + 2; nl.update()
+T.near(tonumber(mats.bne_lamp_lens.fields.emissiveIntensityNits), 1000, 1e-6, 'lens at 25 percent')
+T.near(tonumber(mats.bne_bld_facade.fields.emissiveIntensityNits), 200, 1e-6, 'window intensity preserved')
 T.done('test_nightlights')

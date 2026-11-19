@@ -111,6 +111,7 @@ M.LIGHT = { range = 36, inner = 50, outer = 130, brightness = 8.0, color = '1 0.
 M.HIGH_MAST = { range = 70, inner = 70, outer = 150, brightness = 12.0, color = '1 0.82 0.60 1', drop = 0.12, tilt = 0 }
 M.LANTERN = { range = 20, inner = 65, outer = 150, brightness = 4.0, color = '1 0.68 0.12 1', drop = 0.12, tilt = 0 }
 
+local brightness, glowScale = 1, 1
 local lastCheck = -1e9
 local shown = {}         -- material name -> the factor and nits set (set again only when they change)
 local shownMap = {}      -- material name -> the emissive map set (none: its materials.json's, M.MAPS' first)
@@ -135,7 +136,9 @@ end
 -- day a map stays: the glow is off, and the evening's comes back at dusk with the glow.)
 local function apply(night, step)
   for name, glow in pairs(M.MATERIALS) do
-    local want = night and (glow[1] .. '|' .. glow[2]) or 'off'
+    local lamp = name == 'bne_lamp_lens' or name == 'bne_fr_glass' or name:match('^bne_lamp_glow%d+$')
+    local nits = lamp and glow[2] * glowScale or glow[2]
+    local want = night and (glow[1] .. '|' .. nits) or 'off'
     local maps = M.MAPS[name]
     local map = night and maps and maps[step] or nil
     if map == (shownMap[name] or (maps and maps[1])) then map = nil end
@@ -144,8 +147,8 @@ local function apply(night, step)
       if m then
         local ok = pcall(function()
           if map then m:setField('emissiveMap', 0, map) end
-          m:setField('emissiveFactor', 0, night and glow[1] or '0 0 0')
-          m:setField('emissiveIntensityNits', 0, tostring(night and glow[2] or -1))
+          m:setField('emissiveFactor', 0, night and nits > 0 and glow[1] or '0 0 0')
+          m:setField('emissiveIntensityNits', 0, tostring(night and nits or -1))
           m:flush()
           m:reload()
         end)
@@ -177,7 +180,7 @@ function M.onRows(key, items, groups)
   local out = {}
   for _, r in ipairs(items) do
     if type(r) == 'table' and groupsById[r[1]] and r[2] and r[3] and r[4] then
-      out[#out + 1] = { r[2], r[3], r[4], r[5], groupsById[r[1]] == 'fr_lantern_light', groupsById[r[1]] == 'high_mast_light' }
+      out[#out + 1] = { r[2], r[3], r[4], r[5], groupsById[r[1]] == 'fr_lantern_light', groupsById[r[1]] == 'high_mast_light', r[9] or 1 }
     end
   end
   lenses[key] = #out > 0 and out or nil
@@ -264,12 +267,13 @@ local function place(e, l)
   if l then
     local L = l[6] and M.HIGH_MAST or l[5] and M.LANTERN or M.LIGHT
     -- Reapply on reuse: a light previously serving a lantern can serve a stock lamp.
-    if e.profile ~= L then
+    local intensity = L.brightness * (l[7] and brightness * l[7] or 1)
+    if e.profile ~= L or e.intensity ~= intensity then
       for field, value in pairs({ range = L.range, innerAngle = L.inner, outerAngle = L.outer,
-                                  brightness = L.brightness, color = L.color }) do
+                                  brightness = intensity, color = L.color }) do
         o:setField(field, 0, tostring(value))
       end
-      e.profile = L
+      e.profile, e.intensity = L, intensity
     end
     if l[4] then                                        -- (its forward, local y: down, tilted toward the road)
       local a, t = math.rad(l[4]), math.rad(L.tilt)
@@ -285,6 +289,16 @@ local function place(e, l)
   end
   if (l ~= nil) ~= (e.at ~= nil) then o:setField('isEnabled', 0, l and 'true' or 'false') end
   e.at = l
+end
+
+function M.setBrightness(percent)
+  brightness = math.max(0, math.min(100, percent)) / 100
+  for _, e in ipairs(pool) do if e.at then place(e, e.at) end end
+end
+
+function M.setGlow(percent)
+  glowScale = math.max(0, math.min(100, percent)) / 100
+  lastCheck = -1e9
 end
 
 local function stepLights(night)

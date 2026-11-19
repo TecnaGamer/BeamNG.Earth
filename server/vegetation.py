@@ -409,6 +409,9 @@ class Vegetation:
             import standalonepaths
             if standalonepaths.enabled():
                 name = f"{y}-charzykowy-promenada-4m.npz"
+        import pedestrianlighting
+        if pedestrianlighting.enabled():
+            name = name[:-4] + "-lighting-v1.npz"
         return os.path.join(self.dir, str(rel), str(x), name) if self.dir else None
 
     def _load(self, x, y):
@@ -598,14 +601,24 @@ class Vegetation:
             keep = _keep_off_mask(tree, vines, chm) | (tree.height >= VINE_TREE_M)
             tree, lcls = tree.take(keep), lcls[keep]
         import standalonepaths
+        import pedestrianlighting
         path_blockers = []
-        if standalonepaths.enabled():
+        if standalonepaths.enabled() or pedestrianlighting.enabled():
             import geodesy
             path_frame = geodesy.EnuFrame((lat0 + lat1) / 2, (lon0 + lon1) / 2)
             e, n, _ = path_frame.geodetic_to_enu(np.array([lat0, lat1]), np.array([lon0, lon1]), 0.)
             box = (min(e), min(n), max(e), max(n))
-            path_blockers = [(xy, width / 2) for _, xy, width, _ in standalonepaths.parts(
-                path_frame, box, road_cells, getattr(self.surface, "urban", None), self.widths)]
+            parts = standalonepaths.parts(path_frame, box, road_cells, getattr(self.surface, "urban", None),
+                                          self.widths, lighting=pedestrianlighting.enabled())
+            if standalonepaths.enabled():
+                path_blockers = [(xy, width / 2) for _, xy, width, _ in parts]
+            if pedestrianlighting.enabled():
+                keys = mapcells.cells_for_bbox(lat0, lon0, lat1, lon1)
+                sites = list(pedestrianlighting.path_sites(parts, road_cells, box))
+                sites.extend(pedestrianlighting.area_sites(path_frame, box, self.md, keys))
+                # A short segment models the post footprint in the existing plant exclusion pass.
+                path_blockers.extend((np.array([[px-.15, py], [px+.15, py]]), .35)
+                                     for _, px, py, _, _ in sites)
             if path_blockers:
                 keep = _off_paths(tree, path_frame, path_blockers)
                 tree, lcls = tree.take(keep), lcls[keep]

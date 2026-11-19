@@ -47,6 +47,8 @@ FEATURES = (
                        "BNE_SIDEWALK_V2": "on"}, None),
     ("expEuScenery", {"BNE_EU_ROAD_DETAILS": "on", "BNE_FR_ROADS": "on", "BNE_FR_HOUSES": "on"}, None),
     ("standalonePaths", {"BNE_STANDALONE_PATHS": "on"}, None),
+    ("osmPedestrianLighting", {"BNE_PEDESTRIAN_LIGHTING": "on"}, None),
+    ("strictOsmLighting", {"BNE_STRICT_LIGHTING": "on"}, None),
     ("expDropRails", {"BNE_DROP_RAILS": "on"}, None),                     # droprails.enabled
     ("expEntranceFlares", {"BNE_ENTRANCE_FLARES": "on"}, None),           # roads.flares_enabled
     ("expPriorityStops", {"BNE_PRIORITY_STOPS": "on"}, None),             # furniture.PRIORITY_STOPS

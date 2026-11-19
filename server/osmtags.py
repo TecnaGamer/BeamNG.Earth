@@ -650,5 +650,6 @@ def join(feats, tags, geometry=None):
     ids = fast._ef.osm_join(feats.attrs, tags, len(feats), feats.part_off, feats.ring_off, feats.coord_off,
                             feats.lonlat, list(FLOATS), list(TEXTS), sorted(roadlanes.HIGHWAYS), list(ONEWAY_YES),
                             way_id, mg.text_column)
+    feats.attrs["osm_way_lit"] = mg.text_column([str(tags.get(w, {}).get("lit", "")) for w in ids])
     roadlanes.join(feats, tags, ids, geometry)
     return feats

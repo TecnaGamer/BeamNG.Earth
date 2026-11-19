@@ -3247,6 +3247,8 @@ class Server:
         de_nodes = designsmod.reads_here(designsmod.enabled(self.dej_on), anchor.frame, designsmod.tile_reach(box))
         sign_nodes = secrossings.read(self.mapdata, anchor.frame, nkeys) \
             if secrossings.wanted(self.country(anchor), de_nodes) else None
+        import pedestrianlighting
+        near_lamps = [] if pedestrianlighting.enabled() else None
         clearance = [] if self.buildings else None     # (build_tile's RoadClearance, PR #629: the powerlines' too)
         roadside_jobs = []
         drives = []
@@ -3279,7 +3281,7 @@ class Server:
                                      terrain_paint=self.surface is not None, cover_out=cover, marks=marks,
                                      roads_out=near_roads, roadside_jobs=roadside_jobs, signals=furnituremod.signals_for(self.mapdata, anchor.frame, nkeys),
                                      driveways_out=mapped_drives,
-                                     nodes=sign_nodes, clearance_out=clearance,
+                                     nodes=sign_nodes, clearance_out=clearance, lamp_coverage=near_lamps,
                                      development=developmentmod.for_tile(self.mapdata, anchor.frame, tx, ty), towns=towns,
                                      de_on=designsmod.enabled(self.dej_on), de_routes=de_routes, mapped_lamps=mapped_lamps,
                                      wear=Server.wear_arg(self),
@@ -3541,6 +3543,10 @@ class Server:
         radar_props, speed_traps = radars.tile_rows(anchor.frame, box, self.mapdata, elev, self.road_widths, urban)
         if radar_props:
             props = (props or []) + radar_props
+        if items is not None and pedestrianlighting.enabled():
+            props.extend(pedestrianlighting.tile_rows(anchor.frame, box, cells, urban, self.road_widths,
+                self.mapdata, nkeys, drawn, props, mapped_lamps, rings, clearance[0] if clearance else None,
+                near_roads, near_lamps, poleprofiles.lamp_country_selector(Server.pole_profile(self, anchor), anchor.frame)))
         import racedig              # (BNE_RACEWAY_DIG: no prop, pole or wire end on a racetrack's band)
         racedig.tile_clear(anchor.frame, cells, props, wires, elev, self.mapdata)
         import standalonepaths

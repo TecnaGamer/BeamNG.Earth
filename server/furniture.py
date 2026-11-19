@@ -1237,11 +1237,21 @@ def off_buildings(rows, rings, groups=(G_STREET_TREE,), clear=STREET_TREE_WALL_M
     return [r for i, r in enumerate(rows) if i not in drop]
 
 
+def strict_lighting():
+    return os.environ.get("BNE_STRICT_LIGHTING", "").lower() in {"on", "1", "true"}
+
+
+def way_lighting(f, i, direct=False):
+    column = "osm_way_lit" if direct or strict_lighting() else "osm_lit"
+    values = f.attrs.get(column)
+    return str(values[i]).strip().lower() if values is not None else ""
+
+
 def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=False, decks=(),
           signals=None, buried=0.0, region=None, lighting=None, country=None, priority=None, ground=None,
           clearance=None, development=None, pole_profile=None, pole_frame=None,
           sign_obstacles=None, defer_gore=False, obstacles=(), mapped_poles=None, de_on=False, de_ctx=None,
-          de_ctl=None, mapped_lamps=None):
+          de_ctl=None, mapped_lamps=None, lamp_coverage=None):
     """Rows [group, x, y, z, yaw, scale, height, rank] (trees.lua's tile rows) of the lamps and poles of a
     tile box (x0, y0, x1, y1). roads: build_tile's (fid, spec, centreline (k, 3), lon); walks: its sidewalk
     runs (dicts with fid, pts, side, w); decks: the bridge decks over the tile [(centreline (k, 3), half
@@ -1262,10 +1272,27 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
     kit_at = poleprofiles.kit_selector(pole_profile, pole_frame)
     spacing_of = lamp_spacing(region, dense=not town)
     lighting = lighting or {}  # OSM way lighting; absent/unknown keeps the inferred rule
+    if strict_lighting():
+        lighting = {fid: "yes" if lighting.get(fid) == "yes" else "no" for fid, *_ in roads}
     mapped_lamps = list(mapped_lamps or ())
     # (the mapped lamps stand instead of guessed ones along their road, which keeps its utility poles, without their
     # lamps; the other roads keep their rules)
     lamps_mapped = roads_with_points(roads, [r[1:3] for r in mapped_lamps], MAPPED_ALONG_M)
+
+    mapped_cover = None
+    if mapped_lamps and (lamp_coverage is not None or strict_lighting()):
+        from pedestrianlighting import Neighbors
+        mapped_cover = Neighbors()
+        for row in mapped_lamps:
+            mapped_cover.add(*row[1:3])
+        lamps_mapped = {fid for fid in lamps_mapped if lighting.get(fid) != "yes"}
+
+    def site_open(q):
+        return mapped_cover is None or not mapped_cover.near(*q, 18.)
+
+    def record_site(q):
+        if lamp_coverage is not None and box[0]-24 <= q[0] <= box[2]+24 and box[1]-24 <= q[1] <= box[3]+24:
+            lamp_coverage.append((float(q[0]), float(q[1])))
 
     def lamp_ok(fid):           # may this road get guessed lamps (posts or on its poles)?
         return lighting.get(fid) != "no" and fid not in lamps_mapped
@@ -1327,6 +1354,10 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
         def put(group, spacing, phase, curb_off, height, yaw_fn, clear=END_CLEAR_M, optional=False):
             for p, out, s_line in _stations(run, line, spacing, phase, clear, side):
                 q = p[:2] - out * (w / 2 - curb_off)
+                if group == G_LAMP:
+                    if not site_open(q):
+                        continue
+                    record_site(q)
                 if _owns(box, q[0], q[1]) and not on_bed(q):
                     if optional:
                         k = int(round((s_line - phase) / spacing))
@@ -1363,8 +1394,10 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
                     k = int(round((float(_project(line, q[None])[0]) - ph) / TOWN_POLE_SPACING))
                     lamp = ([G_POLELAMP, round(float(q[0]), 2), round(float(q[1]), 2),
                              round(float(p[2]) + POLE_LAMP_Z, 2), round(yaw, 1), 1.0, 1.1, 0.0]
-                            if lamp_ok(fid) and pole_lamp(spec.cls, k, region) else None)
+                            if lamp_ok(fid) and site_open(q) and pole_lamp(spec.cls, k, region) else None)
                     # (with its arm: the next tile's span to it goes when the arm culls the pole there)
+                    if lamp is not None:
+                        record_site(q)
                     run_poles.append((pole[1], pole[2], pole[3], pole[4], pole_style, lamp))
                     if _owns(box, q[0], q[1]):
                         rows.append(pole)
@@ -1455,7 +1488,9 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
                 run = []
                 continue
             if not poles:                   # buried lines: lamp posts, their arms over the road
-                if inside and drawn:
+                if drawn and site_open(q):
+                    record_site(q)
+                if inside and drawn and site_open(q):
                     h = (HIGHWAY_LAMP_H["na" if _na(region) else None] if highway and not spec.link
                          else LAMP_H[G_LAMP])
                     group = G_LAMP
@@ -1476,7 +1511,9 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
                 continue
             lamp = ([G_POLELAMP, round(float(q[0]), 2), round(float(q[1]), 2),
                      round(float(p[2]) + POLE_LAMP_Z, 2), round(yaw, 1), 1.0, 1.1, 0.0]
-                    if drawn and pole_lamp(spec.cls, k, region) else None)
+                    if drawn and site_open(q) and pole_lamp(spec.cls, k, region) else None)
+            if lamp is not None:
+                record_site(q)
             run.append((pole[1], pole[2], pole[3], pole[4], pole_style, lamp))
             if inside:
                 rows.append(pole)
