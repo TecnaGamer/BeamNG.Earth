@@ -3008,6 +3008,24 @@ class SkeletonGableTest(unittest.TestCase):
         self.assertAlmostEqual(P[:, 2].min(), 6.0, delta=1e-6)          # (gables stand on the walls: no eaves)
 
 
+class SkeletonValidTest(unittest.TestCase):
+    def test_a_footprint_the_skeleton_gets_wrong_keeps_a_house_sized_roof(self):
+        """Eifel 50.2430,6.9358 (the player's report W545TFKJ): a house's outline cut at a carriageway's edge, its LoD2
+        roof gabled 6.3 m on its 7.05 m height: the skeleton rose 18 km (an event of near-parallel edges far off) and the
+        walls were cut to 2.5 m under it. The skeleton fails now (a node over its distance to the walls): the house's
+        heightfield roof, its walls and roof the house's."""
+        ring = np.array([[18.9178692467, 0.0452073521], [20.6767692372, 1.7992849494], [21.8247669715, 0.2728416349],
+                         [24.5034039463, 2.5625249972], [22.9727422795, 4.0889654141], [28.712666233, 9.8131666211],
+                         [22.9726911617, 15.9189168255], [13.1434547151, 6.1166355389]])
+        self.assertLess(bld.skeleton_rise(ring), 10.0)          # (12,157 m before: 0, failed)
+        s = bld.plan(ring, {"class": "house", "height": 7.0488, "roof_shape": "gabled", "roof_height": 6.3}, 0,
+                     50.243, 6.9358)
+        got = bld.build([(s, 400.0, 400.5)])
+        P = np.asarray(got[0])
+        self.assertLess(P[:, 2].max() - 400.0, 15.0)
+        self.assertFalse(s.skel, "the heightfield roof, not the failed skeleton")
+
+
 class OnBridgeOverWaterTest(unittest.TestCase):
     def test_a_building_mapped_on_a_bridge_over_a_river_is_left_out(self):
         """Blackfriars station (the player's report BEF94SAA): OSM's building, layer 1, along the railway bridge across
