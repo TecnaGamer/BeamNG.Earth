@@ -15,6 +15,10 @@ of EOX's tiles. Read once at the server's start, so a change reaches a player at
 packs are built to 50 degrees: tiles.yml max_lat); farther out bngs2's finest zoom is the next coarser one
 (imagery.zoom_caps), as before the switch raised it there.
 
+For a local server, ``BNGE_S2_CDN=fallback`` gives USGS first choice at every zoom it covers.
+Sentinel-2 packs still fill gaps. This can avoid a near/far colour step in USGS areas at the
+cost of more USGS requests.
+
 "bngaer" ({"imagery": {"bngaer": {"enabled": true}}}): the 1 m aerial packs (aerialpacks.py) first in the chain, where
 their coverage files list packs; elsewhere the live sources as before, and the mini PC asked to build the place's cell
 ("request": false: never asked). Left out when this build's Pillow cannot decode AVIF. BNGE_AERIAL=off / on overrides
@@ -112,11 +116,12 @@ def chain(names, fetcher, cache_dir):
     on = imagery.get(S2.name) or {}
     if not isinstance(on, dict) or not on.get("enabled") or BEFORE not in names:
         return tuple(names)
-    i = names.index(BEFORE)
+    fallback = os.environ.get("BNGE_S2_CDN", "").strip().lower() == "fallback"
+    i = names.index(BEFORE) + int(fallback)
     # (no "max_zoom": as the environment says, BNGE_S2_MAX_ZOOM, else 12: a test of the next zoom before the switch)
     src = (imagerymod.set_s2_max_zoom(on["max_zoom"], _max_lat(on, on["max_zoom"])) if "max_zoom" in on
            else imagerymod.SOURCES[S2.name])
-    log.info("cdn: %s on (%s, to zoom %d%s)", S2.name, CDN_BASE, src.max_zoom,
+    log.info("cdn: %s %s (%s, to zoom %d%s)", S2.name, "fallback" if fallback else "on", CDN_BASE, src.max_zoom,
              "".join(f", z{z} to {lim:g} deg" for z, lim in src.zoom_max_lat))
     return tuple(names[:i] + [S2.name] + names[i:])
 

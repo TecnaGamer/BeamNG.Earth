@@ -72,6 +72,11 @@ API keys, no other packages (the `.cdae` writer has its own msgpack encoder). Th
 The v1.2 behaviour is `--near-visual terrain --imagery off` (the integration drive and `test_e2e.py`
 run that way).
 
+For sharp colour steps where the Sentinel-2 packs meet USGS imagery at different terrain
+resolutions, start the world server with `BNGE_S2_CDN=fallback`. USGS then supplies both
+resolutions where it has data; the packs still fill gaps. This option may slow initial loading
+by moving more requests to USGS. It does not correct seams between different imagery surveys.
+
 On startup the server prints `earthd listening on 127.0.0.1:<port> session <sessionId> -> <dir> (far tiles: cdae, near visual: mesh, imagery: usgs,eox2023,eox2016)`.
 Session folders left by earlier runs (only folders that contain its `.earthd-session` marker) are
 deleted at start when their marker is more than a day old (`SESSION_STALE_S`). A younger one may still
