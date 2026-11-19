@@ -831,6 +831,46 @@ def _span_clip(rails, tunnels, near=None):
     return out
 
 
+def _roads_under_bridges(frame, cells, box, reach, rails):
+    """[(line, half width)]: the roads on the ground that pass under a track's mapped bridge (the bridge parts of
+    rails cross their lines), for _spans_over_roads."""
+    bridges = [xy for (_fid, _c, kind, xy) in rails if kind == "bridge" and len(xy) >= 2]
+    if not bridges:
+        return []
+    ways = [(np.asarray(line, np.float64)[:, :2], float(half))
+            for line, half, _g in graded_crossings(frame, cells, box, reach) if len(line) >= 2]
+    return [w for w, hits in zip(ways, roads._crossings_by(bridges, [w[0] for w in ways])) if hits]
+
+
+def _spans_over_roads(rails, prof, ways):
+    """(rails, prof) with each ground part's run over a road that passes under the track's bridge (ways:
+    _roads_under_bridges') drawn as a span: the bridge goes on past the road's carriageway and the bed's feet
+    (_span_clip's reach, FOOT_MAX_M + STEP_M past its half width), at the beds already made. The map's bridge often ends
+    at the road's centre line, not past its edge: Vienna's primary road under the five tracks by the A23, the bridges
+    ending 2.8 m from its centre on a 4.3 m half width, the ground tracks' beds stood on its carriageway and their walls
+    rose 7 m out of it. Drawn only: which of the two moves (the track rises, the road goes under) is decided on the
+    mapped bridge (_structure_run, grading's own), so the decks' and the beds' heights are those of the mapped parts."""
+    if not ways or not rails:
+        return rails, prof
+    import fast
+    fast.require(487, "rail_span_clip")
+    pi, ai, bi, br = fast._ef.rail_span_clip(roads._lines64([xy for *_, xy in rails]),
+                                             [kind == "ground" for _f, _c, kind, _xy in rails],
+                                             roads._lines64([ln for ln, _h in ways]), [float(h) for _ln, h in ways],
+                                             FOOT_MAX_M + STEP_M, None)
+    out_r, out_p = [], []
+    for n, a, b, bridge in zip(pi.tolist(), ai.tolist(), bi.tolist(), br.tolist()):
+        fid, cls, kind, xy = rails[n]
+        zb, zg = prof[n]
+        if a == 0 and b == len(xy) - 1 and not bridge:
+            out_r.append(rails[n])
+            out_p.append(prof[n])
+            continue
+        out_r.append((fid, cls, "bridge" if bridge else kind, xy[a:b + 1]))
+        out_p.append((np.asarray(zb)[a:b + 1], np.asarray(zg)[a:b + 1]))
+    return out_r, out_p
+
+
 MIN_LINE_M = 50.0           # m: connected track shorter than this is left out (a siding's piece cut off by its
                             # abandoned rest, 12 m under a bridge on its own, 2026-10-25)
 
@@ -3337,6 +3377,7 @@ def tile_decks(frame, tx, ty, cells, ground, far_ground=None, load=None, bed_ele
     prof = _beds(frame, rails, ground,
                  raising_underpasses(tunnels, tcls) + plain_underpasses(frame, cells, box, rails, tunnels=tunnels),
                  load, bed_elev)
+    rails, prof = _spans_over_roads(rails, prof, _roads_under_bridges(frame, cells, box, REACH_M, rails))  # (tile_mesh's)
     carried = [under is not None and kind == "bridge" and np.asarray(under(xy), bool).mean() >= 0.5
                for _f, _c, kind, xy in rails]
     return _bridge_decks(rails, prof, carried)
@@ -3388,6 +3429,7 @@ def tile_mesh(frame, tx, ty, cells, ground, sign_style=None, far_ground=None, re
                       load, bed_elev)
                 if rails else [])
         runs = None
+        rails, prof = _spans_over_roads(rails, prof, _roads_under_bridges(frame, cells, box, REACH_M, rails))
     keep = [n for n in range(len(rails)) if n not in _drop]
     if _drop:                                       # (a retry past the vertex budget: the tracks of lowest rank left out)
         rails, prof = [rails[n] for n in keep], [prof[n] for n in keep]
