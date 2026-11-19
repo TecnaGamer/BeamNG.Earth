@@ -2435,7 +2435,8 @@ def _map_chunks(src, dst, chunks):
     for k, c in enumerate(chunks):
         if c.get("sxn") is not None:
             q = c["sxn"]
-            out[k]["sxn"] = geotiles.world_map(src, dst, np.array([[q[0], q[1], q[2] if len(q) > 2 else 0.0]]))[0].tolist()
+            out[k]["sxn"] = (geotiles.world_map(src, dst, np.array([[q[0], q[1], q[2] if len(q) > 2 else 0.0]]))[0].tolist()
+                             + list(q[3:]))     # (P2c: the branch's id kept: roads.deck_pads)
         if c.get("sx"):
             out[k]["sx"] = [[side, geotiles.world_map(src, dst, np.c_[np.asarray(f, np.float64)[:, :2],
                                                                          np.zeros(len(f))])[:, :2].tolist()]

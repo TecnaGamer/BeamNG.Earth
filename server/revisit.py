@@ -443,9 +443,11 @@ def keyed_env(k):
 # the plans (roadshape.part_simple: bounded, from the map round the structure), never the chain's group.
 # BNE_ROADSHAPE 3 (P2b, sheet): an exit off a bridge one deck with its road (roadshape.deck_sheets: the union slab, the
 # branch pinned to the through deck's heights, no junction pad at the fork); sheet's tiles were decks' before.
+# BNE_ROADSHAPE 4 (P2c, sheet): the union ends where the heights part when the edges' split fails the height tests;
+# the split vertex from the fork's record alone (not the tile's lane shifts); a fork's pad kept for an arm not in it.
 SWITCH_VERSIONS = {"BNE_LEVEL_SPACING": 5, "BNE_FAST_DECK_GROUND": 2, "BNE_UNDER_SPEED": 2, "BNE_FAST_GAP": 5,
                    "BNE_RACEWAY_DIG": 2, "BNE_DIRT_BUMP": 2, "BNE_DIRT_BANK": 2, "BNE_DECK_STRUCT": 5,
-                   "BNE_ROADSHAPE": 3, "BNE_DECK_SKEW": 1}
+                   "BNE_ROADSHAPE": 4, "BNE_DECK_SKEW": 1}
 
 
 def keyed_value(k, v):

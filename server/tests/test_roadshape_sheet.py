@@ -105,6 +105,20 @@ class SheetRecords(unittest.TestCase):
         z_t = 10.0 + 2.0 * ramp[3, 0] / 300.0
         self.assertAlmostEqual(float(ramp[3, 2] + dzs[2][3]), z_t, places=6)
 
+    def test_heights_part_first(self):
+        """P2c: a ramp inside the through deck's edge at its height for 160 m, then climbing 3 m away before the map's
+        edges part (I-95 by the Middle Branch): the union ends where the heights part (|dz| 0.5 m), not nowhere."""
+        thr = ("b-through", MAIN._replace(width=18.0), line((0, 0), (400, 0), 41, 10.0, 10.0), 0)
+        xy = np.array([[0.0, 0.0], [20.0, 7.0], [160.0, 7.0], [220.0, 15.0], [300.0, 35.0]])
+        ramp = ("c-ramp", RAMP._replace(width=8.3), np.c_[xy, [10.0, 10.0, 10.0, 13.0, 14.0]], 0)
+        recs, _dz = self.recs([thr, ramp])
+        self.assertEqual(len(recs), 1)
+        self.assertTrue(165.0 < recs[0]["s_t"] < 185.0, recs[0]["s_t"])
+        self.assertLessEqual(abs(recs[0]["dz"]), 0.5 + 1e-9)
+        flat = ("c-ramp", ramp[1], np.c_[xy, [10.0] * 5], 0)
+        recs, _dz = self.recs([thr, flat])          # (heights together: the edges' split, as P2b)
+        self.assertGreater(recs[0]["s_t"], 195.0)
+
     def test_no_forks(self):
         p = scene()
         self.assertEqual(self.recs([p[0], (p[1][0], TWO, p[1][2], 0), p[2]])[0], [])     # (two-way through)
@@ -175,6 +189,73 @@ class SheetDecks(unittest.TestCase):
             roadshape.SHEET = old
         self.assertEqual(got[0][0], 1)
         self.assertEqual(got[0], got[1])
+
+    def test_two_windows_lane_shifts(self):
+        """P2c (Codex): two tiles shifting the through deck's lanes differently (one tile's shift reaching the split,
+        the other's not): the ramp's split vertex and the union's outline are the same in both, the record's own; the
+        through deck's split vertex on the record's split line in both."""
+        p = scene()
+
+        def shift_a(fid, pts):
+            return None
+
+        def shift_b(fid, pts):
+            if fid != "b-through":
+                return None
+            return 0.5 + 0.004 * np.asarray(pts, np.float64)[:, 0]
+        old = roadshape.SHEET
+        roadshape.SHEET = True
+        try:
+            recs, _decks = roads._sheet_plan(p, None, None, p)
+            self.assertEqual(len(recs), 1)
+            at, nrm = np.asarray(recs[0][3]), np.asarray(recs[0][5])
+            got = []
+            for sh in (shift_a, shift_b):
+                allc = roads._deck_chunks(p, (-60.0, -60.0, 360.0, 90.0), shift_of=sh, sheet_wide=p)
+                ends = sorted({(round(float(c["n"][e][0]), 9), round(float(c["n"][e][1]), 9))
+                               for c in allc if c.get("fid") == "c-ramp" and c.get("deck")
+                               for e, k in ((0, "sk0"), (-1, "sk1")) if c.get(k)})
+                sx = sorted(str(c.get("sx")) for c in allc if c.get("fid") == "b-through" and c.get("sx"))
+                tv = [np.asarray(c["n"][e][:2], np.float64) for c in allc if c.get("fid") == "b-through"
+                      for e, k in ((0, "sk0"), (-1, "sk1")) if c.get(k)]
+                self.assertTrue(tv)
+                for q in tv:            # (on the split line: no offset along the through deck)
+                    w = q - at
+                    self.assertLess(abs(float(w[0] * nrm[1] - w[1] * nrm[0])), 1e-6)
+                got.append((ends, sx[:1]))
+        finally:
+            roadshape.SHEET = old
+        self.assertTrue(got[0][0])
+        self.assertEqual(got[0], got[1])
+        self.assertTrue(np.allclose(np.asarray(got[0][0][0]), recs[0][4], atol=1e-9))
+
+    def test_third_arm_keeps_its_pad(self):
+        """P2c (Codex): a third deck meeting the fork's node, in no union, keeps the pad of the arms other than the
+        union's branch (its corner); the fork alone has none, as in P2b."""
+        p = scene()
+        side = ("d-side", MAIN, line((0, 0), (-60, -100), 13, 10.0, 10.0), -76.6)
+        old = roadshape.SHEET
+        roadshape.SHEET = True
+        try:
+            pads = []
+            for parts in (p, p + [side]):
+                allc = roads._deck_chunks(parts, (-60.0, -120.0, 360.0, 90.0))
+                skip = [c["sxn"] for c in allc if c.get("sxn") is not None]
+                self.assertTrue(skip and all(s[3] == "c-ramp" for s in skip))
+                decks = [(f, s, np.asarray(q, np.float64)[:, :2], np.asarray(q, np.float64)[:, 2]) for f, s, q, _ in parts]
+                got = roads.deck_pads(decks, [], (-60.0, -120.0, 360.0, 90.0), lambda xy: np.zeros(len(xy)), own=False,
+                                      skip=skip)
+                pads.append([g for g in got if float(np.hypot(*np.asarray(g[1], np.float64)[:2])) < 5.0])
+                old_skip = [s[:3] for s in skip]          # (P2b's node alone: the whole pad gone)
+                before = roads.deck_pads(decks, [], (-60.0, -120.0, 360.0, 90.0), lambda xy: np.zeros(len(xy)),
+                                         own=False, skip=old_skip)
+                self.assertFalse([g for g in before if float(np.hypot(*np.asarray(g[1], np.float64)[:2])) < 5.0])
+        finally:
+            roadshape.SHEET = old
+        self.assertEqual(pads[0], [])
+        self.assertEqual(len(pads[1]), 1)
+        ring = np.asarray(pads[1][0][0], np.float64)
+        self.assertLess(float(ring[:, 0].min()), -5.0)          # (it reaches along the third arm)
 
     def test_before(self):
         """The same scene without the switch: the two slabs overlap at the fork (what P2b removes)."""

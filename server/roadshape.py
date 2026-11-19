@@ -683,7 +683,7 @@ def shadow_forks(cell_keys, cell_fn, cache_dir):
 # at the through road's heights (its profile pinned to them in the union, back to its own over the blend after it).
 # From the split the two decks go on as before: the median fill to the gore nose (roadmesh._noses).
 # A record is a function of the two parts alone (their whole lines): every tile that holds them builds the same one.
-SHEET_VERSION = 514         # earthfast.deck_sheets
+SHEET_VERSION = 515         # earthfast.deck_sheets (515: P2c, heights parting first)
 SHEET_JOIN_M = 1.0          # m: a branch's end this near the through part's line meets it
 SHEET_FORK_DEG = 40.0       # the branch leaves within this of the through road's going on (forks.rs's FORK_DEG)
 SHEET_NODE_DZ = 0.5         # m: the two at the node within this in height (one level)

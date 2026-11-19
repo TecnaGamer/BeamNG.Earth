@@ -7348,6 +7348,7 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // flagged, no record; three more params)
     m.add_function(wrap_pyfunction!(roadshape::sheet::deck_sheets, m)?)?;
     // 514: v2 P2b (roadshape::sheet::deck_sheets: exits off bridges as one deck, BNE_ROADSHAPE=sheet)
-    m.add("VERSION", 514)?;
+    // 515: v2 P2c (deck_sheets: the union ends where the heights part when the edges' split fails the height tests)
+    m.add("VERSION", 515)?;
     Ok(())
 }
