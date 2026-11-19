@@ -249,8 +249,10 @@ def end_simple(cell_fn, key, end, ll):
                 # (another structure's deck ending within END_CLEAR_M of this end, a stacked level's or a ramp's: a
                 # road end there could be taken onto either, grading by the nearest, deck_end_at; neither is simple,
                 # so the plans and both decks agree whichever it takes. Codex review of the fix)
+                # (the way's own other parts not: one way split at a level change goes on through its joint, where no
+                # approach ends; Strasbourg's tertiary decks lost their shape to it)
                 for i, k in enumerate(near):
-                    if k in now:
+                    if k in now or str(k[0]) == str(key[0]):
                         continue
                     r = decks[k][0][[0, -1]]
                     e, n, _ = fr.geodetic_to_enu(r[:, 1], r[:, 0], 0.0)
