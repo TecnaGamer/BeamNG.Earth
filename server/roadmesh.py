@@ -816,8 +816,10 @@ def trim_overlaps(rb, context=(), shared=None, coplanar=False):
         # faces at one height, z-fighting: Ottawa t4's merge, the Nordschleife's overlapping raceway decks), a
         # junction's (shared) too: its field lays each half on its one surface. Not an exit's union (P2b: "sx" /
         # "noslab", drawn as one already) against anything)
-        ok = np.array([not (c.get("noslab") or c.get("sx")) for (r, c) in list(rb) + list(context)
-                       if r[5] is not None], bool)
+        # (deck ribbons alone: never a marking's or a sidewalk's ribbon, which a tile draws in its window only;
+        # Codex review of P3d)
+        ok = np.array([bool(c.get("deck")) and not (c.get("noslab") or c.get("sx") or c.get("tunnel"))
+                       for (r, c) in list(rb) + list(context) if r[5] is not None], bool)
         if ok.any():
             pick = np.flatnonzero(ok)
             remap = np.full(len(ok), -1, np.int64)

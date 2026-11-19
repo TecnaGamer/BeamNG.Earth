@@ -113,6 +113,14 @@ fn d2(a: [f64; 2], b: [f64; 2]) -> f64 {
     dx * dx + dy * dy
 }
 
+/// whether p's foot on polyline xy's end segment at end e (0: its start) lies past that end (beyond it, not on it)
+fn past_end(xy: &[[f64; 2]], e: usize, p: [f64; 2]) -> bool {
+    let n = xy.len();
+    let (q, r) = if e == 0 { (xy[0], xy[1]) } else { (xy[n - 1], xy[n - 2]) };
+    let d = [q[0] - r[0], q[1] - r[1]];
+    (p[0] - q[0]) * d[0] + (p[1] - q[1]) * d[1] > 1e-9
+}
+
 fn unit(v: [f64; 2]) -> [f64; 2] {
     let n = (v[0] * v[0] + v[1] * v[1]).sqrt();
     if n > 1e-12 {
@@ -874,7 +882,8 @@ pub fn solve_core(ms: &[Member], joins: &[[i64; 5]], pins: &[[i64; 3]], floors: 
                     return fallback(S_BUDGET, rep);
                 }
                 let (dd, t) = nearest(&ms[a].xy, &ms[a].s, ms[b].xy[k]);
-                if t <= TWIN_END_M || t >= la - TWIN_END_M {
+                if (t <= TWIN_END_M && past_end(&ms[a].xy, 0, ms[b].xy[k]))
+                    || (t >= la - TWIN_END_M && past_end(&ms[a].xy, 1, ms[b].xy[k])) {
                     continue;
                 }
                 let gap = dd.sqrt() - ms[a].half - ms[b].half;
@@ -1010,6 +1019,10 @@ pub fn solve_core(ms: &[Member], joins: &[[i64; 5]], pins: &[[i64; 3]], floors: 
     }
     let mut seen = BTreeSet::new();
     let mut ncross = 0usize;
+    let app_joined: BTreeSet<(usize, usize)> = joins.iter().filter_map(|q| {
+        let (a, b) = (q[0] as usize, q[2] as usize);
+        if a < ms.len() && b < ms.len() && ms[a].deck != ms[b].deck { Some((a.min(b), a.max(b))) } else { None }
+    }).collect();
     for v in grid.values() {
         work += (v.len() as u64) * (v.len() as u64);
         if work > BUDGET.work {
@@ -1030,7 +1043,11 @@ pub fn solve_core(ms: &[Member], joins: &[[i64; 5]], pins: &[[i64; 3]], floors: 
                 let Some((u, w)) = seg_cross(a.xy[ka], a.xy[ka + 1], b.xy[kb], b.xy[kb + 1]) else { continue };
                 let ta = a.s[ka] + u * (a.s[ka + 1] - a.s[ka]);
                 let tb = b.s[kb] + w * (b.s[kb + 1] - b.s[kb]);
-                if abut_dist(a, ta) < at_grade || abut_dist(b, tb) < at_grade {
+                // (a deck and an approach: only the approach's own joint with that deck is at grade; any other deck
+                // over it holds the clearance near its abutment too (never worse than today's: min(need, dz)), Codex
+                // review of P3d)
+                let near = abut_dist(a, ta) < at_grade || abut_dist(b, tb) < at_grade;
+                if near && (a.deck && b.deck || app_joined.contains(&(ma.min(mb), ma.max(mb)))) {
                     continue;
                 }
                 let (za, zb) = (z_at(a, ta), z_at(b, tb));

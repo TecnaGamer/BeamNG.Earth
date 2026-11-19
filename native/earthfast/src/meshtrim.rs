@@ -62,9 +62,9 @@ pub fn deck_trim_overlaps<'py>(
     }
     let (dz_lo, dz_hi, gap, shared) = (pr[0], pr[1], pr[2], pr[3] != 0.0);
     let along_cos = if pr.len() >= 5 { pr[4] } else { f64::NEG_INFINITY };
-    // (533, road revamp v2 P3d: a sixth value non-zero: a point whose nearest point on the other deck is that deck's
-    // very end lies past it, not over it: no cut (roadmesh's coplanar trim: a deck cut halfway toward the end of a
-    // deck merging into it left a hole past that end))
+    // (533, road revamp v2 P3d: a sixth value non-zero, roadmesh's coplanar trim: a point whose nearest point on the
+    // other deck is that deck's very end lies past it, not over it: no cut (a deck cut halfway toward the end of a deck
+    // merging into it left a hole past that end); and the cut line at least at the other's near edge)
     let past_end = pr.len() >= 6 && pr[5] != 0.0;
     let nr = off.len().saturating_sub(1);
     let np_ = l.nrows();
@@ -167,7 +167,10 @@ pub fn deck_trim_overlaps<'py>(
                             continue;
                         }
                     }
-                    let cut = nmax(h[i] - (best / 2.0 - gap), 0.0);
+                    // (533 coplanar mode: the cut line inside both footprints, at least to the other's near edge: a
+                    // narrow deck's edge short of the midpoint left a gap to the wide one's, Codex review of P3d)
+                    let keep = if past_end { nmax(best / 2.0, best - wo) } else { best / 2.0 - gap };
+                    let cut = nmax(h[i] - keep, 0.0);
                     let on_left = (bq[0] - p[0]) * u[i][0] + (bq[1] - p[1]) * u[i][1] > 0.0;
                     if on_left {
                         tl[i] = nmax(tl[i], cut);
