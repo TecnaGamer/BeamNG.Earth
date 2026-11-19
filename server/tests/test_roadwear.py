@@ -258,6 +258,21 @@ class SurfaceV2Test(unittest.TestCase):
         patches = len([c for c in ch if c["m"] == "bne_wear_patchstrip"]) / (L / 1000)
         self.assertTrue(5 <= patches <= 11, patches)      # about 8 a km
 
+    def test_v2_leaves_out_the_old_lane_strips(self):
+        """With the v2 overlays the full-lane strips (polish, sealed, cracks) are left out even with BNE_WEAR_STRIPS=on
+        (they lay over the v2 wear and patch strips 0.2 mm apart); the manhole covers stay."""
+        rd = [("c", spec(surf="concrete", lanes=4, cls="motorway", width=16.0), line(128, -500, 128, 800), 0.0),
+              ("a", spec(lanes=2), line(-500, 128, 800, 128), 0.0)]
+        from unittest import mock
+        with mock.patch.object(roadwear, "STRIPS_ON", True):
+            got = kinds(plan(rd))
+            with mock.patch.object(roadwear, "SURFACE_V2", False):
+                old = kinds(plan(rd))
+        self.assertTrue({"bne_wear_sealed", "bne_wear_cracks"} & set(old), old)     # (drawn without v2)
+        self.assertFalse({"bne_wear_tread", "bne_wear_sealed", "bne_wear_cracks"} & set(got), got)
+        self.assertIn("bne_wear_tread2", got)
+        self.assertEqual("bne_spot_manhole" in got, "bne_spot_manhole" in old)
+
     def test_variation_runs_through_junctions(self):
         """The variation strips run on across a crossing road's carriageway (the stock maps'); the wear stops."""
         a = ("a", spec(lanes=2, width=7.4), line(-500, 128, 800, 128), 0.0)
