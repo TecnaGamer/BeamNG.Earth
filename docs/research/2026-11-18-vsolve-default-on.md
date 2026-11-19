@@ -1,7 +1,7 @@
 # The one solve on by default (2026-11-18)
 
 This is the RFC's step 4, first half. With `BNE_VSOLVE` unset, the planner now uses the solve's heights wherever the
-native kernel has the solve (`vsolve.KERNEL_MIN`, earthfast 490). On an older build it stays off, as before: the
+native kernel has the solve (`vsolve.KERNEL_MIN`, earthfast 505). On an older build it stays off, as before: the
 plans are the passes' either way, but with the mode on they would be cached under the solve's key
 (`plancache.plans_format`, `.vs1`) and kept after the kernel was rebuilt. `BNE_VSOLVE=off` gives the passes alone.
 The passes themselves stay: removing them, one PR each, is the second half.
@@ -116,4 +116,4 @@ passes / on before this PR (2026-11-18-vsolve-corridors.md's code, with the floo
 - **The drive in the game** (the RFC's step 3) has not been done. The user's order is that it comes last.
 - **The passes stay.** They still run in on mode: the solve takes its rows from their rules and falls back to their
   heights where its hard rows are infeasible. Removing them is the RFC's step 4, second half, one PR each.
-- **The kernel:** the solve needs earthfast 490. A build without it plans with the passes alone, as before.
+- **The kernel:** the solve needs earthfast 505. A build without it plans with the passes alone, as before.
