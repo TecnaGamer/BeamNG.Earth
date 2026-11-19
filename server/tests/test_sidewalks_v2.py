@@ -130,6 +130,35 @@ class ProfileTest(unittest.TestCase):
         self.assertAlmostEqual(float(a["pts"][-1, 2]), float(b["pts"][0, 2]), places=12)
 
 
+class BentSeamTest(unittest.TestCase):
+    @unittest.skipUnless(getattr(fast._ef, "VERSION", 0) >= sidewalks.V2_NATIVE, "earthfast 502")
+    def test_pieces_meeting_on_a_bend_share_their_curb_point_and_reveal(self):
+        # a run bending 30 degrees at a tile border: each tile's piece ends on the bend; with the whole run's mitre
+        # there (build_tile's end_n) both put the curb, and so the reveal's probes, at one point
+        a = np.column_stack([np.linspace(0, 20, 11), np.zeros(11), np.zeros(11)])
+        d = np.array([np.cos(np.radians(30)), np.sin(np.radians(30))])
+        b = np.column_stack([20 + d[0] * np.linspace(0, 20, 11), d[1] * np.linspace(0, 20, 11), np.zeros(11)])
+        whole = np.vstack([a, b[1:]])
+        n = sidewalks.normals_2d(whole[:, :2])[10]
+        ca, _ = sidewalks.run_geometry(a, 1, 2.5, (None, (a[-1, :2], n)))
+        cb, _ = sidewalks.run_geometry(b, 1, 2.5, ((b[0, :2], n), None))
+        self.assertLess(float(np.hypot(*(ca[-1, :2] - cb[0, :2]))), 1e-12)
+        plain_a, _ = sidewalks.run_geometry(a, 1, 2.5)
+        plain_b, _ = sidewalks.run_geometry(b, 1, 2.5)
+        self.assertGreater(float(np.hypot(*(plain_a[-1, :2] - plain_b[0, :2]))), 0.3, "without: apart")
+        with mock.patch.object(sidewalks, "V2", True):
+            wa = {"pts": a.copy(), "side": 1, "caps": (True, False), "ramps": [], "w": 2.5, "roll": 0.0,
+                  "end_n": (None, (a[-1, :2].copy(), n))}
+            wb = {"pts": b.copy(), "side": 1, "caps": (False, True), "ramps": [], "w": 2.5, "roll": 0.0,
+                  "end_n": ((b[0, :2].copy(), n), None)}
+
+            def ground(x, y):
+                return 0.05 * np.sin(x / 2.0) + 0.04 * np.cos(y / 1.5)
+            for w in (wa, wb):
+                roads.drape_walks(geodesy.EnuFrame(40.0, -100.0, 0.0), None, [w], ground)
+        self.assertAlmostEqual(float(wa["hv"][-1]), float(wb["hv"][0]), places=12)
+
+
 class DrivewayTest(unittest.TestCase):
     @unittest.skipUnless(getattr(fast._ef, "VERSION", 0) >= sidewalks.V2_NATIVE, "earthfast 502")
     def test_crossings_along_a_run(self):

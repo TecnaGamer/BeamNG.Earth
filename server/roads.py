@@ -7203,9 +7203,10 @@ def corner_rolls(arc, rows, roll_of):
     return tuple(out)
 
 
-def walk_drives(run0, lines):
-    """[(s0, s1)] along a walk's centreline run0 (k, >= 2) where driveways cross it (sidewalks v2: its lowered kerb
-    and apron there; earthfast walk_crossings). lines: [(centreline (m, 2), half width)]."""
+def walk_drives(run0, lines, curb0=None):
+    """[(s0, s1)] where driveways cross a walk's centreline run0 (k, >= 2): stations along its curb line curb0 (k, >= 2,
+    row for row: the stations the mesh's ramps take; None: along run0) (sidewalks v2: its lowered kerb and apron
+    there; earthfast walk_crossings). lines: [(centreline (m, 2), half width)]."""
     run0 = np.asarray(run0, np.float64)
     if not lines or len(run0) < 2:
         return []
@@ -7220,7 +7221,18 @@ def walk_drives(run0, lines):
     fast.require(sidewalks.V2_NATIVE, "walk crossings")
     pts = np.ascontiguousarray(np.concatenate([ln for ln, _ in near]), np.float64)
     off = np.r_[0, np.cumsum([len(ln) for ln, _ in near])].astype(np.int64)
-    return list(fast._ef.walk_crossings(xy, pts, off, np.array([h for _, h in near], np.float64)))
+    got = list(fast._ef.walk_crossings(xy, pts, off, np.array([h for _, h in near], np.float64)))
+    if curb0 is None or not got:
+        return got
+    sc = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(xy, axis=0).T))]
+    sk = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(np.asarray(curb0, np.float64)[:, :2], axis=0).T))]
+    # (beyond the ends: the end's own scale; a range's middle mapped, its half width kept)
+    out = []
+    for a, b in got:
+        m, h = 0.5 * (a + b), 0.5 * (b - a)
+        mk = float(dnp.interp(m, sc, sk)) + (m - sc[-1] if m > sc[-1] else min(m, 0.0))
+        out.append((mk - h, mk + h))
+    return out
 
 
 def walk_drive_ranges(walks, drives):
@@ -7233,7 +7245,9 @@ def walk_drive_ranges(walks, drives):
     for wk in walks:
         if "corner" in wk or "disc" in wk or "roll" not in wk or wk.get("median") or not wk.get("minor"):
             continue
-        got = walk_drives(wk["pts"], lines)
+        import sidewalks
+        curb, _ = sidewalks.run_geometry(wk["pts"], wk["side"], wk.get("w", SIDEWALK["w"]), wk.get("end_n"))
+        got = walk_drives(wk["pts"], lines, curb)
         if got:
             merged = []
             for a, b in sorted(list(wk.get("drives", ())) + got):
@@ -7245,7 +7259,7 @@ def walk_drive_ranges(walks, drives):
 
 
 def drives_on(run, run0, drives0):
-    """drives0 (along run0) along run, a piece of run0 (clip_polyline's: its start on run0), those within
+    """drives0 (along the curb line run0) along run, a piece's curb line (its start on run0), those within
     DRIVE_KEEP_M of it."""
     if not drives0:
         return []
@@ -7295,7 +7309,7 @@ def _drape_walks_v2(frame, elev, walks, ground):
         else:
             w = float(wk.get("w", SIDEWALK["w"]))
             pts = densify(np.asarray(wk["pts"], np.float64)[:, :3], step)
-            curb, out = sidewalks.run_geometry(pts, wk["side"], w)
+            curb, out = sidewalks.run_geometry(pts, wk["side"], w, wk.get("end_n"))
             roll = float(wk.get("roll", 0.0))
             items.append(("run", wk, (pts, curb, out, w, roll)))
             ends.extend(((curb[0, :2], roll), (curb[-1, :2], roll)))
@@ -13215,6 +13229,7 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
             runs_near.append({"fid": fid, "pts": run, "w": style.width, "side": 1,
                               "j": (False, False), "footway": style, "mapped": True})
         legacy_surfaces = {}
+        import sidewalks as _sw
         v2_walks = _sw_v2() and bool(roads)
         if v2_walks:                            # (sidewalks v2: the driveways a walk crosses, each road's kerb)
             drive_lines = [(p2[:, :2], s2.width / 2) for (_f2, s2, p2, _l2), d in zip(roads, drive_m.tolist()) if d]
@@ -13227,7 +13242,10 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
             if v2_walks and not detached and not rn.get("mapped"):
                 v2_extra["roll"] = 0.0 if rn.get("median") else kerb_of(fid)
                 v2_extra["minor"] = fid in seen and seen[fid][2] is not None and seen[fid][2].cls in DRIVE_CLASSES
-                drives0 = [] if rn.get("median") else walk_drives(run0, drive_lines)
+                # (the curb line of the whole run: the drives' stations along it, a piece's bent ends' mitres)
+                n0 = _sw.normals_2d(np.asarray(run0, np.float64)[:, :2])
+                curb0, _ = _sw.run_geometry(run0, side, w)
+                drives0 = [] if rn.get("median") else walk_drives(run0, drive_lines, curb0)
             if footway is not None:
                 style = {"surface": footway.surface, "height": footway.height, "europe": True, "detached": detached}
                 if rn.get("mapped"):
@@ -13260,7 +13278,13 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
                 walks.append({"pts": run, "side": side, "caps": caps, "ramps": ramps, "w": w, "fid": fid,
                               "median": rn.get("median", False), **style, **v2_extra})
                 if v2_extra:
-                    walks[-1]["drives"] = drives_on(run, run0, drives0)
+                    ends = []
+                    for q in (run[0, :2], run[-1, :2]):
+                        k = np.flatnonzero(dnp.hypot(*(run0[1:-1, :2] - q).T) < 1e-9)
+                        ends.append((q.copy(), n0[1 + int(k[0])].copy()) if len(k) else None)
+                    walks[-1]["end_n"] = tuple(ends)
+                    curb, _ = _sw.run_geometry(run, side, w, walks[-1]["end_n"])
+                    walks[-1]["drives"] = drives_on(curb, curb0, drives0)
                 if not rn.get("median") and not detached:
                     walks[-1]["drain_ends"] = (caps[0] or at_j0, caps[1] or at_j1)
         if walks is not None and pole_profile is not None:

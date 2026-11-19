@@ -107,6 +107,9 @@ def _normals_2d(xy):
     return n
 
 
+normals_2d = _normals_2d
+
+
 RAMP_RUN = 1.8          # m over which a curb ramp's slab climbs back to the sidewalk (1:12)
 RAMP_FLARE = 0.6        # m of curb sloping down on each side of a ramp
 RAMP_H = 0.01           # m: the curb at a ramp (flush with the gutter)
@@ -227,7 +230,8 @@ def _soft_parts(p):
                 dnp.interp(mid, stations, np.asarray(v, np.float64))
         hv = v2.get("hv")
         hv = np.asarray(hv, np.float64) if hv is not None and len(hv) == len(stations) else None
-        centre = centre + ({**v2, "hv": along("hv"), "drop": along("drop"), "roll": along("roll"),
+        # (its back v1's, as the tips' profile: the two meet in one cross-section)
+        centre = centre + ({**v2, "hv": along("hv"), "drop": None, "roll": along("roll"),
                             "drives": [(a - lo, b - lo) for a, b in v2.get("drives") or ()]},)
     tips = []
     for width, a, b, start in ((lo, 0., lo, True), (hi, length - hi, length, False)):
@@ -301,11 +305,13 @@ class Builder:
             ramps = c.get("ramps", ()) if h > LOW_EDGE_HEIGHT else ()
             self.add_corner(c["arc"], c["inward"], c["outer"], ramps=ramps, **style)
             if V2:
-                self._v2_last({"hv": c.get("hv"), "roll": c.get("roll"), "otoe": c.get("otoe"),
-                               "abs": bool(c.get("abs"))})
+                otoe = c.get("otoe")
+                if otoe is not None and style["europe"] and len(otoe) == 3 and len(c["outer"]) == 3:
+                    otoe = np.r_[otoe[0], 0.5 * (otoe[0] + otoe[1]), otoe[1:]]   # (add_corner's midpoint, its ground)
+                self._v2_last({"hv": c.get("hv"), "roll": c.get("roll"), "otoe": otoe, "abs": bool(c.get("abs"))})
             return
         width = walk.get("w", default_width)
-        curb, out = run_geometry(walk["pts"], walk["side"], width)
+        curb, out = run_geometry(walk["pts"], walk["side"], width, walk.get("end_n") if V2 else None)
         slab = BRICK if walk.get("brick") and style["surface"] is None else 1
         ramps = walk.get("ramps", ()) if h > LOW_EDGE_HEIGHT else ()
         self.add_run(curb, out, width, caps=walk["caps"], ramps=ramps, slab=slab, taper=style["europe"],
@@ -564,11 +570,16 @@ class _Lean:
         return self.b.empty()
 
 
-def run_geometry(walk_line, side, w):
+def run_geometry(walk_line, side, w, ends=None):
     """The curb line and outward vectors of a sidewalk run given its centreline (k, 3) and the side of
-    the road it is on (+1: the road's left, as roads.offset_polyline). Pure."""
+    the road it is on (+1: the road's left, as roads.offset_polyline); ends: (start, end), each None or (point,
+    normal): that normal where the line's end is still that point (a tile's piece of a run bending there). Pure."""
     xy = np.asarray(walk_line, np.float64)[:, :2]
     n = _normals_2d(xy)
+    if ends is not None:                # (sidewalks v2: a piece's end on a bend of its whole run: the whole run's mitre)
+        for i, e in ((0, ends[0]), (-1, ends[1])):
+            if e is not None and float(dnp.hypot(*(xy[i] - np.asarray(e[0], np.float64)[:2]))) < 1e-6:
+                n[i] = np.asarray(e[1], np.float64)[:2]
     out = n * side                      # left of the road's direction is +n for side +1
     curb = np.array(walk_line, np.float64)
     curb[:, :2] = xy - out * (w / 2)

@@ -2445,7 +2445,15 @@ def _map_walks(src, dst, walks):
             c["inward"] = inw / np.maximum(dnp.hypot(*inw.T), 1e-12)[:, None]
             wk["corner"] = c
         else:
-            wk["pts"] = mp(wk["pts"])
+            src_pts = np.asarray(wk["pts"], np.float64)
+            wk["pts"] = mp(src_pts)
+            if wk.get("end_n") is not None:     # (sidewalks v2: a bent end's mitre: at the mapped end, turned)
+                ends = []
+                for i, e in zip((0, -1), wk["end_n"]):
+                    ok = e is not None and float(dnp.hypot(*(src_pts[i, :2] - np.asarray(e[0])[:2]))) < 1e-6
+                    ends.append((np.asarray(wk["pts"][i, :2], np.float64).copy(),
+                                 dnp.matmul(np.asarray(e[1], np.float64)[:2], r2.T)) if ok else None)
+                wk["end_n"] = tuple(ends)
         out.append(wk)
     return out
 
