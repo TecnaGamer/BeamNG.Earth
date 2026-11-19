@@ -131,6 +131,7 @@ mod railindex;
 mod railnode;
 mod stationzone;
 mod seawater;
+mod subpoly;
 mod railunder;
 mod railspans;
 mod osmml;
@@ -6396,6 +6397,9 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(enu_rings, m)?)?;
     m.add_function(wrap_pyfunction!(enu_bounds, m)?)?;
     // (500: enu_rings / enu_bounds, mapgeom's many-ring conversions)
+    m.add_function(wrap_pyfunction!(subpoly::sub_polyline, m)?)?;
+    m.add_function(wrap_pyfunction!(subpoly::sub_polylines, m)?)?;
+    // (504: roads.sub_polyline and its many-ring batch)
     m.add_function(wrap_pyfunction!(reframe_segs, m)?)?;
     m.add_function(wrap_pyfunction!(bc7_encode, m)?)?;
     m.add_function(wrap_pyfunction!(inside_blockers, m)?)?;
@@ -7171,6 +7175,8 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // only where its weight is not 0; each bin's segments met nearest first, so a point in a core stops within its
     // first pairs).
     // 498-502 are other branches'
-    m.add("VERSION", 503)?;
+    // 504: sub_polyline / sub_polylines (subpoly.rs: roads.sub_polyline, a feature's rings x level ranges in one call
+    // for _parts_by_level_new, _part_keys_new, railways._pieces_of, height_limit_lines). 502-503 are other branches'
+    m.add("VERSION", 504)?;
     Ok(())
 }
