@@ -59,7 +59,7 @@ class GroundEnds(unittest.TestCase):
 
     def test_rows_are_the_ribbons_own(self):
         rows = list(roadmesh._end_rows(self.rs, self.ab))
-        runs = roadmesh._ground_runs(self.rs, self.ab)
+        runs = list(roadmesh._ground_runs(self.rs, self.ab))
         ab = self.ab
         self.assertEqual(len(rows), len(self.rs))
         for g, (left, right, *_r) in enumerate(self.rs):
@@ -79,11 +79,11 @@ class GroundEnds(unittest.TestCase):
         # (a bounded buffer: a ribbon or a few a call, the same rows)
         import unittest.mock as um
         whole = [tuple(np.asarray(x).tobytes() for x in r) for r in roadmesh._end_rows(self.rs, self.ab)]
-        runs = roadmesh._ground_runs(self.rs, self.ab)
+        runs = list(roadmesh._ground_runs(self.rs, self.ab))
         with um.patch.object(roadmesh, "_TO_POINTS_MAX", 5):
             self.assertEqual([tuple(np.asarray(x).tobytes() for x in r) for r in roadmesh._end_rows(self.rs, self.ab)],
                              whole)
-            got = roadmesh._ground_runs(self.rs, self.ab)
+            got = list(roadmesh._ground_runs(self.rs, self.ab))
         self.assertTrue(all(_same(a[0], b[0]) and a[1] == b[1] and a[2] == b[2] for a, b in zip(got, runs)))
 
     def test_none_unless_float64_pairs(self):

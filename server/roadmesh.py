@@ -1339,25 +1339,28 @@ def _end_rows(rs, ab):
 
 
 def _ground_runs(rs, ab):
-    """build's ground ribbons rs: [(lengths along the mid line from its start, its start's distance to the nearest
-    deck end of ab, its end's)] in rs's order; None as _end_rows."""
+    """build's ground ribbons rs, one (lengths along the mid line from its start, its start's distance to the nearest
+    deck end of ab, its end's) after another in rs's order (a call per quantity for a chunk of ribbons); None as
+    _end_rows."""
     if not rs or not _f64_pairs(rs):
         return None
-    lens = [len(r[0]) for r in rs]
-    mid = (np.concatenate([r[0] for r in rs]) + np.concatenate([r[1] for r in rs])) * 0.5
-    ends = np.cumsum(lens)
-    starts = ends - lens
-    inner = np.ones(len(mid), bool)             # (each ribbon's own legs only: none from one ribbon to the next)
-    inner[starts] = False
-    legs = np.flatnonzero(inner)
-    d = mid[legs] - mid[legs - 1]
-    seg = dnp.hypot(d[:, 0], d[:, 1])
-    d0, d1 = np.empty(len(rs)), np.empty(len(rs))
-    for a, b in _chunks(len(rs), ab):
-        d0[a:b] = _to_points(ab, mid[starts[a:b]]).min(1)
-        d1[a:b] = _to_points(ab, mid[ends[a:b] - 1]).min(1)
-    return [(np.r_[0.0, np.cumsum(seg[a - i:b - i - 1])], x0, x1)
-            for i, (a, b, x0, x1) in enumerate(zip(starts.tolist(), ends.tolist(), d0, d1))]
+
+    def runs():
+        for a, b in _chunks(len(rs), ab):
+            part = rs[a:b]
+            lens = [len(r[0]) for r in part]
+            mid = (np.concatenate([r[0] for r in part]) + np.concatenate([r[1] for r in part])) * 0.5
+            ends = np.cumsum(lens)
+            starts = ends - lens
+            inner = np.ones(len(mid), bool)     # (each ribbon's own legs only: none from one ribbon to the next)
+            inner[starts] = False
+            legs = np.flatnonzero(inner)
+            d = mid[legs] - mid[legs - 1]
+            seg = dnp.hypot(d[:, 0], d[:, 1])
+            d0, d1 = _to_points(ab, mid[starts]).min(1), _to_points(ab, mid[ends - 1]).min(1)
+            for i, (s0, s1, x0, x1) in enumerate(zip(starts.tolist(), ends.tolist(), d0, d1)):
+                yield np.r_[0.0, np.cumsum(seg[s0 - i:s1 - i - 1])], x0, x1
+    return runs()
 
 
 def build(frame, chunks, elev, origin, lift=0.0, clip=None, follow=False, q=None, drawn=None, context=(),
@@ -1479,15 +1482,13 @@ def build(frame, chunks, elev, origin, lift=0.0, clip=None, follow=False, q=None
     k0 = nverts = 0
     # (the ground ribbons' lengths along and end distances to the deck ends, one call each as above)
     runs = _ground_runs([r for r, _c in rbc if r[5] is None and len(r[0]) >= 2], ab_pts) if len(deck_abuts) else None
-    gi = 0
     for ri, ((left, right, v, m, layer, fz), c) in enumerate(rbc):
         k = len(left)
         if fz is None:
             cur_lift = np.full(k, lift)
             if len(deck_abuts) and k >= 2:
                 if runs is not None:
-                    s_from_start, d0, d1 = runs[gi]
-                    gi += 1
+                    s_from_start, d0, d1 = next(runs)
                 else:
                     mid = (left + right) * 0.5
                     s_from_start = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(mid, axis=0).T))]
