@@ -94,6 +94,17 @@ class SheetRecords(unittest.TestCase):
         self.assertEqual(a[0]["s_b"], b[0]["s_b"])
         self.assertEqual((b[0]["t"], b[0]["b"]), (1, 0))
 
+    def test_ends_a_hair_apart(self):
+        """The ramp's start 0.2 um from the through deck's (two nodes a rounding apart): one record, its pin once."""
+        p = scene()
+        ramp = p[2][2].copy()
+        ramp[0, 0] += 2e-7
+        src = [p[0], p[1], (p[2][0], p[2][1], ramp, p[2][3])]
+        recs, dzs = roads._sheet_records(src)
+        self.assertEqual(len(recs), 1)
+        z_t = 10.0 + 2.0 * ramp[3, 0] / 300.0
+        self.assertAlmostEqual(float(ramp[3, 2] + dzs[2][3]), z_t, places=6)
+
     def test_no_forks(self):
         p = scene()
         self.assertEqual(self.recs([p[0], (p[1][0], TWO, p[1][2], 0), p[2]])[0], [])     # (two-way through)

@@ -12761,7 +12761,9 @@ def _sheet_records(src):
     xy = [np.asarray(src[i][2], np.float64)[:, :2] for i in uniq]
     lo = np.array([p.min(0) for p in xy]).reshape(-1, 2)
     hi = np.array([p.max(0) for p in xy]).reshape(-1, 2)
-    nodes = sorted({(round(float(p[e, 0]), 6), round(float(p[e, 1]), 6)) for n, p in enumerate(xy)
+    # (each one-way part's end exactly as it is: the kernel takes the branches ending exactly there, so every branch
+    # end is one call's alone, its pins added once; Codex: rounded buckets could take one end twice)
+    nodes = sorted({(float(p[e, 0]), float(p[e, 1])) for n, p in enumerate(xy)
                     if _travel(src[uniq[n]][1]) != 0 for e in (0, -1)})
     r_ = roadshape.SHEET_NODE_R_M
     recs, dzs = [], [None] * len(src)
@@ -12774,13 +12776,10 @@ def _sheet_records(src):
             p = xy[n]
             if float(_seg_dist(qa[None, :], p[:-1], p[1:]).min()) <= r_:
                 local.append(uniq[n])
-        # (the node's exact point: an end of one of them)
-        node = next((src[i][2][e][:2] for i in local for e in (0, -1)
-                     if (round(float(src[i][2][e][0]), 6), round(float(src[i][2][e][1]), 6)) == q), None)
-        if node is None or len(local) < 2:
+        if len(local) < 2:
             continue
         got, dz = roadshape.deck_sheets([(src[i][0], src[i][1], src[i][2], float(src[i][1].width) / 2) for i in local],
-                                        node=node)
+                                        node=q)
         for r in got:
             r = dict(r)
             r["t"], r["b"] = local[r["t"]], local[r["b"]]

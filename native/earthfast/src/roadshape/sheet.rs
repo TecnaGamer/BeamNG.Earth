@@ -466,7 +466,7 @@ pub fn deck_sheets<'py>(py: Python<'py>, xy: PyReadonlyArray2<'py, f64>, z: PyRe
             for e in 0..2 {
                 if node.len() == 2 && !parts[b].line.p.is_empty() {
                     let q = if e == 0 { parts[b].line.p[0] } else { parts[b].line.p[parts[b].line.p.len() - 1] };
-                    if norm(sub(q, [node[0], node[1]])) > 1e-6 { continue; }     // (only the branch ends at node)
+                    if q[0] != node[0] || q[1] != node[1] { continue; }      // (only the branch ends exactly at node)
                 }
                 if let Some(r) = fork_of(&parts, b, e, &prm) { out.push(r); }
             }
