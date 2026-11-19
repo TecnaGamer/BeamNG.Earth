@@ -671,8 +671,16 @@ local function apply(e)
   local c = S.cur
   setIf(e.getCloudCover, e.setCloudCover, c.coverage, 0.005)
   writeSun(c.sunDim)
-  setIf(e.getCloudCirrusCoverage, e.setCloudCirrusCoverage, c.cirrusCoverage, 0.005)
-  setIf(e.getCloudCirrusDensity, e.setCloudCirrusDensity, c.cirrusDensity, 0.005)
+  -- A positive residue keeps the renderer's cirrus pass active even when
+  -- real weather reports no high cloud. Finish the fade at exactly zero.
+  local eps = 0.005
+  if S.tgt.cirrusCoverage == 0 and c.cirrusCoverage <= eps and c.cirrusDensity <= eps then
+    setIf(e.getCloudCirrusCoverage, e.setCloudCirrusCoverage, 0, 0)
+    setIf(e.getCloudCirrusDensity, e.setCloudCirrusDensity, 0, 0)
+  else
+    setIf(e.getCloudCirrusCoverage, e.setCloudCirrusCoverage, c.cirrusCoverage, eps)
+    setIf(e.getCloudCirrusDensity, e.setCloudCirrusDensity, c.cirrusDensity, eps)
+  end
   local l = math.sqrt(c.cloudDirX ^ 2 + c.cloudDirY ^ 2)
   if l > 1e-3 then
     local x, y = c.cloudDirX / l, c.cloudDirY / l
