@@ -29,8 +29,8 @@ import sys
 
 import numpy as np
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-if HERE not in sys.path:
+HERE = os.path.realpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "server"))
+if HERE not in sys.path:   # (the server's modules: this probe lives in tools/probes/)
     sys.path.insert(0, HERE)
 
 

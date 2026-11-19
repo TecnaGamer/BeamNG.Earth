@@ -23,7 +23,7 @@ import tempfile
 import threading
 import time
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.realpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "server")))
 os.environ.setdefault("BNGE_LOG", "warning")
 
 import numpy as np  # noqa: E402
