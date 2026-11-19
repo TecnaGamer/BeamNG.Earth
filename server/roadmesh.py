@@ -2012,7 +2012,8 @@ def deck(chunks, origin, piers=(), context=(), beams=(), ground=(), parapets=Non
     cov_ctx = [(r, c) for r, c in zip(cr, context)] + _ground_carriageways(list(chunks) + list(ground))
     covered = _parapet_cover([(r, c) for r, c in rb], cov_ctx)
     medians = _median_gaps([(r, c) for r, c in rb],
-                           [(r, c) for r, c in zip(ribbons(list(context)), context) if r[5] is not None])
+                           [(r, c) for r, c in zip(ribbons(list(context)), context) if r[5] is not None],
+                           skip={n for n, (_r, c) in enumerate(rb) if c.get("rch")})
     tops = {}               # slab depth -> the indices of its pieces' tops in P (_slabs_from_tops)
     for n, ((left, right, v, m, layer, z), c) in enumerate(rb):
         active_field = junctions.get(c.get('fid'))
@@ -2021,13 +2022,12 @@ def deck(chunks, origin, piers=(), context=(), beams=(), ground=(), parapets=Non
         u = lat / np.maximum(dnp.hypot(lat[:, 0], lat[:, 1]), 1e-9)[:, None]     # unit left
         wide = 0.0 if c.get("tunnel") else PARAPET_W
         sl, sr = _sheet_reach(c, left, right)
-        gl_, gr_, ol_, or_, vl_, vr_ = _sheet_medians(medians[n], sl, sr)
-        (xl, cl), (xr, cr_) = _opposite(gl_, ol_, *_noses(gl_), vl_), _opposite(gr_, or_, *_noses(gr_), vr_)
+        rl, rr, cl, cr_, _nl, _nr = _slab_reach(c, v, medians[n], sl, sr, wide, left, right)
         covered[n] = (covered[n][0] | cl, covered[n][1] | cr_)
         # the slab's edges, past the road's (to the middle of a median beside another deck; to a point at a gore nose),
         # changing no faster than REACH_SLOPE along it; over an exit's union (P2b) to its outer edge
-        el = left + u * _sheet_max(_smooth_reach(_reach(wide, xl), left), sl)[:, None]
-        er = right - u * _sheet_max(_smooth_reach(_reach(wide, xr), right), sr)[:, None]
+        el = left + u * _sheet_max(rl, sl)[:, None]
+        er = right - u * _sheet_max(rr, sr)[:, None]
         zl = active_field.at(el) if active_field is not None else z
         zr = active_field.at(er) if active_field is not None else z
         bk = _bank_rows(c, k) if active_field is None else None
@@ -2443,12 +2443,13 @@ MEDIAN_ALONG_M = 1.2    # ... or m (its edge points' spacing)
 MEDIAN_INSIDE_M = 0.3   # m: and no further inside this deck's edge
 
 
-def _median_gaps(rb, context=()):
+def _median_gaps(rb, context=(), skip=()):
     """Per deck ribbon (left, right, opposite left, opposite right): the gap (m) from each edge point to the nearest
     edge of another deck within MEDIAN_JOIN_M at about its height (PARAPET_COVER_DZ), else 0: a median between two
     carriageways' decks; and whether that deck carries the opposite traffic (both one-way, their chunks' "tdir").
     rb and context: [(ribbon, chunk)]; the context's pieces of the same deck (its fid: the deck going on in the tiles
-    around) are not another deck (they had hidden every median at 0 m)."""
+    around) are not another deck (they had hidden every median at 0 m). skip: the indices of rb worked out elsewhere
+    (None in their place: a chunk with its line's reach, _slab_reach); still edges for the others."""
     edges = []                      # (owner, points (k, 3), its traffic's direction (k, 2))
     for n, ((left, right, v, m, layer, z), c) in enumerate(rb):
         key = c.get("fid", ("own", n))
@@ -2462,6 +2463,9 @@ def _median_gaps(rb, context=()):
         edges.append((key, np.c_[right, z], tv))
     out = []
     for n, ((left, right, v, m, layer, z), c) in enumerate(rb):
+        if n in skip:
+            out.append(None)
+            continue
         own = c.get("fid", ("own", n))
         mine = _travel_vec(left, right, c.get("tdir", 0))
         sides, opps, hit_owners, overs = [], [], [], []
@@ -2531,6 +2535,36 @@ MEDIAN_BARRIER_M = 2.5
 
 
 REACH_SLOPE = 0.35      # m the slab's reach past its road (a median's fill, a nose) may change per m along its edge
+REACH_STEP_M = 2.0      # m between the stations a deck part's reach is worked out at along its whole line (_slab_reach)
+NOSE_WALK_PTS = 10      # stations a gore nose narrows over at most, in from its run's end (along a line: the reach a
+                        # function of the line within a bounded distance, roads.REACH_WINDOW_M)
+
+
+def _slab_reach(c, v, med, sl, sr, wide, left, right):
+    """Per row of a deck ribbon (v: its texture coordinate along it) the slab's reach past the road's edge, before an
+    exit union's (_sheet_max), whether a median covers the edge, and whether the edge is a gore nose's or a median
+    barrier's (full barriers): (reach left, right, covered left, right, nose left, right). A drawn deck chunk with its
+    part's reach along the whole line ("rch": roads._reach_tag, earthfast deck_reach) samples it at its rows, the
+    flags at the nearest station: the same at a tile's cut in both tiles (seamprobe). Else from the chunk's own median
+    gaps (med: _median_gaps' row), as before."""
+    rc = c.get("rch")
+    if rc:
+        nodes = np.asarray(c["n"], np.float64)
+        a = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(nodes[:, :2], axis=0).T))]
+        s = dnp.interp(np.asarray(v, np.float64) * float(c.get("tl") or 10.0), a, np.asarray(rc["st"], np.float64))
+        S = np.asarray(rc["s"], np.float64)
+        rl = dnp.interp(s, S, np.asarray(rc["l"], np.float64))
+        rr = dnp.interp(s, S, np.asarray(rc["r"], np.float64))
+        j = np.clip(np.searchsorted(S, s), 1, len(S) - 1)
+        j = np.where(s - S[j - 1] <= S[j] - s, j - 1, j)
+        f = np.asarray(rc["f"], np.int64)[j]
+        ml, mr = sl > 0, sr > 0         # (over an exit's union: no median there, _sheet_medians)
+        return (rl, rr, (f & 1 > 0) & ~ml, (f & 2 > 0) & ~mr, (f & 4 > 0) & ~ml, (f & 8 > 0) & ~mr)
+    gl_, gr_, ol_, or_, vl_, vr_ = _sheet_medians(med, sl, sr)
+    (xl, cl), (xr, cr_) = _opposite(gl_, ol_, *_noses(gl_), vl_), _opposite(gr_, or_, *_noses(gr_), vr_)
+    return (_smooth_reach(_reach(wide, xl), left), _smooth_reach(_reach(wide, xr), right), cl, cr_,
+            ((gl_ > 0) & ~cl & ~ol_) | (ol_ & (gl_ <= MEDIAN_BARRIER_M)),
+            ((gr_ > 0) & ~cr_ & ~or_) | (or_ & (gr_ <= MEDIAN_BARRIER_M)))
 
 
 def _reach(wide, ext):
@@ -2666,7 +2700,8 @@ def parapet_runs(chunks, context=(), _rb=None, ground=(), pads=()):
     cov_ctx = [(r, c) for r, c in zip(cr, context)] + _ground_carriageways(list(chunks) + list(ground))
     covered = _parapet_cover([(r, c) for r, c in rb], cov_ctx)
     medians = _median_gaps([(r, c) for r, c in rb],
-                           [(r, c) for r, c in zip(ribbons(list(context)), context) if r[5] is not None])
+                           [(r, c) for r, c in zip(ribbons(list(context)), context) if r[5] is not None],
+                           skip={n for n, (_r, c) in enumerate(rb) if c.get("rch")})
     out = []
     for n, ((left, right, v, _m, _layer, z), c) in enumerate(rb):
         if c.get("tunnel"):       # deck() draws the tunnel floor without parapets
@@ -2675,18 +2710,16 @@ def parapet_runs(chunks, context=(), _rb=None, ground=(), pads=()):
         u = lat / np.maximum(dnp.hypot(lat[:, 0], lat[:, 1]), 1e-9)[:, None]
         wide = 0.0 if c.get("tunnel") else PARAPET_W
         sl, sr = _sheet_reach(c, left, right)
-        gl_, gr_, ol_, or_, vl_, vr_ = _sheet_medians(medians[n], sl, sr)
-        (xl, cl), (xr, cr_) = _opposite(gl_, ol_, *_noses(gl_), vl_), _opposite(gr_, or_, *_noses(gr_), vr_)
+        # (nose: full barriers, never the low curb: a gore nose's points, _noses; a median barrier's, _opposite)
+        rl, rr, cl, cr_, nl, nr = _slab_reach(c, v, medians[n], sl, sr, wide, left, right)
         covered[n] = (covered[n][0] | cl, covered[n][1] | cr_)
-        # (full barriers, never the low curb: a gore nose's points, _noses; a median barrier's, _opposite)
-        nose = (((gl_ > 0) & ~cl & ~ol_) | (ol_ & (gl_ <= MEDIAN_BARRIER_M)),
-                ((gr_ > 0) & ~cr_ & ~or_) | (or_ & (gr_ <= MEDIAN_BARRIER_M)))
+        nose = (nl, nr)
         if len(pads):               # (none inside a junction pad: roads.deck_pads)
             import roads as _roads
             covered[n] = (covered[n][0] | _roads.pad_inside(pads, left, z=z),
                           covered[n][1] | _roads.pad_inside(pads, right, z=z))
-        el = left + u * _sheet_max(_smooth_reach(_reach(wide, xl), left), sl)[:, None]
-        er = right - u * _sheet_max(_smooth_reach(_reach(wide, xr), right), sr)[:, None]
+        el = left + u * _sheet_max(rl, sl)[:, None]
+        er = right - u * _sheet_max(rr, sr)[:, None]
         k = len(z)
         for sgn, edge, inner, cov, nz in ((1, el, left, covered[n][0], nose[0]),
                                           (-1, er, right, covered[n][1], nose[1])):
@@ -2698,16 +2731,27 @@ def parapet_runs(chunks, context=(), _rb=None, ground=(), pads=()):
                 j = i
                 while j + 1 < k and not cov[j + 1]:
                     j += 1
-                run_len = float(dnp.hypot(*np.diff(edge[i:j + 1], axis=0).T).sum()) if j > i else 0.0
-                if j > i and (run_len >= PARAPET_MIN_M or i == 0 or j == k - 1):
-                    sl = slice(i, j + 1)
+                a, b = i, j
+                grown = False
+                if a == b and k > 1 and c.get("rch"):
+                    # (a free row alone on a cut at the tile's edge, the next one covered: the parapet goes on to that
+                    # row, as it goes on to the cut in the other tile; dropped, the other tile's ended on the cut, its
+                    # part's reach the same in both but the rows its cover changes between not: seamprobe, Fort Pitt)
+                    # (full height to it, no end taper there: the other tile's run is full height at the cut)
+                    if a == 0 and c.get("ct0") is not None:
+                        b, grown = 1, True
+                    elif a == k - 1 and c.get("ct1") is not None:
+                        a, grown = k - 2, True
+                run_len = float(dnp.hypot(*np.diff(edge[a:b + 1], axis=0).T).sum()) if b > a else 0.0
+                if b > a and (run_len >= PARAPET_MIN_M or a == 0 or b == k - 1):
+                    sl = slice(a, b + 1)
                     edge_run, inner_run = edge[sl], inner[sl]
                     mid_ = (left + right) / 2
                     ends = list(c.get("abut") or [])
-                    if i > 0:                                       # the run stops there (a gap, a gore)
-                        ends.append(tuple(mid_[i]))
-                    if j < k - 1:
-                        ends.append(tuple(mid_[j]))
+                    if a > 0 and not grown:                         # the run stops there (a gap, a gore)
+                        ends.append(tuple(mid_[a]))
+                    if b < k - 1 and not grown:
+                        ends.append(tuple(mid_[b]))
                     out.append({
                         "mid": mid_[sl],
                         "ends": ends,

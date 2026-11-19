@@ -7,6 +7,7 @@
 #![deny(clippy::disallowed_methods, clippy::disallowed_types, clippy::iter_over_hash_type)]
 use crate::dm::Dm;
 mod dm;
+mod deckreach;
 mod demsample;
 mod dmmatmul;
 mod devctx;
@@ -7360,6 +7361,11 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 519: the full Rust port's r2a19 (bldmesh: buildings.Mesh as BldMesh, the box-frame roofs, lids, cornices, boxes,
     // stoops, signs and roof-clutter boxes of buildings.build); 516-518 are other branches'
     // 524: try598 with 521 (P3b) and 519 (r2a19) merged; 522-523 are other branches'
-    m.add("VERSION", 524)?;
+    m.add_function(wrap_pyfunction!(deckreach::deck_stations, m)?)?;
+    m.add_function(wrap_pyfunction!(deckreach::deck_reach, m)?)?;
+    // 518: deckreach::deck_reach (a slab's reach along each deck part's whole line, at fixed stations: the tiles either
+    // side of a seam agree on it), on 516 (P3a); 517 is another branch's
+    // 526: try598 with 524 and 518 (deckreach) merged; 525 is another branch's
+    m.add("VERSION", 526)?;
     Ok(())
 }

@@ -13283,6 +13283,8 @@ def _deck_chunks(decks, exact, ground_fn=None, depths=None, walks=None, shift_of
                     if depths and fid in depths:
                         ch["dd"] = round(float(depths[fid]), 3)
                     out.append(ch)
+    reach = _deck_reach(decks, shifted, walks, width_of, sheet, exact,
+                        {fid for fid in joint_profiles if fid not in joint_excluded})
     for i, (fid, spec, pts, lon) in enumerate(decks):
         # at a merge / split the whole deck shifted toward the ramp (its lines with it): the far edge goes straight on
         # from the narrower part's and the added lane widens it on the ramp's side alone; centred on its line it
@@ -13342,6 +13344,7 @@ def _deck_chunks(decks, exact, ground_fn=None, depths=None, walks=None, shift_of
                             ch["tdir"] = _travel(spec)  # (roadmesh: opposite traffic beside it, a median)
                             _sheet_tag(ch, line, sheet.get(i))
                             _cut_ends(ch, line, exact)
+                            _reach_tag(ch, line, reach.get(i))
                             if depths and fid in depths:
                                 ch["dd"] = round(float(depths[fid]), 3)     # (roadmesh.deck: its slab and girders)
                             if abut.get(fid):
@@ -13349,6 +13352,137 @@ def _deck_chunks(decks, exact, ground_fn=None, depths=None, walks=None, shift_of
                         out.append(ch)
     out.extend(rampmerges.chunks(layouts, exact, fixed=True))
     return roadmarkings.paint(out)
+
+
+# m round a tile the slab's reach is worked out along its decks' lines (_deck_reach): every part coming within
+# roadmesh.MEDIAN_JOIN_M of a station in it is in the tile's list (bridges.parts within DECK_CONTEXT_M + NEAR_M), and a
+# station's reach depends on those within earthfast deckreach's radius only (the gaps' fill, a nose's walk, the
+# smoothing: about 54 m), so a tile's rows read the same reach in every tile
+REACH_WINDOW_M = DECK_CONTEXT_M + NEAR_M - 6.0 - 0.5
+
+
+def _deck_reach(decks, shifted, walks, width_of, sheet, exact, joints=()):
+    """{part index: stations (S, 4)}: each deck part's slab reach past its road along its whole drawn line, at fixed
+    stations (earthfast deck_reach: s, reach left / right, flags), from the parts alone (in a canonical order), never
+    from the tile's chunks: the two tiles either side of a seam agree on the cut row (seamprobe; per chunk, the median
+    gaps' runs and the smoothing saw only their own side, 2 mm to 1.1 m steps). roadmesh.deck reads them (_reach_tag).
+    The gaps are measured from the edges as drawn: roadmesh.trim_overlaps' cuts on the stations (joints: the parts on a
+    junction surface, roadmesh._junction_surfaces, not cut against each other: one group here); a branch's stations
+    inside an exit's union (P2b, its "b" intervals: no slab of its own) face no median.
+    """
+    import fast
+    walks = walks or {}
+    order = sorted((i for i, d in enumerate(decks) if len(d[2]) >= 2),
+                   key=lambda i: (_sheet_key(decks[i][0], decks[i][2]),
+                                  np.ascontiguousarray(np.asarray(shifted[i], np.float64)).tobytes()))
+    if not order:
+        return {}
+    pts, hw, owner, tdir, owners, far, far_off, far_part, far_side = [], [], [], [], {}, [], [0], [], []
+    for q, i in enumerate(order):
+        fid, spec, _p, _lon = decks[i]
+        dw, dc = _deck_frame(spec, walks.get(fid))
+        line = np.asarray(offset_polyline(shifted[i], dc) if dc else shifted[i], np.float64)[:, :3]
+        ws = width_of(fid, line) if width_of else None
+        h = (np.full(len(line), round(float(dw), 2)) if ws is None else
+             np.asarray([round(float(x + dw - spec.width), 3) for x in ws], np.float64)) / 2
+        pts.append(line)
+        hw.append(h)
+        owner.append(owners.setdefault(fid, len(owners)))
+        tdir.append(float(_travel(spec)))
+        for _s0, _s1, side, f in (sheet.get(i) or {}).get("t", ()):
+            f = np.asarray(f, np.float64)[:, :2]
+            far.append(f)
+            far_off.append(far_off[-1] + len(f))
+            far_part.append(q)
+            far_side.append(float(side))
+    x0, y0, x1, y1 = exact
+    w = REACH_WINDOW_M
+    prm = np.array([roadmesh.REACH_STEP_M, roadmesh.PARAPET_W, roadmesh.MEDIAN_JOIN_M, roadmesh.MEDIAN_ALONG,
+                    roadmesh.MEDIAN_ALONG_M, roadmesh.MEDIAN_INSIDE_M, roadmesh.PARAPET_COVER_DZ,
+                    roadmesh.MEDIAN_BARRIER_M, roadmesh.MEDIAN_NOSE_M, roadmesh.NOSE_LOOK_PTS, roadmesh.NOSE_WIDEN_M,
+                    roadmesh.MEDIAN_FILL_PTS, roadmesh.REACH_SLOPE, roadmesh.NOSE_WALK_PTS, roadmesh.SHEET_REACH_MAX_M,
+                    roadmesh.SHEET_TOL_M], np.float64)
+    fast.require(518, "deck_reach")
+    st, soff = fast._ef.deck_stations(
+        np.ascontiguousarray(np.concatenate(pts)), np.r_[0, np.cumsum([len(p) for p in pts])].astype(np.int64),
+        np.ascontiguousarray(np.concatenate(hw)), float(roadmesh.REACH_STEP_M))
+    st = np.array(st, np.float64)
+    hide = np.zeros(len(st), bool)
+    tw = w + roadmesh.MEDIAN_JOIN_M + 4.0       # (the cuts near the window: every edge a window station can meet)
+    pieces = []
+    for q, i in enumerate(order):
+        a, b = int(soff[q]), int(soff[q + 1])
+        if b - a < 2:
+            continue
+        sub = st[a:b]
+        for s0, s1 in (sheet.get(i) or {}).get("b", ()):
+            hide[a:b] |= (sub[:, 0] >= s0) & (sub[:, 0] <= s1)
+        inw = (sub[:, 1] >= x0 - tw) & (sub[:, 1] <= x1 + tw) & (sub[:, 2] >= y0 - tw) & (sub[:, 2] <= y1 + tw)
+        j = 0
+        while j < len(inw):
+            if not inw[j]:
+                j += 1
+                continue
+            e = j
+            while e < len(inw) and inw[e]:
+                e += 1
+            if e - j >= 2:
+                pieces.append((a + j, a + e, decks[i][0]))
+            j = e
+    if pieces:
+        tok = object()
+        cut = roadmesh.trim_overlaps([((st[a:b, 4:6].copy(), st[a:b, 6:8].copy(), None, None, None, st[a:b, 3].copy()),
+                                       {"fid": f}) for a, b, f in pieces], (), {f: tok for f in joints} or None)
+        for (a, b, _f), ((left, right, *_r), _c) in zip(pieces, cut):
+            st[a:b, 4:6], st[a:b, 6:8] = left, right
+    st, soff = fast._ef.deck_reach(
+        np.ascontiguousarray(st), np.asarray(soff, np.int64), hide, np.array(owner, np.int64),
+        np.array(tdir, np.float64), np.array([x0 - w, y0 - w, x1 + w, y1 + w], np.float64),
+        np.ascontiguousarray(np.concatenate(far) if far else np.zeros((0, 2))), np.array(far_off, np.int64),
+        np.array(far_part, np.int64), np.array(far_side, np.float64), prm)
+    return {i: st[int(soff[q]):int(soff[q + 1])] for q, i in enumerate(order) if soff[q + 1] - soff[q] >= 2}
+
+
+REACH_STATION_DZ = 2.0     # m: a deck chunk's node is on its line's pass this near its own height (_station_at_height)
+
+
+def _station_at_height(line, q):
+    """_station of q (x, y, z) on line (k, 3) among the line's points within REACH_STATION_DZ of q's height (all where
+    none): a loop ramp passing over itself (a grade-separated self-crossing) never takes the other pass's station.
+    Pure."""
+    p = np.asarray(line, np.float64)
+    a = _arc(p[:, :2])
+    ab = p[1:, :2] - p[:-1, :2]
+    l2 = np.maximum((ab * ab).sum(1), 1e-18)
+    u = np.clip(((q[:2] - p[:-1, :2]) * ab).sum(1) / l2, 0.0, 1.0)
+    m = p[:-1, :2] + ab * u[:, None]
+    dd = dnp.hypot(m[:, 0] - q[0], m[:, 1] - q[1])
+    zm = p[:-1, 2] + (p[1:, 2] - p[:-1, 2]) * u
+    near = np.abs(zm - q[2]) <= REACH_STATION_DZ
+    if near.any():
+        dd = np.where(near, dd, np.inf)
+    j = int(np.argmin(dd))
+    return float(a[j] + (a[j + 1] - a[j]) * u[j])
+
+
+def _reach_tag(ch, line, st):
+    """A drawn deck chunk ch of the line `line` gets its slab's reach (_deck_reach's stations st of its part) as "rch":
+    its nodes' stations along the line ("st") and the stations round them (s, reach left / right, flags);
+    roadmesh.deck samples them at its rows (_line_reach). In place; none where a node's station is unclear."""
+    if st is None:
+        return
+    c = np.asarray(ch["n"], np.float64)
+    sn = np.array([_station_at_height(line, q) for q in c[:, :3]])
+    if len(sn) < 2 or (np.diff(sn) < 0).any():
+        return                      # (a line passing near itself: the old per-chunk reach)
+    s = st[:, 0]
+    a = max(int(np.searchsorted(s, sn[0], "right")) - 2, 0)
+    b = min(int(np.searchsorted(s, sn[-1], "left")) + 2, len(s))
+    sub = st[a:b]
+    if b - a < 2 or not np.isfinite(sub[:, 1:3]).all():
+        return
+    ch["rch"] = {"st": sn.tolist(), "s": sub[:, 0].tolist(), "l": sub[:, 1].tolist(), "r": sub[:, 2].tolist(),
+                 "f": sub[:, 3].astype(np.int64).tolist()}
 
 
 def _deck_clearance(ch):
