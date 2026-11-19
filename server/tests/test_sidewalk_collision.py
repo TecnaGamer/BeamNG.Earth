@@ -124,6 +124,15 @@ class NormalsTest(unittest.TestCase):
         with self.assertRaises(TypeError):
             sidewalks._normals_2d(np.zeros((3, 2), np.float32))
 
+    def test_start_check_needs_508_in_every_mode(self):
+        # (BNE_BATTER=vanilla set MIN_VERSION to 503 outright: a 505 binary started and failed at the first sidewalk)
+        import subprocess
+        here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        for mode in ("off", "vanilla"):
+            out = subprocess.run([sys.executable, "-c", "import fast; print(fast.MIN_VERSION)"], cwd=here,
+                                 env=dict(os.environ, BNE_BATTER=mode), capture_output=True, text=True, check=True)
+            self.assertGreaterEqual(int(out.stdout.strip()), 508, mode)
+
     def test_strided_and_short(self):
         xyz = np.array([[0.0, 0.0, 5.0], [3.0, 4.0, 6.0]])
         np.testing.assert_array_equal(sidewalks._normals_2d(xyz[:, :2]), [[-0.8, 0.6], [-0.8, 0.6]])
