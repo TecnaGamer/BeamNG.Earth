@@ -8196,6 +8196,12 @@ OBS_BLEND_DG = 0.04     # a measured deck eased onto its joints' heights changes
 OBS_BLEND_MIN_M = 10.0  # m, the shortest easing
 OBS_NO_DECK_M = 2.0     # m: a measured deck at most this far over the ground under it ...
 OBS_STALE_M = 3.5       # ... where the solve stands this much higher is a measurement from before the bridge (kept out)
+# ... both read at this percentile of the stations the source measured, not their highest: a GA-400 / I-285 flyover
+# (Atlanta, 33.9117 N 84.3563 W) built after Georgia's 2018 lidar was flown "measured" on the ground under it, 0.3-1.3 m
+# over it but 2.2 m over one dip, so taken: the deck lay 17 m under its solve and the ground rose 5 m through its end,
+# 24 g (2026-11-19). BNE_OBS_STALE_Q=off: the highest, as before.
+_osq = os.environ.get("BNE_OBS_STALE_Q", "75")
+OBS_STALE_Q = None if _osq == "off" else float(_osq)
 OBS_MAX_GRADE = 0.14    # a measured deck steeper than this after the easing (2 m steps) keeps the inference
 OBS_END_MAX_M = float(os.environ.get("BNE_OBS_END_MAX", "inf"))  # m a measured deck's end may lie off the graded road at
                         # its abutment, else the inference (inf: always eased onto it; 4 m made Springfield worse)
@@ -8917,10 +8923,11 @@ class BridgeProfiles:
         prov = roadz.PROVIDER
         if prov is None or not prov.enabled or not lines:
             return zs
-        obs = []
+        obs, obs_ok = [], []    # (obs_ok: the stations the source measured, the rest are its ends carried flat)
         for k, ln in zip(comp, lines):
             xy = np.asarray(ln, np.float64)[:, :2]
             got = None
+            ok = None
             try:
                 spec = pool[k][0]
                 nm = pool[k][5] if len(pool[k]) > 5 else ""
@@ -8942,7 +8949,9 @@ class BridgeProfiles:
                     got = np.asarray(self.frame.geodetic_to_enu(la, lo, zf)[2], np.float64)
             except Exception as ex:             # the inference rather than no bridge
                 log.debug("observed deck %s: %s: %s", k, type(ex).__name__, ex)
+                got = None
             obs.append(got)
+            obs_ok.append(ok if got is not None else None)
         if all(o is None for o in obs):
             return zs
         nk = _EndJoin()
@@ -8987,6 +8996,11 @@ class BridgeProfiles:
                 if not np.isfinite(g).any():
                     continue
                 over_o, over_z = float(np.nanmax(o - g)), float(np.nanmax(z - g))
+                if OBS_STALE_Q is not None and obs_ok[i] is not None and len(obs_ok[i]) == len(o):
+                    m = np.asarray(obs_ok[i], bool) & np.isfinite(g)
+                    if m.sum() >= 3:            # (over the stations it measured: one dip under it is not its height)
+                        over_o = float(np.percentile((o - g)[m], OBS_STALE_Q))
+                        over_z = float(np.percentile((z - g)[m], OBS_STALE_Q))
                 if over_o < OBS_NO_DECK_M and over_z - over_o > OBS_STALE_M:
                     log.debug("observed deck %s: %.1f m over the ground, the solve %.1f m: from before the bridge, "
                               "the solve kept", comp[i], over_o, over_z)
