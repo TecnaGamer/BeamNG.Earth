@@ -41,7 +41,7 @@ import staging
 
 log = logging.getLogger("earthd.vegetation")
 
-VERSION = 49          # (the cached cells hold their groups: 14 for the regional rules of GitHub #110; 16: the roads'
+VERSION = 50          # (the cached cells hold their groups: 14 for the regional rules of GitHub #110; 16: the roads'
                       # drawn widths and sidewalks kept clear; 17: BC's lidar canopy heights, mapdata's canopy layer 2;
                       # 18: the rounded junction corners kept clear, roadcorners.py; 19: one tree per flat crown,
                       # thin_tops; 20: none on or beside a bridge deck, _mask_decks; 21: orchard rows, canopy trees
@@ -90,6 +90,7 @@ VERSION = 49          # (the cached cells hold their groups: 14 for the regional
                       # 47: a tile's biome carries its Koppen class (the ground cover's grasses by climate)
                       # 48: the tropics' remote floor half dead wood (G_DEADWOOD_TROPICAL, THICKET_SHARE)
                       # 49: more birches: Europe's north fewer conifers (NORTH_CONIFER_FACTOR), central Europe CONT_BIRCH_SOUTH
+                      # 50: dev's count of trees back, spread apart to the crown spacing instead of thinned to it (_spread)
 TREE_MIN_M = 3.0
 # The canopy raster, the scatter grids and the crown radii are in Web Mercator units (EPSG:3857: a metre there is
 # cos(lat) metres on the ground) and were tuned by eye at mid latitudes. Past them the same pixel counts covered less
@@ -1447,8 +1448,11 @@ class Vegetation:
         gx0 = np.floor((mx[ii] + 20037508.342789244) / chm.dx).astype(np.int64)
         gy0 = np.floor((20037508.342789244 - my[jj]) / chm.dy).astype(np.int64)
         tie = (_hash01(gx0, gy0, 29) * 1e-3).astype(np.float32)
-        jj, ii = _thin(jj, ii, hs[jj, ii] + tie, chm.dx, k,
-                       crown_spacing((lat0 + lat1) / 2.0, (lon0 + lon1) / 2.0))
+        # (50) thinned as dev (CROWN_SPACING: dev's count of trees), then spread apart to the cell's crown spacing
+        # (SPREAD_ITERS below): the broadleaves' crowns one tree each without losing the trees
+        spacing = crown_spacing((lat0 + lat1) / 2.0, (lon0 + lon1) / 2.0)
+        jj, ii = _thin(jj, ii, hs[jj, ii] + tie, chm.dx, k)
+        spread_k = k                         # (k: reused below for the barren ground's)
         th = hs[jj, ii]
         tlon, tlat = _to4326(mx[ii], my[jj])
         is_tree = th >= TREE_MIN_M
@@ -1497,7 +1501,10 @@ class Vegetation:
         group = open_groups(group, open_)
         kind = np.where(is_tree, KIND_TREE, KIND_BUSH).astype(np.uint8)
         jitter = chm.dx * 0.5
-        tlon2, tlat2 = _to4326(mx[ii] + (u3 - 0.5) * jitter, my[jj] + (u4 - 0.5) * jitter)
+        px_, py_ = mx[ii] + (u3 - 0.5) * jitter, my[jj] + (u4 - 0.5) * jitter
+        if spacing > CROWN_SPACING + 1e-6:
+            px_, py_ = _spread(px_, py_, th, spread_k * spacing, blocked | curb, chm.x0, chm.y0, chm.dx, chm.dy)
+        tlon2, tlat2 = _to4326(px_, py_)
         tree = Items(tlon2, tlat2, th.astype(np.float32), (0.12 * th + 1.0).astype(np.float32), kind, group,
                      _hash01(gx, gy, 5).astype(np.float32), (u2 * 360.0).astype(np.float32),
                      (0.85 + 0.3 * _hash01(gx, gy, 6)).astype(np.float32))
@@ -1794,6 +1801,101 @@ def _thin(jj, ii, h, px, k=1.0, spacing=None):
                               np.ascontiguousarray(h, np.float32),
                               float(CROWN_SPACING if spacing is None else spacing), float(px))
     return jj[keep], ii[keep]
+
+
+SPREAD_ITERS = 4        # (50) _spread's passes (10 spread no better: Syrynka 23 % / 20 % of trees within 2 m)
+SPREAD_PAIRS_EVERY = 2  # its near pairs found again every this many passes
+SPREAD_MAX = 0.75       # a top moved at most this many of its own (spaced) crown radii from where the canopy has it
+
+
+def _near_pairs(x, y, cell):
+    """The index pairs (i < j by bucket order, each once) of points x, y within one bucket of cell metres of each
+    other (the 3 x 3 buckets around each): the candidates of a distance test."""
+    n = len(x)
+    kx = np.floor(x / cell).astype(np.int64)
+    ky = np.floor(y / cell).astype(np.int64)
+    kx -= kx.min() - 1
+    ky -= ky.min() - 1
+    w = int(ky.max()) + 3
+    key = kx * w + ky
+    order = np.argsort(key, kind="stable")
+    sk = key[order]
+    out_i, out_j = [], []
+    for ox, oy in ((0, 0), (1, -1), (1, 0), (1, 1), (0, 1)):
+        nk = key + ox * w + oy
+        lo = np.searchsorted(sk, nk, "left")
+        cnt = np.searchsorted(sk, nk, "right") - lo
+        tot = int(cnt.sum())
+        if tot == 0:
+            continue
+        i = np.repeat(np.arange(n), cnt)
+        off = np.arange(tot) - np.repeat(np.cumsum(cnt) - cnt, cnt)
+        j = order[np.repeat(lo, cnt) + off]
+        if (ox, oy) == (0, 0):
+            m = j > i
+            i, j = i[m], j[m]
+        out_i.append(i)
+        out_j.append(j)
+    if not out_i:
+        z = np.zeros(0, np.int64)
+        return z, z
+    return np.concatenate(out_i), np.concatenate(out_j)
+
+
+def _spread(x, y, h, scale, forbid, x0, y0, dx, dy):
+    """(50) Tops x, y (Web Mercator m) of heights h pushed apart, keeping every one: two tops nearer than scale x
+    their mean crown radius (0.12 h + 1 m) move away from each other, the shorter one the more (the tall crown keeps
+    its canopy top), each at most SPREAD_MAX of its own radius x scale from where it was, never onto a forbidden
+    pixel (buildings, water, roads and their curbs: forbid over the grid x0, y0, dx, dy). Dev's thinning (0.5 crown
+    radii) left a broadleaf's crown two or three trunks a metre or two apart (the user's Syrynka 2026-11-18); the
+    wider thinning of 37 fixed that by dropping 35-45 % of the trees, and the user wanted the spacing, not fewer
+    trees (2026-11-20). Deterministic: sums in index order (bincount), square roots only."""
+    n = len(x)
+    if n < 2:
+        return x, y
+    x0_, y0_ = np.asarray(x, np.float64).copy(), np.asarray(y, np.float64).copy()
+    x, y = x0_.copy(), y0_.copy()
+    r = (0.12 * np.asarray(h, np.float64) + 1.0) * scale
+    cap = SPREAD_MAX * r
+    n_r, n_c = forbid.shape
+    cell = float(r.max())
+    for it in range(SPREAD_ITERS):
+        if it % SPREAD_PAIRS_EVERY == 0:     # (the pairs within reach, found again as the tops move)
+            i, j = _near_pairs(x, y, cell)
+            ex, ey = x[j] - x[i], y[j] - y[i]
+            need = 0.5 * (r[i] + r[j])
+            m = ex * ex + ey * ey < dnp.sq(need + 0.25 * cell)
+            i, j, need = i[m], j[m], need[m]
+            if len(i) == 0:
+                break
+            hi_, hj_ = h[i] + 1.0, h[j] + 1.0
+            wi = hj_ / (hi_ + hj_)              # (the shorter one's share the larger)
+        ex, ey = x[j] - x[i], y[j] - y[i]
+        d2 = ex * ex + ey * ey
+        m = np.flatnonzero(d2 < need * need)
+        if len(m) == 0:
+            break
+        pi, pj, ex, ey, w_ = i[m], j[m], ex[m], ey[m], wi[m]
+        d = np.sqrt(d2[m])
+        gap = need[m] - d
+        same = d < 1e-6
+        dd = np.where(same, 1.0, d)
+        gx_ = np.where(same, gap, gap * ex / dd)
+        gy_ = np.where(same, 0.0, gap * ey / dd)
+        mvx = np.bincount(pj, gx_ * (1.0 - w_), n) - np.bincount(pi, gx_ * w_, n)
+        mvy = np.bincount(pj, gy_ * (1.0 - w_), n) - np.bincount(pi, gy_ * w_, n)
+        nx, ny = x + 0.6 * mvx, y + 0.6 * mvy   # (under-relaxed: a crowd's pushes add up)
+        ox, oy = nx - x0_, ny - y0_
+        o = np.sqrt(ox * ox + oy * oy)
+        f = np.where(o > cap, cap / np.maximum(o, 1e-9), 1.0)
+        nx, ny = x0_ + ox * f, y0_ + oy * f
+        col = np.floor((nx - x0) / dx).astype(np.int64)
+        row = np.floor((y0 - ny) / dy).astype(np.int64)
+        ok = (col >= 0) & (col < n_c) & (row >= 0) & (row < n_r)
+        ok[ok] &= ~forbid[row[ok], col[ok]]
+        x = np.where(ok, nx, x)
+        y = np.where(ok, ny, y)
+    return x, y
 
 
 def _empty():

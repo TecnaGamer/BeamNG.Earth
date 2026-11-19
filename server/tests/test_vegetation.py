@@ -738,6 +738,55 @@ class CrownSpacingTest(unittest.TestCase):
                             (lat, lon, s))
 
 
+class SpreadTest(unittest.TestCase):
+    """(50) _spread: tops pushed apart to the crown spacing, every one kept, off the forbidden pixels."""
+
+    def _grid(self):
+        forbid = np.zeros((100, 100), bool)      # 1 m pixels, x 0..100, y 100..0
+        return forbid, 0.0, 100.0, 1.0, 1.0
+
+    def test_pair_spread_kept(self):
+        forbid, x0, y0, dx, dy = self._grid()
+        x, y, h = np.array([50.0, 51.0]), np.array([50.0, 50.0]), np.array([20.0, 20.0])
+        nx, ny = veg._spread(x, y, h, 1.0, forbid, x0, y0, dx, dy)
+        self.assertEqual(len(nx), 2)
+        self.assertGreater(abs(nx[1] - nx[0]), 2.0, "a metre apart: pushed apart")
+        self.assertAlmostEqual(nx[0] + nx[1], 101.0, places=6, msg="equal heights: both moved alike")
+
+    def test_short_one_moves(self):
+        forbid, x0, y0, dx, dy = self._grid()
+        x, y, h = np.array([50.0, 51.0]), np.array([50.0, 50.0]), np.array([25.0, 5.0])
+        nx, _ = veg._spread(x, y, h, 1.0, forbid, x0, y0, dx, dy)
+        self.assertLess(abs(nx[0] - 50.0), abs(nx[1] - 51.0), "the tall crown keeps its place")
+
+    def test_far_apart_unmoved_and_capped(self):
+        forbid, x0, y0, dx, dy = self._grid()
+        x, y, h = np.array([20.0, 80.0, 50.0, 50.0]), np.array([20.0, 80.0, 50.0, 50.0]), np.full(4, 20.0)
+        nx, ny = veg._spread(x, y, h, 1.0, forbid, x0, y0, dx, dy)
+        self.assertTrue(np.allclose(nx[:2], x[:2]) and np.allclose(ny[:2], y[:2]))
+        cap = veg.SPREAD_MAX * (0.12 * 20.0 + 1.0)
+        self.assertTrue(np.all(np.hypot(nx - x, ny - y) <= cap + 1e-9), "never past its cap")
+        self.assertGreater(abs(nx[3] - nx[2]), 1.0, "two on one spot: pushed apart")
+
+    def test_forbidden(self):
+        forbid, x0, y0, dx, dy = self._grid()
+        forbid[:, 52:] = True                     # a road from x 52 on
+        x, y, h = np.array([50.0, 51.5]), np.array([50.0, 50.0]), np.array([25.0, 5.0])
+        nx, ny = veg._spread(x, y, h, 1.0, forbid, x0, y0, dx, dy)
+        col = np.floor((nx - x0) / dx).astype(int)
+        row = np.floor((y0 - ny) / dy).astype(int)
+        self.assertFalse(forbid[row, col].any(), "no top onto the road")
+
+    def test_deterministic(self):
+        forbid, x0, y0, dx, dy = self._grid()
+        rng = np.random.default_rng(3)
+        x, y, h = rng.uniform(10, 90, 300), rng.uniform(10, 90, 300), rng.uniform(4, 30, 300)
+        a = veg._spread(x, y, h, 1.19, forbid, x0, y0, dx, dy)
+        b = veg._spread(x, y, h, 1.19, forbid, x0, y0, dx, dy)
+        self.assertTrue(np.array_equal(a[0], b[0]) and np.array_equal(a[1], b[1]))
+        self.assertEqual(len(a[0]), 300)
+
+
 class NorthBirchTest(unittest.TestCase):
     """(49) Europe's north: fewer conifers than the leaf maps (EU-Forest's plots), its broadleaves birches."""
 
