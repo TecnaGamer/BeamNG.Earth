@@ -85,6 +85,7 @@ FOOT_STEP_M = 1.0           # m between the points of a crossing's footprint (un
 DECK_MAX_GRADE = 0.06       # a deck climbs no steeper than this (the game's: roads.DECK_MAX_GRADE, grading sets it from there)
 DECK_AIR_M = 0.5            # m: a span over the ground keeps its girders this far off it (past its abutments: _abutments)
 SOFT_M = 0.6                # m: the rounding where an embankment meets the ground (a soft maximum)
+OFF_GROUND_M = 0.1          # m: a road this far over (under) its ground is off it: an embankment (a cut); less, it is on it
 
 CLEAR_PATH_M = 3.0          # m: a path's headroom (no vehicle on it)
 
@@ -1452,8 +1453,9 @@ def ramp(z0, g0, sign, g, rad, d, ground):
     """An embankment (sign +1: its start over the ground, the road falling away from it) or a cut (-1) from height z0,
     leaving at grade g0 (along d), at distances d (from 0, every STEP_M) with ground heights ground: it turns from g0
     to the road's max grade g (falling for an embankment, rising for a cut) over a vertical curve of radius rad, holds
-    it until it meets the ground, and turns onto the ground's grade over a curve of the same radius centred on that
-    touch point. Returns its heights and the index past which it is the ground (len(d) if it never meets it)."""
+    it until it meets the ground, and turns onto the ground's grade over a curve of the same radius, landing tangent
+    to the ground's line. Returns its heights and the index past which it is the ground (len(d) if it never meets
+    it)."""
     n = len(d)
     if n < 2:
         return np.full(n, z0), n
@@ -1480,16 +1482,40 @@ def ramp(z0, g0, sign, g, rad, d, ground):
     g1 = float(grade[t - 1])
     look = min(n - 1, t + max(2, int(round(abs(g1) * rad / max(ds.mean(), 1e-6))) + 2))
     g2 = float((ground[look] - ground[t - 1]) / max(d[look] - d[t - 1], 1e-6)) if look > t - 1 else g1
-    half = 0.5 * rad * abs(g2 - g1)             # (the curve onto the ground, centred on the touch point)
-    s1 = s_t - half
-    s2 = s_t + half
-    k1 = int(np.searchsorted(d, s1))
-    k2 = int(min(n, np.searchsorted(d, s2) + 1))
-    z1 = z_t - g1 * half
+    half = 0.5 * rad * abs(g2 - g1)             # (a curve onto the ground: about half its length either side)
+    line = z_t + g2 * (d - s_t)                 # (the ground's line the ramp lands tangent to)
+    # (that curve runs from where the ramp itself is, at its grade, to the ground's line, at its grade, over the
+    # shortest length the radius allows — the latest start along the ramp that still lands on the ground. Centred on
+    # the touch point instead it assumed the ramp held the touch's grade from far back: a ramp still turning when
+    # it comes at its ground — a short one, from a junction, on a road little under it — met the curve 0.2 m under
+    # the ramp it joined, a kink in the embankment the plan then took on. A landing needs the ramp's grade closing
+    # on the line's at the start it leaves; where it never does — a ground climbing to the shape's end as fast as
+    # the ramp leaves it, its touch on the line at once — there is no landing to make: laid anyway the curve ran on
+    # at the leaving grade, past the ground it was to meet, an embankment climbing off its hill. The curve stays
+    # centred on the touch point there, as it was)
+    ks = np.arange(1, min(t, n - 1) + 1)
+    off_ = sign * (z[ks] - line[ks])
+    clos = sign * (g2 - grade[ks - 1])
+    ok = (off_ > 0.0) & (clos > 0.0) & (2.0 * off_ >= rad * clos * clos)
+    ka = int(ks[ok][-1]) if ok.any() else max(int(np.searchsorted(d, s_t - half)), 1)
+    if float(clos[ks == ka][0]) <= 0.0:
+        s1 = s_t - half
+        k1 = int(np.searchsorted(d, s1))
+        k2 = int(min(n, np.searchsorted(d, s_t + half) + 1))
+        z1 = z_t - g1 * half
+        out = z.copy()
+        for k in range(max(k1, 1), k2):
+            x = d[k] - s1
+            out[k] = z1 + g1 * x + (g2 - g1) / (2.0 * max(2 * half, 1e-6)) * x * x
+        # (past the curve the plan's own ground grading takes over)
+        return out, max(k2, t + 1)
+    ga = float(grade[ka - 1])
+    L = max(2.0 * float(off_[ks == ka][0]) / float(clos[ks == ka][0]), rad * abs(g2 - ga))
+    k2 = int(min(n, np.searchsorted(d, d[ka] + L) + 1))
     out = z.copy()
-    for k in range(max(k1, 1), k2):
-        x = d[k] - s1
-        out[k] = z1 + g1 * x + (g2 - g1) / (2.0 * max(2 * half, 1e-6)) * x * x
+    for k in range(ka, k2):
+        x = d[k] - d[ka]
+        out[k] = z[ka] + ga * x + (g2 - ga) / (2.0 * L) * x * x
     # (past the curve the plan's own ground grading takes over)
     return out, max(k2, t + 1)
 
@@ -1524,13 +1550,143 @@ def _split(net, x, z, k_end, mode, out):
         out.setdefault(int(j), []).append((sv[o], zv[o], mode))
 
 
+def _junction_roads(net, rp, done, pieced):
+    """[(member, arc length, [toward its end L?], height, slope)]: the roads on the ground that ramp rp (embankments'
+    tuple) meets before it is back on its ground (their lines within JOIN_M: a junction, an end on it or its on them,
+    or a crossing at grade), other than where done ({member: [(s from, s to)]}: set by a shape or a ramp already) has
+    them; the arc on that road where they meet, the ways along it away from there (both, mid-road; one, at its end),
+    the ramp's height there and the slope of its surface there (the grade along the ramp as a vector: rise per m east
+    and north). pieced: {member: [(s from, s to)]} of the shapes' pieces (decks, dips). The height is the ramp's
+    between its samples, at the point nearest the road's line: the nearest sample is up to half a step (2 m) from the
+    junction, 0.14 m of a 7 % ramp. A ramp that never gets OFF_GROUND_M off its ground has no junctions: a cut 0.04 m
+    deep at the end of a deck laid the trunk meeting it 0.04 m down at the junction, the deck's approach beside it a
+    bump (Storrow Drive, Boston)."""
+    _j, _s0, _d, _z0, x, z, _k, sign, gr, ks, _g0 = rp
+    k = min(int(ks), len(z))
+    if k < 1:
+        return []
+    z = np.asarray(z, np.float64)[:k]
+    off = sign * (z - np.asarray(gr, np.float64)[:k])
+    if off.max() <= OFF_GROUND_M:
+        return []
+    xy = np.asarray(x["xy"], np.float64)[:k]
+    mem = np.asarray(x["mem"])[:k]
+    ms = np.asarray(x["ms"])[:k]
+    # (the ramp's height only where it is the road's: not inside a shape's piece on it, a dip Perth's ramp ran
+    # through at 3.5 m over it, its junction's side road raised to the ramp)
+    own = np.array([not any(a + 0.5 < v < b - 0.5 for a, b in pieced.get(int(i), ())) for i, v in zip(mem, ms)])
+    # (... and only while it is off its ground: past its touch the ramp is the ground, and a junction there put the
+    # roads meeting it down on it — one on an embankment of its own 2 m over it was cut to it)
+    own &= off > 0.0
+    if not own.any():
+        return []
+    # (the ramp's surface at each sample: its grade along its line, as the direction of fall)
+    lo_, hi_ = np.maximum(np.arange(k) - 1, 0), np.minimum(np.arange(k) + 1, k - 1)
+    v = xy[hi_] - xy[lo_]
+    run = np.maximum(dnp.hypot(v[:, 0], v[:, 1]), 1e-9)
+    surface = ((z[hi_] - z[lo_]) / run)[:, None] * (v / run[:, None])
+    # (the ramp's line every 1/16 step between its samples, over the stretches that are its own)
+    u = np.linspace(0, k - 1, (k - 1) * 16 + 1) if k > 1 else np.zeros(1)
+    i0, i1 = np.floor(u).astype(int), np.minimum(np.ceil(u).astype(int), k - 1)
+    keep = own[i0] & own[i1]
+    pt = np.stack([np.interp(u, np.arange(k), xy[:, 0]), np.interp(u, np.arange(k), xy[:, 1])], axis=1)[keep]
+    zt = np.interp(u, np.arange(k), z)[keep]
+    at = np.rint(u).astype(int)[keep]
+    lo, hi = pt.min(0) - JOIN_M, pt.max(0) + JOIN_M
+    bx = net.box
+    cand = np.flatnonzero((bx[:, 0] <= hi[0]) & (bx[:, 2] >= lo[0]) & (bx[:, 1] <= hi[1]) & (bx[:, 3] >= lo[1]))
+    out = []
+    for j in cand.tolist():
+        mj = net.m[j]
+        if mj.kind != "ground" or len(net.lines[j]) < 2:
+            continue
+        sj, dist = _proj_many(net.lines[j], net.s[j], pt)
+        q = int(np.argmin(dist))
+        if dist[q] > JOIN_M:
+            continue
+        s_ = float(sj[q])
+        if any(a - JOIN_M <= s_ <= b + JOIN_M for a, b in done.get(j, ())):
+            continue
+        ways = [w for w in (True, False) if (net.L[j] - s_ if w else s_) > JOIN_M]
+        if ways:
+            out.append((j, s_, ways, float(zt[q]), surface[at[q]]))
+    return sorted(out, key=lambda o: str(net.m[o[0]].key))
+
+
 def embankments(net, systems, shapes, ground_along):
     """The roads' heights round the shapes: per member, [(s (m,), z (m,), mode)] with mode "fill" (the plan rises to
     it: an embankment), "cut" (the plan goes down to it) or "set" (the plan takes it: a road between two shapes whose
     ramps meet before the ground does, lerped). shapes: per system (pieces, samples, heights);
     ground_along(member, s) -> ground heights."""
-    ramps = []              # (first member, s0, direction +1/-1, z0, samples, z, touch index, sign)
+    ramps = []              # (first member, s0, direction +1/-1, z0, samples, z, touch index, sign, ground, split index,
+    #                          leaving grade)
     out = {}
+    started = []            # (member, direction, s0, sign, z0): the ends already left by a ramp
+    pieced = {}                 # (member: the stretches [(s from, s to)] of the shapes' pieces)
+    for _pcs, _smp, _zs in shapes:
+        for pc in _pcs:
+            for j, a, b in pc["segs"]:
+                pieced.setdefault(int(j), []).append((min(a, b), max(a, b)))
+    done = {j: list(v) for j, v in pieced.items()}     # (the stretches set: the shapes' pieces first, then every
+    #                                                     ramp's as it is laid — a road's own ramp through a junction
+    #                                                     is its height there, not another's)
+
+    def cover(x, ks):
+        """done: the stretches of the members a ramp's first ks samples run along."""
+        k = max(1, min(int(ks), len(x["xy"])))
+        mem, ms = np.asarray(x["mem"])[:k], np.asarray(x["ms"])[:k]
+        for j_ in np.unique(mem).tolist():
+            sv = list(ms[mem == j_])
+            # (the joint the ramp enters the member by: its stretch runs to that end of the member, else a junction a
+            # step short of the first sample reads as unset and the road it runs along gets a ramp of its own over the
+            # same stretch, level where the deck's left at its grade: the two a step apart along it)
+            sv += [s0_ for kk, jj, s0_ in x.get("joints", ()) if jj == j_ and kk < k]
+            done.setdefault(int(j_), []).append((float(min(sv)), float(max(sv))))
+
+    def ramp_from(j, s0, toward_end, z0, g_along, branch=False):
+        """The ramp from height z0 on member j at arc length s0 away from there (toward j's end if toward_end),
+        leaving at grade g_along; branch: it is a junction's, off a ramp's."""
+        segs = _onward(net, j, s0, toward_end)
+        x = sample(net, [dict(segs=segs)])[0]
+        mem, ms = np.asarray(x["mem"]), np.asarray(x["ms"])
+        gr = np.empty(len(mem))
+        for m_ in np.unique(mem):               # (each member's ground in one read, not a read a sample)
+            sel = mem == m_
+            gr[sel] = ground_along(int(m_), ms[sel])
+        sign = 1.0 if z0 >= gr[0] else -1.0
+        d_ = 1 if toward_end else -1
+        g_max, rad = max_grade(net.m[j]), curve_radius(net.m[j])
+        z, k = ramp(z0, g_along, sign, g_max, rad, x["d"] - x["d"][0], gr)
+        if branch:
+            # (a junction's ramp never rises past the crest it leaves it with (a fill) nor falls below the trough (a
+            # cut): the junction is the top of the embankment it starts, the bottom of the cut, or where its grade
+            # carries it on from there (the height its curve to the max grade reaches: 0.5 rad g^2). Left to follow
+            # the ground past where it touches it — a road climbing a hill away from the junction, its grade read
+            # across the climb — the ramp carried a fill 5 m up it, over the road's own way up to its tunnel)
+            crest = z0 + sign * 0.5 * rad * max(sign * float(np.clip(g_along, -g_max, g_max)), 0.0) ** 2
+            z = np.minimum(z, crest) if sign > 0 else np.maximum(z, crest)
+        twin = any(jj == j and dd == d_ and sg == sign and abs(ss - float(s0)) <= JOIN_M and zz == float(z0)
+                   for jj, dd, ss, sg, zz in started) and k >= len(z)
+        started.append((j, d_, float(s0), sign, float(z0)))
+        ks = k
+        # (a ramp of a junction stops where a stretch a shape or another ramp already sets begins: over that stretch
+        # its height is the other's, and the two, laid one to the other's end, meet in a step. And a ramp whose end
+        # another has already left — the same road, way and height, within JOIN_M of it: parallel carriageways'
+        # decks end together, each with its ramp. Where the one met its ground and the other's landing runs past all it
+        # had to land on — the one end's embankment laid twice, the second running on over the plan's own grading past
+        # the ground the first met — the second stops at once: the one end has the one ramp, the first. Its reach for
+        # the junctions it meets is still its touch, the ramp the road's height that far)
+        if twin:
+            ks = min(ks, 1)
+        elif branch:
+            for i in range(1, len(z)):
+                if any(a + 0.5 < float(ms[i]) < b - 0.5 for a, b in done.get(int(mem[i]), ())):
+                    ks = min(ks, i)
+                    break
+        ramps.append((j, s0, d_, z0, x, z, k, sign, gr, ks, g_along))
+        if not branch:
+            cover(x, ks)
+
     for sysm, (pcs, smp, zs) in zip(systems, shapes):
         def shape_z(i, s_):
             got = _var(pcs, smp, i, s_)
@@ -1542,18 +1698,6 @@ def embankments(net, systems, shapes, ground_along):
             zz = z[a] + (z[b] - z[a]) * t
             g = (z[b] - z[a]) / max(dd[b] - dd[a], 1e-6)
             return float(zz), float(g)
-
-        def ramp_from(j, s0, toward_end, z0, g_along):
-            segs = _onward(net, j, s0, toward_end)
-            x = sample(net, [dict(segs=segs)])[0]
-            mem = np.asarray(x["mem"])
-            gr = np.empty(len(mem))
-            for m_ in np.unique(mem):               # (each member's ground in one read, not a read a sample)
-                sel = mem == m_
-                gr[sel] = ground_along(int(m_), np.asarray(x["ms"])[sel])
-            sign = 1.0 if z0 >= gr[0] else -1.0
-            z, k = ramp(z0, g_along, sign, max_grade(net.m[j]), curve_radius(net.m[j]), x["d"] - x["d"][0], gr)
-            ramps.append((j, s0, 1 if toward_end else -1, z0, x, z, k, sign))
 
         # a deck's end on a road on the ground: the embankment (or cut) down (up) to the ground along it
         for i, si, j, sj in sysm["ends"]:
@@ -1578,14 +1722,40 @@ def embankments(net, systems, shapes, ground_along):
                 g = (z[e] - z[k2]) / max(abs(x["d"][e] - x["d"][k2]), 1e-6)
                 toward_end = (x["ms"][e] - x["ms"][k2] > 0) if int(x["mem"][k2]) == j else s_ > net.L[j] / 2
                 ramp_from(j, s_, bool(toward_end), float(z[e]), g)
-    # two ramps on one road toward each other that meet before the ground: the straight line between their ends
+    # a junction a ramp reaches before the ground is at the ramp's height there, for every road that meets it: each
+    # other road leaves it from that height on its own ramp to its ground (and so on through the junctions those
+    # reach). Followed along one road only, a deck's embankment put the six-road square at its end 1.28 m over
+    # its ground on the two roads it went through, the four others left on the ground there and the square laid
+    # at theirs: the deck's last 5.4 m fell 1.6 m to it (Porte Maillot, 48.8781 N 2.2826 E)
+    n0 = len(ramps)
+    n = 0
+    while n < len(ramps):
+        if n >= n0:
+            cover(ramps[n][4], ramps[n][9])
+        for j, s_, ways, z0, surface in _junction_roads(net, ramps[n], done, pieced):
+            done.setdefault(j, []).append((s_ - JOIN_M, s_ + JOIN_M))    # (the junction taken: another ramp
+            #                                                         of the one shape meets its roads a few metres
+            #                                                         along, at a height of its own descent — a second
+            #                                                         group there, lerped to the first, stepped
+            #                                                         between the two)
+            for toward_end in ways:
+                # (a road leaves the junction at the grade of the embankment's surface along its own direction: level
+                # across the ramp's fall line, at the ramp's grade along it — a fork's other branch, running up the same
+                # embankment beside the ramp, rises with it; left level it fell 1 m under the climb of the road beside
+                # it, the two carriageways' pavements overlapping)
+                tb = _tangent(net.lines[j], net.s[j], s_) * (1.0 if toward_end else -1.0)
+                ramp_from(j, s_, toward_end, z0, float(surface @ tb), branch=True)
+        n += 1
+    # two ramps on one road toward each other that meet before the ground: the line between their ends. Between two
+    # junctions' ramps, the curve through their heights that leaves each at its grade (a cubic: the straight line
+    # between them ignored the climb the one leaves with, the road laid 0.6 m under the crest the laws made of it)
     used = set()
     for a in range(len(ramps)):
         for b in range(len(ramps)):
             if a == b or a in used or b in used:
                 continue
-            ja, sa, da, za, xa, z_a, ka, _ = ramps[a]
-            jb, sb, db, zb, xb, z_b, kb, _ = ramps[b]
+            ja, sa, da, za, xa, _z_a, _ka, _sa, _ga, ka, g0a = ramps[a]
+            jb, sb, db, zb, xb, _z_b, _kb, _sb, _gb, kb, g0b = ramps[b]
             if ja != jb or da != 1 or db != -1 or sb <= sa:
                 continue
             reach_a = sa + xa["d"][min(ka, len(xa["d"]) - 1)]
@@ -1593,10 +1763,17 @@ def embankments(net, systems, shapes, ground_along):
             if reach_a >= reach_b:
                 k = max(2, int(math.ceil((sb - sa) / STEP_M)) + 1)
                 sv = np.linspace(sa, sb, k)
-                out.setdefault(ja, []).append((sv, za + (zb - za) * (sv - sa) / max(sb - sa, 1e-6), "set"))
+                t = (sv - sa) / max(sb - sa, 1e-6)
+                if a >= n0 and b >= n0:
+                    run = max(sb - sa, 1e-6)
+                    zv = ((2 * t ** 3 - 3 * t ** 2 + 1) * za + (t ** 3 - 2 * t ** 2 + t) * run * g0a
+                          + (-2 * t ** 3 + 3 * t ** 2) * zb + (t ** 3 - t ** 2) * run * -g0b)
+                else:
+                    zv = za + (zb - za) * t
+                out.setdefault(ja, []).append((sv, zv, "set"))
                 used |= {a, b}
-    for n, (j, s0, d, z0, x, z, k, sign) in enumerate(ramps):
+    for n, (j, s0, d, z0, x, z, k, sign, _gr, ks, _g0) in enumerate(ramps):
         if n in used:
             continue
-        _split(net, x, z, min(k, len(z)), "fill" if sign > 0 else "cut", out)
+        _split(net, x, z, min(ks, len(z)), "fill" if sign > 0 else "cut", out)
     return out

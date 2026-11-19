@@ -2693,6 +2693,44 @@ def shape_heights(z, zs, modes):
     return np.where(put, zs, z), put
 
 
+def shape_reach(xy, z, zs, modes, grade, ground):
+    """A plan's points z (along xy (n, 2+); its ground there: ground (n,)) under the shapes' heights there (zs, modes:
+    _Planner._shape_at's), carried on at the road's grade (rise over run) past where the shapes end, across the stretch
+    the plan is off its ground on that side: an embankment ("fill", "set") on down over a plan under its ground until it
+    meets it, a cut ("cut", "set") on up over one above. The shapes' ramps end on the ground; a plan the passes put
+    under it met the end of one as a step: Porte Maillot's trunk leaving the square at a deck's end, its fill ending on
+    the ground 0.8 m over the trunk's plan, 1 m down in 4 m. A plan off its ground the other way (an approach rising to
+    its own bridge past a fill's end) is not the shape's: carried there, a fill lifted the A61's approach 12 m over its
+    bridge. Pure."""
+    z = np.asarray(z, np.float64)
+    zs = np.asarray(zs, np.float64)
+    g_ = np.asarray(ground, np.float64)
+    m = np.array([str(v) for v in modes])
+    ok = np.isfinite(zs)
+    if not ok.any() or len(z) < 2:
+        return z.copy()
+    run = grade * dnp.hypot(*np.diff(np.asarray(xy, np.float64)[:, :2], axis=0).T)
+    lo = np.where(ok & ((m == "fill") | (m == "set")), zs, -np.inf)
+    hi = np.where(ok & ((m == "cut") | (m == "set")), zs, np.inf)
+    under = ~ok & (z < g_ - SHAPE_REACH_OFF_M)          # (where a fill goes on)
+    over = ~ok & (z > g_ + SHAPE_REACH_OFF_M)           # (where a cut goes on)
+    for k in range(1, len(z)):
+        if under[k]:
+            lo[k] = max(lo[k], lo[k - 1] - run[k - 1])
+        if over[k]:
+            hi[k] = min(hi[k], hi[k - 1] + run[k - 1])
+    for k in range(len(z) - 2, -1, -1):
+        if under[k]:
+            lo[k] = max(lo[k], lo[k + 1] - run[k])
+        if over[k]:
+            hi[k] = min(hi[k], hi[k + 1] + run[k])
+    put = shape_heights(z, zs, modes)
+    return np.where(put[1], put[0], np.minimum(np.maximum(z, lo), hi))
+
+
+SHAPE_REACH_OFF_M = _gsh.OFF_GROUND_M     # m: a plan this far under (over) its ground past a shape's fill (cut) is off it there
+
+
 _SHAPE_SOLVE_LOCK = threading.Lock()    # (every planner's shapes solved / solving tables: short holds)
 
 
@@ -5431,7 +5469,8 @@ class _Planner:
 
     def _apply_shapes(self, plans, specs):
         """SHAPES_ON: each plan on a shape's ramp or cut takes its height there: up to an embankment ("fill"), down to
-        a cut ("cut"), onto a lerp between two shapes ("set"). Whether any changed."""
+        a cut ("cut"), onto a lerp between two shapes ("set"), each carried on at its grade to the plan (shape_reach).
+        Whether any changed."""
         done = False
         for n, ((fid, p), sp) in enumerate(zip(plans, specs)):
             if sp is None:
@@ -5442,7 +5481,8 @@ class _Planner:
             zs, modes = self._shape_at(xy, xy, str(fid).split(":")[0], ("fill", "cut", "set"))
             if not np.isfinite(zs).any():
                 continue
-            z = shape_heights(p.z, zs, modes)[0]
+            import roadlaws
+            z = shape_reach(xy, p.z, zs, modes, roadlaws.laws(sp)[0], self._ground_line(xy))
             if np.abs(z - np.asarray(p.z, np.float64)).max() < 1e-6:
                 continue
             np_ = Plan(p.xy, z, p.half, p.abut, p.cut, p.road_half)
