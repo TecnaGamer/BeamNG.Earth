@@ -18,8 +18,12 @@ Hong Kong SAR) joined to the map's footprints the way France's BD TOPO is (bdtop
 - The join (earthfast.bdtopo_match): of the records whose point stands in a footprint, the highest Tower (TOWER_FIRST),
   else the highest row. An outline over BIG_M2 takes it only when the record's own outline is COVER of the footprint's
   (the map's outline of a whole podium took its tower's height: 68 solid blocks in 80 places, one 10 000 m2 and 204 m
-  tall), else the largest record when that one is, else nothing. A footprint the map splits into parts is left to
-  them (a part without a height takes the footprint's). The map's own height stays; a machine-learned one
+  tall), else the largest record when that one is, else nothing. A record goes to one footprint, as in New York's join
+  (nycmassing.Records.match_layer: one record to one building, the closest in area): of the footprints that picked it,
+  the one whose area is closest to the record's keeps it and the others pick again from what is left (the map's
+  podium and the tower on it no longer both take the tower's height). A footprint the map splits into parts is left to
+  them (a part without a height takes the footprint's) and, like one with a height of the map's own, still claims its
+  record, though nothing is written on it. The map's own height stays; a machine-learned one
   (buildings.ML_HEIGHT_SOURCES) gives way.
   Written: height (height_src "hk_landsd"), and a flat roof from FLAT_MIN_H_M where the map names no roof shape (a
   tower under 260 m2 got a pitched house roof). Storeys against the height, in buildings.ML_FLOOR_M's band of metres a
@@ -60,6 +64,7 @@ TOWER_FIRST = 1e6               # added to a Tower's weight: the highest Tower o
 FLAT_MIN_H_M = 12.0             # from this height a filled-in height gets a flat roof (no pitched roof on a tower)
 BIG_M2 = 2000.0                 # a footprint over this takes a record only when the record covers COVER of it
 COVER = 0.5
+CLAIM_ROUNDS = 8                # picks at most for shared records (measured: one cell of 77 reaches 8, median 2)
 SOURCE = "hk_landsd"            # the height_src it writes
 THREADS = 2                     # background cell downloads at once per process (the host allows 2 at once: roadz's too)
 # (BNGE_: not part of the revisit cache's code key; the wait changes when a tile is built, not what)
@@ -163,19 +168,46 @@ def join(feats, recs):
     start = np.where(has, co[first], 0)
     end = np.where(has, co[first + 1], 0)
     lonlat = np.ascontiguousarray(feats.lonlat, np.float64)
-
-    def match(weight):
-        return np.asarray(fast._ef.bdtopo_match(np.ascontiguousarray(start), np.ascontiguousarray(end), lonlat,
-                                                recs.lon, recs.lat, weight), np.int64)
-    idx = match(recs.weight)
     # (the footprints' own areas, as the records' were measured: their first rings side by side)
     off = np.concatenate([[0], np.cumsum(end - start)]).astype(np.int64)
     _pts, area = fast._ef.bdtopo_points(off, lonlat[np.repeat(start - off[:-1], end - start) + np.arange(off[-1])])
-    need = COVER * np.where(np.asarray(area) > BIG_M2, area, 0.0)
-    small = (idx >= 0) & (recs.area[idx] < need)
-    if small.any():                 # (a podium-wide outline: the podium's record, if that is its size)
-        big = match(recs.area.astype(np.float64))
-        idx[small] = np.where((big[small] >= 0) & (recs.area[big[small]] >= need[small]), big[small], -1)
+    area = np.asarray(area)
+    need = COVER * np.where(area > BIG_M2, area, 0.0)
+
+    def match(weight, pool):
+        if not len(pool):
+            return np.full(n, -1, np.int64)
+        got = np.asarray(fast._ef.bdtopo_match(np.ascontiguousarray(start), np.ascontiguousarray(end), lonlat,
+                                               recs.lon[pool], recs.lat[pool], weight[pool]), np.int64)
+        return np.where(got >= 0, pool[got], -1)
+
+    def pick(pool):
+        """Each footprint's record out of the pool's (record indexes; -1 none)."""
+        idx = match(recs.weight, pool)
+        small = (idx >= 0) & (recs.area[idx] < need)
+        if small.any():             # (a podium-wide outline: the podium's record, if that is its size)
+            big = match(recs.area.astype(np.float64), pool)
+            idx[small] = np.where((big[small] >= 0) & (recs.area[big[small]] >= need[small]), big[small], -1)
+        return idx
+    # (a record belongs to one building, whoever gets written: every polygon footprint takes part, the ones with parts
+    # and the ones with a height of the map's own too)
+    idx = pick(np.arange(recs.n))
+    settled, free = np.zeros(n, bool), np.ones(recs.n, bool)
+    ra = np.maximum(recs.area.astype(np.float64), 1e-3)        # (a record without area: closest to the smallest)
+    for _ in range(CLAIM_ROUNDS - 1):
+        c = np.flatnonzero(idx >= 0)
+        r = idx[c]
+        dup = np.bincount(r)[r] >= 2
+        if not dup.any():
+            break
+        c, r = c[dup], r[dup]
+        wide, narrow = np.maximum(area[c], ra[r]), np.minimum(area[c], ra[r])
+        order = np.lexsort((wide / narrow, r))      # (the closest in area: the least ratio; a tie: stable, lower index)
+        c, r = c[order], r[order]
+        win = np.r_[True, r[1:] != r[:-1]]
+        settled[c[win]] = True
+        free[r[win]] = False
+        idx = np.where(settled, idx, pick(np.flatnonzero(free)))
     a = dict(feats.attrs)
     n_parts = a.get("has_parts")
     m = (idx >= 0) & ~(np.asarray(n_parts, bool) if n_parts is not None else np.zeros(n, bool))
