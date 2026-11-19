@@ -740,12 +740,14 @@ SEAM_FILLED_ON = os.environ.get("BNE_SEAM_FILLED", "on") != "off"   # (_grade_ma
 # abutment height at each common end (earthfast.structure_abutments; _struct_end, _pin_struct_ends). Off: never read.
 STRUCT_ST_ALONE, STRUCT_ST_SHARED, STRUCT_ST_JOINT = 0, 1, 5    # (abutments.rs ST_*)
 STRUCT_GROUP_MAX = 8        # ends in one end group at most (abutments.rs GROUP_MAX)
-STRUCT_COPY_PAD_M = 5.0     # m round a deck's line its cells are read in (each cell's copy of it: the lanes placed per cell)
+STRUCT_COPY_PAD_M = 60.0    # m round a deck's line its cells are read in (each cell's copy of it: the lanes placed per
+                            # cell move a wide deck metres, and copies' spans differ by tens of metres)
+STRUCT_RAISED_M = 0.05      # m: a plan end this far over its own ground estimate was raised: never lowered to share
 STRUCT_NEAR_M = 110.0       # m round an end group's ends the decks are taken from (each end's reach, structures.halo's
                             # 73 m, plus the widest deck's half width and its end's margin)
 STRUCT_SEAM_GRADE = 0.01    # an approach's end moved to its structure's height is eased out at this grade at most ...
 STRUCT_SEAM_K = 15.0        # ... and a vertical curve of this K (m per 1 % of grade change) at least ...
-STRUCT_SEAM_RUN_M = (24.0, 120.0)   # ... over this (within its plan)
+STRUCT_SEAM_RUN_M = (24.0, 120.0)   # ... over this (within its plan; a move needing more is left)
 
 
 def median_profile(z, step, width):
@@ -6098,7 +6100,8 @@ class _Planner:
     # ---- BNE_DECK_STRUCT=abut (road revamp RS S2b part 2a): one abutment height per structure end -------------------
 
     def _struct_end(self, xy):
-        """(m, the other roads beside its approach [(line, half width)]) for the road end xy at a bridge's end: the
+        """(m, the other roads beside its approach [(line, half width)], its own ground estimate m) for the road end xy
+        at a bridge's end: the
         height every approach road ending there is planned to (_pin_struct_ends), shared with the twins' abutments
         beside it (earthfast.structure_abutments' end group: the decks that are one structure side by side), or None
         (no deck end within APPROACH_TOUCH_M, no twin's end there, a joint, a group over its limits). The deck end is
@@ -6286,7 +6289,24 @@ class _Planner:
             log.debug("grading: structure end %s: status %s, h %s", np.round(e0, 1), None if me is None else
                       int(st[me]), np.round(h[group], 3).tolist())
             return None
-        return float(hgt[me]), others.get(me, [])
+        return float(hgt[me]), others.get(me, []), float(h[me])
+
+    @staticmethod
+    def _fill_clear(xy, add, half, others):
+        """Whether the fill slope of raising the plan line xy (n, 2) by add (n,) (SLOPE_RUN x the height out from its
+        edge, half) keeps APPROACH_GAP_M clear of each other road [(line, half width)] beside it, at every vertex."""
+        up = np.flatnonzero(add > 1e-6)
+        if not len(up) or not others:
+            return True
+        reach = half + SLOPE_RUN * add[up] + APPROACH_GAP_M
+        for line, oh in others:
+            ln = np.asarray(line, np.float64)[:, :2]
+            if len(ln) < 2:
+                continue
+            d = roadsmod._seg_dist(xy[up], ln[:-1], ln[1:]).min(axis=1)
+            if (d < reach + float(oh)).any():
+                return False
+        return True
 
     def _pin_struct_ends(self, plans, specs):
         """BNE_DECK_STRUCT=abut (road revamp RS S2b part 2a): each plan end that is a bridge abutment (Plan.abut) to
@@ -6315,25 +6335,31 @@ class _Planner:
                 got = self._struct_end(xy[end])
                 if got is None:
                     continue
-                target, others = got
+                target, others, own = got
                 d = float(target) - float(z[end])
                 if abs(d) < 1e-4:
                     continue
-                run = max(1.5 * abs(d) / STRUCT_SEAM_GRADE, math.sqrt(600.0 * STRUCT_SEAM_K * abs(d)))
-                run = float(np.clip(run, *STRUCT_SEAM_RUN_M))
-                if d >= APPROACH_MIN_LIFT and others:
-                    a = approach_add(xy, end == -1, d, p.half, others)
-                    if a is None or float(a[end]) < d - 0.01:
-                        log.debug("grading: structure end of %s: a raise of %.2f m capped by the roads beside", fid, d)
-                        continue
-                moves.append((end, d, run))
-            if not moves or sum(r for _e, _d, r in moves) > float(s[-1]):
+                if d < 0 and float(z[end]) > own + STRUCT_RAISED_M:
+                    # (never lowered where something raised it over its own ground: a solved or measured deck end, a
+                    # clearance lift too small for _end_lift to report (Codex review): one height there is not worth
+                    # the headroom)
+                    continue
+                run = max(1.5 * abs(d) / STRUCT_SEAM_GRADE, math.sqrt(600.0 * STRUCT_SEAM_K * abs(d)),
+                          STRUCT_SEAM_RUN_M[0])
+                if run > STRUCT_SEAM_RUN_M[1]:
+                    continue        # (more than the grade and curve allow within the longest run: left)
+                moves.append((end, d, run, others))
+            if not moves or sum(m[2] for m in moves) > float(s[-1]):
                 continue
             out = z.copy()
-            for end, d, run in moves:
+            for end, d, run, others in moves:
                 a = s if end == 0 else s[-1] - s
                 t = np.clip(1.0 - a / run, 0.0, 1.0)
-                out = out + d * (t * t * (3.0 - 2.0 * t))
+                add = d * (t * t * (3.0 - 2.0 * t))
+                if d > 0 and not self._fill_clear(xy, add, p.half, others):
+                    log.debug("grading: structure end of %s: a raise of %.2f m would fill onto the roads beside", fid, d)
+                    continue
+                out = out + add
             if np.abs(out - z).max() > 1e-6:
                 np_ = Plan(p.xy, out, p.half, p.abut, p.cut, p.road_half)
                 np_.rid, np_.max_wall, np_.bank = p.rid, p.max_wall, getattr(p, "bank", None)

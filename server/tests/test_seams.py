@@ -285,6 +285,25 @@ class StructEndsTest(unittest.TestCase):
         self.assertIsNone(self.z(g, [0.0, 0.0]))
         self.assertIsNotNone(self.z(g, [60.0, 0.0]))
 
+    def test_a_raised_end_is_never_lowered(self):
+        """A plan end standing over its own ground (a solved or measured deck end, a small lift) keeps its height
+        where sharing would lower it (Codex review)."""
+        g = self.planner((10.0, 11.0, 11.6, 9.4))      # (shared at the first ends: 9.7, under a's ground)
+        s = np.arange(0.0, 101.0, 4.0)
+        ra = grading.Plan(np.c_[-100.0 + s, np.zeros(len(s))], np.full(len(s), 10.4), 5.0, abut=(False, True))
+        ra.rid, ra.max_wall = 1, None
+        self.assertFalse(g._pin_struct_ends([("ra", ra)], [spec("primary")]))
+
+    def test_fill_onto_a_road_beside_is_left(self):
+        g = self.planner((10.0, 11.0, 11.6, 10.6))      # (shared 10.3: a's approach up 0.3 m)
+        beside = (np.array([[-100.0, -6.5], [0.0, -6.5]]), 3.0)       # (a road 6.5 m off, edge to edge 0.5 m)
+        orig = g._struct_end
+        g._struct_end = lambda xy: None if orig(xy) is None else (orig(xy)[0], [beside], orig(xy)[2])
+        s = np.arange(0.0, 101.0, 4.0)
+        ra = grading.Plan(np.c_[-100.0 + s, np.zeros(len(s))], np.full(len(s), 10.0), 3.0, abut=(False, True))
+        ra.rid, ra.max_wall = 1, None
+        self.assertFalse(g._pin_struct_ends([("ra", ra)], [spec("primary")]))
+
     def test_a_short_approach_is_left(self):
         g = self.planner((10.0, 11.0, 11.6, 10.3))
         s = np.arange(0.0, 16.1, 4.0)
