@@ -1,0 +1,51 @@
+{
+  "bngEarth_stubble": {
+    "name": "bngEarth_stubble",
+    "mapTo": "bngEarth_stubble",
+    "class": "Material",
+    "Stages": [
+      {
+        "colorMap": "/assets/materials/foliage/grass/t_cut_wheat/t_cut_wheat_d.color.dds",
+        "normalMap": "/assets/materials/foliage/grass/t_cut_wheat/t_cut_wheat_nm.normal.dds",
+        "specularMap": "/assets/materials/foliage/grass/t_cut_wheat/t_cut_wheat_s.color.dds",
+        "diffuseColor": [1, 1, 1, 1],
+        "roughnessFactor": 0.85
+      },
+      {},
+      {},
+      {}
+    ],
+    "alphaRef": 70,
+    "alphaTest": true,
+    "annotation": "NATURE",
+    "doubleSided": true,
+    "translucentBlendOp": "None"
+  },
+  "bngEarth_ripe_grain": {
+    "name": "bngEarth_ripe_grain",
+    "mapTo": "bngEarth_ripe_grain",
+    "class": "Material",
+    "Stages": [
+      {
+        "ambientOcclusionMap": "/assets/materials/foliage/grass/t_seeded_grass_03/t_seeded_grass_03_ao.data.png",
+        "baseColorMap": "/assets/materials/foliage/grass/t_seeded_grass_03/t_seeded_grass_03_b.color.png",
+        "baseColorFactor": [1.3, 1.08, 0.52, 1],
+        "normalMap": "/assets/materials/foliage/grass/t_seeded_grass_03/t_seeded_grass_03_nm.normal.png",
+        "normalMapStrength": 2,
+        "opacityMap": "/assets/materials/foliage/grass/t_seeded_grass_03/t_seeded_grass_03_o.data.png",
+        "roughnessMap": "/assets/materials/foliage/grass/t_seeded_grass_03/t_seeded_grass_03_r.data.png"
+      },
+      {},
+      {},
+      {}
+    ],
+    "alphaRef": 90,
+    "alphaTest": true,
+    "doubleSided": true,
+    "dynamicCubemap": true,
+    "invertBackFaceNormals": true,
+    "subSurface": true,
+    "subSurfaceIntensity": 1,
+    "version": 1.5
+  }
+}

@@ -91,6 +91,10 @@ M.SOURCES = {
   jri = { materials = { JRI .. 'art/shapes/groundcover/main.materials.json',
                         JRI .. 'art/shapes/groundcover/grass/main.materials.json' },
           items = JRI .. 'main/MissionGroup/Level_objects/vegetation/items.level.json' },
+  -- the fields' ripe grain and stubble (2026-11-19): the mod's own definitions and materials on stock textures (East
+  -- Coast USA's seeded grass tinted ripe gold, the game's unused t_cut_wheat straw); no new shapes
+  crops = { materials = '/art/beamngEarth/groundcover/crops.materials.json',
+            items = '/art/beamngEarth/groundcover/crops.items.json' },
   island = { materials = SI .. 'art/shapes/groundcover/main.materials.json',
              items = SI .. 'main/MissionGroup/Level_objects/vegetation/items.level.json' },
 }
@@ -99,7 +103,8 @@ local function list(v) return type(v) == 'table' and v or { v } end
 -- our layers (server/surface.py MATERIALS)
 local G, LAWN, DUSTY, FOREST = 'bngEarthGroundGrass', 'bngEarthGroundLawn', 'bngEarthGroundDusty', 'bngEarthGroundForest'
 local DRY, WET, SAND = 'bngEarthGroundDryGrass', 'bngEarthGroundWet', 'bngEarthGroundSand'
-M.LAYERS = { grass = G, lawn = LAWN, dusty = DUSTY, forest = FOREST, dry = DRY, wet = WET, sand = SAND }
+local CROP = 'bngEarthGroundCrop'
+M.LAYERS = { grass = G, lawn = LAWN, dusty = DUSTY, forest = FOREST, dry = DRY, wet = WET, sand = SAND, crop = CROP }
 
 -- stock GroundCover (source, src name) -> our layer, element share; `name` (default src) names our
 -- object, for a stock definition used on two layers; `fields` override stock fields. The shares keep
@@ -179,6 +184,20 @@ end
 -- (the dry grass in the deserts: every type on the arid grassland, a little on the scrub)
 local DESERT_DRY = { [0] = { layer = DRY, p = 0.2 }, [1] = { layer = DRY, p = 1 }, [4] = { layer = DRY, p = 1 },
   [5] = { layer = DRY, p = 0.2 }, [6] = { layer = DUSTY, p = 0.3 } }
+-- The fields (server/surface.py CROP: cropland and mapped farmland; the user, 2026-11-19: "crop fields"): the young
+-- green crop (West Coast USA's mown grass, short and even), the ripening grain (the mod's bngEarth_ripe_grain: East
+-- Coast USA's seeded grass, gold, waist-high in clumps), the stubble after the harvest (bngEarth_stubble: the game's
+-- t_cut_wheat straw) as the straw bales lie (trees.lua SEASON), bare soil in winter; w: their windows, the cereals'
+-- calendar of the climate (an autumn-sown crop greens again before the winter where w.winter is given).
+local function fields(w)
+  local out = {
+    E('cropYoung', 'wcusa', 'mown_grass_close', CROP, 0.9, { months = w.young }),
+    E('cropRipe', 'crops', 'bngEarth_ripe_grain', CROP, w.ripeShare or 1.0, { months = w.ripe }),
+    E('stubble', 'crops', 'bngEarth_stubble', CROP, 0.7, { months = w.stubble }),
+  }
+  if w.winter then out[#out + 1] = E('cropWinter', 'wcusa', 'mown_grass_close', CROP, 0.4, { months = w.winter }) end
+  return out
+end
 local function join(...)
   local out = {}
   for _, t in ipairs({ ... }) do for _, x in ipairs(t) do out[#out + 1] = x end end
@@ -209,17 +228,19 @@ local function meadow(w)
     E('woodflowers', 'eca', 'Purple_flowers', FOREST, 0.03, { months = w.woodflowers }),
     E('shrubs', 'wcusa', 'shrubs_near', DUSTY, 0.15),
     E('weeds', 'att', 'weed1', DUSTY, 0.03, { months = w.nettles }),
-  }, wetland(0.05, 0.15, 0.01))
+  }, wetland(0.05, 0.15, 0.01), fields(w.fields))
 end
 
 M.PROFILES = {
   generic = M.DEFS,
   -- Cfb, Cfc, Cwb, Cwc: oceanic Europe, the highlands
   temperate = meadow({ green = span(3, 11), brown = span(12, 2), heads = span(5, 9), buttercups = span(4, 6),
-    flowers = span(6, 8), daisies = span(4, 9), nettles = span(5, 10), woodflowers = span(4, 5) }),
+    flowers = span(6, 8), daisies = span(4, 9), nettles = span(5, 10), woodflowers = span(4, 5),
+    fields = { young = span(3, 5), ripe = span(6, 7), stubble = span(8, 9), winter = span(10, 11) } }),
   -- Dfa, Dfb, Dsa, Dsb, Dwa, Dwb: a shorter season
   continental = meadow({ green = span(4, 10), brown = span(11, 3), heads = span(6, 8), buttercups = span(5, 6),
-    flowers = span(6, 8), daisies = span(5, 8), nettles = span(5, 9), woodflowers = span(5, 5) }),
+    flowers = span(6, 8), daisies = span(5, 8), nettles = span(5, 9), woodflowers = span(5, 5),
+    fields = { young = span(4, 5), ripe = span(6, 7), stubble = span(8, 9), winter = span(10, 10) } }),
   -- Cfa, Cwa: the humid subtropics (the southeast USA, the Po valley, south China): lusher, tall roadside grass
   subtropical = join({
     smallGrass(0.3, 0.27, 0.27, 0.1),
@@ -233,7 +254,7 @@ M.PROFILES = {
     E('woodflowers', 'eca', 'Purple_flowers', FOREST, 0.03, { months = span(3, 5) }),
     E('nettles', 'industrial', 'Nettles_01', FOREST, 0.05, { months = span(4, 10) }),
     E('shrubs', 'wcusa', 'shrubs_near', DUSTY, 0.15),
-  }, wetland(0.06, 0.15, 0.01)),
+  }, wetland(0.06, 0.15, 0.01), fields({ young = span(3, 4), ripe = span(5, 6), stubble = span(7, 8) })),
   -- Csa, Csb, Csc: green from the autumn rains to May, flowered in spring, dry from June to September; the scrub
   -- Italy's garrigue all year
   mediterranean = join({
@@ -253,7 +274,7 @@ M.PROFILES = {
     E('garrigue', 'italy', 'shrubs', DUSTY, 0.04),
     -- irrigated town lawns
     E('lawn', 'wcusa', 'mown_grass_close', LAWN, 0.6),
-  }, wetland(0.05, 0.15, 0.01)),
+  }, wetland(0.05, 0.15, 0.01), fields({ young = span(12, 3), ripe = span(4, 5), stubble = span(6, 8), ripeShare = 0.6 })),
   -- BSh, BSk: dry tussocks on the arid grassland, spring's green and flowers
   steppe = join({
     dryGrass(0.2, { types = { [0] = { layer = DRY, p = 0.2 }, [1] = { layer = DRY, p = 1 }, [4] = { layer = DRY, p = 1 },
@@ -269,7 +290,7 @@ M.PROFILES = {
     -- Utah's dry plants, grey bushes and white flowers (3D)
     E('plants', 'utah', 'plants', DUSTY, 0.02),
     E('lawn', 'wcusa', 'mown_grass_dry', LAWN, 0.05),
-  }, wetland(0.04, 0.12, 0.005)),
+  }, wetland(0.04, 0.12, 0.005), fields({ young = span(4, 5), ripe = span(6, 6), stubble = span(7, 9) })),
   -- BWh: sparse dry tussocks and Johnson Valley's dry bushes and branches, Small Island's yuccas
   desert_hot = join({
     E('tussocks', 'utah', 'Dry_grass_clump', DRY, 0.05),
@@ -326,7 +347,7 @@ M.PROFILES = {
     E('shrubs', 'wcusa', 'shrubs_near', DUSTY, 0.12),
     E('bush', 'att', 'Bush', DUSTY, 0.01),
     E('lawn', 'wcusa', 'mown_grass_close', LAWN, 0.6),
-  }, wetland(0.04, 0.15, 0.01)),
+  }, wetland(0.04, 0.15, 0.01), fields({ young = span(5, 6), ripe = span(7, 8), stubble = span(9, 9) })),
   -- ET, EF: short dry grass, dwarf shrubs, a few buttercups in July
   tundra = join({
     E('short', 'industrial', 'small_grass_dry_close', G, 1.0),

@@ -55,6 +55,10 @@ local STOCK = {
     Dry_grass_clump = { maxElements = 300000, types = { 0, 1, 2, 3, 4, 5, 6, 7 } },
     plants = { maxElements = 100000, types = { 0, 1, 2, 3, 4, 5, 6 } },
   },
+  crops = {     -- (the mod's own: art/beamngEarth/groundcover/crops.items.json)
+    bngEarth_ripe_grain = { maxElements = 48000, types = { 0 } },
+    bngEarth_stubble = { maxElements = 60000, types = { 0, 1, 2, 3 } },
+  },
   wcusa = {
     grass_dry_1 = { maxElements = 256000, types = { 0, 1, 2, 3, 4, 5, 6, 7 } },
     mown_grass_close = { maxElements = 40000, types = { 0, 1, 2, 3, 4, 5, 6, 7 } },
@@ -148,7 +152,7 @@ for name, p in pairs(gc.PROFILES) do
     local b = gc.budget(pl, STOCK)
     worst, most = math.max(worst, b), math.max(most, #pl)
     if b > generic then T.check(false, string.format('%s day %d: %d elements over the generic %d', name, d, b, generic)) end
-    if #pl > 15 then T.check(false, name .. ' day ' .. d .. ': ' .. #pl .. ' objects (at most 15)') end
+    if #pl > 16 then T.check(false, name .. ' day ' .. d .. ': ' .. #pl .. ' objects (at most 16; the wetland and beach ones only where a block has those layers)') end
   end
   report[#report + 1] = string.format('  %-13s at most %6d elements (%3.0f%% of generic), %2d objects', name, worst,
     100 * worst / generic, most)
@@ -162,6 +166,10 @@ local function has(name, m, id)
 end
 T.check(has('temperate', 5, 'buttercups') and not has('temperate', 9, 'buttercups') and has('temperate', 7, 'flowers')
   and not has('temperate', 1, 'flowers'), 'temperate flowers in season')
+T.check(has('temperate', 4, 'cropYoung') and has('temperate', 7, 'cropRipe') and has('temperate', 9, 'stubble')
+  and not has('temperate', 1, 'cropYoung') and not has('temperate', 1, 'stubble'), 'fields: green, ripe, stubble, bare')
+T.check(has('mediterranean', 5, 'cropRipe') and has('mediterranean', 7, 'stubble') and not has('tropical', 7, 'stubble'),
+  "the Mediterranean's earlier harvest; no fields in the tropics' profile")
 T.check(has('mediterranean', 4, 'flowers') and not has('mediterranean', 7, 'flowers') and has('mediterranean', 7, 'dry')
   and has('mediterranean', 1, 'small') and not has('mediterranean', 7, 'small'), 'Mediterranean: green spring, dry summer')
 
