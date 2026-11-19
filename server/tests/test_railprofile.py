@@ -90,9 +90,11 @@ class FindNearTest(unittest.TestCase):
         same line, any kind, within half a step are interpolated; another line's, or farther, stay NaN."""
         xy = np.array([[0.0, 0.0], [railways.STEP_M, 0.0], [2 * railways.STEP_M, 0.0]])
         cm = railprofile._cm(xy)
-        keys = railprofile._pack(cm[:, 0], cm[:, 1])
-        node = {("f", "bridge"): (np.sort(keys), np.array([10.0, 12.0, 14.0])[np.argsort(keys)]),
-                ("g", "ground"): (np.sort(keys), np.full(3, 99.0))}
+        # (a node as _make_node packs it: its groups by (fid, kind), their beds in one earthfast.RailNode)
+        groups = {("f", "bridge"): 0, ("g", "ground"): 1}
+        packed = railprofile.fast._ef.rail_node_pack(np.r_[cm, cm], np.r_[[10.0, 12.0, 14.0], np.full(3, 99.0)],
+                                                     np.array([0, 3, 6], np.int64), np.array([0, 1], np.int64), 2)
+        node = (groups, packed)
         ask = railprofile._cm(np.array([[0.5 * railways.STEP_M, 0.0], [0.0, 3 * railways.STEP_M]]))
         out = railprofile._find(node, "f", "ground", ask)
         self.assertTrue(np.isnan(out).all(), "(no exact key: other kind, other points)")

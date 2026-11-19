@@ -7205,6 +7205,8 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // window's curve bound are its own spacings', not the chain's one closest-two-samples step (a dip piece with two
     // samples 0.3 m apart was held to 0.3 m of grade over its whole length)
     // 509: the fork's 305-309 above merged onto 508
-    m.add("VERSION", 509)?;
+    // 510: RailNode.group(g) -> (keys, heights): railprofile._find_near reads a group's points (its nearest ones
+    // where no key matched, the fork's Popoli fix on the ported node)
+    m.add("VERSION", 510)?;
     Ok(())
 }

@@ -48,6 +48,8 @@ from collections import OrderedDict, namedtuple
 
 import numpy as np
 
+import dmath
+
 import dnp
 import findground
 import gradelaw
@@ -212,7 +214,7 @@ def proj(line, s, q):
 
 def at_s(line, s, sq):
     """The point at arc length sq along line."""
-    return np.array([np.interp(sq, s, line[:, 0]), np.interp(sq, s, line[:, 1])])
+    return np.array([dnp.interp(sq, s, line[:, 0]), dnp.interp(sq, s, line[:, 1])])
 
 
 class Net:
@@ -286,7 +288,7 @@ def _relations(net, i):
 def _tangent(line, s, sq):
     a, b = at_s(line, s, max(sq - 2.0, 0.0)), at_s(line, s, min(sq + 2.0, float(s[-1])))
     v = b - a
-    return v / max(float(np.hypot(*v)), 1e-9)
+    return v / max(float(dnp.hypot(*v)), 1e-9)
 
 
 def _proj_many(line, s, P):
@@ -356,7 +358,7 @@ def _under_pairs_calc(net, u, su, d, sd):
     # (each line as far as straight lines at the crossing's angle overlap round it; a curve's points past it fail the
     # test below. The other's line read there alone: a road passing near its own start again (a loop's deck over the
     # deck it goes on from) has its nearest point on that stretch, not on the one over this crossing)
-    c = abs(float(ta @ tb))
+    c = abs(float(dnp.dot(ta, tb)))
     reach_a = (hb + ha * c + FOOT_STEP_M) / sin if sin > 0.0 else math.inf
     reach_b = (ha + hb * c + FOOT_STEP_M) / sin if sin > 0.0 else math.inf
     lo, hi = max(0.0, sa - reach_a), min(net.L[a_], sa + reach_a)
@@ -377,7 +379,7 @@ def _under_pairs_calc(net, u, su, d, sd):
         k = np.clip(np.searchsorted(lsa, sr, side="right") - 1, 0, len(lsa) - 2)
         t = la[k + 1] - la[k]
         t = t / np.maximum(dnp.hypot(t[:, 0], t[:, 1]), 1e-9)[:, None]
-        base = np.stack([np.interp(sr, lsa, la[:, 0]), np.interp(sr, lsa, la[:, 1])], axis=1)
+        base = np.stack([dnp.interp(sr, lsa, la[:, 0]), dnp.interp(sr, lsa, la[:, 1])], axis=1)
         P = (base[:, None, :] + cv[None, :, None] * np.stack([-t[:, 1], t[:, 0]], axis=1)[:, None, :]).reshape(-1, 2)
         sP = np.repeat(sr, nc)
         # (b's segments near these points alone)
@@ -475,8 +477,8 @@ def _end_meets(net, e, se, o, so, crossed):
     if me.kind not in STRUCTURES:
         return mapped
     if me.kind == mo.kind == "deck" and not crossed and _road_of(me) != _road_of(mo) and mapped:
-        c = abs(float(_tangent(net.lines[e], net.s[e], se) @ _tangent(net.lines[o], net.s[o], so)))
-        return c >= math.cos(math.radians(MERGE_DEG))
+        c = abs(float(dnp.dot(_tangent(net.lines[e], net.s[e], se), _tangent(net.lines[o], net.s[o], so))))
+        return c >= dmath.cos(math.radians(MERGE_DEG))
     return False
 
 
@@ -923,7 +925,7 @@ def next_member(net, i, at_end):
     line = net.lines[i]
     p = line[-1] if at_end else line[0]
     d_out = (line[-1] - line[-2]) if at_end else (line[0] - line[1])
-    d_out = d_out / max(float(np.hypot(*d_out)), 1e-9)
+    d_out = d_out / max(float(dnp.hypot(*d_out)), 1e-9)
     gx, gy = int(p[0] // 5.0), int(p[1] // 5.0)
     best = None
     for dx in (-1, 0, 1):
@@ -933,12 +935,12 @@ def next_member(net, i, at_end):
                     continue
                 lj = net.lines[j]
                 q = lj[-1] if j_end else lj[0]
-                if float(np.hypot(*(q - p))) > JOIN_M:
+                if float(dnp.hypot(*(q - p))) > JOIN_M:
                     continue
                 d_in = (lj[-2] - lj[-1]) if j_end else (lj[1] - lj[0])
-                d_in = d_in / max(float(np.hypot(*d_in)), 1e-9)
+                d_in = d_in / max(float(dnp.hypot(*d_in)), 1e-9)
                 same = net.m[j].key[0] == net.m[i].key[0]
-                score = (0 if same else 1, -float(d_out @ d_in), str(net.m[j].key))
+                score = (0 if same else 1, -float(dnp.dot(d_out, d_in)), str(net.m[j].key))
                 if best is None or score < best[0]:
                     best = (score, j, not j_end)
     if best is None or best[0][1] > -0.5:       # (nothing going on within 60 degrees of straight on)
@@ -1005,7 +1007,7 @@ def sample(net, pcs):
                 joints.append((count - 1, j, float(s0)))
             if not len(sv):
                 continue
-            xy = np.stack([np.interp(sv, net.s[j], net.lines[j][:, 0]), np.interp(sv, net.s[j], net.lines[j][:, 1])],
+            xy = np.stack([dnp.interp(sv, net.s[j], net.lines[j][:, 0]), dnp.interp(sv, net.s[j], net.lines[j][:, 1])],
                           axis=1)
             if xs:
                 d_here = d0 + np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(np.vstack([xs[-1][-1:], xy]), axis=0).T))][1:]
@@ -1474,7 +1476,7 @@ def ramp(z0, g0, sign, g, rad, d, ground):
     t = int(hit[0]) + 1                         # (the first sample past the touch point)
     f = float(off_[t - 1] / max(off_[t - 1] - off_[t], 1e-12))
     s_t = float(d[t - 1] + f * (d[t] - d[t - 1]))   # (the touch point: where the ramp meets the ground)
-    z_t = float(np.interp(s_t, d, ground))
+    z_t = float(dnp.interp(s_t, d, ground))
     g1 = float(grade[t - 1])
     look = min(n - 1, t + max(2, int(round(abs(g1) * rad / max(ds.mean(), 1e-6))) + 2))
     g2 = float((ground[look] - ground[t - 1]) / max(d[look] - d[t - 1], 1e-6)) if look > t - 1 else g1

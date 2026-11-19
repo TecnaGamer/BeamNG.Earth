@@ -183,7 +183,7 @@ def _grid(net, members):
         for e, p in ((0, line[0]), (1, line[-1])):
             ends.setdefault((int(p[0] // CELL_M), int(p[1] // CELL_M)), set()).add((i, e))
         sv = np.linspace(0.0, net.L[i], max(2, int(net.L[i] // SAMPLE_M) + 1))
-        x, y = np.interp(sv, net.s[i], line[:, 0]), np.interp(sv, net.s[i], line[:, 1])
+        x, y = dnp.interp(sv, net.s[i], line[:, 0]), dnp.interp(sv, net.s[i], line[:, 1])
         for cell in set(zip((x // CELL_M).astype(np.int64).tolist(), (y // CELL_M).astype(np.int64).tolist())):
             lines.setdefault(cell, set()).add(i)
     return ends, lines
@@ -428,7 +428,7 @@ def overlap_pairs(net, members=None):
     def points(i):
         if i not in pts:
             sv = np.linspace(0.0, net.L[i], max(2, int(net.L[i] // gs.STEP_M) + 1))
-            pts[i] = np.stack([np.interp(sv, net.s[i], net.lines[i][:, 0]), np.interp(sv, net.s[i], net.lines[i][:, 1])], axis=1)
+            pts[i] = np.stack([dnp.interp(sv, net.s[i], net.lines[i][:, 0]), dnp.interp(sv, net.s[i], net.lines[i][:, 1])], axis=1)
         return pts[i]
     out = []
     for a, b in sorted(cand):
@@ -460,8 +460,8 @@ def _part_key(key, n):
 def _slice(line, s, a, b):
     """The polyline between arc lengths a and b."""
     inner = (s > a + 1e-6) & (s < b - 1e-6)
-    pa = np.array([np.interp(a, s, line[:, 0]), np.interp(a, s, line[:, 1])])
-    pb = np.array([np.interp(b, s, line[:, 0]), np.interp(b, s, line[:, 1])])
+    pa = np.array([dnp.interp(a, s, line[:, 0]), dnp.interp(a, s, line[:, 1])])
+    pb = np.array([dnp.interp(b, s, line[:, 0]), dnp.interp(b, s, line[:, 1])])
     return np.vstack([pa, line[inner][:, :2], pb])
 
 
@@ -512,7 +512,7 @@ def clean(members, meta=None):
         spans = []
         for sec, _over in secs:
             sv = np.linspace(0.0, net1.L[sec], max(2, int(net1.L[sec] // gs.STEP_M) + 1))
-            pts = np.stack([np.interp(sv, net1.s[sec], net1.lines[sec][:, 0]), np.interp(sv, net1.s[sec], net1.lines[sec][:, 1])], axis=1)
+            pts = np.stack([dnp.interp(sv, net1.s[sec], net1.lines[sec][:, 0]), dnp.interp(sv, net1.s[sec], net1.lines[sec][:, 1])], axis=1)
             sp_, d = gs._proj_many(net1.lines[parent], net1.s[parent], pts)
             near = d <= SECTION_NEAR_M
             if near.mean() >= 0.9:

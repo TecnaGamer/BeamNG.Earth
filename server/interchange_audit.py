@@ -450,7 +450,7 @@ def check_pieces(net, sysm, pcs, smp, namer, rels=None):
     # by each one's points within DUP_NEAR_M of the other's line
     def points(i):
         sv = np.linspace(0.0, net.L[i], max(2, int(net.L[i] // gs.STEP_M) + 1))
-        return np.stack([np.interp(sv, net.s[i], net.lines[i][:, 0]), np.interp(sv, net.s[i], net.lines[i][:, 1])], axis=1)
+        return np.stack([dnp.interp(sv, net.s[i], net.lines[i][:, 0]), dnp.interp(sv, net.s[i], net.lines[i][:, 1])], axis=1)
     pts = {}
     for a in scope:
         ma = net.m[a]
@@ -1244,7 +1244,7 @@ def audit_members(members, ground=None, make_fixed=None, ll=None, meta=None, end
 
         def f(i, s):
             sv = np.atleast_1d(np.asarray(s, np.float64))
-            z = ground(np.stack([np.interp(sv, net.s[i], net.lines[i][:, 0]), np.interp(sv, net.s[i], net.lines[i][:, 1])],
+            z = ground(np.stack([dnp.interp(sv, net.s[i], net.lines[i][:, 0]), dnp.interp(sv, net.s[i], net.lines[i][:, 1])],
                                 axis=1))
             return np.asarray(z, np.float64) if np.ndim(s) else float(z[0])
         return f

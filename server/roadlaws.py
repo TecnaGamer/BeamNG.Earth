@@ -277,7 +277,7 @@ def apply(plans, specs, held=None, under=None, skip=(), diagnostics=None, natura
         m = max(2, int(math.ceil(L / STEP_M)) + 1)
         sv = np.linspace(S[0], S[-1], m)
         step = L / max(m - 1, 1)
-        t = np.interp(sv, S, Z)
+        t = dnp.interp(sv, S, Z)
         j = np.clip(np.searchsorted(S, sv), 0, len(S) - 1)      # (a sample is held / only down where a plan point
         hs = np.zeros(m, bool)                                   # within half a step of it is; bounded by theirs)
         ds = np.zeros(m, bool)
@@ -298,7 +298,7 @@ def apply(plans, specs, held=None, under=None, skip=(), diagnostics=None, natura
             g, rr = laws(sps[k])
             g_law, rad, rank = max(g_law, g), max(rad, rr), max(rank, _rank(sps[k]))
         w_n = max(1, int(round(NATURAL_WIN_M / max(step, 1e-6))))
-        tn = np.interp(sv, S, NZ)                       # (the ground's own grade: the natural profile's)
+        tn = dnp.interp(sv, S, NZ)                       # (the ground's own grade: the natural profile's)
         nat = np.abs(tn[w_n:] - tn[:-w_n]) / (w_n * step) if m > w_n else np.abs(np.diff(tn)) / max(step, 1e-6)
         g = max(g_law, float(nat.max()) + NATURAL_PLUS if len(nat) else g_law)
         R.append(dict(sv=sv, t=t, w=np.where(hs, W_HOLD, 1.0 + W_RANK * rank), lo=lo_s,
@@ -363,13 +363,13 @@ def apply(plans, specs, held=None, under=None, skip=(), diagnostics=None, natura
         """Plan k2's own height at its arc sp, past its ends carried on along its end segment."""
         ar, z = arcs[k2], zs[k2]
         if len(ar) < 2 or 0.0 <= sp <= ar[-1]:
-            return float(np.interp(sp, ar, z))
+            return float(dnp.interp(sp, ar, z))
         q = 0 if sp < 0.0 else len(ar) - 2
         return float(z[q] + (z[q + 1] - z[q]) * (sp - ar[q]) / max(float(ar[q + 1] - ar[q]), 1e-9))
 
     def final_on(k2, sp):
         """Plan k2's height at its arc sp as the laws leave it."""
-        return float(np.interp(sp, arcs[k2], np.asarray(plans[idx[k2]].z, np.float64)))
+        return float(dnp.interp(sp, arcs[k2], np.asarray(plans[idx[k2]].z, np.float64)))
 
     landed = []                     # (plan, the plan it lands on, its run, whether it stands as landed): grading
 
@@ -411,8 +411,8 @@ def apply(plans, specs, held=None, under=None, skip=(), diagnostics=None, natura
             if R[ra]["S"][0] <= s <= R[ra]["S"][-1]:
                 _r, rev2, s0 = loc[k2]
                 sk = s0 + (arcs[k2][-1] - arcs[k2] if rev2 else arcs[k2])
-                o = np.argsort(sk)
-                ow = np.interp(R[ra]["sv"][[b0, b1]], sk[o], zs[k2][o])
+                o = np.argsort(sk, kind="stable")
+                ow = dnp.interp(R[ra]["sv"][[b0, b1]], sk[o], zs[k2][o])
                 sp = float(np.clip(arcs[k2][-1] - (s - s0) if rev2 else s - s0, 0.0, arcs[k2][-1]))
                 v = z_on(k2, sp) - ((1.0 - g) * float(ow[0]) + g * float(ow[1]))
             if band == 0.0 and abs(v) < 1e-9:   # (an "eq" coupling's value is 0: a band of none for the rest)
@@ -552,11 +552,11 @@ def apply(plans, specs, held=None, under=None, skip=(), diagnostics=None, natura
         s = s0 + (arcs[k][-1] - arcs[k] if rev else arcs[k])
         if all(out[c] is None for c, _a, _b in where[r]):
             continue
-        o = np.argsort(s)
-        own = np.interp(R[r]["sv"], s[o], zs[k][o])     # (the run's samples on this plan's own heights: at a joint whose
+        o = np.argsort(s, kind="stable")
+        own = dnp.interp(R[r]["sv"], s[o], zs[k][o])     # (the run's samples on this plan's own heights: at a joint whose
                                                         # parts the passes left apart, each part's own, so both end on
                                                         # the solved height; the run's targets there are the first's)
-        z = zs[k] + (np.interp(s, R[r]["sv"], sol[r]) - np.interp(s, R[r]["sv"], own))
+        z = zs[k] + (dnp.interp(s, R[r]["sv"], sol[r]) - dnp.interp(s, R[r]["sv"], own))
         z = np.minimum(np.maximum(z, lob[k]), hib[k])
         z = np.where(hold[k], zs[k], z)                 # (the change, not the resampled profile: the plan's own detail)
         z = np.where(down[k], np.minimum(z, zs[k]), z)

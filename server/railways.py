@@ -440,7 +440,7 @@ def parts(frame, cells, box, reach=REACH_M, clip=False, worn=None, gauges=None, 
     # any, as _pieces)
     idx = [_rail_index(feats, frame) if feats is not None and len(feats) and "subtype" in feats.attrs else None
            for feats in cells]
-    out = fast._ef.rail_parts_select(idx, cells, tuple(float(v) for v in near), roads.level_ranges, roads.ground_parts,
+    out = fast._ef.rail_parts_select(idx, cells, tuple(float(v) for v in near), _rail_ranges, _rail_ground_parts,
                                      wear_of, kept, gauges, TUNNELS_ON, RAIL_LIFECYCLE)
     if any(kind == "ground" and wear_of.get(fid) for fid, _c, kind, _xy in out):
         out = _cut_worn_at_motorways(out, wear_of, motorway_crossings(frame, cells, box, reach), kept, cut_ends)
@@ -448,6 +448,24 @@ def parts(frame, cells, box, reach=REACH_M, clip=False, worn=None, gauges=None, 
     return _span_clip(out, road_underpasses(frame, cells, box, reach) if underpasses is None else underpasses,
                       near if clip else None)
 
+
+
+def _rail_ranges(feats, i):
+    """roads.level_ranges of rail feature i with its short tunnels taken out (laid on the ground, as _pieces): short by
+    the run of the tunnel they are a piece of (tunnel_run_m, through the map's splits at switches), not by the piece's
+    own length: rail_parts_select's own short test (by the piece alone) is given 0, so a 450 m tunnel split into 6-55 m
+    pieces (Birmingham's lines under the Bullring) is not laid on the ground in the mesh while gradesep and the shapes
+    have it in its tunnel."""
+    return [r for r in roads.level_ranges(feats, i)
+            if not (r[2] == "tunnel" and tunnel_run_m(feats, i, r[0], r[1]) < SHORT_TUNNEL_M)]
+
+
+def _rail_ground_parts(feats, i):
+    """rail_parts_select's ground pieces of a feature _rail_ranges left no range: its whole rings where the map's ranges
+    were all short tunnels (laid on the ground, as _pieces), roads.ground_parts (which leaves every tunnel out) else."""
+    if roads.level_ranges(feats, i):
+        return [ring for part in feats.parts(i) for ring in part if len(ring) >= 2]
+    return roads.ground_parts(feats, i)
 
 
 def _rail_index(feats, frame):
@@ -461,7 +479,7 @@ def _rail_index(feats, frame):
     cols = _drawn_cols(feats)
     src = (xin, cols, a["subtype"], a.get("osm_usage"), a.get("osm_railway:preserved"), a.get("osm_gauge"), feats.ids,
            feats.lonlat, feats.part_off, feats.ring_off, feats.coord_off, STEP_M, roads.MIN_PART, MIN_PART_M,
-           SHORT_TUNNEL_M)
+           0.0)
     memos = feats.__dict__.setdefault("_rail_index", [])
     for got_src, got in memos:
         if len(got_src) == len(src) and all(x is y for x, y in zip(got_src, src)):
@@ -478,7 +496,7 @@ def _rail_index(feats, frame):
         np.array([roads._feature_length_m(feats, i) for i in rl], np.float64), [str(ids[i]) for i in rl],
         [heritage(feats, i) for i in rl], np.array([osm_gauge(feats, i) or np.nan for i in rl], np.float64),
         np.asarray(frame.origin, np.float64), np.asarray(frame.rot, np.float64), float(STEP_M),
-        float(roads.MIN_PART), float(MIN_PART_M), float(SHORT_TUNNEL_M))
+        float(roads.MIN_PART), float(MIN_PART_M), 0.0)
     memos.append((src, ix))
     del memos[:-2]
     return ix
@@ -527,7 +545,10 @@ def raising_underpasses(tunnels, classes):
 
 def road_underpasses(frame, cells, box, reach=REACH_M, classes=None):
     """Short road tunnels near box as (xy, half width), including source tunnels made ground by gradesep. classes: a
-    list that gets each one's road class, in the same order (grading's UNDER_TUNNEL_FIXED_ON)."""
+    list that gets each one's road class, in the same order (grading's UNDER_TUNNEL_FIXED_ON); without it the native
+    selection (_road_underpasses_native: the same tunnels, the classes not kept)."""
+    if classes is None:
+        return _road_underpasses_native(frame, cells, box, reach)
     near = (box[0] - reach, box[1] - reach, box[2] + reach, box[3] + reach)
     out, seen = [], set()
     for feats in cells:
@@ -570,6 +591,66 @@ def road_underpasses(frame, cells, box, reach=REACH_M, classes=None):
                     if classes is not None:
                         classes.append(sp.cls)
     return out
+
+
+def _road_underpasses_native(frame, cells, box, reach=REACH_M):
+    """Short road tunnels near box as (xy, half width), including source tunnels made ground by gradesep: layer by
+    layer, its roads in its earthfast.UnderpassIndex (_underpass_index), a road's tunnel geometry made once
+    (_underpass_entry), the window's selection, specs, arc test and dedupe by (id, ends) one call a layer
+    (rail_underpass_select). A road's spec is each call's: its tunnel spec (roads.tunnel_specs, asked every call: a
+    layer's specs made on the lidar rule fault their readers), or the layer's road_specs asked at its first road taken
+    with a map tunnel missing from its ranges (specs made while a download failed are made again)."""
+    import fast
+    fast.require(491, "rail_underpass_select")
+    near = tuple(float(v) for v in (box[0] - reach, box[1] - reach, box[2] + reach, box[3] + reach))
+    out, seen = [], fast._ef.UnderpassSeen()
+    for feats in cells:
+        if feats is None or not len(feats):
+            continue
+        specs = roads.tunnel_specs(feats)
+        fast._ef.rail_underpass_select(_underpass_index(feats, frame), specs, near,
+                                       lambda i: _underpass_entry(feats, frame, specs, i),
+                                       lambda: roads.road_specs(feats), UNDERPASS_SIDE_M, seen, out)
+    return out
+
+
+def _underpass_index(feats, frame):
+    """earthfast.UnderpassIndex of feats' roads in frame (their boxes, a map tunnel or not), kept on the layer for the
+    frame's coordinates and its road revision (roadlanes' reset makes the specs and ranges again)."""
+    import fast
+    xin = feats.xy_in(frame)
+    tagged = _tunnel_tagged(feats)
+    src = (xin, feats.__dict__.get("_road_revision", 0), tagged, roads.UNDERPASS_MAX_M)
+    memos = feats.__dict__.setdefault("_rail_underpass_index", [])
+    for got_src, got in memos:
+        if len(got_src) == len(src) and all(x is y or (k == 1 and x == y) for k, (x, y) in enumerate(zip(got_src, src))):
+            return got
+    ix = fast._ef.UnderpassIndex(np.asarray(feats.boxes(frame), np.float64).reshape(-1, 4),
+                                 np.ascontiguousarray(tagged, bool), float(roads.UNDERPASS_MAX_M))
+    memos.append((src, ix))
+    del memos[:-2]
+    return ix
+
+
+def _underpass_entry(feats, frame, specs, i):
+    """(spec, missing, id, tunnel parts, missing tunnels): road i's tunnel geometry in frame for the UnderpassIndex: its
+    tunnel parts when it has a tunnel spec (retained tunnels keep their cleared portal ends) and the map's tunnels that
+    gradesep made ground (missing from its ranges: Nashville's Carney Street keeps that clearance evidence, also when
+    another tunnel on the feature remains), each an (k, 2) array."""
+    spec = specs[i] is not None
+    rings = roads.tunnel_parts(feats, i) if spec else []
+    tagged = ([(a, b, kind) for a, b, kind in roads.tag_level_ranges(feats, i) if kind == "tunnel"]
+              if _tunnel_tagged(feats)[i] else [])
+    missing = []
+    if tagged:          # (the map's tunnels first: most features have none)
+        effective = [(a, b) for a, b, kind in roads.raw_level_ranges(feats, i) if kind == "tunnel"]
+        missing = [(a, b, kind) for a, b, kind in tagged
+                   if not any(c <= a + roads.MIN_PART and d >= b - roads.MIN_PART for c, d in effective)]
+    gone = roads._parts_by_level_new(feats, i, "tunnel", rngs=missing) if missing else []
+
+    def enu(rs):
+        return [np.ascontiguousarray(np.column_stack(mapgeom.enu_xy(feats, frame, r)), np.float64) for r in rs]
+    return spec, bool(missing), str(feats.ids[i]), enu(rings), enu(gone)
 
 
 # A railway's bridge over a road on the ground (findground: a bridge over a plain way leaves the ground, the plain way
@@ -673,7 +754,7 @@ def plain_underpasses(frame, cells, box, rails, reach=REACH_M, tunnels=None):
             if a1 - a0 < 1.0:
                 continue
             ss = np.linspace(a0, a1, max(3, int((a1 - a0) / STEP_M) + 1))
-            piece = np.c_[np.interp(ss, sl, line[:, 0]), np.interp(ss, sl, line[:, 1])]
+            piece = np.c_[dnp.interp(ss, sl, line[:, 0]), dnp.interp(ss, sl, line[:, 1])]
             if track is not None:
                 clear = track
             else:
@@ -691,24 +772,6 @@ def _underpass_distance(xy, line):
     xy, line = roads._lines64([xy, line])
     return fast._ef.rail_underpass_distance(xy, line)
 
-
-def _rail_boxes(rails):
-    """(n, 4) the boxes (x0, y0, x1, y1) of the rails' parts."""
-    out = np.zeros((len(rails), 4))
-    for n, (*_, xy) in enumerate(rails):
-        out[n, :2] = xy.min(0)
-        out[n, 2:] = xy.max(0)
-    return out
-
-    def __init__(self, rails):
-        self.boxes = np.zeros((len(rails), 4))
-        for n, (*_, xy) in enumerate(rails):
-            self.boxes[n, :2] = xy.min(0)
-            self.boxes[n, 2:] = xy.max(0)
-        self.zeros = [np.zeros(len(xy), bool) for *_, xy in rails]
-        for z in self.zeros:
-            z.flags.writeable = False
-        self._tangent = [None] * len(rails)
 
 def _underpass_hits(rails, tunnels, margin):
     """Per tunnel of tunnels [(line, half width)]: {part index of rails: (its masked points (ascending), their fraction
@@ -1088,7 +1151,6 @@ def graded_crossings(frame, cells, box, reach=REACH_M):
         if feats is None or len(feats) == 0:
             continue
         specs = roads.road_specs(feats)
-        rings, halves = [], []      # (the cell's rings converted in one call)
         for i in _box_hits(feats.boxes(frame), near):
             sp = specs[i]
             fid = str(feats.ids[i])

@@ -85,7 +85,7 @@ def couple_ground(xy, z, ground, half, roads, rdem, lowered=(), lower_m=0.0):
                                            np.ascontiguousarray(own),
                                            np.ascontiguousarray(np.asarray(rdem, np.float64)),
                                            np.ascontiguousarray(off, np.int64), np.ascontiguousarray(hw), REACH_M,
-                                           SEAM_SLOPE, SEAM_TOL_M, MAX_MOVE_M, SPREAD_GRADE)
+                                           SEAM_SLOPE, SEAM_TOL_M, MAX_MOVE_M, railways.GRADE)
     return z if out is None else out
 
 

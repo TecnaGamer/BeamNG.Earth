@@ -6206,8 +6206,8 @@ def roads_over_tube(arc, zr, s, floor, cover, kinds):
     arc, zr = np.asarray(arc, np.float64), np.asarray(zr, np.float64)
     if not len(arc):
         return np.zeros(0, bool)
-    q = np.clip(np.rint(np.interp(arc, s, np.arange(len(s)))).astype(np.int64), 0, len(s) - 1)
-    over = zr - np.interp(arc, s, floor)
+    q = np.clip(np.rint(dnp.interp(arc, s, np.arange(len(s)))).astype(np.int64), 0, len(s) - 1)
+    over = zr - dnp.interp(arc, s, floor)
     return np.isfinite(zr) & (np.asarray(kinds)[q] > 0) & (over > 0.0)         & ((np.asarray(cover)[q] >= TUNNEL_LOW_H) | (over >= TUNNEL_LOW_H))
 
 
@@ -6229,7 +6229,7 @@ def bore_dips(arc, zr, s, floor, low_h, ends=None, grade=None):
     if not len(arc) or len(s) < 3:
         return []
     s = np.asarray(s, np.float64)
-    q = np.clip(np.rint(np.interp(arc, s, np.arange(len(s)))).astype(np.int64), 1, len(s) - 2)
+    q = np.clip(np.rint(dnp.interp(arc, s, np.arange(len(s)))).astype(np.int64), 1, len(s) - 2)
     need = zr - BORE_FIT_M - low_h
     if ends is not None and grade is not None:
         need = np.maximum(need, np.maximum(ends[0] - grade * s[q], ends[1] - grade * (s[-1] - s[q])))
@@ -6316,7 +6316,7 @@ def bore_pieces(s, kinds, floor, crossings, min_m=SECTION_MIN_M):
         for arc, reach, zr in crossings:
             if not s[a] < arc < s[b] or not np.isfinite(zr):
                 continue
-            if zr - float(np.interp(arc, s, floor)) - BORE_FIT_M >= roadmesh.TUNNEL_H:
+            if zr - float(dnp.interp(arc, s, floor)) - BORE_FIT_M >= roadmesh.TUNNEL_H:
                 continue
             reach = max(float(reach), min_m / 2)
             lo, hi = arc - reach, arc + reach
@@ -10383,7 +10383,7 @@ class TunnelProfiles(BridgeProfiles):
             far.append((float(self._raw_ground(d[-1:])[0]), float(arc[-1])))
             at_s = np.arange(MOUTH_NEAR_M, min(MOUTH_FAR_M, arc[-1] - MOUTH_NEAR_M) + 1e-6, MOUTH_STEP_M)
             s.append(at_s)
-            pts.append(np.c_[np.interp(at_s, arc, d[:, 0]), np.interp(at_s, arc, d[:, 1])])
+            pts.append(np.c_[dnp.interp(at_s, arc, d[:, 0]), dnp.interp(at_s, arc, d[:, 1])])
         if not far:
             return None
         pts = np.concatenate(pts)
@@ -10729,7 +10729,7 @@ class TunnelProfiles(BridgeProfiles):
                     continue
                 a = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(ln, axis=0).T))]
                 t = np.linspace(0.0, a[-1], max(2, int(math.ceil(a[-1] / BORE_DIP_STEP_M)) + 1))
-                pts.append(np.stack([np.interp(t, a, ln[:, 0]), np.interp(t, a, ln[:, 1])], axis=1))
+                pts.append(np.stack([dnp.interp(t, a, ln[:, 0]), dnp.interp(t, a, ln[:, 1])], axis=1))
                 reach.append(np.full(len(t), hw + half))
         if not pts:
             return none

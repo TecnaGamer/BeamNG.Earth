@@ -50,6 +50,7 @@ _NODES = OrderedDict()              # (anchor key, ix, iy) -> ({(fid, kind): gro
 _NODES_LOCK = threading.Lock()      # (road tiles are built on several threads)
 _NODES_PTS = [0]
 _EMPTY = ({}, None)                 # (a node with no lines)
+_PACK = np.int64(1) << 31           # (a centimetre key (a, b) as one int64: (a + 2^31) << 32 | (b + 2^31))
 
 
 def _cm(xy):
@@ -136,11 +137,16 @@ def _find_near(node, fid, cm, out):
     todo = np.flatnonzero(np.isnan(out))
     if not len(todo):
         return out
+    groups, packed = node
+    if packed is None:
+        return out
+    fast.require(510, "RailNode.group")
     ks, zs = [], []
-    for (f_, _k), (keys, z_) in node.items():
+    for (f_, _k), g in groups.items():
         if f_ == fid:
-            ks.append(keys)
-            zs.append(z_)
+            keys, z_ = packed.group(g)
+            ks.append(np.asarray(keys, np.int64))
+            zs.append(np.asarray(z_, np.float64))
     if not ks:
         return out
     keys, z_ = np.concatenate(ks), np.concatenate(zs)
@@ -149,7 +155,7 @@ def _find_near(node, fid, cm, out):
     lim = 50.0 * railways.STEP_M                # (cm: half a step)
     for i in todo:
         d = dnp.hypot(kx - cm[i, 0], ky - cm[i, 1])
-        j = np.argsort(d)[:2]
+        j = np.argsort(d, kind="stable")[:2]
         if d[j[0]] > lim:
             continue
         if len(j) > 1 and d[j[1]] <= 2 * lim and d[j[0]] + d[j[1]] > 0:

@@ -7,6 +7,8 @@ game (GAME_GRADE_PLUS: AASHTO's are for a loaded truck); a path 12 %. A track's 
 module has no railways). Pure."""
 import numpy as np
 
+import dnp
+
 PATHS = {"footway", "path", "cycleway", "pedestrian", "steps", "bridleway", "track"}
 DEFAULT_KMH = {"motorway": 110, "trunk": 90, "primary": 70, "secondary": 60, "tertiary": 50, "residential": 40,
                "unclassified": 50, "service": 20, "living_street": 15, "road": 40, "track": 20}
@@ -32,7 +34,7 @@ def road_grade(cls, kmh=None):
     """The steepest grade a road of class cls (limit kmh, or its class's) may hold."""
     if cls in PATHS:
         return 0.12
-    g = float(np.interp(speed(cls, kmh), [20, 30, 40, 50, 60, 80, 100, 120], [0.15, 0.12, 0.10, 0.09, 0.08, 0.06, 0.05, 0.04]))
+    g = float(dnp.interp(speed(cls, kmh), [20, 30, 40, 50, 60, 80, 100, 120], [0.15, 0.12, 0.10, 0.09, 0.08, 0.06, 0.05, 0.04]))
     if (cls or "").endswith("_link"):
         g = max(g, 0.06)
     return g + GAME_GRADE_PLUS

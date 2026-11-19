@@ -2354,7 +2354,7 @@ def _core_hits(pts, segs, own):
     for c0 in range(0, len(pts), 256):
         q = pts[c0:c0 + 256]
         t = np.clip(((q[:, None] - a[None]) * ab[None]).sum(2) / den[None], 0.0, 1.0)
-        d = np.hypot(*(a[None] + ab[None] * t[..., None] - q[:, None]).transpose(2, 0, 1))
+        d = dnp.hypot(*(a[None] + ab[None] * t[..., None] - q[:, None]).transpose(2, 0, 1))
         hit[c0:c0 + 256] = (d < h[None]).any(1)
     return hit
 
@@ -2393,11 +2393,11 @@ def embankment_flanks(plans, specs, bases):
         width0 = np.where(need >= FLANK_MIN_M, np.floor(total / FLANK_STEP_M) * FLANK_STEP_M, 0.0)
         seg = np.diff(xy, axis=0)
         nrm = np.stack([-seg[:, 1], seg[:, 0]], axis=1)
-        nrm /= np.maximum(np.hypot(nrm[:, 0], nrm[:, 1]), 1e-9)[:, None]
+        nrm /= np.maximum(dnp.hypot(nrm[:, 0], nrm[:, 1]), 1e-9)[:, None]
         vn = np.zeros_like(xy)
         vn[:-1] += nrm
         vn[1:] += nrm
-        vn /= np.maximum(np.hypot(vn[:, 0], vn[:, 1]), 1e-9)[:, None]       # (each vertex's normal, to its left)
+        vn /= np.maximum(dnp.hypot(vn[:, 0], vn[:, 1]), 1e-9)[:, None]       # (each vertex's normal, to its left)
         for side in (1.0, -1.0):        # (left: the slope falls to its left; right: rises to its left)
             width = width0.copy()
             on = np.flatnonzero(width > 0)
@@ -2624,7 +2624,8 @@ def _held_by_decks(xy, move, ends, hold=SEAM_DECK_HOLD_M):
     if not len(ends) or not len(move):
         return move
     p = np.asarray(xy, np.float64)[:, :2]
-    d = np.sqrt(((p[:, None, :] - np.asarray(ends, np.float64)[None, :, :]) ** 2).sum(-1)).min(axis=1)
+    dd = p[:, None, :] - np.asarray(ends, np.float64)[None, :, :]
+    d = dnp.hypot(dd[..., 0], dd[..., 1]).min(axis=1)
     cap = railways.GRADE * np.maximum(d - hold, 0.0)
     return np.clip(move, -cap, cap)
 
@@ -3410,7 +3411,8 @@ class _Planner:
                             if RAIL_SEAM_NATURAL:
                                 if seam is None:            # (the roads' points and their ground, once a cell)
                                     seam = (seam_pack(self.frame, self.elev, beside),)
-                                z = seam_on_ground(self.frame, self.elev, xy, z, beside, seam[0])
+                                moved = seam_on_ground(self.frame, self.elev, xy, z, beside, seam[0])
+                                z = z + _held_by_decks(xy, moved - z, rail_ends) if rail_ends is not None else moved
                             else:
                                 moved = railroadseam.couple(xy, z, railways.GRADE_HALF_M, beside,
                                                             railways.seam_lowered(xy, z, beside), railways.SEAM_LOWER_M)
@@ -4528,7 +4530,7 @@ class _Planner:
                     deck = float(np.min(cz))
                 elif rail:                      # (a track's deck: the railways' bed it is drawn at, over the corridor)
                     sb = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(b[:, :2], axis=0).T))]
-                    cpts = np.stack([np.interp(corridor, sb, b[:, 0]), np.interp(corridor, sb, b[:, 1])], axis=1)
+                    cpts = np.stack([dnp.interp(corridor, sb, b[:, 0]), dnp.interp(corridor, sb, b[:, 1])], axis=1)
                     zr = self._track_bed(np.r_[cpts, pt[None]])
                     if not np.isfinite(zr).all():
                         continue                # (the railways lay no track there: nothing over the road to clear)
@@ -4896,7 +4898,7 @@ class _Planner:
         if not ok.any():
             return np.zeros(len(raw))
         if not ok.all():
-            raw = np.interp(np.arange(len(raw)), np.flatnonzero(ok), raw[ok])
+            raw = dnp.interp(np.arange(len(raw)), np.flatnonzero(ok), raw[ok])
         if len(raw) >= 5:
             raw = smooth_profile(median_profile(raw, _gsh.STEP_M, 12.0), _gsh.STEP_M, 6.0)
         return raw
@@ -4945,7 +4947,7 @@ class _Planner:
         new = [v for v in dict.fromkeys(sv) if (i, v) not in tops]
         if new:
             nv = np.array(new, np.float64)
-            q = np.stack([np.interp(nv, net.s[i], net.lines[i][:, 0]), np.interp(nv, net.s[i], net.lines[i][:, 1])],
+            q = np.stack([dnp.interp(nv, net.s[i], net.lines[i][:, 0]), dnp.interp(nv, net.s[i], net.lines[i][:, 1])],
                          axis=1)
             zb = self._track_bed(q, net.m[i].key[2])
             for v, z in zip(new, zb.tolist()):
@@ -4996,7 +4998,7 @@ class _Planner:
             if not ok.any():
                 continue
             if not ok.all():
-                raw = np.interp(np.arange(n), np.flatnonzero(ok), raw[ok])
+                raw = dnp.interp(np.arange(n), np.flatnonzero(ok), raw[ok])
             out[r] = smooth_profile(median_profile(raw, _gsh.STEP_M, 12.0), _gsh.STEP_M, 6.0) if n >= 5 else raw
         return out
 
@@ -5031,8 +5033,8 @@ class _Planner:
                         return np.array([np.nan if z is None else z
                                          for z in self._rail_tops(net, i, sv_.tolist(), rail_tops)])
                     sv = np.clip(sv_[:, None] + np.linspace(-24.0, 24.0, 13)[None], 0.0, net.L[i])
-                    xy = np.stack([np.interp(sv, net.s[i], net.lines[i][:, 0]),
-                                   np.interp(sv, net.s[i], net.lines[i][:, 1])], axis=2)
+                    xy = np.stack([dnp.interp(sv, net.s[i], net.lines[i][:, 0]),
+                                   dnp.interp(sv, net.s[i], net.lines[i][:, 1])], axis=2)
                     return self._ground_lines(xy)[:, 6]
                 m = net.m[i]
                 if m.kind in ("rail", "rail_deck"):     # (a track, on its deck or on the ground: its rails' top over the
@@ -5043,8 +5045,8 @@ class _Planner:
                     #                                                               track there to clear)
                 q = _gsh.at_s(net.lines[i], net.s[i], s_)
                 sv = np.clip(np.linspace(s_ - 24.0, s_ + 24.0, 13), 0.0, net.L[i])
-                xy = np.stack([np.interp(sv, net.s[i], net.lines[i][:, 0]),
-                               np.interp(sv, net.s[i], net.lines[i][:, 1])], axis=1)
+                xy = np.stack([dnp.interp(sv, net.s[i], net.lines[i][:, 0]),
+                               dnp.interp(sv, net.s[i], net.lines[i][:, 1])], axis=1)
                 return float(self._ground_line(xy)[6]) if len(xy) else None
 
             return fixed_z
@@ -5132,7 +5134,7 @@ class _Planner:
                 self._shape_debug(net, sysm, pcs, smp, zs, ground, fixed_z, diag)
 
         def ground_along(i, sv):
-            xy = np.stack([np.interp(sv, net.s[i], net.lines[i][:, 0]), np.interp(sv, net.s[i], net.lines[i][:, 1])],
+            xy = np.stack([dnp.interp(sv, net.s[i], net.lines[i][:, 0]), dnp.interp(sv, net.s[i], net.lines[i][:, 1])],
                           axis=1)
             return self._ground_line(xy)
         emb = _gsh.embankments(net, solved, shapes, ground_along)
@@ -5147,8 +5149,8 @@ class _Planner:
             if m.kind not in ("ground", "tunnel"):
                 continue
             for sv, z, mode in lst:
-                xy = np.stack([np.interp(sv, net.s[j], net.lines[j][:, 0]),
-                               np.interp(sv, net.s[j], net.lines[j][:, 1])], axis=1)
+                xy = np.stack([dnp.interp(sv, net.s[j], net.lines[j][:, 0]),
+                               dnp.interp(sv, net.s[j], net.lines[j][:, 1])], axis=1)
                 prof.setdefault(str(m.key[0]), []).append((xy, np.asarray(z, np.float64), mode))
         log.warning("grading: SHAPES pid %d region %s: %d cells, %d members, %d systems (%d infeasible, left as they are), %d roads "
                     "graded, find %.2f s, solve %.2f s", os.getpid(), hk, len(loaded), len(members), len(mine), failed,
@@ -5309,7 +5311,7 @@ class _Planner:
             P = np.array([float(np.ravel(e_)[0]), float(np.ravel(n_)[0])])
             for i, (f, p) in enumerate(plans):
                 xy = np.asarray(p.xy, np.float64)[:, :2]
-                if len(xy) and float(np.hypot(*(xy - P).T).min()) <= 40.0:
+                if len(xy) and float(dnp.hypot(*(xy - P).T).min()) <= 40.0:
                     near.append((i, np.array(p.z, np.float64)))
         def natural(i):
             if bases is None or i >= len(bases) or len(bases[i]) != len(plans[i][1].z):
@@ -9076,7 +9078,7 @@ def _cover_under(p, cover):
     nrm = np.c_[-d[:, 1] / ln, d[:, 0] / ln]
     half = float(p.half)
     k = max(1, int(np.ceil(half / ARCH_COVER_STEP_M)))
-    zr = np.interp(fine, s, np.asarray(p.z, np.float64))        # (the road's height at each: cover reads it against the floor)
+    zr = dnp.interp(fine, s, np.asarray(p.z, np.float64))        # (the road's height at each: cover reads it against the floor)
     cv = np.full(len(fine), -np.inf)
     for off in np.linspace(-half, half, 2 * k + 1):
         q = at + off * nrm
