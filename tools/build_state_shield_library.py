@@ -12,6 +12,7 @@ import shutil
 import sys
 import xml.etree.ElementTree as ET
 
+import npyfirst  # noqa: F401
 import numpy as np
 from PIL import Image, ImageFilter
 

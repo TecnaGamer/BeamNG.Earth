@@ -14,6 +14,7 @@ import sys
 
 ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT/'server'))
+import npyfirst  # noqa: E402,F401
 import routeindex
 
 
