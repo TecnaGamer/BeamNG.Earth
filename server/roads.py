@@ -9378,6 +9378,35 @@ class BridgeProfiles:
                       else v) for k, v in keep.items()}
         if own is not None and key in shapes:
             own = (own[0], _shaped_line(shapes[key]["xy"], shapes[key], len(own[1])), shapes[key]["z"], own[3])
+        # (BNE_ROADSHAPE=profile, road revamp v2 P3b: a whole chain's decks at the joint profile's heights from ground
+        # anchor to ground anchor, solved here from the decks as shaped (roadshape.profile_built), in place of
+        # deck_profile + _tie_beside; its approach pins go to the plans' second stage (grading.PROFILE_PINS). Every
+        # part of the chain this solve's (a whole chain: one answer whoever solves it); anything but "solved": today's)
+        prof = None
+        if (reqs is not None and roadshape.PROFILE_BUILT and block is None and comp and len(keep) == len(comp)
+                and not getattr(self, "PROFILE_OFF", False)):
+            try:
+                _rec, prof = roadshape.profile_built(self, list(comp), {k: shaped[k] + (pool[k][3],) for k in comp},
+                                                     dict(ground), reqs)
+            except Exception as ex:
+                # (today's heights; the chain marked short, never kept: a cell the profile reads not at hand made
+                # today's here and the profile's elsewhere)
+                log.debug("chain %s: profile: %s: %s", key, type(ex).__name__, ex)
+                import revisit
+                revisit.fault(here=True)
+                prof = None
+            if prof is not None:
+                for k in comp:
+                    z = prof["deck_z"].get(k)
+                    v = shaped[k]
+                    if z is None or len(z) != len(v[1]) or not np.isfinite(z).all():
+                        continue
+                    xy = v[1]
+                    srec = getattr(xy, "shape_rec", None)
+                    if srec is not None:
+                        srec = dict(srec, z=z)
+                        xy = _shaped_line(srec["xy"], srec, xy.raw_n)
+                    shaped[k] = (v[0], xy, z, v[3])
         pre = {k: self._precommit(k, shaped[k], ground) for k in keep}
         beams = tpiers = None
         # (BNE_DECK_STRUCT=shadow, road revamp RS: the chain's structure groups as a JSON, from what this solve read
@@ -9409,6 +9438,11 @@ class BridgeProfiles:
                     self._note_short(k, n_short, n_lidar)
                 self.done[k] = shaped[k]                # (a shape rides on its line: _shaped_line)
                 self._commit(k, ground, pre.get(k))
+                if prof is not None:                    # (P3b: its heights are the profile's; the sheet's pins held)
+                    self.__dict__.setdefault("profiled", set()).add(k)
+                    self.__dict__.setdefault("profile_of", {})[k] = ck
+            if prof is not None and publish:
+                self.__dict__.setdefault("profiles", {}).setdefault(ck, prof)
             if fresh and ck not in self.trusses:
                 self.trusses[ck] = beams
                 self.piers[("truss", ck)] = tpiers
@@ -9445,7 +9479,7 @@ class BridgeProfiles:
                 structures.published(self, comp, pool, zs, infra, block, revisit.CACHE_DIR, short_, raw=raw)
             else:
                 structures.skipped("owner" if not mine else "short" if not canon else "lost")
-        if reqs is not None:
+        if reqs is not None and not roadshape.PROFILE_BUILT:
             # (BNE_ROADSHAPE=profile, road revamp v2 P3a, SHADOW ONLY: the joint profile from ground anchor to ground
             # anchor through this chain's decks, solved off the build (roadshape.profile_published) from the solve
             # that is published: a whole chain's own owner, read complete, every part published by it; nothing built
@@ -9519,11 +9553,25 @@ class BridgeProfiles:
         return True
 
     def _adopt_extra(self, comp):
-        """Under self.lock: what else goes with comp's solve (TunnelProfiles: its sections)."""
-        return None
+        """Under self.lock: what else goes with comp's solve (TunnelProfiles: its sections; BNE_ROADSHAPE=profile: its
+        joint profile's built outputs and the parts at it, P3b)."""
+        pf = self.__dict__.get("profiled")
+        if not pf:
+            return None
+        ck = min(comp)
+        prof = self.__dict__.get("profiles", {}).get(ck)
+        mine = [k for k in comp if k in pf]
+        return ("profile", ck, prof, mine) if prof is not None and mine else None
 
     def _adopt_take(self, extra):
         """Under self.lock: _adopt_extra's from another store."""
+        if extra and extra[0] == "profile":
+            _tag, ck, prof, mine = extra
+            self.__dict__.setdefault("profiles", {}).setdefault(ck, prof)
+            self.__dict__.setdefault("profiled", set()).update(mine)
+            of = self.__dict__.setdefault("profile_of", {})
+            for k in mine:
+                of[k] = ck
 
     def _precommit(self, k, part, ground=None):
         """Before part k (spec, xy, z, lon) is published, outside the lock: what its commit reads (its piers:
@@ -10737,6 +10785,23 @@ class ChainView:
                 if box_owns(box, mx, my) and k not in seen:
                     seen.add(k)
                     out.append(b)
+        return out
+
+    def profiled_ids(self):
+        """The part ids whose published heights are their chain's joint profile (BNE_ROADSHAPE=profile, P3b: the sheet's
+        couplings held by the solve; roads._sheet_plan pins them no more)."""
+        out = set()
+        for st in self._stores():
+            with st.lock:
+                out.update(st._part_id(k) for k in st.__dict__.get("profiled", ()))
+        return out
+
+    def profile_records(self):
+        """The built outputs (roadshape._built) of the chains this view's stores solved by the joint profile."""
+        out = []
+        for st in self._stores():
+            with st.lock:
+                out.extend(st.__dict__.get("profiles", {}).values())
         return out
 
     def depth_of(self, fid):
@@ -12097,12 +12162,15 @@ def _bridge_chunks(frame, bseen, elev, exact, bridges=None, cells=None, walks=No
         # (no cost where no fork can touch the tile: every tile a fork reaches draws its one-way branch)
         wide = (_sheet_window_parts(bridges, frame, cells, exact)
                 if roadshape.SHEET and any(_travel(sp) != 0 for _f, sp, _p, _l in got) else None)
+        pf = getattr(bridges, "profiled_ids", None) if roadshape.PROFILE_BUILT and wide is not None else None
+        pf = pf() if pf is not None else None
         if shaped:
             return _deck_chunks(got, exact, bridges._ground, {d[0]: dd(d[0]) for d in got} if dd else None, walks,
                                 shift_of, width_of, context_m, marks_of=marks_of, shapes=shapes, sheet_wide=wide,
-                                sheet_marks=sheet_marks)
+                                sheet_marks=sheet_marks, profiled=pf)
         return _deck_chunks(got, exact, bridges._ground, {d[0]: dd(d[0]) for d in got} if dd else None, walks,
-                            shift_of, width_of, context_m, marks_of=marks_of, sheet_wide=wide, sheet_marks=sheet_marks)
+                            shift_of, width_of, context_m, marks_of=marks_of, sheet_wide=wide, sheet_marks=sheet_marks,
+                            profiled=pf)
     if not bseen:
         return []
     parts = []                                  # (fid, spec, xy (k, 2), lon)
@@ -12867,7 +12935,7 @@ def _sheet_marks(src, recs):
     return [list(m) for m in sorted(out)]
 
 
-def _sheet_plan(decks, walks, shapes, wide=None, marks=None):
+def _sheet_plan(decks, walks, shapes, wide=None, marks=None, profiled=None):
     """BNE_ROADSHAPE=sheet (road revamp v2 P2b) on the deck parts before anything is drawn from them: the forks
     (_sheet_records) found among wide (the parts round the tile, roads._sheet_window_parts; None: decks), each mapped
     onto the tile's own copies of its parts; the branch pinned to its through deck's heights in their union (and
@@ -12903,7 +12971,8 @@ def _sheet_plan(decks, walks, shapes, wide=None, marks=None):
     decks = list(decks)
     for j, dz in enumerate(dzs):
         i = own(j)
-        if i is not None and dz is not None:
+        # (P3b: a deck at its chain's joint profile keeps its heights: the solve held the union, profile_built)
+        if i is not None and dz is not None and not (profiled and decks[i][0] in profiled):
             fid, spec, pts, lon = decks[i]
             pts = np.array(pts, np.float64, copy=True)
             pts[:, 2] += dz
@@ -13101,7 +13170,7 @@ def _cut_ends(ch, line, box):
 
 
 def _deck_chunks(decks, exact, ground_fn=None, depths=None, walks=None, shift_of=None, width_of=None, context_m=None,
-                 marks_of=None, shapes=None, sheet_wide=None, sheet_marks=None):
+                 marks_of=None, shapes=None, sheet_wide=None, sheet_marks=None, profiled=None):
     """Deck + line chunks of bridge parts [(fid, spec, pts (k, 3), lon)] clipped to the box `exact`, and their decks
     within context_m (default DECK_CONTEXT_M) as "ctx" chunks (not drawn: build_tile's caller hands them to roadmesh.deck).
     ground_fn(xy) -> heights: a part's ends on the ground are its abutments (each deck chunk's "abut" points: the
@@ -13110,7 +13179,8 @@ def _deck_chunks(decks, exact, ground_fn=None, depths=None, walks=None, shift_of
     width at each point where it tapers into another deck (deck_width_fn) or None. shapes (BNE_ROADSHAPE=decks): per
     deck its roadshape shape or None: a shaped deck's rows kept to the chord rule, its ends skewed and buried
     (_deck_shape_ends), no junction surface. sheet_marks (BNE_ROADSHAPE=sheet): a list that gets the forks' nodes round
-    the tile, deck_pads' skip (_sheet_marks)."""
+    the tile, deck_pads' skip (_sheet_marks). profiled (BNE_ROADSHAPE=profile, P3b): the part ids at their chain's
+    joint profile (its sheet couplings held there: no tile-time pins)."""
     import rampmerges, roadmarkings
     def geometry(fid, spec, pts):
         sh = shift_of(fid, pts) if shift_of else None
@@ -13119,7 +13189,7 @@ def _deck_chunks(decks, exact, ground_fn=None, depths=None, walks=None, shift_of
         return pts, spec.width if ws is None else ws
     sheet_recs = []
     if roadshape.SHEET:     # (road revamp v2 P2b: an exit off a bridge one deck with its road; its heights pinned first)
-        sheet_recs, decks = _sheet_plan(decks, walks, shapes, sheet_wide, sheet_marks)
+        sheet_recs, decks = _sheet_plan(decks, walks, shapes, sheet_wide, sheet_marks, profiled)
     layouts = rampmerges.plans(decks, geometry=geometry, pavement=geometry)
     walks = walks or {}
     out = []

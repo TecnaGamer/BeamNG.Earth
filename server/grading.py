@@ -124,6 +124,15 @@ LONG_PART_M = 3000.0        # a road part longer than this is planned per cell, 
 CLIP_MARGIN_M = 400.0
 PLAN_THREADS = 4            # cells planned at once (_plan_missing)
 PLAN_SETS_MAX = 16          # cell sets whose merged plans are kept (Grader._plan_set; ~1 MB each in a town)
+# BNE_ROADSHAPE=profile (road revamp v2 P3b): the graded ground's pinned second stage (_Planner._pin_field).
+# PROFILE_PINS(planner, lat0, lon0, lat1, lon1, pad_m) -> the joint profile's approach pins [(lat (n,), lon (n,),
+# dz (n,), height today (n,), half width, fade (n,))] coming within pad_m of that box, sorted by content (blockworker
+# sets it: the process's bridge chains, solved on the first stage); None: no second stage (every mode but profile).
+# Grader.apply grades by the second stage unless pinned=False.
+PROFILE_PINS = None
+PIN_TAPER_M = 12.0          # m (T_MAX) past an approach's road edge its change fades out over (the plans' own)
+PIN_GATE_M = (1.0, 3.0)     # m: a point this far from the approach's height today keeps its change in full / none
+PIN_STATS = {"calls": 0, "pinned": 0, "pins_s": 0.0, "field_s": 0.0}      # (measurements: _pin_field's calls, seconds)
 SPREAD_CELLS = 16           # plans(): more map cells in the points' bbox: only the cells around the points
 T_MIN, T_MAX = 5.0, 12.0    # m, transition back to the natural ground (5: roads close together meet gently)
 SLOPE_RUN = 2.0             # transition = SLOPE_RUN x the height difference (1:2 slope)
@@ -7345,6 +7354,44 @@ class _Planner:
                 memo[mk] = out
         return out
 
+    def _pin_field(self, lat, lon, e, n, z):
+        """The second stage's change at the points (BNE_ROADSHAPE=profile, road revamp v2 P3b), or None: the joint
+        profile's approach ground (roadshape._built's pins: each approach member's knots, the solve's change, today's
+        height, its road's half width) as earthfast.profile_pin_field lays it over the first stage's graded heights z:
+        on an approach's line its solved height exactly, tapering to nothing over T_MAX past its road's edge, a point
+        at another level kept (PIN_GATE_M). PROFILE_PINS gives the pins within reach of the points (solving the bridge
+        chains there on the first stage). A point's change reads only pins within that reach of it: the same heights
+        whichever query asked. (The pins on the plans' own heights did not hold: where two plans blend at an approach
+        the graded ground moved 0.16 m down where the solve asked 0.77 m up, Fort Pitt.)"""
+        import fast
+        import roadshape
+        t0 = time.perf_counter()
+        if e is None:
+            e, n, _ = self.frame.geodetic_to_enu(lat, lon, 0.0)
+        pad = PIN_TAPER_M + roadshape.PIN_HALF_MAX_M + 1.0
+        pins = PROFILE_PINS(self, float(lat.min()), float(lon.min()), float(lat.max()), float(lon.max()), pad)
+        t1 = time.perf_counter()
+        PIN_STATS["calls"] += 1
+        PIN_STATS["pins_s"] += t1 - t0      # (the chains' solves it asked included)
+        if not pins:
+            return None
+        fast.require(roadshape.PIN_KERNEL, "profile_pin_field")
+        qxy, qoff = [], [0]
+        for p in pins:
+            x, y, _ = self.frame.geodetic_to_enu(p[0], p[1], 0.0)
+            qxy.append(np.stack([np.asarray(x, np.float64), np.asarray(y, np.float64)], axis=1))
+            qoff.append(qoff[-1] + len(p[0]))
+        got = fast._ef.profile_pin_field(
+            np.ascontiguousarray(np.stack([np.asarray(e, np.float64), np.asarray(n, np.float64)], axis=1)),
+            np.ascontiguousarray(z, np.float64), np.ascontiguousarray(np.concatenate(qxy)), qoff,
+            np.ascontiguousarray(np.concatenate([p[2] for p in pins]), np.float64),
+            np.ascontiguousarray(np.concatenate([p[3] for p in pins]), np.float64),
+            np.ascontiguousarray(np.concatenate([p[5] for p in pins]), np.float64), [float(p[4]) for p in pins],
+            [PIN_TAPER_M, PIN_GATE_M[0], PIN_GATE_M[1]])
+        PIN_STATS["field_s"] += time.perf_counter() - t1
+        PIN_STATS["pinned"] += 1
+        return np.asarray(got, np.float64)
+
     def _batter_of(self, pack):
         """pack.bt: the vanilla slopes' params of a plan set's segments (batter_params) from the plans' ground (elev)
         and the buildings (widths: RoadWidths' walls, the cells within BATTER_R_MAX of each segment's core). Each
@@ -7465,7 +7512,7 @@ class _Planner:
         return out
 
     @profile_step('Road grading')
-    def apply(self, lat, lon, base, lift=0.0, roads_only=False, planned_only=False):
+    def apply(self, lat, lon, base, lift=0.0, roads_only=False, planned_only=False, pinned=False):
         """base (the ungraded heights at the points) graded under the roads. Same shape as base.
         lift: m added under the roads (tapering with the grading's weight): the physics block and the
         road mesh use ROAD_LIFT, the visible ground tiles 0, so the road mesh lies exactly on the
@@ -7529,6 +7576,13 @@ class _Planner:
             if race is not None and racedig.ON:
                 keep &= ~race       # (a racetrack over the tunnel: its surface, the tube dug under it, racedig)
             out[keep] = base.ravel()[keep]
+        if pinned and PROFILE_PINS is not None and not roads_only and not planned_only:
+            # (BNE_ROADSHAPE=profile, P3b: the second stage, the joint profile's approach ground: _pin_field)
+            d = self._pin_field(lat.ravel(), lon.ravel(), e, n, out)
+            if d is not None:
+                if keep is not None:
+                    d[keep] = 0.0
+                out = out + d
         return out.reshape(shape)
 
     def road_band(self, lat, lon, reach, planned_only=False):
@@ -8044,20 +8098,24 @@ class Grader:
                 pl._cell_plans(k)
 
     @profile_step('Road grading')
-    def apply(self, lat, lon, base, lift=0.0, roads_only=False, planned_only=False):
-        """_Planner.apply by the points' regions (the anchor plays no part). Same shape as base."""
+    def apply(self, lat, lon, base, lift=0.0, roads_only=False, planned_only=False, pinned=None):
+        """_Planner.apply by the points' regions (the anchor plays no part). Same shape as base. pinned (None: whenever
+        PROFILE_PINS is set): the plans' second stage, with the joint profile's approach pins (BNE_ROADSHAPE=profile,
+        _Planner._pinned); False: the first stage alone (the bridge chains' own ground: their solve reads it)."""
         lat = np.asarray(lat, np.float64)
         lon = np.asarray(lon, np.float64)
         base = np.asarray(base, np.float64)
         if base.size == 0:
             return base
+        if pinned is None:
+            pinned = PROFILE_PINS is not None
         parts = self.store.planners_of(lat, lon)
         if len(parts) == 1:
-            return parts[0][0].apply(lat, lon, base, lift, roads_only, planned_only)
+            return parts[0][0].apply(lat, lon, base, lift, roads_only, planned_only, pinned)
         la, lo, b = lat.ravel(), lon.ravel(), base.ravel()
         out = np.array(b, np.float64, copy=True)
         for pl, idx in parts:
-            out[idx] = pl.apply(la[idx], lo[idx], b[idx], lift, roads_only, planned_only)
+            out[idx] = pl.apply(la[idx], lo[idx], b[idx], lift, roads_only, planned_only, pinned)
         return out.reshape(base.shape)
 
     def road_band(self, lat, lon, reach, planned_only=False):
