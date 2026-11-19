@@ -37,9 +37,14 @@ FEATURES = (
                        # classified differently by the span and yard tiles)
                        "BNE_RACEWAY_PROPS": "on",
                        # railways at roads (the user's reports r61-r64, r80, r92)
-                       "BNE_RAIL_ROAD_FIT": "on", "BNE_RAIL_SEAM_NATURAL": "on"}, None),
-    # (BNE_BATTER=vanilla, the vanilla-style cut and fill slopes of road revamp v2 P1a, left out: nothing joins this
-    # set before the user has looked at it in game; a variable of its own until then, off by default)
+                       "BNE_RAIL_ROAD_FIT": "on", "BNE_RAIL_SEAM_NATURAL": "on",
+                       # road revamp v2, "road shape first" (the user, 2026-11-19: "put them under revamped roads. Have
+                       # that toggle include the latest and what would be the final roads"): vanilla-style cut and fill
+                       # slopes with rocks and wall-foot skirts (P1a), decks that follow the road's curve and bank
+                       # (P1b; becomes "sheet" once the one-slab forks of P2b are in), the surface overlay layer with
+                       # lifted markings (P1c) and the new sidewalks (P1d)
+                       "BNE_BATTER": "vanilla", "BNE_ROADSHAPE": "decks", "BNE_SURFACE_V2": "on",
+                       "BNE_SIDEWALK_V2": "on"}, None),
     ("expEuScenery", {"BNE_EU_ROAD_DETAILS": "on", "BNE_FR_ROADS": "on", "BNE_FR_HOUSES": "on"}, None),
     ("expDropRails", {"BNE_DROP_RAILS": "on"}, None),                     # droprails.enabled
     ("expEntranceFlares", {"BNE_ENTRANCE_FLARES": "on"}, None),           # roads.flares_enabled

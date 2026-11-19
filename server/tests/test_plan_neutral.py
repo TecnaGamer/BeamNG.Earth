@@ -70,11 +70,12 @@ PLANS_READ = ("BNE_BUMPS", "BNE_DIRT_BANK", "BNE_DIRT_BUMP", "BNE_ENTRANCE_FLARE
               # (the Revamped roads setting: tapers, deck K, level spacing, footbridges, rail lifecycle, raceways)
               "BNE_DECK_K_SPEED", "BNE_RACEWAY_DIG", "BNE_FAST_DECK_ENDS", "BNE_FAST_GAP", "BNE_FAST_DECK_GROUND", "BNE_RAIL_LIFECYCLE",
               "BNE_RAIL_SEAM_NATURAL",
-              "BNE_SPEED_TAPERS")
-# (BNE_BATTER, the vanilla slopes, is read by the planning too but is no Experimental switch yet: a variable of its own,
-# keyed like any BNE_* set by hand, plus plancache's ".bv1" tag)
+              "BNE_SPEED_TAPERS",
+              # (road revamp v2 in the Revamped roads setting, 2026-11-19)
+              "BNE_BATTER", "BNE_ROADSHAPE", "BNE_SIDEWALK_V2")
 # Experimental switches the planning does not read that are still NOT on the list, and why (each keeps its keys)
 NOT_LISTED = {
+    "BNE_SURFACE_V2": "road tiles' surface overlays and marking lift only (roadmesh / roadwear, revamp v2 P1c); comes with the Revamped roads setting, whose other switches the plans read, so it stays keyed with it",
     "BNE_GEN_GROUND": "its gated code (the base photo with other arguments: genground.render, blockworker.base_photo, "
                       "earthd.Server._base_in) stores into the server's own state and drives the photo pipeline whose "
                       "products feed planning inputs (roadsurf's verdicts measured from photos on the disk): not "
