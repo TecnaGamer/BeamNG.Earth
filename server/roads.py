@@ -9084,7 +9084,7 @@ class BridgeProfiles:
             try:
                 got = hook(self.frame, lines, [k[0] for k in comp])
             except Exception as ex:
-                log.debug("deck heights from the carriageways: %s: %s", type(ex).__name__, ex)
+                log.error("deck heights from the carriageways: %s: %s", type(ex).__name__, ex)
                 got = None
             if got is not None:
                 out = [g if g is not None else z for g, z in zip(got, out)]

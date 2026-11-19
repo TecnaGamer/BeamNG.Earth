@@ -5194,7 +5194,12 @@ class _Planner:
         mid = line[len(line) // 2]
         la, lo, _ = self.frame.enu_to_geodetic(np.array([mid[0]]), np.array([mid[1]]), 0.0)
         reg = self._shape_region(mapcells.cell_of(float(la[0]), float(lo[0])))
-        items = [it for it in reg.get(str(fid), ()) if it[2] in modes]
+        # (a road's family: the shapes solve the member one_road kept, a lane section "<road>~lanes<a>-<b>" in place of
+        # its road or the road itself, and the roads build either id: the A25's decks at Popoli were solved 6.8 m over
+        # the streets under them as sections and built under the road's own id, so none of the solve was found and
+        # the decks stood 1 m over the streets, the trucks in them)
+        road = str(fid).partition("~lanes")[0]
+        items = [it for k in sorted(reg) if k.partition("~lanes")[0] == road for it in reg[k] if it[2] in modes]
         pts = np.asarray(pts, np.float64).reshape(-1, 2)
         z_out = np.full(len(pts), np.nan)
         m_out = [None] * len(pts)
@@ -9193,7 +9198,14 @@ def _deck_z_hook(frame, lines, fids=None):
             z = None
             if fid is not None:
                 zz, _m = pl._shape_at(xy, xy, fid, ("deck",))
-                z = zz if np.isfinite(zz).all() else None
+                ok = np.isfinite(zz)
+                if ok.all():
+                    z = zz
+                elif ok.any():      # (the shapes solved this deck, but not all of the line the roads build: its own
+                    # heights would stand where the solve put the deck for its crossings' clearance)
+                    log.error("grading: SHAPES deck %s built off its solve: %d of %d points of its line not on a "
+                              "solved piece, at %s", fid, int((~ok).sum()), len(ok),
+                              np.round(xy[~ok][[0, -1]], 1).tolist())
         else:
             z = pl._cw_z_at(xy, xy, fid)
         if z is None:
