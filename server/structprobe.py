@@ -1189,10 +1189,10 @@ def collect(lat, lon, R, cache, offline=False):
         cur["ground"] = kw.get("ground")
         return orig[0](frame_, tx, ty, cells, elev, *a, **kw)
 
-    def g_pads(decks, ground_roads, box, ground_fn, own=True):
+    def g_pads(decks, ground_roads, box, ground_fn, own=True, **kw):
         cur["parts"] = list(decks)
         cur["roads"] = list(ground_roads)
-        return orig[1](decks, ground_roads, box, ground_fn, own)
+        return orig[1](decks, ground_roads, box, ground_fn, own, **kw)     # (skip: v2 P2b's fork nodes)
 
     def g_deck(chunks, origin, *a, **kw):
         r = orig[2](chunks, origin, *a, **kw)
