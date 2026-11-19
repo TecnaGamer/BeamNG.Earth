@@ -413,6 +413,8 @@ class MapData:
         self.lod2_roofs = lod2roofs.Source(cache_dir, self.fetcher) if lod2roofs.ON else None
         import bdtopo                   # (France's measured buildings: IGN BD TOPO, joined in cell(), BNE_BDTOPO)
         self.bdtopo = bdtopo.Source(cache_dir, self.fetcher) if bdtopo.ON else None
+        import hkbuildings              # (Hong Kong's: LandsD's Building layer, joined in cell(), BNE_HK_BUILDINGS)
+        self.hkbuildings = hkbuildings.Source(cache_dir, self.fetcher) if hkbuildings.ON else None
         import railtags                 # (OSM's railway tags joined to the roads layer's rail segments)
         self.rail_tags = railtags.RailTags(cache_dir, self.fetcher) if railtags.ON else None
         # the weekly station shards (railtags.StationTags: fuel and charging stations, capacity, charge points)
@@ -679,11 +681,45 @@ class MapData:
         feats.__dict__["_bdtopo"] = recs.n
         return feats
 
+    def _hkbuildings(self, key, layer, feats):
+        """A Hong Kong buildings layer with the Lands Department's heights and storeys (hkbuildings.py), joined as
+        _bdtopo does France's: once its cell's records are here, never waiting for them nor asking for them."""
+        src = getattr(self, "hkbuildings", None)
+        if src is None or layer != "buildings" or feats is None or feats.__dict__.get("_hkbuildings") is not None:
+            return feats
+        import hkbuildings
+        if not hkbuildings.covers(_key(key).bounds()):
+            feats.__dict__["_hkbuildings"] = False
+            return feats
+        recs = src.cached(key)
+        if recs is None:
+            return feats
+        try:
+            got = hkbuildings.join(feats, recs) if len(feats) else None
+        except Exception as e:      # (the map's attributes alone)
+            log.warning("hkbuildings join %s: %s: %s", key, type(e).__name__, e)
+            got = None
+        if got is not None:
+            feats.attrs = got       # (one swap: a reader holds either the old attrs or the new ones)
+        feats.__dict__["_hkbuildings"] = recs.n
+        return feats
+
     def bdtopo_wait(self, keys, wait=True):
         """A building tile's wait for its French cells' measured buildings (bdtopo.Source.wait: together, bounded;
         wait=False: their downloads started, not waited for). True when they are all here (or none is French); else
         the tile is a revisit fault (built from the map's attributes alone: not kept, built again with them)."""
         src = getattr(self, "bdtopo", None)
+        if src is None:
+            return True
+        ks = [_key(k) for k in keys]
+        ok = src.wait(ks) if wait else (not src.prefetch(ks) and src.wait(ks))
+        if not ok:
+            revisit.fault()
+        return ok
+
+    def hkbuildings_wait(self, keys, wait=True):
+        """bdtopo_wait for Hong Kong's cells (hkbuildings.Source.wait): a miss is a revisit fault."""
+        src = getattr(self, "hkbuildings", None)
         if src is None:
             return True
         ks = [_key(k) for k in keys]
@@ -1486,6 +1522,7 @@ class MapData:
                 revisit.fault(here=True)
             if layer == "buildings":
                 self._bdtopo(key, layer, cd.layers[layer])
+                self._hkbuildings(key, layer, cd.layers[layer])
             elif layer == "roads" and getattr(cd.layers[layer], "__dict__", {}).get("_lidar_rule"):
                 # (its ranges made on the lidar rule for want of the lidar: what is made on them is kept on the layer,
                 # so whatever takes the layer is not kept either: revisit.fault in the taker's thread)
@@ -1641,6 +1678,8 @@ class MapData:
         roadwidth's walls: 30 downloads for 4 Aix tiles built from 2 cells)."""
         if getattr(self, "bdtopo", None) is not None:
             self.bdtopo.prefetch(keys)
+        if getattr(self, "hkbuildings", None) is not None:
+            self.hkbuildings.prefetch(keys)
         for src in self.side_sources:
             try:
                 src.prefetch(keys)
@@ -1654,6 +1693,8 @@ class MapData:
         key = _key(key)
         if layer == "buildings" and getattr(self, "bdtopo", None) is not None and self.bdtopo.wanted(key):
             self.bdtopo.load(key, "predownload")    # (a saved area: France's measured buildings with it)
+        if layer == "buildings" and getattr(self, "hkbuildings", None) is not None and self.hkbuildings.wanted(key):
+            self.hkbuildings.load(key, "predownload")   # (and Hong Kong's)
         path = self.path(key, layer)
         if os.path.exists(path):
             return False

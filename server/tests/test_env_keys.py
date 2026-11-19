@@ -32,7 +32,7 @@ OUTPUT_MODULES = (
     "decisions", "l0roads", "sidewalks", "guardrails", "tunnellids", "subsea", "deckspans", "railroadseam",
     "junctions", "roadcorners", "medians", "medianbarriers", "railprofile", "railbridges", "portals", "germanroads",
     "franceroads", "europewalks", "roadsurf", "lidarz", "pmtiles", "hrdem", "lidarbc", "mtarchive", "polardem",
-    "bdtopo", "blockworker", "specs", "tapers", "experimental")
+    "bdtopo", "hkbuildings", "blockworker", "specs", "tapers", "experimental")
 
 # BNGE_* reads of those modules that change no output, and why.
 NO_OUTPUT = {
@@ -81,6 +81,7 @@ NO_OUTPUT = {
     "BNGE_PMT_BASE": "where Overture's tiles are read",
     "BNGE_MT_BINDINGS": "where Mapterhorn's archive list is read",
     "BNGE_BDTOPO_WAIT": "a wait (when a tile is built, not what)",
+    "BNGE_HK_BUILDINGS_WAIT": "a wait (when a tile is built, not what)",
     "BNGE_DEM_STATS": "statistics",
     "BNGE_FARTRACE": "a trace",
     "BNGE_MEMATTR_S": "memory attribution",

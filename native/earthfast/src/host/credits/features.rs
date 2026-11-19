@@ -160,9 +160,10 @@ impl<'py> Sources<'py> {
                 ("threedbag", "credited_near", "roof:3dbag"),
                 ("nycmassing", "credited_near", "bld:nyc-3d"),
                 ("bdtopo", "credited_near", "bld:bdtopo-fr"),
+                ("hkbuildings", "credited_near", "bld:landsd-hk"),
                 ("roadz", "hk_credited_near", "roadz:hk"),
             ] {
-                if module == "bdtopo" && attr(&md, "bdtopo").is_none() {
+                if matches!(module, "bdtopo" | "hkbuildings") && attr(&md, module).is_none() {
                     continue;
                 }
                 if py
