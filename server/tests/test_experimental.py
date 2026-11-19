@@ -86,6 +86,8 @@ class ChoiceTest(unittest.TestCase):
         self.assertEqual(experimental.env_for({"version": 2, "expRoadBumps": True}), {"BNE_BUMPS": "1"},
                          "the new switches count in any version")
         self.assertEqual(experimental.env_for({"version": 2, "roadSigns": True, "expNlRoadSigns": True}), {})
+        self.assertEqual(experimental.chosen({"version": 3, "roadSigns": False, "expPlRoadSigns": True}), ["roadSigns"])
+        self.assertEqual(experimental.env_for({"version": 3, "roadSigns": False}), {})
 
     def test_hand_set_variable_kept(self):
         with tempfile.TemporaryDirectory() as folder:

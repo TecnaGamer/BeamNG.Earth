@@ -141,7 +141,7 @@ SIGN_H = 2.1
 # Italy's figura II 274 3.35; Austria's 17a 1.5; the Netherlands' H1 3.41; Spain's S-500 3; Portugal's N1a 2.65;
 # PLAINS' about theirs: Wikimedia Commons' drawings)
 PLATES = {"BE": 1.0, "LU": 1.74, "DE": 0.9, "CH": 0.84, "IT": 2.0, "AT": 0.9, "NL": 2.0, "ES": 1.8, "PT": 1.6,
-          "CZ": 1.2, "SK": 1.0, "HU": 1.6, "SI": 1.0, "DK": 1.2, "SE": 1.2, "FI": 1.0, "PL": 1.0, "EE": 1.0,
+          "CZ": 1.2, "SK": 1.0, "HU": 1.6, "SI": 1.0, "DK": 1.2, "SE": 1.2, "FI": 1.0, "PL": 2.4, "EE": 1.0,
           "LV": 1.6, "LT": 1.6, "RO": 1.4, "BG": 1.2, "MK": 1.0, "RS": 1.4, "GR": 1.4, "HR": 1.2, "BA": 1.2,
           "NO": 1.4, "IS": 1.0, "ME": 1.2, "AL": 1.4, "XK": 1.2, "MD": 1.2, "AD": 1.8, "LI": 0.84, "SM": 2.0,
           "UA": 1.6, "BY": 1.2, "GB": 1.6, "IE": 1.6, "MT": 1.0, "CY": 1.4, "US": 1.2, "CA": 1.4, "MX": 1.8,
@@ -1329,7 +1329,8 @@ def _sign(commune, line, s, travel, width, left_hand, main=False):
     p, d = furniture._at(line, np.array([s]))
     f = d[0] * travel
     side = np.array([f[1], -f[0]]) * (-1 if left_hand else 1)
-    q = p[0][:2] + side * (width / 2 + SIGN_OFF_M)
+    offset = max(SIGN_OFF_M, PLATES["PL"] / 2 + 0.6) if commune.country == "PL" else SIGN_OFF_M
+    q = p[0][:2] + side * (width / 2 + offset)
     yaw = furniture._yaw(side[0], side[1])
     at = [round(float(q[0]), 2), round(float(q[1]), 2), round(float(p[0][2]), 2)]
     tail = [commune.name, commune.local, commune.country, round(math.degrees(dmath.atan2(-f[1], -f[0])), 1),
@@ -1713,6 +1714,8 @@ def face_group(name, group, local="", country="FR", nxt="", km=0, sub="", main=F
     key = name if not local else name + "\n" + local
     if country != "FR":
         key = country + "\n" + key
+    if country == "PL":
+        key += "\nE-17a-v1"  # The old combined locality and built-up-area faces used a different body.
     if nxt:                             # (an exit face naming the next place: next_place, and its distance)
         key += "\n>" + nxt + (f" {km}" if km else "")
     if sub:
@@ -2665,8 +2668,7 @@ def _face_ie(name, group, local="", main=False, **_):
 # European road signs: Built-up area limits"): country -> Plain. paper, ink, border: colours; border_frac: the
 # border's width, a share of the plate's height; radius_frac: its corners'; upper: the name in capitals; layout: "name"
 # (the name alone, its lines at " / " or "/"), "name_silhouette" (the name above a silhouette, Denmark), "silhouette"
-# (no name: Sweden, Finland), "name_panel" (a silhouette under a name panel of its own colours, name_paper and
-# name_ink: Poland's D-42 under its E-17a on one post), "bands" (the name on the plate's upper half, its second name,
+# (no name: Sweden, Finland), "bands" (the name on the plate's upper half, its second name,
 # local, on a lower band of name_paper and name_ink: Greece's P-17, Θεσσαλονίκη over Thessaloniki), "silhouette_name"
 # (the silhouette above the name: Iceland's D12.11), "silhouette_band" (the silhouette on the plate's upper part, the
 # name on a lower band of name_paper: Moldova's 5.63, ORHEI under it). A second name (local: a Cyrillic name's Latin
@@ -2688,8 +2690,6 @@ PLAINS = {
     "DK": Plain(FACE_WHITE, BLACK, BLACK, 0.035, 0.06, layout="name_silhouette"),    # E55 / E56
     "SE": Plain(FACE_WHITE, BLACK, BLACK, 0.035, 0.05, layout="silhouette"),         # E5 / E6
     "FI": Plain(YELLOW, BLACK, BLACK, 0.035, 0.05, layout="silhouette"),             # E22 / E23
-    "PL": Plain(FACE_WHITE, BLACK, BLACK, 0.03, 0.05, layout="name_panel",          # D-42 / D-43 under E-17a
-                name_paper=(0, 110, 60), name_ink=FACE_WHITE),
     "EE": Plain(FACE_WHITE, BLACK, BLACK, 0.035, 0.06, layout="name_silhouette"),    # 571a / 572a
     "LV": Plain(FACE_WHITE, BLACK, BLACK, 0.03, 0.05, True),                 # 555 / 556
     "LT": Plain(FACE_WHITE, BLACK, BLACK, 0.03, 0.05, True),                 # 550 / 551
@@ -2843,13 +2843,6 @@ def _face_plain(name, group, local="", country="", style=None, **_):
         lines = [sign_upper(t) for t in lines]
     pad = m + b + 0.07 * h
     top, bottom = m, h - 1 - m
-    if st.layout == "name_panel":           # (the name panel above, the sign under it)
-        split = round(0.36 * h)
-        plate(m, split - 2, st.name_paper, FACE_WHITE)
-        d.rounded_rectangle([m, m, w - 1 - m, split - 2], radius=r, outline=st.name_paper, width=1)
-        text(lines, pad, m + b + 0.03 * h, w - pad, split - 2 - b - 0.03 * h, st.name_ink, st.name_paper,
-             round(0.2 * h))
-        top = split + 2
     plate(top, bottom, st.paper, st.border)
     if group == G_EXIT and st.exit_blank:   # (a one-sided sign's back)
         return img
@@ -2891,14 +2884,47 @@ def _face_plain(name, group, local="", country="", style=None, **_):
         _silhouette(d, (w - sw) / 2, inner[1] + 0.05 * h, (w + sw) / 2, inner[3], st.ink)
     if group == G_EXIT and st.exit_bar:
         d.line([(m + b, bottom - b), (w - 1 - m - b, top + b)], fill=FACE_RED, width=round(0.09 * h))
-        if st.layout == "name_panel":       # (the name panel's own: E-18a)
-            d.line([(m + b, split - 2 - b), (w - 1 - m - b, m + b)], fill=FACE_RED, width=round(0.05 * h))
     return img
+
+
+@functools.lru_cache(maxsize=72)
+def _pl_font(size):
+    from PIL import ImageFont
+    path = os.path.join(os.path.dirname(__file__), "data", "fonts", "Overpass-Bold.ttf")
+    return ImageFont.truetype(path, size)
+
+
+def _face_pl(name, group, local="", **_):
+    """E-17a / E-18a. Both sides have the settlement name. The exit also has a red diagonal."""
+    from PIL import Image, ImageDraw
+    w, h = 768, 192
+    image = Image.new("RGB", (w, h), (0, 110, 60))
+    draw = ImageDraw.Draw(image)
+    draw.rounded_rectangle((5, 5, w - 6, h - 6), radius=12, outline=FACE_WHITE, width=5)
+    lines = list(dict.fromkeys(s.strip() for s in [*BILINGUAL.split(name), local] if s.strip()))
+    if lines:
+        row_height = (h - 38) / len(lines)
+        lo, hi = 1, max(1, int(row_height))
+        while lo < hi:
+            size = (lo + hi + 1) // 2
+            boxes = [_pl_font(size).getbbox(line) for line in lines]
+            if all(x1 - x0 <= w - 58 and y1 - y0 <= row_height * 0.86 for x0, y0, x1, y1 in boxes):
+                lo = size
+            else:
+                hi = size - 1
+        font = _pl_font(lo)
+        for i, line in enumerate(lines):
+            x0, y0, x1, y1 = font.getbbox(line)
+            y = 19 + (i + 0.5) * row_height
+            draw.text(((w - x0 - x1) / 2, y - (y0 + y1) / 2), line, font=font, fill=FACE_WHITE)
+    if group == G_EXIT:
+        draw.line([(9, h - 10), (w - 10, 9)], fill=FACE_RED, width=13)
+    return image.resize((256, 64), Image.Resampling.LANCZOS)
 
 
 # country -> its sign's drawing (face_image): (name, group, local, nxt=, km=, sub=, main=) -> PIL image
 FACES = {"FR": _face_fr, "BE": _face_be, "LU": _face_lu, "DE": _face_de, "CH": _face_ch, "IT": _face_it,
-         "AT": _face_at, "NL": _face_nl, "ES": _face_es, "PT": _face_pt}
+         "AT": _face_at, "NL": _face_nl, "ES": _face_es, "PT": _face_pt, "PL": _face_pl}
 FACES.update({cc: (lambda *a, _cc=cc, **k: _face_plain(*a, country=_cc, **k)) for cc in PLAINS})
 # (Andorra's, Liechtenstein's and San Marino's signs are their neighbours': Spain's S-500, the Swiss Ortstafel, Italy's)
 FACES.update({"AD": _face_es, "LI": _face_ch, "SM": _face_it})
@@ -3149,6 +3175,10 @@ class Towns:
             out = []
             for r in town_signs(roads, communes, frame, box, left_hand, rings, mapped,
                                 self._urban_fn([True]) if mapped else None):
+                if r[10] == "PL":
+                    import plstock
+                    if not plstock.in_country(frame, r[1], r[2]):
+                        continue
                 if meshed is not None and r[10] in KIT_BOARDS:
                     meshed.append(r)
                     continue

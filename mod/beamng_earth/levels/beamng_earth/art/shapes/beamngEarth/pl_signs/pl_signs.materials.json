@@ -1,0 +1,1178 @@
+{
+  "pl_a_11": {
+    "name": "pl_a_11",
+    "mapTo": "pl_a_11",
+    "class": "Material",
+    "version": 1.5,
+    "alphaTest": true,
+    "alphaRef": 1,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/pl_signs/pl_a_11_face_256.png",
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "roughnessFactor": 0.6,
+        "metallicFactor": 0
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "pl_a_11a": {
+    "name": "pl_a_11a",
+    "mapTo": "pl_a_11a",
+    "class": "Material",
+    "version": 1.5,
+    "alphaTest": true,
+    "alphaRef": 1,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/pl_signs/pl_a_11a_face_256.png",
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "roughnessFactor": 0.6,
+        "metallicFactor": 0
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "pl_a_12b": {
+    "name": "pl_a_12b",
+    "mapTo": "pl_a_12b",
+    "class": "Material",
+    "version": 1.5,
+    "alphaTest": true,
+    "alphaRef": 1,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/pl_signs/pl_a_12b_face_256.png",
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "roughnessFactor": 0.6,
+        "metallicFactor": 0
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "pl_a_12c": {
+    "name": "pl_a_12c",
+    "mapTo": "pl_a_12c",
+    "class": "Material",
+    "version": 1.5,
+    "alphaTest": true,
+    "alphaRef": 1,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/pl_signs/pl_a_12c_face_256.png",
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "roughnessFactor": 0.6,
+        "metallicFactor": 0
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "pl_a_14": {
+    "name": "pl_a_14",
+    "mapTo": "pl_a_14",
+    "class": "Material",
+    "version": 1.5,
+    "alphaTest": true,
+    "alphaRef": 1,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/pl_signs/pl_a_14_face_256.png",
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "roughnessFactor": 0.6,
+        "metallicFactor": 0
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "pl_a_16": {
+    "name": "pl_a_16",
+    "mapTo": "pl_a_16",
+    "class": "Material",
+    "version": 1.5,
+    "alphaTest": true,
+    "alphaRef": 1,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/pl_signs/pl_a_16_face_256.png",
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "roughnessFactor": 0.6,
+        "metallicFactor": 0
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "pl_a_17": {
+    "name": "pl_a_17",
+    "mapTo": "pl_a_17",
+    "class": "Material",
+    "version": 1.5,
+    "alphaTest": true,
+    "alphaRef": 1,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/pl_signs/pl_a_17_face_256.png",
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "roughnessFactor": 0.6,
+        "metallicFactor": 0
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "pl_a_18b": {
+    "name": "pl_a_18b",
+    "mapTo": "pl_a_18b",
+    "class": "Material",
+    "version": 1.5,
+    "alphaTest": true,
+    "alphaRef": 1,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/pl_signs/pl_a_18b_face_256.png",
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "roughnessFactor": 0.6,
+        "metallicFactor": 0
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "pl_a_2": {
+    "name": "pl_a_2",
+    "mapTo": "pl_a_2",
+    "class": "Material",
+    "version": 1.5,
+    "alphaTest": true,
+    "alphaRef": 1,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/pl_signs/pl_a_2_face_256.png",
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "roughnessFactor": 0.6,
+        "metallicFactor": 0
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "pl_a_24": {
+    "name": "pl_a_24",
+    "mapTo": "pl_a_24",
+    "class": "Material",
+    "version": 1.5,
+    "alphaTest": true,
+    "alphaRef": 1,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/pl_signs/pl_a_24_face_256.png",
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "roughnessFactor": 0.6,
+        "metallicFactor": 0
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "pl_a_29": {
+    "name": "pl_a_29",
+    "mapTo": "pl_a_29",
+    "class": "Material",
+    "version": 1.5,
+    "alphaTest": true,
+    "alphaRef": 1,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/pl_signs/pl_a_29_face_256.png",
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "roughnessFactor": 0.6,
+        "metallicFactor": 0
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "pl_a_3": {
+    "name": "pl_a_3",
+    "mapTo": "pl_a_3",
+    "class": "Material",
+    "version": 1.5,
+    "alphaTest": true,
+    "alphaRef": 1,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/pl_signs/pl_a_3_face_256.png",
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "roughnessFactor": 0.6,
+        "metallicFactor": 0
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "pl_a_30": {
+    "name": "pl_a_30",
+    "mapTo": "pl_a_30",
+    "class": "Material",
+    "version": 1.5,
+    "alphaTest": true,
+    "alphaRef": 1,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/pl_signs/pl_a_30_face_256.png",
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "roughnessFactor": 0.6,
+        "metallicFactor": 0
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "pl_a_4": {
+    "name": "pl_a_4",
+    "mapTo": "pl_a_4",
+    "class": "Material",
+    "version": 1.5,
+    "alphaTest": true,
+    "alphaRef": 1,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/pl_signs/pl_a_4_face_256.png",
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "roughnessFactor": 0.6,
+        "metallicFactor": 0
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "pl_a_5": {
+    "name": "pl_a_5",
+    "mapTo": "pl_a_5",
+    "class": "Material",
+    "version": 1.5,
+    "alphaTest": true,
+    "alphaRef": 1,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/pl_signs/pl_a_5_face_256.png",
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "roughnessFactor": 0.6,
+        "metallicFactor": 0
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "pl_a_6a": {
+    "name": "pl_a_6a",
+    "mapTo": "pl_a_6a",
+    "class": "Material",
+    "version": 1.5,
+    "alphaTest": true,
+    "alphaRef": 1,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/pl_signs/pl_a_6a_face_256.png",
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "roughnessFactor": 0.6,
+        "metallicFactor": 0
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "pl_a_7": {
+    "name": "pl_a_7",
+    "mapTo": "pl_a_7",
+    "class": "Material",
+    "version": 1.5,
+    "alphaTest": true,
+    "alphaRef": 1,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/pl_signs/pl_a_7_face_256.png",
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "roughnessFactor": 0.6,
+        "metallicFactor": 0
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "pl_a_8": {
+    "name": "pl_a_8",
+    "mapTo": "pl_a_8",
+    "class": "Material",
+    "version": 1.5,
+    "alphaTest": true,
+    "alphaRef": 1,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/pl_signs/pl_a_8_face_256.png",
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "roughnessFactor": 0.6,
+        "metallicFactor": 0
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "pl_b_1": {
+    "name": "pl_b_1",
+    "mapTo": "pl_b_1",
+    "class": "Material",
+    "version": 1.5,
+    "alphaTest": true,
+    "alphaRef": 1,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/pl_signs/pl_b_1_face_256.png",
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "roughnessFactor": 0.6,
+        "metallicFactor": 0
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "pl_b_16_3_5m": {
+    "name": "pl_b_16_3_5m",
+    "mapTo": "pl_b_16_3_5m",
+    "class": "Material",
+    "version": 1.5,
+    "alphaTest": true,
+    "alphaRef": 1,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/pl_signs/pl_b_16_3_5m_face_256.png",
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "roughnessFactor": 0.6,
+        "metallicFactor": 0
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "pl_b_18_3_5t": {
+    "name": "pl_b_18_3_5t",
+    "mapTo": "pl_b_18_3_5t",
+    "class": "Material",
+    "version": 1.5,
+    "alphaTest": true,
+    "alphaRef": 1,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/pl_signs/pl_b_18_3_5t_face_256.png",
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "roughnessFactor": 0.6,
+        "metallicFactor": 0
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "pl_b_2": {
+    "name": "pl_b_2",
+    "mapTo": "pl_b_2",
+    "class": "Material",
+    "version": 1.5,
+    "alphaTest": true,
+    "alphaRef": 1,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/pl_signs/pl_b_2_face_256.png",
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "roughnessFactor": 0.6,
+        "metallicFactor": 0
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "pl_b_20": {
+    "name": "pl_b_20",
+    "mapTo": "pl_b_20",
+    "class": "Material",
+    "version": 1.5,
+    "alphaTest": true,
+    "alphaRef": 1,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/pl_signs/pl_b_20_face_256.png",
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "roughnessFactor": 0.6,
+        "metallicFactor": 0
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "pl_b_21": {
+    "name": "pl_b_21",
+    "mapTo": "pl_b_21",
+    "class": "Material",
+    "version": 1.5,
+    "alphaTest": true,
+    "alphaRef": 1,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/pl_signs/pl_b_21_face_256.png",
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "roughnessFactor": 0.6,
+        "metallicFactor": 0
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "pl_b_22": {
+    "name": "pl_b_22",
+    "mapTo": "pl_b_22",
+    "class": "Material",
+    "version": 1.5,
+    "alphaTest": true,
+    "alphaRef": 1,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/pl_signs/pl_b_22_face_256.png",
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "roughnessFactor": 0.6,
+        "metallicFactor": 0
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "pl_b_23": {
+    "name": "pl_b_23",
+    "mapTo": "pl_b_23",
+    "class": "Material",
+    "version": 1.5,
+    "alphaTest": true,
+    "alphaRef": 1,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/pl_signs/pl_b_23_face_256.png",
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "roughnessFactor": 0.6,
+        "metallicFactor": 0
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "pl_b_25": {
+    "name": "pl_b_25",
+    "mapTo": "pl_b_25",
+    "class": "Material",
+    "version": 1.5,
+    "alphaTest": true,
+    "alphaRef": 1,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/pl_signs/pl_b_25_face_256.png",
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "roughnessFactor": 0.6,
+        "metallicFactor": 0
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "pl_b_33_20": {
+    "name": "pl_b_33_20",
+    "mapTo": "pl_b_33_20",
+    "class": "Material",
+    "version": 1.5,
+    "alphaTest": true,
+    "alphaRef": 1,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/pl_signs/pl_b_33_20_face_256.png",
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "roughnessFactor": 0.6,
+        "metallicFactor": 0
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "pl_b_33_30": {
+    "name": "pl_b_33_30",
+    "mapTo": "pl_b_33_30",
+    "class": "Material",
+    "version": 1.5,
+    "alphaTest": true,
+    "alphaRef": 1,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/pl_signs/pl_b_33_30_face_256.png",
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "roughnessFactor": 0.6,
+        "metallicFactor": 0
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "pl_b_33_50": {
+    "name": "pl_b_33_50",
+    "mapTo": "pl_b_33_50",
+    "class": "Material",
+    "version": 1.5,
+    "alphaTest": true,
+    "alphaRef": 1,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/pl_signs/pl_b_33_50_face_256.png",
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "roughnessFactor": 0.6,
+        "metallicFactor": 0
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "pl_b_35": {
+    "name": "pl_b_35",
+    "mapTo": "pl_b_35",
+    "class": "Material",
+    "version": 1.5,
+    "alphaTest": true,
+    "alphaRef": 1,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/pl_signs/pl_b_35_face_256.png",
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "roughnessFactor": 0.6,
+        "metallicFactor": 0
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "pl_b_42": {
+    "name": "pl_b_42",
+    "mapTo": "pl_b_42",
+    "class": "Material",
+    "version": 1.5,
+    "alphaTest": true,
+    "alphaRef": 1,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/pl_signs/pl_b_42_face_256.png",
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "roughnessFactor": 0.6,
+        "metallicFactor": 0
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "pl_b_9": {
+    "name": "pl_b_9",
+    "mapTo": "pl_b_9",
+    "class": "Material",
+    "version": 1.5,
+    "alphaTest": true,
+    "alphaRef": 1,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/pl_signs/pl_b_9_face_256.png",
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "roughnessFactor": 0.6,
+        "metallicFactor": 0
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "pl_c_12": {
+    "name": "pl_c_12",
+    "mapTo": "pl_c_12",
+    "class": "Material",
+    "version": 1.5,
+    "alphaTest": true,
+    "alphaRef": 1,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/pl_signs/pl_c_12_face_256.png",
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "roughnessFactor": 0.6,
+        "metallicFactor": 0
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "pl_c_16": {
+    "name": "pl_c_16",
+    "mapTo": "pl_c_16",
+    "class": "Material",
+    "version": 1.5,
+    "alphaTest": true,
+    "alphaRef": 1,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/pl_signs/pl_c_16_face_256.png",
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "roughnessFactor": 0.6,
+        "metallicFactor": 0
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "pl_c_2": {
+    "name": "pl_c_2",
+    "mapTo": "pl_c_2",
+    "class": "Material",
+    "version": 1.5,
+    "alphaTest": true,
+    "alphaRef": 1,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/pl_signs/pl_c_2_face_256.png",
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "roughnessFactor": 0.6,
+        "metallicFactor": 0
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "pl_c_9": {
+    "name": "pl_c_9",
+    "mapTo": "pl_c_9",
+    "class": "Material",
+    "version": 1.5,
+    "alphaTest": true,
+    "alphaRef": 1,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/pl_signs/pl_c_9_face_256.png",
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "roughnessFactor": 0.6,
+        "metallicFactor": 0
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "pl_d_1": {
+    "name": "pl_d_1",
+    "mapTo": "pl_d_1",
+    "class": "Material",
+    "version": 1.5,
+    "alphaTest": true,
+    "alphaRef": 1,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/pl_signs/pl_d_1_face_256.png",
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "roughnessFactor": 0.6,
+        "metallicFactor": 0
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "pl_d_15": {
+    "name": "pl_d_15",
+    "mapTo": "pl_d_15",
+    "class": "Material",
+    "version": 1.5,
+    "alphaTest": true,
+    "alphaRef": 1,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/pl_signs/pl_d_15_face_256.png",
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "roughnessFactor": 0.6,
+        "metallicFactor": 0
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "pl_d_2": {
+    "name": "pl_d_2",
+    "mapTo": "pl_d_2",
+    "class": "Material",
+    "version": 1.5,
+    "alphaTest": true,
+    "alphaRef": 1,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/pl_signs/pl_d_2_face_256.png",
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "roughnessFactor": 0.6,
+        "metallicFactor": 0
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "pl_d_3": {
+    "name": "pl_d_3",
+    "mapTo": "pl_d_3",
+    "class": "Material",
+    "version": 1.5,
+    "alphaTest": true,
+    "alphaRef": 1,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/pl_signs/pl_d_3_face_256.png",
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "roughnessFactor": 0.6,
+        "metallicFactor": 0
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "pl_d_40": {
+    "name": "pl_d_40",
+    "mapTo": "pl_d_40",
+    "class": "Material",
+    "version": 1.5,
+    "alphaTest": true,
+    "alphaRef": 1,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/pl_signs/pl_d_40_face_256.png",
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "roughnessFactor": 0.6,
+        "metallicFactor": 0
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "pl_d_41": {
+    "name": "pl_d_41",
+    "mapTo": "pl_d_41",
+    "class": "Material",
+    "version": 1.5,
+    "alphaTest": true,
+    "alphaRef": 1,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/pl_signs/pl_d_41_face_256.png",
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "roughnessFactor": 0.6,
+        "metallicFactor": 0
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "pl_d_42": {
+    "name": "pl_d_42",
+    "mapTo": "pl_d_42",
+    "class": "Material",
+    "version": 1.5,
+    "alphaTest": true,
+    "alphaRef": 1,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/pl_signs/pl_d_42_face_256.png",
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "roughnessFactor": 0.6,
+        "metallicFactor": 0
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "pl_d_43": {
+    "name": "pl_d_43",
+    "mapTo": "pl_d_43",
+    "class": "Material",
+    "version": 1.5,
+    "alphaTest": true,
+    "alphaRef": 1,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/pl_signs/pl_d_43_face_256.png",
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "roughnessFactor": 0.6,
+        "metallicFactor": 0
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "pl_d_6": {
+    "name": "pl_d_6",
+    "mapTo": "pl_d_6",
+    "class": "Material",
+    "version": 1.5,
+    "alphaTest": true,
+    "alphaRef": 1,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/pl_signs/pl_d_6_face_256.png",
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "roughnessFactor": 0.6,
+        "metallicFactor": 0
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "pl_d_6a": {
+    "name": "pl_d_6a",
+    "mapTo": "pl_d_6a",
+    "class": "Material",
+    "version": 1.5,
+    "alphaTest": true,
+    "alphaRef": 1,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/pl_signs/pl_d_6a_face_256.png",
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "roughnessFactor": 0.6,
+        "metallicFactor": 0
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "pl_d_6b": {
+    "name": "pl_d_6b",
+    "mapTo": "pl_d_6b",
+    "class": "Material",
+    "version": 1.5,
+    "alphaTest": true,
+    "alphaRef": 1,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/pl_signs/pl_d_6b_face_256.png",
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "roughnessFactor": 0.6,
+        "metallicFactor": 0
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "pl_f_12a": {
+    "name": "pl_f_12a",
+    "mapTo": "pl_f_12a",
+    "class": "Material",
+    "version": 1.5,
+    "alphaTest": true,
+    "alphaRef": 1,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/pl_signs/pl_f_12a_face_256.png",
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "roughnessFactor": 0.6,
+        "metallicFactor": 0
+      },
+      {},
+      {},
+      {}
+    ]
+  }
+}

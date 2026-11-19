@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg id="B-23" xmlns="http://www.w3.org/2000/svg" width="800" height="800" viewBox="0 0 800 800">
+  <circle cx="400" cy="400" r="400" fill="#d40000"/>
+  <circle cx="400" cy="400" r="320" fill="#fff"/>
+  <path d="M560,330v270h-80v-270c0-49.63-40.37-90-90-90s-90,40.37-90,90v140h40l-80,120-80-120h40v-140c0-93.74,76.26-170,170-170s170,76.26,170,170Z"/>
+  <line x1="654.56" y1="654.56" x2="145.44" y2="145.44" fill="none" stroke="#d40000" stroke-miterlimit="10" stroke-width="60"/>
+</svg>

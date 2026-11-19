@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg id="C-2" xmlns="http://www.w3.org/2000/svg" width="802" height="802" viewBox="0 0 802 802">
+  <circle cx="401" cy="401" r="400" fill="#fff"/>
+  <circle cx="401" cy="401" r="400.5" fill="none" stroke="#000"/>
+  <circle cx="401" cy="401" r="392" fill="#039"/>
+  <path d="M201,461v240h120v-240c0-33.14,26.86-60,60-60h120v120l240-180-240-180v120h-120c-99.41,0-180,80.59-180,180Z" fill="#fff"/>
+</svg>

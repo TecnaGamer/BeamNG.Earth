@@ -150,7 +150,7 @@ def pyinstaller(work, ico, onefile, ver=None, boot=None):
     cmd = [sys.executable] + (["-c", BOOT_SHIM, boot] if boot else ["-m", "PyInstaller"])
     cmd += ["--noconfirm", "--clean", "--console", "--noupx", "--name", NAME,
            "--distpath", os.path.join(work, "dist"), "--workpath", os.path.join(work, "build"),
-           "--specpath", work, "--paths", server, "--paths", ROOT, "--icon", ico,
+           "--specpath", work, "--paths", server, "--paths", ROOT, "--paths", os.path.join(ROOT, "tools"), "--icon", ico,
            "--collect-submodules", "fsspec",
            "--hidden-import", "certifi", "--collect-data", "certifi",   # CA bundle fallback (launcher.ensure_ca_certs)
            "--hidden-import", "truststore",     # Windows: the native certificate store (netfetch.windows_ssl_context, PR #371)
@@ -179,6 +179,7 @@ def pyinstaller(work, ico, onefile, ver=None, boot=None):
            "--add-data", f"{os.path.join(server, 'usgs3dep_index.json.gz')}{SEP}.",     # (roadz.LIDAR_INDEX_PATH)
            # the highway signs' lettering metrics and US state outlines (exitsigns.GLYPHS, signstates.DATA)
            "--add-data", f"{os.path.join(server, 'sign_glyphs.json')}{SEP}.",
+           "--add-data", f"{os.path.join(ROOT, 'tools', 'sign_art', 'pl')}{SEP}sign_art/pl",
            "--add-data", f"{os.path.join(server, 'search_categories.json')}{SEP}.",     # (geocode.CATEGORIES)
            "--add-data", f"{os.path.join(server, 'sign_states.geojson')}{SEP}.",
            # server/data/ (billboardsource.PATH: the mapped billboards; missing from 1.8.0's exe, a warning per worker)

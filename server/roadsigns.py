@@ -419,7 +419,7 @@ def table(signs, z_ground, z_road, sys_row):
     return np.ascontiguousarray(out)
 
 
-def build_tile(md, frame, tx, ty, elev, context, decks=(), left_hand=False, mph=True, country=None):
+def build_tile(md, frame, tx, ty, elev, context, decks=(), left_hand=False, mph=True, country=None, pl=None):
     """The mesh (signstream.write_tile's) of road tile (tx, ty)'s road signs, or None (none)."""
     sys_row = system(country)
     if sys_row is None:
@@ -437,8 +437,21 @@ def build_tile(md, frame, tx, ty, elev, context, decks=(), left_hand=False, mph=
     z = np.asarray(frame.geodetic_to_enu(la, lo, h)[2], np.float64).ravel()
     n = len(signs)
     roles = tables()[0]
-    p, t, uv, mi = fast._ef.road_sign_mesh(table(signs, z[:n], z[n:], sys_row), roles["cols"], roles["rows"],
+    native = table(signs, z[:n], z[n:], sys_row)
+    localized = None
+    if pl is not None:
+        import plstock
+        rules = tables()[1]["rules"]
+        codes = [plstock.ROLES.get(rules[int(row[4])]) for row in signs]
+        native, localized = plstock.split(frame, signs, native, codes, pl, box, stacked=True)
+        if not len(native):
+            return localized
+    p, t, uv, mi = fast._ef.road_sign_mesh(native, roles["cols"], roles["rows"],
                                            [float(box[0]), float(box[1]), 0.0])
     if not len(t):
         return None
-    return p, t, uv, ["bne_signs_" + sys_row["atlas"], METAL], mi
+    mesh = (p, t, uv, ["bne_signs_" + sys_row["atlas"], METAL], mi)
+    if localized is not None:
+        import dezones
+        return dezones._merged(mesh, localized)
+    return mesh

@@ -315,7 +315,7 @@ def general(signs, towns):
 
 
 def build_tile(frame, tx, ty, elev, context, decks=(), left_hand=False, mph=True, face=STYLE_VIENNA, de_on=False,
-               towns=None):
+               towns=None, pl=None):
     """The mesh (signstream.write_tile's) of road tile (tx, ty)'s speed-limit signs, or None (none). de_on (the German
     junction signs, designs.enabled's): near Germany its zone signs too, in one mesh, and not the 274s they replace
     (dezones.tile); otherwise today's. towns: the town signs' towns (townentry.Towns.town_state) when they are on:
@@ -328,11 +328,11 @@ def build_tile(frame, tx, ty, elev, context, decks=(), left_hand=False, mph=True
     if de_on:                   # (Germany's zone signs: dezones.py)
         import dezones
         signs, extra = dezones.tile(frame, box, elev, context, signs, decks, left_hand, mph)
-    mesh = _speed_mesh(frame, box, elev, signs, decks, face)
+    mesh = _speed_mesh(frame, box, elev, signs, decks, face, pl if not mph else None)
     return mesh if extra is None else dezones._merged(mesh, extra)
 
 
-def _speed_mesh(frame, box, elev, signs, decks, face):
+def _speed_mesh(frame, box, elev, signs, decks, face, pl=None):
     """The mesh of place()'s signs of box, or None."""
     keep = [k for k in range(len(signs)) if not exitsigns._on_deck(signs[k, :2], decks, 1.5)]
     if not keep:
@@ -344,6 +344,13 @@ def _speed_mesh(frame, box, elev, signs, decks, face):
     z = np.asarray(frame.geodetic_to_enu(la, lo, h)[2], np.float64).ravel()
     n = len(signs)
     table = np.column_stack([signs[:, 0:2], z[:n], z[n:], signs[:, 2:4], signs[:, 4:6], signs[:, 8]])
+    localized = None
+    if pl is not None:
+        import plstock
+        codes = [f"B-33-{r[4]:g}" for r in signs]
+        table, localized = plstock.split(frame, signs, table, codes, pl, box)
+        if not len(table):
+            return localized
     if face == STYLE_SWEDEN:
         return sweden_mesh(table, (float(box[0]), float(box[1]), 0.0))
     cp, glyph, cap = _glyphs()
@@ -351,4 +358,8 @@ def _speed_mesh(frame, box, elev, signs, decks, face):
                                             [float(box[0]), float(box[1]), 0.0])
     if not len(t):
         return None
-    return p, t, uv, MATERIALS, mi
+    mesh = (p, t, uv, MATERIALS, mi)
+    if localized is not None:
+        import dezones
+        return dezones._merged(mesh, localized)
+    return mesh

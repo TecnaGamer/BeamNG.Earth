@@ -323,7 +323,7 @@ values = defaults() -- until load(): the defaults (= today's behaviour)
 -- Settings no longer on the page, left in older files: ignored without a warning (gasStations: gas stations are
 -- always on since the user's 2026-10-25 "make gas station always enabled and remove the toggle"; framePacing: the
 -- engine patch dtsmooth keeps game speed steady instead, 2026-11-11 "make consistent performance the default")
-M.RETIRED = { gasStations = true, framePacing = true }
+M.RETIRED = { expPlRoadSigns = true, gasStations = true, framePacing = true }
 
 -- A valid value for key, or nil + error. Numbers are clamped to the range; strings that read as a
 -- number or boolean are accepted (the page sends what its controls hold).
@@ -371,6 +371,7 @@ function M.load(path)
     -- (road signs became a real switch, off by default, with version 3, 2026-11-15: a file from before had true as the
     -- hidden switch's default, not as a choice; the server reads it so too, experimental.SINCE_VERSION)
     if (tonumber(data.version) or 1) < 3 then values.roadSigns = false end
+    if data.expPlRoadSigns == true then values.roadSigns = true end
   elseif ok and data ~= nil then
     warnings[#warnings + 1] = 'settings file is not an object'
   elseif not ok and data ~= nil then
