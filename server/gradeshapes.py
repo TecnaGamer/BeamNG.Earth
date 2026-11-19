@@ -1150,7 +1150,13 @@ def solve_shape(net, sysm, pcs, smp, ground, fixed_z, diagnostics=None):
     its ground. None where the
     kernel finds no answer (laws that cannot all hold): no stand-in, the system is left as it is and the caller says
     so (the conflict is the thing to fix). fixed_z(i, s): member i's height where the shape does not move it, at arc
-    length s (None: not known), or at an array of them (an array, NaN: not known)."""
+    length s (None: not known), or at an array of them (an array, NaN: not known).
+
+    BNE_STAGED=1 (measurement only, nothing is built from it unless asked): the heights come from the staged solver's stage 5
+    (staged_heights: the same problem, our own deterministic ADMM, no kernel), the answer in the same form."""
+    if os.environ.get("BNE_STAGED", "").strip().lower() in ("1", "on", "yes", "true"):
+        import staged_heights
+        return staged_heights.solve_shape(net, sysm, pcs, smp, ground, fixed_z, diagnostics)
     try:
         return _solve_shape_qp(net, sysm, pcs, smp, ground, fixed_z, diagnostics)
     except Exception as e:      # (no kernel, or it failed)

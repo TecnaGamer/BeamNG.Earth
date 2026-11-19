@@ -55,8 +55,8 @@ def replay(name):
         e = str(m.key[0] if isinstance(m.key, tuple) else m.key)
         if e not in meta:
             meta[e] = namer.meta.get(e)
-    return SimpleNamespace(name=name, net=net, members=list(net.m), meta=meta, ll=run.frame_ll(rep.frame), edge=None, ground=ground,
-                           today=systems, trace=trace, audits=audits, home=None)
+    return SimpleNamespace(name=name, net=net, members=list(net.m), meta=meta, ll=run.frame_ll(rep.frame), edge=namer.edge, ground=ground,
+                           today=systems, trace=trace, audits=audits, home=None, endinfo=namer.endinfo)
 
 
 def truth(name):
@@ -80,5 +80,20 @@ def truth(name):
     g = Ground(net, func=gfn, fixed_func=fixed)
     today = gs.find_systems(mem, lambda n_: (g.xy, g.fixed))[1]
     meta = {ln.id: dict(name=ln.objektart, layer=str(ln.level)) for ln in ws}
-    return SimpleNamespace(name=name, net=net, members=list(mem), meta=meta, ll=run.frame_ll(rep.frame), edge=None, ground=g,
-                           today=today, trace=None, audits=None, home=None)
+    half = float(site.half)
+    mine = {id(ln) for ln in ws}
+    others = [ln for ln in site.lines if id(ln) not in mine]        # (the survey's paths and what is no way: not members)
+
+    def edge(xy):
+        """The survey's own box: a way that ends at it goes on outside it."""
+        return max(abs(float(xy[0])), abs(float(xy[1]))) >= half - run.SURVEY_EDGE_M
+
+    def endinfo(i, e):
+        """What the survey has at a way's end: a path or a line that is no way ending (or running) there is a road the shapes do not
+        take; nothing else (tests/interchange_audit_run.truth_site)."""
+        p = ws[i].xyz[0 if e == 0 else -1]
+        near = [(str(o.id), o.objektart, str(o.level), None, False, 0, {}) for o in others
+                if float(np.sqrt(np.sum((o.xyz[:, :2] - p[:2]) ** 2, axis=1)).min()) <= run.SURVEY_NODE_M]
+        return dict(near=[], inside=[], others=near, connector=str(tr.node_of(p)), feature_end=e, own_gap=None, own_next=None)
+    return SimpleNamespace(name=name, net=net, members=list(mem), meta=meta, ll=run.frame_ll(rep.frame), edge=edge, ground=g,
+                           today=today, trace=None, audits=None, home=None, endinfo=endinfo)

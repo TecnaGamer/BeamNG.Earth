@@ -49,8 +49,16 @@ the road going on is least one (path_cut, a note) until no path does. A joint wh
 takes it on (oneway_trap) is a failure, the map's: of the 637 meetings of two one-way roads at one Shanghai place 611 chain as
 they should (stats["oneway_two_road_joints"]), so the direction convention is right and these are the exceptions; where traffic
 leaves and none arrives (oneway_source) is a note, its feeder is not in the map read; a joint at the data edge is left. A
-structure's end that meets nothing is a failure (dangling_end), named with the nearest road and whether the two share a map
-node; two structures' free ends of one kind, level and class facing each other on one line across at most FACING_GAP_M are one
+structure's end that meets nothing is looked up in the map first (endinfo, the map's own roads at that end: interchange_audit.
+_end_by_map): the road goes on in a cell outside the region's box (end_beyond_region), into a tunnel that is a tunnel network
+of its own (end_at_tunnel_network), into a road the shapes take no member of (end_at_non_member), is the end of its map road
+with no other road at that node (end_unconnected, the map's, level "map": named, no failure), or the pipeline did not join what
+the map joins (end_not_joined, gap_to_own_part: failures). Not joins by the law, so the map's and a note: a road at that end of
+another network (a road bridge's end on a track) or at another level with no map node of both (gradeshapes._end_meets: a
+separation) is end_at_separation; a road's own next part that lies along it (end_overlaps_own_part, level "map") or whose end is a
+joint with other roads (gap_to_own_part, level "map") is the map's pieces of one way not meeting; a twin track 3 m beside it is no
+part of its road; where the map says nothing it is a failure (dangling_end), named
+with the nearest road and whether the two share a map node; two structures' free ends of one kind, level and class facing each other on one line across at most FACING_GAP_M are one
 road going on across a gap in the map (facing_join, a note). Before any of that clean() makes the members one segment per road part: points closer than MIN_SEG_M are merged
 and a part shorter than that is absorbed into its joint (the kernel holds such a step to MIN_SEG_M, so none is left), the same
 road twice (another cell's copy under another key, a copy clipped at the cell's edge, a road and its own lane sections) is
@@ -832,7 +840,92 @@ def _nearest_text(P, namer, i, p):
             "shared_node" if shared else "near_no_node")
 
 
-def check(P, namer):
+def _end_facts(P, endinfo, k, end):
+    """What the map has at the end `end` of cleaned member k (endinfo(input member, end), the audit's PlannerMeta.endinfo), or None:
+    no endinfo, or that end is no end of the road the member came from (a stretch cut out of it where lane sections lie, a part
+    shortened by the cleaning by more than MIN_SEG_M)."""
+    if endinfo is None:
+        return None
+    cl = P.cleaned
+    if cl is None:
+        return endinfo(k, end)
+    i = cl.source[k]
+    if end == 0:
+        ok = cl.offset[k] <= 1e-6
+    else:
+        ok = abs(cl.offset[k] + P.net.L[k] - cl.input.L[i]) <= 2.0
+    return endinfo(i, end) if ok else None
+
+
+def _apart(P, namer, pe, name, facts, index):
+    """(facts without the roads at the end that are no joint by the law, a Finding or None): a road of the map at a structure's end
+    that the pipeline does not join and should not: another network (a road bridge's end on a railway's track, a busway on a
+    rail bridge's line: roads and rails are two networks), or a structure at another level with no map node of both (a separation,
+    gradeshapes._end_meets: one's end over or under the other's end or middle, its clearance kept). Those are the map's (a road that
+    ends at a track, a stub of tunnel under a bridge), a note naming them; what is left is for interchange_audit._end_by_map."""
+    net = P.net
+    me = net.m[pe.seg]
+    own = facts.get("own_gap")
+    if own is not None:
+        j = index.get(own[5])
+        if j is not None:
+            a = End(pe.seg, pe.end)
+            pa = net.lines[pe.seg][0 if pe.end == 0 else -1]
+            d, b, pb = min(((_len(net.lines[j][0 if e == 0 else -1] - pa), End(j, e), net.lines[j][0 if e == 0 else -1]) for e in (0, 1)),
+                           key=lambda c: c[0])
+            oa, ob = _out(net, *a), _out(net, *b)
+            where = namer.point(pe.point)
+            along = abs(_dot(pb[:2] - pa[:2], oa[:2])) / max(d, 1e-9)
+            if d > gs.JOIN_M and along < 0.5:
+                # (side by side, not on from it: a twin track whose two bridges are one road to the map's identity, Prague's 66 m rail
+                # bridges 3 m apart)
+                facts = dict(facts, own_gap=None)
+            elif _dot(oa, ob) > FOLD_COS:
+                # (the two lines leave the gap the same way: the road's own part lies along this one, an overlap of the map's pieces
+                # of one way, not a gap: Prague's 8 m service bridge starts 8.2 m back along its own ground road)
+                return facts, Finding(1, "end_overlaps_own_part", "map",
+                                      "%s: its %s at %s is %.1f m from the end of the next part of its own road (%s), which runs along it the "
+                                      "same way: the map's pieces of one way overlap there" % (namer.label(pe.seg), name, where, d, namer.label(j)),
+                                      where, [namer.info(pe.seg), namer.info(j)])
+            elif b in P.mate or P.partners.get(b):
+                # (the road's own part ends in a joint with other roads: its end is not free to be the one this end goes on into)
+                return facts, Finding(1, "gap_to_own_part", "map",
+                                      "%s: its %s at %s is %.1f m short of the next part of its own road (%s), whose end is a joint with other "
+                                      "roads: the map's pieces of one way do not meet" % (namer.label(pe.seg), name, where, d, namer.label(j)),
+                                      where, [namer.info(pe.seg), namer.info(j)])
+    keep, apart = [], []
+    cl = P.cleaned
+    taken = None if cl is None else {m.key: i for i, m in enumerate(cl.input.m)}
+    kept = None if cl is None else {}
+    if cl is not None:
+        for k, src in enumerate(cl.source):
+            kept.setdefault(src, []).append(k)
+    for row in facts["inside"]:
+        j = index.get(row[5])
+        if cl is not None and row[5] in taken and (taken[row[5]] not in kept or pe.seg in kept[taken[row[5]]]):
+            continue                    # (a copy or a part the cleaning made one with this member, or dropped: no other road there)
+        if j is None:
+            keep.append(row)
+            continue
+        mo = net.m[j]
+        mapped = me.nodes is None or mo.nodes is None or bool(me.nodes & mo.nodes)
+        if NETWORK[mo.kind] != NETWORK[me.kind]:
+            apart.append((row, j, "is another network (roads and rails do not join)"))
+        elif mo.kind in STRUCT and gs._over(me, mo) is not None and not mapped:
+            apart.append((row, j, "is at another level with no map node of both (a separation, not a joint)"))
+        else:
+            keep.append(row)
+    facts = dict(facts, inside=keep)
+    if not apart or keep or facts["near"]:
+        return facts, None
+    row, j, why = apart[0]
+    where = namer.point(pe.point)
+    return facts, Finding(1, "end_at_separation", "note",
+                          "%s: its %s at %s meets %s, %.1f m from it, which %s" % (namer.label(pe.seg), name, where, namer.label(j), row[4], why),
+                          where, [namer.info(pe.seg), namer.info(j)])
+
+
+def check(P, namer, endinfo=None):
     """Stage 1's checks. ([Finding], stats): every failure named by its Earth id, OSM way and lat / lon (namer: interchange_audit.
     Namer over the same net and meta). Fails: broken_part, missing_segment, duplicated_segment, path_gap, gap, duplicate (a structure twice), overlap,
     oneway_trap, path_direction, dangling_end; notes: duplicate / overlap of ground roads, oneway_source, path_cut, facing_join, identity_join,
@@ -963,7 +1056,8 @@ def check(P, namer):
                                  [namer.info(first[0]), namer.info(other[0])]))
     # 6. the path's ends: a bridge or tunnel meeting nothing hangs in the air
     free = dangling = edge_ends = dead = 0
-    dangling_cat = {}
+    dangling_cat, by_map = {}, {}
+    index = {m.key: k for k, m in enumerate(net.m)}
     for p in P.paths:
         for pe, name in ((p.start, "start"), (p.stop, "end")):
             if pe is None:
@@ -978,6 +1072,16 @@ def check(P, namer):
                                      % (p.id, namer.label(pe.seg), name, namer.point(pe.point)), namer.point(pe.point),
                                      [namer.info(pe.seg)]))
             elif m.kind in STRUCT:
+                facts = _end_facts(P, endinfo, pe.seg, pe.end)
+                got = None
+                if facts is not None:
+                    facts, got = _apart(P, namer, pe, name, facts, index)
+                if got is None and facts is not None:
+                    got = ia._end_by_map(net, namer, pe.seg, pe.end, name, namer.point(pe.point), facts, index)
+                if got is not None:
+                    by_map[got.code] = by_map.get(got.code, 0) + 1
+                    finds.append(got)
+                    continue
                 dangling += 1
                 role = "a ramp: " if (m.cls or "").endswith("_link") else ""
                 near_text, near_cat = _nearest_text(P, namer, pe.seg, pe.point)
@@ -1003,7 +1107,7 @@ def check(P, namer):
     stats = dict(oneway_two_road_joints=ow, segments=len(net.m), usable=len(net.m) - len(P.skipped), in_paths=segs, paths=len(P.paths),
                  closed=sum(1 for p in P.paths if p.closed), joints=len(P.joints),
                  pairs=sum(len(j.paired) for j in P.joints), longest_m=round(max([p.length for p in P.paths] + [0.0]), 0),
-                 by_kinds=dict(sorted(kinds.items())), dangling_ends=dangling, dangling_by_nearest=dict(sorted(dangling_cat.items())), dead_ends=dead, edge_ends=edge_ends,
+                 by_kinds=dict(sorted(kinds.items())), dangling_ends=dangling, dangling_by_nearest=dict(sorted(dangling_cat.items())), ends_by_map=dict(sorted(by_map.items())), dead_ends=dead, edge_ends=edge_ends,
                  oneway_known=sum(1 for p in P.paths if p.flow), fails=sum(1 for f in finds if f.level == "fail"))
     return finds, stats
 

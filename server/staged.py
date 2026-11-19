@@ -13,6 +13,7 @@ import math
 import interchange_audit as ia
 import gradeshapes as gs
 import staged_feasible as s4
+import staged_heights as s5
 import staged_ground as s3
 import staged_levels as s2
 import staged_paths as s1
@@ -26,6 +27,8 @@ class Staged:
         self.stats = {}
         self.facts = []
         self.feasible = {}              # system index -> stats of stage 4
+        self.heights = {}               # system index -> stats of stage 5 (staged_heights.Heights.stats), where it was asked
+        self.heights_of = {}            # system index -> staged_heights.Heights
         self.P = self.L = self.G = self.namer = self.net = self.ground = None
         self.name = ""
 
@@ -62,17 +65,18 @@ class Staged:
         return "\n".join(lines) + "\n"
 
 
-def run(members, meta=None, ll=None, edge=None, ground=None, reader=True, feasibility=True, name=""):
+def run(members, meta=None, ll=None, edge=None, ground=None, reader=True, feasibility=True, name="", heights=False, endinfo=None):
     """The four stages on one map. members: gradeshapes.Member list (as grading._shape_members gives them); meta: what the map has of
     each road by Earth feature id; ll(x, y) -> (lat, lon) for naming; edge(xy) -> at the edge of the data read; ground: an object with
     at(i, s), xy(points), fixed(i, s) and remap(net, source) (tests/staged_fixtures.Ground); reader: ask the elevation for who moves
-    (needs ground); feasibility: run stage 4."""
+    (needs ground); endinfo(member, end) -> what the map has at a member's end (stage 1's loose ends: tests/interchange_audit_run.
+    PlannerMeta.endinfo; keyed by the members as given); feasibility: run stage 4; heights: run stage 5 on every system stage 4 found feasible (S.heights, S.heights_of)."""
     S = Staged()
     S.name = name
     S.P = P = s1.build(members, meta, edge)
     S.net = net = P.net
     S.namer = namer = ia.Namer(net, ll, meta, edge)
-    S.finds[1], S.stats[1] = s1.check(P, namer)
+    S.finds[1], S.stats[1] = s1.check(P, namer, endinfo)
     S.ground = g = ground.remap(net, P.cleaned.source, P.cleaned.offset) if ground is not None else None
     S.L = L = s2.build(P, g.xy if g is not None else None)
     S.finds[2], S.stats[2] = s2.check(L, namer)
@@ -85,6 +89,9 @@ def run(members, meta=None, ll=None, edge=None, ground=None, reader=True, feasib
             S.finds[4] += finds
             stats.pop("potentials", None)
             S.feasible[n] = stats
+            if heights and stats["feasible"]:
+                S.heights_of[n] = H = s5.solve_system(net, sysm, g)
+                S.heights[n] = H.stats
             st4["checked"] += 1
             st4["feasible" if stats["feasible"] else "infeasible"] += 1
             st4["nodes"] += stats.get("nodes", 0)

@@ -205,6 +205,81 @@ def test_two_structures_facing_across_a_short_gap_are_one_road_going_on_and_side
     assert d and any("the nearest road is" in f.text and "m off" in f.text for f in d)
 
 
+def test_a_loose_end_is_looked_up_in_the_map_before_it_is_a_failure():
+    """A deck end that meets nothing is the map's word first: the road goes on outside the box, into a tunnel network or a road the
+    shapes take no member of, or the map has no road there (the map's, named, no failure); only an end the map says nothing of is a
+    dangling_end. A part shortened by the cleaning at that end has no such facts."""
+    a = road(("a", "deck", 0, 0), line(0, 0, 300, 0, 30), "deck", "trunk", 1.0, half=6.0)
+    b = road(("g", "ground", 0, 0), line(-200, 0, 0, 0, 30))
+    base = dict(near=[], inside=[], others=[], connector=None, feature_end=None, own_gap=None, own_next=None)
+
+    def run(facts_of):
+        pl = places.synthetic([a, b])
+        return staged.run(pl.members, pl.meta, None, None, pl.ground, feasibility=False,
+                          endinfo=lambda i, e: facts_of(pl.members[i].key[0], e))
+    none = run(lambda k, e: dict(base))
+    assert codes(none, 1, "fail") == ["dangling_end"]                   # (its start meets the ground road, its end meets nothing)
+    far = run(lambda k, e: dict(base, near=[("x", "deck", "trunk", 1.0, 1.2, ("x", "deck", 0, 0))]) if (k, e) == ("a", 1) else dict(base))
+    assert "end_beyond_region" in codes(far, 1, "note")
+    assert far.stats[1]["ends_by_map"].get("end_beyond_region") == 1
+    unconnected = run(lambda k, e: dict(base, feature_end=e, connector="c9") if (k, e) == ("a", 1) else dict(base))
+    assert [f.level for f in unconnected.finds[1] if f.code == "end_unconnected"] == ["map"]
+    assert "end_unconnected" not in codes(unconnected, 1, "fail") and unconnected.passed(1) == (not unconnected.fails(1))
+
+
+def test_a_road_bridges_end_on_a_track_is_no_failure_and_a_member_is_not_its_own_neighbour():
+    """The map says a road is at that end, in the net, within the joint distance, and no joint was made: it is none by the law where it
+    is another network (roads and rails do not join), and a copy the cleaning made one with the member is the member itself."""
+    a = road(("a", "deck", 0, 0), line(0, 0, 300, 0, 30), "deck", "trunk", 1.0, half=6.0)
+    g = road(("g", "ground", 0, 0), line(-200, 0, 0, 0, 30))
+    r = Member(("rail", "rail", 0), line(300, 0, 500, 0, 20), "rail", "rail", 100, 0.0, 2.0, None)
+    base = dict(near=[], inside=[], others=[], connector=None, feature_end=None, own_gap=None, own_next=None)
+    pl = places.synthetic([a, g, r])
+    ia_ = {i: m.key for i, m in enumerate(pl.members)}
+
+    def endinfo(i, e):
+        if ia_[i][0] == "a" and e == 1:
+            return dict(base, inside=[("rail", "rail", "rail", 0.0, 0.0, ("rail", "rail", 0))])
+        return dict(base)
+    S = staged.run(pl.members, pl.meta, None, None, pl.ground, feasibility=False, endinfo=endinfo)
+    assert "end_at_separation" in codes(S, 1, "note") and "end_not_joined" not in codes(S, 1)
+    assert "another network" in next(f.text for f in S.finds[1] if f.code == "end_at_separation")
+
+
+def test_a_street_over_a_tunnels_footprint_takes_its_height_from_its_anchors_not_the_trench_floor():
+    """Porte Maillot's LiDAR: the terrain under a street on a slab over a cut-and-cover trench is the trench floor, 7 m under the
+    street. Such a point is no point on the ground: it takes the straight line between the street's nearest points outside any
+    footprint. A street wholly over the tunnel has no ground point at all; the tunnel's own road, and a road on its approach, are not
+    over it."""
+    tun = road(("t", "tunnel", 0), line(0, 0, 200, 0, 40), "tunnel", "trunk", -1.0, half=7.0)
+    street = road(("s", "ground", 0), line(100, -120, 100, 120, 60), cls="secondary", half=5.0)
+    portal = road(("p", "ground", 0), line(-120, 0, 0, 0, 30), cls="trunk", half=7.0)
+    short = road(("c", "ground", 0), line(150, -6, 150, 6, 6), cls="service", half=3.0)
+
+    def terrain(xy):
+        xy = np.atleast_2d(xy)
+        trench = (np.abs(xy[:, 1]) < 9.0) & (xy[:, 0] > 0.0) & (xy[:, 0] < 200.0)
+        return np.where(trench, -7.0, 0.0)
+    pl = places.synthetic([tun, street, portal, short], ground=terrain)
+    net = pl.net
+    fp = s3.footprints(net)
+    si = next(i for i, m in enumerate(net.m) if m.key[0] == "s")
+    pi = next(i for i, m in enumerate(net.m) if m.key[0] == "p")
+    ci = next(i for i, m in enumerate(net.m) if m.key[0] == "c")
+    assert si in fp and pi not in fp and 1 == len(fp[si])
+    a, b = fp[si][0]
+    assert 100.0 <= a <= 120.0 and 120.0 <= b <= 145.0                      # (the street's s: 120 m to the tunnel's line, +- the half width)
+    fixed = s3.anchored(net, pl.ground.fixed)
+    mid = net.L[si] / 2.0
+    assert abs(float(pl.ground.fixed(si, mid))) == 7.0                      # (the elevation: the trench floor)
+    assert abs(float(fixed(si, mid))) < 1e-9                                # (the anchors: the street's own level either side)
+    assert float(fixed(si, 10.0)) == float(pl.ground.fixed(si, 10.0))        # (outside the footprint: the elevation's)
+    assert ci in fp and fp[ci][0][0] <= 0.0 and fp[ci][0][1] >= net.L[ci]
+    S = staged.run(pl.members, pl.meta, None, None, pl.ground, feasibility=False)
+    pts = [p for ps in S.G.points.values() for p in ps if p.member == ci]
+    assert not pts
+
+
 def test_one_road_twice_with_another_smoothing_is_one_segment():
     ln1 = line(0, 0, 400, 0, 9)
     ln2 = np.stack([np.linspace(0, 400, 25), 0.8 * np.sin(np.linspace(0, np.pi, 25))], axis=1)     # the same road, 0.8 m off along its middle
@@ -446,7 +521,7 @@ def test_popoli_runs_through_the_four_stages_and_the_copies_are_collapsed():
 @pytest.mark.parametrize("name", ["zurich_brunau", "zurich_duttweilerbruecke"])
 def test_the_survey_places_have_the_systems_today_finds_and_heights(name):
     pl = places.truth(name)
-    S = staged.run(pl.members, pl.meta, pl.ll, pl.edge, pl.ground, name=name)
+    S = staged.run(pl.members, pl.meta, pl.ll, pl.edge, pl.ground, name=name, endinfo=getattr(pl, "endinfo", None))
     assert len(S.G.systems) == len(pl.today)
     assert S.stats[4]["infeasible"] == 0 and S.passed(2) and S.passed(3)
 
