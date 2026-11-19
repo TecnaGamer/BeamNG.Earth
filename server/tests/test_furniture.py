@@ -275,6 +275,23 @@ class PoleTest(unittest.TestCase):
         self.assertEqual(sorted(map(tuple, (x for x in kept if x[2] < 50.0))),
                          sorted(map(tuple, (x for x in free if x[2] < 50.0))), "the other side's stay")
 
+    def test_the_regional_kits_late_rows_keep_off_the_bed_too(self):
+        # (Codex's review: the regional kit's markers and traffic signs join the rows after the clearance filter)
+        r = road("k", "tertiary", False, x1=900.)
+        track = ("rail:a", 2.6, np.array([[-300.0, 60.0, 0.0], [900.0, 60.0, 0.0]]))
+        marker = ["fr_marker", 100.0, 59.0, 0.0, 0.0, 1.0, 1.2, 0.0]
+        clear = ["fr_marker", 200.0, 80.0, 0.0, 0.0, 1.0, 1.2, 0.0]
+        with mock.patch.object(poleprofiles, "kit_enabled", lambda *_: True), \
+                mock.patch("regionalmarkers.place", lambda *a, **k: [list(marker), list(clear)]), \
+                mock.patch("regionalstops.localize", lambda rows, *a: rows), \
+                mock.patch("regionaltraffic.localize", lambda rows, *a: rows), \
+                mock.patch("regionaltraffic.place", lambda *a: []), \
+                mock.patch("euguardrails.enabled", lambda: False), \
+                mock.patch.object(poleprofiles, "country_selector", lambda *a: (lambda *b: "FR")):
+            rows = furniture.place([r], [], (0, 0, 512, 256), obstacles=[track])
+        got = [x for x in rows if x[0] == "fr_marker"]
+        self.assertEqual([x[1] for x in got], [200.0])
+
     def test_rail_obstacles_are_every_ground_track_but_a_tram(self):
         import railxing
         parts = [("r1", "rail", "ground", np.array([[0.0, 0.0], [50.0, 0.0]])),

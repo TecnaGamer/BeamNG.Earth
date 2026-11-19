@@ -498,6 +498,40 @@ class TowerFootprintTest(unittest.TestCase):
                               clearance=clearance)
         return props, wires
 
+    def test_a_tower_two_ways_share_has_one_scale(self):
+        """Two ways sharing a tower, one on flat ground, the other over a ridge (Codex's review): the shared tower's
+        scale is the most either way's spans ask, and both ways' conductors hang on its arms at that scale, in the tile
+        drawing the tower and in the tiles drawing either way's span."""
+        def ground(x, y):
+            x, y = np.asarray(x, np.float64), np.asarray(y, np.float64)
+            return np.maximum(0.0, 30.0 * (1.0 - np.hypot(x - 120.0, y - 165.0) / 25.0))
+        flat_way = np.array([[20.0, 100.0, 0.0], [120.0, 100.0, 0.0]])
+        ridge_way = np.array([[120.0, 100.0, 0.0], [120.0, 230.0, 0.0]])
+        pts = np.ascontiguousarray(np.concatenate([flat_way, ridge_way]), np.float64)
+        off = np.array([0, 2, 4], np.int64)
+        tops = []
+        for box in ([-1e4, -1e4, 1e4, 1e4], [100.0, 90.0, 140.0, 110.0], [0.0, 90.0, 100.0, 110.0],
+                    [100.0, 150.0, 140.0, 180.0]):
+            towers, _, wp, wo, _ = fast._ef.power_line_layout(
+                pts, off, np.zeros(4, bool), powerlines.ARMS, powerlines.SAG, powerlines.SEG_M, powerlines.MIN_SPAN_M,
+                powerlines.MAX_SPAN_M, powerlines.DEDUPE_M, powerlines.END_MERGE_M, powerlines.GANTRY_FRONT, box,
+                np.zeros((0, 2)), np.zeros(1, np.int64), np.zeros(0, np.int64), list(powerlines.ANCHOR_AT),
+                powerlines.GANTRIES, None, ground, powerlines.SPAN_CLEAR_M)
+            at_t = [np.asarray(wp[a:b]) for a, b in zip(wo[:-1], wo[1:])]
+            ends = [q for w in at_t for q in (w[0], w[-1]) if np.hypot(q[0] - 120.0, q[1] - 100.0) < 6.0]
+            for t in towers:
+                if np.hypot(t[0] - 120.0, t[1] - 100.0) < 1e-6:
+                    tops.append(t[4])
+            # every conductor end at the shared tower: one of its arms' heights at a single scale
+            heights = sorted({round(float(q[2]), 4) for q in ends})
+            if ends:
+                s = heights[0] / powerlines.ARMS[:, 1].min()
+                self.assertTrue(all(any(abs(z - h * s) < 1e-3 for h in powerlines.ARMS[:, 1]) for z in heights),
+                                (box, heights, s))
+                tops.append(s)
+        self.assertGreater(max(tops), 1.0, "the ridge way lifts the shared tower")
+        self.assertTrue(all(abs(t - tops[0]) < 1e-6 for t in tops), tops)
+
     def test_a_span_over_a_crest_clears_the_ground(self):
         """A span climbing over a ridge between its towers (Breno, the player's report 0XESWVG2: its conductors through
         the hill): every conductor at least SPAN_CLEAR_M over the ground along it, its towers scaled up where the chord

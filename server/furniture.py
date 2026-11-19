@@ -1486,8 +1486,6 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
             wires.extend(_own_spans(run, box))
     # Poles were checked before joining their wire runs; signs before selecting their relocated spot.
     rows = [r for r in rows if r[0] in (G_POLE, G_SIGNAL, G_SIGNAL_LEFT, G_STOP, G_YIELD) or clearance.clear(r)]
-    if bed is not None:     # (nothing on a track's bed: the junctions' signs too; the poles were kept off it above)
-        rows = [r for r in rows if not on_bed((float(r[1]), float(r[2])))]
     if poleprofiles.kit_enabled(pole_profile):
         import regionalmarkers
         country_at=poleprofiles.country_selector(pole_profile,pole_frame)
@@ -1502,6 +1500,9 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
             import frgore
             rows.extend(frgore.place(pole_frame,roads,box,country_at,
                                     ground=sign_obstacles.ground if sign_obstacles is not None else None,decks=decks))
+    if bed is not None:     # (nothing guessed on a track's bed: the junctions' signs, the regional kit's markers and
+        # signs too; the poles were kept off it above, before their wires; Codex's review)
+        rows = [r for r in rows if not on_bed((float(r[1]), float(r[2])))]
     # (the tile's own, at their mapped points: not moved off the clearance like a guessed one)
     rows += [list(r) for r in mapped_lamps if _owns(box, r[1], r[2])]
     rows = citylamps.localize(rows, poleprofiles.lamp_country_selector(pole_profile, pole_frame))

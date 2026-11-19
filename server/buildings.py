@@ -5390,7 +5390,7 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
                     # Chrysler Building's top 47 m on 0.8 m²)
                     if r is None or _area2(r) / 2 < (PART_TINY_M2 if ph >= PART_TINY_TALL_M else PART_MIN_M2):
                         continue
-                    if on_bridge_over_water(r, lv, water_xy, pmh):
+                    if on_bridge_over_water(r, lv, water_xy, pmh) and _on_support(r, supports) is None:
                         continue        # (a part of a building on a bridge, over the water: on_bridge_over_water)
                     rings.append(r)
                     p_rshape = str(pat.get("roof_shape") or "").lower() or "flat"
@@ -5443,7 +5443,7 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
                 continue
             if rails_xy and on_rail_bed(ring, rails_xy):        # (a building on a railway's bed: BNE_RAIL_XING)
                 continue
-            if on_bridge_over_water(ring, lv, water_xy, at.get("min_height")):
+            if on_bridge_over_water(ring, lv, water_xy, at.get("min_height")) and _on_support(ring, supports) is None:
                 continue                # (a building on a bridge, over the water: on_bridge_over_water)
             is_ml = "src_dataset" in a and str(a["src_dataset"][i]) != "OpenStreetMap"
             if is_ml and _ml_false(ring, bridges_xy, water_xy, ml_roads_xy if ml_roads_xy is not None else roads_xy):

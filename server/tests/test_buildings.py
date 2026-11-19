@@ -3043,6 +3043,27 @@ class OnBridgeOverWaterTest(unittest.TestCase):
         self.assertFalse(bld.on_bridge_over_water(on_bridge, 1.0, water, 9.0), "a canopy 9 m up")
         self.assertFalse(bld.on_bridge_over_water(on_bridge, 1.0, None))
 
+    def test_tile_buildings_leave_out_the_station_but_keep_a_bridge_support(self):
+        """In tile_buildings: the layer 1 footprint over the river goes, the same footprint on a mapped bridge support
+        (a Tower Bridge tower: support_rings) stays (Codex's review)."""
+        import geodesy
+        f = geodesy.EnuFrame(51.51, -0.10)
+
+        def ll(x, y, w, d):
+            e = np.array([x, x + w, x + w, x, x]); n = np.array([y, y, y + d, y + d, y])
+            la, lo, _ = f.enu_to_geodetic(e, n, 0.0)
+            return np.stack([lo, la], 1)
+        river = np.array([[-50.0, 40.0], [300.0, 40.0], [300.0, 200.0], [-50.0, 200.0]])
+        flat = lambda la, lo: np.zeros(np.shape(la))
+        b = Feats(["S", "L"], [ll(20, 60, 40, 120), ll(150, 10, 20, 20)],
+                  **{"class": ["train_station", ""], "height": [15.0, 9.0], "level": [1.0, 1.0]})
+        items = bld.tile_buildings(f, 0, 0, 256, 256, [b], flat, water_xy=[(river, [])])
+        self.assertEqual(len(items), 1, "the station over the river left out, the one on land kept")
+        support = np.array([[10.0, 50.0], [70.0, 50.0], [70.0, 190.0], [10.0, 190.0]])
+        items = bld.tile_buildings(f, 0, 0, 256, 256, [b], flat, water_xy=[(river, [])],
+                                   supports=[(support, "grey")])
+        self.assertEqual(len(items), 2, "a bridge's own support stays")
+
 
 class RoofPhotoTest(unittest.TestCase):
     """Roof colours from the aerial photo (RoofPhoto, native roof_photo_colours)."""
