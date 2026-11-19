@@ -7366,6 +7366,8 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 518: deckreach::deck_reach (a slab's reach along each deck part's whole line, at fixed stations: the tiles either
     // side of a seam agree on it), on 516 (P3a); 517 is another branch's
     // 526: try598 with 524 and 518 (deckreach) merged; 525 is another branch's
-    m.add("VERSION", 526)?;
+    // 523: v2 P3c (profile_pin_field: each approach's pin weight local to its own line and abutment)
+    // 529: try598 with 526 and 523 (P3c) merged; 525, 527, 528 are other branches'
+    m.add("VERSION", 529)?;
     Ok(())
 }

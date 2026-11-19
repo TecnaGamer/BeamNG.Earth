@@ -126,7 +126,7 @@ PLAN_THREADS = 4            # cells planned at once (_plan_missing)
 PLAN_SETS_MAX = 16          # cell sets whose merged plans are kept (Grader._plan_set; ~1 MB each in a town)
 # BNE_ROADSHAPE=profile (road revamp v2 P3b): the graded ground's pinned second stage (_Planner._pin_field).
 # PROFILE_PINS(planner, lat0, lon0, lat1, lon1, pad_m) -> the joint profile's approach pins [(lat (n,), lon (n,),
-# dz (n,), height today (n,), half width, fade (n,))] coming within pad_m of that box, sorted by content (blockworker
+# dz (n,), height today (n,), half width, fade (n,), share (n,))] coming within pad_m of that box, sorted by content (blockworker
 # sets it: the process's bridge chains, solved on the first stage); None: no second stage (every mode but profile).
 # Grader.apply grades by the second stage unless pinned=False.
 PROFILE_PINS = None
@@ -7386,7 +7386,8 @@ class _Planner:
             np.ascontiguousarray(z, np.float64), np.ascontiguousarray(np.concatenate(qxy)), qoff,
             np.ascontiguousarray(np.concatenate([p[2] for p in pins]), np.float64),
             np.ascontiguousarray(np.concatenate([p[3] for p in pins]), np.float64),
-            np.ascontiguousarray(np.concatenate([p[5] for p in pins]), np.float64), [float(p[4]) for p in pins],
+            np.ascontiguousarray(np.concatenate([p[5] for p in pins]), np.float64),
+            np.ascontiguousarray(np.concatenate([p[6] for p in pins]), np.float64), [float(p[4]) for p in pins],
             [PIN_TAPER_M, PIN_GATE_M[0], PIN_GATE_M[1]])
         PIN_STATS["field_s"] += time.perf_counter() - t1
         PIN_STATS["pinned"] += 1

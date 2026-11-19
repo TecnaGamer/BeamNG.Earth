@@ -40,7 +40,8 @@
 //!   the abutments), deck over deck where two deck lines cross more than STACK_MIN_M apart today (the higher today
 //!   stays over the lower by min(the lower's clearance need, today's gap): the solve never swaps two decks).
 //! - Checks: couplings within MARGIN, clearances within MARGIN, no segment steeper than max(MAX_GRADE, the member's
-//!   steepest today) + GRADE_ADD. A coupling or clearance failure that a sheet union takes part in lets that union go
+//!   steepest today) + GRADE_ADD, no C1 joint bending more than SLOPE_TOL + 1.5 x its members' own bend + KINK_STEEP x
+//!   the steeper member's steepest grade today (523). A coupling or clearance failure that a sheet union takes part in lets that union go
 //!   and solves again (at most ATTEMPTS solves; counted); any other failure keeps today's heights (status recorded).
 //! - Budget: structures::heights' (checked counts before allocation; every factorisation charged before it runs):
 //!   over it today's heights (S_BUDGET).
@@ -70,6 +71,8 @@ const ATTEMPTS: usize = 4;
 const JOIN_DZ_M: f64 = 0.5;     // m: two joined deck ends further apart in height today are stacked, not joined
 const SLOPE_TOL: f64 = 0.01;    // the grade either side of a C1 joint may differ by this in a solved result (or
                                 // by as much as its members bend inside, between two pieces)
+const KINK_STEEP: f64 = 0.1;
+const GAP_LOOK: f64 = 2.0;      // an approach's walk looks this many anchors on for another deck end (P3c)    // ... plus this share of the steeper member's steepest grade today (P3c)
 const STACK_MIN_M: f64 = 1.0;   // m: two decks crossing closer than this in height today are one junction (no clearance)      // solves at most: each after letting go of a sheet union in conflict
 
 fn arcs(xy: &[[f64; 2]]) -> Vec<f64> {
@@ -330,6 +333,12 @@ pub fn members_core(decks: &[Vec<[f64; 2]>], half: &[f64], anchor: &[f64], groun
             let mut path = vec![p];
             let mut len = 0.0f64;
             let lim = anchor[d];
+            // (P3c, earthfast 523: the walk looks on to GAP_LOOK x its anchor for another deck's end along the road:
+            // found, one member between the two (reach 2); else cut back to its anchor. Two anchors walked from two
+            // abutments 135 m apart along one road overlapped, each pinned to today's ground at the other's moved
+            // abutment: I-95 Middle Branch's 4.5 g, the two solved 5 m apart on one road)
+            let look = lim * GAP_LOOK;
+            let mut cut: Option<(usize, [f64; 2])> = None;     // (path length before the anchor point, the point)
             let mut used = BTreeSet::new();
             let (mut reach, mut to) = (1i64, -1i64);
             let mut first: Option<(usize, usize, f64)> = None;
@@ -376,10 +385,11 @@ pub fn members_core(decks: &[Vec<[f64; 2]>], half: &[f64], anchor: &[f64], groun
                     if seg <= 1e-6 {
                         continue;
                     }
-                    if len + seg >= lim {
+                    if cut.is_none() && len + seg >= lim {
                         let f = (lim - len) / seg;
-                        path.push([last[0] + f * (q[0] - last[0]), last[1] + f * (q[1] - last[1])]);
-                        len = lim;
+                        cut = Some((path.len(), [last[0] + f * (q[0] - last[0]), last[1] + f * (q[1] - last[1])]));
+                    }
+                    if len + seg >= look {
                         reach = 0;
                         done = true;
                         break;
@@ -399,6 +409,14 @@ pub fn members_core(decks: &[Vec<[f64; 2]>], half: &[f64], anchor: &[f64], groun
                 p = path[path.len() - 1];
                 let ps = arcs(&path);
                 u = out_dir(&path, &ps, 1, dir_m);
+            }
+            if reach != 2 {
+                if let Some((n, q)) = cut {
+                    path.truncate(n);
+                    path.push(q);
+                    len = lim;
+                    reach = 0;
+                }
             }
             if path.len() < 2 || len < step {
                 ends.push([d as i64, e as i64, if joined[d][e] { 2 } else { 0 }]);
@@ -428,6 +446,17 @@ pub fn members_core(decks: &[Vec<[f64; 2]>], half: &[f64], anchor: &[f64], groun
                 keep[i] = false;
                 break;
             }
+        }
+    }
+    // (P3c: an anchor walked from a deck end another walk reached as its gap's far end, found from that side alone
+    // (the other's anchor shorter): the gap member covers its road; Codex review of P3c)
+    for i in 0..walks.len() {
+        if !keep[i] || walks[i].3.reach == 2 {
+            continue;
+        }
+        let me = (walks[i].0 * 2 + walks[i].1) as i64;
+        if (0..walks.len()).any(|j| j != i && keep[j] && walks[j].3.reach == 2 && walks[j].3.to == me) {
+            keep[i] = false;
         }
     }
     for (i, w) in walks.into_iter().enumerate() {
@@ -1130,10 +1159,23 @@ pub fn solve_core(ms: &[Member], joins: &[[i64; 5]], pins: &[[i64; 3]], floors: 
             }
             b
         }).collect();
+        // (P3c, earthfast 523: and KINK_STEEP x the steeper member's steepest grade today: a steep road is a slow one,
+        // the ride of a slope break goes with v^2 (Tromso's 13-23 % streets fell back over a 0.35 % excess))
+        let steep: Vec<f64> = ms.iter().map(|m| {
+            let mut g = 0.0f64;
+            for k in 0..m.xy.len().saturating_sub(1) {
+                let h = m.s[k + 1] - m.s[k];
+                if h >= 0.5 {
+                    g = g.max((m.z[k + 1] - m.z[k]).abs() / h);
+                }
+            }
+            g
+        }).collect();
         let mut kink = 0.0f64;
         for &(c, ha, hb) in &c1_terms {
             let (sa, sb) = ((z[c[1]] - z[c[0]]) / ha.max(1e-3), (z[c[2]] - z[c[1]]) / hb.max(1e-3));
-            let lim = SLOPE_TOL + 1.5 * bend[member_of(c[0])].max(bend[member_of(c[2])]);
+            let (ma, mb) = (member_of(c[0]), member_of(c[2]));
+            let lim = SLOPE_TOL + 1.5 * bend[ma].max(bend[mb]) + KINK_STEEP * steep[ma].max(steep[mb]);
             kink = kink.max((sa - sb).abs() - lim);
         }
         if drift > margin || kink > 0.0 {
