@@ -12030,11 +12030,15 @@ def _bridge_chunks(frame, bseen, elev, exact, bridges=None, cells=None, walks=No
         else:
             got = [(fid, spec, np.c_[xy, z], lon) for fid, spec, xy, z, lon in bridges.parts(cells, near)
                    if np.isfinite(z).all()]
-        if any(dnp.norm(np.diff(p[:, :2], axis=0), axis=1).sum() <= roadmesh.JUNCTION_MAX_PART_M
-               for _fid, _sp, p, _lon in got):
+        if roadshape.SHEET or any(dnp.norm(np.diff(p[:, :2], axis=0), axis=1).sum() <= roadmesh.JUNCTION_MAX_PART_M
+                                  for _fid, _sp, p, _lon in got):
             # A short branch can meet its fork outside the usual parapet context. Both tiles need all incident
             # complete profiles, even the tile holding only that branch's far abutment. parts() adds NEAR_M.
+            # (BNE_ROADSHAPE=sheet: every tile holding a piece of an exit's union or of its branch's height blend
+            # holds both its parts: the blend reaches PIN_BLEND_M past the split, the through deck alongside)
             reach = 3 * roadmesh.JUNCTION_MAX_PART_M + DECK_CONTEXT_M
+            if roadshape.SHEET:
+                reach = max(reach, roadshape.SHEET_WINDOW_M)
             margin = max(0.0, reach - NEAR_M)
             x0, y0, x1, y1 = exact
             cell_fn = getattr(bridges, 'cell_fn', None)
@@ -12352,7 +12356,7 @@ class _Merged(np.ndarray):
     """A merged pad's centre (the joints' mean) carrying its joints."""
 
 
-def deck_pads(decks, ground_roads, box, ground_fn, own=True):
+def deck_pads(decks, ground_roads, box, ground_fn, own=True, skip=()):
     """[(ring (k, 3), centre (3,), walls [(pts (m, 3), out (m, 2))])] of the junction pads of the joints of decks
     [(fid, spec, xy (k, 2), z (k,))] (the bridge parts round tile box, as bridges.parts gives them) whose joint the box
     owns (own False: every joint, the parapets' test round the tile); ground_roads [(fid, spec, pts (k, 2+), _)] the
@@ -12391,18 +12395,9 @@ def deck_pads(decks, ground_roads, box, ground_fn, own=True):
     # dnp.hypot (the same bits as one call per end: elementwise; 21k scalar calls a cold Manhattan visit)
     ends = np.array([line[at] for line, _half in gl for at in (0, -1)], np.float64).reshape(-1, 2)
     joints = []
-    sheet_nodes = []                # (road revamp v2 P2b: a fork whose decks are one slab has no pad)
-    if roadshape.SHEET:
-        recs, _dz = roadshape.deck_sheets([(fid, spec, np.c_[np.asarray(xy, np.float64)[:, :2], np.asarray(z, np.float64)],
-                                            float(spec.width) / 2) for fid, spec, xy, z in decks
-                                           if len(xy) >= 2 and np.isfinite(np.asarray(z, np.float64)).all()])
-        ok = [d for d in decks if len(d[2]) >= 2 and np.isfinite(np.asarray(d[3], np.float64)).all()]
-        for r in recs:
-            p, rv, _role, _sd, u0, u1 = next(c for c in r["cover"] if c[2] == 1)     # (the branch's first piece)
-            xy = np.asarray(ok[p][2], np.float64)[:, :2]
-            a = _arc(xy)
-            u = u1 if rv else u0
-            sheet_nodes.append(np.array([dnp.interp(u, a, xy[:, 0]), dnp.interp(u, a, xy[:, 1])]))
+    # (road revamp v2 P2b: a fork whose decks are one slab has no pad; skip: the forks' nodes the tile's deck chunks
+    # drew so, their "sxn": the very records the mesh used)
+    sheet_nodes = [np.asarray(q, np.float64)[:2] for q in skip]
     for nd, incident in sorted(inc.items()):
         q = nodes[nd]
         if own and not box_owns(box, float(q[0]), float(q[1])):
@@ -12822,6 +12817,7 @@ def _sheet_finish(recs, decks, shifted, width_of):
             continue
         line = np.concatenate(pieces)
         hw = np.concatenate(hws)
+        node = [round(float(line[0, 0]), 3), round(float(line[0, 1]), 3)]     # (the fork's node: its pad left out)
         if len(line) < 2:
             continue
         edges = [offset_polyline(line, hw + roadmesh.PARAPET_W), offset_polyline(line, -(hw + roadmesh.PARAPET_W))]
@@ -12843,7 +12839,7 @@ def _sheet_finish(recs, decks, shifted, width_of):
                 if p == b:
                     ab_ = float(_arc(shifted[p])[kb])
                     a0, a1 = (a0, ab_) if abs(a1 - ab_) <= abs(a0 - ab_) else (ab_, a1)
-                put(p)["b"].append((min(a0, a1), max(a0, a1)))
+                put(p)["b"].append((min(a0, a1), max(a0, a1), node))
         put(t)["cuts"][kt] = nrm
         put(b)["cuts"][kb] = nrm
     return info
@@ -12881,8 +12877,10 @@ def _sheet_tag(ch, line, info):
     sx = [[side, far.tolist()] for s0, s1, side, far in info["t"] if min(hi, s1) - max(lo, s0) > 1e-3]
     if sx:
         ch["sx"] = sx
-    if any(min(hi, s1) - max(lo, s0) > 1e-3 for s0, s1 in info["b"]):
-        ch["noslab"] = True
+    for s0, s1, node in info["b"]:
+        if min(hi, s1) - max(lo, s0) > 1e-3:
+            ch["noslab"] = True
+            ch["sxn"] = node
     for e, at in ((0, 0), (1, -1)):
         for k, nrm in info["cuts"].items():
             if float(dnp.hypot(*(c[at, :2] - line[k, :2]))) > 1e-3:

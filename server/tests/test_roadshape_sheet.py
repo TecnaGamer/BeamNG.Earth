@@ -114,6 +114,8 @@ class SheetDecks(unittest.TestCase):
             self.assertTrue(any(c.get("noslab") for c in ramp))
             self.assertTrue(any(c.get("sk0") or c.get("sk1") for c in ramp if not c.get("noslab")))
             self.assertTrue(any(c.get("sx") for c in ch if str(c.get("fid")).startswith("b-through")))
+            # (the fork's node on the branch's union chunks: roads.deck_pads leaves its pad out)
+            self.assertTrue(all(c.get("sxn") == [0.0, 0.0] for c in ramp if c.get("noslab")))
             # pinned: the ramp's road in the union at the through deck's heights (10 + 2 x / 300)
             for c in ramp:
                 if c.get("noslab"):
@@ -128,7 +130,7 @@ class SheetDecks(unittest.TestCase):
             st = structprobe.top_steps(tops, 1e4)
             self.assertEqual(int((structprobe.key_xy(st["keys"])[:, 0] < 73.0).sum()), 0, (merge, st["worst"]))
             u = structprobe.key_xy(np.unique(tk))
-            for x, y in ((20.0, 6.0), (40.0, 7.5), (60.0, 10.0), (72.0, 11.5), (72.0, 7.0)):
+            for x, y in ((20.0, 6.0), (40.0, 7.5), (60.0, 10.0), (72.0, 11.5), (72.0, 7.0), (73.4, 11.9), (73.8, 11.9)):
                 self.assertTrue(bool(((np.abs(u[:, 0] - x) < 0.2) & (np.abs(u[:, 1] - y) < 0.2)).any()), (x, y))
             cw = [(np.asarray(p[2], np.float64)[:, :2], np.asarray(p[2], np.float64)[:, 2], float(p[1].width) / 2,
                    ("deck", p[0])) for p in parts]

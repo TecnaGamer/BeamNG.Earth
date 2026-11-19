@@ -2365,6 +2365,7 @@ def _noses(g):
 
 
 SHEET_REACH_MAX_M = 40.0    # m past its road's edge a through deck's slab reaches over an exit's union at most
+SHEET_TOL_M = 0.01          # m past an outline piece's ends a row still meets it
 
 
 def _slab_chunks(chunks):
@@ -2397,7 +2398,10 @@ def _sheet_reach(c, left, right):
         den = np.where(ok, den, 1.0)
         t = (wx * D[None, :, 1] - wy * D[None, :, 0]) / den
         s = (wx * d[:, None, 1] - wy * d[:, None, 0]) / den
-        ok &= (s >= 0.0) & (s <= 1.0) & (t >= 0.0) & (t <= SHEET_REACH_MAX_M)
+        # (a centimetre past either end of a piece still meets it: the outline's last point is on the split line to
+        # the millimetre, the through deck's last row on it too)
+        tol = SHEET_TOL_M / np.maximum(dnp.hypot(D[:, 0], D[:, 1]), 1e-9)[None, :]
+        ok &= (s >= -tol) & (s <= 1.0 + tol) & (t >= 0.0) & (t <= SHEET_REACH_MAX_M)
         tt = np.where(ok, t, np.inf).min(1)
         tt = np.where(np.isfinite(tt), tt, 0.0)
         if side > 0:
